@@ -1,24 +1,28 @@
 import { expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { membershipSchema, type ProjectSettingsView } from "@vonvon/protocol";
+import { agentIdSchema, membershipSchema, type ProjectSettingsView } from "@vonvon/protocol";
 import { createClient } from "../../client/src/client";
 import { ClientProvider } from "../src/client-context";
 import { appliedNotice, ConversationRow, conversationNote } from "../src/management/ProjectPanel";
-import { membershipSettingsKey, ProjectPanel as GroupSettings } from "../src/settings/SettingsPanel";
+import { groupJudgeVisible, membershipSettingsKey, ProjectPanel as GroupSettings } from "../src/settings/SettingsPanel";
 
 const client = createClient({ isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {} });
-const section = <T,>(stored: T) => ({ stored, effective: stored, revision: "r", access: { kind: "writable" as const }, apply: [] });
-const view = (kind: string): ProjectSettingsView => ({
-  scope: { kind: "project", botId: "cli_fixture" as ProjectSettingsView["scope"]["botId"], projectName: "demo" },
+const section = <const T,>(stored: T) => ({ stored, effective: stored, revision: "r", access: { kind: "writable" as const }, apply: [] });
+type ViewOptions = Pick<ProjectSettingsView, "decisionModels"> & Pick<ProjectSettingsView["sections"], "run" | "judge"> & { backend?: string };
+const view = (kind: string, options: ViewOptions = {}): ProjectSettingsView => ({
+  scope: { kind: "project", botId: agentIdSchema.parse("cli_fixture"), projectName: "demo" },
   sections: {
     permission: section({ mode: "full" as const, guestMode: "full" as const, network: false }),
     response: section({ noMention: true }),
     model: section({ selection: { kind: "default" as const } }),
-  } as unknown as ProjectSettingsView["sections"],
-  identity: { chatId: "oc_demo", backend: "codex-appserver", cwd: "/tmp/demo", kind },
+    ...(options.run ? { run: options.run } : {}),
+    ...(options.judge ? { judge: options.judge } : {}),
+  },
+  decisionModels: options.decisionModels,
+  identity: { chatId: "oc_demo", backend: options.backend ?? "codex-appserver", cwd: "/tmp/demo", kind },
   members: { openIds: [], revision: "m" },
 });
-const settings = (kind: string) => renderToStaticMarkup(<ClientProvider client={client}><GroupSettings view={view(kind)} refresh={async () => {}} /></ClientProvider>);
+const settings = (kind: string, options: ViewOptions = {}) => renderToStaticMarkup(<ClientProvider client={client}><GroupSettings view={view(kind, options)} refresh={async () => {}} /></ClientProvider>);
 
 it("s25c: a 智能 group's settings show 免 @ as the Bot's call, with no switch; other groups keep the switch", () => {
   const smart = settings("smart");
@@ -58,4 +62,52 @@ it("s25c: a save's warning is its own sentence; a removal's failed group step ke
   expect(appliedNotice("项目绑定已解除，目录已保留。", { warning: "permission denied" }))
     .toBe("项目绑定已解除，目录已保留。 飞书群后续操作未完成：permission denied");
   expect(appliedNotice("项目已更新。", {}, "")).toBe("项目已更新。");
+});
+
+const judge: NonNullable<ProjectSettingsView["sections"]["judge"]> = {
+  ...section({ selection: { kind: "default" } }),
+  effective: { selection: { kind: "llm", model: "gpt-6-luna", effort: "low" } },
+};
+const run: NonNullable<ProjectSettingsView["sections"]["run"]> = {
+  ...section({ pendingPolicy: "default" }), effective: { pendingPolicy: "steer" },
+};
+
+it("s28a: only smart groups with a judge section expose the judge model", () => {
+  expect(settings("smart", { judge })).toContain('aria-label="判断模型"');
+  expect(settings("smart", { judge })).toContain("现在判断用：gpt-6-luna（推理强度 low）");
+  expect(groupJudgeVisible(view("smart", { judge }))).toBe(true);
+  for (const kind of ["multi", "single"]) {
+    expect(settings(kind, { judge })).not.toContain('aria-label="判断模型"');
+    expect(groupJudgeVisible(view(kind, { judge }))).toBe(false);
+  }
+  expect(settings("smart")).not.toContain('aria-label="判断模型"');
+  expect(groupJudgeVisible(view("smart"))).toBe(false);
+});
+
+it("s28a: following the Bot's decision model still explains a missing key", () => {
+  const html = settings("smart", {
+    judge: { ...judge, effective: { selection: { kind: "decision", provider: "typesafe", model: "jev-latest" } } },
+    decisionModels: [{ provider: "typesafe", displayName: "TypeSafe", keyId: "typesafe-api-key", keySet: false,
+      models: [{ id: "jev-latest", displayName: "Jev" }] }],
+  });
+  expect(html).toContain("还没填 key");
+  expect(html).toContain("vonvon secrets set typesafe-api-key");
+});
+
+it("s28a: Codex groups offer run policy choices and show the effective policy", () => {
+  const html = settings("multi", { run });
+  const select = html.match(/<select[^>]*aria-label="运行中来了消息"[^>]*>(.*?)<\/select>/s)?.[1];
+  expect(select).toBeDefined();
+  const options = [...(select ?? "").matchAll(/<option value="([^"]+)"( selected="")?>([^<]+)<\/option>/g)]
+    .map(match => [match[1], match[3], Boolean(match[2])]);
+  expect(options).toEqual([["default", "跟着 Bot 默认", true], ["steer", "插话", false], ["queue", "排队", false]]);
+  expect(html).toContain("现在是插话");
+});
+
+it("s28a: Claude groups explain queueing without a selector; old daemons omit the row", () => {
+  const html = settings("multi", { run: { ...run, effective: { pendingPolicy: "queue" } }, backend: "claude-agent" });
+  expect(html).not.toContain('aria-label="运行中来了消息"');
+  expect(html).toContain("Claude 不支持插话");
+  expect(html).toContain("排队");
+  expect(settings("multi")).not.toContain("运行中来了消息");
 });
