@@ -20,6 +20,7 @@ export interface AskTurnInput {
 export interface AskTurn {
   enqueue(request: AskRequest, from?: AskOrigin): void;
   cancel(requestId: string): void;
+  finishParent(): void;
   close(reason: 'stopped' | 'turn-ended'): void;
 }
 export interface TypedInput {
@@ -101,6 +102,12 @@ export class AskCoordinator {
       cancel: requestId => {
         const entry = turn.queue.find(candidate => candidate.request.id === requestId);
         if (entry) this.settle(turn, entry, { kind: 'unanswered', reason: 'unavailable' }, { providerResolved: true });
+      },
+      finishParent: () => {
+        const parents = turn.queue.filter(entry => !entry.from);
+        // Remove the whole parent batch before settle can promote the next question.
+        turn.queue = turn.queue.filter(entry => entry.from);
+        for (const entry of parents) this.settle(turn, entry, { kind: 'unanswered', reason: 'turn-ended' });
       },
       close: reason => this.close(turn, reason),
     };

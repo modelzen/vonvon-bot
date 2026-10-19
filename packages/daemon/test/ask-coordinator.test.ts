@@ -394,3 +394,22 @@ it('queues parent then child, keeps origin after timeout and clears the waiting 
   expect(f.response).toHaveBeenLastCalledWith('child', { kind: 'unanswered', reason: 'timeout' });
   turn.close('turn-ended');
 });
+
+it('finishes only parent entries without releasing child holds or showing queued parent cards', async () => {
+  const f = fixture(), turn = f.open();
+  turn.enqueue(ask('parent-a')); turn.enqueue(ask('parent-b')); turn.enqueue(ask('child'), { subagentId: 'C' });
+  await flush(); turn.finishParent(); await flush();
+  expect(f.create).toHaveBeenCalledTimes(2);
+  expect(f.response.mock.calls).toEqual(['parent-a', 'parent-b'].map(id => [id, { kind: 'unanswered', reason: 'turn-ended' }]));
+  expect(f.pause.held).toBe(true); expect(f.waiting.mock.lastCall?.[1]).toBe('C');
+  expect(f.submit('parent-a')).toBe('inactive'); expect(f.submit('child', 'msg-2')).toBe('accepted');
+  expect(f.pause.held).toBe(false); turn.close('turn-ended');
+});
+
+it('rejects reused request identity across parent boundaries without answering the wrong child', async () => {
+  const f = fixture(), turn = f.open(); turn.enqueue(ask('same')); await flush();
+  expect(f.submit('same')).toBe('accepted'); turn.finishParent();
+  turn.enqueue(ask('same'), { subagentId: 'C' }); await flush();
+  expect(f.fault).toHaveBeenCalledOnce(); expect(f.response).toHaveBeenCalledTimes(1);
+  expect(f.submit('same')).toBe('inactive'); expect(f.pause.held).toBe(false);
+});

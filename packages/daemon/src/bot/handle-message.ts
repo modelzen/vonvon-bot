@@ -7468,8 +7468,7 @@ export function createOrchestrator(
       // only fires when codex goes fully silent. stopSignal/endSignal end the loop
       // WITHOUT killing the process, so we can clear the goal + recycle cleanly.
       const stop = Promise.race([stopSignal, endSignal]);
-      // One watchdog spans every auto-continued turn, so its pause is reset at
-      // each turn boundary: a hold never carries into the next turn.
+      // Child questions can outlive a parent turn; their watchdog holds do too.
       const idlePause = createIdlePause();
       state.idlePause = idlePause;
       const guarded = withIdleTimeout(run.events, GOAL_IDLE_MS, () => {
@@ -7505,8 +7504,7 @@ export function createOrchestrator(
           continue;
         }
         if (ev.type === 'turn_started') {
-          askTurn?.close('turn-ended');
-          idlePause.reset();
+          askTurn?.finishParent();
           if (unseen && topicThreadId) markSeen(topicThreadId, unseen, opts.seenHow);
           unseen = undefined;
           // Unlike runGoal() construction, this proves the host accepted and
@@ -7522,7 +7520,7 @@ export function createOrchestrator(
             if (activeKey.startsWith('pending:')) throw new Error('Goal topic could not be resolved');
             askPlacement.replyTo = cur.cardMsgId!;
           }
-          askTurn = asks.openTurn({ run, sessionKey: activeKey, placement: askPlacement,
+          askTurn ??= asks.openTurn({ run, sessionKey: activeKey, placement: askPlacement,
             initiator: { kind: opts.requesterKind ?? 'unknown', openId: opts.requesterOpenId }, idlePause,
             waiting: (label, subagentId) => { askWaiting = label; askWaitingSubagentId = subagentId; if (cur) { cur.rc.askWaiting = label; cur.rc.askWaitingSubagentId = subagentId; if (cur.stream) cur.stream.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID); } },
             fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) originalInterrupt(); },
@@ -7530,9 +7528,7 @@ export function createOrchestrator(
           continue;
         }
         if (ev.type === 'done') {
-          askTurn?.close('turn-ended');
-          askTurn = undefined;
-          idlePause.reset();
+          askTurn?.finishParent();
           // turn/completed for an intermediate turn — finalize its card (if any).
           // codex auto-continues with the next turn (a terminal goal status, handled
           // after the loop, preempts the final turn's done).

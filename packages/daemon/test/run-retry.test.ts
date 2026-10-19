@@ -741,3 +741,97 @@ it.each([false, true])('keeps the latest between-turn goal child terminal withou
   expect(fake.createCard).toHaveBeenCalledTimes(1); expect(finalCards().at(-1)).toContain('worker：Inspect'); expect(finalCards().at(-1)).not.toContain('接着显示在下一张卡');
   expect(finalCards().at(-1)?.includes('没收到结束消息')).toBe(!completed);
 });
+
+describe('goal child questions across parent turns', () => {
+  const request = (id: string) => ({ kind: 'confirmation', id, title: id, detail: '', acceptedConsequence: 'Continue', declinedConsequence: 'Stop' } as const);
+  function gate() { let release!: () => void; const promise = new Promise<void>(r => { release = r; }); return { promise, release }; }
+  function goalRun(play: () => AsyncIterable<AgentEvent>) {
+    const response = vi.fn<NonNullable<AgentRun['respondToAsk']>>(async () => {});
+    const thread = Object.assign(scriptedThread([]).t, { clearGoal: vi.fn(async () => {}),
+      runGoal: () => ({ turnId: () => 'g', respondToAsk: response, events: play() }) });
+    return { thread, response };
+  }
+  const child: AgentEvent = { type: 'subagent_start', id: 'C', name: 'worker', task: 'Inspect', stoppable: true };
+  const complete: AgentEvent = { type: 'goal_update', status: 'complete', objective: 'Work', tokensUsed: 1, timeUsedSeconds: 1, tokenBudget: null };
+  const answer = (id: string, carrier = 'managed') => orchestrator.dispatcher.handle({ messageId: carrier, chatId: 'chat', operator: { openId: 'owner' },
+    action: { value: { a: 'ask_submit', requestId: id, decision: 'proceed' } } } as never);
+
+  it.each([false, true])('keeps a child question answerable across done and next started: askBeforeDone=%s', async before => {
+    const done = gate(), next = gate(), finish = gate(); let inGap = false, inNext = false;
+    const f = goalRun(async function* () {
+      yield { type: 'turn_started', turnId: 'g1' }; yield child; yield { type: 'text_delta', itemId: 'a', delta: 'first' };
+      if (before) yield { type: 'ask', request: request('child-q'), subagentId: 'C' };
+      await done.promise; yield { type: 'done', turnId: 'g1' };
+      if (!before) yield { type: 'ask', request: request('child-q'), subagentId: 'C' };
+      inGap = true; await next.promise; yield { type: 'turn_started', turnId: 'g2' }; inNext = true;
+      await finish.promise; yield { type: 'subagent_status', id: 'C', status: 'completed' }; yield { type: 'done', turnId: 'g2' }; yield complete;
+    });
+    const o = setup(f.thread); await o.onMessage(message('/goal Work'));
+    if (before) await until(() => expect(JSON.stringify(fake.managed.mock.calls)).toContain('child-q'));
+    done.release(); await until(() => expect(inGap).toBe(true));
+    expect(f.thread.clearGoal).not.toHaveBeenCalled(); expect(f.response).not.toHaveBeenCalled();
+    await until(() => expect(JSON.stringify(fake.managed.mock.calls)).toContain('子 agent worker 问：'));
+    if (!before) { next.release(); await until(() => expect(inNext).toBe(true)); }
+    await answer('child-q'); await answer('child-q');
+    expect(f.response).toHaveBeenCalledExactlyOnceWith('child-q', { kind: 'answered', answer: { kind: 'confirmation', decision: 'proceed' } });
+    next.release(); finish.release(); await until(() => expect(f.thread.close).toHaveBeenCalled());
+  });
+
+  it('ends only parent questions while keeping one FIFO for child and next-parent questions', async () => {
+    const done = gate(), next = gate(), finish = gate(); let inGap = false, inNext = false; let count = 0;
+    fake.managed.mockImplementation(async () => ({ messageId: `qcard-${++count}` }));
+    const f = goalRun(async function* () {
+      yield { type: 'turn_started', turnId: 'g1' }; yield child;
+      yield { type: 'ask', request: request('parent-1') }; yield { type: 'ask', request: request('child-q'), subagentId: 'C' };
+      await done.promise; yield { type: 'done', turnId: 'g1' }; inGap = true; await next.promise;
+      yield { type: 'turn_started', turnId: 'g2' }; yield { type: 'ask', request: request('parent-2') }; inNext = true;
+      await finish.promise; yield { type: 'done', turnId: 'g2' }; yield complete;
+    });
+    const o = setup(f.thread); await o.onMessage(message('/goal Work')); await until(() => expect(count).toBe(1));
+    done.release(); await until(() => expect(inGap).toBe(true)); await until(() => expect(count).toBe(2));
+    expect(f.response.mock.calls).toEqual([['parent-1', { kind: 'unanswered', reason: 'turn-ended' }]]);
+    next.release(); await until(() => expect(inNext).toBe(true)); expect(count).toBe(2);
+    await answer('parent-1', 'qcard-1'); expect(f.response).toHaveBeenCalledTimes(1);
+    await answer('child-q', 'qcard-2'); await until(() => expect(count).toBe(3));
+    await answer('parent-2', 'qcard-3'); expect(f.response.mock.calls.map(c => c[0])).toEqual(['parent-1', 'child-q', 'parent-2']);
+    finish.release(); await until(() => expect(f.thread.close).toHaveBeenCalled());
+  });
+
+  it.each(['child-terminal', 'cancel', 'goal-terminal', 'stop', 'endGoal', 'shutdown'] as const)('cleans the child question on %s and ignores late answer/cancellation', async reason => {
+    const end = gate(), finish = gate(); let cleaned = false;
+    const f = goalRun(async function* () {
+      yield { type: 'turn_started', turnId: 'g1' }; yield child; yield { type: 'text_delta', itemId: 'a', delta: 'first' };
+      yield { type: 'done', turnId: 'g1' };
+      if (reason === 'endGoal') { yield { type: 'turn_started', turnId: 'g2' }; yield { type: 'text_delta', itemId: 'b', delta: 'second' }; }
+      yield { type: 'ask', request: request('child-q'), subagentId: 'C' };
+      await end.promise;
+      if (reason === 'endGoal') { yield { type: 'turn_started', turnId: 'g3' }; yield { type: 'ask', request: request('late-child'), subagentId: 'C' }; yield { type: 'done', turnId: 'g3' }; }
+      if (reason === 'child-terminal' || reason === 'cancel') {
+        yield { type: 'ask_cancelled', requestId: 'child-q' };
+        if (reason === 'child-terminal') yield { type: 'subagent_status', id: 'C', status: 'completed' };
+        cleaned = true; await finish.promise; yield { type: 'ask_cancelled', requestId: 'child-q' };
+      }
+      yield complete;
+    });
+    const o = setup(f.thread); await o.onMessage(message('/goal Work')); await until(() => expect(JSON.stringify(fake.managed.mock.calls)).toContain('child-q'));
+    expect(f.response).not.toHaveBeenCalled();
+    if (reason === 'stop') {
+      fake.sessions = [{ threadId: 'topic', chatId: 'chat', cwd: '/test', sessionId: 'host', backend: 'codex', summary: '' }];
+      const target = { projectName: 'test', chatId: 'chat', threadId: 'topic' };
+      const context = z.object({ run: z.object({ id: z.string() }) }).parse(await o.collaboration({ action: 'context', ...target }));
+      await o.collaboration({ action: 'stop', ...target, runId: context.run.id });
+    }
+    else if (reason === 'endGoal') await press('goal.end', 'card-2');
+    else if (reason === 'shutdown') await o.shutdown();
+    else { end.release(); if (reason === 'child-terminal' || reason === 'cancel') await until(() => expect(cleaned).toBe(true)); else await until(() => expect(f.thread.close).toHaveBeenCalled()); }
+    await answer('child-q');
+    if (reason === 'child-terminal' || reason === 'cancel') expect(f.response).not.toHaveBeenCalled();
+    else expect(f.response).toHaveBeenCalledExactlyOnceWith('child-q', { kind: 'unanswered', reason: reason === 'goal-terminal' ? 'turn-ended' : 'stopped' });
+    end.release(); finish.release(); await until(() => expect(f.thread.close).toHaveBeenCalled());
+    expect(f.response).toHaveBeenCalledTimes(reason === 'endGoal' ? 2 : reason === 'child-terminal' || reason === 'cancel' ? 0 : 1);
+    if (reason === 'endGoal') {
+      expect(f.response).toHaveBeenLastCalledWith('late-child', { kind: 'unanswered', reason: 'unavailable' });
+      expect(JSON.stringify(fake.managed.mock.calls)).not.toContain('late-child');
+    }
+  });
+});
