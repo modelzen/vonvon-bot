@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ambiguousNote, findHandoffs, handoffNote, handoffText } from '../src/bot/bot-handoff';
+import { ambiguousNote, findHandoffs, handoffSendResult, handoffNote, handoffText } from '../src/bot/bot-handoff';
 import type { RosterBot } from '../src/bot/bot-roster';
 
 const bots = new Map<string, RosterBot>([
@@ -133,5 +133,18 @@ describe('handoff notes', () => {
   });
   it('explains ambiguity without ids', () => {
     expect(ambiguousNote('<小审>')).toBe('→ 想 @ 小审（bot），没交接：群里不止一个叫 小审 的 bot');
+  });
+});
+
+describe('handoff business results', () => {
+  it('only treats a valid zero code as success and an explicit rejection as failed', () => {
+    expect(handoffSendResult({ code: 0 })).toEqual({ kind: 'sent' });
+    expect(handoffSendResult({ code: 230001 })).toEqual({ kind: 'failed', code: 230001 });
+  });
+  it.each([undefined, null, {}, { code: '0' }, { code: NaN }, { code: Infinity }])('keeps invalid responses unknown: %j', value => {
+    expect(handoffSendResult(value)).toEqual({ kind: 'unknown' });
+  });
+  it('does not call a non-timeout uncertainty a timeout', () => {
+    expect(handoffNote(['小审'], 'unknown')).toBe('→ 想 @ 小审（bot），没收到发送结果：可能已发出');
   });
 });

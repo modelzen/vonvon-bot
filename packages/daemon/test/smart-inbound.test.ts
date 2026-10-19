@@ -2,6 +2,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
+import { Client, withTenantToken } from '@larksuiteoapi/node-sdk';
 import { projectRevision } from '../src/admin/collaboration';
 import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
@@ -44,7 +46,7 @@ const fake = vi.hoisted(() => ({
     ({ code: 0, data: { items: [{ thread_id: 'omt_opened' }] as Array<Record<string, unknown>> } })),
   list: vi.fn(),
   request: vi.fn(),
-  reply: vi.fn(async (_req: { path: { message_id: string }; data: { msg_type: string; content: string; reply_in_thread?: boolean } }) => ({ code: 0, data: { message_id: 'om_reminder' } })),
+  reply: vi.fn(async (_req: { path: { message_id: string }; data: { msg_type: string; content: string; reply_in_thread?: boolean } }): ReturnType<Client['im']['v1']['message']['reply']> => ({ code: 0, data: { message_id: 'om_reminder' } })),
   // One id per emoji, so the test sees which reaction went.
   react: vi.fn(async (req: { data: { reaction_type: { emoji_type: string } } }) => ({ data: { reaction_id: `r_${req.data.reaction_type.emoji_type}` } })),
   unreact: vi.fn(async () => ({})),
@@ -1116,11 +1118,11 @@ describe('bot handoffs (s27b)', () => {
   it('27: sends one message for multiple recipients', async () => {
     await turn('@小审 @小P 你们看看'); expect(replies()).toHaveLength(1); expect(textOf()).toBe('<at user_id="ou_审">小审</at> <at user_id="ou_other">小P</at> 你们看看');
   });
-  it.each(['throw', 'code'] as const)('28/29: a failed handoff (%s) adds a grey footnote and allows reminders', async failure => {
+  it.each(['code', 'throw-code'])('29: a business error (%s) is failed delivery and allows reminders', async failure => {
     cfg.preferences.completionReminder = { mode: 'always' };
-    fake.reply.mockImplementation(async req => { if (req.data.msg_type === 'text') { if (failure === 'throw') throw new Error('send failed'); return { code: 230001, data: { message_id: '' } }; } return { code: 0, data: { message_id: 'om_reminder' } }; });
+    fake.reply.mockImplementation(async req => { if (req.data.msg_type === 'text') { if (failure === 'throw-code') throw { response: { data: { code: 230001 } } }; return { code: 230001, data: { message_id: '' } }; } return { code: 0, data: { message_id: 'om_reminder' } }; });
     await turn(); expect(fake.finals).toHaveLength(2); expect(finalText()).toContain("<font color='grey'>→ 想 @ 小审（bot），没发出：发送失败</font>");
-    expect(replies('post')).toHaveLength(1); handoff({ sent: false, why: 'send-failed', ...(failure === 'code' ? { code: 230001 } : {}) });
+    expect(replies('post')).toHaveLength(1); handoff({ sent: false, why: 'send-failed', code: 230001 });
   });
   it('30: timeout reports unknown delivery and ignores late success', async () => {
     const gate = deferred<{ code: number; data: { message_id: string } }>(); fake.reply.mockImplementation(() => gate.promise);
@@ -1128,7 +1130,7 @@ describe('bot handoffs (s27b)', () => {
     try {
       await vi.waitFor(() => expect(fake.finals).toHaveLength(2), { timeout: 11_000, interval: 50 });
       expect(finalText()).toContain('没收到发送结果：超时'); handoff({ sent: 'unknown', why: 'timeout' });
-      gate.resolve({ code: 0, data: { message_id: 'om_late' } }); await settle(); expect(fake.finals).toHaveLength(2);
+      gate.resolve({ code: 0, data: { message_id: 'om_late' } }); await settle(); expect(fake.finals).toHaveLength(2); expect(replies()).toHaveLength(1);
     } finally { gate.resolve({ code: 0, data: { message_id: 'om_late' } }); }
   }, 15_000);
   it('31: failed final card delivery prevents handoff', async () => { fake.finalOk = false; await turn(); expect(replies()).toEqual([]); expect(fake.finals).toHaveLength(1); handoff({ why: 'finalize-failed' }); });
@@ -1171,10 +1173,37 @@ describe('bot handoffs (s27b)', () => {
     await send({ ...says('请写', { at: true }), chat_type: 'p2p' }); await settle();
     expect(fake.inputs).toEqual([]); expect(fake.finals).toEqual([]); expect(replies()).toEqual([]);
   });
-  it('a reply without a result code is failed delivery', async () => {
-    fake.reply.mockImplementation(async () => JSON.parse('{"data":{"message_id":"om_no_code"}}'));
+  it.each(['throw', 'missing-code'])('a reply with no confirmed result (%s) is unknown delivery', async failure => {
+    fake.reply.mockImplementation(async () => { if (failure === 'throw') throw new Error('send failed'); return JSON.parse('{"data":{"message_id":"om_no_code"}}'); });
     await turn(); expect(fake.finals).toHaveLength(2);
-    expect(finalText()).toContain('没发出：发送失败'); handoff({ sent: false, why: 'send-failed' });
+    expect(finalText()).toContain('没收到发送结果：可能已发出'); handoff({ sent: 'unknown', why: 'no-result' }); expect(replies()).toHaveLength(1);
+  });
+  it('a partial roster cannot send until completeness recovers', async () => {
+    fake.request.mockResolvedValue({ code: 0, data: { bots, has_more: true } });
+    await turn(); expect(replies()).toEqual([]); expect(finalText()).not.toContain('→ 想 @'); handoff({ why: 'no-roster' });
+    fake.request.mockResolvedValue({ code: 0, data: { bots, has_more: false } });
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 600_001);
+    try { await turn('@小审 再审一下。'); await vi.waitFor(() => expect(replies()).toHaveLength(1)); handoff({ sent: true }); } finally { now.mockRestore(); }
+  });
+  it('an SDK request accepted before disconnect is unknown delivery and is never retried', async () => {
+    let accepted = 0;
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        if (req.url?.includes('/auth/')) { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ code: 0, tenant_access_token: 'fixture', expire: 7200 })); return; }
+        accepted++; req.socket.destroy();
+      });
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address(); if (!address || typeof address === 'string') throw new Error('missing test server address');
+    const client = new Client({ appId: APP, appSecret: 'fixture', domain: `http://127.0.0.1:${address.port}` });
+    // SDK URL interpolation also treats the local port as a path parameter.
+    fake.reply.mockImplementation(req => client.im.v1.message.reply({ ...req, path: { ...req.path, [address.port]: `:${address.port}` } }, withTenantToken('fixture')));
+    try {
+      await turn(); expect(accepted).toBe(1); expect(replies()).toHaveLength(1);
+      expect(finalText()).toContain('没收到发送结果：可能已发出'); handoff({ sent: 'unknown', why: 'no-result' });
+      await settle(); expect(accepted).toBe(1);
+    } finally { await new Promise<void>((resolve, reject) => server.close(err => err ? reject(err) : resolve())); }
   });
   it('shutdown during an ambiguous roster lookup never sends or repaints', async () => {
     const gate = deferred<unknown>(); fake.request.mockImplementation(() => gate.promise);

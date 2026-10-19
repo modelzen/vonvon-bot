@@ -1,4 +1,4 @@
-import { findHandoffs, handoffText, handoffNote, ambiguousNote, HANDOFF_SEND_MS, type HandoffMiss } from './bot-handoff';
+import { findHandoffs, handoffSendResult, type HandoffSendResult, handoffText, handoffNote, ambiguousNote, HANDOFF_SEND_MS, type HandoffMiss } from './bot-handoff';
 import { AskCoordinator, type AskTurn } from './ask-coordinator';
 import { createPendingGroups, pendingGroupsFile } from '../project/pending-groups';
 import { realpath, stat } from 'node:fs/promises';
@@ -5995,7 +5995,7 @@ export function createOrchestrator(
     await orStop(roster.load(opts.chatId), undefined);
     // Shutdown while reading the roster must not send or repaint, even for ambiguous names.
     if (shuttingDown) { done({ sent: false, why: 'shutdown' }); return; }
-    const bots = roster.peek(opts.chatId);
+    const bots = roster.peekForHandoff(opts.chatId);
     if (!bots) { done({ sent: false, why: 'no-roster' }); return; }
     const { handoffs: found, ambiguous } = findHandoffs(answerText, bots, {
       openId: channel.botIdentity?.openId, appId: channel.rawClient.appId,
@@ -6014,18 +6014,20 @@ export function createOrchestrator(
     if (!found.length) { done({ sent: false, why: 'ambiguous', names: ambiguous.length }); await note(); return; }
     if (shuttingDown) { done({ to, sent: false, why: 'shutdown' }); return; }
     const text = handoffText(found);
-    type SendResult = { ok: boolean; code?: number; err?: unknown };
-    const send: Promise<SendResult> = channel.rawClient.im.v1.message.reply({
+    const send: Promise<HandoffSendResult> = channel.rawClient.im.v1.message.reply({
       path: { message_id: cardId },
       data: { msg_type: 'text', content: JSON.stringify({ text }), reply_in_thread: !opts.flat },
-    }).then(res => ({ ok: res?.code === 0, code: res?.code }),
-      (err: unknown) => ({ ok: false, code: feishuError(err)?.code, err }));
-    const r = await orStop<SendResult | undefined | 'stopped'>(withDeadline(send, HANDOFF_SEND_MS, 'handoff'), 'stopped');
+    }).then(handoffSendResult, (err: unknown) => handoffSendResult(feishuError(err)));
+    const r = await orStop<HandoffSendResult | undefined | 'stopped'>(withDeadline(send, HANDOFF_SEND_MS, 'handoff'), 'stopped');
     if (r === 'stopped') { done({ to, sent: 'unknown', why: 'shutdown' }); return; }
     if (r === undefined) { done({ to, sent: 'unknown', why: 'timeout' }); await note('timeout'); return; }
-    if (!r.ok) {
+    if (r.kind === 'unknown') {
+      done({ to, sent: 'unknown', why: 'no-result' });
+      await note('unknown');
+      return;
+    }
+    if (r.kind === 'failed') {
       done({ to, sent: false, why: 'send-failed', code: r.code });
-      if (r.err !== undefined) log.fail('card', r.err, { phase: 'handoff' });
       await note('failed');
       return;
     }

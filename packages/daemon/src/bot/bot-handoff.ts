@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { RosterBot } from './bot-roster';
 import { atTags, neutraliseAts } from '../card/at-guard';
 import { codeSpans } from '../card/md-scan';
@@ -83,8 +84,17 @@ export function handoffText(handoffs: readonly Handoff[]): string {
   return `${ats} ${sentence || HANDOFF_FALLBACK}`;
 }
 
-export type HandoffMiss = 'failed' | 'timeout';
-const MISS: Record<HandoffMiss, string> = { failed: '没发出：发送失败', timeout: '没收到发送结果：超时，可能已发出' };
+export type HandoffSendResult = { kind: 'sent' } | { kind: 'failed'; code: number } | { kind: 'unknown' };
+const replyCode = z.object({ code: z.number().int() });
+/** A missing or invalid business result cannot prove the server rejected a reply. */
+export function handoffSendResult(reply: unknown): HandoffSendResult {
+  const parsed = replyCode.safeParse(reply);
+  if (!parsed.success) return { kind: 'unknown' };
+  return parsed.data.code === 0 ? { kind: 'sent' } : { kind: 'failed', code: parsed.data.code };
+}
+
+export type HandoffMiss = 'failed' | 'timeout' | 'unknown';
+const MISS: Record<HandoffMiss, string> = { failed: '没发出：发送失败', timeout: '没收到发送结果：超时，可能已发出', unknown: '没收到发送结果：可能已发出' };
 export function handoffNote(names: readonly string[], why: HandoffMiss): string {
   return `→ 想 @ ${names.map((name) => `${plainName(name)}（bot）`).join('、')}，${MISS[why]}`;
 }
