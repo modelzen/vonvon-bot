@@ -69,7 +69,19 @@ export interface ReasoningItem {
 export type FooterStatus = 'thinking' | 'tool_running' | 'streaming' | 'retrying' | null;
 export type Terminal = 'running' | 'done' | 'interrupted' | 'error' | 'idle_timeout';
 
+export interface SubagentRow {
+  id: string;
+  parentId?: string;
+  name: string;
+  task: string;
+  status: 'running' | 'completed' | 'failed' | 'stopped';
+  steps: Array<{ stepId: string; title: string; status: 'running' | 'done' | 'failed' }>;
+  result?: string;
+  stoppable: boolean;
+}
+
 export interface RunState {
+  subagents: SubagentRow[];
   startedAt?: number;
   completedAt?: number;
   /** reasoning + text + tool blocks in arrival order (text/tool interleave preserved) */
@@ -90,6 +102,7 @@ export interface RunState {
 }
 
 export const initialState: RunState = {
+  subagents: [],
   blocks: [],
   reasoning: [],
   reasoningActive: false,
@@ -227,6 +240,36 @@ export function reduce(state: RunState, evt: AgentEvent): RunState {
       return { ...state, blocks };
     }
 
+    case 'subagent_start': {
+      const rows = state.subagents ?? [];
+      if (rows.some(row => row.id === evt.id)) return state;
+      const oldest = rows.findIndex(row => row.status !== 'running');
+      if (rows.length >= 64 && oldest < 0) return state;
+      const kept = rows.length >= 64 ? rows.filter((_, i) => i !== oldest) : rows;
+      const row: SubagentRow = { id: evt.id, parentId: evt.parentId, name: evt.name,
+        task: evt.task.slice(0, 120), status: 'running', steps: [], stoppable: evt.stoppable };
+      return { ...state, subagents: [...kept, row] };
+    }
+
+    case 'subagent_step':
+      return { ...state, subagents: (state.subagents ?? []).map(row => {
+        if (row.id !== evt.id) return row;
+        if (evt.status === 'running') {
+          if (row.steps.some(step => step.stepId === evt.stepId)) return row;
+          return { ...row, steps: [...row.steps, { stepId: evt.stepId, title: evt.title,
+            status: evt.status }].slice(-5) };
+        }
+        return { ...row, steps: row.steps.map(step => step.stepId === evt.stepId
+          ? { ...step, status: evt.status } : step) };
+      }) };
+
+    case 'subagent_status':
+      return { ...state, subagents: (state.subagents ?? []).map(row => {
+        if (row.id !== evt.id || row.status === 'stopped' || row.status === 'failed') return row;
+        if (evt.status === 'running') return row.status === 'completed' ? { ...row, status: evt.status } : row;
+        return { ...row, status: evt.status, result: evt.result?.slice(0, 600) };
+      }) };
+
     case 'context_usage': {
       const usage = { used: evt.usedTokens, window: evt.contextWindow };
       return { ...state, usage, blocks: noteUsage(onWindow(state.blocks, usage.window), usage) };
@@ -246,6 +289,7 @@ export function reduce(state: RunState, evt: AgentEvent): RunState {
       return {
         ...state,
         terminal: 'error',
+        subagents: closeSubagents(state, 'failed'),
         errorMsg: evt.message,
         errorKind: evt.kind ?? errorKindFromText(evt.message),
         footer: null,
@@ -367,12 +411,17 @@ function noteUsage(blocks: Block[], usage: Usage): Block[] {
   return blocks;
 }
 
+function closeSubagents(state: RunState, status: 'stopped' | 'failed'): SubagentRow[] {
+  return (state.subagents ?? []).map(row => row.status === 'running' ? { ...row, status } : row);
+}
+
 export function markInterrupted(state: RunState): RunState {
   return {
     ...state,
     blocks: closeStreamingText(state.blocks),
     reasoningActive: false,
     terminal: 'interrupted',
+    subagents: closeSubagents(state, 'stopped'),
     footer: null,
   };
 }
@@ -383,6 +432,7 @@ export function markIdleTimeout(state: RunState, seconds: number): RunState {
     blocks: closeStreamingText(state.blocks),
     reasoningActive: false,
     terminal: 'idle_timeout',
+    subagents: closeSubagents(state, 'stopped'),
     footer: null,
     idleTimeoutSeconds: seconds,
   };
@@ -395,6 +445,7 @@ export function finalizeIfRunning(state: RunState): RunState {
     blocks: closeStreamingText(state.blocks),
     reasoningActive: false,
     terminal: 'done',
+    subagents: closeSubagents(state, 'failed'),
     footer: null,
   };
 }

@@ -829,7 +829,7 @@ Rejected.
 - Orca's lease and fence, SQLite journal, recovery capsule, and supervisor script. One daemon per machine has no second writer to fence.
 - Any emulation. The prompt-loop goal is deleted, not ported. Claude `/compact` is kept because Claude declares the command, which makes it native (decided 2026-10-12). Session titles stay as a Vonvon-owned feature, not as an emulated provider capability (see *Session titles*).
 
-Verdict items on the audit that this design fixes. D marked Grok todo as native; the fixtures show no `plan` update, so it is `none` pending `grok.three-turns`. D had no per-subagent stop for Claude; `stopTask` is native. D's Codex child-thread handling named `collabAgentToolCall` only; child `item/*` notifications are the step stream.
+Verdict items on the audit that this design fixes. D marked Grok todo as native; the fixtures show no `plan` update, so it is `none` pending `grok.three-turns`. D had no per-subagent stop for Claude; `stopTask` is native. Codex child threads are registered from `thread/started`, spawn `collabAgentToolCall.receiverThreadIds`, or code-mode `subAgentActivity` items. Parent spawn calls keep one process row; child `item/*` notifications feed the separate step stream.
 
 ## Tradeoffs accepted
 
