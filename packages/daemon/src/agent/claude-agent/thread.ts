@@ -1,8 +1,10 @@
 import { readFile } from 'node:fs/promises';
-import type { Options, Query, SDKMessage, SDKUserMessage, SettingSource } from '@anthropic-ai/claude-agent-sdk';
+import type { Options, PermissionResult, Query, SDKMessage, SDKUserMessage, SettingSource } from '@anthropic-ai/claude-agent-sdk';
 import { log } from '../../core/logger';
 import type {
   AgentEvent,
+  AskRequest,
+  AskResolution,
   AgentInput,
   AgentRun,
   AgentThread,
@@ -11,7 +13,8 @@ import type {
   TurnOptions,
 } from '../types';
 import { createTurnMapper, resultErrorText } from './event-map';
-import type { ClaudePermissionOptions } from './permission';
+import { decide, type ClaudeAccess, type ClaudePermissionOptions, type PathFs, type ToolCall } from './permission';
+import { bridgeAsk, type BridgedAsk } from './ask-bridge';
 import { findTranscript, scanTranscript } from './transcript';
 
 /** Config the backend hands the thread to stand up its persistent query(). */
@@ -24,6 +27,9 @@ export interface ClaudeThreadConfig {
   model?: string;
   effort?: ReasoningEffort;
   permission: ClaudePermissionOptions;
+  access: ClaudeAccess;
+  /** Test-only filesystem for exercising stalled permission checks. */
+  permissionFs?: PathFs;
   /** appended to Claude Code's default system prompt (bridge developer guidance). */
   systemPromptAppend?: string;
   /** Which filesystem settings the SDK loads. The SDK default is none — so
@@ -83,6 +89,8 @@ const ABORT_ESCALATE_MS = 4_000;
 
 type TurnItem =
   | { kind: 'msg'; msg: SDKMessage }
+  | { kind: 'ask'; request: AskRequest }
+  | { kind: 'ask_cancelled'; requestId: string }
   | { kind: 'end' }
   | { kind: 'error'; err: unknown };
 
@@ -274,6 +282,13 @@ export class ClaudeAgentThread implements AgentThread {
   private currentTurnId: string | undefined;
   private lastActivityAt = Date.now();
   private sink: ((item: TurnItem) => void) | undefined;
+  private askSink: ((item: TurnItem) => void) | undefined;
+  private askSeq = 0;
+  private readonly access: ClaudeAccess;
+  private readonly permissionFs: PathFs | undefined;
+  private readonly pending = new Map<string, {
+    turnId?: string; settle(result: PermissionResult): void; toResult: BridgedAsk['toResult'];
+  }>();
   /** maxTokens from the last getContextUsage(), for the next turn's mid-turn readings */
   private contextWindow: number | undefined;
   /** The session file and how far it has been read (s15b). */
@@ -282,6 +297,8 @@ export class ClaudeAgentThread implements AgentThread {
   constructor(cfg: ClaudeThreadConfig) {
     this.sessionId = cfg.sessionId;
     this.cwd = cfg.cwd;
+    this.access = cfg.access;
+    this.permissionFs = cfg.permissionFs;
     this.model = cfg.model;
     this.effort = cfg.effort;
     this.transcript = cfg.transcript;
@@ -301,6 +318,7 @@ export class ClaudeAgentThread implements AgentThread {
       settings: AUTO_COMPACT_SETTINGS,
       // permission tier (permissionMode / sandbox / canUseTool / disallowedTools)
       ...cfg.permission,
+      canUseTool: (name, input, opts) => this.canUseTool(name, input, opts),
       stderr: (d: string) => {
         const s = String(d).trim();
         // file-only (not in stdout allowlist) — handy for diagnosing auth/sandbox.
@@ -312,6 +330,78 @@ export class ClaudeAgentThread implements AgentThread {
     void this.pump();
   }
 
+  private async canUseTool(
+    toolName: string, input: Record<string, unknown>,
+    { signal, decisionReason, ...extra }: Parameters<NonNullable<Options['canUseTool']>>[2],
+  ): Promise<PermissionResult> {
+    this.lastActivityAt = Date.now();
+    const call: ToolCall = { toolName, input, decisionReason, extra };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const verdict = await Promise.race([
+        decide(this.access, call, 'callback', this.permissionFs),
+        new Promise<{ kind: 'deny'; message: string }>((resolve) => {
+          timer = setTimeout(() => resolve({ kind: 'deny', message: '权限检查超时，这一步先不做。' }), 5_000);
+        }),
+      ]);
+      log.info('agent', 'claude-perm', {
+        tool: toolName, verdict: verdict.kind, tier: this.access.mode,
+        reasonType: typeof call.extra.decisionReasonType === 'string' ? call.extra.decisionReasonType : undefined,
+      });
+      if (verdict.kind === 'allow') return { behavior: 'allow', updatedInput: input };
+      if (verdict.kind === 'deny') return { behavior: 'deny', message: verdict.message };
+      if (verdict.kind !== 'ask' || signal.aborted) return { behavior: 'deny', message: '权限检查出错，这一步先不做。' };
+      const askSink = this.askSink;
+      if (!askSink) return { behavior: 'deny', message: '现在没有在进行的对话，没法问人。按你自己的判断继续，或者停下来说明。' };
+      const id = `c${++this.askSeq}`;
+      const bridged = bridgeAsk(id, verdict.ask, this.access, call);
+      if (!bridged) return { behavior: 'deny', message: verdict.ask === 'choices' ? '没法把这个问题做成卡片，改用文字问。' : '权限检查出错，这一步先不做。' };
+      log.info('agent', 'claude-ask', { kind: verdict.ask, id });
+      return new Promise<PermissionResult>((resolve) => {
+        const abort = (): void => {
+          const pending = this.pending.get(id);
+          if (!pending) return;
+          this.pending.delete(id);
+          log.info('agent', 'claude-ask', { id, reason: 'aborted' });
+          pending.settle({ behavior: 'deny', message: '权限检查出错，这一步先不做。' });
+          askSink({ kind: 'ask_cancelled', requestId: id });
+        };
+        this.pending.set(id, {
+          turnId: this.currentTurnId, toResult: bridged.toResult,
+          settle: (result) => { signal.removeEventListener('abort', abort); resolve(result); },
+        });
+        signal.addEventListener('abort', abort, { once: true });
+        askSink({ kind: 'ask', request: bridged.request });
+      });
+    } catch {
+      log.fail('agent', new Error('权限检查出错'), { phase: 'claude-perm' });
+      return { behavior: 'deny', message: '权限检查出错，这一步先不做。' };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private respondToAsk(id: string, resolution: AskResolution): Promise<void> {
+    const pending = this.pending.get(id);
+    if (!pending) {
+      log.info('agent', 'claude-ask-late', { id });
+      return Promise.resolve();
+    }
+    this.pending.delete(id);
+    log.info('agent', 'claude-ask', { id, reason: resolution.kind === 'unanswered' ? resolution.reason : resolution.kind });
+    pending.settle(pending.toResult(resolution));
+    return Promise.resolve();
+  }
+
+  private dropAsks(reason: 'turn-ended' | 'stopped', turnId?: string): void {
+    for (const [id, pending] of this.pending) {
+      if (turnId !== undefined && pending.turnId !== turnId) continue;
+      this.pending.delete(id);
+      log.info('agent', 'claude-ask', { id, reason });
+      pending.settle(pending.toResult({ kind: 'unanswered', reason }));
+    }
+  }
+
   /** Single background consumer: route every query message to the current turn. */
   private async pump(): Promise<void> {
     try {
@@ -320,9 +410,13 @@ export class ClaudeAgentThread implements AgentThread {
         this.sink?.({ kind: 'msg', msg });
       }
       this.dead = true;
+      this.askSink = undefined;
+      this.dropAsks('turn-ended');
       this.sink?.({ kind: 'end' });
     } catch (err) {
       this.dead = true;
+      this.askSink = undefined;
+      this.dropAsks('turn-ended');
       log.fail('agent', err, { backend: 'claude-agent', phase: 'pump' });
       this.sink?.({ kind: 'error', err });
     }
@@ -347,6 +441,7 @@ export class ClaudeAgentThread implements AgentThread {
     const inbox = new Inbox<TurnItem>();
     const mySink = (item: TurnItem): void => inbox.push(item);
     this.sink = mySink;
+    this.askSink = mySink;
 
     // Fire the turn (push the user message) so inference overlaps the caller's
     // card setup; messages buffer in `inbox` until the for-await below drains
@@ -383,6 +478,8 @@ export class ClaudeAgentThread implements AgentThread {
             yield { type: 'error', message: msg || 'Claude 会话出错', willRetry: false };
             return;
           }
+          if (item.kind === 'ask') { yield { type: 'ask', request: item.request }; continue; }
+          if (item.kind === 'ask_cancelled') { yield { type: 'ask_cancelled', requestId: item.requestId }; continue; }
           const msg = item.msg as unknown as { type?: string; subtype?: string };
           self.lastActivityAt = Date.now();
           for (const ev of mapper.map(item.msg)) {
@@ -416,6 +513,8 @@ export class ClaudeAgentThread implements AgentThread {
         }
       } finally {
         query = undefined;
+        self.dropAsks('turn-ended', turnId);
+        if (self.askSink === mySink) self.askSink = undefined;
         self.endTurn();
         if (self.sink === mySink) self.sink = undefined;
       }
@@ -423,6 +522,8 @@ export class ClaudeAgentThread implements AgentThread {
 
     return {
       events: gen(),
+      respondToAsk: (id, resolution) => self.respondToAsk(id, resolution),
+      askPending: (id) => self.pending.has(id),
       stopSubagent: async (id) => {
         if (!query || self.dead || self.sink !== mySink) throw new Error('这个子 agent 已经结束');
         try {
@@ -470,6 +571,7 @@ export class ClaudeAgentThread implements AgentThread {
     const inbox = new Inbox<TurnItem>();
     const mySink = (item: TurnItem): void => inbox.push(item);
     this.sink = mySink;
+    this.askSink = mySink;
 
     this.input.push(textUserMessage(goalPrompt(objective)));
 
@@ -507,6 +609,8 @@ export class ClaudeAgentThread implements AgentThread {
             }
             return;
           }
+          if (item.kind === 'ask') { yield { type: 'ask', request: item.request }; continue; }
+          if (item.kind === 'ask_cancelled') { yield { type: 'ask_cancelled', requestId: item.requestId }; continue; }
           const msg = item.msg as unknown as { type?: string; subtype?: string; usage?: Record<string, number> };
           self.lastActivityAt = Date.now();
           for (const ev of mapper.map(item.msg)) {
@@ -542,6 +646,8 @@ export class ClaudeAgentThread implements AgentThread {
       } finally {
         query = undefined;
         self.goalRunning = false;
+        self.dropAsks('turn-ended', turnId);
+        if (self.askSink === mySink) self.askSink = undefined;
         self.endTurn();
         if (self.sink === mySink) self.sink = undefined;
       }
@@ -549,6 +655,8 @@ export class ClaudeAgentThread implements AgentThread {
 
     return {
       events: gen(),
+      respondToAsk: (id, resolution) => self.respondToAsk(id, resolution),
+      askPending: (id) => self.pending.has(id),
       stopSubagent: async (id) => {
         if (!query || self.dead || self.sink !== mySink) throw new Error('这个子 agent 已经结束');
         try {
@@ -572,6 +680,8 @@ export class ClaudeAgentThread implements AgentThread {
    */
   async clearGoal(): Promise<void> {
     if (!this.goalRunning) return;
+    this.askSink = undefined;
+    this.dropAsks('stopped');
     this.goalRunning = false;
     this.interruptRequested = true;
     this.dead = true; // aborted → resolveThread evicts + resumes on next message
@@ -613,6 +723,7 @@ export class ClaudeAgentThread implements AgentThread {
         if (step === 'timeout') throw new Error(`压缩超时（Claude 未在 ${COMPACT_TIMEOUT_MS / 1000}s 内完成）`);
         if (step.kind === 'end') throw new Error('Claude 会话进程已退出');
         if (step.kind === 'error') throw step.err instanceof Error ? step.err : new Error(String(step.err));
+        if (step.kind === 'ask' || step.kind === 'ask_cancelled') continue;
         const msg = step.msg as unknown as { type?: string; subtype?: string };
         this.lastActivityAt = Date.now();
         if (msg.type === 'system' && msg.subtype === 'compact_boundary') compacted = true;
@@ -692,6 +803,8 @@ export class ClaudeAgentThread implements AgentThread {
   }
 
   async close(): Promise<void> {
+    this.askSink = undefined;
+    this.dropAsks('stopped');
     this.dead = true;
     this.endTurn();
     try {

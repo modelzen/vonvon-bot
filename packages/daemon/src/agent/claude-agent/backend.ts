@@ -1,3 +1,4 @@
+import { realpath } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -32,7 +33,7 @@ import { JudgeCallError } from '../types';
 import { claudeErrorKind, errorKindFromText } from '../error-kind';
 import { BRIDGE_DEVELOPER_INSTRUCTIONS } from '../bridge-instructions';
 import { BackendNotInstalledError, isBackendDepInstalled, installedBackendVersion, loadBackendDep } from '../backend-loader';
-import { permissionOptions } from './permission';
+import { claudeAccess, permissionOptions } from './permission';
 import { findTranscript, scanTranscript } from './transcript';
 import { foldSessionMessages, mapSessionSummary } from './history';
 import { ClaudeAgentThread, type TranscriptMark } from './thread';
@@ -48,9 +49,9 @@ const SDK_PKG = '@anthropic-ai/claude-agent-sdk';
  * `settingSources` the SDK loads every source; helper queries load only 'user'
  * (see helperQueryOptions).
  * Turns once passed nothing here, which is why a project's CLAUDE.md / the user's
- * lark-* skills were previously ignored. The programmatic permission tier
- * (permission.ts: bypassPermissions + sandbox) still takes precedence, so a
- * loaded settings.json cannot weaken the sandbox.
+ * lark-* skills were previously ignored. In default/acceptEdits modes, loaded
+ * permissions.allow and additionalDirectories can bypass canUseTool. The
+ * PreToolUse file hook enforces the write boundary even for those calls.
  *
  * TRADEOFF (intentional): loading 'user'/'project' also loads any hooks / mcpServers
  * declared in those `.claude/settings.json` files — and the SDK WILL execute them in
@@ -342,7 +343,7 @@ export class ClaudeAgentBackend implements AgentBackend {
     compact: true,
     // resume 历史卡：读 ~/.claude/projects 会话存储（与 `claude -r` 同源，双向可见）。
     resume: true,
-    approvals: false,
+    approvals: true, // Claude emits questions, confirmations and full-access permissions via canUseTool (s31).
   };
 
   // Claude's sandbox supports macOS (Seatbelt) and Linux (bubblewrap), so all
@@ -599,13 +600,16 @@ export class ClaudeAgentBackend implements AgentBackend {
 
   async startThread(opts: StartThreadOptions): Promise<AgentThread> {
     const sdk = await this.sdkLoader();
+    const realCwd = await realpath(opts.cwd).catch(() => opts.cwd);
+    const access = claudeAccess(opts.mode, opts.network, opts.cwd, realCwd);
     return new ClaudeAgentThread({
       sessionId: randomUUID(),
       resume: false,
       cwd: opts.cwd,
       model: opts.model,
       effort: opts.effort,
-      permission: permissionOptions(opts.mode, opts.network, opts.cwd),
+      access,
+      permission: permissionOptions(access),
       systemPromptAppend: BRIDGE_DEVELOPER_INSTRUCTIONS,
       settingSources: BRIDGE_SETTING_SOURCES,
       env: bridgeClaudeEnv(),
@@ -616,6 +620,8 @@ export class ClaudeAgentBackend implements AgentBackend {
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {
     const sdk = await this.sdkLoader();
     const transcript = await transcriptMark(await assertSessionSaved(opts.sessionId), opts.sessionId);
+    const realCwd = await realpath(opts.cwd).catch(() => opts.cwd);
+    const access = claudeAccess(opts.mode, opts.network, opts.cwd, realCwd);
     return new ClaudeAgentThread({
       sessionId: opts.sessionId,
       resume: true,
@@ -623,7 +629,8 @@ export class ClaudeAgentBackend implements AgentBackend {
       cwd: opts.cwd,
       model: opts.model,
       effort: opts.effort,
-      permission: permissionOptions(opts.mode, opts.network, opts.cwd),
+      access,
+      permission: permissionOptions(access),
       systemPromptAppend: BRIDGE_DEVELOPER_INSTRUCTIONS,
       settingSources: BRIDGE_SETTING_SOURCES,
       env: bridgeClaudeEnv(),
