@@ -4,17 +4,20 @@ import { join } from 'node:path';
 import { CodexAppServerBackend } from '../src/agent/codex-appserver/backend';
 import { writeNodeExecutable } from './helpers/node-executable';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
+import type { CardActionEvent, NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AgentEvent, AgentInput, AskRequest } from '../src/agent/types';
 
 const fake = vi.hoisted(() => ({
   groupMode: 'single' as 'single' | 'multi' | 'smart',
   groupPolicy: undefined as 'steer' | 'queue' | undefined,
   noMention: undefined as boolean | undefined,
+  managed: new Set<string>(),
+  idConvert: vi.fn<(...args: unknown[]) => Promise<{ data: { card_id?: string } }>>(async () => ({ data: {} })),
+  elementUpdate: vi.fn(async (..._args: unknown[]) => ({})),
   sendManaged: vi.fn(async () => ({ messageId: 'ask-1', cardId: 'card-ask' })),
   updateManaged: vi.fn(async () => true),
   reply: vi.fn(async () => ({ data: {} })),
-  getMessage: vi.fn(async () => ({ data: { items: [{ thread_id: 'new-topic' }] } })),
+  getMessage: vi.fn<() => Promise<{ data: { items: { thread_id?: string; chat_id?: string; body?: { content: string } }[] } }>>(async () => ({ data: { items: [{ thread_id: 'new-topic' }] } })),
   backend: { capabilities: { steer: true }, id: 'codex', listModels: vi.fn(async () => []), resumeThread: vi.fn(), startThread: vi.fn() },
   voice: vi.fn(async (_channel: unknown, msg: NormalizedMessage) => ({ text: '语音正文', voice: { messageId: msg.messageId, text: '语音正文', transcribed: true } })),
   live: vi.fn(),
@@ -35,7 +38,7 @@ afterAll(async () => {
   await pool.shutdownResidentClients();
 });
 vi.mock('../src/bot/steer-delivery', async original => { const real = await original<typeof import('../src/bot/steer-delivery')>(); return { ...real, steerWithDeadline: (thread: any, input: any, id: string) => real.steerWithDeadline(thread, input, id, undefined, 150) }; });
-vi.mock('../src/card/managed', async original => ({ ...await original<object>(), sendManagedCard: fake.sendManaged, updateManagedCard: fake.updateManaged }));
+vi.mock('../src/card/managed', async original => ({ ...await original<object>(), sendManagedCard: fake.sendManaged, updateManagedCard: fake.updateManaged, isManaged: (id: string) => fake.managed.has(id) }));
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown, fn: () => unknown) => fn() }));
 vi.mock('../src/agent', async (original) => ({ ...await original<object>(), createBackend: () => fake.backend }));
 vi.mock('../src/project/registry', async (original) => ({
@@ -132,7 +135,7 @@ function message(text: string, over: Partial<NormalizedMessage> = {}): Normalize
 }
 function setup(policy: 'steer' | 'queue' = 'steer') {
   const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: policy, access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' } } };
-  const channel = { send: fake.send, rawClient: { im: { v1: { message: { reply: fake.reply, get: fake.getMessage }, messageReaction: {
+  const channel = { send: fake.send, rawClient: { cardkit: { v1: { card: { idConvert: fake.idConvert }, cardElement: { update: fake.elementUpdate } } }, im: { v1: { message: { reply: fake.reply, get: fake.getMessage }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
   orchestrator = createOrchestrator(channel as never, cfg, '/test');
@@ -143,7 +146,13 @@ beforeEach(() => {
   fake.groupMode = 'single';
   fake.groupPolicy = undefined;
   fake.noMention = undefined;
-  fake.sendManaged.mockReset().mockResolvedValue({ messageId: 'ask-1', cardId: 'card-ask' });
+  fake.managed.clear();
+  fake.idConvert.mockReset().mockResolvedValue({ data: {} });
+  fake.elementUpdate.mockReset().mockResolvedValue({});
+  fake.sendManaged.mockReset().mockImplementation(async () => {
+    fake.managed.add('ask-1');
+    return { messageId: 'ask-1', cardId: 'card-ask' };
+  });
   fake.updateManaged.mockReset().mockResolvedValue(true);
   fake.reply.mockReset().mockResolvedValue({ data: {} });
   fake.getMessage.mockReset().mockResolvedValue({ data: { items: [{ thread_id: 'new-topic' }] } });
@@ -398,5 +407,152 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
     await o.onMessage(message('早先的话', { createTime: Date.now() - 60_000 }));
     expect(run.respond).not.toHaveBeenCalled();
     run.turns[0]!.resolve();
+  });
+});
+
+
+describe('inactive ask card healing', () => {
+  function click(messageId = 'gone', chatId = 'chat'): CardActionEvent {
+    return { messageId, chatId, operator: { openId: 'owner' }, action: {
+      tag: 'button', value: { a: 'ask_submit', requestId: 'x', decision: 'submit' },
+    } };
+  }
+  function oldCard(chatId: string | undefined = 'chat', content = '{"type":"card","data":{"card_id":"c1"}}') {
+    fake.getMessage.mockResolvedValue({ data: { items: [{ chat_id: chatId, body: { content } }] } });
+  }
+  const healed = () => vi.waitFor(() => expect(fake.elementUpdate).toHaveBeenCalledOnce(), { timeout: 2000 });
+
+  it('explains and replaces orphan controls once per card within 60 seconds', async () => {
+    const o = setup(); oldCard();
+    await o.dispatcher.handle(click());
+    await healed();
+    expect(fake.send).toHaveBeenCalledExactlyOnceWith('chat', {
+      markdown: expect.stringContaining('已失效（后台服务重启过）'),
+    }, { replyTo: 'gone' });
+    expect(fake.elementUpdate).toHaveBeenCalledWith({
+      path: { card_id: 'c1', element_id: 'ask_controls' },
+      data: { element: expect.stringContaining('已失效（后台服务重启过）'),
+        sequence: expect.any(Number), uuid: expect.any(String) },
+    });
+    await o.dispatcher.handle(click());
+    expect(fake.send).toHaveBeenCalledOnce();
+    expect(fake.getMessage).toHaveBeenCalledOnce();
+    expect(fake.idConvert).not.toHaveBeenCalled();
+    expect(fake.elementUpdate).toHaveBeenCalledOnce();
+  });
+
+  it('leaves a locally answered card to its normal terminal update', async () => {
+    const run = thread(); const o = await started(run, { threadId: undefined });
+    await visible(run);
+    await o.onMessage(message('用方案 B', { threadId: undefined }));
+    await until(() => answered(run));
+    fake.send.mockClear(); fake.getMessage.mockClear();
+    await o.dispatcher.handle(click('ask-1'));
+    await until(() => expect(fake.send).toHaveBeenCalledOnce());
+    expect(JSON.stringify(fake.send.mock.calls)).toContain('已经有结果了');
+    expect(JSON.stringify(fake.send.mock.calls)).not.toContain('重启');
+    run.turns[0]!.resolve();
+    await o.shutdown();
+    expect(fake.getMessage).not.toHaveBeenCalled();
+    expect(fake.idConvert).not.toHaveBeenCalled();
+    expect(fake.elementUpdate).not.toHaveBeenCalled();
+  });
+
+  it('ignores a forged callback for an active card in another chat', async () => {
+    const run = thread(); const o = await started(run);
+    await visible(run);
+    fake.send.mockClear(); fake.getMessage.mockClear();
+    await o.dispatcher.handle(click('ask-1', 'other'));
+    expect(fake.send).not.toHaveBeenCalled();
+    expect(fake.getMessage).not.toHaveBeenCalled();
+    expect(fake.idConvert).not.toHaveBeenCalled();
+    expect(fake.elementUpdate).not.toHaveBeenCalled();
+    expect(run.respond).not.toHaveBeenCalled();
+    run.turns[0]!.resolve();
+  });
+
+  it.each([
+    ['another chat', 'other', '{"type":"card","data":{"card_id":"c1"}}'],
+    ['no card id', 'chat', '{}'],
+    ['malformed content', 'chat', 'invalid json'],
+  ])('does not update an orphan with %s', async (_label, chatId, content) => {
+    const o = setup(); oldCard(chatId, content);
+    await o.dispatcher.handle(click());
+    await o.shutdown();
+    expect(fake.send).toHaveBeenCalledOnce();
+    expect(fake.getMessage).toHaveBeenCalledOnce();
+    expect(fake.elementUpdate).not.toHaveBeenCalled();
+    if (chatId === 'other') expect(fake.idConvert).not.toHaveBeenCalled();
+  });
+
+  it.each([{ items: [] }, { items: [{}] }])('leaves a missing message body unchanged ($items)', async ({ items }) => {
+    const o = setup();
+    fake.getMessage.mockResolvedValue({ data: { items } });
+    await o.dispatcher.handle(click());
+    await o.shutdown();
+    expect(fake.send).toHaveBeenCalledOnce();
+    expect(fake.getMessage).toHaveBeenCalledOnce();
+    expect(fake.elementUpdate).not.toHaveBeenCalled();
+  });
+
+  it('converts a message id when Feishu returns expanded card content', async () => {
+    const o = setup(); oldCard('chat', '{"title":"选择","elements":[]}');
+    fake.idConvert.mockResolvedValue({ data: { card_id: 'converted-card' } });
+    await o.dispatcher.handle(click());
+    await o.shutdown();
+    expect(fake.idConvert).toHaveBeenCalledExactlyOnceWith({ data: { message_id: 'gone' } });
+    expect(fake.elementUpdate).toHaveBeenCalledWith({
+      path: { card_id: 'converted-card', element_id: 'ask_controls' },
+      data: { element: expect.stringContaining('已失效（后台服务重启过）'),
+        sequence: expect.any(Number), uuid: expect.any(String) },
+    });
+  });
+
+  it('keeps the explanation when conversion returns no card id', async () => {
+    const o = setup(); oldCard('chat', '{"title":"选择","elements":[]}');
+    await o.dispatcher.handle(click());
+    await o.shutdown();
+    expect(fake.idConvert).toHaveBeenCalledOnce();
+    expect(fake.send).toHaveBeenCalledOnce();
+    expect(fake.elementUpdate).not.toHaveBeenCalled();
+  });
+
+  it('logs conversion rejection without rejecting dispatch or shutdown', async () => {
+    const o = setup(); oldCard('chat', '{"title":"选择","elements":[]}');
+    const error = new Error('conversion failed');
+    fake.idConvert.mockRejectedValue(error);
+    await expect(o.dispatcher.handle(click())).resolves.toBeUndefined();
+    await expect(o.shutdown()).resolves.toBeUndefined();
+    expect(fake.send).toHaveBeenCalledOnce();
+    expect(fake.elementUpdate).not.toHaveBeenCalled();
+    expect(fake.log.fail).toHaveBeenCalledWith('card', error, { phase: 'ask-card-heal' });
+  });
+
+  it('never converts an expanded card from another chat', async () => {
+    const o = setup(); oldCard('other', '{"title":"选择","elements":[]}');
+    fake.idConvert.mockResolvedValue({ data: { card_id: 'converted-card' } });
+    await o.dispatcher.handle(click());
+    await o.shutdown();
+    expect(fake.idConvert).not.toHaveBeenCalled();
+    expect(fake.elementUpdate).not.toHaveBeenCalled();
+  });
+
+  it('can heal an old message without a chat_id field', async () => {
+    const o = setup(); oldCard();
+    fake.getMessage.mockResolvedValue({ data: { items: [{ body: { content: '{"type":"card","data":{"card_id":"c1"}}' } }] } });
+    await o.dispatcher.handle(click());
+    await healed();
+  });
+
+  it.each(['get', 'update'])('logs a failed %s without rejecting dispatch or shutdown', async phase => {
+    const o = setup(); oldCard();
+    const error = new Error(`heal ${phase} failed`);
+    if (phase === 'get') fake.getMessage.mockRejectedValue(error);
+    else fake.elementUpdate.mockRejectedValue(error);
+    await expect(o.dispatcher.handle(click())).resolves.toBeUndefined();
+    await expect(o.shutdown()).resolves.toBeUndefined();
+    expect(fake.send).toHaveBeenCalledOnce();
+    expect(fake.log.fail).toHaveBeenCalledWith('card', error, { phase: 'ask-card-heal' });
+    if (phase === 'get') expect(fake.elementUpdate).not.toHaveBeenCalled();
   });
 });

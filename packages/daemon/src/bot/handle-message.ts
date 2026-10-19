@@ -47,7 +47,8 @@ import {
   type ThreadHistory,
   type ThreadSummary,
 } from '../agent/types';
-import type { SelectOption } from '../card/cards';
+import { note, type SelectOption } from '../card/cards';
+import { ASK_CONTROLS_EID } from '../card/ask-card';
 import {
   createAppPreferencesWriter,
   createAdminWriteExecutor,
@@ -93,7 +94,7 @@ import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
 import { createJudge } from '../judge/judge';
 import { createJudgeUsage } from '../judge/usage';
 import { installAtGuard } from '../card/at-guard';
-import { sendManagedCard, updateManagedCard } from '../card/managed';
+import { isManaged, sendManagedCard, updateManagedCard } from '../card/managed';
 import { RunRender } from '../card/run-render';
 import { finalMessageText, initialState, reduce, type RunState } from '../card/run-state';
 import {
@@ -3708,7 +3709,8 @@ export function createOrchestrator(
   }(channel, cfg);
   const asks = new AskCoordinator(channel, cfg, names);
   dispatcher.on('ask_submit', ({ evt, value, formValue }) => {
-    asks.submit({ messageId: evt.messageId, chatId: evt.chatId, operatorOpenId: evt.operator?.openId, value, formValue });
+    const result = asks.submit({ messageId: evt.messageId, chatId: evt.chatId, operatorOpenId: evt.operator?.openId, value, formValue });
+    if (result === 'inactive') healDeadAskCard(evt);
   });
   const outboundFiles = new OutboundFiles(paths.outboundFilesDir);
   void trackTask(outboundFiles.recover(channel));
@@ -3964,6 +3966,41 @@ export function createOrchestrator(
         });
       } catch (err) {
         log.fail('card', err, { phase: 'run-card-heal', key });
+      }
+    })());
+  };
+
+  const ASK_EXPIRED = '已失效（后台服务重启过）';
+  const healDeadAskCard = (evt: CardActionEvent): void => {
+    if (runControlNotes.seen(`dead-ask:${evt.messageId}`)) return;
+    if (isManaged(evt.messageId)) {
+      // settle owns this process's terminal update; epoch sequences would invalidate its counter.
+      void trackTask(channel.send(evt.chatId, { markdown: 'ℹ️ 这个问题已经有结果了（有人回答、超时或已停止），卡片会更新。' }, { replyTo: evt.messageId }).catch(() => undefined));
+      log.info('card', 'action', { actionId: 'ask_submit', settled: true });
+      return;
+    }
+    void trackTask(channel.send(evt.chatId, { markdown: `ℹ️ 这张提问卡${ASK_EXPIRED}，这一轮已经结束。要继续，请重新发消息。` }, { replyTo: evt.messageId }).catch(() => undefined));
+    log.info('card', 'action', { actionId: 'ask_submit', orphan: true });
+    void trackTask((async () => {
+      try {
+        await new Promise((r) => setTimeout(r, CARD_SETTLE_MS));
+        const res = await channel.rawClient.im.v1.message.get({ path: { message_id: evt.messageId } });
+        const item = res.data?.items?.[0];
+        if (item?.chat_id && item.chat_id !== evt.chatId) return;
+        const content = item?.body?.content;
+        let cardId = content ? cardIdFromMessageContent(content) : undefined;
+        if (!cardId) {
+          const converted = await channel.rawClient.cardkit.v1.card.idConvert({ data: { message_id: evt.messageId } });
+          cardId = converted.data?.card_id;
+        }
+        if (!cardId) return;
+        const seq = Math.floor(Date.now() / 1000);
+        await channel.rawClient.cardkit.v1.cardElement.update({
+          path: { card_id: cardId, element_id: ASK_CONTROLS_EID },
+          data: { element: JSON.stringify(note(ASK_EXPIRED)), sequence: seq, uuid: `ha_${cardId}_${seq}` },
+        });
+      } catch (err) {
+        log.fail('card', err, { phase: 'ask-card-heal' });
       }
     })());
   };
