@@ -294,6 +294,7 @@ import {
   type ThreadPull,
   type TopicScan,
   type Who,
+  wakeTriggerText,
 } from './context-weave';
 import {
   addCommentReaction,
@@ -313,7 +314,6 @@ import {
 } from './comments';
 import { createGracefulInterrupt, createIdlePause, Semaphore, withIdleTimeout, type IdlePause } from './watchdog';
 import { createBotRoster } from './bot-roster';
-import { wakeTriggerText } from './bot-wake';
 import { createNameBook, fetchChatMembers, resolveNames, withDeadline } from './names';
 
 /** 所有项目群成员的并集（去重）—— admins 加人的候选源（admins 通常是项目相关的人）。
@@ -583,6 +583,7 @@ type NotedMessage = Pick<NormalizedMessage, 'chatId' | 'messageId' | 'senderId' 
 
 /** How long a group's full-only explanation quiets 免@ and bot messages; a person's @ always gets one. */
 const FULL_ONLY_QUIET_MS = 10 * 60_000;
+const UNBOUND_QUIET_MS = 10 * 60_000;
 /** Each 三条底线 lookup's limit (s22): the group's later messages wait behind it. */
 const LOOKUP_DEADLINE_MS = 3000;
 /** How far back a topic may open under an earlier line than the judged one (s25b): one of the batch, or one of the
@@ -2080,13 +2081,25 @@ export function createOrchestrator(
       if (msg.mentionedBot) {
         // It got only a hint, so the owner sees why on the page.
         noteNotReplied(msg, 'unbound');
-        await channel
-          .send(
-            msg.chatId,
-            { markdown: UNBOUND_GROUP_REPLY },
-            { replyTo: msg.messageId },
-          )
-          .catch(() => undefined);
+        const now = Date.now();
+        const last = unboundNoted.get(msg.chatId);
+        if (now - (last ?? -Infinity) < UNBOUND_QUIET_MS) {
+          log.info('intake', 'unbound-quiet', { chatId: msg.chatId.slice(-6) });
+          return;
+        }
+        unboundNoted.delete(msg.chatId);
+        unboundNoted.set(msg.chatId, now);
+        if (unboundNoted.size > 1000) {
+          const oldest = unboundNoted.keys().next().value;
+          if (oldest !== undefined) unboundNoted.delete(oldest);
+        }
+        const sent = await channel.send(msg.chatId, { markdown: UNBOUND_GROUP_REPLY }, {
+          replyTo: msg.messageId, replyInThread: Boolean(msg.threadId),
+        }).then(() => true, () => false);
+        if (!sent && unboundNoted.get(msg.chatId) === now) {
+          if (last === undefined) unboundNoted.delete(msg.chatId);
+          else unboundNoted.set(msg.chatId, last);
+        }
       }
       return;
     }
@@ -2475,6 +2488,7 @@ export function createOrchestrator(
 
   /** When each group last got the full-only explanation (see refuseFullOnly). */
   const fullOnlyNoted = new Map<string, number>();
+  const unboundNoted = new Map<string, number>();
   /** A 只读 or 读写 turn where the backend runs only in 完全访问 (Codex on Linux): no session starts and
    * nothing is downloaded or woven first. The message is noted and the group told why, in place: every
    * human @, and a bot or 免@ message only when the group got no explanation in the last {@link FULL_ONLY_QUIET_MS}. */
@@ -7886,6 +7900,7 @@ export function createOrchestrator(
         log.info('intake', 'bot-added-no-operator', tail);
         return;
       }
+      unboundNoted.delete(evt.chatId);
       const fresh = await pendingGroups.add(evt.chatId, op).catch(error => {
         log.fail('intake', error, { phase: 'pending-group-add' });
         return true;

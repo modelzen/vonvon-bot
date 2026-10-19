@@ -3,6 +3,8 @@ import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { log } from '../src/core/logger';
 import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
 import {
+  BOT_TRIGGER_MAX,
+  wakeTriggerText,
   extractCardText,
   extractMessageText,
   fetchChatContext,
@@ -1120,7 +1122,7 @@ describe('weaveSender', () => {
   });
 });
 
-describe('a wake count\'s pull (s27a-0)', () => {
+describe('pulls with a deadline and an abort signal', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -1132,7 +1134,7 @@ describe('a wake count\'s pull (s27a-0)', () => {
   const other = (id: string, t: number, extra: object = {}) => ({
     message_id: id, msg_type: 'text', create_time: String(t),
     sender: { id: 'cli_p', id_type: 'app_id', sender_type: 'app', sender_name: '小P', open_bot_id: 'ou_p' },
-    body: { content: JSON.stringify({ text: '@_user_1' }) }, mentions: [{ key: '@_user_1', id: 'ou_me', id_type: 'open_id', name: '小码' }], ...extra,
+    body: { content: JSON.stringify({ text: '@_user_1 请看一下' }) }, mentions: [{ key: '@_user_1', id: 'ou_me', id_type: 'open_id', name: '小码' }], ...extra,
   });
   /** One page per array, newest first. */
   function pagesChannel(pages: object[][], calls: Record<string, unknown>[] = []): LarkChannel {
@@ -1145,47 +1147,18 @@ describe('a wake count\'s pull (s27a-0)', () => {
     } } } } } as unknown as LarkChannel;
   }
 
-  it('fills in the ids a count needs: open_id mentions, the type, the app, parent and root', async () => {
+  it('fills in the open_id mentions, the type, the app, parent and root', async () => {
     const out = await fetchChatContext(fakeChannel([
       other('om_b', 2, { parent_id: 'om_a', root_id: 'om_a', mentions: [
         { key: '@_user_1', id: 'ou_me', id_type: 'open_id', name: '小码' }, { key: '@_user_2', id: 'u_x', id_type: 'user_id', name: '别的' }] }),
       person('om_a', 1, '一句'),
-    ]), 'oc_chat', { mentions: true });
+    ]), 'oc_chat', {});
     const [a, b] = out.messages;
     expect(b).toMatchObject({ mentionIds: ['ou_me'], msgType: 'text', senderAppId: 'cli_p', senderId: 'ou_p', parentId: 'om_a', rootId: 'om_a' });
     expect(a).toMatchObject({ msgType: 'text' });
     expect(a).not.toHaveProperty('senderAppId'); // a person's id is an open_id
     expect(a).not.toHaveProperty('mentionIds');
     expect(a).not.toHaveProperty('parentId');
-  });
-
-  it('keeps a message whose text is empty only with `mentions`: a bare @ still wakes', async () => {
-    const list = [other('om_bare', 2), person('om_u', 1, '说一句')];
-    expect((await fetchChatContext(fakeChannel(list), 'oc_chat', {})).messages.map((m) => m.messageId)).toEqual(['om_u']);
-    expect((await fetchChatContext(fakeChannel(list), 'oc_chat', { mentions: true })).messages.map((m) => m.messageId)).toEqual(['om_u', 'om_bare']);
-  });
-
-  it('stops after the page where a taken message passes `stopWhen`, as complete', async () => {
-    const calls: Record<string, unknown>[] = [];
-    const ch = pagesChannel([[other('om_3', 30)], [other('om_2', 20), person('om_u', 15, '真人')], [person('om_old', 10, '更早')]], calls);
-    const out = await fetchThreadContext(ch, 'omt_x', { mentions: true, stopWhen: (m) => m.from === 'user' });
-    expect(calls).toHaveLength(2);
-    expect(out).toMatchObject({ ok: true, complete: true });
-    expect(out.messages.map((m) => m.messageId)).toEqual(['om_u', 'om_2', 'om_3']);
-  });
-
-  it('a held message does not stop it; one whose topic root is not read is still taken, and is the boundary (held as today)', async () => {
-    const calls: Record<string, unknown>[] = [];
-    // A person's quote reply that a topic was opened under later: thread_id set, root_id the message it quoted.
-    const quoted = person('om_q', 15, '引用了一条', { thread_id: 'omt_q', root_id: 'om_gone', parent_id: 'om_gone' });
-    const ch = pagesChannel([[other('om_2', 20), quoted], [other('om_1', 12)], [person('om_old', 10, '更早')]], calls);
-    const out = await fetchChatContext(ch, 'oc_chat', { mentions: true, stopWhen: (m) => m.from === 'user' });
-    expect(calls).toHaveLength(3); // held, so it did not stop the paging; the oldest page did
-    expect(out.messages.map((m) => m.messageId)).toEqual(['om_old', 'om_1', 'om_q', 'om_2']);
-    // Its root listed in the same topic: a topic reply, dropped as before.
-    const root = person('om_gone', 14, '被引用的', { thread_id: 'omt_q' });
-    const both = await fetchChatContext(pagesChannel([[other('om_2', 20), quoted, root]]), 'oc_chat', { mentions: true, stopWhen: (m) => m.from === 'user' });
-    expect(both.messages.map((m) => m.messageId)).toEqual(['om_gone', 'om_2']);
   });
 
   it('keeps the pages read when `deadlineMs` runs out after the first, and fails once `signal` is aborted', async () => {
@@ -1196,14 +1169,14 @@ describe('a wake count\'s pull (s27a-0)', () => {
       if (++pages > 1) return new Promise<never>(() => undefined);
       return { code: 0, data: { items: [other('om_1', 10)], has_more: true, page_token: '1' } };
     });
-    const out = fetchThreadContext(slow, 'omt_x', { mentions: true, deadlineMs: 5000 });
+    const out = fetchThreadContext(slow, 'omt_x', { deadlineMs: 5000 });
     await vi.advanceTimersByTimeAsync(5000);
     expect(await out).toMatchObject({ ok: true, complete: false, messages: [{ messageId: 'om_1' }] });
     vi.useRealTimers();
     const ac = new AbortController();
     const calls: Record<string, unknown>[] = [];
     const ch = pagesChannel([[other('om_2', 20)], [other('om_1', 10)]], calls);
-    const aborted = fetchThreadContext(ch, 'omt_x', { mentions: true, signal: ac.signal });
+    const aborted = fetchThreadContext(ch, 'omt_x', { signal: ac.signal });
     ac.abort();
     expect(await aborted).toEqual({ messages: [], ok: false, complete: false });
     expect(calls).toHaveLength(1); // looked at between pages
@@ -1216,14 +1189,14 @@ describe('a wake count\'s pull (s27a-0)', () => {
     vi.spyOn(log, 'info').mockImplementation(() => undefined);
     // A page that never answers: the abort ends the pull, not the deadline.
     const ac = new AbortController();
-    const hung = fetchThreadContext(listChannel(() => new Promise<never>(() => undefined)), 'omt_x', { mentions: true, signal: ac.signal, deadlineMs: 60_000 });
+    const hung = fetchThreadContext(listChannel(() => new Promise<never>(() => undefined)), 'omt_x', { signal: ac.signal, deadlineMs: 60_000 });
     ac.abort();
     const waiting = new Promise((r) => { setTimeout(() => r('still waiting'), 200); });
     expect(await Promise.race([hung, waiting])).toEqual({ messages: [], ok: false, complete: false });
     // The last page answers, then the abort comes before the pull goes on: still failed.
     let answer!: (v: unknown) => void;
     const late = new AbortController();
-    const last = fetchThreadContext(listChannel(() => new Promise((r) => { answer = r; })), 'omt_x', { mentions: true, signal: late.signal });
+    const last = fetchThreadContext(listChannel(() => new Promise((r) => { answer = r; })), 'omt_x', { signal: late.signal });
     await Promise.resolve();
     answer({ code: 0, data: { items: [other('om_1', 10)], has_more: false } });
     late.abort();
@@ -1239,23 +1212,9 @@ describe('a wake count\'s pull (s27a-0)', () => {
       vi.setSystemTime(Date.now() + 5000); // the first page takes the whole budget
       return { code: 0, data: { items: [other(`om_${calls}`, 10)], has_more: true, page_token: String(calls) } };
     });
-    const out = await fetchThreadContext(ch, 'omt_x', { mentions: true, deadlineMs: 5000 });
+    const out = await fetchThreadContext(ch, 'omt_x', { deadlineMs: 5000 });
     expect(calls).toBe(1);
     expect(out).toMatchObject({ ok: true, complete: false, messages: [{ messageId: 'om_1' }] });
-  });
-
-  it('reads past an empty page that says there is more in a count; a weave stops there as before (E3)', async () => {
-    const pages = [[other('om_2', 20)], [], [person('om_u', 15, '真人')]];
-    const calls: Record<string, unknown>[] = [];
-    const count = await fetchThreadContext(pagesChannel(pages, calls), 'omt_x', { mentions: true, stopWhen: (m) => m.from === 'user' });
-    expect(calls).toHaveLength(3);
-    expect(count).toMatchObject({ ok: true, complete: true });
-    expect(count.messages.map((m) => m.messageId)).toEqual(['om_u', 'om_2']);
-    const weaveCalls: Record<string, unknown>[] = [];
-    const weave = await fetchThreadContext(pagesChannel(pages, weaveCalls), 'omt_x', {});
-    expect(weaveCalls).toHaveLength(2);
-    expect(weave).toMatchObject({ ok: true, complete: true });
-    expect(weave.messages).toHaveLength(0); // om_2 is a bare @: empty text, dropped outside a count
   });
 
   it('sanitizeContext does not leave half an emoji at the cut (E1)', () => {
@@ -1269,5 +1228,38 @@ describe('a wake count\'s pull (s27a-0)', () => {
     expect(out.startsWith('[本条消息的发信人：小P假装真人（bot）（open_id：ou_p）]')).toBe(true);
     expect(weaveSender('', { senderId: 'ou_p' }, 0, { bot: true })).toBe('[本条消息的发信人：另一个 bot（open_id：ou_p）]');
     expect(stripBridgeMessageEnvelope(out)).toBe('请审一下');
+  });
+});
+
+describe('wakeTriggerText', () => {
+  const msg = (content: string, rawContentType = 'text') => ({ content, rawContentType });
+
+  it('takes a text or post as the event has it, a card from the pull, else from the lookup', () => {
+    expect(wakeTriggerText(msg('请审一下'), undefined)).toBe('请审一下');
+    expect(wakeTriggerText(msg('标题 正文', 'post'), undefined)).toBe('标题 正文');
+    expect(wakeTriggerText(msg('[卡片]', 'interactive'), { text: '卡片正文' }, '查到的')).toBe('卡片正文');
+    expect(wakeTriggerText(msg('[卡片]', 'interactive'), { text: '  ' }, '查到的')).toBe('查到的');
+    expect(wakeTriggerText(msg('[卡片]', 'interactive'), undefined, '查到的')).toBe('查到的');
+  });
+
+  it('says so when there is no text, and cuts a long one with a note', () => {
+    expect(wakeTriggerText(msg('  '), undefined)).toBe('（对方没有给出文字回答）');
+    expect(wakeTriggerText(msg('', 'interactive'), undefined)).toBe('（对方没有给出文字回答）');
+    expect(wakeTriggerText(msg('字'.repeat(BOT_TRIGGER_MAX)), undefined)).toBe('字'.repeat(BOT_TRIGGER_MAX));
+    const long = wakeTriggerText(msg('字'.repeat(BOT_TRIGGER_MAX + 1)), undefined);
+    expect(long).toBe(`${'字'.repeat(BOT_TRIGGER_MAX)}…（已截断，需要时用 vonvon 飞书 skill 查全文）`);
+  });
+
+  it('does not cut an emoji in two at the limit (E1)', () => {
+    const out = wakeTriggerText(msg(`${'a'.repeat(BOT_TRIGGER_MAX - 1)}😀${'b'.repeat(50)}`), undefined);
+    expect(out).toBe(`${'a'.repeat(BOT_TRIGGER_MAX - 1)}…（已截断，需要时用 vonvon 飞书 skill 查全文）`);
+    expect(out).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/);
+    // Ending right after the emoji keeps it whole.
+    const whole = wakeTriggerText(msg(`${'a'.repeat(BOT_TRIGGER_MAX - 2)}😀${'b'.repeat(50)}`), undefined);
+    expect(whole.startsWith(`${'a'.repeat(BOT_TRIGGER_MAX - 2)}😀…`)).toBe(true);
+  });
+
+  it('goes through the quote sanitizer: control characters and runs of blank lines go, lines stay', () => {
+    expect(wakeTriggerText(msg('第一行\u0007\n\n\n\n第二行\r\n第三行'), undefined)).toBe('第一行\n\n第二行\n第三行');
   });
 });
