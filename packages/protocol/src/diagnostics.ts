@@ -72,16 +72,16 @@ export const NOT_REPLIED_TEXT: Record<NotRepliedReason, Text> = {
   },
   "judge-skip": {
     reason: r => `判断后没接话${r.detail ? `：${r.detail}` : ""}`,
-    next: () => "智能模式下这是正常的。要它一定回就 @ 它；总是漏回就改智能提示词。",
+    next: () => "智能模式下这是正常的。真人要它一定回就 @ 它；总是漏回就改智能提示词。",
   },
   "judge-failed": {
-    reason: r => `判断没出结果${r.detail ? `（${r.detail}）` : ""}，没 @ 它的这条没回`,
+    reason: r => `判断没出结果${r.detail ? `（${r.detail}）` : ""}，这条没回`,
     // a decision model's key: the key page fixes it, or the keystore's error in the log below (s23g2)
-    next: r => keyFailureOf(r.detail) === "key" ? "在密钥页填了就恢复；@ 它一定会回。"
-      : keyFailureOf(r.detail) === "keystore" ? "密钥库读得了就恢复，原因在下面 daemon 日志的 secrets.unreadable；@ 它一定会回。"
-      : "@ 它一定会回；反复出现时看下面的日志。",
+    next: r => keyFailureOf(r.detail) === "key" ? "在密钥页填了就恢复；真人 @ 它一定会回。"
+      : keyFailureOf(r.detail) === "keystore" ? "密钥库读得了就恢复，原因在下面 daemon 日志的 secrets.unreadable；真人 @ 它一定会回。"
+      : "真人 @ 它一定会回；反复出现时看下面的日志。",
   },
-  "judge-budget": { reason: () => "这个群这一小时判断了 60 次，到了上限，没 @ 它的这条没判断", next: () => "一小时内会恢复；@ 它仍然会回。" },
+  "judge-budget": { reason: () => "这个群这一小时判断了 60 次，到了上限，这条没判断", next: () => "一小时内会恢复；真人 @ 它仍然会回。" },
   "judge-superseded": { reason: () => "判断说要回，但它已随后来的消息进了会话，没单独回", next: () => "不用处理。" },
   "judge-empty": {
     reason: r => `自己接话后没有要说的，${r.detail ?? "删掉了空卡"}`,
@@ -92,16 +92,16 @@ export const NOT_REPLIED_TEXT: Record<NotRepliedReason, Text> = {
     next: () => "不用处理。真人在这个位置说一句，Bot 之间就能接着来。",
   },
   "bot-wake-failed": {
-    reason: r => `没数出 Bot 之间叫醒了几次${r.detail ? `（${r.detail}）` : ""}，这条 Bot 的 @ 没回`,
-    next: () => "飞书接口偶尔出错；反复出现时看下面的日志和上面「缺的权限」。",
+    reason: r => `处理这条 Bot 的 @ 时出错${r.detail ? `（${r.detail}）` : ""}，没回`,
+    next: () => "反复出现时看下面的日志。",
   },
   "bot-wake-not-allowed": {
-    reason: () => "这个群设了「响应成员」，别的 Bot 的 @ 叫不醒它",
-    next: () => "这是设置的效果。要让 Bot 之间互相 @，在群内设置里清空「响应成员」。",
+    reason: () => "这个群设了「响应成员」，这个 Bot 不在名单上，它的 @ 叫不醒",
+    next: () => "这是设置的效果。要让它能叫醒，把它加进「响应成员」，或者清空名单。",
   },
   "bot-wake-dropped": {
     reason: r => `这条 Bot 的 @ 没处理${r.detail ? `：${r.detail}` : ""}`,
-    next: () => "不用处理。真人说一句，Bot 之间就能接着来。",
+    next: () => "不用处理。",
   },
 };
 

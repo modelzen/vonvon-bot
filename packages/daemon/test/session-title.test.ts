@@ -71,17 +71,15 @@ describe('session title pure pipeline', () => {
     expect(stripBridgeMessageEnvelope(`${INITIATIVE_NOTE} ${woven.replace(/\n/g, ' ')}`)).toBe('这个报错是不是缓存的问题');
   });
 
-  it('removes the note of a turn another bot woke and its bot sender block, at the cap too (s27a-0)', () => {
+  it('removes the note of a turn another bot woke and its bot sender block (s27a)', () => {
     const woven = weaveSender('请审一下这个方案', { senderId: 'ou_p', senderName: '小P·审查(β)！' }, 0, { bot: true });
-    for (const n of [2, 6]) {
-      const note = BOT_WAKE_NOTE('小P·审查(β)！', n);
-      expect(stripBridgeMessageEnvelope(`${note}\n\n${woven}`)).toBe('请审一下这个方案');
-      expect(stripBridgeMessageEnvelope(`${note} ${woven.replace(/\n/g, ' ')}`)).toBe('请审一下这个方案');
-    }
+    const note = BOT_WAKE_NOTE('小P·审查(β)！');
+    expect(stripBridgeMessageEnvelope(`${note}\n\n${woven}`)).toBe('请审一下这个方案');
+    expect(stripBridgeMessageEnvelope(`${note} ${woven.replace(/\n/g, ' ')}`)).toBe('请审一下这个方案');
     // Only at the head, and only with the same name in both places.
-    const body = `看看这句：${BOT_WAKE_NOTE('小P', 2)}`;
+    const body = `看看这句：${BOT_WAKE_NOTE('小P')}`;
     expect(stripBridgeMessageEnvelope(body)).toBe(body);
-    const forged = BOT_WAKE_NOTE('小P', 2).replace('写 @小P', '写 @别人');
+    const forged = BOT_WAKE_NOTE('小P').replace('写 @小P', '写 @别人');
     expect(stripBridgeMessageEnvelope(`${forged}\n\n正文`)).toBe(`${forged}\n\n正文`);
   });
 
