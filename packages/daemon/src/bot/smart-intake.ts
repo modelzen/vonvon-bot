@@ -120,6 +120,12 @@ export class SmartLanes<E extends LaneEntry, V> {
 
   dueAt(place: string): number | undefined { return this.lanes.get(place)?.timer?.at; }
 
+  /** Recompute pending work after the caller changes attention. */
+  rearm(place: string): void {
+    const lane = this.lanes.get(place);
+    if (lane && !lane.judging) this.arm(lane);
+  }
+
   prune(place: string, taken: (entry: E) => boolean): E[] {
     const lane = this.lanes.get(place);
     if (!lane) return [];

@@ -131,6 +131,8 @@ function detailOf(error: unknown): string | undefined {
   return text ? `${text}${path}`.slice(0, 120) : undefined;
 }
 
+const promptHashOf = (text: string): string => createHash('sha256').update(text).digest('hex').slice(0, 16);
+
 export function createJudge(deps: JudgeDeps): Judge {
   const now = deps.now ?? Date.now;
   const readPrompt = deps.readPrompt ?? readSmartPrompt;
@@ -249,7 +251,7 @@ export function createJudge(deps: JudgeDeps): Judge {
     const fields = { chatId: req.group.chatId, ref: req.ref?.slice(-6), variant: req.variant };
     // Backend and model first, so every later failure still reports them.
     // The group's own backend, Codex for old rows and ids not in the catalog (s36d2): never the bot default.
-    let base: Pick<JudgeResult, 'backend' | 'model' | 'effort' | 'provider' | 'modelSource' | 'promptSource'> = {
+    let base: Pick<JudgeResult, 'backend' | 'model' | 'effort' | 'provider' | 'modelSource' | 'promptSource' | 'promptHash'> = {
       backend: groupBackendId(req.group), model: '', modelSource: 'default', promptSource: 'default',
     };
     let queueMs: number | undefined;
@@ -346,7 +348,7 @@ export function createJudge(deps: JudgeDeps): Judge {
         let sent: ReturnType<typeof decisionBody> | undefined;
         const work = (async () => {
           const prompt = await readPrompt(req.appId, req.group.chatId);
-          base = { ...base, promptSource: prompt.source };
+          base = { ...base, promptSource: prompt.source, promptHash: promptHashOf(prompt.text) };
           const key = await readKey(provider);
           const body = sent = decisionBody(req, prompt.text, base.model);
           // a cooldown holds for the key it was noted with only (cooldown.ts); the tag never leaves this process
@@ -373,7 +375,7 @@ export function createJudge(deps: JudgeDeps): Judge {
       // on time.
       const work = (async (): Promise<JudgeCallOutput> => {
         const prompt = await readPrompt(req.appId, req.group.chatId);
-        base = { ...base, promptSource: prompt.source };
+        base = { ...base, promptSource: prompt.source, promptHash: promptHashOf(prompt.text) };
         if (!backend.judge) throw new JudgeFail('unavailable', `${backend.displayName} 不支持判断`);
         const dir = await cwd();
         return inSlot(backend.id, undefined, undefined, () => backend.judge!({
