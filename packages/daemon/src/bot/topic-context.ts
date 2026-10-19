@@ -167,7 +167,7 @@ export function createTopicContext(
       return { info: { ok: false, topic: false }, ttl: denied ? INFO_TTL : INFO_SHORT_TTL };
     };
     try {
-      const res = await withDeadline(channel.rawClient.im.v1.chat.get({ path: { chat_id: chatId } }), 3000);
+      const res = await withDeadline(channel.rawClient.im.v1.chat.get({ path: { chat_id: chatId } }), 3000, 'chat-get');
       if (!res) return unknown('timeout');
       if (typeof res.code === 'number' && res.code !== 0) return unknown(`code=${res.code}`, res);
       const d = res.data as { chat_mode?: string; group_message_type?: string; bot_count?: string | number } | undefined;

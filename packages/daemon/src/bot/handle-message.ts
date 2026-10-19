@@ -1353,7 +1353,7 @@ export function createOrchestrator(
       rootLookups.add(firstId);
       // Shutdown waits for the writes, never for Feishu: the lookup can outlast
       // the supervisor's 8 s grace. One lost to a stop is retried next start.
-      void withDeadline(fetchQuotedMessage(channel, firstId, names), 10_000).then((root) => {
+      void withDeadline(fetchQuotedMessage(channel, firstId, names), 10_000, 'topic-root').then((root) => {
         if (!root || shuttingDown) return;
         const rootFrom: TopicPerson = root.from === 'self' ? { kind: 'self' } : topicPerson(root.from, root.senderId);
         void trackTask(topics.note(msg.chatId, { ...sighting, first: { id: firstId, from: rootFrom, at: root.createTime || undefined, text: root.text } }));
@@ -1602,7 +1602,7 @@ export function createOrchestrator(
     const others = await topicCtx.chatInfo(msg.chatId).then((r) => !r.ok || r.bots === undefined || r.bots > 1);
     await recent.fill(item.place, msg.createTime, (o) => {
       const opts = { ...o, before: msg.createTime, keepSelf: true, names };
-      return withDeadline(msg.threadId ? fetchThreadContext(channel, msg.threadId, opts) : fetchChatContext(channel, msg.chatId, opts), LOOKUP_DEADLINE_MS);
+      return withDeadline(msg.threadId ? fetchThreadContext(channel, msg.threadId, opts) : fetchChatContext(channel, msg.chatId, opts), LOOKUP_DEADLINE_MS, 'recent-context');
     }, others);
     const title = msg.threadId && topics ? (await topics.list(msg.chatId)).find((t) => t.topicId === msg.threadId)?.title : undefined;
     const name = names.peek(msg.senderId) ?? msg.senderName ?? '某人';
@@ -5916,7 +5916,7 @@ export function createOrchestrator(
   async function deleteOwnCard(id: string): Promise<string | undefined> {
     let code: number | undefined;
     try {
-      const res = await withDeadline(channel.rawClient.im.v1.message.delete({ path: { message_id: id } }), DELETE_DEADLINE_MS);
+      const res = await withDeadline(channel.rawClient.im.v1.message.delete({ path: { message_id: id } }), DELETE_DEADLINE_MS, 'card-delete');
       if (!res) {
         log.warn('card', 'empty-delete-failed', { err: 'timeout' });
         return '删空卡超时，卡可能还在';
