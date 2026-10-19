@@ -29,12 +29,13 @@ import {
 import "./settings.css";
 import {useDraft} from './DraftGuard';
 import {settingAnchor} from '../search';
+import {JudgeModelChoice} from './JudgeModelChoice';
 
 type AgentScope = { kind: "agent"; botId: AgentId };
 type ProjectScope = { kind: "project"; botId: AgentId; projectName: string };
 type PanelProps =
   | {scope: 'agent'; target: AgentScope}
-  | {scope: 'project'; target: ProjectScope}
+  | {scope: 'project'; target: ProjectScope; onOpenSecrets?: () => void}
   | {scope: 'host'; target: {kind: 'host'}};
 const isAgentView = (view: SettingsView): view is AgentSettingsView =>
   view.scope.kind === "agent" && "administrators" in view;
@@ -107,10 +108,12 @@ function Editor<T extends object>({
     change: (value: T) => void,
     disabled: boolean,
     commit: (patch: Partial<T>) => Promise<void>,
+    resetKey: string,
   ) => ReactNode;
   save: (patch: Partial<T>, revision: string) => Promise<SettingsReply>;
 }) {
   const [confirmed, setConfirmed] = useState(section);
+  const [discardVersion, setDiscardVersion] = useState(0);
   const [draft, setDraft] = useState<Partial<T>>({});
   const [immediate, setImmediate] = useState<
     | { kind: 'idle' }
@@ -229,6 +232,7 @@ function Editor<T extends object>({
     }
   }
   function discard() {
+    setDiscardVersion(version => version + 1);
     setDraft({});
     setImmediate({kind: 'idle'});
     const latest = conflictCurrent ?? section;
@@ -249,7 +253,7 @@ function Editor<T extends object>({
           : effectText(section)
       }
     >
-      {render(value, edit, disabled, commit)}
+      {render(value, edit, disabled, commit, `${confirmed.revision}:${discardVersion}`)}
       {dirty && <div className="settings-edit-actions">
         <Button
           size="sm"
@@ -287,7 +291,7 @@ function Editor<T extends object>({
     </SettingsGroup>
   );
 }
-function Text({
+export function Text({
   label,
   value,
   onChange,
@@ -402,7 +406,7 @@ function Catalog({
 }: {
   botId: AgentId;
   backend: string;
-  purpose: "project" | "session" | "comments" | "titles";
+  purpose: "project" | "session" | "comments" | "titles" | "judge";
   children: (catalog: ModelCatalog | undefined) => ReactNode;
 }) {
   const client = useClient();
@@ -1297,9 +1301,11 @@ function AgentPanel({
 export function ProjectPanel({
   view,
   refresh,
+  onOpenSecrets,
 }: {
   view: ProjectSettingsView;
   refresh: () => Promise<void>;
+  onOpenSecrets?: () => void;
 }) {
   const client = useClient();
   const [memberId, setMemberId] = useState("");
@@ -1346,7 +1352,9 @@ export function ProjectPanel({
   }, discard: () => setMemberId('')});
   const permission = view.sections.permission,
     response = view.sections.response,
-    model = view.sections.model;
+    model = view.sections.model,
+    run = view.sections.run,
+    judge = view.sections.judge;
   // Codex on Linux: 只读 and 读写 are greyed out; a stored one still shows (product.md 3.8).
   const fullOnly = view.identity.fullOnly;
   const tiers = ([["qa", "只读"], ["write", "读写"], ["full", "完全访问"]] as const)
@@ -1506,6 +1514,29 @@ export function ProjectPanel({
           />
         )}
       />}
+      {groupJudgeVisible(view) && judge && <Catalog botId={view.scope.botId} backend={view.identity.backend} purpose="judge">
+        {(catalog) => <Editor title="判断模型" section={judge}
+          save={(draft, revision) => save("judge", draft, revision)}
+          render={(draft, set, disabled, _commit, resetKey) => <JudgeModelChoice key={resetKey} value={draft.selection}
+            onChange={(selection) => set({selection})} backend={view.identity.backend}
+            catalog={catalog} decisionModels={view.decisionModels}
+            effective={judge.effective.selection}
+            showInheritedKey={judge.stored.selection.kind === "default" && draft.selection.kind === "default"}
+            disabled={disabled} followLabel="跟着 Bot 默认" allowCustom onOpenSecrets={onOpenSecrets} />}
+        />}
+      </Catalog>}
+      {run && (view.identity.backend === "claude-agent"
+        ? <SettingsGroup id={settingAnchor("运行中来了消息")} label="运行中来了消息">
+          <SettingsRow title="运行中来了消息" value="排队" description="Claude 不支持插话，运行中来的消息照样排队。" />
+        </SettingsGroup>
+        : <Editor title="运行中来了消息" section={run}
+          save={(draft, revision) => save("run", draft, revision)}
+          render={(draft, _set, disabled, commit) => <SettingsRow title="运行中来了消息"
+            description={`插话交给正在跑的这一轮，排队等它跑完。现在是${run.effective.pendingPolicy === "steer" ? "插话" : "排队"}。`}
+            trailing={<Select label="运行中来了消息" value={draft.pendingPolicy} disabled={disabled}
+              choices={[{value: "default", label: "跟着 Bot 默认"}, {value: "steer", label: "插话"}, {value: "queue", label: "排队"}]}
+              onChange={(pendingPolicy) => void commit({pendingPolicy})} />}
+          />} />)}
       <details className="membership-settings-details"><summary>话题模型</summary><SessionPicker view={view} /></details>
       <ActionNotice message={notice} />
     </>
@@ -1906,7 +1937,7 @@ function ScopedSettingsPanel(props: PanelProps) {
   const content = isAgentView(view) && props.scope === 'agent' ? (
     <AgentPanel view={view} refresh={refresh} />
   ) : isProjectView(view) && props.scope === 'project' ? (
-    <ProjectPanel view={view} refresh={refresh} />
+    <ProjectPanel view={view} refresh={refresh} onOpenSecrets={props.onOpenSecrets} />
   ) : isHostView(view) ? (
     <HostPanel view={view} refresh={refresh} />
   ) : null;
@@ -1925,4 +1956,8 @@ export function membershipSettingsTarget(member: Membership): ProjectScope {
  * same page remounts them. */
 export function membershipSettingsKey(member: Membership): string {
   return `project-${member.id}-${member.conversation}`;
+}
+
+export function groupJudgeVisible(view: ProjectSettingsView): boolean {
+  return view.identity.kind === "smart" && Boolean(view.sections.judge);
 }

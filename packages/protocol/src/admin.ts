@@ -89,7 +89,16 @@ export const codexSetupSchema = z.object({
 });
 export type CodexSetup = z.infer<typeof codexSetupSchema>;
 
+/** Daily smart-mode calls actually sent to a language or decision model. */
+export const judgeUsageDaySchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), total: z.number().int().nonnegative(),
+  sources: z.array(z.object({ kind: z.enum(["llm", "decision"]), id: z.string(), label: z.string(), count: z.number().int().nonnegative() })),
+  bots: z.array(z.object({ agentId: z.string(), agentName: z.string(), count: z.number().int().nonnegative() })),
+});
+export type JudgeUsageDay = z.infer<typeof judgeUsageDaySchema>;
+
 export const adminRequestSchema = z.discriminatedUnion("type", [
+  z.object({type:z.literal("judgeUsage")}).strict(),
   z.object({type:z.literal("state")}).strict(),
   z.object({type:z.literal("diagnosis"),agentId:agentIdSchema.optional()}).strict(),
   z.object({type:z.literal("hostDoctor")}).strict(),
@@ -110,6 +119,7 @@ export const adminRequestSchema = z.discriminatedUnion("type", [
 export type AdminRequest = z.infer<typeof adminRequestSchema>;
 
 export const adminReplySchema = z.discriminatedUnion("kind", [
+  z.object({kind:z.literal("judgeUsage"),days:z.array(judgeUsageDaySchema).max(31),unreadBots:z.number().int().nonnegative(),botsUnreadable:z.boolean().optional()}),
   z.object({kind:z.literal("state"),state:adminStateSchema}),
   z.object({kind:z.literal("diagnosis"),bot:z.string().optional(),backends:z.array(adminBackendStatusSchema),event:eventDiagnosisSchema.optional(),eventConfigUrl:z.string().optional()}),
   z.object({kind:z.literal("hostDoctor"),doctor:adminHostDoctorSchema}),
