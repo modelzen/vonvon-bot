@@ -1,3 +1,4 @@
+import { claudeAccess } from '../src/agent/claude-agent/permission';
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -156,7 +157,7 @@ describe('ClaudeAgentThread.checkNative', () => {
   it('a fresh thread has nothing to read until its file appears, then reads on from there', async () => {
     const dir = claudeConfig();
     const thread = new ClaudeAgentThread({
-      sessionId: 'fresh-1', resume: false, cwd: process.cwd(), permission: {}, settingSources: [], query: idleQuery,
+      sessionId: 'fresh-1', resume: false, cwd: process.cwd(), access: claudeAccess(undefined, undefined, process.cwd(), process.cwd()), permission: {}, settingSources: [], query: idleQuery,
     });
     threads.push(thread);
 
@@ -182,7 +183,7 @@ describe('ClaudeAgentThread.checkNative', () => {
   it('a given mark is read on from its offset', async () => {
     const file = transcript(cli('old'));
     const thread = new ClaudeAgentThread({
-      sessionId: 'marked', resume: true, cwd: process.cwd(), permission: {}, settingSources: [], query: idleQuery,
+      sessionId: 'marked', resume: true, cwd: process.cwd(), access: claudeAccess(undefined, undefined, process.cwd(), process.cwd()), permission: {}, settingSources: [], query: idleQuery,
       transcript: { file, to: size(file), compaction: 'c-old' },
     });
     threads.push(thread);

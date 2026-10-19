@@ -1,78 +1,165 @@
-import type { Options, SandboxSettings } from '@anthropic-ai/claude-agent-sdk';
+import { realpath, stat, lstat } from 'node:fs/promises';
+import { dirname, isAbsolute, relative, sep } from 'node:path';
+import type { HookCallback, Options } from '@anthropic-ai/claude-agent-sdk';
+import { z } from 'zod';
 import type { PermissionMode } from '../types';
 
-/**
- * Map a bridge permission tier (qa / write / full) to the Claude Agent SDK
- * options that enforce it WITHOUT prompting a human (codex runs approvalPolicy
- * 'never' — we match that: full bypasses prompts; qa/write use the OS sandbox as
- * the boundary and `bypassPermissions` so no prompt ever blocks a turn).
- *
- * Verified empirically (spikes, SDK 0.3.178, macOS):
- *  - `sandbox.enabled` confines Bash writes to the workspace (cwd) at the OS level
- *    even under `permissionMode:'bypassPermissions'` (a /tmp write → "operation not
- *    permitted"; a cwd write succeeds).
- *  - The model CAN escape the sandbox via the Bash `dangerouslyDisableSandbox`
- *    parameter UNLESS `allowUnsandboxedCommands:false` — so we MUST set it false to
- *    make the sandbox a hard boundary (without it, qa/write are NOT enforceable).
- *  - `filesystem.denyWrite:[cwd]` makes even cwd read-only (→ qa).
- *  - `failIfUnavailable:true` → the turn errors (visible) instead of running
- *    unsandboxed if the OS sandbox can't start. Fail-closed, never a silent
- *    downgrade. (Claude's sandbox: macOS Seatbelt / Linux bubblewrap.)
- *
- * ── Security delta vs codex (kept truthful) ──────────────────────────────────
- *  - WRITE confinement to cwd: enforced at the OS level (sandbox + no-escape).
- *    On par with codex's write tier.
- *  - QA read-only: writes denied everywhere (denyWrite:[cwd] + the sandbox's own
- *    out-of-workspace block + write tools removed + no unsandboxed escape). Reads
- *    are NOT yet hard-confined to cwd (codex's qa also restricts reads on
- *    macOS/Windows); a Read/Bash read can still reach outside cwd. Documented gap.
- *  - NETWORK: when off, the network-reaching tools (WebFetch/WebSearch) are removed
- *    and the sandbox isolates Bash network by default; fine-grained Bash-network
- *    parity with codex's `network.enabled` is best-effort (verify before trusting
- *    qa with an untrusted external group that needs network off as a hard gate).
- */
-
-// File-writing built-in tools to strip in qa (read-only). Names per SDK 0.3.178
-// (MultiEdit was folded into Edit; listing an unknown tool only warns, so we keep
-// the real ones).
-const WRITE_TOOLS = ['Write', 'Edit', 'NotebookEdit'];
+/** Claude tiers use default/acceptEdits/bypassPermissions. The sandbox proxy is
+ * not an offline boundary: SandboxNetworkAccess must be denied by the callback.
+ * PreToolUse also checks writes because settings allow rules can skip callbacks.
+ * Resolve links before checking the workspace; missing suffixes never fold '..'. */
+export interface ClaudeAccess {
+  mode: PermissionMode;
+  network: boolean;
+  cwd: string;
+  realCwd: string;
+}
+export function claudeAccess(mode: PermissionMode | undefined, network: boolean | undefined, cwd: string, realCwd: string): ClaudeAccess {
+  return { mode: mode ?? 'full', network: network ?? false, cwd, realCwd };
+}
+export function tierMode(mode: PermissionMode): 'default' | 'acceptEdits' | 'bypassPermissions' {
+  return mode === 'qa' ? 'default' : mode === 'write' ? 'acceptEdits' : 'bypassPermissions';
+}
+export const FILE_WRITE = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
+export const FILE_READ = ['Read', 'Glob', 'Grep', 'LS', 'NotebookRead'];
 const NETWORK_TOOLS = ['WebFetch', 'WebSearch'];
-
-/** The subset of SDK options this module produces. Spread into query() options. */
-export type ClaudePermissionOptions = Pick<
-  Options,
-  'permissionMode' | 'allowDangerouslySkipPermissions' | 'sandbox' | 'disallowedTools'
->;
-
-export function permissionOptions(
-  mode: PermissionMode | undefined,
-  network: boolean | undefined,
-  cwd: string,
-): ClaudePermissionOptions {
-  const tier = mode ?? 'full';
-
-  // full: historical danger-full-access — no sandbox, no prompts, network open.
-  if (tier === 'full') {
-    return { permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true };
-  }
-
-  const sandbox: SandboxSettings = {
-    enabled: true,
-    failIfUnavailable: true, // fail-closed: error out instead of running unsandboxed.
-    autoAllowBashIfSandboxed: true, // sandboxed Bash needn't prompt — the sandbox is the gate.
-    allowUnsandboxedCommands: false, // CRITICAL: block the dangerouslyDisableSandbox escape.
-    ...(tier === 'qa' ? { filesystem: { denyWrite: [cwd] } } : {}),
-  } as SandboxSettings;
-
-  const disallowedTools: string[] = [];
-  if (tier === 'qa') disallowedTools.push(...WRITE_TOOLS); // read-only: no write tools at all.
-  if (!network) disallowedTools.push(...NETWORK_TOOLS); // offline: no network tools.
-
+export type ClaudePermissionOptions = Pick<Options,
+  'permissionMode' | 'allowDangerouslySkipPermissions' | 'sandbox' | 'disallowedTools' | 'allowedTools' | 'hooks'>;
+export function permissionOptions(access: ClaudeAccess): ClaudePermissionOptions {
+  const base = { permissionMode: tierMode(access.mode), allowDangerouslySkipPermissions: true };
+  if (access.mode === 'full') return base;
   return {
-    // bypassPermissions = never prompt; the sandbox (above) is the real boundary.
-    permissionMode: 'bypassPermissions',
-    allowDangerouslySkipPermissions: true,
-    sandbox,
-    ...(disallowedTools.length ? { disallowedTools } : {}),
+    ...base,
+    sandbox: {
+      enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false,
+      ...(access.mode === 'qa' ? { filesystem: { denyWrite: [...new Set([access.cwd, access.realCwd])] } } : {}),
+    },
+    ...(access.network ? { allowedTools: NETWORK_TOOLS } : { disallowedTools: NETWORK_TOOLS }),
+    hooks: { PreToolUse: [{ matcher: FILE_WRITE.join('|'), hooks: [fileHook(access)], timeout: 10 }] },
+  };
+}
+export type Origin = 'hook' | 'callback';
+export interface ToolCall {
+  toolName: string;
+  input: Record<string, unknown>;
+  decisionReason?: string;
+  extra: Record<string, unknown>;
+}
+export type Verdict = { kind: 'continue' } | { kind: 'allow' } | { kind: 'deny'; message: string }
+  | { kind: 'ask'; ask: 'choices' | 'confirmation' | 'permission' };
+export interface PathFs {
+  realpath(p: string): Promise<string>;
+  stat(p: string): Promise<{ dev: number; ino: number }>;
+  lstat(p: string): Promise<unknown>;
+}
+const nativeFs: PathFs = { realpath, stat, lstat };
+const fsError = z.object({ code: z.string() });
+function missing(error: unknown): boolean {
+  const parsed = fsError.safeParse(error);
+  return parsed.success && ['ENOENT', 'ENOTDIR'].includes(parsed.data.code);
+}
+class OutsideWorkspace extends Error {}
+export async function resolveReal(p: string, cwd: string, fsx: PathFs): Promise<string> {
+  let prefix = isAbsolute(p) ? p : `${cwd}${sep}${p}`;
+  const suffix: string[] = [];
+  for (;;) {
+    try {
+      const resolved = await fsx.realpath(prefix);
+      if (suffix.some(part => part === '.' || part === '..')) throw new OutsideWorkspace();
+      return suffix.length ? `${resolved}${sep}${suffix.join(sep)}` : resolved;
+    } catch (error) {
+      if (!missing(error)) throw error;
+      try {
+        await fsx.lstat(prefix);
+      } catch (entryError) {
+        if (!missing(entryError)) throw entryError;
+        // Slice the original string: dirname() would normalize link/../ first.
+        const end = prefix.lastIndexOf(sep);
+        if (end < 0 || prefix === sep) throw error;
+        suffix.unshift(prefix.slice(end + 1));
+        prefix = end === 0 ? sep : prefix.slice(0, end);
+        continue;
+      }
+      // Existing directory entry whose target cannot resolve: dangling symlink.
+      throw new OutsideWorkspace();
+    }
+  }
+}
+export function inside(base: string, target: string, fold = false): boolean {
+  const rel = relative(fold ? base.toLowerCase() : base, fold ? target.toLowerCase() : target);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+export async function within(base: string, target: string, fsx: PathFs): Promise<boolean> {
+  if (inside(base, target)) return true;
+  const root = await fsx.stat(base);
+  for (let p = target;; p = dirname(p)) {
+    try {
+      const current = await fsx.stat(p);
+      if (current.dev === root.dev && current.ino === root.ino) return true;
+    } catch (error) { if (!missing(error)) throw error; }
+    if (dirname(p) === p) return false;
+  }
+}
+/** SDK 0.3.296 preflight B/E/J: rule is explicit, while workingDir,
+ * sensitive-file safetyCheck and the default MCP prompt are not ask rules. */
+export function ownAsk(call: ToolCall): 'rule' | 'other' {
+  return call.extra.decisionReasonType === 'rule' ? 'rule' : 'other';
+}
+export const PERMISSION_ERROR = '权限检查出错，这一步先不做。';
+export const PERMISSION_TIMEOUT = '权限检查超时，这一步先不做。';
+export const NO_TURN = '现在没有在进行的对话，没法问人。按你自己的判断继续，或者停下来说明。';
+const deny = (message: string): Verdict => ({ kind: 'deny', message });
+// Keep directory identity in this session, never across resumed sessions.
+const sessions = new WeakMap<ClaudeAccess, PathFs>();
+function sessionFs(access: ClaudeAccess): PathFs {
+  let fsx = sessions.get(access);
+  if (!fsx) {
+    let identity: ReturnType<PathFs['stat']> | undefined;
+    fsx = { ...nativeFs, stat: p => p === access.realCwd ? identity ??= nativeFs.stat(p) : nativeFs.stat(p) };
+    sessions.set(access, fsx);
+  }
+  return fsx;
+}
+export async function decide(access: ClaudeAccess, call: ToolCall, origin: Origin, fsx: PathFs = sessionFs(access)): Promise<Verdict> {
+  const { toolName: tool, input } = call;
+  if (origin === 'callback') {
+    if (tool === 'AskUserQuestion') return { kind: 'ask', ask: 'choices' };
+    if (tool === 'ExitPlanMode') return { kind: 'ask', ask: 'confirmation' };
+    if (tool === 'EnterPlanMode') return { kind: 'allow' };
+    if (access.mode === 'full') return { kind: 'ask', ask: 'permission' };
+  }
+  const own = (): Verdict => deny(`这一步 Claude 标成了要人确认（${call.decisionReason ?? '命中了设置里的规则'}）。这个群是${access.mode === 'qa' ? '只读' : '读写'}档，这类操作直接拒绝。换个办法，或者停下来说明。`);
+  if (origin === 'callback' && ownAsk(call) === 'rule') return own();
+  if (origin === 'callback' && ['SandboxNetworkAccess', ...NETWORK_TOOLS].includes(tool)) {
+    if (access.network) return { kind: 'allow' };
+    const host = tool === 'SandboxNetworkAccess' && typeof input.host === 'string' ? input.host.slice(0, 100) : '外网';
+    return deny(`这个群关了网络，连不上 ${host}。不要再试着联网，换个办法，或者停下来说明：要联网得请主人在群设置里打开网络。`);
+  }
+  if (origin === 'callback' && tool === 'Bash') {
+    if (input.dangerouslyDisableSandbox === true) return deny('这个群的命令只能在沙箱里跑。');
+    return call.extra.decisionReasonType === 'safetyCheck' ? own() : { kind: 'allow' };
+  }
+  if (!FILE_WRITE.includes(tool) || access.mode === 'full') return { kind: origin === 'hook' ? 'continue' : 'allow' };
+  const path = input.file_path ?? input.notebook_path ?? input.path;
+  if (typeof path !== 'string') return deny(PERMISSION_ERROR);
+  const shown = path.slice(0, 200);
+  if (access.mode === 'qa') return deny(`这个群是只读档，不能写文件（${shown}）。换个不用写文件的办法，或者停下来说明：要写文件得请主人把群改成读写档。`);
+  let allowed: boolean;
+  try { allowed = await within(access.realCwd, await resolveReal(path, access.cwd, fsx), fsx); }
+  catch (error) { if (!(error instanceof OutsideWorkspace)) throw error; allowed = false; }
+  if (!allowed) return deny(`这个群是读写档，只能写工作区里的文件，${shown} 在工作区以外。改写到工作区里，或者停下来说明。`);
+  return { kind: origin === 'hook' ? 'continue' : 'allow' };
+}
+export function fileHook(access: ClaudeAccess, fsx: PathFs = sessionFs(access)): HookCallback {
+  return async input => {
+    try {
+      if (input.hook_event_name !== 'PreToolUse') return {};
+      const parsed = z.record(z.string(), z.unknown()).parse(input.tool_input);
+      const verdict = await decide(access, { toolName: input.tool_name, input: parsed, extra: {} }, 'hook', fsx);
+      if (verdict.kind !== 'deny') return {};
+      return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: verdict.message } };
+    } catch {
+      return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: PERMISSION_ERROR } };
+    }
   };
 }

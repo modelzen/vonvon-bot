@@ -118,4 +118,26 @@ describe('bot roster', () => {
     expect(events).toEqual([{ kind: 'scopeDenied', denial: { scope: 'im:chat:readonly', where: 'chat-info', at: expect.any(Number) } }]);
     expect(r.peek('oc_2')).toBeUndefined();
   });
+  it('withholds incomplete names from handoffs without dropping the guard cache, then recovers', async () => {
+    vi.useFakeTimers();
+    const request = vi.fn().mockResolvedValueOnce(body([B8]))
+      .mockResolvedValueOnce({ code: 0, data: { bots: [B8], has_more: true } })
+      .mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(body([B8]));
+    const r = roster(request);
+    await r.load('oc_1');
+    expect(r.peekForHandoff('oc_1')?.has('ou_b8')).toBe(true);
+    await vi.advanceTimersByTimeAsync(ROSTER_TTL_MS);
+    await r.load('oc_1');
+    expect(r.peekForHandoff('oc_1')).toBeUndefined();
+    expect(r.peek('oc_1')?.has('ou_b8')).toBe(true);
+    await vi.advanceTimersByTimeAsync(ROSTER_TTL_MS);
+    await r.load('oc_1');
+    expect(r.peekForHandoff('oc_1')).toBeUndefined();
+    expect(r.peek('oc_1')?.has('ou_b8')).toBe(true);
+    await vi.advanceTimersByTimeAsync(ROSTER_RETRY_MS);
+    await r.load('oc_1');
+    expect(r.peekForHandoff('oc_1')?.has('ou_b8')).toBe(true);
+    expect(request).toHaveBeenCalledTimes(4);
+  });
+
 });

@@ -174,7 +174,7 @@ const FONT_TAG = /<\/?font\b[^>]*>/g;
 const WHOLE_GREY = /^<font color=['"]?grey['"]?>((?:(?!<\/?font\b).)*)<\/font>$/s;
 /** Vonvon's own grey lines: `processTitle`, `compactionLine`, `footerStatus` and the usage card's stamp.
  * Another bot's grey answer or caveat is kept. */
-const VONVON_GREY_STATUS = /^(?:(?:❌ )?(?:执行过程|已处理 |用时 )|🗜️ |🤖 由 Vonvon Bot 于 |(?:正在处理|正在调用工具|瞬断，自动重试中…|正在输出)$)/u;
+const VONVON_GREY_STATUS = /^(?:(?:❌ )?(?:执行过程|已处理 |用时 )|🗜️ |🤖 由 Vonvon Bot 于 |→ 想 @ |(?:正在处理|正在调用工具|瞬断，自动重试中…|正在输出)$)/u;
 /** The context meter of a Vonvon run card (`runCardMeter`). */
 const RUN_CARD_METER = /^(?:[🟡🟠🔴] )?上下文 (?:\d+% · \S+\/\S+|已用 \S+|—)$/u;
 
