@@ -2433,6 +2433,13 @@ export function createOrchestrator(
     return true;
   }
 
+  /** Keep the bot's trust-boundary note before any subsequently woven history. */
+  function weaveTurnRecordBlock(text: string, extra: Pick<TurnExtra, 'initiative' | 'wake'> | undefined, block: Parameters<typeof weaveRecordBlock>[1]): string {
+    const note = extra?.wake ? BOT_WAKE_NOTE(extra.wake.name) : undefined;
+    if (!note || !text.startsWith(note)) return weaveRecordBlock(text, block);
+    return `${note}\n\n${weaveRecordBlock(text.slice(note.length).trimStart(), block)}`;
+  }
+
   /**
    * Per-message context ingest: fold this message's attachments AND any quoted
    * message into the prompt text codex receives.
@@ -2447,13 +2454,6 @@ export function createOrchestrator(
    * session-scoped, not per-message). Voice display metadata stays separate
    * from the woven agent input.
    */
-  /** Keep the bot's trust-boundary note before any subsequently woven history. */
-  function weaveTurnRecordBlock(text: string, extra: Pick<TurnExtra, 'initiative' | 'wake'> | undefined, block: Parameters<typeof weaveRecordBlock>[1]): string {
-    const note = extra?.wake ? BOT_WAKE_NOTE(extra.wake.name) : undefined;
-    if (!note || !text.startsWith(note)) return weaveRecordBlock(text, block);
-    return `${note}\n\n${weaveRecordBlock(text.slice(note.length).trimStart(), block)}`;
-  }
-
   function ingestContext(msg: NormalizedMessage, text: string, extra?: Pick<TurnExtra, 'initiative' | 'wake'>): Promise<IngestedContext> {
     return orderContext(msg.threadId ?? msg.chatId, () => ingestContextImpl(msg, text, extra));
   }

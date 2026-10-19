@@ -9,7 +9,7 @@ import {
   adminRequestSchema, adminReplySchema, adminStateSchema, directoryRequestSchema, directoryReplySchema,
   jobSchema, environmentReplySchema,
   type DesktopSnapshot, settingsViewSchema, projectViewSchema, projectEditableSchemas, settingsReplySchema,
-  OPTIONAL_SCOPE_EFFECTS, applicationCrashesSchema, crashText, FORCED_DETAIL, NOT_REPLIED_TEXT, diagnosticsEventSchema, notRepliedSchema, KEY_FAILURE, keyFailureOf, keyProblem,
+  applicationCrashesSchema, crashText, FORCED_DETAIL, NOT_REPLIED_TEXT, diagnosticsEventSchema, notRepliedSchema, KEY_FAILURE, keyFailureOf, keyProblem,
   isKnownJudgeSelection, type JudgeSelectionView,
   adminProjectSchema, collaborationRequestSchema, conversationCopy, conversationSchema, conversationToMode, modeToConversation, projectRecordSchema,
 } from "../src/index.js";
@@ -293,14 +293,14 @@ it("points a judgement a decision model's key stopped at the key page, and a key
   const next = (detail?: string) => NOT_REPLIED_TEXT["judge-failed"].next({ ...record, ...(detail ? { detail } : {}) });
   for (const detail of [KEY_FAILURE.missing("TypeSafe"), KEY_FAILURE.invalid("TypeSafe"), KEY_FAILURE.rejected("TypeSafe")]) {
     expect(keyFailureOf(detail)).toBe("key");
-    expect(next(detail)).toBe("在密钥页填了就恢复；@ 它一定会回。");
+    expect(next(detail)).toBe("在密钥页填了就恢复；真人 @ 它一定会回。");
   }
   expect(keyFailureOf("密钥库读不了")).toBe("keystore");
-  expect(next("密钥库读不了")).toBe("密钥库读得了就恢复，原因在下面 daemon 日志的 secrets.unreadable；@ 它一定会回。");
+  expect(next("密钥库读不了")).toBe("密钥库读得了就恢复，原因在下面 daemon 日志的 secrets.unreadable；真人 @ 它一定会回。");
   // any other failure, a model's words that merely mention a key included, keeps the old next step
   for (const detail of [undefined, "判断超时", "模型说：没填 key 的话", "decision timeout"]) {
     expect(keyFailureOf(detail)).toBeUndefined();
-    expect(next(detail)).toBe("@ 它一定会回；反复出现时看下面的日志。");
+    expect(next(detail)).toBe("真人 @ 它一定会回；反复出现时看下面的日志。");
   }
 });
 
@@ -331,12 +331,11 @@ it("words another bot's @ that got no answer, saying Bot as the page does (s27a-
     expect(`${text.reason({ ...record, reason })}${text.next({ ...record, reason })}`).not.toMatch(/bot/);
   }
   expect(NOT_REPLIED_TEXT["bot-wake-cap"].reason({ ...record, reason: "bot-wake-cap" })).toBe("自上一条真人消息起，Bot 之间已互相叫醒 6 次，到了上限，这条 Bot 的 @ 没回");
-  expect(NOT_REPLIED_TEXT["bot-wake-failed"].reason({ ...record, reason: "bot-wake-failed", detail: "历史读不到" })).toBe("没数出 Bot 之间叫醒了几次（历史读不到），这条 Bot 的 @ 没回");
-  expect(NOT_REPLIED_TEXT["bot-wake-failed"].reason({ ...record, reason: "bot-wake-failed" })).toBe("没数出 Bot 之间叫醒了几次，这条 Bot 的 @ 没回");
+  expect(NOT_REPLIED_TEXT["bot-wake-failed"].reason({ ...record, reason: "bot-wake-failed", detail: "历史读不到" })).toBe("处理这条 Bot 的 @ 时出错（历史读不到），没回");
+  expect(NOT_REPLIED_TEXT["bot-wake-failed"].reason({ ...record, reason: "bot-wake-failed" })).toBe("处理这条 Bot 的 @ 时出错，没回");
   expect(NOT_REPLIED_TEXT["bot-wake-dropped"].reason({ ...record, reason: "bot-wake-dropped", detail: "群正在改设置" })).toBe("这条 Bot 的 @ 没处理：群正在改设置");
   expect(NOT_REPLIED_TEXT["bot-wake-not-allowed"].reason({ ...record, reason: "bot-wake-not-allowed" })).toBe("这个群设了「响应成员」，这个 Bot 不在名单上，它的 @ 叫不醒");
   expect(NOT_REPLIED_TEXT["bot-wake-not-allowed"].next({ ...record, reason: "bot-wake-not-allowed" })).toBe("这是设置的效果。要让它能叫醒，把它加进「响应成员」，或者清空名单。");
-  expect(OPTIONAL_SCOPE_EFFECTS["im:chat:readonly"]).toContain("叫醒");
 });
 
 it("validates daily judge usage requests and replies", () => {
@@ -345,4 +344,16 @@ it("validates daily judge usage requests and replies", () => {
   const reply = { kind: "judgeUsage", days: [{ date: "2026-10-19", total: 0, sources: [], bots: [] }], unreadBots: 0 };
   expect(adminReplySchema.parse(reply)).toEqual(reply);
   expect(adminReplySchema.safeParse({ ...reply, days: [{ ...reply.days[0], date: "2026-1-9" }] }).success).toBe(false);
+});
+
+
+it("words judging a bot mention without promising that every @ is answered (s27a)", () => {
+  const record = { at: 1, count: 1, groupId: "oc_fixture", place: "topic" as const, ref: "abc123" };
+  expect(NOT_REPLIED_TEXT["judge-skip"].next({ ...record, reason: "judge-skip" })).toBe("智能模式下这是正常的。真人要它一定回就 @ 它；总是漏回就改智能提示词。");
+  expect(NOT_REPLIED_TEXT["judge-failed"].reason({ ...record, reason: "judge-failed", detail: "超时" })).toBe("判断没出结果（超时），这条没回");
+  expect(NOT_REPLIED_TEXT["judge-budget"].reason({ ...record, reason: "judge-budget" })).toBe("这个群这一小时判断了 60 次，到了上限，这条没判断");
+  expect(NOT_REPLIED_TEXT["judge-budget"].next({ ...record, reason: "judge-budget" })).toBe("一小时内会恢复；真人 @ 它仍然会回。");
+  expect(NOT_REPLIED_TEXT["bot-wake-failed"].reason({ ...record, reason: "bot-wake-failed", detail: "boom" })).toBe("处理这条 Bot 的 @ 时出错（boom），没回");
+  expect(NOT_REPLIED_TEXT["bot-wake-failed"].next({ ...record, reason: "bot-wake-failed" })).toBe("反复出现时看下面的日志。");
+  expect(NOT_REPLIED_TEXT["bot-wake-dropped"].next({ ...record, reason: "bot-wake-dropped" })).toBe("不用处理。");
 });

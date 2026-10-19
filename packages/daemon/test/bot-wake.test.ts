@@ -265,14 +265,13 @@ describe('wakeTriggerText', () => {
 });
 
 describe('BOT_WAKE_NOTE', () => {
-  it('names the bot without parentheses on one line, gives the count, and adds the last-wake line at the cap', () => {
-    const two = BOT_WAKE_NOTE('小P（审查）\n第二行', 2);
-    expect(two).toContain('另一个 bot「小P审查 第二行」发的');
-    expect(two).toContain('写 @小P审查 第二行；');
-    expect(two).toContain('已互相叫醒 2 次，上限 6 次。）');
-    expect(two).not.toContain('已到上限');
-    expect(BOT_WAKE_NOTE('小P', 6)).toMatch(/上限 6 次。）（已到上限：这一轮你照常回答，但你再 @ 别的 bot，它收不到；等真人说一句才能继续。）$/);
-    expect(BOT_WAKE_NOTE('「」', 1)).toContain('另一个 bot「另一个 bot」发的');
+  it('names the bot without parentheses on one line, with no count', () => {
+    const note = BOT_WAKE_NOTE('小P（审查）\n第二行');
+    expect(note).toContain('另一个 bot「小P审查 第二行」发的');
+    expect(note).toContain('写 @小P审查 第二行；');
+    expect(note).not.toMatch(/已互相叫醒|上限|已到上限/);
+    expect(note.endsWith('不要把事交回给刚交给你的 bot。）')).toBe(true);
+    expect(BOT_WAKE_NOTE('「」')).toContain('另一个 bot「另一个 bot」发的');
   });
 });
 
