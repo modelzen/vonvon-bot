@@ -1,9 +1,10 @@
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { mkdir } from 'node:fs/promises';
 import { formatErrorTree } from '../core/error-parts';
 import { bridgeVersion } from '../core/version';
 import { paths } from '../config/paths';
 import { enterDataAccess, type DataLease } from '../config/data-access';
+import { inBotSession } from '../config/session-env';
 import { observeShutdown, type ShutdownControl } from '../host/lifecycle';
 import type { LingerChoice } from './commands/service';
 
@@ -15,6 +16,8 @@ program.hook('preAction', async (_command, action) => {
   // bot repair-dir writes bots.json itself, under the daemon's own lock, and takes one.
   const parent = action.parent?.name();
   if (parent === 'service' || (parent === 'bot' && action.name() !== 'repair-dir') || parent === 'group' || parent === 'settings' || action.name() === '__daemon-control') return;
+  // in a Bot's session secrets list, set and remove only refuse (s23g): before the lease, whose socket a sandbox may forbid, and the data root
+  if (parent === 'secrets' && action.name() !== 'get' && inBotSession(process.env)) return;
   if (action.name() === 'run') {
     const runControl = control = observeShutdown(Boolean(action.opts().parentControl));
     (await import('../host/crash-guard')).installCrashHandlers({ intent: () => runControl.intent ?? (runControl.requested ? 'stop' : 'running') });
@@ -157,33 +160,37 @@ program.command('__restart-after-exit <port> <oldPid> <oldStartedAt> [update]', 
   await (await import('../host/restart')).runSamePortRestartHelper({ port: Number(port), oldPid: Number(oldPid), oldStartedAt, ...(update ? { update: updateStatusSchema.parse(JSON.parse(update)) } : {}) });
 });
 
-// Internal plumbing — the `secrets-getter` wrapper execs `secrets get` to
-// resolve the App Secret from the keystore. Users never call it, so hide it
-// from --help (still fully functional, just unlisted).
-const secrets = program.command('secrets', { hidden: true }).description('本地加密密钥库（内部）');
-secrets
-  .command('get')
-  .description('exec-provider 端点（从 stdin 读 JSON 请求）')
-  .action(async () => {
-    await (await import('./commands/secrets')).secretsGet();
+const secrets = program.command('secrets').description('本机的密钥库：决策模型等服务的 API key，整台电脑一份，所有 Bot 共用');
+const secretsContext = async (options: Json = {}) => (await import('./commands/secrets')).terminalContext(io(options));
+// The `secrets-getter` wrapper execs `secrets get` to resolve the App Secret from the keystore: internal, unlisted.
+secrets.command('get', { hidden: true }).description('exec-provider 端点（从 stdin 读 JSON 请求）').action(async () => {
+  await (await import('./commands/secrets')).secretsGet();
+});
+secrets.command('list').description('列出要 key 的服务：填没填、末四位、哪些 Bot 和飞书群选了它').option('--json', 'Print JSON').action(async (options: Json) => {
+  await (await import('./commands/secrets')).runSecretsList(await secretsContext(options));
+});
+// --raw <id>: any entry by its id, for internal use and repairs; not in the help
+// commander takes excess arguments silently and, allowed, unknown options too: a key typed after the name is then in
+// command.args, refused in words; commander's own error would echo it
+secrets.command('set <name>').description('填或换一个 key：终端里按提示粘贴（不回显），脚本里从标准输入传')
+  .addOption(new Option('--raw').hideHelp()).allowUnknownOption()
+  .addHelpText('after', `
+Names:
+  typesafe-api-key   TypeSafe（决策模型 Jev）
+
+The key is never an argument: it would stay in the shell history. After saving, the key is tried once.
+
+Examples:
+  vonvon secrets set typesafe-api-key
+  vonvon secrets set typesafe-api-key < key.txt   # 脚本里`)
+  .action(async (name: string, options: { raw?: boolean }, command: Command) => {
+    await (await import('./commands/secrets')).runSecretsSet(name, command.args.slice(1), options, await secretsContext());
   });
-secrets
-  .command('set <id>')
-  .description('存储密钥（值从 stdin 读）')
-  .action(async (id: string) => {
-    await (await import('./commands/secrets')).secretsSet(id);
-  });
-secrets
-  .command('list')
-  .description('列出密钥 id')
-  .action(async () => {
-    await (await import('./commands/secrets')).secretsList();
-  });
-secrets
-  .command('remove <id>')
-  .description('删除密钥')
-  .action(async (id: string) => {
-    await (await import('./commands/secrets')).secretsRemove(id);
+secrets.command('remove <name>').description('删掉一个 key；选了它的 Bot 和飞书群要判断的消息按出错处理').addOption(new Option('--raw').hideHelp()).allowUnknownOption()
+  .addHelpText('after', `
+删之前可以先运行 vonvon secrets list，看哪些 Bot 和飞书群选了它；删完也会列出还选着它的。`)
+  .action(async (name: string, options: { raw?: boolean }, command: Command) => {
+    await (await import('./commands/secrets')).runSecretsRemove(name, command.args.slice(1), options, await secretsContext());
   });
 
 // `vonvon hook` is answered in bin/vonvon.mjs before this bundle loads.

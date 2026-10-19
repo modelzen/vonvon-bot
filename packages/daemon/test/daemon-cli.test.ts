@@ -162,7 +162,8 @@ it('open --print on a new host creates the data root, starts the daemon and keep
 
 it('keeps generated secret getters on their captured root outside the parent shell', async () => {
   const f = await fixture();
-  const setter = launch(f.home, f.root, ['secrets', 'set', 'fixture']); setter.child.stdin.end('dummy-only');
+  // run from a bot's session, `secrets set` would refuse (s23g)
+  const setter = launch(f.home, f.root, ['secrets', 'set', '--raw', 'fixture'], { FEISHU_CODEX_BRIDGE: '', VONVON_SESSION: '' }); setter.child.stdin.end('dummy-only');
   expect(await setter.exited).toBe(0);
   const generator = spawn(process.execPath, ['-e', `process.argv[1]=${JSON.stringify(entry)};require(${JSON.stringify(storeEntry)}).buildEncryptedAccountConfig('fixture','feishu').then(config=>console.log(JSON.stringify(config.secrets.providers.bridge))).catch(e=>{console.error(e.message);process.exitCode=1})`], { env: { ...process.env, HOME: f.home, VONVON_HOME: f.root }, stdio: 'pipe' });
   children.push(generator);
@@ -177,6 +178,34 @@ it('keeps generated secret getters on their captured root outside the parent she
   expect(await new Promise<number | null>(resolve => getter.once('close', resolve))).toBe(0);
   expect(JSON.parse(output)).toEqual({ values: { fixture: 'dummy-only' }, errors: {} });
   expect(await readdir(outside.root)).toEqual([]);
+});
+
+it('secrets set and remove refuse an unknown option without echoing it: a key may have been typed there (s23g)', async () => {
+  const f = await fixture();
+  const session = { FEISHU_CODEX_BRIDGE: '', VONVON_SESSION: '' };
+  for (const args of [['set', 'typesafe-api-key', '--ts_TESTKEY0000'], ['set', '--ts_TESTKEY0000', 'typesafe-api-key'], ['remove', 'typesafe-api-key', '--ts_TESTKEY0000'], ['remove', 'typesafe-api-key', 'ts_TESTKEY0000']]) {
+    const p = launch(f.home, f.root, ['secrets', ...args], session); p.child.stdin.end();
+    expect(await p.exited, p.output()).toBe(2);
+    expect(p.output()).not.toContain('TESTKEY');
+  }
+  const help = launch(f.home, f.root, ['secrets', 'remove', '--help'], session);
+  expect(await help.exited).toBe(0);
+  expect(help.output()).toContain('vonvon secrets list');
+  for (const file of ['secrets.enc', 'master.key']) expect(await readdir(f.root)).not.toContain(file);
+});
+
+it('secrets refuses in a bot session before it takes the data lease or makes the data root (s23g)', async () => {
+  const f = await fixture();
+  // Claude's sandbox forbids the lease's socket: a refusal after the lease never showed
+  const root = join(f.root, 'missing');
+  for (const session of [{ FEISHU_CODEX_BRIDGE: '1', VONVON_SESSION: '' }, { FEISHU_CODEX_BRIDGE: '', VONVON_SESSION: '1' }]) {
+    for (const args of [['list'], ['set', 'typesafe-api-key'], ['remove', 'typesafe-api-key']]) {
+      const p = launch(f.home, root, ['secrets', ...args], session); p.child.stdin.end('ts_TESTKEY0000');
+      expect(await p.exited, p.output()).toBe(2);
+      expect(p.output()).toContain('这组命令不能在 Bot 的会话里用');
+    }
+  }
+  expect(await readdir(f.root)).toEqual([]);
 });
 
 it('refuses a reused PID without signaling the unrelated process or changing its lock', async () => {

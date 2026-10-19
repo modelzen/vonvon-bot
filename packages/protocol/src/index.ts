@@ -9,6 +9,7 @@ export * from "./handshake.js";
 export * from "./rpc.js";
 export * from "./events.js";
 export * from "./admin.js";
+export * from "./secrets.js";
 export * from "./directory.js";
 export * from "./setup-steps.js";
 export * from "./diagnostics.js";

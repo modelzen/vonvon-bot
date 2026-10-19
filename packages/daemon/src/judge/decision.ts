@@ -1,5 +1,5 @@
 import { JUDGE_ALLOWED, JUDGE_FORMAT_HEADER, JUDGE_INPUT_BOUNDS, JUDGE_INPUT_EXAMPLE_REQUEST, JUDGE_INPUT_LIMITS, lineFields, oneLine, plainText, shownContext } from './prompt';
-import { callTypeSafe, type DecisionReply } from './typesafe';
+import { callTypeSafe, probeTypeSafe, type DecisionReply, type ProbeResult } from './typesafe';
 import type { JudgeDecision, JudgeLine, JudgeRequest, JudgeVariant } from './types';
 
 /**
@@ -18,6 +18,8 @@ export interface DecisionProvider {
   /** the model's name in a reason */
   label(model: string): string;
   call(body: DecisionBody, key: string, signal: AbortSignal, fetchImpl?: typeof fetch): Promise<DecisionReply>;
+  /** the key page's 试一次 (s23g): one request that sends no group message */
+  probe(key: string, signal: AbortSignal, fetchImpl?: typeof fetch): Promise<ProbeResult>;
 }
 
 /** A Map, so an id such as `constructor` names nothing. */
@@ -31,20 +33,23 @@ const PROVIDERS = new Map<string, DecisionProvider>([
     limit: { running: 8, queued: 32 },
     label: (model) => (model.startsWith('jev') ? 'Jev' : model),
     call: (body, key, signal, fetchImpl) => callTypeSafe(body, key, signal, fetchImpl),
+    // GET /v1/models; whether it needs the key is checked with a real one at s23g's acceptance (v1-plan s23g 做法)
+    probe: (key, signal, fetchImpl) => probeTypeSafe(key, signal, fetchImpl),
   }],
 ]);
 
 export const decisionProvider = (id: string): DecisionProvider | undefined => PROVIDERS.get(id);
 export const decisionProviders = (): DecisionProvider[] => [...PROVIDERS.values()];
 
-/** After a decision model is chosen without its key: what happens meanwhile, and where to fill it in (s23g adds the
- * web page). A file, not `echo`: the key stays out of the shell history. A keystore that cannot be read is not
- * a missing key: filling one in would hit the same error, so it says where to see that error. */
+/** After a decision model is chosen without its key: what happens meanwhile, and where to fill it in (s23g2 adds the
+ * web page). The terminal asks for the key without echoing it, so it stays out of the shell history and of files. A
+ * keystore that cannot be read is not a missing key: filling one in would hit the same error, so it says where to see
+ * that error. */
 export function keyMissingText(m: { displayName: string; keyId: string; keyUnreadable?: boolean }): string {
   const meanwhile = '要判断的消息按出错处理（没 @ Bot 的不回，@ 的回在主区）';
   return m.keyUnreadable
-    ? `读不了密钥库，看不出填没填 ${m.displayName} 的 key，读得了之前${meanwhile}。在终端运行 vonvon secrets list 看报错`
-    : `还没填 ${m.displayName} 的 key，填之前${meanwhile}。在终端运行 vonvon secrets set ${m.keyId} < 存着 key 的文件`;
+    ? `读不了密钥库，看不出填没填 ${m.displayName} 的 key，读得了之前${meanwhile}。在终端运行 vonvon secrets list 看原因`
+    : `还没填 ${m.displayName} 的 key，填之前${meanwhile}。在终端运行 vonvon secrets set ${m.keyId}，按提示粘贴`;
 }
 
 // The decision question of the Jev report's Chinese runs, word for word (2.1: 30/31 right with four more questions,
