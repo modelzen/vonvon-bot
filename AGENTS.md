@@ -4,9 +4,47 @@
 
 2026-10-14 起生效，取代 2026-10-13 的版本，适用于 v1 开发。2026-10-16 起，Mac 上的 Codex 由 Claude 经 Paseo 直接开会话，一个任务一个会话，结果贴回 GitHub；Paseo 用不了时（连不上、开不了会话，或者 #322 上还有活着的队列会话），才把任务贴进队列 issue #322 请 owner 转发，见"工具和同步"。两台机器读同一份规则。本文的 owner 指用户本人；旧的 `owner:` 标签不再使用。Claude 的非平凡任务用 Ultracode 工作流编排。Claude 侧的会话、模型和通知格式另见 JP-VPS 上的 `/home/ops/.claude/vonvon-collaboration.md`，这个文件不在仓库里，Mac 上没有。
 
+## 2026-10-19 起：Claude 出计划，Codex 写代码
+
+owner 2026-10-19 定（Claude 的周额度用到一半）：从 s27a 起，新切片由 Mac mini 上 Codex App 里的 Codex 写代码；Claude 写设计和详细计划、审查、合入。在飞的 #419、#420 由 Claude 收尾。本节和下文冲突时，以本节为准。
+
+- **Claude（JP-VPS）：**
+  - 每一片写一份详细计划 `docs/plans/<片>.md`，格式见 `docs/plans/README.md`。难的片（并发、队列、关闭清理）由 Fable 起草、Opus 审稿。计划走纯文档 PR 合入。
+  - 计划先写到 M7，M7 做到一半再写后面的。
+  - 把开发任务贴进 #322。
+  - 审查 Codex 开的 PR：另一个模型的子代理做独立审查；风险一栏有子进程、并发、关闭清理、错误路径、macOS 原生、数据迁移或合入门禁的，再加一轮多角度审查。发现贴进 PR，再往 #322 贴一个改 PR 的任务。
+  - 打 `frozen`，等 CI，合入。里程碑预览版和通知 owner 照旧。
+  - Claude 不再自己实现新切片。往 Codex 的分支上 push，只限下面"分支"一条说的同步。
+- **Codex（Mac mini 上的 Codex App，owner 开会话）：**
+  - owner 在 Codex App 里发一句"按 modelzen/vonvon-bot#322 正文做"。
+  - Codex 按 #322 的队列做开发任务、改 PR 的任务和检查任务：照计划写代码和测试，在 Mac 上跑检查，用 Mac 自己的测试 bot 做真飞书自测，开 PR，按审查改。
+  - 它有 Computer Use，桌面端的窗口、托盘、系统弹窗这类验收也由它做。
+  - 飞书里的操作一律用 lark-cli，不点飞书客户端（owner 2026-10-19）。
+  - 计划里写不清、要定产品行为的地方，不猜，结果里写"卡住了"。纯技术的取舍自己定，写进 PR 描述"和计划不一样的地方"。
+  - Mac 上 Codex 的额度充足（owner 2026-10-19），尽量并行：一个任务里开子代理分头写代码、写测试、开 PR 前照验收要点自审；队列里有几个开发任务时一起做。测试环境、Computer Use、打包装 app 同一时间只给一个任务用。规矩见 #322 正文"并行"。
+- **owner：** 开 Codex 会话、转发那一句；扫码、注销再登录这类只有人能做的事。
+- **Mac 的测试环境：**
+  - Codex 在 Mac 上用隔离的数据目录跑自己的两个测试 bot，和 JP-VPS 的 Bot 6、7、8 分开，放在专门的测试群里。
+  - 不碰 owner 的 `~/.vonvon-bot`、`com.vonvon.bot.daemon`、bridge 和 `/Applications/Vonvon Bot.app`。
+  - 环境由 #322 的第一个任务建好，数据目录、bot 和群写在 #322 正文"Mac 的测试环境"一节。
+- **分支：**
+  - 开发分支叫 `codex/<片>`，例如 `codex/s27a-bot-wake`，从 `main` 开。
+  - 开发任务、改 PR 的任务在做时，只有 Codex push。
+  - 没有在做的任务时，只有 Claude push，只限两件事：把 `main` merge 进来，以及合入前的同步。push 前先看 #322：这个分支没有开始了却还没有结果的任务。
+  - `codex/fix-*` 照旧。
+- **在飞：**
+  - 在飞产品 PR 照旧最多两个。计数加上 `codex/<片>` 开发 PR（2026-10-19 以后开的；`codex/fix-*` 和 10-14 以前开的旧 `codex/*` PR 不算）。
+  - Claude 贴开发任务时，已贴出、还没开出 PR 的开发任务也算一个，总数不超过两个。Codex 开 PR 时不用再数。
+- **Mac 检查：**
+  - #322 有活着的队列会话时，Mac 上的检查也贴进 #322，不开 Paseo 会话，免得两个会话抢 Computer Use。
+  - Codex 写的片，Mac 上的验收在开发任务里一起做，不另开检查。
+- **Claude 额度用完时：**
+  - Claude 在 #322 和通知里写明。
+  - owner 指定后，照 #367 那次的做法，由 Codex 审查和合入。交还也由 owner 指定。
+
 ## 分工
 
-- JP-VPS 上的 Claude Code 负责 v1 的设计、实现、独立审查、测试和合入。它写 `docs/product.md` 和 `docs/v1-plan.md`，写产品代码和测试，在 JP-VPS 上跑构建、typecheck、lint、定向测试和无头网页界面检查。飞书一侧的行为也在 JP-VPS 上自测：用 lark-cli 以 owner 的用户身份、只在测试群里做，改设置用 `vonvon` 命令行。每个里程碑的验收，不需要 Mac 的步骤由 Claude 先在 JP-VPS 上做完，见 `docs/v1-plan.md` 第 7 节。重命令一律加 `flock /tmp/vonvon-heavy.lock`。全量测试交给 CI 的 Linux 和 macOS 任务。Claude 是唯一的合入入口。
+- JP-VPS 上的 Claude Code 负责 v1 的设计、实现、独立审查、测试和合入（2026-10-19 起实现交给 Codex，见上一节）。它写 `docs/product.md` 和 `docs/v1-plan.md`，写产品代码和测试，在 JP-VPS 上跑构建、typecheck、lint、定向测试和无头网页界面检查。飞书一侧的行为也在 JP-VPS 上自测：用 lark-cli 以 owner 的用户身份、只在测试群里做，改设置用 `vonvon` 命令行。每个里程碑的验收，不需要 Mac 的步骤由 Claude 先在 JP-VPS 上做完，见 `docs/v1-plan.md` 第 7 节。重命令一律加 `flock /tmp/vonvon-heavy.lock`。全量测试交给 CI 的 Linux 和 macOS 任务。Claude 是唯一的合入入口。
 - Mac 上的 Codex 做 Claude 做不到的桌面事项：Mac 上的网页端连 Mac 上的 daemon，真实 macOS 窗口、托盘、菜单、登录项和系统权限弹窗，真实 Codex provider 的运行，用 Mac 钥匙串签名打包预览版。短检查和预览版由 Claude 按"工具和同步"交给 Mac 上的 Codex；长的、需要人来判断的验收交给 owner。公证和对外发布由 owner 在发布前决定谁来做。
 - Codex 可以改代码，按下面两种情况提交：
   - Claude 发起的 Mac 检查里发现问题，Codex 直接修，在临时 worktree 里 commit，用 `git push origin HEAD:<分支>` 推到被检查的 `claude/*` 分支，不 force-push，不 rebase。结果评论里写清改了什么、为什么改和提交号。贴出这个任务的结果、或者看到它被取消之后，Codex 不再 push 这个分支。
@@ -18,7 +56,7 @@
 ## 范围和资料
 
 - v1 的范围以定稿的 `docs/product.md` 为准。owner 在 `docs/product.md` 的 PR 里认可后即为定稿；"定稿"只指这份文档，`frozen` 只指 PR 标签。定稿之前是产品设计环节，不写产品代码。定稿后的新想法写进其中"v1 之后"一节，发布前不实现。
-- v1 的切片和里程碑写在 `docs/v1-plan.md`。它随代码在同一个 PR 里更新，不另开文档 PR。
+- v1 的切片和里程碑写在 `docs/v1-plan.md`。它随代码在同一个 PR 里更新，不另开文档 PR。2026-10-19 起，每一片的详细计划写在 `docs/plans/<片>.md`，由 Claude 在纯文档 PR 里先合入，Codex 照着实现（见"2026-10-19 起"）。
 - `docs/plan.md`（V1 到 V11）和 `docs/roadmap.md` 从 2026-10-14 起停止执行，只作历史参考。
 - 调研结果放在 `docs/research/`。开始调研之前，先读其中的 `README.md`，已经查过的不再重查。新一轮调研放进新的日期目录，并在 `README.md` 里加一行。
 
@@ -40,7 +78,7 @@
   - 经 Paseo 的任务：会话贴出了结果；或者 Claude 用 `paseo stop` 停下会话，`paseo inspect` 确认它已经不在运行。停下的会话可能已经推过：Claude 先 pull，多出来的提交按"一个 PR 的流程"第 2 步审查，这次检查的结论作废，还要查就开一个新任务。连不上 Mac 的 daemon、确认不了会话停没停时（比如 Mac 睡着了），Claude 在提示词所在的地方贴一条第一行是 `<!-- claude-mac-cancel:<任务号> -->` 的取消，通知 owner；等 daemon 连上后 `paseo stop` 加 `paseo inspect` 确认，或者 owner 确认 Mac 上没有这个会话在跑，才 push。Codex 开始任务前、每次 push 前、替换装好的 app 前都看一次有没有这条取消，有就停下，贴结果写明停在哪一步。这几处要看取消写在每份提示词里，不靠 Mac 上那份可能过时的 AGENTS.md。
   - 经 #322 的任务：下面三件事有一件发生：这个任务的结果贴出了；Claude 在它开始之前取消了它，也就是取消贴出后再看一次，#322 里没有比这条取消更早贴的这个任务的开始评论；Claude 按"工具和同步"通知 owner 后，owner 确认 Mac 上没有会话在处理 #322；这时这个任务还没取消的，Claude 先贴取消再 push，免得睡着的 Mac 醒来后旧会话接着推。开始以后才取消的，仍要等结果或 owner 确认。什么时候通知 owner，见"工具和同步"里"转发一次，做完一批"的第 4 条。还要做这次检查，Claude 先取消旧任务，再贴一份新的提示词和一个新任务，按"工具和同步"请 owner 转发。
 - 除了 `frozen`，不给 PR 加别的标签。每次加标签都会按 PR 当时的标签重跑 CI，PR 已带 `frozen` 时会再跑一遍完整平台链。
-- 产品 PR 同时在飞最多两个，第三个要等一个合入。计数方法：开放、非 draft、head 分支以 `claude/` 开头、改动里有 `.github/`、`scripts/`、`AGENTS.md`、`docs/` 和其他 Markdown 以外文件的 PR，再去掉暂停的 #281 和 #285。所以纯文档 PR 和只改 CI、脚本、规则的流程 PR 不计；dependabot PR 和 Codex 的 `codex/fix-*` 修复 PR 不在 `claude/` 分支上，也不计。修复 PR 由 Claude 优先审查和合入。本规则生效前开的 PR 全部暂停：#281（V6b 的 Codex 子进程迁移）、#285（V5 的启动路由），以及 `codex/` 分支上的 #110（V5 的桌面外壳）等。它们的去留在 `docs/product.md` 定稿时由 owner 决定。
+- 产品 PR 同时在飞最多两个，第三个要等一个合入。计数方法：开放、非 draft、head 分支以 `claude/` 开头（2026-10-19 起还有 `codex/<片>` 开发分支，见"2026-10-19 起"）、改动里有 `.github/`、`scripts/`、`AGENTS.md`、`docs/` 和其他 Markdown 以外文件的 PR，再去掉暂停的 #281 和 #285。所以纯文档 PR 和只改 CI、脚本、规则的流程 PR 不计；dependabot PR 和 Codex 的 `codex/fix-*` 修复 PR 不计。修复 PR 由 Claude 优先审查和合入。本规则生效前开的 PR 全部暂停：#281（V6b 的 Codex 子进程迁移）、#285（V5 的启动路由），以及 `codex/` 分支上的 #110（V5 的桌面外壳）等。它们的去留在 `docs/product.md` 定稿时由 owner 决定。
 - 一个 PR 对应一个切片，大小以一个审查子代理能读完整个 diff 为准。不含 lockfile 和生成文件时，以 1500 行改动为上限，超过就先拆。只删死样式（CSS）的纯删除 PR 例外，可以超过：diff 里只有删除的行，没有新增或改动的行，按文件一片；独立审查和 `frozen` 照旧，审查者用脚本和前后截图核，不逐行读（owner 2026-10-18 同意，见 `docs/research/2026-10-18-ui-foundation/report.md` 的 D7）。
 - 每个功能分支在每台机器上只有一棵 worktree，合入即删。GitHub 在合入时自动删除远端分支。Mac 上的 Codex 每做一个任务，自己建一棵 detach 的临时 worktree：经 Paseo 的，留到 Claude 归档会话前让它删；经 #322 的，留到整个队列结束时再删。开 `codex/fix-*` PR 的 Codex 会话，push 完、PR 开好就删掉它的 Mac worktree，之后的修改走修复任务。
 - 进度看 `docs/v1-plan.md` 里的清单、PR 状态，以及 Claude 会话里的里程碑消息。issue #122 看板和 `docs/program-graph.json` 停止更新。不做本地进度页、会话映射文件或定时刷新。
