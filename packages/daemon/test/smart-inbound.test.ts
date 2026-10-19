@@ -8,7 +8,7 @@ import { projectRevision } from '../src/admin/collaboration';
 import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
 import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
-import { wakeTriggerText } from '../src/bot/bot-wake';
+import { wakeTriggerText } from '../src/bot/context-weave';
 import { BOT_WAKE_NOTE, INITIATIVE_NOTE } from '../src/bot/session-title';
 import { JUDGE_BUDGET, JudgeBudget } from '../src/bot/smart-intake';
 import type { JudgeDeps } from '../src/judge/judge';
@@ -73,8 +73,8 @@ const startThread = vi.fn(async () => ({
   },
 }));
 
-vi.mock('../src/bot/bot-wake', async original => {
-  const real = await original<typeof import('../src/bot/bot-wake')>();
+vi.mock('../src/bot/context-weave', async original => {
+  const real = await original<typeof import('../src/bot/context-weave')>();
   return { ...real, wakeTriggerText: vi.fn(real.wakeTriggerText) };
 });
 

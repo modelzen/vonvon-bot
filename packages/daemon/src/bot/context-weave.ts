@@ -1,4 +1,4 @@
-import type { LarkChannel } from '@larksuiteoapi/node-sdk';
+import type { LarkChannel, NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import { log } from '../core/logger';
 import { labelScope } from '../config/scopes';
 import { feishuError, scopeDenial, type FeishuErrorBody } from '../utils/feishu-error';
@@ -353,11 +353,6 @@ export interface PullOpts {
   /** Keep this bot's own messages too (a topic opening's main-area lines). */
   keepSelf?: boolean;
   names?: NameBook;
-  /** A wake count (s27a-0): keep a message whose text is empty too, as a bare `<at>` still wakes; and read past an
-   * empty page that says there is more, as the start has not been reached. */
-  mentions?: true;
-  /** Stop after the page where a message taken straight from it (not a held one) passes this; the pull is then complete. */
-  stopWhen?: (m: ContextMessage) => boolean;
   /** All pages together; FETCH_DEADLINE_MS when unset. No page is asked for once it has run out. */
   deadlineMs?: number;
   /** Once aborted, before a page or while one is read, the pull fails at once, pages read or not. */
@@ -375,9 +370,7 @@ export interface PullOpts {
  *   - `before`: only messages up to this (the trigger's createTime), so a
  *     message that arrives as its own turn later is not woven twice; one in
  *     the same ms is kept, as the watermark moving to the trigger covers it.
- *   - `stopWhen`: also stop, complete, after the page where a kept message
- *     passes it (a wake count stops at the last person's message, s27a-0).
- * This bot's own replies, system notices, deleted, empty (kept with `mentions`) and
+ * This bot's own replies, system notices, deleted, empty and
  * `excludeMessageId` messages are dropped, except `keepId` (the topic's first
  * message, kept even when this bot sent it). Other bots stay. Own replies are
  * dropped as already in the session (product.md 3.5).
@@ -411,17 +404,14 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
   /** Each listed message's topic, and the main-area messages whose root_id is another message (see below). */
   const threadOf = new Map<string, string>();
   const held: { m: ContextMessage; own: boolean; rootId: string }[] = [];
-  /** True when `m` went into the messages. */
-  const take = (m: ContextMessage, own: boolean): boolean => {
+  const take = (m: ContextMessage, own: boolean): void => {
     if (!own) {
-      if (opts.mentions || m.text.trim().length > 0) {
+      if (m.text.trim().length > 0) {
         found.push(m);
-        return true;
       }
     } else if (c.type === 'chat' && m.threadId) {
       ownRoots.push(m);
     }
-    return false;
   };
   function done(complete: boolean): ThreadPull {
     for (const h of held.splice(0)) if (threadOf.get(h.rootId) !== h.m.threadId) take(h.m, h.own);
@@ -472,7 +462,6 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
       const data = res.data as { items?: RawMsgItem[]; has_more?: boolean; page_token?: string } | undefined;
       const items = data?.items ?? [];
       let oldest = Infinity;
-      let stop = false;
       for (const it of items) {
         learnNames(opts.names, it);
         const m = toContextMessage(it, me, opts.names);
@@ -494,13 +483,10 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
           continue;
         }
         // The bot's own messages are left out; one a topic hangs under is handed back apart (s14c).
-        if (take(m, own) && opts.stopWhen?.(m)) stop = true;
+        take(m, own);
       }
       if (!data?.has_more || !data.page_token) return done(true);
-      // An empty page that says there is more: a weave stops there as before; a wake count reads on, as it has not
-      // reached the start, and ends incomplete at the page cap or the deadline.
-      if (items.length === 0 && !opts.mentions) return done(true);
-      if (stop) return done(true);
+      if (items.length === 0) return done(true);
       if (stopAt > 0 && oldest <= stopAt) return done(true);
       if (opts.enough && found.length >= opts.enough) return done(false);
       pageToken = data.page_token;
@@ -896,6 +882,31 @@ export function sanitizeContext(s: string, maxLen: number, oneLine: boolean, lin
   const before = out.charCodeAt(cut - 1);
   if (cut > 0 && cut < out.length && before >= 0xd800 && before <= 0xdbff) cut--;
   return cut < out.length ? `${out.slice(0, cut)}…` : out;
+}
+
+/** The most of another bot's message that goes into the turn's input, in UTF-16 units; a longer one is cut there
+ * (one less when that would split an emoji) and gets 「…」 and a note, about 30 more. */
+export const BOT_TRIGGER_MAX = 800;
+const TRUNCATED = '（已截断，需要时用 vonvon 飞书 skill 查全文）';
+const NO_TEXT = '（对方没有给出文字回答）';
+
+/**
+ * The text of the trigger that goes into the turn, always a string: a text or post message's own content (the
+ * SDK has turned it into text and left out the @ to this bot), a card's from `fetched` (a lookup by id).
+ * Sanitized as quoted context is, multi-line, cut at {@link BOT_TRIGGER_MAX} with a note.
+ */
+export function wakeTriggerText(
+  msg: Pick<NormalizedMessage, 'content' | 'rawContentType'>,
+  trigger: Pick<ContextMessage, 'text'> | undefined,
+  fetched?: string,
+): string {
+  const raw = msg.rawContentType === 'interactive'
+    ? (trigger?.text.trim() ? trigger.text : fetched ?? '')
+    : msg.content;
+  const full = sanitizeContext(raw, Infinity, false);
+  if (!full) return NO_TEXT;
+  const cut = sanitizeContext(raw, BOT_TRIGGER_MAX, false, true);
+  return cut === full ? full : `${cut}${TRUNCATED}`;
 }
 
 /** The longest link text and address that count as a link; longer is plain text,
