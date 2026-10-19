@@ -35,7 +35,7 @@ const FORMAT_BODY: Record<JudgeVariant, string> = {
 skip：不回。
 main：在主区接着聊。
 topic：开一个新话题来回。
-anchor：这条消息接的是哪一条，按消息前面的编号写，m0 是它自己，m1 是它前面最近的一条。它是在接着前面哪条说（比如补充 m1、回答 m2 提的问题），就写那条的编号；不是或者拿不准，写 m0。
+anchor：这条消息接的是哪一条，按消息前面的编号写，m0 是它自己，m1 是它前面最近的一条。它是在接着前面哪条说（比如补充 m1、回答 m2 提的问题），就写那条的编号；不是或者拿不准，写 m0。标了"新"的几条是你这次新看到的（没有标的时候只有 m0 是新的），该接的可能不是 m0：把要接的那条编号写在 anchor。
 只输出一个 JSON 对象，不要别的文字：{"decision":"skip 或 main 或 topic","anchor":"m0","reason":"一句话原因，40 字以内"}`,
   mentioned: `这条消息在群主区点名了你，你一定要回，只选回在哪里：
 main：在主区接着聊。
@@ -44,6 +44,7 @@ topic：开一个新话题来回。
   topic: `这条消息发在一个话题里，要回就回在这个话题里，只选回不回：
 skip：不回。
 reply：回。
+标了"新"的几条是你这次新看到的（没有标的时候只有 m0 是新的）。
 只输出一个 JSON 对象，不要别的文字：{"decision":"skip 或 reply","reason":"一句话原因，40 字以内"}`,
 };
 
@@ -155,6 +156,7 @@ function renderLine(line: JudgeLine, max: number): string {
     notes.push(`@ 了 ${shown}${mentions.length > MENTIONS_MAX ? `…等 ${mentions.length} 人` : ''}`);
   }
   if (line.quote) notes.push(`引用 ${oneLine(line.quote.name)}：${body(line.quote.text, JUDGE_INPUT_LIMITS.quoteChars)}`);
+  if (line.fresh) notes.unshift('新');
   const note = notes.length ? `（${notes.join('；')}）` : '';
   return `${hhmm(line.at)} ${who}${note}：${body(line.text, max)}`;
 }
@@ -163,11 +165,12 @@ function renderLine(line: JudgeLine, max: number): string {
  * cannot start a line, so newlines stay as they are; the speaker's kind is a field of its own, so a name loses a
  * trailing （bot） and needs no quotes. This bot's own lines have no `speaker`: the caller puts the bot's name. */
 export function lineFields(line: JudgeLine, max: number): {
-  time: string; speaker?: string; text: string; mentions?: string[]; quote?: { speaker: string; text: string };
+  time: string; speaker?: string; text: string; new?: true; mentions?: string[]; quote?: { speaker: string; text: string };
 } {
   const mentions = line.mentions ?? [];
   return {
     time: hhmm(line.at),
+    ...(line.fresh ? { new: true as const } : {}),
     ...(line.from === 'self' ? {} : { speaker: oneLine(cleanLine(line.name).replace(BOT_SUFFIX, '')) }),
     text: plainText(line.text, max),
     ...(mentions.length ? { mentions: mentions.slice(0, MENTIONS_MAX).map((name) => oneLine(name)) } : {}),
@@ -195,11 +198,12 @@ export function judgeAnchors(req: Pick<JudgeRequest, 'context' | 'message'>): Ar
 }
 
 /** The user input of one judgement. Built in memory only, never logged (product.md 3.5). */
-export function renderJudgeInput(req: Pick<JudgeRequest, 'variant' | 'botName' | 'group' | 'persona' | 'topicTitle' | 'context' | 'message'>): string {
+export function renderJudgeInput(req: Pick<JudgeRequest, 'variant' | 'botName' | 'group' | 'persona' | 'topicTitle' | 'context' | 'message' | 'why'>): string {
   const out = [`【群】${oneLine(req.group.name, 100)}`, `【你】${oneLine(req.botName)}`];
   const persona = req.persona?.trim();
   if (persona) out.push('【你的个性】', `  ${body(persona, JUDGE_INPUT_LIMITS.personaChars)}`);
   if (req.variant === 'topic' && req.topicTitle?.trim()) out.push(`【话题】${oneLine(req.topicTitle, 100)}`);
+  if (req.why?.trim()) out.push(`【为什么现在看】${oneLine(req.why, 200)}`);
   // Numbered newest first, shown oldest first.
   const recent = shownContext(req.context).map(({ text }, i) => `m${i + 1} ${text}`).reverse();
   out.push('【最近的消息】旧的在前', ...(recent.length ? recent : ['（没有）']));
