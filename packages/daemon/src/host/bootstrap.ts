@@ -13,6 +13,7 @@ import { bridgeVersion } from '../core/version';
 import { defaultHolderPath, ProcessHost } from '../provider/process/process-host';
 import { capOrphanDrain, closeHostRun, guardParentPipes, openBotCrashContext, openHostRun, type HostRunStart } from './crash-guard';
 import { crashEntry } from './crash-store';
+import { registeredProviderPids, unconfirmedProviderPids } from '../agent/owned-process';
 import type { HostNotice } from './crash-notify';
 
 const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -77,7 +78,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
         intent: () => control.intent ?? (control.requested ? 'stop' : 'running'),
       });
       guardParentPipes(control);
-      capOrphanDrain({ log, flush: flushLogs });
+      capOrphanDrain({ log, flush: flushLogs, providers: () => ({ registered: registeredProviderPids(), unconfirmed: unconfirmedProviderPids() }) });
     }
     if (control.requested) return;
     // the supervisor and each bot child (s23f2); one-off commands never get here

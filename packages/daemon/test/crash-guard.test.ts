@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
+import { capOrphanDrain } from '../src/host/crash-guard';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   crashDir, listCrashRecords, readBootId, readRunMarker, writeCrashRecordSync, writeResumeRequest, writeRunMarkerSync,
@@ -21,6 +22,41 @@ const T0 = Date.parse('2026-10-16T05:00:00.000Z');
 const UP = 50_000_000;
 const at = (ms: number): string => new Date(ms).toISOString();
 const log = () => ({ info: vi.fn(), warn: vi.fn(), fail: vi.fn() });
+
+describe('capOrphanDrain', () => {
+  let disconnect: (() => void) | undefined;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    const originalOnce = process.once.bind(process);
+    vi.spyOn(process, 'once').mockImplementation(((event: string | symbol, listener: (...args: unknown[]) => void) => {
+      if (event === 'disconnect') { disconnect = listener; return process; }
+      return originalOnce(event, listener);
+    }) as typeof process.once);
+    vi.spyOn(process, 'exit').mockImplementation((() => undefined as never));
+  });
+  afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); disconnect = undefined; });
+
+  it('s18g ③ logs registered and unconfirmed provider PIDs before orphan cutoff', async () => {
+    const logs = log();
+    capOrphanDrain({ log: logs, providers: () => ({ registered: [11, 12], unconfirmed: [12] }) });
+    expect(disconnect).toBeTypeOf('function');
+    disconnect?.();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(logs.warn).toHaveBeenCalledExactlyOnceWith('run', 'orphan-drain-cut', { waitedMs: 20_000, registered: [11, 12], unconfirmed: [12] });
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(process.exit).toHaveBeenCalledWith(0);
+  });
+
+  it('s18g ④ cuts orphan drain when reading provider PIDs fails', async () => {
+    const logs = log();
+    capOrphanDrain({ log: logs, providers: () => { throw new Error('registry unavailable'); } });
+    disconnect?.();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(logs.warn).toHaveBeenCalledExactlyOnceWith('run', 'orphan-drain-cut', { waitedMs: 20_000 });
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(process.exit).toHaveBeenCalledWith(0);
+  });
+});
 let now = T0;
 let up = UP;
 const clock = (bootId: string | undefined = 'boot-a'): Clock => ({ now: () => now, uptimeMs: () => up, bootId: () => bootId });
