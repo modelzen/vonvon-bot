@@ -481,6 +481,7 @@ describe('a /goal that recovered from an API retry', () => {
 
 
 describe('unbound group hints', () => {
+  const unboundMessage = (text: string) => ({ ...message(text), chatId: 'oc_unbound' });
   const notes: DiagnosticsEvent[] = [];
   function unbound() {
     fake.project = undefined;
@@ -492,14 +493,14 @@ describe('unbound group hints', () => {
 
   it('limits repeated mentions for ten minutes while recording each one', async () => {
     const o = unbound();
-    await o.onMessage(message('一'));
-    await o.onMessage(message('二'));
+    await o.onMessage(unboundMessage('一'));
+    await o.onMessage(unboundMessage('二'));
     expect(fake.send).toHaveBeenCalledOnce();
     expect(unboundNotes()).toHaveLength(2);
     const realNow = Date.now;
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 10 * 60_000 + 1);
     try {
-      await o.onMessage(message('三'));
+      await o.onMessage(unboundMessage('三'));
       expect(fake.send).toHaveBeenCalledTimes(2);
     } finally { clock.mockRestore(); }
   });
@@ -507,39 +508,39 @@ describe('unbound group hints', () => {
   it('retries immediately after a failed send', async () => {
     const o = unbound();
     fake.send.mockRejectedValueOnce(new Error('send failed'));
-    await o.onMessage(message('一'));
-    await o.onMessage(message('二'));
-    await o.onMessage(message('三'));
+    await o.onMessage(unboundMessage('一'));
+    await o.onMessage(unboundMessage('二'));
+    await o.onMessage(unboundMessage('三'));
     expect(fake.send).toHaveBeenCalledTimes(2);
   });
 
   it('replies inside the mentioned topic', async () => {
     const o = unbound();
-    const msg = message('话题');
+    const msg = unboundMessage('话题');
     await o.onMessage(msg);
-    expect(fake.send).toHaveBeenCalledWith('chat', expect.any(Object), { replyTo: msg.messageId, replyInThread: true });
+    expect(fake.send).toHaveBeenCalledWith('oc_unbound', expect.any(Object), { replyTo: msg.messageId, replyInThread: true });
   });
 
   it('keeps separate groups independent and main-area replies in the main area', async () => {
     const o = unbound();
-    await o.onMessage({ ...message('一'), threadId: undefined });
-    await o.onMessage({ ...message('二'), chatId: 'oc_other' });
+    await o.onMessage({ ...unboundMessage('一'), threadId: undefined });
+    await o.onMessage({ ...unboundMessage('二'), chatId: 'oc_other' });
     expect(fake.send).toHaveBeenCalledTimes(2);
     expect(fake.send.mock.calls[0]?.[2]).toEqual(expect.objectContaining({ replyInThread: false }));
   });
 
   it('does not reply or record diagnostics without a mention', async () => {
     const o = unbound();
-    await o.onMessage({ ...message('一'), mentionedBot: false });
+    await o.onMessage({ ...unboundMessage('一'), mentionedBot: false });
     expect(fake.send).not.toHaveBeenCalled();
     expect(notes).toEqual([]);
   });
 
   it('clears the quiet period when the bot is invited again', async () => {
     const o = unbound();
-    await o.onMessage(message('一'));
-    await o.onBotAddedToChat({ chatId: 'chat', operator: { openId: 'owner' } });
-    await o.onMessage(message('二'));
+    await o.onMessage(unboundMessage('一'));
+    await o.onBotAddedToChat({ chatId: 'oc_unbound', operator: { openId: 'owner' } });
+    await o.onMessage(unboundMessage('二'));
     expect(fake.send).toHaveBeenCalledTimes(2);
   });
 });
