@@ -5,7 +5,7 @@ import { feishuError, scopeDenial } from '../utils/feishu-error';
 import { deniedScopeName, errorDetail, reportScopeDenied } from './diagnostics';
 import { withDeadline } from './names';
 
-/** How long a chat's bot list is trusted by the `<at>` guard (D/card/at-guard.ts). A wake count reads past it. */
+/** How long a chat's bot list is trusted by the `<at>` guard (D/card/at-guard.ts). */
 export const ROSTER_TTL_MS = 10 * 60_000;
 /** A failed read is not tried again sooner: the guard asks on every frame. */
 export const ROSTER_RETRY_MS = 60_000;
@@ -24,14 +24,11 @@ interface Snapshot { bots: Bots; complete: boolean }
 /** `pending` settles with this read's bots, or undefined on failure. */
 interface Entry { snapshot?: Snapshot; until: number; pending?: Promise<Bots | undefined> }
 
-/** The guard's view, and a fresh read for a wake count (s27a-0). */
+/** The guard's view and complete roster for outgoing handoffs. */
 export interface BotRoster extends ChatBots {
   peek(chatId: string): Bots | undefined;
   /** Only a complete observed list can establish unique names for outgoing handoffs. */
   peekForHandoff(chatId: string): Bots | undefined;
-  /** A fresh read, past the cache: this read's list, or undefined when it failed (never the old list: two computers
-   * could hold different ones). Shares a read in flight; a success refreshes the cache too. */
-  refresh(chatId: string): Promise<Bots | undefined>;
 }
 
 /**
@@ -109,10 +106,6 @@ export function createBotRoster(
       const entry = entryOf(chatId);
       if (entry.pending) await entry.pending;
       else if (entry.until <= Date.now()) await start(chatId, entry);
-    },
-    refresh(chatId) {
-      const entry = entryOf(chatId);
-      return entry.pending ?? start(chatId, entry);
     },
   };
 }
