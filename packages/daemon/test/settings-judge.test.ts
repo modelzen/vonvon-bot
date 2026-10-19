@@ -36,13 +36,13 @@ const fake = (id: string, list: ModelInfo[]) => ({
 let backends: Record<string, AgentBackend>;
 const botDir = () => join(paths.appDir, 'bot');
 let cfg: AppConfig;
-/** the keystore's ids */
-let secretIds: string[] = [];
+/** the keystore */
+let secrets: Record<string, string> = {};
 
 function owner(overrides: Partial<SettingsOwnerDeps> = {}) {
   return createSettingsOwner({
     cfg, writePreferences: createAppPreferencesWriter({ cfg }), backendFor: (id) => backends[id] ?? backends['codex-appserver']!,
-    evictLiveSessionsForChat: vi.fn(async () => {}), readSmartPrompt: (appId, chatId) => readSmartPrompt(appId, chatId, botDir()), secretIds: async () => secretIds, ...overrides,
+    evictLiveSessionsForChat: vi.fn(async () => {}), readSmartPrompt: (appId, chatId) => readSmartPrompt(appId, chatId, botDir()), getSecret: async id => secrets[id], ...overrides,
   });
 }
 async function save(scope: typeof agent | typeof project, selection: JudgeSelection) {
@@ -73,7 +73,7 @@ beforeEach(async () => {
   vi.stubEnv('CLAUDE_CONFIG_DIR', join(paths.appDir, 'no-claude'));
   vi.stubEnv('ANTHROPIC_BASE_URL', '');
   backends = Object.fromEntries(Object.entries(LISTS).map(([id, list]) => [id, fake(id, list)]));
-  secretIds = [];
+  secrets = {};
   await rm(paths.appDir, { recursive: true, force: true }); await mkdir(paths.appDir, { recursive: true });
   cfg = { accounts: { app: { id: botId, tenant: 'feishu', secret: { source: 'exec', id: 's' } } }, preferences: {} } as unknown as AppConfig;
   await saveConfig(cfg);
@@ -272,22 +272,25 @@ describe('judge settings: the view', () => {
     const listed = [{ provider: 'typesafe', displayName: 'TypeSafe', models: [{ id: 'jev-latest', displayName: 'Jev' }], keyId: 'typesafe-api-key', keySet: false }];
     expect((await o.read(agent) as AgentSettingsView).decisionModels).toEqual(listed);
     const missing = keyMissingText(listed[0]!);
-    expect(missing).toContain('vonvon secrets set typesafe-api-key < 存着 key 的文件');
+    expect(missing).toContain('在终端运行 vonvon secrets set typesafe-api-key，按提示粘贴');
     expect(await save(project, JEV)).toMatchObject({ kind: 'saved', effects: [{ detail: '智能模式的下一次判断就用新模型' }, { fields: ['selection'], when: 'next-message', detail: missing }] });
     // a language model, or the key in: no such line
     expect(await save(agent, { kind: 'llm', model: 'gpt-6-luna' })).toMatchObject({ effects: [{ detail: '智能模式的下一次判断就用新模型' }] });
-    secretIds = ['app-secret', 'typesafe-api-key'];
+    secrets = { 'app-secret': 'x', 'typesafe-api-key': 'ts_TESTKEY0000' };
     expect(await save(agent, JEV)).toMatchObject({ effects: [{ detail: '智能模式的下一次判断就用新模型' }] });
     const p = await o.read(project) as ProjectSettingsView;
     expect(p.decisionModels).toEqual([{ ...listed[0], keySet: true }]);
     expect(projectViewSchema.safeParse(p).error?.issues).toBeUndefined();
+    // s23g: by the judge's rule, a stored key no header carries is a missing one, not an unreadable keystore
+    secrets = { 'typesafe-api-key': 'ts_TEST KEY0000' };
+    expect((await o.read(project) as ProjectSettingsView).decisionModels).toEqual(listed);
     // a keystore it cannot read is said so, not taken for a missing key: filling one in would hit the same error
-    const unreadable = owner({ secretIds: async () => { throw new Error('bad'); } });
+    const unreadable = owner({ getSecret: async () => { throw new Error('bad'); } });
     const u = await unreadable.read(project) as ProjectSettingsView;
     expect(u.decisionModels).toEqual([{ ...listed[0], keySet: false, keyUnreadable: true }]);
     expect(projectViewSchema.safeParse(u).error?.issues).toBeUndefined();
     const unread = keyMissingText(u.decisionModels![0]!);
-    expect(unread).toBe('读不了密钥库，看不出填没填 TypeSafe 的 key，读得了之前要判断的消息按出错处理（没 @ Bot 的不回，@ 的回在主区）。在终端运行 vonvon secrets list 看报错');
+    expect(unread).toBe('读不了密钥库，看不出填没填 TypeSafe 的 key，读得了之前要判断的消息按出错处理（没 @ Bot 的不回，@ 的回在主区）。在终端运行 vonvon secrets list 看原因');
     await save(project, { kind: 'llm', model: 'gpt-6-luna' });
     const before = await unreadable.read(project) as ProjectSettingsView;
     const saved = await unreadable.save({ scope: project, section: 'judge', revision: before.sections.judge.revision, patch: { selection: JEV } } as Parameters<typeof unreadable.save>[0]);

@@ -35,6 +35,8 @@ describe("pinned contract extraction", () => {
       {type:"setupStatus",agentId:"cli_fixture"},{type:"confirmCardCallback",agentId:"cli_fixture",confirmed:true},{type:"daemonStatus"},{type:"codexSetup"},
       {type:"logs",maxBytes:1024},{type:"followLogs",follow:true},
       {type:"switchBackend",agentId:"cli_fixture",projectName:"p",backend:"codex-appserver"},
+      {type:"secrets"},{type:"setSecret",keyId:"typesafe-api-key",value:"ts_TESTKEY0000"},
+      {type:"removeSecret",keyId:"typesafe-api-key"},{type:"testSecret",keyId:"typesafe-api-key"},
     ];
     for (const payload of adminRequests) expect(adminRequestSchema.safeParse(payload).success).toBe(true);
     for (const payload of [{type:"list"},{type:"list",path:"/tmp"},{type:"choose",path:"/tmp"}]) {
@@ -51,12 +53,18 @@ describe("pinned contract extraction", () => {
       {kind:"daemonStatus",status:daemon},
       {kind:"codexSetup",setup:{installation:"installed",authentication:"signedIn",version:"1",executable:"/bin/codex"}},
       {kind:"logs",text:"x"},{kind:"following",follow:true},{kind:"applied",revision:2},
+      {kind:"secrets",unreadBots:0,removed:true,services:[{provider:"typesafe",displayName:"TypeSafe",keyId:"typesafe-api-key",models:[{id:"jev-latest",displayName:"Jev"}],status:"set",last4:"0000",
+        inUse:[{agentId:"cli_fixture",agentName:"bot"},{agentId:"cli_fixture",agentName:"bot",groupId:"oc_fixture",groupName:"g",inherited:true,notSmart:true}]}]},
+      {kind:"secretTested",keyId:"typesafe-api-key",outcome:"auth",message:"key 不对",status:401},{kind:"refused",code:"invalid_key",message:"x"},
     ]) {
       expect(adminReplySchema.safeParse(payload).success).toBe(true);
     }
     expect(requestSchema.safeParse({type:"request",id:"1",method:"snapshot",payload:{type:"get"}}).success).toBe(true);
     expect(requestSchema.safeParse({type:"request",id:"2",method:"admin",payload:{type:"state"}}).success).toBe(true);
     expect(requestSchema.safeParse({type:"request",id:"3",method:"directory",payload:{type:"list"}}).success).toBe(true);
+    // the key's length only: its shape is the daemon's to refuse in words (s23g)
+    for (const value of ["", "x".repeat(4097)]) expect(adminRequestSchema.safeParse({type:"setSecret",keyId:"typesafe-api-key",value}).success).toBe(false);
+    expect(adminRequestSchema.safeParse({type:"setSecret",keyId:"typesafe-api-key",value:"ts_TEST KEY"}).success).toBe(true);
   });
   it("keeps optional V3 job, install, and event fields", () => {
     const base = {id:"job",type:"registerAgent"};
