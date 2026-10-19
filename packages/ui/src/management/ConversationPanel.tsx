@@ -66,6 +66,20 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
     return () => { active = false; };
   }, [selected, target]);
 
+  const run = context?.threadId === selected ? context.run : null;
+  useEffect(() => {
+    if (!run || !selected) return;
+    let active = true;
+    const timer = setInterval(() => {
+      void requestRef.current({ action: "context", ...target, threadId: selected }).then((reply) => {
+        if (!active) return;
+        if (reply.kind === "context" && reply.threadId === selected) setContext(reply);
+        else if (reply.kind === "refused") setError(reply.message);
+      }).catch((failure: unknown) => { if (active) setError(failure instanceof Error ? failure.message : "无法读取会话状态。"); });
+    }, 3000);
+    return () => { active = false; clearInterval(timer); };
+  }, [Boolean(run), selected, target]);
+
   async function execute(action: Exclude<Parameters<CollaborationClient>[0], { action: "project" | "history" | "context" | "usage" | "openGroup" | "createProject" | "editProject" | "removeProject" | "shareUsage" }>, success: string) {
     setBusy(true);
     setError("");
@@ -94,8 +108,6 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
     (!needle || `${item.name ?? ""} ${item.preview} ${item.sessionId}`.toLocaleLowerCase().includes(needle)),
   ) ?? [];
   const current = history?.sessions.find((item) => item.threadId === selected && !item.detached);
-  const run = context?.threadId === selected ? context.run : null;
-
   return <div id={settingAnchor('会话管理')}>
     {current && <SettingsGroup label="当前会话" footer="清空和压缩只作用于当前会话。">
       <SettingsRow title="会话" value={current.summary || current.threadId} />
@@ -104,6 +116,7 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
       <SettingsRow title="自主任务目标" trailing={<div className="settings-inline-actions"><input aria-label="自主任务目标" className="settings-field" value={objective} maxLength={4000} onChange={(event) => setObjective(event.target.value)} placeholder="输入目标" /><Button size="sm" disabled={busy || !objective.trim()} onClick={() => void execute({ action: "startGoal", ...target, threadId: selected, objective: objective.trim() }, "目标任务已开始。")}>开始</Button></div>} />
       {run && <>
         <SettingsRow title="正在运行" value={run.goal ? "自主目标" : "当前任务"} trailing={<div className="settings-inline-actions"><Button size="sm" variant="danger" disabled={busy || !run.canStop} onClick={() => void execute({ action: "stop", ...target, threadId: selected, runId: run.id }, "已请求停止任务。")}>停止</Button><Button size="sm" disabled={busy || !run.canEndGoal} onClick={() => void execute({ action: "endGoal", ...target, threadId: selected, runId: run.id }, "已结束目标。")}>结束目标</Button></div>} />
+        {run.subagents?.map((subagent) => <SettingsRow key={subagent.id} title={`${subagent.name}：${Array.from(subagent.task).slice(0, 40).join("")}`} value={{ running: "运行中", completed: "已完成", failed: "失败", stopped: "已停止" }[subagent.status]} trailing={subagent.status === "running" && subagent.stoppable ? <Button size="sm" disabled={busy} onClick={() => void execute({ action: "stopSubagent", ...target, threadId: selected, runId: run.id, subagentId: subagent.id }, "已请求停止子 agent。")}>停止</Button> : undefined} />)}
         <SettingsRow title="完成时提醒" value={run.reminderRequested ? "已开启" : "未开启"} trailing={<Button size="sm" disabled={busy || !run.canRemind} onClick={() => void execute({ action: "reminder", ...target, threadId: selected, runId: run.id, requested: !run.reminderRequested }, run.reminderRequested ? "已关闭提醒。" : "已开启提醒。")}>{run.reminderRequested ? "关闭提醒" : "开启提醒"}</Button>} />
       </>}
     </SettingsGroup>}
