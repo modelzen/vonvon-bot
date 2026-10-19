@@ -1,3 +1,4 @@
+import { findHandoffs, handoffSendResult, type HandoffSendResult, handoffText, handoffNote, ambiguousNote, HANDOFF_SEND_MS, type HandoffMiss } from './bot-handoff';
 import { AskCoordinator, type AskTurn } from './ask-coordinator';
 import { createPendingGroups, pendingGroupsFile } from '../project/pending-groups';
 import { realpath, stat } from 'node:fs/promises';
@@ -3079,6 +3080,7 @@ export function createOrchestrator(
         }
         reserved.thread = thread;
         launchOpts = {
+          smart: project && sessionModeOf(project) === 'smart' ? true : undefined,
           chatId: msg.chatId,
           replyTo: msg.messageId,
           origin: originFor(msg, flat),
@@ -3426,6 +3428,7 @@ export function createOrchestrator(
         }
       }
       const launchOpts: LaunchOpts = {
+        smart: project && sessionModeOf(project) === 'smart' ? true : undefined,
         chatId: msg.chatId,
         replyTo: anchor?.id ?? msg.messageId,
         triggerId: msg.messageId,
@@ -6024,6 +6027,57 @@ export function createOrchestrator(
     await sendCompletionReminderReply({ channel, cfg, dedupe: completionReminderSent }, input);
   }
 
+  async function handOff(rc: RunCardState, stream: RunCardStream, cardId: string, answerText: string,
+    cardUpdated: boolean, opts: Pick<LaunchOpts, 'chatId' | 'flat' | 'smart'>): Promise<void> {
+    // Final card → fenced cards → one handoff text → session save → completion reminder.
+    if (!opts.smart || rc.rs.terminal !== 'done') return;
+    if (!answerText.includes('@') && !/<at\b/i.test(answerText)) return;
+    const ref = cardId.slice(-6);
+    const done = (fields: Record<string, unknown>): void => log.info('card', 'handoff', { ref, ...fields });
+    if (shuttingDown) { done({ sent: false, why: 'shutdown' }); return; }
+    await orStop(roster.load(opts.chatId), undefined);
+    // Shutdown while reading the roster must not send or repaint, even for ambiguous names.
+    if (shuttingDown) { done({ sent: false, why: 'shutdown' }); return; }
+    const bots = roster.peekForHandoff(opts.chatId);
+    if (!bots) { done({ sent: false, why: 'no-roster' }); return; }
+    const { handoffs: found, ambiguous } = findHandoffs(answerText, bots, {
+      openId: channel.botIdentity?.openId, appId: channel.rawClient.appId,
+    });
+    if (!found.length && !ambiguous.length) return;
+    const to = found.map(h => h.openId.slice(-6));
+    const note = async (why?: HandoffMiss): Promise<void> => {
+      const lines = [...(why ? [handoffNote(found.map(h => h.name), why)] : []), ...ambiguous.map(ambiguousNote)];
+      if (!lines.length || shuttingDown) return;
+      rc.handoffNotes = lines;
+      if (!(await stream.finalizeCard(channel, buildRunCard(rc)))) {
+        log.warn('card', 'handoff-note-failed', { ref, why: why ?? 'ambiguous' });
+      }
+    };
+    if (!cardUpdated) { done({ to, sent: false, why: 'finalize-failed' }); return; }
+    if (!found.length) { done({ sent: false, why: 'ambiguous', names: ambiguous.length }); await note(); return; }
+    if (shuttingDown) { done({ to, sent: false, why: 'shutdown' }); return; }
+    const text = handoffText(found);
+    const send: Promise<HandoffSendResult> = channel.rawClient.im.v1.message.reply({
+      path: { message_id: cardId },
+      data: { msg_type: 'text', content: JSON.stringify({ text }), reply_in_thread: !opts.flat },
+    }).then(handoffSendResult, (err: unknown) => handoffSendResult(feishuError(err)));
+    const r = await orStop<HandoffSendResult | undefined | 'stopped'>(withDeadline(send, HANDOFF_SEND_MS, 'handoff'), 'stopped');
+    if (r === 'stopped') { done({ to, sent: 'unknown', why: 'shutdown' }); return; }
+    if (r === undefined) { done({ to, sent: 'unknown', why: 'timeout' }); await note('timeout'); return; }
+    if (r.kind === 'unknown') {
+      done({ to, sent: 'unknown', why: 'no-result' });
+      await note('unknown');
+      return;
+    }
+    if (r.kind === 'failed') {
+      done({ to, sent: false, why: 'send-failed', code: r.code });
+      await note('failed');
+      return;
+    }
+    done({ to, sent: true, len: text.length, ...(ambiguous.length ? { ambiguous: ambiguous.length } : {}) });
+    await note();
+  }
+
   interface LaunchOpts {
     /** Only group-message launches have a sender to notify if preparation is cut short. */
     origin?: DroppedOrigin;
@@ -6034,6 +6088,8 @@ export function createOrchestrator(
     triggerId?: string;
     /** The first turn is the smart mode joining in on its own (QueuedTurn.initiative). */
     initiative?: true;
+    /** Whether the group was smart when this run started. */
+    smart?: true;
     wake?: TurnExtra['wake'];
     /** true on first reply that creates the topic; subsequent replies use replyTo only */
     replyInThread?: boolean;
@@ -6908,6 +6964,7 @@ export function createOrchestrator(
               log.fail('card', err, { phase: 'clean-card' });
             }
           }
+          await handOff(rc, stream, finalMsgId, answerText, terminalCardUpdated, opts);
           if (topicThreadId) {
             touchSession(topicThreadId); // 轮次收尾打点（M-3 reaper 的空闲时钟）
             await patchSession(topicThreadId, { updatedAt: Date.now(), ...savedMeter(topicThreadId, opts.thread) });
