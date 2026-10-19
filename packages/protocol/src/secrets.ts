@@ -32,6 +32,30 @@ export const secretServiceSchema = z.object({
 });
 export type SecretService = z.infer<typeof secretServiceSchema>;
 
+/** Why a key cannot be saved, or nothing; the words never quote it. The daemon checks it on each save; the key page
+ * checks it before sending, so its words are the same (s23g2). */
+export function keyProblem(value: string): string | undefined {
+  if (!value) return "没有读到 key";
+  if (value.length > API_KEY_MAX) return `key 太长了，最多 ${API_KEY_MAX} 个字符`;
+  if (!API_KEY_SHAPE.test(value)) return "key 只能是一串可见的英文字符，不能有空格、换行或中文";
+  return undefined;
+}
+
+/** The judge's words when a decision model's key stops a judgement (judge.ts readKey, typesafe.ts): they land in a
+ * not-replied record's `detail`, and the 状态与诊断 page reads them back to point at the key page (s23g2). */
+export const KEY_FAILURE = {
+  unreadable: "密钥库读不了",
+  missing: (service: string) => `没填 ${service} 的 key`,
+  invalid: (service: string) => `${service} 的 key 不是一串可见字符，重新填一次`,
+  rejected: (service: string) => `${service} 不认这个 key`,
+} as const;
+/** Which of {@link KEY_FAILURE} a detail is: the keystore, or the key itself (missing, unusable, refused). */
+export function keyFailureOf(detail: string | undefined): "keystore" | "key" | undefined {
+  if (!detail) return undefined;
+  if (detail === KEY_FAILURE.unreadable) return "keystore";
+  return /^没填 .+ 的 key$|^.+ 的 key 不是一串可见字符，重新填一次$|^.+ 不认这个 key$/.test(detail) ? "key" : undefined;
+}
+
 /** What one 试一次 found; `message` is always the daemon's own words. */
 export const secretTestOutcomeSchema = z.enum(["ok", "auth", "busy", "network", "timeout", "failed"]);
 export type SecretTestOutcome = z.infer<typeof secretTestOutcomeSchema>;
