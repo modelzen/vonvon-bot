@@ -268,3 +268,14 @@ describe('smart answer at hint envelope', () => {
     expect(stripBridgeMessageEnvelope(`正文\n${hint}`)).toBe(`正文\n${hint}`);
   });
 });
+
+describe('BOT_WAKE_NOTE', () => {
+  it('names the bot without parentheses on one line, with no count', () => {
+    const note = BOT_WAKE_NOTE('小P（审查）\n第二行');
+    expect(note).toContain('另一个 bot「小P审查 第二行」发的');
+    expect(note).toContain('写 @小P审查 第二行；');
+    expect(note).not.toMatch(/已互相叫醒|上限|已到上限/);
+    expect(note.endsWith('不要把事交回给刚交给你的 bot。）')).toBe(true);
+    expect(BOT_WAKE_NOTE('「」')).toContain('另一个 bot「另一个 bot」发的');
+  });
+});

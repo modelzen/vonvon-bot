@@ -1,3 +1,4 @@
+import { pendingGroupsSchema } from '@vonvon/protocol';
 import { createPendingGroups, pendingGroupsFile } from '../src/project/pending-groups';
 import { existsSync, rmSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -535,7 +536,7 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
   });
 });
 
-it('reads pending events directly and filters bound groups, changed admins and disabled bots', async () => {
+it('reads pending events from all inviters and filters bound groups and disabled bots', async () => {
   const id = 'cli_pending';
   const prior = await import('../src/config/bots').then(module => module.loadBots());
   await seedBots({ ...prior, bots: [...prior.bots, { appId: id, name: 'Pending', tenant: 'feishu', createdAt: 1, active: true }] });
@@ -546,10 +547,18 @@ it('reads pending events directly and filters bound groups, changed admins and d
   await queue.add('oc_pending', 'ou_admin'); await queue.add('oc_other', 'ou_removed'); await queue.refresh();
   const reader = createAdminService({ liveStatus: async () => ({ running: true }) });
   try {
-    expect(await reader.pendingGroups?.(id)).toEqual({ groups: [{ chatId: 'oc_pending', name: 'Research', addedAt: expect.any(Number) }] });
+    expect(await reader.pendingGroups?.(id)).toEqual({ groups: ['oc_pending', 'oc_other'].map(chatId => ({ chatId, name: 'Research', addedAt: expect.any(Number), topic: false })) });
     useBotDir(id);
     await addProject({ name: 'Bound', chatId: 'oc_pending', cwd: '/tmp', blank: false, createdAt: 1 });
-    expect(await reader.pendingGroups?.(id)).toEqual({ groups: [] });
+    expect(await reader.pendingGroups?.(id)).toEqual({ groups: [{ chatId: 'oc_other', name: 'Research', addedAt: expect.any(Number), topic: false }] });
+    const records = Array.from({ length: 1001 }, (_, i) => ({ chatId: `oc_limit_${i + 1}`, operator: 'ou_other', addedAt: i + 1, generation: `fixture-${i}`, state: 'ready', name: 'Pending', ...(i === 1000 ? { topic: true } : {}) }));
+    writeFileSync(pendingGroupsFile(files.projectsFile), JSON.stringify({ version: 1, groups: records }));
+    const result = await reader.pendingGroups?.(id);
+    expect(result?.groups).toHaveLength(1000);
+    expect(result?.groups[0]).toEqual({ chatId: 'oc_limit_1001', name: 'Pending', addedAt: 1001, topic: true });
+    expect(result?.groups.at(-1)).toEqual({ chatId: 'oc_limit_2', name: 'Pending', addedAt: 2 });
+    expect(result?.groups.some(group => group.chatId === 'oc_limit_1')).toBe(false);
+    expect(pendingGroupsSchema.safeParse(result).success).toBe(true);
     expect(await reader.pendingGroups?.(BOT_B)).toEqual({ groups: [] });
     expect(await reader.pendingGroups?.('cli_missing')).toEqual({ groups: [] });
     writeFileSync(pendingGroupsFile(files.projectsFile), '{');
