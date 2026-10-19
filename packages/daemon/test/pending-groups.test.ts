@@ -2,13 +2,13 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { createPendingGroups, readPendingGroups, retirePendingGroup, type PendingGroupVerification } from '../src/project/pending-groups';
+import { createPendingGroups, readPendingGroups, retirePendingGroup, PENDING_REDELIVERY_MS, type PendingGroupVerification } from '../src/project/pending-groups';
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'pending-groups-')); roots.push(root);
   const file = join(root, 'pending-groups.json');
-  const verify = vi.fn(async (_chatId: string): Promise<PendingGroupVerification> => ({ state: 'ready', name: 'Research' }));
+  const verify = vi.fn(async (_chatId: string): Promise<PendingGroupVerification> => ({ state: 'ready', name: 'Research', topic: false }));
   const eligible = vi.fn(async () => true);
   const onError = vi.fn();
   const options = { file, verify, eligible, onError };
@@ -16,7 +16,8 @@ async function fixture() {
 }
 it('persists the event before lookup, deduplicates concurrent deliveries and resumes after restart', async () => {
   const f = await fixture();
-  await Promise.all(Array.from({ length: 8 }, () => f.queue.add('oc_a', 'ou_admin')));
+  const fresh = await Promise.all(Array.from({ length: 8 }, () => f.queue.add('oc_a', 'ou_admin')));
+  expect(fresh.filter(Boolean)).toHaveLength(1);
   expect(f.verify).not.toHaveBeenCalled();
   const [candidate] = await readPendingGroups(f.file);
   expect(candidate).toMatchObject({ state: 'verifying', chatId: 'oc_a', operator: 'ou_admin' });
@@ -24,7 +25,7 @@ it('persists the event before lookup, deduplicates concurrent deliveries and res
   await f.queue.refresh();
   expect(await readPendingGroups(f.file)).toEqual([candidate]);
   await createPendingGroups(f).refresh();
-  expect(await readPendingGroups(f.file)).toEqual([{ ...candidate, state: 'ready', name: 'Research' }]);
+  expect(await readPendingGroups(f.file)).toEqual([{ ...candidate, state: 'ready', name: 'Research', topic: false }]);
   await f.queue.add('oc_a', 'ou_admin');
   expect(await readPendingGroups(f.file)).toHaveLength(1);
 });
@@ -38,13 +39,13 @@ it('does not revive removal or let an old lookup rename a re-added group', async
   await vi.waitFor(() => expect(f.verify).toHaveBeenCalled());
   await f.queue.remove('oc_a');
   await f.queue.add('oc_a', 'ou_admin');
-  release({ state: 'ready', name: 'Stale name' });
+  release({ state: 'ready', name: 'Stale name', topic: false });
   await refreshing;
   const current = await readPendingGroups(f.file);
   expect(current[0]?.generation).not.toBe(first[0]?.generation);
   expect(current[0]?.state).toBe('verifying');
   await f.queue.refresh();
-  expect((await readPendingGroups(f.file))[0]).toMatchObject({ name: 'Research' });
+  expect((await readPendingGroups(f.file))[0]).toMatchObject({ name: 'Research', topic: false });
   await retirePendingGroup(f.file, 'oc_a');
   expect(await readPendingGroups(f.file)).toEqual([]);
 });
@@ -82,12 +83,39 @@ it('retries temporarily missing membership and hides previously ready candidates
   f.verify.mockResolvedValue({ state: 'retry' });
   await f.queue.refresh();
   expect(await readPendingGroups(f.file)).toEqual([original]);
-  f.verify.mockResolvedValue({ state: 'ready', name: 'Available' });
+  f.verify.mockResolvedValue({ state: 'ready', name: 'Available', topic: false });
   await f.queue.refresh();
-  expect((await readPendingGroups(f.file))[0]).toMatchObject({ ...original, state: 'ready', name: 'Available' });
+  expect((await readPendingGroups(f.file))[0]).toMatchObject({ ...original, state: 'ready', name: 'Available', topic: false });
   f.verify.mockResolvedValue({ state: 'retry' });
   await f.queue.refresh();
   expect(await readPendingGroups(f.file)).toEqual([original]);
   await f.queue.remove('oc_a');
   expect(await readPendingGroups(f.file)).toEqual([]);
+});
+
+it('replaces arrivals after ten minutes and ignores redelivery within the window', async () => {
+  const f = await fixture();
+  expect(await f.queue.add('oc_a', 'ou_first', 1000)).toBe(true);
+  await f.queue.refresh();
+  const [original] = await readPendingGroups(f.file);
+  expect(await f.queue.add('oc_a', 'ou_other', 1000 + PENDING_REDELIVERY_MS - 1)).toBe(false);
+  expect(await readPendingGroups(f.file)).toEqual([original]);
+  expect(await f.queue.add('oc_a', 'ou_other', 1000 + PENDING_REDELIVERY_MS)).toBe(true);
+  const [current] = await readPendingGroups(f.file);
+  expect(current).toMatchObject({ operator: 'ou_other', state: 'verifying', addedAt: 1000 + PENDING_REDELIVERY_MS });
+  expect(current?.generation).not.toBe(original?.generation);
+});
+it('persists topic readiness through restart and accepts old records without topic', async () => {
+  const f = await fixture();
+  await f.queue.add('oc_topic', 'ou_guest');
+  f.verify.mockResolvedValue({ state: 'ready', name: 'Topic', topic: true });
+  await f.queue.refresh();
+  expect((await readPendingGroups(f.file))[0]).toMatchObject({ state: 'ready', topic: true });
+  await createPendingGroups(f).refresh();
+  expect((await readPendingGroups(f.file))[0]).toMatchObject({ state: 'ready', topic: true });
+  const old = { chatId: 'oc_old', operator: 'ou_guest', generation: 'old', addedAt: 1, state: 'ready', name: 'Old' };
+  await writeFile(f.file, JSON.stringify({ version: 1, groups: [old] }));
+  expect(await readPendingGroups(f.file)).toEqual([old]);
+  await writeFile(f.file, JSON.stringify({ version: 1, groups: [{ ...old, topic: 'true' }] }));
+  await expect(readPendingGroups(f.file)).rejects.toThrow('待绑定群记录无效');
 });

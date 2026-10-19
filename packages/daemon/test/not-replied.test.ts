@@ -125,7 +125,7 @@ describe('gates', () => {
     expect(records()).toEqual([]);
     await orchestrator.onMessage(message());
     expect(records().map(record => record.reason)).toEqual(['unbound']);
-    expect(fake.send).toHaveBeenCalledWith('oc_demo', { markdown: expect.stringContaining('还没绑定') }, expect.anything());
+    expect(fake.send).toHaveBeenCalledWith('oc_demo', { markdown: expect.stringContaining('主人还没设置好这个群') }, expect.anything());
   });
 });
 
