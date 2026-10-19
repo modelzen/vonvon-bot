@@ -102,7 +102,7 @@ for (const t of [undefined, 1, 'other']) it(`does not treat marker ${String(t)} 
   const { orchestrator } = app();
   try {
     const event = submit('', 'multi', t);
-    if (t === undefined && event.action.value && 't' in event.action.value) delete event.action.value.t;
+    if (t === undefined) event.action.value = { a: DM.joinGroupSubmit, chatId: 'oc_join', kind: 'multi' };
     await orchestrator.dispatcher.handle(event);
     const json = await reply();
     expect(json).toContain('submit_multi');
