@@ -3,7 +3,7 @@ import {useClient} from './client-context';
 import {useDirectoryPicker} from './directory-picker';
 import {useEffect, useRef, useState} from 'react';
 import type {Agent, CommandResult, Conversation, FolderChoice, PendingGroup} from '@vonvon/protocol';
-import {conversationCopy, toolSchema} from '@vonvon/protocol';
+import {conversationCopy, topicConversationCopy, toolSchema} from '@vonvon/protocol';
 import {Button, ChoiceGroup, FormField, InlineNotice} from './reference/components/ui';
 import {Dialog} from './reference/components/ui/Dialog';
 import {SettingsGroup, SettingsRow} from './reference/components/system-settings';
@@ -13,6 +13,9 @@ import type {PendingAgentGroups} from './pending-groups';
 type Mode = {kind: 'create'} | {kind: 'existing'} | {kind: 'bind'; group: PendingGroup};
 /** product.md 3.4: in this order, title plus one line, nothing preselected or marked as recommended. */
 export const CONVERSATIONS = (['threads', 'shared', 'smart'] as const).map(value => ({value, label: conversationCopy[value].title, description: conversationCopy[value].subtitle}));
+export function conversationsFor(topic: boolean) {
+  return topic ? (['threads', 'smart'] as const).map(value => ({value, label: topicConversationCopy[value].title, description: topicConversationCopy[value].subtitle})) : CONVERSATIONS;
+}
 /** 免@ when the user has not touched it: 多会话开，单会话关. */
 const defaultResponse = (conversation: Conversation): 'all' | 'mention' => conversation === 'threads' ? 'all' : 'mention';
 /** The 免@ the dialog shows: the hand pick, else the 会话方式's default. 智能 has none (s25c). */
@@ -56,8 +59,8 @@ export function CreationLockNotice({failure}: {failure: CreationFailure}) {
     ? <InlineNotice title="群已建好，但没存上" tone="warning">{failure.message}</InlineNotice>
     : <InlineNotice title="不确定建好没有" tone="warning">{CREATION_UNKNOWN}要重试，关掉这个窗口再建。</InlineNotice>;
 }
-type Props = {agent: Agent; pending?: PendingAgentGroups; initialGroup?: PendingGroup; onClose: () => void; onChanged: () => Promise<void>};
-export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChanged}: Props) {
+type Props = {linux?: boolean; agent: Agent; pending?: PendingAgentGroups; initialGroup?: PendingGroup; onClose: () => void; onChanged: () => Promise<void>};
+export function JoinGroupDialog({linux, agent, pending, initialGroup, onClose, onChanged}: Props) {
   const {navigate} = useDraftGuard();
   const client = useClient();
   const pickDirectory = useDirectoryPicker();
@@ -139,10 +142,10 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
         <Button aria-pressed={mode.kind === 'existing'} disabled={busy} onClick={() => switchMode({kind: 'existing'})}>加入现有飞书群</Button>
       </div>}
       {mode.kind === 'existing' ? <>
-        <p>在飞书客户端打开目标群，进入「设置 → 群机器人 → 添加机器人」，搜索并添加「{agent.name}」。请使用这个 Bot 的管理员身份操作。</p>
+        <p>在飞书客户端打开目标群，进入「设置 → 群机器人 → 添加机器人」，搜索并添加「{agent.name}」。拉我进群的人不是主人或管理员时，设置卡会发给主人。</p>
         <p role="status">添加后，Vonvon 会显示绑定通知。点击「继续绑定」设置独立目录或选择现有目录。</p>
         {pending?.problem && <InlineNotice title={pending.problem.kind === 'unsupported' ? '当前后台不支持绑定通知' : '绑定通知读取失败'} tone="warning">{pending.problem.message} {pending.problem.kind === 'unsupported' && '请更新 Vonvon daemon，或使用下方的群查找入口。'}</InlineNotice>}
-        {pending?.groups.map(group => <InlineNotice key={group.chatId} title={`${agent.name} 已加入 ${group.name}`} actions={<Button disabled={busy} onClick={() => switchMode({kind: 'bind', group})}>继续绑定</Button>}>选择工作目录后即可开始协作。</InlineNotice>)}
+        {pending?.groups.map(group => <InlineNotice key={group.chatId} title={`${agent.name} 已加入 ${group.name}`} actions={<Button disabled={busy} onClick={() => switchMode({kind: 'bind', group})}>继续绑定</Button>}>还没设置好：选会话方式就能用。</InlineNotice>)}
         <Button disabled={busy} onClick={() => void findGroups()}>查找已经加入的群</Button>
         <small>用于离线期间、升级前加入的群，或未收到通知的情况。</small>
         {manual && <><FormField label="已经加入的飞书群"><select aria-label="选择飞书群" value="" disabled={busy} onChange={event => {const group = manual.groups.find(item => item.id === event.target.value); if (group) switchMode({kind: 'bind', group: {chatId: group.id, name: group.name, addedAt: 0, hasOtherBots: group.hasOtherBots}});}}><option value="">请选择已加入的群</option>{manual.groups.map(group => <option key={group.id} value={group.id} disabled={group.bound}>{group.name}{group.bound ? '（已绑定）' : ''}</option>)}</select></FormField>{!manual.groups.length && <p>没有可显示的群。请确认机器人已加入目标群。</p>}{manual.nextCursor && <Button disabled={busy} onClick={() => void findGroups(manual.nextCursor)}>加载更多</Button>}</>}
@@ -153,14 +156,16 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
           <SettingsRow title="工作目录来源" trailing={<select aria-label="目录来源" disabled={busy} value={existingDirectory ? 'existing' : 'default'} onChange={event => {setExistingDirectory(event.target.value === 'existing'); setFolder(undefined);}}><option value="default">新建空白目录</option><option value="existing">使用现有目录</option></select>} />
           <SettingsRow title="工作目录" value={!existingDirectory ? '为本群创建独立空白目录' : folder?.displayPath ?? '未选择'} trailing={existingDirectory && <Button disabled={busy} onClick={() => void chooseFolder()}>选择文件夹</Button>} />
           <SettingsRow title="执行工具" trailing={<select aria-label="执行工具" disabled={busy} value={tool} onChange={event => setTool(toolSchema.parse(event.target.value))}><option value="codex">Codex</option><option value="claude">Claude</option></select>} />
+          {mode.kind === 'bind' && <SettingsRow title="权限档和网络" value="只读 · 网络关（设置好以后在群详情页改）" />}
         </SettingsGroup>
         <FormField label="会话方式">
-          <ChoiceGroup<Conversation | ''> label="会话方式" aria-required disabled={busy} value={conversation ?? ''} options={CONVERSATIONS} onChange={value => {if (value) {setConversation(value); setResponse(picked => keptResponse(value, picked));}}} />
+          <ChoiceGroup<Conversation | ''> label="会话方式" aria-required disabled={busy} value={conversation ?? ''} options={conversationsFor(mode.kind === 'bind' && mode.group.topic === true)} onChange={value => {if (value) {setConversation(value); setResponse(picked => keptResponse(value, picked));}}} />
         </FormField>
         {mode.kind === 'bind' && mode.group.hasOtherBots && <p>群里还有别的 bot。几个 bot 都选智能，它们才能互相 @、各自判断接不接话。</p>}
         {freeAt && <SettingsGroup>
           <SettingsRow title="免 @" value={freeAt === 'all' ? '不 @ 也回' : '@ 我才回'} trailing={<select aria-label="免 @" disabled={busy} value={freeAt} onChange={event => setResponse(event.target.value === 'all' ? 'all' : 'mention')}><option value="all">开</option><option value="mention">关</option></select>} />
         </SettingsGroup>}
+        {linux && mode.kind === 'bind' && tool === 'codex' && <InlineNotice title="Linux 上的 Codex 只能用完全访问" tone="info">照常绑定。群里 @ 时 Bot 会回一句说明；要用，绑定后在群详情页把权限档改成完全访问。</InlineNotice>}
         <Button variant="primary" loading={busy} disabled={locked || !name.trim() || Boolean(nameProblem) || (existingDirectory && !folder) || !conversation} onClick={() => void save()}>{mode.kind === 'create' ? '创建飞书群并加入' : '绑定工作目录并发送欢迎卡片'}</Button>
       </>}
       {mode.kind === 'create' && lock && <CreationLockNotice failure={lock} />}

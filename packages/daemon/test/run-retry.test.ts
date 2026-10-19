@@ -70,6 +70,7 @@ vi.mock('../src/card/run-card-stream', () => ({
 import { createOrchestrator, retryPrompt } from '../src/bot/handle-message';
 import { weaveRecordBlock, weaveSender } from '../src/bot/context-weave';
 import { stripBridgeMessageEnvelope } from '../src/bot/session-title';
+import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
 import { projectRevision } from '../src/admin/collaboration';
 import type { AppConfig } from '../src/config/schema';
 
@@ -123,10 +124,10 @@ function message(text: string): NormalizedMessage {
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false };
 }
 /** Starts the orchestrator; every resume returns `thread` when given. */
-function setup(thread?: unknown) {
+function setup(thread?: unknown, allowedChats = ['chat']) {
   if (thread) fake.backend.resumeThread.mockResolvedValue(thread);
-  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['admin'], allowedChats: ['chat'] } } };
-  const channel = { send: fake.send, rawClient: { im: { v1: { message: { get: async () => ({ data: { items: [{ thread_id: 'topic' }] } }) }, messageReaction: {
+  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['admin'], allowedChats } } };
+  const channel = { send: fake.send, getChatInfo: async () => ({ name: 'Test', chatType: 'group' }), rawClient: { im: { v1: { chat: { get: async () => ({ data: { chat_mode: 'group' } }) }, chatMembers: { isInChat: async () => ({ code: 0, data: { is_in_chat: true } }) }, message: { get: async () => ({ data: { items: [{ thread_id: 'topic' }] } }) }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
   orchestrator = createOrchestrator(channel as never, cfg, '/test');
@@ -184,6 +185,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await orchestrator?.shutdown();
+  setDiagnosticsSink(undefined);
 });
 
 describe('retryPrompt', () => {
@@ -565,5 +567,70 @@ describe('single subagent controls', () => {
     await untilReplied('这个子 agent 已经结束');
     await click('owner', 'chat', 'missing-card');
     await untilReplied('该任务已结束');
+  });
+});
+
+describe('unbound group hints', () => {
+  const unboundMessage = (text: string) => ({ ...message(text), chatId: 'oc_unbound' });
+  const notes: DiagnosticsEvent[] = [];
+  function unbound() {
+    fake.project = undefined;
+    notes.length = 0;
+    setDiagnosticsSink(event => notes.push(event));
+    return setup(undefined, ['oc_unbound', 'oc_other']);
+  }
+  const unboundNotes = () => notes.filter(event => event.kind === 'notReplied' && event.record.reason === 'unbound');
+
+  it('limits repeated mentions for ten minutes while recording each one', async () => {
+    const o = unbound();
+    await o.onMessage(unboundMessage('一'));
+    await o.onMessage(unboundMessage('二'));
+    expect(fake.send).toHaveBeenCalledOnce();
+    expect(unboundNotes()).toHaveLength(2);
+    const realNow = Date.now;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 10 * 60_000 + 1);
+    try {
+      await o.onMessage(unboundMessage('三'));
+      expect(fake.send).toHaveBeenCalledTimes(2);
+    } finally { clock.mockRestore(); }
+  });
+
+  it('retries immediately after a failed send', async () => {
+    const o = unbound();
+    fake.send.mockRejectedValueOnce(new Error('send failed'));
+    await o.onMessage(unboundMessage('一'));
+    await o.onMessage(unboundMessage('二'));
+    await o.onMessage(unboundMessage('三'));
+    expect(fake.send).toHaveBeenCalledTimes(2);
+  });
+
+  it('replies inside the mentioned topic', async () => {
+    const o = unbound();
+    const msg = unboundMessage('话题');
+    await o.onMessage(msg);
+    expect(fake.send).toHaveBeenCalledWith('oc_unbound', expect.any(Object), { replyTo: msg.messageId, replyInThread: true });
+  });
+
+  it('keeps separate groups independent and main-area replies in the main area', async () => {
+    const o = unbound();
+    await o.onMessage({ ...unboundMessage('一'), threadId: undefined });
+    await o.onMessage({ ...unboundMessage('二'), chatId: 'oc_other' });
+    expect(fake.send).toHaveBeenCalledTimes(2);
+    expect(fake.send.mock.calls[0]?.[2]).toEqual(expect.objectContaining({ replyInThread: false }));
+  });
+
+  it('does not reply or record diagnostics without a mention', async () => {
+    const o = unbound();
+    await o.onMessage({ ...unboundMessage('一'), mentionedBot: false });
+    expect(fake.send).not.toHaveBeenCalled();
+    expect(notes).toEqual([]);
+  });
+
+  it('clears the quiet period when the bot is invited again', async () => {
+    const o = unbound();
+    await o.onMessage(unboundMessage('一'));
+    await o.onBotAddedToChat({ chatId: 'oc_unbound', operator: { openId: 'owner' } });
+    await o.onMessage(unboundMessage('二'));
+    expect(fake.send).toHaveBeenCalledTimes(2);
   });
 });

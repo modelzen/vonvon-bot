@@ -1,10 +1,13 @@
 import {createElement} from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {expect, it} from 'vitest';
-import {collaborationRequestSchema} from '@vonvon/protocol';
+import {agentSchema, collaborationRequestSchema} from '@vonvon/protocol';
 import {RpcError} from '@vonvon/client/browser';
-import {CONVERSATIONS, CREATION_UNKNOWN, CreationLockNotice, creationFailure, keptResponse, projectNameProblem, sentResponse, shownResponse} from '../src/JoinGroupDialog';
-import {canSaveAll} from '../src/settings/DraftGuard';
+import {CONVERSATIONS, CREATION_UNKNOWN, JoinGroupDialog, CreationLockNotice, conversationsFor, creationFailure, keptResponse, projectNameProblem, sentResponse, shownResponse} from '../src/JoinGroupDialog';
+import {canSaveAll, DraftGuardProvider} from '../src/settings/DraftGuard';
+import {createClient} from '../../client/src/client';
+import {ClientProvider} from '../src/client-context';
+import {DirectoryPickerProvider} from '../src/directory-picker';
 
 it('rejects the names the protocol would refuse, before submit', () => {
   for (const name of ['前端/后端', 'a\\b', '换\n行', '制\t表']) {
@@ -66,4 +69,39 @@ it('s25c: lists the three 会话方式 in 3.4\'s order and words, and 智能 has
   expect(sentResponse('create', 'shared', 'mention')).toEqual({response: 'mention'});
   expect(sentResponse('create', 'threads', 'all')).toEqual({});
   expect(collaborationRequestSchema.safeParse({action: 'createProject', agentId: 'cli_join', name: 'n', folder: {kind: 'default'}, tool: 'codex', conversation: 'smart'}).success).toBe(true);
+});
+
+it('s36b2: offers topic conversations and keeps threads 免 @ on by default', () => {
+  expect(conversationsFor(true)).toEqual([
+    {value: 'threads', label: '按话题聊', description: '一个话题一条会话，几件事各聊各的'},
+    {value: 'smart', label: '智能开话题', description: '一个话题一条会话，不用 @ 我也会看情况接话'},
+  ]);
+  expect(conversationsFor(false)).toEqual(CONVERSATIONS);
+  expect(shownResponse('threads', undefined)).toBe('all');
+});
+
+it('s36b2: shows topic binding choices, restricted permissions and Linux Codex guidance only when binding', () => {
+  const client = createClient({isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {}});
+  const agent = agentSchema.parse({id: 'cli_join', name: 'Test Bot', enabled: true, running: true, connection: 'connected', activation: 'active'});
+  const render = (bind: boolean, linux: boolean, topic = true) => renderToStaticMarkup(
+    createElement(ClientProvider, {client, children: createElement(DirectoryPickerProvider, {children:
+      createElement(DraftGuardProvider, {children: createElement(JoinGroupDialog, {
+        agent, linux, ...(bind ? {initialGroup: {chatId: 'oc_topic', name: 'Topic', addedAt: 0, topic}} : {}),
+        onClose: () => {}, onChanged: async () => {},
+      })}),
+    })}),
+  );
+  const topic = render(true, true);
+  expect(topic.match(/role="radio"/g)).toHaveLength(2);
+  expect(topic).toContain('按话题聊');
+  expect(topic).not.toContain('整群一条会话');
+  expect(topic).toContain('权限档和网络');
+  expect(topic).toContain('只读 · 网络关（设置好以后在群详情页改）');
+  expect(topic).toContain('Linux 上的 Codex 只能用完全访问');
+  expect(render(true, false)).not.toContain('Linux 上的 Codex 只能用完全访问');
+  const create = render(false, true);
+  expect(create.match(/role="radio"/g)).toHaveLength(3);
+  expect(create).not.toContain('权限档和网络');
+  expect(create).not.toContain('Linux 上的 Codex 只能用完全访问');
+  expect(render(true, true, false).match(/role="radio"/g)).toHaveLength(3);
 });
