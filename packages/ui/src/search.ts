@@ -34,7 +34,7 @@ const membershipGroups: readonly Group[] = [
   {title: '群绑定', fields: [item('飞书群'), item('工作目录', ['更换目录']), item('会话方式'), item('项目状态')]},
   {title: '解除项目绑定', fields: [item('解除绑定')]},
   {title: '群内响应', fields: [item('不 @ 也能发起任务', ['免 @'])]},
-  {title: '判断模型', fields: [item('判断模型', ['智能模式', '语言模型', '决策模型', 'Jev', 'TypeSafe'], {guide: '只有智能群有这一项：先把会话方式改成「智能开话题」。'}), item('判断的推理强度', ['推理强度'], {field: '判断模型', guide: '先选一个语言模型。'}), item('手填模型 id', [], {field: '判断模型', guide: '在「判断模型」里选「手填模型 id…」。'})]},
+  {title: '判断模型', fields: [item('判断模型', ['智能模式', '语言模型', '决策模型', 'Jev', 'TypeSafe'], {guide: '不是智能群的，先把会话方式改成「智能开话题」，才有这一项。'}), item('判断的推理强度', ['推理强度'], {field: '判断模型', guide: '先选一个语言模型。'}), item('判断的手填模型 id', [], {field: '判断模型', guide: '在「判断模型」里选「手填模型 id…」。'})]},
   {title: '运行中来了消息', fields: [item('运行中来了消息', ['插话', '排队', '跟着 Bot 默认'])]},
   {title: '工作目录权限', fields: [item('权限档'), item('允许网络访问')]},
   {title: '新会话默认模型', fields: [item('模型'), item('自定义模型 ID', ['手填模型 ID', '第三方模型'], {field: '模型', guide: '在「模型」里选「自定义模型 ID…」，再填写模型 ID。'}), item('推理强度', [], {guide: '先选择一个具体模型，再调整推理强度。'})]},

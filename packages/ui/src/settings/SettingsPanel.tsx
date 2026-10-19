@@ -108,10 +108,12 @@ function Editor<T extends object>({
     change: (value: T) => void,
     disabled: boolean,
     commit: (patch: Partial<T>) => Promise<void>,
+    resetKey: string,
   ) => ReactNode;
   save: (patch: Partial<T>, revision: string) => Promise<SettingsReply>;
 }) {
   const [confirmed, setConfirmed] = useState(section);
+  const [discardVersion, setDiscardVersion] = useState(0);
   const [draft, setDraft] = useState<Partial<T>>({});
   const [immediate, setImmediate] = useState<
     | { kind: 'idle' }
@@ -230,6 +232,7 @@ function Editor<T extends object>({
     }
   }
   function discard() {
+    setDiscardVersion(version => version + 1);
     setDraft({});
     setImmediate({kind: 'idle'});
     const latest = conflictCurrent ?? section;
@@ -250,7 +253,7 @@ function Editor<T extends object>({
           : effectText(section)
       }
     >
-      {render(value, edit, disabled, commit)}
+      {render(value, edit, disabled, commit, `${confirmed.revision}:${discardVersion}`)}
       {dirty && <div className="settings-edit-actions">
         <Button
           size="sm"
@@ -1514,7 +1517,7 @@ export function ProjectPanel({
       {groupJudgeVisible(view) && judge && <Catalog botId={view.scope.botId} backend={view.identity.backend} purpose="judge">
         {(catalog) => <Editor title="判断模型" section={judge}
           save={(draft, revision) => save("judge", draft, revision)}
-          render={(draft, set, disabled) => <JudgeModelChoice value={draft.selection}
+          render={(draft, set, disabled, _commit, resetKey) => <JudgeModelChoice key={resetKey} value={draft.selection}
             onChange={(selection) => set({selection})} backend={view.identity.backend}
             catalog={catalog} decisionModels={view.decisionModels}
             effective={judge.effective.selection}

@@ -23,10 +23,10 @@ export function JudgeModelChoice({value, onChange, backend, catalog, decisionMod
   const description = [effective ? `现在判断用：${judgeLabel(effective, decisionModels)}` : '', catalog?.state === 'unavailable' ? catalog.error : ''].filter(Boolean).join('。');
   return <>
     <SettingsRow title="判断模型" description={description || undefined} trailing={
-      <select aria-label="判断模型" className="settings-select" value={custom ? 'custom' : choices.selected} disabled={disabled} onChange={event => {
+      <select aria-label="判断模型" value={custom ? 'custom' : choices.selected} disabled={disabled} onChange={event => {
         if (event.target.value === 'custom') {
           setTyping(true);
-          if (known?.kind === 'llm') onChange({...known, custom: true});
+          if (!(known?.kind === 'llm' && known.custom)) onChange({kind: 'default'});
           return;
         }
         setTyping(false);
@@ -40,7 +40,8 @@ export function JudgeModelChoice({value, onChange, backend, catalog, decisionMod
       </select>
     } />
     {custom && <SettingsRow title="手填模型 id" description="列表里没有的模型，比如网关的。不核对，填错了判断会出错，5 分钟内不再试。" trailing={
-      <Text label="手填模型 id" value={known?.kind === 'llm' ? known.model : ''} disabled={disabled} onChange={model => {
+      <Text label="手填模型 id" value={known?.kind === 'llm' ? known.model : ''} disabled={disabled} onChange={input => {
+        const model = input.trim();
         setTyping(true);
         if (!model) { onChange({kind: 'default'}); return; }
         const effort = known?.kind === 'llm' && known.effort && catalog?.titleEfforts.includes(known.effort) ? known.effort : undefined;
@@ -48,9 +49,9 @@ export function JudgeModelChoice({value, onChange, backend, catalog, decisionMod
       }} />
     } />}
     {known?.kind === 'llm' && <SettingsRow title="推理强度" trailing={
-      <select aria-label="判断的推理强度" className="settings-select" value={known.effort ?? ''} disabled={disabled} onChange={event => {
+      <select aria-label="判断的推理强度" value={known.effort ?? ''} disabled={disabled} onChange={event => {
         const {effort: previous, ...rest} = known;
-        const effort = catalog?.titleEfforts.find(item => item === event.target.value) ?? catalog?.models.find(model => model.id === known.model)?.supportedEfforts.find(item => item === event.target.value);
+        const effort = [known.effort, ...(catalog?.titleEfforts ?? []), ...(catalog?.models.find(model => model.id === known.model)?.supportedEfforts ?? [])].find(item => item === event.target.value);
         onChange({...rest, ...(effort ? {effort} : {})});
       }}>{judgeEffortChoices(known, catalog, backend).map(choice => <option key={choice.value} value={choice.value}>{choice.label}</option>)}</select>
     } />}

@@ -116,3 +116,10 @@ test('s28a: judge models and interruptions lead to the group settings', () => {
   assert.equal(judge?.destination.section, '判断模型');
   assert.ok(findEntries(entries, '插话').some(entry => entry.destination.detail?.kind === 'membership-settings' && entry.destination.section === '运行中来了消息'));
 });
+
+test('s28a review: custom judge search has a distinct title and conditional guidance', () => {
+  const custom = findEntries(entries, '判断的手填模型 id')[0];
+  assert.equal(custom?.title, '判断的手填模型 id');
+  assert.equal(custom?.destination.field, '判断模型');
+  assert.equal(findEntries(entries, '判断模型')[0]?.destination.guide, '不是智能群的，先把会话方式改成「智能开话题」，才有这一项。');
+});

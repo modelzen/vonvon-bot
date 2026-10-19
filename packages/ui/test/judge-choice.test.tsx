@@ -98,3 +98,22 @@ it('names known, inherited, and unknown models', () => {
   expect(judgeLabel({kind: 'default'})).toBe('各后端的默认小模型');
   expect(judgeLabel({kind: 'future'})).toBe('这个版本的网页不认识的设置');
 });
+
+it('keeps saved effort selected even without a matching catalog effort', () => {
+  const value = {kind: 'llm', model: 'saved', effort: 'low'} satisfies JudgeSelectionView;
+  for (const current of [undefined, catalog({models: []}), catalog({state: 'unavailable', models: [], error: '目录不可用'})]) {
+    expect(judgeEffortChoices(value, current, 'codex-appserver').map(option => option.value)).toEqual(['', 'low']);
+    expect(render(value, {catalog: current})).toContain('<option value="low" selected="">low</option>');
+  }
+  expect(judgeEffortChoices({...value, model: 'gpt-6-luna', effort: 'ultra'}, catalog(), 'codex-appserver').map(option => option.value)).toEqual(['', 'low', 'high', 'ultra']);
+});
+it('keeps a saved decision model selected without a decision registry', () => {
+  const result = choices(jev, {decisionModels: undefined});
+  expect(result.decision).toEqual([{value: 'dm:0', label: 'typesafe 的 jev-latest', selection: jev}]);
+  expect(result.selected).toBe('dm:0');
+  expect(render(jev, {decisionModels: undefined})).toContain('<option value="dm:0" selected="">typesafe 的 jev-latest</option>');
+});
+it('distinguishes hidden saved models from models absent from the catalog', () => {
+  expect(render({kind: 'llm', model: 'gpt-6'})).toContain('gpt-6（已保存，目录里已隐藏）');
+  expect(render({kind: 'llm', model: 'gpt-6'})).not.toContain('当前目录里没有');
+});

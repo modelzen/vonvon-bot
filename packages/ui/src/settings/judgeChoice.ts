@@ -19,7 +19,9 @@ export function judgeChoiceOptions(input: {
     if (listed) selected = listed.value;
     else {
       selected = `lm:${language.length}`;
-      language.push({value: selected, label: `${known.model}${catalog && catalog.state !== 'unavailable' && language.length ? '（已保存，当前目录里没有）' : ''}`, selection: known});
+      const hidden = catalog?.models.some(model => model.id === known.model && model.hidden);
+      const suffix = hidden ? '（已保存，目录里已隐藏）' : catalog && catalog.state !== 'unavailable' && language.length ? '（已保存，当前目录里没有）' : '';
+      language.push({value: selected, label: `${known.model}${suffix}`, selection: known});
     }
   }
   if (allowCustom) language.push({value: 'custom', label: '手填模型 id…'});
@@ -32,12 +34,12 @@ export function judgeChoiceOptions(input: {
       decision.push({value: `dm:${decision.length}`, label: `${service.displayName} 的 ${model.displayName}${service.keyUnreadable ? '（读不了密钥库）' : !service.keySet ? '（还没填 key）' : ''}`, selection});
     }
   }
-  if (known?.kind === 'decision' && decisionModels) {
+  if (known?.kind === 'decision') {
     const listed = decision.find(option => option.selection?.kind === 'decision' && option.selection.provider === known.provider && option.selection.model === known.model);
     if (listed) selected = listed.value;
     else {
       selected = `dm:${decision.length}`;
-      decision.push({value: selected, label: `${decisionModels.find(service => service.provider === known.provider)?.displayName ?? known.provider} 的 ${known.model}`, selection: known});
+      decision.push({value: selected, label: `${decisionModels?.find(service => service.provider === known.provider)?.displayName ?? known.provider} 的 ${known.model}`, selection: known});
     }
   }
   const unknown: JudgeChoiceOption | undefined = known ? undefined : {value: 'unknown', label: '这个版本不认识的设置，判断时当没设', disabled: true};
@@ -46,7 +48,9 @@ export function judgeChoiceOptions(input: {
 }
 export function judgeEffortChoices(value: Extract<JudgeSelection, {kind: 'llm'}>, catalog: ModelCatalog | undefined, backend: string): {value: string; label: string}[] {
   const efforts = value.custom ? catalog?.titleEfforts : catalog?.models.find(model => model.id === value.model)?.supportedEfforts;
-  return [{value: '', label: backend === 'claude-agent' ? '默认（关思考）' : '默认（最低一档）'}, ...(efforts ?? []).map(effort => ({value: effort, label: effort}))];
+  const available = [...(efforts ?? [])];
+  if (value.effort && !available.includes(value.effort)) available.push(value.effort);
+  return [{value: '', label: backend === 'claude-agent' ? '默认（关思考）' : '默认（最低一档）'}, ...available.map(effort => ({value: effort, label: effort}))];
 }
 export function judgeLabel(selection: JudgeSelectionView, decisionModels?: DecisionModelsView): string {
   if (!isKnownJudgeSelection(selection)) return '这个版本的网页不认识的设置';
