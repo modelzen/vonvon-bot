@@ -19,6 +19,7 @@ const fake = vi.hoisted(() => ({
   cliObserve: vi.fn(async () => ({ kind: 'error' as const, message: 'absent' })),
   readRegistration: vi.fn(async (): Promise<Registration> => ({ kind: 'absent' })),
   verified: vi.fn(async (): Promise<VerifiedDaemon | null> => null),
+  running: vi.fn(async (_previous: { pid: number; startedAt: string }) => false),
   tray: { destroy: vi.fn() },
   openExternal: vi.fn(async () => {}),
   updateConfiguration: vi.fn(async () => ({ signed: true, manifestURL: 'https://updates.example.test/manifest.json' })),
@@ -86,7 +87,7 @@ vi.mock('../src/tray.js', () => ({ createDesktopTray: vi.fn(() => fake.tray) }))
 vi.mock('../src/update-configuration.js', () => ({ desktopUpdateConfiguration: fake.updateConfiguration }));
 vi.mock('../src/daemon-dependencies.js', () => ({
   prepareDesktopRoot: vi.fn(async () => fake.root),
-  createDaemonDependencies: vi.fn(() => ({ readRegistration: fake.readRegistration, readVerifiedDaemon: fake.verified })),
+  createDaemonDependencies: vi.fn(() => ({ readRegistration: fake.readRegistration, readVerifiedDaemon: fake.verified, ownerRunning: fake.running })),
 }));
 vi.mock('../src/cli-registration.js', () => ({
   desktopCliOptions: vi.fn((options: unknown) => options),
@@ -106,7 +107,7 @@ vi.mock('../src/login-item.js', async importOriginal => {
 import { startDesktop, desktopResources } from '../src/main.js';
 import { changeLoginItem, repairServiceAtStartup } from '../src/login-item.js';
 import { AttachError } from '../src/attach.js';
-import { ConnectionError } from '@vonvon/client/browser';
+import { ConnectionError, RpcError } from '@vonvon/client/browser';
 import { autoUpdater, dialog, net } from 'electron';
 
 type MockApp = EventEmitter & { requestSingleInstanceLock: ReturnType<typeof vi.fn>; quit: ReturnType<typeof vi.fn>; getAppPath: ReturnType<typeof vi.fn> };
@@ -168,6 +169,7 @@ beforeEach(async () => {
   fake.cliObserve.mockClear();
   fake.readRegistration.mockClear().mockResolvedValue({ kind: 'absent' });
   fake.verified.mockReset().mockResolvedValue(null);
+  fake.running.mockReset().mockResolvedValue(false);
   fake.install.mockReset().mockReturnValue(fake.bridge);
   fake.openExternal.mockClear();
   await startDesktop();
@@ -419,8 +421,198 @@ describe('a service helper started from the web UI or a terminal', () => {
 
 });
 
+describe('machine page stop', () => {
+  const previous = { pid: 42, startedAt: 'initial', listen: '127.0.0.1:42345' };
+  const done = async () => ({ type: 'done' as const, message: '正在停止 daemon。' });
+
+  it('s18g stop expects disconnect, waits for old process exit, and allows a fresh start', async () => {
+    fake.running.mockResolvedValueOnce(true).mockResolvedValueOnce(true).mockResolvedValue(false);
+    const send = vi.fn(async () => {
+      expect(actions.isExpectedDisconnect()).toBe(true);
+      return done();
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    try {
+      const stopping = actions.stopHost(previous, send);
+      expect(actions.isExpectedDisconnect()).toBe(true);
+      await vi.advanceTimersByTimeAsync(600);
+      await expect(stopping).resolves.toEqual({ type: 'done', message: 'daemon 已停止。' });
+    } finally { vi.useRealTimers(); }
+    expect(send).toHaveBeenCalledOnce();
+    expect(fake.running).toHaveBeenCalledTimes(3);
+    expect(fake.running.mock.calls.every(([identity]) => identity === previous)).toBe(true);
+    expect(actions.isExpectedDisconnect()).toBe(true);
+    expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+    const identity = { ...previous, pid: 43, startedAt: 'new' };
+    const next = { identity, dispose: vi.fn(async () => {}) };
+    fake.ready.mockResolvedValueOnce(identity);
+    fake.attach.mockResolvedValueOnce(next);
+    await expect(actions.startHost()).resolves.toMatchObject({ message: 'Daemon started.' });
+    expect(actions.isExpectedDisconnect()).toBe(false);
+  });
+
+  it('s18g start waits until machine page stop finishes draining', async () => {
+    let running = true;
+    fake.running.mockImplementation(async () => running);
+    const identity = { ...previous, pid: 44, startedAt: 'after-stop' };
+    const next = { identity, dispose: vi.fn(async () => {}) };
+    fake.ready.mockResolvedValueOnce(identity);
+    fake.attach.mockResolvedValueOnce(next);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    try {
+      const stopping = actions.stopHost(previous, done);
+      let started = false;
+      const starting = actions.startHost().then(reply => { started = true; return reply; });
+      await vi.advanceTimersByTimeAsync(750);
+      expect(fake.ready).toHaveBeenCalledTimes(1);
+      expect(started).toBe(false);
+      running = false;
+      await vi.advanceTimersByTimeAsync(250);
+      await expect(stopping).resolves.toMatchObject({ message: 'daemon 已停止。' });
+      await expect(starting).resolves.toMatchObject({ message: 'Daemon started.' });
+    } finally { vi.useRealTimers(); }
+    expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next);
+  });
+
+  it('s18g stop preserves an RPC refusal and clears expected disconnect', async () => {
+    const refusal = new RpcError('unsupported', '不支持');
+    await expect(actions.stopHost(previous, async () => { throw refusal; })).rejects.toBe(refusal);
+    expect(actions.isExpectedDisconnect()).toBe(false);
+    expect(fake.running).not.toHaveBeenCalled();
+  });
+
+  it('s18g stop waits for exit after the daemon closes before replying', async () => {
+    await expect(actions.stopHost(previous, async () => { throw new Error('Daemon connection closed'); }))
+      .resolves.toEqual({ type: 'done', message: 'daemon 已停止。' });
+    expect(fake.running).toHaveBeenCalledExactlyOnceWith(previous);
+  });
+
+  it('s18g stop times out after one minute and frees startup', async () => {
+    fake.running.mockResolvedValue(true);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    try {
+      const stopping = expect(actions.stopHost(previous, done)).rejects.toThrow('1 分钟内没停完');
+      await vi.advanceTimersByTimeAsync(61_000);
+      await stopping;
+    } finally { vi.useRealTimers(); }
+    expect(actions.isExpectedDisconnect()).toBe(false);
+    const identity = { ...previous, pid: 45, startedAt: 'after-timeout' };
+    fake.ready.mockResolvedValueOnce(identity);
+    fake.attach.mockResolvedValueOnce({ identity, dispose: vi.fn(async () => {}) });
+    await expect(actions.startHost()).resolves.toMatchObject({ message: 'Daemon started.' });
+  });
+
+  it('s18g quit cancels stop while waiting for process exit', async () => {
+    fake.running.mockResolvedValue(true);
+    const stopping = actions.stopHost(previous, done);
+    const cancelled = expect(stopping).rejects.toThrow('停止已取消。');
+    await vi.waitFor(() => expect(fake.running).toHaveBeenCalled());
+    await actions.confirmQuit();
+    await cancelled;
+    expect(fake.bridge.dispose).toHaveBeenCalledOnce();
+    expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+  });
+
+  it('s18g stop refuses during passive reconnection without sending', async () => {
+    fake.attach.mockRejectedValue(new AttachError('owner'));
+    expect(actions.recoverConnection(previous)).toBe(true);
+    const send = vi.fn(done);
+    await expect(actions.stopHost(previous, send)).rejects.toThrow('正在启动、重启或重新连接 daemon，等它结束再停止。');
+    expect(send).not.toHaveBeenCalled();
+    await actions.confirmQuit();
+  });
+
+  it('s18g quit cancels stop even when daemon reply never arrives', async () => {
+    const send = vi.fn(() => new Promise<Awaited<ReturnType<typeof done>>>(() => {}));
+    const stopping = actions.stopHost(previous, send);
+    const cancelled = expect(stopping).rejects.toThrow('停止已取消。');
+    await actions.confirmQuit();
+    await cancelled;
+    expect(send).toHaveBeenCalledOnce();
+    expect(fake.running).not.toHaveBeenCalled();
+    expect(fake.bridge.dispose).toHaveBeenCalledOnce();
+    expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+  });
+});
+
 describe('passive daemon reconnection', () => {
   const previous = { pid: 42, startedAt: 'initial', listen: '127.0.0.1:42345' };
+
+  it('s18g manual start takes over passive reconnection without a late dialog', async () => {
+    fake.attach.mockRejectedValue(new AttachError('owner'));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    try {
+      expect(actions.recoverConnection(previous)).toBe(true);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const identity = { ...previous, pid: 52, startedAt: 'manual' };
+      const next = { identity, dispose: vi.fn(async () => {}) };
+      fake.ready.mockResolvedValueOnce(identity);
+      fake.attach.mockResolvedValue(next);
+      await expect(actions.startHost()).resolves.toMatchObject({ message: 'Daemon started.' });
+      expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next);
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('s18g takeover waits for passive replacement to settle before replacing again', async () => {
+    const candidate = { identity: previous, dispose: vi.fn(async () => {}) };
+    const identity = { ...previous, pid: 53, startedAt: 'manual' };
+    const next = { identity, dispose: vi.fn(async () => {}) };
+    let rejectFirst!: (error: Error) => void;
+    let firstSettled = false;
+    candidate.dispose.mockImplementation(async () => {
+      queueMicrotask(() => { firstSettled = true; rejectFirst(new Error('candidate closed')); });
+    });
+    fake.bridge.replaceOwner.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectFirst = reject; }))
+      .mockImplementationOnce(async () => { expect(firstSettled).toBe(true); });
+    fake.attach.mockResolvedValueOnce(candidate).mockResolvedValueOnce(next);
+    fake.ready.mockResolvedValueOnce(identity);
+    expect(actions.recoverConnection(previous)).toBe(true);
+    await vi.waitFor(() => expect(fake.bridge.replaceOwner).toHaveBeenCalledTimes(1));
+    await expect(actions.startHost()).resolves.toMatchObject({ message: 'Daemon started.' });
+    expect(candidate.dispose).toHaveBeenCalledOnce();
+    expect(fake.bridge.replaceOwner).toHaveBeenLastCalledWith(next);
+    expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+  });
+
+  it('s18g installed service start takes over passive reconnection', async () => {
+    fake.attach.mockRejectedValue(new AttachError('owner'));
+    fake.readRegistration.mockResolvedValue({ kind: 'ours' });
+    expect(actions.recoverConnection(previous)).toBe(true);
+    const identity = { ...previous, pid: 54, startedAt: 'service-start' };
+    const next = { identity, dispose: vi.fn(async () => {}) };
+    fake.ready.mockResolvedValueOnce(identity);
+    fake.attach.mockResolvedValue(next);
+    await expect(actions.service('start')).resolves.toMatchObject({ message: 'Background service started.' });
+    expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next);
+    expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+  });
+
+  it('s18g simultaneous manual starts after passive reconnection launch only one daemon', async () => {
+    fake.attach.mockRejectedValue(new AttachError('owner'));
+    expect(actions.recoverConnection(previous)).toBe(true);
+    const identity = { ...previous, pid: 55, startedAt: 'one-start' };
+    fake.ready.mockResolvedValueOnce(identity);
+    fake.attach.mockResolvedValue({ identity, dispose: vi.fn(async () => {}) });
+    const outcomes = await Promise.allSettled([actions.startHost(), actions.startHost()]);
+    expect(outcomes.filter(value => value.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter(value => value.status === 'rejected')).toHaveLength(1);
+    const rejected = outcomes.find(value => value.status === 'rejected');
+    expect(rejected).toMatchObject({ reason: expect.objectContaining({ message: expect.stringContaining('startup is unavailable') }) });
+    expect(fake.ready).toHaveBeenCalledTimes(2);
+  });
+
+  it('s18g quit prevents a start waiting for passive takeover from launching', async () => {
+    fake.attach.mockRejectedValue(new AttachError('owner'));
+    expect(actions.recoverConnection(previous)).toBe(true);
+    const starting = actions.startHost();
+    const rejected = expect(starting).rejects.toThrow();
+    await actions.confirmQuit();
+    await rejected;
+    expect(fake.ready).toHaveBeenCalledTimes(1);
+    expect(fake.bridge.dispose).toHaveBeenCalledOnce();
+  });
 
   it('follows three external restarts without starting a daemon', async () => {
     let lost = previous;

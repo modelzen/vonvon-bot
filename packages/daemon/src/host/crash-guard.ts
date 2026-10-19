@@ -47,11 +47,15 @@ export function onCrashSync(hook: () => void): () => void {
 const safe = (fn: () => void): void => { try { fn(); } catch { /* logging never ends a start or a crash */ } };
 
 /** No supervisor remains to kill a child stuck draining after IPC disconnects. */
-export function capOrphanDrain(options: { log: CrashLog; flush?: () => Promise<void>; ms?: number }): void {
+export function capOrphanDrain(options: { log: CrashLog; flush?: () => Promise<void>; ms?: number; providers?: () => { registered: number[]; unconfirmed: number[] } }): void {
   process.once('disconnect', () => {
     const since = Date.now();
     const timer = setTimeout(() => {
-      safe(() => options.log.warn('run', 'orphan-drain-cut', { waitedMs: Date.now() - since }));
+      safe(() => {
+        let left: { registered?: number[]; unconfirmed?: number[] } = {};
+        try { left = options.providers?.() ?? {}; } catch { /* PID reads must not prevent the cutoff. */ }
+        options.log.warn('run', 'orphan-drain-cut', { waitedMs: Date.now() - since, ...left });
+      });
       const finish = (): never => { clearTimeout(fallback); process.exit(0); };
       const fallback = setTimeout(finish, 1500);
       void Promise.resolve().then(() => options.flush?.()).then(finish, finish);

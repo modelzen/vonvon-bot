@@ -73,6 +73,8 @@ export interface DesktopBridge {
 export interface ShellActions {
   chooseExecutablePath(): Promise<string | null>;
   startHost(bot?: string): Promise<MachineReply>;
+  /** Expect disconnection before sending the machine-page stop, then wait for this daemon to exit. */
+  stopHost(previous: AttachedDaemon['identity'], send: () => Promise<MachineReply>): Promise<MachineReply>;
   restartHost(previous: AttachedDaemon['identity'], send: () => Promise<CommandResult>): Promise<CommandResult>;
   /** `previous` is the daemon the window talks to, so a switch that replaced it reattaches. */
   service(action: 'install' | 'start' | 'stop' | 'uninstall', previous?: AttachedDaemon['identity'] | null): Promise<MachineReply>;

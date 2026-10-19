@@ -16,9 +16,12 @@ import { desktopCliOptions, observeCli, registerCli } from './cli-registration.j
 import { liveServiceActionRecord } from '../../daemon/src/service/action-report.js';
 import { changeLoginItem, followServiceHelper, repairServiceAtStartup, type LoginItemHooks, type ServiceRuntime } from './login-item.js';
 import type { CommandResult, MachineReply } from '@vonvon/protocol';
-import { ConnectionError } from '@vonvon/client/browser';
+import { ConnectionError, RpcError } from '@vonvon/client/browser';
 
 const restartDeadlineMs = 60_000;
+const stopDeadlineMs = 60_000;
+/** A manual start cancels passive reconnection without a connection-lost dialog. */
+const startTakesOver = 'start-takes-over';
 
 export function desktopResources(appPath: string, packaged: boolean): DesktopResources {
   return packaged ? {
@@ -58,6 +61,8 @@ export async function startDesktop(): Promise<void> {
   let controlledDisconnect = false;
   let starting: Promise<unknown> | undefined;
   let restartCancel: AbortController | undefined;
+  let passive: { cancel: AbortController; done: Promise<void> } | undefined;
+  let stopping: Promise<MachineReply> | undefined;
 
   const show = (): void => {
     if (!window || window.isDestroyed()) {
@@ -293,6 +298,56 @@ export async function startDesktop(): Promise<void> {
       return restart;
     }
 
+    async function stopHost(previous: AttachedDaemon['identity'], send: () => Promise<MachineReply>): Promise<MachineReply> {
+      if (starting || terminating || cleanupPromise) throw new StartHostRefusal('正在启动、重启或重新连接 daemon，等它结束再停止。');
+      const cancel = new AbortController();
+      const cancelled = (): boolean => cancel.signal.aborted || terminating || cleanupPromise !== undefined || !bridge;
+      const refusal = (): StartHostRefusal => new StartHostRefusal('停止已取消。');
+      const unlessCancelled = <T>(pending: Promise<T>): Promise<T> => new Promise<T>((resolve, reject) => {
+        const stop = (): void => reject(refusal());
+        if (cancel.signal.aborted) { stop(); return; }
+        cancel.signal.addEventListener('abort', stop, { once: true });
+        pending.then(resolve, reject).finally(() => cancel.signal.removeEventListener('abort', stop));
+      });
+      const run = (async (): Promise<MachineReply> => {
+        controlledDisconnect = true;
+        try { await unlessCancelled(send()); }
+        catch (error) {
+          if (cancelled()) throw error;
+          if (error instanceof RpcError) { controlledDisconnect = false; throw error; }
+          // The connection can close before the reply; still wait for the daemon to exit.
+        }
+        const deadline = Date.now() + stopDeadlineMs;
+        for (;;) {
+          if (cancelled()) throw refusal();
+          const running = await unlessCancelled(managerDependencies.ownerRunning(previous).catch(() => true));
+          if (!running) return { type: 'done', message: 'daemon 已停止。' };
+          if (Date.now() >= deadline) {
+            controlledDisconnect = false;
+            throw new StartHostRefusal('daemon 1 分钟内没停完，详情在 daemon.log。稍后点"刷新状态"再看。');
+          }
+          await unlessCancelled(new Promise(resolve => setTimeout(resolve, 250)));
+        }
+      })().finally(() => {
+        starting = undefined;
+        stopping = undefined;
+        if (restartCancel === cancel) restartCancel = undefined;
+      });
+      restartCancel = cancel;
+      starting = run;
+      stopping = run;
+      return run;
+    }
+
+    /** Manual starts wait for passive reconnection to yield or an in-progress stop to finish. */
+    function startBlocker(refusal: string): Promise<unknown> | undefined {
+      if (terminating || cleanupPromise) throw new StartHostRefusal(refusal);
+      if (!starting) return undefined;
+      if (passive && starting === passive.done) { passive.cancel.abort(startTakesOver); return passive.done; }
+      if (stopping && starting === stopping) return stopping.catch(() => {});
+      throw new StartHostRefusal(refusal);
+    }
+
     async function guardedService<T>(operation: () => Promise<T>): Promise<T> {
       if (starting || terminating || cleanupPromise) throw new StartHostRefusal('Desktop service operation is unavailable.');
       const run = operation().finally(() => { starting = undefined; });
@@ -339,11 +394,13 @@ export async function startDesktop(): Promise<void> {
         if (stopped() || !bridge) { await next.dispose(); throw refusal(); }
         const closeCandidate = (): void => { void next.dispose().catch(() => {}); };
         cancel.signal.addEventListener('abort', closeCandidate, { once: true });
+        const replacement = bridge.replaceOwner(next);
         try {
-          try { await unlessStopped(bridge.replaceOwner(next)); }
+          try { await unlessStopped(replacement); }
           finally { cancel.signal.removeEventListener('abort', closeCandidate); }
         } catch (error) {
-          if (stopped() || !(error instanceof ConnectionError)) throw error;
+          if (stopped()) { await replacement.catch(() => {}); throw error; }
+          if (!(error instanceof ConnectionError)) throw error;
           await unlessStopped(new Promise(resolve => setTimeout(resolve, 250)));
           continue;
         }
@@ -366,14 +423,17 @@ export async function startDesktop(): Promise<void> {
       const cancel = new AbortController();
       const deadline = setTimeout(() => cancel.abort(), restartDeadlineMs);
       restartCancel = cancel;
-      starting = reconnectPassive(cancel).catch(() => {
-        if (!terminating && !cleanupPromise) showConnectionLost();
+      const done = reconnectPassive(cancel).catch(() => {
+        if (!terminating && !cleanupPromise && cancel.signal.reason !== startTakesOver) showConnectionLost();
       }).finally(() => {
         clearTimeout(deadline);
+        if (passive?.cancel === cancel) passive = undefined;
         controlledDisconnect = false;
         starting = undefined;
         if (restartCancel === cancel) restartCancel = undefined;
       });
+      passive = { cancel, done };
+      starting = done;
       return true;
     }
 
@@ -396,8 +456,9 @@ export async function startDesktop(): Promise<void> {
         return { type: 'done', message: result.message };
       },
       restartHost,
+      stopHost,
       startHost: async bot => {
-        if (starting || terminating || cleanupPromise) throw new StartHostRefusal('Desktop startup is unavailable.');
+        for (let blocker = startBlocker('Desktop startup is unavailable.'); blocker; blocker = startBlocker('Desktop startup is unavailable.')) await blocker;
         const run = (async (): Promise<MachineReply> => {
           try {
             await reattachReady(bot);
@@ -417,6 +478,9 @@ export async function startDesktop(): Promise<void> {
         if (action === 'install' || action === 'uninstall') {
           await setLoginItem(action === 'install', previous);
           return { type: 'done', message: action === 'install' ? '已打开登录时启动。' : '已关闭登录时启动。' };
+        }
+        if (action === 'start') {
+          for (let blocker = startBlocker('Desktop service operation is unavailable.'); blocker; blocker = startBlocker('Desktop service operation is unavailable.')) await blocker;
         }
         return guardedService(async () => {
           if (action === 'stop') throw new StartHostRefusal('桌面版还不能单独停止后台服务：在终端运行 vonvon daemon stop。');
