@@ -40,6 +40,7 @@ export const offlineSettings: T.SettingsAccess = {
   message: '这个 Bot 没在运行，运行起来后才能改设置'
 };
 export interface SettingsOwnerDeps {
+  responseRoster?: (chatId: string) => Promise<import("@vonvon/protocol").ResponseRoster>;
   cfg: AppConfig;
   writePreferences: AppPreferencesWriter;
   backendFor: (id: string) => AgentBackend;
@@ -530,6 +531,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           ...(fullOnly ? { fullOnly } : {})
         },
         members: {
+          ...(deps.responseRoster ? { roster: await deps.responseRoster(p.chatId) } : {}),
           openIds: [...(p.allowedUsers ?? [])],
           revision: settingsRevision([botId, p.name, p.chatId, p.allowedUsers ?? []])
         },

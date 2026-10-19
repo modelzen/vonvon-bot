@@ -133,3 +133,12 @@ it('s36b: the setup card names the adder, workspace defaults, backend and permis
   expect(retry).toContain('重新选一下，点下面对应的按钮');
   expect(retry).toContain('绑定失败');
 });
+
+
+it('s28c: binding recommends smart only after observing another bot', () => {
+  const hint = '群里还有别的 bot。几个 bot 都选智能，它们才能互相 @、各自判断接不接话。';
+  for (const topic of [false, true]) {
+    expect(JSON.stringify(buildJoinGroupFormCard({chatId: 'oc_hint', topic, hasOtherBots: true}))).toContain(hint);
+    for (const hasOtherBots of [false, undefined]) expect(JSON.stringify(buildJoinGroupFormCard({chatId: 'oc_hint', topic, hasOtherBots}))).not.toContain(hint);
+  }
+});
