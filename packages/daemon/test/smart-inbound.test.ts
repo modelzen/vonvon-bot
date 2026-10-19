@@ -20,17 +20,21 @@ vi.mock('../src/config/paths', () => {
 });
 afterAll(() => rmSync(paths.appDir, { recursive: true, force: true }));
 
-interface Deferred<T> { promise: Promise<T>; resolve(value: T): void }
+interface Deferred<T> { promise: Promise<T>; resolve(value: T): void; reject(error: Error): void }
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => { resolve = res; });
-  return { promise, resolve };
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
 }
 
 const fake = vi.hoisted(() => ({
   project: undefined as Record<string, unknown> | undefined,
   sessions: {} as Record<string, unknown>,
   projectLookup: vi.fn(),
+  projectReads: vi.fn(),
+  sessionReads: vi.fn(),
+  readHistory: vi.fn(),
   projectRead: undefined as Promise<void> | undefined,
   fullOnly: false,
   /** Holds every session read while set: an intake parked on the disk. */
@@ -72,9 +76,9 @@ vi.mock('../src/bot/bot-wake', async original => {
 });
 
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_context: unknown, callback: () => unknown) => callback() }));
-vi.mock('../src/project/registry', async original => ({ ...await original<object>(), getProjectByChatId: async () => { await fake.projectRead; return fake.project; }, getProjectByName: async () => { await fake.projectLookup(); return fake.project; } }));
-vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: (id: string) => ({ id, listModels: async () => [], startThread, fullAccessOnly: () => fake.fullOnly }) }));
-vi.mock('../src/bot/session-store', async original => ({ ...await original<object>(), getSession: async (key: string) => { await fake.hold; return fake.sessions[key]; }, upsertSession: async () => undefined }));
+vi.mock('../src/project/registry', async original => ({ ...await original<object>(), getProjectByChatId: async () => { await fake.projectReads(); await fake.projectRead; return fake.project; }, getProjectByName: async () => { await fake.projectLookup(); return fake.project; } }));
+vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: (id: string) => ({ id, listModels: async () => [], listThreads: async () => [{ sessionId: 'past' }], readHistory: fake.readHistory, startThread, fullAccessOnly: () => fake.fullOnly }) }));
+vi.mock('../src/bot/session-store', async original => ({ ...await original<object>(), getSession: async (key: string) => { await fake.sessionReads(key); await fake.hold; return fake.sessions[key]; }, upsertSession: async () => undefined }));
 vi.mock('../src/bot/session-title-coordinator', () => ({ SessionTitleCoordinator: class { startRecovery() {} async shutdown() {} } }));
 vi.mock('../src/judge/judge', async original => ({
   ...await original<object>(),
@@ -156,6 +160,9 @@ beforeEach(() => {
   fake.hold = undefined;
   fake.project = { ...base };
   fake.projectLookup.mockReset();
+  fake.projectReads.mockReset();
+  fake.sessionReads.mockReset();
+  fake.readHistory.mockReset();
   fake.projectRead = undefined;
   fake.list.mockImplementation(async () => ({ code: 0, data: { items: [], has_more: false } }));
   fake.get.mockImplementation(async () => ({ code: 0, data: { items: [{ thread_id: 'omt_opened' }] } }));
@@ -605,10 +612,21 @@ describe('bot wakes (s27a)', () => {
     item({ ...m, message_id: 'om_person', create_time: String(Number(m.create_time) - 60_000) }, owner)]));
   const wake = (o: { thread?: string; text?: string } = {}) => says(o.text ?? 'SECRET_BOT_TEXT', { at: true, thread: o.thread });
 
-  const privateLogs = (m: EventMessage) => {
+  const privateLogs = async (m: EventMessage) => {
     const rows = fake.log.info.mock.calls.filter(c => String(c[1]).startsWith('bot-wake') || c[1] === 'judge-budget' || (c[1] === 'judge-landed' && JSON.stringify(c[2]).includes('"wake":true')));
-    const logs = JSON.stringify(rows);
+    const failures = fake.log.fail.mock.calls.filter(c => ['bot-wake', 'bot-wake-land'].includes(String(c[2]?.phase)));
+    const logs = JSON.stringify([...rows, ...failures.map(([phase, error, fields]) => ({ phase, fields, error: error instanceof Error ? { message: error.message, stack: error.stack } : error }))]);
     for (const secret of ['SECRET_BOT_TEXT', '小P', idOf(m), 'ou_other']) expect(logs).not.toContain(secret);
+    if (failures.length) {
+      const real = await vi.importActual<typeof import('../src/core/logger')>('../src/core/logger');
+      const printed = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        for (const [phase, error, fields] of failures) real.log.fail(phase, error, fields);
+        const output = JSON.stringify(printed.mock.calls);
+        expect(output).toContain('bot-wake');
+        for (const secret of ['SECRET_BOT_TEXT', '小P', idOf(m), 'ou_other']) expect(output).not.toContain(secret);
+      } finally { printed.mockRestore(); }
+    }
   };
 
   it('judges a topic bot mention within the budget, with the bot envelope and no THINKING', async () => {
@@ -625,7 +643,7 @@ describe('bot wakes (s27a)', () => {
       expect(fake.inputs[0]).not.toContain(INITIATIVE_NOTE);
       expect(fake.react.mock.calls.some(([r]) => r.data.reaction_type.emoji_type === 'THINKING')).toBe(false);
       expect(JSON.stringify(fake.unreact.mock.calls)).not.toContain('r_THINKING');
-      privateLogs(m);
+      await privateLogs(m);
     } finally { take.mockRestore(); }
   });
 
@@ -643,7 +661,7 @@ describe('bot wakes (s27a)', () => {
     await noted(failed ? 'judge-failed' : 'judge-skip');
     expect(records()).toHaveLength(1);
     expect(records()[0]).toMatchObject({ sender: '小P', detail: failed ? expect.stringContaining('timeout') : 'bot 闲聊' });
-    expect(fake.inputs).toEqual([]); privateLogs(m);
+    expect(fake.inputs).toEqual([]); await privateLogs(m);
   });
 
   it("over the budget a bot's @ is not judged", async () => {
@@ -652,7 +670,7 @@ describe('bot wakes (s27a)', () => {
     try {
       await botSays(m); await noted('judge-budget');
       expect(fake.get).toHaveBeenCalled(); expect(fake.list).not.toHaveBeenCalled(); expect(fake.judge).not.toHaveBeenCalled();
-      expect(fake.log.info).toHaveBeenCalledWith('intake', 'judge-budget', expect.objectContaining({ wake: true })); privateLogs(m);
+      expect(fake.log.info).toHaveBeenCalledWith('intake', 'judge-budget', expect.objectContaining({ wake: true })); await privateLogs(m);
     } finally { take.mockRestore(); }
   });
 
@@ -690,11 +708,11 @@ describe('bot wakes (s27a)', () => {
 
   it('catches an exception before judging without falling back to direct', async () => {
     const m = wake({ thread: 'omt_boom' }); history(m);
-    vi.mocked(wakeTriggerText).mockImplementationOnce(() => { throw new Error('boom'); });
+    vi.mocked(wakeTriggerText).mockImplementationOnce(() => { throw new Error(`boom SECRET_BOT_TEXT 小P ${idOf(m)} ou_other`); });
     await botSays(m); await noted('bot-wake-failed');
-    expect(records()[0]?.detail).toBe('boom'); expect(fake.inputs).toEqual([]); expect(fake.judge).not.toHaveBeenCalled();
-    expect(fake.log.fail).toHaveBeenCalledWith('intake', expect.any(Error), expect.objectContaining({ phase: 'bot-wake' }));
-    expect(fake.react).not.toHaveBeenCalled(); privateLogs(m);
+    expect(records()[0]?.detail).toContain('boom SECRET_BOT_TEXT'); expect(fake.inputs).toEqual([]); expect(fake.judge).not.toHaveBeenCalled();
+    expect(fake.log.fail).toHaveBeenCalledWith('intake', 'bot-wake-failed', expect.objectContaining({ phase: 'bot-wake' }));
+    expect(fake.react).not.toHaveBeenCalled(); await privateLogs(m);
   });
 
 
@@ -708,7 +726,7 @@ describe('bot wakes (s27a)', () => {
     try {
       await botSays(m, eventId);
       if (allowed) { await decide(m, result('reply')); await answered(); }
-      else { await noted('bot-wake-not-allowed'); expect(fake.inputs).toEqual([]); expect(fake.judge).not.toHaveBeenCalled(); expect(take).not.toHaveBeenCalled(); expect(records()).toHaveLength(1); privateLogs(m); }
+      else { await noted('bot-wake-not-allowed'); expect(fake.inputs).toEqual([]); expect(fake.judge).not.toHaveBeenCalled(); expect(take).not.toHaveBeenCalled(); expect(records()).toHaveLength(1); await privateLogs(m); }
       expect(fake.get).toHaveBeenCalled();
     } finally { take.mockRestore(); }
   });
@@ -720,7 +738,7 @@ describe('bot wakes (s27a)', () => {
     fake.project = change === 'unbound' ? undefined : { ...base, ...(change === 'rule-mode' ? { smart: false } : change === 'disabled' ? { enabled: false } : { allowedUsers: ['ou_owner'] }) };
     gate.resolve({ code: 0, data: { items: [item(m)] } }); await settle();
     if (change !== 'unbound') await noted(change === 'audience' ? 'bot-wake-not-allowed' : change === 'disabled' ? 'group-disabled' : 'bot-wake-dropped');
-    expect(fake.inputs).toEqual([]); expect(fake.judge).not.toHaveBeenCalled(); expect(take).not.toHaveBeenCalled(); privateLogs(m); take.mockRestore();
+    expect(fake.inputs).toEqual([]); expect(fake.judge).not.toHaveBeenCalled(); expect(take).not.toHaveBeenCalled(); await privateLogs(m); take.mockRestore();
   });
 
   it('notes a disabled smart group at intake', async () => {
@@ -762,7 +780,7 @@ describe('bot wakes (s27a)', () => {
   it('records sender kind and logs wake metadata without names, body or full ids', async () => {
     const m = wake({ thread: 'omt_logs' }); history(m); await botSays(m); await decide(m, result('reply')); await answered();
     expect(fake.log.info).toHaveBeenCalledWith('intake', 'recv', expect.objectContaining({ senderType: 'app', senderIdKind: 'ou_' }));
-    privateLogs(m);
+    await privateLogs(m);
     expect(fake.log.info.mock.calls.find(c => c[1] === 'bot-wake')?.[2]).toEqual({ ref: idOf(m).slice(-6), place: 'topic' });
   });
 
@@ -799,24 +817,107 @@ describe('bot wakes (s27a)', () => {
       await decide(m, result('main')); await noted(change === 'audience' ? 'bot-wake-not-allowed' : 'bot-wake-dropped');
       expect(fake.inputs).toEqual([]); expect(records()).toHaveLength(1);
       if (change !== 'audience') expect(records()[0]?.detail).toBe(change === 'rule-mode' ? '群切成了规则模式' : '群正在改设置');
-      privateLogs(m);
+      await privateLogs(m);
     } finally { gate.resolve(); await edit; }
+  });
+
+
+  async function holdMutation(kind: 'edit' | 'resume'): Promise<() => Promise<void>> {
+    const gate = deferred<void>();
+    let pending: Promise<unknown>;
+    if (kind === 'edit') {
+      fake.projectLookup.mockImplementationOnce(async () => {}).mockImplementationOnce(async () => {}).mockImplementationOnce(async () => { await gate.promise; throw new Error('controlled edit'); });
+      pending = orchestrator.collaboration({ action: 'editProject', projectName: 'demo', chatId: CHAT, expectedRevision: projectRevision(fake.project as never), enabled: false }).catch(() => undefined);
+      await vi.waitFor(() => expect(fake.projectLookup).toHaveBeenCalledTimes(3));
+    } else {
+      fake.project = { ...base, kind: 'multi' };
+      const reads = fake.readHistory.mock.calls.length;
+      fake.readHistory.mockImplementationOnce(async () => { await gate.promise; throw new Error('controlled resume'); });
+      pending = orchestrator.collaboration({ action: 'resume', projectName: 'demo', chatId: CHAT, sessionId: 'past', backend: 'codex-appserver' }).catch(() => undefined);
+      await vi.waitFor(() => expect(fake.readHistory).toHaveBeenCalledTimes(reads + 1));
+    }
+    return async () => { gate.resolve(); await pending; };
+  }
+
+  it.each(['intake', 'lookup', 'project'] as const)('recall while awaiting %s never spends judgement budget', async stage => {
+    const m = wake(stage === 'lookup' ? { thread: 'omt_lookup_recall' } : {}); const gate = deferred<void>();
+    if (stage === 'intake') fake.sessionReads.mockImplementationOnce(() => gate.promise);
+    if (stage === 'lookup') fake.get.mockImplementationOnce(async () => { await gate.promise; return { code: 0, data: { items: [item(m)] } }; });
+    if (stage === 'project') fake.projectReads.mockImplementationOnce(async () => {}).mockImplementationOnce(() => gate.promise);
+    const take = vi.spyOn(JudgeBudget.prototype, 'take');
+    try {
+      const intake = botSays(m);
+      await vi.waitFor(() => expect(stage === 'intake' ? fake.sessionReads.mock.calls.length : stage === 'lookup' ? fake.get.mock.calls.length : fake.projectReads.mock.calls.length).toBeGreaterThanOrEqual(stage === 'project' ? 2 : 1));
+      await orchestrator.onRecall({ messageId: idOf(m), chatId: CHAT });
+      gate.resolve(); await intake; await settle();
+      expect(take).not.toHaveBeenCalled(); expect(fake.judge).not.toHaveBeenCalled(); expect(fake.inputs).toEqual([]); expect(records()).toEqual([]);
+    } finally { gate.resolve(); take.mockRestore(); }
+  });
+
+  it('project lookup rejecting after shutdown does not publish a failed-wake diagnostic', async () => {
+    const gate = deferred<void>(); const m = wake();
+    fake.projectReads.mockImplementationOnce(async () => {}).mockImplementationOnce(() => gate.promise);
+    await botSays(m); await vi.waitFor(() => expect(fake.projectReads).toHaveBeenCalledTimes(2));
+    const stop = orchestrator.shutdown(); gate.reject(new Error('controlled storage failure')); await stop; await settle();
+    expect(records()).toEqual([]); expect(fake.inputs).toEqual([]);
+    expect(fake.log.info).toHaveBeenCalledWith('intake', 'bot-wake-dropped', expect.objectContaining({ why: 'shutdown' }));
+  });
+
+  it.each(['edit', 'resume'] as const)('a %s beginning during sender lookup blocks before budget and recovers', async kind => {
+    const gate = deferred<void>(); const entered = deferred<void>(); const m = wake({ thread: 'omt_lookup_gate' });
+    fake.get.mockImplementationOnce(async () => { entered.resolve(); await gate.promise; return { code: 0, data: { items: [item(m)] } }; });
+    const take = vi.spyOn(JudgeBudget.prototype, 'take');
+    await botSays(m); await entered.promise;
+    expect(fake.get).toHaveBeenCalledWith({ path: { message_id: idOf(m) }, params: { with_sender_name: true } });
+    const release = await holdMutation(kind);
+    try {
+      gate.resolve(); await noted('bot-wake-dropped');
+      expect(records()).toHaveLength(1); expect(records()[0]?.detail).toBe(kind === 'edit' ? '群正在改设置' : '群正在恢复会话');
+      expect(take).not.toHaveBeenCalled(); expect(fake.judge).not.toHaveBeenCalled(); expect(fake.inputs).toEqual([]);
+    } finally { gate.resolve(); await release(); fake.project = { ...base }; take.mockRestore(); }
+    const control = wake({ thread: 'omt_recovered' }); await botSays(control); await decide(control, result('reply')); await answered();
+  });
+
+  it.each(['edit', 'resume'] as const)('a late %s lock is rechecked after the final await for every wake exit', async kind => {
+    for (const decision of ['main', 'reply', 'topic'] as const) {
+      const m = wake(decision === 'reply' ? { thread: 'omt_late' } : {});
+      await botSays(m); await judged(m);
+      const gate = deferred<void>(); fake.sessionReads.mockImplementationOnce(() => gate.promise);
+      const reads = fake.sessionReads.mock.calls.length;
+      await decide(m, result(decision)); await vi.waitFor(() => expect(fake.sessionReads.mock.calls.length).toBeGreaterThan(reads));
+      const release = await holdMutation(kind);
+      try {
+        gate.resolve(); await vi.waitFor(() => expect(records()).toHaveLength(['main', 'reply', 'topic'].indexOf(decision) + 1));
+        expect(records().at(-1)).toMatchObject({ reason: 'bot-wake-dropped', detail: kind === 'edit' ? '群正在改设置' : '群正在恢复会话' });
+        expect(fake.inputs).toEqual([]); expect(fake.send).not.toHaveBeenCalled();
+      } finally { gate.resolve(); await release(); fake.project = { ...base }; fake.projectLookup.mockReset(); }
+    }
+  });
+
+  it('judges a bot aside while ordinary unnamed messages remain in their own batch', async () => {
+    const first = says('ORDINARY_FIRST'); await send(first); await judged(first);
+    const m = wake(); await botSays(m); expect((await judged(m)).req.message.from).toBe('bot');
+    const later = says('ORDINARY_LATER'); await send(later); await settle();
+    expect(asked.has(idOf(later))).toBe(false);
+    await decide(first, result('skip')); const next = await judged(later);
+    expect(next.req.message.text).toContain('ORDINARY_LATER'); expect(next.req.message.text).not.toContain('SECRET_BOT_TEXT');
+    await decide(later, result('skip')); await decide(m, result('skip')); await settle(); expect(fake.inputs).toEqual([]);
   });
 
   it('rejects an unknown bot sender before judging when there is an audience', async () => {
     fake.project = { ...base, allowedUsers: ['ou_other'] }; fake.get.mockRejectedValue(new Error('gone'));
     const take = vi.spyOn(JudgeBudget.prototype, 'take'); const m = wake();
-    try { await botSays(m, 'cli_other'); await noted('bot-wake-not-allowed'); expect(fake.judge).not.toHaveBeenCalled(); expect(take).not.toHaveBeenCalled(); privateLogs(m); }
+    try { await botSays(m, 'cli_other'); await noted('bot-wake-not-allowed'); expect(fake.judge).not.toHaveBeenCalled(); expect(take).not.toHaveBeenCalled(); await privateLogs(m); }
     finally { take.mockRestore(); }
   });
 
   it("a lookup that throws while a bot's @ lands is noted", async () => {
     const m = wake(); await botSays(m); await judged(m);
-    fake.projectRead = Promise.reject(new Error('land lookup boom')); void fake.projectRead.catch(() => {});
+    fake.projectRead = Promise.reject(new Error(`land lookup boom SECRET_BOT_TEXT 小P ${idOf(m)} ou_other`)); void fake.projectRead.catch(() => {});
     try {
       await decide(m, result('main')); await noted('bot-wake-failed');
       expect(records()[0]?.detail).toContain('land lookup boom'); expect(records()).toHaveLength(1); expect(fake.inputs).toEqual([]);
-      expect(fake.log.fail).toHaveBeenCalledWith('intake', expect.any(Error), expect.objectContaining({ phase: 'bot-wake-land' }));
+      expect(fake.log.fail).toHaveBeenCalledWith('intake', 'bot-wake-land-failed', expect.objectContaining({ phase: 'bot-wake-land' })); await privateLogs(m);
     } finally { fake.projectRead = undefined; }
   });
 
@@ -895,8 +996,10 @@ describe('bot wake fallbacks and queued turns (s27a)', () => {
     await send(says('HUMAN_RUNNING', { at: true, thread: 'omt_queue' })); await answered();
     const m = says('BOT_QUEUED', { at: true, thread: 'omt_queue' }); fake.list.mockResolvedValue(page([memento(m)]));
     await botSays(m); await decide(m, result('reply')); await vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued', expect.anything()));
+    fake.sessions.omt_queue = { recalls: [{ id: 'om_withdrawn', at: Date.now(), who: { kind: 'user', openId: 'ou_owner' } }] };
     gate.resolve(); await answered(2);
     expect(fake.inputs[1]?.startsWith(BOT_WAKE_NOTE('小P'))).toBe(true);
+    expect(fake.inputs[1]).toContain('撤回');
     expect(JSON.stringify(fake.liveCards.filter(c => c.id === 1))).toContain('完成后提醒我');
     expect(JSON.stringify(fake.cards[1]?.[2])).not.toContain('完成后提醒我');
     await vi.waitFor(() => expect(fake.liveCards.some(c => c.id === 2)).toBe(true));

@@ -494,6 +494,7 @@ export interface QueuedTurn {
   origin?: DroppedOrigin;
   /** The smart mode joined in on its own (TurnExtra.initiative): its card goes if it ends with nothing to say (s25b). */
   initiative?: true;
+  wake?: TurnExtra['wake'];
 }
 
 /** A resumed session's title for its record and topic. Without a native name
@@ -1595,6 +1596,7 @@ export function createOrchestrator(
   }
 
   function submitWake(msg: NormalizedMessage): void {
+    if (recalled.has(msg.messageId)) return;
     if (shuttingDown) {
       log.info('intake', 'bot-wake-dropped', { ref: msg.messageId.slice(-6), why: 'shutdown' });
       return;
@@ -1613,7 +1615,13 @@ export function createOrchestrator(
       return await judgeItem(item, signal);
     } catch (error) {
       if (item.wake) {
-        log.fail('intake', error, { phase: 'bot-wake', ref: item.msg.messageId.slice(-6) });
+        if (shuttingDown) {
+          log.info('intake', 'bot-wake-dropped', { ref: item.msg.messageId.slice(-6), why: 'shutdown' });
+          return { kind: 'drop' };
+        }
+        if (signal.aborted || recalled.has(item.msg.messageId)) return { kind: 'drop' };
+        // Transport/storage errors may carry message bodies or ids; detail stays on the diagnostics page.
+        log.fail('intake', 'bot-wake-failed', { phase: 'bot-wake', ref: item.msg.messageId.slice(-6) });
         noteNotReplied(item.msg, 'bot-wake-failed', { detail: errorDetail(error) });
         return { kind: 'drop' };
       }
@@ -1626,7 +1634,7 @@ export function createOrchestrator(
   async function judgeWake(item: SmartItem, signal: AbortSignal): Promise<SmartVerdict> {
     const { msg } = item;
     const ref = msg.messageId.slice(-6);
-    const gone = (): boolean => shuttingDown || signal.aborted;
+    const gone = (): boolean => shuttingDown || signal.aborted || recalled.has(msg.messageId);
     const dropped = (): SmartVerdict => {
       if (shuttingDown) log.info('intake', 'bot-wake-dropped', { ref, why: 'shutdown' });
       return { kind: 'drop' };
@@ -1740,8 +1748,8 @@ export function createOrchestrator(
       if (!item.wake) throw error;
       const ref = item.msg.messageId.slice(-6);
       if (shuttingDown) log.info('intake', 'bot-wake-dropped', { ref, why: 'shutdown' });
-      else {
-        log.fail('intake', error, { phase: 'bot-wake-land', ref });
+      else if (!recalled.has(item.msg.messageId)) {
+        log.fail('intake', 'bot-wake-land-failed', { phase: 'bot-wake-land', ref });
         const msg = verdict.kind === 'judged' && verdict.wake ? wakeTrigger(item.msg, verdict.wake.sender) : item.msg;
         noteNotReplied(msg, 'bot-wake-failed', { detail: errorDetail(error) });
       }
@@ -1887,6 +1895,12 @@ export function createOrchestrator(
     }
     const refused = await refuseFullOnly(msg, project, ts);
     if (stopped() || refused) return;
+    // A settings/resume lock may have arrived during the final read, before this turn was reserved.
+    if (wake && (projectMutations.has(msg.chatId) || resumePublications.has(msg.chatId))) {
+      const updating = projectMutations.has(msg.chatId);
+      wakeDropped(updating ? 'updating' : 'resuming', updating ? '群正在改设置' : '群正在恢复会话');
+      return;
+    }
     // Joined in on its own: the agent is told so (2.13), never the judge's reason.
     const initiative = variant === 'main' && !wake;
     // An unnamed message that follows up on an earlier one opens its topic there (s25b); a named one under itself.
@@ -2741,6 +2755,7 @@ export function createOrchestrator(
         seen: { id: msg.messageId, at: msg.createTime },
         origin: originFor(msg, flat),
         ...(extra?.initiative ? { initiative: true as const } : {}),
+        wake: extra?.wake,
       });
       dropRetries(sessionKey);
       log.info('intake', 'queued', { depth: existing.queue.length });
@@ -3074,6 +3089,7 @@ export function createOrchestrator(
           timing: { tResolve: tResolveDone - tIntake, tWeave: Date.now() - tIntake },
           ...(recreateReason && !unused ? { sessionNotice: sessionChangeNotice(recreateReason, Boolean(topicId)) } : {}),
           ...(extra?.initiative ? { initiative: true as const } : {}),
+          wake: extra?.wake,
         };
         if (recreateReason) log.info('agent', 'session-changed', { sessionKey, reason: recreateReason, ...(unused ? { unused } : {}) });
         if (goal) await trackRun(launchGoalRun(launchOpts));
@@ -3402,6 +3418,7 @@ export function createOrchestrator(
           ? { id: anchor.id, from: topicPerson('user', anchor.senderId), at: anchor.at || undefined, text: anchor.text }
           : { id: msg.messageId, from: senderOf(msg), at: msg.createTime || undefined, text: msg.content },
         ...(extra?.initiative ? { initiative: true as const } : {}),
+        wake: extra?.wake,
         backendId: be.id,
         titleJobKey,
         titleSource,
@@ -5918,6 +5935,7 @@ export function createOrchestrator(
     triggerId?: string;
     /** The first turn is the smart mode joining in on its own (QueuedTurn.initiative). */
     initiative?: true;
+    wake?: TurnExtra['wake'];
     /** true on first reply that creates the topic; subsequent replies use replyTo only */
     replyInThread?: boolean;
     thread: AgentThread;
@@ -6300,6 +6318,7 @@ export function createOrchestrator(
         recallsShown: opts.recallsShown,
         from: opts.from,
         ...(opts.initiative ? { initiative: opts.initiative } : {}),
+        wake: opts.wake,
       };
       noted = currentTurn;
       // Recall notes a turn of this run said; only a queued turn says the newer ones (s15).
@@ -6337,7 +6356,7 @@ export function createOrchestrator(
           const main = isMainKey(topicThreadId, opts.chatId);
           const topic = main ? {} : { topic: { title: (await topics?.get(opts.chatId, topicThreadId))?.title } };
           const place = { group: (await getProjectByChatId(opts.chatId))?.name, me: channel.botIdentity?.name, ...topic };
-          turnInput = { ...turnInput, text: weaveRecordBlock(turnInput.text ?? '', { place, entries: [], now: Date.now(), table: rows, recalls: recallLines(notes) }) };
+          turnInput = { ...turnInput, text: weaveTurnRecordBlock(turnInput.text ?? '', currentTurn, { place, entries: [], now: Date.now(), table: rows, recalls: recallLines(notes) }) };
           if (rows.length) currentTurn.tableShown = true;
           currentTurn.recallsShown = notes.map((r) => r.id);
           for (const r of notes) said.add(r.id);
