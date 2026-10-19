@@ -80,21 +80,21 @@ const QUESTIONS: Record<JudgeVariant, { question: string; criteria: Partial<Reco
     },
   },
 };
-/** The anchor question of the report's five (35/36 right): m0 and up to 4 earlier lines, each "who：its first 40 characters". */
+/** The anchor question of the report's five (35/36 right): m0 and up to 10 earlier lines, each "who：its first 40 characters". */
 const ANCHOR_QUESTION = '群里哪一条消息是在等 bot（`bot_name`）回应的？';
-const ANCHOR_OPTIONS = 4;
+const ANCHOR_OPTIONS = 10;
 const SPEAKER_TYPE = { user: 'person', bot: 'other_bot', self: 'this_bot' } as const;
 const LABELS: Record<JudgeDecision, string> = { skip: '不回', main: '主区', topic: '开话题', reply: '回' };
 
 interface StateLine {
   id: string; time: string; speaker: string; speaker_type: (typeof SPEAKER_TYPE)[keyof typeof SPEAKER_TYPE]; text: string;
-  mentions?: string[]; quote?: { speaker: string; text: string };
+  new?: true; mentions?: string[]; quote?: { speaker: string; text: string };
 }
 interface Choice { type: 'choice'; instructions: string | { rules: string; question: string }; criteria: Record<string, string> }
 export interface DecisionBody {
   model: string;
   state: {
-    group: string; bot_name: string; bot_role?: string; topic_title?: string;
+    group: string; bot_name: string; bot_role?: string; topic_title?: string; why_looking?: string; new_count?: number;
     recent_messages: StateLine[]; new_message: StateLine;
   };
   questions: { decision: Choice; anchor?: Choice };
@@ -110,7 +110,7 @@ const snippet = (line: StateLine): string => {
  * the anchor. The lines and their m-numbers are the text input's (shownContext, same cuts and cleaning), so an anchor
  * names the same message whichever kind of model judged (s25b). Built in memory only, never logged.
  */
-export function decisionBody(req: Pick<JudgeRequest, 'variant' | 'botName' | 'group' | 'persona' | 'topicTitle' | 'context' | 'message'>, rules: string, model: string): DecisionBody {
+export function decisionBody(req: Pick<JudgeRequest, 'variant' | 'botName' | 'group' | 'persona' | 'topicTitle' | 'context' | 'message' | 'why'>, rules: string, model: string): DecisionBody {
   const bot = oneLine(req.botName);
   const entry = (id: string, line: JudgeLine, max: number): StateLine => {
     const { time, speaker, text, ...more } = lineFields(line, max);
@@ -119,6 +119,7 @@ export function decisionBody(req: Pick<JudgeRequest, 'variant' | 'botName' | 'gr
   // newest first, as numbered
   const recent = shownContext(req.context).map(({ line }, i) => ({ line, item: entry(`m${i + 1}`, line, JUDGE_INPUT_LIMITS.lineChars) }));
   const message = entry('m0', req.message, JUDGE_INPUT_LIMITS.messageChars);
+  const newCount = Number(!!message.new) + recent.filter(({ item }) => item.new).length;
   const persona = req.persona?.trim();
   const topic = req.variant === 'topic' ? req.topicTitle?.trim() : undefined;
   const { question, criteria } = QUESTIONS[req.variant];
@@ -127,6 +128,8 @@ export function decisionBody(req: Pick<JudgeRequest, 'variant' | 'botName' | 'gr
     state: {
       group: oneLine(req.group.name, 100),
       bot_name: bot,
+      ...(req.why?.trim() ? { why_looking: oneLine(req.why, 200) } : {}),
+      ...(newCount ? { new_count: newCount } : {}),
       ...(persona ? { bot_role: plainText(persona, JUDGE_INPUT_LIMITS.personaChars) } : {}),
       ...(topic ? { topic_title: oneLine(topic, 100) } : {}),
       recent_messages: recent.map(({ item }) => item).reverse(),
@@ -136,7 +139,8 @@ export function decisionBody(req: Pick<JudgeRequest, 'variant' | 'botName' | 'gr
   };
   if (req.variant === 'main') {
     // Only lines a topic may open under (handle-message anchorLine): a person's, with an id, naming no one.
-    const options = recent.filter(({ line }) => line.from === 'user' && line.id && !line.named && !line.mentions?.length).slice(0, ANCHOR_OPTIONS);
+    const pool = req.message.fresh || recent.some(({ line }) => line.fresh) ? recent.filter(({ line }) => line.fresh) : recent;
+    const options = pool.filter(({ line }) => line.from === 'user' && line.id && !line.named && !line.mentions?.length).slice(0, ANCHOR_OPTIONS);
     if (options.length) {
       body.questions.anchor = { type: 'choice', instructions: ANCHOR_QUESTION, criteria: Object.fromEntries([message, ...options.map(({ item }) => item)].map((line) => [line.id, snippet(line)])) };
     }
@@ -210,7 +214,7 @@ export const DECISION_FORMAT_LINES: Record<JudgeVariant, string> = Object.fromEn
     '决策模型不读格式行：上面的提示词作为 rules 发给它，程序问它一道选择题，取概率最高的一项。',
     `问题：${QUESTIONS[variant].question}`,
     ...Object.entries(QUESTIONS[variant].criteria).map(([option, text]) => `${option}：${text}`),
-    ...(variant === 'main' ? [`另问一题锚点：${ANCHOR_QUESTION}选项是 m0（它自己）和前面最近 ${ANCHOR_OPTIONS} 条真人发的、没 @ 人的消息。`] : []),
+    ...(variant === 'main' ? [`另问一题锚点：${ANCHOR_QUESTION}选项是 m0（它自己）和前面最近 ${ANCHOR_OPTIONS} 条真人发的、没 @ 人的消息；扫一眼时是这一批里标"新"的那几条。`] : []),
   ].join('\n')]),
 ) as Record<JudgeVariant, string>;
 
