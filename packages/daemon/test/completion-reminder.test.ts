@@ -8,7 +8,7 @@ import {
   isCompletionReminderRequester,
   settleOrdinaryTurnRender,
 } from '../src/bot/handle-message';
-import { sendCompletionReminderReply } from '../src/bot/completion-reminder';
+import { reminderButtonOffered, sendCompletionReminderReply } from '../src/bot/completion-reminder';
 import type { AppConfig } from '../src/config/schema';
 import { log } from '../src/core/logger';
 
@@ -250,5 +250,66 @@ describe('completion reminder native reply orchestration', () => {
     expect(isCompletionReminderRequester('ou_owner', 'ou_owner')).toBe(true);
     expect(isCompletionReminderRequester('ou_admin', 'ou_owner')).toBe(false);
     expect(isCompletionReminderRequester(undefined, 'ou_owner')).toBe(false);
+  });
+});
+
+
+describe('smart completion reminders (s27b3)', () => {
+  const modes = ['manual', 'long', 'failures', 'always'] as const;
+  const outcomes = ['done', 'error', 'idle_timeout', 'interrupted'] as const;
+  for (const mode of modes) {
+    it.each(outcomes.flatMap(outcome => [false, true].map(manuallyRequested => ({ outcome, manuallyRequested }))))(`${mode}: only human errors and timeouts bypass policy ($outcome, requested=$manuallyRequested)`, async ({ outcome, manuallyRequested }) => {
+      const { channel, reply } = replyChannel();
+      const info = vi.spyOn(log, 'info').mockImplementation(() => undefined);
+      try {
+        const input = { smart: true as const, requesterKind: 'user' as const, requesterOpenId: 'ou_owner', cardMsgId: 'om_smart', outcome, requestedAt: 0, manuallyRequested, cardUpdated: true, replyInThread: true };
+        const expected = outcome === 'error' || outcome === 'idle_timeout';
+        expect(await sendCompletionReminderReply({ channel, cfg: config(mode), dedupe: dedupe(), now: () => 300_000 }, input)).toBe(expected ? 'sent' : 'skipped');
+        expect(reply).toHaveBeenCalledTimes(expected ? 1 : 0);
+        if (expected) {
+          expect(reply.mock.calls[0]?.[0]).toMatchObject({ path: { message_id: 'om_smart' }, data: { msg_type: 'post', reply_in_thread: true } });
+          const content = JSON.parse(reply.mock.calls[0]![0].data.content);
+          expect(content.zh_cn.content[0][0]).toEqual({ tag: 'at', user_id: 'ou_owner' });
+          expect(content.zh_cn.content[0][1].text).toContain(outcome === 'error' ? '执行失败' : '响应超时');
+          expect(info).toHaveBeenCalledWith('card', 'completion-reminder', expect.objectContaining({ smart: true }));
+        }
+      } finally { info.mockRestore(); }
+    });
+  }
+
+  it.each(['bot', 'unknown', undefined] as const)('never reminds a non-human initiator (%s), including failed terminal updates', async requesterKind => {
+    const { channel, reply } = replyChannel();
+    for (const cardUpdated of [true, false]) {
+      for (const outcome of outcomes) {
+        expect(await sendCompletionReminderReply({ channel, cfg: config('always'), dedupe: dedupe() }, { smart: true, requesterKind, requesterOpenId: 'ou_other', cardMsgId: 'om_other', outcome, requestedAt: 0, manuallyRequested: true, cardUpdated, replyInThread: false })).toBe('skipped');
+      }
+    }
+    expect(reply).not.toHaveBeenCalled();
+  });
+
+  it('preserves the final-card fallback for a successful human turn', async () => {
+    const { channel, reply } = replyChannel();
+    expect(await sendCompletionReminderReply({ channel, cfg: config('manual'), dedupe: dedupe() }, { smart: true, requesterKind: 'user', requesterOpenId: 'ou_owner', cardMsgId: 'om_fallback', outcome: 'done', requestedAt: 0, manuallyRequested: false, cardUpdated: false, replyInThread: false })).toBe('sent');
+    expect(reply.mock.calls[0]?.[0].data.content).toContain('最终卡片更新失败');
+  });
+
+  it('absorbs a failed smart error reminder and never retries the same card', async () => {
+    const { channel, reply } = replyChannel(vi.fn(async (_request: any) => { throw new Error('network down'); }));
+    const fail = vi.spyOn(log, 'fail').mockImplementation(() => undefined);
+    try {
+      const deps = { channel, cfg: config('manual'), dedupe: dedupe() };
+      const input = { smart: true as const, requesterKind: 'user' as const, requesterOpenId: 'ou_owner', cardMsgId: 'om_smart_error', outcome: 'error' as const, requestedAt: 0, manuallyRequested: false, cardUpdated: true, replyInThread: false };
+      expect(await sendCompletionReminderReply(deps, input)).toBe('failed');
+      expect(await sendCompletionReminderReply(deps, input)).toBe('skipped');
+      expect(reply).toHaveBeenCalledOnce();
+      expect(fail).toHaveBeenCalledWith('card', expect.any(Error), expect.objectContaining({ phase: 'completion-reminder', smart: true }));
+    } finally { fail.mockRestore(); }
+  });
+
+  it('offers the manual button only outside smart turns and never to bots', () => {
+    expect(reminderButtonOffered(config('manual'), { requesterKind: 'user' })).toBe(true);
+    expect(reminderButtonOffered(config('manual'), { requesterKind: 'user', smart: true })).toBe(false);
+    expect(reminderButtonOffered(config('manual'), { requesterKind: 'bot', smart: false })).toBe(false);
+    for (const mode of ['long', 'failures', 'always'] as const) expect(reminderButtonOffered(config(mode), { requesterKind: 'user' })).toBe(false);
   });
 });

@@ -2,6 +2,7 @@ import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { buildCompletionReminderContent } from '../card/completion-reminder';
 import {
   shouldSendCompletionReminder,
+  shouldShowCompletionReminderButton,
   type AppConfig,
   type CompletionReminderOutcome,
 } from '../config/schema';
@@ -12,6 +13,8 @@ export interface CompletionReminderReplyInput {
   requesterOpenId?: string;
   /** Who started the turn: a bot-started turn never sends a completion reminder (s27a). */
   requesterKind?: 'user' | 'bot' | 'unknown';
+  /** The group mode captured when this run started. */
+  smart?: boolean;
   outcome: CompletionReminderOutcome;
   requestedAt: number;
   manuallyRequested: boolean;
@@ -29,6 +32,14 @@ export interface CompletionReminderReplyDeps {
 }
 
 export type CompletionReminderReplyResult = 'sent' | 'skipped' | 'failed';
+
+/** Manual reminder controls are only offered outside smart groups and bot turns. */
+export function reminderButtonOffered(
+  cfg: AppConfig,
+  run: Pick<CompletionReminderReplyInput, 'requesterKind' | 'smart'>,
+): boolean {
+  return shouldShowCompletionReminderButton(cfg) && run.requesterKind !== 'bot' && !run.smart;
+}
 
 /**
  * Apply the four-mode policy and emit the native Feishu reply. Delivery is
@@ -51,14 +62,17 @@ export async function sendCompletionReminderReply(
   }
 
   const elapsedMs = Math.max(0, (deps.now?.() ?? Date.now()) - input.requestedAt);
-  // A failed terminal CardKit update needs an observable fallback regardless
-  // of strategy; otherwise the user is left staring at a forever-running card.
-  const policyMatch = shouldSendCompletionReminder(deps.cfg, {
-    outcome: input.outcome,
-    elapsedMs,
-    manuallyRequested: input.manuallyRequested,
-  });
-  if (input.cardUpdated && !policyMatch) return 'skipped';
+  if (input.smart) {
+    if (input.requesterKind !== 'user' || (input.outcome === 'done' && input.cardUpdated)) return 'skipped';
+  } else {
+    // A failed terminal card needs an observable fallback in every mode.
+    const policyMatch = shouldSendCompletionReminder(deps.cfg, {
+      outcome: input.outcome,
+      elapsedMs,
+      manuallyRequested: input.manuallyRequested,
+    });
+    if (input.cardUpdated && !policyMatch) return 'skipped';
+  }
   if (deps.dedupe.seen(input.cardMsgId)) return 'skipped';
 
   const content = buildCompletionReminderContent({
@@ -77,11 +91,12 @@ export async function sendCompletionReminderReply(
       terminal: input.outcome,
       elapsedMs,
       cardUpdated: input.cardUpdated,
+      ...(input.smart ? { smart: true } : {}),
       ...(input.requesterKind ? { requester: input.requesterKind } : {}),
     });
     return 'sent';
   } catch (err) {
-    log.fail('card', err, { phase: 'completion-reminder', terminal: input.outcome });
+    log.fail('card', err, { phase: 'completion-reminder', terminal: input.outcome, ...(input.smart ? { smart: true } : {}) });
     return 'failed';
   }
 }
