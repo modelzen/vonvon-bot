@@ -336,3 +336,11 @@ it("words another bot's @ that got no answer, saying Bot as the page does (s27a-
   expect(NOT_REPLIED_TEXT["bot-wake-dropped"].reason({ ...record, reason: "bot-wake-dropped", detail: "群正在改设置" })).toBe("这条 Bot 的 @ 没处理：群正在改设置");
   expect(NOT_REPLIED_TEXT["bot-wake-not-allowed"].next({ ...record, reason: "bot-wake-not-allowed" })).toContain("清空「响应成员」");
 });
+
+it("validates daily judge usage requests and replies", () => {
+  expect(adminRequestSchema.parse({ type: "judgeUsage" })).toEqual({ type: "judgeUsage" });
+  expect(adminRequestSchema.safeParse({ type: "judgeUsage", x: 1 }).success).toBe(false);
+  const reply = { kind: "judgeUsage", days: [{ date: "2026-10-19", total: 0, sources: [], bots: [] }], unreadBots: 0 };
+  expect(adminReplySchema.parse(reply)).toEqual(reply);
+  expect(adminReplySchema.safeParse({ ...reply, days: [{ ...reply.days[0], date: "2026-1-9" }] }).success).toBe(false);
+});

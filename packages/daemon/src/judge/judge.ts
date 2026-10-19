@@ -52,8 +52,8 @@ export interface JudgeDeps {
   /** default `<data root>/judge`, 0700, empty */
   cwd?: () => Promise<string>;
   now?: () => number;
-  /** s28 counts judgements per day (s25's hourly budget is taken before the call: bot/smart-intake.ts) */
-  onResult?: (req: JudgeRequest, result: JudgeResult) => void;
+  /** sent is true once the backend call starts, including calls that later fail or abort. */
+  onResult?: (req: JudgeRequest, result: JudgeResult, call: { sent: boolean }) => void;
   /** A decision model's key, read before each of its judgements (the keystore, so a key set or changed by any
    * means is used at once). */
   getSecret?: (id: string) => Promise<string | undefined>;
@@ -245,6 +245,7 @@ export function createJudge(deps: JudgeDeps): Judge {
   }
 
   async function run(req: JudgeRequest, started: number): Promise<JudgeResult> {
+    let called = false;
     const fields = { chatId: req.group.chatId, ref: req.ref?.slice(-6), variant: req.variant };
     // Backend and model first, so every later failure still reports them.
     // The group's own backend, Codex for old rows and ids not in the catalog (s36d2): never the bot default.
@@ -262,7 +263,7 @@ export function createJudge(deps: JudgeDeps): Judge {
       }
       else log.info('judge', 'verdict', { ...common, decision: result.decision });
       try {
-        deps.onResult?.(req, result);
+        deps.onResult?.(req, result, { sent: called });
       } catch (error) {
         log.fail('judge', error, { phase: 'on-result' });
       }
@@ -321,6 +322,7 @@ export function createJudge(deps: JudgeDeps): Judge {
         const sentAt = now();
         try {
           call = start();
+          called = true;
         } catch (error) {
           call = Promise.reject(error);
         }

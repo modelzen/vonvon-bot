@@ -26,6 +26,8 @@ export interface BridgeOptions {
   /** `bots/<appId>/dropped.json` (s18c): the queued messages a shutdown drops are kept there and answered once connected
    * again. Only `daemon run` passes it; without it nothing is kept or answered. */
   droppedFile?: string;
+  /** Per-bot daily judgement counts; omitted by callers that do not persist usage. */
+  judgeUsageFile?: string;
 }
 
 export interface BridgeHandle {
@@ -79,7 +81,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   // service and no socket; s02c deleted D/cli-bridge. Since s02c2 the installed
   // hooks run an empty `vonvon hook`, and the tools ask in the terminal.
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
-    { droppedFile: opts.droppedFile, bot: identity });
+    { droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity });
   const offCrash = onCrashSync(() => orchestrator.saveDroppedSync('crash'));
   const groupTasks = new Set<Promise<JoinedGroups | Project>>();
   let closing: Promise<void> | undefined;
