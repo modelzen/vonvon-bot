@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 
 /**
@@ -30,9 +31,19 @@ export interface AudienceLookups {
   lastBot(threadId: string): Promise<'self' | 'bot' | 'none' | undefined>;
 }
 
+const rawSenderSchema = z.object({ sender: z.object({
+  sender_type: z.string().optional(),
+  sender_id: z.object({ open_id: z.string().optional(), app_id: z.string().optional() }).optional(),
+}).optional() });
+
+/** Parse sender identity at the raw receive-event boundary. */
+export function rawSender(msg: Pick<NormalizedMessage, 'raw'>) {
+  return rawSenderSchema.safeParse(msg.raw).data?.sender;
+}
+
 /** Whether a message came from a bot (an app), from the raw receive event. */
 export function fromBot(msg: Pick<NormalizedMessage, 'raw'>): boolean {
-  const type = (msg.raw as { sender?: { sender_type?: string } } | undefined)?.sender?.sender_type;
+  const type = rawSender(msg)?.sender_type;
   return type === 'app' || type === 'bot';
 }
 
