@@ -54,7 +54,7 @@ describe('desktop group commands in the owning bot', () => {
     const execute = createGroupExecutor(fixture.channel);
     const request = { chatId: 'oc_default_web', projectName: 'Default web', backend: 'codex-appserver', kind: 'multi' } satisfies BindGroupInput;
     const pendingFile = pendingGroupsFile(paths.projectsFile);
-    const queue = createPendingGroups({ file: pendingFile, eligible: async () => true, verify: async () => ({ state: 'ready', name: request.projectName }), onError: error => { throw error; } });
+    const queue = createPendingGroups({ file: pendingFile, eligible: async () => true, verify: async () => ({ state: 'ready', name: request.projectName, topic: false }), onError: error => { throw error; } });
     await queue.add(request.chatId, 'ou_owner'); await queue.refresh();
     const projects = await readFile(paths.projectsFile, 'utf8').catch(() => undefined);
     const registry = await readFile(paths.botsFile, 'utf8');
@@ -143,7 +143,7 @@ describe('desktop group commands in the owning bot', () => {
     await writeFile(file, 'x');
     await expect(execute({ kind: 'bindGroup', input: input(file) })).rejects.toThrow('不是目录');
     const pendingFile = pendingGroupsFile(paths.projectsFile);
-    const queue = createPendingGroups({ file: pendingFile, eligible: async () => true, verify: async () => ({ state: 'ready', name: 'Unbound' }), onError: error => { throw error; } });
+    const queue = createPendingGroups({ file: pendingFile, eligible: async () => true, verify: async () => ({ state: 'ready', name: 'Unbound', topic: false }), onError: error => { throw error; } });
     await queue.add('oc_a', 'ou_admin');
     fixture.membership.mockResolvedValue({ code: 0, data: { is_in_chat: false } });
     await expect(execute({ kind: 'bindGroup', input: input(await workspace()) })).rejects.toThrow('不在此群');
@@ -163,7 +163,7 @@ describe('desktop group commands in the owning bot', () => {
     await execute({ kind: 'bindGroup', input: value });
     await execute({ kind: 'bindGroup', input: value });
     expect(fixture.message).toHaveBeenCalledTimes(1);
-    const queue = createPendingGroups({ file: pendingGroupsFile(paths.projectsFile), eligible: async () => true, verify: async () => ({ state: 'ready', name: 'DM' }), onError: error => { throw error; } });
+    const queue = createPendingGroups({ file: pendingGroupsFile(paths.projectsFile), eligible: async () => true, verify: async () => ({ state: 'ready', name: 'DM', topic: false }), onError: error => { throw error; } });
     await queue.add('oc_dm', 'ou_actual_sender');
     await queue.refresh();
     const dm = await joinExistingGroup(fixture.channel, { name: 'DM', chatId: 'oc_dm', existingPath: dir, addedBy: 'ou_actual_sender', kind: 'multi' });

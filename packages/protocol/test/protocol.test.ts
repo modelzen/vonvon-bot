@@ -11,7 +11,7 @@ import {
   type DesktopSnapshot, settingsViewSchema, projectViewSchema, projectEditableSchemas, settingsReplySchema,
   applicationCrashesSchema, crashText, FORCED_DETAIL, NOT_REPLIED_TEXT, diagnosticsEventSchema, notRepliedSchema, KEY_FAILURE, keyFailureOf, keyProblem,
   isKnownJudgeSelection, type JudgeSelectionView,
-  adminProjectSchema, collaborationRequestSchema, conversationCopy, conversationSchema, conversationToMode, modeToConversation, projectRecordSchema,
+  adminProjectSchema, collaborationRequestSchema, topicConversationCopy, conversationCopy, conversationSchema, conversationToMode, modeToConversation, projectRecordSchema,
 } from "../src/index.js";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
@@ -343,4 +343,11 @@ it("validates daily judge usage requests and replies", () => {
   const reply = { kind: "judgeUsage", days: [{ date: "2026-10-19", total: 0, sources: [], bots: [] }], unreadBots: 0 };
   expect(adminReplySchema.parse(reply)).toEqual(reply);
   expect(adminReplySchema.safeParse({ ...reply, days: [{ ...reply.days[0], date: "2026-1-9" }] }).success).toBe(false);
+});
+
+
+it("s36b: topic conversation copy has two choices in product order", () => {
+  expect(Object.keys(topicConversationCopy)).toEqual(["threads", "smart"]);
+  expect(topicConversationCopy.threads).toEqual({ name: "按话题聊", title: "按话题聊", subtitle: "一个话题一条会话，几件事各聊各的" });
+  expect(topicConversationCopy.smart.subtitle).toBe("一个话题一条会话，不用 @ 我也会看情况接话");
 });

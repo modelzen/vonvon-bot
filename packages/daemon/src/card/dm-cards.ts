@@ -18,7 +18,7 @@ import {
   type AppConfig,
   type SessionTitleAiConfig,
 } from '../config/schema';
-import { conversationCopy, modeToConversation } from '@vonvon/protocol';
+import { conversationCopy, modeToConversation, topicConversationCopy } from '@vonvon/protocol';
 import { effectiveMode, noMentionOf, ruleKind, sessionModeOf, type Project } from '../project/registry';
 import {
   DEFAULT_BACKEND_ID,
@@ -572,14 +572,14 @@ export function buildNewProjectUncertainCard(opts: { name: string; cwd?: string;
  * 免@ left unpicked takes the mode's default (多会话开，单会话关), see {@link parseNoMentionPick}.
  * 智能 has no 免@: the buttons share one form, so its pick is dropped rather than hidden (s25c).
  */
-function sessionModeItems(verb: string, value: ActionValue): CardElement[] {
-  const modes = [['multi', conversationCopy.threads], ['single', conversationCopy.shared], ['smart', conversationCopy.smart]] as const;
+function sessionModeItems(verb: string, value: ActionValue, topic = false): CardElement[] {
+  const modes = topic ? [['topic', topicConversationCopy.threads], ['smart', topicConversationCopy.smart]] as const : [['multi', conversationCopy.threads], ['single', conversationCopy.shared], ['smart', conversationCopy.smart]] as const;
   return [
     md('**会话方式**（点下面的按钮就选了这一项）'),
     ...modes.map(([, copy]) => note(`**${copy.title}**：${copy.subtitle}`)),
     selectMenu({
       name: 'noMention',
-      placeholder: '免 @：不选就按会话方式（@ 我开新会话 开，整群一条会话 关；智能开话题没有这一项）',
+      placeholder: topic ? '免 @：不选就是开（不 @ 也回）；智能开话题没有这一项' : '免 @：不选就按会话方式（@ 我开新会话 开，整群一条会话 关；智能开话题没有这一项）',
       options: [{ label: '免 @ 开：不 @ 也回', value: 'on' }, { label: '免 @ 关：@ 我才回', value: 'off' }],
     }),
     actions(modes.map(([kind, copy]) => submitButton(`${verb}·${copy.title}`, { ...value, kind }, 'default', `submit_${kind}`))),
@@ -594,43 +594,51 @@ export function parseNoMentionPick(formValue: Record<string, unknown> | undefine
 
 /**
  * Bind-an-existing-group form. Reached when a human adds the bot to a group and
- * the bot DMs the adder. Mirrors {@link buildNewProjectFormCard} but the name
+ * the bot DMs the privileged adder or owner. Mirrors {@link buildNewProjectFormCard} but the name
  * input is pre-filled with the group's name (still editable — lets the user
  * dodge a name clash), and the submit buttons carry the group's `chatId` so the
  * handler binds *this* group instead of creating a new one.
  */
 export function buildJoinGroupFormCard(
-  opts: { chatId: string; name?: string; cwd?: string; error?: string; backends?: SelectOption[] },
+  opts: { chatId: string; name?: string; cwd?: string; error?: string; backends?: SelectOption[];
+    backend?: string; topic?: boolean; addedBy?: { name?: string }; fullOnly?: boolean },
 ): CardObject {
   const elements: CardElement[] = [];
   if (opts.error) elements.push(md(`❌ **绑定失败**：${opts.error}`));
   const backends = opts.backends ?? [];
   const formItems: CardElement[] = [
     input({ name: 'name', label: '项目名', placeholder: 'my-app', value: opts.name, required: true }),
-    input({ name: 'cwd', label: '文件夹路径（选填，留空自动新建）', placeholder: '/Users/you/code/my-app', value: opts.cwd }),
+    note('项目名默认用群名，可改。'),
+    input({ name: 'cwd', label: '工作区（选填）', placeholder: '留空就给这个群新建一个目录；填本机已有目录的绝对路径就用它', value: opts.cwd }),
   ];
   if (backends.length > 1) {
     formItems.push(
-      note('🧠 后端 Agent（绑定后**固定不可切换**）。默认 **Codex** 以「只读」档绑定（外部群安全）。'),
-      selectMenu({ name: 'backend', placeholder: '选择后端 Agent', options: backends, initial: backends[0]?.value }),
+      note('🧠 后端（绑定后不能换）。默认用这个 bot 的后端。'),
+      selectMenu({ name: 'backend', placeholder: '选择后端 Agent', options: backends, initial: opts.backend ?? backends[0]?.value }),
     );
   } else if (backends.length === 1) {
     formItems.push(note(`🧠 后端 Agent：**${backends[0]!.label}**（绑定后固定）`));
   }
-  formItems.push(...sessionModeItems('绑定', { a: DM.joinGroupSubmit, chatId: opts.chatId }));
+  formItems.push(note('🔒 权限档：只读 · 网络：关。设置好以后在群详情页或私聊里改。'));
+  if (opts.fullOnly) formItems.push(note('ℹ️ 这台电脑是 Linux：选 Codex 也能绑定，但只读档跑不起来，@ 我时我会回一句说明。要用，绑定后在群设置里改成完全访问（它能读写这个账号能碰到的所有文件）。'));
+  formItems.push(...sessionModeItems('绑定', { a: DM.joinGroupSubmit, chatId: opts.chatId, ...(opts.topic ? { t: 'topic' } : {}) }, opts.topic));
+  const group = opts.name ? `「${opts.name}」` : '一个群（没读到群名）';
+  const introduction = opts.error ? '重新选一下，点下面对应的按钮。' : opts.addedBy
+    ? `**${opts.addedBy.name || '有人'}** 把我拉进了${group}。拉我的不是主人或管理员，所以发给你。设置好才能用：选会话方式，点下面对应的按钮。`
+    : `你把我拉进了${group}。设置好才能用：选会话方式，点下面对应的按钮。`;
   elements.push(
-    md('我已被加入这个群。填一下要绑定的项目信息即可开始用。'),
-    md('项目名默认用群名，可改。**文件夹路径留空** = 自动新建空白项目；**填绝对路径** = 用电脑上已有的文件夹。'),
+    md(introduction),
+    note('设置好之前，群里 @ 我只回一句“主人还没设置好这个群”。这张卡不过期；也可以在网页的 Bot 页点「加入飞书群」设置。'),
     form('join_group', formItems),
   );
-  return card(elements, { header: { title: '🔗 绑定已有群', template: 'turquoise' } });
+  return card(elements, { header: { title: '🔗 设置这个群', template: 'turquoise' } });
 }
 
 /** Shown after a project is created/bound — a terminal "留痕" record with a
  * jump-to-group button so the admin can hop straight into the group and start
  * working. (Re-open the console any time by messaging the bot.) `droppedNoMention`:
  * the form picked 免@ and the group went 智能, which has none (s25c). */
-export function buildNewProjectDoneCard(p: Project, droppedNoMention = false): CardObject {
+export function buildNewProjectDoneCard(p: Project, droppedNoMention = false, topic = false): CardObject {
   const joined = (p.origin ?? 'created') === 'joined';
   const verb = joined ? '已绑定群' : '已创建项目';
   const title = joined ? '🔗 绑定已有群' : '➕ 新建项目';
@@ -638,7 +646,7 @@ export function buildNewProjectDoneCard(p: Project, droppedNoMention = false): C
   const backendName = catalogById(backendId)?.displayName ?? backendId;
   const elements: CardElement[] = [
     md(`✅ ${verb} **${p.name}**${p.blank ? ' _(空白项目)_' : ''}`),
-    note(`📂 \`${p.cwd}\`   ·   ${kindLabel(p)}   ·   🧠 ${backendName}`),
+    note(`📂 \`${p.cwd}\`   ·   ${topic && sessionModeOf(p) === 'multi' ? '按话题聊' : kindLabel(p)}   ·   🧠 ${backendName}`),
     ...(droppedNoMention ? [note('智能开话题没有免 @，刚才选的没用上。')] : []),
     md(p.chatId ? '👉 去群里 **@我** 干活。' : '发我任意消息可再次打开管理台。'),
   ];
