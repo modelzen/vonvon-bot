@@ -1,5 +1,5 @@
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
-import type { AgentRun, AskRequest, AskResolution } from '../agent/types';
+import { isSensitiveAsk, type AgentRun, type AskRequest, type AskResolution } from '../agent/types';
 import { isAdmin, resolveOwner, type AppConfig } from '../config/schema';
 import { buildAskCard, parseAskSubmission, type AskCardState } from '../card/ask-card';
 import { sendManagedCard, updateManagedCard } from '../card/managed';
@@ -20,7 +20,15 @@ export interface AskTurn {
   cancel(requestId: string): void;
   close(reason: 'stopped' | 'turn-ended'): void;
 }
-type EntryState = { kind: 'queued' } | { kind: 'sending' } | { kind: 'visible'; messageId: string }
+export interface TypedInput {
+  chatId: string;
+  place: string;
+  senderId: string;
+  senderKind: 'user' | 'bot' | 'unknown';
+  text: string;
+  createTime?: number;
+}
+type EntryState = { kind: 'queued' } | { kind: 'sending' } | { kind: 'visible'; messageId: string; shownAt: number }
   | { kind: 'settled'; presentation: AskCardState };
 interface Entry {
   request: AskRequest;
@@ -114,6 +122,10 @@ export class AskCoordinator {
   private promote(turn: Turn): void {
     const entry = turn.queue[0];
     if (!turn.open || !entry || entry.state.kind !== 'queued') return;
+    if (turn.run.askPending?.(entry.request.id) === false) {
+      this.settle(turn, entry, { kind: 'unanswered', reason: 'turn-ended' }, { providerResolved: true });
+      return;
+    }
     entry.state = { kind: 'sending' };
     entry.timer = setTimeout(() => this.settle(turn, entry, { kind: 'unanswered', reason: 'unavailable' }), 30_000);
     const { chatId, replyTo, replyInThread } = turn.placement;
@@ -122,7 +134,7 @@ export class AskCoordinator {
         buildAskCard({ request: entry.request, state: { kind: 'pending' }, respondents: this.respondents(turn, entry.request) }), replyTo, replyInThread);
       if (entry.state.kind === 'settled') { this.terminal(turn, entry, sent.messageId, entry.state.presentation); return; }
       clearTimeout(entry.timer);
-      entry.state = { kind: 'visible', messageId: sent.messageId };
+      entry.state = { kind: 'visible', messageId: sent.messageId, shownAt: Date.now() };
       this.carriers.set(sent.messageId, { turn, entry });
       entry.timer = setTimeout(() => this.settle(turn, entry, { kind: 'unanswered', reason: 'timeout' }), 15 * 60_000);
       const content = JSON.stringify({ zh_cn: { content: [[...this.eligible(turn, entry.request).map(user_id => ({ tag: 'at', user_id })), { tag: 'text', text: ' 请回答上方卡片' }]] } });
@@ -153,6 +165,30 @@ export class AskCoordinator {
     }
     this.settle(turn, entry, { kind: 'answered', answer: parsed.answer }, { actor: this.names.peek(operator) ?? `成员 …${operator.slice(-6)}` });
     return 'accepted';
+  }
+  typed(input: TypedInput): 'answered' | 'sensitive' | 'none' {
+    const turn = this.turns.get(input.place);
+    if (!turn || !turn.open || turn.placement.chatId !== input.chatId) return 'none';
+    const entry = turn.queue[0];
+    if (!entry || entry.state.kind !== 'visible') return 'none';
+    if (turn.run.askPending?.(entry.request.id) === false) {
+      this.settle(turn, entry, { kind: 'unanswered', reason: 'turn-ended' }, { providerResolved: true });
+      return 'none';
+    }
+    if (!input.createTime) return 'none';
+    if (input.createTime < entry.state.shownAt) {
+      log.info('card', 'ask-typed-before-visible', { deltaMs: input.createTime - entry.state.shownAt });
+      return 'none';
+    }
+    if (input.senderKind !== 'user' || entry.request.kind !== 'choices') return 'none';
+    if (!(isAdmin(this.cfg, input.senderId) || (turn.initiator.kind === 'user' && input.senderId === turn.initiator.openId))) return 'none';
+    if (isSensitiveAsk(entry.request)) return 'sensitive';
+    const text = input.text.trim().slice(0, 4000);
+    if (!text) return 'none';
+    log.info('card', 'ask-typed', { len: text.length, kind: entry.request.kind });
+    this.settle(turn, entry, { kind: 'answered', answer: { kind: 'text', text } },
+      { actor: this.names.peek(input.senderId) ?? `成员 …${input.senderId.slice(-6)}` });
+    return 'answered';
   }
   private settle(turn: Turn, entry: Entry, resolution: AskResolution, options: { actor?: string; providerResolved?: boolean } = {}): void {
     if (entry.state.kind === 'settled') return;
