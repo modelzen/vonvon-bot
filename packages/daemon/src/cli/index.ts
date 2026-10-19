@@ -4,6 +4,7 @@ import { formatErrorTree } from '../core/error-parts';
 import { bridgeVersion } from '../core/version';
 import { paths } from '../config/paths';
 import { enterDataAccess, type DataLease } from '../config/data-access';
+import { inBotSession } from '../config/session-env';
 import { observeShutdown, type ShutdownControl } from '../host/lifecycle';
 import type { LingerChoice } from './commands/service';
 
@@ -15,6 +16,8 @@ program.hook('preAction', async (_command, action) => {
   // bot repair-dir writes bots.json itself, under the daemon's own lock, and takes one.
   const parent = action.parent?.name();
   if (parent === 'service' || (parent === 'bot' && action.name() !== 'repair-dir') || parent === 'group' || parent === 'settings' || action.name() === '__daemon-control') return;
+  // in a Bot's session secrets list, set and remove only refuse (s23g): before the lease, whose socket a sandbox may forbid, and the data root
+  if (parent === 'secrets' && action.name() !== 'get' && inBotSession(process.env)) return;
   if (action.name() === 'run') {
     const runControl = control = observeShutdown(Boolean(action.opts().parentControl));
     (await import('../host/crash-guard')).installCrashHandlers({ intent: () => runControl.intent ?? (runControl.requested ? 'stop' : 'running') });

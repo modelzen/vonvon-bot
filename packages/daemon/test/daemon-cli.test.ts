@@ -194,6 +194,20 @@ it('secrets set and remove refuse an unknown option without echoing it: a key ma
   for (const file of ['secrets.enc', 'master.key']) expect(await readdir(f.root)).not.toContain(file);
 });
 
+it('secrets refuses in a bot session before it takes the data lease or makes the data root (s23g)', async () => {
+  const f = await fixture();
+  // Claude's sandbox forbids the lease's socket: a refusal after the lease never showed
+  const root = join(f.root, 'missing');
+  for (const session of [{ FEISHU_CODEX_BRIDGE: '1', VONVON_SESSION: '' }, { FEISHU_CODEX_BRIDGE: '', VONVON_SESSION: '1' }]) {
+    for (const args of [['list'], ['set', 'typesafe-api-key'], ['remove', 'typesafe-api-key']]) {
+      const p = launch(f.home, root, ['secrets', ...args], session); p.child.stdin.end('ts_TESTKEY0000');
+      expect(await p.exited, p.output()).toBe(2);
+      expect(p.output()).toContain('这组命令不能在 Bot 的会话里用');
+    }
+  }
+  expect(await readdir(f.root)).toEqual([]);
+});
+
 it('refuses a reused PID without signaling the unrelated process or changing its lock', async () => {
   const f = await fixture();
   const sleeper = spawn(process.execPath, ['-e', "process.stdout.write('ready\\n');setInterval(()=>{},1000)"], { stdio: 'pipe' });
