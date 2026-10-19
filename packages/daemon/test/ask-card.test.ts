@@ -264,3 +264,12 @@ describe('s33 typed questions and answers', () => {
     expect(() => finish(request([choiceQuestion]), { kind: 'choices', answers: [{ questionId: 'pick', text: 'bad' }] })).toThrow('Answer does not match');
   });
 });
+
+
+it.each([{ name: 'reviewer' }, {}])('keeps child origin in pending and terminal titles: %j', from => {
+  for (const state of [{ kind: 'pending' }, { kind: 'timed-out' }] satisfies AskCardState[]) {
+    const card = buildAskCard({ request: confirmation, state, respondents: [], from });
+    expect(JSON.stringify(card)).toContain(`子 agent${'name' in from ? ' reviewer' : ''} 问：${confirmation.title}`);
+  }
+  expect(JSON.stringify(buildAskCard({ request: confirmation, state: { kind: 'pending' }, respondents: [] }))).not.toContain('子 agent');
+});

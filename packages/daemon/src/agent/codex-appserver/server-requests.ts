@@ -71,16 +71,16 @@ export class CodexRequestScope {
   private readonly pending = new Map<string, InboundQuestion>();
   private closed = false;
 
-  constructor(readonly threadId: string) {}
+  constructor(readonly threadId: string, private readonly childTurn: (id: string) => string | undefined = () => undefined) {}
 
   add(question: InboundQuestion): void {
-    if (this.closed || question.threadId !== this.threadId) question.settle();
+    if (this.closed) question.settle();
     else this.pending.set(question.request.id, question);
   }
 
   accepts(question: InboundQuestion, turnId: string | undefined): boolean {
     if (this.pending.get(question.request.id) !== question) return false;
-    if (question.turnId === turnId) return true;
+    if (question.turnId === (question.threadId === this.threadId ? turnId : this.childTurn(question.threadId))) return true;
     this.respond(question.request.id);
     return false;
   }
@@ -100,19 +100,25 @@ export class CodexRequestScope {
     if (this.pending.get(question.request.id) === question) this.pending.delete(question.request.id);
   }
 
-  retireRpc(id: JsonRpcId): InboundCancellation[] {
+  retireRpc(id: JsonRpcId, threadId: string): InboundCancellation[] {
     const cancelled: InboundCancellation[] = [];
     for (const question of this.pending.values()) {
-      if (question.rpcId !== id) continue;
+      if (question.rpcId !== id || question.threadId !== threadId) continue;
       question.cancel();
       cancelled.push({ kind: 'request_cancelled', requestId: question.request.id, owner: this });
     }
     return cancelled;
   }
 
+  finishThread(threadId: string): string[] {
+    const ids = [...this.pending.values()].filter(q => q.threadId === threadId).map(q => q.request.id);
+    for (const id of ids) void this.respond(id);
+    return ids;
+  }
+
   finishTurn(turnId: string): void {
     for (const question of this.pending.values()) {
-      if (question.turnId === turnId) void this.respond(question.request.id);
+      if (question.threadId === this.threadId && question.turnId === turnId) void this.respond(question.request.id);
     }
   }
 
@@ -147,7 +153,7 @@ export function userInputRequest(
   if (!parsed.success || !scope) return unavailable();
   const input = parsed.data satisfies ToolRequestUserInputParams;
   // s33b maps isSecret to sensitive; until then, keep secret questions unavailable.
-  if (input.threadId !== scope.threadId || input.questions.some(q => q.isSecret) || new Set(input.questions.map(q => q.id)).size !== input.questions.length) return unavailable();
+  if (input.questions.some(q => q.isSecret) || new Set(input.questions.map(q => q.id)).size !== input.questions.length) return unavailable();
   const requestId = `codex-request-${serial}`;
   const request = parseAskRequest({
     kind: 'choices', id: requestId, title: input.questions.some(q => !q.options?.length) ? 'Codex 需要你回答' : 'Codex 需要你的选择',

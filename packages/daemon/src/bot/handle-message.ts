@@ -97,7 +97,7 @@ import { createJudgeUsage } from '../judge/usage';
 import { installAtGuard } from '../card/at-guard';
 import { isManaged, sendManagedCard, updateManagedCard } from '../card/managed';
 import { RunRender } from '../card/run-render';
-import { finalMessageText, initialState, reduce, type RunState, type SubagentRow } from '../card/run-state';
+import { finalMessageText, initialState, markInterrupted, reduce, type RunState, type SubagentRow } from '../card/run-state';
 import {
   buildClearedCard,
   buildHelpCard,
@@ -657,6 +657,7 @@ interface ActiveState {
   /** unset only during the brief "reserved, still resolving the thread" window */
   thread?: AgentThread;
   run?: AgentRun;
+  runCard?: RunCardState;
   subagents?: () => SubagentRow[];
   /** follow-up turns queued mid-run; each carries its own text + downloaded images */
   queue: QueuedTurn[];
@@ -4175,15 +4176,17 @@ export function createOrchestrator(
    * 只删 {@link CONTROLS_EID} 控件行（其余内容无从重建；实体 seq 也丢了，用
    * epoch 秒——必大于按帧自增的运行期计数）。改版前的旧卡没有该 element_id，
    * 删除失败仅记日志（告知已发出）。卡片改动等 CARD_SETTLE_MS，避开点击互动窗。 */
-  const healDeadRunCard = (evt: CardActionEvent, key: string, actionId: string, notice = 'ℹ️ 该任务已结束，按钮已失效。'): void => {
-    if (runControlNotes.seen(`dead:${key}`)) return; // 已答复过 / 自愈在路上
+  let healSequence = 0;
+  const healUpdates = new Map<string, Promise<void>>();
+  const healDeadRunCard = (evt: CardActionEvent, key: string, actionId: string, notice = 'ℹ️ 该任务已结束，按钮已失效。', extraElementId?: string): void => {
+    if (runControlNotes.seen(`dead:${key}${extraElementId ? `:${extraElementId}` : ''}`)) return; // 已答复过 / 自愈在路上
     void trackTask(channel
       .send(evt.chatId, { markdown: notice }, { replyTo: evt.messageId })
       .catch(() => undefined));
     const rc = runCards.get(key);
     const stream = runStreams.get(key);
     log.info('card', 'action', { actionId, orphan: true, inProcess: Boolean(rc && stream) });
-    void trackTask((async () => {
+    const update = (healUpdates.get(key) ?? Promise.resolve()).then(async () => {
       try {
         await new Promise((r) => setTimeout(r, CARD_SETTLE_MS));
         if (rc && stream) {
@@ -4195,15 +4198,19 @@ export function createOrchestrator(
           ?.body?.content;
         const cardId = content ? cardIdFromMessageContent(content) : undefined;
         if (!cardId) return;
-        const seq = Math.floor(Date.now() / 1000);
-        await channel.rawClient.cardkit.v1.cardElement.delete({
-          path: { card_id: cardId, element_id: CONTROLS_EID },
-          data: { sequence: seq, uuid: `h_${cardId}_${seq}` },
-        });
+        for (const elementId of [CONTROLS_EID, ...(extraElementId ? [extraElementId] : [])]) {
+          const seq = healSequence = Math.max(healSequence + 1, Math.floor(Date.now() / 1000));
+          try { await channel.rawClient.cardkit.v1.cardElement.delete({
+            path: { card_id: cardId, element_id: elementId },
+            data: { sequence: seq, uuid: `h_${cardId}_${seq}` },
+          }); } catch (err) { log.fail('card', err, { phase: 'run-card-heal', key }); }
+        }
       } catch (err) {
         log.fail('card', err, { phase: 'run-card-heal', key });
       }
-    })());
+    });
+    healUpdates.set(key, update);
+    void trackTask(update.finally(() => { if (healUpdates.get(key) === update) healUpdates.delete(key); }));
   };
 
   const ASK_EXPIRED = '已失效（后台服务重启过）';
@@ -4271,20 +4278,31 @@ export function createOrchestrator(
     .on(RC.stopSub, ({ evt, value }) => {
       const key = typeof value.m === 'string' ? value.m : evt.messageId;
       if (!runAllowed(evt)) return;
+      const extra = typeof value.e === 'string' && /^sb_[0-9a-f]{12}$/.test(value.e) ? value.e : undefined;
       const st = runsByCard.get(key);
-      if (!st) { healDeadRunCard(evt, key, RC.stopSub); return; }
+      if (!st) { healDeadRunCard(evt, key, RC.stopSub, undefined, extra); return; }
       if (!runOwnerOrAdmin(evt, st.requesterOpenId)) {
         denyRunControl(evt, key, RC.stopSub, '停止子 agent');
         return;
       }
-      if (!st.run?.stopSubagent) { healDeadRunCard(evt, key, RC.stopSub); return; }
+      if (!st.run?.stopSubagent) { healDeadRunCard(evt, key, RC.stopSub, undefined, extra); return; }
       if (typeof value.subagentId !== 'string') return;
       void trackTask(st.run.stopSubagent(value.subagentId).catch(error => {
+        const row = st.subagents?.().find(row => row.id === value.subagentId);
+        if (row && row.status !== 'running') return;
         const reason = error instanceof Error ? error.message : String(error);
         if (!runControlNotes.seen(`stop-sub:${key}:${value.subagentId}:${reason}`)) {
           return channel.send(evt.chatId, { markdown: `⚠️ ${reason}` }, { replyTo: evt.messageId }).then(() => undefined, () => undefined);
         }
       }));
+    })
+    .on(RC.subPage, ({ evt, value }) => {
+      if (!runAllowed(evt)) return;
+      const key = typeof value.m === 'string' ? value.m : evt.messageId;
+      if (!runsByCard.has(key)) { healDeadRunCard(evt, key, RC.subPage, undefined, 'sp_next'); return; }
+      if (typeof value.p !== 'number' || !Number.isSafeInteger(value.p) || value.p < 0) return;
+      const rc = runsByCard.get(key)?.runCard;
+      if (rc?.cardKey === key) { rc.subagentPage = value.p; runStreams.get(key)?.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID); }
     })
     // “仅手动”模式的单轮完成提醒。这不是破坏性操作，但也不允许
     // 管理员替别人订阅：只有这一轮的真实发起人能开启。
@@ -6662,6 +6680,7 @@ export function createOrchestrator(
         opts.sessionNotice = undefined; // shown; a failed create leaves it for the failure reply
         curCardKey = cardMsgId;
         rc.cardKey = cardMsgId;
+        state.runCard = rc;
         runsByCard.set(cardMsgId, state);
         runStreams.set(cardMsgId, stream);
         const registerReminder = (messageId: string, target: RunCardState, targetStream: RunCardStream): void => {
@@ -6725,11 +6744,13 @@ export function createOrchestrator(
           boundary = nextBoundary;
           segmentStartedAt = nextStartedAt;
           next.askWaiting = rc.askWaiting;
+          next.askWaitingSubagentId = rc.askWaitingSubagentId;
           rc = next;
           stream = nextStream;
           cardMsgId = nextId;
           curCardKey = nextId;
           rc.cardKey = nextId;
+          state.runCard = rc;
           runsByCard.set(nextId, state);
           runStreams.set(nextId, stream);
           registerReminder(nextId, rc, stream);
@@ -6769,8 +6790,10 @@ export function createOrchestrator(
         const stopSignal = new Promise<void>((res) => {
           resolveStop = res;
         });
+        let startedTurnId: string | undefined;
+        let awaitingSubagents = false;
         const stopper = createGracefulInterrupt({
-          turnId: () => run.turnId(),
+          turnId: () => run.turnId() ?? (awaitingSubagents ? startedTurnId : undefined),
           abort: (tid) => void opts.thread.abort(tid).catch(() => undefined),
           forceStop: resolveStop,
         });
@@ -6783,7 +6806,7 @@ export function createOrchestrator(
         askTurn = asks.openTurn({ run, sessionKey: activeKey,
           placement: { chatId: opts.chatId, replyTo: currentTurn.seen?.id ?? opts.replyTo, replyInThread: !opts.flat },
           initiator: { kind: currentTurn.requesterKind ?? 'unknown', openId: currentTurn.requesterOpenId }, idlePause,
-          waiting: label => { rc.askWaiting = label; stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID); },
+          waiting: (label, subagentId) => { rc.askWaiting = label; rc.askWaitingSubagentId = subagentId; stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID); },
           fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) originalInterrupt(); },
         });
         const guarded = withIdleTimeout(
@@ -6805,7 +6828,9 @@ export function createOrchestrator(
         let evCount = 0;
         let textChars = 0;
         for await (const ev of cardEvents.consume(guarded)) {
-          if (ev.type === 'ask') { askTurn.enqueue(ev.request); continue; }
+          if (ev.type === 'turn_started') startedTurnId = ev.turnId;
+          if (ev.type === 'awaiting_subagents') awaitingSubagents = true;
+          if (ev.type === 'ask') { askTurn.enqueue(ev.request, ev.subagentId ? { subagentId: ev.subagentId, name: render.snapshot().subagents.find(row => row.id === ev.subagentId)?.name } : undefined); continue; }
           if (ev.type === 'ask_cancelled') { askTurn.cancel(ev.requestId); continue; }
           if (ev.type === 'done' || (ev.type === 'error' && !ev.willRetry)) askTurn.close('turn-ended');
           if (ev.type === 'steer_accepted') {
@@ -6861,7 +6886,7 @@ export function createOrchestrator(
           // Non-blocking: never stall event consumption on a round-trip. The pump
           // coalesces and routes the latest snapshot — answer text → element
           // typewriter (cardElement.content), structure → whole-card update.
-          stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID);
+          if (ev.type !== 'subagent_step') stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID);
         }
         askTurn.close('turn-ended');
         clearInterval(cardClock);
@@ -6869,6 +6894,7 @@ export function createOrchestrator(
         state.steerReply = undefined;
         state.idlePause = undefined;
         state.subagents = undefined;
+        state.runCard = undefined;
         state.run = undefined; // completion-card I/O must queue, never steer into a finished turn
         const doneAt = Date.now(); // codex stopped emitting / loop ended
         stopper.dispose(); // 事件流已收尾：撤掉 ⏹ 的 5s 强停兜底定时器
@@ -7101,6 +7127,7 @@ export function createOrchestrator(
       dropCompact(state);
       disposeInterrupt?.();
       state.subagents = undefined;
+      state.runCard = undefined;
       state.run = undefined;
       state.interrupt = undefined;
       // A stream/card failure can leave an agent turn running. Retire that
@@ -7261,6 +7288,10 @@ export function createOrchestrator(
     // sent LAZILY on first content, so a planning-only turn leaves no empty box.
     type GoalTurnCtx = { render: RunRender; rc: RunCardState; stream: RunCardStream | null; cardMsgId: string | null; clock?: ReturnType<typeof setInterval> };
     let cur: GoalTurnCtx | null = null;
+    const finalized: { last?: GoalTurnCtx } = {};
+    let carried: SubagentRow[] = [];
+    const knownSubagents = new Map<string, SubagentRow>();
+    state.subagents = () => cur?.render.snapshot().subagents ?? carried;
     let replyTo = opts.replyTo;
     let replyInThread = opts.flat ? false : (opts.replyInThread ?? Boolean(opts.knownThreadId));
 
@@ -7301,15 +7332,18 @@ export function createOrchestrator(
 
     /** Finalize a turn's card (terminal render). No-op for a render-only turn that
      * never produced content (no card was sent) — that's how empty turns vanish. */
-    const finalizeCard = async (ctx: GoalTurnCtx | null): Promise<void> => {
-      if (!ctx || !ctx.stream || !ctx.cardMsgId) return;
+    const finalizeCard = async (ctx: GoalTurnCtx | null, continues = false): Promise<void> => {
+      if (!ctx) return;
+      carried = ctx.render.snapshot().subagents.filter(row => row.status === 'running');
+      ctx.rc.subagentsCarried = continues && carried.length ? true : undefined;
+      if (!ctx.stream || !ctx.cardMsgId) return;
       clearInterval(ctx.clock);
       ctx.clock = undefined;
       await ctx.stream.drain();
       const subagents = ctx.render.snapshot().subagents;
       ctx.render.finalize();
-      logSubagentChanges(subagents, ctx.render.snapshot().subagents);
-      ctx.rc.rs = ctx.render.snapshot();
+      ctx.rc.rs = { ...ctx.render.snapshot(), subagents };
+      logSubagentChanges(subagents, ctx.rc.rs.subagents);
       const answerText = finalMessageText(ctx.rc.rs);
       ctx.rc.localFiles = await outboundFiles.prepare(answerText, {
         messageId: ctx.cardMsgId, chatId: opts.chatId, cwd: runCwd,
@@ -7320,12 +7354,13 @@ export function createOrchestrator(
       await ctx.stream.updateCard(channel, buildRunCard(ctx.rc));
       runsByCard.delete(ctx.cardMsgId);
       promoteCard(ctx.cardMsgId, ctx.rc);
+      finalized.last = ctx;
     };
 
     /** Begin a turn's render context WITHOUT sending a card yet. */
     const startTurn = (): GoalTurnCtx => {
       const render = new RunRender();
-      state.subagents = () => render.snapshot().subagents;
+      render.seedSubagents(carried);
       render.seedUsage(topicThreadId ? lastUsage.get(topicThreadId) : undefined);
       render.showTools = getShowToolCalls(cfg);
       const goalModelDisp = getModelDisplay(cfg);
@@ -7354,8 +7389,10 @@ export function createOrchestrator(
         upload: (sources) => uploadOutboundImages(channel, sources, runCwd, opts.mode ?? DEFAULT_PERMISSION_MODE, opts.network ?? false),
       });
       ctx.rc.askWaiting = askWaiting;
+      ctx.rc.askWaitingSubagentId = askWaitingSubagentId;
       const cardMsgId = await stream.create(channel, opts.chatId, buildRunCard(ctx.rc), { replyTo, replyInThread });
       ctx.rc.cardKey = cardMsgId;
+      state.runCard = ctx.rc;
       ctx.stream = stream;
       ctx.cardMsgId = cardMsgId;
       opts.sessionNotice = undefined; // shown; a turn without a card keeps it for the next
@@ -7374,6 +7411,7 @@ export function createOrchestrator(
 
     let askTurn: AskTurn | undefined;
     let askWaiting: string | undefined;
+    let askWaitingSubagentId: string | undefined;
     const askPlacement = { chatId: opts.chatId, replyTo: opts.replyTo, replyInThread: !opts.flat };
     let lastStatus = 'active';
     let goalTokens = 0;
@@ -7442,7 +7480,7 @@ export function createOrchestrator(
       for await (const ev of guarded) {
         if (ev.type === 'ask_cancelled') { askTurn?.cancel(ev.requestId); continue; }
         if (ev.type === 'ask') {
-          if (askTurn) askTurn.enqueue(ev.request);
+          if (askTurn) askTurn.enqueue(ev.request, ev.subagentId ? { subagentId: ev.subagentId, name: (cur?.render.snapshot().subagents ?? carried).find(row => row.id === ev.subagentId)?.name } : undefined);
           else { asks.unavailable(run, ev.request, error => log.fail('agent', error)); originalInterrupt(); }
           continue;
         }
@@ -7475,7 +7513,7 @@ export function createOrchestrator(
           // started the goal's first turn. Generate in parallel from here.
           beginGoalSessionTitle();
           if (topicThreadId) requestGoalSessionTitleApply();
-          await finalizeCard(cur); // close the previous turn's card (if it produced one)
+          await finalizeCard(cur, true); // close the previous turn's card (if it produced one)
           cur = startTurn(); // existing topics still send the card lazily on first content
           if (activeKey.startsWith('pending:')) {
             // A new goal needs a real topic before its first ask can accept text.
@@ -7486,7 +7524,7 @@ export function createOrchestrator(
           }
           askTurn = asks.openTurn({ run, sessionKey: activeKey, placement: askPlacement,
             initiator: { kind: opts.requesterKind ?? 'unknown', openId: opts.requesterOpenId }, idlePause,
-            waiting: label => { askWaiting = label; if (cur) { cur.rc.askWaiting = label; if (cur.stream) cur.stream.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID); } },
+            waiting: (label, subagentId) => { askWaiting = label; askWaitingSubagentId = subagentId; if (cur) { cur.rc.askWaiting = label; cur.rc.askWaitingSubagentId = subagentId; if (cur.stream) cur.stream.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID); } },
             fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) originalInterrupt(); },
           });
           continue;
@@ -7500,10 +7538,10 @@ export function createOrchestrator(
           // after the loop, preempts the final turn's done).
           if (cur) {
             cur.render.apply(ev);
-            await finalizeCard(cur);
+            await finalizeCard(cur, !goalEnded);
             cur = null;
           }
-          state.subagents = undefined;
+          state.subagents = () => cur?.render.snapshot().subagents ?? carried;
           // 🎯 结束目标: the goal was cleared mid-turn; that turn is now done and
           // codex won't auto-continue, so stop here (codex emits no terminal we'd
           // otherwise wait on — goal/cleared is ignored by the event map).
@@ -7517,11 +7555,18 @@ export function createOrchestrator(
           if (!cur) continue; // set-failure before any turn → terminal card only
         }
         if (ev.type === 'subagent_start' || ev.type === 'subagent_step' || ev.type === 'subagent_status') {
+          const known = knownSubagents.get(ev.id);
+          if (known && ev.type !== 'subagent_start') {
+            if (cur) cur.render.restoreSubagent(known);
+            else if (!carried.some(row => row.id === ev.id)) carried = [...carried, known];
+          }
           if (cur) {
             const subagents = cur.render.snapshot().subagents;
             cur.render.apply(ev);
             logSubagentChanges(subagents, cur.render.snapshot().subagents);
-          }
+            cur.rc.rs = cur.render.snapshot();
+          } else carried = reduce({ ...initialState, subagents: carried }, ev).subagents;
+          for (const row of cur?.render.snapshot().subagents ?? carried) knownSubagents.set(row.id, row);
           continue;
         }
         if (!cur) cur = startTurn();
@@ -7552,6 +7597,12 @@ export function createOrchestrator(
         logSubagentChanges(subagents, cur.render.snapshot().subagents);
       }
       await finalizeCard(cur);
+      if (!cur && finalized.last && carried.length) {
+        const rs = { ...finalized.last.rc.rs, subagents: [...finalized.last.rc.rs.subagents.filter(row => !carried.some(latest => latest.id === row.id)), ...carried] };
+        finalized.last.rc.rs = interrupted ? markInterrupted(rs) : rs;
+        finalized.last.rc.subagentsCarried = undefined;
+        await finalized.last.stream?.updateCard(channel, buildRunCard(finalized.last.rc));
+      }
       cur = null;
       // Covers a goal that produced no content card (and therefore never called
       // ensureCard) plus Claude's post-result native-session timing.
@@ -7607,6 +7658,7 @@ export function createOrchestrator(
     } finally {
       askTurn?.close('turn-ended');
       state.idlePause = undefined;
+      state.runCard = undefined;
       state.run = undefined;
       state.subagents = undefined;
       clearInterval(cur?.clock);

@@ -378,3 +378,19 @@ it('retires queued asks too when provider completion wins before the next promot
   expect(f.create).toHaveBeenCalledOnce(); expect(f.response).not.toHaveBeenCalled();
   expect(f.pause.held).toBe(false); turn.close('turn-ended');
 });
+
+
+it('queues parent then child, keeps origin after timeout and clears the waiting child identity', async () => {
+  vi.useFakeTimers(); const f = fixture(); const turn = f.open();
+  turn.enqueue(ask('parent')); turn.enqueue(ask('child'), { subagentId: 's1', name: 'reviewer' });
+  await flush(); expect(f.create).toHaveBeenCalledTimes(1);
+  expect(f.waiting).toHaveBeenLastCalledWith(expect.any(String), undefined);
+  expect(f.submit('parent')).toBe('accepted'); await flush();
+  expect(f.waiting).toHaveBeenLastCalledWith(expect.any(String), 's1');
+  expect(JSON.stringify(f.create.mock.calls[1])).toContain('子 agent reviewer 问：');
+  await vi.advanceTimersByTimeAsync(15 * 60_000);
+  expect(JSON.stringify(f.update.mock.calls)).toContain('子 agent reviewer 问：');
+  expect(f.waiting).toHaveBeenLastCalledWith(undefined, undefined);
+  expect(f.response).toHaveBeenLastCalledWith('child', { kind: 'unanswered', reason: 'timeout' });
+  turn.close('turn-ended');
+});

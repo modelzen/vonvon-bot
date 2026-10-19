@@ -248,6 +248,9 @@ describe('Codex inbound requests over the real app-server transport', () => {
       expect(entry.request).toMatchObject({ title: 'Codex 需要你回答', questions: [{ selection: 'text', sensitive: false }] });
       await scope.respond(entry.request.id);
     }
+    const foreign = (await stream.next()).value;
+    if (!foreign || 'method' in foreign || foreign.kind !== 'request') throw new Error('Expected foreign request');
+    expect(scope.accepts(foreign, 'turn')).toBe(false);
     await vi.waitFor(() => expect(f.replies()).toHaveLength(6));
     expect(f.replies().map(reply => (reply as { id: string }).id).sort()).toEqual(['bad', 'duplicate', 'empty', 'foreign', 'null', 'secret']);
     for (const reply of f.replies()) expect(reply).toMatchObject({ result: { answers: {} } });

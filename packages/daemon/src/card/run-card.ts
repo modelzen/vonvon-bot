@@ -19,6 +19,7 @@ import { fileComponentCount, renderFileAnswer, type InlineFiles } from './inline
 import { hasMarkdownTable, renderReport } from './report-render';
 import { StreamingImages } from './outbound-images';
 import type { RunCardStream } from './run-card-stream';
+import { buildSubagentSection } from './subagent-section';
 import { processPanel } from './process-panel';
 import { buildProcessBody, currentAnswerIndex, processTitle, runElapsedMs } from './run-process';
 import { runCardMeter } from './context-gauge';
@@ -27,6 +28,7 @@ import { runCardMeter } from './context-gauge';
 export const RC = {
   stop: 'run.stop',
   stopSub: 'run.stopSub',
+  subPage: 'run.subPage',
   /** manual completion-reminder mode: notify this turn's requester when it ends. */
   remind: 'run.remind',
   /** goal-only: clear the goal but let the in-flight turn finish (no auto-continue). */
@@ -103,6 +105,9 @@ function stopControl(cardKey: string, presentation: StopControlPresentation): Ca
 /** Routing + render inputs for one run card. */
 export interface RunCardState {
   askWaiting?: string;
+  askWaitingSubagentId?: string;
+  subagentsCarried?: true;
+  subagentPage?: number;
   rs: RunState;
   /** This display segment ended because an accepted steer opened a new card. */
   continued?: boolean;
@@ -234,17 +239,32 @@ function runTypography(element: CardElement): CardElement {
 /** The ordered process stays above the current answer. Only the trailing text
  * item streams through ANSWER_EID; earlier progress text remains in the process.
  * Controls stay at the bottom and preserve their stable routing element id. */
+// Process budgeting also counts each panel's header markdown and icon.
+function sectionPanelOverhead(elements: CardElement[]): number {
+  return elements.reduce((n, el) => n + (el.tag === 'collapsible_panel' ? 2 : 0)
+    + (Array.isArray(el.elements) ? sectionPanelOverhead(el.elements) : 0), 0);
+}
+
+function subagentSection(state: RunState, rc: RunCardState) {
+  if (rc.continued) return { elements: state.subagents.length ? [noteMd(`子 agent（${state.subagents.length} 个）接着显示在下一张卡`)] : [], components: state.subagents.length ? 1 : 0 };
+  return buildSubagentSection({ rows: state.subagents, running: state.terminal === 'running', terminal: state.terminal,
+    cardKey: state.terminal === 'running' ? rc.cardKey : undefined, carried: rc.subagentsCarried, page: rc.subagentPage,
+    waiting: rc.askWaiting && rc.askWaitingSubagentId ? { subagentId: rc.askWaitingSubagentId, label: rc.askWaiting } : undefined });
+}
+
 function renderRunning(state: RunState, rc: RunCardState): CardElement[] {
+  const section = subagentSection(state, rc);
   // The context meter heads every run card (s12), running and terminal.
   const elements: CardElement[] = [runCardMeter(state.usage)];
   if (rc.sessionNotice) elements.push(noteMd(rc.sessionNotice));
 
   const answerIdx = currentAnswerIndex(state.blocks);
   const processBlocks = state.blocks.filter((b, i) => i !== answerIdx && (rc.showTools !== false || b.kind !== 'tool'));
-  const process = buildProcessBody(processBlocks, rc.images, PROCESS_COMPONENT_BUDGET, true);
+  const process = buildProcessBody(processBlocks, rc.images, PROCESS_COMPONENT_BUDGET - section.components - sectionPanelOverhead(section.elements), true);
   const title = processTitle(state.terminal, runElapsedMs(state));
   if (process.length) elements.push(processPanel(title, process, true));
   else if (state.startedAt !== undefined) elements.push(md(`<font color='grey'>${title}</font>`));
+  elements.push(...section.elements);
   const answer = answerIdx >= 0 ? (state.blocks[answerIdx] as Extract<Block, { kind: 'text' }>).content : '';
   if (answer) {
     elements.push(...renderRichText(answer, rc.images, { streamTailId: ANSWER_EID, live: true }));
@@ -254,6 +274,7 @@ function renderRunning(state: RunState, rc: RunCardState): CardElement[] {
   // 显示模型 pref is on; either alone falls back to a single line.
   const mEl = modelEl(rc);
   if (rc.askWaiting) elements.push(md(rc.askWaiting));
+  else if (state.awaitingSubagents) elements.push(md(`⏳ 主回合已答完，等 ${state.subagents.filter(row => row.status === 'running').length} 个子 agent 结束`));
   else if (state.footer && mEl) elements.push(splitRow(footerStatus(state.footer), mEl));
   else if (state.footer) elements.push(footerStatus(state.footer));
   else if (mEl) elements.push(mEl);
@@ -308,6 +329,7 @@ function renderRunning(state: RunState, rc: RunCardState): CardElement[] {
  * a partial answer (if any text streamed) stays visible above the note.
  */
 function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
+  const section = subagentSection(state, rc);
   const elements: CardElement[] = [runCardMeter(state.usage)];
   if (rc.sessionNotice) elements.push(noteMd(rc.sessionNotice));
 
@@ -322,10 +344,12 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
   const blocks = rc.showTools === false ? processBlocks.filter((b) => b.kind !== 'tool') : processBlocks;
   const processBudget = rc.localFiles?.links.length
     ? Math.max(10, Math.min(PROCESS_COMPONENT_BUDGET, 170 - fileComponentCount(answerElements))) : PROCESS_COMPONENT_BUDGET;
-  const processEls = buildProcessBody(blocks, rc.images, processBudget);
+  const processEls = buildProcessBody(blocks, rc.images, Math.max(10, processBudget - section.components - sectionPanelOverhead(section.elements)));
   const title = processTitle(state.terminal, runElapsedMs(state));
   if (processEls.length) elements.push(processPanel(title, processEls, false));
   else if (state.startedAt !== undefined) elements.push(md(`<font color='grey'>${title}</font>`));
+
+  elements.push(...section.elements);
 
   // Terminal answer. A reply that TABLES its data goes through the report
   // renderer: card markdown has no tables, so `| a | b |` would otherwise show up

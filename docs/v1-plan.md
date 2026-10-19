@@ -1141,9 +1141,11 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s34b 做法（#435）：Codex 的 `stopSubagent` 只对子线程当前回合发一条 `turn/interrupt`，Claude 普通回合和目标模式均保留当前 Query 调 `stopTask`，结束清句柄；退出、清除、关闭或被新回合替换后拒绝旧句柄。拒绝文案为“这个子 agent 已经结束”“这个子 agent 还没开始回合”“这个任务不支持单独停止子 agent”，SDK 错误以“停止子 agent 失败：”开头；旧 runId 回“原任务已经结束，请刷新”。`RC.stopSub` 沿用群许可、发起人或管理员、失效卡自愈三道门。当前运行的子行由 `RunRender` 快照读取，正常、异常与目标回合收口时清理；`context.run.subagents` 只给 id、name、task、status、stoppable，RPC 的 `contextResult` 同步声明，避免 Zod 丢掉字段。网页端按行单停，运行中每 3 秒重拉 context。
 - s34b 自测（JP-VPS）：用户自己的 Codex 配置能开两个子 agent；真实 RPC 单停第一条后是 stopped，第二条与父回合仍 running，第二条随后 completed，父卡正常 done，汇总提到有一条未完成；对 completed 子行再停，直接客户端收到 conflict 和“这个子 agent 已经结束”（网页包装成 refused）。Claude 两个前台子任务也验到 stopped/running，另一条完成、父卡 done。未读改用户 Codex 配置，未切隔离 CODEX_HOME；两群权限已恢复。构建、全工作区 typecheck/lint、9 文件 161 条定向测试通过；面板真浏览器外观留给 s35 的 Mac 检查和 M6 验收。
 - s34a 探测：隔离登录的 Codex 0.156.1 默认模型为 `gpt-6-astra`，model info 为 multi-agent v2；features list 是 `multi_agent=true`、`multi_agent_v2=false`。spawn 实际是 `subAgentActivity`，没有子 `thread/started`，子 `item/*`、`turn/*` 与父线程走同一连接。`collabAgentToolCall` 只见 wait，其 receiver 列表在 started 与 completed 都为空；父 interrupt 后子仍 active，需独立发停止请求。实现兼容生成类型的 `subAgent` 与旧的 `subagent` 来源拼法，不替用户改开关。
+- s35 做法：Claude 新建、续接会话强制前台变量，辅助查询仍继承环境。Codex 普通回合由程序延迟 done，父先完成时清插话 turnId、等待运行子行，整停只中断仍运行的子；目标模式不等，跨轮保存运行行和已知身份，复用已完成子任务时恢复行。子提问按父、子线程和当前回合校验，子终态取消其待答；Claude 从 SDK agentID 透传来源。卡区完整显示 8 行、溢出运行行每页 24 个，面板和按钮身份稳定，步骤跟每秒时钟刷新，父过程预算同步扣减。单停竞争静默，旧卡只删许可按钮；分页保留群权限门。关闭顺序不变。
+- s35 前置实测：准确开工 main 为 eaa7eac，环境变量最小改动为 756f36f。full 档两个前台子任务运行后 RPC 整停，卡 4.22 秒进入 interrupted，日志 graceful true，30 秒后记录的本次子命令无残留。初轮因 CLI 显示名选择器错误，实际用了原 qa 档，已在 full 档重测，qa 初轮不作为前置通过依据。Monitor 通过 ToolSearch 加载并返回 started，但没有三次 tick 输出或后续卡。Mac 网页面板外观由后续 #322 检查；飞书面板展开保持、真实按钮点击仍待 M6 owner。
 - s34a 自测（JP-VPS）：Codex 的用户配置下能开子 agent，30 秒空闲阈值下子任务连续执行六次 sleep 8，日志 start → completed、最近 5 步，父卡 done，无 idle_timeout。经 RPC stop 整轮后子状态 stopped、卡片已停止；首次实测父终态先到，补了运行状态收口日志，最终源码复验通过。Claude 两个前台 Agent 均 start → completed，主过程只有两条子任务工具行，没有子步骤的 Read/Grep/Glob。未改用户 Codex 配置，也未切隔离 CODEX_HOME；原阈值和两个群权限均恢复。构建、全工作区 typecheck/lint、8 文件 137 条定向测试通过。卡片 ⏹ 的实际回调留给 M6 owner 验收。
 - s34a 复查（任务 51）：补回通知空值保护，已完成子线程可续跑，sendInput/resumeAgent 可补登记，迟到的子回合会补停；目标轮次之间的子事件不建空卡，旧 complete 快照不影响新回合总结，日志按实际状态变化记录。原空值、A 续跑和迟到补停先复现失败，新增 65 活跃子的用例先复现少发一条中断，修后 10 文件 204 条通过；构建、全工作区 typecheck/lint 通过。隔离 CODEX_HOME 的真实子 agent 经 RPC stop 后日志 stopped、卡片已停止；原阈值与群权限已恢复，正常重启后 daemon 和三个 bot 的 CODEX_HOME 计数均为 0。
-- s35：e01 测过，变量有效，不做备选，前提是开工时补测的 ⏹ 没问题。运行卡在这一轮唯一的 result 到达时收尾，子 agent 区用 task_* 消息和 `parent_tool_use_id`（e02 第 4 节）。开工时补测两件事：前台子 agent 跑着时按 ⏹ 多久能停下；设了变量后 Monitor 还能不能用。
+- s35：e01 测过，变量有效，不做备选，前提是开工时补测的 ⏹ 没问题。运行卡在这一轮唯一的 result 到达时收尾，子 agent 区用 task_* 消息和 `parent_tool_use_id`（e02 第 4 节）。开工时补测两件事：前台子 agent 跑着时按 ⏹ 多久能停下；设了变量后 Monitor 还能不能用。任务 97 的前置实测：full 档整停 4.22 秒收卡、graceful true，30 秒后本次子命令无残留；Monitor 可启动，但三次 tick 输出没验到。
 
 - s33–35：扩展既有原生协议夹具，断流、静默流取消、迟到事件、父子交错、待答与停止均走实际 transport/coordinator/reducer/假卡片出口；检查全部预期事件被消费。s35 保留最近 5 步和省略计数、稳定子身份及异常终态，不重写父过程预算策略。
 
@@ -1453,6 +1455,10 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 
 | 项 | 默认值 | 理由 | 用在 |
 |---|---|---|---|
+| 子 agent 区完整行和分页 | 完整显示 8 行，待答优先；其余运行行每页 24 行，子区最多 84 个组件，并从父过程预算扣减 | 不截掉运行身份；plain 和终态卡列出全部运行身份，失败、停止逐行，完成只计数 | s35 |
+| 子 agent 步骤刷新 | 跟每秒卡片时钟合并；开始、终态即时推送 | 不为每一步额外占群里所有 Bot 共用的飞书限额 | s35 |
+| Codex 等子 agent 时的新消息 | 同一会话排队，前卡收尾后运行 | 父回合已结束，没有可插话的回合 | s35 |
+| 卡收尾时仍未报结束的子 agent | 写"没收到结束消息" | 不隐去身份，也不把未结束说成完成 | s35 |
 | Claude 权限判定期限 | 5 秒未完成按拒绝 | 文件系统或外部判定挂起也不能放行 | s31 |
 | Claude 方案卡长度 | 2,000 字后加截断说明 | 完整方案仍在运行卡 | s31 |
 | Claude 权限卡动作长度 | 500 字 | 避免单张卡过长 | s31 |

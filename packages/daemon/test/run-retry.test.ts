@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
-import type { AgentEvent, AgentInput } from '../src/agent/types';
+import type { AgentEvent, AgentInput, AgentRun } from '../src/agent/types';
 
 // Same harness shape as message-queue-races: real orchestrator, faked backend,
 // card stream and stores.
 const fake = vi.hoisted(() => ({
   backend: { capabilities: { steer: true }, id: 'codex', listModels: vi.fn(async () => []), resumeThread: vi.fn(), startThread: vi.fn() },
   live: vi.fn(),
+  deleteElement: vi.fn(async (..._args: unknown[]) => ({})),
   final: vi.fn(async (..._args: unknown[]) => true),
   createCard: vi.fn(async (..._args: unknown[]) => 'card'),
   send: vi.fn(async (..._args: unknown[]) => ({})),
@@ -84,7 +85,7 @@ function fakeThread(play: (id: string, n: number) => AsyncIterable<AgentEvent>) 
   const t = {
     sessionId: 'host', isAlive: vi.fn(() => true),
     close: vi.fn(async () => undefined), abort: vi.fn(async () => undefined), steer: vi.fn(async () => undefined),
-    runStreamed(input: AgentInput) {
+    runStreamed(input: AgentInput): AgentRun {
       const n = consumed.push(input);
       const id = `turn-${n}`;
       return { turnId: () => id, events: (async function* (): AsyncGenerator<AgentEvent> {
@@ -127,7 +128,7 @@ function message(text: string): NormalizedMessage {
 function setup(thread?: unknown, allowedChats = ['chat']) {
   if (thread) fake.backend.resumeThread.mockResolvedValue(thread);
   const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['admin'], allowedChats } } };
-  const channel = { send: fake.send, getChatInfo: async () => ({ name: 'Test', chatType: 'group' }), rawClient: { im: { v1: { chat: { get: async () => ({ data: { chat_mode: 'group' } }) }, chatMembers: { isInChat: async () => ({ code: 0, data: { is_in_chat: true } }) }, message: { get: async () => ({ data: { items: [{ thread_id: 'topic' }] } }) }, messageReaction: {
+  const channel = { send: fake.send, getChatInfo: async () => ({ name: 'Test', chatType: 'group' }), rawClient: { cardkit: { v1: { cardElement: { delete: fake.deleteElement } } }, im: { v1: { chat: { get: async () => ({ data: { chat_mode: 'group' } }) }, chatMembers: { isInChat: async () => ({ code: 0, data: { is_in_chat: true } }) }, message: { get: async () => ({ data: { items: [{ thread_id: 'topic', body: { content: JSON.stringify({ type: 'card', data: { card_id: 'orphan-entity' } }) } }] } }) }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
   orchestrator = createOrchestrator(channel as never, cfg, '/test');
@@ -633,4 +634,110 @@ describe('unbound group hints', () => {
     await o.onMessage(unboundMessage('二'));
     expect(fake.send).toHaveBeenCalledTimes(2);
   });
+});
+
+
+describe('s35 child lifecycle at the orchestrator boundary', () => {
+  const child: AgentEvent = { type: 'subagent_start', id: 'child', name: 'reviewer', task: 'Inspect', stoppable: true };
+  const click = (a: string, value: object = {}, chatId = 'chat', openId = 'owner', m = 'card-1') => orchestrator.dispatcher.handle({
+    messageId: m, chatId, operator: { openId }, action: { value: { a, m, ...value } },
+  } as never);
+
+  it.each([false, true])('warns on single-stop refusal only while the row is running: terminal=%s', async terminal => {
+    let finish!: () => void; const held = new Promise<void>(r => { finish = r; });
+    const run = fakeThread(async function* (id) { yield child; if (terminal) yield { type: 'subagent_status', id: 'child', status: 'completed' }; await held; yield { type: 'done', turnId: id }; });
+    const original = run.t.runStreamed.bind(run.t);
+    run.t.runStreamed = input => ({ ...original(input), stopSubagent: async () => { throw Error('stop refused'); } });
+    const o = setup(run.t); await o.onMessage(message('Work'));
+    await until(() => expect(JSON.stringify(fake.live.mock.calls)).toContain(terminal ? '已完成' : 'reviewer'));
+    await click('run.stopSub', { subagentId: 'child' }); await sleep(20);
+    expect(replied('stop refused')).toBe(!terminal); finish(); await until(() => expect(finals('done')).toHaveLength(1));
+  });
+
+  it('heals each valid stale child/page button once and ignores forged element identities', async () => {
+    setup(); fake.deleteElement.mockRejectedValueOnce(new Error('controls already removed'));
+    for (const e of ['sb_0123456789ab', 'sb_abcdef012345', 'sb_x', 'so_0123456789ab']) await click('run.stopSub', { e, subagentId: 'child' }, 'chat', 'owner', 'orphan');
+    await click('run.subPage', {}, 'chat', 'owner', 'orphan');
+    await until(() => expect(fake.deleteElement).toHaveBeenCalledTimes(7));
+    const ids = fake.deleteElement.mock.calls.map(call => z.object({ path: z.object({ element_id: z.string() }) }).parse(call[0]).path.element_id);
+    expect(ids.filter(id => id.startsWith('sb_'))).toEqual(['sb_0123456789ab', 'sb_abcdef012345']); expect(ids).toContain('sp_next');
+    await click('run.stopSub', { e: 'sb_0123456789ab', subagentId: 'child' }, 'chat', 'owner', 'orphan');
+    expect(fake.deleteElement).toHaveBeenCalledTimes(7);
+  });
+
+  it('accepts paging for allowed members, rejects illegal pages and never bypasses the chat gate', async () => {
+    const o = setup(silentThread().t); await o.onMessage(message('Work')); await until(() => expect(fake.live).toHaveBeenCalled());
+    fake.live.mockClear();
+    await click('run.subPage', { p: 1 }, 'chat', 'other'); expect(fake.live).toHaveBeenCalledTimes(1);
+    for (const p of [-1, 'x', 1.5]) await click('run.subPage', { p });
+    await click('run.subPage', { p: 2 }, 'blocked-chat'); expect(fake.live).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])('queues new input or gracefully stops while waiting for children: stop=%s', async stop => {
+    let finish!: () => void; const held = new Promise<void>(r => { finish = r; }); let waiting = false;
+    const run = fakeThread(async function* (id, n) { if (n === 1) { yield child; waiting = true; yield { type: 'awaiting_subagents' }; await held; yield { type: 'subagent_status', id: 'child', status: stop ? 'stopped' : 'completed' }; } yield { type: 'done', turnId: id }; });
+    const original = run.t.runStreamed.bind(run.t); run.t.runStreamed = input => ({ ...original(input), turnId: () => waiting ? undefined : 'turn-1' });
+    run.t.abort.mockImplementation(async () => { finish(); });
+    const o = setup(run.t); await o.onMessage(message('Work')); await until(() => expect(JSON.stringify(fake.live.mock.calls)).toContain('等 1 个子 agent'));
+    if (stop) { await click('run.stop'); await until(() => expect(finals('interrupted')).toHaveLength(1)); expect(run.t.abort).toHaveBeenCalledExactlyOnceWith('turn-1'); expect(run.t.close).not.toHaveBeenCalled(); }
+    else { await o.onMessage(message('Next')); expect(run.consumed).toHaveLength(1); expect(run.t.steer).not.toHaveBeenCalled(); finish(); await until(() => expect(run.consumed).toHaveLength(2)); }
+  });
+
+  it('merges twenty child steps into the next clock frame instead of pushing twenty cards', async () => {
+    let steps!: () => void; const gate = new Promise<void>(r => { steps = r; }); let finish!: () => void; const held = new Promise<void>(r => { finish = r; }); let delivered = false;
+    const run = fakeThread(async function* (id) { yield child; await gate; for (let n = 0; n < 20; n++) yield { type: 'subagent_step', id: 'child', stepId: String(n), title: 'step', status: 'running' }; delivered = true; await held; yield { type: 'done', turnId: id }; });
+    vi.useFakeTimers();
+    try {
+    const o = setup(run.t); await o.onMessage(message('Work')); await until(() => expect(JSON.stringify(fake.live.mock.calls)).toContain('reviewer'));
+    const count = fake.live.mock.calls.length; steps(); await until(() => expect(delivered).toBe(true)); expect(fake.live).toHaveBeenCalledTimes(count); finish(); await until(() => expect(finals('done')).toHaveLength(1));
+    } finally { finish(); vi.useRealTimers(); }
+  });
+
+  it('keeps child origin and waiting identity even when parent card pushes fail', async () => {
+    fake.live.mockImplementation(() => false); let finish!: () => void; const held = new Promise<void>(r => { finish = r; });
+    const request = { kind: 'confirmation', id: 'q', title: 'Proceed?', detail: '', acceptedConsequence: 'Continue', declinedConsequence: 'Stop' } as const;
+    const run = fakeThread(async function* (id) { yield child; yield { type: 'ask', request, subagentId: 'child' }; await held; yield { type: 'done', turnId: id }; });
+    const original = run.t.runStreamed.bind(run.t); run.t.runStreamed = input => ({ ...original(input), respondToAsk: async () => {} });
+    const o = setup(run.t); await o.onMessage(message('Work')); await until(() => expect(fake.managed).toHaveBeenCalled());
+    expect(JSON.stringify(fake.managed.mock.calls)).toContain('子 agent reviewer 问：'); expect(JSON.stringify(fake.live.mock.calls)).toContain('回答（见下方卡片）'); finish(); await until(() => expect(finals('done')).toHaveLength(1));
+  });
+
+  it('carries a live row across goal turns and retains a step between them without an empty card', async () => {
+    let next!: () => void; const gap = new Promise<void>(r => { next = r; });
+    const goal = Object.assign(scriptedThread([]).t, { clearGoal: vi.fn(async () => {}), runGoal: () => ({ turnId: () => 'g', events: (async function* (): AsyncGenerator<AgentEvent> {
+      yield { type: 'turn_started', turnId: 'g1' }; yield child; yield { type: 'text_delta', itemId: 'a', delta: 'first' }; yield { type: 'done', turnId: 'g1' };
+      yield { type: 'subagent_step', id: 'child', stepId: 'gap', title: 'between turns', status: 'running' }; await gap;
+      yield { type: 'turn_started', turnId: 'g2' }; yield { type: 'text_delta', itemId: 'b', delta: 'second' }; yield { type: 'subagent_status', id: 'child', status: 'completed' }; yield { type: 'done', turnId: 'g2' };
+      yield { type: 'goal_update', status: 'complete', objective: 'Work', tokensUsed: 1, timeUsedSeconds: 1, tokenBudget: null };
+    })() }) });
+    const o = setup(goal); await o.onMessage(message('/goal Work')); await until(() => expect(finalCards().join()).toContain('接着显示在下一张卡'));
+    expect(fake.createCard).toHaveBeenCalledTimes(1); next(); await until(() => expect(fake.managed).toHaveBeenCalled());
+    expect(fake.createCard).toHaveBeenCalledTimes(2); expect(finalCards().join()).toContain('between turns'); expect(finalCards().join()).toContain('1 步');
+  });
+});
+
+
+it('restores a completed goal child when reused without another start event', async () => {
+  const goal = Object.assign(scriptedThread([]).t, { clearGoal: vi.fn(async () => {}), runGoal: () => ({ turnId: () => 'g', events: (async function* (): AsyncGenerator<AgentEvent> {
+    yield { type: 'turn_started', turnId: 'g1' }; yield { type: 'subagent_start', id: 'reused', name: 'reused worker', task: 'Inspect', stoppable: true };
+    yield { type: 'subagent_status', id: 'reused', status: 'completed' }; yield { type: 'text_delta', itemId: 'a', delta: 'first' }; yield { type: 'done', turnId: 'g1' };
+    yield { type: 'turn_started', turnId: 'g2' }; yield { type: 'subagent_status', id: 'reused', status: 'running' }; yield { type: 'subagent_step', id: 'reused', stepId: 'reuse', title: 'resumed work', status: 'running' };
+    yield { type: 'text_delta', itemId: 'b', delta: 'second' }; yield { type: 'subagent_status', id: 'reused', status: 'completed' }; yield { type: 'done', turnId: 'g2' };
+    yield { type: 'goal_update', status: 'complete', objective: 'Work', tokensUsed: 1, timeUsedSeconds: 1, tokenBudget: null };
+  })() }) });
+  const o = setup(goal); await o.onMessage(message('/goal Work')); await until(() => expect(fake.managed).toHaveBeenCalled());
+  const resumed = finalCards().find(card => card.includes('resumed work'));
+  expect(resumed).toBeDefined(); expect(resumed).toContain('1 步');
+  expect(JSON.stringify(fake.live.mock.calls)).toContain('"subagentId":"reused"');
+});
+
+it.each([false, true])('keeps the latest between-turn goal child terminal without a new card: completed=%s', async completed => {
+  const goal = Object.assign(scriptedThread([]).t, { clearGoal: vi.fn(async () => {}), runGoal: () => ({ turnId: () => 'g', events: (async function* (): AsyncGenerator<AgentEvent> {
+    yield { type: 'turn_started', turnId: 'g1' }; yield { type: 'subagent_start', id: 'child', name: 'worker', task: 'Inspect', stoppable: true }; yield { type: 'text_delta', itemId: 'a', delta: 'answer' }; yield { type: 'done', turnId: 'g1' };
+    if (completed) yield { type: 'subagent_status', id: 'child', status: 'completed' };
+    yield { type: 'goal_update', status: 'complete', objective: 'Work', tokensUsed: 1, timeUsedSeconds: 1, tokenBudget: null };
+  })() }) });
+  const o = setup(goal); await o.onMessage(message('/goal Work')); await until(() => expect(fake.managed).toHaveBeenCalled());
+  expect(fake.createCard).toHaveBeenCalledTimes(1); expect(finalCards().at(-1)).toContain('worker：Inspect'); expect(finalCards().at(-1)).not.toContain('接着显示在下一张卡');
+  expect(finalCards().at(-1)?.includes('没收到结束消息')).toBe(!completed);
 });

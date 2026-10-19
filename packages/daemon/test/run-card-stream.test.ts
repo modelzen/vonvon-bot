@@ -1,3 +1,7 @@
+import { AskCoordinator } from '../src/bot/ask-coordinator';
+import { createIdlePause } from '../src/bot/watchdog';
+import type { AgentRun } from '../src/agent/types';
+import type { AppConfig } from '../src/config/schema';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RunCardStream } from '../src/card/run-card-stream';
 import { card, md, mdStream } from '../src/card/cards';
@@ -391,4 +395,28 @@ describe('RunCardStream — no bot <at> leaves the run card (s27a0, all fail on 
     expect(ch.updates.at(-1).data).toContain('回答 <at id=\\"ou_h\\">张三</at>');
     expect(ch.updates.map((u: any) => u.data).join('')).not.toContain('ou_b');
   });
+});
+
+
+it('delivers an independent child question while the real running-card pump rejects every update', async () => {
+  const ch = fakeChannel(); let serial = 0;
+  const create = vi.fn(async () => ({ data: { card_id: `card-${++serial}` } }));
+  const update = vi.fn(async () => { throw new Error('fixture running-card update failed'); });
+  const reply = vi.fn(async () => ({ data: { message_id: 'question-carrier' } }));
+  ch.rawClient.cardkit.v1.card.create = create; ch.rawClient.cardkit.v1.card.update = update;
+  ch.rawClient.im.v1.message.reply = reply;
+  const stream = new RunCardStream(); await stream.create(ch, 'failure-chat', card([md('initial')]), {});
+  stream.streamCoalesced(ch, card([md('changed')]), null);
+  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' } } };
+  const run: AgentRun = { turnId: () => 'turn', events: (async function* () {})(), respondToAsk: async () => {} };
+  const asks = new AskCoordinator(ch, cfg, { peek: () => 'Owner' });
+  const turn = asks.openTurn({ run, sessionKey: 'session', placement: { chatId: 'failure-chat', replyTo: 'trigger', replyInThread: true },
+    initiator: { kind: 'user', openId: 'owner' }, idlePause: createIdlePause(),
+    waiting: () => stream.streamCoalesced(ch, card([md('waiting')]), null), fault: error => { throw error; } });
+  try {
+    turn.enqueue({ id: 'child-question', kind: 'confirmation', title: 'Proceed?', detail: '', acceptedConsequence: 'Continue', declinedConsequence: 'Stop' }, { subagentId: 'child', name: 'reviewer' });
+    await stream.drain(); await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+    expect(update).toHaveBeenCalled(); expect(create).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(create.mock.calls[1])).toContain('子 agent reviewer 问：');
+  } finally { turn.close('stopped'); asks.shutdown(); await stream.drain(); }
 });
