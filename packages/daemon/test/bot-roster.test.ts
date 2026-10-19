@@ -83,7 +83,8 @@ describe('bot roster', () => {
 
   it('refresh shares a read in flight, and gives undefined, not the old list, when that read fails', async () => {
     let fail!: (e: Error) => void;
-    const request = vi.fn().mockResolvedValueOnce(body([B8])).mockImplementationOnce(() => new Promise((_, reject) => { fail = reject; }));
+    const request = vi.fn().mockResolvedValueOnce(body([B8])).mockImplementationOnce(() => new Promise((_, reject) => { fail = reject; }))
+      .mockResolvedValueOnce(body([]));
     vi.useFakeTimers();
     const r = roster(request);
     await r.load('oc_1');
@@ -95,6 +96,13 @@ describe('bot roster', () => {
     expect(await fresh).toBeUndefined();
     await loading;
     expect(r.peek('oc_1')?.has('ou_b8')).toBe(true); // the guard keeps the old list
+    // The failure holds the guard's reads off for a minute, as its own failure does; refresh is not held off, and a
+    // success refreshes the guard's list too.
+    await r.load('oc_1');
+    expect(request).toHaveBeenCalledTimes(2);
+    expect([...(await r.refresh('oc_1'))!.keys()]).toEqual(['ou_me']);
+    expect(request).toHaveBeenCalledTimes(3);
+    expect([...r.peek('oc_1')!.keys()]).toEqual(['ou_me']);
     // A read that never answers or is cut by shutdown is a failure too.
     const cut = roster(vi.fn(() => new Promise(() => {})), (_p, fallback) => Promise.resolve(fallback));
     expect(await cut.refresh('oc_1')).toBeUndefined();
