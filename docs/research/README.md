@@ -215,10 +215,10 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 
 | 报告 | 内容 | 说明 |
 |---|---|---|
-| [e03](2026-10-19-mac-spikes/e03.md) | Claude 的只读、读写档换成 `default`、`acceptEdits` 加 macOS 沙箱以后，哪些请求走到 `canUseTool`；关网、开网有没有域名名单、WebFetch、WebSearch；加载和不加载用户设置的差别；今天的 `bypassPermissions` 加沙箱能不能 `curl` 出去、写 `/tmp` | Mac 上在测。用户设置是 owner 的 |
-| [e03b](2026-10-19-mac-spikes/e03b.md) | 只读档用 `denyRead` 加 `allowRead` 限读，bot 目录写不写得进；完全访问档下的 ask、deny 规则；读写档下各根里两家的配置文件挡不挡得住 | Mac 上在测。删除关键目录没实测，只读了代码 |
-| [e04](2026-10-19-mac-spikes/e04.md) | Codex 的只读、读写、关网、完全访问下，会话的 shell 能不能连 127.0.0.1 的 TCP 和 Unix socket，环境变量传不传得进，同版本 Electron 能不能以 node 方式跑，`.git` 只读时能不能 `git commit`，第二个根能不能写 | Mac 上在测。打包版 app 没测，用替身 |
-| [e04b](2026-10-19-mac-spikes/e04b.md) | 同一个探针在 Claude 沙箱里：连本机、环境变量、Electron、git 提交、附加目录能不能写 | Mac 上在测。打包版 app 没测，用替身 |
+| [e03](2026-10-19-mac-spikes/e03.md) | Claude 的只读、读写档换成 `default`、`acceptEdits` 加 macOS 沙箱以后，哪些请求走到 `canUseTool`；关网、开网有没有域名名单、WebFetch、WebSearch；加载和不加载用户设置的差别（没测成）；今天的 `bypassPermissions` 加沙箱能不能 `curl` 出去、写 `/tmp` | 已测。不加载用户设置的对照轮未登录，没测成；用户设置是 owner 的。今天关网档能 `curl` 出去的原因见 e04b |
+| [e03b](2026-10-19-mac-spikes/e03b.md) | 只读档用 `denyRead` 加 `allowRead` 限读，bot 目录写不写得进；完全访问档下的 ask、deny 规则；读写档下各根里两家的配置文件挡不挡得住 | 已测。删除关键目录没实测，只读了代码；硬链接没建成 |
+| [e04](2026-10-19-mac-spikes/e04.md) | Codex 的只读、读写、关网、完全访问下，会话的 shell 能不能连 127.0.0.1 的 TCP 和 Unix socket，环境变量传不传得进，同版本 Electron 能不能以 node 方式跑，`.git` 只读时能不能 `git commit`，第二个根能不能写 | 已测。打包版 app 没测，用替身；受限档 git 先卡在读 `.gitconfig`，没走到 `.git` |
+| [e04b](2026-10-19-mac-spikes/e04b.md) | 同一个探针在 Claude 沙箱里：连本机、环境变量、Electron、git 提交、附加目录能不能写 | 已测。打包版 app 没测，用替身 |
 
 ## 补充
 
