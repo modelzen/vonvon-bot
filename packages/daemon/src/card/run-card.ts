@@ -134,6 +134,8 @@ export interface RunCardState {
   modelOnTerminal?: boolean;
   /** Suppress the stop control for non-goal cards that opt out of stopping. */
   hideStop?: boolean;
+  /** Terminal-only handoff failures, unknown results, or ambiguous names. */
+  handoffNotes?: string[];
   /** Present only in the global `manual` reminder mode. `available` renders the
    * one-shot “完成后提醒我” button; `requested` replaces it with a visible
    * confirmation. Non-manual modes leave this unset and therefore never expose
@@ -354,6 +356,8 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
     elements.push(noteMd('_🔁 已重试，结果见下一张卡片_'));
   }
 
+  for (const line of rc.handoffNotes ?? []) elements.push(greyNote(line));
+
   // 「模型 · 推理强度」footnote, bottom-right — only the always(始终) mode keeps it
   // on the terminal card; running(仅输出时) drops it once the turn ends.
   const mEl = rc.modelOnTerminal ? modelEl(rc) : null;
@@ -479,6 +483,10 @@ const FOOTER_STATUS: Record<Exclude<FooterStatus, null>, { readonly icon: string
   retrying: { icon: 'warning_outlined', text: '瞬断，自动重试中…' },
   streaming: { icon: 'edit_outlined', text: '正在输出' },
 };
+
+function greyNote(text: string): CardElement {
+  return { tag: 'markdown', content: `<font color='grey'>${text}</font>`, text_size: 'notation' };
+}
 
 function footerStatus(status: Exclude<FooterStatus, null>): CardElement {
   const item = FOOTER_STATUS[status];

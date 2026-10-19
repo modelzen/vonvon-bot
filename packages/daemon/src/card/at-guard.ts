@@ -37,6 +37,17 @@ const AT_ATTRS = 512;
 const AT = /<at\b(?=([^>\n]{0,512}))(?:\1(?:>((?:(?!<\/?at\b)[\s\S])*)<\/at\s*>|>|$))?/gi;
 const AT_ID = /\b(?:open_id|user_id|id)\s*=\s*["']?([^"'\s>/]+)/i;
 
+/** Every opening `<at>` tag naming an id, with its full matching range. */
+export function atTags(text: string): { id: string; start: number; end: number }[] {
+  const tags: { id: string; start: number; end: number }[] = [];
+  for (const m of text.matchAll(AT)) {
+    if (m[0].length === 3 || !m[1]?.includes('=')) continue;
+    const id = AT_ID.exec(m[1])?.[1];
+    if (id) tags.push({ id, start: m.index, end: m.index + m[0].length });
+  }
+  return tags;
+}
+
 /** Every opening tag counts: `id=`, `user_id=`, `open_id=`, quoted or not, closed or not, inside code too (Feishu was
  * never tried there; it only changes the look). `bots` undefined: this chat's list is not known. */
 export function neutraliseAts(text: string, bots: ChatBotIds | undefined, keep?: ReadonlySet<string>): string {
