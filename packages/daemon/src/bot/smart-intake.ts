@@ -8,7 +8,7 @@
  * judges only the newest, the others being its context. Verdicts land in arrival order only where it
  * matters: one that puts its message into the place's session lands after every earlier message naming
  * this bot that may go there too landed or was dropped, so the reply to an @ is never woven into another turn's record block
- * first (design H1). Verdicts that skip or open a topic land at once, and nothing waits on an unnamed one.
+ * first (design H1). An aside is judged separately at once, but holds no other landing. Verdicts that skip or open a topic land at once, and nothing waits on an unnamed one.
  */
 
 /** Judgements per group in an hour (product.md 3.4 控制成本, v1-plan 第 5 节). */
@@ -38,6 +38,8 @@ export interface LaneEntry {
   place: string;
   /** It names this bot: judged at once, and later landings into the session wait for it. */
   named: boolean;
+  /** Judged separately at once, without holding later landings: another bot's @ may be skipped. */
+  aside?: true;
 }
 
 export interface LaneDeps<E extends LaneEntry, V> {
@@ -94,8 +96,8 @@ export class SmartLanes<E extends LaneEntry, V> {
     if (verdict) {
       lane.slots.push({ items: [item], seq: item.seq, named: entry.named, ctl: new AbortController(), verdict });
       this.flush(lane);
-    } else if (!entry.named && lane.judging) lane.waiting.push(item);
-    else this.start(lane, [item], entry.named);
+    } else if (!entry.named && !entry.aside && lane.judging) lane.waiting.push(item);
+    else this.start(lane, [item], entry.named, Boolean(entry.aside));
     return true;
   }
 
@@ -153,10 +155,10 @@ export class SmartLanes<E extends LaneEntry, V> {
     this.lanes.clear();
   }
 
-  private start(lane: Lane<E, V>, items: Item<E>[], named: boolean): void {
+  private start(lane: Lane<E, V>, items: Item<E>[], named: boolean, aside: boolean): void {
     const slot: Slot<E, V> = { items, seq: items[items.length - 1]!.seq, named, ctl: new AbortController() };
     lane.slots.push(slot);
-    if (!named) lane.judging = slot;
+    if (!named && !aside) lane.judging = slot;
     const place = items[0]!.entry.place;
     this.deps.track(this.deps.judge(items.map((item) => item.entry), slot.ctl.signal).then((value) => {
       if (!slot.dead) slot.verdict = { value };
@@ -178,7 +180,7 @@ export class SmartLanes<E extends LaneEntry, V> {
   /** The waiting messages as one batch, once nothing unnamed is judged. */
   private next(lane: Lane<E, V>): void {
     if (this.closed || lane.judging || !lane.waiting.length) return;
-    this.start(lane, lane.waiting.splice(0), false);
+    this.start(lane, lane.waiting.splice(0), false, false);
   }
 
   /** Lands every verdict that may land now. */

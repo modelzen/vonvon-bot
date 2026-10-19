@@ -187,24 +187,18 @@ describe('completion reminder native reply orchestration', () => {
     expect(reply.mock.calls[1]?.[0].data.reply_in_thread).toBe(false);
   });
 
-  it('@-s a bot that woke the turn the same way, as a post; an id that is not an open_id gets no at node (s27a-0)', async () => {
+  it('skips the reminder of a turn another bot started, whatever the id (s27a)', async () => {
     const { channel, reply } = replyChannel();
     const info = vi.spyOn(log, 'info').mockImplementation(() => undefined);
-    const deps = { channel, cfg: config('always'), dedupe: dedupe(), now: () => 11_000 };
-    const base = { requestedAt: 1_000, manuallyRequested: false, summary: '审方案', cardUpdated: true, replyInThread: false, outcome: 'done' as const };
-    await sendCompletionReminderReply(deps, { ...base, cardMsgId: 'om_1', requesterOpenId: 'ou_other', requesterKind: 'bot' });
-    await sendCompletionReminderReply(deps, { ...base, cardMsgId: 'om_2', requesterOpenId: 'cli_other', requesterKind: 'bot' });
-    // A union_id starts with `o` too, but is not an open_id.
-    await sendCompletionReminderReply(deps, { ...base, cardMsgId: 'om_3', requesterOpenId: 'on_other', requesterKind: 'bot' });
-    expect(reply.mock.calls.map((c) => c[0].data.msg_type)).toEqual(['post', 'post', 'post']);
-    const [bot, noId, unionId] = reply.mock.calls.map((c) => JSON.parse(c[0].data.content).zh_cn.content);
-    expect(bot[0][0]).toEqual({ tag: 'at', user_id: 'ou_other' });
-    expect(noId[0]).toEqual([{ tag: 'text', text: '✅「审方案」已完成 · 用时 10 秒' }]);
-    expect(noId[1]).toEqual([{ tag: 'text', text: '结果在上方卡片。' }]);
-    expect(JSON.stringify(noId)).not.toContain('cli_other');
-    expect(unionId).toEqual(noId);
-    expect(info).toHaveBeenCalledWith('card', 'completion-reminder', expect.objectContaining({ requester: 'bot' }));
-    info.mockRestore();
+    try {
+      const deps = { channel, cfg: config('always'), dedupe: dedupe(), now: () => 11_000 };
+      const base = { requestedAt: 1_000, manuallyRequested: false, summary: '审方案', cardUpdated: true, replyInThread: false, outcome: 'done' as const };
+      for (const requesterOpenId of ['ou_other', 'cli_other', 'on_other']) {
+        expect(await sendCompletionReminderReply(deps, { ...base, cardMsgId: `om_${requesterOpenId}`, requesterOpenId, requesterKind: 'bot' })).toBe('skipped');
+      }
+      expect(reply).not.toHaveBeenCalled();
+      expect(info.mock.calls.some(c => c[1] === 'completion-reminder')).toBe(false);
+    } finally { info.mockRestore(); }
   });
 
   it('uses a reply as terminal-card fallback even when the selected policy would skip success', async () => {
