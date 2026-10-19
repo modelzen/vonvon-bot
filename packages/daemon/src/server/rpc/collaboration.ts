@@ -43,6 +43,7 @@ const contextResult = z.object({
   run: z.object({
     id: z.string(), goal: z.boolean(), canStop: z.boolean(),
     canEndGoal: z.boolean(), canRemind: z.boolean(), reminderRequested: z.boolean(),
+    subagents: z.array(z.object({ id: z.string(), name: z.string(), task: z.string(), status: z.enum(['running', 'completed', 'failed', 'stopped']), stoppable: z.boolean() })).optional(),
   }).nullable(),
 });
 const shareResult = z.object({ messageId: z.string().min(1) });

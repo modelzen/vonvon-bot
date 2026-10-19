@@ -9,11 +9,12 @@ const bot: AdminBot = { appId: 'cli_owner', name: 'Owner', tenant: 'feishu', act
 const target = { agentId: bot.appId, projectName: 'demo', groupId: 'oc_demo' };
 const project = { name: 'demo', chatId: 'oc_demo', cwd: '/fixture', kind: 'single', backend: 'codex-appserver', enabled: true, revision: 'revision' };
 const history = { sessions: [{ threadId: 'oc_demo', chatId: 'oc_demo', sessionId: 'old', summary: 'previous', backend: 'codex-appserver', cwd: '/fixture', createdAt: 1, updatedAt: 2, detached: true }], threads: [{ sessionId: 'past', preview: 'history', name: 'Past', createdAt: 1, updatedAt: 2 }], backend: 'codex-appserver', threadsError: 'history unavailable' };
-const context = { threadId: 'oc_demo', usage: { used: 20, window: 100 }, run: { id: 'run', goal: false, canStop: true, canEndGoal: false, canRemind: true, reminderRequested: false } };
+const context = { threadId: 'oc_demo', usage: { used: 20, window: 100 }, run: { id: 'run', goal: false, canStop: true, canEndGoal: false, canRemind: true, reminderRequested: false, subagents: [{ id: 'child-one', name: 'first', task: 'count files', status: 'running', stoppable: true }, { id: 'child-two', name: 'second', task: 'count tests', status: 'completed', stoppable: true }] } };
 const cases = [
   { request: { action: 'project', ...target }, raw: { project }, reply: { kind: 'project', project } },
   { request: { action: 'history', ...target }, raw: history, reply: { kind: 'history', ...history } },
   { request: { action: 'context', ...target, threadId: 'oc_demo' }, raw: context, reply: { kind: 'context', ...context } },
+  { request: { action: 'stopSubagent', ...target, threadId: 'oc_demo', runId: 'run', subagentId: 'child-one' }, raw: { ok: true }, reply: { kind: 'applied' } },
   { request: { action: 'shareUsage', ...target, sections: ['stats'] }, raw: { messageId: 'om_share' }, reply: { kind: 'applied', messageId: 'om_share' } },
   { request: { action: 'createProject', agentId: bot.appId, name: 'demo', folder: { kind: 'default' }, tool: 'codex', conversation: 'shared' }, raw: { ok: true, project }, reply: { kind: 'applied', project } },
   { request: { action: 'editProject', ...target, expectedRevision: 'revision', enabled: false }, raw: { ok: true, project }, reply: { kind: 'applied', project } },
@@ -35,6 +36,7 @@ it('adapts every raw collaboration operation through the WebSocket boundary', as
       const payload = collaborationRequestSchema.parse(test.request);
       expect(await client.call({ type: 'request', id: `raw-${index}`, method: 'collaboration', payload }), payload.action).toEqual({ type: 'response', id: `raw-${index}`, method: 'collaboration', payload: collaborationReplySchema.parse(test.reply) });
       expect(collaboration.mock.calls.at(-1)?.[0]).toBe(bot.appId);
+      if (payload.action === 'stopSubagent') expect(collaboration.mock.calls.at(-1)?.[1]).toEqual({ action: 'stopSubagent', projectName: 'demo', chatId: 'oc_demo', threadId: 'oc_demo', runId: 'run', subagentId: 'child-one' });
     }
     collaboration.mockResolvedValueOnce({ ok: true, kind: 'refused', code: 'spoofed', message: 'completed' });
     expect(await client.call({ type: 'request', id: 'authoritative-kind', method: 'collaboration', payload: collaborationRequestSchema.parse({ action: 'compact', ...target, threadId: 'oc_demo' }) })).toEqual({ type: 'response', id: 'authoritative-kind', method: 'collaboration', payload: { kind: 'applied', message: 'completed' } });

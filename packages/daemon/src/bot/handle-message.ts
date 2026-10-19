@@ -95,7 +95,7 @@ import { createJudgeUsage } from '../judge/usage';
 import { installAtGuard } from '../card/at-guard';
 import { sendManagedCard, updateManagedCard } from '../card/managed';
 import { RunRender } from '../card/run-render';
-import { finalMessageText, initialState, reduce, type RunState } from '../card/run-state';
+import { finalMessageText, initialState, reduce, type RunState, type SubagentRow } from '../card/run-state';
 import {
   buildClearedCard,
   buildHelpCard,
@@ -654,6 +654,7 @@ interface ActiveState {
   /** unset only during the brief "reserved, still resolving the thread" window */
   thread?: AgentThread;
   run?: AgentRun;
+  subagents?: () => SubagentRow[];
   /** follow-up turns queued mid-run; each carries its own text + downloaded images */
   queue: QueuedTurn[];
   /** who started this run — gates destructive ⏹ (design §5) */
@@ -4189,6 +4190,24 @@ export function createOrchestrator(
       st.interrupt?.();
       log.info('card', 'action', { actionId: 'run.stop', stopped: Boolean(st.interrupt) });
     })
+    .on(RC.stopSub, ({ evt, value }) => {
+      const key = typeof value.m === 'string' ? value.m : evt.messageId;
+      if (!runAllowed(evt)) return;
+      const st = runsByCard.get(key);
+      if (!st) { healDeadRunCard(evt, key, RC.stopSub); return; }
+      if (!runOwnerOrAdmin(evt, st.requesterOpenId)) {
+        denyRunControl(evt, key, RC.stopSub, '停止子 agent');
+        return;
+      }
+      if (!st.run?.stopSubagent) { healDeadRunCard(evt, key, RC.stopSub); return; }
+      if (typeof value.subagentId !== 'string') return;
+      void trackTask(st.run.stopSubagent(value.subagentId).catch(error => {
+        const reason = error instanceof Error ? error.message : String(error);
+        if (!runControlNotes.seen(`stop-sub:${key}:${value.subagentId}:${reason}`)) {
+          return channel.send(evt.chatId, { markdown: `⚠️ ${reason}` }, { replyTo: evt.messageId }).then(() => undefined, () => undefined);
+        }
+      }));
+    })
     // “仅手动”模式的单轮完成提醒。这不是破坏性操作，但也不允许
     // 管理员替别人订阅：只有这一轮的真实发起人能开启。
     .on(RC.remind, ({ evt, value }) => {
@@ -5896,7 +5915,14 @@ export function createOrchestrator(
     if (!record || record.detached) throw new AdminWriteError('此会话已归档或不属于当前项目，请开始新会话');
     const key = record.threadId;
     const state = active.get(key);
-    if (request.action === 'context') return { threadId: key, usage: lastUsage.get(key) ?? null, run: state ? { id: runId(state), goal: state.isGoal === true, canStop: Boolean(state.interrupt), canEndGoal: Boolean(state.endGoal), canRemind: state.requesterOpenId === owner && shouldShowCompletionReminderButton(cfg) && !state.isGoal, reminderRequested: state.completionReminderRequested === true } : null };
+    if (request.action === 'context') return { threadId: key, usage: lastUsage.get(key) ?? null, run: state ? { id: runId(state), goal: state.isGoal === true, canStop: Boolean(state.interrupt), canEndGoal: Boolean(state.endGoal), canRemind: state.requesterOpenId === owner && shouldShowCompletionReminderButton(cfg) && !state.isGoal, reminderRequested: state.completionReminderRequested === true, subagents: (state.subagents?.() ?? []).map(({ id, name, task, status, stoppable }) => ({ id, name, task, status, stoppable })) } : null };
+    if (request.action === 'stopSubagent') {
+      if (!state || runId(state) !== request.runId) throw new AdminWriteError('原任务已经结束，请刷新');
+      if (!state.run?.stopSubagent) throw new AdminWriteError('这个任务不支持单独停止子 agent');
+      try { await state.run.stopSubagent(request.subagentId); }
+      catch (error) { throw new AdminWriteError(error instanceof Error ? error.message : String(error)); }
+      return { ok: true };
+    }
     if (request.action === 'stop' || request.action === 'endGoal' || request.action === 'reminder') {
       if (!state || runId(state) !== request.runId) throw new AdminWriteError('原任务已经结束，请刷新');
       if (request.action === 'stop') { if (!state.interrupt) throw new AdminWriteError('任务正在准备，请稍后停止'); state.interrupt(); }
@@ -6407,6 +6433,7 @@ export function createOrchestrator(
         const turnStartAt = Date.now(); // turn/start 已在 runStreamed() 内发出（与下面的建卡并行）
         state.run = run;
         const render = new RunRender();
+        state.subagents = () => render.snapshot().subagents;
         render.seedUsage(meterOf(topicThreadId, rec, opts.thread));
         const cardEvents = new TurnCardEvents();
         state.steerReply = { run, accept: (messageId, voice) => cardEvents.accept(messageId, voice) };
@@ -6705,6 +6732,7 @@ export function createOrchestrator(
         cardClock = undefined;
         state.steerReply = undefined;
         state.idlePause = undefined;
+        state.subagents = undefined;
         state.run = undefined; // completion-card I/O must queue, never steer into a finished turn
         const doneAt = Date.now(); // codex stopped emitting / loop ended
         stopper.dispose(); // 事件流已收尾：撤掉 ⏹ 的 5s 强停兜底定时器
@@ -6934,6 +6962,7 @@ export function createOrchestrator(
       const dropped = state.queue.splice(0).length;
       dropCompact(state);
       disposeInterrupt?.();
+      state.subagents = undefined;
       state.run = undefined;
       state.interrupt = undefined;
       // A stream/card failure can leave an agent turn running. Retire that
@@ -7158,6 +7187,7 @@ export function createOrchestrator(
     /** Begin a turn's render context WITHOUT sending a card yet. */
     const startTurn = (): GoalTurnCtx => {
       const render = new RunRender();
+      state.subagents = () => render.snapshot().subagents;
       render.seedUsage(topicThreadId ? lastUsage.get(topicThreadId) : undefined);
       render.showTools = getShowToolCalls(cfg);
       const goalModelDisp = getModelDisplay(cfg);
@@ -7335,6 +7365,7 @@ export function createOrchestrator(
             await finalizeCard(cur);
             cur = null;
           }
+          state.subagents = undefined;
           // 🎯 结束目标: the goal was cleared mid-turn; that turn is now done and
           // codex won't auto-continue, so stop here (codex emits no terminal we'd
           // otherwise wait on — goal/cleared is ignored by the event map).
@@ -7438,6 +7469,8 @@ export function createOrchestrator(
     } finally {
       askTurn?.close('turn-ended');
       state.idlePause = undefined;
+      state.run = undefined;
+      state.subagents = undefined;
       clearInterval(cur?.clock);
       active.delete(activeKey);
       if (cur?.cardMsgId) runsByCard.delete(cur.cardMsgId);

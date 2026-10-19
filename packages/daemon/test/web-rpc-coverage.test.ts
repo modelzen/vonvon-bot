@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -121,6 +121,7 @@ else process.exit(0);
   const project = { name: projectName, chatId: groupId, cwd: '/fixture', kind: 'multi' as const, backend: 'codex-appserver', enabled: true, revision: 'token' };
   const bot = { appId: agentId, name: 'fixture', tenant: 'feishu' as const, active: true, current: true, running: true, completionReminder: { mode: 'always' as const, longTaskMinutes: 7 } };
   const host = { scope: { kind: 'host' as const }, sections: { execution: { stored: { codexBin: null }, effective: { codexBin: null }, revision: 'token', access: { kind: 'writable' as const }, apply: [] } }, runtime: { codexBin: null, fallbackCwd: '/fixture', platform: 'darwin' } };
+  const stopSubagent = vi.fn(async (_agent: string, _request: unknown) => ({ ok: true }));
   const service = fakeService({
     listBots: async () => [bot],
     listProjects: async () => [{ name: projectName, chatId: groupId, cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 }],
@@ -133,6 +134,7 @@ else process.exit(0);
       if (request.action === 'project') return { project };
       if (request.action === 'history') return { sessions: [], threads: [], backend: 'codex-appserver' };
       if (request.action === 'context') return { threadId: request.threadId, usage: null, run: null };
+      if (request.action === 'stopSubagent') return stopSubagent(_agent, request);
       if (request.action === 'shareUsage') return { messageId: 'om_fixture' };
       if (request.action === 'createProject' || request.action === 'editProject') return { ok: true, project };
       if (request.action === 'removeProject') return { ok: true, groupEffect: 'left' };
@@ -179,7 +181,7 @@ else process.exit(0);
         { action: 'project', ...target }, { action: 'editProject', ...target, expectedRevision: 'token' }, { action: 'removeProject', ...target, expectedRevision: 'token' },
         { action: 'history', ...target }, { action: 'context', ...session }, { action: 'clear', ...session }, { action: 'compact', ...session },
         { action: 'resume', ...target, sessionId: 'session', backend: 'codex-appserver' }, { action: 'startGoal', ...session, objective: 'fixture' },
-        { action: 'stop', ...session, runId: 'run' }, { action: 'endGoal', ...session, runId: 'run' }, { action: 'reminder', ...session, runId: 'run', requested: true },
+        { action: 'stop', ...session, runId: 'run' }, { action: 'stopSubagent', ...session, runId: 'run', subagentId: 'child' }, { action: 'endGoal', ...session, runId: 'run' }, { action: 'reminder', ...session, runId: 'run', requested: true },
         { action: 'usage', force: false }, { action: 'shareUsage', ...target, sections: ['stats'] }, { action: 'openGroup', ...target },
       ],
       environment: [
@@ -217,9 +219,13 @@ else process.exit(0);
         else {
           expect(frame.type, key).toBe('response');
           expect(responseSchema.safeParse(frame).success, key).toBe(true);
+          if (key === 'collaboration.stopSubagent') expect(frame).toMatchObject({ type: 'response', method: 'collaboration', payload: { kind: 'applied' } });
         }
       }
     }
+    expect(stopSubagent).toHaveBeenCalledExactlyOnceWith(agentId, {
+      action: 'stopSubagent', projectName, chatId: groupId, threadId: 'thread', runId: 'run', subagentId: 'child',
+    });
     expect(unsupported.size).toBe(13);
     await client.close();
   } finally {

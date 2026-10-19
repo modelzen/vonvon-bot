@@ -84,6 +84,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
         agent_path:null,agent_nickname:null,agent_role:null}}}}});
       if (id !== 'unstarted') event('turn/started',{threadId:id,turn:{id:id+'-turn'}});
     }
+    if (scenario === 'single') event('turn/completed',{threadId:'child2',turn:{id:'child2-turn',status:'completed'}});
     if (msg.params.input[0].text === 'hold') for (const id of ['child1','child2']) event('item/started',{
       threadId:id,turnId:id+'-turn',item:{type:'commandExecution',id:id+'-step',command:'pwd',cwd:'/repo'}});
     if (msg.params.input[0].text !== 'hold') event('turn/completed',{threadId:'host',turn:{id:'turn',status:'completed'}});
@@ -262,3 +263,31 @@ it.each(['stream-noid', 'stream-known', 'goal-noid', 'goal-known', 'restore-send
     }
   },
 );
+
+
+it.each([false, true])('stops only the requested running child across parent turns (goal=%s) and rejects unavailable children', async goal => {
+  const previous = process.env.CODEX_BIN;
+  process.env.CODEX_BIN = bin;
+  const thread = await new CodexAppServerBackend().startThread({ cwd: dir });
+  try {
+    const run = thread.runStreamed({ text: 'single' });
+    for await (const event of run.events) void event;
+    expect(run.stopSubagent).toBeTypeOf('function');
+    await expect(run.stopSubagent?.('unknown')).rejects.toThrow('这个子 agent 已经结束');
+    await expect(run.stopSubagent?.('child2')).rejects.toThrow('这个子 agent 已经结束');
+    await expect(run.stopSubagent?.('unstarted')).rejects.toThrow('这个子 agent 还没开始回合');
+    const next = goal ? thread.runGoal('scope-goal-known') : thread.runStreamed({ text: 'hold' });
+    const drained = (async () => { for await (const event of next.events) void event; })();
+    const offset = requests().length;
+    await next.stopSubagent?.('child1');
+    expect(requests().slice(offset).filter(request => request.method === 'turn/interrupt')).toEqual([
+      expect.objectContaining({ params: { threadId: 'child1', turnId: 'child1-turn' } }),
+    ]);
+    await thread.close();
+    await drained;
+  } finally {
+    await thread.close();
+    if (previous === undefined) delete process.env.CODEX_BIN;
+    else process.env.CODEX_BIN = previous;
+  }
+});
