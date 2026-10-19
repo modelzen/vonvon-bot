@@ -37,6 +37,9 @@ describe('neutraliseAts', () => {
     // a tag inside the overlong attributes is read too, so the `>` after it cannot make it whole again
     expect(neutraliseAts(`<at x=1 ${'y'.repeat(600)}<at id=ou_b>小审</at>`, BOTS)).toBe(`@ x=1 ${'y'.repeat(600)}@小审`);
     expect(neutraliseAts('<at id=ou_b\n', BOTS)).toBe('<at id=ou_b\n'); // no tag before the line ends, as before
+    for (const pad of [508, 509, 510, 511, 512, 513, 600]) { // its `id=` past the cap, the list known or not
+      for (const bots of [BOTS, undefined]) expect(neutraliseAts(`<at ${'x'.repeat(pad)} id=ou_b>小审</at>`, bots)).not.toMatch(/<at\b/i);
+    }
     const line = `${'<at id=ou_b '.repeat(20_000)}\n`; // 240 KB: quadratic before, minutes here
     const started = performance.now();
     expect(neutraliseAts(line, BOTS).startsWith('@ id=ou_b @ id=ou_b ')).toBe(true);

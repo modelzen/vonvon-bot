@@ -42,8 +42,9 @@ const AT_ID = /\b(?:open_id|user_id|id)\s*=\s*["']?([^"'\s>/]+)/i;
 export function neutraliseAts(text: string, bots: ChatBotIds | undefined, keep?: ReadonlySet<string>): string {
   if (!HAS_AT.test(text)) return text;
   return text.replace(AT, (tag, attrs: string, name: string | undefined) => {
-    // not a tag up to a line's end; past the cap only `<at` goes, and the `<at`s after it are read in turn
-    if (tag.length === 3) return attrs.length === AT_ATTRS && attrs.includes('=') ? '@' : tag;
+    // not a tag before the line ends: kept. Past the cap, wherever its `id=` is: only `<at` goes, and the `<at`s after
+    // it are read in turn
+    if (tag.length === 3) return attrs.length === AT_ATTRS ? '@' : tag;
     if (!attrs.includes('=')) return tag; // `<at least>`: no attribute, names nobody
     const id = AT_ID.exec(attrs)?.[1];
     const bot = id !== undefined && bots?.has(id) === true;
