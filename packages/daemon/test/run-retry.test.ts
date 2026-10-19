@@ -510,7 +510,7 @@ describe('single subagent controls', () => {
       expect(context).toMatchObject({ run: { subagents: [{ id: 'child-a' }, { id: 'child-b' }] } });
       if (context.run) {
         runId = context.run.id;
-        expect(Object.keys(context.run.subagents![0]).sort()).toEqual(['id', 'name', 'status', 'stoppable', 'task']);
+        expect(Object.keys(context.run.subagents[0] ?? {}).sort()).toEqual(['id', 'name', 'status', 'stoppable', 'task']);
       }
     });
     await expect(o.collaboration({ action: 'stopSubagent', ...target, runId: 'old', subagentId: 'child-a' })).rejects.toThrow('原任务已经结束，请刷新');
