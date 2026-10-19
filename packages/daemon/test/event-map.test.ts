@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mapNotification } from '../src/agent/codex-appserver/event-map';
+import { mapChildNotification, mapNotification, readSubAgentActivity, readSubagentSpawn } from '../src/agent/codex-appserver/event-map';
 import type { ServerNotification, ThreadItem } from '../src/agent/codex-appserver/protocol';
 
 function notification(method: string, params: unknown): ServerNotification {
@@ -392,4 +392,84 @@ describe('mapNotification', () => {
     }
     expect(mapNotification(itemStarted({ type: 'userMessage', id: 'user-1' } as ThreadItem))).toBeNull();
   });
+});
+
+
+describe('Codex subagent mapping', () => {
+  const collab = {
+    type: 'collabAgentToolCall', id: 'spawn', tool: 'spawnAgent', status: 'inProgress',
+    senderThreadId: 'thread-1', receiverThreadIds: ['child'], prompt: 'count files',
+    model: null, reasoningEffort: null, agentsStates: {},
+  } satisfies ThreadItem;
+
+  it('keeps parent spawn and wait as ordinary tool rows', () => {
+    expect(mapNotification(itemStarted(collab))).toMatchObject({
+      type: 'tool_use', itemId: 'spawn', title: '子 agent：count files',
+    });
+    expect(mapNotification(itemStarted({ ...collab, tool: 'wait' }))).toMatchObject({
+      type: 'tool_use', title: '等子 agent',
+    });
+  });
+
+  it('maps child lifecycle without producing parent events', () => {
+    const child = { running: true, turnId: 'turn-1', result: 'answer' };
+    const map = (method: string, params: unknown) => mapChildNotification('child', notification(method, params), child);
+    expect(map('turn/started', { turn: { id: 'turn-2' } })).toMatchObject({
+      events: [{ type: 'subagent_status', id: 'child', status: 'running' }],
+      patch: { turnId: 'turn-2', running: true },
+    });
+    for (const [status, expected] of [['completed', 'completed'], ['interrupted', 'stopped'], ['failed', 'failed']]) {
+      expect(map('turn/completed', { turn: { id: 'turn-1', status } }).events).toEqual([
+        { type: 'subagent_status', id: 'child', status: expected, result: 'answer' },
+      ]);
+    }
+    expect(map('thread/closed', { threadId: 'child' }).events).toEqual([
+      { type: 'subagent_status', id: 'child', status: 'stopped' },
+    ]);
+    expect(map('error', { error: { message: 'child failed' }, willRetry: false }).events).toEqual([]);
+  });
+
+  it('pairs equal-title steps by item id and captures final text silently', () => {
+    const child = { running: true };
+    const command: ThreadItem = {
+      type: 'commandExecution', id: 'one', command: 'pwd', cwd: '/repo',
+      processId: null, source: 'agent', status: 'inProgress', commandActions: [], aggregatedOutput: '', exitCode: null, durationMs: null,
+    };
+    for (const id of ['one', 'two']) {
+      expect(mapChildNotification('child', itemStarted({ ...command, id }), child).events).toEqual([
+        { type: 'subagent_step', id: 'child', stepId: id, title: 'pwd', status: 'running' },
+      ]);
+    }
+    for (const exitCode of [0, 1]) {
+      expect(mapChildNotification('child', itemCompleted({ ...command, id: 'two', exitCode }), child).events).toMatchObject([
+        { type: 'subagent_step', id: 'child', stepId: 'two', status: exitCode ? 'failed' : 'done' },
+      ]);
+    }
+    expect(mapChildNotification('child', itemCompleted({
+      type: 'agentMessage', id: 'answer', text: 'finished', phase: null, memoryCitation: null,
+    }), child)).toEqual({ events: [], patch: { result: 'finished' } });
+  });
+});
+
+
+it('validates and maps code-mode subAgentActivity items', () => {
+  const item = { type: 'subAgentActivity', id: 'activity', kind: 'started', agentThreadId: 'child', agentPath: 'root/explorer' };
+  expect(readSubAgentActivity(item)).toEqual(item);
+  expect(readSubAgentActivity({ ...item, agentThreadId: null })).toBeUndefined();
+  expect(mapNotification(notification('item/started', { item }))).toMatchObject({
+    type: 'tool_use', itemId: 'activity', title: '子 agent：explorer',
+  });
+  expect(mapNotification(notification('item/completed', { item }))).toMatchObject({
+    type: 'tool_result', itemId: 'activity',
+  });
+  expect(mapNotification(notification('item/started', { item: { ...item, kind: 'completed' } }))).toBeNull();
+});
+
+
+it.each(['subagent', 'subAgent'])('reads %s thread-spawn sources', key => {
+  const spawn = { parent_thread_id: 'host', depth: 1, agent_path: null, agent_nickname: 'helper', agent_role: null };
+  expect(readSubagentSpawn({ [key]: { thread_spawn: spawn } })).toMatchObject({
+    parent_thread_id: 'host', agent_nickname: 'helper', agent_role: null,
+  });
+  expect(readSubagentSpawn({ [key]: { thread_spawn: { ...spawn, parent_thread_id: null } } })).toBeUndefined();
 });

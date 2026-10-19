@@ -537,6 +537,15 @@ export function isCompletionReminderRequester(operatorOpenId?: string, requester
   return Boolean(operatorOpenId && requesterOpenId && operatorOpenId === requesterOpenId);
 }
 
+function logSubagentChanges(before: RunState['subagents'] = [], after: RunState['subagents'] = []): void {
+  for (const row of after) {
+    const previous = before.find(old => old.id === row.id);
+    if (!previous || (row.status !== 'running' && row.status !== previous.status)) {
+      log.info('agent', 'subagent', { id: row.id.slice(-6), status: previous ? row.status : 'start', steps: row.steps.length });
+    }
+  }
+}
+
 /**
  * Settle an ordinary turn after its event stream closes. A dead backend can
  * close the async iterator without ever emitting `done` or a fatal `error`; in
@@ -549,6 +558,7 @@ export function settleOrdinaryTurnRender(
   render: RunRender,
   input: { interrupted: boolean; timedOut: boolean; idleTimeoutSeconds: number; procDead: boolean },
 ): void {
+  const subagents = render.snapshot().subagents;
   if (input.interrupted) render.interrupt();
   else if (input.timedOut) render.timeout(input.idleTimeoutSeconds);
   else if (input.procDead && render.terminal() === 'running') {
@@ -557,6 +567,7 @@ export function settleOrdinaryTurnRender(
     // finalize() is a no-op for explicit done/error terminals.
     render.finalize();
   }
+  logSubagentChanges(subagents, render.snapshot().subagents);
 }
 
 /** A turn that started but did not answer: the error it threw, or the run state it ended in. */
@@ -6450,7 +6461,9 @@ export function createOrchestrator(
           }
           lastEvAt = tEv;
           evCount++;
+          const subagents = render.snapshot().subagents;
           render.apply(ev);
+          logSubagentChanges(subagents, render.snapshot().subagents);
           // Track context usage for /context and the next turn's meter. Only
           // auto-compaction reaches the turn loop (a manual /compact drains its own
           // events); it shows as a line on this card, and Claude's post-compaction
@@ -6907,7 +6920,9 @@ export function createOrchestrator(
       clearInterval(ctx.clock);
       ctx.clock = undefined;
       await ctx.stream.drain();
+      const subagents = ctx.render.snapshot().subagents;
       ctx.render.finalize();
+      logSubagentChanges(subagents, ctx.render.snapshot().subagents);
       ctx.rc.rs = ctx.render.snapshot();
       const answerText = finalMessageText(ctx.rc.rs);
       ctx.rc.localFiles = await outboundFiles.prepare(answerText, {
@@ -7106,8 +7121,18 @@ export function createOrchestrator(
           if (!ev.willRetry) { askTurn?.close('turn-ended'); askTurn = undefined; goalErrorMsg = ev.message; }
           if (!cur) continue; // set-failure before any turn → terminal card only
         }
+        if (ev.type === 'subagent_start' || ev.type === 'subagent_step' || ev.type === 'subagent_status') {
+          if (cur) {
+            const subagents = cur.render.snapshot().subagents;
+            cur.render.apply(ev);
+            logSubagentChanges(subagents, cur.render.snapshot().subagents);
+          }
+          continue;
+        }
         if (!cur) cur = startTurn();
+        const subagents = cur.render.snapshot().subagents;
         cur.render.apply(ev);
+        logSubagentChanges(subagents, cur.render.snapshot().subagents);
         // Reasoning ALONE doesn't warrant a card (a planning-only turn must not leave
         // an empty box); only real output (text / tool calls) sends the card. Once a
         // card exists, keep streaming everything (incl. reasoning) into it.
@@ -7126,7 +7151,11 @@ export function createOrchestrator(
       state.idlePause = undefined;
       // ⏹ 终止: mark the in-flight turn's card as interrupted before finalizing
       // (finalize() is a no-op once terminal, so this doesn't clash).
-      if (interrupted && cur) cur.render.interrupt();
+      if (interrupted && cur) {
+        const subagents = cur.render.snapshot().subagents;
+        cur.render.interrupt();
+        logSubagentChanges(subagents, cur.render.snapshot().subagents);
+      }
       await finalizeCard(cur);
       cur = null;
       // Covers a goal that produced no content card (and therefore never called
