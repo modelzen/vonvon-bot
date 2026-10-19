@@ -215,6 +215,8 @@ export function InlineNotice(props: {
   );
 }
 
+/** Wires the description and error to its one child. With `htmlFor` the control sits deeper (an input with a button
+ * beside it, s23g2): the caller wires it, and the ids are `${htmlFor}-description` and `${htmlFor}-error`. */
 export function FormField(props: {
   children: ReactNode;
   className?: string;
@@ -226,9 +228,10 @@ export function FormField(props: {
   required?: boolean;
 }) {
   const generatedId = useId();
-  const descriptionId = props.description ? `${generatedId}-description` : undefined;
-  const errorId = props.error ? `${generatedId}-error` : undefined;
-  const formControl = isValidElement(props.children)
+  const base = props.htmlFor ?? generatedId;
+  const descriptionId = props.description ? `${base}-description` : undefined;
+  const errorId = props.error ? `${base}-error` : undefined;
+  const formControl = !props.htmlFor && isValidElement(props.children)
     ? props.children as ReactElement<{
         "aria-describedby"?: string;
         "aria-invalid"?: boolean | "false" | "grammar" | "spelling" | "true";

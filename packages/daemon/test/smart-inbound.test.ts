@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { projectRevision } from '../src/admin/collaboration';
@@ -10,6 +10,8 @@ import { wakeTables } from '../src/bot/bot-wake';
 import { existsSync } from 'node:fs';
 import { BOT_WAKE_NOTE, INITIATIVE_NOTE } from '../src/bot/session-title';
 import { JUDGE_BUDGET, JudgeBudget } from '../src/bot/smart-intake';
+import type { JudgeDeps } from '../src/judge/judge';
+import { localDay } from '../src/judge/usage';
 import type { JudgeRequest, JudgeResult } from '../src/judge/types';
 import { receive, type EventMessage, type ReceiveOpts } from './helpers/lark-events';
 
@@ -51,6 +53,8 @@ const fake = vi.hoisted(() => ({
   finals: [] as unknown[],
   bots: '1',
   judge: vi.fn(),
+  judgeDeps: undefined as JudgeDeps | undefined,
+  judgeShutdown: vi.fn(async () => {}),
   log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() },
 }));
 const startThread = vi.fn(async () => ({
@@ -73,7 +77,7 @@ vi.mock('../src/bot/session-store', async original => ({ ...await original<objec
 vi.mock('../src/bot/session-title-coordinator', () => ({ SessionTitleCoordinator: class { startRecovery() {} async shutdown() {} } }));
 vi.mock('../src/judge/judge', async original => ({
   ...await original<object>(),
-  createJudge: () => ({ judge: fake.judge, warm: () => {}, shutdown: async () => {} }),
+  createJudge: (deps: JudgeDeps) => { fake.judgeDeps = deps; return { judge: fake.judge, warm: () => {}, shutdown: () => fake.judgeShutdown() }; },
 }));
 vi.mock('../src/card/run-card-stream', () => ({
   RunCardStream: class {
@@ -140,6 +144,7 @@ const send = async (m: EventMessage, sender?: ReceiveOpts['sender']) => orchestr
 beforeEach(() => {
   vi.clearAllMocks();
   asked.clear();
+  fake.judgeShutdown.mockImplementation(async () => {});
   events = [];
   fake.inputs = [];
   fake.sessions = {};
@@ -877,4 +882,36 @@ it('records a bot wake at the settings gate without asking it to resend', async 
   expect(records()[0]).toMatchObject({ reason: 'bot-wake-dropped', detail: '群正在改设置' });
   expect(fake.list).not.toHaveBeenCalled(); expect(fake.send).not.toHaveBeenCalled();
   gate.resolve(); await edit;
+});
+describe('judge usage wiring (s28b)', () => {
+  const request = (): JudgeRequest => ({ variant: 'main', appId: APP, botName: BOT.name, group: { chatId: CHAT, name: 'demo', backend: 'codex-appserver' }, context: [], message: { at: 0, from: 'user', name: 'fixture', text: 'hello' } });
+  it.each([true, false])('persists only sent results with a configured file: %s', async configured => {
+    await orchestrator.shutdown();
+    const dir = mkdtempSync(join(tmpdir(), 'smart-usage-'));
+    const file = join(dir, 'judge-usage.json');
+    try {
+      orchestrator = createOrchestrator(channel as never, cfg, '/tmp/demo', undefined, configured ? { judgeUsageFile: file } : undefined);
+      fake.judgeDeps?.onResult?.(request(), result('skip'), { sent: true });
+      fake.judgeDeps?.onResult?.(request(), result('skip'), { sent: false });
+      await orchestrator.shutdown();
+      if (configured) expect(JSON.parse(readFileSync(file, 'utf8')).days[localDay(Date.now())]).toEqual({ 'llm:codex-appserver': 1 });
+      else expect(existsSync(file)).toBe(false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('flushes usage without waiting for judge backend cleanup', async () => {
+    await orchestrator.shutdown();
+    const dir = mkdtempSync(join(tmpdir(), 'smart-usage-'));
+    const file = join(dir, 'judge-usage.json');
+    const pending = deferred<void>();
+    fake.judgeShutdown.mockImplementation(() => pending.promise);
+    orchestrator = createOrchestrator(channel as never, cfg, '/tmp/demo', undefined, { judgeUsageFile: file });
+    fake.judgeDeps?.onResult?.(request(), result('skip'), { sent: true });
+    let done = false;
+    const shutdown = orchestrator.shutdown().then(() => { done = true; });
+    try {
+      await vi.waitFor(() => expect(JSON.parse(readFileSync(file, 'utf8')).days[localDay(Date.now())]).toEqual({ 'llm:codex-appserver': 1 }), { timeout: 2500 });
+      expect(done).toBe(false);
+    } finally { pending.resolve(); await shutdown; rmSync(dir, { recursive: true, force: true }); }
+  });
 });

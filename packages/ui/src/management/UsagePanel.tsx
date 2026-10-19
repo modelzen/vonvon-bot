@@ -5,6 +5,7 @@ import type { Agent, Group, Membership, MembershipId } from "@vonvon/protocol";
 import type { CollaborationClient, CollaborationReply, UsageShareSection } from "@vonvon/protocol";
 import { settingAnchor } from "../search";
 import "./usage.css";
+import { JudgeUsageGroup } from "./JudgeUsage";
 
 type Usage = Extract<CollaborationReply, { kind: "usage" }>["data"];
 type Profile = Usage["profile"];
@@ -141,6 +142,7 @@ export function UsagePanel({ request, onOpenEnvironment, onOpenShare }: Props) {
       </SettingsGroup>
       </details>
     </>}
+    <JudgeUsageGroup />
   </div>;
 }
 

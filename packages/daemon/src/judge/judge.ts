@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { API_KEY_SHAPE } from '@vonvon/protocol';
+import { API_KEY_SHAPE, KEY_FAILURE } from '@vonvon/protocol';
 import { catalogBackendIds } from '../agent/catalog';
 import { BackendNotInstalledError } from '../agent/backend-loader';
 import { ProviderProcessCleanupError } from '../agent/owned-process';
@@ -52,8 +52,8 @@ export interface JudgeDeps {
   /** default `<data root>/judge`, 0700, empty */
   cwd?: () => Promise<string>;
   now?: () => number;
-  /** s28 counts judgements per day (s25's hourly budget is taken before the call: bot/smart-intake.ts) */
-  onResult?: (req: JudgeRequest, result: JudgeResult) => void;
+  /** sent is true once the backend call starts, including calls that later fail or abort. */
+  onResult?: (req: JudgeRequest, result: JudgeResult, call: { sent: boolean }) => void;
   /** A decision model's key, read before each of its judgements (the keystore, so a key set or changed by any
    * means is used at once). */
   getSecret?: (id: string) => Promise<string | undefined>;
@@ -170,11 +170,11 @@ export function createJudge(deps: JudgeDeps): Judge {
       key = await readSecret(provider.keyId);
     } catch (error) {
       log.warn('judge', 'keystore-unreadable', { provider: provider.id, code: (error as { code?: unknown } | undefined)?.code ?? (error as Error | undefined)?.name });
-      throw new JudgeFail('failed', '密钥库读不了');
+      throw new JudgeFail('failed', KEY_FAILURE.unreadable);
     }
-    if (!key) throw new JudgeFail('key', `没填 ${provider.displayName} 的 key`);
+    if (!key) throw new JudgeFail('key', KEY_FAILURE.missing(provider.displayName));
     // anything else would make fetch throw an error that quotes the header, key and all
-    if (!API_KEY_SHAPE.test(key)) throw new JudgeFail('key', `${provider.displayName} 的 key 不是一串可见字符，重新填一次`);
+    if (!API_KEY_SHAPE.test(key)) throw new JudgeFail('key', KEY_FAILURE.invalid(provider.displayName));
     return key;
   }
 
@@ -245,6 +245,7 @@ export function createJudge(deps: JudgeDeps): Judge {
   }
 
   async function run(req: JudgeRequest, started: number): Promise<JudgeResult> {
+    let called = false;
     const fields = { chatId: req.group.chatId, ref: req.ref?.slice(-6), variant: req.variant };
     // Backend and model first, so every later failure still reports them.
     // The group's own backend, Codex for old rows and ids not in the catalog (s36d2): never the bot default.
@@ -262,7 +263,7 @@ export function createJudge(deps: JudgeDeps): Judge {
       }
       else log.info('judge', 'verdict', { ...common, decision: result.decision });
       try {
-        deps.onResult?.(req, result);
+        deps.onResult?.(req, result, { sent: called });
       } catch (error) {
         log.fail('judge', error, { phase: 'on-result' });
       }
@@ -321,6 +322,7 @@ export function createJudge(deps: JudgeDeps): Judge {
         const sentAt = now();
         try {
           call = start();
+          called = true;
         } catch (error) {
           call = Promise.reject(error);
         }

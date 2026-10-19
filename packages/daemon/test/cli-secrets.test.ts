@@ -129,7 +129,7 @@ describe('vonvon secrets (s23g)', () => {
       await runSecretsList(h.ctx);
       await runSecretsSet('typesafe-api-key', [], {}, h.ctx);
       await runSecretsRemove('typesafe-api-key', [], { raw: true }, h.ctx);
-      expect(h.err()).toBe('这组命令不能在 Bot 的会话里用，在自己的终端里运行。\n'.repeat(3));
+      expect(h.err()).toBe('这组命令不能在 Bot 的会话里用。在网页的密钥页填或删，或者在自己的终端里运行。\n'.repeat(3));
       expect(h.code()).toBe(2);
       expect(h.sent).toEqual([]);
     }

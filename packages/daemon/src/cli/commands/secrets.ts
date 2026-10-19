@@ -10,7 +10,7 @@ import { decisionProviders, type DecisionProvider } from '../../judge/decision';
 import { readRunningPidLock } from '../../server/pid-lock';
 import { print, printable, want, withDaemon, type Daemon, type Io } from '../daemon-client';
 
-const SESSION_REFUSED = '这组命令不能在 Bot 的会话里用，在自己的终端里运行。';
+const SESSION_REFUSED = '这组命令不能在 Bot 的会话里用。在网页的密钥页填或删，或者在自己的终端里运行。';
 const ARGS_REFUSED = 'key 不写在命令参数里（会进 shell 的历史）。直接运行 vonvon secrets set <名字>，按提示粘贴；脚本里从标准输入传进来。';
 const REMOVE_ARGS_REFUSED = '只写一个名字，后面多写了东西，没有删。';
 /** A save may wait out the keystore's 30 s lock across processes. */

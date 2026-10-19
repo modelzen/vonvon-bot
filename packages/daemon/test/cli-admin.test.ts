@@ -461,7 +461,7 @@ it('judge: set takes the selection JSON, get prints a row per backend and the pr
   expect(h.out()).toContain('  Codex 的群用：决策模型 typesafe 的 jev-latest（Bot 设的）\n  Claude 的群用：决策模型 typesafe 的 jev-latest（Bot 设的）\n');
   // s23f: the daemon lists its decision models: their names, a key not filled in, and under get judge how to choose one
   const typesafe = { provider: 'typesafe', displayName: 'TypeSafe', models: [{ id: 'jev-latest', displayName: 'Jev' }], keyId: 'typesafe-api-key', keySet: false };
-  const missing = '  还没填 TypeSafe 的 key，填之前要判断的消息按出错处理（没 @ Bot 的不回，@ 的回在主区）。在终端运行 vonvon secrets set typesafe-api-key，按提示粘贴\n';
+  const missing = '  还没填 TypeSafe 的 key，填之前要判断的消息按出错处理（没 @ Bot 的不回，@ 的回在主区）。在网页的密钥页填，或者在终端运行 vonvon secrets set typesafe-api-key，按提示粘贴\n';
   const choose = (keyState: string, group = '') => `  可选的决策模型：TypeSafe 的 jev-latest（Jev，key ${keyState}）。选它：vonvon settings set ${group}judge.selection='{"kind":"decision","provider":"typesafe","model":"jev-latest"}'\n`;
   Object.assign(agentView, { decisionModels: [typesafe] });
   h.clear(); await runSettingsGet('judge', {}, h.io(), h.daemon);
@@ -484,7 +484,7 @@ it('judge: set takes the selection JSON, get prints a row per backend and the pr
   // a keystore the daemon cannot read: said so, not taken for a missing key
   Object.assign(projectView, { decisionModels: [{ ...typesafe, keyUnreadable: true }] });
   h.clear(); await runSettingsGet('judge', { group: 'pay' }, h.io(), h.daemon);
-  expect(h.out()).toContain(`  读不了密钥库，看不出填没填 TypeSafe 的 key，读得了之前要判断的消息按出错处理（没 @ Bot 的不回，@ 的回在主区）。在终端运行 vonvon secrets list 看原因\n${choose('填没填看不出，密钥库读不了', '--group pay ')}`);
+  expect(h.out()).toContain(`  读不了密钥库，看不出填没填 TypeSafe 的 key，读得了之前要判断的消息按出错处理（没 @ Bot 的不回，@ 的回在主区）。原因在网页状态与诊断页底部的 daemon 日志（secrets.unreadable），或者在终端运行 vonvon secrets list 看\n${choose('填没填看不出，密钥库读不了', '--group pay ')}`);
   expect(h.out()).not.toContain('还没填');
   // a kind from a newer daemon: shown as sent, and said so
   const future = { kind: 'oracle', provider: 'x', model: 'y' };

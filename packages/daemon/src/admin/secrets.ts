@@ -1,4 +1,4 @@
-import { API_KEY_MAX, API_KEY_SHAPE, type AdminReply, type AdminRequest, type SecretService, type SecretUse } from '@vonvon/protocol';
+import { API_KEY_SHAPE, keyProblem, type AdminReply, type AdminRequest, type SecretService, type SecretUse } from '@vonvon/protocol';
 import { catalogBackendIds } from '../agent/catalog';
 import { loadBots } from '../config/bots';
 import { MUTEX_TIMEOUT } from '../config/data-access';
@@ -72,13 +72,8 @@ export async function keyStatus(provider: Pick<DecisionProvider, 'keyId'>, read:
   return { status: 'set', ...(key.length >= LAST4_MIN ? { last4: key.slice(-4) } : {}) };
 }
 
-/** Why a key cannot be saved, or nothing; the words never quote it. */
-export function keyProblem(value: string): string | undefined {
-  if (!value) return '没有读到 key';
-  if (value.length > API_KEY_MAX) return `key 太长了，最多 ${API_KEY_MAX} 个字符`;
-  if (!API_KEY_SHAPE.test(value)) return 'key 只能是一串可见的英文字符，不能有空格、换行或中文';
-  return undefined;
-}
+/** Why a key cannot be saved: in the protocol, so the key page says it in the same words before sending (s23g2). */
+export { keyProblem };
 
 const stored = (value: unknown) => parseStoredJudge(value, catalogBackendIds()).value;
 

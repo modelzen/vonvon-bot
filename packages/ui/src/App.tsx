@@ -60,6 +60,7 @@ import {LoginServiceRow, deviceTitle, toggleService} from './setup/service-toggl
 import {GrantStep, ScopeGrantRow, jobToCancel, withRegisteredAgent, type RegisterModal} from './setup/GrantStep';
 import {MachinePanel} from './management/MachinePanel';
 import {DiagnosticsPanel} from './management/DiagnosticsPanel';
+import {SecretsPanel} from './management/SecretsPanel';
 import {UpdatePanel} from './management/UpdatePanel';
 
 type Modal =
@@ -332,6 +333,7 @@ function DesktopApp() {
     environment: "本机环境",
     usage: "用量",
     application: "应用与启动",
+    secrets: "密钥",
     diagnostics: "状态与诊断",
   };
   const host = snapshot.host;
@@ -823,7 +825,7 @@ function DesktopApp() {
                   <p className="collaboration-scope-note">这里只配置 {agent.name} 在 {group.name} 中的工作目录、响应方式和权限。</p>
                   <ProjectPanel key={`manage-${member.id}`} scope={{kind: 'project', agentId: agent.id, groupId: group.id, projectName: member.name}} request={client.collaboration} onChanged={async () => {await run({type: 'refresh'});}}>
                     <SettingsGroup id={settingAnchor('历史会话')} label="历史会话"><SettingsRow title="会话与状态" trailing={<Button size="sm" onClick={() => membershipPane({kind: 'activity'})}>查看历史会话</Button>} /></SettingsGroup>
-                    <SettingsPanel key={membershipSettingsKey(member)} scope="project" target={membershipSettingsTarget(member)} />
+                    <SettingsPanel key={membershipSettingsKey(member)} scope="project" target={membershipSettingsTarget(member)} onOpenSecrets={() => openPage("secrets")} />
                   </ProjectPanel>
                   </>}
                   </div>
@@ -884,8 +886,10 @@ function DesktopApp() {
               </SettingsGroup>
             </>
           )}
+          {page === "secrets" && <SecretsPanel onOpenApplication={() => openPage("application")}
+            onOpenLogs={() => { openPage("diagnostics"); setSearchTarget({page: "diagnostics", section: "daemon 日志"}); }}/>}
           {page === "diagnostics" && <DiagnosticsPanel snapshot={snapshot} ready={ready} busy={busy} run={run}
-            onOpenSetup={() => openPage("setup")} onOpenEnvironment={() => openPage("environment")}
+            onOpenSetup={() => openPage("setup")} onOpenEnvironment={() => openPage("environment")} onOpenSecrets={() => openPage("secrets")}
             onNotice={(message, error) => setNotice({message, error})}/>}
           </>}
         </div>

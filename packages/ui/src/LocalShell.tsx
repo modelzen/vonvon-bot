@@ -1,5 +1,5 @@
 import type {ReactNode} from 'react';
-import {Activity,Bot,ListChecks,MessageSquare,MonitorCog,Search,Stethoscope,Wrench} from 'lucide-react';
+import {Activity,Bot,KeyRound,ListChecks,MessageSquare,MonitorCog,Search,Stethoscope,Wrench} from 'lucide-react';
 import {SettingsToolbar} from './reference/components/system-settings';
 import type {CollaborationView,Page} from './collaboration-model';
 import {uiFeatures} from './features';
@@ -7,7 +7,7 @@ import {uiFeatures} from './features';
 export function AppShell(props:{page:Page;view:CollaborationView;title:string;children:ReactNode;onNavigate:(page:Page)=>void;onOpenList:(view:CollaborationView)=>void;onBack?:()=>void;backLabel?:string;onSearch?:()=>void;selectedFeature?:string;onFeatureNavigate?:(id:string)=>void}){
   const lists=[{id:'agents',label:'Bot',icon:Bot},{id:'groups',label:'群聊',icon:MessageSquare}] as const;
   const primarySettings=[{id:'setup',label:'首次运行清单',icon:ListChecks},{id:'environment',label:'本机环境',icon:Wrench}] as const;
-  const settings=[{id:'usage',label:'用量',icon:Activity},{id:'application',label:'应用与启动',icon:MonitorCog},{id:'diagnostics',label:'状态与诊断',icon:Stethoscope}] as const;
+  const settings=[{id:'usage',label:'用量',icon:Activity},{id:'application',label:'应用与启动',icon:MonitorCog},{id:'secrets',label:'密钥',icon:KeyRound},{id:'diagnostics',label:'状态与诊断',icon:Stethoscope}] as const;
   return <div className="settings-window collaboration-window">
     <aside aria-label="应用侧栏" className="settings-sidebar">
       <div className="settings-sidebar-drag-region" aria-hidden="true"/>

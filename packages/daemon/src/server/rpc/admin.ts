@@ -4,6 +4,7 @@ import { buildEventConfigUrl } from '../../config/scopes';
 import { readAdminState } from '../state';
 import type { RpcOutcome } from '../rpc';
 import { unsupported } from '../errors';
+import { judgeUsageView } from '../../admin/judge-usage';
 import { secretsAction } from '../../admin/secrets';
 
 export async function diagnosis(service: AdminService, agentId?: string): Promise<Extract<AdminReply, { kind: 'diagnosis' }>> {
@@ -16,6 +17,7 @@ export async function diagnosis(service: AdminService, agentId?: string): Promis
 }
 export async function adminRpc(service: AdminService, followLogs: (follow: boolean) => void, request: AdminRequest): Promise<RpcOutcome<AdminReply>> {
   switch (request.type) {
+    case 'judgeUsage': return { kind: 'read', value: await judgeUsageView() };
     case 'state': return { kind: 'read', value: { kind: 'state', state: await readAdminState(service) } };
     case 'diagnosis': return { kind: 'read', value: await diagnosis(service, request.agentId) };
     case 'hostDoctor': return { kind: 'read', value: { kind: 'hostDoctor', doctor: await service.hostDoctor() } };

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { keyFailureOf } from "./secrets.js";
 
 /** Why a message to this bot got no answer (product.md 3.1 item 8). Gates first, then failed turns, then queued
  * messages a restart dropped (s18c), then the smart mode's judgements (s25), then another bot's @ (s27a-0). */
@@ -75,7 +76,10 @@ export const NOT_REPLIED_TEXT: Record<NotRepliedReason, Text> = {
   },
   "judge-failed": {
     reason: r => `判断没出结果${r.detail ? `（${r.detail}）` : ""}，没 @ 它的这条没回`,
-    next: () => "@ 它一定会回；反复出现时看下面的日志。",
+    // a decision model's key: the key page fixes it, or the keystore's error in the log below (s23g2)
+    next: r => keyFailureOf(r.detail) === "key" ? "在密钥页填了就恢复；@ 它一定会回。"
+      : keyFailureOf(r.detail) === "keystore" ? "密钥库读得了就恢复，原因在下面 daemon 日志的 secrets.unreadable；@ 它一定会回。"
+      : "@ 它一定会回；反复出现时看下面的日志。",
   },
   "judge-budget": { reason: () => "这个群这一小时判断了 60 次，到了上限，没 @ 它的这条没判断", next: () => "一小时内会恢复；@ 它仍然会回。" },
   "judge-superseded": { reason: () => "判断说要回，但它已随后来的消息进了会话，没单独回", next: () => "不用处理。" },

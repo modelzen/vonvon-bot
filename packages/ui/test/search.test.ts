@@ -108,3 +108,24 @@ test('words the 叫法表 retired still find the renamed fields', () => {
   assert.equal(findEntries(entries, '当前 Profile')[0]?.title, '当前账号配置 飞书 CLI');
   assert.ok(findEntries(entries, '机器人').some(entry => entry.id === 'agents'));
 });
+
+test('判断次数 searches lead to the usage section', () => {
+  const result = findEntries(entries, '判断次数')[0];
+  assert.equal(result?.destination.page, 'usage');
+  assert.equal(result?.destination.section, '智能模式的判断次数');
+  assert.equal(result?.destination.field, '');
+});
+
+test('s28a: judge models and interruptions lead to the group settings', () => {
+  const judge = findEntries(entries, '判断模型')[0];
+  assert.equal(judge?.destination.detail?.kind, 'membership-settings');
+  assert.equal(judge?.destination.section, '判断模型');
+  assert.ok(findEntries(entries, '插话').some(entry => entry.destination.detail?.kind === 'membership-settings' && entry.destination.section === '运行中来了消息'));
+});
+
+test('s28a review: custom judge search has a distinct title and conditional guidance', () => {
+  const custom = findEntries(entries, '判断的手填模型 id')[0];
+  assert.equal(custom?.title, '判断的手填模型 id');
+  assert.equal(custom?.destination.field, '判断模型');
+  assert.equal(findEntries(entries, '判断模型').find(entry => entry.title === '判断模型' && entry.destination.field === '判断模型')?.destination.guide, '不是智能群的，先把会话方式改成「智能开话题」，才有这一项。');
+});

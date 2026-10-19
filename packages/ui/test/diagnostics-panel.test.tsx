@@ -21,7 +21,7 @@ const snapshot = (agents: Agent[], crashes?: ApplicationCrashes): DesktopSnapsho
   tools, jobs: [], application: {platform: 'macos', version: '0.9.0', loginItem: false, dataPath: '/tmp/vonvon-home', ...(crashes ? {crashes} : {})},
 });
 const render = (agents: Agent[], crashes?: ApplicationCrashes) => renderToStaticMarkup(<ClientProvider client={client}>
-  <DiagnosticsPanel snapshot={snapshot(agents, crashes)} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onOpenSetup={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}}/>
+  <DiagnosticsPanel snapshot={snapshot(agents, crashes)} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onOpenSetup={() => {}} onOpenEnvironment={() => {}} onOpenSecrets={() => {}} onNotice={() => {}}/>
 </ClientProvider>);
 
 it('shows the lock holder across retries, and gives a pause priority', () => {
@@ -151,7 +151,7 @@ it('lists the groups an older version put in a wrong directory, only when there 
     {...snapshot([agent]).memberships[0]!, id: 'm3' as never, groupId: 'oc_home' as never, name: '家', directory: '/tmp', directoryProblem: 'dataDirParent' as const},
   ]};
   const html = renderToStaticMarkup(<ClientProvider client={client}>
-    <DiagnosticsPanel snapshot={misplaced} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onOpenSetup={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}}/>
+    <DiagnosticsPanel snapshot={misplaced} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onOpenSetup={() => {}} onOpenEnvironment={() => {}} onOpenSecrets={() => {}} onNotice={() => {}}/>
   </ClientProvider>);
   expect(html).toContain('群目录');
   expect(html).toContain('3 个群放错了位置');

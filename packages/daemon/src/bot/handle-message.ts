@@ -92,6 +92,7 @@ import { CardDispatcher, type CardActionHandler } from '../card/dispatcher';
 import { closeOwnedProviderProcesses } from '../agent/owned-process';
 import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
 import { createJudge } from '../judge/judge';
+import { createJudgeUsage } from '../judge/usage';
 import { installAtGuard } from '../card/at-guard';
 import { sendManagedCard, updateManagedCard } from '../card/managed';
 import { RunRender } from '../card/run-render';
@@ -979,7 +980,8 @@ export function createOrchestrator(
   topics?: TopicRegistry,
   /** `droppedFile`: where a shutdown keeps the queued messages it drops (s18c). No default: without it, nothing is
    * kept or answered (tests, and every caller but `daemon run`). */
-  options?: { droppedFile?: string; bot?: BotIdentity },
+  // Only daemon run supplies judgeUsageFile; tests that omit it do not persist usage.
+  options?: { droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity },
 ): Orchestrator {
   const bindingBot = options?.bot ? { ...options.bot } : undefined;
   /** Lazily-constructed backends by id — one instance per backend for the whole
@@ -1043,7 +1045,10 @@ export function createOrchestrator(
   const backend = backendFor();
   const sessionTitles = new SessionTitleCoordinator({ backendFor: (id) => backendFor(id) });
   /** Smart-mode judgements (s23), for groups in 智能 (s25). */
-  const judge = createJudge({ backendFor: (id) => backendFor(id) });
+  const judgeUsage = options?.judgeUsageFile ? createJudgeUsage({ file: options.judgeUsageFile }) : undefined;
+  const judge = createJudge({ backendFor: (id) => backendFor(id), onResult: (_req, result, call) => {
+    if (call.sent) judgeUsage?.add(result);
+  } });
   /** What smart groups' judgements read, and how many each group may make in an hour (s25). */
   const recent = new RecentLines();
   const budget = new JudgeBudget();
@@ -7904,6 +7909,11 @@ export function createOrchestrator(
     if (dropped.queued || dropped.held || dropped.compacts) log.info('bridge', 'shutdown_dropped', dropped);
     startCleanup(() => sessionTitles.shutdown());
     startCleanup(() => judge.shutdown());
+    // Abort results finish in microtasks; persist them without waiting for backend cleanup.
+    if (judgeUsage) startCleanup(async () => {
+      await new Promise<void>(resolve => setImmediate(resolve));
+      await judgeUsage.close();
+    });
     const live = [...new Set(sessions.values())];
     sessions.clear();
     for (const thread of live) startCleanup(() => thread.close());
