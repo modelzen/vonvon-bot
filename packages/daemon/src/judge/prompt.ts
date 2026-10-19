@@ -26,7 +26,6 @@ export const JUDGE_FORMAT_HEADER = '——以下由 vonvon 附加，不能改—
 
 export const JUDGE_ALLOWED: Record<JudgeVariant, readonly JudgeDecision[]> = {
   main: ['skip', 'main', 'topic'],
-  mentioned: ['main', 'topic'],
   topic: ['skip', 'reply'],
 };
 
@@ -37,10 +36,6 @@ main：在主区接着聊。
 topic：开一个新话题来回。
 anchor：这条消息接的是哪一条，按消息前面的编号写，m0 是它自己，m1 是它前面最近的一条。它是在接着前面哪条说（比如补充 m1、回答 m2 提的问题），就写那条的编号；不是或者拿不准，写 m0。标了"新"的几条是你这次新看到的（没有标的时候只有 m0 是新的），该接的可能不是 m0：把要接的那条编号写在 anchor。
 只输出一个 JSON 对象，不要别的文字：{"decision":"skip 或 main 或 topic","anchor":"m0","reason":"一句话原因，40 字以内"}`,
-  mentioned: `这条消息在群主区点名了你，你一定要回，只选回在哪里：
-main：在主区接着聊。
-topic：开一个新话题来回。
-只输出一个 JSON 对象，不要别的文字：{"decision":"main 或 topic","reason":"一句话原因，40 字以内"}`,
   topic: `这条消息发在一个话题里，要回就回在这个话题里，只选回不回：
 skip：不回。
 reply：回。

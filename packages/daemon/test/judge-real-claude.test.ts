@@ -15,7 +15,7 @@ import { filesWith } from './helpers/marker-scan';
  * VONVON_REAL_JUDGE=1; CI never runs it. Keeps the real HOME (the login lives there) and points
  * the data root (VONVON_HOME) and the judge cwd (VONVON_JUDGE_CWD) at a temporary directory. The
  * judge cwd gets an empty `memory/` folder under ~/.claude/projects (s23c spike), so pass a fixed
- * VONVON_JUDGE_CWD across runs. `VONVON_REAL_JUDGE_RUNS=<n>` repeats the three variants n times (e12).
+ * VONVON_JUDGE_CWD across runs. `VONVON_REAL_JUDGE_RUNS=<n>` repeats the two variants n times (e12).
  */
 const REAL = process.env.VONVON_REAL_JUDGE === '1';
 const RUNS = Math.max(1, Number(process.env.VONVON_REAL_JUDGE_RUNS ?? 1) || 1);
@@ -27,7 +27,6 @@ const marker = randomUUID();
 
 const MESSAGES: Record<JudgeVariant, { text: string; mentions?: string[] }> = {
   main: { text: '今天食堂的红烧肉不错' },
-  mentioned: { text: '@小码 订单接口一直报 500', mentions: ['小码'] },
   topic: { text: '这个报错能帮我看下吗' },
 };
 
@@ -68,9 +67,9 @@ describe.skipIf(!REAL)('真实 Claude 判断（VONVON_REAL_JUDGE=1）', () => {
     if (ownCwd) rmSync(ownCwd, { recursive: true, force: true });
   });
 
-  it('haiku，字符串 systemPrompt：三种变体格式对，决定在这个变体允许的集合里', async () => {
+  it('haiku，字符串 systemPrompt：两种变体格式对，决定在这个变体允许的集合里', async () => {
     for (let run = 0; run < RUNS; run++) {
-      for (const variant of ['main', 'mentioned', 'topic'] as const) {
+      for (const variant of ['main', 'topic'] as const) {
         const result = await judge.judge(request(variant));
         console.log(JSON.stringify({ variant, model: result.model, decision: result.decision, ms: result.ms, error: result.error?.kind }));
         expect(result.error).toBeUndefined();

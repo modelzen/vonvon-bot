@@ -6,11 +6,10 @@ export type { JudgeErrorKind } from '../agent/error-kind';
 
 /**
  * Where the message to judge was posted (product.md 3.4):
- *   main      group main area, nobody named: skip / main / topic
- *   mentioned group main area, names this bot: it always replies, only main / topic
+ *   main      group main area, named or unnamed: skip / main / topic
  *   topic     inside a topic (topic-group posts too): skip / reply
  */
-export type JudgeVariant = 'main' | 'mentioned' | 'topic';
+export type JudgeVariant = 'main' | 'topic';
 export type JudgeDecision = 'skip' | 'main' | 'topic' | 'reply';
 
 /**
@@ -69,12 +68,12 @@ export interface JudgeRequest {
   ref?: string;
   /** s25 and s26 abort when the message is recalled or they give up */
   signal?: AbortSignal;
-  /** default by variant, see JUDGE_TIMEOUT_MS */
+  /** default by variant (JUDGE_TIMEOUT_MS); named messages pass JUDGE_NAMED_TIMEOUT_MS */
   timeoutMs?: number;
 }
 
 export interface JudgeResult {
-  /** always set; on failure `main` for mentioned and `skip` otherwise, but `skip` for aborted and closed */
+  /** always set; skip on any failure, including aborted and closed */
   decision: JudgeDecision;
   /** the model's reason, at most 80 characters, empty on failure; a decision model's is written from its options (s23f) */
   reason: string;
