@@ -52,6 +52,14 @@ describe('countBotWakes: the boundary', () => {
     expect(countBotWakes([...msgs, later], { messageId: 't', createTime: msgs.at(-1)!.createTime }, ME, T, true).n).toBe(2);
   });
 
+  it('a trigger with no time bounds nothing, so the count fails (E4)', () => {
+    const msgs = [user('u'), atBot('b1', 'cli_x', ['ou_me']), atBot('t', 'cli_me', ['ou_x'])];
+    const later = user('later'); // sent after the trigger: with no time to bound it, it would end the count
+    expect(countBotWakes([...msgs, later], { messageId: 't', createTime: 0 }, ME, T, true)).toMatchObject({ kind: 'failed' });
+    expect(countBotWakes(msgs, { messageId: 't', createTime: Number.NaN }, ME, T, true)).toMatchObject({ kind: 'failed' });
+    expect(countBotWakes(msgs, { messageId: 't', createTime: msgs.at(-1)!.createTime }, ME, T, true)).toMatchObject({ kind: 'ok', n: 2 });
+  });
+
   it('a person\'s message with an empty text (a bare @) is still the boundary', () => {
     const msgs = [atBot('o1', 'cli_x', ['ou_me']), user('u', { text: '' }), atBot('t', 'cli_x', ['ou_me'])];
     expect(count(msgs).n).toBe(1);
@@ -240,6 +248,15 @@ describe('wakeTriggerText', () => {
     expect(wakeTriggerText(msg('字'.repeat(BOT_TRIGGER_MAX)), undefined)).toBe('字'.repeat(BOT_TRIGGER_MAX));
     const long = wakeTriggerText(msg('字'.repeat(BOT_TRIGGER_MAX + 1)), undefined);
     expect(long).toBe(`${'字'.repeat(BOT_TRIGGER_MAX)}…（已截断，需要时用 vonvon 飞书 skill 查全文）`);
+  });
+
+  it('does not cut an emoji in two at the limit (E1)', () => {
+    const out = wakeTriggerText(msg(`${'a'.repeat(BOT_TRIGGER_MAX - 1)}😀${'b'.repeat(50)}`), undefined);
+    expect(out).toBe(`${'a'.repeat(BOT_TRIGGER_MAX - 1)}…（已截断，需要时用 vonvon 飞书 skill 查全文）`);
+    expect(out).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/);
+    // Ending right after the emoji keeps it whole.
+    const whole = wakeTriggerText(msg(`${'a'.repeat(BOT_TRIGGER_MAX - 2)}😀${'b'.repeat(50)}`), undefined);
+    expect(whole.startsWith(`${'a'.repeat(BOT_TRIGGER_MAX - 2)}😀…`)).toBe(true);
   });
 
   it('goes through the quote sanitizer: control characters and runs of blank lines go, lines stay', () => {

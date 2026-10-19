@@ -347,13 +347,14 @@ export interface PullOpts {
   /** Keep this bot's own messages too (a topic opening's main-area lines). */
   keepSelf?: boolean;
   names?: NameBook;
-  /** A wake count (s27a-0): keep a message whose text is empty too, as a bare `<at>` still wakes. */
+  /** A wake count (s27a-0): keep a message whose text is empty too, as a bare `<at>` still wakes; and read past an
+   * empty page that says there is more, as the start has not been reached. */
   mentions?: true;
   /** Stop after the page where a message taken straight from it (not a held one) passes this; the pull is then complete. */
   stopWhen?: (m: ContextMessage) => boolean;
-  /** All pages together; FETCH_DEADLINE_MS when unset. */
+  /** All pages together; FETCH_DEADLINE_MS when unset. No page is asked for once it has run out. */
   deadlineMs?: number;
-  /** Looked at before each page: once aborted, the pull fails. */
+  /** Once aborted, before a page or while one is read, the pull fails at once, pages read or not. */
   signal?: AbortSignal;
 }
 
@@ -432,7 +433,9 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
     const me = meOf(channel);
     for (let page = 0; page < PAGE_CAP; page++) {
       if (opts.signal?.aborted) return failedPull();
-      const res = await withDeadline(channel.rawClient.im.v1.message.list({
+      const left = deadline - Date.now();
+      // Out of time before this page: it is not asked for (the same as a page that timed out).
+      const res = left <= 0 ? undefined : await abortable(withDeadline(channel.rawClient.im.v1.message.list({
         params: {
           container_id_type: c.type,
           container_id: c.id,
@@ -443,7 +446,8 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
           ...window,
           ...(pageToken ? { page_token: pageToken } : {}),
         },
-      }), deadline - Date.now(), 'context-pull');
+      }), left, 'context-pull'), opts.signal);
+      if (res === ABORTED || opts.signal?.aborted) return failedPull();
       if (!res) {
         // Out of time. The pages read so far hold the most recent messages and are
         // kept, as at the page cap; with none, the pull fails and the watermark stays.
@@ -486,7 +490,10 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
         // The bot's own messages are left out; one a topic hangs under is handed back apart (s14c).
         if (take(m, own) && opts.stopWhen?.(m)) stop = true;
       }
-      if (!data?.has_more || !data.page_token || items.length === 0) return done(true);
+      if (!data?.has_more || !data.page_token) return done(true);
+      // An empty page that says there is more: a weave stops there as before; a wake count reads on, as it has not
+      // reached the start, and ends incomplete at the page cap or the deadline.
+      if (items.length === 0 && !opts.mentions) return done(true);
       if (stop) return done(true);
       if (stopAt > 0 && oldest <= stopAt) return done(true);
       if (opts.enough && found.length >= opts.enough) return done(false);
@@ -507,6 +514,20 @@ function where(c: Container): Record<string, string> {
 
 function failedPull(): ThreadPull {
   return { messages: [], ok: false, complete: false };
+}
+
+const ABORTED = Symbol('aborted');
+
+/** `p`, or {@link ABORTED} as soon as `signal` is aborted; the listener goes when either settles. */
+function abortable<T>(p: Promise<T>, signal: AbortSignal | undefined): Promise<T | typeof ABORTED> {
+  if (!signal) return p;
+  if (signal.aborted) return Promise.resolve(ABORTED);
+  let onAbort = (): void => undefined;
+  const aborted = new Promise<typeof ABORTED>((resolve) => {
+    onAbort = () => resolve(ABORTED);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  return Promise.race([p, aborted]).finally(() => signal.removeEventListener('abort', onAbort));
 }
 
 /** The most recent `limit` messages to weave (oldest→newest in, same order
@@ -864,7 +885,10 @@ export function sanitizeContext(s: string, maxLen: number, oneLine: boolean, lin
   out = oneLine ? out.replace(/\s+/g, ' ') : out.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
   out = out.trim();
   if (out.length <= maxLen) return out;
-  const cut = links ? linkCut(out, maxLen) : maxLen;
+  let cut = links ? linkCut(out, maxLen) : maxLen;
+  // Not between the two halves of a surrogate pair (an emoji): a lone half is not text (s27a-0).
+  const before = out.charCodeAt(cut - 1);
+  if (cut > 0 && cut < out.length && before >= 0xd800 && before <= 0xdbff) cut--;
   return cut < out.length ? `${out.slice(0, cut)}…` : out;
 }
 

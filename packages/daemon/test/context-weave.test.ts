@@ -1203,6 +1203,58 @@ describe('a wake count\'s pull (s27a-0)', () => {
     expect(await fetchThreadContext(ch, 'omt_x', { signal: before.signal })).toEqual({ messages: [], ok: false, complete: false });
   });
 
+  it('fails at once when `signal` is aborted while a page is read, even one that answers after (C1)', async () => {
+    vi.spyOn(log, 'info').mockImplementation(() => undefined);
+    // A page that never answers: the abort ends the pull, not the deadline.
+    const ac = new AbortController();
+    const hung = fetchThreadContext(listChannel(() => new Promise<never>(() => undefined)), 'omt_x', { mentions: true, signal: ac.signal, deadlineMs: 60_000 });
+    ac.abort();
+    const waiting = new Promise((r) => { setTimeout(() => r('still waiting'), 200); });
+    expect(await Promise.race([hung, waiting])).toEqual({ messages: [], ok: false, complete: false });
+    // The last page answers, then the abort comes before the pull goes on: still failed.
+    let answer!: (v: unknown) => void;
+    const late = new AbortController();
+    const last = fetchThreadContext(listChannel(() => new Promise((r) => { answer = r; })), 'omt_x', { mentions: true, signal: late.signal });
+    await Promise.resolve();
+    answer({ code: 0, data: { items: [other('om_1', 10)], has_more: false } });
+    late.abort();
+    expect(await last).toEqual({ messages: [], ok: false, complete: false });
+  });
+
+  it('asks for no page once the deadline is used up (C2)', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(log, 'info').mockImplementation(() => undefined);
+    let calls = 0;
+    const ch = listChannel(async () => {
+      calls++;
+      vi.setSystemTime(Date.now() + 5000); // the first page takes the whole budget
+      return { code: 0, data: { items: [other(`om_${calls}`, 10)], has_more: true, page_token: String(calls) } };
+    });
+    const out = await fetchThreadContext(ch, 'omt_x', { mentions: true, deadlineMs: 5000 });
+    expect(calls).toBe(1);
+    expect(out).toMatchObject({ ok: true, complete: false, messages: [{ messageId: 'om_1' }] });
+  });
+
+  it('reads past an empty page that says there is more in a count; a weave stops there as before (E3)', async () => {
+    const pages = [[other('om_2', 20)], [], [person('om_u', 15, '真人')]];
+    const calls: Record<string, unknown>[] = [];
+    const count = await fetchThreadContext(pagesChannel(pages, calls), 'omt_x', { mentions: true, stopWhen: (m) => m.from === 'user' });
+    expect(calls).toHaveLength(3);
+    expect(count).toMatchObject({ ok: true, complete: true });
+    expect(count.messages.map((m) => m.messageId)).toEqual(['om_u', 'om_2']);
+    const weaveCalls: Record<string, unknown>[] = [];
+    const weave = await fetchThreadContext(pagesChannel(pages, weaveCalls), 'omt_x', {});
+    expect(weaveCalls).toHaveLength(2);
+    expect(weave).toMatchObject({ ok: true, complete: true });
+    expect(weave.messages).toHaveLength(0); // om_2 is a bare @: empty text, dropped outside a count
+  });
+
+  it('sanitizeContext does not leave half an emoji at the cut (E1)', () => {
+    expect(sanitizeContext('ab😀c', 3, true)).toBe('ab…');
+    expect(sanitizeContext('ab😀c', 3, true, true)).toBe('ab…');
+    expect(sanitizeContext('ab😀c', 4, true)).toBe('ab😀…');
+  });
+
   it('writes another bot as the sender with 「（bot）」 after its name, and the block still strips', () => {
     const out = weaveSender('请审一下', { senderId: 'ou_p', senderName: '小P（假装真人）' }, 0, { bot: true });
     expect(out.startsWith('[本条消息的发信人：小P假装真人（bot）（open_id：ou_p）]')).toBe(true);

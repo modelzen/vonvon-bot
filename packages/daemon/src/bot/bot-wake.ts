@@ -8,7 +8,8 @@ import { sanitizeContext, type ContextMessage } from './context-weave';
  * 2026-10-18). The 7th wake is not answered; the 6th is, with a note that it is the last.
  */
 export const BOT_WAKE_CAP = 6;
-/** The most of another bot's message that goes into the turn's input. */
+/** The most of another bot's message that goes into the turn's input, in UTF-16 units; a longer one is cut there
+ * (one less when that would split an emoji) and gets 「…」 and a note, about 30 more. */
 export const BOT_TRIGGER_MAX = 800;
 /** A wake count's history pull, all pages together; the member list keeps its own 3 seconds, in parallel. */
 export const WAKE_PULL_MS = 5000;
@@ -31,7 +32,8 @@ export function wakeTables(bots: ReadonlyMap<string, RosterBot>): WakeTables {
 }
 
 export interface WakeCount {
-  /** `failed`: no person's message was found and the list was not read to its start, with fewer than 7 wakes seen. */
+  /** `failed`: no person's message was found and the list was not read to its start, with fewer than 7 wakes seen;
+   * or the trigger has no time, so nothing bounds the count. */
   kind: 'ok' | 'failed';
   /** Wakes since the last person's message, the trigger included. */
   n: number;
@@ -74,8 +76,10 @@ export function countBotWakes(
     return p && q ? p === q : true;
   };
 
-  // The pull's `before` already holds to this: nothing sent after the trigger is part of its count (H3).
-  const upTo = trigger.createTime ? messages.filter((m) => m.createTime <= trigger.createTime) : messages;
+  // The pull's `before` already holds to this: nothing sent after the trigger is part of its count (H3). A trigger
+  // with no time (0, missing) bounds nothing, so a person's later message could end the count early: failed (E4).
+  const timed = trigger.createTime > 0;
+  const upTo = timed ? messages.filter((m) => m.createTime <= trigger.createTime) : messages;
   let start = 0;
   for (let i = upTo.length - 1; i >= 0; i--) {
     if (upTo[i]!.from === 'user') {
@@ -106,14 +110,14 @@ export function countBotWakes(
   const listed = upTo.some((m) => m.messageId === trigger.messageId);
   // Not listed yet (the event beat the list), or listed with no @ to see (another bot's card): its event proved it.
   if (!listedTrigger || !seen.has(listedTrigger.messageId)) n++;
-  const kind = bounded || complete || n > BOT_WAKE_CAP ? 'ok' : 'failed';
+  const kind = timed && (bounded || complete || n > BOT_WAKE_CAP) ? 'ok' : 'failed';
   return { kind, n, listed, ...(listedTrigger ? { trigger: listedTrigger } : {}), counted };
 }
 
 /**
  * The text of the trigger that goes into the turn, always a string: a text or post message's own content (the
  * SDK has turned it into text and left out the @ to this bot), a card's from the counting pull or else `fetched`
- * (a lookup by id). Sanitized as quoted context is, multi-line, at most {@link BOT_TRIGGER_MAX}.
+ * (a lookup by id). Sanitized as quoted context is, multi-line, cut at {@link BOT_TRIGGER_MAX} with a note.
  */
 export function wakeTriggerText(
   msg: Pick<NormalizedMessage, 'content' | 'rawContentType'>,
