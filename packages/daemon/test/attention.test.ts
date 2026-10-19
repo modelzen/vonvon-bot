@@ -69,6 +69,11 @@ describe('due time', () => {
     expect(a.due(A.place, [], T0)).toBeUndefined();
     expect(a.due('oc_z', [T0], T0)).toBe(T0 + s(20));
   });
+  it('includes a newer hard signal in the quiet deadline without adding it to pending', () => {
+    const a = new Attention(); a.arrive(A, T0);
+    a.arrive(A, T0 + s(10));
+    expect(a.due(A.place, [T0], T0 + s(10))).toBe(T0 + s(30));
+  });
   it('10. waits until the previous look interval has passed', () => {
     const a = new Attention(); a.arrive(A, T0); a.glanced(A, T0 + s(20));
     a.verdict(A, 'glance', 'skip', T0 + s(25)); a.arrive(A, T0 + s(60));
@@ -186,6 +191,14 @@ describe('state memory and glance selection', () => {
     expect(a.notePrompt(A.chatId, 'h2')).toBe(true);
     expect(a.state(A.place)).toBeUndefined(); expect(a.state(B.place)).toBeDefined();
     expect(a.notePrompt(B.chatId, 'h1')).toBe(false);
+  });
+  it('keeps a prompt hash across forget so a later change is still detected', () => {
+    const a = new Attention();
+    expect(a.notePrompt(A.chatId, 'h1')).toBe(false);
+    expect(a.notePrompt(A.chatId, 'h2')).toBe(true);
+    a.forget(A.chatId);
+    expect(a.notePrompt(A.chatId, 'h3')).toBe(true);
+    expect(a.notePrompt(A.chatId, 'h3')).toBe(false);
   });
   it('28. evicts the least recently used place and permits mine to restore it', () => {
     const a = new Attention(); for (let n = 0; n < 200; n++) a.arrive(topic(n), T0);
