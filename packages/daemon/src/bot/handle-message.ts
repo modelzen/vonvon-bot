@@ -260,7 +260,7 @@ import {
   type SessionTitleSource,
 } from './session-title';
 import { lineOfMessage, quotedLine, RecentLines, type RecentLine } from './recent-lines';
-import { JudgeBudget, SmartLanes, type LaneEntry } from './smart-intake';
+import { JudgeBudget, SmartLanes, type LaneEntry, type JudgeKind } from './smart-intake';
 import { handleDmConsole } from './dm-console';
 import { createSyncCopyGate } from './sync-copy';
 import { fetchInteractiveCardText, isDegradedCardContent } from './card-content';
@@ -743,7 +743,7 @@ interface WakeFacts { text: string; sender: { openId?: string; name?: string } }
 /** What a smart group's lane decided for a batch (s25). */
 type SmartVerdict =
   | { kind: 'judged'; result: JudgeResult; wake?: WakeFacts }
-  /** Answered without a judgement: a named message over the budget, or a topic only its sender talks in (s25b). */
+  /** Answered without a judgement: a failed named judgement, or a topic only its sender talks in (s25b). */
   | { kind: 'direct' }
   /** Not judged: the group's hourly budget is spent. */
   | { kind: 'budget' }
@@ -1585,6 +1585,11 @@ export function createOrchestrator(
   /** Judgements by place, off the SDK's per-chat queue (smart-intake.ts). */
   const smartLanes = new SmartLanes<SmartItem, SmartVerdict>({
     judge: judgeSmart,
+    due: () => undefined,
+    now: Date.now,
+    setTimer: (fn, ms) => { const timer = setTimeout(fn, ms); timer.unref(); return timer; },
+    clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
+    overflow: (dropped) => log.info('intake', 'lane-overflow', { place: dropped[0]?.place.slice(-6), n: dropped.length }),
     // Into the place's session: after the earlier named messages there (design H1).
     ordered: (v) => v.kind === 'direct' || (v.kind === 'judged' && (v.result.decision === 'main' || v.result.decision === 'reply')),
     land: landSmart,
@@ -1601,15 +1606,12 @@ export function createOrchestrator(
       if (named) droppedReplies?.appendSync(originOf(msg, !msg.threadId));
       return;
     }
-    const item: SmartItem = { id: msg.messageId, place: msg.threadId ?? msg.chatId, named, msg, variant };
+    const item: SmartItem = { id: msg.messageId, place: msg.threadId ?? msg.chatId, kind: named ? 'named' : 'chat', msg, variant };
     if (variant === 'topic' && msg.threadId) item.solo = (scan ?? scanTopic(channel, msg.threadId, msg.senderId, LOOKUP_DEADLINE_MS)).solo;
     // Seen at once while its place is judged (up to 12 s): it gets an answer whatever the judgement says. The
     // run's own ⏳ and 🫳 follow once it lands, so this one is taken off then.
     if (named) item.ack = trackTask(addReaction(msg.messageId, 'THINKING'));
-    // Counted here, as a named message is judged at once; over the budget it goes to the main area unjudged (3.4).
-    const over = named && !budget.take(msg.chatId, Date.now());
-    if (over) log.info('intake', 'judge-budget', { ref: msg.messageId.slice(-6), named: true });
-    smartLanes.submit(item, over ? { value: { kind: 'direct' } } : undefined);
+    smartLanes.submit(item);
   }
 
   function submitWake(msg: NormalizedMessage): void {
@@ -1618,18 +1620,18 @@ export function createOrchestrator(
       log.info('intake', 'bot-wake-dropped', { ref: msg.messageId.slice(-6), why: 'shutdown' });
       return;
     }
-    const item: SmartItem = { id: msg.messageId, place: msg.threadId ?? msg.chatId, named: false, aside: true, wake: true, msg,
+    const item: SmartItem = { id: msg.messageId, place: msg.threadId ?? msg.chatId, kind: 'aside', wake: true, msg,
       variant: msg.threadId ? 'topic' : 'main' };
     smartLanes.submit(item);
   }
 
   /** Judges the newest message of a batch (the others came while the one before was judged: its context). Never
    * rejects: a lookup that throws answers a named message in the main area, as a failed judgement would. */
-  async function judgeSmart(batch: SmartItem[], signal: AbortSignal): Promise<SmartVerdict> {
+  async function judgeSmart(batch: SmartItem[], signal: AbortSignal, glance: boolean): Promise<SmartVerdict> {
     const item = batch[batch.length - 1]!;
     try {
       if (item.wake) return await judgeWake(item, signal);
-      return await judgeItem(item, signal);
+      return await judgeItem(item, signal, glance);
     } catch (error) {
       if (item.wake) {
         if (shuttingDown) {
@@ -1643,8 +1645,8 @@ export function createOrchestrator(
         return { kind: 'drop' };
       }
       log.fail('intake', error, { phase: 'smart-judge', ref: item.msg.messageId.slice(-6) });
-      if (!item.named) for (const b of batch) noteNotReplied(b.msg, 'judge-failed', { detail: errorDetail(error) });
-      return item.named ? { kind: 'direct' } : { kind: 'drop' };
+      if (item.kind !== 'named') for (const b of batch) noteNotReplied(b.msg, 'judge-failed', { detail: errorDetail(error) });
+      return item.kind === 'named' ? { kind: 'direct' } : { kind: 'drop' };
     }
   }
 
@@ -1687,7 +1689,7 @@ export function createOrchestrator(
       return { kind: 'drop' };
     }
     // 预算在过了上面几道门之后拿：名单外的、停用和改设置中的都不占 60 次。不另设被 bot @ 的子上限（owner 2026-10-19）。
-    if (!budget.take(msg.chatId, Date.now())) {
+    if (!budget.take(msg.chatId, Date.now(), 'bot')) {
       log.info('intake', 'judge-budget', { ref, wake: true });
       noteNotReplied(trig, 'judge-budget');
       return { kind: 'drop' };
@@ -1713,7 +1715,11 @@ export function createOrchestrator(
     return { ...msg, resources: [], senderId: sender.openId ?? '', senderName: sender.name ?? msg.senderName };
   }
 
-  async function judgeItem(item: SmartItem, signal: AbortSignal): Promise<SmartVerdict> {
+  function judgeKindOf(item: SmartItem, glance: boolean): JudgeKind {
+    return item.kind === 'aside' ? 'bot' : glance ? 'glance' : 'focus';
+  }
+
+  async function judgeItem(item: SmartItem, signal: AbortSignal, glance: boolean): Promise<SmartVerdict> {
     const { msg } = item;
     // A 同时发送到群 copy is looked up here, not on the chat's queue (s14d).
     if (!msg.threadId && !msg.mentionedBot && (await syncCopy.skip(msg, true))) return { kind: 'drop' };
@@ -1723,7 +1729,7 @@ export function createOrchestrator(
       log.info('intake', 'judge-solo', { ref: msg.messageId.slice(-6) });
       return { kind: 'direct' };
     }
-    if (!item.named && !budget.take(msg.chatId, Date.now())) return { kind: 'budget' };
+    if (item.kind !== 'named' && !budget.take(msg.chatId, Date.now(), judgeKindOf(item, glance))) return { kind: 'budget' };
     const project = await getProjectByChatId(msg.chatId);
     if (!project) return { kind: 'drop' };
     // Other bots' messages reach this one only through a pull (3.11): read them where there may be some.
@@ -1757,7 +1763,7 @@ export function createOrchestrator(
     return (state.triggerAt ?? 0) > msg.createTime;
   }
 
-  async function landSmart(batch: SmartItem[], verdict: SmartVerdict): Promise<void> {
+  async function landSmart(batch: SmartItem[], verdict: SmartVerdict, _glance: boolean): Promise<void> {
     const item = batch[batch.length - 1]!;
     try {
       await landVerdict(item, batch, verdict);
@@ -1876,7 +1882,7 @@ export function createOrchestrator(
     }
     const text = wake?.text ?? msg.content.trim();
     if (sessionModeOf(project) !== 'smart') {
-      if (!item.named) {
+      if (item.kind !== 'named') {
         if (wake) wakeDropped('rule-mode', '群切成了规则模式');
         else noteNotReplied(msg, 'group-updating');
         return;
@@ -1900,12 +1906,12 @@ export function createOrchestrator(
     if (decision === 'topic') {
       const reopened = await reopenedTopic(msg);
       if (stopped() || reopened) return;
-      if (!item.named) {
+      if (item.kind !== 'named') {
         const seen = mainWillWeave(msg) || await alreadySeen(msg, msg.chatId);
         if (stopped()) return;
         if (seen) { superseded(); return; }
       }
-    } else if (!item.named) {
+    } else if (item.kind !== 'named') {
       const seen = await alreadySeen(msg, ts.sessionKey);
       if (stopped()) return;
       if (seen || (wake && active.get(ts.sessionKey)?.woven?.has(msg.messageId))) { superseded(); return; }
@@ -8097,7 +8103,7 @@ export function createOrchestrator(
       if (state.waiting) lost.push(state.waiting);
     }
     // Named messages still judged (s25): their senders were promised an answer. Unnamed ones go without a word.
-    for (const item of smartLanes.pending()) if (item.named) lost.push(originOf(item.msg, !item.msg.threadId));
+    for (const item of smartLanes.pending()) lost.push(originOf(item.msg, !item.msg.threadId));
     return lost;
   }
 
