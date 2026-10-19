@@ -121,5 +121,5 @@ test('s28a review: custom judge search has a distinct title and conditional guid
   const custom = findEntries(entries, '判断的手填模型 id')[0];
   assert.equal(custom?.title, '判断的手填模型 id');
   assert.equal(custom?.destination.field, '判断模型');
-  assert.equal(findEntries(entries, '判断模型')[0]?.destination.guide, '不是智能群的，先把会话方式改成「智能开话题」，才有这一项。');
+  assert.equal(findEntries(entries, '判断模型').find(entry => entry.title === '判断模型' && entry.destination.field === '判断模型')?.destination.guide, '不是智能群的，先把会话方式改成「智能开话题」，才有这一项。');
 });
