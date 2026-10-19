@@ -1658,7 +1658,7 @@ export function createOrchestrator(
     const needText = msg.rawContentType === 'interactive' && !r.trigger?.text.trim();
     const [fetched, sender] = await Promise.all([
       needText
-        ? orStop(withDeadline(fetchQuotedMessage(channel, msg.messageId, names), LOOKUP_DEADLINE_MS, 'wake-trigger'), undefined).then((m) => m?.text)
+        ? orStop(withDeadline(fetchQuotedMessage(channel, msg.messageId, names, { refOnly: true }), LOOKUP_DEADLINE_MS, 'wake-trigger'), undefined).then((m) => m?.text)
         : Promise.resolve(undefined),
       wakeSender(msg, r.trigger, tables),
     ]);
@@ -1670,7 +1670,7 @@ export function createOrchestrator(
     let openId = trigger?.senderId;   // 列表里的 open_bot_id
     let name = trigger ? (trigger.senderAppId ? tables.byAppId.get(trigger.senderAppId)?.name : undefined) || trigger.senderName : undefined;
     if (!openId) {
-      const meta = await orStop(fetchMessageMeta(channel, msg.messageId, names, { event: 'wake-sender-lookup-failed', deadlineMs: LOOKUP_DEADLINE_MS }), undefined);
+      const meta = await orStop(fetchMessageMeta(channel, msg.messageId, names, { event: 'wake-sender-lookup-failed', deadlineMs: LOOKUP_DEADLINE_MS, refOnly: true }), undefined);
       openId = meta?.senderId;
     }
     if (!openId && msg.senderId.startsWith('ou_')) openId = msg.senderId;
