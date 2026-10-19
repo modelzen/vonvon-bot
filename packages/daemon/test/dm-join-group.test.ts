@@ -93,7 +93,7 @@ it('keeps topic choices on a missing-name error', async () => {
 it('keeps ordinary multi binding working', async () => {
   const { orchestrator } = app();
   try {
-    await orchestrator.dispatcher.handle(submit('Ordinary', 'multi', undefined));
+    await orchestrator.dispatcher.handle(submit('Ordinary', 'multi', ''));
     expect(await reply()).toContain('多会话');
     expect(await getProjectByName('Ordinary')).toMatchObject({ kind: 'multi', noMention: true });
   } finally { await orchestrator.shutdown(); }
@@ -102,7 +102,7 @@ for (const t of [undefined, 1, 'other']) it(`does not treat marker ${String(t)} 
   const { orchestrator } = app();
   try {
     const event = submit('', 'multi', t);
-    if (t === undefined && event.action.value) delete event.action.value.t;
+    if (t === undefined && event.action.value && 't' in event.action.value) delete event.action.value.t;
     await orchestrator.dispatcher.handle(event);
     const json = await reply();
     expect(json).toContain('submit_multi');

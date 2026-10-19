@@ -23,8 +23,10 @@ export async function readPendingGroups(file: string): Promise<Candidate[]> {
     const base = { chatId: value.chatId, operator: value.operator, addedAt: value.addedAt, generation: value.generation };
     if (value.state === 'verifying') return { ...base, state: 'verifying' };
     if (value.state === 'ready' && 'name' in value && typeof value.name === 'string' && value.name.trim()) {
-      if ('topic' in value && typeof value.topic !== 'boolean') throw new Error('待绑定群记录无效');
-      return { ...base, state: 'ready', name: value.name, ...('topic' in value ? { topic: value.topic } : {}) };
+      if (!('topic' in value)) return { ...base, state: 'ready', name: value.name };
+      const topic = value.topic;
+      if (typeof topic !== 'boolean') throw new Error('待绑定群记录无效');
+      return { ...base, state: 'ready', name: value.name, topic };
     }
     throw new Error('待绑定群记录无效');
   });

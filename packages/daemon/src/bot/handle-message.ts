@@ -7465,7 +7465,9 @@ export function createOrchestrator(
       if (info.chatType === 'p2p' || (channel.botIdentity?.openId && info.ownerId === channel.botIdentity.openId)) return { state: 'ignore' };
       const name = info?.name?.trim();
       if (!name) throw new Error('无法读取飞书群名称');
-      return { state: 'ready', name, topic: info.chatType === 'topic' || (await topicCtx.chatInfo(chatId)).topic };
+      // Feishu also returns topic; the SDK declaration only lists group and p2p.
+      const chatType: string = info.chatType;
+      return { state: 'ready', name, topic: chatType === 'topic' || (await topicCtx.chatInfo(chatId)).topic };
     },
     onError: error => log.fail('intake', error, { phase: 'pending-groups' }),
   });
@@ -7534,7 +7536,8 @@ export function createOrchestrator(
         return;
       }
       const name = info?.name?.trim() ?? '';
-      const topic = info?.chatType === 'topic' || mode.topic;
+      const chatType: string | undefined = info?.chatType;
+      const topic = chatType === 'topic' || mode.topic;
       const backends = backendOptionsFor('full');
       const backend = await defaultBindBackend(backends);
       if (shuttingDown) {

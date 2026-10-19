@@ -33,9 +33,10 @@ function harness(config = cfg) {
   const batch = vi.fn(async () => ({ code: 0, data: { items: [] } }));
   const get = vi.fn(async () => ({ code: 0, data: { items: [{ member_id: 'ou_guest', name: '访客' }] } }));
   const chat = vi.fn(async () => ({ code: 0, data: { chat_mode: 'group', group_message_type: 'chat' } }));
-  const channel = { send: vi.fn(async () => ({ messageId: 'om_reply' })), botIdentity: { openId: 'ou_bot' }, getChatInfo, rawClient: { contact: { v3: { user: { batch } } }, im: { v1: { chat: { get: chat }, chatMembers: { isInChat, get } } } } };
+  const send = vi.fn(async () => ({ messageId: 'om_reply' }));
+  const channel = { send, botIdentity: { openId: 'ou_bot' }, getChatInfo, rawClient: { contact: { v3: { user: { batch } } }, im: { v1: { chat: { get: chat }, chatMembers: { isInChat, get } } } } };
   const app = createOrchestrator(channel as never, config, paths.appDir); apps.push(app);
-  return { app, channel, getChatInfo, isInChat, batch, get, chat };
+  return { app, channel, send, getChatInfo, isInChat, batch, get, chat };
 }
 const apps: ReturnType<typeof createOrchestrator>[] = [];
 beforeEach(async () => {
@@ -124,7 +125,7 @@ it('s36b 20: a hung sweep preserves the candidate, logs failure, and retries on 
   await vi.waitFor(async () => expect(await pending()).toEqual([expect.objectContaining({ state: 'ready' })])); expect(fixture.send).toHaveBeenCalledOnce();
 });
 it('s36b offline regression: an unbound mention only replies; it neither records nor privately sends a setup card', async () => {
-  const { app, channel } = harness();
+  const { app, send } = harness();
   const message: NormalizedMessage = { messageId: 'om_offline', chatId: 'oc_offline', chatType: 'group', senderId: 'ou_owner', content: '在吗', mentionedBot: true, createTime: Date.now(), mentions: [], mentionAll: false, rawContentType: 'text', resources: [] };
-  await app.onMessage(message); expect(channel.send).toHaveBeenCalledWith('oc_offline', { markdown: '主人还没设置好这个群，设置好就能用。' }, expect.anything()); expect(fixture.send).not.toHaveBeenCalled(); expect(await pending()).toEqual([]);
+  await app.onMessage(message); expect(send).toHaveBeenCalledWith('oc_offline', { markdown: '主人还没设置好这个群，设置好就能用。' }, expect.anything()); expect(fixture.send).not.toHaveBeenCalled(); expect(await pending()).toEqual([]);
 });
