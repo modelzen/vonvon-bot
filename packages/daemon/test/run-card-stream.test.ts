@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RunCardStream } from '../src/card/run-card-stream';
-import { card, mdStream } from '../src/card/cards';
+import { card, md, mdStream } from '../src/card/cards';
+import { installAtGuard } from '../src/card/at-guard';
 
 /** A live frame whose only element is the streamed answer ({@link mdStream}). */
 function frame(answer: string) {
@@ -338,5 +339,56 @@ describe('RunCardStream terminal icon transport', () => {
     expect(ch.updates[1].data).toContain('"content":"final"');
     expect(ch.updates[0].sequence).toBeLessThan(ch.updates[1].sequence);
     expect(ch.updates[0].data).not.toContain('mutated after enqueue');
+  });
+});
+
+describe('RunCardStream — no bot <at> leaves the run card (s27a0, all fail on main)', () => {
+  const BOT = '<at id="ou_b">小审</at>';
+  const HUMAN = '<at id="ou_h">张三</at>';
+  /** A chat whose bot list is read only when the guard asks (`load`), after `read` resolves. */
+  function guarded() {
+    const ch = fakeChannel();
+    const elements: string[] = [];
+    ch.rawClient.cardkit.v1.cardElement.update = async (r: any) => { elements.push(r.data.element); return {}; };
+    let read!: () => void;
+    const gate = new Promise<void>((resolve) => { read = resolve; });
+    let bots: Map<string, { name: string }> | undefined;
+    const load = vi.fn(async () => { await gate; bots = new Map([['ou_b', { name: '小审' }]]); });
+    installAtGuard(ch, { peek: () => bots, load });
+    return { ch, elements, read, load };
+  }
+
+  it('streams the answer typewriter and element writes without it; a person is real once the list is read', async () => {
+    const { ch, elements, read, load } = guarded();
+    const s = new RunCardStream();
+    await s.create(ch, 'oc_at', frame('hello'), {});
+    s.streamCoalesced(ch, frame('hello'), 'answer');
+    await s.drain();
+    s.streamCoalesced(ch, frame(`hello ${BOT} ${HUMAN}`), 'answer'); // element route; does not wait for the list
+    await s.drain();
+    expect(ch.contents.at(-1).content).toBe('hello @小审 @张三');
+    expect(load).toHaveBeenCalledWith('oc_at');
+    read();
+    await s.updateElement(ch, 'local_file_0', { tag: 'markdown', element_id: 'local_file_0', content: `${BOT}${HUMAN}` });
+    expect(JSON.parse(elements[0]!).content).toBe(`@小审${HUMAN}`);
+    s.streamCoalesced(ch, frame(`hello ${BOT} ${HUMAN}!`), 'answer');
+    await s.drain();
+    expect(ch.contents.at(-1).content).toBe(`hello @小审 ${HUMAN}!`);
+  });
+
+  it('a streamed whole-card frame does not wait; the final card does, and keeps the person', async () => {
+    const { ch, read } = guarded();
+    const s = new RunCardStream();
+    await s.create(ch, 'oc_at', frame('hi'), {});
+    s.streamCoalesced(ch, card([md(`过程 ${BOT}`), mdStream(`回答 ${HUMAN}`, 'answer')], { streaming: true }), 'answer');
+    await s.drain();
+    expect(ch.updates.at(-1).data).toContain('过程 @小审');
+    expect(ch.updates.at(-1).data).toContain('回答 @张三');
+    const final = s.finalizeCard(ch, card([md(`过程 ${BOT}`), md(`回答 ${HUMAN}`)]));
+    read();
+    expect(await final).toBe(true);
+    expect(ch.updates.at(-1).data).toContain('过程 @小审');
+    expect(ch.updates.at(-1).data).toContain('回答 <at id=\\"ou_h\\">张三</at>');
+    expect(ch.updates.map((u: any) => u.data).join('')).not.toContain('ou_b');
   });
 });

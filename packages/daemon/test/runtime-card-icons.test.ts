@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RUNTIME_TERMINAL_ICON, serializeRuntimeCard } from '../src/card/runtime-card-icons';
+import { installAtGuard } from '../src/card/at-guard';
+import { buildAskCard } from '../src/card/ask-card';
+import { buildGoalDoneCard } from '../src/card/goal-card';
+import { buildCleanCard } from '../src/card/markdown-render';
+import { buildRunCard, buildRunCardPlain } from '../src/card/run-card';
+import { initialState, reduce } from '../src/card/run-state';
 
 function terminalCard() {
   return { body: { elements: [
@@ -99,5 +105,41 @@ describe('runtime terminal icon serialization', () => {
     finish({ data: { image_key: 'late_key' } });
     expect(await serializeRuntimeCard(terminalCard(), bot)).toBe(JSON.stringify(terminalCard()));
     expect(bot.im.v1.image.create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the <at> guard at the whole-card choke point (s27a0, all fail on main)', () => {
+  const BOT = '<at id="ou_b">小审</at>';
+  const bot = (): object => {
+    const client = { im: {} };
+    installAtGuard({ rawClient: client } as never, { peek: () => new Map([['ou_b', { name: '小审' }]]), load: async () => {} });
+    return client;
+  };
+  let state = reduce(initialState, { type: 'thinking', itemId: 'r', text: `推理里 ${BOT}` });
+  state = reduce(state, { type: 'text', itemId: 'p', text: `进度话 ${BOT}` });
+  state = reduce(state, { type: 'tool_use', itemId: 't', title: 'pwd', kind: 'command' });
+  state = reduce(state, { type: 'text', itemId: 'a', text: `回答 ${BOT}，<at id="ou_h">张三</at>` });
+
+  it.each([
+    ['a running card (process text and reasoning)', () => buildRunCard({ rs: state })],
+    ['a terminal card', () => buildRunCard({ rs: reduce(state, { type: 'done', turnId: 't' }) })],
+    ['a demoted card', () => buildRunCardPlain({ rs: state, cardKey: 'k' })],
+    ['a goal summary card', () => buildGoalDoneCard({ objective: `目标 ${BOT}`, status: 'complete', tokensUsed: 1, timeUsedSeconds: 1 })],
+    ['a fence card', () => buildCleanCard(`# 标题 ${BOT}\n\n正文 ${BOT}`)],
+  ])('%s carries no bot <at>', async (_name, build) => {
+    const out = await serializeRuntimeCard(build(), bot(), 'oc_1');
+    expect(out).toContain('@小审');
+    expect(out).not.toContain('ou_b');
+  });
+
+  it('keeps a person and an ask card\'s respondents, also when the bot list cannot be read', async () => {
+    expect(await serializeRuntimeCard(buildRunCard({ rs: state }), bot(), 'oc_1')).toContain('<at id=\\"ou_h\\">张三</at>');
+    const unread = { im: {} };
+    installAtGuard({ rawClient: unread } as never, { peek: () => undefined, load: async () => {} });
+    const ask = buildAskCard({ request: { id: 'q', kind: 'confirmation', title: '决定', detail: `问 ${BOT} 和 <at id="ou_h">张三</at>`,
+      acceptedConsequence: '做', declinedConsequence: '停' }, state: { kind: 'pending' }, respondents: [{ openId: 'ou_owner', name: '主人' }] });
+    const out = await serializeRuntimeCard(ask, unread, 'oc_1');
+    expect(out).toContain('<at id=\\"ou_owner\\">主人</at>');
+    expect(out).toContain('问 @小审 和 @张三');
   });
 });
