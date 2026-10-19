@@ -621,3 +621,17 @@ describe('buildRunCard — 表格与图片（渲染层改写）', () => {
     expect(els.some((e) => e.tag === 'collapsible_panel')).toBe(true);
   });
 });
+
+describe('handoff footnotes (s27b)', () => {
+  it('renders each terminal note before the model footer and never while running', () => {
+    const notes = ['→ 想 @ 小审（bot），没发出：发送失败', '→ 想 @ 小码（bot），没交接：群里不止一个叫 小码 的 bot'];
+    const rs = run([{ type: 'text', itemId: 'a', text: 'answer' }, { type: 'done', turnId: 't' }]);
+    const elements = bodyEls(buildRunCard({ rs, cardKey: 'm1', handoffNotes: notes, model: 'test-model', modelOnTerminal: true }));
+    const indexes = notes.map(line => elements.findIndex(el => el.content === `<font color='grey'>${line}</font>`));
+    expect(indexes[0]).toBeGreaterThan(elements.findIndex(el => el.element_id === ANSWER_EID));
+    expect(indexes[1]).toBe(indexes[0]! + 1);
+    for (const i of indexes) expect(elements[i!]).toMatchObject({ tag: 'markdown', text_size: 'notation' });
+    expect(JSON.stringify(elements.slice(indexes[1]! + 1))).toContain('test-model');
+    expect(JSON.stringify(buildRunCard({ rs: initialState, handoffNotes: notes }))).not.toContain('→ 想 @');
+  });
+});

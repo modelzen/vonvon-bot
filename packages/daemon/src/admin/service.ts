@@ -1,5 +1,4 @@
 import { pendingGroupsFile, readPendingGroups, type PendingGroup } from '../project/pending-groups';
-import { isAdmin } from '../config/schema';
 import type { CollaborationRequest } from './collaboration';
 import {runtimeDistribution} from '../service/distribution';
 import { createSettingsService } from './settings-service';
@@ -473,6 +472,9 @@ export interface AdminServiceDeps {
   uninstallBackend?: (pkg: string, opts?: { binName?: string }) => Promise<UninstallResult>;
 }
 
+// pendingGroupsSchema accepts at most 1,000 groups; stored records are retained.
+const MAX_PENDING_GROUPS = 1000;
+
 /**
  * AdminService 的统一实现：读路径直读 ~/.feishu-codex-bridge/bots/<appId>/ 下的
  * 注册表/会话文件（复用 registry / session-store / store 模块的显式路径导出，
@@ -621,9 +623,10 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       if (!isComplete(cfg)) return { groups: [] };
       const bound = new Set((await listProjectsIn(files.projectsFile)).map(project => project.chatId));
       const groups = (await readPendingGroups(pendingGroupsFile(files.projectsFile)))
-        .flatMap(group => group.state === 'ready' && isAdmin(cfg, group.operator) && !bound.has(group.chatId)
-          ? [{ chatId: group.chatId, name: group.name, addedAt: group.addedAt }] : []);
-      return { groups };
+        .flatMap(group => group.state === 'ready' && !bound.has(group.chatId)
+          ? [{ chatId: group.chatId, name: group.name, addedAt: group.addedAt, ...(group.topic === undefined ? {} : { topic: group.topic }) }] : []);
+      return { groups: groups.length > MAX_PENDING_GROUPS
+        ? groups.sort((a, b) => b.addedAt - a.addedAt).slice(0, MAX_PENDING_GROUPS) : groups };
     },
     async joinedGroups(botId, cursor) {
       if (!deps.executeGroups) throw new NotWiredYetError('群列表');

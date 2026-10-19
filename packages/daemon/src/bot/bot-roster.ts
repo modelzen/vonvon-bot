@@ -5,7 +5,7 @@ import { feishuError, scopeDenial } from '../utils/feishu-error';
 import { deniedScopeName, errorDetail, reportScopeDenied } from './diagnostics';
 import { withDeadline } from './names';
 
-/** How long a chat's bot list is trusted by the `<at>` guard (D/card/at-guard.ts). A wake count reads past it. */
+/** How long a chat's bot list is trusted by the `<at>` guard (D/card/at-guard.ts). */
 export const ROSTER_TTL_MS = 10 * 60_000;
 /** A failed read is not tried again sooner: the guard asks on every frame. */
 export const ROSTER_RETRY_MS = 60_000;
@@ -20,14 +20,15 @@ interface MembersBody {
   data?: { bots?: { app_id?: unknown; member_id?: unknown; name?: unknown }[]; has_more?: boolean };
 }
 type Bots = ReadonlyMap<string, RosterBot>;
-/** `pending` is a read in flight, settling with what it read, or undefined when it failed. */
-interface Entry { bots?: Bots; until: number; pending?: Promise<Bots | undefined> }
+interface Snapshot { bots: Bots; complete: boolean }
+/** `pending` settles with this read's bots, or undefined on failure. */
+interface Entry { snapshot?: Snapshot; until: number; pending?: Promise<Bots | undefined> }
 
-/** The guard's view, and a fresh read for a wake count (s27a-0). */
+/** The guard's view and complete roster for outgoing handoffs. */
 export interface BotRoster extends ChatBots {
-  /** A fresh read, past the cache: this read's list, or undefined when it failed (never the old list: two computers
-   * could hold different ones). Shares a read in flight; a success refreshes the cache too. */
-  refresh(chatId: string): Promise<Bots | undefined>;
+  peek(chatId: string): Bots | undefined;
+  /** Only a complete observed list can establish unique names for outgoing handoffs. */
+  peekForHandoff(chatId: string): Bots | undefined;
 }
 
 /**
@@ -42,7 +43,7 @@ export function createBotRoster(
 ): BotRoster {
   const entries = new Map<string, Entry>();
 
-  async function read(chatId: string, stale: boolean): Promise<Bots | undefined> {
+  async function read(chatId: string, stale: boolean): Promise<Snapshot | undefined> {
     const where = { chatId: chatId.slice(-6), stale };
     const failed = (reason: string, failure?: unknown): undefined => {
       const denial = scopeDenial(failure);
@@ -73,7 +74,7 @@ export function createBotRoster(
       // My app_id too: a wake count tells this bot's messages by it (s27a-0).
       if (me?.openId && !bots.has(me.openId)) bots.set(me.openId, { appId: channel.rawClient.appId ?? '', name: me.name });
       log.info('card', 'bot-roster', { ...where, bots: bots.size, ...(body.data?.has_more ? { more: true } : {}) });
-      return bots;
+      return { bots, complete: body.data?.has_more !== true };
     } catch (err) {
       const code = feishuError(err)?.code;
       return failed(code !== undefined ? `code=${code}` : errorDetail(err) ?? 'error', err);
@@ -86,25 +87,25 @@ export function createBotRoster(
     return entry;
   }
   function start(chatId: string, entry: Entry): Promise<Bots | undefined> {
-    const pending = read(chatId, Boolean(entry.bots)).then((bots) => {
-      if (bots) entry.bots = bots;
-      entry.until = Date.now() + (bots ? ROSTER_TTL_MS : ROSTER_RETRY_MS);
-      return bots;
+    const pending = read(chatId, Boolean(entry.snapshot)).then((snapshot) => {
+      if (snapshot) entry.snapshot = snapshot;
+      entry.until = Date.now() + (snapshot ? ROSTER_TTL_MS : ROSTER_RETRY_MS);
+      return snapshot?.bots;
     }).finally(() => { entry.pending = undefined; });
     entry.pending = pending;
     return pending;
   }
 
   return {
-    peek: (chatId) => entries.get(chatId)?.bots,
+    peek: (chatId) => entries.get(chatId)?.snapshot?.bots,
+    peekForHandoff(chatId) {
+      const snapshot = entries.get(chatId)?.snapshot;
+      return snapshot?.complete ? snapshot.bots : undefined;
+    },
     async load(chatId) {
       const entry = entryOf(chatId);
       if (entry.pending) await entry.pending;
       else if (entry.until <= Date.now()) await start(chatId, entry);
-    },
-    refresh(chatId) {
-      const entry = entryOf(chatId);
-      return entry.pending ?? start(chatId, entry);
     },
   };
 }
