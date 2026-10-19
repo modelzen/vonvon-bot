@@ -1168,8 +1168,8 @@ describe('bot handoffs (s27b)', () => {
   });
   it('a private chat never hands off or adds footnotes', async () => {
     answers('@小审 请审');
-    await send({ ...says('请写', { at: true }), chat_type: 'p2p' }); await landed();
-    expect(replies()).toEqual([]); expect(finalText()).not.toContain('→ 想 @');
+    await send({ ...says('请写', { at: true }), chat_type: 'p2p' }); await settle();
+    expect(fake.inputs).toEqual([]); expect(fake.finals).toEqual([]); expect(replies()).toEqual([]);
   });
   it('a reply without a result code is failed delivery', async () => {
     fake.reply.mockImplementation(async () => JSON.parse('{"data":{"message_id":"om_no_code"}}'));

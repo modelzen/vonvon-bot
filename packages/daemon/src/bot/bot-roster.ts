@@ -25,6 +25,7 @@ interface Entry { bots?: Bots; until: number; pending?: Promise<Bots | undefined
 
 /** The guard's view, and a fresh read for a wake count (s27a-0). */
 export interface BotRoster extends ChatBots {
+  peek(chatId: string): Bots | undefined;
   /** A fresh read, past the cache: this read's list, or undefined when it failed (never the old list: two computers
    * could hold different ones). Shares a read in flight; a success refreshes the cache too. */
   refresh(chatId: string): Promise<Bots | undefined>;

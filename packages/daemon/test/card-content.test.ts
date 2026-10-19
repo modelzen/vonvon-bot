@@ -239,7 +239,7 @@ it('omits handoff status notes but keeps other grey prose (s27b)', () => {
     { tag: 'markdown', content: "<font color='grey'>→ 想 @ 小审（bot），没发出：发送失败</font>" },
     { tag: 'markdown', content: "<font color='grey'>→ 想想别的</font>" },
   ] } };
-  const text = extractRawCardText(card);
+  const text = extractSendCardText(card);
   expect(text).not.toContain('→ 想 @');
   expect(text).toContain('→ 想想别的');
 });
