@@ -1,4 +1,5 @@
 import { smartSalience, type Salience, type SalienceDeps } from './salience';
+import { getAppRoleSnapshot } from '../config/app-roles';
 import { createChatPeople } from './chat-people';
 import { findHandoffs, handoffSendResult, type HandoffSendResult, handoffText, handoffNote, ambiguousNote, ambiguousPersonNote, overNote, incompleteNote, otherBotNames, HANDOFF_SEND_MS, type HandoffMiss } from './bot-handoff';
 import { AskCoordinator, type AskTurn } from './ask-coordinator';
@@ -4637,6 +4638,10 @@ export function createOrchestrator(
   // DM management console buttons (design §3.1). Admin-gated; sub-views patch
   // the same card in place, each carrying a ⬅️ 菜单 back button.
   const dmAdmin = (openId?: string): boolean => isAdmin(cfg, openId ?? '');
+  const administratorIds = (): (string | undefined)[] => {
+    const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
+    return [roles?.ownerOpenId, ...(roles?.admins ?? []), cfg.preferences?.access?.ownerOpenId, ...(cfg.preferences?.access?.admins ?? [])];
+  };
   // DM cards are CardKit entities (sendManagedCard); update them via the
   // settle-then-cardkit path so the click's callback acks first. Passing the
   // whole evt lets settleUpdate self-heal an orphaned (post-restart) card by
@@ -5565,7 +5570,7 @@ export function createOrchestrator(
     .on(DM.admins, ({ evt }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
       patch(evt, async () =>
-        buildAdminsCard(cfg, await namesWithOperator(evt, [resolveOwner(cfg), ...(cfg.preferences?.access?.admins ?? [])])),
+        buildAdminsCard(cfg, await namesWithOperator(evt, administratorIds())),
       );
     })
     .on(DM.addAdminForm, ({ evt }) => {
@@ -5585,12 +5590,12 @@ export function createOrchestrator(
         if (id) {
           await writePreferences((preferences) => {
             const access: AppAccess = { ...(preferences.access ?? {}) };
-            access.ownerOpenId ??= resolveOwner(cfg);
+            access.ownerOpenId ??= cfg.preferences?.access?.admins?.[0];
             access.admins = Array.from(new Set([...(access.admins ?? []), id]));
             preferences.access = access;
           }).catch((e) => log.fail('console', e, { phase: 'save-config' }));
         }
-        const ids = [resolveOwner(cfg), ...(cfg.preferences?.access?.admins ?? [])];
+        const ids = administratorIds();
         const next = buildAdminsCard(cfg, await namesWithOperator(evt, ids));
         await sendManagedCard(channel, evt.chatId, next).catch((e) => log.fail('console', e, { phase: 'admin-add-result' }));
       })());
@@ -5599,15 +5604,17 @@ export function createOrchestrator(
       if (!dmAdmin(evt.operator?.openId)) return;
       const id = typeof value.u === 'string' ? value.u : '';
       patch(evt, async () => {
-        if (id && id !== resolveOwner(cfg)) {
+        const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
+        const scanner = cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0];
+        if (id && id !== resolveOwner(cfg) && id !== scanner && !roles?.admins.includes(id)) {
           await writePreferences((preferences) => {
             const access: AppAccess = { ...(preferences.access ?? {}) };
-            access.ownerOpenId ??= resolveOwner(cfg);
+            access.ownerOpenId ??= cfg.preferences?.access?.admins?.[0];
             access.admins = (access.admins ?? []).filter((x) => x !== id);
             preferences.access = access;
           }).catch((e) => log.fail('console', e, { phase: 'save-config' }));
         }
-        const ids = [resolveOwner(cfg), ...(cfg.preferences?.access?.admins ?? [])];
+        const ids = administratorIds();
         return buildAdminsCard(cfg, await namesWithOperator(evt, ids));
       });
     })
