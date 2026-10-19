@@ -1,6 +1,6 @@
 import { RpcError } from '@vonvon/client';
 import type { AdminReply, SecretService, SecretUse } from '@vonvon/protocol';
-import { keyProblem, secretsAction, type SecretsRequest, type SecretsView } from '../../admin/secrets';
+import { describeKeystoreError, keyProblem, secretsAction, type SecretsRequest, type SecretsView } from '../../admin/secrets';
 import { getSecret, removeSecret, setSecret } from '../../config/keystore';
 import { paths } from '../../config/paths';
 import { inBotSession } from '../../config/session-env';
@@ -168,40 +168,67 @@ export async function runSecretsRemove(name: string, extra: string[], options: {
   });
 }
 
-/** What `secrets get` answers for `ids`. A decision provider's key is never handed out: only the daemon reads it, and
- * this runs in bot sessions too, where lark-cli resolves the App Secret through it (s23g). */
-export async function secretValues(ids: string[], read: typeof getSecret = getSecret): Promise<{ values: Record<string, string>; errors: Record<string, { message: string }> }> {
-  const kept = new Set(decisionProviders().map(p => p.keyId));
-  const values: Record<string, string> = {};
-  const errors: Record<string, { message: string }> = {};
-  for (const id of ids) {
-    if (kept.has(id)) { errors[id] = { message: 'not handed out: only the daemon reads this key' }; continue; }
-    try {
-      const v = await read(id);
-      if (v !== undefined) values[id] = v;
-      else errors[id] = { message: 'not found' };
-    } catch (err) {
-      errors[id] = { message: err instanceof Error ? err.message : String(err) };
+/** lark-cli's exec provider (1.0.98, the same protocol as OpenClaw's). */
+export const EXEC_PROTOCOL_VERSION = 1;
+export interface ExecReply {
+  protocolVersion: typeof EXEC_PROTOCOL_VERSION;
+  values: Record<string, string>;
+  errors: Record<string, { message: string }>;
+}
+export type ExecRequest = { ids: string[] } | { ids: string[]; problem: string };
+
+export function parseExecRequest(input: string): ExecRequest {
+  let request: unknown;
+  try { request = JSON.parse(input); }
+  catch { return { ids: [], problem: 'invalid request JSON' }; }
+  if (typeof request !== 'object' || request === null || Array.isArray(request)) return { ids: [], problem: 'invalid request JSON' };
+  let ids: string[] = [];
+  if ('ids' in request) {
+    if (!Array.isArray(request.ids) || !request.ids.every((id: unknown) => typeof id === 'string')) {
+      return { ids: [], problem: 'invalid request: ids must be an array of strings' };
     }
+    ids = [...new Set<string>(request.ids)];
   }
-  return { values, errors };
+  if ('protocolVersion' in request && request.protocolVersion !== EXEC_PROTOCOL_VERSION) {
+    return { ids, problem: 'unsupported protocolVersion: only 1' };
+  }
+  return { ids };
 }
 
-/**
- * `secrets get` — exec-provider endpoint. Reads a JSON-RPC-ish request from
- * stdin (`{ protocolVersion, provider, ids: [...] }`) and writes
- * `{ values: { id: secret }, errors: { id: { message } } }` to stdout.
- * Invoked by the secrets-getter wrapper (and lark-cli) to resolve secrets.
- */
-export async function secretsGet(): Promise<void> {
-  const input = await readStdin();
-  let ids: string[] = [];
-  try {
-    const req = JSON.parse(input) as { ids?: string[] };
-    ids = Array.isArray(req.ids) ? req.ids : [];
-  } catch {
-    process.stdout.write(JSON.stringify({ values: {}, errors: { _: { message: 'invalid request JSON' } } }));
-    return;
+/** Decision provider keys stay inside the daemon; bot sessions may only resolve App Secrets. */
+export async function secretValues(ids: string[], read: typeof getSecret = getSecret): Promise<ExecReply> {
+  const kept = new Set(decisionProviders().map(p => p.keyId));
+  const values: [string, string][] = [];
+  const errors: [string, { message: string }][] = [];
+  for (const id of ids) {
+    if (kept.has(id)) { errors.push([id, { message: 'not handed out: only the daemon reads this key' }]); continue; }
+    try {
+      const value = await read(id);
+      if (value !== undefined) values.push([id, value]);
+      else errors.push([id, { message: 'not found' }]);
+    } catch (error) {
+      const { problem, code } = describeKeystoreError(error);
+      errors.push([id, { message: `${problem}（${code}）` }]);
+    }
   }
-  process.stdout.write(JSON.stringify(await secretValues(ids)));
+  return { protocolVersion: EXEC_PROTOCOL_VERSION, values: Object.fromEntries(values), errors: Object.fromEntries(errors) };
+}
+
+function failAll(ids: string[], message: string): ExecReply {
+  return { protocolVersion: EXEC_PROTOCOL_VERSION, values: {}, errors: Object.fromEntries((ids.length ? ids : ['_']).map(id => [id, { message }])) };
+}
+
+/** Writes one v1 reply so lark-cli receives errors without exposing filesystem paths. */
+export async function secretsGet(io = { input: readStdin, write: (text: string): void => { process.stdout.write(text); } }): Promise<void> {
+  let ids: string[] = [];
+  let reply: ExecReply;
+  try {
+    const request = parseExecRequest(await io.input());
+    ids = request.ids;
+    reply = 'problem' in request ? failAll(ids, request.problem) : await secretValues(ids);
+  } catch (error) {
+    const { code } = describeKeystoreError(error);
+    reply = failAll(ids, `secrets get 出错了（${code}）`);
+  }
+  io.write(`${JSON.stringify(reply)}\n`);
 }

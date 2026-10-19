@@ -1,10 +1,22 @@
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { link, lstat, mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
+import { link, lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
 import { paths } from './paths';
 import { acquireMutex, closeMutex } from './data-access';
+
+/** Readers take no locks, create no directories or files, and use no sockets. They read the store before the key;
+ * no store means no secret, without opening the key. Writers publish the key first (temp, fsync, link, directory
+ * fsync), then the store (temp, fsync, rename, directory fsync), replacing the whole store without truncation.
+ * master.key is published once: never overwrite, delete or rename onto it. Key rotation needs a new reader protocol.
+ * Readers return plaintext only after GCM final authenticates it. Hard links are allowed: a killed first writer
+ * may leave the key's temporary link behind, and authentication checks the content rather than the link count.
+ * Data leases exclude secrets get; operations that must exclude readers cannot rely on assertNoDataLeases.
+ */
+/** Files a keystore read opens under the data root, in order; s31b leaves them readable. */
+export const KEYSTORE_READ_FILES = ['secrets.enc', 'master.key'] as const;
+const READ_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
 
 const encoded = z.string().refine(value => Buffer.from(value, 'base64').toString('base64') === value, 'Invalid base64');
 const envelope = z.object({
@@ -22,8 +34,19 @@ const keystoreError = (code: string, message: string, cause?: unknown): Error =>
 
 async function readStore(): Promise<StoreFile | undefined> {
   let text: string;
-  try { text = await readFile(paths.secretsFile, 'utf8'); }
-  catch (error) { if (missing(error)) return undefined; throw error; }
+  let handle;
+  try { handle = await open(paths.secretsFile, READ_FLAGS); }
+  catch (error) {
+    if (missing(error)) return undefined;
+    if (error instanceof Error && 'code' in error && (error.code === 'ELOOP' || error.code === 'EMLINK')) {
+      throw keystoreError('KEYSTORE_STORE_FORMAT', 'Secrets store must be a regular file.', error);
+    }
+    throw error;
+  }
+  try {
+    if (!(await handle.stat()).isFile()) throw keystoreError('KEYSTORE_STORE_FORMAT', 'Secrets store must be a regular file.');
+    text = await handle.readFile('utf8');
+  } finally { await handle.close(); }
   try { return storeSchema.parse(JSON.parse(text)); }
   catch (error) { throw keystoreError('KEYSTORE_STORE_FORMAT', 'Secrets store is not valid.', error); }
 }
@@ -38,7 +61,7 @@ async function syncDirectory(directory: string): Promise<void> {
 async function loadKey(): Promise<Buffer> {
   const metadata = await lstat(paths.masterKeyFile);
   if (!metadata.isFile() || metadata.isSymbolicLink()) throw keystoreError('KEYSTORE_MASTER_KEY_MODE', 'Master key must be a private regular file.');
-  const handle = await open(paths.masterKeyFile, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  const handle = await open(paths.masterKeyFile, READ_FLAGS);
   try {
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size !== 32 || (process.platform !== 'win32' && ((stat.mode & 0o777) !== 0o600 || stat.uid !== process.getuid?.()))) {
@@ -100,6 +123,7 @@ export async function getSecret(id: string): Promise<string | undefined> {
   const store = await readStore();
   if (!store) return undefined;
   const key = await keyForStore();
+  if (!Object.hasOwn(store.entries, id)) return undefined;
   const entry = store.entries[id];
   if (!entry) return undefined;
   try {

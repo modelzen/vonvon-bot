@@ -1,6 +1,9 @@
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { build } from 'esbuild';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createBackend } from '../src/agent';
 import type { AgentEvent, AgentThread, PermissionMode } from '../src/agent/types';
@@ -61,5 +64,41 @@ describe.runIf(LIVE)('Claude permission live boundaries', () => {
   it.each(['write', 'full'] as const)('%s bridges a real question and answer', { timeout: 180_000 }, async mode => {
     const { cwd } = workspace(); const events = await run(await start(cwd, mode), 'Use AskUserQuestion to ask whether I choose A or B. Wait for its answer, then repeat the selected answer.', true);
     expect(events.some(e => e.type === 'ask' && e.request.kind === 'choices')).toBe(true); expect(text(events)).toContain('A');
+  });
+});
+
+
+describe.runIf(LIVE)('Claude secrets get live sandbox', () => {
+  it.each([
+    { mode: 'qa', network: false },
+    { mode: 'write', network: false },
+    { mode: 'write', network: true },
+  ] satisfies { mode: PermissionMode; network: boolean }[])('secrets get in $mode with network=$network', { timeout: 180_000 }, async ({ mode, network }) => {
+    const { dir, cwd } = workspace(); const root = join(dir, 'vh'); mkdirSync(root);
+    const cache = resolve('node_modules/.cache'); mkdirSync(cache, { recursive: true });
+    const bundle = mkdtempSync(join(cache, 'secrets-get-live-')); dirs.push(bundle);
+    const cli = join(bundle, 'cli.mjs'); const keystore = join(bundle, 'keystore.cjs');
+    await build({ entryPoints: [resolve('src/cli/index.ts')], outfile: cli, bundle: true, packages: 'external', platform: 'node', format: 'esm' });
+    await build({ entryPoints: [resolve('src/config/keystore.ts')], outfile: keystore, bundle: true, platform: 'node', format: 'cjs' });
+    const fake = randomBytes(24).toString('hex');
+    const setter = spawn(process.execPath, ['-e', `require(${JSON.stringify(keystore)}).setSecret('app-cli_fake',process.env.FAKE_SECRET).catch(()=>{process.exitCode=1})`], { env: { ...process.env, HOME: dir, VONVON_HOME: root, FAKE_SECRET: fake }, stdio: 'ignore' });
+    const code = await new Promise<number | null>((resolve, reject) => { setter.once('error', reject); setter.once('close', resolve); });
+    expect(code).toBe(0);
+    const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
+    const getter = join(root, 'secrets-getter');
+    writeFileSync(getter, `#!/bin/sh\nVONVON_HOME=${quote(root)} exec ${quote(process.execPath)} ${quote(cli)} secrets get "$@"\n`, { mode: 0o700 });
+    const before = readdirSync(root, { recursive: true }).sort();
+    const expected = ['master.key', 'secrets-getter', 'secrets.enc'];
+    if (process.platform === 'darwin') expected.push('.locks', join('.locks', 'keystore.lock'));
+    expect(before).toEqual(expected.sort());
+    const command = `printf '%s' '{"protocolVersion":1,"provider":"bridge","ids":["app-cli_fake"]}' | ${quote(getter)}`;
+    const events = await run(await start(cwd, mode, network), ['Use Bash exactly once:', '```sh', command, '```', 'Report the output; do not retry.'].join('\n'));
+    const replies = events.flatMap(event => event.type === 'tool_result' ? (event.output ?? '').split('\n').filter(line => line.startsWith('{"protocolVersion"')) : []);
+    expect(replies.length).toBeGreaterThan(0);
+    expect(replies.some(line => {
+      try { return JSON.stringify(JSON.parse(line)) === JSON.stringify({ protocolVersion: 1, values: { 'app-cli_fake': fake }, errors: {} }); }
+      catch { return false; }
+    })).toBe(true);
+    expect(readdirSync(root, { recursive: true }).sort()).toEqual(before);
   });
 });
