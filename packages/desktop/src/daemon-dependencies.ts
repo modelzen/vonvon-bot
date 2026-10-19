@@ -3,7 +3,7 @@ import { lstat, mkdir, open, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PROTOCOL_VERSION } from '@vonvon/protocol';
 import type { DataRoot } from '../../daemon/src/config/data-root.js';
-import { readRunningPidLock } from '../../daemon/src/server/pid-lock.js';
+import { isPidLockOwnerRunning, readRunningPidLock } from '../../daemon/src/server/pid-lock.js';
 import { verifyPidLockOwner } from '../../daemon/src/server/owner-verification.js';
 import { classifyDistribution } from '../../daemon/src/service/distribution.js';
 import { withToolDirectories } from '../../daemon/src/platform/tool-path.js';
@@ -36,7 +36,7 @@ interface DesktopDaemonRuntime {
   packaged: boolean;
 }
 
-export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonManagerDependencies {
+export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonManagerDependencies & { ownerRunning(previous: { pid: number; startedAt: string }): Promise<boolean> } {
   const pause = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
   async function launch(command: 'start' | 'run', port: number, bot?: string): Promise<number | undefined> {
@@ -65,6 +65,10 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
   }
 
   return {
+    /** The old process still counts as running after releasing its PID lock, until it exits. */
+    async ownerRunning(previous) {
+      return isPidLockOwnerRunning({ pid: previous.pid, startedAt: previous.startedAt, listen: null });
+    },
     async readVerifiedDaemon() {
       let lock = await readRunningPidLock(runtime.root);
       for (let attempt = 0; lock && !lock.listen && attempt < 500; attempt++) {

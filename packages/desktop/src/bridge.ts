@@ -103,6 +103,14 @@ function failure(error: unknown): IpcResult<never> {
   return { ok: false, error: safeFailure(error) };
 }
 
+type MachineStatus = Extract<MachineReply, { type: 'status' }>;
+/** The stopped view has no daemon, running service or temporary Bot. */
+function stoppedView(before: MachineStatus): MachineStatus {
+  const { temporaryAgent: _stopped, ...rest } = before;
+  const state = before.service.state === 'running' || before.service.state === 'detached' ? 'stopped' : before.service.state;
+  return { ...rest, host: null, service: { ...before.service, running: false, pid: undefined, ...(state ? { state } : {}) } };
+}
+
 export function installBridge(
   owner: AttachedDaemon, window: BrowserWindow, paths: DesktopResources, actions: ShellActions,
 ): DesktopBridge {
@@ -115,7 +123,8 @@ export function installBridge(
   let activeOwner: AttachedDaemon | null = owner;
   let replacing: Promise<void> | undefined;
   let candidate: AttachedDaemon | null = null;
-  let stoppedStatus: Extract<MachineReply, { type: 'status' }> | undefined;
+  let stoppedStatus: MachineStatus | undefined;
+  let lastStatus: MachineStatus | undefined;
   const retainedErrors: SafeFailure[] = [];
 
   function currentDocument(): boolean {
@@ -230,7 +239,18 @@ export function installBridge(
         throw new Error('Shell-owned machine action');
       return request;
     }, async value => {
+      if (value.type === 'stopHost' && activeOwner) {
+        const owner = activeOwner;
+        // Preserve the last readable machine status when the pre-stop status request fails.
+        const read = await owner.client.machine({ type: 'status' }).catch(() => undefined);
+        const before = read?.type === 'status' ? read : lastStatus;
+        const reply = await actions.stopHost(owner.identity, () => owner.client.machine(value));
+        // A replacement connected while stopping must keep its own status.
+        if (before && activeOwner === owner) stoppedStatus = stoppedView(before);
+        return reply;
+      }
       const reply = value.type === 'status' && stoppedStatus ? stoppedStatus : await client().machine(value);
+      if (reply.type === 'status' && reply !== stoppedStatus) lastStatus = reply;
       return value.type === 'status' && reply.type === 'status'
         ? { ...reply, cli: await actions.observeCli() } : reply;
     });
@@ -256,7 +276,7 @@ export function installBridge(
       try { reply = machineReplySchema.parse(await actions.service(value, activeOwner?.identity ?? null)); }
       finally { if (switchesLoginItem) await refreshService(); }
       if (value === 'stop' && before?.type === 'status') {
-        stoppedStatus = { ...before, host: null, service: { ...before.service, running: false, pid: undefined } };
+        stoppedStatus = stoppedView(before);
       }
       return reply;
     });

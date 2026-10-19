@@ -32,11 +32,12 @@ export function listenerCloseUnconfirmed(error: unknown): boolean {
 }
 
 export async function closeOwnedProviders(shutdown: () => Promise<void> = async () => {}): Promise<void> {
-  let orphanLogged = false;
+  let orphanKey: string | undefined;
   const report = (settled: boolean): Promise<void> => {
     const pids = unconfirmedProviderPids();
     if (process.send && !process.connected) {
-      if (!orphanLogged) { orphanLogged = true; log.info('daemon-shutdown', 'owned-work-orphan', { pids }); }
+      const key = [...pids].sort((a, b) => a - b).join(',');
+      if (key !== orphanKey) { orphanKey = key; log.info('daemon-shutdown', 'owned-work-orphan', { pids }); }
       return Promise.resolve();
     }
     if (!settled && pids.length) log.warn('daemon-shutdown', 'owned_work_unconfirmed', { pid: process.pid, pids });
