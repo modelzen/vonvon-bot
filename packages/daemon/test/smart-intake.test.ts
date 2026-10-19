@@ -426,6 +426,45 @@ describe('SmartLanes timers', () => {
       invariant(t, { waiting: false, judging: true, future: false });
     });
   }
+  for (const future of [false, true]) {
+    it(`bounds recall refill to the newest 40 entries with ${future ? 'future' : 'immediate'} due`, async () => {
+      let delayed = false;
+      let waiting: { id: string; at: number }[] = [];
+      const t = lanes((place, batch, now) => {
+        waiting = batch.map(({ entry, at }) => ({ id: entry.id, at }));
+        return delayed ? quiet20(place, batch, now) : undefined;
+      });
+      const oldIds = Array.from({ length: 40 }, (_, i) => `b${i + 1}`);
+      const newIds = Array.from({ length: 40 }, (_, i) => `c${i + 1}`);
+      t.lane.submit(entry('seed'));
+      for (const id of oldIds) t.lane.submit(entry(id));
+      t.judging.get('seed')!.answer.resolve('skip'); await flush();
+      t.landing.get('seed')!.resolve(); await flush();
+      const old = t.judging.get('b40')!;
+      expect(old.batch).toEqual(oldIds);
+      for (const id of newIds) { t.advance(seconds(1)); t.lane.submit(entry(id)); }
+      delayed = future;
+      t.lane.abort('b40');
+      expect(old.signal.aborted).toBe(true);
+      expect({ waiting: waiting.length, overflow: t.overflow }).toEqual({ waiting: 40, overflow: [oldIds.slice(0, -1)] });
+      expect(waiting).toEqual(newIds.map((id, i) => ({ id, at: seconds(i + 1) })));
+      expect(t.timers.size).toBe(future ? 1 : 0);
+      if (future) {
+        expect(t.judging.has('c40')).toBe(false);
+        expect(t.lane.dueAt('chat')).toBe(seconds(60));
+      } else expect(t.judging.get('c40')!.batch).toEqual(newIds);
+      old.answer.resolve('main'); await flush();
+      expect(t.landed).toEqual(['seed:skip']);
+      if (future) t.advance(seconds(20));
+      expect(t.judging.get('c40')).toMatchObject({ batch: newIds, glance: future });
+      t.judging.get('c40')!.answer.resolve('main'); await flush();
+      expect(t.landed).toEqual(['seed:skip', 'c40:main']);
+      t.landing.get('c40')!.resolve(); await flush();
+      expect(t.lane.prune('chat', () => true)).toEqual([]);
+      expect(t.timers.size).toBe(0);
+      await Promise.all(t.tasks);
+    });
+  }
   it('shutdown clears timers before aborting and ignores a queued timer callback', async () => {
     const t = lanes(quiet20); t.lane.submit(entry('a')); t.lane.submit(entry('n', 'named'));
     const timer = [...t.timers.values()][0]!;

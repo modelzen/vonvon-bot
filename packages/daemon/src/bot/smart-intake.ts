@@ -112,9 +112,7 @@ export class SmartLanes<E extends LaneEntry, V> {
     if (entry.kind !== 'chat') this.start(lane, [item], entry.kind, false);
     else {
       lane.waiting.push(item);
-      if (lane.waiting.length > LANE_WAITING_MAX) {
-        this.deps.overflow?.(lane.waiting.splice(0, lane.waiting.length - LANE_WAITING_MAX).map((i) => i.entry));
-      }
+      this.trimWaiting(lane);
       if (!lane.judging) this.arm(lane);
     }
     return true;
@@ -160,6 +158,7 @@ export class SmartLanes<E extends LaneEntry, V> {
         if (lane.judging === slot) {
           lane.judging = undefined;
           lane.waiting.unshift(...slot.items.slice(0, -1));
+          this.trimWaiting(lane);
           this.arm(lane);
         }
         this.flush(lane);
@@ -212,6 +211,13 @@ export class SmartLanes<E extends LaneEntry, V> {
       this.flush(lane);
       this.tidy(place, lane);
     }));
+  }
+
+  private trimWaiting(lane: Lane<E, V>): void {
+    if (lane.waiting.length > LANE_WAITING_MAX) {
+      const dropped = lane.waiting.splice(0, lane.waiting.length - LANE_WAITING_MAX);
+      this.deps.overflow?.(dropped.map((item) => item.entry));
+    }
   }
 
   private clearTimer(lane: Lane<E, V>): void {
