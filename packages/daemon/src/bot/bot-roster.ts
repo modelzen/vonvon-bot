@@ -20,13 +20,15 @@ interface MembersBody {
   data?: { bots?: { app_id?: unknown; member_id?: unknown; name?: unknown }[]; has_more?: boolean };
 }
 type Bots = ReadonlyMap<string, RosterBot>;
-interface Snapshot { bots: Bots; complete: boolean }
+export interface BotRosterSnapshot { bots: Bots; complete: boolean }
 /** `pending` settles with this read's bots, or undefined on failure. */
-interface Entry { snapshot?: Snapshot; until: number; pending?: Promise<Bots | undefined> }
+interface Entry { snapshot?: BotRosterSnapshot; latest?: BotRosterSnapshot; until: number; pending?: Promise<Bots | undefined> }
 
 /** The guard's view and complete roster for outgoing handoffs. */
 export interface BotRoster extends ChatBots {
   peek(chatId: string): Bots | undefined;
+  /** The latest read only: a failed refresh must not offer stale members as current. */
+  selection(chatId: string): BotRosterSnapshot | undefined;
   /** Only a complete observed list can establish unique names for outgoing handoffs. */
   peekForHandoff(chatId: string): Bots | undefined;
 }
@@ -43,7 +45,7 @@ export function createBotRoster(
 ): BotRoster {
   const entries = new Map<string, Entry>();
 
-  async function read(chatId: string, stale: boolean): Promise<Snapshot | undefined> {
+  async function read(chatId: string, stale: boolean): Promise<BotRosterSnapshot | undefined> {
     const where = { chatId: chatId.slice(-6), stale };
     const failed = (reason: string, failure?: unknown): undefined => {
       const denial = scopeDenial(failure);
@@ -88,6 +90,7 @@ export function createBotRoster(
   }
   function start(chatId: string, entry: Entry): Promise<Bots | undefined> {
     const pending = read(chatId, Boolean(entry.snapshot)).then((snapshot) => {
+      entry.latest = snapshot;
       if (snapshot) entry.snapshot = snapshot;
       entry.until = Date.now() + (snapshot ? ROSTER_TTL_MS : ROSTER_RETRY_MS);
       return snapshot?.bots;
@@ -97,6 +100,7 @@ export function createBotRoster(
   }
 
   return {
+    selection: (chatId) => entries.get(chatId)?.latest,
     peek: (chatId) => entries.get(chatId)?.snapshot?.bots,
     peekForHandoff(chatId) {
       const snapshot = entries.get(chatId)?.snapshot;

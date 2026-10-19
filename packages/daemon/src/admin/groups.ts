@@ -1,3 +1,5 @@
+import { createTopicContext } from '../bot/topic-context';
+import { createNameBook } from '../bot/names';
 import { paths } from '../config/paths';
 import type { BotIdentity } from '../config/bots';
 import { realpath, stat } from 'node:fs/promises';
@@ -20,7 +22,7 @@ export interface BindGroupInput {
 }
 export type AdminGroupOp = { kind: 'joinedGroups'; cursor?: string } | { kind: 'bindGroup'; input: BindGroupInput };
 export interface JoinedGroups {
-  groups: { chatId: string; name: string; bound: boolean }[];
+  groups: { chatId: string; name: string; bound: boolean; hasOtherBots?: boolean }[];
   nextCursor?: string;
 }
 export class GroupUpstreamError extends Error {
@@ -47,7 +49,8 @@ export function parseJoinedGroups(raw: unknown): JoinedGroups {
   if (!raw || typeof raw !== 'object' || !('groups' in raw) || !Array.isArray(raw.groups)) throw new GroupUpstreamError('群列表响应无效');
   const groups = raw.groups.map(group => {
     if (!group || typeof group !== 'object' || typeof group.chatId !== 'string' || typeof group.name !== 'string' || typeof group.bound !== 'boolean') throw new GroupUpstreamError('群列表响应无效');
-    return { chatId: group.chatId, name: group.name, bound: group.bound };
+    if ('hasOtherBots' in group && group.hasOtherBots !== undefined && typeof group.hasOtherBots !== 'boolean') throw new GroupUpstreamError('群列表响应无效');
+    return { chatId: group.chatId, name: group.name, bound: group.bound, ...('hasOtherBots' in group && typeof group.hasOtherBots === 'boolean' ? { hasOtherBots: group.hasOtherBots } : {}) };
   });
   if ('nextCursor' in raw && raw.nextCursor !== undefined && typeof raw.nextCursor !== 'string') throw new GroupUpstreamError('群列表游标无效');
   return { groups, ...('nextCursor' in raw && typeof raw.nextCursor === 'string' ? { nextCursor: raw.nextCursor } : {}) };
@@ -94,6 +97,7 @@ function refused(phase: GroupPhase, reply: { code?: number; msg?: string }, fall
 
 export function createGroupExecutor(channel: LarkChannel, identity: BotIdentity, projectsRootDir?: string): (op: AdminGroupOp) => Promise<JoinedGroups | Project> {
   const bot = { ...identity };
+  const topicContext = createTopicContext(channel, undefined, createNameBook(channel), { stopping: () => false, track: p => p });
   async function bind(request: BindGroupInput): Promise<Project> {
     const input = { ...request };
     const location = { file: paths.projectsFile, dataRoot: paths.appDir };
@@ -125,6 +129,10 @@ export function createGroupExecutor(channel: LarkChannel, identity: BotIdentity,
       bound: projects.some(project => project.chatId === item.chat_id),
     }] : []);
     if (response.data.has_more && !response.data.page_token) refused('joined-groups', {}, '飞书群列表缺少下一页游标');
-    return { groups, ...(response.data.has_more ? { nextCursor: response.data.page_token } : {}) };
+    const enriched = await Promise.all(groups.map(async group => {
+      const info = await topicContext.chatInfo(group.chatId);
+      return { ...group, ...(info.ok && info.bots !== undefined ? { hasOtherBots: info.bots > 1 } : {}) };
+    }));
+    return { groups: enriched, ...(response.data.has_more ? { nextCursor: response.data.page_token } : {}) };
   };
 }
