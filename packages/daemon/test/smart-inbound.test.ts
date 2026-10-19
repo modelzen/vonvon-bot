@@ -8,8 +8,9 @@ import { projectRevision } from '../src/admin/collaboration';
 import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
 import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
+import { PEOPLE_RETRY_MS, PEOPLE_TTL_MS } from '../src/bot/chat-people';
 import { wakeTriggerText } from '../src/bot/context-weave';
-import { BOT_WAKE_NOTE, INITIATIVE_NOTE } from '../src/bot/session-title';
+import { AT_HINT_NOTE, BOT_WAKE_NOTE, INITIATIVE_NOTE } from '../src/bot/session-title';
 import { JUDGE_BUDGET, JudgeBudget } from '../src/bot/smart-intake';
 import type { JudgeDeps } from '../src/judge/judge';
 import { localDay } from '../src/judge/usage';
@@ -46,6 +47,7 @@ const fake = vi.hoisted(() => ({
     ({ code: 0, data: { items: [{ thread_id: 'omt_opened' }] as Array<Record<string, unknown>> } })),
   list: vi.fn(),
   request: vi.fn(),
+  members: vi.fn(),
   reply: vi.fn(async (_req: { path: { message_id: string }; data: { msg_type: string; content: string; reply_in_thread?: boolean } }): ReturnType<Client['im']['v1']['message']['reply']> => ({ code: 0, data: { message_id: 'om_reminder' } })),
   // One id per emoji, so the test sees which reaction went.
   react: vi.fn(async (req: { data: { reaction_type: { emoji_type: string } } }) => ({ data: { reaction_id: `r_${req.data.reaction_type.emoji_type}` } })),
@@ -115,6 +117,7 @@ const cfg: AppConfig & { preferences: NonNullable<AppConfig["preferences"]> } = 
 const channel = {
   send: fake.send, botIdentity: BOT,
   rawClient: { appId: APP, request: fake.request, im: { v1: {
+    chatMembers: { get: fake.members },
     messageReaction: { create: fake.react, delete: fake.unreact },
     message: { reply: fake.reply, get: fake.get, list: fake.list, delete: fake.del },
     // The group's only bot unless a test says otherwise.
@@ -182,6 +185,8 @@ beforeEach(() => {
   fake.liveCards = [];
   fake.bots = '1';
   cfg.preferences.completionReminder = { mode: 'manual' };
+  fake.members.mockReset();
+  fake.members.mockResolvedValue({ code: 0, data: { items: [], has_more: false } });
   fake.request.mockImplementation(async () => ({ code: 0, data: { bots: [{ app_id: 'cli_other', member_id: 'ou_other', name: '小P' }] } }));
   fake.judge.mockImplementation((req: JudgeRequest) => {
     const answer = deferred<JudgeResult>();
@@ -1297,6 +1302,7 @@ describe('bot handoffs (s27b)', () => {
   });
   it.each(['main', 'topic'] as const)('25/25a: main-area mention judged %s wires smart handoffs', async place => {
     await turn('@小审 请审一下。', place); expect(replies()).toHaveLength(1); expect(replies()[0]!.data.reply_in_thread).toBe(place === 'topic');
+    expect(fake.inputs[0]).toContain(AT_HINT_NOTE(['小P', '小审']));
   });
   it('26: supplies context for an empty sentence', async () => { await turn('@小审'); expect(textOf()).toBe('<at user_id="ou_审">小审</at> 请看上面的回答'); });
   it('27: sends one message for multiple recipients', async () => {
@@ -1390,14 +1396,24 @@ describe('bot handoffs (s27b)', () => {
     } finally { await new Promise<void>((resolve, reject) => server.close(err => err ? reject(err) : resolve())); }
   });
   it('shutdown during an ambiguous roster lookup never sends or repaints', async () => {
-    const gate = deferred<unknown>(); fake.request.mockImplementation(() => gate.promise);
-    answers('@小审 请审'); await send(says('请写', { at: true, thread: 'omt_handoff' }));
-    await vi.waitFor(() => expect(fake.finals).toHaveLength(1));
-    await vi.waitFor(() => expect(fake.request).toHaveBeenCalled());
-    const stopping = orchestrator.shutdown();
-    gate.resolve({ code: 0, data: { bots: [...bots, { app_id: 'cli_审b', member_id: 'ou_审b', name: '小审' }] } });
-    await stopping; await settle(); expect(fake.finals).toHaveLength(1); expect(replies()).toEqual([]);
-    expect(finalText()).not.toContain('→ 想 @'); handoff({ why: 'shutdown' });
+    const gate = deferred<unknown>();
+    fake.request.mockResolvedValueOnce({ code: 0, data: { bots } }).mockImplementation(() => gate.promise);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    fake.events = async function* () {
+      yield { type: 'text', itemId: 'a', text: '@小审 请审' };
+      // The input hint used the initial roster; only the final handoff refresh hangs.
+      vi.setSystemTime(Date.now() + 600_001);
+      yield { type: 'done', turnId: 'turn-fixture' };
+    };
+    try {
+      await send(says('请写', { at: true, thread: 'omt_handoff' }));
+      await vi.waitFor(() => expect(fake.finals).toHaveLength(1));
+      await vi.waitFor(() => expect(fake.request).toHaveBeenCalledTimes(2));
+      const stopping = orchestrator.shutdown();
+      gate.resolve({ code: 0, data: { bots: [...bots, { app_id: 'cli_审b', member_id: 'ou_审b', name: '小审' }] } });
+      await stopping; await settle(); expect(fake.finals).toHaveLength(1); expect(replies()).toEqual([]);
+      expect(finalText()).not.toContain('→ 想 @'); handoff({ why: 'shutdown' });
+    } finally { vi.useRealTimers(); gate.resolve({ code: 0, data: { bots } }); }
   });
   it('40: queued turns hand off separately on their own cards', async () => {
     fake.project = { ...base, pendingPolicy: 'queue' }; const gate = deferred<void>(); let runs = 0;
@@ -1406,4 +1422,148 @@ describe('bot handoffs (s27b)', () => {
     await vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued', expect.anything())); gate.resolve(); await vi.waitFor(() => expect(replies()).toHaveLength(2));
     expect(replies().map(req => req.path.message_id)).toEqual(['card_1', 'card_2']);
   });
+});
+
+describe('people @ and brakes (s27b2)', () => {
+  const bots = [{ app_id: 'cli_other', member_id: 'ou_other', name: '小P' }, { app_id: 'cli_审', member_id: 'ou_审', name: '小审' }];
+  const people = [{ member_id: 'ou_owner', name: '王五' }, { member_id: 'ou_张', name: '张三' }, { member_id: 'ou_张丰', name: '张三丰' }, { member_id: 'ou_李', name: '李四' }];
+  const page = (items = people, has_more = false) => ({ code: 0, data: { items, has_more, ...(has_more ? { page_token: 'p2' } : {}) } });
+  const replies = (type = 'text') => fake.reply.mock.calls.map(([req]) => req).filter(req => req.data.msg_type === type);
+  const textOf = (): string => JSON.parse(replies().at(-1)!.data.content).text;
+  const finalText = () => JSON.stringify(fake.finals.at(-1));
+  const handoff = (fields: object) => expect(fake.log.info).toHaveBeenCalledWith(expect.any(String), 'handoff', expect.objectContaining(fields));
+  const answers = (text: string) => { fake.events = async function* () { yield { type: 'text', itemId: 'a', text }; yield { type: 'done', turnId: 'turn-fixture' }; }; };
+  async function turn(text: string) {
+    const previous = fake.log.info.mock.calls.filter(c => c[1] === 'final').length;
+    answers(text); await send(says('请写方案', { at: true, thread: 'omt_people' }));
+    await vi.waitFor(() => expect(fake.log.info.mock.calls.filter(c => c[1] === 'final')).toHaveLength(previous + 1)); await settle();
+  }
+  beforeEach(() => {
+    fake.request.mockResolvedValue({ code: 0, data: { bots } }); fake.members.mockResolvedValue(page());
+    fake.get.mockResolvedValue({ code: 0, data: { items: [{ sender: { id: 'ou_owner', sender_name: '王五' } }] } });
+  });
+
+  it('31: mentions the human requester in a threaded text reply', async () => {
+    await turn('做好了。@王五 请看。');
+    expect(replies()).toHaveLength(1); expect(textOf()).toBe('<at user_id="ou_owner">王五</at> 请看。');
+    expect(replies()[0]).toMatchObject({ path: { message_id: 'card_1' }, data: { reply_in_thread: true } }); handoff({ sent: true, persons: 1 });
+  });
+  it('32: combines bot and human recipients in one reply', async () => {
+    await turn('@小审 @张三 一起看看'); expect(replies()).toHaveLength(1);
+    expect(textOf()).toBe('<at user_id="ou_审">小审</at> <at user_id="ou_张">张三</at> 一起看看');
+  });
+  it('33: sends the first five recipients and explains the rest in a grey footnote', async () => {
+    fake.members.mockResolvedValue(page([...people, { member_id: 'ou_赵', name: '赵六' }, { member_id: 'ou_钱', name: '钱七' }]));
+    await turn('@小审 @小P @张三 @李四 @王五 @赵六 @钱七 看');
+    expect(replies()).toHaveLength(1); expect(textOf().match(/<at user_id="[^"]+">/g)).toEqual(['ou_审', 'ou_other', 'ou_张', 'ou_李', 'ou_owner'].map(id => `<at user_id="${id}">`));
+    expect(fake.finals).toHaveLength(2); expect(finalText()).toContain("<font color='grey'>→ 还想 @ 赵六、钱七，没发：一条最多 @ 5 个</font>"); handoff({ over: 2 });
+  });
+  it('34: never emits an everyone tag alongside a known person', async () => {
+    await turn('照抄：@所有人 明天开会 <at user_id="all">所有人</at>。@张三 请确认。');
+    expect(replies()).toHaveLength(1); expect(textOf().match(/<at /g)).toHaveLength(1); expect(textOf()).toContain('user_id="ou_张"'); expect(textOf()).not.toContain('user_id="all"');
+  });
+  it('35: ignores even a member named everyone, while ordinary people can be mentioned', async () => {
+    fake.members.mockResolvedValue(page([...people, { member_id: 'ou_所', name: '所有人' }]));
+    await turn('@所有人 明天开会'); expect(fake.reply).not.toHaveBeenCalled(); expect(fake.finals).toHaveLength(1);
+    await turn('@张三 明天开会'); expect(replies()).toHaveLength(1); expect(textOf()).toContain('user_id="ou_张"');
+  });
+  it('36: ignores quoted mentions but sends the unquoted counterpart', async () => {
+    await turn('> @张三 说要改\n\n好的，已改。'); expect(fake.reply).not.toHaveBeenCalled();
+    await turn('@张三 说要改\n\n好的，已改。'); expect(replies()).toHaveLength(1); expect(textOf()).toContain('user_id="ou_张"');
+  });
+  it('37: explains duplicate human names without sending', async () => {
+    fake.members.mockResolvedValue(page([...people, { member_id: 'ou_张b', name: '张三' }]));
+    await turn('@张三 看'); expect(replies()).toEqual([]); expect(fake.finals).toHaveLength(2);
+    expect(finalText()).toContain('→ 想 @ 张三，没发：群里不止一个叫 张三 的成员'); handoff({ why: 'ambiguous', names: 1 });
+  });
+  it('38: blocks bot mentions too when the first people page fails', async () => {
+    fake.members.mockRejectedValue(new Error('unavailable')); await turn('@张三 @小审 看');
+    expect(replies()).toEqual([]); expect(fake.finals).toHaveLength(2);
+    expect(finalText()).toContain('→ 想 @ 小审（bot），没发：群成员名单没读全，认不准有没有重名'); handoff({ incomplete: true, people: false, why: 'incomplete' });
+  });
+  it('38a: discovers duplicate names across pages', async () => {
+    fake.members.mockResolvedValueOnce(page([{ member_id: 'ou_张', name: '张三' }, { member_id: 'ou_王', name: '王五' }], true)).mockImplementationOnce(async req => {
+      expect(req.params.page_token).toBe('p2'); return page([{ member_id: 'ou_张b', name: '张三' }]);
+    });
+    await turn('@张三 看看'); expect(fake.members).toHaveBeenCalledTimes(2); expect(replies()).toEqual([]);
+    expect(finalText()).toContain('→ 想 @ 张三，没发：群里不止一个叫 张三 的成员'); handoff({ why: 'ambiguous', names: 1 });
+  });
+  it('38b: a failed later page blocks both human and bot candidates', async () => {
+    fake.members.mockResolvedValueOnce(page([{ member_id: 'ou_张', name: '张三' }], true)).mockRejectedValueOnce(new Error('unavailable'));
+    await turn('@张三 @小审 看'); expect(replies()).toEqual([]);
+    expect(finalText()).toContain('→ 想 @ 张三、小审（bot），没发：群成员名单没读全，认不准有没有重名'); handoff({ incomplete: true, unverified: 2 });
+  });
+  it('38c: sends unique recipients from every completed page', async () => {
+    fake.members.mockResolvedValueOnce(page(people.slice(0, 2), true)).mockResolvedValueOnce(page([people[3]!]));
+    await turn('@张三 @李四 @小审 看'); expect(replies()).toHaveLength(1);
+    expect(textOf()).toBe('<at user_id="ou_张">张三</at> <at user_id="ou_李">李四</at> <at user_id="ou_审">小审</at> 看'); expect(finalText()).not.toContain('→ 想 @');
+    expect(fake.log.info.mock.calls.filter(c => c[1] === 'handoff').at(-1)?.[2]).not.toHaveProperty('incomplete');
+  });
+  it('38d: retains stale candidates as unverified until a complete refresh recovers', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      fake.members.mockResolvedValueOnce(page([{ member_id: 'ou_张', name: '张三' }])); await turn('@张三 看'); expect(textOf()).toContain('user_id="ou_张"');
+      vi.setSystemTime(Date.now() + PEOPLE_TTL_MS + 1);
+      fake.members.mockResolvedValueOnce(page([{ member_id: 'ou_王', name: '王五' }], true)).mockRejectedValueOnce(new Error('unavailable'));
+      await turn('@张三 @小审 看'); expect(replies()).toHaveLength(1);
+      expect(finalText()).toContain('→ 想 @ 张三、小审（bot），没发：群成员名单没读全，认不准有没有重名'); handoff({ incomplete: true });
+      vi.setSystemTime(Date.now() + PEOPLE_RETRY_MS + 1);
+      fake.members.mockResolvedValueOnce(page([{ member_id: 'ou_王', name: '王五' }], true)).mockResolvedValueOnce(page([{ member_id: 'ou_张', name: '张三' }]));
+      await turn('@张三 @小审 看'); expect(replies()).toHaveLength(2); expect(textOf()).toBe('<at user_id="ou_张">张三</at> <at user_id="ou_审">小审</at> 看');
+      expect(fake.log.info.mock.calls.filter(c => c[1] === 'handoff').at(-1)?.[2]).not.toHaveProperty('incomplete');
+    } finally { vi.useRealTimers(); }
+  });
+  it('43: rule groups retain completion reminders and never translate answer mentions', async () => {
+    fake.project = { ...base, smart: false }; cfg.preferences.completionReminder = { mode: 'always' };
+    await turn('@张三 看'); expect(replies()).toEqual([]); expect(replies('post')).toHaveLength(1); expect(replies('post')[0]!.data.content).toContain('ou_owner');
+  });
+  it.each([false, true])('45: places the mention hint before the human sender, with empty roster=%s', async empty => {
+    if (empty) fake.request.mockResolvedValue({ code: 0, data: { bots: [] } });
+    await turn('好的'); const input = fake.inputs[0]!; const hint = AT_HINT_NOTE(empty ? [] : ['小P', '小审']);
+    expect(input).toContain(hint); expect(input.indexOf(hint)).toBeLessThan(input.indexOf('[本条消息的发信人：'));
+  });
+  it('45: omits ambiguous bot names from the hint', async () => {
+    fake.request.mockResolvedValue({ code: 0, data: { bots: [...bots, { app_id: 'cli_审b', member_id: 'ou_审b', name: '小审' }] } });
+    await turn('好的'); expect(fake.inputs[0]).toContain(AT_HINT_NOTE(['小P'])); expect(fake.inputs[0]).not.toContain(AT_HINT_NOTE(['小P', '小审']));
+  });
+  it('45: puts a bot wake before the mention hint and sender block', async () => {
+    answers('好的'); const m = says('请修改', { at: true, thread: 'omt_people' });
+    fake.list.mockResolvedValue({ code: 0, data: { items: [{ message_id: idOf(m), create_time: m.create_time, msg_type: 'text', body: { content: m.content }, sender: { id: 'cli_other', id_type: 'app_id', sender_type: 'app', open_bot_id: 'ou_other', sender_name: '小P' } }], has_more: false } });
+    await send(m, { openId: 'ou_other', type: 'app', name: '小P' }); await decide(m, result('reply')); await vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
+    const input = fake.inputs[0]!; const hint = AT_HINT_NOTE(['小P', '小审']);
+    expect(input).toContain(hint); expect(input.indexOf(BOT_WAKE_NOTE('小P'))).toBe(0); expect(input.indexOf(hint)).toBeLessThan(input.indexOf('[本条消息的发信人：'));
+  });
+  it('45: supplies the hint to a queued human turn too', async () => {
+    fake.project = { ...base, pendingPolicy: 'queue' }; const gate = deferred<void>(); let runs = 0;
+    fake.events = async function* () { if (++runs === 1) await gate.promise; yield { type: 'done', turnId: 'turn-fixture' }; };
+    await send(says('第一轮', { at: true, thread: 'omt_people' })); await vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
+    await send(says('第二轮', { at: true, thread: 'omt_people' })); await vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued', expect.anything()));
+    gate.resolve(); await vi.waitFor(() => expect(fake.inputs).toHaveLength(2)); expect(fake.inputs[1]).toContain(AT_HINT_NOTE(['小P', '小审']));
+  });
+  it('45: leaves rule-group input free of the smart mention hint', async () => {
+    fake.project = { ...base, smart: false }; await turn('好的'); expect(fake.inputs[0]).not.toContain('会变成真 @');
+  });
+  it('releases a pending people lookup on shutdown without sending or repainting', async () => {
+    const gate = deferred<unknown>(); fake.members.mockImplementation(() => gate.promise);
+    answers('@张三 @小审 看'); await send(says('请写方案', { at: true, thread: 'omt_people' }));
+    await vi.waitFor(() => expect(fake.members).toHaveBeenCalled()); await vi.waitFor(() => expect(fake.finals).toHaveLength(1));
+    await orchestrator.shutdown();
+    gate.resolve(page()); await settle(); expect(fake.finals).toHaveLength(1); expect(replies()).toEqual([]); handoff({ why: 'shutdown' });
+  });
+  it('never sends a person mention without a complete bot roster', async () => {
+    fake.request.mockRejectedValue(new Error('unavailable')); await turn('@张三 看');
+    expect(replies()).toEqual([]); expect(finalText()).not.toContain('→ 想 @'); handoff({ why: 'no-roster' });
+  });
+  it('uses the solo hint when the bot roster cannot be read', async () => {
+    fake.request.mockRejectedValue(new Error('unavailable')); await turn('好的');
+    expect(fake.inputs[0]).toContain(AT_HINT_NOTE([])); expect(fake.inputs[0]).not.toContain(AT_HINT_NOTE(['小P', '小审']));
+  });
+  it('keeps the hint out of judge input before supplying it to the agent', async () => {
+    answers('好的'); const m = says('请写方案', { at: true }); await send(m);
+    const request = (await judged(m)).req;
+    expect(JSON.stringify(request)).not.toContain('会变成真 @');
+    await decide(m, result('main')); await vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
+    expect(fake.inputs[0]).toContain(AT_HINT_NOTE(['小P', '小审']));
+  });
+
 });

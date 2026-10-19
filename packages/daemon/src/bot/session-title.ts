@@ -45,6 +45,12 @@ export function BOT_WAKE_NOTE(name: string): string {
   return wakeNote(who, who);
 }
 const BRIDGE_WAKE_PREFIX = new RegExp(`^${wakeNote('([^」\\r\\n]*)', '\\1')}[ \\t]*(?:\\r?\\n[ \\t]*){0,2}`, 'u');
+const AT_HINT_TAIL = '要提醒谁、请哪个 bot 接着做，就在回答里写 @名字，会变成真 @；只是提到不要 @。';
+const AT_HINT_SOLO = '要提醒谁，就在回答里写 @名字，会变成真 @；只是提到不要 @。';
+export function AT_HINT_NOTE(bots: readonly string[]): string {
+  return bots.length ? `（群里还有 bot：${bots.join('、')}。${AT_HINT_TAIL}）` : `（${AT_HINT_SOLO}）`;
+}
+const BRIDGE_AT_HINT_PREFIX = new RegExp(`^（(?:群里还有 bot：[^（）\\r\\n]*。${AT_HINT_TAIL}|${AT_HINT_SOLO})）[ \\t]*(?:\\r?\\n[ \\t]*){0,2}`, 'u');
 /** The file manifest (media.weaveFileManifest), with its 没下载下来 lines and the header without a saved file. */
 const BRIDGE_FILE_MANIFEST_SUFFIX =
   /(?:^|(?:\r?\n){2})\[用户上传了 \d+ 个附件(?:，(?:\d+ 个)?已保存到本地，可用 shell \/ 读取工具按下面的绝对路径直接打开)?：\r?\n(?:(?:- [^\r\n]+ → [^\r\n]+|没下载下来：[^\r\n]+)\r?\n)+\][ \t]*$/u;
@@ -57,7 +63,7 @@ export function stripBridgeSenderPrefix(text: string): string {
 /**
  * Remove every envelope the Bridge may weave around an Agent prompt:
  *
- *   retry preface -> record block -> smart-mode or bot-wake note -> sender -> quote -> user body -> local file manifest
+ *   retry preface -> record block -> smart-mode or bot-wake note -> @ hint -> sender -> quote -> user body -> local file manifest
  *
  * Title sources normally travel separately from that woven prompt. This is a
  * strict recovery boundary for a queued/restarted job, so an internal open_id,
@@ -74,6 +80,7 @@ export function stripBridgeMessageEnvelope(text: string): string {
       .replace(BRIDGE_RECORD_BLOCK_PREFIX, '')
       .replace(BRIDGE_INITIATIVE_PREFIX, '')
       .replace(BRIDGE_WAKE_PREFIX, '')
+      .replace(BRIDGE_AT_HINT_PREFIX, '')
       .replace(BRIDGE_SENDER_PREFIX, '')
       .replace(BRIDGE_QUOTE_PREFIX, '');
   } while (out !== previous);
