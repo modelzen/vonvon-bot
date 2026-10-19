@@ -8,13 +8,14 @@ import type { CardActionEvent, NormalizedMessage } from '@larksuiteoapi/node-sdk
 import type { AgentEvent, AgentInput, AskRequest } from '../src/agent/types';
 
 const fake = vi.hoisted(() => ({
+  dmConsole: vi.fn(async () => undefined),
   groupMode: 'single' as 'single' | 'multi' | 'smart',
   groupPolicy: undefined as 'steer' | 'queue' | undefined,
   noMention: undefined as boolean | undefined,
   managed: new Set<string>(),
   idConvert: vi.fn<(...args: unknown[]) => Promise<{ data: { card_id?: string } }>>(async () => ({ data: {} })),
   elementUpdate: vi.fn(async (..._args: unknown[]) => ({})),
-  sendManaged: vi.fn(async () => ({ messageId: 'ask-1', cardId: 'card-ask' })),
+  sendManaged: vi.fn(async (..._args: unknown[]) => ({ messageId: 'ask-1', cardId: 'card-ask' })),
   updateManaged: vi.fn(async () => true),
   reply: vi.fn(async () => ({ data: {} })),
   getMessage: vi.fn<() => Promise<{ data: { items: { thread_id?: string; chat_id?: string; body?: { content: string } }[] } }>>(async () => ({ data: { items: [{ thread_id: 'new-topic' }] } })),
@@ -72,6 +73,7 @@ vi.mock('../src/card/run-card-stream', () => ({
     stats() { return { pushCount: 0, cardPushes: 0, elPushes: 0, totalRttMs: 0, maxRttMs: 0 }; }
   },
 }));
+vi.mock('../src/bot/dm-console', () => ({ handleDmConsole: fake.dmConsole }));
 vi.mock('../src/voice/inbound', async original => ({ ...await original<object>(), ingestVoice: fake.voice }));
 import { createOrchestrator } from '../src/bot/handle-message';
 import type { AppConfig } from '../src/config/schema';
@@ -149,9 +151,11 @@ beforeEach(() => {
   fake.managed.clear();
   fake.idConvert.mockReset().mockResolvedValue({ data: {} });
   fake.elementUpdate.mockReset().mockResolvedValue({});
+  let managedCount = 0;
   fake.sendManaged.mockReset().mockImplementation(async () => {
-    fake.managed.add('ask-1');
-    return { messageId: 'ask-1', cardId: 'card-ask' };
+    const messageId = `ask-${++managedCount}`;
+    fake.managed.add(messageId);
+    return { messageId, cardId: `card-${messageId}` };
   });
   fake.updateManaged.mockReset().mockResolvedValue(true);
   fake.reply.mockReset().mockResolvedValue({ data: {} });
@@ -169,6 +173,7 @@ beforeEach(() => {
 afterEach(async () => {
   await orchestrator?.shutdown();
   vi.unstubAllEnvs();
+  vi.useRealTimers();
 });
 // Keep synchronization polling well below the injected 150ms steer deadline.
 const until = (check: () => void) => vi.waitFor(check, { interval: 5 });
@@ -556,5 +561,76 @@ describe('inactive ask card healing', () => {
     expect(fake.send).toHaveBeenCalledOnce();
     expect(fake.log.fail).toHaveBeenCalledWith('card', error, { phase: 'ask-card-heal' });
     if (phase === 'get') expect(fake.elementUpdate).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('s33b sensitive ask intake', () => {
+  const sensitive: AskRequest = { ...choice, questions: [{ id: 'q', title: '密码', detail: '', selection: 'text', sensitive: true }] };
+  async function secretVisible(run: ReturnType<typeof thread>) {
+    await visible(run, sensitive);
+    await until(() => expect(fake.sendManaged.mock.calls.some(args => args[5] === 'open_id')).toBe(true));
+  }
+
+  it('answers in p2p before the console, and falls back when no card waits', async () => {
+    const run = thread(); const o = await started(run, { threadId: undefined });
+    await secretVisible(run);
+    await o.onMessage(message('private answer', { chatType: 'p2p', chatId: 'dm', threadId: undefined }));
+    await until(() => expect(run.respond).toHaveBeenCalledExactlyOnceWith('id',
+      { kind: 'answered', answer: { kind: 'text', text: 'private answer' } }));
+    expect(fake.dmConsole).not.toHaveBeenCalled();
+    const ordinary = message('console message', { chatType: 'p2p', chatId: 'dm', threadId: undefined });
+    await o.onMessage(ordinary);
+    expect(fake.dmConsole).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.anything(), ordinary);
+    run.turns[0]!.resolve();
+  });
+
+  it.each(['bot', 'attachment'] as const)('keeps p2p %s messages in the console without answering', async kind => {
+    const run = thread(); const o = await started(run, { threadId: undefined });
+    await secretVisible(run);
+    const incoming = message('not an answer', { chatType: 'p2p', chatId: 'dm', threadId: undefined,
+      ...(kind === 'bot' ? { raw: { sender: { sender_type: 'app' } } }
+        : { rawContentType: 'post', resources: [{ type: 'image', fileKey: 'attachment' }] as NormalizedMessage['resources'] }),
+    });
+    await o.onMessage(incoming);
+    expect(fake.dmConsole).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.anything(), incoming);
+    expect(run.respond).not.toHaveBeenCalled();
+    await o.onMessage(message('private answer', { chatType: 'p2p', chatId: 'dm', threadId: undefined }));
+    await until(() => expect(run.respond).toHaveBeenCalledExactlyOnceWith('id',
+      { kind: 'answered', answer: { kind: 'text', text: 'private answer' } }));
+    run.turns[0]!.resolve();
+  });
+
+  it.each([undefined, 'topic'])('reminds an eligible group sender once per 60 seconds and still steers in %s', async threadId => {
+    const run = thread(); const o = await started(run, { threadId });
+    await secretVisible(run);
+    fake.send.mockClear();
+    const reminders = () => fake.send.mock.calls.filter(args => JSON.stringify(args).includes('群里发的不算回答'));
+    const first = message('group answer', { threadId });
+    await o.onMessage(first);
+    await until(() => expect(run.t.steer).toHaveBeenCalledTimes(1));
+    expect(reminders()).toHaveLength(1);
+    expect(reminders()[0]).toEqual(['chat', { markdown: '🔒 这题要在私聊里回答，群里发的不算回答。' },
+      { replyTo: first.messageId, replyInThread: Boolean(threadId) }]);
+    await o.onMessage(message('group answer again', { threadId }));
+    await until(() => expect(run.t.steer).toHaveBeenCalledTimes(2));
+    expect(reminders()).toHaveLength(1);
+    vi.setSystemTime(Date.now() + 61_000);
+    await o.onMessage(message('group answer later', { threadId }));
+    await until(() => expect(run.t.steer).toHaveBeenCalledTimes(3));
+    expect(reminders()).toHaveLength(2);
+    expect(run.respond).not.toHaveBeenCalled();
+    run.turns[0]!.resolve();
+  });
+
+  it('does not remind an ineligible group sender and still steers (negative control)', async () => {
+    const run = thread(); const o = await started(run, { threadId: undefined });
+    await visible(run, sensitive);
+    fake.send.mockClear();
+    await o.onMessage(message('guest message', { threadId: undefined, senderId: 'guest' }));
+    await until(() => expect(run.t.steer).toHaveBeenCalledOnce());
+    expect(JSON.stringify(fake.send.mock.calls)).not.toContain('在私聊里回答');
+    expect(run.respond).not.toHaveBeenCalled();
+    run.turns[0]!.resolve();
   });
 });
