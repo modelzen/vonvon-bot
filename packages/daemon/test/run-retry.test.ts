@@ -366,7 +366,7 @@ describe('[重试] on a failed run card', () => {
     fake.project = undefined; // unbound in the DM console; the bot is still in the group
 
     await tap('card-1');
-    await untilReplied('本群还没绑定为项目');
+    await untilReplied('主人还没设置好这个群');
     await o.onReaction({ action: 'added', emojiType: 'THUMBSUP', messageId: 'card-1', operator: { openId: 'owner' } } as never);
     await sleep(100);
     expect(fake.backend.resumeThread).toHaveBeenCalledTimes(1);

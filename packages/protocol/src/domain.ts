@@ -37,6 +37,11 @@ export const conversationCopy = {
   shared: { name: "单会话", title: "整群一条会话", subtitle: "主区一条会话，上下文一直连着；想另起一件事，开个话题和我聊" },
   smart: { name: "智能", title: "智能开话题", subtitle: "主区一条会话，不用 @ 我也会看情况接话；聊到新的事，我自己开话题、起新会话" },
 } as const;
+/** 话题群和话题形式群没有主区：多会话、单会话合成“按话题聊”（存成多会话），和智能二选一（3.4）。 */
+export const topicConversationCopy = {
+  threads: { name: "按话题聊", title: "按话题聊", subtitle: "一个话题一条会话，几件事各聊各的" },
+  smart: { name: "智能", title: "智能开话题", subtitle: "一个话题一条会话，不用 @ 我也会看情况接话" },
+} as const;
 /** 会话方式 as the daemon stores it (`sessionModeOf`): multi = 多会话, single = 单会话, smart = 智能. */
 export type SessionMode = "multi" | "single" | "smart";
 const MODES = { threads: "multi", shared: "single", smart: "smart" } as const satisfies Record<Conversation, SessionMode>;
