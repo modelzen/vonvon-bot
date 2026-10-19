@@ -22,8 +22,9 @@ import type {
   TurnOptions,
 } from '../types';
 import { isGoalTerminal, SessionInUseError } from '../types';
-import { BRIDGE_DEVELOPER_INSTRUCTIONS } from '../bridge-instructions';
+import { resolveSessionProfile, type SessionProfileCapabilities } from '../session-profile';
 import { AppServerClient } from './app-server-client';
+import { NATIVE_MEMORY_OFF } from './memory-config';
 import { connectGated, refillWarmPool, takeWarmClient, utilityRequest } from './client-pool';
 import { mapChildNotification, mapNotification, readSubAgentActivity, readSubagentSpawn, type Child } from './event-map';
 import { runCodexJudge } from './judge-process';
@@ -68,6 +69,25 @@ export function sandboxParams(
           network: { enabled: Boolean(network) },
         },
       },
+    },
+  };
+}
+
+/** Rebuilt for every start/resume; never persists workspace trust to user config. */
+export function codexSessionParams(opts: StartThreadOptions): Record<string, unknown> {
+  const profile = resolveSessionProfile(opts.profile);
+  const sandbox = sandboxParams(opts.mode, opts.network);
+  return {
+    ...sandbox,
+    cwd: opts.cwd,
+    approvalPolicy: APPROVAL_POLICY,
+    developerInstructions: profile.instructions,
+    ...(opts.model ? { model: opts.model } : {}),
+    config: {
+      ...(typeof sandbox.config === 'object' ? sandbox.config : {}),
+      projects: { [opts.cwd]: { trust_level: 'trusted' } },
+      ...NATIVE_MEMORY_OFF,
+      shell_environment_policy: { set: profile.env },
     },
   };
 }
@@ -149,6 +169,8 @@ export async function generateCodexSessionTitleWithClient(
     // Match Codex App's isolated background job: no web search, hooks, fanout,
     // or subagents. Read-only still lets the core runtime initialize safely.
     config: {
+      ...NATIVE_MEMORY_OFF,
+      projects: { [opts.cwd]: { trust_level: 'trusted' } },
       web_search: 'disabled',
       'features.enable_fanout': false,
       'features.hooks': false,
@@ -652,6 +674,12 @@ class CodexThread implements AgentThread {
 }
 
 export class CodexAppServerBackend implements AgentBackend {
+  readonly profileCapabilities = {
+    instructions: { channel: 'developer', replaceOnResume: false },
+    additionalRoots: false, directoryAccess: false, capabilityPackages: false, mcpServers: false,
+    env: true, disableNativeMemory: true,
+    reapplyOnResume: ['env', 'nativeSettings', 'workspaceTrust'],
+  } satisfies SessionProfileCapabilities;
   readonly id = 'codex-appserver';
   readonly displayName = 'Codex (app-server)';
   private modelCache: ModelInfo[] | null = null;
@@ -814,30 +842,26 @@ export class CodexAppServerBackend implements AgentBackend {
     // Auto-compaction is codex's own default and stays on (s12): no
     // model_auto_compact_token_limit override, and newer codex caps any limit at
     // 90% of the window anyway.
-    const sandbox = sandboxParams(opts.mode, opts.network);
+    const params = codexSessionParams(opts);
     const client = await this.spawn(opts.cwd);
-    const res = await client.request<{ thread: { id: string } }>('thread/start', {
-      cwd: opts.cwd,
-      approvalPolicy: APPROVAL_POLICY,
-      ...sandbox,
-      developerInstructions: BRIDGE_DEVELOPER_INSTRUCTIONS,
-      ...(opts.model ? { model: opts.model } : {}),
-    });
+    let res: { thread: { id: string } };
+    try {
+      res = await client.request<{ thread: { id: string } }>('thread/start', params);
+    } catch (err) {
+      await client.close().catch((closeErr: unknown) => log.fail('agent', closeErr, { phase: 'start-close' }));
+      throw err;
+    }
     return new CodexThread(client, res.thread.id, opts.model, opts.effort, false);
   }
 
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {
-    const sandbox = sandboxParams(opts.mode, opts.network);
+    const params = codexSessionParams(opts);
     const client = await this.spawn(opts.cwd);
     let res: { thread: { id: string; turns?: Turn[] } };
     try {
       res = await client.request<{ thread: { id: string; turns?: Turn[] } }>('thread/resume', {
         threadId: opts.sessionId,
-        cwd: opts.cwd,
-        approvalPolicy: APPROVAL_POLICY,
-        ...sandbox,
-        developerInstructions: BRIDGE_DEVELOPER_INSTRUCTIONS,
-        ...(opts.model ? { model: opts.model } : {}),
+        ...params,
       });
     } catch (err) {
       // This process holds nothing yet; a refused resume must not leave it running.

@@ -31,12 +31,12 @@ import type {
 } from '../types';
 import { JudgeCallError } from '../types';
 import { claudeErrorKind, errorKindFromText } from '../error-kind';
-import { BRIDGE_DEVELOPER_INSTRUCTIONS } from '../bridge-instructions';
+import { resolveSessionProfile, type SessionProfileCapabilities } from '../session-profile';
 import { BackendNotInstalledError, isBackendDepInstalled, installedBackendVersion, loadBackendDep } from '../backend-loader';
 import { claudeAccess, permissionOptions } from './permission';
 import { findTranscript, scanTranscript } from './transcript';
 import { foldSessionMessages, mapSessionSummary } from './history';
-import { ClaudeAgentThread, type TranscriptMark } from './thread';
+import { ClaudeAgentThread, NATIVE_MEMORY_OFF, type TranscriptMark } from './thread';
 import { claudeConfigDir, readConfiguredClaudeModel } from './configured-model';
 import { loginFromAccount, loginFromEnv, loginUnderService, readClaudeLogin } from './login';
 
@@ -104,7 +104,7 @@ function bridgeClaudeEnv(): Record<string, string> {
 function helperQueryOptions(cwd: string): Options {
   return {
     cwd,
-    env: { ...bridgeClaudeEnv(), ENABLE_CLAUDEAI_MCP_SERVERS: 'false' },
+    env: { ...bridgeClaudeEnv(), ...NATIVE_MEMORY_OFF.env, ENABLE_CLAUDEAI_MCP_SERVERS: 'false' },
     persistSession: false,
     maxTurns: 1,
     tools: [],
@@ -113,6 +113,7 @@ function helperQueryOptions(cwd: string): Options {
     strictMcpConfig: true,
     settingSources: ['user'],
     settings: {
+      ...NATIVE_MEMORY_OFF,
       disableAllHooks: true,
       // e02: with 'user' loaded the personal CLAUDE.md is read unless excluded;
       // the glob covers ~/.claude, the absolute path covers CLAUDE_CONFIG_DIR.
@@ -320,6 +321,12 @@ async function* idleClaudeInput(signal: AbortSignal): AsyncGenerator<never, void
  * reads the state for the environment page and the desktop snapshot.
  */
 export class ClaudeAgentBackend implements AgentBackend {
+  readonly profileCapabilities = {
+    instructions: { channel: 'system-append', replaceOnResume: false },
+    additionalRoots: false, directoryAccess: false, capabilityPackages: false, mcpServers: false,
+    env: true, disableNativeMemory: true,
+    reapplyOnResume: ['env', 'nativeSettings'],
+  } satisfies SessionProfileCapabilities;
   readonly id = 'claude-agent';
   readonly displayName = 'Claude';
   /** Successful SDK discovery is stable for this backend process and avoids
@@ -599,6 +606,7 @@ export class ClaudeAgentBackend implements AgentBackend {
   }
 
   async startThread(opts: StartThreadOptions): Promise<AgentThread> {
+    const profile = resolveSessionProfile(opts.profile);
     const sdk = await this.sdkLoader();
     const realCwd = await realpath(opts.cwd).catch(() => opts.cwd);
     const access = claudeAccess(opts.mode, opts.network, opts.cwd, realCwd);
@@ -610,14 +618,15 @@ export class ClaudeAgentBackend implements AgentBackend {
       effort: opts.effort,
       access,
       permission: permissionOptions(access),
-      systemPromptAppend: BRIDGE_DEVELOPER_INSTRUCTIONS,
+      systemPromptAppend: profile.instructions,
       settingSources: BRIDGE_SETTING_SOURCES,
-      env: bridgeClaudeEnv(),
+      env: { ...bridgeClaudeEnv(), ...profile.env, CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },
       query: sdk.query,
     });
   }
 
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {
+    const profile = resolveSessionProfile(opts.profile);
     const sdk = await this.sdkLoader();
     const transcript = await transcriptMark(await assertSessionSaved(opts.sessionId), opts.sessionId);
     const realCwd = await realpath(opts.cwd).catch(() => opts.cwd);
@@ -631,9 +640,9 @@ export class ClaudeAgentBackend implements AgentBackend {
       effort: opts.effort,
       access,
       permission: permissionOptions(access),
-      systemPromptAppend: BRIDGE_DEVELOPER_INSTRUCTIONS,
+      systemPromptAppend: profile.instructions,
       settingSources: BRIDGE_SETTING_SOURCES,
-      env: bridgeClaudeEnv(),
+      env: { ...bridgeClaudeEnv(), ...profile.env, CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },
       query: sdk.query,
     });
   }

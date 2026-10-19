@@ -134,7 +134,12 @@ describe('Codex backend native session titles', () => {
       ephemeral: true,
       sandbox: 'read-only',
       approvalPolicy: 'never',
-      config: expect.objectContaining({ web_search: 'disabled' }),
+      config: expect.objectContaining({
+        web_search: 'disabled',
+        projects: { '/repo': { trust_level: 'trusted' } },
+        features: { memories: false },
+        memories: { use_memories: false, generate_memories: false },
+      }),
     }));
     expect(request).toHaveBeenCalledWith('turn/start', expect.objectContaining({
       threadId: 'title-thread',
@@ -295,10 +300,12 @@ describe('Claude backend native session titles', () => {
       settingSources: ['user'],
       strictMcpConfig: true,
       settings: expect.objectContaining({
+        autoMemoryEnabled: false,
+        env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },
         disableAllHooks: true,
         claudeMdExcludes: expect.arrayContaining(['**/.claude/CLAUDE.md']),
       }),
-      env: expect.objectContaining({ FEISHU_CODEX_BRIDGE: '1', ENABLE_CLAUDEAI_MCP_SERVERS: 'false' }),
+      env: expect.objectContaining({ FEISHU_CODEX_BRIDGE: '1', ENABLE_CLAUDEAI_MCP_SERVERS: 'false', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' }),
     }));
     await expect(backend.listModels()).resolves.toEqual(models);
     expect(query).toHaveBeenCalledOnce(); // successful discovery is cached
@@ -337,15 +344,19 @@ describe('Claude backend native session titles', () => {
       mcpServers: {},
       settingSources: ['user'],
       settings: expect.objectContaining({
+        autoMemoryEnabled: false,
+        env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },
         disableAllHooks: true,
         claudeMdExcludes: expect.arrayContaining(['**/.claude/CLAUDE.md']),
       }),
-      env: expect.objectContaining({ FEISHU_CODEX_BRIDGE: '1' }),
+      env: expect.objectContaining({ FEISHU_CODEX_BRIDGE: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' }),
       outputFormat: {
         type: 'json_schema',
         schema: expect.objectContaining({ required: ['title'] }),
       },
     }));
+    expect(titleCall.options.settings).not.toHaveProperty('autoCompactEnabled');
+    expect(titleCall.options.settings.env).not.toHaveProperty('DISABLE_AUTO_COMPACT');
     expect(titleQuery.close).toHaveBeenCalledOnce();
   });
 

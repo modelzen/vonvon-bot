@@ -29,6 +29,7 @@ beforeEach(async () => {
 const FAKE_SERVER = `#!/usr/bin/env node
 require('fs').appendFileSync(__filename + '.count', process.pid + '\\n');
 let buf = '';
+let prewarm;
 const send = (obj) => process.stdout.write(JSON.stringify(obj) + '\\n');
 process.stdin.on('data', (d) => {
   buf += d;
@@ -48,6 +49,7 @@ process.stdin.on('data', (d) => {
       continue;
     }
     if (m === 'thread/start' && p.ephemeral) {
+      prewarm = p;
       // 预热路径：先吐一条「噪音」通知再回包——验证取用时被清空
       send({ jsonrpc: '2.0', method: 'prewarm/noise', params: {} });
       send({ jsonrpc: '2.0', id: msg.id, result: { thread: { id: 'warm_eph' } } });
@@ -55,6 +57,7 @@ process.stdin.on('data', (d) => {
     }
     if (m === 'emit') send({ jsonrpc: '2.0', method: 'real/event', params: {} });
     const result =
+      m === 'warm/params' ? prewarm :
       m === 'model/list' ? { data: [{ id: 'pool-model', isDefault: true }] } :
       m === 'thread/list' ? { data: [{ id: 't1', preview: 'hi', createdAt: 1, updatedAt: 2 }] } :
       m === 'thread/read' ? { thread: { turns: [] } } :
@@ -163,6 +166,13 @@ describe('容量 1 预热池（M-2）', () => {
     const client = takeWarmClient(bin);
     expect(client).not.toBeNull();
     expect(takeWarmClient(bin)).toBeNull(); // 容量 1：取走即空
+    expect(await client!.request('warm/params')).toMatchObject({
+      config: {
+        features: { memories: false },
+        memories: { use_memories: false, generate_memories: false },
+        projects: { [tmpdir()]: { trust_level: 'untrusted' } },
+      },
+    });
 
     // 取走的热进程功能完好：真实 thread/start 直接可用
     const res = await client!.request<{ thread: { id: string } }>('thread/start', { cwd: '/p' });
