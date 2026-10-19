@@ -9,7 +9,7 @@ import {
   adminRequestSchema, adminReplySchema, adminStateSchema, directoryRequestSchema, directoryReplySchema,
   jobSchema, environmentReplySchema,
   type DesktopSnapshot, settingsViewSchema, projectViewSchema, projectEditableSchemas, settingsReplySchema,
-  applicationCrashesSchema, crashText, FORCED_DETAIL, NOT_REPLIED_TEXT, diagnosticsEventSchema,
+  applicationCrashesSchema, crashText, FORCED_DETAIL, NOT_REPLIED_TEXT, diagnosticsEventSchema, KEY_FAILURE, keyFailureOf, keyProblem,
   isKnownJudgeSelection, type JudgeSelectionView,
   adminProjectSchema, collaborationRequestSchema, conversationCopy, conversationSchema, conversationToMode, modeToConversation, projectRecordSchema,
 } from "../src/index.js";
@@ -286,6 +286,31 @@ it("writes a crash in one line: a signal the supervisor saw with its uptime, a f
   // A newer daemon's extra field or longer list does not fail the snapshot (the daemon trims to 20).
   const records = Array.from({ length: 25 }, () => ({ at: 1, kind: "fatal", reason: "x", extra: true }));
   expect(applicationCrashesSchema.parse({ records }).records).toHaveLength(25);
+});
+
+it("points a judgement a decision model's key stopped at the key page, and a keystore it cannot read at the log (s23g2)", () => {
+  const record = { at: 1, count: 1, groupId: "oc_fixture_group", place: "main" as const, reason: "judge-failed" as const };
+  const next = (detail?: string) => NOT_REPLIED_TEXT["judge-failed"].next({ ...record, ...(detail ? { detail } : {}) });
+  for (const detail of [KEY_FAILURE.missing("TypeSafe"), KEY_FAILURE.invalid("TypeSafe"), KEY_FAILURE.rejected("TypeSafe")]) {
+    expect(keyFailureOf(detail)).toBe("key");
+    expect(next(detail)).toBe("在密钥页填了就恢复；@ 它一定会回。");
+  }
+  expect(keyFailureOf("密钥库读不了")).toBe("keystore");
+  expect(next("密钥库读不了")).toBe("密钥库读得了就恢复，原因在下面 daemon 日志的 secrets.unreadable；@ 它一定会回。");
+  // any other failure, a model's words that merely mention a key included, keeps the old next step
+  for (const detail of [undefined, "判断超时", "模型说：没填 key 的话", "decision timeout"]) {
+    expect(keyFailureOf(detail)).toBeUndefined();
+    expect(next(detail)).toBe("@ 它一定会回；反复出现时看下面的日志。");
+  }
+});
+
+it("says why a key cannot be saved in the daemon's words, never quoting it (s23g2)", () => {
+  expect(keyProblem("")).toBe("没有读到 key");
+  expect(keyProblem("x".repeat(4097))).toBe("key 太长了，最多 4096 个字符");
+  expect(keyProblem("tsk test")).toBe("key 只能是一串可见的英文字符，不能有空格、换行或中文");
+  expect(keyProblem("tsk-密钥")).toBe("key 只能是一串可见的英文字符，不能有空格、换行或中文");
+  expect(keyProblem("x".repeat(4096))).toBeUndefined();
+  expect(keyProblem("tsk-test-0000000000000000abcd")).toBeUndefined();
 });
 
 it("words a queued message a restart dropped, and lets one event count several messages (s18c)", () => {
