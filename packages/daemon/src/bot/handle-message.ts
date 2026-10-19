@@ -6045,7 +6045,7 @@ export function createOrchestrator(
     } finally {
       if (!launched && active.get(key) === reserved) active.delete(key);
       releaseIdle(key, compacted);
-      const dropped = !launched ? askAgain(reserved.queue, project.chatId, ruleKind(project) === 'single' ? 'main' : 'topic', 'occupied', '会话被占用') : 0;
+      const dropped = !launched ? askAgain(reserved.queue, project.chatId, isMainKey(key, project.chatId) ? 'main' : 'topic', 'occupied', '会话被占用') : 0;
       if (dropped) await channel.send(project.chatId, { markdown: `操作期间收到的 ${dropped} 条消息未执行，请重发。` });
     }
   }

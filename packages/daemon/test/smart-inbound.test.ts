@@ -105,6 +105,7 @@ vi.mock('../src/card/run-card-stream', () => ({
 }));
 
 import { createOrchestrator } from '../src/bot/handle-message';
+import * as sessionStore from '../src/bot/session-store';
 
 const BOT = { openId: 'ou_bot', name: '小码' };
 const APP = 'cli_fixture';
@@ -1072,6 +1073,43 @@ describe('bot wake fallbacks and queued turns (s27a)', () => {
       else expect(JSON.stringify(fake.send.mock.calls)).not.toContain('请重发');
       expect(fake.inputs).toEqual([]);
     } finally { gate.resolve(); await resume; }
+  });
+
+  it.each(['main', 'topic'] as const)('reports the actual %s location when desktop compact drops a bot queue', async place => {
+    const key = place === 'main' ? CHAT : 'omt_compact_diagnostic';
+    const location = place === 'main' ? {} : { thread: key };
+    const gate = deferred<void>(); const entered = deferred<void>();
+    const create = startThread.getMockImplementation();
+    if (!create) throw new Error('thread fixture missing');
+    startThread.mockImplementationOnce(async () => ({ ...await create(), compact: async () => {
+      entered.resolve(); await gate.promise; return {};
+    } }));
+    const record = { threadId: key, chatId: CHAT, cwd: '/tmp/demo', sessionId: 'native-fixture',
+      backend: 'codex-appserver', summary: 'fixture', createdAt: 1, updatedAt: 1 };
+    const list = vi.spyOn(sessionStore, 'listSessions').mockResolvedValue([record]);
+    fake.sessions[key] = record;
+    let compact: Promise<unknown> | undefined;
+    try {
+      const first = says('WARM_SESSION', { at: true, ...location });
+      await send(first);
+      if (place === 'main') await decide(first, result('main'));
+      await vi.waitFor(() => expect(fake.finals).toHaveLength(1)); await settle();
+      compact = orchestrator.collaboration({ action: 'compact', projectName: 'demo', chatId: CHAT, threadId: key });
+      await entered.promise;
+      const bot = says('BOT_DURING_COMPACT', { at: true, ...location });
+      await botSays(bot); await decide(bot, result(place === 'main' ? 'main' : 'reply'));
+      await vi.waitFor(() => expect(fake.log.info.mock.calls.filter(call => call[1] === 'queued')).toHaveLength(1));
+      const human = says('HUMAN_DURING_COMPACT', { at: true, ...location });
+      await send(human);
+      if (place === 'main') await decide(human, result('main'));
+      await vi.waitFor(() => expect(fake.log.info.mock.calls.filter(call => call[1] === 'queued')).toHaveLength(2));
+      gate.resolve(); await compact;
+      expect(records().filter(record => record.reason === 'bot-wake-dropped')).toEqual([
+        expect.objectContaining({ place, detail: '会话被占用' }),
+      ]);
+      expect(fake.send).toHaveBeenLastCalledWith(CHAT, { markdown: '操作期间收到的 1 条消息未执行，请重发。' });
+      expect(fake.inputs).toHaveLength(1);
+    } finally { gate.resolve(); await compact; list.mockRestore(); }
   });
 
   it('drops a queued bot during shutdown without adding diagnostics or asking for a resend', async () => {
