@@ -141,11 +141,12 @@ export class AskCoordinator {
       this.effect(() => this.channel.rawClient.im.v1.message.reply({ path: { message_id: sent.messageId }, data: { msg_type: 'post', content, reply_in_thread: replyInThread } }));
     }, error => { this.settle(turn, entry, { kind: 'unanswered', reason: 'unavailable' }); log.fail('card', error, { phase: 'ask-send' }); });
   }
-  submit(input: { messageId: string; chatId: string; operatorOpenId?: string; value: unknown; formValue: unknown }): 'accepted' | 'invalid' | 'denied' | 'inactive' {
+  submit(input: { messageId: string; chatId: string; operatorOpenId?: string; value: unknown; formValue: unknown }): 'accepted' | 'invalid' | 'denied' | 'inactive' | 'foreign' {
     const found = this.carriers.get(input.messageId);
     if (!found) return 'inactive';
     const { turn, entry } = found;
-    if (!turn.open || this.turns.get(turn.sessionKey) !== turn || turn.queue[0] !== entry || turn.placement.chatId !== input.chatId) return 'inactive';
+    if (!turn.open || this.turns.get(turn.sessionKey) !== turn || turn.queue[0] !== entry) return 'inactive';
+    if (turn.placement.chatId !== input.chatId) return 'foreign';
     const parsed = parseAskSubmission({ request: entry.request, value: input.value, formValue: input.formValue });
     if (!parsed.ok) {
       const key = `invalid:${input.operatorOpenId ?? ''}:${parsed.reason}`;

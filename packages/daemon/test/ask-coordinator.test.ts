@@ -81,7 +81,7 @@ it('revalidates current authorization, carrier/chat/request identity, and dedupl
   const f = fixture(); const turn = f.open(); turn.enqueue(ask('a')); await flush();
   expect(f.submit('wrong')).toBe('invalid');
   expect(f.submit('a', 'fake')).toBe('inactive');
-  expect(f.submit('a', 'msg-1', 'owner', { chatId: 'fake' })).toBe('inactive');
+  expect(f.submit('a', 'msg-1', 'owner', { chatId: 'fake' })).toBe('foreign');
   f.cfg.preferences!.access!.admins = ['new-admin'];
   expect(f.submit('a', 'msg-1', 'admin')).toBe('denied');
   expect(f.submit('a', 'msg-1', 'admin')).toBe('denied');
