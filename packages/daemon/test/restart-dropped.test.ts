@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  DROPPED_MAX_AGE_MS, ReplyTimeoutError, createDroppedReplies, droppedText, droppedUuid, readDropped, recordDroppedSync, replyFailure,
+  originFor, originOf, DROPPED_MAX_AGE_MS, ReplyTimeoutError, createDroppedReplies, droppedText, droppedUuid, readDropped, recordDroppedSync, replyFailure,
   settleDroppedSync, type DroppedEntry, type DroppedOrigin,
 } from '../src/bot/restart-dropped';
 
@@ -251,4 +251,13 @@ describe('the replies, one group after another', () => {
     expect(() => replies.saveSync([origin('a', 'a1', 1)], 'shutdown')).not.toThrow();
     expect(log.fail).toHaveBeenCalledWith('bridge', expect.objectContaining({ code: 'ENOTDIR' }), { phase: 'dropped-record' });
   });
+});
+
+
+it('does not let a bot message replace a human in the restart resend list', () => {
+  const message = { chatId: 'oc_demo', messageId: 'om_human', createTime: NOW, raw: { sender: { sender_type: 'user' } } };
+  for (const flat of [true, false]) {
+    expect(originFor(message, flat)).toEqual(originOf(message, flat));
+    expect(originFor({ ...message, raw: { sender: { sender_type: 'app' } } }, flat)).toBeUndefined();
+  }
 });

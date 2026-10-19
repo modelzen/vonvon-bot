@@ -12,7 +12,7 @@ function deferred<T>(): Deferred<T> {
 const flush = async (): Promise<void> => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
 
 type V = 'main' | 'topic' | 'skip';
-const entry = (id: string, named = false, place = 'chat'): LaneEntry => ({ id, place, named });
+const entry = (id: string, named = false, place = 'chat', aside = false): LaneEntry => ({ id, place, named, ...(aside ? { aside: true } : {}) });
 
 /** Lanes whose judgements and landings the test settles by hand. */
 function lanes() {
@@ -54,6 +54,27 @@ describe('JudgeBudget', () => {
 });
 
 describe('SmartLanes', () => {
+  it('an aside entry is judged at once beside the unnamed batch, is never its context, and holds nothing back', async () => {
+    const t = lanes();
+    t.lane.submit(entry('a'));
+    t.lane.submit(entry('w', false, 'chat', true));
+    t.lane.submit(entry('b'));
+    t.lane.submit(entry('n', true));
+    expect([...t.judging.keys()]).toEqual(['a', 'w', 'n']);
+    t.judging.get('a')!.answer.resolve('skip'); await flush();
+    expect(t.judging.get('b')!.batch).toEqual(['b']);
+    t.judging.get('n')!.answer.resolve('main'); await flush();
+    expect(t.landed).toContain('n:main');
+    t.landing.get('n')!.resolve(); await flush();
+    t.lane.submit(entry('earlier', true));
+    t.lane.submit(entry('later-w', false, 'chat', true));
+    t.judging.get('later-w')!.answer.resolve('main'); await flush();
+    expect(t.landed).not.toContain('later-w:main');
+    t.judging.get('earlier')!.answer.resolve('main'); await flush();
+    t.landing.get('earlier')!.resolve(); await flush();
+    expect(t.landed).toContain('later-w:main');
+  });
+
   it('judges one unnamed batch a place at a time; those coming meanwhile go as one batch, the newest judged', async () => {
     const t = lanes();
     t.lane.submit(entry('a'));
