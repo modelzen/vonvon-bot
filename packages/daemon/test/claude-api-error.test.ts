@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { createTurnMapper, resultErrorText } from '../src/agent/claude-agent/event-map';
 import { ClaudeAgentThread } from '../src/agent/claude-agent/thread';
@@ -36,7 +36,7 @@ afterEach(async () => {
 });
 
 /** Only replace the external SDK query; exercise the real thread, mapper and card. */
-function makeThread(turns: SDKMessage[][], endAfterTurn = false): ClaudeAgentThread {
+function makeThread(turns: SDKMessage[][], endAfterTurn = false, stopTask = async (_id: string): Promise<void> => {}): ClaudeAgentThread {
   let turn = 0;
   const thread = new ClaudeAgentThread({
     sessionId: 'test-session', resume: false, cwd: process.cwd(), permission: {}, settingSources: [],
@@ -46,6 +46,7 @@ function makeThread(turns: SDKMessage[][], endAfterTurn = false): ClaudeAgentThr
         if (endAfterTurn) return;
       }
     })(), {
+      stopTask,
       getContextUsage: async () => null,
       interrupt: async () => {},
       close: () => {},
@@ -205,4 +206,27 @@ describe.each([false, true])('Claude terminal errors (goal: %s)', (goal) => {
     expect(events.some((event) => event.type === 'error')).toBe(false);
     expect(events.at(-1)?.type).toBe('done');
   });
+});
+
+
+it('stops the requested Claude task only during its own parent turn', async () => {
+  const stopTask = vi.fn(async (_id: string) => {});
+  const thread = makeThread([[success], [success]], false, stopTask);
+  const run = thread.runStreamed({ text: 'first' });
+  expect(run.stopSubagent).toBeTypeOf('function');
+  await run.stopSubagent?.('task-one');
+  expect(stopTask).toHaveBeenCalledExactlyOnceWith('task-one');
+  for await (const event of run.events) void event;
+  const next = thread.runStreamed({ text: 'second' });
+  await expect(run.stopSubagent?.('task-one')).rejects.toThrow('这个子 agent 已经结束');
+  for await (const event of next.events) void event;
+  await expect(next.stopSubagent?.('task-two')).rejects.toThrow('这个子 agent 已经结束');
+  expect(stopTask).toHaveBeenCalledTimes(1);
+});
+
+it('adds a Chinese reason when Claude stopTask fails', async () => {
+  const thread = makeThread([[success]], false, async () => { throw new Error('SDK denied'); });
+  const run = thread.runStreamed({ text: 'test' });
+  await expect(run.stopSubagent?.('task-one')).rejects.toThrow('停止子 agent 失败：SDK denied');
+  for await (const event of run.events) void event;
 });

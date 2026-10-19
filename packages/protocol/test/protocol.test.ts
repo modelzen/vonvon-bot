@@ -11,7 +11,7 @@ import {
   type DesktopSnapshot, settingsViewSchema, projectViewSchema, projectEditableSchemas, settingsReplySchema,
   applicationCrashesSchema, crashText, FORCED_DETAIL, NOT_REPLIED_TEXT, diagnosticsEventSchema, notRepliedSchema, KEY_FAILURE, keyFailureOf, keyProblem,
   isKnownJudgeSelection, type JudgeSelectionView,
-  adminProjectSchema, collaborationRequestSchema, conversationCopy, conversationSchema, conversationToMode, modeToConversation, projectRecordSchema,
+  adminProjectSchema, collaborationRequestSchema, collaborationReplySchema, conversationCopy, conversationSchema, conversationToMode, modeToConversation, projectRecordSchema,
 } from "../src/index.js";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
@@ -343,4 +343,17 @@ it("validates daily judge usage requests and replies", () => {
   const reply = { kind: "judgeUsage", days: [{ date: "2026-10-19", total: 0, sources: [], bots: [] }], unreadBots: 0 };
   expect(adminReplySchema.parse(reply)).toEqual(reply);
   expect(adminReplySchema.safeParse({ ...reply, days: [{ ...reply.days[0], date: "2026-1-9" }] }).success).toBe(false);
+});
+
+
+it("s34b: validates strict single-subagent stop requests and optional context rows", () => {
+  const request = { action: "stopSubagent", agentId: "cli_fixture", projectName: "demo", groupId: "oc_fixture", threadId: "thread", runId: "run", subagentId: "child" };
+  expect(collaborationRequestSchema.parse(request)).toEqual(request);
+  expect(collaborationRequestSchema.safeParse({ ...request, extra: true }).success).toBe(false);
+  const run = { id: "run", goal: false, canStop: true, canEndGoal: false, canRemind: true, reminderRequested: false };
+  const reply = { kind: "context", threadId: "thread", usage: null, run };
+  expect(collaborationReplySchema.parse(reply)).toEqual(reply);
+  const rows = [{ id: "child", name: "worker", task: "count files", status: "running", stoppable: true }];
+  const withRows = { ...reply, run: { ...run, subagents: rows } };
+  expect(collaborationReplySchema.parse(withRows)).toEqual(withRows);
 });
