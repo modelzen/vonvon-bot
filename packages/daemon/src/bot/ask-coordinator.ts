@@ -122,6 +122,10 @@ export class AskCoordinator {
   private promote(turn: Turn): void {
     const entry = turn.queue[0];
     if (!turn.open || !entry || entry.state.kind !== 'queued') return;
+    if (turn.run.askPending?.(entry.request.id) === false) {
+      this.settle(turn, entry, { kind: 'unanswered', reason: 'turn-ended' }, { providerResolved: true });
+      return;
+    }
     entry.state = { kind: 'sending' };
     entry.timer = setTimeout(() => this.settle(turn, entry, { kind: 'unanswered', reason: 'unavailable' }), 30_000);
     const { chatId, replyTo, replyInThread } = turn.placement;
@@ -167,7 +171,15 @@ export class AskCoordinator {
     if (!turn || !turn.open || turn.placement.chatId !== input.chatId) return 'none';
     const entry = turn.queue[0];
     if (!entry || entry.state.kind !== 'visible') return 'none';
-    if (!input.createTime || input.createTime < entry.state.shownAt) return 'none';
+    if (turn.run.askPending?.(entry.request.id) === false) {
+      this.settle(turn, entry, { kind: 'unanswered', reason: 'turn-ended' }, { providerResolved: true });
+      return 'none';
+    }
+    if (!input.createTime) return 'none';
+    if (input.createTime < entry.state.shownAt) {
+      log.info('card', 'ask-typed-before-visible', { deltaMs: input.createTime - entry.state.shownAt });
+      return 'none';
+    }
     if (input.senderKind !== 'user' || entry.request.kind !== 'choices') return 'none';
     if (!(isAdmin(this.cfg, input.senderId) || (turn.initiator.kind === 'user' && input.senderId === turn.initiator.openId))) return 'none';
     if (isSensitiveAsk(entry.request)) return 'sensitive';

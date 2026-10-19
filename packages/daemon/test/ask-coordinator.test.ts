@@ -5,6 +5,7 @@ import type { AppConfig } from '../src/config/schema';
 import { AskCoordinator } from '../src/bot/ask-coordinator';
 import { createIdlePause } from '../src/bot/watchdog';
 import { log } from '../src/core/logger';
+import { CodexRequestScope, userInputRequest, type InboundQuestion } from '../src/agent/codex-appserver/server-requests';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -16,7 +17,7 @@ function ask(id: string, kind: 'confirmation' | 'permission' = 'confirmation'): 
   const common = { id, title: '决定', detail: '继续吗', acceptedConsequence: '继续', declinedConsequence: '停止' };
   return kind === 'permission' ? { ...common, kind, permissionMode: 'full' } : { ...common, kind };
 }
-function choices(id = 'choices'): AskRequest {
+function choices(id = 'choices'): Extract<AskRequest, { kind: 'choices' }> {
   return { id, kind: 'choices', title: '选择', acceptedConsequence: '继续', declinedConsequence: '停止',
     questions: [{ id: 'q', title: '选一个', detail: '', selection: 'single', other: false, options: [{ id: 'one', label: '一', description: '' }] }] };
 }
@@ -319,4 +320,61 @@ it('lets the first synchronous claim win against clicks, timeout, stop and repla
   expect(f.typed()).toBe('none');
   expect(f.response).toHaveBeenCalledTimes(3);
   third.close('turn-ended');
+});
+
+
+it('keeps sensitive text questions pending without responding or editing', async () => {
+  const f = fixture(); const turn = f.open();
+  turn.enqueue({ ...choices(), questions: [{ id: 'q', title: 'Secret', detail: '', selection: 'text', sensitive: true }] });
+  await flush(); expect(f.typed()).toBe('sensitive');
+  expect(f.response).not.toHaveBeenCalled(); expect(f.update).not.toHaveBeenCalled();
+  expect(f.pause.held).toBe(true); turn.close('turn-ended');
+});
+
+it('observes a rejected typed response and faults the current turn', async () => {
+  const f = fixture(); const turn = f.open(); const error = new Error('typed response failed');
+  turn.enqueue(choices()); await flush();
+  const unhandled = vi.fn(); process.on('unhandledRejection', unhandled);
+  try {
+    f.response.mockRejectedValueOnce(error);
+    expect(f.typed()).toBe('answered'); await flush();
+    await new Promise(resolve => setImmediate(resolve));
+    expect(f.fault).toHaveBeenCalledExactlyOnceWith(error);
+    expect(unhandled).not.toHaveBeenCalled(); expect(f.pause.held).toBe(false);
+  } finally { process.off('unhandledRejection', unhandled); turn.close('turn-ended'); }
+});
+
+it('records only the millisecond delta when the visibility time gate rejects input', async () => {
+  vi.useFakeTimers(); const info = vi.spyOn(log, 'info').mockImplementation(() => {});
+  const f = fixture(); const turn = f.open();
+  try {
+    turn.enqueue(choices()); await flush();
+    expect(f.typed('session', 'starter', 'private answer', 'chat', Date.now() - 12)).toBe('none');
+    expect(info).toHaveBeenCalledWith('card', 'ask-typed-before-visible', { deltaMs: -12 });
+    expect(JSON.stringify(info.mock.calls)).not.toContain('private answer');
+  } finally { turn.close('turn-ended'); info.mockRestore(); }
+});
+
+it('logs only question identity when Codex disallows other choices but receives free text', async () => {
+  const info = vi.spyOn(log, 'info').mockImplementation(() => {});
+  const scope = new CodexRequestScope('thread'); let question!: InboundQuestion;
+  try {
+    const wire = userInputRequest({ threadId: 'thread', turnId: 'turn', itemId: 'item', questions: [{
+      id: 'provider-question', header: 'Pick', question: 'Pick one', isOther: false, isSecret: false,
+      options: [{ label: 'One', description: '' }],
+    }] }, 'rpc', 1, scope, value => { question = value; });
+    await scope.respond(question.request.id, { kind: 'answered', answer: { kind: 'text', text: 'private answer' } });
+    expect(await wire).toEqual({ result: { answers: { 'provider-question': { answers: ['private answer'] } } } });
+    expect(info).toHaveBeenCalledWith('agent', 'ask-text-without-other', { questionId: 'provider-question' });
+    expect(JSON.stringify(info.mock.calls)).not.toContain('private answer');
+  } finally { scope.close(); info.mockRestore(); }
+});
+
+it('retires queued asks too when provider completion wins before the next promotion', async () => {
+  const f = fixture(); const pending = vi.fn(() => true); f.run.askPending = pending;
+  const turn = f.open(); turn.enqueue(choices('first')); turn.enqueue(choices('second')); await flush();
+  pending.mockReturnValue(false);
+  expect(f.typed()).toBe('none'); await flush();
+  expect(f.create).toHaveBeenCalledOnce(); expect(f.response).not.toHaveBeenCalled();
+  expect(f.pause.held).toBe(false); turn.close('turn-ended');
 });

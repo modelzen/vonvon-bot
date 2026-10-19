@@ -1,14 +1,20 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { CodexAppServerBackend } from '../src/agent/codex-appserver/backend';
+import { writeNodeExecutable } from './helpers/node-executable';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AgentEvent, AgentInput, AskRequest } from '../src/agent/types';
 
 const fake = vi.hoisted(() => ({
-  groupMode: 'single' as 'single' | 'multi',
+  groupMode: 'single' as 'single' | 'multi' | 'smart',
   groupPolicy: undefined as 'steer' | 'queue' | undefined,
   noMention: undefined as boolean | undefined,
   sendManaged: vi.fn(async () => ({ messageId: 'ask-1', cardId: 'card-ask' })),
   updateManaged: vi.fn(async () => true),
   reply: vi.fn(async () => ({ data: {} })),
+  getMessage: vi.fn(async () => ({ data: { items: [{ thread_id: 'new-topic' }] } })),
   backend: { capabilities: { steer: true }, id: 'codex', listModels: vi.fn(async () => []), resumeThread: vi.fn(), startThread: vi.fn() },
   voice: vi.fn(async (_channel: unknown, msg: NormalizedMessage) => ({ text: '语音正文', voice: { messageId: msg.messageId, text: '语音正文', transcribed: true } })),
   live: vi.fn(),
@@ -19,6 +25,15 @@ const fake = vi.hoisted(() => ({
   record: {} as Record<string, unknown>,
   history: vi.fn(async (..._args: unknown[]) => ({ messages: [] as unknown[], ok: true, complete: true })),
 }));
+// Each test owns an orchestrator, but the process registries live for this module.
+vi.mock('../src/agent/owned-process', async original => ({ ...await original<object>(), closeOwnedProviderProcesses: async () => {} }));
+vi.mock('../src/agent/codex-appserver/client-pool', async original => ({ ...await original<object>(), shutdownResidentClients: async () => {} }));
+afterAll(async () => {
+  const processes = await vi.importActual<typeof import('../src/agent/owned-process')>('../src/agent/owned-process');
+  const pool = await vi.importActual<typeof import('../src/agent/codex-appserver/client-pool')>('../src/agent/codex-appserver/client-pool');
+  await processes.closeOwnedProviderProcesses();
+  await pool.shutdownResidentClients();
+});
 vi.mock('../src/bot/steer-delivery', async original => { const real = await original<typeof import('../src/bot/steer-delivery')>(); return { ...real, steerWithDeadline: (thread: any, input: any, id: string) => real.steerWithDeadline(thread, input, id, undefined, 150) }; });
 vi.mock('../src/card/managed', async original => ({ ...await original<object>(), sendManagedCard: fake.sendManaged, updateManagedCard: fake.updateManaged }));
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown, fn: () => unknown) => fn() }));
@@ -70,6 +85,7 @@ function deferred<T>() {
 }
 function thread() {
   const respond = vi.fn(async () => {});
+  const askPending = vi.fn(() => true);
   const turns: ReturnType<typeof deferred<void>>[] = [];
   const consumed: AgentInput[] = [];
   const progress: { queue: AgentEvent[]; wake?: () => void }[] = [];
@@ -86,6 +102,7 @@ function thread() {
       const id = `turn-${turns.push(end)}`;
       return {
         respondToAsk: respond,
+        askPending,
         turnId: () => id, // deliberately keep backend ID stale during final-card I/O
         events: (async function* (): AsyncGenerator<AgentEvent> {
           yield { type: 'turn_started', turnId: id };
@@ -103,7 +120,7 @@ function thread() {
       };
     },
   };
-  return { t, turns, consumed, respond, emit(event: AgentEvent, index = 0) {
+  return { t, turns, consumed, respond, askPending, emit(event: AgentEvent, index = 0) {
     progress[index]!.queue.push(event); progress[index]!.wake?.();
   } };
 }
@@ -115,7 +132,7 @@ function message(text: string, over: Partial<NormalizedMessage> = {}): Normalize
 }
 function setup(policy: 'steer' | 'queue' = 'steer') {
   const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: policy, access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' } } };
-  const channel = { send: fake.send, rawClient: { im: { v1: { message: { reply: fake.reply, get: async () => ({ data: { items: [{ thread_id: 'new-topic' }] } }) }, messageReaction: {
+  const channel = { send: fake.send, rawClient: { im: { v1: { message: { reply: fake.reply, get: fake.getMessage }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
   orchestrator = createOrchestrator(channel as never, cfg, '/test');
@@ -129,6 +146,7 @@ beforeEach(() => {
   fake.sendManaged.mockReset().mockResolvedValue({ messageId: 'ask-1', cardId: 'card-ask' });
   fake.updateManaged.mockReset().mockResolvedValue(true);
   fake.reply.mockReset().mockResolvedValue({ data: {} });
+  fake.getMessage.mockReset().mockResolvedValue({ data: { items: [{ thread_id: 'new-topic' }] } });
   fake.record = {};
   fake.history.mockReset().mockResolvedValue({ messages: [], ok: true, complete: true });
   fake.voice.mockReset().mockImplementation(async (_channel, msg) => voiceResult('语音正文', msg.messageId));
@@ -141,6 +159,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await orchestrator?.shutdown();
+  vi.unstubAllEnvs();
 });
 // Keep synchronization polling well below the injected 150ms steer deadline.
 const until = (check: () => void) => vi.waitFor(check, { interval: 5 });
@@ -229,6 +248,125 @@ describe('typed ask messages at intake', () => {
     await until(() => expect(run.respond).toHaveBeenCalledExactlyOnceWith('id',
       { kind: 'answered', answer: { kind: 'text', text: '用方案 B' } }));
     expect(fake.send.mock.calls.some(args => JSON.stringify(args).includes('目标运行中'))).toBe(false);
+    run.turns[0]!.resolve();
+  });
+
+  it.each(['multi', 'smart'] as const)('binds an ask-first main-area goal to its new topic (%s)', async mode => {
+    fake.groupMode = mode;
+    // A real app-server transport, isolated executable and no account credentials.
+    // Retain the fixture directory for inspection under the task's no-delete rule.
+    const dir = execFileSync('mktemp', ['-d'], { encoding: 'utf8' }).trim();
+    const { bin } = writeNodeExecutable(dir, 'codex', `
+const fs = require('node:fs');
+const path = require('node:path');
+const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
+require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+  const m = JSON.parse(line);
+  fs.appendFileSync(path.join(__dirname, 'frames'), line + '\\n');
+  if (!m.method) {
+    send({ method: 'thread/goal/updated', params: { threadId: 'host', goal: { status: 'complete' } } });
+    send({ method: 'turn/completed', params: { threadId: 'host', turn: { id: 'goal-turn' } } });
+    return;
+  }
+  if (m.id !== undefined) send({ id: m.id, result: m.method === 'thread/start' || m.method === 'thread/resume' ? { thread: { id: 'host' } } : {} });
+  if (m.method === 'thread/goal/set') {
+    send({ method: 'turn/started', params: { threadId: 'host', turn: { id: 'goal-turn' } } });
+    send({ id: 'provider-ask', method: 'item/tool/requestUserInput', params: {
+      threadId: 'host', turnId: 'goal-turn', itemId: 'item', questions: [{ id: 'q', header: 'Pick', question: 'Which?',
+      isOther: true, isSecret: false, options: [{ label: 'A', description: '' }] }] } });
+  }
+});
+`);
+    vi.stubEnv('CODEX_BIN', bin);
+    const backend = new CodexAppServerBackend();
+    const respond = vi.fn();
+    fake.backend.startThread.mockImplementation(async opts => {
+      const live = await backend.startThread({ ...opts, cwd: dir });
+      const runGoal = live.runGoal!.bind(live);
+      live.runGoal = objective => {
+        const run = runGoal(objective);
+        const original = run.respondToAsk!.bind(run);
+        run.respondToAsk = (id, answer) => { respond(id, answer); return original(id, answer); };
+        return run;
+      };
+      return live;
+    });
+    const o = setup();
+    await o.onMessage(message('/goal finish the work', { threadId: undefined }));
+    await vi.waitFor(() => expect(fake.reply).toHaveBeenCalled(), { timeout: 5000, interval: 10 });
+    await o.onMessage(message('use B', { threadId: 'new-topic' }));
+    await until(() => expect(respond).toHaveBeenCalledWith(expect.any(String), { kind: 'answered', answer: { kind: 'text', text: 'use B' } }));
+    await until(() => expect(readFileSync(join(dir, 'frames'), 'utf8')).toContain('"answers":["use B"]'));
+    expect(fake.backend.startThread).toHaveBeenCalledTimes(1);
+    expect(fake.backend.resumeThread).not.toHaveBeenCalled();
+    expect(fake.sendManaged.mock.calls[0]).toEqual(expect.arrayContaining(['card', true]));
+  }, 10_000);
+
+  it.each([false, true])('settles an unresolved goal topic card even when its final update rejects (%s)', async rejectUpdate => {
+    fake.groupMode = 'multi';
+    fake.getMessage.mockResolvedValue({ data: { items: [] } });
+    if (rejectUpdate) fake.final.mockRejectedValue(new Error('card update failed'));
+    const run = thread();
+    const clearGoal = vi.fn(async () => undefined);
+    if (rejectUpdate) clearGoal.mockRejectedValue(new Error('clear goal failed'));
+    Object.assign(run.t, { runGoal: () => run.t.runStreamed({ text: 'goal' }), clearGoal });
+    fake.backend.startThread.mockResolvedValue(run.t);
+    const o = setup();
+    await o.onMessage(message('/goal finish the work', { threadId: undefined }));
+    await vi.waitFor(() => expect(run.t.close).toHaveBeenCalled(), { timeout: 3000, interval: 10 });
+    expect(fake.log.warn.mock.calls.filter(call => call[1] === 'threadid-missing')).toHaveLength(3);
+    expect(fake.sendManaged).not.toHaveBeenCalled();
+    expect(fake.final).toHaveBeenCalledTimes(1);
+    expect(clearGoal).toHaveBeenCalledTimes(1);
+    const card = JSON.stringify(fake.final.mock.calls[0]);
+    expect(card).toContain('Goal topic could not be resolved');
+    expect(card).not.toContain('结束目标');
+    expect(card).not.toContain('终止');
+    expect(JSON.stringify(fake.send.mock.calls)).toContain('Goal topic could not be resolved');
+  });
+
+  it.each([undefined, 'topic'])('keeps /goal out of answers in %s and preserves goal dispatch', async threadId => {
+    const run = thread();
+    const runGoal = vi.fn(() => run.t.runStreamed({ text: 'goal' }));
+    Object.assign(run.t, { runGoal, clearGoal: vi.fn(async () => undefined) });
+    const o = await started(run, { threadId });
+    await visible(run);
+    await o.onMessage(message('/goal finish the work', { threadId }));
+    expect(run.respond).not.toHaveBeenCalled();
+    await until(() => expect(JSON.stringify(fake.send.mock.calls)).toContain('当前会话有任务在跑'));
+    run.turns[0]!.resolve();
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('card', 'final', expect.anything()));
+    await o.onMessage(message('/goal finish the work', { threadId }));
+    await until(() => expect(runGoal).toHaveBeenCalledWith(expect.stringContaining('finish the work')));
+    run.turns[1]!.resolve();
+  });
+
+  it.each(['image', 'file'] as const)('keeps mixed post %s attachments on ordinary intake', async type => {
+    const run = thread(); const o = await started(run);
+    await visible(run);
+    await o.onMessage(message('use the attached example', { rawContentType: 'post',
+      resources: [{ type, fileKey: 'attachment' }] as NormalizedMessage['resources'] }));
+    await until(() => expect(run.t.steer).toHaveBeenCalled());
+    expect(run.respond).not.toHaveBeenCalled();
+    run.turns[0]!.resolve();
+  });
+
+  it('accepts a purely textual post as an answer', async () => {
+    const run = thread(); const o = await started(run);
+    await visible(run);
+    await o.onMessage(message('用方案 B', { rawContentType: 'post' }));
+    await until(() => answered(run));
+    run.turns[0]!.resolve();
+  });
+
+  it('keeps a typed message in intake after the provider closes its ask scope', async () => {
+    const run = thread(); const o = await started(run);
+    await visible(run);
+    // Provider terminal prefetch closed the scope; its done event is not consumed yet.
+    run.askPending.mockReturnValue(false);
+    await o.onMessage(message('continue with this new input'));
+    await until(() => expect(run.t.steer).toHaveBeenCalled());
+    expect(run.respond).not.toHaveBeenCalled();
     run.turns[0]!.resolve();
   });
 

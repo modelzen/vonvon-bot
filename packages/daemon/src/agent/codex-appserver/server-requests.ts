@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { log } from '../../core/logger';
 import { parseAskRequest, type AskAnswer, type AskRequest, type AskResolution } from '../types';
 import type { JsonRpcAnswer, JsonRpcId } from '../../provider/transport/jsonrpc';
 import type { PermissionsRequestApprovalResponse } from './protocol/generated/v2/PermissionsRequestApprovalResponse';
@@ -20,7 +21,8 @@ const inputSchema = z.object({
 const unavailable = (): JsonRpcAnswer => ({ result: { answers: {} } satisfies ToolRequestUserInputResponse });
 type InputQuestion = ToolRequestUserInputParams['questions'][number];
 
-function otherAnswer(_question: InputQuestion, text: string): string[] {
+function otherAnswer(question: InputQuestion, text: string): string[] {
+  if (question.options?.length && !question.isOther) log.info('agent', 'ask-text-without-other', { questionId: question.id });
   return [text];
 }
 
@@ -81,6 +83,10 @@ export class CodexRequestScope {
     if (question.turnId === turnId) return true;
     this.respond(question.request.id);
     return false;
+  }
+
+  isPending(id: string): boolean {
+    return this.pending.has(id);
   }
 
   respond(id: string, resolution?: AskResolution): Promise<void> {

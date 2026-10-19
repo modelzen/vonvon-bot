@@ -268,6 +268,8 @@ export interface AgentRun {
   stopSubagent?(id: string): Promise<void>;
   /** Claim/release the local continuation synchronously before returning delivery work. */
   respondToAsk?(requestId: string, resolution: AskResolution): Promise<void>;
+  /** Synchronous provider claim state, including terminal events not yet consumed by the UI. */
+  askPending?(requestId: string): boolean;
   events: AsyncIterable<AgentEvent>;
   /** current turn id, available after `turn_started` */
   turnId(): string | undefined;
