@@ -74,7 +74,6 @@ import {
   getShowToolCalls,
   getCommentsConfig,
   getCompletionReminderConfig,
-  shouldShowCompletionReminderButton,
   isAdmin,
   isChatAllowed,
   isUserAllowedInProject,
@@ -183,6 +182,7 @@ import {
 } from '../card/dm-cards';
 import {
   sendCompletionReminderReply,
+  reminderButtonOffered,
   type CompletionReminderReplyInput,
 } from './completion-reminder';
 import { currentVersion } from '../service/update';
@@ -669,6 +669,8 @@ interface ActiveState {
   requesterOpenId?: string;
   /** A bot-started turn sends no completion reminder and shows no reminder button. */
   requesterKind?: 'user' | 'bot' | 'unknown';
+  /** Group mode captured for this run, including its global-slot wait. */
+  smart?: boolean;
   /** Manual mode, current turn only. May be set while the initial run is still
    * waiting in the global concurrency queue; reset when a queued follow-up
    * becomes the current turn. */
@@ -1512,7 +1514,7 @@ export function createOrchestrator(
   /** Render the one-shot affordance only while the current global mode is
    * manual. Non-manual modes return undefined, so their cards have no button. */
   const completionReminderView = (state: ActiveState): 'available' | 'requested' | undefined =>
-    shouldShowCompletionReminderButton(cfg) && state.requesterKind !== 'bot'
+    reminderButtonOffered(cfg, state)
       ? state.completionReminderRequested
         ? 'requested'
         : 'available'
@@ -2983,7 +2985,7 @@ export function createOrchestrator(
       log.info('intake', 'queued', { depth: existing.queue.length });
       return;
     }
-    const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg), isGoal: goal, runLoop: true,
+    const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg), smart: project && sessionModeOf(project) === 'smart', isGoal: goal, runLoop: true,
       ...(flat && !msg.threadId && !goal ? { triggerAt: msg.createTime } : {}) };
     active.set(sessionKey, reserved);
     dropRetries(sessionKey);
@@ -4469,7 +4471,7 @@ export function createOrchestrator(
       // Settings may have changed after this frame was rendered. Refuse a
       // stale manual button and repaint it away instead of creating a hidden
       // per-turn override under long/failures/always.
-      if (!shouldShowCompletionReminderButton(cfg)) {
+      if (st.isGoal || !reminderButtonOffered(cfg, st)) {
         completionReminderRefreshers.get(key)?.();
         log.info('card', 'action', { actionId: RC.remind, stale: true });
         return;
@@ -6118,7 +6120,7 @@ export function createOrchestrator(
       if (!current || projectMutations.has(project.chatId) || projectRevision(current) !== projectRevision(project)) throw new AdminWriteError('项目已改变，请刷新后重试');
       const key = ruleKind(project) === 'single' ? perm.sessionKey : `desktop-resume:${project.chatId}`;
       if (active.has(key) || intakeChats.has(project.chatId) || pendingTopics.has(project.chatId)) throw new AdminWriteError('会话正在运行');
-      const reserved: ActiveState = { queue: [], requesterOpenId: owner };
+      const reserved: ActiveState = { queue: [], requesterOpenId: owner, requesterKind: 'user', smart: sessionModeOf(project) === 'smart' };
       active.set(key, reserved);
       if (ruleKind(project) !== 'single') resumePublications.add(project.chatId);
       let publishedKey: string | undefined;
@@ -6169,7 +6171,7 @@ export function createOrchestrator(
     if (!record || record.detached) throw new AdminWriteError('此会话已归档或不属于当前项目，请开始新会话');
     const key = record.threadId;
     const state = active.get(key);
-    if (request.action === 'context') return { threadId: key, usage: lastUsage.get(key) ?? null, run: state ? { id: runId(state), goal: state.isGoal === true, canStop: Boolean(state.interrupt), canEndGoal: Boolean(state.endGoal), canRemind: state.requesterOpenId === owner && shouldShowCompletionReminderButton(cfg) && !state.isGoal, reminderRequested: state.completionReminderRequested === true, subagents: (state.subagents?.() ?? []).map(({ id, name, task, status, stoppable }) => ({ id, name, task, status, stoppable })) } : null };
+    if (request.action === 'context') return { threadId: key, usage: lastUsage.get(key) ?? null, run: state ? { id: runId(state), goal: state.isGoal === true, canStop: Boolean(state.interrupt), canEndGoal: Boolean(state.endGoal), canRemind: state.requesterOpenId === owner && reminderButtonOffered(cfg, state) && !state.isGoal, reminderRequested: state.completionReminderRequested === true, subagents: (state.subagents?.() ?? []).map(({ id, name, task, status, stoppable }) => ({ id, name, task, status, stoppable })) } : null };
     if (request.action === 'stopSubagent') {
       if (!state || runId(state) !== request.runId) throw new AdminWriteError('原任务已经结束，请刷新');
       if (!state.run?.stopSubagent) throw new AdminWriteError('这个任务不支持单独停止子 agent');
@@ -6182,7 +6184,7 @@ export function createOrchestrator(
       if (request.action === 'stop') { if (!state.interrupt) throw new AdminWriteError('任务正在准备，请稍后停止'); state.interrupt(); }
       else if (request.action === 'endGoal') { if (!state.endGoal) throw new AdminWriteError('当前不是目标任务'); state.endGoal(); }
       else {
-        if (state.requesterOpenId !== owner || !shouldShowCompletionReminderButton(cfg) || state.isGoal) throw new AdminWriteError('仅任务发起人可设置本次完成提醒，且需开启手动提醒模式');
+        if (state.requesterOpenId !== owner || !reminderButtonOffered(cfg, state) || state.isGoal) throw new AdminWriteError('仅任务发起人可设置本次完成提醒，且需开启手动提醒模式');
         state.completionReminderRequested = request.requested;
         refreshCompletionReminderCards();
       }
@@ -6193,7 +6195,7 @@ export function createOrchestrator(
     const sessionBackend = backendFor(record.backend);
     if (request.action === 'startGoal' && sessionBackend.capabilities?.goal === false) throw new AdminWriteError('当前后端不支持自主目标');
     if (request.action === 'compact' && sessionBackend.capabilities?.compact === false) throw new AdminWriteError('当前后端不支持手动压缩');
-    const reserved: ActiveState = { queue: [], requesterOpenId: owner };
+    const reserved: ActiveState = { queue: [], requesterOpenId: owner, requesterKind: 'user', smart: sessionModeOf(project) === 'smart', isGoal: request.action === 'startGoal' };
     active.set(key, reserved);
     let launched = false;
     let compacted: AgentThread | undefined;
@@ -6239,6 +6241,7 @@ export function createOrchestrator(
 
   // ── shared run loop ───────────────────────────────────────────────
   async function sendCompletionReminder(input: CompletionReminderReplyInput): Promise<void> {
+    if (shuttingDown) return;
     await sendCompletionReminderReply({ channel, cfg, dedupe: completionReminderSent }, input);
   }
 
@@ -6559,6 +6562,8 @@ export function createOrchestrator(
     // queued during startup aren't lost); fall back to a fresh state otherwise.
     const state: ActiveState = active.get(activeKey) ?? { queue: [], requesterOpenId: opts.requesterOpenId, runLoop: true };
     state.thread = opts.thread;
+    state.runLoop = true;
+    state.smart = opts.smart === true;
     if (opts.requesterOpenId) state.requesterOpenId = opts.requesterOpenId;
     if (opts.requesterKind) state.requesterKind = opts.requesterKind;
     active.set(activeKey, state);
@@ -7207,6 +7212,7 @@ export function createOrchestrator(
             cardMsgId: finalMsgId,
             requesterOpenId: currentTurn.requesterOpenId,
             requesterKind: currentTurn.requesterKind,
+            smart: opts.smart === true,
             outcome: rc.rs.terminal === 'running' ? 'done' : rc.rs.terminal,
             requestedAt: currentTurn.requestedAt,
             manuallyRequested,
