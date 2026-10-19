@@ -23,6 +23,11 @@ export function unconfirmedProviderPids(): number[] {
   return [...ownedProcesses].flatMap(process => process.unconfirmedPid === undefined ? [] : [process.unconfirmedPid]);
 }
 
+/** Registered provider process groups, including leaders that exited before close() settled. */
+export function registeredProviderPids(): number[] {
+  return [...ownedProcesses].flatMap(process => process.child.pid === undefined ? [] : [process.child.pid]);
+}
+
 type Exit = { kind: 'exit'; code: number | null; signal: NodeJS.Signals | null };
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 const hasCode = (error: unknown, code: string): boolean => error instanceof Error && 'code' in error && error.code === code;
