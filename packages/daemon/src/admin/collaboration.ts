@@ -16,6 +16,7 @@ export type CollaborationRequest =
   | ({ action: 'resume'; sessionId: string; backend: string } & ProjectTarget)
   | ({ action: 'startGoal'; threadId: string; objective: string } & ProjectTarget)
   | ({ [K in 'stop' | 'endGoal']: { action: K; threadId: string; runId: string } & ProjectTarget }['stop' | 'endGoal'])
+  | ({ action: 'stopSubagent'; threadId: string; runId: string; subagentId: string } & ProjectTarget)
   | ({ action: 'reminder'; threadId: string; runId: string; requested: boolean } & ProjectTarget)
   | { action: 'usage'; force?: boolean };
 export type AdminCollaborationOp = { kind: 'collaboration'; request: CollaborationRequest };
@@ -31,7 +32,7 @@ export function parseCollaborationRequest(raw: Record<string, unknown>): Collabo
     createProject: ['requestId','name','directory','kind','noMention','backend'], project: [], history: [], shareUsage: ['sections'],
     editProject: ['expectedRevision','directory','kind','enabled'], removeProject: ['expectedRevision'],
     context: ['threadId'], clear: ['threadId'], compact: ['threadId'], resume: ['sessionId','backend'],
-    startGoal: ['threadId','objective'], stop: ['threadId','runId'], endGoal: ['threadId','runId'], reminder: ['threadId','runId','requested'], usage: ['force'],
+    startGoal: ['threadId','objective'], stop: ['threadId','runId'], stopSubagent: ['threadId','runId','subagentId'], endGoal: ['threadId','runId'], reminder: ['threadId','runId','requested'], usage: ['force'],
   };
   const action = raw.action;
   if (typeof action !== 'string' || !Object.hasOwn(allowed, action)) throw new InvalidGroupInput('未知协作操作');
