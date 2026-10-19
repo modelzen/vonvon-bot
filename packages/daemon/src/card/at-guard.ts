@@ -30,8 +30,11 @@ export const keptAts = (card: object): ReadonlySet<string> | undefined => kept.g
 
 const HAS_AT = /<at\b/i;
 // The opening tag never spans lines, or `<at least …` in prose would eat them up to a `>`; `$` is a frame cut inside
-// it. The name may hold other tags and lines, never another `<at`, so no `</at>` is left behind.
-const AT = /<at\b([^>\n]*)(?:>((?:(?!<\/?at\b)[\s\S])*)<\/at\s*>|>|$)/gi;
+// it. The name may hold other tags and lines, never another `<at`, so no `</at>` is left behind. The attributes are
+// read once, at most AT_ATTRS of them (the lookahead and `\1` do not backtrack), so a line of unclosed `<at ` is
+// linear, not seconds of a blocked loop. When the whole tag does not match, only `<at` does.
+const AT_ATTRS = 512;
+const AT = /<at\b(?=([^>\n]{0,512}))(?:\1(?:>((?:(?!<\/?at\b)[\s\S])*)<\/at\s*>|>|$))?/gi;
 const AT_ID = /\b(?:open_id|user_id|id)\s*=\s*["']?([^"'\s>/]+)/i;
 
 /** Every opening tag counts: `id=`, `user_id=`, `open_id=`, quoted or not, closed or not, inside code too (Feishu was
@@ -39,6 +42,8 @@ const AT_ID = /\b(?:open_id|user_id|id)\s*=\s*["']?([^"'\s>/]+)/i;
 export function neutraliseAts(text: string, bots: ChatBotIds | undefined, keep?: ReadonlySet<string>): string {
   if (!HAS_AT.test(text)) return text;
   return text.replace(AT, (tag, attrs: string, name: string | undefined) => {
+    // not a tag up to a line's end; past the cap only `<at` goes, and the `<at`s after it are read in turn
+    if (tag.length === 3) return attrs.length === AT_ATTRS && attrs.includes('=') ? '@' : tag;
     if (!attrs.includes('=')) return tag; // `<at least>`: no attribute, names nobody
     const id = AT_ID.exec(attrs)?.[1];
     const bot = id !== undefined && bots?.has(id) === true;

@@ -32,6 +32,17 @@ describe('neutraliseAts', () => {
     expect(neutraliseAts(text, BOTS)).toBe(out);
   });
 
+  it('breaks an opening tag too long to read, and stays linear on a line of unclosed ones', () => {
+    expect(neutraliseAts(`<at id="ou_h" ${'x'.repeat(600)}>张三</at>`, BOTS)).toBe(`@ id="ou_h" ${'x'.repeat(600)}>张三</at>`);
+    // a tag inside the overlong attributes is read too, so the `>` after it cannot make it whole again
+    expect(neutraliseAts(`<at x=1 ${'y'.repeat(600)}<at id=ou_b>小审</at>`, BOTS)).toBe(`@ x=1 ${'y'.repeat(600)}@小审`);
+    expect(neutraliseAts('<at id=ou_b\n', BOTS)).toBe('<at id=ou_b\n'); // no tag before the line ends, as before
+    const line = `${'<at id=ou_b '.repeat(20_000)}\n`; // 240 KB: quadratic before, minutes here
+    const started = performance.now();
+    expect(neutraliseAts(line, BOTS).startsWith('@ id=ou_b @ id=ou_b ')).toBe(true);
+    expect(performance.now() - started).toBeLessThan(3_000);
+  });
+
   it('keeps a person once the list is known, and the program\'s own ids before it is', () => {
     const person = '<at id="ou_h">张三</at> 和 <at email="z@x.cn"></at>';
     expect(neutraliseAts(person, BOTS)).toBe(person);
