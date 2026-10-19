@@ -27,8 +27,10 @@ export function formatCompletionElapsed(elapsedMs: number): string {
 /**
  * Build a native Feishu `post` body. The requester is a structured `at` node,
  * not markdown text, so this extra reply enters Feishu's real mention/message
- * notification path. The returned value is ready for `im.v1.message.reply`'s
- * `content` field.
+ * notification path; another bot is @-ed the same way, which wakes it and shows
+ * in the message list (s27a step 0). An id that is not an open_id (`ou_`), as an
+ * app sender's id in an event may be, gets no `at` node, only the two lines
+ * (s27a-0). The returned value is ready for `im.v1.message.reply`'s `content` field.
  */
 export function buildCompletionReminderContent(input: CompletionReminderPost): string {
   const task = compactSummary(input.summary);
@@ -45,13 +47,14 @@ export function buildCompletionReminderContent(input: CompletionReminderPost): s
       : '详情在上方卡片。'
     : '最终卡片更新失败，请查看上方流式内容或重新发起任务。';
 
+  const at = input.requesterOpenId.startsWith('ou_');
   return JSON.stringify({
     zh_cn: {
       title: '',
       content: [
         [
-          { tag: 'at', user_id: input.requesterOpenId },
-          { tag: 'text', text: headline },
+          ...(at ? [{ tag: 'at', user_id: input.requesterOpenId }] : []),
+          { tag: 'text', text: at ? headline : headline.trimStart() },
         ],
         [{ tag: 'text', text: detail }],
       ],
