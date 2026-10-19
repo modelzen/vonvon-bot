@@ -2,10 +2,13 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { projectRevision } from '../src/admin/collaboration';
 import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
 import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
-import { INITIATIVE_NOTE } from '../src/bot/session-title';
+import { wakeTables } from '../src/bot/bot-wake';
+import { existsSync } from 'node:fs';
+import { BOT_WAKE_NOTE, INITIATIVE_NOTE } from '../src/bot/session-title';
 import { JUDGE_BUDGET, JudgeBudget } from '../src/bot/smart-intake';
 import type { JudgeRequest, JudgeResult } from '../src/judge/types';
 import { receive, type EventMessage, type ReceiveOpts } from './helpers/lark-events';
@@ -26,13 +29,16 @@ function deferred<T>(): Deferred<T> {
 const fake = vi.hoisted(() => ({
   project: undefined as Record<string, unknown> | undefined,
   sessions: {} as Record<string, unknown>,
+  projectLookup: vi.fn(),
   fullOnly: false,
   /** Holds every session read while set: an intake parked on the disk. */
   hold: undefined as Promise<void> | undefined,
   send: vi.fn(async () => ({ messageId: 'om_sent' })),
   get: vi.fn(async (_req: { path: { message_id: string } }) =>
-    ({ code: 0, data: { items: [{ thread_id: 'omt_opened' }] as Array<{ thread_id?: string; create_time?: string }> } })),
+    ({ code: 0, data: { items: [{ thread_id: 'omt_opened' }] as Array<Record<string, unknown>> } })),
   list: vi.fn(),
+  request: vi.fn(),
+  reply: vi.fn(async () => ({ code: 0, data: { message_id: 'om_reminder' } })),
   // One id per emoji, so the test sees which reaction went.
   react: vi.fn(async (req: { data: { reaction_type: { emoji_type: string } } }) => ({ data: { reaction_id: `r_${req.data.reaction_type.emoji_type}` } })),
   unreact: vi.fn(async () => ({})),
@@ -55,8 +61,13 @@ const startThread = vi.fn(async () => ({
   },
 }));
 
+vi.mock('../src/bot/bot-wake', async original => {
+  const real = await original<typeof import('../src/bot/bot-wake')>();
+  return { ...real, wakeTables: vi.fn(real.wakeTables) };
+});
+
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_context: unknown, callback: () => unknown) => callback() }));
-vi.mock('../src/project/registry', async original => ({ ...await original<object>(), getProjectByChatId: async () => fake.project, getProjectByName: async () => fake.project }));
+vi.mock('../src/project/registry', async original => ({ ...await original<object>(), getProjectByChatId: async () => fake.project, getProjectByName: async () => { await fake.projectLookup(); return fake.project; } }));
 vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: (id: string) => ({ id, listModels: async () => [], startThread, fullAccessOnly: () => fake.fullOnly }) }));
 vi.mock('../src/bot/session-store', async original => ({ ...await original<object>(), getSession: async (key: string) => { await fake.hold; return fake.sessions[key]; }, upsertSession: async () => undefined }));
 vi.mock('../src/bot/session-title-coordinator', () => ({ SessionTitleCoordinator: class { startRecovery() {} async shutdown() {} } }));
@@ -82,12 +93,12 @@ const BOT = { openId: 'ou_bot', name: '小码' };
 const APP = 'cli_fixture';
 const CHAT = 'oc_demo';
 const base = { name: 'demo', chatId: CHAT, cwd: '/tmp/demo', kind: 'single', smart: true, mode: 'full', network: false };
-const cfg: AppConfig = { accounts: { app: { id: APP, secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, completionReminder: { mode: 'manual' } } };
+const cfg: AppConfig & { preferences: NonNullable<AppConfig["preferences"]> } = { accounts: { app: { id: APP, secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, completionReminder: { mode: 'manual' } } };
 const channel = {
   send: fake.send, botIdentity: BOT,
-  rawClient: { appId: APP, im: { v1: {
+  rawClient: { appId: APP, request: fake.request, im: { v1: {
     messageReaction: { create: fake.react, delete: fake.unreact },
-    message: { get: fake.get, list: fake.list, delete: fake.del },
+    message: { reply: fake.reply, get: fake.get, list: fake.list, delete: fake.del },
     // The group's only bot unless a test says otherwise.
     chat: { get: async () => ({ code: 0, data: { chat_mode: 'group', bot_count: fake.bots } }) },
   } } },
@@ -135,6 +146,7 @@ beforeEach(() => {
   fake.fullOnly = false;
   fake.hold = undefined;
   fake.project = { ...base };
+  fake.projectLookup.mockReset();
   fake.list.mockImplementation(async () => ({ code: 0, data: { items: [], has_more: false } }));
   fake.get.mockImplementation(async () => ({ code: 0, data: { items: [{ thread_id: 'omt_opened' }] } }));
   fake.del.mockImplementation(async () => ({ code: 0 }));
@@ -142,6 +154,8 @@ beforeEach(() => {
   fake.cards = [];
   fake.finals = [];
   fake.bots = '1';
+  cfg.preferences.completionReminder = { mode: 'manual' };
+  fake.request.mockImplementation(async () => ({ code: 0, data: { bots: [{ app_id: 'cli_other', member_id: 'ou_other', name: '小P' }] } }));
   fake.judge.mockImplementation((req: JudgeRequest) => {
     const answer = deferred<JudgeResult>();
     asked.set(req.ref!, { req, answer });
@@ -561,4 +575,302 @@ describe('smart mode: one person in a topic, the anchor, the empty card (s25b)',
     await vi.waitFor(() => expect(fake.finals).toHaveLength(2));
     expect(fake.del).not.toHaveBeenCalled();
   });
+});
+
+describe('bot wakes (s27a)', () => {
+  const other = { id: 'cli_other', id_type: 'app_id', sender_type: 'app', open_bot_id: 'ou_other', sender_name: '小P' };
+  const owner = { id: 'ou_owner', id_type: 'open_id', sender_type: 'user' };
+  const item = (m: EventMessage, sender: object = other, extra: object = {}) => ({
+    message_id: idOf(m), create_time: m.create_time, msg_type: m.message_type,
+    body: { content: m.content }, sender,
+    mentions: [{ id: BOT.openId, id_type: 'open_id', key: '@_user_1', name: BOT.name }], ...extra,
+  });
+  const page = (items: object[], more = false) => ({ code: 0, data: { items, has_more: more, page_token: more ? 'next' : undefined } });
+  const botSays = (m: EventMessage, openId = 'ou_other') => send(m, { openId, type: 'app', name: '小P' });
+  const answered = (n = 1) => vi.waitFor(() => expect(fake.inputs).toHaveLength(n));
+  const noted = (reason: string) => vi.waitFor(() => expect(records().map(r => r.reason)).toContain(reason));
+  const history = (m: EventMessage, earlier: object[] = []) => fake.list.mockResolvedValue(page([item(m), ...earlier,
+    item({ ...m, message_id: 'om_person', create_time: String(Number(m.create_time) - 60_000) }, owner)]));
+  const wake = (o: { thread?: string; text?: string } = {}) => says(o.text ?? 'SECRET_BOT_TEXT', { at: true, thread: o.thread });
+
+  it('answers a topic bot mention without judging or budget, with the bot envelope and THINKING removed', async () => {
+    const m = wake({ thread: 'omt_wake' }); history(m);
+    const take = vi.spyOn(JudgeBudget.prototype, 'take').mockReturnValue(false);
+    try {
+      await botSays(m); await answered();
+      expect(fake.inputs[0]).toContain(BOT_WAKE_NOTE('小P', 1));
+      expect(fake.inputs[0]!.indexOf(BOT_WAKE_NOTE('小P', 1))).toBeLessThan(fake.inputs[0]!.indexOf('[本条消息的发信人'));
+      expect(fake.inputs[0]).toContain('小P（bot）（open_id：ou_other）');
+      expect(fake.inputs[0]).toContain('SECRET_BOT_TEXT');
+      expect(fake.judge).not.toHaveBeenCalled(); expect(take).not.toHaveBeenCalled();
+      expect(fake.list).toHaveBeenCalled(); expect(fake.request).toHaveBeenCalled();
+      await vi.waitFor(() => expect(fake.unreact).toHaveBeenCalled());
+      expect(fake.react).toHaveBeenCalledWith(expect.objectContaining({ data: { reaction_type: { emoji_type: 'THINKING' } } }));
+      expect(fake.log.info.mock.calls.some(c => c[1] === 'judge-budget')).toBe(false);
+    } finally { take.mockRestore(); }
+  });
+
+  it('replies to a main-area trigger in the main area', async () => {
+    const m = wake(); history(m); await botSays(m); await answered();
+    expect(fake.cards[0]![3]).toMatchObject({ replyTo: idOf(m), replyInThread: false });
+  });
+
+  it.each(['single', 'multi', 'unbound'])('keeps rejecting bots in %s rule groups without reading or noting', async kind => {
+    fake.project = kind === 'unbound' ? undefined : { ...base, kind, smart: false };
+    await botSays(wake()); await settle();
+    expect(fake.log.info).toHaveBeenCalledWith('intake', 'reject', expect.objectContaining({ reason: 'bot-sender' }));
+    expect(fake.list).not.toHaveBeenCalled(); expect(fake.request).not.toHaveBeenCalled();
+    expect(records()).toEqual([]); expect(fake.inputs).toEqual([]);
+    fake.project = { ...base }; const m = wake({ thread: 'omt_control' }); history(m);
+    await botSays(m); await answered();
+  });
+
+  it.each([5, 6, 7])('counts %i wakes from shared history and stops only past six', async n => {
+    const m = wake();
+    const earlier = Array.from({ length: n - 1 }, (_, i) => item({ ...m, message_id: `om_before_${i}`, create_time: String(Number(m.create_time) - 1000 - i * 1000) }));
+    // An unmentioned, unanswered card is not another wake.
+    earlier.push(item({ ...m, message_id: 'om_unanswered', create_time: String(Number(m.create_time) - 20_000) }, other, { msg_type: 'interactive', mentions: [] }));
+    history(m, earlier); await botSays(m);
+    if (n > 6) { await noted('bot-wake-cap'); expect(fake.inputs).toEqual([]); }
+    else { await answered(); expect(fake.inputs[0]).toContain(`已互相叫醒 ${n} 次`); if (n === 6) expect(fake.inputs[0]).toContain('已到上限'); }
+    expect(fake.log.info).toHaveBeenCalledWith('intake', n > 6 ? 'bot-wake-cap' : 'bot-wake', expect.objectContaining({ n }));
+  });
+
+  it('counts an unanswered card once when another application replied to it', async () => {
+    const m = wake();
+    history(m, [item({ ...m, message_id: 'om_answer', create_time: String(Number(m.create_time) - 1000) }, { ...other, id: APP, open_bot_id: BOT.openId }, { mentions: [], parent_id: 'om_card' }),
+      item({ ...m, message_id: 'om_card', create_time: String(Number(m.create_time) - 2000) }, other, { msg_type: 'interactive', mentions: [] })]);
+    await botSays(m); await answered(); expect(fake.inputs[0]).toContain(BOT_WAKE_NOTE('小P', 2));
+  });
+
+  it.each(['history-throw', 'history-code', 'roster-throw', 'roster-missing', 'boundary'])('fails closed when %s cannot be read', async failure => {
+    const m = wake({ thread: 'omt_fail' }); history(m);
+    if (failure === 'history-throw') fake.list.mockRejectedValue(new Error('network'));
+    if (failure === 'history-code') fake.list.mockResolvedValue({ code: 230001 });
+    if (failure === 'roster-throw') fake.request.mockRejectedValue(new Error('network'));
+    if (failure === 'roster-missing') fake.request.mockResolvedValue({ code: 0, data: {} });
+    if (failure === 'boundary') fake.list.mockResolvedValue(page([item(m, other, { mentions: [] })], true));
+    await botSays(m); await noted('bot-wake-failed');
+    expect(records()).toHaveLength(1); expect(fake.inputs).toEqual([]);
+    expect(records()[0]?.detail).toBe(failure.startsWith('history') ? '历史读不到' : failure.startsWith('roster') ? '群成员列表读不到' : '没读到上一条真人消息');
+  });
+
+  it('catches a counting exception without falling back to direct, and removes THINKING', async () => {
+    const m = wake({ thread: 'omt_boom' }); history(m);
+    vi.mocked(wakeTables).mockImplementationOnce(() => { throw new Error('boom'); });
+    await botSays(m); await noted('bot-wake-failed');
+    expect(records()[0]?.detail).toBe('boom'); expect(fake.inputs).toEqual([]); expect(fake.judge).not.toHaveBeenCalled();
+    expect(fake.log.fail).toHaveBeenCalledWith('intake', expect.any(Error), expect.objectContaining({ phase: 'bot-wake' }));
+    await vi.waitFor(() => expect(fake.unreact).toHaveBeenCalled());
+  });
+
+  it('does not use a person later than the trigger as a reset boundary', async () => {
+    const m = wake();
+    history(m, [item({ ...m, message_id: 'om_later', create_time: String(Number(m.create_time) + 1000) }, owner),
+      item({ ...m, message_id: 'om_before', create_time: String(Number(m.create_time) - 1000) })]);
+    await botSays(m); await answered(); expect(fake.inputs[0]).toContain(BOT_WAKE_NOTE('小P', 2));
+  });
+
+  it.each([
+    ['ou_other', ['ou_owner'], false], ['ou_other', ['ou_owner', 'ou_other'], true],
+    ['cli_other', ['ou_other'], true], ['cli_other', ['ou_owner'], false], ['ou_wrong', ['ou_other'], true], ['ou_other', [], true],
+  ])('checks the resolved sender only at landing (%s, %j)', async (eventId, allowedUsers, allowed) => {
+    fake.project = { ...base, allowedUsers }; const m = wake({ thread: 'omt_audience' }); history(m);
+    await botSays(m, eventId);
+    if (allowed) await answered(); else { await noted('bot-wake-not-allowed'); expect(fake.inputs).toEqual([]); }
+    expect(fake.list).toHaveBeenCalled(); expect(fake.request).toHaveBeenCalled();
+  });
+
+  it.each(['rule-mode', 'audience', 'disabled', 'unbound'])('rechecks %s after counting completes', async change => {
+    const m = wake({ thread: 'omt_change' }); const gate = deferred<ReturnType<typeof page>>();
+    fake.list.mockReturnValue(gate.promise); await botSays(m);
+    await vi.waitFor(() => expect(fake.list).toHaveBeenCalled());
+    fake.project = change === 'unbound' ? undefined : { ...base, ...(change === 'rule-mode' ? { smart: false } : change === 'disabled' ? { enabled: false } : { allowedUsers: ['ou_owner'] }) };
+    gate.resolve(page([item(m)])); await settle();
+    if (change !== 'unbound') await noted(change === 'audience' ? 'bot-wake-not-allowed' : change === 'disabled' ? 'group-disabled' : 'bot-wake-dropped');
+    expect(fake.inputs).toEqual([]);
+  });
+
+  it('notes a disabled smart group at intake', async () => {
+    fake.project = { ...base, enabled: false }; await botSays(wake()); await noted('group-disabled');
+    expect(fake.list).not.toHaveBeenCalled();
+  });
+
+  it.each(['/goal 做点什么', '/compact'])('treats %s from a bot as ordinary text', async text => {
+    const m = wake({ thread: 'omt_command', text }); history(m); await botSays(m); await answered();
+    expect(fake.inputs[0]).toContain(text);
+    expect(fake.react.mock.calls.some(([r]) => r.data.reaction_type.emoji_type === 'OKR')).toBe(false);
+  });
+
+  it('keeps an unrelated topic responsive while counting hangs', async () => {
+    const m = wake({ thread: 'omt_hung' }); const gate = deferred<ReturnType<typeof page>>();
+    fake.list.mockImplementation(async (r: { params: { container_id: string } }) => r.params.container_id === 'omt_hung' ? gate.promise : page([])); await botSays(m);
+    await vi.waitFor(() => expect(fake.list).toHaveBeenCalled());
+    await send(says('PERSON_CONTROL', { at: true, thread: 'omt_other' })); await answered();
+    expect(fake.inputs[0]).toContain('PERSON_CONTROL'); gate.resolve(page([item(m)])); await answered(2);
+  });
+
+  it('lands a preceding named human before a bot whose count finishes first', async () => {
+    const human = says('PERSON_FIRST', { at: true }); await send(human); await judged(human);
+    const m = wake(); history(m); await botSays(m); await settle(); expect(fake.inputs).toEqual([]);
+    await decide(human, result('main')); await answered(2);
+    expect(fake.inputs[0]).toContain('PERSON_FIRST'); expect(fake.inputs[1]).toContain('SECRET_BOT_TEXT');
+  });
+
+  it.each(['ou_bot', 'ou_other'])('rejects itself while another bot wakes it (%s)', async sender => {
+    const m = wake({ thread: 'omt_self' }); history(m); await botSays(m, sender);
+    if (sender === 'ou_other') await answered(); else { await settle(); expect(fake.inputs).toEqual([]); expect(fake.list).not.toHaveBeenCalled(); }
+  });
+
+  it('records sender kind and logs wake metadata without names, body or full ids', async () => {
+    const m = wake({ thread: 'omt_logs' }); history(m); await botSays(m); await answered();
+    expect(fake.log.info).toHaveBeenCalledWith('intake', 'recv', expect.objectContaining({ senderType: 'app', senderIdKind: 'ou_' }));
+    const logs = fake.log.info.mock.calls.filter(c => String(c[1]).startsWith('bot-wake'));
+    expect(logs.length).toBeGreaterThan(0);
+    expect(JSON.stringify(logs)).not.toMatch(new RegExp(`SECRET_BOT_TEXT|小P|${idOf(m)}|ou_other`));
+  });
+
+  it.each(['intake', 'count', 'land'])('shutdown during %s never persists a bot for resend or notes it', async stage => {
+    await orchestrator.shutdown(); const file = join(paths.appDir, `wake-${stage}.json`);
+    orchestrator = createOrchestrator(channel as never, cfg, '/tmp/demo', undefined, { droppedFile: file });
+    const m = wake({ thread: 'omt_stop' }); const disk = deferred<void>(); const count = deferred<ReturnType<typeof page>>();
+    history(m);
+    if (stage === 'intake') fake.hold = disk.promise;
+    else fake.list.mockReturnValue(count.promise);
+    if (stage === 'count') fake.request.mockReturnValue(new Promise(() => {}));
+    const intake = botSays(m);
+    if (stage === 'intake') await settle();
+    else {
+      await vi.waitFor(() => expect(fake.list).toHaveBeenCalled());
+      if (stage === 'land') { fake.hold = disk.promise; count.resolve(page([item(m)])); await settle(); }
+    }
+    const stop = orchestrator.shutdown(); disk.resolve();
+    await Promise.race([stop, new Promise((_, reject) => setTimeout(() => reject(new Error('shutdown hung')), 2900))]);
+    count.resolve(page([item(m)])); await intake; await settle();
+    expect(fake.inputs).toEqual([]); expect(records()).toEqual([]);
+    if (existsSync(file)) expect(readFileSync(file, 'utf8')).not.toContain(idOf(m));
+    if (stage !== 'land') expect(fake.log.info).toHaveBeenCalledWith('intake', 'bot-wake-dropped', expect.objectContaining({ why: 'shutdown' }));
+  });
+});
+
+// Separate describe keeps the shared fixture while exercising sender and lifecycle fallbacks.
+describe('bot wake fallbacks and queued turns (s27a)', () => {
+  const memento = (m: EventMessage, sender: object = { sender_type: 'app', id: 'cli_other', open_bot_id: 'ou_other', sender_name: '小P' }) => ({
+    message_id: idOf(m), create_time: m.create_time, msg_type: m.message_type, body: { content: m.content }, sender,
+    mentions: [{ id: BOT.openId, id_type: 'open_id', key: '@_user_1', name: BOT.name }],
+  });
+  const page = (items: object[]) => ({ code: 0, data: { items, has_more: false } });
+  const botSays = (m: EventMessage, openId = 'ou_other') => send(m, { openId, type: 'app', name: '小P' });
+  const answered = (n = 1) => vi.waitFor(() => expect(fake.inputs).toHaveLength(n));
+
+  it.each([true, false])('uses card text from history when listed=%s, otherwise fetches the card', async listed => {
+    const m = { ...says('', { at: true, thread: 'omt_card' }), message_type: 'interactive', content: JSON.stringify({ text: '降级占位' }) };
+    const card = { ...memento(m), body: { content: JSON.stringify({ title: 'CARD_BODY_FIXTURE', elements: [] }) } };
+    fake.list.mockResolvedValue(page(listed ? [card] : []));
+    fake.get.mockResolvedValue({ code: 0, data: { items: [card] } });
+    await botSays(m); await answered();
+    expect(fake.inputs[0]).toContain('CARD_BODY_FIXTURE');
+    const cardReads = fake.get.mock.calls.filter(([r]) => r.path.message_id === idOf(m) && 'params' in r && JSON.stringify(r).includes('card_msg_content_type'));
+    expect(cardReads.length > 0).toBe(!listed);
+  });
+
+  it.each([true, false])('resolves missing trigger sender with metadata when readable=%s', async readable => {
+    const m = says('继续看', { at: true, thread: 'omt_sender' }); fake.list.mockResolvedValue(page([]));
+    if (readable) fake.get.mockResolvedValue({ code: 0, data: { items: [memento(m)] } });
+    else fake.get.mockRejectedValue(new Error('gone'));
+    await botSays(m, 'cli_other'); await answered();
+    if (readable) expect(fake.inputs[0]).toContain('open_id：ou_other');
+    else { expect(fake.inputs[0]).not.toContain('本条消息的发信人'); expect(fake.inputs[0]).toContain(BOT_WAKE_NOTE('另一个 bot', 1)); }
+  });
+
+  it.each(['intake', 'land'])('does not answer a wake already seen at %s', async stage => {
+    const m = says('ALREADY_SEEN', { at: true }); const gate = deferred<ReturnType<typeof page>>();
+    if (stage === 'intake') fake.sessions[CHAT] = { lastSeenAt: Number(m.create_time) + 1000 };
+    else fake.list.mockReturnValue(gate.promise);
+    await botSays(m);
+    if (stage === 'land') {
+      await vi.waitFor(() => expect(fake.list).toHaveBeenCalled());
+      fake.sessions[CHAT] = { lastSeenAt: Number(m.create_time) + 1000 }; gate.resolve(page([memento(m)]));
+    }
+    await vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'bot-wake-superseded', expect.objectContaining({ at: stage })));
+    expect(fake.inputs).toEqual([]);
+    if (stage === 'intake') { expect(records()).toEqual([]); expect(fake.list).not.toHaveBeenCalled(); }
+    else expect(records()[0]).toMatchObject({ reason: 'bot-wake-dropped', detail: '已随后来的消息进了会话' });
+  });
+
+  it('ignores a recalled wake and answers an otherwise identical control', async () => {
+    const m = says('WITHDRAWN', { at: true, thread: 'omt_recalled' });
+    await orchestrator.onRecall({ messageId: idOf(m), chatId: CHAT } as never); await botSays(m); await settle();
+    expect(fake.inputs).toEqual([]);
+    const control = says('CONTROL', { at: true, thread: 'omt_control' }); fake.list.mockResolvedValue(page([memento(control)]));
+    await botSays(control); await answered();
+  });
+
+  it.each(['always', 'failures'] as const)('completion mode %s preserves the bot requester and post mention', async mode => {
+    cfg.preferences.completionReminder = { mode }; const m = says('提醒测试', { at: true, thread: 'omt_remind' });
+    fake.list.mockResolvedValue(page([memento(m)])); await botSays(m); await answered();
+    await vi.waitFor(() => expect(fake.finals).toHaveLength(1)); await settle();
+    if (mode === 'always') {
+      expect(fake.reply).toHaveBeenCalledOnce();
+      expect(fake.reply).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ msg_type: 'post', content: expect.stringContaining('ou_other') }) }));
+      expect(fake.log.info).toHaveBeenCalledWith('card', 'completion-reminder', expect.objectContaining({ requester: 'bot' }));
+    } else expect(fake.reply).not.toHaveBeenCalled();
+  });
+
+  it('keeps the wake envelope when a bot queues behind a human turn', async () => {
+    fake.project = { ...base, pendingPolicy: 'queue' }; const gate = deferred<void>();
+    fake.events = async function* () { await gate.promise; yield { type: 'done', turnId: 'turn-fixture' }; };
+    await send(says('HUMAN_RUNNING', { at: true, thread: 'omt_queue' })); await answered();
+    const m = says('BOT_QUEUED', { at: true, thread: 'omt_queue' }); fake.list.mockResolvedValue(page([memento(m)]));
+    await botSays(m); await vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued', expect.anything()));
+    gate.resolve(); await answered(2);
+    expect(fake.inputs[1]?.startsWith(BOT_WAKE_NOTE('小P', 1))).toBe(true);
+  });
+
+  it('does not persist a bot waiting for the global run slot', async () => {
+    await orchestrator.shutdown(); const file = join(paths.appDir, 'wake-global-slot.json');
+    orchestrator = createOrchestrator(channel as never, { ...cfg, preferences: { ...cfg.preferences, maxConcurrentRuns: 1 } }, '/tmp/demo', undefined, { droppedFile: file });
+    const gate = deferred<void>(); fake.events = async function* () { await gate.promise; yield { type: 'done', turnId: 'turn-fixture' }; };
+    await send(says('SLOT_OWNER', { at: true, thread: 'omt_slot_a' })); await answered();
+    const m = says('BOT_WAITING', { at: true, thread: 'omt_slot_b' }); fake.list.mockResolvedValue(page([memento(m)]));
+    await botSays(m); await vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'run-queued', expect.anything()));
+    const stopping = orchestrator.shutdown(); gate.resolve(); await stopping;
+    if (existsSync(file)) expect(readFileSync(file, 'utf8')).not.toContain(idOf(m));
+  });
+});
+
+it('keeps failed card and sender lookup logs free of the trigger id, body and bot name', async () => {
+  const m = { ...says('PRIVATE_BODY', { at: true, thread: 'omt_private' }), message_type: 'interactive' };
+  fake.list.mockResolvedValue({ code: 0, data: { items: [], has_more: false } });
+  fake.get.mockImplementation(async r => {
+    if (r.path.message_id === idOf(m)) throw new Error(`failed ${idOf(m)} PRIVATE_BODY 小P`);
+    return { code: 0, data: { items: [] } };
+  });
+  await send(m, { openId: 'cli_other', type: 'app', name: '小P' });
+  await vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
+  const lookups = fake.log.warn.mock.calls.filter(c => ['quote-fetch-failed', 'wake-sender-lookup-failed'].includes(String(c[1])) && JSON.stringify(c[2]).includes(idOf(m).slice(-6)));
+  expect(lookups).toHaveLength(2);
+  expect(JSON.stringify(lookups)).not.toMatch(new RegExp(`${idOf(m)}|PRIVATE_BODY|小P`));
+});
+
+
+it('a main-area bot wake does not take an exhausted judgement budget', async () => {
+  const take = vi.spyOn(JudgeBudget.prototype, 'take').mockReturnValue(false);
+  try {
+    await send(says('BOT_NO_BUDGET', { at: true }), { openId: 'ou_other', type: 'app', name: '小P' });
+    await vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
+    expect(take).not.toHaveBeenCalled(); expect(fake.judge).not.toHaveBeenCalled();
+    expect(fake.log.info.mock.calls.some(c => c[1] === 'judge-budget')).toBe(false);
+  } finally { take.mockRestore(); }
+});
+
+it('records a bot wake at the settings gate without asking it to resend', async () => {
+  const gate = deferred<void>();
+  fake.projectLookup.mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined).mockImplementationOnce(async () => { await gate.promise; throw new Error('test stopped edit'); });
+  const edit = orchestrator.collaboration({ action: 'editProject', projectName: 'demo', chatId: CHAT, expectedRevision: projectRevision(fake.project as never), enabled: false }).catch(() => undefined);
+  await vi.waitFor(() => expect(fake.projectLookup).toHaveBeenCalledTimes(3));
+  await send(says('BOT_DURING_EDIT', { at: true }), { openId: 'ou_other', type: 'app', name: '小P' });
+  expect(records()[0]).toMatchObject({ reason: 'bot-wake-dropped', detail: '群正在改设置' });
+  expect(fake.list).not.toHaveBeenCalled(); expect(fake.send).not.toHaveBeenCalled();
+  gate.resolve(); await edit;
 });

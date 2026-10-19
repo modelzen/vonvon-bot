@@ -9,7 +9,7 @@ import {
   adminRequestSchema, adminReplySchema, adminStateSchema, directoryRequestSchema, directoryReplySchema,
   jobSchema, environmentReplySchema,
   type DesktopSnapshot, settingsViewSchema, projectViewSchema, projectEditableSchemas, settingsReplySchema,
-  applicationCrashesSchema, crashText, FORCED_DETAIL, NOT_REPLIED_TEXT, diagnosticsEventSchema, notRepliedSchema,
+  OPTIONAL_SCOPE_EFFECTS, applicationCrashesSchema, crashText, FORCED_DETAIL, NOT_REPLIED_TEXT, diagnosticsEventSchema, notRepliedSchema,
   isKnownJudgeSelection, type JudgeSelectionView,
   adminProjectSchema, collaborationRequestSchema, conversationCopy, conversationSchema, conversationToMode, modeToConversation, projectRecordSchema,
 } from "../src/index.js";
@@ -309,5 +309,7 @@ it("words another bot's @ that got no answer, saying Bot as the page does (s27a-
   expect(NOT_REPLIED_TEXT["bot-wake-failed"].reason({ ...record, reason: "bot-wake-failed", detail: "历史读不到" })).toBe("没数出 Bot 之间叫醒了几次（历史读不到），这条 Bot 的 @ 没回");
   expect(NOT_REPLIED_TEXT["bot-wake-failed"].reason({ ...record, reason: "bot-wake-failed" })).toBe("没数出 Bot 之间叫醒了几次，这条 Bot 的 @ 没回");
   expect(NOT_REPLIED_TEXT["bot-wake-dropped"].reason({ ...record, reason: "bot-wake-dropped", detail: "群正在改设置" })).toBe("这条 Bot 的 @ 没处理：群正在改设置");
-  expect(NOT_REPLIED_TEXT["bot-wake-not-allowed"].next({ ...record, reason: "bot-wake-not-allowed" })).toContain("清空「响应成员」");
+  expect(NOT_REPLIED_TEXT["bot-wake-not-allowed"].reason({ ...record, reason: "bot-wake-not-allowed" })).toBe("这个群设了「响应成员」，这个 Bot 不在名单上，它的 @ 叫不醒");
+  expect(NOT_REPLIED_TEXT["bot-wake-not-allowed"].next({ ...record, reason: "bot-wake-not-allowed" })).toBe("这是设置的效果。要让它能叫醒，把它加进「响应成员」，或者清空名单。");
+  expect(OPTIONAL_SCOPE_EFFECTS["im:chat:readonly"]).toContain("叫醒");
 });

@@ -268,7 +268,7 @@ describe('the orchestrator with several bots in the group', () => {
     expect(speakerLookups()).toBe(0); // the turn's own history pull carries sender names
   });
 
-  it("never answers another bot's message, even one that @-mentions it", async () => {
+  it("still rejects another bot in a rule group, even one that @-mentions it", async () => {
     await orchestrator.onMessage(message({ sender: 'app', senderId: 'ou_other_bot', ...inTopic }));
     await orchestrator.onMessage(message({ sender: 'app', senderId: 'ou_other_bot', atMe: true }));
     expect(fake.startThread).not.toHaveBeenCalled();

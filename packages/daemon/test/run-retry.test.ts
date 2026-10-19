@@ -316,6 +316,24 @@ describe('[重试] on a failed run card', () => {
     expect(sentText().filter((t) => t.includes('已丢弃'))).toEqual([expect.stringContaining('1 条排队消息已丢弃')]);
   });
 
+  it('during multi-session recovery asks only a human to wait, never another bot', async () => {
+    let failHistory!: (error: Error) => void;
+    Object.assign(fake.backend, {
+      listThreads: async () => [{ sessionId: 'past' }],
+      readHistory: () => new Promise((_resolve, reject) => { failHistory = reject; }),
+    });
+    const o = setup(scriptedThread([]).t);
+    const resume = o.collaboration({ action: 'resume', projectName: 'test', chatId: 'chat', sessionId: 'past', backend: 'codex' }).catch(() => undefined);
+    await until(() => expect(failHistory).toBeDefined());
+    const bot = { ...message('BOT_WAIT_CONTROL'), raw: { sender: { sender_type: 'app' } } };
+    await o.onMessage(bot);
+    expect(sentText().filter(t => t.includes('正在恢复历史会话'))).toEqual([]);
+    await o.onMessage(message('PERSON_WAIT_CONTROL'));
+    await untilReplied('正在恢复历史会话');
+    failHistory(new Error('gone'));
+    await resume;
+  });
+
   it('tells the tap when a resume starts while it waits out the wrap-up, and keeps the button', async () => {
     let readHistory: ((err: Error) => void) | undefined;
     Object.assign(fake.backend, {
