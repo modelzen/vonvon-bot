@@ -1988,6 +1988,7 @@ export function createOrchestrator(
     // before any reply, record, watermark or note; its topic message is answered (s14d).
     if (msg.chatType === 'p2p') {
       if (await syncCopy.skip(msg, true)) return;
+      if (!fromBot(msg) && typedCandidate(msg) && asks.dmText({ openId: msg.senderId, text: msg.content.trim(), messageId: msg.messageId, createTime: msg.createTime })) return;
       await handleDmConsole(channel, cfg, msg);
       return;
     }
@@ -2146,6 +2147,7 @@ export function createOrchestrator(
         const typed = asks.typed({ chatId: msg.chatId, place: ts.sessionKey, senderId: msg.senderId,
           senderKind: askRequesterKind(msg), text, createTime: msg.createTime });
         if (typed === 'answered') { markSeen(ts.sessionKey, { id: msg.messageId, at: msg.createTime }); return; }
+        if (typed === 'sensitive') noteSensitiveInGroup(msg, ts.sessionKey);
       }
       // Smart: a judgement decides (s25); the refusal of a tier the backend cannot run waits for it to say reply.
       if (smart && !goalObjective) {
@@ -2209,6 +2211,7 @@ export function createOrchestrator(
         const typed = asks.typed({ chatId: msg.chatId, place: ts.sessionKey, senderId: msg.senderId,
           senderKind: askRequesterKind(msg), text, createTime: msg.createTime });
         if (typed === 'answered') { markSeen(ts.sessionKey, { id: msg.messageId, at: msg.createTime }); return; }
+        if (typed === 'sensitive') noteSensitiveInGroup(msg, ts.sessionKey);
       }
       // Smart: an unnamed topic message is judged, only reply or not (s25); a named one is answered as before.
       if (smart && audience === 'nobody' && !goalObjective) {
@@ -4136,6 +4139,11 @@ export function createOrchestrator(
   // 连点刷屏。终态间隙（interrupt 刚卸下、runsByCard 还没清）窗口极小，保持
   // 忽略（audit-03 结论）。
   const runControlNotes = new RecentIdCache(512, 60_000);
+  function noteSensitiveInGroup(msg: NormalizedMessage, sessionKey: string): void {
+    if (runControlNotes.seen(`ask-sensitive:${sessionKey}`)) return;
+    void trackTask(channel.send(msg.chatId, { markdown: '🔒 这题要在私聊里回答，群里发的不算回答。' },
+      { replyTo: msg.messageId, replyInThread: Boolean(msg.threadId) }).catch(() => undefined));
+  }
   /** 非发起人/非管理员点 ⏹/🎯：明确告知规则。 */
   const denyRunControl = (evt: CardActionEvent, key: string, actionId: string, verb: string): void => {
     if (!runControlNotes.seen(`deny:${key}:${evt.operator?.openId ?? ''}`)) {
