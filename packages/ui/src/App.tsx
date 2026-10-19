@@ -429,7 +429,7 @@ function DesktopApp() {
             if (!owner || (!page.groups.length && page.problem?.kind !== 'failed')) return null;
             return <div key={page.agentId} className="page-stack">
               {page.problem?.kind === 'failed' && <InlineNotice title={`${owner.name} 的绑定通知读取失败`} tone="warning">{page.problem.message}</InlineNotice>}
-              {page.groups.map(group => <InlineNotice key={group.chatId} title={`${owner.name} 已加入 ${group.name}`} actions={<Button onClick={() => openJoin(owner.id, group)}>继续绑定</Button>}>尚未绑定工作目录，可以继续完成设置。</InlineNotice>)}
+              {page.groups.map(group => <InlineNotice key={group.chatId} title={`${owner.name} 已加入 ${group.name}`} actions={<Button onClick={() => openJoin(owner.id, group)}>继续绑定</Button>}>还没设置好：选会话方式就能用。</InlineNotice>)}
             </div>;
           })}
           {feedback}
@@ -898,7 +898,7 @@ function DesktopApp() {
       <PendingGroupToasts pages={pendingGroups} agents={snapshot.agents} hidden={modal !== null} onContinue={(owner, group) => openJoin(owner.id, group)} />
       {modal?.kind === 'join' && (() => {
         const owner = snapshot.agents.find(item => item.id === modal.agentId);
-        return owner ? <JoinGroupDialog key={`${owner.id}:${modal.group?.chatId ?? 'new'}`} agent={owner} initialGroup={modal.group} pending={pendingGroups.find(item => item.agentId === owner.id)} onClose={() => setModal(null)} onChanged={async () => {await run({type: 'refresh'});}} /> : null;
+        return owner ? <JoinGroupDialog key={`${owner.id}:${modal.group?.chatId ?? 'new'}`} agent={owner} linux={snapshot.application.platform === 'linux'} initialGroup={modal.group} pending={pendingGroups.find(item => item.agentId === owner.id)} onClose={() => setModal(null)} onChanged={async () => {await run({type: 'refresh'});}} /> : null;
       })()}
       <Dialog
         open={modal !== null && modal.kind !== "deleteAgent" && modal.kind !== "join"}

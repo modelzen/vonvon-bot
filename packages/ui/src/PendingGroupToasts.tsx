@@ -22,6 +22,6 @@ export function PendingGroupToasts({pages, agents, hidden, onContinue}: {
     {entries.map(({agent, group, key}) => <InlineNotice key={key} title={`${agent.name} 已加入 ${group.name}`} actions={<>
       <Button onClick={() => onContinue(agent, group)}>继续绑定</Button>
       <IconButton label={`关闭 ${group.name} 的绑定通知`} onClick={() => dismiss(key)}><X size={14} /></IconButton>
-    </>}>选择工作目录即可开始协作。稍后也可从待绑定列表继续。</InlineNotice>)}
+    </>}>还没设置好：选会话方式就能用。稍后也可从待绑定列表继续。</InlineNotice>)}
   </aside>;
 }
