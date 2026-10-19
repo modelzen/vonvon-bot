@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { guardCardJson, installAtGuard, keepAts, neutraliseAts, type ChatBots } from '../src/card/at-guard';
+import { atTags, guardCardJson, installAtGuard, keepAts, neutraliseAts, type ChatBots } from '../src/card/at-guard';
 import { sendManagedCard, updateManagedCard } from '../src/card/managed';
 
 // s27a0, all new on main: a bot's `<at>` never leaves in a card or markdown post.
@@ -124,5 +124,17 @@ describe('managed cards', () => {
     const content = (r: any): string => JSON.parse(r.data.data ?? r.data.card.data).body.elements[0].content;
     expect(content(create.mock.calls[0]![0])).toBe('@小审<at id="ou_h">张三</at>');
     expect(content(update.mock.calls[0]![0])).toBe('<at id="ou_h">张三</at>@小审');
+  });
+});
+
+
+describe('atTags', () => {
+  it('reads ids and full ranges without prose or bare tag prefixes', () => {
+    const text = 'x <at id="ou_1">A</at> y <at user_id=ou_2/> <at least> <at';
+    expect(atTags(text)).toEqual([
+      { id: 'ou_1', start: 2, end: 22 },
+      { id: 'ou_2', start: 25, end: 43 },
+    ]);
+    expect(atTags(text)).toEqual(atTags(text));
   });
 });
