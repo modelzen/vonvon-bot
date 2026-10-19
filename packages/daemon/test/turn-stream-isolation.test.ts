@@ -32,6 +32,42 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     setTimeout(() => send({id:msg.id,error:{code:-32000,message:'start rejected'}}), 20);
     return;
   }
+  if (text === 'activity') {
+    send({id:msg.id,result:{turn:{id}}});
+    const activity = (parent, turn, child) => event('item/started',parent,turn,{item:{
+      type:'subAgentActivity',id:'spawn-'+child,kind:'started',agentThreadId:child,agentPath:'root/'+child}});
+    activity('host',id,'activity-child');
+    event('turn/started','activity-child','child-turn');
+    event('turn/started','activity-child','child-turn-new');
+    event('turn/completed','activity-child','child-turn',{turn:{id:'child-turn',status:'failed'}});
+    activity('activity-child','child-turn-new','activity-grandchild');
+    event('turn/started','activity-grandchild','grandchild-turn');
+    event('item/started','activity-grandchild','grandchild-turn',{item:{
+      type:'commandExecution',id:'nested-step',command:'pwd',cwd:'/repo'}});
+    event('turn/completed','activity-grandchild','grandchild-turn',{turn:{id:'grandchild-turn',status:'completed'}});
+    event('turn/completed','activity-child','child-turn-new',{turn:{id:'child-turn-new',status:'completed'}});
+    event('turn/completed','host',id); return;
+  }
+  if (text === 'children') {
+    send({id:msg.id,result:{turn:{id}}});
+    const register = (child, parent) => send({method:'thread/started',params:{thread:{id:child,
+      source:{subagent:{thread_spawn:{parent_thread_id:parent,depth:1,agent_path:null,agent_nickname:'小助手',agent_role:null}}}}}});
+    const steps = child => {
+      event('turn/started',child,'child-turn');
+      event('item/started',child,'child-turn',{item:{type:'commandExecution',id:child+'-step',command:'pwd',cwd:'/repo'}});
+      event('error',child,'child-turn',{error:{message:'child only'},willRetry:false});
+      event('turn/completed',child,'child-turn',{turn:{id:'child-turn',status:'completed'}});
+    };
+    register('child','host'); steps('child');
+    register('child3','child'); steps('child3');
+    event('item/completed','host',id,{item:{type:'collabAgentToolCall',id:'spawn',tool:'spawnAgent',
+      receiverThreadIds:['child2'],senderThreadId:'host',prompt:'count',agentsStates:{}}});
+    steps('child2');
+    event('item/started','host',id,{item:{type:'collabAgentToolCall',id:'spawn-started',tool:'spawnAgent',
+      receiverThreadIds:['child4'],senderThreadId:'host',prompt:'count',agentsStates:{}}});
+    steps('child4');
+    event('turn/completed','host',id); return;
+  }
   if (text === 'clean') {
     send({id:msg.id,result:{turn:{id}}});
     event('turn/started','host',id);
@@ -135,4 +171,41 @@ it.each(['compact', 'goal'])('a rejected %s leaves no reader to steal the next t
    {type:'done',turnId:'turn-1'},
   ]);
  });
+});
+
+
+it('routes registered children and grandchildren through the child channel', async () => {
+  await withThread(async thread => {
+    const events = await collect(thread.runStreamed({ text: 'children' }));
+    for (const id of ['child', 'child2', 'child3', 'child4']) {
+      expect(events).toContainEqual(expect.objectContaining({ type: 'subagent_start', id }));
+      expect(events).toContainEqual(expect.objectContaining({ type: 'subagent_step', id, stepId: id + '-step' }));
+      expect(events).toContainEqual(expect.objectContaining({ type: 'subagent_status', id, status: 'completed' }));
+    }
+    expect(events).toContainEqual(expect.objectContaining({ type: 'subagent_start', id: 'child', name: '小助手' }));
+    expect(events).toContainEqual(expect.objectContaining({ type: 'subagent_start', id: 'child3', parentId: 'child' }));
+    expect(events.some(e => e.type === 'error' || (e.type === 'tool_use' && e.itemId.endsWith('-step')))).toBe(false);
+  });
+});
+
+
+it('registers code-mode activity items on parent and child threads without thread/started', async () => {
+  await withThread(async thread => {
+    const events = await collect(thread.runStreamed({ text: 'activity' }));
+    expect(events).toContainEqual(expect.objectContaining({ type: 'subagent_start', id: 'activity-child' }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'subagent_start', id: 'activity-grandchild', parentId: 'activity-child',
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'subagent_step', id: 'activity-grandchild', stepId: 'nested-step', status: 'running',
+    }));
+    expect(events.filter(e => e.type === 'subagent_status' && e.id === 'activity-child')).toEqual([
+      { type: 'subagent_status', id: 'activity-child', status: 'running' },
+      { type: 'subagent_status', id: 'activity-child', status: 'running' },
+      { type: 'subagent_status', id: 'activity-child', status: 'completed', result: undefined },
+    ]);
+    expect(events.filter(e => e.type === 'tool_use')).toEqual([
+      expect.objectContaining({ itemId: 'spawn-activity-child' }),
+    ]);
+  });
 });

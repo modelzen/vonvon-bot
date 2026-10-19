@@ -6446,6 +6446,10 @@ export function createOrchestrator(
           lastEvAt = tEv;
           evCount++;
           render.apply(ev);
+          if (ev.type === 'subagent_start' || (ev.type === 'subagent_status' && ev.status !== 'running')) {
+            const row = render.snapshot().subagents.find(s => s.id === ev.id);
+            log.info('agent', 'subagent', { id: ev.id.slice(-6), status: ev.type === 'subagent_start' ? 'start' : ev.status, steps: row?.steps.length ?? 0 });
+          }
           // Track context usage for /context and the next turn's meter. Only
           // auto-compaction reaches the turn loop (a manual /compact drains its own
           // events); it shows as a line on this card, and Claude's post-compaction
@@ -7103,6 +7107,10 @@ export function createOrchestrator(
         }
         if (!cur) cur = startTurn();
         cur.render.apply(ev);
+        if (ev.type === 'subagent_start' || (ev.type === 'subagent_status' && ev.status !== 'running')) {
+          const row = cur.render.snapshot().subagents.find(s => s.id === ev.id);
+          log.info('agent', 'subagent', { id: ev.id.slice(-6), status: ev.type === 'subagent_start' ? 'start' : ev.status, steps: row?.steps.length ?? 0 });
+        }
         // Reasoning ALONE doesn't warrant a card (a planning-only turn must not leave
         // an empty box); only real output (text / tool calls) sends the card. Once a
         // card exists, keep streaming everything (incl. reasoning) into it.

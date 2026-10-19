@@ -1,4 +1,5 @@
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import { log } from '../../core/logger';
 import { claudeErrorKind } from '../error-kind';
 import type { AgentEvent, ToolKind } from '../types';
 
@@ -74,6 +75,7 @@ export interface TurnMapper {
 
 /** Create a per-turn mapper. One per `runStreamed` turn (state resets with it). */
 export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
+  const agents = new Map<string, { runId?: string; terminal?: string }>();
   let blockSeq = 0;
   const open = new Map<number, OpenBlock>();
   let systemEmitted = false;
@@ -89,6 +91,7 @@ export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
     const m = msg as unknown as Record<string, any>;
     switch (m.type) {
       case 'system':
+        if (msg.type === 'system' && (msg.subtype === 'task_started' || msg.subtype === 'task_progress' || msg.subtype === 'task_updated' || msg.subtype === 'task_notification')) return mapTask(msg);
         if (m.subtype === 'init') {
           if (typeof m.model === 'string') initModel = m.model;
           if (!systemEmitted) {
@@ -117,9 +120,10 @@ export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
         return [];
 
       case 'stream_event':
-        return mapStreamEvent(m.event);
+        return m.parent_tool_use_id != null ? [] : mapStreamEvent(m.event);
 
       case 'assistant': {
+        if (msg.type === 'assistant' && msg.parent_tool_use_id != null) return mapChild(msg);
         const content = (m.message?.content ?? []) as ContentBlock[];
         // Synthetic API failures may have no stream_event text deltas and can
         // even precede an empty success result. Preserve the explicit SDK error
@@ -163,6 +167,7 @@ export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
       }
 
       case 'user': {
+        if (msg.type === 'user' && msg.parent_tool_use_id != null) return mapChild(msg);
         const content = m.message?.content;
         if (!Array.isArray(content)) return [];
         const out: AgentEvent[] = [];
@@ -212,6 +217,52 @@ export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
       default:
         return [];
     }
+  }
+
+  function mapTask(msg: Extract<SDKMessage, { subtype: 'task_started' | 'task_progress' | 'task_updated' | 'task_notification' }>): AgentEvent[] {
+    const agent = agents.get(msg.task_id);
+    if (agent?.runId && msg.run_id && msg.run_id < agent.runId) return [];
+    if (msg.subtype === 'task_started') {
+      if (msg.task_type !== 'local_agent' || msg.ambient || msg.skip_transcript) return [];
+      if (agent) {
+        if (!msg.run_id || agent.runId === msg.run_id) return [];
+        agents.set(msg.task_id, { runId: msg.run_id });
+        return [{ type: 'subagent_status', id: msg.task_id, status: 'running' }];
+      }
+      agents.set(msg.task_id, { runId: msg.run_id });
+      return [{ type: 'subagent_start', id: msg.task_id, parentId: msg.parent_task_id,
+        name: msg.subagent_type ?? '子 agent', task: msg.description.slice(0, 120), stoppable: true }];
+    }
+    if (!agent || msg.subtype === 'task_progress') return [];
+    const status = msg.subtype === 'task_updated' ? msg.patch.status : msg.status;
+    if (status !== 'completed' && status !== 'failed' && status !== 'killed' && status !== 'stopped') return [];
+    const runId = msg.run_id ?? agent.runId ?? msg.task_id;
+    if (msg.run_id) agent.runId = msg.run_id;
+    if (agent.terminal === runId) return [];
+    agent.terminal = runId;
+    const result = msg.subtype === 'task_updated' ? msg.patch.error : msg.summary;
+    return [{ type: 'subagent_status', id: msg.task_id,
+      status: status === 'killed' ? 'stopped' : status, result: result?.slice(0, 600) }];
+  }
+
+  function mapChild(msg: Extract<SDKMessage, { type: 'assistant' | 'user' }>): AgentEvent[] {
+    if (!('agent_id' in msg) || !msg.agent_id) {
+      log.warn('agent', 'subagent-no-id');
+      return [];
+    }
+    if (!agents.has(msg.agent_id) || !Array.isArray(msg.message.content)) return [];
+    const out: AgentEvent[] = [];
+    for (const block of msg.message.content) {
+      if (block.type === 'tool_use' || block.type === 'server_tool_use') {
+        const input = block.input;
+        out.push({ type: 'subagent_step', id: msg.agent_id, stepId: block.id,
+          title: toolTitle(block.name, input && typeof input === 'object' ? Object.fromEntries(Object.entries(input)) : {}, ctx.cwd), status: 'running' });
+      } else if (block.type === 'tool_result') {
+        out.push({ type: 'subagent_step', id: msg.agent_id, stepId: block.tool_use_id,
+          title: '', status: block.is_error ? 'failed' : 'done' });
+      }
+    }
+    return out;
   }
 
   function mapStreamEvent(ev: Record<string, any> | undefined): AgentEvent[] {
@@ -290,6 +341,7 @@ export function toolTitle(name: string, input: Record<string, unknown>, cwd?: st
       return `抓取网页 ${s('url')}`.trim();
     case 'WebSearch':
       return `联网搜索 ${s('query')}`.trim();
+    case 'Agent':
     case 'Task':
       return `子任务：${s('description') || s('subagent_type') || ''}`.trim();
     case 'TodoWrite':
