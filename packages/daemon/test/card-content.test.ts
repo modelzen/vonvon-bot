@@ -237,9 +237,13 @@ describe('extractSendCardText', () => {
 it('omits handoff status notes but keeps other grey prose (s27b)', () => {
   const card = { body: { elements: [
     { tag: 'markdown', content: "<font color='grey'>→ 想 @ 小审（bot），没发出：发送失败</font>" },
+    { tag: 'markdown', content: "<font color='grey'>→ 还想 @ 成员，没发：一条最多 @ 5 个</font>" },
+    { tag: 'markdown', content: "<font color='grey'>→ 还想说</font>" },
     { tag: 'markdown', content: "<font color='grey'>→ 想想别的</font>" },
   ] } };
   const text = extractSendCardText(card);
   expect(text).not.toContain('→ 想 @');
+  expect(text).not.toContain('→ 还想 @');
+  expect(text).toContain('→ 还想说');
   expect(text).toContain('→ 想想别的');
 });
