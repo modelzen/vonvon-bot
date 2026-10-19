@@ -9,6 +9,8 @@ vi.mock('../src/platform/spawn', async original => ({ ...await original<object>(
 vi.mock('../src/agent/codex-appserver/locate', () => ({ resolveCodexBin: () => '/fixture/no-provider' }));
 const fake = vi.hoisted(() => ({
   project: vi.fn(),
+  refreshRoles: vi.fn(async () => {}),
+  stopRoles: vi.fn(async () => {}),
   channel: { on: vi.fn((..._args: unknown[]) => {}), connect: vi.fn(async () => {}), disconnect: vi.fn(async () => {}) },
   backend: { capabilities: { steer: true }, id: 'codex', listModels: vi.fn(async () => []), resumeThread: vi.fn(), startThread: vi.fn() },
   voice: vi.fn(async (_channel: unknown, msg: NormalizedMessage) => ({ text: '语音正文', voice: { messageId: msg.messageId, text: '语音正文', transcribed: true } })),
@@ -17,6 +19,10 @@ const fake = vi.hoisted(() => ({
   createCard: vi.fn(async (..._args: unknown[]) => 'card'),
   send: vi.fn(async (..._args: unknown[]) => ({})),
   log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() },
+}));
+vi.mock('../src/config/app-roles', async original => ({
+  ...await original<object>(),
+  createAppRoleRefresher: () => ({ refresh: fake.refreshRoles, stop: fake.stopRoles }),
 }));
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown, fn: () => unknown) => fn() }));
 vi.mock('../src/agent', async (original) => ({ ...await original<object>(), createBackend: () => fake.backend }));
@@ -70,6 +76,7 @@ function deferred<T>() {
 function thread() {
   const turns: ReturnType<typeof deferred<void>>[] = [];
   const consumed: AgentInput[] = [];
+  const started = deferred<void>();
   const t = {
     sessionId: 'host', isAlive: () => true,
     close: vi.fn(async () => { for (const turn of turns) turn.resolve(); }),
@@ -79,6 +86,7 @@ function thread() {
       consumed.push(input);
       const end = deferred<void>();
       const id = `turn-${turns.push(end)}`;
+      started.resolve();
       return {
         turnId: () => id,
         events: (async function* (): AsyncGenerator<AgentEvent> {
@@ -89,7 +97,7 @@ function thread() {
       };
     },
   };
-  return { t, turns, consumed };
+  return { t, turns, consumed, started };
 }
 let orchestrator: ReturnType<typeof createOrchestrator> | undefined;
 let seq = 0;
@@ -484,7 +492,8 @@ it('real orchestrator shutdown awaits an accepted message continuation before it
 it.each(['clean', 'failed'] as const)('startup failure waits for the accepted run and %s provider cleanup', async cleanup => {
   const { owner, fixture } = born();
   const run = thread();
-  run.t.close.mockImplementation(() => owner.close());
+  const closingProvider = deferred<void>();
+  run.t.close.mockImplementation(() => { closingProvider.resolve(); return owner.close(); });
   fake.backend.resumeThread.mockResolvedValue(run.t);
   const startupError = new Error('channel connect failed after accepting a run');
   const accepted = deferred<void>();
@@ -499,10 +508,13 @@ it.each(['clean', 'failed'] as const)('startup failure waits for the accepted ru
   const startup = startBridge({ identity: { appId: cfg.accounts.app.id, tenant: cfg.accounts.app.tenant, createdAt: 1 }, cfg, appSecret: 'fixture', fallbackCwd: '/test' });
   const starting = observe(startup);
   await vi.advanceTimersByTimeAsync(0);
+  await run.started.promise;
+  expect(fake.refreshRoles).toHaveBeenCalledOnce();
   expect(run.consumed).toHaveLength(1);
   expect(transport.spawn).toHaveBeenCalledOnce();
   expect(fixture.state()).toBe('present');
   accepted.resolve();
+  await closingProvider.promise;
   await vi.advanceTimersByTimeAsync(0);
   expect(run.t.close).toHaveBeenCalledOnce();
   expect(kill).toHaveBeenCalledWith(-fixture.pid!, 'SIGTERM');
@@ -534,6 +546,7 @@ it.each(['clean', 'failed'] as const)('startup failure waits for the accepted ru
   await expect(startup).rejects.toThrow(cleanup === 'clean' ? startupError : 'Bridge startup and cleanup failed');
   expect(starting.status).toBe('rejected');
   expect(ownerModule.unconfirmedProviderPids()).toEqual([]);
+  expect(fake.stopRoles).toHaveBeenCalledOnce();
   expect(fake.channel.disconnect).toHaveBeenCalledOnce();
   if (cleanup === 'clean') {
     expect(starting.error).toBe(startupError);

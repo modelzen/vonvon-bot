@@ -161,6 +161,8 @@ export interface AgentSettingsView {
   sections: Sections<AgentSections>;
   ownerOpenId: string | null;
   administrators: {
+    feishu?: { ownerOpenId: string | null; adminOpenIds: string[] };
+    scannerOpenId?: string | null;
     openIds: string[];
     revision: string;
   };

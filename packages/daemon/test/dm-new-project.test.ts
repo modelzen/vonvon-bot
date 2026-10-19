@@ -1,3 +1,4 @@
+import * as appRoles from '../src/config/app-roles';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CardActionEvent } from '@larksuiteoapi/node-sdk';
@@ -155,4 +156,18 @@ it('answers a click delivered again after its group was created with the created
     expect(second).not.toContain('"tag":"form"');
     expect(fake.creates()).toHaveLength(1);
   } finally { await orchestrator.shutdown(); }
+});
+
+it('allows a Feishu application administrator into the DM project creation action', async () => {
+  const roles = vi.spyOn(appRoles, 'getAppRoleSnapshot').mockReturnValue({
+    appId: bot.appId, tenant: 'feishu', fetchedAt: Date.now(), ownerOpenId: 'ou_app_owner', admins: ['ou_app_admin'],
+  });
+  const { fake, orchestrator } = app();
+  try {
+    const event = submit('Application administrator');
+    event.operator = { openId: 'ou_app_admin' };
+    await orchestrator.dispatcher.handle(event);
+    expect(await reply(1)).toContain('已创建项目');
+    expect(fake.creates()[0]?.data).toMatchObject({ user_id_list: ['ou_app_admin'] });
+  } finally { await orchestrator.shutdown(); roles.mockRestore(); }
 });
