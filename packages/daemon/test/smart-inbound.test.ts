@@ -1213,6 +1213,36 @@ describe('attention (s25g)', () => {
     expect(noted('judge-superseded')).toHaveLength(1); expect(noted('judge-superseded')[0]?.times).toBe(1);
     expect(fake.inputs).toHaveLength(1); expect(startThread).toHaveBeenCalledTimes(1);
   });
+  it('supersedes a glance topic after a named main reply lands during its anchor lookup', async () => {
+    const a = says('LATE_TOPIC_ANCHOR'), b = says('LATE_TOPIC_BATCH');
+    await send(a); await send(b); await advance(s(20));
+    const lookup = deferred<void>();
+    const entered = deferred<void>();
+    fake.get.mockImplementation(async ({ path }) => {
+      if (path.message_id === idOf(a)) { entered.resolve(); await lookup.promise; }
+      return { code: 0, data: { items: [{ create_time: '1', ...(path.message_id.startsWith('card') ? { thread_id: 'omt_opened' } : {}) }] } };
+    });
+    try {
+      await decide(b, result('topic', { anchor: idOf(a) })); await entered.promise;
+      const n = says('NAMED_MAIN_WINS', { at: true }); await send(n); await decide(n, result('main'));
+      await vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
+      expect(fake.cards[0]![3]).toMatchObject({ replyTo: idOf(n) });
+      lookup.resolve();
+      await vi.waitFor(() => expect(fake.inputs.length > 1 || noted('judge-superseded').length === 1).toBe(true));
+      expect(fake.inputs).toHaveLength(1); expect(startThread).toHaveBeenCalledTimes(1);
+      expect(fake.cards).toHaveLength(1); expect(fake.inputs[0]).toContain('NAMED_MAIN_WINS');
+      expect(noted('judge-superseded')).toMatchObject([{ ref: idOf(b).slice(-6), times: 2 }]);
+      expect(logged('judge-landed')).toEqual([expect.objectContaining({ ref: idOf(n).slice(-6), decision: 'main' })]);
+      const next = says('NEW_TOPIC_REQUEST'); await send(next);
+      const { req } = await judged(next);
+      expect(req.context.some(l => l.id === `act:${idOf(b)}` || l.text.includes('开了话题'))).toBe(false);
+      // A new, later request can still use A: the discarded lookup left no anchor reservation.
+      await decide(next, result('topic', { anchor: idOf(a) }));
+      await vi.waitFor(() => expect(fake.cards).toHaveLength(2));
+      expect(fake.cards[1]![3]).toMatchObject({ replyTo: idOf(a), replyInThread: true });
+      expect(startThread).toHaveBeenCalledTimes(2);
+    } finally { lookup.resolve(); }
+  });
   it('53. a named arrival still runs when the earlier glance lands first', async () => {
     const a = says('GLANCE_FIRST'); await send(a); await advance(s(20));
     const n = says('NAMED_SECOND', { at: true }); await send(n); await judged(n);

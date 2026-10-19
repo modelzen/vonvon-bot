@@ -2058,6 +2058,14 @@ export function createOrchestrator(
     recent.addOwn(place, msg.chatId, { id: actId, at: actAt, text: guessed });
     const under = proposed ? await anchorLine(msg, look ? batch.filter((b) => look.includes(b.id)) : batch, proposed) : undefined;
     if (stopped()) return;
+    // The anchor lookup can outlive a later main reply. Recheck after the final await;
+    // this check, the start registration and dispatch below must stay synchronous.
+    if (item.kind !== 'named' && (trig.createTime <= takenAt() || (decision === 'topic' && mainWillWeave(msg)))) {
+      recent.remove(actId);
+      if (under) openingUnder.delete(under.id);
+      superseded();
+      return;
+    }
     const landed = actText(under);
     if (landed !== guessed) {
       recent.remove(actId);
