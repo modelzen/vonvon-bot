@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { callTypeSafe, DecisionError, DECISION_TIMEOUT_MS, probeTypeSafe, retryAfterMs, TYPESAFE_MODELS_URL, TYPESAFE_URL } from '../src/judge/typesafe';
+import { callTypeSafe, DecisionError, DECISION_TIMEOUT_MS, probeTypeSafe, RETRY_MIN_MS, retryAfterMs, TYPESAFE_MODELS_URL, TYPESAFE_URL } from '../src/judge/typesafe';
+
+const fake = vi.hoisted(() => ({ log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() } }));
+vi.mock('../src/core/logger', () => ({ log: fake.log }));
 
 const KEY = 'ts_TESTKEY0000';
 const BODY = { model: 'jev-latest', state: { new_message: { text: '群消息原文' } }, questions: {} };
@@ -26,6 +29,7 @@ async function failure(promise: Promise<unknown>): Promise<DecisionError> {
 
 beforeEach(() => {
   vi.useFakeTimers({ now: Date.parse('2026-10-18T10:00:00Z') });
+  vi.clearAllMocks();
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -180,5 +184,121 @@ describe('probeTypeSafe (s23g 试一次)', () => {
     expect(await hang.result).toEqual({ outcome: 'timeout', message: 'TypeSafe 5 秒没回' });
     const quoted = await probe(({ init }) => { new Headers(init.headers); return json(200, {}); }, `${KEY}\nX: y`).result;
     expect(quoted).toEqual({ outcome: 'network', message: '连不上 TypeSafe' });
+  });
+});
+
+/** fetch's error for a connection that failed, as undici throws it: `fetch failed` with Node's error as the cause. */
+const fetchFailed = (cause: object) => Object.assign(new TypeError('fetch failed'), { cause });
+const netError = (code: string, syscall: string, address?: string) =>
+  Object.assign(new Error(`${syscall} ${code}${address ? ` ${address}:443` : ''}`), { code, syscall, ...(address ? { address, port: 443 } : {}) });
+/** Node's happy eyeballs giving up on TypeSafe's two A and two AAAA records, on a host without an IPv6 route. */
+const happyEyeballs = () => Object.assign(new AggregateError([
+  netError('ETIMEDOUT', 'connect', '104.18.1.1'), netError('ENETUNREACH', 'connect', '2606:4700::1'),
+  netError('ETIMEDOUT', 'connect', '104.18.2.2'), netError('ENETUNREACH', 'connect', '2606:4700::2'),
+]), { code: 'ETIMEDOUT' });
+
+describe('a connection that failed before sending is tried once more (s23f2)', () => {
+  /** Answers with `first` the first time, then with `then`. */
+  const twice = (first: () => Promise<Response> | Response, then: () => Promise<Response> | Response = () => json(200, OK)) => {
+    let n = 0;
+    return fakeFetch(() => (n++ === 0 ? first() : then()));
+  };
+  const retries = () => fake.log.info.mock.calls.filter((c) => c[1] === 'decision-retry');
+
+  it('happy eyeballs timing out: tried again within the same 5 s, and the answer says it was retried', async () => {
+    const f = twice(() => { throw fetchFailed(happyEyeballs()); });
+    expect(await callTypeSafe(BODY, KEY, new AbortController().signal, f.fn)).toEqual({ body: OK, retried: true });
+    expect(f.calls).toHaveLength(2);
+    // the same request, the same signal
+    expect(f.calls[1]!.init).toEqual(f.calls[0]!.init);
+    expect(retries()).toHaveLength(1);
+    expect(retries()[0]![2]).toEqual({ call: 'decision', code: 'ETIMEDOUT', attempts: ['ETIMEDOUT/v4', 'ENETUNREACH/v6', 'ETIMEDOUT/v4', 'ENETUNREACH/v6'], ms: 0 });
+    expect(JSON.stringify(fake.log.info.mock.calls)).not.toMatch(/104\.18|2606:4700|TESTKEY|群消息原文/);
+  });
+
+  it.each<[string, object]>([
+    ['refused', netError('ECONNREFUSED', 'connect', '104.18.1.1')],
+    ['no route', netError('EHOSTUNREACH', 'connect', '104.18.1.1')],
+    ['network unreachable', netError('ENETUNREACH', 'connect', '2606:4700::1')],
+    ['DNS not answering', netError('EAI_AGAIN', 'getaddrinfo')],
+    ["undici's connect timeout", Object.assign(new Error('Connect Timeout Error'), { code: 'UND_ERR_CONNECT_TIMEOUT' })],
+  ])('%s: tried again', async (_, cause) => {
+    const f = twice(() => { throw fetchFailed(cause); });
+    expect(await callTypeSafe(BODY, KEY, new AbortController().signal, f.fn)).toMatchObject({ body: OK, retried: true });
+    expect(f.calls).toHaveLength(2);
+  });
+
+  it.each<[string, () => Response]>([
+    ['a reset after connecting', () => { throw fetchFailed(netError('ECONNRESET', 'read')); }],
+    ['a timeout after connecting', () => { throw fetchFailed(netError('ETIMEDOUT', 'read')); }],
+    ['the socket closed by the other side', () => { throw fetchFailed(Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' })); }],
+    ['an attempt that got further than connect', () => { throw fetchFailed(Object.assign(new AggregateError([netError('ETIMEDOUT', 'connect', '104.18.1.1'), netError('ECONNRESET', 'read', '104.18.2.2')]), { code: 'ETIMEDOUT' })); }],
+    ['a name that does not exist', () => { throw fetchFailed(netError('ENOTFOUND', 'getaddrinfo')); }],
+    ['an error with no cause', () => { throw new TypeError('fetch failed'); }],
+    ['a 5xx', () => json(503, {})],
+    ['an answer it cannot read', () => new Response('<html>', { status: 200 })],
+  ])('%s: not tried again, as the request may have been sent and charged', async (_, first) => {
+    const f = twice(first);
+    const error = await failure(callTypeSafe(BODY, KEY, new AbortController().signal, f.fn));
+    expect(f.calls).toHaveLength(1);
+    expect(error.info.retried).toBeUndefined();
+    expect(retries()).toHaveLength(0);
+  });
+
+  it('a read timeout is not tried again', async () => {
+    const f = twice(() => new Promise<Response>(() => undefined));
+    const first = failure(callTypeSafe(BODY, KEY, new AbortController().signal, f.fn));
+    await vi.advanceTimersByTimeAsync(DECISION_TIMEOUT_MS);
+    expect(await first).toMatchObject({ kind: 'timeout' });
+    expect(f.calls).toHaveLength(1);
+  });
+
+  it('only with 1.5 s of the 5 s left', async () => {
+    const after = (ms: number) => () => new Promise<Response>((_, reject) => setTimeout(() => reject(fetchFailed(netError('ECONNREFUSED', 'connect', '104.18.1.1'))), ms));
+    const late = twice(after(DECISION_TIMEOUT_MS - RETRY_MIN_MS + 1));
+    const lateCall = failure(callTypeSafe(BODY, KEY, new AbortController().signal, late.fn));
+    await vi.advanceTimersByTimeAsync(DECISION_TIMEOUT_MS - RETRY_MIN_MS + 1);
+    expect(await lateCall).toMatchObject({ kind: 'network', message: '连不上 TypeSafe（ECONNREFUSED）', info: { code: 'ECONNREFUSED' } });
+    expect(late.calls).toHaveLength(1);
+    const inTime = twice(after(DECISION_TIMEOUT_MS - RETRY_MIN_MS));
+    const inTimeCall = callTypeSafe(BODY, KEY, new AbortController().signal, inTime.fn);
+    await vi.advanceTimersByTimeAsync(DECISION_TIMEOUT_MS - RETRY_MIN_MS);
+    expect(await inTimeCall).toMatchObject({ retried: true });
+    expect(inTime.calls).toHaveLength(2);
+  });
+
+  it('the retry shares the 5 s: a second attempt that hangs ends at 5 s from the first', async () => {
+    const f = twice(() => { throw fetchFailed(happyEyeballs()); }, () => new Promise<Response>(() => undefined));
+    const call = failure(callTypeSafe(BODY, KEY, new AbortController().signal, f.fn));
+    await vi.advanceTimersByTimeAsync(DECISION_TIMEOUT_MS);
+    expect(await call).toMatchObject({ kind: 'timeout', info: { retried: true } });
+    expect(f.calls).toHaveLength(2);
+  });
+
+  it('only once: a second failure is the error, with each attempt by code and family and no address', async () => {
+    const f = twice(() => { throw fetchFailed(happyEyeballs()); }, () => { throw fetchFailed(happyEyeballs()); });
+    const error = await failure(callTypeSafe(BODY, KEY, new AbortController().signal, f.fn));
+    expect(f.calls).toHaveLength(2);
+    expect(error).toMatchObject({ kind: 'network', message: '连不上 TypeSafe（ETIMEDOUT）' });
+    expect(error.info).toEqual({ code: 'ETIMEDOUT', attempts: ['ETIMEDOUT/v4', 'ENETUNREACH/v6', 'ETIMEDOUT/v4', 'ENETUNREACH/v6'], retried: true });
+    expect(JSON.stringify([error.message, error.info])).not.toMatch(/104\.18|2606:4700/);
+    // a status after the retry says so too
+    const busy = await failure(callTypeSafe(BODY, KEY, new AbortController().signal, twice(() => { throw fetchFailed(happyEyeballs()); }, () => json(429, {})).fn));
+    expect(busy).toMatchObject({ kind: 'busy', info: { status: 429, retried: true } });
+  });
+
+  it('a caller that gave up is not tried again', async () => {
+    const ctl = new AbortController();
+    const reason = new Error('judge timeout');
+    const f = twice(() => { ctl.abort(reason); throw fetchFailed(happyEyeballs()); });
+    await expect(callTypeSafe(BODY, KEY, ctl.signal, f.fn)).rejects.toBe(reason);
+    expect(f.calls).toHaveLength(1);
+  });
+
+  it('试一次 is tried again the same way', async () => {
+    const f = twice(() => { throw fetchFailed(happyEyeballs()); }, () => json(200, { data: [] }));
+    expect(await probeTypeSafe(KEY, new AbortController().signal, f.fn)).toEqual({ outcome: 'ok', message: '能用' });
+    expect(f.calls.map((c) => c.url)).toEqual([TYPESAFE_MODELS_URL, TYPESAFE_MODELS_URL]);
+    expect(retries()[0]![2]).toMatchObject({ call: 'probe', code: 'ETIMEDOUT' });
   });
 });

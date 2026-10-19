@@ -7,6 +7,7 @@ import { acquirePidLock, getPidLockInfo, isPidLockOwnerRunning, PidLockError, pu
 import { verifyPidLockOwner } from '../server/owner-verification';
 import { readStartupRegistration } from '../service/startup';
 import { flushLogs, log } from '../core/logger';
+import { startLoopLagMonitor } from '../core/loop-lag';
 import { wasLogged } from '../core/error-parts';
 import { bridgeVersion } from '../core/version';
 import { defaultHolderPath, ProcessHost } from '../provider/process/process-host';
@@ -36,6 +37,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
   let owner: PidLockInfo | undefined;
   let host: ProcessHost | undefined;
   let run: HostRunStart | undefined;
+  let stopLoopLag: (() => void) | undefined;
   // The failure that no stop or restart asked for: it is a crash (`fatal`) and counts toward the pause.
   let fatal: { error: unknown } | undefined;
   const errors: unknown[] = [];
@@ -78,6 +80,8 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       capOrphanDrain({ log, flush: flushLogs });
     }
     if (control.requested) return;
+    // the supervisor and each bot child (s23f2); one-off commands never get here
+    stopLoopLag = startLoopLagMonitor({ pid: process.pid, ...(options.bot ? { bot: options.bot } : {}) });
     host = new ProcessHost({
       dataDir: paths.appDir, daemonBootId: randomUUID(),
       ...(process.platform === 'win32' ? { platform: 'win32' } : { platform: 'posix', holderPath: defaultHolderPath() }),
@@ -126,6 +130,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
     if (!wasLogged(error)) log.fail('daemon-run', error, { phase: 'run' }, { console: false });
   }
   finally {
+    stopLoopLag?.();
     // A cleanup failure no longer turns a requested restart into a stop (v1-plan s17): the replacement starts only
     // after this process has exited, and leftover provider processes are swept at the next boot.
     try { await host?.closeAll(); } catch (error) { log.fail('daemon-shutdown', error, { phase: 'process-host' }); errors.push(error); }

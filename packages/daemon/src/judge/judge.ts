@@ -361,7 +361,7 @@ export function createJudge(deps: JudgeDeps): Judge {
         for (const why of answer.notes) log.info('judge', 'decision-note', { ...fields, why });
         const anchor = answer.anchor ? judgeAnchors(req)[answer.anchor] : undefined;
         return finish({ decision: answer.decision, reason: answer.reason, confidence: answer.confidence, ...(anchor ? { anchor } : {}), ...base, ms: now() - started }, {
-          confidence: answer.confidence, providerModel: answer.providerModel, requestId: reply.requestId,
+          confidence: answer.confidence, providerModel: answer.providerModel, requestId: reply.requestId, retried: reply.retried,
           inputTokens: answer.inputTokens, outputTokens: answer.outputTokens, anchor: anchor?.slice(-6),
         });
       }

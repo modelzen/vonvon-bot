@@ -9,7 +9,7 @@ import {
   adminRequestSchema, adminReplySchema, adminStateSchema, directoryRequestSchema, directoryReplySchema,
   jobSchema, environmentReplySchema,
   type DesktopSnapshot, settingsViewSchema, projectViewSchema, projectEditableSchemas, settingsReplySchema,
-  applicationCrashesSchema, crashText, FORCED_DETAIL, NOT_REPLIED_TEXT, diagnosticsEventSchema, KEY_FAILURE, keyFailureOf, keyProblem,
+  applicationCrashesSchema, crashText, FORCED_DETAIL, NOT_REPLIED_TEXT, diagnosticsEventSchema, notRepliedSchema, KEY_FAILURE, keyFailureOf, keyProblem,
   isKnownJudgeSelection, type JudgeSelectionView,
   adminProjectSchema, collaborationRequestSchema, conversationCopy, conversationSchema, conversationToMode, modeToConversation, projectRecordSchema,
 } from "../src/index.js";
@@ -321,4 +321,18 @@ it("words a queued message a restart dropped, and lets one event count several m
   expect(diagnosticsEventSchema.parse({ kind: "notReplied", record, times: 3 })).toEqual({ kind: "notReplied", record, times: 3 });
   expect(diagnosticsEventSchema.safeParse({ kind: "notReplied", record, times: 0 }).success).toBe(false);
   expect(diagnosticsEventSchema.safeParse({ kind: "notReplied", record, times: 10_001 }).success).toBe(false);
+});
+
+it("words another bot's @ that got no answer, saying Bot as the page does (s27a-0)", () => {
+  const record = { at: 1, count: 1, groupId: "oc_fixture_group", place: "topic" as const, ref: "abc123" };
+  for (const reason of ["bot-wake-cap", "bot-wake-failed", "bot-wake-not-allowed", "bot-wake-dropped"] as const) {
+    expect(notRepliedSchema.parse({ ...record, reason }).reason).toBe(reason);
+    const text = NOT_REPLIED_TEXT[reason];
+    expect(`${text.reason({ ...record, reason })}${text.next({ ...record, reason })}`).not.toMatch(/bot/);
+  }
+  expect(NOT_REPLIED_TEXT["bot-wake-cap"].reason({ ...record, reason: "bot-wake-cap" })).toBe("自上一条真人消息起，Bot 之间已互相叫醒 6 次，到了上限，这条 Bot 的 @ 没回");
+  expect(NOT_REPLIED_TEXT["bot-wake-failed"].reason({ ...record, reason: "bot-wake-failed", detail: "历史读不到" })).toBe("没数出 Bot 之间叫醒了几次（历史读不到），这条 Bot 的 @ 没回");
+  expect(NOT_REPLIED_TEXT["bot-wake-failed"].reason({ ...record, reason: "bot-wake-failed" })).toBe("没数出 Bot 之间叫醒了几次，这条 Bot 的 @ 没回");
+  expect(NOT_REPLIED_TEXT["bot-wake-dropped"].reason({ ...record, reason: "bot-wake-dropped", detail: "群正在改设置" })).toBe("这条 Bot 的 @ 没处理：群正在改设置");
+  expect(NOT_REPLIED_TEXT["bot-wake-not-allowed"].next({ ...record, reason: "bot-wake-not-allowed" })).toContain("清空「响应成员」");
 });

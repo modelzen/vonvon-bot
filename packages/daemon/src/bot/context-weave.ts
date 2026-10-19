@@ -98,6 +98,15 @@ export interface ContextMessage {
   streaming?: boolean;
   /** The topic it is in (a main-area pull lists only a topic's first message). */
   threadId?: string;
+  /** The ids it @-mentions that are open_ids in this app's namespace (a wake count, s27a-0). */
+  mentionIds?: string[];
+  /** Feishu's `msg_type`. */
+  msgType?: string;
+  /** An app sender's app_id: the same for every reader, unlike its open_bot_id. */
+  senderAppId?: string;
+  /** The message it replies to (Feishu's `parent_id`), and its thread's first message (`root_id`). */
+  parentId?: string;
+  rootId?: string;
 }
 
 /** Subset of the `im.v1.message.get` / `.list` item shape we read. */
@@ -108,6 +117,7 @@ interface RawMsgItem {
   deleted?: boolean;
   thread_id?: string;
   root_id?: string;
+  parent_id?: string;
   /** `sender_name` and `open_bot_id` come only `with_sender_name` (e10). */
   sender?: { id?: string; id_type?: string; sender_type?: string; sender_name?: string; open_bot_id?: string };
   body?: { content?: string };
@@ -167,7 +177,7 @@ export async function fetchQuotedMessage(
     const res = await withDeadline(channel.rawClient.im.v1.message.get({
       path: { message_id: messageId },
       params: { with_sender_name: true, card_msg_content_type: CARD_CONTENT },
-    }), FETCH_DEADLINE_MS);
+    }), FETCH_DEADLINE_MS, 'quoted-message');
     if (!res) {
       log.warn('intake', 'quote-fetch-failed', { messageId, err: 'timeout' });
       return undefined;
@@ -199,7 +209,7 @@ export async function fetchMessageMeta(channel: LarkChannel, messageId: string, 
     const res = await withDeadline(channel.rawClient.im.v1.message.get({
       path: { message_id: messageId },
       params: { with_sender_name: true },
-    }), opts.deadlineMs ?? FETCH_DEADLINE_MS);
+    }), opts.deadlineMs ?? FETCH_DEADLINE_MS, 'message-meta');
     if (!res) return failed('timeout');
     if (typeof res.code === 'number' && res.code !== 0) return failed(res.msg, res.code);
     const item = (res.data as { items?: RawMsgItem[] } | undefined)?.items?.[0];
@@ -243,7 +253,7 @@ async function walkTopic(channel: LarkChannel, threadId: string, deadlineMs: num
           page_size: PAGE_SIZE,
           ...(pageToken ? { page_token: pageToken } : {}),
         },
-      }), deadline - Date.now());
+      }), deadline - Date.now(), 'topic-walk');
       if (!res) return failed('timeout');
       if (typeof res.code === 'number' && res.code !== 0) return failed(res.msg, res.code);
       const data = res.data as { items?: RawMsgItem[]; has_more?: boolean; page_token?: string } | undefined;
@@ -337,6 +347,15 @@ export interface PullOpts {
   /** Keep this bot's own messages too (a topic opening's main-area lines). */
   keepSelf?: boolean;
   names?: NameBook;
+  /** A wake count (s27a-0): keep a message whose text is empty too, as a bare `<at>` still wakes; and read past an
+   * empty page that says there is more, as the start has not been reached. */
+  mentions?: true;
+  /** Stop after the page where a message taken straight from it (not a held one) passes this; the pull is then complete. */
+  stopWhen?: (m: ContextMessage) => boolean;
+  /** All pages together; FETCH_DEADLINE_MS when unset. No page is asked for once it has run out. */
+  deadlineMs?: number;
+  /** Once aborted, before a page or while one is read, the pull fails at once, pages read or not. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -350,7 +369,9 @@ export interface PullOpts {
  *   - `before`: only messages up to this (the trigger's createTime), so a
  *     message that arrives as its own turn later is not woven twice; one in
  *     the same ms is kept, as the watermark moving to the trigger covers it.
- * This bot's own replies, system notices, deleted, empty and
+ *   - `stopWhen`: also stop, complete, after the page where a kept message
+ *     passes it (a wake count stops at the last person's message, s27a-0).
+ * This bot's own replies, system notices, deleted, empty (kept with `mentions`) and
  * `excludeMessageId` messages are dropped, except `keepId` (the topic's first
  * message, kept even when this bot sent it). Other bots stay. Own replies are
  * dropped as already in the session (product.md 3.5).
@@ -384,12 +405,17 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
   /** Each listed message's topic, and the main-area messages whose root_id is another message (see below). */
   const threadOf = new Map<string, string>();
   const held: { m: ContextMessage; own: boolean; rootId: string }[] = [];
-  const take = (m: ContextMessage, own: boolean): void => {
+  /** True when `m` went into the messages. */
+  const take = (m: ContextMessage, own: boolean): boolean => {
     if (!own) {
-      if (m.text.trim().length > 0) found.push(m);
+      if (opts.mentions || m.text.trim().length > 0) {
+        found.push(m);
+        return true;
+      }
     } else if (c.type === 'chat' && m.threadId) {
       ownRoots.push(m);
     }
+    return false;
   };
   function done(complete: boolean): ThreadPull {
     for (const h of held.splice(0)) if (threadOf.get(h.rootId) !== h.m.threadId) take(h.m, h.own);
@@ -402,11 +428,14 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
   if (c.type === 'chat' && stopAt > 0) window.start_time = String(Math.floor(stopAt / 1000));
   if (c.type === 'chat' && opts.before) window.end_time = String(Math.ceil(opts.before / 1000));
   let pageToken: string | undefined;
-  const deadline = Date.now() + FETCH_DEADLINE_MS;
+  const deadline = Date.now() + (opts.deadlineMs ?? FETCH_DEADLINE_MS);
   try {
     const me = meOf(channel);
     for (let page = 0; page < PAGE_CAP; page++) {
-      const res = await withDeadline(channel.rawClient.im.v1.message.list({
+      if (opts.signal?.aborted) return failedPull();
+      const left = deadline - Date.now();
+      // Out of time before this page: it is not asked for (the same as a page that timed out).
+      const res = left <= 0 ? undefined : await abortable(withDeadline(channel.rawClient.im.v1.message.list({
         params: {
           container_id_type: c.type,
           container_id: c.id,
@@ -417,7 +446,8 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
           ...window,
           ...(pageToken ? { page_token: pageToken } : {}),
         },
-      }), deadline - Date.now());
+      }), left, 'context-pull'), opts.signal);
+      if (res === ABORTED || opts.signal?.aborted) return failedPull();
       if (!res) {
         // Out of time. The pages read so far hold the most recent messages and are
         // kept, as at the page cap; with none, the pull fails and the watermark stays.
@@ -436,6 +466,7 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
       const data = res.data as { items?: RawMsgItem[]; has_more?: boolean; page_token?: string } | undefined;
       const items = data?.items ?? [];
       let oldest = Infinity;
+      let stop = false;
       for (const it of items) {
         learnNames(opts.names, it);
         const m = toContextMessage(it, me, opts.names);
@@ -457,9 +488,13 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
           continue;
         }
         // The bot's own messages are left out; one a topic hangs under is handed back apart (s14c).
-        take(m, own);
+        if (take(m, own) && opts.stopWhen?.(m)) stop = true;
       }
-      if (!data?.has_more || !data.page_token || items.length === 0) return done(true);
+      if (!data?.has_more || !data.page_token) return done(true);
+      // An empty page that says there is more: a weave stops there as before; a wake count reads on, as it has not
+      // reached the start, and ends incomplete at the page cap or the deadline.
+      if (items.length === 0 && !opts.mentions) return done(true);
+      if (stop) return done(true);
       if (stopAt > 0 && oldest <= stopAt) return done(true);
       if (opts.enough && found.length >= opts.enough) return done(false);
       pageToken = data.page_token;
@@ -479,6 +514,20 @@ function where(c: Container): Record<string, string> {
 
 function failedPull(): ThreadPull {
   return { messages: [], ok: false, complete: false };
+}
+
+const ABORTED = Symbol('aborted');
+
+/** `p`, or {@link ABORTED} as soon as `signal` is aborted; the listener goes when either settles. */
+function abortable<T>(p: Promise<T>, signal: AbortSignal | undefined): Promise<T | typeof ABORTED> {
+  if (!signal) return p;
+  if (signal.aborted) return Promise.resolve(ABORTED);
+  let onAbort = (): void => undefined;
+  const aborted = new Promise<typeof ABORTED>((resolve) => {
+    onAbort = () => resolve(ABORTED);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  return Promise.race([p, aborted]).finally(() => signal.removeEventListener('abort', onAbort));
 }
 
 /** The most recent `limit` messages to weave (oldest→newest in, same order
@@ -531,6 +580,8 @@ function toContextMessage(item: RawMsgItem, me: Me, names?: NameBook): ContextMe
   const mine = me.openId ? (item.mentions ?? []).filter((m) => m.id === me.openId) : [];
   const others = item.mentions?.filter((m) => !mine.includes(m));
   const drop = mine.map((m) => m.key).filter((k): k is string => Boolean(k));
+  const mentionIds = (item.mentions ?? []).filter((m) => m.id && isOpenId(m.id_type)).map((m) => m.id as string);
+  const s = item.sender;
   return {
     messageId: item.message_id ?? '',
     senderName: name,
@@ -542,6 +593,11 @@ function toContextMessage(item: RawMsgItem, me: Me, names?: NameBook): ContextMe
     ...(item.mentions?.length || item.body?.content?.includes('@_all') ? { named: true as const } : {}),
     ...(item.msg_type === 'interactive' && isStreamingCard(item.body?.content) ? { streaming: true } : {}),
     ...(item.thread_id ? { threadId: item.thread_id } : {}),
+    ...(mentionIds.length ? { mentionIds } : {}),
+    ...(item.msg_type ? { msgType: item.msg_type } : {}),
+    ...(s?.sender_type === 'app' && s.id_type === 'app_id' && s.id ? { senderAppId: s.id } : {}),
+    ...(item.parent_id ? { parentId: item.parent_id } : {}),
+    ...(item.root_id ? { rootId: item.root_id } : {}),
   };
 }
 
@@ -572,7 +628,7 @@ export async function fetchTopicOpener(
   try {
     const res = await withDeadline(channel.rawClient.im.v1.message.list({
       params: { container_id_type: 'thread', container_id: threadId, sort_type: 'ByCreateTimeAsc', page_size: 2, with_sender_name: true },
-    }), OPENER_DEADLINE_MS);
+    }), OPENER_DEADLINE_MS, 'topic-opener');
     if (!res) return failed('timeout');
     if (typeof res.code === 'number' && res.code !== 0) return failed(`code=${res.code}`);
     const item = ((res.data as { items?: RawMsgItem[] } | undefined)?.items ?? []).find((it) => it.message_id !== rootId);
@@ -829,7 +885,10 @@ export function sanitizeContext(s: string, maxLen: number, oneLine: boolean, lin
   out = oneLine ? out.replace(/\s+/g, ' ') : out.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
   out = out.trim();
   if (out.length <= maxLen) return out;
-  const cut = links ? linkCut(out, maxLen) : maxLen;
+  let cut = links ? linkCut(out, maxLen) : maxLen;
+  // Not between the two halves of a surrogate pair (an emoji): a lone half is not text (s27a-0).
+  const before = out.charCodeAt(cut - 1);
+  if (cut > 0 && cut < out.length && before >= 0xd800 && before <= 0xdbff) cut--;
   return cut < out.length ? `${out.slice(0, cut)}…` : out;
 }
 
@@ -1109,8 +1168,8 @@ function whoText(who: Who | undefined): string {
   return name || '某人';
 }
 
-/** Without parentheses, a person's name cannot pass for "名字（bot）". */
-function personName(s: string): string {
+/** Without parentheses, a person's name cannot pass for "名字（bot）". One line, at most 40. */
+export function personName(s: string): string {
   return label(s.replace(/[（）()]/g, ''), 40);
 }
 
@@ -1174,16 +1233,21 @@ const LATE_NOTE_MS = 2 * 60_000;
  * Returns `text` unchanged when there's no usable open_id (nothing to assert).
  * sanitizeContext is the single boundary for the display name — it is
  * uploader-influenced, so oneLine=true collapses it so a crafted name can't
- * forge a fenced block (mirrors weaveQuote / weaveRecordBlock).
+ * forge a fenced block (mirrors weaveQuote / weaveRecordBlock). `bot`: the
+ * sender is another bot, written `名字（bot）` as the record block does.
  */
 export function weaveSender(
   text: string,
   sender: { senderId?: string; senderName?: string },
   lateMs = 0,
+  opts: { bot?: boolean } = {},
 ): string {
   const id = (sender.senderId ?? '').trim();
   if (!id) return text;
-  const who = sanitizeContext(sender.senderName ?? '', SENDER_NAME_MAX, true) || '某用户';
+  // Another bot (s27a-0): as a record block's line names it, without parentheses and then 「（bot）」.
+  const who = opts.bot
+    ? whoText({ kind: 'bot', name: sender.senderName })
+    : sanitizeContext(sender.senderName ?? '', SENDER_NAME_MAX, true) || '某用户';
   // Inside the block (still ending in "）]") so session-title strips it with the block.
   const late = lateMs > LATE_NOTE_MS ? `（这条消息 ${Math.round(lateMs / 60_000)} 分钟前发出，bot 断线重连后才收到）` : '';
   const block = `[本条消息的发信人：${who}（open_id：${id}）${late}]`;

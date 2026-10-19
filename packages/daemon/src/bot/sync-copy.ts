@@ -77,7 +77,7 @@ export function createSyncCopyGate(channel: LarkChannel, lookupMs = SYNC_LOOKUP_
       log.info('intake', 'sync-lookup', { timeoutMs: lookupMs });
     }
     try {
-      const res = await withDeadline(channel.rawClient.im.v1.message.get({ path: { message_id: messageId } }), lookupMs);
+      const res = await withDeadline(channel.rawClient.im.v1.message.get({ path: { message_id: messageId } }), lookupMs, 'sync-lookup');
       if (!res) return failed('timeout');
       if (typeof res.code === 'number' && res.code !== 0) return failed(`code=${res.code}`);
       failLogged = false;
