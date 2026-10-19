@@ -209,6 +209,17 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 |---|---|---|
 | [report](2026-10-18-ui-foundation/report.md) | 去重后的 55 条问题（F01 到 F55）、建议的 u01 到 u10、叫法表草稿、要 owner 定的 11 件事（D1 到 D11）、带行为改动的条目（第 1 节 G）、留给最后一轮的 | v1-plan 记着的"会话方式叫法不一样"已核对为一致；死样式的行数以删前的 CSS coverage 为准 |
 
+## 2026-10-19 第一版实验 e03、e04（Mac）
+
+`2026-10-19-mac-spikes/`，基于 `main` 的 `84162db`。`docs/v1-plan.md` 第 4 节里要 macOS 沙箱的两个实验，在 owner 的 Mac 上由 Mac 上的 Codex 实测。Claude 用 Agent SDK 0.3.296（自带 CLI 2.1.296），Codex 用当前版本和最低版本 0.156.1。每份末尾有核实记录。
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [e03](2026-10-19-mac-spikes/e03.md) | Claude 的只读、读写档换成 `default`、`acceptEdits` 加 macOS 沙箱以后，哪些请求走到 `canUseTool`；关网、开网有没有域名名单、WebFetch、WebSearch；加载和不加载用户设置的差别；今天的 `bypassPermissions` 加沙箱能不能 `curl` 出去、写 `/tmp` | Mac 上在测。用户设置是 owner 的 |
+| [e03b](2026-10-19-mac-spikes/e03b.md) | 只读档用 `denyRead` 加 `allowRead` 限读，bot 目录写不写得进；完全访问档下的 ask、deny 规则；读写档下各根里两家的配置文件挡不挡得住 | Mac 上在测。删除关键目录没实测，只读了代码 |
+| [e04](2026-10-19-mac-spikes/e04.md) | Codex 的只读、读写、关网、完全访问下，会话的 shell 能不能连 127.0.0.1 的 TCP 和 Unix socket，环境变量传不传得进，同版本 Electron 能不能以 node 方式跑，`.git` 只读时能不能 `git commit`，第二个根能不能写 | Mac 上在测。打包版 app 没测，用替身 |
+| [e04b](2026-10-19-mac-spikes/e04b.md) | 同一个探针在 Claude 沙箱里：连本机、环境变量、Electron、git 提交、附加目录能不能写 | Mac 上在测。打包版 app 没测，用替身 |
+
 ## 补充
 
 codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次。`codex mcp list` 里的 `cua_repl` 来自内置插件 `unified-computer-use@openai-bundled`，就是原生 Computer Use；显示为 disabled 的 `computer-use` 是旧通道。经 Paseo 调用时，Mac 锁屏会失败（getpaseo/paseo#3346），`full-access` 模式会自动批准打开应用。process 报告里的相关说法和这里一致。
