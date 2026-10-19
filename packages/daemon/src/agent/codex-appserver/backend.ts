@@ -349,7 +349,7 @@ class CodexThread implements AgentThread {
         activeTurnId = undefined;
       }
     }
-    return { events: gen(), askPending: id => requests.isPending(id), respondToAsk: (id, resolution) => requests.respond(id, resolution), turnId: () => activeTurnId, lastActivity: () => lastActivityAt };
+    return { events: gen(), askPending: id => requests.isPending(id), stopSubagent: (id) => self.stopSubagent(id), respondToAsk: (id, resolution) => requests.respond(id, resolution), turnId: () => activeTurnId, lastActivity: () => lastActivityAt };
   }
 
   runGoal(objective: string): AgentRun {
@@ -468,7 +468,7 @@ class CodexThread implements AgentThread {
         self.currentTurnId = undefined;
       }
     }
-    return { events: gen(), askPending: id => requests.isPending(id), respondToAsk: (id, resolution) => requests.respond(id, resolution), turnId: () => self.currentTurnId, lastActivity: () => lastActivityAt };
+    return { events: gen(), askPending: id => requests.isPending(id), stopSubagent: (id) => self.stopSubagent(id), respondToAsk: (id, resolution) => requests.respond(id, resolution), turnId: () => self.currentTurnId, lastActivity: () => lastActivityAt };
   }
 
   private registerChild(id: string, child: Child, task = ''): AgentEvent[] {
@@ -569,6 +569,13 @@ class CodexThread implements AgentThread {
       expectedTurnId,
       input: toUserInput(input),
     }, 30_000);
+  }
+
+  async stopSubagent(id: string): Promise<void> {
+    const child = this.children.get(id);
+    if (!child?.running) throw new Error('这个子 agent 已经结束');
+    if (!child.turnId) throw new Error('这个子 agent 还没开始回合');
+    await this.client.request('turn/interrupt', { threadId: id, turnId: child.turnId });
   }
 
   async abort(turnId: string): Promise<void> {

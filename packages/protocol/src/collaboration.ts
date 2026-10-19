@@ -25,6 +25,7 @@ export const collaborationRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("resume"), ...target, sessionId, backend: z.string().min(1).max(100) }).strict(),
   z.object({ action: z.literal("startGoal"), ...sessionTarget, objective: z.string().trim().min(1).max(4000) }).strict(),
   z.object({ action: z.literal("stop"), ...sessionTarget, runId: z.string().min(1).max(256) }).strict(),
+  z.object({ action: z.literal("stopSubagent"), ...sessionTarget, runId: z.string().min(1).max(256), subagentId: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("endGoal"), ...sessionTarget, runId: z.string().min(1).max(256) }).strict(),
   z.object({ action: z.literal("reminder"), ...sessionTarget, runId: z.string().min(1).max(256), requested: z.boolean() }).strict(),
   z.object({ action: z.literal("usage"), force: z.boolean() }).strict(),
@@ -80,7 +81,7 @@ const usageBundle = z.object({
 export const collaborationReplySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("project"), project: projectRecordSchema }),
   z.object({ kind: z.literal("history"), sessions: z.array(boundSession), threads: z.array(resumableThread), backend: z.string(), threadsError: z.string().optional() }),
-  z.object({ kind: z.literal("context"), threadId, usage: z.object({ used: z.number(), window: z.number().nullable() }).nullable(), run: z.object({ id: z.string(), goal: z.boolean(), canStop: z.boolean(), canEndGoal: z.boolean(), canRemind: z.boolean(), reminderRequested: z.boolean() }).nullable() }),
+  z.object({ kind: z.literal("context"), threadId, usage: z.object({ used: z.number(), window: z.number().nullable() }).nullable(), run: z.object({ id: z.string(), goal: z.boolean(), canStop: z.boolean(), canEndGoal: z.boolean(), canRemind: z.boolean(), reminderRequested: z.boolean(), subagents: z.array(z.object({ id: z.string(), name: z.string(), task: z.string(), status: z.enum(["running", "completed", "failed", "stopped"]), stoppable: z.boolean() })).optional() }).nullable() }),
   z.object({ kind: z.literal("usage"), data: usageBundle }),
   z.object({ kind: z.literal("applied"), project: projectRecordSchema.optional(), threadId: threadId.optional(), messageId: z.string().optional(), groupEffect: z.enum(["left", "transferred", "failed"]).optional(), warning: z.string().optional(), message: z.string().optional() }),
   z.object({ kind: z.literal("opened") }),
