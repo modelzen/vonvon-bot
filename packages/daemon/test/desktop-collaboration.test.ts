@@ -606,8 +606,10 @@ it('captures real bot-added events for desktop while retaining DM binding and cl
   try {
     await app.onBotAddedToChat({ chatId: 'oc_nonadmin', operator: { openId: 'ou_guest' } });
     await app.onBotAddedToChat({ chatId: 'oc_demo', operator: { openId: 'ou_owner' } });
-    expect(await readPendingGroups(file)).toEqual([]);
-    expect(fixture.send).not.toHaveBeenCalled();
+    await vi.waitFor(async () => expect(await readPendingGroups(file)).toEqual([expect.objectContaining({ chatId: 'oc_nonadmin', operator: 'ou_guest', state: 'ready' })]));
+    expect(fixture.send).toHaveBeenCalledWith(channel, 'ou_owner', expect.any(Object), undefined, false, 'open_id');
+    await app.onBotRemovedFromChat('oc_nonadmin');
+    fixture.send.mockClear();
     await app.onBotAddedToChat({ chatId: 'oc_new_event', operator: { openId: 'ou_owner' } });
     await vi.waitFor(async () => expect(await readPendingGroups(file)).toEqual([
       expect.objectContaining({ chatId: 'oc_new_event', operator: 'ou_owner', state: 'ready', name: 'New research group', addedAt: expect.any(Number) }),

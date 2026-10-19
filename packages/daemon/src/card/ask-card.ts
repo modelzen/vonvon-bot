@@ -1,7 +1,10 @@
 import { z } from 'zod';
-import type { AskAnswer, AskRequest } from '../agent/types';
+import type { AskAnswer, AskChoiceAnswer, AskRequest } from '../agent/types';
 import { keepAts } from './at-guard';
-import { actions, button, card, form, md, multiSelectMenu, note, selectMenu, submitButton, type ActionValue, type CardElement, type CardObject } from './cards';
+import { actions, button, card, form, input as textInput, md, multiSelectMenu, note, selectMenu, submitButton, type ActionValue, type CardElement, type CardObject } from './cards';
+
+// Feishu element IDs allow only letters, digits and underscores (20 characters max).
+export const ASK_CONTROLS_EID = 'ask_controls';
 
 export type AskCardState =
   | { kind: 'pending' }
@@ -9,6 +12,7 @@ export type AskCardState =
   | { kind: 'timed-out' }
   | { kind: 'stopped' }
   | { kind: 'unavailable'; reason: 'turn-ended' | 'unavailable' }
+  // Restarted old cards are healed by replacing their controls in s33c.
   | { kind: 'expired'; reason: 'restart' };
 
 export type AskSubmissionResult =
@@ -51,16 +55,25 @@ export function parseAskSubmission(input: { request: AskRequest; value: unknown;
     return invalid;
   }
   if (decision !== 'submit') return invalid;
-  if (formValue === undefined) return empty;
+  const missingAnswer: AskSubmissionResult = request.questions.every(q => q.selection === 'text')
+    ? { ok: false, reason: 'empty', message: '请填写回答' } : empty;
+  if (formValue === undefined) return missingAnswer;
   if (formValue === null || typeof formValue !== 'object' || Array.isArray(formValue)) return invalid;
   const fields = formSchema.safeParse(formValue);
   if (!fields.success) return invalid;
-  const names = new Set(request.questions.map((_, index) => `q${index}`));
+  const names = new Set(request.questions.flatMap((q, index) =>
+    q.selection !== 'text' && q.other ? [`q${index}`, `q${index}_other`] : [`q${index}`]));
   if (Object.keys(formValue).some(name => !names.has(name))) return invalid;
-  const answers: { questionId: string; selected: [string, ...string[]] }[] = [];
+  const answers: AskChoiceAnswer[] = [];
   let missing = false;
   for (const [index, question] of request.questions.entries()) {
     const raw = fields.data[`q${index}`];
+    const typed = question.selection === 'text' ? raw : question.other ? fields.data[`q${index}_other`] : undefined;
+    if (typed !== undefined && typeof typed !== 'string') return invalid;
+    const text = typeof typed === 'string' ? typed.trim() : '';
+    if (text.length > 1000) return invalid;
+    if (text) { answers.push({ questionId: question.id, text }); continue; }
+    if (question.selection === 'text') { missing = true; continue; }
     if (raw === undefined || raw === '' || (Array.isArray(raw) && raw.length === 0)) {
       missing = true;
       continue;
@@ -76,13 +89,13 @@ export function parseAskSubmission(input: { request: AskRequest; value: unknown;
     if (new Set(selected).size !== selected.length || selected.some(id => !validIds.has(id))) return invalid;
     answers.push({ questionId: question.id, selected: [first, ...rest] });
   }
-  if (missing) return empty;
+  if (missing) return missingAnswer;
   const [first, ...rest] = answers;
-  if (!first) return empty;
+  if (!first) return missingAnswer;
   return { ok: true, answer: { kind: 'choices', answers: [first, ...rest] } };
 }
 
-function decisionLabel(answer: Exclude<AskAnswer, { kind: 'choices' }>): string {
+function decisionLabel(answer: Exclude<AskAnswer, { kind: 'choices' | 'text' }>): string {
   switch (answer.decision) {
     case 'proceed': return '按这个方案做';
     case 'explain': return '不行，我来说';
@@ -94,6 +107,13 @@ function decisionLabel(answer: Exclude<AskAnswer, { kind: 'choices' }>): string 
 
 /** Revalidate terminal results too, so a mismatched request cannot display a false answer. */
 function answerSummary(request: AskRequest, answer: AskAnswer): string {
+  const mismatch = () => new Error('Answer does not match ask request');
+  const excerpt = (text: string) => text.length > 200 ? `${text.slice(0, 200)}…` : text;
+  if (answer.kind === 'text') {
+    const text = answer.text.trim();
+    if (request.kind !== 'choices' || !text || text.length > 4000) throw mismatch();
+    return excerpt(text);
+  }
   let result: AskSubmissionResult;
   if (answer.kind === 'choices') {
     if (request.kind !== 'choices' || answer.answers.length !== request.questions.length) throw new Error('Answer does not match ask request');
@@ -103,19 +123,29 @@ function answerSummary(request: AskRequest, answer: AskAnswer): string {
       if (matches.length !== 1) throw new Error('Answer does not match ask request');
       const item = matches[0];
       if (!item) throw new Error('Answer does not match ask request');
-      fields[`q${index}`] = question.selection === 'single' && item.selected.length === 1 ? item.selected[0] : item.selected;
+      if ('text' in item) {
+        if (question.selection !== 'text' && !question.other) throw mismatch();
+        fields[question.selection === 'text' ? `q${index}` : `q${index}_other`] = item.text;
+      } else {
+        if (question.selection === 'text') throw mismatch();
+        fields[`q${index}`] = question.selection === 'single' && item.selected.length === 1 ? item.selected[0] : item.selected;
+      }
     });
     result = parseAskSubmission({ request, value: callback(request, 'submit'), formValue: fields });
   } else {
     result = parseAskSubmission({ request, value: callback(request, answer.decision), formValue: undefined });
   }
   if (!result.ok) throw new Error('Answer does not match ask request');
+  if (result.answer.kind === 'text') throw mismatch();
   if (result.answer.kind !== 'choices') return decisionLabel(result.answer);
   if (request.kind !== 'choices') throw new Error('Answer does not match ask request');
+  const parsedAnswers = result.answer.answers;
   return request.questions.map(question => {
-    const selected: readonly string[] = result.answer.kind === 'choices'
-      ? result.answer.answers.find(item => item.questionId === question.id)?.selected ?? [] : [];
-    return `${question.title}：${question.options.filter(option => selected.includes(option.id)).map(option => option.label).join('、')}`;
+    const item = parsedAnswers.find(item => item.questionId === question.id);
+    if (!item) throw mismatch();
+    if ('text' in item) return `${question.title}：${excerpt(item.text)}`;
+    if (question.selection === 'text') throw mismatch();
+    return `${question.title}：${question.options.filter(option => item.selected.includes(option.id)).map(option => option.label).join('、')}`;
   }).join('\n');
 }
 
@@ -125,7 +155,7 @@ export function buildAskCard(input: { request: AskRequest; state: AskCardState; 
   if (request.kind === 'choices') {
     for (const question of request.questions) {
       elements.push(md(`**${question.title}**\n${question.detail}`));
-      elements.push(...question.options.map(option => md(`${option.label}${option.description ? `：${option.description}` : ''}`)));
+      if (question.selection !== 'text') elements.push(...question.options.map(option => md(`${option.label}${option.description ? `：${option.description}` : ''}`)));
     }
   } else elements.push(md(request.detail));
   elements.push(md(`回答后：${request.acceptedConsequence}\n\n未回答或拒绝后：${request.declinedConsequence}`));
@@ -133,16 +163,18 @@ export function buildAskCard(input: { request: AskRequest; state: AskCardState; 
   if (state.kind === 'pending') {
     if (request.kind === 'choices') {
       elements.push(form('ask', [
-        ...request.questions.map((question, index) => {
+        ...request.questions.flatMap((question, index) => {
+          if (question.selection === 'text') return [textInput({ name: `q${index}`, placeholder: question.title, inputType: 'multiline_text', rows: 2, maxLength: 1000 })];
           const opts = { name: `q${index}`, placeholder: question.title, options: question.options.map(option => ({ label: option.label, value: option.id })) };
-          return question.selection === 'single' ? selectMenu(opts) : multiSelectMenu(opts);
+          const selector = question.selection === 'single' ? selectMenu(opts) : multiSelectMenu(opts);
+          return question.other ? [selector, textInput({ name: `q${index}_other`, placeholder: '其他（直接打字）', maxLength: 1000 })] : [selector];
         }),
-        submitButton('提交选择', callback(request, 'submit')),
-      ]));
+        submitButton(request.questions.every(q => q.selection === 'text') ? '提交回答' : '提交选择', callback(request, 'submit')),
+      ], ASK_CONTROLS_EID));
     } else if (request.kind === 'confirmation') {
-      elements.push(actions([button('按这个方案做', callback(request, 'proceed'), 'primary'), button('不行，我来说', callback(request, 'explain'))]));
+      elements.push(actions([button('按这个方案做', callback(request, 'proceed'), 'primary'), button('不行，我来说', callback(request, 'explain'))], ASK_CONTROLS_EID));
     } else {
-      elements.push(actions([button('允许这一次', callback(request, 'allow-once'), 'primary'), button('拒绝', callback(request, 'deny'))]));
+      elements.push(actions([button('允许这一次', callback(request, 'allow-once'), 'primary'), button('拒绝', callback(request, 'deny'))], ASK_CONTROLS_EID));
     }
   } else {
     switch (state.kind) {
