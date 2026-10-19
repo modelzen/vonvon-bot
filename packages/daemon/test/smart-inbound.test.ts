@@ -44,7 +44,7 @@ const fake = vi.hoisted(() => ({
     ({ code: 0, data: { items: [{ thread_id: 'omt_opened' }] as Array<Record<string, unknown>> } })),
   list: vi.fn(),
   request: vi.fn(),
-  reply: vi.fn(async () => ({ code: 0, data: { message_id: 'om_reminder' } })),
+  reply: vi.fn(async (_req: { path: { message_id: string }; data: { msg_type: string; content: string; reply_in_thread?: boolean } }) => ({ code: 0, data: { message_id: 'om_reminder' } })),
   // One id per emoji, so the test sees which reaction went.
   react: vi.fn(async (req: { data: { reaction_type: { emoji_type: string } } }) => ({ data: { reaction_id: `r_${req.data.reaction_type.emoji_type}` } })),
   unreact: vi.fn(async () => ({})),
@@ -55,6 +55,7 @@ const fake = vi.hoisted(() => ({
   /** Each run card's create arguments, and the frames cards were finalized with. */
   cards: [] as unknown[][],
   finals: [] as unknown[],
+  finalOk: true,
   liveCards: [] as { id: number; card: unknown }[],
   bots: '1',
   judge: vi.fn(),
@@ -90,7 +91,7 @@ vi.mock('../src/card/run-card-stream', () => ({
     async create(...args: unknown[]) { fake.cards.push(args); this.id = fake.cards.length; return `card_${this.id}`; }
     streamCoalesced(_channel: unknown, card: unknown) { fake.liveCards.push({ id: this.id, card }); }
     async updateCard(_channel: unknown, card: unknown) { fake.liveCards.push({ id: this.id, card }); return true; }
-    async finalizeCard(_channel: unknown, card: unknown) { fake.finals.push(card); return true; }
+    async finalizeCard(_channel: unknown, card: unknown) { fake.finals.push(card); return fake.finalOk; }
     getCardId() { return 'card'; }
     async drain() {}
     async settleImages() { return new Map(); }
@@ -170,6 +171,9 @@ beforeEach(() => {
   fake.events = undefined;
   fake.cards = [];
   fake.finals = [];
+  fake.finalOk = true;
+  fake.reply.mockReset();
+  fake.reply.mockResolvedValue({ code: 0, data: { message_id: 'om_reminder' } });
   fake.liveCards = [];
   fake.bots = '1';
   cfg.preferences.completionReminder = { mode: 'manual' };
@@ -1074,5 +1078,119 @@ describe('judge usage wiring (s28b)', () => {
       await vi.waitFor(() => expect(JSON.parse(readFileSync(file, 'utf8')).days[localDay(Date.now())]).toEqual({ 'llm:codex-appserver': 1 }), { timeout: 2500 });
       expect(done).toBe(false);
     } finally { pending.resolve(); await shutdown; rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe('bot handoffs (s27b)', () => {
+  const bots = [{ app_id: 'cli_other', member_id: 'ou_other', name: '小P' }, { app_id: 'cli_审', member_id: 'ou_审', name: '小审' }];
+  const answers = (text: string) => { fake.events = async function* () { yield { type: 'text', itemId: 'a', text }; yield { type: 'done', turnId: 'turn-fixture' }; }; };
+  const replies = (type = 'text') => fake.reply.mock.calls.map(([req]) => req).filter(req => req.data.msg_type === type);
+  const textOf = (): string => JSON.parse(replies()[0]!.data.content).text;
+  const finalText = () => JSON.stringify(fake.finals.at(-1));
+  const landed = async () => { await vi.waitFor(() => expect(fake.log.info.mock.calls.some(c => c[1] === 'final')).toBe(true)); await settle(); };
+  const handoff = (fields: object) => expect(fake.log.info).toHaveBeenCalledWith(expect.any(String), 'handoff', expect.objectContaining(fields));
+  async function turn(text = '@小审 请审一下。', place: 'reply' | 'main' | 'topic' = 'reply') {
+    answers(text); const m = says('请写方案', { at: true, ...(place === 'reply' ? { thread: 'omt_handoff' } : {}) });
+    await send(m); if (place !== 'reply') await decide(m, result(place)); await landed();
+  }
+  async function botTurn(text: string) {
+    answers(text); const m = says('请修改', { at: true, thread: 'omt_handoff' });
+    fake.list.mockResolvedValue({ code: 0, data: { items: [{ message_id: idOf(m), create_time: m.create_time, msg_type: 'text', body: { content: m.content }, sender: { id: 'cli_other', id_type: 'app_id', sender_type: 'app', open_bot_id: 'ou_other', sender_name: '小P' } }], has_more: false } });
+    await send(m, { openId: 'ou_other', type: 'app', name: '小P' }); await decide(m, result('reply')); await landed();
+  }
+  beforeEach(() => { fake.request.mockResolvedValue({ code: 0, data: { bots } }); });
+
+  it('24: finalizes before a topic handoff, then reminds the human separately', async () => {
+    cfg.preferences.completionReminder = { mode: 'always' };
+    fake.reply.mockImplementation(async () => { expect(fake.finals).toHaveLength(1); expect(finalText()).not.toContain('→ 想 @'); return { code: 0, data: { message_id: 'om_reply' } }; });
+    await turn('方案在上面。\n@小审 请审一下。');
+    expect(fake.reply.mock.calls.map(([req]) => req.data.msg_type)).toEqual(['text', 'post']);
+    expect(replies()[0]).toMatchObject({ path: { message_id: 'card_1' }, data: { reply_in_thread: true } });
+    expect(textOf()).toBe('<at user_id="ou_审">小审</at> 请审一下。');
+    expect(replies('post')[0]!.data.content).toContain('ou_owner'); expect(replies('post')[0]!.data.content).not.toContain('ou_审'); handoff({ sent: true });
+  });
+  it.each(['main', 'topic'] as const)('25/25a: main-area mention judged %s wires smart handoffs', async place => {
+    await turn('@小审 请审一下。', place); expect(replies()).toHaveLength(1); expect(replies()[0]!.data.reply_in_thread).toBe(place === 'topic');
+  });
+  it('26: supplies context for an empty sentence', async () => { await turn('@小审'); expect(textOf()).toBe('<at user_id="ou_审">小审</at> 请看上面的回答'); });
+  it('27: sends one message for multiple recipients', async () => {
+    await turn('@小审 @小P 你们看看'); expect(replies()).toHaveLength(1); expect(textOf()).toBe('<at user_id="ou_审">小审</at> <at user_id="ou_other">小P</at> 你们看看');
+  });
+  it.each(['throw', 'code'] as const)('28/29: a failed handoff (%s) adds a grey footnote and allows reminders', async failure => {
+    cfg.preferences.completionReminder = { mode: 'always' };
+    fake.reply.mockImplementation(async req => { if (req.data.msg_type === 'text') { if (failure === 'throw') throw new Error('send failed'); return { code: 230001, data: { message_id: '' } }; } return { code: 0, data: { message_id: 'om_reminder' } }; });
+    await turn(); expect(fake.finals).toHaveLength(2); expect(finalText()).toContain("<font color='grey'>→ 想 @ 小审（bot），没发出：发送失败</font>");
+    expect(replies('post')).toHaveLength(1); handoff({ sent: false, why: 'send-failed', ...(failure === 'code' ? { code: 230001 } : {}) });
+  });
+  it('30: timeout reports unknown delivery and ignores late success', async () => {
+    const gate = deferred<{ code: number; data: { message_id: string } }>(); fake.reply.mockImplementation(() => gate.promise);
+    answers('@小审 请审'); await send(says('请写', { at: true, thread: 'omt_handoff' })); await vi.waitFor(() => expect(replies()).toHaveLength(1));
+    try {
+      await vi.waitFor(() => expect(fake.finals).toHaveLength(2), { timeout: 11_000, interval: 50 });
+      expect(finalText()).toContain('没收到发送结果：超时'); handoff({ sent: 'unknown', why: 'timeout' });
+      gate.resolve({ code: 0, data: { message_id: 'om_late' } }); await settle(); expect(fake.finals).toHaveLength(2);
+    } finally { gate.resolve({ code: 0, data: { message_id: 'om_late' } }); }
+  }, 15_000);
+  it('31: failed final card delivery prevents handoff', async () => { fake.finalOk = false; await turn(); expect(replies()).toEqual([]); expect(fake.finals).toHaveLength(1); handoff({ why: 'finalize-failed' }); });
+  it('32: bot-started turns send exactly one handoff with no reminder in always mode', async () => {
+    cfg.preferences.completionReminder = { mode: 'always' }; await botTurn('改好了。@小P 请再看一遍。');
+    expect(fake.reply).toHaveBeenCalledOnce(); expect(textOf()).toBe('<at user_id="ou_other">小P</at> 请再看一遍。'); expect(replies('post')).toEqual([]);
+    expect(fake.log.info.mock.calls.some(c => c[1] === 'completion-reminder')).toBe(false); handoff({ sent: true });
+  });
+  it('32a: bot-started answers without @ send nothing', async () => { cfg.preferences.completionReminder = { mode: 'always' }; await botTurn('修改好了。'); expect(fake.reply).not.toHaveBeenCalled(); });
+  it('33: stopped partial answers do not hand off', async () => {
+    const gate = deferred<void>(); fake.events = async function* () { yield { type: 'text', itemId: 'a', text: '@小审 请审' }; await gate.promise; yield { type: 'done', turnId: 'turn-fixture' }; };
+    await send(says('请写', { at: true, thread: 'omt_handoff' })); await vi.waitFor(() => expect(fake.liveCards.length).toBeGreaterThan(0));
+    const stopping = orchestrator.dispatcher.handle({ messageId: 'card_1', chatId: CHAT, operator: { openId: 'ou_owner' }, action: { value: { a: 'run.stop', m: 'card_1' } } } as never);
+    await settle(); gate.resolve(); await stopping; await landed();
+    expect(fake.log.info.mock.calls.some(c => c[1] === 'final' && c[2]?.terminal === 'interrupted')).toBe(true); expect(replies()).toEqual([]); expect(finalText()).not.toContain('→ 想 @');
+  });
+  it('34: failed partial answers do not hand off', async () => {
+    fake.events = async function* () { yield { type: 'text', itemId: 'a', text: '@小审 请审' }; yield { type: 'error', message: 'boom', willRetry: false }; };
+    await send(says('请写', { at: true, thread: 'omt_handoff' })); await landed(); expect(replies()).toEqual([]); expect(finalText()).not.toContain('→ 想 @');
+  });
+  it('35: rule groups keep @ names as ordinary answer text', async () => { fake.project = { ...base, smart: false }; await turn(); expect(replies()).toEqual([]); expect(finalText()).not.toContain('→ 想 @'); });
+  it.each(['@张三 请看', '@小码 请看'])('36/37: unknown and self names stay text: %s', async text => { await turn(text); expect(replies()).toEqual([]); expect(finalText()).not.toContain('→ 想 @'); });
+  it('38: unavailable roster causes no speculative footnote', async () => {
+    fake.request.mockRejectedValue(new Error('unavailable')); await turn(); expect(replies()).toEqual([]); expect(finalText()).not.toContain('→ 想 @'); handoff({ why: 'no-roster' });
+  });
+  it.each([false, true])('38a/b: ambiguous names add a footnote and distinct recipients still send (%s)', async mixed => {
+    fake.request.mockResolvedValue({ code: 0, data: { bots: [...bots, { app_id: 'cli_审b', member_id: 'ou_审b', name: '小审' }, { app_id: 'cli_丁', member_id: 'ou_丁', name: '小丁' }] } });
+    await turn(mixed ? '@小审 @小丁 看' : '@小审 请审'); expect(fake.finals).toHaveLength(2);
+    expect(finalText()).toContain("<font color='grey'>→ 想 @ 小审（bot），没交接：群里不止一个叫 小审 的 bot</font>"); expect(finalText()).not.toContain('ou_审'); expect(finalText()).not.toContain('没发出');
+    expect(replies()).toHaveLength(mixed ? 1 : 0); if (mixed) { expect(textOf()).toBe('<at user_id="ou_丁">小丁</at> 看'); handoff({ sent: true, ambiguous: 1 }); } else handoff({ why: 'ambiguous', names: 1 });
+  });
+  it('39: shutdown releases a pending handoff without updating the card again', async () => {
+    const gate = deferred<{ code: number; data: { message_id: string } }>(); fake.reply.mockImplementation(() => gate.promise);
+    answers('@小审 请审'); await send(says('请写', { at: true, thread: 'omt_handoff' })); await vi.waitFor(() => expect(replies()).toHaveLength(1));
+    await Promise.race([orchestrator.shutdown(), new Promise((_, reject) => setTimeout(() => reject(new Error('shutdown blocked')), 3000))]);
+    expect(fake.finals).toHaveLength(1); handoff({ sent: 'unknown', why: 'shutdown' }); gate.resolve({ code: 0, data: { message_id: 'om_late' } });
+  });
+  it('a private chat never hands off or adds footnotes', async () => {
+    answers('@小审 请审');
+    await send({ ...says('请写', { at: true }), chat_type: 'p2p' }); await landed();
+    expect(replies()).toEqual([]); expect(finalText()).not.toContain('→ 想 @');
+  });
+  it('a reply without a result code is failed delivery', async () => {
+    fake.reply.mockImplementation(async () => JSON.parse('{"data":{"message_id":"om_no_code"}}'));
+    await turn(); expect(fake.finals).toHaveLength(2);
+    expect(finalText()).toContain('没发出：发送失败'); handoff({ sent: false, why: 'send-failed' });
+  });
+  it('shutdown during an ambiguous roster lookup never sends or repaints', async () => {
+    const gate = deferred<unknown>(); fake.request.mockImplementation(() => gate.promise);
+    answers('@小审 请审'); await send(says('请写', { at: true, thread: 'omt_handoff' }));
+    await vi.waitFor(() => expect(fake.finals).toHaveLength(1));
+    await vi.waitFor(() => expect(fake.request).toHaveBeenCalled());
+    const stopping = orchestrator.shutdown();
+    gate.resolve({ code: 0, data: { bots: [...bots, { app_id: 'cli_审b', member_id: 'ou_审b', name: '小审' }] } });
+    await stopping; await settle(); expect(fake.finals).toHaveLength(1); expect(replies()).toEqual([]);
+    expect(finalText()).not.toContain('→ 想 @'); handoff({ why: 'shutdown' });
+  });
+  it('40: queued turns hand off separately on their own cards', async () => {
+    fake.project = { ...base, pendingPolicy: 'queue' }; const gate = deferred<void>(); let runs = 0;
+    fake.events = async function* () { if (++runs === 1) await gate.promise; yield { type: 'text', itemId: 'a', text: '@小审 请审' }; yield { type: 'done', turnId: 'turn-fixture' }; };
+    await send(says('第一轮', { at: true, thread: 'omt_handoff' })); await vi.waitFor(() => expect(fake.inputs).toHaveLength(1)); await send(says('第二轮', { at: true, thread: 'omt_handoff' }));
+    await vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued', expect.anything())); gate.resolve(); await vi.waitFor(() => expect(replies()).toHaveLength(2));
+    expect(replies().map(req => req.path.message_id)).toEqual(['card_1', 'card_2']);
   });
 });
