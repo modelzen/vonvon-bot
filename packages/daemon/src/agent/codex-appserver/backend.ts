@@ -345,6 +345,7 @@ class CodexThread implements AgentThread {
         }
       } finally {
         requests.close();
+        for (const child of self.children.values()) child.stopRequested = false;
         activeTurnId = undefined;
       }
     }
@@ -462,6 +463,7 @@ class CodexThread implements AgentThread {
         }
       } finally {
         requests.close();
+        for (const child of self.children.values()) child.stopRequested = false;
         await stream.return?.();
         self.currentTurnId = undefined;
       }
@@ -472,6 +474,8 @@ class CodexThread implements AgentThread {
   private registerChild(id: string, child: Child, task = ''): AgentEvent[] {
     const existing = this.children.get(id);
     if (existing) {
+      existing.running = true;
+      existing.closed = false;
       if (child.nickname) existing.nickname = child.nickname;
       if (child.role) existing.role = child.role;
       if (child.parentId) existing.parentId = child.parentId;
