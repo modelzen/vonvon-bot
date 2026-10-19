@@ -92,8 +92,8 @@ export const NOT_REPLIED_TEXT: Record<NotRepliedReason, Text> = {
     next: () => "飞书接口偶尔出错；反复出现时看下面的日志和上面「缺的权限」。",
   },
   "bot-wake-not-allowed": {
-    reason: () => "这个群设了「响应成员」，别的 Bot 的 @ 叫不醒它",
-    next: () => "这是设置的效果。要让 Bot 之间互相 @，在群内设置里清空「响应成员」。",
+    reason: () => "这个群设了「响应成员」，这个 Bot 不在名单上，它的 @ 叫不醒",
+    next: () => "这是设置的效果。要让它能叫醒，把它加进「响应成员」，或者清空名单。",
   },
   "bot-wake-dropped": {
     reason: r => `这条 Bot 的 @ 没处理${r.detail ? `：${r.detail}` : ""}`,
@@ -104,7 +104,7 @@ export const NOT_REPLIED_TEXT: Record<NotRepliedReason, Text> = {
 /** The optional scopes of 3.11 that change what the bot does in a chat, and what is lost without each. */
 export const OPTIONAL_SCOPE_EFFECTS: Record<string, string> = {
   "contact:user.base:readonly": "叫不出群里人的真名",
-  "im:chat:readonly": "认不出话题群；数不出群里几个 Bot，多会话主区的命令要 @；把 Bot 拉进群后不提醒绑定",
+  "im:chat:readonly": "认不出话题群；数不出群里几个 Bot，多会话主区的命令要 @；把 Bot 拉进群后不提醒绑定；别的 Bot @ 它时数不出叫醒了几次，不会醒",
   "im:message.group_at_msg.include_bot:readonly": "别的 Bot @ 它时收不到",
   "application:application:self_manage": "飞书里的应用管理员不能管这个 Bot",
 };

@@ -31,7 +31,7 @@ export interface AudienceLookups {
 }
 
 /** Whether a message came from a bot (an app), from the raw receive event. */
-export function fromBot(msg: NormalizedMessage): boolean {
+export function fromBot(msg: Pick<NormalizedMessage, 'raw'>): boolean {
   const type = (msg.raw as { sender?: { sender_type?: string } } | undefined)?.sender?.sender_type;
   return type === 'app' || type === 'bot';
 }

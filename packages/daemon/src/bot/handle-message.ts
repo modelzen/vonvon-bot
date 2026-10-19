@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { AskCoordinator, type AskTurn } from './ask-coordinator';
 import { createPendingGroups, pendingGroupsFile } from '../project/pending-groups';
 import { realpath, stat } from 'node:fs/promises';
@@ -32,7 +33,7 @@ import type { NotReplied, NotRepliedReason } from '@vonvon/protocol';
 import type { JudgeDecision, JudgeResult, JudgeVariant } from '../judge/types';
 import { JUDGE_INPUT_LIMITS, oneLine } from '../judge/prompt';
 import { deniedScopeName, errorDetail, fitDetail, reportNotReplied, reportScopeDenied } from './diagnostics';
-import { createDroppedReplies, originOf, type DroppedOrigin } from './restart-dropped';
+import { createDroppedReplies, originFor, originOf, type DroppedOrigin } from './restart-dropped';
 import { catalogById, projectCreatableBackends, visibleCatalog } from '../agent/catalog';
 import {
   DEFAULT_PERMISSION_MODE,
@@ -251,6 +252,7 @@ import { topicTitle, type TopicPerson, type TopicRegistry, type TopicSighting, t
 import { createTopicContext, localBots, personOf, topicQuotes, topicRows, type ChatInfo } from './topic-context';
 import { audienceOf, fromBot, quotedId } from './baselines';
 import {
+  BOT_WAKE_NOTE,
   INITIATIVE_NOTE,
   sessionTitleSourceFromMessage,
   stripBridgeMessageEnvelope,
@@ -309,6 +311,7 @@ import {
 } from './comments';
 import { createGracefulInterrupt, createIdlePause, Semaphore, withIdleTimeout, type IdlePause } from './watchdog';
 import { createBotRoster } from './bot-roster';
+import { BOT_WAKE_CAP, WAKE_PULL_MS, countBotWakes, wakeTables, wakeTriggerText, type WakeTables } from './bot-wake';
 import { createNameBook, fetchChatMembers, resolveNames, withDeadline } from './names';
 
 /** 所有项目群成员的并集（去重）—— admins 加人的候选源（admins 通常是项目相关的人）。
@@ -439,6 +442,11 @@ function backendOptionsFor(mode: PermissionMode): SelectOption[] {
 export function dmCreationId(messageId: string, operator: string, renderToken: unknown): string {
   return createHash('sha256').update(JSON.stringify([messageId, operator, typeof renderToken === 'string' ? renderToken : ''])).digest('hex').slice(0, 32);
 }
+
+const wakeEventSchema = z.object({ sender: z.object({
+  sender_type: z.string().optional(),
+  sender_id: z.object({ open_id: z.string().optional(), app_id: z.string().optional() }).optional(),
+}).optional() });
 
 /** Said when a creation reaches its turn after shutdown began: nothing was sent to Feishu. */
 const CREATION_STOPPING = '后台服务正在关闭，没有建群';
@@ -680,7 +688,7 @@ interface ActiveState {
   /** Set while /compact or /new holds the session with no run: input waits here and
    * goes through intake again once the command is done (s15). `early` tells one
    * sent before a /new that swapped ({@link newAt}) instead. */
-  deferred?: { id: string; at?: number; go: () => void; early: () => void; origin: DroppedOrigin }[];
+  deferred?: { id: string; at?: number; go: () => void; early: () => void; origin?: DroppedOrigin }[];
   /** The /new command's send time, once its swap is done: input sent before it belongs to the old session. */
   newAt?: number;
   /** The run's trigger while it waits for a global slot (acquireRunSlot), for a shutdown to keep (s18c). */
@@ -704,10 +712,12 @@ interface TurnExtra {
   retry?: RetryGate;
   /** The smart mode joined in on its own (s25): the agent gets {@link INITIATIVE_NOTE} before the message. */
   initiative?: true;
+  wake?: { n: number; name: string };
 }
 
 /** A smart group's message on its lane (s25). */
 interface SmartItem extends LaneEntry {
+  wake?: true;
   msg: NormalizedMessage;
   variant: JudgeVariant;
   /** The reaction a named message got while it waits on its judgement. */
@@ -718,6 +728,7 @@ interface SmartItem extends LaneEntry {
 
 /** What a smart group's lane decided for a batch (s25). */
 type SmartVerdict =
+  | { kind: 'wake'; n: number; text: string; sender: { openId?: string; name?: string } }
   | { kind: 'judged'; result: JudgeResult }
   /** Answered without a judgement: a named message over the budget, or a topic only its sender talks in (s25b). */
   | { kind: 'direct' }
@@ -1173,7 +1184,8 @@ export function createOrchestrator(
   }
   /** s27a0: no card or markdown post of this bot carries a real `<at>` of a bot; the chat's bot list is read on the
    * first `<at>` there (D/card/at-guard.ts). Rule groups too: a rule bot's card wakes a smart bot just the same. */
-  installAtGuard(channel, createBotRoster(channel, { stop: orStop }));
+  const roster = createBotRoster(channel, { stop: orStop });
+  installAtGuard(channel, roster);
   const acceptedTasks = new Set<Promise<unknown>>();
   const shutdownErrors = new Set<unknown>();
 
@@ -1541,12 +1553,19 @@ export function createOrchestrator(
     noteNotReplied(msg, reason, { place, backendId, detail });
   }
 
+  const hasAudience = (project: Project): boolean => (project.allowedUsers?.length ?? 0) > 0;
+  function isMe(msg: NormalizedMessage): boolean {
+    const sender = wakeEventSchema.safeParse(msg.raw).data?.sender?.sender_id;
+    const own = channel.botIdentity?.openId;
+    return Boolean((own && (msg.senderId === own || sender?.open_id === own)) || (sender?.app_id && sender.app_id === cfg.accounts.app.id));
+  }
+
   // ── the smart mode's intake (s25) ─────────────────────────────────
   /** Judgements by place, off the SDK's per-chat queue (smart-intake.ts). */
   const smartLanes = new SmartLanes<SmartItem, SmartVerdict>({
     judge: judgeSmart,
     // Into the place's session: after the earlier named messages there (design H1).
-    ordered: (v) => v.kind === 'direct' || (v.kind === 'judged' && (v.result.decision === 'main' || v.result.decision === 'reply')),
+    ordered: (v) => v.kind === 'wake' || v.kind === 'direct' || (v.kind === 'judged' && (v.result.decision === 'main' || v.result.decision === 'reply')),
     land: landSmart,
     fail: (error) => log.fail('intake', error, { phase: 'smart-lane' }),
     track: (task) => { void trackTask(task); },
@@ -1572,18 +1591,128 @@ export function createOrchestrator(
     smartLanes.submit(item, over ? { value: { kind: 'direct' } } : undefined);
   }
 
+  function submitWake(msg: NormalizedMessage): void {
+    if (shuttingDown) {
+      log.info('intake', 'bot-wake-dropped', { ref: msg.messageId.slice(-6), why: 'shutdown' });
+      return;
+    }
+    const item: SmartItem = { id: msg.messageId, place: msg.threadId ?? msg.chatId, named: true, wake: true, msg,
+      variant: msg.threadId ? 'topic' : 'mentioned' };
+    item.ack = trackTask(addReaction(msg.messageId, 'THINKING'));
+    smartLanes.submit(item);
+  }
+
   /** Judges the newest message of a batch (the others came while the one before was judged: its context). Never
    * rejects: a lookup that throws answers a named message in the main area, as a failed judgement would. */
   async function judgeSmart(batch: SmartItem[], signal: AbortSignal): Promise<SmartVerdict> {
     const item = batch[batch.length - 1]!;
     try {
+      if (item.wake) return await countWake(item, signal);
       return await judgeItem(item, signal);
     } catch (error) {
+      if (item.wake) {
+        log.fail('intake', error, { phase: 'bot-wake', ref: item.msg.messageId.slice(-6) });
+        noteNotReplied(item.msg, 'bot-wake-failed', { detail: errorDetail(error) });
+        return { kind: 'drop' };
+      }
       log.fail('intake', error, { phase: 'smart-judge', ref: item.msg.messageId.slice(-6) });
       if (!item.named) for (const b of batch) noteNotReplied(b.msg, 'judge-failed', { detail: errorDetail(error) });
       return item.named ? { kind: 'direct' } : { kind: 'drop' };
     }
   }
+
+  async function countWake(item: SmartItem, signal: AbortSignal): Promise<SmartVerdict> {
+    const { msg } = item;
+    const ref = msg.messageId.slice(-6);
+    const gone = (): boolean => shuttingDown || signal.aborted;
+    const dropped = (): SmartVerdict => {
+      if (shuttingDown) log.info('intake', 'bot-wake-dropped', { ref, why: 'shutdown' });
+      return { kind: 'drop' };
+    };
+    const failed = (why: string): SmartVerdict => {
+      log.info('intake', 'bot-wake-failed', { ref, why });
+      noteNotReplied(msg, 'bot-wake-failed', { detail: why });
+      return { kind: 'drop' };
+    };
+    const opts: PullOpts = { before: msg.createTime, keepSelf: true, names, mentions: true,
+      stopWhen: (m) => m.from === 'user', deadlineMs: WAKE_PULL_MS, signal };
+    const [bots, pull] = await Promise.all([
+      orStop(roster.refresh(msg.chatId), undefined),
+      orStop(msg.threadId ? fetchThreadContext(channel, msg.threadId, opts) : fetchChatContext(channel, msg.chatId, opts), undefined),
+    ]);
+    if (gone()) return dropped();
+    if (!bots) return failed('群成员列表读不到');
+    if (!pull?.ok) return failed('历史读不到');
+    const tables = wakeTables(bots);
+    const r = countBotWakes(pull.messages, { messageId: msg.messageId, createTime: msg.createTime },
+      { openId: channel.botIdentity?.openId, appId: cfg.accounts.app.id }, tables, pull.complete);
+    log.info('intake', 'bot-wake', { ref, place: msg.threadId ? 'topic' : 'main', n: r.n, cap: BOT_WAKE_CAP,
+      listed: r.listed, complete: pull.complete, counted: r.counted });
+    if (r.kind === 'failed') return failed(msg.createTime > 0 ? '没读到上一条真人消息' : '触发消息没有时间');
+    if (r.n > BOT_WAKE_CAP) {
+      log.info('intake', 'bot-wake-cap', { ref, n: r.n });
+      noteNotReplied(r.trigger?.senderId ? { ...msg, senderId: r.trigger.senderId } : msg, 'bot-wake-cap');
+      return { kind: 'drop' };
+    }
+    // 正文和发信人在这里定下：落地时不再读飞书。两样要查时并行，合起来最多 3 秒
+    const needText = msg.rawContentType === 'interactive' && !r.trigger?.text.trim();
+    const [fetched, sender] = await Promise.all([
+      needText
+        ? orStop(withDeadline(fetchQuotedMessage(channel, msg.messageId, names), LOOKUP_DEADLINE_MS, 'wake-trigger'), undefined).then((m) => m?.text)
+        : Promise.resolve(undefined),
+      wakeSender(msg, r.trigger, tables),
+    ]);
+    if (gone()) return dropped();
+    return { kind: 'wake', n: r.n, text: wakeTriggerText(msg, r.trigger, fetched), sender };
+  }
+
+  async function wakeSender(msg: NormalizedMessage, trigger: ContextMessage | undefined, tables: WakeTables): Promise<{ openId?: string; name?: string }> {
+    let openId = trigger?.senderId;   // 列表里的 open_bot_id
+    let name = trigger ? (trigger.senderAppId ? tables.byAppId.get(trigger.senderAppId)?.name : undefined) || trigger.senderName : undefined;
+    if (!openId) {
+      const meta = await orStop(fetchMessageMeta(channel, msg.messageId, names, { event: 'wake-sender-lookup-failed', deadlineMs: LOOKUP_DEADLINE_MS }), undefined);
+      openId = meta?.senderId;
+    }
+    if (!openId && msg.senderId.startsWith('ou_')) openId = msg.senderId;
+    if (openId && !name) name = tables.byOpenId.get(openId)?.name || names.peek(openId);
+    return { ...(openId ? { openId } : {}), ...(name ? { name } : {}) };
+  }
+
+
+  async function landWake(item: SmartItem, verdict: Extract<SmartVerdict, { kind: 'wake' }>): Promise<void> {
+    const { msg } = item;
+    const ref = msg.messageId.slice(-6);
+    // Resolve bot identity before landing; only the final text is passed to the agent.
+    const trig: NormalizedMessage = { ...msg, resources: [], senderId: verdict.sender.openId ?? '',
+      senderName: verdict.sender.name ?? msg.senderName };
+    const dropped = (why: string, detail: string): void => {
+      log.info('intake', 'bot-wake-dropped', { ref, why });
+      noteNotReplied(trig, 'bot-wake-dropped', { detail });
+    };
+    if (recalledSkip(msg)) return;
+    if (shuttingDown) { log.info('intake', 'bot-wake-dropped', { ref, why: 'shutdown' }); return; }
+    const project = await getProjectByChatId(msg.chatId);
+    if (!project) { log.info('intake', 'bot-wake-dropped', { ref, why: 'unbound' }); return; }
+    if (project.enabled === false) { noteNotReplied(trig, 'group-disabled'); return; }
+    if (projectMutations.has(msg.chatId)) { dropped('updating', '群正在改设置'); return; }
+    if (resumePublications.has(msg.chatId)) { dropped('resuming', '群正在恢复会话'); return; }
+    if (sessionModeOf(project) !== 'smart') { dropped('rule-mode', '群切成了规则模式'); return; }
+    if (hasAudience(project) && !(verdict.sender.openId && isUserAllowedInProject(cfg, project, verdict.sender.openId))) {
+      log.info('intake', 'bot-wake-not-allowed', { ref });
+      noteNotReplied(trig, 'bot-wake-not-allowed');
+      return;
+    }
+    const ts = turnSession(msg.threadId ?? msg.chatId, project);
+    if (await alreadySeen(msg, ts.sessionKey) || active.get(ts.sessionKey)?.woven?.has(msg.messageId)) {
+      log.info('intake', 'bot-wake-superseded', { ref, at: 'land' });
+      noteNotReplied(trig, 'bot-wake-dropped', { detail: '已随后来的消息进了会话' });
+      return;
+    }
+    if (await refuseFullOnly(trig, project, ts)) return;
+    void trackTask(handleTurn(trig, verdict.text, ts.sessionKey, !msg.threadId, project, ts,
+      { wake: { n: verdict.n, name: verdict.sender.name ?? '' } }).catch((err) => log.fail('intake', err)));
+  }
+
 
   async function judgeItem(item: SmartItem, signal: AbortSignal): Promise<SmartVerdict> {
     const { msg, variant } = item;
@@ -1676,6 +1805,11 @@ export function createOrchestrator(
    * smart and not being changed, and the message did not land already (Rakazo A2).
    */
   async function landVerdict(item: SmartItem, batch: SmartItem[], verdict: SmartVerdict): Promise<void> {
+    if (item.wake && verdict.kind !== 'wake') {
+      if (verdict.kind !== 'drop') noteNotReplied(item.msg, 'bot-wake-failed', { detail: '结果不是叫醒' });
+      return;
+    }
+    if (verdict.kind === 'wake') { if (item.wake) await landWake(item, verdict); return; }
     const { msg, variant } = item;
     const ref = msg.messageId.slice(-6);
     if (verdict.kind === 'drop') return;
@@ -1785,6 +1919,8 @@ export function createOrchestrator(
     if (recalledSkip(msg)) return;
     // No message text (3.5); the ids' last 6 characters match the 状态与诊断 page's 消息尾号.
     log.info('intake', 'recv', {
+      senderType: wakeEventSchema.safeParse(msg.raw).data?.sender?.sender_type,
+      senderIdKind: msg.senderId.startsWith('ou_') ? 'ou_' : msg.senderId.startsWith('cli_') ? 'cli_' : msg.senderId ? 'other' : 'empty',
       chatType: msg.chatType,
       mentionedBot: msg.mentionedBot,
       threadId: msg.threadId ? msg.threadId.slice(-6) : null,
@@ -1808,6 +1944,7 @@ export function createOrchestrator(
     // A smart group's every message from a person may be (s25).
     const smart = project !== undefined && sessionModeOf(project) === 'smart';
     const bot = fromBot(msg);
+    const wakeable = bot && smart && msg.mentionedBot;
     const maybe = !bot && (msg.mentionedBot || Boolean(project && (shouldRespondWithoutMention(project, msg)
       || ((smart || noMentionOf(project)) && quotedId(msg) !== undefined))));
     // A smart group's unnamed message is looked up for a copy in its lane, off this chat's queue (s25).
@@ -1817,23 +1954,37 @@ export function createOrchestrator(
       recent.add(msg.threadId ?? msg.chatId, lineOfMessage(msg, names.peek(msg.senderId) ?? msg.senderName ?? '某人', quotedLine(recent, msg)));
     }
     if (resumePublications.has(msg.chatId)) {
-      await channel.send(msg.chatId, { markdown: '正在恢复历史会话，请完成后重发此消息。' }, { replyTo: msg.messageId });
+      if (bot) { if (wakeable) noteNotReplied(msg, 'bot-wake-dropped', { detail: '群正在恢复会话' }); }
+      else await channel.send(msg.chatId, { markdown: '正在恢复历史会话，请完成后重发此消息。' }, { replyTo: msg.messageId });
       return;
     }
     if (project?.enabled === false) {
-      if (msg.mentionedBot && !bot) noteNotReplied(msg, 'group-disabled');
+      if (msg.mentionedBot && (!bot || smart)) noteNotReplied(msg, 'group-disabled');
       return;
     }
     if (projectMutations.has(msg.chatId)) {
+      if (wakeable) noteNotReplied(msg, 'bot-wake-dropped', { detail: '群正在改设置' });
       // A smart group's chatter is not noted: it was not said to this bot.
       if (!bot && (msg.mentionedBot || (project && !smart && shouldRespondWithoutMention(project, msg)))) noteNotReplied(msg, 'group-updating');
       return;
     }
     if (project && msg.threadId && isChatAllowed(cfg, msg.chatId)) noteTopicMessage(msg);
-    if (!maybe) {
-      if (bot && msg.mentionedBot) log.info('intake', 'reject', { reason: 'bot-sender', ref: msg.messageId.slice(-6) });
+    if (bot) {
+      const ref = msg.messageId.slice(-6);
+      if (!msg.mentionedBot || !project || !smart || isMe(msg)) {
+        if (msg.mentionedBot) log.info('intake', 'reject', { reason: 'bot-sender', ref });
+        return;
+      }
+      if (!isChatAllowed(cfg, msg.chatId)) { noteNotReplied(msg, 'chat-not-allowed'); return; }
+      const ts = turnSession(msg.threadId ?? msg.chatId, project);
+      if (await alreadySeen(msg, ts.sessionKey)) {
+        log.info('intake', 'bot-wake-superseded', { ref, at: 'intake' });   // 重推，或真人那一轮已织进会话；不记诊断
+        return;
+      }
+      submitWake(msg);
       return;
     }
+    if (!maybe) return;
     let refused: NotRepliedReason | undefined;
     if (!isChatAllowed(cfg, msg.chatId)) refused = 'chat-not-allowed';
     else if (!isUserAllowedInProject(cfg, project, msg.senderId)) refused = 'user-not-allowed';
@@ -2279,14 +2430,14 @@ export function createOrchestrator(
    * session-scoped, not per-message). Voice display metadata stays separate
    * from the woven agent input.
    */
-  function ingestContext(msg: NormalizedMessage, text: string, initiative?: boolean): Promise<IngestedContext> {
-    return orderContext(msg.threadId ?? msg.chatId, () => ingestContextImpl(msg, text, initiative));
+  function ingestContext(msg: NormalizedMessage, text: string, extra?: Pick<TurnExtra, 'initiative' | 'wake'>): Promise<IngestedContext> {
+    return orderContext(msg.threadId ?? msg.chatId, () => ingestContextImpl(msg, text, extra));
   }
-  async function ingestContextImpl(msg: NormalizedMessage, text: string, initiative?: boolean): Promise<IngestedContext> {
+  async function ingestContextImpl(msg: NormalizedMessage, text: string, extra?: Pick<TurnExtra, 'initiative' | 'wake'>): Promise<IngestedContext> {
     names.learnMentions(msg.mentions);
     // Started first so the lookup overlaps the voice, file and quote fetches;
     // bounded, and undefined on failure (the block then says 某用户, as before).
-    const senderNameP = names.senderName(msg);
+    const senderNameP = extra?.wake ? Promise.resolve(extra.wake.name || undefined) : names.senderName(msg);
     const ingested = msg.rawContentType === 'audio' ? await ingestVoice(channel, msg, voice) : { text };
     let body = ingested.text;
     if (messageHasFiles(msg)) {
@@ -2312,10 +2463,11 @@ export function createOrchestrator(
     // codex can match the roster (approve-gate) and @ them back. Covers both the
     // first-turn (startReservedRun) and mid-turn (handleTurn) paths.
     const senderName = (await senderNameP) ?? msg.senderName;
-    body = weaveSender(body, { senderId: msg.senderId, senderName }, deliveryLagMs(msg));
+    body = weaveSender(body, { senderId: msg.senderId, senderName }, deliveryLagMs(msg), { bot: fromBot(msg) });
     // A turn the smart mode joined on its own (s25): a fixed line, never the judge model's reason, which was
     // written by a small model that read untrusted group messages (Rakazo 第二轮 5).
-    if (initiative) body = `${INITIATIVE_NOTE}\n\n${body}`;
+    if (extra?.initiative) body = `${INITIATIVE_NOTE}\n\n${body}`;
+    if (extra?.wake) body = `${BOT_WAKE_NOTE(extra.wake.name, extra.wake.n)}\n\n${body}`;
     return { ...ingested, text: body };
   }
 
@@ -2368,7 +2520,7 @@ export function createOrchestrator(
       // A retry brings its own saved images instead.
       let pendingImages: Promise<string[] | undefined> = Promise.resolve(extra?.images);
       if (!extra?.images && messageHasImages(msg)) pendingImages = collectInboundImages(channel, msg);
-      const [images, woven] = await Promise.all([pendingImages, ingestContext(msg, text, extra?.initiative)]);
+      const [images, woven] = await Promise.all([pendingImages, ingestContext(msg, text, extra)]);
       if (existing.intakeCancelled) {
         await channel.send(msg.chatId, { markdown: '本条消息处理期间会话已停止，请重发。' }, { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined);
         return;
@@ -2522,7 +2674,7 @@ export function createOrchestrator(
     if (existing) {
       // A /compact or /new holds the session: wait, then go through here again (s15).
       if (existing.deferred && !extra?.retry) {
-        existing.deferred.push({ id: msg.messageId, at: msg.createTime, origin: originOf(msg, flat), go: () =>
+        existing.deferred.push({ id: msg.messageId, at: msg.createTime, origin: originFor(msg, flat), go: () =>
           startReservedRun(msg, text, sessionKey, flat, project, perm, preloadedImages, preIngested, summaryText, goal, extra), early: () => {
           log.info('intake', 'reject', { reason: 'before-new', msgId: msg.messageId });
           void trackTask(channel.send(msg.chatId, { markdown: '⚠️ 这条在 `/new` 之前发的，新会话不带它，要问就再发一次。' },
@@ -2563,7 +2715,7 @@ export function createOrchestrator(
         requestedAt: msg.createTime || Date.now(),
         summary: stripFileTokens(summaryText ?? text).slice(0, 80) || undefined,
         seen: { id: msg.messageId, at: msg.createTime },
-        origin: originOf(msg, flat),
+        origin: originFor(msg, flat),
         ...(extra?.initiative ? { initiative: true as const } : {}),
       });
       dropRetries(sessionKey);
@@ -2597,7 +2749,7 @@ export function createOrchestrator(
             : Promise.resolve(undefined);
         // File attachments / quoted message woven into the prompt. Skipped when
         // preIngested (handleTurn already wove them into `text`).
-        const ingestP = preIngested ? Promise.resolve(preIngested) : ingestContext(msg, text, extra?.initiative);
+        const ingestP = preIngested ? Promise.resolve(preIngested) : ingestContext(msg, text, extra);
         let tResolveDone = tIntake;
         const resolveP = resolveThread(sessionKey, msg.chatId, {
           mode: perm.mode,
@@ -2857,7 +3009,7 @@ export function createOrchestrator(
         launchOpts = {
           chatId: msg.chatId,
           replyTo: msg.messageId,
-          origin: originOf(msg, flat),
+          origin: originFor(msg, flat),
           replyInThread: !flat,
           flat,
           thread,
@@ -3141,7 +3293,7 @@ export function createOrchestrator(
       // Download any attached/forwarded images so the opening turn can see them,
       // and any file attachments (their paths get woven into the prompt text).
       const imagesP = messageHasImages(msg) ? collectInboundImages(channel, msg) : Promise.resolve(undefined);
-      const ingestP = ingestContext(msg, text, initiative);
+      const ingestP = ingestContext(msg, text, initiative ? { initiative } : undefined);
       // The opening's main-area lines before the trigger and the 引用行 among them
       // (not for a goal: its objective stays self-contained). Never rejects.
       const listP = !goal && topics ? topics.list(msg.chatId) : Promise.resolve([]);
@@ -3204,7 +3356,7 @@ export function createOrchestrator(
         chatId: msg.chatId,
         replyTo: anchor?.id ?? msg.messageId,
         triggerId: msg.messageId,
-        origin: originOf(msg, false),
+        origin: originFor(msg, false),
         replyInThread: true,
         thread,
         firstText,
@@ -5853,7 +6005,7 @@ export function createOrchestrator(
       if (msgId) stream.streamCoalesced(channel, queueCard({ position: pos, cardKey: msgId }), null);
     });
     // Replied to where the queue card is (s18c), until a slot or a cancel ends the wait.
-    state.waiting = {
+    if (opts.requesterKind !== 'bot') state.waiting = {
       chatId: opts.chatId, messageId: opts.replyTo, at: opts.requestedAt ?? Date.now(),
       replyInThread: opts.flat ? false : (opts.replyInThread ?? Boolean(opts.knownThreadId)), place: opts.flat ? 'main' : 'topic',
     };
@@ -6615,6 +6767,7 @@ export function createOrchestrator(
           await sendCompletionReminder({
             cardMsgId: finalMsgId,
             requesterOpenId: currentTurn.requesterOpenId,
+            requesterKind: currentTurn.requesterKind,
             outcome: rc.rs.terminal === 'running' ? 'done' : rc.rs.terminal,
             requestedAt: currentTurn.requestedAt,
             manuallyRequested,
@@ -7705,13 +7858,13 @@ export function createOrchestrator(
     const lost: DroppedOrigin[] = [];
     for (const state of new Set(active.values())) {
       for (const turn of state.queue) if (turn.origin && !(turn.seen && state.woven?.has(turn.seen.id))) lost.push(turn.origin);
-      for (const held of state.deferred ?? []) lost.push(held.origin);
+      for (const held of state.deferred ?? []) if (held.origin) lost.push(held.origin);
       // Where dropCompact would answer it.
       if (state.compactAfter) lost.push(originOf(state.compactAfter.msg, !state.compactAfter.inThread));
       if (state.waiting) lost.push(state.waiting);
     }
     // Named messages still judged (s25): their senders were promised an answer. Unnamed ones go without a word.
-    for (const item of smartLanes.pending()) if (item.named) lost.push(originOf(item.msg, !item.msg.threadId));
+    for (const item of smartLanes.pending()) if (item.named && !item.wake) lost.push(originOf(item.msg, !item.msg.threadId));
     return lost;
   }
 
