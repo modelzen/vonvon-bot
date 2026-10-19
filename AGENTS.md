@@ -2,7 +2,7 @@
 
 2026-10-17 到 10-18，Claude 额度用完期间，owner 把开发临时交给 JP-VPS 上的 Codex（#367）。这期间的 PR（#364 到 #385）由 Codex 推进和合入，其中 #364、#365 的主体是 Claude 之前写的；独立审查主要由 gpt-6-astra 做，实现也是 Codex。2026-10-18 owner 停下 Codex、交还职责，下文的分工照旧生效。
 
-2026-10-14 起生效，取代 2026-10-13 的版本，适用于 v1 开发。2026-10-16 起，Mac 上的 Codex 由 Claude 经 Paseo 直接开会话，一个任务一个会话，结果贴回 GitHub；Paseo 用不了时（连不上、开不了会话，或者 #322 上还有活着的队列会话），才把任务贴进队列 issue #322 请 owner 转发，见"工具和同步"。两台机器读同一份规则。本文的 owner 指用户本人；旧的 `owner:` 标签不再使用。Claude 的非平凡任务用 Ultracode 工作流编排。Claude 侧的会话、模型和通知格式另见 JP-VPS 上的 `/home/ops/.claude/vonvon-collaboration.md`，这个文件不在仓库里，Mac 上没有。
+2026-10-14 起生效，取代 2026-10-13 的版本，适用于 v1 开发。2026-10-16 起，Mac 上的 Codex 由 Claude 经 Paseo 直接开会话，一个任务一个会话，结果贴回 GitHub；Paseo 用不了时（连不上、开不了会话，或者 #322 上还有活着的队列会话），才把任务贴进队列 issue #322 请 owner 转发，见"工具和同步"。2026-10-19 起又以 #322 为主：owner 在 Codex App 里开队列会话，Claude 往 #322 贴任务，经 Paseo 开 Mac 会话只在 owner 要求时用（见"2026-10-19 起"）。两台机器读同一份规则。本文的 owner 指用户本人；旧的 `owner:` 标签不再使用。Claude 的非平凡任务用 Ultracode 工作流编排。Claude 侧的会话、模型和通知格式另见 JP-VPS 上的 `/home/ops/.claude/vonvon-collaboration.md`，这个文件不在仓库里，Mac 上没有。
 
 ## 2026-10-19 起：Claude 出计划，Codex 写代码
 
@@ -37,6 +37,7 @@ owner 2026-10-19 定（Claude 的周额度用到一半）：从 s27a 起，新�
   - 用之前拿目录锁：`mkdir /tmp/vonvon-accept.d`。失败就是有人在用，过几分钟再来；超过一小时还拿不到，在结果里写"卡住了：验收 daemon 被占"。
   - 拿到后写上是谁：`echo "<任务号或 claude> $(date -u +%FT%TZ)" > /tmp/vonvon-accept.d/owner`。
   - 用完放锁：`rm -f /tmp/vonvon-accept.d/owner && rmdir /tmp/vonvon-accept.d`。
+  - 锁里记的任务已经没有会话在跑时（Claude 用 `paseo ls`、`paseo inspect` 确认），Claude 可以替它放锁；Codex 不放别人的锁。
   - 不用 `flock`：Codex 每次调用工具都是新 shell，`exec 8>…; flock 8` 在命令结束时就放了锁。
   - Codex 自测完、换回 `main` 之前，验收 daemon 跑的是没审查的代码。Claude 用它做别的验收前，先用 `git -C /home/ops/vonvon/worktrees/accept rev-parse HEAD` 确认它跑的是哪个 sha。
 - **删除文件：** 两台机器的 Codex 都守删除文件的硬规矩，原文在 #322 和 #422 正文，改一边要改另一边。
@@ -118,6 +119,7 @@ Codex 写的片按"2026-10-19 起"一节走，下面第 1 步对它不适用。
 ## 工具和同步
 
 - 两台机器的 Paseo daemon 通过 Tailscale 互通。JP-VPS 为 `100.121.117.46:6767`，provider `claude`，项目 `/home/ops/vonvon/vonvon-bot`。Mac 为 `100.127.134.58:6767`，provider `codex`。owner 自己的会话照旧经它们跑。不通过 SSH 执行 `claude -p`。
+- 2026-10-19 起 Mac 上的事以 #322 为主（见"2026-10-19 起"），下面"经 Paseo 开会话"几条只在 owner 要求时用。
 - 2026-10-16 起，Mac 上的事由 Claude 经 Paseo 在 Mac mini 上直接开 Codex 会话，不再请 owner 转发（owner 2026-10-16 让 Claude 定）。issue #322 的队列留作备用：Paseo 连不上时（Mac 睡着、Tailscale 断了、daemon 没开）、`paseo run` 失败时，或者 #322 上还有活着的队列会话时才用，规则见下面"经 #322"的几条。Claude 和 Codex 之间不交接 PR。
 - 经 Paseo 开会话：
   1. 这一节的 `paseo` 命令都由 Claude 在 JP-VPS 上执行，Codex 不用管。
