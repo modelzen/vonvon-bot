@@ -69,6 +69,7 @@ vi.mock('../src/card/run-card-stream', () => ({
 import { createOrchestrator, retryPrompt } from '../src/bot/handle-message';
 import { weaveRecordBlock, weaveSender } from '../src/bot/context-weave';
 import { stripBridgeMessageEnvelope } from '../src/bot/session-title';
+import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
 import { projectRevision } from '../src/admin/collaboration';
 import type { AppConfig } from '../src/config/schema';
 
@@ -125,7 +126,7 @@ function message(text: string): NormalizedMessage {
 function setup(thread?: unknown) {
   if (thread) fake.backend.resumeThread.mockResolvedValue(thread);
   const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['admin'] } } };
-  const channel = { send: fake.send, rawClient: { im: { v1: { message: { get: async () => ({ data: { items: [{ thread_id: 'topic' }] } }) }, messageReaction: {
+  const channel = { send: fake.send, getChatInfo: async () => ({ name: 'Test', chatType: 'group' }), rawClient: { im: { v1: { chat: { get: async () => ({ data: { chat_mode: 'group' } }) }, chatMembers: { isInChat: async () => ({ code: 0, data: { is_in_chat: true } }) }, message: { get: async () => ({ data: { items: [{ thread_id: 'topic' }] } }) }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
   orchestrator = createOrchestrator(channel as never, cfg, '/test');
@@ -183,6 +184,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await orchestrator?.shutdown();
+  setDiagnosticsSink(undefined);
 });
 
 describe('retryPrompt', () => {
@@ -474,5 +476,70 @@ describe('a /goal that recovered from an API retry', () => {
     const done = JSON.stringify(fake.managed.mock.calls[0]![2]);
     expect(done).toContain('Token 预算用尽');
     expect(done).not.toContain('网络波动');
+  });
+});
+
+
+describe('unbound group hints', () => {
+  const notes: DiagnosticsEvent[] = [];
+  function unbound() {
+    fake.project = undefined;
+    notes.length = 0;
+    setDiagnosticsSink(event => notes.push(event));
+    return setup();
+  }
+  const unboundNotes = () => notes.filter(event => event.kind === 'notReplied' && event.record.reason === 'unbound');
+
+  it('limits repeated mentions for ten minutes while recording each one', async () => {
+    const o = unbound();
+    await o.onMessage(message('一'));
+    await o.onMessage(message('二'));
+    expect(fake.send).toHaveBeenCalledOnce();
+    expect(unboundNotes()).toHaveLength(2);
+    const realNow = Date.now;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 10 * 60_000 + 1);
+    try {
+      await o.onMessage(message('三'));
+      expect(fake.send).toHaveBeenCalledTimes(2);
+    } finally { clock.mockRestore(); }
+  });
+
+  it('retries immediately after a failed send', async () => {
+    const o = unbound();
+    fake.send.mockRejectedValueOnce(new Error('send failed'));
+    await o.onMessage(message('一'));
+    await o.onMessage(message('二'));
+    await o.onMessage(message('三'));
+    expect(fake.send).toHaveBeenCalledTimes(2);
+  });
+
+  it('replies inside the mentioned topic', async () => {
+    const o = unbound();
+    const msg = message('话题');
+    await o.onMessage(msg);
+    expect(fake.send).toHaveBeenCalledWith('chat', expect.any(Object), { replyTo: msg.messageId, replyInThread: true });
+  });
+
+  it('keeps separate groups independent and main-area replies in the main area', async () => {
+    const o = unbound();
+    await o.onMessage({ ...message('一'), threadId: undefined });
+    await o.onMessage({ ...message('二'), chatId: 'oc_other' });
+    expect(fake.send).toHaveBeenCalledTimes(2);
+    expect(fake.send.mock.calls[0]?.[2]).toEqual(expect.objectContaining({ replyInThread: false }));
+  });
+
+  it('does not reply or record diagnostics without a mention', async () => {
+    const o = unbound();
+    await o.onMessage({ ...message('一'), mentionedBot: false });
+    expect(fake.send).not.toHaveBeenCalled();
+    expect(notes).toEqual([]);
+  });
+
+  it('clears the quiet period when the bot is invited again', async () => {
+    const o = unbound();
+    await o.onMessage(message('一'));
+    await o.onBotAddedToChat({ chatId: 'chat', operator: { openId: 'owner' } });
+    await o.onMessage(message('二'));
+    expect(fake.send).toHaveBeenCalledTimes(2);
   });
 });

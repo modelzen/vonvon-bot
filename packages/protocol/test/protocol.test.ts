@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
-  agentViewSchema, bridgeProjectsStoreSchema, commandSchema, helloSchema,
+  pendingGroupsSchema, agentViewSchema, bridgeProjectsStoreSchema, commandSchema, helloSchema,
   machineIdSchema, requestSchema, responseSchema, errorEnvelopeSchema,
   desktopSnapshotSchema, eventSchema, watchSnapshots,
   adminRequestSchema, adminReplySchema, adminStateSchema, directoryRequestSchema, directoryReplySchema,
@@ -350,4 +350,16 @@ it("s36b: topic conversation copy has two choices in product order", () => {
   expect(Object.keys(topicConversationCopy)).toEqual(["threads", "smart"]);
   expect(topicConversationCopy.threads).toEqual({ name: "按话题聊", title: "按话题聊", subtitle: "一个话题一条会话，几件事各聊各的" });
   expect(topicConversationCopy.smart.subtitle).toBe("一个话题一条会话，不用 @ 我也会看情况接话");
+});
+
+it("preserves optional pending group topic flags", () => {
+  const group = { chatId: "oc_pending", name: "Pending", addedAt: 1 };
+  expect(pendingGroupsSchema.parse({ groups: [group, { ...group, topic: true }, { ...group, topic: false }] }).groups).toEqual([group, { ...group, topic: true }, { ...group, topic: false }]);
+  expect(pendingGroupsSchema.safeParse({ groups: [{ ...group, topic: "x" }] }).success).toBe(false);
+});
+
+it("explains unbound reply throttling and both setup routes", () => {
+  const record = notRepliedSchema.parse({ reason: "unbound", groupId: "oc_pending", place: "main", ref: "abc123", at: 1, count: 1 });
+  expect(NOT_REPLIED_TEXT.unbound.reason(record)).toBe("这个群还没设置好，@ 它只回了一句提示（同一个群 10 分钟最多回一次）");
+  expect(NOT_REPLIED_TEXT.unbound.next(record)).toBe("主人在私聊的设置卡上选会话方式、点绑定；或者在 Bot 页点「加入飞书群」设置这个群。");
 });

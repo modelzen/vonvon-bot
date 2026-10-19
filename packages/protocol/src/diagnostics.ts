@@ -48,7 +48,7 @@ export const NOT_REPLIED_TEXT: Record<NotRepliedReason, Text> = {
   "group-updating": { reason: () => "当时这个群正在改设置或恢复会话，这条没处理", next: () => "请发消息的人重发。" },
   "chat-not-allowed": { reason: () => "这个群不在「允许的飞书群」里", next: () => "在 Bot 设置的「允许的飞书群」里加上它，或者清空名单。" },
   "user-not-allowed": { reason: () => "发消息的人不在「响应成员」里", next: () => "在群内设置的「响应成员」里加上这个人。" },
-  unbound: { reason: () => "这个群还没绑定，只回了一句提示", next: () => "在 Bot 页点「加入飞书群」绑定这个群。" },
+  unbound: { reason: () => "这个群还没设置好，@ 它只回了一句提示（同一个群 10 分钟最多回一次）", next: () => "主人在私聊的设置卡上选会话方式、点绑定；或者在 Bot 页点「加入飞书群」设置这个群。" },
   "lookup-failed": {
     reason: r => `没查到${r.detail ?? "这条消息是对谁说的"}，没 @ 它的这条就没回`,
     next: () => "飞书接口偶尔出错，请对方 @ 它再发一次；反复出现时看下面的日志。",
