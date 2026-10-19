@@ -111,3 +111,12 @@ it("s28a: Claude groups explain queueing without a selector; old daemons omit th
   expect(html).toContain("排队");
   expect(settings("multi")).not.toContain("运行中来了消息");
 });
+
+
+it('s28c: the conversation row recommends smart with other bots, including when already smart', () => {
+  const hint = '群里还有别的 bot。几个 bot 都选智能，它们才能互相 @、各自判断接不接话。';
+  for (const target of ['threads', 'shared', 'smart'] as const) {
+    expect(renderToStaticMarkup(<ConversationRow target={target} current={target} disabled={false} onChange={() => {}} otherBots />)).toContain(hint);
+    expect(renderToStaticMarkup(<ConversationRow target={target} current={target} disabled={false} onChange={() => {}} />)).not.toContain(hint);
+  }
+});

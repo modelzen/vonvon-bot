@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createGroupExecutor as createOwnedGroupExecutor, describeGroupFailure, parseBindGroupInput, UNNAMED_GROUP, type BindGroupInput } from '../src/admin/groups';
+import { createGroupExecutor as createOwnedGroupExecutor, describeGroupFailure, parseBindGroupInput, parseJoinedGroups, UNNAMED_GROUP, type BindGroupInput } from '../src/admin/groups';
 import { log } from '../src/core/logger';
 import { createAdminIpcCaller, createAdminIpcResponder } from '../src/admin/ipc';
 import { addProject, listProjects, listProjectsIn } from '../src/project/registry';
@@ -454,4 +454,27 @@ describe('desktop group commands in the owning bot', () => {
     expect(parseBindGroupInput({ ...input(paths.appDir), projectName: ' Trim ' }).projectName).toBe('Trim');
     for (const patch of [{ backend: 'unknown' }, { directory: 'relative' }, { kind: 'new' }, { chatId: '../escape' }, { extra: true }]) expect(() => parseBindGroupInput({ ...input(paths.appDir), ...patch })).toThrow();
   });
+});
+
+
+it('s28c: joined-group hints use observed bot counts and survive the IPC parser', async () => {
+  for (const count of ['2', '1', undefined]) {
+    const fixture = channelFixture();
+    Object.assign(fixture.channel.rawClient.im.v1.chat, {get: async () => ({code: 0, data: {bot_count: count}})});
+    const result = await createGroupExecutor(fixture.channel)({kind: 'joinedGroups'});
+    expect(parseJoinedGroups(result)).toMatchObject({groups: [{chatId: 'oc_a', ...(count === undefined ? {} : {hasOtherBots: count === '2'})}]});
+    if (count === undefined && 'groups' in result) expect(result.groups[0]).not.toHaveProperty('hasOtherBots');
+  }
+});
+
+it('s28c: pending groups persist and clear an observed other-bot hint', async () => {
+  const file = join(paths.appDir, 'pending-hint.json');
+  let hasOtherBots: boolean | undefined = true;
+  const queue = createPendingGroups({file, eligible: async () => true, verify: async () => ({state: 'ready', name: 'Hint group', topic: false, hasOtherBots}), onError: error => {throw error;}});
+  await queue.add('oc_hint', 'ou_owner');
+  await queue.refresh();
+  expect(await readPendingGroups(file)).toMatchObject([{state: 'ready', hasOtherBots: true}]);
+  hasOtherBots = undefined;
+  await queue.refresh();
+  expect((await readPendingGroups(file))[0]).not.toHaveProperty('hasOtherBots');
 });
