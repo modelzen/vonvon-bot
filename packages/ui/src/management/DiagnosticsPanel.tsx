@@ -13,6 +13,7 @@ import {useClaudeLoginCheck} from '../setup/useClaudeLoginCheck';
 import {useSetupStatus, type SetupRead} from '../setup/useSetupStatus';
 import {openExternalUrl} from '../url-actions';
 import {LogPanel} from './LogPanel';
+import {KeyDiagnosticsRows, useSecrets} from './SecretsPanel';
 import './diagnostics.css';
 
 const badge = (status: string, tone: StepTone) => <StatusBadge tone={tone} variant="pill">{status}</StatusBadge>;
@@ -152,15 +153,26 @@ function CrashBars({snapshot, ready, busy, run}: {snapshot: DesktopSnapshot; rea
   </div>)}</>;
 }
 
-/** 状态与诊断 (product.md 3.1 item 8): the red bar of a crash pause, this machine's tools and the daemon's crashes, then
- * each bot's connection, setup, scopes, tools, misplaced group directories, recent not-replied messages and crashes, then the daemon log. */
-export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpenEnvironment, onNotice}: {
+/** The daemon log at the bottom of the page, scrolled to and focused. */
+function showLog() {
+  const section = document.getElementById(settingAnchor('daemon 日志'));
+  if (!section) return;
+  section.tabIndex = -1;
+  section.scrollIntoView({block: 'start'});
+  section.focus({preventScroll: true});
+}
+
+/** 状态与诊断 (product.md 3.1 item 8): the red bar of a crash pause, this machine's tools, its decision models' keys
+ * (s23g2) and the daemon's crashes, then each bot's connection, setup, scopes, tools, misplaced group directories,
+ * recent not-replied messages and crashes, then the daemon log. */
+export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpenEnvironment, onOpenSecrets, onNotice}: {
   snapshot: DesktopSnapshot; ready: boolean; busy: boolean;
   run: (command: Command) => Promise<CommandResult>;
-  onOpenSetup: () => void; onOpenEnvironment: () => void;
+  onOpenSetup: () => void; onOpenEnvironment: () => void; onOpenSecrets: () => void;
   onNotice: (message: string, error: boolean) => void;
 }) {
   const client = useClient();
+  const secrets = useSecrets();
   const {reads, recheck} = useSetupStatus(snapshot.agents.map(agent => agent.id), {poll: false});
   const claudeLogin = useClaudeLoginCheck(snapshot.tools, message => onNotice(message, true));
   const tools = toolSteps(snapshot.tools, {claudeChecking: claudeLogin.checking}).steps;
@@ -169,7 +181,7 @@ export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpe
   async function recheckAll() {
     // No CLI is started: the snapshot is rebuilt and each bot's Feishu settings are read once more.
     await run({type: 'refresh'});
-    await Promise.all(snapshot.agents.map(agent => recheck(agent.id)));
+    await Promise.all([...snapshot.agents.map(agent => recheck(agent.id)), secrets.reader.read()]);
   }
   function act(action: StepAction) {
     if (action.kind === 'claudeLogin') void claudeLogin.check(true);
@@ -190,6 +202,7 @@ export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpe
       <SettingsRow title="daemon 版本" value={host.kind === 'connected' ? host.version : '未知'}/>
       {tools.map(step => <SettingsRow key={step.id} title={step.title} description={stepDescription(step)}
         trailing={<span className="setup-step-trailing">{badge(step.status, step.tone)}{toolAction(step)}</span>}/>)}
+      <KeyDiagnosticsRows read={secrets.read} onOpenSecrets={onOpenSecrets} onShowLog={showLog}/>
       <SettingsRow title="数据目录" value={<code>{snapshot.application.dataPath}</code>}/>
       <SettingsRow title="最近读取" value={snapshot.observedAt ? formatTime(snapshot.observedAt) : '尚未读取'}/>
       {crashes && <SettingsRow title="最近的崩溃" description={<CrashList records={crashes.records.filter(record => !record.appId)} now={Date.now()}/>}/>}

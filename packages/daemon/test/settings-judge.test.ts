@@ -272,7 +272,7 @@ describe('judge settings: the view', () => {
     const listed = [{ provider: 'typesafe', displayName: 'TypeSafe', models: [{ id: 'jev-latest', displayName: 'Jev' }], keyId: 'typesafe-api-key', keySet: false }];
     expect((await o.read(agent) as AgentSettingsView).decisionModels).toEqual(listed);
     const missing = keyMissingText(listed[0]!);
-    expect(missing).toContain('在终端运行 vonvon secrets set typesafe-api-key，按提示粘贴');
+    expect(missing).toContain('在网页的密钥页填，或者在终端运行 vonvon secrets set typesafe-api-key，按提示粘贴');
     expect(await save(project, JEV)).toMatchObject({ kind: 'saved', effects: [{ detail: '智能模式的下一次判断就用新模型' }, { fields: ['selection'], when: 'next-message', detail: missing }] });
     // a language model, or the key in: no such line
     expect(await save(agent, { kind: 'llm', model: 'gpt-6-luna' })).toMatchObject({ effects: [{ detail: '智能模式的下一次判断就用新模型' }] });
@@ -290,7 +290,7 @@ describe('judge settings: the view', () => {
     expect(u.decisionModels).toEqual([{ ...listed[0], keySet: false, keyUnreadable: true }]);
     expect(projectViewSchema.safeParse(u).error?.issues).toBeUndefined();
     const unread = keyMissingText(u.decisionModels![0]!);
-    expect(unread).toBe('读不了密钥库，看不出填没填 TypeSafe 的 key，读得了之前要判断的消息按出错处理（没 @ Bot 的不回，@ 的回在主区）。在终端运行 vonvon secrets list 看原因');
+    expect(unread).toBe('读不了密钥库，看不出填没填 TypeSafe 的 key，读得了之前要判断的消息按出错处理（没 @ Bot 的不回，@ 的回在主区）。原因在网页状态与诊断页底部的 daemon 日志（secrets.unreadable），或者在终端运行 vonvon secrets list 看');
     await save(project, { kind: 'llm', model: 'gpt-6-luna' });
     const before = await unreadable.read(project) as ProjectSettingsView;
     const saved = await unreadable.save({ scope: project, section: 'judge', revision: before.sections.judge.revision, patch: { selection: JEV } } as Parameters<typeof unreadable.save>[0]);

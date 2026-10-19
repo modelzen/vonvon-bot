@@ -149,8 +149,10 @@ export function Dialog(props: {
   );
 }
 
+/** `children` replaces the fixed note: what the confirmation is about, such as the list a removal affects (s23g2). */
 export function ConfirmDialog(props: {
   cancelLabel?: string;
+  children?: ReactNode;
   confirmLabel?: string;
   description: ReactNode;
   error?: ReactNode;
@@ -189,7 +191,7 @@ export function ConfirmDialog(props: {
       {props.error && (
         <InlineNotice title="操作失败" tone="danger">{props.error}</InlineNotice>
       )}
-      <div className="ui-dialog__notice">请确认后再继续；取消不会修改任何本机数据。</div>
+      {props.children ?? <div className="ui-dialog__notice">请确认后再继续；取消不会修改任何本机数据。</div>}
     </Dialog>
   );
 }

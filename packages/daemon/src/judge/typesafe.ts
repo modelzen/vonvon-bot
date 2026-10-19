@@ -1,7 +1,7 @@
 import { isIP } from 'node:net';
 import { JudgeCallError } from '../agent/types';
 import { log } from '../core/logger';
-import type { SecretTestOutcome } from '@vonvon/protocol';
+import { KEY_FAILURE, type SecretTestOutcome } from '@vonvon/protocol';
 import type { JudgeErrorKind } from './types';
 
 /** TypeSafe's decision endpoint (Jev report 第 1 节). */
@@ -126,7 +126,7 @@ function failure(status: number, text: string | undefined, retryAfter: string | 
   const first = (Array.isArray(detail) ? detail[0] : detail) as { error_type?: unknown; type?: unknown; message?: unknown } | undefined;
   const errorType = token(first?.error_type ?? first?.type, 40);
   const info = { status, ...(errorType ? { errorType } : {}), ...more };
-  if (status === 401) return new DecisionError('auth', 'TypeSafe 不认这个 key', COOL_MS, info);
+  if (status === 401) return new DecisionError('auth', KEY_FAILURE.rejected('TypeSafe'), COOL_MS, info);
   if (status === 429) return new DecisionError('busy', 'TypeSafe 限流了', retryAfterMs(retryAfter, now), info);
   // only the prefix: the rest of the message is the model id we sent
   if (status === 400 && errorType === 'api_usage_error' && typeof first?.message === 'string' && first.message.startsWith('Unknown model')) {
