@@ -458,6 +458,7 @@ export class ClaudeAgentThread implements AgentThread {
     );
 
     const self = this;
+    let query: Query | undefined = this.query;
     async function* gen(): AsyncGenerator<AgentEvent> {
       yield { type: 'turn_started', turnId };
       let terminalError = false;
@@ -511,6 +512,7 @@ export class ClaudeAgentThread implements AgentThread {
           }
         }
       } finally {
+        query = undefined;
         self.dropAsks('turn-ended', turnId);
         if (self.askSink === mySink) self.askSink = undefined;
         self.endTurn();
@@ -522,6 +524,14 @@ export class ClaudeAgentThread implements AgentThread {
       events: gen(),
       respondToAsk: (id, resolution) => self.respondToAsk(id, resolution),
       askPending: (id) => self.pending.has(id),
+      stopSubagent: async (id) => {
+        if (!query || self.dead || self.sink !== mySink) throw new Error('这个子 agent 已经结束');
+        try {
+          await query.stopTask(id);
+        } catch (err) {
+          throw new Error(`停止子 agent 失败：${err instanceof Error ? err.message : String(err)}`);
+        }
+      },
       turnId: () => self.currentTurnId,
       lastActivity: () => self.lastActivityAt,
     };
@@ -566,6 +576,7 @@ export class ClaudeAgentThread implements AgentThread {
     this.input.push(textUserMessage(goalPrompt(objective)));
 
     const self = this;
+    let query: Query | undefined = this.query;
     async function* gen(): AsyncGenerator<AgentEvent> {
       yield { type: 'goal_update', status: 'active', objective, tokensUsed: 0, timeUsedSeconds: 0, tokenBudget: null };
       yield { type: 'turn_started', turnId };
@@ -633,6 +644,7 @@ export class ClaudeAgentThread implements AgentThread {
           }
         }
       } finally {
+        query = undefined;
         self.goalRunning = false;
         self.dropAsks('turn-ended', turnId);
         if (self.askSink === mySink) self.askSink = undefined;
@@ -641,7 +653,21 @@ export class ClaudeAgentThread implements AgentThread {
       }
     }
 
-    return { events: gen(), respondToAsk: (id, resolution) => self.respondToAsk(id, resolution), askPending: (id) => self.pending.has(id), turnId: () => self.currentTurnId, lastActivity: () => self.lastActivityAt };
+    return {
+      events: gen(),
+      respondToAsk: (id, resolution) => self.respondToAsk(id, resolution),
+      askPending: (id) => self.pending.has(id),
+      stopSubagent: async (id) => {
+        if (!query || self.dead || self.sink !== mySink) throw new Error('这个子 agent 已经结束');
+        try {
+          await query.stopTask(id);
+        } catch (err) {
+          throw new Error(`停止子 agent 失败：${err instanceof Error ? err.message : String(err)}`);
+        }
+      },
+      turnId: () => self.currentTurnId,
+      lastActivity: () => self.lastActivityAt,
+    };
   }
 
   /**

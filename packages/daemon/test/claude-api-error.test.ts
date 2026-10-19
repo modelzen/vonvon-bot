@@ -1,11 +1,11 @@
 import { claudeAccess } from '../src/agent/claude-agent/permission';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { createTurnMapper, resultErrorText } from '../src/agent/claude-agent/event-map';
 import { ClaudeAgentThread } from '../src/agent/claude-agent/thread';
 import type { AgentEvent } from '../src/agent/types';
 import { buildRunCard } from '../src/card/run-card';
-import { initialState, reduce } from '../src/card/run-state';
+import { finalMessageText, initialState, reduce } from '../src/card/run-state';
 
 // Sanitized SDK fixtures: no provider requests, credentials or local session data.
 const msg = (value: unknown): SDKMessage => value as SDKMessage;
@@ -37,7 +37,7 @@ afterEach(async () => {
 });
 
 /** Only replace the external SDK query; exercise the real thread, mapper and card. */
-function makeThread(turns: SDKMessage[][], endAfterTurn = false): ClaudeAgentThread {
+function makeThread(turns: Array<SDKMessage[] | AsyncIterable<SDKMessage>>, endAfterTurn = false, stopTask = async (_id: string): Promise<void> => {}): ClaudeAgentThread {
   let turn = 0;
   const thread = new ClaudeAgentThread({
     sessionId: 'test-session', resume: false, cwd: process.cwd(), access: claudeAccess(undefined, undefined, process.cwd(), process.cwd()), permission: {}, settingSources: [],
@@ -47,6 +47,7 @@ function makeThread(turns: SDKMessage[][], endAfterTurn = false): ClaudeAgentThr
         if (endAfterTurn) return;
       }
     })(), {
+      stopTask,
       getContextUsage: async () => null,
       interrupt: async () => {},
       close: () => {},
@@ -206,4 +207,91 @@ describe.each([false, true])('Claude terminal errors (goal: %s)', (goal) => {
     expect(events.some((event) => event.type === 'error')).toBe(false);
     expect(events.at(-1)?.type).toBe('done');
   });
+});
+
+
+it.each([false, true])('stops the requested Claude task only during its own parent turn (goal=%s)', async goal => {
+  const stopTask = vi.fn(async (_id: string) => {});
+  const thread = makeThread([[success], [success]], false, stopTask);
+  const run = goal ? thread.runGoal('first') : thread.runStreamed({ text: 'first' });
+  expect(run.stopSubagent).toBeTypeOf('function');
+  await run.stopSubagent?.('task-one');
+  expect(stopTask).toHaveBeenCalledExactlyOnceWith('task-one');
+  for await (const event of run.events) void event;
+  const next = goal ? thread.runGoal('second') : thread.runStreamed({ text: 'second' });
+  await expect(run.stopSubagent?.('task-one')).rejects.toThrow('这个子 agent 已经结束');
+  for await (const event of next.events) void event;
+  await expect(next.stopSubagent?.('task-two')).rejects.toThrow('这个子 agent 已经结束');
+  expect(stopTask).toHaveBeenCalledTimes(1);
+});
+
+it.each([false, true])('adds a Chinese reason when Claude stopTask fails (goal=%s)', async goal => {
+  const thread = makeThread([[success]], false, async () => { throw new Error('SDK denied'); });
+  const run = goal ? thread.runGoal('test') : thread.runStreamed({ text: 'test' });
+  await expect(run.stopSubagent?.('task-one')).rejects.toThrow('停止子 agent 失败：SDK denied');
+  for await (const event of run.events) void event;
+});
+
+it('provides single-task stop for stoppable children in a Claude goal', async () => {
+  const stopTask = vi.fn(async (_id: string) => {});
+  const thread = makeThread([[msg({ type: 'system', subtype: 'task_started', task_type: 'local_agent', task_id: 'child-goal', description: 'goal child' }), success]], false, stopTask);
+  const run = thread.runGoal('test objective');
+  for await (const event of run.events) {
+    if (event.type === 'subagent_start') {
+      expect(event.stoppable).toBe(true);
+      expect(run.stopSubagent).toBeTypeOf('function');
+      await run.stopSubagent?.(event.id);
+      expect(stopTask).toHaveBeenCalledExactlyOnceWith('child-goal');
+    }
+  }
+});
+
+
+it('stops one goal child while its sibling and parent complete normally', async () => {
+  let stopped!: () => void;
+  const stopRequested = new Promise<void>(resolve => { stopped = resolve; });
+  const stopTask = vi.fn(async (_id: string) => { stopped(); });
+  async function* messages(): AsyncGenerator<SDKMessage> {
+    for (const id of ['child-one', 'child-two']) yield msg({
+      type: 'system', subtype: 'task_started', task_type: 'local_agent', task_id: id, description: id,
+    });
+    await stopRequested;
+    yield msg({ type: 'system', subtype: 'task_notification', task_id: 'child-one', status: 'stopped' });
+    yield msg({ type: 'system', subtype: 'task_notification', task_id: 'child-two', status: 'completed', summary: 'Sibling finished' });
+    yield* reply;
+  }
+  const thread = makeThread([messages()], false, stopTask);
+  const abort = vi.spyOn(thread, 'abort');
+  const clearGoal = vi.spyOn(thread, 'clearGoal');
+  const run = thread.runGoal('test objective');
+  const events: AgentEvent[] = [];
+  for await (const event of run.events) {
+    events.push(event);
+    if (event.type === 'subagent_start' && event.id === 'child-two') {
+      expect(events.filter(event => event.type === 'subagent_start')).toHaveLength(2);
+      await run.stopSubagent?.('child-one');
+    }
+  }
+  expect(stopTask).toHaveBeenCalledExactlyOnceWith('child-one');
+  expect(abort).not.toHaveBeenCalled();
+  expect(clearGoal).not.toHaveBeenCalled();
+  expect(events).toContainEqual({ type: 'subagent_status', id: 'child-one', status: 'stopped', result: undefined });
+  expect(events).toContainEqual({ type: 'subagent_status', id: 'child-two', status: 'completed', result: 'Sibling finished' });
+  expect(events).toContainEqual(expect.objectContaining({ type: 'goal_update', status: 'complete' }));
+  const state = events.reduce(reduce, initialState);
+  expect(state.terminal).toBe('done');
+  expect(finalMessageText(state)).toBe('正常回复');
+  await expect(run.stopSubagent?.('child-two')).rejects.toThrow('这个子 agent 已经结束');
+  expect(stopTask).toHaveBeenCalledTimes(1);
+});
+
+it.each(['exit', 'clear', 'close'])('refuses goal child stop after %s', async ending => {
+  const stopTask = vi.fn(async (_id: string) => {});
+  const thread = makeThread([[]], true, stopTask);
+  const run = thread.runGoal('test objective');
+  if (ending === 'clear') await thread.clearGoal();
+  else if (ending === 'close') await thread.close();
+  else for await (const event of run.events) void event;
+  await expect(run.stopSubagent?.('child-one')).rejects.toThrow('这个子 agent 已经结束');
+  expect(stopTask).not.toHaveBeenCalled();
 });
