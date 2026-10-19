@@ -10,7 +10,7 @@ import { log } from '../core/logger';
 export interface CompletionReminderReplyInput {
   cardMsgId: string;
   requesterOpenId?: string;
-  /** Who started the turn: a person, or another bot that woke this one (s27a-0; logged). */
+  /** Who started the turn: a bot-started turn never sends a completion reminder (s27a). */
   requesterKind?: 'user' | 'bot' | 'unknown';
   outcome: CompletionReminderOutcome;
   requestedAt: number;
@@ -35,6 +35,7 @@ export type CompletionReminderReplyResult = 'sent' | 'skipped' | 'failed';
  * deliberately best-effort: this runs after the task/card terminal has been
  * settled, catches transport failures, and never rewrites the task outcome.
  */
+// A bot-started turn never sends a reminder; the agent decides whether its answer @-mentions the bot.
 export async function sendCompletionReminderReply(
   deps: CompletionReminderReplyDeps,
   input: CompletionReminderReplyInput,
@@ -42,6 +43,7 @@ export async function sendCompletionReminderReply(
   // Explicit product boundary: user-stop / queue-cancel never generate an @
   // reply. Only ordinary success, agent error and watchdog timeout do.
   if (
+    input.requesterKind === 'bot' ||
     !input.requesterOpenId ||
     (input.outcome !== 'done' && input.outcome !== 'error' && input.outcome !== 'idle_timeout')
   ) {

@@ -342,7 +342,7 @@ describe('failed turns', () => {
     expect(records()[0]).toMatchObject({ reason: 'failed', detail: 'boom' });
     expect(JSON.stringify(events)).not.toContain(SECRET);
     const recv = fake.log.info.mock.calls.find(call => call[0] === 'intake' && call[1] === 'recv');
-    expect(recv?.[2]).toEqual({ chatType: 'group', mentionedBot: true, threadId: 'abcdef', chat: 'c_demo', ref: msg.messageId.slice(-6) });
+    expect(recv?.[2]).toStrictEqual({ senderType: undefined, senderIdKind: 'ou_', chatType: 'group', mentionedBot: true, threadId: 'abcdef', chat: 'c_demo', ref: msg.messageId.slice(-6) });
   });
 });
 

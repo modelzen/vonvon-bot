@@ -10,6 +10,7 @@ import { z } from 'zod';
 import type { CrashLog } from '../host/crash-guard';
 import { writeAtomicSync } from '../host/crash-store';
 import { FEISHU_RATE_LIMIT_CODES, feishuError, scopeDenial } from '../utils/feishu-error';
+import { fromBot } from './baselines';
 import { deniedScopeName, errorDetail } from './diagnostics';
 
 /** Where a dropped message was: the reply goes under it, in its topic when it was in one. */
@@ -42,6 +43,11 @@ const fileSchema = z.object({ v: z.literal(1), entries: z.array(z.unknown()) }).
 /** A message's place as its ordinary reply has it: quoted in a single group's main area, else in its topic. */
 export function originOf(msg: Pick<NormalizedMessage, 'chatId' | 'messageId' | 'createTime'>, flat: boolean): DroppedOrigin {
   return { chatId: msg.chatId, messageId: msg.messageId, at: msg.createTime || Date.now(), replyInThread: !flat, place: flat ? 'main' : 'topic' };
+}
+
+/** Bots are never asked to resend after a restart. */
+export function originFor(msg: Pick<NormalizedMessage, 'chatId' | 'messageId' | 'createTime' | 'raw'>, flat: boolean): DroppedOrigin | undefined {
+  return fromBot(msg) ? undefined : originOf(msg, flat);
 }
 
 const isMissing = (error: unknown): boolean => (error as { code?: unknown } | null)?.code === 'ENOENT';
