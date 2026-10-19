@@ -15,6 +15,8 @@ import { serializeRuntimeCard } from './runtime-card-icons';
 interface ManagedEntry {
   cardId: string;
   sequence: number;
+  /** For the `<at>` guard when the card is updated (s27a0). */
+  chatId?: string;
 }
 
 // Per-process; lost on restart, which is fine — a stale card just stops being
@@ -93,7 +95,8 @@ export async function sendManagedCard(
   receiveIdType: 'chat_id' | 'open_id' = 'chat_id',
 ): Promise<ManagedCardSendResult> {
   stampRenderToken(card);
-  const data = await serializeRuntimeCard(card, channel.rawClient);
+  const chatId = receiveIdType === 'chat_id' ? to : undefined;
+  const data = await serializeRuntimeCard(card, channel.rawClient, chatId);
 
   // One attempt = create the entity + send the message that references it.
   const attempt = async (): Promise<ManagedCardSendResult> => {
@@ -120,7 +123,7 @@ export async function sendManagedCard(
     if (!messageId) {
       throw new Error('send card-by-reference returned no message_id');
     }
-    byMessageId.set(messageId, { cardId, sequence: 0 });
+    byMessageId.set(messageId, { cardId, sequence: 0, chatId });
     return { messageId, cardId };
   };
 
@@ -156,7 +159,7 @@ export async function updateManagedCard(
     return false;
   }
   stampRenderToken(card);
-  const data = await serializeRuntimeCard(card, channel.rawClient);
+  const data = await serializeRuntimeCard(card, channel.rawClient, entry.chatId);
   const push = async (): Promise<void> => {
     entry.sequence += 1;
     await channel.rawClient.cardkit.v1.card.update({

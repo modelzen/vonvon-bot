@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import type { PermissionMode } from '../agent/types';
 import { scanLocalFiles, type LocalFileRef } from '../card/file-refs';
+import { guardCardJson } from '../card/at-guard';
 import type { CardElement } from '../card/cards';
 import { fileComponentCount, renderFileAnswer, type InlineFiles } from '../card/inline-files';
 import type { CardDispatcher } from '../card/dispatcher';
@@ -321,7 +322,8 @@ export class OutboundFiles {
         try {
           const result = await timed(channel.rawClient.cardkit.v1.cardElement.update({
             path: { card_id: manifest.cardId, element_id: elementId },
-            data: { element: JSON.stringify(element), sequence: manifest.sequence, uuid: randomUUID() },
+            // No live stream after a restart: this element write skips the stream's `<at>` guard (s27a0).
+            data: { element: await guardCardJson(channel.rawClient, JSON.stringify(element), manifest.chatId), sequence: manifest.sequence, uuid: randomUUID() },
           }));
           if (result?.code) throw new Error(`CardKit ${result.code}`);
           return true;

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { AskAnswer, AskRequest } from '../agent/types';
+import { keepAts } from './at-guard';
 import { actions, button, card, form, md, multiSelectMenu, note, selectMenu, submitButton, type ActionValue, type CardElement, type CardObject } from './cards';
 
 export type AskCardState =
@@ -153,5 +154,7 @@ export function buildAskCard(input: { request: AskRequest; state: AskCardState; 
       default: { const exhaustive: never = state; return exhaustive; }
     }
   }
-  return card(elements, { header: { title: request.title, template: state.kind === 'pending' ? 'blue' : 'grey' }, forward: false });
+  // The respondents' @ is the program's own: it stays real even when the chat's bot list cannot be read (s27a0).
+  return keepAts(card(elements, { header: { title: request.title, template: state.kind === 'pending' ? 'blue' : 'grey' }, forward: false }),
+    respondents.map(person => person.openId));
 }

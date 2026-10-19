@@ -90,6 +90,15 @@ it('does not tell a sender to resend a desktop goal interrupted during preparati
   expect(existsSync(file)).toBe(false);
 });
 
+it('s27a0: the desktop objective goes out without a real <at> (main fails: channel.send is not guarded)', async () => {
+  const be = backend(); const app = orchestrator();
+  try {
+    await app.collaboration({ action: 'startGoal', ...target, threadId: 'oc_demo', objective: '让 <at id="ou_b">小审</at> 看' });
+    await vi.waitFor(() => expect(fixture.send).toHaveBeenCalledWith('oc_demo', { markdown: '桌面端启动目标：让 @小审 看' }, undefined));
+    expect(be.resumeThread).toHaveBeenCalled();
+  } finally { await app.shutdown(); }
+});
+
 it('generates a share card with only the requested sections', async () => {
   backend(); const app = orchestrator();
   fixture.usage.mockResolvedValueOnce({
