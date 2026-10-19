@@ -55,7 +55,7 @@ describe('event loop lag (s23f2)', () => {
 
     await vi.advanceTimersByTimeAsync(LOOP_LAG_REPORT_MS - 3_000);
     expect(fake.log.info).toHaveBeenCalledTimes(1);
-    expect(fake.log.info).toHaveBeenCalledWith('daemon-run', 'loop-lag', { pid: 42, bot: 'cli_a', p99Ms: 30, maxMs: 260 });
+    expect(fake.log.info).toHaveBeenCalledWith('daemon-run', 'loop-lag', { pid: 42, bot: 'cli_a', p99Ms: 30, maxMs: 260, stalls: 1 });
     expect(minute!.resets).toBe(1);
 
     stop();
@@ -65,6 +65,22 @@ describe('event loop lag (s23f2)', () => {
     await vi.advanceTimersByTimeAsync(LOOP_LAG_REPORT_MS * 2);
     expect(fake.log.warn).toHaveBeenCalledTimes(1);
     expect(fake.log.info).toHaveBeenCalledTimes(1);
+  });
+
+  it('a host stalling every second gets one warning in 10 s, and the minute\'s line counts every stall', async () => {
+    vi.useFakeTimers();
+    const h = histogram();
+    const stop = startLoopLagMonitor({}, h.factory);
+    const [, second] = h.made;
+    for (let i = 0; i < 25; i++) {
+      second!.set(300);
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    // seconds 1, 11 and 21
+    expect(fake.log.warn).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(LOOP_LAG_REPORT_MS - 25_000);
+    expect(fake.log.info).toHaveBeenCalledWith('daemon-run', 'loop-lag', { p99Ms: 0, maxMs: 0, stalls: 25 });
+    stop();
   });
 
   it('holds no process open: with the real histogram, no timer of its keeps the loop alive', () => {

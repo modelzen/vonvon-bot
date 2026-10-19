@@ -6,8 +6,8 @@ import net from 'node:net';
  * tried (s23f2). Node's 250 ms turned a slow connect into a failure: TypeSafe has two A and two AAAA records, a host
  * without an IPv6 route fails the AAAA ones at once, and two IPv4 attempts each slower than 250 ms ended as an
  * AggregateError with code ETIMEDOUT. 1 s is Linux's first SYN retransmission timeout, so it rides out a SYN-ACK that
- * is late, not one that is lost. Feishu has only A records and its last attempt has no timer, so it never failed this
- * way; for it a larger value is a cost: one lost SYN to the first address now waits about 1 s, not 250 ms, before
+ * is late, not one that is lost. Feishu has only A records and Node sets no timer on the last attempt (a last address that
+ * hangs waits for the caller's own timeout), so it never failed this way; for it a larger value is a cost: one lost SYN to the first address now waits about 1 s, not 250 ms, before
  * the second is tried.
  */
 export const AUTO_SELECT_ATTEMPT_MS = 1_000;
