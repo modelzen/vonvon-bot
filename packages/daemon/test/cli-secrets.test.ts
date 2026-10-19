@@ -37,7 +37,7 @@ describe('vonvon secrets (s23g)', () => {
   it('list: state, last four and who chose it; an unreadable keystore exits 1', async () => {
     const h = context(() => view(service({ status: 'set', last4: 'A1B2', inUse: USES }), { unreadBots: 2 }), { daemon: true });
     await runSecretsList(h.ctx);
-    expect(h.out()).toBe('TypeSafe（typesafe-api-key）  已填 ••••A1B2\n  在用：值班助手（Bot 默认）、发布群（值班助手，跟着 Bot 默认）、未命名群聊（值班助手，现在不是智能群）\n'
+    expect(h.out()).toBe('TypeSafe（typesafe-api-key）  已填 ••••A1B2\n  在用：值班助手（Bot 默认）、发布群（值班助手，跟着 Bot 默认）、未命名飞书群（值班助手，现在不是智能群）\n'
       + '有 2 个 Bot 的设置读不了，没算进来；vonvon daemon logs 里的 secrets.bot-unreadable 有原因。\n');
     expect(h.admin).toHaveBeenCalledTimes(1);
     expect(h.code()).toBeUndefined();
@@ -47,6 +47,20 @@ describe('vonvon secrets (s23g)', () => {
     expect(u.out()).toContain('现在没有 Bot 或飞书群选它');
     expect(u.code()).toBe(1);
     expect(u.direct).toHaveBeenCalledTimes(1);
+    const b = context(() => view(service(), { botsUnreadable: true }));
+    await runSecretsList(b.ctx);
+    expect(b.out()).toContain('Bot 清单（bots.json）读不了，谁选了它没算进来；vonvon daemon logs 里的 secrets.bots-unreadable 有原因。');
+  });
+
+  it('set with a keystore that cannot be read says so and exits 1 before asking for the key', async () => {
+    for (const daemon of [false, true]) {
+      const h = context(() => view(service({ status: 'unreadable', problem: 'secrets.enc 的格式不对', code: 'KEYSTORE_STORE_FORMAT' })), { daemon, key: KEY });
+      await runSecretsSet('typesafe-api-key', [], {}, h.ctx);
+      expect(h.readKey).not.toHaveBeenCalled();
+      expect(h.sent).toEqual([{ type: 'secrets' }]);
+      expect(h.err()).toBe('没有存：TypeSafe 的 key 读不了：secrets.enc 的格式不对（KEYSTORE_STORE_FORMAT）。vonvon daemon logs 里的 secrets.unreadable 有原话\n');
+      expect(h.code()).toBe(1);
+    }
   });
 
   it('set: connects first, asks for the key, trims it, saves and tries it once', async () => {
@@ -81,7 +95,7 @@ describe('vonvon secrets (s23g)', () => {
   it('a daemon from before s23g: the files are written here, after saying so', async () => {
     const h = context(() => view(service({ status: 'set' })), { daemon: true });
     h.admin.mockImplementation(async () => { throw new RpcError('invalid_request', '请求参数无效。'); });
-    await runSecretsRemove('typesafe-api-key', {}, h.ctx);
+    await runSecretsRemove('typesafe-api-key', [], {}, h.ctx);
     expect(h.err()).toContain('daemon 比命令行旧');
     expect(h.direct.mock.calls.map(([r]) => r.type)).toEqual(['secrets', 'removeSecret']);
   });
@@ -94,9 +108,18 @@ describe('vonvon secrets (s23g)', () => {
     expect(h.direct).not.toHaveBeenCalled();
   });
 
+  it('remove refuses anything after the name, echoing none of it', async () => {
+    const h = context(() => view(service(), { removed: true }));
+    await runSecretsRemove('typesafe-api-key', [KEY], {}, h.ctx);
+    await runSecretsRemove('x', [KEY], { raw: true }, h.ctx);
+    expect(h.err()).toBe('只写一个名字，后面多写了东西，没有删。\n'.repeat(2));
+    expect(h.code()).toBe(2);
+    expect(h.sent).toEqual([]);
+  });
+
   it('remove names who still chose it', async () => {
     const h = context(() => view(service({ inUse: USES.slice(0, 1) }), { removed: true }));
-    await runSecretsRemove('typesafe-api-key', {}, h.ctx);
+    await runSecretsRemove('typesafe-api-key', [], {}, h.ctx);
     expect(h.out()).toBe('✓ 已删 TypeSafe 的 key。\n还选着它的：值班助手（Bot 默认）；它们要判断的消息按出错处理（没 @ Bot 的不回，@ 的回在主区），重新填就恢复。\n');
   });
 
@@ -105,7 +128,7 @@ describe('vonvon secrets (s23g)', () => {
       const h = context(() => view(service()), { env, key: KEY });
       await runSecretsList(h.ctx);
       await runSecretsSet('typesafe-api-key', [], {}, h.ctx);
-      await runSecretsRemove('typesafe-api-key', { raw: true }, h.ctx);
+      await runSecretsRemove('typesafe-api-key', [], { raw: true }, h.ctx);
       expect(h.err()).toBe('这组命令不能在 Bot 的会话里用，在自己的终端里运行。\n'.repeat(3));
       expect(h.code()).toBe(2);
       expect(h.sent).toEqual([]);

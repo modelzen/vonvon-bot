@@ -180,6 +180,20 @@ it('keeps generated secret getters on their captured root outside the parent she
   expect(await readdir(outside.root)).toEqual([]);
 });
 
+it('secrets set and remove refuse an unknown option without echoing it: a key may have been typed there (s23g)', async () => {
+  const f = await fixture();
+  const session = { FEISHU_CODEX_BRIDGE: '', VONVON_SESSION: '' };
+  for (const args of [['set', 'typesafe-api-key', '--ts_TESTKEY0000'], ['set', '--ts_TESTKEY0000', 'typesafe-api-key'], ['remove', 'typesafe-api-key', '--ts_TESTKEY0000'], ['remove', 'typesafe-api-key', 'ts_TESTKEY0000']]) {
+    const p = launch(f.home, f.root, ['secrets', ...args], session); p.child.stdin.end();
+    expect(await p.exited, p.output()).toBe(2);
+    expect(p.output()).not.toContain('TESTKEY');
+  }
+  const help = launch(f.home, f.root, ['secrets', 'remove', '--help'], session);
+  expect(await help.exited).toBe(0);
+  expect(help.output()).toContain('vonvon secrets list');
+  for (const file of ['secrets.enc', 'master.key']) expect(await readdir(f.root)).not.toContain(file);
+});
+
 it('refuses a reused PID without signaling the unrelated process or changing its lock', async () => {
   const f = await fixture();
   const sleeper = spawn(process.execPath, ['-e', "process.stdout.write('ready\\n');setInterval(()=>{},1000)"], { stdio: 'pipe' });

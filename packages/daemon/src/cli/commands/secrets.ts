@@ -12,6 +12,7 @@ import { print, printable, want, withDaemon, type Daemon, type Io } from '../dae
 
 const SESSION_REFUSED = '这组命令不能在 Bot 的会话里用，在自己的终端里运行。';
 const ARGS_REFUSED = 'key 不写在命令参数里（会进 shell 的历史）。直接运行 vonvon secrets set <名字>，按提示粘贴；脚本里从标准输入传进来。';
+const REMOVE_ARGS_REFUSED = '只写一个名字，后面多写了东西，没有删。';
 /** A save may wait out the keystore's 30 s lock across processes. */
 const SAVE_MS = 45_000;
 
@@ -81,11 +82,17 @@ function service(ctx: SecretsContext, name: string): DecisionProvider | undefine
 }
 
 const useText = (u: SecretUse): string => u.groupId === undefined ? `${u.agentName}（Bot 默认）`
-  : `${u.groupName || '未命名群聊'}（${[u.agentName, u.inherited && '跟着 Bot 默认', u.notSmart && '现在不是智能群'].filter(Boolean).join('，')}）`;
+  : `${u.groupName || '未命名飞书群'}（${[u.agentName, u.inherited && '跟着 Bot 默认', u.notSmart && '现在不是智能群'].filter(Boolean).join('，')}）`;
 const statusText = (s: SecretService): string => s.status === 'set' ? `已填${s.last4 ? ` ••••${s.last4}` : ''}`
   : s.status === 'missing' ? '还没填'
   : s.status === 'invalid' ? '存着的 key 不能用（有空格或看不见的字符），重新填一次'
   : `读不了：${s.problem}（${s.code}）。vonvon daemon logs 里的 secrets.unreadable 有原话`;
+
+/** Whose choices are missing from `inUse`, and where the logs say why. */
+const unreadNotes = (view: SecretsView): string[] => [
+  ...view.botsUnreadable ? ['Bot 清单（bots.json）读不了，谁选了它没算进来；vonvon daemon logs 里的 secrets.bots-unreadable 有原因。'] : [],
+  ...view.unreadBots ? [`有 ${view.unreadBots} 个 Bot 的设置读不了，没算进来；vonvon daemon logs 里的 secrets.bot-unreadable 有原因。`] : [],
+];
 
 export async function runSecretsList(ctx: SecretsContext): Promise<void> {
   if (refused(ctx)) return;
@@ -94,8 +101,8 @@ export async function runSecretsList(ctx: SecretsContext): Promise<void> {
     `${s.displayName}（${s.keyId}）  ${statusText(s)}`,
     `  ${s.inUse.length ? `在用：${s.inUse.map(useText).join('、')}` : '现在没有 Bot 或飞书群选它'}`,
   ]);
-  if (view.unreadBots) human.push(`有 ${view.unreadBots} 个 Bot 的设置读不了，没算进来；vonvon daemon logs 里的 secrets.bot-unreadable 有原因。`);
-  print(ctx.io, human, { services: view.services, unreadBots: view.unreadBots });
+  human.push(...unreadNotes(view));
+  print(ctx.io, human, { services: view.services, unreadBots: view.unreadBots, ...(view.botsUnreadable ? { botsUnreadable: true } : {}) });
   if (view.services.some(s => s.status === 'unreadable')) ctx.exit(1);
 }
 
@@ -114,7 +121,10 @@ export async function runSecretsSet(name: string, extra: string[], options: { ra
     if (options.raw) { await rawSet(name, ctx); return; }
     const provider = service(ctx, name);
     if (!provider) return;
-    await route(ctx, async send => {
+    await route(ctx, async (send, first) => {
+      // a keystore that cannot be read refuses the save too: say so before the key crosses the terminal
+      const current = first.services.find(s => s.keyId === provider.keyId);
+      if (current?.status === 'unreadable') { ctx.warn(`没有存：${provider.displayName} 的 key ${statusText(current)}\n`); ctx.exit(1); return; }
       const value = (await ctx.readKey(`粘贴 ${provider.displayName} 的 key（不回显），回车结束：`)).trim();
       const problem = keyProblem(value);
       if (problem) { ctx.warn(`没有存：${problem}。\n`); ctx.exit(2); return; }
@@ -137,8 +147,10 @@ async function rawSet(id: string, ctx: SecretsContext): Promise<void> {
   ctx.io.write(`✓ 已存储密钥: ${printable(id)}\n`);
 }
 
-export async function runSecretsRemove(name: string, options: { raw?: boolean }, ctx: SecretsContext): Promise<void> {
+/** `secrets remove <名字>`; anything after the name is refused unechoed, as for `set`. */
+export async function runSecretsRemove(name: string, extra: string[], options: { raw?: boolean }, ctx: SecretsContext): Promise<void> {
   if (refused(ctx)) return;
+  if (extra.length) { ctx.warn(`${REMOVE_ARGS_REFUSED}\n`); ctx.exit(2); return; }
   if (options.raw) {
     ctx.io.write(await removeSecret(name) ? `✓ 已删除: ${printable(name)}\n` : `未找到: ${printable(name)}\n`);
     return;
@@ -151,6 +163,7 @@ export async function runSecretsRemove(name: string, options: { raw?: boolean },
     print(ctx.io, !view.removed ? [`${provider.displayName} 的 key 本来就没填。`] : [
       `✓ 已删 ${provider.displayName} 的 key。`,
       ...uses.length ? [`还选着它的：${uses.map(useText).join('、')}；它们要判断的消息按出错处理（没 @ Bot 的不回，@ 的回在主区），重新填就恢复。`] : [],
+      ...unreadNotes(view),
     ], {});
   });
 }

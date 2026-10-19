@@ -119,9 +119,9 @@ export const adminReplySchema = z.discriminatedUnion("kind", [
   z.object({kind:z.literal("logs"),text:z.string()}),
   z.object({kind:z.literal("following"),follow:z.boolean()}),
   z.object({kind:z.literal("applied"),revision:z.number()}),
-  /** `unreadBots`: bots whose settings could not be read, so their choices are not in `inUse`; `removed` answers
-   * removeSecret (false: there was no key) */
-  z.object({kind:z.literal("secrets"),services:z.array(secretServiceSchema),unreadBots:z.number().int().nonnegative(),removed:z.boolean().optional()}),
+  /** `unreadBots`: bots whose settings could not be read, so their choices are not in `inUse`; `botsUnreadable`: the
+   * bot list itself could not be read, so `inUse` lists no one; `removed` answers removeSecret (false: there was no key) */
+  z.object({kind:z.literal("secrets"),services:z.array(secretServiceSchema),unreadBots:z.number().int().nonnegative(),botsUnreadable:z.boolean().optional(),removed:z.boolean().optional()}),
   z.object({kind:z.literal("secretTested"),keyId:z.string(),outcome:secretTestOutcomeSchema,message:z.string(),status:z.number().int().optional()}),
   z.object({kind:z.literal("refused"),code:z.string(),message:z.string()}),
 ]);

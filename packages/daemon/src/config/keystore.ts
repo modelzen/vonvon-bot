@@ -17,7 +17,7 @@ type StoreFile = z.infer<typeof storeSchema>;
 type Envelope = z.infer<typeof envelope>;
 const missing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
 /** An error the key page tells apart by its code (admin/secrets.ts); its message stays for logs. A missing master key
- * on a read is lstat's own ENOENT: keyForMutation tells a first save by it. */
+ * is lstat's own ENOENT inside: keyForMutation tells a first save by it, and the reads give it a code (keyForStore). */
 const keystoreError = (code: string, message: string, cause?: unknown): Error => Object.assign(new Error(message, cause === undefined ? undefined : { cause }), { code });
 
 async function readStore(): Promise<StoreFile | undefined> {
@@ -48,6 +48,15 @@ async function loadKey(): Promise<Buffer> {
     if (key.length !== 32) throw keystoreError('KEYSTORE_MASTER_KEY_MODE', 'Invalid master key length.');
     return key;
   } finally { await handle.close(); }
+}
+
+/** The master key of a store that is there: gone, it is said by its code, so no other missing file reads as it. */
+async function keyForStore(): Promise<Buffer> {
+  try { return await loadKey(); }
+  catch (error) {
+    if (missing(error)) throw keystoreError('KEYSTORE_MASTER_KEY_MISSING', 'Master key is missing for an existing secrets store.', error);
+    throw error;
+  }
 }
 
 async function keyForMutation(storeExists: boolean): Promise<Buffer> {
@@ -90,7 +99,7 @@ function encrypt(key: Buffer, plaintext: string): Envelope {
 export async function getSecret(id: string): Promise<string | undefined> {
   const store = await readStore();
   if (!store) return undefined;
-  const key = await loadKey();
+  const key = await keyForStore();
   const entry = store.entries[id];
   if (!entry) return undefined;
   try {
@@ -126,7 +135,7 @@ export function removeSecret(id: string): Promise<boolean> {
   return mutate(async () => {
     const store = await readStore();
     if (!store) return false;
-    await loadKey();
+    await keyForStore();
     if (!Object.hasOwn(store.entries, id)) return false;
     delete store.entries[id];
     await writeStore(store);
@@ -137,6 +146,6 @@ export function removeSecret(id: string): Promise<boolean> {
 export async function listSecretIds(): Promise<string[]> {
   const store = await readStore();
   if (!store) return [];
-  await loadKey();
+  await keyForStore();
   return Object.keys(store.entries);
 }

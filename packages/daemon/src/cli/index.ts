@@ -167,9 +167,10 @@ secrets.command('list').description('列出要 key 的服务：填没填、末�
   await (await import('./commands/secrets')).runSecretsList(await secretsContext(options));
 });
 // --raw <id>: any entry by its id, for internal use and repairs; not in the help
-// commander takes excess arguments silently; a key typed after the name is in command.args, to refuse it in words
+// commander takes excess arguments silently and, allowed, unknown options too: a key typed after the name is then in
+// command.args, refused in words; commander's own error would echo it
 secrets.command('set <name>').description('填或换一个 key：终端里按提示粘贴（不回显），脚本里从标准输入传')
-  .addOption(new Option('--raw').hideHelp())
+  .addOption(new Option('--raw').hideHelp()).allowUnknownOption()
   .addHelpText('after', `
 Names:
   typesafe-api-key   TypeSafe（决策模型 Jev）
@@ -182,9 +183,11 @@ Examples:
   .action(async (name: string, options: { raw?: boolean }, command: Command) => {
     await (await import('./commands/secrets')).runSecretsSet(name, command.args.slice(1), options, await secretsContext());
   });
-secrets.command('remove <name>').description('删掉一个 key；选了它的 Bot 和飞书群要判断的消息按出错处理').addOption(new Option('--raw').hideHelp())
-  .action(async (name: string, options: { raw?: boolean }) => {
-    await (await import('./commands/secrets')).runSecretsRemove(name, options, await secretsContext());
+secrets.command('remove <name>').description('删掉一个 key；选了它的 Bot 和飞书群要判断的消息按出错处理').addOption(new Option('--raw').hideHelp()).allowUnknownOption()
+  .addHelpText('after', `
+删之前可以先运行 vonvon secrets list，看哪些 Bot 和飞书群选了它；删完也会列出还选着它的。`)
+  .action(async (name: string, options: { raw?: boolean }, command: Command) => {
+    await (await import('./commands/secrets')).runSecretsRemove(name, command.args.slice(1), options, await secretsContext());
   });
 
 // `vonvon hook` is answered in bin/vonvon.mjs before this bundle loads.
