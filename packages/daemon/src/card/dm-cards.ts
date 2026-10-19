@@ -1,3 +1,6 @@
+import type { ResponseRoster } from '@vonvon/protocol';
+import { responseMemberLabel } from '../bot/response-members';
+import { getAppRoleSnapshot } from '../config/app-roles';
 import { voiceView, VOICE_TITLE, VOICE_DESCRIPTION, VOICE_NOTICE, VOICE_DOC_URL } from '../voice/view';
 import {
   COMPLETION_REMINDER_LONG_TASK_MAX_MINUTES,
@@ -10,7 +13,6 @@ import {
   getSessionTitleEfforts,
   getShowToolCalls,
   normalizeRunIdleTimeoutSeconds,
-  resolveOwner,
   RUN_IDLE_TIMEOUT_DEFAULT_SEC,
   RUN_IDLE_TIMEOUT_MAX_SEC,
   RUN_IDLE_TIMEOUT_MIN_SEC,
@@ -601,7 +603,7 @@ export function parseNoMentionPick(formValue: Record<string, unknown> | undefine
  */
 export function buildJoinGroupFormCard(
   opts: { chatId: string; name?: string; cwd?: string; error?: string; backends?: SelectOption[];
-    backend?: string; topic?: boolean; addedBy?: { name?: string }; fullOnly?: boolean },
+    backend?: string; topic?: boolean; hasOtherBots?: boolean; addedBy?: { name?: string }; fullOnly?: boolean },
 ): CardObject {
   const elements: CardElement[] = [];
   if (opts.error) elements.push(md(`❌ **绑定失败**：${opts.error}`));
@@ -622,6 +624,7 @@ export function buildJoinGroupFormCard(
   formItems.push(note('🔒 权限档：只读 · 网络：关。设置好以后在群详情页或私聊里改。'));
   if (opts.fullOnly) formItems.push(note('ℹ️ 这台电脑是 Linux：选 Codex 也能绑定，但只读档跑不起来，@ 我时我会回一句说明。要用，绑定后在群设置里改成完全访问（它能读写这个账号能碰到的所有文件）。'));
   formItems.push(...sessionModeItems('绑定', { a: DM.joinGroupSubmit, chatId: opts.chatId, ...(opts.topic ? { t: 'topic' } : {}) }, opts.topic));
+  if (opts.hasOtherBots) formItems.push(note('群里还有别的 bot。几个 bot 都选智能，它们才能互相 @、各自判断接不接话。'));
   const group = opts.name ? `「${opts.name}」` : '一个群（没读到群名）';
   const introduction = opts.error ? '重新选一下，点下面对应的按钮。' : opts.addedBy
     ? `**${opts.addedBy.name || '有人'}** 把我拉进了${group}。拉我的不是主人或管理员，所以发给你。设置好才能用：选会话方式，点下面对应的按钮。`
@@ -1484,26 +1487,37 @@ function memberName(names: Map<string, string>, id: string): string {
  * `names` 由调用方用 contact.batch 预解析 open_id→姓名。
  */
 export function buildAdminsCard(cfg: AppConfig, names: Map<string, string>): CardObject {
-  const owner = resolveOwner(cfg);
+  const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
+  const owner = roles?.ownerOpenId;
+  const scanner = cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0];
   const admins = cfg.preferences?.access?.admins ?? [];
   const elements: CardElement[] = [md('**管理员名单** · 本 bot 全局（可私聊管理 / 建项目 / 销毁操作）'), hr()];
   const seen = new Set<string>();
   if (owner) {
     seen.add(owner);
-    elements.push(actions([md(`👑 **${memberName(names, owner)}** · Bot 拥有者（注册者）`)]));
+    elements.push(actions([md(`👑 **${memberName(names, owner)}** · 飞书应用拥有者`)]));
+  }
+  for (const id of roles?.admins ?? []) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    elements.push(actions([md(`${memberName(names, id)} · 飞书应用管理员`)]));
+  }
+  if (scanner && !seen.has(scanner)) {
+    seen.add(scanner);
+    elements.push(actions([md(`${memberName(names, scanner)} · 扫码注册者`)]));
   }
   let extra = 0;
   for (const id of admins) {
     if (seen.has(id)) continue;
     seen.add(id);
     extra++;
-    elements.push(actions([md(memberName(names, id)), button('🗑 移除', { a: DM.rmAdmin, u: id }, 'danger')]));
+    elements.push(actions([md(`${memberName(names, id)} · 本地管理员`), button('🗑 移除', { a: DM.rmAdmin, u: id }, 'danger')]));
   }
   if (extra === 0) elements.push(note('暂无额外管理员。'));
   elements.push(
     hr(),
     actions([button('➕ 添加管理员', { a: DM.addAdminForm }, 'primary'), button('⬅️ 设置', { a: DM.settings })]),
-    note('👑 Bot 拥有者（注册此 bot 的人）恒为管理员，不可移除；名单为空时仅拥有者可管理。'),
+    note('飞书应用拥有者和管理员请在飞书开放平台管理；扫码注册者不可移除。'),
   );
   return card(elements, { header: { title: '👮 管理员', template: 'blue' } });
 }
@@ -1867,14 +1881,14 @@ export function buildAllowlistCard(
 }
 
 /**
- * 添加白名单成员的表单卡。候选来自**群成员接口**（含外部租户成员，且 API 本身不返回
- * 机器人）；大群只列前 N，其余走 open_id 手动输入兜底。提交按钮携带项目名（n）。
+ * 添加响应成员：候选合并真人与 bot 名册；仅显示有界首页，保留手填入口。
  */
 export function buildAddAllowedCard(
   projectName: string,
-  members: { openId: string; name: string }[],
+  roster: ResponseRoster | undefined,
 ): CardObject {
   const MAX = 50;
+  const members = roster?.entries ?? [];
   const shown = members.slice(0, MAX);
   const formEls: CardElement[] = [];
   if (shown.length > 0) {
@@ -1882,7 +1896,7 @@ export function buildAddAllowedCard(
       selectMenu({
         name: 'pick',
         placeholder: '从群成员选择',
-        options: shown.map((m) => ({ label: m.name, value: m.openId })),
+        options: shown.map((m) => ({ label: responseMemberLabel(m), value: m.openId })),
       }),
     );
   }
@@ -1895,6 +1909,7 @@ export function buildAddAllowedCard(
     actions([submitButton('✅ 确认添加', { a: DM.addAllowedSubmit, n: projectName }, 'primary', 'submit_allowed')]),
   );
   const tail: CardElement[] = [];
+  if (roster?.state !== 'complete') tail.push(note('群成员名册未完整读取，已有响应名单不受影响；可重新打开此页重试，或输入 open_id。'));
   if (members.length > MAX) tail.push(note(`群成员较多，仅列前 ${MAX} 个；其余请直接输入 open_id。`));
   return card(
     [

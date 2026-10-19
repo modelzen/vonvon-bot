@@ -1145,20 +1145,23 @@ function AgentPanel({
         footer={
           cards.access.kind === "readonly"
             ? cards.access.message
-            : "注册 Bot 的主人始终有管理员权限，不能在这里移除。"
+            : "飞书应用身份请在飞书开放平台管理；注册者始终保留本地管理员权限。"
         }
       >
-        <SettingsRow title="主人" value={view.ownerOpenId ?? "尚未确认"} />
+        <SettingsRow title="飞书应用拥有者" value={view.administrators.feishu?.ownerOpenId ?? "尚未获取"} />
+        {view.administrators.feishu?.adminOpenIds.map((id) => (
+          <SettingsRow key={`feishu-${id}`} title={id} value="飞书应用管理员 · 请在飞书开放平台管理" />
+        ))}
+        <SettingsRow title="扫码注册者" value={view.administrators.scannerOpenId ?? view.ownerOpenId ?? "尚未确认"} />
         {view.administrators.openIds.map((id) => (
           <SettingsRow
             key={id}
             title={id}
+            value="本地管理员"
             trailing={
-              <Button
+              id === view.ownerOpenId || id === view.administrators.scannerOpenId || view.administrators.feishu?.adminOpenIds.includes(id) ? undefined : <Button
                 size="sm"
-                disabled={
-                  id === view.ownerOpenId || cards.access.kind === "readonly"
-                }
+                disabled={cards.access.kind === "readonly"}
                 onClick={() =>
                   void act({
                     type: "act",
@@ -1350,6 +1353,11 @@ export function ProjectPanel({
     const parsed = openIdSchema.safeParse(memberId.trim());
     return parsed.success ? memberAction(parsed.data, 'present') : false;
   }, discard: () => setMemberId('')});
+  const roster = view.members.roster;
+  const memberLabel = (id: string) => {
+    const member = roster?.entries.find(entry => entry.openId === id);
+    return member ? `${member.name}${member.kind === "bot" ? " · Bot" : ""} · …${id.slice(-6)}` : `未读取到名称 · …${id.slice(-6)}`;
+  };
   const permission = view.sections.permission,
     response = view.sections.response,
     model = view.sections.model,
@@ -1431,7 +1439,7 @@ export function ProjectPanel({
         {view.members.openIds.map((id) => (
           <SettingsRow
             key={id}
-            title={id}
+            title={memberLabel(id)}
             trailing={
               <Button
                 size="sm"
@@ -1444,6 +1452,19 @@ export function ProjectPanel({
           />
         ))}
         <SettingsRow
+          title="从群成员选择"
+          description={roster?.state === "complete" ? "包含群里的 Bot。" : "名册未完整读取，已有名单保留。检查飞书群读取权限后稍等一分钟再重试，或直接输入 Open ID。"}
+          trailing={<div className="settings-inline-actions">
+            <select aria-label="选择响应成员" value={memberId} disabled={permission.access.kind === "readonly"}
+              onChange={event => setMemberId(event.target.value)}>
+              <option value="">选择群成员或 Bot</option>
+              {roster?.entries.filter(entry => !view.members.openIds.includes(entry.openId)).map(entry =>
+                <option key={entry.openId} value={entry.openId}>{memberLabel(entry.openId)}</option>)}
+            </select>
+            <Button size="sm" onClick={() => void refresh()}>重新读取成员</Button>
+          </div>}
+        />
+        <SettingsRow
           title="添加成员 Open ID"
           trailing={
             <div className="settings-inline-actions">
@@ -1455,7 +1476,7 @@ export function ProjectPanel({
               />
               <Button
                 size="sm"
-                disabled={!openIdSchema.safeParse(memberId.trim()).success}
+                disabled={permission.access.kind === "readonly" || !openIdSchema.safeParse(memberId.trim()).success}
                 onClick={() => void memberAction(memberId.trim(), "present")}
               >
                 添加

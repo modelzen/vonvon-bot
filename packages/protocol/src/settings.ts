@@ -239,6 +239,8 @@ export const agentViewSchema = z.object({
   decisionModels,
   ownerOpenId: z.string().nullable(),
   administrators: z.object({
+    feishu: z.object({ ownerOpenId: z.string().nullable(), adminOpenIds: z.array(z.string()) }).optional(),
+    scannerOpenId: z.string().nullable().optional(),
     openIds: z.array(z.string()),
     revision: z.string(),
   }),
@@ -252,6 +254,14 @@ export const agentViewSchema = z.object({
     maxEditLength: z.number(),
   }),
 });
+/** A bounded, observed group roster; the saved response list is independent of this read. */
+export const responseRosterSchema = z.object({
+  state: z.enum(["complete", "partial", "unavailable"]),
+  entries: z.array(z.object({ openId: z.string(), name: z.string(), kind: z.enum(["person", "bot"]) })),
+  otherBots: z.boolean(),
+});
+export type ResponseRoster = z.infer<typeof responseRosterSchema>;
+
 export const projectViewSchema = z.object({
   scope: z.object({
     kind: z.literal("project"),
@@ -273,7 +283,7 @@ export const projectViewSchema = z.object({
     /** Set when this host runs the backend only in 完全访问 (Codex on Linux): why 只读 and 读写 are greyed out. */
     fullOnly: z.string().optional(),
   }),
-  members: z.object({ openIds: z.array(z.string()), revision: z.string() }),
+  members: z.object({ openIds: z.array(z.string()), revision: z.string(), roster: responseRosterSchema.optional() }),
 });
 export const sessionViewSchema = z.object({
   scope: z.object({

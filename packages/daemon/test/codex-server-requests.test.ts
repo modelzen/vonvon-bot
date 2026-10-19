@@ -228,13 +228,13 @@ describe('Codex inbound requests over the real app-server transport', () => {
     await owned.return?.();
   });
 
-  it('maps missing and empty options to text questions while rejecting malformed, secret and foreign requests', async () => {
+  it('maps missing and empty options to text questions while rejecting malformed and foreign requests', async () => {
     const f = await clientFixture();
     const scope = f.client.openRequestScope('thread');
     const stream = f.client.events()[Symbol.asyncIterator]();
     const base = params.questions[0];
     await f.emit([
-      question('bad', {}), question('secret', { ...params, questions: [{ ...base, isSecret: true }] }),
+      question('bad', {}),
       question('null', { ...params, questions: [{ ...base, options: null }] }),
       question('empty', { ...params, questions: [{ ...base, options: [] }] }),
       question('foreign', { ...params, threadId: 'other' }),
@@ -251,9 +251,27 @@ describe('Codex inbound requests over the real app-server transport', () => {
     const foreign = (await stream.next()).value;
     if (!foreign || 'method' in foreign || foreign.kind !== 'request') throw new Error('Expected foreign request');
     expect(scope.accepts(foreign, 'turn')).toBe(false);
-    await vi.waitFor(() => expect(f.replies()).toHaveLength(6));
-    expect(f.replies().map(reply => (reply as { id: string }).id).sort()).toEqual(['bad', 'duplicate', 'empty', 'foreign', 'null', 'secret']);
+    await vi.waitFor(() => expect(f.replies()).toHaveLength(5));
+    expect(f.replies().map(reply => (reply as { id: string }).id).sort()).toEqual(['bad', 'duplicate', 'empty', 'foreign', 'null']);
     for (const reply of f.replies()) expect(reply).toMatchObject({ result: { answers: {} } });
+    await stream.return?.();
+  });
+
+  it.each(['text', 'choices'])('maps secret questions with options to sensitive text and returns %s answers', async kind => {
+    const f = await clientFixture();
+    const scope = f.client.openRequestScope('thread');
+    const stream = f.client.events()[Symbol.asyncIterator]();
+    await f.emit([question('secret', { ...params, questions: [{ ...params.questions[0], isSecret: true }] }), { method: 'after-secret', params: {} }]);
+    const entry = (await stream.next()).value;
+    if (!entry || 'method' in entry || entry.kind !== 'request') throw new Error('Expected sensitive request');
+    expect(entry.request).toMatchObject({ title: 'Codex 需要你回答', questions: [{ selection: 'text', sensitive: true }] });
+    expect(entry.request.questions[0]).not.toHaveProperty('options');
+    await scope.respond(entry.request.id, { kind: 'answered', answer: kind === 'text'
+      ? { kind: 'text', text: 'private answer' }
+      : { kind: 'choices', answers: [{ questionId: 'q0', text: 'private answer' }] } });
+    await vi.waitFor(() => expect(f.replies()).toEqual([{ jsonrpc: '2.0', id: 'secret', result: { answers: {
+      'original-question': { answers: ['private answer'] },
+    } } }]));
     await stream.return?.();
   });
 
@@ -365,7 +383,8 @@ describe('Codex AgentRun request ownership', () => {
   it.each(['complete', 'fail', 'secret', 'eof'])('settles or releases pending input on %s', async text => {
     const f = await runFixture(text);
     const events = await drain(f.iterator);
-    if (text === 'secret' || text === 'fail') expect(events.some(e => e.type === 'ask')).toBe(false);
+    if (text === 'fail') expect(events.some(e => e.type === 'ask')).toBe(false);
+    if (text === 'secret') expect(events.some(e => e.type === 'ask')).toBe(true);
     if (text !== 'eof') await vi.waitFor(() => expect(f.replies()).toContainEqual({ jsonrpc: '2.0', id: 'ask-1', result: { answers: {} } }));
     // A closed peer cannot deliver, but a stale local answer remains harmless.
     const ask = events.find(e => e.type === 'ask');

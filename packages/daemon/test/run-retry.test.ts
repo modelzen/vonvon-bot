@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
-import type { AgentEvent, AgentInput, AgentRun } from '../src/agent/types';
+import type { AgentEvent, AgentInput, AgentRun, AskRequest } from '../src/agent/types';
 
 // Same harness shape as message-queue-races: real orchestrator, faked backend,
 // card stream and stores.
 const fake = vi.hoisted(() => ({
   backend: { capabilities: { steer: true }, id: 'codex', listModels: vi.fn(async () => []), resumeThread: vi.fn(), startThread: vi.fn() },
   live: vi.fn(),
+  updated: vi.fn(async (..._args: unknown[]) => true),
   deleteElement: vi.fn(async (..._args: unknown[]) => ({})),
   final: vi.fn(async (..._args: unknown[]) => true),
   createCard: vi.fn(async (..._args: unknown[]) => 'card'),
@@ -27,7 +28,7 @@ vi.mock('../src/config/schema', async (original) => {
   return { ...schema, getRunIdleTimeoutMs: (cfg: AppConfig) => fake.idleMs ?? schema.getRunIdleTimeoutMs(cfg) };
 });
 vi.mock('../src/card/managed', async (original) => ({
-  ...await original<object>(), sendManagedCard: fake.managed, updateManagedCard: async () => true,
+  ...await original<object>(), sendManagedCard: fake.managed, updateManagedCard: fake.updated,
 }));
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown, fn: () => unknown) => fn() }));
 vi.mock('../src/agent', async (original) => ({ ...await original<object>(), createBackend: () => fake.backend }));
@@ -834,4 +835,57 @@ describe('goal child questions across parent turns', () => {
       expect(JSON.stringify(fake.managed.mock.calls)).not.toContain('late-child');
     }
   });
+  it.each([false, true])('keeps sensitive child questions private across parent boundaries and stop: askBeforeDone=%s', async before => {
+    const done = gate(), next = gate(), finish = gate(); let inGap = false, inNext = false, count = 0;
+    fake.managed.mockImplementation(async () => ({ messageId: `private-card-${++count}` }));
+    const secret = 'fixture-private-answer';
+    const sensitive = (id: string): AskRequest => ({ kind: 'choices', id, title: id, acceptedConsequence: 'Continue', declinedConsequence: 'Stop',
+      questions: [{ id: 'q', title: 'Private input', detail: '', selection: 'text', sensitive: true }] });
+    const f = goalRun(async function* () {
+      yield { type: 'turn_started', turnId: 'g1' }; yield child; yield { type: 'text_delta', itemId: 'a', delta: 'first' };
+      if (before) yield { type: 'ask', request: sensitive('secret-first'), subagentId: 'C' };
+      await done.promise; yield { type: 'done', turnId: 'g1' };
+      if (!before) yield { type: 'ask', request: sensitive('secret-first'), subagentId: 'C' };
+      inGap = true; await next.promise; yield { type: 'turn_started', turnId: 'g2' }; yield { type: 'text_delta', itemId: 'b', delta: 'second' };
+      yield { type: 'ask', request: sensitive('secret-second'), subagentId: 'C' }; inNext = true;
+      await finish.promise; yield { type: 'done', turnId: 'g2' }; yield complete;
+    });
+    const o = setup(f.thread); await o.onMessage(message('/goal Work'));
+    const carrier = (id: string, recipient: string) => {
+      const index = fake.managed.mock.calls.findIndex(call => call[1] === recipient && JSON.stringify(call[2]).includes(id));
+      expect(index).toBeGreaterThanOrEqual(0); return `private-card-${index + 1}`;
+    };
+    const click = (id: string, recipient: string) => o.dispatcher.handle({ messageId: carrier(id, recipient), chatId: recipient === 'chat' ? 'chat' : 'p2p', operator: { openId: 'owner' },
+      action: { value: { a: 'ask_submit', requestId: id, decision: 'submit' } }, raw: { action: { form_value: { q0: secret } } } } as never);
+    if (before) await until(() => expect(count).toBe(3));
+    done.release(); await until(() => expect(inGap).toBe(true)); await until(() => expect(count).toBe(3));
+    expect(f.thread.clearGoal).not.toHaveBeenCalled(); expect(f.response).not.toHaveBeenCalled();
+    for (const call of fake.managed.mock.calls) {
+      const card = JSON.stringify(call[2]); expect(card).toContain('子 agent worker 问：');
+      expect(card.includes('"tag":"form"')).toBe(call[1] !== 'chat');
+      if (call[1] === 'chat') expect(card).not.toContain('"tag":"input"');
+    }
+    await click('secret-first', 'chat'); expect(f.response).not.toHaveBeenCalled();
+    next.release(); await until(() => expect(inNext).toBe(true)); expect(count).toBe(3);
+    await o.onMessage({ ...message(secret), chatType: 'p2p', chatId: 'p2p', threadId: undefined });
+    expect(f.response).toHaveBeenCalledExactlyOnceWith('secret-first', { kind: 'answered', answer: { kind: 'text', text: secret } });
+    await until(() => expect(count).toBe(6)); await click('secret-first', 'owner'); expect(f.response).toHaveBeenCalledTimes(1);
+    fake.sessions = [{ threadId: 'topic', chatId: 'chat', cwd: '/test', sessionId: 'host', backend: 'codex', summary: '' }];
+    const target = { projectName: 'test', chatId: 'chat', threadId: 'topic' };
+    const context = z.object({ run: z.object({ id: z.string() }) }).parse(await o.collaboration({ action: 'context', ...target }));
+    await o.collaboration({ action: 'stop', ...target, runId: context.run.id });
+    await click('secret-second', 'owner'); await until(() => expect(f.thread.close).toHaveBeenCalled());
+    expect(f.response.mock.calls).toEqual([['secret-first', { kind: 'answered', answer: { kind: 'text', text: secret } }], ['secret-second', { kind: 'unanswered', reason: 'stopped' }]]);
+    const updates = fake.updated.mock.calls;
+    for (const recipient of ['chat', 'owner', 'admin']) {
+      for (const id of ['secret-first', 'secret-second']) {
+        const patch = updates.find(call => call[1] === carrier(id, recipient)); expect(patch).toBeDefined();
+        expect(JSON.stringify(patch)).toContain(id === 'secret-first' ? recipient === 'chat' ? '已在私聊里回答' : recipient === 'owner' ? '已提交' : '已由' : '已停止');
+        expect(JSON.stringify(patch)).not.toContain('"tag":"form"');
+      }
+    }
+    expect(JSON.stringify([fake.managed.mock.calls, updates, fake.live.mock.calls, fake.final.mock.calls, fake.send.mock.calls, fake.log.info.mock.calls, fake.log.warn.mock.calls, fake.log.fail.mock.calls])).not.toContain(secret);
+    finish.release();
+  });
+
 });

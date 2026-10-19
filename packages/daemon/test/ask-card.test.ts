@@ -273,3 +273,55 @@ it.each([{ name: 'reviewer' }, {}])('keeps child origin in pending and terminal 
   }
   expect(JSON.stringify(buildAskCard({ request: confirmation, state: { kind: 'pending' }, respondents: [] }))).not.toContain('子 agent');
 });
+
+describe('s33b sensitive ask cards', () => {
+  const request = parseAskRequest({ ...base, kind: 'choices', questions: [
+    { id: 'password', title: '密码', detail: '填写密码', selection: 'text', sensitive: true },
+  ] });
+  const secret = 'sensitive-answer-must-stay-private';
+  const build = (scope: 'group' | 'dm', state: AskCardState = { kind: 'pending' }) => buildAskCard({
+    request, scope, state, respondents: [{ openId: 'u1', name: '张三' }],
+  });
+
+  it('keeps sensitive controls only in DMs and explains where to answer', () => {
+    for (const group of [build('group'), buildAskCard({ request, state: { kind: 'pending' }, respondents: [] })]) {
+      expect(nodes(group).some(node => node.tag === 'form' || node.tag === 'input' || node.element_id === ASK_CONTROLS_EID)).toBe(false);
+      expect(JSON.stringify(group)).toContain('不在群里显示输入框');
+    }
+    const dm = build('dm');
+    expect(nodes(dm).some(node => node.tag === 'form')).toBe(true);
+    expect(nodes(dm).find(node => node.tag === 'input')).toMatchObject({ input_type: 'multiline_text' });
+    expect(nodes(dm).some(node => node.element_id === ASK_CONTROLS_EID)).toBe(true);
+    expect(JSON.stringify(dm)).toContain('答案只交给 agent');
+    expect(JSON.stringify(dm)).not.toContain('可回答');
+  });
+
+  it('redacts validated sensitive answers in group and both DM terminal states', () => {
+    const answers: AskAnswer[] = [{ kind: 'text', text: secret }, { kind: 'choices', answers: [{ questionId: 'password', text: secret }] }];
+    for (const answer of answers) {
+      const state = { kind: 'answered', answer, actor: '张三', at: 'now' } satisfies AskCardState;
+      const group = JSON.stringify(build('group', state));
+      const self = JSON.stringify(build('dm', { ...state, by: 'self' }));
+      const other = JSON.stringify(build('dm', { ...state, by: 'other' }));
+      expect(group).toContain('已在私聊里回答（内容不显示）');
+      expect(group).toContain('张三 · now');
+      expect(self).toContain('已提交 · now（内容不显示）');
+      expect(other).toContain('已由 张三 回答 · now');
+      for (const json of [group, self, other]) {
+        expect(json).not.toContain(secret);
+        expect(json).not.toContain(ASK_CONTROLS_EID);
+      }
+    }
+    for (const answer of [{ kind: 'text', text: ' ' }, { kind: 'choices', answers: [{ questionId: 'wrong', text: secret }] }] satisfies AskAnswer[]) {
+      expect(() => build('group', { kind: 'answered', answer, actor: '张三', at: 'now' })).toThrow('Answer does not match');
+    }
+  });
+
+  it('explains failed DM delivery and shares stopped and timed-out states across scopes', () => {
+    for (const scope of ['group', 'dm'] as const) {
+      expect(JSON.stringify(build(scope, { kind: 'unavailable', reason: 'dm-failed' }))).toContain('没能私聊到能回答的人，这题没法回答');
+      expect(JSON.stringify(build(scope, { kind: 'stopped' }))).toContain('⏹ 已停止');
+      expect(JSON.stringify(build(scope, { kind: 'timed-out' }))).toContain('⏱ 15 分钟没人回答');
+    }
+  });
+});

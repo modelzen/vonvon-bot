@@ -27,6 +27,8 @@ export type JudgeSelectionStored =
 export interface JudgeLine {
   /** message id: what an anchor names (s25b); never rendered */
   id?: string;
+  /** Newly seen in this judgement; not stored. */
+  fresh?: true;
   /** epoch ms */
   at: number;
   /** this bot, another bot, a person */
@@ -46,6 +48,8 @@ export interface JudgeLine {
 
 export interface JudgeRequest {
   variant: JudgeVariant;
+  /** Why this position is being looked at now, as one factual sentence. */
+  why?: string;
   /** which bot (finds SMART.md) */
   appId: string;
   /** the 你 of the prompt */
@@ -86,6 +90,8 @@ export interface JudgeResult {
   /** set when a decision model was chosen: whose `model` it is (`backend` is then the group's) */
   provider?: string;
   modelSource: 'default' | 'bot' | 'group';
+  /** First 16 hex characters of the SMART.md hash; absent before the prompt is read. */
+  promptHash?: string;
   promptSource: 'default' | 'bot' | 'group';
   /** from the call to the result */
   ms: number;

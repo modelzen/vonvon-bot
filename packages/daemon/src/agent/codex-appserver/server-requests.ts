@@ -152,11 +152,10 @@ export function userInputRequest(
   const parsed = inputSchema.safeParse(params);
   if (!parsed.success || !scope) return unavailable();
   const input = parsed.data satisfies ToolRequestUserInputParams;
-  // s33b maps isSecret to sensitive; until then, keep secret questions unavailable.
-  if (input.questions.some(q => q.isSecret) || new Set(input.questions.map(q => q.id)).size !== input.questions.length) return unavailable();
+  if (new Set(input.questions.map(q => q.id)).size !== input.questions.length) return unavailable();
   const requestId = `codex-request-${serial}`;
   const request = parseAskRequest({
-    kind: 'choices', id: requestId, title: input.questions.some(q => !q.options?.length) ? 'Codex 需要你回答' : 'Codex 需要你的选择',
+    kind: 'choices', id: requestId, title: input.questions.some(q => q.isSecret || !q.options?.length) ? 'Codex 需要你回答' : 'Codex 需要你的选择',
     acceptedConsequence: '将所选选项发送给 Codex。', declinedConsequence: '不提供答案，交回 Codex 处理。',
     questions: input.questions.map((q, qi) => q.options?.length && !q.isSecret
       ? { id: `q${qi}`, title: q.header, detail: q.question, selection: 'single', other: q.isOther,
