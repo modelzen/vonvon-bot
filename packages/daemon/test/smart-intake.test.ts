@@ -534,3 +534,22 @@ describe('SmartLanes recovery', () => {
     expect(t.timers.size).toBe(0);
   });
 });
+
+describe('rearm (s25g)', () => {
+  it('37. cancels a watch timer and judges immediately after focus changes', () => {
+    let due: Due = quiet20;
+    const t = lanes((...args) => due(...args)); t.lane.submit(entry('a'));
+    expect(t.lane.dueAt('chat')).toBe(seconds(20)); due = () => undefined;
+    t.lane.rearm('chat'); expect(t.judging.get('a')?.glance).toBe(false);
+    expect(t.timers.size).toBe(0); expect(t.cleared).toHaveLength(1);
+    expect(() => t.lane.rearm('none')).not.toThrow();
+  });
+  it('38. leaves an in-flight chat judgement alone and waits for settle', async () => {
+    const t = lanes(quiet20); t.lane.submit(entry('a')); t.advance(seconds(20));
+    t.lane.submit(entry('b')); t.lane.rearm('chat');
+    expect([...t.judging.keys()]).toEqual(['a']); expect(t.timers.size).toBe(0);
+    t.judging.get('a')!.answer.resolve('skip'); await flush();
+    t.landing.get('a')!.resolve(); await flush();
+    expect(t.lane.dueAt('chat')).toBe(seconds(40));
+  });
+});
