@@ -30,7 +30,7 @@ function makeThread(permissionFs?: PathFs) {
   if (!canUseTool) throw new Error('missing canUseTool');
   return { thread, options, canUseTool, end: () => end?.() };
 }
-function callbackArgs(signal = new AbortController().signal) { return { signal, toolUseID: 'tool' }; }
+function callbackArgs(signal = new AbortController().signal) { return { signal, requestId: 'request', toolUseID: 'tool' }; }
 
 it('installs the write tier, file hook and callback', () => {
   const { options } = makeThread();

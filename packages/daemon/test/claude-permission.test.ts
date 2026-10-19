@@ -36,7 +36,7 @@ describe('Claude permission tiers', () => {
 });
 describe('callback decision table', () => {
   it.each(['qa', 'write', 'full'] as const)('%s handles the three plan/question tools before rules', async mode => {
-    for (const [tool, ask] of [['AskUserQuestion', 'choices'], ['ExitPlanMode', 'confirmation']]) {
+    for (const [tool, ask] of [['AskUserQuestion', 'choices'], ['ExitPlanMode', 'confirmation']] as const) {
       expect(await decide(tier(mode), call(tool, {}, { decisionReasonType: 'rule' }), 'callback')).toEqual({ kind: 'ask', ask });
     }
     expect(await decide(tier(mode), call('EnterPlanMode'), 'callback')).toEqual({ kind: 'allow' });

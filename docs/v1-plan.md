@@ -1060,7 +1060,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 |---|---|---|---|---|---|---|---|
 | [x] | s29 | 提问的事件和卡片 | 用 ask 事件换掉占位的 approval_request；三种卡一个版面，写清后果；空提交提示"至少选一项"（3.8"卡片"） | 640 | — | 并发、错误路径 | 无（渲染在 s31 的 Mac 检查里看） |
 | [x] | s30 | 卡片的发送、谁能点、等待和超时 | 同一条会话同时一张卡；单独发一条并 @ 能回答的人；daemon 按点击人判断谁能点；15 分钟超时；等卡时看门狗暂停；普通回合、`/goal`、云文档评论三处都接上（3.8） | 900 | s29、s11、e09 | 并发、关闭清理、错误路径 | 无（真实卡片在 s31 一起看） |
-| [ ] | s31 | Claude 的权限档换算，提问接上 | 只读用 default、读写用 acceptEdits、完全访问照旧，所有会话带 allowDangerouslySkipPermissions；加 canUseTool：AskUserQuestion 出选项卡，ExitPlanMode 出确认卡，越权拒绝并说明，完全访问下 Claude 自己要问的出权限卡；关网靠回调拒 SandboxNetworkAccess，开网 WebFetch、WebSearch 能用；写文件按真实路径过档的边界（PreToolUse 钩子加回调）（3.8 换算表）。配置文件挡写、限读、会话标题的读法拆到 s31b | 1,000 | s30、s33、e02、e03 | 子进程、并发、关闭清理、错误路径 | 真实 Claude 三档各跑一遍：越权被拒带原因，关网 curl 被拒、开网 WebFetch 能用，选项卡能答、能超时，等卡时能停止（JP-VPS 先做，Seatbelt 经 #322 补验） |
+| [x] | s31 | Claude 的权限档换算，提问接上 | 只读用 default、读写用 acceptEdits、完全访问照旧，所有会话带 allowDangerouslySkipPermissions；加 canUseTool：AskUserQuestion 出选项卡，ExitPlanMode 出确认卡，越权拒绝并说明，完全访问下 Claude 自己要问的出权限卡；关网靠回调拒 SandboxNetworkAccess，开网 WebFetch、WebSearch 能用；写文件按真实路径过档的边界（PreToolUse 钩子加回调）（3.8 换算表）。配置文件挡写、限读、会话标题的读法拆到 s31b | 1,000（实际 955，含测试） | s30、s33、e02、e03 | 子进程、并发、关闭清理、错误路径 | 真实 Claude 三档各跑一遍：越权被拒带原因，关网 curl 被拒、开网 WebFetch 能用，选项卡能答、能超时，等卡时能停止（JP-VPS 先做，Seatbelt 经 #322 补验） |
 | [ ] | s31b | Claude 只读、读写档挡配置文件、限读 | 只读、读写档用沙箱的 denyWrite 加 Edit 拒绝规则、写文件按真实路径，挡住主工作区里两家的配置文件（3.6）；限读（owner 2026-10-19 定了要挡，e03b 的做法）：沙箱 denyRead 挡数据目录的 `bots/`、`projects/` 和根上的 `local-credential`、旧 `config.json`（飞书凭据先不挡，owner 2026-10-19，好让 lark-cli 以 bot 身份能用），allowRead 放开本群记忆、`bots/<appId>/skills/` 和 cwd，Read 按真实路径对同一份名单（3.6，第 9 节第 20 项）；顺手修 `readSessionTitle` 的读法（e02 第 8 节） | 540 | s31、e03b、e04b | 子进程、错误路径 | 读写档下用 Write 和 Bash 写工作区的 `.mcp.json`、`.claude/settings.json` 都被拒，先用 Bash 建指向它们的符号链接、硬链接再用 Edit 写链接也被拒；用 Bash 新建原本不存在的 `.mcp.json`、`.claude/skills/x`，把整个 `.claude` 目录 `mv` 走再重建，也都被拒（product.md 第 9 节第 24 项）；只读、读写档下 Bash 读别的群目录、别的群记忆、私聊记忆、根上的凭据都被拒，本群记忆、skill、cwd 读得到，Read 读本群记忆放行（JP-VPS 先做，Seatbelt 经 #322 补验） |
 | [x] | s32 | Codex 发来的请求不再报错 | 服务端请求进同一个通知队列；提问变选项卡，审批回 decline，不认识的方法仍回 -32601（3.8） | 900 | s30 | 子进程、并发、错误路径 | 真实 Codex：普通回合不发请求，审批请求回 decline 后这一轮不卡 |
 | [x] | s33 | 打字回答、打字题 | 选项卡在等时，能回答的人在同一位置发的文字消息就是答案，不再插话或排队；agent 的问题可以没有选项，卡上有输入框，选项题可以带"其他"；Codex 没有选项的题映成打字题；确认卡、权限卡只认按钮，等它们时打的字照普通消息处理（owner 2026-10-19；3.8"卡片"） | 1000（实际 1000；#433） | s30、s32 | 子进程、并发、错误路径 | 开发任务已验真 Codex 计划模式文字回传；当前内置工具发不出 isOther:false、无选项和敏感题，见下方边界 |
@@ -1069,6 +1069,10 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [x] | s34a | 子 agent 的事件 | 加三种子 agent 事件（开始、一步、状态），每个子 agent 一个稳定的 id；Codex 认出子线程（`thread/started` 的来源和父线程 spawnAgent 的 `receiverThreadIds` 两条路），收它的通知、刷新看门狗，子 agent 在干活时父回合不再被当成卡死；父线程开、等、关子 agent 在主过程各留一行；Claude 子 agent 的步骤不再混进主过程，只留父进程的"子任务：…"一行（工具名 `Agent` 也认）；运行状态里一个子 agent 一行（最多 64 行、每行最近 5 步），⏹ 和看门狗收口时把在跑的行标成停止；⏹ 停全部，Codex 连子线程一起停；Codex 的子 agent 跟着用户自己的 Codex 设置走，Vonvon 不替用户打开或关掉 `multi_agent`（owner 2026-10-19）；卡片上的子 agent 区在 s35（3.9） | 1,080（实际 1141，含测试；#429） | — | 并发、错误路径 | 无（JP-VPS 上真实 Codex、Claude 各跑一次带子 agent 的任务：父回合不被看门狗杀，主过程里没有子 agent 的步骤；用户的 Codex 没开子 agent 时，Codex 那一侧记"没验到"，只在隔离的 `CODEX_HOME` 里开着验，见"s34a 做法"） |
 | [ ] | s34b | 单停一个子 agent | 能单独停一个子 agent，父回合和别的子 agent 照跑：Codex 对这个子线程的回合发 `turn/interrupt`，Claude 调 `Query.stopTask`，已经结束的、还没开始回合的拒绝并说明原因；卡片动作 `RC.stopSub` 过和 ⏹ 一样的三道门（按钮在 s35 画）；RPC `stopSubagent` 和 `context.run.subagents`；网页端"对话"面板的运行行下面一个子 agent 一行，在跑的带"停止"，运行中每 3 秒重拉一次（3.9） | 535 | s34a | 并发、错误路径 | 无（JP-VPS 上经 RPC 停掉两个子 agent 中的一个，另一个和父回合照跑；面板在浏览器里的样子留给 s35 的 Mac 检查和 M6 验收） |
 | [ ] | s35 | 运行卡上的子 agent 区 | 一行一个子 agent，点开看最近 5 步，每行能停；都结束卡才收尾；子 agent 发起的卡片发在父运行卡的位置，写"子 agent X 问……"；Claude 会话打开 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`；用 s34a 的 `RunState.subagents` 和 s34b 的 `RC.stopSub` 画行和按钮（3.9、3.8） | 500 | s34a、s34b、s30、e01 | 并发、关闭清理 | 真实 Claude 的子 agent 跑完前卡不收尾（子 agent 区和停止按钮在飞书客户端里的样子，M6 验收时 owner 看） |
+
+- s31 做法：三档分别用 default、acceptEdits、bypassPermissions，每次启动和恢复都显式设置并允许后续升档。canUseTool 和写文件 PreToolUse 共用真实路径判定；符号链接、悬空链接、含未建路径的 `..`、大小写不同的同级目录均有真实文件系统回归。只读不移除写工具，拒绝带中文原因；关网拒 SandboxNetworkAccess，开网保留 WebFetch/WebSearch。
+- s31 探测：SDK 0.3.296 的 rule 字段可靠区分项目/用户 ask 与普通 MCP、外部 Read、变量 Bash；变量 Bash 放行仍受沙箱限制。完全访问删除工作区根进入 safetyCheck，普通子目录删除不进回调。显式允许和附加目录下，外部 Write 被钩子拒、Bash 被沙箱拒。退出计划模式在隔离 HOME/CLAUDE_CONFIG_DIR 双轮成功恢复读写档，权限设置未持久改变；CLI 远端缓存有源码分类证据，不把任务 70 的全局摘要变化归因于某个进程。配置挡写/限读仍留 s31b，s35 未合入，不提前接子 agent 卡头；没有改 handle-message。
+- s31 自测：构建、全工作区 typecheck、lint、8 文件 204 项定向测试与 7 项真实 Claude 集成通过。Bot 6 的 Claude 测试群已验真实选项卡、同话题文字答 B 后生成 Python 文件、真实 15 分钟无人回答后 timeout/done、等卡时 RPC stop 和卡片已停止、停止后普通回复、关网 curl 拒绝、外部 Write 拒绝、开网 curl 200 与 WebFetch、只读内外 Write 均被拒。完全访问文字答 A 后外部临时文件写成，随后清理；原群权限和网络已恢复核对。Mac Seatbelt、真实客户端按钮点击均待补验。自测由作者做，没经独立检查。
 
 开工要点：
 - s30：要不要另发一条带 @ 的文字，按 e09 的结果定；结果出来前默认另发。
@@ -1411,6 +1415,10 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 
 | 项 | 默认值 | 理由 | 用在 |
 |---|---|---|---|
+| Claude 权限判定期限 | 5 秒未完成按拒绝 | 文件系统或外部判定挂起也不能放行 | s31 |
+| Claude 方案卡长度 | 2,000 字后加截断说明 | 完整方案仍在运行卡 | s31 |
+| Claude 权限卡动作长度 | 500 字 | 避免单张卡过长 | s31 |
+| Claude 只读、读写档的其他工具和本机联网 | 没命中 ask 规则的其他工具照常允许；开网时本机地址也允许 | 保留现有工具范围，限本机网络另在 s46 做 | s31 |
 | 打字答多道题 | 同一段文字给每道题 | 模型从哪个键读都读得到全文，不猜这段话答的是哪题 | s33 |
 | 关了免@ 的群里打字回答 | 要 @ bot 才算；没 @ 的照今天停在 @ 门 | Claude 2026-10-19 定：今天的 @ 门不动；否则要把判断挪到门前并先过群和成员名单，改动大 | s33 |
 | 群里没设、用 Bot 的值 | 写"跟着 Bot 默认" | s23g2 起密钥页和命令行都这样说，切片表原来写的"继承 bot 默认"跟着改 | s28a |
