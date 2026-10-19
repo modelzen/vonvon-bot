@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseAskRequest, type AgentEvent, type AskAnswer, type AskRequest } from '../src/agent/types';
-import { buildAskCard, parseAskSubmission, type AskCardState } from '../src/card/ask-card';
+import { ASK_CONTROLS_EID, buildAskCard, parseAskSubmission, type AskCardState } from '../src/card/ask-card';
 import { RunRender } from '../src/card/run-render';
 import { initialState, reduce } from '../src/card/run-state';
 
@@ -52,6 +52,7 @@ describe('provider request boundary', () => {
   it('rejects duplicate question and option ids, and empty options', () => {
     if (choices.kind !== 'choices') throw new Error('fixture');
     const first = choices.questions[0];
+    if (first.selection === 'text') throw new Error('fixture');
     for (const questions of [
       [first, first],
       [{ ...first, options: [] }],
@@ -201,4 +202,65 @@ it.each(['__proto__', 'constructor', 'prototype'])('rejects extra own callback k
   const request = { id: 'metadata', kind: 'confirmation', title: '确认', detail: '继续', acceptedConsequence: '继续', declinedConsequence: '停止' } satisfies AskRequest;
   const value: unknown = JSON.parse(`{"a":"ask_submit","requestId":"metadata","decision":"proceed","__r":"managed","${key}":"foreign"}`);
   expect(parseAskSubmission({ request, value, formValue: undefined }).ok).toBe(false);
+});
+
+describe('s33 typed questions and answers', () => {
+  const textQuestion = { id: 'text', title: '路径', detail: '说明', selection: 'text' };
+  const choiceQuestion = { id: 'pick', title: '方案', detail: '', selection: 'single', options: [{ id: 'a', label: 'A', description: '' }] };
+  const request = (questions: unknown[]) => parseAskRequest({ ...base, kind: 'choices', questions });
+  const finish = (request: AskRequest, answer: AskAnswer) => render(request, { kind: 'answered', answer, actor: '答题人', at: 'now' });
+  const parse = (request: AskRequest, formValue: unknown) => parseAskSubmission({ request, value, formValue });
+
+  it('accepts text without options and rejects mixed or incomplete schemas', () => {
+    expect(request([textQuestion])).toMatchObject({ questions: [{ selection: 'text', sensitive: false }] });
+    expect(request([choiceQuestion])).toMatchObject({ questions: [{ other: false }] });
+    expect(() => request([{ ...textQuestion, options: choiceQuestion.options }])).toThrow();
+    expect(() => request([{ ...choiceQuestion, options: undefined }])).toThrow();
+  });
+
+  it('renders optional other input and multiline text with stable controls', () => {
+    expect(ASK_CONTROLS_EID).toMatch(/^[A-Za-z][A-Za-z0-9_]{0,19}$/);
+    const mixed = request([{ ...choiceQuestion, other: true }, textQuestion]);
+    const all = nodes(render(mixed));
+    expect(all.find(n => n.tag === 'select_static')?.name).toBe('q0');
+    expect(all.filter(n => n.tag === 'input').map(n => n.name)).toEqual(['q0_other', 'q1']);
+    expect(all.find(n => n.name === 'q1')).toMatchObject({ input_type: 'multiline_text', max_length: 1000 });
+    expect(JSON.stringify(render(mixed))).toContain('提交选择');
+    expect(JSON.stringify(render(request([textQuestion])))).toContain('提交回答');
+    expect(nodes(render(request([choiceQuestion]))).some(n => n.name === 'q0_other')).toBe(false);
+    for (const req of [mixed, confirmation, permission]) {
+      expect(nodes(render(req)).filter(n => n.element_id === 'ask_controls')).toHaveLength(1);
+      expect(nodes(render(req, { kind: 'stopped' })).some(n => n.element_id === 'ask_controls')).toBe(false);
+    }
+  });
+
+  it('prefers other text, trims answers and validates text lengths and field names', () => {
+    const other = request([{ ...choiceQuestion, other: true }]);
+    expect(parse(other, { q0: 'a', q0_other: '  ' })).toMatchObject({ ok: true, answer: { answers: [{ selected: ['a'] }] } });
+    for (const q0 of ['', 'a']) expect(parse(other, { q0, q0_other: ' 手写 ' })).toMatchObject({ ok: true, answer: { answers: [{ questionId: 'pick', text: '手写' }] } });
+    const text = request([textQuestion]);
+    for (const fields of [undefined, {}, { q0: '' }, { q0: '  ' }]) expect(parse(text, fields)).toEqual({ ok: false, reason: 'empty', message: '请填写回答' });
+    expect(parse(text, { q0: ' 答 ' })).toMatchObject({ ok: true, answer: { answers: [{ questionId: 'text', text: '答' }] } });
+    for (const fields of [{ q0: 'x'.repeat(1001) }, { q0: ['a'] }, { q0: '答', q0_other: 'bad' }]) expect(parse(text, fields)).toMatchObject({ ok: false, reason: 'invalid' });
+    expect(parse(other, { q0: 'a', q0_other: 'x'.repeat(1001) })).toMatchObject({ ok: false, reason: 'invalid' });
+    expect(parse(other, { q0_other: 1 })).toMatchObject({ ok: false, reason: 'invalid' });
+  });
+
+  it('validates terminal text and choice-text answers before displaying excerpts', () => {
+    const mixed = request([{ ...choiceQuestion, other: true }, textQuestion]);
+    const json = JSON.stringify(finish(mixed, { kind: 'text', text: 'x'.repeat(300) }));
+    expect(json).toContain('x'.repeat(200) + '…');
+    expect(json).not.toContain('x'.repeat(201));
+    const answered = JSON.stringify(finish(mixed, { kind: 'choices', answers: [{ questionId: 'pick', text: ' 手写 ' }, { questionId: 'text', text: ' /tmp ' }] }));
+    expect(answered).toContain('方案：手写');
+    expect(answered).toContain('路径：/tmp');
+    for (const req of [confirmation, permission]) expect(() => finish(req, { kind: 'text', text: 'yes' })).toThrow('Answer does not match');
+    for (const text of ['  ', 'x'.repeat(4001)]) expect(() => finish(mixed, { kind: 'text', text })).toThrow('Answer does not match');
+    for (const answers of [
+      [{ questionId: 'foreign', text: 'bad' }],
+      [{ questionId: 'text', selected: ['a'] }],
+      [{ questionId: 'text', text: 'x'.repeat(1001) }],
+    ]) expect(() => finish(request([textQuestion]), { kind: 'choices', answers: answers as Extract<AskAnswer, { kind: 'choices' }>['answers'] })).toThrow('Answer does not match');
+    expect(() => finish(request([choiceQuestion]), { kind: 'choices', answers: [{ questionId: 'pick', text: 'bad' }] })).toThrow('Answer does not match');
+  });
 });

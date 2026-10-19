@@ -1336,6 +1336,10 @@ export function createOrchestrator(
     const senderType = (msg.raw as { sender?: { sender_type?: string } } | undefined)?.sender?.sender_type;
     return senderType === 'user' ? 'user' : senderType === 'app' ? 'bot' : 'unknown';
   }
+  function typedCandidate(msg: NormalizedMessage): boolean {
+    return (msg.rawContentType === 'text' || msg.rawContentType === 'post') && msg.content.trim().length > 0
+      && !messageHasImages(msg) && !messageHasFiles(msg);
+  }
   /** Who sent a message, as the topic registry records it. */
   function senderOf(msg: NormalizedMessage): TopicPerson {
     const app = (msg.raw as { sender?: { sender_type?: string } } | undefined)?.sender?.sender_type === 'app';
@@ -1939,6 +1943,11 @@ export function createOrchestrator(
         await postContextCard(msg, ts.sessionKey, false);
         return;
       }
+      if (!cmd && !goalObjective && typedCandidate(msg)) {
+        const typed = asks.typed({ chatId: msg.chatId, place: ts.sessionKey, senderId: msg.senderId,
+          senderKind: askRequesterKind(msg), text, createTime: msg.createTime });
+        if (typed === 'answered') { markSeen(ts.sessionKey, { id: msg.messageId, at: msg.createTime }); return; }
+      }
       // Smart: a judgement decides (s25); the refusal of a tier the backend cannot run waits for it to say reply.
       if (smart && !goalObjective) {
         if (await alreadySeen(msg, ts.sessionKey)) return;
@@ -1996,6 +2005,11 @@ export function createOrchestrator(
       if (cmd === 'context') {
         await postContextCard(msg, ts.sessionKey, true);
         return;
+      }
+      if (!cmd && !goalObjective && typedCandidate(msg)) {
+        const typed = asks.typed({ chatId: msg.chatId, place: ts.sessionKey, senderId: msg.senderId,
+          senderKind: askRequesterKind(msg), text, createTime: msg.createTime });
+        if (typed === 'answered') { markSeen(ts.sessionKey, { id: msg.messageId, at: msg.createTime }); return; }
       }
       // Smart: an unnamed topic message is judged, only reply or not (s25); a named one is answered as before.
       if (smart && audience === 'nobody' && !goalObjective) {
@@ -7094,7 +7108,14 @@ export function createOrchestrator(
           beginGoalSessionTitle();
           if (topicThreadId) requestGoalSessionTitleApply();
           await finalizeCard(cur); // close the previous turn's card (if it produced one)
-          cur = startTurn(); // render-only; the card is sent lazily on first content
+          cur = startTurn(); // existing topics still send the card lazily on first content
+          if (activeKey.startsWith('pending:')) {
+            // A new goal needs a real topic before its first ask can accept text.
+            // Anchor both the active run and the question to the same run card.
+            await ensureCard(cur);
+            if (activeKey.startsWith('pending:')) throw new Error('Goal topic could not be resolved');
+            askPlacement.replyTo = cur.cardMsgId!;
+          }
           askTurn = asks.openTurn({ run, sessionKey: activeKey, placement: askPlacement,
             initiator: { kind: opts.requesterKind ?? 'unknown', openId: opts.requesterOpenId }, idlePause,
             waiting: label => { askWaiting = label; if (cur) { cur.rc.askWaiting = label; if (cur.stream) cur.stream.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID); } },
@@ -7196,6 +7217,21 @@ export function createOrchestrator(
     } catch (err) {
       askTurn?.close('turn-ended');
       log.fail('intake', err);
+      await opts.thread.clearGoal().catch(error => log.fail('agent', error, { phase: 'goal-clear' }));
+      if (cur?.stream && cur.cardMsgId) {
+        clearInterval(cur.clock);
+        cur.render.apply({ type: 'error', message: err instanceof Error ? err.message : String(err), willRetry: false });
+        cur.rc.rs = cur.render.snapshot();
+        cur.rc.askWaiting = undefined;
+        // Do not repeat finalizeCard's file/image I/O after a failure. Drain old
+        // frames, then retire the card without controls; a second failure stays secondary.
+        try {
+          await cur.stream.drain();
+          await cur.stream.updateCard(channel, buildRunCardPlain(cur.rc));
+        } catch (error) { log.fail('card', error, { phase: 'goal-failure-card' }); }
+        runStreams.delete(cur.cardMsgId);
+        runCards.delete(cur.cardMsgId);
+      }
       await channel
         .send(opts.chatId, { markdown: runFailureMessage(err, 0, opts.sessionNotice) }, { replyTo: opts.replyTo, replyInThread: !opts.flat })
         .catch(() => undefined);
