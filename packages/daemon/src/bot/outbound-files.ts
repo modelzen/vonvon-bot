@@ -321,6 +321,7 @@ export class OutboundFiles {
         try {
           const result = await timed(channel.rawClient.cardkit.v1.cardElement.update({
             path: { card_id: manifest.cardId, element_id: elementId },
+            // Needs no `<at>` guard (s27a0): the only agent text is the label, which `fileText` escapes.
             data: { element: JSON.stringify(element), sequence: manifest.sequence, uuid: randomUUID() },
           }));
           if (result?.code) throw new Error(`CardKit ${result.code}`);

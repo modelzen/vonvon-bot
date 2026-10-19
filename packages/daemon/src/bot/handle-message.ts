@@ -91,6 +91,7 @@ import { CardDispatcher, type CardActionHandler } from '../card/dispatcher';
 import { closeOwnedProviderProcesses } from '../agent/owned-process';
 import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
 import { createJudge } from '../judge/judge';
+import { installAtGuard } from '../card/at-guard';
 import { sendManagedCard, updateManagedCard } from '../card/managed';
 import { RunRender } from '../card/run-render';
 import { finalMessageText, initialState, reduce, type RunState } from '../card/run-state';
@@ -307,6 +308,7 @@ import {
   syncCommentInstructions,
 } from './comments';
 import { createGracefulInterrupt, createIdlePause, Semaphore, withIdleTimeout, type IdlePause } from './watchdog';
+import { createBotRoster } from './bot-roster';
 import { createNameBook, fetchChatMembers, resolveNames, withDeadline } from './names';
 
 /** 所有项目群成员的并集（去重）—— admins 加人的候选源（admins 通常是项目相关的人）。
@@ -1169,6 +1171,9 @@ export function createOrchestrator(
     onStop.add(stop);
     return Promise.race([p, stopped]).finally(() => onStop.delete(stop));
   }
+  /** s27a0: no card or markdown post of this bot carries a real `<at>` of a bot; the chat's bot list is read on the
+   * first `<at>` there (D/card/at-guard.ts). Rule groups too: a rule bot's card wakes a smart bot just the same. */
+  installAtGuard(channel, createBotRoster(channel, { stop: orStop }));
   const acceptedTasks = new Set<Promise<unknown>>();
   const shutdownErrors = new Set<unknown>();
 

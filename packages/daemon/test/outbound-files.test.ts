@@ -138,7 +138,7 @@ describe('click-to-get local files', () => {
   it('updates every inline alias after sending and after a restart, without sending twice', async () => {
     context.cardId = 'card_1';
     const painted: string[] = [];
-    const prepared = await service.prepare('[首处](<测试 报告.xlsx>) 以及 `测试 报告.xlsx`', context, async (id) => { painted.push(id); return true; });
+    const prepared = await service.prepare('[<at id=ou_b>首处</at>](<测试 报告.xlsx>) 以及 `测试 报告.xlsx`', context, async (id) => { painted.push(id); return true; });
     const payloads = values(prepared.links);
     expect(payloads).toHaveLength(2);
     expect(payloads[0]!.i).toBe(payloads[1]!.i);
@@ -148,6 +148,8 @@ describe('click-to-get local files', () => {
     for (const { element } of prepared.links) expect(element).toMatchObject({ behaviors: [{ type: 'open_url', default_url: messageLink }] });
     await new OutboundFiles(dir, 0).deliver(channel, evt, payloads[1]!, allow);
     expect(update.mock.calls.map(([request]) => request.path.element_id)).toEqual(['local_file_0', 'local_file_1']);
+    // s27a0: this write has no `<at>` guard; the label is escaped, so the agent's `<at>` cannot wake a bot here.
+    expect(JSON.parse(update.mock.calls[0]![0].data.element).elements[0].content).toBe("<font color='blue'>&lt;at id=ou\\_b&gt;首处&lt;/at&gt;</font>");
     expect(upload).toHaveBeenCalledOnce();
     expect(reply).toHaveBeenCalledOnce();
   });

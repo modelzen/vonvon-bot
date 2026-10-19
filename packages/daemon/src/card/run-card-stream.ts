@@ -1,6 +1,7 @@
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { log } from '../core/logger';
 import type { CardObject, CardElement } from './cards';
+import { guardCardJson, guardText } from './at-guard';
 import { isCardIdNotReady } from './managed';
 import type { StreamingImages } from './outbound-images';
 import { serializeRuntimeCard } from './runtime-card-icons';
@@ -123,6 +124,8 @@ export class RunCardStream {
   private lastAnswerText = '';
   // Per-chat pacer shared with the chat's other streams (set in create()).
   private pacer: ChatPacer | null = null;
+  /** Where the card is, for the `<at>` guard (s27a0); set in create(). */
+  private chatId = '';
   // Forced whole-card writes (button/settings repaint, queue → run flip,
   // terminal frame) must never race one another. In particular, an async
   // completion-reminder repaint that started just before turn completion must
@@ -246,8 +249,11 @@ export class RunCardStream {
    * PATCH) and resend the frame. Recovery runs inside the pump coroutine, so
    * event consumption never blocks on it. Returns true ⇔ the frame landed (the
    * pump only advances its baselines on delivered frames). */
-  private async streamElement(channel: LarkChannel, elementId: string, content: string): Promise<boolean> {
+  private async streamElement(channel: LarkChannel, elementId: string, answer: string): Promise<boolean> {
     if (!this.cardId) return false;
+    // Not through serializeRuntimeCard, so the `<at>` guard is here; a streamed frame does not wait for the bot list.
+    const guarded = guardText(channel.rawClient, answer, this.chatId, false);
+    const content = typeof guarded === 'string' ? guarded : await guarded;
     const push = async (): Promise<void> => {
       assertCardkitSuccess(
         await channel.rawClient.cardkit.v1.cardElement.content({
@@ -315,7 +321,8 @@ export class RunCardStream {
     opts: { replyTo?: string; replyInThread?: boolean },
   ): Promise<string> {
     this.pacer = pacerFor(chatId); // shared with the chat's other streams
-    const initialData = await serializeRuntimeCard(initialCard, channel.rawClient);
+    this.chatId = chatId;
+    const initialData = await serializeRuntimeCard(initialCard, channel.rawClient, chatId);
     const attempt = async (): Promise<string> => {
       const created = await channel.rawClient.cardkit.v1.card.create({
         data: { type: 'card_json', data: initialData },
@@ -365,7 +372,7 @@ export class RunCardStream {
    * away when it comes around again. */
   async streamCard(channel: LarkChannel, fullCard: CardObject, force = false): Promise<boolean> {
     if (!this.cardId) return false;
-    const data = await serializeRuntimeCard(fullCard, channel.rawClient);
+    const data = await serializeRuntimeCard(fullCard, channel.rawClient, this.chatId, false);
     if (data === this.lastContent) return true;
     const now = Date.now();
     if (!force && now - this.lastPush < STREAM_THROTTLE_MS) return false;
@@ -418,9 +425,12 @@ export class RunCardStream {
 
   updateElement(channel: LarkChannel, elementId: string, element: CardElement): Promise<boolean> {
     this.elementOverrides.set(elementId, element);
-    const data = JSON.stringify(element);
+    const raw = JSON.stringify(element);
     const task = this.forcedUpdateTail.then(async () => {
       if (!this.cardId) return false;
+      // The other write that skips serializeRuntimeCard (s27a0).
+      const guarded = guardCardJson(channel.rawClient, raw, this.chatId);
+      const data = typeof guarded === 'string' ? guarded : await guarded;
       for (let attempt = 0; attempt < 2; attempt++) {
         await this.pacer?.wait();
         try {
@@ -479,7 +489,7 @@ export class RunCardStream {
         return el;
       };
       if (frame.body?.elements) frame.body.elements = frame.body.elements.map(overlay);
-      return this.pushForcedUpdate(channel, await serializeRuntimeCard(frame, channel.rawClient));
+      return this.pushForcedUpdate(channel, await serializeRuntimeCard(frame, channel.rawClient, this.chatId));
     });
     // A surprising transport failure must not poison the serialization tail and
     // prevent the terminal frame. pushForcedUpdate normally absorbs failures,
