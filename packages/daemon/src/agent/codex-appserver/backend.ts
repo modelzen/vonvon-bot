@@ -349,7 +349,7 @@ class CodexThread implements AgentThread {
         activeTurnId = undefined;
       }
     }
-    return { events: gen(), respondToAsk: (id, resolution) => requests.respond(id, resolution), turnId: () => activeTurnId, lastActivity: () => lastActivityAt };
+    return { events: gen(), askPending: id => requests.isPending(id), respondToAsk: (id, resolution) => requests.respond(id, resolution), turnId: () => activeTurnId, lastActivity: () => lastActivityAt };
   }
 
   runGoal(objective: string): AgentRun {
@@ -468,7 +468,7 @@ class CodexThread implements AgentThread {
         self.currentTurnId = undefined;
       }
     }
-    return { events: gen(), respondToAsk: (id, resolution) => requests.respond(id, resolution), turnId: () => self.currentTurnId, lastActivity: () => lastActivityAt };
+    return { events: gen(), askPending: id => requests.isPending(id), respondToAsk: (id, resolution) => requests.respond(id, resolution), turnId: () => self.currentTurnId, lastActivity: () => lastActivityAt };
   }
 
   private registerChild(id: string, child: Child, task = ''): AgentEvent[] {
