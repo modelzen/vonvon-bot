@@ -313,6 +313,8 @@ function fileChangeDiffMd(changes: FileUpdateChange[] | undefined): string | und
 
 
 export interface Child {
+  closed?: boolean;
+  stopRequested?: boolean;
   parentId?: string;
   turnId?: string;
   running: boolean;
@@ -325,11 +327,11 @@ export interface Child {
 export function mapChildNotification(id: string, n: ServerNotification, child: Child): { events: AgentEvent[]; patch?: Partial<Child> } {
   switch (n.method) {
     case 'turn/started':
-      return { events: [{ type: 'subagent_status', id, status: 'running' }], patch: { turnId: n.params.turn.id, running: true, result: undefined } };
+      return { events: [{ type: 'subagent_status', id, status: 'running' }], patch: { turnId: n.params.turn.id, running: true, closed: false, result: undefined } };
     case 'turn/completed':
-      return { events: [{ type: 'subagent_status', id, status: n.params.turn.status === 'interrupted' ? 'stopped' : n.params.turn.status === 'failed' ? 'failed' : 'completed', result: child.result }], patch: { running: false } };
+      return { events: [{ type: 'subagent_status', id, status: n.params.turn.status === 'interrupted' ? 'stopped' : n.params.turn.status === 'failed' ? 'failed' : 'completed', result: child.result }], patch: { running: false, stopRequested: false } };
     case 'thread/closed':
-      return { events: child.running ? [{ type: 'subagent_status', id, status: 'stopped' }] : [], patch: { running: false } };
+      return { events: child.running ? [{ type: 'subagent_status', id, status: 'stopped' }] : [], patch: { running: false, closed: true, stopRequested: false } };
     case 'error':
       log.warn('agent', 'subagent-error', { id: id.slice(-6) });
       return { events: [] };

@@ -75,7 +75,7 @@ export interface TurnMapper {
 
 /** Create a per-turn mapper. One per `runStreamed` turn (state resets with it). */
 export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
-  const agents = new Map<string, { runId?: string; terminal?: string }>();
+  const agents = new Map<string, { runId?: string; terminal?: string; seenRuns: Set<string> }>();
   let blockSeq = 0;
   const open = new Map<number, OpenBlock>();
   let systemEmitted = false;
@@ -221,15 +221,17 @@ export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
 
   function mapTask(msg: Extract<SDKMessage, { subtype: 'task_started' | 'task_progress' | 'task_updated' | 'task_notification' }>): AgentEvent[] {
     const agent = agents.get(msg.task_id);
-    if (agent?.runId && msg.run_id && msg.run_id < agent.runId) return [];
+    if (agent && msg.run_id && msg.run_id !== agent.runId && agent.seenRuns.has(msg.run_id)) return [];
     if (msg.subtype === 'task_started') {
       if (msg.task_type !== 'local_agent' || msg.ambient || msg.skip_transcript) return [];
       if (agent) {
         if (!msg.run_id || agent.runId === msg.run_id) return [];
-        agents.set(msg.task_id, { runId: msg.run_id });
+        agent.runId = msg.run_id;
+        agent.terminal = undefined;
+        agent.seenRuns.add(msg.run_id);
         return [{ type: 'subagent_status', id: msg.task_id, status: 'running' }];
       }
-      agents.set(msg.task_id, { runId: msg.run_id });
+      agents.set(msg.task_id, { runId: msg.run_id, seenRuns: new Set(msg.run_id ? [msg.run_id] : []) });
       return [{ type: 'subagent_start', id: msg.task_id, parentId: msg.parent_task_id,
         name: msg.subagent_type ?? '子 agent', task: msg.description.slice(0, 120), stoppable: true }];
     }
@@ -237,7 +239,10 @@ export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
     const status = msg.subtype === 'task_updated' ? msg.patch.status : msg.status;
     if (status !== 'completed' && status !== 'failed' && status !== 'killed' && status !== 'stopped') return [];
     const runId = msg.run_id ?? agent.runId ?? msg.task_id;
-    if (msg.run_id) agent.runId = msg.run_id;
+    if (msg.run_id) {
+      agent.runId = msg.run_id;
+      agent.seenRuns.add(msg.run_id);
+    }
     if (agent.terminal === runId) return [];
     agent.terminal = runId;
     const result = msg.subtype === 'task_updated' ? msg.patch.error : msg.summary;

@@ -13,11 +13,13 @@ const { bin } = writeNodeExecutable(dir, 'codex', `
 const fs = require('node:fs');
 const send = msg => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...msg})+'\\n');
 const event = (method,params) => send({method,params});
+let scenario;
 require('node:readline').createInterface({input:process.stdin}).on('line', line => {
   const msg = JSON.parse(line);
   if (typeof msg.id !== 'number') return;
   fs.appendFileSync(${JSON.stringify(requestsFile)},JSON.stringify(msg)+'\\n');
   if (msg.method === 'turn/interrupt') {
+    if (scenario === 'late' && msg.params.threadId === 'host') setTimeout(() => event('turn/started',{threadId:'late-child',turn:{id:'late-turn'}}),20);
     send(msg.params.threadId === 'host' ? {id:msg.id,error:{code:-32000,message:'parent failed'}} : {id:msg.id,result:{}});
     return;
   }
@@ -25,6 +27,32 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
     msg.method === 'thread/resume' ? {thread:{id:'resumed'}} : msg.method === 'turn/start' ? {turn:{id:'turn'}} : {}});
   if (msg.method === 'turn/start') {
     event('turn/started',{threadId:'host',turn:{id:'turn'}});
+    scenario = msg.params.input[0].text;
+    const collab = (tool, ids, agentsStates = {}) => event('item/completed',{threadId:'host',turnId:'turn',item:{
+      type:'collabAgentToolCall',id:tool+JSON.stringify(ids),tool,senderThreadId:'host',receiverThreadIds:ids,prompt:'work',agentsStates}});
+    const start = (id, turnId = id+'-turn') => event('turn/started',{threadId:id,turn:{id:turnId}});
+    if (scenario === 'revive') {
+      for (const [receivers, states] of [[null,null],[{},[]],[42,'invalid']]) collab('spawnAgent',receivers,states);
+      collab('spawnAgent',['A']); start('A');
+      event('future/notification',{threadId:'A',turn:null});
+      event('turn/completed',{threadId:'A',turn:null});
+      for (const tool of ['sendInput','resumeAgent']) {
+        collab(tool,[tool]); start(tool);
+        event('item/started',{threadId:tool,turnId:tool+'-turn',item:{type:'commandExecution',id:tool+'-step',command:'pwd',cwd:'/repo'}});
+      }
+      event('turn/completed',{threadId:'A',turn:{id:'A-turn',status:'completed'}});
+      collab('spawnAgent',['B']); collab('sendInput',['A']); start('A','A-turn-new');
+      event('item/started',{threadId:'A',turnId:'A-turn-new',item:{type:'commandExecution',id:'resumed-step',command:'pwd',cwd:'/repo'}});
+      event('turn/completed',{threadId:'host',turn:{id:'turn',status:'completed'}}); return;
+    }
+    if (scenario === 'late') { collab('spawnAgent',['late-child']); return; }
+    if (scenario === 'states') {
+      const agentsStates = {};
+      for (const status of ['errored','shutdown','notFound']) {
+        collab('spawnAgent',[status]); start(status); agentsStates[status] = {status};
+      }
+      collab('wait',Object.keys(agentsStates),agentsStates); return;
+    }
     if (msg.params.input[0].text !== 'hold') for (const id of ['child1','child2','unstarted']) {
       event('thread/started',{thread:{id,source:{subagent:{thread_spawn:{parent_thread_id:'host',depth:1,
         agent_path:null,agent_nickname:null,agent_role:null}}}}});
@@ -100,6 +128,54 @@ it('leaves user multi-agent settings untouched on start, resume, turn and both g
   } finally {
     await started.close();
     await resumed.close();
+    if (previous === undefined) delete process.env.CODEX_BIN;
+    else process.env.CODEX_BIN = previous;
+  }
+});
+
+
+it('receives A again after A completes, B spawns and sendInput resumes A without thread/started', async () => {
+  const previous = process.env.CODEX_BIN;
+  process.env.CODEX_BIN = bin;
+  const thread = await new CodexAppServerBackend().startThread({ cwd: dir });
+  try {
+    const events: AgentEvent[] = [];
+    for await (const event of thread.runStreamed({ text: 'revive' }).events) events.push(event);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'subagent_step', id: 'A', stepId: 'resumed-step' }));
+    expect(events.filter(event => event.type === 'subagent_start' && event.id === 'A')).toHaveLength(1);
+    for (const id of ['sendInput', 'resumeAgent']) expect(events).toContainEqual(expect.objectContaining({
+      type: 'subagent_step', id, stepId: id + '-step',
+    }));
+  } finally {
+    await thread.close();
+    if (previous === undefined) delete process.env.CODEX_BIN;
+    else process.env.CODEX_BIN = previous;
+  }
+});
+
+it.each(['late', 'states'])('handles child interruption lifecycle: %s', async scenario => {
+  const previous = process.env.CODEX_BIN;
+  process.env.CODEX_BIN = bin;
+  const thread = await new CodexAppServerBackend().startThread({ cwd: dir });
+  const offset = requests().length;
+  const seen: AgentEvent[] = [];
+  const drained = (async () => {
+    for await (const event of thread.runStreamed({ text: scenario }).events) seen.push(event);
+  })();
+  try {
+    await vi.waitFor(() => expect(seen.filter(event => event.type === (scenario === 'late' ? 'subagent_start' : 'subagent_status'))).toHaveLength(scenario === 'late' ? 1 : 6));
+    if (scenario === 'states') {
+      for (const [id, status] of [['errored', 'failed'], ['shutdown', 'stopped'], ['notFound', 'stopped']]) {
+        expect(seen).toContainEqual(expect.objectContaining({ type: 'subagent_status', id, status }));
+      }
+    }
+    await expect(thread.abort('turn')).rejects.toThrow('parent failed');
+    const interrupts = () => requests().slice(offset).filter(request => request.method === 'turn/interrupt').map(request => request.params);
+    expect(interrupts()).toEqual([{ threadId: 'host', turnId: 'turn' }]);
+    if (scenario === 'late') await vi.waitFor(() => expect(interrupts()).toContainEqual({ threadId: 'late-child', turnId: 'late-turn' }));
+  } finally {
+    await thread.close();
+    await drained;
     if (previous === undefined) delete process.env.CODEX_BIN;
     else process.env.CODEX_BIN = previous;
   }

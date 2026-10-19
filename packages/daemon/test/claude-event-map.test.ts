@@ -248,4 +248,19 @@ describe('Claude 子 agent 事件', () => {
     expect(mapper.map(task('task_notification', { run_id: undefined, status: 'completed', summary: '新结果' }))).toHaveLength(1);
   });
 
+  it('新 run 的 id 字母序更小仍续跑，并忽略已见旧 run 的延迟消息', () => {
+    const mapper = createTurnMapper();
+    mapper.map(startAgent({ run_id: 'z-old' }));
+    mapper.map(task('task_notification', { run_id: 'z-old', status: 'completed', summary: '旧结果' }));
+    expect(mapper.map(startAgent({ run_id: 'a-new' }))).toEqual([
+      { type: 'subagent_status', id: 'child', status: 'running' },
+    ]);
+    expect(mapper.map(task('task_notification', { run_id: 'z-old', status: 'failed', summary: '延迟结果' }))).toEqual([]);
+    expect(mapper.map(startAgent({ run_id: 'z-old' }))).toEqual([]);
+    expect(mapper.map(task('task_updated', { run_id: 'a-new', patch: { status: 'completed' } }))).toEqual([
+      { type: 'subagent_status', id: 'child', status: 'completed', result: undefined },
+    ]);
+    expect(mapper.map(task('task_notification', { run_id: undefined, status: 'completed', summary: '重复' }))).toEqual([]);
+  });
+
 });

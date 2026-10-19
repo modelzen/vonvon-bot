@@ -536,10 +536,11 @@ export function isCompletionReminderRequester(operatorOpenId?: string, requester
   return Boolean(operatorOpenId && requesterOpenId && operatorOpenId === requesterOpenId);
 }
 
-function logClosedSubagents(before: RunState['subagents'], after: RunState['subagents']): void {
+function logSubagentChanges(before: RunState['subagents'] = [], after: RunState['subagents'] = []): void {
   for (const row of after) {
-    if (row.status !== 'running' && before.some(old => old.id === row.id && old.status === 'running')) {
-      log.info('agent', 'subagent', { id: row.id.slice(-6), status: row.status, steps: row.steps.length });
+    const previous = before.find(old => old.id === row.id);
+    if (!previous || (row.status !== 'running' && row.status !== previous.status)) {
+      log.info('agent', 'subagent', { id: row.id.slice(-6), status: previous ? row.status : 'start', steps: row.steps.length });
     }
   }
 }
@@ -565,7 +566,7 @@ export function settleOrdinaryTurnRender(
     // finalize() is a no-op for explicit done/error terminals.
     render.finalize();
   }
-  logClosedSubagents(subagents, render.snapshot().subagents);
+  logSubagentChanges(subagents, render.snapshot().subagents);
 }
 
 /** A turn that started but did not answer: the error it threw, or the run state it ended in. */
@@ -6455,11 +6456,9 @@ export function createOrchestrator(
           }
           lastEvAt = tEv;
           evCount++;
+          const subagents = render.snapshot().subagents;
           render.apply(ev);
-          if (ev.type === 'subagent_start' || (ev.type === 'subagent_status' && ev.status !== 'running')) {
-            const row = render.snapshot().subagents.find(s => s.id === ev.id);
-            log.info('agent', 'subagent', { id: ev.id.slice(-6), status: ev.type === 'subagent_start' ? 'start' : ev.status, steps: row?.steps.length ?? 0 });
-          }
+          logSubagentChanges(subagents, render.snapshot().subagents);
           // Track context usage for /context and the next turn's meter. Only
           // auto-compaction reaches the turn loop (a manual /compact drains its own
           // events); it shows as a line on this card, and Claude's post-compaction
@@ -6918,7 +6917,7 @@ export function createOrchestrator(
       await ctx.stream.drain();
       const subagents = ctx.render.snapshot().subagents;
       ctx.render.finalize();
-      logClosedSubagents(subagents, ctx.render.snapshot().subagents);
+      logSubagentChanges(subagents, ctx.render.snapshot().subagents);
       ctx.rc.rs = ctx.render.snapshot();
       const answerText = finalMessageText(ctx.rc.rs);
       ctx.rc.localFiles = await outboundFiles.prepare(answerText, {
@@ -7117,12 +7116,18 @@ export function createOrchestrator(
           if (!ev.willRetry) { askTurn?.close('turn-ended'); askTurn = undefined; goalErrorMsg = ev.message; }
           if (!cur) continue; // set-failure before any turn → terminal card only
         }
-        if (!cur) cur = startTurn();
-        cur.render.apply(ev);
-        if (ev.type === 'subagent_start' || (ev.type === 'subagent_status' && ev.status !== 'running')) {
-          const row = cur.render.snapshot().subagents.find(s => s.id === ev.id);
-          log.info('agent', 'subagent', { id: ev.id.slice(-6), status: ev.type === 'subagent_start' ? 'start' : ev.status, steps: row?.steps.length ?? 0 });
+        if (ev.type === 'subagent_start' || ev.type === 'subagent_step' || ev.type === 'subagent_status') {
+          if (cur) {
+            const subagents = cur.render.snapshot().subagents;
+            cur.render.apply(ev);
+            logSubagentChanges(subagents, cur.render.snapshot().subagents);
+          }
+          continue;
         }
+        if (!cur) cur = startTurn();
+        const subagents = cur.render.snapshot().subagents;
+        cur.render.apply(ev);
+        logSubagentChanges(subagents, cur.render.snapshot().subagents);
         // Reasoning ALONE doesn't warrant a card (a planning-only turn must not leave
         // an empty box); only real output (text / tool calls) sends the card. Once a
         // card exists, keep streaming everything (incl. reasoning) into it.
@@ -7144,7 +7149,7 @@ export function createOrchestrator(
       if (interrupted && cur) {
         const subagents = cur.render.snapshot().subagents;
         cur.render.interrupt();
-        logClosedSubagents(subagents, cur.render.snapshot().subagents);
+        logSubagentChanges(subagents, cur.render.snapshot().subagents);
       }
       await finalizeCard(cur);
       cur = null;

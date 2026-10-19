@@ -440,6 +440,7 @@ class CodexThread implements AgentThread {
             }
             if (ev.type === 'goal_update') {
               if (ev.objective !== objective) continue; // stale snapshot for a different goal
+              if (!armed && isGoalTerminal(ev.status)) continue;
               if (ev.status === 'active' || ev.status === 'paused') armed = true;
               yield ev;
               // A goal spans many auto-continued turns — a per-turn `done` is NOT the
@@ -476,27 +477,37 @@ class CodexThread implements AgentThread {
       if (child.parentId) existing.parentId = child.parentId;
       return [];
     }
-    for (const [key, value] of this.children) if (!value.running) this.children.delete(key);
+    for (const [key, value] of this.children) if (value.closed) this.children.delete(key);
+    if (this.children.size >= 64) {
+      const oldest = [...this.children].find(([, value]) => !value.running);
+      if (!oldest) return [];
+      this.children.delete(oldest[0]);
+    }
     this.children.set(id, child);
     return [{ type: 'subagent_start', id, parentId: child.parentId, name: child.nickname ?? child.role ?? '子 agent', task: task.slice(0, 120), stoppable: true }];
   }
 
   private registerFromItem(n: ServerNotification, parentId: string): AgentEvent[] {
     const events: AgentEvent[] = [];
+    if (n.method !== 'item/started' && n.method !== 'item/completed') return events;
+    if (!n.params.item || typeof n.params.item !== 'object') return events;
     if (n.method === 'item/started' || n.method === 'item/completed') {
       const activity = readSubAgentActivity(n.params.item);
       if (activity?.kind === 'started') events.push(...this.registerChild(activity.agentThreadId, { parentId: parentId === this.sessionId ? undefined : parentId, running: true, nickname: activity.agentPath.split('/').pop() }));
     }
     if ((n.method === 'item/started' || n.method === 'item/completed') && n.params.item.type === 'collabAgentToolCall') {
       const item = n.params.item;
-      if (item.tool === 'spawnAgent') {
-        for (const id of item.receiverThreadIds) events.push(...this.registerChild(id, { parentId: parentId === this.sessionId ? undefined : parentId, running: true }, item.prompt ?? ''));
+      if (item.tool === 'spawnAgent' || item.tool === 'sendInput' || item.tool === 'resumeAgent') {
+        const receivers = Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds.filter(id => typeof id === 'string') : [];
+        for (const id of receivers) events.push(...this.registerChild(id, { parentId: parentId === this.sessionId ? undefined : parentId, running: true }, item.prompt ?? ''));
       }
       if (n.method === 'item/completed') {
-        for (const [id, state] of Object.entries(item.agentsStates)) {
+        const states = item.agentsStates && typeof item.agentsStates === 'object' && !Array.isArray(item.agentsStates) ? item.agentsStates : {};
+        for (const [id, state] of Object.entries(states)) {
           const child = this.children.get(id);
-          if (!child?.running || !state || !['errored', 'shutdown', 'notFound'].includes(state.status)) continue;
+          if (!child?.running || !state || typeof state !== 'object' || !['errored', 'shutdown', 'notFound'].includes(state.status)) continue;
           child.running = false;
+          child.stopRequested = false;
           events.push({ type: 'subagent_status', id, status: state.status === 'errored' ? 'failed' : 'stopped' });
         }
       }
@@ -506,31 +517,41 @@ class CodexThread implements AgentThread {
 
   /** undefined means foreign/stale activity; an empty array still refreshes liveness. */
   private routeNotification(n: ServerNotification, ownedTurnId?: string, goal = false): AgentEvent[] | undefined {
+    const p = n.params;
+    if (!p || typeof p !== 'object') return;
+    if (n.method === 'thread/started' && (!n.params.thread || typeof n.params.thread !== 'object')) return;
+    if ((n.method === 'item/started' || n.method === 'item/completed') && (!n.params.item || typeof n.params.item !== 'object')) return;
+    if ((n.method === 'turn/started' || n.method === 'turn/completed') && (!n.params.turn || typeof n.params.turn !== 'object' || typeof n.params.turn.id !== 'string')) return;
+    if ('turn' in p && (!p.turn || typeof p.turn !== 'object' || !('id' in p.turn) || typeof p.turn.id !== 'string')) return;
     if (n.method === 'thread/started') {
       const spawn = readSubagentSpawn(n.params.thread.source);
       if (!spawn) return;
       if (spawn.parent_thread_id !== this.sessionId && !this.children.has(spawn.parent_thread_id)) return;
       return this.registerChild(n.params.thread.id, { parentId: spawn.parent_thread_id === this.sessionId ? undefined : spawn.parent_thread_id, running: true, nickname: spawn.agent_nickname ?? undefined, role: spawn.agent_role ?? undefined });
     }
-    const p = n.params;
     if (!('threadId' in p) || typeof p.threadId !== 'string') return;
     if (p.threadId === this.sessionId) {
       if ('turnId' in p && p.turnId !== ownedTurnId && !(goal && n.method === 'thread/goal/updated' && p.turnId === null)) return;
-      if ('turn' in p && !(goal && n.method === 'turn/started') && p.turn.id !== ownedTurnId) return;
+      if ('turn' in p && p.turn && typeof p.turn === 'object' && !(goal && n.method === 'turn/started') && p.turn.id !== ownedTurnId) return;
       const events = this.registerFromItem(n, this.sessionId);
       const mapped = mapNotification(n);
       if (mapped) events.push(mapped);
       return events;
     }
-    const child = this.children.get(p.threadId);
+    const threadId = p.threadId;
+    const child = this.children.get(threadId);
     if (!child) return;
     if (n.method !== 'turn/started' && child.turnId) {
       if ('turnId' in p && p.turnId !== child.turnId) return;
-      if ('turn' in p && p.turn.id !== child.turnId) return;
+      if ('turn' in p && p.turn && typeof p.turn === 'object' && p.turn.id !== child.turnId) return;
     }
     const events = this.registerFromItem(n, p.threadId);
     const mapped = mapChildNotification(p.threadId, n, child);
     Object.assign(child, mapped.patch);
+    if (n.method === 'turn/started' && child.stopRequested && child.turnId) {
+      void this.client.request('turn/interrupt', { threadId: p.threadId, turnId: child.turnId })
+        .catch(() => log.warn('agent', 'subagent-interrupt-failed', { id: threadId.slice(-6) }));
+    }
     return [...events, ...mapped.events];
   }
 
@@ -550,7 +571,9 @@ class CodexThread implements AgentThread {
     this.client.cancelRequests(this.sessionId, turnId);
     const stops = [this.client.request('turn/interrupt', { threadId: this.sessionId, turnId })];
     for (const [threadId, child] of this.children) {
-      if (child.running && child.turnId) stops.push(this.client.request('turn/interrupt', { threadId, turnId: child.turnId }));
+      if (!child.running) continue;
+      child.stopRequested = true;
+      if (child.turnId) stops.push(this.client.request('turn/interrupt', { threadId, turnId: child.turnId }));
     }
     const results = await Promise.allSettled(stops);
     for (const result of results.slice(1)) {
