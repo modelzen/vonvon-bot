@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { parseAskRequest, type AskRequest, type AskResolution } from '../types';
+import { parseAskRequest, type AskAnswer, type AskRequest, type AskResolution } from '../types';
 import type { JsonRpcAnswer, JsonRpcId } from '../../provider/transport/jsonrpc';
 import type { PermissionsRequestApprovalResponse } from './protocol/generated/v2/PermissionsRequestApprovalResponse';
 import type { ToolRequestUserInputParams } from './protocol/generated/v2/ToolRequestUserInputParams';
@@ -18,6 +18,35 @@ const inputSchema = z.object({
   })).min(1),
 });
 const unavailable = (): JsonRpcAnswer => ({ result: { answers: {} } satisfies ToolRequestUserInputResponse });
+type InputQuestion = ToolRequestUserInputParams['questions'][number];
+
+function otherAnswer(_question: InputQuestion, text: string): string[] {
+  return [text];
+}
+
+/** Translate stable card IDs back to the provider's opaque question IDs and labels. */
+function answerTexts(questions: InputQuestion[], answer: AskAnswer): Map<string, string[]> | undefined {
+  if (answer.kind === 'text') {
+    return new Map(questions.map(q => [q.id, otherAnswer(q, answer.text)]));
+  }
+  if (answer.kind !== 'choices' || answer.answers.length !== questions.length) return undefined;
+  const texts = new Map<string, string[]>();
+  for (const [qi, q] of questions.entries()) {
+    const matches = answer.answers.filter(a => a.questionId === `q${qi}`);
+    if (matches.length !== 1) return undefined;
+    const item = matches[0];
+    if (!item) return undefined;
+    if ('text' in item) {
+      texts.set(q.id, otherAnswer(q, item.text));
+      continue;
+    }
+    if (item.selected.length !== 1) return undefined;
+    const label = q.options?.find((_option, oi) => item.selected[0] === `o${oi}`)?.label;
+    if (!label) return undefined;
+    texts.set(q.id, [label]);
+  }
+  return texts;
+}
 
 export interface InboundQuestion {
   kind: 'request';
@@ -111,15 +140,16 @@ export function userInputRequest(
   const parsed = inputSchema.safeParse(params);
   if (!parsed.success || !scope) return unavailable();
   const input = parsed.data satisfies ToolRequestUserInputParams;
-  if (input.threadId !== scope.threadId || input.questions.some(q => q.isSecret || !q.options?.length) || new Set(input.questions.map(q => q.id)).size !== input.questions.length) return unavailable();
+  // s33b maps isSecret to sensitive; until then, keep secret questions unavailable.
+  if (input.threadId !== scope.threadId || input.questions.some(q => q.isSecret) || new Set(input.questions.map(q => q.id)).size !== input.questions.length) return unavailable();
   const requestId = `codex-request-${serial}`;
   const request = parseAskRequest({
-    kind: 'choices', id: requestId, title: 'Codex 需要你的选择',
+    kind: 'choices', id: requestId, title: input.questions.some(q => !q.options?.length) ? 'Codex 需要你回答' : 'Codex 需要你的选择',
     acceptedConsequence: '将所选选项发送给 Codex。', declinedConsequence: '不提供答案，交回 Codex 处理。',
-    questions: input.questions.map((q, qi) => ({
-      id: `q${qi}`, title: q.header, detail: q.question, selection: 'single',
-      options: q.options?.map((option, oi) => ({ id: `o${oi}`, label: option.label, description: option.description })),
-    })),
+    questions: input.questions.map((q, qi) => q.options?.length && !q.isSecret
+      ? { id: `q${qi}`, title: q.header, detail: q.question, selection: 'single', other: q.isOther,
+          options: q.options.map((option, oi) => ({ id: `o${oi}`, label: option.label, description: option.description })) }
+      : { id: `q${qi}`, title: q.header, detail: q.question, selection: 'text', sensitive: q.isSecret }),
   });
   return new Promise(resolve => {
     let settled = false;
@@ -136,14 +166,10 @@ export function userInputRequest(
         settled = true;
         scope.forget(question);
         const answers = new Map<string, { answers: string[] }>();
-        if (resolution?.kind === 'answered' && resolution.answer.kind === 'choices') {
-          for (const [qi, q] of input.questions.entries()) {
-            const selected = resolution.answer.answers.find(a => a.questionId === `q${qi}`)?.selected;
-            if (!selected || selected.length !== 1) { resolve(unavailable()); return; }
-            const label = q.options?.find((_option, oi) => selected[0] === `o${oi}`)?.label;
-            if (!label) { resolve(unavailable()); return; }
-            answers.set(q.id, { answers: [label] });
-          }
+        if (resolution?.kind === 'answered') {
+          const texts = answerTexts(input.questions, resolution.answer);
+          if (!texts) { resolve(unavailable()); return; }
+          for (const [questionId, list] of texts) answers.set(questionId, { answers: list });
         }
         resolve({ result: { answers: Object.fromEntries(answers) } satisfies ToolRequestUserInputResponse });
       },

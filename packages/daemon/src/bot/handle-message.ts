@@ -1320,6 +1320,9 @@ export function createOrchestrator(
     const senderType = (msg.raw as { sender?: { sender_type?: string } } | undefined)?.sender?.sender_type;
     return senderType === 'user' ? 'user' : senderType === 'app' ? 'bot' : 'unknown';
   }
+  function typedCandidate(msg: NormalizedMessage): boolean {
+    return (msg.rawContentType === 'text' || msg.rawContentType === 'post') && msg.content.trim().length > 0;
+  }
   /** Who sent a message, as the topic registry records it. */
   function senderOf(msg: NormalizedMessage): TopicPerson {
     const app = (msg.raw as { sender?: { sender_type?: string } } | undefined)?.sender?.sender_type === 'app';
@@ -1923,6 +1926,11 @@ export function createOrchestrator(
         await postContextCard(msg, ts.sessionKey, false);
         return;
       }
+      if (!cmd && !goalObjective && typedCandidate(msg)) {
+        const typed = asks.typed({ chatId: msg.chatId, place: ts.sessionKey, senderId: msg.senderId,
+          senderKind: askRequesterKind(msg), text, createTime: msg.createTime });
+        if (typed === 'answered') { markSeen(ts.sessionKey, { id: msg.messageId, at: msg.createTime }); return; }
+      }
       // Smart: a judgement decides (s25); the refusal of a tier the backend cannot run waits for it to say reply.
       if (smart && !goalObjective) {
         if (await alreadySeen(msg, ts.sessionKey)) return;
@@ -1980,6 +1988,11 @@ export function createOrchestrator(
       if (cmd === 'context') {
         await postContextCard(msg, ts.sessionKey, true);
         return;
+      }
+      if (!cmd && !goalObjective && typedCandidate(msg)) {
+        const typed = asks.typed({ chatId: msg.chatId, place: ts.sessionKey, senderId: msg.senderId,
+          senderKind: askRequesterKind(msg), text, createTime: msg.createTime });
+        if (typed === 'answered') { markSeen(ts.sessionKey, { id: msg.messageId, at: msg.createTime }); return; }
       }
       // Smart: an unnamed topic message is judged, only reply or not (s25); a named one is answered as before.
       if (smart && audience === 'nobody' && !goalObjective) {

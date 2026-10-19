@@ -4,6 +4,7 @@ import type { AgentRun, AskRequest } from '../src/agent/types';
 import type { AppConfig } from '../src/config/schema';
 import { AskCoordinator } from '../src/bot/ask-coordinator';
 import { createIdlePause } from '../src/bot/watchdog';
+import { log } from '../src/core/logger';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -14,6 +15,10 @@ function deferred<T>() {
 function ask(id: string, kind: 'confirmation' | 'permission' = 'confirmation'): AskRequest {
   const common = { id, title: '决定', detail: '继续吗', acceptedConsequence: '继续', declinedConsequence: '停止' };
   return kind === 'permission' ? { ...common, kind, permissionMode: 'full' } : { ...common, kind };
+}
+function choices(id = 'choices'): AskRequest {
+  return { id, kind: 'choices', title: '选择', acceptedConsequence: '继续', declinedConsequence: '停止',
+    questions: [{ id: 'q', title: '选一个', detail: '', selection: 'single', other: false, options: [{ id: 'one', label: '一', description: '' }] }] };
 }
 function fixture() {
   let counter = 0;
@@ -32,7 +37,9 @@ function fixture() {
     placement: { chatId: 'chat', replyTo: 'trigger', replyInThread: true }, initiator: { kind, openId: 'starter' }, idlePause: pause, waiting, fault });
   const submit = (id = 'a', messageId = 'msg-1', operatorOpenId = 'starter', extra: object = {}) => coordinator.submit({ messageId, chatId: 'chat', operatorOpenId,
     value: { a: 'ask_submit', requestId: id, decision: 'proceed' }, formValue: undefined, ...extra });
-  return { coordinator, channel, cfg, create, update, reply, send, response, run, pause, waiting, fault, open, submit };
+  const typed = (place = 'session', senderId = 'starter', text = '我的回答', chatId = 'chat', createTime = Date.now(),
+    senderKind: 'user' | 'bot' | 'unknown' = 'user') => coordinator.typed({ place, senderId, text, chatId, createTime, senderKind });
+  return { coordinator, channel, cfg, create, update, reply, send, response, run, pause, waiting, fault, open, submit, typed };
 }
 const flush = async () => { for (let n = 0; n < 12; n++) await Promise.resolve(); };
 afterEach(() => { vi.useRealTimers(); });
@@ -150,7 +157,7 @@ it('isolates sessions and rejects comment requests immediately without presentat
 
 it('empty choices show deduplicated feedback and remain answerable', async () => {
   const f = fixture(); const turn = f.open();
-  turn.enqueue({ id: 'choices', kind: 'choices', title: '选择', acceptedConsequence: '继续', declinedConsequence: '停止', questions: [{ id: 'q', title: '选一个', detail: '', selection: 'single', options: [{ id: 'one', label: '一', description: '' }] }] });
+  turn.enqueue({ id: 'choices', kind: 'choices', title: '选择', acceptedConsequence: '继续', declinedConsequence: '停止', questions: [{ id: 'q', title: '选一个', detail: '', selection: 'single', other: false, options: [{ id: 'one', label: '一', description: '' }] }] });
   await flush();
   const value = { a: 'ask_submit', requestId: 'choices', decision: 'submit', __r: 'managed' };
   expect(f.submit('choices', 'msg-1', 'starter', { value })).toBe('invalid');
@@ -224,4 +231,92 @@ it('cancels sending cards and terminalizes late delivery without affecting a lat
   expect(f.pause.held).toBe(false);
   expect(vi.getTimerCount()).toBe(0);
   expect(f.reply.mock.calls.filter(([input]) => input.data.msg_type === 'post')).toHaveLength(1);
+});
+
+it('claims visible choices typed by the initiator, updates the card and advances FIFO', async () => {
+  const f = fixture(); const turn = f.open();
+  turn.enqueue(choices('first')); turn.enqueue(choices('second')); await flush();
+  expect(f.typed()).toBe('answered');
+  expect(f.response).toHaveBeenCalledExactlyOnceWith('first', { kind: 'answered', answer: { kind: 'text', text: '我的回答' } });
+  expect(f.pause.held).toBe(true);
+  await flush();
+  expect(f.create).toHaveBeenCalledTimes(2);
+  const edits = JSON.stringify(f.update.mock.calls);
+  expect(edits).toContain('name-starter');
+  expect(edits).toContain('我的回答');
+  turn.close('turn-ended'); expect(f.pause.held).toBe(false);
+});
+
+it('accepts a current admin but rejects wrong identity, location, sender kind, and non-choice cards', async () => {
+  const f = fixture(); const turn = f.open(); turn.enqueue(choices()); await flush();
+  expect(f.typed('other')).toBe('none');
+  expect(f.typed('session', 'starter', 'x', 'other-chat')).toBe('none');
+  expect(f.typed('session', 'guest')).toBe('none');
+  expect(f.typed('session', 'starter', 'x', 'chat', Date.now(), 'bot')).toBe('none');
+  expect(f.typed('session', 'starter', 'x', 'chat', Date.now(), 'unknown')).toBe('none');
+  expect(f.response).not.toHaveBeenCalled();
+  expect(f.typed('session', 'admin')).toBe('answered');
+  expect(f.response).toHaveBeenCalledOnce();
+  turn.close('turn-ended');
+  for (const kind of ['confirmation', 'permission'] as const) {
+    const g = fixture(); const t = g.open(); t.enqueue(ask('a', kind)); await flush();
+    expect(g.typed()).toBe('none');
+    expect(g.typed('session', 'admin')).toBe('none');
+    expect(g.response).not.toHaveBeenCalled();
+    expect(g.update).not.toHaveBeenCalled();
+    t.close('turn-ended');
+  }
+});
+
+it('requires a visible card and a message timestamp no earlier than its visibility', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-19T00:00:00.000Z'));
+  const f = fixture(); const held = deferred<{ data: { card_id: string } }>();
+  f.create.mockReturnValueOnce(held.promise);
+  const turn = f.open(); turn.enqueue(choices()); await flush();
+  expect(f.typed()).toBe('none');
+  held.resolve({ data: { card_id: 'card-1' } }); await flush();
+  const shownAt = Date.now();
+  expect(f.coordinator.typed({ place: 'session', chatId: 'chat', senderId: 'starter', senderKind: 'user', text: 'x' })).toBe('none');
+  expect(f.typed('session', 'starter', 'x', 'chat', shownAt - 1)).toBe('none');
+  expect(f.typed('session', 'starter', 'x', 'chat', shownAt)).toBe('answered');
+  expect(f.typed()).toBe('none');
+  expect(f.response).toHaveBeenCalledOnce();
+  turn.close('turn-ended');
+});
+
+it('ignores blank text and truncates longer answers to 4000 characters', async () => {
+  const f = fixture(); const turn = f.open(); turn.enqueue(choices()); await flush();
+  expect(f.typed('session', 'starter', ' \n ')).toBe('none');
+  expect(f.response).not.toHaveBeenCalled();
+  expect(f.typed('session', 'starter', `  ${'x'.repeat(4001)}  `)).toBe('answered');
+  expect(f.response.mock.calls[0]![1]).toEqual({ kind: 'answered', answer: { kind: 'text', text: 'x'.repeat(4000) } });
+  turn.close('turn-ended');
+});
+
+it('logs only answer length and request kind', async () => {
+  const info = vi.spyOn(log, 'info').mockImplementation(() => {});
+  try {
+    const f = fixture(); const turn = f.open(); turn.enqueue(choices()); await flush();
+    expect(f.typed('session', 'starter', '私密回答')).toBe('answered');
+    expect(info).toHaveBeenCalledWith('card', 'ask-typed', { len: 4, kind: 'choices' });
+    expect(JSON.stringify(info.mock.calls.filter(([, event]) => event === 'ask-typed'))).not.toContain('私密回答');
+    turn.close('turn-ended');
+  } finally { info.mockRestore(); }
+});
+
+it('lets the first synchronous claim win against clicks, timeout, stop and replacement turns', async () => {
+  vi.useFakeTimers();
+  const f = fixture(); const first = f.open(); first.enqueue(choices()); await flush();
+  await vi.advanceTimersByTimeAsync(15 * 60_000 - 1);
+  expect(f.typed()).toBe('answered');
+  first.close('stopped'); await vi.advanceTimersByTimeAsync(1);
+  expect(f.response).toHaveBeenCalledOnce(); expect(f.pause.held).toBe(false);
+  const second = f.open(); second.enqueue(ask('confirm')); await flush();
+  expect(f.typed()).toBe('none');
+  second.close('turn-ended');
+  const third = f.open(); third.enqueue(choices('click')); await flush();
+  expect(f.submit('click', 'msg-3', 'starter', { value: { a: 'ask_submit', requestId: 'click', decision: 'submit', __r: 'managed' }, formValue: { q0: 'one' } })).toBe('accepted');
+  expect(f.typed()).toBe('none');
+  expect(f.response).toHaveBeenCalledTimes(3);
+  third.close('turn-ended');
 });

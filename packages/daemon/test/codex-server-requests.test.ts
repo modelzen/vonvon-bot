@@ -192,6 +192,7 @@ describe('Codex inbound requests over the real app-server transport', () => {
     const entry = (await events.next()).value;
     if (!entry || 'method' in entry || entry.kind !== 'request') throw new Error('Expected request');
     expect(scope.accepts(entry, 'turn')).toBe(true);
+    expect(entry.request.questions).toMatchObject([{ selection: 'single', other: true }]);
     expect((await events.next()).value).toMatchObject({ method: 'after' });
     await scope.respond(entry.request.id, { kind: 'answered', answer: { kind: 'choices', answers: [{ questionId: 'q0', selected: ['o0'] }] } });
     await scope.respond(entry.request.id);
@@ -227,9 +228,10 @@ describe('Codex inbound requests over the real app-server transport', () => {
     await owned.return?.();
   });
 
-  it('settles malformed, secret, missing/empty options and foreign requests without producing group asks', async () => {
+  it('maps missing and empty options to text questions while rejecting malformed, secret and foreign requests', async () => {
     const f = await clientFixture();
-    f.client.openRequestScope('thread');
+    const scope = f.client.openRequestScope('thread');
+    const stream = f.client.events()[Symbol.asyncIterator]();
     const base = params.questions[0];
     await f.emit([
       question('bad', {}), question('secret', { ...params, questions: [{ ...base, isSecret: true }] }),
@@ -238,8 +240,65 @@ describe('Codex inbound requests over the real app-server transport', () => {
       question('foreign', { ...params, threadId: 'other' }),
       question('duplicate', { ...params, questions: [base, base] }),
     ]);
+    for (const id of ['null', 'empty']) {
+      const entry = (await stream.next()).value;
+      if (!entry || 'method' in entry || entry.kind !== 'request') throw new Error('Expected text request');
+      expect(entry.rpcId).toBe(id);
+      expect(scope.accepts(entry, 'turn')).toBe(true);
+      expect(entry.request).toMatchObject({ title: 'Codex 需要你回答', questions: [{ selection: 'text', sensitive: false }] });
+      await scope.respond(entry.request.id);
+    }
     await vi.waitFor(() => expect(f.replies()).toHaveLength(6));
+    expect(f.replies().map(reply => (reply as { id: string }).id).sort()).toEqual(['bad', 'duplicate', 'empty', 'foreign', 'null', 'secret']);
     for (const reply of f.replies()) expect(reply).toMatchObject({ result: { answers: {} } });
+    await stream.return?.();
+  });
+
+  it('returns a whole text answer to every original question', async () => {
+    const f = await clientFixture();
+    const scope = f.client.openRequestScope('thread');
+    const stream = f.client.events()[Symbol.asyncIterator]();
+    await f.emit([question('whole-text', { ...params, questions: [
+      { ...params.questions[0], isOther: false }, { ...params.questions[0], id: 'free-form', header: 'Explain', options: null },
+    ] })]);
+    const entry = (await stream.next()).value;
+    if (!entry || 'method' in entry || entry.kind !== 'request') throw new Error('Expected request');
+    expect(entry.request).toMatchObject({ title: 'Codex 需要你回答', questions: [
+      { selection: 'single', other: false }, { selection: 'text', sensitive: false },
+    ] });
+    await scope.respond(entry.request.id, { kind: 'answered', answer: { kind: 'text', text: '随便写' } });
+    await vi.waitFor(() => expect(f.replies()).toEqual([{ jsonrpc: '2.0', id: 'whole-text', result: { answers: {
+      'original-question': { answers: ['随便写'] }, 'free-form': { answers: ['随便写'] },
+    } } }]));
+    await stream.return?.();
+  });
+
+  it('maps per-question text and selected labels, and rejects incomplete or mismatched choice answers', async () => {
+    const f = await clientFixture();
+    const scope = f.client.openRequestScope('thread');
+    const stream = f.client.events()[Symbol.asyncIterator]();
+    const two = { ...params, questions: [params.questions[0],
+      { ...params.questions[0], id: 'free-form', header: 'Explain', options: [] }] };
+    const responses = [
+      { id: 'mixed', answers: [{ questionId: 'q0', selected: ['o0'] as [string] }, { questionId: 'q1', text: '手写' }] },
+      { id: 'other', answers: [{ questionId: 'q0', text: '我的选项' }, { questionId: 'q1', text: '另一段' }] },
+      { id: 'missing', answers: [{ questionId: 'q0', selected: ['o0'] as [string] }] },
+      { id: 'extra', answers: [{ questionId: 'q0', selected: ['o0'] as [string] }, { questionId: 'q1', text: '写' }, { questionId: 'q2', text: '多余' }] },
+      { id: 'wrong-option', answers: [{ questionId: 'q0', selected: ['o9'] as [string] }, { questionId: 'q1', text: '写' }] },
+    ];
+    for (const { id, answers } of responses) {
+      await f.emit([question(id, two)]);
+      const entry = (await stream.next()).value;
+      if (!entry || 'method' in entry || entry.kind !== 'request') throw new Error('Expected request');
+      await scope.respond(entry.request.id, { kind: 'answered', answer: { kind: 'choices', answers: answers as [{ questionId: string; selected: [string] } | { questionId: string; text: string }, ...({ questionId: string; selected: [string] } | { questionId: string; text: string })[]] } });
+    }
+    await vi.waitFor(() => expect(f.replies()).toHaveLength(responses.length));
+    expect(f.replies()).toEqual([
+      { jsonrpc: '2.0', id: 'mixed', result: { answers: { 'original-question': { answers: ['Original label'] }, 'free-form': { answers: ['手写'] } } } },
+      { jsonrpc: '2.0', id: 'other', result: { answers: { 'original-question': { answers: ['我的选项'] }, 'free-form': { answers: ['另一段'] } } } },
+      ...['missing', 'extra', 'wrong-option'].map(id => ({ jsonrpc: '2.0', id, result: { answers: {} } })),
+    ]);
+    await stream.return?.();
   });
 
   it.each(['clear', 'iterator-return', 'utility', 'filtered'] as const)('releases %s requests without stranding wire replies', async kind => {

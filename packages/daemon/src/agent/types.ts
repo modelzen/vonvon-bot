@@ -125,13 +125,21 @@ export type ToolKind = 'command' | 'file' | 'search' | 'tool';
 
 const askText = z.string().trim().min(1);
 const askOptionSchema = z.object({ id: askText, label: askText, description: z.string() }).strict();
-const askQuestionSchema = z.object({
+const askChoiceQuestion = z.object({
   id: askText,
   title: askText,
   detail: z.string(),
   selection: z.enum(['single', 'multiple']),
   options: z.tuple([askOptionSchema]).rest(askOptionSchema),
+  /** Allow a typed answer outside the options (Codex isOther). */
+  other: z.boolean().default(false),
 }).strict();
+const askTextQuestion = z.object({
+  id: askText, title: askText, detail: z.string(), selection: z.literal('text'),
+  /** Sensitive text moves to private chat in s33b. */
+  sensitive: z.boolean().default(false),
+}).strict();
+const askQuestionSchema = z.discriminatedUnion('selection', [askChoiceQuestion, askTextQuestion]);
 const askBase = {
   id: askText,
   title: askText,
@@ -150,6 +158,7 @@ export const askRequestSchema = z.discriminatedUnion('kind', [
   request.questions.forEach((question, index) => {
     if (questionIds.has(question.id)) ctx.addIssue({ code: 'custom', path: ['questions', index, 'id'], message: 'Duplicate question id' });
     questionIds.add(question.id);
+    if (question.selection === 'text') return;
     const optionIds = new Set<string>();
     question.options.forEach((option, optionIndex) => {
       if (optionIds.has(option.id)) ctx.addIssue({ code: 'custom', path: ['questions', index, 'options', optionIndex, 'id'], message: 'Duplicate option id' });
@@ -160,8 +169,15 @@ export const askRequestSchema = z.discriminatedUnion('kind', [
 
 export type AskRequest = z.infer<typeof askRequestSchema>;
 
+export function isSensitiveAsk(request: AskRequest): boolean {
+  return request.kind === 'choices' && request.questions.some(q => q.selection === 'text' && q.sensitive);
+}
+
+export type AskChoiceAnswer = { questionId: string; selected: [string, ...string[]] } | { questionId: string; text: string };
 export type AskAnswer =
-  | { kind: 'choices'; answers: [{ questionId: string; selected: [string, ...string[]] }, ...{ questionId: string; selected: [string, ...string[]] }[]] }
+  | { kind: 'choices'; answers: [AskChoiceAnswer, ...AskChoiceAnswer[]] }
+  /** Typed reply to the whole choices request; confirmation and permission require buttons. */
+  | { kind: 'text'; text: string }
   | { kind: 'confirmation'; decision: 'proceed' | 'explain' }
   | { kind: 'permission'; decision: 'allow-once' | 'deny' };
 
