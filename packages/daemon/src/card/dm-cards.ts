@@ -1,5 +1,6 @@
 import type { ResponseRoster } from '@vonvon/protocol';
 import { responseMemberLabel } from '../bot/response-members';
+import { getAppRoleSnapshot } from '../config/app-roles';
 import { voiceView, VOICE_TITLE, VOICE_DESCRIPTION, VOICE_NOTICE, VOICE_DOC_URL } from '../voice/view';
 import {
   COMPLETION_REMINDER_LONG_TASK_MAX_MINUTES,
@@ -12,7 +13,6 @@ import {
   getSessionTitleEfforts,
   getShowToolCalls,
   normalizeRunIdleTimeoutSeconds,
-  resolveOwner,
   RUN_IDLE_TIMEOUT_DEFAULT_SEC,
   RUN_IDLE_TIMEOUT_MAX_SEC,
   RUN_IDLE_TIMEOUT_MIN_SEC,
@@ -1487,26 +1487,37 @@ function memberName(names: Map<string, string>, id: string): string {
  * `names` 由调用方用 contact.batch 预解析 open_id→姓名。
  */
 export function buildAdminsCard(cfg: AppConfig, names: Map<string, string>): CardObject {
-  const owner = resolveOwner(cfg);
+  const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
+  const owner = roles?.ownerOpenId;
+  const scanner = cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0];
   const admins = cfg.preferences?.access?.admins ?? [];
   const elements: CardElement[] = [md('**管理员名单** · 本 bot 全局（可私聊管理 / 建项目 / 销毁操作）'), hr()];
   const seen = new Set<string>();
   if (owner) {
     seen.add(owner);
-    elements.push(actions([md(`👑 **${memberName(names, owner)}** · Bot 拥有者（注册者）`)]));
+    elements.push(actions([md(`👑 **${memberName(names, owner)}** · 飞书应用拥有者`)]));
+  }
+  for (const id of roles?.admins ?? []) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    elements.push(actions([md(`${memberName(names, id)} · 飞书应用管理员`)]));
+  }
+  if (scanner && !seen.has(scanner)) {
+    seen.add(scanner);
+    elements.push(actions([md(`${memberName(names, scanner)} · 扫码注册者`)]));
   }
   let extra = 0;
   for (const id of admins) {
     if (seen.has(id)) continue;
     seen.add(id);
     extra++;
-    elements.push(actions([md(memberName(names, id)), button('🗑 移除', { a: DM.rmAdmin, u: id }, 'danger')]));
+    elements.push(actions([md(`${memberName(names, id)} · 本地管理员`), button('🗑 移除', { a: DM.rmAdmin, u: id }, 'danger')]));
   }
   if (extra === 0) elements.push(note('暂无额外管理员。'));
   elements.push(
     hr(),
     actions([button('➕ 添加管理员', { a: DM.addAdminForm }, 'primary'), button('⬅️ 设置', { a: DM.settings })]),
-    note('👑 Bot 拥有者（注册此 bot 的人）恒为管理员，不可移除；名单为空时仅拥有者可管理。'),
+    note('飞书应用拥有者和管理员请在飞书开放平台管理；扫码注册者不可移除。'),
   );
   return card(elements, { header: { title: '👮 管理员', template: 'blue' } });
 }

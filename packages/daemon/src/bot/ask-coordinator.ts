@@ -1,6 +1,7 @@
+import { getAppRoleSnapshot } from '../config/app-roles';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { isSensitiveAsk, type AgentRun, type AskRequest, type AskResolution } from '../agent/types';
-import { isAdmin, resolveOwner, type AppConfig } from '../config/schema';
+import { isAdmin, type AppConfig } from '../config/schema';
 import { buildAskCard, parseAskSubmission, type AskCardState } from '../card/ask-card';
 import { sendManagedCard, updateManagedCard } from '../card/managed';
 import { log } from '../core/logger';
@@ -62,7 +63,9 @@ export class AskCoordinator {
     this.effect(() => turn.fault(error));
   }
   private eligible(turn: Turn, request: AskRequest): string[] {
-    return [...new Set([resolveOwner(this.cfg), ...(this.cfg.preferences?.access?.admins ?? []),
+    const roles = getAppRoleSnapshot(this.cfg.accounts.app.id, this.cfg.accounts.app.tenant);
+    return [...new Set([roles?.ownerOpenId, ...(roles?.admins ?? []), this.cfg.preferences?.access?.ownerOpenId,
+      ...(this.cfg.preferences?.access?.admins ?? []),
       ...(request.kind !== 'permission' && turn.initiator.kind === 'user' ? [turn.initiator.openId] : [])]
       .filter((id): id is string => Boolean(id)))];
   }

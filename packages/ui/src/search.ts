@@ -25,7 +25,7 @@ const agentGroups: readonly AgentGroup[] = [
   {title: '云文档评论', fields: [item('后端', ['执行工具']), item('模型'), item('推理强度', [], {guide: '先选择一个具体模型，再调整推理强度。'})]},
   {title: '评论回复规则', fields: [item('评论规则文本', ['提示词', 'instructions'], {field: '评论回复规则'}), item('保存规则', ['保存评论规则']), item('恢复默认', ['恢复默认评论规则'])]},
   {title: '新会话标题', aliases: ['会话标题'], fields: [item('后端', ['标题后端', '执行工具']), item('用模型生成标题'), item('自定义模型 ID', ['标题模型 ID'], {guide: '先打开「用模型生成标题」，即可设置模型 ID。'}), item('推理强度', ['标题推理强度'], {guide: '先打开「用模型生成标题」，即可设置推理强度。'})]},
-  {title: '管理员', fields: [item('主人', ['所有者']), item('添加管理员 Open ID'), item('移除管理员', [], {field: '', guide: '在管理员列表中找到要移除的成员。'})]},
+  {title: '管理员', fields: [item('飞书应用拥有者', ['主人', '所有者', '飞书应用所有者']), item('扫码注册者', ['扫码人', '注册者']), item('添加管理员 Open ID'), item('移除管理员', [], {field: '', guide: '在管理员列表中找到要移除的成员。'})]},
   {title: '工作区的默认位置', aliases: ['新项目默认目录'], fields: [item('文件夹', ['根目录', '新项目根目录'])]},
   {title: '允许的飞书群', fields: [item('群范围'), item('添加群 ID'), item('移除群 ID', [], {field: '', guide: '在允许的飞书群列表中找到要移除的群。'})]},
   {title: '移除 Bot', fields: [item('删除本地 Bot 数据', ['删除机器人'])]},

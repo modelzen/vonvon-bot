@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { botIdentity, commitBotCredentialRefresh, loadBots } from '../config/bots';
 import { botPaths } from '../config/paths';
 import { loadConfig } from '../config/store';
-import { isComplete, secretKeyForApp } from '../config/schema';
+import { isAdmin, isComplete, secretKeyForApp } from '../config/schema';
 import { setSecret } from '../config/keystore';
 import { validateAppCredentials } from '../utils/feishu-auth';
 import { startRegistration, registrationErrorCode, type StartRegistrationOptions } from './wizard';
@@ -32,7 +32,7 @@ export async function refreshBotCredentials(
     const creds = await register({ ...options, appId });
     if (options.signal.aborted) return fail('abort', '已取消。');
     if (creds.clientId !== appId || creds.tenant !== entry.tenant) return fail('credential_rejected', '扫码返回的应用或租户不匹配，未保存凭据。');
-    if (!creds.operatorOpenId || (creds.operatorOpenId !== owner && !config.preferences?.access?.admins?.includes(creds.operatorOpenId))) {
+    if (!creds.operatorOpenId || !isAdmin(config, creds.operatorOpenId)) {
       return fail('access_denied', '请由这个 Bot 的主人或管理员扫码，未保存凭据。');
     }
     const validation = await validate(appId, creds.clientSecret, entry.tenant);

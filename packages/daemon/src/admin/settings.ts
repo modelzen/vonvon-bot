@@ -1,3 +1,4 @@
+import { getAppRoleSnapshot } from '../config/app-roles';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { JUDGE_SELECTION_KINDS } from '@vonvon/protocol';
@@ -471,11 +472,14 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         judgeByBackend[id] = { model, ...(effort ? { effort } : {}), ...(provider ? { provider } : {}), source: modelSource === 'bot' ? 'bot' : 'default' };
       }
       const text = await instructions.read();
+      const roles = getAppRoleSnapshot(botId, cfg.accounts.app.tenant);
       return {
         scope,
         sections,
         ownerOpenId: resolveOwner(cfg) ?? null,
         administrators: {
+          feishu: { ownerOpenId: roles?.ownerOpenId ?? null, adminOpenIds: roles?.admins ?? [] },
+          scannerOpenId: cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0] ?? null,
           openIds: [...(cfg.preferences?.access?.admins ?? [])],
           revision: settingsRevision([botId, resolveOwner(cfg), cfg.preferences?.access?.admins ?? []])
         },
@@ -801,8 +805,10 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         case 'adminMember':
           await deps.writePreferences(p => {
             check([botId, resolveOwner(cfg), p.access?.admins ?? []], action.revision);
-            if (action.openId === resolveOwner(cfg) && action.membership === 'absent')
-              throw new SettingsInputError('主人不能移除');
+            const roles = getAppRoleSnapshot(botId, cfg.accounts.app.tenant);
+            const scanner = cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0];
+            if (action.membership === 'absent' && (action.openId === resolveOwner(cfg) || action.openId === scanner || roles?.admins.includes(action.openId)))
+              throw new SettingsInputError('飞书应用管理员和注册者不能在本机移除');
             const admins = new Set(p.access?.admins ?? []);
             if (action.membership === 'present')
               admins.add(action.openId);

@@ -1145,20 +1145,23 @@ function AgentPanel({
         footer={
           cards.access.kind === "readonly"
             ? cards.access.message
-            : "注册 Bot 的主人始终有管理员权限，不能在这里移除。"
+            : "飞书应用身份请在飞书开放平台管理；注册者始终保留本地管理员权限。"
         }
       >
-        <SettingsRow title="主人" value={view.ownerOpenId ?? "尚未确认"} />
+        <SettingsRow title="飞书应用拥有者" value={view.administrators.feishu?.ownerOpenId ?? "尚未获取"} />
+        {view.administrators.feishu?.adminOpenIds.map((id) => (
+          <SettingsRow key={`feishu-${id}`} title={id} value="飞书应用管理员 · 请在飞书开放平台管理" />
+        ))}
+        <SettingsRow title="扫码注册者" value={view.administrators.scannerOpenId ?? view.ownerOpenId ?? "尚未确认"} />
         {view.administrators.openIds.map((id) => (
           <SettingsRow
             key={id}
             title={id}
+            value="本地管理员"
             trailing={
-              <Button
+              id === view.ownerOpenId || id === view.administrators.scannerOpenId || view.administrators.feishu?.adminOpenIds.includes(id) ? undefined : <Button
                 size="sm"
-                disabled={
-                  id === view.ownerOpenId || cards.access.kind === "readonly"
-                }
+                disabled={cards.access.kind === "readonly"}
                 onClick={() =>
                   void act({
                     type: "act",

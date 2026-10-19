@@ -33,6 +33,19 @@ test('every literal configuration row label in the current desktop UI is indexed
   assert.deepEqual(missing, []);
 });
 
+test('s53: application owner and scanner search reveal their administrator rows', () => {
+  for (const [query, field] of [
+    ['飞书应用拥有者', '飞书应用拥有者'], ['飞书应用所有者', '飞书应用拥有者'],
+    ['主人', '飞书应用拥有者'], ['扫码注册者', '扫码注册者'], ['扫码人', '扫码注册者'],
+  ]) {
+    const result = findEntries(entries, query!)[0];
+    assert.equal(result?.destination.section, '管理员');
+    assert.equal(result?.destination.detail?.kind, 'agent-settings');
+    assert.equal(result?.destination.field, field);
+    assert.deepEqual(result?.destination.selection, {kind: 'agent', id: agentId});
+  }
+});
+
 test('rare field, aliases, and multi-term scope queries resolve to their real category', () => {
   assert.equal(findEntries(entries, '清空白名单')[0]?.destination.detail?.kind, 'membership-settings');
   assert.equal(findEntries(entries, 'App Secret')[0]?.destination.reveal, 'profile-add');
