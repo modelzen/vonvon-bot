@@ -1,5 +1,5 @@
 import {Fragment, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode} from 'react';
-import {KeyRound, LoaderCircle} from 'lucide-react';
+import {KeyRound} from 'lucide-react';
 import {formatTime, keyProblem, type SecretService} from '@vonvon/protocol';
 import {useClient} from '../client-context';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
@@ -94,12 +94,13 @@ export function UsesRow({service, view}: {service: SecretService; view: SecretsV
       {notesOf(notes)}
     </>
     : notes.length ? notesOf(notes) : `现在没有 Bot 或飞书群选它。判断模型选了 ${choice(service)} 才用这个 key。`;
-  return <SettingsRow title="谁在用" description={description}
+  // the count stays by the title however long the list (多角度审查 B4)
+  return <SettingsRow className="secrets-uses-row" title="谁在用" description={description}
     trailing={view.botsUnreadable ? pill('Bot 清单读不了', 'warning') : service.inUse.length ? <StatusBadge>{useCount(service.inUse)}</StatusBadge> : undefined}/>;
 }
 
-const fillDescription = (service: SecretService, replacing: boolean) => replacing
-  ? `整串重填，${service.last4 ? `现在的 ••••${service.last4} 会被换掉` : '现在存的那串会被换掉'}。存在本机，只有 daemon 读它，页面上只显示末四位。`
+const fillDescription = (flow: FillFlow) => flow.replacing
+  ? `整串重填，${flow.was ? `现在的 ••••${flow.was} 会被换掉` : '现在存的那串会被换掉'}。存在本机，只有 daemon 读它，页面上只显示末四位。`
   : '存在本机，只有 daemon 读它，页面上只显示末四位。填完马上试一次能不能用。';
 
 /** Enter submits the key, except while an input method is still composing. */
@@ -109,7 +110,8 @@ export const submitsOnKey = (key: string, composing: boolean): boolean => key ==
  * The field is uncontrolled (s23g2 做法): the key is read from it only on submit, cleared on submit and on close, and
  * never lands in a `value` attribute. No `<form>`: Enter is handled on the field. The Dialog gives focus once when it
  * opens, so each step change moves it here: to the field, to the dialog while a request runs, to the main button of
- * a result.
+ * a result. While it saves and tries, the panel keeps the field's height and the header, and the pressed button stays
+ * where it was, spinning: the second click of a double-click lands on it, not on 关闭 or the backdrop (多角度审查 B2).
  */
 export function FillKeyDialog({flow, service, onClose, onSubmit, onAgain, onRetest}: {
   flow: FillFlow | undefined; service: SecretService | undefined;
@@ -122,6 +124,7 @@ export function FillKeyDialog({flow, service, onClose, onSubmit, onAgain, onRete
   const [ready, setReady] = useState(false);
   const [shown, setShown] = useState(false);
   const [problem, setProblem] = useState<string>();
+  const [hold, setHold] = useState<number>();
   const step = flow?.step;
   useEffect(() => {
     setReady(false); setShown(false); setProblem(undefined);
@@ -141,6 +144,7 @@ export function FillKeyDialog({flow, service, onClose, onSubmit, onAgain, onRete
     // what was typed stays, so it can be fixed
     if (wrong) { setProblem(wrong); input.current?.focus(); return; }
     if (input.current) input.current.value = '';
+    setHold(body.current?.offsetHeight);
     onSubmit(value);
   }
   function keyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -149,7 +153,7 @@ export function FillKeyDialog({flow, service, onClose, onSubmit, onAgain, onRete
     submit();
   }
   const title = `${flow.replacing ? '换' : '填'} ${service.displayName} 的 key`;
-  const progress = (text: string) => <div className="secrets-dialog-progress" role="status"><LoaderCircle aria-hidden="true" className="ui-button__spinner" size={16}/><span>{text}</span></div>;
+  const progress = (text: string) => <div className="secrets-dialog-progress" role="status">{text}</div>;
   const tail = flow.last4 ? `（末四位 ${flow.last4}）` : '';
   let content: ReactNode;
   let footer: ReactNode;
@@ -168,7 +172,8 @@ export function FillKeyDialog({flow, service, onClose, onSubmit, onAgain, onRete
   } else if (flow.step === 'saving' || flow.step === 'testing' || !flow.result) {
     // both can be closed: the result lands in the key's row (owner 没看稿子，按推荐：v1-plan 第 5 节)
     content = progress(flow.step === 'saving' ? '正在存…' : `已存下${tail}，正在试一次…`);
-    footer = <Button onClick={close}>关闭</Button>;
+    // a retest keeps the last result until the new one lands
+    footer = <><Button onClick={close}>关闭</Button><Button variant="primary" loading>{flow.result ? '再试一次' : '保存并试一次'}</Button></>;
   } else {
     const copy = resultCopy(flow.result, service.displayName, flow.last4);
     content = <InlineNotice tone={copy.tone} title={copy.title}>{copy.body}</InlineNotice>;
@@ -178,9 +183,10 @@ export function FillKeyDialog({flow, service, onClose, onSubmit, onAgain, onRete
           : <Button ref={main} variant="primary" onClick={close}>完成</Button>;
   }
   // one ref for the Dialog: a new one would rerun its opening effect and bounce the focus
+  const held = hold !== undefined && flow.step !== 'input';
   return <Dialog open title={title} onClose={close} initialFocusRef={input}
-    description={flow.step === 'input' ? fillDescription(service, flow.replacing) : undefined} footer={footer}>
-    <div className="secrets-dialog" ref={body}>{content}</div>
+    description={flow.step !== 'result' ? fillDescription(flow) : undefined} footer={footer}>
+    <div className={`secrets-dialog${held && flow.step !== 'result' ? ' secrets-dialog--held' : ''}`} style={held ? {minHeight: hold} : undefined} ref={body}>{content}</div>
   </Dialog>;
 }
 
@@ -221,6 +227,7 @@ export function SecretsPanel({onOpenLogs, onOpenApplication}: {onOpenLogs: () =>
   const [reloading, setReloading] = useState(false);
   const page = useRef<HTMLDivElement>(null);
   const view = read.kind === 'ready' ? read.view : undefined;
+  useEffect(() => { if (view) flows.listed(view.services); }, [flows, view]);
 
   // After a dialog: back to its row once the row has a button to take it; the opener may be gone (填 key became 换 key)
   useEffect(() => {
@@ -246,7 +253,7 @@ export function SecretsPanel({onOpenLogs, onOpenApplication}: {onOpenLogs: () =>
       const reply = await reader.change({type: 'removeSecret', keyId: target.keyId});
       if (reply.kind !== 'secrets') error = reply.kind === 'refused' ? reply.message : 'daemon 回的不是密钥的列表';
     } catch (failure) {
-      error = errorText(failure, '没连上 daemon');
+      error = errorText(failure);
     }
     if (error) { setRemoval(current => current && {...current, pending: false, error}); return; }
     flows.removed(target.keyId);
@@ -279,7 +286,7 @@ export function SecretsPanel({onOpenLogs, onOpenApplication}: {onOpenLogs: () =>
           : !view.services.length ? <SettingsRow title="这个版本没有要 key 的服务"/>
             : view.services.map(service => <Fragment key={service.keyId}>
               <KeyRow service={service} view={view} row={rows[service.keyId] ?? {}}
-                onFill={() => flows.open(service.keyId, false)} onReplace={() => flows.open(service.keyId, true)}
+                onFill={() => flows.open(service.keyId, false)} onReplace={() => flows.open(service.keyId, true, service.last4)}
                 onRemove={() => setRemoval({keyId: service.keyId, pending: false})} onTest={() => void flows.test(service.keyId)} onOpenLogs={onOpenLogs}/>
               <UsesRow service={service} view={view}/>
             </Fragment>)}
@@ -303,9 +310,12 @@ export function KeyDiagnosticsRows({read, onOpenSecrets, onShowLog}: {read: Secr
   if (read.kind === 'loading') return <SettingsRow title={title} trailing={trailing('检查中', 'neutral')}/>;
   if (read.kind === 'old') return <SettingsRow title={title} description={`${OLD_DAEMON}。`} trailing={trailing('看不到', 'neutral')}/>;
   if (read.kind === 'failed') return <SettingsRow title={title} description={read.problem} trailing={trailing('读取失败', 'warning')}/>;
+  // a reread that failed keeps the last list: say so, as the 密钥 page does (多角度审查 R-F1)
+  const stale = read.problem ? `没读到最新的（${read.problem}），这是上一次读到的。` : '';
   return <>{read.view.services.map(service => {
     const row = keyDiagnosis(service, read.view);
     const action = row.action && <Button size="sm" variant="ghost" onClick={row.action.to === 'logs' ? onShowLog : onOpenSecrets}>{row.action.label}</Button>;
-    return <SettingsRow key={service.keyId} title={title} description={row.description} trailing={trailing(row.status, row.tone, action)}/>;
+    return <SettingsRow key={service.keyId} title={title} description={`${stale}${row.description}`}
+      trailing={trailing(row.status, stale && row.tone !== 'danger' ? 'warning' : row.tone, action)}/>;
   })}</>;
 }

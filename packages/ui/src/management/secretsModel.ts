@@ -18,8 +18,18 @@ export const MEANWHILE = '要判断的消息按出错处理（没 @ Bot 的不�
 
 /** A daemon from before s23g knows none of these requests (v1-plan s23g 做法（实现时定下的）). */
 const isOld = (error: unknown): boolean => error instanceof Error && (error as {code?: unknown}).code === 'invalid_request';
-export const errorText = (error: unknown, fallback: string): string =>
-  isOld(error) ? OLD_DAEMON : error instanceof Error && error.message ? error.message : fallback;
+/** An error the daemon sent: the client's RpcError, with the daemon's code and words. */
+const fromDaemon = (error: unknown): error is Error => error instanceof Error && error.name === 'RpcError' && typeof (error as {code?: unknown}).code === 'string';
+/**
+ * The daemon's words for what it refused; anything else (the connection gone, a reply this page cannot read) is a
+ * fixed line, and the original goes only to the console (多角度审查 R-F3).
+ */
+export function errorText(error: unknown): string {
+  if (isOld(error)) return OLD_DAEMON;
+  if (fromDaemon(error) && error.message) return error.message;
+  console.warn('密钥页：', error);
+  return error instanceof Error && error.name === 'ZodError' ? 'daemon 回的内容网页读不懂' : '没连上 daemon';
+}
 
 /**
  * Reads the list. Each read, save and removal takes the next number, and only the last one asked lands: an answer
@@ -38,15 +48,16 @@ export function secretsReader(admin: Admin, publish: (read: SecretsRead) => void
   };
   async function read(): Promise<void> {
     const asked = ++latest;
+    let problem: string;
     try {
       const reply = await admin({type: 'secrets'});
-      if (reply.kind !== 'secrets') throw new Error('daemon 回的不是密钥的列表');
-      land(asked, () => ({kind: 'ready', view: reply}));
+      if (reply.kind === 'secrets') { land(asked, () => ({kind: 'ready', view: reply})); return; }
+      problem = 'daemon 回的不是密钥的列表';
     } catch (error) {
-      land(asked, previous => isOld(error) ? {kind: 'old'}
-        : previous.kind === 'ready' ? {...previous, problem: errorText(error, '没读到')}
-          : {kind: 'failed', problem: errorText(error, '没读到')});
+      if (isOld(error)) { land(asked, () => ({kind: 'old'})); return; }
+      problem = errorText(error);
     }
+    land(asked, previous => previous.kind === 'ready' ? {...previous, problem} : {kind: 'failed', problem});
   }
   async function change(request: Change): Promise<AdminReply> {
     const asked = ++latest;
@@ -77,7 +88,7 @@ export async function saveKey(change: (request: Change) => Promise<AdminReply>, 
     const last4 = reply.services.find(service => service.keyId === keyId)?.last4;
     return {kind: 'saved', ...(last4 ? {last4} : {})};
   } catch (error) {
-    return {kind: 'failed', message: errorText(error, '没连上 daemon')};
+    return {kind: 'failed', message: errorText(error)};
   }
 }
 
@@ -87,14 +98,17 @@ export async function testKey(admin: Admin, keyId: string, now: () => number = D
     if (reply.kind === 'secretTested') return {at: now(), outcome: reply.outcome, message: reply.message, ...(reply.status !== undefined ? {status: reply.status} : {})};
     return {at: now(), outcome: 'refused', message: reply.kind === 'refused' ? reply.message : 'daemon 回的不是试一次的结果'};
   } catch (error) {
-    return {at: now(), outcome: 'refused', message: errorText(error, '没连上 daemon')};
+    return {at: now(), outcome: 'refused', message: errorText(error)};
   }
 }
 
 /** A key's row: busy while its save or 试一次 runs, and the last result under the description. */
 export type RowState = {busy?: 'saving' | 'testing'; tested?: Tested};
-/** The fill dialog: the key, then its save and its 试一次 as two requests, then what 试一次 found unless it was 能用. */
-export type FillFlow = {id: number; keyId: string; replacing: boolean; step: 'input' | 'saving' | 'testing' | 'result'; last4?: string; result?: Tested};
+/**
+ * The fill dialog: the key, then its save and its 试一次 as two requests, then what 试一次 found unless it was 能用.
+ * `was`: the last four when it opened, which its header names until the result (the list has the new one by then).
+ */
+export type FillFlow = {id: number; keyId: string; replacing: boolean; was?: string; step: 'input' | 'saving' | 'testing' | 'result'; last4?: string; result?: Tested};
 /** What the 密钥 page keeps besides the list; `refocus`: the key whose row takes focus once a dialog is gone. */
 export type KeyFlows = {rows: Record<string, RowState>; fill?: FillFlow; refocus?: string};
 
@@ -106,6 +120,8 @@ export type KeyFlows = {rows: Record<string, RowState>; fill?: FillFlow; refocus
 export function keyFlows(admin: Admin, change: (request: Change) => Promise<AdminReply>, publish: (state: KeyFlows) => void, now: () => number = Date.now) {
   let state: KeyFlows = {rows: {}};
   let ids = 0;
+  /** each key as the list last had it: status and last four */
+  const listedAs = new Map<string, string>();
   const set = (next: KeyFlows) => { state = next; publish(state); };
   const row = (keyId: string, patch: RowState) => set({...state, rows: {...state.rows, [keyId]: {...state.rows[keyId], ...patch}}});
   const step = (id: number | undefined, next: (flow: FillFlow) => FillFlow) => {
@@ -122,7 +138,7 @@ export function keyFlows(admin: Admin, change: (request: Change) => Promise<Admi
   }
   return {
     current: () => state,
-    open(keyId: string, replacing: boolean) { set({...state, fill: {id: ++ids, keyId, replacing, step: 'input'}}); },
+    open(keyId: string, replacing: boolean, was?: string) { set({...state, fill: {id: ++ids, keyId, replacing, ...(was ? {was} : {}), step: 'input'}}); },
     close() { if (state.fill) closed(state.fill.keyId); },
     /** 再试一次 or 换一个: back to the field */
     again() { step(state.fill?.id, flow => ({...flow, step: 'input', result: undefined})); },
@@ -150,6 +166,21 @@ export function keyFlows(admin: Admin, change: (request: Change) => Promise<Admi
     refocusTo(keyId: string) { set({...state, refocus: keyId}); },
     /** Focus went back (or elsewhere): nothing to render, so nothing is published. */
     refocused(keyId: string) { if (state.refocus === keyId) state = {...state, refocus: undefined}; },
+    /**
+     * The list as read: a key stored, replaced or removed elsewhere since its row's result drops that result, which
+     * was about the key before (多角度审查 R-F2). A row whose request still runs keeps it; what lands next replaces it.
+     */
+    listed(services: readonly SecretService[]) {
+      let rows = state.rows;
+      for (const service of services) {
+        const stored = `${service.status}:${service.last4 ?? ''}`;
+        const before = listedAs.get(service.keyId);
+        listedAs.set(service.keyId, stored);
+        const current = rows[service.keyId];
+        if (before !== undefined && before !== stored && current?.tested && !current.busy) rows = {...rows, [service.keyId]: {}};
+      }
+      if (rows !== state.rows) set({...state, rows});
+    },
     /** 重新读取: the results go, a request that still runs keeps its row busy. */
     forget() { set({...state, rows: Object.fromEntries(Object.entries(state.rows).map(([keyId, current]) => [keyId, {busy: current.busy}]))}); },
   };
@@ -201,10 +232,10 @@ export function useNote(use: SecretUse, service: Pick<SecretService, 'displayNam
 /** The command line's form (`vonvon secrets list`), for the one row on the 状态与诊断 page. */
 export const useText = (use: SecretUse): string => use.groupId === undefined ? `${use.agentName}（Bot 默认）`
   : `${use.groupName || '未命名飞书群'}（${[use.agentName, use.inherited && '跟着 Bot 默认', use.notSmart && '现在不是智能群'].filter(Boolean).join('，')}）`;
-export function useCount(uses: readonly SecretUse[]): string {
+export function useCount(uses: readonly SecretUse[], between = ' · '): string {
   const bots = new Set(uses.map(use => use.agentId)).size;
   const groups = uses.filter(use => use.groupId !== undefined).length;
-  return groups ? `${bots} 个 Bot · ${groups} 个飞书群` : `${bots} 个 Bot`;
+  return groups ? `${bots} 个 Bot${between}${groups} 个飞书群` : `${bots} 个 Bot`;
 }
 
 const BOTS_LOG = 'vonvon daemon logs 里的 secrets.bots-unreadable 有原因。';
@@ -241,11 +272,14 @@ export function removalCopy(service: SecretService, view: Pick<SecretsView, 'bot
   };
 }
 
+/** The 决策模型的 key row names up to four of those who chose it, else three and counts them all; the 密钥 page lists them (多角度审查 B3). */
+const NAMED = 3;
 /** The 决策模型的 key row on the 状态与诊断 page (product.md 3.1 第 8 条): always there, a problem only when someone chose it. */
 export function keyDiagnosis(service: SecretService, view: Pick<SecretsView, 'botsUnreadable' | 'unreadBots'>): {
   status: string; tone: Tone; description: string; action?: {label: string; to: 'secrets' | 'logs'};
 } {
-  const who = service.inUse.map(useText).join('、');
+  const named = service.inUse.length > NAMED + 1 ? service.inUse.slice(0, NAMED) : service.inUse;
+  const who = named.map(useText).join('、') + (named.length < service.inUse.length ? `等 ${useCount(service.inUse, '、')}` : '');
   const chose = `${who}选了 ${choice(service)}`;
   const nobody = `现在没有 Bot 或飞书群选 ${choice(service)}`;
   const notes = unreadNotes(view).join('');

@@ -1,12 +1,13 @@
 import {describe, expect, it, vi} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
+import {z} from 'zod';
 import type {AdminReply, AdminRequest, SecretService, SecretUse} from '@vonvon/protocol';
 import {createClient, RpcError} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
 import {FillKeyDialog, KeyDiagnosticsRows, KeyRow, RemoveKeyDialog, SecretsPanel, UsesRow, submitsOnKey} from '../src/management/SecretsPanel';
 import {
-  keyDiagnosis, keyFlows, removalCopy, rereads, resultCopy, saveKey, secretsReader, testKey, testTone, type FillFlow, type KeyFlows, type SecretsRead, type SecretsView,
-  type Tested,
+  errorText, keyDiagnosis, keyFlows, removalCopy, rereads, resultCopy, saveKey, secretsReader, testKey, testTone, type FillFlow, type KeyFlows, type SecretsRead,
+  type SecretsView, type Tested,
 } from '../src/management/secretsModel';
 import {findEntries, searchEntries} from '../src/search';
 
@@ -36,6 +37,8 @@ function daemon() {
   return {admin, calls};
 }
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+/** errorText puts what is not the daemon's words in the console */
+const quiet = () => vi.spyOn(console, 'warn').mockImplementation(() => {});
 
 describe('the list reader (s23g2 做法: request numbers)', () => {
   it('lands only the last read asked, whatever order the answers come back in', async () => {
@@ -73,6 +76,7 @@ describe('the list reader (s23g2 做法: request numbers)', () => {
   });
 
   it('a refused or failed change reads the list again; an old daemon is said so; a failed read keeps the last list', async () => {
+    quiet();
     const d = daemon();
     const seen: SecretsRead[] = [];
     const reader = secretsReader(d.admin, read => seen.push(read));
@@ -85,22 +89,36 @@ describe('the list reader (s23g2 做法: request numbers)', () => {
     const failing = reader.read();
     d.calls[2]!.reject(new Error('Daemon connection closed'));
     await failing;
-    expect(seen.at(-1)).toEqual({kind: 'ready', view: view(), problem: 'Daemon connection closed'});
+    expect(seen.at(-1)).toEqual({kind: 'ready', view: view(), problem: '没连上 daemon'});
     const old = reader.read();
     d.calls[3]!.reject(new RpcError('invalid_request', 'Invalid request'));
     await old;
     expect(seen.at(-1)).toEqual({kind: 'old'});
     const fresh = secretsReader(d.admin, read => seen.push(read));
     const none = fresh.read();
-    d.calls[4]!.reject(new Error('boom'));
+    d.calls[4]!.reject(new RpcError('operation_failed', '密钥库被别的进程占着'));
     await none;
-    expect(seen.at(-1)).toEqual({kind: 'failed', problem: 'boom'});
+    expect(seen.at(-1)).toEqual({kind: 'failed', problem: '密钥库被别的进程占着'});
     // after stop (the page is gone) nothing lands
     fresh.stop();
     const late = fresh.read();
     d.calls[5]!.resolve(view());
     await late;
-    expect(seen.at(-1)).toEqual({kind: 'failed', problem: 'boom'});
+    expect(seen.at(-1)).toEqual({kind: 'failed', problem: '密钥库被别的进程占着'});
+  });
+
+  it('shows the daemon\'s words, and a fixed line for the connection or a reply it cannot read (多角度审查 R-F3)', () => {
+    const warn = quiet();
+    expect(errorText(new RpcError('operation_failed', '磁盘满了（ENOSPC）'))).toBe('磁盘满了（ENOSPC）');
+    expect(errorText(new RpcError('invalid_request', '请求参数无效。'))).toBe('daemon 比网页旧，重启 daemon 后再开这一页');
+    expect(warn).not.toHaveBeenCalled();
+    const closed = new Error('Daemon connection closed');
+    expect(errorText(closed)).toBe('没连上 daemon');
+    expect(warn).toHaveBeenLastCalledWith('密钥页：', closed);
+    const unreadable = z.object({kind: z.enum(['secrets'])}).safeParse({kind: 'later'}).error;
+    expect(errorText(unreadable)).toBe('daemon 回的内容网页读不懂');
+    expect(errorText('thrown')).toBe('没连上 daemon');
+    warn.mockRestore();
   });
 
   it('coming back to the window reads again, not while hidden and once for a focus and a visibilitychange together', () => {
@@ -128,8 +146,9 @@ describe('save and 试一次', () => {
     expect(admin).toHaveBeenCalledWith({type: 'testSecret', keyId: 'typesafe-api-key'});
     admin.mockResolvedValueOnce({kind: 'refused', code: 'missing_key', message: '还没填 TypeSafe 的 key'});
     expect(await testKey(admin, 'typesafe-api-key', () => 5)).toEqual({at: 5, outcome: 'refused', message: '还没填 TypeSafe 的 key'});
+    quiet();
     admin.mockRejectedValueOnce(new Error('Daemon connection closed'));
-    expect(await testKey(admin, 'typesafe-api-key', () => 5)).toEqual({at: 5, outcome: 'refused', message: 'Daemon connection closed'});
+    expect(await testKey(admin, 'typesafe-api-key', () => 5)).toEqual({at: 5, outcome: 'refused', message: '没连上 daemon'});
   });
 
   it('Enter submits, not while an input method composes', () => {
@@ -221,13 +240,20 @@ describe('the fill dialog', () => {
     expect(markup).not.toContain('<form');
     expect(markup).toMatch(/<button[^>]*disabled=""[^>]*><span>保存并试一次<\/span>/);
     expect(markup).toContain('aria-pressed="false"');
-    expect(text(dialog(flow({replacing: true}), service()))).toContain('换 TypeSafe 的 key整串重填，现在的 ••••7f3a 会被换掉。');
+    expect(text(dialog(flow({replacing: true, was: '7f3a'}), service()))).toContain('换 TypeSafe 的 key整串重填，现在的 ••••7f3a 会被换掉。');
   });
 
-  it('shows each request while it runs, closable', () => {
+  it('shows each request while it runs, closable, with the header and the pressed button kept in place (多角度审查 B2)', () => {
     expect(text(dialog(flow({step: 'saving'})))).toContain('正在存…关闭');
-    expect(text(dialog(flow({step: 'testing', last4: 'abcd'})))).toContain('已存下（末四位 abcd），正在试一次…');
-    expect(dialog(flow({step: 'testing'}))).toContain('role="status"');
+    // the list has the new last four by now: the header names the one it opened with
+    const testing = dialog(flow({step: 'testing', replacing: true, was: '7f3a', last4: 'abcd'}), service({last4: 'abcd'}));
+    expect(text(testing)).toContain('换 TypeSafe 的 key整串重填，现在的 ••••7f3a 会被换掉。存在本机，只有 daemon 读它，页面上只显示末四位。已存下（末四位 abcd），正在试一次…');
+    expect(testing).toContain('role="status"');
+    const pressed = (markup: string) => [...markup.matchAll(/<button[^>]*>(?:<svg.*?<\/svg>)?<span>([^<]+)<\/span><\/button>/g)].map(m => [m[1], /disabled=""/.test(m[0]), m[0].includes('ui-button__spinner')]);
+    expect(pressed(testing)).toEqual([['关闭', false, false], ['保存并试一次', true, true]]);
+    // a retest keeps the last result until the new one lands: 再试一次 spins where it was
+    expect(pressed(dialog(flow({step: 'testing', last4: 'abcd', result: tested('timeout', 'TypeSafe 5 秒没回')})))).toEqual([['关闭', false, false], ['再试一次', true, true]]);
+    expect(text(dialog(flow({step: 'result', replacing: true, was: '7f3a', last4: 'abcd', result: tested('auth', 'key 不对')})))).not.toContain('会被换掉');
   });
 
   it('words each result of 试一次 with what to do next', () => {
@@ -348,6 +374,40 @@ describe('the fill dialog and the rows (s23g2 做法: each fill has its own id)'
     expect(flows.current().rows[KEY]).toEqual({});
     flows.removed(KEY);
     expect(flows.current().refocus).toBe(KEY);
+    // 换 key keeps the last four it opened with, for its header
+    flows.open(KEY, true, '7f3a');
+    expect(flows.current().fill).toEqual({id: 1, keyId: KEY, replacing: true, was: '7f3a', step: 'input'});
+  });
+
+  it('a key stored, replaced or removed elsewhere drops its row\'s result when the list is read again (多角度审查 R-F2)', async () => {
+    const {d, flows} = setup();
+    flows.listed([service()]);
+    const first = flows.test(KEY);
+    d.calls[0]!.resolve(answer('ok', '能用'));
+    await first;
+    // the same key read again: the result stays
+    flows.listed([service()]);
+    expect(flows.current().rows[KEY]?.tested?.outcome).toBe('ok');
+    flows.listed([service({status: 'missing', last4: undefined})]);
+    expect(flows.current().rows[KEY]).toEqual({});
+    // replaced elsewhere: same status, another last four
+    flows.listed([service()]);
+    const second = flows.test(KEY);
+    d.calls[1]!.resolve(answer('auth', 'key 不对'));
+    await second;
+    flows.listed([service({last4: 'wxyz'})]);
+    expect(flows.current().rows[KEY]).toEqual({});
+    // a request that still runs keeps its row, and what it brings lands
+    const third = flows.test(KEY);
+    d.calls[2]!.resolve(answer('ok', '能用'));
+    await third;
+    const fourth = flows.test(KEY);
+    flows.listed([service({last4: 'abcd'})]);
+    expect(flows.current().rows[KEY]).toMatchObject({busy: 'testing', tested: {outcome: 'ok'}});
+    d.calls[3]!.resolve(answer('auth', 'key 不对'));
+    await fourth;
+    flows.listed([service({last4: 'abcd'})]);
+    expect(flows.current().rows[KEY]).toMatchObject({tested: {outcome: 'auth'}});
   });
 });
 
@@ -406,6 +466,26 @@ describe('the 状态与诊断 row (product.md 3.1 第 8 条)', () => {
     expect(rows({kind: 'loading'})).toBe('决策模型的 key检查中');
     expect(rows({kind: 'old'})).toBe('决策模型的 keydaemon 比网页旧，重启 daemon 后再开这一页。看不到');
     expect(rows({kind: 'failed', problem: 'Daemon connection closed'})).toBe('决策模型的 keyDaemon connection closed读取失败');
+  });
+
+  it('a reread that failed says the row is the last list read, in yellow unless it is red (多角度审查 R-F1)', () => {
+    const markup = (read: SecretsRead) => html(<KeyDiagnosticsRows read={read} onOpenSecrets={noop} onShowLog={noop}/>);
+    const stale = markup({kind: 'ready', view: view(), problem: '没连上 daemon'});
+    expect(text(stale)).toContain('决策模型的 key没读到最新的（没连上 daemon），这是上一次读到的。选了 TypeSafe 的 Jev 的：');
+    expect(stale).toContain('ui-status-badge--warning');
+    expect(stale).not.toContain('ui-status-badge--success');
+    expect(markup({kind: 'ready', view: view()})).not.toContain('没读到最新的');
+    expect(markup({kind: 'ready', view: view(service({status: 'unreadable', last4: undefined})), problem: 'x'})).toContain('ui-status-badge--danger');
+  });
+
+  it('names up to four who chose it, else three and counts them all (多角度审查 B3)', () => {
+    const crowd: SecretUse[] = [USES[0]!, ...Array.from({length: 30}, (_, i): SecretUse => ({agentId: `cli_${i % 3}`, agentName: `Bot${i % 3}`, groupId: `oc_${i}`, groupName: `群${i}`}))];
+    const missing = keyDiagnosis(service({status: 'missing', last4: undefined, inUse: crowd}), view()).description;
+    expect(missing).toMatch(/^小P（Bot 默认）、群0（Bot0）、群1（Bot1）等 4 个 Bot、30 个飞书群选了 TypeSafe 的 Jev，本机还没填它的 key。/);
+    expect(missing).not.toContain('群2');
+    expect(keyDiagnosis(service({inUse: crowd}), view()).description).toBe('选了 TypeSafe 的 Jev 的：小P（Bot 默认）、群0（Bot0）、群1（Bot1）等 4 个 Bot、30 个飞书群。');
+    // four are all named
+    expect(keyDiagnosis(service(), view()).description).toContain('周报整理（小审，现在不是智能群）');
   });
 });
 
