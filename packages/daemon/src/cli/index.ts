@@ -1,3 +1,5 @@
+// first: sets the connection defaults of every daemon process (the supervisor, each `--bot` child and each command)
+import './tune-network';
 import { Command, Option } from 'commander';
 import { mkdir } from 'node:fs/promises';
 import { formatErrorTree } from '../core/error-parts';

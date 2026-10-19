@@ -1,4 +1,6 @@
+import { isIP } from 'node:net';
 import { JudgeCallError } from '../agent/types';
+import { log } from '../core/logger';
 import type { SecretTestOutcome } from '@vonvon/protocol';
 import type { JudgeErrorKind } from './types';
 
@@ -7,8 +9,11 @@ export const TYPESAFE_URL = 'https://api.typesafe.ai/v1/systemone';
 /** Its model list: the key page's 试一次 asks it (product.md 3.1 第 9 条), so no group message goes out. */
 export const TYPESAFE_MODELS_URL = 'https://api.typesafe.ai/v1/models';
 /** From sending the request to the last byte of the answer, inside the judgement's own timeout (JUDGE_TIMEOUT_MS);
- * past it the call fails as `timeout`. Jev answered in at most 0.32 s (Jev report 2.4); no retry. */
+ * past it the call fails as `timeout`. Jev answered in at most 0.32 s (Jev report 2.4). A retry runs inside it. */
 export const DECISION_TIMEOUT_MS = 5_000;
+/** A connection that failed is tried once more only with this much of the 5 s left: one connection attempt
+ * (AUTO_SELECT_ATTEMPT_MS, 1 s) and Jev's answer (s23f2). */
+export const RETRY_MIN_MS = 1_500;
 /** A key or model failure cools 5 minutes, as a backend's does (v1-plan 第 5 节"决策模型出错时"). */
 const COOL_MS = 5 * 60_000;
 /** 429 without a usable `retry-after`. */
@@ -26,6 +31,10 @@ export interface DecisionErrorInfo {
   requestId?: string;
   /** the network error's code, such as ENOTFOUND */
   code?: string;
+  /** each connection attempt of Node's happy eyeballs, as code/family (`ETIMEDOUT/v4`): never the address (s23f2) */
+  attempts?: string[];
+  /** the connection failed once before and was tried again (s23f2) */
+  retried?: true;
 }
 
 /**
@@ -43,6 +52,8 @@ export interface DecisionReply {
   /** the parsed JSON of a 2xx answer, unchecked */
   body: unknown;
   requestId?: string;
+  /** answered on the second try, after a connection that failed (s23f2) */
+  retried?: true;
 }
 
 /** A header or field the service sets, as a log may keep it. */
@@ -50,6 +61,36 @@ const token = (value: unknown, max: number): string | undefined => {
   const kept = typeof value === 'string' ? value.replace(/[^\w.-]/g, '').slice(0, max) : '';
   return kept || undefined;
 };
+
+/** What a failed connection says, as Node and undici give it: an error with `code` and `syscall` (and `address`), or
+ * Node's happy eyeballs' AggregateError of one such error per address tried. */
+type NetFailure = { code?: unknown; syscall?: unknown; address?: unknown; errors?: unknown };
+/** Codes of a connection that never opened, so not a byte of the request went out (s23f2). */
+const NOT_CONNECTED = new Set(['ECONNREFUSED', 'ETIMEDOUT', 'ENETUNREACH', 'EHOSTUNREACH', 'EAI_AGAIN']);
+
+const netParts = (cause: NetFailure): NetFailure[] => (Array.isArray(cause.errors) ? cause.errors as NetFailure[] : [cause]);
+
+/** fetch's error when it never connected: its cause, or every attempt in it, failed in connect or getaddrinfo with one
+ * of {@link NOT_CONNECTED}, or is undici's own connect timeout. A reset or a timeout after that may follow a request
+ * the service got, and is not tried again: a second one may be charged twice. */
+function neverConnected(error: unknown): boolean {
+  const cause = (error as { cause?: unknown } | undefined)?.cause;
+  if (!cause || typeof cause !== 'object') return false;
+  const parts = netParts(cause as NetFailure);
+  return parts.length > 0 && parts.every((part) => part?.code === 'UND_ERR_CONNECT_TIMEOUT'
+    || (typeof part?.code === 'string' && NOT_CONNECTED.has(part.code) && (part.syscall === 'connect' || part.syscall === 'getaddrinfo')));
+}
+
+/** An AggregateError's attempts, at most 8, as `code/v4`. */
+function attemptsOf(cause: unknown): string[] | undefined {
+  if (!cause || typeof cause !== 'object' || !Array.isArray((cause as NetFailure).errors)) return undefined;
+  const attempts = netParts(cause as NetFailure).slice(0, 8).map((part) => {
+    const code = token(part?.code, 30) ?? '?';
+    const family = typeof part?.address === 'string' ? isIP(part.address) : 0;
+    return family ? `${code}/v${family}` : code;
+  });
+  return attempts.length ? attempts : undefined;
+}
 
 /** At most {@link BODY_MAX} bytes of the body; undefined when it is longer. */
 async function readCapped(res: Response): Promise<string | undefined> {
@@ -79,12 +120,12 @@ export function retryAfterMs(value: string | null, now: number): number {
 
 /** A non-2xx answer as a failure (v1-plan 第 5 节"决策模型出错时"). Only `error_type` is read from the body: a 422
  * echoes the fields it refused, group messages included. */
-function failure(status: number, text: string | undefined, retryAfter: string | null, now: number, requestId?: string): DecisionError {
+function failure(status: number, text: string | undefined, retryAfter: string | null, now: number, more: DecisionErrorInfo): DecisionError {
   let detail: unknown;
   try { detail = text ? (JSON.parse(text) as { detail?: unknown }).detail : undefined; } catch { /* not JSON: no error type */ }
   const first = (Array.isArray(detail) ? detail[0] : detail) as { error_type?: unknown; type?: unknown; message?: unknown } | undefined;
   const errorType = token(first?.error_type ?? first?.type, 40);
-  const info = { status, ...(errorType ? { errorType } : {}), ...(requestId ? { requestId } : {}) };
+  const info = { status, ...(errorType ? { errorType } : {}), ...more };
   if (status === 401) return new DecisionError('auth', 'TypeSafe 不认这个 key', COOL_MS, info);
   if (status === 429) return new DecisionError('busy', 'TypeSafe 限流了', retryAfterMs(retryAfter, now), info);
   // only the prefix: the rest of the message is the model id we sent
@@ -134,9 +175,12 @@ async function request(url: string, body: unknown, key: string, signal: AbortSig
   // A fetch that ignores its signal still ends on time.
   const stopped = new Promise<never>((_, reject) => ctl.signal.addEventListener('abort', () => reject(ctl.signal.reason), { once: true }));
   stopped.catch(() => undefined);
+  const started = now();
+  let retried = false;
+  const again = (): DecisionErrorInfo => (retried ? { retried: true } : {});
   try {
     const post = body !== undefined;
-    const res = await Promise.race([fetchImpl(url, {
+    const send = (): Promise<Response> => Promise.race([fetchImpl(url, {
       method: post ? 'POST' : 'GET',
       headers: { Authorization: `Bearer ${key}`, ...(post ? { 'Content-Type': 'application/json' } : {}), Accept: 'application/json', 'User-Agent': 'vonvon-bot' },
       ...(post ? { body: JSON.stringify(body) } : {}),
@@ -144,26 +188,40 @@ async function request(url: string, body: unknown, key: string, signal: AbortSig
       redirect: 'error',
       signal: ctl.signal,
     }), stopped]);
+    let res: Response;
+    try {
+      res = await send();
+    } catch (error) {
+      // once, within the same 5 s, and only when nothing was sent (s23f2)
+      const left = DECISION_TIMEOUT_MS - (now() - started);
+      if (ctl.signal.aborted || !neverConnected(error) || left < RETRY_MIN_MS) throw error;
+      const cause = (error as { cause?: NetFailure }).cause!;
+      const attempts = attemptsOf(cause);
+      log.info('judge', 'decision-retry', { call: post ? 'decision' : 'probe', code: token(cause.code, 30), ...(attempts ? { attempts } : {}), ms: now() - started });
+      retried = true;
+      res = await send();
+    }
     const requestId = token(res.headers.get('x-typesafe-request-id'), 64);
     if (!res.ok) {
       const text = await Promise.race([readCapped(res), stopped]).catch(() => undefined);
-      throw failure(res.status, text, res.headers.get('retry-after'), now(), requestId);
+      throw failure(res.status, text, res.headers.get('retry-after'), now(), { ...(requestId ? { requestId } : {}), ...again() });
     }
     const text = await Promise.race([readCapped(res), stopped]);
     let parsed: unknown;
     try { parsed = text === undefined ? undefined : JSON.parse(text); } catch { /* below */ }
-    if (parsed === undefined) throw new DecisionError('format', '决策模型没按格式回答', undefined, { status: res.status, ...(requestId ? { requestId } : {}) });
-    return { body: parsed, ...(requestId ? { requestId } : {}) };
+    if (parsed === undefined) throw new DecisionError('format', '决策模型没按格式回答', undefined, { status: res.status, ...(requestId ? { requestId } : {}), ...again() });
+    return { body: parsed, ...(requestId ? { requestId } : {}), ...(retried ? { retried: true as const } : {}) };
   } catch (error) {
     if (signal.aborted) throw signal.reason;
     // a status already in hand says more than the 5 s its error body ran past: a 401 still cools
     if (error instanceof DecisionError) throw error;
     // `timeout`, not `network`: it neither cools nor falls back differently, but counts apart (review)
-    if (ctl.signal.aborted) throw new DecisionError('timeout', `TypeSafe ${DECISION_TIMEOUT_MS / 1000} 秒没回`);
+    if (ctl.signal.aborted) throw new DecisionError('timeout', `TypeSafe ${DECISION_TIMEOUT_MS / 1000} 秒没回`, undefined, again());
     // fetch puts the code on the cause; a body stream that breaks halfway, on the error itself
-    const cause = error as { code?: unknown; cause?: { code?: unknown } } | undefined;
-    const code = token(cause?.cause?.code ?? cause?.code, 30);
-    throw new DecisionError('network', `连不上 TypeSafe${code ? `（${code}）` : ''}`, undefined, code ? { code } : {});
+    const failed = error as { code?: unknown; cause?: NetFailure } | undefined;
+    const code = token(failed?.cause?.code ?? failed?.code, 30);
+    const attempts = attemptsOf(failed?.cause);
+    throw new DecisionError('network', `连不上 TypeSafe${code ? `（${code}）` : ''}`, undefined, { ...(code ? { code } : {}), ...(attempts ? { attempts } : {}), ...again() });
   } finally {
     clearTimeout(timer);
     signal.removeEventListener('abort', onAbort);
