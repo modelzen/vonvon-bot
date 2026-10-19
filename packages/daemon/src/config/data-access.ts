@@ -5,6 +5,9 @@ import { platform } from 'node:os';
 import { join } from 'node:path';
 
 export class DataAccessError extends Error {}
+/** The code on acquireMutex's error when the lock stayed held past the wait, as opposed to a lock that cannot be taken
+ * at all (macOS: a bad `.locks` directory); admin/secrets.ts tells the two apart by it. */
+export const MUTEX_TIMEOUT = 'DATA_MUTEX_TIMEOUT';
 /** `service` serializes `vonvon service install|uninstall`, whoever runs it: the terminal, the daemon's helper or the desktop's. */
 type MutexRole = 'admission' | 'host' | 'keystore' | 'service' | 'bots' | 'projects' | 'creation';
 export interface DataLease { release(): void }
@@ -86,7 +89,7 @@ export async function acquireMutex(home: string, role: MutexRole, timeoutMs = 15
   for (;;) {
     const release = await tryLock(path, role);
     if (release) return heldMutex(role, release);
-    if (Date.now() >= deadline) throw new DataAccessError(`Bridge ${role} is busy on its local coordination endpoint.`);
+    if (Date.now() >= deadline) throw Object.assign(new DataAccessError(`Bridge ${role} is busy on its local coordination endpoint.`), { code: MUTEX_TIMEOUT });
     await new Promise((resolve) => setTimeout(resolve, 40));
   }
 }

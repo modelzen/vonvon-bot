@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { agentIdSchema, permissionSchema } from "./domain.js";
+import { API_KEY_MAX, keyIdSchema, secretServiceSchema, secretTestOutcomeSchema } from "./secrets.js";
 
 export const adminProjectSchema = z.object({
   avatarDataUrl: z.string().optional(),
@@ -99,6 +100,12 @@ export const adminRequestSchema = z.discriminatedUnion("type", [
   z.object({type:z.literal("logs"),maxBytes:z.number().int().optional()}).strict(),
   z.object({type:z.literal("followLogs"),follow:z.boolean()}).strict(),
   z.object({type:z.literal("switchBackend"),agentId:agentIdSchema,projectName:z.string(),backend:z.string()}).strict(),
+  /** The key page (s23g): the services that take a key, and filling in, removing and trying one; the value is trimmed
+   * and its shape checked by the daemon, which refuses it in a reply. */
+  z.object({type:z.literal("secrets")}).strict(),
+  z.object({type:z.literal("setSecret"),keyId:keyIdSchema,value:z.string().min(1).max(API_KEY_MAX)}).strict(),
+  z.object({type:z.literal("removeSecret"),keyId:keyIdSchema}).strict(),
+  z.object({type:z.literal("testSecret"),keyId:keyIdSchema}).strict(),
 ]);
 export type AdminRequest = z.infer<typeof adminRequestSchema>;
 
@@ -112,5 +119,10 @@ export const adminReplySchema = z.discriminatedUnion("kind", [
   z.object({kind:z.literal("logs"),text:z.string()}),
   z.object({kind:z.literal("following"),follow:z.boolean()}),
   z.object({kind:z.literal("applied"),revision:z.number()}),
+  /** `unreadBots`: bots whose settings could not be read, so their choices are not in `inUse`; `botsUnreadable`: the
+   * bot list itself could not be read, so `inUse` lists no one; `removed` answers removeSecret (false: there was no key) */
+  z.object({kind:z.literal("secrets"),services:z.array(secretServiceSchema),unreadBots:z.number().int().nonnegative(),botsUnreadable:z.boolean().optional(),removed:z.boolean().optional()}),
+  z.object({kind:z.literal("secretTested"),keyId:z.string(),outcome:secretTestOutcomeSchema,message:z.string(),status:z.number().int().optional()}),
+  z.object({kind:z.literal("refused"),code:z.string(),message:z.string()}),
 ]);
 export type AdminReply = z.infer<typeof adminReplySchema>;
