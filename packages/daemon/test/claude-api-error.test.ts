@@ -1,3 +1,4 @@
+import { claudeAccess } from '../src/agent/claude-agent/permission';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { createTurnMapper, resultErrorText } from '../src/agent/claude-agent/event-map';
@@ -39,7 +40,7 @@ afterEach(async () => {
 function makeThread(turns: SDKMessage[][], endAfterTurn = false): ClaudeAgentThread {
   let turn = 0;
   const thread = new ClaudeAgentThread({
-    sessionId: 'test-session', resume: false, cwd: process.cwd(), permission: {}, settingSources: [],
+    sessionId: 'test-session', resume: false, cwd: process.cwd(), access: claudeAccess(undefined, undefined, process.cwd(), process.cwd()), permission: {}, settingSources: [],
     query: ({ prompt }) => Object.assign((async function* () {
       for await (const _ of prompt) {
         yield* turns[turn++] ?? [];
