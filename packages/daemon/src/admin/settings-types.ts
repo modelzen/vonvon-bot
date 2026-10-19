@@ -161,6 +161,8 @@ export interface AgentSettingsView {
   sections: Sections<AgentSections>;
   ownerOpenId: string | null;
   administrators: {
+    feishu?: { ownerOpenId: string | null; adminOpenIds: string[] };
+    scannerOpenId?: string | null;
     openIds: string[];
     revision: string;
   };
@@ -200,6 +202,7 @@ export interface ProjectSettingsView {
     fullOnly?: string;
   };
   members: {
+    roster?: import("@vonvon/protocol").ResponseRoster;
     openIds: string[];
     revision: string;
   };

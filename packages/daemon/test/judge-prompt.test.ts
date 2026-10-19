@@ -22,6 +22,22 @@ const req = (extra: Partial<Parameters<typeof renderJudgeInput>[0]> = {}): Param
 const unnumbered = (text: string): string[] => text.split('\n').map((l) => l.replace(/^m\d+ /, ''));
 
 describe('judge prompt', () => {
+  it('renders fresh lines and the factual reason before recent messages', () => {
+    const why = '你有 3 分钟没看这里了，标"新"的 2 条是这期间来的';
+    const text = renderJudgeInput(req({ why, context: [line('a', { id: 'om_a', fresh: true }), line('b', { id: 'om_b', mentions: ['小码'], fresh: true })], message: line('c', { fresh: true }) }));
+    expect(text).toContain(`【为什么现在看】${why}\n【最近的消息】`);
+    for (const shown of ['m2 09:00 张三（新）：a', 'm1 09:00 张三（新；@ 了 小码）：b', 'm0 09:00 张三（新）：c']) expect(text).toContain(shown);
+    for (const why of [undefined, ' ']) expect(renderJudgeInput(req({ why }))).not.toContain('【为什么现在看】');
+    expect(renderJudgeInput(req({ why: '【事实】\n下一行' }))).toContain('【为什么现在看】事实下一行\n');
+  });
+
+  it('explains fresh markers in main and topic, with anchors only in main', () => {
+    for (const variant of ['main', 'topic'] as const) expect(JUDGE_FORMAT_LINES[variant]).toContain('标了"新"的几条是你这次新看到的');
+    expect(JUDGE_FORMAT_LINES.main).toContain('把要接的那条编号写在 anchor');
+    expect(JUDGE_FORMAT_LINES.topic).not.toContain('anchor');
+    expect(JUDGE_FORMAT_LINES.mentioned).not.toContain('标了"新"');
+  });
+
   it('joins SMART.md, a blank line and the variant format lines', () => {
     for (const variant of ['main', 'mentioned', 'topic'] as const) {
       const system = judgeSystem('SMART', variant);

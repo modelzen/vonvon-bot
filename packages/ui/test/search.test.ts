@@ -33,6 +33,19 @@ test('every literal configuration row label in the current desktop UI is indexed
   assert.deepEqual(missing, []);
 });
 
+test('s53: application owner and scanner search reveal their administrator rows', () => {
+  for (const [query, field] of [
+    ['飞书应用拥有者', '飞书应用拥有者'], ['飞书应用所有者', '飞书应用拥有者'],
+    ['主人', '飞书应用拥有者'], ['扫码注册者', '扫码注册者'], ['扫码人', '扫码注册者'],
+  ]) {
+    const result = findEntries(entries, query!)[0];
+    assert.equal(result?.destination.section, '管理员');
+    assert.equal(result?.destination.detail?.kind, 'agent-settings');
+    assert.equal(result?.destination.field, field);
+    assert.deepEqual(result?.destination.selection, {kind: 'agent', id: agentId});
+  }
+});
+
 test('rare field, aliases, and multi-term scope queries resolve to their real category', () => {
   assert.equal(findEntries(entries, '清空白名单')[0]?.destination.detail?.kind, 'membership-settings');
   assert.equal(findEntries(entries, 'App Secret')[0]?.destination.reveal, 'profile-add');
@@ -128,4 +141,28 @@ test('s28a review: custom judge search has a distinct title and conditional guid
   assert.equal(custom?.title, '判断的手填模型 id');
   assert.equal(custom?.destination.field, '判断模型');
   assert.equal(findEntries(entries, '判断模型').find(entry => entry.title === '判断模型' && entry.destination.field === '判断模型')?.destination.guide, '不是智能群的，先把会话方式改成「智能开话题」，才有这一项。');
+});
+
+
+test('s28c: member picker label and alias navigate to the bound group response-member row', () => {
+  for (const query of ['从群成员选择', '选择响应成员']) {
+    const result = findEntries(entries, query)[0];
+    assert.equal(result?.title, '从群成员选择');
+    assert.deepEqual(result?.destination, {
+      page: 'collaboration', view: 'groups', selection: {kind: 'membership', id: membershipId},
+      detail: {kind: 'membership-settings'}, section: '响应成员', field: '从群成员选择',
+      reveal: undefined, guide: undefined,
+    });
+  }
+});
+
+test('s28c: the manual Open ID entry remains searchable alongside the picker', () => {
+  for (const query of ['添加成员 Open ID', '成员 Open ID']) {
+    const result = findEntries(entries, query)[0];
+    assert.equal(result?.title, '添加成员 Open ID');
+    assert.equal(result?.destination.section, '响应成员');
+    assert.equal(result?.destination.field, '添加成员 Open ID');
+    assert.deepEqual(result?.destination.selection, {kind: 'membership', id: membershipId});
+    assert.deepEqual(result?.destination.detail, {kind: 'membership-settings'});
+  }
 });

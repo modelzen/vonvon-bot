@@ -25,7 +25,7 @@ const agentGroups: readonly AgentGroup[] = [
   {title: '云文档评论', fields: [item('后端', ['执行工具']), item('模型'), item('推理强度', [], {guide: '先选择一个具体模型，再调整推理强度。'})]},
   {title: '评论回复规则', fields: [item('评论规则文本', ['提示词', 'instructions'], {field: '评论回复规则'}), item('保存规则', ['保存评论规则']), item('恢复默认', ['恢复默认评论规则'])]},
   {title: '新会话标题', aliases: ['会话标题'], fields: [item('后端', ['标题后端', '执行工具']), item('用模型生成标题'), item('自定义模型 ID', ['标题模型 ID'], {guide: '先打开「用模型生成标题」，即可设置模型 ID。'}), item('推理强度', ['标题推理强度'], {guide: '先打开「用模型生成标题」，即可设置推理强度。'})]},
-  {title: '管理员', fields: [item('主人', ['所有者']), item('添加管理员 Open ID'), item('移除管理员', [], {field: '', guide: '在管理员列表中找到要移除的成员。'})]},
+  {title: '管理员', fields: [item('飞书应用拥有者', ['主人', '所有者', '飞书应用所有者']), item('扫码注册者', ['扫码人', '注册者']), item('添加管理员 Open ID'), item('移除管理员', [], {field: '', guide: '在管理员列表中找到要移除的成员。'})]},
   {title: '工作区的默认位置', aliases: ['新项目默认目录'], fields: [item('文件夹', ['根目录', '新项目根目录'])]},
   {title: '允许的飞书群', fields: [item('群范围'), item('添加群 ID'), item('移除群 ID', [], {field: '', guide: '在允许的飞书群列表中找到要移除的群。'})]},
   {title: '移除 Bot', fields: [item('删除本地 Bot 数据', ['删除机器人'])]},
@@ -38,7 +38,7 @@ const membershipGroups: readonly Group[] = [
   {title: '运行中来了消息', fields: [item('运行中来了消息', ['插话', '排队', '跟着 Bot 默认'])]},
   {title: '工作目录权限', fields: [item('权限档'), item('允许网络访问')]},
   {title: '新会话默认模型', fields: [item('模型'), item('自定义模型 ID', ['手填模型 ID', '第三方模型'], {field: '模型', guide: '在「模型」里选「自定义模型 ID…」，再填写模型 ID。'}), item('推理强度', [], {guide: '先选择一个具体模型，再调整推理强度。'})]},
-  {title: '响应成员', fields: [item('添加成员 Open ID'), item('移除成员', [], {field: '', guide: '在响应成员列表中找到要移除的成员。'}), item('允许所有成员', ['清空白名单'], {guide: '设置了成员白名单后，会显示「清空白名单」。'})]},
+  {title: '响应成员', fields: [item('从群成员选择', ['选择响应成员']), item('添加成员 Open ID'), item('移除成员', [], {field: '', guide: '在响应成员列表中找到要移除的成员。'}), item('允许所有成员', ['清空白名单'], {guide: '设置了成员白名单后，会显示「清空白名单」。'})]},
   {title: '话题模型', fields: [item('选择话题'), item('话题身份', [], {field: '选择话题', guide: '选择话题后可以查看身份。'}), item('本话题模型', [], {field: '选择话题', guide: '先选择话题，再设置该话题的模型。'}), item('自定义模型 ID', ['话题手填模型 ID'], {field: '选择话题', guide: '先选择话题，再在「本话题模型」里选「自定义模型 ID…」。'}), item('推理强度', ['话题推理强度'], {field: '选择话题', guide: '先选择话题并选定具体模型，再调整推理强度。'})]},
 ];
 /** What the 本机环境 fields were called before the 叫法表 (docs/v1-plan.md section 5), so the old words still find them. */
