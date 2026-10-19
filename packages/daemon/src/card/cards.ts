@@ -513,8 +513,8 @@ export function input(opts: {
 
 /** A form container (schema 2.0). Inputs inside it surface their values in
  * `action.form_value` when a `form_action_type:'submit'` button is clicked. */
-export function form(name: string, elements: CardElement[]): CardElement {
-  return { tag: 'form', name, elements };
+export function form(name: string, elements: CardElement[], elementId?: string): CardElement {
+  return { tag: 'form', name, elements, ...(elementId ? { element_id: elementId } : {}) };
 }
 
 /** A button that submits its enclosing form — its click callback carries the
