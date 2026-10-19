@@ -63,6 +63,9 @@ export function secretsReader(admin: Admin, publish: (read: SecretsRead) => void
 }
 export type SecretsReader = ReturnType<typeof secretsReader>;
 
+/** Coming back to the window reads the list again: not while hidden, and once for the focus and visibilitychange that come together. */
+export const rereads = (hidden: boolean, now: number, last: number): boolean => !hidden && now - last >= 1000;
+
 /** One 试一次, or a save that did not go through: what the key's row and the dialog show. */
 export type Tested = {at: number; outcome: SecretTestOutcome | 'refused' | 'saveFailed'; message: string; status?: number};
 
@@ -87,6 +90,71 @@ export async function testKey(admin: Admin, keyId: string, now: () => number = D
     return {at: now(), outcome: 'refused', message: errorText(error, '没连上 daemon')};
   }
 }
+
+/** A key's row: busy while its save or 试一次 runs, and the last result under the description. */
+export type RowState = {busy?: 'saving' | 'testing'; tested?: Tested};
+/** The fill dialog: the key, then its save and its 试一次 as two requests, then what 试一次 found unless it was 能用. */
+export type FillFlow = {id: number; keyId: string; replacing: boolean; step: 'input' | 'saving' | 'testing' | 'result'; last4?: string; result?: Tested};
+/** What the 密钥 page keeps besides the list; `refocus`: the key whose row takes focus once a dialog is gone. */
+export type KeyFlows = {rows: Record<string, RowState>; fill?: FillFlow; refocus?: string};
+
+/**
+ * The fill dialog and the keys' rows (s23g2 做法). Each fill takes its own id; what its requests bring back reaches
+ * the dialog only while that fill is the open one, and always reaches the key's row, so a dialog closed mid-way, or
+ * a newer one, is never reopened or overwritten. 能用 closes the dialog; any other result stays in it.
+ */
+export function keyFlows(admin: Admin, change: (request: Change) => Promise<AdminReply>, publish: (state: KeyFlows) => void, now: () => number = Date.now) {
+  let state: KeyFlows = {rows: {}};
+  let ids = 0;
+  const set = (next: KeyFlows) => { state = next; publish(state); };
+  const row = (keyId: string, patch: RowState) => set({...state, rows: {...state.rows, [keyId]: {...state.rows[keyId], ...patch}}});
+  const step = (id: number | undefined, next: (flow: FillFlow) => FillFlow) => {
+    if (id !== undefined && state.fill?.id === id) set({...state, fill: next(state.fill)});
+  };
+  const closed = (keyId: string) => set({...state, fill: undefined, refocus: keyId});
+  async function test(keyId: string, id?: number) {
+    row(keyId, {busy: 'testing'});
+    step(id, flow => ({...flow, step: 'testing'}));
+    const tested = await testKey(admin, keyId, now);
+    row(keyId, {busy: undefined, tested});
+    if (tested.outcome === 'ok' && id !== undefined && state.fill?.id === id) closed(keyId);
+    else step(id, flow => ({...flow, step: 'result', result: tested}));
+  }
+  return {
+    current: () => state,
+    open(keyId: string, replacing: boolean) { set({...state, fill: {id: ++ids, keyId, replacing, step: 'input'}}); },
+    close() { if (state.fill) closed(state.fill.keyId); },
+    /** 再试一次 or 换一个: back to the field */
+    again() { step(state.fill?.id, flow => ({...flow, step: 'input', result: undefined})); },
+    retest: () => state.fill ? test(state.fill.keyId, state.fill.id) : Promise.resolve(),
+    test: (keyId: string) => test(keyId),
+    async save(value: string) {
+      const flow = state.fill;
+      if (!flow || flow.step !== 'input') return;
+      const {id, keyId} = flow;
+      row(keyId, {busy: 'saving'});
+      step(id, current => ({...current, step: 'saving', result: undefined}));
+      const saved = await saveKey(change, keyId, value);
+      if (saved.kind === 'failed') {
+        const tested: Tested = {at: now(), outcome: 'saveFailed', message: saved.message};
+        row(keyId, {busy: undefined, tested});
+        step(id, current => ({...current, step: 'result', result: tested}));
+        return;
+      }
+      row(keyId, {tested: undefined});
+      step(id, current => ({...current, last4: saved.last4}));
+      await test(keyId, id);
+    },
+    /** A removal went through: the row starts over, and focus goes back to it. */
+    removed(keyId: string) { set({...state, rows: {...state.rows, [keyId]: {...state.rows[keyId], tested: undefined}}, refocus: keyId}); },
+    refocusTo(keyId: string) { set({...state, refocus: keyId}); },
+    /** Focus went back (or elsewhere): nothing to render, so nothing is published. */
+    refocused(keyId: string) { if (state.refocus === keyId) state = {...state, refocus: undefined}; },
+    /** 重新读取: the results go, a request that still runs keeps its row busy. */
+    forget() { set({...state, rows: Object.fromEntries(Object.entries(state.rows).map(([keyId, current]) => [keyId, {busy: current.busy}]))}); },
+  };
+}
+export type KeyFlowsController = ReturnType<typeof keyFlows>;
 
 /** 能用 green; a busy, unreachable or slow service yellow (only this try failed); a key refused, not taken or not saved red. */
 export const testTone = (outcome: Tested['outcome']): Tone =>
@@ -139,30 +207,37 @@ export function useCount(uses: readonly SecretUse[]): string {
   return groups ? `${bots} 个 Bot · ${groups} 个飞书群` : `${bots} 个 Bot`;
 }
 
+const BOTS_LOG = 'vonvon daemon logs 里的 secrets.bots-unreadable 有原因。';
+const BOT_LOG = 'vonvon daemon logs 里的 secrets.bot-unreadable 有原因。';
+
 /** Whose choices `inUse` is missing, and where the log says why: the command line's words. */
 export const unreadNotes = (view: Pick<SecretsView, 'botsUnreadable' | 'unreadBots'>): string[] => [
-  ...view.botsUnreadable ? ['Bot 清单（bots.json）读不了，谁选了它没算进来；vonvon daemon logs 里的 secrets.bots-unreadable 有原因。'] : [],
-  ...view.unreadBots ? [`有 ${view.unreadBots} 个 Bot 的设置读不了，没算进来；vonvon daemon logs 里的 secrets.bot-unreadable 有原因。`] : [],
+  ...view.botsUnreadable ? [`Bot 清单（bots.json）读不了，谁选了它没算进来；${BOTS_LOG}`] : [],
+  ...view.unreadBots ? [`有 ${view.unreadBots} 个 Bot 的设置读不了，没算进来；${BOT_LOG}`] : [],
 ];
 
-/** The removal's confirmation: who chose it, in two lists, or why no one is listed (product.md 3.1 第 9 条). */
+/**
+ * The removal's confirmation: who chose it, in two lists, or why no one is listed (product.md 3.1 第 9 条). When no
+ * one is listed because of what could not be read, the lead says it once, with where the log says why, in place of
+ * that note.
+ */
 export function removalCopy(service: SecretService, view: Pick<SecretsView, 'botsUnreadable' | 'unreadBots'>) {
   const active = service.inUse.filter(use => !use.notSmart);
   const notSmart = service.inUse.filter(use => use.notSmart);
   const unknown = service.inUse.length ? undefined
-    : view.botsUnreadable ? 'Bot 清单读不了，不知道谁选了它。'
-      : view.unreadBots ? `有 ${view.unreadBots} 个 Bot 的设置读不了，不知道它们选没选它。` : undefined;
+    : view.botsUnreadable ? {text: 'Bot 清单读不了，不知道谁选了它', log: BOTS_LOG}
+      : view.unreadBots ? {text: `有 ${view.unreadBots} 个 Bot 的设置读不了，不知道它们选没选它`, log: BOT_LOG} : undefined;
   return {
     description: service.status === 'invalid' ? '存着的这串不能用，现在已经按没填处理。只删本机存的这一份。'
       : `${service.last4 ? `末四位 ${service.last4}。` : ''}只删本机存的这一份，${service.displayName} 那边的 key 还在。`,
-    lead: unknown ? `${unknown}选了它的飞书群删了以后${MEANWHILE}，重新填就恢复。`
+    lead: unknown ? `${unknown.text}；${unknown.log}选了它的飞书群删了以后${MEANWHILE}，重新填就恢复。`
       : !service.inUse.length ? '现在没有 Bot 或飞书群选它，删了不影响任何群。'
         : !active.length ? undefined
           : service.status === 'invalid' ? '存着的这串不能用，下面这些现在已经按没填处理，删了也一样；重新填就恢复。'
             : '删了以后，下面这些 Bot 和飞书群要判断的消息按出错处理：没 @ Bot 的不回，@ 的回在主区。重新填就恢复。',
     active, notSmart,
     notSmartNote: notSmart.length ? '下面这些现在不是智能群，删了不影响；改成智能群后会按出错处理。' : undefined,
-    notes: unreadNotes(view),
+    notes: unreadNotes(view).filter(note => !unknown || !note.endsWith(unknown.log)),
   };
 }
 

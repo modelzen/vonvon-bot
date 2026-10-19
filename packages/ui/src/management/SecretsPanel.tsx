@@ -7,8 +7,8 @@ import {Button, FormField, InlineNotice, PageHeader, StatusBadge, type StatusTon
 import {ConfirmDialog, Dialog} from '../reference/components/ui/Dialog';
 import {settingAnchor} from '../search';
 import {
-  MEANWHILE, OLD_DAEMON, choice, errorText, keyDiagnosis, keyStatus, removalCopy, resultCopy, saveKey, secretsReader, testKey, testTone, testedText,
-  unreadNotes, useCount, useName, useNote, type SecretsRead, type SecretsReader, type SecretsView, type Tested,
+  MEANWHILE, OLD_DAEMON, choice, errorText, keyDiagnosis, keyFlows, keyStatus, removalCopy, rereads, resultCopy, secretsReader, testTone, testedText,
+  unreadNotes, useCount, useName, useNote, type FillFlow, type KeyFlows, type RowState, type SecretsRead, type SecretsView,
 } from './secretsModel';
 import './secrets.css';
 
@@ -22,9 +22,9 @@ export function useSecrets() {
     void reader.read();
     let last = Date.now();
     const again = () => {
-      // focus and visibilitychange come together; one read is enough
-      if (document.visibilityState === 'hidden' || Date.now() - last < 1000) return;
-      last = Date.now();
+      const now = Date.now();
+      if (!rereads(document.visibilityState === 'hidden', now, last)) return;
+      last = now;
       void reader.read();
     };
     window.addEventListener('focus', again);
@@ -35,9 +35,6 @@ export function useSecrets() {
 }
 
 const pill = (text: string, tone: StatusTone) => <StatusBadge tone={tone} variant="pill">{text}</StatusBadge>;
-
-/** A key's row: busy while its save or 试一次 runs, and the last result under the description. */
-export type RowState = {busy?: 'saving' | 'testing'; tested?: Tested};
 
 export function KeyRow({service, view, row, onFill, onReplace, onRemove, onTest, onOpenLogs}: {
   service: SecretService; view: SecretsView; row: RowState;
@@ -100,9 +97,6 @@ export function UsesRow({service, view}: {service: SecretService; view: SecretsV
   return <SettingsRow title="谁在用" description={description}
     trailing={view.botsUnreadable ? pill('Bot 清单读不了', 'warning') : service.inUse.length ? <StatusBadge>{useCount(service.inUse)}</StatusBadge> : undefined}/>;
 }
-
-/** The fill dialog: the key, then its save and its 试一次 as two requests, then what 试一次 found unless it was 能用. */
-export type FillFlow = {id: number; keyId: string; replacing: boolean; step: 'input' | 'saving' | 'testing' | 'result'; last4?: string; result?: Tested};
 
 const fillDescription = (service: SecretService, replacing: boolean) => replacing
   ? `整串重填，${service.last4 ? `现在的 ••••${service.last4} 会被换掉` : '现在存的那串会被换掉'}。存在本机，只有 daemon 读它，页面上只显示末四位。`
@@ -221,75 +215,28 @@ export function RemoveKeyDialog({removal, service, view, onCancel, onConfirm}: {
 export function SecretsPanel({onOpenLogs, onOpenApplication}: {onOpenLogs: () => void; onOpenApplication: () => void}) {
   const client = useClient();
   const {read, reader} = useSecrets();
-  const [rows, setRows] = useState<Record<string, RowState>>({});
-  const [fill, setFill] = useState<FillFlow>();
+  const [{rows, fill}, setFlows] = useState<KeyFlows>({rows: {}});
+  const flows = useMemo(() => keyFlows(request => client.admin(request), reader.change, setFlows), [client, reader]);
   const [removal, setRemoval] = useState<Removal>();
   const [reloading, setReloading] = useState(false);
   const page = useRef<HTMLDivElement>(null);
-  const openFlow = useRef<number>(undefined);
-  const flows = useRef(0);
-  const refocus = useRef<string>(undefined);
   const view = read.kind === 'ready' ? read.view : undefined;
-  const setRow = (keyId: string, patch: RowState) => setRows(current => ({...current, [keyId]: {...current[keyId], ...patch}}));
 
   // After a dialog: back to its row once the row has a button to take it; the opener may be gone (填 key became 换 key)
   useEffect(() => {
-    const keyId = refocus.current;
+    const keyId = flows.current().refocus;
     if (!keyId) return;
     const timer = window.setTimeout(() => {
-      if (refocus.current !== keyId) return;
+      if (flows.current().refocus !== keyId) return;
       const active = document.activeElement;
-      if (active && active !== document.body && page.current?.contains(active)) { refocus.current = undefined; return; }
-      if (active && active !== document.body && !active.closest('.ui-dialog')) { refocus.current = undefined; return; }
+      if (active && active !== document.body && page.current?.contains(active)) { flows.refocused(keyId); return; }
+      if (active && active !== document.body && !active.closest('.ui-dialog')) { flows.refocused(keyId); return; }
       const target = page.current?.querySelector<HTMLElement>(`.${keyRowClass(keyId)} button:not([disabled])`);
-      if (target) { refocus.current = undefined; target.focus({preventScroll: true}); }
+      if (target) { flows.refocused(keyId); target.focus({preventScroll: true}); }
     }, 0);
     return () => window.clearTimeout(timer);
   });
 
-  function openFill(keyId: string, replacing: boolean) {
-    const id = ++flows.current;
-    openFlow.current = id;
-    setFill({id, keyId, replacing, step: 'input'});
-  }
-  function closeFill() {
-    if (fill) refocus.current = fill.keyId;
-    openFlow.current = undefined;
-    setFill(undefined);
-  }
-  const onFlow = (id: number | undefined, next: (flow: FillFlow) => FillFlow | undefined) => {
-    if (id === undefined || openFlow.current !== id) return;
-    setFill(current => {
-      if (current?.id !== id) return current;
-      return next(current);
-    });
-  };
-  async function runTest(keyId: string, id?: number) {
-    setRow(keyId, {busy: 'testing'});
-    onFlow(id, flow => ({...flow, step: 'testing'}));
-    const tested = await testKey(request => client.admin(request), keyId);
-    setRow(keyId, {busy: undefined, tested});
-    if (id !== undefined && openFlow.current === id && tested.outcome === 'ok') {
-      refocus.current = keyId;
-      openFlow.current = undefined;
-      setFill(undefined);
-    } else onFlow(id, flow => ({...flow, step: 'result', result: tested}));
-  }
-  async function save(flow: FillFlow, value: string) {
-    const {id, keyId} = flow;
-    setRow(keyId, {busy: 'saving'});
-    onFlow(id, current => ({...current, step: 'saving', result: undefined}));
-    const saved = await saveKey(reader.change, keyId, value);
-    if (saved.kind === 'failed') {
-      const tested: Tested = {at: Date.now(), outcome: 'saveFailed', message: saved.message};
-      setRow(keyId, {busy: undefined, tested});
-      onFlow(id, current => ({...current, step: 'result', result: tested}));
-      return;
-    }
-    setRow(keyId, {tested: undefined});
-    onFlow(id, current => ({...current, last4: saved.last4}));
-    await runTest(keyId, id);
-  }
   async function remove() {
     const target = removal;
     if (!target) return;
@@ -302,13 +249,12 @@ export function SecretsPanel({onOpenLogs, onOpenApplication}: {onOpenLogs: () =>
       error = errorText(failure, '没连上 daemon');
     }
     if (error) { setRemoval(current => current && {...current, pending: false, error}); return; }
-    setRow(target.keyId, {tested: undefined});
-    refocus.current = target.keyId;
+    flows.removed(target.keyId);
     setRemoval(undefined);
   }
   async function reload() {
     setReloading(true);
-    setRows(current => Object.fromEntries(Object.entries(current).map(([keyId, row]) => [keyId, {busy: row.busy}])));
+    flows.forget();
     try { await reader.read(); } finally { setReloading(false); }
   }
 
@@ -333,8 +279,8 @@ export function SecretsPanel({onOpenLogs, onOpenApplication}: {onOpenLogs: () =>
           : !view.services.length ? <SettingsRow title="这个版本没有要 key 的服务"/>
             : view.services.map(service => <Fragment key={service.keyId}>
               <KeyRow service={service} view={view} row={rows[service.keyId] ?? {}}
-                onFill={() => openFill(service.keyId, false)} onReplace={() => openFill(service.keyId, true)}
-                onRemove={() => setRemoval({keyId: service.keyId, pending: false})} onTest={() => void runTest(service.keyId)} onOpenLogs={onOpenLogs}/>
+                onFill={() => flows.open(service.keyId, false)} onReplace={() => flows.open(service.keyId, true)}
+                onRemove={() => setRemoval({keyId: service.keyId, pending: false})} onTest={() => void flows.test(service.keyId)} onOpenLogs={onOpenLogs}/>
               <UsesRow service={service} view={view}/>
             </Fragment>)}
       </SettingsGroup>
@@ -343,12 +289,10 @@ export function SecretsPanel({onOpenLogs, onOpenApplication}: {onOpenLogs: () =>
   return <div className="page-stack secrets-page" ref={page}>
     {header}
     {body}
-    <FillKeyDialog flow={fillService ? fill : undefined} service={fillService} onClose={closeFill}
-      onSubmit={value => { if (fill) void save(fill, value); }}
-      onAgain={() => onFlow(fill?.id, flow => ({...flow, step: 'input', result: undefined}))}
-      onRetest={() => { if (fill) void runTest(fill.keyId, fill.id); }}/>
+    <FillKeyDialog flow={fillService ? fill : undefined} service={fillService} onClose={flows.close}
+      onSubmit={value => void flows.save(value)} onAgain={flows.again} onRetest={() => void flows.retest()}/>
     <RemoveKeyDialog removal={removeService ? removal : undefined} service={removeService} view={view}
-      onCancel={() => { if (removal) refocus.current = removal.keyId; setRemoval(undefined); }} onConfirm={() => void remove()}/>
+      onCancel={() => { if (removal) flows.refocusTo(removal.keyId); setRemoval(undefined); }} onConfirm={() => void remove()}/>
   </div>;
 }
 

@@ -3,8 +3,11 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import type {AdminReply, AdminRequest, SecretService, SecretUse} from '@vonvon/protocol';
 import {createClient, RpcError} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
-import {FillKeyDialog, KeyDiagnosticsRows, KeyRow, RemoveKeyDialog, SecretsPanel, UsesRow, submitsOnKey, type FillFlow} from '../src/management/SecretsPanel';
-import {keyDiagnosis, removalCopy, resultCopy, saveKey, secretsReader, testKey, type SecretsRead, type SecretsView, type Tested} from '../src/management/secretsModel';
+import {FillKeyDialog, KeyDiagnosticsRows, KeyRow, RemoveKeyDialog, SecretsPanel, UsesRow, submitsOnKey} from '../src/management/SecretsPanel';
+import {
+  keyDiagnosis, keyFlows, removalCopy, rereads, resultCopy, saveKey, secretsReader, testKey, testTone, type FillFlow, type KeyFlows, type SecretsRead, type SecretsView,
+  type Tested,
+} from '../src/management/secretsModel';
 import {findEntries, searchEntries} from '../src/search';
 
 const client = createClient({isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {}});
@@ -98,6 +101,12 @@ describe('the list reader (s23g2 做法: request numbers)', () => {
     d.calls[5]!.resolve(view());
     await late;
     expect(seen.at(-1)).toEqual({kind: 'failed', problem: 'boom'});
+  });
+
+  it('coming back to the window reads again, not while hidden and once for a focus and a visibilitychange together', () => {
+    expect(rereads(false, 5000, 3000)).toBe(true);
+    expect(rereads(false, 5000, 4500)).toBe(false);
+    expect(rereads(true, 5000, 3000)).toBe(false);
   });
 });
 
@@ -234,6 +243,111 @@ describe('the fill dialog', () => {
     expect(resultCopy(tested('auth', 'x'), 'TypeSafe').tone).toBe('danger');
     expect(resultCopy(tested('busy', 'x'), 'TypeSafe').tone).toBe('warning');
     expect(resultCopy(tested('timeout', 'x'), 'TypeSafe').footer).toBe('retry');
+    // only this try failed: yellow; the key or the save: red
+    expect(['ok', 'busy', 'network', 'timeout', 'auth', 'failed', 'refused', 'saveFailed'].map(outcome => testTone(outcome as Tested['outcome'])))
+      .toEqual(['success', 'warning', 'warning', 'warning', 'danger', 'danger', 'danger', 'danger']);
+  });
+});
+
+describe('the fill dialog and the rows (s23g2 做法: each fill has its own id)', () => {
+  const KEY = 'typesafe-api-key';
+  const answer = (outcome: Tested['outcome'], message: string, status?: number) =>
+    ({kind: 'secretTested', keyId: KEY, outcome, message, ...(status ? {status} : {})}) as AdminReply;
+  const setup = () => {
+    const d = daemon();
+    const seen: KeyFlows[] = [];
+    const flows = keyFlows(d.admin, d.admin, state => seen.push(state), () => 7);
+    /** opens a fill, sends the key and answers the save; 试一次 is then asked, and `done` waits for its answer */
+    const filled = async (last4: string, replacing = false) => {
+      flows.open(KEY, replacing);
+      const done = flows.save(`tsk-test-000000000000${last4}`);
+      d.calls.at(-1)!.resolve(view(service({last4})));
+      await tick();
+      return {done};
+    };
+    return {d, flows, seen, filled};
+  };
+
+  it('a fill closed while 试一次 runs is not reopened, and a newer one is left alone: the result goes to the row', async () => {
+    const {d, flows, seen, filled} = setup();
+    const first = (await filled('abcd')).done;
+    expect(flows.current().fill).toMatchObject({id: 1, step: 'testing', last4: 'abcd'});
+    expect(flows.current().rows[KEY]).toEqual({busy: 'testing'});
+    expect(d.calls.map(call => call.request.type)).toEqual(['setSecret', 'testSecret']);
+    flows.close();
+    expect(flows.current()).toMatchObject({fill: undefined, refocus: KEY});
+    flows.refocused(KEY);
+    flows.open(KEY, true);
+    d.calls[1]!.resolve(answer('auth', 'key 不对：TypeSafe 不认这个 key', 401));
+    await first;
+    expect(flows.current().fill).toEqual({id: 2, keyId: KEY, replacing: true, step: 'input'});
+    expect(flows.current().rows[KEY]).toEqual({tested: {at: 7, outcome: 'auth', message: 'key 不对：TypeSafe 不认这个 key', status: 401}});
+    expect(flows.current().refocus).toBeUndefined();
+    // 能用 for a fill that is gone does not close the open one
+    const second = flows.save('tsk-test-0000000000000000wxyz');
+    d.calls[2]!.resolve(view(service({last4: 'wxyz'})));
+    await tick();
+    flows.close();
+    flows.open(KEY, true);
+    d.calls[3]!.resolve(answer('ok', '能用'));
+    await second;
+    expect(flows.current().fill).toMatchObject({id: 3, step: 'input'});
+    expect(flows.current().rows[KEY]?.tested?.outcome).toBe('ok');
+    expect(seen.at(-1)).toBe(flows.current());
+  });
+
+  it('能用 closes the dialog and sends focus to the row; another result stays in the dialog and in the row', async () => {
+    const {d, flows, filled} = setup();
+    const first = (await filled('abcd')).done;
+    d.calls[1]!.resolve(answer('ok', '能用'));
+    await first;
+    expect(flows.current()).toMatchObject({fill: undefined, refocus: KEY, rows: {[KEY]: {tested: {outcome: 'ok', message: '能用'}}}});
+    const second = (await filled('wxyz', true)).done;
+    d.calls[3]!.resolve(answer('timeout', 'TypeSafe 5 秒没回'));
+    await second;
+    expect(flows.current().fill).toMatchObject({id: 2, step: 'result', last4: 'wxyz', result: {outcome: 'timeout', message: 'TypeSafe 5 秒没回'}});
+    expect(flows.current().rows[KEY]?.tested?.outcome).toBe('timeout');
+    // 再试一次 in the dialog asks again for the same fill
+    const again = flows.retest();
+    expect(flows.current().fill?.step).toBe('testing');
+    d.calls[4]!.resolve(answer('ok', '能用'));
+    await again;
+    expect(flows.current().fill).toBeUndefined();
+  });
+
+  it('a save that did not go through is not tried; it stays in the dialog and the row, and 再试一次 goes back to the field', async () => {
+    const {d, flows} = setup();
+    await flows.save('nothing open');
+    expect(d.calls).toHaveLength(0);
+    flows.open(KEY, false);
+    const saving = flows.save('tsk-test-0000000000000000abcd');
+    expect(flows.current().rows[KEY]).toEqual({busy: 'saving'});
+    expect(flows.current().fill?.step).toBe('saving');
+    // sent once: a second Enter while it saves asks nothing
+    void flows.save('tsk-test-0000000000000000abcd');
+    expect(d.calls).toHaveLength(1);
+    d.calls[0]!.resolve({kind: 'refused', code: 'keystore', message: '磁盘满了（ENOSPC）'});
+    await saving;
+    expect(d.calls).toHaveLength(1);
+    expect(flows.current().fill).toMatchObject({step: 'result', result: {outcome: 'saveFailed', message: '磁盘满了（ENOSPC）'}});
+    expect(flows.current().rows[KEY]).toEqual({tested: {at: 7, outcome: 'saveFailed', message: '磁盘满了（ENOSPC）'}});
+    flows.again();
+    expect(flows.current().fill).toEqual({id: 1, keyId: KEY, replacing: false, step: 'input'});
+  });
+
+  it('试一次 in the row opens nothing and moves no focus; 重新读取 forgets results, not a running request; a removal starts the row over', async () => {
+    const {d, flows} = setup();
+    const running = flows.test(KEY);
+    expect(flows.current().rows[KEY]).toEqual({busy: 'testing'});
+    flows.forget();
+    expect(flows.current().rows[KEY]).toEqual({busy: 'testing'});
+    d.calls[0]!.resolve(answer('busy', '连上了，但 TypeSafe 限流了，稍后再试', 429));
+    await running;
+    expect(flows.current()).toEqual({rows: {[KEY]: {tested: {at: 7, outcome: 'busy', message: '连上了，但 TypeSafe 限流了，稍后再试', status: 429}}}});
+    flows.forget();
+    expect(flows.current().rows[KEY]).toEqual({});
+    flows.removed(KEY);
+    expect(flows.current().refocus).toBe(KEY);
   });
 });
 
@@ -257,10 +371,15 @@ describe('the removal', () => {
 
   it('says it when no one chose it, when the Bot list or some bots could not be read, for a stored key that cannot be used, and a failure', () => {
     expect(dialog(service({inUse: []}))).toContain('现在没有 Bot 或飞书群选它，删了不影响任何群。');
-    expect(dialog(service({inUse: []}), view(service({inUse: []}), {botsUnreadable: true}))).toContain('Bot 清单读不了，不知道谁选了它。选了它的飞书群删了以后要判断的消息按出错处理');
+    // what could not be read is said once, with where the log says why
+    const unread = dialog(service({inUse: []}), view(service({inUse: []}), {botsUnreadable: true}));
+    expect(unread).toContain('Bot 清单读不了，不知道谁选了它；vonvon daemon logs 里的 secrets.bots-unreadable 有原因。选了它的飞书群删了以后要判断的消息按出错处理');
+    expect(unread.match(/读不了/g)).toHaveLength(1);
     const some = dialog(service({inUse: []}), view(service({inUse: []}), {unreadBots: 1}));
-    expect(some).toContain('有 1 个 Bot 的设置读不了，不知道它们选没选它。');
-    expect(some).toContain('secrets.bot-unreadable');
+    expect(some).toContain('有 1 个 Bot 的设置读不了，不知道它们选没选它；vonvon daemon logs 里的 secrets.bot-unreadable 有原因。选了它的');
+    expect(some.match(/读不了/g)).toHaveLength(1);
+    // with some listed, the note stays under the lists
+    expect(dialog(service(), view(service(), {unreadBots: 1}))).toContain('有 1 个 Bot 的设置读不了，没算进来；vonvon daemon logs 里的 secrets.bot-unreadable 有原因。');
     const invalid = dialog(service({status: 'invalid', last4: undefined}));
     expect(invalid).toContain('存着的这串不能用，现在已经按没填处理。只删本机存的这一份。');
     expect(invalid).toContain('存着的这串不能用，下面这些现在已经按没填处理，删了也一样；重新填就恢复。');
