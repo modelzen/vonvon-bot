@@ -9,6 +9,7 @@ import type { VonvonClient } from '@vonvon/client/browser';
 import { ConnectionError, RpcError } from '@vonvon/client/browser';
 import { desktopChannels, type AttachedDaemon, type DesktopResources } from '../src/ipc-contract.js';
 import { ServiceActionError } from '../src/service-error.js';
+import { StartHostRefusal } from '../src/daemon-manager.js';
 
 const { handlers, openExternal, failRegistration } = vi.hoisted(() => ({
   handlers: new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>>(),
@@ -47,7 +48,7 @@ function harness() {
   let onError: (error: Error) => void = () => {};
   let onSnapshot: (value: unknown) => void = () => {};
   const snapshot = vi.fn(async () => ({ revision: 1, application: { platform: 'macos', version: '1', loginItem: false, dataPath: fixtureRoot } }));
-  const machine = vi.fn(async (): ReturnType<VonvonClient['machine']> => ({ type: 'done', message: 'ok' }));
+  const machine = vi.fn(async (_request: Parameters<VonvonClient['machine']>[0]): ReturnType<VonvonClient['machine']> => ({ type: 'done', message: 'ok' }));
   const dispose = vi.fn(async () => {});
   const run = vi.fn(async (): ReturnType<VonvonClient['run']> => ({ kind: 'applied', revision: 2 }));
   const client = {
@@ -64,6 +65,7 @@ function harness() {
   const actions = {
     startHost: vi.fn(async (_bot?: string) => ({ type: 'done' as const, message: 'started' })),
     restartHost: vi.fn(async (_previous: AttachedDaemon['identity'], send: () => ReturnType<VonvonClient['run']>) => send()),
+    stopHost: vi.fn(async (_previous: AttachedDaemon['identity'], send: () => ReturnType<VonvonClient['machine']>) => send()),
     service: vi.fn(async (_action: 'install' | 'start' | 'stop' | 'uninstall', _previous?: AttachedDaemon['identity'] | null) => ({ type: 'done' as const, message: 'service updated' })),
     setLoginItem: vi.fn(async (_enabled: boolean, _previous?: AttachedDaemon['identity'] | null) => {}),
     isExpectedDisconnect: vi.fn(() => false),
@@ -395,6 +397,84 @@ describe('desktop IPC boundary', () => {
     expect(() => harness()).toThrow('registration failed');
     expect(handlers.size).toBe(0);
   });
+});
+
+const runningStatus = { type: 'status' as const, host: { ownership: 'owned' as const, pid: 1 },
+  service: { platformName: 'macos', installed: true, running: true, state: 'running' as const, pid: '1', servicePath: '', stdoutPath: '', stderrPath: '' },
+  temporaryAgent: 'cli_x', cli: { kind: 'ready' as const, bin: '/bin/vonvon', message: 'ready' } };
+
+it('s18g bridge stop uses shell before disconnect and publishes stopped status', async () => {
+  const h = harness();
+  await h.invoke(desktopChannels.subscribe);
+  h.machine.mockImplementation(async request => {
+    if (request.type === 'status') return runningStatus;
+    if (request.type === 'stopHost') {
+      queueMicrotask(() => h.emitError(new ConnectionError('server_shutdown')));
+      return { type: 'done', message: '正在停止 daemon。' };
+    }
+    return { type: 'done', message: 'ok' };
+  });
+  h.actions.stopHost.mockImplementation(async (_previous, send) => {
+    h.actions.isExpectedDisconnect.mockReturnValue(true);
+    return send();
+  });
+  expect(await h.invoke(desktopChannels.machine, { type: 'stopHost' })).toMatchObject({ ok: true });
+  await Promise.resolve();
+  expect(h.actions.stopHost).toHaveBeenCalledExactlyOnceWith(h.owner.identity, expect.any(Function));
+  expect(h.machine.mock.calls).toEqual([[{ type: 'status' }], [{ type: 'stopHost' }]]);
+  expect(h.actions.recoverConnection).not.toHaveBeenCalled();
+  expect(h.actions.connectionLost).not.toHaveBeenCalled();
+  expect(h.webContents.send.mock.calls.map(call => call[1])).not.toContainEqual(expect.objectContaining({ type: 'error' }));
+  const stopped = await h.invoke(desktopChannels.machine, { type: 'status' });
+  expect(stopped).toMatchObject({ ok: true, value: { host: null, service: { running: false, state: 'stopped' },
+    cli: { kind: 'error', message: 'not registered' } } });
+  expect((stopped as { value: Record<string, unknown> }).value).not.toHaveProperty('temporaryAgent');
+  expect(h.machine).toHaveBeenCalledTimes(2);
+  await h.bridge.dispose();
+});
+
+it('s18g bridge stop refusal leaves live machine status available', async () => {
+  const h = harness();
+  h.machine.mockResolvedValue(runningStatus);
+  h.actions.stopHost.mockRejectedValueOnce(new StartHostRefusal('没停完'));
+  expect(await h.invoke(desktopChannels.machine, { type: 'stopHost' })).toEqual({ ok: false,
+    error: { kind: 'validation', message: '没停完' } });
+  expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toMatchObject({ ok: true,
+    value: { host: { pid: 1 }, service: { running: true } } });
+  expect(h.machine).toHaveBeenCalledTimes(2);
+  await h.bridge.dispose();
+});
+
+it('s18g bridge stop never overlays a replacement owner', async () => {
+  const h = harness();
+  h.machine.mockResolvedValue(runningStatus);
+  let finish!: (reply: { type: 'done'; message: string }) => void;
+  h.actions.stopHost.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const stopping = h.invoke(desktopChannels.machine, { type: 'stopHost' });
+  await vi.waitFor(() => expect(h.actions.stopHost).toHaveBeenCalledOnce());
+  const next = { client: { snapshot: vi.fn(async () => ({ revision: 1 })), machine: vi.fn(async () => ({
+    ...runningStatus, host: { ownership: 'owned', pid: 2 } })), watchSnapshots: () => () => {},
+    onLog: () => () => {}, onBackendInstall: () => () => {}, onError: () => () => {} },
+  identity: { pid: 2, startedAt: 'next', listen: '127.0.0.1:4000' }, dispose: vi.fn(async () => {}) } as unknown as AttachedDaemon;
+  await h.bridge.replaceOwner(next);
+  finish({ type: 'done', message: 'daemon 已停止。' });
+  await expect(stopping).resolves.toMatchObject({ ok: true });
+  expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toMatchObject({ ok: true,
+    value: { host: { pid: 2 }, service: { running: true } } });
+  await h.bridge.dispose();
+});
+
+it('s18g bridge stop falls back to the last readable status', async () => {
+  const h = harness();
+  h.machine.mockResolvedValueOnce(runningStatus)
+    .mockRejectedValueOnce(new RpcError('internal', '读不到服务状态'))
+    .mockResolvedValueOnce({ type: 'done', message: '正在停止 daemon。' });
+  expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toMatchObject({ ok: true });
+  expect(await h.invoke(desktopChannels.machine, { type: 'stopHost' })).toMatchObject({ ok: true });
+  const stopped = await h.invoke(desktopChannels.machine, { type: 'status' });
+  expect(stopped).toMatchObject({ ok: true, value: { host: null, service: { running: false, state: 'stopped' } } });
+  expect(h.machine).toHaveBeenCalledTimes(3);
+  await h.bridge.dispose();
 });
 
 it('serves installed/stopped status after stop closes RPC, then uses the reattached owner', async () => {
