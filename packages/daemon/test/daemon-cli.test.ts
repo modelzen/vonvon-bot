@@ -162,7 +162,8 @@ it('open --print on a new host creates the data root, starts the daemon and keep
 
 it('keeps generated secret getters on their captured root outside the parent shell', async () => {
   const f = await fixture();
-  const setter = launch(f.home, f.root, ['secrets', 'set', 'fixture']); setter.child.stdin.end('dummy-only');
+  // run from a bot's session, `secrets set` would refuse (s23g)
+  const setter = launch(f.home, f.root, ['secrets', 'set', '--raw', 'fixture'], { FEISHU_CODEX_BRIDGE: '', VONVON_SESSION: '' }); setter.child.stdin.end('dummy-only');
   expect(await setter.exited).toBe(0);
   const generator = spawn(process.execPath, ['-e', `process.argv[1]=${JSON.stringify(entry)};require(${JSON.stringify(storeEntry)}).buildEncryptedAccountConfig('fixture','feishu').then(config=>console.log(JSON.stringify(config.secrets.providers.bridge))).catch(e=>{console.error(e.message);process.exitCode=1})`], { env: { ...process.env, HOME: f.home, VONVON_HOME: f.root }, stdio: 'pipe' });
   children.push(generator);

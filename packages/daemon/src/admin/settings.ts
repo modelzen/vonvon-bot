@@ -12,7 +12,7 @@ import { effectiveMode, getProjectByName, listProjects, mutateProject, noMention
 import { getSession, isRetiredKey, mutateSession, RETIRED_KEY_TEXT, type SessionRecord } from '../bot/session-store';
 import { DEFAULT_COMMENT_INSTRUCTIONS, saveCommentInstructions, syncAllCommentInstructions } from '../bot/comments';
 import { voiceView } from '../voice/view';
-import { listSecretIds } from '../config/keystore';
+import { keyStatus } from './secrets';
 import { DECISION_FORMAT_LINES, DECISION_INPUT_EXAMPLE, decisionProvider, decisionProviders, keyMissingText } from '../judge/decision';
 import { DECISION_PROVIDER_ID, parseStoredJudge, resolveJudgeModel } from '../judge/model';
 import { JUDGE_CLAUDE_NOTE, JUDGE_CODEX_NOTE, JUDGE_FORMAT_LINES, JUDGE_INPUT_EXAMPLE } from '../judge/prompt';
@@ -54,8 +54,8 @@ export interface SettingsOwnerDeps {
   mutateSession?: typeof mutateSession;
   /** tests point it at a temporary bot directory */
   readSmartPrompt?: (appId: string, chatId?: string) => ReturnType<typeof readSmartPrompt>;
-  /** the keystore's ids, for whether a decision model's key is filled in */
-  secretIds?: () => Promise<string[]>;
+  /** the keystore, for whether a decision model's key is filled in */
+  getSecret?: (id: string) => Promise<string | undefined>;
   instructions?: {
     read(): Promise<string>;
     save(text: string): Promise<void>;
@@ -402,13 +402,16 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     const { model, effort, provider } = resolveJudgeModel(backend, layers, peekModels(backend));
     return { selection: provider ? { kind: 'decision', provider, model } : { kind: 'llm', backend, model, ...(effort ? { effort } : {}) } };
   }
-  /** Every decision model this version calls, and whether its key is filled in (an unreadable keystore is said so,
-   * not taken for a missing key): what `settings get` and a picker list (s23f, s28). */
+  /** Every decision model this version calls, and whether its key is filled in by the judge's rule (an unreadable
+   * keystore is said so, not taken for a missing key; one stored in a shape no header carries is missing, as the
+   * judge takes it): what `settings get` and a picker list (s23f, s28), and the key page's status (s23g). */
   async function decisionModels(): Promise<T.DecisionModelsView> {
-    const ids = await (deps.secretIds ?? listSecretIds)().catch(() => undefined);
-    return decisionProviders().map(p => ({
-      provider: p.id, displayName: p.displayName, models: p.models.map(m => ({ ...m })), keyId: p.keyId,
-      keySet: ids?.includes(p.keyId) ?? false, ...(ids ? {} : { keyUnreadable: true }),
+    return Promise.all(decisionProviders().map(async p => {
+      const { status } = await keyStatus(p, deps.getSecret);
+      return {
+        provider: p.id, displayName: p.displayName, models: p.models.map(m => ({ ...m })), keyId: p.keyId,
+        keySet: status === 'set', ...(status === 'unreadable' ? { keyUnreadable: true } : {}),
+      };
     }));
   }
   /** SMART.md of the bot (no chatId) or the group, with the read-only parts around it: a decision model's options

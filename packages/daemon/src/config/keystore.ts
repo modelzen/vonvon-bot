@@ -16,10 +16,16 @@ const storeSchema = z.object({ version: z.literal(1), entries: z.record(z.string
 type StoreFile = z.infer<typeof storeSchema>;
 type Envelope = z.infer<typeof envelope>;
 const missing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
+/** An error the key page tells apart by its code (admin/secrets.ts); its message stays for logs. A missing master key
+ * on a read is lstat's own ENOENT: keyForMutation tells a first save by it. */
+const keystoreError = (code: string, message: string, cause?: unknown): Error => Object.assign(new Error(message, cause === undefined ? undefined : { cause }), { code });
 
 async function readStore(): Promise<StoreFile | undefined> {
-  try { return storeSchema.parse(JSON.parse(await readFile(paths.secretsFile, 'utf8'))); }
+  let text: string;
+  try { text = await readFile(paths.secretsFile, 'utf8'); }
   catch (error) { if (missing(error)) return undefined; throw error; }
+  try { return storeSchema.parse(JSON.parse(text)); }
+  catch (error) { throw keystoreError('KEYSTORE_STORE_FORMAT', 'Secrets store is not valid.', error); }
 }
 
 async function syncDirectory(directory: string): Promise<void> {
@@ -31,15 +37,15 @@ async function syncDirectory(directory: string): Promise<void> {
 
 async function loadKey(): Promise<Buffer> {
   const metadata = await lstat(paths.masterKeyFile);
-  if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error('Master key must be a private regular file.');
+  if (!metadata.isFile() || metadata.isSymbolicLink()) throw keystoreError('KEYSTORE_MASTER_KEY_MODE', 'Master key must be a private regular file.');
   const handle = await open(paths.masterKeyFile, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size !== 32 || (process.platform !== 'win32' && ((stat.mode & 0o777) !== 0o600 || stat.uid !== process.getuid?.()))) {
-      throw new Error('Master key must contain 32 bytes and be owned by the current user with mode 0600.');
+      throw keystoreError('KEYSTORE_MASTER_KEY_MODE', 'Master key must contain 32 bytes and be owned by the current user with mode 0600.');
     }
     const key = await handle.readFile();
-    if (key.length !== 32) throw new Error('Invalid master key length.');
+    if (key.length !== 32) throw keystoreError('KEYSTORE_MASTER_KEY_MODE', 'Invalid master key length.');
     return key;
   } finally { await handle.close(); }
 }
@@ -48,7 +54,7 @@ async function keyForMutation(storeExists: boolean): Promise<Buffer> {
   try { return await loadKey(); }
   catch (error) {
     if (!missing(error)) throw error;
-    if (storeExists) throw new Error('Master key is missing for an existing secrets store.');
+    if (storeExists) throw keystoreError('KEYSTORE_MASTER_KEY_MISSING', 'Master key is missing for an existing secrets store.');
   }
   const temporary = `${paths.masterKeyFile}.${randomUUID()}.tmp`;
   try {
@@ -87,9 +93,11 @@ export async function getSecret(id: string): Promise<string | undefined> {
   const key = await loadKey();
   const entry = store.entries[id];
   if (!entry) return undefined;
-  const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(entry.iv, 'base64'));
-  decipher.setAuthTag(Buffer.from(entry.tag, 'base64'));
-  return Buffer.concat([decipher.update(Buffer.from(entry.data, 'base64')), decipher.final()]).toString('utf8');
+  try {
+    const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(entry.iv, 'base64'));
+    decipher.setAuthTag(Buffer.from(entry.tag, 'base64'));
+    return Buffer.concat([decipher.update(Buffer.from(entry.data, 'base64')), decipher.final()]).toString('utf8');
+  } catch (error) { throw keystoreError('KEYSTORE_DECRYPT', 'Secret could not be decrypted with this master key.', error); }
 }
 
 let mutations: Promise<unknown> = Promise.resolve();
