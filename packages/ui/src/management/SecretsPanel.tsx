@@ -93,7 +93,7 @@ export function UsesRow({service, view}: {service: SecretService; view: SecretsV
       </li>)}</ul>
       {notesOf(notes)}
     </>
-    : notes.length ? notesOf(notes) : `现在没有 Bot 或飞书群选它。判断模型选了 ${choice(service)} 才用这个 key。`;
+    : notes.length ? notesOf(notes) : `现在没有 Bot 或飞书群选它。在智能群的群详情页把「判断模型」选成 ${choice(service)}，才用这个 key。`;
   // the count stays by the title however long the list (多角度审查 B4)
   return <SettingsRow className="secrets-uses-row" title="谁在用" description={description}
     trailing={view.botsUnreadable ? pill('Bot 清单读不了', 'warning') : service.inUse.length ? <StatusBadge>{useCount(service.inUse)}</StatusBadge> : undefined}/>;
