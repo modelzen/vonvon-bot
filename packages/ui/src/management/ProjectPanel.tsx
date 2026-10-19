@@ -5,7 +5,7 @@ import { SettingsGroup, SettingsRow } from "../reference/components/system-setti
 import { conversationCopy, conversationSchema, modeToConversation, type AgentId, type Conversation, type FolderChoice, type GroupId } from "@vonvon/protocol";
 import type { CollaborationClient, CollaborationReply, ProjectRecord } from "@vonvon/protocol";
 import "../settings/settings.css";
-import {useShellCapabilities} from '../client-context';
+import {useClient, useShellCapabilities} from '../client-context';
 import {groupUrl, openExternalUrl} from '../url-actions';
 import {useDraft, useDraftGuard} from "../settings/DraftGuard";
 import {settingAnchor} from '../search';
@@ -37,8 +37,8 @@ export function appliedNotice(success: string, reply: { warning?: string; messag
 }
 
 /** The 会话方式 picker: the three of product.md 3.4, in its order. */
-export function ConversationRow({ target, current, disabled, onChange }: { target: Conversation; current: Conversation; disabled: boolean; onChange: (next: Conversation) => void }) {
-  return <SettingsRow title="会话方式" description={conversationNote(target, current)} trailing={<select aria-label="项目会话方式" value={target} disabled={disabled} onChange={(event) => onChange(conversationSchema.catch(current).parse(event.target.value))}>{conversationSchema.options.map((value) => <option key={value} value={value}>{conversationCopy[value].title}</option>)}</select>} />;
+export function ConversationRow({ target, current, disabled, onChange, otherBots }: { otherBots?: boolean; target: Conversation; current: Conversation; disabled: boolean; onChange: (next: Conversation) => void }) {
+  return <SettingsRow title="会话方式" description={<>{conversationNote(target, current)}{otherBots && <><br />群里还有别的 bot。几个 bot 都选智能，它们才能互相 @、各自判断接不接话。</>}</>} trailing={<select aria-label="项目会话方式" value={target} disabled={disabled} onChange={(event) => onChange(conversationSchema.catch(current).parse(event.target.value))}>{conversationSchema.options.map((value) => <option key={value} value={value}>{conversationCopy[value].title}</option>)}</select>} />;
 }
 
 function replyError(reply: CollaborationReply): string | undefined {
@@ -75,6 +75,18 @@ export function ProjectStatus({ scope, request }: Pick<Props, "scope" | "request
 
 export function ProjectPanel({ scope, request, onChanged, children }: Props) {
   const shell = useShellCapabilities();
+  const client = useClient();
+  const [otherBots, setOtherBots] = useState(false);
+  useEffect(() => {
+    let active = true;
+    setOtherBots(false);
+    void client.settings({type: "read", scope: {kind: "project", botId: scope.agentId, projectName: scope.projectName}}).then(reply => {
+      if (active && reply.kind === "view" && reply.view.scope.kind === "project" && "members" in reply.view && "chatId" in reply.view.identity && reply.view.identity.chatId === scope.groupId) {
+        setOtherBots(reply.view.members.roster?.otherBots === true);
+      }
+    }).catch(() => {});
+    return () => {active = false;};
+  }, [client, scope.agentId, scope.projectName, scope.groupId]);
   const guard = useDraftGuard();
   const pickDirectory = useDirectoryPicker();
   const requestRef = useRef(request);
@@ -190,7 +202,7 @@ export function ProjectPanel({ scope, request, onChanged, children }: Props) {
       {project && <>
         <SettingsRow title="飞书群" value={project.name} trailing={<Button size="sm" onClick={() => void openExternalUrl(groupUrl(scope.groupId), 'group', shell).catch((failure: unknown) => setError(failure instanceof Error ? failure.message : "无法打开飞书群。"))}>在飞书打开</Button>} />
         <SettingsRow title="工作目录" description={folder?.displayPath ?? project.cwd} trailing={<Button size="sm" disabled={saving} onClick={() => void pickDirectory().then((choice) => { if (choice) setFolder(choice); }).catch((failure: unknown) => setError(failure instanceof Error ? failure.message : "目录选择失败。"))}>更换目录</Button>} />
-        <ConversationRow target={conversation} current={modeToConversation(project.kind)} disabled={saving} onChange={setConversation} />
+        <ConversationRow otherBots={otherBots} target={conversation} current={modeToConversation(project.kind)} disabled={saving} onChange={setConversation} />
         <SettingsRow title="项目状态" trailing={<select aria-label="项目状态" value={enabled ? "enabled" : "disabled"} disabled={saving} onChange={(event) => setEnabled(event.target.value === "enabled")}><option value="enabled">启用</option><option value="disabled">停用</option></select>} />
         <div className="settings-edit-actions"><Button size="sm" disabled={!changed || saving} onClick={() => { setConversation(modeToConversation(project.kind)); setEnabled(project.enabled); setFolder(undefined); }}>放弃修改</Button><Button size="sm" variant="primary" loading={saving} disabled={!changed} onClick={() => void saveDraft()}>保存项目</Button></div>
       </>}

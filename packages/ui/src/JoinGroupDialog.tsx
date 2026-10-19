@@ -145,7 +145,7 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
         {pending?.groups.map(group => <InlineNotice key={group.chatId} title={`${agent.name} 已加入 ${group.name}`} actions={<Button disabled={busy} onClick={() => switchMode({kind: 'bind', group})}>继续绑定</Button>}>选择工作目录后即可开始协作。</InlineNotice>)}
         <Button disabled={busy} onClick={() => void findGroups()}>查找已经加入的群</Button>
         <small>用于离线期间、升级前加入的群，或未收到通知的情况。</small>
-        {manual && <><FormField label="已经加入的飞书群"><select aria-label="选择飞书群" value="" disabled={busy} onChange={event => {const group = manual.groups.find(item => item.id === event.target.value); if (group) switchMode({kind: 'bind', group: {chatId: group.id, name: group.name, addedAt: 0}});}}><option value="">请选择已加入的群</option>{manual.groups.map(group => <option key={group.id} value={group.id} disabled={group.bound}>{group.name}{group.bound ? '（已绑定）' : ''}</option>)}</select></FormField>{!manual.groups.length && <p>没有可显示的群。请确认机器人已加入目标群。</p>}{manual.nextCursor && <Button disabled={busy} onClick={() => void findGroups(manual.nextCursor)}>加载更多</Button>}</>}
+        {manual && <><FormField label="已经加入的飞书群"><select aria-label="选择飞书群" value="" disabled={busy} onChange={event => {const group = manual.groups.find(item => item.id === event.target.value); if (group) switchMode({kind: 'bind', group: {chatId: group.id, name: group.name, addedAt: 0, hasOtherBots: group.hasOtherBots}});}}><option value="">请选择已加入的群</option>{manual.groups.map(group => <option key={group.id} value={group.id} disabled={group.bound}>{group.name}{group.bound ? '（已绑定）' : ''}</option>)}</select></FormField>{!manual.groups.length && <p>没有可显示的群。请确认机器人已加入目标群。</p>}{manual.nextCursor && <Button disabled={busy} onClick={() => void findGroups(manual.nextCursor)}>加载更多</Button>}</>}
       </> : <>
         {mode.kind === 'bind' && <InlineNotice title={`绑定 ${mode.group.name}`}>Bot · {agent.name}</InlineNotice>}
         <FormField label={mode.kind === 'create' ? '飞书群名称' : '本地绑定名称'} error={nameProblem}><input aria-label={mode.kind === 'create' ? '飞书群名称' : '本地绑定名称'} maxLength={100} disabled={busy} value={name} onChange={event => setName(event.target.value)} /></FormField>
@@ -157,6 +157,7 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
         <FormField label="会话方式">
           <ChoiceGroup<Conversation | ''> label="会话方式" aria-required disabled={busy} value={conversation ?? ''} options={CONVERSATIONS} onChange={value => {if (value) {setConversation(value); setResponse(picked => keptResponse(value, picked));}}} />
         </FormField>
+        {mode.kind === 'bind' && mode.group.hasOtherBots && <p>群里还有别的 bot。几个 bot 都选智能，它们才能互相 @、各自判断接不接话。</p>}
         {freeAt && <SettingsGroup>
           <SettingsRow title="免 @" value={freeAt === 'all' ? '不 @ 也回' : '@ 我才回'} trailing={<select aria-label="免 @" disabled={busy} value={freeAt} onChange={event => setResponse(event.target.value === 'all' ? 'all' : 'mention')}><option value="all">开</option><option value="mention">关</option></select>} />
         </SettingsGroup>}

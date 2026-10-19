@@ -237,7 +237,7 @@ export const desktopSnapshotSchema = z.object({
 export type DesktopSnapshot = z.infer<typeof desktopSnapshotSchema>;
 export const folderChoiceSchema = z.object({ token: folderTokenSchema, displayPath: z.string() });
 export type FolderChoice = z.infer<typeof folderChoiceSchema>;
-export const pendingGroupSchema = z.object({chatId: groupIdSchema, name: z.string().min(1).max(1000), addedAt: z.number().finite().nonnegative()});
+export const pendingGroupSchema = z.object({chatId: groupIdSchema, name: z.string().min(1).max(1000), addedAt: z.number().finite().nonnegative(), hasOtherBots: z.boolean().optional()});
 export const pendingGroupsSchema = z.object({groups: z.array(pendingGroupSchema).max(1000)});
 export type PendingGroup = z.infer<typeof pendingGroupSchema>;
 export const commandResultSchema = z.discriminatedUnion("kind", [
@@ -245,7 +245,7 @@ export const commandResultSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("applied"), revision: z.number() }),
   z.object({ kind: z.literal("started"), jobId: jobIdSchema }),
   z.object({ kind: z.literal("folderChosen"), folder: folderChoiceSchema }),
-  z.object({ kind: z.literal("groups"), groups: z.array(z.object({ id: groupIdSchema, name: z.string(), bound: z.boolean() })), nextCursor: z.string().optional() }),
+  z.object({ kind: z.literal("groups"), groups: z.array(z.object({ id: groupIdSchema, name: z.string(), bound: z.boolean(), hasOtherBots: z.boolean().optional() })), nextCursor: z.string().optional() }),
   z.object({ kind: z.literal("cancelled") }),
   z.object({ kind: z.literal("activationPending"), message: z.string() }),
   z.object({ kind: z.literal("refused"), code: z.string(), message: z.string() }),

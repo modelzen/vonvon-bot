@@ -622,7 +622,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       const bound = new Set((await listProjectsIn(files.projectsFile)).map(project => project.chatId));
       const groups = (await readPendingGroups(pendingGroupsFile(files.projectsFile)))
         .flatMap(group => group.state === 'ready' && isAdmin(cfg, group.operator) && !bound.has(group.chatId)
-          ? [{ chatId: group.chatId, name: group.name, addedAt: group.addedAt }] : []);
+          ? [{ chatId: group.chatId, name: group.name, addedAt: group.addedAt, ...(group.hasOtherBots === undefined ? {} : { hasOtherBots: group.hasOtherBots }) }] : []);
       return { groups };
     },
     async joinedGroups(botId, cursor) {

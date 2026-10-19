@@ -314,6 +314,7 @@ import {
 } from './comments';
 import { createGracefulInterrupt, createIdlePause, Semaphore, withIdleTimeout, type IdlePause } from './watchdog';
 import { createBotRoster } from './bot-roster';
+import { readResponseRoster, responseMemberLabel } from './response-members';
 import { createNameBook, fetchChatMembers, resolveNames, withDeadline } from './names';
 
 /** 所有项目群成员的并集（去重）—— admins 加人的候选源（admins 通常是项目相关的人）。
@@ -4451,6 +4452,13 @@ export function createOrchestrator(
     return m;
   };
 
+  const responseNames = async (evt: CardActionEvent, project: Project): Promise<Map<string, string>> => {
+    const members = await orStop(readResponseRoster(channel, roster, project.chatId), { state: 'unavailable', entries: [], otherBots: false });
+    const names = await namesWithOperator(evt, project.allowedUsers ?? []);
+    for (const member of members.entries) names.set(member.openId, responseMemberLabel(member));
+    return names;
+  };
+
   function applyPref(evt: CardActionEvent, mut: (p: AppPreferences) => void): Promise<boolean> {
     if (!dmAdmin(evt.operator?.openId)) return Promise.resolve(false);
     const saved = writePreferences(mut).then(
@@ -4883,11 +4891,13 @@ export function createOrchestrator(
       // its card_id, so the result goes to a new card while the form stays above
       // as a 留痕. Detached so the click acks immediately (join is slow).
       void trackTask((async () => {
+        const info = chatId ? await orStop(topicCtx.chatInfo(chatId), { ok: false, topic: false }) : undefined;
+        const formWithBots = { ...form, hasOtherBots: info?.ok && info.bots !== undefined ? info.bots > 1 : undefined };
         let result;
         if (!chatId)
-          result = buildJoinGroupFormCard({ ...form, error: '缺少群标识，请重新从进群通知里打开绑定卡' });
-        else if (!name) result = buildJoinGroupFormCard({ ...form, error: '项目名不能为空' });
-        else if (!op) result = buildJoinGroupFormCard({ ...form, error: '无法识别操作者身份' });
+          result = buildJoinGroupFormCard({ ...formWithBots, error: '缺少群标识，请重新从进群通知里打开绑定卡' });
+        else if (!name) result = buildJoinGroupFormCard({ ...formWithBots, error: '项目名不能为空' });
+        else if (!op) result = buildJoinGroupFormCard({ ...formWithBots, error: '无法识别操作者身份' });
         else {
           try {
             if (!bindingBot) throw new Error('缺少机器人注册身份，请重启后再绑定');
@@ -4909,7 +4919,7 @@ export function createOrchestrator(
             log.info('console', 'join-group', { name: p.name, blank: p.blank, backend: p.backend, mode: p.mode });
             result = buildNewProjectDoneCard(p, kind === 'smart' && parseNoMentionPick(formValue) !== undefined, topic);
           } catch (err) {
-            result = buildJoinGroupFormCard({ ...form, error: err instanceof Error ? err.message : String(err) });
+            result = buildJoinGroupFormCard({ ...formWithBots, error: err instanceof Error ? err.message : String(err) });
           }
         }
         await sendManagedCard(channel, evt.chatId, result).catch((e) =>
@@ -5397,7 +5407,7 @@ export function createOrchestrator(
       patch(evt, async () => {
         const p = await getProjectByName(name);
         if (!p) return renderDmMenuCard();
-        return buildAllowlistCard(p, await namesWithOperator(evt, p.allowedUsers ?? []));
+        return buildAllowlistCard(p, await responseNames(evt, p));
       });
     })
     .on(DM.addAllowedForm, ({ evt, value }) => {
@@ -5406,7 +5416,7 @@ export function createOrchestrator(
       if (!name) return;
       patch(evt, async () => {
         const p = await getProjectByName(name);
-        const members = p?.chatId ? await fetchChatMembers(channel, p.chatId) : [];
+        const members = p?.chatId ? await readResponseRoster(channel, roster, p.chatId) : undefined;
         return buildAddAllowedCard(name, members);
       });
     })
@@ -5421,7 +5431,7 @@ export function createOrchestrator(
         if (id) await updateProject(name, (p) => ({ allowedUsers: Array.from(new Set([...(p.allowedUsers ?? []), id])) }));
         const fresh = await getProjectByName(name); // 写后回读，卡片显示与盘上一致
         if (!fresh) return;
-        const card = buildAllowlistCard(fresh, await namesWithOperator(evt, fresh.allowedUsers ?? []));
+        const card = buildAllowlistCard(fresh, await responseNames(evt, fresh));
         await sendManagedCard(channel, evt.chatId, card).catch((e) => log.fail('console', e, { phase: 'allow-add-result' }));
       })());
     })
@@ -5433,7 +5443,7 @@ export function createOrchestrator(
         await updateProject(name, (p) => ({ allowedUsers: (p.allowedUsers ?? []).filter((x) => x !== id) }));
         const fresh = await getProjectByName(name); // 写后回读，与盘上一致
         if (!fresh) return renderDmMenuCard();
-        return buildAllowlistCard(fresh, await namesWithOperator(evt, fresh.allowedUsers ?? []));
+        return buildAllowlistCard(fresh, await responseNames(evt, fresh));
       });
     })
     // 项目设置卡（可扩展容器）：打开 + DM 版免@开关（携带项目名 n，不能靠 evt.chatId）。
@@ -7830,7 +7840,8 @@ export function createOrchestrator(
       if (!name) throw new Error('无法读取飞书群名称');
       // Feishu also returns topic; the SDK declaration only lists group and p2p.
       const chatType: string = info.chatType;
-      return { state: 'ready', name, topic: chatType === 'topic' || (await topicCtx.chatInfo(chatId)).topic };
+      const mode = await topicCtx.chatInfo(chatId);
+      return { state: 'ready', name, topic: chatType === 'topic' || mode.topic, ...(mode.ok && mode.bots !== undefined ? { hasOtherBots: mode.bots > 1 } : {}) };
     },
     onError: error => log.fail('intake', error, { phase: 'pending-groups' }),
   });
@@ -7909,6 +7920,7 @@ export function createOrchestrator(
       }
       const fullOnly = Boolean(backendFor(DEFAULT_BACKEND_ID).fullAccessOnly?.());
       const card = buildJoinGroupFormCard({ chatId: evt.chatId, name, topic, backends, backend,
+        hasOtherBots: mode.ok && mode.bots !== undefined ? mode.bots > 1 : undefined,
         fullOnly, addedBy: admin ? undefined : { name: adderName } });
       const sent = await orStop(sendManagedCard(channel, to, card, undefined, false, 'open_id').then(() => 'yes', error => {
         log.fail('intake', error, { phase: 'bot-added-bindcard', to: admin ? 'adder' : 'owner' });
@@ -8231,7 +8243,7 @@ export function createOrchestrator(
   // 首次真实调用会自动重试，fallback 绝不被钉死（listModels 包装层也不缓存）。
   void trackTask(backend.listModels().catch((err) => log.fail('agent', err, { phase: 'models-prewarm' })));
 
-  const settings = createSettingsOwner({ cfg, backendFor, evictLiveSessionsForChat, writePreferences, voiceAction: voice.action, refreshCompletionReminders: refreshCompletionReminderCards });
+  const settings = createSettingsOwner({ responseRoster: (chatId) => orStop(readResponseRoster(channel, roster, chatId), { state: 'unavailable', entries: [], otherBots: false }), cfg, backendFor, evictLiveSessionsForChat, writePreferences, voiceAction: voice.action, refreshCompletionReminders: refreshCompletionReminderCards });
   const executeAdminWrite = createAdminWriteExecutor({ cfg, backendFor, evictLiveSessionsForChat, writePreferences, voiceAction: voice.action, settings });
   const adminExecute = async (op: AdminWriteOp): Promise<AdminWriteResult> => {
     const result = await executeAdminWrite(op);

@@ -287,3 +287,17 @@ it('s36d2: a group whose backend left the catalog runs Codex and shows the Codex
   p = await owner.read(project) as ProjectSettingsView;
   expect(p.sections.model.effective.selection).toEqual({ kind: 'explicit', model: 'fixture-model', effort: 'low' });
 });
+
+it('s28c: a partial or unavailable roster never replaces saved response members or changes their revision', async () => {
+  await updateProject('demo', () => ({ allowedUsers: ['ou_saved'] }));
+  const responseRoster = vi.fn().mockResolvedValue({ state: 'partial', entries: [{ openId: 'ou_bot', name: 'Bot', kind: 'bot' }], otherBots: true });
+  const { owner } = await fixture({ responseRoster });
+  const before = await owner.read(project) as ProjectSettingsView;
+  expect(before.members.openIds).toEqual(['ou_saved']);
+  expect(before.members.roster?.entries[0]?.openId).toBe('ou_bot');
+  responseRoster.mockResolvedValue({ state: 'unavailable', entries: [], otherBots: false });
+  const after = await owner.read(project) as ProjectSettingsView;
+  expect(after.members.openIds).toEqual(['ou_saved']);
+  expect(after.members.revision).toBe(before.members.revision);
+  expect((await getProjectByName('demo'))?.allowedUsers).toEqual(['ou_saved']);
+});

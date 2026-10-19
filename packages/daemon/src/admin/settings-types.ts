@@ -200,6 +200,7 @@ export interface ProjectSettingsView {
     fullOnly?: string;
   };
   members: {
+    roster?: import("@vonvon/protocol").ResponseRoster;
     openIds: string[];
     revision: string;
   };
