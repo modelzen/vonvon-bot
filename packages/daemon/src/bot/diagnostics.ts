@@ -60,10 +60,12 @@ export function errorDetail(error: unknown): string | undefined {
 export const NOT_REPLIED_LIMIT = 30;
 const DENIED_SCOPE_LIMIT = 10;
 const MERGE_MS = 10 * 60_000;
-/** Of the 30, the most kept for the smart mode's normal outcomes (s25): a busy group's quiet judgements do
- * not push out the failures the page is for. */
+/** Of the 30, the most kept for the smart mode's normal outcomes (s25), another bot's @ past the cap or dropped by
+ * a setting included (s27a-0): a busy group's quiet records do not push out the failures the page is for. */
 export const QUIET_LIMIT = 10;
-const QUIET_REASONS: ReadonlySet<NotRepliedReason> = new Set(['judge-skip', 'judge-superseded', 'judge-empty']);
+const QUIET_REASONS: ReadonlySet<NotRepliedReason> = new Set([
+  'judge-skip', 'judge-superseded', 'judge-empty', 'bot-wake-cap', 'bot-wake-not-allowed', 'bot-wake-dropped',
+]);
 
 export interface DiagnosticsStore {
   accept(appId: string, event: DiagnosticsEvent): void;

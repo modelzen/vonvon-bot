@@ -1,11 +1,12 @@
 import { z } from "zod";
 
 /** Why a message to this bot got no answer (product.md 3.1 item 8). Gates first, then failed turns, then queued
- * messages a restart dropped (s18c), then the smart mode's judgements (s25). */
+ * messages a restart dropped (s18c), then the smart mode's judgements (s25), then another bot's @ (s27a-0). */
 export const notRepliedReasonSchema = z.enum([
   "group-disabled", "group-updating", "chat-not-allowed", "user-not-allowed", "unbound", "lookup-failed",
   "signed-out", "codex-too-old", "tool-missing", "tier-unavailable", "missing-scope", "quota", "network", "idle-timeout", "agent-exited", "failed",
   "restarted", "judge-skip", "judge-failed", "judge-budget", "judge-superseded", "judge-empty",
+  "bot-wake-cap", "bot-wake-failed", "bot-wake-not-allowed", "bot-wake-dropped",
 ]);
 export type NotRepliedReason = z.infer<typeof notRepliedReasonSchema>;
 /** Where a running bot was refused a scope: the back-fill, real names, a group's info, or a reply. */
@@ -81,6 +82,22 @@ export const NOT_REPLIED_TEXT: Record<NotRepliedReason, Text> = {
   "judge-empty": {
     reason: r => `自己接话后没有要说的，${r.detail ?? "删掉了空卡"}`,
     next: () => "智能模式下这是正常的。总是这样就改智能提示词，让它少接话。",
+  },
+  "bot-wake-cap": {
+    reason: () => "自上一条真人消息起，Bot 之间已互相叫醒 6 次，到了上限，这条 Bot 的 @ 没回",
+    next: () => "不用处理。真人在这个位置说一句，Bot 之间就能接着来。",
+  },
+  "bot-wake-failed": {
+    reason: r => `没数出 Bot 之间叫醒了几次${r.detail ? `（${r.detail}）` : ""}，这条 Bot 的 @ 没回`,
+    next: () => "飞书接口偶尔出错；反复出现时看下面的日志和上面「缺的权限」。",
+  },
+  "bot-wake-not-allowed": {
+    reason: () => "这个群设了「响应成员」，别的 Bot 的 @ 叫不醒它",
+    next: () => "这是设置的效果。要让 Bot 之间互相 @，在群内设置里清空「响应成员」。",
+  },
+  "bot-wake-dropped": {
+    reason: r => `这条 Bot 的 @ 没处理${r.detail ? `：${r.detail}` : ""}`,
+    next: () => "不用处理。真人说一句，Bot 之间就能接着来。",
   },
 };
 

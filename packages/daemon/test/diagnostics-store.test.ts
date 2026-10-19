@@ -63,6 +63,17 @@ describe('diagnostics store', () => {
     expect(store.view('cli_a')!.notReplied).toHaveLength(NOT_REPLIED_LIMIT);
   });
 
+  it('counts another bot\'s @ past the cap, refused by a setting or dropped as quiet; a failed count is not (s27a-0)', () => {
+    const store = createDiagnosticsStore({ changed: () => {} });
+    store.accept('cli_a', replied({ reason: 'quota' }));
+    for (let i = 0; i < 30; i++) store.accept('cli_a', replied({ groupId: `oc_${i}`, reason: (['bot-wake-cap', 'bot-wake-not-allowed', 'bot-wake-dropped'] as const)[i % 3], at: 1_000_000 + i }));
+    expect(store.view('cli_a')!.notReplied.filter(item => item.reason !== 'quota')).toHaveLength(QUIET_LIMIT);
+    for (let i = 0; i < 30; i++) store.accept('cli_a', replied({ groupId: `oc_w${i}`, reason: 'bot-wake-failed', at: 2_000_000 + i }));
+    const failed = store.view('cli_a')!.notReplied;
+    expect(failed).toHaveLength(NOT_REPLIED_LIMIT);
+    expect(failed.every(item => item.reason === 'bot-wake-failed')).toBe(true);
+  });
+
   it('drops a deleted bot, and refreshes the page at most once a second', () => {
     vi.useFakeTimers();
     const changed = vi.fn();
