@@ -67,6 +67,8 @@ const fake = vi.hoisted(() => ({
 }));
 const startThread = vi.fn(async () => ({
   sessionId: 'native-fixture', isAlive: () => true, close: async () => {}, abort: async () => {}, steer: async () => {},
+  runGoal: () => ({ events: fake.events?.() ?? (async function* () {})() }),
+  clearGoal: async () => {},
   runStreamed: (input: { text: string }) => {
     fake.inputs.push(input.text);
     return { turnId: () => 'turn-fixture', events: fake.events?.() ?? (async function* () { yield { type: 'done', turnId: 'turn-fixture' }; })() };
@@ -103,6 +105,7 @@ vi.mock('../src/card/run-card-stream', () => ({
 }));
 
 import { createOrchestrator } from '../src/bot/handle-message';
+import * as sessionStore from '../src/bot/session-store';
 
 const BOT = { openId: 'ou_bot', name: '小码' };
 const APP = 'cli_fixture';
@@ -953,6 +956,176 @@ describe('bot wake fallbacks and queued turns (s27a)', () => {
     await orchestrator.onMessage({ ...msg, raw: { sender: { sender_type: senderType } } });
   };
   const answered = (n = 1) => vi.waitFor(() => expect(fake.inputs).toHaveLength(n));
+
+  it('records a bot mention during /goal without sending the goal-busy explanation, while a person gets it', async () => {
+    const gate = deferred<void>();
+    fake.events = async function* () { yield { type: 'text', itemId: 'goal-output', text: '正在整理' }; await gate.promise; };
+    try {
+      await send(says('/goal 整理文档', { at: true, thread: 'omt_busy_goal' }));
+      await vi.waitFor(() => expect(fake.cards).toHaveLength(1));
+      const m = says('BOT_GOAL_BUSY', { at: true, thread: 'omt_busy_goal' });
+      await botSays(m); await decide(m, result('reply'));
+      await vi.waitFor(() => expect(records().filter(record => record.reason === 'bot-wake-dropped')).toHaveLength(1));
+      expect(records().find(record => record.reason === 'bot-wake-dropped')).toMatchObject({ detail: '会话在跑 /goal' });
+      expect(JSON.stringify(fake.send.mock.calls)).not.toContain('目标运行中');
+      await send(says('HUMAN_GOAL_BUSY', { at: true, thread: 'omt_busy_goal' }));
+      await vi.waitFor(() => expect(JSON.stringify(fake.send.mock.calls)).toContain('目标运行中'));
+      expect(fake.inputs).toEqual([]);
+    } finally { gate.resolve(); }
+  });
+
+  it('drops a bot message sent before /new without asking it to resend', async () => {
+    const gate = deferred<void>();
+    const create = startThread.getMockImplementation();
+    if (!create) throw new Error('thread fixture missing');
+    startThread.mockImplementationOnce(async () => { await gate.promise; return create(); });
+    const m = says('BOT_BEFORE_NEW', { at: true });
+    try {
+      await send(says('/new', { at: true }));
+      await vi.waitFor(() => expect(startThread).toHaveBeenCalledOnce());
+      await botSays(m); await decide(m, result('main'));
+      await vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'deferred', expect.objectContaining({ msgId: idOf(m) })));
+      gate.resolve();
+      await vi.waitFor(() => expect(records().filter(record => record.reason === 'bot-wake-dropped')).toHaveLength(1));
+      expect(records().find(record => record.reason === 'bot-wake-dropped')).toMatchObject({ detail: '会话换成了新的（/new）' });
+      expect(JSON.stringify(fake.send.mock.calls)).not.toContain('这条在');
+      expect(fake.inputs).toEqual([]);
+    } finally { gate.resolve(); }
+  });
+
+  it('drops bot intake finishing after stop without asking for a resend', async () => {
+    const run = deferred<void>(); const context = deferred<void>(); const reading = deferred<void>();
+    fake.events = async function* () { await run.promise; yield { type: 'done', turnId: 'turn-fixture' }; };
+    try {
+      await send(says('RUNNING', { at: true, thread: 'omt_cancelled' })); await answered();
+      const m = { ...says('BOT_CANCELLED', { at: true, thread: 'omt_cancelled' }), parent_id: 'om_quoted' };
+      await botSays(m); await judged(m);
+      fake.get.mockImplementationOnce(async () => { reading.resolve(); await context.promise; return { code: 0, data: { items: [] } }; });
+      await decide(m, result('reply')); await vi.waitFor(() => expect(fake.get).toHaveBeenCalledWith(expect.objectContaining({ path: { message_id: 'om_quoted' } }))); await reading.promise;
+      const stopping = orchestrator.dispatcher.handle({ messageId: 'card_1', chatId: CHAT, operator: { openId: 'ou_owner' }, action: { value: { a: 'run.stop', m: 'card_1' } } } as never);
+      await settle(); context.resolve(); run.resolve(); await stopping;
+      await vi.waitFor(() => expect(records().filter(record => record.reason === 'bot-wake-dropped')).toHaveLength(1));
+      expect(records().find(record => record.reason === 'bot-wake-dropped')).toMatchObject({ detail: '会话被停下了' });
+      expect(fake.log.info).toHaveBeenCalledWith('intake', 'bot-wake-dropped', expect.objectContaining({ why: 'intake-cancelled' }));
+      expect(JSON.stringify(fake.send.mock.calls)).not.toContain('请重发');
+      expect(fake.inputs).toHaveLength(1);
+    } finally { context.resolve(); run.resolve(); }
+  });
+
+  it('quietens repeated full-only explanations for bots while human mentions still get an explanation', async () => {
+    fake.project = { ...base, mode: 'qa' }; fake.fullOnly = true;
+    for (let i = 0; i < 2; i++) {
+      const m = says('BOT_FULL_ONLY', { at: true, thread: `omt_full_bot_${i}` });
+      await botSays(m); await decide(m, result('reply'));
+      await vi.waitFor(() => expect(records()).toHaveLength(i + 1));
+    }
+    expect(fake.send).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 2; i++) await send(says('HUMAN_FULL_ONLY', { at: true, thread: `omt_full_human_${i}` }));
+    await vi.waitFor(() => expect(records()).toHaveLength(4));
+    expect(fake.send).toHaveBeenCalledTimes(3);
+    expect(records().every(record => record.reason === 'tier-unavailable')).toBe(true);
+    expect(fake.inputs).toEqual([]);
+  });
+
+  it.each([['failed', 0], ['failed', 1], ['stopped', 0], ['stopped', 1]] as const)('asks only people in a dropped queue to resend (%s, people=%s)', async (terminal, people) => {
+    fake.project = { ...base, pendingPolicy: 'queue' };
+    const gate = deferred<void>();
+    fake.events = async function* () {
+      await gate.promise;
+      if (terminal === 'failed') throw new Error('controlled failure');
+      else yield { type: 'done', turnId: 'turn-fixture' };
+    };
+    await send(says('RUNNING', { at: true, thread: 'omt_dropped' })); await answered();
+    const m = says('BOT_DROPPED', { at: true, thread: 'omt_dropped' });
+    await botSays(m); await decide(m, result('reply'));
+    await vi.waitFor(() => expect(fake.log.info.mock.calls.filter(call => call[1] === 'queued')).toHaveLength(1));
+    if (people) {
+      await send(says('HUMAN_DROPPED', { at: true, thread: 'omt_dropped' }));
+      await vi.waitFor(() => expect(fake.log.info.mock.calls.filter(call => call[1] === 'queued')).toHaveLength(2));
+    }
+    const stopping = terminal === 'stopped' ? orchestrator.dispatcher.handle({ messageId: 'card_1', chatId: CHAT, operator: { openId: 'ou_owner' }, action: { value: { a: 'run.stop', m: 'card_1' } } } as never) : undefined;
+    await settle(); gate.resolve(); await stopping;
+    await vi.waitFor(() => expect(records().filter(record => record.reason === 'bot-wake-dropped')).toHaveLength(1));
+    expect(records().find(record => record.reason === 'bot-wake-dropped')).toMatchObject({ detail: terminal === 'failed' ? '前一轮出错，排队的没跑' : '会话被停下了' });
+    if (people) await vi.waitFor(() => expect(JSON.stringify(fake.send.mock.calls)).toContain('1 条排队消息'));
+    else expect(JSON.stringify(fake.send.mock.calls)).not.toContain('条排队消息');
+    expect(JSON.stringify(fake.send.mock.calls)).not.toContain('2 条排队消息');
+    expect(fake.inputs).toHaveLength(1);
+  });
+
+  it.each([0, 1])('counts only people queued while a desktop resume fails (people=%s)', async people => {
+    const gate = deferred<void>();
+    fake.readHistory.mockImplementationOnce(async () => { await gate.promise; throw new Error('controlled resume'); });
+    const resume = orchestrator.collaboration({ action: 'resume', projectName: 'demo', chatId: CHAT, sessionId: 'past', backend: 'codex-appserver' }).catch(() => undefined);
+    try {
+      await vi.waitFor(() => expect(fake.readHistory).toHaveBeenCalledOnce());
+      const m = says('BOT_OCCUPIED', { at: true });
+      await botSays(m); await decide(m, result('main'));
+      await vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued', expect.anything()));
+      if (people) {
+        const human = says('HUMAN_OCCUPIED', { at: true });
+        await send(human); await decide(human, result('main'));
+        await vi.waitFor(() => expect(fake.log.info.mock.calls.filter(call => call[1] === 'queued')).toHaveLength(2));
+      }
+      gate.resolve(); await resume;
+      expect(records().filter(record => record.reason === 'bot-wake-dropped')).toEqual([expect.objectContaining({ detail: '会话被占用' })]);
+      if (people) expect(JSON.stringify(fake.send.mock.calls)).toContain('切回期间收到的 1 条消息未执行，请重发');
+      else expect(JSON.stringify(fake.send.mock.calls)).not.toContain('请重发');
+      expect(fake.inputs).toEqual([]);
+    } finally { gate.resolve(); await resume; }
+  });
+
+  it.each(['main', 'topic'] as const)('reports the actual %s location when desktop compact drops a bot queue', async place => {
+    const key = place === 'main' ? CHAT : 'omt_compact_diagnostic';
+    const location = place === 'main' ? {} : { thread: key };
+    const gate = deferred<void>(); const entered = deferred<void>();
+    const create = startThread.getMockImplementation();
+    if (!create) throw new Error('thread fixture missing');
+    startThread.mockImplementationOnce(async () => ({ ...await create(), compact: async () => {
+      entered.resolve(); await gate.promise; return {};
+    } }));
+    const record = { threadId: key, chatId: CHAT, cwd: '/tmp/demo', sessionId: 'native-fixture',
+      backend: 'codex-appserver', summary: 'fixture', createdAt: 1, updatedAt: 1 };
+    const list = vi.spyOn(sessionStore, 'listSessions').mockResolvedValue([record]);
+    fake.sessions[key] = record;
+    let compact: Promise<unknown> | undefined;
+    try {
+      const first = says('WARM_SESSION', { at: true, ...location });
+      await send(first);
+      if (place === 'main') await decide(first, result('main'));
+      await vi.waitFor(() => expect(fake.finals).toHaveLength(1)); await settle();
+      compact = orchestrator.collaboration({ action: 'compact', projectName: 'demo', chatId: CHAT, threadId: key });
+      await entered.promise;
+      const bot = says('BOT_DURING_COMPACT', { at: true, ...location });
+      await botSays(bot); await decide(bot, result(place === 'main' ? 'main' : 'reply'));
+      await vi.waitFor(() => expect(fake.log.info.mock.calls.filter(call => call[1] === 'queued')).toHaveLength(1));
+      const human = says('HUMAN_DURING_COMPACT', { at: true, ...location });
+      await send(human);
+      if (place === 'main') await decide(human, result('main'));
+      await vi.waitFor(() => expect(fake.log.info.mock.calls.filter(call => call[1] === 'queued')).toHaveLength(2));
+      gate.resolve(); await compact;
+      expect(records().filter(record => record.reason === 'bot-wake-dropped')).toEqual([
+        expect.objectContaining({ place, detail: '会话被占用' }),
+      ]);
+      expect(fake.send).toHaveBeenLastCalledWith(CHAT, { markdown: '操作期间收到的 1 条消息未执行，请重发。' });
+      expect(fake.inputs).toHaveLength(1);
+    } finally { gate.resolve(); await compact; list.mockRestore(); }
+  });
+
+  it('drops a queued bot during shutdown without adding diagnostics or asking for a resend', async () => {
+    fake.project = { ...base, pendingPolicy: 'queue' };
+    const gate = deferred<void>();
+    fake.events = async function* () { await gate.promise; yield { type: 'done', turnId: 'turn-fixture' }; };
+    await send(says('RUNNING', { at: true, thread: 'omt_shutdown_queue' })); await answered();
+    const m = says('BOT_SHUTDOWN', { at: true, thread: 'omt_shutdown_queue' });
+    await botSays(m); await decide(m, result('reply'));
+    await vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued', expect.anything()));
+    const stopping = orchestrator.shutdown(); await settle(); gate.resolve(); await stopping;
+    expect(records()).toEqual([]);
+    expect(JSON.stringify(fake.send.mock.calls)).not.toContain('请重发');
+    expect(fake.log.info).toHaveBeenCalledWith('bridge', 'shutdown_dropped', { queued: 1, held: 0, compacts: 0 });
+    expect(fake.inputs).toHaveLength(1);
+  });
 
   it('fetches a bot card text by id', async () => {
     const m = { ...says('', { at: true, thread: 'omt_card' }), message_type: 'interactive', content: JSON.stringify({ text: '降级占位' }) };
