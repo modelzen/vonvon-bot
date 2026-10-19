@@ -591,7 +591,7 @@ owner 的话："确认卡、选项卡、授权卡这些需要用户交互、用�
   - Claude：不一样。Claude Code 的子 agent 默认在后台跑，经 Agent SDK 用时也是；主回合可以先结束，子 agent 跑完再通知 Claude 起新的一轮（code.claude.com/docs/en/sub-agents）。实测里一条消息出了 4 到 6 个结果。设置 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` 后，子 agent 一律在前台跑，主回合等它们都结束，一条消息只有一个结果，几个子 agent 之间仍然并行（实测，`docs/research/2026-10-14-v1-spikes/e01-background-tasks.md`）。代价是它同时关掉后台 Bash 等所有后台任务，比如 bot 不能在后台起一个开发服务器再结束这一轮；模型要在后台跑命令时会先报错一次，再改成前台跑。第一版在 bot 的 Claude 会话里打开这个开关，两家行为就一致了。这是 Claude 的决定。前台子 agent 跑着时按 ⏹ 多久能停下还没测，s35 开工时补测（e01）；停不下来的话，回头再定。
 - 子 agent 跑的时候，群里的新消息按今天的规则插话或排队，只给父 agent。第一版不能直接跟某个子 agent 说话。
 - Codex 的子 agent 跟着用户自己的 Codex 设置走：Vonvon 不在会话里替用户打开或关掉 `features.multi_agent`，用户开了就显示子 agent，没开 Codex 那一侧就没有子 agent，只有 Claude 一侧有（owner 2026-10-19）。Vonvon 自己的标题任务和判断线程照旧关着子 agent。
-- 今天 Codex 的子线程事件全丢了，Claude 子 agent 的步骤混进了主过程（`D/agent/codex-appserver/backend.ts:333-337`；`D/agent/claude-agent/event-map.ts:92-123`），第一版要修。
+- s34a 已修复 Codex 丢弃子线程事件和 Claude 子 agent 步骤混进主过程的问题。Codex 由 `D/agent/codex-appserver/backend.ts` 的 `routeNotification` 登记并接收子线程通知，Claude 由 `D/agent/claude-agent/event-map.ts` 的子通道隔离步骤。
 
 ### 3.10 后台服务和崩溃
 

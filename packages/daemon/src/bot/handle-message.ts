@@ -541,6 +541,15 @@ export function isCompletionReminderRequester(operatorOpenId?: string, requester
   return Boolean(operatorOpenId && requesterOpenId && operatorOpenId === requesterOpenId);
 }
 
+function logSubagentChanges(before: RunState['subagents'] = [], after: RunState['subagents'] = []): void {
+  for (const row of after) {
+    const previous = before.find(old => old.id === row.id);
+    if (!previous || (row.status !== 'running' && row.status !== previous.status)) {
+      log.info('agent', 'subagent', { id: row.id.slice(-6), status: previous ? row.status : 'start', steps: row.steps.length });
+    }
+  }
+}
+
 /**
  * Settle an ordinary turn after its event stream closes. A dead backend can
  * close the async iterator without ever emitting `done` or a fatal `error`; in
@@ -553,6 +562,7 @@ export function settleOrdinaryTurnRender(
   render: RunRender,
   input: { interrupted: boolean; timedOut: boolean; idleTimeoutSeconds: number; procDead: boolean },
 ): void {
+  const subagents = render.snapshot().subagents;
   if (input.interrupted) render.interrupt();
   else if (input.timedOut) render.timeout(input.idleTimeoutSeconds);
   else if (input.procDead && render.terminal() === 'running') {
@@ -561,6 +571,7 @@ export function settleOrdinaryTurnRender(
     // finalize() is a no-op for explicit done/error terminals.
     render.finalize();
   }
+  logSubagentChanges(subagents, render.snapshot().subagents);
 }
 
 /** A turn that started but did not answer: the error it threw, or the run state it ended in. */
@@ -1337,6 +1348,10 @@ export function createOrchestrator(
     const senderType = rawSender(msg)?.sender_type;
     return senderType === 'user' ? 'user' : 'unknown';
   }
+  function typedCandidate(msg: NormalizedMessage): boolean {
+    return (msg.rawContentType === 'text' || msg.rawContentType === 'post') && msg.content.trim().length > 0
+      && !messageHasImages(msg) && !messageHasFiles(msg);
+  }
   /** Who sent a message, as the topic registry records it. */
   function senderOf(msg: NormalizedMessage): TopicPerson {
     return topicPerson(fromBot(msg) ? 'bot' : 'user', msg.senderId);
@@ -2105,6 +2120,11 @@ export function createOrchestrator(
         await postContextCard(msg, ts.sessionKey, false);
         return;
       }
+      if (!cmd && !goalObjective && typedCandidate(msg)) {
+        const typed = asks.typed({ chatId: msg.chatId, place: ts.sessionKey, senderId: msg.senderId,
+          senderKind: askRequesterKind(msg), text, createTime: msg.createTime });
+        if (typed === 'answered') { markSeen(ts.sessionKey, { id: msg.messageId, at: msg.createTime }); return; }
+      }
       // Smart: a judgement decides (s25); the refusal of a tier the backend cannot run waits for it to say reply.
       if (smart && !goalObjective) {
         if (await alreadySeen(msg, ts.sessionKey)) return;
@@ -2162,6 +2182,11 @@ export function createOrchestrator(
       if (cmd === 'context') {
         await postContextCard(msg, ts.sessionKey, true);
         return;
+      }
+      if (!cmd && !goalObjective && typedCandidate(msg)) {
+        const typed = asks.typed({ chatId: msg.chatId, place: ts.sessionKey, senderId: msg.senderId,
+          senderKind: askRequesterKind(msg), text, createTime: msg.createTime });
+        if (typed === 'answered') { markSeen(ts.sessionKey, { id: msg.messageId, at: msg.createTime }); return; }
       }
       // Smart: an unnamed topic message is judged, only reply or not (s25); a named one is answered as before.
       if (smart && audience === 'nobody' && !goalObjective) {
@@ -6642,7 +6667,9 @@ export function createOrchestrator(
           }
           lastEvAt = tEv;
           evCount++;
+          const subagents = render.snapshot().subagents;
           render.apply(ev);
+          logSubagentChanges(subagents, render.snapshot().subagents);
           // Track context usage for /context and the next turn's meter. Only
           // auto-compaction reaches the turn loop (a manual /compact drains its own
           // events); it shows as a line on this card, and Claude's post-compaction
@@ -7101,7 +7128,9 @@ export function createOrchestrator(
       clearInterval(ctx.clock);
       ctx.clock = undefined;
       await ctx.stream.drain();
+      const subagents = ctx.render.snapshot().subagents;
       ctx.render.finalize();
+      logSubagentChanges(subagents, ctx.render.snapshot().subagents);
       ctx.rc.rs = ctx.render.snapshot();
       const answerText = finalMessageText(ctx.rc.rs);
       ctx.rc.localFiles = await outboundFiles.prepare(answerText, {
@@ -7268,7 +7297,14 @@ export function createOrchestrator(
           beginGoalSessionTitle();
           if (topicThreadId) requestGoalSessionTitleApply();
           await finalizeCard(cur); // close the previous turn's card (if it produced one)
-          cur = startTurn(); // render-only; the card is sent lazily on first content
+          cur = startTurn(); // existing topics still send the card lazily on first content
+          if (activeKey.startsWith('pending:')) {
+            // A new goal needs a real topic before its first ask can accept text.
+            // Anchor both the active run and the question to the same run card.
+            await ensureCard(cur);
+            if (activeKey.startsWith('pending:')) throw new Error('Goal topic could not be resolved');
+            askPlacement.replyTo = cur.cardMsgId!;
+          }
           askTurn = asks.openTurn({ run, sessionKey: activeKey, placement: askPlacement,
             initiator: { kind: opts.requesterKind ?? 'unknown', openId: opts.requesterOpenId }, idlePause,
             waiting: label => { askWaiting = label; if (cur) { cur.rc.askWaiting = label; if (cur.stream) cur.stream.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID); } },
@@ -7300,8 +7336,18 @@ export function createOrchestrator(
           if (!ev.willRetry) { askTurn?.close('turn-ended'); askTurn = undefined; goalErrorMsg = ev.message; }
           if (!cur) continue; // set-failure before any turn → terminal card only
         }
+        if (ev.type === 'subagent_start' || ev.type === 'subagent_step' || ev.type === 'subagent_status') {
+          if (cur) {
+            const subagents = cur.render.snapshot().subagents;
+            cur.render.apply(ev);
+            logSubagentChanges(subagents, cur.render.snapshot().subagents);
+          }
+          continue;
+        }
         if (!cur) cur = startTurn();
+        const subagents = cur.render.snapshot().subagents;
         cur.render.apply(ev);
+        logSubagentChanges(subagents, cur.render.snapshot().subagents);
         // Reasoning ALONE doesn't warrant a card (a planning-only turn must not leave
         // an empty box); only real output (text / tool calls) sends the card. Once a
         // card exists, keep streaming everything (incl. reasoning) into it.
@@ -7320,7 +7366,11 @@ export function createOrchestrator(
       state.idlePause = undefined;
       // ⏹ 终止: mark the in-flight turn's card as interrupted before finalizing
       // (finalize() is a no-op once terminal, so this doesn't clash).
-      if (interrupted && cur) cur.render.interrupt();
+      if (interrupted && cur) {
+        const subagents = cur.render.snapshot().subagents;
+        cur.render.interrupt();
+        logSubagentChanges(subagents, cur.render.snapshot().subagents);
+      }
       await finalizeCard(cur);
       cur = null;
       // Covers a goal that produced no content card (and therefore never called
@@ -7356,6 +7406,21 @@ export function createOrchestrator(
     } catch (err) {
       askTurn?.close('turn-ended');
       log.fail('intake', err);
+      await opts.thread.clearGoal().catch(error => log.fail('agent', error, { phase: 'goal-clear' }));
+      if (cur?.stream && cur.cardMsgId) {
+        clearInterval(cur.clock);
+        cur.render.apply({ type: 'error', message: err instanceof Error ? err.message : String(err), willRetry: false });
+        cur.rc.rs = cur.render.snapshot();
+        cur.rc.askWaiting = undefined;
+        // Do not repeat finalizeCard's file/image I/O after a failure. Drain old
+        // frames, then retire the card without controls; a second failure stays secondary.
+        try {
+          await cur.stream.drain();
+          await cur.stream.updateCard(channel, buildRunCardPlain(cur.rc));
+        } catch (error) { log.fail('card', error, { phase: 'goal-failure-card' }); }
+        runStreams.delete(cur.cardMsgId);
+        runCards.delete(cur.cardMsgId);
+      }
       await channel
         .send(opts.chatId, { markdown: runFailureMessage(err, 0, opts.sessionNotice) }, { replyTo: opts.replyTo, replyInThread: !opts.flat })
         .catch(() => undefined);

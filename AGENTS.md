@@ -4,6 +4,26 @@
 
 2026-10-14 起生效，取代 2026-10-13 的版本，适用于 v1 开发。2026-10-16 起，Mac 上的 Codex 由 Claude 经 Paseo 直接开会话，一个任务一个会话，结果贴回 GitHub；Paseo 用不了时（连不上、开不了会话，或者 #322 上还有活着的队列会话），才把任务贴进队列 issue #322 请 owner 转发，见"工具和同步"。2026-10-19 起又以 #322 为主：owner 在 Codex App 里开队列会话，Claude 往 #322 贴任务，经 Paseo 开 Mac 会话只在 owner 要求时用（见"2026-10-19 起"）。两台机器读同一份规则。本文的 owner 指用户本人；旧的 `owner:` 标签不再使用。Claude 的非平凡任务用 Ultracode 工作流编排。Claude 侧的会话、模型和通知格式另见 JP-VPS 上的 `/home/ops/.claude/vonvon-collaboration.md`，这个文件不在仓库里，Mac 上没有。
 
+## 2026-10-19 晚起：Codex 审查、合入和派活
+
+owner 2026-10-19 晚定。当时 Claude 的周额度只剩约 25%，还要撑 5 天，owner 要在这 5 天里把 v1 全部做完、发布。这是"Claude 额度用完时"那一节的 owner 指定，和下文冲突的以本节为准。
+
+- **总管：** JP-VPS 上一个 Codex 会话，模型 gpt-6-astra，由 Claude 经 Paseo 开。它负责：
+  - 审查 PR，产品 PR 和文档 PR 都审；
+  - 往 #322、#422 贴改 PR 的任务；
+  - 同步 `main`、打 `frozen`、等 CI、合入、清理；
+  - 派下一片、发里程碑预览版任务。
+
+  做法全在 #436 正文。
+- **实现：** 照旧是 Mac（#322）和 JP-VPS（#422）上的 Codex，模型 gpt-6.1-sol。审查者和作者不是同一个模型。
+- **计划：**
+  - s31、s35、s46、s61、s62 由 Claude 写，走文档 PR。
+  - 其余没有计划的片，由实现者先照 `docs/plans/README.md` 写计划，计划和代码放在同一个 PR 里，由总管一起审。
+- **Claude：** 只写上面那几份计划，把总管在 #436 贴的 `codex-need-claude` 转告 owner，发布前把关。不再审查每个 PR。
+- **在飞：** 产品 PR 最多 6 个（原来 4 个），计数方法照旧。
+- **v1 的范围：** 照 `docs/v1-plan.md` 全部做（owner 2026-10-19）。
+- **交还：** 由 owner 指定。额度恢复不会自动切回。
+
 ## 2026-10-19 起：Claude 出计划，Codex 写代码
 
 owner 2026-10-19 定（Claude 的周额度用到一半）：从 s27a 起，新切片由 Mac mini 上 Codex App 里的 Codex 写代码；Claude 写设计和详细计划、审查、合入。在飞的 #419 由 Claude 收尾（#420 已合入）。本节和下文冲突时，以本节为准。

@@ -125,13 +125,21 @@ export type ToolKind = 'command' | 'file' | 'search' | 'tool';
 
 const askText = z.string().trim().min(1);
 const askOptionSchema = z.object({ id: askText, label: askText, description: z.string() }).strict();
-const askQuestionSchema = z.object({
+const askChoiceQuestion = z.object({
   id: askText,
   title: askText,
   detail: z.string(),
   selection: z.enum(['single', 'multiple']),
   options: z.tuple([askOptionSchema]).rest(askOptionSchema),
+  /** Allow a typed answer outside the options (Codex isOther). */
+  other: z.boolean().default(false),
 }).strict();
+const askTextQuestion = z.object({
+  id: askText, title: askText, detail: z.string(), selection: z.literal('text'),
+  /** Sensitive text moves to private chat in s33b. */
+  sensitive: z.boolean().default(false),
+}).strict();
+const askQuestionSchema = z.discriminatedUnion('selection', [askChoiceQuestion, askTextQuestion]);
 const askBase = {
   id: askText,
   title: askText,
@@ -150,6 +158,7 @@ export const askRequestSchema = z.discriminatedUnion('kind', [
   request.questions.forEach((question, index) => {
     if (questionIds.has(question.id)) ctx.addIssue({ code: 'custom', path: ['questions', index, 'id'], message: 'Duplicate question id' });
     questionIds.add(question.id);
+    if (question.selection === 'text') return;
     const optionIds = new Set<string>();
     question.options.forEach((option, optionIndex) => {
       if (optionIds.has(option.id)) ctx.addIssue({ code: 'custom', path: ['questions', index, 'options', optionIndex, 'id'], message: 'Duplicate option id' });
@@ -160,8 +169,15 @@ export const askRequestSchema = z.discriminatedUnion('kind', [
 
 export type AskRequest = z.infer<typeof askRequestSchema>;
 
+export function isSensitiveAsk(request: AskRequest): boolean {
+  return request.kind === 'choices' && request.questions.some(q => q.selection === 'text' && q.sensitive);
+}
+
+export type AskChoiceAnswer = { questionId: string; selected: [string, ...string[]] } | { questionId: string; text: string };
 export type AskAnswer =
-  | { kind: 'choices'; answers: [{ questionId: string; selected: [string, ...string[]] }, ...{ questionId: string; selected: [string, ...string[]] }[]] }
+  | { kind: 'choices'; answers: [AskChoiceAnswer, ...AskChoiceAnswer[]] }
+  /** Typed reply to the whole choices request; confirmation and permission require buttons. */
+  | { kind: 'text'; text: string }
   | { kind: 'confirmation'; decision: 'proceed' | 'explain' }
   | { kind: 'permission'; decision: 'allow-once' | 'deny' };
 
@@ -172,6 +188,9 @@ export function parseAskRequest(raw: unknown): AskRequest {
 
 /** Normalized stream events, mapped from app-server notifications. */
 export type AgentEvent =
+  | { type: 'subagent_start'; id: string; parentId?: string; name: string; task: string; stoppable: boolean }
+  | { type: 'subagent_step'; id: string; stepId: string; title: string; status: 'running' | 'done' | 'failed' }
+  | { type: 'subagent_status'; id: string; status: 'running' | 'completed' | 'failed' | 'stopped'; result?: string }
   | { type: 'system'; threadId: string }
   | { type: 'turn_started'; turnId: string }
   | { type: 'text_delta'; itemId: string; delta: string }
@@ -244,8 +263,13 @@ export type AskResolution =
   | { kind: 'unanswered'; reason: 'timeout' | 'stopped' | 'turn-ended' | 'unavailable' };
 
 export interface AgentRun {
+  /** Resolves once the stop request is sent, without waiting for termination.
+   * Rejects with a Chinese reason when ended or no turn has started. */
+  stopSubagent?(id: string): Promise<void>;
   /** Claim/release the local continuation synchronously before returning delivery work. */
   respondToAsk?(requestId: string, resolution: AskResolution): Promise<void>;
+  /** Synchronous provider claim state, including terminal events not yet consumed by the UI. */
+  askPending?(requestId: string): boolean;
   events: AsyncIterable<AgentEvent>;
   /** current turn id, available after `turn_started` */
   turnId(): string | undefined;
