@@ -172,6 +172,9 @@ export function parseAskRequest(raw: unknown): AskRequest {
 
 /** Normalized stream events, mapped from app-server notifications. */
 export type AgentEvent =
+  | { type: 'subagent_start'; id: string; parentId?: string; name: string; task: string; stoppable: boolean }
+  | { type: 'subagent_step'; id: string; stepId: string; title: string; status: 'running' | 'done' | 'failed' }
+  | { type: 'subagent_status'; id: string; status: 'running' | 'completed' | 'failed' | 'stopped'; result?: string }
   | { type: 'system'; threadId: string }
   | { type: 'turn_started'; turnId: string }
   | { type: 'text_delta'; itemId: string; delta: string }
@@ -244,6 +247,9 @@ export type AskResolution =
   | { kind: 'unanswered'; reason: 'timeout' | 'stopped' | 'turn-ended' | 'unavailable' };
 
 export interface AgentRun {
+  /** Resolves once the stop request is sent, without waiting for termination.
+   * Rejects with a Chinese reason when ended or no turn has started. */
+  stopSubagent?(id: string): Promise<void>;
   /** Claim/release the local continuation synchronously before returning delivery work. */
   respondToAsk?(requestId: string, resolution: AskResolution): Promise<void>;
   events: AsyncIterable<AgentEvent>;

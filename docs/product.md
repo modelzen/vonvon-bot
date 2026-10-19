@@ -51,7 +51,7 @@ Vonvon Bot 是一个 macOS 桌面应用；Linux 上可以只装后台服务，�
 5. 建新 bot 只走上面的向导，不在聊天里做。Mac 上在桌面端，Linux 上在网页或终端里（3.10）。
 6. Bot 页：个性、规矩、工作区、代码仓库、skill、MCP、记忆、智能提示词、判断模型、所在的群（还没设置好的单列一组"待设置"，3.4）。
 7. 群详情页：这个 bot 在这个群里的会话方式（3.4）和各项覆盖，见 3.2。被拉进来、还没设置好的群也列在这里，能在这里设置。
-8. 状态与诊断页：每个 bot 的连接状态，Codex 和 Claude 的版本检查，最近没回的消息和原因（包括智能模式判断"不回"的原因；用决策模型判断的，写选项和把握度）。选了决策模型、本机却没填它的 key 的 bot 和群，单独列一行。目录放错了位置的旧群（3.3）也单独列一行，写明到哪里换目录。用量页显示判断调用的次数。
+8. 状态与诊断页：每个 bot 的连接状态，Codex 和 Claude 的版本检查，最近没回的消息和原因（包括智能模式判断"不回"的原因；用决策模型判断的，写选项和把握度）。选了决策模型、本机却没填它的 key 的 bot 和群，单独列一行。目录放错了位置的旧群（3.3）也单独列一行，写明到哪里换目录。用量页按天显示判断调用的次数：发起了调用的才算一次（连不上也算），见 `docs/v1-plan.md` 第 5 节。
 9. 密钥页：集中管理要 key 的服务（owner 2026-10-18 要的）。整台机器一份，所有 bot 共用，不按 bot 分。第一版列的是决策模型（3.4），现在只有 TypeSafe 的 Jev。Codex 和 Claude 用本机自己的登录（包括它们自己的 API key 登录），vonvon 不经手它们的 key，不列；以后 provider 要 vonvon 来存 key 时（比如第 8 节第 2 条说的 Claude 改成只支持 API key，或者以后加的后端），也放在这里。
    - 每一项能填、能换、能删。页面只显示填没填和末四位，不回显全文；换的时候整串重填。填完马上试一次能不能用（TypeSafe 是调它列模型的接口，不发群消息），显示"能用""key 不对"或"连不上"。删之前列出哪些 bot 和群选了这家的决策模型，删了以后这些群照 3.4 出错的规矩走：要判断的消息，被 @ 的照常回，没 @ 的不回。
    - key 存在本机，和 bot 的 App Secret 同一个加密库（`~/.vonvon-bot/secrets.enc`，AES-256-GCM，主密钥是同目录下只有本人能读的 `master.key`），不进 `config.json`、快照和日志。bot 的 App Secret 由扫码写入和刷新，不在这页列。
@@ -94,6 +94,7 @@ Vonvon Bot 是一个 macOS 桌面应用；Linux 上可以只装后台服务，�
   bots/<appId>/
     config.json                 bot 设置，含工作区、仓库
     projects.json               每个群一条，含群的覆盖
+    judge-usage.json            智能模式每天判断了几次，留 30 天
     SOUL.md                     bot 个性
     AGENTS.md                   规矩，可选
     SMART.md                    智能提示词，不存在时用内置默认值
@@ -590,7 +591,7 @@ owner 的话："确认卡、选项卡、授权卡这些需要用户交互、用�
   - Claude：不一样。Claude Code 的子 agent 默认在后台跑，经 Agent SDK 用时也是；主回合可以先结束，子 agent 跑完再通知 Claude 起新的一轮（code.claude.com/docs/en/sub-agents）。实测里一条消息出了 4 到 6 个结果。设置 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` 后，子 agent 一律在前台跑，主回合等它们都结束，一条消息只有一个结果，几个子 agent 之间仍然并行（实测，`docs/research/2026-10-14-v1-spikes/e01-background-tasks.md`）。代价是它同时关掉后台 Bash 等所有后台任务，比如 bot 不能在后台起一个开发服务器再结束这一轮；模型要在后台跑命令时会先报错一次，再改成前台跑。第一版在 bot 的 Claude 会话里打开这个开关，两家行为就一致了。这是 Claude 的决定。前台子 agent 跑着时按 ⏹ 多久能停下还没测，s35 开工时补测（e01）；停不下来的话，回头再定。
 - 子 agent 跑的时候，群里的新消息按今天的规则插话或排队，只给父 agent。第一版不能直接跟某个子 agent 说话。
 - Codex 的子 agent 跟着用户自己的 Codex 设置走：Vonvon 不在会话里替用户打开或关掉 `features.multi_agent`，用户开了就显示子 agent，没开 Codex 那一侧就没有子 agent，只有 Claude 一侧有（owner 2026-10-19）。Vonvon 自己的标题任务和判断线程照旧关着子 agent。
-- 今天 Codex 的子线程事件全丢了，Claude 子 agent 的步骤混进了主过程（`D/agent/codex-appserver/backend.ts:333-337`；`D/agent/claude-agent/event-map.ts:92-123`），第一版要修。
+- s34a 已修复 Codex 丢弃子线程事件和 Claude 子 agent 步骤混进主过程的问题。Codex 由 `D/agent/codex-appserver/backend.ts` 的 `routeNotification` 登记并接收子线程通知，Claude 由 `D/agent/claude-agent/event-map.ts` 的子通道隔离步骤。
 
 ### 3.10 后台服务和崩溃
 

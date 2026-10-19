@@ -1,3 +1,5 @@
+import { z } from 'zod';
+import { log } from '../../core/logger';
 import { codexErrorKind } from '../error-kind';
 import type { AgentEvent } from '../types';
 import type { FileUpdateChange, ServerNotification, ThreadItem } from './protocol';
@@ -34,7 +36,28 @@ export interface MapContext {
  * item/reasoning/textDelta; item/completed gives the final text for
  * reconciliation; commandExecution/fileChange map to tool blocks.
  */
+// 0.156.1 code-mode models emit this item instead of collab spawn notifications.
+const subAgentActivity = z.object({ type: z.literal('subAgentActivity'), id: z.string(), kind: z.string(), agentThreadId: z.string(), agentPath: z.string() });
+const threadSpawn = z.object({ thread_spawn: z.object({ parent_thread_id: z.string(), agent_nickname: z.string().nullish(), agent_role: z.string().nullish() }) });
+const subagentSource = z.union([z.object({ subagent: threadSpawn }), z.object({ subAgent: threadSpawn })]);
+export function readSubagentSpawn(source: unknown) {
+  const parsed = subagentSource.safeParse(source);
+  if (!parsed.success) return undefined;
+  return 'subagent' in parsed.data ? parsed.data.subagent.thread_spawn : parsed.data.subAgent.thread_spawn;
+}
+
+export function readSubAgentActivity(item: unknown) {
+  const parsed = subAgentActivity.safeParse(item);
+  return parsed.success ? parsed.data : undefined;
+}
+
 export function mapNotification(n: ServerNotification, ctx?: MapContext): AgentEvent | null {
+  if (n.method === 'item/started' || n.method === 'item/completed') {
+    const activity = readSubAgentActivity(n.params.item);
+    if (activity) return activity.kind !== 'started' ? null : n.method === 'item/started'
+      ? { type: 'tool_use', itemId: activity.id, title: `子 agent：${activity.agentPath.split('/').pop() ?? '子 agent'}`, kind: 'tool' }
+      : { type: 'tool_result', itemId: activity.id };
+  }
   switch (n.method) {
     case 'thread/started':
       return { type: 'system', threadId: n.params.thread.id };
@@ -91,6 +114,8 @@ export function mapNotification(n: ServerNotification, ctx?: MapContext): AgentE
 
 function mapItemStart(item: ThreadItem, ctx?: MapContext): AgentEvent | null {
   switch (item.type) {
+    case 'collabAgentToolCall':
+      return { type: 'tool_use', itemId: item.id, title: item.tool === 'wait' ? '等子 agent' : item.tool === 'closeAgent' ? '关子 agent' : `子 agent：${(item.prompt ?? '').slice(0, 40)}`, kind: 'tool' };
     case 'commandExecution':
       return { type: 'tool_use', itemId: item.id, title: item.command, detail: String(item.cwd), kind: 'command' };
     case 'fileChange':
@@ -127,6 +152,8 @@ function mapItemStart(item: ThreadItem, ctx?: MapContext): AgentEvent | null {
 
 function mapItemComplete(item: ThreadItem): AgentEvent | null {
   switch (item.type) {
+    case 'collabAgentToolCall':
+      return { type: 'tool_result', itemId: item.id, exitCode: item.status === 'failed' ? 1 : undefined };
     case 'agentMessage':
       return { type: 'text', itemId: item.id, text: item.text };
     case 'reasoning': {
@@ -282,4 +309,43 @@ function fileChangeDiffMd(changes: FileUpdateChange[] | undefined): string | und
   const body = cut ? `${joined.slice(0, DIFF_MAX)}…` : joined;
   const note = cut ? `\n_（已截断，完整 diff ${joined.length} 字符）_` : '';
   return `\`\`\`diff\n${body}\n\`\`\`${note}`;
+}
+
+
+export interface Child {
+  closed?: boolean;
+  stopRequested?: boolean;
+  parentId?: string;
+  turnId?: string;
+  running: boolean;
+  nickname?: string;
+  role?: string;
+  result?: string;
+}
+
+/** Child activity never becomes a parent text, error or done event. */
+export function mapChildNotification(id: string, n: ServerNotification, child: Child): { events: AgentEvent[]; patch?: Partial<Child> } {
+  switch (n.method) {
+    case 'turn/started':
+      return { events: [{ type: 'subagent_status', id, status: 'running' }], patch: { turnId: n.params.turn.id, running: true, closed: false, result: undefined } };
+    case 'turn/completed':
+      return { events: [{ type: 'subagent_status', id, status: n.params.turn.status === 'interrupted' ? 'stopped' : n.params.turn.status === 'failed' ? 'failed' : 'completed', result: child.result }], patch: { running: false, stopRequested: false } };
+    case 'thread/closed':
+      return { events: child.running ? [{ type: 'subagent_status', id, status: 'stopped' }] : [], patch: { running: false, closed: true, stopRequested: false } };
+    case 'error':
+      log.warn('agent', 'subagent-error', { id: id.slice(-6) });
+      return { events: [] };
+    case 'item/started':
+    case 'item/completed': {
+      const item = n.params.item;
+      if (n.method === 'item/completed' && item.type === 'agentMessage') return { events: [], patch: { result: item.text.slice(0, 600) } };
+      if (!['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'webSearch'].includes(item.type)) return { events: [] };
+      const ev = n.method === 'item/started' ? mapItemStart(item) : mapItemComplete(item);
+      if (ev?.type === 'tool_use') return { events: [{ type: 'subagent_step', id, stepId: item.id, title: ev.title, status: 'running' }] };
+      if (ev?.type === 'tool_result') return { events: [{ type: 'subagent_step', id, stepId: item.id, title: '', status: ev.exitCode != null && ev.exitCode !== 0 ? 'failed' : 'done' }] };
+      return { events: [] };
+    }
+    default:
+      return { events: [] };
+  }
 }
