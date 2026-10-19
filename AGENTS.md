@@ -11,7 +11,7 @@ owner 2026-10-19 定（Claude 的周额度用到一半）：从 s27a 起，新�
 - **Claude（JP-VPS）：**
   - 每一片写一份详细计划 `docs/plans/<片>.md`，格式见 `docs/plans/README.md`。难的片（并发、队列、关闭清理）由 Fable 起草、Opus 审稿。计划走纯文档 PR 合入。
   - 计划先写到 M7，M7 做到一半再写后面的。
-  - 把开发任务贴进 #322。
+  - 把开发任务贴进 #322（Mac）或 #422（JP-VPS）。
   - 审查 Codex 开的 PR：另一个模型的子代理做独立审查；风险一栏有子进程、并发、关闭清理、错误路径、macOS 原生、数据迁移或合入门禁的，再加一轮多角度审查。发现贴进 PR，再往 #322 贴一个改 PR 的任务。
   - 打 `frozen`，等 CI，合入。里程碑预览版和通知 owner 照旧。
   - Claude 不再自己实现新切片。往 Codex 的分支上 push，只限下面"分支"一条说的同步。
@@ -22,7 +22,14 @@ owner 2026-10-19 定（Claude 的周额度用到一半）：从 s27a 起，新�
   - 飞书里的操作一律用 lark-cli，不点飞书客户端（owner 2026-10-19）。
   - 计划里写不清、要定产品行为的地方，不猜，结果里写"卡住了"。纯技术的取舍自己定，写进 PR 描述"和计划不一样的地方"。
   - Mac 上 Codex 的额度充足（owner 2026-10-19），尽量并行：一个任务里开子代理分头写代码、写测试、开 PR 前照验收要点自审；队列里有几个开发任务时一起做。测试环境、Computer Use、打包装 app 同一时间只给一个任务用。规矩见 #322 正文"并行"。
-- **owner：** 开 Codex 会话、转发那一句；扫码、注销再登录这类只有人能做的事。
+- **Codex（JP-VPS 上的 Codex CLI，Claude 开会话）：**
+  - owner 2026-10-19 让 Claude 也用 JP-VPS 上已登录的 Codex。
+  - Claude 经 Paseo 在 JP-VPS 上开会话：provider codex，模式 auto-review，一片一个会话。任务和规矩在 #422。
+  - 它做要用 JP-VPS 测试环境自测的片：Bot 6、7、8，`accept-home2` 的验收 daemon，已经绑好的测试群，Jev 的 key。Mac 上的 Codex 做要 Mac 和桌面验收的片。
+  - 做法和 Mac 上的开发任务一样：照计划，分支 `codex/<片>`，开 PR，改 PR 的任务。
+  - 用 auto-review 而不用 full access，是因为 Claude 这边拦 `rm` 的钩子管不到 Codex。2026-10-16 的误删就发生在这台机器上，删除文件的硬规矩照样适用。
+  - 验收 daemon 两边都会用，用的时候拿 `/tmp/vonvon-accept.lock`。
+- **owner：** 在 Mac 的 Codex App 里开会话、转发那一句（Claude 会在通知里写明要发什么）；扫码、注销再登录这类只有人能做的事。
 - **Mac 的测试环境：**
   - Codex 在 Mac 上用隔离的数据目录跑自己的两个测试 bot，和 JP-VPS 的 Bot 6、7、8 分开，放在专门的测试群里。
   - 不碰 owner 的 `~/.vonvon-bot`、`com.vonvon.bot.daemon`、bridge 和 `/Applications/Vonvon Bot.app`。
@@ -34,7 +41,7 @@ owner 2026-10-19 定（Claude 的周额度用到一半）：从 s27a 起，新�
   - `codex/fix-*` 照旧。
 - **在飞：**
   - 在飞产品 PR 照旧最多两个。计数加上 `codex/<片>` 开发 PR（2026-10-19 以后开的；`codex/fix-*` 和 10-14 以前开的旧 `codex/*` PR 不算）。
-  - Claude 贴开发任务时，已贴出、还没开出 PR 的开发任务也算一个，总数不超过两个。Codex 开 PR 时不用再数。
+  - Claude 贴开发任务时（#322 或 #422），已贴出、还没开出 PR 的开发任务也算一个，总数不超过两个。Codex 开 PR 时不用再数。
 - **Mac 检查：**
   - #322 有活着的队列会话时，Mac 上的检查也贴进 #322，不开 Paseo 会话，免得两个会话抢 Computer Use。
   - Codex 写的片，Mac 上的验收在开发任务里一起做，不另开检查。
