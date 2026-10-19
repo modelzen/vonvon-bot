@@ -177,7 +177,7 @@ export async function fetchQuotedMessage(
     const res = await withDeadline(channel.rawClient.im.v1.message.get({
       path: { message_id: messageId },
       params: { with_sender_name: true, card_msg_content_type: CARD_CONTENT },
-    }), FETCH_DEADLINE_MS);
+    }), FETCH_DEADLINE_MS, 'quoted-message');
     if (!res) {
       log.warn('intake', 'quote-fetch-failed', { messageId, err: 'timeout' });
       return undefined;
@@ -209,7 +209,7 @@ export async function fetchMessageMeta(channel: LarkChannel, messageId: string, 
     const res = await withDeadline(channel.rawClient.im.v1.message.get({
       path: { message_id: messageId },
       params: { with_sender_name: true },
-    }), opts.deadlineMs ?? FETCH_DEADLINE_MS);
+    }), opts.deadlineMs ?? FETCH_DEADLINE_MS, 'message-meta');
     if (!res) return failed('timeout');
     if (typeof res.code === 'number' && res.code !== 0) return failed(res.msg, res.code);
     const item = (res.data as { items?: RawMsgItem[] } | undefined)?.items?.[0];
@@ -253,7 +253,7 @@ async function walkTopic(channel: LarkChannel, threadId: string, deadlineMs: num
           page_size: PAGE_SIZE,
           ...(pageToken ? { page_token: pageToken } : {}),
         },
-      }), deadline - Date.now());
+      }), deadline - Date.now(), 'topic-walk');
       if (!res) return failed('timeout');
       if (typeof res.code === 'number' && res.code !== 0) return failed(res.msg, res.code);
       const data = res.data as { items?: RawMsgItem[]; has_more?: boolean; page_token?: string } | undefined;
@@ -443,7 +443,7 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
           ...window,
           ...(pageToken ? { page_token: pageToken } : {}),
         },
-      }), deadline - Date.now());
+      }), deadline - Date.now(), 'context-pull');
       if (!res) {
         // Out of time. The pages read so far hold the most recent messages and are
         // kept, as at the page cap; with none, the pull fails and the watermark stays.
@@ -607,7 +607,7 @@ export async function fetchTopicOpener(
   try {
     const res = await withDeadline(channel.rawClient.im.v1.message.list({
       params: { container_id_type: 'thread', container_id: threadId, sort_type: 'ByCreateTimeAsc', page_size: 2, with_sender_name: true },
-    }), OPENER_DEADLINE_MS);
+    }), OPENER_DEADLINE_MS, 'topic-opener');
     if (!res) return failed('timeout');
     if (typeof res.code === 'number' && res.code !== 0) return failed(`code=${res.code}`);
     const item = ((res.data as { items?: RawMsgItem[] } | undefined)?.items ?? []).find((it) => it.message_id !== rootId);

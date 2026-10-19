@@ -56,7 +56,7 @@ export function createBotRoster(
         method: 'GET',
         url: `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/members/list`,
         params: { member_types: 'bot', member_id_type: 'open_id', page_size: 100 },
-      }), ROSTER_READ_MS), 'stopped');
+      }), ROSTER_READ_MS, 'bot-roster'), 'stopped');
       if (body === 'stopped') return undefined;
       if (!body) return failed('timeout');
       if (body.code !== 0) return failed(`code=${String(body.code)}`, body);
