@@ -60,7 +60,7 @@ describe('decision model request (s23f 做法（问法）)', () => {
     expect(state.recent_messages.at(-1)).toMatchObject({ id: 'm1', speaker: '人29' });
   });
 
-  it('asks each variant its options, 不回 first; only main asks the anchor, at most 4 lines, none when no line fits', () => {
+  it('asks each variant its options, 不回 first; only main asks the anchor, at most 10 lines, none when no line fits', () => {
     const keys = (variant: JudgeVariant, extra: Partial<JudgeRequest> = {}) => {
       const { questions } = decisionBody(req(variant, extra), 'S', 'jev-latest');
       return [Object.keys(questions.decision.criteria), questions.anchor ? Object.keys(questions.anchor.criteria) : undefined];
@@ -69,10 +69,29 @@ describe('decision model request (s23f 做法（问法）)', () => {
     expect(keys('topic', { topicTitle: ' 3.2 发版说明 ' })).toEqual([['skip', 'reply'], undefined]);
     expect(decisionBody(req('topic', { topicTitle: ' 3.2 发版说明 ' }), 'S', 'm').state.topic_title).toBe('3.2 发版说明');
     const people: JudgeLine[] = Array.from({ length: 6 }, (_, i) => ({ id: `om_${i}`, at: at(10, i), from: 'user', name: `人${i}`, text: `第 ${i} 条` }));
-    expect(keys('main', { context: people })).toEqual([['skip', 'main', 'topic'], ['m0', 'm1', 'm2', 'm3', 'm4']]);
+    expect(keys('main', { context: people })).toEqual([['skip', 'main', 'topic'], ['m0', 'm1', 'm2', 'm3', 'm4', 'm5', 'm6']]);
     expect(keys('main', { context: [CONTEXT[1]!, CONTEXT[2]!, { ...CONTEXT[0]!, id: undefined }] })[1]).toBeUndefined();
     // a line pulled from history that @-mentions someone has no names, only `named`: not an option either
-    expect(keys('main', { context: [...people.slice(0, 5), { ...people[5]!, named: true }] })[1]).toEqual(['m0', 'm2', 'm3', 'm4', 'm5']);
+    expect(keys('main', { context: [...people.slice(0, 5), { ...people[5]!, named: true }] })[1]).toEqual(['m0', 'm2', 'm3', 'm4', 'm5', 'm6']);
+  });
+
+  it('sends why, fresh counts and anchors drawn only from fresh context', () => {
+    const context: JudgeLine[] = Array.from({ length: 6 }, (_, i) => ({ id: `om_${i}`, at: at(10, i), from: 'user', name: '人', text: `${i}`, ...([1, 3].includes(i) ? { fresh: true as const } : {}) }));
+    const request = req('main', { why: 'W', context, message: { ...req('main').message, fresh: true } });
+    const body = decisionBody(request, 'S', 'm');
+    expect(body.state).toMatchObject({ why_looking: 'W', new_count: 3, new_message: { new: true } });
+    expect(body.state.recent_messages.filter(line => line.new).map(line => line.id)).toEqual(['m5', 'm3']);
+    expect(Object.keys(body.questions.anchor!.criteria)).toEqual(['m0', 'm3', 'm5']);
+    const single = decisionBody(req('main', { message: { ...req('main').message, fresh: true } }), 'S', 'm');
+    expect(single.questions.anchor).toBeUndefined();
+    expect(single.state.new_count).toBe(1);
+    const plain = decisionBody(req('main', { context: Array.from({ length: 12 }, (_, i) => ({ ...context[0]!, id: `om_${i}`, fresh: undefined })) }), 'S', 'm');
+    expect(Object.keys(plain.questions.anchor!.criteria)).toEqual(Array.from({ length: 11 }, (_, i) => `m${i}`));
+    expect(plain.state).not.toHaveProperty('why_looking');
+    expect(plain.state).not.toHaveProperty('new_count');
+    expect(plain.state.recent_messages.every(line => !('new' in line))).toBe(true);
+    expect(DECISION_FORMAT_LINES.main).toContain('最近 10 条');
+    expect(DECISION_FORMAT_LINES.main).toContain('标"新"的');
   });
 
   it('gives the persona as bot_role, cut as the text input cuts it', () => {
