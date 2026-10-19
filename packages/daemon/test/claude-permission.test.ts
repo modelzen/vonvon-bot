@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, symlink, rm, access as fsAccess } from 'node:fs/promises';
+import { mkdtemp, mkdir, symlink, rm, realpath, access as fsAccess } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -102,7 +102,7 @@ it('uses directory identity for case aliases and propagates errors', async () =>
   await expect(within(cwd, '/elsewhere/x', { ...fsx, stat: async () => { throw Object.assign(new Error(), { code: 'EACCES' }); } })).rejects.toMatchObject({ code: 'EACCES' });
 });
 it('resolves real filesystem paths, aliases, missing suffixes and dangling links', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 's31-path-')); dirs.push(dir);
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 's31-path-'))); dirs.push(dir);
   const work = join(dir, 'Work'); const outside = join(dir, 'outside');
   await mkdir(work); await mkdir(join(outside, 'sub'), { recursive: true });
   await symlink(work, join(dir, 'workspace-alias'));
@@ -122,7 +122,7 @@ it('resolves real filesystem paths, aliases, missing suffixes and dangling links
 });
 
 it('checks case identities according to the actual filesystem', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 's31-case-')); dirs.push(dir);
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 's31-case-'))); dirs.push(dir);
   const work = join(dir, 'Work'); const lower = join(dir, 'work');
   await mkdir(work);
   const caseSensitive = await mkdir(lower).then(() => true, (error: unknown) => {
