@@ -1206,7 +1206,7 @@ function recordLine(m: ContextMessage, now: number): string {
   const at = clockOf(m.createTime, now);
   if (m.from === 'self') return `${at} 你：${body}`;
   const who = personName(m.senderName) || '某人';
-  if (m.from === 'bot') return `${at} ${who}（bot${m.streaming ? '，还没答完' : ''}）：${body}`;
+  if (m.from === 'bot') return `${at} ${who}（bot${m.streaming ? '，还没答完' : ''}）${m.mentionsMe ? ' → @你' : ''}：${body}`;
   return `${at} ${who}${m.mentionsMe ? ' → @你' : ''}：${body}`;
 }
 

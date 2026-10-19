@@ -308,6 +308,15 @@ describe('weaveRecordBlock', () => {
     ].join('\n'));
   });
 
+  it.each([false, true])('marks bot mentions in record blocks, including streaming cards (streaming=%s)', streaming => {
+    const out = weaveRecordBlock('', { place: main, now, entries: [
+      cm({ messageId: 'om_named', from: 'bot', senderName: '小P', mentionsMe: true, streaming, text: '请再看一遍', createTime: at(15, 9, 0) }),
+      cm({ messageId: 'om_plain', from: 'bot', senderName: '小Q', text: '普通回答', createTime: at(15, 9, 1) }),
+    ] }).split('\n');
+    expect(out[1]).toBe(`09:00 小P（bot${streaming ? '，还没答完' : ''}） → @你：请再看一遍`);
+    expect(out[2]).toBe('09:01 小Q（bot）：普通回答');
+  });
+
   it('names the topic, with or without its title, and leaves out an unknown bot name', () => {
     const entries = [cm({ createTime: at(15, 10, 3) })];
     expect(weaveRecordBlock('？', { place: { ...main, topic: { title: '订单接口 500' } }, entries, now }).split('\n')[0])

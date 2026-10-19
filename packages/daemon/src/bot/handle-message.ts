@@ -581,7 +581,7 @@ interface TurnFailure { error?: unknown; rs?: RunState; procDead?: boolean }
 /** The message a not-replied record is about. */
 type NotedMessage = Pick<NormalizedMessage, 'chatId' | 'messageId' | 'senderId' | 'createTime' | 'threadId'>;
 
-/** How long a group's full-only explanation quiets the next ones for 免@ messages; an @ always gets one. */
+/** How long a group's full-only explanation quiets 免@ and bot messages; a person's @ always gets one. */
 const FULL_ONLY_QUIET_MS = 10 * 60_000;
 /** Each 三条底线 lookup's limit (s22): the group's later messages wait behind it. */
 const LOOKUP_DEADLINE_MS = 3000;
@@ -1568,6 +1568,26 @@ export function createOrchestrator(
       ...(sender ? { sender } : {}), ...(backend ? { backend } : {}), ...(extra.detail ? { detail: fitDetail(extra.detail) } : {}), ref: msg.messageId.slice(-6),
     });
   }
+  function dropBotMessage(msg: NormalizedMessage, why: string, detail: string): boolean {
+    if (!fromBot(msg)) return false;
+    log.info('intake', 'bot-wake-dropped', { ref: msg.messageId.slice(-6), why });
+    if (!shuttingDown) noteNotReplied(msg, 'bot-wake-dropped', { detail });
+    return true;
+  }
+
+  /** Only people are asked to resend; bot messages leave diagnostics instead. */
+  function askAgain(queue: readonly QueuedTurn[], chatId: string, place: NotReplied['place'], why: string, detail: string): number {
+    let people = 0;
+    for (const turn of queue) {
+      if (turn.requesterKind !== 'bot') { people++; continue; }
+      const id = turn.seen?.id ?? '';
+      log.info('intake', 'bot-wake-dropped', { ref: id.slice(-6), why });
+      if (!shuttingDown) noteNotReplied({ chatId, messageId: id, senderId: turn.requesterOpenId ?? '', createTime: turn.requestedAt },
+        'bot-wake-dropped', { place, detail });
+    }
+    return people;
+  }
+
   /** A turn that started but did not answer; a refused scope also goes to the page's 缺的权限. */
   function noteFailure(msg: NotedMessage, place: NotReplied['place'], backendId: string | undefined, failure: TurnFailure): void {
     const { reason, detail, scope } = failureReason(failure);
@@ -2457,7 +2477,7 @@ export function createOrchestrator(
   const fullOnlyNoted = new Map<string, number>();
   /** A 只读 or 读写 turn where the backend runs only in 完全访问 (Codex on Linux): no session starts and
    * nothing is downloaded or woven first. The message is noted and the group told why, in place: every
-   * @, and a 免@ message only when the group got no explanation in the last {@link FULL_ONLY_QUIET_MS}. */
+   * human @, and a bot or 免@ message only when the group got no explanation in the last {@link FULL_ONLY_QUIET_MS}. */
   async function refuseFullOnly(msg: NormalizedMessage, project: Project, perm: TurnPerm): Promise<boolean> {
     const mode = perm.mode ?? 'full';
     if (mode === 'full') return false;
@@ -2467,7 +2487,7 @@ export function createOrchestrator(
     noteNotReplied(msg, 'tier-unavailable', { backendId: be.id });
     const now = Date.now();
     const last = fullOnlyNoted.get(msg.chatId);
-    if (!msg.mentionedBot && now - (last ?? -Infinity) < FULL_ONLY_QUIET_MS) return true;
+    if ((!msg.mentionedBot || fromBot(msg)) && now - (last ?? -Infinity) < FULL_ONLY_QUIET_MS) return true;
     // Stamped before sending so 免@ messages arriving meanwhile stay quiet; put back if the send fails.
     fullOnlyNoted.set(msg.chatId, now);
     // The command needs --bot when the host has several bots (pickBot); an unreadable registry counts as one.
@@ -2560,6 +2580,7 @@ export function createOrchestrator(
     return orderTurns(sessionKey, async () => {
       if (staleRetry(extra)) return;
       if (owner?.intakeCancelled) {
+        if (dropBotMessage(msg, 'intake-cancelled', '会话被停下了')) return;
         await channel.send(msg.chatId, { markdown: '排队期间会话已停止，请重发本条消息。' }, { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined);
         return;
       }
@@ -2594,6 +2615,7 @@ export function createOrchestrator(
       if (!extra?.images && messageHasImages(msg)) pendingImages = collectInboundImages(channel, msg);
       const [images, woven] = await Promise.all([pendingImages, ingestContext(msg, text, extra)]);
       if (existing.intakeCancelled) {
+        if (dropBotMessage(msg, 'intake-cancelled', '会话被停下了')) return;
         await channel.send(msg.chatId, { markdown: '本条消息处理期间会话已停止，请重发。' }, { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined);
         return;
       }
@@ -2698,6 +2720,7 @@ export function createOrchestrator(
 
   /** 🎯 goal 运行中收到消息的统一提示（goal 会话不入队，见 ActiveState.isGoal）。 */
   async function replyGoalBusy(msg: NormalizedMessage, flat: boolean): Promise<void> {
+    if (dropBotMessage(msg, 'goal-busy', '会话在跑 /goal')) return;
     await channel
       .send(
         msg.chatId,
@@ -2748,6 +2771,7 @@ export function createOrchestrator(
       if (existing.deferred && !extra?.retry) {
         existing.deferred.push({ id: msg.messageId, at: msg.createTime, origin: originFor(msg, flat), go: () =>
           startReservedRun(msg, text, sessionKey, flat, project, perm, preloadedImages, preIngested, summaryText, goal, extra), early: () => {
+          if (dropBotMessage(msg, 'before-new', '会话换成了新的（/new）')) return;
           log.info('intake', 'reject', { reason: 'before-new', msgId: msg.messageId });
           void trackTask(channel.send(msg.chatId, { markdown: '⚠️ 这条在 `/new` 之前发的，新会话不带它，要问就再发一次。' },
             { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined));
@@ -3132,7 +3156,7 @@ export function createOrchestrator(
       } catch (err) {
         if (active.get(sessionKey) === reserved) active.delete(sessionKey);
         releaseIdle(sessionKey, sessions.get(sessionKey));
-        const dropped = reserved.queue.splice(0).length;
+        const dropped = askAgain(reserved.queue.splice(0), msg.chatId, flat ? 'main' : 'topic', 'run-failed', '前一轮出错，排队的没跑');
         dropCompact(reserved);
         reaction?.done();
         log.fail('intake', err);
@@ -5646,11 +5670,12 @@ export function createOrchestrator(
           settleUpdate(evt.messageId, taken ? buildResumeErrorCard(state, inUseText(taken)) : buildResumeDoneCard(state));
         } finally {
           if (active.get(sessionKey) === reserved) active.delete(sessionKey);
-          if (reserved.queue.length > 0) {
+          const dropped = askAgain(reserved.queue, state.chatId, 'main', 'occupied', '会话被占用');
+          if (dropped > 0) {
             await channel
               .send(
                 state.chatId,
-                { markdown: `⚠️ 切回期间收到的 ${reserved.queue.length} 条消息未进入会话，请重发。` },
+                { markdown: `⚠️ 切回期间收到的 ${dropped} 条消息未进入会话，请重发。` },
                 { replyTo: state.originalMsgId },
               )
               .catch(() => undefined);
@@ -5708,9 +5733,10 @@ export function createOrchestrator(
             bound = !taken;
           } finally {
             if (active.get(tid) === reserved) active.delete(tid);
-            if (reserved.queue.length > 0) {
+            const dropped = askAgain(reserved.queue, state.chatId, 'topic', 'occupied', '会话被占用');
+            if (dropped > 0) {
               await channel
-                .send(state.chatId, { markdown: `⚠️ 恢复期间收到的 ${reserved.queue.length} 条消息未进入会话，请重发。` }, { replyTo: sent.messageId, replyInThread: true })
+                .send(state.chatId, { markdown: `⚠️ 恢复期间收到的 ${dropped} 条消息未进入会话，请重发。` }, { replyTo: sent.messageId, replyInThread: true })
                 .catch(() => undefined);
             }
           }
@@ -5947,7 +5973,8 @@ export function createOrchestrator(
         resumePublications.delete(project.chatId);
         if (publishedKey && active.get(publishedKey) === reserved) active.delete(publishedKey);
         if (active.get(key) === reserved) active.delete(key);
-        if (reserved.queue.length) await channel.send(project.chatId, { markdown: `切回期间收到的 ${reserved.queue.length} 条消息未执行，请重发。` });
+        const dropped = askAgain(reserved.queue, project.chatId, ruleKind(project) === 'single' ? 'main' : 'topic', 'occupied', '会话被占用');
+        if (dropped) await channel.send(project.chatId, { markdown: `切回期间收到的 ${dropped} 条消息未执行，请重发。` });
       }
     }
     if (isRetiredKey(request.threadId)) throw new AdminWriteError(RETIRED_KEY_TEXT);
@@ -6018,7 +6045,8 @@ export function createOrchestrator(
     } finally {
       if (!launched && active.get(key) === reserved) active.delete(key);
       releaseIdle(key, compacted);
-      if (!launched && reserved.queue.length) await channel.send(project.chatId, { markdown: `操作期间收到的 ${reserved.queue.length} 条消息未执行，请重发。` });
+      const dropped = !launched ? askAgain(reserved.queue, project.chatId, ruleKind(project) === 'single' ? 'main' : 'topic', 'occupied', '会话被占用') : 0;
+      if (dropped) await channel.send(project.chatId, { markdown: `操作期间收到的 ${dropped} 条消息未执行，请重发。` });
     }
   }
 
@@ -6231,12 +6259,13 @@ export function createOrchestrator(
     log.info('intake', 'run-queued', { position: q.position(), key: activeKey });
     /** The card's last word for a run that never starts. */
     const endCard = (): void => {
+      const dropped = askAgain(state.queue, opts.chatId, opts.flat ? 'main' : 'topic', 'queue-dropped', '会话被停下了');
       if (!msgId) return;
       runsByCard.delete(msgId);
       runStreams.delete(msgId);
       completionReminderRefreshers.delete(msgId);
       // At shutdown nobody cancelled it: the card says the bot stopped, and the bot says so again once back (s18c).
-      void trackTask(stream.updateCard(channel, queueCard({ cancelled: true, dropped: state.queue.length, ...(shuttingDown ? { stopped: true } : {}) })));
+      void trackTask(stream.updateCard(channel, queueCard({ cancelled: true, dropped, ...(shuttingDown ? { stopped: true } : {}) })));
     };
     // 等待期 ⏹ = 移除 waiter + 释放预订。槽已到手的瞬间 cancel() 返回 false →
     // 让位给运行期 interrupt（launchRun 每轮重装）。
@@ -7021,11 +7050,12 @@ export function createOrchestrator(
         if (killed || procDead || interrupted || compactDied) {
           state.intakeCancelled = true;
           dropCompact(state);
-          if (state.queue.length > 0) {
+          const dropped = askAgain(state.queue, opts.chatId, opts.flat ? 'main' : 'topic', 'queue-dropped', '会话被停下了');
+          if (dropped > 0) {
             void trackTask(channel
               .send(
                 opts.chatId,
-                { markdown: `⚠️ ${state.queue.length} 条排队消息已丢弃，请重发。` },
+                { markdown: `⚠️ ${dropped} 条排队消息已丢弃，请重发。` },
                 { replyTo: finalMsgId, replyInThread: !opts.flat },
               )
               .catch(() => undefined));
@@ -7053,7 +7083,7 @@ export function createOrchestrator(
       askTurn?.close('turn-ended');
       // Detach before any await: new messages must not join a failed consumer.
       if (active.get(activeKey) === state) active.delete(activeKey);
-      const dropped = state.queue.splice(0).length;
+      const dropped = askAgain(state.queue.splice(0), opts.chatId, opts.flat ? 'main' : 'topic', 'run-failed', '前一轮出错，排队的没跑');
       dropCompact(state);
       disposeInterrupt?.();
       state.subagents = undefined;
