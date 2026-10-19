@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AgentEvent, AgentInput } from '../src/agent/types';
 
@@ -123,9 +124,9 @@ function message(text: string): NormalizedMessage {
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false };
 }
 /** Starts the orchestrator; every resume returns `thread` when given. */
-function setup(thread?: unknown) {
+function setup(thread?: unknown, allowedChats = ['chat']) {
   if (thread) fake.backend.resumeThread.mockResolvedValue(thread);
-  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['admin'] } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['admin'], allowedChats } } };
   const channel = { send: fake.send, getChatInfo: async () => ({ name: 'Test', chatType: 'group' }), rawClient: { im: { v1: { chat: { get: async () => ({ data: { chat_mode: 'group' } }) }, chatMembers: { isInChat: async () => ({ code: 0, data: { is_in_chat: true } }) }, message: { get: async () => ({ data: { items: [{ thread_id: 'topic' }] } }) }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
@@ -161,7 +162,7 @@ const finalCards = () => fake.final.mock.calls.map((call) => JSON.stringify(call
 /** Whether a final card (`card`'s, when given) carries the [重试] button. */
 const offersRetry = (card = '') => finalCards().some((json) => json.includes('run.retry') && json.includes(card));
 const retried = () => finalCards().some((json) => json.includes('已重试'));
-const until = (check: () => void) => vi.waitFor(check, { interval: 5, timeout: 3000 });
+const until = (check: () => void | Promise<void>) => vi.waitFor(check, { interval: 5, timeout: 3000 });
 const untilReplied = (text: string) => until(() => expect(replied(text)).toBe(true));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const finals = (terminal: string) =>
@@ -497,6 +498,77 @@ describe('a /goal that recovered from an API retry', () => {
   });
 });
 
+describe('single subagent controls', () => {
+  it('heals a mapped card after its run has ended', async () => {
+    const { o, wrapUp } = await heldInWrapUp();
+    try {
+      await o.dispatcher.handle({ messageId: 'card-1', chatId: 'chat', operator: { openId: 'owner' },
+        action: { value: { a: 'run.stopSub', m: 'card-1', subagentId: 'child-a' } } } as never);
+      await untilReplied('该任务已结束');
+    } finally { wrapUp(); }
+  });
+
+  it('keeps the parent running, returns only public rows, and preserves RPC refusal reasons', async () => {
+    let finish!: () => void;
+    const held = new Promise<void>(resolve => { finish = resolve; });
+    const stopSubagent = vi.fn(async (_id: string) => {});
+    const run = fakeThread(async function* () {
+      yield { type: 'subagent_start', id: 'child-a', name: 'Alpha', task: 'Count files', stoppable: true };
+      yield { type: 'subagent_start', id: 'child-b', name: 'Beta', task: 'Read files', stoppable: true };
+      await held;
+      yield { type: 'done', turnId: 'turn-1' };
+    });
+    const original = run.t.runStreamed.bind(run.t);
+    run.t.runStreamed = input => ({ ...original(input), stopSubagent });
+    const o = setup(run.t);
+    fake.sessions = [{ threadId: 'topic', chatId: 'chat', cwd: '/test', sessionId: 'host', backend: 'codex', summary: '' }];
+    const target = { projectName: 'test', chatId: 'chat', threadId: 'topic' };
+    await o.onMessage(message('Work'));
+    let runId = '';
+    await until(async () => {
+      const context = z.object({ run: z.object({ id: z.string(), subagents: z.array(z.object({ id: z.string(), name: z.string(), task: z.string(), status: z.string(), stoppable: z.boolean() }).passthrough()) }).nullable() }).parse(await o.collaboration({ action: 'context', ...target }));
+      expect(context).toMatchObject({ run: { subagents: [{ id: 'child-a' }, { id: 'child-b' }] } });
+      if (context.run) {
+        runId = context.run.id;
+        expect(Object.keys(context.run.subagents[0] ?? {}).sort()).toEqual(['id', 'name', 'status', 'stoppable', 'task']);
+      }
+    });
+    await expect(o.collaboration({ action: 'stopSubagent', ...target, runId: 'old', subagentId: 'child-a' })).rejects.toThrow('原任务已经结束，请刷新');
+    await o.collaboration({ action: 'stopSubagent', ...target, runId, subagentId: 'child-a' });
+    expect(stopSubagent).toHaveBeenCalledExactlyOnceWith('child-a');
+    expect(run.t.abort).not.toHaveBeenCalled();
+    stopSubagent.mockRejectedValueOnce(new Error('这个子 agent 已经结束'));
+    await expect(o.collaboration({ action: 'stopSubagent', ...target, runId, subagentId: 'child-a' })).rejects.toThrow('这个子 agent 已经结束');
+    finish();
+    await until(async () => expect(await o.collaboration({ action: 'context', ...target })).toMatchObject({ run: null }));
+  });
+
+  it('gates the card action by chat and owner, stops only the requested child, and heals stale cards', async () => {
+    const stopSubagent = vi.fn(async (_id: string) => {});
+    const run = silentThread();
+    const original = run.t.runStreamed.bind(run.t);
+    run.t.runStreamed = input => ({ ...original(input), stopSubagent });
+    const o = setup(run.t);
+    await o.onMessage(message('Work'));
+    await until(() => expect(fake.live).toHaveBeenCalled());
+    const click = (openId: string, chatId = 'chat', card = 'card-1') => o.dispatcher.handle({
+      messageId: card, chatId, operator: { openId }, action: { value: { a: 'run.stopSub', m: card, subagentId: 'child-a' } },
+    } as never);
+    await click('owner', 'blocked-chat');
+    expect(stopSubagent).not.toHaveBeenCalled();
+    await click('other');
+    expect(stopSubagent).not.toHaveBeenCalled();
+    await untilReplied('仅发起人或管理员');
+    await click('owner');
+    await until(() => expect(stopSubagent).toHaveBeenCalledExactlyOnceWith('child-a'));
+    expect(run.t.abort).not.toHaveBeenCalled();
+    stopSubagent.mockRejectedValueOnce(new Error('这个子 agent 已经结束'));
+    await click('admin');
+    await untilReplied('这个子 agent 已经结束');
+    await click('owner', 'chat', 'missing-card');
+    await untilReplied('该任务已结束');
+  });
+});
 
 describe('unbound group hints', () => {
   const unboundMessage = (text: string) => ({ ...message(text), chatId: 'oc_unbound' });
@@ -505,7 +577,7 @@ describe('unbound group hints', () => {
     fake.project = undefined;
     notes.length = 0;
     setDiagnosticsSink(event => notes.push(event));
-    return setup();
+    return setup(undefined, ['oc_unbound', 'oc_other']);
   }
   const unboundNotes = () => notes.filter(event => event.kind === 'notReplied' && event.record.reason === 'unbound');
 
