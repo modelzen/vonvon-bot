@@ -109,6 +109,12 @@ test('words the 叫法表 retired still find the renamed fields', () => {
   assert.ok(findEntries(entries, '机器人').some(entry => entry.id === 'agents'));
 });
 
+test('判断次数 searches lead to the usage section', () => {
+  const result = findEntries(entries, '判断次数')[0];
+  assert.equal(result?.destination.page, 'usage');
+  assert.equal(result?.destination.section, '智能模式的判断次数');
+  assert.equal(result?.destination.field, '');
+});
 
 test('s28a: judge models and interruptions lead to the group settings', () => {
   const judge = findEntries(entries, '判断模型')[0];

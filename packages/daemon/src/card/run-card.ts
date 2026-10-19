@@ -26,6 +26,7 @@ import { runCardMeter } from './context-gauge';
 /** Action ids for the in-topic run card. */
 export const RC = {
   stop: 'run.stop',
+  stopSub: 'run.stopSub',
   /** manual completion-reminder mode: notify this turn's requester when it ends. */
   remind: 'run.remind',
   /** goal-only: clear the goal but let the in-flight turn finish (no auto-continue). */

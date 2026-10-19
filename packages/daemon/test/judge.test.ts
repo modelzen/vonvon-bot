@@ -101,6 +101,7 @@ describe('judge', () => {
       modelSource: 'default', promptSource: 'bot', ms: 300,
     });
     expect(onResult).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledWith(req('main'), result.value, { sent: true });
     const call = f.calls[0]!;
     expect(call).toMatchObject({ model: 'gpt-6-luna', effort: 'low', cwd: '/judge' });
     expect(call.system.startsWith('SMART\n\n——以下由 vonvon 附加')).toBe(true);
@@ -109,6 +110,56 @@ describe('judge', () => {
     expect(verdict).toMatchObject({ ref: '123456', decision: 'topic', inputTokens: 10, cachedTokens: 2, outputTokens: 3, reasoningTokens: 1 });
     // never the text, the reason or the prompt
     expect(JSON.stringify(fake.log.info.mock.calls)).not.toMatch(/新的事|你好|SMART/);
+  });
+
+  it('counts auth requests but not their cooldown (s28b)', async () => {
+    const f = fakeBackend();
+    f.answer(async () => { throw new JudgeCallError('auth', 'login required', true); });
+    const onResult = vi.fn();
+    const judge = make(f.backend, { onResult });
+    for (let i = 0; i < 2; i++) expect((await judge.judge(req())).error?.kind).toBe('auth');
+    expect(onResult.mock.calls.map(call => call[2])).toEqual([{ sent: true }, { sent: false }]);
+    expect(f.backend.judge).toHaveBeenCalledTimes(1);
+  });
+
+  it('distinguishes caller aborts before and after sending (s28b)', async () => {
+    const f = fakeBackend();
+    const pending = deferred<JudgeCallOutput>();
+    f.answer(() => pending.promise);
+    const onResult = vi.fn();
+    const judge = make(f.backend, { onResult });
+    const callers = Array.from({ length: 5 }, () => new AbortController());
+    const running = callers.map(caller => judge.judge(req('main', { signal: caller.signal })));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.backend.judge).toHaveBeenCalledTimes(4);
+    callers[4]!.abort();
+    expect((await running[4])?.error?.kind).toBe('aborted');
+    expect(onResult).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), { sent: false });
+    callers[0]!.abort();
+    expect((await running[0])?.error?.kind).toBe('aborted');
+    expect(onResult).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), { sent: true });
+    pending.resolve(ANSWER);
+    await Promise.all(running);
+    await judge.shutdown();
+  });
+
+  it('reports sent closed results before a stuck backend finishes shutdown (s28b)', async () => {
+    vi.useRealTimers();
+    const f = fakeBackend();
+    const pending = deferred<JudgeCallOutput>();
+    f.answer(() => pending.promise);
+    const onResult = vi.fn();
+    const judge = make(f.backend, { onResult });
+    const running = judge.judge(req());
+    await vi.waitFor(() => expect(f.backend.judge).toHaveBeenCalledTimes(1));
+    let closed = false;
+    const shutdown = judge.shutdown().then(() => { closed = true; });
+    try {
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(await running).toMatchObject({ error: { kind: 'closed' } });
+      expect(onResult).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ error: expect.objectContaining({ kind: 'closed' }) }), { sent: true });
+      expect(closed).toBe(false);
+    } finally { pending.resolve(ANSWER); await shutdown; }
   });
 
   it('falls back by variant: a mention replies in main, the rest skip', async () => {
@@ -416,6 +467,18 @@ describe('decision models (s23f)', () => {
     return { judge, backend: f.backend, sent, fetchFn, getSecret, respond(fn: typeof respond) { respond = fn; } };
   }
   const jreq = (variant: JudgeVariant = 'main', extra: Partial<JudgeRequest> = {}) => req(variant, { botJudge: JEV, ...extra });
+  it('counts a sent 503 but no request for a missing key (s28b)', async () => {
+    for (const hasKey of [false, true]) {
+      const onResult = vi.fn();
+      const fetchFn = vi.fn(async () => new Response('', { status: 503 }));
+      const judge = make(fakeBackend().backend, { getSecret: async () => hasKey ? KEY : undefined, fetch: fetchFn, onResult });
+      const result = await judge.judge(jreq());
+      expect(result.error?.kind).toBe(hasKey ? 'network' : 'key');
+      expect(onResult).toHaveBeenCalledWith(expect.anything(), result, { sent: hasKey });
+      expect(fetchFn).toHaveBeenCalledTimes(hasKey ? 1 : 0);
+      await judge.shutdown();
+    }
+  });
   const logged = () => JSON.stringify([fake.log.info.mock.calls, fake.log.warn.mock.calls, fake.log.fail.mock.calls]);
   const json = (status: number, body: unknown, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers });
 
