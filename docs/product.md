@@ -536,7 +536,7 @@ s31 起 Claude 通过 `canUseTool` 接上选项题、计划确认和完全访问
   - Read、Write 出工作区进回调；只读档的 Write 写工作区里也进回调。Bash 读工作区以外不进回调，直接读到。
   - 回调只拒超出这一档的请求，不一律拒。一律拒的话，有两处比今天拒得多（e03、e03b）：
     - Read 读工作区以外：今天直接读到，换档后进回调。回调按真实路径对照沙箱给 Bash 的同一份读名单，和 Bash 一个边界：按 `denyRead`、`allowRead`（3.6，第 9 节第 20 项）。
-    - 带 shell 变量的 Bash：s31 在 Linux SDK 0.3.296 实测，变量读取以 `decisionReasonType: other` 进回调，ask 规则是 `rule`，可以分开；放行后仍在沙箱里，工作区外写入和 `denyRead` 路径读取均被阻止。因此保留非规则、非安全确认的沙箱 Bash，明确申请退出沙箱的仍拒绝。Mac 补验待完成。
+    - 带 shell 变量的 Bash：s31 在 Linux SDK 0.3.296 实测，变量读取以 `decisionReasonType: other` 进回调，ask 规则是 `rule`，可以分开；放行后仍在沙箱里，工作区外写入和 `denyRead` 路径读取均被阻止。因此保留非规则、非安全确认的沙箱 Bash，明确申请退出沙箱的仍拒绝。Mac 任务 74 已在 Seatbelt 下复验变量 Bash 仍受沙箱限制，见 `docs/v1-plan.md` 的 s31 Mac 补验记录。
   - 代价是今天读写档的 Write 能往工作区以外写，换档后会被拒（这一次的记忆目录除外，3.6）。
   - WebFetch、WebSearch：关网仍去掉工具并由回调兜底拒绝；开网显式允许。s31 Linux 实测，不设允许项的 WebFetch 会进回调；设置裸工具允许项后普通网站不进回调，命中网站 ask 规则的仍以 `rule` 进回调并在只读、读写档拒绝。
   - 各个根里两家的配置文件（3.6）在读写档下用拒绝规则挡：e02、e03b 测到 `.claude/` 下和 `.mcp.json` 的 Write 在 `acceptEdits` 下也走回调；加了拒绝规则后不进回调、直接被拒（e03b，只测了主工作区）。
@@ -544,7 +544,7 @@ s31 起 Claude 通过 `canUseTool` 接上选项题、计划确认和完全访问
 - 中途改档不用重开会话：Codex 每一轮的 `turn/start` 能带新的设置，Claude 运行中能 `setPermissionMode`，升档降档都是下一轮生效（实测，e02 第 3 节）。升到完全访问要求会话启动时带 `allowDangerouslySkipPermissions`，所以每条会话启动时都带上；resume 不恢复上次的档（`settingSources` 为空时测的），每次都明确传。Codex 一半还是推断。
 - Linux 上 Codex 的只读、读写档今天直接拒绝启动（`D/agent/codex-appserver/backend.ts` 的 `sandboxParams`），所以 Linux 上的 Codex 只能用完全访问，界面写明。被拉进的已有群默认只读，在 Linux 上用 Codex 时起不来：bot 回一句说明，等主人在设置里明确改成完全访问，不自动放开。（s20b 已改）
 
-**完全访问下还会问什么。** 不问权限。Claude 自己在任何模式下都会停下来问的少数几类，照样发卡问，和 Claude 自己的行为一致，比如用户在自己的 Claude 设置里写了"这类操作必须问"、删除关键目录（`approval-ux.md` 2.2）。这种卡只有主人和管理员能点，15 分钟没人点按拒绝。只读、读写两档下，这几类直接拒绝。实测里 `bypassPermissions` 下，没有规则时只有 AskUserQuestion 走到回调，写 `.claude/` 下的文件也直接放行（e02 第 1 节）。规则在 Mac 上测了项目设置里的（e03b，SDK 0.3.296，`settingSources: ['user', 'project']`，单次）：Bash 命中 ask 规则时进回调，放行后照常执行；命中 deny 规则直接被拒，不进回调；普通 Bash 不进回调。s31 在 Linux SDK 0.3.296 实测：项目和隔离用户层的 Bash ask、Edit ask 均进回调并标成 `rule`；删除临时工作区根进 `safetyCheck` 回调（实测拒绝），普通子目录删除不进回调。读写档的 `.claude/rules/`、`.mcp.json` 敏感路径提示同样是 `safetyCheck`，按真实路径判断后放行；完全访问档它们不进回调。这里只报告实测范围，不承诺每一种删除都要确认。Mac 补验待完成。
+**完全访问下还会问什么。** 不问权限。Claude 自己在任何模式下都会停下来问的少数几类，照样发卡问，和 Claude 自己的行为一致，比如用户在自己的 Claude 设置里写了"这类操作必须问"、删除关键目录（`approval-ux.md` 2.2）。这种卡只有主人和管理员能点，15 分钟没人点按拒绝。只读、读写两档下，这几类直接拒绝。实测里 `bypassPermissions` 下，没有规则时只有 AskUserQuestion 走到回调，写 `.claude/` 下的文件也直接放行（e02 第 1 节）。规则在 Mac 上测了项目设置里的（e03b，SDK 0.3.296，`settingSources: ['user', 'project']`，单次）：Bash 命中 ask 规则时进回调，放行后照常执行；命中 deny 规则直接被拒，不进回调；普通 Bash 不进回调。s31 在 Linux SDK 0.3.296 实测：项目和隔离用户层的 Bash ask、Edit ask 均进回调并标成 `rule`；删除临时工作区根进 `safetyCheck` 回调（实测拒绝），普通子目录删除不进回调。读写档的 `.claude/rules/`、`.mcp.json` 敏感路径提示同样是 `safetyCheck`，按真实路径判断后放行；完全访问档它们不进回调。这里只报告实测范围，不承诺每一种删除都要确认。`docs/plans/s31.md` 第 6.2 节的 Mac 补验已完成，见 `docs/v1-plan.md` 的 s31 Mac 补验记录；删除工作区根与敏感路径的本轮专项证据来自 Linux。
 
 **卡片。** 所有要人点的卡片一个样：同样的版面、同样的状态、同样的"谁能点"规则。所有会话默认就有，不只在私聊。
 - **运行卡**：流式输出、⏹ 停止、工具折叠、上下文仪表、子 agent 区（见 3.9）。等人回答时显示"⏸ 等 张三 回答（见下方卡片）"。
@@ -779,8 +779,8 @@ bot 的个性、记忆、skill 导入后为空，行为和今天一样。
 | 8 | 主人在 Codex 应用或 `claude --resume` 里打开同一条会话，看到的是否和 bot 一样；两边同时写会怎样 | 3.5。e14 在终端里测了：看到的一样；bot 最后一轮之后还占着会话 45 到 50 分钟，这期间 Claude 两边分叉，Codex 拒绝终端打开。owner 2026-10-16 定了改（D6 选 A，s15b 已改）。Codex 桌面端没测，放进 M5 预览版任务 |
 | 9 | 智能判断的延迟和每次占多少额度 | 3.4 的成本上限 |
 | 10 | bridge 的锁格式能不能占住 `processes.json` | 第 5 节第 4 步。预查能（e07）：每个 bot 一把锁，挡得住 `run`，挡不住 `start`。真机在 e08 |
-| 11 | Claude 三档、提问和自身确认的真实回调边界 | s31 Linux SDK 0.3.296 已探测：ask 规则为 rule；变量 Bash 放行仍受沙箱约束；普通 MCP 与工作区外 Read 可与规则区分；工作区根删除进 safetyCheck，普通子目录不进。隔离 HOME/CLAUDE_CONFIG_DIR 的两轮 G 证明退出计划模式恢复 acceptEdits，用户和项目权限设置不变；CLI 远端缓存另行分类，未宣称元数据字节不变。Mac 补验待完成 |
-| 12 | Claude 的关网和写文件边界 | s31 在 Linux 的真实集成与测试群中已验：关网 curl 无 200，SandboxNetworkAccess 回调拒绝；开网 curl 200、WebFetch 成功；只读内外 Write 和读写工作区外 Write 均拒绝，文件不存在。PreToolUse 真实路径钩子补上设置允许项跳过回调的缺口。Mac Seatbelt 补验待完成，配置挡写和限读在 s31b |
+| 11 | Claude 三档、提问和自身确认的真实回调边界 | s31 Linux SDK 0.3.296 已探测：ask 规则为 rule；变量 Bash 放行仍受沙箱约束；普通 MCP 与工作区外 Read 可与规则区分；工作区根删除进 safetyCheck，普通子目录不进。隔离 HOME/CLAUDE_CONFIG_DIR 的两轮 G 证明退出计划模式恢复 acceptEdits，用户和项目权限设置不变；CLI 远端缓存另行分类，未宣称元数据字节不变。Mac 任务 74 的 A/C/G/I 与 7 项真实集成已通过，范围见 s31 Mac 补验记录；真实按钮仍留 M6 owner |
+| 12 | Claude 的关网和写文件边界 | s31 在 Linux 的真实集成与测试群中已验：关网 curl 无 200，SandboxNetworkAccess 回调拒绝；开网 curl 200、WebFetch 成功；只读内外 Write 和读写工作区外 Write 均拒绝，文件不存在。PreToolUse 真实路径钩子补上设置允许项跳过回调的缺口。Mac 任务 74 的 Seatbelt、大小写卷与真实测试 Bot 边界已通过；配置挡写和限读仍在 s31b |
 | 13 | 飞书卡片里的 @ 会不会提醒人 | 3.8 卡片怎么发 |
 | 14 | 拉历史带 `with_sender_name` 能不能拿到名字；别的 bot 的卡片回答能不能拉到正文；话题里引用某一条消息时有没有字段能分出来；勾了"同时发送到群"会收到几次事件 | 3.4、3.5。已测（e10）：名字能拿到，真人和 bot 都有；别的 bot 的卡片正文要带 `card_msg_content_type` 才拉得到；话题里回复某一条时，`parent_id` 是那一条，`root_id` 是话题第一条（接口发的回复）。"同时发送到群"没测，s14 之前由 owner 在客户端里发 |
 | 15 | bot 能不能在私聊里开话题，用户在私聊里开的话题事件里带不带 `thread_id` | 3.5。已测（e10）：bot 用 `reply_in_thread` 能在私聊里开话题；用户开的和 bot 开的，事件里都带 `thread_id` |
