@@ -45,6 +45,10 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
       event('item/started',{threadId:'A',turnId:'A-turn-new',item:{type:'commandExecution',id:'resumed-step',command:'pwd',cwd:'/repo'}});
       event('turn/completed',{threadId:'host',turn:{id:'turn',status:'completed'}}); return;
     }
+    if (scenario === 'many') {
+      for (let i = 0; i < 65; i++) { collab('spawnAgent',['active-'+i]); start('active-'+i); }
+      event('turn/completed',{threadId:'host',turn:{id:'turn',status:'completed'}}); return;
+    }
     if (scenario === 'late') { collab('spawnAgent',['late-child']); return; }
     if (scenario === 'states') {
       const agentsStates = {};
@@ -176,6 +180,27 @@ it.each(['late', 'states'])('handles child interruption lifecycle: %s', async sc
   } finally {
     await thread.close();
     await drained;
+    if (previous === undefined) delete process.env.CODEX_BIN;
+    else process.env.CODEX_BIN = previous;
+  }
+});
+
+
+it('interrupts all 65 active children after the parent turn ends', async () => {
+  const previous = process.env.CODEX_BIN;
+  process.env.CODEX_BIN = bin;
+  const thread = await new CodexAppServerBackend().startThread({ cwd: dir });
+  const offset = requests().length;
+  try {
+    for await (const event of thread.runStreamed({ text: 'many' }).events) void event;
+    await expect(thread.abort('turn')).rejects.toThrow('parent failed');
+    const interrupted = requests().slice(offset).filter(request => request.method === 'turn/interrupt');
+    expect(interrupted).toHaveLength(66);
+    for (let i = 0; i < 65; i++) expect(interrupted).toContainEqual(expect.objectContaining({
+      params: { threadId: 'active-' + i, turnId: 'active-' + i + '-turn' },
+    }));
+  } finally {
+    await thread.close();
     if (previous === undefined) delete process.env.CODEX_BIN;
     else process.env.CODEX_BIN = previous;
   }

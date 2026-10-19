@@ -478,9 +478,9 @@ class CodexThread implements AgentThread {
       return [];
     }
     for (const [key, value] of this.children) if (value.closed) this.children.delete(key);
-    if (this.children.size >= 64) {
+    while (this.children.size >= 64) {
       const oldest = [...this.children].find(([, value]) => !value.running);
-      if (!oldest) return [];
+      if (!oldest) break; // All live children must remain stoppable, even above the history budget.
       this.children.delete(oldest[0]);
     }
     this.children.set(id, child);
