@@ -143,12 +143,23 @@ export function createNameBook(
   };
 }
 
-/** `p`, or undefined once `ms` passed (the SDK's calls have no timeout). */
-export function withDeadline<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
+/**
+ * `p`, or undefined once `ms` passed (the SDK's calls have no timeout). A `p` that settles after that is still
+ * watched: one info line says how long it took and whether it succeeded, to tell a slow call from a dead one (s23f2).
+ * `what` names the call in that line.
+ */
+export function withDeadline<T>(p: Promise<T>, ms: number, what?: string): Promise<T | undefined> {
+  const started = Date.now();
+  let expired = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<undefined>((resolve) => {
-    timer = setTimeout(() => resolve(undefined), ms);
+    timer = setTimeout(() => { expired = true; resolve(undefined); }, ms);
   });
+  const settled = (ok: boolean): void => {
+    if (expired) log.info('intake', 'late-answer', { ...(what ? { what } : {}), deadlineMs: ms, ms: Date.now() - started, ok });
+  };
+  // handles the rejection too, so a late failure is never unhandled
+  p.then(() => settled(true), () => settled(false));
   return Promise.race([p, late]).finally(() => clearTimeout(timer));
 }
 

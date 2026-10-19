@@ -7,6 +7,11 @@ import { enterDataAccess, type DataLease } from '../config/data-access';
 import { inBotSession } from '../config/session-env';
 import { observeShutdown, type ShutdownControl } from '../host/lifecycle';
 import type { LingerChoice } from './commands/service';
+import { tuneNetworkDefaults } from '../core/net-tuning';
+
+// First thing in every daemon process (the supervisor, each `--bot` child and each command): none of the modules
+// above connects anywhere as it loads.
+tuneNetworkDefaults();
 
 const program = new Command().name('vonvon').description('Vonvon Bot daemon').version(bridgeVersion());
 let lease: DataLease | undefined;

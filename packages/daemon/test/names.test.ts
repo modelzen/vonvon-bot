@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
-import { createNameBook } from '../src/bot/names';
+import { createNameBook, withDeadline } from '../src/bot/names';
+import { log } from '../src/core/logger';
 import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
 
 vi.mock('../src/core/logger', () => ({ log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() } }));
@@ -141,5 +142,60 @@ describe('NameBook', () => {
     book.remember('ou_a', '从历史学到的');
     release();
     expect(await pending).toBe('从历史学到的');
+  });
+});
+
+describe('withDeadline (s23f2: a late answer is logged, not dropped)', () => {
+  afterEach(() => { vi.useRealTimers(); vi.mocked(log.info).mockClear(); });
+  const late = () => vi.mocked(log.info).mock.calls.filter((c) => c[1] === 'late-answer').map((c) => c[2]);
+  /** A promise settled by hand. */
+  const deferred = <T>() => {
+    let resolve!: (value: T) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+    return { promise, resolve, reject };
+  };
+
+  it('gives undefined at the deadline, then logs how long the call took and that it came', async () => {
+    vi.useFakeTimers();
+    const d = deferred<string>();
+    const result = withDeadline(d.promise, 1500, 'sync-lookup');
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(await result).toBeUndefined();
+    expect(late()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(700);
+    d.resolve('answer');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(late()).toEqual([{ what: 'sync-lookup', deadlineMs: 1500, ms: 2200, ok: true }]);
+  });
+
+  it('a late failure is logged as not ok and never left unhandled', async () => {
+    vi.useFakeTimers();
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      const d = deferred<string>();
+      const result = withDeadline(d.promise, 3000);
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(await result).toBeUndefined();
+      d.reject(new Error('socket hang up'));
+      await vi.advanceTimersByTimeAsync(0);
+      // a real turn of the loop, where Node reports a rejection nobody handled
+      vi.useRealTimers();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(late()).toEqual([{ deadlineMs: 3000, ms: 4000, ok: false }]);
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
+  });
+
+  it('an answer in time is returned as before and logs nothing; a failure in time still rejects', async () => {
+    vi.useFakeTimers();
+    expect(await withDeadline(Promise.resolve(7), 1000)).toBe(7);
+    const failing = withDeadline(Promise.reject(new Error('boom')), 1000);
+    await expect(failing).rejects.toThrow('boom');
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(late()).toEqual([]);
   });
 });

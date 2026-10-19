@@ -492,6 +492,28 @@ describe('decision models (s23f)', () => {
     expect(logged()).not.toMatch(/群消息|Cannot authenticate|你好/);
   });
 
+  it('a connection that failed before sending is tried once: the verdict or the error says retried, the attempts by code and family (s23f2)', async () => {
+    const attempt = (code: string, address: string) => Object.assign(new Error(`connect ${code} ${address}:443`), { code, syscall: 'connect', address, port: 443 });
+    const eyeballs = () => Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new AggregateError([attempt('ETIMEDOUT', '104.18.1.1'), attempt('ENETUNREACH', '2606:4700::1')]), { code: 'ETIMEDOUT' }),
+    });
+    const j = jev();
+    let n = 0;
+    j.respond((init) => { if (n++ === 0) throw eyeballs(); return answerTo(init); });
+    expect(await j.judge.judge(jreq('main'))).toMatchObject({ decision: 'skip', provider: 'typesafe' });
+    expect(j.fetchFn).toHaveBeenCalledTimes(2);
+    expect(fake.log.info.mock.calls.find((c) => c[1] === 'decision-retry')![2]).toMatchObject({ call: 'decision', code: 'ETIMEDOUT', attempts: ['ETIMEDOUT/v4', 'ENETUNREACH/v6'] });
+    expect(fake.log.info.mock.calls.find((c) => c[1] === 'verdict')![2]).toMatchObject({ provider: 'typesafe', retried: true });
+    const down = jev();
+    down.respond(() => { throw eyeballs(); });
+    expect(await down.judge.judge(jreq('mentioned'))).toMatchObject({ decision: 'main', error: { kind: 'network', detail: '连不上 TypeSafe（ETIMEDOUT）' } });
+    expect(down.fetchFn).toHaveBeenCalledTimes(2);
+    expect(fake.log.warn.mock.calls.find((c) => c[1] === 'decision-error')![2]).toMatchObject({
+      kind: 'network', code: 'ETIMEDOUT', attempts: ['ETIMEDOUT/v4', 'ENETUNREACH/v6'], retried: true,
+    });
+    expect(logged()).not.toMatch(/104\.18|2606:4700|TESTKEY/);
+  });
+
   it('runs 8 at a time with 32 queued per provider, refuses the 41st as busy, and gives each slot on as a call settles', async () => {
     const j = jev();
     const pending: Array<() => void> = [];
