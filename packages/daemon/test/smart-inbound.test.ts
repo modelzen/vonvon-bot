@@ -329,7 +329,8 @@ describe('smart mode intake (s25)', () => {
     expect(startThread).not.toHaveBeenCalled();
   });
 
-  it(`stops judging after ${JUDGE_BUDGET} judgements in an hour; a named message then goes to the main area unjudged`, async () => {
+  it('keeps judging a named message past 60 judgements an hour; unnamed ones are not judged', async () => {
+    const judgeNamed = fake.judge.getMockImplementation()!;
     fake.judge.mockImplementation(async (req: JudgeRequest) => { asked.set(req.ref!, { req, answer: deferred() }); return result('skip'); });
     for (let i = 0; i < JUDGE_BUDGET; i++) {
       await send(says(`第 ${i} 句`));
@@ -337,9 +338,19 @@ describe('smart mode intake (s25)', () => {
     }
     await send(says('超了'));
     await vi.waitFor(() => expect(records().filter((r) => r.reason === 'judge-budget')).toHaveLength(1));
-    await send(says('请回答', { at: true }));
+    fake.judge.mockImplementationOnce(judgeNamed);
+    const named = says('请回答', { at: true });
+    await send(named);
+    expect((await judged(named)).req.variant).toBe('mentioned');
+    expect(fake.judge).toHaveBeenCalledTimes(JUDGE_BUDGET + 1);
+    await decide(named, result('main'));
     await vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
-    expect(fake.judge).toHaveBeenCalledTimes(JUDGE_BUDGET);
+    fake.judge.mockImplementationOnce(judgeNamed);
+    const next = says('再请回答', { at: true });
+    await send(next);
+    expect((await judged(next)).req.variant).toBe('mentioned');
+    expect(fake.judge).toHaveBeenCalledTimes(JUDGE_BUDGET + 2);
+    await decide(next, result('main'));
   });
 
   it('judges an unnamed topic message only for whether to reply', async () => {
@@ -635,7 +646,7 @@ describe('bot wakes (s27a)', () => {
     try {
       await botSays(m);
       expect((await judged(m)).req).toMatchObject({ variant: 'topic', message: { from: 'bot', name: '小P', senderId: 'ou_other', mentions: ['小码'], text: expect.stringContaining('SECRET_BOT_TEXT') } });
-      expect(take).toHaveBeenCalledOnce(); expect(fake.inputs).toEqual([]);
+      expect(take).toHaveBeenCalledOnce(); expect(take).toHaveBeenCalledWith(CHAT, expect.any(Number), 'bot'); expect(fake.inputs).toEqual([]);
       expect(fake.react).not.toHaveBeenCalled(); expect(fake.unreact).not.toHaveBeenCalled();
       await decide(m, result('reply')); await answered();
       expect(fake.inputs[0]?.startsWith(BOT_WAKE_NOTE('小P'))).toBe(true);
