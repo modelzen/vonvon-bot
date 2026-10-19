@@ -90,6 +90,10 @@ function bridgeClaudeEnv(): Record<string, string> {
   return base;
 }
 
+function sessionClaudeEnv(): Record<string, string> {
+  return { ...bridgeClaudeEnv(), CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' };
+}
+
 /**
  * Options shared by the helper queries (login probe, model list, session title).
  * They start the same CLI with the same user settings a turn reads, so an `env`
@@ -612,7 +616,7 @@ export class ClaudeAgentBackend implements AgentBackend {
       permission: permissionOptions(access),
       systemPromptAppend: BRIDGE_DEVELOPER_INSTRUCTIONS,
       settingSources: BRIDGE_SETTING_SOURCES,
-      env: bridgeClaudeEnv(),
+      env: sessionClaudeEnv(),
       query: sdk.query,
     });
   }
@@ -633,7 +637,7 @@ export class ClaudeAgentBackend implements AgentBackend {
       permission: permissionOptions(access),
       systemPromptAppend: BRIDGE_DEVELOPER_INSTRUCTIONS,
       settingSources: BRIDGE_SETTING_SOURCES,
-      env: bridgeClaudeEnv(),
+      env: sessionClaudeEnv(),
       query: sdk.query,
     });
   }
