@@ -98,7 +98,7 @@ describe('judge', () => {
     await vi.advanceTimersByTimeAsync(300);
     expect(result.value).toEqual({
       decision: 'topic', reason: '新的事', backend: 'codex-appserver', model: 'gpt-6-luna', effort: 'low',
-      modelSource: 'default', promptSource: 'bot', ms: 300,
+      modelSource: 'default', promptSource: 'bot', promptHash: expect.stringMatching(/^[a-f0-9]{16}$/), ms: 300,
     });
     expect(onResult).toHaveBeenCalledTimes(1);
     expect(onResult).toHaveBeenCalledWith(req('main'), result.value, { sent: true });
@@ -110,6 +110,20 @@ describe('judge', () => {
     expect(verdict).toMatchObject({ ref: '123456', decision: 'topic', inputTokens: 10, cachedTokens: 2, outputTokens: 3, reasoningTokens: 1 });
     // never the text, the reason or the prompt
     expect(JSON.stringify(fake.log.info.mock.calls)).not.toMatch(/新的事|你好|SMART/);
+  });
+
+  it('hashes the prompt body consistently, and has no hash when closed before reading', async () => {
+    let text = 'SMART';
+    const judge = make(fakeBackend().backend, { readPrompt: async () => ({ source: 'bot', text, path: '/p' }) });
+    const first = await judge.judge(req());
+    expect(first.promptHash).toMatch(/^[a-f0-9]{16}$/);
+    expect((await judge.judge(req())).promptHash).toBe(first.promptHash);
+    text += ' changed';
+    expect((await judge.judge(req())).promptHash).not.toBe(first.promptHash);
+    await judge.shutdown();
+    const closed = await judge.judge(req());
+    expect(closed.error?.kind).toBe('closed');
+    expect(closed).not.toHaveProperty('promptHash');
   });
 
   it('counts auth requests but not their cooldown (s28b)', async () => {
@@ -488,7 +502,7 @@ describe('decision models (s23f)', () => {
     const result = await j.judge.judge(jreq('topic', { topicTitle: '发版' }));
     expect(result).toEqual({
       decision: 'reply', reason: 'Jev：不回 0.30、回 0.70（把握度 0.40）', confidence: 0.4, backend: 'codex-appserver', model: 'jev-latest', provider: 'typesafe',
-      modelSource: 'bot', promptSource: 'bot', ms: 0,
+      modelSource: 'bot', promptSource: 'bot', promptHash: expect.stringMatching(/^[a-f0-9]{16}$/), ms: 0,
     });
     expect(j.backend.judge).not.toHaveBeenCalled();
     expect(j.backend.listModels).not.toHaveBeenCalled();

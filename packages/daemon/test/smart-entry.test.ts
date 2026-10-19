@@ -1,3 +1,4 @@
+import { FocusEverywhere } from './helpers/focus-everywhere';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
@@ -75,7 +76,7 @@ beforeEach(async () => {
   fake.judge.mockImplementation(async (_req: JudgeRequest): Promise<JudgeResult> =>
     ({ decision: 'skip', reason: '闲聊', backend: 'codex-appserver', model: 'm', modelSource: 'default', promptSource: 'default', ms: 1 }));
   setDiagnosticsSink(event => events.push(event));
-  orchestrator = createOrchestrator(channel as never, cfg, paths.appDir);
+  orchestrator = createOrchestrator(channel as never, cfg, paths.appDir, undefined, { attention: new FocusEverywhere() });
 });
 afterEach(async () => { setDiagnosticsSink(undefined); await orchestrator.shutdown(); });
 
@@ -125,5 +126,45 @@ describe('s25c: the web entry writes 智能 the way the inbound path reads it', 
       expect(card).not.toContain(`"a":"${DM.setNoMentionDm}"`);
     }
     expect(await getProjectByName('entry')).toMatchObject({ kind: 'single', smart: true, noMention: false });
+  });
+});
+
+describe('attention forgets (s25g)', () => {
+  let clock = Date.now();
+  let nextTimer = 0;
+  const timers = new Map<number, { at: number; fn(): void }>();
+  const time = {
+    now: () => clock,
+    setTimer: (fn: () => void, ms: number) => { const h = ++nextTimer; timers.set(h, { at: clock + ms, fn }); return h; },
+    clearTimer: (h: unknown) => { if (typeof h === 'number') timers.delete(h); },
+  };
+  const settle = async () => { for (let i = 0; i < 30; i++) await new Promise(r => setImmediate(r)); };
+  async function advance(ms: number): Promise<void> {
+    const end = clock + ms;
+    for (;;) {
+      const next = [...timers].filter(([, t]) => t.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
+      if (!next) break;
+      timers.delete(next[0]); clock = Math.max(clock, next[1].at); next[1].fn(); await settle();
+    }
+    clock = end; await settle();
+  }
+  const forgotten = () => fake.log.info.mock.calls.filter(([, e]) => e === 'attention-forget').map(([, , f]) => f);
+  beforeEach(async () => {
+    timers.clear(); clock = Date.now(); await orchestrator.shutdown();
+    orchestrator = createOrchestrator(channel as never, cfg, paths.appDir, undefined, { time });
+  });
+  it('58. resets attention on both mode transitions and unbinding, but not on an unchanged mode', async () => {
+    await switchTo('smart'); fake.log.info.mockClear();
+    await send(chatter('ENTRY_FIRST')); await settle(); expect(fake.judge).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(timers.size).toBe(1));
+    await advance(20_000); await vi.waitFor(() => expect(fake.judge).toHaveBeenCalledTimes(1));
+    await switchTo('single'); expect(forgotten()).toHaveLength(1); expect(forgotten()[0]).toMatchObject({ why: 'mode' });
+    await switchTo('smart'); expect(forgotten()).toHaveLength(2); expect(forgotten()[1]).toMatchObject({ why: 'mode' });
+    await send(chatter('ENTRY_RESET')); await vi.waitFor(() => expect(timers.size).toBe(1));
+    await advance(20_000); await vi.waitFor(() => expect(fake.judge).toHaveBeenCalledTimes(2));
+    await switchTo('smart'); expect(forgotten()).toHaveLength(2);
+    const expectedRevision = projectRevision((await getProjectByName('entry'))!);
+    await orchestrator.collaboration({ action: 'removeProject', ...target, expectedRevision });
+    expect(forgotten()).toHaveLength(3); expect(forgotten()[2]).toMatchObject({ why: 'unbind' });
   });
 });

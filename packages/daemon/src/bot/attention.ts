@@ -159,6 +159,16 @@ export class Attention {
     this.focus(this.touch(ref, true)!, now);
   }
 
+  /** Freeze an existing focused place into watch without changing its reply time. */
+  freeze(ref: PlaceRef, _now: number): boolean {
+    const place = this.touch(ref, false);
+    if (!place || place.mode !== 'focus') return false;
+    place.mode = 'watch';
+    place.intervalMs = this.params.exitIntervalMs;
+    place.misses = 0;
+    return true;
+  }
+
   state(place: string): PlaceView | undefined {
     const value = this.places.get(place);
     return value ? { ...value } : undefined;
