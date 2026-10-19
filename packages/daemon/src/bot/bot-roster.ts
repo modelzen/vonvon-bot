@@ -51,8 +51,11 @@ export function createBotRoster(
       if (body === 'stopped') return undefined;
       if (!body) return failed('timeout');
       if (body.code !== 0) return failed(`code=${String(body.code)}`, body);
+      // No bucket at all, not even an empty one: the API changed, so nothing is known (v1-plan, s27a0 做法).
+      const bucket = body.data?.bots;
+      if (!Array.isArray(bucket)) return failed('no-bots-bucket');
       const bots = new Map<string, RosterBot>();
-      for (const b of body.data?.bots ?? []) {
+      for (const b of bucket) {
         if (typeof b?.member_id === 'string' && b.member_id) {
           bots.set(b.member_id, { appId: typeof b.app_id === 'string' ? b.app_id : '', name: typeof b.name === 'string' ? b.name : '' });
         }

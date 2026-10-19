@@ -24,6 +24,10 @@ describe('neutraliseAts', () => {
     ['```\n<at id="ou_b">小审</at>\n```', '```\n@小审\n```'], // in code too
     ['`<at id=ou_b>小审</at>`', '`@小审`'],
     ['<at id=all></at>', '@所有人'],
+    ['<at id=ou_b/> 和 <at id="ou_b" />', '@小审 和 @小审'], // self-closed: whole, the list's name
+    ['<at id=ou_b>a<b>c</b></at>', '@a<b>c</b>'], // no `</at>` left behind
+    ['<at id=ou_b>张\n三</at>', '@张\n三'],
+    ['<at id=ou_b>小审 请看\n<at id=ou_h>张三</at>', '@小审 请看\n<at id=ou_h>张三</at>'], // a name stops at the next tag
   ])('a bot, `all` or a cut tag: %s', (text, out) => {
     expect(neutraliseAts(text, BOTS)).toBe(out);
   });
@@ -35,6 +39,7 @@ describe('neutraliseAts', () => {
     expect(neutraliseAts('<at id="ou_h">张三</at><at id="ou_b">小审</at>', undefined, new Set(['ou_h']))).toBe('<at id="ou_h">张三</at>@小审');
     expect(neutraliseAts('<at id="ou_b">小审</at>', BOTS, new Set(['ou_b']))).toBe('@小审'); // a bot never stays
     expect(neutraliseAts('说 <at 这种写法\n下一行 >', undefined)).toBe('说 <at 这种写法\n下一行 >'); // a tag never spans lines
+    expect(neutraliseAts('a <at least> b', undefined)).toBe('a <at least> b'); // no attribute: not a mention
   });
 });
 

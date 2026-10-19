@@ -20,7 +20,8 @@ const lists = new WeakMap<object, ChatBots>();
 const wrapped = new WeakSet<object>();
 const kept = new WeakMap<object, ReadonlySet<string>>();
 
-/** `ids` are @-ed in `card` by the program itself (an ask card's respondents): they stay real before the list is read. */
+/** `ids` are @-ed in `card` by the program itself (an ask card's respondents): they stay real before the list is read.
+ * Kept by the card object: a JSON copy (the run card's forced update) loses it; the run card has no such @ yet. */
 export function keepAts<T extends object>(card: T, ids: readonly string[]): T {
   kept.set(card, new Set(ids));
   return card;
@@ -28,20 +29,22 @@ export function keepAts<T extends object>(card: T, ids: readonly string[]): T {
 export const keptAts = (card: object): ReadonlySet<string> | undefined => kept.get(card);
 
 const HAS_AT = /<at\b/i;
-// A tag never spans lines; `$` is a frame cut inside the tag.
-const AT = /<at\b([^>\n]*)(?:>([^<\n]*)<\/at\s*>|>|$)/gi;
-const AT_ID = /\b(?:open_id|user_id|id)\s*=\s*["']?([^"'\s>]+)/i;
+// The opening tag never spans lines, or `<at least …` in prose would eat them up to a `>`; `$` is a frame cut inside
+// it. The name may hold other tags and lines, never another `<at`, so no `</at>` is left behind.
+const AT = /<at\b([^>\n]*)(?:>((?:(?!<\/?at\b)[\s\S])*)<\/at\s*>|>|$)/gi;
+const AT_ID = /\b(?:open_id|user_id|id)\s*=\s*["']?([^"'\s>/]+)/i;
 
 /** Every opening tag counts: `id=`, `user_id=`, `open_id=`, quoted or not, closed or not, inside code too (Feishu was
  * never tried there; it only changes the look). `bots` undefined: this chat's list is not known. */
 export function neutraliseAts(text: string, bots: ChatBotIds | undefined, keep?: ReadonlySet<string>): string {
   if (!HAS_AT.test(text)) return text;
   return text.replace(AT, (tag, attrs: string, name: string | undefined) => {
+    if (!attrs.includes('=')) return tag; // `<at least>`: no attribute, names nobody
     const id = AT_ID.exec(attrs)?.[1];
     const bot = id !== undefined && bots?.has(id) === true;
     if (!bot && id !== 'all' && (bots !== undefined || (id !== undefined && keep?.has(id) === true))) return tag;
-    if (name === undefined) return '@';
-    return `@${name.trim() || (id && bots?.get(id)?.name) || (bot ? '另一个 bot' : id === 'all' ? '所有人' : '某人')}`;
+    if (name === undefined && !/\/\s*$/.test(attrs)) return '@'; // unclosed or cut; `<at id=x/>` is whole
+    return `@${name?.trim() || (id && bots?.get(id)?.name) || (bot ? '另一个 bot' : id === 'all' ? '所有人' : '某人')}`;
   });
 }
 

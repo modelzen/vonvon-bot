@@ -23,6 +23,15 @@ describe('bot roster', () => {
     expect([...r.peek('oc_1/x')!]).toEqual([['ou_b8', { appId: 'cli_8', name: 'Bot 8' }], ['ou_me', { appId: '', name: '我' }]]);
   });
 
+  it('takes a success without the bots bucket for a failed read; an empty bucket is a read', async () => {
+    const r = roster(vi.fn(async () => ({ code: 0, data: { items: [{ member_id: 'ou_b8' }] } })));
+    await r.load('oc_1');
+    expect(r.peek('oc_1')).toBeUndefined();
+    const empty = roster(vi.fn(async () => body([])));
+    await empty.load('oc_1');
+    expect([...empty.peek('oc_1')!.keys()]).toEqual(['ou_me']);
+  });
+
   it('trusts a list ten minutes, shares one read, and keeps the old list when a re-read fails', async () => {
     vi.useFakeTimers();
     const request = vi.fn().mockResolvedValueOnce(body([B8])).mockRejectedValue(new Error('offline'));
