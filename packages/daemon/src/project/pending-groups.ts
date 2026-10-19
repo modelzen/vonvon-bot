@@ -4,10 +4,11 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 type Candidate = { chatId: string; operator: string; addedAt: number; generation: string } &
-  ({ state: 'verifying' } | { state: 'ready'; name: string });
-export type PendingGroupVerification = { state: 'ready'; name: string } | { state: 'retry' } | { state: 'ignore' };
-export interface PendingGroup { chatId: string; name: string; addedAt: number }
+  ({ state: 'verifying' } | { state: 'ready'; name: string; topic?: boolean });
+export type PendingGroupVerification = { state: 'ready'; name: string; topic: boolean } | { state: 'retry' } | { state: 'ignore' };
+export interface PendingGroup { chatId: string; name: string; addedAt: number; topic?: boolean }
 export const pendingGroupsFile = (projectsFile: string): string => join(dirname(projectsFile), 'pending-groups.json');
+export const PENDING_REDELIVERY_MS = 10 * 60_000;
 const writers = new Map<string, Promise<unknown>>();
 
 export async function readPendingGroups(file: string): Promise<Candidate[]> {
@@ -21,7 +22,10 @@ export async function readPendingGroups(file: string): Promise<Candidate[]> {
         !('generation' in value) || typeof value.generation !== 'string' || !('state' in value)) throw new Error('待绑定群记录无效');
     const base = { chatId: value.chatId, operator: value.operator, addedAt: value.addedAt, generation: value.generation };
     if (value.state === 'verifying') return { ...base, state: 'verifying' };
-    if (value.state === 'ready' && 'name' in value && typeof value.name === 'string' && value.name.trim()) return { ...base, state: 'ready', name: value.name };
+    if (value.state === 'ready' && 'name' in value && typeof value.name === 'string' && value.name.trim()) {
+      if ('topic' in value && typeof value.topic !== 'boolean') throw new Error('待绑定群记录无效');
+      return { ...base, state: 'ready', name: value.name, ...('topic' in value ? { topic: value.topic } : {}) };
+    }
     throw new Error('待绑定群记录无效');
   });
 }
@@ -69,7 +73,7 @@ export function createPendingGroups(options: {
           if (result.state === 'ignore') return groups.filter(group => group !== current);
           return groups.map(group => {
             if (group !== current) return group;
-            if (result.state === 'ready') return { ...group, state: 'ready', name: result.name };
+            if (result.state === 'ready') return { ...group, state: 'ready', name: result.name, topic: result.topic };
             return { chatId: group.chatId, operator: group.operator, addedAt: group.addedAt, generation: group.generation, state: 'verifying' };
           });
         });
@@ -77,9 +81,16 @@ export function createPendingGroups(options: {
     }
   }
   return {
-    add(chatId: string, operator: string): Promise<void> {
-      return update(options.file, groups => groups.some(group => group.chatId === chatId) ? groups :
-        [...groups, { chatId, operator, addedAt: Date.now(), generation: randomUUID(), state: 'verifying' }]);
+    async add(chatId: string, operator: string, now = Date.now()): Promise<boolean> {
+      let fresh = false;
+      await update(options.file, groups => {
+        const existing = groups.find(group => group.chatId === chatId);
+        if (existing && now - existing.addedAt < PENDING_REDELIVERY_MS) return groups;
+        fresh = true;
+        const candidate: Candidate = { chatId, operator, addedAt: now, generation: randomUUID(), state: 'verifying' };
+        return existing ? groups.map(group => group === existing ? candidate : group) : [...groups, candidate];
+      });
+      return fresh;
     },
     remove: (chatId: string) => retirePendingGroup(options.file, chatId),
     refresh(): Promise<void> {
