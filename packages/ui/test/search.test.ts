@@ -108,3 +108,9 @@ test('words the 叫法表 retired still find the renamed fields', () => {
   assert.equal(findEntries(entries, '当前 Profile')[0]?.title, '当前账号配置 飞书 CLI');
   assert.ok(findEntries(entries, '机器人').some(entry => entry.id === 'agents'));
 });
+
+test('判断次数 searches lead to the usage section', () => {
+  const result = findEntries(entries, '判断次数')[0];
+  assert.equal(result?.destination.page, 'usage');
+  assert.equal(result?.destination.section, '智能模式的判断次数');
+});

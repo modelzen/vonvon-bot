@@ -42,6 +42,7 @@ const membershipGroups: readonly Group[] = [
 /** What the 本机环境 fields were called before the 叫法表 (docs/v1-plan.md section 5), so the old words still find them. */
 const formerly: Readonly<Record<string, string>> = {'后端状态': 'Host 状态', '后端版本': 'Host 版本', '当前账号配置': '当前 Profile'};
 const globalGroups: readonly {page: Page; section: string; fields: readonly Target[]}[] = [
+  {page: 'usage', section: '智能模式的判断次数', fields: [item('判断次数', ['判断', '按 Bot 看'])]},
   {page: 'application', section: '启动选项', fields: [item('运行状态'), item('重启 daemon'), item('登录电脑时启动', ['开机启动'])]},
   {page: 'application', section: '命令行工具', fields: [item('vonvon', ['CLI', '修复命令行工具'])]},
   {page: 'application', section: 'daemon 运行', fields: [item('运行方式'), item('daemon 服务', ['启动 daemon', '停止 daemon']), item('临时运行 Bot', [], {guide: '仅运行指定 Bot 时显示当前临时运行状态。'})]},
@@ -71,7 +72,7 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
     {id: 'agents', title: 'Bot', aliases: ['机器人', '注册 Bot', '添加 Bot', '加入飞书群并设置工作目录'], page: 'collaboration', view: 'agents'},
     {id: 'setup', title: '首次运行清单', aliases: ['后端', '准备执行工具', '扫码', '开权限', '一键开权限', '事件订阅', '卡片回调', '发布版本', '长连接'], page: 'setup'},
     {id: 'groups', title: '群聊', aliases: ['飞书群', '项目', '已连接飞书群'], page: 'collaboration', view: 'groups'},
-    {id: 'usage', title: 'Codex 用量', aliases: ['账号', '套餐', '限额', '活动', '热力图'], page: 'usage'},
+    {id: 'usage', title: 'Codex 用量', aliases: ['账号', '套餐', '限额', '活动', '热力图', '判断次数', '智能模式'], page: 'usage'},
     {id: 'environment', title: '本机环境', aliases: ['工具', '安装', '授权'], page: 'environment'},
     {id: 'application', title: '应用与启动', aliases: ['版本', '更新', '后台服务'], page: 'application'},
     {id: 'secrets', title: '密钥', aliases: ['key', 'API key', 'TypeSafe', 'Jev', '决策模型'], page: 'secrets'},
