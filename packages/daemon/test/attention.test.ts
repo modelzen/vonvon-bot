@@ -241,3 +241,18 @@ describe('state memory and glance selection', () => {
     expect(a.notePrompt('oc_b', 'changed')).toBe(false); // unknown hash after eviction
   });
 });
+
+describe('freeze (s25g)', () => {
+  it('32. turns focus into watch and preserves its reply time', () => {
+    const a = new Attention(); a.replied(A, T0); a.verdict(A, 'focus', 'skip', T0);
+    expect(a.state(A.place)?.misses).toBe(1);
+    expect(a.freeze(A, T0 + s(1))).toBe(true);
+    expect(a.state(A.place)).toMatchObject({ mode: 'watch', intervalMs: m(3), misses: 0, repliedAt: T0 });
+  });
+  it('33. leaves watch unchanged and does not create missing places', () => {
+    const a = new Attention(); a.arrive(A, T0); glanceSkip(a); glanceSkip(a);
+    const before = a.state(A.place); expect(before?.intervalMs).toBe(m(5));
+    expect(a.freeze(A, T0)).toBe(false); expect(a.state(A.place)).toEqual(before);
+    expect(a.freeze(A2, T0)).toBe(false); expect(a.state(A2.place)).toBeUndefined();
+  });
+});

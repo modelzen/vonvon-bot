@@ -1,4 +1,6 @@
-import { findHandoffs, handoffSendResult, type HandoffSendResult, handoffText, handoffNote, ambiguousNote, HANDOFF_SEND_MS, type HandoffMiss } from './bot-handoff';
+import { getAppRoleSnapshot } from '../config/app-roles';
+import { createChatPeople } from './chat-people';
+import { findHandoffs, handoffSendResult, type HandoffSendResult, handoffText, handoffNote, ambiguousNote, ambiguousPersonNote, overNote, incompleteNote, otherBotNames, HANDOFF_SEND_MS, type HandoffMiss } from './bot-handoff';
 import { AskCoordinator, type AskTurn } from './ask-coordinator';
 import { createPendingGroups, pendingGroupsFile } from '../project/pending-groups';
 import { realpath, stat } from 'node:fs/promises';
@@ -255,13 +257,15 @@ import { createTopicContext, localBots, personOf, topicQuotes, topicRows, type C
 import { audienceOf, fromBot, quotedId, rawSender } from './baselines';
 import {
   BOT_WAKE_NOTE,
+  AT_HINT_NOTE,
   INITIATIVE_NOTE,
   sessionTitleSourceFromMessage,
   stripBridgeMessageEnvelope,
   type SessionTitleSource,
 } from './session-title';
 import { lineOfMessage, quotedLine, RecentLines, type RecentLine } from './recent-lines';
-import { JudgeBudget, SmartLanes, type LaneEntry, type JudgeKind } from './smart-intake';
+import { JudgeBudget, SmartLanes, JUDGE_GLANCE_CAP, JUDGE_BUDGET, JUDGE_BUDGET_WINDOW_MS, type LaneEntry, type JudgeKind } from './smart-intake';
+import { Attention, outcomeOf, type PlaceRef, type PlaceView, type LookKind } from './attention';
 import { handleDmConsole } from './dm-console';
 import { createSyncCopyGate } from './sync-copy';
 import { fetchInteractiveCardText, isDegradedCardContent } from './card-content';
@@ -581,7 +585,7 @@ interface TurnFailure { error?: unknown; rs?: RunState; procDead?: boolean }
 /** The message a not-replied record is about. */
 type NotedMessage = Pick<NormalizedMessage, 'chatId' | 'messageId' | 'senderId' | 'createTime' | 'threadId'>;
 
-/** How long a group's full-only explanation quiets the next ones for 免@ messages; an @ always gets one. */
+/** How long a group's full-only explanation quiets 免@ and bot messages; a person's @ always gets one. */
 const FULL_ONLY_QUIET_MS = 10 * 60_000;
 const UNBOUND_QUIET_MS = 10 * 60_000;
 /** Each 三条底线 lookup's limit (s22): the group's later messages wait behind it. */
@@ -731,6 +735,7 @@ interface TurnExtra {
 
 /** A smart group's message on its lane (s25). */
 interface SmartItem extends LaneEntry {
+  at: number;
   wake?: true;
   msg: NormalizedMessage;
   variant: JudgeVariant;
@@ -744,7 +749,7 @@ interface WakeFacts { text: string; sender: { openId?: string; name?: string } }
 
 /** What a smart group's lane decided for a batch (s25). */
 type SmartVerdict =
-  | { kind: 'judged'; result: JudgeResult; wake?: WakeFacts }
+  | { kind: 'judged'; result: JudgeResult; wake?: WakeFacts; look?: string[] }
   /** Answered without a judgement: a failed named judgement, or a topic only its sender talks in (s25b). */
   | { kind: 'direct' }
   /** Not judged: the group's hourly budget is spent. */
@@ -986,6 +991,12 @@ export function pickIdleSessions(
   return out;
 }
 
+export interface IntakeTime {
+  now(): number;
+  setTimer(fn: () => void, ms: number): unknown;
+  clearTimer(handle: unknown): void;
+}
+
 export function createOrchestrator(
   channel: LarkChannel,
   cfg: AppConfig,
@@ -995,7 +1006,7 @@ export function createOrchestrator(
   /** `droppedFile`: where a shutdown keeps the queued messages it drops (s18c). No default: without it, nothing is
    * kept or answered (tests, and every caller but `daemon run`). */
   // Only daemon run supplies judgeUsageFile; tests that omit it do not persist usage.
-  options?: { droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity },
+  options?: { droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention },
 ): Orchestrator {
   const bindingBot = options?.bot ? { ...options.bot } : undefined;
   /** Lazily-constructed backends by id — one instance per backend for the whole
@@ -1066,6 +1077,15 @@ export function createOrchestrator(
   /** What smart groups' judgements read, and how many each group may make in an hour (s25). */
   const recent = new RecentLines();
   const budget = new JudgeBudget();
+  const time: IntakeTime = options?.time ?? {
+    now: Date.now,
+    setTimer: (fn, ms) => { const timer = setTimeout(fn, ms); timer.unref(); return timer; },
+    clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
+  };
+  const attention = options?.attention ?? new Attention();
+  const placeOf = (msg: NormalizedMessage): PlaceRef => ({ chatId: msg.chatId, place: msg.threadId ?? msg.chatId });
+  const takenTo = new Map<string, { chatId: string; at: number }>();
+  const budgetNotedAt = new Map<string, number>();
   /** The lines a smart topic is being opened under, until its start ends (s25b): neither the registry nor Feishu
    * knows that topic yet, so a second judgement naming one meanwhile opens on its own message. */
   const openingUnder = new Set<string>();
@@ -1204,6 +1224,7 @@ export function createOrchestrator(
   /** s27a0: no card or markdown post of this bot carries a real `<at>` of a bot; the chat's bot list is read on the
    * first `<at>` there (D/card/at-guard.ts). Rule groups too: a rule bot's card wakes a smart bot just the same. */
   const roster = createBotRoster(channel, { stop: orStop });
+  const people = createChatPeople(channel, { stop: orStop });
   installAtGuard(channel, roster);
   const acceptedTasks = new Set<Promise<unknown>>();
   const shutdownErrors = new Set<unknown>();
@@ -1397,6 +1418,8 @@ export function createOrchestrator(
   }
   /** This bot opened `topicId` (a reply in thread, or a resumed session's topic). */
   function noteOpenedTopic(chatId: string, topicId: string, first: TopicSighting['first']): void {
+    attention.replied({ chatId, place: topicId }, time.now());
+    smartLanes.rearm(topicId);
     if (topics) void trackTask(topics.note(chatId, { topicId, at: Date.now(), from: { kind: 'self' }, first }));
   }
   /** The session's last meter reading: in memory, else the one saved with its
@@ -1560,15 +1583,35 @@ export function createOrchestrator(
    * name cache, never looked up; no text. Rule mode's messages not meant for it are never noted, nor a
    * recalled one whose turn failed after the recall (s15). */
   function noteNotReplied(msg: NotedMessage, reason: NotRepliedReason,
-    extra: { place?: NotReplied['place']; backendId?: string | undefined; detail?: string | undefined } = {}): void {
+    extra: { place?: NotReplied['place']; backendId?: string | undefined; detail?: string | undefined; times?: number } = {}): void {
     if (recalled.has(msg.messageId)) return;
     const sender = names.peek(msg.senderId)?.slice(0, 64);
     const backend = backendTool(extra.backendId);
     reportNotReplied({
       at: msg.createTime || Date.now(), groupId: msg.chatId, place: extra.place ?? (msg.threadId ? 'topic' : 'main'), reason,
       ...(sender ? { sender } : {}), ...(backend ? { backend } : {}), ...(extra.detail ? { detail: fitDetail(extra.detail) } : {}), ref: msg.messageId.slice(-6),
-    });
+    }, extra.times);
   }
+  function dropBotMessage(msg: NormalizedMessage, why: string, detail: string): boolean {
+    if (!fromBot(msg)) return false;
+    log.info('intake', 'bot-wake-dropped', { ref: msg.messageId.slice(-6), why });
+    if (!shuttingDown) noteNotReplied(msg, 'bot-wake-dropped', { detail });
+    return true;
+  }
+
+  /** Only people are asked to resend; bot messages leave diagnostics instead. */
+  function askAgain(queue: readonly QueuedTurn[], chatId: string, place: NotReplied['place'], why: string, detail: string): number {
+    let people = 0;
+    for (const turn of queue) {
+      if (turn.requesterKind !== 'bot') { people++; continue; }
+      const id = turn.seen?.id ?? '';
+      log.info('intake', 'bot-wake-dropped', { ref: id.slice(-6), why });
+      if (!shuttingDown) noteNotReplied({ chatId, messageId: id, senderId: turn.requesterOpenId ?? '', createTime: turn.requestedAt },
+        'bot-wake-dropped', { place, detail });
+    }
+    return people;
+  }
+
   /** A turn that started but did not answer; a refused scope also goes to the page's 缺的权限. */
   function noteFailure(msg: NotedMessage, place: NotReplied['place'], backendId: string | undefined, failure: TurnFailure): void {
     const { reason, detail, scope } = failureReason(failure);
@@ -1587,10 +1630,19 @@ export function createOrchestrator(
   /** Judgements by place, off the SDK's per-chat queue (smart-intake.ts). */
   const smartLanes = new SmartLanes<SmartItem, SmartVerdict>({
     judge: judgeSmart,
-    due: () => undefined,
-    now: Date.now,
-    setTimer: (fn, ms) => { const timer = setTimeout(fn, ms); timer.unref(); return timer; },
-    clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
+    due: (place, waiting, now) => {
+      if (attention.state(place)?.mode === 'focus') return undefined;
+      const at = attention.due(place, waiting.map((w) => w.at), now)!;
+      if (at > now) return at;
+      const { msg } = waiting[0]!.entry;
+      if (budget.used(msg.chatId, now) < JUDGE_GLANCE_CAP) return at;
+      const until = budget.freeAt(msg.chatId, now, JUDGE_GLANCE_CAP);
+      log.info('intake', 'glance-deferred', { place: place.slice(-6), n: waiting.length, inMs: until - now });
+      return Math.max(until, now + 1);
+    },
+    now: time.now,
+    setTimer: time.setTimer,
+    clearTimer: time.clearTimer,
     overflow: (dropped) => log.info('intake', 'lane-overflow', { place: dropped[0]?.place.slice(-6), n: dropped.length }),
     // Into the place's session: after the earlier named messages there (design H1).
     ordered: (v) => v.kind === 'direct' || (v.kind === 'judged' && (v.result.decision === 'main' || v.result.decision === 'reply')),
@@ -1601,14 +1653,16 @@ export function createOrchestrator(
 
   /** Hands a smart group's message to its lane: `mentioned` (named, in the main area), `main` or `topic` (unnamed). A
    * topic's `scan` is the one 三条底线 started, else it starts here: it runs while the message waits on its lane. */
-  function submitSmart(msg: NormalizedMessage, variant: JudgeVariant, scan?: TopicScan): void {
+  function submitSmart(msg: NormalizedMessage, variant: JudgeVariant, scan?: TopicScan, mine?: boolean): void {
     const named = variant === 'mentioned';
     // Its intake crossed the shutdown (a disk read): a named one is answered once the bot is back, as launchRun does (s18c).
     if (shuttingDown) {
       if (named) droppedReplies?.appendSync(originOf(msg, !msg.threadId));
       return;
     }
-    const item: SmartItem = { id: msg.messageId, place: msg.threadId ?? msg.chatId, kind: named ? 'named' : 'chat', msg, variant };
+    const now = time.now();
+    attention.arrive(placeOf(msg), now, mine === undefined ? undefined : { mine });
+    const item: SmartItem = { at: now, id: msg.messageId, place: msg.threadId ?? msg.chatId, kind: named ? 'named' : 'chat', msg, variant };
     if (variant === 'topic' && msg.threadId) item.solo = (scan ?? scanTopic(channel, msg.threadId, msg.senderId, LOOKUP_DEADLINE_MS)).solo;
     // Seen at once while its place is judged (up to 12 s): it gets an answer whatever the judgement says. The
     // run's own ⏳ and 🫳 follow once it lands, so this one is taken off then.
@@ -1616,25 +1670,96 @@ export function createOrchestrator(
     smartLanes.submit(item);
   }
 
-  function submitWake(msg: NormalizedMessage): void {
+  function submitWake(msg: NormalizedMessage, mine?: boolean): void {
     if (recalled.has(msg.messageId)) return;
     if (shuttingDown) {
       log.info('intake', 'bot-wake-dropped', { ref: msg.messageId.slice(-6), why: 'shutdown' });
       return;
     }
-    const item: SmartItem = { id: msg.messageId, place: msg.threadId ?? msg.chatId, kind: 'aside', wake: true, msg,
+    const now = time.now();
+    attention.arrive(placeOf(msg), now, mine === undefined ? undefined : { mine });
+    const item: SmartItem = { at: now, id: msg.messageId, place: msg.threadId ?? msg.chatId, kind: 'aside', wake: true, msg,
       variant: msg.threadId ? 'topic' : 'main' };
     smartLanes.submit(item);
+  }
+
+  async function topicMine(msg: NormalizedMessage): Promise<boolean | undefined> {
+    if (!msg.threadId || attention.state(msg.threadId)) return undefined;
+    const t = await topics?.get(msg.chatId, msg.threadId);
+    const mine = Boolean(t && (t.sessions.length || t.openedBy?.kind === 'self'));
+    if (mine) log.info('intake', 'attention-recover', { ref: msg.messageId.slice(-6), place: 'topic' });
+    return mine;
+  }
+
+  function forgetAttention(chatId: string, why: 'mode' | 'unbind' | 'prompt'): void {
+    attention.forget(chatId);
+    log.info('intake', 'attention-forget', { chat: chatId.slice(-6), why });
+  }
+
+  function takeUpTo(ref: PlaceRef, at: number): void {
+    const to = Math.max(takenTo.get(ref.place)?.at ?? 0, at);
+    takenTo.delete(ref.place);
+    takenTo.set(ref.place, { chatId: ref.chatId, at: to });
+    if (takenTo.size > 1_000) takenTo.delete(takenTo.keys().next().value!);
+    const pruned = smartLanes.prune(ref.place, (e) => e.msg.createTime <= to);
+    if (pruned.length) log.info('intake', 'lane-pruned', { place: ref.place.slice(-6), n: pruned.length });
+  }
+
+  function freezeOnBudget(item: SmartItem, n: number): void {
+    const now = time.now();
+    const ref = placeOf(item.msg);
+    if (attention.freeze(ref, now)) log.info('intake', 'attention-freeze', { ref: item.msg.messageId.slice(-6), place: item.msg.threadId ? 'topic' : 'main' });
+    const last = budgetNotedAt.get(ref.chatId);
+    log.info('intake', 'unjudged', { ref: item.msg.messageId.slice(-6), place: item.msg.threadId ? 'topic' : 'main', why: 'budget', n, noted: last === undefined || now - last >= JUDGE_BUDGET_WINDOW_MS });
+    if (last !== undefined && now - last < JUDGE_BUDGET_WINDOW_MS) return;
+    budgetNotedAt.set(ref.chatId, now);
+    noteNotReplied(item.msg, 'judge-budget', { times: n });
+  }
+
+  function whyLooking(before: PlaceView | undefined, kind: LookKind, now: number, n: number): string | undefined {
+    if (kind === 'focus' && before?.mode === 'focus') {
+      if (before.repliedAt !== undefined) {
+        const age = now - before.repliedAt;
+        return age < 60_000 ? '你刚在这里说过话，正在跟着看' : `你 ${Math.round(age / 60_000)} 分钟前在这里说过话，正在跟着看`;
+      }
+      return before.topic ? '你在这个话题里说过话，正在跟着看' : '你在这里说过话，正在跟着看';
+    }
+    if (kind !== 'glance') return undefined;
+    if (before?.lookedAt === undefined) return `你第一次看这里，标"新"的 ${n} 条是新来的`;
+    const age = now - before.lookedAt;
+    return age < 60_000 ? `你刚看过这里，标"新"的 ${n} 条是这之后来的` : `你有 ${Math.round(age / 60_000)} 分钟没看这里了，标"新"的 ${n} 条是这期间来的`;
   }
 
   /** Judges the newest message of a batch (the others came while the one before was judged: its context). Never
    * rejects: a lookup that throws answers a named message in the main area, as a failed judgement would. */
   async function judgeSmart(batch: SmartItem[], signal: AbortSignal, glance: boolean): Promise<SmartVerdict> {
     const item = batch[batch.length - 1]!;
+    const ref = placeOf(item.msg);
+    const now = time.now();
+    const kind: LookKind = item.kind === 'chat' ? (glance ? 'glance' : 'focus') : 'signal';
+    let look = batch;
+    let why: string | undefined;
+    if (item.kind === 'chat') {
+      const before = attention.state(ref.place);
+      let old: SmartItem[] = [];
+      if (glance) ({ look, old } = attention.pickGlance(batch, now));
+      const where = item.msg.threadId ? 'topic' : 'main';
+      if (old.length) log.info('intake', 'unjudged', { ref: item.msg.messageId.slice(-6), place: where, why: 'old', n: old.length });
+      if (!look.length) return { kind: 'drop' };
+      attention.glanced(ref, now);
+      log.info('intake', 'attention', { ref: item.msg.messageId.slice(-6), place: where, kind, mode: before?.mode ?? 'watch', intervalMs: before?.intervalMs, n: look.length, old: old.length });
+      why = whyLooking(before, kind, now, look.length);
+    }
     try {
-      if (item.wake) return await judgeWake(item, signal);
-      return await judgeItem(item, signal, glance);
+      const verdict = item.wake ? await judgeWake(item, signal)
+        : await judgeItem(item, signal, { glance, fresh: new Set(look.map((b) => b.id)), why, n: look.length });
+      if (verdict.kind === 'judged') {
+        if (verdict.result.promptHash && attention.notePrompt(ref.chatId, verdict.result.promptHash)) forgetAttention(ref.chatId, 'prompt');
+        attention.verdict(ref, kind, outcomeOf(verdict.result), now);
+      }
+      return glance && verdict.kind === 'judged' ? { ...verdict, look: look.map((b) => b.id) } : verdict;
     } catch (error) {
+      if (item.kind === 'chat') attention.verdict(ref, kind, 'error', time.now());
       if (item.wake) {
         if (shuttingDown) {
           log.info('intake', 'bot-wake-dropped', { ref: item.msg.messageId.slice(-6), why: 'shutdown' });
@@ -1647,7 +1772,10 @@ export function createOrchestrator(
         return { kind: 'drop' };
       }
       log.fail('intake', error, { phase: 'smart-judge', ref: item.msg.messageId.slice(-6) });
-      if (item.kind !== 'named') for (const b of batch) noteNotReplied(b.msg, 'judge-failed', { detail: errorDetail(error) });
+      if (item.kind !== 'named') {
+        if (glance) noteNotReplied(item.msg, 'judge-failed', { detail: errorDetail(error), times: look.length });
+        else for (const b of batch) noteNotReplied(b.msg, 'judge-failed', { detail: errorDetail(error) });
+      }
       return item.kind === 'named' ? { kind: 'direct' } : { kind: 'drop' };
     }
   }
@@ -1691,7 +1819,7 @@ export function createOrchestrator(
       return { kind: 'drop' };
     }
     // 预算在过了上面几道门之后拿：名单外的、停用和改设置中的都不占 60 次。不另设被 bot @ 的子上限（owner 2026-10-19）。
-    if (!budget.take(msg.chatId, Date.now(), 'bot')) {
+    if (!budget.take(msg.chatId, time.now(), 'bot')) {
       log.info('intake', 'judge-budget', { ref, wake: true });
       noteNotReplied(trig, 'judge-budget');
       return { kind: 'drop' };
@@ -1721,7 +1849,7 @@ export function createOrchestrator(
     return item.kind === 'aside' ? 'bot' : glance ? 'glance' : 'focus';
   }
 
-  async function judgeItem(item: SmartItem, signal: AbortSignal, glance: boolean): Promise<SmartVerdict> {
+  async function judgeItem(item: SmartItem, signal: AbortSignal, look: { glance: boolean; fresh: Set<string>; why?: string; n: number }): Promise<SmartVerdict> {
     const { msg } = item;
     // A 同时发送到群 copy is looked up here, not on the chat's queue (s14d).
     if (!msg.threadId && !msg.mentionedBot && (await syncCopy.skip(msg, true))) return { kind: 'drop' };
@@ -1731,28 +1859,45 @@ export function createOrchestrator(
       log.info('intake', 'judge-solo', { ref: msg.messageId.slice(-6) });
       return { kind: 'direct' };
     }
-    if (item.kind !== 'named' && !budget.take(msg.chatId, Date.now(), judgeKindOf(item, glance))) return { kind: 'budget' };
     const project = await getProjectByChatId(msg.chatId);
-    if (!project) return { kind: 'drop' };
+    const dropped = (why: string): SmartVerdict => {
+      log.info('intake', 'judge-dropped', { ref: msg.messageId.slice(-6), why });
+      return { kind: 'drop' };
+    };
+    if (!project) return item.kind === 'chat' ? dropped('unbound') : { kind: 'drop' };
+    if (item.kind === 'chat') {
+      if (project.enabled === false) return dropped('disabled');
+      if (sessionModeOf(project) !== 'smart') return dropped('rule-mode');
+      if (projectMutations.has(msg.chatId)) return dropped('updating');
+      if (resumePublications.has(msg.chatId)) return dropped('resuming');
+    }
+    if (item.kind !== 'named' && !budget.take(msg.chatId, time.now(), judgeKindOf(item, look.glance))) {
+      if (!look.glance || budget.used(msg.chatId, time.now()) >= JUDGE_BUDGET) freezeOnBudget(item, look.n);
+      else log.info('intake', 'unjudged', { ref: msg.messageId.slice(-6), why: 'glance-cap', n: look.n });
+      return { kind: 'budget' };
+    }
     // Other bots' messages reach this one only through a pull (3.11): read them where there may be some.
     const others = await topicCtx.chatInfo(msg.chatId).then((r) => !r.ok || r.bots === undefined || r.bots > 1);
     const name = names.peek(msg.senderId) ?? msg.senderName ?? '某人';
-    const result = await callJudge(item, project, msg, name, others, signal);
+    const result = await callJudge(item, project, msg, name, others, signal, look);
     return { kind: 'judged', result };
   }
 
-  async function callJudge(item: SmartItem, project: Project, msg: NormalizedMessage, name: string, others: boolean, signal: AbortSignal): Promise<JudgeResult> {
+  async function callJudge(item: SmartItem, project: Project, msg: NormalizedMessage, name: string, others: boolean, signal: AbortSignal, look?: { glance: boolean; fresh: Set<string>; why?: string }): Promise<JudgeResult> {
     await orStop(recent.fill(item.place, msg.createTime, (o) => {
       const opts = { ...o, before: msg.createTime, keepSelf: true, names };
       return withDeadline(msg.threadId ? fetchThreadContext(channel, msg.threadId, opts) : fetchChatContext(channel, msg.chatId, opts), LOOKUP_DEADLINE_MS, 'recent-context');
     }, others), undefined);
     const title = msg.threadId && topics ? (await topics.list(msg.chatId)).find((t) => t.topicId === msg.threadId)?.title : undefined;
+    let context = recent.context(item.place, { id: msg.messageId, at: msg.createTime });
+    if (look && (look.fresh.size > 1 || look.glance)) context = context.map((l) => l.id && look.fresh.has(l.id) ? { ...l, fresh: true as const } : l);
+    const line = lineOfMessage(msg, name, quotedLine(recent, msg), JUDGE_INPUT_LIMITS.messageChars);
     return judge.judge({
       variant: item.variant, appId: cfg.accounts.app.id, botName: channel.botIdentity?.name ?? '',
       group: { chatId: project.chatId, name: project.name, backend: project.backend, judge: project.judge },
       botJudge: cfg.preferences?.judge, ...(title ? { topicTitle: title } : {}),
-      context: recent.context(item.place, { id: msg.messageId, at: msg.createTime }),
-      message: lineOfMessage(msg, name, quotedLine(recent, msg), JUDGE_INPUT_LIMITS.messageChars),
+      context, message: look?.glance ? { ...line, fresh: true as const } : line,
+      ...(look?.why ? { why: look.why } : {}),
       ref: msg.messageId, signal,
     });
   }
@@ -1780,6 +1925,7 @@ export function createOrchestrator(
       }
     } finally {
       dropAck(item);
+      if (attention.state(item.place)?.mode === 'focus') smartLanes.rearm(item.place);
     }
   }
 
@@ -1825,6 +1971,7 @@ export function createOrchestrator(
    * smart and not being changed, and the message did not land already (Rakazo A2).
    */
   async function landVerdict(item: SmartItem, batch: SmartItem[], verdict: SmartVerdict): Promise<void> {
+    const look = verdict.kind === 'judged' ? verdict.look : undefined;
     const wake = verdict.kind === 'judged' ? verdict.wake : undefined;
     const msg = wake ? wakeTrigger(item.msg, wake.sender) : item.msg;
     const { variant } = item;
@@ -1842,13 +1989,12 @@ export function createOrchestrator(
       if (wake) {
         log.info('intake', 'bot-wake-superseded', { ref, at: 'land' });
         noteNotReplied(msg, 'bot-wake-dropped', { detail: '已随后来的消息进了会话' });
-      } else noteNotReplied(msg, 'judge-superseded');
+      } else noteNotReplied(msg, 'judge-superseded', look ? { times: look.length } : {});
     };
     if (stopped()) return;
     if (verdict.kind === 'drop') return;
     if (verdict.kind === 'budget') {
-      log.info('intake', 'judge-budget', { ref, batch: batch.length });
-      for (const b of batch) noteNotReplied(b.msg, 'judge-budget');
+      log.info('intake', 'judge-budget', { ref, batch: batch.length, kind: 'chat' });
       return;
     }
     let decision: JudgeDecision = msg.threadId ? 'reply' : 'main';
@@ -1862,7 +2008,8 @@ export function createOrchestrator(
         // The model's reason goes on the page only (3.4); a decision model may give its confidence alone (s23f).
         const detail = kind ? result.error?.detail ?? kind
           : result.reason || (result.confidence !== undefined ? `把握度 ${result.confidence.toFixed(2)}` : undefined);
-        for (const b of batch) noteNotReplied(wake ? msg : b.msg, reason, { backendId: result.backend, detail });
+        if (look) noteNotReplied(msg, reason, { backendId: result.backend, detail, times: look.length });
+        else for (const b of batch) noteNotReplied(wake ? msg : b.msg, reason, { backendId: result.backend, detail });
         return;
       }
       decision = result.decision;
@@ -1883,18 +2030,7 @@ export function createOrchestrator(
       return;
     }
     const text = wake?.text ?? msg.content.trim();
-    if (sessionModeOf(project) !== 'smart') {
-      if (item.kind !== 'named') {
-        if (wake) wakeDropped('rule-mode', '群切成了规则模式');
-        else noteNotReplied(msg, 'group-updating');
-        return;
-      }
-      if (!msg.threadId && ruleKind(project) === 'multi') {
-        if (!(await refuseFullOnly(msg, project, turnPerm(project)))) startTopicDirectly(msg, text, project);
-        return;
-      }
-      decision = msg.threadId ? 'reply' : 'main';
-    }
+    if (sessionModeOf(project) !== 'smart') { noteNotReplied(msg, 'group-updating'); return; }
     // A list changed during judgement must still exclude this bot before it starts a turn.
     if (wake && hasAudience(project) && !(wake.sender.openId && isUserAllowedInProject(cfg, project, wake.sender.openId))) {
       log.info('intake', 'bot-wake-not-allowed', { ref });
@@ -1903,22 +2039,32 @@ export function createOrchestrator(
     }
     const place = msg.threadId ?? msg.chatId;
     const ts = turnSession(place, project);
+    const anchorId = decision === 'main' && look && verdict.kind === 'judged' ? verdict.result.anchor : undefined;
+    const anchored = anchorId && look?.includes(anchorId) ? batch.find((b) => b.id === anchorId) : undefined;
+    if (anchorId && !anchored) log.info('intake', 'anchor-not-in-batch', { ref });
+    let trig = anchored?.msg ?? msg;
+    if (trig !== msg && recalled.has(trig.messageId)) { log.info('intake', 'anchor-dropped', { ref, why: 'recalled' }); trig = msg; }
+    const turnText = trig === msg ? text : trig.content.trim();
+    const takenAt = (): number => takenTo.get(place)?.at ?? 0;
+    const initiative = variant === 'main' && !wake;
+    const proposed = decision === 'topic' && initiative && verdict.kind === 'judged' ? verdict.result.anchor : undefined;
     // Not twice: an unnamed message a later turn's record block carried is not answered on its own. A named one is
     // never dropped so; landings into the session wait for it (SmartLanes), and a re-push was checked on intake.
     if (decision === 'topic') {
       const reopened = await reopenedTopic(msg);
       if (stopped() || reopened) return;
       if (item.kind !== 'named') {
-        const seen = mainWillWeave(msg) || await alreadySeen(msg, msg.chatId);
+        const seen = msg.createTime <= takenAt() || mainWillWeave(msg) || await alreadySeen(msg, msg.chatId);
         if (stopped()) return;
-        if (seen) { superseded(); return; }
+        if (seen || msg.createTime <= takenAt()) { superseded(); return; }
+        if (proposed && (openingUnder.has(proposed) || (await topics?.list(msg.chatId))?.some((t) => t.firstId === proposed))) { superseded(); return; }
       }
     } else if (item.kind !== 'named') {
-      const seen = await alreadySeen(msg, ts.sessionKey);
+      const seen = await alreadySeen(trig, ts.sessionKey);
       if (stopped()) return;
-      if (seen || (wake && active.get(ts.sessionKey)?.woven?.has(msg.messageId))) { superseded(); return; }
+      if (trig.createTime <= takenAt() || seen || (wake && active.get(ts.sessionKey)?.woven?.has(msg.messageId))) { superseded(); return; }
     }
-    const refused = await refuseFullOnly(msg, project, ts);
+    const refused = await refuseFullOnly(trig, project, ts);
     if (stopped() || refused) return;
     // A settings/resume lock may have arrived during the final read, before this turn was reserved.
     if (wake && (projectMutations.has(msg.chatId) || resumePublications.has(msg.chatId))) {
@@ -1926,32 +2072,38 @@ export function createOrchestrator(
       wakeDropped(updating ? 'updating' : 'resuming', updating ? '群正在改设置' : '群正在恢复会话');
       return;
     }
-    // Joined in on its own: the agent is told so (2.13), never the judge's reason.
-    const initiative = variant === 'main' && !wake;
-    // An unnamed message that follows up on an earlier one opens its topic there (s25b); a named one under itself.
-    const proposed = decision === 'topic' && initiative && verdict.kind === 'judged' ? verdict.result.anchor : undefined;
     // The next judgement here sees what this bot is doing, before its answer comes and before the line it opens
     // under is looked up: written for the person's line the judgement named, again if that one is dropped.
     const actId = `act:${msg.messageId}`;
     const actAt = Date.now();
     const actText = (line: RecentLine | undefined): string => {
-      const who = oneLine(line?.name ?? names.peek(msg.senderId) ?? msg.senderName ?? '某人');
+      const who = oneLine(line?.name ?? names.peek(trig.senderId) ?? trig.senderName ?? '某人');
       return decision === 'topic' ? `（在 ${who} 的这条下开了话题来回）` : `（在回 ${who} 的这条）`;
     };
     const guess = proposed ? recent.get(proposed) : undefined;
     const guessed = actText(guess?.from === 'user' ? guess : undefined);
     recent.addOwn(place, msg.chatId, { id: actId, at: actAt, text: guessed });
-    const under = proposed ? await anchorLine(msg, batch, proposed) : undefined;
+    const under = proposed ? await anchorLine(msg, look ? batch.filter((b) => look.includes(b.id)) : batch, proposed) : undefined;
     if (stopped()) return;
+    // The anchor lookup can outlive a later main reply. Recheck after the final await;
+    // this check, the start registration and dispatch below must stay synchronous.
+    if (item.kind !== 'named' && (trig.createTime <= takenAt() || (decision === 'topic' && mainWillWeave(msg)))) {
+      recent.remove(actId);
+      if (under) openingUnder.delete(under.id);
+      superseded();
+      return;
+    }
     const landed = actText(under);
     if (landed !== guessed) {
       recent.remove(actId);
       recent.addOwn(place, msg.chatId, { id: actId, at: actAt, text: landed });
     }
-    log.info('intake', 'judge-landed', { ref, decision, variant, ...(wake ? { wake: true } : {}), ...(under ? { anchor: under.id.slice(-6) } : {}) });
+    if (decision !== 'topic') takeUpTo({ chatId: msg.chatId, place }, trig.createTime);
+    attention.replied({ chatId: msg.chatId, place }, time.now());
+    log.info('intake', 'judge-landed', { ref, decision, variant, ...(look ? { glance: true, looked: look.length } : {}), ...(trig !== msg ? { trigger: trig.messageId.slice(-6) } : {}), ...(wake ? { wake: true } : {}), ...(under ? { anchor: under.id.slice(-6) } : {}) });
     const extra = wake ? { wake: { name: wake.sender.name ?? '' } } : initiative ? { initiative: true as const } : undefined;
     if (decision === 'topic') startTopicDirectly(msg, text, project, false, extra, under);
-    else void trackTask(handleTurn(msg, text, ts.sessionKey, !msg.threadId, project, ts, extra)
+    else void trackTask(handleTurn(trig, turnText, ts.sessionKey, !trig.threadId, project, ts, extra)
       .catch((err) => log.fail('intake', err)));
   }
 
@@ -2038,7 +2190,7 @@ export function createOrchestrator(
         log.info('intake', 'bot-wake-superseded', { ref, at: 'intake' });   // 重推，或真人那一轮已织进会话；不记诊断
         return;
       }
-      submitWake(msg);
+      submitWake(msg, await topicMine(msg));
       return;
     }
     if (!maybe) return;
@@ -2216,7 +2368,7 @@ export function createOrchestrator(
       // Smart: an unnamed topic message is judged, only reply or not (s25); a named one is answered as before.
       if (smart && audience === 'nobody' && !goalObjective) {
         if (await alreadySeen(msg, ts.sessionKey)) return;
-        submitSmart(msg, 'topic', scanned.topic);
+        submitSmart(msg, 'topic', scanned.topic, await topicMine(msg));
         return;
       }
       if (await refuseFullOnly(msg, project, ts)) return;
@@ -2230,6 +2382,13 @@ export function createOrchestrator(
         return;
       }
       if (await alreadySeen(msg, ts.sessionKey)) return;
+      if (smart) {
+        const ref = placeOf(msg);
+        attention.arrive(ref, time.now());
+        attention.replied(ref, time.now());
+        takeUpTo(ref, msg.createTime);
+        smartLanes.rearm(ref.place);
+      }
       void trackTask(handleTurn(msg, text, ts.sessionKey, false, project, ts).catch((err) => log.fail('intake', err)));
       return;
     }
@@ -2474,7 +2633,7 @@ export function createOrchestrator(
   const unboundNoted = new Map<string, number>();
   /** A 只读 or 读写 turn where the backend runs only in 完全访问 (Codex on Linux): no session starts and
    * nothing is downloaded or woven first. The message is noted and the group told why, in place: every
-   * @, and a 免@ message only when the group got no explanation in the last {@link FULL_ONLY_QUIET_MS}. */
+   * human @, and a bot or 免@ message only when the group got no explanation in the last {@link FULL_ONLY_QUIET_MS}. */
   async function refuseFullOnly(msg: NormalizedMessage, project: Project, perm: TurnPerm): Promise<boolean> {
     const mode = perm.mode ?? 'full';
     if (mode === 'full') return false;
@@ -2484,7 +2643,7 @@ export function createOrchestrator(
     noteNotReplied(msg, 'tier-unavailable', { backendId: be.id });
     const now = Date.now();
     const last = fullOnlyNoted.get(msg.chatId);
-    if (!msg.mentionedBot && now - (last ?? -Infinity) < FULL_ONLY_QUIET_MS) return true;
+    if ((!msg.mentionedBot || fromBot(msg)) && now - (last ?? -Infinity) < FULL_ONLY_QUIET_MS) return true;
     // Stamped before sending so 免@ messages arriving meanwhile stay quiet; put back if the send fails.
     fullOnlyNoted.set(msg.chatId, now);
     // The command needs --bot when the host has several bots (pickBot); an unreadable registry counts as one.
@@ -2519,14 +2678,19 @@ export function createOrchestrator(
    * session-scoped, not per-message). Voice display metadata stays separate
    * from the woven agent input.
    */
-  function ingestContext(msg: NormalizedMessage, text: string, extra?: Pick<TurnExtra, 'initiative' | 'wake'>): Promise<IngestedContext> {
-    return orderContext(msg.threadId ?? msg.chatId, () => ingestContextImpl(msg, text, extra));
+  function ingestContext(msg: NormalizedMessage, text: string, extra?: Pick<TurnExtra, 'initiative' | 'wake'>, project?: Project): Promise<IngestedContext> {
+    return orderContext(msg.threadId ?? msg.chatId, () => ingestContextImpl(msg, text, extra, project));
   }
-  async function ingestContextImpl(msg: NormalizedMessage, text: string, extra?: Pick<TurnExtra, 'initiative' | 'wake'>): Promise<IngestedContext> {
+  async function ingestContextImpl(msg: NormalizedMessage, text: string, extra?: Pick<TurnExtra, 'initiative' | 'wake'>, project?: Project): Promise<IngestedContext> {
     names.learnMentions(msg.mentions);
     // Started first so the lookup overlaps the voice, file and quote fetches;
     // bounded, and undefined on failure (the block then says 某用户, as before).
     const senderNameP = extra?.wake ? Promise.resolve(extra.wake.name || undefined) : names.senderName(msg);
+    const hintP = project && sessionModeOf(project) === 'smart'
+      ? orStop(roster.load(msg.chatId), undefined)
+        .then(() => AT_HINT_NOTE(otherBotNames(roster.peek(msg.chatId), { openId: channel.botIdentity?.openId, appId: channel.rawClient?.appId })))
+        .catch(() => AT_HINT_NOTE([]))
+      : undefined;
     const ingested = msg.rawContentType === 'audio' ? await ingestVoice(channel, msg, voice) : { text };
     let body = ingested.text;
     if (messageHasFiles(msg)) {
@@ -2553,6 +2717,8 @@ export function createOrchestrator(
     // first-turn (startReservedRun) and mid-turn (handleTurn) paths.
     const senderName = (await senderNameP) ?? msg.senderName;
     body = weaveSender(body, { senderId: msg.senderId, senderName }, deliveryLagMs(msg), { bot: fromBot(msg) });
+    const hint = await hintP;
+    if (hint) body = `${hint}\n\n${body}`;
     // A turn the smart mode joined on its own (s25): a fixed line, never the judge model's reason, which was
     // written by a small model that read untrusted group messages (Rakazo 第二轮 5).
     if (extra?.initiative) body = `${INITIATIVE_NOTE}\n\n${body}`;
@@ -2577,6 +2743,7 @@ export function createOrchestrator(
     return orderTurns(sessionKey, async () => {
       if (staleRetry(extra)) return;
       if (owner?.intakeCancelled) {
+        if (dropBotMessage(msg, 'intake-cancelled', '会话被停下了')) return;
         await channel.send(msg.chatId, { markdown: '排队期间会话已停止，请重发本条消息。' }, { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined);
         return;
       }
@@ -2609,8 +2776,9 @@ export function createOrchestrator(
       // A retry brings its own saved images instead.
       let pendingImages: Promise<string[] | undefined> = Promise.resolve(extra?.images);
       if (!extra?.images && messageHasImages(msg)) pendingImages = collectInboundImages(channel, msg);
-      const [images, woven] = await Promise.all([pendingImages, ingestContext(msg, text, extra)]);
+      const [images, woven] = await Promise.all([pendingImages, ingestContext(msg, text, extra, project)]);
       if (existing.intakeCancelled) {
+        if (dropBotMessage(msg, 'intake-cancelled', '会话被停下了')) return;
         await channel.send(msg.chatId, { markdown: '本条消息处理期间会话已停止，请重发。' }, { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined);
         return;
       }
@@ -2715,6 +2883,7 @@ export function createOrchestrator(
 
   /** 🎯 goal 运行中收到消息的统一提示（goal 会话不入队，见 ActiveState.isGoal）。 */
   async function replyGoalBusy(msg: NormalizedMessage, flat: boolean): Promise<void> {
+    if (dropBotMessage(msg, 'goal-busy', '会话在跑 /goal')) return;
     await channel
       .send(
         msg.chatId,
@@ -2765,6 +2934,7 @@ export function createOrchestrator(
       if (existing.deferred && !extra?.retry) {
         existing.deferred.push({ id: msg.messageId, at: msg.createTime, origin: originFor(msg, flat), go: () =>
           startReservedRun(msg, text, sessionKey, flat, project, perm, preloadedImages, preIngested, summaryText, goal, extra), early: () => {
+          if (dropBotMessage(msg, 'before-new', '会话换成了新的（/new）')) return;
           log.info('intake', 'reject', { reason: 'before-new', msgId: msg.messageId });
           void trackTask(channel.send(msg.chatId, { markdown: '⚠️ 这条在 `/new` 之前发的，新会话不带它，要问就再发一次。' },
             { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined));
@@ -2839,7 +3009,7 @@ export function createOrchestrator(
             : Promise.resolve(undefined);
         // File attachments / quoted message woven into the prompt. Skipped when
         // preIngested (handleTurn already wove them into `text`).
-        const ingestP = preIngested ? Promise.resolve(preIngested) : ingestContext(msg, text, extra);
+        const ingestP = preIngested ? Promise.resolve(preIngested) : ingestContext(msg, text, extra, goal ? undefined : project);
         let tResolveDone = tIntake;
         const resolveP = resolveThread(sessionKey, msg.chatId, {
           mode: perm.mode,
@@ -3149,7 +3319,7 @@ export function createOrchestrator(
       } catch (err) {
         if (active.get(sessionKey) === reserved) active.delete(sessionKey);
         releaseIdle(sessionKey, sessions.get(sessionKey));
-        const dropped = reserved.queue.splice(0).length;
+        const dropped = askAgain(reserved.queue.splice(0), msg.chatId, flat ? 'main' : 'topic', 'run-failed', '前一轮出错，排队的没跑');
         dropCompact(reserved);
         reaction?.done();
         log.fail('intake', err);
@@ -3385,7 +3555,7 @@ export function createOrchestrator(
       // Download any attached/forwarded images so the opening turn can see them,
       // and any file attachments (their paths get woven into the prompt text).
       const imagesP = messageHasImages(msg) ? collectInboundImages(channel, msg) : Promise.resolve(undefined);
-      const ingestP = ingestContext(msg, text, extra);
+      const ingestP = ingestContext(msg, text, extra, goal ? undefined : project);
       // The opening's main-area lines before the trigger and the 引用行 among them
       // (not for a goal: its objective stays self-contained). Never rejects.
       const listP = !goal && topics ? topics.list(msg.chatId) : Promise.resolve([]);
@@ -4440,6 +4610,10 @@ export function createOrchestrator(
   // DM management console buttons (design §3.1). Admin-gated; sub-views patch
   // the same card in place, each carrying a ⬅️ 菜单 back button.
   const dmAdmin = (openId?: string): boolean => isAdmin(cfg, openId ?? '');
+  const administratorIds = (): (string | undefined)[] => {
+    const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
+    return [roles?.ownerOpenId, ...(roles?.admins ?? []), cfg.preferences?.access?.ownerOpenId, ...(cfg.preferences?.access?.admins ?? [])];
+  };
   // DM cards are CardKit entities (sendManagedCard); update them via the
   // settle-then-cardkit path so the click's callback acks first. Passing the
   // whole evt lets settleUpdate self-heal an orphaned (post-restart) card by
@@ -5029,6 +5203,7 @@ export function createOrchestrator(
       // with the group once the owner dissolves it, so nothing to clean up here.
       patch(evt, async () => {
         const removed = await removeProject(name);
+        if (removed?.chatId) forgetAttention(removed.chatId, 'unbind');
         let tail: string;
         if (removed && (removed.origin ?? 'created') === 'joined') {
           // joined group: the bot is a plain member, not the owner — it just
@@ -5367,7 +5542,7 @@ export function createOrchestrator(
     .on(DM.admins, ({ evt }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
       patch(evt, async () =>
-        buildAdminsCard(cfg, await namesWithOperator(evt, [resolveOwner(cfg), ...(cfg.preferences?.access?.admins ?? [])])),
+        buildAdminsCard(cfg, await namesWithOperator(evt, administratorIds())),
       );
     })
     .on(DM.addAdminForm, ({ evt }) => {
@@ -5387,12 +5562,12 @@ export function createOrchestrator(
         if (id) {
           await writePreferences((preferences) => {
             const access: AppAccess = { ...(preferences.access ?? {}) };
-            access.ownerOpenId ??= resolveOwner(cfg);
+            access.ownerOpenId ??= cfg.preferences?.access?.admins?.[0];
             access.admins = Array.from(new Set([...(access.admins ?? []), id]));
             preferences.access = access;
           }).catch((e) => log.fail('console', e, { phase: 'save-config' }));
         }
-        const ids = [resolveOwner(cfg), ...(cfg.preferences?.access?.admins ?? [])];
+        const ids = administratorIds();
         const next = buildAdminsCard(cfg, await namesWithOperator(evt, ids));
         await sendManagedCard(channel, evt.chatId, next).catch((e) => log.fail('console', e, { phase: 'admin-add-result' }));
       })());
@@ -5401,15 +5576,17 @@ export function createOrchestrator(
       if (!dmAdmin(evt.operator?.openId)) return;
       const id = typeof value.u === 'string' ? value.u : '';
       patch(evt, async () => {
-        if (id && id !== resolveOwner(cfg)) {
+        const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
+        const scanner = cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0];
+        if (id && id !== resolveOwner(cfg) && id !== scanner && !roles?.admins.includes(id)) {
           await writePreferences((preferences) => {
             const access: AppAccess = { ...(preferences.access ?? {}) };
-            access.ownerOpenId ??= resolveOwner(cfg);
+            access.ownerOpenId ??= cfg.preferences?.access?.admins?.[0];
             access.admins = (access.admins ?? []).filter((x) => x !== id);
             preferences.access = access;
           }).catch((e) => log.fail('console', e, { phase: 'save-config' }));
         }
-        const ids = [resolveOwner(cfg), ...(cfg.preferences?.access?.admins ?? [])];
+        const ids = administratorIds();
         return buildAdminsCard(cfg, await namesWithOperator(evt, ids));
       });
     })
@@ -5668,11 +5845,12 @@ export function createOrchestrator(
           settleUpdate(evt.messageId, taken ? buildResumeErrorCard(state, inUseText(taken)) : buildResumeDoneCard(state));
         } finally {
           if (active.get(sessionKey) === reserved) active.delete(sessionKey);
-          if (reserved.queue.length > 0) {
+          const dropped = askAgain(reserved.queue, state.chatId, 'main', 'occupied', '会话被占用');
+          if (dropped > 0) {
             await channel
               .send(
                 state.chatId,
-                { markdown: `⚠️ 切回期间收到的 ${reserved.queue.length} 条消息未进入会话，请重发。` },
+                { markdown: `⚠️ 切回期间收到的 ${dropped} 条消息未进入会话，请重发。` },
                 { replyTo: state.originalMsgId },
               )
               .catch(() => undefined);
@@ -5730,9 +5908,10 @@ export function createOrchestrator(
             bound = !taken;
           } finally {
             if (active.get(tid) === reserved) active.delete(tid);
-            if (reserved.queue.length > 0) {
+            const dropped = askAgain(reserved.queue, state.chatId, 'topic', 'occupied', '会话被占用');
+            if (dropped > 0) {
               await channel
-                .send(state.chatId, { markdown: `⚠️ 恢复期间收到的 ${reserved.queue.length} 条消息未进入会话，请重发。` }, { replyTo: sent.messageId, replyInThread: true })
+                .send(state.chatId, { markdown: `⚠️ 恢复期间收到的 ${dropped} 条消息未进入会话，请重发。` }, { replyTo: sent.messageId, replyInThread: true })
                 .catch(() => undefined);
             }
           }
@@ -5851,6 +6030,7 @@ export function createOrchestrator(
             if (projectRevision(latest) !== request.expectedRevision) throw new AdminWriteError('项目设置已改变，请刷新后重试');
           });
           if (!removed) throw new AdminWriteError('项目已移除，请刷新');
+          forgetAttention(project.chatId, 'unbind');
           for (const rec of records) { const thread = sessions.get(rec.threadId); sessions.delete(rec.threadId); if (thread) await thread.close().catch(error => log.fail('desktop', error, { phase: 'project-session-close' })); }
           let groupEffect: 'left' | 'transferred' | 'failed';
           let warning: string | undefined;
@@ -5892,6 +6072,7 @@ export function createOrchestrator(
         // 单会话 and 智能 share the main area's session (keyed by chatId): switching between them archives nothing.
         const archive = (patch.cwd !== undefined && patch.cwd !== project.cwd) || (mode !== undefined && (mode === 'multi' ? 'multi' : 'single') !== ruleKind(project));
         const updated = archive ? await detachSessionsForChat(project.chatId, commit) : await commit();
+        if (sessionModeOf(updated) !== sessionModeOf(project)) forgetAttention(project.chatId, 'mode');
         if (archive) expireRetries((retry) => retry.chatId === project.chatId); // its sessions start over
         for (const rec of records) {
           const thread = sessions.get(rec.threadId); sessions.delete(rec.threadId);
@@ -5969,7 +6150,8 @@ export function createOrchestrator(
         resumePublications.delete(project.chatId);
         if (publishedKey && active.get(publishedKey) === reserved) active.delete(publishedKey);
         if (active.get(key) === reserved) active.delete(key);
-        if (reserved.queue.length) await channel.send(project.chatId, { markdown: `切回期间收到的 ${reserved.queue.length} 条消息未执行，请重发。` });
+        const dropped = askAgain(reserved.queue, project.chatId, ruleKind(project) === 'single' ? 'main' : 'topic', 'occupied', '会话被占用');
+        if (dropped) await channel.send(project.chatId, { markdown: `切回期间收到的 ${dropped} 条消息未执行，请重发。` });
       }
     }
     if (isRetiredKey(request.threadId)) throw new AdminWriteError(RETIRED_KEY_TEXT);
@@ -6040,7 +6222,8 @@ export function createOrchestrator(
     } finally {
       if (!launched && active.get(key) === reserved) active.delete(key);
       releaseIdle(key, compacted);
-      if (!launched && reserved.queue.length) await channel.send(project.chatId, { markdown: `操作期间收到的 ${reserved.queue.length} 条消息未执行，请重发。` });
+      const dropped = !launched ? askAgain(reserved.queue, project.chatId, isMainKey(key, project.chatId) ? 'main' : 'topic', 'occupied', '会话被占用') : 0;
+      if (dropped) await channel.send(project.chatId, { markdown: `操作期间收到的 ${dropped} 条消息未执行，请重发。` });
     }
   }
 
@@ -6057,18 +6240,25 @@ export function createOrchestrator(
     const ref = cardId.slice(-6);
     const done = (fields: Record<string, unknown>): void => log.info('card', 'handoff', { ref, ...fields });
     if (shuttingDown) { done({ sent: false, why: 'shutdown' }); return; }
-    await orStop(roster.load(opts.chatId), undefined);
+    await Promise.all([orStop(roster.load(opts.chatId), undefined), orStop(people.load(opts.chatId), undefined)]);
     // Shutdown while reading the roster must not send or repaint, even for ambiguous names.
     if (shuttingDown) { done({ sent: false, why: 'shutdown' }); return; }
     const bots = roster.peekForHandoff(opts.chatId);
     if (!bots) { done({ sent: false, why: 'no-roster' }); return; }
-    const { handoffs: found, ambiguous } = findHandoffs(answerText, bots, {
+    const known = people.peek(opts.chatId);
+    const { handoffs: found, ambiguous, ambiguousPeople, over, unverified } = findHandoffs(answerText, bots, {
       openId: channel.botIdentity?.openId, appId: channel.rawClient.appId,
-    });
-    if (!found.length && !ambiguous.length) return;
+    }, known?.people, known?.complete ?? false);
+    if (!found.length && !ambiguous.length && !ambiguousPeople.length && !unverified.length) return;
     const to = found.map(h => h.openId.slice(-6));
     const note = async (why?: HandoffMiss): Promise<void> => {
-      const lines = [...(why ? [handoffNote(found.map(h => h.name), why)] : []), ...ambiguous.map(ambiguousNote)];
+      const lines = [
+        ...(why ? [handoffNote(found, why)] : []),
+        ...ambiguous.map(ambiguousNote),
+        ...ambiguousPeople.map(ambiguousPersonNote),
+        ...(unverified.length ? [incompleteNote(unverified)] : []),
+        ...(over.length ? [overNote(over)] : []),
+      ];
       if (!lines.length || shuttingDown) return;
       rc.handoffNotes = lines;
       if (!(await stream.finalizeCard(channel, buildRunCard(rc)))) {
@@ -6076,7 +6266,15 @@ export function createOrchestrator(
       }
     };
     if (!cardUpdated) { done({ to, sent: false, why: 'finalize-failed' }); return; }
-    if (!found.length) { done({ sent: false, why: 'ambiguous', names: ambiguous.length }); await note(); return; }
+    if (!found.length) {
+      done({
+        sent: false, why: unverified.length ? 'incomplete' : 'ambiguous',
+        names: ambiguous.length + ambiguousPeople.length + unverified.length,
+        ...(unverified.length ? { incomplete: true, unverified: unverified.length, ...(!known ? { people: false } : {}) } : {}),
+      });
+      await note();
+      return;
+    }
     if (shuttingDown) { done({ to, sent: false, why: 'shutdown' }); return; }
     const text = handoffText(found);
     const send: Promise<HandoffSendResult> = channel.rawClient.im.v1.message.reply({
@@ -6096,7 +6294,10 @@ export function createOrchestrator(
       await note('failed');
       return;
     }
-    done({ to, sent: true, len: text.length, ...(ambiguous.length ? { ambiguous: ambiguous.length } : {}) });
+    done({ to, sent: true, len: text.length, ...(ambiguous.length ? { ambiguous: ambiguous.length } : {}),
+      ...(ambiguousPeople.length ? { ambiguousPeople: ambiguousPeople.length } : {}),
+      ...(over.length ? { over: over.length } : {}),
+      ...(found.some(h => h.person) ? { persons: found.filter(h => h.person).length } : {}) });
     await note();
   }
 
@@ -6253,12 +6454,13 @@ export function createOrchestrator(
     log.info('intake', 'run-queued', { position: q.position(), key: activeKey });
     /** The card's last word for a run that never starts. */
     const endCard = (): void => {
+      const dropped = askAgain(state.queue, opts.chatId, opts.flat ? 'main' : 'topic', 'queue-dropped', '会话被停下了');
       if (!msgId) return;
       runsByCard.delete(msgId);
       runStreams.delete(msgId);
       completionReminderRefreshers.delete(msgId);
       // At shutdown nobody cancelled it: the card says the bot stopped, and the bot says so again once back (s18c).
-      void trackTask(stream.updateCard(channel, queueCard({ cancelled: true, dropped: state.queue.length, ...(shuttingDown ? { stopped: true } : {}) })));
+      void trackTask(stream.updateCard(channel, queueCard({ cancelled: true, dropped, ...(shuttingDown ? { stopped: true } : {}) })));
     };
     // 等待期 ⏹ = 移除 waiter + 释放预订。槽已到手的瞬间 cancel() 返回 false →
     // 让位给运行期 interrupt（launchRun 每轮重装）。
@@ -7043,11 +7245,12 @@ export function createOrchestrator(
         if (killed || procDead || interrupted || compactDied) {
           state.intakeCancelled = true;
           dropCompact(state);
-          if (state.queue.length > 0) {
+          const dropped = askAgain(state.queue, opts.chatId, opts.flat ? 'main' : 'topic', 'queue-dropped', '会话被停下了');
+          if (dropped > 0) {
             void trackTask(channel
               .send(
                 opts.chatId,
-                { markdown: `⚠️ ${state.queue.length} 条排队消息已丢弃，请重发。` },
+                { markdown: `⚠️ ${dropped} 条排队消息已丢弃，请重发。` },
                 { replyTo: finalMsgId, replyInThread: !opts.flat },
               )
               .catch(() => undefined));
@@ -7075,7 +7278,7 @@ export function createOrchestrator(
       askTurn?.close('turn-ended');
       // Detach before any await: new messages must not join a failed consumer.
       if (active.get(activeKey) === state) active.delete(activeKey);
-      const dropped = state.queue.splice(0).length;
+      const dropped = askAgain(state.queue.splice(0), opts.chatId, opts.flat ? 'main' : 'topic', 'run-failed', '前一轮出错，排队的没跑');
       dropCompact(state);
       disposeInterrupt?.();
       state.subagents = undefined;
@@ -7957,6 +8160,7 @@ export function createOrchestrator(
     // undefined when the entry is already gone.
     const removed = await removeProject(project.name);
     if (!removed) return;
+    forgetAttention(project.chatId, 'unbind');
     log.info('intake', 'bot-removed-unbind', { name: removed.name, chatId: chatId.slice(-6) });
     if (removed.addedBy) {
       await channel.rawClient.im.v1.message

@@ -1,3 +1,4 @@
+import { APP_ROLE_CACHE_MS, createAppRoleRefresher, getAppRoleSnapshot } from '../config/app-roles';
 import type { CollaborationRequest } from '../admin/collaboration';
 import type { HostSettings } from '../admin/settings-types';
 import type { AdminWriteResult } from '../admin/ops';
@@ -82,11 +83,27 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   // hooks run an empty `vonvon hook`, and the tools ask in the terminal.
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
     { droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity });
+  const roles = createAppRoleRefresher(app, opts.appSecret);
+  await roles.refresh();
+  let rolesStopped = false;
+  let rolesTimer: ReturnType<typeof setTimeout>;
+  const scheduleRoles = (): void => {
+    const cached = getAppRoleSnapshot(app.id, app.tenant);
+    const remaining = cached ? cached.fetchedAt + APP_ROLE_CACHE_MS - Date.now() : 0;
+    rolesTimer = setTimeout(() => {
+      void roles.refresh().then(() => { if (!rolesStopped) scheduleRoles(); });
+    }, remaining > 0 && remaining <= APP_ROLE_CACHE_MS ? remaining : APP_ROLE_CACHE_MS);
+    rolesTimer.unref();
+  };
+  scheduleRoles();
   const offCrash = onCrashSync(() => orchestrator.saveDroppedSync('crash'));
   const groupTasks = new Set<Promise<JoinedGroups | Project>>();
   let closing: Promise<void> | undefined;
   const shutdown = (): Promise<void> => {
     if (closing) return closing;
+    rolesStopped = true;
+    clearTimeout(rolesTimer);
+    const rolesClosing = roles.stop();
     // s18c: stop taking events first. One that comes after this is not acknowledged, so Feishu pushes it again to the
     // next process, which answers it; taken now, it would be acknowledged and dropped by the closing orchestrator.
     // Replies and card updates go over HTTP, which this does not close. allSettled handles a rejection at once: it must
@@ -96,6 +113,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     const orchestratorClosing = orchestrator.shutdown();
     closing = (async () => {
       const errors: unknown[] = [];
+      await rolesClosing;
       try { await orchestratorClosing; }
       catch (error) { errors.push(error); }
       const groups = await groupsClosing;

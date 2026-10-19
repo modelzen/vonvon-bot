@@ -298,6 +298,8 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
       const live = await backend.startThread({ ...opts, cwd: dir });
       const runGoal = live.runGoal!.bind(live);
       live.runGoal = objective => {
+        expect(objective).not.toContain('会变成真 @');
+        expect(objective).not.toContain('群里还有 bot：');
         const run = runGoal(objective);
         const original = run.respondToAsk!.bind(run);
         run.respondToAsk = (id, answer) => { respond(id, answer); return original(id, answer); };
