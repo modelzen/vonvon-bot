@@ -761,6 +761,10 @@ describe('bot wake fallbacks and queued turns (s27a)', () => {
   });
   const page = (items: object[]) => ({ code: 0, data: { items, has_more: false } });
   const botSays = (m: EventMessage, openId = 'ou_other') => send(m, { openId, type: 'app', name: '小P' });
+  const rawBotSays = async (m: EventMessage, senderType: 'app' | 'bot') => {
+    const msg = await receive(m, { bot: BOT, sender: { openId: 'ou_other', type: 'app', name: '小P' } });
+    await orchestrator.onMessage({ ...msg, raw: { sender: { sender_type: senderType } } });
+  };
   const answered = (n = 1) => vi.waitFor(() => expect(fake.inputs).toHaveLength(n));
 
   it.each([true, false])('uses card text from history when listed=%s, otherwise fetches the card', async listed => {
@@ -806,9 +810,9 @@ describe('bot wake fallbacks and queued turns (s27a)', () => {
     await botSays(control); await answered();
   });
 
-  it.each(['always', 'failures'] as const)('completion mode %s preserves the bot requester and post mention', async mode => {
+  it.each([['always', 'app'], ['always', 'bot'], ['failures', 'app'], ['failures', 'bot']] as const)('completion mode %s preserves the bot requester and post mention (raw %s)', async (mode, senderType) => {
     cfg.preferences.completionReminder = { mode }; const m = says('提醒测试', { at: true, thread: 'omt_remind' });
-    fake.list.mockResolvedValue(page([memento(m)])); await botSays(m); await answered();
+    fake.list.mockResolvedValue(page([memento(m)])); await rawBotSays(m, senderType); await answered();
     await vi.waitFor(() => expect(fake.finals).toHaveLength(1)); await settle();
     if (mode === 'always') {
       expect(fake.reply).toHaveBeenCalledOnce();
@@ -827,13 +831,13 @@ describe('bot wake fallbacks and queued turns (s27a)', () => {
     expect(fake.inputs[1]?.startsWith(BOT_WAKE_NOTE('小P', 1))).toBe(true);
   });
 
-  it('does not persist a bot waiting for the global run slot', async () => {
-    await orchestrator.shutdown(); const file = join(paths.appDir, 'wake-global-slot.json');
+  it.each(['app', 'bot'] as const)('does not persist a bot waiting for the global run slot (raw %s)', async senderType => {
+    await orchestrator.shutdown(); const file = join(paths.appDir, `wake-global-slot-${senderType}.json`);
     orchestrator = createOrchestrator(channel as never, { ...cfg, preferences: { ...cfg.preferences, maxConcurrentRuns: 1 } }, '/tmp/demo', undefined, { droppedFile: file });
     const gate = deferred<void>(); fake.events = async function* () { await gate.promise; yield { type: 'done', turnId: 'turn-fixture' }; };
     await send(says('SLOT_OWNER', { at: true, thread: 'omt_slot_a' })); await answered();
     const m = says('BOT_WAITING', { at: true, thread: 'omt_slot_b' }); fake.list.mockResolvedValue(page([memento(m)]));
-    await botSays(m); await vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'run-queued', expect.anything()));
+    await rawBotSays(m, senderType); await vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'run-queued', expect.anything()));
     const stopping = orchestrator.shutdown(); gate.resolve(); await stopping;
     if (existsSync(file)) expect(readFileSync(file, 'utf8')).not.toContain(idOf(m));
   });

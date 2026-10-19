@@ -1329,13 +1329,13 @@ export function createOrchestrator(
     return openId ? { kind, openId } : { kind };
   }
   function askRequesterKind(msg: NormalizedMessage): 'user' | 'bot' | 'unknown' {
-    const senderType = (msg.raw as { sender?: { sender_type?: string } } | undefined)?.sender?.sender_type;
-    return senderType === 'user' ? 'user' : senderType === 'app' ? 'bot' : 'unknown';
+    if (fromBot(msg)) return 'bot';
+    const senderType = wakeEventSchema.safeParse(msg.raw).data?.sender?.sender_type;
+    return senderType === 'user' ? 'user' : 'unknown';
   }
   /** Who sent a message, as the topic registry records it. */
   function senderOf(msg: NormalizedMessage): TopicPerson {
-    const app = (msg.raw as { sender?: { sender_type?: string } } | undefined)?.sender?.sender_type === 'app';
-    return topicPerson(app ? 'bot' : 'user', msg.senderId);
+    return topicPerson(fromBot(msg) ? 'bot' : 'user', msg.senderId);
   }
   /** First messages looked up for the registry in this process (at most once each). */
   const rootLookups = new Set<string>();
