@@ -1,3 +1,4 @@
+import { redactTokens } from '../core/token-redact';
 // Crash records, the host run marker and the resume request under `<data root>/crash/` (product.md 3.10).
 // No import of config/paths or core/logger: the crash handler and its tests bundle this file into child processes.
 import { execFileSync } from 'node:child_process';
@@ -154,7 +155,7 @@ export function writeCrashRecordSync(root: string, record: CrashRecord): string 
   const parsed = crashRecordSchema.parse(record);
   const name = `${crashScopeKey(parsed.scope, parsed.appId)}-${parsed.at.replace(/[-:.]/g, '')}-${parsed.pid}-${randomBytes(4).toString('hex')}.json`;
   if (!RECORD_NAME.test(name)) throw new Error(`Unexpected crash record name ${name}.`);
-  writeAtomicSync(crashDir(root), name, JSON.stringify(parsed));
+  writeAtomicSync(crashDir(root), name, redactTokens(JSON.stringify(parsed)));
   return name;
 }
 
