@@ -128,3 +128,14 @@ describe('lineOfMessage', () => {
     expect(quotedLine(r, message({ replyToMessageId: 'om_gone' }))).toBeUndefined();
   });
 });
+
+it('exposes all-mentions as facts and reads rings without touching LRU', () => {
+  expect(lineOfMessage(message({ mentionAll: true }), '人')).toMatchObject({ named: true, mentions: ['所有人'] });
+  const r = new RecentLines(40, 2);
+  expect(r.lines('missing')).toEqual([]);
+  r.add('a', line('2', 2), line('1', 1));
+  r.add('b', line('3', 3));
+  expect(r.lines('a').map(l => l.id)).toEqual(['1', '2']);
+  r.add('c', line('4', 4));
+  expect(r.lines('a')).toEqual([]);
+});

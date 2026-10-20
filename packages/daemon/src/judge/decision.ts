@@ -65,13 +65,6 @@ const QUESTIONS: Record<JudgeVariant, { question: string; criteria: Partial<Reco
       topic: '开新话题回：需要 bot 回应，而且是一件新的事，要来回好几轮，或者要查、要改、要写东西',
     },
   },
-  mentioned: {
-    question: '`new_message` 在群主区点名了 bot（`bot_name`），bot 一定要回。按 `rules`，回在哪里？',
-    criteria: {
-      main: '在主区回：接着主区正在聊的事，或者一两句就能答完',
-      topic: '开新话题回：一件新的事，要来回好几轮，或者要查、要改、要写东西',
-    },
-  },
   topic: {
     question: '`new_message` 发在话题 `topic_title` 里，要回就回在这个话题里。按 `rules`，bot（`bot_name`）回不回？',
     criteria: {

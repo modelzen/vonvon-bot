@@ -321,7 +321,7 @@ describe('judge settings: the view', () => {
     const o = owner();
     let a = await o.read(agent) as AgentSettingsView;
     expect(a.smartPrompt).toEqual({
-      source: 'default', path: join(botDir(), 'SMART.md'), text: DEFAULT_SMART_PROMPT, formatLines: JUDGE_FORMAT_LINES,
+      source: 'default', path: join(botDir(), 'SMART.md'), text: DEFAULT_SMART_PROMPT, formatLines: { ...JUDGE_FORMAT_LINES, mentioned: JUDGE_FORMAT_LINES.main },
       inputExample: JUDGE_INPUT_EXAMPLE, backendNote: `${JUDGE_CODEX_NOTE}\n${JUDGE_CLAUDE_NOTE}`, maxLength: 8000,
     });
     await mkdir(join(botDir(), 'groups', 'oc_demo'), { recursive: true });
@@ -336,9 +336,9 @@ describe('judge settings: the view', () => {
     await save(project, JEV);
     p = await o.read(project) as ProjectSettingsView;
     expect(p.smartPrompt).not.toHaveProperty('backendNote');
-    expect(p.smartPrompt).toMatchObject({ source: 'group', formatLines: DECISION_FORMAT_LINES, inputExample: DECISION_INPUT_EXAMPLE });
+    expect(p.smartPrompt).toMatchObject({ source: 'group', formatLines: { ...DECISION_FORMAT_LINES, mentioned: DECISION_FORMAT_LINES.main }, inputExample: DECISION_INPUT_EXAMPLE });
     await save(agent, JEV);
-    expect((await o.read(agent) as AgentSettingsView).smartPrompt).toEqual({ source: 'bot', path: join(botDir(), 'SMART.md'), text: 'bot 的提示词', formatLines: DECISION_FORMAT_LINES, inputExample: DECISION_INPUT_EXAMPLE, maxLength: 8000 });
+    expect((await o.read(agent) as AgentSettingsView).smartPrompt).toEqual({ source: 'bot', path: join(botDir(), 'SMART.md'), text: 'bot 的提示词', formatLines: { ...DECISION_FORMAT_LINES, mentioned: DECISION_FORMAT_LINES.main }, inputExample: DECISION_INPUT_EXAMPLE, maxLength: 8000 });
     await writeFile(join(botDir(), 'SMART.md'), 'x'.repeat(8001));
     a = await o.read(agent) as AgentSettingsView;
     expect(a.smartPrompt).toMatchObject({ error: 'SMART.md 超过 8000 字', path: join(botDir(), 'SMART.md'), text: '' });

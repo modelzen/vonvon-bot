@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fetchTopicLastBot } from '../src/bot/context-weave';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { log } from '../src/core/logger';
 import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
@@ -1262,4 +1263,53 @@ describe('wakeTriggerText', () => {
   it('goes through the quote sanitizer: control characters and runs of blank lines go, lines stay', () => {
     expect(wakeTriggerText(msg('第一行\u0007\n\n\n\n第二行\r\n第三行'), undefined)).toBe('第一行\n\n第二行\n第三行');
   });
+});
+
+describe('rule topic history migrated from topic-scan', () => {
+/** Who sent an item: the asker (ou_a), another person, this bot, another bot, anonymous, a system notice. */
+const TOPIC_SENDERS = {
+  asker: { id: 'ou_a', id_type: 'open_id', sender_type: 'user' },
+  other: { id: 'ou_b', id_type: 'open_id', sender_type: 'user' },
+  self: { id: 'cli_me', id_type: 'app_id', sender_type: 'app', open_bot_id: 'ou_bot' },
+  bot: { id: 'cli_x', id_type: 'app_id', sender_type: 'app', open_bot_id: 'ou_x' },
+  anonymous: { id: '', sender_type: 'anonymous' },
+  system: undefined,
+} as const;
+type Who = keyof typeof TOPIC_SENDERS;
+const topicItem = (who: Who, extra: object = {}) => ({ message_id: `om_${who}`, msg_type: who === 'system' ? 'system' : 'text', sender: TOPIC_SENDERS[who], ...extra });
+
+/** Serves `pages` newest first, one per call; a page that is 'fail' answers a non-zero code, 'hang' never answers. */
+function topicChannel(pages: Array<Array<ReturnType<typeof topicItem>> | 'fail' | 'hang'>, more = false) {
+  const list = vi.fn(async ({ params }: { params: { page_token?: string } }) => {
+    const at = Number(params.page_token ?? 0);
+    const page = pages[at]!;
+    if (page === 'fail') return { code: 230002, msg: 'Bot is not in the chat' };
+    if (page === 'hang') return new Promise(() => undefined);
+    const next = at + 1 < pages.length || more;
+    return { code: 0, data: { items: page, has_more: next, page_token: next ? String(at + 1) : undefined } };
+  });
+  const ch = { botIdentity: { openId: 'ou_bot' }, rawClient: { appId: 'cli_me', im: { v1: { message: { list } } } } } as unknown as LarkChannel;
+  return { ch, list };
+}
+
+beforeEach(() => {
+  vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+  vi.spyOn(log, 'info').mockImplementation(() => undefined);
+});
+afterEach(() => vi.restoreAllMocks());
+
+describe('fetchTopicLastBot (rule mode, unchanged by s25b)', () => {
+  it('stops at the first bot, a deleted one too', async () => {
+    const c = topicChannel([[topicItem('other'), topicItem('self', { deleted: true }), topicItem('bot')], [topicItem('bot')]]);
+    expect(await fetchTopicLastBot(c.ch, 'omt_t', 3000)).toBe('self');
+    expect(c.list).toHaveBeenCalledTimes(1);
+  });
+
+  it('a later page that fails before any bot: unknown; three full pages without one: none', async () => {
+    expect(await fetchTopicLastBot(topicChannel([[topicItem('asker')], 'fail']).ch, 'omt_t', 3000)).toBeUndefined();
+    const full = topicChannel([[topicItem('asker')], [topicItem('other')], [topicItem('asker')]], true);
+    expect(await fetchTopicLastBot(full.ch, 'omt_t', 3000)).toBe('none');
+    expect(full.list).toHaveBeenCalledTimes(3);
+  });
+});
 });

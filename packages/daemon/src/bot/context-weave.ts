@@ -292,45 +292,6 @@ export async function fetchTopicLastBot(channel: LarkChannel, threadId: string, 
   return end === 'failed' ? undefined : found ?? 'none';
 }
 
-/** A smart group's topic, read once for the message `sender` posted (s25b). */
-export interface TopicScan {
-  /** As {@link fetchTopicLastBot} has it, settled at the first bot met: 三条底线 waits for nothing more. */
-  lastBot: Promise<'self' | 'bot' | 'none' | undefined>;
-  /** Only `sender` among people talks with this bot here (product.md 3.4 控制成本): of the bots, this one spoke last,
-   * and the newest pages (3, or back to the topic's start) were read, every one of them, with no other person in them.
-   * Another bot further back does not count. Never rejects. */
-  solo: Promise<boolean>;
-}
-
-/** One walk of the topic for both answers. Another bot spoke last: it stops there. Someone else spoke: it stops once
- * the last bot is known. Deleted messages and system notices are no one; a sender that is not a person known by open_id
- * (anonymous, another id type) is someone else. */
-export function scanTopic(channel: LarkChannel, threadId: string, sender: string, deadlineMs: number): TopicScan {
-  let settle!: (value: 'self' | 'bot' | 'none' | undefined) => void;
-  const lastBot = new Promise<'self' | 'bot' | 'none' | undefined>((resolve) => { settle = resolve; });
-  let bot: 'self' | 'bot' | undefined;
-  let other = false;
-  const solo = walkTopic(channel, threadId, deadlineMs, (it, kind) => {
-    if (kind === 'self' || kind === 'bot') {
-      if (!bot) {
-        bot = kind;
-        settle(kind);
-      }
-      return other || bot === 'bot';
-    }
-    if (!other && !it.deleted && it.msg_type !== 'system' && it.sender?.sender_type) {
-      const s = it.sender;
-      other = !(s.sender_type === 'user' && isOpenId(s.id_type) && s.id === sender);
-    }
-    return other && bot !== undefined;
-  }).then((end) => {
-    // Failed before a bot was met: unknown, as fetchTopicLastBot. After: what was read stands, marked not whole (s25 M3).
-    settle(end === 'failed' ? bot : bot ?? 'none');
-    return end !== 'failed' && bot === 'self' && !other;
-  });
-  return { lastBot, solo };
-}
-
 /** One history pull: the messages found, oldest→newest. */
 export interface ThreadPull {
   messages: ContextMessage[];
