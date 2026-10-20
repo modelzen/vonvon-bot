@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { constants } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { build } from 'esbuild';
@@ -30,7 +30,7 @@ afterEach(async () => {
 });
 afterAll(async () => { await rm(buildDir, { recursive: true, force: true }); });
 async function fixture() {
-  const dir = await mkdtemp(join(tmpdir(), 'secrets-get-')); dirs.push(dir);
+  const dir = await mkdtemp(join(await realpath(tmpdir()), 'secrets-get-')); dirs.push(dir);
   const home = join(dir, 'home'); const root = join(dir, 'vh'); await mkdir(home); await mkdir(root);
   return { dir, home, root };
 }
