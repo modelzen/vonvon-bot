@@ -1,6 +1,6 @@
-import { realpathSync } from 'node:fs';
+import { mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { app, autoUpdater, BrowserWindow, dialog, Menu, net, type Tray, type WebContents } from 'electron';
 import { resolveDataRoot } from '../../daemon/src/config/data-root.js';
@@ -42,6 +42,18 @@ function startupMessage(error: unknown): string {
 }
 
 export async function startDesktop(): Promise<void> {
+  const testHome = process.env.VONVON_DESKTOP_TEST_HOME;
+  if (testHome) {
+    // The existing test entry point must isolate Electron's lock/cache/update state too.
+    if (!isAbsolute(testHome) || !process.env.VONVON_HOME || !isAbsolute(process.env.VONVON_HOME)) {
+      throw new Error('Desktop testing requires absolute test home and VONVON_HOME');
+    }
+    const userData = join(testHome, 'userData');
+    mkdirSync(userData, { recursive: true, mode: 0o700 });
+    app.setPath('appData', testHome);
+    app.setPath('userData', userData);
+    app.setAppLogsPath(join(testHome, 'logs'));
+  }
   if (!app.requestSingleInstanceLock()) {
     app.quit();
     return;

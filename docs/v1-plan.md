@@ -310,12 +310,12 @@ Codex 先用隔离的 HOME 和 bridge 数据副本走完整个导入，包括故
 
 ### M11 公开发布准备（s65、s66、s67）
 
-**给 owner 什么：**（第 8 节）能出签名并公证过的 universal dmg，Intel Mac 也能装；应用里能检查更新并装上新版。npm 包和桌面包的许可证改成闭源（UNLICENSED）。在一台没有 bridge 的 Mac 上，从零安装、扫码、开权限，第一次对话走通，这是第 8 节第 5 条的 Mac 一半。s66 只在要不到 Anthropic 的书面确认时做。
+**给 owner 什么：**（第 8 节）能在本地出已有 Developer ID 签名的 universal dmg，Intel Mac 也能装；hardened runtime 和 entitlements 明确配置，签名以 `codesign --verify --deep --strict` 验证。公证以后由 owner 定，不是本次 s65 前置。应用里检查更新并装上新版的完整承诺保留，s65 先生成本地清单和 feed，公开地址发布前填。npm 包和桌面包的许可证改成闭源（UNLICENSED）。在一台没有 bridge 的 Mac 上，从零安装、扫码、开权限，第一次对话走通，这是第 8 节第 5 条的 Mac 一半。s66：owner 2026-10-20 定不做，owner 去向 Anthropic 要确认。
 
 **怎么验收：** owner 要做的：第 1 步里新开一个干净的 macOS 用户装 dmg，第 2 步（从零扫码走清单，到第一次对话）。其余步骤 Codex 在 M11 的预览版任务里先做完，结果写在通知里。
 
-product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前办好。开始前还没定的，Claude 用【需要你决定】一次问齐。然后：
-1. Codex 先查：从下载地址下载 dmg，用 `spctl --assess --type open --context context:primary-signature` 查 dmg、`spctl --assess --type execute` 查里面的 app，再用 `xcrun stapler validate` 查两者，都通过。命令行下载的文件不带隔离标记，Gatekeeper 不会真的拦一次，所以放不放行只在 owner 这一半看。owner：在 Mac 上新开一个干净的 macOS 用户（没有 bridge），从下载地址装 dmg，Gatekeeper 直接放行。
+owner 2026-10-20 已定 s65 先做本地包，地址以后填，公证以后定，不再重复问这些决定。发布前其余准备按本文第 8 节检查。然后：
+1. s65 本地先查：app 用 `codesign --verify --deep --strict` 验签，dmg 独立验签；Apple Silicon 和已有 Rosetta 分别实际启动。此时不跑公证或 stapler，不宣称 Gatekeeper 放行。公开地址和公证以后准备好时，再从公开地址下载并做对应 `spctl`/`stapler` 验证；owner 在干净 macOS 用户中从公开地址安装的发布前验收保留，不能用本地无 quarantine 启动替代。
 2. owner：从零走一遍清单：扫码、开权限、事件订阅、发布、登录时启动，然后第一次对话走通。
 3. Codex 先查：装一个旧一点的版本，在"应用与启动"页检查更新，装上新版。装回新版后，`vonvon service status` 和装旧版之前一样，Codex 在回复里写明。
 
@@ -495,7 +495,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s11 做法（领文件）：`fileClaimMode` 去掉了"只有发起人或管理员"，本群能用 bot 的人都能领；项目停用时谁也领不了。点的人用自己的权限档，和文件写出时的档取交集，所以访客领不到完全权限档写在工作区外面的文件；这时只回点的人一句，不在共享卡上标错。s15c 去掉访客档以后，点的人和发起人用同一档，交集这一步可以删。s15c：点的人用群现在的档；文件写出时的档那一步留着：群的档调低以后，旧卡上工作区外的文件领不到。
 - s11 留下的事：
   - s30 已按 3.8 接云文档评论：那里不发卡，收到提问立即回“无法回答”，由后端把确认/权限换成拒绝；不持有 `IdlePause`。
-  - 给 s60：bridge 里存着 `runIdleTimeoutSeconds: 120` 的用户，多半是点过当时的默认按钮。换算时要不要去掉这个值，由 s60 定。
+  - 给 s60（owner 定案）：bridge 旧 `runIdleTimeoutSeconds` 正好 120 时移除覆盖，使用新默认 10 分钟；其他显式值保留，0 即关闭，缺失用新默认。每 bot 的预览/结果必须提示“空闲超时：旧版的 120 秒是当时的默认值，改成现在的默认 10 分钟；要 120 秒请到设置里改回”。
   - ［重试］只重放这一轮最初的输入。运行中插话补进来的内容不在里面，只在会话历史里。
   - 进程中途死掉（"agent 进程异常退出"）不算网络失败，没有重试按钮。
   - 登录失效的提示仍然写 `codex login`，Claude 会话也是这句；运行卡不知道后端是哪个，留给 s19 诊断页一起改。s19 已改：运行卡按后端写 Codex 或 Claude 的登录办法。
@@ -1408,7 +1408,7 @@ s46 做法：真实 A/B/K、四轮和 Bot 6 证据归属任务 125 的源码 `0e
 |---|---|---|---|---|---|---|---|
 | [x] | s58 | 迁移前的清理：删掉没上线的改名迁移 | 删从没上线的改名迁移及专属兼容修复；保留现行数据目录、凭据 getter 识别和互斥/租约（cli-bridge 和它的 Windows 分支由 s02c 删） | 450 | — | — | 无 |
 | [x] | s59 | 导入预检 | 从 #226 移植预检、本地文件读取和旧密钥库，去掉准入互斥锁和 Windows 部分；每个 bot 只读地查第 5 节第 2 步那几项 | 1180（实际 894；#463） | s58 | 数据迁移、macOS 原生、错误路径 | 任务 122 技术等价：0.6.14 原版 writer 生成的合成旧数据兼容，真实 launchctl/ps 对唯一临时服务的读取适配；不代表私人历史副本、真 bridge service 或 e08 |
-| [ ] | s60 | 把 bridge 的数据换算成第一版的形状 | 一个纯函数：bot 照搬，管理员进本机名单，个人指令照旧带上；每个群变成规则模式下的覆盖，cwd 原地引用（第 5 节） | 320 | s59、s36、s21、s12 | 数据迁移 | 无 |
+| [x] | s60 | 把 bridge 的数据换算成第一版的形状 | 一个纯函数：bot 照搬，管理员进本机名单，个人指令照旧带上；每个群变成规则模式下的覆盖，cwd 原地引用（第 5 节） | 320（实际 641；#467） | s59、s36、s21、s12 | 数据迁移 | 无 |
 | [ ] | s61 | 导入事务（上）：停 bridge、占锁、复制、回滚 | 第 5 节第 3 到 5 步：事务跑在 daemon 的 host 里，由 host 持锁；照 bridge 自己 stop 的做法卸掉 launchd 任务、plist 挪进暂存目录，按 bridge 的格式占锁，换算后暂存、用新密钥重新加密；先记日志再做，任何一步失败、关机、被杀都倒序回滚，先放锁再放回 plist、重新加载 bridge（详细计划 `docs/plans/s61.md`） | 1,090 | s60、e07、e08 | 子进程、并发、关闭清理、错误路径、数据迁移、macOS 原生 | 在 Mac 的测试用户账号里装 bridge 0.6.14：前半段后 plist 被删、手动 run 被拒；复制后故意失败，回滚后 bridge 重新起来 |
 | [ ] | s62 | 导入事务（下）：Codex 兜底、hook、启动、回执 | 第 5 节第 6 到 9 步：找 codex，备份后卸掉 bridge 的 hook，把暂存的 bot 搬进来，启动全部 bot 等连上，写迁移标记（提交点）和回执；之后每次启动都先占 bridge 的锁，bridge 在跑某个 bot 时这个 bot 不启动并提示（详细计划 `docs/plans/s62.md`） | 1,100 | s61 | 子进程、并发、错误路径、macOS 原生 | 同一个测试用户账号里从头导入：旧会话接得上，卸掉 hook 后审批回到终端里问；第 8 步故意失败能回滚；导入后手动 run 被拒 |
 | [ ] | s63 | 导入页 | 发现 bridge 就显示导入页：预检表、"会感到的变化"和"失去"两张清单、进度、回执；清单加"可选：从 bridge 导入"，只在 macOS 显示（第 5 节） | 520 | s62、s04 | 错误路径 | 无（M10 验收前，预览版任务在测试用户账号里走一遍导入页） |
@@ -1418,6 +1418,9 @@ s46 做法：真实 A/B/K、四轮和 Bot 6 证据归属任务 125 的源码 `0e
 - s58、s59 不依赖 M3 到 M9，M4 之后在第二条线上做。
 - s58 做法（#373）：删除生产入口未使用的 `data-root-migration.ts`、`legacy-data-root.ts`、`host/migration.ts`，以及只为改名迁移服务的兼容修复、错误类型和测试。现行 `resolveDataRoot` 继续默认使用 `~/.vonvon-bot`，显式 `VONVON_HOME` 的行为不变；getter 识别、互斥与租约仍保留。隔离的真实 CLI 启动与退出验证默认和显式目录两条路径，两个旧目录的实体、内容和孤立迁移日志均保留。原来的改名做法和第 5 节"复制数据、旧目录原地引用"相反；`~/.vonvon-bridge` 的识别在 s59 里按预检的需要重写。
 - s59：合入后在 #226 里写明移植了哪些代码，先不关。
+- s60 做法（#467）：`import/bridge/conversion.ts` 显式校验旧版完整快照，纯转换逐 bot 返回未分配 entry、V1 config/project/session、密钥来源计划、copy 相对路径和 notes；不使用 s59 脱敏摘要。群取更严档并列出差异，cwd 原地引用；个人指令保留 native 继承，评论提示词/已发文件 copy 归属按 bot 保留。凭据仅接收旧库 id / plaintext 来源标记 / external 引用，旧库和 plaintext 输出 secretKeyForApp 的 V1 getter 引用，绝不收发明文；getter 路径由 s61 显式提供，不读取或执行。entry active 沿用旧 current，时间/handle/目录留给 s61；错误逐 bot 返回，合法 sibling 信息保留。live #admin 改名，#guest 和 detached 旧键保留停用；键碰撞明确拒绝、不覆盖。120 秒移除且逐 bot 提示，0 是旧版关闭编码；autoCompact 丢弃。无 IO、crypto、getter、事务或用户入口，s61–s63 接线及真实服务/续接验收待后片。
+- s60 任务140检查：普通合并main后 head `c34baeef97857cc822bcb79353ad8590bc3b7dfe`；旧661bfd79模块在新来源契约的5个正例中5/5真实断言失败；当前隔离HOME/VONVON_HOME下daemon typecheck及7文件161项首次通过（转换53项），最终实现失败0/重跑0。未触构建原语，不重复build/lint；无provider/真实服务/事务验收，独立审查待总管（#436）。
+- s60 任务134旧契约检查（不代表任务140契约检查已通过）：准确基线 `49c13c604b0c2a542ebc0f0f1ba49160a02d25fa` 加本片未提交改动；隔离 HOME/VONVON_HOME 下 build、typecheck、lint 首次通过，转换/schema/one-tier/session-store/execution-resolve/session-mode/bot-defaults 共 7 文件 144 项首次通过，无失败/重跑。全合成数据契约检查，不代表 s61 真事务或 s62 真续接验收；独立审查待总管（#436）。
 - s59 做法（#463）：复用 #226 的受限只读文件读取、旧 PBKDF2/AES-GCM 密钥解密和预检校验，逐 bot 返回群数、目录、密钥、hook、运行状态，另查 bridge 的 launchctl 状态与自带 Codex；失败保留全部 bot 的结果。没有未发布的准入锁也能预检，现行 V1 数据准入/租约保留。不做 s60–s62 的换算和事务，也不接 s63 页面。
 - s59 旧目录：有顶层 `processes.json`、没有 `bots.json` 的旧平铺安装只读提示“这个 bridge 还是旧的目录格式。先照常启动一次原来的 bridge，让它升级目录，再回来重试导入”；不启动/停止 bridge、不改文件、不报没有数据、不跳过 bot，重试重新预检。有 `bots.json` 后照常导入全部 bot（Claude 2026-10-19 定，按 s59 开工说明）。
 - s59 验收状态：按任务 122 明确审定的纯技术等价边界打勾。固定旧源码 `6698118352d7eca87887d3ee1b58736caca204bc`（0.6.14），未经改写的旧 writer 写两个合成 bot/群/会话及随机旧库，旧 getSecret 自检匹配与新预检 decryptable 均 2/2，假 salt/tag 失败对照正确。真实唯一 LaunchAgent/自有进程经测试 seam 只映射固定查询目标，running、退出 stopped、卸载 stopped 均通过，source/home 全路径/类型/链接/字节不变；服务已卸载且进程退出。TOML/JSON null 必改反证已修，60 条定向与 typecheck/lint 通过；独立复核待总管。证据准确称“0.6.14 原版 writer 生成的合成旧数据兼容”和“真实 launchctl/ps 对合成临时服务的读取适配”，不称私人历史数据、真 bridge 服务或 e08 已验，不前移 s61/s62 的事务职责。
@@ -1433,12 +1436,13 @@ s46 做法：真实 A/B/K、四轮和 Bot 6 证据归属任务 125 的源码 `0e
 
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
-| [ ] | s65 | 公证的 universal dmg、更新源和许可证 | universal 包，hardened runtime 和 entitlements，公证；版本号统一写入；生成更新清单和 feed；许可证改成 UNLICENSED（第 8 节第 1、3 条） | 370 | — | macOS 原生 | 用 owner 的证书签名并公证：Gatekeeper 放行，Apple Silicon 和 Rosetta 下都能启动，能检查并装上新版 |
-| [ ] | s66 | 公开版里 Claude 只用 API key（要不到书面确认时才做） | 公开构建里 Claude 不复用本机登录，只用主人填的 API key；开发版和自用版不变（第 8 节第 2 条） | 250 | s03 | 错误路径 | 公开构建里 Claude 只用 API key、不读钥匙串里的登录（要 owner 给一个 key） |
+| [x] | s65 | 本地 universal 分发包、签名和更新产物 | universal dmg/zip，hardened runtime 和 entitlements，已有 Developer ID 签名；统一版本；本地更新 manifest/feed；第一方 UNLICENSED。公证以后由 owner 定，地址发布前填（owner 2026-10-20） | 900–1200（实际 611；#468） | — | macOS 原生、错误路径 | codesign --verify --deep --strict；真实双架构，Apple Silicon/Rosetta 分别启动；本地清单适配现有更新器。公开下载与完整旧版更新安装留发布前验证 |
+| — | s66 | owner 2026-10-20：不做，owner 去要确认 | 不实施 API-only 公开构建；Claude 登录书面确认仍是公开发布前事项（第 8 节第 2 条） | — | — | — | 保留 owner 获取书面确认的发布前义务 |
 | [ ] | s67 | 发布前的 Mac 验收 | 第 8 节第 5 条的 Mac 一半：在没有 bridge 的 macOS 用户上，用公开的 dmg 从零安装、扫码、开权限、第一次对话；结果写进本文第 10 节 | 30 | s65、s63；s64 已准备好即可 | — | 全部在真机和真实飞书里做，扫码由 owner 来做 |
 
 开工要点：
-- s65：今天 `build.mjs` 写死版本 0.1.0，而更新比较用的正是它。bridge 和 Paseo 的许可声明（NOTICE、LICENSE.bridge、LICENSE.paseo）今天已经随 npm 包和桌面包发，只改 license 字段。
+- s65：详细计划见 `docs/plans/s65.md`，不等最后一轮 UI。以 daemon 现有版本为产品源，desktop/stage/Core/npm 一致；协议/client 自有版本不改。正式 universal 走双架构 Electron 下载、合并后签名，preview 保留 Apple Silicon。桥接与 Paseo 的 NOTICE、LICENSE.bridge、LICENSE.paseo、PROVENANCE 继续随 npm/app 分发。真实签名、架构、Rosetta 和更新产物证据按作者结果记录，未验不勾。
+- s65 做法（#468）：正式 API 显式 universal targets，双架构 Electron 合并后已有 Developer ID 签名；13 个 Mach-O 双架构/逐个验签，5 份权限精确仅 JIT。dmg 挂载内 app 另验，arm64 与已有 Rosetta 分别实际启动；Rosetta 首次未就绪保留，诊断后全新隔离目录重试成功，原因未证实。本地清单/模板、UNLICENSED 和 npm 声明已验；公证/公开下载/完整在线更新仍未验。详见 `docs/research/2026-10-20-s65/local-distribution.md`。
 - s67：先由预览版任务装好，Codex 走一遍不需要扫码的部分，再交 owner 验收。Linux 那一半在 s20b 做。
 
 ### 界面打底（u01 到 u10）
@@ -1573,7 +1577,8 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | 密钥页"谁在用"怎么排 | 一个 Bot 默认或一个群一行，每行写 Bot 名和怎么选的；30 个群时这一列约 1,200px 高 | Claude 定的，owner 看稿子后可能改。按 Bot 分组（Bot 一行，下面的群只写群名和"自己选了"或"不是智能群"）能压到三分之一；删之前要看清每个群跟着谁，先照现在的排（s23g2 多角度审查 B5） | s23g2 |
 | "谁在用"列不列现在不是智能群的 | 列，标"现在不是智能群"；删的确认里单列一段，写"删了不影响；改成智能群后会按出错处理" | Claude 定的，owner 看稿子后可能改。选了 Jev 的群改回智能马上就要用这个 key，删之前该知道 | s23g2 |
 | 卡片里的 @所有人 | 变文字（上面"卡片和 markdown 里的 `<at>`"一行，s27a0 已做，s23g2 不改） | Claude 定的，owner 看稿子后可能改。@所有人叫不叫得醒别的 bot 没测，宁可不叫 | s27a0 |
-| 许可证 | UNLICENSED | 第一版闭源，第 8 节第 3 条要求发布前改掉 MIT | s65 |
+| 许可证 | 第一方 UNLICENSED；第三方声明保留 | 第一版闭源，第 8 节第 3 条；不改 bridge/Paseo 许可归属 | s65 |
+| 正式桌面包 | universal dmg/zip；hardened runtime，已有 Developer ID 签名；本地清单/feed | owner 2026-10-20；公开地址发布前填，公证以后由 owner 定；未配地址更新不可用 | s65 |
 | Linux 验收在哪做 | JP-VPS 上的普通用户账号，做完卸载 | 第 8 节第 5 条要一台 systemd 主机 | s20b |
 | Linux 上 `service install` 怎么问 linger | 只在终端里问一句，回车或 y 算同意；不是终端、没带 `--linger` 就不开，只打命令；`--linger` 不问就开，`--no-linger` 不开；不用 sudo，开不了给出 sudo 的命令 | 3.10 说"没开就问一句，同意后执行"，没说没人回答时怎么办；没人回答不算同意 | s20a |
 | 卸载时的 linger | 不关，只提示 `loginctl disable-linger` | linger 是这个账号的设置，别的用户服务可能也靠它，也分不出是不是 `service install` 开的 | s20a |
@@ -1663,7 +1668,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | 每条会话记几条撤回说明 | 20 条，留最新的 | 3.5 没给数；说过一次就清，平时到不了 | s15 |
 | 比消息先到的撤回记多久 | 进程内记一天，最多 2000 个消息 id，不落盘 | 飞书的事件不保证按顺序到；隔得更久的很少见 | s15 |
 | 网页端运行状态刷新 | 有运行时每 3 秒重拉一次 `context`；空闲、切换会话或卸载时清定时器 | 还没有推送，子 agent 后来出现的行和停止后的状态要看得到；一次是本机 IPC 一来一回 | s34b |
-| 预览版 | 只出 Apple Silicon，不公证 | 只装在 owner 自己的 Mac 上验收；universal 包和公证在 M11（第 8 节第 1 条） | 本文第 7 节 |
+| 预览版 | 只出 Apple Silicon，不公证 | 只装在 owner 自己的 Mac 上验收；universal 包在 M11 s65；公证由 owner 以后决定（2026-10-20） | 本文第 7 节 |
 
 ### 叫法表
 
@@ -1775,9 +1780,9 @@ D8 的三个待定项（product.md 第 11 节），u01 这样定：
 
 | 事 | 什么时候要 | 说明 |
 |---|---|---|
-| Apple 开发者的公证凭据 | M11（s65） | 申请和配置要时间 |
-| 公开的下载和更新地址 | M11（s64 的通知、s65 的更新源） | product.md 第 8 节第 1 条 |
-| 向 Anthropic 要 Claude 登录的书面确认 | 公开发布前 | product.md 第 8 节第 2 条，可能要几周；要不到就做 s66 |
+| Apple 开发者的公证凭据 | owner 以后决定公证时 | owner 2026-10-20：此次 s65 不公证、不配置凭据 |
+| 公开的下载和更新地址 | 公开发布前填写；s64 通知/更新源上线前 | owner 2026-10-20 先不定；s65 做配置和本地产物，不硬编码 |
+| 向 Anthropic 要 Claude 登录的书面确认 | 公开发布前 | product.md 第 8 节第 2 条；owner 2026-10-20 定 s66 不做，owner 去要确认 |
 | 一位同事或第二个飞书账号 | e10（s18 之前）、e09（s30 之前）、M6 第 4 步、M9 第 2 和第 6 步 | 验收时要有另一个人点卡片、私聊 bot |
 | TypeSafe 的账号和 key | s23f、s23g 和 M5 第 11 步（测试 key 已给，2026-10-18） | 测试 key 存在 JP-VPS 本机，不进仓库，Claude 在 JP-VPS 上测这几处时用。Mac 上要用 Jev 时由 owner 在密钥页自己填，key 不经 GitHub 传给 Mac 上的 Codex。长期用要 owner 自己的账号和付款方式；有没有免费额度，文档没写 |
 | JP-VPS 上再加两个测试 bot | 已做（2026-10-16） | M5 要同一台机器上三个 bot（一个规则模式、两个智能模式）。owner 在 JP-VPS 的终端里扫码建了 Vonvon Bot 7、Bot 8，开发者后台由 Mac 上的 Codex 配好、发布（本文第 10 节"M3 验收期间顺带看到的"） |
