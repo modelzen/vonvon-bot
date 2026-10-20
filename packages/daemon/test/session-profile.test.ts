@@ -157,3 +157,15 @@ for (const field of ['additionalRoots', 'capabilityPackages', 'mcpServers'] as c
     }),
   }));
 });
+
+
+it('keeps the built-in vonvon_bot name out of unsupported profile MCP configuration', async () => {
+  const profile = { ...explicit, mcpServers: [{ name: 'vonvon_bot' }] };
+  const claude = claudeFixture();
+  for (const backend of [new CodexAppServerBackend(), claude.backend]) {
+    await expect(backend.startThread({ cwd: '/fixture', profile })).rejects.toThrow('s39');
+    await expect(backend.resumeThread({ cwd: '/fixture', profile, sessionId: 'saved' })).rejects.toThrow('s39');
+  }
+  expect(claude.load).not.toHaveBeenCalled();
+  expect(rpc.take).not.toHaveBeenCalled();
+});

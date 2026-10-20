@@ -7,7 +7,8 @@ import { createGroupExecutor, type AdminGroupOp, type JoinedGroups } from '../ad
 import type { Project } from '../project/registry';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import type { AdminWriteOp } from '../admin/ops';
-import type { AppConfig } from '../config/schema';
+import { isAdmin, resolveOwner, type AppConfig } from '../config/schema';
+import { createAgentEntries, type AgentEntries } from '../agent/entry/registry';
 import { log } from '../core/logger';
 import { createOrchestrator } from './handle-message';
 import { createTopicRegistry } from './topic-registry';
@@ -33,6 +34,7 @@ export interface BridgeOptions {
 }
 
 export interface BridgeHandle {
+  entries: AgentEntries;
   channel: LarkChannel;
   collaboration: (request: CollaborationRequest) => Promise<unknown>;
   adminGroups: (op: AdminGroupOp) => Promise<JoinedGroups | Project>;
@@ -60,8 +62,9 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   // 咖啡一下 (the local Claude Code / Codex hook relay) left v1 in s02b: no
   // service and no socket; s02c deleted D/cli-bridge. Since s02c2 the installed
   // hooks run an empty `vonvon hook`, and the tools ask in the terminal.
+  const entries = createAgentEntries({ appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), isOwner: id => resolveOwner(opts.cfg) === id });
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
-    { droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity });
+    { entries, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity });
   const roles = createAppRoleRefresher(app, opts.appSecret);
   await roles.refresh();
   let rolesStopped = false;
@@ -177,7 +180,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
       void task.then(() => groupTasks.delete(task), () => groupTasks.delete(task));
       return task;
     };
-    return { channel, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, settings: orchestrator.settings, shutdown };
+    return { channel, entries, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, settings: orchestrator.settings, shutdown };
   } catch (error) {
     try { await shutdown(); }
     catch (cleanupError) {
