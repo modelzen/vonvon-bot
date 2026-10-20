@@ -1,3 +1,4 @@
+import type { AgentEntries, AgentPlace, TurnScope } from '../agent/entry/registry';
 import { redactAgentEvents } from '../core/token-redact';
 import { smartSalience, type Salience, type SalienceDeps } from './salience';
 import { getAppRoleSnapshot } from '../config/app-roles';
@@ -43,6 +44,8 @@ import {
   DEFAULT_PERMISSION_MODE,
   REASONING_EFFORTS,
   type AgentBackend,
+  type StartThreadOptions,
+  type ResumeThreadOptions,
   type AgentInput,
   type AgentRun,
   type AgentThread,
@@ -1010,8 +1013,9 @@ export function createOrchestrator(
   /** `droppedFile`: where a shutdown keeps the queued messages it drops (s18c). No default: without it, nothing is
    * kept or answered (tests, and every caller but `daemon run`). */
   // Only daemon run supplies judgeUsageFile; tests that omit it do not persist usage.
-  options?: { droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention },
+  options?: { entries?: AgentEntries; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention },
 ): Orchestrator {
+  const entries = options?.entries;
   const bindingBot = options?.bot ? { ...options.bot } : undefined;
   /** Lazily-constructed backends by id — one instance per backend for the whole
    * bridge (mirrors the old single-instance shape; codex stays the default). */
@@ -1151,6 +1155,19 @@ export function createOrchestrator(
    * （touchSession）打点；空闲时长 = now − 最后打点。 */
   const sessionTouchedAt = new Map<string, number>();
   /** sessions.set + 打点 —— 所有放进 LIVE 缓存的会话一律走这里。 */
+  async function startWith(be: AgentBackend, opts: StartThreadOptions, place: AgentPlace): Promise<AgentThread> {
+    if (!entries) return be.startThread(opts);
+    const entry = entries.issue(place);
+    try { const thread = await be.startThread({ ...opts, entry }); entry.attach(thread); return thread; }
+    catch (error) { entry.revoke('start-failed'); throw error; }
+  }
+  async function resumeWith(be: AgentBackend, opts: ResumeThreadOptions, place: AgentPlace): Promise<AgentThread> {
+    if (!entries) return be.resumeThread(opts);
+    const entry = entries.issue(place);
+    try { const thread = await be.resumeThread({ ...opts, entry }); entry.attach(thread); return thread; }
+    catch (error) { entry.revoke('start-failed'); throw error; }
+  }
+
   function trackSession(key: string, thread: AgentThread): void {
     if (shuttingDown) {
       void trackTask(thread.close());
@@ -2877,6 +2894,7 @@ export function createOrchestrator(
         dropRetries(sessionKey);
         markSeen(sessionKey, { id: msg.messageId, at: msg.createTime });
         try {
+          entries?.noteSteer(cur.thread, { openId: msg.senderId, kind: askRequesterKind(msg) });
           await steerWithDeadline(cur.thread, { text: woven.text, images }, tid);
           const split = steerReply?.accept(msg.messageId, woven.voice);
           if (!split && woven.voice) voiceReply?.add(woven.voice);
@@ -3243,7 +3261,7 @@ export function createOrchestrator(
           // Rebuilt after the cwd changed: the record's backend, as its model is (s36d2).
           const cwd = workCwd(project);
           const be = sessionBackendOf(prior, project);
-          thread = await be.startThread({ cwd, model, effort, mode: perm.mode, network: perm.network });
+          thread = await startWith(be, { cwd, model, effort, mode: perm.mode, network: perm.network }, { kind: 'group', chatId: msg.chatId });
           trackSession(sessionKey, thread);
           // 自愈观测：来源=全新会话（无持久化记录），与 resume-ok/resume-recreate
           // 互斥——三者其一 + agent 层的 spawn/prewarm-hit 即可还原完整恢复路径。
@@ -3491,14 +3509,14 @@ export function createOrchestrator(
     const be = backendFor(rec.backend);
     await waitReleased(threadId);
     try {
-      const resumed = await be.resumeThread({
+      const resumed = await resumeWith(be, {
         cwd: rec.cwd,
         sessionId: rec.sessionId,
         model: rec.model,
         effort: rec.effort,
         mode: perm?.mode,
         network: perm?.network,
-      });
+      }, { kind: 'group', chatId });
       trackSession(threadId, resumed);
       // 自愈观测：resume 来源=持久化记录（区分「resume 自愈」与 LIVE 快路径的
       // 普通续轮——后者不经过这里，stream.timing 的 tResolve≈0 是它的指纹）。
@@ -3510,13 +3528,13 @@ export function createOrchestrator(
       // Open in a terminal or the Codex app (s15b): say so and keep the session.
       if (err instanceof SessionInUseError) throw err;
       const cwd = workCwd(project, rec);
-      const fresh = await be.startThread({
+      const fresh = await startWith(be, {
         cwd,
         model: rec.model,
         effort: rec.effort,
         mode: perm?.mode ?? project?.mode,
         network: perm?.network ?? project?.network,
-      });
+      }, { kind: 'group', chatId });
       trackSession(threadId, fresh);
       lastUsage.delete(threadId);
       // The resumed codex thread is gone — repoint the persisted record at the
@@ -3589,7 +3607,7 @@ export function createOrchestrator(
       let tResolveDone = tIntake;
       const threadP = (async () => {
         const { model, effort } = pickDefault(await listModels(be), prefer);
-        const thread = await be.startThread({ cwd, model, effort, mode: perm.mode, network: perm.network });
+        const thread = await startWith(be, { cwd, model, effort, mode: perm.mode, network: perm.network }, { kind: 'group', chatId: msg.chatId });
         tResolveDone = Date.now();
         return { thread, model, effort };
       })();
@@ -4054,13 +4072,13 @@ export function createOrchestrator(
           effort ??= picked.effort;
           modelCustom = isCustomDefault(prefer, model);
         }
-        const fresh = await be.startThread({
+        const fresh = await startWith(be, {
           cwd,
           model,
           effort,
           mode: perm.mode,
           network: perm.network,
-        });
+        }, { kind: 'group', chatId: msg.chatId });
         // Close + evict the parked live thread (a separate app-server proc); its
         // on-disk session survives for /resume. Then track the fresh one.
         const old = sessions.get(sessionKey);
@@ -6257,7 +6275,7 @@ export function createOrchestrator(
     try {
       if (request.action === 'clear') {
         if (ruleKind(project) !== 'single' || key !== perm.sessionKey) throw new AdminWriteError('只有单会话群可以清空当前上下文');
-        const fresh = await sessionBackend.startThread({ cwd: project.cwd, model: record.model, effort: record.effort, mode: perm.mode, network: perm.network });
+        const fresh = await startWith(sessionBackend, { cwd: project.cwd, model: record.model, effort: record.effort, mode: perm.mode, network: perm.network }, { kind: 'group', chatId: project.chatId });
         // The local clock, not a Feishu createTime like the other watermarks: this
         // is the main-area session, which no back-fill reads until s14 (it must
         // then allow for clock skew, or use the newest createTime it has).
@@ -6641,6 +6659,7 @@ export function createOrchestrator(
     const { release } = slot;
     let queuedCard = slot.queuedCard;
     reaction?.started(); // slot acquired → flip OneSecond → Typing
+    let turnScope: TurnScope | undefined;
     let askTurn: AskTurn | undefined;
     let firstCardSent = false;
     let titleStart: Promise<boolean> | undefined;
@@ -6779,6 +6798,11 @@ export function createOrchestrator(
         let turnInput = currentTurn.input;
         state.requesterOpenId = currentTurn.requesterOpenId;
         state.requesterKind = currentTurn.requesterKind;
+        turnScope = entries?.openTurn(opts.thread, {
+          requesterOpenId: currentTurn.requesterOpenId, requesterKind: currentTurn.requesterKind,
+          triggerMessageId: currentTurn.seen?.id, retry: currentTurn.replayText !== undefined,
+          initiative: Boolean(currentTurn.initiative), wake: Boolean(currentTurn.wake),
+        });
         dropRetries(topicThreadId); // an older card's [重试] would replay out of order
         if (titleTurnAttempted && !titleStart && opts.titleJobKey) {
           // A prior turn/start was rejected before turn_started. If a queued
@@ -7065,7 +7089,7 @@ export function createOrchestrator(
           if (ev.type === 'awaiting_subagents') awaitingSubagents = true;
           if (ev.type === 'ask') { askTurn.enqueue(ev.request, ev.subagentId ? { subagentId: ev.subagentId, name: render.snapshot().subagents.find(row => row.id === ev.subagentId)?.name } : undefined); continue; }
           if (ev.type === 'ask_cancelled') { askTurn.cancel(ev.requestId); continue; }
-          if (ev.type === 'done' || (ev.type === 'error' && !ev.willRetry)) askTurn.close('turn-ended');
+          if (ev.type === 'done' || (ev.type === 'error' && !ev.willRetry)) { turnScope?.close(); askTurn.close('turn-ended'); }
           if (ev.type === 'steer_accepted') {
             await splitCard(ev);
             continue;
@@ -7121,6 +7145,7 @@ export function createOrchestrator(
           // typewriter (cardElement.content), structure → whole-card update.
           if (ev.type !== 'subagent_step') stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID);
         }
+        turnScope?.close();
         askTurn.close('turn-ended');
         clearInterval(cardClock);
         cardClock = undefined;
@@ -7354,6 +7379,7 @@ export function createOrchestrator(
         activateQueuedTurn(state, currentTurn);
       }
     } catch (err) {
+      turnScope?.close();
       askTurn?.close('turn-ended');
       // Detach before any await: new messages must not join a failed consumer.
       if (active.get(activeKey) === state) active.delete(activeKey);
@@ -7374,6 +7400,7 @@ export function createOrchestrator(
         .send(opts.chatId, { markdown: runFailureMessage(err, dropped, opts.sessionNotice) }, { replyTo: opts.replyTo, replyInThread: !opts.flat })
         .catch((sendError) => log.fail('intake', sendError, { phase: 'run-failure-feedback', dropped }));
     } finally {
+      turnScope?.close();
       askTurn?.close('turn-ended');
       // A replacement run may have reserved the key while failure feedback
       // was in flight. Never delete another run's reservation.
@@ -7988,7 +8015,7 @@ export function createOrchestrator(
           const release = await sema.acquire();
           try {
             if (shuttingDown) return;
-            const thread = await resolveDocThread(sessionKey, cwd, instructions, ctx.question);
+            const thread = await resolveDocThread(sessionKey, cwd, instructions, ctx.question, target.fileToken);
             if (shuttingDown) { await thread.close(); return; }
             const rec = await getSession(sessionKey);
             const run = thread.runStreamed({ text: prompt }, { model: rec?.model, effort: rec?.effort });
@@ -8092,6 +8119,7 @@ export function createOrchestrator(
     cwd: string,
     instructions: string,
     question: string,
+    docId: string,
   ): Promise<AgentThread> {
     // The comment settings, else the bot default, else built in (s36d2); no tier, as before.
     const comments = resolveCommentsExecution(cfg.preferences);
@@ -8109,7 +8137,7 @@ export function createOrchestrator(
     }
     if (rec && rec.backend === be.id) {
       try {
-        const resumed = await be.resumeThread({ cwd: rec.cwd, sessionId: rec.sessionId, model, effort });
+        const resumed = await resumeWith(be, { cwd: rec.cwd, sessionId: rec.sessionId, model, effort }, { kind: 'doc', docId });
         // 评论的模型来自评论设置（不是手填的）或 bot 默认
         await patchSession(sessionKey, { model, effort, modelCustom });
         trackSession(sessionKey, resumed);
@@ -8119,7 +8147,7 @@ export function createOrchestrator(
         log.fail('agent', err, { phase: 'comment-resume', sessionKey });
       }
     }
-    const fresh = await be.startThread({ cwd, model, effort });
+    const fresh = await startWith(be, { cwd, model, effort }, { kind: 'doc', docId });
     trackSession(sessionKey, fresh);
     commentInstrUsed.set(sessionKey, instructions);
     await upsertSession({
@@ -8497,6 +8525,7 @@ export function createOrchestrator(
   function shutdown(): Promise<void> {
     if (shutdownPromise) return shutdownPromise;
     shuttingDown = true;
+    entries?.closeAll('shutdown');
     asks.shutdown();
     // Written at once, before anything is cleared below and long before the Codex processes end or the lock goes.
     droppedReplies?.saveSync(collectLost(), 'shutdown');
