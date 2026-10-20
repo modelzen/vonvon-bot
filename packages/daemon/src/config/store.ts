@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { paths } from './paths';
@@ -88,7 +88,7 @@ export async function ensureSecretsGetterWrapper(): Promise<string> {
 // 同进程内并发 saveConfig 串行化 + tmp 唯一名：避免两次写共用 tmp 文件交错（rename
 // 命中被对方写一半的 tmp → JSON 损坏，或丢写）。
 let saveChain: Promise<unknown> = Promise.resolve();
-export function saveConfig(cfg: AppConfig, path: string = paths.configFile, expected?: Partial<AppConfig>): Promise<void> {
+export function saveConfig(cfg: AppConfig, path: string = paths.configFile, expected?: Partial<AppConfig>, beforeCommit?: () => void): Promise<void> {
   const expectedSnapshot = expected === undefined ? undefined : structuredClone(expected);
   // Snapshot before yielding so queued saves validate exactly what they write.
   let serialized: string;
@@ -109,9 +109,12 @@ export function saveConfig(cfg: AppConfig, path: string = paths.configFile, expe
     await admitDirectoryChanges(nextDirectories, configDirectories(previous), paths.appDir);
     await mkdir(dirname(path), { recursive: true });
     const tmp = `${path}.tmp-${process.pid}-${randomUUID()}`;
-    await writeFile(tmp, serialized, 'utf8');
-    await chmod(tmp, 0o600);
-    await rename(tmp, path);
+    try {
+      await writeFile(tmp, serialized, 'utf8');
+      await chmod(tmp, 0o600);
+      beforeCommit?.();
+      await rename(tmp, path);
+    } finally { await unlink(tmp).catch(() => undefined); }
   });
   saveChain = run.then(
     () => undefined,
