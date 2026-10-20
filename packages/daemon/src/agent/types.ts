@@ -1,3 +1,4 @@
+import type { SessionProfile, SessionProfileCapabilities } from './session-profile';
 import { z } from 'zod';
 import type { AgentErrorKind, JudgeErrorKind } from './error-kind';
 
@@ -355,6 +356,7 @@ export class SessionInUseError extends Error {
 }
 
 export interface StartThreadOptions {
+  profile?: SessionProfile;
   cwd: string;
   model?: string;
   effort?: ReasoningEffort;
@@ -558,6 +560,7 @@ export interface AgentCapabilities {
 }
 
 export interface AgentBackend {
+  readonly profileCapabilities?: SessionProfileCapabilities;
   readonly id: string;
   readonly displayName: string;
   /** undefined ⇒ all true (codex 的完整能力面)；见 {@link AgentCapabilities}。 */
