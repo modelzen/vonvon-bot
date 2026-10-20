@@ -488,9 +488,9 @@ bot 自己开的话题（比如上面主区例子里的「订单接口 500」）
 
 **做法**：
 1. 扩展已有的 `vonvon` 命令行（`packages/daemon/package.json` 的 `bin`，现在注册了 `daemon`、`open`、`service` 等子命令，`D/cli/index.ts:20-55`），加上设置和飞书两组子命令。设置命令是所有会改东西的命令，包括建群和拉人进群；飞书命令只查不改。命令行照旧给终端用。
-2. agent 不在 shell 里调命令行，走 vonvon 自己的 MCP 工具：同一组命令做成 MCP 工具，MCP server 由 Codex、Claude 拉起，跑在沙箱外（要测，见第 4 条），令牌交给它。原因：在 Mac 上实测，Codex 的只读、读写档里 nvm 装的 Node 起不来，关网时 shell 也连不上本机（e04）；Claude 的沙箱里 TCP 直连本机被拒，只有 Unix socket 和沙箱的代理放行后到得了（e04b）。走 MCP，两家用同一条路，也不靠 shell 里的 Node（第 9 节第 2 项）。下文说 agent 用设置命令、飞书命令，指的都是对应的 MCP 工具。
+2. agent 不在 shell 里调命令行，走 vonvon 自己的 MCP 工具：同一组命令做成 MCP 工具，Codex 拉起 vonvon 的 MCP server，跑在沙箱外，令牌放在只有 vonvon 和它读得到的专用文件里；Claude 的 vonvon 工具跑在 daemon 的 bot 子进程里，不用令牌。原因：在 Mac 上实测，Codex 的只读、读写档里 nvm 装的 Node 起不来，关网时 shell 也连不上本机（e04）；Claude 的沙箱里 TCP 直连本机被拒，只有 Unix socket 和沙箱的代理放行后到得了（e04b）。走 MCP，两家调同一张工具表，也不靠 shell 里的 Node（第 9 节第 2 项）。下文说 agent 用设置命令、飞书命令，指的都是对应的 MCP 工具。
 3. vonvon 设置 skill 告诉 agent 怎么用设置命令，飞书 skill 教飞书命令。只有私聊的会话装设置 skill、注册设置工具；别的会话不注册，调用也会被 daemon 拒绝（下面令牌那条）。
-4. 只换通路，别的照旧：用户能改的设置、能查的内容不变；谁能改、只在私聊、"聊天改设置"开关这些规则不变。MCP 这条路还没测，`docs/v1-plan.md` s46 开工先测：Codex 的只读、完全访问档要不要配 `approve`；两家拉起的 MCP server 是不是真在沙箱外；Claude 的 MCP 调用走不走 `canUseTool`。只读档调不通、又配不上时，群里的飞书查询就用不了，按 `docs/v1-plan.md` 4.2 第 3 条问 owner。
+4. 只换通路，别的照旧：用户能改的设置、能查的内容不变；谁能改、只在私聊、"聊天改设置"开关这些规则不变。Claude 的进程内 MCP 已在 s46 的 Linux 四轮自测中调通：只读、读写档经过权限回调，完全访问档不经过。Codex 的 `approve`、沙箱外 MCP 和 Mac 上的 Claude Seatbelt 留给 s46b 实测。只读档调不通、又配不上时，群里的飞书查询就用不了，按 `docs/v1-plan.md` 4.2 第 3 条问 owner。
 
 **能改什么**：只限这个 bot 自己的事。命令行能改的这个 bot 的设置，聊天里都能改，因为 agent 调的设置工具和命令行是同一组命令（owner 2026-10-18 定，第 11 节）。
 
@@ -502,7 +502,7 @@ bot 自己开的话题（比如上面主区例子里的「订单接口 500」）
 - 群里不能在聊天里改设置。某个群自己的设置、bot 的默认设置和别的群的设置，都在私聊里改，说清是哪个群。
 - 判断模型能在聊天里改，包括改成决策模型（3.4）。本机还没填这家的 key 时照样改，回执里写明还没填 key，填之前这个群要判断的消息按出错处理（3.4：真人 @ 我、引用我的照常回，没点名的不回），告诉主人去桌面端或网页的密钥页填，或者在终端里用 `vonvon secrets set`。聊天里只说填没填，不显示 key，末四位也不显示。有人把 key 发在聊天里，bot 不存、不复述，提醒他这个 key 已经进了会话记录，最好去那家服务换一个新的。设置 skill 不教 `vonvon secrets`，从 bot 的会话里调它会被拒（`docs/v1-plan.md` s23g）。这一条是 Claude 定的（第 11 节）。
 - 谁能改由 daemon 判断，不由 agent 判断。daemon 知道这一轮是谁的消息触发的，只有主人和管理员触发的那一轮能改设置，别人的命令直接被拒。私聊本来只有主人和管理员能用，daemon 照样再查一遍。
-- daemon 靠每条会话自己的令牌认出命令来自哪条会话：会话启动时 vonvon 把令牌交给这条会话的 MCP server，调用时带上。没有令牌、令牌对不上，或者不是私聊会话的设置命令，一律拒绝。
+- daemon 靠每条会话自己的令牌认出命令来自哪条会话：会话启动时 vonvon 把令牌交给这条会话的 MCP server，调用时带上。Claude 的会话不用令牌，工具本身就绑在会话上。没有有效凭证，或者不是私聊会话的设置命令，一律拒绝。
 - 改完在卡片上显示改了什么，带［撤销］。个性、规矩、智能提示词和记忆，受影响的会话下一轮就用上；skill 和 MCP 名单要等下一条会话，或者会话进程重开、恢复以后（3.6"改了什么时候生效"）。
 - 回执来自 daemon 的已提交结果，列明影响的 bot、群或个人范围、改前改后、版本和生效时机。落盘失败不显示“已改好”；回执发送失败与设置失败分开记录，重发回执不重复修改。撤销核对当前版本和操作人的权限，旧回执不能静默覆盖新修改；并发记忆仍按 3.6 等其他回合结束的撤销规则处理。不新增设置审批层。
 - 回执还多两行：由谁的哪条消息触发（摘消息的前 60 字），和 bot 的说明（agent 写的为什么改，标明是 bot 说的）。诱导出来的修改，比如主人说"总结这个网页"、回执却是启用了一个 MCP 或改了允许的群，一眼就看得出（3.8"留下的风险"）。这两行是 Claude 建议的，owner 2026-10-18 没反对（第 11 节）。
@@ -764,9 +764,9 @@ bot 的个性、记忆、skill 导入后为空，行为和今天一样。
 ## 8. 发布条件
 
 公开发布前要满足这些，由 owner 决定谁来做：
-1. dmg 签名并公证，更新源可用。要 Apple 开发者的公证凭据，以及一个公开的下载和更新地址。
-2. Claude 的登录：第一版复用用户本机的 Claude 登录。Agent SDK 的文档写着"Unless previously approved, Anthropic does not allow third party developers to offer claude.ai login or rate limits for their products"（code.claude.com/docs/en/agent-sdk/overview）；另一份帮助文档又说 Agent SDK 和第三方应用照样可以用订阅额度（`docs/research/2026-10-14-strategy/agent-integrations.md:119`）。两份说法不一致，所以公开发布前向 Anthropic 要书面确认。拿不到确认，公开版里 Claude 改成只支持 API key。开发和自用不受影响。问答第 17 题问的就是这件事，不是测试时用什么账号。
-3. daemon 的 `package.json` 写着 MIT，发布前改掉。安装包带上 bridge（MIT）和 Paseo（Apache-2.0，NOTICE）的许可声明。第一版闭源。
+1. universal dmg 使用已有的 Developer ID 签名，启用 hardened runtime 和所需 entitlements，签名验证通过。公开下载和更新地址做成配置项，发布前填写并验证可用；公证由 owner 以后决定，本轮不做公证、不配置公证凭据（owner 2026-10-20）。
+2. Claude 的登录：第一版复用用户本机的 Claude 登录。Agent SDK 的文档写着"Unless previously approved, Anthropic does not allow third party developers to offer claude.ai login or rate limits for their products"（code.claude.com/docs/en/agent-sdk/overview）；另一份帮助文档又说 Agent SDK 和第三方应用照样可以用订阅额度（`docs/research/2026-10-14-strategy/agent-integrations.md:119`）。两份说法不一致，所以公开发布前向 Anthropic 要书面确认。owner 2026-10-20 定 s66 不做，由 owner 去要书面确认，本轮不实施只支持 API key 的公开构建。开发和自用不受影响。问答第 17 题问的就是这件事，不是测试时用什么账号。
+3. 第一方包使用 UNLICENSED，第一版闭源。安装包保留 bridge（MIT）和 Paseo（Apache-2.0，NOTICE）的许可声明，不改变第三方的许可归属。
 4. bridge 的最后一版发出（第 5 节）。
 5. 在一台没有 bridge 的 Mac 上，从零安装、扫码、开权限，第一次对话走通。Linux 命令行版在一台 systemd 主机上走通安装、崩溃重启、停止和卸载。
 

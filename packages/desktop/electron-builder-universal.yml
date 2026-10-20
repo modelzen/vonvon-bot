@@ -1,0 +1,22 @@
+# Distribution only. Preview package:dir keeps its existing host-architecture contract.
+extends: ./electron-builder.yml
+electronDist: null
+forceCodeSigning: true
+artifactName: Vonvon-Bot-${version}-${arch}.${ext}
+mac:
+  target:
+    - target: dmg
+      arch: universal
+    - target: zip
+      arch: universal
+  hardenedRuntime: true
+  entitlements: entitlements.plist
+  entitlementsInherit: entitlements.plist
+  notarize: false
+  gatekeeperAssess: false
+  # Localization data is sealed by its enclosing framework, not independently executable.
+  signIgnore:
+    - '/Resources/[^/]+\.lproj/locale\.pak$'
+dmg:
+  sign: true
+publish: null
