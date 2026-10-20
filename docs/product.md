@@ -713,6 +713,7 @@ bot 的个性、记忆、skill 导入后为空，行为和今天一样。
 **怎么迁**（只做 macOS）：
 1. 桌面端首次运行发现 `~/.feishu-codex-bridge`，就显示导入页。
 2. 只读预检：每个 bot 的群数、目录是否还在、密钥能否解开、hook 是否装了、bridge 是否在跑、bridge 自己装的 codex 在不在。
+   - 有顶层 `processes.json`、没有 `bots.json` 的旧平铺目录，只读提示“这个 bridge 还是旧的目录格式。先照常启动一次原来的 bridge，让它升级目录，再回来重试导入”；不启动或停止 bridge，不改文件，不报没有数据，不跳过 bot。重试重新预检，有 `bots.json` 后照常导入全部 bot（Claude 2026-10-19 定，按 s59 开工说明）。
 3. 调 bridge 自己的 `stop`，它会删 plist、去掉自启。
 4. 用 bridge 的锁格式给每个 bot 占住它的 `bots/<appId>/processes.json`，防止有人手动 `run`。锁挡不住 `start`：`start` 不看锁，会把自启装回来，launchd 拉起的 `run` 再一遍遍被锁拒掉（e07：锁在函数层面实测过，`run` 和 `start` 的表现是读代码，真机在 e08）。
 5. 复制数据，用新密钥重新加密。

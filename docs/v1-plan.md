@@ -1372,7 +1372,9 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s58、s59 不依赖 M3 到 M9，M4 之后在第二条线上做。
 - s58 做法（#373）：删除生产入口未使用的 `data-root-migration.ts`、`legacy-data-root.ts`、`host/migration.ts`，以及只为改名迁移服务的兼容修复、错误类型和测试。现行 `resolveDataRoot` 继续默认使用 `~/.vonvon-bot`，显式 `VONVON_HOME` 的行为不变；getter 识别、互斥与租约仍保留。隔离的真实 CLI 启动与退出验证默认和显式目录两条路径，两个旧目录的实体、内容和孤立迁移日志均保留。原来的改名做法和第 5 节"复制数据、旧目录原地引用"相反；`~/.vonvon-bridge` 的识别在 s59 里按预检的需要重写。
 - s59：合入后在 #226 里写明移植了哪些代码，先不关。
-- s59：预检只直接导入有 `bots.json` 的安装。没有它的老式平铺安装，bridge 下次运行时会把顶层的 `processes.json` 改名到 `bots/<appId>/processes.json`，盖掉 vonvon 写的锁（e07 第 8 条）。用过 0.6.x 的应该都有；遇到没有的怎么办（比如提示先让 bridge 跑一次升级目录）开工时定，要是变成不导入，按本文 4.2 第 3 条问 owner。
+- s59 做法：复用 #226 的受限只读文件读取、旧 PBKDF2/AES-GCM 密钥解密和预检校验，逐 bot 返回群数、目录、密钥、hook、运行状态，另查 bridge 的 launchctl 状态与自带 Codex；失败保留全部 bot 的结果。没有未发布的准入锁也能预检，现行 V1 数据准入/租约保留。不做 s60–s62 的换算和事务，也不接 s63 页面。
+- s59 旧目录：有顶层 `processes.json`、没有 `bots.json` 的旧平铺安装只读提示“这个 bridge 还是旧的目录格式。先照常启动一次原来的 bridge，让它升级目录，再回来重试导入”；不启动/停止 bridge、不改文件、不报没有数据、不跳过 bot，重试重新预检。有 `bots.json` 后照常导入全部 bot（Claude 2026-10-19 定，按 s59 开工说明）。
+- s59 验收状态：源码与隔离假数据检查随本片记录；未取得授权的 bridge 0.6.14 历史数据副本和测试用户服务，真实密钥/运行状态尚未验收，故此行暂不打勾。构造快照不代表原生服务或历史用户数据验收。
 - s61：按 e07：bridge 的锁每个 bot 一把，在 `~/.feishu-codex-bridge/bots/<appId>/processes.json`，`appId` 要和目录名完全一致，调 v2 的 `acquireSingleInstanceLock` 时显式传这个路径。持有者是同一用户下、活过整个事务的进程，由它自己写锁，不复用旧记录、不自己拼 `startedAt`。`stop` 以后 bridge 还在优雅退出，要轮询重试到抢到为止并设上限；抢不到时持有者已不是预检看到的那个 bridge，就按失败回滚。回滚时先放锁再 `start` bridge，不然被拉起的 `run` 会被自己的锁拒掉。抢锁本身是原子的，不用另加互斥。
 - s61、s62：锁挡得住 `run`，挡不住 `start`（e07，读代码）：`start` 不看锁，照样写 plist、bootstrap，被拉起的 `run` 反复被拒，第 3 步去掉的自启就装回来了。写迁移标记前再查一次 bridge 的 plist 和 launchd 任务，还在就再 `stop` 一次。多 bot 模式下 supervisor 的子进程被拒后按 1 到 30 秒退避一直重启，一放锁最多 30 秒就连上，所以 s62 的"之后每次启动都占 bridge 的锁"要保留。product.md 第 5 节第 4 步先按本文 4.2 改。
 - s62：长期占锁时，0.6.14 的报错会叫用户 `kill <pid>`，那个 pid 是 vonvon 的 daemon。用户照做后 bridge 抢到锁，vonvon 再起来时抢锁抛 `BridgeAlreadyRunningError`：这时这个 bot 不启动，告诉主人 bridge 正在跑它。一次给多个 bot 占锁时共用一个 exit 回调，免得 11 把以上时 Node 打 `MaxListenersExceededWarning`（e07）。
