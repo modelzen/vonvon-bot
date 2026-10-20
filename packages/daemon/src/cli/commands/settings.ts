@@ -148,7 +148,7 @@ function promptSource(prompt: SmartPromptView, group: boolean): string {
 
 /** The judge prompt in full, for `get judge` only: it runs to a few thousand characters. Split into lines, since printing strips a line's own breaks. */
 function promptText(prompt: SmartPromptView): string[] {
-  const where = { main: '群主区', mentioned: '主区被 @', topic: '话题里' } as const;
+  const where = { main: '群主区', topic: '话题里' } as const;
   return [
     '—— 智能提示词 ——', prompt.error ? '（读不了，见上面）' : prompt.text,
     ...(Object.keys(where) as (keyof typeof where)[]).flatMap(v => [`—— 程序附的格式行（只读）：${where[v]} ——`, prompt.formatLines[v]]),

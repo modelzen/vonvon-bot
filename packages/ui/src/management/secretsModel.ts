@@ -14,7 +14,7 @@ type Admin = (request: AdminRequest) => Promise<AdminReply>;
 type Change = Extract<AdminRequest, {type: 'setSecret' | 'removeSecret'}>;
 
 export const OLD_DAEMON = 'daemon 比网页旧，重启 daemon 后再开这一页';
-export const MEANWHILE = '要判断的消息按出错处理（没 @ Bot 的不回，@ 的回在主区）';
+export const MEANWHILE = '要判断的消息按出错处理（没点名的不回，真人 @ 的照旧回）';
 
 /** A daemon from before s23g knows none of these requests (v1-plan s23g 做法（实现时定下的）). */
 const isOld = (error: unknown): boolean => error instanceof Error && (error as {code?: unknown}).code === 'invalid_request';
@@ -265,7 +265,7 @@ export function removalCopy(service: SecretService, view: Pick<SecretsView, 'bot
       : !service.inUse.length ? '现在没有 Bot 或飞书群选它，删了不影响任何群。'
         : !active.length ? undefined
           : service.status === 'invalid' ? '存着的这串不能用，下面这些现在已经按没填处理，删了也一样；重新填就恢复。'
-            : '删了以后，下面这些 Bot 和飞书群要判断的消息按出错处理：没 @ Bot 的不回，@ 的回在主区。重新填就恢复。',
+            : '删了以后，下面这些 Bot 和飞书群要判断的消息按出错处理：没点名的不回，真人 @ 的照旧回。重新填就恢复。',
     active, notSmart,
     notSmartNote: notSmart.length ? '下面这些现在不是智能群，删了不影响；改成智能群后会按出错处理。' : undefined,
     notes: unreadNotes(view).filter(note => !unknown || !note.endsWith(unknown.log)),

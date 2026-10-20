@@ -16,13 +16,11 @@ import { parseStoredJudge, resolveJudgeModel } from './model';
 import { judgeAnchors, judgeSchema, judgeSystem, parseVerdict, renderJudgeInput } from './prompt';
 import { readSmartPrompt, SmartPromptError } from './smart-file';
 import { DecisionError } from './typesafe';
-import type { JudgeDecision, JudgeErrorKind, JudgeRequest, JudgeResult } from './types';
+import type { JudgeErrorKind, JudgeRequest, JudgeResult } from './types';
 
-/** From the call to the result, queueing and a cold start included (design 3.2). A mention always
- * gets a reply and the judgement only picks where, so it waits less. e12: warm judgements took at most
- * 7.9 s (Codex) and 6.1 s (Claude), a new Codex judge process 10.3 to 11.1 s; 12 s covers those, 20 s
- * a warm judgement queued one round. */
-export const JUDGE_TIMEOUT_MS = { main: 20_000, mentioned: 12_000, topic: 20_000 } as const;
+export const JUDGE_TIMEOUT_MS = { main: 20_000, topic: 20_000 } as const;
+/** Named messages wait at most twelve seconds before intake handles the failure. */
+export const JUDGE_NAMED_TIMEOUT_MS = 12_000;
 /** How long an aborted backend call may take to clean up before its slot is given back anyway. */
 export const JUDGE_SETTLE_MS = 15_000;
 /** After a model-list fetch that left nothing cached, how long before trying again. */
@@ -110,11 +108,6 @@ class Limiter {
     if (next) next(); // the slot passes straight on
     else this.running--;
   }
-}
-
-function fallback(variant: JudgeRequest['variant'], kind: JudgeErrorKind): JudgeDecision {
-  if (kind === 'aborted' || kind === 'closed') return 'skip';
-  return variant === 'mentioned' ? 'main' : 'skip';
 }
 
 function kindOf(error: unknown): JudgeErrorKind {
@@ -274,7 +267,7 @@ export function createJudge(deps: JudgeDeps): Judge {
     const fail = (error: unknown): JudgeResult => {
       const kind = kindOf(error);
       const detail = kind === 'format' ? `${base.provider ? '决策' : ''}模型没按格式回答` : detailOf(error);
-      return finish({ decision: fallback(req.variant, kind), reason: '', error: { kind, ...(detail ? { detail } : {}) }, ...base, ms: now() - started });
+      return finish({ decision: 'skip', reason: '', error: { kind, ...(detail ? { detail } : {}) }, ...base, ms: now() - started });
     };
 
     if (closed) return fail(new JudgeAbort('closed'));
@@ -418,7 +411,7 @@ export function createJudge(deps: JudgeDeps): Judge {
         // run() catches its own failures; this is the last guard of "never rejects".
         log.fail('judge', error, { phase: 'judge' });
         return {
-          decision: fallback(req.variant, 'failed'), reason: '', error: { kind: 'failed' as const, detail: detailOf(error) },
+          decision: 'skip', reason: '', error: { kind: 'failed' as const, detail: detailOf(error) },
           backend: groupBackendId(req.group), model: '', modelSource: 'default' as const, promptSource: 'default' as const, ms: now() - started,
         };
       });
