@@ -1428,13 +1428,13 @@ s46 做法：真实 A/B/K、四轮和 Bot 6 证据归属任务 125 的源码 `0e
 
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
-| [x] | s65 | 本地 universal 分发包、签名和更新产物 | universal dmg/zip，hardened runtime 和 entitlements，已有 Developer ID 签名；统一版本；本地更新 manifest/feed；第一方 UNLICENSED。公证以后由 owner 定，地址发布前填（owner 2026-10-20） | 900–1200 | — | macOS 原生、错误路径 | codesign --verify --deep --strict；真实双架构，Apple Silicon/Rosetta 分别启动；本地清单适配现有更新器。公开下载与完整旧版更新安装留发布前验证 |
+| [x] | s65 | 本地 universal 分发包、签名和更新产物 | universal dmg/zip，hardened runtime 和 entitlements，已有 Developer ID 签名；统一版本；本地更新 manifest/feed；第一方 UNLICENSED。公证以后由 owner 定，地址发布前填（owner 2026-10-20） | 900–1200（实际 611；#468） | — | macOS 原生、错误路径 | codesign --verify --deep --strict；真实双架构，Apple Silicon/Rosetta 分别启动；本地清单适配现有更新器。公开下载与完整旧版更新安装留发布前验证 |
 | — | s66 | owner 2026-10-20：不做，owner 去要确认 | 不实施 API-only 公开构建；Claude 登录书面确认仍是公开发布前事项（第 8 节第 2 条） | — | — | — | 保留 owner 获取书面确认的发布前义务 |
 | [ ] | s67 | 发布前的 Mac 验收 | 第 8 节第 5 条的 Mac 一半：在没有 bridge 的 macOS 用户上，用公开的 dmg 从零安装、扫码、开权限、第一次对话；结果写进本文第 10 节 | 30 | s65、s63；s64 已准备好即可 | — | 全部在真机和真实飞书里做，扫码由 owner 来做 |
 
 开工要点：
 - s65：详细计划见 `docs/plans/s65.md`，不等最后一轮 UI。以 daemon 现有版本为产品源，desktop/stage/Core/npm 一致；协议/client 自有版本不改。正式 universal 走双架构 Electron 下载、合并后签名，preview 保留 Apple Silicon。桥接与 Paseo 的 NOTICE、LICENSE.bridge、LICENSE.paseo、PROVENANCE 继续随 npm/app 分发。真实签名、架构、Rosetta 和更新产物证据按作者结果记录，未验不勾。
-- s65 做法：正式 API 显式 universal targets，双架构 Electron 合并后已有 Developer ID 签名；13 个 Mach-O 双架构/逐个验签，5 份权限精确仅 JIT。dmg 挂载内 app 另验，arm64 与已有 Rosetta 分别实际启动；Rosetta 首次未就绪保留，诊断后全新隔离目录重试成功，原因未证实。本地清单/模板、UNLICENSED 和 npm 声明已验；公证/公开下载/完整在线更新仍未验。详见 `docs/research/2026-10-20-s65/local-distribution.md`。
+- s65 做法（#468）：正式 API 显式 universal targets，双架构 Electron 合并后已有 Developer ID 签名；13 个 Mach-O 双架构/逐个验签，5 份权限精确仅 JIT。dmg 挂载内 app 另验，arm64 与已有 Rosetta 分别实际启动；Rosetta 首次未就绪保留，诊断后全新隔离目录重试成功，原因未证实。本地清单/模板、UNLICENSED 和 npm 声明已验；公证/公开下载/完整在线更新仍未验。详见 `docs/research/2026-10-20-s65/local-distribution.md`。
 - s67：先由预览版任务装好，Codex 走一遍不需要扫码的部分，再交 owner 验收。Linux 那一半在 s20b 做。
 
 ### 界面打底（u01 到 u10）
