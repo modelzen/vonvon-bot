@@ -136,3 +136,20 @@ it('does not create a pending ask if close wins the async permission check', asy
   await thread.close();
   await expect(result).resolves.toMatchObject({ behavior: 'deny', message: expect.stringContaining('没有在进行') });
 });
+
+
+it.each([undefined, 'child-id'])('passes SDK agentID through ordinary and goal asks: %s', async agentID => {
+  for (const goal of [false, true]) {
+    const { thread, canUseTool } = makeThread();
+    const run = goal ? thread.runGoal('test') : thread.runStreamed({ text: 'test' });
+    const iterator = run.events[Symbol.asyncIterator](); await iterator.next();
+    if (goal) await iterator.next();
+    const permission = canUseTool('AskUserQuestion', question, { ...callbackArgs(), agentID });
+    const event = (await iterator.next()).value;
+    if (event?.type !== 'ask') throw new Error('missing ask');
+    expect(event.subagentId).toBe(agentID);
+    await run.respondToAsk?.(event.request.id, { kind: 'unanswered', reason: 'stopped' });
+    await expect(permission).resolves.toMatchObject({ behavior: 'deny' });
+    await iterator.return?.();
+  }
+});
