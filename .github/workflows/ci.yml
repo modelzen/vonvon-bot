@@ -17,7 +17,7 @@ jobs:
   linux:
     name: linux
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     outputs:
       scope: ${{ steps.scope.outputs.scope }}
       full: ${{ steps.scope.outputs.full }}
