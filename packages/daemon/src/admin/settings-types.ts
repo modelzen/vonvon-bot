@@ -334,9 +334,10 @@ export interface ModelCatalog {
   error?: string;
   titleEfforts: ReasoningEffort[];
 }
+export interface SettingsCommitOptions { beforeCommit?: () => void; notAfter?: number }
 export interface HostSettings {
   read(scope: SettingsScope): Promise<SettingsView>;
-  save(edit: SettingsEdit): Promise<SettingsSave>;
+  save(edit: SettingsEdit, options?: SettingsCommitOptions): Promise<SettingsSave>;
   models(query: ModelQuery): Promise<ModelCatalog>;
   act(action: SettingsAction): Promise<SettingsActionResult>;
 }
