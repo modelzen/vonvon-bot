@@ -1310,8 +1310,10 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [ ] | s44a | 新 bot 的基础原生隔离与内置能力包边界 | 新 bot 不带 Claude 个人指令和两家个人 skill；Codex 个人 AGENTS.md 保留并声明 bot 规矩优先，导入 bot 不变。沿 s39 唯一能力包路径选择来源，包不能被会话篡改；尚未实现的设置/飞书工具不提前放入 | 500 | s37、s39、e02、e05 | 子进程、错误路径 | 两家新开、重开和 resume 不恢复个人 skill；新 bot 不读 Claude 个人指令，Codex 个人 AGENTS.md 冲突按 bot 规矩；包写入受限 |
 | [ ] | s44b | skill/MCP 名单组合与原生交付 | 用户库和 bot 自有 skill 按位置组合、群增减、MCP 交付和恢复；扩展 s39/s44a 同一包生成器。名单改了按 3.6 生效，不覆盖内置包 | 650 | s44a、s43 | 子进程、错误路径 | 真实 Codex 用 bot skill、MCP 在 never 下调通且 resume 仍在；Claude 名单/恢复和 MCP 调用；原 s44 的其余真实能力项全部保留 |
 | [ ] | s45 | skill 和 MCP 页面，bot 和群的启用名单 | 两个库页面，删除时列出还在用的 bot 和群；Bot 页的启用名单，群详情页的增减；Bot 页和群详情页也列出 `bots/<appId>/skills/` 里的 skill，群里能移除（3.2、3.6） | 550 | s43、s41、s42 | — | 无 |
-| [ ] | s46 | 会话令牌和 agent 调 vonvon 的入口 | 每条会话一个令牌，经环境变量交给 agent；host 加一个只接 POST 的路由，子进程依次校验令牌、私聊、触发人、开关（3.7） | 520 | s37、e04 | 子进程、并发、关闭清理、错误路径 | agent 调不调得到 vonvon、带不带得上令牌：Codex 只读、读写、关网各一次，Claude 沙箱一次 |
-| [ ] | s47 | vonvon settings 和 vonvon feishu 命令行框架 | 在 s07a 的命令上加：两组命令从环境变量读地址和令牌，不拿数据租约，输出 JSON；飞书组先做群列表和群成员（3.7） | 380 | s46、s07a | 错误路径 | 无 |
+| [ ] | s46 | agent 调 vonvon 的校验和 Claude 的 vonvon 工具 | bot 子进程里每条会话一份凭证（起会话、恢复一次一份；会话关掉、进程死了、停机都作废，只在内存里）；调用依次校验凭证、私聊、触发人、开关（3.7），设置类按会话排队，不是人触发的回合一律拒，设置调用绑定发起它的回合、提交点（写入口 `rename` 前）同步查现时授权、70 秒预算含排队；Claude 的 vonvon 工具用 SDK 内建 MCP 跑在 bot 子进程里，不用令牌（详细计划 `docs/plans/s46.md`；实际 diff 超 1,500 时按计划第 9 节拆出 s46d 提交点，s46b、s47 依赖它） | 1,290 | s37、e04 | 并发、关闭清理、错误路径 | Claude 只读、读写、完全访问档各调通一次 `session_info`（JP-VPS 先做，Seatbelt 在 s46b 的 Mac 自测里补） |
+| [ ] | s46c | 令牌替换 | 运行卡的三处事件流、日志、诊断、崩溃记录里把令牌（原样、base64、base64url）换成占位字样，分在两段里的也抓得到（详细计划 `docs/plans/s46.md` 4.8） | 180 | 无 | 错误路径 | 无 |
+| [ ] | s46b | Codex 的 vonvon MCP 和 host 的 POST 路由 | Codex 每次起会话、恢复会话发一个新令牌，写进 0600 的令牌文件，vonvon MCP server 的启动环境里只有地址和文件路径；MCP server 由 Codex 在沙箱外拉起，经 127.0.0.1 调 host 一个只接 POST 的路由，host 经 IPC 交给 bot 子进程按 s46 校验；停机先拒新请求、再作废令牌、最后关监听；托管和内联两种模式的 401 逐字节相同（详细计划 `docs/plans/s46.md`） | 1,090 | s46、s46c、s31b、s37、e05 | 子进程、并发、关闭清理、错误路径 | Codex 只读、读写、关网各调通一次，令牌不出现在会话的 shell、进程列表、文件和运行卡里（Mac） |
+| [ ] | s47 | vonvon settings 和 vonvon feishu 命令行框架 | 在 s07a 的命令上加：两组命令不拿数据租约，输出 JSON；同一组命令函数登记成 s46 的 vonvon 工具（agent 那条路不从环境变量读令牌，见 `docs/plans/s46.md` 4.1 G）；飞书组先做群列表和群成员（3.7）；每个设置工具的写都经 `ctx.commit`，在提交点前调 `guard()`，交给 host 写的请求带 `notAfter`（`docs/plans/s46.md` 4.4a） | 380 | s46、s07a | 错误路径 | 无 |
 | [ ] | s48 | vonvon 飞书 skill：列话题、读另一条会话、读飞书消息 | 列本群话题、按会话 id 读另一条会话、按话题或时间读消息；只放行同一个 bot、同一个群、档不高于自己的会话；卡片写"读了话题 T1、T2 的会话"（3.5"查飞书上下文"） | 950 | s47、s44b、s13、e02、e11 | 子进程、错误路径 | 无（M8 验收前，预览版任务按 3.5 时间线第 7 步跑一遍） |
 
 开工要点：
@@ -1330,7 +1332,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s46：Claude 一侧（e04b，SDK 0.3.296）沙箱里 Node、Electron 都起得来，但到 daemon 的路不通：TCP 直连本机六种配置下都被拒（curl 7、Node/Electron EPERM）。能到本机的只有两条。一是沙箱注入的 HTTP 代理：今天的 `bypassPermissions` 两档直接到；候选 `default` 档的 `SandboxNetworkAccess` 回调拒了本机地址，就到不了；候选 `acceptEdits` 档回调放行本机后才到。二是 `network.allowUnixSockets` 列出的那个 Unix socket，curl、Node 都到；同轮还加了 `allowedDomains`，两者各自的作用没分开测。这些都没测过 MCP：六轮 `mcp__*` 工具数都是 0，Claude 拉起的 MCP server 在不在沙箱外也没测，开工时补测。MCP 在 Claude 上调不通时的备选是让 daemon 另开一个 Unix socket，会话沙箱只用 `allowUnixSockets` 放行它。
 - s46：开工先测 vonvon 的 MCP 在两家各档调不调得通，下面几样都没测过。Codex 在 `approvalPolicy: never` 下，不配 `default_tools_approval_mode: "approve"` 时读写档被拒过一次（e05，0.162.1），只读、完全访问档没测；配上以后三档、开网关网都要过。Codex 拉起的 MCP server 要确认真在沙箱外：受限档里 nvm 的 Node、主目录的包装脚本都起不来（e04），套进沙箱也会起不来。Claude 的 `default`、`acceptEdits` 档下 MCP 工具调用走不走 `canUseTool`，走的话 s31 的回调要放行 vonvon 的工具。Codex 的会话层 MCP 每次 resume 整份重传（e05，见 s37），令牌按会话发，所以这个 MCP 的配置每次都要带上令牌。shell 里认"在 bot 的会话里"照旧靠 `FEISHU_CODEX_BRIDGE=1` 和 `VONVON_SESSION`（e04、e04b 都传得到）。只读档调不通、又配不上时，群里的飞书查询（3.7 说每个会话都能用）就用不了，按 4.2 第 3 类问 owner。行数写详细计划时按 MCP 重估。
 - s47 开工要点（Rakazo 第二轮，2026-10-18）：`set` 接受 `--revision`，整段文字必须带，今天命令内部现读版本，挡不住拿旧内容整段写回；`--json` 下错误也输出 JSON，写明种类、冲突时带当前内容，按种类给退出码；`access` 按调用方算，无权和不存在同形；读输出的预算和续读放 s48。建议按约 500 行估（Rakazo 第二轮报告"s46、s47、s48"）。
-- s47：按 e04，agent 不在 shell 里调 `vonvon settings`、`vonvon feishu`：Codex 只读、读写档的 shell 里 nvm 的 Node、主目录包装脚本都起不来或读不了，关网时也连不上 daemon（见 s46）。agent 那条路走 s46 的 MCP 工具：MCP server 的地址和令牌从启动环境读，用 s07a 留下的第二种连接（`D/cli/daemon-client.ts`）调同一组命令函数，所以命令函数要能被 MCP 工具直接调、返回结构化结果，不只打印 JSON。命令行照旧给终端用。
+- s47：按 e04，agent 不在 shell 里调 `vonvon settings`、`vonvon feishu`：Codex 只读、读写档的 shell 里 nvm 的 Node、主目录包装脚本都起不来或读不了，关网时也连不上 daemon（见 s46）。agent 那条路走 s46 的 vonvon 工具：s46 计划改了原来"MCP server 从启动环境读令牌、用 s07a 的第二种连接调命令函数"的写法，工具登记在 bot 子进程的登记表里，由 bot 子进程直接调同一组命令函数（`docs/plans/s46.md` 4.1 G、4.3），所以命令函数要能被直接调、返回结构化结果，不只打印 JSON。命令行照旧给终端用。
 - s48 开工要点（Rakazo 第二轮，2026-10-18）：输出约 1 万字节内，超了显式截断并给续读位置，带覆盖范围和稳定 id，范围从令牌推出；Claude 读取和运行卡用同一条"一轮的最终回答"规则；SKILL.md 写查历史的指引（Rakazo 第二轮报告"s46、s47、s48"）。
 - s48：飞书 skill 里的示例写成 MCP 工具还是 shell 命令，跟 s46 的结果走。按 e04，Codex 只读、读写档的 shell 里命令行起不来，关网也连不上（见 s46）。
 
@@ -1491,7 +1493,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | Claude 权限判定期限 | 5 秒未完成按拒绝 | 文件系统或外部判定挂起也不能放行 | s31 |
 | Claude 方案卡长度 | 2,000 字后加截断说明 | 完整方案仍在运行卡 | s31 |
 | Claude 权限卡动作长度 | 500 字 | 避免单张卡过长 | s31 |
-| Claude 只读、读写档的其他工具和本机联网 | 没命中 ask 规则的其他工具照常允许；开网时本机地址也允许 | 保留现有工具范围，限本机网络另在 s46 做 | s31 |
+| Claude 只读、读写档的其他工具和本机联网 | 没命中 ask 规则的其他工具照常允许；开网时本机地址也允许 | 保留现有工具范围；s46 不限本机网络（新路由要令牌，agent 的 shell 里没有），限不限待 owner 定（`docs/plans/s46.md` 第 9 节） | s31 |
 | 打字答多道题 | 同一段文字给每道题 | 模型从哪个键读都读得到全文，不猜这段话答的是哪题 | s33 |
 | 关了免@ 的群里打字回答 | 要 @ bot 才算；没 @ 的照今天停在 @ 门 | Claude 2026-10-19 定：今天的 @ 门不动；否则要把判断挪到门前并先过群和成员名单，改动大 | s33 |
 | 群里没设、用 Bot 的值 | 写"跟着 Bot 默认" | s23g2 起密钥页和命令行都这样说，切片表原来写的"继承 bot 默认"跟着改 | s28a |
