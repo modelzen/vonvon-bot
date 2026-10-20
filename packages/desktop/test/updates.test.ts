@@ -88,12 +88,29 @@ describe('desktop update port', () => {
     expect(h.fetch).toHaveBeenCalledTimes(1);
   });
 
+  it('does not install or persist success when preparation fails, and permits retry', async () => {
+    const h = fixture();
+    await h.updater.check();
+    const download = h.updater.install();
+    h.driver.emit('update-downloaded');
+    await download;
+    h.beforeInstall.mockRejectedValueOnce(new Error('daemon did not stop'));
+    await expect(h.updater.install()).rejects.toThrow('daemon did not stop');
+    expect(h.driver.quitAndInstall).not.toHaveBeenCalled();
+    expect(() => readFileSync(h.statePath, 'utf8')).toThrow();
+    await h.updater.install();
+    expect(h.driver.quitAndInstall).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects native errors instead of reporting a verified download', async () => {
     const h = fixture();
     await h.updater.check();
     const download = h.updater.install();
     h.driver.emit('error', new Error('bad signature'));
     await expect(download).rejects.toThrow('桌面更新下载或签名校验失败');
+    h.driver.emit('update-downloaded');
+    await expect(h.updater.check()).resolves.toMatchObject({ state: 'available' });
+    expect(h.beforeInstall).not.toHaveBeenCalled();
     expect(h.driver.quitAndInstall).not.toHaveBeenCalled();
   });
 });
