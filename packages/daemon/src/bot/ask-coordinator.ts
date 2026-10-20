@@ -37,13 +37,16 @@ interface Entry {
   release: () => void;
   timer?: ReturnType<typeof setTimeout>;
   denied: Set<string>;
+  answeredByDm?: string;
+  dm?: Map<string, { kind: 'sending' } | { kind: 'visible'; messageId: string; shownAt: number } | { kind: 'failed' }>;
 }
 interface Turn extends AskTurnInput { faulted: boolean; open: boolean; queue: Entry[] }
 
 /** Owns logical claims synchronously; all transport work is detached from run/shutdown drains. */
 export class AskCoordinator {
   private readonly turns = new Map<string, Turn>();
-  private readonly carriers = new Map<string, { turn: Turn; entry: Entry }>();
+  private readonly carriers = new Map<string, { turn: Turn; entry: Entry; dm?: string }>();
+  private readonly dmIndex = new Map<string, Map<Entry, Turn>>();
   private readonly latest = new WeakMap<AgentRun, Turn>();
   private readonly seen = new WeakMap<AgentRun, Set<string>>();
   private open = true;
@@ -118,9 +121,9 @@ export class AskCoordinator {
     this.open = false;
     for (const turn of [...this.turns.values()]) this.close(turn, 'stopped');
   }
-  private terminal(turn: Turn, entry: Entry, messageId: string, state: AskCardState): void {
+  private terminal(turn: Turn, entry: Entry, messageId: string, state: AskCardState, dm?: string): void {
     this.effect(() => updateManagedCard(this.channel, messageId,
-      buildAskCard({ request: entry.request, state, respondents: this.respondents(turn, entry.request) })));
+      buildAskCard({ request: entry.request, state, respondents: this.respondents(turn, entry.request), scope: dm ? 'dm' : 'group' })));
   }
   private promote(turn: Turn): void {
     const entry = turn.queue[0];
@@ -140,16 +143,66 @@ export class AskCoordinator {
       entry.state = { kind: 'visible', messageId: sent.messageId, shownAt: Date.now() };
       this.carriers.set(sent.messageId, { turn, entry });
       entry.timer = setTimeout(() => this.settle(turn, entry, { kind: 'unanswered', reason: 'timeout' }), 15 * 60_000);
-      const content = JSON.stringify({ zh_cn: { content: [[...this.eligible(turn, entry.request).map(user_id => ({ tag: 'at', user_id })), { tag: 'text', text: ' 请回答上方卡片' }]] } });
+      const content = JSON.stringify({ zh_cn: { content: [[...this.eligible(turn, entry.request).map(user_id => ({ tag: 'at', user_id })), { tag: 'text', text: isSensitiveAsk(entry.request) ? ' 请在和我的私聊里回答上方问题' : ' 请回答上方卡片' }]] } });
       this.effect(() => this.channel.rawClient.im.v1.message.reply({ path: { message_id: sent.messageId }, data: { msg_type: 'post', content, reply_in_thread: replyInThread } }));
+      if (isSensitiveAsk(entry.request)) this.sendDms(turn, entry);
     }, error => { this.settle(turn, entry, { kind: 'unanswered', reason: 'unavailable' }); log.fail('card', error, { phase: 'ask-send' }); });
+  }
+  private sendDms(turn: Turn, entry: Entry): void {
+    const ids = this.eligible(turn, entry.request);
+    const dm: NonNullable<Entry['dm']> = new Map(ids.map(id => [id, { kind: 'sending' }]));
+    entry.dm = dm;
+    if (!ids.length) {
+      this.settle(turn, entry, { kind: 'unanswered', reason: 'unavailable' }, { presentation: { kind: 'unavailable', reason: 'dm-failed' } });
+      return;
+    }
+    for (const id of ids) {
+      let entries = this.dmIndex.get(id);
+      if (!entries) { entries = new Map(); this.dmIndex.set(id, entries); }
+      entries.set(entry, turn);
+      this.effect(async () => {
+        const sent = await sendManagedCard(this.channel, id,
+          buildAskCard({ request: entry.request, state: { kind: 'pending' }, respondents: [], scope: 'dm' }), undefined, false, 'open_id');
+        if (entry.state.kind === 'settled') {
+          this.terminal(turn, entry, sent.messageId, this.dmPresentation(entry.state.presentation, id, entry.answeredByDm), id);
+          return;
+        }
+        dm.set(id, { kind: 'visible', messageId: sent.messageId, shownAt: Date.now() });
+        this.carriers.set(sent.messageId, { turn, entry, dm: id });
+      }, error => {
+        dm.set(id, { kind: 'failed' });
+        log.fail('card', error, { phase: 'ask-dm-send' });
+        if ([...dm.values()].every(state => state.kind === 'failed')) {
+          this.settle(turn, entry, { kind: 'unanswered', reason: 'unavailable' }, { presentation: { kind: 'unavailable', reason: 'dm-failed' } });
+        }
+      });
+    }
+  }
+  private dmPresentation(state: AskCardState, id: string, byDm?: string): AskCardState {
+    return state.kind === 'answered' ? { ...state, by: id === byDm ? 'self' : 'other' } : state;
   }
   submit(input: { messageId: string; chatId: string; operatorOpenId?: string; value: unknown; formValue: unknown }): 'accepted' | 'invalid' | 'denied' | 'inactive' | 'foreign' {
     const found = this.carriers.get(input.messageId);
     if (!found) return 'inactive';
     const { turn, entry } = found;
     if (!turn.open || this.turns.get(turn.sessionKey) !== turn || turn.queue[0] !== entry) return 'inactive';
-    if (turn.placement.chatId !== input.chatId) return 'foreign';
+    if (found.dm) {
+      if (input.operatorOpenId !== found.dm) return 'denied';
+      if (turn.run.askPending?.(entry.request.id) === false) {
+        this.settle(turn, entry, { kind: 'unanswered', reason: 'turn-ended' }, { providerResolved: true });
+        return 'inactive';
+      }
+    } else {
+      if (turn.placement.chatId !== input.chatId) return 'foreign';
+      if (isSensitiveAsk(entry.request)) {
+        const key = `sensitive:${input.operatorOpenId ?? ''}`;
+        if (!entry.denied.has(key)) {
+          entry.denied.add(key);
+          this.effect(() => this.channel.send(input.chatId, { markdown: '这个问题请在私聊里回答' }, { replyTo: input.messageId, replyInThread: turn.placement.replyInThread }));
+        }
+        return 'invalid';
+      }
+    }
     const parsed = parseAskSubmission({ request: entry.request, value: input.value, formValue: input.formValue });
     if (!parsed.ok) {
       const key = `invalid:${input.operatorOpenId ?? ''}:${parsed.reason}`;
@@ -167,7 +220,7 @@ export class AskCoordinator {
       }
       return 'denied';
     }
-    this.settle(turn, entry, { kind: 'answered', answer: parsed.answer }, { actor: this.names.peek(operator) ?? `成员 …${operator.slice(-6)}` });
+    this.settle(turn, entry, { kind: 'answered', answer: parsed.answer }, { actor: this.names.peek(operator) ?? `成员 …${operator.slice(-6)}`, byDm: found.dm });
     return 'accepted';
   }
   typed(input: TypedInput): 'answered' | 'sensitive' | 'none' {
@@ -194,16 +247,53 @@ export class AskCoordinator {
       { actor: this.names.peek(input.senderId) ?? `成员 …${input.senderId.slice(-6)}` });
     return 'answered';
   }
-  private settle(turn: Turn, entry: Entry, resolution: AskResolution, options: { actor?: string; providerResolved?: boolean } = {}): void {
+  dmText(input: { openId: string; text: string; messageId: string; createTime?: number }): boolean {
+    const waiting = [...(this.dmIndex.get(input.openId) ?? [])].filter(([entry, turn]) => {
+      if (entry.state.kind !== 'visible' || !turn.open) return false;
+      if (turn.run.askPending?.(entry.request.id) === false) {
+        this.settle(turn, entry, { kind: 'unanswered', reason: 'turn-ended' }, { providerResolved: true });
+        return false;
+      }
+      const dm = entry.dm?.get(input.openId);
+      return dm?.kind === 'visible' && Boolean(input.createTime && input.createTime >= dm.shownAt)
+        && this.eligible(turn, entry.request).includes(input.openId);
+    });
+    const first = waiting[0];
+    if (!first) return false;
+    if (waiting.length > 1) {
+      const key = `dm-many:${input.openId}`;
+      if (!first[0].denied.has(key)) {
+        first[0].denied.add(key);
+        this.effect(() => this.channel.rawClient.im.v1.message.create({ params: { receive_id_type: 'open_id' }, data: {
+          receive_id: input.openId, msg_type: 'text', content: JSON.stringify({ text: `有 ${waiting.length} 个问题在等你回答，请分别用上面的卡片回答` }),
+        } }));
+      }
+      return true;
+    }
+    const text = input.text.trim().slice(0, 4000);
+    if (!text) return false;
+    log.info('card', 'ask-dm-typed', { len: text.length });
+    this.settle(first[1], first[0], { kind: 'answered', answer: { kind: 'text', text } },
+      { actor: this.names.peek(input.openId) ?? `成员 …${input.openId.slice(-6)}`, byDm: input.openId });
+    return true;
+  }
+  private settle(turn: Turn, entry: Entry, resolution: AskResolution, options: { actor?: string; providerResolved?: boolean; byDm?: string; presentation?: AskCardState } = {}): void {
     if (entry.state.kind === 'settled') return;
     const messageId = entry.state.kind === 'visible' ? entry.state.messageId : undefined;
-    const presentation: AskCardState = resolution.kind === 'answered'
+    const presentation: AskCardState = options.presentation ?? (resolution.kind === 'answered'
       ? { kind: 'answered', answer: resolution.answer, actor: options.actor ?? '', at: new Date().toISOString() }
       : resolution.reason === 'timeout' ? { kind: 'timed-out' }
-      : resolution.reason === 'stopped' ? { kind: 'stopped' } : { kind: 'unavailable', reason: resolution.reason };
+      : resolution.reason === 'stopped' ? { kind: 'stopped' } : { kind: 'unavailable', reason: resolution.reason });
+    entry.answeredByDm = options.byDm;
     entry.state = { kind: 'settled', presentation };
     clearTimeout(entry.timer);
     if (messageId) this.carriers.delete(messageId);
+    for (const [id, dm] of entry.dm ?? []) {
+      const entries = this.dmIndex.get(id);
+      entries?.delete(entry);
+      if (!entries?.size) this.dmIndex.delete(id);
+      if (dm.kind === 'visible') this.carriers.delete(dm.messageId);
+    }
     turn.queue = turn.queue.filter(candidate => candidate !== entry);
     entry.release();
     // Invoke the provider's local claim before doing presentation or any network work.
@@ -211,5 +301,8 @@ export class AskCoordinator {
     this.waiting(turn);
     this.promote(turn);
     if (messageId) this.terminal(turn, entry, messageId, presentation);
+    for (const [id, dm] of entry.dm ?? []) {
+      if (dm.kind === 'visible') this.terminal(turn, entry, dm.messageId, this.dmPresentation(presentation, id, options.byDm), id);
+    }
   }
 }
