@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import type { SessionProfile } from '../src/agent/session-profile';
 import {
+  executionSessionProfile,
   botBackendId,
   groupBackendId,
   resolveCommentsExecution,
@@ -147,4 +153,70 @@ describe('云文档评论', () => {
     expect(resolveCommentsExecution({ ...b, comments: { backend: CODEX } }).model).toBeUndefined();
     expect(resolveCommentsExecution({ ...b, comments: { model: 'opus', effort: 'high' } }).model).toEqual({ model: 'opus', effort: 'high', custom: false, source: 'comments' });
   });
+});
+
+describe('execution roots admission', () => {
+  const fixtures: string[] = [];
+  afterEach(async () => { for (const root of fixtures.splice(0)) await rm(root, { recursive: true }); });
+  async function fixture() {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'execution-roots-')));
+    fixtures.push(root);
+    const cwd = join(root, 'work');
+    const extra = join(root, 'extra');
+    const repo = join(root, 'repo');
+    for (const path of [cwd, extra, repo]) await mkdir(path);
+    execFileSync('git', ['init', '--quiet', repo]);
+    return { root, cwd, extra, repo, dataDir: join(root, 'data') };
+  }
+  it.each(['qa', 'write', 'full'] as const)('admits canonical roots and preserves the existing %s profile fields', async permission => {
+    const f = await fixture();
+    const alias = join(f.root, 'alias');
+    await symlink(f.extra, alias);
+    const profile: SessionProfile = { instructions: 'existing instructions', env: { KEEP: 'yes' }, nativeSettings: { automaticMemory: false }, additionalRoots: [], capabilityPackages: [], mcpServers: [] };
+    const execution = resolveExecution({ group: group({ cwd: f.cwd, mode: permission, directories: { workspaces: { primary: f.cwd, additional: [alias] }, repositories: [f.repo] } }) });
+    const result = await executionSessionProfile({ ...f, execution, backend: CODEX, scope: 'group', profile });
+    expect(result).toMatchObject({ instructions: expect.stringContaining(profile.instructions), env: profile.env, additionalRoots: [
+      { path: f.extra, access: permission === 'qa' ? 'read' : 'write' },
+      { path: f.repo, access: permission === 'qa' ? 'read' : 'write' },
+    ] });
+    expect(result?.instructions).toContain('AGENTS.md 或 CLAUDE.md');
+    expect(result?.instructions.match(/AGENTS.md 或 CLAUDE.md/g)).toHaveLength(1);
+  });
+  it('rejects new non-Git repositories and data roots before provider delivery', async () => {
+    const f = await fixture();
+    const execution = resolveExecution({ group: group({ cwd: f.cwd, directories: { repositories: [f.extra] } }) });
+    await expect(executionSessionProfile({ ...f, execution, backend: CODEX, scope: 'group' })).rejects.toThrow('expected local Git root');
+    await mkdir(f.dataDir);
+    execution.repositories = [];
+    execution.workspaces.additional = [f.dataDir];
+    await expect(executionSessionProfile({ ...f, execution, backend: CODEX, scope: 'group' })).rejects.toThrow('Invalid directory settings');
+  });
+  it('deduplicates across workspaces/repositories and excludes the real cwd without adding bot primary', async () => {
+    const f = await fixture();
+    const execution = resolveExecution({ bot: { directories: { workspaces: { primary: f.extra, additional: [f.repo] }, repositories: [f.repo] } } });
+    const result = await executionSessionProfile({ ...f, execution, backend: CODEX, scope: 'group' });
+    expect(result?.additionalRoots).toEqual([{ path: f.repo, access: 'write' }]);
+    execution.workspaces.additional = [f.cwd];
+    execution.repositories = [];
+    expect(await executionSessionProfile({ ...f, execution, backend: CODEX, scope: 'group' })).toBeUndefined();
+  });
+  it('keeps Claude and ungrouped single-root profiles unchanged but admits group primary', async () => {
+    const execution = resolveExecution({ group: group({ directories: { repositories: ['/missing/repo'] } }) });
+    expect(await executionSessionProfile({ execution, cwd: '/missing', backend: CLAUDE, scope: 'group' })).toBeUndefined();
+    execution.repositories = [];
+    await expect(executionSessionProfile({ execution, cwd: '/missing', backend: CODEX, scope: 'group' })).rejects.toThrow();
+    expect(await executionSessionProfile({ execution, cwd: '/missing', backend: CODEX, scope: 'ungrouped' })).toBeUndefined();
+  });
+  it('rejects a group primary symlink into bot data even without extra roots', async () => {
+    const f = await fixture();
+    await mkdir(f.dataDir);
+    const botData = join(f.dataDir, 'bots');
+    await mkdir(botData);
+    const alias = join(f.root, 'linked-work');
+    await symlink(botData, alias);
+    const execution = resolveExecution({ group: group({ cwd: f.cwd }) });
+    await expect(executionSessionProfile({ ...f, execution, cwd: alias, backend: CODEX, scope: 'group' })).rejects.toThrow('Invalid directory settings');
+    expect(await executionSessionProfile({ ...f, execution, cwd: alias, backend: CODEX, scope: 'ungrouped' })).toBeUndefined();
+  });
+
 });

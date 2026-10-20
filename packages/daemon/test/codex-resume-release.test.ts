@@ -45,7 +45,7 @@ process.stdin.on('data', (d) => {
         send({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: 'thread not found' } });
         continue;
       }
-      send({ jsonrpc: '2.0', id: msg.id, result: { thread: { id: p.threadId, ...(turns[p.threadId] ? { turns: turns[p.threadId] } : {}) } } });
+      send({ jsonrpc: '2.0', id: msg.id, result: { cwd: p.cwd, runtimeWorkspaceRoots: p.runtimeWorkspaceRoots, approvalPolicy: p.approvalPolicy, sandbox: { type: 'dangerFullAccess' }, thread: { id: p.threadId, ...(turns[p.threadId] ? { turns: turns[p.threadId] } : {}) } } });
       continue;
     }
     if (msg.method === 'turn/start') {
@@ -58,7 +58,7 @@ process.stdin.on('data', (d) => {
       send({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId: p.threadId, turn: { id: 'tr' } } });
       continue;
     }
-    const result = msg.method === 'thread/start' ? { thread: { id: 'th_fresh' } } : {};
+    const result = msg.method === 'thread/start' ? { cwd: p.cwd, runtimeWorkspaceRoots: p.runtimeWorkspaceRoots, approvalPolicy: p.approvalPolicy, sandbox: { type: 'dangerFullAccess' }, thread: { id: 'th_fresh' } } : {};
     send({ jsonrpc: '2.0', id: msg.id, result });
   }
 });

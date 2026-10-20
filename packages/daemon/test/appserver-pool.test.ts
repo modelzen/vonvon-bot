@@ -61,7 +61,7 @@ process.stdin.on('data', (d) => {
       m === 'model/list' ? { data: [{ id: 'pool-model', isDefault: true }] } :
       m === 'thread/list' ? { data: [{ id: 't1', preview: 'hi', createdAt: 1, updatedAt: 2 }] } :
       m === 'thread/read' ? { thread: { turns: [] } } :
-      m === 'thread/start' ? { thread: { id: 'th_' + process.pid } } :
+      m === 'thread/start' ? { cwd: p.cwd, runtimeWorkspaceRoots: p.runtimeWorkspaceRoots, approvalPolicy: p.approvalPolicy, sandbox: { type: 'dangerFullAccess' }, thread: { id: 'th_' + process.pid } } :
       {};
     send({ jsonrpc: '2.0', id: msg.id, result });
   }

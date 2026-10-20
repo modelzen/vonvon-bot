@@ -205,7 +205,7 @@ import { paths } from '../config/paths';
 import { loadBots } from '../config/bots';
 import { admitDirectorySettings } from '../config/directories';
 import { DirectoryError, directoryFailure } from '../config/directory-errors';
-import { botBackendId, groupBackendId, resolveCommentsExecution, resolveExecution, resolveModelPreference, type ModelPreference } from '../config/execution';
+import { botBackendId, groupBackendId, resolveCommentsExecution, resolveExecution, resolveModelPreference, executionSessionProfile, type ModelPreference } from '../config/execution';
 import { fileClaimMode, OutboundFiles } from './outbound-files';
 import { getSecret } from '../config/keystore';
 import { buildScopeGrantUrl, JOIN_GROUP_SCOPES } from '../config/scopes';
@@ -1033,6 +1033,10 @@ export function createOrchestrator(
   /** The group's execution values (s36d2): its tier, network, workspace and 运行中来了消息. */
   function execOf(project: Project | undefined) {
     return resolveExecution({ bot: cfg.preferences, group: project });
+  }
+  function profileOf(project: Project | undefined, cwd: string, backend: AgentBackend, permission?: PermissionMode) {
+    const execution = execOf(project);
+    return executionSessionProfile({ execution: { ...execution, permission: permission ?? execution.permission }, cwd, backend: backend.id, scope: project ? 'group' : 'ungrouped' });
   }
   /** The group's backend: its own, else Codex; not the bot default (product.md 3.2). */
   function groupBackend(project: Pick<Project, 'backend'> | undefined): AgentBackend {
@@ -3284,7 +3288,7 @@ export function createOrchestrator(
           // Rebuilt after the cwd changed: the record's backend, as its model is (s36d2).
           const cwd = workCwd(project);
           const be = sessionBackendOf(prior, project);
-          thread = await be.startThread({ cwd, model, effort, mode: perm.mode, network: perm.network });
+          thread = await be.startThread({ cwd, model, effort, mode: perm.mode, network: perm.network, profile: await profileOf(project, cwd, be, perm.mode) });
           trackSession(sessionKey, thread);
           // 自愈观测：来源=全新会话（无持久化记录），与 resume-ok/resume-recreate
           // 互斥——三者其一 + agent 层的 spawn/prewarm-hit 即可还原完整恢复路径。
@@ -3535,6 +3539,7 @@ export function createOrchestrator(
       const resumed = await be.resumeThread({
         cwd: rec.cwd,
         sessionId: rec.sessionId,
+        profile: await profileOf(project, rec.cwd, be, perm?.mode),
         model: rec.model,
         effort: rec.effort,
         mode: perm?.mode,
@@ -3553,6 +3558,7 @@ export function createOrchestrator(
       const cwd = workCwd(project, rec);
       const fresh = await be.startThread({
         cwd,
+        profile: await profileOf(project, cwd, be, perm?.mode),
         model: rec.model,
         effort: rec.effort,
         mode: perm?.mode ?? project?.mode,
@@ -3630,7 +3636,7 @@ export function createOrchestrator(
       let tResolveDone = tIntake;
       const threadP = (async () => {
         const { model, effort } = pickDefault(await listModels(be), prefer);
-        const thread = await be.startThread({ cwd, model, effort, mode: perm.mode, network: perm.network });
+        const thread = await be.startThread({ cwd, model, effort, mode: perm.mode, network: perm.network, profile: await profileOf(project, cwd, be, perm.mode) });
         tResolveDone = Date.now();
         return { thread, model, effort };
       })();
@@ -4101,6 +4107,7 @@ export function createOrchestrator(
           effort,
           mode: perm.mode,
           network: perm.network,
+          profile: await profileOf(project, cwd, be, perm.mode),
         });
         // Close + evict the parked live thread (a separate app-server proc); its
         // on-disk session survives for /resume. Then track the fresh one.
@@ -6298,7 +6305,7 @@ export function createOrchestrator(
     try {
       if (request.action === 'clear') {
         if (ruleKind(project) !== 'single' || key !== perm.sessionKey) throw new AdminWriteError('只有单会话群可以清空当前上下文');
-        const fresh = await sessionBackend.startThread({ cwd: project.cwd, model: record.model, effort: record.effort, mode: perm.mode, network: perm.network });
+        const fresh = await sessionBackend.startThread({ cwd: project.cwd, model: record.model, effort: record.effort, mode: perm.mode, network: perm.network, profile: await profileOf(project, project.cwd, sessionBackend, perm.mode) });
         // The local clock, not a Feishu createTime like the other watermarks: this
         // is the main-area session, which no back-fill reads until s14 (it must
         // then allow for clock skew, or use the newest createTime it has).
@@ -8150,7 +8157,7 @@ export function createOrchestrator(
     }
     if (rec && rec.backend === be.id) {
       try {
-        const resumed = await be.resumeThread({ cwd: rec.cwd, sessionId: rec.sessionId, model, effort });
+        const resumed = await be.resumeThread({ cwd: rec.cwd, sessionId: rec.sessionId, model, effort, profile: await profileOf(undefined, rec.cwd, be, 'full') });
         // 评论的模型来自评论设置（不是手填的）或 bot 默认
         await patchSession(sessionKey, { model, effort, modelCustom });
         trackSession(sessionKey, resumed);
@@ -8160,7 +8167,7 @@ export function createOrchestrator(
         log.fail('agent', err, { phase: 'comment-resume', sessionKey });
       }
     }
-    const fresh = await be.startThread({ cwd, model, effort });
+    const fresh = await be.startThread({ cwd, model, effort, profile: await profileOf(undefined, cwd, be, 'full') });
     trackSession(sessionKey, fresh);
     commentInstrUsed.set(sessionKey, instructions);
     await upsertSession({

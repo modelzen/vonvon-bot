@@ -29,7 +29,13 @@ const threads: { close(): Promise<void> }[] = [];
 
 beforeEach(() => {
   vi.clearAllMocks();
-  rpc.request.mockResolvedValue({ thread: { id: 'test-session', turns: [] } });
+  rpc.request.mockImplementation(async (_method, params) => ({
+    thread: { id: params.threadId ?? 'test-session', turns: [] }, cwd: params.cwd, runtimeWorkspaceRoots: params.runtimeWorkspaceRoots,
+    approvalPolicy: 'never', activePermissionProfile: params.config?.default_permissions ? { id: 'feishu', extends: null } : null,
+    sandbox: params.sandbox === 'danger-full-access' ? { type: 'dangerFullAccess' } : {
+      type: 'workspaceWrite', writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true,
+    },
+  }));
   rpc.take.mockReturnValue({ request: rpc.request, close: rpc.close });
 });
 afterEach(async () => {
@@ -129,7 +135,7 @@ for (const field of ['additionalRoots', 'capabilityPackages', 'mcpServers'] as c
       const options = { cwd: '/repo', mode: 'full' as const, profile: unsupported };
       const codex = new CodexAppServerBackend();
       const claude = claudeFixture();
-      for (const backend of [codex, claude.backend]) {
+      for (const backend of field === 'additionalRoots' ? [claude.backend] : [codex, claude.backend]) {
         await expect(action === 'start' ? backend.startThread(options)
           : backend.resumeThread({ ...options, sessionId: 'saved' })).rejects.toThrow('s39');
       }
@@ -149,7 +155,9 @@ for (const field of ['additionalRoots', 'capabilityPackages', 'mcpServers'] as c
     config: expect.objectContaining({
       default_permissions: 'feishu',
       permissions: { feishu: {
-        filesystem: { ':minimal': 'read', ':workspace_roots': { '.': 'write' } },
+        filesystem: expect.objectContaining({ ':minimal': 'read', ':workspace_roots': { '.': 'read' },
+          '/profile-workspace': expect.objectContaining({ '.': 'write', '.mcp.json': 'read', '.claude/skills': 'read' }),
+        }),
         network: { enabled: false },
       } },
       features: { memories: false },

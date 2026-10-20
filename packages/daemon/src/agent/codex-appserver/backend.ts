@@ -24,6 +24,7 @@ import type {
 import { isGoalTerminal, SessionInUseError } from '../types';
 import { resolveSessionProfile, type SessionProfileCapabilities } from '../session-profile';
 import { AppServerClient } from './app-server-client';
+import { codexFilesystem, codexWorkspaceRoots, verifyCodexWorkspaceEcho } from './workspace-policy';
 import { NATIVE_MEMORY_OFF } from './memory-config';
 import { connectGated, refillWarmPool, takeWarmClient, utilityRequest } from './client-pool';
 import { mapChildNotification, mapNotification, readSubAgentActivity, readSubagentSpawn, type Child } from './event-map';
@@ -54,6 +55,7 @@ export function sandboxParams(
   mode: PermissionMode | undefined,
   network: boolean | undefined,
   platform: NodeJS.Platform = process.platform,
+  roots?: ReturnType<typeof codexWorkspaceRoots>,
 ): Record<string, unknown> {
   if ((mode ?? 'full') === 'full') return { sandbox: 'danger-full-access' };
   if (!codexConfinesReads(platform)) throw new CodexFullOnlyError();
@@ -62,10 +64,7 @@ export function sandboxParams(
       default_permissions: 'feishu',
       permissions: {
         feishu: {
-          filesystem: {
-            ':minimal': 'read',
-            ':workspace_roots': { '.': mode === 'write' ? 'write' : 'read' },
-          },
+          filesystem: codexFilesystem(roots ?? [], mode === 'write' ? 'write' : 'qa'),
           network: { enabled: Boolean(network) },
         },
       },
@@ -75,11 +74,13 @@ export function sandboxParams(
 
 /** Rebuilt for every start/resume; never persists workspace trust to user config. */
 export function codexSessionParams(opts: StartThreadOptions): Record<string, unknown> {
-  const profile = resolveSessionProfile(opts.profile);
-  const sandbox = sandboxParams(opts.mode, opts.network);
+  const profile = resolveSessionProfile(opts.profile, { additionalRoots: true });
+  const roots = codexWorkspaceRoots(opts);
+  const sandbox = sandboxParams(opts.mode, opts.network, process.platform, roots);
   return {
     ...sandbox,
     cwd: opts.cwd,
+    runtimeWorkspaceRoots: roots.map(root => root.path),
     approvalPolicy: APPROVAL_POLICY,
     developerInstructions: profile.instructions,
     ...(opts.model ? { model: opts.model } : {}),
@@ -710,9 +711,9 @@ class CodexThread implements AgentThread {
 export class CodexAppServerBackend implements AgentBackend {
   readonly profileCapabilities = {
     instructions: { channel: 'developer', replaceOnResume: false },
-    additionalRoots: false, directoryAccess: false, capabilityPackages: false, mcpServers: false,
+    additionalRoots: true, directoryAccess: true, capabilityPackages: false, mcpServers: false,
     env: true, disableNativeMemory: true,
-    reapplyOnResume: ['env', 'nativeSettings', 'workspaceTrust'],
+    reapplyOnResume: ['env', 'nativeSettings', 'workspaceTrust', 'additionalRoots', 'directoryAccess'],
   } satisfies SessionProfileCapabilities;
   readonly id = 'codex-appserver';
   readonly displayName = 'Codex (app-server)';
@@ -881,6 +882,7 @@ export class CodexAppServerBackend implements AgentBackend {
     let res: { thread: { id: string } };
     try {
       res = await client.request<{ thread: { id: string } }>('thread/start', params);
+      verifyCodexWorkspaceEcho(res, opts);
     } catch (err) {
       await client.close().catch((closeErr: unknown) => log.fail('agent', closeErr, { phase: 'start-close' }));
       throw err;
@@ -897,6 +899,7 @@ export class CodexAppServerBackend implements AgentBackend {
         threadId: opts.sessionId,
         ...params,
       });
+      verifyCodexWorkspaceEcho(res, opts);
     } catch (err) {
       // This process holds nothing yet; a refused resume must not leave it running.
       await client.close().catch((closeErr: unknown) => log.fail('agent', closeErr, { phase: 'resume-close' }));
