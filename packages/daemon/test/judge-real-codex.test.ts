@@ -16,7 +16,7 @@ import { filesWith } from './helpers/marker-scan';
  * VONVON_REAL_JUDGE=1; CI never runs it. Keeps the real HOME (the login lives there) and points
  * the data root (VONVON_HOME) and the judge cwd (VONVON_JUDGE_CWD) at a temporary directory.
  * `CODEX_BIN=<npm prefix>/node_modules/.bin/codex` runs it on another version, e.g. 0.156.1.
- * `VONVON_REAL_JUDGE_RUNS=<n>` repeats the three variants n times (e12).
+ * `VONVON_REAL_JUDGE_RUNS=<n>` repeats the two variants n times (e12).
  */
 const REAL = process.env.VONVON_REAL_JUDGE === '1';
 const RUNS = Math.max(1, Number(process.env.VONVON_REAL_JUDGE_RUNS ?? 1) || 1);
@@ -28,7 +28,6 @@ const marker = randomUUID();
 
 const MESSAGES: Record<JudgeVariant, { text: string; mentions?: string[] }> = {
   main: { text: '今天食堂的红烧肉不错' },
-  mentioned: { text: '@小码 订单接口一直报 500', mentions: ['小码'] },
   topic: { text: '这个报错能帮我看下吗' },
 };
 
@@ -81,14 +80,14 @@ describe.skipIf(!REAL)('真实 Codex 判断（VONVON_REAL_JUDGE=1）', () => {
     expect(judgeProcessStats().pid).toBe(pid);
     // Logged, not asserted: the model's own latency (seconds) swamps the ~2 s cold start.
     console.log(JSON.stringify({ coldMs: first.ms, warmMs: second.ms }));
-    const four = await Promise.all((['main', 'mentioned', 'topic', 'main'] as const).map(v => judge.judge(request(v))));
+    const four = await Promise.all((['main', 'topic', 'topic', 'main'] as const).map(v => judge.judge(request(v))));
     expect(four.map(r => r.error)).toEqual([undefined, undefined, undefined, undefined]);
     expect(judgeProcessStats()).toMatchObject({ pid, spawned: spawned + 1, stuck: 0 });
   }, 120_000);
 
-  it('三种变体：格式对，决定在这个变体允许的集合里', async () => {
+  it('两种变体：格式对，决定在这个变体允许的集合里', async () => {
     for (let run = 0; run < RUNS; run++) {
-      for (const variant of ['main', 'mentioned', 'topic'] as const) {
+      for (const variant of ['main', 'topic'] as const) {
         const result = await judge.judge(request(variant));
         console.log(JSON.stringify({ variant, decision: result.decision, ms: result.ms, error: result.error?.kind }));
         expect(result.error).toBeUndefined();
@@ -124,15 +123,15 @@ describe.skipIf(!REAL)('真实 Codex 判断（VONVON_REAL_JUDGE=1）', () => {
     }
   }, 60_000 * RUNS);
 
-  it('超时：turn 跑起来以后超时，补发 interrupt，兜底回在主区，进程照常用', async () => {
-    const warm = await judge.judge(request('mentioned'));
+  it('超时：turn 跑起来以后超时，补发 interrupt，判断层兜底不回，进程照常用', async () => {
+    const warm = await judge.judge(request('main'));
     expect(warm.error).toBeUndefined();
     const pid = judgeProcessStats().pid;
     const before = judgeProcessStats().interrupts;
     const timeoutMs = Math.max(800, Math.round(warm.ms * 0.6));
-    const late = await judge.judge(request('mentioned', { timeoutMs }));
+    const late = await judge.judge(request('main', { timeoutMs }));
     expect(late.error?.kind).toBe('timeout');
-    expect(late.decision).toBe('main');
+    expect(late.decision).toBe('skip');
     await vi.waitFor(() => expect(judgeProcessStats().interrupts).toBe(before + 1), { timeout: 20_000 });
     expect((await judge.judge(request('main'))).error).toBeUndefined();
     expect(judgeProcessStats().pid).toBe(pid);

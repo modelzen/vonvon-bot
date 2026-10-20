@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderProcessCleanupError } from '../src/agent/owned-process';
 import { JudgeCallError, type AgentBackend, type JudgeCall, type JudgeCallOutput, type ModelInfo } from '../src/agent/types';
-import { createJudge, JUDGE_SETTLE_MS, MODEL_LIST_RETRY_MS, type JudgeDeps } from '../src/judge/judge';
+import { createJudge, JUDGE_NAMED_TIMEOUT_MS, JUDGE_SETTLE_MS, MODEL_LIST_RETRY_MS, type JudgeDeps } from '../src/judge/judge';
 import { SmartPromptError } from '../src/judge/smart-file';
 import type { JudgeErrorKind, JudgeRequest, JudgeResult, JudgeVariant } from '../src/judge/types';
 
@@ -176,60 +176,74 @@ describe('judge', () => {
     } finally { pending.resolve(ANSWER); await shutdown; }
   });
 
-  it('falls back by variant: a mention replies in main, the rest skip', async () => {
+  it('falls back to skip for every variant', async () => {
     const kinds: JudgeErrorKind[] = ['auth', 'quota', 'version', 'model', 'network', 'failed', 'unavailable'];
     for (const kind of kinds) {
       const f = fakeBackend();
       // not structured, so no cooldown repeats the first failure (judge-cooldown.test.ts)
       f.answer(async () => { throw new JudgeCallError(kind, `boom ${kind}\nsecond line`, false); });
       const judge = make(f.backend);
-      for (const variant of ['main', 'mentioned', 'topic'] as const) {
+      for (const variant of ['main', 'topic'] as const) {
         const result = await judge.judge(req(variant));
-        expect(result.decision).toBe(variant === 'mentioned' ? 'main' : 'skip');
+        expect(result.decision).toBe('skip');
         expect(result.error).toEqual({ kind, detail: `boom ${kind}` });
         expect(result.reason).toBe('');
       }
     }
     const f = fakeBackend();
     f.answer(async () => ({ text: '我觉得该回' }));
-    const result = await make(f.backend).judge(req('mentioned'));
-    expect(result).toMatchObject({ decision: 'main', error: { kind: 'format', detail: '模型没按格式回答' } });
-    f.answer(async () => ({ text: '{"decision":"skip","reason":"x"}' }));
-    expect((await make(f.backend).judge(req('mentioned'))).error?.kind).toBe('format');
+    const result = await make(f.backend).judge(req('main'));
+    expect(result).toMatchObject({ decision: 'skip', error: { kind: 'format', detail: '模型没按格式回答' } });
+    f.answer(async () => ({ text: '{"decision":"reply","reason":"x"}' }));
+    expect((await make(f.backend).judge(req('main'))).error?.kind).toBe('format');
   });
 
   it('a prompt failure still reports backend and model', async () => {
     const f = fakeBackend();
     const judge = make(f.backend, { readPrompt: async () => { throw new SmartPromptError('SMART.md 是符号链接', '/b/SMART.md'); } });
-    const result = await judge.judge(req('mentioned'));
-    expect(result).toMatchObject({ decision: 'main', backend: 'codex-appserver', model: 'gpt-6-luna', error: { kind: 'prompt', detail: 'SMART.md 是符号链接：/b/SMART.md' } });
+    const result = await judge.judge(req('main'));
+    expect(result).toMatchObject({ decision: 'skip', backend: 'codex-appserver', model: 'gpt-6-luna', error: { kind: 'prompt', detail: 'SMART.md 是符号链接：/b/SMART.md' } });
     expect(f.backend.judge).not.toHaveBeenCalled();
   });
 
   it('times out on a stuck backend, prompt read or model list, and aborts the signal', async () => {
     const f = fakeBackend();
     f.answer(() => new Promise(() => undefined));
-    const stuck = timed(make(f.backend).judge(req('mentioned', { timeoutMs: 1_000 })));
+    const stuck = timed(make(f.backend).judge(req('main', { timeoutMs: 1_000 })));
     await vi.advanceTimersByTimeAsync(999);
     expect(stuck.value).toBeUndefined();
     await vi.advanceTimersByTimeAsync(1);
-    expect(stuck.value).toMatchObject({ decision: 'main', error: { kind: 'timeout' }, ms: 1_000 });
+    expect(stuck.value).toMatchObject({ decision: 'skip', error: { kind: 'timeout' }, ms: 1_000 });
     expect(f.calls[0]!.signal.aborted).toBe(true);
 
     const prompt = timed(make(fakeBackend().backend, { readPrompt: () => new Promise(() => undefined) }).judge(req('main', { timeoutMs: 500 })));
     await vi.advanceTimersByTimeAsync(500);
     expect(prompt.value).toMatchObject({ decision: 'skip', error: { kind: 'timeout' } });
 
-    // the default timeout for a mention is 12 s (e12)
-    const def = timed(make(f.backend).judge(req('mentioned')));
+    // Named callers explicitly request the 12 s timeout (s25e).
+    expect(JUDGE_NAMED_TIMEOUT_MS).toBe(12_000);
+    const def = timed(make(f.backend).judge(req('main', { timeoutMs: JUDGE_NAMED_TIMEOUT_MS })));
     await vi.advanceTimersByTimeAsync(11_999);
     expect(def.value).toBeUndefined();
     await vi.advanceTimersByTimeAsync(1);
     expect(def.at).toBe(1_000_000 + 1_500 + 12_000);
+    expect(def.value).toMatchObject({ decision: 'skip', error: { kind: 'timeout' }, ms: 12_000 });
 
     const list = fakeBackend({ listModels: vi.fn(() => new Promise<ModelInfo[]>(() => undefined)) });
     const result = await make(list.backend).judge(req());
     expect(result.decision).toBe('topic');
+  });
+
+  it('defaults main judgements to 20 seconds', async () => {
+    const f = fakeBackend();
+    f.answer(() => new Promise(() => undefined));
+    const result = timed(make(f.backend).judge(req('main')));
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(result.value).toBeUndefined();
+    expect(f.calls[0]!.signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(result.value).toMatchObject({ decision: 'skip', error: { kind: 'timeout' }, ms: 20_000 });
+    expect(f.calls[0]!.signal.aborted).toBe(true);
   });
 
   it('fetches the model list once in the background, and not again for 5 minutes', async () => {
@@ -281,8 +295,8 @@ describe('judge', () => {
     const running = Array.from({ length: 20 }, () => timed(judge.judge(req('main', { timeoutMs: 5_000 }))));
     await vi.advanceTimersByTimeAsync(0);
     expect(f.backend.judge).toHaveBeenCalledTimes(4);
-    const busy = await judge.judge(req('mentioned'));
-    expect(busy).toMatchObject({ decision: 'main', error: { kind: 'busy' } });
+    const busy = await judge.judge(req('main'));
+    expect(busy).toMatchObject({ decision: 'skip', error: { kind: 'busy' } });
     await vi.advanceTimersByTimeAsync(5_000);
     expect(running.every((r) => r.value?.error?.kind === 'timeout' && r.at === 1_000_000 + 5_000)).toBe(true);
     expect(f.backend.judge).toHaveBeenCalledTimes(4);
@@ -408,18 +422,18 @@ describe('judge', () => {
     expect(await make(f.backend).judge(req('topic'))).toMatchObject({ decision: 'skip', error: { kind: 'unavailable' } });
   });
 
-  it('the caller giving up is aborted, and skips even for a mention', async () => {
+  it('the caller giving up is aborted, and skips for main too', async () => {
     const f = fakeBackend();
     f.answer(() => new Promise(() => undefined));
     const caller = new AbortController();
-    const result = timed(make(f.backend).judge(req('mentioned', { signal: caller.signal })));
+    const result = timed(make(f.backend).judge(req('main', { signal: caller.signal })));
     await vi.advanceTimersByTimeAsync(100);
     caller.abort();
     await vi.advanceTimersByTimeAsync(0);
     expect(result.value).toMatchObject({ decision: 'skip', error: { kind: 'aborted' }, ms: 100 });
     const gone = new AbortController();
     gone.abort();
-    expect(await make(f.backend).judge(req('mentioned', { signal: gone.signal }))).toMatchObject({ decision: 'skip', error: { kind: 'aborted' } });
+    expect(await make(f.backend).judge(req('main', { signal: gone.signal }))).toMatchObject({ decision: 'skip', error: { kind: 'aborted' } });
   });
 
   it('shutdown closes queued and running judgements, then waits for the backend calls', async () => {
@@ -427,7 +441,7 @@ describe('judge', () => {
     const pending: Deferred<JudgeCallOutput>[] = [];
     f.answer(() => { const d = deferred<JudgeCallOutput>(); pending.push(d); return d.promise; });
     const judge = make(f.backend);
-    const results = Array.from({ length: 6 }, (_, i) => timed(judge.judge(req(i % 2 ? 'mentioned' : 'topic'))));
+    const results = Array.from({ length: 6 }, (_, i) => timed(judge.judge(req(i % 2 ? 'main' : 'topic'))));
     await vi.advanceTimersByTimeAsync(0);
     let done = false;
     void judge.shutdown().then(() => { done = true; });
@@ -435,7 +449,7 @@ describe('judge', () => {
     expect(results.map((r) => r.value?.error?.kind)).toEqual(Array(6).fill('closed'));
     expect(results.every((r) => r.value?.decision === 'skip')).toBe(true);
     expect(f.backend.judge).toHaveBeenCalledTimes(4);
-    expect((await judge.judge(req('mentioned'))).error?.kind).toBe('closed');
+    expect((await judge.judge(req('main'))).error?.kind).toBe('closed');
     expect(done).toBe(false);
     for (const d of pending) d.reject(new Error('closed'));
     await vi.advanceTimersByTimeAsync(0);
@@ -455,8 +469,8 @@ describe('judge', () => {
 
   it('never rejects, even when backendFor throws', async () => {
     const judge = createJudge({ backendFor: () => { throw new Error('未知后端'); }, readPrompt: async () => ({ source: 'default', text: 'S', path: '/p' }) });
-    const result: JudgeResult = await judge.judge(req('mentioned'));
-    expect(result).toMatchObject({ decision: 'main', backend: 'codex-appserver', error: { kind: 'failed', detail: '未知后端' } });
+    const result: JudgeResult = await judge.judge(req('main'));
+    expect(result).toMatchObject({ decision: 'skip', backend: 'codex-appserver', error: { kind: 'failed', detail: '未知后端' } });
   });
 });
 
@@ -522,10 +536,10 @@ describe('decision models (s23f)', () => {
     expect(await j.judge.judge(jreq('main', { context }))).toMatchObject({ decision: 'topic', anchor: 'om_old' });
   });
 
-  it('without a key sends nothing and falls back by variant, each time, logged as info; a key that is no key likewise', async () => {
+  it('without a key sends nothing and skips each time, logged as info; a key that is no key likewise', async () => {
     const j = jev(async () => undefined);
     expect(await j.judge.judge(jreq('main'))).toMatchObject({ decision: 'skip', provider: 'typesafe', error: { kind: 'key', detail: '没填 TypeSafe 的 key' } });
-    expect(await j.judge.judge(jreq('mentioned'))).toMatchObject({ decision: 'main', error: { kind: 'key' } });
+    expect(await j.judge.judge(jreq('main'))).toMatchObject({ decision: 'skip', error: { kind: 'key' } });
     expect(fake.log.info.mock.calls.filter((c) => c[1] === 'failed')).toHaveLength(2);
     expect(fake.log.warn).not.toHaveBeenCalled();
     const bad = jev(async () => `${KEY}\n`);
@@ -537,7 +551,7 @@ describe('decision models (s23f)', () => {
 
   it('a keystore it cannot read fails with a fixed detail, none of its own words', async () => {
     const j = jev(async () => { throw Object.assign(new Error('Master key must be owned by the current user: /home/u/master.key'), { code: 'EACCES' }); });
-    expect(await j.judge.judge(jreq('mentioned'))).toMatchObject({ decision: 'main', error: { kind: 'failed', detail: '密钥库读不了' } });
+    expect(await j.judge.judge(jreq('main'))).toMatchObject({ decision: 'skip', error: { kind: 'failed', detail: '密钥库读不了' } });
     expect(fake.log.warn.mock.calls.find((c) => c[1] === 'keystore-unreadable')![2]).toMatchObject({ provider: 'typesafe', code: 'EACCES' });
     expect(logged()).not.toMatch(/Master key|master\.key/);
     expect(j.fetchFn).not.toHaveBeenCalled();
@@ -545,8 +559,8 @@ describe('decision models (s23f)', () => {
 
   it('a provider this version does not know is unavailable: no quiet switch to the small model', async () => {
     const j = jev();
-    expect(await j.judge.judge(jreq('mentioned', { botJudge: { ...JEV, provider: 'openai' } }))).toMatchObject({
-      decision: 'main', provider: 'openai', error: { kind: 'unavailable', detail: '这个版本不认识决策模型 openai' },
+    expect(await j.judge.judge(jreq('main', { botJudge: { ...JEV, provider: 'openai' } }))).toMatchObject({
+      decision: 'skip', provider: 'openai', error: { kind: 'unavailable', detail: '这个版本不认识决策模型 openai' },
     });
     expect(j.fetchFn).not.toHaveBeenCalled();
     expect(j.backend.judge).not.toHaveBeenCalled();
@@ -583,7 +597,7 @@ describe('decision models (s23f)', () => {
     expect(fake.log.info.mock.calls.find((c) => c[1] === 'verdict')![2]).toMatchObject({ provider: 'typesafe', retried: true });
     const down = jev();
     down.respond(() => { throw eyeballs(); });
-    expect(await down.judge.judge(jreq('mentioned'))).toMatchObject({ decision: 'main', error: { kind: 'network', detail: '连不上 TypeSafe（ETIMEDOUT）' } });
+    expect(await down.judge.judge(jreq('main'))).toMatchObject({ decision: 'skip', error: { kind: 'network', detail: '连不上 TypeSafe（ETIMEDOUT）' } });
     expect(down.fetchFn).toHaveBeenCalledTimes(2);
     expect(fake.log.warn.mock.calls.find((c) => c[1] === 'decision-error')![2]).toMatchObject({
       kind: 'network', code: 'ETIMEDOUT', attempts: ['ETIMEDOUT/v4', 'ENETUNREACH/v6'], retried: true,
@@ -597,7 +611,7 @@ describe('decision models (s23f)', () => {
     j.respond((init) => new Promise((resolve) => pending.push(() => resolve(answerTo(init)))));
     const results = Array.from({ length: 40 }, () => j.judge.judge(jreq('main')));
     await vi.waitFor(() => expect(pending).toHaveLength(8));
-    expect(await j.judge.judge(jreq('mentioned'))).toMatchObject({ decision: 'main', error: { kind: 'busy', detail: '判断排队满了' } });
+    expect(await j.judge.judge(jreq('main'))).toMatchObject({ decision: 'skip', error: { kind: 'busy', detail: '判断排队满了' } });
     for (let round = 0; round < 5; round++) {
       await vi.waitFor(() => expect(pending).toHaveLength(8));
       for (const release of pending.splice(0)) release();
@@ -609,9 +623,9 @@ describe('decision models (s23f)', () => {
   it('its own 5 s is timeout too; the judgement\'s timeout, queueing included, is timeout and sends no queued request', async () => {
     const j = jev();
     j.respond(() => new Promise(() => undefined));
-    const one = timed(j.judge.judge(jreq('mentioned')));
+    const one = timed(j.judge.judge(jreq('main')));
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(one.value).toMatchObject({ decision: 'main', error: { kind: 'timeout', detail: 'TypeSafe 5 秒没回' } });
+    expect(one.value).toMatchObject({ decision: 'skip', error: { kind: 'timeout', detail: 'TypeSafe 5 秒没回' } });
     const running = Array.from({ length: 8 }, () => timed(j.judge.judge(jreq('main', { timeoutMs: 4_000 }))));
     const queued = timed(j.judge.judge(jreq('main', { timeoutMs: 2_000 })));
     await vi.advanceTimersByTimeAsync(2_000);
@@ -628,7 +642,7 @@ describe('decision models (s23f)', () => {
     expect(await j.judge.judge(jreq('main'))).toMatchObject({ decision: 'skip', error: { kind: 'busy', detail: 'TypeSafe 限流了' } });
     j.respond((init) => answerTo(init));
     const other = { group: { chatId: 'oc_g', name: '群', backend: 'codex-appserver', judge: { ...JEV, model: 'jev-preview' } } };
-    expect(await j.judge.judge(jreq('mentioned', other))).toMatchObject({ decision: 'main', error: { kind: 'busy', detail: '不到 1 分钟前刚失败过，2 分钟内不再调' } });
+    expect(await j.judge.judge(jreq('main', other))).toMatchObject({ decision: 'skip', error: { kind: 'busy', detail: '不到 1 分钟前刚失败过，2 分钟内不再调' } });
     expect(j.fetchFn).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(90_000);
     expect((await j.judge.judge(jreq('main'))).error).toBeUndefined();
@@ -661,7 +675,7 @@ describe('decision models (s23f)', () => {
       signals.push(init.signal!);
       init.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
     }));
-    const results = [timed(j.judge.judge(jreq('main'))), timed(j.judge.judge(jreq('mentioned')))];
+    const results = [timed(j.judge.judge(jreq('main'))), timed(j.judge.judge(jreq('main')))];
     await vi.waitFor(() => expect(signals).toHaveLength(2));
     let done = false;
     void j.judge.shutdown().then(() => { done = true; });
