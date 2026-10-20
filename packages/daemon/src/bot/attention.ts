@@ -1,3 +1,4 @@
+import type { GroupAttention } from '@vonvon/protocol';
 import type { JudgeResult } from '../judge/types';
 
 export interface AttentionParams {
@@ -54,6 +55,24 @@ export class Attention {
   private readonly places = new Map<string, PlaceView>();
   private readonly prompts = new Map<string, string>();
 
+  private observer?: (groups: GroupAttention[]) => void;
+
+  observe(observer: (groups: GroupAttention[]) => void): void { this.observer = observer; this.changed(); }
+
+  snapshot(): GroupAttention[] {
+    const groups = new Map<string, GroupAttention>();
+    for (const state of this.places.values()) {
+      const group = groups.get(state.chatId) ?? { groupId: state.chatId, focusedTopics: 0, watchedTopics: 0 };
+      if (!state.topic) group.main = { mode: state.mode, intervalMs: state.intervalMs };
+      else if (state.mode === 'focus') group.focusedTopics++;
+      else group.watchedTopics++;
+      groups.set(state.chatId, group);
+    }
+    return [...groups.values()];
+  }
+
+  private changed(): void { this.observer?.(this.snapshot()); }
+
   constructor(params: Partial<AttentionParams> = {}) {
     const intervalsMs = [...(params.intervalsMs ?? ATTENTION_DEFAULTS.intervalsMs)];
     if (!intervalsMs.length || intervalsMs.some((value, index) =>
@@ -89,6 +108,7 @@ export class Attention {
     if (fresh) {
       if (place.topic && opts.mine) place.mode = 'focus';
       place.arrivedAt = now;
+      this.changed();
       return place.mode;
     }
     if (!place.topic && place.mode === 'focus' && place.repliedAt !== undefined
@@ -102,6 +122,7 @@ export class Attention {
       place.intervalMs = this.params.intervalsMs[0]!;
     }
     place.arrivedAt = Math.max(place.arrivedAt ?? now, now);
+    this.changed();
     return place.mode;
   }
 
@@ -120,6 +141,7 @@ export class Attention {
 
   glanced(ref: PlaceRef, now: number): void {
     this.touch(ref, true)!.lookedAt = now;
+    this.changed();
   }
 
   private focus(place: PlaceView, now: number): void {
@@ -127,6 +149,7 @@ export class Attention {
     place.intervalMs = this.params.intervalsMs[0]!;
     place.misses = 0;
     place.repliedAt = now;
+    this.changed();
   }
 
   verdict(ref: PlaceRef, kind: LookKind, outcome: LookOutcome, now: number): void {
@@ -145,6 +168,7 @@ export class Attention {
         place.intervalMs = this.params.exitIntervalMs;
         place.misses = 0;
       }
+      this.changed();
       return;
     }
     if (kind === 'signal') {
@@ -152,6 +176,7 @@ export class Attention {
     } else if (kind === 'glance') {
       place.intervalMs = this.params.intervalsMs.find(interval => interval > place.intervalMs) ?? place.intervalMs;
     }
+    this.changed();
   }
 
   /** This bot successfully started a turn in this place. */
@@ -166,6 +191,7 @@ export class Attention {
     place.mode = 'watch';
     place.intervalMs = this.params.exitIntervalMs;
     place.misses = 0;
+    this.changed();
     return true;
   }
 
@@ -178,6 +204,7 @@ export class Attention {
     for (const [place, state] of this.places) {
       if (state.chatId === chatId) this.places.delete(place);
     }
+    this.changed();
   }
 
   /** A changed smart prompt resets only this group's attention, not its hash. */

@@ -1,3 +1,5 @@
+import { setDiagnosticsSink } from '../src/bot/diagnostics';
+import { SMART_FACTS_GUIDANCE } from '../src/judge/prompt';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderProcessCleanupError } from '../src/agent/owned-process';
 import { JudgeCallError, type AgentBackend, type JudgeCall, type JudgeCallOutput, type ModelInfo } from '../src/agent/types';
@@ -63,6 +65,7 @@ beforeEach(() => {
   for (const fn of Object.values(fake.log)) fn.mockClear();
 });
 afterEach(() => {
+  setDiagnosticsSink(undefined);
   vi.useRealTimers();
 });
 
@@ -685,4 +688,26 @@ describe('decision models (s23f)', () => {
     expect(done).toBe(true);
     expect(fake.log.warn.mock.calls.filter((c) => c[1] === 'decision-error')).toHaveLength(0);
   });
+});
+
+it('notices the effective custom prompt once per bot/group per judge lifetime, including concurrent first use', async () => {
+  const notices: string[] = [];
+  setDiagnosticsSink(event => { if (event.kind === 'customPrompt') notices.push(event.groupId); });
+  let source: 'bot' | 'group' | 'default' = 'default';
+  let text = 'old custom';
+  const deps = { readPrompt: async () => ({ source, text, path: '/prompt' }) };
+  const judge = make(fakeBackend().backend, deps);
+  await judge.judge(req());
+  expect(notices).toEqual([]);
+  source = 'group'; text = SMART_FACTS_GUIDANCE;
+  await judge.judge(req());
+  expect(notices).toEqual([]);
+  text = 'unchanged group override';
+  await Promise.all([judge.judge(req()), judge.judge(req())]);
+  expect(notices).toEqual(['oc_g']);
+  source = 'bot';
+  await judge.judge(req());
+  expect(notices).toHaveLength(1);
+  await make(fakeBackend().backend, deps).judge(req());
+  expect(notices).toEqual(['oc_g', 'oc_g']);
 });

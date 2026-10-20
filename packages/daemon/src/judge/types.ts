@@ -26,6 +26,8 @@ export type JudgeSelectionStored =
 export interface JudgeLine {
   /** message id: what an anchor names (s25b); never rendered */
   id?: string;
+  /** A weak short/common-name match in this line, never an immediate signal. */
+  sameNameWord?: true;
   /** Newly seen in this judgement; not stored. */
   fresh?: true;
   /** epoch ms */
@@ -45,7 +47,14 @@ export interface JudgeLine {
   quote?: { name: string; text: string };
 }
 
+export interface JudgeFacts {
+  otherBots: { names: string[]; complete: boolean };
+  here: { kind: 'main' | 'topic'; openedBy?: string; speakers: string[]; historyIncomplete: true };
+  botExchangesSincePerson?: { count: number; atLeast: boolean };
+}
+
 export interface JudgeRequest {
+  facts?: JudgeFacts;
   variant: JudgeVariant;
   /** Why this position is being looked at now, as one factual sentence. */
   why?: string;

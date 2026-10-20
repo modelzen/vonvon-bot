@@ -1,4 +1,5 @@
-import { smartSalience, type Salience, type SalienceDeps } from './salience';
+import { buildJudgeFacts, judgeFactRead, sameNameWord } from './judge-facts';
+import { bareText, smartSalience, type Salience, type SalienceDeps } from './salience';
 import { getAppRoleSnapshot } from '../config/app-roles';
 import { createChatPeople } from './chat-people';
 import { findHandoffs, handoffSendResult, type HandoffSendResult, handoffText, handoffNote, ambiguousNote, ambiguousPersonNote, overNote, incompleteNote, otherBotNames, HANDOFF_SEND_MS, type HandoffMiss } from './bot-handoff';
@@ -35,7 +36,7 @@ import { feishuError, scopeDenial } from '../utils/feishu-error';
 import type { NotReplied, NotRepliedReason } from '@vonvon/protocol';
 import type { JudgeErrorKind, JudgeDecision, JudgeResult, JudgeVariant } from '../judge/types';
 import { JUDGE_INPUT_LIMITS, oneLine } from '../judge/prompt';
-import { deniedScopeName, errorDetail, fitDetail, reportNotReplied, reportScopeDenied } from './diagnostics';
+import { deniedScopeName, errorDetail, fitDetail, reportAttention, reportNotReplied, reportScopeDenied } from './diagnostics';
 import { createDroppedReplies, originFor, originOf, type DroppedOrigin } from './restart-dropped';
 import { catalogById, projectCreatableBackends, visibleCatalog } from '../agent/catalog';
 import {
@@ -746,6 +747,7 @@ interface SmartItem extends LaneEntry {
   ack?: Promise<string | undefined>;
   /** Why this human message is judged immediately. */
   signal?: 'at-me' | 'quote-me' | 'name';
+  quoteBy?: 'quote' | 'root';
 }
 
 interface WakeFacts { text: string; sender: { openId?: string; name?: string } }
@@ -1086,6 +1088,24 @@ export function createOrchestrator(
     clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
   };
   const attention = options?.attention ?? new Attention();
+  let attentionBudgetTimer: unknown;
+  function publishAttention(): void {
+    if (attentionBudgetTimer !== undefined) time.clearTimer(attentionBudgetTimer);
+    attentionBudgetTimer = undefined;
+    if (shuttingDown) return;
+    const now = time.now();
+    let next = Infinity;
+    const groups = attention.snapshot().map(group => {
+      const used = budget.used(group.groupId, now);
+      if (used < JUDGE_GLANCE_CAP) return group;
+      const cap = used >= JUDGE_BUDGET ? JUDGE_BUDGET : JUDGE_GLANCE_CAP;
+      const until = budget.freeAt(group.groupId, now, cap);
+      next = Math.min(next, until);
+      return { ...group, budget: { kind: used >= JUDGE_BUDGET ? 'named-only' as const : 'no-glance' as const, until } };
+    });
+    reportAttention(groups);
+    if (Number.isFinite(next)) attentionBudgetTimer = time.setTimer(publishAttention, Math.max(1, next - now));
+  }
   const placeOf = (msg: NormalizedMessage): PlaceRef => ({ chatId: msg.chatId, place: msg.threadId ?? msg.chatId });
   const takenTo = new Map<string, { chatId: string; at: number }>();
   const budgetNotedAt = new Map<string, number>();
@@ -1198,6 +1218,7 @@ export function createOrchestrator(
   const commentInstrUsed = new Map<string, string>();
   const sema = new Semaphore(getMaxConcurrentRuns(cfg));
   let shuttingDown = false;
+  attention.observe(publishAttention);
   let shutdownPromise: Promise<void> | undefined;
   const droppedReplies = options?.droppedFile ? createDroppedReplies({
     appId: cfg.accounts.app.id, file: options.droppedFile, log,
@@ -1682,7 +1703,7 @@ export function createOrchestrator(
     const now = time.now();
     attention.arrive(placeOf(msg), now, mine === undefined ? undefined : { mine });
     const item: SmartItem = { at: now, id: msg.messageId, place: msg.threadId ?? msg.chatId, kind, msg,
-      variant: msg.threadId ? 'topic' : 'main', ...(salience.kind !== 'plain' ? { signal: salience.kind } : {}) };
+      variant: msg.threadId ? 'topic' : 'main', ...(salience.kind !== 'plain' ? { signal: salience.kind } : {}), ...(salience.kind === 'quote-me' ? { quoteBy: salience.by } : {}) };
     if (kind === 'named') item.ack = trackTask(addReaction(msg.messageId, 'THINKING'));
     smartLanes.submit(item);
   }
@@ -1803,6 +1824,8 @@ export function createOrchestrator(
       if (glance) noteNotReplied(item.msg, 'judge-failed', { detail: errorDetail(error), times: look.length });
       else for (const b of batch) noteNotReplied(b.msg, 'judge-failed', { detail: errorDetail(error) });
       return { kind: 'drop' };
+    } finally {
+      publishAttention();
     }
   }
 
@@ -1921,20 +1944,38 @@ export function createOrchestrator(
   }
 
   async function callJudge(item: SmartItem, project: Project, msg: NormalizedMessage, name: string, others: boolean, signal: AbortSignal, look?: { glance: boolean; fresh: Set<string>; why?: string }): Promise<JudgeResult> {
-    await orStop(recent.fill(item.place, msg.createTime, (o) => {
+    const reads = await judgeFactRead(withDeadline(Promise.all([orStop(recent.fill(item.place, msg.createTime, (o) => {
       const opts = { ...o, before: msg.createTime, keepSelf: true, names };
       return withDeadline(msg.threadId ? fetchThreadContext(channel, msg.threadId, opts) : fetchChatContext(channel, msg.chatId, opts), LOOKUP_DEADLINE_MS, 'recent-context');
-    }, others), undefined);
-    const title = msg.threadId && topics ? (await topics.list(msg.chatId)).find((t) => t.topicId === msg.threadId)?.title : undefined;
+    }, others), undefined), orStop(withDeadline(roster.load(msg.chatId), LOOKUP_DEADLINE_MS, 'judge-roster').catch(() => undefined), undefined).then(bots => bots ? roster.selection(msg.chatId) : undefined)]), LOOKUP_DEADLINE_MS, 'judge-facts'), signal);
+    const topic = !signal.aborted && msg.threadId && topics ? (await judgeFactRead(orStop(withDeadline(topics.list(msg.chatId), LOOKUP_DEADLINE_MS, 'judge-topic'), undefined), signal))?.find((t) => t.topicId === msg.threadId) : undefined;
+    const title = topic?.title;
     let context = recent.context(item.place, { id: msg.messageId, at: msg.createTime });
     if (look && (look.fresh.size > 1 || look.glance)) context = context.map((l) => l.id && look.fresh.has(l.id) ? { ...l, fresh: true as const } : l);
     const line = lineOfMessage(msg, name, quotedLine(recent, msg), JUDGE_INPUT_LIMITS.messageChars);
+    const botName = channel.botIdentity?.name ?? '';
+    context = context.map((l) => sameNameWord(l.text, botName) ? { ...l, sameNameWord: true as const } : l);
+    if (sameNameWord(bareText(msg), botName)) line.sameNameWord = true;
+    const root = msg.threadId ? recent.get(msg.rootId ?? '') : undefined;
+    const opener = topic?.openedBy;
+    const openedBy = opener?.kind === 'self' ? '你' : opener?.name ?? (opener?.openId ? names.peek(opener.openId) : undefined)
+      ?? (root?.from === 'self' ? '你' : root?.name) ?? (rootKinds.get(item.place) === 'self' ? '你' : undefined);
+    const facts = buildJudgeFacts({
+      lines: recent.lines(item.place), message: line, topic: !!msg.threadId,
+      roster: reads?.[1], self: { openId: channel.botIdentity?.openId, appId: cfg.accounts.app.id },
+      ...(openedBy ? { openedBy } : {}),
+    });
+    const why = item.wake ? '别的 bot @ 了你'
+      : item.signal === 'at-me' ? '真人 @ 了你'
+      : item.signal === 'quote-me' ? (item.quoteBy === 'root' ? '真人回答了你发起的话题根消息' : '真人引用了你的消息')
+      : item.signal === 'name' ? '真人叫了你的完整名字' : look?.why;
     return judge.judge({
+      facts,
       variant: item.variant, appId: cfg.accounts.app.id, botName: channel.botIdentity?.name ?? '',
       group: { chatId: project.chatId, name: project.name, backend: project.backend, judge: project.judge },
       botJudge: cfg.preferences?.judge, ...(title ? { topicTitle: title } : {}),
       context, message: look?.glance ? { ...line, fresh: true as const } : line,
-      ...(look?.why ? { why: look.why } : {}),
+      ...(why ? { why } : {}),
       ref: msg.messageId, signal, ...(item.kind === 'named' ? { timeoutMs: JUDGE_NAMED_TIMEOUT_MS } : {}),
     });
   }
@@ -8496,6 +8537,9 @@ export function createOrchestrator(
   function shutdown(): Promise<void> {
     if (shutdownPromise) return shutdownPromise;
     shuttingDown = true;
+    if (attentionBudgetTimer !== undefined) time.clearTimer(attentionBudgetTimer);
+    attentionBudgetTimer = undefined;
+    attention.observe(() => undefined);
     asks.shutdown();
     // Written at once, before anything is cleared below and long before the Codex processes end or the lock goes.
     droppedReplies?.saveSync(collectLost(), 'shutdown');

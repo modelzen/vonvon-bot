@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { NotReplied } from '@vonvon/protocol';
+import { botDiagnosticsSchema, type NotReplied } from '@vonvon/protocol';
 import { createDiagnosticsStore, errorDetail, NOT_REPLIED_LIMIT, QUIET_LIMIT, parseDiagnosticsIpc, reportNotReplied, reportScopeDenied, setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
 
 const record = (fields: Partial<Omit<NotReplied, 'count'>> = {}): Omit<NotReplied, 'count'> =>
@@ -143,4 +143,23 @@ describe('diagnostics events', () => {
     expect(errorDetail('y'.repeat(300))).toHaveLength(120);
     expect(errorDetail(new Error(''))).toBeUndefined();
   });
+});
+
+it('accepts old snapshots and new bounded IPC, replaces live attention and clears it on restart', () => {
+  expect(botDiagnosticsSchema.safeParse({ notReplied: [], deniedScopes: [] }).success).toBe(true);
+  const store = createDiagnosticsStore({ changed: () => {} });
+  const event: DiagnosticsEvent = { kind: 'attention', groups: [{ groupId: 'oc_a', main: { mode: 'watch', intervalMs: 60000 }, focusedTopics: 1, watchedTopics: 2, budget: { kind: 'no-glance', until: 123 } }] };
+  expect(parseDiagnosticsIpc({ fcb: 'fcb.diagnostics', event })).toEqual(event);
+  expect(parseDiagnosticsIpc({ fcb: 'fcb.diagnostics', event: { ...event, groups: [{ ...event.groups[0], focusedTopics: -1 }] } })).toBeUndefined();
+  store.accept('a', event);
+  store.accept('a', { kind: 'customPrompt', groupId: 'oc_a' });
+  store.accept('a', { kind: 'customPrompt', groupId: 'oc_a' });
+  expect(store.view('a')?.customPromptGroups).toEqual(['oc_a']);
+  expect(botDiagnosticsSchema.safeParse(store.view('a')).success).toBe(true);
+  expect(botDiagnosticsSchema.omit({attention: true, customPromptGroups: true}).parse(store.view('a'))).toEqual({notReplied: [], deniedScopes: []});
+  store.accept('a', { kind: 'attention', groups: [] });
+  expect(store.view('a')?.attention).toEqual([]);
+  store.clearLive('a');
+  expect(store.view('a')).toBeUndefined();
+  store.close();
 });
