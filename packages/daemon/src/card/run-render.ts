@@ -6,6 +6,7 @@ import {
   markInterrupted,
   reduce,
   type RunState,
+  type SubagentRow,
   type Terminal,
   type Usage,
 } from './run-state';
@@ -27,8 +28,16 @@ export class RunRender {
     if (usage && !this.state.usage) this.state = { ...this.state, usage };
   }
 
+  seedSubagents(rows: SubagentRow[]): void {
+    if (!this.state.subagents.length) this.state = { ...this.state, subagents: rows };
+  }
+
+  restoreSubagent(row: SubagentRow): void {
+    if (!this.state.subagents.some(current => current.id === row.id)) this.state = { ...this.state, subagents: [...this.state.subagents, row] };
+  }
+
   apply(ev: AgentEvent): void {
-    this.state = reduce(this.state, ev);
+    this.state = reduce(this.state, ev, Date.now());
     this.freezeClock();
   }
 

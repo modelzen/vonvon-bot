@@ -16,7 +16,7 @@ import { JUDGE_BUDGET, JudgeBudget } from '../src/bot/smart-intake';
 import type { JudgeDeps } from '../src/judge/judge';
 import { localDay } from '../src/judge/usage';
 import type { JudgeRequest, JudgeResult } from '../src/judge/types';
-import { receive, type EventMessage, type ReceiveOpts } from './helpers/lark-events';
+import { throughBridgeChannel, receive, type EventMessage, type ReceiveOpts } from './helpers/lark-events';
 
 vi.mock('../src/config/paths', () => {
   const appDir = mkdtempSync(join(tmpdir(), 'smart-inbound-'));
@@ -44,6 +44,7 @@ const fake = vi.hoisted(() => ({
   /** Holds every session read while set: an intake parked on the disk. */
   hold: undefined as Promise<void> | undefined,
   send: vi.fn(async () => ({ messageId: 'om_sent' })),
+  cardCreate: vi.fn(async () => ({ code: 0, data: { card_id: 'card_help' } })),
   get: vi.fn(async (_req: { path: { message_id: string } }) =>
     ({ code: 0, data: { items: [{ thread_id: 'omt_opened' }] as Array<Record<string, unknown>> } })),
   list: vi.fn(),
@@ -119,7 +120,7 @@ const base = { name: 'demo', chatId: CHAT, cwd: '/tmp/demo', kind: 'single', sma
 const cfg: AppConfig & { preferences: NonNullable<AppConfig["preferences"]> } = { accounts: { app: { id: APP, secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, completionReminder: { mode: 'manual' } } };
 const channel = {
   send: fake.send, botIdentity: BOT,
-  rawClient: { appId: APP, request: fake.request, im: { v1: {
+  rawClient: { appId: APP, request: fake.request, cardkit: { v1: { card: { create: fake.cardCreate } } }, im: { v1: {
     chatMembers: { get: fake.members },
     messageReaction: { create: fake.react, delete: fake.unreact },
     message: { reply: fake.reply, get: fake.get, list: fake.list, delete: fake.del },
@@ -131,14 +132,17 @@ const channel = {
 let sequence = 0;
 let clock = Date.now();
 /** A group message from the owner: `at` @-mentions this bot, `thread` puts it in a topic. */
-function says(text: string, o: { at?: boolean; thread?: string } = {}): EventMessage {
+function says(text: string, o: { at?: boolean; thread?: string; all?: boolean; mentionOther?: { openId: string; name: string }; parent?: string; root?: string } = {}): EventMessage {
   const id = `om_smart_${++sequence}`;
   const time = String(clock += 1000);
   return {
     message_id: id, create_time: time, update_time: time, chat_id: CHAT, chat_type: 'group', message_type: 'text',
-    content: JSON.stringify({ text: o.at ? `@_user_1 ${text}` : text }),
+    content: JSON.stringify({ text: o.at ? `@_user_1 ${text}` : o.all ? `@_all ${text}` : o.mentionOther ? `@_user_2 ${text}` : text }),
     ...(o.at ? { mentions: [{ key: '@_user_1', id: { open_id: BOT.openId, union_id: 'on_bot' }, name: BOT.name, tenant_key: 't' }] } : {}),
+    ...(o.all ? { mentions: [{ key: '@_all', id: { open_id: 'all' }, name: '所有人' }] } : {}),
+    ...(o.mentionOther ? { mentions: [{ key: '@_user_2', id: { open_id: o.mentionOther.openId }, name: o.mentionOther.name }] } : {}),
     ...(o.thread ? { thread_id: o.thread, root_id: 'om_root', parent_id: 'om_root' } : {}),
+    ...(o.parent ? { parent_id: o.parent } : {}), ...(o.root ? { root_id: o.root } : {}),
   };
 }
 const idOf = (m: EventMessage) => String(m.message_id);
@@ -196,7 +200,7 @@ beforeEach(() => {
   fake.judge.mockImplementation((req: JudgeRequest) => {
     const answer = deferred<JudgeResult>();
     asked.set(req.ref!, { req, answer });
-    const abort = () => answer.resolve(result(req.variant === 'mentioned' ? 'main' : 'skip', { error: { kind: 'aborted' } }));
+    const abort = () => answer.resolve(result('skip', { error: { kind: 'aborted' } }));
     if (req.signal?.aborted) abort(); else req.signal?.addEventListener('abort', abort);
     return answer.promise;
   });
@@ -210,10 +214,11 @@ describe('smart mode intake (s25)', () => {
     const chatter = says('这个报错是不是缓存的问题');
     await send(chatter); // returns while the judgement runs
     expect((await judged(chatter)).req.variant).toBe('main');
-    await send(says('帮我看下日志', { at: true, thread: 'omt_t' }));
+    const named = says('帮我看下日志', { at: true, thread: 'omt_t' });
+    await send(named); await decide(named, result('reply'));
     await vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
     expect(fake.inputs[0]).toContain('帮我看下日志');
-    expect(asked.size).toBe(1);
+    expect(asked.size).toBe(2);
   });
 
   it('notes a skip with the reason and a failure with its detail, on the page only', async () => {
@@ -242,10 +247,11 @@ describe('smart mode intake (s25)', () => {
     expect(fake.inputs[0]).not.toContain('SECRET_REASON_FIXTURE');
   });
 
-  it('judges a named message only for where, marks it seen meanwhile, and answers it without the initiative line', async () => {
+  it('judges a named message with main and a 12 s timeout, THINKING meanwhile, without the initiative line', async () => {
     const m = says('看下这个', { at: true });
     await send(m);
-    expect((await judged(m)).req.variant).toBe('mentioned');
+    expect((await judged(m)).req.variant).toBe('main');
+    expect((await judged(m)).req.timeoutMs).toBe(12_000);
     await vi.waitFor(() => expect(fake.react).toHaveBeenCalledWith({ path: { message_id: idOf(m) }, data: { reaction_type: { emoji_type: 'THINKING' } } }));
     await decide(m, result('main'));
     await vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
@@ -359,14 +365,14 @@ describe('smart mode intake (s25)', () => {
     fake.judge.mockImplementationOnce(judgeNamed);
     const named = says('请回答', { at: true });
     await send(named);
-    expect((await judged(named)).req.variant).toBe('mentioned');
+    expect((await judged(named)).req.variant).toBe('main');
     expect(fake.judge).toHaveBeenCalledTimes(JUDGE_BUDGET + 1);
     await decide(named, result('main'));
     await vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
     fake.judge.mockImplementationOnce(judgeNamed);
     const next = says('再请回答', { at: true });
     await send(next);
-    expect((await judged(next)).req.variant).toBe('mentioned');
+    expect((await judged(next)).req.variant).toBe('main');
     expect(fake.judge).toHaveBeenCalledTimes(JUDGE_BUDGET + 2);
     await decide(next, result('main'));
   });
@@ -416,45 +422,7 @@ describe('smart mode intake (s25)', () => {
 });
 
 describe('smart mode: one person in a topic, the anchor, the empty card (s25b)', () => {
-  const owner = { id: 'ou_owner', id_type: 'open_id', sender_type: 'user' };
-  const me = { id: APP, id_type: 'app_id', sender_type: 'app', open_bot_id: BOT.openId };
-  /** A topic page newest first; `more` says another page follows. */
-  const page = (senders: object[], more = false) => ({ code: 0, data: { items: senders.map((sender, i) => ({ message_id: `om_p${i}`, msg_type: 'text', sender })), has_more: more, ...(more ? { page_token: 'p2' } : {}) } });
-  /** Only the topic scan lists without sender names. */
-  const scans = () => fake.list.mock.calls.filter(([r]) => (r as { params: { with_sender_name?: boolean } }).params.with_sender_name === undefined);
   const answered = () => vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
-
-  it('answers unjudged, outside the budget, where only the sender talks with this bot', async () => {
-    const take = vi.spyOn(JudgeBudget.prototype, 'take');
-    fake.list.mockImplementation(async () => page([owner, me, owner]));
-    await send(says('接着说', { thread: 'omt_t' }));
-    await answered();
-    expect(fake.judge).not.toHaveBeenCalled();
-    expect(take).not.toHaveBeenCalled();
-    expect(fake.log.info).toHaveBeenCalledWith('intake', 'judge-solo', expect.anything());
-    expect(fake.inputs[0]).not.toContain(INITIATIVE_NOTE);
-    take.mockRestore();
-  });
-
-  it('judges when someone else spoke there, or a later page failed', async () => {
-    fake.list.mockImplementation(async () => page([owner, me, { ...owner, id: 'ou_other' }]));
-    const second = says('接着说', { thread: 'omt_t' });
-    await send(second);
-    await judged(second);
-    fake.list.mockImplementation(async ({ params }: { params: { page_token?: string } }) => params.page_token ? { code: 230002, msg: 'x' } : page([owner, me], true));
-    const failed = says('还在吗', { thread: 'omt_u' });
-    await send(failed);
-    await judged(failed);
-  });
-
-  it('with other bots, 三条底线 and the judgement read the topic once', async () => {
-    fake.bots = '2';
-    fake.list.mockImplementation(async () => page([owner, me]));
-    await send(says('接着说', { thread: 'omt_t' }));
-    await answered();
-    expect(scans()).toHaveLength(1);
-    expect(fake.judge).not.toHaveBeenCalled();
-  });
 
   it('opens the topic under the earlier line the judgement names', async () => {
     const asked = says('导出接口 500 有人看吗？');
@@ -483,7 +451,7 @@ describe('smart mode: one person in a topic, the anchor, the empty card (s25b)',
     // Says nothing to this bot (it names another), but is a line of the ring.
     const named = says('@_user_2 你看下');
     named.mentions = [{ key: '@_user_2', id: { open_id: 'ou_x', union_id: 'on_x' }, name: '小审', tenant_key: 't' }];
-    await send(named);
+    await send(named); await decide(named, result('skip')); await settle();
     const [first, third] = [says('顺便说一下是生产环境'), says('还有一件事')];
     const cases: Array<[EventMessage, string]> = [
       [first, idOf(threaded)],
@@ -647,7 +615,13 @@ describe('smart mode: one person in a topic, the anchor, the empty card (s25b)',
   });
 });
 
+function replyToHumanTopics() {
+  const judge = fake.judge.getMockImplementation()!;
+  fake.judge.mockImplementation((req: JudgeRequest) => req.variant === 'topic' && req.message.from === 'user' && req.message.named ? Promise.resolve(result('reply')) : judge(req));
+}
+
 describe('bot wakes (s27a)', () => {
+  beforeEach(replyToHumanTopics);
   const other = { id: 'cli_other', id_type: 'app_id', sender_type: 'app', open_bot_id: 'ou_other', sender_name: '小P' };
   const owner = { id: 'ou_owner', id_type: 'open_id', sender_type: 'user' };
   const item = (m: EventMessage, sender: object = other, extra: object = {}) => ({
@@ -977,6 +951,7 @@ describe('bot wakes (s27a)', () => {
 
 // Separate describe keeps the shared fixture while exercising sender and lifecycle fallbacks.
 describe('bot wake fallbacks and queued turns (s27a)', () => {
+  beforeEach(replyToHumanTopics);
   const memento = (m: EventMessage, sender: object = { sender_type: 'app', id: 'cli_other', open_bot_id: 'ou_other', sender_name: '小P' }) => ({
     message_id: idOf(m), create_time: m.create_time, msg_type: m.message_type, body: { content: m.content }, sender,
     mentions: [{ id: BOT.openId, id_type: 'open_id', key: '@_user_1', name: BOT.name }],
@@ -1403,7 +1378,7 @@ describe('attention (s25g)', () => {
   });
   it('50. a named topic opening leaves pending main messages and rearms them in focus', async () => {
     const a = says('WAIT_FOR_TOPIC'); await send(a); expect(timers.size).toBe(1);
-    const n = says('请开一个话题', { at: true }); await send(n); expect((await judged(n)).req.variant).toBe('mentioned');
+    const n = says('请开一个话题', { at: true }); await send(n); expect((await judged(n)).req.variant).toBe('main');
     expect(asked.has(idOf(a))).toBe(false); await decide(n, result('topic'));
     await vi.waitFor(() => expect(fake.inputs).toHaveLength(1)); await settle();
     expect((await judged(a)).req.message.fresh).toBeUndefined(); expect(logged('lane-pruned')).toEqual([]);
@@ -1550,8 +1525,8 @@ describe('attention (s25g)', () => {
   });
   it('64. a direct topic mention prunes pending work and focuses the topic', async () => {
     const a = says('TOPIC_PENDING', { thread: 'omt_t' }); await send(a);
-    const n = says('TOPIC_NAMED', { at: true, thread: 'omt_t' }); await send(n);
-    await vi.waitFor(() => expect(fake.inputs).toHaveLength(1)); expect(fake.judge).not.toHaveBeenCalled();
+    const n = says('TOPIC_NAMED', { at: true, thread: 'omt_t' }); await send(n); await decide(n, result('reply'));
+    await vi.waitFor(() => expect(fake.inputs).toHaveLength(1)); expect(fake.judge).toHaveBeenCalledTimes(1);
     expect(logged('lane-pruned')).toContainEqual(expect.objectContaining({ n: 1 }));
     const b = says('TOPIC_AFTER', { thread: 'omt_t' }); await send(b); await settle(); await judged(b);
     expect(logged('attention')).toContainEqual(expect.objectContaining({ kind: 'focus', place: 'topic' }));
@@ -1566,6 +1541,7 @@ describe('attention (s25g)', () => {
 });
 
 describe('bot handoffs (s27b)', () => {
+  beforeEach(replyToHumanTopics);
   const bots = [{ app_id: 'cli_other', member_id: 'ou_other', name: '小P' }, { app_id: 'cli_审', member_id: 'ou_审', name: '小审' }];
   const answers = (text: string) => { fake.events = async function* () { yield { type: 'text', itemId: 'a', text }; yield { type: 'done', turnId: 'turn-fixture' }; }; };
   const replies = (type = 'text') => fake.reply.mock.calls.map(([req]) => req).filter(req => req.data.msg_type === type);
@@ -1719,6 +1695,7 @@ describe('bot handoffs (s27b)', () => {
 });
 
 describe('people @ and brakes (s27b2)', () => {
+  beforeEach(replyToHumanTopics);
   const bots = [{ app_id: 'cli_other', member_id: 'ou_other', name: '小P' }, { app_id: 'cli_审', member_id: 'ou_审', name: '小审' }];
   const people = [{ member_id: 'ou_owner', name: '王五' }, { member_id: 'ou_张', name: '张三' }, { member_id: 'ou_张丰', name: '张三丰' }, { member_id: 'ou_李', name: '李四' }];
   const page = (items = people, has_more = false) => ({ code: 0, data: { items, has_more, ...(has_more ? { page_token: 'p2' } : {}) } });
@@ -1863,9 +1840,243 @@ describe('people @ and brakes (s27b2)', () => {
 
 });
 
+describe('no rules at the smart entry (s25e)', () => {
+  const other = { openId: 'ou_other', name: '张三' };
+  const noted = (reason: string) => records().filter(r => r.reason === reason);
+  const logged = (event: string) => fake.log.info.mock.calls.filter(([, e]) => e === event).map(([, , fields]) => fields);
+  const meta = (self: boolean) => ({ code: 0, data: { items: [{ create_time: '1', sender: self ? { id: APP, id_type: 'app_id', sender_type: 'app', open_bot_id: BOT.openId } : { id: 'ou_zhang', id_type: 'open_id', sender_type: 'user' } }] } });
+  async function ask(m: EventMessage) { await throughBridgeChannel(await receive(m, { bot: BOT }), orchestrator.onMessage); return (await judged(m)).req; }
+  const answered = (n = 1) => vi.waitFor(() => expect(fake.inputs).toHaveLength(n));
+
+  it('13: everyone mentions enter judgement and keep their visible name', async () => {
+    const m = says('明天十点开会', { all: true });
+    const req = await ask(m);
+    expect(req.variant).toBe('main');
+    expect(req.message.mentions).toContain('所有人');
+    expect(req.message.named).toBe(true);
+    await decide(m, result('skip')); await settle();
+    expect(noted('judge-skip')).toHaveLength(1);
+  });
+  it('SDK entry leaves @all without @thisBot silent in rules mode', async () => {
+    fake.project = { ...base, smart: false };
+    const m = says('请大家看一下', { all: true });
+    await throughBridgeChannel(await receive(m, { bot: BOT }), orchestrator.onMessage);
+    await settle();
+    expect(fake.judge).not.toHaveBeenCalled();
+    expect(fake.inputs).toEqual([]);
+    expect(fake.reply).not.toHaveBeenCalled();
+    expect(fake.send).not.toHaveBeenCalled();
+  });
+  it('14: mentions of other people enter judgement as initiative', async () => {
+    const m = says('你看下', { mentionOther: { openId: 'ou_x', name: '小审' } });
+    expect((await ask(m)).message.mentions).toEqual(['小审']);
+    await decide(m, result('main')); await answered();
+    expect(fake.inputs[0]).toContain(INITIATIVE_NOTE);
+  });
+  it('15: resolves missing quotes, trusts the ring, and treats missing metadata as ordinary', async () => {
+    fake.bots = '2';
+    fake.get.mockResolvedValueOnce(meta(false));
+    const q1 = says('这个呢', { parent: 'om_q1' });
+    expect((await ask(q1)).timeoutMs).toBeUndefined();
+    expect(noted('lookup-failed')).toEqual([]);
+    await decide(q1, result('skip')); await settle();
+    fake.get.mockResolvedValueOnce(meta(true));
+    const q2 = says('那这个', { parent: 'om_q2' });
+    const req = await ask(q2);
+    expect(req.variant).toBe('main'); expect(req.timeoutMs).toBe(12_000);
+    expect(fake.react).toHaveBeenCalledWith({ path: { message_id: idOf(q2) }, data: { reaction_type: { emoji_type: 'THINKING' } } });
+    expect(logged('salience')).toContainEqual(expect.objectContaining({ kind: 'quote-me', by: 'quote' }));
+    await decide(q2, result('skip', { reason: '知悉' })); await settle();
+    expect(fake.unreact).toHaveBeenCalled(); expect(fake.inputs).toEqual([]); expect(fake.send).not.toHaveBeenCalled();
+    expect(noted('judge-skip').filter(r => r.detail === '知悉')).toHaveLength(1);
+    fake.get.mockResolvedValueOnce({ code: 230002, data: { items: [] } });
+    const q3 = says('还有', { parent: 'om_q3' });
+    expect((await ask(q3)).timeoutMs).toBeUndefined();
+    expect(noted('lookup-failed')).toEqual([]);
+    await decide(q3, result('skip')); await settle();
+    const a = says('问题'); await ask(a); await decide(a, result('skip')); await settle();
+    const getsBeforeQuote = fake.get.mock.calls.filter(([r]) => r.path.message_id === idOf(a)).length;
+    const b = says('补充', { parent: idOf(a) }); await ask(b);
+    expect(fake.get.mock.calls.filter(([r]) => r.path.message_id === idOf(a))).toHaveLength(getsBeforeQuote);
+  });
+  it('16: named timeouts answer without initiative or failure diagnostics and remove THINKING', async () => {
+    const m = says('看下', { at: true }); await ask(m);
+    await decide(m, result('skip', { error: { kind: 'timeout' } })); await answered();
+    expect(fake.inputs[0]).not.toContain(INITIATIVE_NOTE); expect(noted('judge-failed')).toEqual([]);
+    expect(logged('judge-fallback')).toContainEqual(expect.objectContaining({ why: 'named', error: 'timeout' }));
+    expect(fake.unreact).toHaveBeenCalled();
+  });
+  it('17: topic mentions are judged with 12 seconds and may reply or silently skip', async () => {
+    const m = says('看下', { at: true, thread: 'omt_t' });
+    const req = await ask(m); expect(req.variant).toBe('topic'); expect(req.timeoutMs).toBe(12_000);
+    await decide(m, result('reply')); await answered();
+    expect(fake.cards[0]![3]).toMatchObject({ replyInThread: true });
+    const skipped = says('还有', { at: true, thread: 'omt_t' }); await ask(skipped);
+    await decide(skipped, result('skip')); await settle();
+    expect(fake.inputs).toHaveLength(1); expect(noted('judge-skip')).toHaveLength(1); expect(fake.unreact).toHaveBeenCalled();
+  });
+  it('18: one-person topics are judged and budgeted, falling back only until another person speaks', async () => {
+    const take = vi.spyOn(JudgeBudget.prototype, 'take');
+    try {
+      const a = says('接着说', { thread: 'omt_s' }); await ask(a);
+      await decide(a, result('reply')); await answered(); await settle();
+      const b = says('再问一句', { thread: 'omt_s' }); await ask(b);
+      await decide(b, result('skip', { error: { kind: 'failed', detail: 'boom' } })); await answered(2); await settle();
+      expect(noted('judge-failed')).toEqual([]);
+      expect(logged('judge-fallback')).toContainEqual(expect.objectContaining({ why: 'solo' }));
+      const c = says('我也问', { thread: 'omt_s' }); await send(c, other); await judged(c);
+      await decide(c, result('skip')); await settle();
+      const d = says('呢', { thread: 'omt_s' }); await ask(d);
+      await decide(d, result('skip', { error: { kind: 'failed' } })); await settle();
+      expect(fake.inputs).toHaveLength(2); expect(noted('judge-failed')).toHaveLength(1);
+      expect(take).toHaveBeenCalledTimes(4);
+      expect(take.mock.calls.map(([, , kind]) => kind)).toEqual(['focus', 'focus', 'focus', 'focus']);
+    } finally { take.mockRestore(); }
+  });
+  it('19: names use their budget, without THINKING, initiative, or error fallback', async () => {
+    const take = vi.spyOn(JudgeBudget.prototype, 'take');
+    try {
+      const m = says('小码 看下 128'); const req = await ask(m);
+      expect(req.variant).toBe('main'); expect(req.timeoutMs).toBeUndefined();
+      expect(fake.react).not.toHaveBeenCalled(); expect(take.mock.calls.at(-1)?.[2]).toBe('name');
+      expect(logged('salience')).toContainEqual(expect.objectContaining({ kind: 'name' }));
+      await decide(m, result('main')); await answered(); await settle(); expect(fake.inputs[0]).not.toContain(INITIATIVE_NOTE);
+      const skipped = says('小码 第三人称'); await ask(skipped); await decide(skipped, result('skip', { reason: '第三人称' })); await settle();
+      expect(noted('judge-skip')).toHaveLength(1);
+      const failed = says('小码 看下'); await ask(failed); await decide(failed, result('skip', { error: { kind: 'timeout' } })); await settle();
+      expect(fake.inputs).toHaveLength(1); expect(noted('judge-failed')).toHaveLength(1); expect(logged('judge-fallback')).toEqual([]);
+    } finally { take.mockRestore(); }
+  });
+  it('20: an exhausted name budget records one unaggregated refusal without freezing attention', async () => {
+    const take = vi.spyOn(JudgeBudget.prototype, 'take').mockReturnValueOnce(false);
+    try {
+      await send(says('小码 在吗')); await settle();
+      expect(fake.judge).not.toHaveBeenCalled(); expect(noted('judge-budget')).toHaveLength(1);
+      expect(events.find(e => e.kind === 'notReplied' && e.record.reason === 'judge-budget')).not.toHaveProperty('times');
+      expect(logged('attention-freeze')).toEqual([]);
+    } finally { take.mockRestore(); }
+  });
+  it('21: named topic proposals open under the triggering message rather than the anchor', async () => {
+    const e = says('早'); await ask(e); await decide(e, result('skip')); await settle();
+    fake.get.mockResolvedValue(meta(false)); // The earlier line is a valid, unthreaded anchor.
+    const m = says('小码 这个500看下'); await ask(m); await decide(m, result('topic', { anchor: idOf(e) })); await answered();
+    expect(fake.cards[0]![3]).toMatchObject({ replyTo: idOf(m) });
+  });
+  it('22: partial names remain chat, full names use name budget, and common names have no salience', async () => {
+    const take = vi.spyOn(JudgeBudget.prototype, 'take');
+    try {
+      for (const name of ['小码助手', 'AI']) {
+        await orchestrator.shutdown();
+        const bot = { ...BOT, name };
+        orchestrator = createOrchestrator({ ...channel, botIdentity: bot } as never, cfg, '/tmp/demo', undefined, { attention: new FocusEverywhere() });
+        fake.log.info.mockClear();
+        const m = says(name === 'AI' ? 'AI 看下' : '小码 看下');
+        await orchestrator.onMessage(await receive(m, { bot }));
+        expect((await judged(m)).req.message.fresh).toBeUndefined(); expect(take.mock.calls.at(-1)?.[2]).toBe('focus');
+        expect(logged('name-partial')).toHaveLength(name === 'AI' ? 0 : 1);
+        expect(logged('salience')).toEqual([]);
+        await decide(m, result('skip')); await settle();
+        if (name !== 'AI') {
+          const full = says('小码助手 看下'); await orchestrator.onMessage(await receive(full, { bot })); await judged(full);
+          expect(take.mock.calls.at(-1)?.[2]).toBe('name'); await decide(full, result('skip')); await settle();
+        }
+      }
+    } finally { take.mockRestore(); }
+  });
+  it('23: commands need an at in multi-bot main areas, while a lone bot still serves help', async () => {
+    fake.bots = '2'; await send(says('/help')); await settle();
+    expect(fake.judge).not.toHaveBeenCalled(); expect(fake.send).not.toHaveBeenCalled();
+    expect(logged('audience')).toContainEqual(expect.objectContaining({ by: 'command-needs-at' }));
+    fake.bots = '1'; await orchestrator.shutdown();
+    orchestrator = createOrchestrator(channel as never, cfg, '/tmp/demo', undefined, { attention: new FocusEverywhere() });
+    await send(says('/help')); await settle();
+    expect(fake.cardCreate).toHaveBeenCalledTimes(1);
+    expect(fake.reply).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ msg_type: 'interactive' }) }));
+  });
+  it('24: recalled named messages never fall back or leave a refusal', async () => {
+    const m = says('看下', { at: true }); await ask(m);
+    await orchestrator.onRecall({ messageId: idOf(m), chatId: CHAT }); await settle();
+    expect(fake.inputs).toEqual([]); expect(records()).toEqual([]); expect(logged('judge-fallback')).toEqual([]);
+  });
+  it('25: salience, partial-name, fallback and budget logs contain no text, name, or full message id', async () => {
+    fake.get.mockResolvedValueOnce(meta(true));
+    const quote = says('看下', { parent: 'om_q1' }); await ask(quote); await decide(quote, result('skip')); await settle();
+    const named = says('看下', { at: true }); await ask(named); await decide(named, result('skip', { error: { kind: 'timeout' } })); await answered(); await settle();
+    const name = says('小码 看下'); await ask(name); await decide(name, result('skip')); await settle();
+    const entries = ['salience', 'name-partial', 'judge-fallback', 'judge-budget'].flatMap(logged);
+    expect(entries.length).toBeGreaterThan(0);
+    const text = JSON.stringify(entries);
+    for (const secret of ['小码', '小审', '看下', idOf(quote), idOf(named), idOf(name)]) expect(text).not.toContain(secret);
+  });
+
+  it('root cache: successful lookups are reused, failures retry, and the oldest of 201 roots is evicted', async () => {
+    const lookupCount = (id: string) => fake.get.mock.calls.filter(([r]) => r.path.message_id === id).length;
+    fake.get.mockResolvedValue(meta(true));
+    const first = says('继续', { thread: 'omt_cached', root: 'om_cached', parent: 'om_cached' });
+    expect((await ask(first)).timeoutMs).toBe(12_000); await decide(first, result('skip')); await settle();
+    const second = says('继续问', { thread: 'omt_cached', root: 'om_cached', parent: 'om_cached' });
+    expect((await ask(second)).timeoutMs).toBe(12_000); await decide(second, result('skip')); await settle();
+    expect(lookupCount('om_cached')).toBe(1);
+    fake.get.mockResolvedValueOnce({ code: 230002, data: { items: [] } });
+    const failed = says('还在吗', { thread: 'omt_retry', root: 'om_retry', parent: 'om_retry' });
+    expect((await ask(failed)).timeoutMs).toBeUndefined(); await decide(failed, result('skip')); await settle();
+    const retry = says('再问', { thread: 'omt_retry', root: 'om_retry', parent: 'om_retry' });
+    expect((await ask(retry)).timeoutMs).toBe(12_000); await decide(retry, result('skip')); await settle();
+    expect(lookupCount('om_retry')).toBe(2);
+    for (let i = 0; i < 199; i++) {
+      const m = says('继续', { thread: `omt_cache_${i}`, root: `om_cache_${i}`, parent: `om_cache_${i}` });
+      await ask(m); await decide(m, result('skip')); await settle();
+    }
+    const evicted = says('再继续', { thread: 'omt_cached', root: 'om_cached', parent: 'om_cached' });
+    expect((await ask(evicted)).timeoutMs).toBe(12_000);
+    expect(lookupCount('om_cached')).toBe(2);
+  }, 30_000);
+
+  it('quote lookup deadlines admit ordinary messages after three seconds without lookup-failed diagnostics', async () => {
+    fake.get.mockImplementationOnce(() => new Promise(() => {}));
+    const m = says('继续', { parent: 'om_hung' });
+    const started = Date.now();
+    expect((await ask(m)).timeoutMs).toBeUndefined();
+    expect(Date.now() - started).toBeGreaterThanOrEqual(2_900);
+    expect(noted('lookup-failed')).toEqual([]);
+    expect(fake.log.warn.mock.calls.filter(([, event]) => event === 'quote-lookup-failed')).toHaveLength(1);
+    await decide(m, result('skip')); await settle();
+    expect(fake.inputs).toEqual([]);
+  }, 10_000);
+  it('a newer named fallback supersedes the earlier chat judgement so only one turn starts', async () => {
+    const chat = says('再补一句'); await ask(chat);
+    const named = says('看下', { at: true }); await ask(named);
+    await decide(named, result('skip', { error: { kind: 'timeout' } })); await answered(); await settle();
+    await decide(chat, result('main')); await settle();
+    expect(startThread).toHaveBeenCalledTimes(1);
+    expect(fake.inputs).toHaveLength(1); expect(fake.inputs[0]).not.toContain(INITIATIVE_NOTE);
+    expect(noted('judge-failed')).toEqual([]);
+  });
+
+  it.each(['at', 'quote', 'fallback'] as const)('36—38: %s judgement is discarded after switching to rules', async kind => {
+    if (kind === 'quote') fake.get.mockResolvedValueOnce(meta(true));
+    const m = says('看下', kind === 'quote' ? { parent: 'om_q2' } : { at: true }); await ask(m);
+    fake.project = { ...base, smart: false };
+    await decide(m, kind === 'fallback' ? result('skip', { error: { kind: 'timeout' } }) : result('main')); await settle();
+    expect(fake.inputs).toEqual([]); expect(fake.cards).toEqual([]); expect(noted('group-updating')).toHaveLength(1);
+    expect(fake.unreact).toHaveBeenCalled(); expect(noted('judge-failed')).toEqual([]);
+    if (kind === 'fallback') expect(logged('judge-fallback')).toContainEqual(expect.objectContaining({ why: 'named' }));
+    if (kind === 'at') {
+      const count = fake.judge.mock.calls.length;
+      await send(says('再看下', { at: true })); await answered(); expect(fake.judge).toHaveBeenCalledTimes(count);
+    }
+  });
+});
 
 describe('smart reminder runtime (s27b3)', () => {
   beforeEach(() => {
+    // Reminder cases exercise a turn the smart judge has chosen to answer.
+    fake.judge.mockImplementation((req: JudgeRequest) => {
+      const answer = deferred<JudgeResult>();
+      answer.resolve(result('reply'));
+      asked.set(req.ref!, { req, answer });
+      return answer.promise;
+    });
     vi.spyOn(sessionStore, 'listSessions').mockResolvedValue(['omt_snapshot', 'omt_stale', 'omt_goal_reminder', 'omt_slot_a', 'omt_slot_b', 'omt_denied'].map(threadId => ({ threadId, chatId: CHAT, cwd: '/tmp/demo', sessionId: 'native-fixture', backend: 'codex-appserver', summary: 'test', createdAt: 0, updatedAt: 0 })));
   });
   afterEach(() => vi.mocked(sessionStore.listSessions).mockRestore());

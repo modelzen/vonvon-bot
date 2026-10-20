@@ -78,9 +78,13 @@ export interface SubagentRow {
   steps: Array<{ stepId: string; title: string; status: 'running' | 'done' | 'failed' }>;
   result?: string;
   stoppable: boolean;
+  stepCount: number;
+  startedAt: number;
+  endedAt?: number;
 }
 
 export interface RunState {
+  awaitingSubagents?: true;
   subagents: SubagentRow[];
   startedAt?: number;
   completedAt?: number;
@@ -156,7 +160,7 @@ function upsertReasoning(items: ReasoningItem[], id: string, mutate: (prev: stri
 }
 
 /** Fold one normalized AgentEvent into the run state (pure). */
-export function reduce(state: RunState, evt: AgentEvent): RunState {
+export function reduce(state: RunState, evt: AgentEvent, now = Date.now()): RunState {
   switch (evt.type) {
     case 'text_delta':
       return {
@@ -243,12 +247,9 @@ export function reduce(state: RunState, evt: AgentEvent): RunState {
     case 'subagent_start': {
       const rows = state.subagents ?? [];
       if (rows.some(row => row.id === evt.id)) return state;
-      const oldest = rows.findIndex(row => row.status !== 'running');
-      if (rows.length >= 64 && oldest < 0) return state;
-      const kept = rows.length >= 64 ? rows.filter((_, i) => i !== oldest) : rows;
       const row: SubagentRow = { id: evt.id, parentId: evt.parentId, name: evt.name,
-        task: evt.task.slice(0, 120), status: 'running', steps: [], stoppable: evt.stoppable };
-      return { ...state, subagents: [...kept, row] };
+        task: evt.task.slice(0, 120), status: 'running', steps: [], stepCount: 0, startedAt: now, stoppable: evt.stoppable };
+      return { ...state, subagents: [...rows, row] };
     }
 
     case 'subagent_step':
@@ -256,7 +257,7 @@ export function reduce(state: RunState, evt: AgentEvent): RunState {
         if (row.id !== evt.id) return row;
         if (evt.status === 'running') {
           if (row.steps.some(step => step.stepId === evt.stepId)) return row;
-          return { ...row, steps: [...row.steps, { stepId: evt.stepId, title: evt.title,
+          return { ...row, stepCount: row.stepCount + 1, steps: [...row.steps, { stepId: evt.stepId, title: evt.title,
             status: evt.status }].slice(-5) };
         }
         return { ...row, steps: row.steps.map(step => step.stepId === evt.stepId
@@ -266,9 +267,12 @@ export function reduce(state: RunState, evt: AgentEvent): RunState {
     case 'subagent_status':
       return { ...state, subagents: (state.subagents ?? []).map(row => {
         if (row.id !== evt.id || row.status === 'stopped' || row.status === 'failed') return row;
-        if (evt.status === 'running') return row.status === 'completed' ? { ...row, status: evt.status } : row;
-        return { ...row, status: evt.status, result: evt.result?.slice(0, 600) };
+        if (evt.status === 'running') return row.status === 'completed' ? { ...row, status: evt.status, endedAt: undefined } : row;
+        return { ...row, status: evt.status, endedAt: row.endedAt ?? now, result: evt.result?.slice(0, 600) };
       }) };
+
+    case 'awaiting_subagents':
+      return { ...state, awaitingSubagents: true, footer: null };
 
     case 'context_usage': {
       const usage = { used: evt.usedTokens, window: evt.contextWindow };
@@ -289,7 +293,7 @@ export function reduce(state: RunState, evt: AgentEvent): RunState {
       return {
         ...state,
         terminal: 'error',
-        subagents: closeSubagents(state, 'failed'),
+        subagents: closeSubagents(state, 'failed', now),
         errorMsg: evt.message,
         errorKind: evt.kind ?? errorKindFromText(evt.message),
         footer: null,
@@ -411,41 +415,41 @@ function noteUsage(blocks: Block[], usage: Usage): Block[] {
   return blocks;
 }
 
-function closeSubagents(state: RunState, status: 'stopped' | 'failed'): SubagentRow[] {
-  return (state.subagents ?? []).map(row => row.status === 'running' ? { ...row, status } : row);
+function closeSubagents(state: RunState, status: 'stopped' | 'failed', now: number): SubagentRow[] {
+  return (state.subagents ?? []).map(row => row.status === 'running' ? { ...row, status, endedAt: row.endedAt ?? now } : row);
 }
 
-export function markInterrupted(state: RunState): RunState {
+export function markInterrupted(state: RunState, now = Date.now()): RunState {
   return {
     ...state,
     blocks: closeStreamingText(state.blocks),
     reasoningActive: false,
     terminal: 'interrupted',
-    subagents: closeSubagents(state, 'stopped'),
+    subagents: closeSubagents(state, 'stopped', now),
     footer: null,
   };
 }
 
-export function markIdleTimeout(state: RunState, seconds: number): RunState {
+export function markIdleTimeout(state: RunState, seconds: number, now = Date.now()): RunState {
   return {
     ...state,
     blocks: closeStreamingText(state.blocks),
     reasoningActive: false,
     terminal: 'idle_timeout',
-    subagents: closeSubagents(state, 'stopped'),
+    subagents: closeSubagents(state, 'stopped', now),
     footer: null,
     idleTimeoutSeconds: seconds,
   };
 }
 
-export function finalizeIfRunning(state: RunState): RunState {
+export function finalizeIfRunning(state: RunState, now = Date.now()): RunState {
   if (state.terminal !== 'running') return state;
   return {
     ...state,
     blocks: closeStreamingText(state.blocks),
     reasoningActive: false,
     terminal: 'done',
-    subagents: closeSubagents(state, 'failed'),
+    subagents: closeSubagents(state, 'failed', now),
     footer: null,
   };
 }

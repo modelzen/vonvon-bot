@@ -95,7 +95,7 @@ const ABORT_ESCALATE_MS = 4_000;
 
 type TurnItem =
   | { kind: 'msg'; msg: SDKMessage }
-  | { kind: 'ask'; request: AskRequest }
+  | { kind: 'ask'; request: AskRequest; subagentId?: string }
   | { kind: 'ask_cancelled'; requestId: string }
   | { kind: 'end' }
   | { kind: 'error'; err: unknown };
@@ -377,7 +377,7 @@ export class ClaudeAgentThread implements AgentThread {
           settle: (result) => { signal.removeEventListener('abort', abort); resolve(result); },
         });
         signal.addEventListener('abort', abort, { once: true });
-        askSink({ kind: 'ask', request: bridged.request });
+        askSink({ kind: 'ask', request: bridged.request, subagentId: extra.agentID });
       });
     } catch {
       log.fail('agent', new Error('权限检查出错'), { phase: 'claude-perm' });
@@ -484,7 +484,7 @@ export class ClaudeAgentThread implements AgentThread {
             yield { type: 'error', message: msg || 'Claude 会话出错', willRetry: false };
             return;
           }
-          if (item.kind === 'ask') { yield { type: 'ask', request: item.request }; continue; }
+          if (item.kind === 'ask') { yield { type: 'ask', request: item.request, subagentId: item.subagentId }; continue; }
           if (item.kind === 'ask_cancelled') { yield { type: 'ask_cancelled', requestId: item.requestId }; continue; }
           const msg = item.msg as unknown as { type?: string; subtype?: string };
           self.lastActivityAt = Date.now();
@@ -615,7 +615,7 @@ export class ClaudeAgentThread implements AgentThread {
             }
             return;
           }
-          if (item.kind === 'ask') { yield { type: 'ask', request: item.request }; continue; }
+          if (item.kind === 'ask') { yield { type: 'ask', request: item.request, subagentId: item.subagentId }; continue; }
           if (item.kind === 'ask_cancelled') { yield { type: 'ask_cancelled', requestId: item.requestId }; continue; }
           const msg = item.msg as unknown as { type?: string; subtype?: string; usage?: Record<string, number> };
           self.lastActivityAt = Date.now();

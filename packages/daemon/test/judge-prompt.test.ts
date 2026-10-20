@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_SMART_PROMPT,
+  JUDGE_ALLOWED,
   JUDGE_FORMAT_HEADER,
   JUDGE_FORMAT_LINES,
   JUDGE_INPUT_EXAMPLE,
@@ -35,19 +36,18 @@ describe('judge prompt', () => {
     for (const variant of ['main', 'topic'] as const) expect(JUDGE_FORMAT_LINES[variant]).toContain('标了"新"的几条是你这次新看到的');
     expect(JUDGE_FORMAT_LINES.main).toContain('把要接的那条编号写在 anchor');
     expect(JUDGE_FORMAT_LINES.topic).not.toContain('anchor');
-    expect(JUDGE_FORMAT_LINES.mentioned).not.toContain('标了"新"');
   });
 
   it('joins SMART.md, a blank line and the variant format lines', () => {
-    for (const variant of ['main', 'mentioned', 'topic'] as const) {
+    expect(Object.keys(JUDGE_ALLOWED)).toEqual(['main', 'topic']);
+    for (const variant of ['main', 'topic'] as const) {
       const system = judgeSystem('SMART', variant);
       expect(system).toBe(`SMART\n\n${JUDGE_FORMAT_LINES[variant]}`);
       expect(JUDGE_FORMAT_LINES[variant].split('\n')[0]).toBe(JUDGE_FORMAT_HEADER);
       expect(JUDGE_FORMAT_LINES[variant].split('\n')[1]).toBe('你只做判断，不调用任何工具，不回答消息本身。');
     }
-    expect(new Set(Object.values(JUDGE_FORMAT_LINES)).size).toBe(3);
+    expect(new Set(Object.values(JUDGE_FORMAT_LINES)).size).toBe(2);
     expect(DEFAULT_SMART_PROMPT).toContain('拿不准时不回');
-    expect(judgeSchema('mentioned')).toMatchObject({ required: ['decision', 'reason'], properties: { decision: { enum: ['main', 'topic'] } } });
     expect(judgeSchema('topic')).toMatchObject({ properties: { decision: { enum: ['skip', 'reply'] }, reason: { maxLength: 80 } } });
   });
 
@@ -55,7 +55,7 @@ describe('judge prompt', () => {
     const main = judgeSchema('main') as { required: string[]; properties: Record<string, { enum?: string[] }> };
     expect(main.required).toEqual(['decision', 'anchor', 'reason']);
     expect(main.properties.anchor!.enum).toEqual(Array.from({ length: 21 }, (_, i) => `m${i}`));
-    for (const variant of ['mentioned', 'topic'] as const) expect(judgeSchema(variant)).not.toHaveProperty('properties.anchor');
+    expect(judgeSchema('topic')).not.toHaveProperty('properties.anchor');
     expect(JUDGE_FORMAT_LINES.main).toContain('"anchor":"m0"');
     expect(JUDGE_FORMAT_LINES.main).toContain('m0 是它自己，m1 是它前面最近的一条');
     expect(JUDGE_FORMAT_LINES.topic).not.toContain('anchor');
@@ -224,7 +224,7 @@ describe('judge prompt', () => {
   });
 
   it('rejects answers outside the variant', () => {
-    expect(parseVerdict('mentioned', { text: '{"decision":"skip","reason":"x"}' })).toBeUndefined();
+    expect(parseVerdict('main', { text: '{"decision":"reply","reason":"x"}' })).toBeUndefined();
     expect(parseVerdict('topic', { text: '{"decision":"main","reason":"x"}' })).toBeUndefined();
     expect(parseVerdict('main', { text: '' })).toBeUndefined();
     expect(parseVerdict('main', { text: '不回' })).toBeUndefined();

@@ -22,7 +22,7 @@ vi.mock('../src/agent/codex-appserver/locate', () => ({
 }));
 
 const explicit: SessionProfile = {
-  instructions: 'Use the session instructions.', env: { PROFILE_TEST: 'session-value', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0' },
+  instructions: 'Use the session instructions.', env: { PROFILE_TEST: 'session-value', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0' },
   nativeSettings: { automaticMemory: false }, additionalRoots: [], capabilityPackages: [], mcpServers: [],
 };
 const threads: { close(): Promise<void> }[] = [];
@@ -107,7 +107,7 @@ describe('Claude session profile reaches SDK query options', () => {
           cwd: root,
           systemPrompt: { type: 'preset', preset: 'claude_code', append: profile
             ? `${BRIDGE_DEVELOPER_INSTRUCTIONS}\n\n${profile.instructions}` : BRIDGE_DEVELOPER_INSTRUCTIONS },
-          env: expect.objectContaining({ [SESSION_ENV]: '1', ...profile?.env, CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' }),
+          env: expect.objectContaining({ [SESSION_ENV]: '1', ...profile?.env, CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' }),
           settings: expect.objectContaining({ autoCompactEnabled: true, autoMemoryEnabled: false,
             env: expect.objectContaining({ DISABLE_AUTO_COMPACT: '', DISABLE_COMPACT: '', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' }) }),
           ...(action === 'resume' ? { resume: 'saved' } : {}),
