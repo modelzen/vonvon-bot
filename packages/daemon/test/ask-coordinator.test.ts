@@ -381,6 +381,41 @@ it('retires queued asks too when provider completion wins before the next promot
   expect(f.pause.held).toBe(false); turn.close('turn-ended');
 });
 
+
+it('queues parent then child, keeps origin after timeout and clears the waiting child identity', async () => {
+  vi.useFakeTimers(); const f = fixture(); const turn = f.open();
+  turn.enqueue(ask('parent')); turn.enqueue(ask('child'), { subagentId: 's1', name: 'reviewer' });
+  await flush(); expect(f.create).toHaveBeenCalledTimes(1);
+  expect(f.waiting).toHaveBeenLastCalledWith(expect.any(String), undefined);
+  expect(f.submit('parent')).toBe('accepted'); await flush();
+  expect(f.waiting).toHaveBeenLastCalledWith(expect.any(String), 's1');
+  expect(JSON.stringify(f.create.mock.calls[1])).toContain('子 agent reviewer 问：');
+  await vi.advanceTimersByTimeAsync(15 * 60_000);
+  expect(JSON.stringify(f.update.mock.calls)).toContain('子 agent reviewer 问：');
+  expect(f.waiting).toHaveBeenLastCalledWith(undefined, undefined);
+  expect(f.response).toHaveBeenLastCalledWith('child', { kind: 'unanswered', reason: 'timeout' });
+  turn.close('turn-ended');
+});
+
+it('finishes only parent entries without releasing child holds or showing queued parent cards', async () => {
+  const f = fixture(), turn = f.open();
+  turn.enqueue(ask('parent-a')); turn.enqueue(ask('parent-b')); turn.enqueue(ask('child'), { subagentId: 'C' });
+  await flush(); turn.finishParent(); await flush();
+  expect(f.create).toHaveBeenCalledTimes(2);
+  expect(f.response.mock.calls).toEqual(['parent-a', 'parent-b'].map(id => [id, { kind: 'unanswered', reason: 'turn-ended' }]));
+  expect(f.pause.held).toBe(true); expect(f.waiting.mock.lastCall?.[1]).toBe('C');
+  expect(f.submit('parent-a')).toBe('inactive'); expect(f.submit('child', 'msg-2')).toBe('accepted');
+  expect(f.pause.held).toBe(false); turn.close('turn-ended');
+});
+
+it('rejects reused request identity across parent boundaries without answering the wrong child', async () => {
+  const f = fixture(), turn = f.open(); turn.enqueue(ask('same')); await flush();
+  expect(f.submit('same')).toBe('accepted'); turn.finishParent();
+  turn.enqueue(ask('same'), { subagentId: 'C' }); await flush();
+  expect(f.fault).toHaveBeenCalledOnce(); expect(f.response).toHaveBeenCalledTimes(1);
+  expect(f.submit('same')).toBe('inactive'); expect(f.pause.held).toBe(false);
+});
+
 function sensitive(id = 'secret'): Extract<AskRequest, { kind: 'choices' }> {
   return { ...choices(id), questions: [{ id: 'secret-q', title: '密码', detail: '', selection: 'text', sensitive: true }] };
 }

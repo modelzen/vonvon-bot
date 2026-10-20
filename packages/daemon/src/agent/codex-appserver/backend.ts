@@ -248,6 +248,11 @@ function withTitleDeadline<T>(work: Promise<T>, timeoutMs = TITLE_GENERATION_TIM
 
 class CodexThread implements AgentThread {
   private currentTurnId: string | undefined;
+  private parentDoneTurnId: string | undefined;
+
+  private runningChildren(): number {
+    return [...this.children.values()].filter(child => child.running).length;
+  }
   private children = new Map<string, Child>();
 
   constructor(
@@ -294,7 +299,10 @@ class CodexThread implements AgentThread {
     // before it and stay buffered in the client; never infer identity from the
     // first turn/started (it may belong to an old turn or a subagent).
     // Observe rejection eagerly, even if card creation delays consumption.
-    const requests = self.client.openRequestScope(self.sessionId);
+    const requests = self.client.openRequestScope(self.sessionId, id => {
+      const child = self.children.get(id);
+      return child?.running ? child.turnId : undefined;
+    });
     let activeTurnId: string | undefined;
     const started = self.client.request<TurnStartResponse>('turn/start', params)
       .then((result) => {
@@ -310,6 +318,7 @@ class CodexThread implements AgentThread {
         return { error };
       });
     async function* gen(): AsyncGenerator<AgentEvent> {
+      let deferred: Extract<AgentEvent, { type: 'done' }> | undefined;
       try {
         const result = await started;
         if ('error' in result) {
@@ -324,9 +333,9 @@ class CodexThread implements AgentThread {
               if (notification.owner === requests) yield { type: 'ask_cancelled', requestId: notification.requestId };
               continue;
             }
-            if (requests.accepts(notification, result.turnId)) {
+            if (requests.accepts(notification, activeTurnId)) {
               lastActivityAt = Date.now();
-              yield { type: 'ask', request: notification.request };
+              yield { type: 'ask', request: notification.request, subagentId: notification.threadId === self.sessionId ? undefined : notification.threadId };
             }
             continue;
           }
@@ -334,6 +343,18 @@ class CodexThread implements AgentThread {
           if (!routed) continue;
           lastActivityAt = Date.now();
           for (const ev of routed) {
+            if (ev.type === 'subagent_status' && ev.status !== 'running') {
+              for (const id of requests.finishThread(ev.id)) yield { type: 'ask_cancelled', requestId: id };
+            }
+            if (ev.type === 'done' && self.runningChildren() > 0) {
+              if (deferred) continue;
+              deferred = ev;
+              activeTurnId = undefined;
+              self.parentDoneTurnId = result.turnId;
+              requests.finishTurn(result.turnId);
+              yield { type: 'awaiting_subagents' };
+              continue;
+            }
             if (ev.type === 'done' || (ev.type === 'error' && !ev.willRetry)) {
               requests.close();
               activeTurnId = undefined; // no steering during terminal-card I/O
@@ -342,8 +363,14 @@ class CodexThread implements AgentThread {
             }
             yield ev;
           }
+          if (deferred && self.runningChildren() === 0) {
+            requests.close();
+            yield deferred;
+            return;
+          }
         }
       } finally {
+        self.parentDoneTurnId = undefined;
         requests.close();
         for (const child of self.children.values()) child.stopRequested = false;
         activeTurnId = undefined;
@@ -354,7 +381,10 @@ class CodexThread implements AgentThread {
 
   runGoal(objective: string): AgentRun {
     const self = this;
-    const requests = self.client.openRequestScope(self.sessionId);
+    const requests = self.client.openRequestScope(self.sessionId, id => {
+      const child = self.children.get(id);
+      return child?.running ? child.turnId : undefined;
+    });
     this.currentTurnId = undefined;
     // Same liveness clock as runStreamed — the goal's 30min idle backstop must
     // also see raw activity, not just mapped events.
@@ -413,7 +443,7 @@ class CodexThread implements AgentThread {
             }
             if (requests.accepts(step.value, ownedTurnId)) {
               lastActivityAt = Date.now();
-              yield { type: 'ask', request: step.value.request };
+              yield { type: 'ask', request: step.value.request, subagentId: step.value.threadId === self.sessionId ? undefined : step.value.threadId };
             }
             continue;
           }
@@ -421,6 +451,9 @@ class CodexThread implements AgentThread {
           if (!routed) continue;
           lastActivityAt = Date.now();
           for (const ev of routed) {
+            if (ev.type === 'subagent_status' && ev.status !== 'running') {
+              for (const id of requests.finishThread(ev.id)) yield { type: 'ask_cancelled', requestId: id };
+            }
             if (ev.type === 'turn_started') {
               self.currentTurnId = ev.turnId;
               if (ownedTurnId && ownedTurnId !== ev.turnId) requests.finishTurn(ownedTurnId);
@@ -579,19 +612,20 @@ class CodexThread implements AgentThread {
   }
 
   async abort(turnId: string): Promise<void> {
-    this.client.cancelRequests(this.sessionId, turnId);
-    const stops = [this.client.request('turn/interrupt', { threadId: this.sessionId, turnId })];
+    const parentLive = turnId !== this.parentDoneTurnId;
+    if (parentLive) this.client.cancelRequests(this.sessionId, turnId);
+    const stops = parentLive ? [this.client.request('turn/interrupt', { threadId: this.sessionId, turnId })] : [];
     for (const [threadId, child] of this.children) {
       if (!child.running) continue;
       child.stopRequested = true;
       if (child.turnId) stops.push(this.client.request('turn/interrupt', { threadId, turnId: child.turnId }));
     }
     const results = await Promise.allSettled(stops);
-    for (const result of results.slice(1)) {
+    for (const result of results.slice(parentLive ? 1 : 0)) {
       if (result.status === 'rejected') log.warn('agent', 'subagent-interrupt-failed');
     }
     const main = results[0];
-    if (main?.status === 'rejected') throw main.reason;
+    if (parentLive && main?.status === 'rejected') throw main.reason;
   }
 
   async compact(): Promise<CompactResult> {
