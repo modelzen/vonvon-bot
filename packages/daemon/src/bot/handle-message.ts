@@ -1,3 +1,4 @@
+import { redactAgentEvents } from '../core/token-redact';
 import { buildJudgeFacts, judgeFactRead, sameNameWord } from './judge-facts';
 import { bareText, smartSalience, type Salience, type SalienceDeps } from './salience';
 import { getAppRoleSnapshot } from '../config/app-roles';
@@ -7083,7 +7084,7 @@ export function createOrchestrator(
           fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) originalInterrupt(); },
         });
         const guarded = withIdleTimeout(
-          run.events,
+          redactAgentEvents(run.events),
           idleMs,
           () => {
             timedOut = true;
@@ -7745,7 +7746,7 @@ export function createOrchestrator(
       // Child questions can outlive a parent turn; their watchdog holds do too.
       const idlePause = createIdlePause();
       state.idlePause = idlePause;
-      const guarded = withIdleTimeout(run.events, GOAL_IDLE_MS, () => {
+      const guarded = withIdleTimeout(redactAgentEvents(run.events), GOAL_IDLE_MS, () => {
         idledOut = true;
       }, stop, run.lastActivity, idlePause);
       const originalInterrupt = state.interrupt;
@@ -8040,7 +8041,7 @@ export function createOrchestrator(
             let stopAsk!: () => void;
             const askStopped = new Promise<void>(resolve => { stopAsk = resolve; });
             const idleMs = currentIdleMs();
-            const guarded = withIdleTimeout(run.events, idleMs, () => {
+            const guarded = withIdleTimeout(redactAgentEvents(run.events), idleMs, () => {
               timedOut = true;
             }, askStopped, run.lastActivity);
             try {

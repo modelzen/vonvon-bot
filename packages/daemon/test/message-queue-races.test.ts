@@ -135,6 +135,26 @@ afterEach(async () => {
 // Keep synchronization polling well below the injected 150ms steer deadline.
 const until = (check: () => void) => vi.waitFor(check, { interval: 5 });
 
+describe('running card token redaction', () => {
+  it.each(['ordinary', 'goal'] as const)('redacts split tokens in the final %s card', async kind => {
+    const token = `vvs1_${'a'.repeat(43)}`;
+    const run = thread();
+    const goalThread = { ...run.t, runGoal: () => run.t.runStreamed({ text: 'goal' }), clearGoal: vi.fn(async () => undefined) };
+    fake.backend.resumeThread.mockResolvedValue(goalThread);
+    const o = setup();
+    await o.onMessage(message(kind === 'goal' ? '/goal finish fixture' : 'finish fixture'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    run.emit({ type: 'text_delta', itemId: 'answer', delta: `prefix ${token.slice(0, 21)}` });
+    run.emit({ type: 'text_delta', itemId: 'answer', delta: `${token.slice(21)} suffix` });
+    run.turns[0]!.resolve();
+    await until(() => {
+      const card = JSON.stringify(fake.final.mock.calls.at(-1)?.[1]);
+      expect(card).toContain('prefix [已隐藏的 vonvon 令牌] suffix');
+      expect(card).not.toContain(token);
+    });
+  });
+});
+
 describe('message queue lifecycle', () => {
   it('starts the follow-up when steer rejects after its original consumer has finished', async () => {
     const run = thread();

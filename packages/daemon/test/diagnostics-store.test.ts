@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { botDiagnosticsSchema, type NotReplied } from '@vonvon/protocol';
-import { createDiagnosticsStore, errorDetail, NOT_REPLIED_LIMIT, QUIET_LIMIT, parseDiagnosticsIpc, reportNotReplied, reportScopeDenied, setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
+import { createDiagnosticsStore, errorDetail, fitDetail, NOT_REPLIED_LIMIT, QUIET_LIMIT, parseDiagnosticsIpc, reportNotReplied, reportScopeDenied, setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
 
 const record = (fields: Partial<Omit<NotReplied, 'count'>> = {}): Omit<NotReplied, 'count'> =>
   ({ at: 1_000_000, groupId: 'oc_fixture_group', place: 'main', reason: 'signed-out', backend: 'codex', ref: 'abc123', ...fields });
@@ -162,4 +162,16 @@ it('accepts old snapshots and new bounded IPC, replaces live attention and clear
   store.clearLive('a');
   expect(store.view('a')).toBeUndefined();
   store.close();
+});
+
+it('redacts diagnostics before shortening the detail', () => {
+  const token = `vvs1_${'a'.repeat(43)}`;
+  const prefix = 'x'.repeat(100);
+  expect(fitDetail(token)).toBe('[已隐藏的 vonvon 令牌]');
+  expect(errorDetail(new Error(token))).toBe('[已隐藏的 vonvon 令牌]');
+  for (const detail of [fitDetail(`${prefix} ${token}`), errorDetail(new Error(`${prefix} ${token}`))]) {
+    expect(detail).not.toContain('vvs1_');
+    expect(detail).toContain('[已隐藏的 vonvon 令牌]');
+    expect(detail!.length).toBeLessThanOrEqual(120);
+  }
 });

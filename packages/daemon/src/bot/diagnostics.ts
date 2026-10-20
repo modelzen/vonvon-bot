@@ -2,6 +2,7 @@ import {
   DENIED_SCOPE_SHOWN_MS, diagnosticsEventSchema,
   type GroupAttention, type BotDiagnostics, type DeniedScope, type DiagnosticsEvent, type NotReplied, type NotRepliedReason, type ScopeDenialPlace,
 } from '@vonvon/protocol';
+import { redactTokens } from '../core/token-redact';
 import { CHAT_OPTIONAL_SCOPES, REQUIRED_SCOPES } from '../config/scopes';
 
 /**
@@ -44,7 +45,9 @@ export function parseDiagnosticsIpc(message: unknown): DiagnosticsEvent | undefi
 /** Cut to the record's 120 UTF-16 units, which its schema counts, without splitting a character: a judge's
  * 80-character reason in emoji is 160 (s25). */
 export function fitDetail(text: string | undefined): string | undefined {
-  if (!text || text.length <= 120) return text;
+  if (text === undefined) return undefined;
+  text = redactTokens(text);
+  if (text.length <= 120) return text;
   let out = '';
   for (const char of text) {
     if (out.length + char.length > 120) break;
@@ -55,7 +58,7 @@ export function fitDetail(text: string | undefined): string | undefined {
 
 /** An error's first line without control characters, cut to the record's 120. */
 export function errorDetail(error: unknown): string | undefined {
-  const text = (error instanceof Error ? error.message : String(error ?? '')).split('\n')[0]!.replace(/[\x00-\x1f\x7f]/g, '').trim();
+  const text = redactTokens(error instanceof Error ? error.message : String(error ?? '')).split('\n')[0]!.replace(/[\x00-\x1f\x7f]/g, '').trim();
   return text ? text.slice(0, 120) : undefined;
 }
 
