@@ -1,11 +1,11 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { constants } from 'node:fs';
-import { copyFile, link, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, rmdir, symlink, writeFile } from 'node:fs/promises';
+import { link, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, rmdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { MoveFileSafetyError, moveFileSafely, type MoveFileDeps } from '../src/import/bridge/move-file';
+import type { BridgeMoveAllocation } from '../src/import/bridge/journal';
+import { MoveFileSafetyError, moveFileSafely, type MoveFileDeps, type MoveFileIntent } from '../src/import/bridge/move-file';
 
 const roots: string[] = [];
 const bytes = 'synthetic plist bytes\n';
@@ -19,12 +19,14 @@ async function fixture(reverse = false) {
   await mkdir(original); await mkdir(staging);
   const src = join(reverse ? staging : original, 'bridge.plist');
   const dst = join(reverse ? original : staging, 'bridge.plist');
-  const intent = { src, dst, sha256, txId: 'test-tx' };
-  return { root, intent, temporary: join(reverse ? original : staging, '.bridge.plist.vonvon-test-tx.tmp') };
+  const txId = '11111111-1111-4111-8111-111111111111';
+  const intent: MoveFileIntent = { src, dst, sha256, txId, operation: { sequence: 0,
+    from: reverse ? 'stage' : 'original', to: reverse ? 'original' : 'stage', allocations: [] } };
+  return { root, intent, temporary: join(reverse ? original : staging, `.bridge.plist.vonvon-${txId}.tmp`) };
 }
 const absent = async (path: string) => expect(lstat(path)).rejects.toMatchObject({ code: 'ENOENT' });
 function acrossDevices(src: string): MoveFileDeps {
-  return { rename: async (from, to) => {
+  return { persistAllocation: async () => undefined, rename: async (from, to) => {
     if (from === src) throw Object.assign(new Error('injected cross-device'), { code: 'EXDEV' });
     await rename(from, to);
   } };
@@ -60,11 +62,10 @@ it.each([false, true])('EXDEV copies then publishes real bytes in reverse=%s', a
   await writeFile(intent.src, bytes);
   let copied = false;
   const deps = acrossDevices(intent.src);
-  deps.copyFile = async (from, to, flags) => {
-    expect(flags).toBe(constants.COPYFILE_EXCL);
-    await copyFile(from, to, flags);
+  deps.copyToHandle = async (from, to) => {
+    await to.writeFile(await from.readFile());
     expect(await readFile(intent.src, 'utf8')).toBe(bytes);
-    expect(await readFile(to, 'utf8')).toBe(bytes);
+    expect(await to.stat()).toMatchObject({ size: Buffer.byteLength(bytes) });
     await absent(intent.dst);
     copied = true;
   };
@@ -96,16 +97,18 @@ it('copy failure and failure after actual copy preserve source and no partial de
   await writeFile(intent.src, bytes);
   const failed = new Error('copy fault');
   await expect(moveFileSafely(intent, {
-    ...acrossDevices(intent.src), copyFile: async () => { throw failed; },
+    ...acrossDevices(intent.src), copyToHandle: async () => { throw failed; },
   })).rejects.toBe(failed);
   await absent(intent.dst); await absent(temporary);
+  expect(await readdir(dirname(intent.dst))).toEqual([]);
   await expect(moveFileSafely(intent, {
-    ...acrossDevices(intent.src), fault: async point => {
-      if (point === 'after-copy') { await writeFile(temporary, 'partial'); throw failed; }
+    ...acrossDevices(intent.src), copyToHandle: async (from, to) => {
+      await to.writeFile((await from.readFile()).subarray(0, 4)); throw failed;
     },
   })).rejects.toBe(failed);
   expect(await readFile(intent.src, 'utf8')).toBe(bytes);
   await absent(intent.dst); await absent(temporary);
+  expect(await readdir(dirname(intent.dst))).toEqual([]);
 });
 
 it('unlink failure after publish leaves both originals for the next real recovery', async () => {
@@ -120,7 +123,7 @@ it('unlink failure after publish leaves both originals for the next real recover
   await absent(intent.src);
 });
 
-it('preserves a foreign exact temporary and unrelated names, and removes matching completed leftover', async () => {
+it('preserves foreign exact temporaries even when bytes match, and retains unrelated names', async () => {
   const { intent, temporary } = await fixture();
   const unrelated = `${temporary}-foreign`;
   await writeFile(intent.src, bytes); await writeFile(temporary, 'FOREIGN'); await writeFile(unrelated, 'OTHER');
@@ -128,8 +131,9 @@ it('preserves a foreign exact temporary and unrelated names, and removes matchin
   expect(await readFile(temporary, 'utf8')).toBe('FOREIGN');
   expect(await readFile(intent.src, 'utf8')).toBe(bytes);
   await writeFile(temporary, bytes);
-  expect(await moveFileSafely(intent)).toEqual({ kind: 'moved' });
-  await absent(temporary);
+  expect(await moveFileSafely(intent)).toEqual({ kind: 'conflict' });
+  expect(await readFile(temporary, 'utf8')).toBe(bytes);
+  expect(await readFile(intent.src, 'utf8')).toBe(bytes);
   expect(await readFile(unrelated, 'utf8')).toBe('OTHER');
 });
 
@@ -169,11 +173,14 @@ it.each([
 
 // Replacing a copied temporary is not ours to clean, even if the exact name is unchanged.
 it('preserves a replacement inode when cleaning up a failed current copy', async () => {
-  const { root, intent, temporary } = await fixture();
+  const { root, intent } = await fixture();
+  let temporary = '';
   const foreign = join(root, 'foreign');
   await writeFile(intent.src, bytes); await writeFile(foreign, 'FOREIGN');
   await expect(moveFileSafely(intent, {
     ...acrossDevices(intent.src),
+    persistAllocation: async allocation => { temporary = join(dirname(intent.dst),
+      `.bridge.plist.vonvon-${intent.txId}-${allocation.sequence}-${allocation.nonce}.tmp`); },
     fault: async point => {
       if (point === 'after-copy') { await rename(foreign, temporary); throw new Error('fault'); }
     },
@@ -194,23 +201,42 @@ it.each([false, true])('accepts absent source parents with destination present=%
   else await absent(dirname(intent.dst));
 });
 
-it('preserves an unknown partial from a copy seam that throws before ownership capture', async () => {
+it('preserves unknown partial bytes without a durable allocation receipt', async () => {
   const { intent, temporary } = await fixture();
-  await writeFile(intent.src, bytes);
-  const failure = new Error('partial copy failure');
-  await expect(moveFileSafely(intent, {
-    ...acrossDevices(intent.src),
-    copyFile: async (from, to, flags) => {
-      await copyFile(from, to, flags);
-      await writeFile(to, 'partial');
-      throw failure;
-    },
-  })).rejects.toBe(failure);
-  expect(await readFile(intent.src, 'utf8')).toBe(bytes);
-  expect(await readFile(temporary, 'utf8')).toBe('partial');
-  await absent(intent.dst);
+  await writeFile(intent.src, bytes); await writeFile(temporary, 'partial');
   expect(await moveFileSafely(intent)).toEqual({ kind: 'conflict' });
   expect(await readFile(intent.src, 'utf8')).toBe(bytes);
   expect(await readFile(temporary, 'utf8')).toBe('partial');
   await absent(intent.dst);
+});
+
+it.each([true, false])('rejects invalid allocation sequence/direction before reserving: %s', async badSequence => {
+  const { intent } = await fixture(); await writeFile(intent.src, bytes);
+  await expect(moveFileSafely({ ...intent, operation: { sequence: badSequence ? -1 : 0,
+    from: 'original', to: badSequence ? 'stage' : 'original', allocations: [] } }, acrossDevices(intent.src))).rejects.toThrow();
+  expect(await readFile(intent.src, 'utf8')).toBe(bytes);
+  expect(await readdir(dirname(intent.dst))).toEqual([]);
+});
+
+it.each(['nonzero', 'foreign-inode', 'symlink', 'callback-replace'])('preserves unknown new receipt slots: %s', async kind => {
+  const { root, intent } = await fixture(); await writeFile(intent.src, bytes);
+  const parent = await lstat(dirname(intent.dst));
+  const nonce = '22222222-2222-4222-8222-222222222222';
+  const temporary = join(dirname(intent.dst), `.bridge.plist.vonvon-${intent.txId}-0-${nonce}.tmp`);
+  const foreign = join(root, 'foreign'); await writeFile(foreign, 'FOREIGN', { mode: 0o600 });
+  await writeFile(temporary, kind === 'nonzero' ? 'partial' : '', { mode: 0o600 });
+  const metadata = await lstat(temporary);
+  const allocation: BridgeMoveAllocation = { txId: intent.txId, sequence: 0, from: 'original', to: 'stage', sha256,
+    parent: { dev: parent.dev, ino: parent.ino }, nonce,
+    inode: kind === 'foreign-inode' ? { dev: metadata.dev, ino: metadata.ino } : null };
+  if (kind === 'foreign-inode') await rename(foreign, temporary);
+  if (kind === 'symlink') { await rm(temporary); await symlink(foreign, temporary); }
+  const run = () => moveFileSafely({ ...intent, operation: { sequence: 0, from: 'original', to: 'stage', allocations: [allocation] } }, {
+    persistAllocation: async () => { if (kind === 'callback-replace') await rename(foreign, temporary); },
+  });
+  if (kind === 'symlink') await expect(run()).rejects.toThrow();
+  else expect(await run()).toEqual({ kind: 'conflict' });
+  expect(await readFile(intent.src, 'utf8')).toBe(bytes); await absent(intent.dst);
+  expect(await readFile(temporary, 'utf8')).toBe(kind === 'nonzero' ? 'partial' : 'FOREIGN');
+  if (kind === 'symlink') expect((await lstat(temporary)).isSymbolicLink()).toBe(true);
 });

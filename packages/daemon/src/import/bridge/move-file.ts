@@ -1,8 +1,9 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
-import { copyFile, lstat, open, rename, unlink } from 'node:fs/promises';
+import { lstat, open, rename, unlink, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, parse, resolve } from 'node:path';
 import { inspectLocalPath } from './bounded-local-files';
+import { BridgeMoveAllocationSchema, type BridgeMoveAllocation } from './journal';
 
 export type MoveFileResult = { kind: 'moved' | 'conflict' | 'missing' };
 export interface MoveFileIntent {
@@ -10,18 +11,26 @@ export interface MoveFileIntent {
   dst: string;
   sha256: string;
   txId: string;
+  operation?: Pick<BridgeMoveAllocation, 'sequence' | 'from' | 'to'> & { allocations: readonly BridgeMoveAllocation[] };
 }
 export interface MoveFileDeps {
   rename?: typeof rename;
-  copyFile?: typeof copyFile;
+  copyToHandle?: (source: FileHandle, target: FileHandle) => Promise<void>;
+  persistAllocation?: (allocation: BridgeMoveAllocation) => Promise<void>;
   unlink?: typeof unlink;
-  fault?: (point: 'after-copy' | 'crash-after:exdev-publish') => void | Promise<void>;
+  fault?: (point: 'after-temporary-create' | 'after-copy' | 'crash-after:exdev-publish') => void | Promise<void>;
 }
 export class MoveFileSafetyError extends Error {
   constructor() { super('Unsafe bridge import file move'); }
 }
 interface CheckedFile { metadata: Stats; hash: string }
-const sameInode = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino;
+const sameInode = (a: Pick<Stats, 'dev' | 'ino'>, b: Pick<Stats, 'dev' | 'ino'>) => a.dev === b.dev && a.ino === b.ino;
+function checkedAllocation(value: BridgeMoveAllocation): BridgeMoveAllocation {
+  const allocation = BridgeMoveAllocationSchema.parse(value);
+  if (!((allocation.from === 'original' && allocation.to === 'stage')
+    || (allocation.from === 'stage' && (allocation.to === 'original' || allocation.to === 'backup')))) throw new MoveFileSafetyError();
+  return allocation;
+}
 const hasCode = (error: unknown, code: string) => error instanceof Error && 'code' in error && error.code === code;
 
 async function inspect(path: string): Promise<CheckedFile | undefined> {
@@ -59,24 +68,47 @@ export async function moveFileSafely(intent: MoveFileIntent, deps: MoveFileDeps 
   if (![src, dst].every(path => isAbsolute(path) && resolve(path) === path)
     || src === dst || sha256.length !== 64 || /[^a-f0-9]/.test(sha256)
     || txId.length < 1 || txId.length > 100 || /[^a-zA-Z0-9_-]/.test(txId)) throw new MoveFileSafetyError();
-  const temporary = join(dirname(dst), `.${basename(dst)}.vonvon-${txId}.tmp`);
-  if (temporary === src) throw new MoveFileSafetyError();
+  const oldTemporary = join(dirname(dst), `.${basename(dst)}.vonvon-${txId}.tmp`);
+  if (oldTemporary === src) throw new MoveFileSafetyError();
   const move = deps.rename ?? rename;
   const remove = deps.unlink ?? unlink;
-  const copy = deps.copyFile ?? copyFile;
+  const persist = deps.persistAllocation;
+  const operation = intent.operation;
+  const temporaryPath = (allocation: BridgeMoveAllocation) => join(dirname(dst),
+    `.${basename(dst)}.vonvon-${txId}-${allocation.sequence}-${allocation.nonce}.tmp`);
+  // No durable reservation exists for legacy names, even if their bytes match.
+  if (await inspect(oldTemporary)) return { kind: 'conflict' };
+  for (const rawAllocation of operation?.allocations ?? []) {
+    const allocation = checkedAllocation(rawAllocation);
+    if (!persist || !operation || allocation.txId !== txId || allocation.sha256 !== sha256
+      || allocation.sequence !== operation?.sequence || allocation.from !== operation.from || allocation.to !== operation.to) {
+      throw new MoveFileSafetyError();
+    }
+    const parent = await inspectLocalPath(parse(dst).root, dirname(dst));
+    if (!parent?.isDirectory() || !sameInode(parent, allocation.parent)) throw new MoveFileSafetyError();
+    const path = temporaryPath(allocation);
+    const metadata = await inspectLocalPath(parse(dst).root, path);
+    if (!metadata) continue;
+    if (!metadata.isFile() || metadata.nlink !== 1 || (metadata.mode & 0o777) !== 0o600
+      || (allocation.inode ? !sameInode(metadata, allocation.inode) : metadata.size !== 0)) return { kind: 'conflict' };
+    if (!allocation.inode) await persist({ ...allocation, inode: { dev: metadata.dev, ino: metadata.ino } });
+    const currentParent = await inspectLocalPath(parse(dst).root, dirname(dst));
+    const current = await inspectLocalPath(parse(dst).root, path);
+    if (!currentParent?.isDirectory() || !sameInode(currentParent, allocation.parent)
+      || !current?.isFile() || current.nlink !== 1 || (current.mode & 0o777) !== 0o600
+      || !sameInode(current, metadata)) return { kind: 'conflict' };
+    await remove(path);
+    await syncDirectory(dirname(dst));
+  }
   let ownedTemporary: Stats | undefined;
+  let temporary = '';
+
   async function removeChecked(path: string, file: CheckedFile): Promise<void> {
     await verifyParent(path);
     const current = await inspect(path);
     if (!current || current.hash !== sha256 || !sameInode(current.metadata, file.metadata)) throw new MoveFileSafetyError();
     await remove(path);
     await syncDirectory(dirname(path));
-  }
-  // A name alone is insufficient ownership: preserve partial, linked or foreign leftovers.
-  const leftover = await inspect(temporary);
-  if (leftover) {
-    if (leftover.hash !== sha256) return { kind: 'conflict' };
-    await removeChecked(temporary, leftover);
   }
   const source = await inspect(src);
   const destination = await inspect(dst);
@@ -97,17 +129,34 @@ export async function moveFileSafely(intent: MoveFileIntent, deps: MoveFileDeps 
   } catch (error) {
     if (!hasCode(error, 'EXDEV')) throw error;
   }
+  if (!operation || !persist) throw new MoveFileSafetyError();
+  const parent = await inspectLocalPath(parse(dst).root, dirname(dst));
+  if (!parent?.isDirectory()) throw new MoveFileSafetyError();
+  const allocation: BridgeMoveAllocation = { txId, sha256, sequence: operation.sequence,
+    from: operation.from, to: operation.to, parent: { dev: parent.dev, ino: parent.ino }, nonce: randomUUID(), inode: null };
+  temporary = temporaryPath(allocation);
+  if (await inspectLocalPath(parse(dst).root, temporary)) return { kind: 'conflict' };
+  checkedAllocation(allocation);
+  await persist(allocation);
+  const reservedParent = await inspectLocalPath(parse(dst).root, dirname(dst));
+  if (!reservedParent?.isDirectory() || !sameInode(reservedParent, allocation.parent)) throw new MoveFileSafetyError();
   try {
-    await copy(src, temporary, constants.COPYFILE_EXCL);
-    const copied = await inspect(temporary);
-    if (!copied) throw new MoveFileSafetyError();
-    ownedTemporary = copied.metadata;
-    if (copied.hash !== sha256) throw new MoveFileSafetyError();
-    const handle = await open(temporary, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const target = await open(temporary, 'wx+', 0o600);
     try {
-      if (!sameInode(await handle.stat(), copied.metadata)) throw new MoveFileSafetyError();
-      await handle.sync();
-    } finally { await handle.close(); }
+      ownedTemporary = await target.stat();
+      await syncDirectory(dirname(dst));
+      await deps.fault?.('after-temporary-create');
+      await persist({ ...allocation, inode: { dev: ownedTemporary.dev, ino: ownedTemporary.ino } });
+      const input = await open(src, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      try {
+        if (!sameInode(await input.stat(), source.metadata)) throw new MoveFileSafetyError();
+        if (deps.copyToHandle) await deps.copyToHandle(input, target);
+        else await target.writeFile(await input.readFile());
+        await target.sync();
+      } finally { await input.close(); }
+    } finally { await target.close(); }
+    const copied = await inspect(temporary);
+    if (!copied || !ownedTemporary || copied.hash !== sha256 || !sameInode(copied.metadata, ownedTemporary)) throw new MoveFileSafetyError();
     await deps.fault?.('after-copy');
     await verifyParent(dst);
     if (await inspect(dst)) return { kind: 'conflict' };
@@ -126,7 +175,10 @@ export async function moveFileSafely(intent: MoveFileIntent, deps: MoveFileDeps 
         if (hasCode(error, 'ENOENT')) return undefined;
         throw error;
       });
-      if (current?.isFile() && current.nlink === 1 && sameInode(current, ownedTemporary)) await remove(temporary);
+      if (current?.isFile() && current.nlink === 1 && sameInode(current, ownedTemporary)) {
+        await remove(temporary);
+        await syncDirectory(dirname(dst));
+      }
     }
   }
 }

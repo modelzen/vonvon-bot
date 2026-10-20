@@ -16,9 +16,15 @@ const file = z.string().max(4096).refine(value => {
   return ['config.json', 'projects.json', 'sessions.json', 'comment-instructions.md'].includes(value)
     || value.startsWith('outbound-files/') || /^\.vonvon-import-[a-f0-9-]{36}$/.test(value);
 });
+export const BridgeMoveAllocationSchema = z.object({
+  txId, sequence: integer, from: z.enum(['original', 'stage']), to: z.enum(['stage', 'original', 'backup']),
+  sha256: hash, parent: identity, nonce: z.string().uuid(), inode: identity.nullable(),
+}).strict();
+export type BridgeMoveAllocation = z.infer<typeof BridgeMoveAllocationSchema>;
 const intent = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('move-plist'), from: z.enum(['original', 'stage']),
-    to: z.enum(['stage', 'original', 'backup']), sha256: hash }).strict(),
+    to: z.enum(['stage', 'original', 'backup']), sha256: hash,
+    allocations: z.array(BridgeMoveAllocationSchema).max(128).default([]) }).strict(),
   z.object({ kind: z.literal('write-file'), appId: identifier, file, sha256: hash }).strict(),
   z.object({ kind: z.literal('create-secret'), appId: identifier, id: z.string(),
     iv: z.string().length(24).regex(/^[a-f0-9]{24}$/) }).strict(),
@@ -54,6 +60,7 @@ export const BridgeImportJournalSchema = z.object({
     || (terminal.some(step => step === journal.step) && journal.outcome !== journal.step)
     || (journal.step === 'rolling-back' && !journal.cleanupPending)
     || (journal.step === 'done' && journal.cleanupPending)) fail();
+  const nonces = new Set<string>();
   journal.intents.forEach(({ sequence, action }, index) => {
     if (sequence !== index || ('appId' in action && action.appId !== null && !reserved.has(action.appId))) fail();
     if (action.kind === 'write-file' && action.file.startsWith('.vonvon-import-')
@@ -61,12 +68,39 @@ export const BridgeImportJournalSchema = z.object({
     if (action.kind === 'create-secret' && action.id !== `app-${action.appId}`) fail();
     if (action.kind === 'move-plist' && (!journal.before.plist.present
       || action.sha256 !== journal.before.plist.sha256)) fail();
+    if (action.kind === 'move-plist') for (const allocation of action.allocations) {
+      if (allocation.txId !== journal.txId || allocation.sequence !== sequence || allocation.from !== action.from
+        || allocation.to !== action.to || allocation.sha256 !== action.sha256 || nonces.has(allocation.nonce)) fail();
+      nonces.add(allocation.nonce);
+    }
     if (action.kind === 'move-plist' && !((action.from === 'original' && action.to === 'stage')
       || (action.from === 'stage' && (action.to === 'original' || action.to === 'backup')))) fail();
   });
 });
 export type BridgeImportJournal = z.infer<typeof BridgeImportJournalSchema>;
 export type BridgeImportIntent = BridgeImportJournal['intents'][number];
+export function withBridgeMoveAllocation(journal: BridgeImportJournal, value: BridgeMoveAllocation): BridgeImportJournal {
+  const allocation = BridgeMoveAllocationSchema.parse(value), item = journal.intents[allocation.sequence];
+  if (item?.action.kind !== 'move-plist') throw new Error('Invalid bridge move allocation owner');
+  const existing = item.action.allocations.findIndex(entry => entry.nonce === allocation.nonce);
+  const allocations = [...item.action.allocations];
+  if (existing < 0) allocations.push(allocation); else allocations[existing] = allocation;
+  if (!sameIntentAction(item.action, { ...item.action, allocations })) throw new Error('Bridge move allocation ownership changed');
+  const intents = journal.intents.map(entry => entry.sequence === allocation.sequence
+    ? { ...entry, action: { ...item.action, allocations } } : entry);
+  return BridgeImportJournalSchema.parse({ ...journal, intents });
+}
+function sameIntentAction(before: BridgeImportIntent['action'], after: BridgeImportIntent['action']): boolean {
+  if (before.kind !== 'move-plist' || after.kind !== 'move-plist') return JSON.stringify(before) === JSON.stringify(after);
+  const { allocations: oldAllocations, ...oldAction } = before, { allocations, ...action } = after;
+  return JSON.stringify(oldAction) === JSON.stringify(action) && allocations.slice(oldAllocations.length).every(entry => entry.inode === null)
+    && oldAllocations.every((old, index) => {
+      const next = allocations[index];
+      if (!next) return false;
+      const { inode: oldInode, ...oldFacts } = old, { inode, ...facts } = next;
+      return JSON.stringify(oldFacts) === JSON.stringify(facts) && (oldInode === null || JSON.stringify(oldInode) === JSON.stringify(inode));
+    });
+}
 export interface BridgeJournalPaths { appDir: string; bridgeDir: string; plistFile: string }
 const maxBytes = 1024 * 1024;
 
@@ -113,6 +147,10 @@ export async function writeBridgeImportJournal(paths: BridgeJournalPaths, value:
   if (Buffer.byteLength(content) > maxBytes) throw new Error('Bridge import journal size limit exceeded');
   const location = await inspectJournal(paths);
   const previous = await readBridgeImportJournal(paths);
+  if (journal.intents.slice(previous?.txId === journal.txId ? previous.intents.length : 0).some(item =>
+    item.action.kind === 'move-plist' && item.action.allocations.some(entry => entry.inode !== null))) {
+    throw new Error('Bridge move allocation must reserve before inode receipt');
+  }
   if (previous?.txId === journal.txId) {
     const immutable = ['hostPid', 'startedAt', 'bridgeDir', 'plistFile', 'uid', 'reservedAppIds', 'before', 'stageDir'] as const;
     if (immutable.some(field => JSON.stringify(previous[field]) !== JSON.stringify(journal[field]))
@@ -120,7 +158,7 @@ export async function writeBridgeImportJournal(paths: BridgeJournalPaths, value:
       || (previous.outcome !== null && previous.outcome !== journal.outcome)
       || previous.intents.some((item, index) => {
         const next = journal.intents[index];
-        return !next || JSON.stringify(item.action) !== JSON.stringify(next.action) || (item.completed && !next.completed);
+        return !next || !sameIntentAction(item.action, next.action) || (item.completed && !next.completed);
       })) throw new Error('Bridge import journal ownership changed');
   }
   if (previous && previous.txId !== journal.txId) {

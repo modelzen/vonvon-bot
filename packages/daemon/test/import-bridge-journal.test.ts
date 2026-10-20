@@ -3,8 +3,8 @@ import { link, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, rmdir, sy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { BridgeImportJournalSchema, ownsBridgeImportStage, parseBridgeImportJournal,
-  readBridgeImportJournal, writeBridgeImportJournal, type BridgeImportJournal } from '../src/import/bridge/journal';
+import { BridgeMoveAllocationSchema, BridgeImportJournalSchema, ownsBridgeImportStage, parseBridgeImportJournal,
+  readBridgeImportJournal, writeBridgeImportJournal, withBridgeMoveAllocation, type BridgeMoveAllocation, type BridgeImportJournal } from '../src/import/bridge/journal';
 
 const io = vi.hoisted(() => ({ failRename: false, failSync: false, swapTemporary: '', swapJournal: false, events: [] as string[] }));
 vi.mock('node:fs/promises', async importOriginal => {
@@ -239,4 +239,30 @@ it('refuses an atomic journal replacement during a real read without exposing th
   expect(await readFile(`${file}.retained`)).toEqual(original);
   await writeFile(file, 'SYNTHETIC-SENSITIVE-CORRUPTION');
   await expect(readBridgeImportJournal(paths)).rejects.toThrow(/^Invalid bridge import journal$/);
+});
+
+it('binds durable move allocations and permits only append then null-to-inode progress', async () => {
+  const { paths, journal, directory } = await fixture();
+  let state = parseBridgeImportJournal({ ...journal, before: { ...journal.before, plist: { present: true, sha256: 'a'.repeat(64) } },
+    intents: [{ sequence: 0, completed: false, action: { kind: 'move-plist', from: 'original', to: 'stage', sha256: 'a'.repeat(64) } }] }, paths);
+  await writeBridgeImportJournal(paths, state);
+  const parent = await lstat(directory);
+  const reservation: BridgeMoveAllocation = { txId: journal.txId, sequence: 0, from: 'original', to: 'stage', sha256: 'a'.repeat(64),
+    parent: { dev: parent.dev, ino: parent.ino }, nonce: '33333333-3333-4333-8333-333333333333', inode: null };
+  state = withBridgeMoveAllocation(state, reservation); await writeBridgeImportJournal(paths, state);
+  state = (await readBridgeImportJournal(paths)) ?? state;
+  const temporary = join(directory, 'synthetic-owned'); await writeFile(temporary, '', { flag: 'wx', mode: 0o600 });
+  const metadata = await lstat(temporary), receipt = { ...reservation, inode: { dev: metadata.dev, ino: metadata.ino } };
+  const owned = withBridgeMoveAllocation(state, receipt); await writeBridgeImportJournal(paths, owned);
+  for (const change of [{ txId: '44444444-4444-4444-8444-444444444444' }, { sequence: 1 }, { to: 'backup' },
+    { sha256: 'b'.repeat(64) }, { parent: { dev: parent.dev, ino: parent.ino + 1 } }, { inode: null }]) {
+    expect(() => withBridgeMoveAllocation(owned, BridgeMoveAllocationSchema.parse({ ...receipt, ...change }))).toThrow();
+  }
+  await expect(writeBridgeImportJournal(paths, state)).rejects.toThrow('ownership changed');
+  const action = owned.intents[0]?.action;
+  if (action?.kind !== 'move-plist') throw new Error('missing move intent');
+  expect(() => parseBridgeImportJournal({ ...owned, intents: [{ sequence: 0, completed: false,
+    action: { ...action, allocations: [receipt, receipt] } }] }, paths)).toThrow();
+  expect(() => withBridgeMoveAllocation(owned, { ...receipt, nonce: '55555555-5555-4555-8555-555555555555' })).toThrow();
+  expect((await readBridgeImportJournal(paths))?.intents).toEqual(owned.intents);
 });
