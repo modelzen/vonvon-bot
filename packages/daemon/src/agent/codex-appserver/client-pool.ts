@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { log } from '../../core/logger';
 import { AppServerClient, JsonRpcError } from './app-server-client';
 import { resolveCodexBin } from './locate';
+import { NATIVE_MEMORY_OFF } from './memory-config';
 
 /**
  * 常驻 app-server 进程（M-2，依据 research/08 实测）：
@@ -305,6 +306,11 @@ export function refillWarmPool(): Promise<void> {
           ephemeral: true,
           approvalPolicy: 'never',
           sandbox: 'read-only',
+          config: {
+            ...NATIVE_MEMORY_OFF,
+            // No project is selected during prewarm; never persist trust for tmpdir.
+            projects: { [NEUTRAL_CWD]: { trust_level: 'untrusted' } },
+          },
         }),
         PREWARM_TIMEOUT_MS,
         'prewarm thread/start',

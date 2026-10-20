@@ -59,10 +59,12 @@ describe('Claude judge (design 3.3)', () => {
       cwd: '/data/judge', systemPrompt: 'SMART\n\n格式行', title: 'vonvon judge', model: 'haiku', tools: [], skills: [], mcpServers: {}, strictMcpConfig: true,
       persistSession: false, maxTurns: 1, settingSources: ['user'], thinking: { type: 'disabled' },
       outputFormat: { type: 'json_schema', schema: SCHEMA },
-      settings: { disableAllHooks: true, claudeMdExcludes: expect.arrayContaining(['**/.claude/CLAUDE.md']) },
+      settings: { autoMemoryEnabled: false, env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' }, disableAllHooks: true, claudeMdExcludes: expect.arrayContaining(['**/.claude/CLAUDE.md']) },
     });
     expect(options).not.toHaveProperty('effort');
-    expect(options?.env).toMatchObject({ ENABLE_CLAUDEAI_MCP_SERVERS: 'false' });
+    expect(options?.env).toMatchObject({ ENABLE_CLAUDEAI_MCP_SERVERS: 'false', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' });
+    expect(options?.settings).not.toHaveProperty('autoCompactEnabled');
+    expect(options?.settings).not.toHaveProperty('env.DISABLE_AUTO_COMPACT');
   });
 
   it('tokens come from modelUsage, every model of the query, thinking included; usage only without it', async () => {

@@ -1,6 +1,6 @@
-/** Set on the processes of a bot's session (s46 gives each session a token in it; s37 and s46 use this name), so
- * `vonvon secrets` can refuse them (product.md 3.7). No TOKEN, KEY or SECRET in it: Codex leaves variables with
- * those words out of a shell's environment. */
+/** Marks bot sessions; s46 can replace the default marker with a session token.
+ * Both providers pass TOKEN/KEY/SECRET-named variables too (e04/e04b); this name
+ * is an identity convention, not a protection against shell access. */
 export const SESSION_ENV = 'VONVON_SESSION';
 
 /** A process started inside a bot's session: s46's variable, or the marker the Codex app-server and the Claude SDK
