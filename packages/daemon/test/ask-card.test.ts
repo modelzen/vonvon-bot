@@ -265,6 +265,15 @@ describe('s33 typed questions and answers', () => {
   });
 });
 
+
+it.each([{ name: 'reviewer' }, {}])('keeps child origin in pending and terminal titles: %j', from => {
+  for (const state of [{ kind: 'pending' }, { kind: 'timed-out' }] satisfies AskCardState[]) {
+    const card = buildAskCard({ request: confirmation, state, respondents: [], from });
+    expect(JSON.stringify(card)).toContain(`子 agent${'name' in from ? ' reviewer' : ''} 问：${confirmation.title}`);
+  }
+  expect(JSON.stringify(buildAskCard({ request: confirmation, state: { kind: 'pending' }, respondents: [] }))).not.toContain('子 agent');
+});
+
 describe('s33b sensitive ask cards', () => {
   const request = parseAskRequest({ ...base, kind: 'choices', questions: [
     { id: 'password', title: '密码', detail: '填写密码', selection: 'text', sensitive: true },

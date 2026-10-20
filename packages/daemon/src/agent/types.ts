@@ -231,7 +231,8 @@ export type AgentEvent =
       timeUsedSeconds: number;
       tokenBudget: number | null;
     }
-  | { type: 'ask'; request: AskRequest }
+  | { type: 'ask'; request: AskRequest; subagentId?: string }
+  | { type: 'awaiting_subagents' }
   | { type: 'ask_cancelled'; requestId: string }
   | { type: 'error'; message: string; willRetry: boolean; kind?: AgentErrorKind };
 
@@ -270,6 +271,7 @@ export interface AgentRun {
   respondToAsk?(requestId: string, resolution: AskResolution): Promise<void>;
   /** Synchronous provider claim state, including terminal events not yet consumed by the UI. */
   askPending?(requestId: string): boolean;
+  /** Ordinary runs emit done after all running children settle; goal runs carry children across turns. */
   events: AsyncIterable<AgentEvent>;
   /** current turn id, available after `turn_started` */
   turnId(): string | undefined;
