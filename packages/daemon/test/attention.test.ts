@@ -256,3 +256,19 @@ describe('freeze (s25g)', () => {
     expect(a.freeze(A2, T0)).toBe(false); expect(a.state(A2.place)).toBeUndefined();
   });
 });
+
+it('reports real per-group main and topic state, eviction and forgetting without topic ids', () => {
+  const a = new Attention({ places: 2 });
+  let latest = a.snapshot();
+  a.observe(groups => { latest = groups; });
+  a.arrive(A, T0);
+  a.arrive(A1, T0, { mine: true });
+  expect(latest).toEqual([{ groupId: 'oc_a', main: { mode: 'watch', intervalMs: 60000 }, focusedTopics: 1, watchedTopics: 0 }]);
+  a.freeze(A1, T0);
+  expect(latest[0]?.watchedTopics).toBe(1);
+  a.arrive(B, T0);
+  expect(latest.find(group => group.groupId === 'oc_a')?.main).toBeUndefined();
+  a.forget('oc_a');
+  expect(latest.map(group => group.groupId)).toEqual(['oc_b']);
+  expect(new Attention().snapshot()).toEqual([]);
+});

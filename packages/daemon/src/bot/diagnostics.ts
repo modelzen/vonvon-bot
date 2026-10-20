@@ -1,6 +1,6 @@
 import {
   DENIED_SCOPE_SHOWN_MS, diagnosticsEventSchema,
-  type BotDiagnostics, type DeniedScope, type DiagnosticsEvent, type NotReplied, type NotRepliedReason, type ScopeDenialPlace,
+  type GroupAttention, type BotDiagnostics, type DeniedScope, type DiagnosticsEvent, type NotReplied, type NotRepliedReason, type ScopeDenialPlace,
 } from '@vonvon/protocol';
 import { redactTokens } from '../core/token-redact';
 import { CHAT_OPTIONAL_SCOPES, REQUIRED_SCOPES } from '../config/scopes';
@@ -22,6 +22,8 @@ function report(event: DiagnosticsEvent): void {
 }
 /** `times` > 1: one record for that many messages (a group's dropped queue, s18c). */
 export function reportNotReplied(record: Omit<NotReplied, 'count'>, times = 1): void { report({ kind: 'notReplied', record, ...(times > 1 ? { times } : {}) }); }
+export function reportAttention(groups: GroupAttention[]): void { report({ kind: 'attention', groups }); }
+export function reportCustomPromptNotice(groupId: string): void { report({ kind: 'customPrompt', groupId }); }
 /** Only scopes the console check reads reach 缺的权限, which may call one 后台显示已开; Feishu's list of scopes that
  * would do can start with an alias (`im:message`), so the name is the first the check reads, else the first. */
 const CHECKED_SCOPES: ReadonlySet<string> = new Set([...REQUIRED_SCOPES, ...CHAT_OPTIONAL_SCOPES]);
@@ -75,6 +77,7 @@ export interface DiagnosticsStore {
   /** A bot's records for the snapshot; undefined when it has none. */
   view(appId: string): BotDiagnostics | undefined;
   /** Drops the records of bots no longer registered. */
+  clearLive(appId: string): void;
   retain(appIds: ReadonlySet<string>): void;
   close(): void;
 }
@@ -84,7 +87,7 @@ export interface DiagnosticsStore {
  * once a second. A Claude turn that failed for its login tells `claudeSignedOut`. */
 export function createDiagnosticsStore(opts: { changed: () => void; claudeSignedOut?: (at: number) => void; now?: () => number; throttleMs?: number }): DiagnosticsStore {
   const now = opts.now ?? Date.now;
-  const bots = new Map<string, { notReplied: NotReplied[]; deniedScopes: DeniedScope[] }>();
+  const bots = new Map<string, BotDiagnostics>();
   let timer: NodeJS.Timeout | undefined;
   let closed = false;
   const changed = (): void => {
@@ -96,7 +99,11 @@ export function createDiagnosticsStore(opts: { changed: () => void; claudeSigned
     accept(appId, event) {
       const bot = bots.get(appId) ?? { notReplied: [], deniedScopes: [] };
       bots.set(appId, bot);
-      if (event.kind === 'scopeDenied') {
+      if (event.kind === 'attention') {
+        bot.attention = event.groups;
+      } else if (event.kind === 'customPrompt') {
+        bot.customPromptGroups = [...new Set([...(bot.customPromptGroups ?? []), event.groupId])];
+      } else if (event.kind === 'scopeDenied') {
         bot.deniedScopes = [event.denial, ...bot.deniedScopes.filter(item => item.scope !== event.denial.scope)].slice(0, DENIED_SCOPE_LIMIT);
       } else {
         const record = event.record;
@@ -115,7 +122,11 @@ export function createDiagnosticsStore(opts: { changed: () => void; claudeSigned
       const bot = bots.get(appId);
       if (!bot) return undefined;
       const deniedScopes = bot.deniedScopes.filter(item => now() - item.at < DENIED_SCOPE_SHOWN_MS);
-      return bot.notReplied.length || deniedScopes.length ? { notReplied: bot.notReplied, deniedScopes } : undefined;
+      return bot.notReplied.length || deniedScopes.length || bot.attention || bot.customPromptGroups?.length ? { ...bot, deniedScopes } : undefined;
+    },
+    clearLive(appId) {
+      const bot = bots.get(appId);
+      if (bot) { delete bot.attention; delete bot.customPromptGroups; changed(); }
     },
     retain(appIds) { for (const appId of bots.keys()) if (!appIds.has(appId)) bots.delete(appId); },
     close() { closed = true; if (timer) clearTimeout(timer); timer = undefined; },

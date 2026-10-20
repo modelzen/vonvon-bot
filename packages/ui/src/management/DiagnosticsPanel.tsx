@@ -1,6 +1,6 @@
 import type {ReactNode} from 'react';
 import {
-  NOT_REPLIED_TEXT, OPTIONAL_SCOPE_EFFECTS, SCOPE_DENIAL_PLACE_TEXT, backendLabel, botSteps, connectionStep, crashText, formatTime, toolSteps,
+  CUSTOM_PROMPT_NOTICE, NOT_REPLIED_TEXT, OPTIONAL_SCOPE_EFFECTS, SCOPE_DENIAL_PLACE_TEXT, backendLabel, botSteps, connectionStep, crashText, formatTime, toolSteps,
   type AdminSetupStatus, type Agent, type Command, type CommandResult, type CrashEntry, type DesktopSnapshot, type DirectoryProblem, type Membership, type NotReplied, type SetupStep, type StepAction, type StepTone,
 } from '@vonvon/protocol';
 import {useClient, useShellCapabilities} from '../client-context';
@@ -102,6 +102,20 @@ function CrashList({records, now}: {records: readonly CrashEntry[]; now: number}
   </li>)}</ul>;
 }
 
+function SmartDiagnostics({agent, snapshot, now}: {agent: Agent; snapshot: DesktopSnapshot; now: number}) {
+  const groups = snapshot.memberships.filter(member => member.agentId === agent.id && member.conversation === 'smart');
+  if (!groups.length) return null;
+  return <>
+    <SettingsRow title="智能群关注状态" description={<ul className="diagnostics-scopes">{groups.map(member => {
+      const state = agent.running && agent.enabled && !member.stale ? agent.diagnostics?.attention?.find(item => item.groupId === member.groupId) : undefined;
+      const main = state?.main ? `主区${state.main.mode === 'focus' ? '专注' : `留意（间隔 ${state.main.intervalMs / 1000} 秒）`}` : '主区尚无关注状态';
+      const budget = state?.budget && state.budget.until > now ? state.budget.kind === 'no-glance' ? '；判断预算已到 45 次，暂停扫一眼' : '；判断预算已到 60 次，仅真人 @、引用或回答它的根消息仍判断' : '';
+      return <li key={member.id}>{member.name}：{!agent.enabled || !agent.running ? 'Bot 未运行' : member.stale ? '群状态暂不可读' : !agent.diagnostics?.attention ? 'daemon 未提供关注状态' : `${main}；话题专注 ${state?.focusedTopics ?? 0} 个、留意 ${state?.watchedTopics ?? 0} 个${budget}`}</li>;
+    })}</ul>}/>
+    {groups.some(member => agent.diagnostics?.customPromptGroups?.includes(member.groupId)) && <SettingsRow title="自定义智能提示词" description={<ul className="diagnostics-scopes">{groups.filter(member => agent.diagnostics?.customPromptGroups?.includes(member.groupId)).map(member => <li key={member.id}>{member.name}：{CUSTOM_PROMPT_NOTICE}</li>)}</ul>}/>}
+  </>;
+}
+
 function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
   agent: Agent; snapshot: DesktopSnapshot; read: SetupRead | undefined; tools: readonly SetupStep[];
   onOpenSetup: () => void; onError: (message: string) => void;
@@ -133,6 +147,7 @@ function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
         onClick={() => void openExternalUrl(grantUrl, 'app-console', shell).catch(error => onError(error instanceof Error ? error.message : '无法打开开发者后台。'))}>一键开权限</Button>}</span>}/>
     <SettingsRow title="后端" description={toolText || '还没有绑定群'}/>
     {misplaced.length > 0 && <SettingsRow title="群目录" description={<DirectoryProblems members={misplaced}/>} trailing={badge(`${misplaced.length} 个群放错了位置`, 'warning')}/>}
+    <SmartDiagnostics agent={agent} snapshot={snapshot} now={now}/>
     <SettingsRow title="最近没回的消息" description={<NotRepliedList records={records} agent={agent} snapshot={snapshot} now={now}/>}/>
     {crashes && <SettingsRow title="最近的崩溃" description={<CrashList records={crashes} now={now}/>}/>}
   </SettingsGroup>;
