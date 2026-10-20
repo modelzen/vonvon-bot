@@ -764,9 +764,9 @@ bot 的个性、记忆、skill 导入后为空，行为和今天一样。
 ## 8. 发布条件
 
 公开发布前要满足这些，由 owner 决定谁来做：
-1. dmg 签名并公证，更新源可用。要 Apple 开发者的公证凭据，以及一个公开的下载和更新地址。
-2. Claude 的登录：第一版复用用户本机的 Claude 登录。Agent SDK 的文档写着"Unless previously approved, Anthropic does not allow third party developers to offer claude.ai login or rate limits for their products"（code.claude.com/docs/en/agent-sdk/overview）；另一份帮助文档又说 Agent SDK 和第三方应用照样可以用订阅额度（`docs/research/2026-10-14-strategy/agent-integrations.md:119`）。两份说法不一致，所以公开发布前向 Anthropic 要书面确认。拿不到确认，公开版里 Claude 改成只支持 API key。开发和自用不受影响。问答第 17 题问的就是这件事，不是测试时用什么账号。
-3. daemon 的 `package.json` 写着 MIT，发布前改掉。安装包带上 bridge（MIT）和 Paseo（Apache-2.0，NOTICE）的许可声明。第一版闭源。
+1. universal dmg 使用已有的 Developer ID 签名，启用 hardened runtime 和所需 entitlements，签名验证通过。公开下载和更新地址做成配置项，发布前填写并验证可用；公证由 owner 以后决定，本轮不做公证、不配置公证凭据（owner 2026-10-20）。
+2. Claude 的登录：第一版复用用户本机的 Claude 登录。Agent SDK 的文档写着"Unless previously approved, Anthropic does not allow third party developers to offer claude.ai login or rate limits for their products"（code.claude.com/docs/en/agent-sdk/overview）；另一份帮助文档又说 Agent SDK 和第三方应用照样可以用订阅额度（`docs/research/2026-10-14-strategy/agent-integrations.md:119`）。两份说法不一致，所以公开发布前向 Anthropic 要书面确认。owner 2026-10-20 定 s66 不做，由 owner 去要书面确认，本轮不实施只支持 API key 的公开构建。开发和自用不受影响。问答第 17 题问的就是这件事，不是测试时用什么账号。
+3. 第一方包使用 UNLICENSED，第一版闭源。安装包保留 bridge（MIT）和 Paseo（Apache-2.0，NOTICE）的许可声明，不改变第三方的许可归属。
 4. bridge 的最后一版发出（第 5 节）。
 5. 在一台没有 bridge 的 Mac 上，从零安装、扫码、开权限，第一次对话走通。Linux 命令行版在一台 systemd 主机上走通安装、崩溃重启、停止和卸载。
 
