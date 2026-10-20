@@ -623,6 +623,8 @@ describe('unbound group hints', () => {
 
   it('does not reply or record diagnostics without a mention', async () => {
     const o = unbound();
+    expect(notes).toEqual([{ kind: 'attention', groups: [] }]);
+    notes.length = 0;
     await o.onMessage({ ...unboundMessage('一'), mentionedBot: false });
     expect(fake.send).not.toHaveBeenCalled();
     expect(notes).toEqual([]);
