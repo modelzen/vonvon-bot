@@ -1947,7 +1947,7 @@ export function createOrchestrator(
     const reads = await judgeFactRead(withDeadline(Promise.all([orStop(recent.fill(item.place, msg.createTime, (o) => {
       const opts = { ...o, before: msg.createTime, keepSelf: true, names };
       return withDeadline(msg.threadId ? fetchThreadContext(channel, msg.threadId, opts) : fetchChatContext(channel, msg.chatId, opts), LOOKUP_DEADLINE_MS, 'recent-context');
-    }, others), undefined), orStop(withDeadline(roster.load(msg.chatId), LOOKUP_DEADLINE_MS, 'judge-roster').catch(() => undefined), undefined).then(bots => bots ? roster.selection(msg.chatId) : undefined)]), LOOKUP_DEADLINE_MS, 'judge-facts'), signal);
+    }, others), undefined), orStop(withDeadline(roster.load(msg.chatId).then(() => roster.selection(msg.chatId)), LOOKUP_DEADLINE_MS, 'judge-roster').catch(() => undefined), undefined)]), LOOKUP_DEADLINE_MS, 'judge-facts'), signal);
     const topic = !signal.aborted && msg.threadId && topics ? (await judgeFactRead(orStop(withDeadline(topics.list(msg.chatId), LOOKUP_DEADLINE_MS, 'judge-topic'), undefined), signal))?.find((t) => t.topicId === msg.threadId) : undefined;
     const title = topic?.title;
     let context = recent.context(item.place, { id: msg.messageId, at: msg.createTime });

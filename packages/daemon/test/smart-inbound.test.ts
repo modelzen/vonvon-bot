@@ -9,6 +9,7 @@ import { projectRevision } from '../src/admin/collaboration';
 import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
 import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
+import { ROSTER_TTL_MS } from '../src/bot/bot-roster';
 import { PEOPLE_RETRY_MS, PEOPLE_TTL_MS } from '../src/bot/chat-people';
 import { wakeTriggerText } from '../src/bot/context-weave';
 import { AT_HINT_NOTE, BOT_WAKE_NOTE, INITIATIVE_NOTE } from '../src/bot/session-title';
@@ -2037,6 +2038,26 @@ describe('no rules at the smart entry (s25e)', () => {
     expect(req.message.sameNameWord).toBeUndefined();
     await decide(latest, result('skip'));
   });
+  it('does not reuse an old complete roster when the current fact read times out', async () => {
+    const first = says('第一次读取', { at: true });
+    expect((await ask(first)).facts?.otherBots).toEqual({ names: ['小P'], complete: true });
+    await decide(first, result('skip')); await settle();
+    const pending = deferred<{ code: number; data: { bots: { app_id: string; member_id: string; name: string }[] } }>();
+    const realNow = Date.now.bind(Date);
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + ROSTER_TTL_MS + 1);
+    fake.request.mockReturnValue(pending.promise);
+    try {
+      const next = says('缓存过期后', { at: true });
+      await send(next);
+      await vi.waitFor(() => expect(asked.has(idOf(next))).toBe(true), { timeout: 5_000 });
+      expect(asked.get(idOf(next))?.req.facts?.otherBots).toEqual({ names: [], complete: false });
+      await decide(next, result('skip')); await settle();
+      pending.resolve({ code: 0, data: { bots: [{ app_id: 'late', member_id: 'ou_late', name: '迟到名册' }] } });
+      await settle();
+      expect(asked.get(idOf(next))?.req.facts?.otherBots).toEqual({ names: [], complete: false });
+    } finally { now.mockRestore(); pending.resolve({ code: 0, data: { bots: [] } }); }
+  }, 10_000);
+
   it('23: commands need an at in multi-bot main areas, while a lone bot still serves help', async () => {
     fake.bots = '2'; await send(says('/help')); await settle();
     expect(fake.judge).not.toHaveBeenCalled(); expect(fake.send).not.toHaveBeenCalled();
