@@ -3,8 +3,10 @@ import { access, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkedProductVersion } from '../../scripts/product-version.mjs';
 import { stageDaemon } from '../../scripts/stage-daemon.mjs';
 
+const version = await checkedProductVersion();
 const root = dirname(fileURLToPath(import.meta.url));
 const dist = join(root, 'dist');
 const stage = join(root, 'stage');
@@ -57,7 +59,8 @@ await cp(ui, join(stage, 'ui'), { recursive: true });
 await cp(join(root, 'assets/tray.png'), join(stage, 'assets/tray.png'));
 await writeFile(join(stage, 'package.json'), JSON.stringify({
   name: 'vonvon-bot-desktop',
-  version: '0.1.0',
+  version,
+  license: 'UNLICENSED',
   private: true,
   main: 'desktop/main.cjs',
   description: 'Vonvon Bot desktop',
@@ -73,6 +76,7 @@ await cp(npmSource, join(stage, 'npm'), { recursive: true, dereference: true });
 
 const daemonMetadata = JSON.parse(await readFile(join(daemonSource, 'package.json'), 'utf8'));
 await stageDaemon(daemonStage, {
-  name: daemonMetadata.name, version: daemonMetadata.version, type: 'module', bin: daemonMetadata.bin,
+  name: daemonMetadata.name, version, type: 'module', bin: daemonMetadata.bin,
+  license: daemonMetadata.license, author: daemonMetadata.author,
   dependencies: daemonMetadata.dependencies,
 });

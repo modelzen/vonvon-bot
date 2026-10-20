@@ -310,12 +310,12 @@ Codex 先用隔离的 HOME 和 bridge 数据副本走完整个导入，包括故
 
 ### M11 公开发布准备（s65、s66、s67）
 
-**给 owner 什么：**（第 8 节）能出签名并公证过的 universal dmg，Intel Mac 也能装；应用里能检查更新并装上新版。npm 包和桌面包的许可证改成闭源（UNLICENSED）。在一台没有 bridge 的 Mac 上，从零安装、扫码、开权限，第一次对话走通，这是第 8 节第 5 条的 Mac 一半。s66 只在要不到 Anthropic 的书面确认时做。
+**给 owner 什么：**（第 8 节）能在本地出已有 Developer ID 签名的 universal dmg，Intel Mac 也能装；hardened runtime 和 entitlements 明确配置，签名以 `codesign --verify --deep --strict` 验证。公证以后由 owner 定，不是本次 s65 前置。应用里检查更新并装上新版的完整承诺保留，s65 先生成本地清单和 feed，公开地址发布前填。npm 包和桌面包的许可证改成闭源（UNLICENSED）。在一台没有 bridge 的 Mac 上，从零安装、扫码、开权限，第一次对话走通，这是第 8 节第 5 条的 Mac 一半。s66：owner 2026-10-20 定不做，owner 去向 Anthropic 要确认。
 
 **怎么验收：** owner 要做的：第 1 步里新开一个干净的 macOS 用户装 dmg，第 2 步（从零扫码走清单，到第一次对话）。其余步骤 Codex 在 M11 的预览版任务里先做完，结果写在通知里。
 
-product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前办好。开始前还没定的，Claude 用【需要你决定】一次问齐。然后：
-1. Codex 先查：从下载地址下载 dmg，用 `spctl --assess --type open --context context:primary-signature` 查 dmg、`spctl --assess --type execute` 查里面的 app，再用 `xcrun stapler validate` 查两者，都通过。命令行下载的文件不带隔离标记，Gatekeeper 不会真的拦一次，所以放不放行只在 owner 这一半看。owner：在 Mac 上新开一个干净的 macOS 用户（没有 bridge），从下载地址装 dmg，Gatekeeper 直接放行。
+owner 2026-10-20 已定 s65 先做本地包，地址以后填，公证以后定，不再重复问这些决定。发布前其余准备按本文第 8 节检查。然后：
+1. s65 本地先查：app 用 `codesign --verify --deep --strict` 验签，dmg 独立验签；Apple Silicon 和已有 Rosetta 分别实际启动。此时不跑公证或 stapler，不宣称 Gatekeeper 放行。公开地址和公证以后准备好时，再从公开地址下载并做对应 `spctl`/`stapler` 验证；owner 在干净 macOS 用户中从公开地址安装的发布前验收保留，不能用本地无 quarantine 启动替代。
 2. owner：从零走一遍清单：扫码、开权限、事件订阅、发布、登录时启动，然后第一次对话走通。
 3. Codex 先查：装一个旧一点的版本，在"应用与启动"页检查更新，装上新版。装回新版后，`vonvon service status` 和装旧版之前一样，Codex 在回复里写明。
 
@@ -1431,12 +1431,13 @@ s46 做法：真实 A/B/K、四轮和 Bot 6 证据归属任务 125 的源码 `0e
 
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
-| [ ] | s65 | 公证的 universal dmg、更新源和许可证 | universal 包，hardened runtime 和 entitlements，公证；版本号统一写入；生成更新清单和 feed；许可证改成 UNLICENSED（第 8 节第 1、3 条） | 370 | — | macOS 原生 | 用 owner 的证书签名并公证：Gatekeeper 放行，Apple Silicon 和 Rosetta 下都能启动，能检查并装上新版 |
-| [ ] | s66 | 公开版里 Claude 只用 API key（要不到书面确认时才做） | 公开构建里 Claude 不复用本机登录，只用主人填的 API key；开发版和自用版不变（第 8 节第 2 条） | 250 | s03 | 错误路径 | 公开构建里 Claude 只用 API key、不读钥匙串里的登录（要 owner 给一个 key） |
+| [x] | s65 | 本地 universal 分发包、签名和更新产物 | universal dmg/zip，hardened runtime 和 entitlements，已有 Developer ID 签名；统一版本；本地更新 manifest/feed；第一方 UNLICENSED。公证以后由 owner 定，地址发布前填（owner 2026-10-20） | 900–1200（实际 611；#468） | — | macOS 原生、错误路径 | codesign --verify --deep --strict；真实双架构，Apple Silicon/Rosetta 分别启动；本地清单适配现有更新器。公开下载与完整旧版更新安装留发布前验证 |
+| — | s66 | owner 2026-10-20：不做，owner 去要确认 | 不实施 API-only 公开构建；Claude 登录书面确认仍是公开发布前事项（第 8 节第 2 条） | — | — | — | 保留 owner 获取书面确认的发布前义务 |
 | [ ] | s67 | 发布前的 Mac 验收 | 第 8 节第 5 条的 Mac 一半：在没有 bridge 的 macOS 用户上，用公开的 dmg 从零安装、扫码、开权限、第一次对话；结果写进本文第 10 节 | 30 | s65、s63；s64 已准备好即可 | — | 全部在真机和真实飞书里做，扫码由 owner 来做 |
 
 开工要点：
-- s65：今天 `build.mjs` 写死版本 0.1.0，而更新比较用的正是它。bridge 和 Paseo 的许可声明（NOTICE、LICENSE.bridge、LICENSE.paseo）今天已经随 npm 包和桌面包发，只改 license 字段。
+- s65：详细计划见 `docs/plans/s65.md`，不等最后一轮 UI。以 daemon 现有版本为产品源，desktop/stage/Core/npm 一致；协议/client 自有版本不改。正式 universal 走双架构 Electron 下载、合并后签名，preview 保留 Apple Silicon。桥接与 Paseo 的 NOTICE、LICENSE.bridge、LICENSE.paseo、PROVENANCE 继续随 npm/app 分发。真实签名、架构、Rosetta 和更新产物证据按作者结果记录，未验不勾。
+- s65 做法（#468）：正式 API 显式 universal targets，双架构 Electron 合并后已有 Developer ID 签名；13 个 Mach-O 双架构/逐个验签，5 份权限精确仅 JIT。dmg 挂载内 app 另验，arm64 与已有 Rosetta 分别实际启动；Rosetta 首次未就绪保留，诊断后全新隔离目录重试成功，原因未证实。本地清单/模板、UNLICENSED 和 npm 声明已验；公证/公开下载/完整在线更新仍未验。详见 `docs/research/2026-10-20-s65/local-distribution.md`。
 - s67：先由预览版任务装好，Codex 走一遍不需要扫码的部分，再交 owner 验收。Linux 那一半在 s20b 做。
 
 ### 界面打底（u01 到 u10）
@@ -1571,7 +1572,8 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | 密钥页"谁在用"怎么排 | 一个 Bot 默认或一个群一行，每行写 Bot 名和怎么选的；30 个群时这一列约 1,200px 高 | Claude 定的，owner 看稿子后可能改。按 Bot 分组（Bot 一行，下面的群只写群名和"自己选了"或"不是智能群"）能压到三分之一；删之前要看清每个群跟着谁，先照现在的排（s23g2 多角度审查 B5） | s23g2 |
 | "谁在用"列不列现在不是智能群的 | 列，标"现在不是智能群"；删的确认里单列一段，写"删了不影响；改成智能群后会按出错处理" | Claude 定的，owner 看稿子后可能改。选了 Jev 的群改回智能马上就要用这个 key，删之前该知道 | s23g2 |
 | 卡片里的 @所有人 | 变文字（上面"卡片和 markdown 里的 `<at>`"一行，s27a0 已做，s23g2 不改） | Claude 定的，owner 看稿子后可能改。@所有人叫不叫得醒别的 bot 没测，宁可不叫 | s27a0 |
-| 许可证 | UNLICENSED | 第一版闭源，第 8 节第 3 条要求发布前改掉 MIT | s65 |
+| 许可证 | 第一方 UNLICENSED；第三方声明保留 | 第一版闭源，第 8 节第 3 条；不改 bridge/Paseo 许可归属 | s65 |
+| 正式桌面包 | universal dmg/zip；hardened runtime，已有 Developer ID 签名；本地清单/feed | owner 2026-10-20；公开地址发布前填，公证以后由 owner 定；未配地址更新不可用 | s65 |
 | Linux 验收在哪做 | JP-VPS 上的普通用户账号，做完卸载 | 第 8 节第 5 条要一台 systemd 主机 | s20b |
 | Linux 上 `service install` 怎么问 linger | 只在终端里问一句，回车或 y 算同意；不是终端、没带 `--linger` 就不开，只打命令；`--linger` 不问就开，`--no-linger` 不开；不用 sudo，开不了给出 sudo 的命令 | 3.10 说"没开就问一句，同意后执行"，没说没人回答时怎么办；没人回答不算同意 | s20a |
 | 卸载时的 linger | 不关，只提示 `loginctl disable-linger` | linger 是这个账号的设置，别的用户服务可能也靠它，也分不出是不是 `service install` 开的 | s20a |
@@ -1661,7 +1663,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | 每条会话记几条撤回说明 | 20 条，留最新的 | 3.5 没给数；说过一次就清，平时到不了 | s15 |
 | 比消息先到的撤回记多久 | 进程内记一天，最多 2000 个消息 id，不落盘 | 飞书的事件不保证按顺序到；隔得更久的很少见 | s15 |
 | 网页端运行状态刷新 | 有运行时每 3 秒重拉一次 `context`；空闲、切换会话或卸载时清定时器 | 还没有推送，子 agent 后来出现的行和停止后的状态要看得到；一次是本机 IPC 一来一回 | s34b |
-| 预览版 | 只出 Apple Silicon，不公证 | 只装在 owner 自己的 Mac 上验收；universal 包和公证在 M11（第 8 节第 1 条） | 本文第 7 节 |
+| 预览版 | 只出 Apple Silicon，不公证 | 只装在 owner 自己的 Mac 上验收；universal 包在 M11 s65；公证由 owner 以后决定（2026-10-20） | 本文第 7 节 |
 
 ### 叫法表
 
@@ -1773,9 +1775,9 @@ D8 的三个待定项（product.md 第 11 节），u01 这样定：
 
 | 事 | 什么时候要 | 说明 |
 |---|---|---|
-| Apple 开发者的公证凭据 | M11（s65） | 申请和配置要时间 |
-| 公开的下载和更新地址 | M11（s64 的通知、s65 的更新源） | product.md 第 8 节第 1 条 |
-| 向 Anthropic 要 Claude 登录的书面确认 | 公开发布前 | product.md 第 8 节第 2 条，可能要几周；要不到就做 s66 |
+| Apple 开发者的公证凭据 | owner 以后决定公证时 | owner 2026-10-20：此次 s65 不公证、不配置凭据 |
+| 公开的下载和更新地址 | 公开发布前填写；s64 通知/更新源上线前 | owner 2026-10-20 先不定；s65 做配置和本地产物，不硬编码 |
+| 向 Anthropic 要 Claude 登录的书面确认 | 公开发布前 | product.md 第 8 节第 2 条；owner 2026-10-20 定 s66 不做，owner 去要确认 |
 | 一位同事或第二个飞书账号 | e10（s18 之前）、e09（s30 之前）、M6 第 4 步、M9 第 2 和第 6 步 | 验收时要有另一个人点卡片、私聊 bot |
 | TypeSafe 的账号和 key | s23f、s23g 和 M5 第 11 步（测试 key 已给，2026-10-18） | 测试 key 存在 JP-VPS 本机，不进仓库，Claude 在 JP-VPS 上测这几处时用。Mac 上要用 Jev 时由 owner 在密钥页自己填，key 不经 GitHub 传给 Mac 上的 Codex。长期用要 owner 自己的账号和付款方式；有没有免费额度，文档没写 |
 | JP-VPS 上再加两个测试 bot | 已做（2026-10-16） | M5 要同一台机器上三个 bot（一个规则模式、两个智能模式）。owner 在 JP-VPS 的终端里扫码建了 Vonvon Bot 7、Bot 8，开发者后台由 Mac 上的 Codex 配好、发布（本文第 10 节"M3 验收期间顺带看到的"） |
