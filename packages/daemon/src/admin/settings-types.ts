@@ -60,7 +60,7 @@ export interface SmartPromptView {
   source: 'default' | 'bot' | 'group';
   path: string;
   text: string;
-  formatLines: Record<'main' | 'mentioned' | 'topic', string>;
+  formatLines: { main: string; topic: string; mentioned?: string };
   inputExample: string;
   backendNote?: string;
   maxLength: number;

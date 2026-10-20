@@ -83,7 +83,7 @@ describe('Claude judge (design 3.3)', () => {
   it.each([
     ['main', '```json\n{"decision":"skip","reason":"张三是@王五约时间，与小码无关，不需要插话"}\n```', 'skip'],
     ['topic', '{"decision":"reply","reason":"张三在问迁移期间缓存抖动的降级方案，属于小码可协助的技术问题，群里暂无人答。"}', 'reply'],
-    ['mentioned', '{"decision":"topic","reason":"点名要查线上500日志，需要排查和多轮来回，开新话题更合适"}', 'topic'],
+    ['main', '{"decision":"topic","anchor":"m0","reason":"点名要查线上500日志，需要排查和多轮来回，开新话题更合适"}', 'topic'],
   ] as const)('error_max_turns with a %s answer in text: the last text goes to parseVerdict', async (variant, text, decision) => {
     const { backend } = backendWith([assistantText('先想一下'), { type: 'user', message: { content: [] } } as unknown as SDKMessage, assistantText(text), maxTurns]);
     const out = await backend.judge!(call());

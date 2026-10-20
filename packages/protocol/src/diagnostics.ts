@@ -72,16 +72,16 @@ export const NOT_REPLIED_TEXT: Record<NotRepliedReason, Text> = {
   },
   "judge-skip": {
     reason: r => `判断后没接话${r.detail ? `：${r.detail}` : ""}`,
-    next: () => "智能模式下这是正常的。真人要它一定回就 @ 它；总是漏回就改智能提示词。",
+    next: () => "智能模式下这是正常的。总是漏回就改智能提示词。",
   },
   "judge-failed": {
     reason: r => `判断没出结果${r.detail ? `（${r.detail}）` : ""}，这条没回`,
     // a decision model's key: the key page fixes it, or the keystore's error in the log below (s23g2)
-    next: r => keyFailureOf(r.detail) === "key" ? "在密钥页填了就恢复；真人 @ 它一定会回。"
-      : keyFailureOf(r.detail) === "keystore" ? "密钥库读得了就恢复，原因在下面 daemon 日志的 secrets.unreadable；真人 @ 它一定会回。"
-      : "真人 @ 它一定会回；反复出现时看下面的日志。",
+    next: r => keyFailureOf(r.detail) === "key" ? "在密钥页填了就恢复；真人 @ 它的照旧会回。"
+      : keyFailureOf(r.detail) === "keystore" ? "密钥库读得了就恢复，原因在下面 daemon 日志的 secrets.unreadable；真人 @ 它的照旧会回。"
+      : "真人 @ 它的照旧会回；反复出现时看下面的日志。",
   },
-  "judge-budget": { reason: () => "这个群这一小时判断了 60 次，到了上限，这条没判断", next: () => "一小时内会恢复；真人 @ 它仍然会回。" },
+  "judge-budget": { reason: () => "这个群这一小时判断了 60 次，到了上限，这条没判断", next: () => "一小时内会恢复；真人 @ 它的不算在这个数里，照常判断。" },
   "judge-superseded": { reason: () => "判断说要回，但它已随后来的消息进了会话，没单独回", next: () => "不用处理。" },
   "judge-empty": {
     reason: r => `自己接话后没有要说的，${r.detail ?? "删掉了空卡"}`,

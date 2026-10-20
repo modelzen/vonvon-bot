@@ -65,7 +65,6 @@ describe('decision model request (s23f 做法（问法）)', () => {
       const { questions } = decisionBody(req(variant, extra), 'S', 'jev-latest');
       return [Object.keys(questions.decision.criteria), questions.anchor ? Object.keys(questions.anchor.criteria) : undefined];
     };
-    expect(keys('mentioned')).toEqual([['main', 'topic'], undefined]);
     expect(keys('topic', { topicTitle: ' 3.2 发版说明 ' })).toEqual([['skip', 'reply'], undefined]);
     expect(decisionBody(req('topic', { topicTitle: ' 3.2 发版说明 ' }), 'S', 'm').state.topic_title).toBe('3.2 发版说明');
     const people: JudgeLine[] = Array.from({ length: 6 }, (_, i) => ({ id: `om_${i}`, at: at(10, i), from: 'user', name: `人${i}`, text: `第 ${i} 条` }));
@@ -106,13 +105,13 @@ describe('decision model request (s23f 做法（问法）)', () => {
   });
 
   it('shows the options and a sample state in place of the format lines and the text input', () => {
-    for (const variant of ['main', 'mentioned', 'topic'] as const) {
+    expect(Object.keys(DECISION_FORMAT_LINES)).toEqual(['main', 'topic']);
+    for (const variant of ['main', 'topic'] as const) {
       expect(DECISION_FORMAT_LINES[variant].split('\n')[0]).toBe(JUDGE_FORMAT_HEADER);
       expect(DECISION_FORMAT_LINES[variant]).toContain('决策模型不读格式行');
     }
     expect(DECISION_FORMAT_LINES.topic).toContain('\nreply：回：');
     expect(DECISION_FORMAT_LINES.main).toContain('锚点');
-    expect(DECISION_FORMAT_LINES.mentioned).not.toContain('锚点');
     expect(DECISION_INPUT_EXAMPLE).toBe(`${JSON.stringify(decisionBody(JUDGE_INPUT_EXAMPLE_REQUEST, '', 'jev-latest').state, null, 2)}\n${JUDGE_INPUT_BOUNDS}`);
     expect(JSON.parse(DECISION_INPUT_EXAMPLE.slice(0, DECISION_INPUT_EXAMPLE.lastIndexOf('\n'))).new_message).toMatchObject({ id: 'm0', mentions: ['小码'] });
   });
@@ -126,8 +125,8 @@ describe('decision model answer (s23f 做法（原因和把握度）)', () => {
       decision: 'main', reason: 'Jev：不回 0.20、主区 0.50、开话题 0.30（把握度 0.25）', confidence: 0.25, anchor: 4, notes: ['choice-mismatch'],
       providerModel: 'jev-1.13.0', inputTokens: 1200, outputTokens: 30,
     });
-    expect(readDecision(sent('mentioned'), 'mentioned', 'Jev', answer({ choice: 'main', confidence: 0.82, probabilities: { main: 0.91, topic: 0.09 } }))).toMatchObject({
-      decision: 'main', reason: 'Jev：主区 0.91、开话题 0.09（把握度 0.82）', notes: [],
+    expect(readDecision(sent('topic'), 'topic', 'Jev', answer({ choice: 'reply', confidence: 0.82, probabilities: { skip: 0.09, reply: 0.91 } }))).toMatchObject({
+      decision: 'reply', reason: 'Jev：不回 0.09、回 0.91（把握度 0.82）', notes: [],
     });
   });
 
@@ -161,9 +160,9 @@ describe('decision model answer (s23f 做法（原因和把握度）)', () => {
       expect(read).not.toHaveProperty('anchor');
     }
     expect(readDecision(sent('main'), 'main', 'Jev', answer(p, { anchor: { choice: 'm0' } }))).not.toHaveProperty('anchor');
-    const odd = { model: 'jev-1.13.0 "<b>"', answers: { decision: { probabilities: { main: 1, topic: 0 } } }, usage: { input_tokens: -1, output_tokens: '3' } };
-    const read = readDecision(sent('mentioned'), 'mentioned', 'Jev', odd);
-    expect(read).toMatchObject({ providerModel: 'jev-1.13.0b', notes: ['choice-mismatch'] });
+    const odd = { model: 'jev-1.13.0 "<b>"', answers: { decision: { probabilities: { skip: 0, main: 1, topic: 0 } } }, usage: { input_tokens: -1, output_tokens: '3' } };
+    const read = readDecision(sent('main'), 'main', 'Jev', odd);
+    expect(read).toMatchObject({ providerModel: 'jev-1.13.0b', notes: ['choice-mismatch', 'anchor-invalid'] });
     expect(read).not.toHaveProperty('inputTokens');
     expect(read).not.toHaveProperty('outputTokens');
   });

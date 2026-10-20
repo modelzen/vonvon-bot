@@ -186,7 +186,7 @@ describe('the key row', () => {
   it('missing, a stored key that cannot be used, and a keystore it cannot read', () => {
     const missing = text(row(service({status: 'missing', last4: undefined})));
     expect(missing).toContain('还没填');
-    expect(missing).toContain('填之前，选了它的 Bot 和飞书群要判断的消息按出错处理（没 @ Bot 的不回，@ 的回在主区）。');
+    expect(missing).toContain('填之前，选了它的 Bot 和飞书群要判断的消息按出错处理（没点名的不回，真人 @ 的照旧回）。');
     expect(missing).toContain('填 key');
     expect(text(row(service({status: 'missing', last4: undefined, inUse: []})))).not.toContain('填之前');
     expect(text(row(service({status: 'missing', last4: undefined, inUse: []}), view(service({inUse: []}), {botsUnreadable: true})))).toContain('填之前');
@@ -418,7 +418,7 @@ describe('the removal', () => {
   it('lists who chose it, those in 智能 first, those not in 智能 apart', () => {
     const markup = dialog(service());
     expect(markup).toContain('删 TypeSafe 的 key？末四位 7f3a。只删本机存的这一份，TypeSafe 那边的 key 还在。');
-    expect(markup).toContain('删了以后，下面这些 Bot 和飞书群要判断的消息按出错处理：没 @ Bot 的不回，@ 的回在主区。重新填就恢复。');
+    expect(markup).toContain('删了以后，下面这些 Bot 和飞书群要判断的消息按出错处理：没点名的不回，真人 @ 的照旧回。重新填就恢复。');
     expect(markup.indexOf('前端开发')).toBeLessThan(markup.indexOf('下面这些现在不是智能群，删了不影响；改成智能群后会按出错处理。'));
     expect(markup.indexOf('下面这些现在不是智能群')).toBeLessThan(markup.indexOf('周报整理'));
     // under that note each line does not say it again
