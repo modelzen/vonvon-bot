@@ -1125,7 +1125,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [x] | s33b | 敏感问题去私聊 | 要填密码这类敏感信息的题，群卡不显示输入框，bot 私聊每个能回答的人一张带输入框的卡，在私聊里点卡、或者恰好一张在等时直接打字都算回答；群里打字提示一次去私聊，消息照常处理（owner 2026-10-19）；答案不进日志和任何卡；私聊卡全部发不出时按无法回答收尾（3.8"等待和超时"） | 540（实际 497；#454） | s33c | 并发、关闭清理、错误路径 | 无 |
 | [x] | s34a | 子 agent 的事件 | 加三种子 agent 事件（开始、一步、状态），每个子 agent 一个稳定的 id；Codex 认出子线程（`thread/started` 的来源和父线程 spawnAgent 的 `receiverThreadIds` 两条路），收它的通知、刷新看门狗，子 agent 在干活时父回合不再被当成卡死；父线程开、等、关子 agent 在主过程各留一行；Claude 子 agent 的步骤不再混进主过程，只留父进程的"子任务：…"一行（工具名 `Agent` 也认）；运行状态里一个子 agent 一行（最多 64 行、每行最近 5 步），⏹ 和看门狗收口时把在跑的行标成停止；⏹ 停全部，Codex 连子线程一起停；Codex 的子 agent 跟着用户自己的 Codex 设置走，Vonvon 不替用户打开或关掉 `multi_agent`（owner 2026-10-19）；卡片上的子 agent 区在 s35（3.9） | 1,080（实际 1141，含测试；#429） | — | 并发、错误路径 | 无（JP-VPS 上真实 Codex、Claude 各跑一次带子 agent 的任务：父回合不被看门狗杀，主过程里没有子 agent 的步骤；用户的 Codex 没开子 agent 时，Codex 那一侧记"没验到"，只在隔离的 `CODEX_HOME` 里开着验，见"s34a 做法"） |
 | [x] | s34b | 单停一个子 agent | 能单独停一个子 agent，父回合和别的子 agent 照跑：Codex 对这个子线程的回合发 `turn/interrupt`，Claude 调 `Query.stopTask`，已经结束的、还没开始回合的拒绝并说明原因；卡片动作 `RC.stopSub` 过和 ⏹ 一样的三道门（按钮在 s35 画）；RPC `stopSubagent` 和 `context.run.subagents`；网页端"对话"面板的运行行下面一个子 agent 一行，在跑的带"停止"，运行中每 3 秒重拉一次（3.9） | 535（实际 416，含测试；#435） | s34a | 并发、错误路径 | 无（JP-VPS 上经 RPC 停掉两个子 agent 中的一个，另一个和父回合照跑；面板在浏览器里的样子留给 s35 的 Mac 检查和 M6 验收） |
-| [ ] | s35 | 运行卡上的子 agent 区 | 一行一个子 agent，点开看最近 5 步，每行能停；都结束卡才收尾；子 agent 发起的卡片发在父运行卡的位置，写"子 agent X 问……"；Claude 会话打开 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`；用 s34a 的 `RunState.subagents` 和 s34b 的 `RC.stopSub` 画行和按钮（3.9、3.8） | 500 | s34a、s34b、s30、e01 | 并发、关闭清理 | 真实 Claude 的子 agent 跑完前卡不收尾（子 agent 区和停止按钮在飞书客户端里的样子，M6 验收时 owner 看） |
+| [x] | s35 | 运行卡上的子 agent 区 | 一行一个子 agent，点开看最近 5 步，每行能停；都结束卡才收尾；子 agent 发起的卡片发在父运行卡的位置，写"子 agent X 问……"；Claude 会话打开 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`；用 s34a 的 `RunState.subagents` 和 s34b 的 `RC.stopSub` 画行和按钮（3.9、3.8） | 1110（实际新增+删除；#455） | s34a、s34b、s30、e01 | 并发、关闭清理 | 真实 Claude 的子 agent 跑完前卡不收尾（子 agent 区和停止按钮在飞书客户端里的样子，M6 验收时 owner 看） |
 
 - s31 做法（#443）：三档分别用 default、acceptEdits、bypassPermissions，每次启动和恢复都显式设置并允许后续升档。canUseTool 和写文件 PreToolUse 共用真实路径判定；符号链接、悬空链接、含未建路径的 `..`、大小写不同的同级目录均有真实文件系统回归。只读不移除写工具，拒绝带中文原因；关网拒 SandboxNetworkAccess，开网保留 WebFetch/WebSearch。
 - s31 探测：SDK 0.3.296 的 rule 字段可靠区分项目/用户 ask 与普通 MCP、外部 Read、变量 Bash；变量 Bash 放行仍受沙箱限制。完全访问删除工作区根进入 safetyCheck，普通子目录删除不进回调。显式允许和附加目录下，外部 Write 被钩子拒、Bash 被沙箱拒。退出计划模式在隔离 HOME/CLAUDE_CONFIG_DIR 双轮成功恢复读写档，权限设置未持久改变；CLI 远端缓存有源码分类证据，不把任务 70 的全局摘要变化归因于某个进程。配置挡写/限读仍留 s31b，s35 未合入，不提前接子 agent 卡头；没有改 handle-message。
@@ -1176,9 +1176,16 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s34b 做法（#435）：Codex 的 `stopSubagent` 只对子线程当前回合发一条 `turn/interrupt`，Claude 普通回合和目标模式均保留当前 Query 调 `stopTask`，结束清句柄；退出、清除、关闭或被新回合替换后拒绝旧句柄。拒绝文案为“这个子 agent 已经结束”“这个子 agent 还没开始回合”“这个任务不支持单独停止子 agent”，SDK 错误以“停止子 agent 失败：”开头；旧 runId 回“原任务已经结束，请刷新”。`RC.stopSub` 沿用群许可、发起人或管理员、失效卡自愈三道门。当前运行的子行由 `RunRender` 快照读取，正常、异常与目标回合收口时清理；`context.run.subagents` 只给 id、name、task、status、stoppable，RPC 的 `contextResult` 同步声明，避免 Zod 丢掉字段。网页端按行单停，运行中每 3 秒重拉 context。
 - s34b 自测（JP-VPS）：用户自己的 Codex 配置能开两个子 agent；真实 RPC 单停第一条后是 stopped，第二条与父回合仍 running，第二条随后 completed，父卡正常 done，汇总提到有一条未完成；对 completed 子行再停，直接客户端收到 conflict 和“这个子 agent 已经结束”（网页包装成 refused）。Claude 两个前台子任务也验到 stopped/running，另一条完成、父卡 done。未读改用户 Codex 配置，未切隔离 CODEX_HOME；两群权限已恢复。构建、全工作区 typecheck/lint、9 文件 161 条定向测试通过；面板真浏览器外观留给 s35 的 Mac 检查和 M6 验收。
 - s34a 探测：隔离登录的 Codex 0.156.1 默认模型为 `gpt-6-astra`，model info 为 multi-agent v2；features list 是 `multi_agent=true`、`multi_agent_v2=false`。spawn 实际是 `subAgentActivity`，没有子 `thread/started`，子 `item/*`、`turn/*` 与父线程走同一连接。`collabAgentToolCall` 只见 wait，其 receiver 列表在 started 与 completed 都为空；父 interrupt 后子仍 active，需独立发停止请求。实现兼容生成类型的 `subAgent` 与旧的 `subagent` 来源拼法，不替用户改开关。
+- s35 做法（#455）：Claude 新建、续接会话强制前台变量，辅助查询仍继承环境。Codex 普通回合由程序延迟 done，父先完成时清插话 turnId、等待运行子行，整停只中断仍运行的子；目标模式不等，跨轮保存运行行和已知身份，复用已完成子任务时恢复行。子提问按父、子线程和当前回合校验，子终态取消其待答；Claude 从 SDK agentID 透传来源。卡区完整显示 8 行、溢出运行行每页 24 个，面板和按钮身份稳定，步骤跟每秒时钟刷新，父过程预算同步扣减。单停竞争静默，旧卡只删许可按钮；分页保留群权限门。关闭顺序不变。
+- s35 前置实测：准确开工 main 为 eaa7eac，环境变量最小改动为 756f36f。full 档两个前台子任务运行后 RPC 整停，卡 4.22 秒进入 interrupted，日志 graceful true，30 秒后记录的本次子命令无残留。初轮因 CLI 显示名选择器错误，实际用了原 qa 档，已在 full 档重测，qa 初轮不作为前置通过依据。Monitor 通过 ToolSearch 加载并返回 started，但没有三次 tick 输出或后续卡。Mac 网页面板外观由后续 #322 检查；飞书面板展开保持、真实按钮点击仍待 M6 owner。
+- s35 完整自测：实测代码 head 为 796766e。全工作区 build/typecheck/lint 通过；21 个定向文件 469 条通过。准确开工 main 反证为 31 失败、203 通过，另有一个缺新增模块的套件加载失败，不能算其断言执行；拆开的状态反证为 7 失败、6 通过。前置环境用例在 main 为 1 失败、10 通过。
+- s35 真实矩阵：Claude 两条前台子任务正常完成，准确目录计数 563；单停 long-sleeper 后另一条继续并计数一致，父卡正常收尾。Codex 使用既有默认配置，两个子任务正常完成；父先答时确实看到等待页脚，子终态后仅一次正常收尾；等待中新消息记 queued，前卡完成后第二轮正常收尾；等待中 RPC 整停为 graceful，子 stopped、卡 interrupted。收尾后 60 秒窗口没有额外应用消息，下一轮独立探针无旧子内容。未读取或改写用户 Codex 配置，未启用隔离 CODEX_HOME。
+- s35 验收边界与恢复：真实 Claude/Codex 子提问本轮未触发，不能记为真卡回答通过；Monitor 三次 tick 未验到。卡片结构、稳定身份、按钮许可与预算由自动夹具验证；VPS 日志/RPC 不代替客户端展开保持和实际按钮点击。两群权限均恢复并回读；最终 daemon 保留本片 head。首轮相对计数目录不在测试工作区，已用准确验收目录补测，未改变用户工作区配置。
+- s35 复核修订（任务 103）：目标共用一条提问队列；父轮 done/下一轮 started 只结束父题，活子题继续等待、排队与接收回答，watchdog hold 随子题释放。子取消/终态、目标收口、整停和 shutdown 清对应题；结束目标后不重开队列。修前准确 head 472a8cc 的 9 个入口场景为 8 失败、1 通过，修后补队列批量清父题、重复身份、结束后迟到题等对照。首轮修后 411 通过、1 个旧卡整停夹具失败，改走当前 runId 的 RPC stop 后 20 文件 412 条通过，全工作区 build/typecheck/lint 通过，原断言保留。本轮仅确定性夹具，未拿 accept、未改真实 bot 配置，原 796766e 实测及未验边界不变。
+- s35 main 整合（任务 110，#455）：合入含 s33b 的 4c589d9，敏感子题保留子来源与文本敏感标记；群卡不带控件、DM 卡可答，终态不显示答案。目标仍共用一条队列，父轮只清父题，跨轮子题及其 watchdog hold 保留；敏感题名单、动态权限、DM 文字入口与迟到/重复收口沿用 main。补入口交界夹具验证父 done 前与轮间出现的敏感子题，DM 回答仅一次，整停收全部群/DM 卡；五文件 251 条通过，新增夹具改为显式 AskRequest 后 57 条复跑通过，protocol/client/daemon build 与全工作区 typecheck/lint 通过。本轮未用 accept 或真实配置；任务 97 的真实源码 796766e 与未验边界不变。
 - s34a 自测（JP-VPS）：Codex 的用户配置下能开子 agent，30 秒空闲阈值下子任务连续执行六次 sleep 8，日志 start → completed、最近 5 步，父卡 done，无 idle_timeout。经 RPC stop 整轮后子状态 stopped、卡片已停止；首次实测父终态先到，补了运行状态收口日志，最终源码复验通过。Claude 两个前台 Agent 均 start → completed，主过程只有两条子任务工具行，没有子步骤的 Read/Grep/Glob。未改用户 Codex 配置，也未切隔离 CODEX_HOME；原阈值和两个群权限均恢复。构建、全工作区 typecheck/lint、8 文件 137 条定向测试通过。卡片 ⏹ 的实际回调留给 M6 owner 验收。
 - s34a 复查（任务 51）：补回通知空值保护，已完成子线程可续跑，sendInput/resumeAgent 可补登记，迟到的子回合会补停；目标轮次之间的子事件不建空卡，旧 complete 快照不影响新回合总结，日志按实际状态变化记录。原空值、A 续跑和迟到补停先复现失败，新增 65 活跃子的用例先复现少发一条中断，修后 10 文件 204 条通过；构建、全工作区 typecheck/lint 通过。隔离 CODEX_HOME 的真实子 agent 经 RPC stop 后日志 stopped、卡片已停止；原阈值与群权限已恢复，正常重启后 daemon 和三个 bot 的 CODEX_HOME 计数均为 0。
-- s35：e01 测过，变量有效，不做备选，前提是开工时补测的 ⏹ 没问题。运行卡在这一轮唯一的 result 到达时收尾，子 agent 区用 task_* 消息和 `parent_tool_use_id`（e02 第 4 节）。开工时补测两件事：前台子 agent 跑着时按 ⏹ 多久能停下；设了变量后 Monitor 还能不能用。
+- s35：e01 测过，变量有效，不做备选，前提是开工时补测的 ⏹ 没问题。运行卡在这一轮唯一的 result 到达时收尾，子 agent 区用 task_* 消息和 `parent_tool_use_id`（e02 第 4 节）。开工时补测两件事：前台子 agent 跑着时按 ⏹ 多久能停下；设了变量后 Monitor 还能不能用。任务 97 的前置实测：full 档整停 4.22 秒收卡、graceful true，30 秒后本次子命令无残留；Monitor 可启动，但三次 tick 输出没验到。
 
 - s33–35：扩展既有原生协议夹具，断流、静默流取消、迟到事件、父子交错、待答与停止均走实际 transport/coordinator/reducer/假卡片出口；检查全部预期事件被消费。s35 保留最近 5 步和省略计数、稳定子身份及异常终态，不重写父过程预算策略。
 
@@ -1317,8 +1324,10 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [ ] | s44a | 新 bot 的基础原生隔离与内置能力包边界 | 新 bot 不带 Claude 个人指令和两家个人 skill；Codex 个人 AGENTS.md 保留并声明 bot 规矩优先，导入 bot 不变。沿 s39 唯一能力包路径选择来源，包不能被会话篡改；尚未实现的设置/飞书工具不提前放入 | 500 | s37、s39、e02、e05 | 子进程、错误路径 | 两家新开、重开和 resume 不恢复个人 skill；新 bot 不读 Claude 个人指令，Codex 个人 AGENTS.md 冲突按 bot 规矩；包写入受限 |
 | [ ] | s44b | skill/MCP 名单组合与原生交付 | 用户库和 bot 自有 skill 按位置组合、群增减、MCP 交付和恢复；扩展 s39/s44a 同一包生成器。名单改了按 3.6 生效，不覆盖内置包 | 650 | s44a、s43 | 子进程、错误路径 | 真实 Codex 用 bot skill、MCP 在 never 下调通且 resume 仍在；Claude 名单/恢复和 MCP 调用；原 s44 的其余真实能力项全部保留 |
 | [ ] | s45 | skill 和 MCP 页面，bot 和群的启用名单 | 两个库页面，删除时列出还在用的 bot 和群；Bot 页的启用名单，群详情页的增减；Bot 页和群详情页也列出 `bots/<appId>/skills/` 里的 skill，群里能移除（3.2、3.6） | 550 | s43、s41、s42 | — | 无 |
-| [ ] | s46 | 会话令牌和 agent 调 vonvon 的入口 | 每条会话一个令牌，经环境变量交给 agent；host 加一个只接 POST 的路由，子进程依次校验令牌、私聊、触发人、开关（3.7） | 520 | s37、e04 | 子进程、并发、关闭清理、错误路径 | agent 调不调得到 vonvon、带不带得上令牌：Codex 只读、读写、关网各一次，Claude 沙箱一次 |
-| [ ] | s47 | vonvon settings 和 vonvon feishu 命令行框架 | 在 s07a 的命令上加：两组命令从环境变量读地址和令牌，不拿数据租约，输出 JSON；飞书组先做群列表和群成员（3.7） | 380 | s46、s07a | 错误路径 | 无 |
+| [ ] | s46 | agent 调 vonvon 的校验和 Claude 的 vonvon 工具 | bot 子进程里每条会话一份凭证（起会话、恢复一次一份；会话关掉、进程死了、停机都作废，只在内存里）；调用依次校验凭证、私聊、触发人、开关（3.7），设置类按会话排队，不是人触发的回合一律拒，设置调用绑定发起它的回合、提交点（写入口 `rename` 前）同步查现时授权、70 秒预算含排队；Claude 的 vonvon 工具用 SDK 内建 MCP 跑在 bot 子进程里，不用令牌（详细计划 `docs/plans/s46.md`；实际 diff 超 1,500 时按计划第 9 节拆出 s46d 提交点，s46b、s47 依赖它） | 1,290 | s37、e04 | 并发、关闭清理、错误路径 | Claude 只读、读写、完全访问档各调通一次 `session_info`（JP-VPS 先做，Seatbelt 在 s46b 的 Mac 自测里补） |
+| [ ] | s46c | 令牌替换 | 运行卡的三处事件流、日志、诊断、崩溃记录里把令牌（原样、base64、base64url）换成占位字样，分在两段里的也抓得到（详细计划 `docs/plans/s46.md` 4.8） | 180 | 无 | 错误路径 | 无 |
+| [ ] | s46b | Codex 的 vonvon MCP 和 host 的 POST 路由 | Codex 每次起会话、恢复会话发一个新令牌，写进 0600 的令牌文件，vonvon MCP server 的启动环境里只有地址和文件路径；MCP server 由 Codex 在沙箱外拉起，经 127.0.0.1 调 host 一个只接 POST 的路由，host 经 IPC 交给 bot 子进程按 s46 校验；停机先拒新请求、再作废令牌、最后关监听；托管和内联两种模式的 401 逐字节相同（详细计划 `docs/plans/s46.md`） | 1,090 | s46、s46c、s31b、s37、e05 | 子进程、并发、关闭清理、错误路径 | Codex 只读、读写、关网各调通一次，令牌不出现在会话的 shell、进程列表、文件和运行卡里（Mac） |
+| [ ] | s47 | vonvon settings 和 vonvon feishu 命令行框架 | 在 s07a 的命令上加：两组命令不拿数据租约，输出 JSON；同一组命令函数登记成 s46 的 vonvon 工具（agent 那条路不从环境变量读令牌，见 `docs/plans/s46.md` 4.1 G）；飞书组先做群列表和群成员（3.7）；每个设置工具的写都经 `ctx.commit`，在提交点前调 `guard()`，交给 host 写的请求带 `notAfter`（`docs/plans/s46.md` 4.4a） | 380 | s46、s07a | 错误路径 | 无 |
 | [ ] | s48 | vonvon 飞书 skill：列话题、读另一条会话、读飞书消息 | 列本群话题、按会话 id 读另一条会话、按话题或时间读消息；只放行同一个 bot、同一个群、档不高于自己的会话；卡片写"读了话题 T1、T2 的会话"（3.5"查飞书上下文"） | 950 | s47、s44b、s13、e02、e11 | 子进程、错误路径 | 无（M8 验收前，预览版任务按 3.5 时间线第 7 步跑一遍） |
 
 开工要点：
@@ -1337,7 +1346,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s46：Claude 一侧（e04b，SDK 0.3.296）沙箱里 Node、Electron 都起得来，但到 daemon 的路不通：TCP 直连本机六种配置下都被拒（curl 7、Node/Electron EPERM）。能到本机的只有两条。一是沙箱注入的 HTTP 代理：今天的 `bypassPermissions` 两档直接到；候选 `default` 档的 `SandboxNetworkAccess` 回调拒了本机地址，就到不了；候选 `acceptEdits` 档回调放行本机后才到。二是 `network.allowUnixSockets` 列出的那个 Unix socket，curl、Node 都到；同轮还加了 `allowedDomains`，两者各自的作用没分开测。这些都没测过 MCP：六轮 `mcp__*` 工具数都是 0，Claude 拉起的 MCP server 在不在沙箱外也没测，开工时补测。MCP 在 Claude 上调不通时的备选是让 daemon 另开一个 Unix socket，会话沙箱只用 `allowUnixSockets` 放行它。
 - s46：开工先测 vonvon 的 MCP 在两家各档调不调得通，下面几样都没测过。Codex 在 `approvalPolicy: never` 下，不配 `default_tools_approval_mode: "approve"` 时读写档被拒过一次（e05，0.162.1），只读、完全访问档没测；配上以后三档、开网关网都要过。Codex 拉起的 MCP server 要确认真在沙箱外：受限档里 nvm 的 Node、主目录的包装脚本都起不来（e04），套进沙箱也会起不来。Claude 的 `default`、`acceptEdits` 档下 MCP 工具调用走不走 `canUseTool`，走的话 s31 的回调要放行 vonvon 的工具。Codex 的会话层 MCP 每次 resume 整份重传（e05，见 s37），令牌按会话发，所以这个 MCP 的配置每次都要带上令牌。shell 里认"在 bot 的会话里"照旧靠 `FEISHU_CODEX_BRIDGE=1` 和 `VONVON_SESSION`（e04、e04b 都传得到）。只读档调不通、又配不上时，群里的飞书查询（3.7 说每个会话都能用）就用不了，按 4.2 第 3 类问 owner。行数写详细计划时按 MCP 重估。
 - s47 开工要点（Rakazo 第二轮，2026-10-18）：`set` 接受 `--revision`，整段文字必须带，今天命令内部现读版本，挡不住拿旧内容整段写回；`--json` 下错误也输出 JSON，写明种类、冲突时带当前内容，按种类给退出码；`access` 按调用方算，无权和不存在同形；读输出的预算和续读放 s48。建议按约 500 行估（Rakazo 第二轮报告"s46、s47、s48"）。
-- s47：按 e04，agent 不在 shell 里调 `vonvon settings`、`vonvon feishu`：Codex 只读、读写档的 shell 里 nvm 的 Node、主目录包装脚本都起不来或读不了，关网时也连不上 daemon（见 s46）。agent 那条路走 s46 的 MCP 工具：MCP server 的地址和令牌从启动环境读，用 s07a 留下的第二种连接（`D/cli/daemon-client.ts`）调同一组命令函数，所以命令函数要能被 MCP 工具直接调、返回结构化结果，不只打印 JSON。命令行照旧给终端用。
+- s47：按 e04，agent 不在 shell 里调 `vonvon settings`、`vonvon feishu`：Codex 只读、读写档的 shell 里 nvm 的 Node、主目录包装脚本都起不来或读不了，关网时也连不上 daemon（见 s46）。agent 那条路走 s46 的 vonvon 工具：s46 计划改了原来"MCP server 从启动环境读令牌、用 s07a 的第二种连接调命令函数"的写法，工具登记在 bot 子进程的登记表里，由 bot 子进程直接调同一组命令函数（`docs/plans/s46.md` 4.1 G、4.3），所以命令函数要能被直接调、返回结构化结果，不只打印 JSON。命令行照旧给终端用。
 - s48 开工要点（Rakazo 第二轮，2026-10-18）：输出约 1 万字节内，超了显式截断并给续读位置，带覆盖范围和稳定 id，范围从令牌推出；Claude 读取和运行卡用同一条"一轮的最终回答"规则；SKILL.md 写查历史的指引（Rakazo 第二轮报告"s46、s47、s48"）。
 - s48：飞书 skill 里的示例写成 MCP 工具还是 shell 命令，跟 s46 的结果走。按 e04，Codex 只读、读写档的 shell 里命令行起不来，关网也连不上（见 s46）。
 
@@ -1491,10 +1500,14 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 |---|---|---|---|
 | 私聊里打字算答案的条件 | 这个人恰好只有一张敏感卡在等；两张以上提示用卡片 | 没有别的办法知道答的是哪题 | s33b |
 | 敏感题部分私聊卡发不出 | 群里不说，只记日志；全部发不出时群卡写“没能私聊到能回答的人” | Claude 2026-10-19 定：发出去的人照常能答；群里列出谁没收到也没人能补救 | s33b |
+| 子 agent 区完整行和分页 | 完整显示 8 行，待答优先；其余运行行每页 24 行，子区最多 84 个组件，并从父过程预算扣减 | 不截掉运行身份；plain 和终态卡列出全部运行身份，失败、停止逐行，完成只计数 | s35 |
+| 子 agent 步骤刷新 | 跟每秒卡片时钟合并；开始、终态即时推送 | 不为每一步额外占群里所有 Bot 共用的飞书限额 | s35 |
+| Codex 等子 agent 时的新消息 | 同一会话排队，前卡收尾后运行 | 父回合已结束，没有可插话的回合 | s35 |
+| 卡收尾时仍未报结束的子 agent | 写"没收到结束消息" | 不隐去身份，也不把未结束说成完成 | s35 |
 | Claude 权限判定期限 | 5 秒未完成按拒绝 | 文件系统或外部判定挂起也不能放行 | s31 |
 | Claude 方案卡长度 | 2,000 字后加截断说明 | 完整方案仍在运行卡 | s31 |
 | Claude 权限卡动作长度 | 500 字 | 避免单张卡过长 | s31 |
-| Claude 只读、读写档的其他工具和本机联网 | 没命中 ask 规则的其他工具照常允许；开网时本机地址也允许 | 保留现有工具范围，限本机网络另在 s46 做 | s31 |
+| Claude 只读、读写档的其他工具和本机联网 | 没命中 ask 规则的其他工具照常允许；开网时本机地址也允许 | 保留现有工具范围；s46 不限本机网络（新路由要令牌，agent 的 shell 里没有），限不限待 owner 定（`docs/plans/s46.md` 第 9 节） | s31 |
 | 打字答多道题 | 同一段文字给每道题 | 模型从哪个键读都读得到全文，不猜这段话答的是哪题 | s33 |
 | 关了免@ 的群里打字回答 | 要 @ bot 才算；没 @ 的照今天停在 @ 门 | Claude 2026-10-19 定：今天的 @ 门不动；否则要把判断挪到门前并先过群和成员名单，改动大 | s33 |
 | 群里没设、用 Bot 的值 | 写"跟着 Bot 默认" | s23g2 起密钥页和命令行都这样说，切片表原来写的"继承 bot 默认"跟着改 | s28a |

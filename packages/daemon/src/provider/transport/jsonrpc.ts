@@ -285,8 +285,8 @@ export class AppServerClient {
     peer.onNotification = (method, params, frame) => {
       if (method === 'serverRequest/resolved') {
         const resolved = resolvedRequestSchema.safeParse(params);
-        if (resolved.success && resolved.data.threadId === this.requestScope?.threadId) {
-          for (const cancelled of this.requestScope.retireRpc(resolved.data.requestId)) this.notifications.push(cancelled);
+        if (resolved.success && this.requestScope) {
+          for (const cancelled of this.requestScope.retireRpc(resolved.data.requestId, resolved.data.threadId)) this.notifications.push(cancelled);
         }
       }
       this.notifications.push(frame as unknown as ServerNotification);
@@ -401,9 +401,9 @@ export class AppServerClient {
     };
   }
 
-  openRequestScope(threadId: string): CodexRequestScope {
+  openRequestScope(threadId: string, childTurn?: (id: string) => string | undefined): CodexRequestScope {
     this.requestScope?.close();
-    return this.requestScope = new CodexRequestScope(threadId);
+    return this.requestScope = new CodexRequestScope(threadId, childTurn);
   }
 
   cancelRequests(threadId: string, turnId: string): void {

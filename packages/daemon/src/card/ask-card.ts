@@ -150,7 +150,7 @@ function answerSummary(request: AskRequest, answer: AskAnswer): string {
   }).join('\n');
 }
 
-export function buildAskCard(input: { request: AskRequest; state: AskCardState; respondents: readonly { openId: string; name: string }[]; scope?: 'group' | 'dm' }): CardObject {
+export function buildAskCard(input: { request: AskRequest; from?: { name?: string }; state: AskCardState; respondents: readonly { openId: string; name: string }[]; scope?: 'group' | 'dm' }): CardObject {
   const { request, state, respondents, scope = 'group' } = input;
   const elements: CardElement[] = [];
   if (scope === 'dm') elements.push(md('这是群里 agent 问的问题。答案只交给 agent，不会出现在群里。'));
@@ -198,6 +198,6 @@ export function buildAskCard(input: { request: AskRequest; state: AskCardState; 
     }
   }
   // The respondents' @ is the program's own: it stays real even when the chat's bot list cannot be read (s27a0).
-  return keepAts(card(elements, { header: { title: request.title, template: state.kind === 'pending' ? 'blue' : 'grey' }, forward: false }),
+  return keepAts(card(elements, { header: { title: input.from ? `子 agent${input.from.name ? ` ${input.from.name}` : ''} 问：${request.title}` : request.title, template: state.kind === 'pending' ? 'blue' : 'grey' }, forward: false }),
     respondents.map(person => person.openId));
 }

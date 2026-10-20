@@ -177,7 +177,8 @@ describe('Codex backend native session titles', () => {
 });
 
 describe('Claude backend native session titles', () => {
-  it('passes the dedicated non-SDK entrypoint on both fresh and resumed chats', async () => {
+  it('forces foreground tasks and preserves bridge env on fresh and resumed chats', async () => {
+    vi.stubEnv('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS', '0');
     const firstQuery = asyncQuery([]);
     const resumedQuery = asyncQuery([]);
     const query = vi.fn()
@@ -197,10 +198,9 @@ describe('Claude backend native session titles', () => {
     const resumed = await backend.resumeThread({ cwd: '/repo', sessionId: 'session-1' });
 
     for (const call of query.mock.calls) {
-      expect(call[0].options?.env).toEqual(expect.objectContaining({
-        FEISHU_CODEX_BRIDGE: '1',
-        CLAUDE_CODE_ENTRYPOINT: 'feishu-codex-bridge',
-      }));
+      expect(call[0].options?.env?.FEISHU_CODEX_BRIDGE).toBe('1');
+      expect(call[0].options?.env?.CLAUDE_CODE_ENTRYPOINT).toBe('feishu-codex-bridge');
+      expect(call[0].options?.env?.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe('1');
     }
     expect(query.mock.calls[0]![0].options).toEqual(expect.objectContaining({
       cwd: '/repo',
@@ -254,6 +254,7 @@ describe('Claude backend native session titles', () => {
   });
 
   it('uses customTitle/renameSession and an ephemeral no-tools structured query', async () => {
+    vi.stubEnv('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS', '0');
     const modelQuery = asyncQuery([], [{
       value: 'claude-title-model',
       displayName: 'Claude Title',
@@ -298,7 +299,7 @@ describe('Claude backend native session titles', () => {
         disableAllHooks: true,
         claudeMdExcludes: expect.arrayContaining(['**/.claude/CLAUDE.md']),
       }),
-      env: expect.objectContaining({ FEISHU_CODEX_BRIDGE: '1', ENABLE_CLAUDEAI_MCP_SERVERS: 'false' }),
+      env: expect.objectContaining({ FEISHU_CODEX_BRIDGE: '1', ENABLE_CLAUDEAI_MCP_SERVERS: 'false', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0' }),
     }));
     await expect(backend.listModels()).resolves.toEqual(models);
     expect(query).toHaveBeenCalledOnce(); // successful discovery is cached
@@ -340,7 +341,7 @@ describe('Claude backend native session titles', () => {
         disableAllHooks: true,
         claudeMdExcludes: expect.arrayContaining(['**/.claude/CLAUDE.md']),
       }),
-      env: expect.objectContaining({ FEISHU_CODEX_BRIDGE: '1' }),
+      env: expect.objectContaining({ FEISHU_CODEX_BRIDGE: '1', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0' }),
       outputFormat: {
         type: 'json_schema',
         schema: expect.objectContaining({ required: ['title'] }),

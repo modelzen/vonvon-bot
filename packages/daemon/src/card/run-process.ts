@@ -231,7 +231,7 @@ export function processTitle(
   return `${status === 'error' ? '❌ ' : ''}${label}${suffix}`;
 }
 
-function formatElapsed(milliseconds: number): string {
+export function formatElapsed(milliseconds: number): string {
   const total = Math.max(0, Math.floor(milliseconds / 1_000));
   if (total === 0) return '不足 1 秒';
   const seconds = total % 60;
