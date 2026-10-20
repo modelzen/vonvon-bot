@@ -154,9 +154,9 @@ export async function inspectLocalPath(root: string, file: string, signal?: Abor
   return metadata;
 }
 
-export async function readLocalText(root: string, file: string, signal?: AbortSignal): Promise<string | undefined> {
+export async function readLocalText(root: string, file: string, signal?: AbortSignal, maxBytes = 16 * 1024 * 1024): Promise<string | undefined> {
   if (!await inspectLocalPath(root, file, signal)) return undefined;
-  const text = await readBoundedUtf8FileStrict(file, { maxBytes: 16 * 1024 * 1024, timeoutMs: 2_000, signal });
+  const text = await readBoundedUtf8FileStrict(file, { maxBytes, timeoutMs: 2_000, signal });
   if (!await inspectLocalPath(root, file, signal)) throw new LocalFileSafetyError('not-regular-file');
   return text;
 }
