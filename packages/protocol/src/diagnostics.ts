@@ -27,15 +27,26 @@ export const notRepliedSchema = z.object({
 export type NotReplied = z.infer<typeof notRepliedSchema>;
 export const deniedScopeSchema = z.object({ scope: z.string().min(1).max(100), where: scopeDenialPlaceSchema, at: z.number().finite().nonnegative() }).strict();
 export type DeniedScope = z.infer<typeof deniedScopeSchema>;
+/** Actual Attention values, aggregated without retaining topic identifiers. */
+const attentionPlaceSchema = z.object({ mode: z.enum(["focus", "watch"]), intervalMs: z.number().finite().nonnegative() }).strict();
+export const groupAttentionSchema = z.object({
+  groupId: z.string().regex(/^oc_[A-Za-z0-9_-]{1,200}$/),
+  main: attentionPlaceSchema.optional(), focusedTopics: z.number().int().nonnegative(), watchedTopics: z.number().int().nonnegative(),
+  budget: z.object({ kind: z.enum(["no-glance", "named-only"]), until: z.number().finite().nonnegative() }).strict().optional(),
+}).strict();
+export type GroupAttention = z.infer<typeof groupAttentionSchema>;
+export const CUSTOM_PROMPT_NOTICE = "新版默认智能提示词新增：先看这话是对谁说的；Bot 来回几次且真人一直没说话时，除非还有明确没做完的事，不再接。你的自定义提示词保持原样，可到智能提示词里自行修改。";
 /** What a bot child reports (the `fcb.diagnostics` IPC message); s18 adds its kinds here. `times` counts one record as
  * several messages (s18c: a group's dropped queue); child and host are always the same version. */
 export const diagnosticsEventSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("attention"), groups: z.array(groupAttentionSchema).max(200) }).strict(),
+  z.object({ kind: z.literal("customPrompt"), groupId: z.string().regex(/^oc_[A-Za-z0-9_-]{1,200}$/) }).strict(),
   z.object({ kind: z.literal("notReplied"), record: notRepliedSchema.omit({ count: true }), times: z.number().int().positive().max(10_000).optional() }).strict(),
   z.object({ kind: z.literal("scopeDenied"), denial: deniedScopeSchema }).strict(),
 ]);
 export type DiagnosticsEvent = z.infer<typeof diagnosticsEventSchema>;
 /** Kept in the daemon's memory per bot; s18 adds its crash records as more fields. */
-export const botDiagnosticsSchema = z.object({ notReplied: z.array(notRepliedSchema), deniedScopes: z.array(deniedScopeSchema) });
+export const botDiagnosticsSchema = z.object({ notReplied: z.array(notRepliedSchema), deniedScopes: z.array(deniedScopeSchema), attention: z.array(groupAttentionSchema).optional(), customPromptGroups: z.array(z.string()).optional() });
 export type BotDiagnostics = z.infer<typeof botDiagnosticsSchema>;
 
 /** `bot` is the bot the record belongs to, and whether the host has more than one (a command then needs --bot). */

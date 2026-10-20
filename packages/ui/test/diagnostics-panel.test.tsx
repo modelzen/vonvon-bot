@@ -161,3 +161,25 @@ it('lists the groups an older version put in a wrong directory, only when there 
   expect(html).toContain('点「更换目录」');
   expect(render([agent])).not.toContain('群目录');
 });
+
+it('shows every smart group once with actual main/topic state, budget and old prompt notice; rules stay absent', () => {
+  const snap = snapshot([{...agent, diagnostics: {notReplied: [], deniedScopes: [], attention: [{groupId: 'oc_bound_group', main: {mode: 'watch', intervalMs: 180000}, focusedTopics: 2, watchedTopics: 1, budget: {kind: 'no-glance', until: now + 60000}}], customPromptGroups: ['oc_bound_group']}}]);
+  snap.memberships[0]!.conversation = 'smart';
+  const html = renderToStaticMarkup(<ClientProvider client={client}><DiagnosticsPanel snapshot={snap} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onOpenSetup={() => {}} onOpenEnvironment={() => {}} onOpenSecrets={() => {}} onNotice={() => {}}/></ClientProvider>);
+  expect(html).toContain('主区留意（间隔 180 秒）');
+  expect(html).toContain('话题专注 2 个、留意 1 个');
+  expect(html).toContain('暂停扫一眼');
+  expect(html).toContain('你的自定义提示词保持原样');
+  expect(render([agent])).not.toContain('智能群关注状态');
+  for (const title of ['智能群关注状态', '自定义智能提示词']) expect(findEntries(searchEntries(snap), title).some(entry => entry.destination.section === diagnosticsSection(agent.id))).toBe(true);
+});
+
+it('distinguishes a new daemon with empty attention from an old daemon without the field', () => {
+  const show = (attention?: []) => {
+    const snap = snapshot([{...agent, diagnostics: {notReplied: [], deniedScopes: [], ...(attention ? {attention} : {})}}]);
+    snap.memberships[0]!.conversation = 'smart';
+    return renderToStaticMarkup(<ClientProvider client={client}><DiagnosticsPanel snapshot={snap} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onOpenSetup={() => {}} onOpenEnvironment={() => {}} onOpenSecrets={() => {}} onNotice={() => {}}/></ClientProvider>);
+  };
+  expect(show([])).toContain('主区尚无关注状态');
+  expect(show()).toContain('daemon 未提供关注状态');
+});

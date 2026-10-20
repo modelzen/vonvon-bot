@@ -305,6 +305,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
 
     proc.on('exit', (code, signal) => {
       if (c.proc !== proc) return;
+      diagnostics.clearLive(c.bot.appId);
       c.proc = undefined;
       c.ipc = undefined;
       notifier.botExited(c.bot.appId);
