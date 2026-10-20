@@ -17,6 +17,7 @@ function entry() {
 }
 function fixture(withSdk = true, stream?: AsyncIterable<SDKMessage>) {
   let options: Options | undefined;
+  const registered: string[] = [];
   let end: (() => void) | undefined;
   let invoke: ((args: object, extra: unknown) => Promise<unknown>) | undefined;
   const query = vi.fn<ClaudeSdkFacade['query']>(params => {
@@ -25,12 +26,13 @@ function fixture(withSdk = true, stream?: AsyncIterable<SDKMessage>) {
       { close: () => end?.(), interrupt: async () => {} }) as unknown as Query;
   });
   const makeTool: typeof tool = (name, description, schema, handler, ...rest) => {
+    registered.push(name);
     invoke = (args, extra) => handler(args as never, extra as never);
     return tool(name, description, schema, handler, ...rest);
   };
   const sdk = { query, listSessions: vi.fn(), getSessionInfo: vi.fn(), getSessionMessages: vi.fn(), renameSession: vi.fn(),
     ...(withSdk ? { createSdkMcpServer, tool: makeTool } : {}) } satisfies ClaudeSdkFacade;
-  return { backend: new ClaudeAgentBackend(async () => sdk, () => undefined), query,
+  return { registered, backend: new ClaudeAgentBackend(async () => sdk, () => undefined), query,
     options: () => options, invoke: (args: object, extra: unknown) => { if (!invoke) throw Error('missing handler'); return invoke(args, extra); } };
 }
 it.each(['start', 'resume'] as const)('%s carries entry separately from the serializable profile', async action => {
@@ -107,4 +109,22 @@ it.each([0, 255, 256])('keeps streamed/full duplicate origins in their original 
   f.options()?.abortController?.signal.addEventListener('abort', () => order.push('abort'));
   await thread.close();
   expect(order).toEqual(['revoke', 'abort']);
+});
+
+it.each(['group', 'doc', 'p2p'] as const)('registers the shared %s discovery list with Claude without exposing forbidden writers', async kind => {
+  const write = vi.fn(async () => 'changed');
+  const registry = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true,
+    tools: [
+      { name: 't_read', class: 'read', description: 'read', input: z.object({}), run: async () => 'read' },
+      { name: 't_set', class: 'settings', description: 'write', input: z.object({}), run: write },
+    ] });
+  const grant = registry.issue({ kind });
+  const f = fixture();
+  const thread = await f.backend.startThread({ cwd: '/fixture', entry: grant });
+  threads.push(thread); grant.attach(thread);
+  expect(f.registered).toEqual(kind === 'p2p' ? ['t_read', 't_set'] : ['t_read']);
+  expect(f.registered).toEqual(grant.tools().map(spec => spec.name));
+  expect(await grant.call('t_read', {})).toEqual({ ok: true, result: 'read' });
+  if (kind !== 'p2p') expect(await grant.call('t_set', {}, { toolUseId: 'forged' })).toMatchObject({ ok: false, reason: 'not-dm' });
+  expect(write).not.toHaveBeenCalled();
 });

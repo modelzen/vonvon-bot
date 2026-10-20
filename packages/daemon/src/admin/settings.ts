@@ -1,4 +1,5 @@
 import { getAppRoleSnapshot } from '../config/app-roles';
+import { ToolRefusal } from '../agent/entry/tools';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { JUDGE_SELECTION_KINDS } from '@vonvon/protocol';
@@ -581,7 +582,14 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       value: view.sections[edit.section as keyof typeof view.sections]
     } as T.SettingsSectionView;
   }
-  async function save(input: T.SettingsEdit): Promise<T.SettingsSave> {
+  async function save(input: T.SettingsEdit, options?: T.SettingsCommitOptions): Promise<T.SettingsSave> {
+    let committed = false;
+    const beforeCommit = () => {
+      if (options?.notAfter !== undefined && Date.now() >= options.notAfter) throw new ToolRefusal({ ok: false, code: 'timeout', message: '已过期，没有修改设置。' });
+      options?.beforeCommit?.();
+      committed = true;
+    };
+    const commitOptions = { beforeCommit };
     const parsed = parseSettingsEdit(input);
     own(parsed.scope);
     if (access.kind !== 'writable')
@@ -664,7 +672,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               break;
             default: throw new SettingsInputError('无效的 Bot 设置');
           }
-        });
+        }, commitOptions);
         if (e.section === 'completion')
           deps.refreshCompletionReminders?.();
       }
@@ -729,7 +737,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             case 'judge':
               storeJudge(p, judge!, groupBackendId(p));
           }
-        });
+        }, commitOptions);
         if (e.section === 'permission') {
           try {
             await deps.evictLiveSessionsForChat(p.chatId);
@@ -755,7 +763,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             delete s.modelCustom;
           else
             s.modelCustom = chosen.custom === true;
-        });
+        }, commitOptions);
       }
       const section = await sectionView(edit);
       const keyless = edit.section === 'judge' ? await keyMissing(edit.patch.selection as T.JudgeSelectionView | undefined) : undefined;
@@ -771,6 +779,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           kind: 'conflict',
           current: await sectionView(edit)
         };
+      if (error instanceof ToolRefusal || committed) throw error;
       return rejected(error);
     }
   }

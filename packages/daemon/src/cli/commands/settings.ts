@@ -1,3 +1,5 @@
+import { CommandError } from '../command-error';
+import { settingsGet, settingsSet, settingsAccess } from '../../admin/structured-commands';
 import {
   agentSectionSchemas, isKnownJudgeSelection, projectEditableSchemas, sessionSectionSchemas, sessionThreadIdSchema,
   type Agent, type AgentSettingsView, type DecisionModelsView, type JudgeSelectionView, type Membership, type ProjectSettingsView, type SessionSettingsView,
@@ -17,7 +19,7 @@ type Check = { safeParse(value: unknown): { success: true } | { success: false; 
 type SectionSchema = { shape: Record<string, unknown>; partial(): { strict(): Check } };
 type SectionView = { stored: unknown; effective: unknown; revision: string; access: { kind: 'writable' } | { kind: 'readonly'; message: string } };
 export type Kind = 'agent' | 'project' | 'session';
-export type Target = { bot?: string; group?: string; session?: string };
+export type Target = { bot?: string; group?: string; session?: string; revision?: string; reason?: string };
 
 const TABLES: Record<Kind, Record<string, SectionSchema>> = { agent: agentSectionSchemas, project: projectEditableSchemas, session: sessionSectionSchemas };
 const sectionNames = (kind: Kind): string[] => Object.keys(TABLES[kind]);
@@ -122,7 +124,7 @@ async function resolveScope(call: Call, target: Target): Promise<{ agent: Agent;
 }
 
 const readView = async (call: Call, scope: SettingsScope): Promise<SettingsView> =>
-  want('读取设置', await call('读取设置', c => c.settings({ type: 'read', scope })), 'view').view;
+  (await settingsGet({ read: async scope => want('读取设置', await call('读取设置', c => c.settings({ type: 'read', scope })), 'view').view }, scope)).view;
 
 function header(view: SettingsView, agent: Agent, membership?: Membership): string {
   if (membership) return `群 ${membership.name}（${membership.groupId}）· ${toolLabel(membership.backend)} · ${conversationLabel(membership.conversation)} · ${membership.directory}`;
@@ -254,15 +256,14 @@ export async function runSettingsSet(assignments: readonly string[], target: Tar
     const { scope } = await resolveScope(call, target);
     // Each section carries its own revision; there is no view-level one.
     const sections = (await readView(call, scope)).sections as Record<string, SectionView>;
-    const revision = Object.hasOwn(sections, section) ? sections[section]?.revision : undefined;
+    const revision = target.revision ?? (Object.hasOwn(sections, section) ? sections[section]?.revision : undefined);
     if (!revision) throw new Error(`daemon 没有 ${section} 这一节。daemon 可能比命令行旧。`);
-    const reply = await call('保存设置', c => c.settings({ type: 'save', edit: { scope, section, revision, patch } }), { unknown });
-    return want('保存设置', reply, 'saved', unknown).result;
+    return settingsSet({ save: async edit => want('保存设置', await call('保存设置', c => c.settings({ type: 'save', edit }), { unknown }), 'saved', unknown).result }, { scope, section, revision, patch });
   });
   // Same wording as the web page's errorText; a conflict is not retried, the user reruns with fresh eyes.
-  if (result.kind === 'conflict') throw new Error('这项设置刚在别处改过，没有保存。重新运行一次。');
-  if (result.kind === 'rejected') throw new Error(`没有保存：${result.fields.map(field => `${field.field}：${field.message}`).join('；')}`);
-  if (result.kind === 'unavailable') throw new Error(result.reason.kind === 'readonly' ? result.reason.message : '当前不可编辑。');
+  if (result.kind === 'conflict') throw new CommandError('conflict', '这项设置刚在别处改过，没有保存。先读取当前版本再修改。', result.current);
+  if (result.kind === 'rejected') throw new CommandError('bad-args', `没有保存：${result.fields.map(field => `${field.field}：${field.message}`).join('；')}`);
+  if (result.kind === 'unavailable') throw new CommandError('refused', result.reason.kind === 'readonly' ? result.reason.message : '当前不可编辑。');
   // The daemon fills in a language model's backend: show what was stored, and for which groups.
   const stored = section === 'judge' ? (result.section.value.stored as { selection?: JudgeSelectionView }).selection : undefined;
   const known = stored && isKnownJudgeSelection(stored) ? stored : undefined;
@@ -270,5 +271,14 @@ export async function runSettingsSet(assignments: readonly string[], target: Tar
     : known?.kind === 'llm' && known.backend ? `（${toolLabel(known.backend)} 的群用）` : '';
   const saved = stored ? `judge.selection = ${show(stored)}${whose}`
     : Object.entries(patch).map(([key, value]) => `${section}.${key} = ${show(value)}`).join('、');
-  print(io, [`已保存 ${saved}。`, ...result.effects.map(effect => effect.detail)], { section: result.section, effects: result.effects });
+  print(io, [`已保存 ${saved}。`, ...result.effects.map(effect => effect.detail)], { ...result, ...(target.reason ? { reason: target.reason } : {}) });
+}
+
+export async function runSettingsAccess(target: Target, io: Io, daemon: Daemon = withDaemon): Promise<void> {
+  scopeKind(target);
+  const result = await daemon(async call => {
+    const { scope } = await resolveScope(call, target);
+    return settingsAccess({ read: async scope => readView(call, scope) }, scope);
+  });
+  print(io, [JSON.stringify(result)], result);
 }

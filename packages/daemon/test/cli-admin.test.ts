@@ -371,7 +371,7 @@ it('settings set saves with the section revision and explains each refusal', asy
   expect(settings).toHaveBeenNthCalledWith(1, { type: 'read', scope });
   expect(settings).toHaveBeenNthCalledWith(2, { type: 'save', edit: { scope, section: 'permission', revision: 'rev-mode', patch: { mode: 'full' } } });
   expect(h.out()).toBe('已保存 permission.mode = full。\n下一轮生效。\n');
-  for (const message of ['这项设置刚在别处改过，没有保存。重新运行一次。', '没有保存：mode：后端不支持此权限档位', '这个 Bot 没在运行，运行起来后才能改设置']) {
+  for (const message of ['这项设置刚在别处改过，没有保存。先读取当前版本再修改。', '没有保存：mode：后端不支持此权限档位', '这个 Bot 没在运行，运行起来后才能改设置']) {
     await expect(runSettingsSet(['permission.mode=full'], { group: 'pay' }, h.io(), h.daemon)).rejects.toThrow(message);
   }
   await expect(runSettingsSet(['permission.mode=full'], { group: 'pay', session: 'omt_x' }, h.io(), h.daemon)).rejects.toThrow('--group 和 --session 只能选一个。');
