@@ -239,12 +239,8 @@ export function createAgentEntries(opts: {
       },
       call,
       noteToolUse(id) {
-        if (grant.phase !== 'attached' || grant.origins.has(id)) return;
+        if (grant.phase !== 'attached' || grant.origins.has(id) || grant.origins.size >= 256) return;
         grant.origins.set(id, grant.turn);
-        if (grant.origins.size > 256) {
-          const oldest = grant.origins.keys().next().value;
-          if (oldest !== undefined) grant.origins.delete(oldest);
-        }
       },
       attach(thread) {
         if (grant.phase !== 'pending') return;

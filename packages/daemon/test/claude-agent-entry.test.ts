@@ -64,13 +64,16 @@ it.each(['qa', 'write', 'full'] as const)('preserves %s permission decisions for
   expect(verdict).toMatchObject(mode === 'full' ? { kind: 'ask', ask: 'permission' } : { kind: 'allow' });
 });
 
-it('binds streamed and complete tool-use IDs before dispatch, keeps duplicates in their original turn, and revokes before abort', async () => {
+it.each([0, 255, 256])('keeps streamed/full duplicate origins in their original turn after %i other IDs', async count => {
   let advance: (() => void) | undefined;
-  const wait = () => new Promise<void>(resolve => { advance = resolve; });
+  let pause = 0;
+  const wait = () => { pause++; return new Promise<void>(resolve => { advance = resolve; }); };
   const block = { type: 'tool_use', id: 'origin-1', name: 'mcp__vonvon_bot__t_set', input: {} };
   const messages = (async function* (): AsyncGenerator<SDKMessage> {
     await wait();
     yield { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: block } } as SDKMessage;
+    await wait();
+    for (let i = 0; i < count; i++) yield { type: 'stream_event', event: { type: 'content_block_start', index: i + 1, content_block: { ...block, id: `other-${i}` } } } as SDKMessage;
     await wait();
     yield { type: 'assistant', message: { content: [block] } } as SDKMessage;
   })();
@@ -89,10 +92,13 @@ it('binds streamed and complete tool-use IDs before dispatch, keeps duplicates i
   await vi.waitFor(() => expect(noted).toHaveBeenCalledWith('origin-1'));
   await expect(f.invoke({}, { _meta: { 'claudecode/toolUseId': 'origin-1' } })).resolves.toMatchObject({ content: [{ text: '"changed"' }] });
   expect(noted.mock.invocationCallOrder[0]).toBeLessThan(called.mock.invocationCallOrder[0]!);
+  advance?.(); await vi.waitFor(() => expect(pause).toBe(3));
   first.close(); registry.openTurn(thread, { ...facts, triggerMessageId: 'next-message' });
   advance?.();
-  await vi.waitFor(() => expect(noted).toHaveBeenCalledTimes(2));
-  await expect(f.invoke({}, { _meta: { 'claudecode/toolUseId': 'origin-1' } })).resolves.toMatchObject({ isError: true });
+  await vi.waitFor(() => expect(noted).toHaveBeenCalledTimes(count + 2));
+  const late = await f.invoke({}, { _meta: { 'claudecode/toolUseId': 'origin-1' } });
+  expect.soft(write).toHaveBeenCalledOnce();
+  expect(late).toMatchObject({ isError: true });
   await expect(called.mock.results.at(-1)?.value).resolves.toMatchObject({ reason: 'turn-ended' });
   expect(write).toHaveBeenCalledOnce();
   const order: string[] = [];

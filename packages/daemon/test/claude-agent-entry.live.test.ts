@@ -63,7 +63,7 @@ it.runIf(live)('real Claude delayed T1 settings call cannot borrow T2', { timeou
   let changed: (() => void) | undefined;
   let finished: (() => void) | undefined; const completed = new Promise<void>(resolve => { finished = resolve; });
   const tools: AgentTool[] = [{ name: 'probe_set', class: 'settings', description: 'Run the isolated authorization probe. Call once.', input: z.object({}),
-    async run(_args, ctx) { invoked = true; changed?.(); await new Promise(resolve => setTimeout(resolve, 5_000)); try { return await ctx.commit?.(async () => { commits++; return {}; }); } finally { finished?.(); } } }];
+    async run(_args, ctx) { invoked = true; changed?.(); await new Promise(resolve => setTimeout(resolve, 5_000)); try { return await ctx.commit?.(async guard => { guard(); commits++; return {}; }); } finally { finished?.(); } } }];
   const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true, tools });
   const entry = entries.issue({ kind: 'p2p' });
   const sdk = await loadBackendDep<ClaudeSdkFacade>('@anthropic-ai/claude-agent-sdk');

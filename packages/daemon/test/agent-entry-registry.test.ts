@@ -275,3 +275,42 @@ describe('settings queues and absolute deadlines', () => {
     expect(await replacement).toMatchObject({ ok: true }); expect(commits).toBe(1);
   });
 });
+
+
+it.each([255, 256])('does not reassign an old origin after %i other IDs', async count => {
+  let commits = 0;
+  const f = setup({ run: async (_args, ctx) => {
+    if (!ctx.commit) throw Error('missing commit');
+    return ctx.commit(async guard => { guard(); commits++; return ctx.turn?.triggerMessageId; });
+  } });
+  for (let i = 0; i < count; i++) f.entry.noteToolUse(`other-${i}`);
+  f.scope?.close(); f.entries.openTurn(f.t, { ...person, triggerMessageId: 'm2' });
+  f.entry.noteToolUse('u1');
+  const reply = await f.call();
+  expect.soft(commits).toBe(0);
+  expect(reply).toMatchObject(refused('turn-ended'));
+});
+
+it('keeps the last provable new origin at capacity, rejects overflow across turns, and recovers only with a new grant', async () => {
+  let commits = 0;
+  const f = setup({ run: async (_args, ctx) => {
+    if (!ctx.commit) throw Error('missing commit');
+    return ctx.commit(async guard => { guard(); commits++; return ctx.turn?.triggerMessageId; });
+  } });
+  for (let i = 0; i < 254; i++) f.entry.noteToolUse(`other-${i}`);
+  f.scope?.close(); const second = f.entries.openTurn(f.t, { ...person, triggerMessageId: 'm2' });
+  f.entry.noteToolUse('last-proof');
+  expect(await f.entry.call('t_set', {}, { toolUseId: 'last-proof' })).toEqual({ ok: true, result: 'm2' });
+  f.entry.noteToolUse('overflow');
+  expect(await f.entry.call('t_set', {}, { toolUseId: 'overflow' })).toMatchObject(refused('unknown-origin'));
+  second.close(); f.entries.openTurn(f.t, { ...person, triggerMessageId: 'm3' });
+  f.entry.noteToolUse('overflow'); f.entry.noteToolUse('last-proof');
+  expect(await f.entry.call('t_set', {}, { toolUseId: 'overflow' })).toMatchObject(refused('unknown-origin'));
+  expect(await f.entry.call('t_set', {}, { toolUseId: 'last-proof' })).toMatchObject(refused('turn-ended'));
+  expect(await f.entry.call('t_read', {})).toEqual({ ok: true, result: 'read' });
+  expect(commits).toBe(1);
+  const fresh = f.entries.issue({ kind: 'p2p' }), next = thread(); fresh.attach(next);
+  f.entries.openTurn(next, { ...person, triggerMessageId: 'm3' }); fresh.noteToolUse('overflow');
+  expect(await fresh.call('t_set', {}, { toolUseId: 'overflow' })).toEqual({ ok: true, result: 'm3' });
+  expect(commits).toBe(2);
+});
