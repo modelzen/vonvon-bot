@@ -70,9 +70,15 @@ export interface TranscriptMark {
  * process env or a settings file's `env`, each turn it off; this layer wins over
  * all of them, and an empty env value counts as unset. Only bot sessions get it.
  */
+export const NATIVE_MEMORY_OFF = {
+  autoMemoryEnabled: false,
+  env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },
+} satisfies Options['settings'];
+
 export const AUTO_COMPACT_SETTINGS = {
   autoCompactEnabled: true,
-  env: { DISABLE_AUTO_COMPACT: '', DISABLE_COMPACT: '' },
+  ...NATIVE_MEMORY_OFF,
+  env: { ...NATIVE_MEMORY_OFF.env, DISABLE_AUTO_COMPACT: '', DISABLE_COMPACT: '' },
 } satisfies Options['settings'];
 
 /** Hard ceiling on a manual /compact (a summarization turn) so a wedged process
