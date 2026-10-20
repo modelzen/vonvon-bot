@@ -6,6 +6,7 @@ import type { AgentEvent, AgentInput } from '../src/agent/types';
 
 const fake = vi.hoisted(() => ({
   groupMode: 'single' as 'single' | 'multi',
+  projectKind: undefined as 'single' | undefined,
   groupPolicy: undefined as 'steer' | 'queue' | undefined,
   backend: { capabilities: { steer: true }, id: 'codex', listModels: vi.fn(async () => []), resumeThread: vi.fn(), startThread: vi.fn() },
   voice: vi.fn(async (_channel: unknown, msg: NormalizedMessage) => ({ text: '语音正文', voice: { messageId: msg.messageId, text: '语音正文', transcribed: true } })),
@@ -22,11 +23,11 @@ vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown,
 vi.mock('../src/agent', async (original) => ({ ...await original<object>(), createBackend: () => fake.backend }));
 vi.mock('../src/project/registry', async (original) => ({
   ...await original<object>(),
-  getProjectByChatId: async () => ({ name: 'test', chatId: 'chat', cwd: '/test', groupMode: fake.groupMode, ...(fake.groupPolicy ? { pendingPolicy: fake.groupPolicy } : {}) }),
+  getProjectByChatId: async () => ({ name: 'test', chatId: 'chat', cwd: '/test', groupMode: fake.groupMode, ...(fake.projectKind ? { kind: fake.projectKind } : {}), ...(fake.groupPolicy ? { pendingPolicy: fake.groupPolicy } : {}) }),
 }));
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),
-  getSession: async () => ({ threadId: 'topic', chatId: 'chat', sessionId: 'host', backend: 'codex', cwd: '/test', summary: '', ...fake.record }),
+  getSession: async () => fake.record.absent ? undefined : ({ threadId: 'topic', chatId: 'chat', sessionId: 'host', backend: 'codex', cwd: '/test', summary: '', ...fake.record }),
   // Only watermark writes (the function form) land; other patches stay no-ops.
   patchSession: async (_key: string, patch: unknown) => {
     if (typeof patch === 'function') Object.assign(fake.record, patch({ ...fake.record }));
@@ -52,6 +53,8 @@ vi.mock('../src/card/run-card-stream', () => ({
   },
 }));
 vi.mock('../src/voice/inbound', async original => ({ ...await original<object>(), ingestVoice: fake.voice }));
+import { createAgentEntries, type AgentEntries } from '../src/agent/entry/registry';
+import type { AgentEntry } from '../src/agent/types';
 import { createOrchestrator } from '../src/bot/handle-message';
 import type { AppConfig } from '../src/config/schema';
 
@@ -107,17 +110,18 @@ function message(text: string): NormalizedMessage {
   return { messageId: `msg-${++seq}`, chatId: 'chat', chatType: 'group', threadId: 'topic',
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false };
 }
-function setup(policy: 'steer' | 'queue' = 'steer') {
+function setup(policy: 'steer' | 'queue' = 'steer', entries?: AgentEntries) {
   const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: policy, access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' } } };
   const channel = { send: fake.send, rawClient: { im: { v1: { message: { get: async () => ({ data: { items: [{ thread_id: 'new-topic' }] } }) }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
-  orchestrator = createOrchestrator(channel as never, cfg, '/test');
+  orchestrator = createOrchestrator(channel as never, cfg, '/test', undefined, { entries });
   return orchestrator;
 }
 beforeEach(() => {
   vi.clearAllMocks();
   fake.groupMode = 'single';
+  fake.projectKind = undefined;
   fake.groupPolicy = undefined;
   fake.record = {};
   fake.history.mockReset().mockResolvedValue({ messages: [], ok: true, complete: true });
@@ -662,4 +666,97 @@ describe('watermark for interjections and queued turns (s09)', () => {
     expect(run.consumed[2]!.text).not.toContain('queued one');
     run.turns[2]!.resolve();
   });
+});
+
+
+describe('agent entry orchestration', () => {
+  function human(text: string): NormalizedMessage { return { ...message(text), raw: { sender: { sender_type: 'user' } } }; }
+  function entries() {
+    return createAgentEntries({ appId: 'fixture', isAdmin: id => id === 'owner', isOwner: id => id === 'owner' });
+  }
+  it('attaches a fresh group grant for resume, opens the triggering turn, and closes it on done', async () => {
+    const registry = entries(), open = vi.spyOn(registry, 'openTurn');
+    const run = thread();
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup('queue', registry), first = human('first');
+    await o.onMessage(first);
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const grant: AgentEntry = fake.backend.resumeThread.mock.calls[0]![0].entry;
+    await expect(grant.call('session_info', {})).resolves.toMatchObject({ ok: true, result: { place: 'group', turn: 'person', settings: { allowed: false, reason: 'not-dm' } } });
+    expect(open).toHaveBeenCalledWith(run.t, expect.objectContaining({ requesterOpenId: 'owner', triggerMessageId: first.messageId, retry: false }));
+    const second = { ...human('second'), senderId: 'other' };
+    await o.onMessage(second);
+    run.turns[0]!.resolve();
+    await until(() => expect(run.consumed).toHaveLength(2));
+    expect(open).toHaveBeenLastCalledWith(run.t, expect.objectContaining({ requesterOpenId: 'other', triggerMessageId: second.messageId }));
+    run.turns[1]!.resolve();
+    await until(() => expect(fake.final).toHaveBeenCalled());
+    await until(async () => expect(await grant.call('session_info', {})).toMatchObject({ result: { turn: 'none' } }));
+  });
+  it('revokes a failed resume grant before reopening with a distinct grant', async () => {
+    const registry = entries(), run = thread();
+    fake.backend.resumeThread.mockRejectedValueOnce(Error('resume failed'));
+    fake.backend.startThread.mockResolvedValueOnce(run.t);
+    await setup('steer', registry).onMessage(human('retry saved session'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const old: AgentEntry = fake.backend.resumeThread.mock.calls[0]![0].entry;
+    const next: AgentEntry = fake.backend.startThread.mock.calls[0]![0].entry;
+    expect(old).not.toBe(next);
+    await expect(old.call('session_info', {})).resolves.toMatchObject({ code: 'revoked' });
+    await expect(next.call('session_info', {})).resolves.toMatchObject({ ok: true });
+    run.turns[0]!.resolve();
+  });
+  it('revokes a failed start grant', async () => {
+    const registry = entries();
+    fake.backend.resumeThread.mockRejectedValueOnce(Error('resume failed'));
+    fake.backend.startThread.mockRejectedValueOnce(Error('start failed'));
+    await setup('steer', registry).onMessage(human('cannot start'));
+    await until(() => expect(fake.backend.startThread).toHaveBeenCalled());
+    const grant: AgentEntry = fake.backend.startThread.mock.calls[0]![0].entry;
+    await until(async () => expect(await grant.call('session_info', {})).toMatchObject({ code: 'revoked' }));
+  });
+  it('invalidates human authority before delivering another person’s steer', async () => {
+    const registry = entries(), run = thread();
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup('steer', registry);
+    await o.onMessage(human('first'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const grant: AgentEntry = fake.backend.resumeThread.mock.calls[0]![0].entry;
+    run.t.steer.mockImplementationOnce(async () => {
+      await expect(grant.call('session_info', {})).resolves.toMatchObject({ result: { turn: 'other' } });
+    });
+    await o.onMessage({ ...human('steer'), senderId: 'other' });
+    await until(() => expect(run.t.steer).toHaveBeenCalled());
+    run.turns[0]!.resolve();
+  });
+  it('revokes grants before shutdown closes a provider', async () => {
+    const registry = entries(), run = thread();
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup('steer', registry);
+    await o.onMessage(human('running'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const grant: AgentEntry = fake.backend.resumeThread.mock.calls[0]![0].entry;
+    run.t.close.mockImplementationOnce(async () => {
+      await expect(grant.call('session_info', {})).resolves.toMatchObject({ code: 'revoked' });
+      run.turns[0]!.resolve();
+    });
+    await o.shutdown();
+    expect(run.t.close).toHaveBeenCalled();
+  });
+});
+
+it.each(['new message', '/clear'])('issues and attaches a group grant for a fresh start via %s', async path => {
+  const registry = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true });
+  const issue = vi.spyOn(registry, 'issue'), run = thread();
+  if (path === 'new message') fake.record = { absent: true };
+  else fake.projectKind = 'single';
+  fake.backend.startThread.mockResolvedValueOnce(run.t);
+  const input = { ...message(path), raw: { sender: { sender_type: 'user' } }, ...(path === '/clear' ? { threadId: undefined } : {}) };
+  await setup('queue', registry).onMessage(input);
+  await until(() => expect(fake.backend.startThread).toHaveBeenCalledOnce());
+  expect(fake.backend.resumeThread).not.toHaveBeenCalled();
+  expect(issue).toHaveBeenCalledWith({ kind: 'group', chatId: 'chat' });
+  const grant: AgentEntry = fake.backend.startThread.mock.calls[0]![0].entry;
+  await until(async () => expect(await grant.call('session_info', {})).toMatchObject({ ok: true, result: { place: 'group' } }));
+  if (run.turns[0]) run.turns[0].resolve();
 });
