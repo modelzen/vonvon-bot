@@ -7,7 +7,7 @@ import type { AdminSettingsReadOp } from './ipc';
 import { CodexSetupService, type CodexSetup, type CodexJob, type CodexJobType } from '../agent/codex-appserver/setup';
 import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
 import { fetchUsageBundle } from '../agent/usage';
-import { parseJoinedGroups, type AdminGroupOp, type BindGroupInput, type JoinedGroups } from './groups';
+import { parseJoinedGroups, parseGroupMembers, type GroupMembers, type AdminGroupOp, type BindGroupInput, type JoinedGroups } from './groups';
 import { voiceView } from '../voice/view';
 import type { VoiceAction, VoiceView } from '../voice/types';
 import { readFile, rm } from 'node:fs/promises';
@@ -120,6 +120,7 @@ export interface AdminService {
   close?(): Promise<void>;
   pendingGroups?(botId: string): Promise<{ groups: PendingGroup[] }>;
   joinedGroups?(botId: string, cursor?: string): Promise<JoinedGroups>;
+  groupMembers?(botId: string, chatId: string, cursor?: string): Promise<GroupMembers>;
   bindGroup?(botId: string, input: BindGroupInput): Promise<AdminProject>;
   getVoice(botId: string): Promise<VoiceView>;
   setVoice(botId: string, action: VoiceAction): Promise<void>;
@@ -631,6 +632,10 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     async joinedGroups(botId, cursor) {
       if (!deps.executeGroups) throw new NotWiredYetError('群列表');
       return parseJoinedGroups(await deps.executeGroups(botId, { kind: 'joinedGroups', cursor }));
+    },
+    async groupMembers(botId, chatId, cursor) {
+      if (!deps.executeGroups) throw new NotWiredYetError('群成员');
+      return parseGroupMembers(await deps.executeGroups(botId, { kind: 'groupMembers', chatId, cursor }));
     },
     async bindGroup(botId, input) {
       if (!deps.executeGroups) throw new NotWiredYetError('绑定群聊');

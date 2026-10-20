@@ -3,11 +3,13 @@ import { APP_ROLE_CACHE_MS, createAppRoleRefresher, getAppRoleSnapshot } from '.
 import type { CollaborationRequest } from '../admin/collaboration';
 import type { HostSettings } from '../admin/settings-types';
 import type { AdminWriteResult } from '../admin/ops';
-import { createGroupExecutor, type AdminGroupOp, type JoinedGroups } from '../admin/groups';
+import { createGroupExecutor, type AdminGroupOp, type GroupMembers, type JoinedGroups } from '../admin/groups';
 import type { Project } from '../project/registry';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import type { AdminWriteOp } from '../admin/ops';
 import { isAdmin, resolveOwner, type AppConfig } from '../config/schema';
+import { createCommandTools } from '../agent/entry/command-tools';
+import { listProjects } from '../project/registry';
 import { createAgentEntries, type AgentEntries } from '../agent/entry/registry';
 import { log } from '../core/logger';
 import { createOrchestrator } from './handle-message';
@@ -37,7 +39,7 @@ export interface BridgeHandle {
   entries: AgentEntries;
   channel: LarkChannel;
   collaboration: (request: CollaborationRequest) => Promise<unknown>;
-  adminGroups: (op: AdminGroupOp) => Promise<JoinedGroups | Project>;
+  adminGroups: (op: AdminGroupOp) => Promise<JoinedGroups | GroupMembers | Project>;
   adminExecute: (op: AdminWriteOp) => Promise<AdminWriteResult>;
   settings: HostSettings;
   /** Graceful teardown: drop the long connection first, then close every codex
@@ -62,7 +64,21 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   // 咖啡一下 (the local Claude Code / Codex hook relay) left v1 in s02b: no
   // service and no socket; s02c deleted D/cli-bridge. Since s02c2 the installed
   // hooks run an empty `vonvon hook`, and the tools ask in the terminal.
-  const entries = createAgentEntries({ appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), isOwner: id => resolveOwner(opts.cfg) === id });
+  const entries = createAgentEntries({ appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), isOwner: id => resolveOwner(opts.cfg) === id, tools: createCommandTools({
+    appId: app.id,
+    settings: { read: scope => orchestrator.settings.read(scope), save: (edit, options) => orchestrator.settings.save(edit, options), models: query => orchestrator.settings.models(query), act: action => orchestrator.settings.act(action) },
+    projects: listProjects,
+    groups: async cursor => {
+      const result = await createGroupExecutor(channel, identity)({ kind: 'joinedGroups', cursor });
+      if (!('groups' in result)) throw new Error('Invalid group reply');
+      return result;
+    },
+    members: async (chatId, cursor) => {
+      const result = await createGroupExecutor(channel, identity)({ kind: 'groupMembers', chatId, cursor });
+      if (!('members' in result)) throw new Error('Invalid members reply');
+      return result;
+    },
+  }) });
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
     { entries, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity });
   const roles = createAppRoleRefresher(app, opts.appSecret);
@@ -79,7 +95,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   };
   scheduleRoles();
   const offCrash = onCrashSync(() => orchestrator.saveDroppedSync('crash'));
-  const groupTasks = new Set<Promise<JoinedGroups | Project>>();
+  const groupTasks = new Set<Promise<JoinedGroups | GroupMembers | Project>>();
   let closing: Promise<void> | undefined;
   const shutdown = (): Promise<void> => {
     if (closing) return closing;

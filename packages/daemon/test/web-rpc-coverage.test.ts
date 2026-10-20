@@ -122,11 +122,14 @@ else process.exit(0);
   const bot = { appId: agentId, name: 'fixture', tenant: 'feishu' as const, active: true, current: true, running: true, completionReminder: { mode: 'always' as const, longTaskMinutes: 7 } };
   const host = { scope: { kind: 'host' as const }, sections: { execution: { stored: { codexBin: null }, effective: { codexBin: null }, revision: 'token', access: { kind: 'writable' as const }, apply: [] } }, runtime: { codexBin: null, fallbackCwd: '/fixture', platform: 'darwin' } };
   const stopSubagent = vi.fn(async (_agent: string, _request: unknown) => ({ ok: true }));
+  const members = [{ openId: 'ou_fixture_member', name: 'Fixture member' }];
+  const groupMembers = vi.fn(async (_agent: string, _group: string, _cursor?: string) => ({ members, nextCursor: 'members-next' }));
   const service = fakeService({
     listBots: async () => [bot],
     listProjects: async () => [{ name: projectName, chatId: groupId, cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 }],
     pendingGroups: async () => ({ groups: [] }),
     joinedGroups: async () => ({ groups: [] }),
+    groupMembers,
     bindGroup: async () => ({ name: projectName, chatId: groupId, cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 }),
     startCodexJob: () => ({ id: operationId }),
     codexJob: () => ({ id: operationId, type: 'install', state: 'succeeded' }),
@@ -163,7 +166,7 @@ else process.exit(0);
       command: [
         { type: 'refresh' }, { type: 'listPendingGroups', agentId }, { type: 'openEventSettings', url: 'https://open.feishu.cn/app/cli_fixture/event' },
         { type: 'registerAgent' }, { type: 'refreshAgentCredentials', agentId }, { type: 'installCodex' }, { type: 'startCodexLogin' }, { type: 'restartHost' },
-        { type: 'listJoinedGroups', agentId }, { type: 'bindGroup', agentId, groupId, projectName, folder: { kind: 'existing', folderToken }, tool: 'codex', conversation: 'threads' },
+        { type: 'listJoinedGroups', agentId }, { type: 'listGroupMembers', agentId, groupId, cursor: 'members-page' }, { type: 'bindGroup', agentId, groupId, projectName, folder: { kind: 'existing', folderToken }, tool: 'codex', conversation: 'threads' },
         { type: 'setResponse', membershipId: JSON.stringify([agentId, groupId]), response: 'all' },
         { type: 'setPermission', membershipId: JSON.stringify([agentId, groupId]), administrator: 'write', network: true },
         { type: 'setAgentEnabled', agentId, enabled: true }, { type: 'deleteAgent', agentId }, { type: 'cancelJob', jobId: operationId },
@@ -220,12 +223,14 @@ else process.exit(0);
           expect(frame.type, key).toBe('response');
           expect(responseSchema.safeParse(frame).success, key).toBe(true);
           if (key === 'collaboration.stopSubagent') expect(frame).toMatchObject({ type: 'response', method: 'collaboration', payload: { kind: 'applied' } });
+          if (key === 'command.listGroupMembers') expect(frame).toMatchObject({ type: 'response', method: 'command', payload: { kind: 'members', members, nextCursor: 'members-next' } });
         }
       }
     }
     expect(stopSubagent).toHaveBeenCalledExactlyOnceWith(agentId, {
       action: 'stopSubagent', projectName, chatId: groupId, threadId: 'thread', runId: 'run', subagentId: 'child',
     });
+    expect(groupMembers).toHaveBeenCalledExactlyOnceWith(agentId, groupId, 'members-page');
     expect(unsupported.size).toBe(13);
     await client.close();
   } finally {

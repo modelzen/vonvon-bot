@@ -124,7 +124,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
             return { connection: handle.channel.getConnectionStatus?.()?.state ?? 'unknown' };
           }
           if (op.kind === 'collaboration') return handle.collaboration(op.request);
-          if (op.kind === 'joinedGroups' || op.kind === 'bindGroup') return handle.adminGroups(op);
+          if (op.kind === 'joinedGroups' || op.kind === 'groupMembers' || op.kind === 'bindGroup') return handle.adminGroups(op);
           if (op.kind === 'settingsRead') return handle.settings.read(op.scope);
           if (op.kind === 'settingsModels') return handle.settings.models(op.query);
           return handle.adminExecute(op);

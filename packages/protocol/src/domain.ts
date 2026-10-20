@@ -75,6 +75,7 @@ export const commandSchema = z.discriminatedUnion("type", [
       cursor: z.string().min(1).max(2048).optional(),
     })
     .strict(),
+  z.object({ type: z.literal("listGroupMembers"), agentId: agentIdSchema, groupId: groupIdSchema, cursor: z.string().min(1).max(2048).optional() }).strict(),
   z
     .object({
       type: z.literal("bindGroup"),
@@ -245,6 +246,7 @@ export const commandResultSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("applied"), revision: z.number() }),
   z.object({ kind: z.literal("started"), jobId: jobIdSchema }),
   z.object({ kind: z.literal("folderChosen"), folder: folderChoiceSchema }),
+  z.object({ kind: z.literal("members"), members: z.array(z.object({ openId: z.string().min(1), name: z.string() })), nextCursor: z.string().optional() }),
   z.object({ kind: z.literal("groups"), groups: z.array(z.object({ id: groupIdSchema, name: z.string(), bound: z.boolean(), hasOtherBots: z.boolean().optional() })), nextCursor: z.string().optional() }),
   z.object({ kind: z.literal("cancelled") }),
   z.object({ kind: z.literal("activationPending"), message: z.string() }),

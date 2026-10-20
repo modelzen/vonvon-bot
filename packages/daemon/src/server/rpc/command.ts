@@ -37,6 +37,12 @@ export async function commandRpc(options: { service: AdminService; jobs: Jobs; p
       const result = await service.joinedGroups(request.agentId, request.cursor);
       return { kind: 'read', value: { kind: 'groups', groups: result.groups.map(group => ({ id: groupIdSchema.parse(group.chatId), name: group.name, bound: group.bound, ...(group.hasOtherBots === undefined ? {} : { hasOtherBots: group.hasOtherBots }) })), ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}) } };
     }
+    case 'listGroupMembers': {
+      await requireRunningAgent(service, request.agentId);
+      if (!service.groupMembers) return unsupported();
+      const result = await service.groupMembers(request.agentId, request.groupId, request.cursor);
+      return { kind: 'read', value: { kind: 'members', ...result } };
+    }
     case 'bindGroup': {
       await requireRunningAgent(service, request.agentId);
       if (!service.bindGroup) return unsupported();

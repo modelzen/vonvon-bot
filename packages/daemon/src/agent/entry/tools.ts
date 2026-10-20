@@ -4,6 +4,9 @@ import type { AgentPlace } from './registry';
 
 export interface ToolContext {
   signal: AbortSignal;
+  notAfter: number;
+  admin?: boolean;
+  readonly writeRefusal?: Extract<AgentToolReply, { ok: false }>;
   place: AgentPlace;
   turn?: { id: number; requesterOpenId: string; role: 'owner' | 'admin'; triggerMessageId: string };
   /** Call guard synchronously immediately before the write becomes effective, with no await between. */
