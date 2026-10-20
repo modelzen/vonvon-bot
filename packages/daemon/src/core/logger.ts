@@ -3,6 +3,7 @@ import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs';
 import { open, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { redactTokens } from './token-redact';
 import { paths } from '../config/paths';
 import { errorParts, markLogged, type ExpandedErrors } from './error-parts';
 
@@ -142,7 +143,7 @@ function emit(level: Level, phase: string, event: string, fields: LogFields = {}
   const s = getStream(ts.slice(0, 10));
   if (s) {
     try {
-      s.write(`${JSON.stringify(entry)}\n`);
+      s.write(`${redactTokens(JSON.stringify(entry))}\n`);
     } catch {
       /* swallow disk errors — logging should never crash the bot */
     }
@@ -153,7 +154,7 @@ function emit(level: Level, phase: string, event: string, fields: LogFields = {}
   if (!showOnStdout || !toConsole) return;
 
   const fn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
-  fn(formatStdout(level, phase, event, ctx, shown));
+  fn(redactTokens(formatStdout(level, phase, event, ctx, shown)));
 }
 
 function formatStdout(
@@ -198,12 +199,13 @@ function formatFields(fields: LogFields): string {
     if (v === undefined || v === null) continue;
     if (k === 'stack') continue;
     if (typeof v === 'string') {
-      parts.push(`${k}=${v.length > 80 ? `${v.slice(0, 80)}…` : v}`);
+      const text = redactTokens(v);
+      parts.push(`${k}=${text.length > 80 ? `${text.slice(0, 80)}…` : text}`);
     } else if (typeof v === 'number' || typeof v === 'boolean') {
       parts.push(`${k}=${v}`);
     } else {
       try {
-        const str = JSON.stringify(v);
+        const str = redactTokens(JSON.stringify(v));
         parts.push(`${k}=${str.length > 80 ? `${str.slice(0, 80)}…` : str}`);
       } catch {
         parts.push(`${k}=?`);
