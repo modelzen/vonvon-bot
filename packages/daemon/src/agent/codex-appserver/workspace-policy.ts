@@ -31,6 +31,9 @@ export function codexWorkspaceRoots(opts: { cwd: string; mode?: PermissionMode; 
     if (root.access !== 'read' && root.access !== 'write') throw new Error('Codex 工作区权限无效');
   }
   if ((opts.mode ?? 'full') === 'full') return roots;
+  if (roots.some(root => ['/private/tmp', '/private/var/tmp', '/tmp', '/var/tmp'].some(scratch => contains(root.path, scratch)))) {
+    throw new Error('受限工作区不能覆盖平台临时目录边界');
+  }
   for (const root of roots) {
     for (const other of roots) {
       if (root === other || !contains(other.path, root.path)) continue;
@@ -48,7 +51,10 @@ export function codexFilesystem(roots: readonly Root[], mode: 'qa' | 'write') {
     '.': mode === 'qa' ? 'read' : root.access,
     ...Object.fromEntries(CODEX_PROTECTED_PATHS.map(path => [path, 'read'])),
   }]);
-  return { ':minimal': 'read', ':workspace_roots': { '.': 'read' }, ...Object.fromEntries(entries) };
+  // 0.162.1 scratch_access_roots retains explicit read restrictions as exclusions
+  // from implicit scratch grants. More-specific workspace entries remain writable.
+  return { ':minimal': 'read', ':workspace_roots': { '.': 'read' },
+    '/private/tmp': { '.': 'read' }, '/private/var/tmp': { '.': 'read' }, ...Object.fromEntries(entries) };
 }
 
 const SandboxSchema = z.discriminatedUnion('type', [

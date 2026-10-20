@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CodexAppServerBackend, codexSessionParams } from '../src/agent/codex-appserver/backend';
 import { CODEX_PROTECTED_PATHS } from '../src/agent/codex-appserver/workspace-policy';
+import * as admission from '../src/agent/codex-appserver/workspace-admission';
 import * as fullOnly from '../src/agent/codex-appserver/full-only';
 import type { SessionProfile } from '../src/agent/session-profile';
 import type { StartThreadOptions } from '../src/agent/types';
@@ -30,6 +31,9 @@ function echo(mode: 'qa' | 'write' | 'full' = 'write') {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(fullOnly, 'codexConfinesReads').mockReturnValue(true);
+  // Parameter/echo unit cases use symbolic wire roots; real layout admission is
+  // exercised with actual files and the same backend in s39-workspace-admission.
+  vi.spyOn(admission, 'admitCodexWorkspaceLayout').mockResolvedValue();
   rpc.request.mockResolvedValue(echo());
   rpc.take.mockReturnValue({ request: rpc.request, close: rpc.close });
 });
@@ -55,7 +59,7 @@ for (const mode of ['qa', 'write', 'full'] as const) {
             [path]: { '.': mode === 'qa' || path === '/reference' ? 'read' : 'write', ...Object.fromEntries(CODEX_PROTECTED_PATHS.map(target => [target, 'read'])) },
           } } } } });
         }
-        expect(params).toMatchObject({ config: { permissions: { feishu: { filesystem: { ':workspace_roots': { '.': 'read' } } } } } });
+        expect(params).toMatchObject({ config: { permissions: { feishu: { filesystem: { ':workspace_roots': { '.': 'read' }, '/private/tmp': { '.': 'read' }, '/private/var/tmp': { '.': 'read' } } } } } });
       }
       await thread.close();
     });
@@ -100,6 +104,8 @@ it('rejects restricted platforms and conflicting/nested roots before acquiring a
     [{ path: '/workspace/.claude/skills/injected', access: 'write' }],
     [{ path: '/reference', access: 'read' }, { path: '/reference/sub', access: 'write' }],
     [{ path: '/alias/../repo', access: 'write' }],
+    [{ path: '/private/tmp', access: 'write' }],
+    [{ path: '/tmp', access: 'read' }],
   ] satisfies SessionProfile['additionalRoots'][]) {
     await expect(backend.startThread({ ...options(), profile: { ...profile, additionalRoots: roots } })).rejects.toThrow();
     expect(rpc.take).not.toHaveBeenCalled();

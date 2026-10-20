@@ -150,13 +150,14 @@ for (const field of ['additionalRoots', 'capabilityPackages', 'mcpServers'] as c
  it('Codex preserves restricted filesystem and network configuration while applying the profile', async () => {
   vi.spyOn(fullOnly, 'codexConfinesReads').mockReturnValue(true);
   const backend = new CodexAppServerBackend();
-  threads.push(await backend.startThread({ cwd: '/profile-workspace', mode: 'write', network: false, profile: explicit }));
+  const cwd = mkdtempSync(join(tmpdir(), 'profile-restricted-'));
+  threads.push(await backend.startThread({ cwd, mode: 'write', network: false, profile: explicit }));
   expect(rpc.request).toHaveBeenCalledWith('thread/start', expect.objectContaining({
     config: expect.objectContaining({
       default_permissions: 'feishu',
       permissions: { feishu: {
         filesystem: expect.objectContaining({ ':minimal': 'read', ':workspace_roots': { '.': 'read' },
-          '/profile-workspace': expect.objectContaining({ '.': 'write', '.mcp.json': 'read', '.claude/skills': 'read' }),
+          [cwd]: expect.objectContaining({ '.': 'write', '.mcp.json': 'read', '.claude/skills': 'read' }),
         }),
         network: { enabled: false },
       } },

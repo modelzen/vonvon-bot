@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
+import { CodexWorkspaceLayoutError } from '../src/agent/codex-appserver/workspace-admission';
 import type { AgentEvent, AgentInput, ModelInfo, TurnOptions } from '../src/agent/types';
 
 // s36d2: the orchestrator's entries read one resolver (config/execution.ts). Two real backend ids,
@@ -311,6 +312,14 @@ describe('s39a production profile delivery', () => {
       expect(call).toHaveBeenCalledWith(expect.objectContaining({ cwd, profile: expect.objectContaining({ additionalRoots: roots(extra, repository) }) }));
     }
     expect(claude.startThread).not.toHaveBeenCalled();
+  });
+  it('surfaces an unsafe restored layout without replacing the stored conversation', async () => {
+    fake.records.set('omt_t', record('omt_t', { cwd }));
+    codex.resumeThread.mockRejectedValueOnce(new CodexWorkspaceLayoutError());
+    await setup({ directories: { repositories: [repository] } }).onMessage(message('continue', 'omt_t'));
+    await vi.waitFor(() => expect(fake.send.mock.calls.some(call => JSON.stringify(call).includes('硬链接'))).toBe(true));
+    expect(codex.startThread).not.toHaveBeenCalled();
+    expect(fake.records.get('omt_t')).toMatchObject({ sessionId: 'old-omt_t', cwd });
   });
   it('keeps Claude profile empty with configured additional roots', async () => {
     fake.project = { ...fake.project, backend: CLAUDE };

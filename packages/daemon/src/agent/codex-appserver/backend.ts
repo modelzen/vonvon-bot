@@ -25,6 +25,7 @@ import type {
 import { isGoalTerminal, SessionInUseError } from '../types';
 import { resolveSessionProfile, type SessionProfileCapabilities } from '../session-profile';
 import { AppServerClient } from './app-server-client';
+import { admitCodexWorkspaceLayout } from './workspace-admission';
 import { codexFilesystem, codexWorkspaceRoots, verifyCodexWorkspaceEcho } from './workspace-policy';
 import { NATIVE_MEMORY_OFF } from './memory-config';
 import { connectGated, refillWarmPool, takeWarmClient, utilityRequest } from './client-pool';
@@ -881,6 +882,7 @@ export class CodexAppServerBackend implements AgentBackend {
     // model_auto_compact_token_limit override, and newer codex caps any limit at
     // 90% of the window anyway.
     const params = codexSessionParams(opts);
+    await admitCodexWorkspaceLayout(opts);
     const client = await this.spawn(opts.cwd);
     let res: { thread: { id: string } };
     try {
@@ -895,6 +897,7 @@ export class CodexAppServerBackend implements AgentBackend {
 
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {
     const params = codexSessionParams(opts);
+    await admitCodexWorkspaceLayout(opts);
     const client = await this.spawn(opts.cwd);
     let res: { thread: { id: string; turns?: Turn[] } };
     try {

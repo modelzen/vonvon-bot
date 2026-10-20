@@ -69,6 +69,7 @@ import {
   probeBackends,
   type AdminWriteOp,
 } from '../admin/ops';
+import { CodexWorkspaceLayoutError } from '../agent/codex-appserver/workspace-admission';
 import { isGoalTerminal, SessionInUseError, UsageError } from '../agent/types';
 import { parseModelId } from '../agent/model-id';
 import {
@@ -3572,7 +3573,7 @@ export function createOrchestrator(
     } catch (err) {
       log.fail('agent', err, { phase: 'resume-on-turn', threadId });
       // Open in a terminal or the Codex app (s15b): say so and keep the session.
-      if (err instanceof SessionInUseError) throw err;
+      if (err instanceof SessionInUseError || err instanceof CodexWorkspaceLayoutError) throw err;
       const cwd = workCwd(project, rec);
       const fresh = await startWith(be, {
         cwd,
