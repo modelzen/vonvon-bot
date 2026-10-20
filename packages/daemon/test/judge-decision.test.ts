@@ -35,7 +35,7 @@ describe('decision model request (s23f 做法（问法）)', () => {
       questions: {
         decision: {
           type: 'choice',
-          instructions: { rules: 'SMART 原文', question: '`new_message` 发在群主区，没有点名谁。按 `rules`，bot（`bot_name`）该怎么处理它？' },
+          instructions: { rules: 'SMART 原文', question: '`new_message` 发在群主区。按 `rules`，bot（`bot_name`）该怎么处理它？' },
           criteria: {
             skip: '不回：闲聊、寒暄、"好的""收到"这类话；说给别人的话；别人已经在处理或答过；bot 说不出新的有用的东西；拿不准',
             main: '在主区回：需要 bot 回应，接着主区正在聊的事，或者一两句就能答完',

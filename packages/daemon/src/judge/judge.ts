@@ -1,3 +1,4 @@
+import { reportCustomPromptNotice } from '../bot/diagnostics';
 import { createHash } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -13,7 +14,7 @@ import { log } from '../core/logger';
 import { createCooldown } from './cooldown';
 import { decisionBody, decisionProvider, readDecision, type DecisionProvider } from './decision';
 import { parseStoredJudge, resolveJudgeModel } from './model';
-import { judgeAnchors, judgeSchema, judgeSystem, parseVerdict, renderJudgeInput } from './prompt';
+import { SMART_FACTS_GUIDANCE, judgeAnchors, judgeSchema, judgeSystem, parseVerdict, renderJudgeInput } from './prompt';
 import { readSmartPrompt, SmartPromptError } from './smart-file';
 import { DecisionError } from './typesafe';
 import type { JudgeErrorKind, JudgeRequest, JudgeResult } from './types';
@@ -129,6 +130,13 @@ const promptHashOf = (text: string): string => createHash('sha256').update(text)
 export function createJudge(deps: JudgeDeps): Judge {
   const now = deps.now ?? Date.now;
   const readPrompt = deps.readPrompt ?? readSmartPrompt;
+  const noticedPrompts = new Set<string>();
+  const notePrompt = (req: JudgeRequest, prompt: Awaited<ReturnType<typeof readSmartPrompt>>): void => {
+    const key = `${req.appId}:${req.group.chatId}`;
+    if (prompt.source === 'default' || prompt.text.includes(SMART_FACTS_GUIDANCE) || noticedPrompts.has(key)) return;
+    noticedPrompts.add(key);
+    reportCustomPromptNotice(req.group.chatId);
+  };
   const readSecret = deps.getSecret ?? getSecret;
   let cwdOnce: Promise<string> | undefined;
   const cwd = deps.cwd ?? (() => {
@@ -341,6 +349,7 @@ export function createJudge(deps: JudgeDeps): Judge {
         let sent: ReturnType<typeof decisionBody> | undefined;
         const work = (async () => {
           const prompt = await readPrompt(req.appId, req.group.chatId);
+          if (!ctl.signal.aborted) notePrompt(req, prompt);
           base = { ...base, promptSource: prompt.source, promptHash: promptHashOf(prompt.text) };
           const key = await readKey(provider);
           const body = sent = decisionBody(req, prompt.text, base.model);
@@ -368,6 +377,7 @@ export function createJudge(deps: JudgeDeps): Judge {
       // on time.
       const work = (async (): Promise<JudgeCallOutput> => {
         const prompt = await readPrompt(req.appId, req.group.chatId);
+        if (!ctl.signal.aborted) notePrompt(req, prompt);
         base = { ...base, promptSource: prompt.source, promptHash: promptHashOf(prompt.text) };
         if (!backend.judge) throw new JudgeFail('unavailable', `${backend.displayName} 不支持判断`);
         const dir = await cwd();
