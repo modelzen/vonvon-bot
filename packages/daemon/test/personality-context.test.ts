@@ -11,7 +11,7 @@ const roots: string[] = [];
 async function fixture(maxCharacters = 1000) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'vonvon-personality-context-')));
   roots.push(root);
-  return { root, files: createPersonalityFiles(root, { maxCharacters }) };
+  return { root, files: createPersonalityFiles(root, { maxCharacters, execution: 'daemon-exclusive' }) };
 }
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 async function context(files: PersonalityFiles, location: PersonalityLocation, botName = 'FAKE_BOT') {

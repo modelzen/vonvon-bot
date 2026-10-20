@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, realpath, rename, unlink, type FileHandle } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, isAbsolute, join, parse, resolve } from 'node:path';
 
@@ -7,7 +7,7 @@ export type PersonalityFile =
   | { kind: 'bot-soul' | 'bot-agents' | 'public-memory' }
   | { kind: 'group-soul' | 'group-memory'; chatId: string }
   | { kind: 'dm-memory'; personId: string };
-export type FileFailure = 'invalid-target' | 'unsafe-file' | 'too-large' | 'invalid-utf8' | 'too-many-characters' | 'io';
+export type FileFailure = 'invalid-target' | 'unsafe-file' | 'too-large' | 'invalid-utf8' | 'too-many-characters' | 'boundary-not-established' | 'io';
 export interface FileSnapshot {
   file: string;
   /** Opaque bot-root identity; identical contents in another bot are different provenance. */
@@ -24,8 +24,9 @@ export type FileRead =
   | { kind: 'error'; file: string; reason: FileFailure };
 /** A committed write is a file fact, never evidence that a model received it. */
 export type FileWrite =
-  | { kind: 'committed'; snapshot: FileSnapshot }
+  | { kind: 'committed'; snapshot: FileSnapshot; cleanupWarning?: 'source-close-failed' }
   | { kind: 'error'; file: string; reason: FileFailure };
+export type PersonalityExecution = 'daemon-exclusive' | 'full' | { kind: 'restricted'; backend: 'codex' | 'claude' };
 export const PERSONALITY_SAFETY_BYTES = 64 * 1024;
 
 class FileError extends Error {
@@ -34,7 +35,7 @@ class FileError extends Error {
 const missing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
 function failure(error: unknown): FileFailure { return error instanceof FileError ? error.reason : 'io'; }
 function id(value: string): string {
-  if (!/^[A-Za-z0-9_-]{1,200}$/.test(value)) throw new FileError('invalid-target');
+  if (value.length < 1 || value.length > 200 || /[^A-Za-z0-9_-]/u.test(value)) throw new FileError('invalid-target');
   return value;
 }
 function relativeFile(target: PersonalityFile): string {
@@ -65,12 +66,17 @@ function snapshot(file: string, content: string, maxCharacters: number, source: 
  */
 export function createPersonalityFiles(
   botRoot: string,
-  policy: { maxCharacters: number },
+  policy: { maxCharacters: number; execution: PersonalityExecution },
   operations: { commitRename?: typeof rename } = {},
 ) {
-  if (!isAbsolute(botRoot) || !Number.isSafeInteger(policy.maxCharacters) || policy.maxCharacters < 1) {
+  if (!isAbsolute(botRoot) || !Number.isSafeInteger(policy.maxCharacters) || policy.maxCharacters < 1
+    || !(policy.execution === 'full' || policy.execution === 'daemon-exclusive' || (typeof policy.execution === 'object' && policy.execution !== null
+      && policy.execution.kind === 'restricted' && ['codex', 'claude'].includes(policy.execution.backend)))) {
     throw new Error('Invalid personality file policy');
   }
+  const maxCharacters = policy.maxCharacters;
+  const execution = typeof policy.execution === 'object' ? 'restricted' : policy.execution;
+  const commitRename = operations.commitRename ?? rename;
   let rootIdentity: string | undefined;
   function source(): string {
     if (rootIdentity === undefined) throw new FileError('io');
@@ -143,7 +149,7 @@ export function createPersonalityFiles(
         let content: string;
         try { content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, length)); }
         catch { throw new FileError('invalid-utf8'); }
-        return { kind: 'present', snapshot: snapshot(file, content, policy.maxCharacters, source()) };
+        return { kind: 'present', snapshot: snapshot(file, content, maxCharacters, source()) };
       } finally { await handle.close(); }
     } catch (error) {
       return missing(error) ? { kind: 'missing', file } : { kind: 'error', file, reason: failure(error) };
@@ -151,11 +157,15 @@ export function createPersonalityFiles(
   }
   async function write(target: PersonalityFile, content: string): Promise<FileWrite> {
     let file = '(invalid)';
-    let temporary: { path: string; file: string; token: string } | undefined;
+    let temporary: { path: string; file: string; token: string; identity: string } | undefined;
+    let handle: FileHandle | undefined;
     try {
       file = relativeFile(target);
+      // No receipt can currently establish that a real reply session consumed the protected policy.
+      // Do not accept an asserted boolean/profile name as a capability, or silently fall back to full.
+      if (execution === 'restricted') throw new FileError('boundary-not-established');
       await root();
-      const next = snapshot(file, content, policy.maxCharacters, source());
+      const next = snapshot(file, content, maxCharacters, source());
       if (next.needsOrganization) throw new FileError('too-many-characters');
       if (next.bytes > PERSONALITY_SAFETY_BYTES) throw new FileError('too-large');
       // Reject strings that cannot round-trip as UTF-8 (unpaired UTF-16 surrogates).
@@ -163,20 +173,40 @@ export function createPersonalityFiles(
       const parent = await parents(file, true);
       const path = join(parent.path, basename(file));
       const before = await existing(path);
-      temporary = { path: join(parent.path, `.vonvon-${randomUUID()}.tmp`), file, token: parent.token };
-      const handle = await open(temporary.path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-      try { await handle.writeFile(content, 'utf8'); await handle.sync(); }
-      finally { await handle.close(); }
+      // The source object never lives in an agent-writable memory directory.
+      const stageFile = `daemon-staging/.vonvon-${randomUUID()}.tmp`;
+      const stage = await parents(stageFile, true);
+      if ((await lstat(stage.path)).dev !== (await lstat(parent.path)).dev) throw new FileError('unsafe-file');
+      const stagePath = join(stage.path, basename(stageFile));
+      handle = await open(stagePath, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+      temporary = { path: stagePath, file: stageFile, token: stage.token, identity: identity(await handle.stat()) };
+      await handle.writeFile(content, 'utf8');
+      await handle.sync();
       await verifyParents(file, parent.token);
-      if (await existing(path) !== before) throw new FileError('unsafe-file');
-      await (operations.commitRename ?? rename)(temporary.path, path);
+      await verifyParents(stageFile, stage.token);
+      if (await existing(path) !== before || await existing(stagePath) !== temporary.identity) throw new FileError('unsafe-file');
+      // Capture the actual source while it is in trusted staging. Identity/data checks are
+      // anomaly detection; only the established execution boundary prevents replacing it.
+      const actual = Buffer.alloc(next.bytes + 1);
+      const observed = await handle.read(actual, 0, actual.length, 0);
+      const stagedBytes = actual.subarray(0, observed.bytesRead);
+      if (!stagedBytes.equals(Buffer.from(content))) throw new FileError('unsafe-file');
+      const submitted = snapshot(file, stagedBytes.toString('utf8'), maxCharacters, source());
+      await commitRename(stagePath, path);
       temporary = undefined;
-      return { kind: 'committed', snapshot: next };
+      // The atomic-commit fact is not invalidated by a legitimate later writer. A close
+      // failure is a cleanup warning, never a claim that an already committed write failed.
+      const closeFailed = await handle.close().then(() => false, () => true);
+      if (!closeFailed) handle = undefined;
+      return { kind: 'committed', snapshot: submitted, ...(closeFailed ? { cleanupWarning: 'source-close-failed' } : {}) };
     } catch (error) { return { kind: 'error', file, reason: failure(error) }; }
     finally {
       // Never chase a swapped ancestor while cleaning up our own temporary file.
       const cleanup = temporary;
-      if (cleanup) await verifyParents(cleanup.file, cleanup.token).then(() => unlink(cleanup.path)).catch(() => undefined);
+      if (cleanup) await verifyParents(cleanup.file, cleanup.token).then(async () => {
+        if (await existing(cleanup.path) === cleanup.identity) await unlink(cleanup.path);
+      }).catch(() => undefined);
+      if (handle) await handle.close().catch(() => undefined);
     }
   }
   return { read, write };
