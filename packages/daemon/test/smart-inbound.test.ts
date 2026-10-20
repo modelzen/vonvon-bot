@@ -1,3 +1,4 @@
+import { createAgentEntries } from '../src/agent/entry/registry';
 import { FocusEverywhere } from './helpers/focus-everywhere';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -245,6 +246,25 @@ describe('smart mode intake (s25)', () => {
     expect(fake.inputs[0]).toContain(INITIATIVE_NOTE);
     expect(fake.inputs[0]).toContain('登录接口为什么 500');
     expect(fake.inputs[0]).not.toContain('SECRET_REASON_FIXTURE');
+  });
+
+  it('keeps an initiative run outside human settings authority', async () => {
+    await orchestrator.shutdown();
+    const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true });
+    const issue = vi.spyOn(entries, 'issue'), open = vi.spyOn(entries, 'openTurn'), checked = vi.fn();
+    orchestrator = createOrchestrator(channel as never, cfg, '/tmp/demo', undefined, { attention: new FocusEverywhere(), entries });
+    fake.events = async function* () {
+      const grant = issue.mock.results[0]!.value;
+      await expect(grant.call('session_info', {})).resolves.toMatchObject({ ok: true, result: { turn: 'other' } });
+      checked();
+      yield { type: 'done', turnId: 'turn-fixture' };
+    };
+    const m = says('登录接口为什么 500');
+    await send(m);
+    await decide(m, result('main'));
+    await vi.waitFor(() => expect(checked).toHaveBeenCalledOnce());
+    expect(open).toHaveBeenCalledOnce();
+    expect(open).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ initiative: true, retry: false, wake: false }));
   });
 
   it('judges a named message with main and a 12 s timeout, THINKING meanwhile, without the initiative line', async () => {

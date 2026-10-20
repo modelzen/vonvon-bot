@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
-import type { AgentEvent, AgentInput, AgentRun, AskRequest } from '../src/agent/types';
+import type { AgentEntry, AgentEvent, AgentInput, AgentRun, AskRequest } from '../src/agent/types';
 
 // Same harness shape as message-queue-races: real orchestrator, faked backend,
 // card stream and stores.
@@ -69,6 +69,7 @@ vi.mock('../src/card/run-card-stream', () => ({
     stats() { return { pushCount: 0, cardPushes: 0, elPushes: 0, totalRttMs: 0, maxRttMs: 0 }; }
   },
 }));
+import { createAgentEntries, type AgentEntries } from '../src/agent/entry/registry';
 import { createOrchestrator, retryPrompt } from '../src/bot/handle-message';
 import { weaveRecordBlock, weaveSender } from '../src/bot/context-weave';
 import { stripBridgeMessageEnvelope } from '../src/bot/session-title';
@@ -126,13 +127,13 @@ function message(text: string): NormalizedMessage {
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false };
 }
 /** Starts the orchestrator; every resume returns `thread` when given. */
-function setup(thread?: unknown, allowedChats = ['chat']) {
+function setup(thread?: unknown, allowedChats = ['chat'], entries?: AgentEntries) {
   if (thread) fake.backend.resumeThread.mockResolvedValue(thread);
   const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['admin'], allowedChats } } };
   const channel = { send: fake.send, getChatInfo: async () => ({ name: 'Test', chatType: 'group' }), rawClient: { cardkit: { v1: { cardElement: { delete: fake.deleteElement } } }, im: { v1: { chat: { get: async () => ({ data: { chat_mode: 'group' } }) }, chatMembers: { isInChat: async () => ({ code: 0, data: { is_in_chat: true } }) }, message: { get: async () => ({ data: { items: [{ thread_id: 'topic', body: { content: JSON.stringify({ type: 'card', data: { card_id: 'orphan-entity' } }) } }] } }) }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
-  orchestrator = createOrchestrator(channel as never, cfg, '/test');
+  orchestrator = createOrchestrator(channel as never, cfg, '/test', undefined, { entries });
   return orchestrator;
 }
 /** Sends `msg` to a session on `run` and waits for its run card's error final. */
@@ -888,4 +889,50 @@ describe('goal child questions across parent turns', () => {
     finish.release();
   });
 
+});
+
+describe('agent entry authority during compact and retry', () => {
+  const registry = () => createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true });
+  const human = (text: string) => ({ ...message(text), raw: { sender: { sender_type: 'user' } } });
+  it('closes the triggering authority before running a queued manual compaction', async () => {
+    let finish: (() => void) | undefined;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    const run = fakeThread(async function* (turnId) { await gate; yield { type: 'done', turnId }; });
+    const entries = registry();
+    let grant: AgentEntry;
+    const compactChecked = vi.fn();
+    const compact = vi.fn(async () => {
+      await expect(grant.call('session_info', {})).resolves.toMatchObject({ result: { turn: 'none' } });
+      compactChecked();
+      return {};
+    });
+    Object.assign(run.t, { compact });
+    const o = setup(run.t, ['chat'], entries);
+    await o.onMessage(human('first'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    grant = fake.backend.resumeThread.mock.calls[0]![0].entry;
+    await expect(grant.call('session_info', {})).resolves.toMatchObject({ result: { turn: 'person' } });
+    await o.onMessage(human('/compact'));
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'compact-queued', expect.anything()));
+    expect(compact).not.toHaveBeenCalled();
+    finish?.();
+    await until(() => expect(compactChecked).toHaveBeenCalledOnce());
+    expect(compact).toHaveBeenCalledOnce();
+  });
+  it('replays through the retry button without reusing the original human authority', async () => {
+    const entries = registry(), open = vi.spyOn(entries, 'openTurn'), checked = vi.fn();
+    const run = fakeThread(async function* (turnId, n) {
+      const grant: AgentEntry = fake.backend.resumeThread.mock.calls[0]![0].entry;
+      await expect(grant.call('session_info', {})).resolves.toMatchObject({ result: { turn: n === 1 ? 'person' : 'other' } });
+      if (n === 1) yield NETWORK;
+      else { checked(); yield { type: 'done', turnId }; }
+    });
+    const o = setup(run.t, ['chat'], entries);
+    await o.onMessage(human('retry this message'));
+    await until(() => expect(offersRetry('card-1')).toBe(true));
+    await tap('card-1');
+    await until(() => expect(checked).toHaveBeenCalledOnce());
+    expect(run.consumed).toHaveLength(2);
+    expect(open).toHaveBeenLastCalledWith(run.t, expect.objectContaining({ retry: true }));
+  });
 });
