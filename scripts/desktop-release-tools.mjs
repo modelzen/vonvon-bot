@@ -1,3 +1,4 @@
+import plist from 'plist';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, open, readFile, readdir, writeFile } from 'node:fs/promises';
@@ -78,17 +79,21 @@ export async function verifyUniversalApp({ app, version, teamIdentifier, execute
     const { stdout } = await execute('/usr/bin/lipo', ['-archs', path]);
     const archs = stdout.trim().split(/\s+/).sort();
     if (archs.join(',') !== 'arm64,x86_64') throw new Error(`Non-universal bundled runtime: ${path.slice(app.length + 1)}`);
+    await execute('/usr/bin/codesign', ['--verify', '--strict', path]);
     architectures.push({ path: path.slice(app.length + 1), archs });
   }
+  const entitlementChecks = [];
   for (const path of [app, ...paths.filter(path => /Helper[^/]*\.app\/Contents\/MacOS\//.test(path))]) {
     const { stdout, stderr: entitlementError } = await execute('/usr/bin/codesign', ['--display', '--entitlements', ':-', path]);
-    const entitlements = stdout + entitlementError;
-    if (!entitlements.includes('com.apple.security.cs.allow-jit')
-      || /com\.apple\.security\.(?:cs\.(?:allow-unsigned-executable-memory|disable-library-validation)|device\.|personal-information\.)/.test(entitlements)) {
+    const xml = (stdout + entitlementError).match(/<\?xml[\s\S]*<\/plist>/)?.[0];
+    const entitlements = xml ? plist.parse(xml) : undefined;
+    if (!entitlements || typeof entitlements !== 'object' || Array.isArray(entitlements)
+      || Object.keys(entitlements).length !== 1 || entitlements['com.apple.security.cs.allow-jit'] !== true) {
       throw new Error('Electron entitlements do not match the minimal JIT policy');
     }
+    entitlementChecks.push({ path: path === app ? '.' : path.slice(app.length + 1), entitlements });
   }
-  return { signature: 'Developer ID Application', hardenedRuntime: true, architectures };
+  return { signature: 'Developer ID Application', hardenedRuntime: true, architectures, entitlementChecks };
 }
 
 /** The existing NativeUpdateDriver uses Squirrel.Mac's default JSON endpoint, not latest-mac.yml. */

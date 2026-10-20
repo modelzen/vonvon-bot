@@ -14,6 +14,9 @@ mac:
   entitlementsInherit: entitlements.plist
   notarize: false
   gatekeeperAssess: false
+  # Localization data is sealed by its enclosing framework, not independently executable.
+  signIgnore:
+    - '/Resources/[^/]+\.lproj/locale\.pak$'
 dmg:
   sign: true
 publish: null

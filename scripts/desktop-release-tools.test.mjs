@@ -98,7 +98,7 @@ async function appFixture(t) {
   const execute = async (command, args) => {
     if (command.endsWith('PlistBuddy')) return { stdout: `${version}\n`, stderr: '' };
     if (command.endsWith('lipo')) return { stdout: 'x86_64 arm64\n', stderr: '' };
-    if (args.includes('--entitlements')) return { stdout: '<key>com.apple.security.cs.allow-jit</key><true/>', stderr: '' };
+    if (args.includes('--entitlements')) return { stdout: '<?xml version="1.0"?><plist version="1.0"><dict><key>com.apple.security.cs.allow-jit</key><true/></dict></plist>', stderr: '' };
     return { stdout: '', stderr: `Authority=Developer ID Application: Test\nTeamIdentifier=${teamIdentifier}\nflags=0x10000(runtime)\n` };
   };
   return { ...h, app, core, execute, options: { app, version, teamIdentifier, execute } };
@@ -109,10 +109,13 @@ test('verification reads actual Core metadata, third-party declarations and ever
   const result = await verifyUniversalApp(h.options);
   assert.equal(result.architectures.length, 3);
   assert.ok(result.architectures.every(file => file.archs.join(',') === 'arm64,x86_64'));
+  assert.deepEqual(result.entitlementChecks.map(entry => entry.entitlements), [
+    { 'com.apple.security.cs.allow-jit': true }, { 'com.apple.security.cs.allow-jit': true },
+  ]);
   await verifyDmg(h.release.dmg, teamIdentifier, h.execute);
 });
 
-for (const variant of ['Core version', 'first-party license', 'third-party declaration', 'single arch', 'unsigned', 'wrong team', 'broad entitlements']) {
+for (const variant of ['Core version', 'first-party license', 'third-party declaration', 'single arch', 'unsigned', 'wrong team', 'broad entitlements', 'false JIT', 'unknown entitlement']) {
   test(`verification refuses ${variant}`, async t => {
     const h = await appFixture(t);
     if (variant === 'Core version') await h.put(`${h.core}package.json`, JSON.stringify({ version: '0.1.0', license: 'UNLICENSED' }));
@@ -123,7 +126,9 @@ for (const variant of ['Core version', 'first-party license', 'third-party decla
       if (variant === 'single arch' && command.endsWith('lipo')) return { stdout: 'arm64', stderr: '' };
       const result = await h.execute(command, args);
       if (variant === 'wrong team') result.stderr = result.stderr.replace(teamIdentifier, 'OTHERTEAM1');
-      if (variant === 'broad entitlements' && args.includes('--entitlements')) result.stdout += '<key>com.apple.security.cs.disable-library-validation</key><true/>';
+      if (variant === 'broad entitlements' && args.includes('--entitlements')) result.stdout = result.stdout.replace('</dict>', '<key>com.apple.security.cs.disable-library-validation</key><true/></dict>');
+      if (variant === 'false JIT' && args.includes('--entitlements')) result.stdout = result.stdout.replace('<true/>', '<false/>');
+      if (variant === 'unknown entitlement' && args.includes('--entitlements')) result.stdout = result.stdout.replace('</dict>', '<key>com.apple.security.get-task-allow</key><true/></dict>');
       return result;
     };
     await assert.rejects(verifyUniversalApp({ ...h.options, execute }));
