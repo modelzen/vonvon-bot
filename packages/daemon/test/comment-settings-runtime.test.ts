@@ -1,3 +1,4 @@
+import { createAgentEntries } from '../src/agent/entry/registry';
 import { afterAll, expect, it, vi } from 'vitest';
 import { rm } from 'node:fs/promises';
 import type { AgentBackend, AgentEvent, AgentRun, AskRequest } from '../src/agent/types';
@@ -158,5 +159,30 @@ it('redacts a split token in a cloud comment reply through the orchestrator', as
     await orchestrator.onComment({ fileType: 'docx', fileToken: 'redact-doc', commentId: 'redact-comment', replyId: 'one', mentionedBot: true, operator: { openId: 'ou_owner' } } as never);
     expect(fixture.posted).toHaveBeenLastCalledWith('prefix [已隐藏的 vonvon 令牌] suffix');
     expect(fixture.posted.mock.calls.at(-1)?.[0]).not.toContain(token);
+  } finally { await orchestrator.shutdown(); }
+});
+
+it('binds document grants to the resolved document for start, resume and failed-resume fallback', async () => {
+  const codex = backend('codex-appserver');
+  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, comments: { backend: 'codex-appserver', model: 'one' } } };
+  const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true });
+  const issue = vi.spyOn(entries, 'issue');
+  const orchestrator = createOrchestrator({} as never, cfg, paths.appDir, undefined, { entries });
+  const event = (replyId: string) => ({ fileType: 'docx', fileToken: 'unresolved-token', commentId: 'entry-document', replyId, mentionedBot: true, operator: { openId: 'ou_owner' } });
+  try {
+    await orchestrator.onComment(event('first') as never);
+    cfg.preferences!.comments!.model = 'two';
+    await orchestrator.onComment(event('second') as never);
+    cfg.preferences!.comments!.model = 'one';
+    codex.resumeThread.mockRejectedValueOnce(Error('resume failed'));
+    await orchestrator.onComment(event('third') as never);
+    expect(codex.startThread).toHaveBeenCalledTimes(2);
+    expect(codex.resumeThread).toHaveBeenCalledTimes(2);
+    expect(issue).toHaveBeenCalledTimes(4);
+    for (const [place] of issue.mock.calls) expect(place).toEqual({ kind: 'doc', docId: 'fixture-doc' });
+    const grants = issue.mock.results.map(result => result.value);
+    expect(new Set(grants).size).toBe(4);
+    await expect(grants[2].call('session_info', {})).resolves.toMatchObject({ code: 'revoked' });
+    await expect(grants[3].call('session_info', {})).resolves.toMatchObject({ ok: true, result: { place: 'doc', turn: 'none' } });
   } finally { await orchestrator.shutdown(); }
 });
