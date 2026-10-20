@@ -33,3 +33,24 @@ it('writes the trace context and top-level id fields short, on stdout and in the
   }
   expect(line).toMatchObject({ chatId: 'abcdef', msgId: '81a2b3', sessionKey: '6f7a8b#guest', nested: { chatId: 'oc_0123456789abcdef' } });
 });
+
+it('redacts raw and encoded tokens in the file and before console field truncation', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  const token = `vvs1_${'a'.repeat(43)}`;
+  const marker = `token-${Date.now()}`;
+  log.warn('test', 'tokens', { marker, token, nested: { encoded: Buffer.from(token).toString('base64') } });
+  log.warn('test', 'tokens', { text: `${'x'.repeat(60)} ${token}` });
+  const output = warn.mock.calls.map(call => String(call[0])).join('\n');
+  expect(output).not.toContain(token);
+  expect(output).not.toContain('vvs1_');
+  expect(output).toContain('[已隐藏的 vonvon 令牌]');
+  let line: string | undefined;
+  for (let i = 0; i < 40 && !line; i++) {
+    await new Promise(resolve => setTimeout(resolve, 50));
+    line = readdirSync(TEST_LOGS_DIR).filter(file => file.endsWith('.log')).flatMap(file => readFileSync(join(TEST_LOGS_DIR, file), 'utf8').split('\n')).find(row => row.includes(marker));
+  }
+  expect(line).toBeDefined();
+  expect(line).not.toContain(token);
+  expect(line).not.toContain(Buffer.from(token).toString('base64'));
+  expect(JSON.parse(line!)).toMatchObject({ token: '[已隐藏的 vonvon 令牌]', nested: { encoded: '[已隐藏的 vonvon 令牌]' } });
+});

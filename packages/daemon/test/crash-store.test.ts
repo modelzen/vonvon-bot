@@ -365,3 +365,14 @@ describe('unsent pause message storage', () => {
     expect(corrupt).toHaveBeenCalledOnce();
   });
 });
+
+it('redacts raw and encoded tokens from the serialized crash record', () => {
+  const root = tempRoot();
+  const token = `vvs1_${'a'.repeat(43)}`;
+  const encoded = Buffer.from(token).toString('base64');
+  const name = writeCrashRecordSync(root, record({ reason: `${token} ${encoded}` }));
+  const text = readFileSync(join(crashDir(root), name), 'utf8');
+  expect(text).not.toContain(token);
+  expect(text).not.toContain(encoded);
+  expect(listCrashRecords(root)[0]?.reason).toBe('[已隐藏的 vonvon 令牌] [已隐藏的 vonvon 令牌]');
+});
