@@ -254,3 +254,27 @@ it('does not follow a linked salt or hook configuration', async () => {
   expect(result.bots[0]?.secret).toBe('invalid'); expect(result.bots[0]?.hooks.claude).toBe('unknown');
   expect(await digest(dir)).toBe(before);
 });
+
+it.each([
+  ['enabled', '[features]\nhooks = true\n', 'installed'],
+  ['malformed', '[features]\nhooks = true\nbroken = [\n', 'unknown'],
+  ['multiline-string', 'note = """\n[features]\nhooks = true\n"""\n', 'needs-repair'],
+])('checks actual TOML syntax through preflight: %s', async (_name, toml, expected) => {
+  const { dir, homeDir, options } = await fixture(); await hookFixture(homeDir, 'codex');
+  await writeFile(join(homeDir, '.codex/config.toml'), toml!);
+  const before = await digest(dir); const result = await inspect(options);
+  expect(result.bots[0]?.hooks.codex).toBe(expected);
+  expect(await digest(dir)).toBe(before);
+});
+it.each(['claude', 'codex'] as const)('reports existing %s JSON null as unknown instead of absent', async agent => {
+  const { dir, homeDir, options } = await fixture(); await hookFixture(homeDir, agent);
+  await json(join(homeDir, `.${agent}`, agent === 'claude' ? 'settings.json' : 'hooks.json'), null);
+  const before = await digest(dir); const result = await inspect(options);
+  expect(result.bots[0]?.hooks[agent]).toBe('unknown');
+  expect(await digest(dir)).toBe(before);
+});
+it('keeps hooks disabled when the TOML file is missing', async () => {
+  const { homeDir, options } = await fixture(); await hookFixture(homeDir, 'codex');
+  await rm(join(homeDir, '.codex/config.toml'));
+  expect((await inspect(options)).bots[0]?.hooks.codex).toBe('needs-repair');
+});

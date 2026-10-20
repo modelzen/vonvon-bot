@@ -3,6 +3,7 @@ import { access, lstat, readlink, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
+import { parse as parseToml } from 'smol-toml';
 import { inspectLocalPath, LocalFileSafetyError, readLocalText, withTimeout } from './bounded-local-files';
 import { canDecryptLegacySecret, loadLegacyKeystoreKey } from './legacy-keystore';
 
@@ -202,17 +203,14 @@ async function readHooks(home: string, signal?: AbortSignal): Promise<{ claude: 
   const results: { claude: HookInput; codex: HookInput } = { claude: undefined, codex: undefined };
   for (const agent of ['claude', 'codex'] as const) {
     try {
-      const value = hookSchema.parse(await json(home, agent === 'claude' ? '.claude/settings.json' : '.codex/hooks.json', signal) ?? {});
+      const raw = await json(home, agent === 'claude' ? '.claude/settings.json' : '.codex/hooks.json', signal);
+      const value = hookSchema.parse(raw === undefined ? {} : raw);
       let enabled = true;
       if (agent === 'codex') {
         const toml = await readLocalText(home, join(home, '.codex/config.toml'), signal) ?? '';
-        let features = false;
-        enabled = false;
-        for (const line of toml.split(/\r?\n/)) {
-          const trimmed = line.trim();
-          if (/^\[.+\]/.test(trimmed)) features = /^\[features\]\s*(?:#.*)?$/.test(trimmed);
-          if (features && /^hooks\s*=\s*true\s*(?:#.*)?$/.test(trimmed)) enabled = true;
-        }
+        const config = z.object({ features: z.object({ hooks: z.boolean().optional() }).optional() })
+          .parse(parseToml(toml, { integersAsBigInt: 'asNeeded' }));
+        enabled = config.features?.hooks === true;
       }
       results[agent] = { value, enabled };
     } catch { /* Unknown is preserved; unreadable is never reported as absent. */ }
