@@ -131,7 +131,7 @@ type ClaudeSdk = typeof import('@anthropic-ai/claude-agent-sdk');
 export type ClaudeSdkFacade = Pick<
   ClaudeSdk,
   'query' | 'listSessions' | 'getSessionInfo' | 'getSessionMessages' | 'renameSession'
->;
+> & Partial<Pick<ClaudeSdk, 'createSdkMcpServer' | 'tool'>>;
 
 // On Linux the SDK calls process.report.getReport() for every session it builds, to tell musl from glibc. The
 // report looks up the name of every open socket's peer synchronously, which held the event loop for 25 to 30 s on
@@ -626,6 +626,9 @@ export class ClaudeAgentBackend implements AgentBackend {
       settingSources: BRIDGE_SETTING_SOURCES,
       env: sessionClaudeEnv(profile.env),
       query: sdk.query,
+      entry: opts.entry,
+      createSdkMcpServer: sdk.createSdkMcpServer,
+      tool: sdk.tool,
     });
   }
 
@@ -648,6 +651,9 @@ export class ClaudeAgentBackend implements AgentBackend {
       settingSources: BRIDGE_SETTING_SOURCES,
       env: sessionClaudeEnv(profile.env),
       query: sdk.query,
+      entry: opts.entry,
+      createSdkMcpServer: sdk.createSdkMcpServer,
+      tool: sdk.tool,
     });
   }
 }

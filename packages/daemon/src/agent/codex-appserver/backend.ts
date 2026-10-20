@@ -1,6 +1,7 @@
 import { log } from '../../core/logger';
 import type {
   AgentBackend,
+  AgentEntry,
   AgentEvent,
   AgentInput,
   AgentRun,
@@ -287,6 +288,7 @@ class CodexThread implements AgentThread {
      * thread/start resumes as `thread not loaded`, so it is kept until its first turn. */
     private onDisk: boolean,
     readonly lastCompaction?: string,
+    private readonly entry?: AgentEntry,
   ) {}
 
   get releaseAfterRun(): boolean {
@@ -704,6 +706,7 @@ class CodexThread implements AgentThread {
   }
 
   close(): Promise<void> {
+    this.entry?.revoke('closed');
     return this.client.close();
   }
 }
@@ -887,7 +890,7 @@ export class CodexAppServerBackend implements AgentBackend {
       await client.close().catch((closeErr: unknown) => log.fail('agent', closeErr, { phase: 'start-close' }));
       throw err;
     }
-    return new CodexThread(client, res.thread.id, opts.model, opts.effort, false);
+    return new CodexThread(client, res.thread.id, opts.model, opts.effort, false, undefined, opts.entry);
   }
 
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {
@@ -906,7 +909,7 @@ export class CodexAppServerBackend implements AgentBackend {
       if (isWriterConflict(err)) throw new SessionInUseError(opts.sessionId, err);
       throw err;
     }
-    return new CodexThread(client, res.thread.id, opts.model, opts.effort, true, lastCompactionOf(res.thread.turns));
+    return new CodexThread(client, res.thread.id, opts.model, opts.effort, true, lastCompactionOf(res.thread.turns), opts.entry);
   }
 
   private async spawn(cwd: string): Promise<AppServerClient> {
