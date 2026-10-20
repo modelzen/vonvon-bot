@@ -5,7 +5,6 @@ import { isDead } from '../config/data-access';
 
 export const launchdLabel = 'ai.feishu-codex-bridge.bot';
 export const systemdUnit = 'feishu-codex-bridge.service';
-export const runKeyPath = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
 export const runKeyName = 'feishu-codex-bridge';
 export const relaunchTaskName = 'feishu-codex-bridge-relaunch';
 export type InstallationState = { kind: 'absent' } | { kind: 'registered'; detail: string };
@@ -40,13 +39,6 @@ export function inspectInstallation(home: string): InstallationState {
     if (exists(paths.systemd)) return { kind: 'registered', detail: paths.systemd };
     const units = execute('systemctl', ['--user', 'list-units', '--all', '--plain', '--no-legend', systemdUnit]);
     return units.includes(systemdUnit) ? { kind: 'registered', detail: systemdUnit } : { kind: 'absent' };
-  }
-  if (process.platform === 'win32') {
-    const script = `$ErrorActionPreference='Stop'; $k='Registry::HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'; if (Test-Path $k) { $p=Get-ItemProperty -LiteralPath $k; if ($p.PSObject.Properties.Name -contains '${runKeyName}') { 'registered' } }`;
-    const registration = execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script]);
-    const tasks = execute('schtasks', ['/query', '/fo', 'CSV', '/nh']);
-    return registration.includes('registered') || tasks.includes(relaunchTaskName)
-      ? { kind: 'registered', detail: `${runKeyName} startup or relaunch task` } : { kind: 'absent' };
   }
   throw new Error(`Offline service inspection is not supported on ${process.platform}.`);
 }
