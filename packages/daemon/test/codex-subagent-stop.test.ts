@@ -12,7 +12,11 @@ const requestsFile = join(dir, 'requests.jsonl');
 const { bin } = writeNodeExecutable(dir, 'codex', `
 const fs = require('node:fs');
 const send = msg => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...msg})+'\\n');
-const event = (method,params) => send({method,params});
+let goalObjective;
+const event = (method,params) => {
+  if (goalObjective && method === 'turn/completed' && params.threadId === 'host') send({method:'thread/goal/updated',params:{threadId:'host',turnId:null,goal:{objective:goalObjective,status:'complete'}}});
+  send({method,params});
+};
 let scenario;
 require('node:readline').createInterface({input:process.stdin}).on('line', line => {
   const msg = JSON.parse(line);
@@ -20,18 +24,23 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
   fs.appendFileSync(${JSON.stringify(requestsFile)},JSON.stringify(msg)+'\\n');
   if (msg.method === 'turn/interrupt') {
     if (scenario?.startsWith('scope-') && msg.params.threadId === 'host') {
+      if (scenario.startsWith('scope-restore')) event('thread/closed',{threadId:'another-child'});
+      if (scenario.includes('noid')) event('thread/closed',{threadId:'scoped-child'});
       if (scenario.startsWith('scope-restore')) event('turn/started',{threadId:'scoped-child',turn:{id:'restored-turn'}});
       if (scenario.includes('goal')) event('thread/goal/updated',{threadId:'host',turnId:null,
         goal:{objective:scenario,status:'complete',tokensUsed:0,timeUsedSeconds:0,tokenBudget:null}});
       event('turn/completed',{threadId:'host',turn:{id:'turn',status:'interrupted'}});
     }
     if (scenario === 'late' && msg.params.threadId === 'host') setTimeout(() => event('turn/started',{threadId:'late-child',turn:{id:'late-turn'}}),20);
+    if (msg.params.threadId !== 'host') event('turn/completed',{threadId:msg.params.threadId,turn:{id:msg.params.turnId,status:'interrupted'}});
     send(msg.params.threadId === 'host' ? {id:msg.id,error:{code:-32000,message:'parent failed'}} : {id:msg.id,result:{}});
     return;
   }
   send({id:msg.id,result:msg.method === 'thread/start' ? {thread:{id:'host'}} :
     msg.method === 'thread/resume' ? {thread:{id:'resumed'}} : msg.method === 'turn/start' ? {turn:{id:'turn'}} : {}});
-  if (msg.method === 'turn/start' || (msg.method === 'thread/goal/set' && msg.params.objective.startsWith('scope-'))) {
+  if (msg.method === 'thread/goal/set') goalObjective = msg.params.objective;
+  if (msg.method === 'turn/start') goalObjective = undefined;
+  if (msg.method === 'turn/start' || (msg.method === 'thread/goal/set' && msg.params.objective !== 'count')) {
     event('turn/started',{threadId:'host',turn:{id:'turn'}});
     scenario = msg.method === 'turn/start' ? msg.params.input[0].text : msg.params.objective;
     const collab = (tool, ids, agentsStates = {}) => event('item/completed',{threadId:'host',turnId:'turn',item:{
@@ -41,6 +50,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
       if (scenario === 'scope-next') {
         start('scoped-child','next-turn');
         event('item/started',{threadId:'scoped-child',turnId:'next-turn',item:{type:'commandExecution',id:'next-step',command:'pwd',cwd:'/repo'}});
+        event('turn/completed',{threadId:'scoped-child',turn:{id:'next-turn',status:'completed'}});
         event('turn/completed',{threadId:'host',turn:{id:'turn',status:'completed'}}); return;
       }
       collab('spawnAgent',['scoped-child']);
@@ -79,15 +89,15 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
       }
       collab('wait',Object.keys(agentsStates),agentsStates); return;
     }
-    if (msg.params.input[0].text !== 'hold') for (const id of ['child1','child2','unstarted']) {
+    if (scenario !== 'hold' && scenario !== 'clean') for (const id of ['child1','child2','unstarted']) {
       event('thread/started',{thread:{id,source:{subagent:{thread_spawn:{parent_thread_id:'host',depth:1,
         agent_path:null,agent_nickname:null,agent_role:null}}}}});
       if (id !== 'unstarted') event('turn/started',{threadId:id,turn:{id:id+'-turn'}});
     }
     if (scenario === 'single') event('turn/completed',{threadId:'child2',turn:{id:'child2-turn',status:'completed'}});
-    if (msg.params.input[0].text === 'hold') for (const id of ['child1','child2']) event('item/started',{
+    if (scenario === 'hold') for (const id of ['child1','child2']) event('item/started',{
       threadId:id,turnId:id+'-turn',item:{type:'commandExecution',id:id+'-step',command:'pwd',cwd:'/repo'}});
-    if (msg.params.input[0].text !== 'hold') event('turn/completed',{threadId:'host',turn:{id:'turn',status:'completed'}});
+    if (scenario !== 'hold') event('turn/completed',{threadId:'host',turn:{id:'turn',status:'completed'}});
   }
   if (msg.method === 'thread/goal/set') for (const status of ['active','complete']) event('thread/goal/updated',{threadId:msg.params.threadId,turnId:null,
     goal:{objective:msg.params.objective,status,tokensUsed:0,timeUsedSeconds:0,tokenBudget:null}});
@@ -107,7 +117,7 @@ it('retains running children across parent turns and interrupts them even when t
   const thread = await new CodexAppServerBackend().startThread({ cwd: dir });
   try {
     const initial: AgentEvent[] = [];
-    for await (const event of thread.runStreamed({ text: 'finish' }).events) initial.push(event);
+    for await (const event of thread.runGoal('finish').events) initial.push(event);
     expect(initial.at(-1)).toMatchObject({ type: 'done' });
     expect(initial.filter(event => event.type === 'subagent_status')).toHaveLength(2);
     const run = thread.runStreamed({ text: 'hold' });
@@ -140,8 +150,9 @@ it('leaves user multi-agent settings untouched on start, resume, turn and both g
   const backend = new CodexAppServerBackend();
   const started = await backend.startThread({ cwd: dir });
   const resumed = await backend.resumeThread({ cwd: dir, sessionId: 'resumed' });
+  const offset = requests().length;
   try {
-    for await (const event of started.runStreamed({ text: 'finish' }).events) void event;
+    for await (const event of started.runStreamed({ text: 'clean' }).events) void event;
     for (const thread of [started, resumed]) {
       for await (const event of thread.runGoal('count').events) void event;
     }
@@ -151,7 +162,7 @@ it('leaves user multi-agent settings untouched on start, resume, turn and both g
       expect(matching.length).toBeGreaterThan(0);
       for (const request of matching) expect(JSON.stringify(request.params)).not.toContain('multi_agent');
     }
-    expect(logged.filter(r => r.method === 'thread/goal/set').map(r => r.params.threadId)).toEqual(['host', 'resumed']);
+    expect(requests().slice(offset).filter(r => r.method === 'thread/goal/set').map(r => r.params.threadId)).toEqual(['host', 'resumed']);
   } finally {
     await started.close();
     await resumed.close();
@@ -167,7 +178,7 @@ it('receives A again after A completes, B spawns and sendInput resumes A without
   const thread = await new CodexAppServerBackend().startThread({ cwd: dir });
   try {
     const events: AgentEvent[] = [];
-    for await (const event of thread.runStreamed({ text: 'revive' }).events) events.push(event);
+    for await (const event of thread.runGoal('revive').events) events.push(event);
     expect(events).toContainEqual(expect.objectContaining({ type: 'subagent_step', id: 'A', stepId: 'resumed-step' }));
     expect(events.filter(event => event.type === 'subagent_start' && event.id === 'A')).toHaveLength(1);
     for (const id of ['sendInput', 'resumeAgent']) expect(events).toContainEqual(expect.objectContaining({
@@ -215,7 +226,7 @@ it('interrupts all 65 active children after the parent turn ends', async () => {
   const thread = await new CodexAppServerBackend().startThread({ cwd: dir });
   const offset = requests().length;
   try {
-    for await (const event of thread.runStreamed({ text: 'many' }).events) void event;
+    for await (const event of thread.runGoal('many').events) void event;
     await expect(thread.abort('turn')).rejects.toThrow('parent failed');
     const interrupted = requests().slice(offset).filter(request => request.method === 'turn/interrupt');
     expect(interrupted).toHaveLength(66);
@@ -270,7 +281,7 @@ it.each([false, true])('stops only the requested running child across parent tur
   process.env.CODEX_BIN = bin;
   const thread = await new CodexAppServerBackend().startThread({ cwd: dir });
   try {
-    const run = thread.runStreamed({ text: 'single' });
+    const run = thread.runGoal('single');
     for await (const event of run.events) void event;
     expect(run.stopSubagent).toBeTypeOf('function');
     await expect(run.stopSubagent?.('unknown')).rejects.toThrow('这个子 agent 已经结束');

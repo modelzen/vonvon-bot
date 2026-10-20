@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { RunRender } from '../src/card/run-render';
 import type { AgentEvent } from '../src/agent/types';
 import { finalizeIfRunning, initialState, markIdleTimeout, markInterrupted, reduce } from '../src/card/run-state';
 
@@ -17,14 +18,15 @@ describe('subagent run state', () => {
     expect(reduce(state, status('completed')).subagents[0]?.result).toHaveLength(600);
   });
 
-  it('caps rows at 64, retaining running rows and evicting the oldest terminal row', () => {
+  it('retains all running and terminal identities beyond 64 rows', () => {
     let state = running();
     for (let i = 1; i < 64; i++) state = reduce(state, start(String(i)));
-    expect(reduce(state, start('overflow'))).toBe(state);
+    state = reduce(state, start('overflow'));
+    expect(state.subagents).toHaveLength(65);
     state = reduce(state, status('completed'));
     state = reduce(state, start('new'));
-    expect(state.subagents).toHaveLength(64);
-    expect(state.subagents.map(row => row.id)).toEqual([...Array.from({ length: 63 }, (_, i) => String(i + 1)), 'new']);
+    expect(state.subagents).toHaveLength(66);
+    expect(state.subagents.map(row => row.id)).toEqual(['a', ...Array.from({ length: 63 }, (_, i) => String(i + 1)), 'overflow', 'new']);
   });
 
   it('pairs identical titles by stepId, deduplicates starts, and keeps five recent steps', () => {
@@ -71,4 +73,29 @@ describe('subagent run state', () => {
     Reflect.deleteProperty(legacy, 'subagents');
     expect(reduce(legacy, start()).subagents).toHaveLength(1);
   });
+});
+
+it('timestamps a new child with zero total steps', () => {
+  expect(reduce(initialState, start(), 1000).subagents[0]).toMatchObject({ startedAt: 1000, stepCount: 0 });
+});
+it('counts seven started steps while retaining only the latest five', () => {
+  let state = reduce(initialState, start(), 1000);
+  for (let i = 0; i < 7; i++) state = reduce(state, step(String(i)), 2000);
+  expect(state.subagents[0]?.stepCount).toBe(7); expect(state.subagents[0]?.steps).toHaveLength(5);
+});
+it('timestamps completion and clears its end on resume without resetting its start', () => {
+  const done = reduce(reduce(initialState, start(), 1000), status('completed'), 5000);
+  expect(done.subagents[0]?.endedAt).toBe(5000);
+  expect(reduce(done, status('running'), 6000).subagents[0]).toMatchObject({ startedAt: 1000, endedAt: undefined });
+});
+it('marks waiting children without ending the parent or retaining its old footer', () => {
+  expect(reduce({ ...initialState, footer: 'thinking' }, { type: 'awaiting_subagents' }))
+    .toMatchObject({ awaitingSubagents: true, footer: null, terminal: 'running' });
+});
+it('timestamps interruption when closing running children', () => {
+  expect(markInterrupted(reduce(initialState, start(), 1000), 7000).subagents[0]).toMatchObject({ status: 'stopped', endedAt: 7000 });
+});
+it('seeds child rows only into an empty render', () => {
+  const rows = reduce(initialState, start(), 1000).subagents, render = new RunRender();
+  render.seedSubagents(rows); render.seedSubagents([]); expect(render.snapshot().subagents).toBe(rows);
 });
