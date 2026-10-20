@@ -1,10 +1,11 @@
+import { createBridgeChannel } from './bridge-channel';
 import { APP_ROLE_CACHE_MS, createAppRoleRefresher, getAppRoleSnapshot } from '../config/app-roles';
 import type { CollaborationRequest } from '../admin/collaboration';
 import type { HostSettings } from '../admin/settings-types';
 import type { AdminWriteResult } from '../admin/ops';
 import { createGroupExecutor, type AdminGroupOp, type JoinedGroups } from '../admin/groups';
 import type { Project } from '../project/registry';
-import { createLarkChannel, Domain, type LarkChannel } from '@larksuiteoapi/node-sdk';
+import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import type { AdminWriteOp } from '../admin/ops';
 import type { AppConfig } from '../config/schema';
 import { log } from '../core/logger';
@@ -54,29 +55,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   if (identity.appId !== opts.cfg.accounts.app.id || identity.tenant !== opts.cfg.accounts.app.tenant) throw new Error('Bot 的注册身份与配置不匹配');
   await mergeTiers();
   const app = opts.cfg.accounts.app;
-  const channel = createLarkChannel({
-    appId: app.id,
-    appSecret: opts.appSecret,
-    domain: app.tenant === 'lark' ? Domain.Lark : Domain.Feishu,
-    source: 'feishu-codex-bridge',
-    // surface raw events so card-action handlers can read form submissions
-    // (action.form_value) — used by the new-project form.
-    includeRawEvent: true,
-    // Deliver ALL group messages (not just @bot) to `onMessage`. The SDK's
-    // PolicyGate otherwise drops non-@ group messages with reason 'no_mention'
-    // before they reach us, which would make 免@ impossible. We turn the SDK
-    // filter off and let our per-project gate (shouldRespondWithoutMention in
-    // handle-message) be the single source of truth for 免@. Non-@ delivery
-    // still requires the im:message.group_msg scope (Feishu-side push).
-    policy: { requireMention: false },
-    // Disable the SDK's 600ms per-chat text batching. It merges messages by
-    // chatId, so two topics in the same group posting within 600ms get their
-    // content concatenated and senderId taken from the last message — breaking
-    // "topic = independent session" and misattributing permissions. delayMs: 0
-    // takes the SDK's pure-serial branch (dedup + chat queue stay on); double
-    // sends are already prevented by startReservedRun's synchronous booking.
-    safety: { batch: { text: { delayMs: 0 } } },
-  });
+  const channel = createBridgeChannel(app, opts.appSecret);
 
   // 咖啡一下 (the local Claude Code / Codex hook relay) left v1 in s02b: no
   // service and no socket; s02c deleted D/cli-bridge. Since s02c2 the installed

@@ -16,7 +16,7 @@ import { JUDGE_BUDGET, JudgeBudget } from '../src/bot/smart-intake';
 import type { JudgeDeps } from '../src/judge/judge';
 import { localDay } from '../src/judge/usage';
 import type { JudgeRequest, JudgeResult } from '../src/judge/types';
-import { receive, type EventMessage, type ReceiveOpts } from './helpers/lark-events';
+import { throughBridgeChannel, receive, type EventMessage, type ReceiveOpts } from './helpers/lark-events';
 
 vi.mock('../src/config/paths', () => {
   const appDir = mkdtempSync(join(tmpdir(), 'smart-inbound-'));
@@ -1845,7 +1845,7 @@ describe('no rules at the smart entry (s25e)', () => {
   const noted = (reason: string) => records().filter(r => r.reason === reason);
   const logged = (event: string) => fake.log.info.mock.calls.filter(([, e]) => e === event).map(([, , fields]) => fields);
   const meta = (self: boolean) => ({ code: 0, data: { items: [{ create_time: '1', sender: self ? { id: APP, id_type: 'app_id', sender_type: 'app', open_bot_id: BOT.openId } : { id: 'ou_zhang', id_type: 'open_id', sender_type: 'user' } }] } });
-  async function ask(m: EventMessage) { await send(m); return (await judged(m)).req; }
+  async function ask(m: EventMessage) { await throughBridgeChannel(await receive(m, { bot: BOT }), orchestrator.onMessage); return (await judged(m)).req; }
   const answered = (n = 1) => vi.waitFor(() => expect(fake.inputs).toHaveLength(n));
 
   it('13: everyone mentions enter judgement and keep their visible name', async () => {
@@ -1856,6 +1856,16 @@ describe('no rules at the smart entry (s25e)', () => {
     expect(req.message.named).toBe(true);
     await decide(m, result('skip')); await settle();
     expect(noted('judge-skip')).toHaveLength(1);
+  });
+  it('SDK entry leaves @all without @thisBot silent in rules mode', async () => {
+    fake.project = { ...base, smart: false };
+    const m = says('请大家看一下', { all: true });
+    await throughBridgeChannel(await receive(m, { bot: BOT }), orchestrator.onMessage);
+    await settle();
+    expect(fake.judge).not.toHaveBeenCalled();
+    expect(fake.inputs).toEqual([]);
+    expect(fake.reply).not.toHaveBeenCalled();
+    expect(fake.send).not.toHaveBeenCalled();
   });
   it('14: mentions of other people enter judgement as initiative', async () => {
     const m = says('你看下', { mentionOther: { openId: 'ou_x', name: '小审' } });
@@ -2060,6 +2070,13 @@ describe('no rules at the smart entry (s25e)', () => {
 
 describe('smart reminder runtime (s27b3)', () => {
   beforeEach(() => {
+    // Reminder cases exercise a turn the smart judge has chosen to answer.
+    fake.judge.mockImplementation((req: JudgeRequest) => {
+      const answer = deferred<JudgeResult>();
+      answer.resolve(result('reply'));
+      asked.set(req.ref!, { req, answer });
+      return answer.promise;
+    });
     vi.spyOn(sessionStore, 'listSessions').mockResolvedValue(['omt_snapshot', 'omt_stale', 'omt_goal_reminder', 'omt_slot_a', 'omt_slot_b', 'omt_denied'].map(threadId => ({ threadId, chatId: CHAT, cwd: '/tmp/demo', sessionId: 'native-fixture', backend: 'codex-appserver', summary: 'test', createdAt: 0, updatedAt: 0 })));
   });
   afterEach(() => vi.mocked(sessionStore.listSessions).mockRestore());

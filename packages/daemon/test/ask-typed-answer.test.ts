@@ -1,3 +1,4 @@
+import { throughBridgeChannel } from './helpers/lark-events';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -219,8 +220,8 @@ describe('typed ask messages at intake', () => {
     const o = await started(run);
     await visible(run);
     fake.judge.mockClear();
-    await o.onMessage(message('用方案 B', { mentionedBot: false,
-      mentionAll: target === 'all', mentions: target === 'other' ? [{ key: '@_x', name: '小审', isBot: false, openId: 'ou_other' }] : [] }));
+    await throughBridgeChannel(message('用方案 B', { mentionedBot: false,
+      mentionAll: target === 'all', mentions: target === 'other' ? [{ key: '@_x', name: '小审', isBot: false, openId: 'ou_other' }] : [] }), o.onMessage);
     await until(() => expect(fake.judge).toHaveBeenCalled());
     expect(run.respond).not.toHaveBeenCalled();
     run.turns[0]!.resolve();
