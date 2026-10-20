@@ -1,6 +1,6 @@
 {
   "name": "@vonvon/desktop",
-  "version": "0.1.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,8 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "build": "node build.mjs",
     "start": "electron .",
-    "package:dir": "electron-builder --config electron-builder.yml --dir"
+    "package:dir": "electron-builder --config electron-builder.yml --dir",
+    "package:universal": "node ../../scripts/package-desktop.mjs"
   },
   "dependencies": {
     "@vonvon/client": "0.1.0",
@@ -19,5 +20,6 @@
   "main": "dist/main.cjs",
   "devDependencies": {
     "npm": "11.20.0"
-  }
+  },
+  "license": "UNLICENSED"
 }

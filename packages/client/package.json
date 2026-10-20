@@ -30,5 +30,6 @@
   },
   "devDependencies": {
     "@types/ws": "8.18.2"
-  }
+  },
+  "license": "UNLICENSED"
 }
