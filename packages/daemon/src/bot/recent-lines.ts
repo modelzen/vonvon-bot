@@ -41,7 +41,7 @@ export function lineOfMessage(msg: NormalizedMessage, name: string, quoted?: Rec
   const others = msg.mentions.filter((m) => !m.isBot);
   const mine = msg.mentions.filter((m) => m.isBot).map((m) => m.key);
   const text = event?.content ? extractMessageText(event.message_type, event.content, others, mine).trim() : msg.content;
-  const mentions = msg.mentions.map((m) => m.name ?? '某人');
+  const mentions = [...msg.mentions.map((m) => m.name ?? '某人'), ...(msg.mentionAll ? ['所有人'] : [])];
   return {
     id: msg.messageId, at: msg.createTime || Date.now(), from: fromBot(msg) ? 'bot' : 'user', name, text: cut(text, max),
     ...(msg.senderId ? { senderId: msg.senderId } : {}), ...(mentions.length || msg.mentionAll ? { named: true as const } : {}),
@@ -76,6 +76,11 @@ export class RecentLines {
   private readonly where = new Map<string, string>();
 
   constructor(private readonly perPlace = RECENT_PER_PLACE, private readonly maxPlaces = RECENT_PLACES) {}
+
+  /** Reads without changing the order used for eviction. */
+  lines(key: string): readonly RecentLine[] {
+    return this.places.get(key)?.lines ?? [];
+  }
 
   private place(key: string): Place {
     let p = this.places.get(key);

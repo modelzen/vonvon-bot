@@ -419,7 +419,9 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
   /** SMART.md of the bot (no chatId) or the group, with the read-only parts around it: a decision model's options
    * and state in place of the format lines and the text input when one judges (s23f). */
   async function smartPromptView(chatId: string | undefined, notes: string[], decision: boolean): Promise<T.SmartPromptView> {
-    const fixed = { formatLines: { ...(decision ? DECISION_FORMAT_LINES : JUDGE_FORMAT_LINES) }, inputExample: decision ? DECISION_INPUT_EXAMPLE : JUDGE_INPUT_EXAMPLE, maxLength: SMART_MAX_CHARS, ...(notes.length ? { backendNote: notes.join('\n') } : {}) };
+    const lines = decision ? DECISION_FORMAT_LINES : JUDGE_FORMAT_LINES;
+    // Old clients require this wire field; it is an alias, not a judgement variant.
+    const fixed = { formatLines: { ...lines, mentioned: lines.main }, inputExample: decision ? DECISION_INPUT_EXAMPLE : JUDGE_INPUT_EXAMPLE, maxLength: SMART_MAX_CHARS, ...(notes.length ? { backendNote: notes.join('\n') } : {}) };
     try {
       return { ...await (deps.readSmartPrompt ?? readSmartPrompt)(botId, chatId), ...fixed };
     }

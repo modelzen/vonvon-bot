@@ -1,3 +1,4 @@
+import { reportCustomPromptNotice } from '../bot/diagnostics';
 import { createHash } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -13,16 +14,14 @@ import { log } from '../core/logger';
 import { createCooldown } from './cooldown';
 import { decisionBody, decisionProvider, readDecision, type DecisionProvider } from './decision';
 import { parseStoredJudge, resolveJudgeModel } from './model';
-import { judgeAnchors, judgeSchema, judgeSystem, parseVerdict, renderJudgeInput } from './prompt';
+import { SMART_FACTS_GUIDANCE, judgeAnchors, judgeSchema, judgeSystem, parseVerdict, renderJudgeInput } from './prompt';
 import { readSmartPrompt, SmartPromptError } from './smart-file';
 import { DecisionError } from './typesafe';
-import type { JudgeDecision, JudgeErrorKind, JudgeRequest, JudgeResult } from './types';
+import type { JudgeErrorKind, JudgeRequest, JudgeResult } from './types';
 
-/** From the call to the result, queueing and a cold start included (design 3.2). A mention always
- * gets a reply and the judgement only picks where, so it waits less. e12: warm judgements took at most
- * 7.9 s (Codex) and 6.1 s (Claude), a new Codex judge process 10.3 to 11.1 s; 12 s covers those, 20 s
- * a warm judgement queued one round. */
-export const JUDGE_TIMEOUT_MS = { main: 20_000, mentioned: 12_000, topic: 20_000 } as const;
+export const JUDGE_TIMEOUT_MS = { main: 20_000, topic: 20_000 } as const;
+/** Named messages wait at most twelve seconds before intake handles the failure. */
+export const JUDGE_NAMED_TIMEOUT_MS = 12_000;
 /** How long an aborted backend call may take to clean up before its slot is given back anyway. */
 export const JUDGE_SETTLE_MS = 15_000;
 /** After a model-list fetch that left nothing cached, how long before trying again. */
@@ -112,11 +111,6 @@ class Limiter {
   }
 }
 
-function fallback(variant: JudgeRequest['variant'], kind: JudgeErrorKind): JudgeDecision {
-  if (kind === 'aborted' || kind === 'closed') return 'skip';
-  return variant === 'mentioned' ? 'main' : 'skip';
-}
-
 function kindOf(error: unknown): JudgeErrorKind {
   if (error instanceof JudgeAbort || error instanceof JudgeFail || error instanceof JudgeCallError) return error.kind;
   if (error instanceof SmartPromptError) return 'prompt';
@@ -136,6 +130,13 @@ const promptHashOf = (text: string): string => createHash('sha256').update(text)
 export function createJudge(deps: JudgeDeps): Judge {
   const now = deps.now ?? Date.now;
   const readPrompt = deps.readPrompt ?? readSmartPrompt;
+  const noticedPrompts = new Set<string>();
+  const notePrompt = (req: JudgeRequest, prompt: Awaited<ReturnType<typeof readSmartPrompt>>): void => {
+    const key = `${req.appId}:${req.group.chatId}`;
+    if (prompt.source === 'default' || prompt.text.includes(SMART_FACTS_GUIDANCE) || noticedPrompts.has(key)) return;
+    noticedPrompts.add(key);
+    reportCustomPromptNotice(req.group.chatId);
+  };
   const readSecret = deps.getSecret ?? getSecret;
   let cwdOnce: Promise<string> | undefined;
   const cwd = deps.cwd ?? (() => {
@@ -274,7 +275,7 @@ export function createJudge(deps: JudgeDeps): Judge {
     const fail = (error: unknown): JudgeResult => {
       const kind = kindOf(error);
       const detail = kind === 'format' ? `${base.provider ? '决策' : ''}模型没按格式回答` : detailOf(error);
-      return finish({ decision: fallback(req.variant, kind), reason: '', error: { kind, ...(detail ? { detail } : {}) }, ...base, ms: now() - started });
+      return finish({ decision: 'skip', reason: '', error: { kind, ...(detail ? { detail } : {}) }, ...base, ms: now() - started });
     };
 
     if (closed) return fail(new JudgeAbort('closed'));
@@ -348,6 +349,7 @@ export function createJudge(deps: JudgeDeps): Judge {
         let sent: ReturnType<typeof decisionBody> | undefined;
         const work = (async () => {
           const prompt = await readPrompt(req.appId, req.group.chatId);
+          if (!ctl.signal.aborted) notePrompt(req, prompt);
           base = { ...base, promptSource: prompt.source, promptHash: promptHashOf(prompt.text) };
           const key = await readKey(provider);
           const body = sent = decisionBody(req, prompt.text, base.model);
@@ -375,6 +377,7 @@ export function createJudge(deps: JudgeDeps): Judge {
       // on time.
       const work = (async (): Promise<JudgeCallOutput> => {
         const prompt = await readPrompt(req.appId, req.group.chatId);
+        if (!ctl.signal.aborted) notePrompt(req, prompt);
         base = { ...base, promptSource: prompt.source, promptHash: promptHashOf(prompt.text) };
         if (!backend.judge) throw new JudgeFail('unavailable', `${backend.displayName} 不支持判断`);
         const dir = await cwd();
@@ -418,7 +421,7 @@ export function createJudge(deps: JudgeDeps): Judge {
         // run() catches its own failures; this is the last guard of "never rejects".
         log.fail('judge', error, { phase: 'judge' });
         return {
-          decision: fallback(req.variant, 'failed'), reason: '', error: { kind: 'failed' as const, detail: detailOf(error) },
+          decision: 'skip', reason: '', error: { kind: 'failed' as const, detail: detailOf(error) },
           backend: groupBackendId(req.group), model: '', modelSource: 'default' as const, promptSource: 'default' as const, ms: now() - started,
         };
       });

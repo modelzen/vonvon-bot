@@ -1,3 +1,4 @@
+import type { SessionProfile, SessionProfileCapabilities } from './session-profile';
 import { z } from 'zod';
 import type { AgentErrorKind, JudgeErrorKind } from './error-kind';
 
@@ -231,7 +232,8 @@ export type AgentEvent =
       timeUsedSeconds: number;
       tokenBudget: number | null;
     }
-  | { type: 'ask'; request: AskRequest }
+  | { type: 'ask'; request: AskRequest; subagentId?: string }
+  | { type: 'awaiting_subagents' }
   | { type: 'ask_cancelled'; requestId: string }
   | { type: 'error'; message: string; willRetry: boolean; kind?: AgentErrorKind };
 
@@ -270,6 +272,7 @@ export interface AgentRun {
   respondToAsk?(requestId: string, resolution: AskResolution): Promise<void>;
   /** Synchronous provider claim state, including terminal events not yet consumed by the UI. */
   askPending?(requestId: string): boolean;
+  /** Ordinary runs emit done after all running children settle; goal runs carry children across turns. */
   events: AsyncIterable<AgentEvent>;
   /** current turn id, available after `turn_started` */
   turnId(): string | undefined;
@@ -353,6 +356,7 @@ export class SessionInUseError extends Error {
 }
 
 export interface StartThreadOptions {
+  profile?: SessionProfile;
   cwd: string;
   model?: string;
   effort?: ReasoningEffort;
@@ -556,6 +560,7 @@ export interface AgentCapabilities {
 }
 
 export interface AgentBackend {
+  readonly profileCapabilities?: SessionProfileCapabilities;
   readonly id: string;
   readonly displayName: string;
   /** undefined ⇒ all true (codex 的完整能力面)；见 {@link AgentCapabilities}。 */

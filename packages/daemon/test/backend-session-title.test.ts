@@ -134,7 +134,12 @@ describe('Codex backend native session titles', () => {
       ephemeral: true,
       sandbox: 'read-only',
       approvalPolicy: 'never',
-      config: expect.objectContaining({ web_search: 'disabled' }),
+      config: expect.objectContaining({
+        web_search: 'disabled',
+        projects: { '/repo': { trust_level: 'trusted' } },
+        features: { memories: false },
+        memories: { use_memories: false, generate_memories: false },
+      }),
     }));
     expect(request).toHaveBeenCalledWith('turn/start', expect.objectContaining({
       threadId: 'title-thread',
@@ -177,7 +182,8 @@ describe('Codex backend native session titles', () => {
 });
 
 describe('Claude backend native session titles', () => {
-  it('passes the dedicated non-SDK entrypoint on both fresh and resumed chats', async () => {
+  it('forces foreground tasks and preserves bridge env on fresh and resumed chats', async () => {
+    vi.stubEnv('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS', '0');
     const firstQuery = asyncQuery([]);
     const resumedQuery = asyncQuery([]);
     const query = vi.fn()
@@ -197,10 +203,9 @@ describe('Claude backend native session titles', () => {
     const resumed = await backend.resumeThread({ cwd: '/repo', sessionId: 'session-1' });
 
     for (const call of query.mock.calls) {
-      expect(call[0].options?.env).toEqual(expect.objectContaining({
-        FEISHU_CODEX_BRIDGE: '1',
-        CLAUDE_CODE_ENTRYPOINT: 'feishu-codex-bridge',
-      }));
+      expect(call[0].options?.env?.FEISHU_CODEX_BRIDGE).toBe('1');
+      expect(call[0].options?.env?.CLAUDE_CODE_ENTRYPOINT).toBe('feishu-codex-bridge');
+      expect(call[0].options?.env?.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe('1');
     }
     expect(query.mock.calls[0]![0].options).toEqual(expect.objectContaining({
       cwd: '/repo',
@@ -254,6 +259,7 @@ describe('Claude backend native session titles', () => {
   });
 
   it('uses customTitle/renameSession and an ephemeral no-tools structured query', async () => {
+    vi.stubEnv('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS', '0');
     const modelQuery = asyncQuery([], [{
       value: 'claude-title-model',
       displayName: 'Claude Title',
@@ -295,10 +301,12 @@ describe('Claude backend native session titles', () => {
       settingSources: ['user'],
       strictMcpConfig: true,
       settings: expect.objectContaining({
+        autoMemoryEnabled: false,
+        env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },
         disableAllHooks: true,
         claudeMdExcludes: expect.arrayContaining(['**/.claude/CLAUDE.md']),
       }),
-      env: expect.objectContaining({ FEISHU_CODEX_BRIDGE: '1', ENABLE_CLAUDEAI_MCP_SERVERS: 'false' }),
+      env: expect.objectContaining({ FEISHU_CODEX_BRIDGE: '1', ENABLE_CLAUDEAI_MCP_SERVERS: 'false', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0' }),
     }));
     await expect(backend.listModels()).resolves.toEqual(models);
     expect(query).toHaveBeenCalledOnce(); // successful discovery is cached
@@ -337,15 +345,19 @@ describe('Claude backend native session titles', () => {
       mcpServers: {},
       settingSources: ['user'],
       settings: expect.objectContaining({
+        autoMemoryEnabled: false,
+        env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },
         disableAllHooks: true,
         claudeMdExcludes: expect.arrayContaining(['**/.claude/CLAUDE.md']),
       }),
-      env: expect.objectContaining({ FEISHU_CODEX_BRIDGE: '1' }),
+      env: expect.objectContaining({ FEISHU_CODEX_BRIDGE: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '0' }),
       outputFormat: {
         type: 'json_schema',
         schema: expect.objectContaining({ required: ['title'] }),
       },
     }));
+    expect(titleCall.options.settings).not.toHaveProperty('autoCompactEnabled');
+    expect(titleCall.options.settings.env).not.toHaveProperty('DISABLE_AUTO_COMPACT');
     expect(titleQuery.close).toHaveBeenCalledOnce();
   });
 

@@ -22,8 +22,9 @@ import type {
   TurnOptions,
 } from '../types';
 import { isGoalTerminal, SessionInUseError } from '../types';
-import { BRIDGE_DEVELOPER_INSTRUCTIONS } from '../bridge-instructions';
+import { resolveSessionProfile, type SessionProfileCapabilities } from '../session-profile';
 import { AppServerClient } from './app-server-client';
+import { NATIVE_MEMORY_OFF } from './memory-config';
 import { connectGated, refillWarmPool, takeWarmClient, utilityRequest } from './client-pool';
 import { mapChildNotification, mapNotification, readSubAgentActivity, readSubagentSpawn, type Child } from './event-map';
 import { runCodexJudge } from './judge-process';
@@ -68,6 +69,25 @@ export function sandboxParams(
           network: { enabled: Boolean(network) },
         },
       },
+    },
+  };
+}
+
+/** Rebuilt for every start/resume; never persists workspace trust to user config. */
+export function codexSessionParams(opts: StartThreadOptions): Record<string, unknown> {
+  const profile = resolveSessionProfile(opts.profile);
+  const sandbox = sandboxParams(opts.mode, opts.network);
+  return {
+    ...sandbox,
+    cwd: opts.cwd,
+    approvalPolicy: APPROVAL_POLICY,
+    developerInstructions: profile.instructions,
+    ...(opts.model ? { model: opts.model } : {}),
+    config: {
+      ...(typeof sandbox.config === 'object' ? sandbox.config : {}),
+      projects: { [opts.cwd]: { trust_level: 'trusted' } },
+      ...NATIVE_MEMORY_OFF,
+      shell_environment_policy: { set: profile.env },
     },
   };
 }
@@ -149,6 +169,8 @@ export async function generateCodexSessionTitleWithClient(
     // Match Codex App's isolated background job: no web search, hooks, fanout,
     // or subagents. Read-only still lets the core runtime initialize safely.
     config: {
+      ...NATIVE_MEMORY_OFF,
+      projects: { [opts.cwd]: { trust_level: 'trusted' } },
       web_search: 'disabled',
       'features.enable_fanout': false,
       'features.hooks': false,
@@ -248,6 +270,11 @@ function withTitleDeadline<T>(work: Promise<T>, timeoutMs = TITLE_GENERATION_TIM
 
 class CodexThread implements AgentThread {
   private currentTurnId: string | undefined;
+  private parentDoneTurnId: string | undefined;
+
+  private runningChildren(): number {
+    return [...this.children.values()].filter(child => child.running).length;
+  }
   private children = new Map<string, Child>();
 
   constructor(
@@ -294,7 +321,10 @@ class CodexThread implements AgentThread {
     // before it and stay buffered in the client; never infer identity from the
     // first turn/started (it may belong to an old turn or a subagent).
     // Observe rejection eagerly, even if card creation delays consumption.
-    const requests = self.client.openRequestScope(self.sessionId);
+    const requests = self.client.openRequestScope(self.sessionId, id => {
+      const child = self.children.get(id);
+      return child?.running ? child.turnId : undefined;
+    });
     let activeTurnId: string | undefined;
     const started = self.client.request<TurnStartResponse>('turn/start', params)
       .then((result) => {
@@ -310,6 +340,7 @@ class CodexThread implements AgentThread {
         return { error };
       });
     async function* gen(): AsyncGenerator<AgentEvent> {
+      let deferred: Extract<AgentEvent, { type: 'done' }> | undefined;
       try {
         const result = await started;
         if ('error' in result) {
@@ -324,9 +355,9 @@ class CodexThread implements AgentThread {
               if (notification.owner === requests) yield { type: 'ask_cancelled', requestId: notification.requestId };
               continue;
             }
-            if (requests.accepts(notification, result.turnId)) {
+            if (requests.accepts(notification, activeTurnId)) {
               lastActivityAt = Date.now();
-              yield { type: 'ask', request: notification.request };
+              yield { type: 'ask', request: notification.request, subagentId: notification.threadId === self.sessionId ? undefined : notification.threadId };
             }
             continue;
           }
@@ -334,6 +365,18 @@ class CodexThread implements AgentThread {
           if (!routed) continue;
           lastActivityAt = Date.now();
           for (const ev of routed) {
+            if (ev.type === 'subagent_status' && ev.status !== 'running') {
+              for (const id of requests.finishThread(ev.id)) yield { type: 'ask_cancelled', requestId: id };
+            }
+            if (ev.type === 'done' && self.runningChildren() > 0) {
+              if (deferred) continue;
+              deferred = ev;
+              activeTurnId = undefined;
+              self.parentDoneTurnId = result.turnId;
+              requests.finishTurn(result.turnId);
+              yield { type: 'awaiting_subagents' };
+              continue;
+            }
             if (ev.type === 'done' || (ev.type === 'error' && !ev.willRetry)) {
               requests.close();
               activeTurnId = undefined; // no steering during terminal-card I/O
@@ -342,8 +385,14 @@ class CodexThread implements AgentThread {
             }
             yield ev;
           }
+          if (deferred && self.runningChildren() === 0) {
+            requests.close();
+            yield deferred;
+            return;
+          }
         }
       } finally {
+        self.parentDoneTurnId = undefined;
         requests.close();
         for (const child of self.children.values()) child.stopRequested = false;
         activeTurnId = undefined;
@@ -354,7 +403,10 @@ class CodexThread implements AgentThread {
 
   runGoal(objective: string): AgentRun {
     const self = this;
-    const requests = self.client.openRequestScope(self.sessionId);
+    const requests = self.client.openRequestScope(self.sessionId, id => {
+      const child = self.children.get(id);
+      return child?.running ? child.turnId : undefined;
+    });
     this.currentTurnId = undefined;
     // Same liveness clock as runStreamed — the goal's 30min idle backstop must
     // also see raw activity, not just mapped events.
@@ -413,7 +465,7 @@ class CodexThread implements AgentThread {
             }
             if (requests.accepts(step.value, ownedTurnId)) {
               lastActivityAt = Date.now();
-              yield { type: 'ask', request: step.value.request };
+              yield { type: 'ask', request: step.value.request, subagentId: step.value.threadId === self.sessionId ? undefined : step.value.threadId };
             }
             continue;
           }
@@ -421,6 +473,9 @@ class CodexThread implements AgentThread {
           if (!routed) continue;
           lastActivityAt = Date.now();
           for (const ev of routed) {
+            if (ev.type === 'subagent_status' && ev.status !== 'running') {
+              for (const id of requests.finishThread(ev.id)) yield { type: 'ask_cancelled', requestId: id };
+            }
             if (ev.type === 'turn_started') {
               self.currentTurnId = ev.turnId;
               if (ownedTurnId && ownedTurnId !== ev.turnId) requests.finishTurn(ownedTurnId);
@@ -579,19 +634,20 @@ class CodexThread implements AgentThread {
   }
 
   async abort(turnId: string): Promise<void> {
-    this.client.cancelRequests(this.sessionId, turnId);
-    const stops = [this.client.request('turn/interrupt', { threadId: this.sessionId, turnId })];
+    const parentLive = turnId !== this.parentDoneTurnId;
+    if (parentLive) this.client.cancelRequests(this.sessionId, turnId);
+    const stops = parentLive ? [this.client.request('turn/interrupt', { threadId: this.sessionId, turnId })] : [];
     for (const [threadId, child] of this.children) {
       if (!child.running) continue;
       child.stopRequested = true;
       if (child.turnId) stops.push(this.client.request('turn/interrupt', { threadId, turnId: child.turnId }));
     }
     const results = await Promise.allSettled(stops);
-    for (const result of results.slice(1)) {
+    for (const result of results.slice(parentLive ? 1 : 0)) {
       if (result.status === 'rejected') log.warn('agent', 'subagent-interrupt-failed');
     }
     const main = results[0];
-    if (main?.status === 'rejected') throw main.reason;
+    if (parentLive && main?.status === 'rejected') throw main.reason;
   }
 
   async compact(): Promise<CompactResult> {
@@ -652,6 +708,12 @@ class CodexThread implements AgentThread {
 }
 
 export class CodexAppServerBackend implements AgentBackend {
+  readonly profileCapabilities = {
+    instructions: { channel: 'developer', replaceOnResume: false },
+    additionalRoots: false, directoryAccess: false, capabilityPackages: false, mcpServers: false,
+    env: true, disableNativeMemory: true,
+    reapplyOnResume: ['env', 'nativeSettings', 'workspaceTrust'],
+  } satisfies SessionProfileCapabilities;
   readonly id = 'codex-appserver';
   readonly displayName = 'Codex (app-server)';
   private modelCache: ModelInfo[] | null = null;
@@ -814,30 +876,26 @@ export class CodexAppServerBackend implements AgentBackend {
     // Auto-compaction is codex's own default and stays on (s12): no
     // model_auto_compact_token_limit override, and newer codex caps any limit at
     // 90% of the window anyway.
-    const sandbox = sandboxParams(opts.mode, opts.network);
+    const params = codexSessionParams(opts);
     const client = await this.spawn(opts.cwd);
-    const res = await client.request<{ thread: { id: string } }>('thread/start', {
-      cwd: opts.cwd,
-      approvalPolicy: APPROVAL_POLICY,
-      ...sandbox,
-      developerInstructions: BRIDGE_DEVELOPER_INSTRUCTIONS,
-      ...(opts.model ? { model: opts.model } : {}),
-    });
+    let res: { thread: { id: string } };
+    try {
+      res = await client.request<{ thread: { id: string } }>('thread/start', params);
+    } catch (err) {
+      await client.close().catch((closeErr: unknown) => log.fail('agent', closeErr, { phase: 'start-close' }));
+      throw err;
+    }
     return new CodexThread(client, res.thread.id, opts.model, opts.effort, false);
   }
 
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {
-    const sandbox = sandboxParams(opts.mode, opts.network);
+    const params = codexSessionParams(opts);
     const client = await this.spawn(opts.cwd);
     let res: { thread: { id: string; turns?: Turn[] } };
     try {
       res = await client.request<{ thread: { id: string; turns?: Turn[] } }>('thread/resume', {
         threadId: opts.sessionId,
-        cwd: opts.cwd,
-        approvalPolicy: APPROVAL_POLICY,
-        ...sandbox,
-        developerInstructions: BRIDGE_DEVELOPER_INSTRUCTIONS,
-        ...(opts.model ? { model: opts.model } : {}),
+        ...params,
       });
     } catch (err) {
       // This process holds nothing yet; a refused resume must not leave it running.

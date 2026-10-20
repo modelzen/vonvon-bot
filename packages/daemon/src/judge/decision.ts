@@ -1,4 +1,4 @@
-import { JUDGE_ALLOWED, JUDGE_FORMAT_HEADER, JUDGE_INPUT_BOUNDS, JUDGE_INPUT_EXAMPLE_REQUEST, JUDGE_INPUT_LIMITS, lineFields, oneLine, plainText, shownContext } from './prompt';
+import { judgeFactFields, JUDGE_ALLOWED, JUDGE_FORMAT_HEADER, JUDGE_INPUT_BOUNDS, JUDGE_INPUT_EXAMPLE_REQUEST, JUDGE_INPUT_LIMITS, lineFields, oneLine, plainText, shownContext } from './prompt';
 import { callTypeSafe, probeTypeSafe, type DecisionReply, type ProbeResult } from './typesafe';
 import type { JudgeDecision, JudgeLine, JudgeRequest, JudgeVariant } from './types';
 
@@ -58,18 +58,11 @@ const SKIP = '不回：闲聊、寒暄、"好的""收到"这类话；说给别�
 /** The options in JUDGE_ALLOWED's order, 不回 first: a Choice leans to the options asked first. */
 const QUESTIONS: Record<JudgeVariant, { question: string; criteria: Partial<Record<JudgeDecision, string>> }> = {
   main: {
-    question: '`new_message` 发在群主区，没有点名谁。按 `rules`，bot（`bot_name`）该怎么处理它？',
+    question: '`new_message` 发在群主区。按 `rules`，bot（`bot_name`）该怎么处理它？',
     criteria: {
       skip: SKIP,
       main: '在主区回：需要 bot 回应，接着主区正在聊的事，或者一两句就能答完',
       topic: '开新话题回：需要 bot 回应，而且是一件新的事，要来回好几轮，或者要查、要改、要写东西',
-    },
-  },
-  mentioned: {
-    question: '`new_message` 在群主区点名了 bot（`bot_name`），bot 一定要回。按 `rules`，回在哪里？',
-    criteria: {
-      main: '在主区回：接着主区正在聊的事，或者一两句就能答完',
-      topic: '开新话题回：一件新的事，要来回好几轮，或者要查、要改、要写东西',
     },
   },
   topic: {
@@ -88,13 +81,16 @@ const LABELS: Record<JudgeDecision, string> = { skip: '不回', main: '主区', 
 
 interface StateLine {
   id: string; time: string; speaker: string; speaker_type: (typeof SPEAKER_TYPE)[keyof typeof SPEAKER_TYPE]; text: string;
-  new?: true; mentions?: string[]; quote?: { speaker: string; text: string };
+  new?: true; same_name_word?: true; mentions?: string[]; quote?: { speaker: string; text: string };
 }
 interface Choice { type: 'choice'; instructions: string | { rules: string; question: string }; criteria: Record<string, string> }
 export interface DecisionBody {
   model: string;
   state: {
     group: string; bot_name: string; bot_role?: string; topic_title?: string; why_looking?: string; new_count?: number;
+    other_bots?: NonNullable<ReturnType<typeof judgeFactFields>>['other_bots'];
+    here?: NonNullable<ReturnType<typeof judgeFactFields>>['here'];
+    bot_exchanges_since_person?: NonNullable<ReturnType<typeof judgeFactFields>>['bot_exchanges_since_person'];
     recent_messages: StateLine[]; new_message: StateLine;
   };
   questions: { decision: Choice; anchor?: Choice };
@@ -110,7 +106,7 @@ const snippet = (line: StateLine): string => {
  * the anchor. The lines and their m-numbers are the text input's (shownContext, same cuts and cleaning), so an anchor
  * names the same message whichever kind of model judged (s25b). Built in memory only, never logged.
  */
-export function decisionBody(req: Pick<JudgeRequest, 'variant' | 'botName' | 'group' | 'persona' | 'topicTitle' | 'context' | 'message' | 'why'>, rules: string, model: string): DecisionBody {
+export function decisionBody(req: Pick<JudgeRequest, 'variant' | 'botName' | 'group' | 'persona' | 'topicTitle' | 'context' | 'message' | 'why' | 'facts'>, rules: string, model: string): DecisionBody {
   const bot = oneLine(req.botName);
   const entry = (id: string, line: JudgeLine, max: number): StateLine => {
     const { time, speaker, text, ...more } = lineFields(line, max);
@@ -126,6 +122,7 @@ export function decisionBody(req: Pick<JudgeRequest, 'variant' | 'botName' | 'gr
   const body: DecisionBody = {
     model,
     state: {
+      ...judgeFactFields(req.facts),
       group: oneLine(req.group.name, 100),
       bot_name: bot,
       ...(req.why?.trim() ? { why_looking: oneLine(req.why, 200) } : {}),

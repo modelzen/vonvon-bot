@@ -7,18 +7,21 @@ import { sendManagedCard, updateManagedCard } from '../card/managed';
 import { log } from '../core/logger';
 import type { IdlePause } from './watchdog';
 
+export interface AskOrigin { subagentId: string; name?: string }
+
 export interface AskTurnInput {
   run: AgentRun;
   sessionKey: string;
   placement: { chatId: string; replyTo: string; replyInThread: boolean };
   initiator: { kind: 'user' | 'bot' | 'unknown'; openId?: string };
   idlePause: IdlePause;
-  waiting: (label: string | undefined) => void;
+  waiting: (label: string | undefined, subagentId?: string) => void;
   fault: (error: unknown) => void;
 }
 export interface AskTurn {
-  enqueue(request: AskRequest): void;
+  enqueue(request: AskRequest, from?: AskOrigin): void;
   cancel(requestId: string): void;
+  finishParent(): void;
   close(reason: 'stopped' | 'turn-ended'): void;
 }
 export interface TypedInput {
@@ -33,6 +36,7 @@ type EntryState = { kind: 'queued' } | { kind: 'sending' } | { kind: 'visible'; 
   | { kind: 'settled'; presentation: AskCardState };
 interface Entry {
   request: AskRequest;
+  from?: AskOrigin;
   state: EntryState;
   release: () => void;
   timer?: ReturnType<typeof setTimeout>;
@@ -77,7 +81,7 @@ export class AskCoordinator {
   }
   private waiting(turn: Turn): void {
     const head = turn.queue[0];
-    this.effect(() => turn.waiting(head ? `⏸ 等 ${this.respondents(turn, head.request).map(person => person.name).join('、') || '指定成员'} 回答（见下方卡片）` : undefined));
+    this.effect(() => turn.waiting(head ? `⏸ 等 ${this.respondents(turn, head.request).map(person => person.name).join('、') || '指定成员'} 回答（见下方卡片）` : undefined, head?.from?.subagentId));
   }
   private claim(run: AgentRun, request: AskRequest): boolean {
     let ids = this.seen.get(run);
@@ -92,18 +96,24 @@ export class AskCoordinator {
     const turn: Turn = { ...input, faulted: false, open: this.open, queue: [] };
     if (turn.open) { this.turns.set(input.sessionKey, turn); this.latest.set(input.run, turn); }
     return {
-      enqueue: request => {
+      enqueue: (request, from) => {
         if (!turn.open) { this.unavailable(input.run, request, input.fault); return; }
         if (!this.claim(input.run, request)) {
           this.fault(turn, new Error('Ask producer missing response port or repeated request id')); return;
         }
-        turn.queue.push({ request, state: { kind: 'queued' }, release: input.idlePause.hold(), denied: new Set() });
+        turn.queue.push({ request, from, state: { kind: 'queued' }, release: input.idlePause.hold(), denied: new Set() });
         this.waiting(turn);
         this.promote(turn);
       },
       cancel: requestId => {
         const entry = turn.queue.find(candidate => candidate.request.id === requestId);
         if (entry) this.settle(turn, entry, { kind: 'unanswered', reason: 'unavailable' }, { providerResolved: true });
+      },
+      finishParent: () => {
+        const parents = turn.queue.filter(entry => !entry.from);
+        // Remove the whole parent batch before settle can promote the next question.
+        turn.queue = turn.queue.filter(entry => entry.from);
+        for (const entry of parents) this.settle(turn, entry, { kind: 'unanswered', reason: 'turn-ended' });
       },
       close: reason => this.close(turn, reason),
     };
@@ -123,7 +133,7 @@ export class AskCoordinator {
   }
   private terminal(turn: Turn, entry: Entry, messageId: string, state: AskCardState, dm?: string): void {
     this.effect(() => updateManagedCard(this.channel, messageId,
-      buildAskCard({ request: entry.request, state, respondents: this.respondents(turn, entry.request), scope: dm ? 'dm' : 'group' })));
+      buildAskCard({ request: entry.request, from: entry.from, state, respondents: this.respondents(turn, entry.request), scope: dm ? 'dm' : 'group' })));
   }
   private promote(turn: Turn): void {
     const entry = turn.queue[0];
@@ -137,7 +147,7 @@ export class AskCoordinator {
     const { chatId, replyTo, replyInThread } = turn.placement;
     this.effect(async () => {
       const sent = await sendManagedCard(this.channel, chatId,
-        buildAskCard({ request: entry.request, state: { kind: 'pending' }, respondents: this.respondents(turn, entry.request) }), replyTo, replyInThread);
+        buildAskCard({ request: entry.request, from: entry.from, state: { kind: 'pending' }, respondents: this.respondents(turn, entry.request) }), replyTo, replyInThread);
       if (entry.state.kind === 'settled') { this.terminal(turn, entry, sent.messageId, entry.state.presentation); return; }
       clearTimeout(entry.timer);
       entry.state = { kind: 'visible', messageId: sent.messageId, shownAt: Date.now() };
@@ -162,7 +172,7 @@ export class AskCoordinator {
       entries.set(entry, turn);
       this.effect(async () => {
         const sent = await sendManagedCard(this.channel, id,
-          buildAskCard({ request: entry.request, state: { kind: 'pending' }, respondents: [], scope: 'dm' }), undefined, false, 'open_id');
+          buildAskCard({ request: entry.request, from: entry.from, state: { kind: 'pending' }, respondents: [], scope: 'dm' }), undefined, false, 'open_id');
         if (entry.state.kind === 'settled') {
           this.terminal(turn, entry, sent.messageId, this.dmPresentation(entry.state.presentation, id, entry.answeredByDm), id);
           return;

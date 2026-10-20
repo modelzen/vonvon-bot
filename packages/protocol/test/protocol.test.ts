@@ -180,6 +180,9 @@ describe("pinned contract extraction", () => {
     const llm = {kind:"llm",backend:"codex-appserver",model:"gpt-6-luna",effort:"low"};
     const jev = {kind:"decision",provider:"typesafe",model:"jev-latest"};
     const prompt = {source:"default",path:"/p",text:"t",formatLines:{main:"a",mentioned:"b",topic:"c"},inputExample:"x",maxLength:8000};
+    const noMentioned = { ...prompt, formatLines: { main: 'a', topic: 'c' } };
+    expect(agentViewSchema.parse({ ...old, smartPrompt: noMentioned }).smartPrompt?.formatLines).toEqual(noMentioned.formatLines);
+    expect(agentViewSchema.parse({ ...old, smartPrompt: prompt }).smartPrompt?.formatLines.mentioned).toBe('b');
     const parsed = agentViewSchema.parse({ ...old, sections: { ...old.sections, judge: {...section({selection:{kind:"default"}}),effective:{selection:llm}} }, smartPrompt: prompt,
       judgeByBackend: {"codex-appserver":{model:"gpt-6-luna",effort:"low",source:"default"},"claude-agent":{model:"jev-latest",provider:"typesafe",source:"bot"}} });
     expect(parsed.sections.judge?.effective.selection).toEqual(llm);
@@ -293,14 +296,14 @@ it("points a judgement a decision model's key stopped at the key page, and a key
   const next = (detail?: string) => NOT_REPLIED_TEXT["judge-failed"].next({ ...record, ...(detail ? { detail } : {}) });
   for (const detail of [KEY_FAILURE.missing("TypeSafe"), KEY_FAILURE.invalid("TypeSafe"), KEY_FAILURE.rejected("TypeSafe")]) {
     expect(keyFailureOf(detail)).toBe("key");
-    expect(next(detail)).toBe("在密钥页填了就恢复；真人 @ 它一定会回。");
+    expect(next(detail)).toBe("在密钥页填了就恢复；真人 @ 它的照旧会回。");
   }
   expect(keyFailureOf("密钥库读不了")).toBe("keystore");
-  expect(next("密钥库读不了")).toBe("密钥库读得了就恢复，原因在下面 daemon 日志的 secrets.unreadable；真人 @ 它一定会回。");
+  expect(next("密钥库读不了")).toBe("密钥库读得了就恢复，原因在下面 daemon 日志的 secrets.unreadable；真人 @ 它的照旧会回。");
   // any other failure, a model's words that merely mention a key included, keeps the old next step
   for (const detail of [undefined, "判断超时", "模型说：没填 key 的话", "decision timeout"]) {
     expect(keyFailureOf(detail)).toBeUndefined();
-    expect(next(detail)).toBe("真人 @ 它一定会回；反复出现时看下面的日志。");
+    expect(next(detail)).toBe("真人 @ 它的照旧会回；反复出现时看下面的日志。");
   }
 });
 
@@ -349,10 +352,10 @@ it("validates daily judge usage requests and replies", () => {
 
 it("words judging a bot mention without promising that every @ is answered (s27a)", () => {
   const record = { at: 1, count: 1, groupId: "oc_fixture", place: "topic" as const, ref: "abc123" };
-  expect(NOT_REPLIED_TEXT["judge-skip"].next({ ...record, reason: "judge-skip" })).toBe("智能模式下这是正常的。真人要它一定回就 @ 它；总是漏回就改智能提示词。");
+  expect(NOT_REPLIED_TEXT["judge-skip"].next({ ...record, reason: "judge-skip" })).toBe("智能模式下这是正常的。总是漏回就改智能提示词。");
   expect(NOT_REPLIED_TEXT["judge-failed"].reason({ ...record, reason: "judge-failed", detail: "超时" })).toBe("判断没出结果（超时），这条没回");
   expect(NOT_REPLIED_TEXT["judge-budget"].reason({ ...record, reason: "judge-budget" })).toBe("这个群这一小时判断了 60 次，到了上限，这条没判断");
-  expect(NOT_REPLIED_TEXT["judge-budget"].next({ ...record, reason: "judge-budget" })).toBe("一小时内会恢复；真人 @ 它仍然会回。");
+  expect(NOT_REPLIED_TEXT["judge-budget"].next({ ...record, reason: "judge-budget" })).toBe("一小时内会恢复；真人 @ 它的不算在这个数里，照常判断。");
   expect(NOT_REPLIED_TEXT["bot-wake-failed"].reason({ ...record, reason: "bot-wake-failed", detail: "boom" })).toBe("处理这条 Bot 的 @ 时出错（boom），没回");
   expect(NOT_REPLIED_TEXT["bot-wake-failed"].next({ ...record, reason: "bot-wake-failed" })).toBe("反复出现时看下面的日志。");
   expect(NOT_REPLIED_TEXT["bot-wake-dropped"].next({ ...record, reason: "bot-wake-dropped" })).toBe("不用处理。");

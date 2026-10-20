@@ -1,8 +1,13 @@
 import type { JudgeCallOutput } from '../agent/types';
-import type { JudgeDecision, JudgeLine, JudgeRequest, JudgeVariant } from './types';
+import type { JudgeDecision, JudgeFacts, JudgeLine, JudgeRequest, JudgeVariant } from './types';
+
+export const SMART_FACTS_GUIDANCE = `先看这话是对谁说的：结合 @、引用、这个位置是谁开的、谁说过话、群里还有哪些 bot，以及为什么现在看，再判断要不要接。
+bot 之间来回几次、真人一直没说话时，除非还有明确没做完的事，不再接。`;
 
 /** The built-in SMART.md (product.md 3.4). Shown in full, editable, restorable. */
 export const DEFAULT_SMART_PROMPT = `你替群里的一个 bot 判断：一条新消息，它要不要接话；要接的话，回在哪里。群里有真人，也可能有别的 bot。
+
+${SMART_FACTS_GUIDANCE}
 
 该回：
 - 有人在问问题、请人帮忙，或者在讨论一件事，这正是你能帮上的（看你的名字和分工）。
@@ -26,21 +31,16 @@ export const JUDGE_FORMAT_HEADER = '——以下由 vonvon 附加，不能改—
 
 export const JUDGE_ALLOWED: Record<JudgeVariant, readonly JudgeDecision[]> = {
   main: ['skip', 'main', 'topic'],
-  mentioned: ['main', 'topic'],
   topic: ['skip', 'reply'],
 };
 
 const FORMAT_BODY: Record<JudgeVariant, string> = {
-  main: `这条消息发在群主区，没有点名谁。三选一：
+  main: `这条消息发在群主区。三选一：
 skip：不回。
 main：在主区接着聊。
 topic：开一个新话题来回。
 anchor：这条消息接的是哪一条，按消息前面的编号写，m0 是它自己，m1 是它前面最近的一条。它是在接着前面哪条说（比如补充 m1、回答 m2 提的问题），就写那条的编号；不是或者拿不准，写 m0。标了"新"的几条是你这次新看到的（没有标的时候只有 m0 是新的），该接的可能不是 m0：把要接的那条编号写在 anchor。
 只输出一个 JSON 对象，不要别的文字：{"decision":"skip 或 main 或 topic","anchor":"m0","reason":"一句话原因，40 字以内"}`,
-  mentioned: `这条消息在群主区点名了你，你一定要回，只选回在哪里：
-main：在主区接着聊。
-topic：开一个新话题来回。
-只输出一个 JSON 对象，不要别的文字：{"decision":"main 或 topic","reason":"一句话原因，40 字以内"}`,
   topic: `这条消息发在一个话题里，要回就回在这个话题里，只选回不回：
 skip：不回。
 reply：回。
@@ -150,6 +150,7 @@ function hhmm(at: number): string {
 function renderLine(line: JudgeLine, max: number): string {
   const who = line.from === 'self' ? '你' : speakerName(line.name, line.from);
   const notes: string[] = [];
+  if (line.sameNameWord) notes.push('提到了和你同名的词');
   const mentions = line.mentions ?? [];
   if (mentions.length) {
     const shown = mentions.slice(0, MENTIONS_MAX).map((name) => oneLine(name)).join('、');
@@ -165,11 +166,12 @@ function renderLine(line: JudgeLine, max: number): string {
  * cannot start a line, so newlines stay as they are; the speaker's kind is a field of its own, so a name loses a
  * trailing （bot） and needs no quotes. This bot's own lines have no `speaker`: the caller puts the bot's name. */
 export function lineFields(line: JudgeLine, max: number): {
-  time: string; speaker?: string; text: string; new?: true; mentions?: string[]; quote?: { speaker: string; text: string };
+  time: string; speaker?: string; text: string; new?: true; same_name_word?: true; mentions?: string[]; quote?: { speaker: string; text: string };
 } {
   const mentions = line.mentions ?? [];
   return {
     time: hhmm(line.at),
+    ...(line.sameNameWord ? { same_name_word: true as const } : {}),
     ...(line.fresh ? { new: true as const } : {}),
     ...(line.from === 'self' ? {} : { speaker: oneLine(cleanLine(line.name).replace(BOT_SUFFIX, '')) }),
     text: plainText(line.text, max),
@@ -197,13 +199,30 @@ export function judgeAnchors(req: Pick<JudgeRequest, 'context' | 'message'>): Ar
   return [req.message.id, ...shownContext(req.context).map(({ line }) => line.id)];
 }
 
+/** Both judge backends receive the same bounded, single-line facts. */
+export function judgeFactFields(facts: JudgeFacts | undefined) {
+  if (!facts) return undefined;
+  const names = (values: string[]) => values.map((name) => oneLine(name));
+  return {
+    other_bots: { names: names(facts.otherBots.names), complete: facts.otherBots.complete },
+    here: { kind: facts.here.kind, ...(facts.here.openedBy ? { opened_by: oneLine(facts.here.openedBy) } : {}), speakers: names(facts.here.speakers), history_incomplete: true },
+    ...(facts.botExchangesSincePerson && facts.botExchangesSincePerson.count >= 2 ? { bot_exchanges_since_person: { count: facts.botExchangesSincePerson.count, at_least: facts.botExchangesSincePerson.atLeast, source: 'recent_visible_messages', history_incomplete: true } } : {}),
+  };
+}
+
 /** The user input of one judgement. Built in memory only, never logged (product.md 3.5). */
-export function renderJudgeInput(req: Pick<JudgeRequest, 'variant' | 'botName' | 'group' | 'persona' | 'topicTitle' | 'context' | 'message' | 'why'>): string {
+export function renderJudgeInput(req: Pick<JudgeRequest, 'variant' | 'botName' | 'group' | 'persona' | 'topicTitle' | 'context' | 'message' | 'why' | 'facts'>): string {
   const out = [`【群】${oneLine(req.group.name, 100)}`, `【你】${oneLine(req.botName)}`];
   const persona = req.persona?.trim();
   if (persona) out.push('【你的个性】', `  ${body(persona, JUDGE_INPUT_LIMITS.personaChars)}`);
   if (req.variant === 'topic' && req.topicTitle?.trim()) out.push(`【话题】${oneLine(req.topicTitle, 100)}`);
   if (req.why?.trim()) out.push(`【为什么现在看】${oneLine(req.why, 200)}`);
+  const facts = judgeFactFields(req.facts);
+  if (facts) {
+    out.push(`【群里还有的 bot】${facts.other_bots.names.join('、') || (facts.other_bots.complete ? '没有' : '未知')}${facts.other_bots.complete ? '（完整名册）' : '（仅最近确知说过话的 bot，可能不全）'}`);
+    out.push(`【这个位置】${facts.here.kind === 'main' ? '群主区' : '话题'}；谁开的：${facts.here.opened_by ?? '未知'}；最近说过话的：${facts.here.speakers.join('、') || '未知'}（仅最近记录，可能不全）`);
+    if (facts.bot_exchanges_since_person) out.push(`【bot 来回】最近可见记录中，自最后一条可见真人消息起${facts.bot_exchanges_since_person.at_least ? '至少' : ''} ${facts.bot_exchanges_since_person.count} 次（每条 bot 发言一次，含当前消息；历史可能不全，缺口中是否有真人发言未知）`);
+  }
   // Numbered newest first, shown oldest first.
   const recent = shownContext(req.context).map(({ text }, i) => `m${i + 1} ${text}`).reverse();
   out.push('【最近的消息】旧的在前', ...(recent.length ? recent : ['（没有）']));
@@ -217,6 +236,7 @@ const at = (h: number, m: number): number => new Date(2026, 9, 16, h, m).getTime
 export const JUDGE_INPUT_EXAMPLE_REQUEST = {
   variant: 'main',
   botName: '小P',
+  facts: { otherBots: { names: ['小码'], complete: true }, here: { kind: 'main', speakers: ['张三', '小码', '你', '李四'], historyIncomplete: true } },
   group: { chatId: 'oc_example', name: '产品讨论' },
   context: [
     { at: at(10, 1), from: 'user', name: '张三', text: '下周发版' },
@@ -230,7 +250,7 @@ export const JUDGE_INPUT_EXAMPLE_REQUEST = {
 } satisfies Parameters<typeof renderJudgeInput>[0];
 
 /** The input's bounds, under each sample input. */
-export const JUDGE_INPUT_BOUNDS = `（上限：最近的消息最多 ${JUDGE_INPUT_LIMITS.contextLines} 条、合计 ${JUDGE_INPUT_LIMITS.contextChars} 字，每条 ${JUDGE_INPUT_LIMITS.lineChars} 字；要判断的消息 ${JUDGE_INPUT_LIMITS.messageChars} 字；个性 ${JUDGE_INPUT_LIMITS.personaChars} 字；引用 ${JUDGE_INPUT_LIMITS.quoteChars} 字）`;
+export const JUDGE_INPUT_BOUNDS = `（上限：最近的消息最多 ${JUDGE_INPUT_LIMITS.contextLines} 条、合计 ${JUDGE_INPUT_LIMITS.contextChars} 字，每条 ${JUDGE_INPUT_LIMITS.lineChars} 字；要判断的消息 ${JUDGE_INPUT_LIMITS.messageChars} 字；个性 ${JUDGE_INPUT_LIMITS.personaChars} 字；引用 ${JUDGE_INPUT_LIMITS.quoteChars} 字；群里 bot 名册最多 100 个，位置发言人最多 41 个，名字各 50 字）`;
 
 /** What the model is given, filled with sample data, plus the bounds: shown read-only (product.md
  * 第 11 节 2026-10-16 "也都可以看到"). */
