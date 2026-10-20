@@ -1,6 +1,6 @@
 import { throughBridgeChannel } from './helpers/lark-events';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { CodexAppServerBackend } from '../src/agent/codex-appserver/backend';
 import { writeNodeExecutable } from './helpers/node-executable';
@@ -8,6 +8,17 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import type { CardActionEvent, NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AgentEvent, AgentInput, AskRequest } from '../src/agent/types';
 
+// Keep the execution workspace physically separate from daemon data.
+const workspace = await vi.hoisted(async () => {
+  const { mkdtempSync, realpathSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  return realpathSync(mkdtempSync(join(tmpdir(), 'ask-typed-answer-workspace-')));
+});
+afterAll(async () => {
+  const { rm } = await import('node:fs/promises');
+  await rm(workspace, { recursive: true, force: true });
+});
 const fake = vi.hoisted(() => ({
   judge: vi.fn(async () => ({ decision: 'reply', reason: '答', ms: 0 })),
   sessionMissing: false,
@@ -48,11 +59,11 @@ vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown,
 vi.mock('../src/agent', async (original) => ({ ...await original<object>(), createBackend: () => fake.backend }));
 vi.mock('../src/project/registry', async (original) => ({
   ...await original<object>(),
-  getProjectByChatId: async () => ({ name: 'test', chatId: 'chat', cwd: '/test', kind: fake.groupMode === 'smart' ? 'single' : fake.groupMode, ...(fake.groupMode === 'smart' ? { smart: true } : {}), ...(fake.groupPolicy ? { pendingPolicy: fake.groupPolicy } : {}), ...(fake.noMention !== undefined ? { noMention: fake.noMention } : {}) }),
+  getProjectByChatId: async () => ({ name: 'test', chatId: 'chat', cwd: workspace, kind: fake.groupMode === 'smart' ? 'single' : fake.groupMode, ...(fake.groupMode === 'smart' ? { smart: true } : {}), ...(fake.groupPolicy ? { pendingPolicy: fake.groupPolicy } : {}), ...(fake.noMention !== undefined ? { noMention: fake.noMention } : {}) }),
 }));
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),
-  getSession: async (key: string) => fake.sessionMissing ? undefined : ({ threadId: key, chatId: 'chat', sessionId: 'host', backend: 'codex', cwd: '/test', summary: '', ...fake.record }),
+  getSession: async (key: string) => fake.sessionMissing ? undefined : ({ threadId: key, chatId: 'chat', sessionId: 'host', backend: 'codex', cwd: workspace, summary: '', ...fake.record }),
   // Only watermark writes (the function form) land; other patches stay no-ops.
   patchSession: async (_key: string, patch: unknown) => {
     if (typeof patch === 'function') Object.assign(fake.record, patch({ ...fake.record }));
@@ -144,7 +155,7 @@ function setup(policy: 'steer' | 'queue' = 'steer') {
   const channel = { send: fake.send, rawClient: { cardkit: { v1: { card: { idConvert: fake.idConvert }, cardElement: { update: fake.elementUpdate } } }, im: { v1: { message: { reply: fake.reply, get: fake.getMessage }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
-  orchestrator = createOrchestrator(channel as never, cfg, '/test');
+  orchestrator = createOrchestrator(channel as never, cfg, workspace);
   return orchestrator;
 }
 beforeEach(() => {
@@ -288,7 +299,7 @@ describe('typed ask messages at intake', () => {
     if (mode === 'smart') fake.sessionMissing = true;
     // A real app-server transport, isolated executable and no account credentials.
     // Retain the fixture directory for inspection under the task's no-delete rule.
-    const dir = execFileSync('mktemp', ['-d'], { encoding: 'utf8' }).trim();
+    const dir = realpathSync(execFileSync('mktemp', ['-d'], { encoding: 'utf8' }).trim());
     const { bin } = writeNodeExecutable(dir, 'codex', `
 const fs = require('node:fs');
 const path = require('node:path');
@@ -301,7 +312,14 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
     send({ method: 'turn/completed', params: { threadId: 'host', turn: { id: 'goal-turn' } } });
     return;
   }
-  if (m.id !== undefined) send({ id: m.id, result: m.method === 'thread/start' || m.method === 'thread/resume' ? { thread: { id: 'host' } } : {} });
+  if (m.id !== undefined) {
+    const thread = m.method === 'thread/start' || m.method === 'thread/resume';
+    send({ id: m.id, result: thread ? {
+      thread: { id: 'host' }, cwd: m.params.cwd,
+      runtimeWorkspaceRoots: m.params.runtimeWorkspaceRoots, approvalPolicy: m.params.approvalPolicy,
+      ...(m.params.sandbox === 'danger-full-access' ? { sandbox: { type: 'dangerFullAccess' } } : {}),
+    } : {} });
+  }
   if (m.method === 'thread/goal/set') {
     send({ method: 'turn/started', params: { threadId: 'host', turn: { id: 'goal-turn' } } });
     send({ id: 'provider-ask', method: 'item/tool/requestUserInput', params: {

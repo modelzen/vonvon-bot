@@ -22,6 +22,17 @@ import { RpcError } from '../src/server/errors';
 import { seedBots } from './helpers/bot-fixture';
 import { fakeLark, httpError, stall } from './helpers/fake-lark-http';
 
+// Keep the execution workspace physically separate from daemon data.
+const workspace = await vi.hoisted(async () => {
+  const { mkdtempSync, realpathSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  return realpathSync(mkdtempSync(join(tmpdir(), 'desktop-collaboration-workspace-')));
+});
+afterAll(async () => {
+  const { rm } = await import('node:fs/promises');
+  await rm(workspace, { recursive: true, force: true });
+});
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
   const appDir = mkdtempSync(join(tmpdir(), 'desktop-collaboration-'));
@@ -60,8 +71,8 @@ beforeEach(async () => {
   await rm(paths.projectsFile, { force: true }); await rm(paths.sessionsFile, { force: true });
   fixture.failProjectsWrite = false; fixture.holdProjectsWrite = undefined;
   fixture.leave.mockReset(); fixture.send.mockClear();
-  await addProject({ name: 'demo', chatId: 'oc_demo', cwd: paths.appDir, kind: 'single', blank: false, origin: 'joined', createdAt: 1, backend: 'codex-appserver' });
-  await upsertSession({ threadId: 'oc_demo', chatId: 'oc_demo', cwd: paths.appDir, sessionId: 'old', backend: 'codex-appserver', summary: 'old', createdAt: 1, updatedAt: 1 });
+  await addProject({ name: 'demo', chatId: 'oc_demo', cwd: workspace, kind: 'single', blank: false, origin: 'joined', createdAt: 1, backend: 'codex-appserver' });
+  await upsertSession({ threadId: 'oc_demo', chatId: 'oc_demo', cwd: workspace, sessionId: 'old', backend: 'codex-appserver', summary: 'old', createdAt: 1, updatedAt: 1 });
 });
 afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
 it('rejects untrusted identity, extra fields and relative paths at the HTTP boundary', () => {
@@ -128,7 +139,7 @@ it('clears a flat binding with its model settings and keeps old backend history 
   try {
     await app.collaboration({ action: 'clear', ...target, threadId: 'oc_demo' });
     expect(await getSession('oc_demo')).toMatchObject({ sessionId: 'fresh' });
-    expect(be.startThread).toHaveBeenCalledWith(expect.objectContaining({ cwd: paths.appDir }));
+    expect(be.startThread).toHaveBeenCalledWith(expect.objectContaining({ cwd: workspace }));
     await app.collaboration({ action: 'resume', ...target, sessionId: 'past', backend: 'codex-appserver' });
     expect(await getSession('oc_demo')).toMatchObject({ sessionId: 'past' });
     await expect(app.collaboration({ action: 'resume', ...target, sessionId: 'foreign', backend: 'codex-appserver' })).rejects.toThrow('不属于');
@@ -230,7 +241,7 @@ it.each([
       : app.collaboration({ action, ...target, threadId: 'oc_demo' });
   const settled = expect(operation).rejects.toThrow(preparationError.message);
   try {
-    await entered;
+    await Promise.race([entered, settled]);
     const context = await app.collaboration({ action: 'context', ...target, threadId: 'oc_demo' });
     expect.soft(context).toMatchObject({ run: { goal: action === 'startGoal', canRemind: false, reminderRequested: false } });
     if (!context || typeof context !== 'object' || !('run' in context) || !context.run || typeof context.run !== 'object' || !('id' in context.run) || typeof context.run.id !== 'string') throw new Error('suspended desktop preparation has no run');
@@ -405,7 +416,7 @@ it('never applies a stale project target to another binding and refreshes actual
   backend(); const app = orchestrator();
   try {
     await removeProject('demo');
-    await addProject({ name: 'demo', chatId: 'oc_replacement', cwd: paths.appDir, blank: false, createdAt: 2 });
+    await addProject({ name: 'demo', chatId: 'oc_replacement', cwd: workspace, blank: false, createdAt: 2 });
     await expect(app.collaboration({ action: 'history', ...target })).rejects.toThrow('已改变');
     expect(await app.collaboration({ action: 'usage', force: true })).toHaveProperty('data');
     expect(fixture.usage).toHaveBeenCalledWith(true);
@@ -544,7 +555,7 @@ it('s36d1: a web creation whose group was made and not saved reaches the page as
 });
 it('leaves a key from before s15c unused and refuses unsupported goal before posting to Feishu', async () => {
   const be = backend(); fixture.backend = { ...be, capabilities: { goal: false, compact: true, resume: true } };
-  await upsertSession({ threadId: 'oc_demo#guest', chatId: 'oc_demo', cwd: paths.appDir, sessionId: 'guest-native', backend: 'codex-appserver', summary: 'guest', createdAt: 1, updatedAt: 1 });
+  await upsertSession({ threadId: 'oc_demo#guest', chatId: 'oc_demo', cwd: workspace, sessionId: 'guest-native', backend: 'codex-appserver', summary: 'guest', createdAt: 1, updatedAt: 1 });
   const app = orchestrator();
   try {
     await expect(app.collaboration({ action: 'compact', ...target, threadId: 'oc_demo#guest' })).rejects.toThrow('已停用');

@@ -6,6 +6,17 @@ import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
 
+// Keep the execution workspace physically separate from daemon data.
+const workspace = await vi.hoisted(async () => {
+  const { mkdtempSync, realpathSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  return realpathSync(mkdtempSync(join(tmpdir(), 'no-mention-parity-workspace-')));
+});
+afterAll(async () => {
+  const { rm } = await import('node:fs/promises');
+  await rm(workspace, { recursive: true, force: true });
+});
 vi.mock('../src/config/paths', () => {
   const appDir = mkdtempSync(join(tmpdir(), 'no-mention-parity-'));
   return { paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json'), commentsRootDir: join(appDir, 'comments') } };
@@ -31,7 +42,7 @@ const fake = vi.hoisted(() => ({
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_context: unknown, callback: () => unknown) => callback() }));
 vi.mock('../src/project/registry', async original => ({
   ...await original<object>(),
-  getProjectByChatId: async () => ({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', kind: fake.kind, noMention: fake.noMention, mode: 'qa', network: false }),
+  getProjectByChatId: async () => ({ name: 'demo', chatId: 'oc_demo', cwd: workspace, kind: fake.kind, noMention: fake.noMention, mode: 'qa', network: false }),
 }));
 vi.mock('../src/agent', async original => ({
   ...await original<object>(),
@@ -71,7 +82,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   fake.kind = 'multi';
   fake.noMention = true;
-  orchestrator = createOrchestrator(channel as never, cfg, '/tmp/demo');
+  orchestrator = createOrchestrator(channel as never, cfg, workspace);
 });
 afterEach(async () => { await orchestrator.shutdown(); });
 

@@ -11,6 +11,17 @@ import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostic
 import { DM, PERMISSION_CARD_VERSION } from '../src/card/dm-cards';
 import { addProject, getProjectByName, removeProject, type Project } from '../src/project/registry';
 
+// Keep the execution workspace physically separate from daemon data.
+const workspace = await vi.hoisted(async () => {
+  const { mkdtempSync, realpathSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  return realpathSync(mkdtempSync(join(tmpdir(), 'not-replied-workspace-')));
+});
+afterAll(async () => {
+  const { rm } = await import('node:fs/promises');
+  await rm(workspace, { recursive: true, force: true });
+});
 vi.mock('../src/config/paths', () => {
   const appDir = mkdtempSync(join(tmpdir(), 'not-replied-'));
   return { paths: { appDir, botsFile: join(appDir, 'bots.json'), sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json'), commentsRootDir: join(appDir, 'comments') } };
@@ -64,7 +75,7 @@ vi.mock('../src/card/run-card-stream', () => ({
 
 import { createOrchestrator, failureReason } from '../src/bot/handle-message';
 
-const base = { name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', kind: 'multi', noMention: false, mode: 'qa', network: false };
+const base = { name: 'demo', chatId: 'oc_demo', cwd: workspace, kind: 'multi', noMention: false, mode: 'qa', network: false };
 const cfg = (allowedChats?: string[]): AppConfig => ({ accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', ...(allowedChats ? { allowedChats } : {}) }, completionReminder: { mode: 'manual' } } });
 const channel = { send: fake.send, rawClient: { im: { v1: { messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) }, message: { get: async () => ({ data: { items: [{ thread_id: 'omt_opened_topic' }] } }) } } } } };
 let orchestrator: ReturnType<typeof createOrchestrator>;
@@ -77,7 +88,7 @@ function message(fields: Partial<NormalizedMessage> = {}): NormalizedMessage {
 }
 const records = () => events.flatMap(event => event.kind === 'notReplied' ? [event.record] : []);
 const replies = () => fake.send.mock.calls.map(([, content]) => (content as { markdown: string }).markdown);
-function start(config = cfg()) { orchestrator = createOrchestrator(channel as never, config, '/tmp/demo'); }
+function start(config = cfg()) { orchestrator = createOrchestrator(channel as never, config, workspace); }
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -197,7 +208,7 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
   });
 
   it('refuses a DM card that saves 只读, and sends one offering only 完全访问', async () => {
-    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', createdAt: 1, blank: false, mode: 'qa' });
+    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: workspace, createdAt: 1, blank: false, mode: 'qa' });
     const submit = (mode: string) => orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
       action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo', v: PERMISSION_CARD_VERSION } }, raw: { action: { form_value: { mode, network: 'off' } } } } as never);
     try {
@@ -213,7 +224,7 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
 
   it('an old DM card that carries guestMode saves nothing and gets a fresh one-tier card', async () => {
     fake.fullOnly = undefined;
-    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', createdAt: 1, blank: false, mode: 'qa' });
+    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: workspace, createdAt: 1, blank: false, mode: 'qa' });
     try {
       await orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
         action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo' } }, raw: { action: { form_value: { mode: 'full', guestMode: 'qa', network: 'off' } } } } as never);
@@ -228,7 +239,7 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
   it('an old DM card left alone saves nothing, so it cannot widen a group that ran its members at 只读', async () => {
     // Before s15c: 管理员档 full, 普通用户档 qa (now the group's one tier). On a full-only backend that card
     // preset only 管理员档, so untouched it submits mode=full and no guestMode.
-    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', createdAt: 1, blank: false, mode: 'full', guestMode: 'qa' } as Project);
+    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: workspace, createdAt: 1, blank: false, mode: 'full', guestMode: 'qa' } as Project);
     try {
       await orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
         action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo' } }, raw: { action: { form_value: { mode: 'full', network: 'off' } } } } as never);
@@ -243,7 +254,7 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
   });
 
   it('keeps a stored 只读 when the DM card is saved with the tier dropdowns left alone', async () => {
-    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', createdAt: 1, blank: false, mode: 'qa' });
+    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: workspace, createdAt: 1, blank: false, mode: 'qa' });
     try {
       // The card presets no tier it cannot offer, so an untouched dropdown sends nothing.
       await orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
@@ -348,8 +359,8 @@ describe('failed turns', () => {
 
 describe('keys left from before s15c', () => {
   it('the DM project list and topics cards count only live sessions', async () => {
-    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', createdAt: 1, blank: false });
-    const rec = (threadId: string) => ({ threadId, chatId: 'oc_demo', cwd: '/tmp/demo', sessionId: `s-${threadId}`, backend: 'codex-appserver', summary: threadId, createdAt: 1, updatedAt: 1 });
+    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: workspace, createdAt: 1, blank: false });
+    const rec = (threadId: string) => ({ threadId, chatId: 'oc_demo', cwd: workspace, sessionId: `s-${threadId}`, backend: 'codex-appserver', summary: threadId, createdAt: 1, updatedAt: 1 });
     writeFileSync(paths.sessionsFile, JSON.stringify({ version: 3, sessions: [rec('omt_a'), rec('omt_b#guest'), rec('omt_c#admin')], titleJobs: [] }));
     const click = (a: string, value: object) => orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: `om_${a}`, operator: { openId: 'ou_owner' },
       action: { tag: 'button', value: { a, ...value } } } as never);

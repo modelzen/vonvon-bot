@@ -8,6 +8,17 @@ import { paths } from '../src/config/paths';
 import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
 import { receive as receiveEvent } from './helpers/lark-events';
 
+// Keep the execution workspace physically separate from daemon data.
+const workspace = await vi.hoisted(async () => {
+  const { mkdtempSync, realpathSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  return realpathSync(mkdtempSync(join(tmpdir(), 'sync-copy-workspace-')));
+});
+afterAll(async () => {
+  const { rm } = await import('node:fs/promises');
+  await rm(workspace, { recursive: true, force: true });
+});
 vi.mock('../src/config/paths', () => {
   const appDir = mkdtempSync(join(tmpdir(), 'sync-copy-'));
   return { paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json'), commentsRootDir: join(appDir, 'comments') } };
@@ -226,7 +237,7 @@ describe('createSyncCopyGate', () => {
 });
 
 describe('the orchestrator answers only the topic message', () => {
-  const base = { name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', kind: 'multi', noMention: false, mode: 'qa', guestMode: 'qa', network: false };
+  const base = { name: 'demo', chatId: 'oc_demo', cwd: workspace, kind: 'multi', noMention: false, mode: 'qa', guestMode: 'qa', network: false };
   const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, completionReminder: { mode: 'manual' } } };
   // The group's only bot (s22 looks nothing up then).
   const channel = { send: fake.send, rawClient: { im: { v1: { messageReaction: { create: fake.react, delete: async () => ({}) }, message: { get: fake.get }, chat: { get: async () => ({ code: 0, data: { chat_mode: 'group', bot_count: '1' } }) } } } } };
@@ -240,7 +251,7 @@ describe('the orchestrator answers only the topic message', () => {
     events = [];
     setDiagnosticsSink(event => events.push(event));
     fake.project = { ...base };
-    orchestrator = createOrchestrator(channel as never, cfg, '/tmp/demo');
+    orchestrator = createOrchestrator(channel as never, cfg, workspace);
   });
   afterEach(async () => { setDiagnosticsSink(undefined); await orchestrator.shutdown(); });
 

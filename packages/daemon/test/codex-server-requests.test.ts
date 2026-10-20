@@ -32,7 +32,10 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
   } else if (m.method === 'fixture/exit') {
     process.exit(0);
   } else if (m.method === 'thread/resume') {
-    send({ id: m.id, result: { thread: { id: 'thread' } } }); return;
+    send({ id: m.id, result: { thread: { id: 'thread' } ,
+      cwd: m.params.cwd, runtimeWorkspaceRoots: m.params.runtimeWorkspaceRoots,
+      approvalPolicy: m.params.approvalPolicy, sandbox: { type: m.params.sandbox === 'danger-full-access' ? 'dangerFullAccess' : undefined },
+    } }); return;
   } else if (m.method === 'turn/start') {
     const id = 'turn-' + ++turn;
     const text = m.params.input[0].text;

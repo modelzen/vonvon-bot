@@ -33,7 +33,10 @@ process.stdin.on('data', (d) => {
       }, 20);
       continue;
     }
-    const result = msg.method === 'thread/start' ? { thread: { id: 'th_live' } } : {};
+    const result = msg.method === 'thread/start' ? { thread: { id: 'th_live' } ,
+      cwd: msg.params.cwd, runtimeWorkspaceRoots: msg.params.runtimeWorkspaceRoots,
+      approvalPolicy: msg.params.approvalPolicy, sandbox: { type: msg.params.sandbox === 'danger-full-access' ? 'dangerFullAccess' : undefined },
+    } : {};
     send({ jsonrpc: '2.0', id: msg.id, result });
   }
 });
