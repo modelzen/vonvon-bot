@@ -51,6 +51,20 @@ describe('entry lifecycle and authorization', () => {
     expect(JSON.stringify([aa, bb])).not.toMatch(/private-chat|private-dm|admin|m1/);
     entries.closeAll('shutdown');
   });
+  it.each(['group', 'doc', 'p2p'] as const)('discovers settings writers only in DM, including pending %s entries', async kind => {
+    const write = vi.fn(async () => 'changed');
+    const f = setup({ place: { kind }, attached: false, open: false, run: write });
+    const names = () => f.entry.tools().map(spec => spec.name);
+    expect(names()).toEqual(kind === 'p2p' ? ['t_read', 't_set'] : ['t_read']);
+    f.entry.attach(f.t);
+    expect(await f.entry.call('t_read', {})).toEqual({ ok: true, result: 'read' });
+    f.state.admin = false; f.state.enabled = false;
+    expect(names()).toEqual(kind === 'p2p' ? ['t_read', 't_set'] : ['t_read']);
+    if (kind !== 'p2p') expect(await f.call()).toMatchObject(refused('not-dm'));
+    expect(write).not.toHaveBeenCalled();
+    f.entry.revoke('closed');
+    expect(() => names()).toThrow();
+  });
   it('permits static discovery pending attach, but no calls', async () => {
     const run = vi.fn(async () => 'ok'); const f = setup({ attached: false, open: false, run });
     expect(f.entry.tools().map(tool => tool.name)).toContain('t_read');
