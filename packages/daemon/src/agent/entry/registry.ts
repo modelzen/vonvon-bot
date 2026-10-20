@@ -235,7 +235,8 @@ export function createAgentEntries(opts: {
         if (grant.thread && !grant.thread.isAlive()) revoke(grant);
         if (grant.phase === 'revoked') throw new ToolRefusal(failure('revoked'));
         if (grant.phase === 'capacity') return [];
-        return tools.map(({ name, description, input }) => ({ name, description, input }));
+        return tools.filter(tool => tool.class !== 'settings' || grant.place.kind === 'p2p')
+          .map(({ name, description, input }) => ({ name, description, input }));
       },
       call,
       noteToolUse(id) {
