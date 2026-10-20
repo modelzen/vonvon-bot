@@ -1,4 +1,4 @@
-import { mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import { paths } from '../config/paths';
@@ -269,7 +269,7 @@ function directoryRows(raw: unknown): DirectoryRow[] {
   });
 }
 
-async function writeStored(location: RegistryLocation, body: Record<string, unknown>, previous: Record<string, unknown>): Promise<void> {
+async function writeStored(location: RegistryLocation, body: Record<string, unknown>, previous: Record<string, unknown>, beforeCommit?: () => void): Promise<void> {
   // Both callers own detached rows and a separate previous disk snapshot.
   const next = body;
   const oldProjects = directoryRows(previous.projects);
@@ -294,18 +294,25 @@ async function writeStored(location: RegistryLocation, body: Record<string, unkn
   }
   const serialized = `${JSON.stringify(next, null, 2)}\n`;
   const tmp = `${location.file}.tmp-${process.pid}-${randomUUID()}`;
-  await writeFile(tmp, serialized, 'utf8');
-  await rename(tmp, location.file);
+  try {
+    await writeFile(tmp, serialized, 'utf8');
+    beforeCommit?.();
+    await rename(tmp, location.file);
+  } catch (error) {
+    await unlink(tmp).catch(() => undefined);
+    throw error;
+  }
 }
 
-async function write(location: RegistryLocation, projects: Project[]): Promise<void>;
-async function write(location: RegistryLocation, projects: Project[], selected: Project): Promise<Project>;
-async function write(location: RegistryLocation, projects: Project[], selected?: Project): Promise<Project | void> {
+export interface ProjectCommitOptions { beforeCommit?: () => void }
+async function write(location: RegistryLocation, projects: Project[], selected?: undefined, options?: ProjectCommitOptions): Promise<void>;
+async function write(location: RegistryLocation, projects: Project[], selected: Project, options?: ProjectCommitOptions): Promise<Project>;
+async function write(location: RegistryLocation, projects: Project[], selected?: Project, options?: ProjectCommitOptions): Promise<Project | void> {
   const detached: Project[] = JSON.parse(JSON.stringify(projects));
   const result = selected === undefined ? undefined : detached[projects.indexOf(selected)];
   if (selected !== undefined && result === undefined) throw new Error('待保存的项目不存在');
   const previous = await readStored(location.file);
-  await writeStored(location, { ...previous, version: FILE_VERSION, projects: detached }, previous);
+  await writeStored(location, { ...previous, version: FILE_VERSION, projects: detached }, previous, options?.beforeCommit);
   return result;
 }
 
@@ -421,6 +428,7 @@ export function bindProject(input: ProjectBinding, prepareNew: (previous?: Previ
 export async function updateProject(
   name: string,
   patch: Partial<Omit<Project, 'name'>> | ((p: Project) => Partial<Omit<Project, 'name'>>),
+  options?: ProjectCommitOptions,
 ): Promise<void> {
   const capturedPatch = typeof patch === 'function' ? patch : structuredClone(patch);
   return ownProjects(async location => {
@@ -432,7 +440,7 @@ export async function updateProject(
     for (const [k, v] of Object.entries(actual)) {
       if (v !== undefined) target[k] = v;
     }
-    await write(location, projects);
+    await write(location, projects, undefined, options);
   });
 }
 
@@ -456,13 +464,13 @@ export async function removeProject(name: string, beforeRemove?: (project: Proje
   });
 }
 
-export async function mutateProject(name: string, mutate: (project: Project) => void | Promise<void>): Promise<Project> {
+export async function mutateProject(name: string, mutate: (project: Project) => void | Promise<void>, options?: ProjectCommitOptions): Promise<Project> {
   return ownProjects(async location => {
     const projects = await read(location.file);
     const project = projects.find(item => item.name === name);
     if (!project) throw new Error('项目不存在');
     await mutate(project);
-    return write(location, projects, project);
+    return write(location, projects, project, options);
   });
 }
 
