@@ -20,10 +20,23 @@ export interface BindGroupInput {
   /** 免@; left out → 3.4's default for `kind`. 智能 has none and refuses it. */
   noMention?: boolean;
 }
-export type AdminGroupOp = { kind: 'joinedGroups'; cursor?: string } | { kind: 'bindGroup'; input: BindGroupInput };
+export type AdminGroupOp = { kind: 'joinedGroups'; cursor?: string } | { kind: 'groupMembers'; chatId: string; cursor?: string } | { kind: 'bindGroup'; input: BindGroupInput };
 export interface JoinedGroups {
   groups: { chatId: string; name: string; bound: boolean; hasOtherBots?: boolean }[];
   nextCursor?: string;
+}
+export interface GroupMembers {
+  members: { openId: string; name: string }[];
+  nextCursor?: string;
+}
+export function parseGroupMembers(raw: unknown): GroupMembers {
+  if (!raw || typeof raw !== 'object' || !('members' in raw) || !Array.isArray(raw.members)) throw new GroupUpstreamError('群成员响应无效');
+  const members = raw.members.map(member => {
+    if (!member || typeof member !== 'object' || typeof member.openId !== 'string' || !member.openId || typeof member.name !== 'string') throw new GroupUpstreamError('群成员响应无效');
+    return { openId: member.openId, name: member.name };
+  });
+  if ('nextCursor' in raw && raw.nextCursor !== undefined && (typeof raw.nextCursor !== 'string' || !raw.nextCursor)) throw new GroupUpstreamError('群成员游标无效');
+  return { members, ...('nextCursor' in raw && typeof raw.nextCursor === 'string' ? { nextCursor: raw.nextCursor } : {}) };
 }
 export class GroupUpstreamError extends Error {
   readonly code = 'GROUP_UPSTREAM';
@@ -60,7 +73,7 @@ export function parseJoinedGroups(raw: unknown): JoinedGroups {
 const GROUP_READ_SCOPE = 'im:chat:readonly';
 /** Shown for a chat Feishu lists without a name, so one odd item cannot fail the whole list. */
 export const UNNAMED_GROUP = '（未命名群）';
-type GroupPhase = 'joined-groups' | 'bind-group';
+type GroupPhase = 'joined-groups' | 'bind-group' | 'group-members';
 
 /**
  * What the desktop shows for a failed Feishu group call. The SDK throws axios errors whose message
@@ -95,7 +108,7 @@ function refused(phase: GroupPhase, reply: { code?: number; msg?: string }, fall
   throw error;
 }
 
-export function createGroupExecutor(channel: LarkChannel, identity: BotIdentity, projectsRootDir?: string): (op: AdminGroupOp) => Promise<JoinedGroups | Project> {
+export function createGroupExecutor(channel: LarkChannel, identity: BotIdentity, projectsRootDir?: string): (op: AdminGroupOp) => Promise<JoinedGroups | GroupMembers | Project> {
   const bot = { ...identity };
   const topicContext = createTopicContext(channel, undefined, createNameBook(channel), { stopping: () => false, track: p => p });
   async function bind(request: BindGroupInput): Promise<Project> {
@@ -118,6 +131,19 @@ export function createGroupExecutor(channel: LarkChannel, identity: BotIdentity,
   return async op => {
     if (op.kind === 'bindGroup') {
       return bind(op.input);
+    }
+    if (op.kind === 'groupMembers') {
+      const membership = await channel.rawClient.im.v1.chatMembers.isInChat({ path: { chat_id: op.chatId } }).catch(upstream('group-members'));
+      if (membership.code !== 0 || typeof membership.data?.is_in_chat !== 'boolean') refused('group-members', membership, '无法确认机器人群成员身份');
+      if (!membership.data.is_in_chat) throw new AdminWriteError('机器人不在此群中');
+      const reply = await channel.rawClient.im.v1.chatMembers.get({ path: { chat_id: op.chatId }, params: { member_id_type: 'open_id', page_size: 100, ...(op.cursor ? { page_token: op.cursor } : {}) } }).catch(upstream('group-members'));
+      if (reply.code !== 0 || !Array.isArray(reply.data?.items)) refused('group-members', reply, '飞书群成员响应无效');
+      if (reply.data.has_more && !reply.data.page_token) refused('group-members', {}, '飞书群成员缺少下一页游标');
+      const members = reply.data.items.map(member => {
+        if (!member.member_id) refused('group-members', {}, '飞书群成员缺少 open_id');
+        return { openId: member.member_id, name: member.name || '（未命名成员）' };
+      });
+      return { members, ...(reply.data.has_more ? { nextCursor: reply.data.page_token } : {}) };
     }
     const response = await channel.rawClient.im.v1.chat.list({ params: { page_size: 50, ...(op.cursor ? { page_token: op.cursor } : {}) } }).catch(upstream('joined-groups'));
     if (response.code !== 0 || !response.data || !Array.isArray(response.data.items)) refused('joined-groups', response, '飞书群列表响应无效');

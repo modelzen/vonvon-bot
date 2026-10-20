@@ -175,7 +175,7 @@ export function createAgentEntries(opts: {
           if (Date.now() > deadline - reserveMs) throw new ToolRefusal(failure('timeout'));
         };
         async function execute() {
-          const ctx: ToolContext = { signal: controller.signal, place: grant.place };
+          const ctx: ToolContext = { signal: controller.signal, place: grant.place, notAfter: deadline, get admin() { return !!grant.turn?.active && grant.turn.human && opts.isAdmin(grant.turn.facts.requesterOpenId ?? ''); }, get writeRefusal() { return authorizeNow(grant, auth); } };
           if (settings && auth) {
             ctx.turn = { id: auth.id, requesterOpenId: auth.facts.requesterOpenId ?? '', triggerMessageId: auth.facts.triggerMessageId ?? '', role: opts.isOwner(auth.facts.requesterOpenId ?? '') ? 'owner' : 'admin' };
             ctx.commit = async write => {

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createGroupExecutor as createOwnedGroupExecutor, describeGroupFailure, parseBindGroupInput, parseJoinedGroups, UNNAMED_GROUP, type BindGroupInput } from '../src/admin/groups';
+import { createGroupExecutor as createOwnedGroupExecutor, describeGroupFailure, parseBindGroupInput, parseJoinedGroups, parseGroupMembers, UNNAMED_GROUP, type BindGroupInput } from '../src/admin/groups';
 import { log } from '../src/core/logger';
 import { createAdminIpcCaller, createAdminIpcResponder } from '../src/admin/ipc';
 import { addProject, listProjects, listProjectsIn } from '../src/project/registry';
@@ -37,10 +37,11 @@ function channelFixture() {
   const message = vi.fn(async () => ({ code: 0, data: { message_id: 'message' } }));
   const membership = vi.fn(async () => ({ code: 0, data: { is_in_chat: true } }));
   const list = vi.fn(async () => ({ code: 0, data: { items: [{ chat_id: 'oc_a', name: 'Group A' }], has_more: true, page_token: 'page2' } }));
+  const members = vi.fn(async () => ({ code: 0, data: { items: [{ member_id: 'ou_person', name: 'Person' }], has_more: true, page_token: 'members2' } }));
   const create = vi.fn(async () => ({ code: 0, data: { chat_id: 'oc_created' } }));
   const managers = vi.fn(async () => ({ code: 0 }));
-  const channel = { rawClient: { im: { v1: { message: { create: message }, chatMembers: { isInChat: membership }, chat: { list, create }, chatManagers: { addManagers: managers } } } } } as unknown as LarkChannel;
-  return { channel, message, membership, list, create, managers };
+  const channel = { rawClient: { im: { v1: { message: { create: message }, chatMembers: { isInChat: membership, get: members }, chat: { list, create }, chatManagers: { addManagers: managers } } } } } as unknown as LarkChannel;
+  return { channel, message, membership, members, list, create, managers };
 }
 /** A thrown SDK (axios) error carrying the Feishu body in `response.data`. */
 function axiosError(status: number, data: unknown): Error {
@@ -477,4 +478,33 @@ it('s28c: pending groups persist and clear an observed other-bot hint', async ()
   hasOtherBots = undefined;
   await queue.refresh();
   expect((await readPendingGroups(file))[0]).not.toHaveProperty('hasOtherBots');
+});
+
+
+describe('group member transport', () => {
+  it('preserves member ids, names and pagination through IPC', async () => {
+    const fixture = channelFixture();
+    let receive: (raw: unknown) => void = () => undefined;
+    const caller = createAdminIpcCaller(message => receive(message));
+    receive = createAdminIpcResponder(op => {
+      if (op.kind !== 'groupMembers') throw new Error('unexpected command');
+      return createGroupExecutor(fixture.channel)(op);
+    }, caller.onMessage);
+    expect(parseGroupMembers(await caller.call({ kind: 'groupMembers', chatId: 'oc_a', cursor: 'members1' }))).toEqual({ members: [{ openId: 'ou_person', name: 'Person' }], nextCursor: 'members2' });
+    expect(fixture.members).toHaveBeenCalledWith({ path: { chat_id: 'oc_a' }, params: { member_id_type: 'open_id', page_size: 100, page_token: 'members1' } });
+  });
+  it('refuses reading a group the bot has not joined', async () => {
+    const fixture = channelFixture();
+    fixture.membership.mockResolvedValue({ code: 0, data: { is_in_chat: false } });
+    await expect(createGroupExecutor(fixture.channel)({ kind: 'groupMembers', chatId: 'oc_a' })).rejects.toThrow('机器人不在此群中');
+    expect(fixture.members).not.toHaveBeenCalled();
+  });
+  it('does not turn upstream failure or broken pagination into empty success', async () => {
+    const fixture = channelFixture();
+    fixture.members.mockResolvedValueOnce({ code: 999, data: { items: [], has_more: false, page_token: '' } });
+    await expect(createGroupExecutor(fixture.channel)({ kind: 'groupMembers', chatId: 'oc_a' })).rejects.toThrow('999');
+    fixture.members.mockResolvedValueOnce({ code: 0, data: { items: [], has_more: true, page_token: '' } });
+    await expect(createGroupExecutor(fixture.channel)({ kind: 'groupMembers', chatId: 'oc_a' })).rejects.toThrow('缺少下一页游标');
+    expect(() => parseGroupMembers({ members: [{ name: 'No id' }] })).toThrow('群成员响应无效');
+  });
 });

@@ -1,10 +1,11 @@
+import { CommandError } from './command-error';
 import { connectLocal, ConnectionError, RpcError, type VonvonClient } from '@vonvon/client';
 import { backendLabel, conversationCopy, requestSchema, type Agent, type Membership } from '@vonvon/protocol';
 import { paths } from '../config/paths';
 import { verifyPidLockOwner } from '../server/owner-verification';
 import { PidLockError, readRunningPidLock } from '../server/pid-lock';
 
-/** Where a command prints; `json` switches stdout to one JSON line. Errors stay plain text on stderr. */
+/** Where a command prints; `json` switches stdout to one JSON line. The entry point formats failures for --json. */
 export type Io = { json: boolean; write(text: string): void };
 export type Call = <T>(what: string, run: (c: VonvonClient) => Promise<T>, o?: { feishu?: boolean; unknown?: string; ms?: number }) => Promise<T>;
 /** One connection for the whole command; s47 passes its own connector through `withDaemon`. */
@@ -26,36 +27,36 @@ export const printable = (text: string): string => text.replace(CONTROL, '');
 export async function connectLocalDaemon(home = paths.appDir, cliEntry = process.argv[1]): Promise<VonvonClient> {
   let lock;
   try { lock = await readRunningPidLock(home); }
-  catch (error) { throw new Error(`连不上 daemon：${firstLine(error)}`); }
-  if (!lock) throw new Error('daemon 没有运行。先运行 vonvon daemon start。');
-  if (!lock.listen) throw new Error('daemon 正在启动，稍后再试。');
+  catch (error) { throw new CommandError('connection', `连不上 daemon：${firstLine(error)}`); }
+  if (!lock) throw new CommandError('connection', 'daemon 没有运行。先运行 vonvon daemon start。');
+  if (!lock.listen) throw new CommandError('connection', 'daemon 正在启动，稍后再试。');
   // Covers a missing or wrong local-credential too: the check is an authenticated round trip.
   try { await verifyPidLockOwner(home, lock); }
   catch (error) {
-    if (error instanceof PidLockError) throw new Error(`连不上 daemon（PID ${lock.pid}）：本机凭据对不上，或者这个 PID 已经不是 daemon。运行 vonvon daemon status 查看。`);
+    if (error instanceof PidLockError) throw new CommandError('connection', `连不上 daemon（PID ${lock.pid}）：本机凭据对不上，或者这个 PID 已经不是 daemon。运行 vonvon daemon status 查看。`);
     throw error;
   }
-  if (!cliEntry) throw new Error('Cannot locate the daemon CLI entry.');
+  if (!cliEntry) throw new CommandError('connection', 'Cannot locate the daemon CLI entry.');
   try { return await connectLocal({ home, cliEntry }); }
   catch (error) {
     // The child printed {"running":false}: the daemon stopped between the lock check and discovery.
-    if (isZodError(error)) throw new Error('daemon 刚刚停止了。先运行 vonvon daemon start。');
+    if (isZodError(error)) throw new CommandError('connection', 'daemon 刚刚停止了。先运行 vonvon daemon start。');
     const message = firstLine(error);
-    if (message === 'Daemon closed during handshake') throw new Error('daemon 在握手时断开了：本机凭据对不上，或者 daemon 刚好停止或重启了。稍后重试，或运行 vonvon daemon status 查看。');
-    if (message === 'Daemon handshake timed out') throw new Error('和 daemon 握手超时。');
-    if (message.includes('protocol version mismatch')) throw new Error(VERSION_MISMATCH);
-    throw new Error(`连不上 daemon：${message}`);
+    if (message === 'Daemon closed during handshake') throw new CommandError('connection', 'daemon 在握手时断开了：本机凭据对不上，或者 daemon 刚好停止或重启了。稍后重试，或运行 vonvon daemon status 查看。');
+    if (message === 'Daemon handshake timed out') throw new CommandError('connection', '和 daemon 握手超时。');
+    if (message.includes('protocol version mismatch')) throw new CommandError('connection', VERSION_MISMATCH);
+    throw new CommandError('connection', `连不上 daemon：${message}`);
   }
 }
 
 function translate(what: string, error: unknown, ms: number, unknown?: string): Error {
-  if (error instanceof BadRequest) return new Error(`${what}没有发出：命令行给的参数不对（${error.message}）。`);
-  if (error instanceof CallTimeout) return new Error(lines(`daemon 在 ${ms / 1000} 秒内没有回应（${what}）。`, unknown, '运行 vonvon daemon logs 查看。'));
-  if (error instanceof RpcError) return new Error(lines(`${what}失败：${error.message}`, error.code === 'unsupported' ? 'daemon 可能比命令行旧。' : undefined));
-  if (error instanceof ConnectionError || firstLine(error) === 'Daemon connection closed') return new Error(lines('和 daemon 的连接断了，daemon 可能正在停止。', unknown));
+  if (error instanceof BadRequest) return new CommandError('bad-args', `${what}没有发出：命令行给的参数不对（${error.message}）。`);
+  if (error instanceof CallTimeout) return new CommandError(unknown ? 'outcome-unknown' : 'connection', lines(`daemon 在 ${ms / 1000} 秒内没有回应（${what}）。`, unknown, '运行 vonvon daemon logs 查看。'));
+  if (error instanceof RpcError) return new CommandError(error.code === 'unauthorized' || error.code === 'forbidden' ? 'refused' : error.code === 'invalid_request' ? 'bad-args' : unknown && error.code === 'operation_failed' ? 'outcome-unknown' : 'failed', lines(`${what}失败：${error.message}`, error.code === 'unsupported' ? 'daemon 可能比命令行旧。' : undefined));
+  if (error instanceof ConnectionError || firstLine(error) === 'Daemon connection closed') return new CommandError(unknown ? 'outcome-unknown' : 'connection', lines('和 daemon 的连接断了，daemon 可能正在停止。', unknown));
   // checkRequests already parsed the request, so the client's own ZodError is a reply this CLI cannot read.
-  if (isZodError(error)) return new Error(lines(VERSION_MISMATCH, unknown));
-  return new Error(`${what}失败：${firstLine(error)}`);
+  if (isZodError(error)) return new CommandError(unknown ? 'outcome-unknown' : 'connection', lines(VERSION_MISMATCH, unknown));
+  return new CommandError(unknown ? 'outcome-unknown' : 'failed', lines(`${what}失败：${firstLine(error)}`, unknown));
 }
 
 /** Client method → RPC method; snapshot() always sends the same payload. */
@@ -86,7 +87,7 @@ function checkRequests(client: VonvonClient): VonvonClient {
 function printableError(error: unknown): unknown {
   if (!(error instanceof Error)) return error;
   const message = error.message.split('\n').map(printable).join('\n');
-  return message === error.message ? error : new Error(message);
+  return message === error.message ? error : error instanceof CommandError ? new CommandError(error.kind, message, error.current) : new Error(message);
 }
 
 export async function withDaemon<T>(fn: (call: Call) => Promise<T>, connect = connectLocalDaemon, timeouts = TIMEOUTS): Promise<T> {
@@ -112,9 +113,9 @@ export function want<R extends { kind: string }, K extends R['kind']>(what: stri
   if (reply.kind === kind) return reply as Extract<R, { kind: K }>;
   const message = 'message' in reply && typeof reply.message === 'string' ? reply.message : undefined;
   if (message !== undefined && (reply.kind === 'refused' || reply.kind === 'outcomeUnknown' || reply.kind === 'activationPending')) {
-    throw new Error(lines(`${what}没有完成：${message}`, reply.kind === 'outcomeUnknown' ? unknown : undefined));
+    throw new CommandError(reply.kind === 'outcomeUnknown' ? 'outcome-unknown' : 'refused', lines(`${what}没有完成：${message}`, reply.kind === 'outcomeUnknown' ? unknown : undefined));
   }
-  throw new Error(`${what}没有完成：daemon 回了意外的结果（${reply.kind}）。`);
+  throw new CommandError('failed', `${what}没有完成：daemon 回了意外的结果（${reply.kind}）。`);
 }
 
 export const NO_BOT = '还没有 Bot。运行 vonvon bot add 在终端里扫码注册，或者在网页里注册（vonvon open）。';
