@@ -81,7 +81,7 @@ const smartPrompt = z.object({
   /** the file to make or edit: the group's for a group, the bot's for the bot */
   path: z.string(),
   text: z.string(),
-  formatLines: z.object({ main: z.string(), mentioned: z.string(), topic: z.string() }),
+  formatLines: z.object({ main: z.string(), mentioned: z.string().optional(), topic: z.string() }),
   inputExample: z.string(),
   /** what else the backend's model sees */
   backendNote: z.string().optional(),

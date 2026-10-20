@@ -12,13 +12,13 @@ vi.mock('../src/config/paths', async () => {
   const appDir = mkdtempSync(join(tmpdir(), 'comment-settings-runtime-'));
   return { paths: { appDir, configFile: join(appDir, 'config.json'), sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), commentInstructionsFile: join(appDir, 'instructions.md'), commentsRootDir: join(appDir, 'comments'), projectsRootDir: join(appDir, 'projects') } };
 });
-const fixture = vi.hoisted(() => ({ backends: new Map<string, unknown>(), replies: 0 }));
+const fixture = vi.hoisted(() => ({ backends: new Map<string, unknown>(), replies: 0, posted: vi.fn<(reply: string) => void>() }));
 vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: (id = 'codex-appserver') => fixture.backends.get(id) }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, warn() {}, fail() {} }, withTrace: (_context: unknown, callback: () => unknown) => callback() }));
 vi.mock('../src/bot/comments', async original => ({
   ...await original<object>(),
   resolveComment: async () => ({ target: { fileType: 'docx', fileToken: 'fixture-doc' }, ctx: { question: 'fixture question', isWhole: true, targetReplyId: undefined } }),
-  postCommentReply: async () => { fixture.replies++; },
+  postCommentReply: async (_channel: unknown, _target: unknown, _event: unknown, reply: string) => { fixture.replies++; fixture.posted(reply); },
 }));
 function backend(id: string, ask?: { request: AskRequest; respond?: AgentRun['respondToAsk']; events?: () => AsyncIterable<AgentEvent>; turnId?: () => string | undefined }) {
   let next = 0;
@@ -139,5 +139,24 @@ it('s36d2: saving a comment model from the DM card leaves an inherited backend u
     expect((await loadConfig()).preferences?.comments).not.toHaveProperty('backend');
     await submit('claude-agent', 'one');
     await vi.waitFor(() => expect(cfg.preferences?.comments).toEqual({ backend: 'claude-agent', model: 'one', effort: 'high' }));
+  } finally { await orchestrator.shutdown(); }
+});
+
+it('redacts a split token in a cloud comment reply through the orchestrator', async () => {
+  const token = `vvs1_${'b'.repeat(43)}`;
+  backend('codex-appserver', {
+    request: { id: 'unused', kind: 'confirmation', title: '', detail: '', acceptedConsequence: '', declinedConsequence: '' },
+    events: () => (async function* (): AsyncGenerator<AgentEvent> {
+      yield { type: 'text_delta', itemId: 'answer', delta: `prefix ${token.slice(0, 19)}` };
+      yield { type: 'text_delta', itemId: 'answer', delta: `${token.slice(19)} suffix` };
+      yield { type: 'done', turnId: 'turn' };
+    })(),
+  });
+  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, comments: { backend: 'codex-appserver' } } };
+  const orchestrator = createOrchestrator({} as never, cfg, paths.appDir);
+  try {
+    await orchestrator.onComment({ fileType: 'docx', fileToken: 'redact-doc', commentId: 'redact-comment', replyId: 'one', mentionedBot: true, operator: { openId: 'ou_owner' } } as never);
+    expect(fixture.posted).toHaveBeenLastCalledWith('prefix [已隐藏的 vonvon 令牌] suffix');
+    expect(fixture.posted.mock.calls.at(-1)?.[0]).not.toContain(token);
   } finally { await orchestrator.shutdown(); }
 });

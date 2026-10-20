@@ -1,3 +1,4 @@
+import { throughBridgeChannel } from './helpers/lark-events';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -8,6 +9,8 @@ import type { CardActionEvent, NormalizedMessage } from '@larksuiteoapi/node-sdk
 import type { AgentEvent, AgentInput, AskRequest } from '../src/agent/types';
 
 const fake = vi.hoisted(() => ({
+  judge: vi.fn(async () => ({ decision: 'reply', reason: '答', ms: 0 })),
+  sessionMissing: false,
   dmConsole: vi.fn(async () => undefined),
   groupMode: 'single' as 'single' | 'multi' | 'smart',
   groupPolicy: undefined as 'steer' | 'queue' | undefined,
@@ -40,15 +43,16 @@ afterAll(async () => {
 });
 vi.mock('../src/bot/steer-delivery', async original => { const real = await original<typeof import('../src/bot/steer-delivery')>(); return { ...real, steerWithDeadline: (thread: any, input: any, id: string) => real.steerWithDeadline(thread, input, id, undefined, 150) }; });
 vi.mock('../src/card/managed', async original => ({ ...await original<object>(), sendManagedCard: fake.sendManaged, updateManagedCard: fake.updateManaged, isManaged: (id: string) => fake.managed.has(id) }));
+vi.mock('../src/judge/judge', async original => ({ ...await original<object>(), createJudge: () => ({ judge: fake.judge, shutdown: async () => {}, warm: () => {} }) }));
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown, fn: () => unknown) => fn() }));
 vi.mock('../src/agent', async (original) => ({ ...await original<object>(), createBackend: () => fake.backend }));
 vi.mock('../src/project/registry', async (original) => ({
   ...await original<object>(),
-  getProjectByChatId: async () => ({ name: 'test', chatId: 'chat', cwd: '/test', kind: fake.groupMode, ...(fake.groupPolicy ? { pendingPolicy: fake.groupPolicy } : {}), ...(fake.noMention !== undefined ? { noMention: fake.noMention } : {}) }),
+  getProjectByChatId: async () => ({ name: 'test', chatId: 'chat', cwd: '/test', kind: fake.groupMode === 'smart' ? 'single' : fake.groupMode, ...(fake.groupMode === 'smart' ? { smart: true } : {}), ...(fake.groupPolicy ? { pendingPolicy: fake.groupPolicy } : {}), ...(fake.noMention !== undefined ? { noMention: fake.noMention } : {}) }),
 }));
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),
-  getSession: async (key: string) => ({ threadId: key, chatId: 'chat', sessionId: 'host', backend: 'codex', cwd: '/test', summary: '', ...fake.record }),
+  getSession: async (key: string) => fake.sessionMissing ? undefined : ({ threadId: key, chatId: 'chat', sessionId: 'host', backend: 'codex', cwd: '/test', summary: '', ...fake.record }),
   // Only watermark writes (the function form) land; other patches stay no-ops.
   patchSession: async (_key: string, patch: unknown) => {
     if (typeof patch === 'function') Object.assign(fake.record, patch({ ...fake.record }));
@@ -146,6 +150,7 @@ function setup(policy: 'steer' | 'queue' = 'steer') {
 beforeEach(() => {
   vi.clearAllMocks();
   fake.groupMode = 'single';
+  fake.sessionMissing = false;
   fake.groupPolicy = undefined;
   fake.noMention = undefined;
   fake.managed.clear();
@@ -209,6 +214,19 @@ describe('typed ask messages at intake', () => {
     run.turns[0]!.resolve();
   });
 
+  it.each(['other', 'all'] as const)('keeps @%s out of typed answers but sends it to smart judgement', async target => {
+    fake.groupMode = 'smart';
+    const run = thread();
+    const o = await started(run);
+    await visible(run);
+    fake.judge.mockClear();
+    await throughBridgeChannel(message('用方案 B', { mentionedBot: false,
+      mentionAll: target === 'all', mentions: target === 'other' ? [{ key: '@_x', name: '小审', isBot: false, openId: 'ou_other' }] : [] }), o.onMessage);
+    await until(() => expect(fake.judge).toHaveBeenCalled());
+    expect(run.respond).not.toHaveBeenCalled();
+    run.turns[0]!.resolve();
+  });
+
   it('answers before a queued turn is added', async () => {
     fake.groupPolicy = 'queue';
     const run = thread(); const o = await started(run);
@@ -265,8 +283,9 @@ describe('typed ask messages at intake', () => {
     run.turns[0]!.resolve();
   });
 
-  it.each(['multi', 'smart'] as const)('binds an ask-first main-area goal to its new topic (%s)', async mode => {
+  it.each(['multi', 'smart'] as const)('routes an ask-first main-area goal answer to its resulting place (%s)', async mode => {
     fake.groupMode = mode;
+    if (mode === 'smart') fake.sessionMissing = true;
     // A real app-server transport, isolated executable and no account credentials.
     // Retain the fixture directory for inspection under the task's no-delete rule.
     const dir = execFileSync('mktemp', ['-d'], { encoding: 'utf8' }).trim();
@@ -308,14 +327,15 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
       return live;
     });
     const o = setup();
-    await o.onMessage(message('/goal finish the work', { threadId: undefined }));
+    const initial = message('/goal finish the work', { threadId: undefined });
+    await o.onMessage(initial);
     await vi.waitFor(() => expect(fake.reply).toHaveBeenCalled(), { timeout: 5000, interval: 10 });
-    await o.onMessage(message('use B', { threadId: 'new-topic' }));
+    await o.onMessage(message('use B', { threadId: mode === 'smart' ? undefined : 'new-topic' }));
     await until(() => expect(respond).toHaveBeenCalledWith(expect.any(String), { kind: 'answered', answer: { kind: 'text', text: 'use B' } }));
     await until(() => expect(readFileSync(join(dir, 'frames'), 'utf8')).toContain('"answers":["use B"]'));
     expect(fake.backend.startThread).toHaveBeenCalledTimes(1);
     expect(fake.backend.resumeThread).not.toHaveBeenCalled();
-    expect(fake.sendManaged.mock.calls[0]).toEqual(expect.arrayContaining(['card', true]));
+    expect(fake.sendManaged.mock.calls[0]?.slice(3)).toEqual([mode === 'smart' ? initial.messageId : 'card', mode !== 'smart']);
   }, 10_000);
 
   it.each([false, true])('settles an unresolved goal topic card even when its final update rejects (%s)', async rejectUpdate => {

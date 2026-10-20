@@ -21,7 +21,7 @@ function setup() {
 }
 
 const req = (model?: string): JudgeRequest => ({
-  variant: 'mentioned', appId: 'cli_a', botName: 'P',
+  variant: 'main', appId: 'cli_a', botName: 'P',
   group: { chatId: 'oc_g', name: 'g', backend: 'codex-appserver', ...(model ? { judge: { kind: 'llm', backend: 'codex-appserver', model } } : {}) },
   context: [], message: { at: 0, from: 'user', name: 'u', text: 't' },
 });
@@ -44,7 +44,7 @@ describe('judge cooldown (design 第 4 节)', () => {
     s.succeed();
     await vi.advanceTimersByTimeAsync(2 * 60_000);
     const cooled = await s.judge.judge(req());
-    expect(cooled).toMatchObject({ decision: 'main', error: { kind: 'quota', detail: '2 分钟前刚失败过，5 分钟内不再调' } });
+    expect(cooled).toMatchObject({ decision: 'skip', error: { kind: 'quota', detail: '2 分钟前刚失败过，5 分钟内不再调' } });
     // auth and quota cool the whole backend, whatever the model
     expect((await s.judge.judge(req('other'))).error?.kind).toBe('quota');
     expect(s.calls).toHaveBeenCalledTimes(1);
@@ -96,7 +96,7 @@ describe('judge cooldown (design 第 4 节)', () => {
     await vi.waitFor(() => expect(pending).toHaveLength(4));
     pending[0]!.reject(new JudgeCallError('quota', 'boom quota', true));
     expect((await running[0])!.error?.kind).toBe('quota');
-    expect(await queued).toMatchObject({ decision: 'main', error: { kind: 'quota', detail: '不到 1 分钟前刚失败过，5 分钟内不再调' } });
+    expect(await queued).toMatchObject({ decision: 'skip', error: { kind: 'quota', detail: '不到 1 分钟前刚失败过，5 分钟内不再调' } });
     expect(s.calls).toHaveBeenCalledTimes(4);
     for (const p of pending.slice(1)) p.resolve({ text: '{"decision":"main","reason":""}' });
     for (const r of running.slice(1)) expect((await r).error).toBeUndefined();

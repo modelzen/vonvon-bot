@@ -59,10 +59,12 @@ describe('Claude judge (design 3.3)', () => {
       cwd: '/data/judge', systemPrompt: 'SMART\n\n格式行', title: 'vonvon judge', model: 'haiku', tools: [], skills: [], mcpServers: {}, strictMcpConfig: true,
       persistSession: false, maxTurns: 1, settingSources: ['user'], thinking: { type: 'disabled' },
       outputFormat: { type: 'json_schema', schema: SCHEMA },
-      settings: { disableAllHooks: true, claudeMdExcludes: expect.arrayContaining(['**/.claude/CLAUDE.md']) },
+      settings: { autoMemoryEnabled: false, env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' }, disableAllHooks: true, claudeMdExcludes: expect.arrayContaining(['**/.claude/CLAUDE.md']) },
     });
     expect(options).not.toHaveProperty('effort');
-    expect(options?.env).toMatchObject({ ENABLE_CLAUDEAI_MCP_SERVERS: 'false' });
+    expect(options?.env).toMatchObject({ ENABLE_CLAUDEAI_MCP_SERVERS: 'false', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' });
+    expect(options?.settings).not.toHaveProperty('autoCompactEnabled');
+    expect(options?.settings).not.toHaveProperty('env.DISABLE_AUTO_COMPACT');
   });
 
   it('tokens come from modelUsage, every model of the query, thinking included; usage only without it', async () => {
@@ -83,7 +85,7 @@ describe('Claude judge (design 3.3)', () => {
   it.each([
     ['main', '```json\n{"decision":"skip","reason":"张三是@王五约时间，与小码无关，不需要插话"}\n```', 'skip'],
     ['topic', '{"decision":"reply","reason":"张三在问迁移期间缓存抖动的降级方案，属于小码可协助的技术问题，群里暂无人答。"}', 'reply'],
-    ['mentioned', '{"decision":"topic","reason":"点名要查线上500日志，需要排查和多轮来回，开新话题更合适"}', 'topic'],
+    ['main', '{"decision":"topic","anchor":"m0","reason":"点名要查线上500日志，需要排查和多轮来回，开新话题更合适"}', 'topic'],
   ] as const)('error_max_turns with a %s answer in text: the last text goes to parseVerdict', async (variant, text, decision) => {
     const { backend } = backendWith([assistantText('先想一下'), { type: 'user', message: { content: [] } } as unknown as SDKMessage, assistantText(text), maxTurns]);
     const out = await backend.judge!(call());
