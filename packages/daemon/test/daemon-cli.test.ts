@@ -182,7 +182,7 @@ it('keeps generated secret getters on their captured root outside the parent she
   let output = ''; getter.stdout.on('data', data => { output += String(data); });
   getter.stdin.end(JSON.stringify({ ids: ['fixture'] }));
   expect(await new Promise<number | null>(resolve => getter.once('close', resolve))).toBe(0);
-  expect(JSON.parse(output)).toEqual({ values: { fixture: 'dummy-only' }, errors: {} });
+  expect(JSON.parse(output)).toEqual({ protocolVersion: 1, values: { fixture: 'dummy-only' }, errors: {} });
   expect(await readdir(outside.root)).toEqual([]);
 });
 

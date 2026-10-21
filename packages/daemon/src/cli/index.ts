@@ -22,6 +22,9 @@ program.hook('preAction', async (_command, action) => {
   // bot, group and settings only talk RPC to a running daemon, so they never create the data root or take a lease;
   // bot repair-dir writes bots.json itself, under the daemon's own lock, and takes one.
   const parent = action.parent?.name();
+  // The exec provider runs in sandboxes that refuse admission sockets and data-root writes.
+  // Like daemon getSecret, it only reads the atomically published keystore and takes no lease.
+  if (parent === 'secrets' && action.name() === 'get') return;
   if (parent === 'service' || (parent === 'bot' && action.name() !== 'repair-dir') || parent === 'group' || parent === 'settings' || parent === 'feishu' || action.name() === '__daemon-control') return;
   // in a Bot's session secrets list, set and remove only refuse (s23g): before the lease, whose socket a sandbox may forbid, and the data root
   if (parent === 'secrets' && action.name() !== 'get' && inBotSession(process.env)) return;

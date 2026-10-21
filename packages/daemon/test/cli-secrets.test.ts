@@ -1,9 +1,12 @@
+import { basename } from 'node:path';
+import { KEYSTORE_READ_FILES } from '../src/config/keystore';
+import { paths } from '../src/config/paths';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { RpcError, type VonvonClient } from '@vonvon/client';
 import type { AdminReply, AdminRequest, SecretService } from '@vonvon/protocol';
 import { withDaemon } from '../src/cli/daemon-client';
-import { runSecretsList, runSecretsRemove, runSecretsSet, secretValues, type SecretsContext } from '../src/cli/commands/secrets';
+import { runSecretsList, runSecretsRemove, runSecretsSet, parseExecRequest, secretValues, secretsGet, type SecretsContext } from '../src/cli/commands/secrets';
 import { InputCancelled, readHidden } from '../src/core/terminal-input';
 
 const KEY = 'ts_TESTKEY0000';
@@ -135,9 +138,58 @@ describe('vonvon secrets (s23g)', () => {
     }
     const read = vi.fn(async (id: string) => (id === 'app-cli_a' ? 'app-secret' : KEY));
     expect(await secretValues(['app-cli_a', 'typesafe-api-key'], read)).toEqual({
-      values: { 'app-cli_a': 'app-secret' }, errors: { 'typesafe-api-key': { message: 'not handed out: only the daemon reads this key' } },
+      protocolVersion: 1, values: { 'app-cli_a': 'app-secret' }, errors: { 'typesafe-api-key': { message: 'not handed out: only the daemon reads this key' } },
     });
     expect(read).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('exec provider protocol (s31b0)', () => {
+  it.each([
+    ['nope', { ids: [], problem: 'invalid request JSON' }],
+    ['null', { ids: [], problem: 'invalid request JSON' }],
+    ['[]', { ids: [], problem: 'invalid request JSON' }],
+    ['"x"', { ids: [], problem: 'invalid request JSON' }],
+    ['{"ids":"a"}', { ids: [], problem: 'invalid request: ids must be an array of strings' }],
+    ['{"ids":["a",1]}', { ids: [], problem: 'invalid request: ids must be an array of strings' }],
+    ['{"protocolVersion":2,"ids":["a","a"]}', { ids: ['a'], problem: 'unsupported protocolVersion: only 1' }],
+    ['{}', { ids: [] }],
+    ['{"protocolVersion":2}', { ids: [], problem: 'unsupported protocolVersion: only 1' }],
+    ['{"protocolVersion":2,"ids":false}', { ids: [], problem: 'invalid request: ids must be an array of strings' }],
+    ['{"protocolVersion":1,"ids":["a"]}', { ids: ['a'] }],
+    ['{"ids":["a","b","a"]}', { ids: ['a', 'b'] }],
+  ])('parses %s', (input, expected) => {
+    expect(parseExecRequest(input)).toEqual(expected);
+  });
+
+  it.each(['__proto__', 'constructor', 'toString'])('keeps %s as an own property without changing prototypes', async id => {
+    const reply = await secretValues([id], async () => undefined);
+    expect(Object.hasOwn(reply.errors, id)).toBe(true);
+    expect(JSON.stringify(reply)).toContain(`${JSON.stringify(id)}:{"message":"not found"}`);
+    expect(Object.getPrototypeOf(reply)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(reply.errors)).toBe(Object.prototype);
+    const found = await secretValues([id], async () => 'fake');
+    expect(Object.hasOwn(found.values, id)).toBe(true);
+    expect(Object.getPrototypeOf(found.values)).toBe(Object.prototype);
+  });
+
+  it.each([
+    [async () => { throw new Error('/private/path'); }, 'secrets get 出错了（UNKNOWN）'],
+    [async () => 'nope', 'invalid request JSON'],
+  ])('writes exactly one v1 error line', async (input, message) => {
+    const write = vi.fn();
+    await expect(secretsGet({ input, write })).resolves.toBeUndefined();
+    expect(write.mock.calls).toEqual([[`${JSON.stringify({ protocolVersion: 1, values: {}, errors: { _: { message } } })}\n`]]);
+  });
+
+  it('describes keystore failures without disclosing their original message', async () => {
+    expect(await secretValues(['a'], async () => { throw Object.assign(new Error('/private/path'), { code: 'EACCES' }); })).toEqual({
+      protocolVersion: 1, values: {}, errors: { a: { message: '没有权限读写密钥库的文件（EACCES）' } },
+    });
+  });
+
+  it('exports the read files in the same order as the configured paths', () => {
+    expect(KEYSTORE_READ_FILES).toEqual([basename(paths.secretsFile), basename(paths.masterKeyFile)]);
   });
 });
 
