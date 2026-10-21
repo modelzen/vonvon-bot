@@ -8,6 +8,18 @@ import { createOrchestrator } from '../src/bot/handle-message';
 
 // s15f: `/resume` leaves off, and refuses, a native session another place of the group holds.
 // Real orchestrator and session store on a temp dir; faked backend, Feishu and cards.
+
+// Keep the execution workspace physically separate from daemon data.
+const workspace = await vi.hoisted(async () => {
+  const { mkdtempSync, realpathSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  return realpathSync(mkdtempSync(join(tmpdir(), 'resume-in-use-workspace-')));
+});
+afterAll(async () => {
+  const { rm } = await import('node:fs/promises');
+  await rm(workspace, { recursive: true, force: true });
+});
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
   const appDir = mkdtempSync(join(tmpdir(), 'resume-in-use-'));
@@ -80,7 +92,7 @@ function backend() {
   return be;
 }
 const record = (threadId: string, sessionId: string, more: Partial<SessionRecord> = {}): SessionRecord =>
-  ({ threadId, chatId: CHAT, cwd: paths.appDir, sessionId, backend: BE, summary: sessionId, createdAt: 1, updatedAt: 1, ...more });
+  ({ threadId, chatId: CHAT, cwd: workspace, sessionId, backend: BE, summary: sessionId, createdAt: 1, updatedAt: 1, ...more });
 const bound = async (sessionId: string) => (await listSessions()).filter((s) => s.sessionId === sessionId && !s.detached).map((s) => s.threadId);
 
 function message(content: string) {
@@ -108,7 +120,7 @@ async function settled(card: { id: string }) {
 beforeEach(async () => {
   await rm(paths.projectsFile, { force: true }); await rm(paths.sessionsFile, { force: true });
   fake.cards = []; fake.updates = []; send.mockClear(); fake.lookup = async () => undefined;
-  await addProject({ name: 'demo', chatId: CHAT, cwd: paths.appDir, kind: 'single', blank: false, origin: 'joined', createdAt: 1, backend: BE });
+  await addProject({ name: 'demo', chatId: CHAT, cwd: workspace, kind: 'single', blank: false, origin: 'joined', createdAt: 1, backend: BE });
   await upsertSession(record(CHAT, 'mine'));       // the main area
   await upsertSession(record('omt_a', 'held'));    // a topic of the group
 });

@@ -1,3 +1,7 @@
+import { realpath } from 'node:fs/promises';
+import type { SessionProfile } from '../agent/session-profile';
+import { admitDirectorySettings } from './directories';
+import { paths } from './paths';
 import { catalogById } from '../agent/catalog';
 import { DEFAULT_BACKEND_ID, type PermissionMode, type ReasoningEffort } from '../agent/types';
 import { effectiveMode, type Project } from '../project/registry';
@@ -137,4 +141,45 @@ export function resolveCommentsExecution(bot: AppPreferences | undefined): { bac
     ? { model: comments.model.trim(), effort: comments.effort, custom: false, source: 'comments' }
     : resolveModelPreference({ bot }, backend);
   return { backend, ...(model ? { model } : {}), source: own ? 'comments' : known(bot?.defaults?.backend) ? 'bot' : 'builtin' };
+}
+
+/** Add admitted execution roots without changing cwd, provider ownership or existing profile fields. */
+export async function executionSessionProfile({ execution, cwd, backend, scope, profile, dataDir = paths.appDir }: {
+  execution: Pick<ResolvedExecution, 'workspaces' | 'repositories' | 'permission'>;
+  cwd: string;
+  backend: string;
+  scope: 'group' | 'ungrouped';
+  profile?: SessionProfile;
+  dataDir?: string;
+}): Promise<SessionProfile | undefined> {
+  // s39c owns Claude delivery; do not turn its existing sessions into unsupported profiles.
+  if (backend !== DEFAULT_BACKEND_ID) return profile;
+  const [firstAdditional, ...otherAdditional] = execution.workspaces.additional;
+  if (scope === 'ungrouped' && firstAdditional === undefined && execution.repositories.length === 0) return profile;
+  const actualCwd = await realpath(cwd);
+  // Groups admit the real execution cwd, never a configured primary substituted for a
+  // stored session's cwd. Comments retain their existing bot-owned per-document cwd.
+  const workspaces = scope === 'group'
+    ? { primary: actualCwd, additional: execution.workspaces.additional.filter(path => path !== actualCwd) }
+    : firstAdditional === undefined ? undefined : { primary: firstAdditional, additional: otherAdditional };
+  const admitted = await admitDirectorySettings({ ...(workspaces ? { workspaces } : {}), repositories: execution.repositories }, { dataDir });
+  const roots = new Set([
+    ...(admitted?.workspaces ? [admitted.workspaces.primary, ...admitted.workspaces.additional] : []),
+    ...admitted?.repositories ?? [],
+  ]);
+  roots.delete(actualCwd);
+  if (roots.size === 0) return profile;
+  const access: 'read' | 'write' = execution.permission === 'qa' ? 'read' : 'write';
+  const guidance = '用某个仓库或附加工作区前，先阅读那里适用的 AGENTS.md 或 CLAUDE.md；附加根不保证原生加载其说明文件。';
+  const instructions = profile?.instructions ?? '';
+  return {
+    // The backend adds its fixed prefix once; preserve s38's assembled instructions/env.
+    instructions: roots.size && !instructions.includes(guidance)
+      ? [instructions, guidance].filter(Boolean).join('\n\n') : instructions,
+    env: profile?.env ?? {},
+    nativeSettings: { automaticMemory: false },
+    additionalRoots: [...profile?.additionalRoots ?? [], ...[...roots].map(path => ({ path, access }))],
+    capabilityPackages: profile?.capabilityPackages ?? [],
+    mcpServers: profile?.mcpServers ?? [],
+  };
 }

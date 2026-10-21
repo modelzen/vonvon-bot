@@ -36,7 +36,10 @@ process.stdin.on('data', (d) => {
       send({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId: 'th_eager', turn: { id: 't1' } } });
       continue;
     }
-    const result = msg.method === 'thread/start' ? { thread: { id: 'th_eager' } } : {};
+    const result = msg.method === 'thread/start' ? { thread: { id: 'th_eager' } ,
+      cwd: msg.params.cwd, runtimeWorkspaceRoots: msg.params.runtimeWorkspaceRoots,
+      approvalPolicy: msg.params.approvalPolicy, sandbox: { type: msg.params.sandbox === 'danger-full-access' ? 'dangerFullAccess' : undefined },
+    } : {};
     send({ jsonrpc: '2.0', id: msg.id, result });
   }
 });

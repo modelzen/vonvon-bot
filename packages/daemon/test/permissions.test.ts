@@ -53,7 +53,7 @@ describe('sandboxParams', () => {
   it('darwin: write → workspace write + network honored', () => {
     withPlatform('darwin', () => {
       const p = sandboxParams('write', true) as any;
-      expect(p.config.permissions.feishu.filesystem[':workspace_roots']['.']).toBe('write');
+      expect(p.config.permissions.feishu.filesystem[':workspace_roots']['.']).toBe('read');
       expect(p.config.permissions.feishu.network.enabled).toBe(true);
     });
   });

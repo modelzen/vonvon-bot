@@ -39,7 +39,10 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
   if (scenario==='ask-finish') setTimeout(()=>send({method:'serverRequest/resolved',params:{threadId:'child',requestId:'question'}}),5);
  }
  if (m.method==='turn/steer') done('child','child-turn');
- send({id:m.id,result:m.method==='thread/start'?{thread:{id:'host'}}:{}});
+ send({id:m.id,result:m.method==='thread/start'?{thread:{id:'host'},
+      cwd: m.params.cwd, runtimeWorkspaceRoots: m.params.runtimeWorkspaceRoots,
+      approvalPolicy: m.params.approvalPolicy, sandbox: { type: m.params.sandbox === 'danger-full-access' ? 'dangerFullAccess' : undefined },
+    }:{}});
 });
 `;
 const cleanup: Array<() => Promise<void>> = [];

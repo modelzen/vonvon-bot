@@ -23,7 +23,10 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     setTimeout(() => send({id:msg.id,error:{code:-32000,message:'rejected'}}), 20); return;
   }
   if (msg.method !== 'turn/start') {
-    send({id:msg.id,result:msg.method === 'thread/start' ? {thread:{id:'host'}} : {}});
+    send({id:msg.id,result:msg.method === 'thread/start' ? {thread:{id:'host'},
+      cwd: msg.params.cwd, runtimeWorkspaceRoots: msg.params.runtimeWorkspaceRoots,
+      approvalPolicy: msg.params.approvalPolicy, sandbox: { type: msg.params.sandbox === 'danger-full-access' ? 'dangerFullAccess' : undefined },
+    } : {}});
     return;
   }
   const id = 'turn-' + (++count);

@@ -1,7 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AgentEvent, AgentInput, TurnOptions } from '../src/agent/types';
 
+// Keep the execution workspace physically separate from daemon data.
+const workspace = await vi.hoisted(async () => {
+  const { mkdtempSync, realpathSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  return realpathSync(mkdtempSync(join(tmpdir(), 'single-session-model-display-workspace-')));
+});
+afterAll(async () => {
+  const { rm } = await import('node:fs/promises');
+  await rm(workspace, { recursive: true, force: true });
+});
 const fake = vi.hoisted(() => ({
   record: undefined as any,
   backend: { capabilities: { steer: true }, id: 'codex-appserver', listModels: vi.fn(async () => []), resumeThread: vi.fn(), startThread: vi.fn() },
@@ -14,7 +25,7 @@ vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown,
 vi.mock('../src/agent', async (original) => ({ ...await original<object>(), createBackend: () => fake.backend }));
 vi.mock('../src/project/registry', async (original) => ({
   ...await original<object>(),
-  getProjectByChatId: async () => ({ name: 'test', chatId: 'chat', cwd: '/test', kind: 'single', defaultModel: 'chosen-model', defaultEffort: 'xhigh' }),
+  getProjectByChatId: async () => ({ name: 'test', chatId: 'chat', cwd: workspace, kind: 'single', defaultModel: 'chosen-model', defaultEffort: 'xhigh' }),
 }));
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),
@@ -85,7 +96,7 @@ function setup(showModel: 'off' | 'running' | 'always' = 'always') {
   const channel = { send: fake.send, rawClient: { im: { v1: { messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
-  orchestrator = createOrchestrator(channel as never, cfg, '/test');
+  orchestrator = createOrchestrator(channel as never, cfg, workspace);
   return orchestrator;
 }
 beforeEach(() => {
@@ -131,7 +142,7 @@ describe('single-session model display', () => {
 
   it.each([false, true])('repairs missing metadata without replacing an existing selection (hasSelection=%s)', async (hasSelection) => {
     const selected = hasSelection ? { model: 'existing-model', effort: 'high' } : {};
-    fake.record = { threadId: 'chat', chatId: 'chat', sessionId: 'host', backend: 'codex-appserver', cwd: '/test', summary: '', ...selected };
+    fake.record = { threadId: 'chat', chatId: 'chat', sessionId: 'host', backend: 'codex-appserver', cwd: workspace, summary: '', ...selected };
     const run = thread();
     fake.backend.resumeThread.mockResolvedValue(run.t);
     const o = setup();

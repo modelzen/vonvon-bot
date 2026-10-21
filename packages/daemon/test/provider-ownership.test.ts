@@ -1,9 +1,20 @@
 import { ChildProcess } from 'node:child_process';
 import { PassThrough } from 'node:stream';
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AgentEvent, AgentInput } from '../src/agent/types';
 
+// Keep the execution workspace physically separate from daemon data.
+const workspace = await vi.hoisted(async () => {
+  const { mkdtempSync, realpathSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  return realpathSync(mkdtempSync(join(tmpdir(), 'provider-ownership-workspace-')));
+});
+afterAll(async () => {
+  const { rm } = await import('node:fs/promises');
+  await rm(workspace, { recursive: true, force: true });
+});
 const transport = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock('../src/platform/spawn', async original => ({ ...await original<object>(), spawnProcess: transport.spawn }));
 vi.mock('../src/agent/codex-appserver/locate', () => ({ resolveCodexBin: () => '/fixture/no-provider' }));
@@ -35,7 +46,7 @@ vi.mock('../src/project/registry', async (original) => ({
 }));
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),
-  getSession: async () => ({ threadId: 'topic', chatId: 'chat', sessionId: 'host', backend: 'codex', cwd: '/test', summary: '' }),
+  getSession: async () => ({ threadId: 'topic', chatId: 'chat', sessionId: 'host', backend: 'codex', cwd: workspace, summary: '' }),
   patchSession: async () => undefined,
   upsertSession: async () => undefined,
 }));
@@ -110,7 +121,7 @@ function setup(policy: 'steer' | 'queue' = 'steer') {
   const channel = { send: fake.send, rawClient: { im: { v1: { message: { get: async () => ({ data: { items: [{ thread_id: 'new-topic' }] } }) }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
-  orchestrator = createOrchestrator(channel as never, cfg, '/test');
+  orchestrator = createOrchestrator(channel as never, cfg, workspace);
   return orchestrator;
 }
 
@@ -155,16 +166,24 @@ function shell(pid: number | undefined = nextPid++): Shell {
   const stdout = new PassThrough();
   const stderr = new PassThrough();
   Object.defineProperties(child, { pid: { value: pid, configurable: true }, stdin: { value: stdin }, stdout: { value: stdout }, stderr: { value: stderr } });
-  const requests: { id: number; method: string }[] = [];
+  const requests: { id: number; method: string; params?: Record<string, unknown> }[] = [];
   const held = new Set<string>();
   let state: GroupState = 'present';
   let exited = false;
-  const respond = (request: { id: number; method: string }) => stdout.write(JSON.stringify({ id: request.id, result: request.method.startsWith('thread/') ? { thread: { id: 'host' } } : {} }) + '\n');
+  const respond = (request: typeof requests[number]) => {
+    const params = request.params;
+    const result = request.method.startsWith('thread/') ? {
+      thread: { id: 'host' }, cwd: params?.cwd,
+      runtimeWorkspaceRoots: params?.runtimeWorkspaceRoots, approvalPolicy: params?.approvalPolicy,
+      ...(params?.sandbox === 'danger-full-access' ? { sandbox: { type: 'dangerFullAccess' } } : {}),
+    } : {};
+    stdout.write(JSON.stringify({ id: request.id, result }) + '\n');
+  };
   stdin.on('data', data => {
     for (const line of String(data).trim().split('\n')) {
       const request: unknown = JSON.parse(line);
       if (!request || typeof request !== 'object' || !('id' in request) || typeof request.id !== 'number' || !('method' in request) || typeof request.method !== 'string') continue;
-      const rpc = { id: request.id, method: request.method };
+      const rpc = { id: request.id, method: request.method, params: 'params' in request ? request.params as Record<string, unknown> : undefined };
       requests.push(rpc);
       if (!held.has(rpc.method)) queueMicrotask(() => respond(rpc));
     }
@@ -194,7 +213,7 @@ beforeEach(async () => {
   nextPid = 987654321;
   endings.length = 0;
   transport.spawn.mockReset().mockImplementation(() => { throw new Error('Unexpected fixture spawn'); });
-  fake.project.mockReset().mockImplementation(async () => ({ name: 'test', chatId: 'chat', cwd: '/test', groupMode: 'single' }));
+  fake.project.mockReset().mockImplementation(async () => ({ name: 'test', chatId: 'chat', cwd: workspace, groupMode: 'single' }));
   fake.backend.resumeThread.mockReset();
   fake.backend.startThread.mockReset();
   fake.send.mockReset().mockResolvedValue({});
@@ -342,7 +361,7 @@ it('real AppServerClient close retains its exact Promise and forced-death failur
   const fixture = shell();
   transport.spawn.mockReturnValueOnce(fixture.child);
   const { AppServerClient } = await import('../src/agent/codex-appserver/app-server-client');
-  const client = new AppServerClient({ bin: '/fixture/no-provider', cwd: '/test' });
+  const client = new AppServerClient({ bin: '/fixture/no-provider', cwd: workspace });
   const connecting = client.connect();
   await vi.advanceTimersByTimeAsync(0);
   await connecting;
@@ -359,7 +378,7 @@ it('real AppServerClient close retains its exact Promise and forced-death failur
 
 it('connecting an already closed client rejects without spawning', async () => {
   const { AppServerClient } = await import('../src/agent/codex-appserver/app-server-client');
-  const client = new AppServerClient({ bin: '/fixture/no-provider', cwd: '/test' });
+  const client = new AppServerClient({ bin: '/fixture/no-provider', cwd: workspace });
   await client.close();
   const result = observe(client.connect());
   await vi.advanceTimersByTimeAsync(0);
@@ -441,7 +460,7 @@ it('real BridgeHandle shares shutdown and retains provider failure through trans
   run.t.close.mockImplementation(() => owner.close());
   fake.backend.resumeThread.mockResolvedValue(run.t);
   const { startBridge } = await import('../src/bot/bridge');
-  const bridge = await startBridge({ identity: { appId: cfg.accounts.app.id, tenant: cfg.accounts.app.tenant, createdAt: 1 }, cfg, appSecret: 'fixture', fallbackCwd: '/test' });
+  const bridge = await startBridge({ identity: { appId: cfg.accounts.app.id, tenant: cfg.accounts.app.tenant, createdAt: 1 }, cfg, appSecret: 'fixture', fallbackCwd: workspace });
   const registration = fake.channel.on.mock.calls.find(call => call[0] === 'message');
   if (!registration || typeof registration[1] !== 'function') throw new Error('Message handler absent');
   await registration[1](message('first'));
@@ -478,7 +497,7 @@ it('real orchestrator shutdown awaits an accepted message continuation before it
   const closing = observe(shutdown);
   await vi.advanceTimersByTimeAsync(0);
   expect.soft(closing.status).toBe('pending');
-  project.resolve({ name: 'test', chatId: 'chat', cwd: '/test', groupMode: 'single' });
+  project.resolve({ name: 'test', chatId: 'chat', cwd: workspace, groupMode: 'single' });
   await vi.advanceTimersByTimeAsync(0);
   expect.soft(fake.send).toHaveBeenCalledOnce();
   expect.soft(closing.status).toBe('pending');
@@ -505,7 +524,7 @@ it.each(['clean', 'failed'] as const)('startup failure waits for the accepted ru
     throw startupError;
   });
   const { startBridge } = await import('../src/bot/bridge');
-  const startup = startBridge({ identity: { appId: cfg.accounts.app.id, tenant: cfg.accounts.app.tenant, createdAt: 1 }, cfg, appSecret: 'fixture', fallbackCwd: '/test' });
+  const startup = startBridge({ identity: { appId: cfg.accounts.app.id, tenant: cfg.accounts.app.tenant, createdAt: 1 }, cfg, appSecret: 'fixture', fallbackCwd: workspace });
   const starting = observe(startup);
   await vi.advanceTimersByTimeAsync(0);
   await run.started.promise;
@@ -572,7 +591,7 @@ it('actual backend thread close and resident warm client remain pending past gra
   transport.spawn.mockReturnValueOnce(warm.child).mockReturnValueOnce(session.child);
   const { CodexAppServerBackend } = await import('../src/agent/codex-appserver/backend');
   const pool = await import('../src/agent/codex-appserver/client-pool');
-  const pendingThread = new CodexAppServerBackend().resumeThread({ cwd: '/test', sessionId: 'host' });
+  const pendingThread = new CodexAppServerBackend().resumeThread({ cwd: workspace, sessionId: 'host' });
   await vi.advanceTimersByTimeAsync(0);
   const actualThread = await pendingThread;
   const threadResult = observe(actualThread.close());

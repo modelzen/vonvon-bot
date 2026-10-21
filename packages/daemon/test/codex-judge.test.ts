@@ -104,7 +104,10 @@ function respond(msg) {
     if (mode === 'stuck-start') return;
     if (mode === 'bad-start') return reply(msg.id, { thread: {} });
     const id = 'th' + (++threads) + '_' + process.pid;
-    return later(mode.startsWith('slow-start=') ? msOf(mode) : 0, () => reply(msg.id, { thread: { id, ephemeral: true } }));
+    return later(mode.startsWith('slow-start=') ? msOf(mode) : 0, () => reply(msg.id, { thread: { id, ephemeral: true },
+      cwd: p.cwd, runtimeWorkspaceRoots: p.runtimeWorkspaceRoots, approvalPolicy: p.approvalPolicy,
+      sandbox: { type: p.sandbox === 'read-only' ? 'readOnly' : p.sandbox === 'danger-full-access' ? 'dangerFullAccess' : undefined, networkAccess: false },
+    }));
   }
   if (m === 'turn/start') {
     const text = p.input[0].text;
@@ -670,6 +673,8 @@ describe('Codex 首启闸（R3-1）', () => {
     const release = fake.hold('initialize');
     const backend = new CodexAppServerBackend();
     const session = backend.startThread({ cwd: fake.cwd });
+    // Admission is asynchronous; establish that the session owns the first-start gate.
+    await waitForProcess(() => expect(fake.requests('initialize')[0]?.params.clientInfo?.name).toBe('feishu-codex-bridge'));
     const judged = judge(call());
     void session.catch(() => undefined);
     void judged.catch(() => undefined);
@@ -694,6 +699,8 @@ describe('Codex 首启闸（R3-1）', () => {
     const release = fake.hold('initialize');
     const session = new CodexAppServerBackend().startThread({ cwd: fake.cwd });
     void session.catch(() => undefined);
+    // Observe the session holding initialize before starting the competing judge.
+    await waitForProcess(() => expect(fake.requests('initialize')[0]?.params.clientInfo?.name).toBe('feishu-codex-bridge'));
     let settled = false;
     const judged = judge(call());
     void judged.then(() => { settled = true; }, () => { settled = true; });

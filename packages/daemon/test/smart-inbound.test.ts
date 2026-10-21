@@ -20,6 +20,17 @@ import { localDay } from '../src/judge/usage';
 import type { JudgeRequest, JudgeResult } from '../src/judge/types';
 import { throughBridgeChannel, receive, type EventMessage, type ReceiveOpts } from './helpers/lark-events';
 
+// Keep the execution workspace physically separate from daemon data.
+const workspace = await vi.hoisted(async () => {
+  const { mkdtempSync, realpathSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  return realpathSync(mkdtempSync(join(tmpdir(), 'smart-inbound-workspace-')));
+});
+afterAll(async () => {
+  const { rm } = await import('node:fs/promises');
+  await rm(workspace, { recursive: true, force: true });
+});
 vi.mock('../src/config/paths', () => {
   const appDir = mkdtempSync(join(tmpdir(), 'smart-inbound-'));
   return { paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json'), commentsRootDir: join(appDir, 'comments'), botsFile: join(appDir, 'bots.json') } };
@@ -118,7 +129,7 @@ import * as sessionStore from '../src/bot/session-store';
 const BOT = { openId: 'ou_bot', name: '小码' };
 const APP = 'cli_fixture';
 const CHAT = 'oc_demo';
-const base = { name: 'demo', chatId: CHAT, cwd: '/tmp/demo', kind: 'single', smart: true, mode: 'full', network: false };
+const base = { name: 'demo', chatId: CHAT, cwd: workspace, kind: 'single', smart: true, mode: 'full', network: false };
 const cfg: AppConfig & { preferences: NonNullable<AppConfig["preferences"]> } = { accounts: { app: { id: APP, secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, completionReminder: { mode: 'manual' } } };
 const channel = {
   send: fake.send, botIdentity: BOT,
@@ -207,7 +218,7 @@ beforeEach(() => {
     return answer.promise;
   });
   setDiagnosticsSink((event) => events.push(event));
-  orchestrator = createOrchestrator(channel as never, cfg, '/tmp/demo', undefined, { attention: new FocusEverywhere() });
+  orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, { attention: new FocusEverywhere() });
 });
 afterEach(async () => { setDiagnosticsSink(undefined); await orchestrator.shutdown(); });
 
@@ -253,7 +264,7 @@ describe('smart mode intake (s25)', () => {
     await orchestrator.shutdown();
     const entries = createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true });
     const issue = vi.spyOn(entries, 'issue'), open = vi.spyOn(entries, 'openTurn'), checked = vi.fn();
-    orchestrator = createOrchestrator(channel as never, cfg, '/tmp/demo', undefined, { attention: new FocusEverywhere(), entries });
+    orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, { attention: new FocusEverywhere(), entries });
     fake.events = async function* () {
       const grant = issue.mock.results[0]!.value;
       await expect(grant.call('session_info', {})).resolves.toMatchObject({ ok: true, result: { turn: 'other' } });
@@ -410,7 +421,7 @@ describe('smart mode intake (s25)', () => {
 
   it('at shutdown keeps the named messages still judged for an answer once back, not the unnamed ones (M7)', async () => {
     const file = join(paths.appDir, 'dropped.json');
-    const kept = createOrchestrator(channel as never, cfg, '/tmp/demo', undefined, { droppedFile: file, attention: new FocusEverywhere() });
+    const kept = createOrchestrator(channel as never, cfg, workspace, undefined, { droppedFile: file, attention: new FocusEverywhere() });
     const named = says('B 请回答', { at: true });
     const chatter = says('A 顺便说一句');
     await kept.onMessage(await receive(named, { bot: BOT }));
@@ -428,7 +439,7 @@ describe('smart mode intake (s25)', () => {
 
   it('keeps for an answer once back a named message whose intake crossed the shutdown, with no THINKING put on', async () => {
     const file = join(paths.appDir, 'dropped-crossed.json');
-    const kept = createOrchestrator(channel as never, cfg, '/tmp/demo', undefined, { droppedFile: file, attention: new FocusEverywhere() });
+    const kept = createOrchestrator(channel as never, cfg, workspace, undefined, { droppedFile: file, attention: new FocusEverywhere() });
     const disk = deferred<void>();
     fake.hold = disk.promise;
     const named = says('B 请回答', { at: true });
@@ -833,7 +844,7 @@ describe('bot wakes (s27a)', () => {
 
   it.each(['intake', 'lookup', 'judge', 'fill', 'land'])('shutdown during %s never persists a bot for resend or notes it', async stage => {
     await orchestrator.shutdown(); const file = join(paths.appDir, `wake-${stage}.json`);
-    orchestrator = createOrchestrator(channel as never, cfg, '/tmp/demo', undefined, { droppedFile: file, attention: new FocusEverywhere() });
+    orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, { droppedFile: file, attention: new FocusEverywhere() });
     const m = wake({ thread: 'omt_stop' }); const disk = deferred<void>();
     if (stage === 'intake') fake.hold = disk.promise;
     if (stage === 'lookup') { fake.get.mockReturnValue(new Promise(() => {})); fake.request.mockReturnValue(new Promise(() => {})); }
@@ -1129,7 +1140,7 @@ describe('bot wake fallbacks and queued turns (s27a)', () => {
     startThread.mockImplementationOnce(async () => ({ ...await create(), compact: async () => {
       entered.resolve(); await gate.promise; return {};
     } }));
-    const record = { threadId: key, chatId: CHAT, cwd: '/tmp/demo', sessionId: 'native-fixture',
+    const record = { threadId: key, chatId: CHAT, cwd: workspace, sessionId: 'native-fixture',
       backend: 'codex-appserver', summary: 'fixture', createdAt: 1, updatedAt: 1 };
     const list = vi.spyOn(sessionStore, 'listSessions').mockResolvedValue([record]);
     fake.sessions[key] = record;
@@ -1244,7 +1255,7 @@ describe('bot wake fallbacks and queued turns (s27a)', () => {
 
   it.each(['app', 'bot'] as const)('does not persist a bot waiting for the global run slot (raw %s)', async senderType => {
     await orchestrator.shutdown(); const file = join(paths.appDir, `wake-global-slot-${senderType}.json`);
-    orchestrator = createOrchestrator(channel as never, { ...cfg, preferences: { ...cfg.preferences, maxConcurrentRuns: 1 } }, '/tmp/demo', undefined, { droppedFile: file, attention: new FocusEverywhere() });
+    orchestrator = createOrchestrator(channel as never, { ...cfg, preferences: { ...cfg.preferences, maxConcurrentRuns: 1 } }, workspace, undefined, { droppedFile: file, attention: new FocusEverywhere() });
     const gate = deferred<void>(); fake.events = async function* () { await gate.promise; yield { type: 'done', turnId: 'turn-fixture' }; };
     await send(says('SLOT_OWNER', { at: true, thread: 'omt_slot_a' })); await answered();
     const m = says('BOT_WAITING', { at: true, thread: 'omt_slot_b' }); fake.list.mockResolvedValue(page([memento(m)]));
@@ -1287,7 +1298,7 @@ describe('judge usage wiring (s28b)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'smart-usage-'));
     const file = join(dir, 'judge-usage.json');
     try {
-      orchestrator = createOrchestrator(channel as never, cfg, '/tmp/demo', undefined, { ...(configured ? { judgeUsageFile: file } : {}), attention: new FocusEverywhere() });
+      orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, { ...(configured ? { judgeUsageFile: file } : {}), attention: new FocusEverywhere() });
       fake.judgeDeps?.onResult?.(request(), result('skip'), { sent: true });
       fake.judgeDeps?.onResult?.(request(), result('skip'), { sent: false });
       await orchestrator.shutdown();
@@ -1302,7 +1313,7 @@ describe('judge usage wiring (s28b)', () => {
     const file = join(dir, 'judge-usage.json');
     const pending = deferred<void>();
     fake.judgeShutdown.mockImplementation(() => pending.promise);
-    orchestrator = createOrchestrator(channel as never, cfg, '/tmp/demo', undefined, { judgeUsageFile: file, attention: new FocusEverywhere() });
+    orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, { judgeUsageFile: file, attention: new FocusEverywhere() });
     fake.judgeDeps?.onResult?.(request(), result('skip'), { sent: true });
     let done = false;
     const shutdown = orchestrator.shutdown().then(() => { done = true; });
@@ -1347,7 +1358,7 @@ describe('attention (s25g)', () => {
   }
   beforeEach(async () => {
     timers.clear(); await orchestrator.shutdown();
-    orchestrator = createOrchestrator(channel as never, cfg, '/tmp/demo', undefined, { time });
+    orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, { time });
   });
 
   it('publishes actual budget thresholds through diagnostics, expires them and removes its timer on shutdown', async () => {
@@ -1492,9 +1503,9 @@ describe('attention (s25g)', () => {
     expect(noted('judge-superseded')).toEqual([]);
   });
   it('54. restores only topics opened by this bot or having a session, once per place', async () => {
-    const reg = createTopicRegistry({ dir: mkdtempSync(join(paths.appDir, 'topics-')), sessions: async () => [{ threadId: 'omt_v', chatId: CHAT, cwd: '/tmp/demo', sessionId: 'past', backend: 'codex-appserver', summary: '', createdAt: 1, updatedAt: 1 }] });
+    const reg = createTopicRegistry({ dir: mkdtempSync(join(paths.appDir, 'topics-')), sessions: async () => [{ threadId: 'omt_v', chatId: CHAT, cwd: workspace, sessionId: 'past', backend: 'codex-appserver', summary: '', createdAt: 1, updatedAt: 1 }] });
     for (const topicId of ['omt_t', 'omt_u', 'omt_v']) await reg.note(CHAT, { topicId, at: clock, from: topicId === 'omt_t' ? { kind: 'self' } : { kind: 'user', openId: 'ou_owner' } });
-    await orchestrator.shutdown(); orchestrator = createOrchestrator(channel as never, cfg, '/tmp/demo', reg, { time });
+    await orchestrator.shutdown(); orchestrator = createOrchestrator(channel as never, cfg, workspace, reg, { time });
     const a = says('RECOVER_MINE', { thread: 'omt_t' }); await send(a); await settle(); await judged(a);
     expect(logged('attention-recover')).toHaveLength(1); await decide(a, result('skip')); await settle();
     const b = says('RECOVER_AGAIN', { thread: 'omt_t' }); await send(b); await settle(); await judged(b);
@@ -1559,7 +1570,7 @@ describe('attention (s25g)', () => {
   });
   it('61. shuts down pending work without persisting it as dropped', async () => {
     const file = join(paths.appDir, `attention-dropped-${sequence}.json`);
-    await orchestrator.shutdown(); orchestrator = createOrchestrator(channel as never, cfg, '/tmp/demo', undefined, { time, droppedFile: file });
+    await orchestrator.shutdown(); orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, { time, droppedFile: file });
     const a = says('STOP_PENDING'); await send(a); expect(timers.size).toBe(1);
     await orchestrator.shutdown(); expect(timers.size).toBe(0); await advance(s(60)); expect(fake.judge).not.toHaveBeenCalled();
     expect(existsSync(file) ? readFileSync(file, 'utf8') : '').not.toContain(idOf(a));
@@ -2027,7 +2038,7 @@ describe('no rules at the smart entry (s25e)', () => {
       for (const name of ['小码助手', 'AI']) {
         await orchestrator.shutdown();
         const bot = { ...BOT, name };
-        orchestrator = createOrchestrator({ ...channel, botIdentity: bot } as never, cfg, '/tmp/demo', undefined, { attention: new FocusEverywhere() });
+        orchestrator = createOrchestrator({ ...channel, botIdentity: bot } as never, cfg, workspace, undefined, { attention: new FocusEverywhere() });
         fake.log.info.mockClear();
         const m = says(name === 'AI' ? 'AI 看下' : '小码 看下');
         await orchestrator.onMessage(await receive(m, { bot }));
@@ -2046,7 +2057,7 @@ describe('no rules at the smart entry (s25e)', () => {
   it('attaches weak-name evidence to the earlier batch line when its latest line has no name', async () => {
     await orchestrator.shutdown();
     const bot = { ...BOT, name: 'AI' };
-    orchestrator = createOrchestrator({ ...channel, botIdentity: bot } as never, cfg, '/tmp/demo', undefined, { attention: new FocusEverywhere() });
+    orchestrator = createOrchestrator({ ...channel, botIdentity: bot } as never, cfg, workspace, undefined, { attention: new FocusEverywhere() });
     const first = says('先看这里');
     await orchestrator.onMessage(await receive(first, { bot })); await judged(first);
     const earlier = says('AI 看看'), latest = says('还有这个');
@@ -2083,7 +2094,7 @@ describe('no rules at the smart entry (s25e)', () => {
     expect(fake.judge).not.toHaveBeenCalled(); expect(fake.send).not.toHaveBeenCalled();
     expect(logged('audience')).toContainEqual(expect.objectContaining({ by: 'command-needs-at' }));
     fake.bots = '1'; await orchestrator.shutdown();
-    orchestrator = createOrchestrator(channel as never, cfg, '/tmp/demo', undefined, { attention: new FocusEverywhere() });
+    orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, { attention: new FocusEverywhere() });
     await send(says('/help')); await settle();
     expect(fake.cardCreate).toHaveBeenCalledTimes(1);
     expect(fake.reply).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ msg_type: 'interactive' }) }));
@@ -2172,7 +2183,7 @@ describe('smart reminder runtime (s27b3)', () => {
       asked.set(req.ref!, { req, answer });
       return answer.promise;
     });
-    vi.spyOn(sessionStore, 'listSessions').mockResolvedValue(['omt_snapshot', 'omt_stale', 'omt_goal_reminder', 'omt_slot_a', 'omt_slot_b', 'omt_denied'].map(threadId => ({ threadId, chatId: CHAT, cwd: '/tmp/demo', sessionId: 'native-fixture', backend: 'codex-appserver', summary: 'test', createdAt: 0, updatedAt: 0 })));
+    vi.spyOn(sessionStore, 'listSessions').mockResolvedValue(['omt_snapshot', 'omt_stale', 'omt_goal_reminder', 'omt_slot_a', 'omt_slot_b', 'omt_denied'].map(threadId => ({ threadId, chatId: CHAT, cwd: workspace, sessionId: 'native-fixture', backend: 'codex-appserver', summary: 'test', createdAt: 0, updatedAt: 0 })));
   });
   afterEach(() => vi.mocked(sessionStore.listSessions).mockRestore());
   const landed = async () => { await vi.waitFor(() => expect(fake.log.info.mock.calls.some(c => c[1] === 'final')).toBe(true)); await settle(); };
@@ -2180,7 +2191,7 @@ describe('smart reminder runtime (s27b3)', () => {
 
   it('a smart human waiting for a global slot has no card or management reminder controls', async () => {
     await orchestrator.shutdown();
-    orchestrator = createOrchestrator(channel as never, { ...cfg, preferences: { ...cfg.preferences, maxConcurrentRuns: 1 } }, '/tmp/demo');
+    orchestrator = createOrchestrator(channel as never, { ...cfg, preferences: { ...cfg.preferences, maxConcurrentRuns: 1 } }, workspace);
     const gate = deferred<void>();
     fake.events = async function* () { await gate.promise; yield { type: 'done', turnId: 'turn-fixture' }; };
     try {

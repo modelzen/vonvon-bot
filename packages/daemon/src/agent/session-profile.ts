@@ -14,19 +14,19 @@ export interface SessionProfile {
 
 export interface SessionProfileCapabilities {
   instructions: { channel: 'developer' | 'system-append'; replaceOnResume: false };
-  additionalRoots: false;
+  additionalRoots: boolean;
   /** Per-path overrides beyond cwd's existing permission tier. */
-  directoryAccess: false;
+  directoryAccess: boolean;
   capabilityPackages: false;
   /** Explicit profile delivery, distinct from native inherited MCP settings. */
   mcpServers: false;
   env: true;
   disableNativeMemory: true;
-  reapplyOnResume: readonly ('env' | 'nativeSettings' | 'workspaceTrust')[];
+  reapplyOnResume: readonly ('env' | 'nativeSettings' | 'workspaceTrust' | 'additionalRoots' | 'directoryAccess')[];
 }
 
-export function resolveSessionProfile(input?: SessionProfile): SessionProfile {
-  if (input?.additionalRoots.length || input?.capabilityPackages.length || input?.mcpServers.length) {
+export function resolveSessionProfile(input?: SessionProfile, capabilities?: { additionalRoots: boolean }): SessionProfile {
+  if ((!capabilities?.additionalRoots && input?.additionalRoots.length) || input?.capabilityPackages.length || input?.mcpServers.length) {
     throw new Error('额外根、能力包和 MCP profile 交付尚未支持（s39）');
   }
   return {
@@ -35,7 +35,7 @@ export function resolveSessionProfile(input?: SessionProfile): SessionProfile {
       : BRIDGE_DEVELOPER_INSTRUCTIONS,
     env: { [SESSION_ENV]: '1', ...input?.env },
     nativeSettings: { automaticMemory: false },
-    additionalRoots: [],
+    additionalRoots: input?.additionalRoots ?? [],
     capabilityPackages: [],
     mcpServers: [],
   };
