@@ -114,6 +114,9 @@ function requirePrivateDirectory(path: string, kind = 'admission'): void {
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new DataAccessError(`Invalid ${kind} directory ${path}.`);
 }
 
+/** Whether another vonvon command holds a data lease. secrets get never does: sandboxed readers cannot use
+ * admission sockets or writes and read the keystore lock-free. Moving or deleting the data root, or replacing
+ * master.key, must exclude keystore readers by another protocol rather than relying on this check. */
 export function assertNoDataLeases(home: string): void {
   const dir = leaseDirectory(home);
   let files: string[];
@@ -135,6 +138,7 @@ export function assertNoDataLeases(home: string): void {
   }
 }
 
+/** Held for the lifetime of CLI commands not let through by cli/index.ts; secrets get is let through. */
 export async function enterDataAccess(home: string): Promise<DataLease> {
   const mutex = await acquireMutex(home, 'admission');
   try {
