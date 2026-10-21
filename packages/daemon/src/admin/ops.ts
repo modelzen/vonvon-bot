@@ -83,17 +83,17 @@ export type AdminPreferencesWriteOutcome =
  * snapshot has reached disk. A failed write leaves LIVE untouched and does not
  * poison later writes in the queue.
  */
-export type AppPreferencesWriter = (mutate: (preferences: AppPreferences) => void | Promise<void>) => Promise<AppPreferences>;
+export type AppPreferencesWriter = (mutate: (preferences: AppPreferences) => void | Promise<void>, options?: { beforeCommit?: () => void }) => Promise<AppPreferences>;
 
 export function createAppPreferencesWriter(opts: {
   cfg: AppConfig;
   /** Test injection; production defaults to the atomic config writer. */
-  persistConfig?: (cfg: AppConfig) => Promise<void>;
+  persistConfig?: (cfg: AppConfig, beforeCommit?: () => void) => Promise<void>;
 }): AppPreferencesWriter {
   let chain: Promise<unknown> = Promise.resolve();
-  const persist = opts.persistConfig ?? ((next: AppConfig) => saveConfig(next, undefined, opts.cfg));
+  const persist = opts.persistConfig ?? ((next: AppConfig, beforeCommit?: () => void) => saveConfig(next, undefined, opts.cfg, beforeCommit));
 
-  return (mutate) => {
+  return (mutate, options) => {
     const run = chain.then(async () => {
       if (!opts.persistConfig) {
         const disk = await loadConfig();
@@ -101,7 +101,7 @@ export function createAppPreferencesWriter(opts: {
       }
       const preferences = structuredClone(opts.cfg.preferences ?? {});
       await mutate(preferences);
-      await persist({ ...opts.cfg, preferences });
+      await persist({ ...opts.cfg, preferences }, options?.beforeCommit);
       opts.cfg.preferences = preferences;
       return preferences;
     });
@@ -314,7 +314,7 @@ export async function performSetCompletionReminder(opts: {
   /** Omit for a mode-only update; the writer merges the latest queued threshold. */
   longTaskMinutes?: number;
   /** 测试注入；生产缺省走 config/store 的原子 saveConfig。 */
-  persistConfig?: (cfg: AppConfig) => Promise<void>;
+  persistConfig?: (cfg: AppConfig, beforeCommit?: () => void) => Promise<void>;
   /** 与其它 DM/Web preferences 写共享的串行 writer。 */
   writePreferences?: AppPreferencesWriter;
 }): Promise<AdminPreferencesWriteOutcome> {
@@ -356,7 +356,7 @@ export interface AdminWriteExecutorDeps {
   /** LIVE bot config；setCompletionReminder 需要它来热更新运行态。 */
   cfg?: AppConfig;
   /** 测试注入；生产缺省由 performSetCompletionReminder 调 saveConfig。 */
-  persistConfig?: (cfg: AppConfig) => Promise<void>;
+  persistConfig?: (cfg: AppConfig, beforeCommit?: () => void) => Promise<void>;
   /** 与 DM 设置共用，避免 Web/DM 并发读改写丢字段。 */
   writePreferences?: AppPreferencesWriter;
 }

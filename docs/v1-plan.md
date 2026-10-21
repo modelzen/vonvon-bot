@@ -310,12 +310,12 @@ Codex 先用隔离的 HOME 和 bridge 数据副本走完整个导入，包括故
 
 ### M11 公开发布准备（s65、s66、s67）
 
-**给 owner 什么：**（第 8 节）能出签名并公证过的 universal dmg，Intel Mac 也能装；应用里能检查更新并装上新版。npm 包和桌面包的许可证改成闭源（UNLICENSED）。在一台没有 bridge 的 Mac 上，从零安装、扫码、开权限，第一次对话走通，这是第 8 节第 5 条的 Mac 一半。s66 只在要不到 Anthropic 的书面确认时做。
+**给 owner 什么：**（第 8 节）能在本地出已有 Developer ID 签名的 universal dmg，Intel Mac 也能装；hardened runtime 和 entitlements 明确配置，签名以 `codesign --verify --deep --strict` 验证。公证以后由 owner 定，不是本次 s65 前置。应用里检查更新并装上新版的完整承诺保留，s65 先生成本地清单和 feed，公开地址发布前填。npm 包和桌面包的许可证改成闭源（UNLICENSED）。在一台没有 bridge 的 Mac 上，从零安装、扫码、开权限，第一次对话走通，这是第 8 节第 5 条的 Mac 一半。s66：owner 2026-10-20 定不做，owner 去向 Anthropic 要确认。
 
 **怎么验收：** owner 要做的：第 1 步里新开一个干净的 macOS 用户装 dmg，第 2 步（从零扫码走清单，到第一次对话）。其余步骤 Codex 在 M11 的预览版任务里先做完，结果写在通知里。
 
-product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前办好。开始前还没定的，Claude 用【需要你决定】一次问齐。然后：
-1. Codex 先查：从下载地址下载 dmg，用 `spctl --assess --type open --context context:primary-signature` 查 dmg、`spctl --assess --type execute` 查里面的 app，再用 `xcrun stapler validate` 查两者，都通过。命令行下载的文件不带隔离标记，Gatekeeper 不会真的拦一次，所以放不放行只在 owner 这一半看。owner：在 Mac 上新开一个干净的 macOS 用户（没有 bridge），从下载地址装 dmg，Gatekeeper 直接放行。
+owner 2026-10-20 已定 s65 先做本地包，地址以后填，公证以后定，不再重复问这些决定。发布前其余准备按本文第 8 节检查。然后：
+1. s65 本地先查：app 用 `codesign --verify --deep --strict` 验签，dmg 独立验签；Apple Silicon 和已有 Rosetta 分别实际启动。此时不跑公证或 stapler，不宣称 Gatekeeper 放行。公开地址和公证以后准备好时，再从公开地址下载并做对应 `spctl`/`stapler` 验证；owner 在干净 macOS 用户中从公开地址安装的发布前验收保留，不能用本地无 quarantine 启动替代。
 2. owner：从零走一遍清单：扫码、开权限、事件订阅、发布、登录时启动，然后第一次对话走通。
 3. Codex 先查：装一个旧一点的版本，在"应用与启动"页检查更新，装上新版。装回新版后，`vonvon service status` 和装旧版之前一样，Codex 在回复里写明。
 
@@ -417,7 +417,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s07 留下的，给 s08：服务正在跑时 install 拒绝替换定义，桌面端换新版本后要先 `daemon stop` 再 `service install`，或者在 s08 给 install 加"替换运行中的服务"。开关读 `service status --json` 的 `state`，`disabled` 就是系统设置里关掉了。网页和桌面端的 machine RPC 里 install、uninstall 仍然拒绝，s08 接到 CLI。系统设置里显示成什么，s08 看要不要在 plist 里加 `AssociatedBundleIdentifiers`（会改定义格式，旧定义变成 `unrecognized`，install 会重写）。
 - s07 留下的，给 s17：`service status` 还不显示 launchd 的 `last exit code` 和 `last terminating signal`，崩溃记录做的时候一起加。s17 开工时拆给了 s17b，见 M4 的"s17 做法（行数）"。
 - s07 留下的，给 s20a：Linux 的 install 没处理 linger；没有用户 systemd（比如容器里）时 `service status` 显示查不到，install 报 `User manager unavailable`。s20a 已改，见 M4 的"s20a 做法（linger）"和"s20a 做法（没有用户 systemd）"。
-- s07a：放在第二条线上尽快做，因为 Linux 先行的验收要用它（本文第 1 节）。owner 2026-10-15 说："改配置也不一定非要网页端改。也可以 vonvon-bot 命令行改。我感觉命令行实现验收的快一些。你自行考虑。当然网页端的验收肯定也要的。"命令只调网页端已经在用的 RPC（快照、`listJoinedGroups`、`listPendingGroups`、`bindGroup`、各设置页的读和存，以及清单的 `admin setupStatus`、选文件夹的 `directory choose` 和群设置页的会话列表 `settings sessions`），走 `@vonvon/client` 的 `connectLocal` 和本机凭据，不改 daemon 的行为。本机凭据这条路和网页端同一级，给在终端里的主人用，不交给 agent，设置 skill 也不走它。s47 以后在同一套命令代码上另加 agent 那条路（从环境变量读地址和会话令牌，按 3.7 校验私聊和触发人）。`vonvon bot add`（终端扫码）仍在 s20a（s20a 已做）。行数和风险都是估的，开工时先量。
+- s07a：放在第二条线上尽快做，因为 Linux 先行的验收要用它（本文第 1 节）。owner 2026-10-15 说："改配置也不一定非要网页端改。也可以 vonvon-bot 命令行改。我感觉命令行实现验收的快一些。你自行考虑。当然网页端的验收肯定也要的。"命令只调网页端已经在用的 RPC（快照、`listJoinedGroups`、`listPendingGroups`、`bindGroup`、各设置页的读和存，以及清单的 `admin setupStatus`、选文件夹的 `directory choose` 和群设置页的会话列表 `settings sessions`），走 `@vonvon/client` 的 `connectLocal` 和本机凭据，不改 daemon 的行为。本机凭据这条路和网页端同一级，给在终端里的主人用，不交给 agent，设置 skill 也不走它。s07a 当时预留的环境变量地址/令牌方案已由 s46 取代：agent 走 bot 子进程工具登记表，Claude 不用令牌，Codex 专用令牌文件与路由留 s46b；s47 直接复用命令函数。`vonvon bot add`（终端扫码）仍在 s20a（s20a 已做）。行数和风险都是估的，开工时先量。
 - s07a 的做法：命令是 `vonvon bot list`、`bot status [bot]`（也可以写 `--bot`）、`group list`、`group joined`、`group pending`、`group bind <群 id> --folder <路径> [--name] [--tool codex|claude] [--conversation threads|shared]`、`settings get [节]` 和 `settings set <节.项=值…>`。`--bot` 填 bot 的 id 或名字；`settings` 用 `--group`（群 id 或项目名）或 `--session`（话题 id）选范围，都不填就是 bot 的设置。人看的输出和报错是中文，去掉飞书名字里的控制字符，`--json` 打一行 JSON，原样保留，出错退出 1。
 - s07a 的做法：这三组命令只走 RPC，不建数据目录，不拿数据租约，在 `D/cli/index.ts` 的钩子里和 `service` 一样跳过。daemon 没在跑就提示先 `vonvon daemon start`，不自动起：看状态不该把 bot 跑起来。
 - s07a 的做法：每次调用都有超时，本机 30 秒，要调飞书的（清单、查已加入的群、绑群）75 秒，比 supervisor 的 60 秒 IPC 超时长，daemon 自己的报错先到。绑群、存设置超时或断线时，提示可能已经完成和怎么查。存设置撞上别处的修改不自动重试。
@@ -425,7 +425,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s07a 的做法：只有一个 bot 时可以不填 `--bot`，多个时必须填；名字重了（s01 预填的都叫 Vonvon Bot）要填 id。不用 `bots.json` 里旧的"当前 bot"。
 - s07a 的做法：`group bind` 的项目名先用 `--name`，没给就用待绑定记录里的群名，再没有就翻已加入的群（最多 20 页、1000 个群）。文件夹在命令行这边展开 `~`、转成绝对路径、查存在，daemon 照旧要求在主目录里。
 - s07a 的做法：Linux 上用 Codex 绑完群，多打一行提示运行 `vonvon settings set --group <群 id> permission.mode=full`。只提示，不自动改，默认档留给 s20a、s20b。
-- s07a 留下的，给 s47：agent 那条路在 `D/cli/daemon-client.ts` 里加第二种连接（从环境变量读地址和令牌），传给 `withDaemon`，命令函数照用。
+- s07a 留下的历史方案：在 `D/cli/daemon-client.ts` 加环境变量地址/令牌连接。s46 已明确不采用；s47 由 CLI 和 bot 进程内工具直接共用结构化命令函数，不增加第二种终端凭据。
 - s07a 留下的：本机那一节（`codexBin`）和设置里走 `act` 的操作（管理员、群成员、评论提示词、语音）没进命令行，s47 或以后要用再加。2026-10-18 定了聊天里能改它们（product.md 3.7），管理员、群成员、评论提示词和语音由 s55 加进命令行。
 - s07a 留下的，给 s02b、s02c：`cliBridge`（咖啡一下）在人看的输出里不显示，`settings set` 拒绝改，`--json` 里还在，等 s02b、s02c 删掉。s02c1 已删，`--json` 里也没有了。
 - s07a 留下的：`D/cli/commands/doctor.ts` 也是没人调用的旧代码，随 s02c 或 s58 删。s02c1 已删。旧的 `commands/bot.ts`（直接读 `bots.json`）和 `checkbox.ts` 已在本片删掉。
@@ -440,7 +440,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s08 的做法：只有 macOS 能在界面里装卸。Linux 上清单这一步只读，写明终端命令，"应用与启动"页不显示开关，machine RPC 也拒绝装卸；linger 在 s20a 做。这样也避开了 systemd 的问题：服务里的 daemon 起的助手会跟着 unit 一起被停掉。
 - s08 的做法：app 从 App Translocation 的临时位置运行时，install 拒绝，提示先把 app 拖进"应用程序"再打开：不然装进去的定义下次就找不到 app。
 - s08 的做法：install 不加"替换运行中的服务"（没有 `--replace`）。定义要换时（app 挪过位置、换了版本），桌面端（s08b）先 `daemon stop` 再 `service install`，s07 审过的安装事务不动。
-- s08 留下的：版本号相同的两次构建分不出新旧，预览版要升补丁号，构建号以后再加；不拒绝从 `/Volumes` 运行；plist 里加不加 `AssociatedBundleIdentifiers`，等 s08b 的 Mac 检查看签名版显示什么再定；网页重连后回到默认页，记住当前页约 6 行，需要时再加。s47 加 agent 令牌时，不能让它们调 machine `service`。
+- s08 留下的：版本号相同的两次构建分不出新旧，预览版要升补丁号，构建号以后再加；不拒绝从 `/Volumes` 运行；plist 里加不加 `AssociatedBundleIdentifiers`，等 s08b 的 Mac 检查看签名版显示什么再定；网页重连后回到默认页，记住当前页约 6 行，需要时再加。s46b 加 agent 令牌路由时，不能让它们调 machine `service`。
 - s08b 的做法：app 挪走或换新版后，桌面端启动时在接 daemon 之前修服务。只在 macOS 上的打包版、不在 App Translocation 里时做，不看 `VONVON_DESKTOP_TEST_HOME`（Mac 检查要用它）。判断是一个纯函数 `planStartupRepair`，看三件事：服务定义属于桌面版（`ours`，安装方式 `desktop`）而它记的 Electron 或 CLI 入口已经不在了（挪过位置）；正在跑的 daemon 比 app 自带的旧；自己名下的定义是旧格式（`unrecognized` 里的普通文件；符号链接或目录 install 不替换，就不修，这个判断用 daemon 的 `isIrreplaceableDefinition`，桌面端不匹配英文原文）。服务定义属于桌面版、在跑的 daemon 比 app 旧时，先 `daemon stop`（等 60 秒），再 `service install --keep-running`（等 180 秒）；只是挪过位置或定义是旧格式时，先直接 install，install 回"服务自己的 daemon 挡着"（`replace-running`）才 `daemon stop` 再装一次，这样 install 一直被拒（比如系统设置里关了后台运行）时，不会每次打开 app 都把 bot 停一次。然后照常接 daemon；没有注册服务、只是 daemon 比 app 旧时，`daemon stop` 后照常起 app 自带的新版本。npm 装的服务和别的数据目录的服务都不动。挪过位置时停了 daemon 以后，launchd 里的任务没有 PID，install 能重写定义；原地换新版时定义的字节不变，install 回 `already-installed`，接下来的 `daemon start` 把新版本拉起来。两份 app 不会来回抢：只有记的路径没了，或者在跑的版本更旧，才修。同一个数据目录上 npm 起的旧版分离 daemon 也会被换成 app 自带的版本，这种情况少，接受。
 - s08b 的做法：修服务失败的原因留着。之后接 daemon 也失败时，致命错误框里写修服务的原因，不写"等待就绪超时"；接上了就弹一个不挡操作的提示"后台服务没能更新到这个位置的 Vonvon Bot：<原因>"。`daemon stop` 失败时不往下修，接回旧 daemon，提示"没能停下旧版本的 daemon：<原因>。先用着旧版本，稍后在「应用与启动」里重启 daemon。"
 - s08b 的做法：新旧只比版本号（`D/service/update.ts` 的 `isNewer`）。app 自带的版本读 `Resources/daemon/package.json`，不用 `app.getVersion()`，那是 stage 包的 0.1.0。只升不降：在跑的 daemon 比 app 新时不动。版本号相同的两次构建分不出新旧，所以每出一次预览版都要升补丁号。
@@ -495,7 +495,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s11 做法（领文件）：`fileClaimMode` 去掉了"只有发起人或管理员"，本群能用 bot 的人都能领；项目停用时谁也领不了。点的人用自己的权限档，和文件写出时的档取交集，所以访客领不到完全权限档写在工作区外面的文件；这时只回点的人一句，不在共享卡上标错。s15c 去掉访客档以后，点的人和发起人用同一档，交集这一步可以删。s15c：点的人用群现在的档；文件写出时的档那一步留着：群的档调低以后，旧卡上工作区外的文件领不到。
 - s11 留下的事：
   - s30 已按 3.8 接云文档评论：那里不发卡，收到提问立即回“无法回答”，由后端把确认/权限换成拒绝；不持有 `IdlePause`。
-  - 给 s60：bridge 里存着 `runIdleTimeoutSeconds: 120` 的用户，多半是点过当时的默认按钮。换算时要不要去掉这个值，由 s60 定。
+  - 给 s60（owner 定案）：bridge 旧 `runIdleTimeoutSeconds` 正好 120 时移除覆盖，使用新默认 10 分钟；其他显式值保留，0 即关闭，缺失用新默认。每 bot 的预览/结果必须提示“空闲超时：旧版的 120 秒是当时的默认值，改成现在的默认 10 分钟；要 120 秒请到设置里改回”。
   - ［重试］只重放这一轮最初的输入。运行中插话补进来的内容不在里面，只在会话历史里。
   - 进程中途死掉（"agent 进程异常退出"）不算网络失败，没有重试按钮。
   - 登录失效的提示仍然写 `codex login`，Claude 会话也是这句；运行卡不知道后端是哪个，留给 s19 诊断页一起改。s19 已改：运行卡按后端写 Codex 或 Claude 的登录办法。
@@ -1126,7 +1126,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [x] | s29 | 提问的事件和卡片 | 用 ask 事件换掉占位的 approval_request；三种卡一个版面，写清后果；空提交提示"至少选一项"（3.8"卡片"） | 640 | — | 并发、错误路径 | 无（渲染在 s31 的 Mac 检查里看） |
 | [x] | s30 | 卡片的发送、谁能点、等待和超时 | 同一条会话同时一张卡；单独发一条并 @ 能回答的人；daemon 按点击人判断谁能点；15 分钟超时；等卡时看门狗暂停；普通回合、`/goal`、云文档评论三处都接上（3.8） | 900 | s29、s11、e09 | 并发、关闭清理、错误路径 | 无（真实卡片在 s31 一起看） |
 | [x] | s31 | Claude 的权限档换算，提问接上 | 只读用 default、读写用 acceptEdits、完全访问照旧，所有会话带 allowDangerouslySkipPermissions；加 canUseTool：AskUserQuestion 出选项卡，ExitPlanMode 出确认卡，越权拒绝并说明，完全访问下 Claude 自己要问的出权限卡；关网靠回调拒 SandboxNetworkAccess，开网 WebFetch、WebSearch 能用；写文件按真实路径过档的边界（PreToolUse 钩子加回调）（3.8 换算表）。配置文件挡写、限读、会话标题的读法拆到 s31b | 1,000（实际 973，含测试与文档；#443） | s30、s33、e02、e03 | 子进程、并发、关闭清理、错误路径 | Mac 任务 74 已通过 A/C/G/I、7 项真实集成、大小写卷及专用测试 Bot 边界；真实按钮点击仍留 M6 owner，见下方记录 |
-| [ ] | s31b0 | `vonvon secrets get` 在 Claude 沙箱里能用 | lark-cli 的 exec provider 经 `secrets-getter` 调 `vonvon secrets get`。它不再拿 CLI 的准入锁，不写 `.access` 租约，不建数据目录，只读 `secrets.enc`、`master.key`，和 daemon 自己读密钥库一样不拿锁（写者原子发布、`master.key` 只写一次、每项都过 AES-GCM 校验，读坏了就报错、不给值）；每条回复都带 `protocolVersion: 1`（lark-cli 1.0.98 要求）；`secrets.enc` 不跟符号链接，不读 FIFO 和目录，不加大小上限（任务 94，`docs/plans/s31b0.md`） | 510（实际 597，含测试和计划；#459；验收未完） | s31 | 并发、错误路径、子进程 | Seatbelt 里只读、读写档（开网、关网）的 Bash 经 `secrets-getter` 取到假密钥；读写档里 lark-cli `config bind` 经它成功；假数据目录里没有多出 `.locks`、`.access`（Linux 四 getter、两 bind 按修订口径已过；Mac 任务 117 三文件 71/72，真实项认证前 0 工具调用；修复后仍待补验） |
+| [x] | s31b0 | `vonvon secrets get` 在 Claude 沙箱里能用 | lark-cli 的 exec provider 经 `secrets-getter` 调 `vonvon secrets get`。它不再拿 CLI 的准入锁，不写 `.access` 租约，不建数据目录，只读 `secrets.enc`、`master.key`，和 daemon 自己读密钥库一样不拿锁（写者原子发布、`master.key` 只写一次、每项都过 AES-GCM 校验，读坏了就报错、不给值）；每条回复都带 `protocolVersion: 1`（lark-cli 1.0.98 要求）；`secrets.enc` 不跟符号链接，不读 FIFO 和目录，不加大小上限（任务 94，`docs/plans/s31b0.md`） | 510（实际 589，含测试和计划；#459） | s31 | 并发、错误路径、子进程 | 按 owner 2026-10-21 修订口径：Mac 130 同 head 三文件72/72，VPS限定真实沙箱四getter协议成功；不称Mac Seatbelt已验。正常HOME OAuth、模型选工具、个人/managed插件混合环境移到s31b真机验收 |
 | [ ] | s31b | Claude 只读、读写档挡配置文件、限读 | 只读、读写档用沙箱的 denyWrite 加 Edit 拒绝规则、写文件按真实路径，挡住主工作区里两家的配置文件（3.6）；限读（owner 2026-10-19 定了要挡，e03b 的做法）：沙箱 denyRead 挡数据目录的 `bots/`、`projects/` 和根上的 `local-credential`、旧 `config.json`（飞书凭据先不挡，owner 2026-10-19，好让 lark-cli 以 bot 身份能用），allowRead 放开本群记忆、`bots/<appId>/skills/` 和 cwd，Read 按真实路径对同一份名单（3.6，第 9 节第 20 项）；Linux 的只读、读写档由 vonvon 经 `spawnClaudeCodeProcess` 给 Claude 进程套一层 bubblewrap 挂载命名空间，盖住数据目录、挂回 cwd 和放开的几项，里层沙箱名单不含 cwd 的上级，好让默认位置下的空工作区在只读档起得来，会话跑着时新建的兄弟也看不到（`docs/plans/s31b.md` 4.2a）；顺手修 `readSessionTitle` 的读法（e02 第 8 节） | 710 | s31、s31b0、e03b、e04b | 子进程、错误路径 | 读写档下用 Write 和 Bash 写工作区的 `.mcp.json`、`.claude/settings.json` 都被拒，先用 Bash 建指向它们的符号链接、硬链接再用 Edit 写链接也被拒；用 Bash 新建原本不存在的 `.mcp.json`、`.claude/skills/x`，把整个 `.claude` 目录 `mv` 走再重建，也都被拒（product.md 第 9 节第 24 项）；只读、读写档下 Bash 读别的群目录、别的群记忆、私聊记忆、根上的凭据都被拒，本群记忆、skill、cwd 读得到，Read 读本群记忆放行（JP-VPS 先做，Seatbelt 经 #322 补验） |
 | [x] | s32 | Codex 发来的请求不再报错 | 服务端请求进同一个通知队列；提问变选项卡，审批回 decline，不认识的方法仍回 -32601（3.8） | 900 | s30 | 子进程、并发、错误路径 | 真实 Codex：普通回合不发请求，审批请求回 decline 后这一轮不卡 |
 | [x] | s33 | 打字回答、打字题 | 选项卡在等时，能回答的人在同一位置发的文字消息就是答案，不再插话或排队；agent 的问题可以没有选项，卡上有输入框，选项题可以带"其他"；Codex 没有选项的题映成打字题；确认卡、权限卡只认按钮，等它们时打的字照普通消息处理（owner 2026-10-19；3.8"卡片"） | 1000（实际 1000；#433） | s30、s32 | 子进程、并发、错误路径 | 开发任务已验真 Codex 计划模式文字回传；当前内置工具发不出 isOther:false、无选项和敏感题，见下方边界 |
@@ -1137,11 +1137,12 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [x] | s35 | 运行卡上的子 agent 区 | 一行一个子 agent，点开看最近 5 步，每行能停；都结束卡才收尾；子 agent 发起的卡片发在父运行卡的位置，写"子 agent X 问……"；Claude 会话打开 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`；用 s34a 的 `RunState.subagents` 和 s34b 的 `RC.stopSub` 画行和按钮（3.9、3.8） | 1110（实际新增+删除；#455） | s34a、s34b、s30、e01 | 并发、关闭清理 | 真实 Claude 的子 agent 跑完前卡不收尾（子 agent 区和停止按钮在飞书客户端里的样子，M6 验收时 owner 看） |
 
 - s31b0 做法（#459）：CLI 仅对 `secrets get` 免建目录、免准入与租约；`assertNoDataLeases` 仍无生产调用方，未来排他操作不能据此排除 getter。读者只打开 `secrets.enc`、`master.key`，不跟链接，不阻塞在 FIFO，普通文件用同一 handle 完整读取；保留写者互斥、原子发布和不可变 key。合法大库不加上限，合法硬链接允许（首次 key link 发布后异常退出可能留下 nlink=2）。回复固定为一行 `protocolVersion: 1`、`values`、`errors`，兼容缺版本请求，决策 key 不交出，错误不泄露值或路径。
-- s31b0 验收边界：任务 102 的实现基于 `871a4a150a61f6868fb8b238f7cce911f99ba77c`，补丁 SHA256 `df245280ac6327f6a3713b11fc7f9ad0ab86c2709350b721fcfa8c083e0a8ddc`（保留为提交 `ffbc353`）。历史五文件初轮 89 项为 88 过、1 项准备等待超时；修后 `secrets-get` 13/13、协调夹具单例 1/1，不能写成最终 head 一轮 89 全绿。标准 s31 真实三轮 3/3 也属于该旧基线加实现补丁，live 脚本 SHA256 `0499da01b7116d76e9aab392d73ff3191a7f6ee511cf814ea19ced01b339a164`。4.0 用系统 runtime 2.1.304，6.1B 用 SDK 0.3.296/runtime 2.1.296、lark-cli 1.0.98。任务 113 在源码 `41021e6` 上构建、全 typecheck、lint 通过，有限预备布局的四 getter、两 bind 和旧 main `871a4a1` 反例已留存，文件名及 `.access` 内容不变。按 Claude 2026-10-20 回复，关网 bind 的 getter start、exit=0、stdout 95 字节、完整协议及假值匹配、bind 本地 `ok=true` 且权限未放宽，符合修订口径；不要求网络错误，不把 bind 成功当成联网已验。网络隔离另引 s31 [任务 74 旧证据](https://github.com/modelzen/vonvon-bot/pull/443#issuecomment-6272364377)（准确 head `1731cb7aba21716b031d10567f0598db71187f03`），不算当前 s31b0 Mac 补验。任务 116 仅修文档和正常同步 main，没有重跑模型或别人的测试。独立主审在 `cb86a99` 的三文件 72/72、protocol/client 构建及 daemon typecheck 是独立证据，不算作者新跑。按 2026-10-19 方案 B，有限预备布局仍只验协议，普通或空 cwd 的生产读名单已知启动失败，继续阻塞 s31b 生产接线。Mac 任务 117 的实际失败与未验边界见下一条，不能用 VPS 记录替代 Seatbelt 补验，故本片暂不勾选。
+- s31b0 验收边界：任务 102 的实现基于 `871a4a150a61f6868fb8b238f7cce911f99ba77c`，补丁 SHA256 `df245280ac6327f6a3713b11fc7f9ad0ab86c2709350b721fcfa8c083e0a8ddc`（保留为提交 `ffbc353`）。历史五文件初轮 89 项为 88 过、1 项准备等待超时；修后 `secrets-get` 13/13、协调夹具单例 1/1，不能写成最终 head 一轮 89 全绿。标准 s31 真实三轮 3/3 也属于该旧基线加实现补丁，live 脚本 SHA256 `0499da01b7116d76e9aab392d73ff3191a7f6ee511cf814ea19ced01b339a164`。4.0 用系统 runtime 2.1.304，6.1B 用 SDK 0.3.296/runtime 2.1.296、lark-cli 1.0.98。任务 113 在源码 `41021e6` 上构建、全 typecheck、lint 通过，有限预备布局的四 getter、两 bind 和旧 main `871a4a1` 反例已留存，文件名及 `.access` 内容不变。按 Claude 2026-10-20 回复，关网 bind 的 getter start、exit=0、stdout 95 字节、完整协议及假值匹配、bind 本地 `ok=true` 且权限未放宽，符合修订口径；不要求网络错误，不把 bind 成功当成联网已验。网络隔离另引 s31 [任务 74 旧证据](https://github.com/modelzen/vonvon-bot/pull/443#issuecomment-6272364377)（准确 head `1731cb7aba21716b031d10567f0598db71187f03`），不算当前 s31b0 Mac 补验。任务 116 仅修文档和正常同步 main，没有重跑模型或别人的测试。独立主审在 `cb86a99` 的三文件 72/72、protocol/client 构建及 daemon typecheck 是独立证据，不算作者新跑。按 2026-10-19 方案 B，有限预备布局仍只验协议，普通或空 cwd 的生产读名单已知启动失败，继续阻塞 s31b 生产接线。Mac 任务 117 的实际失败与未验边界见下一条；这些是历史结果，本片当前合入口径按下述 owner 2026-10-21 决定，不声称 VPS 记录完成了 Seatbelt 补验。
 
-- s31b0 Mac 117 / VPS 123：Mac 在准确 head `dc11bb36d4c62a3221d2833ff5fca0ccbb4d6c4e` 构建 protocol/client/daemon 通过，三文件 71/72、1 失败、0 跳过；唯一失败为祖先 `/var` 别名与产品规范化路径不一致，使精确读取集合变成空集。任务 123 仅在 `secrets-get.test.ts` 创建 fixture 时 realpath 临时父根，保持双文件精确集合、零写/零 listen/connect、根自身 symlink 拒绝断言不变；自有 TMPDIR 祖先别名布局修前复现该空集合失败，修后同布局整个受影响文件 13/13、0 失败、0 跳过，daemon 源码及测试类型检查通过。Mac 的原 live 只读关网及首个 getter 诊断均未到 Bash；独立认证诊断返回 not logged in、0 工具调用，不是 getter 或 Seatbelt 执行失败。其余 live、getter/bind 矩阵、准确旧 main、网络正负及预备/未预备布局对照均未执行，清单不变来自 0 工具调用，不能证明 getter 实跑零写。Mac lark-cli 为 1.0.96，与 VPS 1.0.98 分开；本轮未操作 Mac/登录，认证问题已交总管。新的 VPS 测试通过不能覆盖 Mac 71/72，亦不能补齐真实矩阵，须总管另派最终准确 head 补验。证据见 [Mac 117](https://github.com/modelzen/vonvon-bot/pull/459#issuecomment-6281477074) 与[独立复核](https://github.com/modelzen/vonvon-bot/pull/459#issuecomment-6281560160)。
+- s31b0 Mac 117 / VPS 123：Mac 在准确 head `dc11bb36d4c62a3221d2833ff5fca0ccbb4d6c4e` 构建 protocol/client/daemon 通过，三文件 71/72、1 失败、0 跳过；唯一失败为祖先 `/var` 别名与产品规范化路径不一致，使精确读取集合变成空集。任务 123 仅在 `secrets-get.test.ts` 创建 fixture 时 realpath 临时父根，保持双文件精确集合、零写/零 listen/connect、根自身 symlink 拒绝断言不变；自有 TMPDIR 祖先别名布局修前复现该空集合失败，修后同布局整个受影响文件 13/13、0 失败、0 跳过，daemon 源码及测试类型检查通过。Mac 的原 live 只读关网及首个 getter 诊断均未到 Bash；独立认证诊断返回 not logged in、0 工具调用，不是 getter 或 Seatbelt 执行失败。其余 live、getter/bind 矩阵、准确旧 main、网络正负及预备/未预备布局对照均未执行，清单不变来自 0 工具调用，不能证明 getter 实跑零写。Mac lark-cli 为 1.0.96，与 VPS 1.0.98 分开；本轮未操作 Mac/登录，认证问题已交总管。新的 VPS 测试通过不能覆盖 Mac 71/72，亦不能补齐真实矩阵，原口径据此要求补验；后续 Mac 130 在准确作者 head 完成三文件72/72，剩余真实链验收按2026-10-21决定转到s31b。证据见 [Mac 117](https://github.com/modelzen/vonvon-bot/pull/459#issuecomment-6281477074) 与[独立复核](https://github.com/modelzen/vonvon-bot/pull/459#issuecomment-6281560160)。
 
-- s31b0 技术验收安排（任务 128，尚未执行）：[Mac 126 状态检查](https://github.com/modelzen/vonvon-bot/pull/459#issuecomment-6281796279)在同 SDK 0.3.296/runtime 2.1.296 下，正常环境为 true/oauth_token，两种隔离 HOME/config 为 false；仅证明状态解析可用，未验 token 联网，不要求 owner 重登或复制凭据。后续真实 Mac 保留正常 HOME、默认认证解析及显式继承 env，只隔离 cwd/VONVON_HOME/假数据/getter/debug，允许正常 usage/cache/初始化元数据，不能声称全 HOME 零写。按 6.2 以 persistSession:false、空个人配置/skill/MCP 来源、严格 MCP、排除个人 CLAUDE.md 和原生记忆关闭做技术隔离，不禁程序化 hooks，不改权限/沙箱/回调，也不承诺排除 managed 策略。三权限组合经 sdkLoader 树外代理真实 query，记为“实际 Backend + SDK 隔离包装”，不改原 live 或算其原样通过；四 getter/两 bind 走直接 SDK probe。下一 Mac 先最短无工具认证探针再首 getter，init 仅内存核空 MCP/无非预期扩展并报布尔，认证失败/交互权限/非预期 managed 扩展即停；成功再做既定三组合、四 getter、两 bind、修前对照，不加矩阵、不变更账号/endpoint/模型。Mac 117 失败与任务 123 VPS 通过仍分开，所有剩余 Mac 项仍未验；s31b 普通空 cwd 生产接线阻塞、方案 B 布局及本地 bind 口径不变。本轮只改文档和正常 merge main，无源码冲突，仅核对双向补丁完整性及 diff-check，未跑模型或真实环境，独立增量复核待总管。
+- s31b0 历史技术验收安排（任务128）：曾安排保留正常 HOME 并隔离个人扩展的真实 SDK 包装检查；状态 true/oauth_token 只证明状态解析，不证明模型请求成功。任务130/146未完成真实模型链，不据此判定 owner 登录失效。该安排作为历史记录保留，当前三项真实链验收已移到s31b，不再阻塞s31b0。
+- s31b0 当前验收口径（[owner 2026-10-21](https://github.com/modelzen/vonvon-bot/issues/436#issuecomment-6309888765)）：本片仅交付只读 getter 与 exec protocol v1；Mac130 在作者 head `81e8a7e` 三文件72/72，VPS113 四 getter/两 bind 为同生产补丁的限定布局证据，两者分开记。正常 HOME OAuth、真实模型选工具、个人/managed 插件混合环境仍未验，转到s31b；下次错误只记 result 类别不贴原文。普通空 cwd 的生产接线阻塞不变。本轮只做批准的口径同步及 main 合并，CLI 冲突保留 secrets get 免租约和 main 的 feishu 免租约逻辑；新验证与最终准确 CI 另记。
 
 - s31 做法（#443）：三档分别用 default、acceptEdits、bypassPermissions，每次启动和恢复都显式设置并允许后续升档。canUseTool 和写文件 PreToolUse 共用真实路径判定；符号链接、悬空链接、含未建路径的 `..`、大小写不同的同级目录均有真实文件系统回归。只读不移除写工具，拒绝带中文原因；关网拒 SandboxNetworkAccess，开网保留 WebFetch/WebSearch。
 - s31 探测：SDK 0.3.296 的 rule 字段可靠区分项目/用户 ask 与普通 MCP、外部 Read、变量 Bash；变量 Bash 放行仍受沙箱限制。完全访问删除工作区根进入 safetyCheck，普通子目录删除不进回调。显式允许和附加目录下，外部 Write 被钩子拒、Bash 被沙箱拒。退出计划模式在隔离 HOME/CLAUDE_CONFIG_DIR 双轮成功恢复读写档，权限设置未持久改变；CLI 远端缓存有源码分类证据，不把任务 70 的全局摘要变化归因于某个进程。配置挡写/限读仍留 s31b，s35 未合入，不提前接子 agent 卡头；没有改 handle-message。
@@ -1340,11 +1341,13 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [ ] | s44a | 新 bot 的基础原生隔离与内置能力包边界 | 新 bot 不带 Claude 个人指令和两家个人 skill；Codex 个人 AGENTS.md 保留并声明 bot 规矩优先，导入 bot 不变。沿 s39 唯一能力包路径选择来源，包不能被会话篡改；尚未实现的设置/飞书工具不提前放入 | 500 | s37、s39、e02、e05 | 子进程、错误路径 | 两家新开、重开和 resume 不恢复个人 skill；新 bot 不读 Claude 个人指令，Codex 个人 AGENTS.md 冲突按 bot 规矩；包写入受限 |
 | [ ] | s44b | skill/MCP 名单组合与原生交付 | 用户库和 bot 自有 skill 按位置组合、群增减、MCP 交付和恢复；扩展 s39/s44a 同一包生成器。名单改了按 3.6 生效，不覆盖内置包 | 650 | s44a、s43 | 子进程、错误路径 | 真实 Codex 用 bot skill、MCP 在 never 下调通且 resume 仍在；Claude 名单/恢复和 MCP 调用；原 s44 的其余真实能力项全部保留 |
 | [ ] | s45 | skill 和 MCP 页面，bot 和群的启用名单 | 两个库页面，删除时列出还在用的 bot 和群；Bot 页的启用名单，群详情页的增减；Bot 页和群详情页也列出 `bots/<appId>/skills/` 里的 skill，群里能移除（3.2、3.6） | 550 | s43、s41、s42 | — | 无 |
-| [ ] | s46 | agent 调 vonvon 的校验和 Claude 的 vonvon 工具 | bot 子进程里每条会话一份凭证（起会话、恢复一次一份；会话关掉、进程死了、停机都作废，只在内存里）；调用依次校验凭证、私聊、触发人、开关（3.7），设置类按会话排队，不是人触发的回合一律拒，设置调用绑定发起它的回合、提交点（写入口 `rename` 前）同步查现时授权、70 秒预算含排队；Claude 的 vonvon 工具用 SDK 内建 MCP 跑在 bot 子进程里，不用令牌（详细计划 `docs/plans/s46.md`；实际 diff 超 1,500 时按计划第 9 节拆出 s46d 提交点，s46b、s47 依赖它） | 1,290 | s37、e04 | 并发、关闭清理、错误路径 | Claude 只读、读写、完全访问档各调通一次 `session_info`（JP-VPS 先做，Seatbelt 在 s46b 的 Mac 自测里补） |
+| [x] | s46 | agent 调 vonvon 的校验和 Claude 的 vonvon 工具 | bot 子进程里每条会话一份凭证（起会话、恢复一次一份；会话关掉、进程死了、停机都作废，只在内存里）；调用依次校验凭证、私聊、触发人、开关（3.7），设置类按会话排队，不是人触发的回合一律拒，设置调用绑定发起它的回合、提交点（写入口 `rename` 前）同步查现时授权、70 秒预算含排队；Claude 的 vonvon 工具用 SDK 内建 MCP 跑在 bot 子进程里，不用令牌（详细计划 `docs/plans/s46.md`；完整交付 4.4a 提交点、结算和项目写入口检查） | 1,290（实际 1423，含测试；#464） | s37、e04 | 并发、关闭清理、错误路径 | Claude 只读、读写、完全访问档各调通一次 `session_info`（JP-VPS 先做，Seatbelt 在 s46b 的 Mac 自测里补） |
 | [x] | s46c | 令牌替换 | 运行卡的三处事件流、日志、诊断、崩溃记录里把令牌（原样、base64、base64url）换成占位字样，分在两段里的也抓得到（详细计划 `docs/plans/s46.md` 4.8） | 180（实际 443；#460） | 无 | 错误路径 | 无 |
 | [ ] | s46b | Codex 的 vonvon MCP 和 host 的 POST 路由 | Codex 每次起会话、恢复会话发一个新令牌，写进 0600 的令牌文件，vonvon MCP server 的启动环境里只有地址和文件路径；MCP server 由 Codex 在沙箱外拉起，经 127.0.0.1 调 host 一个只接 POST 的路由，host 经 IPC 交给 bot 子进程按 s46 校验；停机先拒新请求、再作废令牌、最后关监听；托管和内联两种模式的 401 逐字节相同（详细计划 `docs/plans/s46.md`） | 1,090 | s46、s46c、s31b、s37、e05 | 子进程、并发、关闭清理、错误路径 | Codex 只读、读写、关网各调通一次，令牌不出现在会话的 shell、进程列表、文件和运行卡里（Mac） |
-| [ ] | s47 | vonvon settings 和 vonvon feishu 命令行框架 | 在 s07a 的命令上加：两组命令不拿数据租约，输出 JSON；同一组命令函数登记成 s46 的 vonvon 工具（agent 那条路不从环境变量读令牌，见 `docs/plans/s46.md` 4.1 G）；飞书组先做群列表和群成员（3.7）；每个设置工具的写都经 `ctx.commit`，在提交点前调 `guard()`，交给 host 写的请求带 `notAfter`（`docs/plans/s46.md` 4.4a） | 380 | s46、s07a | 错误路径 | 无 |
+| [x] | s47 | vonvon settings 和 vonvon feishu 命令行框架 | 在 s07a 的命令上加：两组命令不拿数据租约，输出 JSON；同一组命令函数登记成 s46 的 vonvon 工具（agent 那条路不从环境变量读令牌，见 `docs/plans/s46.md` 4.1 G）；飞书组先做群列表和群成员（3.7）；每个设置工具的写都经 `ctx.commit`，在提交点前调 `guard()`，交给 host 写的请求带 `notAfter`（`docs/plans/s46.md` 4.4a） | 380（实际 999；#469） | s46、s07a | 错误路径 | 无 |
 | [ ] | s48 | vonvon 飞书 skill：列话题、读另一条会话、读飞书消息 | 列本群话题、按会话 id 读另一条会话、按话题或时间读消息；只放行同一个 bot、同一个群、档不高于自己的会话；卡片写"读了话题 T1、T2 的会话"（3.5"查飞书上下文"） | 950 | s47、s44b、s13、e02、e11 | 子进程、错误路径 | 无（M8 验收前，预览版任务按 3.5 时间线第 7 步跑一遍） |
+
+s46 做法：真实 A/B/K、四轮和 Bot 6 证据归属任务 125 的源码 `0ed17ae`；任务 135 仅离线修复及普通 main 同步，未重跑真实 provider 或群验收。每个 bot 子进程一张凭证表，设置调用绑定原回合；`commit` 的同步 guard 在真正提交前复查授权和截止时间，项目写入口在临时文件写完、rename 前检查。Claude 用 SDK 进程内 MCP，不用令牌；Codex 本片只接生命周期，令牌文件和路由归 s46b。SDK 0.3.296、运行时 2.1.296 在 Linux 的 A/B/K 和四轮实测通过；来源键为 `_meta['claudecode/toolUseId']`，五次观察均先收到事件再运行处理函数。Bot 6 三档关网群验收通过，原设置已在线恢复。Mac Seatbelt 留 s46b，不计作本片通过。完整提交点仍在 1,500 行内，没有拆 s46d。来源表满 256 项后保留已知归属、拒绝登记未知来源，只由新 grant 恢复登记；读类不受影响。
 
 开工要点：
 - s44a：`~/.codex/AGENTS.md` 按会话关不掉（e05，4 个版本；会话层 `project_doc_max_bytes: 0` 只关项目里的那份）。owner 2026-10-15 定（选了 A）：接受，带上它，在 bot 的指令里声明 bot 的规矩优先；product.md 3.6 已跟着改。`thread/start` 回包的 `instructionSources` 列出实际加载的文件，可以显示在桌面端。
@@ -1362,6 +1365,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s46：按 e04（macOS 26.7，Codex 0.156.1、0.162.1，`feishu` 权限配置），Codex 的 shell 里走命令行到不了 daemon。关网的只读、读写档，curl 连本机 TCP 和 Unix socket 都没到服务端；只读关网档（0.162.1）另放行一个 Unix socket（`unix_sockets=allow`、`allow_local_binding`、回环域名 allow，没开网络代理）也一样。开网的只读（只测了 0.162.1）、读写档 curl 到得了本机，但命令行起不来：所用 nvm 的 Node v24.14.1 读 OpenSSL 配置被拒，临时目录里的 Electron 44.4.5 加载框架失败，主目录下的包装脚本 `~/.local/share/vonvon-bot/bin/vonvon` 一字节都读不了（没运行过它）。只有完全访问档（只测了 0.162.1）curl、Node、Electron 都连得上。所以按 product.md 第 9 节第 2 项的退路，这一片把同一组命令做成 vonvon 自己的 MCP 工具，由 agent 在沙箱外拉起，经 127.0.0.1 调 host 的 POST 路由。令牌交给这个 MCP server，表里"经环境变量交给 agent"一并改。受限档里的 Node、Electron 在联网前就起不来，它们自己有没有网络权限没判定；打包版 app 里的真 `vonvon` 命令行没测。
 - s46：Claude 一侧（e04b，SDK 0.3.296）沙箱里 Node、Electron 都起得来，但到 daemon 的路不通：TCP 直连本机六种配置下都被拒（curl 7、Node/Electron EPERM）。能到本机的只有两条。一是沙箱注入的 HTTP 代理：今天的 `bypassPermissions` 两档直接到；候选 `default` 档的 `SandboxNetworkAccess` 回调拒了本机地址，就到不了；候选 `acceptEdits` 档回调放行本机后才到。二是 `network.allowUnixSockets` 列出的那个 Unix socket，curl、Node 都到；同轮还加了 `allowedDomains`，两者各自的作用没分开测。这些都没测过 MCP：六轮 `mcp__*` 工具数都是 0，Claude 拉起的 MCP server 在不在沙箱外也没测，开工时补测。MCP 在 Claude 上调不通时的备选是让 daemon 另开一个 Unix socket，会话沙箱只用 `allowUnixSockets` 放行它。
 - s46：开工先测 vonvon 的 MCP 在两家各档调不调得通，下面几样都没测过。Codex 在 `approvalPolicy: never` 下，不配 `default_tools_approval_mode: "approve"` 时读写档被拒过一次（e05，0.162.1），只读、完全访问档没测；配上以后三档、开网关网都要过。Codex 拉起的 MCP server 要确认真在沙箱外：受限档里 nvm 的 Node、主目录的包装脚本都起不来（e04），套进沙箱也会起不来。Claude 的 `default`、`acceptEdits` 档下 MCP 工具调用走不走 `canUseTool`，走的话 s31 的回调要放行 vonvon 的工具。Codex 的会话层 MCP 每次 resume 整份重传（e05，见 s37），令牌按会话发，所以这个 MCP 的配置每次都要带上令牌。shell 里认"在 bot 的会话里"照旧靠 `FEISHU_CODEX_BRIDGE=1` 和 `VONVON_SESSION`（e04、e04b 都传得到）。只读档调不通、又配不上时，群里的飞书查询（3.7 说每个会话都能用）就用不了，按 4.2 第 3 类问 owner。行数写详细计划时按 MCP 重估。
+- s47 做法（#469）：共享工具清单按会话位置过滤，群和评论不注册 settings 类写工具，私聊注册；只读工具保留，直接伪造写调用仍由 not-dm 拒绝。终端增加 `settings access`、`set --revision --reason` 与 `feishu groups/members --cursor`，失败 JSON 含种类及稳定退出码；显式版本不被内部最新版本替换，旧字段 patch 保持兼容。CLI 与 MCP 直接调用共享函数，agent 只看本 bot／本群范围，access 反映当前来源、开关和写权限；preferences/project/session 的真实 rename 前均检查 guard 和绝对期限。保存后未知错误不冒充未保存、不重试。未新增整段文字 writer、Codex 令牌路由、skill 或回执；隔离离线自测，Mac 验收无。
 - s47 开工要点（Rakazo 第二轮，2026-10-18）：`set` 接受 `--revision`，整段文字必须带，今天命令内部现读版本，挡不住拿旧内容整段写回；`--json` 下错误也输出 JSON，写明种类、冲突时带当前内容，按种类给退出码；`access` 按调用方算，无权和不存在同形；读输出的预算和续读放 s48。建议按约 500 行估（Rakazo 第二轮报告"s46、s47、s48"）。
 - s47：按 e04，agent 不在 shell 里调 `vonvon settings`、`vonvon feishu`：Codex 只读、读写档的 shell 里 nvm 的 Node、主目录包装脚本都起不来或读不了，关网时也连不上 daemon（见 s46）。agent 那条路走 s46 的 vonvon 工具：s46 计划改了原来"MCP server 从启动环境读令牌、用 s07a 的第二种连接调命令函数"的写法，工具登记在 bot 子进程的登记表里，由 bot 子进程直接调同一组命令函数（`docs/plans/s46.md` 4.1 G、4.3），所以命令函数要能被直接调、返回结构化结果，不只打印 JSON。命令行照旧给终端用。
 - s48 开工要点（Rakazo 第二轮，2026-10-18）：输出约 1 万字节内，超了显式截断并给续读位置，带覆盖范围和稳定 id，范围从令牌推出；Claude 读取和运行卡用同一条"一轮的最终回答"规则；SKILL.md 写查历史的指引（Rakazo 第二轮报告"s46、s47、s48"）。
@@ -1407,10 +1411,10 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
 | [x] | s58 | 迁移前的清理：删掉没上线的改名迁移 | 删从没上线的改名迁移及专属兼容修复；保留现行数据目录、凭据 getter 识别和互斥/租约（cli-bridge 和它的 Windows 分支由 s02c 删） | 450 | — | — | 无 |
-| [ ] | s59 | 导入预检 | 从 #226 移植预检、本地文件读取和旧密钥库，去掉准入互斥锁和 Windows 部分；每个 bot 只读地查第 5 节第 2 步那几项 | 1180 | s58 | 数据迁移、macOS 原生、错误路径 | 用 bridge 0.6.14 的数据副本和隔离的 HOME：预检和实际一致，真实主机名能解开密钥，launchctl 看得出 bridge 在跑 |
-| [ ] | s60 | 把 bridge 的数据换算成第一版的形状 | 一个纯函数：bot 照搬，管理员进本机名单，个人指令照旧带上；每个群变成规则模式下的覆盖，cwd 原地引用（第 5 节） | 320 | s59、s36、s21、s12 | 数据迁移 | 无 |
-| [ ] | s61 | 导入事务（上）：停 bridge、占锁、复制、回滚 | 第 5 节第 3 到 5 步：调 bridge 自己的 stop，按 bridge 的格式占锁，复制并用新密钥重新加密；任何一步失败就倒序回滚，再 start bridge | 650 | s60、e07、e08 | 子进程、并发、关闭清理、错误路径、数据迁移、macOS 原生 | 在 Mac 的测试用户账号里装 bridge 0.6.14：前半段后 plist 被删、手动 run 被拒；复制后故意失败，回滚后 bridge 重新起来 |
-| [ ] | s62 | 导入事务（下）：Codex 兜底、hook、启动、回执 | 第 5 节第 6 到 9 步：找 codex，备份后卸掉 bridge 的 hook，启动全部 bot，写迁移标记和回执；之后每次启动都占 bridge 的锁 | 450 | s61 | 子进程、并发、错误路径、macOS 原生 | 同一个测试用户账号里从头导入：旧会话接得上，卸掉 hook 后审批回到终端里问；第 8 步故意失败能回滚；导入后手动 run 被拒 |
+| [x] | s59 | 导入预检 | 从 #226 移植预检、本地文件读取和旧密钥库，去掉准入互斥锁和 Windows 部分；每个 bot 只读地查第 5 节第 2 步那几项 | 1180（实际 894；#463） | s58 | 数据迁移、macOS 原生、错误路径 | 任务 122 技术等价：0.6.14 原版 writer 生成的合成旧数据兼容，真实 launchctl/ps 对唯一临时服务的读取适配；不代表私人历史副本、真 bridge service 或 e08 |
+| [x] | s60 | 把 bridge 的数据换算成第一版的形状 | 一个纯函数：bot 照搬，管理员进本机名单，个人指令照旧带上；每个群变成规则模式下的覆盖，cwd 原地引用（第 5 节） | 320（实际 641；#467） | s59、s36、s21、s12 | 数据迁移 | 无 |
+| [ ] | s61 | 导入事务（上）：停 bridge、占锁、复制、回滚 | 第 5 节第 3 到 5 步：事务跑在 daemon 的 host 里，由 host 持锁；照 bridge 自己 stop 的做法卸掉 launchd 任务、plist 挪进暂存目录，按 bridge 的格式占锁，换算后暂存、用新密钥重新加密；先记日志再做，任何一步失败、关机、被杀都倒序回滚，先放锁再放回 plist、重新加载 bridge（详细计划 `docs/plans/s61.md`） | 1,090 | s60、e07、e08 | 子进程、并发、关闭清理、错误路径、数据迁移、macOS 原生 | 在 Mac 的测试用户账号里装 bridge 0.6.14：前半段后 plist 被删、手动 run 被拒；复制后故意失败，回滚后 bridge 重新起来 |
+| [ ] | s62 | 导入事务（下）：Codex 兜底、hook、启动、回执 | 第 5 节第 6 到 9 步：找 codex，备份后卸掉 bridge 的 hook，把暂存的 bot 搬进来，启动全部 bot 等连上，写迁移标记（提交点）和回执；之后每次启动都先占 bridge 的锁，bridge 在跑某个 bot 时这个 bot 不启动并提示（详细计划 `docs/plans/s62.md`） | 1,100 | s61 | 子进程、并发、错误路径、macOS 原生 | 同一个测试用户账号里从头导入：旧会话接得上，卸掉 hook 后审批回到终端里问；第 8 步故意失败能回滚；导入后手动 run 被拒 |
 | [ ] | s63 | 导入页 | 发现 bridge 就显示导入页：预检表、"会感到的变化"和"失去"两张清单、进度、回执；清单加"可选：从 bridge 导入"，只在 macOS 显示（第 5 节） | 520 | s62、s04 | 错误路径 | 无（M10 验收前，预览版任务在测试用户账号里走一遍导入页） |
 | [ ] | s64 | bridge 最后一版（feishu-codex-bridge 仓库） | 从 0.6.14（`6698118`）开分支：看到迁移标记就拒绝启动，stop 和 status 给提示，第一次启动给主人发通知（第 5 节、第 8 节第 4 条） | 200 | s62 | 错误路径 | 无（发布前由 owner 在飞书客户端里看通知） |
 
@@ -1418,24 +1422,31 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s58、s59 不依赖 M3 到 M9，M4 之后在第二条线上做。
 - s58 做法（#373）：删除生产入口未使用的 `data-root-migration.ts`、`legacy-data-root.ts`、`host/migration.ts`，以及只为改名迁移服务的兼容修复、错误类型和测试。现行 `resolveDataRoot` 继续默认使用 `~/.vonvon-bot`，显式 `VONVON_HOME` 的行为不变；getter 识别、互斥与租约仍保留。隔离的真实 CLI 启动与退出验证默认和显式目录两条路径，两个旧目录的实体、内容和孤立迁移日志均保留。原来的改名做法和第 5 节"复制数据、旧目录原地引用"相反；`~/.vonvon-bridge` 的识别在 s59 里按预检的需要重写。
 - s59：合入后在 #226 里写明移植了哪些代码，先不关。
-- s59：预检只直接导入有 `bots.json` 的安装。没有它的老式平铺安装，bridge 下次运行时会把顶层的 `processes.json` 改名到 `bots/<appId>/processes.json`，盖掉 vonvon 写的锁（e07 第 8 条）。用过 0.6.x 的应该都有；遇到没有的怎么办（比如提示先让 bridge 跑一次升级目录）开工时定，要是变成不导入，按本文 4.2 第 3 条问 owner。
+- s60 做法（#467）：`import/bridge/conversion.ts` 显式校验旧版完整快照，纯转换逐 bot 返回未分配 entry、V1 config/project/session、密钥来源计划、copy 相对路径和 notes；不使用 s59 脱敏摘要。群取更严档并列出差异，cwd 原地引用；个人指令保留 native 继承，评论提示词/已发文件 copy 归属按 bot 保留。凭据仅接收旧库 id / plaintext 来源标记 / external 引用，旧库和 plaintext 输出 secretKeyForApp 的 V1 getter 引用，绝不收发明文；getter 路径由 s61 显式提供，不读取或执行。entry active 沿用旧 current，时间/handle/目录留给 s61；错误逐 bot 返回，合法 sibling 信息保留。live #admin 改名，#guest 和 detached 旧键保留停用；键碰撞明确拒绝、不覆盖。120 秒移除且逐 bot 提示，0 是旧版关闭编码；autoCompact 丢弃。无 IO、crypto、getter、事务或用户入口，s61–s63 接线及真实服务/续接验收待后片。
+- s60 任务140检查：普通合并main后 head `c34baeef97857cc822bcb79353ad8590bc3b7dfe`；旧661bfd79模块在新来源契约的5个正例中5/5真实断言失败；当前隔离HOME/VONVON_HOME下daemon typecheck及7文件161项首次通过（转换53项），最终实现失败0/重跑0。未触构建原语，不重复build/lint；无provider/真实服务/事务验收，独立审查待总管（#436）。
+- s60 任务134旧契约检查（不代表任务140契约检查已通过）：准确基线 `49c13c604b0c2a542ebc0f0f1ba49160a02d25fa` 加本片未提交改动；隔离 HOME/VONVON_HOME 下 build、typecheck、lint 首次通过，转换/schema/one-tier/session-store/execution-resolve/session-mode/bot-defaults 共 7 文件 144 项首次通过，无失败/重跑。全合成数据契约检查，不代表 s61 真事务或 s62 真续接验收；独立审查待总管（#436）。
+- s59 做法（#463）：复用 #226 的受限只读文件读取、旧 PBKDF2/AES-GCM 密钥解密和预检校验，逐 bot 返回群数、目录、密钥、hook、运行状态，另查 bridge 的 launchctl 状态与自带 Codex；失败保留全部 bot 的结果。没有未发布的准入锁也能预检，现行 V1 数据准入/租约保留。不做 s60–s62 的换算和事务，也不接 s63 页面。
+- s59 旧目录：有顶层 `processes.json`、没有 `bots.json` 的旧平铺安装只读提示“这个 bridge 还是旧的目录格式。先照常启动一次原来的 bridge，让它升级目录，再回来重试导入”；不启动/停止 bridge、不改文件、不报没有数据、不跳过 bot，重试重新预检。有 `bots.json` 后照常导入全部 bot（Claude 2026-10-19 定，按 s59 开工说明）。
+- s59 验收状态：按任务 122 明确审定的纯技术等价边界打勾。固定旧源码 `6698118352d7eca87887d3ee1b58736caca204bc`（0.6.14），未经改写的旧 writer 写两个合成 bot/群/会话及随机旧库，旧 getSecret 自检匹配与新预检 decryptable 均 2/2，假 salt/tag 失败对照正确。真实唯一 LaunchAgent/自有进程经测试 seam 只映射固定查询目标，running、退出 stopped、卸载 stopped 均通过，source/home 全路径/类型/链接/字节不变；服务已卸载且进程退出。TOML/JSON null 必改反证已修，60 条定向与 typecheck/lint 通过；独立复核待总管。证据准确称“0.6.14 原版 writer 生成的合成旧数据兼容”和“真实 launchctl/ps 对合成临时服务的读取适配”，不称私人历史数据、真 bridge 服务或 e08 已验，不前移 s61/s62 的事务职责。
 - s61：按 e07：bridge 的锁每个 bot 一把，在 `~/.feishu-codex-bridge/bots/<appId>/processes.json`，`appId` 要和目录名完全一致，调 v2 的 `acquireSingleInstanceLock` 时显式传这个路径。持有者是同一用户下、活过整个事务的进程，由它自己写锁，不复用旧记录、不自己拼 `startedAt`。`stop` 以后 bridge 还在优雅退出，要轮询重试到抢到为止并设上限；抢不到时持有者已不是预检看到的那个 bridge，就按失败回滚。回滚时先放锁再 `start` bridge，不然被拉起的 `run` 会被自己的锁拒掉。抢锁本身是原子的，不用另加互斥。
 - s61、s62：锁挡得住 `run`，挡不住 `start`（e07，读代码）：`start` 不看锁，照样写 plist、bootstrap，被拉起的 `run` 反复被拒，第 3 步去掉的自启就装回来了。写迁移标记前再查一次 bridge 的 plist 和 launchd 任务，还在就再 `stop` 一次。多 bot 模式下 supervisor 的子进程被拒后按 1 到 30 秒退避一直重启，一放锁最多 30 秒就连上，所以 s62 的"之后每次启动都占 bridge 的锁"要保留。product.md 第 5 节第 4 步先按本文 4.2 改。
 - s62：长期占锁时，0.6.14 的报错会叫用户 `kill <pid>`，那个 pid 是 vonvon 的 daemon。用户照做后 bridge 抢到锁，vonvon 再起来时抢锁抛 `BridgeAlreadyRunningError`：这时这个 bot 不启动，告诉主人 bridge 正在跑它。一次给多个 bot 占锁时共用一个 exit 回调，免得 11 把以上时 Node 打 `MaxListenersExceededWarning`（e07）。
 - s62：卸 hook 的代码和认 bridge hook 的规则从 #226 分支的 hook 改写代码移植，和 s02c 删不删 `D/cli-bridge/` 无关。合入后在 #226 里补上这部分，再关闭它。
 - s61、s62：Mac 检查放在测试用户账号里，因为那个账号有自己的 launchd 域，停 bridge 时不会碰到 owner 账号里同名的任务。
+- s61、s62：测试用户叫 `vonvontest`，由 owner 建好、用快速切换登录着，再加一条只允许切到这个用户的 sudoers 规则（Claude 2026-10-20 已请 owner 做）。Codex 的准备、检查和恢复见 `docs/plans/s61.md` 6.2；没准备好时写"卡住了"，代码照常审查合入（导入在 s63 之前用户碰不到），这两行不勾。e08 在同一个账号里先做。
 - s64：PR 在 feishu-codex-bridge 仓库，不占本仓库的在飞名额。下载地址等 M11 定下来再填，什么时候发布由 owner 定。先看迁移标记再拿锁，换掉 0.6.14 那句叫人 `kill` 的提示（e07）。
 
 ### M11 公开发布准备
 
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
-| [ ] | s65 | 公证的 universal dmg、更新源和许可证 | universal 包，hardened runtime 和 entitlements，公证；版本号统一写入；生成更新清单和 feed；许可证改成 UNLICENSED（第 8 节第 1、3 条） | 370 | — | macOS 原生 | 用 owner 的证书签名并公证：Gatekeeper 放行，Apple Silicon 和 Rosetta 下都能启动，能检查并装上新版 |
-| [ ] | s66 | 公开版里 Claude 只用 API key（要不到书面确认时才做） | 公开构建里 Claude 不复用本机登录，只用主人填的 API key；开发版和自用版不变（第 8 节第 2 条） | 250 | s03 | 错误路径 | 公开构建里 Claude 只用 API key、不读钥匙串里的登录（要 owner 给一个 key） |
+| [x] | s65 | 本地 universal 分发包、签名和更新产物 | universal dmg/zip，hardened runtime 和 entitlements，已有 Developer ID 签名；统一版本；本地更新 manifest/feed；第一方 UNLICENSED。公证以后由 owner 定，地址发布前填（owner 2026-10-20） | 900–1200（实际 611；#468） | — | macOS 原生、错误路径 | codesign --verify --deep --strict；真实双架构，Apple Silicon/Rosetta 分别启动；本地清单适配现有更新器。公开下载与完整旧版更新安装留发布前验证 |
+| — | s66 | owner 2026-10-20：不做，owner 去要确认 | 不实施 API-only 公开构建；Claude 登录书面确认仍是公开发布前事项（第 8 节第 2 条） | — | — | — | 保留 owner 获取书面确认的发布前义务 |
 | [ ] | s67 | 发布前的 Mac 验收 | 第 8 节第 5 条的 Mac 一半：在没有 bridge 的 macOS 用户上，用公开的 dmg 从零安装、扫码、开权限、第一次对话；结果写进本文第 10 节 | 30 | s65、s63；s64 已准备好即可 | — | 全部在真机和真实飞书里做，扫码由 owner 来做 |
 
 开工要点：
-- s65：今天 `build.mjs` 写死版本 0.1.0，而更新比较用的正是它。bridge 和 Paseo 的许可声明（NOTICE、LICENSE.bridge、LICENSE.paseo）今天已经随 npm 包和桌面包发，只改 license 字段。
+- s65：详细计划见 `docs/plans/s65.md`，不等最后一轮 UI。以 daemon 现有版本为产品源，desktop/stage/Core/npm 一致；协议/client 自有版本不改。正式 universal 走双架构 Electron 下载、合并后签名，preview 保留 Apple Silicon。桥接与 Paseo 的 NOTICE、LICENSE.bridge、LICENSE.paseo、PROVENANCE 继续随 npm/app 分发。真实签名、架构、Rosetta 和更新产物证据按作者结果记录，未验不勾。
+- s65 做法（#468）：正式 API 显式 universal targets，双架构 Electron 合并后已有 Developer ID 签名；13 个 Mach-O 双架构/逐个验签，5 份权限精确仅 JIT。dmg 挂载内 app 另验，arm64 与已有 Rosetta 分别实际启动；Rosetta 首次未就绪保留，诊断后全新隔离目录重试成功，原因未证实。本地清单/模板、UNLICENSED 和 npm 声明已验；公证/公开下载/完整在线更新仍未验。详见 `docs/research/2026-10-20-s65/local-distribution.md`。
 - s67：先由预览版任务装好，Codex 走一遍不需要扫码的部分，再交 owner 验收。Linux 那一半在 s20b 做。
 
 ### 界面打底（u01 到 u10）
@@ -1517,7 +1528,9 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 |---|---|---|---|
 | 私聊里打字算答案的条件 | 这个人恰好只有一张敏感卡在等；两张以上提示用卡片 | 没有别的办法知道答的是哪题 | s33b |
 | 敏感题部分私聊卡发不出 | 群里不说，只记日志；全部发不出时群卡写“没能私聊到能回答的人” | Claude 2026-10-19 定：发出去的人照常能答；群里列出谁没收到也没人能补救 | s33b |
-| Bot 会话 profile | 两家原生记忆始终关闭；VONVON_SESSION 默认 1，s46 可替换为令牌 | 不共享原生记忆，沿用既有会话身份变量 | s37 |
+| vonvon 工具的超时 | 工具 70 秒，从接纳起含设置队列等待；host 75 秒、MCP 80 秒、Codex 90 秒由 s46b 接线 | 内层先回明确超时，过期排队项永不执行 | s46、s46b |
+| vonvon 工具的上限 | 每会话同时 4 调用，设置排队 8 个，结果 256 KiB，每 bot 1024 凭证；host 32 并发、请求 64 KiB 由 s46b 接线 | 限制单会话和单 bot 的资源占用 | s46、s46b |
+| Bot 会话 profile | 两家原生记忆始终关闭；VONVON_SESSION 保持 1；s46 的会话凭证不交给 shell | 不共享原生记忆，沿用既有会话身份变量 | s37 |
 | 子 agent 区完整行和分页 | 完整显示 8 行，待答优先；其余运行行每页 24 行，子区最多 84 个组件，并从父过程预算扣减 | 不截掉运行身份；plain 和终态卡列出全部运行身份，失败、停止逐行，完成只计数 | s35 |
 | 子 agent 步骤刷新 | 跟每秒卡片时钟合并；开始、终态即时推送 | 不为每一步额外占群里所有 Bot 共用的飞书限额 | s35 |
 | Codex 等子 agent 时的新消息 | 同一会话排队，前卡收尾后运行 | 父回合已结束，没有可插话的回合 | s35 |
@@ -1525,7 +1538,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | Claude 权限判定期限 | 5 秒未完成按拒绝 | 文件系统或外部判定挂起也不能放行 | s31 |
 | Claude 方案卡长度 | 2,000 字后加截断说明 | 完整方案仍在运行卡 | s31 |
 | Claude 权限卡动作长度 | 500 字 | 避免单张卡过长 | s31 |
-| Claude 只读、读写档的其他工具和本机联网 | 没命中 ask 规则的其他工具照常允许；开网时本机地址也允许 | 保留现有工具范围；s46 不限本机网络（新路由要令牌，agent 的 shell 里没有），限不限待 owner 定（`docs/plans/s46.md` 第 9 节） | s31 |
+| Claude 只读、读写档的其他工具和本机联网 | 没命中 ask 规则的其他工具照常允许；开网时本机地址也允许 | 保留现有工具范围；s46 不限本机网络（新路由要令牌，agent 的 shell 里没有），owner 2026-10-20 已定不挡本机端口（`docs/plans/s46.md` 第 9 节） | s31 |
 | 打字答多道题 | 同一段文字给每道题 | 模型从哪个键读都读得到全文，不猜这段话答的是哪题 | s33 |
 | 关了免@ 的群里打字回答 | 要 @ bot 才算；没 @ 的照今天停在 @ 门 | Claude 2026-10-19 定：今天的 @ 门不动；否则要把判断挪到门前并先过群和成员名单，改动大 | s33 |
 | 群里没设、用 Bot 的值 | 写"跟着 Bot 默认" | s23g2 起密钥页和命令行都这样说，切片表原来写的"继承 bot 默认"跟着改 | s28a |
@@ -1568,7 +1581,8 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | 密钥页"谁在用"怎么排 | 一个 Bot 默认或一个群一行，每行写 Bot 名和怎么选的；30 个群时这一列约 1,200px 高 | Claude 定的，owner 看稿子后可能改。按 Bot 分组（Bot 一行，下面的群只写群名和"自己选了"或"不是智能群"）能压到三分之一；删之前要看清每个群跟着谁，先照现在的排（s23g2 多角度审查 B5） | s23g2 |
 | "谁在用"列不列现在不是智能群的 | 列，标"现在不是智能群"；删的确认里单列一段，写"删了不影响；改成智能群后会按出错处理" | Claude 定的，owner 看稿子后可能改。选了 Jev 的群改回智能马上就要用这个 key，删之前该知道 | s23g2 |
 | 卡片里的 @所有人 | 变文字（上面"卡片和 markdown 里的 `<at>`"一行，s27a0 已做，s23g2 不改） | Claude 定的，owner 看稿子后可能改。@所有人叫不叫得醒别的 bot 没测，宁可不叫 | s27a0 |
-| 许可证 | UNLICENSED | 第一版闭源，第 8 节第 3 条要求发布前改掉 MIT | s65 |
+| 许可证 | 第一方 UNLICENSED；第三方声明保留 | 第一版闭源，第 8 节第 3 条；不改 bridge/Paseo 许可归属 | s65 |
+| 正式桌面包 | universal dmg/zip；hardened runtime，已有 Developer ID 签名；本地清单/feed | owner 2026-10-20；公开地址发布前填，公证以后由 owner 定；未配地址更新不可用 | s65 |
 | Linux 验收在哪做 | JP-VPS 上的普通用户账号，做完卸载 | 第 8 节第 5 条要一台 systemd 主机 | s20b |
 | Linux 上 `service install` 怎么问 linger | 只在终端里问一句，回车或 y 算同意；不是终端、没带 `--linger` 就不开，只打命令；`--linger` 不问就开，`--no-linger` 不开；不用 sudo，开不了给出 sudo 的命令 | 3.10 说"没开就问一句，同意后执行"，没说没人回答时怎么办；没人回答不算同意 | s20a |
 | 卸载时的 linger | 不关，只提示 `loginctl disable-linger` | linger 是这个账号的设置，别的用户服务可能也靠它，也分不出是不是 `service install` 开的 | s20a |
@@ -1658,7 +1672,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | 每条会话记几条撤回说明 | 20 条，留最新的 | 3.5 没给数；说过一次就清，平时到不了 | s15 |
 | 比消息先到的撤回记多久 | 进程内记一天，最多 2000 个消息 id，不落盘 | 飞书的事件不保证按顺序到；隔得更久的很少见 | s15 |
 | 网页端运行状态刷新 | 有运行时每 3 秒重拉一次 `context`；空闲、切换会话或卸载时清定时器 | 还没有推送，子 agent 后来出现的行和停止后的状态要看得到；一次是本机 IPC 一来一回 | s34b |
-| 预览版 | 只出 Apple Silicon，不公证 | 只装在 owner 自己的 Mac 上验收；universal 包和公证在 M11（第 8 节第 1 条） | 本文第 7 节 |
+| 预览版 | 只出 Apple Silicon，不公证 | 只装在 owner 自己的 Mac 上验收；universal 包在 M11 s65；公证由 owner 以后决定（2026-10-20） | 本文第 7 节 |
 
 ### 叫法表
 
@@ -1770,9 +1784,9 @@ D8 的三个待定项（product.md 第 11 节），u01 这样定：
 
 | 事 | 什么时候要 | 说明 |
 |---|---|---|
-| Apple 开发者的公证凭据 | M11（s65） | 申请和配置要时间 |
-| 公开的下载和更新地址 | M11（s64 的通知、s65 的更新源） | product.md 第 8 节第 1 条 |
-| 向 Anthropic 要 Claude 登录的书面确认 | 公开发布前 | product.md 第 8 节第 2 条，可能要几周；要不到就做 s66 |
+| Apple 开发者的公证凭据 | owner 以后决定公证时 | owner 2026-10-20：此次 s65 不公证、不配置凭据 |
+| 公开的下载和更新地址 | 公开发布前填写；s64 通知/更新源上线前 | owner 2026-10-20 先不定；s65 做配置和本地产物，不硬编码 |
+| 向 Anthropic 要 Claude 登录的书面确认 | 公开发布前 | product.md 第 8 节第 2 条；owner 2026-10-20 定 s66 不做，owner 去要确认 |
 | 一位同事或第二个飞书账号 | e10（s18 之前）、e09（s30 之前）、M6 第 4 步、M9 第 2 和第 6 步 | 验收时要有另一个人点卡片、私聊 bot |
 | TypeSafe 的账号和 key | s23f、s23g 和 M5 第 11 步（测试 key 已给，2026-10-18） | 测试 key 存在 JP-VPS 本机，不进仓库，Claude 在 JP-VPS 上测这几处时用。Mac 上要用 Jev 时由 owner 在密钥页自己填，key 不经 GitHub 传给 Mac 上的 Codex。长期用要 owner 自己的账号和付款方式；有没有免费额度，文档没写 |
 | JP-VPS 上再加两个测试 bot | 已做（2026-10-16） | M5 要同一台机器上三个 bot（一个规则模式、两个智能模式）。owner 在 JP-VPS 的终端里扫码建了 Vonvon Bot 7、Bot 8，开发者后台由 Mac 上的 Codex 配好、发布（本文第 10 节"M3 验收期间顺带看到的"） |

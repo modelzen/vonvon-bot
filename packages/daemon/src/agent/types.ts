@@ -1,3 +1,4 @@
+import type { AgentToolSpec } from './entry/tools';
 import type { SessionProfile, SessionProfileCapabilities } from './session-profile';
 import { z } from 'zod';
 import type { AgentErrorKind, JudgeErrorKind } from './error-kind';
@@ -355,7 +356,21 @@ export class SessionInUseError extends Error {
   }
 }
 
+export type AgentToolReply =
+  | { ok: true; result: unknown }
+  | { ok: false; code: 'not-ready' | 'revoked' | 'unknown-tool' | 'refused' | 'bad-args' | 'busy' | 'timeout' | 'failed';
+      reason?: 'not-dm' | 'not-human-turn' | 'not-admin' | 'switch-off' | 'turn-ended' | 'unknown-origin'; message: string };
+
+export interface AgentEntry {
+  tools(): readonly AgentToolSpec[];
+  call(name: string, args: unknown, origin?: { toolUseId?: string }): Promise<AgentToolReply>;
+  noteToolUse(toolUseId: string): void;
+  attach(thread: AgentThread): void;
+  revoke(reason: 'closed' | 'start-failed' | 'dead' | 'shutdown'): void;
+}
+
 export interface StartThreadOptions {
+  entry?: AgentEntry;
   profile?: SessionProfile;
   cwd: string;
   model?: string;

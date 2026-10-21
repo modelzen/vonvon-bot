@@ -1,6 +1,7 @@
 // first: sets the connection defaults of every daemon process (the supervisor, each `--bot` child and each command)
 import './tune-network';
 import { Command, Option } from 'commander';
+import { commandFailure } from './command-error';
 import { mkdir } from 'node:fs/promises';
 import { formatErrorTree } from '../core/error-parts';
 import { bridgeVersion } from '../core/version';
@@ -11,6 +12,10 @@ import { observeShutdown, type ShutdownControl } from '../host/lifecycle';
 import type { LingerChoice } from './commands/service';
 
 const program = new Command().name('vonvon').description('Vonvon Bot daemon').version(bridgeVersion());
+const structured = ['settings', 'feishu'].includes(process.argv[2] ?? '');
+const jsonFailure = structured && process.argv.includes('--json');
+if (structured) program.exitOverride();
+if (jsonFailure) program.configureOutput({ writeErr: () => undefined });
 let lease: DataLease | undefined;
 let control: ShutdownControl | undefined;
 program.hook('preAction', async (_command, action) => {
@@ -20,7 +25,7 @@ program.hook('preAction', async (_command, action) => {
   // The exec provider runs in sandboxes that refuse admission sockets and data-root writes.
   // Like daemon getSecret, it only reads the atomically published keystore and takes no lease.
   if (parent === 'secrets' && action.name() === 'get') return;
-  if (parent === 'service' || (parent === 'bot' && action.name() !== 'repair-dir') || parent === 'group' || parent === 'settings' || action.name() === '__daemon-control') return;
+  if (parent === 'service' || (parent === 'bot' && action.name() !== 'repair-dir') || parent === 'group' || parent === 'settings' || parent === 'feishu' || action.name() === '__daemon-control') return;
   // in a Bot's session secrets list, set and remove only refuse (s23g): before the lease, whose socket a sandbox may forbid, and the data root
   if (parent === 'secrets' && action.name() !== 'get' && inBotSession(process.env)) return;
   if (action.name() === 'run') {
@@ -139,12 +144,17 @@ group.command('bind <groupId>').description('Bind a group (oc_…) to a folder')
     await (await import('./commands/group')).runGroupBind(groupId, options, io(options));
   });
 const settings = program.command('settings').description('Read and change bot, group and session settings');
-type Target = Json & { bot?: string; group?: string; session?: string };
+type Target = Json & { bot?: string; group?: string; session?: string; revision?: string; reason?: string };
 const scoped = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--session <threadId>', 'Session thread id').option('--json', 'Print JSON');
 scoped(settings.command('get [section]').description('Show settings, or one section; `get judge` also prints the whole judge prompt')).action(async (section: string | undefined, options: Target) => {
   await (await import('./commands/settings')).runSettingsGet(section, options, io(options));
 });
+scoped(settings.command('access').description('Show access to the requested settings')).action(async (options: Target) => {
+  await (await import('./commands/settings')).runSettingsAccess(options, io(options));
+});
 scoped(settings.command('set <section.key=value...>').description('Change fields of one section; values are JSON or plain text'))
+  .option('--revision <revision>', 'Revision held by the caller; stale revisions are rejected')
+  .option('--reason <text>', 'Explanation retained with the committed result')
   .addHelpText('after', `
 Examples:
   vonvon settings set --group oc_xxx permission.mode=full
@@ -156,6 +166,15 @@ Examples:
   vonvon settings set --group oc_xxx judge.selection='{"kind":"default"}'   # 群里去掉覆盖，用 bot 的`)
   .action(async (assignments: string[], options: Target) => {
     await (await import('./commands/settings')).runSettingsSet(assignments, options, io(options));
+  });
+const feishu = program.command('feishu').description('Read Feishu groups and members');
+feishu.command('groups').description('List joined groups, one page').option(...BOT).option('--cursor <cursor>', 'Next page cursor').option('--json', 'Print JSON')
+  .action(async (options: Json & { bot?: string; cursor?: string }) => {
+    await (await import('./commands/feishu')).runFeishu('groups', undefined, options, io(options));
+  });
+feishu.command('members <groupId>').description('List group members, one page').option(...BOT).option('--cursor <cursor>', 'Next page cursor').option('--json', 'Print JSON')
+  .action(async (groupId: string, options: Json & { bot?: string; cursor?: string }) => {
+    await (await import('./commands/feishu')).runFeishu('members', groupId, options, io(options));
   });
 program.command('__daemon-control <action>', { hidden: true }).action(async (action: string) => {
   await (await import('./commands/daemon-control')).runDaemonControl(action);
@@ -204,6 +223,14 @@ program.parseAsync(process.argv).then(async () => {
   await (await import('../core/logger')).flushLogs();
   process.exit(process.exitCode ?? 0);
 }).catch(async (err) => {
+  if (structured) {
+    if (err?.code === 'commander.helpDisplayed' || err?.code === 'commander.version') return;
+    const failure = commandFailure(err);
+    if (jsonFailure) process.stdout.write(`${JSON.stringify(failure)}\n`);
+    else console.error(failure.error.message);
+    process.exitCode = failure.exitCode;
+    return;
+  }
   // s17b: an AggregateError (a failed shutdown) also prints each error inside it, one per line.
   console.error(formatErrorTree(err));
   await (await import('../core/logger')).flushLogs();

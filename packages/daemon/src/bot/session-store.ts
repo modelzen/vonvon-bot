@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { paths } from '../config/paths';
@@ -292,12 +292,15 @@ function withLock<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-async function write(store: StoreFile): Promise<void> {
+async function write(store: StoreFile, beforeCommit?: () => void): Promise<void> {
   await mkdir(dirname(paths.sessionsFile), { recursive: true });
   const tmp = `${paths.sessionsFile}.tmp-${process.pid}-${randomUUID()}`;
   const body: StoreFile = { ...store, version: FILE_VERSION };
-  await writeFile(tmp, `${JSON.stringify(body, null, 2)}\n`, 'utf8');
-  await rename(tmp, paths.sessionsFile);
+  try {
+    await writeFile(tmp, `${JSON.stringify(body, null, 2)}\n`, 'utf8');
+    beforeCommit?.();
+    await rename(tmp, paths.sessionsFile);
+  } finally { await unlink(tmp).catch(() => undefined); }
 }
 
 export async function listSessions(): Promise<SessionRecord[]> {
@@ -496,14 +499,14 @@ export async function updateSessionTitleJob(
   });
 }
 
-export async function mutateSession(threadId: string, mutate: (session: SessionRecord) => void | Promise<void>): Promise<SessionRecord> {
+export async function mutateSession(threadId: string, mutate: (session: SessionRecord) => void | Promise<void>, options?: { beforeCommit?: () => void }): Promise<SessionRecord> {
   return withLock(async () => {
     const store = await read();
     const session = store.sessions.find(item => item.threadId === threadId);
     if (!session) throw new Error('会话不存在或已被删除');
     await mutate(session);
     session.updatedAt = Date.now();
-    await write(store);
+    await write(store, options?.beforeCommit);
     return session;
   });
 }

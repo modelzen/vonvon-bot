@@ -223,3 +223,9 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 ## 补充
 
 codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次。`codex mcp list` 里的 `cua_repl` 来自内置插件 `unified-computer-use@openai-bundled`，就是原生 Computer Use；显示为 disabled 的 `computer-use` 是旧通道。经 Paseo 调用时，Mac 锁屏会失败（getpaseo/paseo#3346），`full-access` 模式会自动批准打开应用。process 报告里的相关说法和这里一致。
+
+## 2026-10-20 s65 本地 universal 分发
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [local-distribution](2026-10-20-s65/local-distribution.md) | 签名 dmg/zip、13 个 Mach-O、5 份最窄权限、arm64/Rosetta 启动与本地更新模板 | 首次错误 target 作者停止及 Rosetta 首轮未就绪均保留；未公证/发布/安装 owner app |
