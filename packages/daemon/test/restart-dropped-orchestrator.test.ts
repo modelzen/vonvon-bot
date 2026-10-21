@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -28,11 +28,11 @@ vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown,
 vi.mock('../src/agent', async (original) => ({ ...await original<object>(), createBackend: () => fake.backend }));
 vi.mock('../src/project/registry', async (original) => ({
   ...await original<object>(),
-  getProjectByChatId: async (chatId: string) => ({ name: 'test', chatId, cwd: '/test', kind: fake.kind, pendingPolicy: fake.policy }),
+  getProjectByChatId: async (chatId: string) => ({ name: 'test', chatId, cwd: workspace, kind: fake.kind, pendingPolicy: fake.policy }),
 }));
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),
-  getSession: async (key: string) => ({ threadId: key, chatId: 'oc_group_a', sessionId: 'host', backend: 'codex', cwd: '/test', summary: '', ...fake.record }),
+  getSession: async (key: string) => ({ threadId: key, chatId: 'oc_group_a', sessionId: 'host', backend: 'codex', cwd: workspace, summary: '', ...fake.record }),
   patchSession: async () => undefined,
   upsertSession: async () => undefined,
 }));
@@ -60,6 +60,7 @@ type Dropped = typeof import('../src/bot/restart-dropped');
 let createOrchestrator: Module['createOrchestrator'];
 let dropped: Dropped;
 let root: string;
+let workspace: string;
 let file: string;
 let events: DiagnosticsEvent[];
 const opened: ReturnType<Module['createOrchestrator']>[] = [];
@@ -68,7 +69,9 @@ const APP = 'cli_restart_fixture';
 beforeEach(async () => {
   vi.clearAllMocks();
   vi.resetModules();
-  root = mkdtempSync(join(tmpdir(), 'vonvon-restart-dropped-'));
+  root = realpathSync(mkdtempSync(join(tmpdir(), 'vonvon-restart-dropped-')));
+  workspace = join(root, 'workspace');
+  mkdirSync(workspace);
   vi.stubEnv('HOME', join(root, 'home'));
   vi.stubEnv('VONVON_HOME', join(root, 'vonvon'));
   ({ createOrchestrator } = await import('../src/bot/handle-message'));
@@ -146,7 +149,7 @@ function setup(options: { droppedFile?: string | false; maxConcurrentRuns?: numb
     message: { get: async () => ({ data: { items: [{ thread_id: 'omt_new_topic' }] } }), reply: options.reply ?? fake.reply },
     messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) },
   } } } };
-  const o = createOrchestrator(channel as never, cfg, '/test', undefined, options.droppedFile === false ? undefined : { droppedFile: options.droppedFile ?? file });
+  const o = createOrchestrator(channel as never, cfg, workspace, undefined, options.droppedFile === false ? undefined : { droppedFile: options.droppedFile ?? file });
   opened.push(o);
   return o;
 }
@@ -736,7 +739,10 @@ const event = (method,params) => send({method,params});
 require('node:readline').createInterface({input:process.stdin}).on('line',line => {
   const msg = JSON.parse(line);
   if (typeof msg.id !== 'number') return;
-  send({id:msg.id,result:msg.method === 'thread/resume' ? {thread:{id:'host'}} : {}});
+  send({id:msg.id,result:msg.method === 'thread/resume' ? {thread:{id:'host'},
+      cwd: msg.params.cwd, runtimeWorkspaceRoots: msg.params.runtimeWorkspaceRoots,
+      approvalPolicy: msg.params.approvalPolicy, sandbox: { type: msg.params.sandbox === 'danger-full-access' ? 'dangerFullAccess' : undefined },
+    } : {}});
   if (msg.method === 'thread/goal/set') {
     event('thread/goal/updated',{threadId:'host',turnId:null,goal:{objective:msg.params.objective,
       status:'complete',tokensUsed:9001,timeUsedSeconds:999,tokenBudget:null}});
@@ -748,7 +754,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line =
 `);
   vi.stubEnv('CODEX_BIN', bin);
   const { CodexAppServerBackend } = await import('../src/agent/codex-appserver/backend');
-  const actual = await new CodexAppServerBackend().resumeThread({ cwd: root, sessionId: 'host' });
+  const actual = await new CodexAppServerBackend().resumeThread({ cwd: workspace, sessionId: 'host' });
   fake.backend.resumeThread.mockResolvedValue(actual);
   const o = setup({ droppedFile: false });
   try {

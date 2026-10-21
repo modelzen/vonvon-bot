@@ -8,6 +8,17 @@ import { paths } from '../src/config/paths';
 import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
 import { audienceOf, quotedId, type AudienceLookups } from '../src/bot/baselines';
 
+// Keep the execution workspace physically separate from daemon data.
+const workspace = await vi.hoisted(async () => {
+  const { mkdtempSync, realpathSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  return realpathSync(mkdtempSync(join(tmpdir(), 'baselines-workspace-')));
+});
+afterAll(async () => {
+  const { rm } = await import('node:fs/promises');
+  await rm(workspace, { recursive: true, force: true });
+});
 vi.mock('../src/config/paths', () => {
   const appDir = mkdtempSync(join(tmpdir(), 'baselines-'));
   return { paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json'), commentsRootDir: join(appDir, 'comments') } };
@@ -160,8 +171,8 @@ describe('the orchestrator with several bots in the group', () => {
     fake.get.mockImplementation(async () => ({ code: 0, data: { items: [item('user')] } }));
     events = [];
     setDiagnosticsSink((e) => events.push(e));
-    fake.project = { name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', kind: 'multi', noMention: true, mode: 'full', network: false };
-    orchestrator = createOrchestrator(channel as never, cfg, '/tmp/demo');
+    fake.project = { name: 'demo', chatId: 'oc_demo', cwd: workspace, kind: 'multi', noMention: true, mode: 'full', network: false };
+    orchestrator = createOrchestrator(channel as never, cfg, workspace);
   });
   afterEach(async () => { setDiagnosticsSink(undefined); await orchestrator.shutdown(); });
 

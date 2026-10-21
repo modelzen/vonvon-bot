@@ -36,8 +36,14 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
     send(msg.params.threadId === 'host' ? {id:msg.id,error:{code:-32000,message:'parent failed'}} : {id:msg.id,result:{}});
     return;
   }
-  send({id:msg.id,result:msg.method === 'thread/start' ? {thread:{id:'host'}} :
-    msg.method === 'thread/resume' ? {thread:{id:'resumed'}} : msg.method === 'turn/start' ? {turn:{id:'turn'}} : {}});
+  send({id:msg.id,result:msg.method === 'thread/start' ? {thread:{id:'host'},
+      cwd: msg.params.cwd, runtimeWorkspaceRoots: msg.params.runtimeWorkspaceRoots,
+      approvalPolicy: msg.params.approvalPolicy, sandbox: { type: msg.params.sandbox === 'danger-full-access' ? 'dangerFullAccess' : undefined },
+    } :
+    msg.method === 'thread/resume' ? {thread:{id:'resumed'},
+      cwd: msg.params.cwd, runtimeWorkspaceRoots: msg.params.runtimeWorkspaceRoots,
+      approvalPolicy: msg.params.approvalPolicy, sandbox: { type: msg.params.sandbox === 'danger-full-access' ? 'dangerFullAccess' : undefined },
+    } : msg.method === 'turn/start' ? {turn:{id:'turn'}} : {}});
   if (msg.method === 'thread/goal/set') goalObjective = msg.params.objective;
   if (msg.method === 'turn/start') goalObjective = undefined;
   if (msg.method === 'turn/start' || (msg.method === 'thread/goal/set' && msg.params.objective !== 'count')) {

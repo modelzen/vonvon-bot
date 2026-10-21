@@ -22,7 +22,10 @@ process.stdin.on('data', (d) => {
     const msg = JSON.parse(line);
     if (typeof msg.id !== 'number') continue; // notification — ignore
     if (msg.method === 'turn/start') process.exit(1); // crash mid-turn, no reply
-    const result = msg.method === 'thread/start' ? { thread: { id: 'th_test' } } : {};
+    const result = msg.method === 'thread/start' ? { thread: { id: 'th_test' } ,
+      cwd: msg.params.cwd, runtimeWorkspaceRoots: msg.params.runtimeWorkspaceRoots,
+      approvalPolicy: msg.params.approvalPolicy, sandbox: { type: msg.params.sandbox === 'danger-full-access' ? 'dangerFullAccess' : undefined },
+    } : {};
     process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }) + '\\n');
   }
 });
