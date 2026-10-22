@@ -29,10 +29,15 @@ export function judgeEffort(model: string, models: ModelInfo[] | undefined, cust
   return REASONING_EFFORTS.find((effort) => info.supportedEfforts.includes(effort));
 }
 
-/** gpt-6-luna; when the cached list lacks it but has another `*-luna`, the first of those. */
+/** Prefer the small Luna model. Once discovery has a visible catalog, choose only from it. */
 export function codexJudgeDefault(models: ModelInfo[] | undefined): { model: string; effort?: ReasoningEffort } {
-  const listed = models?.some((m) => m.id === CODEX_JUDGE_MODEL);
-  const model = models && !listed ? models.find((m) => m.id.endsWith('-luna'))?.id ?? CODEX_JUDGE_MODEL : CODEX_JUDGE_MODEL;
+  const visible = models?.filter(item => !item.hidden);
+  const model = visible?.length
+    ? (visible.find(item => item.id === CODEX_JUDGE_MODEL)
+      ?? visible.find(item => item.id.endsWith('-luna'))
+      ?? visible.find(item => item.isDefault)
+      ?? visible[0]!).id
+    : CODEX_JUDGE_MODEL;
   const effort = judgeEffort(model, models);
   return effort ? { model, effort } : { model };
 }
@@ -165,10 +170,15 @@ export function resolveJudgeModel(
   for (const source of ['group', 'bot'] as const) {
     const chosen = layers[source];
     if (chosen?.kind === 'decision') return { model: chosen.model, provider: chosen.provider, modelSource: source };
-    if (chosen?.backend !== backendId) continue;
+    if (!chosen || (source === 'bot' && chosen.backend !== backendId)) continue;
     const effort = chosen.effort ? fitJudgeEffort(chosen.model, chosen.effort, models, chosen.custom)
-      : backendId === CLAUDE_BACKEND_ID ? undefined : judgeEffort(chosen.model, models, chosen.custom);
+      : chosen.backend === CLAUDE_BACKEND_ID ? undefined : judgeEffort(chosen.model, models, chosen.custom);
     return { model: chosen.model, ...(effort ? { effort } : {}), modelSource: source };
   }
   return { ...defaultJudgeModel(backendId, models, readClaude), modelSource: 'default' };
+}
+
+/** The group may judge with another provider than the one running its tasks. */
+export function judgeBackendId(taskBackend: string, group: JudgeSelectionStored | undefined): string {
+  return group?.kind === 'llm' ? group.backend : taskBackend;
 }

@@ -38,6 +38,8 @@ export interface ClaudeThreadConfig {
   permissionFs?: PathFs;
   /** appended to Claude Code's default system prompt (bridge developer guidance). */
   systemPromptAppend?: string;
+  additionalDirectories?: string[];
+  skills?: string[];
   /** Which filesystem settings the SDK loads. The SDK default is none — so
    * project/user CLAUDE.md, skills and `.claude/settings.json` are NOT read
    * unless set. The backend passes ['user','project'] to make a claude session
@@ -347,6 +349,8 @@ export class ClaudeAgentThread implements AgentThread {
         ? { systemPrompt: { type: 'preset', preset: 'claude_code', append: cfg.systemPromptAppend } }
         : {}),
       ...(cfg.settingSources ? { settingSources: cfg.settingSources } : {}),
+      ...(cfg.additionalDirectories?.length ? { additionalDirectories: cfg.additionalDirectories } : {}),
+      ...(cfg.skills ? { skills: cfg.skills } : {}),
       ...(cfg.env ? { env: cfg.env } : {}),
       settings: AUTO_COMPACT_SETTINGS,
       ...(mcpServers.vonvon_bot ? { mcpServers } : {}),

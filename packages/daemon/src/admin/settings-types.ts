@@ -1,3 +1,4 @@
+import type { BotProfile, GroupProfile, ProjectModelAccess, ProjectWorkspace, ProjectSmartRules, ProjectSkills, ProjectPresentation } from '../project/registry';
 import type { ModelInfo, PermissionMode, ReasoningEffort } from '../agent/types';
 import type { ModelDisplayMode, PendingPolicy, ResolvedCompletionReminderConfig } from '../config/schema';
 import type { VoiceAction, VoiceView } from '../voice/types';
@@ -74,6 +75,7 @@ export type TitlePolicy = {
   effort: ReasoningEffort;
 };
 export interface AgentSections {
+  profile: BotProfile;
   cards: {
     showToolCalls: boolean;
     showModel: ModelDisplayMode;
@@ -102,6 +104,12 @@ export interface AgentSections {
   };
 }
 export interface ProjectSections {
+  profile: GroupProfile;
+  modelAccess: ProjectModelAccess;
+  workspace: ProjectWorkspace;
+  smartRules: ProjectSmartRules;
+  skills: ProjectSkills;
+  presentation: ProjectPresentation;
   permission: {
     mode: PermissionMode;
     /** @deprecated since s15c always equal to `mode`, never saved; kept so clients from before s15c still parse the view */
@@ -158,7 +166,7 @@ export interface AgentSettingsView {
   scope: Extract<SettingsScope, {
     kind: 'agent';
   }>;
-  sections: Sections<AgentSections>;
+  sections: Sections<Omit<AgentSections, 'profile'>> & Partial<Sections<Pick<AgentSections, 'profile'>>>;
   ownerOpenId: string | null;
   administrators: {
     feishu?: { ownerOpenId: string | null; adminOpenIds: string[] };
@@ -192,7 +200,10 @@ export interface ProjectSettingsView {
   scope: Extract<SettingsScope, {
     kind: 'project';
   }>;
-  sections: Sections<ProjectSections>;
+  sections: Sections<Omit<ProjectSections, 'profile' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation'>> & Partial<Sections<Pick<ProjectSections, 'profile' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation'>>>;
+  botProfile?: BotProfile;
+  skillsError?: string;
+  skills?: Array<{ path: string; name: string; description: string; source: 'workspace' | 'user' | 'provider'; enabled: boolean }>;
   identity: {
     chatId: string;
     backend: string;

@@ -1,0 +1,99 @@
+import type { AgentBackend, AgentSkill } from './types';
+import { readdir, readFile, realpath, stat } from 'node:fs/promises';
+import { basename, dirname, join, relative } from 'node:path';
+import { homedir } from 'node:os';
+import { parse as parseToml } from 'smol-toml';
+import { claudeConfigDir } from './claude-agent/configured-model';
+
+/** A partial, read-only inventory for stopped Bots. Native plugins need a running provider. */
+export async function discoverLocalGroupSkills(input: {
+  backendId: string; cwd: string; directories?: string[]; disabledPaths?: readonly string[];
+  /** Filesystem-only dependency injection for tests. */
+  home?: string; env?: NodeJS.ProcessEnv;
+}): Promise<AgentSkill[]> {
+  const claude = input.backendId === 'claude-agent';
+  if (!claude && input.backendId !== 'codex-appserver') throw new Error('当前 Provider 无法读取本地技能');
+  const home = input.home ?? homedir();
+  const env = input.env ?? process.env;
+  const nativeHome = claude ? claudeConfigDir(env, home) : env.CODEX_HOME || join(home, '.codex');
+  const disabled = new Set(input.disabledPaths ?? []);
+  if (!claude) {
+    const file = join(nativeHome, 'config.toml');
+    const content = await readFile(file, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error; });
+    if (content) {
+      const configured = parseToml(content).skills;
+      if (configured && typeof configured === 'object' && !Array.isArray(configured) && 'config' in configured && Array.isArray(configured.config)) {
+        for (const value of configured.config) {
+          if (value && typeof value === 'object' && !Array.isArray(value) && 'enabled' in value && 'path' in value && value.enabled === false && typeof value.path === 'string') {
+            const path = value.path;
+            disabled.add(path);
+            disabled.add(await realpath(path).catch(() => path));
+          }
+        }
+      }
+    }
+  }
+  const found = new Map<string, AgentSkill>();
+  const visited = new Set<string>();
+  let count = 0;
+  const scalar = (value: string) => value.trim().replace(/^(['"])([\s\S]*)\1$/u, '$2');
+  async function inspect(file: string, source: 'workspace' | 'user', fallback: string, command: boolean) {
+    const entry = await stat(file);
+    if (!entry.isFile() || entry.size > 128 * 1024) return;
+    const content = await readFile(file, 'utf8');
+    const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u)?.[1];
+    if (!frontmatter && !command) return;
+    const name = scalar(frontmatter?.match(/^name:\s*(.+)$/mu)?.[1] ?? fallback);
+    const rawDescription = frontmatter?.match(/^description:\s*(.+)$/mu)?.[1] ?? '';
+    const description = /^[>|][-+]?\s*$/u.test(rawDescription)
+      ? (frontmatter?.match(/^description:[^\n]*\n((?:[ \t]+[^\n]*(?:\n|$))*)/mu)?.[1] ?? '').trim().replace(/\s+/gu, ' ')
+      : scalar(rawDescription);
+    if (!name || (!description && !command)) return;
+    const path = claude ? `claude:${name}` : await realpath(file);
+    found.set(path, { path, name, description, source, enabled: !disabled.has(path) });
+  }
+  async function scan(root: string, source: 'workspace' | 'user', command = false, path = root, depth = 0): Promise<void> {
+    if (depth > 6) return;
+    const canonical = await realpath(path).catch(error => { if (error.code === 'ENOENT') return undefined; throw error; });
+    if (!canonical || visited.has(canonical)) return;
+    visited.add(canonical);
+    const entries = await readdir(path, { withFileTypes: true });
+    for (const entry of entries) {
+      if (++count > 4096) throw new Error('本地技能目录过大，请启动 Bot 后读取完整目录');
+      const next = join(path, entry.name);
+      if (entry.isDirectory() || entry.isSymbolicLink() && (await stat(next)).isDirectory()) await scan(root, source, command, next, depth + 1);
+      else if (entry.name === 'SKILL.md' || command && entry.name.endsWith('.md')) {
+        const fallback = command ? relative(root, next).replace(/\.md$/u, '').split(/[\\/]/u).join(':') : basename(dirname(next));
+        await inspect(next, source, fallback, command);
+      }
+    }
+  }
+  await scan(join(nativeHome, 'skills'), 'user');
+  if (claude) await scan(join(nativeHome, 'commands'), 'user', true);
+  else await scan(join(home, '.agents', 'skills'), 'user');
+  for (const workspace of new Set([input.cwd, ...input.directories ?? []])) {
+    await scan(join(workspace, claude ? '.claude' : '.agents', 'skills'), 'workspace');
+    if (claude) await scan(join(workspace, '.claude', 'commands'), 'workspace', true);
+  }
+  return [...found.values()];
+}
+
+/** Uses the provider's own inventory, including plugins and user configuration. */
+export async function discoverGroupSkills(input: {
+  backend: AgentBackend; cwd: string; directories?: string[]; disabledPaths?: readonly string[];
+}): Promise<AgentSkill[]> {
+  if (!input.backend.listSkills) throw new Error('当前 Provider 无法读取技能目录');
+  const skills = await input.backend.listSkills({ cwd: input.cwd, directories: input.directories });
+  const disabled = new Set(input.disabledPaths ?? []);
+  return skills.map(skill => ({ ...skill, enabled: skill.enabled && !disabled.has(skill.path) }));
+}
+
+/** Omitted when no per-group override exists, preserving provider-native dynamic discovery. */
+export async function groupSkillProfile(input: Parameters<typeof discoverGroupSkills>[0]) {
+  const disabledPaths = input.disabledPaths ?? [];
+  if (!disabledPaths.length) return undefined;
+  if (input.backend.id === 'codex-appserver') return { disabledPaths };
+  const skills = await discoverGroupSkills(input);
+  // Claude's native whitelist hides the skill and rejects Skill tool invocation.
+  return { disabledPaths, enabledNames: skills.filter(skill => skill.enabled).map(skill => skill.name) };
+}

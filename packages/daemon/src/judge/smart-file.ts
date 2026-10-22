@@ -84,3 +84,8 @@ export async function readSmartPrompt(appId: string, chatId?: string, dir?: stri
   if (text !== undefined) return { source: 'bot', text, path };
   return { source: 'default', text: DEFAULT_SMART_PROMPT, path };
 }
+
+/** Owner text remains separate from the fixed decision protocol. Legacy SMART is kept whole in respond. */
+export function composeSmartRules(rules: { respond: string; newTopic: string }): string {
+  return [`## 何时响应\n${rules.respond}`, `## 何时创建新话题\n${rules.newTopic}`].join('\n\n');
+}
