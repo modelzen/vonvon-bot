@@ -17,7 +17,7 @@ vi.mock('../src/config/paths', async () => {
 });
 const fixture = vi.hoisted(() => ({ send: vi.fn(async (..._args: unknown[]) => ({ messageId: 'om_result', cardId: 'card' })) }));
 // Keep both selectable backends available so error cards can preserve the selection.
-vi.mock('../src/agent', async original => ({ ...await original<object>(), isBackendEntryInstalled: () => true, createBackend: () => ({ id: 'codex-appserver', listModels: async () => [] }), effectiveDefaultBackend: async () => 'codex-appserver' }));
+vi.mock('../src/agent', async original => ({ ...await original<object>(), isBackendEntryInstalled: () => true, createBackend: () => ({ id: 'codex-appserver', listModels: async () => [{ id: 'default', displayName: 'Default', supportedEfforts: ['medium'], defaultEffort: 'medium', isDefault: true, hidden: false }] }), effectiveDefaultBackend: async () => 'codex-appserver' }));
 vi.mock('../src/card/managed', () => ({ sendManagedCard: fixture.send, updateManagedCard: vi.fn(async () => true) }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, warn() {}, fail() {} }, withTrace: (_context: unknown, callback: () => unknown) => callback() }));
 
@@ -52,12 +52,12 @@ it('binds 按话题聊 as multi with default 免@ on and a topic result label', 
     expect(await getProjectByName('Topic')).toMatchObject({ kind: 'multi', noMention: true, origin: 'joined', mode: 'qa', network: false });
   } finally { await orchestrator.shutdown(); }
 });
-it('binds the topic smart button as 智能', async () => {
+it('guides smart binding to the web decision model picker without creating a group', async () => {
   const { orchestrator } = app();
   try {
     await orchestrator.dispatcher.handle(submit('Smart', 'smart'));
-    await reply();
-    expect(await getProjectByName('Smart')).toMatchObject({ kind: 'single', smart: true, noMention: false });
+    expect(await reply()).toContain('请在网页端连接智能群，并选择决策模型');
+    expect(await getProjectByName('Smart')).toBeUndefined();
   } finally { await orchestrator.shutdown(); }
 });
 it('refuses only an explicit not-in-chat result and preserves the topic form', async () => {

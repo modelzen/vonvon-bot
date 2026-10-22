@@ -44,6 +44,15 @@ vi.mock('../src/project/registry', async (original) => ({
   // count fake-timer ticks to connect, so keep startup free of real I/O.
   splitTierChats: async () => new Map(),
 }));
+// Ownership assertions use exact fake-clock ticks; personality file I/O has its own tests.
+vi.mock('../src/bot/group-profile', async original => ({
+  ...await original<object>(),
+  readGroupPersonality: async () => ({
+    bot: { persona: '', memory: '' },
+    group: { persona: '', memory: '', inheritPersona: true, inheritMemory: true },
+    persona: '', memory: '', instructions: '', version: 'fixture-empty',
+  }),
+}));
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),
   getSession: async () => ({ threadId: 'topic', chatId: 'chat', sessionId: 'host', backend: 'codex', cwd: workspace, summary: '' }),
@@ -93,6 +102,7 @@ function thread() {
     close: vi.fn(async () => { for (const turn of turns) turn.resolve(); }),
     abort: vi.fn(async () => undefined),
     steer: vi.fn(async (_input: AgentInput, _id: string): Promise<void> => undefined),
+    injectContext: vi.fn(async (_text: string) => undefined),
     runStreamed(input: AgentInput) {
       consumed.push(input);
       const end = deferred<void>();
