@@ -9,14 +9,20 @@ import { runtimeDistribution } from '../../service/distribution';
 import type { RpcOutcome } from '../rpc';
 import type { SnapshotStore } from '../snapshot';
 import { unsupported } from '../errors';
+import type { EnvironmentService } from '../../environment/service';
 import type {BridgeImporter} from '../../import/bridge/transaction';
 import {RpcError} from '../errors';
 
 /** The login-time service switch (3.10): the helper launcher, the snapshot that shows it, and the data root. */
-export type MachineServiceContext = { launcher: ServiceActionLauncher; snapshots: Pick<SnapshotStore, 'observeService' | 'refreshService'>; root: string; bridgeImport?: BridgeImporter };
+export type MachineServiceContext = { launcher: ServiceActionLauncher; snapshots: Pick<SnapshotStore, 'observeService' | 'refreshService'>; root: string; bridgeImport?: BridgeImporter; environment?: Pick<EnvironmentService, 'mcp'> };
 
 export async function machineRpc(service: AdminService, control: ShutdownControl | undefined, port: number, request: MachineRequest, services?: MachineServiceContext): Promise<RpcOutcome<MachineReply>> {
   switch (request.type) {
+    case 'mcp': {
+      if (!services?.environment) return unsupported();
+      const reply = await services.environment.mcp(request.request);
+      return request.request.action === 'list' ? { kind: 'read', value: reply } : { kind: 'mutation', reply: () => reply };
+    }
     case 'bridgeImport': {
       if (!services?.bridgeImport) return unsupported();
       if (request.action === 'start' && request.acceptedChanges !== true) throw new RpcError('invalid_request', '请先确认导入后的变化。');

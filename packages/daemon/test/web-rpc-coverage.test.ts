@@ -197,7 +197,7 @@ else process.exit(0);
         { type: 'profileInit', name: 'test' }, { type: 'profileInitStatus' }, { type: 'profileInitCancel', operationId },
       ],
       machine: [
-        { type: 'bridgeImport', action: 'status' },
+        { type: 'mcp', request: { action: 'list', provider: 'claude' } }, { type: 'bridgeImport', action: 'status' },
         { type: 'status' }, { type: 'repairCli' }, { type: 'service', action: 'install' }, { type: 'setServiceSkipped', skipped: false }, { type: 'startHost' }, { type: 'stopHost' }, { type: 'logs' },
         { type: 'checkCoreUpdate' }, { type: 'applyCoreUpdate' }, { type: 'coreUpdateStatus' }, { type: 'checkDesktopUpdate' }, { type: 'openReleases' }, { type: 'installDesktopUpdate' },
       ],
@@ -227,6 +227,7 @@ else process.exit(0);
           expect(responseSchema.safeParse(frame).success, key).toBe(true);
           if (key === 'collaboration.providerModels') expect(frame).toMatchObject({ payload: { kind: 'providerModels', backend: 'codex-appserver', state: 'unavailable', models: [] } });
           if (key === 'environment.backendInstallStatus') expect(frame).toMatchObject({ payload: { kind: 'backendInstallStatus', operation: null } });
+          if (key === 'machine.mcp') expect(frame).toMatchObject({ payload: { type: 'mcp', provider: 'claude', status: 'ready', entries: [] } });
           if (key === 'collaboration.stopSubagent') expect(frame).toMatchObject({ type: 'response', method: 'collaboration', payload: { kind: 'applied' } });
           if (key === 'command.listGroupMembers') expect(frame).toMatchObject({ type: 'response', method: 'command', payload: { kind: 'members', members, nextCursor: 'members-next' } });
         }

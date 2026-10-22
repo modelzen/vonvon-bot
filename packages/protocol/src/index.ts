@@ -16,3 +16,5 @@ export * from "./setup-steps.js";
 export * from "./diagnostics.js";
 export * from "./crash.js";
 export * from "./display.js";
+
+export * from './mcp.js';

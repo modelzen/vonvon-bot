@@ -56,7 +56,7 @@ it('closes admission synchronously and shares the drain with abort callback reen
     expect(admission.operation.peers.size).toBe(0);
   } finally { cleanup.resolve(aborted); await closing; }
   expect(jobs.close()).toBe(closing);
-  expect(jobs.attachBackend(admission, { id: 'replay', open: true, event() {} }).replay).toEqual([{ type: 'error', code: 'aborted', message: 'cancelled' }]);
+  expect(jobs.attachBackend(admission, { id: 'replay', open: true, event() {} }).replay).toEqual([{ type: 'error', code: 'aborted', message: '安装已取消。' }]);
 });
 
 it('drains an admission selected before the service microtask starts', async () => {
