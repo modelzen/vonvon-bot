@@ -108,15 +108,15 @@ export function UsagePanel({ request, onOpenEnvironment, onOpenShare }: Props) {
   const primaryLabel = windowLabel(data?.usage.main.primary?.windowSeconds, "主要限额");
   const secondaryLabel = windowLabel(data?.usage.main.secondary?.windowSeconds, "额外限额");
   return <div className="usage-panel">
-    <header className="usage-intro"><div><h2>Codex 用量</h2><p>本机登录的 Codex 账号。所有 Bot 共享同一份用量。</p></div><Button size="sm" loading={busy} onClick={() => void refresh()}>刷新用量</Button></header>
+    <header className="usage-intro"><div><h2>Codex 用量</h2><p>所有 Bot 共用本机 Codex 账号的用量。</p></div><Button size="sm" loading={busy} onClick={() => void refresh()}>刷新用量</Button></header>
     {data?.usage.main.primary && <div className="usage-summary" aria-label="Codex 当前用量">
       <div><span>{primaryLabel}</span><strong>{Math.round(data.usage.main.primary.usedPercent)}<small>% 已用</small></strong><div className="usage-progress" role="progressbar" aria-label={`${primaryLabel}已用`} aria-valuenow={data.usage.main.primary.usedPercent} aria-valuemin={0} aria-valuemax={100}><span style={{width: `${Math.max(0, Math.min(100, data.usage.main.primary.usedPercent))}%`}}/></div></div>
       <div><span>{secondaryLabel}</span><strong>{data.usage.main.secondary ? Math.round(data.usage.main.secondary.usedPercent) : '—'}<small>{data.usage.main.secondary ? '% 已用' : '暂不可用'}</small></strong><div className="usage-progress" role="progressbar" aria-label={`${secondaryLabel}已用`} aria-valuenow={data.usage.main.secondary?.usedPercent ?? 0} aria-valuemin={0} aria-valuemax={100}><span style={{width: `${Math.max(0, Math.min(100, data.usage.main.secondary?.usedPercent ?? 0))}%`}}/></div></div>
     </div>}
     <SettingsGroup id={settingAnchor('分享 Codex 用量')}>
-      <SettingsRow title="分享 Codex 用量" description="选择飞书群并生成可转发的用量卡片。" trailing={<Button size="sm" onClick={onOpenShare}>选择飞书群</Button>} />
+      <SettingsRow title="分享 Codex 用量" description="在飞书群生成用量卡片。" trailing={<Button size="sm" onClick={onOpenShare}>选择飞书群</Button>} />
     </SettingsGroup>
-    <SettingsGroup label="当前账号" footer="数据来自本机 Codex 登录账号。">
+    <SettingsGroup label="当前账号">
       {data ? <>
         <SettingsRow title="账号" value={profile?.displayName || "当前 Codex 账号"} />
         <SettingsRow title="套餐" value={data.usage.planType || "未提供"} />
@@ -130,7 +130,7 @@ export function UsagePanel({ request, onOpenEnvironment, onOpenShare }: Props) {
     </SettingsGroup>
     {profile && <>
       <SettingsGroup label="每日活动"><Heatmap profile={profile} /></SettingsGroup>
-      <details className="usage-details"><summary>查看详细活动统计</summary>
+      <details className="usage-details"><summary>详细统计</summary>
       <SettingsGroup label="活动统计" footer={profile.statsAsOf ? `统计截至 ${profile.statsAsOf}` : undefined}>
         {profileStats(profile).map(item => <SettingsRow key={item.label} title={item.label} value={item.value} />)}
         <SettingsRow title="会话总数" value={amount(profile.totalThreads)} />
