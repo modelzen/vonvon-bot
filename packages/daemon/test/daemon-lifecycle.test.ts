@@ -70,6 +70,19 @@ vi.mock('../src/agent/owned-process', () => ({
 }));
 vi.mock('../src/agent', () => ({ installBackendDep() {}, uninstallBackendDep() {} }));
 vi.mock('../src/bot/bridge', () => ({ startBridge: fixture.startBridge }));
+// These cases exercise host/provider ownership without a migration. Vitest's worker has an IPC
+// channel, while the real importer is deliberately host-only and owns real Bridge locks.
+vi.mock('../src/import/bridge/runtime', () => ({
+  bridgeImportRuntime: () => ({
+    importer: {},
+    recover: async () => {},
+    guard: async () => undefined,
+    bind() {},
+    releaseRemoved() {},
+    shutdown: async () => {},
+    dispose() {},
+  }),
+}));
 vi.mock('../src/bot/onboarding', () => ({
   ensureOnboarded: async () => ({ cfg: { accounts: { app: { id: 'runner-bot' } } }, secret: 'fixture' }),
   announceEventsWhenLive() {},

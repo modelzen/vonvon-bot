@@ -15,6 +15,7 @@ import { capOrphanDrain, closeHostRun, guardParentPipes, openBotCrashContext, op
 import { crashEntry } from './crash-store';
 import { registeredProviderPids, unconfirmedProviderPids } from '../agent/owned-process';
 import type { HostNotice } from './crash-notify';
+import {bridgeImportRuntime} from '../import/bridge/runtime';
 
 const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -89,6 +90,8 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
     });
     log.info('process-host', 'boot-sweep', { ...await host.sweepOrphans() });
     log.info('process-host', 'boot-admission', { admission: host.admission()?.reason ?? 'allowed' });
+    // Recover migration before runRun reads the registry or starts any Bot; orphan providers were drained above.
+    if (!process.send) await bridgeImportRuntime().recover();
     // Lane 10 hook: the value is a fake-child.mjs path; the real `vonvon daemon run` has no other seam a lane can reach.
     if (process.env.VONVON_TEST_SPAWN_FAKE_CHILD) {
       await host.spawn('codex', 'lane-10', { file: process.execPath, args: [process.env.VONVON_TEST_SPAWN_FAKE_CHILD, '--ignore-term', '--grandchildren', '1'], env: Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) });
@@ -135,6 +138,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
     // A cleanup failure no longer turns a requested restart into a stop (v1-plan s17): the replacement starts only
     // after this process has exited, and leftover provider processes are swept at the next boot.
     try { await host?.closeAll(); } catch (error) { log.fail('daemon-shutdown', error, { phase: 'process-host' }); errors.push(error); }
+    if (!process.send) bridgeImportRuntime().dispose();
     // JP-VPS acceptance seam (s17b): a two-level cleanup failure, to see each error in the logs and on stderr.
     if (host && !process.send && process.env.VONVON_TEST_CRASH === 'cleanup') {
       const seam = new AggregateError([new Error('step 1'), new AggregateError([new Error('step 2')], 'VONVON_TEST_CRASH nested')], 'VONVON_TEST_CRASH cleanup');

@@ -6,7 +6,14 @@ vi.mock('../src/agent/owned-process', () => ({ closeOwnedProviderProcesses: fixt
 vi.mock('../src/bot/onboarding', () => ({ ensureOnboarded: fixture.onboard, announceEventsWhenLive: vi.fn() }));
 vi.mock('../src/bot/bridge', () => ({ startBridge: vi.fn(async () => ({ shutdown: fixture.shutdown })) }));
 vi.mock('../src/core/single-instance', () => ({ acquireSingleInstanceLock: () => () => {}, BridgeAlreadyRunningError: class extends Error {} }));
-vi.mock('../src/config/bots', () => ({ ensureRegistry: async () => ({ bots: [] }), activeBots: () => [] }));
+vi.mock('../src/config/bots', () => ({ ensureRegistry: async () => ({ bots: [] }), activeBots: () => [], loadBots: async () => ({ bots: [] }) }));
+// Keep restart/exit-code cases independent from the host's Bridge migration owner.
+vi.mock('../src/import/bridge/runtime', () => ({
+  bridgeImportRuntime: () => ({
+    importer: {}, recover: async () => {}, guard: async () => undefined,
+    bind() {}, releaseRemoved() {}, shutdown: async () => {}, dispose() {},
+  }),
+}));
 vi.mock('../src/admin/service', () => ({ createAdminService: vi.fn() }));
 vi.mock('../src/agent', () => ({ installBackendDep: vi.fn(), uninstallBackendDep: vi.fn() }));
 vi.mock('../src/server/http', async original => ({ ...await original<typeof import('../src/server/http')>(), startApi: fixture.api }));
