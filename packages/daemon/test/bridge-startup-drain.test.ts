@@ -56,6 +56,13 @@ vi.mock('../src/project/registry', async original => ({
   ...await original<object>(),
   getProjectByChatId: async () => undefined,
 }));
+// Startup-drain cases own a temporary host and no legacy Bridge migration.
+vi.mock('../src/import/bridge/runtime', () => ({
+  bridgeImportRuntime: () => ({
+    importer: {}, recover: async () => {}, guard: async () => undefined,
+    bind() {}, releaseRemoved() {}, shutdown: async () => {}, dispose() {},
+  }),
+}));
 vi.mock('../src/bot/onboarding', () => ({
   ensureOnboarded: async () => ({ cfg, secret: 'fixture', identity: { appId: cfg.accounts.app.id, tenant: cfg.accounts.app.tenant, createdAt: 1 } }),
   announceEventsWhenLive() {},
