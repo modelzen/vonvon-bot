@@ -28,7 +28,7 @@ test('every literal configuration row label in the current desktop UI is indexed
     'src/App.tsx',
   ].map(path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')).join('\n');
   const labels = [...source.matchAll(/<SettingsRow\s+(?:[^>]*?\s)?title="([^"]+)"/gs)].map(match => match[1]!);
-  const transient = new Set(['正在读取当前设置…', '正在读取项目', '没有匹配的会话']);
+  const transient = new Set(['正在读取当前设置…', '正在读取项目', '正在读取群内设置', '没有匹配的会话', '群配置读取失败', '尚未绑定飞书群']);
   const missing = [...new Set(labels)].filter(label => !transient.has(label) && !entries.some(entry => entry.title === label || entry.aliases.includes(label)));
   assert.deepEqual(missing, []);
 });
@@ -73,7 +73,7 @@ test('results are complete, ranked, uniquely identified, and have valid destinat
   const catalog = searchEntries(many);
   const matches = findEntries(catalog, '最大并发任务');
   assert.equal(matches.length, 70);
-  assert.equal(matches[0]?.title, '最大并发任务');
+  assert.equal(matches[0]?.title, '同时处理的任务');
   assert.equal(new Set(catalog.map(entry => entry.id)).size, catalog.length);
   assert.ok(catalog.every(entry => !entry.destination.section || settingAnchor(entry.destination.section).startsWith('setting-')));
   assert.equal(findEntries(entries, '')[0]?.id, 'agents');

@@ -1,0 +1,110 @@
+import {expect, it} from 'vitest';
+import {renderToStaticMarkup} from 'react-dom/server';
+import {agentIdSchema, type ModelCatalog, type ProjectSettingsView} from '@vonvon/protocol';
+import {createClient} from '../../client/src/client';
+import {ClientProvider} from '../src/client-context';
+import {DirectoryPickerProvider} from '../src/directory-picker';
+import {GroupSettingsContent, ModelAccessChoices, modelAccessProblem, type GroupSettingsTab} from '../src/settings/GroupDesignSettings';
+import {PersonaEditor} from '../src/settings/PersonaEditor';
+
+const client = createClient({isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {}});
+const section = <const T,>(stored: T) => ({stored, effective: stored, revision: 'r', access: {kind: 'writable' as const}, apply: []});
+const fixture = (): ProjectSettingsView => ({
+  scope: {kind: 'project', botId: agentIdSchema.parse('cli_example'), projectName: '真实群'},
+  identity: {chatId: 'oc_actual', backend: 'codex-appserver', cwd: '/Users/example/project', kind: 'smart'},
+  botProfile: {persona: 'Bot 的个性原文', memory: 'Bot 的记忆原文'},
+  skills: [{name: '实际技能', description: '从 Provider 发现', path: 'claude:actual', source: 'provider', enabled: true}],
+  sections: {
+    permission: section({mode: 'full', guestMode: 'full', network: false}), response: section({noMention: false}), model: section({selection: {kind: 'default'}}),
+    profile: section({persona: '本群补充', memory: '本群记忆', inheritPersona: true, inheritMemory: false}),
+    modelAccess: section({backend: 'codex-appserver', models: ['actual-a'], efforts: ['low']}),
+    workspace: section({primary: '/one', directories: ['/one', '/two'], repositories: ['/repo-a', '/repo-b']}),
+    skills: section({disabledPaths: []}),
+    presentation: section({voiceEnabled: false, showToolCalls: true, showModel: 'running', completionMode: 'manual', longTaskMinutes: 5}),
+    smartRules: section({respond: '响应规则原文', newTopic: '新话题规则原文'}),
+    judge: section({selection: {kind: 'llm', backend: 'codex-appserver', model: 'actual-a'}}),
+    run: {...section({pendingPolicy: 'default'}), effective: {pendingPolicy: 'queue'}},
+  }, members: {openIds: [], revision: 'm'},
+});
+const render = (tab: GroupSettingsTab, view = fixture()) => renderToStaticMarkup(<ClientProvider client={client}><DirectoryPickerProvider>
+  <GroupSettingsContent tab={tab} view={view} refresh={async () => {}} botName="测试 Bot" onOpenTools={() => {}}/>
+</DirectoryPickerProvider></ClientProvider>);
+const catalog: ModelCatalog = {backend: 'codex-appserver', state: 'ready', source: 'backend-provided', observedAt: 1, titleEfforts: ['low', 'high'], models: [
+  {id: 'actual-a', displayName: '实际模型 A', description: '', isDefault: true, hidden: false, supportedEfforts: ['low'], defaultEffort: 'low'},
+  {id: 'actual-b', displayName: '实际模型 B', description: '', isDefault: false, hidden: false, supportedEfforts: ['high'], defaultEffort: 'high'},
+  {id: 'no-effort', displayName: '无 Effort 模型', description: '', isDefault: false, hidden: false, supportedEfforts: [], defaultEffort: 'none'},
+]};
+it('keeps Bot source read-only inside the group editor and inheritance optional for each field', () => {
+  const html = render('profile');
+  expect(html).toContain('aria-label="继承的 Bot 个性"');
+  expect(html).toContain('Bot 的个性原文');
+  expect(html).toContain('aria-label="移除 Bot 个性继承"');
+  expect(html).toContain('继承 Bot 记忆');
+  expect(html).not.toContain('Bot 的记忆原文');
+  expect(html).toContain('aria-label="本群个性"');
+  expect(html).toContain('本群补充');
+  expect(html).not.toContain('添加 Bot 记忆');
+  const bot = renderToStaticMarkup(<PersonaEditor label="个性" value="源内容" onChange={() => {}}/>);
+  expect(bot).toContain('aria-label="Bot 个性"');
+  expect(bot).not.toContain('继承');
+});
+it('shows discovered skills and no fabricated tool authorization state', () => {
+  const html = render('capabilities');
+  expect(html).toContain('实际技能');
+  expect(html).toContain('aria-label="使用 实际技能"');
+  expect(html).toContain('添加技能');
+  expect(html).toContain('工具与连接');
+  expect(html).not.toContain('待安装');
+  expect(html).not.toContain('待授权');
+  const empty = fixture(); empty.skills = [];
+  expect(render('capabilities', empty)).toContain('尚未发现技能');
+  expect(render('capabilities', empty)).not.toContain('实际技能');
+  const failed = fixture(); delete failed.skills; failed.skillsError = '启动 Bot 后可读取 Provider 的技能目录';
+  expect(render('capabilities', failed)).toContain(failed.skillsError);
+  expect(render('capabilities', failed)).not.toContain('尚未发现技能');
+});
+it('keeps one primary among peer directories and no primary repository', () => {
+  const html = render('workspace');
+  expect(html).toContain('/one'); expect(html).toContain('/two');
+  expect(html.match(/class="gd-primary-label"/g)).toHaveLength(1);
+  expect(html).toContain('请先选择其他主目录');
+  const repositories = html.slice(html.indexOf('<h3>代码仓库</h3>'));
+  expect(repositories).toContain('/repo-a'); expect(repositories).toContain('/repo-b');
+  expect(repositories).not.toContain('gd-primary-label');
+  expect(repositories).not.toContain('设为主目录');
+  expect(html).not.toContain('附加目录');
+});
+it('renders one independent Effort group from the actual catalog', () => {
+  const html = renderToStaticMarkup(<ModelAccessChoices value={{backend: catalog.backend, models: ['actual-a', 'actual-b'], efforts: ['low']}} catalog={catalog} disabled={false} onChange={() => {}}/>);
+  expect(html.match(/<legend>可用 Effort<\/legend>/g)).toHaveLength(1);
+  expect(html).not.toContain('<select');
+  expect(html).toContain('实际模型 A'); expect(html).toContain('实际模型 B');
+  expect(html).toContain('请选择 实际模型 B 支持的 Effort');
+});
+it('rejects missing catalogs and model/Effort combinations with no intersection', () => {
+  const value = {backend: catalog.backend, models: ['actual-a', 'actual-b'], efforts: ['low'] as ('low' | 'high')[]};
+  expect(modelAccessProblem(value, catalog)).toContain('实际模型 B');
+  expect(modelAccessProblem({...value, efforts: ['low', 'high']}, catalog)).toBeUndefined();
+  expect(modelAccessProblem({...value, models: ['no-effort'], efforts: []}, catalog)).toBeUndefined();
+  expect(modelAccessProblem({...value, models: []}, catalog)).toContain('至少');
+  expect(modelAccessProblem(value)).toContain('暂不可用');
+  expect(modelAccessProblem({...value, models: ['unknown']}, catalog)).toContain('unknown');
+  expect(modelAccessProblem(value, {...catalog, backend: 'other'})).toContain('暂不可用');
+});
+it('restores separate smart prompts and response controls without Bot default actions', () => {
+  const html = render('response');
+  expect(html).toContain('什么时候回复'); expect(html).toContain('响应规则原文');
+  expect(html).toContain('什么时候创建新话题'); expect(html).toContain('新话题规则原文');
+  expect(html).toContain('响应成员'); expect(html).toContain('完成提醒'); expect(html).toContain('显示模型');
+  expect(html).not.toContain('跟着 Bot 默认');
+  expect(html).not.toContain('查看合成');
+  expect(html).not.toContain('不 @ 也能发起任务');
+});
+it('announces shared readonly reasons once but preserves independent safety reasons', () => {
+  const view = fixture();
+  for (const value of Object.values(view.sections)) if (value) value.access = {kind: 'readonly', reason: 'offline', message: '共同不可编辑原因'};
+  view.sections.permission.access = {kind: 'readonly', reason: 'policy', message: '独有权限限制'};
+  const html = render('response', view);
+  expect(html.match(/共同不可编辑原因/g)).toHaveLength(1);
+  expect(html.match(/独有权限限制/g)).toHaveLength(1);
+});
