@@ -169,7 +169,7 @@ it('renders the grant step with both ways out before the first read', () => {
   expect(html).toContain('Bot 已注册');
   expect(html).toContain('第 2 步 · 开权限');
   expect(html).toContain('正在检测…');
-  expect(html).toContain('去首次运行清单');
+  expect(html).toContain('查看连接与设置');
   expect(html).toContain('完成');
 });
 
