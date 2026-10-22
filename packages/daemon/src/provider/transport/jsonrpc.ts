@@ -226,6 +226,8 @@ export interface AppServerClientOptions {
   bin: string;
   cwd: string;
   env?: Record<string, string>;
+  /** Use an isolated configuration-only environment without inherited provider secrets. */
+  replaceEnv?: boolean;
   clientName?: string;
   quietOutput?: boolean;
   initializeTimeoutMs?: number;
@@ -262,7 +264,7 @@ export class AppServerClient {
     // streams are non-null, so the cast to *WithoutNullStreams is sound.
     const owned = new OwnedProviderProcess(this.opts.bin, ['app-server', '--listen', 'stdio://'], {
       cwd: this.opts.cwd,
-      env: binChildEnv(this.opts.bin, mergeProcessEnv(process.env, { ...this.opts.env, FEISHU_CODEX_BRIDGE: '1' })),
+      env: binChildEnv(this.opts.bin, mergeProcessEnv(this.opts.replaceEnv ? {} : process.env, { ...this.opts.env, FEISHU_CODEX_BRIDGE: '1' })),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const child = owned.child as ChildProcessWithoutNullStreams;
