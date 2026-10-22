@@ -19,7 +19,7 @@ vi.mock('../src/config/paths', async () => {
 });
 const fixture = vi.hoisted(() => ({ send: vi.fn(async (..._args: unknown[]) => ({ messageId: 'om_result', cardId: 'card' })) }));
 // One backend: the form shows no picker, so the group gets the effective default written in.
-vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: () => ({ id: 'codex-appserver', listModels: async () => [] }), effectiveDefaultBackend: async () => 'claude-agent' }));
+vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: (id: string) => ({ id, listModels: async () => [{ id: 'fixture-model', displayName: 'Fixture', description: '', hidden: false, isDefault: true, supportedEfforts: ['medium' as const], defaultEffort: 'medium' as const }] }), effectiveDefaultBackend: async () => 'claude-agent' }));
 vi.mock('../src/card/managed', () => ({ sendManagedCard: fixture.send, updateManagedCard: vi.fn(async () => true) }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, warn() {}, fail() {} }, withTrace: (_context: unknown, callback: () => unknown) => callback() }));
 

@@ -18,7 +18,7 @@ vi.mock('../src/config/paths', async () => {
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
   const appDir = mkdtempSync(join(tmpdir(), 'coffee-retired-'));
-  return { paths: { appDir, projectsFile: join(appDir, 'projects.json'), commentInstructionsFile: join(appDir, 'comment-instructions.md'), commentsRootDir: join(appDir, 'comments'), projectsRootDir: join(appDir, 'projects') } };
+  return { paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), commentInstructionsFile: join(appDir, 'comment-instructions.md'), commentsRootDir: join(appDir, 'comments'), projectsRootDir: join(appDir, 'projects') } };
 });
 vi.mock('@larksuiteoapi/node-sdk', async original => ({
   ...await original<object>(),

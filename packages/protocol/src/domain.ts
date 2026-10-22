@@ -1,4 +1,5 @@
 import { z } from "zod";
+import {groupDecisionSchema} from "./group-decision.js";
 import { botDiagnosticsSchema } from "./diagnostics.js";
 import { applicationCrashesSchema, crashPauseSchema, lockHeldSchema } from "./crash.js";
 
@@ -90,6 +91,7 @@ export const commandSchema = z.discriminatedUnion("type", [
       folder: folderSelectionSchema,
       tool: toolSchema,
       conversation: conversationSchema,
+      judge: groupDecisionSchema.optional(),
       response: replyModeSchema.optional(),
     })
     .strict(),
@@ -231,6 +233,7 @@ export const desktopSnapshotSchema = z.object({
   revision: z.number(), observedAt: z.number(), stale: z.boolean(), host: hostStateSchema,
   agents: z.array(agentSchema), groups: z.array(groupSchema), memberships: z.array(membershipSchema),
   tools: z.array(toolStateSchema), jobs: z.array(jobSchema),
+  recentConversations: z.object({items:z.array(z.object({agentId:agentIdSchema,groupId:groupIdSchema,threadId:z.string(),summary:z.string(),updatedAt:z.number()})),unavailableBots:z.number().int().nonnegative()}).optional(),
   application: z.object({ platform: z.enum(["macos", "linux", "unsupported"]), version: z.string(), loginItem: z.boolean(), dataPath: z.string(), service: applicationServiceSchema.optional(),
     /** The whole daemon's pause and the last day's crash records (s18a); absent from older daemons. */
     crashes: applicationCrashesSchema.optional() }),

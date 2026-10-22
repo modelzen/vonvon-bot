@@ -10,9 +10,14 @@ import { createPendingGroups, pendingGroupsFile } from '../project/pending-group
 import { realpath, stat } from 'node:fs/promises';
 import type { BotIdentity } from '../config/bots';
 import { createHash, randomUUID } from 'node:crypto';
+import { readGroupPersonality } from './group-profile';
+import { groupSkillProfile } from '../agent/group-skills';
+import { parseStoredJudge } from '../judge/model';
+import { presentationConfig } from './group-presentation';
+import { createSkillChat } from './skill-chat';
 import { projectRevision, projectView, type CollaborationRequest } from '../admin/collaboration';
 import { AdminWriteError } from '../admin/ops';
-import { createSettingsOwner } from '../admin/settings';
+import { createSettingsOwner, materializeGroupSettings } from '../admin/settings';
 import type { HostSettings } from '../admin/settings-types';
 import type { AdminWriteResult } from '../admin/ops';
 import { registerVoiceConsole } from './voice-console';
@@ -209,7 +214,7 @@ import { paths } from '../config/paths';
 import { loadBots } from '../config/bots';
 import { admitDirectorySettings } from '../config/directories';
 import { DirectoryError, directoryFailure } from '../config/directory-errors';
-import { botBackendId, groupBackendId, resolveCommentsExecution, resolveExecution, resolveModelPreference, executionSessionProfile, type ModelPreference } from '../config/execution';
+import { botBackendId, groupBackendId, resolveCommentsExecution, resolveExecution, resolveModelPreference, executionSessionProfile, projectModelAllowed, projectModelCatalog, type ModelPreference } from '../config/execution';
 import { fileClaimMode, OutboundFiles } from './outbound-files';
 import { getSecret } from '../config/keystore';
 import { buildScopeGrantUrl, JOIN_GROUP_SCOPES } from '../config/scopes';
@@ -660,6 +665,7 @@ export function sessionChangeNotice(reason: RecreateReason, topic: boolean): str
 
 interface ActiveState {
   steerReply?: { run: AgentRun; accept: (messageId: string, voice?: VoiceReply) => boolean };
+  presentation?: AppConfig;
   /** Captured with the steer target so a late ACK cannot decorate another turn. */
   voiceReply?: { run: AgentRun; add: (voice: VoiceReply) => void };
   /** Prevent a late ASR result from restarting a stopped conversation. */
@@ -825,6 +831,8 @@ export interface RecallEvent {
 }
 
 export interface Orchestrator {
+  /** Called by the production bridge before event intake; never runs in unit harnesses implicitly. */
+  initialize?(): Promise<void>;
   collaboration: (request: CollaborationRequest) => Promise<unknown>;
   onMessage: (msg: NormalizedMessage) => Promise<void>;
   /** `comment` event handler: @bot in a cloud-doc comment → reply in-thread. */
@@ -1039,9 +1047,29 @@ export function createOrchestrator(
   function execOf(project: Project | undefined) {
     return resolveExecution({ bot: cfg.preferences, group: project });
   }
-  function profileOf(project: Project | undefined, cwd: string, backend: AgentBackend, permission?: PermissionMode) {
+  async function profileOf(project: Project | undefined, cwd: string, backend: AgentBackend, permission?: PermissionMode) {
     const execution = execOf(project);
-    return executionSessionProfile({ execution: { ...execution, permission: permission ?? execution.permission }, cwd, backend: backend.id, scope: project ? 'group' : 'ungrouped' });
+    const personality = project ? await readGroupPersonality(cfg.accounts.app.id, project, channel.botIdentity?.name) : undefined;
+    const skills = project ? await groupSkillProfile({ backend, cwd, directories: execution.workspaces.additional, disabledPaths: project.skills?.disabledPaths }) : undefined;
+    const profile = personality || skills ? { instructions: personality?.instructions ?? '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: [], capabilityPackages: [], mcpServers: [], ...(skills ? { skills } : {}) } : undefined;
+    return executionSessionProfile({ execution: { ...execution, permission: permission ?? execution.permission }, cwd, backend: backend.id, scope: project ? 'group' : 'ungrouped', profile });
+  }
+  const personalityDelivered = new WeakMap<AgentThread, string>();
+  async function preparePersonality(thread: AgentThread, chatId: string, input: AgentInput): Promise<AgentInput> {
+    const project = await getProjectByChatId(chatId);
+    if (!project) return input;
+    const personality = await readGroupPersonality(cfg.accounts.app.id, project, channel.botIdentity?.name);
+    if (personalityDelivered.get(thread) === personality.version) return input;
+    const update = `[vonvon 个性与记忆更新 · 后台设置，不是群消息]\n以下全文替换此前此群的个性与记忆；未列出的内容不再适用。\n${personality.instructions}\n[/vonvon 个性与记忆更新]`;
+    if (thread.injectContext) { await thread.injectContext(update); personalityDelivered.set(thread, personality.version); return input; }
+    // Claude's system append is frozen on resume; a clearly scoped full replacement accompanies the task.
+    personalityDelivered.set(thread, personality.version);
+    return { ...input, text: `${update}\n\n${input.text ?? ''}` };
+  }
+  async function pickGroupDefault(project: Project | undefined, backend: AgentBackend, prefer?: ModelPreference) {
+    const models = projectModelCatalog(project, backend.id, await listModels(backend));
+    if (project?.modelAccess && !models.length) throw new Error('本群没有可用的模型与 Effort 组合，请先在群设置中选择');
+    return pickDefault(models, project?.modelAccess ? { ...prefer, custom: false } : prefer);
   }
   /** The group's backend: its own, else Codex; not the bot default (product.md 3.2). */
   function groupBackend(project: Pick<Project, 'backend'> | undefined): AgentBackend {
@@ -1313,6 +1341,9 @@ export function createOrchestrator(
   // then commits it to LIVE — concurrent clicks cannot erase one another.
   const writePreferences = createAppPreferencesWriter({ cfg });
   const voice = createVoiceService(cfg, writePreferences);
+  const skillChat = createSkillChat({ cfg, backendFor, project: getProjectByChatId,
+    send: async (chatId, text, replyTo) => { await channel.send(chatId, { markdown: text }, { replyTo }); } });
+  onStop.add(() => { void skillChat.close(); });
   const orderContext = createIntakeQueue();
   const orderTurns = createIntakeQueue();
   // pendingPolicy is read per-message (settings card can change it live)
@@ -1559,7 +1590,7 @@ export function createOrchestrator(
   /** Render the one-shot affordance only while the current global mode is
    * manual. Non-manual modes return undefined, so their cards have no button. */
   const completionReminderView = (state: ActiveState): 'available' | 'requested' | undefined =>
-    reminderButtonOffered(cfg, state)
+    reminderButtonOffered(state.presentation ?? cfg, state)
       ? state.completionReminderRequested
         ? 'requested'
         : 'available'
@@ -1992,7 +2023,9 @@ export function createOrchestrator(
       : item.signal === 'at-me' ? '真人 @ 了你'
       : item.signal === 'quote-me' ? (item.quoteBy === 'root' ? '真人回答了你发起的话题根消息' : '真人引用了你的消息')
       : item.signal === 'name' ? '真人叫了你的完整名字' : look?.why;
+    const personality = await readGroupPersonality(cfg.accounts.app.id, project, channel.botIdentity?.name);
     return judge.judge({
+      persona: personality.persona, memory: personality.memory,
       facts,
       variant: item.variant, appId: cfg.accounts.app.id, botName: channel.botIdentity?.name ?? '',
       group: { chatId: project.chatId, name: project.name, backend: project.backend, judge: project.judge },
@@ -2242,6 +2275,7 @@ export function createOrchestrator(
     if (msg.chatType === 'p2p') {
       if (await syncCopy.skip(msg, true)) return;
       if (!fromBot(msg) && typedCandidate(msg) && asks.dmText({ openId: msg.senderId, text: msg.content.trim(), messageId: msg.messageId, createTime: msg.createTime })) return;
+      if (!fromBot(msg) && typedCandidate(msg) && await skillChat.handle(msg)) return;
       await handleDmConsole(channel, cfg, msg);
       return;
     }
@@ -2795,7 +2829,8 @@ export function createOrchestrator(
         .then(() => AT_HINT_NOTE(otherBotNames(roster.peek(msg.chatId), { openId: channel.botIdentity?.openId, appId: channel.rawClient?.appId })))
         .catch(() => AT_HINT_NOTE([]))
       : undefined;
-    const ingested = msg.rawContentType === 'audio' ? await ingestVoice(channel, msg, voice) : { text };
+    const audioProject = msg.rawContentType === 'audio' ? await getProjectByChatId(msg.chatId) : undefined;
+    const ingested = msg.rawContentType === 'audio' ? await ingestVoice(channel, msg, { transcribe: (audio, durationMs) => voice.transcribe(audio, durationMs, audioProject?.presentation?.voiceEnabled) }) : { text };
     let body = ingested.text;
     if (messageHasFiles(msg)) {
       const { files, failed } = await collectInboundFiles(channel, msg);
@@ -3185,7 +3220,7 @@ export function createOrchestrator(
           // The backend the session runs on: the record's (also when rebuilt in a new cwd), else the group's.
           const be = sessionBackendOf(prior, project);
           const prefer = modelPrefOf(project, be.id);
-          const defaults = pickDefault(await listModels(be), prefer);
+          const defaults = await pickGroupDefault(project, be, prefer);
           if (!model) {
             model = defaults.model;
             modelCustom = isCustomDefault(prefer, model);
@@ -3654,7 +3689,7 @@ export function createOrchestrator(
       const tIntake = Date.now();
       let tResolveDone = tIntake;
       const threadP = (async () => {
-        const { model, effort } = pickDefault(await listModels(be), prefer);
+        const { model, effort } = await pickGroupDefault(project, be, prefer);
         const thread = await startWith(be, { cwd, model, effort, mode: perm.mode, network: perm.network, profile: await profileOf(project, cwd, be, perm.mode) }, { kind: 'group', chatId: msg.chatId });
         tResolveDone = Date.now();
         return { thread, model, effort };
@@ -3872,17 +3907,20 @@ export function createOrchestrator(
         // 持久化，重启 resume 会把 codex model id 喂给 claude CLI，会话坏死。
         const [rec, project] = await Promise.all([getSession(sessionKey), getProjectByChatId(msg.chatId)]);
         const be = sessionBackendOf(rec, project);
-        const models = await listModels(be);
+        const models = projectModelCatalog(project, be.id, await listModels(be));
+        if (!models.length) throw new Error('本群没有可用的模型与 Effort 组合，请先在群设置中选择');
         // Seed the /model card's "current" from the default (when this topic has
         // no session record yet) so a fresh topic shows what it WILL start on;
         // pickDefault validates it against the live list.
-        const def = pickDefault(models, modelPrefOf(project, be.id));
+        const prefer = modelPrefOf(project, be.id);
+        const def = pickDefault(models, project?.modelAccess ? { ...prefer, custom: false } : prefer);
         // 记录里跨后端污染的 model id（旧版未路由的 /model 卡写入）不在本后端
         // 列表里——回落默认，别把坏值当 select 初值渲染。手填的 id（会话上标了
         // modelCustom）不在列表里也照显示。
         const recModel =
           rec?.model && (rec.modelCustom || models.some((m) => m.id === rec.model)) ? rec.model : undefined;
         const state: ModelCardState = {
+          allowCustom: !project?.modelAccess,
           chatId: msg.chatId,
           threadId: sessionKey,
           requesterOpenId: msg.senderId,
@@ -4115,7 +4153,7 @@ export function createOrchestrator(
         let modelCustom = rec?.modelCustom;
         if (!model) {
           const prefer = modelPrefOf(project, be.id);
-          const picked = pickDefault(await listModels(be), prefer);
+          const picked = await pickGroupDefault(project, be, prefer);
           model = picked.model;
           effort ??= picked.effort;
           modelCustom = isCustomDefault(prefer, model);
@@ -4323,6 +4361,11 @@ export function createOrchestrator(
           state.note = stale;
           return buildModelCard(state);
         }
+        const project = await getProjectByChatId(state.chatId);
+        const currentModels = projectModelCatalog(project, state.backend ?? rec?.backend ?? DEFAULT_BACKEND_ID, await listModels(backendFor(state.backend ?? rec?.backend)));
+        const chosen = currentModels.find(model => model.id === option);
+        if (!chosen) { state.note = '这个模型已不在本群可用范围，请重新打开 /model。'; return buildModelCard(state); }
+        state.models = currentModels;
         state.model = option;
         // re-pick a valid effort if the new model doesn't support the current one
         const m = state.models.find((x) => x.id === option);
@@ -4343,6 +4386,11 @@ export function createOrchestrator(
           state.note = stale;
           return buildModelCard(state);
         }
+        const project = await getProjectByChatId(state.chatId);
+        const catalog = await listModels(backendFor(state.backend));
+        if (!projectModelAllowed(project, state.backend ?? DEFAULT_BACKEND_ID, state.model, option as ReasoningEffort, catalog)) {
+          state.note = '这个 Effort 已不在本群可用范围，请重新打开 /model。'; return buildModelCard(state);
+        }
         state.effort = option as ReasoningEffort;
         await patchSession(state.threadId, { effort: state.effort });
         state.note = '✅ 已设置 effort，下一轮生效';
@@ -4362,6 +4410,8 @@ export function createOrchestrator(
           state.note = stale;
         } else if (!parsed.ok) {
           state.note = `⚠️ ${parsed.message}`;
+        } else if ((await getProjectByChatId(state.chatId))?.modelAccess) {
+          state.note = '本群只能使用群设置中已选择的模型。';
         } else {
           state.model = parsed.id;
           if (!getSessionTitleEfforts(state.backend ?? rec?.backend ?? '').includes(state.effort)) state.effort = 'medium';
@@ -4593,7 +4643,7 @@ export function createOrchestrator(
       // Settings may have changed after this frame was rendered. Refuse a
       // stale manual button and repaint it away instead of creating a hidden
       // per-turn override under long/failures/always.
-      if (st.isGoal || !reminderButtonOffered(cfg, st)) {
+      if (st.isGoal || !reminderButtonOffered(st.presentation ?? cfg, st)) {
         completionReminderRefreshers.get(key)?.();
         log.info('card', 'action', { actionId: RC.remind, stale: true });
         return;
@@ -5161,6 +5211,7 @@ export function createOrchestrator(
         let result;
         if (!name) result = buildNewProjectFormCard({ cwd: cwdIn, error: '项目名不能为空', backends });
         else if (!op) result = buildNewProjectFormCard({ name, cwd: cwdIn, error: '无法识别操作者身份', backends });
+        else if (kind === 'smart') result = buildNewProjectFormCard({ name, cwd: cwdIn, error: '请在网页端创建智能群，并选择决策模型。', backends });
         else {
           try {
             if (!bindingBot) throw new Error('缺少机器人注册身份，请重启后再建群');
@@ -5181,7 +5232,7 @@ export function createOrchestrator(
               signal,
             }));
             log.info('console', 'new-project', { name: p.name, blank: p.blank, backend: p.backend, requestId });
-            result = buildNewProjectDoneCard(p, kind === 'smart' && parseNoMentionPick(formValue) !== undefined);
+            result = buildNewProjectDoneCard(p, false);
           } catch (err) {
             // A group may exist (s36d1): say so, with no form that could create a second one.
             result = err instanceof CreationOutcomeUnknownError || err instanceof CreatedButUnsavedError
@@ -5218,6 +5269,7 @@ export function createOrchestrator(
           result = buildJoinGroupFormCard({ ...formWithBots, error: '缺少群标识，请重新从进群通知里打开绑定卡' });
         else if (!name) result = buildJoinGroupFormCard({ ...formWithBots, error: '项目名不能为空' });
         else if (!op) result = buildJoinGroupFormCard({ ...formWithBots, error: '无法识别操作者身份' });
+        else if (kind === 'smart') result = buildJoinGroupFormCard({ ...formWithBots, error: '请在网页端连接智能群，并选择决策模型。' });
         else {
           try {
             if (!bindingBot) throw new Error('缺少机器人注册身份，请重启后再绑定');
@@ -5237,7 +5289,7 @@ export function createOrchestrator(
               mode: bindModeFor(backend),
             });
             log.info('console', 'join-group', { name: p.name, blank: p.blank, backend: p.backend, mode: p.mode });
-            result = buildNewProjectDoneCard(p, kind === 'smart' && parseNoMentionPick(formValue) !== undefined, topic);
+            result = buildNewProjectDoneCard(p, false, topic);
           } catch (err) {
             result = buildJoinGroupFormCard({ ...formWithBots, error: err instanceof Error ? err.message : String(err) });
           }
@@ -6119,7 +6171,7 @@ export function createOrchestrator(
       const result = serialCreate(async signal => {
         const directory = request.directory === undefined ? undefined : await realpath(request.directory);
         if (directory !== undefined && !(await stat(directory)).isDirectory()) throw new AdminWriteError('所选文件夹不是目录');
-        const project = await createProject(channel, { requestId: request.requestId, requestSignature: signature, bot, name: request.name, ownerOpenId: owner, existingPath: directory, projectsRootDir: cfg.preferences?.projectsRootDir, kind: request.kind, noMention: request.noMention, backend: request.backend, mode: bindModeFor(request.backend), signal });
+        const project = await createProject(channel, { requestId: request.requestId, requestSignature: signature, bot, name: request.name, ownerOpenId: owner, existingPath: directory, projectsRootDir: cfg.preferences?.projectsRootDir, kind: request.kind, noMention: request.noMention, backend: request.backend, judge: request.judge, mode: bindModeFor(request.backend), signal });
         return { ok: true, project: projectView(project) };
       }).catch((error: unknown) => {
         // Every refusal crosses IPC as the bot's own word; a result not known stays a plain error, which the RPC
@@ -6190,6 +6242,7 @@ export function createOrchestrator(
         if (request.enabled !== undefined) patch.enabled = request.enabled;
         // The page sends the 会话方式 it shows, so an unchanged one (智能 included) is left alone (s25c).
         const mode = request.kind;
+        if (mode === 'smart' && sessionModeOf(project) !== 'smart' && !parseStoredJudge(project.judge, backendIds()).value) throw new AdminWriteError('请先在本群回复规则中设置决策模型，再开启智能模式');
         const commit = () => mutateProject(project.name, latest => {
           if (projectRevision(latest) !== request.expectedRevision) throw new AdminWriteError('项目设置已改变，请刷新后重试');
           // Switching 会话方式 leaves 免@ as it was (3.4): pin the value it read as before. 智能 has none, so leaving it
@@ -6293,7 +6346,7 @@ export function createOrchestrator(
     if (!record || record.detached) throw new AdminWriteError('此会话已归档或不属于当前项目，请开始新会话');
     const key = record.threadId;
     const state = active.get(key);
-    if (request.action === 'context') return { threadId: key, usage: lastUsage.get(key) ?? null, run: state ? { id: runId(state), goal: state.isGoal === true, canStop: Boolean(state.interrupt), canEndGoal: Boolean(state.endGoal), canRemind: state.requesterOpenId === owner && reminderButtonOffered(cfg, state) && !state.isGoal, reminderRequested: state.completionReminderRequested === true, subagents: (state.subagents?.() ?? []).map(({ id, name, task, status, stoppable }) => ({ id, name, task, status, stoppable })) } : null };
+    if (request.action === 'context') return { threadId: key, usage: lastUsage.get(key) ?? null, run: state ? { id: runId(state), goal: state.isGoal === true, canStop: Boolean(state.interrupt), canEndGoal: Boolean(state.endGoal), canRemind: state.requesterOpenId === owner && reminderButtonOffered(state.presentation ?? cfg, state) && !state.isGoal, reminderRequested: state.completionReminderRequested === true, subagents: (state.subagents?.() ?? []).map(({ id, name, task, status, stoppable }) => ({ id, name, task, status, stoppable })) } : null };
     if (request.action === 'stopSubagent') {
       if (!state || runId(state) !== request.runId) throw new AdminWriteError('原任务已经结束，请刷新');
       if (!state.run?.stopSubagent) throw new AdminWriteError('这个任务不支持单独停止子 agent');
@@ -6306,7 +6359,7 @@ export function createOrchestrator(
       if (request.action === 'stop') { if (!state.interrupt) throw new AdminWriteError('任务正在准备，请稍后停止'); state.interrupt(); }
       else if (request.action === 'endGoal') { if (!state.endGoal) throw new AdminWriteError('当前不是目标任务'); state.endGoal(); }
       else {
-        if (state.requesterOpenId !== owner || !reminderButtonOffered(cfg, state) || state.isGoal) throw new AdminWriteError('仅任务发起人可设置本次完成提醒，且需开启手动提醒模式');
+        if (state.requesterOpenId !== owner || !reminderButtonOffered(state.presentation ?? cfg, state) || state.isGoal) throw new AdminWriteError('仅任务发起人可设置本次完成提醒，且需开启手动提醒模式');
         state.completionReminderRequested = request.requested;
         refreshCompletionReminderCards();
       }
@@ -6362,9 +6415,9 @@ export function createOrchestrator(
   }
 
   // ── shared run loop ───────────────────────────────────────────────
-  async function sendCompletionReminder(input: CompletionReminderReplyInput): Promise<void> {
+  async function sendCompletionReminder(input: CompletionReminderReplyInput, runConfig = cfg): Promise<void> {
     if (shuttingDown) return;
-    await sendCompletionReminderReply({ channel, cfg, dedupe: completionReminderSent }, input);
+    await sendCompletionReminderReply({ channel, cfg: runConfig, dedupe: completionReminderSent }, input);
   }
 
   async function handOff(rc: RunCardState, stream: RunCardStream, cardId: string, answerText: string,
@@ -6684,6 +6737,7 @@ export function createOrchestrator(
     // queued during startup aren't lost); fall back to a fresh state otherwise.
     const state: ActiveState = active.get(activeKey) ?? { queue: [], requesterOpenId: opts.requesterOpenId, runLoop: true };
     state.thread = opts.thread;
+    state.presentation = presentationConfig(cfg, await getProjectByChatId(opts.chatId));
     state.runLoop = true;
     state.smart = opts.smart === true;
     if (opts.requesterOpenId) state.requesterOpenId = opts.requesterOpenId;
@@ -6886,7 +6940,13 @@ export function createOrchestrator(
         }
         const turnModel = rec?.model ?? opts.model;
         const turnEffort = rec?.effort ?? opts.effort;
-        const modelDisp = getModelDisplay(cfg);
+        const modelDisp = getModelDisplay(state.presentation ?? cfg);
+        const currentProject = await getProjectByChatId(opts.chatId);
+        const turnBackend = backendFor(opts.backendId);
+        if (!projectModelAllowed(currentProject, turnBackend.id, turnModel, turnEffort, currentProject?.modelAccess ? await listModels(turnBackend) : undefined)) {
+          throw new Error('当前模型或 Effort 已不在本群可用范围，请用 /model 重新选择。若已更换 Provider，请创建新会话。');
+        }
+        turnInput = await preparePersonality(opts.thread, opts.chatId, turnInput);
         const run = opts.thread.runStreamed(turnInput, { model: turnModel, effort: turnEffort });
         let unseen = currentTurn.seen;
         titleTurnAttempted = true;
@@ -6900,7 +6960,7 @@ export function createOrchestrator(
         let boundary: RunState | undefined;
         let segmentStartedAt: number | undefined;
         const segmentSnapshot = (): RunState => runSegment(render.snapshot(), boundary, segmentStartedAt);
-        render.showTools = getShowToolCalls(cfg);
+        render.showTools = getShowToolCalls(state.presentation ?? cfg);
         let cardMsgId: string | undefined;
         let rc: RunCardState = {
           rs: render.snapshot(),
@@ -7356,7 +7416,7 @@ export function createOrchestrator(
             summary: currentTurn.summary,
             cardUpdated: terminalCardUpdated,
             replyInThread: !opts.flat,
-          });
+          }, state.presentation);
         } catch (err) {
           log.fail('card', err, { phase: 'terminal-delivery' });
           void trackTask(channel.send(opts.chatId, { markdown: '⚠️ 本轮已结束，但结果同步失败，请检查会话记录。' }, { replyTo: finalMsgId, replyInThread: !opts.flat }).catch(() => undefined));
@@ -7497,6 +7557,7 @@ export function createOrchestrator(
     // The goal's workspace — see LaunchOpts.cwd / launchRun's runCwd.
     const runCwd = opts.cwd ?? fallbackCwd;
     const state: ActiveState = active.get(activeKey) ?? { queue: [], requesterOpenId: opts.requesterOpenId };
+    state.presentation = presentationConfig(cfg, await getProjectByChatId(opts.chatId));
     state.thread = opts.thread;
     state.isGoal = true; // messages during the goal get a prompt, never queue (handleTurn)
     if (opts.requesterOpenId) state.requesterOpenId = opts.requesterOpenId;
@@ -7672,8 +7733,8 @@ export function createOrchestrator(
       const render = new RunRender();
       render.seedSubagents(carried);
       render.seedUsage(topicThreadId ? lastUsage.get(topicThreadId) : undefined);
-      render.showTools = getShowToolCalls(cfg);
-      const goalModelDisp = getModelDisplay(cfg);
+      render.showTools = getShowToolCalls(state.presentation ?? cfg);
+      const goalModelDisp = getModelDisplay(state.presentation ?? cfg);
       const rc: RunCardState = {
         rs: render.snapshot(),
         requesterOpenId: opts.requesterOpenId,
@@ -7740,7 +7801,11 @@ export function createOrchestrator(
     });
 
     try {
-      const run = opts.thread.runGoal(objective);
+      const currentProject = await getProjectByChatId(opts.chatId);
+      const goalBackend = backendFor(opts.backendId);
+      if (!projectModelAllowed(currentProject, goalBackend.id, opts.model, opts.effort, currentProject?.modelAccess ? await listModels(goalBackend) : undefined)) throw new Error('当前模型或 Effort 已不在本群可用范围，请用 /model 重新选择。');
+      const goalContext = await preparePersonality(opts.thread, opts.chatId, {});
+      const run = opts.thread.runGoal(goalContext.text ? `${goalContext.text}\n\n目标：${objective}` : objective);
       state.run = run;
       // ⏹ 终止: clear the goal first (so it won't reactivate on resume), then end
       // the loop immediately — cutting the in-flight turn's output.
@@ -8592,6 +8657,7 @@ export function createOrchestrator(
       try { cleanup.push(operation()); }
       catch (error) { shutdownErrors.add(error); }
     };
+    startCleanup(() => skillChat.close());
     startCleanup(closeOwnedProviderProcesses);
     startCleanup(shutdownResidentClients);
     const dropped = { queued: 0, held: 0, compacts: 0 };
@@ -8661,6 +8727,10 @@ export function createOrchestrator(
     return result;
   }
   return {
+    initialize: async () => {
+      const result = await materializeGroupSettings({ cfg, backendFor });
+      if (result.updated.length || result.deferred.length) log.info('settings', 'group-settings-materialized', { updated: result.updated.length, deferred: result.deferred.length });
+    },
     collaboration: collaborate,
     onMessage: admitEvent(onMessage),
     onComment: admitEvent(onComment),

@@ -51,6 +51,8 @@ export function reasoningEffortLabel(effort: string): string {
 
 /** Server-side state for a pending `/model` card, keyed by its messageId. */
 export interface ModelCardState {
+  /** Explicit group allowsets disable the legacy free-form model escape hatch. */
+  allowCustom?: boolean;
   chatId: string;
   /** the topic (session) whose model/effort this card edits */
   threadId: string;
@@ -131,7 +133,7 @@ export function buildModelCard(state: ModelCardState): CardObject {
     elements.push(hr(), md(`当前模型：${curLabel}`));
   }
 
-  elements.push(
+  if (state.allowCustom !== false) elements.push(
     hr(),
     form('model_custom', [
       input({

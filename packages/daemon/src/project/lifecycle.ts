@@ -1,3 +1,5 @@
+import type {GroupDecision} from '@vonvon/protocol';
+import {prepareNewGroupSettings} from './initial-settings';
 import { pendingGroupsFile, retireBoundPendingGroup } from './pending-groups';
 import { realpath, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -61,6 +63,7 @@ export interface CreateProjectInput {
   kind: SessionMode;
   /** 免@; left out → {@link bindNoMention}. Always written, so a later 会话方式 switch keeps it. 智能 ignores it. */
   noMention?: boolean;
+  judge?: GroupDecision;
   /** permission tier (default 'full' for self-created projects). */
   mode?: PermissionMode;
   /** agent backend chosen at creation (fixed afterwards — no switching). Left out (the DM form shows no picker
@@ -132,6 +135,7 @@ export interface JoinGroupInput {
   kind: SessionMode;
   /** 免@; left out → {@link bindNoMention}. 智能 ignores it. */
   noMention?: boolean;
+  judge?: GroupDecision;
   /** permission tier (default 'qa' — read-only — for joined external groups). */
   mode?: PermissionMode;
   /** agent backend chosen at bind time (fixed afterwards — no switching). */
@@ -195,7 +199,8 @@ export async function createProject(channel: Pick<LarkChannel, 'rawClient'>, req
   const explicit = existingPath ? await admitExistingDirectory(existingPath, location.dataRoot) : undefined;
   const root = existingPath ? '' : resolveProjectsRootDir(input.projectsRootDir);
   await assertBotIdentity(input.bot);
-  const row = { createdAt: Date.now(), origin: 'created' as const, mode, backend,
+  const initialSettings = await prepareNewGroupSettings({backend, kind:input.kind, judge:input.judge});
+  const row = { ...initialSettings, createdAt: Date.now(), origin: 'created' as const, mode, backend,
     network: input.network ?? false, creationRequestId: input.requestId,
     ...(input.requestSignature === undefined ? {} : { creationRequestSignature: input.requestSignature }) };
   const noMention = entryNoMention(input);
@@ -287,8 +292,9 @@ export async function joinExistingGroup(channel: LarkChannel, request: JoinGroup
       backend: input.backend ?? defaultBackend, kind: input.kind, noMention: entryNoMention(input) }, async previous => {
       assertBackendUsable(input.backend, mode);
       const restored = existingPath || scope.allocatedPath ? undefined : await restorableDirectory(previous, location.dataRoot, root);
+      const initialSettings = await prepareNewGroupSettings({backend:input.backend || defaultBackend,kind:input.kind,judge:input.judge});
       const workspace = existingPath ? await admitExistingDirectory(existingPath, location.dataRoot) : restored ?? await scope.prepareDefault();
-      return { ...workspace, createdAt: Date.now(), origin: 'joined', addedBy: input.addedBy,
+      return { ...workspace, ...initialSettings, createdAt: Date.now(), origin: 'joined', addedBy: input.addedBy,
         mode, backend: input.backend || defaultBackend, network: input.network ?? false };
     }, location);
     await retireBoundPendingGroup(pendingGroupsFile(location.file), binding.project.chatId);

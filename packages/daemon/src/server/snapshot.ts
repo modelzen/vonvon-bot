@@ -13,6 +13,7 @@ import { isTranslocated, runtimeDistribution, type Distribution } from '../servi
 import { bridgeVersion } from '../core/version';
 import { projectState } from './projection';
 import { readAdminState } from './state';
+import {readRecentConversations} from './recent-conversations';
 
 export interface SnapshotStore {
   current(): DesktopSnapshot;
@@ -132,6 +133,7 @@ export async function createSnapshotStore(options: {
       ...snapshot, ...projected, agents, tools: shownTools,
       application: { ...base, loginItem, ...(service ? { service } : {}), ...(options.crashes ? { crashes: options.crashes.application(Date.now()) } : {}) },
       jobs: options.jobs(),
+      recentConversations: await readRecentConversations(root,projected.memberships),
       observedAt: Date.now(),
     };
     const changed = snapshot.revision === 0 || !isDeepStrictEqual(

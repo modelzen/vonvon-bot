@@ -21,6 +21,11 @@ const fake = vi.hoisted(() => ({
 vi.mock('../src/bot/steer-delivery', async original => { const real = await original<typeof import('../src/bot/steer-delivery')>(); return { ...real, steerWithDeadline: (thread: any, input: any, id: string) => real.steerWithDeadline(thread, input, id, undefined, 150) }; });
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown, fn: () => unknown) => fn() }));
 vi.mock('../src/agent', async (original) => ({ ...await original<object>(), createBackend: () => fake.backend }));
+// Queue timing uses a deterministic profile; filesystem profile delivery has its own tests.
+vi.mock('../src/bot/group-profile', async original => ({ ...await original<object>(), readGroupPersonality: async () => ({
+  bot: { persona: '', memory: '' }, group: { persona: '', memory: '', inheritPersona: true, inheritMemory: true },
+  persona: '', memory: '', instructions: '', version: 'fixture-empty',
+}) }));
 vi.mock('../src/project/registry', async (original) => ({
   ...await original<object>(),
   getProjectByChatId: async () => ({ name: 'test', chatId: 'chat', cwd: '/test', groupMode: fake.groupMode, ...(fake.projectKind ? { kind: fake.projectKind } : {}), ...(fake.groupPolicy ? { pendingPolicy: fake.groupPolicy } : {}) }),
@@ -76,6 +81,7 @@ function thread() {
     close: vi.fn(async () => { for (const turn of turns) turn.resolve(); }),
     abort: vi.fn(async () => undefined),
     steer: vi.fn(async (_input: AgentInput, _id: string): Promise<void> => undefined),
+    injectContext: vi.fn(async (_text: string) => undefined),
     runStreamed(input: AgentInput) {
       consumed.push(input);
       const end = deferred<void>();

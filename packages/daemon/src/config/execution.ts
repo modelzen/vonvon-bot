@@ -157,10 +157,10 @@ export async function executionSessionProfile({ execution, cwd, backend, scope, 
   profile?: SessionProfile;
   dataDir?: string;
 }): Promise<SessionProfile | undefined> {
-  // s39c owns Claude delivery; do not turn its existing sessions into unsupported profiles.
-  if (backend !== DEFAULT_BACKEND_ID) return profile;
+  // Both providers receive admitted workspace roots through their native session adapters.
+  if (backend !== DEFAULT_BACKEND_ID && backend !== 'claude-agent') return profile;
   const [firstAdditional, ...otherAdditional] = execution.workspaces.additional;
-  if (scope === 'ungrouped' && firstAdditional === undefined && execution.repositories.length === 0) return profile;
+  if ((scope === 'ungrouped' || backend === 'claude-agent') && firstAdditional === undefined && execution.repositories.length === 0) return profile;
   const actualCwd = await realpath(cwd);
   // Groups admit the real execution cwd, never a configured primary substituted for a
   // stored session's cwd. Comments retain their existing bot-owned per-document cwd.
@@ -186,6 +186,7 @@ export async function executionSessionProfile({ execution, cwd, backend, scope, 
     additionalRoots: [...profile?.additionalRoots ?? [], ...[...roots].map(path => ({ path, access }))],
     capabilityPackages: profile?.capabilityPackages ?? [],
     mcpServers: profile?.mcpServers ?? [],
+    ...(profile?.skills ? { skills: profile.skills } : {}),
   };
 }
 
