@@ -112,10 +112,9 @@ async function writeStore(store: StoreFile, beforeCommit?: () => Promise<void>):
   } finally { await unlink(temporary).catch(error => { if (!missing(error)) throw error; }); }
 }
 
-function encrypt(key: Buffer, plaintext: string): Envelope {
-  const iv = randomBytes(12);
+function encrypt(key: Buffer, plaintext: string | Buffer, iv = randomBytes(12)): Envelope {
   const cipher = createCipheriv('aes-256-gcm', key, iv);
-  const data = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const data = Buffer.concat([typeof plaintext === 'string' ? cipher.update(plaintext, 'utf8') : cipher.update(plaintext), cipher.final()]);
   return { iv: iv.toString('base64'), data: data.toString('base64'), tag: cipher.getAuthTag().toString('base64') };
 }
 
@@ -172,4 +171,31 @@ export async function listSecretIds(): Promise<string[]> {
   if (!store) return [];
   await keyForStore();
   return Object.keys(store.entries);
+}
+
+/** Migration creates, never replaces. The journal owns this exact IV, including across process crashes. */
+export function createSecret(id: string, plaintext: Buffer, iv: Buffer): Promise<void> {
+  if (iv.length !== 12) return Promise.reject(new Error('Invalid secret ownership'));
+  return mutate(async () => {
+    const previous = await readStore();
+    if (previous && Object.hasOwn(previous.entries, id)) throw new Error('Secret already exists');
+    const key = await keyForMutation(previous !== undefined);
+    try {
+      const store: StoreFile = previous ?? {version: 1, entries: {}};
+      Object.defineProperty(store.entries, id, {value: encrypt(key, plaintext, iv), enumerable: true, configurable: true, writable: true});
+      await writeStore(store);
+    } finally { key.fill(0); }
+  });
+}
+export function removeSecretIfIv(id: string, iv: Buffer): Promise<'removed' | 'absent' | 'foreign'> {
+  return mutate(async () => {
+    const store = await readStore();
+    const entry = store?.entries[id];
+    if (!store || !entry) return 'absent';
+    if (entry.iv !== iv.toString('base64')) return 'foreign';
+    const key = await keyForStore(); key.fill(0);
+    delete store.entries[id];
+    await writeStore(store);
+    return 'removed';
+  });
 }

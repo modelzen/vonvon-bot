@@ -3,6 +3,7 @@ export * from "./settings.js";
 export * from "./collaboration.js";
 export * from "./environment.js";
 export * from "./machine.js";
+export * from "./bridge-import.js";
 export * from "./watch.js";
 export * from "./store.js";
 export * from "./handshake.js";

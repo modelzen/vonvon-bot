@@ -260,3 +260,13 @@ describe('lock-free readers (s31b0)', () => {
   });
 
 });
+
+describe('Bridge credential ownership', () => {
+  it('creates without overwriting and rolls back only the transaction reserved IV', async () => {
+    const directory = await root();
+    expect(await run(directory, `await k.createSecret('app-imported',Buffer.from('fixture-only'),Buffer.alloc(12,1)); console.log(await k.getSecret('app-imported'))`)).toEqual({code: 0, output: 'fixture-only\n'});
+    expect((await run(directory, `await k.createSecret('app-imported',Buffer.from('collision'),Buffer.alloc(12,2))`)).code).toBe(1);
+    expect(await run(directory, `console.log(await k.removeSecretIfIv('app-imported',Buffer.alloc(12,2))); console.log(await k.getSecret('app-imported'))`)).toEqual({code: 0, output: 'foreign\nfixture-only\n'});
+    expect(await run(directory, `console.log(await k.removeSecretIfIv('app-imported',Buffer.alloc(12,1))); console.log(await k.removeSecretIfIv('app-imported',Buffer.alloc(12,1)))`)).toEqual({code: 0, output: 'removed\nabsent\n'});
+  });
+});

@@ -195,6 +195,7 @@ else process.exit(0);
         { type: 'profileInit', name: 'test' }, { type: 'profileInitStatus' }, { type: 'profileInitCancel', operationId },
       ],
       machine: [
+        { type: 'bridgeImport', action: 'status' },
         { type: 'status' }, { type: 'repairCli' }, { type: 'service', action: 'install' }, { type: 'setServiceSkipped', skipped: false }, { type: 'startHost' }, { type: 'stopHost' }, { type: 'logs' },
         { type: 'checkCoreUpdate' }, { type: 'applyCoreUpdate' }, { type: 'coreUpdateStatus' }, { type: 'checkDesktopUpdate' }, { type: 'openReleases' }, { type: 'installDesktopUpdate' },
       ],
@@ -206,7 +207,7 @@ else process.exit(0);
     const unsupported = new Set([
       'command.openEventSettings', 'command.openJobAuthorization', 'command.copyJobAuthorization',
       'settings.chooseExecutable', 'settings.saveExecutable', 'collaboration.openGroup', 'environment.openVerification',
-      'machine.repairCli', 'machine.service', 'machine.startHost', 'machine.checkDesktopUpdate', 'machine.openReleases', 'machine.installDesktopUpdate',
+      'machine.bridgeImport', 'machine.repairCli', 'machine.service', 'machine.startHost', 'machine.checkDesktopUpdate', 'machine.openReleases', 'machine.installDesktopUpdate',
     ]);
     for (const method of Object.keys(cases) as (keyof typeof cases)[]) {
       const variants = cases[method];
@@ -231,7 +232,7 @@ else process.exit(0);
       action: 'stopSubagent', projectName, chatId: groupId, threadId: 'thread', runId: 'run', subagentId: 'child',
     });
     expect(groupMembers).toHaveBeenCalledExactlyOnceWith(agentId, groupId, 'members-page');
-    expect(unsupported.size).toBe(13);
+    expect(unsupported.size).toBe(14);
     await client.close();
   } finally {
     await fixture?.close();

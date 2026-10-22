@@ -6,6 +6,7 @@ import { extname, isAbsolute, join, relative, sep } from 'node:path';
 import { paths } from '../../config/paths';
 import { spawnProcess, spawnProcessSync } from '../../platform/spawn';
 import { binChildEnv } from '../../platform/tool-path';
+import {committedBridgeCodex} from '../../import/bridge/markers';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -65,6 +66,8 @@ function locateBin(home: string, root: string, env: NodeJS.ProcessEnv, blockLega
       if (existsSync(candidate)) return candidate;
     }
   }
+  const imported = committedBridgeCodex(home, root);
+  if (imported && existsSync(imported)) return imported;
   return null;
 }
 

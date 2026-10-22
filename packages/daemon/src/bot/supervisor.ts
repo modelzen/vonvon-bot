@@ -22,6 +22,7 @@ import { botLabel, createCrashNotifier, type CrashNotifier, type HostNotice } fr
 import { crashText, type CrashKind, type CrashPause, type LockHeld } from '@vonvon/protocol';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import {bridgeImportRuntime} from '../import/bridge/runtime';
 
 const ownedWorkSchema = z.object({
   fcb: z.literal('fcb.owned-work'),
@@ -61,6 +62,8 @@ interface Child {
   prunedAt?: number;
   spawnRecordedAt?: number;
   lockWait?: { since: number; reported?: LockHeld };
+  bridgeHeld?: LockHeld;
+  bridgeChecking?: boolean;
 }
 
 /** The host's run and chain, under which the children's records go, and its own pause (s18a); what its start knows of
@@ -86,6 +89,9 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   const runId = options.crash?.runId ?? randomUUID();
   const chainId = options.crash?.chainId ?? randomUUID();
   const childEnv: NodeJS.ProcessEnv = { ...process.env, VONVON_HOME: paths.appDir, VONVON_HOST_RUN_ID: runId, VONVON_HOST_CHAIN_ID: chainId };
+  const migration = bridgeImportRuntime();
+  const importCodex = new Map<string, string>();
+  let bridgeTimer: ReturnType<typeof setTimeout> | undefined;
   const paused = Boolean(options.paused);
   const root = paths.appDir;
   const clock = systemClock;
@@ -250,8 +256,8 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     restartLater(c, { spawn: code }, `起不来（spawn ${code}）`);
   };
 
-  const spawnChild = (c: Child): void => {
-    if (shuttingDown || paused || !c.enabled || c.proc || c.stopping || c.pause) return;
+  const spawnUnchecked = (c: Child): void => {
+    if (shuttingDown || paused || !c.enabled || c.proc || c.stopping || c.pause || c.bridgeHeld) return;
     c.restartTimer = undefined;
     retryPauses();
     c.startedAt = Date.now();
@@ -261,7 +267,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     try {
       proc = spawnProcess(process.execPath, [cliEntry, 'daemon', 'run', '--bot', c.bot.appId], {
         stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-        env: childEnv,
+        env: importCodex.has(c.bot.appId) ? {...childEnv, CODEX_BIN: importCodex.get(c.bot.appId)} : childEnv,
       });
     } catch (error) { // ENOMEM and the like throw instead of emitting 'error'
       log.fail('supervisor', error, { bot: c.bot.name, phase: 'spawn' });
@@ -361,6 +367,18 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     });
   };
 
+  const spawnChild = (child: Child): void => {
+    if (shuttingDown || child.bridgeChecking || child.proc || !child.enabled) return;
+    child.bridgeChecking = true;
+    void migration.guard(child.bot.appId).then(guard => {
+      child.bridgeHeld = guard ? {...guard, by: 'bridge', since: child.bridgeHeld?.since ?? Date.now()} : undefined;
+      if (!guard) spawnUnchecked(child);
+      api?.invalidate();
+    }).catch(() => {
+      child.bridgeHeld = {by: 'bridge', since: Date.now(), message: '无法检查 Bridge 导入锁，Bot 暂不启动。'};
+    }).finally(() => {child.bridgeChecking = false;});
+  };
+
   const stopBot = (child: Child): Promise<void> => {
     if (child.stopping) return child.stopping;
     const proc = child.proc;
@@ -389,16 +407,63 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     notifier.hostStarted(options.crash?.notice, {
       chainId, bots, paused, botPaused: appId => Boolean(children.get(appId)?.pause), ...(options.registryUnreadable ? { registryUnreadable: true } : {}),
     });
+    // Disabled migrated Bots also belong to Vonvon: acquire all their legacy locks before starting children.
+    // The paused recovery host deliberately exposes diagnostics even when bots.json is unreadable.
+    // It starts no children; all normal starts still fail closed on a registry read error.
+    if (!options.registryUnreadable) for (const bot of (await loadBots()).bots) await migration.guard(bot.appId);
     for (const c of children.values()) spawnChild(c);
 
     const byAppId = (botId: string): Child | undefined => children.get(botId);
     const hostPause = paused ? options.crash?.pause ?? { since: supervisorStartedAt, crashes: CRASH_PAUSE_COUNT } : undefined;
+    let adminService: ReturnType<typeof createAdminService>;
+    migration.bind({
+      start: async (appId, fallback) => {
+        if (fallback) importCodex.set(appId, fallback);
+        const result = await adminService.setBotEnabled(appId, true);
+        if (!result.ok) throw new Error('Imported bot activation failed');
+      },
+      stop: async appId => {
+        const child = children.get(appId);
+        if (!child) {
+          if (readSingleInstanceHolder(appId, botPaths(appId).processesFile)) throw new Error('Bot process ownership is unknown');
+          return;
+        }
+        child.enabled = false;
+        if (child.restartTimer) clearTimeout(child.restartTimer);
+        await stopBot(child); importCodex.delete(appId);
+      },
+      connection: async appId => {
+        const child = children.get(appId);
+        if (!child?.ipc) return 'unknown';
+        const value = await child.ipc.call({kind: 'status'}, STATUS_IPC_TIMEOUT_MS).catch(() => undefined) as {connection?: string} | undefined;
+        return value?.connection ?? 'unknown';
+      },
+    }, () => api?.invalidate());
+    const checkBridgeLocks = async (): Promise<void> => {
+      if (shuttingDown) return;
+      try {
+        const registry = await loadBots();
+        migration.releaseRemoved(new Set(registry.bots.map(bot => bot.appId)));
+        for (const bot of registry.bots) await migration.guard(bot.appId);
+        for (const child of children.values()) {
+          const wasBridgeHeld = child.bridgeHeld !== undefined;
+          const guard = await migration.guard(child.bot.appId);
+          child.bridgeHeld = guard ? {...guard, by: 'bridge', since: child.bridgeHeld?.since ?? Date.now()} : undefined;
+          if (guard && child.proc) await stopBot(child);
+          else if (wasBridgeHeld && !guard && child.enabled) spawnChild(child);
+        }
+        api?.invalidate();
+      } catch { /* Unknown ownership is retried; spawnChild still checks before every launch. */ }
+      if (!shuttingDown) bridgeTimer = setTimeout(() => void checkBridgeLocks(), lockSlowMs);
+    };
+    bridgeTimer = setTimeout(() => void checkBridgeLocks(), lockSlowMs);
     api = await startApi({
       port: options.port,
       control,
+      bridgeImport: migration.importer,
       diagnostics,
-      crashes: { application: now => ({ ...(hostPause ? { paused: hostPause } : {}), records: records(now) }), paused: appId => children.get(appId)?.pause, lockHeld: appId => children.get(appId)?.lockWait?.reported },
-      service: createAdminService({
+      crashes: { application: now => ({ ...(hostPause ? { paused: hostPause } : {}), records: records(now) }), paused: appId => children.get(appId)?.pause, lockHeld: appId => children.get(appId)?.bridgeHeld ?? children.get(appId)?.lockWait?.reported },
+      service: adminService = createAdminService({
         applyBotActivation: async (appId, enabled) => {
           if (shuttingDown) throw new Error('daemon 正在退出。');
           let child = children.get(appId);
@@ -506,6 +571,9 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     await control.waitForRequest();
   } catch (error) { errors.push(error); }
   finally {
+    if (bridgeTimer) clearTimeout(bridgeTimer);
+    // Restore Bridge before stopping ordinary children. An uncommitted import cannot be abandoned on clean exit.
+    try {await migration.shutdown();} catch (error) {errors.push(error);}
     // First: a 30 s wait must not end during the drain and tell the owner a bot "recovered" (s18b).
     const notices = notifier.close();
     shuttingDown = true;
@@ -518,6 +586,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       errors.push(...drained.filter(result => result.status === 'rejected').map(result => result.reason));
     }), notices]);
     cleanup.push(...await Promise.allSettled([control.completeShutdown(() => api?.release() ?? Promise.resolve())]));
+    migration.dispose();
     if (!options.control) control.dispose();
     const failures = cleanup.filter(result => result.status === 'rejected');
     errors.push(...failures.map(failure => failure.reason));

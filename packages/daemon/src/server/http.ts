@@ -19,6 +19,7 @@ import { commandRpc } from './rpc/command';
 import { collaborationRpc } from './rpc/collaboration';
 import { environmentRpc } from './rpc/environment';
 import { machineRpc } from './rpc/machine';
+import type {BridgeImporter} from '../import/bridge/transaction';
 import { settingsRpc } from './rpc/settings';
 import { readLocalIdentity } from './local-credential';
 import { getRpcErrorCode } from './errors';
@@ -49,7 +50,7 @@ export interface DaemonApi extends ApiLifetime {
 /** Test seams for the login-time service: the platform and spawn of the helper launcher, and the manager read. */
 type ServiceSeams = Pick<Parameters<typeof createServiceActionLauncher>[0], 'platform' | 'spawn'> & Pick<Parameters<typeof createSnapshotStore>[0], 'readService'>;
 
-export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics']; crashes?: Parameters<typeof createSnapshotStore>[0]['crashes'] }): Promise<DaemonApi> {
+export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; bridgeImport?: BridgeImporter; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics']; crashes?: Parameters<typeof createSnapshotStore>[0]['crashes'] }): Promise<DaemonApi> {
   let acquiredServer: ReturnType<typeof createServer> | undefined;
   let acquiredJobs: Jobs | undefined;
   let acquiredLogs: LogFollowers | undefined;
@@ -158,7 +159,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
         case 'settings': return finish(peer, await settingsRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'settings', payload }));
         case 'collaboration': return finish(peer, await collaborationRpc(options.service, directory, request.payload), payload => ({ type: 'response', id, method: 'collaboration', payload }));
         case 'environment': return finish(peer, await environmentRpc(options.service, jobs, peer, request.payload, environment), payload => ({ type: 'response', id, method: 'environment', payload }));
-        case 'machine': return finish(peer, await machineRpc(options.service, options.control, port, request.payload, { launcher: serviceActions, snapshots, root: home }), payload => ({ type: 'response', id, method: 'machine', payload }));
+        case 'machine': return finish(peer, await machineRpc(options.service, options.control, port, request.payload, { launcher: serviceActions, snapshots, root: home, bridgeImport: options.bridgeImport }), payload => ({ type: 'response', id, method: 'machine', payload }));
         case 'command': return finish(peer, await commandRpc({ service: options.service, jobs, peer, directory, snapshots, control: options.control, port }, request.payload), payload => ({ type: 'response', id, method: 'command', payload }));
         case 'directory': {
           if (request.payload.type === 'list') { peer.send({ type: 'response', id, method: 'directory', payload: await directory.list(request.payload.path) }); return; }

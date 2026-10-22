@@ -20,7 +20,7 @@ export const crashEntrySchema = z.object({
 export type CrashEntry = z.infer<typeof crashEntrySchema>;
 export const applicationCrashesSchema = z.object({ paused: crashPauseSchema.optional(), records: z.array(crashEntrySchema) });
 export type ApplicationCrashes = z.infer<typeof applicationCrashesSchema>;
-export const lockHeldSchema = z.object({ pid: z.number().int().positive().optional(), since: z.number().finite().nonnegative() });
+export const lockHeldSchema = z.object({ pid: z.number().int().positive().optional(), since: z.number().finite().nonnegative(), by: z.literal('bridge').optional(), message: z.string().optional() });
 export type LockHeld = z.infer<typeof lockHeldSchema>;
 
 export function formatUptime(ms: number): string {
