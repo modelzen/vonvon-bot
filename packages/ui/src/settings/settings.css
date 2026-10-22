@@ -29,7 +29,10 @@
   color: var(--color-text-secondary);
   cursor: pointer;
   font-weight: 500;
+  font-size: 13px;
+  line-height: 1.5;
 }
+.settings-disclosure > summary:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -3px; }
 .settings-disclosure > .ss-row::before {
   content: "";
   position: absolute;
@@ -57,6 +60,100 @@
 .settings-number {
   width: 86px;
   box-sizing: border-box;
+  font-variant-numeric: tabular-nums;
+}
+.setting-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+.setting-choice {
+  display: inline-flex;
+  position: relative;
+  min-width: 0;
+  cursor: pointer;
+}
+.setting-choice input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+}
+.setting-choice > span {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 1px solid var(--color-border, rgba(0, 0, 0, .12));
+  border-radius: var(--settings-control-radius, 8px);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  box-sizing: border-box;
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.setting-choice input:checked + span {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 7%, var(--color-surface));
+  color: var(--color-accent);
+  font-weight: 600;
+}
+.setting-choice input:focus-visible + span {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.setting-choice input:disabled + span {
+  opacity: .5;
+  cursor: not-allowed;
+}
+.setting-choice:active input:not(:disabled) + span { background: var(--color-surface-muted); }
+.setting-choices--stacked { flex-direction: column; }
+.setting-choices--stacked .setting-choice,
+.setting-choices--stacked .setting-choice > span { width: 100%; }
+.collaboration-window .ss-row.group-choice-row {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.collaboration-window .group-choice-row > .ss-row__copy,
+.collaboration-window .group-choice-row > .ss-row__trailing {
+  flex: 1 1 100%;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+.group-help-note {
+  display: block;
+  margin-top: 5px;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.group-help-note code { color: var(--color-text-secondary); }
+.collaboration-window .group-more-actions { margin-top: 16px; }
+.collaboration-window .group-more-actions > .ss-section { margin-top: 12px; }
+.collaboration-window .group-binding-settings .ss-row__description { overflow-wrap: anywhere; }
+
+@container settings-content (max-width: 450px) {
+  .membership-settings-sheet .ss-row:has(select),
+  .membership-settings-sheet .ss-row:has(.settings-inline-actions),
+  .group-binding-settings .ss-row:has(.ui-button) {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .membership-settings-sheet .ss-row:has(select) > .ss-row__copy,
+  .membership-settings-sheet .ss-row:has(select) > .ss-row__trailing,
+  .membership-settings-sheet .ss-row:has(.settings-inline-actions) > .ss-row__trailing {
+    width: 100%;
+    flex-basis: 100%;
+    max-width: 100%;
+  }
+  .membership-settings-sheet .ss-row__trailing select { width: 100%; }
+  .membership-settings-sheet .settings-inline-actions { justify-content: flex-start; }
+  .setting-choice > span { min-height: 44px; }
 }
 .settings-instructions {
   box-sizing: border-box;
@@ -110,7 +207,7 @@
 
 .collaboration-window .agent-settings-page {
   display: grid;
-  width: min(100%, 580px);
+  width: 100%;
   gap: 16px;
   justify-self: center;
   min-width: 0;
@@ -194,8 +291,13 @@
   display: block;
   margin-top: 3px;
   color: var(--color-text-tertiary);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
+}
+.collaboration-window .agent-settings-disclosure > summary:active { background: var(--color-surface-muted); }
+@media (hover: hover) and (pointer: fine) {
+  .settings-disclosure > summary:hover,
+  .collaboration-window .agent-settings-disclosure > summary:hover { background: var(--color-surface-hover); }
 }
 .collaboration-window .agent-settings-disclosure > summary:focus-visible {
   outline: 2px solid var(--color-accent);
