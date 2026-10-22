@@ -13,7 +13,17 @@ vi.mock('node:child_process', async original => ({ ...await original<typeof impo
 vi.mock('../src/agent/owned-process', () => ({ closeOwnedProviderProcesses: async () => {}, unconfirmedProviderPids: () => [], registeredProviderPids: () => [] }));
 vi.mock('../src/service/startup', () => ({ readStartupRegistration: async () => ({ kind: 'absent' }), startRegisteredDaemon: async () => { throw new Error('unexpected service start'); } }));
 vi.mock('../src/config/paths', async original => ({
-  ...await original<typeof import('../src/config/paths')>(), paths: { get appDir() { return f.root; } },
+  ...await original<typeof import('../src/config/paths')>(), paths: {
+    get appDir() { return f.root; },
+    get botsFile() { return join(f.root, 'bots.json'); },
+  },
+}));
+// Migration is unrelated to the process/listener ownership exercised here.
+vi.mock('../src/import/bridge/runtime', () => ({
+  bridgeImportRuntime: () => ({
+    importer: {}, recover: async () => {}, guard: async () => undefined,
+    bind() {}, releaseRemoved() {}, shutdown: async () => {}, dispose() {},
+  }),
 }));
 vi.mock('../src/platform/spawn', () => ({ spawnProcess: f.spawn }));
 vi.mock('../src/admin/service', () => ({ createAdminService: vi.fn() }));

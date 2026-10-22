@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { parse as parseToml } from 'smol-toml';
 import { inspectLocalPath, LocalFileSafetyError, readLocalText, withTimeout } from './bounded-local-files';
 import { canDecryptLegacySecret, loadLegacyKeystoreKey } from './legacy-keystore';
+import {classifyHookCommand} from './hooks';
 
 // Schema bounds and the read-only source inspection are adapted from #226.
 const appId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
@@ -19,7 +20,7 @@ const registrySchema = z.object({ version: z.literal(1), current: appId.optional
   appId, name: text, tenant: z.enum(['feishu', 'lark']), botName: z.string().max(256).optional(), active: z.boolean().optional(),
 })).max(128) });
 const projectSchema = z.object({ name: text, chatId: text, cwd: text.refine(isAbsolute),
-  mode: tier.optional(), guestMode: tier.optional(), noMention: z.boolean().optional(), kind: z.enum(['multi', 'single']).optional(),
+  mode: tier.optional(), guestMode: tier.nullable().optional(), noMention: z.boolean().optional(), kind: z.enum(['multi', 'single']).optional(),
   network: z.boolean().optional(), allowedUsers: z.array(text).max(4096).optional(), backend: text.optional(),
   autoCompact: z.boolean().optional(), defaultModel: text.optional(), defaultEffort: text.optional(),
 });
@@ -226,7 +227,7 @@ function hookFor(input: HookInput, appId: string, agent: 'claude' | 'codex', cur
       const command = hook.command ?? '';
       if (command.includes('agent2lark-hook')) continue;
       // Only known bridge entry points; unrelated commands containing "hook" do not count.
-      const bridge = /^(?:feishu-codex-bridge|"[^"\n]+"\s+"[^"\n]*\/feishu-codex-bridge\.mjs")\s+hook(?:\s|$)/.test(command.trim());
+      const bridge = classifyHookCommand(command) !== 'other';
       if (!bridge || !new RegExp(`(?:^|\\s)--agent\\s+${agent}(?:\\s|$)`).test(command)) continue;
       const bot = /(?:^|\s)--bot\s+(?:"([A-Za-z0-9_-]+)"|'([A-Za-z0-9_-]+)'|([A-Za-z0-9_-]+))(?:\s|$)/.exec(command);
       if (bot ? (bot[1] ?? bot[2] ?? bot[3]) === appId : current) events.add(event);

@@ -28,7 +28,12 @@ const intent = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('write-file'), appId: identifier, file, sha256: hash }).strict(),
   z.object({ kind: z.literal('create-secret'), appId: identifier, id: z.string(),
     iv: z.string().length(24).regex(/^[a-f0-9]{24}$/) }).strict(),
-  z.object({ kind: z.literal('register-bot'), appId: identifier, registrationId: z.string().uuid() }).strict(),
+  z.object({ kind: z.literal('register-bot'), appId: identifier, registrationId: z.string().uuid(), handle: z.string().optional() }).strict(),
+  z.object({ kind: z.literal('move-bot'), appId: identifier }).strict(),
+  z.object({ kind: z.literal('hook'), target: z.enum(['claude', 'codex']), before: hash, after: hash, mode: integer }).strict(),
+  z.object({ kind: z.literal('marker'), target: z.enum(['bridge', 'done']), sha256: hash }).strict(),
+  z.object({ kind: z.literal('start-bot'), appId: identifier }).strict(),
+  z.object({ kind: z.literal('late-plist'), sha256: hash }).strict(),
   z.object({ kind: z.literal('service'), operation: z.enum(['bootout', 'bootstrap']) }).strict(),
   z.object({ kind: z.literal('stage-directory'), appId: identifier.nullable() }).strict(),
 ]);
@@ -46,7 +51,9 @@ export const BridgeImportJournalSchema = z.object({
   }).strict(),
   stageDir: absolutePath, stageIdentity: identity.nullable(),
   intents: z.array(z.object({ sequence: integer, completed: z.boolean(), action: intent }).strict()).max(8192),
-  step: z.enum(['checking', 'stopping', 'locking', 'staging', 'staged', 'rolling-back', ...terminal, 'refused']),
+  step: z.enum(['checking', 'stopping', 'locking', 'staging', 'staged', 'codex', 'hooks', 'moving', 'starting', 'finishing', 'rolling-back', ...terminal, 'refused']),
+  bots: z.array(z.object({appId: identifier, name: z.string()}).strict()).optional(),
+  notes: z.array(z.object({kind: z.string(), message: z.string(), appId: identifier.optional(), chatId: z.string().optional()}).strict()).optional(),
   cleanupPending: z.boolean(), outcome: z.enum(terminal).nullable(),
   error: z.object({ code: z.string().min(1).max(128), message: z.string().max(1024) }).strict().optional(),
 }).strict().superRefine((journal, ctx) => {
@@ -91,6 +98,9 @@ export function withBridgeMoveAllocation(journal: BridgeImportJournal, value: Br
   return BridgeImportJournalSchema.parse({ ...journal, intents });
 }
 function sameIntentAction(before: BridgeImportIntent['action'], after: BridgeImportIntent['action']): boolean {
+  if (before.kind === 'register-bot' && after.kind === 'register-bot') {
+    return before.appId === after.appId && before.registrationId === after.registrationId && (before.handle === undefined || before.handle === after.handle);
+  }
   if (before.kind !== 'move-plist' || after.kind !== 'move-plist') return JSON.stringify(before) === JSON.stringify(after);
   const { allocations: oldAllocations, ...oldAction } = before, { allocations, ...action } = after;
   return JSON.stringify(oldAction) === JSON.stringify(action) && allocations.slice(oldAllocations.length).every(entry => entry.inode === null)
@@ -155,7 +165,8 @@ export async function writeBridgeImportJournal(paths: BridgeJournalPaths, value:
     const immutable = ['hostPid', 'startedAt', 'bridgeDir', 'plistFile', 'uid', 'reservedAppIds', 'before', 'stageDir'] as const;
     if (immutable.some(field => JSON.stringify(previous[field]) !== JSON.stringify(journal[field]))
       || (previous.stageIdentity !== null && JSON.stringify(previous.stageIdentity) !== JSON.stringify(journal.stageIdentity))
-      || (previous.outcome !== null && previous.outcome !== journal.outcome)
+      || (previous.outcome !== null && previous.outcome !== journal.outcome
+        && !(previous.outcome !== 'done' && journal.step === 'rolling-back' && journal.cleanupPending && journal.outcome === null))
       || previous.intents.some((item, index) => {
         const next = journal.intents[index];
         return !next || !sameIntentAction(item.action, next.action) || (item.completed && !next.completed);

@@ -15,6 +15,7 @@ import { performCoreUpdate } from '../../service/update';
 import { startApi } from '../../server/http';
 import { noteClaudeLoginFailed } from '../../agent/claude-agent/login';
 import { createDiagnosticsStore, ipcDiagnosticsSink, setDiagnosticsSink } from '../../bot/diagnostics';
+import {bridgeImportRuntime} from '../../import/bridge/runtime';
 
 interface RunOptions {
   control?: ShutdownControl;
@@ -46,6 +47,11 @@ export async function runRun(botName?: string, options: RunOptions = {}): Promis
   // Explicit selector always runs exactly that one bot inline (this is also how
   // the supervisor launches each child: `run --bot <appId>`).
   if (botName) {
+    if (!process.send) {
+      const registry = await ensureRegistry();
+      const entry = registry.bots.find(bot => bot.appId === botName || bot.name === botName);
+      if (entry) {const guard = await bridgeImportRuntime().guard(entry.appId); if (guard) throw new Error(guard.message);}
+    }
     await runSingle(botName, control, options);
     return;
   }

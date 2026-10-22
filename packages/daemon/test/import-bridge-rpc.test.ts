@@ -1,0 +1,20 @@
+import {expect, it, vi} from 'vitest';
+import {machineRequestSchema, type BridgeImportReply} from '@vonvon/protocol';
+import {machineRpc, type MachineServiceContext} from '../src/server/rpc/machine';
+import {fakeService} from './server-fixture';
+import type {BridgeImporter} from '../src/import/bridge/transaction';
+it('requires accepted migration changes before starting and keeps detection read-only', async () => {
+  const reply: BridgeImportReply = {type: 'bridgeImport', detection: {kind: 'found', message: 'fixture'}, preflight: null, view: null};
+  const detect = vi.fn(async () => reply), start = vi.fn(async () => reply), rollback = vi.fn(async () => reply);
+  const importer = {detect, start, rollback} as unknown as BridgeImporter;
+  const context = {bridgeImport: importer} as MachineServiceContext;
+  const call = (value: unknown) => machineRpc(fakeService(), undefined, 1234, machineRequestSchema.parse(value), context);
+  expect(await call({type: 'bridgeImport', action: 'detect'})).toEqual({kind: 'read', value: reply});
+  expect(start).not.toHaveBeenCalled(); expect(detect).toHaveBeenCalledOnce();
+  await expect(call({type: 'bridgeImport', action: 'start'})).rejects.toMatchObject({code: 'invalid_request'});
+  expect(start).not.toHaveBeenCalled();
+  expect((await call({type: 'bridgeImport', action: 'start', acceptedChanges: true})).kind).toBe('mutation');
+  expect(start).toHaveBeenCalledOnce();
+  expect((await call({type: 'bridgeImport', action: 'rollback'})).kind).toBe('mutation');
+  expect(rollback).toHaveBeenCalledOnce();
+});
