@@ -10,6 +10,7 @@ import { type Allocation, type ObjectIdentity, SafeAppIdSchema, parseAllocations
 import { DirectoryError, directoryError } from './directory-errors';
 import { resolveProjectsRootDir, type DirectorySettings } from './directories';
 import { groupAllocationKey, parseGroupNamespaces, type GroupNamespaceState } from './group-namespace';
+import {assertBridgeImportReservation} from '../import/bridge/reservation';
 
 /** One saved bot. Credentials' secret lives in the keystore (key `app-<appId>`). */
 export interface BotEntry {
@@ -312,10 +313,13 @@ export type RegistrationCommit = Readonly<{
 export function registerBotEntry(
   input: Pick<BotEntry, 'appId' | 'tenant' | 'botName'> & { desiredName: string; initialPreferences?: AppPreferences },
   persistAccount: (selected: RegistrationCommit) => Promise<void>,
+  imported?: {txId: string; registrationId: string; onBeforePublish: (handle: string) => Promise<void>},
 ): Promise<RegisterEntryResult> {
   const identity = structuredClone(input);
   return ownBots(async registry => {
+    await assertBridgeImportReservation(paths.appDir, identity.appId, imported?.txId);
     const previous = registry.bots.find(bot => bot.appId === identity.appId);
+    if (previous && imported) throw new Error('Imported bot already registered');
     if (previous) return { kind: 'already-registered', entry: previous };
     if (!SafeAppIdSchema.safeParse(identity.appId).success) throw new Error('Invalid bot app ID');
     const snapshot = await loadConfig(botPaths(identity.appId).configFile);
@@ -330,19 +334,41 @@ export function registerBotEntry(
         parent: resolveProjectsRootDir(preferences?.projectsRootDir), dataDir: paths.appDir }, allocations));
       registry.allocations = { ...allocations, [identity.appId]: allocation };
     }
+    await imported?.onBeforePublish(allocation.handle);
     // Re-publish visible intent before a retry can create or trust its directory.
     await publish(registry);
     const pending = allocation;
     allocation = await directoryError(pending.handle, () => materializeBot(registry, pending));
     await publish(registry);
     const entry: BotEntry = { appId: identity.appId, tenant: identity.tenant, botName: identity.botName,
-      name: allocation.handle, createdAt: Date.now(), registrationId: randomUUID() };
+      name: allocation.handle, createdAt: Date.now(), registrationId: imported?.registrationId ?? randomUUID() };
     await persistAccount(Object.freeze({ entry: Object.freeze({ ...entry }), snapshot: structuredClone(snapshot),
       preferences: structuredClone(preferences), namespaceRoot: allocation.namespaceRoot }));
     registry.bots.push(entry);
     registry.current ??= entry.appId;
     await publish(registry);
     return { kind: 'registered', entry };
+  });
+}
+
+/** Import admission shares the same interprocess mutex as ordinary registration. */
+export function reserveImportedBots(appIds: readonly string[], reserve: () => Promise<void>): Promise<void> {
+  return ownBots(async registry => {
+    if (registry.bots.some(bot => appIds.includes(bot.appId)) || appIds.some(id => registry.allocations?.[id])) throw new Error('Bot destination conflict');
+    await reserve();
+  });
+}
+export function unregisterImportedBots(entries: readonly {appId: string; registrationId: string; handle?: string}[]): Promise<void> {
+  return ownBots(async registry => {
+    for (const entry of entries) {
+      const existing = registry.bots.find(bot => bot.appId === entry.appId);
+      if (existing && existing.registrationId !== entry.registrationId) throw new Error('Imported registration ownership changed');
+      registry.bots = registry.bots.filter(bot => bot.appId !== entry.appId);
+      const allocation = registry.allocations?.[entry.appId];
+      if (allocation && allocation.handle === entry.handle) delete registry.allocations![entry.appId];
+    }
+    if (!registry.bots.some(bot => bot.appId === registry.current)) registry.current = registry.bots.find(bot => bot.active)?.appId ?? registry.bots[0]?.appId;
+    await publish(registry);
   });
 }
 
@@ -400,6 +426,7 @@ export function removeBot(
 ): Promise<RemoveBotResult> {
   const identity = { ...expected };
   return ownBots(async registry => {
+    await assertBridgeImportReservation(paths.appDir, identity.appId);
     const entry = registry.bots.find(bot => bot.appId === identity.appId);
     if (!entry) return { kind: 'missing' };
     if (!sameIdentity(entry, identity)) return { kind: 'stale' };
@@ -420,6 +447,7 @@ export function commitBotCredentialRefresh(
 ): Promise<'committed' | 'stale'> {
   const identity = { ...expected };
   return ownBots(async registry => {
+    await assertBridgeImportReservation(paths.appDir, identity.appId);
     const entry = registry.bots.find(bot => bot.appId === identity.appId);
     if (!entry || !sameIdentity(entry, identity)) return 'stale';
     await persist();

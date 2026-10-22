@@ -9,12 +9,20 @@ import { runtimeDistribution } from '../../service/distribution';
 import type { RpcOutcome } from '../rpc';
 import type { SnapshotStore } from '../snapshot';
 import { unsupported } from '../errors';
+import type {BridgeImporter} from '../../import/bridge/transaction';
+import {RpcError} from '../errors';
 
 /** The login-time service switch (3.10): the helper launcher, the snapshot that shows it, and the data root. */
-export type MachineServiceContext = { launcher: ServiceActionLauncher; snapshots: Pick<SnapshotStore, 'observeService' | 'refreshService'>; root: string };
+export type MachineServiceContext = { launcher: ServiceActionLauncher; snapshots: Pick<SnapshotStore, 'observeService' | 'refreshService'>; root: string; bridgeImport?: BridgeImporter };
 
 export async function machineRpc(service: AdminService, control: ShutdownControl | undefined, port: number, request: MachineRequest, services?: MachineServiceContext): Promise<RpcOutcome<MachineReply>> {
   switch (request.type) {
+    case 'bridgeImport': {
+      if (!services?.bridgeImport) return unsupported();
+      if (request.action === 'start' && request.acceptedChanges !== true) throw new RpcError('invalid_request', '请先确认导入后的变化。');
+      const reply = await services.bridgeImport[request.action]();
+      return request.action === 'start' || request.action === 'rollback' ? {kind: 'mutation', reply: () => reply} : {kind: 'read', value: reply};
+    }
     case 'status': {
       const read = controlDesktopService('status');
       // 重新检测 asks here; the snapshot takes the same answer instead of waiting for its 60 s read.

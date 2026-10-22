@@ -135,3 +135,28 @@ describe('real bot writer ownership', () => {
     expect(Object.keys((await registry(root)).allocations)).toEqual(['new']);
   });
 });
+
+it('reserves import app IDs before normal registration and preserves foreign incarnations during rollback', async () => {
+  const root = await home(), txId = '11111111-1111-4111-8111-111111111111';
+  const journalFile = join(root, 'import/bridge/journal.json');
+  await mkdir(join(root, 'import/bridge'), {recursive: true});
+  const journal = {version: 1, txId, hostPid: process.pid, startedAt: 1, uid: 501, bridgeDir: join(root, 'old'), plistFile: join(root, 'old.plist'),
+    reservedAppIds: ['migrating'], acquiredLocks: [], before: {plist: {present: false}, serviceLoaded: false, holders: [{appId: 'migrating', pid: null, startedAt: null}]},
+    stageDir: join(root, 'import/bridge', txId), stageIdentity: null, intents: [], step: 'staging', cleanupPending: false, outcome: null};
+  await successful(root, `await m.reserveImportedBots(['migrating'],async()=>require('node:fs').writeFileSync(${JSON.stringify(journalFile)},${JSON.stringify(JSON.stringify(journal))}));`);
+  const blocked = await run(root, `await m.registerBotEntry(${identity('migrating')},async()=>{throw Error('credential callback must not run')});`).done;
+  expect(blocked.code).toBe(1); expect(blocked.stderr).toContain('正在从 bridge 导入');
+  const registered = await successful(root, `await m.registerBotEntry(${identity('migrating')},async()=>{},{txId:${JSON.stringify(txId)},registrationId:'owned-import',onBeforePublish:async handle=>process.stdout.write(handle)});`);
+  expect(registered).toBe('shared');
+  for (const code of [
+    `const entry=(await m.loadBots()).bots[0];await m.commitBotCredentialRefresh(m.botIdentity(entry),async()=>{throw Error('must not write')});`,
+    `const entry=(await m.loadBots()).bots[0];await m.removeBot(m.botIdentity(entry),{isRunning:async()=>false,cleanup:async()=>{throw Error('must not delete')}});`,
+  ]) {const result = await run(root, code).done; expect(result.code).toBe(1); expect(result.stderr).toContain('正在从 bridge 导入');}
+  const foreign = await run(root, `await m.unregisterImportedBots([{appId:'migrating',registrationId:'different',handle:'shared'}]);`).done;
+  expect(foreign.code).toBe(1); expect((await registry(root)).bots).toHaveLength(1);
+  await successful(root, `await m.unregisterImportedBots([{appId:'migrating',registrationId:'owned-import',handle:'shared'}]);`);
+  expect((await registry(root)).bots).toHaveLength(0);
+  await writeFile(journalFile, JSON.stringify({...journal, outcome: 'rolled-back', step: 'rolled-back'}));
+  await successful(root, register('migrating'));
+  expect((await registry(root)).bots).toHaveLength(1);
+});

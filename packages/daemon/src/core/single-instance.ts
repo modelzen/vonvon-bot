@@ -115,23 +115,26 @@ export function readSingleInstanceHolder(appId: string, file: string = paths.pro
  *
  * `file` 仅测试注入用，生产固定 {@link paths.processesFile}。
  */
-export function acquireSingleInstanceLock(appId: string, file: string = paths.processesFile): () => void {
-  mkdirSync(dirname(file), { recursive: true });
+export function acquireSingleInstanceLock(appId: string, file: string = paths.processesFile, options: {createDir?: boolean; onExit?: boolean} = {}): () => void {
+  if (options.createDir !== false) mkdirSync(dirname(file), { recursive: true });
   const record: LockRecord = { pid: process.pid, appId, startedAt: Date.now() };
 
   for (let attempt = 0; attempt < CLAIM_ATTEMPTS; attempt++) {
     // O_EXCL 原子抢占：文件不存在则「创建即占有」，存在则原子失败。
     try {
       writeFileSync(file, `${JSON.stringify(record)}\n`, { flag: 'wx' });
+      const owned = statSync(file);
       const release = (): void => {
         try {
           const rec = JSON.parse(readFileSync(file, 'utf8')) as Partial<LockRecord>;
-          if (rec.pid === process.pid) unlinkSync(file);
+          const current = statSync(file);
+          if (rec.pid === process.pid && rec.appId === appId && rec.startedAt === record.startedAt
+            && current.dev === owned.dev && current.ino === owned.ino) unlinkSync(file);
         } catch {
           /* already removed or replaced by another instance */
         }
       };
-      process.once('exit', release);
+      if (options.onExit !== false) process.once('exit', release);
       return release;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err; // fail-closed（EACCES 等）
