@@ -1,0 +1,12 @@
+.directory-browser{display:grid;gap:12px;min-width:0;font-size:13px}
+.directory-browser-location{display:flex;align-items:center;gap:10px;min-width:0}
+.directory-browser-location code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;color:var(--color-text-secondary)}
+.directory-browser-search{display:flex;gap:8px}.directory-browser-search input{min-width:0;width:100%;height:34px;padding:0 10px;border:1px solid var(--color-border);border-radius:7px;background:var(--color-canvas);color:inherit}
+.directory-current{display:flex;align-items:center;gap:8px;min-height:32px}
+.directory-browser-list{max-height:260px;overflow:auto;border:1px solid var(--color-border);border-radius:9px}
+.directory-browser-row{display:flex;align-items:center;gap:8px;padding:0 10px}.directory-browser-row+.directory-browser-row{border-top:1px solid var(--color-border)}
+.directory-browser-row>button{display:flex;align-items:center;gap:10px;flex:1;min-width:0;min-height:38px;border:0;background:transparent;color:inherit;text-align:left;cursor:pointer}.directory-browser-row>button>span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.directory-browser-row:hover{background:var(--color-canvas)}
+.directory-browser input[type=checkbox]{accent-color:var(--color-accent);width:15px;height:15px;flex:none}
+.directory-selected{display:grid;gap:5px;max-height:140px;overflow:auto}.directory-selected>div{display:flex;align-items:center;gap:8px;min-width:0}.directory-selected code{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--color-text-secondary);font-size:11px}.directory-selected button{border:0;background:none;color:var(--color-text-secondary);display:grid;place-items:center;width:28px;height:28px;cursor:pointer}
+.directory-empty{margin:16px;color:var(--color-text-secondary)}.directory-selection-count{margin-right:auto;color:var(--color-text-secondary);font-size:12px}
+@media(pointer:coarse){.directory-browser-row>button{min-height:44px}.directory-current{min-height:44px}.directory-selected button{min-width:44px;min-height:44px}}

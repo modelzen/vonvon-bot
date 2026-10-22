@@ -73,6 +73,7 @@ function harness() {
     repairCli: vi.fn(async () => ({ type: 'done' as const, message: 'installed' })),
     observeCli: vi.fn(async () => ({ kind: 'error' as const, message: 'not registered' })),
     chooseExecutablePath: vi.fn(async (): Promise<string | null> => '/usr/local/bin/codex'),
+    chooseDirectoryPaths: vi.fn(async (_multiple: boolean): Promise<string[] | null> => ['/tmp/workspace', '/tmp/docs']),
     checkDesktopUpdate: vi.fn(async () => ({ state: 'available' as const, current: '1.0.0', latest: '1.1.0', message: 'ready' })),
     installDesktopUpdate: vi.fn(async () => ({ state: 'downloaded' as const, current: '1.0.0', latest: '1.1.0', message: 'ready' })),
     hide: vi.fn(), confirmQuit: vi.fn(async () => {}), connectionLost: vi.fn(),
@@ -343,6 +344,20 @@ describe('desktop IPC boundary', () => {
     h.frame.url += '#fragment';
     expect(await h.invoke(desktopChannels.chooseExecutablePath)).toMatchObject({ ok: false });
     expect(h.actions.chooseExecutablePath).toHaveBeenCalledTimes(2);
+    await h.bridge.dispose();
+  });
+
+  it('keeps the native multi-directory chooser behind the document boundary', async () => {
+    const h = harness();
+    const wrong = {...h.event, senderFrame:{url:h.frame.url}} as IpcMainInvokeEvent;
+    expect(await handlers.get(desktopChannels.chooseDirectoryPaths)?.(wrong,true)).toMatchObject({ok:false});
+    expect(await h.invoke(desktopChannels.chooseDirectoryPaths,'true')).toMatchObject({ok:false});
+    expect(await h.invoke(desktopChannels.chooseDirectoryPaths,true,false)).toMatchObject({ok:false});
+    expect(h.actions.chooseDirectoryPaths).not.toHaveBeenCalled();
+    expect(await h.invoke(desktopChannels.chooseDirectoryPaths,true)).toEqual({ok:true,value:['/tmp/workspace','/tmp/docs']});
+    expect(h.actions.chooseDirectoryPaths).toHaveBeenCalledExactlyOnceWith(true);
+    h.actions.chooseDirectoryPaths.mockResolvedValueOnce(null);
+    expect(await h.invoke(desktopChannels.chooseDirectoryPaths,false)).toEqual({ok:true,value:null});
     await h.bridge.dispose();
   });
 
