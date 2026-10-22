@@ -17,7 +17,7 @@ it('offers people and bots, distinguishes names and preserves absent saved membe
   const html = render(view());
   expect(html).toContain('value="ou_bot_peer"'); expect(html).toContain('同名 · Bot · …t_peer');
   expect(html).toContain('value="ou_person"'); expect(html).toContain('同名 · …person');
-  expect(html).toContain('未读取到名称 · …issing'); expect(html).toContain('已有名单保留');
+  expect(html).toContain('未读取到名称 · …issing'); expect(html).toContain('已选成员保留');
 });
 it('keeps manual input for old daemons and disables the picker for readonly settings', () => {
   const v = view(); delete v.members.roster;
