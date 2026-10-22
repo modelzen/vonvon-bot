@@ -20,6 +20,7 @@ import {
 import { AppShell } from "./LocalShell";
 import { AgentAvatar } from './AgentAvatar';
 import { GroupAvatar } from './GroupAvatar';
+import { GroupDirectory, type GroupDirectoryState } from './GroupDirectory';
 import {
   SettingsGroup,
   SettingsRow,
@@ -45,17 +46,21 @@ import {
   formatTime,
 } from "@vonvon/protocol";
 import type { CollaborationView, Page } from "./collaboration-model";
-import {SettingsPanel,membershipSettingsKey,membershipSettingsTarget} from "./settings/SettingsPanel";
+import {SettingsPanel} from "./settings/SettingsPanel";
 import {DraftGuardProvider, useDraftGuard} from './settings/DraftGuard';
 import {diagnosticsSection, searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
-import {initialRoute, openMembership, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type AgentPane, type CollaborationRoute, type MembershipPane} from './collaboration-navigation';
+import {initialRoute, openMembership, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type AgentPane, type CollaborationRoute, joinedGroupRoute} from './collaboration-navigation';
 import {SearchDialog} from './SearchDialog';
 import {flushSync} from 'react-dom';
-import {ProjectPanel, ProjectStatus} from './management/ProjectPanel';
-import {ConversationPanel} from './management/ConversationPanel';
+import {GroupWorkspace, groupTabForSection, type GroupDesignTab} from './GroupWorkspace';
+import {AgentProfileSettings} from './settings/GroupDesignSettings';
 import {ShareUsagePanel, UsagePanel} from './management/UsagePanel';
 import {EnvironmentPanel} from './management/EnvironmentPanel';
-import {SetupChecklist} from './setup/SetupChecklist';
+import {ProviderManager} from './setup/ProviderSetup';
+import {type SetupProvider} from './setup/provider-state';
+import {WelcomeSetup} from './setup/WelcomeSetup';
+import {BridgeImportPanel} from './setup/BridgeImportPanel';
+import {TodayHome, SettingsHome} from './TodayHome';
 import {LoginServiceRow, deviceTitle, toggleService} from './setup/service-toggle';
 import {GrantStep, ScopeGrantRow, jobToCancel, withRegisteredAgent, type RegisterModal} from './setup/GrantStep';
 import {MachinePanel} from './management/MachinePanel';
@@ -65,7 +70,7 @@ import {UpdatePanel} from './management/UpdatePanel';
 
 type Modal =
   | RegisterModal
-  | { kind: "join"; agentId: AgentId; group?: PendingGroup }
+  | { kind: "join"; agentId: AgentId; group?: PendingGroup; provider?: SetupProvider; suspended?: boolean }
   | { kind: "collaboration"; membership: Membership }
   | { kind: "shareUsage" }
   | { kind: "deleteAgent"; agentId: AgentId; name: string }
@@ -105,6 +110,12 @@ function DetailTabs({selected, onSelect, first, second}: {selected: 'overview' |
     <button type="button" aria-current={selected === 'settings' ? 'page' : undefined} className={selected === 'settings' ? 'is-selected' : ''} onClick={() => onSelect('settings')}>{second}</button>
   </nav>;
 }
+function BotDetailTabs({selected, onSelect}: {selected: AgentPane['kind']; onSelect: (pane: AgentPane) => void}) {
+  return <nav className="collaboration-detail-tabs" aria-label="Bot 详情">
+    {([{kind: 'groups', label: '群聊'}, {kind: 'profile', label: '个性与记忆'}, {kind: 'settings', label: '管理 Bot'}] as const).map(pane =>
+      <button key={pane.kind} type="button" aria-current={selected === pane.kind ? 'page' : undefined} className={selected === pane.kind ? 'is-selected' : ''} onClick={() => onSelect({kind: pane.kind})}>{pane.label}</button>)}
+  </nav>;
+}
 
 function FeaturePage({feature}: {feature: (typeof uiFeatures)[number]}) { const Component = feature.component; return <Component/>; }
 
@@ -120,13 +131,18 @@ function DesktopApp() {
   const [searchTarget, setSearchTarget] = useState<Destination>();
   const [snapshot, setSnapshot] = useState<DesktopSnapshot>();
   const [route, setRoute] = useState<CollaborationRoute>(initialRoute);
-  const [page, setPage] = useState<Page>("collaboration");
+  const [setupProvider, setSetupProvider] = useState<SetupProvider>();
+  const [page, setPage] = useState<Page>("home");
+  const [settingsReturn, setSettingsReturn] = useState<{page: Page; route: CollaborationRoute; label: string}>();
+  const [groupDirectoryState, setGroupDirectoryState] = useState<GroupDirectoryState>({query: '', expanded: {}});
+  const [groupTabs, setGroupTabs] = useState<Record<string, GroupDesignTab>>({});
   const [featureId, setFeatureId] = useState<string>();
   const feature = uiFeatures.find(item => item.id === featureId && item.slot === "page");
   const view = routeView(route);
   const selection = routeSelection(route);
   const detail = routeDetail(route);
   const [modal, setModal] = useState<Modal>(null);
+  const [joinedTarget, setJoinedTarget] = useState<{agentId: AgentId; chatId: string}>();
   const [pending, setPending] = useState(0);
   const busy = pending > 0;
   const modalGeneration = useRef(0);
@@ -160,7 +176,7 @@ function DesktopApp() {
         }
         return false;
       }
-      if ((searchTarget.selection?.kind === 'agent' && searchTarget.detail?.kind === 'agent-settings') || searchTarget.detail?.kind === 'membership-settings') {
+      {
         let ancestor: HTMLElement | null = section;
         while (ancestor) {
           if (ancestor instanceof HTMLDetailsElement) ancestor.open = true;
@@ -192,22 +208,40 @@ function DesktopApp() {
     }, 3500);
     return () => {observer.disconnect(); window.clearTimeout(timeout);};
   }, [searchTarget, page, selection]);
-  const firstRunDecided = useRef(false);
   useEffect(
     () =>
       client.watchSnapshots((next) => {
         setSnapshot(next);
         setModal(current => current?.kind === "register" ? withRegisteredAgent(current, next.jobs) : current);
-        // A machine with no bot yet opens on the checklist, once per window.
-        if (!firstRunDecided.current && next.host.kind === "connected" && !next.stale) {
-          firstRunDecided.current = true;
-          if (!next.agents.length) setPage(current => current === "collaboration" ? "setup" : current);
-        }
         document.documentElement.dataset.desktopPlatform =
           next.application.platform;
       }),
     [],
   );
+  useEffect(() => {
+    if (!snapshot || !joinedTarget) return;
+    const destination = joinedGroupRoute(snapshot, joinedTarget);
+    if (!destination) return;
+    setRoute(destination);
+    setPage('collaboration');
+    setJoinedTarget(undefined);
+    setNotice(undefined);
+  }, [snapshot, joinedTarget]);
+  async function joined(target: {agentId: AgentId; chatId?: string}) {
+    setSettingsReturn(undefined);
+    setFeatureId(undefined);
+    setPage('collaboration');
+    setRoute({kind: 'list', view: 'groups'});
+    setJoinedTarget(target.chatId ? {agentId: target.agentId, chatId: target.chatId} : undefined);
+    const refreshed = await run({type: 'refresh'});
+    if (refreshed.kind === 'refused' || refreshed.kind === 'outcomeUnknown') setJoinedTarget(undefined);
+  }
+  function configureJoinProvider() {
+    // Keep the dialog mounted so its name, directory and conversation choice survive.
+    setModal(current => current?.kind === 'join' ? {...current, suspended: true} : current);
+    setSettingsReturn({page, route, label: '添加飞书群'});
+    setPage('providers');
+  }
   async function run(
     command: Command,
     isCurrent: () => boolean = () => true,
@@ -243,21 +277,25 @@ function DesktopApp() {
   function select(next: Selection) {
     if (!snapshot) return;
     navigate(() => {
+      setJoinedTarget(undefined);
       setRoute(current => next.kind === 'overview'
         ? {kind: 'list', view: routeView(current)}
         : next.kind === 'agent'
           ? {kind: 'agent', id: next.id, pane: {kind: 'groups'}}
           : next.kind === 'group'
-            ? {kind: 'group', id: next.id}
+            ? (() => {const member = snapshot.memberships.find(item => item.groupId === next.id); return member ? openMembership({kind:'group',id:next.id}, member.id, snapshot) : {kind:'group' as const,id:next.id};})()
             : openMembership(current, next.id, snapshot));
       setPage("collaboration");
+      setSettingsReturn(undefined);
       setNotice(undefined);
     });
   }
   function changeRoute(next: (current: CollaborationRoute) => CollaborationRoute) {
     navigate(() => {
+      setJoinedTarget(undefined);
       setRoute(next);
       setPage('collaboration');
+      setSettingsReturn(undefined);
       setFeatureId(undefined);
       setNotice(undefined);
     });
@@ -265,37 +303,56 @@ function DesktopApp() {
   function agentPane(pane: AgentPane) {
     changeRoute(current => current.kind === 'agent' ? {...current, pane} : current);
   }
-  function membershipPane(pane: MembershipPane) {
-    changeRoute(current => current.kind === 'membership' ? {...current, pane} : current);
-  }
   function openList(next: CollaborationView) {
     navigate(() => {
+      setJoinedTarget(undefined);
+      setModal(current => current?.kind === 'join' && current.suspended ? null : current);
       setRoute({kind: 'list', view: next});
       setPage('collaboration');
+      setSettingsReturn(undefined);
       setFeatureId(undefined);
       setNotice(undefined);
     });
   }
-  function openPage(next: Page) { navigate(() => { setPage(next); setFeatureId(undefined); }); }
+  function openPage(next: Page) { navigate(() => { setModal(current => current?.kind === 'join' && current.suspended ? null : current); setJoinedTarget(undefined); setPage(next); setFeatureId(undefined); setSettingsReturn(undefined); }); }
+  function openContextSettings(next: Page) {
+    navigate(() => {
+      const selected = route.kind === 'membership' ? snapshot?.memberships.find(item => item.id === route.id) : undefined;
+      const label = selected ? snapshot?.groups.find(item => item.id === selected.groupId)?.name ?? '群设置' : 'Bot 设置';
+      setSettingsReturn({page, route, label}); setPage(next); setFeatureId(undefined);
+    });
+  }
+  function returnFromSettings() {
+    if (!settingsReturn) return;
+    const restore = () => {setModal(current => current?.kind === 'join' ? {...current, suspended: false} : current); setPage(settingsReturn.page); setRoute(settingsReturn.route); setSettingsReturn(undefined); setNotice(undefined);};
+    // Returning to the same draft is not abandoning it.
+    if (modal?.kind === 'join' && modal.suspended) restore();
+    else navigate(restore);
+  }
   function openSearchResult(entry: SearchEntry) {
     if (!snapshot) return;
     flushSync(() => setSearchOpen(false));
     navigate(() => {
+      setJoinedTarget(undefined);
+      setModal(current => current?.kind === 'join' && current.suspended ? null : current);
       setPage(entry.destination.page);
+      setSettingsReturn(undefined);
       setFeatureId(undefined);
       const target = routeFromSearch(entry.destination, snapshot);
-      if (target) setRoute(target.route);
+      if (target) {setRoute(target.route); if (target.route.kind === 'membership') {const memberId=target.route.id; setGroupTabs(current=>({...current,[memberId]:groupTabForSection(entry.destination.section)}));}}
       setSearchTarget(target?.missing ? undefined : entry.destination.section ? entry.destination : undefined);
       setNotice(target?.missing ? {message: target.missing, error: false} : undefined);
     });
   }
-  async function register(agentId?: AgentId) {
+  async function register(agentId?: AgentId, provider?: SetupProvider) {
+    if (!agentId && !provider && !snapshot?.agents.length) {openPage('setup'); return;}
+    if (provider) {setSetupProvider(provider); setPage('setup');}
     const result = await run(agentId ? {type: "refreshAgentCredentials", agentId} : { type: "registerAgent" });
     if (result.kind === "started")
       setModal({ kind: "register", jobId: result.jobId, refresh: Boolean(agentId) });
   }
-  function openJoin(agentId: AgentId, group?: PendingGroup) {
-    navigate(() => setModal({kind: 'join', agentId, group}));
+  function openJoin(agentId: AgentId, group?: PendingGroup, provider?: SetupProvider) {
+    navigate(() => setModal({kind: 'join', agentId, group, provider}));
   }
   async function closeModal() {
     const generation = ++modalGeneration.current;
@@ -326,14 +383,18 @@ function DesktopApp() {
         ? snapshot.groups.find((item) => item.id === member.groupId)
         : undefined;
   const titles: Record<Page, string> = {
+    home: "概览",
+    settings: "设置",
     collaboration: member
       ? `${group?.name ?? '飞书群'} · ${agent?.name ?? 'Bot'}`
       : (agent?.name ?? group?.name ?? (view === "agents" ? "Bot" : "群聊")),
-    setup: "首次运行清单",
-    environment: "本机环境",
+    setup: "飞书连接",
+    bridgeImport: "导入 Bridge",
+    environment: "工具与连接",
+    providers: "Provider",
     usage: "用量",
     application: "应用与启动",
-    secrets: "密钥",
+    secrets: "决策模型",
     diagnostics: "状态与诊断",
   };
   const host = snapshot.host;
@@ -345,7 +406,7 @@ function DesktopApp() {
   const parentLabel = route.kind === 'membership'
     ? route.parent.kind === 'agent'
       ? snapshot.agents.find(item => item.id === route.parent.id)?.name ?? 'Bot'
-      : snapshot.groups.find(item => item.id === route.parent.id)?.name ?? '群聊'
+      : '群聊列表'
     : routeView(route) === 'agents' ? 'Bot 列表' : '群聊列表';
   function membershipRows(
     members: Membership[],
@@ -368,8 +429,7 @@ function DesktopApp() {
             <strong>{perspective === "agents" ? g.name : a.name}</strong>
             <small>
               {backendName(m.backend)} ·{" "}
-              {conversationCopy[m.conversation].title}
-              {' '}· 查看群内协作
+              {{threads:'多会话',shared:'单会话',smart:'智能'}[m.conversation]}
             </small>
           </span>
           <span className="settings-entity-row__value">
@@ -401,19 +461,21 @@ function DesktopApp() {
         page={page}
         view={view}
         title={feature?.label ?? titles[page]}
+        firstUse={!snapshot.agents.length}
         onNavigate={openPage}
         selectedFeature={featureId}
-        onFeatureNavigate={id => navigate(() => setFeatureId(id))}
+        onFeatureNavigate={id => navigate(() => {setJoinedTarget(undefined); setModal(current => current?.kind === 'join' && current.suspended ? null : current); setFeatureId(id);})}
         onSearch={() => setSearchOpen(true)}
         onOpenList={openList}
-        backLabel={`返回 ${parentLabel}`}
+        backLabel={`返回 ${settingsReturn?.label ?? parentLabel}`}
         onBack={
-          !feature && page === "collaboration" && route.kind !== 'list'
-            ? () => changeRoute(routeBack)
+          settingsReturn ? returnFromSettings : !feature && page === "collaboration" && route.kind !== 'list'
+            ? () => changeRoute(current => current.kind === 'membership' && current.parent.kind === 'group' ? {kind:'list',view:'groups'} : routeBack(current))
             : undefined
         }
       >
         <div className="page-stack">
+          {['usage', 'application', 'diagnostics'].includes(page) && <header className="today-page-heading"><h1>{titles[page]}</h1></header>}
           {feature ? <FeaturePage feature={feature} /> : <>
           {page === 'collaboration' && route.kind !== 'list' && <nav className="collaboration-breadcrumb" aria-label="当前位置">
             <button type="button" onClick={() => openList(view)}>{view === 'agents' ? 'Bot' : '群聊'}</button>
@@ -462,6 +524,8 @@ function DesktopApp() {
               保留上次成功读取的群配置。读取恢复前请勿重复绑定。
             </InlineNotice>
           )}
+          {page === "home" && snapshot.agents.length > 0 && <TodayHome snapshot={snapshot} onAgent={id => select({kind: "agent", id})} onGroup={id => select({kind: "group", id})} onSetup={() => openPage("setup")} onRegister={() => void register()} disabled={!ready || busy}/>}
+          {page === "settings" && <SettingsHome onNavigate={openPage} onFeature={id => navigate(() => setFeatureId(id))}/>}
           {page === "collaboration" && (
             <>
               {route.kind === 'list' && host.kind === "connected" &&
@@ -488,7 +552,7 @@ function DesktopApp() {
                 >
                   <SettingsRow
                     icon={ListChecks}
-                    title="首次运行清单"
+                    title="连接与设置"
                     description="后端、扫码、开权限、事件订阅、发布，一步步检测。"
                     onClick={() => openPage("setup")}
                   />
@@ -508,14 +572,7 @@ function DesktopApp() {
               )}
               {selection.kind === "overview" && (
                 <>
-                  {view === "groups" && (
-                    <div className="collaboration-page-heading">
-                      <div>
-                        <h2>已连接的飞书群</h2>
-                        <p>同一个群可以有多个 Bot，各自保留工作目录和群内配置。</p>
-                      </div>
-                    </div>
-                  )}
+                  {view === 'agents' && <header className="today-page-heading today-page-heading--actions"><div><h1>Bot</h1><span>{snapshot.agents.length} 个 Bot</span></div><Button icon={<Plus size={14}/>} disabled={!ready || busy} onClick={() => void register()}>注册 Bot</Button></header>}
                   {view === "agents"
                     ? snapshot.agents.length > 0 && (
                         <section
@@ -550,11 +607,7 @@ function DesktopApp() {
                                         : `飞书 · ${groupCount} 个群聊`}
                                     </small>
                                   </span>
-                                  <span
-                                    className={`settings-entity-row__value settings-entity-row__value--${status.tone}`}
-                                  >
-                                    {status.label}
-                                  </span>
+                                  {status.tone !== 'success' && <span className={`settings-entity-row__value settings-entity-row__value--${status.tone}`}>{status.label}</span>}
                                   <ChevronRight
                                     aria-hidden="true"
                                     className="settings-entity-row__chevron"
@@ -563,46 +616,12 @@ function DesktopApp() {
                                 </button>
                               );
                             })}
-                            <button
-                              className="settings-add-row"
-                              type="button"
-                              disabled={!ready || busy}
-                              onClick={() => void register()}
-                            >
-                              <span aria-hidden="true" className="settings-add-row__icon">
-                                <Plus size={15} />
-                              </span>
-                              <span>注册 Bot</span>
-                            </button>
+
                           </div>
                         </section>
                       )
-                    : snapshot.groups.map((g) => (
-                        <SettingsGroup
-                          key={g.id}
-                          label={
-                            <button
-                              className="section-title-link"
-                              onClick={() =>
-                                select({ kind: "group", id: g.id })
-                              }
-                            >
-                              <GroupAvatar group={g} />
-                              {g.name}
-                              <ChevronRight size={13} />
-                            </button>
-                          }
-                        >
-                          <div className="settings-entity-group__surface">
-                            {membershipRows(
-                              snapshot.memberships.filter(
-                                (m) => m.groupId === g.id,
-                              ),
-                              "groups",
-                            )}
-                          </div>
-                        </SettingsGroup>
-                      ))}
+                    : <GroupDirectory snapshot={snapshot} state={groupDirectoryState} onStateChange={setGroupDirectoryState} statusFor={agentListStatus}
+                        onMembership={id => select({kind: 'membership', id})}/>}
                   {!(view === "agents"
                     ? snapshot.agents.length
                     : snapshot.groups.length) && (
@@ -630,12 +649,6 @@ function DesktopApp() {
                       )}
                     </div>
                   )}
-                  {view === "groups" && (
-                    <p className="collaboration-footnote">
-                      只列出通过 Vonvon
-                      注册的机器人。这里显示本地绑定名称，可能与飞书当前群名不同。
-                    </p>
-                  )}
                 </>
               )}
               {selection.kind === "agent" && agent && (
@@ -645,7 +658,6 @@ function DesktopApp() {
                     <div>
                       <span className="collaboration-profile__kind">Bot</span>
                       <h2>{agent.name}</h2>
-                      <p>通过飞书机器人身份参与协作</p>
                     </div>
                     <StatusBadge
                       tone={agentListStatus(agent).tone}
@@ -653,8 +665,8 @@ function DesktopApp() {
                       {agentListStatus(agent).label}
                     </StatusBadge>
                   </header>
-                  <DetailTabs first="已加入的群聊" second="Bot 设置" selected={detail.kind === 'agent-settings' ? 'settings' : 'overview'} onSelect={next => agentPane(next === 'overview' ? {kind: 'groups'} : {kind: 'settings'})}/>
-                  {detail.kind !== 'agent-settings' ? <>
+                  <div className="bot-detail-navigation"><BotDetailTabs selected={route.kind === 'agent' ? route.pane.kind : 'groups'} onSelect={agentPane}/></div>
+                  {route.kind === 'agent' && route.pane.kind === 'profile' ? <AgentProfileSettings botId={agent.id}/> : detail.kind !== 'agent-settings' ? <>
                   <SettingsGroup
                     label="已加入的飞书群"
                     action={
@@ -684,11 +696,10 @@ function DesktopApp() {
                     </div>
                   </SettingsGroup>
                   </> : <div className="agent-settings-page">
-                  <p className="collaboration-scope-note">这里管理 {agent.name} 的身份、运行与通知。群里的工作区和响应方式在各个群的设置里改。</p>
                   <SettingsGroup className="agent-activation" id={settingAnchor('Bot 身份')}>
                     <SettingsRow
                       title="启用 Bot"
-                      description={!agent.enabled && agent.running ? "Bot 尚未停止，仍可能回复飞书消息。请到「应用与启动」重启 daemon。" : "更改立即生效。停用会结束此 Bot 的运行中任务。"}
+                      description={!agent.enabled && agent.running ? "Bot 尚未停止，仍可能回复飞书消息。请到「应用与启动」重启 daemon。" : "停用将结束此 Bot 正在运行的任务。"}
                       trailing={
                         <Toggle
                           className="settings-row-switch"
@@ -709,11 +720,11 @@ function DesktopApp() {
                   </SettingsGroup>
                   <SettingsGroup label="连接与权限" id={settingAnchor('连接与权限')}>
                     <SettingsRow title="应用 ID" value={<code>{agent.id}</code>} />
-                    <SettingsRow title="首次运行清单" description="权限、长连接、事件订阅、卡片回调和发布，逐项检测。" onClick={() => openPage("setup")} />
+                    <SettingsRow title="连接与设置" description="检测权限、事件与发布状态。" onClick={() => openPage("setup")} />
                     <ScopeGrantRow key={`grant-${agent.id}`} agentId={agent.id} disabled={busy || !ready} onError={message => setNotice({message, error: true})}/>
-                    <SettingsRow title="刷新飞书凭据" description="重新扫码换一份凭据，保留群绑定、会话和设置。开权限用上面的「一键开权限」。"
+                    <SettingsRow title="刷新飞书凭据" description="重新扫码，保留群聊、会话和设置。"
                       trailing={<Button size="sm" disabled={busy || !ready} onClick={() => void register(agent.id)}>重新扫码</Button>}/>
-                    <SettingsRow title="状态与诊断" description="连接、缺的权限、后端和最近没回的消息。"
+                    <SettingsRow title="状态与诊断" description="查看连接问题与运行日志。"
                       trailing={<Button size="sm" onClick={() => { openPage("diagnostics"); setSearchTarget({page: "diagnostics", section: diagnosticsSection(agent.id)}); }}>查看</Button>}/>
                   </SettingsGroup>
                   <SettingsPanel
@@ -766,13 +777,12 @@ function DesktopApp() {
                       <span className="collaboration-profile__kind">飞书群</span>
                       <h2>{group.name}</h2>
                       <p>
-                        本地绑定名称 ·{" "}
                         {
                           snapshot.memberships.filter(
                             (m) => m.groupId === group.id,
                           ).length
                         }{" "}
-                        个 Vonvon Bot
+                        个 Bot
                       </p>
                     </div>
                   </header>
@@ -784,53 +794,14 @@ function DesktopApp() {
                       "groups",
                     )}
                   </SettingsGroup>
-                  <p className="collaboration-footnote">
-                    这里只展示 Vonvon
-                    注册的机器人，不显示真人和其他来源的机器人。
-                  </p>
                 </>
               )}
-              {member && agent && group && (
-                <>
-                  <div className={detail.kind === 'membership-settings' ? 'membership-settings-sheet' : 'membership-activity-sheet'}>
-                  <header className="collaboration-profile">
-                    <GroupAvatar group={group} large />
-                    <div>
-                      <span className="collaboration-profile__kind">群内协作</span>
-                      <h2>{group.name}</h2>
-                      {member.name !== group.name && <p>绑定名称：{member.name}</p>}
-                    </div>
-                  </header>
-                  <div className="collaboration-member-context">
-                    <AgentAvatar agent={agent} />
-                    <span className="collaboration-member-context__copy"><strong>{agent.name}</strong><small>此 Bot 在本群内协作</small></span>
-                    <button type="button" onClick={() => changeRoute(() => ({kind: 'agent', id: agent.id, pane: {kind: 'settings'}}))}>Bot 设置</button>
-                    <button type="button" onClick={() => changeRoute(() => ({kind: 'group', id: group.id}))}>查看飞书群</button>
-                  </div>
-                  <DetailTabs first="会话与状态" second="群内设置" selected={detail.kind === 'membership-settings' ? 'settings' : 'overview'} onSelect={next => membershipPane(next === 'overview' ? {kind: 'activity'} : {kind: 'settings'})}/>
-                  {detail.kind !== 'membership-settings' ? <>
-                  <SettingsGroup label="群内协作">
-                    <SettingsRow title="工作目录" value={<code>{member.directory}</code>}/>
-                    <SettingsRow title="执行工具" value={backendName(member.backend)}/>
-                    <SettingsRow title="会话方式" value={conversationCopy[member.conversation].title} description={conversationCopy[member.conversation].subtitle}/>
-                    <ProjectStatus scope={{kind: 'project', agentId: agent.id, groupId: group.id, projectName: member.name}} request={client.collaboration}/>
-                    <SettingsRow title="Bot 连接" value={member.stale ? '状态过期' : agentListStatus(agent).label}/>
-                  </SettingsGroup>
-                  <ConversationPanel key={`sessions-${member.id}`} agentId={agent.id} groupId={group.id} projectName={member.name} conversation={member.conversation} request={client.collaboration}/>
-                  <SettingsGroup label="快捷操作">
-                    <SettingsRow title="飞书群" value={group.name} trailing={<Button size="sm" onClick={() => void openExternalUrl(groupUrl(group.id), 'group', shell).catch(error => setNotice({message: error instanceof Error ? error.message : '无法打开飞书群。', error: true}))}>在飞书打开</Button>}/>
-                  </SettingsGroup>
-                  <div className="desktop-actions"><Button disabled={member.stale} onClick={() => setModal({kind: 'collaboration', membership: member})}>开始一次协作</Button></div>
-                  </> : <>
-                  <p className="collaboration-scope-note">这里只配置 {agent.name} 在 {group.name} 中的工作目录、响应方式和权限。</p>
-                  <ProjectPanel key={`manage-${member.id}`} scope={{kind: 'project', agentId: agent.id, groupId: group.id, projectName: member.name}} request={client.collaboration} onChanged={async () => {await run({type: 'refresh'});}}>
-                    <SettingsGroup id={settingAnchor('历史会话')} label="历史会话"><SettingsRow title="会话与状态" trailing={<Button size="sm" onClick={() => membershipPane({kind: 'activity'})}>查看历史会话</Button>} /></SettingsGroup>
-                    <SettingsPanel key={membershipSettingsKey(member)} scope="project" target={membershipSettingsTarget(member)} onOpenSecrets={() => openPage("secrets")} />
-                  </ProjectPanel>
-                  </>}
-                  </div>
-                </>
-              )}
+              {member && agent && group && <GroupWorkspace key={member.id} member={member} agent={agent} group={group} snapshot={snapshot}
+                revealHistory={searchTarget?.reveal === "group-history"} initialTab={searchTarget ? groupTabForSection(searchTarget.section) : groupTabs[member.id]} onTabChange={tab => setGroupTabs(current => ({...current,[member.id]:tab}))}
+                onBot={next => select({kind:'membership',id:next.id})}
+                onBotProfile={() => changeRoute(() => ({kind:'agent',id:agent.id,pane:{kind:'profile'}}))}
+                onOpenTools={() => openContextSettings('environment')} onOpenSecrets={() => openContextSettings('secrets')}
+                onChanged={async () => {await run({type:'refresh'});}}/>}
               {((route.kind === 'agent' && !agent) || (route.kind === 'group' && !group) || (route.kind === 'membership' && (!member || !agent || !group))) && (
                 <InlineNotice title="内容暂不可用">
                   {route.kind === 'membership' ? '这条群内协作或关联的 Bot、飞书群已变化。请返回上一级并刷新。' : '这个 Bot 或飞书群已变化。请返回列表并刷新。'}
@@ -838,7 +809,9 @@ function DesktopApp() {
               )}
             </>
           )}
-          {page === "setup" && <SetupChecklist snapshot={snapshot} ready={ready} busy={busy} run={run} onRegister={agentId => void register(agentId)} onOpenEnvironment={() => openPage("environment")} onNotice={(message, error) => setNotice({message, error})} codexJobs={snapshot.jobs.filter(job => job.type === "loginCodex" && isActive(job)).map(job => <JobPanel key={job.id} job={job} run={run} busy={busy}/>)}/>}
+          {(page === "setup" || (page === "home" && !snapshot.agents.length)) && <WelcomeSetup initialProvider={setupProvider} onProviderPrepared={setSetupProvider} onCreateBot={provider => void register(undefined, provider)} onOpenGroups={() => snapshot.agents.length === 1 ? openJoin(snapshot.agents[0]!.id, undefined, setupProvider) : openList("agents")} snapshot={snapshot} ready={ready} busy={busy} run={run} onRegister={agentId => void register(agentId)} onOpenEnvironment={() => openPage("environment")} onNotice={(message, error) => setNotice({message, error})} codexJobs={snapshot.jobs.filter(job => job.type === "loginCodex" && isActive(job)).map(job => <JobPanel key={job.id} job={job} run={run} busy={busy}/>)}/>}
+          {page === "bridgeImport" && <section className="welcome-setup" aria-label="导入 Bridge"><header className="today-page-heading"><h1>导入 Bridge</h1></header><BridgeImportPanel ready={ready} busy={busy} platform={snapshot.application.platform} showUnavailable/></section>}
+          {page === "providers" && <ProviderManager snapshot={snapshot} ready={ready} busy={busy} run={run} reveal={searchTarget?.reveal === 'codex' ? 'codex' : searchTarget?.reveal === 'claude' ? 'claude' : undefined}/>}
           {page === "environment" && <><EnvironmentPanel reveal={searchTarget?.reveal} codexBusy={snapshot.jobs.some(job => (job.type === "loginCodex" || job.type === "installCodex") && isActive(job))} request={client.environment} onCodexLogin={async () => {await run({type: "startCodexLogin"});}} codexJobs={snapshot.jobs.filter(job => job.type === "loginCodex" || job.type === "installCodex").map(job => <JobPanel key={job.id} job={job} run={run} busy={busy}/>)}/></>}
           {page === "usage" && <UsagePanel request={client.collaboration} onOpenEnvironment={() => openPage('environment')} onOpenShare={() => setModal({kind: 'shareUsage'})}/>}
           {page === "application" && (
@@ -847,7 +820,6 @@ function DesktopApp() {
                 <SettingsRow
                   icon={Monitor}
                   title={deviceTitle(snapshot.application.platform)}
-                  description="本地使用，无需产品账号。"
                   value={`v${snapshot.application.version}`}
                 />
               </SettingsGroup>
@@ -863,7 +835,7 @@ function DesktopApp() {
                   }
                 />
                 <SettingsRow
-                  title="重启 daemon"
+                  title="重启后台服务"
                   description="重新加载已保存的 Bot 设置。"
                   trailing={
                     <Button
@@ -877,9 +849,11 @@ function DesktopApp() {
                 />
                 <LoginServiceRow application={snapshot.application} busy={busy} onToggle={enabled => void runShell(async () => setNotice({message: await toggleService(enabled, client, shell), error: false}))}/>
               </SettingsGroup>
-              <MachinePanel reveal={searchTarget?.reveal} request={client.machine} agents={snapshot.agents} macos={snapshot.application.platform === 'macos'}/>
               <UpdatePanel request={client.machine} attached={host.kind === 'connected' && host.ownership === 'attached'}/>
-              <SettingsPanel scope="host" target={{ kind: "host" }} />
+              <details className="today-advanced-settings"><summary>高级运行设置<span>命令行、后台服务与执行程序</span><ChevronRight size={14} aria-hidden="true"/></summary><div>
+                <MachinePanel reveal={searchTarget?.reveal} request={client.machine} agents={snapshot.agents} macos={snapshot.application.platform === 'macos'}/>
+                <SettingsPanel scope="host" target={{ kind: "host" }} />
+              </div></details>
               <SettingsGroup label="窗口与退出" id={settingAnchor('窗口与退出')} footer="关闭窗口会留在菜单栏或托盘继续运行。退出应用后，daemon 和 Bot 会继续在后台运行。">
                 <SettingsRow title="隐藏到托盘" value={!shell?.hideWindow ? '桌面版提供' : undefined} trailing={<Button size="sm" disabled={!shell?.hideWindow} onClick={() => {if (shell?.hideWindow) void runShell(shell.hideWindow);}}>隐藏窗口</Button>} />
                 <SettingsRow title="退出 Vonvon Bot" value={!shell?.quit ? '桌面版提供' : undefined} trailing={<Button size="sm" disabled={busy || !shell?.quit} onClick={() => {const quit = shell?.quit; if (quit) navigate(() => void runShell(quit));}}>退出应用</Button>} />
@@ -898,7 +872,7 @@ function DesktopApp() {
       <PendingGroupToasts pages={pendingGroups} agents={snapshot.agents} hidden={modal !== null} onContinue={(owner, group) => openJoin(owner.id, group)} />
       {modal?.kind === 'join' && (() => {
         const owner = snapshot.agents.find(item => item.id === modal.agentId);
-        return owner ? <JoinGroupDialog key={`${owner.id}:${modal.group?.chatId ?? 'new'}`} agent={owner} linux={snapshot.application.platform === 'linux'} initialGroup={modal.group} pending={pendingGroups.find(item => item.agentId === owner.id)} onClose={() => setModal(null)} onChanged={async () => {await run({type: 'refresh'});}} /> : null;
+        return owner ? <JoinGroupDialog key={`${owner.id}:${modal.group?.chatId ?? 'new'}`} agent={owner} tools={snapshot.tools} initialProvider={modal.provider} open={!modal.suspended} onOpenProviders={configureJoinProvider} linux={snapshot.application.platform === 'linux'} initialGroup={modal.group} pending={pendingGroups.find(item => item.agentId === owner.id)} onClose={() => setModal(null)} onChanged={joined} /> : null;
       })()}
       <Dialog
         open={modal !== null && modal.kind !== "deleteAgent" && modal.kind !== "join"}
@@ -916,10 +890,10 @@ function DesktopApp() {
         <div className="page-stack">
           {feedback}
           {modal?.kind === "register" && modal.agentId && (
-            <GrantStep key={modal.agentId} agentId={modal.agentId} onOpenChecklist={() => { setModal(null); openPage("setup"); }} onDone={() => setModal(null)} />
+            <GrantStep key={modal.agentId} agentId={modal.agentId} onOpenChecklist={() => { setModal(null); openPage("setup"); }} onDone={() => {setModal(null); openPage("setup");}} />
           )}
           {modal?.kind === "register" && !modal.agentId && registration && (
-            <><p>{modal.refresh ? "重新扫码刷新这个 Bot 的凭据，保留群绑定、会话和设置。请用这个 Bot 的管理员身份扫码。" : "第 1 步：用飞书扫码注册 Bot。注册好后在这里接着一键开权限。"}</p><JobPanel job={registration} run={run} busy={busy} /></>
+            <><p>{modal.refresh ? "重新扫码刷新这个 Bot 的凭据，保留群绑定、会话和设置。请用这个 Bot 的管理员身份扫码。" : "用飞书扫码，随后完成权限配置。"}</p><JobPanel job={registration} run={run} busy={busy} /></>
           )}
           {modal?.kind === "collaboration" && (
             <>

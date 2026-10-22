@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'vitest';
 import {agentIdSchema, groupIdSchema, membershipIdSchema, type DesktopSnapshot} from '@vonvon/protocol';
-import {openMembership, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type CollaborationRoute} from '../src/collaboration-navigation';
+import {joinedGroupRoute, openMembership, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type CollaborationRoute} from '../src/collaboration-navigation';
 
 const agentId = agentIdSchema.parse('cli_navigationA');
 const anotherAgentId = agentIdSchema.parse('cli_navigationB');
@@ -59,4 +59,13 @@ test('missing membership search returns a clear group list fallback', () => {
   const missing = routeFromSearch({page: 'collaboration', selection: {kind: 'membership', id: membershipIdSchema.parse('deleted')}}, snapshot);
   assert.deepEqual(missing?.route, {kind: 'list', view: 'groups'});
   assert.match(missing?.missing ?? '', /不存在/);
+});
+
+test('binding opens the matching Bot in the group once its snapshot arrives', () => {
+  const target = {agentId: anotherAgentId, chatId: groupId};
+  assert.equal(joinedGroupRoute({...snapshot, memberships: []}, target), undefined);
+  assert.equal(joinedGroupRoute({...snapshot, groups: []}, target), undefined);
+  assert.deepEqual(joinedGroupRoute(snapshot, target), {
+    kind: 'membership', id: anotherMemberId, pane: {kind: 'settings'}, parent: {kind: 'group', id: groupId},
+  });
 });
