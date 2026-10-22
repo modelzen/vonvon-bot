@@ -1,4 +1,5 @@
 import { z } from "zod";
+import {modelCatalogSchema} from "./settings.js";
 import { agentIdSchema, conversationSchema, folderTokenSchema, folderSelectionSchema, groupIdSchema, replyModeSchema, toolSchema } from "./domain.js";
 
 const projectName = z.string().trim().min(1).max(100).regex(/^[^/\\\x00-\x1f]+$/);
@@ -14,6 +15,7 @@ const conversation = conversationSchema;
 const folder = folderSelectionSchema;
 
 export const collaborationRequestSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("providerModels"), backend }).strict(),
   z.object({ action: z.literal("createProject"), agentId: agentIdSchema, name: projectName, folder, tool: toolSchema, conversation, response: replyModeSchema.optional() }).strict(),
   z.object({ action: z.literal("project"), ...target }).strict(),
   z.object({ action: z.literal("editProject"), ...target, expectedRevision: revision, folderToken: folderTokenSchema.optional(), conversation: conversation.optional(), enabled: z.boolean().optional() }).strict(),
@@ -79,6 +81,7 @@ const usageBundle = z.object({
 });
 
 export const collaborationReplySchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("providerModels"), backend, state: z.enum(["ready", "unavailable"]), models: modelCatalogSchema.shape.models, message: z.string().optional() }),
   z.object({ kind: z.literal("project"), project: projectRecordSchema }),
   z.object({ kind: z.literal("history"), sessions: z.array(boundSession), threads: z.array(resumableThread), backend: z.string(), threadsError: z.string().optional() }),
   z.object({ kind: z.literal("context"), threadId, usage: z.object({ used: z.number(), window: z.number().nullable() }).nullable(), run: z.object({ id: z.string(), goal: z.boolean(), canStop: z.boolean(), canEndGoal: z.boolean(), canRemind: z.boolean(), reminderRequested: z.boolean(), subagents: z.array(z.object({ id: z.string(), name: z.string(), task: z.string(), status: z.enum(["running", "completed", "failed", "stopped"]), stoppable: z.boolean() })).optional() }).nullable() }),

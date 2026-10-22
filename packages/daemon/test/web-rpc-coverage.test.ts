@@ -180,6 +180,7 @@ else process.exit(0);
         { type: 'sessions', botId: agentId, projectName }, { type: 'chooseExecutable' }, { type: 'saveExecutable', token: operationId, revision: 'token' },
       ],
       collaboration: [
+        { action: 'providerModels', backend: 'codex-appserver' },
         { action: 'createProject', agentId, name: projectName, folder: { kind: 'default' }, tool: 'codex', conversation: 'threads' },
         { action: 'project', ...target }, { action: 'editProject', ...target, expectedRevision: 'token' }, { action: 'removeProject', ...target, expectedRevision: 'token' },
         { action: 'history', ...target }, { action: 'context', ...session }, { action: 'clear', ...session }, { action: 'compact', ...session },
@@ -188,6 +189,7 @@ else process.exit(0);
         { action: 'usage', force: false }, { action: 'shareUsage', ...target, sections: ['stats'] }, { action: 'openGroup', ...target },
       ],
       environment: [
+        { type: 'backendInstallStatus', id: 'claude-agent' }, { type: 'cancelBackendInstall', operationId },
         { type: 'scan' }, { type: 'backendCatalog' }, { type: 'backendVersion', id: 'claude-agent' }, { type: 'backendLogin', id: 'claude-agent', refresh: false }, { type: 'backendInstall', id: 'claude-agent', update: false }, { type: 'backendUninstall', id: 'claude-agent' },
         { type: 'install', tool: 'lark-cli' }, { type: 'update', tool: 'lark-cli' }, { type: 'toolInstallStatus' }, { type: 'cancelInstall', operationId }, { type: 'uninstall', tool: 'lark-cli' },
         { type: 'authStatus', tool: 'lark-cli' }, { type: 'startLogin', tool: 'lark-cli' }, { type: 'loginStatus' }, { type: 'openVerification', operationId }, { type: 'cancelLogin', operationId },
@@ -223,6 +225,8 @@ else process.exit(0);
         else {
           expect(frame.type, key).toBe('response');
           expect(responseSchema.safeParse(frame).success, key).toBe(true);
+          if (key === 'collaboration.providerModels') expect(frame).toMatchObject({ payload: { kind: 'providerModels', backend: 'codex-appserver', state: 'unavailable', models: [] } });
+          if (key === 'environment.backendInstallStatus') expect(frame).toMatchObject({ payload: { kind: 'backendInstallStatus', operation: null } });
           if (key === 'collaboration.stopSubagent') expect(frame).toMatchObject({ type: 'response', method: 'collaboration', payload: { kind: 'applied' } });
           if (key === 'command.listGroupMembers') expect(frame).toMatchObject({ type: 'response', method: 'command', payload: { kind: 'members', members, nextCursor: 'members-next' } });
         }
