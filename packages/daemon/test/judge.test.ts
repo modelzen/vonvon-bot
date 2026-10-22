@@ -711,3 +711,18 @@ it('notices the effective custom prompt once per bot/group per judge lifetime, i
   await make(fakeBackend().backend, deps).judge(req());
   expect(notices).toEqual(['oc_g', 'oc_g']);
 });
+
+
+it('dispatches the explicit decision Provider and both group rules to the actual judge call', async () => {
+  const codex = fakeBackend();
+  const claude = fakeBackend({ id: 'claude-agent', displayName: 'Claude' });
+  const readPrompt = vi.fn(async () => ({ source: 'bot' as const, text: 'legacy should not override', path: '/old' }));
+  const judge = make(codex.backend, { backendFor: id => id === 'claude-agent' ? claude.backend : codex.backend, readPrompt });
+  const result = await judge.judge(req('main', { group: { chatId: 'oc_g', name: '群', backend: 'codex-appserver', judge: { kind: 'llm', backend: 'claude-agent', model: 'haiku' }, smartRules: { respond: '需要帮助时响应', newTopic: '独立问题新建话题' } } }));
+  expect(result).toMatchObject({ backend: 'claude-agent', model: 'haiku', promptSource: 'group', decision: 'topic' });
+  expect(codex.calls).toHaveLength(0);
+  expect(claude.calls[0]!.system).toContain('需要帮助时响应');
+  expect(claude.calls[0]!.system).toContain('独立问题新建话题');
+  expect(readPrompt).not.toHaveBeenCalled();
+  await judge.shutdown();
+});

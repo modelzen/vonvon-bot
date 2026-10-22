@@ -106,7 +106,7 @@ const snippet = (line: StateLine): string => {
  * the anchor. The lines and their m-numbers are the text input's (shownContext, same cuts and cleaning), so an anchor
  * names the same message whichever kind of model judged (s25b). Built in memory only, never logged.
  */
-export function decisionBody(req: Pick<JudgeRequest, 'variant' | 'botName' | 'group' | 'persona' | 'topicTitle' | 'context' | 'message' | 'why' | 'facts'>, rules: string, model: string): DecisionBody {
+export function decisionBody(req: Pick<JudgeRequest, 'variant' | 'botName' | 'group' | 'persona' | 'memory' | 'topicTitle' | 'context' | 'message' | 'why' | 'facts'>, rules: string, model: string): DecisionBody {
   const bot = oneLine(req.botName);
   const entry = (id: string, line: JudgeLine, max: number): StateLine => {
     const { time, speaker, text, ...more } = lineFields(line, max);
@@ -128,6 +128,7 @@ export function decisionBody(req: Pick<JudgeRequest, 'variant' | 'botName' | 'gr
       ...(req.why?.trim() ? { why_looking: oneLine(req.why, 200) } : {}),
       ...(newCount ? { new_count: newCount } : {}),
       ...(persona ? { bot_role: plainText(persona, JUDGE_INPUT_LIMITS.personaChars) } : {}),
+      ...(req.memory?.trim() ? { background_memory: plainText(req.memory, JUDGE_INPUT_LIMITS.memoryChars) } : {}),
       ...(topic ? { topic_title: oneLine(topic, 100) } : {}),
       recent_messages: recent.map(({ item }) => item).reverse(),
       new_message: message,

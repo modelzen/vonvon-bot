@@ -299,6 +299,8 @@ export interface TurnOptions {
 }
 
 export interface AgentThread {
+  /** Update daemon-owned context in native history before the next task, without a model turn. */
+  injectContext?(text: string): Promise<void>;
   /** backend session id（codex 的 thread id，其它后端可能是 session UUID）——持久化进
    * SessionRecord.sessionId，重启后经 resumeThread 找回同一会话。 */
   readonly sessionId: string;
@@ -574,7 +576,18 @@ export interface AgentCapabilities {
   approvals: boolean;
 }
 
+export interface AgentSkill {
+  /** Native selector; Claude names use claude:<name> when no file path is exposed. */
+  path: string;
+  name: string;
+  description: string;
+  source: 'workspace' | 'user' | 'provider';
+  enabled: boolean;
+}
+
 export interface AgentBackend {
+  /** Native discovery without submitting a model turn. */
+  listSkills?(input: { cwd: string; directories?: string[] }): Promise<AgentSkill[]>;
   readonly profileCapabilities?: SessionProfileCapabilities;
   readonly id: string;
   readonly displayName: string;

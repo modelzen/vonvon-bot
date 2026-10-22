@@ -107,7 +107,7 @@ describe('who chose a key: the judge\'s own resolution (s23g)', () => {
       group('oc_1', '发布群', smart),
       // a language model on the group's own backend: it judges with that
       group('oc_2', '同后端', { ...smart, judge: { kind: 'llm', backend: 'codex-appserver', model: 'gpt-6-luna' } }),
-      // stored for another backend, so the group falls to the bot's layer
+      // A group may judge through Codex while running tasks on Claude; it does not inherit the Bot key.
       group('oc_3', '别的后端', { ...smart, backend: 'claude-agent', judge: { kind: 'llm', backend: 'codex-appserver', model: 'gpt-6-luna' } }),
       group('oc_4', '多会话', {}),
       group('oc_5', '单会话自己选了', { kind: 'single', judge: JEV }),
@@ -124,11 +124,11 @@ describe('who chose a key: the judge\'s own resolution (s23g)', () => {
     expect(view.services[0]!.inUse).toEqual([
       { agentId: 'cli_a', agentName: '值班助手' },
       { agentId: 'cli_a', agentName: '值班助手', groupId: 'oc_1', groupName: '发布群', inherited: true },
-      { agentId: 'cli_a', agentName: '值班助手', groupId: 'oc_3', groupName: '别的后端', inherited: true },
       { agentId: 'cli_a', agentName: '值班助手', groupId: 'oc_5', groupName: '单会话自己选了', notSmart: true },
       { agentId: 'cli_a', agentName: '值班助手', groupId: 'oc_7', groupName: '读不懂的覆盖', inherited: true },
       { agentId: 'cli_b', agentName: 'cli_b', groupId: 'oc_b1', groupName: '' },
     ]);
+    expect(view.services[0]!.inUse.some(use => use.groupId === 'oc_3')).toBe(false);
     expect(view.botsUnreadable).toBeUndefined();
     expect(adminReplySchema.safeParse(view).success).toBe(true);
   });
