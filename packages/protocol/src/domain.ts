@@ -11,6 +11,12 @@ export const groupIdSchema = z
   .string()
   .regex(/^oc_[A-Za-z0-9_-]{1,200}$/)
   .brand<"GroupId">();
+/** A project of the library (daemon project/library.ts): `prj_` and eight hex digits. */
+export const projectIdSchema = z
+  .string()
+  .regex(/^prj_[0-9a-f]{8}$/)
+  .brand<"ProjectId">();
+export type ProjectId = z.infer<typeof projectIdSchema>;
 export const membershipIdSchema = z
   .string()
   .min(1)
@@ -89,6 +95,8 @@ export const commandSchema = z.discriminatedUnion("type", [
         .max(100)
         .regex(/^[^/\\\x00-\x1f]+$/),
       folder: folderSelectionSchema,
+      /** Join this project instead of making one; with it the folder is not used and must be `default`. */
+      project: projectIdSchema.optional(),
       tool: toolSchema,
       conversation: conversationSchema,
       judge: groupDecisionSchema.optional(),
@@ -152,6 +160,8 @@ export type DirectoryProblem = z.infer<typeof directoryProblemSchema>;
 export const membershipSchema = z.object({
   avatarDataUrl: z.string().optional(), id: membershipIdSchema, agentId: agentIdSchema,
   groupId: groupIdSchema, name: z.string(), directory: z.string(), backend: z.string(),
+  /** The library project this binding belongs to; absent until the daemon has linked the row (daemon start), and from older daemons. */
+  projectId: projectIdSchema.optional(),
   /** Absent when the directory is fine, and from daemons before s36c2d. */
   directoryProblem: directoryProblemSchema.optional(),
   conversation: conversationSchema, response: replyModeSchema,
@@ -166,6 +176,14 @@ export const membershipSchema = z.object({
   stale: z.boolean(),
 });
 export type Membership = z.infer<typeof membershipSchema>;
+/** A library project and the bindings that share it, as the snapshot shows them. */
+export const snapshotProjectSchema = z.object({
+  id: projectIdSchema, name: z.string(), revision: z.number().int().min(1),
+  /** The main folder of the project's workspace. */
+  directory: z.string(),
+  bindings: z.array(z.object({ agentId: agentIdSchema, groupId: groupIdSchema })),
+});
+export type SnapshotProject = z.infer<typeof snapshotProjectSchema>;
 export const groupSchema = z.object({ id: groupIdSchema, name: z.string(), avatarDataUrl: z.string().optional() });
 export type Group = z.infer<typeof groupSchema>;
 /** Codex only: how its version compares with the minimum and the tested version. */
@@ -234,6 +252,8 @@ export type Job = z.infer<typeof jobSchema>;
 export const desktopSnapshotSchema = z.object({
   revision: z.number(), observedAt: z.number(), stale: z.boolean(), host: hostStateSchema,
   agents: z.array(agentSchema), groups: z.array(groupSchema), memberships: z.array(membershipSchema),
+  /** The project library (memory design §2.5); absent from daemons before it. */
+  projects: z.array(snapshotProjectSchema).optional(),
   tools: z.array(toolStateSchema), jobs: z.array(jobSchema),
   recentConversations: z.object({items:z.array(z.object({agentId:agentIdSchema,groupId:groupIdSchema,threadId:z.string(),summary:z.string(),updatedAt:z.number()})),unavailableBots:z.number().int().nonnegative()}).optional(),
   application: z.object({ platform: z.enum(["macos", "linux", "unsupported"]), version: z.string(), loginItem: z.boolean(), dataPath: z.string(), service: applicationServiceSchema.optional(),

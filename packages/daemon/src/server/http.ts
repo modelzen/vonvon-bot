@@ -18,6 +18,7 @@ import { adminRpc } from './rpc/admin';
 import { commandRpc } from './rpc/command';
 import { collaborationRpc } from './rpc/collaboration';
 import { environmentRpc } from './rpc/environment';
+import { libraryRpc } from './rpc/library';
 import { machineRpc } from './rpc/machine';
 import type {BridgeImporter} from '../import/bridge/transaction';
 import { settingsRpc } from './rpc/settings';
@@ -161,6 +162,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
         case 'environment': return finish(peer, await environmentRpc(options.service, jobs, peer, request.payload, environment), payload => ({ type: 'response', id, method: 'environment', payload }));
         case 'machine': return finish(peer, await machineRpc(options.service, options.control, port, request.payload, { launcher: serviceActions, snapshots, root: home, bridgeImport: options.bridgeImport, environment }), payload => ({ type: 'response', id, method: 'machine', payload }));
         case 'command': return finish(peer, await commandRpc({ service: options.service, jobs, peer, directory, snapshots, control: options.control, port }, request.payload), payload => ({ type: 'response', id, method: 'command', payload }));
+        case 'library': return finish(peer, await libraryRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'library', payload }));
         case 'directory': {
           if (request.payload.type === 'list') { peer.send({ type: 'response', id, method: 'directory', payload: await directory.list(request.payload.path) }); return; }
           const folder = await directory.choose(request.payload.path);

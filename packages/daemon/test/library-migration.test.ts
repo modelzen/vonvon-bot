@@ -39,9 +39,10 @@ let work: string;
 
 beforeEach(() => {
   fixture.root = realpathSync(mkdtempSync(join(tmpdir(), 'library-migration-')));
-  work = join(fixture.root, 'work');
+  // Outside the data root: a workspace inside it is refused, and the drift check now writes folders through that rule.
+  work = realpathSync(mkdtempSync(join(tmpdir(), 'library-work-')));
 });
-afterEach(() => { rmSync(fixture.root, { recursive: true, force: true }); });
+afterEach(() => { rmSync(fixture.root, { recursive: true, force: true }); rmSync(work, { recursive: true, force: true }); });
 
 function folder(name: string): string { const path = join(work, name); mkdirSync(path, { recursive: true }); return path; }
 function bots(entries: Array<{ appId: string; botName: string; active?: boolean }>): void {
@@ -154,8 +155,10 @@ describe('startup migration step A', () => {
     expect((await library())[0]!.workspace.primary).toBe(cwd);
     renameSync(join(work, 'unmounted'), join(work, 'volume'));
     const id = stored('cli_a')[0]!.projectId as string;
-    expect((await run()).drift).toEqual([{ projectId: id, rows: 2, fields: ['primary'], outcome: 'repaired' }]);
+    // The same folder, now resolvable: the library takes the canonical path, the rows (which resolve to it) do not drift.
+    expect((await run()).drift).toEqual([{ projectId: id, rows: 0, fields: ['primary'], outcome: 'repaired' }]);
     expect((await library())[0]).toMatchObject({ id, revision: 2, workspace: { primary: join(work, 'volume', 'proj') } });
+    expect(stored('cli_a')[0]!.cwd).toBe(cwd);
     expect((await run()).drift).toEqual([]);
   });
 
@@ -304,17 +307,27 @@ describe('startup migration step A', () => {
   });
 });
 
+const sessionsFile = (appId: string) => join(fixture.root, 'bots', appId, 'sessions.json');
+function sessions(appId: string, chats: string[]): void {
+  writeFileSync(sessionsFile(appId), JSON.stringify({ version: 3, titleJobs: [], sessions: chats.map(chatId => ({ threadId: `th_${chatId}`, chatId, cwd: '/old', sessionId: 's', backend: 'codex-appserver', summary: '', createdAt: 1, updatedAt: 1 })) }));
+}
+const detached = (appId: string): Record<string, boolean> => Object.fromEntries((JSON.parse(readFileSync(sessionsFile(appId), 'utf8')).sessions as Row[]).map(item => [item.chatId as string, item.detached === true]));
+
 describe('startup drift check', () => {
-  it('lets a project with one binding follow that row\'s folders, which an older path changed', async () => {
+  it('makes a row that an older path changed follow the library again and archives its group\'s sessions', async () => {
     bots([{ appId: 'cli_a', botName: '小支' }]);
-    rows('cli_a', [row('支付组', 'oc_pay', folder('pay'))]);
+    const pay = folder('pay');
+    rows('cli_a', [row('支付组', 'oc_pay', pay), row('官网', 'oc_web', folder('web'))]);
     await run();
-    const moved = folder('moved');
-    rows('cli_a', stored('cli_a').map(item => ({ ...item, cwd: moved })));
+    const [project] = await library();
+    rows('cli_a', stored('cli_a').map(item => item.chatId === 'oc_pay' ? { ...item, cwd: folder('moved') } : item));
+    sessions('cli_a', ['oc_pay', 'oc_web']);
     const report = await run();
-    expect(report.drift).toEqual([{ projectId: stored('cli_a')[0]!.projectId, rows: 1, fields: ['primary'], outcome: 'repaired' }]);
-    expect((await library())[0]).toMatchObject({ revision: 2, workspace: { primary: moved } });
-    expect(stored('cli_a')[0]!.cwd).toBe(moved);
+    expect(report.drift).toEqual([{ projectId: project!.id, rows: 1, fields: ['primary'], outcome: 'repaired' }]);
+    // The library is the source of truth: it is untouched, the row took its folder.
+    expect((await library())[0]).toEqual(project);
+    expect(stored('cli_a')[0]).toMatchObject({ cwd: pay, directories: { workspaces: { primary: pay, additional: [] } } });
+    expect(detached('cli_a')).toEqual({ oc_pay: true, oc_web: false });
     expect((await run()).drift).toEqual([]);
   });
 
@@ -334,7 +347,7 @@ describe('startup drift check', () => {
     expect(await library()).toEqual(before);
   });
 
-  it('lets a shared project follow when all its bindings moved alike', async () => {
+  it('brings every binding of a shared project back to the project\'s folder', async () => {
     const shared = folder('shared');
     bots([{ appId: 'cli_a', botName: '小支' }, { appId: 'cli_b', botName: '小发' }]);
     rows('cli_a', [row('支付组', 'oc_pay', shared)]);
@@ -343,21 +356,40 @@ describe('startup drift check', () => {
     const moved = folder('moved');
     for (const appId of ['cli_a', 'cli_b']) rows(appId, stored(appId).map(item => ({ ...item, cwd: moved })));
     expect((await run()).drift).toEqual([{ projectId: stored('cli_a')[0]!.projectId, rows: 2, fields: ['primary'], outcome: 'repaired' }]);
-    expect((await library())[0]!.workspace.primary).toBe(moved);
+    expect((await library())[0]!.workspace.primary).toBe(shared);
+    for (const appId of ['cli_a', 'cli_b']) expect(stored(appId)[0]!.cwd).toBe(shared);
   });
 
-  it('only reports a shared project whose bindings disagree, and a row moved onto another project\'s folder', async () => {
+  it('keeps the union of the extra folders when rows join one project by folder, and a row moved onto another project\'s folder goes back', async () => {
     const shared = folder('shared'), extra = folder('extra'), other = folder('other');
     bots([{ appId: 'cli_a', botName: '小支' }, { appId: 'cli_b', botName: '小发' }]);
     rows('cli_a', [row('支付组', 'oc_pay', shared), row('官网', 'oc_web', other)]);
     rows('cli_b', [row('支付组', 'oc_pay', shared, { directories: { workspaces: { primary: shared, additional: [extra] } } })]);
     const first = await run();
-    expect(first.drift).toEqual([{ projectId: stored('cli_a')[0]!.projectId, rows: 2, fields: ['additional'], outcome: 'shared' }]);
+    // The second row's extra folder is not dropped: the project has it, and the first row now mirrors it.
+    expect((await library()).find(project => project.workspace.primary === shared)).toMatchObject({ revision: 2, workspace: { additional: [extra] } });
+    expect(first.drift).toEqual([{ projectId: stored('cli_a')[0]!.projectId, rows: 1, fields: ['additional'], outcome: 'repaired' }]);
+    expect(stored('cli_a')[0]).toMatchObject({ directories: { workspaces: { primary: shared, additional: [extra] } } });
     rows('cli_a', stored('cli_a').map(item => item.chatId === 'oc_web' ? { ...item, cwd: shared } : item));
-    const before = await library();
     const second = await run();
-    expect(second.drift).toContainEqual({ projectId: stored('cli_a')[1]!.projectId, rows: 1, fields: ['primary'], outcome: 'primary-taken' });
-    expect(await library()).toEqual(before);
+    expect(second.drift).toEqual([{ projectId: stored('cli_a')[1]!.projectId, rows: 1, fields: ['primary'], outcome: 'repaired' }]);
+    expect(stored('cli_a')[1]!.cwd).toBe(other);
+  });
+
+  it('leaves a drifted row of a bot that runs in another process for the next start', async () => {
+    bots([{ appId: 'cli_a', botName: '小支' }]);
+    const pay = folder('pay');
+    rows('cli_a', [row('支付组', 'oc_pay', pay)]);
+    await run();
+    const moved = folder('moved');
+    rows('cli_a', stored('cli_a').map(item => ({ ...item, cwd: moved })));
+    writeFileSync(join(fixture.root, 'bots', 'cli_a', 'processes.json'), JSON.stringify({ pid: process.ppid, appId: 'cli_a', startedAt: Date.now() }));
+    const report = await run();
+    expect(report.drift).toEqual([{ projectId: stored('cli_a')[0]!.projectId, rows: 1, fields: ['primary'], outcome: 'failed' }]);
+    expect(stored('cli_a')[0]!.cwd).toBe(moved);
+    rmSync(join(fixture.root, 'bots', 'cli_a', 'processes.json'));
+    expect((await run()).drift).toEqual([{ projectId: stored('cli_a')[0]!.projectId, rows: 1, fields: ['primary'], outcome: 'repaired' }]);
+    expect(stored('cli_a')[0]!.cwd).toBe(pay);
   });
 });
 

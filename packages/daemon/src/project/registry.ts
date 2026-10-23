@@ -8,6 +8,7 @@ import { syncDirectory } from '../config/bot-namespace';
 import { REASONING_EFFORTS, type PermissionMode, type ReasoningEffort } from '../agent/types';
 import { admitDirectoryChanges, parseDirectorySettings, type DirectorySettings } from '../config/directories';
 import type { JudgeSelectionStored } from '../judge/types';
+import { isProjectId } from './library';
 
 export interface BotProfile { persona: string; memory: string }
 export interface GroupProfile extends BotProfile { inheritPersona: boolean; inheritMemory: boolean }
@@ -298,6 +299,13 @@ function directoryRows(raw: unknown): DirectoryRow[] {
   });
 }
 
+/** A row that names a project, which holds its folders; the row's own `cwd` and `directories` only mirror them (§2.1). */
+function isBoundRow(row: Record<string, unknown>): row is Record<string, unknown> & { projectId: string } { return isProjectId(row.projectId); }
+const foldersOf = (row: Record<string, unknown>): string => {
+  const directories = (row.directories ?? {}) as DirectorySettings;
+  return JSON.stringify([row.cwd, directories.workspaces ?? null, directories.repositories ?? null]);
+};
+
 /**
  * The stored shape of a row's settings blocks: the registry's own copy (memory design §2.2), equal today to the
  * protocol's section schemas they were checked with, so a later protocol change to a section (`profile` → `role`)
@@ -322,7 +330,7 @@ function validateGroupSettings(row: Record<string, unknown>): void {
   if (access && (!access.models.length || new Set(access.models).size !== access.models.length || new Set(access.efforts).size !== access.efforts.length)) throw new Error('Invalid group settings: modelAccess');
 }
 
-async function writeStored(location: RegistryLocation, body: Record<string, unknown>, previous: Record<string, unknown>, beforeCommit?: () => void, durable = false): Promise<void> {
+async function writeStored(location: RegistryLocation, body: Record<string, unknown>, previous: Record<string, unknown>, beforeCommit?: () => void, durable = false, mirror = false): Promise<void> {
   // Both callers own detached rows and a separate previous disk snapshot.
   const next = body;
   const oldProjects = directoryRows(previous.projects);
@@ -332,6 +340,9 @@ async function writeStored(location: RegistryLocation, body: Record<string, unkn
     const directories = parseDirectorySettings(row.directories);
     const old = oldProjects.find(project => project.chatId === row.chatId && project.name === row.name);
     const oldDirectories = parseDirectorySettings(old?.directories);
+    if (!mirror && old && isBoundRow(row) && isBoundRow(old) && row.projectId === old.projectId && foldersOf(row) !== foldersOf(old)) {
+      throw new Error('这个群的工作区归项目管，请改项目的工作区（library.workspace），不要直接改群的目录');
+    }
     if (directories?.workspaces && (row.cwd !== old?.cwd
       || JSON.stringify(directories.workspaces) !== JSON.stringify(oldDirectories?.workspaces))) {
       let cwd: string;
@@ -365,7 +376,12 @@ async function writeStored(location: RegistryLocation, body: Record<string, unkn
   if (durable) await syncDirectory(dirname(location.file));
 }
 
-export interface ProjectCommitOptions { beforeCommit?: () => void }
+export interface ProjectCommitOptions {
+  beforeCommit?: () => void;
+  /** Set only by the host's workspace funnel (admin/library.ts): the one writer allowed to change the folders of a row
+   * that belongs to a library project, to make them the project's again. */
+  mirror?: boolean;
+}
 async function write(location: RegistryLocation, projects: Project[], selected?: undefined, options?: ProjectCommitOptions): Promise<void>;
 async function write(location: RegistryLocation, projects: Project[], selected: Project, options?: ProjectCommitOptions): Promise<Project>;
 async function write(location: RegistryLocation, projects: Project[], selected?: Project, options?: ProjectCommitOptions): Promise<Project | void> {
@@ -373,7 +389,7 @@ async function write(location: RegistryLocation, projects: Project[], selected?:
   const result = selected === undefined ? undefined : detached[projects.indexOf(selected)];
   if (selected !== undefined && result === undefined) throw new Error('待保存的项目不存在');
   const previous = await readStored(location.file);
-  await writeStored(location, { ...previous, version: FILE_VERSION, projects: detached }, previous, options?.beforeCommit);
+  await writeStored(location, { ...previous, version: FILE_VERSION, projects: detached }, previous, options?.beforeCommit, false, options?.mirror === true);
   return result;
 }
 
@@ -458,6 +474,26 @@ function previousDirectories(stored: Record<string, unknown>): Record<string, Pr
   }));
 }
 
+/**
+ * Top-level key of projects.json: chat id → the library project the group's row had when it was unbound, so binding
+ * the group again can offer "接回" that project (§2.1; the same precedent as {@link PREVIOUS_DIRECTORIES}). Kept for
+ * every unbound row that had a project, whatever its age.
+ */
+const PREVIOUS_PROJECTS = 'previousProjects';
+function previousProjects(stored: Record<string, unknown>): Record<string, string> {
+  const raw = stored[PREVIOUS_PROJECTS];
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {};
+  return Object.fromEntries(Object.entries(raw).filter((entry): entry is [string, string] => isProjectId(entry[1])));
+}
+/** The directory the group `chatId` had when it was unbound, if the bot's file remembers one (rows from before s36c2c3). */
+export async function previousDirectoryIn(file: string, chatId: string): Promise<PreviousDirectory | undefined> {
+  return previousDirectories(await readStored(file))[chatId];
+}
+/** The library project the group `chatId` was bound to before it was unbound, if the bot's file remembers one. */
+export async function previousProjectIdIn(file: string, chatId: string): Promise<string | undefined> {
+  return previousProjects(await readStored(file))[chatId];
+}
+
 type ProjectBinding = Pick<Project, 'name' | 'chatId'> & {
   /** A new group has no `legacyPath`: its chat id is fresh, so no stored row is compared with it. */
   cwd: { kind: 'existing'; path: string } | { kind: 'default'; legacyPath?: string; allocatedPath?: string };
@@ -465,8 +501,11 @@ type ProjectBinding = Pick<Project, 'name' | 'chatId'> & {
   defaultBackend: string;
   kind: SessionMode;
   noMention: boolean;
+  /** The library project this binding belongs to, made before this call (project/library.ts, §2.1): the row names it
+   * and carries the step-A marker, so the next start does not migrate it again. Left out → the row waits for step A. */
+  project?: { id: string };
 };
-type NewBinding = Pick<Project, 'cwd' | 'blank' | 'createdAt' | 'directories' | 'origin' | 'addedBy' | 'mode' | 'backend' | 'network' | 'creationRequestId' | 'creationRequestSignature'>;
+type NewBinding = Pick<Project, 'cwd' | 'blank' | 'createdAt' | 'directories' | 'origin' | 'addedBy' | 'mode' | 'backend' | 'network' | 'creationRequestId' | 'creationRequestSignature'> & Partial<Pick<Project, 'migration'>>;
 type BindingResult = { kind: 'bound'; project: Project } | { kind: 'existing'; project: Project };
 
 /** Decide against the latest row under the projects owner. prepareNew is local
@@ -494,7 +533,8 @@ export function bindProject(input: ProjectBinding, prepareNew: (previous?: Previ
     const prepared = await prepareNew(previous);
     if (binding.cwd.kind === 'existing' && prepared.cwd !== binding.cwd.path) throw new Error('工作目录已改变，请重新选择');
     const project: Project = { ...prepared, name: binding.name, chatId: binding.chatId,
-      noMention: binding.noMention, ...storedMode(binding.kind) };
+      noMention: binding.noMention, ...storedMode(binding.kind),
+      ...(binding.project ? { projectId: binding.project.id, migration: { ...prepared.migration, library: Date.now() } } : {}) };
     projects.push(project);
     return { kind: 'bound', project: await write(location, projects, project) };
   }, target);
@@ -531,13 +571,17 @@ export async function removeProject(name: string, beforeRemove?: (project: Proje
     if (idx === -1) return undefined;
     beforeRemove?.(projects[idx]!);
     const [removed] = projects.splice(idx, 1);
-    if (!removed?.chatId || removed.directories?.workspaces) {
+    const previous = await readStored(location.file);
+    const keepDirectory = !!removed?.chatId && !removed.directories?.workspaces;
+    const keepProject = !!removed?.chatId && isProjectId(removed.projectId);
+    if (!removed || (!keepDirectory && !keepProject)) {
       await write(location, projects);
       return removed;
     }
-    const previous = await readStored(location.file);
-    const remembered = { ...previousDirectories(previous), [removed.chatId]: { cwd: removed.cwd, blank: removed.blank === true } };
-    await writeStored(location, { ...previous, version: FILE_VERSION, projects: JSON.parse(JSON.stringify(projects)), [PREVIOUS_DIRECTORIES]: remembered }, previous);
+    const remembered: Record<string, unknown> = {};
+    if (keepDirectory) remembered[PREVIOUS_DIRECTORIES] = { ...previousDirectories(previous), [removed.chatId]: { cwd: removed.cwd, blank: removed.blank === true } };
+    if (keepProject) remembered[PREVIOUS_PROJECTS] = { ...previousProjects(previous), [removed.chatId]: removed.projectId };
+    await writeStored(location, { ...previous, version: FILE_VERSION, projects: JSON.parse(JSON.stringify(projects)), ...remembered }, previous);
     return removed;
   });
 }
@@ -558,6 +602,8 @@ export async function resetProjectDirectoryOverride(name: string, key: keyof Dir
     const projects = await read(location.file);
     const project = projects.find(item => item.name === name);
     if (!project?.directories || !Object.hasOwn(project.directories, key)) return;
+    // A row of a library project mirrors it: the override goes in the project (admin/library.ts `resetWorkspaceOverride`).
+    if (isProjectId(project.projectId)) throw new Error('这个群的工作区归项目管，请改项目的工作区（library.workspace），不要直接改群的目录');
     delete project.directories[key];
     await write(location, projects);
   });

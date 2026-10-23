@@ -292,14 +292,14 @@ function withLock<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-async function write(store: StoreFile, beforeCommit?: () => void): Promise<void> {
-  await mkdir(dirname(paths.sessionsFile), { recursive: true });
-  const tmp = `${paths.sessionsFile}.tmp-${process.pid}-${randomUUID()}`;
+async function write(store: StoreFile, beforeCommit?: () => void, file: string = paths.sessionsFile): Promise<void> {
+  await mkdir(dirname(file), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}-${randomUUID()}`;
   const body: StoreFile = { ...store, version: FILE_VERSION };
   try {
     await writeFile(tmp, `${JSON.stringify(body, null, 2)}\n`, 'utf8');
     beforeCommit?.();
-    await rename(tmp, paths.sessionsFile);
+    await rename(tmp, file);
   } finally { await unlink(tmp).catch(() => undefined); }
 }
 
@@ -312,15 +312,24 @@ export async function getSession(threadId: string): Promise<SessionRecord | unde
 }
 
 export async function detachSessionsForChat<T>(chatId: string, commit: () => Promise<T>): Promise<T> {
+  return detachSessionsForChatIn(paths.sessionsFile, chatId, commit);
+}
+
+/**
+ * {@link detachSessionsForChat} on a named sessions.json, for the host archiving the sessions of a bot that is not
+ * running (a workspace change reaches every bot of a project, memory design §2.1). Only safe while no process owns
+ * that bot's files: the in-process lock here does not cover another process.
+ */
+export async function detachSessionsForChatIn<T>(file: string, chatId: string, commit: () => Promise<T>): Promise<T> {
   return withLock(async () => {
-    const store = await read();
+    const store = await readStoreIn(file);
     const original = structuredClone(store);
     for (const session of store.sessions) if (session.chatId === chatId) session.detached = true;
-    await write(store);
+    await write(store, undefined, file);
     try {
       return await commit();
     } catch (error) {
-      await write(original);
+      await write(original, undefined, file);
       throw error;
     }
   });

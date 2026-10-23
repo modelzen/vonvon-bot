@@ -2,6 +2,10 @@ import { pendingGroupsFile, readPendingGroups, type PendingGroup } from '../proj
 import type { CollaborationRequest } from './collaboration';
 import {runtimeDistribution} from '../service/distribution';
 import { createSettingsService } from './settings-service';
+import { admitLibraryWorkspace, createHostLibrary, type AdminLibraryOp, type HostLibrary } from './library';
+import { isProjectId, readLibrary } from '../project/library';
+import { projectRevision, projectView } from './collaboration';
+import { AdminWriteError } from './ops';
 import type { HostSettings } from './settings-types';
 import type { AdminSettingsReadOp } from './ipc';
 import { CodexSetupService, type CodexSetup, type CodexJob, type CodexJobType } from '../agent/codex-appserver/setup';
@@ -10,7 +14,7 @@ import { fetchUsageBundle } from '../agent/usage';
 import { parseJoinedGroups, parseGroupMembers, type GroupMembers, type AdminGroupOp, type BindGroupInput, type JoinedGroups } from './groups';
 import { voiceView } from '../voice/view';
 import type { VoiceAction, VoiceView } from '../voice/types';
-import { readFile, rm } from 'node:fs/promises';
+import { readFile, realpath, rm, stat } from 'node:fs/promises';
 import { botIdentity, loadBots, setBotActivation, removeBot } from '../config/bots';
 import { botPaths, botDir } from '../config/paths';
 import { configuredProjectsRoots, directoryContext, legacyDirectoryProblems } from '../project/directory-audit';
@@ -112,6 +116,8 @@ import type { AdminWriteOp } from './ops';
  */
 export interface AdminService {
   collaboration?(botId: string, request: CollaborationRequest): Promise<unknown>;
+  /** The project library (admin/library.ts): its workspace is changed only through here. */
+  library?: HostLibrary;
   accountUsage(force: boolean): Promise<AccountUsageBundle>;
   settings?: HostSettings;
   codexSetup?(): Promise<CodexSetup>;
@@ -298,6 +304,8 @@ export interface AdminProject {
   name: string;
   chatId: string;
   cwd: string;
+  /** The library project this binding belongs to (project/library.ts); absent until the daemon has linked the row. */
+  projectId?: string;
   blank: boolean;
   branch?: string;
   kind: SessionMode;
@@ -445,6 +453,8 @@ export interface AdminServiceDeps {
   executeCollaboration?: (botId: string, request: CollaborationRequest) => Promise<unknown>;
   executeGroups?: (botId: string, op: AdminGroupOp) => Promise<unknown>;
   executeWrite?: (botId: string, op: AdminWriteOp) => Promise<unknown>;
+  /** Asks a running bot process to follow a project's new workspace (admin/library.ts `AdminLibraryOp`). */
+  executeLibrary?: (botId: string, op: AdminLibraryOp) => Promise<unknown>;
   /** 实时运行状态（daemon 进程内：本进程 channel / 子进程 IPC）。返回 undefined
    * 或缺省 → 回退锁文件探测（该 bot 不归本 daemon 管，如未激活的 bot）。 */
   liveStatus?: (botId: string) => Promise<BotLiveStatus | undefined>;
@@ -534,6 +544,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       enabled: p.enabled !== false,
       chatId: p.chatId,
       cwd: p.cwd,
+      ...(isProjectId(p.projectId) ? { projectId: p.projectId } : {}),
       blank: p.blank,
       branch: p.branch,
       kind: sessionModeOf(p),
@@ -583,6 +594,36 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     }
   }
 
+  const library = createHostLibrary({ liveStatus: deps.liveStatus, executeLibrary: deps.executeLibrary, readonlyPreview: deps.readonlyPreview });
+  /**
+   * `editProject` with a folder for a group of a library project: the folder is the project's, so it goes through the
+   * library (every group and bot of the project follows, §2.1) instead of the bot's own row. Left to the bot as it is
+   * when the row has no project. The rest of the edit (会话方式, 启停) goes on to the bot afterwards, on the row as the
+   * workspace change left it.
+   */
+  async function editProjectFolder(botId: string, request: Extract<CollaborationRequest, { action: 'editProject' }>): Promise<unknown | undefined> {
+    const files = botPaths(botId);
+    const row = (await listProjectsIn(files.projectsFile)).find(item => item.name === request.projectName && item.chatId === request.chatId);
+    if (!row || !isProjectId(row.projectId)) return undefined;
+    const project = (await readLibrary()).projects.find(item => item.id === row.projectId);
+    if (!project) return undefined;
+    if (projectRevision(row) !== request.expectedRevision) throw new AdminWriteError('项目设置已改变，请刷新后重试');
+    let directory: string;
+    try { directory = await realpath(request.directory!); } catch { throw new AdminWriteError('所选文件夹不存在'); }
+    if (!(await stat(directory)).isDirectory()) throw new AdminWriteError('所选文件夹不是目录');
+    const { primary } = await admitLibraryWorkspace({ primary: directory, additional: [] });
+    const change = await library.workspace({ projectId: project.id, refuseWhenBusy: true,
+      workspace: { ...project.workspace, primary, additional: project.workspace.additional.filter(path => path !== primary) } });
+    const fresh = (await listProjectsIn(files.projectsFile)).find(item => item.name === request.projectName && item.chatId === request.chatId);
+    if (!fresh) throw new AdminWriteError('项目已移除，请刷新');
+    const lagging = change.rebound.filter(item => item.state === 'failed').length;
+    const warning = lagging ? `工作区已改，但有 ${lagging} 个绑定没跟上，下次启动 daemon 时会修好` : undefined;
+    if (request.kind === undefined && request.enabled === undefined && request.project === undefined) return { ok: true, project: projectView(fresh), ...(warning ? { warning } : {}) };
+    const { directory: _directory, ...rest } = request;
+    const reply = await deps.executeCollaboration!(botId, { ...rest, expectedRevision: projectRevision(fresh) }) as Record<string, unknown>;
+    return warning && typeof reply === 'object' && reply !== null ? { ...reply, warning: [reply.warning, warning].filter(Boolean).join('；') } : reply;
+  }
+
   function executeWrite(botId: string, action: string, op: AdminWriteOp): Promise<void> {
     if (!deps.executeWrite) throw new NotWiredYetError(action);
     return deps.executeWrite(botId, op).then(() => undefined);
@@ -599,7 +640,8 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       );
       return read;
     },
-    settings: createSettingsService(deps),
+    settings: createSettingsService(deps, library),
+    library,
     codexSetup: () => codexTools.setup(),
     startCodexJob(type) {
       if (deps.readonlyPreview || deps.daemonStartedAt === undefined) throw new NotWiredYetError('Codex 设置');
@@ -617,6 +659,10 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     },
     async collaboration(botId, request) {
       if (!deps.executeCollaboration) throw new NotWiredYetError('协作管理');
+      if (request.action === 'editProject' && request.directory !== undefined && !deps.readonlyPreview) {
+        const handled = await editProjectFolder(botId, request);
+        if (handled !== undefined) return handled;
+      }
       return deps.executeCollaboration(botId, request);
     },
     async pendingGroups(botId) {

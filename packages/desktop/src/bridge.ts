@@ -4,7 +4,7 @@ import { shell, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'ele
 import { ConnectionError, RpcError } from '@vonvon/client/browser';
 import {
   adminRequestSchema, collaborationRequestSchema, commandSchema,
-  directoryRequestSchema, environmentRequestSchema, machineRequestSchema,
+  directoryRequestSchema, environmentRequestSchema, libraryRequestSchema, machineRequestSchema,
   settingsRequestSchema, machineReplySchema, type MachineReply,
 } from '@vonvon/protocol';
 import { allowedExternalUrl, type ExternalUrlKind } from '../../ui/src/url-actions.js';
@@ -256,6 +256,7 @@ export function installBridge(
     });
     register(desktopChannels.admin, 1, value => adminRequestSchema.parse(value), value => client().admin(value));
     register(desktopChannels.directory, 1, value => directoryRequestSchema.parse(value), value => client().directory(value));
+    register(desktopChannels.library, 1, value => libraryRequestSchema.parse(value), value => client().library(value));
     register(desktopChannels.close, 0, noArg, () => activeOwner?.dispose() ?? Promise.resolve());
     register(desktopChannels.external, 1, value => value, openAllowedExternal);
     register(desktopChannels.startHost, 1, value => {

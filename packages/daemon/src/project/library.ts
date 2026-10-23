@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { paths } from '../config/paths';
 import { acquireMutex, closeMutex, holdMutexRole, isDead } from '../config/data-access';
 import { syncDirectory } from '../config/bot-namespace';
+import type { DirectorySettings } from '../config/directories';
 
 /**
  * 项目库（记忆设计 §2.1）：`<数据根>/library/projects.json`。项目是工作区的真相源，以后也是项目记忆的主人；
@@ -22,6 +23,9 @@ export interface LibraryProject {
   revision: number;
   /** 迁移建的项目：从哪个 bot 的哪个群的绑定行来。迁移按它找已经建过的项目，中途退出再启不会再建一个 */
   migratedFrom?: { botId: string; chatId: string };
+  /** A project made at binding time: from which bot's group. {@link createLibraryProject} finds the project a run cut
+   * off between the library write and the row write already made, by this and the main folder. */
+  createdBy?: { botId: string; chatId: string };
   workspace: LibraryWorkspace;
 }
 
@@ -86,6 +90,7 @@ const ProjectSchema = z.looseObject({
   createdAt: z.number().finite(),
   revision: z.number().int().min(1),
   migratedFrom: z.looseObject({ botId: z.string().min(1).max(200), chatId: z.string().min(1).max(204) }).optional(),
+  createdBy: z.looseObject({ botId: z.string().min(1).max(200), chatId: z.string().min(1).max(204) }).optional(),
   workspace: WorkspaceSchema,
 });
 const FileSchema = z.looseObject({ version: z.literal(1), projects: z.array(ProjectSchema) });
@@ -230,4 +235,106 @@ export function holdMemoryDirectory<T>(dir: string, operation: () => Promise<T>)
 export function projectDirectory(projectId: string, location: LibraryLocation = libraryLocation()): string {
   if (!isProjectId(projectId)) throw new Error('项目 id 无效');
   return join(location.dir, projectId);
+}
+
+/** Why a library operation was refused; `project` is the one in the way (`primary-taken`, `name-taken`). */
+export type LibraryErrorCode = 'not-found' | 'revision' | 'primary-taken' | 'name-taken';
+export class LibraryError extends Error {
+  constructor(readonly code: LibraryErrorCode, message: string, readonly project?: { id: string; name: string }) {
+    super(message);
+    this.name = 'LibraryError';
+  }
+}
+
+/**
+ * Whether a project's main folder is `primary`, as stored or as it resolves now: a project made while its folder could
+ * not be resolved holds the lexical path until the drift check corrects it. `resolved` caches each path's resolution.
+ */
+export async function sameMainFolder(project: LibraryProject, primary: string, resolved: Map<string, Promise<ResolvedDirectory>>): Promise<boolean> {
+  const stored = project.workspace.primary;
+  if (stored === primary) return true;
+  if (!resolved.has(stored)) resolved.set(stored, resolveDirectory(stored));
+  const now = await resolved.get(stored)!;
+  return now.resolved && now.path === primary;
+}
+
+/** The project whose main folder is `primary` (canonical), other than `exceptId`. */
+export async function projectWithMainFolder(projects: readonly LibraryProject[], primary: string, exceptId?: string): Promise<LibraryProject | undefined> {
+  const resolved = new Map<string, Promise<ResolvedDirectory>>();
+  for (const project of projects) if (project.id !== exceptId && await sameMainFolder(project, primary, resolved)) return project;
+  return undefined;
+}
+
+const takenText = (project: { name: string }): string => `这个文件夹已经是项目「${project.name}」的主目录。要共用请加入项目「${project.name}」`;
+
+/** `name` made unique among `projects` with " 2", " 3" (§2.1), cut so the whole fits the library's limit. */
+export function uniqueProjectName(projects: readonly { name: string }[], name: string): string {
+  const taken = new Set(projects.map(project => project.name));
+  const base = name.trim() || '项目';
+  const candidate = (n: number): string => {
+    const tail = n > 1 ? ` ${n}` : '';
+    let head = '';
+    for (const character of base) { if (head.length + character.length + tail.length > PROJECT_NAME_MAX) break; head += character; }
+    return `${head}${tail}`;
+  };
+  for (let n = 1; ; n++) if (!taken.has(candidate(n))) return candidate(n);
+}
+
+export interface NewLibraryProject {
+  name: string;
+  /** Admitted, with a canonical main folder (`admitDirectorySettings`). */
+  workspace: LibraryWorkspace;
+  createdBy: { botId: string; chatId: string };
+}
+
+/**
+ * Makes the project a binding is about to join, before the binding's own row is written (§2.1): the library first,
+ * the rows second, so a run cut off in between leaves a project the next run finds again, never one a row names
+ * without the library knowing it. A main folder that is already a project's is refused, unless that project was made
+ * for this same group by an earlier run (the retry), which comes back as it is. A taken name gets " 2".
+ */
+export function createLibraryProject(input: NewLibraryProject, location?: LibraryLocation, now: () => number = Date.now): Promise<LibraryProject> {
+  const request = structuredClone(input);
+  return ownLibrary(async draft => {
+    const owner = await projectWithMainFolder(draft.projects, request.workspace.primary);
+    if (owner) {
+      if (owner.createdBy?.botId === request.createdBy.botId && owner.createdBy.chatId === request.createdBy.chatId) return owner;
+      throw new LibraryError('primary-taken', takenText(owner), { id: owner.id, name: owner.name });
+    }
+    const project: LibraryProject = {
+      id: newProjectId(new Set(draft.projects.map(item => item.id))),
+      name: uniqueProjectName(draft.projects, request.name),
+      createdAt: now(), revision: 1, createdBy: request.createdBy, workspace: request.workspace,
+    };
+    draft.projects.push(project);
+    await draft.commit();
+    return project;
+  }, location);
+}
+
+/**
+ * Sets a project's workspace inside {@link ownLibrary} (the one operation every workspace entry goes through, §2.1).
+ * `revision` is the project's, refused when it moved; `workspace` is admitted already. A workspace the project has
+ * already changes nothing, not even its revision. Another project's main folder is refused.
+ */
+export async function setLibraryWorkspace(draft: LibraryDraft, change: { projectId: string; revision: number; workspace: LibraryWorkspace }): Promise<{ project: LibraryProject; changed: boolean }> {
+  const project = draft.projects.find(item => item.id === change.projectId);
+  if (!project) throw new LibraryError('not-found', '项目不存在，请刷新');
+  if (project.revision !== change.revision) throw new LibraryError('revision', '项目已改变，请刷新后重试');
+  if (JSON.stringify(project.workspace) === JSON.stringify(change.workspace)) return { project, changed: false };
+  const owner = await projectWithMainFolder(draft.projects, change.workspace.primary, project.id);
+  if (owner) throw new LibraryError('primary-taken', takenText(owner), { id: owner.id, name: owner.name });
+  project.workspace = change.workspace;
+  project.revision += 1;
+  await draft.commit();
+  return { project, changed: true };
+}
+
+/** The `cwd`, `blank` and `directories` of a binding row that mirrors `workspace` (§2.1); the one place that shapes them. */
+export function workspaceMirror(workspace: LibraryWorkspace): { cwd: string; blank: false; directories: DirectorySettings } {
+  return {
+    cwd: workspace.primary,
+    blank: false,
+    directories: { workspaces: { primary: workspace.primary, additional: [...workspace.additional] }, ...(workspace.repositories ? { repositories: [...workspace.repositories] } : {}) },
+  };
 }

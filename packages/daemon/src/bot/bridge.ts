@@ -7,6 +7,7 @@ import { createGroupExecutor, type AdminGroupOp, type GroupMembers, type JoinedG
 import type { Project } from '../project/registry';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import type { AdminWriteOp } from '../admin/ops';
+import type { AdminLibraryOp } from '../admin/library';
 import { isAdmin, resolveOwner, type AppConfig } from '../config/schema';
 import { createCommandTools } from '../agent/entry/command-tools';
 import { listProjects } from '../project/registry';
@@ -41,6 +42,8 @@ export interface BridgeHandle {
   collaboration: (request: CollaborationRequest) => Promise<unknown>;
   adminGroups: (op: AdminGroupOp) => Promise<JoinedGroups | GroupMembers | Project>;
   adminExecute: (op: AdminWriteOp) => Promise<AdminWriteResult>;
+  /** The host's workspace fan-out for this bot (admin/library.ts `AdminLibraryOp`). */
+  libraryExecute: (op: AdminLibraryOp) => Promise<unknown>;
   settings: HostSettings;
   /** Graceful teardown: drop the long connection first, then close every codex
    *  session (no orphan app-servers). Idempotent enough for a signal handler. */
@@ -197,7 +200,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
       void task.then(() => groupTasks.delete(task), () => groupTasks.delete(task));
       return task;
     };
-    return { channel, entries, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, settings: orchestrator.settings, shutdown };
+    return { channel, entries, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, shutdown };
   } catch (error) {
     try { await shutdown(); }
     catch (cleanupError) {

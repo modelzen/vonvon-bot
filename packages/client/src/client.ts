@@ -2,12 +2,12 @@ import {
   adminReplySchema, collaborationReplySchema, commandResultSchema,
   desktopSnapshotSchema, directoryReplySchema, environmentReplySchema,
   errorEnvelopeSchema, eventSchema, machineReplySchema, requestSchema,
-  settingsReplySchema,
+  libraryReplySchema, settingsReplySchema,
   type AdminReply, type AdminRequest, type BackendInstallEventPayload,
   type CollaborationReply, type CollaborationRequest, type Command,
   type CommandResult, type DesktopSnapshot, type DirectoryReply,
   type DirectoryRequest, type EnvironmentReply, type EnvironmentRequest,
-  type LogEventPayload, type MachineReply, type MachineRequest,
+  type LibraryReply, type LibraryRequest, type LogEventPayload, type MachineReply, type MachineRequest,
   type SettingsReply, type SettingsRequest,
 } from "@vonvon/protocol";
 import type { z } from "zod";
@@ -36,6 +36,7 @@ export interface VonvonClient {
   machine(request: MachineRequest): Promise<MachineReply>;
   admin(request: AdminRequest): Promise<AdminReply>;
   directory(request: DirectoryRequest): Promise<DirectoryReply>;
+  library(request: LibraryRequest): Promise<LibraryReply>;
   onLog(listener: (payload: LogEventPayload) => void): () => void;
   onBackendInstall(listener: (payload: BackendInstallEventPayload) => void): () => void;
   onError(listener: (error: Error) => void): () => void;
@@ -47,6 +48,7 @@ const replySchemas = {
   settings: settingsReplySchema, collaboration: collaborationReplySchema,
   environment: environmentReplySchema, machine: machineReplySchema,
   admin: adminReplySchema, directory: directoryReplySchema,
+  library: libraryReplySchema,
 } satisfies Record<z.infer<typeof requestSchema>["method"], z.ZodTypeAny>;
 type Method = keyof typeof replySchemas;
 type Payload<M extends Method> = Extract<z.input<typeof requestSchema>, { method: M }>["payload"];
@@ -175,6 +177,7 @@ export function createClient(socket: ClientConnection): VonvonClient {
     machine: request => send("machine", request),
     admin: request => send("admin", request),
     directory: request => send("directory", request),
+    library: request => send("library", request),
     onLog(listener) { logs.add(listener); return () => { logs.delete(listener); }; },
     onBackendInstall(listener) { installs.add(listener); return () => { installs.delete(listener); }; },
     onError(listener) {

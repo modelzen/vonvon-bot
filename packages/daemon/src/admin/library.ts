@@ -1,18 +1,26 @@
 import { existsSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { loadBots, type BotEntry } from '../config/bots';
 import { botPaths, paths } from '../config/paths';
+import { acquireMutex, closeMutex } from '../config/data-access';
+import { admitDirectorySettings } from '../config/directories';
+import { directoryFailure, DirectoryError } from '../config/directory-errors';
 import { log } from '../core/logger';
+import { acquireSingleInstanceLock, readSingleInstanceHolder } from '../core/single-instance';
 import { assertBridgeImportReservation } from '../import/bridge/reservation';
-import { listProjectsIn, withStoredRows, type Project } from '../project/registry';
+import { listProjectsIn, mutateProject, withStoredRows, type Project } from '../project/registry';
+import { detachSessionsForChatIn } from '../bot/session-store';
 import {
-  isProjectId, libraryLocation, newProjectId, ownLibrary, PROJECT_NAME_MAX, readLibrary, resolveDirectory,
+  isProjectId, libraryLocation, LibraryError, newProjectId, ownLibrary, PROJECT_NAME_MAX, projectWithMainFolder, readLibrary, resolveDirectory, sameMainFolder,
+  setLibraryWorkspace, workspaceMirror,
   type LibraryProject, type LibraryWorkspace, type ResolvedDirectory,
 } from '../project/library';
+import { AdminWriteError } from './ops';
 
 /**
- * host 一侧的项目库（记忆设计 §2.6 `admin/library.ts`）。P1a 只有启动时的迁移步骤 A、漂移检查和给
- * `vonvon project list` 的总览；`library.*` 服务和 IPC 扇出在 P1b。
+ * host 一侧的项目库（记忆设计 §2.6 `admin/library.ts`）：启动时的迁移步骤 A、漂移检查和给 `vonvon project list` 的总览，
+ * 以及 P1b 的 `library.*` 服务：工作区的唯一写入口（settings、`editProject`、reset、首次绑定都经它）和给每个绑定行
+ * 扇出镜像、归档会话的 IPC `libraryWorkspaceChanged`。
  */
 
 export interface LibraryStartupOptions {
@@ -22,11 +30,13 @@ export interface LibraryStartupOptions {
 }
 export type DriftField = 'primary' | 'additional' | 'repositories';
 /**
- * A project whose bindings' mirrors no longer match it. `repaired`: its bindings, all alike, were changed by a path
- * that still writes the row (P1b funnels them), so the library took their workspace. `shared`: bindings of one
- * project disagree with each other, left for the owner. `primary-taken`: their new main folder is another project's.
+ * A project whose bindings' mirrors no longer match it. The library is the source of truth since P1b funnels every
+ * workspace write through it, so a row that differs was missed by a fan-out (the bot was down, the process died
+ * between the two writes) or written by an older daemon: `repaired` = the row took the project's workspace and its
+ * sessions were archived; `failed` = it could not (the bot runs outside this daemon, the folder is gone), tried again
+ * at the next start.
  */
-export interface DriftNote { projectId: string; rows: number; fields: DriftField[]; outcome: 'repaired' | 'shared' | 'primary-taken' }
+export interface DriftNote { projectId: string; rows: number; fields: DriftField[]; outcome: 'repaired' | 'failed' }
 export interface LibraryStartupReport {
   /** rows that got their `projectId` or step-A marker this start */
   linked: number;
@@ -62,18 +72,6 @@ export async function rowWorkspace(row: Pick<Project, 'cwd' | 'directories'>): P
       ...(directories?.repositories ? { repositories: [...directories.repositories] } : {}),
     },
   };
-}
-
-/**
- * Whether a project's main folder is `primary`, as stored or as it resolves now: a project made while its folder could
- * not be resolved holds the lexical path until the drift check corrects it. `resolved` caches each path's resolution.
- */
-async function sameMain(project: LibraryProject, primary: string, resolved: Map<string, Promise<ResolvedDirectory>>): Promise<boolean> {
-  const stored = project.workspace.primary;
-  if (stored === primary) return true;
-  if (!resolved.has(stored)) resolved.set(stored, resolveDirectory(stored));
-  const now = await resolved.get(stored)!;
-  return now.resolved && now.path === primary;
 }
 
 const stepADone = (row: Project): boolean => {
@@ -136,15 +134,29 @@ async function splitGroups(bots: readonly BotEntry[]): Promise<Set<string>> {
 }
 
 /**
+ * The workspace of a project and a row that joins it by main folder (step A): extra folders and repositories are the
+ * union, the project's own first. A side with no explicit repositories inherits its bot's, which the project can only
+ * keep by holding none; when only one side has a list, the project takes it, so the repositories someone chose are
+ * kept (the other row now shares that list instead of its bot's default).
+ */
+export function mergeWorkspaces(project: LibraryWorkspace, row: LibraryWorkspace): LibraryWorkspace {
+  const union = (a: readonly string[], b: readonly string[]): string[] => [...new Set([...a, ...b])];
+  const additional = union(project.additional, row.additional).filter(path => path !== project.primary);
+  const repositories = project.repositories || row.repositories ? union(project.repositories ?? [], row.repositories ?? []) : undefined;
+  const { repositories: _repositories, ...rest } = project;
+  return { ...rest, additional, ...(repositories ? { repositories } : {}) };
+}
+
+/**
  * Step A for one bot (memory design §7.1), holding library → this bot's projects. Each row that needs it is linked to
  * the project whose main folder is the row's: the one made from it by a run cut off between the two writes, or one
  * two bindings of one folder were always sharing. A row whose folder cannot be resolved now goes to the project made
  * from it before (`migratedFrom`) instead. Otherwise a new project, under the row's own `projectId` when the library
  * lost that project, so whatever else names it finds it again. `migratedFrom` alone never decides for a row whose
  * folder resolves: a group unbound and bound again to another folder gets a new project, and the old one keeps its
- * folder (D4). A row joining a project by its folder brings nothing else: the project keeps the first row's extra
- * folders and repositories, and the drift check reports the difference (`shared`). The library is written first,
- * the rows second; a run that stops in between leaves projects the next run finds again, never an orphan.
+ * folder (D4). A row joining a project by its folder adds its extra folders and repositories to the project's
+ * ({@link mergeWorkspaces}), since the library's workspace replaces every row's mirror at the next drift check.
+ * The library is written first, the rows second; a run that stops in between leaves projects the next run finds again, never an orphan.
  */
 async function linkBot(bot: BotEntry, report: LibraryStartupReport, options: LibraryStartupOptions, split: () => Promise<ReadonlySet<string>>): Promise<void> {
   const file = botPaths(bot.appId).projectsFile;
@@ -161,6 +173,7 @@ async function linkBot(bot: BotEntry, report: LibraryStartupReport, options: Lib
     const byId = new Map(draft.projects.map(project => [project.id, project]));
     const mains = new Map<string, Promise<ResolvedDirectory>>();
     const links: Array<{ row: Project; id: string }> = [];
+    const mergedProjects = new Set<string>();
     const at = now();
     for (const row of stored) {
       const current = isProjectId(row.projectId) ? byId.get(row.projectId) : undefined;
@@ -174,7 +187,17 @@ async function linkBot(bot: BotEntry, report: LibraryStartupReport, options: Lib
       }
       const { workspace, resolved } = await rowWorkspace(row);
       let project: LibraryProject | undefined;
-      for (const item of draft.projects) if (!project && await sameMain(item, workspace.primary, mains)) project = item;
+      for (const item of draft.projects) if (!project && await sameMainFolder(item, workspace.primary, mains)) project = item;
+      // The library is authoritative from P1b, so a row joining a project by its folder must not lose its own extra
+      // folders and repositories when the project's replace the row's mirror: the project takes the union (never silent).
+      if (project && resolved) {
+        const merged = mergeWorkspaces(project.workspace, workspace);
+        if (JSON.stringify(merged) !== JSON.stringify(project.workspace)) {
+          project.workspace = merged;
+          project.revision += 1;
+          mergedProjects.add(project.id);
+        }
+      }
       // A folder that cannot be resolved now is not compared; the project made from this row before is still its.
       if (!project && !resolved) project = draft.projects.filter(item => item.migratedFrom?.botId === bot.appId && item.migratedFrom.chatId === row.chatId).at(-1);
       if (!project) {
@@ -192,8 +215,9 @@ async function linkBot(bot: BotEntry, report: LibraryStartupReport, options: Lib
       }
       links.push({ row, id: project.id });
     }
-    if (created) {
+    if (created || mergedProjects.size) {
       await draft.commit();
+      if (mergedProjects.size) log.info('library', 'workspace_merged', { botId: bot.appId, projects: mergedProjects.size });
       await options.afterLibraryWrite?.(bot.appId);
     }
     for (const { row, id } of links) {
@@ -217,52 +241,133 @@ function driftFields(project: LibraryWorkspace, row: LibraryWorkspace): DriftFie
   return fields;
 }
 
+/** The row fields that mirror a project's workspace (§2.1): the main folder, its declaration and the repositories. */
+export function applyMirror(row: Project, workspace: LibraryWorkspace): void {
+  const mirror = workspaceMirror(workspace);
+  if (row.cwd !== mirror.cwd) row.blank = false; // a folder somebody chose is no blank project the bridge made
+  row.cwd = mirror.cwd;
+  row.directories = mirror.directories;
+}
+
+export interface MirrorOutcome { chatId: string; name: string; fields: DriftField[]; state: 'archived' | 'failed'; error?: string }
+/** Archives the sessions of a chat, then runs `commit`; the bot's own `detachSessionsForChat` or one on a named file. */
+export type ArchiveChat = <T>(chatId: string, commit: () => Promise<T>) => Promise<T>;
+
+/** The rows of this bot that belong to the project and no longer mirror it. Lock-free; a row whose folder cannot be resolved now is left out. */
+export async function driftedRows(botId: string, projectId: string): Promise<Array<{ row: Project; fields: DriftField[] }>> {
+  const project = (await readLibrary()).projects.find(item => item.id === projectId);
+  if (!project) return [];
+  const drifted: Array<{ row: Project; fields: DriftField[] }> = [];
+  for (const row of await listProjectsIn(botPaths(botId).projectsFile)) {
+    if (row.projectId !== projectId) continue;
+    const mirror = await rowWorkspace(row);
+    const fields = mirror.resolved ? driftFields(project.workspace, mirror.workspace) : [];
+    if (fields.length) drifted.push({ row, fields });
+  }
+  return drifted;
+}
+
 /**
- * Startup drift check (memory design §2.1): each project against the mirrors in its binding rows, once, logged once
- * per project. Until P1b funnels every workspace write through the library, a row edited since step A is the newer
- * side, so a project whose bindings all mirror one workspace takes it; P1b turns this around to the library's.
- * Bindings that disagree with each other, or a move onto another project's main folder, are only reported. A row
- * whose folder cannot be resolved now (an unmounted volume behind a link) is left out: its lexical path is not an
- * edit, and taking it would flip the project at every mount and unmount.
+ * Makes every row of this bot that belongs to the project mirror it again, archiving the group's sessions first
+ * (`archive`, §2.1: a workspace change always starts the group's sessions over). Reads the library's latest at the
+ * moment it writes, so two changes arriving out of order still end at the newest. One row failing leaves the others
+ * done. Runs in the bot's own process (it holds `projects` there) or, for a bot that is stopped, in the host.
+ */
+export async function mirrorProjectIntoBot(botId: string, projectId: string, archive: ArchiveChat): Promise<MirrorOutcome[]> {
+  const files = botPaths(botId);
+  const outcomes: MirrorOutcome[] = [];
+  for (const { row, fields } of await driftedRows(botId, projectId)) {
+    const workspace = (await readLibrary()).projects.find(item => item.id === projectId)?.workspace;
+    if (!workspace) break;
+    try {
+      await archive(row.chatId, () => mutateProject(row.name, latest => {
+        if (latest.projectId !== projectId) throw new Error('这个群已经换了项目');
+        applyMirror(latest, workspace);
+      }, { mirror: true }, { file: files.projectsFile, dataRoot: paths.appDir }));
+      outcomes.push({ chatId: row.chatId, name: row.name, fields, state: 'archived' });
+    } catch (error) {
+      outcomes.push({ chatId: row.chatId, name: row.name, fields, state: 'failed', error: messageOf(error) });
+    }
+  }
+  return outcomes;
+}
+
+/**
+ * Runs `operation` on a bot no process owns, the way settings edit a stopped bot (admin/settings-service.ts): the
+ * `bots` mutex keeps registration and starts out, the instance lock keeps a start out for the duration. A bot that
+ * runs, here or in another terminal, is refused: its files belong to its process.
+ */
+async function withStoppedBot<T>(botId: string, operation: () => Promise<T>): Promise<T> {
+  const mutex = await acquireMutex(paths.appDir, 'bots', 3000);
+  let release: (() => void) | undefined;
+  try {
+    if (!(await loadBots()).bots.some(bot => bot.appId === botId)) throw new Error('Bot 已移除');
+    await assertBridgeImportReservation(paths.appDir, botId);
+    const files = botPaths(botId);
+    const raw = await readFile(files.processesFile, 'utf8').catch(error => { if (error.code === 'ENOENT') return undefined; throw error; });
+    if ((raw && JSON.parse(raw).pid === process.pid) || readSingleInstanceHolder(botId, files.processesFile)) throw new Error('这个 Bot 正在别的进程里运行');
+    release = acquireSingleInstanceLock(botId, files.processesFile, { createDir: false, onExit: false });
+    return await operation();
+  } finally { release?.(); await closeMutex(mutex); }
+}
+
+/** {@link mirrorProjectIntoBot} for a bot that is not running: sessions archived on its own file by the host. */
+async function mirrorStoppedBot(botId: string, projectId: string): Promise<MirrorOutcome[]> {
+  if (!(await driftedRows(botId, projectId)).length) return [];
+  const sessionsFile = botPaths(botId).sessionsFile;
+  return withStoppedBot(botId, () => mirrorProjectIntoBot(botId, projectId, (chatId, commit) => detachSessionsForChatIn(sessionsFile, chatId, commit)));
+}
+
+/**
+ * Startup drift check (memory design §2.1): the library is the source of truth, so a row whose mirror differs from
+ * its project (a fan-out missed it, an older daemon wrote it) takes the project's workspace, its group's sessions
+ * archived, logged once per project. A row whose folder cannot be resolved now (an unmounted volume behind a link) is
+ * left out: its lexical path is not an edit, and a project's folder must not flip at every mount and unmount.
  */
 async function checkDrift(bots: readonly BotEntry[], report: LibraryStartupReport): Promise<void> {
   if (!(await readLibrary()).projects.length) return;
+  const notes = new Map<string, DriftNote>();
+  // A folder the library only held lexically (a link whose target was gone when its project was made) that resolves
+  // now is the same folder, not a change: the library takes its canonical path, so no row looks drifted for it.
   await ownLibrary(async draft => {
-    const ids = new Set(draft.projects.map(project => project.id));
-    const bound = new Map<string, LibraryWorkspace[]>();
-    for (const bot of bots) {
-      let rows: Project[];
-      // Unreadable rows were reported by step A just before.
-      try { rows = await listProjectsIn(botPaths(bot.appId).projectsFile); } catch { continue; }
-      for (const row of rows) {
-        if (!isProjectId(row.projectId) || !ids.has(row.projectId)) continue;
-        const mirror = await rowWorkspace(row);
-        if (mirror.resolved) bound.set(row.projectId, [...bound.get(row.projectId) ?? [], mirror.workspace]);
-      }
-    }
     let changed = false;
     for (const project of draft.projects) {
-      const mirrors = bound.get(project.id) ?? [];
-      const fields = [...new Set(mirrors.flatMap(mirror => driftFields(project.workspace, mirror)))];
-      if (!fields.length) continue;
-      let outcome: DriftNote['outcome'] = 'shared';
-      const [only, ...others] = mirrors;
-      if (only && others.every(mirror => !driftFields(only, mirror).length)) {
-        if (only.primary !== project.workspace.primary && draft.projects.some(other => other !== project && other.workspace.primary === only.primary)) outcome = 'primary-taken';
-        else {
-          project.workspace = only;
-          project.revision += 1;
-          changed = true;
-          outcome = 'repaired';
-        }
-      }
-      const note: DriftNote = { projectId: project.id, rows: mirrors.length, fields, outcome };
-      report.drift.push(note);
-      if (outcome === 'repaired') log.info('library', 'drift_repaired', { ...note });
-      else log.warn('library', 'drift', { ...note });
+      const now = await resolveDirectory(project.workspace.primary);
+      if (!now.resolved || now.path === project.workspace.primary || await projectWithMainFolder(draft.projects, now.path, project.id)) continue;
+      project.workspace = { ...project.workspace, primary: now.path };
+      project.revision += 1;
+      changed = true;
+      notes.set(project.id, { projectId: project.id, rows: 0, fields: ['primary'], outcome: 'repaired' });
     }
     if (changed) await draft.commit();
   });
+  const ids = new Set((await readLibrary()).projects.map(project => project.id));
+  for (const bot of bots) {
+    let projectIds: string[];
+    // Unreadable rows were reported by step A just before.
+    try { projectIds = [...new Set((await listProjectsIn(botPaths(bot.appId).projectsFile)).map(row => row.projectId).filter((id): id is string => isProjectId(id) && ids.has(id)))]; } catch { continue; }
+    for (const projectId of projectIds) {
+      let outcomes: MirrorOutcome[];
+      try { outcomes = await mirrorStoppedBot(bot.appId, projectId); }
+      catch (error) {
+        // Stays drifted for the next start; whatever runs meanwhile reads the row's own folders, as before.
+        const drifted = await driftedRows(bot.appId, projectId).catch(() => []);
+        if (!drifted.length) continue;
+        outcomes = drifted.map(({ row, fields }) => ({ chatId: row.chatId, name: row.name, fields, state: 'failed' as const, error: messageOf(error) }));
+      }
+      if (!outcomes.length) continue;
+      const note = notes.get(projectId) ?? { projectId, rows: 0, fields: [], outcome: 'repaired' } satisfies DriftNote;
+      note.rows += outcomes.length;
+      note.fields = [...new Set([...note.fields, ...outcomes.flatMap(outcome => outcome.fields)])];
+      if (outcomes.some(outcome => outcome.state === 'failed')) note.outcome = 'failed';
+      notes.set(projectId, note);
+    }
+  }
+  for (const note of notes.values()) {
+    report.drift.push(note);
+    if (note.outcome === 'repaired') log.info('library', 'drift_repaired', { ...note });
+    else log.warn('library', 'drift', { ...note });
+  }
 }
 
 /**
@@ -328,4 +433,114 @@ export async function libraryOverview(): Promise<LibraryOverview> {
     }
   }
   return overview;
+}
+
+/** What the host asks a running bot process to do about a project's workspace (admin/ipc.ts carries it). */
+export type AdminLibraryOp =
+  /** make this bot's rows of the project mirror the library again and archive their groups' sessions; answers {@link MirrorOutcome}[] */
+  | { kind: 'libraryWorkspaceChanged'; projectId: string }
+  /** whether this bot is running something its rows of the project would interrupt; answers `{ busy }` */
+  | { kind: 'libraryWorkspaceCheck'; projectId: string };
+
+export interface WorkspaceRequest {
+  projectId: string;
+  /** The project's revision the caller saw; left out = the current one (an entry that has its own row-level check). */
+  revision?: number;
+  workspace: { primary: string; additional: string[]; repositories?: string[] };
+  /** Refuse while a bot using the project is running something, as `editProject` always did. Settings saves never refused. */
+  refuseWhenBusy?: boolean;
+}
+export interface WorkspaceChange {
+  project: LibraryProject;
+  /** false when the library already held this workspace; the rows are still brought in line */
+  changed: boolean;
+  /** one entry per binding row that needed it; `failed` ones stay drifted and are repaired at the next start */
+  rebound: Array<MirrorOutcome & { botId: string }>;
+}
+export interface LibraryHostDeps {
+  /** Whether the bot has a running process of this daemon. */
+  liveStatus?: (botId: string) => Promise<{ running: boolean } | undefined>;
+  /** Reaches that process (supervisor IPC, or the process itself for a single bot). */
+  executeLibrary?: (botId: string, op: AdminLibraryOp) => Promise<unknown>;
+  readonlyPreview?: boolean;
+}
+export interface HostLibrary {
+  overview(): Promise<LibraryOverview>;
+  /** The one writer of a project's workspace (§2.1): the library, then every bot's rows. */
+  workspace(request: WorkspaceRequest): Promise<WorkspaceChange>;
+  /** Drops one override of the project's workspace: `repositories` back to each bot's default, `workspaces` to no extra folders. */
+  resetOverride(projectId: string, key: 'workspaces' | 'repositories'): Promise<WorkspaceChange>;
+}
+
+/** The workspace as the library holds it, admitted: canonical folders, inside the places a workspace may be. */
+export async function admitLibraryWorkspace(workspace: WorkspaceRequest['workspace']): Promise<LibraryWorkspace> {
+  try {
+    const admitted = await admitDirectorySettings({ workspaces: { primary: workspace.primary, additional: workspace.additional }, ...(workspace.repositories ? { repositories: workspace.repositories } : {}) }, { dataDir: paths.appDir });
+    return { primary: admitted!.workspaces!.primary, additional: admitted!.workspaces!.additional, ...(admitted!.repositories ? { repositories: admitted!.repositories } : {}) };
+  } catch (error) {
+    const failure = directoryFailure(error);
+    throw failure instanceof DirectoryError ? new AdminWriteError(failure.message) : failure;
+  }
+}
+
+export function createHostLibrary(deps: LibraryHostDeps = {}): HostLibrary {
+  // The host's own operations on workspaces run one at a time, so two fan-outs never interleave their archiving.
+  let chain: Promise<unknown> = Promise.resolve();
+  const serial = <T>(operation: () => Promise<T>): Promise<T> => {
+    const run = chain.then(operation);
+    chain = run.catch(() => undefined);
+    return run;
+  };
+  const live = async (botId: string): Promise<boolean> => !!deps.executeLibrary && (await deps.liveStatus?.(botId).catch(() => undefined))?.running === true;
+  /** The registered bots with a row of the project; a bot whose rows cannot be read is left out (the next start tells). */
+  async function bindingBots(projectId: string): Promise<BotEntry[]> {
+    const found: BotEntry[] = [];
+    for (const bot of (await loadBots()).bots) {
+      try { if ((await listProjectsIn(botPaths(bot.appId).projectsFile)).some(row => row.projectId === projectId)) found.push(bot); }
+      catch { /* reported by step A and the drift check */ }
+    }
+    return found;
+  }
+  async function change(request: WorkspaceRequest): Promise<WorkspaceChange> {
+    if (deps.readonlyPreview) throw new AdminWriteError('预览模式不能改工作区，请先启动 daemon');
+    const workspace = await admitLibraryWorkspace(request.workspace);
+    const bots = await bindingBots(request.projectId);
+    if (request.refuseWhenBusy) {
+      for (const bot of bots) {
+        if (!await live(bot.appId)) continue;
+        const answer = await deps.executeLibrary!(bot.appId, { kind: 'libraryWorkspaceCheck', projectId: request.projectId }) as { busy?: boolean };
+        if (answer?.busy) throw new AdminWriteError(`共用这个项目的 Bot「${botLabel(bot)}」正在执行任务，请结束后修改工作区`);
+      }
+    }
+    const written = await ownLibrary(draft => setLibraryWorkspace(draft, {
+      projectId: request.projectId,
+      revision: request.revision ?? draft.projects.find(project => project.id === request.projectId)?.revision ?? 0,
+      workspace,
+    }));
+    // The library is released: a bot's own process takes `projects` next and must never wait for `library` (lock order).
+    const rebound: WorkspaceChange['rebound'] = [];
+    for (const bot of bots) {
+      try {
+        const outcomes = await live(bot.appId)
+          ? await deps.executeLibrary!(bot.appId, { kind: 'libraryWorkspaceChanged', projectId: request.projectId }) as MirrorOutcome[]
+          : await mirrorStoppedBot(bot.appId, request.projectId);
+        rebound.push(...outcomes.map(outcome => ({ botId: bot.appId, ...outcome })));
+      } catch (error) {
+        log.fail('library', error, { phase: 'fan-out', botId: bot.appId, projectId: request.projectId });
+        rebound.push({ botId: bot.appId, chatId: '', name: '', fields: [], state: 'failed', error: messageOf(error) });
+      }
+    }
+    return { project: written.project, changed: written.changed, rebound };
+  }
+  return {
+    overview: libraryOverview,
+    workspace: request => serial(() => change(request)),
+    resetOverride: (projectId, key) => serial(async () => {
+      const project = (await readLibrary()).projects.find(item => item.id === projectId);
+      if (!project) throw new LibraryError('not-found', '项目不存在，请刷新');
+      const { repositories: _repositories, ...rest } = project.workspace;
+      const workspace = key === 'repositories' ? rest : { ...project.workspace, additional: [] };
+      return change({ projectId, workspace });
+    }),
+  };
 }

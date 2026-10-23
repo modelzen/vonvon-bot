@@ -17,6 +17,8 @@ import { presentationConfig } from './group-presentation';
 import { createSkillChat } from './skill-chat';
 import { projectRevision, projectView, type CollaborationRequest } from '../admin/collaboration';
 import { AdminWriteError } from '../admin/ops';
+import { applyMirror, mirrorProjectIntoBot, type AdminLibraryOp } from '../admin/library';
+import { isProjectId, readLibrary, type LibraryProject } from '../project/library';
 import { createSettingsOwner, materializeGroupSettings } from '../admin/settings';
 import { validateProviderJudge } from '../project/initial-settings';
 import type { HostSettings } from '../admin/settings-types';
@@ -853,6 +855,8 @@ export interface Orchestrator {
   onRecall: (evt: RecallEvent) => Promise<void>;
   dispatcher: CardDispatcher;
   adminExecute: (op: AdminWriteOp) => Promise<AdminWriteResult>;
+  /** The host changed a library project's workspace: this bot's rows of it follow, their groups' sessions archived (admin/library.ts). */
+  libraryExecute: (op: AdminLibraryOp) => Promise<unknown>;
   settings: HostSettings;
   /** Close every live codex session (SIGKILLs the app-server children) so a
    *  graceful exit leaves no orphan processes. */
@@ -6172,7 +6176,7 @@ export function createOrchestrator(
       const result = serialCreate(async signal => {
         const directory = request.directory === undefined ? undefined : await realpath(request.directory);
         if (directory !== undefined && !(await stat(directory)).isDirectory()) throw new AdminWriteError('所选文件夹不是目录');
-        const project = await createProject(channel, { requestId: request.requestId, requestSignature: signature, bot, name: request.name, ownerOpenId: owner, existingPath: directory, projectsRootDir: cfg.preferences?.projectsRootDir, kind: request.kind, noMention: request.noMention, backend: request.backend, judge: request.judge, mode: bindModeFor(request.backend), signal });
+        const project = await createProject(channel, { requestId: request.requestId, requestSignature: signature, bot, name: request.name, ownerOpenId: owner, existingPath: directory, project: request.project, projectsRootDir: cfg.preferences?.projectsRootDir, kind: request.kind, noMention: request.noMention, backend: request.backend, judge: request.judge, mode: bindModeFor(request.backend), signal });
         return { ok: true, project: projectView(project) };
       }).catch((error: unknown) => {
         // Every refusal crosses IPC as the bot's own word; a result not known stays a plain error, which the RPC
@@ -6228,6 +6232,17 @@ export function createOrchestrator(
           return { ok: true, groupEffect, ...(warning ? { warning } : {}) };
         }
         const patch: Partial<Project> = {};
+        // A row of a library project mirrors its workspace; the host funnels every change through the library
+        // (admin/library.ts), so a folder arriving here for such a row did not come that way.
+        if (request.directory !== undefined && isProjectId(project.projectId)) throw new AdminWriteError('这个群的工作区归项目管，请改项目的工作区');
+        // 换到别的项目: the row names the other project and mirrors its workspace; the group's sessions start over.
+        let rebind: LibraryProject | undefined;
+        if (request.project !== undefined) {
+          if (request.directory !== undefined) throw new AdminWriteError('换项目和改文件夹要分两次');
+          rebind = (await readLibrary()).projects.find(item => item.id === request.project);
+          if (!rebind) throw new AdminWriteError('项目不存在，请刷新');
+          if (rebind.id === project.projectId) rebind = undefined;
+        }
         if (request.directory !== undefined) {
           // The same admission as creating and binding (s36c2d). Only a new directory is checked, so an old row already
           // in a refused place can still be turned off; the first change gives an old row its declaration.
@@ -6262,9 +6277,14 @@ export function createOrchestrator(
           else if (mode !== undefined) delete latest.smart; // left by an old daemon, never counted
           Object.assign(latest, patch);
           if (patch.cwd !== undefined) latest.directories = { ...latest.directories, workspaces: { primary: patch.cwd, additional: latest.directories?.workspaces?.additional ?? [] } };
-        });
+          if (rebind) {
+            latest.projectId = rebind.id;
+            latest.migration = { ...latest.migration, library: Date.now() };
+            applyMirror(latest, rebind.workspace);
+          }
+        }, { mirror: rebind !== undefined });
         // 单会话 and 智能 share the main area's session (keyed by chatId): switching between them archives nothing.
-        const archive = (patch.cwd !== undefined && patch.cwd !== project.cwd) || (mode !== undefined && (mode === 'multi' ? 'multi' : 'single') !== ruleKind(project));
+        const archive = (patch.cwd !== undefined && patch.cwd !== project.cwd) || rebind !== undefined || (mode !== undefined && (mode === 'multi' ? 'multi' : 'single') !== ruleKind(project));
         const updated = archive ? await detachSessionsForChat(project.chatId, commit) : await commit();
         if (sessionModeOf(updated) !== sessionModeOf(project)) forgetAttention(project.chatId, 'mode');
         if (archive) expireRetries((retry) => retry.chatId === project.chatId); // its sessions start over
@@ -8723,6 +8743,28 @@ export function createOrchestrator(
     return result;
   };
 
+  /**
+   * The host changed a library project's workspace (admin/library.ts): this bot's rows of it take the new folders and
+   * their groups' sessions are archived the way `editProject` always did: the next turn opens a new session. A group
+   * is held for the moment, so a message arriving meanwhile is not answered into the old workspace.
+   */
+  const libraryExecute = async (op: AdminLibraryOp): Promise<unknown> => {
+    const mine = (await listProjects()).filter(row => row.projectId === op.projectId);
+    if (op.kind === 'libraryWorkspaceCheck') {
+      return { busy: mine.length > 0 && (active.size > 0 || mine.some(row => projectMutations.has(row.chatId) || intakeChats.has(row.chatId) || pendingTopics.has(row.chatId))) };
+    }
+    const held = mine.map(row => row.chatId).filter(chatId => !projectMutations.has(chatId));
+    for (const chatId of held) projectMutations.add(chatId);
+    try {
+      return await mirrorProjectIntoBot(cfg.accounts.app.id, op.projectId, async (chatId, commit) => {
+        const result = await detachSessionsForChat(chatId, commit);
+        expireRetries(retry => retry.chatId === chatId); // its sessions start over
+        await evictLiveSessionsForChat(chatId);
+        return result;
+      });
+    } finally { for (const chatId of held) projectMutations.delete(chatId); }
+  };
+
   const admittedCollaboration = admit(collaboration);
   /** s36d1: creations skip admit, whose shutdown refusal would read as a result not known; serialCreate refuses
    * them instead, saying nothing was created. The drain waits for one in flight, but how it ended is its caller's
@@ -8748,6 +8790,7 @@ export function createOrchestrator(
     onRecall: admitEvent(onRecall),
     dispatcher,
     adminExecute: admit(adminExecute),
+    libraryExecute: admit(libraryExecute),
     settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },
     shutdown,
     saveDroppedSync: (why: 'shutdown' | 'crash') => droppedReplies?.saveSync(collectLost(), why),

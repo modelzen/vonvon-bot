@@ -10,6 +10,7 @@ import { getCompletionReminderConfig, getMaxConcurrentRuns, getModelDisplay, get
 import { paths } from '../config/paths';
 import { admitDirectorySettings, resolveProjectsRootDir } from '../config/directories';
 import { botBackendId, groupBackendId, resolveCommentsExecution, resolveModelPreference, resolveProjectModelAccess, projectModelAllowed } from '../config/execution';
+import { isProjectId } from '../project/library';
 import { effectiveMode, getProjectByName, listProjects, mutateProject, noMentionOf, pendingPolicyOf, sessionModeOf, type Project, type ProjectWorkspace } from '../project/registry';
 import { getSession, listSessions, isRetiredKey, mutateSession, RETIRED_KEY_TEXT, type SessionRecord } from '../bot/session-store';
 import { DEFAULT_COMMENT_INSTRUCTIONS, saveCommentInstructions, syncAllCommentInstructions } from '../bot/comments';
@@ -213,8 +214,12 @@ function projectData(p: Project): T.ProjectSections {
     }
   };
 }
-function workspaceOf(p: Project): ProjectWorkspace {
+export function workspaceOf(p: Project): ProjectWorkspace {
   return { primary: p.cwd, directories: [p.cwd, ...p.directories?.workspaces?.additional ?? []], repositories: p.directories?.repositories ?? [] };
+}
+/** The revision a project's workspace section carries, for the host's save through the library (settings-service.ts). */
+export function workspaceRevision(botId: string, p: Project): string {
+  return settingsRevision([botId, projectRaw(p, 'workspace')]);
 }
 function projectRaw(p: Project, section: keyof T.ProjectSections): unknown {
   if (section === 'workspace') return [p.name, p.chatId, p.cwd, p.directories];
@@ -576,7 +581,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       if (!p)
         throw new SettingsInputError('项目不存在');
       const data = await projectSettings(p);
-      const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, makeSection(value, [botId, projectRaw(p, key as keyof T.ProjectSections)], sectionAccess('project', key), effect(Object.keys(value), key === 'model' ? 'new-session' : key === 'permission' ? 'session-rebind' : 'next-message', key === 'model' ? '仅新会话使用项目默认模型' : key === 'judge' ? agentEffects.judge[0]!.detail : key === 'run' && p.backend === 'claude-agent' ? 'Claude 不支持插话，运行中来的消息照样排队' : '下一条消息生效'))])) as T.ProjectSettingsView['sections'];
+      const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, makeSection(value, [botId, projectRaw(p, key as keyof T.ProjectSections)], sectionAccess('project', key), effect(Object.keys(value), key === 'model' ? 'new-session' : key === 'permission' || key === 'workspace' ? 'session-rebind' : 'next-message', key === 'model' ? '仅新会话使用项目默认模型' : key === 'workspace' ? '下一轮新开会话' : key === 'judge' ? agentEffects.judge[0]!.detail : key === 'run' && p.backend === 'claude-agent' ? 'Claude 不支持插话，运行中来的消息照样排队' : '下一条消息生效'))])) as T.ProjectSettingsView['sections'];
       for (const key of ['profile', 'smartRules'] as const) sections[key]!.revision = settingsRevision(await sectionRaw(p, key));
       const botProfile = await profile.readBot(botId);
       sections.profile!.effective = { ...data.profile, persona: [data.profile.inheritPersona ? botProfile.persona : '', data.profile.persona].filter(Boolean).join('\n\n'), memory: [data.profile.inheritMemory ? botProfile.memory : '', data.profile.memory].filter(Boolean).join('\n\n') };
@@ -772,6 +777,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         let admittedWorkspace: ProjectWorkspace | undefined;
         const allowedCatalog = e.section === 'modelAccess' ? await validateModelAccess({ ...original.modelAccess, ...e.patch }, original.modelAccess) : undefined;
         if (e.section === 'workspace') {
+          // The project holds the workspace; the host funnels a change through the library (admin/library.ts), never this row.
+          if (isProjectId(initial.projectId)) throw new SettingsInputError('这个群的工作区归项目管，请通过 daemon 修改项目的工作区');
           const value = { ...original.workspace, ...e.patch };
           if (!value.directories.includes(value.primary)) throw new SettingsInputError('主目录必须在工作区目录中');
           const admitted = await admitDirectorySettings({ workspaces: { primary: value.primary, additional: value.directories.filter(path => path !== value.primary) }, repositories: value.repositories }, { dataDir: paths.appDir });
