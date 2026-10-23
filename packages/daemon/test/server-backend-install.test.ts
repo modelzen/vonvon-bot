@@ -3,8 +3,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { EnvironmentReply, Event } from '@vonvon/protocol';
+import { environmentReplySchema, environmentRequestSchema, type EnvironmentReply, type Event } from '@vonvon/protocol';
 import { Jobs, type BackendAdmission, type JobPeer } from '../src/server/jobs';
+import { environmentRpc } from '../src/server/rpc/environment';
 import { backendErrorSuffix } from '../src/server/backend-output';
 import { fakeService, socketClient, startFixture } from './server-fixture';
 import { installBackendDep, type InstallResult } from '../src/agent/installer';
@@ -255,6 +256,69 @@ describe('bounded backend output', () => {
       expect(client.frames.flatMap(frame => frame.type === 'event' && frame.event === 'backendInstall' ? [frame.payload.item] : [])).toEqual([{ type: 'log', chunk: 'later-1' }, { type: 'log', chunk: 'later-2' }, { type: 'done' }]);
       expect(client.socket.readyState).toBe(1);
     } finally { gate.resolve(); run.finish(); await client.close(); await fixture.close(); }
+  });
+});
+
+describe('backend install status and cancellation', () => {
+  it('reads progress and retained terminal state without starting another install', async () => {
+    const run = producer();
+    expect(run.jobs.backendInstallStatus('claude-agent')).toBeNull();
+    const admission = run.jobs.selectBackend('claude-agent', false);
+    run.emit('installing');
+    expect(run.jobs.backendInstallStatus('claude-agent')).toMatchObject({
+      operationId: admission.operation.operationId, state: 'running', replay: [{ type: 'log', chunk: 'installing' }],
+    });
+    run.finish();
+    await admission.operation.done;
+    expect(run.jobs.backendInstallStatus('claude-agent')).toMatchObject({
+      operationId: admission.operation.operationId, state: 'succeeded', replay: [{ type: 'log', chunk: 'installing' }, { type: 'done' }],
+    });
+    expect(run.jobs.cancelBackendInstall(admission.operation.operationId)).toBe(false);
+    const fresh = run.jobs.selectBackend('claude-agent', false);
+    expect(run.jobs.backendInstallStatus('claude-agent')?.operationId).toBe(fresh.operation.operationId);
+    expect(fresh.operation.operationId).not.toBe(admission.operation.operationId);
+    await fresh.operation.done;
+  });
+
+  it('cancels only the matching active operation and reports abort despite a late success', async () => {
+    const gates = [deferred<InstallResult>(), deferred<InstallResult>()];
+    const signals: AbortSignal[] = [];
+    const service = fakeService({ installBackend: (_id, _callback, signal) => {
+      signals.push(signal!);
+      return gates[signals.length - 1]!.promise;
+    } });
+    const jobs = new Jobs({ service, changed() {}, toolsSettled() {} });
+    managers.push(jobs);
+    const first = jobs.selectBackend('claude-agent', false);
+    const second = jobs.selectBackend('claude-agent', true);
+    expect(jobs.cancelBackendInstall('00000000-0000-4000-8000-000000000000')).toBe(false);
+    expect(jobs.cancelBackendInstall(first.operation.operationId)).toBe(true);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+    gates[0]!.resolve(success);
+    gates[1]!.resolve(success);
+    await Promise.all([first.operation.done, second.operation.done]);
+    expect(jobs.attachBackend(first, observer('first')).replay.at(-1)).toEqual({ type: 'error', code: 'aborted', message: '安装已取消。' });
+    expect(jobs.attachBackend(second, observer('second')).replay.at(-1)).toEqual({ type: 'done' });
+    expect(jobs.backendInstallStatus('claude-agent')).toMatchObject({ operationId: second.operation.operationId, state: 'succeeded' });
+  });
+
+  it('exposes the read and cancel requests through environment RPC', async () => {
+    const run = producer();
+    const peer = observer('rpc');
+    const statusRequest = environmentRequestSchema.parse({ type: 'backendInstallStatus', id: 'claude-agent' });
+    const before = await environmentRpc(run.service, run.jobs, peer, statusRequest);
+    expect(before).toEqual({ kind: 'read', value: { kind: 'backendInstallStatus', operation: null } });
+    const admission = run.jobs.selectBackend('claude-agent', false);
+    const running = await environmentRpc(run.service, run.jobs, peer, statusRequest);
+    if (running.kind !== 'read') throw new Error('status must be read-only');
+    expect(environmentReplySchema.parse(running.value)).toMatchObject({ kind: 'backendInstallStatus', operation: { operationId: admission.operation.operationId, state: 'running' } });
+    const cancelled = await environmentRpc(run.service, run.jobs, peer, environmentRequestSchema.parse({ type: 'cancelBackendInstall', operationId: admission.operation.operationId }));
+    expect(cancelled).toMatchObject({ kind: 'read', value: { kind: 'applied' } });
+    run.finish();
+    await admission.operation.done;
+    const after = await environmentRpc(run.service, run.jobs, peer, statusRequest);
+    expect(after).toMatchObject({ kind: 'read', value: { kind: 'backendInstallStatus', operation: { state: 'cancelled' } } });
   });
 });
 

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import QRCode from 'qrcode';
-import { agentIdSchema, jobIdSchema, type BackendInstallItem, type CommandResult, type EnvironmentReply, type Event, type Job, type JobId } from '@vonvon/protocol';
+import { agentIdSchema, jobIdSchema, type BackendInstallItem, type BackendInstallStatus, type CommandResult, type EnvironmentReply, type Event, type Job, type JobId } from '@vonvon/protocol';
 import type { AdminService } from '../admin/service';
 import { CodexSetupConflict } from '../agent/codex-appserver/setup';
 import { RpcError, unsupported } from './errors';
@@ -28,6 +28,7 @@ interface BackendOperation {
   peers: Set<JobPeer>;
   done: Promise<void>;
   terminal?: BackendInstallItem;
+  expiresAt?: number;
 }
 export interface BackendAdmission { operation: BackendOperation; attached: boolean }
 
@@ -40,6 +41,7 @@ export class Jobs {
   private readonly expires = new Map<JobId, number>();
   private readonly backends = new Map<string, BackendOperation>();
   private readonly backendWork = new Set<BackendOperation>();
+  private readonly backendLatest = new Map<string, BackendOperation>();
   private readonly poll: NodeJS.Timeout;
   private closed = false;
   private closing: Promise<void> | undefined;
@@ -157,8 +159,10 @@ export class Jobs {
     const operation: BackendOperation = { operationId: randomUUID(), id, update, abort: new AbortController(), output: new BackendOutput(), peers: new Set(), done: Promise.resolve() };
     this.backends.set(key, operation);
     this.backendWork.add(operation);
+    this.backendLatest.set(id, operation);
     const emit = (item: BackendInstallItem): void => {
-      if (item.type !== 'log') { operation.terminal = item; if (this.backends.get(key) === operation) this.backends.delete(key); }
+      if (operation.terminal) return;
+      if (item.type !== 'log') { operation.terminal = item; operation.expiresAt = Date.now() + 10 * 60_000; }
       for (const peer of operation.peers) if (peer.open) peer.event({ type: 'event', event: 'backendInstall', payload: { operationId: operation.operationId, id, update, item } });
     };
     let install: ReturnType<AdminService['installBackend']>;
@@ -168,10 +172,37 @@ export class Jobs {
       install = Promise.reject(error);
     }
     operation.done = install
-      .then(result => { emit(result.ok ? { type: 'done' } : { type: 'error', code: result.aborted ? 'aborted' : 'install_failed', message: backendErrorSuffix(result.tail) }); })
-      .catch(error => { emit({ type: 'error', code: 'unknown', message: backendErrorSuffix(error instanceof Error ? error.message : '安装失败。') }); })
+      .then(result => { emit(operation.abort.signal.aborted || result.aborted
+        ? { type: 'error', code: 'aborted', message: operation.abort.signal.aborted ? '安装已取消。' : backendErrorSuffix(result.tail) }
+        : result.ok ? { type: 'done' } : { type: 'error', code: 'install_failed', message: backendErrorSuffix(result.tail) }); })
+      .catch(error => { emit(operation.abort.signal.aborted
+        ? { type: 'error', code: 'aborted', message: '安装已取消。' }
+        : { type: 'error', code: 'unknown', message: backendErrorSuffix(error instanceof Error ? error.message : '安装失败。') }); })
       .finally(() => { if (this.backends.get(key) === operation) this.backends.delete(key); this.backendWork.delete(operation); operation.peers.clear(); this.options.toolsSettled(); });
     return { operation, attached: false };
+  }
+  backendInstallStatus(id: string): BackendInstallStatus | null {
+    const operation = this.backendLatest.get(id);
+    if (!operation) return null;
+    if (operation.expiresAt !== undefined && operation.expiresAt <= Date.now()) {
+      this.backendLatest.delete(id);
+      return null;
+    }
+    const { text, omittedBytes } = operation.output.snapshot();
+    const replay: BackendInstallItem[] = text ? [{ type: 'log', chunk: text }] : [];
+    if (operation.terminal) replay.push(operation.terminal);
+    return {
+      operationId: operation.operationId, id: operation.id, update: operation.update,
+      state: !operation.terminal ? 'running' : operation.terminal.type === 'done' ? 'succeeded'
+        : operation.terminal.type === 'error' && operation.terminal.code === 'aborted' ? 'cancelled' : 'failed',
+      replay, omittedBytes,
+    };
+  }
+  cancelBackendInstall(operationId: string): boolean {
+    const operation = [...this.backendWork].find(candidate => candidate.operationId === operationId);
+    if (!operation || operation.terminal || operation.abort.signal.aborted) return false;
+    operation.abort.abort();
+    return true;
   }
   attachBackend(admission: BackendAdmission, peer: JobPeer): Extract<EnvironmentReply, { kind: 'backendInstall' }> {
     const { operation, attached } = admission;

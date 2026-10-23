@@ -754,18 +754,18 @@ export class CodexAppServerBackend implements AgentBackend {
 
   async listModels(): Promise<ModelInfo[]> {
     if (this.modelCache) return this.modelCache;
-    if (!resolveCodexBin()) return STATIC_MODELS;
+    if (!resolveCodexBin()) return OFFLINE_CODEX_MODELS;
     try {
       // 常驻 utility client（M-2）：原本每次付一套 spawn+initialize，现在共享复用。
       const res = await utilityRequest<{ data?: RawModel[] }>('model/list', { limit: 50 });
       const models = (res.data ?? []).map(mapModel);
       // 空列表和失败一样：回落兜底但不缓存，下次再问（handle-message 的 listModels 注释）。
-      if (!models.length) return STATIC_MODELS;
+      if (!models.length) return OFFLINE_CODEX_MODELS;
       this.modelCache = models;
       return models;
     } catch (err) {
       log.fail('agent', err, { phase: 'model/list' });
-      return STATIC_MODELS;
+      return OFFLINE_CODEX_MODELS;
     }
   }
 
@@ -1045,7 +1045,7 @@ function mapModel(m: RawModel): ModelInfo {
   };
 }
 
-const STATIC_MODELS: ModelInfo[] = [
+export const OFFLINE_CODEX_MODELS: ModelInfo[] = [
   {
     id: 'gpt-5.5',
     displayName: 'GPT-5.5',

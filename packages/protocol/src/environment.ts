@@ -17,6 +17,8 @@ export const environmentRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("backendCatalog") }).strict(),
   z.object({ type: z.literal("backendVersion"), id: z.string().regex(/^[a-z0-9-]{1,80}$/) }).strict(),
   z.object({ type: z.literal("backendInstall"), id: z.string().regex(/^[a-z0-9-]{1,80}$/), update: z.boolean() }).strict(),
+  z.object({ type: z.literal("backendInstallStatus"), id: z.string().regex(/^[a-z0-9-]{1,80}$/) }).strict(),
+  z.object({ type: z.literal("cancelBackendInstall"), operationId }).strict(),
   z.object({ type: z.literal("backendUninstall"), id: z.string().regex(/^[a-z0-9-]{1,80}$/) }).strict(),
   z.object({ type: z.literal("backendLogin"), id: z.string().regex(/^[a-z0-9-]{1,80}$/), refresh: z.boolean() }).strict(),
   z.object({ type: z.literal("install"), tool: environmentToolSchema }).strict(),
@@ -83,6 +85,13 @@ export const toolInstallOperationSchema = z.union([
   z.object({kind:z.enum(["succeeded", "failed", "cancelled"]), id:z.string(), message:z.string()}),
 ]);
 export type ToolInstallOperation = z.infer<typeof toolInstallOperationSchema>;
+export const backendInstallStatusSchema = z.object({
+  operationId, id: z.string(), update: z.boolean(),
+  state: z.enum(["running", "succeeded", "failed", "cancelled"]),
+  replay: z.array(backendInstallItemSchema),
+  omittedBytes: z.number().int().nonnegative(),
+});
+export type BackendInstallStatus = z.infer<typeof backendInstallStatusSchema>;
 export const environmentReplySchema = z.discriminatedUnion("kind", [
   z.object({kind:z.literal("tools"), tools:z.array(environmentToolStateSchema)}),
   z.object({kind:z.literal("backends"), entries:z.array(backendEntrySchema)}),
@@ -94,6 +103,7 @@ export const environmentReplySchema = z.discriminatedUnion("kind", [
   z.object({kind:z.literal("toolInstall"), operation:toolInstallOperationSchema.nullable()}),
   z.object({kind:z.literal("applied"), message:z.string()}),
   z.object({kind:z.literal("backendInstall"), operationId, id:z.string(), update:z.boolean(), attached:z.boolean(), replay:z.array(backendInstallItemSchema), omittedBytes:z.number().int().nonnegative().optional()}),
+  z.object({kind:z.literal("backendInstallStatus"), operation:backendInstallStatusSchema.nullable()}),
   z.object({kind:z.literal("refused"), code:z.string(), message:z.string()}),
 ]);
 export type EnvironmentReply = z.infer<typeof environmentReplySchema>;

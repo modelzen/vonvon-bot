@@ -453,11 +453,16 @@ export class ClaudeAgentBackend implements AgentBackend {
       return this.modelCache;
     } catch (err) {
       log.fail('agent', err, { backend: 'claude-agent', phase: 'supportedModels' });
-      return withConfiguredDefault(STATIC_MODELS, this.configuredModel());
+      return withConfiguredDefault(OFFLINE_CLAUDE_MODELS, this.configuredModel());
     } finally {
       abortController.abort();
       query?.close();
     }
+  }
+
+  /** Only models returned by this instance's successful SDK discovery; fallback is never cached. */
+  peekModels(): ModelInfo[] | undefined {
+    return this.modelCache ?? undefined;
   }
 
   /** 最近会话（newest first），读 ~/.claude/projects/<cwd-hash> 的 JSONL 存储——
@@ -746,7 +751,7 @@ export function withConfiguredDefault(models: ModelInfo[], configured: string | 
 
 /** Failure-only fallback when SDK model discovery cannot initialize. Successful
  * discovery is cached above and remains the normal model-picker source. */
-const STATIC_MODELS: ModelInfo[] = [
+export const OFFLINE_CLAUDE_MODELS: ModelInfo[] = [
   {
     id: 'claude-opus-4-8',
     displayName: 'Claude Opus 4.8',
