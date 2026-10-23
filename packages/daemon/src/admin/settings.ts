@@ -26,8 +26,8 @@ import { probeBackends, SMART_NO_MENTION_REFUSED, type AppPreferencesWriter } fr
 import { parseSettingsAction, parseSettingsEdit, SettingsInputError } from './settings-parse';
 import type * as T from './settings-types';
 import { offlineModelCatalog, rememberModelCatalog } from './model-catalog';
-import { readBotProfile, readGroupProfile, updateBotProfile } from '../bot/group-profile';
-import { readRole, roleDraft, roleProblem, updateRole } from '../bot/role-files';
+import { supplementOf } from '../bot/context-assembly';
+import { botFiles, readRole, readSoulText, readText, roleDraft, roleProblem, updateRole, waitForBotFiles } from '../bot/role-files';
 import { loadBots } from '../config/bots';
 import { discoverGroupSkills, discoverLocalGroupSkills } from '../agent/group-skills';
 import { validateProviderJudge } from '../project/initial-settings';
@@ -60,7 +60,6 @@ export interface SettingsOwnerDeps {
   /** Local stopped-Bot editing uses cached catalogs only, never starts a provider. */
   offline?: boolean;
   localEditing?: boolean;
-  profile?: { readBot: typeof readBotProfile; readGroup: typeof readGroupProfile; updateBot: typeof updateBotProfile };
   discoverSkills?: typeof discoverGroupSkills;
   writePreferences: AppPreferencesWriter;
   backendFor: (id: string) => AgentBackend;
@@ -288,9 +287,14 @@ async function registeredBotName(appId: string): Promise<string | undefined> {
   try { return (await loadBots()).bots.find(bot => bot.appId === appId)?.botName; }
   catch { return undefined; }
 }
+/** The whole `SOUL.md` and the old shared memory, as a read-only record: nothing reads the second file any more (P4a). */
+async function legacyBotProfile(appId: string): Promise<{ persona: string; memory: string }> {
+  await waitForBotFiles(appId);
+  const files = await botFiles(appId);
+  return { persona: await readSoulText(appId), memory: await readText(files, { kind: 'public-memory' }) };
+}
 export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
   const cfg = deps.cfg;
-  const profile = deps.profile ?? { readBot: readBotProfile, readGroup: readGroupProfile, updateBot: updateBotProfile };
   const botId = cfg.accounts.app.id;
   const access = deps.access ?? writable;
   const sectionAccess = (kind: string, section: string) => deps.localEditing && isLocalSettingsSection(kind, section) ? writable : access;
@@ -504,9 +508,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
   }
   async function projectSettings(p: Project): Promise<T.ProjectSections> {
     const result = projectData(p);
-    result.profile = await profile.readGroup(botId, p);
-    // Until P4a switches the readers, a row without a supplement shows its group persona (migration step B copies it).
-    result.role = { supplement: p.supplement ?? result.profile.persona };
+    // `profile` is only a record of what the row held before the memory migration; the runtime reads `role` and the entries.
+    result.role = { supplement: supplementOf(p) };
     result.modelAccess = resolveProjectModelAccess({ bot: cfg.preferences, group: p }, peekModels(groupBackendId(p)));
     if (!p.directories?.repositories) result.workspace.repositories = [...cfg.preferences?.directories?.repositories ?? []];
     if (!p.smartRules) result.smartRules = rulesFromSmartPrompt(await (deps.readSmartPrompt ?? readSmartPrompt)(botId, p.chatId));
@@ -515,8 +518,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     return result;
   }
   async function sectionRaw(p: Project, section: keyof T.ProjectSections): Promise<unknown> {
-    if (section === 'profile' && !p.profile) return [botId, projectRaw(p, section), await profile.readGroup(botId, p)];
-    if (section === 'role' && p.supplement === undefined) return [botId, projectRaw(p, section), (await profile.readGroup(botId, p)).persona];
+    if (section === 'role' && p.supplement === undefined) return [botId, projectRaw(p, section), supplementOf(p)];
     if (section === 'smartRules' && !p.smartRules) return [botId, projectRaw(p, section), (await (deps.readSmartPrompt ?? readSmartPrompt)(botId, p.chatId)).text];
     return [botId, projectRaw(p, section)];
   }
@@ -540,7 +542,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     own(scope);
     if (scope.kind === 'agent') {
       const data = agentData(cfg);
-      data.profile = await profile.readBot(botId);
+      data.profile = await legacyBotProfile(botId);
       const roleView = await readRole(botId);
       data.role = { identity: roleView.identity, notes: roleView.notes };
       const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, makeSection(value, [botId, agentRaw(cfg.preferences ?? {}, key as keyof T.AgentSections)], access, agentEffects[key as keyof T.AgentSections])])) as T.AgentSettingsView['sections'];
@@ -609,8 +611,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       const data = await projectSettings(p);
       const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, makeSection(value, [botId, projectRaw(p, key as keyof T.ProjectSections)], sectionAccess('project', key), effect(Object.keys(value), key === 'model' ? 'new-session' : key === 'permission' || key === 'workspace' ? 'session-rebind' : 'next-message', key === 'model' ? '仅新会话使用项目默认模型' : key === 'workspace' ? '下一轮新开会话' : key === 'judge' ? agentEffects.judge[0]!.detail : key === 'run' && p.backend === 'claude-agent' ? 'Claude 不支持插话，运行中来的消息照样排队' : '下一条消息生效'))])) as T.ProjectSettingsView['sections'];
       for (const key of ['profile', 'role', 'smartRules'] as const) sections[key]!.revision = settingsRevision(await sectionRaw(p, key));
-      const botProfile = await profile.readBot(botId);
-      sections.profile!.effective = { ...data.profile, persona: [data.profile.inheritPersona ? botProfile.persona : '', data.profile.persona].filter(Boolean).join('\n\n'), memory: [data.profile.inheritMemory ? botProfile.memory : '', data.profile.memory].filter(Boolean).join('\n\n') };
+      const botProfile = await legacyBotProfile(botId);
+      sections.profile!.effective = { ...data.profile };
       const backendId = groupBackendId(p);
       sections.run.effective = { pendingPolicy: pendingPolicyOf(getPendingPolicy(cfg), p) };
       // The group's default, else the bot's on the same backend (s36d2).
@@ -732,12 +734,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             return next;
           }, { beforeCommit });
         } else if (e.section === 'profile') {
-          await profile.updateBot(botId, current => {
-            check([botId, current], e.revision);
-            // The role is edited in its own section; this one keeps the shared memory (until P4a) and shows the whole file.
-            if (e.patch.persona !== undefined && e.patch.persona !== current.persona) throw new SettingsInputError('角色设定请在「身份与职责」「其他说明」里改');
-            return { ...current, ...e.patch };
-          }, beforeCommit);
+          // Read-only since P4a: the role has its own section and the shared memory is now the bot's memory entries.
+          throw new SettingsInputError('角色设定请在「身份与职责」「其他说明」里改；公共记忆已改为 Bot 记忆，在记忆页里改');
         } else await deps.writePreferences(async (p) => {
           check([botId, agentRaw(p, e.section as keyof T.AgentSections)], e.revision);
           switch (e.section) {
@@ -835,15 +833,11 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           check(await sectionRaw(p, e.section), e.revision);
           switch (e.section) {
             case 'profile':
-              p.profile = { ...await profile.readGroup(botId, p), ...e.patch };
-              // Both fields are live until P4a: a persona saved here is the supplement too.
-              if (e.patch.persona !== undefined) p.supplement = p.profile.persona;
-              break;
+              throw new SettingsInputError('本群的个性已改为「补充职责」，本群记忆已改为项目记忆，请在对应的页面里改');
             case 'role': {
               const supplement = e.patch.supplement ?? original.role.supplement;
               if (supplement !== original.role.supplement && [...supplement].length > SUPPLEMENT_MAX) throw new SettingsInputError(`补充职责最多 ${SUPPLEMENT_MAX} 字`);
               p.supplement = supplement;
-              p.profile = { ...await profile.readGroup(botId, p), persona: supplement };
               break;
             }
             case 'smartRules': p.smartRules = { ...original.smartRules, ...e.patch }; break;
@@ -1064,7 +1058,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
 
 /** Freeze historical Bot defaults into group-local settings once. Reading a settings page never
  * writes this migration; only the owning Bot startup invokes it. Fields already edited stay put. */
-export async function materializeGroupSettings(deps: Pick<SettingsOwnerDeps, 'cfg' | 'backendFor' | 'listProjects' | 'mutateProject' | 'profile' | 'readSmartPrompt'> & { readSessions?: typeof listSessions }): Promise<{ updated: string[]; deferred: string[] }> {
+export async function materializeGroupSettings(deps: Pick<SettingsOwnerDeps, 'cfg' | 'backendFor' | 'listProjects' | 'mutateProject' | 'readSmartPrompt'> & { readSessions?: typeof listSessions }): Promise<{ updated: string[]; deferred: string[] }> {
   const botId = deps.cfg.accounts.app.id;
   const sessions = await (deps.readSessions ?? listSessions)();
   const rows = await (deps.listProjects ?? listProjects)();
@@ -1085,14 +1079,11 @@ export async function materializeGroupSettings(deps: Pick<SettingsOwnerDeps, 'cf
     const oldEffectiveJudge = resolveJudgeModel(backend, { bot: oldJudge }, native);
     const judge: JudgeSelectionStored = oldEffectiveJudge.provider ? { kind: 'decision', provider: oldEffectiveJudge.provider, model: oldEffectiveJudge.model } : { kind: 'llm', backend, model: oldEffectiveJudge.model, ...(oldEffectiveJudge.effort ? { effort: oldEffectiveJudge.effort } : {}) };
     let rules = row.smartRules;
-    let groupProfile = row.profile;
     try {
       rules ??= rulesFromSmartPrompt(await (deps.readSmartPrompt ?? readSmartPrompt)(botId, row.chatId));
-      groupProfile ??= await (deps.profile?.readGroup ?? readGroupProfile)(botId, row);
     } catch { result.deferred.push(row.name); continue; }
     const before = settingsRevision(row);
     const changes: Partial<Project> = {
-      ...(!row.profile ? { profile: groupProfile } : {}),
       ...(!row.smartRules ? { smartRules: rules } : {}),
       ...(!row.modelAccess && models.length && !foreignSessions ? { modelAccess: { backend, models, efforts } } : {}),
       ...(!row.defaultModel && preference ? { defaultModel: preference.model, defaultEffort: preference.effort, defaultModelCustom: preference.custom } : {}),

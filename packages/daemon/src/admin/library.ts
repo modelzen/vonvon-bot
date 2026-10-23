@@ -1,13 +1,15 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { loadBots, type BotEntry } from '../config/bots';
-import { botPaths, paths } from '../config/paths';
+import { botDir, botPaths, paths } from '../config/paths';
 import { acquireMutex, closeMutex } from '../config/data-access';
 import { admitDirectorySettings } from '../config/directories';
 import { directoryFailure, DirectoryError } from '../config/directory-errors';
 import { log } from '../core/logger';
 import { acquireSingleInstanceLock, readSingleInstanceHolder } from '../core/single-instance';
-import { migrateRoleFiles } from '../bot/role-files';
+import { botFiles, migrateRoleFiles, readText } from '../bot/role-files';
+import { importGroupMemory, importSharedMemory } from '../bot/memory-import';
+import { botMemoryLocation, MemoryStore, projectMemoryLocation } from '../bot/memory-store';
 import { assertBridgeImportReservation } from '../import/bridge/reservation';
 import { listProjectsIn, mutateProject, withStoredRows, type Project } from '../project/registry';
 import { detachSessionsForChatIn } from '../bot/session-store';
@@ -39,6 +41,8 @@ export type DriftField = 'primary' | 'additional' | 'repositories';
  */
 export interface DriftNote { projectId: string; rows: number; fields: DriftField[]; outcome: 'repaired' | 'failed' }
 export interface LibraryStartupReport {
+  /** rows that got their step-B marker (supplement and memory) this start */
+  memoryMigrated?: number;
   /** rows that got their `projectId` or step-A marker this start */
   linked: number;
   /** projects made for them */
@@ -234,6 +238,65 @@ async function linkBot(bot: BotEntry, report: LibraryStartupReport, options: Lib
   report.created += created;
 }
 
+/**
+ * Step B for one bot (memory design §7.1, P4a): each row that has its project and no `migration.memory` yet. The old
+ * group persona becomes the row's `supplement`, the old group memory becomes project entries under "背景" (what the
+ * desktop wrote is trusted, what only a file on disk held is not), and the bot's `memory/shared.md` becomes archived
+ * Bot entries waiting to be picked. The entries go in first, under the memory mutex and with no library or projects
+ * lock held (memory locks are never taken inside them); the markers are written last under the projects lock, so a
+ * run cut off in between imports nothing twice (every entry carries an import hash) and writes the markers next time.
+ * A row whose project the library lost, or that changed meanwhile, is left for the next start.
+ */
+async function migrateBotMemory(bot: BotEntry, options: LibraryStartupOptions): Promise<number> {
+  const file = botPaths(bot.appId).projectsFile;
+  const rows = await listProjectsIn(file);
+  const pending = rows.filter(row => typeof row.chatId === 'string' && row.chatId && isProjectId(row.projectId) && stepADone(row) && row.migration?.memory === undefined);
+  if (!pending.length) return 0;
+  await assertBridgeImportReservation(paths.appDir, bot.appId);
+  const files = await botFiles(bot.appId);
+  const shared = await readText(files, { kind: 'public-memory' });
+  if (shared.trim()) {
+    await importSharedMemory(new MemoryStore(botMemoryLocation(botDir(bot.appId))), { importFile: 'memory/shared.md', text: shared, botId: bot.appId });
+  }
+  const library = await readLibrary();
+  const done = new Map<string, { supplement: string }>();
+  for (const row of pending) {
+    const project = library.projects.find(item => item.id === row.projectId);
+    if (!project) { log.warn('library', 'memory_project_missing', { botId: bot.appId }); continue; }
+    const limit = (project as { memoryLimit?: unknown }).memoryLimit;
+    const store = new MemoryStore(projectMemoryLocation(project.id, typeof limit === 'number' && Number.isInteger(limit) && limit > 0 ? { limit } : {}));
+    let supplement: string;
+    let memory: string;
+    let importFile: string;
+    let trusted: boolean;
+    if (row.profile) {
+      ({ persona: supplement, memory } = row.profile);
+      importFile = `projects.json#${row.chatId}.profile.memory`;
+      trusted = true;
+    } else {
+      [supplement, memory] = await Promise.all([readText(files, { kind: 'group-soul', chatId: row.chatId }), readText(files, { kind: 'group-memory', chatId: row.chatId })]);
+      importFile = `groups/${row.chatId}/memory/group.md`;
+      trusted = false;
+    }
+    if (memory.trim()) await importGroupMemory(store, { importFile, text: memory, botId: bot.appId, chatId: row.chatId, trusted });
+    done.set(row.chatId, { supplement });
+  }
+  if (!done.size) return 0;
+  const at = (options.now ?? Date.now)();
+  let marked = 0;
+  await withStoredRows({ file, dataRoot: paths.appDir }, async stored => {
+    for (const row of stored) {
+      const step = done.get(row.chatId);
+      if (!step || row.migration?.memory !== undefined) continue;
+      if (row.supplement === undefined && step.supplement.trim()) row.supplement = step.supplement;
+      row.migration = { ...row.migration, memory: at };
+      marked++;
+    }
+    return marked > 0;
+  });
+  return marked;
+}
+
 function driftFields(project: LibraryWorkspace, row: LibraryWorkspace): DriftField[] {
   const fields: DriftField[] = [];
   if (project.primary !== row.primary) fields.push('primary');
@@ -411,6 +474,16 @@ export async function prepareLibraryAtStartup(options: LibraryStartupOptions = {
     }
   }
   if (rolesMerged) log.info('library', 'roles_merged', { count: rolesMerged });
+  // Step B, after A (it needs the rows' projects) and R (the role files are settled).
+  report.memoryMigrated = 0;
+  for (const bot of bots) {
+    try { report.memoryMigrated += await migrateBotMemory(bot, options); }
+    catch (error) {
+      report.failed.push({ botId: bot.appId, error: messageOf(error) });
+      log.fail('library', error, { phase: 'memory', botId: bot.appId });
+    }
+  }
+  if (report.memoryMigrated) log.info('library', 'memory_migrated', { rows: report.memoryMigrated });
   if (report.linked) log.info('library', 'migrated', { linked: report.linked, created: report.created });
   try { await checkDrift(bots, report); }
   catch (error) { log.fail('library', error, { phase: 'drift' }); }

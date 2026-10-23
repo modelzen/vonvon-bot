@@ -25,7 +25,7 @@ vi.mock('../src/config/paths', async () => {
 });
 
 import { prepareLibraryAtStartup } from '../src/admin/library';
-import { readBotProfile, readGroupPersonality } from '../src/bot/group-profile';
+import { assemble, loadContextSources } from '../src/bot/context-assembly';
 import {
   composeRole, IDENTITY_MAX, migrateRoleFiles, parseRole, readRole, roleDraft, roleProblem, updateRole,
 } from '../src/bot/role-files';
@@ -203,11 +203,12 @@ describe('migration step R', () => {
     put('AGENTS.md', 'AGENTS_LATER_MARKER');
     expect(await migrateRoleFiles(APP)).toBe('marked');
     expect(get('AGENTS.md')).toBe('AGENTS_LATER_MARKER');
-    expect((await readBotProfile(APP)).persona).not.toContain('AGENTS_LATER_MARKER');
     expect((await readRole(APP)).notes).not.toContain('AGENTS_LATER_MARKER');
-    const personality = await readGroupPersonality(APP, { chatId: 'oc_x', name: '群', profile: undefined }, '助手');
-    expect(personality.instructions).not.toContain('AGENTS_LATER_MARKER');
-    expect(personality.instructions).toContain('助手');
+    const sources = await loadContextSources({ appId: APP, botName: '助手', place: { kind: 'group', chatId: 'oc_x', chatName: '群' }, botDirectory: join(fixture.root, 'bots', APP) });
+    const assembled = assemble(sources);
+    const text = [assembled.identity, assembled.role, assembled.supplement, assembled.botMemory].join('\n');
+    expect(text).not.toContain('AGENTS_LATER_MARKER');
+    expect(text).toContain('助手');
   });
   it('keeps the other keys of import-state.json and does not need the bot to be running', async () => {
     mkdirSync(botFile('memory'), { recursive: true });

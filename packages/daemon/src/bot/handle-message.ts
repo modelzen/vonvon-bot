@@ -10,7 +10,8 @@ import { createPendingGroups, pendingGroupsFile } from '../project/pending-group
 import { realpath, stat } from 'node:fs/promises';
 import type { BotIdentity } from '../config/bots';
 import { createHash, randomUUID } from 'node:crypto';
-import { readGroupPersonality } from './group-profile';
+import { settleTurn, recordUsage, type TurnStores } from './turn-usage';
+import { assemble, judgeContext, loadContextSources, openingInstructions, planTurnUpdate, contextOf, newNonce, type ContextPlace } from './context-assembly';
 import { groupSkillProfile } from '../agent/group-skills';
 import { parseStoredJudge } from '../judge/model';
 import { presentationConfig } from './group-presentation';
@@ -257,6 +258,7 @@ import {
   nextSeen,
   nothingSeen,
   patchSession,
+  type SessionContext,
   sessionHolder,
   sessionTitleJobKey,
   upsertSession,
@@ -1053,24 +1055,72 @@ export function createOrchestrator(
   function execOf(project: Project | undefined) {
     return resolveExecution({ bot: cfg.preferences, group: project });
   }
-  async function profileOf(project: Project | undefined, cwd: string, backend: AgentBackend, permission?: PermissionMode) {
-    const execution = execOf(project);
-    const personality = project ? await readGroupPersonality(cfg.accounts.app.id, project, channel.botIdentity?.name) : undefined;
-    const skills = project ? await groupSkillProfile({ backend, cwd, directories: execution.workspaces.additional, disabledPaths: project.skills?.disabledPaths }) : undefined;
-    const profile = personality || skills ? { instructions: personality?.instructions ?? '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: [], capabilityPackages: [], mcpServers: [], ...(skills ? { skills } : {}) } : undefined;
-    return executionSessionProfile({ execution: { ...execution, permission: permission ?? execution.permission }, cwd, backend: backend.id, scope: project ? 'group' : 'ungrouped', profile });
+  /** What vonvon hands a session of `project` (a comment session when there is none): see bot/context-assembly.ts. */
+  async function contextSourcesFor(project: Project | undefined, options: { skipBotMemory?: boolean } = {}) {
+    const place: ContextPlace = project ? { kind: 'group', chatId: project.chatId, chatName: project.name } : { kind: 'comment' };
+    return loadContextSources({
+      appId: cfg.accounts.app.id, botName: channel.botIdentity?.name, place, ...(project ? { row: project } : {}),
+      nameOf: openId => names.peek(openId), chatNames: async () => new Map((await listProjects()).map(row => [row.chatId, row.name] as const)), ...(options.skipBotMemory ? { skipBotMemory: true } : {}),
+    });
   }
-  const personalityDelivered = new WeakMap<AgentThread, string>();
-  async function preparePersonality(thread: AgentThread, chatId: string, input: AgentInput): Promise<AgentInput> {
+  /** The context a new session was opened with, by the profile object it was opened from (4.2: the record exists only later). */
+  const openings = new WeakMap<object, SessionContext>();
+  /** What each live thread has been handed; a resumed thread reads its record on its first turn. */
+  const contextDelivered = new WeakMap<AgentThread, SessionContext>();
+  const contextField = (thread: AgentThread): { context: SessionContext } | Record<string, never> => {
+    const context = contextDelivered.get(thread);
+    return context ? { context } : {};
+  };
+  async function profileOf(project: Project | undefined, cwd: string, backend: AgentBackend, permission?: PermissionMode, place?: 'comment') {
+    const execution = execOf(project);
+    const sources = project || place === 'comment' ? await contextSourcesFor(project) : undefined;
+    const assembled = sources ? assemble(sources, project ? 'work' : 'comment') : undefined;
+    const nonce = newNonce();
+    const skills = project ? await groupSkillProfile({ backend, cwd, directories: execution.workspaces.additional, disabledPaths: project.skills?.disabledPaths }) : undefined;
+    const profile = assembled || skills ? { instructions: assembled ? openingInstructions(assembled, nonce) : '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: [], capabilityPackages: [], mcpServers: [], ...(skills ? { skills } : {}) } : undefined;
+    const built = await executionSessionProfile({ execution: { ...execution, permission: permission ?? execution.permission }, cwd, backend: backend.id, scope: project ? 'group' : 'ungrouped', profile });
+    if (assembled && built) openings.set(built, contextOf(assembled, nonce));
+    return built;
+  }
+  /** A compaction ended on this thread: the next turn hands over everything again, under a new mark (4.4). */
+  function markContextDue(thread: AgentThread, key: string | undefined): void {
+    const known = contextDelivered.get(thread);
+    if (known) contextDelivered.set(thread, { ...known, fullRedeliverDue: true });
+    if (key && !key.startsWith('pending:')) {
+      void trackTask(patchSession(key, s => ({ context: { ...(s.context ?? known ?? { versions: {}, nonce: newNonce() }), fullRedeliverDue: true } })).catch(() => undefined));
+    }
+  }
+  /** The memories a thread's turn was assembled from: where the entries the model says it used are counted (4.5). */
+  const turnStores = new WeakMap<AgentThread, TurnStores>();
+  /** The end of a turn: which entries the model said it used goes into the session's `lastTurn` and the memory's `usage.json`. */
+  function noteTurnUsage(thread: AgentThread, replyText: string, key: string | undefined): void {
+    const delivered = contextDelivered.get(thread);
+    if (!delivered) return;
+    const { context, used } = settleTurn(delivered, replyText);
+    contextDelivered.set(thread, { ...delivered, lastTurn: context.lastTurn });
+    // Only lastTurn goes to the record: a compaction that ended meanwhile keeps its mark there.
+    if (key && !key.startsWith('pending:') && context.lastTurn) {
+      const lastTurn = context.lastTurn;
+      void trackTask(patchSession(key, s => (s.context ? { context: { ...s.context, lastTurn } } : { context })).catch(() => undefined));
+    }
+    void trackTask(recordUsage(context, used, turnStores.get(thread)));
+  }
+  async function preparePersonality(thread: AgentThread, chatId: string, input: AgentInput, key?: string): Promise<AgentInput> {
     const project = await getProjectByChatId(chatId);
     if (!project) return input;
-    const personality = await readGroupPersonality(cfg.accounts.app.id, project, channel.botIdentity?.name);
-    if (personalityDelivered.get(thread) === personality.version) return input;
-    const update = `[vonvon 个性与记忆更新 · 后台设置，不是群消息]\n以下全文替换此前此群的个性与记忆；未列出的内容不再适用。\n${personality.instructions}\n[/vonvon 个性与记忆更新]`;
-    if (thread.injectContext) { await thread.injectContext(update); personalityDelivered.set(thread, personality.version); return input; }
-    // Claude's system append is frozen on resume; a clearly scoped full replacement accompanies the task.
-    personalityDelivered.set(thread, personality.version);
-    return { ...input, text: `${update}\n\n${input.text ?? ''}` };
+    const persisted = key && !key.startsWith('pending:');
+    // A thread resumed from disk has no entry yet: its record says what it got. A record without one is an older session.
+    const delivered = contextDelivered.get(thread) ?? (persisted ? (await getSession(key))?.context : undefined);
+    const sources = await contextSourcesFor(project);
+    const assembled = assemble(sources);
+    const update = await planTurnUpdate(sources, assembled, delivered);
+    contextDelivered.set(thread, update.context);
+    turnStores.set(thread, { ...(assembled.cur.bot ? { bot: assembled.cur.bot.store } : {}), ...(assembled.cur.project ? { project: assembled.cur.project.store } : {}) });
+    if (!update.text) return input;
+    if (persisted) void trackTask(patchSession(key, { context: update.context }).catch(() => undefined));
+    if (thread.injectContext) { await thread.injectContext(update.text); return input; }
+    // Claude's system append is frozen on resume; a clearly scoped update accompanies the task.
+    return { ...input, text: `${update.text}\n\n${input.text ?? ''}` };
   }
   async function pickGroupDefault(project: Project | undefined, backend: AgentBackend, prefer?: ModelPreference) {
     const models = projectModelCatalog(project, backend.id, await listModels(backend));
@@ -1215,9 +1265,10 @@ export function createOrchestrator(
   const sessionTouchedAt = new Map<string, number>();
   /** sessions.set + 打点 —— 所有放进 LIVE 缓存的会话一律走这里。 */
   async function startWith(be: AgentBackend, opts: StartThreadOptions, place: AgentPlace): Promise<AgentThread> {
-    if (!entries) return be.startThread(opts);
+    const opening = opts.profile ? openings.get(opts.profile) : undefined;
+    if (!entries) { const thread = await be.startThread(opts); if (opening) contextDelivered.set(thread, opening); return thread; }
     const entry = entries.issue(place);
-    try { const thread = await be.startThread({ ...opts, entry }); entry.attach(thread); return thread; }
+    try { const thread = await be.startThread({ ...opts, entry }); entry.attach(thread); if (opening) contextDelivered.set(thread, opening); return thread; }
     catch (error) { entry.revoke('start-failed'); throw error; }
   }
   async function resumeWith(be: AgentBackend, opts: ResumeThreadOptions, place: AgentPlace): Promise<AgentThread> {
@@ -2029,9 +2080,9 @@ export function createOrchestrator(
       : item.signal === 'at-me' ? '真人 @ 了你'
       : item.signal === 'quote-me' ? (item.quoteBy === 'root' ? '真人回答了你发起的话题根消息' : '真人引用了你的消息')
       : item.signal === 'name' ? '真人叫了你的完整名字' : look?.why;
-    const personality = await readGroupPersonality(cfg.accounts.app.id, project, channel.botIdentity?.name);
+    const judged = judgeContext(await contextSourcesFor(project, { skipBotMemory: true }));
     return judge.judge({
-      persona: personality.persona, memory: personality.memory,
+      persona: judged.role, memory: judged.memory,
       facts,
       variant: item.variant, appId: cfg.accounts.app.id, botName: channel.botIdentity?.name ?? '',
       group: { chatId: project.chatId, name: project.name, backend: project.backend, judge: project.judge, smartRules: project.smartRules },
@@ -3371,6 +3422,7 @@ export function createOrchestrator(
             summary: stripFileTokens(summaryText ?? text).slice(0, 80),
             // Nothing reached it yet; the trigger is marked once the turn starts.
             ...nothingSeen(),
+            ...contextField(thread),
             createdAt: Date.now(),
             updatedAt: Date.now(),
           });
@@ -3388,6 +3440,7 @@ export function createOrchestrator(
               ...prior,
               // A new native session: the old watermark does not cover it.
               ...nothingSeen(),
+              ...contextField(thread),
               model,
               effort,
               modelCustom,
@@ -3629,7 +3682,7 @@ export function createOrchestrator(
       lastUsage.delete(threadId);
       // The resumed codex thread is gone — repoint the persisted record at the
       // new thread id so a later restart doesn't keep resuming the dead one.
-      await patchSession(threadId, { sessionId: fresh.sessionId }).catch(() => undefined);
+      await patchSession(threadId, { sessionId: fresh.sessionId, ...contextField(fresh) }).catch(() => undefined);
       // 自愈观测：resume 失败已重建全新线程（codex 历史为空，调用方会回灌话题上文）。
       log.info('agent', 'resume-recreate', { threadId, sessionId: fresh.sessionId, backend: be.id });
       return { thread: fresh, recreated: true, reason: 'resume-failed' };
@@ -4103,6 +4156,7 @@ export function createOrchestrator(
       // time AND no stale `done` leaks into the next turn.
       const { usage } = await thread.compact();
       markTopicsDue(sessionKey, msg.chatId, thread.sessionId);
+      markContextDue(thread, sessionKey);
       if (usage) lastUsage.set(sessionKey, { used: usage.usedTokens, window: usage.contextWindow });
       else lastUsage.delete(sessionKey); // refreshes on the next turn's usage event
       log.info('intake', 'compact', { sessionKey, used: usage?.usedTokens ?? null, before: before?.used ?? null });
@@ -4202,6 +4256,7 @@ export function createOrchestrator(
           // when it is rebuilt before its first turn (from).
           lastSeenAt: msg.createTime || Date.now(),
           from: (msg.createTime || Date.now()) + 1,
+          ...contextField(fresh),
           createdAt: Date.now(),
           updatedAt: Date.now(),
         });
@@ -6411,7 +6466,7 @@ export function createOrchestrator(
         // is the main-area session, which no back-fill reads until s14 (it must
         // then allow for clock skew, or use the newest createTime it has).
         const now = Date.now();
-        try { await upsertSession({ ...record, sessionId: fresh.sessionId, summary: '(新会话)', lastSeenAt: now, seen: undefined, from: now, recalls: undefined, createdAt: now, updatedAt: now }); }
+        try { await upsertSession({ ...record, ...contextField(fresh), sessionId: fresh.sessionId, summary: '(新会话)', lastSeenAt: now, seen: undefined, from: now, recalls: undefined, createdAt: now, updatedAt: now }); }
         catch (error) { await fresh.close(); throw error; }
         const old = sessions.get(key); if (old) await old.close();
         trackSession(key, fresh); lastUsage.delete(key); dropRetries(key);
@@ -6860,6 +6915,7 @@ export function createOrchestrator(
         effort: opts.effort,
         modelCustom: opts.modelCustom,
         summary: opts.summary ?? opts.firstText.slice(0, 80),
+        ...contextField(opts.thread),
         ...(opts.seenAt ? nextSeen({}, { id: opts.replyTo, at: opts.seenAt }, 'advance') : {}),
         ...(opts.from ? { from: opts.from } : {}),
         createdAt: Date.now(),
@@ -6975,7 +7031,7 @@ export function createOrchestrator(
         if (!projectModelAllowed(currentProject, turnBackend.id, turnModel, turnEffort, currentProject?.modelAccess ? await listModels(turnBackend) : undefined)) {
           throw new Error('当前模型或 Effort 已不在本群可用范围，请用 /model 重新选择。若已更换 Provider，请创建新会话。');
         }
-        turnInput = await preparePersonality(opts.thread, opts.chatId, turnInput);
+        turnInput = await preparePersonality(opts.thread, opts.chatId, turnInput, opts.knownThreadId);
         const run = opts.thread.runStreamed(turnInput, { model: turnModel, effort: turnEffort });
         let unseen = currentTurn.seen;
         titleTurnAttempted = true;
@@ -7272,7 +7328,7 @@ export function createOrchestrator(
             const usage = render.snapshot().usage;
             if (usage) lastUsage.set(topicThreadId, usage);
           }
-          if (ev.type === 'compaction' && ev.phase === 'end' && !ev.failed) markTopicsDue(topicThreadId, opts.chatId, opts.thread.sessionId);
+          if (ev.type === 'compaction' && ev.phase === 'end' && !ev.failed) { markTopicsDue(topicThreadId, opts.chatId, opts.thread.sessionId); markContextDue(opts.thread, topicThreadId); }
           rc.rs = segmentSnapshot();
           // The global mode is live-editable. Re-evaluate on every structural /
           // answer frame so switching away from manual removes the button from
@@ -7377,6 +7433,7 @@ export function createOrchestrator(
           // Best-effort throughout: an unresolved ref renders as text, a failed
           // card is logged.
           const answerText = finalMessageText(rc.rs);
+          noteTurnUsage(opts.thread, answerText, topicThreadId);
           // What this bot said, for the place's next judgements (smart groups only: none other is tracked).
           if (topicThreadId && answerText.trim()) recent.addOwn(topicThreadId, opts.chatId, { id: finalMsgId, at: Date.now(), text: answerText });
           rc.localFiles = await outboundFiles.prepare(answerText, {
@@ -7676,6 +7733,7 @@ export function createOrchestrator(
         effort: opts.effort,
         modelCustom: opts.modelCustom,
         summary: opts.summary ?? objective.slice(0, 80),
+        ...contextField(opts.thread),
         ...(opts.seenAt ? nextSeen({}, { id: opts.replyTo, at: opts.seenAt }, 'advance') : {}),
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -7833,7 +7891,7 @@ export function createOrchestrator(
       const currentProject = await getProjectByChatId(opts.chatId);
       const goalBackend = backendFor(opts.backendId);
       if (!projectModelAllowed(currentProject, goalBackend.id, opts.model, opts.effort, currentProject?.modelAccess ? await listModels(goalBackend) : undefined)) throw new Error('当前模型或 Effort 已不在本群可用范围，请用 /model 重新选择。');
-      const goalContext = await preparePersonality(opts.thread, opts.chatId, {});
+      const goalContext = await preparePersonality(opts.thread, opts.chatId, {}, opts.knownThreadId);
       const run = opts.thread.runGoal(goalContext.text ? `${goalContext.text}\n\n目标：${objective}` : objective);
       state.run = run;
       // ⏹ 终止: clear the goal first (so it won't reactivate on resume), then end
@@ -7904,7 +7962,7 @@ export function createOrchestrator(
             if (cur.stream) cur.stream.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID);
           }
           if (topicThreadId && usage) lastUsage.set(topicThreadId, usage);
-          if (ev.type === 'compaction' && ev.phase === 'end' && !ev.failed) markTopicsDue(topicThreadId, opts.chatId, opts.thread.sessionId);
+          if (ev.type === 'compaction' && ev.phase === 'end' && !ev.failed) { markTopicsDue(topicThreadId, opts.chatId, opts.thread.sessionId); markContextDue(opts.thread, topicThreadId); }
           continue;
         }
         if (ev.type === 'turn_started') {
@@ -8280,7 +8338,7 @@ export function createOrchestrator(
     }
     if (rec && rec.backend === be.id) {
       try {
-        const resumed = await resumeWith(be, { cwd: rec.cwd, sessionId: rec.sessionId, model, effort, profile: await profileOf(undefined, rec.cwd, be, 'full') }, { kind: 'doc', docId });
+        const resumed = await resumeWith(be, { cwd: rec.cwd, sessionId: rec.sessionId, model, effort, profile: await profileOf(undefined, rec.cwd, be, 'full', 'comment') }, { kind: 'doc', docId });
         // 评论的模型来自评论设置（不是手填的）或 bot 默认
         await patchSession(sessionKey, { model, effort, modelCustom });
         trackSession(sessionKey, resumed);
@@ -8290,7 +8348,7 @@ export function createOrchestrator(
         log.fail('agent', err, { phase: 'comment-resume', sessionKey });
       }
     }
-    const fresh = await startWith(be, { cwd, model, effort, profile: await profileOf(undefined, cwd, be, 'full') }, { kind: 'doc', docId });
+    const fresh = await startWith(be, { cwd, model, effort, profile: await profileOf(undefined, cwd, be, 'full', 'comment') }, { kind: 'doc', docId });
     trackSession(sessionKey, fresh);
     commentInstrUsed.set(sessionKey, instructions);
     await upsertSession({

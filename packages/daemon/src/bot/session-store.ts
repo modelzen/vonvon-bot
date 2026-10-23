@@ -68,8 +68,30 @@ export interface SessionRecord {
    * ordinary turn and then dropped (product.md 3.5 "撤回和编辑"). Ids, times and
    * open_ids only, never text. Older records lack it. */
   recalls?: RecallNote[];
+  /** What the session was last handed of vonvon's role, supplement and memory (bot/context-assembly.ts). A record
+   * without it is an older session: its next turn gets the whole thing again. */
+  context?: SessionContext;
   createdAt: number;
   updatedAt: number;
+}
+
+/** What one memory looked like when the session last got it: `[text hash, branch, 1 if trusted]` per active entry. */
+export interface MemoryDelivered {
+  storeId: string;
+  lastEventId?: string;
+  /** The branch list the model was told, in order. */
+  branches: string[];
+  items: Record<string, [string, string, 0 | 1]>;
+}
+export interface SessionContext {
+  /** Section → version of what was last delivered. */
+  versions: Record<string, string>;
+  /** Random per session, changed at each whole redelivery; the update blocks and `<vonvon-mem>` carry it. */
+  nonce: string;
+  /** A compaction ended since: the next turn hands over everything again. */
+  fullRedeliverDue?: boolean;
+  memory?: Record<string, MemoryDelivered>;
+  lastTurn?: { at: number; injected: number; used: string[] };
 }
 
 /** A recalled message the session got: its id and send time, who sent it, and

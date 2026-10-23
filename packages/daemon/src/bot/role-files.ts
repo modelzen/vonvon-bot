@@ -10,7 +10,7 @@ import { createPersonalityFiles, PERSONALITY_SAFETY_BYTES, type PersonalityFile,
 /**
  * 角色设定（记忆设计 2.3）：`SOUL.md` 里的两段，身份与职责、其他说明。没有单独的"规矩"（D6），
  * `bots/<appId>/AGENTS.md` 迁移（步骤 R）以后不再读写。这里也是这个 bot 目录下 `SOUL.md` 的唯一写入口，
- * 旧读法（group-profile.ts）要写它时也走 {@link withBotFiles}，同一把锁。
+ * 旧读法要写它时也走 {@link withBotFiles}，同一把锁。
  */
 
 export const IDENTITY_HEADING = '## 身份与职责';
@@ -92,7 +92,8 @@ export function roleDraft(botName: string | undefined): string {
 const MAX_CHARACTERS = PERSONALITY_SAFETY_BYTES;
 const chains = new Map<string, Promise<unknown>>();
 
-function botRoot(appId: string): string {
+/** `bots/<appId>/`, from the bot's explicit paths (never the process-global ones). */
+export function botRoot(appId: string): string {
   if (!/^[A-Za-z0-9_-]{1,200}$/u.test(appId)) throw new Error('无效 Bot 标识');
   const paths = botPaths(appId);
   return paths.dir ?? dirname(paths.configFile);
@@ -235,7 +236,7 @@ export async function readRole(appId: string): Promise<RoleView> {
   };
 }
 
-/** The whole `SOUL.md`, as the old readers (group-profile.ts until P4a) take it; never AGENTS.md. */
+/** The whole `SOUL.md`, as the old readers take it; never AGENTS.md. */
 export async function readSoulText(appId: string): Promise<string> { return readText(await botFiles(appId), { kind: 'bot-soul' }); }
 
 /**

@@ -49,25 +49,23 @@ beforeEach(async () => {
 });
 afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
 
-it('stores independent profile fields, keeps inherited text live and conflicts on concurrent edits', async () => {
+it('keeps the old profile sections read-only and conflicts on concurrent role edits', async () => {
   const owner = createSettingsOwner(deps());
   let a = await owner.read(agent) as AgentSettingsView;
   expect((await owner.save({ scope: agent, section: 'role', revision: a.sections.role!.revision, patch: { identity: '公共个性' } })).kind).toBe('saved');
   a = await owner.read(agent) as AgentSettingsView;
-  expect((await owner.save({ scope: agent, section: 'profile', revision: a.sections.profile!.revision, patch: { memory: '公共记忆' } })).kind).toBe('saved');
+  agentViewSchema.parse(a);
+  // the shared memory is the bot's memory entries now: nothing is written to the old section
+  expect(await owner.save({ scope: agent, section: 'profile', revision: a.sections.profile!.revision, patch: { memory: '公共记忆' } })).toMatchObject({ kind: 'rejected', fields: [{ message: expect.stringContaining('Bot 记忆') }] });
   let p = await view(owner);
   expect(projectViewSchema.safeParse(p).success).toBe(true);
-  const replies = await Promise.all(['本群一', '本群二'].map(persona => owner.save({ scope, section: 'profile', revision: p.sections.profile!.revision, patch: { persona, memory: '本群记忆', inheritPersona: false, inheritMemory: true } })));
+  expect(await owner.save({ scope, section: 'profile', revision: p.sections.profile!.revision, patch: { persona: '本群', memory: '本群记忆' } })).toMatchObject({ kind: 'rejected', fields: [{ message: expect.stringContaining('补充职责') }] });
+  const replies = await Promise.all(['本群一', '本群二'].map(supplement => owner.save({ scope, section: 'role', revision: p.sections.role!.revision, patch: { supplement } })));
   expect(replies.map(x => x.kind).sort()).toEqual(['conflict', 'saved']);
-  const winningPersona = replies[0]!.kind === 'saved' ? '本群一' : '本群二';
   p = await view(owner);
-  expect(p.sections.profile!.effective).toMatchObject({ persona: winningPersona, memory: '公共记忆\n\n本群记忆' });
-  a = await owner.read(agent) as AgentSettingsView;
-  agentViewSchema.parse(a);
-  await owner.save({ scope: agent, section: 'profile', revision: a.sections.profile!.revision, patch: { memory: '更新的公共记忆' } });
-  p = await view(owner);
-  expect(p.sections.profile!.stored.memory).toBe('本群记忆');
-  expect(p.sections.profile!.effective.memory).toBe('更新的公共记忆\n\n本群记忆');
+  expect(p.sections.role!.stored.supplement).toBe(replies[0]!.kind === 'saved' ? '本群一' : '本群二');
+  // the old section is only a record: it shows the row's own `profile`, never a file
+  expect(p.sections.profile!.effective).toEqual(p.sections.profile!.stored);
 });
 
 it('keeps models and efforts independent and prevents legacy project/session model writes bypassing removal', async () => {
@@ -159,6 +157,8 @@ it('freezes inherited legacy choices without dropping old session model IDs or u
   const p = (await getProjectByName('demo'))!;
   expect(p.modelAccess!.models).toEqual(expect.arrayContaining(['a', 'old-gateway', 'old-topic']));
   expect(p).toMatchObject({ future: 'preserve', defaultModel: 'old-gateway', pendingPolicy: 'queue', presentation: { showToolCalls: false }, smartRules: { respond: oldSmart } });
+  // the materialization no longer writes `profile`: the role is the bot's file, the supplement and memory are the migration's
+  expect(p.profile).toBeUndefined();
 });
 
 it('edits only local sections while stopped, keeps live actions gated, and never steals its own process lock', async () => {
@@ -245,7 +245,7 @@ it('edits the role as two sections of SOUL.md and keeps the editor to those two 
   expect(await owner.save({ scope: agent, section: 'profile', revision: a.sections.profile!.revision, patch: { persona: '直接改' } })).toMatchObject({ kind: 'rejected', fields: [{ message: expect.stringContaining('角色设定') }] });
 });
 
-it('writes a group supplement to the row and to profile.persona until P4a, and shows a row without one by its persona', async () => {
+it('writes a group supplement to the row only, and shows a row the migration has not reached by its old persona', async () => {
   const owner = createSettingsOwner(deps());
   let p = await view(owner);
   projectViewSchema.parse(p);
@@ -256,10 +256,10 @@ it('writes a group supplement to the row and to profile.persona until P4a, and s
   expect((await owner.save({ scope, section: 'role', revision: p.sections.role!.revision, patch: { supplement: '少说话' } })).kind).toBe('saved');
   const row = (await getProjectByName('demo'))!;
   expect(row.supplement).toBe('少说话');
-  expect(row.profile).toMatchObject({ persona: '少说话', inheritPersona: true });
+  expect(row.profile).toMatchObject({ persona: '旧本群个性' });
   p = await view(owner);
   expect(await owner.save({ scope, section: 'role', revision: p.sections.role!.revision, patch: { supplement: '字'.repeat(5001) } })).toMatchObject({ kind: 'rejected', fields: [{ message: expect.stringContaining('5000') }] });
-  // a persona saved through the old section is the supplement too
-  expect((await owner.save({ scope, section: 'profile', revision: p.sections.profile!.revision, patch: { persona: '老入口' } })).kind).toBe('saved');
-  expect((await getProjectByName('demo'))!.supplement).toBe('老入口');
+  // a row the migration has handled does not fall back to its old persona
+  await mutateProject('demo', async current => { delete current.supplement; current.migration = { memory: 1 }; });
+  expect((await view(owner)).sections.role!.stored).toEqual({ supplement: '' });
 });
