@@ -1,4 +1,6 @@
-import type { AgentEntries, AgentPlace, TurnScope } from '../agent/entry/registry';
+import type { AgentEntries, AgentPlace, TurnMemory, TurnScope } from '../agent/entry/registry';
+import { createHiddenBlockFilter, escapeInboundMarkers, memoryNonce, noteMissedBlocks, takeLastMissed, takeMemoryNotices, type FoundBlocks, type RawBlock } from './hidden-blocks';
+import type { MemoryWriter } from './memory-writer';
 import { redactAgentEvents } from '../core/token-redact';
 import { buildJudgeFacts, judgeFactRead, sameNameWord } from './judge-facts';
 import { bareText, smartSalience, type Salience, type SalienceDeps } from './salience';
@@ -10,13 +12,16 @@ import { createPendingGroups, pendingGroupsFile } from '../project/pending-group
 import { realpath, stat } from 'node:fs/promises';
 import type { BotIdentity } from '../config/bots';
 import { createHash, randomUUID } from 'node:crypto';
-import { readGroupPersonality } from './group-profile';
+import { settleTurn, recordUsage, type TurnStores } from './turn-usage';
+import { assemble, judgeContext, loadContextSources, openingInstructions, planTurnUpdate, contextOf, newNonce, type ContextPlace } from './context-assembly';
 import { groupSkillProfile } from '../agent/group-skills';
 import { parseStoredJudge } from '../judge/model';
 import { presentationConfig } from './group-presentation';
 import { createSkillChat } from './skill-chat';
 import { projectRevision, projectView, type CollaborationRequest } from '../admin/collaboration';
 import { AdminWriteError } from '../admin/ops';
+import { applyMirror, mirrorProjectIntoBot, siblingProjectOfChat, type AdminLibraryOp } from '../admin/library';
+import { isProjectId, readLibrary, type LibraryProject } from '../project/library';
 import { createSettingsOwner, materializeGroupSettings } from '../admin/settings';
 import { validateProviderJudge } from '../project/initial-settings';
 import type { HostSettings } from '../admin/settings-types';
@@ -166,6 +171,7 @@ import {
   buildDoctorCard,
   buildGroupSettingsCard,
   buildJoinGroupFormCard,
+  parseProjectPick,
   parseNoMentionPick,
   buildModelDefaultCard,
   parseModelDefaultFormValue,
@@ -255,6 +261,8 @@ import {
   nextSeen,
   nothingSeen,
   patchSession,
+  acceptedNonces,
+  type SessionContext,
   sessionHolder,
   sessionTitleJobKey,
   upsertSession,
@@ -495,6 +503,9 @@ export interface QueuedTurn {
    * (turn_started), never when it is queued or dequeued: a dropped queue or a
    * refused turn/start must leave it for the next back-fill. */
   seen?: SeenMark;
+  /** The message that triggered this turn, when {@link seen} is not set (a new topic's first turn): what the turn's
+   * memory facts count as typed by a person (agent/entry/registry.ts `openTurn`). */
+  triggerMessageId?: string;
   /** How {@link seen} moves the watermark (session-store.nextSeen); 'id' when unset. */
   seenHow?: SeenHow;
   /** Other bots' cards its record block wove while they were still streaming (SessionRecord.streaming). */
@@ -514,7 +525,11 @@ export interface QueuedTurn {
   /** The smart mode joined in on its own (TurnExtra.initiative): its card goes if it ends with nothing to say (s25b). */
   initiative?: true;
   wake?: TurnExtra['wake'];
+  /** The trigger message as typed, for the memory provenance check (记忆设计 §3.2); absent for a bot's message and a retry. */
+  memoryTrigger?: MemoryTrigger;
 }
+/** What the memory write rules look at in the trigger message: that a person typed it, and its own words (no quote, forward or record block). */
+export interface MemoryTrigger { typed: boolean; text: string }
 
 /** A resumed session's title for its record and topic. Without a native name
  * the backend's preview is the first prompt as the bot wove it, record block
@@ -854,6 +869,8 @@ export interface Orchestrator {
   onRecall: (evt: RecallEvent) => Promise<void>;
   dispatcher: CardDispatcher;
   adminExecute: (op: AdminWriteOp) => Promise<AdminWriteResult>;
+  /** The host changed a library project's workspace: this bot's rows of it follow, their groups' sessions archived (admin/library.ts). */
+  libraryExecute: (op: AdminLibraryOp) => Promise<unknown>;
   settings: HostSettings;
   /** Close every live codex session (SIGKILLs the app-server children) so a
    *  graceful exit leaves no orphan processes. */
@@ -1026,9 +1043,10 @@ export function createOrchestrator(
   /** `droppedFile`: where a shutdown keeps the queued messages it drops (s18c). No default: without it, nothing is
    * kept or answered (tests, and every caller but `daemon run`). */
   // Only daemon run supplies judgeUsageFile; tests that omit it do not persist usage.
-  options?: { entries?: AgentEntries; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention },
+  options?: { entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention },
 ): Orchestrator {
   const entries = options?.entries;
+  const memory = options?.memory;
   const bindingBot = options?.bot ? { ...options.bot } : undefined;
   /** Lazily-constructed backends by id — one instance per backend for the whole
    * bridge (mirrors the old single-instance shape; codex stays the default). */
@@ -1049,24 +1067,95 @@ export function createOrchestrator(
   function execOf(project: Project | undefined) {
     return resolveExecution({ bot: cfg.preferences, group: project });
   }
-  async function profileOf(project: Project | undefined, cwd: string, backend: AgentBackend, permission?: PermissionMode) {
-    const execution = execOf(project);
-    const personality = project ? await readGroupPersonality(cfg.accounts.app.id, project, channel.botIdentity?.name) : undefined;
-    const skills = project ? await groupSkillProfile({ backend, cwd, directories: execution.workspaces.additional, disabledPaths: project.skills?.disabledPaths }) : undefined;
-    const profile = personality || skills ? { instructions: personality?.instructions ?? '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: [], capabilityPackages: [], mcpServers: [], ...(skills ? { skills } : {}) } : undefined;
-    return executionSessionProfile({ execution: { ...execution, permission: permission ?? execution.permission }, cwd, backend: backend.id, scope: project ? 'group' : 'ungrouped', profile });
+  /** What vonvon hands a session of `project` (a comment session when there is none): see bot/context-assembly.ts. */
+  async function contextSourcesFor(project: Project | undefined, options: { skipBotMemory?: boolean } = {}) {
+    const place: ContextPlace = project ? { kind: 'group', chatId: project.chatId, chatName: project.name } : { kind: 'comment' };
+    return loadContextSources({
+      appId: cfg.accounts.app.id, botName: channel.botIdentity?.name, place, ...(project ? { row: project } : {}),
+      nameOf: openId => names.peek(openId), chatNames: async () => new Map((await listProjects()).map(row => [row.chatId, row.name] as const)), ...(options.skipBotMemory ? { skipBotMemory: true } : {}),
+    });
   }
-  const personalityDelivered = new WeakMap<AgentThread, string>();
-  async function preparePersonality(thread: AgentThread, chatId: string, input: AgentInput): Promise<AgentInput> {
+  /** Claude has the memory tools and never hidden blocks (3.4); every other backend is told how to leave a block and gets it parsed. */
+  const hiddenBlocksFor = (backendId: string | undefined): boolean => backendFor(backendId).id !== 'claude-agent';
+  /**
+   * The one mark of a session (4.1): the opening, the update blocks, `<vonvon-mem>` and `<vonvon-remember>` all carry
+   * `SessionContext.nonce`. A thread with no context yet (a private chat, a comment) falls back to the per-session value.
+   */
+  const sessionNonce = (thread: AgentThread): string => contextDelivered.get(thread)?.nonce ?? memoryNonce(thread.sessionId);
+  /** Every mark the thread's model may be using (the opening's and earlier redeliveries' too). */
+  const sessionNonces = (thread: AgentThread): string[] => {
+    const context = contextDelivered.get(thread);
+    return context ? acceptedNonces(context) : [memoryNonce(thread.sessionId)];
+  };
+  /** The context a new session was opened with, by the profile object it was opened from (4.2: the record exists only later). */
+  const openings = new WeakMap<object, SessionContext>();
+  /** What each live thread has been handed; a resumed thread reads its record on its first turn. */
+  const contextDelivered = new WeakMap<AgentThread, SessionContext>();
+  const contextField = (thread: AgentThread): { context: SessionContext } | Record<string, never> => {
+    const context = contextDelivered.get(thread);
+    return context ? { context } : {};
+  };
+  async function profileOf(project: Project | undefined, cwd: string, backend: AgentBackend, permission?: PermissionMode, place?: 'comment') {
+    const execution = execOf(project);
+    const sources = project || place === 'comment' ? await contextSourcesFor(project) : undefined;
+    const assembled = sources ? assemble(sources, project ? 'work' : 'comment') : undefined;
+    const nonce = newNonce();
+    const skills = project ? await groupSkillProfile({ backend, cwd, directories: execution.workspaces.additional, disabledPaths: project.skills?.disabledPaths }) : undefined;
+    const profile = assembled || skills ? { instructions: assembled ? openingInstructions(assembled, nonce, { hiddenBlocks: Boolean(project) && hiddenBlocksFor(backend.id) }) : '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: [], capabilityPackages: [], mcpServers: [], ...(skills ? { skills } : {}) } : undefined;
+    const built = await executionSessionProfile({ execution: { ...execution, permission: permission ?? execution.permission }, cwd, backend: backend.id, scope: project ? 'group' : 'ungrouped', profile });
+    if (assembled && built) openings.set(built, contextOf(assembled, nonce));
+    return built;
+  }
+  /** A compaction ended on this thread: the next turn hands over everything again, under a new mark (4.4). */
+  function markContextDue(thread: AgentThread, key: string | undefined): void {
+    const known = contextDelivered.get(thread);
+    if (known) contextDelivered.set(thread, { ...known, fullRedeliverDue: true });
+    if (key && !key.startsWith('pending:')) {
+      void trackTask(patchSession(key, s => ({ context: { ...(s.context ?? known ?? { versions: {}, nonce: newNonce() }), fullRedeliverDue: true } })).catch(() => undefined));
+    }
+  }
+  /** The memories a thread's turn was assembled from: where the entries the model says it used are counted (4.5). */
+  const turnStores = new WeakMap<AgentThread, TurnStores>();
+  /** The `<vonvon-mem>` markers the stream filter took out of this turn's reply: the final card text no longer has them. */
+  const turnMarks = new WeakMap<AgentThread, RawBlock[]>();
+  /** Hidden blocks not taken this turn, kept until the turn's usage is settled (the order of the two is not fixed). */
+  const lastMissed = new WeakMap<AgentThread, string[]>();
+  /** The end of a turn: which entries the model said it used goes into the session's `lastTurn` and the memory's `usage.json`. */
+  function noteTurnUsage(thread: AgentThread, replyText: string, key: string | undefined): void {
+    const marks = turnMarks.get(thread);
+    turnMarks.delete(thread);
+    const delivered = contextDelivered.get(thread);
+    if (!delivered) return;
+    const { context, used } = settleTurn(delivered, replyText, Date.now(), marks);
+    const missed = lastMissed.get(thread);
+    lastMissed.delete(thread);
+    if (missed?.length && context.lastTurn) context.lastTurn = { ...context.lastTurn, missed };
+    contextDelivered.set(thread, { ...delivered, lastTurn: context.lastTurn });
+    if (key && !key.startsWith('pending:') && context.lastTurn) {
+      // The record may be behind the thread (a turn that ran under a pending key never saved what it was handed): the thread's
+      // context wins, except that a compaction marked meanwhile stays marked.
+      void trackTask(patchSession(key, s => ({ context: { ...context, ...(s.context?.fullRedeliverDue ? { fullRedeliverDue: true as const } : {}) } })).catch(() => undefined));
+    }
+    void trackTask(recordUsage(context, used, turnStores.get(thread)));
+  }
+  async function preparePersonality(thread: AgentThread, chatId: string, input: AgentInput, key?: string, backendId?: string): Promise<AgentInput> {
     const project = await getProjectByChatId(chatId);
     if (!project) return input;
-    const personality = await readGroupPersonality(cfg.accounts.app.id, project, channel.botIdentity?.name);
-    if (personalityDelivered.get(thread) === personality.version) return input;
-    const update = `[vonvon 个性与记忆更新 · 后台设置，不是群消息]\n以下全文替换此前此群的个性与记忆；未列出的内容不再适用。\n${personality.instructions}\n[/vonvon 个性与记忆更新]`;
-    if (thread.injectContext) { await thread.injectContext(update); personalityDelivered.set(thread, personality.version); return input; }
-    // Claude's system append is frozen on resume; a clearly scoped full replacement accompanies the task.
-    personalityDelivered.set(thread, personality.version);
-    return { ...input, text: `${update}\n\n${input.text ?? ''}` };
+    const persisted = key && !key.startsWith('pending:');
+    // A thread resumed from disk has no entry yet: its record says what it got. A record without one is an older session.
+    const delivered = contextDelivered.get(thread) ?? (persisted ? (await getSession(key))?.context : undefined);
+    const sources = await contextSourcesFor(project);
+    const assembled = assemble(sources);
+    // What the last turn's hidden blocks could not record goes into this turn's update (3.4); the update carries the entries
+    // written since because the sources above are read now, at the start of the turn.
+    const update = await planTurnUpdate(sources, assembled, delivered, Date.now(), { notices: takeMemoryNotices(thread.sessionId), hiddenBlocks: hiddenBlocksFor(backendId) });
+    contextDelivered.set(thread, update.context);
+    turnStores.set(thread, { ...(assembled.cur.bot ? { bot: assembled.cur.bot.store } : {}), ...(assembled.cur.project ? { project: assembled.cur.project.store } : {}) });
+    if (!update.text) return input;
+    if (persisted) void trackTask(patchSession(key, { context: update.context }).catch(() => undefined));
+    if (thread.injectContext) { await thread.injectContext(update.text); return input; }
+    // Claude's system append is frozen on resume; a clearly scoped update accompanies the task.
+    return { ...input, text: `${update.text}\n\n${input.text ?? ''}` };
   }
   async function pickGroupDefault(project: Project | undefined, backend: AgentBackend, prefer?: ModelPreference) {
     const models = projectModelCatalog(project, backend.id, await listModels(backend));
@@ -1224,6 +1313,8 @@ export function createOrchestrator(
       throw new ThreadPermissionChanged('旧权限会话没能关闭，请稍后重试。', {cause: error});
     } finally { clearTimeout(timer); }
   }
+  /** The profile a thread was actually started with: a permission save can swap in a rebuilt one (and its opening). */
+  const profileUsed = new WeakMap<AgentThread, object>();
   /** A save can finish while a provider is starting, before eviction can see its thread. */
   async function createWithPermission<T extends StartThreadOptions>(be: AgentBackend, original: T, place: AgentPlace, create: (opts: T) => Promise<AgentThread>): Promise<AgentThread> {
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -1238,6 +1329,7 @@ export function createOrchestrator(
       let thread: AgentThread;
       try { thread = await create({...opts, ...(entry ? {entry} : {})}); entry?.attach(thread); }
       catch (error) { entry?.revoke('start-failed'); throw error; }
+      if (opts.profile) profileUsed.set(thread, opts.profile);
       const fingerprint = permissionFingerprint(opts);
       threadPermissions.set(thread, fingerprint);
       let current: Project | undefined;
@@ -1254,10 +1346,58 @@ export function createOrchestrator(
   const sessionTouchedAt = new Map<string, number>();
   /** sessions.set + 打点 —— 所有放进 LIVE 缓存的会话一律走这里。 */
   async function startWith(be: AgentBackend, opts: StartThreadOptions, place: AgentPlace): Promise<AgentThread> {
-    return createWithPermission(be, opts, place, options => be.startThread(options));
+    const thread = await createWithPermission(be, opts, place, options => be.startThread(options));
+    const used = profileUsed.get(thread);
+    const opening = used ? openings.get(used) : undefined;
+    if (opening) contextDelivered.set(thread, opening);
+    return thread;
   }
   async function resumeWith(be: AgentBackend, opts: ResumeThreadOptions, place: AgentPlace): Promise<AgentThread> {
     return createWithPermission(be, opts, place, options => be.resumeThread(options));
+  }
+
+  /**
+   * 助手正文里的隐藏块（记忆设计 §3.4）：所有出口都剥；只有群和私聊里普通的一轮、会话用的是 Codex（Claude 有工具，不认隐藏块）
+   * 时，才在 `done` 之前解析最后一条消息里的块。评论里不解析（`applyBlocks` 里按位置再关一道）。
+   */
+  function hiddenBlockFilter(thread: AgentThread, backendId: string | undefined, turn: TurnMemory | undefined, recordKey: () => string | undefined = () => undefined) {
+    const parse = memory && turn && turn.place.kind !== 'doc' && hiddenBlocksFor(backendId);
+    turnMarks.delete(thread);
+    return createHiddenBlockFilter({
+      onTurnEnd: async found => {
+        // Usage markers are read for every backend, whatever the blocks do: the text the card ends with no longer has them.
+        if (found.mem.length) turnMarks.set(thread, found.mem);
+        if (parse) await applyHiddenBlocks(thread, turn, found, recordKey());
+      },
+    });
+  }
+  async function applyHiddenBlocks(thread: AgentThread, turn: TurnMemory, found: FoundBlocks, recordKey?: string): Promise<void> {
+    if (!memory) return;
+    const key = thread.sessionId;
+    const current = sessionNonce(thread);
+    const accepted = sessionNonces(thread);
+    // A block under any mark this session was given counts as the current one (a compaction does not unsay the opening).
+    const normalized: FoundBlocks = { ...found, remember: found.remember.map(block => (block.attrs.n !== undefined && accepted.includes(block.attrs.n) ? { ...block, attrs: { ...block.attrs, n: current } } : block)) };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      // 写不进去也不拖住这一轮的收尾；超时以后轮次一结束，提交点前的重判会把这次写入拒掉
+      const outcome = await Promise.race([
+        memory.applyBlocks({ found: normalized, nonce: current, ctx: { turn: turn.turn, ...(turn.triggerMessageId ? { triggerMessageId: turn.triggerMessageId } : {}) } }),
+        new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), 15_000); timer.unref?.(); }),
+      ]);
+      if (outcome) {
+        noteMissedBlocks(key, outcome.missed);
+        // The turn's usage may already be settled: its `lastTurn` gets the reasons too (taken here, not left for the next turn).
+        const reasons = takeLastMissed(key);
+        if (reasons.length && recordKey && !recordKey.startsWith('pending:')) {
+          void trackTask(patchSession(recordKey, s => (s.context?.lastTurn ? { context: { ...s.context, lastTurn: { ...s.context.lastTurn, missed: reasons } } } : {})).catch(() => undefined));
+          lastMissed.set(thread, reasons);
+        }
+      }
+      else log.warn('memory', 'hidden-block-timeout', {});
+    } catch (error) {
+      log.fail('memory.hidden-block', error, {});
+    } finally { clearTimeout(timer); }
   }
 
   function trackSession(key: string, thread: AgentThread): void {
@@ -1494,6 +1634,11 @@ export function createOrchestrator(
     return (msg.rawContentType === 'text' || msg.rawContentType === 'post') && msg.content.trim().length > 0
       && !messageHasImages(msg) && !messageHasFiles(msg)
       && !msg.mentionAll && !msg.mentions.some((m) => !m.isBot);
+  }
+  /** A turn's trigger for the memory write rules; none for a bot's message or a retry (neither is a person typing). */
+  function memoryTriggerOf(msg: NormalizedMessage, extra: Partial<Pick<TurnExtra, 'replayText' | 'wake' | 'initiative'>> | undefined): { memoryTrigger?: MemoryTrigger } {
+    if (fromBot(msg) || extra?.replayText !== undefined) return {};
+    return { memoryTrigger: { typed: typedCandidate(msg), text: msg.content.trim() } };
   }
   /** Who sent a message, as the topic registry records it. */
   function senderOf(msg: NormalizedMessage): TopicPerson {
@@ -2062,9 +2207,9 @@ export function createOrchestrator(
       : item.signal === 'at-me' ? '真人 @ 了你'
       : item.signal === 'quote-me' ? (item.quoteBy === 'root' ? '真人回答了你发起的话题根消息' : '真人引用了你的消息')
       : item.signal === 'name' ? '真人叫了你的完整名字' : look?.why;
-    const personality = await readGroupPersonality(cfg.accounts.app.id, project, channel.botIdentity?.name);
+    const judged = judgeContext(await contextSourcesFor(project, { skipBotMemory: true }));
     return judge.judge({
-      persona: personality.persona, memory: personality.memory,
+      persona: judged.role, memory: judged.memory,
       facts,
       variant: item.variant, appId: cfg.accounts.app.id, botName: channel.botIdentity?.name ?? '',
       group: { chatId: project.chatId, name: project.name, backend: project.backend, judge: project.judge, smartRules: project.smartRules },
@@ -2202,7 +2347,7 @@ export function createOrchestrator(
       } else noteNotReplied(msg, 'group-updating');
       return;
     }
-    const text = wake?.text ?? msg.content.trim();
+    const text = wake?.text ?? escapeInboundMarkers(msg.content.trim());
     if (sessionModeOf(project) !== 'smart') { noteNotReplied(msg, 'group-updating'); return; }
     // A list changed during judgement must still exclude this bot before it starts a turn.
     if (wake && hasAudience(project) && !(wake.sender.openId && isUserAllowedInProject(cfg, project, wake.sender.openId))) {
@@ -2429,7 +2574,7 @@ export function createOrchestrator(
       }
     }
 
-    const text = msg.content.trim();
+    const text = escapeInboundMarkers(msg.content.trim());
     const cmd = parseCommand(text);
     // `/goal <objective>` anywhere in the message → a persistent autonomous goal
     // run (OKR reaction as the receipt, streaming cards, then a terminal card).
@@ -3157,6 +3302,7 @@ export function createOrchestrator(
         origin: originFor(msg, flat),
         ...(extra?.initiative ? { initiative: true as const } : {}),
         wake: extra?.wake,
+        ...memoryTriggerOf(msg, extra),
       });
       dropRetries(sessionKey);
       log.info('intake', 'queued', { depth: existing.queue.length });
@@ -3404,6 +3550,7 @@ export function createOrchestrator(
             summary: stripFileTokens(summaryText ?? text).slice(0, 80),
             // Nothing reached it yet; the trigger is marked once the turn starts.
             ...nothingSeen(),
+            ...contextField(thread),
             createdAt: Date.now(),
             updatedAt: Date.now(),
           });
@@ -3421,6 +3568,7 @@ export function createOrchestrator(
               ...prior,
               // A new native session: the old watermark does not cover it.
               ...nothingSeen(),
+              ...contextField(thread),
               model,
               effort,
               modelCustom,
@@ -3492,6 +3640,7 @@ export function createOrchestrator(
           ...(recreateReason && !unused ? { sessionNotice: sessionChangeNotice(recreateReason, Boolean(topicId)) } : {}),
           ...(extra?.initiative ? { initiative: true as const } : {}),
           wake: extra?.wake,
+          ...memoryTriggerOf(msg, extra),
         };
         if (recreateReason) log.info('agent', 'session-changed', { sessionKey, reason: recreateReason, ...(unused ? { unused } : {}) });
         if (goal) await trackRun(launchGoalRun(launchOpts));
@@ -3631,16 +3780,31 @@ export function createOrchestrator(
     const be = backendFor(rec.backend);
     await waitReleased(threadId);
     try {
+      const resumeProfile = await profileOf(project, rec.cwd, be, perm.mode);
       const resumed = await resumeWith(be, {
         cwd: rec.cwd,
         sessionId: rec.sessionId,
-        profile: await profileOf(project, rec.cwd, be, perm.mode),
+        profile: resumeProfile,
         model: rec.model,
         effort: rec.effort,
         mode: perm.mode,
         network: perm.network, native: perm.native,
       }, { kind: 'group', chatId });
       trackSession(threadId, resumed);
+      // The opening handed to a resumed session carries a new mark. Claude takes its system append again on resume, so that
+      // opening is what it now holds (the record's mark stays accepted); Codex keeps the instructions it was started with,
+      // so it keeps the record's context and also accepts the mark of the opening that was built.
+      const reopenedProfile = profileUsed.get(resumed) ?? resumeProfile;
+      const reopened = reopenedProfile ? openings.get(reopenedProfile) : undefined;
+      if (reopened) {
+        if (!hiddenBlocksFor(be.id)) {
+          const context: SessionContext = { ...reopened, previousNonces: [...new Set(acceptedNonces(rec.context))].slice(0, 6) };
+          contextDelivered.set(resumed, context);
+          void trackTask(patchSession(threadId, { context }).catch(() => undefined));
+        } else if (rec.context) {
+          contextDelivered.set(resumed, { ...rec.context, previousNonces: [...new Set([...(rec.context.previousNonces ?? []), reopened.nonce])].slice(0, 6) });
+        }
+      }
       // 自愈观测：resume 来源=持久化记录（区分「resume 自愈」与 LIVE 快路径的
       // 普通续轮——后者不经过这里，stream.timing 的 tResolve≈0 是它的指纹）。
       log.info('agent', 'resume-ok', { threadId, sessionId: rec.sessionId, backend: be.id });
@@ -3663,7 +3827,7 @@ export function createOrchestrator(
       lastUsage.delete(threadId);
       // The resumed codex thread is gone — repoint the persisted record at the
       // new thread id so a later restart doesn't keep resuming the dead one.
-      await patchSession(threadId, { sessionId: fresh.sessionId }).catch(() => undefined);
+      await patchSession(threadId, { sessionId: fresh.sessionId, ...contextField(fresh) }).catch(() => undefined);
       // 自愈观测：resume 失败已重建全新线程（codex 历史为空，调用方会回灌话题上文）。
       log.info('agent', 'resume-recreate', { threadId, sessionId: fresh.sessionId, backend: be.id });
       return { thread: fresh, recreated: true, reason: 'resume-failed' };
@@ -3818,6 +3982,7 @@ export function createOrchestrator(
         requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg),
         requestedAt: msg.createTime || tIntake,
         seenAt: msg.createTime,
+        triggerMessageId: msg.messageId,
         // The topic session's oldest line: the opening's first main line, else the trigger (s15).
         from: section ? section.main[0]?.createTime || msg.createTime : undefined,
         openTopic: anchor
@@ -3825,6 +3990,7 @@ export function createOrchestrator(
           : { id: msg.messageId, from: senderOf(msg), at: msg.createTime || undefined, text: msg.content },
         ...(extra?.initiative ? { initiative: true as const } : {}),
         wake: extra?.wake,
+        ...memoryTriggerOf(msg, extra),
         backendId: be.id,
         titleJobKey,
         titleSource,
@@ -4137,6 +4303,7 @@ export function createOrchestrator(
       // time AND no stale `done` leaks into the next turn.
       const { usage } = await thread.compact();
       markTopicsDue(sessionKey, msg.chatId, thread.sessionId);
+      markContextDue(thread, sessionKey);
       if (usage) lastUsage.set(sessionKey, { used: usage.usedTokens, window: usage.contextWindow });
       else lastUsage.delete(sessionKey); // refreshes on the next turn's usage event
       log.info('intake', 'compact', { sessionKey, used: usage?.usedTokens ?? null, before: before?.used ?? null });
@@ -4236,6 +4403,7 @@ export function createOrchestrator(
           // when it is rebuilt before its first turn (from).
           lastSeenAt: msg.createTime || Date.now(),
           from: (msg.createTime || Date.now()) + 1,
+          ...contextField(fresh),
           createdAt: Date.now(),
           updatedAt: Date.now(),
         });
@@ -5304,7 +5472,9 @@ export function createOrchestrator(
       // as a 留痕. Detached so the click acks immediately (join is slow).
       void trackTask((async () => {
         const info = chatId ? await orStop(topicCtx.chatInfo(chatId), { ok: false, topic: false }) : undefined;
-        const formWithBots = { ...form, hasOtherBots: info?.ok && info.bots !== undefined ? info.bots > 1 : undefined };
+        // The group's other bot's project, looked up here and again below: the card carries no project id.
+        const sibling = chatId && bindingBot ? await siblingProjectOfChat(chatId, bindingBot.appId).catch(() => undefined) : undefined;
+        const formWithBots = { ...form, hasOtherBots: info?.ok && info.bots !== undefined ? info.bots > 1 : undefined, ...(sibling ? { sibling: { name: sibling.name } } : {}) };
         let result;
         if (!chatId)
           result = buildJoinGroupFormCard({ ...formWithBots, error: '缺少群标识，请重新从进群通知里打开绑定卡' });
@@ -5323,6 +5493,7 @@ export function createOrchestrator(
               chatId,
               addedBy: op,
               existingPath: cwdIn || undefined,
+              ...(sibling && !cwdIn && parseProjectPick(formValue) === 'join' ? { project: sibling.id } : {}),
               projectsRootDir: cfg.preferences?.projectsRootDir,
               kind,
               noMention: parseNoMentionPick(formValue),
@@ -6217,7 +6388,7 @@ export function createOrchestrator(
       const result = serialCreate(async signal => {
         const directory = request.directory === undefined ? undefined : await realpath(request.directory);
         if (directory !== undefined && !(await stat(directory)).isDirectory()) throw new AdminWriteError('所选文件夹不是目录');
-        const project = await createProject(channel, { requestId: request.requestId, requestSignature: signature, bot, name: request.name, ownerOpenId: owner, existingPath: directory, projectsRootDir: cfg.preferences?.projectsRootDir, kind: request.kind, noMention: request.noMention, backend: request.backend, judge: request.judge, mode: bindModeFor(request.backend), signal });
+        const project = await createProject(channel, { requestId: request.requestId, requestSignature: signature, bot, name: request.name, ownerOpenId: owner, existingPath: directory, project: request.project, projectsRootDir: cfg.preferences?.projectsRootDir, kind: request.kind, noMention: request.noMention, backend: request.backend, judge: request.judge, mode: bindModeFor(request.backend), signal });
         return { ok: true, project: projectView(project) };
       }).catch((error: unknown) => {
         // Every refusal crosses IPC as the bot's own word; a result not known stays a plain error, which the RPC
@@ -6273,6 +6444,17 @@ export function createOrchestrator(
           return { ok: true, groupEffect, ...(warning ? { warning } : {}) };
         }
         const patch: Partial<Project> = {};
+        // A row of a library project mirrors its workspace; the host funnels every change through the library
+        // (admin/library.ts), so a folder arriving here for such a row did not come that way.
+        if (request.directory !== undefined && isProjectId(project.projectId)) throw new AdminWriteError('这个群的工作区归项目管，请改项目的工作区');
+        // 换到别的项目: the row names the other project and mirrors its workspace; the group's sessions start over.
+        let rebind: LibraryProject | undefined;
+        if (request.project !== undefined) {
+          if (request.directory !== undefined) throw new AdminWriteError('换项目和改文件夹要分两次');
+          rebind = (await readLibrary()).projects.find(item => item.id === request.project);
+          if (!rebind) throw new AdminWriteError('项目不存在，请刷新');
+          if (rebind.id === project.projectId) rebind = undefined;
+        }
         if (request.directory !== undefined) {
           // The same admission as creating and binding (s36c2d). Only a new directory is checked, so an old row already
           // in a refused place can still be turned off; the first change gives an old row its declaration.
@@ -6307,9 +6489,14 @@ export function createOrchestrator(
           else if (mode !== undefined) delete latest.smart; // left by an old daemon, never counted
           Object.assign(latest, patch);
           if (patch.cwd !== undefined) latest.directories = { ...latest.directories, workspaces: { primary: patch.cwd, additional: latest.directories?.workspaces?.additional ?? [] } };
-        });
+          if (rebind) {
+            latest.projectId = rebind.id;
+            latest.migration = { ...latest.migration, library: Date.now() };
+            applyMirror(latest, rebind.workspace);
+          }
+        }, { mirror: rebind !== undefined });
         // 单会话 and 智能 share the main area's session (keyed by chatId): switching between them archives nothing.
-        const archive = (patch.cwd !== undefined && patch.cwd !== project.cwd) || (mode !== undefined && (mode === 'multi' ? 'multi' : 'single') !== ruleKind(project));
+        const archive = (patch.cwd !== undefined && patch.cwd !== project.cwd) || rebind !== undefined || (mode !== undefined && (mode === 'multi' ? 'multi' : 'single') !== ruleKind(project));
         const updated = archive ? await detachSessionsForChat(project.chatId, commit) : await commit();
         if (sessionModeOf(updated) !== sessionModeOf(project)) forgetAttention(project.chatId, 'mode');
         if (archive) expireRetries((retry) => retry.chatId === project.chatId); // its sessions start over
@@ -6434,7 +6621,7 @@ export function createOrchestrator(
         // is the main-area session, which no back-fill reads until s14 (it must
         // then allow for clock skew, or use the newest createTime it has).
         const now = Date.now();
-        try { await upsertSession({ ...record, sessionId: fresh.sessionId, summary: '(新会话)', lastSeenAt: now, seen: undefined, from: now, recalls: undefined, createdAt: now, updatedAt: now }); }
+        try { await upsertSession({ ...record, ...contextField(fresh), sessionId: fresh.sessionId, summary: '(新会话)', lastSeenAt: now, seen: undefined, from: now, recalls: undefined, createdAt: now, updatedAt: now }); }
         catch (error) { await fresh.close(); throw error; }
         const old = sessions.get(key); if (old) await old.close();
         trackSession(key, fresh); lastUsage.delete(key); dropRetries(key);
@@ -6554,6 +6741,7 @@ export function createOrchestrator(
     /** Whether the group was smart when this run started. */
     smart?: true;
     wake?: TurnExtra['wake'];
+    memoryTrigger?: MemoryTrigger;
     /** true on first reply that creates the topic; subsequent replies use replyTo only */
     replyInThread?: boolean;
     thread: AgentThread;
@@ -6592,6 +6780,8 @@ export function createOrchestrator(
     openTopic?: TopicSighting['first'];
     /** The trigger, marked seen once the host accepts the first turn (see QueuedTurn.seen). */
     seen?: SeenMark;
+    /** See QueuedTurn.triggerMessageId. */
+    triggerMessageId?: string;
     seenHow?: SeenHow;
     /** The first turn's record block: cards still streaming, the ids it carried, the topics it quoted and whether it had the table (see QueuedTurn). */
     streaming?: SeenMark[];
@@ -6816,6 +7006,7 @@ export function createOrchestrator(
     let queuedCard = slot.queuedCard;
     reaction?.started(); // slot acquired → flip OneSecond → Typing
     let turnScope: TurnScope | undefined;
+    let turnMemory: TurnMemory | undefined;
     let askTurn: AskTurn | undefined;
     let firstCardSent = false;
     let titleStart: Promise<boolean> | undefined;
@@ -6884,6 +7075,7 @@ export function createOrchestrator(
         effort: opts.effort,
         modelCustom: opts.modelCustom,
         summary: opts.summary ?? opts.firstText.slice(0, 80),
+        ...contextField(opts.thread),
         ...(opts.seenAt ? nextSeen({}, { id: opts.replyTo, at: opts.seenAt }, 'advance') : {}),
         ...(opts.from ? { from: opts.from } : {}),
         createdAt: Date.now(),
@@ -6934,6 +7126,7 @@ export function createOrchestrator(
         summary: opts.summary,
         replayText: opts.replayText,
         seen: opts.seen,
+        triggerMessageId: opts.triggerMessageId,
         seenHow: opts.seenHow,
         streaming: opts.streaming,
         woven: opts.woven,
@@ -6943,6 +7136,7 @@ export function createOrchestrator(
         from: opts.from,
         ...(opts.initiative ? { initiative: opts.initiative } : {}),
         wake: opts.wake,
+        ...(opts.memoryTrigger ? { memoryTrigger: opts.memoryTrigger } : {}),
       };
       noted = currentTurn;
       // Recall notes a turn of this run said; only a queued turn says the newer ones (s15).
@@ -6956,9 +7150,11 @@ export function createOrchestrator(
         state.requesterKind = currentTurn.requesterKind;
         turnScope = entries?.openTurn(opts.thread, {
           requesterOpenId: currentTurn.requesterOpenId, requesterKind: currentTurn.requesterKind,
-          triggerMessageId: currentTurn.seen?.id, retry: currentTurn.replayText !== undefined,
+          triggerMessageId: currentTurn.seen?.id ?? currentTurn.triggerMessageId, retry: currentTurn.replayText !== undefined,
           initiative: Boolean(currentTurn.initiative), wake: Boolean(currentTurn.wake),
+          ...(currentTurn.memoryTrigger ? { typed: currentTurn.memoryTrigger.typed, triggerText: currentTurn.memoryTrigger.text } : {}),
         });
+        turnMemory = turnScope ? entries?.memoryTurn(opts.thread) : undefined;
         dropRetries(topicThreadId); // an older card's [重试] would replay out of order
         if (titleTurnAttempted && !titleStart && opts.titleJobKey) {
           // A prior turn/start was rejected before turn_started. If a queued
@@ -6999,7 +7195,7 @@ export function createOrchestrator(
         if (!projectModelAllowed(currentProject, turnBackend.id, turnModel, turnEffort, currentProject?.modelAccess ? await listModels(turnBackend) : undefined)) {
           throw new Error('当前模型或 Effort 已不在本群可用范围，请用 /model 重新选择。若已更换 Provider，请创建新会话。');
         }
-        turnInput = await preparePersonality(opts.thread, opts.chatId, turnInput);
+        turnInput = await preparePersonality(opts.thread, opts.chatId, turnInput, topicThreadId, opts.backendId);
         const run = opts.thread.runStreamed(turnInput, { model: turnModel, effort: turnEffort });
         let unseen = currentTurn.seen;
         titleTurnAttempted = true;
@@ -7229,7 +7425,7 @@ export function createOrchestrator(
           fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) originalInterrupt(); },
         });
         const guarded = withIdleTimeout(
-          redactAgentEvents(run.events),
+          redactAgentEvents(run.events, hiddenBlockFilter(opts.thread, opts.backendId, turnMemory, () => topicThreadId)),
           idleMs,
           () => {
             timedOut = true;
@@ -7296,7 +7492,7 @@ export function createOrchestrator(
             const usage = render.snapshot().usage;
             if (usage) lastUsage.set(topicThreadId, usage);
           }
-          if (ev.type === 'compaction' && ev.phase === 'end' && !ev.failed) markTopicsDue(topicThreadId, opts.chatId, opts.thread.sessionId);
+          if (ev.type === 'compaction' && ev.phase === 'end' && !ev.failed) { markTopicsDue(topicThreadId, opts.chatId, opts.thread.sessionId); markContextDue(opts.thread, topicThreadId); }
           rc.rs = segmentSnapshot();
           // The global mode is live-editable. Re-evaluate on every structural /
           // answer frame so switching away from manual removes the button from
@@ -7401,6 +7597,7 @@ export function createOrchestrator(
           // Best-effort throughout: an unresolved ref renders as text, a failed
           // card is logged.
           const answerText = finalMessageText(rc.rs);
+          noteTurnUsage(opts.thread, answerText, topicThreadId);
           // What this bot said, for the place's next judgements (smart groups only: none other is tracked).
           if (topicThreadId && answerText.trim()) recent.addOwn(topicThreadId, opts.chatId, { id: finalMsgId, at: Date.now(), text: answerText });
           rc.localFiles = await outboundFiles.prepare(answerText, {
@@ -7700,6 +7897,7 @@ export function createOrchestrator(
         effort: opts.effort,
         modelCustom: opts.modelCustom,
         summary: opts.summary ?? objective.slice(0, 80),
+        ...contextField(opts.thread),
         ...(opts.seenAt ? nextSeen({}, { id: opts.replyTo, at: opts.seenAt }, 'advance') : {}),
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -7857,7 +8055,7 @@ export function createOrchestrator(
       const currentProject = await getProjectByChatId(opts.chatId);
       const goalBackend = backendFor(opts.backendId);
       if (!projectModelAllowed(currentProject, goalBackend.id, opts.model, opts.effort, currentProject?.modelAccess ? await listModels(goalBackend) : undefined)) throw new Error('当前模型或 Effort 已不在本群可用范围，请用 /model 重新选择。');
-      const goalContext = await preparePersonality(opts.thread, opts.chatId, {});
+      const goalContext = await preparePersonality(opts.thread, opts.chatId, {}, opts.knownThreadId, opts.backendId);
       const run = opts.thread.runGoal(goalContext.text ? `${goalContext.text}\n\n目标：${objective}` : objective);
       state.run = run;
       // ⏹ 终止: clear the goal first (so it won't reactivate on resume), then end
@@ -7899,7 +8097,7 @@ export function createOrchestrator(
       // Child questions can outlive a parent turn; their watchdog holds do too.
       const idlePause = createIdlePause();
       state.idlePause = idlePause;
-      const guarded = withIdleTimeout(redactAgentEvents(run.events), GOAL_IDLE_MS, () => {
+      const guarded = withIdleTimeout(redactAgentEvents(run.events, createHiddenBlockFilter()), GOAL_IDLE_MS, () => {
         idledOut = true;
       }, stop, run.lastActivity, idlePause);
       const originalInterrupt = state.interrupt;
@@ -7928,7 +8126,7 @@ export function createOrchestrator(
             if (cur.stream) cur.stream.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID);
           }
           if (topicThreadId && usage) lastUsage.set(topicThreadId, usage);
-          if (ev.type === 'compaction' && ev.phase === 'end' && !ev.failed) markTopicsDue(topicThreadId, opts.chatId, opts.thread.sessionId);
+          if (ev.type === 'compaction' && ev.phase === 'end' && !ev.failed) { markTopicsDue(topicThreadId, opts.chatId, opts.thread.sessionId); markContextDue(opts.thread, topicThreadId); }
           continue;
         }
         if (ev.type === 'turn_started') {
@@ -8194,7 +8392,7 @@ export function createOrchestrator(
             let stopAsk!: () => void;
             const askStopped = new Promise<void>(resolve => { stopAsk = resolve; });
             const idleMs = currentIdleMs();
-            const guarded = withIdleTimeout(redactAgentEvents(run.events), idleMs, () => {
+            const guarded = withIdleTimeout(redactAgentEvents(run.events, createHiddenBlockFilter()), idleMs, () => {
               timedOut = true;
             }, askStopped, run.lastActivity);
             try {
@@ -8304,7 +8502,7 @@ export function createOrchestrator(
     }
     if (rec && rec.backend === be.id) {
       try {
-        const resumed = await resumeWith(be, { cwd: rec.cwd, sessionId: rec.sessionId, model, effort, profile: await profileOf(undefined, rec.cwd, be, 'full') }, { kind: 'doc', docId });
+        const resumed = await resumeWith(be, { cwd: rec.cwd, sessionId: rec.sessionId, model, effort, profile: await profileOf(undefined, rec.cwd, be, 'full', 'comment') }, { kind: 'doc', docId });
         // 评论的模型来自评论设置（不是手填的）或 bot 默认
         await patchSession(sessionKey, { model, effort, modelCustom });
         trackSession(sessionKey, resumed);
@@ -8314,7 +8512,7 @@ export function createOrchestrator(
         log.fail('agent', err, { phase: 'comment-resume', sessionKey });
       }
     }
-    const fresh = await startWith(be, { cwd, model, effort, profile: await profileOf(undefined, cwd, be, 'full') }, { kind: 'doc', docId });
+    const fresh = await startWith(be, { cwd, model, effort, profile: await profileOf(undefined, cwd, be, 'full', 'comment') }, { kind: 'doc', docId });
     trackSession(sessionKey, fresh);
     commentInstrUsed.set(sessionKey, instructions);
     await upsertSession({
@@ -8431,7 +8629,8 @@ export function createOrchestrator(
         return;
       }
       const fullOnly = backendFor(DEFAULT_BACKEND_ID).fullAccessOnly?.();
-      const card = buildJoinGroupFormCard({ chatId: evt.chatId, name, topic, backends, backend,
+      const sibling = bindingBot ? await orStop(siblingProjectOfChat(evt.chatId, bindingBot.appId).catch(() => undefined), undefined) : undefined;
+      const card = buildJoinGroupFormCard({ chatId: evt.chatId, name, topic, backends, backend, ...(sibling ? { sibling: { name: sibling.name } } : {}),
         hasOtherBots: mode.ok && mode.bots !== undefined ? mode.bots > 1 : undefined,
         fullOnly, addedBy: admin ? undefined : { name: adderName } });
       const sent = await orStop(sendManagedCard(channel, to, card, undefined, false, 'open_id').then(() => 'yes', error => {
@@ -8769,6 +8968,28 @@ export function createOrchestrator(
     return result;
   };
 
+  /**
+   * The host changed a library project's workspace (admin/library.ts): this bot's rows of it take the new folders and
+   * their groups' sessions are archived the way `editProject` always did: the next turn opens a new session. A group
+   * is held for the moment, so a message arriving meanwhile is not answered into the old workspace.
+   */
+  const libraryExecute = async (op: AdminLibraryOp): Promise<unknown> => {
+    const mine = (await listProjects()).filter(row => row.projectId === op.projectId);
+    if (op.kind === 'libraryWorkspaceCheck') {
+      return { busy: mine.length > 0 && (active.size > 0 || mine.some(row => projectMutations.has(row.chatId) || intakeChats.has(row.chatId) || pendingTopics.has(row.chatId))) };
+    }
+    const held = mine.map(row => row.chatId).filter(chatId => !projectMutations.has(chatId));
+    for (const chatId of held) projectMutations.add(chatId);
+    try {
+      return await mirrorProjectIntoBot(cfg.accounts.app.id, op.projectId, async (chatId, commit) => {
+        const result = await detachSessionsForChat(chatId, commit);
+        expireRetries(retry => retry.chatId === chatId); // its sessions start over
+        await evictLiveSessionsForChat(chatId);
+        return result;
+      });
+    } finally { for (const chatId of held) projectMutations.delete(chatId); }
+  };
+
   const admittedCollaboration = admit(collaboration);
   /** s36d1: creations skip admit, whose shutdown refusal would read as a result not known; serialCreate refuses
    * them instead, saying nothing was created. The drain waits for one in flight, but how it ended is its caller's
@@ -8794,6 +9015,7 @@ export function createOrchestrator(
     onRecall: admitEvent(onRecall),
     dispatcher,
     adminExecute: admit(adminExecute),
+    libraryExecute: admit(libraryExecute),
     settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },
     shutdown,
     saveDroppedSync: (why: 'shutdown' | 'crash') => droppedReplies?.saveSync(collectLost(), why),

@@ -203,3 +203,4 @@ html, body { min-width: 320px; min-height: 0; }
 .today-advanced-settings[open] > summary > svg { transform: rotate(90deg); }
 .today-advanced-settings > div { display: grid; gap: 20px; padding: 4px 16px 16px; }
 .today-advanced-settings > summary:focus-visible { outline-offset: -3px; border-radius: 12px; }
+.today-nav-count { display: inline-block; min-width: 16px; margin-left: 5px; padding: 0 5px; border-radius: 8px; background: var(--color-accent); color: var(--color-accent-contrast, #fff); font-size: 10px; font-weight: 600; line-height: 16px; text-align: center; }

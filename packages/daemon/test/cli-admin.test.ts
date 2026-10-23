@@ -454,7 +454,7 @@ it('settings get prints each section, gives the view as JSON, and lists a group\
   expect(out).toContain('会话（最近 2 个，共 2 个；看单个会话：vonvon settings get --session <id>）');
   expect(out.indexOf('omt_new')).toBeLessThan(out.indexOf('omt_old'));
   expect(out).toContain(`gpt-5.5  ${'修'.repeat(40)}…\n`);
-  await expect(runSettingsGet('nope', {}, h.io(), h.daemon)).rejects.toThrow('没有 nope 这一节。可以看的有：profile、cards、run、completion、comments、titles、paths、access、judge');
+  await expect(runSettingsGet('nope', {}, h.io(), h.daemon)).rejects.toThrow('没有 nope 这一节。可以看的有：profile、role、cards、run、completion、comments、titles、paths、access、judge');
 });
 
 it('judge: set takes the selection JSON, get prints a row per backend and the prompt source, get judge the whole prompt', async () => {

@@ -1,8 +1,8 @@
 import {toolNames} from './management/environmentPresentation';
-import type {AgentId, DesktopSnapshot, GroupId, MembershipId} from '@vonvon/protocol';
+import type {AgentId, DesktopSnapshot, MembershipId, ProjectId} from '@vonvon/protocol';
 import type {CollaborationView, Page} from './collaboration-model';
 
-export type Selection = {kind: 'overview'} | {kind: 'agent'; id: AgentId} | {kind: 'group'; id: GroupId} | {kind: 'membership'; id: MembershipId};
+export type Selection = {kind: 'overview'} | {kind: 'agent'; id: AgentId} | {kind: 'project'; id: ProjectId} | {kind: 'membership'; id: MembershipId};
 export type DetailPane = {kind: 'overview'} | {kind: 'agent-settings'} | {kind: 'membership-settings'};
 export type SearchReveal = 'machine-advanced' | 'codex' | 'claude' | 'codex-tool' | 'claude-tool' | 'lark-tool' | 'profile-manager' | 'profile-add' | 'profile-create' | 'agent-profile' | 'group-history';
 export type Destination = {page: Page; view?: CollaborationView; selection?: Selection; detail?: DetailPane; section?: string; field?: string; reveal?: SearchReveal; guide?: string};
@@ -28,14 +28,17 @@ const agentGroups: readonly AgentGroup[] = [
   {title: '允许的飞书群', fields: [item('群范围'), item('添加群 ID'), item('移除群 ID', [], {field: '', guide: '在允许的飞书群列表中找到要移除的群。'})]},
   {title: '移除 Bot', fields: [item('删除本地 Bot 数据', ['删除机器人'])]},
 ];
+/** Project-owned settings: the workspace is the project's, shared by every group that uses it (memory design §5.3). */
+const projectGroups: readonly Group[] = [
+  {title: '工作区', aliases: ['工作目录', '文件夹'], fields: [item('目录', ['工作目录', '更换目录', '文件夹'], {field: ''}), item('添加目录'), item('主目录', ['设为主目录'], {field: ''}), item('代码仓库', [], {field: ''}), item('添加仓库')]},
+];
 const membershipGroups: readonly Group[] = [
   {title: '群设置', aliases: ['群绑定'], fields: [item('在本群使用', ['启用', '停用', '在这个群中使用 Bot'], {field: ''})]},
   {title: '技能', aliases: ['能力', 'Skill'], fields: [item('添加技能', ['添加 Skill']), item('使用技能', ['启用技能', '关闭技能'], {field: ''})]},
   {title: '语音', fields: [item('语音转文字', ['启用语音', '语音识别'])]},
-  {title: '个性与记忆', fields: [item('本群个性'), item('本群记忆'), item('继承 Bot 个性', [], {field: '本群个性'}), item('继承 Bot 记忆', [], {field: '本群记忆'})]},
+  {title: '补充职责', aliases: ['本群职责', '角色补充'], fields: [item('补充职责', ['本群个性', '这个 Bot 在本项目里多做什么'], {field: ''})]},
   {title: '可用模型', aliases: ['模型', '执行工具'], fields: [item('模型 Provider', ['执行后端'], {field: ''}), item('允许使用的模型', ['模型多选'], {field: ''}), item('可用 Effort', ['推理强度', 'Effort 多选'], {field: ''})]},
-  {title: '工作区', fields: [item('目录', ['工作目录', '更换目录', '文件夹'], {field: ''}), item('添加目录'), item('主目录', ['设为主目录'], {field: ''}), item('代码仓库', [], {field: ''}), item('添加仓库')]},
-  {title: '权限', fields: [item('权限'), item('能挡到什么'), item('高级设置')]},
+  {title: '权限', aliases: ['工作目录权限'], fields: [item('权限'), item('能挡到什么'), item('高级设置')]},
   {title: '聊天方式', fields: [item('聊天方式', ['会话方式', '智能模式', '智能开话题'], {field: ''})]},
   {title: '决策模型', smartOnly: true, aliases: ['判断模型'], fields: [item('决策 Provider', ['判断模型', 'Jev', 'TypeSafe'], {field: ''}), item('决策 Effort', ['判断的推理强度'], {field: '', guide: '先选择语言模型，再设置 Effort。'}), item('自定义决策模型 ID', ['判断的手填模型 id'], {field: '', guide: '选择语言模型 Provider，再点「自定义模型 ID」。'})]},
   {title: '判断规则', smartOnly: true, fields: [item('判断规则', ['什么时候回应', '什么时候不回应', '消息在群主区时', '消息已经在话题里时', '什么时候回复', '什么时候创建新话题', '响应提示词', '新话题提示词'])]},
@@ -78,7 +81,7 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
     {id: 'agents', title: 'Bot', aliases: ['机器人', '注册 Bot', '添加 Bot', '加入飞书群并设置工作目录'], page: 'collaboration', view: 'agents'},
     {id: 'bridgeImport', title: '导入 Bridge', aliases: ['feishu-codex-bridge', 'Feishu Codex Bridge', '迁移', '旧版导入', '恢复导入'], page: 'bridgeImport'},
     {id: 'setup', title: '连接与设置', aliases: ['首次运行清单', '后端', '准备执行工具', '扫码', '开权限', '一键开权限', '事件订阅', '卡片回调', '发布版本', '长连接'], page: 'setup'},
-    {id: 'groups', title: '群聊', aliases: ['飞书群', '项目', '已连接飞书群'], page: 'collaboration', view: 'groups'},
+    {id: 'projects', title: '项目', aliases: ['飞书群', '群聊', '已连接飞书群', '群设置'], page: 'collaboration', view: 'projects'},
     {id: 'usage', title: 'Codex 用量', aliases: ['账号', '套餐', '限额', '活动', '热力图', '判断次数', '智能模式'], page: 'usage'},
     {id: 'providers', title: 'Provider', aliases: ['Codex', 'Claude', '模型来源', '安装', '登录', '授权'], page: 'providers'},
     {id: 'environment', title: '工具与连接', aliases: ['本机环境', '飞书 CLI', 'MCP'], page: 'environment'},
@@ -102,12 +105,23 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
       group.fields.forEach((field, index) => entries.push({id: `${agent.id}-${group.title}-${index}`, title: field.title, context: `Bot 设置 · ${agent.name} · ${group.title}`, aliases: field.aliases ?? [], destination: {...destination, field: field.field ?? field.title, guide: field.guide}, kind: 'setting'}));
     }
   }
-  for (const group of snapshot.groups) entries.push({id: group.id, title: group.name, context: '飞书群', aliases: [group.id], destination: {page: 'collaboration', view: 'groups', selection: {kind: 'group', id: group.id}}, kind: 'item'});
+  const groupNames = new Map(snapshot.groups.map(group => [group.id as string, group.name]));
+  for (const project of snapshot.projects ?? []) {
+    const base: Destination = {page: 'collaboration', view: 'projects', selection: {kind: 'project', id: project.id}};
+    const groups = project.bindings.map(binding => groupNames.get(binding.groupId) ?? '').filter(Boolean);
+    entries.push({id: project.id, title: project.name, context: '项目', aliases: [...new Set(groups)], destination: base, kind: 'item'});
+    entries.push(...expand(project.id, `项目 · ${project.name}`, base, projectGroups, {kind: 'overview'}));
+  }
+  for (const group of snapshot.groups) {
+    // A group no project owns yet is still found by name: it opens the group's first binding.
+    const member = snapshot.memberships.find(item => item.groupId === group.id && !item.projectId);
+    if (member) entries.push({id: group.id, title: group.name, context: '飞书群', aliases: [group.id], destination: {page: 'collaboration', view: 'projects', selection: {kind: 'membership', id: member.id}}, kind: 'item'});
+  }
   const agents = new Map(snapshot.agents.map(agent => [agent.id, agent]));
   const groups = new Map(snapshot.groups.map(group => [group.id, group]));
   for (const member of snapshot.memberships) {
     const context = `群设置 · ${groups.get(member.groupId)?.name ?? member.name} · ${agents.get(member.agentId)?.name ?? member.agentId}`;
-    const base: Destination = {page: 'collaboration', view: 'groups', selection: {kind: 'membership', id: member.id}};
+    const base: Destination = {page: 'collaboration', view: 'projects', selection: {kind: 'membership', id: member.id}};
     entries.push({id: member.id, title: member.name, context, aliases: [member.directory, member.backend], destination: base, kind: 'item'});
     entries.push({id: `${member.id}-settings`, title: '群设置', context, aliases: ['群内设置', '群内权限', '绑定', '行为', '权限'], destination: {...base, detail: {kind: 'membership-settings'}}, kind: 'setting'});
     entries.push({id: `${member.id}-history-link`, title: '对话记录', context, aliases: ['历史会话', '会话与状态', '会话管理'], destination: {...base, detail: {kind: 'overview'}, section: '会话管理', reveal: 'group-history'}, kind: 'setting'});
@@ -120,7 +134,7 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
 }
 export function findEntries(entries: readonly SearchEntry[], query: string): SearchEntry[] {
   const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
-  if (!terms.length) return ['agents', 'groups', 'usage', 'providers', 'environment', 'application', 'secrets', 'diagnostics'].flatMap(id => entries.find(entry => entry.id === id) ?? []);
+  if (!terms.length) return ['agents', 'projects', 'usage', 'providers', 'environment', 'application', 'secrets', 'diagnostics'].flatMap(id => entries.find(entry => entry.id === id) ?? []);
   const rank = (entry: SearchEntry) => {
     const title = entry.title.toLocaleLowerCase();
     const needle = terms.join(' ');

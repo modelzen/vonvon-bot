@@ -90,7 +90,7 @@ export const DIRECTORY_PROBLEM_TEXT: Record<DirectoryProblem, string> = {
 function DirectoryProblems({members}: {members: readonly Membership[]}) {
   return <>
     <ul className="diagnostics-scopes">{members.map(member => <li key={member.id}>「{member.name}」{DIRECTORY_PROBLEM_TEXT[member.directoryProblem!]}：<code>{member.directory}</code></li>)}</ul>
-    请在群设置的「工作区」中更换目录。原文件不会自动迁移。
+    请在项目页的「工作区」中更换目录。原文件不会自动迁移。
   </>;
 }
 

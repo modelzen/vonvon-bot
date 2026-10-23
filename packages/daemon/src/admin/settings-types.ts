@@ -80,6 +80,8 @@ export type TitlePolicy = {
 };
 export interface AgentSections {
   profile: BotProfile;
+  /** 角色设定：SOUL.md 的身份与职责、其他说明（记忆设计 2.3） */
+  role: { identity: string; notes: string };
   cards: {
     showToolCalls: boolean;
     showModel: ModelDisplayMode;
@@ -109,6 +111,8 @@ export interface AgentSections {
 }
 export interface ProjectSections {
   profile: GroupProfile;
+  /** 补充职责：绑定行的 `supplement`（P4a 之前和 `profile.persona` 双写） */
+  role: { supplement: string };
   modelAccess: ProjectModelAccess;
   workspace: ProjectWorkspace;
   smartRules: ProjectSmartRules;
@@ -181,7 +185,8 @@ export interface AgentSettingsView {
   scope: Extract<SettingsScope, {
     kind: 'agent';
   }>;
-  sections: Sections<Omit<AgentSections, 'profile'>> & Partial<Sections<Pick<AgentSections, 'profile'>>>;
+  sections: Sections<Omit<AgentSections, 'profile' | 'role'>> & Partial<Sections<Pick<AgentSections, 'profile' | 'role'>>>;
+  roleInfo?: { draft?: string; headed: boolean; oversized: boolean; mergedNotice: boolean; integrity: 'ok' | 'untracked' | 'changed' };
   ownerOpenId: string | null;
   administrators: {
     feishu?: { ownerOpenId: string | null; adminOpenIds: string[] };
@@ -215,7 +220,7 @@ export interface ProjectSettingsView {
   scope: Extract<SettingsScope, {
     kind: 'project';
   }>;
-  sections: Sections<Omit<ProjectSections, 'profile' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation'>> & Partial<Sections<Pick<ProjectSections, 'profile' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation'>>>;
+  sections: Sections<Omit<ProjectSections, 'profile' | 'role' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation'>> & Partial<Sections<Pick<ProjectSections, 'profile' | 'role' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation'>>>;
   botProfile?: BotProfile;
   skillsError?: string;
   skills?: Array<{ path: string; name: string; description: string; source: 'workspace' | 'user' | 'provider'; enabled: boolean }>;

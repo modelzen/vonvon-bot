@@ -18,7 +18,7 @@ vi.mock('../src/config/paths', async () => {
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
   const appDir = mkdtempSync(join(tmpdir(), 'coffee-retired-'));
-  return { paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), commentInstructionsFile: join(appDir, 'comment-instructions.md'), commentsRootDir: join(appDir, 'comments'), projectsRootDir: join(appDir, 'projects') } };
+  return { botDir: (appId: string) => join(appDir, 'bots', appId), botPaths: (appId: string) => { const dir = join(appDir, 'bots', appId); return { dir, configFile: join(dir, 'config.json'), sessionsFile: join(dir, 'sessions.json'), projectsFile: join(dir, 'projects.json'), processesFile: join(dir, 'processes.json'), setupFile: join(dir, 'setup.json'), topicsDir: join(dir, 'topics'), droppedFile: join(dir, 'dropped.json'), judgeUsageFile: join(dir, 'judge-usage.json') }; }, paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), commentInstructionsFile: join(appDir, 'comment-instructions.md'), commentsRootDir: join(appDir, 'comments'), projectsRootDir: join(appDir, 'projects') } };
 });
 vi.mock('@larksuiteoapi/node-sdk', async original => ({
   ...await original<object>(),
