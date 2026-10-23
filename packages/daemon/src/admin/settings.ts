@@ -18,7 +18,7 @@ import { keyStatus } from './secrets';
 import { DECISION_FORMAT_LINES, DECISION_INPUT_EXAMPLE, decisionProvider, decisionProviders, keyMissingText } from '../judge/decision';
 import { DECISION_PROVIDER_ID, parseStoredJudge, resolveJudgeModel } from '../judge/model';
 import { JUDGE_CLAUDE_NOTE, JUDGE_CODEX_NOTE, JUDGE_FORMAT_LINES, JUDGE_INPUT_EXAMPLE } from '../judge/prompt';
-import { readSmartPrompt, SMART_MAX_CHARS, SmartPromptError, composeSmartRules } from '../judge/smart-file';
+import { readSmartPrompt, SMART_MAX_CHARS, SmartPromptError, composeSmartRules, resolveSmartRules, rulesFromSmartPrompt } from '../judge/smart-file';
 import type { JudgeSelectionStored } from '../judge/types';
 import type { VoiceAction } from '../voice/types';
 import { probeBackends, SMART_NO_MENTION_REFUSED, type AppPreferencesWriter } from './ops';
@@ -190,7 +190,7 @@ function projectData(p: Project): T.ProjectSections {
     profile: p.profile ?? { persona: '', memory: '', inheritPersona: true, inheritMemory: true },
     modelAccess: resolveProjectModelAccess({ group: p }),
     workspace: workspaceOf(p),
-    smartRules: p.smartRules ?? { respond: '', newTopic: '' },
+    smartRules: resolveSmartRules(p.smartRules ?? { respond: '', newTopic: '' }),
     skills: p.skills ?? { disabledPaths: [] },
     presentation: p.presentation ?? { voiceEnabled: false, showToolCalls: true, showModel: 'off', completionMode: 'manual', longTaskMinutes: 5 },
     permission: {
@@ -477,7 +477,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     result.profile = await profile.readGroup(botId, p);
     result.modelAccess = resolveProjectModelAccess({ bot: cfg.preferences, group: p }, peekModels(groupBackendId(p)));
     if (!p.directories?.repositories) result.workspace.repositories = [...cfg.preferences?.directories?.repositories ?? []];
-    if (!p.smartRules) result.smartRules = { respond: (await (deps.readSmartPrompt ?? readSmartPrompt)(botId, p.chatId)).text, newTopic: '' };
+    if (!p.smartRules) result.smartRules = rulesFromSmartPrompt(await (deps.readSmartPrompt ?? readSmartPrompt)(botId, p.chatId));
     const completion = getCompletionReminderConfig(cfg);
     result.presentation = p.presentation ? { showModel: getModelDisplay(cfg), ...p.presentation } : { voiceEnabled: voiceView(cfg).enabled, showToolCalls: getShowToolCalls(cfg), showModel: getModelDisplay(cfg), completionMode: completion.mode, longTaskMinutes: completion.longTaskMinutes };
     return result;
@@ -1017,7 +1017,7 @@ export async function materializeGroupSettings(deps: Pick<SettingsOwnerDeps, 'cf
     let rules = row.smartRules;
     let groupProfile = row.profile;
     try {
-      rules ??= { respond: (await (deps.readSmartPrompt ?? readSmartPrompt)(botId, row.chatId)).text, newTopic: '' };
+      rules ??= rulesFromSmartPrompt(await (deps.readSmartPrompt ?? readSmartPrompt)(botId, row.chatId));
       groupProfile ??= await (deps.profile?.readGroup ?? readGroupProfile)(botId, row);
     } catch { result.deferred.push(row.name); continue; }
     const before = settingsRevision(row);

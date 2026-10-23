@@ -7,6 +7,7 @@ import type { CollaborationClient, CollaborationReply } from "@vonvon/protocol";
 import "../settings/settings.css";
 import {useShellCapabilities} from '../client-context';
 import {groupUrl, openExternalUrl} from '../url-actions';
+import {SettingChoices} from '../settings/SettingChoices';
 
 type Props = {
   agentId: AgentId;
@@ -112,7 +113,7 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
     {current && <SettingsGroup label="当前会话" footer="清空和压缩只作用于当前会话。">
       <SettingsRow title="会话" value={current.summary || current.threadId} />
       <SettingsRow title="上下文" value={context?.usage ? `${context.usage.used.toLocaleString()} / ${context.usage.window?.toLocaleString() ?? "未知窗口"}` : "暂无可用统计"} trailing={<Button size="sm" onClick={() => void request({ action: "context", ...target, threadId: selected }).then((reply) => { if (reply.kind === "context") setContext(reply); else if (reply.kind === "refused") setError(reply.message); })}>刷新</Button>} />
-      <SettingsRow title="会话操作" description={conversation === "threads" ? "@ 我开新会话的群可压缩当前会话；清空只用于主区一条会话的群（整群一条会话、智能开话题）。" : undefined} trailing={<div className="settings-inline-actions"><Button size="sm" disabled={busy || conversation === "threads"} onClick={() => void execute({ action: "clear", ...target, threadId: selected }, "已开始新会话。")}>清空会话</Button><Button size="sm" disabled={busy} onClick={() => void execute({ action: "compact", ...target, threadId: selected }, "上下文已压缩。")}>压缩上下文</Button></div>} />
+      <SettingsRow title="会话操作" description={conversation === "threads" ? "多会话支持压缩上下文；清空仅适用于主区会话。" : undefined} trailing={<div className="settings-inline-actions"><Button size="sm" disabled={busy || conversation === "threads"} onClick={() => void execute({ action: "clear", ...target, threadId: selected }, "已开始新会话。")}>清空会话</Button><Button size="sm" disabled={busy} onClick={() => void execute({ action: "compact", ...target, threadId: selected }, "上下文已压缩。")}>压缩上下文</Button></div>} />
       <SettingsRow title="自主任务目标" trailing={<div className="settings-inline-actions"><input aria-label="自主任务目标" className="settings-field" value={objective} maxLength={4000} onChange={(event) => setObjective(event.target.value)} placeholder="输入目标" /><Button size="sm" disabled={busy || !objective.trim()} onClick={() => void execute({ action: "startGoal", ...target, threadId: selected, objective: objective.trim() }, "目标任务已开始。")}>开始</Button></div>} />
       {run && <>
         <SettingsRow title="正在运行" value={run.goal ? "自主目标" : "当前任务"} trailing={<div className="settings-inline-actions"><Button size="sm" variant="danger" disabled={busy || !run.canStop} onClick={() => void execute({ action: "stop", ...target, threadId: selected, runId: run.id }, "已请求停止任务。")}>停止</Button><Button size="sm" disabled={busy || !run.canEndGoal} onClick={() => void execute({ action: "endGoal", ...target, threadId: selected, runId: run.id }, "已结束目标。")}>结束目标</Button></div>} />
@@ -122,11 +123,12 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
     </SettingsGroup>}
     <SettingsGroup label="历史会话" action={<Button size="sm" disabled={busy} onClick={() => void refresh()}>刷新</Button>} footer="可以在飞书打开已绑定的话题。可恢复的旧会话会重新绑定到此项目。">
       <SettingsRow title="搜索" trailing={<input aria-label="搜索历史会话" className="settings-field" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="标题、摘要或会话 ID" />} />
-      <SettingsRow title="筛选" trailing={<select aria-label="筛选历史会话" value={filter} onChange={(event) => setFilter(event.target.value === "bound" ? "bound" : event.target.value === "resumable" ? "resumable" : "all")}><option value="all">全部</option><option value="bound">已绑定话题</option><option value="resumable">可恢复会话</option></select>} />
+      <SettingsRow title="筛选" trailing={<SettingChoices label="筛选历史会话" value={filter} disabled={false} onChange={setFilter} choices={[{value: 'all', label: '全部'}, {value: 'bound', label: '已绑定'}, {value: 'resumable', label: '可恢复'}]}/>} />
       {sessions.map((item) => <SettingsRow key={item.threadId} title={item.summary || "未命名会话"} description={`${new Date(item.updatedAt).toLocaleString()} · ${item.backend} · ${item.cwd}${item.detached ? " · 已归档" : ""}`} trailing={<Button size="sm" onClick={() => void openExternalUrl(groupUrl(groupId, item.threadId), 'group', shell).catch(error => setError(error instanceof Error ? error.message : '无法打开飞书群。'))}>在飞书打开</Button>} />)}
       {history?.threadsError && <InlineNotice title="旧会话暂不可读取" tone="warning">{history.threadsError}</InlineNotice>}
       {threads.map((item) => <SettingsRow key={item.sessionId} title={item.name || item.preview || "旧会话"} description={`${new Date(item.updatedAt * 1000).toLocaleString()} · 可恢复`} trailing={<Button size="sm" loading={busy} onClick={() => history && void execute({ action: "resume", ...target, sessionId: item.sessionId, backend: history.backend }, "已恢复会话。")}>恢复</Button>} />)}
-      {sessions.length === 0 && threads.length === 0 && !history?.threadsError && <SettingsRow title="没有匹配的会话" description="可调整关键词或筛选条件。" />}
+      {!history && !error && <p className="settings-operation-message" role="status">正在读取会话…</p>}
+      {history && sessions.length === 0 && threads.length === 0 && !history.threadsError && <SettingsRow title={needle || filter !== 'all' ? '没有匹配的会话' : '暂无历史会话'} description={needle || filter !== 'all' ? '试试其他关键词或筛选条件。' : undefined} />}
     </SettingsGroup>
     {error && <InlineNotice title="会话操作未完成" tone="danger">{error}</InlineNotice>}
     {notice && <InlineNotice title="会话已更新">{notice}</InlineNotice>}

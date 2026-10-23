@@ -3,6 +3,7 @@ import { lstat, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { checkedProductVersion, repositoryRoot } from './product-version.mjs';
 import { updateConfiguration, verifyDmg, verifyUniversalApp, writeDesktopRelease } from './desktop-release-tools.mjs';
+import { stageClaudeUniversal } from './stage-claude-universal.mjs';
 
 const desktop = join(repositoryRoot, 'packages/desktop');
 const version = await checkedProductVersion();
@@ -21,6 +22,7 @@ try {
 } catch (error) {
   if (error?.code !== 'ENOENT') throw error;
 }
+await stageClaudeUniversal({ stage: join(desktop, 'stage/daemon'), root: repositoryRoot });
 await build({
   projectDir: desktop,
   targets: Platform.MAC.createTarget(['dmg', 'zip'], Arch.universal),

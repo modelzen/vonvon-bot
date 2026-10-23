@@ -84,11 +84,13 @@ vi.mock('../src/agent', () => ({
   installedBackendVersion: vi.fn(() => null),
   latestNpmVersion: vi.fn(async () => null),
 }));
+vi.mock('../src/agent/backend-loader', () => ({ isBundledBackend: vi.fn(() => false) }));
 
 import { installedBackendVersion, latestNpmVersion } from '../src/agent';
+import { isBundledBackend } from '../src/agent/backend-loader';
 import { createAdminService, NotWiredYetError } from '../src/admin/service';
 
-afterEach(() => vi.clearAllMocks());
+afterEach(() => { vi.clearAllMocks(); vi.mocked(isBundledBackend).mockReturnValue(false); });
 
 describe('listBackendCatalog · 状态聚合', () => {
   it('聚合 catalog + 三态 depState/installable/version/approxSize + 默认标记', async () => {
@@ -129,6 +131,21 @@ describe('listBackendCatalog · 状态聚合', () => {
 });
 
 describe('installBackend · installer 委托 + 守门', () => {
+  it('内置后端的下载、更新、卸载均拒绝且不碰用户安装器', async () => {
+    vi.mocked(isBundledBackend).mockImplementation(id => id === 'fake-lib');
+    const install = vi.fn();
+    const uninstall = vi.fn();
+    const svc = createAdminService({ installBackend: install, uninstallBackend: uninstall });
+    expect((await svc.installBackend('fake-lib')).tail).toContain('更新 Vonvon Bot 应用');
+    expect((await svc.installBackend('fake-lib', undefined, undefined, { update: true })).tail).toContain('更新 Vonvon Bot 应用');
+    expect((await svc.uninstallBackend('fake-lib')).message).toContain('不能在这里卸载');
+    expect(install).not.toHaveBeenCalled();
+    expect(uninstall).not.toHaveBeenCalled();
+    const row = (await svc.listBackendCatalog()).entries.find(entry => entry.id === 'fake-lib')!;
+    expect(row).toMatchObject({ bundled: true, installable: false, canUninstall: false });
+    vi.mocked(installedBackendVersion).mockReturnValueOnce('0.3.296');
+    expect(await svc.backendVersion('fake-lib')).toEqual({ installed: '0.3.296', latest: '0.3.296', hasUpdate: false });
+  });
   it('库类 installable 后端委托 installer（带版本 pin、binName=undefined），透传进度/结果', async () => {
     const installer = vi.fn(async (pkg: string, onProgress?: (c: string) => void) => {
       onProgress?.('added 1 package\n');

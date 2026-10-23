@@ -58,5 +58,5 @@ test.each([{unreadBots: 1}, {botsUnreadable: true}])('empty unreadable usage doe
   expect(html).toContain('0 次');
 });
 test('footer describes attempted calls including connection failures', () => {
-  expect(render({kind: 'ready', view})).toContain('发起了调用的才算一次（连不上也算）');
+  expect(render({kind: 'ready', view})).toContain('计入已发起的调用，包括连接失败。');
 });

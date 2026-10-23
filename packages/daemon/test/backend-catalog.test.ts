@@ -16,6 +16,8 @@ import { backendIds, createBackend } from '../src/agent';
 import {
   BackendNotInstalledError,
   isBackendDepInstalled,
+  isBundledBackend,
+  installedBackendVersion,
   loadBackendDep,
 } from '../src/agent/backend-loader';
 import { buildInstallCommand, stripVersion } from '../src/agent/installer';
@@ -124,6 +126,24 @@ describe('backend-loader：按需依赖加载（三路径）', () => {
     // cross-spawn 是 CJS 函数；ESM interop 下函数挂在 default（或模块本身）。
     expect(typeof (mod.default ?? mod)).toBe('function');
     expect(isBackendDepInstalled('cross-spawn')).toBe(true);
+  });
+
+  it('版本与实际加载顺序一致，SDK exports 隐藏 package.json 时仍读出本地包版本', async () => {
+    const pkg = '@anthropic-ai/claude-agent-sdk';
+    const userPkg = join(userDir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk');
+    mkdirSync(userPkg, { recursive: true });
+    writeFileSync(join(userPkg, 'package.json'), JSON.stringify({ name: pkg, version: '99.0.0' }));
+    expect(installedBackendVersion(pkg)).toBe(CLAUDE_AGENT_SDK_VERSION);
+  });
+
+  it('仅 daemon 元数据的 bundledBackends 声明内置，开发态依赖不算', () => {
+    const metadata = join(userDir, 'package.json');
+    writeFileSync(metadata, JSON.stringify({ name: '@vonvon/daemon', bundledBackends: ['claude-agent'] }));
+    expect(isBundledBackend('claude-agent', metadata)).toBe(true);
+    expect(isBundledBackend('codex-appserver', metadata)).toBe(false);
+    writeFileSync(metadata, JSON.stringify({ name: 'other', bundledBackends: ['claude-agent'] }));
+    expect(isBundledBackend('claude-agent', metadata)).toBe(false);
+    expect(isBundledBackend('claude-agent')).toBe(false);
   });
 
   it('② 用户私装目录解析：bridge 自身没有的包，从 backendsDir 加载', async () => {

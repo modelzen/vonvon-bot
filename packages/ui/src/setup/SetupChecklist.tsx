@@ -26,18 +26,22 @@ export function stepDescription({detail, items, warnings, commands}: Pick<SetupS
   </>;
 }
 
-export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEnvironment, onNotice, codexJobs}: {
+export type SetupChecklistProps = {
   snapshot: DesktopSnapshot; ready: boolean; busy: boolean;
   run: (command: Command) => Promise<CommandResult>;
   onRegister: (agentId?: AgentId) => void;
   onOpenEnvironment: () => void;
   onNotice: (message: string, error: boolean) => void;
   codexJobs: ReactNode;
-}) {
+  compact?: boolean;
+  botsOnly?: boolean;
+};
+
+export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEnvironment, onNotice, codexJobs, compact = false, botsOnly = false}: SetupChecklistProps) {
   const client = useClient();
   const shell = useShellCapabilities();
   const {reads, recheck} = useSetupStatus(snapshot.agents.map(agent => agent.id));
-  const claudeLogin = useClaudeLoginCheck(snapshot.tools, message => onNotice(message, true));
+  const claudeLogin = useClaudeLoginCheck(botsOnly ? [] : snapshot.tools, message => onNotice(message, true));
   const [working, setWorking] = useState<string>();
   async function act(action: StepAction, agentId?: AgentId) {
     const key = `${agentId ?? 'tools'}:${action.kind}`;
@@ -69,7 +73,7 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
     return <SettingsRow key={step.id} title={`${index + 1}. ${step.title}`}
       description={stepDescription(step)}
       trailing={<span className="setup-step-trailing">
-        <StatusBadge tone={step.tone} variant="pill">{step.status}</StatusBadge>
+        <StatusBadge tone={step.tone}>{step.status}</StatusBadge>
         {step.actions.map(action => <Button key={action.kind + action.label} size="sm" variant={action.kind === 'serviceInstall' && action.primary ? 'primary' : undefined}
           loading={working === `${agentId ?? 'tools'}:${action.kind}` || (action.kind === 'claudeLogin' && claudeLogin.checking)}
           disabled={busy || !ready} onClick={() => void act(action, agentId)}>{action.label}</Button>)}
@@ -77,18 +81,20 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
   }
   const tools = toolSteps(snapshot.tools, {claudeChecking: claudeLogin.checking});
   const linux = snapshot.application.platform === 'linux' ? linuxSteps(snapshot.tools) : [];
-  return <div className="page-stack setup-checklist">
-    <p className="collaboration-footnote">每一步都会自动检测，做完会变成绿色。飞书那边的设置改完后，几秒内这里会跟着变。</p>
-    <SettingsGroup label="后端" footer="Codex 或 Claude 至少需要一个可用。"
-      action={<StatusBadge tone={tools.ready ? 'success' : 'warning'} variant="pill">{tools.ready ? '可以用了' : '还没有能用的后端'}</StatusBadge>}>
+  const toolContent = <>
+    <SettingsGroup label={compact ? '模型工具' : '后端'} footer="Codex 或 Claude 至少需要一个可用。"
+      action={<StatusBadge tone={tools.ready ? 'success' : 'warning'} variant="pill">{tools.ready ? '可以用了' : compact ? '需要准备' : '还没有能用的后端'}</StatusBadge>}>
       {tools.steps.map((step, index) => stepRow(step, index))}
     </SettingsGroup>
     {codexJobs}
-    {/* Only explains what the qa and write modes need here; not counted in 可以用了 or 还差几步 (s20a). */}
     {linux.length ? <SettingsGroup label="Linux 上的权限档">{linux.map((step, index) => stepRow(step, index))}</SettingsGroup> : null}
     <SettingsGroup label="后台运行" footer={SERVICE_FOOTER[snapshot.application.platform]}>
       {stepRow(serviceStep(snapshot.application), 0)}
     </SettingsGroup>
+  </>;
+  return <div className="page-stack setup-checklist">
+    {!compact && <p className="collaboration-footnote">自动检测飞书配置。完成卡片回调后，请手动确认。</p>}
+    {!compact && !botsOnly && toolContent}
     {snapshot.agents.map(agent => {
       const read = reads[agent.id];
       const steps = botSteps(agent, read?.status, read?.problem);
@@ -99,9 +105,13 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
         {steps.map((step, index) => stepRow(step, index, agent.id))}
       </SettingsGroup>;
     })}
-    <SettingsGroup label={snapshot.agents.length ? '再注册一个 Bot' : '第一步'}>
+    {compact && !botsOnly && <details className="welcome-setup__tools" open={snapshot.agents.length > 0 ? true : undefined}>
+      <summary><span>工具与后台运行</span><StatusBadge tone={tools.ready ? 'success' : 'neutral'}>{tools.ready ? '模型工具已就绪' : 'Codex、Claude 与自动运行'}</StatusBadge></summary>
+      <div>{toolContent}</div>
+    </details>}
+    {!compact && !botsOnly && <SettingsGroup label={snapshot.agents.length ? '再注册一个 Bot' : '第一步'}>
       <SettingsRow title="扫码建飞书应用" description="用飞书扫码，自动建好飞书应用并保存凭据。建好后这里会接着检测权限、事件和发布。"
         trailing={<Button size="sm" variant={snapshot.agents.length ? 'secondary' : 'primary'} disabled={busy || !ready} onClick={() => onRegister()}>注册 Bot</Button>}/>
-    </SettingsGroup>
+    </SettingsGroup>}
   </div>;
 }

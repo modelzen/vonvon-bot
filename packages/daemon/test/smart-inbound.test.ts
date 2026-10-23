@@ -15,6 +15,7 @@ import { PEOPLE_RETRY_MS, PEOPLE_TTL_MS } from '../src/bot/chat-people';
 import { wakeTriggerText } from '../src/bot/context-weave';
 import { AT_HINT_NOTE, BOT_WAKE_NOTE, INITIATIVE_NOTE } from '../src/bot/session-title';
 import { JUDGE_BUDGET, JudgeBudget } from '../src/bot/smart-intake';
+import type { AgentBackend, JudgeCall } from '../src/agent/types';
 import type { JudgeDeps } from '../src/judge/judge';
 import { localDay } from '../src/judge/usage';
 import type { JudgeRequest, JudgeResult } from '../src/judge/types';
@@ -223,6 +224,67 @@ beforeEach(() => {
   orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, { attention: new FocusEverywhere() });
 });
 afterEach(async () => { setDiagnosticsSink(undefined); await orchestrator.shutdown(); });
+
+describe('smart rules from group settings', () => {
+  // Exercise the real intake -> judge -> provider boundary. Only the model and legacy file read are fixtures.
+  async function useRealJudge(source: 'group' | 'bot' | 'default' = 'bot', decision: 'main' | 'skip' = 'skip') {
+    const { createJudge } = await vi.importActual<typeof import('../src/judge/judge')>('../src/judge/judge');
+    const calls: JudgeCall[] = [];
+    const results: JudgeResult[] = [];
+    const readPrompt = vi.fn(async () => ({ source, text: 'LEGACY_SMART_PROMPT', path: '/fixture/SMART.md' }));
+    const backend = {
+      id: 'codex-appserver', displayName: 'Codex', listModels: async () => [],
+      judge: async (call: JudgeCall) => { calls.push(call); return { text: JSON.stringify({ decision, reason: '' }) }; },
+    } as unknown as AgentBackend;
+    const judge = createJudge({ backendFor: () => backend, readPrompt, cwd: async () => workspace });
+    fake.judge.mockImplementation(async (request: JudgeRequest) => {
+      const result = await judge.judge(request);
+      results.push(result);
+      return result;
+    });
+    fake.judgeShutdown.mockImplementation(() => judge.shutdown());
+    return { calls, results, readPrompt };
+  }
+
+  it('sends both saved group rules to the model ahead of legacy prompts and executes a reply decision', async () => {
+    fake.project = { ...base, smartRules: { respond: '遇到需要协助的技术问题就回复', newTopic: '独立的问题创建新话题' } };
+    const judge = await useRealJudge('bot', 'main');
+    await send(says('登录接口报错，请帮忙看一下'));
+    await vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
+    expect(judge.results).toEqual([expect.objectContaining({ decision: 'main', promptSource: 'group' })]);
+    expect(judge.calls[0]!.system).toContain('遇到需要协助的技术问题就回复');
+    expect(judge.calls[0]!.system).toContain('独立的问题创建新话题');
+    expect(judge.calls[0]!.system).not.toContain('LEGACY_SMART_PROMPT');
+    expect(judge.readPrompt).not.toHaveBeenCalled();
+    expect(fake.inputs[0]).toContain('登录接口报错，请帮忙看一下');
+  });
+
+  it('uses edited group rules on the next incoming message without restarting the bot', async () => {
+    fake.project = { ...base, smartRules: { respond: '仅关注部署问题', newTopic: '部署故障单开话题' } };
+    const judge = await useRealJudge();
+    await send(says('第一条消息'));
+    await vi.waitFor(() => expect(records()).toHaveLength(1));
+    fake.project = { ...base, smartRules: { respond: '也关注测试问题', newTopic: '测试失败单开话题' } };
+    await send(says('第二条消息'));
+    await vi.waitFor(() => expect(records()).toHaveLength(2));
+    expect(judge.calls).toHaveLength(2);
+    expect(judge.calls[0]!.system).toContain('仅关注部署问题');
+    expect(judge.calls[0]!.system).toContain('部署故障单开话题');
+    expect(judge.calls[1]!.system).toContain('也关注测试问题');
+    expect(judge.calls[1]!.system).toContain('测试失败单开话题');
+    expect(judge.calls[1]!.system).not.toContain('仅关注部署问题');
+    expect(judge.readPrompt).not.toHaveBeenCalled();
+  });
+
+  it.each(['group', 'bot', 'default'] as const)('keeps the legacy %s prompt source when no group rules are saved', async source => {
+    const judge = await useRealJudge(source);
+    await send(says('没有群内规则时仍使用原来的提示词'));
+    await vi.waitFor(() => expect(records()).toHaveLength(1));
+    expect(judge.readPrompt).toHaveBeenCalledExactlyOnceWith(APP, CHAT);
+    expect(judge.calls[0]!.system).toContain('LEGACY_SMART_PROMPT');
+    expect(judge.results).toEqual([expect.objectContaining({ decision: 'skip', promptSource: source })]);
+  });
+});
 
 describe('smart mode intake (s25)', () => {
   it('a judgement does not hold the chat: a topic @ is answered while the main area is still judged (A1)', async () => {

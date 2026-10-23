@@ -1,9 +1,9 @@
 import { afterEach, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { watch } from 'node:fs';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fixtureNode } from './fixture-node';
 import type { EnvironmentRequest } from '@vonvon/protocol';
 import { EnvironmentService } from '../src/environment/service';
@@ -34,6 +34,32 @@ if (args[0] === 'profile') {
   const service = new EnvironmentService({ home: dir, getDataRoot: () => dir, resolveCodex: () => null, nodePath, path: dir, fetchLatest: async () => null });
   return { dir, cli, service };
 }
+
+it.skipIf(process.platform === 'win32')('finds native Claude Code when the desktop PATH omits the user bin directory', async () => {
+  const { dir, service } = await fixture();
+  const cli = join(dir, '.local', 'bin', 'claude');
+  await mkdir(dirname(cli), { recursive: true });
+  await writeFile(cli, '#!/usr/bin/env node\nconsole.log("2.1.296 (Claude Code)");\n', { mode: 0o700 });
+  try {
+    expect(await service['inspect']('claude')).toMatchObject({ installation: 'external', executable: cli, version: '2.1.296', canUninstall: false });
+  } finally { await service.close(); }
+});
+
+it.skipIf(process.platform === 'win32')('finds nvm Claude Code outside the desktop PATH and keeps explicit PATH precedence', async () => {
+  const { dir, service } = await fixture();
+  const nvm = join(dir, '.nvm', 'versions', 'node');
+  for (const version of ['v9.9.0', 'v24.14.1', 'v99.0.0']) {
+    const cli = join(nvm, version, 'bin', 'claude');
+    await mkdir(dirname(cli), { recursive: true });
+    await writeFile(cli, '#!/usr/bin/env node\nconsole.log("2.1.296 (Claude Code)");\n', { mode: version === 'v99.0.0' ? 0o600 : 0o700 });
+  }
+  try {
+    expect(await service['inspect']('claude')).toMatchObject({ installation: 'external', executable: join(nvm, 'v24.14.1', 'bin', 'claude'), version: '2.1.296', canUninstall: false });
+    const onPath = join(dir, 'claude');
+    await writeFile(onPath, '#!/usr/bin/env node\nconsole.log("2.1.200 (Claude Code)");\n', { mode: 0o700 });
+    expect(await service['resolveTool']('claude')).toEqual({ executable: onPath, ownership: 'external' });
+  } finally { await service.close(); }
+});
 
 const mutations = [
   { type: 'profileUse', name: 'one' },
