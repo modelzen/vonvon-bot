@@ -153,6 +153,7 @@ describe("pinned contract extraction", () => {
       },identity:{chatId:"oc_fixture",backend:"codex-appserver",cwd:"/tmp",kind:"multi"},members:{openIds:[],revision:"r1"}},
       {scope:{kind:"session",botId:"cli_fixture",threadId:"thread"},sections:{model:section({selection})},identity:{backend:"codex-appserver",sessionId:"session",chatId:"oc_fixture",projectName:"fixture"}},
       {scope:{kind:"host"},sections:{execution:section({codexBin:null})},runtime:{codexBin:null,fallbackCwd:"/tmp",platform:"macos"}},
+      {scope:{kind:"host"},sections:{execution:section({codexBin:null}),judge:section({byProvider:{"codex-appserver":{model:"luna",effort:"low"}}})},runtime:{codexBin:null,fallbackCwd:"/tmp",platform:"macos"}},
     ];
     for (const view of views) {
       const parsed = settingsViewSchema.parse(view);
