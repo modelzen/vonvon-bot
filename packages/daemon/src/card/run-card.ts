@@ -378,7 +378,7 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
     elements.push(noteMd('_（未返回内容）_'));
   }
   if (rc.retry === 'sent') {
-    elements.push(noteMd(`${statusSymbol('running')} 已重试，结果见下一张卡片`));
+    elements.push(noteMd('已重试，结果见下一张卡片'));
   }
 
   for (const line of rc.handoffNotes ?? []) elements.push(greyNote(line));
@@ -517,7 +517,7 @@ function footerStatus(status: Exclude<FooterStatus, null>): CardElement {
   const item = FOOTER_STATUS[status];
   return {
     tag: 'markdown',
-    content: `<font color='grey'>${item.text}</font> ${statusSymbol(status === 'retrying' ? 'waiting' : 'running')}`,
+    content: [`<font color='grey'>${item.text}</font>`, statusSymbol(status === 'retrying' ? 'waiting' : 'running')].filter(Boolean).join(' '),
     text_size: 'notation',
     icon: { tag: 'standard_icon', token: item.icon, color: 'grey' },
   };
