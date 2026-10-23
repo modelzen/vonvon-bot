@@ -1,9 +1,9 @@
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
-import { agentIdSchema, groupIdSchema, DEFAULT_SMART_RULES } from '@vonvon/protocol';
+import { agentIdSchema, groupIdSchema, DEFAULT_SMART_RULES, smartRulesText } from '@vonvon/protocol';
 import { botDir } from '../config/paths';
-import { DEFAULT_SMART_PROMPT, LEGACY_DEFAULT_SMART_PROMPT } from './prompt';
+import { DEFAULT_SMART_PROMPT, LEGACY_DEFAULT_SMART_PROMPT, LEGACY_TWO_FIELD_SMART_RULES } from './prompt';
 
 // Reading SMART.md lives here until s38's bot file module replaces it.
 
@@ -49,8 +49,8 @@ async function readLayer(path: string): Promise<string | undefined> {
     if (st.size > SMART_MAX_BYTES) throw new SmartPromptError('SMART.md 超过 32 KB', path);
     const buffer = await handle.readFile();
     if (buffer.length > SMART_MAX_BYTES) throw new SmartPromptError('SMART.md 超过 32 KB', path);
-    const text = buffer.toString('utf8').trim();
-    if (!text) return undefined;
+    const text = buffer.toString('utf8');
+    if (!text.trim()) return undefined;
     if ([...text].length > SMART_MAX_CHARS) throw new SmartPromptError(`SMART.md 超过 ${SMART_MAX_CHARS} 字`, path);
     return text;
   } catch (error) {
@@ -87,17 +87,16 @@ export async function readSmartPrompt(appId: string, chatId?: string, dir?: stri
 
 /** Owner text remains separate from the fixed decision protocol. Legacy SMART is kept whole in respond. */
 export function composeSmartRules(rules: { respond: string; newTopic: string }): string {
-  const effective = resolveSmartRules(rules);
-  return [`## 何时响应\n${effective.respond}`, `## 何时创建新话题\n${effective.newTopic}`].join('\n\n');
+  return smartRulesText(resolveSmartRules(rules));
 }
 
 /** Upgrade only exact app-generated defaults; never split or replace an owner's custom SMART. */
 export function resolveSmartRules(rules: { respond: string; newTopic: string }): { respond: string; newTopic: string } {
-  const blank = !rules.respond.trim() && !rules.newTopic.trim();
-  const legacyFull = !rules.newTopic && [LEGACY_DEFAULT_SMART_PROMPT, DEFAULT_SMART_PROMPT].includes(rules.respond);
+  const legacyFull = !rules.newTopic && [LEGACY_DEFAULT_SMART_PROMPT, smartRulesText(LEGACY_TWO_FIELD_SMART_RULES)].includes(rules.respond);
+  const legacyTwoField = rules.respond === LEGACY_TWO_FIELD_SMART_RULES.respond && rules.newTopic === LEGACY_TWO_FIELD_SMART_RULES.newTopic;
   const legacyShort = rules.respond === '被 @、有人提问或需要我的能力时回应；闲聊和已解决的问题不主动接话。'
     && rules.newTopic === '出现一个需要独立跟进的新任务时创建话题；已有话题继续在原处回复。';
-  return blank || legacyFull || legacyShort ? { ...DEFAULT_SMART_RULES } : { ...rules };
+  return legacyFull || legacyTwoField || legacyShort ? { ...DEFAULT_SMART_RULES } : { ...rules };
 }
 
 export function rulesFromSmartPrompt(prompt: SmartPrompt): { respond: string; newTopic: string } {

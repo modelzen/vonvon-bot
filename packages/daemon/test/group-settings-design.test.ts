@@ -104,7 +104,7 @@ it('preserves the complete legacy SMART text and saves both prompt areas with CA
   expect((await getProjectByName('demo'))!.smartRules).toEqual({ respond: oldSmart, newTopic: '遇到独立问题才创建' });
 });
 
-it('shows both default rule fields and preserves the other field on a partial save', async () => {
+it('shows the complete default rule document and preserves the wire fields on a partial save', async () => {
   const owner = createSettingsOwner({...deps(), readSmartPrompt: async () => ({source: 'default', path: '/fixture/SMART.md', text: DEFAULT_SMART_PROMPT})});
   const p = await view(owner);
   expect(p.sections.smartRules!.stored).toEqual(DEFAULT_SMART_RULES);
@@ -112,6 +112,16 @@ it('shows both default rule fields and preserves the other field on a partial sa
   const result = await owner.save({scope, section: 'smartRules', revision: p.sections.smartRules!.revision, patch: {respond: '仅响应测试请求'}});
   expect(result.kind).toBe('saved');
   expect((await getProjectByName('demo'))!.smartRules).toEqual({respond: '仅响应测试请求', newTopic: DEFAULT_SMART_RULES.newTopic});
+});
+
+it('saves and rereads a completely cleared rule document without restoring defaults or a legacy file', async () => {
+  const owner = createSettingsOwner(deps());
+  const p = await view(owner);
+  expect((await owner.save({scope, section: 'smartRules', revision: p.sections.smartRules!.revision, patch: {respond: '', newTopic: ''}})).kind).toBe('saved');
+  expect((await getProjectByName('demo'))!.smartRules).toEqual({respond: '', newTopic: ''});
+  const reloaded = await view(owner);
+  expect(reloaded.sections.smartRules!.stored).toEqual({respond: '', newTopic: ''});
+  expect(reloaded.smartPrompt!.text).toBe('');
 });
 
 it('updates exact materialized defaults consistently in the view and runtime, preserving custom edits', async () => {

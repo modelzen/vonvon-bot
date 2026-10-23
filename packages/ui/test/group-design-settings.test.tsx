@@ -91,12 +91,13 @@ it('rejects missing catalogs and model/Effort combinations with no intersection'
   expect(modelAccessProblem({...value, models: ['unknown']}, catalog)).toContain('unknown');
   expect(modelAccessProblem(value, {...catalog, backend: 'other'})).toContain('暂不可用');
 });
-it('restores separate smart prompts and response controls without Bot default actions', () => {
+it('combines legacy smart prompts in one editor without losing either custom rule', () => {
   const html = render('response');
   expect(html.indexOf('决策模型')).toBeLessThan(html.indexOf('判断规则'));
   expect(html.indexOf('实际回复和执行任务')).toBeLessThan(html.indexOf('判断规则'));
-  expect(html).toContain('什么时候回复'); expect(html).toContain('响应规则原文');
-  expect(html).toContain('什么时候创建新话题'); expect(html).toContain('新话题规则原文');
+  expect(html).toContain('响应规则原文'); expect(html).toContain('新话题规则原文');
+  expect(html.match(/role="textbox"/g)).toHaveLength(1);
+  expect(html).toContain('contentEditable="true"');
   expect(html).toContain('响应成员'); expect(html).toContain('完成提醒'); expect(html).toContain('显示模型');
   expect(html).not.toContain('跟着 Bot 默认');
   expect(html).not.toContain('查看合成');
@@ -111,13 +112,13 @@ it('announces shared readonly reasons once but preserves independent safety reas
   expect(html.match(/独有权限限制/g)).toHaveLength(1);
 });
 
-it('shows actual default text in both editable prompt fields with a restore action', () => {
+it('shows the actual default in one writing surface with four removable headings and restore', () => {
   const view = fixture();
   view.sections.smartRules = section({...DEFAULT_SMART_RULES});
   const html = render('response', view);
-  expect(html).toContain('直接叫你的名字');
-  expect(html).toContain('出现独立的新任务');
-  expect(html).toMatch(/<textarea[^>]*aria-label="什么时候回复"[^>]*>先看/);
-  expect(html).toMatch(/<textarea[^>]*aria-label="什么时候创建新话题"[^>]*>接着当前讨论/);
+  for (const title of ['什么时候回应', '什么时候不回应', '消息在群主区时', '消息已经在话题里时']) expect(html).toContain(title);
+  expect(html.match(/data-rule-heading/g)).toHaveLength(4);
+  expect(html.match(/data-remove-heading/g)).toHaveLength(4);
+  expect(html).toContain('话题内只判断是否回应');
   expect(html).toContain('恢复默认');
 });

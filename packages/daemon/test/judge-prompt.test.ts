@@ -47,7 +47,7 @@ describe('judge prompt', () => {
       expect(JUDGE_FORMAT_LINES[variant].split('\n')[1]).toBe('你只做判断，不调用任何工具，不回答消息本身。');
     }
     expect(new Set(Object.values(JUDGE_FORMAT_LINES)).size).toBe(2);
-    expect(DEFAULT_SMART_PROMPT).toContain('拿不准时不回');
+    expect(DEFAULT_SMART_PROMPT).toContain('拿不准时不回应');
     expect(judgeSchema('topic')).toMatchObject({ properties: { decision: { enum: ['skip', 'reply'] }, reason: { maxLength: 80 } } });
   });
 
