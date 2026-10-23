@@ -42,7 +42,7 @@ extraResources:
       - "**/*"
 npmRebuild: false
 mac:
-  icon: ../ui/public/vonvon-logo.png
+  icon: assets/macos-icon.png
   category: public.app-category.developer-tools
   target:
     - dmg

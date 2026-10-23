@@ -34,6 +34,7 @@ if (keys.length === 2) {
 }
 await access(join(ui, 'index.html'));
 await access(join(root, 'assets/tray.png'));
+await access(join(root, 'assets/macos-icon.png'));
 await mkdir(dist, { recursive: true });
 await build({
   absWorkingDir: root,
@@ -57,6 +58,7 @@ await cp(join(dist, 'preload.cjs'), join(stage, 'desktop/preload.cjs'));
 await cp(join(dist, 'update-config.json'), join(stage, 'dist/update-config.json'));
 await cp(ui, join(stage, 'ui'), { recursive: true });
 await cp(join(root, 'assets/tray.png'), join(stage, 'assets/tray.png'));
+await cp(join(root, 'assets/macos-icon.png'), join(stage, 'assets/macos-icon.png'));
 await writeFile(join(stage, 'package.json'), JSON.stringify({
   name: 'vonvon-bot-desktop',
   version,

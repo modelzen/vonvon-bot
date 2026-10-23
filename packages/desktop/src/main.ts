@@ -155,8 +155,8 @@ export async function startDesktop(): Promise<void> {
     if (terminating) return;
     const paths = desktopResources(app.getAppPath(), app.isPackaged);
     const uiIndex = realpathSync(paths.uiIndex);
-    // Use this build's brand asset even when macOS cached an older bundle icon.
-    if (process.platform === 'darwin') app.dock?.setIcon(join(dirname(uiIndex), 'vonvon-logo.png'));
+    // Use the same padded, transparent icon as the bundle, including in dev mode.
+    if (process.platform === 'darwin') app.dock?.setIcon(join(dirname(paths.trayPng), 'macos-icon.png'));
     const uiUrl = pathToFileURL(uiIndex).href;
     const preload = realpathSync(paths.preload);
     const icon = realpathSync(paths.trayPng);
