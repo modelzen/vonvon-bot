@@ -37,7 +37,7 @@ export const claudeTable: PermissionTable = {
     write: 'Claude：Edit automatically（acceptEdits 模式），命令在沙箱里',
     full: 'Claude：Bypass permissions（bypassPermissions）',
   }),
-  strength: () => '命令在系统沙箱里跑，改不了工作区以外的文件；工作区以外的文件读得到，包括别的群的记忆。',
+  strength: env => '只读、工作区可写档下，命令和读写文件的工具都挡得住 vonvon 存的别的群、别的项目、私聊的资料（包括记忆）；工作区和 bot 的 skill 读得到。' + (env.platform === 'linux' ? '别的群的目录名看得到、里面读不到；会话开着时新建的群、项目、bot 目录，命令读得到，到这个话题下一次起会话才挡。' : '') + '高级设置选「跳过权限检查」时，即使命令沙箱开着，也不限制读取别的群、项目和私聊资料。',
   fields: () => [
     { key: 'permissionMode', label: '权限模式', native: 'permission mode', kind: 'choice', choices: [
       { value: 'default', label: names.default, native: 'default', hint: '要确认的操作在群里没人确认，一律拒绝。' },
@@ -72,7 +72,7 @@ export const claudeTable: PermissionTable = {
     const value = parseClaudeNative(settings);
     const network = value.network === 'domains' ? `只允许 ${value.domains[0]}${value.domains.length > 1 ? ` 等 ${value.domains.length} 个网站` : ''}` : value.network === 'all' ? '全部' : '关';
     return `权限模式：${names[value.permissionMode]}（${value.permissionMode}）；命令沙箱：${value.sandbox ? '开' : '关'}` +
-      (value.permissionMode === 'bypassPermissions' ? '' : `；网络：${network}`);
+      (value.permissionMode === 'bypassPermissions' ? '；不限制读取别的群、项目和私聊资料' : `；网络：${network}`);
   },
   fromLegacy: (tier, network) => parseClaudeNative({ permissionMode: tier === 'qa' ? 'default' : 'acceptEdits', network: network ? 'all' : 'off' }),
 };

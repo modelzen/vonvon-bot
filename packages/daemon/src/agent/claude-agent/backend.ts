@@ -35,7 +35,9 @@ import { claudeErrorKind, errorKindFromText } from '../error-kind';
 import { resolveSessionProfile, type SessionProfileCapabilities } from '../session-profile';
 import { BackendNotInstalledError, isBackendDepInstalled, installedBackendVersion, loadBackendDep } from '../backend-loader';
 import { claudeAccess, permissionOptions } from './permission';
-import { findTranscript, scanTranscript } from './transcript';
+import { realScope, linuxReadScope } from './read-scope';
+export { ReadScopeError } from './read-scope';
+import { findTranscript, readCustomTitle, scanTranscript } from './transcript';
 import { foldSessionMessages, mapSessionSummary } from './history';
 import { ClaudeAgentThread, NATIVE_MEMORY_OFF, type TranscriptMark } from './thread';
 import { claudeConfigDir, readConfiguredClaudeModel } from './configured-model';
@@ -517,15 +519,11 @@ export class ClaudeAgentBackend implements AgentBackend {
     }
   }
 
-  async readSessionTitle(cwd: string, sessionId: string): Promise<string | undefined> {
-    const sdk = await this.sdkLoader();
-    // Read the exact transcript metadata instead of a bounded list page: an old
-    // resumed session may no longer be in the newest N entries. Only customTitle
-    // counts here; summary/firstPrompt do not make Claude Code's resume picker
-    // treat the session as explicitly named.
-    const session = await sdk.getSessionInfo(sessionId, { dir: cwd });
-    const title = session?.customTitle?.trim();
-    return title || undefined;
+  async readSessionTitle(_cwd: string, sessionId: string): Promise<string | undefined> {
+    // getSessionInfo().customTitle also includes CLI-generated ai-title records.
+    // Only explicit custom-title records should stop vonvon from naming a session.
+    const file = await findTranscript(sessionId);
+    return file ? readCustomTitle(file) : undefined;
   }
 
   async setSessionTitle(cwd: string, sessionId: string, title: string): Promise<void> {
@@ -636,6 +634,10 @@ export class ClaudeAgentBackend implements AgentBackend {
     const sdk = await this.sdkLoader();
     const realCwd = await realpath(opts.cwd).catch(() => opts.cwd);
     const access = claudeAccess(opts.mode, opts.network, opts.cwd, realCwd, await Promise.all(profile.additionalRoots.map(async root => ({ ...root, path: await realpath(root.path) }))), opts.native);
+    if (access.mode !== 'full' && opts.readScope) {
+      access.read = await realScope(opts.readScope, opts.cwd, realCwd);
+      if (process.platform === 'linux') access.sandboxRead = await linuxReadScope(access.read, realCwd);
+    }
     return new ClaudeAgentThread({
       sessionId: randomUUID(),
       resume: false,
@@ -662,6 +664,10 @@ export class ClaudeAgentBackend implements AgentBackend {
     const transcript = await transcriptMark(await assertSessionSaved(opts.sessionId), opts.sessionId);
     const realCwd = await realpath(opts.cwd).catch(() => opts.cwd);
     const access = claudeAccess(opts.mode, opts.network, opts.cwd, realCwd, await Promise.all(profile.additionalRoots.map(async root => ({ ...root, path: await realpath(root.path) }))), opts.native);
+    if (access.mode !== 'full' && opts.readScope) {
+      access.read = await realScope(opts.readScope, opts.cwd, realCwd);
+      if (process.platform === 'linux') access.sandboxRead = await linuxReadScope(access.read, realCwd);
+    }
     return new ClaudeAgentThread({
       sessionId: opts.sessionId,
       resume: true,
