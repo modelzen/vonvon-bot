@@ -17,6 +17,18 @@ it('keeps a saved unavailable model Provider visible but disabled', () => {
   expect(html).toContain('配置已保留');
 });
 
+it('explains the retained tier and cleared advanced settings when changing Provider', () => {
+  const props = {botId, value: {backend: 'claude-agent', models: [], efforts: []}, onChange: () => {}, disabled: false,
+    providers: [{id: 'codex-appserver', displayName: 'Codex'}, {id: 'claude-agent', displayName: 'Claude'}],
+    savedBackend: 'codex-appserver', permission: {name: '工作区可写', summary: '能改工作区里的文件，能联网。'}};
+  const html = render(createElement(ModelAccessFields, props));
+  expect(html).toContain('换 provider 以后，权限还是「工作区可写」（能改工作区里的文件，能联网。）；高级设置会清掉。');
+  expect(render(createElement(ModelAccessFields, {...props, value: {...props.value, backend: props.savedBackend}}))).not.toContain('高级设置会清掉');
+  const invalid = render(createElement(ModelAccessFields, {...props, permissionInvalid: true, permission: {name: '只读', summary: '不联网。'}}));
+  expect(invalid).toContain('恢复原来保存的权限档，可能比当前的只读更宽。建议先在工作区重新选一档。');
+  expect(invalid).not.toContain('权限还是「只读」');
+});
+
 it('keeps unavailable decision Providers visible and open for setup guidance', () => {
   const html = render(createElement(DecisionFields, {botId, groupBackend: 'codex-appserver', value: {kind: 'llm', backend: 'claude-agent', model: 'haiku'}, effective: {kind: 'default'}, onChange: () => {}, disabled: false, providers: [], services: [{provider: 'actual', displayName: 'Actual', keyId: 'actual-key', models: [{id: 'jev', displayName: 'Jev'}], keySet: false}]}));
   expect(html).toContain('Claude 尚未就绪');

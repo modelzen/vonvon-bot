@@ -52,10 +52,9 @@ vi.mock('../src/config/paths', async () => {
   };
 });
 
-// performSetPermissionMode 的「后端档位兼容守门」直接从 catalog 读 supportedModes
-// （非 backendFor 注入），故用 mock 给真实 catalog 追加一个泛化的「仅 full」后端条目
-// 'fake-fullonly'，以保留该守卫的通用覆盖——而不绑定任何具体后端名。其余 catalog
-// 行为（codex-appserver 全档、catalogBackendIds 等）走 importActual 原样保留。
+// groupBackendId recognizes the synthetic runtime backend through this catalog entry.
+// Permission validation itself reads the injected runtime backend, including host availability.
+// Other catalog behavior remains unchanged.
 vi.mock('../src/agent/catalog', async () => {
   const actual = await vi.importActual<typeof import('../src/agent/catalog')>('../src/agent/catalog');
   const fakeFullOnly = {
@@ -86,6 +85,10 @@ function fakeBackend(over: Partial<AgentBackend> = {}): AgentBackend {
     doctor: async () => ({ ok: true, version: '1.0.0' }),
     ...over,
   } as unknown as AgentBackend;
+}
+
+function permissionBackendFor(id: string): AgentBackend {
+  return fakeBackend({ id, ...(id === 'fake-fullonly' ? { supportedModes: ['full'] } : {}) });
 }
 
 beforeEach(async () => {
@@ -273,18 +276,20 @@ describe('performSetCompletionReminder', () => {
 });
 
 describe('performSetPermissionMode', () => {
-  it('落盘 mode/network + 驱逐活跃会话（新档立即生效的既有语义）', async () => {
+  it.each([['qa', false], ['write', true], ['full', true]] as const)('sets %s with network %s, clears custom and evicts sessions', async (mode, network) => {
+    await mutateProject('demo', p => { p.custom = { backend: 'codex-appserver', settings: { sandbox: 'read-only', network: true } }; });
     const evict = vi.fn(async () => undefined);
     const r = await performSetPermissionMode({
       projectName: 'demo',
-      mode: 'qa',
-      network: true,
+      mode,
+      backendFor: permissionBackendFor,
       evictLiveSessionsForChat: evict,
     });
     expect(r.ok).toBe(true);
     const p = await getProjectByName('demo');
-    expect(p?.mode).toBe('qa');
-    expect(p?.network).toBe(true);
+    expect(p?.mode).toBe(mode);
+    expect(p?.network).toBe(network);
+    expect(p).not.toHaveProperty('custom');
     expect(evict).toHaveBeenCalledWith('oc_demo');
   });
 
@@ -292,18 +297,20 @@ describe('performSetPermissionMode', () => {
     const stored = JSON.parse(await readFile(paths.projectsFile, 'utf8'));
     stored.projects = stored.projects.map((p: Record<string, unknown>) => (p.name === 'demo' ? { ...p, mode: 'full', guestMode: 'qa' } : p));
     await writeFile(paths.projectsFile, JSON.stringify(stored));
-    const r = await performSetPermissionMode({ projectName: 'demo', mode: 'write', evictLiveSessionsForChat: async () => undefined });
+    const r = await performSetPermissionMode({ projectName: 'demo', mode: 'write', backendFor: permissionBackendFor, evictLiveSessionsForChat: async () => undefined });
     expect(r.ok).toBe(true);
     const row = JSON.parse(await readFile(paths.projectsFile, 'utf8')).projects.find((p: { name: string }) => p.name === 'demo');
     expect(row).not.toHaveProperty('guestMode');
     expect(row.mode).toBe('write');
   });
 
-  it('缺省字段不改盘（undefined 跳过——与 DM 旧写法等价）', async () => {
+  it('an unselected tier keeps custom settings and does not evict', async () => {
+    await mutateProject('demo', p => { p.custom = { backend: 'codex-appserver', settings: { sandbox: 'read-only', network: true } }; });
+    const before = await readFile(paths.projectsFile, 'utf8');
     const evict = vi.fn(async () => undefined);
-    await performSetPermissionMode({ projectName: 'demo', network: false, evictLiveSessionsForChat: evict });
-    const p = await getProjectByName('demo');
-    expect(p?.mode).toBe('full'); // 原值保留
+    await performSetPermissionMode({ projectName: 'demo', backendFor: permissionBackendFor, evictLiveSessionsForChat: evict });
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(before);
+    expect(evict).not.toHaveBeenCalled();
   });
 
   it('Web 来路的非法档位 → 拒绝（DM 来路有 asTier 收窄，这里再守一道）', async () => {
@@ -311,10 +318,11 @@ describe('performSetPermissionMode', () => {
     const r = await performSetPermissionMode({
       projectName: 'demo',
       mode: 'root' as never,
+      backendFor: permissionBackendFor,
       evictLiveSessionsForChat: evict,
     });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toContain('未知权限档');
+    if (!r.ok) expect(r.reason).toContain('未知权限');
     expect(evict).not.toHaveBeenCalled();
     expect((await getProjectByName('demo'))?.mode).toBe('full');
   });
@@ -325,9 +333,9 @@ describe('performSetPermissionMode', () => {
   it('后端只支持 full，把权限档改到 qa → 前置拒绝且不落盘、不驱逐', async () => {
     await addProject({ name: 'cl', chatId: 'oc_cl', cwd: '/tmp/cl', blank: false, createdAt: 1, mode: 'full', backend: 'fake-fullonly' });
     const evict = vi.fn(async () => undefined);
-    const r = await performSetPermissionMode({ projectName: 'cl', mode: 'qa', evictLiveSessionsForChat: evict });
+    const r = await performSetPermissionMode({ projectName: 'cl', mode: 'qa', backendFor: permissionBackendFor, evictLiveSessionsForChat: evict });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toContain('完全访问');
+    if (!r.ok) expect(r.reason).toBe('这个 provider 没有这一档。');
     expect(evict).not.toHaveBeenCalled();
     expect((await getProjectByName('cl'))?.mode).toBe('full'); // 未改盘
     await removeProject('cl');
@@ -335,7 +343,7 @@ describe('performSetPermissionMode', () => {
 
   it('codex 后端（supportedModes 全档）→ 任意权限档放行', async () => {
     await addProject({ name: 'cx', chatId: 'oc_cx', cwd: '/tmp/cx', blank: false, createdAt: 1, mode: 'full', backend: 'codex-appserver' });
-    const r = await performSetPermissionMode({ projectName: 'cx', mode: 'qa', evictLiveSessionsForChat: async () => undefined });
+    const r = await performSetPermissionMode({ projectName: 'cx', mode: 'qa', backendFor: permissionBackendFor, evictLiveSessionsForChat: async () => undefined });
     expect(r.ok).toBe(true);
     expect((await getProjectByName('cx'))?.mode).toBe('qa');
     await removeProject('cx');
@@ -367,12 +375,13 @@ describe('performBackendSwitch（注册表 → doctor 探活 → 档位支持面
     await performSetPermissionMode({
       projectName: 'demo',
       mode: 'qa',
+      backendFor: permissionBackendFor,
       evictLiveSessionsForChat: async () => undefined,
     });
     const be = fakeBackend({ supportedModes: ['full'] } as Partial<AgentBackend>);
     const r = await performBackendSwitch({ projectName: 'demo', target: 'codex-appserver', backendFor: () => be });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toContain('权限档');
+    if (!r.ok) expect(r.reason).toContain('权限');
   });
 
   it('全过 → 写盘 + 写后回读（legacy：backend 未设时一次性落地）', async () => {
@@ -380,6 +389,16 @@ describe('performBackendSwitch（注册表 → doctor 探活 → 档位支持面
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.project.backend).toBe('codex-appserver');
     expect((await getProjectByName('demo'))?.backend).toBe('codex-appserver');
+  });
+
+  it('a real legacy backend change clears custom and normalizes network without changing the tier', async () => {
+    await mutateProject('demo', p => { p.mode = 'write'; p.network = false;
+      p.custom = { backend: 'codex-appserver', settings: { sandbox: 'workspace-write', network: false } }; });
+    const r = await performBackendSwitch({ projectName: 'demo', target: 'claude-agent', backendFor: () => fakeBackend({ id: 'claude-agent' }) });
+    expect(r.ok).toBe(true);
+    const p = await getProjectByName('demo');
+    expect(p).toMatchObject({ backend: 'claude-agent', mode: 'write', network: true });
+    expect(p).not.toHaveProperty('custom');
   });
 
   it('已设后端再切到异值 → 防御式拒绝「创建时选定，不支持切换」且不写盘', async () => {
@@ -395,9 +414,11 @@ describe('performBackendSwitch（注册表 → doctor 探活 → 档位支持面
 
   it('已设后端切到同值 → no-op 放行（幂等，不算切换）', async () => {
     await performBackendSwitch({ projectName: 'demo', target: 'codex-appserver', backendFor: () => fakeBackend() });
+    const custom = { backend: 'codex-appserver', settings: { sandbox: 'workspace-write', network: false } };
+    await mutateProject('demo', p => { p.mode = 'write'; p.network = false; p.custom = custom; });
     const r = await performBackendSwitch({ projectName: 'demo', target: 'codex-appserver', backendFor: () => fakeBackend() });
     expect(r.ok).toBe(true);
-    expect((await getProjectByName('demo'))?.backend).toBe('codex-appserver');
+    expect(await getProjectByName('demo')).toMatchObject({ backend: 'codex-appserver', mode: 'write', network: false, custom });
   });
 });
 
@@ -411,6 +432,25 @@ describe('createAdminWriteExecutor / runAdminWriteOp（Web · IPC 入口）', ()
     const r = await runAdminWriteOp({ kind: 'setNoMention', project: 'demo', on: false }, deps);
     expect(r.ok).toBe(true);
     expect((await getProjectByName('demo'))?.noMention).toBe(false);
+  });
+
+  it('RPC permission writes honor runtime full-only capability before saving or evicting', async () => {
+    await mutateProject('demo', p => { p.custom = { backend: 'codex-appserver', settings: { sandbox: 'read-only', network: true } }; });
+    const before = await readFile(paths.projectsFile, 'utf8');
+    const reason = 'Linux 测试后端只能使用完全访问。';
+    const backendFor = vi.fn((id: string | undefined) => fakeBackend({ id, fullAccessOnly: () => reason }));
+    const evictLiveSessionsForChat = vi.fn(async () => undefined);
+    for (const mode of ['qa', 'write'] as const) {
+      expect(await runAdminWriteOp({ kind: 'setPermissionMode', project: 'demo', mode }, { backendFor, evictLiveSessionsForChat }))
+        .toEqual({ ok: false, reason });
+      expect(await readFile(paths.projectsFile, 'utf8')).toBe(before);
+      expect(evictLiveSessionsForChat).not.toHaveBeenCalled();
+    }
+    expect((await runAdminWriteOp({ kind: 'setPermissionMode', project: 'demo', mode: 'full' }, { backendFor, evictLiveSessionsForChat })).ok).toBe(true);
+    expect(await getProjectByName('demo')).toMatchObject({ mode: 'full', network: true });
+    expect(await getProjectByName('demo')).not.toHaveProperty('custom');
+    expect(backendFor).toHaveBeenCalledWith('codex-appserver');
+    expect(evictLiveSessionsForChat).toHaveBeenCalledOnce();
   });
 
   it('执行器：成功返回 done，拒绝抛 AdminWriteError（带 code，IPC/HTTP 可还原）', async () => {

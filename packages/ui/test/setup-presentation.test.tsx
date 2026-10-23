@@ -237,7 +237,7 @@ const sandboxed = (sandbox?: NonNullable<ToolState['sandbox']>) => linuxSteps([t
 it('adds the Codex note and the Claude sandbox on Linux, only for tools that are installed', () => {
   expect(linuxSteps([tool({tool: 'codex', installation: 'missing'}), tool({tool: 'claude', installation: 'missing'})])).toEqual([]);
   const [codex, claude] = sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'ok'});
-  expect(codex).toMatchObject({id: 'codex-linux', title: 'Codex 的权限档', status: '只能用完全访问', tone: 'neutral', done: true, actions: []});
+  expect(codex).toMatchObject({id: 'codex-linux', title: 'Codex 的权限', status: '只能用完全访问', tone: 'neutral', done: true, actions: []});
   expect(codex?.detail).toContain('vonvon settings set --group <群 id> permission.mode=full');
   expect(claude).toMatchObject({id: 'claude-sandbox', status: '可以用', tone: 'success', done: true, commands: undefined});
   expect(linuxSteps([tool({tool: 'codex', installation: 'unknown'})]).map(step => step.id)).toEqual(['codex-linux']);

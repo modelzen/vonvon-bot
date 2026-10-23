@@ -175,11 +175,11 @@ it('readonly owner never permits writes; failed catalogs do not disable unrelate
 it('project persistence survives failed runtime eviction with an explicit restart effect', async () => {
   const { owner } = await fixture({ evictLiveSessionsForChat: async () => { throw new Error('busy'); } });
   const view = await owner.read(project) as ProjectSettingsView;
-  const result = await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { network: true } });
+  const result = await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { mode: 'write' } });
   expect(result.kind).toBe('saved'); if (result.kind === 'saved') expect(result.effects.some(e => e.when === 'restart')).toBe(true);
   expect((await getProjectByName('demo'))?.network).toBe(true);
 });
-it('s20b: a full-only backend says why, refuses saving 只读 or 读写, and keeps a stored 只读', async () => {
+it('s31c: a full-only backend refuses unavailable tiers and custom, while unrelated edits retain a stored 只读', async () => {
   expect((await (await fixture()).owner.read(project) as ProjectSettingsView).identity).not.toHaveProperty('fullOnly');
   await updateProject('demo', { mode: 'qa' });
   const { owner } = await fixture({ backendFor: () => ({ ...backend, fullAccessOnly: () => 'only full here' }) });
@@ -189,11 +189,83 @@ it('s20b: a full-only backend says why, refuses saving 只读 or 读写, and kee
     const result = await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch });
     expect(result).toEqual({ kind: 'rejected', fields: [{ field: 'settings', message: 'only full here' }] });
   }
-  expect((await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { network: true } })).kind).toBe('saved');
-  expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa', network: true });
+  expect((await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { custom: { sandbox: 'read-only', network: false } } }))).toEqual({ kind: 'rejected', fields: [{ field: 'settings', message: 'only full here' }] });
+  expect(view.sections.permission.stored.options.tiers[0]?.unavailable).toBe('only full here');
+  expect((await owner.save({ scope: project, section: 'presentation', revision: view.sections.presentation!.revision, patch: { showToolCalls: false } })).kind).toBe('saved');
+  expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa' });
   view = await owner.read(project) as ProjectSettingsView;
   expect((await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { mode: 'full' } })).kind).toBe('saved');
   expect((await getProjectByName('demo'))?.mode).toBe('full');
+});
+describe('s31c permission settings', () => {
+  const custom = { backend: 'codex-appserver', settings: { sandbox: 'read-only', network: true } };
+  it.each([
+    [{ mode: 'write' }, 'write', true, undefined],
+    [{ custom: { sandbox: 'workspace-write', network: true } }, 'write', true, undefined],
+    [{ mode: 'full', custom: custom.settings }, 'qa', true, custom],
+    [{ custom: null }, 'qa', false, undefined],
+    [{ mode: 'write', custom: null }, 'write', true, undefined],
+  ] as const)('saves patch %j with canonical stored effects', async (patch, mode, network, expectedCustom) => {
+    await updateProject('demo', { mode: 'qa', network: true, custom });
+    const evict = vi.fn(async () => {});
+    const { owner } = await fixture({ evictLiveSessionsForChat: evict });
+    const before = await owner.read(project) as ProjectSettingsView;
+    expect((await owner.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch })).kind).toBe('saved');
+    const saved = (await getProjectByName('demo'))!;
+    expect(saved).toMatchObject({ mode, network });
+    expect(saved.custom).toEqual(expectedCustom);
+    if (!expectedCustom) expect(saved).not.toHaveProperty('custom');
+    expect(evict).toHaveBeenCalledOnce();
+  });
+  it('rejects network patches explicitly, malformed custom and unsupported tiers', async () => {
+    expect(() => parseSettingsEdit({ scope: project, section: 'permission', revision: 'r', patch: { network: true } })).toThrow('联网已经并进权限的档位');
+    for (const value of [[], 'x', 3]) expect(() => parseSettingsEdit({ scope: project, section: 'permission', revision: 'r', patch: { custom: value } })).toThrow();
+    const { owner } = await fixture({ backendFor: () => ({ ...backend, supportedModes: ['full'] }) });
+    const before = await owner.read(project) as ProjectSettingsView;
+    expect(await owner.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { custom: { sandbox: 'unknown' } } })).toMatchObject({ kind: 'rejected', fields: [{ message: expect.stringContaining('Codex 高级设置') }] });
+    expect(await owner.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { mode: 'write' } })).toMatchObject({ kind: 'rejected', fields: [{ message: '这个 provider 没有这一档。' }] });
+  });
+  it('shows legacy/custom/invalid states and includes custom in conflict revisions', async () => {
+    const { owner } = await fixture();
+    await updateProject('demo', { mode: 'write', network: false });
+    let view = await owner.read(project) as ProjectSettingsView;
+    expect(view.sections.permission.stored).toMatchObject({ network: false, custom: { sandbox: 'workspace-write', network: false }, options: { legacy: true, customSummary: expect.stringContaining('网络：关') } });
+    expect((await getProjectByName('demo'))!).not.toHaveProperty('custom');
+    await updateProject('demo', { mode: 'qa', network: true, custom });
+    view = await owner.read(project) as ProjectSettingsView;
+    expect(view.sections.permission.stored.options.customSummary).toContain('只读（read-only）');
+    expect(view.sections.permission.stored.options).not.toHaveProperty('legacy');
+    await updateProject('demo', { custom: { ...custom, settings: { sandbox: 'read-only', network: false } } });
+    const changed = await owner.read(project) as ProjectSettingsView;
+    expect(changed.sections.permission.revision).not.toBe(view.sections.permission.revision);
+    expect((await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { mode: 'write' } })).kind).toBe('conflict');
+    await updateProject('demo', { mode: 'full', custom: { ...custom, settings: { bad: true } } });
+    expect((await owner.read(project) as ProjectSettingsView).sections.permission.stored).toMatchObject({ mode: 'qa', custom: null, network: false, options: { invalid: true } });
+  });
+  it.each([true, false])('clears custom and legacy network only on a real provider switch (custom=%s)', async explicit => {
+    await updateProject('demo', { mode: 'write', network: false, ...(explicit ? { custom } : {}) });
+    const { owner } = await fixture({ backendFor: id => ({ ...backend, id }) });
+    let view = await owner.read(project) as ProjectSettingsView;
+    expect((await owner.save({ scope: project, section: 'modelAccess', revision: view.sections.modelAccess!.revision, patch: { backend: 'codex-appserver', models: ['fixture-model'], efforts: ['high'] } })).kind).toBe('saved');
+    expect((await getProjectByName('demo'))?.network).toBe(false);
+    if (explicit) expect((await getProjectByName('demo'))?.custom).toEqual(custom);
+    view = await owner.read(project) as ProjectSettingsView;
+    expect((await owner.save({ scope: project, section: 'modelAccess', revision: view.sections.modelAccess!.revision, patch: { backend: 'claude-agent', models: ['fixture-model'], efforts: ['high'] } })).kind).toBe('saved');
+    expect(await getProjectByName('demo')).toMatchObject({ mode: 'write', network: true, backend: 'claude-agent' });
+    expect((await getProjectByName('demo'))!).not.toHaveProperty('custom');
+    view = await owner.read(project) as ProjectSettingsView;
+    expect(view.sections.permission.stored.options.tiers[0]?.native).toContain('Claude：');
+    expect((await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { custom: custom.settings } })).kind).toBe('rejected');
+  });
+  it('allows switching to a provider on which the stored tier is unavailable', async () => {
+    await updateProject('demo', { backend: 'claude-agent', mode: 'qa', network: true });
+    const { owner } = await fixture({ backendFor: id => ({ ...backend, id, fullAccessOnly: () => id === 'codex-appserver' ? 'only full here' : undefined }) });
+    const before = await owner.read(project) as ProjectSettingsView;
+    expect((await owner.save({ scope: project, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch: { backend: 'codex-appserver', models: ['fixture-model'], efforts: ['high'] } })).kind).toBe('saved');
+    expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa', network: false });
+    const after = await owner.read(project) as ProjectSettingsView;
+    expect(after.sections.permission.stored).toMatchObject({ mode: 'qa', options: { tiers: [expect.objectContaining({ tier: 'qa', unavailable: 'only full here' }), expect.anything(), expect.anything()] } });
+  });
 });
 it('s21: a group overrides 运行中来了消息, "default" goes back to the bot, Claude shows queue', async () => {
   const { owner } = await fixture();

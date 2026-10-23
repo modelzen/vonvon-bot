@@ -5259,7 +5259,7 @@ export function createOrchestrator(
       const kind = pickedMode(value.kind);
       const topic = value.t === 'topic';
       const backends = backendOptionsFor('full');
-      const fullOnly = Boolean(backendFor(DEFAULT_BACKEND_ID).fullAccessOnly?.());
+      const fullOnly = backendFor(DEFAULT_BACKEND_ID).fullAccessOnly?.();
       const form = { chatId, name, cwd: cwdIn, backends, backend, topic, fullOnly };
       // Same fresh-card pattern as DM.newProjectSubmit: a submitted form locks
       // its card_id, so the result goes to a new card while the form stays above
@@ -5865,39 +5865,40 @@ export function createOrchestrator(
         return p ? buildProjectSettingsCard(p, backendDisplayName(p.backend), AUTO_COMPACT_RETIRED) : renderDmMenuCard();
       });
     })
-    // 🔐 权限：打开下拉表单子卡（权限档 + 联网，选完提交）。
+    // 🔐 权限：打开单个权限下拉表单，联网随档。
     .on(DM.permission, ({ evt, value }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
       const name = typeof value.n === 'string' ? value.n : '';
       patch(evt, async () => {
         const p = await getProjectByName(name);
-        return p ? buildPermissionCard(p, groupBackend(p).fullAccessOnly?.()) : renderDmMenuCard();
+        const be = groupBackend(p);
+        return p ? buildPermissionCard(p, permissionTable(be.id), tableEnv(be)) : renderDmMenuCard();
       });
     })
-    // 提交权限表单：落盘 权限档 mode / 联网，再驱逐本项目活跃会话让新档立即生效（沙箱
+    // 提交权限表单：落盘 mode、清自定义并让联网随档，再驱逐本项目活跃会话让新档立即生效（沙箱
     // 在 thread/start 绑定后不可变）。表单卡 card_id 提交后会锁，故发一张全新的项目设置卡
     // （旧表单卡留痕），不 patch 原卡。
     .on(DM.permissionSubmit, ({ evt, value, formValue }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
       const name = typeof value.n === 'string' ? value.n : '';
       const mode = asTier(selectValue(formValue, 'mode'));
-      const network = selectValue(formValue, 'network') === 'on';
-      // A card sent before s15c (no version; it has 普通成员权限) saves nothing, a fresh one-tier card goes out.
+      // Old cards (including the separate network field) save nothing; send a current card.
       const oldCard = value.v !== PERMISSION_CARD_VERSION || selectValue(formValue, 'guestMode') !== undefined;
       void trackTask((async () => {
-        // On a full-only backend a save of 只读 or 读写 is refused as the web save is, with a fresh card.
         const p = await getProjectByName(name);
-        const fullOnly = p && groupBackend(p).fullAccessOnly?.();
-        if (p && (oldCard || (fullOnly && mode !== undefined && mode !== 'full'))) {
-          log.info('console', 'permission-refused', { project: name, mode, reason: oldCard ? 'old-card' : 'full-only' });
-          await sendManagedCard(channel, evt.chatId, buildPermissionCard(p, fullOnly)).catch((e) => log.fail('console', e, { phase: 'permission-result' }));
+        const be = groupBackend(p);
+        const table = permissionTable(be.id), env = tableEnv(be);
+        if (p && (oldCard || (mode !== undefined && tierInfo(table, env, mode).unavailable))) {
+          log.info('console', 'permission-refused', { project: name, mode, reason: oldCard ? 'old-card' : 'tier-unavailable' });
+          await sendManagedCard(channel, evt.chatId, buildPermissionCard(p, table, env)).catch((e) => log.fail('console', e, { phase: 'permission-result' }));
           return;
         }
+        if (mode === undefined) return;
         // 共享层（admin/ops.ts）：落盘 + 驱逐活跃会话让新档立即生效；写后回读，
         // 卡片与盘上一致——与 Web 控制台的 setPermissionMode 完全同一条路径。
-        const r = await performSetPermissionMode({ projectName: name, mode, network, evictLiveSessionsForChat });
+        const r = await performSetPermissionMode({ projectName: name, mode, backendFor, evictLiveSessionsForChat });
         if (!r.ok) return;
-        log.info('console', 'permission', { project: name, mode, network });
+        log.info('console', 'permission', { project: name, mode });
         await sendManagedCard(channel, evt.chatId, buildProjectSettingsCard(r.project, backendDisplayName(r.project.backend))).catch((e) =>
           log.fail('console', e, { phase: 'permission-result' }),
         );
@@ -8386,7 +8387,7 @@ export function createOrchestrator(
         log.info('intake', 'bot-added-dropped', tail);
         return;
       }
-      const fullOnly = Boolean(backendFor(DEFAULT_BACKEND_ID).fullAccessOnly?.());
+      const fullOnly = backendFor(DEFAULT_BACKEND_ID).fullAccessOnly?.();
       const card = buildJoinGroupFormCard({ chatId: evt.chatId, name, topic, backends, backend,
         hasOtherBots: mode.ok && mode.bots !== undefined ? mode.bots > 1 : undefined,
         fullOnly, addedBy: admin ? undefined : { name: adderName } });

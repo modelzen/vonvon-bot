@@ -255,7 +255,7 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
       await vi.waitFor(() => expect(fake.card).toHaveBeenCalledOnce());
       const sent = JSON.stringify(fake.card.mock.calls[0]?.[2]);
       expect(sent).toContain(`"v":${PERMISSION_CARD_VERSION}`);
-      expect(sent).toContain('现在是🔒 项目内只读');
+      expect(sent).toContain('现在是只读');
       expect(fake.log.info).toHaveBeenCalledWith('console', 'permission-refused', { project: 'demo', mode: 'full', reason: 'old-card' });
       expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa' });
       expect(JSON.parse(readFileSync(paths.projectsFile, 'utf8')).projects[0]).toMatchObject({ mode: 'full', guestMode: 'qa' });
@@ -268,8 +268,23 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
       // The card presets no tier it cannot offer, so an untouched dropdown sends nothing.
       await orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
         action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo', v: PERMISSION_CARD_VERSION } }, raw: { action: { form_value: { network: 'on' } } } } as never);
+      await orchestrator.shutdown();
+      expect(fake.card).not.toHaveBeenCalled();
+      expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa' });
+      expect((await getProjectByName('demo'))?.network).toBeUndefined();
+    } finally { await removeProject('demo'); }
+  });
+
+  it('refreshes a previous network-switch card without writing either field', async () => {
+    fake.fullOnly = undefined;
+    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: workspace, createdAt: 1, blank: false, mode: 'qa', network: false });
+    try {
+      await orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
+        action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo', v: PERMISSION_CARD_VERSION - 1 } },
+        raw: { action: { form_value: { mode: 'write', network: 'on' } } } } as never);
       await vi.waitFor(() => expect(fake.card).toHaveBeenCalledOnce());
-      expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa', network: true });
+      expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa', network: false });
+      expect(JSON.stringify(fake.card.mock.calls[0]?.[2])).not.toContain('"name":"network"');
     } finally { await removeProject('demo'); }
   });
 

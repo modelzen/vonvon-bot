@@ -5,6 +5,7 @@ export class SettingsInputError extends Error {
 }
 type Rule = (value: unknown) => boolean;
 const bool: Rule = value => typeof value === 'boolean';
+const isPlainObject: Rule = value => value !== null && typeof value === 'object' && !Array.isArray(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 const body: Rule = value => typeof value === 'string' && value.length <= 30000;
 const selector: Rule = value => typeof value === 'string' && value.length > 0 && value.length <= 4096 && !/[\r\n\0]/.test(value);
 const text: Rule = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000;
@@ -107,7 +108,7 @@ const schemas: Record<string, Record<string, Rule>> = {
     presentation: shape({ voiceEnabled: bool, showToolCalls: bool, showModel: one('off', 'running', 'always'), completionMode: one('manual', 'long', 'failures', 'always'), longTaskMinutes: integer(1, 1440) }, true),
     permission: shape({
       mode: one('qa', 'write', 'full'),
-      network: bool
+      custom: value => value === null || isPlainObject(value)
     }, true),
     response: shape({
       noMention: bool
@@ -175,6 +176,8 @@ export function parseSettingsEdit(input: unknown): SettingsEdit {
     throw new SettingsInputError('设置保存参数无效');
   const scope = parseSettingsScope(object.scope);
   const section = String(object.section);
+  if (scope.kind === 'project' && section === 'permission' && object.patch && typeof object.patch === 'object' && Object.hasOwn(object.patch, 'network'))
+    throw new SettingsInputError('联网已经并进权限的档位：只读不联网，工作区可写联网，完全访问不限制。只读又要联网这类组合，用高级设置 permission.custom。');
   const rule = schemas[scope.kind]?.[section];
   if (!Object.hasOwn(schemas[scope.kind]!, section) || !rule || !rule(object.patch) || Object.keys(settingsObject(object.patch)).length === 0)
     throw new SettingsInputError('设置字段、类型或范围无效');

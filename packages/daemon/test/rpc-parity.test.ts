@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { requestSchema, responseSchema } from '@vonvon/protocol';
 import type { AdminBot, AdminProject } from '../src/admin/service';
 import type { HostSettingsView } from '../src/admin/settings-types';
@@ -28,7 +28,8 @@ function inventory(folderToken: string) {
     ['GET voice', 'settings', { type: 'read', scope: agentScope }],
     ['POST voice', 'settings', { type: 'act', action: { kind: 'voice', botId: bot.appId, action: { action: 'disable' } } }],
     ['POST completion-reminder', 'settings', { type: 'save', edit: { scope: agentScope, section: 'completion', revision: 'old', patch: { mode: 'always' } } }],
-    ['POST permission', 'command', { type: 'setPermission', membershipId, administrator: 'write', network: true }],
+    ['POST permission', 'command', { type: 'setPermission', membershipId, administrator: 'write', network: false }],
+    ['POST permission without network', 'command', { type: 'setPermission', membershipId, administrator: 'qa' }],
     ['POST no-mention', 'command', { type: 'setResponse', membershipId, response: 'all' }],
     ['POST backend', 'admin', { type: 'switchBackend', agentId: bot.appId, projectName: project.name, backend: 'claude-agent' }],
     ['PATCH bot', 'command', { type: 'setAgentEnabled', agentId: bot.appId, enabled: true }],
@@ -68,7 +69,8 @@ function inventory(folderToken: string) {
 describe('route inventory parity', () => {
   it('calls every replacement route through real WebSocket and parses its reply schema', async () => {
     let active = false;
-    const service = fakeService({ listBots: async () => [{ ...bot, active }], listProjects: async () => [project], setBotEnabled: async (_id, enabled) => { active = enabled; return { ok: true, activation: 'applied', message: '' }; },
+    const setPermissionMode = vi.fn(async () => undefined);
+    const service = fakeService({ setPermissionMode, listBots: async () => [{ ...bot, active }], listProjects: async () => [project], setBotEnabled: async (_id, enabled) => { active = enabled; return { ok: true, activation: 'applied', message: '' }; },
       pendingGroups: async () => ({ groups: [] }), joinedGroups: async () => ({ groups: [] }), bindGroup: async () => project,
       collaboration: async () => ({ project: { name: project.name, chatId: project.chatId, cwd: project.cwd, kind: project.kind, backend: project.backend, enabled: true, revision: 'project-token' } }),
       startCodexJob: () => ({ id: 'fixture-job' }), codexJob: () => ({ id: 'fixture-job', type: 'install', state: 'succeeded' }),
@@ -92,6 +94,7 @@ describe('route inventory parity', () => {
           expect(frame).toMatchObject({ payload: { kind: 'applied', revision: client.frames[snapshotIndex]?.type === 'event' && client.frames[snapshotIndex]?.event === 'snapshot' ? client.frames[snapshotIndex].payload.revision : -1 } });
         }
       }
+      expect(setPermissionMode.mock.calls).toEqual([[bot.appId, project.name, { mode: 'write' }], [bot.appId, project.name, { mode: 'qa' }]]);
       expect(fixture.control.requestRestart).toHaveBeenCalledWith(fixture.api.port);
       expect(fixture.control.requestStop).toHaveBeenCalledOnce();
       await client.close();

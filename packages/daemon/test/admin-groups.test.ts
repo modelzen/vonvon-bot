@@ -251,7 +251,7 @@ describe('desktop group commands in the owning bot', () => {
       await expect(joinExistingGroup(fixture.channel, { ...value, ...patch })).rejects.toThrow('不可修改');
     }
     await expect(joinExistingGroup(fixture.channel, { ...value, chatId: 'oc_name_conflict' })).rejects.toThrow('项目名');
-    expect(await joinExistingGroup(fixture.channel, { ...value, name: ' Conflicts ', mode: 'full', network: true, addedBy: 'ou_changed', noMention: true })).toEqual(first);
+    expect(await joinExistingGroup(fixture.channel, { ...value, name: ' Conflicts ', mode: 'full', addedBy: 'ou_changed', noMention: true })).toEqual(first);
     expect(await readFile(paths.projectsFile, 'utf8')).toBe(bytes);
     expect(fixture.message).toHaveBeenCalledTimes(1);
   });

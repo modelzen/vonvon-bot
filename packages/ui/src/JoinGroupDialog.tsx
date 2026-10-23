@@ -206,7 +206,7 @@ export function JoinGroupDialog({linux, open = true, agent, pending, initialGrou
           {existingDirectory && <SettingsRow title="主目录" value={folder?.displayPath ?? '未选择'} trailing={<Button disabled={busy} onClick={() => void chooseFolder()}>选择文件夹</Button>}/> }
           <SettingsRow className="group-choice-row" title="Provider" trailing={<SettingChoices<ProviderTool | ''> label="执行工具" disabled={busy} value={tool ?? ''} choices={[{value: 'codex', label: 'Codex', disabled: !ready('codex')}, {value: 'claude', label: 'Claude', disabled: !ready('claude')}]} onChange={value => {if ((value === 'codex' || value === 'claude') && ready(value)) setPickedTool(toolSchema.parse(value));}}/>} />
           {(!tool || !ready(tool)) && <SettingsRow title="Provider 尚未就绪" description={tool ? '当前选择不可用，请重新登录或主动选择其他 Provider。' : '请先安装并登录 Codex 或 Claude。'} trailing={onOpenProviders && <Button disabled={busy} onClick={onOpenProviders}>设置 Provider</Button>}/>}
-          {mode.kind === 'bind' && <SettingsRow title="权限档和网络" value="只读 · 网络关闭" />}
+          {mode.kind === 'bind' && <SettingsRow title="权限" value="只读（不联网）" />}
         </SettingsGroup>
         <FormField label="会话方式">
           <ChoiceGroup<Conversation | ''> label="会话方式" aria-required disabled={busy} value={conversation ?? ''} options={conversationsFor(mode.kind === 'bind' && mode.group.topic === true)} onChange={value => {if (value) {setConversation(value); setResponse(picked => keptResponse(value, picked));}}} />

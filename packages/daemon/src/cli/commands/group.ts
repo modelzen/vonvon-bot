@@ -120,7 +120,7 @@ export async function runGroupBind(rawGroupId: string, options: BindOptions, io:
   const human = [`已绑定 ${result.name}（${groupId.data}）→ ${result.folder} · ${tool.data === 'codex' ? 'Codex' : 'Claude'} · ${conversationLabel(conversation.data)}${smart ? '' : ` · 免 @ ${reply === 'all' ? '开' : '关'}`}`];
   // The group stays in qa: on Linux its Codex turns are refused with a reply until the owner picks full (s20b).
   if (host.platform === 'linux' && tool.data === 'codex') {
-    human.push(`Linux 上 Codex 只能用完全访问，运行：vonvon settings set${result.several ? ` --bot ${result.agentId}` : ''} --group ${groupId.data} permission.mode=full`);
+    human.push(`Linux 上的 Codex 暂时只能用完全访问，没有沙箱。运行：vonvon settings set${result.several ? ` --bot ${result.agentId}` : ''} --group ${groupId.data} permission.mode=full`);
   }
   print(io, human, { groupId: groupId.data, name: result.name, folder: result.folder, tool: tool.data, conversation: conversation.data, ...(smart ? {} : { response: reply }), revision: result.revision });
 }

@@ -121,8 +121,8 @@ it('s36b: topic binding offers only 按话题聊 and 智能 with topic action va
 
 it('s36b: the setup card names the adder, workspace defaults, backend and permissions', () => {
   const opts = { chatId: 'oc_topic', name: 'Test group', backends: [{ label: 'Codex', value: 'codex-appserver' }, { label: 'Claude', value: 'claude-agent' }], backend: 'claude-agent' };
-  const json = JSON.stringify(buildJoinGroupFormCard({ ...opts, addedBy: { name: 'Guest' }, fullOnly: true }));
-  for (const text of ['🔗 设置这个群', '**Guest** 把我拉进了「Test group」', '拉我的不是主人或管理员，所以发给你', '留空就给这个群新建一个目录', '只读 · 网络：关', '这台电脑是 Linux', '默认用这个 bot 的后端']) expect(json).toContain(text);
+  const json = JSON.stringify(buildJoinGroupFormCard({ ...opts, addedBy: { name: 'Guest' }, fullOnly: '这台电脑是 Linux，只能完全访问' }));
+  for (const text of ['🔗 设置这个群', '**Guest** 把我拉进了「Test group」', '拉我的不是主人或管理员，所以发给你', '留空就给这个群新建一个目录', '只读（不联网）', '这台电脑是 Linux，只能完全访问', '默认用这个 bot 的后端']) expect(json).toContain(text);
   expect(json).toContain('"initial_option":"claude-agent"');
   expect(json).not.toContain('/Users/you');
   const plain = JSON.stringify(buildJoinGroupFormCard({ chatId: 'oc_unknown', addedBy: {} }));

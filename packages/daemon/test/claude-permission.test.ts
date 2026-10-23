@@ -49,6 +49,10 @@ describe('callback decision table', () => {
       }
     }
   });
+  it('explains how a custom network-off write group can return to the networked write tier', async () => {
+    expect(await decide(tier('write', false), call('SandboxNetworkAccess', { host: 'example.com' }), 'callback'))
+      .toEqual({ kind: 'deny', message: '这个群的权限不联网，连不上 example.com。不要再试着联网，换个办法，或者停下来说明：要联网得请主人在群设置里重新选一次工作区可写，或者改成完全访问。' });
+  });
   it.each([
     { mode: 'qa', network: false },
     { mode: 'write', network: true },

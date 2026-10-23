@@ -118,6 +118,19 @@ it('uses semantic inputs and keeps existing bytes when repeat input or group evi
   }, root);
 });
 
+it('reuses the pre-s31c full/false signature after upgrade and ignores new network input', async () => {
+  const root = await home(), seed = prepare(root);
+  const signature = `create/v1:${createHash('sha256').update(JSON.stringify([key.appId, key.tenant, seed.operatorOpenId,
+    seed.input.name, 'default', seed.input.workspace.root, 'multi', true, 'codex-appserver', 'full', false])).digest('hex')}`;
+  const legacy = await withCreationJournal(key, journal => journal.change(seed), root);
+  expect(legacy.snapshot.signature).toBe(signature);
+  const original = await readFile(pathFor(root));
+  await withCreationJournal(key, async journal => {
+    expect(await journal.change({ ...seed, input: { ...seed.input, network: true } })).toEqual(legacy);
+  }, root);
+  expect(await readFile(pathFor(root))).toEqual(original);
+});
+
 it('never permits dispatching an unknown operation again, including after the platform window', async () => {
   const root = await home();
   await withCreationJournal(key, async journal => {
