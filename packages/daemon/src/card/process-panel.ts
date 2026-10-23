@@ -4,14 +4,14 @@ export function processPanel(
   title: string,
   elements: readonly CardElement[],
   expanded: boolean,
-  options: { readonly icon?: string; readonly bodyIndent?: number; readonly spacing?: number; } = {},
+  options: { readonly icon?: string; readonly bodyIndent?: number; readonly spacing?: number; readonly titleColor?: 'grey' | false; } = {},
 ): CardElement {
   return {
     tag: 'collapsible_panel',
     expanded,
     header: {
       title: {
-        tag: 'markdown', content: `<font color='grey'>${title}</font>`, text_size: 'normal',
+        tag: 'markdown', content: options.titleColor === false ? title : `<font color='grey'>${title}</font>`, text_size: 'normal',
         ...(options.icon === undefined ? {} : { icon: { tag: 'standard_icon', token: options.icon, color: 'grey' } }),
       },
       vertical_align: 'center',
