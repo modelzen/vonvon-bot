@@ -116,6 +116,13 @@ export const memoryRequestSchema = z.discriminatedUnion("type", [
   z.object({type:z.literal("undo"),scope:memoryScopeRefSchema,eventId:id}).strict(),
   z.object({type:z.literal("export"),scope:memoryScopeRefSchema}).strict(),
   z.object({type:z.literal("events"),scope:memoryScopeRefSchema,itemId:id}).strict(),
+  /** 设计 5.8：记下主人这次打开这一页的时间，下次 `list` 只标这之后的（`library/seen.json`，不碰条目和 revision） */
+  z.object({type:z.literal("seen"),page:z.discriminatedUnion("kind",[
+    z.object({kind:z.literal("bot"),botId:id}).strict(),
+    z.object({kind:z.literal("project"),projectId:id}).strict(),
+  ])}).strict(),
+  /** 导航、项目列表、Bot 列表上"新"的条数：每个项目、每个 Bot 各一个数 */
+  z.object({type:z.literal("newCounts")}).strict(),
 ]);
 export type MemoryRequest = z.infer<typeof memoryRequestSchema>;
 
@@ -136,7 +143,15 @@ export const memoryReplySchema = z.discriminatedUnion("kind", [
     /** false: memory.json was changed outside the daemon; trusted entries are not to be injected */
     verified: z.boolean(),
     problems: z.array(z.string()),
+    /** 5.8：主人上次打开这一页以后，群里新记、改过、归档的条目（主人自己在桌面端、命令行做的、迁移导入的不算）；旧 daemon 没有 */
+    newIds: z.array(z.string()).optional(),
+    /** 同上，bot 新开的分支 */
+    newBranches: z.array(z.string()).optional(),
+    /** 因为满了、为给新条目腾位而归档的条目（3.7）；"已归档"里标"为腾位归档" */
+    madeRoom: z.array(z.string()).optional(),
   }),
+  z.object({kind:z.literal("seen"),at:z.number()}),
+  z.object({kind:z.literal("newCounts"),projects:z.record(z.string(),z.number().int().nonnegative()),bots:z.record(z.string(),z.number().int().nonnegative())}),
   z.object({kind:z.literal("item"),item:memoryItemSchema,branchApplied:z.string().optional(),newBranch:z.boolean().optional()}),
   z.object({kind:z.literal("conflict"),current:memoryItemSchema.optional(),message:z.string()}),
   z.object({kind:z.literal("refused"),reason:memoryRefusalSchema,message:z.string()}),

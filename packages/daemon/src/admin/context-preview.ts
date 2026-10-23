@@ -75,6 +75,7 @@ function sessionOf(record: SessionRecord, src: ContextSources, a: Assembled): No
   return {
     ...base, legacy: false, redeliverDue: context.fullRedeliverDue === true, sections,
     ...(turn ? { lastTurn: { at: turn.at, injected: turn.injected, items: itemsOf(context.memory),
+      ...(turn.missed?.length ? { missed: turn.missed } : {}),
       used: turn.used.map(id => { const text = current.get(id); return { id, ...(text === undefined ? {} : { text: Array.from(text.replace(/\s+/g, ' ').trim()).slice(0, USED_TEXT_CHARS).join('') }) }; }) } } : {}),
   };
 }

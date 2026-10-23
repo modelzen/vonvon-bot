@@ -268,12 +268,22 @@ const NOTICES_MAX = 2_048;
 const notices = new Map<string, { others: number; reasons: string[]; full: boolean }>();
 /** 隐藏块没记上的原因（`memory-full` 单独算），攒到下一轮的更新块（P4a 的 context-assembly 调 {@link takeMemoryNotices} 取走） */
 export function noteMissedBlocks(key: string, missed: readonly string[]): void {
+  lastMissed.set(key, missed.map(describeMiss));
+  if (lastMissed.size > NOTICES_MAX) lastMissed.delete(lastMissed.keys().next().value as string);
   if (!missed.length) { notices.delete(key); return; }
   const others = missed.filter(reason => reason !== 'memory-full');
   notices.set(key, { others: others.length, reasons: others.map(describeMiss), full: others.length < missed.length });
   if (notices.size > NOTICES_MAX) notices.delete(notices.keys().next().value as string);
 }
+/** 最近一轮没记上的原因（桌面端项目页显示"有 N 条没记上"，5.3），一轮一条原因、不带原文；取走即清，下一轮重新写 */
+const lastMissed = new Map<string, string[]>();
+export function takeLastMissed(key: string): string[] {
+  const reasons = lastMissed.get(key) ?? [];
+  lastMissed.delete(key);
+  return reasons;
+}
 const MISS_TEXT: Record<string, string> = {
+  'memory-full': '项目记忆满了',
   'bad-nonce': '标记不对', 'looks-like-secret': '像密钥', 'not-allowed-here': '这里不能记', 'no-project': '这个群没有绑定项目',
   duplicate: '已经记着了', 'bad-args': '内容不合要求', dropped: '块没写完整或太多',
 };

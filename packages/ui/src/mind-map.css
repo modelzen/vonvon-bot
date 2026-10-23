@@ -9,6 +9,8 @@
 .mm-label { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; padding: 4px 2px; border: 0; background: none; color: inherit; font: inherit; line-height: 1.45; text-align: left; overflow-wrap: anywhere; }
 button.mm-label { cursor: pointer; }
 .mm-label > small { flex: none; color: var(--color-text-secondary); font-size: 11px; white-space: nowrap; }
+.mm-new { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--color-accent); }
+.mm-box[data-fresh] { border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 7%, var(--color-surface)); }
 .mm-fold { flex: none; width: 20px; height: 20px; padding: 0; border: 1px solid var(--color-border); border-radius: 50%; background: var(--color-surface-muted); color: var(--color-text-secondary); font: inherit; font-size: 12px; line-height: 1; cursor: pointer; }
 .mm-box[data-kind=root] { border-width: 2px; border-radius: 18px; padding: 6px 14px; font-weight: 650; font-size: 15px; background: var(--color-surface-muted); }
 .mm-box[data-kind=section] { font-weight: 600; background: var(--color-surface-muted); }
@@ -60,3 +62,17 @@ button.mm-label { cursor: pointer; }
 .memory-history > li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .memory-role-panel { display: grid; gap: 8px; }
 @media (max-width: 900px) { .memory-body { flex-direction: column; } .memory-panel { flex-basis: auto; width: 100%; } }
+
+/* 模型看到什么 (§5.5) */
+.context-panel { display: grid; gap: 10px; min-width: 0; }
+.context-panel h3 { margin: 0; font-size: 14px; }
+.context-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.context-table th, .context-table td { padding: 6px 8px; border-bottom: 1px solid var(--color-border); text-align: left; vertical-align: top; font-weight: 400; }
+.context-table thead th { color: var(--color-text-secondary); font-weight: 500; }
+.context-table tbody th { font-weight: 500; }
+.context-table td[data-warn] { color: var(--color-status-warning, #a86a00); }
+.context-detail, .context-judge, .context-turn { display: grid; gap: 6px; justify-items: start; }
+.context-items { display: grid; gap: 6px; font-size: 12px; }
+.context-items ul { margin: 2px 0 0; padding-left: 18px; line-height: 1.55; }
+.context-last-turn { display: grid; gap: 2px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
