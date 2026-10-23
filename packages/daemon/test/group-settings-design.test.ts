@@ -52,7 +52,9 @@ afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
 it('stores independent profile fields, keeps inherited text live and conflicts on concurrent edits', async () => {
   const owner = createSettingsOwner(deps());
   let a = await owner.read(agent) as AgentSettingsView;
-  expect((await owner.save({ scope: agent, section: 'profile', revision: a.sections.profile!.revision, patch: { persona: '公共个性', memory: '公共记忆' } })).kind).toBe('saved');
+  expect((await owner.save({ scope: agent, section: 'role', revision: a.sections.role!.revision, patch: { identity: '公共个性' } })).kind).toBe('saved');
+  a = await owner.read(agent) as AgentSettingsView;
+  expect((await owner.save({ scope: agent, section: 'profile', revision: a.sections.profile!.revision, patch: { memory: '公共记忆' } })).kind).toBe('saved');
   let p = await view(owner);
   expect(projectViewSchema.safeParse(p).success).toBe(true);
   const replies = await Promise.all(['本群一', '本群二'].map(persona => owner.save({ scope, section: 'profile', revision: p.sections.profile!.revision, patch: { persona, memory: '本群记忆', inheritPersona: false, inheritMemory: true } })));
@@ -222,4 +224,42 @@ it('rejects malformed explicit group settings without broadening access or rewri
   await expect(view(createSettingsOwner(deps()))).rejects.toThrow('modelAccess');
   await expect(mutateProject('demo', p => { p.enabled = true; })).rejects.toThrow('modelAccess');
   expect(await readFile(paths.projectsFile, 'utf8')).toBe(content);
+});
+
+it('edits the role as two sections of SOUL.md and keeps the editor to those two (draft from the app name, no AGENTS.md)', async () => {
+  const owner = createSettingsOwner({ ...deps(), botName: '小支' });
+  await writeFile(join(botPaths(botId).dir, 'SOUL.md'), '旧 SOUL 全文');
+  let a = await owner.read(agent) as AgentSettingsView;
+  agentViewSchema.parse(a);
+  expect(a.sections.role!.stored).toEqual({ identity: '', notes: '旧 SOUL 全文' });
+  expect(a.roleInfo).toMatchObject({ headed: false, oversized: false, mergedNotice: false, draft: '我是「小支」，团队里的 AI 助手。我负责：' });
+  expect(await readFile(join(botPaths(botId).dir, 'SOUL.md'), 'utf8')).toBe('旧 SOUL 全文');
+  const stale = a.sections.role!.revision;
+  expect((await owner.save({ scope: agent, section: 'role', revision: stale, patch: { identity: '发布助手' } })).kind).toBe('saved');
+  expect(await readFile(join(botPaths(botId).dir, 'SOUL.md'), 'utf8')).toBe('## 身份与职责\n发布助手\n\n## 其他说明\n旧 SOUL 全文\n');
+  expect((await owner.save({ scope: agent, section: 'role', revision: stale, patch: { notes: 'x' } })).kind).toBe('conflict');
+  a = await owner.read(agent) as AgentSettingsView;
+  expect(a.roleInfo?.draft).toBeUndefined();
+  expect(await owner.save({ scope: agent, section: 'role', revision: a.sections.role!.revision, patch: { identity: '字'.repeat(501) } })).toMatchObject({ kind: 'rejected', fields: [{ message: expect.stringContaining('500') }] });
+  // the whole-file view keeps its persona for old readers but cannot rewrite the role
+  expect(await owner.save({ scope: agent, section: 'profile', revision: a.sections.profile!.revision, patch: { persona: '直接改' } })).toMatchObject({ kind: 'rejected', fields: [{ message: expect.stringContaining('角色设定') }] });
+});
+
+it('writes a group supplement to the row and to profile.persona until P4a, and shows a row without one by its persona', async () => {
+  const owner = createSettingsOwner(deps());
+  let p = await view(owner);
+  projectViewSchema.parse(p);
+  expect(p.sections.role!.stored).toEqual({ supplement: '' });
+  await mutateProject('demo', async row => { row.profile = { persona: '旧本群个性', memory: '', inheritPersona: true, inheritMemory: true }; });
+  p = await view(owner);
+  expect(p.sections.role!.stored).toEqual({ supplement: '旧本群个性' });
+  expect((await owner.save({ scope, section: 'role', revision: p.sections.role!.revision, patch: { supplement: '少说话' } })).kind).toBe('saved');
+  const row = (await getProjectByName('demo'))!;
+  expect(row.supplement).toBe('少说话');
+  expect(row.profile).toMatchObject({ persona: '少说话', inheritPersona: true });
+  p = await view(owner);
+  expect(await owner.save({ scope, section: 'role', revision: p.sections.role!.revision, patch: { supplement: '字'.repeat(5001) } })).toMatchObject({ kind: 'rejected', fields: [{ message: expect.stringContaining('5000') }] });
+  // a persona saved through the old section is the supplement too
+  expect((await owner.save({ scope, section: 'profile', revision: p.sections.profile!.revision, patch: { persona: '老入口' } })).kind).toBe('saved');
+  expect((await getProjectByName('demo'))!.supplement).toBe('老入口');
 });

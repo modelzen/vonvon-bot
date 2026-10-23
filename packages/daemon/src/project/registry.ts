@@ -99,6 +99,9 @@ export interface Project {
   /** 这一行（某个 bot 在某个群）属于项目库里的哪个项目（project/library.ts）。host 启动时补上（记忆设计 7.1 步骤 A）；
    * 旧 daemon 不认这个键，读写都原样带着。不是字符串、或者库里没有这个项目，下次启动重新补。 */
   projectId?: string;
+  /** 补充职责（原"本群个性"，记忆设计 2.2）：这个 bot 在这个项目里多做什么、少做什么。写入时 ≤ 5,000 字，读取不校验。
+   * P4a 之前和 `profile.persona` 双写；读者切换后 `profile` 不再读。 */
+  supplement?: string;
   /** 记忆设计 7.1 的分步标记，每步做完的时间（epoch ms）：`library` = 步骤 A，`memory` = 步骤 B。 */
   migration?: { library?: number; memory?: number };
 }

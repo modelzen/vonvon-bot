@@ -288,13 +288,19 @@ function AgentProfileLoader({botId}: {botId: AgentId}) {
   }, [client, botId]);
   useEffect(() => {void refresh(); return () => {serial.current++;};}, [refresh]);
   return <div className="group-design-settings">{error && <InlineNotice title="读取未完成" tone="warning">{error}<Button size="sm" onClick={() => void refresh()}>重试</Button></InlineNotice>}
-    {view?.sections.profile ? <Editor title="个性与记忆" section={view.sections.profile} save={async (patch, revision) => {
-      const reply = await client.settings({type: 'save', edit: {scope: {kind: 'agent', botId}, section: 'profile', patch, revision}});
-      if (reply.kind === 'saved' && reply.result.kind === 'saved') await refresh();
-      return reply;
-    }} render={(draft, set, disabled) => <>
-      <PersonaEditor label="个性" value={draft.persona} onChange={persona => set({...draft, persona})} disabled={disabled} maxLength={30000}/>
-      <PersonaEditor label="记忆" value={draft.memory} onChange={memory => set({...draft, memory})} disabled={disabled} maxLength={30000}/>
-    </>}/> : view ? <MissingSection/> : !error && <p className="gd-empty" role="status">正在读取…</p>}
+    {view?.sections.role ? <>
+      {view.roleInfo?.mergedNotice && <p className="settings-readonly-notice" role="status">原来 AGENTS.md 里的内容已并到「其他说明」末尾。</p>}
+      {view.roleInfo?.oversized && <p className="settings-readonly-notice" role="status">这份角色设定比现在的上限长，能打开，下次修改时请精简。</p>}
+      {view.roleInfo?.integrity === 'changed' && <p className="settings-readonly-notice" role="status">角色设定文件在 vonvon 之外被改过。</p>}
+      <Editor title="角色设定" section={view.sections.role} initialDraft={view.roleInfo?.draft ? {identity: view.roleInfo.draft} : undefined} save={async (patch, revision) => {
+        const reply = await client.settings({type: 'save', edit: {scope: {kind: 'agent', botId}, section: 'role', patch, revision}});
+        if (reply.kind === 'saved' && reply.result.kind === 'saved') await refresh();
+        return reply;
+      }} render={(draft, set, disabled) => <>
+        <PersonaEditor label="身份与职责" value={draft.identity} onChange={identity => set({...draft, identity})} disabled={disabled} maxLength={500}/>
+        <p className="gd-note">{[...draft.identity].length} / 500</p>
+        <PersonaEditor label="其他说明" value={draft.notes} onChange={notes => set({...draft, notes})} disabled={disabled}/>
+      </>}/>
+    </> : view ? <MissingSection/> : !error && <p className="gd-empty" role="status">正在读取…</p>}
   </div>;
 }

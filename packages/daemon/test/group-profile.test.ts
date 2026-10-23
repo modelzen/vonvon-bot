@@ -10,13 +10,13 @@ beforeEach(async () => { state.root = await realpath(await mkdtemp(join(tmpdir()
 afterEach(async () => { await rm(state.root, { recursive: true, force: true }); });
 
 describe('Bot and group personality integration', () => {
-  it('preserves legacy SOUL and AGENTS in the one editor, then saves without duplicating them', async () => {
+  it('reads the whole SOUL.md as the persona and no longer reads or writes AGENTS.md', async () => {
     const root = join(state.root, 'bot_a'); await mkdir(root);
     await writeFile(join(root, 'SOUL.md'), 'persona'); await writeFile(join(root, 'AGENTS.md'), 'work instructions');
-    expect(await readBotProfile('bot_a')).toEqual({ persona: 'persona\n\nwork instructions', memory: '' });
+    expect(await readBotProfile('bot_a')).toEqual({ persona: 'persona', memory: '' });
     await updateBotProfile('bot_a', current => ({ ...current, memory: 'shared fact' }));
-    expect(await readBotProfile('bot_a')).toEqual({ persona: 'persona\n\nwork instructions', memory: 'shared fact' });
-    expect(await readFile(join(root, 'AGENTS.md'), 'utf8')).toBe('');
+    expect(await readBotProfile('bot_a')).toEqual({ persona: 'persona', memory: 'shared fact' });
+    expect(await readFile(join(root, 'AGENTS.md'), 'utf8')).toBe('work instructions');
   });
   it('keeps independent inheritance live and never leaks another bot or group', async () => {
     await updateBotProfile('bot_a', () => ({ persona: 'BOT_A', memory: 'MEMORY_A' }));
