@@ -6,6 +6,7 @@ import {GroupWorkspace} from '../src/GroupWorkspace';
 import {GroupDesignSettings, GroupSettingsContent} from '../src/settings/GroupDesignSettings';
 import {Editor} from '../src/settings/SettingsPanel';
 import {GroupAttentionStatus} from '../src/management/GroupAttentionStatus';
+import {ConversationSlider} from '../src/settings/ConversationSlider';
 
 type Slot = {states: unknown[]; refs: Array<{current: unknown}>; effects: Array<{deps?: unknown[]; cleanup?: () => void}>; memos: Array<{deps?: unknown[]; value: unknown}>; state: number; ref: number; effect: number; memo: number};
 const harness = vi.hoisted(() => ({slots: {} as Record<string, Slot>, active: '', pending: [] as Array<() => void>, client: {collaboration: vi.fn(), settings: vi.fn(), environment: vi.fn(), snapshot: vi.fn()}}));
@@ -15,6 +16,7 @@ vi.mock('react', async original => {
     useState: (initial: unknown) => {const slot = harness.slots[harness.active]!; const index = slot.state++; if (!(index in slot.states)) slot.states[index] = typeof initial === 'function' ? initial() : initial; return [slot.states[index], (next: unknown) => {slot.states[index] = typeof next === 'function' ? next(slot.states[index]) : next;}];},
     useRef: (initial: unknown) => {const slot = harness.slots[harness.active]!; return slot.refs[slot.ref++] ??= {current: initial};},
     useContext: () => [],
+    useId: () => 'conversation-description',
     useCallback: (callback: unknown, deps?: unknown[]) => memo(() => callback, deps),
     useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => {const slot = harness.slots[harness.active]!; const index = slot.effect++; const old = slot.effects[index]; if (old?.deps && deps && deps.length === old.deps.length && deps.every((value, at) => Object.is(value, old.deps![at]))) return; harness.pending.push(() => {old?.cleanup?.(); slot.effects[index] = {deps, cleanup: effect() || undefined};});},
   };
@@ -81,6 +83,43 @@ beforeEach(() => {
   harness.client.snapshot.mockResolvedValue({...snapshot});
   harness.client.settings.mockImplementation(async (request: SettingsRequest) => {if (request.type === 'read') {events.push('read-settings'); return {kind: 'view', view};} if (request.type === 'save') {events.push('save-decision'); return save(request);} throw new Error(`unexpected settings ${request.type}`);});
   harness.client.collaboration.mockImplementation(async request => {if (request.action === 'project') {events.push('read-project'); return {kind: 'project', project};} if (request.action === 'editProject') {events.push('edit-project'); project = {...project, kind: 'smart', revision: 'project-r2'}; return {kind: 'applied', project};} throw new Error(`unexpected collaboration ${request.action}`);});
+});
+
+it('previews a drag across the middle mode and submits only its released destination', () => {
+  const onChange = vi.fn();
+  const inspect = () => nodes(renderAt('slider', () => ConversationSlider({label: '聊天方式', value: 'threads', onChange}))).find(node => node.type === 'input')!;
+  let input = inspect();
+  input.props.onPointerDown({button: 0, pointerId: 1, currentTarget: {setPointerCapture: vi.fn()}});
+  input.props.onChange({currentTarget: {value: '1'}}); input = inspect();
+  expect(input.props['aria-valuetext']).toBe('连续交谈'); expect(onChange).not.toHaveBeenCalled();
+  input.props.onChange({currentTarget: {value: '2'}}); input = inspect();
+  expect(input.props['aria-valuetext']).toBe('智能'); expect(onChange).not.toHaveBeenCalled();
+  input.props.onPointerUp(); input.props.onLostPointerCapture();
+  expect(onChange).toHaveBeenCalledExactlyOnceWith('smart');
+  // Opening or cancelling the smart setup does not make the preview the saved mode.
+  expect(inspect().props['aria-valuetext']).toBe('独立话题');
+});
+
+it.each(['onPointerCancel', 'onLostPointerCapture'])('cancels a drag on %s without saving a mode', event => {
+  const onChange = vi.fn();
+  const inspect = () => nodes(renderAt('slider', () => ConversationSlider({label: '聊天方式', value: 'shared', onChange}))).find(node => node.type === 'input')!;
+  let input = inspect();
+  input.props.onPointerDown({button: 0, pointerId: 1, currentTarget: {setPointerCapture: vi.fn()}});
+  input.props.onChange({currentTarget: {value: '2'}}); input = inspect();
+  input.props[event](); input.props.onPointerUp();
+  expect(onChange).not.toHaveBeenCalled(); expect(inspect().props['aria-valuetext']).toBe('连续交谈');
+});
+
+it('commits a keyboard gesture once and cancels a pending gesture if the control is disabled', () => {
+  const onChange = vi.fn(); let disabled = false;
+  const inspect = () => nodes(renderAt('slider', () => ConversationSlider({label: '聊天方式', value: 'threads', disabled, onChange}))).find(node => node.type === 'input')!;
+  let input = inspect(); input.props.onKeyDown({key: 'End'});
+  input.props.onChange({currentTarget: {value: '2'}}); input = inspect();
+  expect(onChange).not.toHaveBeenCalled(); input.props.onKeyUp({key: 'End'}); input.props.onBlur();
+  expect(onChange).toHaveBeenCalledExactlyOnceWith('smart'); onChange.mockClear();
+  input = inspect(); input.props.onKeyDown({key: 'ArrowRight'}); input.props.onChange({currentTarget: {value: '1'}});
+  disabled = true; input = inspect(); input.props.onKeyUp({key: 'ArrowRight'});
+  expect(onChange).not.toHaveBeenCalled(); expect(input.props['aria-valuetext']).toBe('独立话题');
 });
 
 it('shows attention beside the smart conversation control on 沟通方式 and hides it while either mode source changes', async () => {
