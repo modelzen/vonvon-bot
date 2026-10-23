@@ -68,8 +68,10 @@ export interface Project {
    * Read via {@link effectiveMode}. 'qa'/'write' confine reads+writes to `cwd`. Old rows'
    * `guestMode` (a second tier for non-admins) is folded in on read, see {@link foldGuestTier}. */
   mode?: PermissionMode;
-  /** allow the agent's shell to reach the network in 'qa'/'write' ('full' always can), and Vonvon to
-   * fetch remote images in every tier. Default false. */
+  /** Provider-native settings; ignored when backend differs from the group's current backend. */
+  custom?: { backend: string; settings: Record<string, unknown> };
+  /** Since s31c, derived from the tier (TIER_NETWORK). Old inconsistent values are read as
+   * custom settings by groupPermission; missing legacy values still mean network off. */
   network?: boolean;
   // Old projects.json rows may still carry `autoCompact: false`. Since s12 both
   // backends always auto-compact and nothing reads it; rows keep it until s60.

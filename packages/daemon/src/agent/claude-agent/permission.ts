@@ -3,6 +3,7 @@ import { dirname, isAbsolute, relative, sep } from 'node:path';
 import type { HookCallback, Options } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import type { PermissionMode } from '../types';
+import { TIER_NAMES } from '../permission/types';
 
 /** Claude tiers use default/acceptEdits/bypassPermissions. The sandbox proxy is
  * not an offline boundary: SandboxNetworkAccess must be denied by the callback.
@@ -132,12 +133,12 @@ export async function decide(access: ClaudeAccess, call: ToolCall, origin: Origi
     if (tool === 'EnterPlanMode') return { kind: 'allow' };
     if (access.mode === 'full') return { kind: 'ask', ask: 'permission' };
   }
-  const own = (): Verdict => deny(`这一步 Claude 标成了要人确认（${call.decisionReason ?? '命中了设置里的规则'}）。这个群是${access.mode === 'qa' ? '只读' : '读写'}档，这类操作直接拒绝。换个办法，或者停下来说明。`);
+  const own = (): Verdict => deny(`这一步 Claude 标成了要人确认（${call.decisionReason ?? '命中了设置里的规则'}）。这个群的权限是${TIER_NAMES[access.mode]}，这类操作直接拒绝。换个办法，或者停下来说明。`);
   if (origin === 'callback' && ownAsk(call) === 'rule') return own();
   if (origin === 'callback' && ['SandboxNetworkAccess', ...NETWORK_TOOLS].includes(tool)) {
     if (access.network) return { kind: 'allow' };
     const host = tool === 'SandboxNetworkAccess' && typeof input.host === 'string' ? input.host.slice(0, 100) : '外网';
-    return deny(`这个群关了网络，连不上 ${host}。不要再试着联网，换个办法，或者停下来说明：要联网得请主人在群设置里打开网络。`);
+    return deny(`这个群的权限不联网，连不上 ${host}。不要再试着联网，换个办法，或者停下来说明：要联网得请主人把群的权限改成工作区可写或完全访问。`);
   }
   if (origin === 'callback' && tool === 'Bash') {
     if (input.dangerouslyDisableSandbox === true) return deny('这个群的命令只能在沙箱里跑。');
@@ -147,7 +148,7 @@ export async function decide(access: ClaudeAccess, call: ToolCall, origin: Origi
   const path = input.file_path ?? input.notebook_path ?? input.path;
   if (typeof path !== 'string') return deny(PERMISSION_ERROR);
   const shown = path.slice(0, 200);
-  if (access.mode === 'qa') return deny(`这个群是只读档，不能写文件（${shown}）。换个不用写文件的办法，或者停下来说明：要写文件得请主人把群改成读写档。`);
+  if (access.mode === 'qa') return deny(`这个群的权限是只读，不能写文件（${shown}）。换个不用写文件的办法，或者停下来说明：要写文件得请主人把群的权限改成工作区可写。`);
   let allowed: boolean;
   try {
     const target = await resolveReal(path, access.cwd, fsx);
@@ -156,7 +157,7 @@ export async function decide(access: ClaudeAccess, call: ToolCall, origin: Origi
     if ((await Promise.all((access.additionalRoots ?? []).filter(root => root.access === 'read').map(root => within(root.path, target, fsx)))).some(Boolean)) allowed = false;
   }
   catch (error) { if (!(error instanceof OutsideWorkspace)) throw error; allowed = false; }
-  if (!allowed) return deny(`这个群是读写档，只能写工作区里的文件，${shown} 在工作区以外。改写到工作区里，或者停下来说明。`);
+  if (!allowed) return deny(`这个群的权限是工作区可写，只能写工作区里的文件，${shown} 在工作区以外。改写到工作区里，或者停下来说明。`);
   return { kind: origin === 'hook' ? 'continue' : 'allow' };
 }
 export function fileHook(access: ClaudeAccess, fsx: PathFs = sessionFs(access)): HookCallback {

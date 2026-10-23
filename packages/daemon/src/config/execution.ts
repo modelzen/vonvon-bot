@@ -3,14 +3,18 @@ import type { SessionProfile } from '../agent/session-profile';
 import { admitDirectorySettings } from './directories';
 import { paths } from './paths';
 import { catalogById } from '../agent/catalog';
+import { permissionTable } from '../agent/permission';
+import { TIER_NETWORK, type Tier, type PermissionEffect } from '../agent/permission/types';
 import { DEFAULT_BACKEND_ID, type PermissionMode, type ReasoningEffort, type ModelInfo } from '../agent/types';
 import { effectiveMode, type Project, type ProjectModelAccess } from '../project/registry';
 import { resolveBotDefaults } from './defaults';
 import type { AppPreferences, PendingPolicy } from './schema';
+import { log } from '../core/logger';
 
 // What a session actually runs with (product.md 3.2, s36d2): one place reads the bot defaults
-// (`preferences.defaults`, `preferences.directories`) and a group's row together. Pure: no disk,
-// no model list. A group's tier, network and backend are written when it is set up and never
+// (`preferences.defaults`, `preferences.directories`) and a group's row together. No config reads
+// or model list; invalid native settings only emit a warning once per group. A group's tier,
+// network and backend are written when it is set up and never
 // follow the bot defaults (3.2, 3.8, 3.11); the bot defaults are for places with no group
 // (私聊 from s49). Callers check a model preference against the live list with pickDefault.
 
@@ -41,7 +45,7 @@ export interface ResolvedExecution {
 }
 
 export type GroupLayer = Pick<Project,
-  'backend' | 'mode' | 'network' | 'cwd' | 'directories' | 'pendingPolicy' | 'defaultModel' | 'defaultEffort' | 'defaultModelCustom' | 'modelAccess'>;
+  'backend' | 'mode' | 'network' | 'custom' | 'cwd' | 'directories' | 'pendingPolicy' | 'defaultModel' | 'defaultEffort' | 'defaultModelCustom' | 'modelAccess'> & Partial<Pick<Project, 'chatId'>>;
 export type ExecutionLayers = { bot?: AppPreferences; group?: GroupLayer };
 
 /** A backend id still in the catalog; a removed one counts as unset, as backendFor does. */
@@ -53,6 +57,63 @@ function known(id: string | undefined): string | undefined {
 /** A group's backend: its own, else Codex (old rows). Never the bot default (3.2, 3.11). */
 export function groupBackendId(group: Pick<Project, 'backend' | 'modelAccess'> | undefined): string {
   return known(group?.modelAccess?.backend ?? group?.backend) ?? DEFAULT_BACKEND_ID;
+}
+
+export interface GroupPermission {
+  tier: Tier;
+  custom?: Record<string, unknown>;
+  legacy?: true;
+  invalid?: true;
+  effect: PermissionEffect;
+}
+
+type PermissionGroup = Pick<Project, 'mode' | 'network' | 'custom' | 'backend' | 'modelAccess'> & Partial<Pick<Project, 'chatId'>>;
+const warnedInvalidCustom = new Set<string>();
+const warnedAnonymousCustom = new WeakSet<object>();
+
+function invalidGroupPermission(group: PermissionGroup): GroupPermission {
+  const warned = group.chatId ? warnedInvalidCustom.has(group.chatId) : warnedAnonymousCustom.has(group);
+  if (!warned) {
+    if (group.chatId) warnedInvalidCustom.add(group.chatId);
+    else warnedAnonymousCustom.add(group);
+    // Rejected settings and parse errors can contain arbitrary private values.
+    log.warn('permission', 'custom-invalid');
+  }
+  return { tier: 'qa', invalid: true, effect: { mode: 'qa', network: false } };
+}
+
+/** Read native settings or preserve a legacy tier/network pair without rewriting stored rows. */
+export function groupPermission(group: PermissionGroup): GroupPermission {
+  // Corrupt tiers must never become workspace-write through fromLegacy's fallback.
+  if (group.mode !== undefined && group.mode !== 'qa' && group.mode !== 'write' && group.mode !== 'full') {
+    return { tier: 'qa', effect: { mode: 'qa', network: false } };
+  }
+  const tier = effectiveMode(group);
+  const backend = groupBackendId(group);
+  const table = permissionTable(backend);
+  if (group.custom?.backend === backend) {
+    try {
+      const settings = table.parseCustom(group.custom.settings);
+      return { tier, custom: settings, effect: table.effect(settings) };
+    } catch {
+      return invalidGroupPermission(group);
+    }
+  }
+  if (tier !== 'full' && group.network !== undefined && typeof group.network !== 'boolean') {
+    return invalidGroupPermission(group);
+  }
+  const network = group.network ?? false;
+  if (tier !== 'full' && network !== TIER_NETWORK[tier]) {
+    try {
+      const settings = table.fromLegacy(tier, network);
+      return settings
+        ? { tier, custom: settings, legacy: true, effect: table.effect(settings) }
+        : { tier, effect: { mode: tier, network } };
+    } catch {
+      return invalidGroupPermission(group);
+    }
+  }
+  return { tier, effect: { mode: tier, network: TIER_NETWORK[tier] } };
 }
 
 /** The bot's default backend: for places with no group, and for the bot's default model. */
@@ -99,18 +160,20 @@ export function resolveExecution({ bot, group }: ExecutionLayers): ResolvedExecu
   } as const;
   if (group) {
     const backend = groupBackendId(group);
+    const permission = groupPermission(group);
+    const permissionSource: ExecutionSource = permission.custom || permission.invalid || group.mode ? 'group' : 'builtin';
     return {
       backend,
-      permission: effectiveMode(group),
-      network: group.network ?? false,
+      permission: permission.effect.mode,
+      network: permission.effect.network,
       // The group's own directory only, not the bot's other workspaces (v1-plan 第 5 节).
       workspaces: { primary: group.cwd, additional: group.directories?.workspaces?.additional ?? [] },
       ...shared,
       model: resolveModelPreference({ bot, group }, backend),
       sources: {
         backend: known(group.backend) ? 'group' : 'builtin',
-        permission: group.mode ? 'group' : 'builtin',
-        network: group.network === undefined ? 'builtin' : 'group',
+        permission: permissionSource,
+        network: permissionSource,
         workspaces: 'group',
         ...sharedSources,
       },
@@ -127,7 +190,7 @@ export function resolveExecution({ bot, group }: ExecutionLayers): ResolvedExecu
     sources: {
       backend: known(bot?.defaults?.backend) ? 'bot' : 'builtin',
       permission: bot?.defaults?.permission ? 'bot' : 'builtin',
-      network: bot?.defaults?.network === undefined ? 'builtin' : 'bot',
+      network: bot?.defaults?.permission ? 'bot' : 'builtin',
       workspaces: dirs?.workspaces ? 'bot' : 'builtin',
       ...sharedSources,
     },

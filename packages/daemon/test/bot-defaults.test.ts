@@ -45,8 +45,16 @@ describe('execution defaults boundary', () => {
     const raw = { backend: 'future-provider', model: { kind, id: 'custom/model', effort: 'ultra' }, permission: 'full', network: false };
     const parsed = parseBotDefaults(raw);
     expect(parsed).toEqual(raw);
-    expect(resolveBotDefaults(parsed)).toEqual(raw);
+    expect(resolveBotDefaults(parsed)).toEqual({ ...raw, network: true });
   });
+
+  it.each([['qa', true, false], ['write', false, true], ['full', false, true]] as const)(
+    'derives network from %s while accepting the old network field', (permission, network, expected) => {
+      const defaults = parseBotDefaults({ permission, network });
+      expect(defaults).toEqual({ permission, network });
+      expect(resolveBotDefaults(defaults)).toMatchObject({ permission, network: expected });
+    },
+  );
 
   const malformed = [
     null, [], 'secret-value', { backend: '' }, { backend: '  ' }, { backend: ' padded ' }, { backend: 4 },
@@ -175,6 +183,11 @@ describe('registration account construction', () => {
     await saveConfig(cfg, file);
     expect((await loadConfig(file)).preferences).toEqual(cfg.preferences);
     expect(cfg.accounts.app.secret).toMatchObject({ source: 'exec', provider: 'bridge' });
+  });
+
+  it('writes the network effect of a supplied tier instead of the legacy network switch', async () => {
+    const cfg = await buildEncryptedAccountConfig('fixture', 'feishu', { defaults: { permission: 'write', network: false } });
+    expect(cfg.preferences?.defaults).toEqual({ permission: 'write', network: true });
   });
 
   it('retains existing preferences and supplied defaults without input mutation', async () => {
