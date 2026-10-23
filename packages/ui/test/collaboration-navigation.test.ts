@@ -53,15 +53,15 @@ test('Agent settings use one pane and return to the Agent list', () => {
   assert.deepEqual(routeBack(found.route), {kind: 'list', view: 'agents'});
 });
 
-test('search direct into group-local settings uses the project as its canonical parent', () => {
+test('search direct into group-local settings keeps its group as the parent', () => {
   const found = routeFromSearch({page: 'collaboration', selection: {kind: 'membership', id: memberId}, detail: {kind: 'membership-settings'}}, snapshot);
-  assert.deepEqual(found?.route, {kind: 'membership', id: memberId, pane: {kind: 'settings'}, parent: {kind: 'project', id: projectId, pane: {kind: 'map'}}});
-  assert.deepEqual(routeBack(found!.route), {kind: 'project', id: projectId, pane: {kind: 'map'}});
+  assert.deepEqual(found?.route, {kind: 'membership', id: memberId, pane: {kind: 'settings'}, parent: {kind: 'group', id: groupId}});
+  assert.deepEqual(routeBack(found!.route), {kind: 'group', id: groupId});
 });
 
-test('missing membership search returns a clear project list fallback', () => {
+test('missing membership search returns a clear group list fallback', () => {
   const missing = routeFromSearch({page: 'collaboration', selection: {kind: 'membership', id: membershipIdSchema.parse('deleted')}}, snapshot);
-  assert.deepEqual(missing?.route, {kind: 'list', view: 'projects'});
+  assert.deepEqual(missing?.route, {kind: 'list', view: 'groups'});
   assert.match(missing?.missing ?? '', /不存在/);
 });
 
@@ -70,7 +70,7 @@ test('binding opens the matching Bot in the group once its snapshot arrives', ()
   assert.equal(joinedGroupRoute({...snapshot, memberships: []}, target), undefined);
   assert.equal(joinedGroupRoute({...snapshot, groups: []}, target), undefined);
   assert.deepEqual(joinedGroupRoute(snapshot, target), {
-    kind: 'membership', id: anotherMemberId, pane: {kind: 'settings'}, parent: {kind: 'project', id: projectId, pane: {kind: 'map'}},
+    kind: 'membership', id: anotherMemberId, pane: {kind: 'settings'}, parent: {kind: 'group', id: groupId},
   });
 });
 
@@ -84,4 +84,31 @@ test('a binding no project owns yet opens from the project list, and a project s
   const gone = routeFromSearch({page: 'collaboration', selection: {kind: 'project', id: projectId}}, unlinked);
   assert.deepEqual(gone?.route, {kind: 'list', view: 'projects'});
   assert.match(gone?.missing ?? '', /项目已不存在/);
+});
+
+
+test('same group with Bots in different projects keeps one group parent', () => {
+  const otherProjectId = projectIdSchema.parse('prj_00000a0c');
+  const data: DesktopSnapshot = {...snapshot, projects: [...snapshot.projects!, {...snapshot.projects![0]!, id: otherProjectId}], memberships: snapshot.memberships.map((member, index) => ({...member, projectId: index ? otherProjectId : projectId}))};
+  const first = openMembership({kind: 'list', view: 'groups'}, memberId, data);
+  const second = openMembership(first, anotherMemberId, data);
+  assert.equal(routeView(first), 'groups');
+  assert.deepEqual(routeBack(first), {kind: 'group', id: groupId});
+  assert.deepEqual(routeBack(second), {kind: 'group', id: groupId});
+});
+
+test('different groups sharing a project preserve distinct group parents', () => {
+  const otherGroupId = groupIdSchema.parse('oc_navigation_other');
+  const data: DesktopSnapshot = {...snapshot, groups: [...snapshot.groups, {id: otherGroupId, name: '发布群'}], memberships: snapshot.memberships.map((member, index) => ({...member, groupId: index ? otherGroupId : groupId}))};
+  const first = openMembership({kind: 'list', view: 'groups'}, memberId, data);
+  const second = openMembership(first, anotherMemberId, data);
+  assert.deepEqual(routeBack(first), {kind: 'group', id: groupId});
+  assert.deepEqual(routeBack(second), {kind: 'group', id: otherGroupId});
+});
+
+test('old daemons without projects still support the group tree and group search route', () => {
+  const data: DesktopSnapshot = {...snapshot, projects: undefined, memberships: snapshot.memberships.map(({projectId: _drop, ...member}) => member)};
+  const opened = openMembership({kind: 'list', view: 'groups'}, memberId, data);
+  assert.deepEqual(routeBack(opened), {kind: 'group', id: groupId});
+  assert.deepEqual(routeFromSearch({page: 'collaboration', selection: {kind: 'group', id: groupId}}, data)?.route, {kind: 'group', id: groupId});
 });

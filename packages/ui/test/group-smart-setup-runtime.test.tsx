@@ -53,6 +53,7 @@ function render() {
   let editor: Element[] = [];
   if (dialog.props.open) {
     const settings = nodes(dialog).find(node => node.type === GroupDesignSettings)!;
+    if (!settings) return {workspace, content: [], header: []};
     const loader = GroupDesignSettings(settings.props as any) as Element;
     const content = nodes(renderAt('loader', () => (loader.type as (props: any) => ReactNode)(loader.props))).find(node => node.type === GroupSettingsContent);
     if (content) {
@@ -99,6 +100,7 @@ it('shows attention beside the smart conversation control on 回复规则 and hi
       snapshot: {...snapshot, memberships: [liveMember]}, initialTab: 'response', onBot: () => {}, onBotProfile: () => {},
       onOpenTools: () => {}, onOpenSecrets: () => {}, onChanged: changed})));
     const settings = workspace.find(node => node.type === GroupDesignSettings && !node.props.decisionSetupOnly)!;
+    if (!settings) return {workspace, content: [], header: []};
     const loader = GroupDesignSettings(settings.props as any) as Element;
     const loaded = nodes(renderAt('attention-loader', () => (loader.type as (props: any) => ReactNode)(loader.props)))
       .find(node => node.type === GroupSettingsContent);
@@ -113,7 +115,7 @@ it('shows attention beside the smart conversation control on 回复规则 and hi
   expect(ui.header.some(node => node.props.label === '聊天方式')).toBe(true);
   expect(ui.content.some(node => node.type === GroupAttentionStatus)).toBe(true);
 
-  ui.workspace.find(node => node.type === 'button' && node.props.children === '补充职责')!.props.onClick();
+  ui.workspace.find(node => node.type === 'button' && node.props.children === '记忆')!.props.onClick();
   ui = await settled();
   expect(ui.content.some(node => node.type === GroupAttentionStatus)).toBe(false);
   ui.workspace.find(node => node.type === 'button' && node.props.children === '回复规则')!.props.onClick();
