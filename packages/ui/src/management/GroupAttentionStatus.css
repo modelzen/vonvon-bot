@@ -17,7 +17,8 @@
   --attention-color: var(--color-status-warning);
   --attention-surface: var(--color-status-warning-bg);
 }
-.group-attention[data-tone=unknown] {
+.group-attention[data-tone=unknown],
+.group-attention[data-tone=idle] {
   --attention-color: var(--color-text-secondary);
   --attention-surface: var(--color-surface-muted);
 }
