@@ -12,6 +12,7 @@ import type { DirectoryBrowser } from '../directory-browser';
 import type { RpcOutcome } from '../rpc';
 import { RpcError, unsupported } from '../errors';
 import { requireRunningAgent } from './ownership';
+import { discoverProviderModels } from '../../admin/model-catalog';
 
 const projectRecord = z.unknown().transform(value => projectRecordSchema.parse(value));
 const mutation = z.object({
@@ -56,6 +57,10 @@ const usageErrorMessages: Record<UsageErrorKind, string> = {
 };
 
 export async function collaborationRpc(service: AdminService, directory: DirectoryBrowser, request: CollaborationRequest): Promise<RpcOutcome<CollaborationReply>> {
+  if (request.action === 'providerModels') {
+    const result = await discoverProviderModels(request.backend);
+    return { kind: 'read', value: collaborationReplySchema.parse({ kind: 'providerModels', backend: request.backend, state: result.models.length ? 'ready' : 'unavailable', models: result.models, ...(result.message ? { message: result.message } : {}) }) };
+  }
   if (request.action === 'usage') {
     try { return { kind: 'read', value: collaborationReplySchema.parse({ kind: 'usage', data: await service.accountUsage(request.force) }) }; }
     catch (error) {

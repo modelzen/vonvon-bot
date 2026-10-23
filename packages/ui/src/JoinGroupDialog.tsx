@@ -100,7 +100,7 @@ export function JoinGroupDialog({linux, agent, pending, initialGroup, onClose, o
       const reply = mode.kind === 'create'
         ? await client.collaboration({action: 'createProject', agentId: agent.id, name: name.trim(), folder: existingDirectory && folder ? {kind: 'existing', folderToken: folder.token} : {kind: 'default'}, tool, conversation, ...picked})
         : await client.run({type: 'bindGroup', agentId: agent.id, groupId: mode.group.chatId, projectName: name.trim(), folder: existingDirectory && folder ? {kind: 'existing', folderToken: folder.token} : {kind: 'default'}, tool, conversation, ...picked});
-      if (!reply || reply.kind !== 'applied') {setError(reply && 'message' in reply ? reply.message : '操作未完成，请重试。'); return false;}
+      if (!reply || reply.kind !== 'applied') {setError(reply && 'message' in reply && typeof reply.message === 'string' ? reply.message : '操作未完成，请重试。'); return false;}
       await onChanged();
       active.current = false;
       onClose();

@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { homedir } from "node:os";
+import { McpService } from "./mcp";
+import type { McpRequest, McpReply } from "@vonvon/protocol";
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
@@ -67,7 +70,8 @@ export class EnvironmentService {
   private closePromise?: Promise<void>;
   /** Each launched tool process, with a promise that settles when its pipes close. */
   private readonly children = new Map<ChildProcess, Promise<void>>();
-  private readonly requests = new Set<Promise<EnvironmentReply>>();
+  private readonly requests = new Set<Promise<unknown>>();
+  private mcpService?: McpService;
 
   constructor(options: EnvironmentServiceOptions) {
     if (!isAbsolute(options.home) || !isAbsolute(options.nodePath)) throw new Error("Absolute home and Node paths required.");
@@ -89,6 +93,23 @@ export class EnvironmentService {
     return pending;
   }
 
+  mcp(request: McpRequest): Promise<McpReply> {
+    if (this.closing) return Promise.resolve({ type: 'mcp', provider: request.provider, status: 'unavailable', configPath: '', revision: '', entries: [], cliAvailable: false, message: '本机环境正在退出。' });
+    // An explicitly isolated home must not inherit the owner's provider directories.
+    const env = { ...this.environment(), ...(this.home === homedir() ? {
+      ...(process.env.CODEX_HOME ? { CODEX_HOME: process.env.CODEX_HOME } : {}),
+      ...(process.env.CLAUDE_CONFIG_DIR ? { CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR } : {}),
+    } : {}) };
+    this.mcpService ??= new McpService({ home: this.home, env,
+      resolveTool: async provider => (await this.resolveTool(provider))?.executable ?? null,
+      command: (executable, args) => this.command(executable, args, 20_000, undefined, undefined, { ...env, PATH: this.environment(executable).PATH }),
+    });
+    const pending = this.mcpService.run(request);
+    this.requests.add(pending);
+    void pending.then(() => this.requests.delete(pending), () => this.requests.delete(pending));
+    return pending;
+  }
+
   close(): Promise<void> {
     this.closing = true;
     this.closePromise ??= this.drain();
@@ -104,10 +125,10 @@ export class EnvironmentService {
     }
   }
 
-  private launch(executablePath: string, args: string[], secret?: string): ChildProcess {
+  private launch(executablePath: string, args: string[], secret?: string, env?: NodeJS.ProcessEnv): ChildProcess {
     if (this.closing) throw new Error("本机环境正在退出。");
     const child = this.spawnProcess(executablePath, args, {
-      env: this.environment(executablePath), stdio: [secret === undefined ? "ignore" : "pipe", "pipe", "pipe"], detached: true,
+      env: env ?? this.environment(executablePath), stdio: [secret === undefined ? "ignore" : "pipe", "pipe", "pipe"], detached: true,
     });
     const closed = new Promise<void>((resolve) => child.once("close", resolve));
     this.children.set(child, closed);
@@ -490,10 +511,10 @@ export class EnvironmentService {
     };
   }
 
-  private command(executablePath: string, args: string[], timeoutMs: number, secret?: string, signal?: AbortSignal): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
+  private command(executablePath: string, args: string[], timeoutMs: number, secret?: string, signal?: AbortSignal, env?: NodeJS.ProcessEnv): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
       signal?.throwIfAborted();
-      const child = this.launch(executablePath, args, secret);
+      const child = this.launch(executablePath, args, secret, env);
       let stdout = "";
       let stderr = "";
       let bytes = 0;

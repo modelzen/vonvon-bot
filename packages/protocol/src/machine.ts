@@ -1,8 +1,10 @@
 import {z} from 'zod';
 import {agentIdSchema, lingerStateSchema, serviceStateSchema} from './domain.js';
+import {mcpRequestSchema, mcpReplySchema} from './mcp.js';
 import {bridgeImportReplySchema} from './bridge-import.js';
 
 export const machineRequestSchema = z.discriminatedUnion('type', [
+  z.object({type:z.literal('mcp'), request:mcpRequestSchema}),
   z.object({type:z.literal('bridgeImport'), action:z.enum(['detect','preflight','start','status','rollback']), acceptedChanges:z.literal(true).optional()}),
   z.object({type:z.literal('status')}),
   z.object({type:z.literal('repairCli')}),
@@ -26,6 +28,7 @@ export type ServiceStatus = z.infer<typeof serviceStatusSchema>;
 export const desktopUpdateSchema = z.object({state:z.enum(['current','available','unavailable','downloaded']),current:z.string(),latest:z.string().optional(),message:z.string()});
 export type DesktopUpdate = z.infer<typeof desktopUpdateSchema>;
 export const machineReplySchema = z.discriminatedUnion('type', [
+  mcpReplySchema,
   bridgeImportReplySchema,
   z.object({type:z.literal('status'),service:serviceStatusSchema,host:z.object({ownership:z.enum(['owned','attached']),pid:z.number()}).nullable(),temporaryAgent:z.string().optional(),cli:z.union([z.object({kind:z.literal('ready'),bin:z.string(),message:z.string()}),z.object({kind:z.literal('error'),message:z.string()})])}),
   z.object({type:z.literal('done'),message:z.string()}),

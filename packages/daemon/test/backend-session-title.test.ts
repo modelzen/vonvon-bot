@@ -382,9 +382,12 @@ describe('Claude backend native session titles', () => {
     } as unknown as ClaudeSdkFacade;
     const backend = new ClaudeAgentBackend(async () => sdk, () => undefined);
 
+    expect(backend.peekModels()).toBeUndefined();
+
     const models = await backend.listModels();
     expect(models.length).toBeGreaterThan(0);
     expect(models[0]!.id).toMatch(/^claude-/);
+    expect(backend.peekModels()).toBeUndefined();
     expect(failed.close).toHaveBeenCalledOnce();
 
     // Failure fallback is not cached: the next call retries and then caches the
@@ -392,6 +395,7 @@ describe('Claude backend native session titles', () => {
     await expect(backend.listModels()).resolves.toEqual([
       expect.objectContaining({ id: 'claude-recovered' }),
     ]);
+    expect(backend.peekModels()).toEqual([expect.objectContaining({ id: 'claude-recovered' })]);
     await backend.listModels();
     expect(query).toHaveBeenCalledTimes(2);
     expect(recovered.close).toHaveBeenCalledOnce();

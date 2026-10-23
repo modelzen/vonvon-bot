@@ -22,6 +22,13 @@ export async function environmentRpc(service: AdminService, jobs: Jobs, peer: Jo
       const admission = jobs.selectBackend(request.id, request.update);
       return { kind: 'mutation', reply: () => jobs.attachBackend(admission, peer) };
     }
+    case 'backendInstallStatus': return { kind: 'read', value: { kind: 'backendInstallStatus', operation: jobs.backendInstallStatus(request.id) } };
+    case 'cancelBackendInstall': {
+      const cancelled = jobs.cancelBackendInstall(request.operationId);
+      return { kind: 'read', value: cancelled
+        ? { kind: 'applied', message: '已请求取消安装。' }
+        : { kind: 'refused', code: 'unknown_operation', message: '没有找到匹配的活动安装。' } };
+    }
     case 'scan': case 'install': case 'update': case 'uninstall': case 'toolInstallStatus': case 'cancelInstall':
     case 'authStatus': case 'startLogin': case 'loginStatus': case 'cancelLogin': case 'profileList':
     case 'profileUse': case 'profileAdd': case 'profileInit': case 'profileInitStatus': case 'profileInitCancel': {
