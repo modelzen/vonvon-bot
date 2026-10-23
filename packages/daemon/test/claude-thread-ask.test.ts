@@ -1,7 +1,8 @@
-import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { Options, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { resolve } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { claudeAccess, permissionOptions, type PathFs } from '../src/agent/claude-agent/permission';
-import { ClaudeAgentThread } from '../src/agent/claude-agent/thread';
+import { AUTO_COMPACT_SETTINGS, ClaudeAgentThread } from '../src/agent/claude-agent/thread';
 import type { AskResolution } from '../src/agent/types';
 
 const threads: ClaudeAgentThread[] = [];
@@ -11,31 +12,75 @@ afterEach(async () => {
 });
 const question = { questions: [{ question: '选哪个？', header: '选择', multiSelect: false,
   options: [{ label: 'A', description: '甲' }, { label: 'B', description: '乙' }] }] };
-function makeThread(permissionFs?: PathFs) {
+function makeThread(permissionFs?: PathFs, native?: Readonly<Record<string, unknown>>) {
   let options: Options | undefined;
   let end: (() => void) | undefined;
-  const access = claudeAccess('write', false, '/workspace', '/workspace');
+  const access = claudeAccess('write', false, '/workspace', '/workspace', undefined, native);
+  const setPermissionMode = vi.fn(async (_mode: string) => {});
+  const submitted: SDKUserMessage[] = [];
   const thread = new ClaudeAgentThread({
     sessionId: 'test', resume: false, cwd: '/workspace', access,
     permission: permissionOptions(access), permissionFs,
     query: (params) => {
       options = params.options;
+      void (async () => { for await (const message of params.prompt) submitted.push(message); })();
       return Object.assign((async function* (): AsyncGenerator<SDKMessage> {
         await new Promise<void>((resolve) => { end = resolve; });
-      })(), { interrupt: async () => {}, close: () => end?.(), getContextUsage: async () => null }) as unknown as Query;
+      })(), { interrupt: async () => {}, close: () => end?.(), getContextUsage: async () => null, setPermissionMode }) as unknown as Query;
     },
   });
   threads.push(thread);
   const canUseTool = options?.canUseTool;
   if (!canUseTool) throw new Error('missing canUseTool');
-  return { thread, options, canUseTool, end: () => end?.() };
+  return { thread, options, canUseTool, setPermissionMode, submitted, end: () => end?.() };
 }
 function callbackArgs(signal = new AbortController().signal) { return { signal, requestId: 'request', toolUseID: 'tool' }; }
 
 it('installs the write tier, file hook and callback', () => {
-  const { options } = makeThread();
+  const { options, setPermissionMode } = makeThread();
   expect(options?.permissionMode).toBe('acceptEdits');
   expect(options?.hooks?.PreToolUse?.[0]?.matcher).toContain('Write');
+  expect(setPermissionMode).not.toHaveBeenCalled();
+});
+
+it.each([undefined, 'default', 'acceptEdits', 'auto', 'bypassPermissions', 'plan'] as const)('keeps plan files inside cwd only for native %s', permissionMode => {
+  const { options } = makeThread(undefined, permissionMode ? { permissionMode } : undefined);
+  expect(options?.settings).toEqual(permissionMode === 'plan'
+    ? { ...AUTO_COMPACT_SETTINGS, plansDirectory: '.claude/plans' } : AUTO_COMPACT_SETTINGS);
+  if (permissionMode === 'plan') expect(resolve(options?.cwd ?? '', '.claude/plans')).toBe('/workspace/.claude/plans');
+});
+
+it('resets plan before submitting every turn and confirms into session-only acceptEdits', async () => {
+  const { thread, canUseTool, setPermissionMode, submitted } = makeThread(undefined, { permissionMode: 'plan' });
+  let release!: () => void;
+  setPermissionMode.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+  const run = thread.runStreamed({ text: 'first' }), iterator = run.events[Symbol.asyncIterator]();
+  await iterator.next();
+  expect(submitted).toHaveLength(0);
+  release();
+  await vi.waitFor(() => expect(submitted).toHaveLength(1));
+  const result = canUseTool('ExitPlanMode', { plan: 'create a.txt' }, callbackArgs());
+  const event = (await iterator.next()).value;
+  if (event?.type !== 'ask') throw new Error('missing confirmation');
+  await run.respondToAsk?.(event.request.id, { kind: 'answered', answer: { kind: 'confirmation', decision: 'proceed' } });
+  expect(await result).toMatchObject({ behavior: 'allow', updatedPermissions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }] });
+  await iterator.return?.();
+  const next = thread.runStreamed({ text: 'second' }).events[Symbol.asyncIterator]();
+  await next.next();
+  await vi.waitFor(() => expect(submitted).toHaveLength(2));
+  expect(setPermissionMode.mock.calls).toEqual([['plan'], ['plan']]);
+  await next.return?.();
+});
+
+it('does not reset auto and still submits a plan turn when resetting fails', async () => {
+  const auto = makeThread(undefined, { permissionMode: 'auto' });
+  auto.thread.runStreamed({ text: 'auto' });
+  await vi.waitFor(() => expect(auto.submitted).toHaveLength(1));
+  expect(auto.setPermissionMode).not.toHaveBeenCalled();
+  const plan = makeThread(undefined, { permissionMode: 'plan' });
+  plan.setPermissionMode.mockRejectedValueOnce(new Error('synthetic reset failure'));
+  plan.thread.runStreamed({ text: 'plan' });
+  await vi.waitFor(() => expect(plan.submitted).toHaveLength(1));
 });
 
 it('answers a question and synchronously claims it before a duplicate response', async () => {

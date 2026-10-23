@@ -8,6 +8,8 @@ export function genericTable(backend: string): PermissionTable {
     backend,
     tiers: env => permissionTiers(env),
     strength: () => '这个 provider 没有说明它能挡到什么程度。',
+    fields: () => [],
+    expand: () => ({}),
     parseCustom: noCustom,
     matchTier: () => undefined,
     effect: noCustom,

@@ -352,7 +352,9 @@ export class ClaudeAgentThread implements AgentThread {
       ...(cfg.additionalDirectories?.length ? { additionalDirectories: cfg.additionalDirectories } : {}),
       ...(cfg.skills ? { skills: cfg.skills } : {}),
       ...(cfg.env ? { env: cfg.env } : {}),
-      settings: AUTO_COMPACT_SETTINGS,
+      // SDK plansDirectory is relative to cwd; plan files stay inside the existing write boundary.
+      settings: cfg.access.native?.permissionMode === 'plan'
+        ? { ...AUTO_COMPACT_SETTINGS, plansDirectory: '.claude/plans' } : AUTO_COMPACT_SETTINGS,
       ...(mcpServers.vonvon_bot ? { mcpServers } : {}),
       // permission tier (permissionMode / sandbox / canUseTool / disallowedTools)
       ...cfg.permission,
@@ -469,6 +471,12 @@ export class ClaudeAgentThread implements AgentThread {
     }
   }
 
+  private resetPlanMode(): Promise<void> {
+    return this.access.native?.permissionMode === 'plan'
+      ? this.query.setPermissionMode('plan').catch(err => log.fail('agent', err, { phase: 'setPermissionMode' }))
+      : Promise.resolve();
+  }
+
   runStreamed(input: AgentInput, turn?: TurnOptions): AgentRun {
     const turnId = `t${++this.turnSeq}`;
     this.currentTurnId = turnId;
@@ -483,6 +491,7 @@ export class ClaudeAgentThread implements AgentThread {
       this.query.setModel(turn.model).catch((err) => log.fail('agent', err, { phase: 'setModel' }));
     }
     if (turn?.effort) this.effort = turn.effort;
+    const permissionReady = this.resetPlanMode();
 
     const mapper = createTurnMapper({ cwd: this.cwd, contextWindow: this.contextWindow });
     const inbox = new Inbox<TurnItem>();
@@ -496,7 +505,7 @@ export class ClaudeAgentThread implements AgentThread {
     // base64-encodes the files first (async), pushed as soon as ready. A build
     // failure (encoding is best-effort, so this shouldn't fire) still pushes the
     // text alone rather than leaving the turn waiting forever on `inbox`.
-    void toUserMessage(input).then(
+    void permissionReady.then(() => toUserMessage(input)).then(
       (m) => this.input.push(m),
       (err) => {
         log.fail('agent', err, { backend: 'claude-agent', phase: 'build-user-message' });
@@ -620,7 +629,7 @@ export class ClaudeAgentThread implements AgentThread {
     this.sink = mySink;
     this.askSink = mySink;
 
-    this.input.push(textUserMessage(goalPrompt(objective)));
+    void this.resetPlanMode().then(() => this.input.push(textUserMessage(goalPrompt(objective))));
 
     const self = this;
     let query: Query | undefined = this.query;
