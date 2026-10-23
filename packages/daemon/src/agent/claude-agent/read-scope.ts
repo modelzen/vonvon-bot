@@ -51,7 +51,11 @@ export async function linuxReadScope(scope: ReadScope, realCwd: string): Promise
       for (const entry of entries) {
         if (entry !== component) {
           const sibling = join(cursor, entry);
-          deny.push(...(await pathsFor(sibling, 'deny')).filter(candidate => candidate === sibling || !inside(candidate, realCwd)));
+          const paths = await pathsFor(sibling, 'deny');
+          // The native sandbox resolves links again; denying the alias would
+          // also hide its workspace target. Other protected targets stay mounted.
+          if (paths.some(target => target !== sibling && (inside(target, realCwd) || inside(realCwd, target)))) continue;
+          deny.push(...paths);
         }
       }
       cursor = join(cursor, component);

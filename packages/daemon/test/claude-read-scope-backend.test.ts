@@ -72,14 +72,25 @@ describe('Claude read scope preparation', () => {
     await expect(linuxReadScope(coarse, cwd)).rejects.toEqual(new ReadScopeError('没法读取数据目录里的群列表，只读、工作区可写档暂时不能启动。请主人检查数据目录的访问权限。'));
     expect(warn).toHaveBeenCalledWith('claude-read-scope', 'list-failed', { error });
   });
-  it('keeps sibling links without denying their workspace or ancestor targets', async () => {
+  it('omits sibling aliases to the workspace and ancestors but keeps other protected targets', async () => {
     const { root, cwd, scope, g2 } = await layout();
     const groups = join(root, 'projects/A/groups');
     const alias = join(groups, 'alias'), up = join(groups, 'up'), other = join(groups, 'other');
     await symlink(cwd, alias); await symlink(join(root, 'projects/A'), up); await symlink(g2, other);
     const linux = await linuxReadScope(await realScope(scope, cwd, cwd), cwd);
-    expect(linux.deny).toEqual(expect.arrayContaining([alias, up, other, g2]));
+    expect(linux.deny).toEqual(expect.arrayContaining([other, g2]));
+    expect(linux.deny).not.toContain(alias);
+    expect(linux.deny).not.toContain(up);
     for (const path of [cwd, groups, join(root, 'projects/A'), join(root, 'projects')]) expect(linux.deny).not.toContain(path);
+  });
+  it.each(['subdirectory', 'root'] as const)('omits a sibling symlink to the workspace %s', async targetKind => {
+    const { root, cwd, scope } = await layout();
+    const sub = join(cwd, 'sub'); await mkdir(sub);
+    const link = join(root, 'projects/A/groups/x');
+    await symlink(targetKind === 'root' ? '/' : sub, link);
+    const linux = await linuxReadScope(await realScope(scope, cwd, cwd), cwd);
+    expect(linux.deny).not.toContain(link);
+    expect(linux.deny).not.toContain(targetKind === 'root' ? '/' : sub);
   });
   it('rejects a level with 2001 entries and logs its count', async () => {
     const { root, cwd, scope } = await layout();
