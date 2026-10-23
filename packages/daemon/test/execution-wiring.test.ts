@@ -326,11 +326,14 @@ describe('s39a production profile delivery', () => {
     await setup({ directories: { repositories: [repository] } }).onMessage(message('new topic'));
     await vi.waitFor(() => expect(claude.startThread).toHaveBeenCalled());
     expect(claude.startThread).toHaveBeenCalledWith(expect.objectContaining({ cwd }));
-    expect(claude.startThread.mock.calls[0]?.[0].profile).toEqual({
+    const profile = claude.startThread.mock.calls[0]?.[0].profile;
+    expect(profile).toMatchObject({
       additionalRoots: roots(extra, repository),
       capabilityPackages: [], env: {}, mcpServers: [], nativeSettings: { automaticMemory: false },
-      instructions: '当前 Bot："app"；当前群："g"。\n\n用某个仓库或附加工作区前，先阅读那里适用的 AGENTS.md 或 CLAUDE.md；附加根不保证原生加载其说明文件。',
     });
+    // The opening comes from context assembly (memory design §4.1); the multi-root note follows it once.
+    expect(profile.instructions).toContain('群「g」里工作。');
+    expect(profile.instructions.endsWith('用某个仓库或附加工作区前，先阅读那里适用的 AGENTS.md 或 CLAUDE.md；附加根不保证原生加载其说明文件。')).toBe(true);
   });
   it('delivers current group roots through clear while retaining the stored backend', async () => {
     fake.project = { ...fake.project, kind: 'single', backend: CLAUDE };

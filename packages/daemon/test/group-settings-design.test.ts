@@ -161,6 +161,14 @@ it('freezes inherited legacy choices without dropping old session model IDs or u
   expect(p.profile).toBeUndefined();
 });
 
+it('leaves the folders of a row bound to a library project alone: no default repositories, no folder-guard crash at start', async () => {
+  cfg.preferences = { directories: { repositories: ['/fixture/repo'] } };
+  await mutateProject('demo', p => { p.projectId = 'prj_0123abcd'; });
+  const migration = await materializeGroupSettings({ ...deps(), readSessions: async () => [] });
+  expect(migration.updated).toEqual(['demo']);
+  expect((await getProjectByName('demo'))!.directories?.repositories).toBeUndefined();
+});
+
 it('edits only local sections while stopped, keeps live actions gated, and never steals its own process lock', async () => {
   const executeWrite = vi.fn();
   const service = createSettingsService({ executeWrite, liveStatus: async () => undefined });

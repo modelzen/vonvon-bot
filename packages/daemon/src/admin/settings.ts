@@ -1130,7 +1130,9 @@ export async function materializeGroupSettings(deps: Pick<SettingsOwnerDeps, 'cf
       ...(!row.smartRules ? { smartRules: rules } : {}),
       ...(!row.modelAccess && models.length && !foreignSessions ? { modelAccess: { backend, models, efforts } } : {}),
       ...(!row.defaultModel && preference ? { defaultModel: preference.model, defaultEffort: preference.effort, defaultModelCustom: preference.custom } : {}),
-      ...(row.directories?.repositories === undefined ? { directories: { ...row.directories, repositories: [...deps.cfg.preferences?.directories?.repositories ?? []] } } : {}),
+      // A row of a library project mirrors the project's folders (memory design §2.1): left out, it runs with the bot's
+      // default repositories, as before, and the folder guard in the registry stays quiet.
+      ...(row.directories?.repositories === undefined && !isProjectId(row.projectId) ? { directories: { ...row.directories, repositories: [...deps.cfg.preferences?.directories?.repositories ?? []] } } : {}),
       ...(!row.pendingPolicy ? { pendingPolicy: getPendingPolicy(deps.cfg) } : {}),
       ...(!row.presentation || row.presentation.showModel === undefined ? { presentation: { voiceEnabled: voiceView(deps.cfg).enabled, showToolCalls: getShowToolCalls(deps.cfg), showModel: getModelDisplay(deps.cfg), completionMode: completion.mode, longTaskMinutes: completion.longTaskMinutes, ...row.presentation } } : {}),
       ...(!row.judge && judge ? { judge } : {}),
