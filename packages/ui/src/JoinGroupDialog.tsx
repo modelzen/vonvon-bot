@@ -76,8 +76,8 @@ export function initialGroupProvider(initialProvider?: ProviderTool, tools?: Too
   if (initialProvider && ready(initialProvider)) return initialProvider;
   return (['codex', 'claude'] as const).find(ready);
 }
-type Props = {snapshot?: DesktopSnapshot; linux?: boolean; open?: boolean; agent: Agent; pending?: PendingAgentGroups; initialGroup?: PendingGroup; initialProvider?: ProviderTool; tools?: ToolState[]; onClose: () => void; onChanged: (target: {agentId: Agent['id']; chatId: string}) => Promise<void>; onOpenProviders?: () => void; onOpenDecisionModel?: () => void};
-export function JoinGroupDialog({snapshot, linux, open = true, agent, pending, initialGroup, initialProvider, tools, onClose, onChanged, onOpenProviders, onOpenDecisionModel}: Props) {
+type Props = {snapshot?: DesktopSnapshot; linux?: boolean; open?: boolean; agent: Agent; pending?: PendingAgentGroups; initialGroup?: PendingGroup; initialProvider?: ProviderTool; /** Start the 项目 row on joining this project (the project page's 把一个群加进来…). */ initialProject?: ProjectId; tools?: ToolState[]; onClose: () => void; onChanged: (target: {agentId: Agent['id']; chatId: string}) => Promise<void>; onOpenProviders?: () => void; onOpenDecisionModel?: () => void};
+export function JoinGroupDialog({snapshot, linux, open = true, agent, pending, initialGroup, initialProvider, initialProject, tools, onClose, onChanged, onOpenProviders, onOpenDecisionModel}: Props) {
   const {navigate} = useDraftGuard();
   const client = useClient();
   const pickDirectory = useDirectoryPicker();
@@ -105,7 +105,7 @@ export function JoinGroupDialog({snapshot, linux, open = true, agent, pending, i
   const [existingDirectory, setExistingDirectory] = useState(false);
   // 项目 (§5.6): what the daemon remembers for this group, and the owner's own pick over the default.
   const [previousId, setPreviousId] = useState<ProjectId>();
-  const [pickedProject, setPickedProject] = useState<ProjectChoice>();
+  const [pickedProject, setPickedProject] = useState<ProjectChoice | undefined>(initialProject ? {kind: 'join', id: initialProject, reason: 'picked'} : undefined);
   // A snapshot refresh can improve the suggested default, but never replaces a hand pick.
   const [pickedTool, setPickedTool] = useState<ProviderTool | undefined>(undefined);
   const ready = (provider: ProviderTool) => providerUsable(tools?.find(item => item.tool === provider));

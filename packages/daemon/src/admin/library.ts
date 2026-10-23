@@ -446,6 +446,15 @@ export async function libraryOverview(): Promise<LibraryOverview> {
   return overview;
 }
 
+/**
+ * The project another bot already works in for this group, if any (§5.6): the setup card offers to join it. The first
+ * one in the library's order when the group's bots are in different projects. Read from the published files, no lock.
+ */
+export async function siblingProjectOfChat(chatId: string, exceptBotId: string): Promise<{ id: string; name: string } | undefined> {
+  const found = (await libraryOverview()).projects.find(project => project.bindings.some(binding => binding.chatId === chatId && binding.botId !== exceptBotId));
+  return found && { id: found.id, name: found.name };
+}
+
 /** What the host asks a running bot process to do about a project's workspace (admin/ipc.ts carries it). */
 export type AdminLibraryOp =
   /** make this bot's rows of the project mirror the library again and archive their groups' sessions; answers {@link MirrorOutcome}[] */

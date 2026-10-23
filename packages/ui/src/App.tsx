@@ -4,7 +4,7 @@ import {uiFeatures} from './features';
 import {PendingGroupToasts} from './PendingGroupToasts';
 import {JoinGroupDialog} from './JoinGroupDialog';
 import {usePendingGroups} from './pending-groups';
-import type {PendingGroup} from '@vonvon/protocol';
+import type {PendingGroup, ProjectId} from '@vonvon/protocol';
 import { useEffect, useRef, useState } from "react";
 import {
   Bot,
@@ -55,7 +55,7 @@ import {initialRoute, openMembership, routeBack, routeDetail, routeFromSearch, r
 import {SearchDialog} from './SearchDialog';
 import {flushSync} from 'react-dom';
 import {GroupWorkspace, groupTabForSection, type GroupDesignTab} from './GroupWorkspace';
-import {AgentProfileSettings} from './settings/GroupDesignSettings';
+import {BotMap} from './BotMap';
 import {ShareUsagePanel, UsagePanel} from './management/UsagePanel';
 import {EnvironmentPanel} from './management/EnvironmentPanel';
 import {ProviderManager} from './setup/ProviderSetup';
@@ -72,7 +72,7 @@ import {UpdatePanel} from './management/UpdatePanel';
 
 type Modal =
   | RegisterModal
-  | { kind: "join"; agentId: AgentId; group?: PendingGroup; provider?: SetupProvider; suspended?: boolean }
+  | { kind: "join"; agentId: AgentId; group?: PendingGroup; provider?: SetupProvider; project?: ProjectId; suspended?: boolean }
   | { kind: "collaboration"; membership: Membership }
   | { kind: "shareUsage" }
   | { kind: "deleteAgent"; agentId: AgentId; name: string }
@@ -114,7 +114,7 @@ function DetailTabs({selected, onSelect, first, second}: {selected: 'overview' |
 }
 function BotDetailTabs({selected, onSelect}: {selected: AgentPane['kind']; onSelect: (pane: AgentPane) => void}) {
   return <nav className="collaboration-detail-tabs" aria-label="Bot 详情">
-    {([{kind: 'groups', label: '群聊'}, {kind: 'profile', label: '个性与记忆'}, {kind: 'settings', label: '管理 Bot'}] as const).map(pane =>
+    {([{kind: 'groups', label: '群聊'}, {kind: 'profile', label: '导图'}, {kind: 'settings', label: '管理 Bot'}] as const).map(pane =>
       <button key={pane.kind} type="button" aria-current={selected === pane.kind ? 'page' : undefined} className={selected === pane.kind ? 'is-selected' : ''} onClick={() => onSelect({kind: pane.kind})}>{pane.label}</button>)}
   </nav>;
 }
@@ -683,7 +683,7 @@ function DesktopApp() {
                     </StatusBadge>
                   </header>
                   <div className="bot-detail-navigation"><BotDetailTabs selected={route.kind === 'agent' ? route.pane.kind : 'groups'} onSelect={agentPane}/></div>
-                  {route.kind === 'agent' && route.pane.kind === 'profile' ? <AgentProfileSettings botId={agent.id}/> : detail.kind !== 'agent-settings' ? <>
+                  {route.kind === 'agent' && route.pane.kind === 'profile' ? <BotMap agentId={agent.id} snapshot={snapshot} onProject={id => select({kind: 'project', id})}/> : detail.kind !== 'agent-settings' ? <>
                   <SettingsGroup
                     label="已加入的飞书群"
                     action={
@@ -791,6 +791,7 @@ function DesktopApp() {
                 onMembership={id => select({kind: 'membership', id})}
                 onChanged={async () => {await run({type: 'refresh'});}}
                 onDeleted={() => openList('projects')}
+                onAddGroup={(agentId, projectId) => navigate(() => setModal({kind: 'join', agentId, project: projectId}))}
                 onOpenTools={() => openContextSettings('environment')} onOpenProviders={() => openContextSettings('providers')} onOpenSecrets={() => openContextSettings('secrets')}/>}
               {member && agent && group && <GroupWorkspace key={member.id} member={member} agent={agent} group={group} snapshot={snapshot}
                 revealHistory={searchTarget?.reveal === "group-history"} initialTab={searchTarget ? groupTabForSection(searchTarget.section) : groupTabs[member.id]} onTabChange={tab => setGroupTabs(current => ({...current,[member.id]:tab}))}
@@ -869,7 +870,7 @@ function DesktopApp() {
       <PendingGroupToasts pages={pendingGroups} agents={snapshot.agents} hidden={modal !== null} onContinue={(owner, group) => openJoin(owner.id, group)} />
       {modal?.kind === 'join' && (() => {
         const owner = snapshot.agents.find(item => item.id === modal.agentId);
-        return owner ? <JoinGroupDialog key={`${owner.id}:${modal.group?.chatId ?? 'new'}`} snapshot={snapshot} agent={owner} tools={snapshot.tools} initialProvider={modal.provider} open={!modal.suspended} onOpenProviders={() => configureJoinProvider()} onOpenDecisionModel={() => configureJoinProvider('secrets')} linux={snapshot.application.platform === 'linux'} initialGroup={modal.group} pending={pendingGroups.find(item => item.agentId === owner.id)} onClose={() => setModal(null)} onChanged={joined} /> : null;
+        return owner ? <JoinGroupDialog key={`${owner.id}:${modal.group?.chatId ?? 'new'}:${modal.project ?? ''}`} snapshot={snapshot} agent={owner} tools={snapshot.tools} initialProvider={modal.provider} initialProject={modal.project} open={!modal.suspended} onOpenProviders={() => configureJoinProvider()} onOpenDecisionModel={() => configureJoinProvider('secrets')} linux={snapshot.application.platform === 'linux'} initialGroup={modal.group} pending={pendingGroups.find(item => item.agentId === owner.id)} onClose={() => setModal(null)} onChanged={joined} /> : null;
       })()}
       <Dialog
         open={modal !== null && modal.kind !== "deleteAgent" && modal.kind !== "join"}

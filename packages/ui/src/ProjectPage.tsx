@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {ChevronRight, Download, Pencil, Trash2} from 'lucide-react';
-import {backendLabel, type DesktopSnapshot, type LibraryProject, type LibraryReply, type MembershipId, type ProjectId, type SnapshotProject, type ToolState} from '@vonvon/protocol';
+import {Download, Pencil, Trash2} from 'lucide-react';
+import {backendLabel, type Agent, type AgentId, type DesktopSnapshot, type LibraryProject, type LibraryReply, type MembershipId, type ProjectId, type SnapshotProject, type ToolState} from '@vonvon/protocol';
 import {useClient} from './client-context';
 import {Button, InlineNotice} from './reference/components/ui';
 import {ConfirmDialog, Dialog} from './reference/components/ui/Dialog';
@@ -9,6 +9,8 @@ import {useDraft, useDraftGuard} from './settings/DraftGuard';
 import {groupDesignTabs} from './GroupWorkspace';
 import {bindingRows, otherProjectNotices, projectDeletable, workspaceRisks} from './project-model';
 import {settingAnchor} from './search';
+import {MemoryMap} from './MemoryMap';
+import type {MapNode} from './MindMap';
 import type {ProjectPane} from './collaboration-navigation';
 import './group-workspace.css';
 
@@ -50,12 +52,14 @@ type Props = {
   onMembership: (id: MembershipId) => void;
   onChanged: () => Promise<void>;
   onDeleted: () => void;
+  /** Opens the join dialog for this Bot with the project already picked (§5.3 + 把一个群加进来…). */
+  onAddGroup?: (agentId: AgentId, projectId: ProjectId) => void;
   onOpenTools?: () => void;
   onOpenProviders?: () => void;
   onOpenSecrets?: () => void;
 };
 // Intent: one project, its groups and Bots, and the workspace they share. Pages are plain: the owner leads a later visual pass.
-export function ProjectPage({project, snapshot, pane, tools, onPane, onMembership, onChanged, onDeleted, onOpenTools, onOpenProviders, onOpenSecrets}: Props) {
+export function ProjectPage({project, snapshot, pane, tools, onPane, onMembership, onChanged, onDeleted, onAddGroup, onOpenTools, onOpenProviders, onOpenSecrets}: Props) {
   const guard = useDraftGuard();
   const {library, error, refresh} = useLibraryProject(project.id, snapshot.revision);
   const [dialog, setDialog] = useState<'rename' | 'delete' | null>(null);
@@ -74,7 +78,7 @@ export function ProjectPage({project, snapshot, pane, tools, onPane, onMembershi
       {only && groupDesignTabs.map(([value, label]) => <button type="button" key={value} aria-current={pane.kind === 'group' && pane.tab === value ? 'page' : undefined} onClick={() => guard.navigate(() => onPane({kind: 'group', tab: value}))}>{label}</button>)}
     </nav>
     {error && <InlineNotice title="读取未完成" tone="warning">{error}<Button size="sm" onClick={() => void refresh()}>重试</Button></InlineNotice>}
-    {tab === 'map' && <ProjectMap project={project} snapshot={snapshot} library={library} onMembership={onMembership}/>}
+    {tab === 'map' && <ProjectMap project={project} snapshot={snapshot} library={library} onMembership={onMembership} onAddGroup={onAddGroup}/>}
     {tab === 'workspace' && <ProjectWorkspace project={project} snapshot={snapshot} library={library} refresh={async () => {await refresh(); await onChanged();}}/>}
     {tab === 'context' && <section id={settingAnchor('模型看到什么')} aria-label="模型看到什么"><p className="group-control-note">这一页会列出 vonvon 交给模型的角色设定和记忆。现在还没有开放。</p></section>}
     {pane.kind === 'group' && only && onlyAgent && onlyGroup && <div className="project-page-group" aria-label={`${onlyGroup.name} 的设置`}>
@@ -87,23 +91,35 @@ export function ProjectPage({project, snapshot, pane, tools, onPane, onMembershi
   </div>;
 }
 
-function ProjectMap({project, snapshot, library, onMembership}: {project: SnapshotProject; snapshot: DesktopSnapshot; library?: LibraryProject; onMembership: (id: MembershipId) => void}) {
+function ProjectMap({project, snapshot, library, onMembership, onAddGroup}: {project: SnapshotProject; snapshot: DesktopSnapshot; library?: LibraryProject; onMembership: (id: MembershipId) => void; onAddGroup?: (agentId: AgentId, projectId: ProjectId) => void}) {
   const rows = bindingRows(snapshot, project, library);
   const notices = otherProjectNotices(snapshot, project);
-  return <section id={settingAnchor('群和 Bot')} className="project-map" aria-label="群和 Bot">
-    <h3>群和 Bot</h3>
-    {!rows.length && <p className="group-control-note">没有群在用这个项目。到 Bot 页把一个群连进来，或删除这个项目。</p>}
-    <ul className="project-binding-list">
-      {rows.map(row => <li key={`${row.agentId}:${row.groupId}`}>
-        <button type="button" className="project-binding" disabled={!row.member} aria-label={`设置 ${row.group} 中的 ${row.bot}`} onClick={() => row.member && onMembership(row.member.id)}>
-          <strong>{row.group} · {row.bot}</strong>
-          <small>{row.member ? `${conversationLabel[row.member.conversation]} · ${backendLabel(row.member.backend)}` : ''}</small>
-          {row.state === 'invalid' && <span className="group-directory-status" data-tone="warning">已失效</span>}
-          {row.state === 'disabled' && <span className="group-directory-status" data-tone="neutral">已停用</span>}
-          {row.member && <ChevronRight size={13} aria-hidden="true"/>}
-        </button>
-      </li>)}
-    </ul>
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const targets = useMemo(() => ({
+    bots: [...new Set(project.bindings.map(binding => binding.agentId))].map(id => ({id, name: snapshot.agents.find(agent => agent.id === id)?.name ?? id})),
+    botName: (id: string) => snapshot.agents.find(agent => agent.id === id)?.name ?? '这个 Bot',
+    groupName: (chatId: string) => snapshot.groups.find(group => group.id === chatId)?.name ?? '一个群',
+  }), [snapshot, project.bindings]);
+  const bindingNodes: MapNode[] = rows.map(row => ({
+    id: `g:${row.agentId}:${row.groupId}`, kind: 'branch', label: `${row.group} · ${row.bot}`,
+    meta: row.state === 'invalid' ? `已失效（${row.bot} 已不在群里）` : [row.state === 'disabled' ? '已停用' : '', row.member ? `${conversationLabel[row.member.conversation]} · ${backendLabel(row.member.backend)}` : ''].filter(Boolean).join(' · ') + (row.member ? ' →' : ''),
+    tone: row.state === 'ok' ? undefined : 'muted',
+    ...(row.member ? {onClick: () => onMembership(row.member!.id), menu: [{id: 'unbind', label: `不再用${row.bot}处理这个群…`, onSelect: () => onMembership(row.member!.id)}]} : {}),
+  }));
+  // Candidates for 把一个群加进来: the project's own Bots first, then the rest; one candidate opens the dialog at once.
+  const inProject = new Set(project.bindings.map(binding => binding.agentId as string));
+  const agents = [...snapshot.agents].sort((a, b) => Number(inProject.has(b.id)) - Number(inProject.has(a.id)));
+  const add = (agent: Agent) => onAddGroup?.(agent.id, project.id);
+  const addNode: MapNode = agents.length > 1
+    ? {id: 'add-group', kind: 'action', label: '+ 把一个群加进来…', open: Boolean(open['add-group']), onToggle: () => setOpen(current => ({...current, 'add-group': !current['add-group']})),
+      children: agents.map(agent => ({id: `add:${agent.id}`, kind: 'action' as const, label: `用 ${agent.name}`, onClick: () => add(agent)}))}
+    : {id: 'add-group', kind: 'action', label: '+ 把一个群加进来…', ...(agents[0] && onAddGroup ? {onClick: () => add(agents[0]!)} : {})};
+  const groups: MapNode = {id: 'groups', kind: 'section', label: '群和 Bot', meta: String(rows.length), open: open.groups ?? true, onToggle: () => setOpen(current => ({...current, groups: !(current.groups ?? true)})), children: [...bindingNodes, addNode]};
+  return <section id={settingAnchor('群和 Bot')} className="project-map" aria-label="导图">
+    <MemoryMap scope={{kind: 'project', projectId: project.id}} rootLabel={project.name} mode="direct" memoryLabel="项目记忆" targets={targets} after={[groups]}
+      note="共用这个项目的群里，Bot 都会读到这些记忆。"
+      empty="还没有。群里说“记住……”，或者 Bot 自己判断值得记时会挂到下面的分支上。Bot 在群里说了“记住了”，就是记了。"/>
+    {!rows.length && <p className="group-control-note">没有群在用这个项目。从“群和 Bot”里把一个群加进来，或删除这个项目。</p>}
     {notices.map(notice => <InlineNotice key={notice.memberId} title="同一个群里的另一个 Bot 用的是别的项目" tone="warning"
       actions={<Button size="sm" onClick={() => onMembership(notice.memberId)}>去设置</Button>}>
       {notice.bot} 在 {notice.group} 用的是项目「{notice.project}」，记忆和目录和这里不通。在 {notice.bot} 的群设置页可以换到这个项目。

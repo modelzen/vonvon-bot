@@ -17,7 +17,7 @@ import { presentationConfig } from './group-presentation';
 import { createSkillChat } from './skill-chat';
 import { projectRevision, projectView, type CollaborationRequest } from '../admin/collaboration';
 import { AdminWriteError } from '../admin/ops';
-import { applyMirror, mirrorProjectIntoBot, type AdminLibraryOp } from '../admin/library';
+import { applyMirror, mirrorProjectIntoBot, siblingProjectOfChat, type AdminLibraryOp } from '../admin/library';
 import { isProjectId, readLibrary, type LibraryProject } from '../project/library';
 import { createSettingsOwner, materializeGroupSettings } from '../admin/settings';
 import { validateProviderJudge } from '../project/initial-settings';
@@ -168,6 +168,7 @@ import {
   buildDoctorCard,
   buildGroupSettingsCard,
   buildJoinGroupFormCard,
+  parseProjectPick,
   parseNoMentionPick,
   buildModelDefaultCard,
   parseModelDefaultFormValue,
@@ -5270,7 +5271,9 @@ export function createOrchestrator(
       // as a 留痕. Detached so the click acks immediately (join is slow).
       void trackTask((async () => {
         const info = chatId ? await orStop(topicCtx.chatInfo(chatId), { ok: false, topic: false }) : undefined;
-        const formWithBots = { ...form, hasOtherBots: info?.ok && info.bots !== undefined ? info.bots > 1 : undefined };
+        // The group's other bot's project, looked up here and again below: the card carries no project id.
+        const sibling = chatId && bindingBot ? await siblingProjectOfChat(chatId, bindingBot.appId).catch(() => undefined) : undefined;
+        const formWithBots = { ...form, hasOtherBots: info?.ok && info.bots !== undefined ? info.bots > 1 : undefined, ...(sibling ? { sibling: { name: sibling.name } } : {}) };
         let result;
         if (!chatId)
           result = buildJoinGroupFormCard({ ...formWithBots, error: '缺少群标识，请重新从进群通知里打开绑定卡' });
@@ -5289,6 +5292,7 @@ export function createOrchestrator(
               chatId,
               addedBy: op,
               existingPath: cwdIn || undefined,
+              ...(sibling && !cwdIn && parseProjectPick(formValue) === 'join' ? { project: sibling.id } : {}),
               projectsRootDir: cfg.preferences?.projectsRootDir,
               kind,
               noMention: parseNoMentionPick(formValue),
@@ -8407,7 +8411,8 @@ export function createOrchestrator(
         return;
       }
       const fullOnly = Boolean(backendFor(DEFAULT_BACKEND_ID).fullAccessOnly?.());
-      const card = buildJoinGroupFormCard({ chatId: evt.chatId, name, topic, backends, backend,
+      const sibling = bindingBot ? await orStop(siblingProjectOfChat(evt.chatId, bindingBot.appId).catch(() => undefined), undefined) : undefined;
+      const card = buildJoinGroupFormCard({ chatId: evt.chatId, name, topic, backends, backend, ...(sibling ? { sibling: { name: sibling.name } } : {}),
         hasOtherBots: mode.ok && mode.bots !== undefined ? mode.bots > 1 : undefined,
         fullOnly, addedBy: admin ? undefined : { name: adderName } });
       const sent = await orStop(sendManagedCard(channel, to, card, undefined, false, 'open_id').then(() => 'yes', error => {

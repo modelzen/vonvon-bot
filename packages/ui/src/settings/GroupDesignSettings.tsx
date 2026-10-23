@@ -266,10 +266,10 @@ function AddSkillDialog({open, onClose, botId, chatId, botName, groupName}: {ope
   </Dialog>;
 }
 
-export function AgentProfileSettings({botId}: {botId: AgentId}) {
-  return <AgentProfileLoader key={botId} botId={botId}/>;
+export function AgentProfileSettings({botId, onSaved}: {botId: AgentId; onSaved?: () => void}) {
+  return <AgentProfileLoader key={botId} botId={botId} onSaved={onSaved}/>;
 }
-function AgentProfileLoader({botId}: {botId: AgentId}) {
+function AgentProfileLoader({botId, onSaved}: {botId: AgentId; onSaved?: () => void}) {
   const client = useClient();
   const [view, setView] = useState<AgentSettingsView>();
   const [error, setError] = useState<string>();
@@ -291,7 +291,7 @@ function AgentProfileLoader({botId}: {botId: AgentId}) {
       {view.roleInfo?.integrity === 'changed' && <p className="settings-readonly-notice" role="status">角色设定文件在 vonvon 之外被改过。</p>}
       <Editor title="角色设定" section={view.sections.role} initialDraft={view.roleInfo?.draft ? {identity: view.roleInfo.draft} : undefined} save={async (patch, revision) => {
         const reply = await client.settings({type: 'save', edit: {scope: {kind: 'agent', botId}, section: 'role', patch, revision}});
-        if (reply.kind === 'saved' && reply.result.kind === 'saved') await refresh();
+        if (reply.kind === 'saved' && reply.result.kind === 'saved') {await refresh(); onSaved?.();}
         return reply;
       }} render={(draft, set, disabled) => <>
         <PersonaEditor label="身份与职责" value={draft.identity} onChange={identity => set({...draft, identity})} disabled={disabled} maxLength={500}/>
