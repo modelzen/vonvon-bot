@@ -175,13 +175,15 @@ it.each(['no-glance', 'named-only'] as const)('waits for a fresh snapshot at the
   expect(reading(show(state()))).toContain('当前间隔 3 分钟');
 });
 
-it('offers keyboard-accessible help and no writable attention control', () => {
+it('offers a named, collapsed help button and no writable attention control', () => {
   const html = render();
-  expect(html).toMatch(/<details[\s>]/);
-  expect(html).toMatch(/<summary[^>]*>[^<]*数值说明/);
+  const trigger = html.match(/<button\b[^>]*aria-label="主区关注度 50 \/ 100，留意中。查看数值说明"[^>]*>/)?.[0];
+  expect(trigger).toBeDefined();
+  expect(trigger).toContain('aria-haspopup="dialog"');
+  expect(trigger).toContain('aria-expanded="false"');
   expect(html).not.toMatch(/<(?:input|select|textarea)\b/);
   expect(html).not.toContain('role="slider"');
-  expect(render({connected: false})).toContain('数值说明');
+  expect(render({connected: false})).toContain('aria-label="主区关注度 未知，连接已断开，暂无关注状态。查看数值说明"');
 });
 
 it.each(['threads', 'shared'] as const)('does not expose smart attention for a %s membership', conversation => {
