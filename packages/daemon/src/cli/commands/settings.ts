@@ -95,7 +95,7 @@ export function parseAssignments(kind: Kind, assignments: readonly string[]): { 
   if (section === 'cliBridge') throw new Error('咖啡一下第一版已拿掉，不能改。');
   if (section === 'compact' && kind === 'project') throw new Error('自动压缩现在一直开着，不能关了。');
   if (section === 'permission' && kind === 'project' && fields.has('network')) throw new Error('联网已经并进权限的档位：只读不联网，工作区可写联网，完全访问不限制。只读又要联网这类组合，用高级设置 permission.custom。');
-  if (section === 'permission' && kind === 'project' && fields.has('guestMode')) throw new Error('「普通成员权限」去掉了：一个群只有一个权限档，群里谁说话都用它。改 permission.mode。');
+  if (section === 'permission' && kind === 'project' && fields.has('guestMode')) throw new Error('「普通成员权限」去掉了：一个群只有一个权限，群里谁说话都用它。改 permission.mode。');
   const schema = Object.hasOwn(TABLES[kind], section) ? TABLES[kind][section] : undefined;
   if (!schema) throw new Error(`没有 ${section} 这一节。可以改的有：${sectionNames(kind).join('、')}`);
   // fromEntries keeps a key like __proto__ as data, so strict() reports it.

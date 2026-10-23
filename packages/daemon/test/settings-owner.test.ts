@@ -202,8 +202,8 @@ describe('s31c permission settings', () => {
   it.each([
     [{ mode: 'write' }, 'write', true, undefined],
     [{ custom: { sandbox: 'workspace-write', network: true } }, 'write', true, undefined],
-    [{ mode: 'full', custom: custom.settings }, 'qa', true, custom],
-    [{ custom: null }, 'qa', false, undefined],
+    [{ custom: custom.settings }, 'qa', true, custom],
+    [{ mode: 'qa', custom: null }, 'qa', false, undefined],
     [{ mode: 'write', custom: null }, 'write', true, undefined],
   ] as const)('saves patch %j with canonical stored effects', async (patch, mode, network, expectedCustom) => {
     await updateProject('demo', { mode: 'qa', network: true, custom });
@@ -216,6 +216,42 @@ describe('s31c permission settings', () => {
     expect(saved.custom).toEqual(expectedCustom);
     if (!expectedCustom) expect(saved).not.toHaveProperty('custom');
     expect(evict).toHaveBeenCalledOnce();
+  });
+  it('rejects choosing a tier and non-null custom settings together', async () => {
+    const { owner } = await fixture();
+    const before = await owner.read(project) as ProjectSettingsView;
+    const disk = await readFile(paths.projectsFile, 'utf8');
+    expect(await owner.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { mode: 'full', custom: custom.settings } })).toMatchObject({ kind: 'rejected', fields: [{ message: '选档和高级设置一次只改一个' }] });
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(disk);
+  });
+  it.each([
+    [{ mode: 'write', network: false }, 'write', true],
+    [{ mode: 'full', network: true, custom: { ...custom, settings: { bad: true } } }, 'qa', false],
+    [{ mode: 'qa', network: true, custom }, 'qa', false],
+  ] as const)('requires a tier when clearing custom state %j, then switches with the safe tier', async (initial, mode, network) => {
+    await updateProject('demo', initial);
+    const evict = vi.fn(async () => {});
+    const { owner } = await fixture({ backendFor: id => ({ ...backend, id }), evictLiveSessionsForChat: evict });
+    const before = await owner.read(project) as ProjectSettingsView;
+    const disk = await readFile(paths.projectsFile, 'utf8');
+    expect(await owner.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { custom: null } })).toMatchObject({ kind: 'rejected', fields: [{ message: '清掉高级设置时要同时选一档，例如 permission.mode=qa。' }] });
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(disk);
+    expect(evict).not.toHaveBeenCalled();
+    expect((await owner.save({ scope: project, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch: { backend: 'claude-agent', models: ['fixture-model'], efforts: ['high'] } })).kind).toBe('saved');
+    expect(await getProjectByName('demo')).toMatchObject({ mode, network, backend: 'claude-agent' });
+    expect((await getProjectByName('demo'))!).not.toHaveProperty('custom');
+  });
+  it.each([{}, { mode: 'full', network: false }, { mode: 'qa', network: false }] as const)('clearing absent custom is a complete no-op for %j', async initial => {
+    await updateProject('demo', initial);
+    const evict = vi.fn(async () => {});
+    const { owner } = await fixture({ backendFor: () => ({ ...backend, fullAccessOnly: () => 'only full here' }), evictLiveSessionsForChat: evict });
+    const before = await owner.read(project) as ProjectSettingsView;
+    const disk = await readFile(paths.projectsFile, 'utf8');
+    let committed = false;
+    expect(await owner.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { custom: null } }, { beforeCommit: () => { committed = true; } })).toMatchObject({ kind: 'saved', effects: [] });
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(disk);
+    expect(committed).toBe(false);
+    expect(evict).not.toHaveBeenCalled();
   });
   it('rejects network patches explicitly, malformed custom and unsupported tiers', async () => {
     expect(() => parseSettingsEdit({ scope: project, section: 'permission', revision: 'r', patch: { network: true } })).toThrow('联网已经并进权限的档位');

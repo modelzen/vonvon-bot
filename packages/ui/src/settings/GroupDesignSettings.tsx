@@ -133,7 +133,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, botName = 'Bot'
         </>}/> : <MissingSection/>)}
       {tab === 'model' && (sections.modelAccess ? <Editor title="可用模型" section={sections.modelAccess} save={(patch, revision) => save('modelAccess', patch, revision)}
         render={(draft, set, disabled) => <ModelAccessFields botId={view.scope.botId} value={draft} onChange={set} disabled={disabled} providers={providers} onCatalog={rememberCatalog}
-          permission={sections.permission.stored.options.tiers.find(tier => tier.tier === sections.permission.stored.mode)} permissionInvalid={sections.permission.stored.options.invalid} savedBackend={view.identity.backend}/>}
+          permissionName={sections.permission.stored.options.tiers.find(tier => tier.tier === sections.permission.stored.mode)?.name} savedBackend={view.identity.backend}/>}
         validate={value => providers.some(provider => provider.id === value.backend) ? modelAccessProblem(value, modelCatalog.current) : '此 Provider 当前不可用，请先安装并登录。'}/> : <MissingSection/>)}
       {tab === 'workspace' && <>
         {sections.workspace ? <Editor title="工作区" section={sections.workspace} save={(patch, revision) => save('workspace', patch, revision)}
@@ -176,13 +176,11 @@ export function modelAccessProblem(value: ModelAccess, catalog?: ModelCatalog): 
   const incompatible = catalog.models.filter(model => value.models.includes(model.id) && model.supportedEfforts.length > 0 && !model.supportedEfforts.some(effort => value.efforts.includes(effort)));
   return incompatible.length ? `请选择 ${incompatible.map(model => model.displayName).join('、')} 支持的 Effort。` : undefined;
 }
-export function ModelAccessFields({botId, value, onChange, disabled, providers, onCatalog, permission, permissionInvalid, savedBackend}: {botId: AgentId; value: ModelAccess; onChange: (value: ModelAccess) => void; disabled: boolean; providers: Provider[]; onCatalog?: (catalog: ModelCatalog | undefined) => void; permission?: {name: string; summary: string}; permissionInvalid?: boolean; savedBackend?: string}) {
+export function ModelAccessFields({botId, value, onChange, disabled, providers, onCatalog, permissionName, savedBackend}: {botId: AgentId; value: ModelAccess; onChange: (value: ModelAccess) => void; disabled: boolean; providers: Provider[]; onCatalog?: (catalog: ModelCatalog | undefined) => void; permissionName?: string; savedBackend?: string}) {
   const available = providers.some(provider => provider.id === value.backend);
   return <div className="gd-model-fields">
     <fieldset><legend>Provider</legend><SettingChoices label="模型 Provider" choices={providerChoices(providers, value.backend)} value={value.backend} disabled={disabled} onChange={backend => {if (providers.some(provider => provider.id === backend)) onChange({backend, models: [], efforts: []});}}/></fieldset>
-    {permission && value.backend !== savedBackend && <p className="gd-note" role="status">{permissionInvalid
-      ? '换 provider 会清掉高级设置，并恢复原来保存的权限档，可能比当前的只读更宽。建议先在工作区重新选一档。'
-      : <>换 provider 以后，权限还是「{permission.name}」（{permission.summary}）；高级设置会清掉。</>}</p>}
+    {permissionName && value.backend !== savedBackend && <p className="gd-note" role="status">换 provider 以后，权限还是「{permissionName}」；高级设置会清掉。</p>}
     {!available && <p className="gd-note" role="status">此 Provider 暂不可用。完成安装与登录后可继续，原配置已保留。</p>}
     <Catalog key={value.backend} botId={botId} backend={value.backend} purpose="project">{catalog => <ModelAccessChoices value={value} onChange={onChange} catalog={catalog?.backend === value.backend ? catalog : undefined} disabled={disabled || !available} onCatalog={onCatalog}/>}</Catalog>
   </div>;

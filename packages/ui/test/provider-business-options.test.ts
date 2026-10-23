@@ -1,10 +1,12 @@
-import {createElement} from 'react';
+import {Children, createElement, isValidElement, type ReactNode} from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {expect, it} from 'vitest';
-import {agentIdSchema} from '@vonvon/protocol';
+import {agentIdSchema, type ProjectSettingsView} from '@vonvon/protocol';
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
-import {DecisionFields, ModelAccessFields, modelAccessProblem} from '../src/settings/GroupDesignSettings';
+import {DecisionFields, GroupSettingsContent, ModelAccessFields, modelAccessProblem} from '../src/settings/GroupDesignSettings';
+import {Editor} from '../src/settings/SettingsPanel';
+import {permissionValue} from './permission-fixture';
 
 const client = createClient({isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {}});
 const botId = agentIdSchema.parse('cli_provider_options');
@@ -20,13 +22,32 @@ it('keeps a saved unavailable model Provider visible but disabled', () => {
 it('explains the retained tier and cleared advanced settings when changing Provider', () => {
   const props = {botId, value: {backend: 'claude-agent', models: [], efforts: []}, onChange: () => {}, disabled: false,
     providers: [{id: 'codex-appserver', displayName: 'Codex'}, {id: 'claude-agent', displayName: 'Claude'}],
-    savedBackend: 'codex-appserver', permission: {name: '工作区可写', summary: '能改工作区里的文件，能联网。'}};
+    savedBackend: 'codex-appserver', permissionName: '工作区可写'};
   const html = render(createElement(ModelAccessFields, props));
-  expect(html).toContain('换 provider 以后，权限还是「工作区可写」（能改工作区里的文件，能联网。）；高级设置会清掉。');
+  expect(html).toContain('换 provider 以后，权限还是「工作区可写」；高级设置会清掉。');
+  expect(html).not.toContain('能改工作区里的文件，能联网。');
   expect(render(createElement(ModelAccessFields, {...props, value: {...props.value, backend: props.savedBackend}}))).not.toContain('高级设置会清掉');
-  const invalid = render(createElement(ModelAccessFields, {...props, permissionInvalid: true, permission: {name: '只读', summary: '不联网。'}}));
-  expect(invalid).toContain('恢复原来保存的权限档，可能比当前的只读更宽。建议先在工作区重新选一档。');
-  expect(invalid).not.toContain('权限还是「只读」');
+});
+
+it('uses the invalid custom view’s qa tier in the provider-change hint', () => {
+  const permission = permissionValue('qa'); permission.options.invalid = true;
+  const section = <T,>(stored: T) => ({stored, effective: stored, revision: 'r', access: {kind: 'writable' as const}, apply: []});
+  const view: ProjectSettingsView = {scope: {kind: 'project', botId, projectName: 'demo'}, identity: {chatId: 'oc_demo', backend: 'codex-appserver', cwd: '/tmp/demo', kind: 'single'},
+    sections: {permission: section(permission), response: section({noMention: false}), model: section({selection: {kind: 'default'}}), modelAccess: section({backend: 'codex-appserver', models: [], efforts: []})}, members: {openIds: [], revision: 'r'}};
+  function ChangedProvider() {
+    const content = GroupSettingsContent({view, tab: 'model', refresh: async () => {}});
+    function findEditor(node: ReactNode): any {
+      for (const child of Children.toArray(node)) if (isValidElement<{children?: ReactNode}>(child)) {
+        if (child.type === Editor) return child;
+        const nested = findEditor(child.props.children); if (nested) return nested;
+      }
+    }
+    return findEditor(content).props.render({...view.sections.modelAccess!.stored, backend: 'claude-agent'}, () => {}, false);
+  }
+  const html = render(createElement(ChangedProvider));
+  expect(html).toContain('权限还是「只读」；高级设置会清掉。');
+  expect(html).not.toContain('恢复原来保存的权限档');
+  expect(html).not.toContain('可能比当前的只读更宽');
 });
 
 it('keeps unavailable decision Providers visible and open for setup guidance', () => {

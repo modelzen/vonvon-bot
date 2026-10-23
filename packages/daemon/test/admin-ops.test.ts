@@ -391,13 +391,15 @@ describe('performBackendSwitch（注册表 → doctor 探活 → 档位支持面
     expect((await getProjectByName('demo'))?.backend).toBe('codex-appserver');
   });
 
-  it('a real legacy backend change clears custom and normalizes network without changing the tier', async () => {
-    await mutateProject('demo', p => { p.mode = 'write'; p.network = false;
-      p.custom = { backend: 'codex-appserver', settings: { sandbox: 'workspace-write', network: false } }; });
+  it.each([
+    { mode: 'full' as const, custom: { backend: 'codex-appserver', settings: { sandbox: 'invalid' } }, expected: 'qa' as const, network: false },
+    { mode: 'write' as const, custom: undefined, expected: 'write' as const, network: true },
+  ])('a real legacy backend change safely normalizes $mode to $expected', async ({ mode, custom, expected, network }) => {
+    await mutateProject('demo', p => { p.mode = mode; p.network = false; p.custom = custom; });
     const r = await performBackendSwitch({ projectName: 'demo', target: 'claude-agent', backendFor: () => fakeBackend({ id: 'claude-agent' }) });
     expect(r.ok).toBe(true);
     const p = await getProjectByName('demo');
-    expect(p).toMatchObject({ backend: 'claude-agent', mode: 'write', network: true });
+    expect(p).toMatchObject({ backend: 'claude-agent', mode: expected, network });
     expect(p).not.toHaveProperty('custom');
   });
 

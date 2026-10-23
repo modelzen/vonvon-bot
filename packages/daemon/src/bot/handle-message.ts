@@ -5872,7 +5872,7 @@ export function createOrchestrator(
       patch(evt, async () => {
         const p = await getProjectByName(name);
         const be = groupBackend(p);
-        return p ? buildPermissionCard(p, permissionTable(be.id), tableEnv(be)) : renderDmMenuCard();
+        return p ? buildPermissionCard(p, permissionTable(groupBackendId(p)), tableEnv(be)) : renderDmMenuCard();
       });
     })
     // 提交权限表单：落盘 mode、清自定义并让联网随档，再驱逐本项目活跃会话让新档立即生效（沙箱
@@ -5887,13 +5887,17 @@ export function createOrchestrator(
       void trackTask((async () => {
         const p = await getProjectByName(name);
         const be = groupBackend(p);
-        const table = permissionTable(be.id), env = tableEnv(be);
+        const table = permissionTable(groupBackendId(p)), env = tableEnv(be);
         if (p && (oldCard || (mode !== undefined && tierInfo(table, env, mode).unavailable))) {
           log.info('console', 'permission-refused', { project: name, mode, reason: oldCard ? 'old-card' : 'tier-unavailable' });
           await sendManagedCard(channel, evt.chatId, buildPermissionCard(p, table, env)).catch((e) => log.fail('console', e, { phase: 'permission-result' }));
           return;
         }
-        if (mode === undefined) return;
+        if (mode === undefined) {
+          await channel.send(evt.chatId, { markdown: '没有改动。' }, { replyTo: evt.messageId })
+            .catch(e => log.fail('console', e, { phase: 'permission-result' }));
+          return;
+        }
         // 共享层（admin/ops.ts）：落盘 + 驱逐活跃会话让新档立即生效；写后回读，
         // 卡片与盘上一致——与 Web 控制台的 setPermissionMode 完全同一条路径。
         const r = await performSetPermissionMode({ projectName: name, mode, backendFor, evictLiveSessionsForChat });

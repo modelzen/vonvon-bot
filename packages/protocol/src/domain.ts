@@ -107,7 +107,7 @@ export const commandSchema = z.discriminatedUnion("type", [
       type: z.literal("setPermission"),
       membershipId: membershipIdSchema,
       administrator: permissionSchema,
-      /** @deprecated s31c: network is derived from the tier; old values are ignored. */
+      /** @deprecated s31c: network is derived from the tier; a contradictory old value is rejected. */
       network: z.boolean().optional(),
     })
     .strict(),

@@ -163,7 +163,7 @@ const apparmorCommands = (bwrap: string): string[] => [
 
 function claudeSandboxStep(sandbox: ClaudeSandbox | undefined): SetupStep {
   const step = (status: string, tone: StepTone, detail?: string, commands?: string[]): SetupStep =>
-    ({id: 'claude-sandbox', title: 'Claude 的权限档', status, tone, done: tone === 'success', detail, actions: [], commands});
+    ({id: 'claude-sandbox', title: 'Claude 的权限', status, tone, done: tone === 'success', detail, actions: [], commands});
   if (!sandbox) return step('无法确认', 'neutral');
   const missing = [...(sandbox.bwrap ? [] : ['bwrap']), ...(sandbox.socat ? [] : ['socat'])];
   if (!sandbox.bwrap || missing.length) return step(`缺 ${missing.join('、')}`, 'warning', SANDBOX_MISSING, [`sudo apt install ${missing.map(name => name === 'bwrap' ? 'bubblewrap' : name).join(' ')}`]);

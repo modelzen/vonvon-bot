@@ -1,7 +1,7 @@
 import type { BotSettingsEdit, SettingsAction, SettingsSave, SettingsActionResult, HostSettings } from './settings-types';
 import { backendIds } from '../agent';
 import { permissionTable, tableEnv, tierInfo, TIER_NETWORK } from '../agent/permission';
-import { groupBackendId } from '../config/execution';
+import { groupBackendId, groupPermission } from '../config/execution';
 import type { AgentBackend, BackendProbe, PermissionMode, ReasoningEffort } from '../agent/types';
 import { tierLabel, type BackendProbeRow } from '../card/dm-cards';
 import {
@@ -224,8 +224,10 @@ export async function performBackendSwitch(opts: {
   if (reason) return { ok: false, reason };
   await mutateProject(opts.projectName, latest => {
     if (groupBackendId(latest) !== opts.target) {
+      const mode = groupPermission(latest).tier;
+      latest.mode = mode;
+      latest.network = TIER_NETWORK[mode];
       delete latest.custom;
-      latest.network = TIER_NETWORK[effectiveMode(latest)];
     }
     latest.backend = opts.target;
   });
@@ -250,8 +252,9 @@ export async function performSetPermissionMode(opts: {
   const p = await getProjectByName(opts.projectName);
   if (!p) return { ok: false, reason: `项目「${opts.projectName}」不存在` };
   if (opts.mode === undefined) return { ok: true, project: p };
-  const be = opts.backendFor(groupBackendId(p));
-  const info = tierInfo(permissionTable(be.id), tableEnv(be), opts.mode);
+  const backend = groupBackendId(p);
+  const be = opts.backendFor(backend);
+  const info = tierInfo(permissionTable(backend), tableEnv(be), opts.mode);
   if (info.unavailable) return { ok: false, reason: info.unavailable };
   const mode = opts.mode;
   await mutateProject(opts.projectName, latest => {

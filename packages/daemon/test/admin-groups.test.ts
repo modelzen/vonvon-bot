@@ -211,6 +211,13 @@ describe('desktop group commands in the owning bot', () => {
     expect(fixture.message).toHaveBeenCalledTimes(1);
   });
 
+  it.each([['qa', false], ['write', true], ['full', true]] as const)('joining an existing group writes %s with network %s', async (mode, network) => {
+    const fixture = channelFixture();
+    const project = await joinExistingGroup(fixture.channel, { name: `Tier ${mode}`, chatId: `oc_tier_${mode}`, existingPath: await workspace(), kind: 'multi', mode });
+    expect(project).toMatchObject({ mode, network });
+    expect((await listProjects()).find(row => row.chatId === project.chatId)).toMatchObject({ mode, network });
+  });
+
   it('rejects protected explicit workspaces before binding or creating a group', async () => {
     const fixture = channelFixture();
     const value = { name: 'Protected', existingPath: paths.appDir, kind: 'multi' as const };

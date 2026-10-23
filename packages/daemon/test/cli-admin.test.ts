@@ -144,12 +144,12 @@ it('bot status prints the service step after the tools without counting it', asy
   await runBotStatus(undefined, sandboxed.io(), sandboxed.daemon);
   const out = sandboxed.out();
   expect(out).toMatch(/· Codex 的权限：只能用完全访问\n    Linux 上的 Codex 暂时只能用完全访问/);
-  expect(out).toContain("! Claude 的权限档：被 AppArmor 挡住\n");
+  expect(out).toContain("! Claude 的权限：被 AppArmor 挡住\n");
   // The commands are not indented: an indented closing EOF would not end the heredoc when pasted into a shell.
   expect(out).toContain(["\n\nsudo tee /etc/apparmor.d/bwrap >/dev/null <<'EOF'", 'abi <abi/4.0>,', 'include <tunables/global>',
     'profile bwrap /usr/bin/bwrap flags=(unconfined) {', '  userns,', '  include if exists <local/bwrap>', '}', 'EOF',
     'sudo apparmor_parser -r /etc/apparmor.d/bwrap\n\n'].join('\n'));
-  expect(out.indexOf('Claude 的权限档')).toBeLessThan(out.indexOf('后台服务'));
+  expect(out.indexOf('Claude 的权限')).toBeLessThan(out.indexOf('后台服务'));
   expect(out).toMatch(/全部就绪。\n$/);
   sandboxed.clear(); await runBotStatus(undefined, sandboxed.io(true), sandboxed.daemon);
   expect(JSON.parse(sandboxed.out())).toMatchObject({ ready: true, steps: expect.arrayContaining([expect.objectContaining({ id: 'claude-sandbox', done: false })]) });
@@ -343,7 +343,7 @@ it('settings set parses values as JSON or text and names the bad field', () => {
   for (const [kind, args, message] of [
     ['project', ['permission.mode=bad'], 'permission.mode 只能是 qa、write、full'],
     ['project', ['permission.nope=1'], 'permission 没有 nope 这一项。可以改的有：mode、custom'],
-    ['project', ['permission.guestMode=full'], '「普通成员权限」去掉了：一个群只有一个权限档，群里谁说话都用它。改 permission.mode。'],
+    ['project', ['permission.guestMode=full'], '「普通成员权限」去掉了：一个群只有一个权限，群里谁说话都用它。改 permission.mode。'],
     ['project', ['permission.mode=full', 'cards.showModel=off'], '一次只能改一节；permission 和 cards 分两次改。'],
     ['agent', ['cliBridge.agents={}'], '咖啡一下第一版已拿掉，不能改。'],
     ['project', ['compact.autoCompact=false'], '自动压缩现在一直开着，不能关了。'],

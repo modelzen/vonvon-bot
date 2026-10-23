@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
-import { requestSchema, responseSchema } from '@vonvon/protocol';
+import { membershipIdSchema, requestSchema, responseSchema } from '@vonvon/protocol';
 import type { AdminBot, AdminProject } from '../src/admin/service';
 import type { HostSettingsView } from '../src/admin/settings-types';
 import { readAdminState } from '../src/server/state';
@@ -28,7 +28,7 @@ function inventory(folderToken: string) {
     ['GET voice', 'settings', { type: 'read', scope: agentScope }],
     ['POST voice', 'settings', { type: 'act', action: { kind: 'voice', botId: bot.appId, action: { action: 'disable' } } }],
     ['POST completion-reminder', 'settings', { type: 'save', edit: { scope: agentScope, section: 'completion', revision: 'old', patch: { mode: 'always' } } }],
-    ['POST permission', 'command', { type: 'setPermission', membershipId, administrator: 'write', network: false }],
+    ['POST permission', 'command', { type: 'setPermission', membershipId, administrator: 'write', network: true }],
     ['POST permission without network', 'command', { type: 'setPermission', membershipId, administrator: 'qa' }],
     ['POST no-mention', 'command', { type: 'setResponse', membershipId, response: 'all' }],
     ['POST backend', 'admin', { type: 'switchBackend', agentId: bot.appId, projectName: project.name, backend: 'claude-agent' }],
@@ -97,6 +97,20 @@ describe('route inventory parity', () => {
       expect(setPermissionMode.mock.calls).toEqual([[bot.appId, project.name, { mode: 'write' }], [bot.appId, project.name, { mode: 'qa' }]]);
       expect(fixture.control.requestRestart).toHaveBeenCalledWith(fixture.api.port);
       expect(fixture.control.requestStop).toHaveBeenCalledOnce();
+      await client.close();
+    } finally { await fixture.close(); }
+  });
+
+  it.each([['write', false], ['qa', true], ['full', false]] as const)('refuses contradictory legacy RPC network for %s without calling the writer', async (administrator, network) => {
+    const setPermissionMode = vi.fn(async () => undefined);
+    const fixture = await startFixture(fakeService({ listBots: async () => [bot], listProjects: async () => [project], setPermissionMode }));
+    try {
+      const client = await socketClient(fixture.api.port, fixture.credential); await client.ready();
+      const frame = await client.call({ type: 'request', id: 'contradictory-permission', method: 'command', payload: {
+        type: 'setPermission', membershipId: membershipIdSchema.parse(JSON.stringify([bot.appId, project.chatId])), administrator, network,
+      } });
+      expect(frame).toMatchObject({ type: 'error', code: 'invalid_request', message: '联网已经并进权限的档位：只读不联网，工作区可写联网，完全访问不限制。只读又要联网这类组合，用高级设置 permission.custom。' });
+      expect(setPermissionMode).not.toHaveBeenCalled();
       await client.close();
     } finally { await fixture.close(); }
   });

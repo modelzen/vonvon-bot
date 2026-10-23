@@ -282,8 +282,8 @@ it('puts the service step in its own group after the tools', () => {
   expect(other).toContain('1. 后台服务');
   expect(other).not.toContain('LaunchAgent');
   expect(other).not.toContain('<span>打开</span>');
-  expect(other).not.toContain('Linux 上的权限档');
-  expect(html).not.toContain('Linux 上的权限档');
+  expect(other).not.toContain('Linux 上的权限');
+  expect(html).not.toContain('Linux 上的权限');
 });
 
 it('shows the Linux group between the tools and the service, with commands in a block', () => {
@@ -291,9 +291,10 @@ it('shows the Linux group between the tools and the service, with commands in a 
     <SetupChecklist snapshot={{...snapshot([]), tools: [tool({tool: 'claude', sandbox: {bwrap: null, socat: true, userns: 'unchecked'}})], application: {...snapshot([]).application, platform: 'linux', service: service()}}}
       ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}} codexJobs={null}/>
   </ClientProvider>);
-  expect(html.indexOf('后端')).toBeLessThan(html.indexOf('Linux 上的权限档'));
-  expect(html.indexOf('Linux 上的权限档')).toBeLessThan(html.indexOf('后台运行'));
-  expect(html).toContain('1. Claude 的权限档');
+  expect(html.indexOf('后端')).toBeLessThan(html.indexOf('Linux 上的权限'));
+  expect(html.indexOf('Linux 上的权限')).toBeLessThan(html.indexOf('后台运行'));
+  expect(html).not.toContain('Linux 上的权限档');
+  expect(html).toContain('1. Claude 的权限');
   expect(html).toContain('<pre class="setup-step-commands">sudo apt install bubblewrap</pre>');
   expect(html).toContain('systemd 用户服务。退出 SSH 后也要在线，安装时打开 linger。');
   expect(html).not.toContain('Codex 的权限档');

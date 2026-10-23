@@ -247,6 +247,8 @@ function makeSection<V>(stored: V, raw: unknown, access: T.SettingsAccess, apply
 }
 class Conflict extends Error {
 }
+class Unchanged extends Error {
+}
 function check(actual: unknown, revision: string): void {
   if (settingsRevision(actual) !== revision)
     throw new Conflict();
@@ -809,11 +811,13 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               break;
             case 'modelAccess': {
               const previousBackend = groupBackendId(p);
+              const currentTier = groupPermission(p).tier;
               p.modelAccess = { ...original.modelAccess, ...e.patch };
               p.backend = p.modelAccess.backend;
               if (groupBackendId(p) !== previousBackend) {
                 delete p.custom;
-                p.network = TIER_NETWORK[effectiveMode(p)];
+                p.mode = currentTier;
+                p.network = TIER_NETWORK[currentTier];
               }
               if (!p.defaultModel || !p.modelAccess.models.includes(p.defaultModel)) { p.defaultModel = p.modelAccess.models[0]; delete p.defaultModelCustom; }
               const supported = allowedCatalog?.find(m => m.id === p.defaultModel)?.supportedEfforts;
@@ -822,6 +826,14 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               break;
             }
             case 'permission': {
+              if (e.patch.mode !== undefined && e.patch.custom !== undefined && e.patch.custom !== null)
+                throw new SettingsInputError('选档和高级设置一次只改一个');
+              if (e.patch.mode === undefined && e.patch.custom === null) {
+                const current = groupPermission(p);
+                if (current.custom || current.legacy || current.invalid)
+                  throw new SettingsInputError('清掉高级设置时要同时选一档，例如 permission.mode=qa。');
+                throw new Unchanged();
+              }
               const backendId = groupBackendId(p);
               const table = permissionTable(backendId);
               let mode = e.patch.mode ?? effectiveMode(p);
@@ -880,7 +892,11 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             case 'judge':
               storeJudge(p, judge!, groupBackendId(p));
           }
-        }, commitOptions);
+        }, commitOptions).catch(error => {
+          if (error instanceof Unchanged) return undefined;
+          throw error;
+        });
+        if (!p) return { kind: 'saved', section: await sectionView(e), effects: [] };
         if (['permission', 'workspace', 'skills', 'modelAccess', 'profile'].includes(e.section)) {
           try {
             await deps.evictLiveSessionsForChat(p.chatId);
