@@ -1,12 +1,12 @@
 import {
   adminReplySchema, collaborationReplySchema, commandResultSchema,
-  desktopSnapshotSchema, directoryReplySchema, environmentReplySchema,
+  desktopSnapshotSchema, directoryReplySchema, environmentReplySchema, memoryReplySchema,
   errorEnvelopeSchema, eventSchema, machineReplySchema, requestSchema,
   settingsReplySchema,
   type AdminReply, type AdminRequest, type BackendInstallEventPayload,
   type CollaborationReply, type CollaborationRequest, type Command,
   type CommandResult, type DesktopSnapshot, type DirectoryReply,
-  type DirectoryRequest, type EnvironmentReply, type EnvironmentRequest,
+  type DirectoryRequest, type EnvironmentReply, type EnvironmentRequest, type MemoryReply, type MemoryRequest,
   type LogEventPayload, type MachineReply, type MachineRequest,
   type SettingsReply, type SettingsRequest,
 } from "@vonvon/protocol";
@@ -36,6 +36,7 @@ export interface VonvonClient {
   machine(request: MachineRequest): Promise<MachineReply>;
   admin(request: AdminRequest): Promise<AdminReply>;
   directory(request: DirectoryRequest): Promise<DirectoryReply>;
+  memory(request: MemoryRequest): Promise<MemoryReply>;
   onLog(listener: (payload: LogEventPayload) => void): () => void;
   onBackendInstall(listener: (payload: BackendInstallEventPayload) => void): () => void;
   onError(listener: (error: Error) => void): () => void;
@@ -46,7 +47,7 @@ const replySchemas = {
   snapshot: desktopSnapshotSchema, command: commandResultSchema,
   settings: settingsReplySchema, collaboration: collaborationReplySchema,
   environment: environmentReplySchema, machine: machineReplySchema,
-  admin: adminReplySchema, directory: directoryReplySchema,
+  admin: adminReplySchema, directory: directoryReplySchema, memory: memoryReplySchema,
 } satisfies Record<z.infer<typeof requestSchema>["method"], z.ZodTypeAny>;
 type Method = keyof typeof replySchemas;
 type Payload<M extends Method> = Extract<z.input<typeof requestSchema>, { method: M }>["payload"];
@@ -175,6 +176,7 @@ export function createClient(socket: ClientConnection): VonvonClient {
     machine: request => send("machine", request),
     admin: request => send("admin", request),
     directory: request => send("directory", request),
+    memory: request => send("memory", request),
     onLog(listener) { logs.add(listener); return () => { logs.delete(listener); }; },
     onBackendInstall(listener) { installs.add(listener); return () => { installs.delete(listener); }; },
     onError(listener) {

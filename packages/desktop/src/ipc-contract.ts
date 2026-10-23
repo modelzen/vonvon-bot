@@ -11,6 +11,7 @@ export const desktopChannels = {
   machine: 'desktop:client:machine',
   admin: 'desktop:client:admin',
   directory: 'desktop:client:directory',
+  memory: 'desktop:client:memory',
   close: 'desktop:client:close',
   subscribe: 'desktop:subscribe',
   external: 'desktop:shell:external',

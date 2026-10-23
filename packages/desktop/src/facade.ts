@@ -1,7 +1,7 @@
 import type { VonvonClient } from '@vonvon/client/browser';
 import {
   adminReplySchema, backendInstallEventPayloadSchema, collaborationReplySchema,
-  commandResultSchema, desktopSnapshotSchema, directoryReplySchema,
+  commandResultSchema, desktopSnapshotSchema, directoryReplySchema, memoryReplySchema,
   environmentReplySchema, logEventPayloadSchema, machineReplySchema, desktopUpdateSchema,
   settingsReplySchema,
   type BackendInstallEventPayload, type DesktopSnapshot, type LogEventPayload,
@@ -175,6 +175,7 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
     environment: request => callClient(desktopChannels.environment, value => environmentReplySchema.parse(value), request),
     machine: request => callClient(desktopChannels.machine, value => machineReplySchema.parse(value), request),
     admin: request => callClient(desktopChannels.admin, value => adminReplySchema.parse(value), request),
+    memory: request => callClient(desktopChannels.memory, value => memoryReplySchema.parse(value), request),
     directory: request => callClient(desktopChannels.directory, value => directoryReplySchema.parse(value), request),
     onLog(listener) {
       if (!clientClosed) logs.add(listener);

@@ -7,6 +7,7 @@ import { machineRequestSchema, machineReplySchema } from "./machine.js";
 import { desktopSnapshotSchema } from "./domain.js";
 import { adminRequestSchema, adminReplySchema } from "./admin.js";
 import { directoryRequestSchema, directoryReplySchema } from "./directory.js";
+import { memoryRequestSchema, memoryReplySchema } from "./memory.js";
 
 const id = z.string().min(1);
 export const requestSchema = z.discriminatedUnion("method", [
@@ -18,6 +19,7 @@ export const requestSchema = z.discriminatedUnion("method", [
   z.object({type:z.literal("request"),id,method:z.literal("machine"),payload:machineRequestSchema}).strict(),
   z.object({type:z.literal("request"),id,method:z.literal("admin"),payload:adminRequestSchema}).strict(),
   z.object({type:z.literal("request"),id,method:z.literal("directory"),payload:directoryRequestSchema}).strict(),
+  z.object({type:z.literal("request"),id,method:z.literal("memory"),payload:memoryRequestSchema}).strict(),
 ]);
 export type Request = z.infer<typeof requestSchema>;
 export const responseSchema = z.discriminatedUnion("method", [
@@ -29,6 +31,7 @@ export const responseSchema = z.discriminatedUnion("method", [
   z.object({type:z.literal("response"),id,method:z.literal("machine"),payload:machineReplySchema}).strict(),
   z.object({type:z.literal("response"),id,method:z.literal("admin"),payload:adminReplySchema}).strict(),
   z.object({type:z.literal("response"),id,method:z.literal("directory"),payload:directoryReplySchema}).strict(),
+  z.object({type:z.literal("response"),id,method:z.literal("memory"),payload:memoryReplySchema}).strict(),
 ]);
 export type Response = z.infer<typeof responseSchema>;
 export const errorEnvelopeSchema = z.object({
