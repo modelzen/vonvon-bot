@@ -1,71 +1,65 @@
-import {useEffect, useState} from 'react';
+import {useState} from 'react';
 import {backendLabel, isKnownJudgeSelection, type AgentId, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ToolState} from '@vonvon/protocol';
 import {Button, InlineNotice, SelectControl} from '../reference/components/ui';
-import {providerBackends, providerNames} from '../setup/provider-state';
-import {useClaudeLoginCheck} from '../setup/useClaudeLoginCheck';
-import {Catalog} from './SettingsPanel';
 import {SettingChoices} from './SettingChoices';
 
 type Provider = {id: string; displayName: string};
 type Selection = Extract<JudgeSelectionView, {kind: 'llm'}>;
-
-export function decisionProviderProblem(value: JudgeSelectionView, provider: string | undefined, groupBackend: string): string | undefined {
-  if (!provider || !isKnownJudgeSelection(value) || value.kind === 'default') return undefined;
-  const selected = value.kind === 'decision' ? `decision:${value.provider}` : value.backend ?? groupBackend;
-  return selected === provider ? undefined : '请先选择当前 Provider 的模型。';
+const providerIds = ['codex-appserver', 'claude-agent', 'typesafe'] as const;
+type DecisionProvider = typeof providerIds[number];
+export function savedDecisionProvider(value: JudgeSelectionView, groupBackend: string): string | undefined {
+  if (!isKnownJudgeSelection(value)) return undefined;
+  if (value.kind === 'provider') return value.provider;
+  if (value.kind === 'llm') return value.backend ?? groupBackend;
+  if (value.kind === 'decision') return value.provider;
+  return undefined;
+}
+export function decisionProviderProblem(value: JudgeSelectionView, viewed: string | undefined, groupBackend: string): string | undefined {
+  if (!viewed) return undefined;
+  const saved = savedDecisionProvider(value, groupBackend);
+  return saved === viewed ? undefined : '请选择当前 Provider。';
+}
+export function providerDecisionProblem(value: JudgeSelectionView, providers: Provider[], services?: DecisionModelsView): string | undefined {
+  if (!isKnownJudgeSelection(value) || value.kind !== 'provider') return '请选择判断 Provider。';
+  if (value.provider === 'typesafe') {
+    const service = services?.find(item => item.provider === 'typesafe');
+    if (!service || service.keyUnreadable) return '无法读取 Jev 密钥，请检查决策模型设置。';
+    return service.keySet ? undefined : '请先添加 Jev 密钥。';
+  }
+  return providers.some(item => item.id === value.provider) ? undefined : '此判断 Provider 当前不可用，请先安装并登录。';
 }
 
-// Intent: help a group owner choose how the Bot decides to join a conversation.
-// Hierarchy: purpose, three Provider choices, one compact model control; rules follow.
-// Palette/depth/surfaces: existing neutral settings surface and border; blue only marks selection.
-// Typography/spacing: system 13px controls, secondary 12px explanation, 4px rhythm and 16px insets.
-export function DecisionFields({botId, groupBackend, value, effective, onChange, disabled, providers, services, tools = [], onOpenProviders, onOpenSecrets, onProviderChange, initial = false}: {
+export function DecisionFields({groupBackend, value, effective, onChange, disabled, providers, services, onOpenProviders, onOpenSecrets, onProviderChange, initial = false}: {
   botId: AgentId; groupBackend: string; value: JudgeSelectionView; effective: JudgeSelectionView; onChange: (value: JudgeSelectionView) => void; disabled: boolean;
   providers: Provider[]; services?: DecisionModelsView; tools?: readonly ToolState[];
   onProviderChange?: (provider: string) => void; onOpenProviders?: () => void; onOpenSecrets?: (provider?: string) => void; initial?: boolean;
 }) {
-  const known = isKnownJudgeSelection(value) ? value : undefined;
-  const active = !initial && known?.kind === 'default' && isKnownJudgeSelection(effective) ? effective : known;
-  const [provider, setProvider] = useState(active?.kind === 'decision' ? `decision:${active.provider}` : active?.kind === 'llm' ? active.backend ?? groupBackend : groupBackend);
-  const [custom, setCustom] = useState(active?.kind === 'llm' && Boolean(active.custom));
-  const [error, setError] = useState<string>();
-  useEffect(() => {onProviderChange?.(provider);}, [provider, onProviderChange]);
-  const claude = useClaudeLoginCheck(tools, setError);
-  const service = services?.find(item => `decision:${item.provider}` === provider);
-  const serviceLabel = service?.models.map(model => model.displayName).join('、') || service?.displayName;
-  const serviceReady = (item: DecisionModelsView[number]) => item.keySet && !item.keyUnreadable;
-  const nativeReady = providers.some(item => item.id === provider);
-  const nativeChoices = Object.entries(providerBackends).map(([tool, id]) => ({value: id, label: providerNames[tool as keyof typeof providerNames]}));
-  const options = [...nativeChoices, ...(services ?? []).map(item => ({value: `decision:${item.provider}`, label: item.models.some(model => model.displayName === 'Jev') ? 'Jev' : item.displayName}))];
-  if (provider && !options.some(item => item.value === provider)) options.push({value: provider, label: backendLabel(provider)});
-  const selection = active?.kind === 'llm' && (active.backend ?? groupBackend) === provider ? active : undefined;
+  const saved = savedDecisionProvider(value, groupBackend);
+  const inherited = initial ? undefined : savedDecisionProvider(effective, groupBackend);
+  const [viewed, setViewed] = useState(saved ?? inherited ?? '');
+  const service = services?.find(item => item.provider === 'typesafe');
+  const ready = (id: string) => id === 'typesafe' ? Boolean(service?.keySet && !service.keyUnreadable) : providers.some(item => item.id === id);
+  const choices = providerIds.map(id => ({value: id, label: id === 'typesafe' ? 'Jev' : backendLabel(id), disabled: !ready(id)}));
+  if (saved && !choices.some(item => item.value === saved)) choices.push({value: saved as DecisionProvider, label: backendLabel(saved), disabled: true});
+  const legacy = isKnownJudgeSelection(value) && (value.kind === 'llm' || value.kind === 'decision' || value.kind === 'default' && Boolean(inherited));
   return <div className="gd-model-fields gd-decision-fields">
-    <p className="gd-decision-purpose">在智能模式下，判断群消息要不要回、回在哪里，以及是否创建新话题。<br/>实际回复和执行任务使用本群的任务模型。</p>
-    {!known && <p className="gd-note" role="alert">当前客户端无法编辑已保存的决策模型类型。</p>}
-    <fieldset><legend>Provider</legend><SettingChoices label="决策 Provider" value={provider} disabled={disabled} choices={options} onChange={next => {
-      if (disabled) return;
-      setProvider(next); setCustom(false); setError(undefined); onProviderChange?.(next);
-      // Browsing setup guidance must not clear the group's current choice or create an unsaved draft.
-      const nextService = services?.find(item => `decision:${item.provider}` === next);
-      if (nextService && serviceReady(nextService) && nextService.models.length === 1) onChange({kind: 'decision', provider: nextService.provider, model: nextService.models[0]!.id});
+    <p className="gd-decision-purpose">判断群消息要不要回复、回在哪里，以及是否创建新话题。实际回复和执行任务使用本群的执行 Provider。</p>
+    {legacy && <div className="gd-note" role="status">当前群保留旧决策模型设置。改用「设置 → 决策模型」中此 Provider 的模型和推理强度：
+      <Button size="sm" disabled={disabled || !viewed || !ready(viewed)} onClick={() => {
+        if (disabled || !providerIds.some(id => id === viewed) || !ready(viewed)) return;
+        onChange({kind: 'provider', provider: viewed as DecisionProvider});
+      }}>使用统一配置</Button>
+    </div>}
+    {!isKnownJudgeSelection(value) && <p className="gd-note" role="alert">当前客户端无法编辑已保存的决策设置。</p>}
+    <fieldset><legend>判断 Provider</legend><SettingChoices label="判断 Provider" value={viewed} disabled={disabled} choices={[{value: '', label: '请选择', disabled: true}, ...choices]} onChange={next => {
+      if (disabled || !providerIds.some(id => id === next) || !ready(next)) return;
+      setViewed(next); onProviderChange?.(next); onChange({kind: 'provider', provider: next as DecisionProvider});
     }}/></fieldset>
-    {service ? <>
-      {serviceReady(service) ? <fieldset><legend>模型</legend><SelectControl label="决策模型" className="gd-decision-select" disabled={disabled}
-        value={active?.kind === 'decision' && active.provider === service.provider ? active.model : ''}
-        options={[{value: '', label: '选择模型', disabled: true}, ...service.models.map(model => ({value: model.id, label: model.displayName}))]}
-        onChange={model => {if (!disabled && service.models.some(item => item.id === model)) onChange({kind: 'decision', provider: service.provider, model});}}/>
-      </fieldset> : <InlineNotice title={service.keyUnreadable ? `无法读取 ${serviceLabel} 密钥` : `${serviceLabel} 尚未配置`} tone="warning">
-        {service.keyUnreadable ? '请到密钥设置检查，恢复后再选择模型。' : `需要先添加 ${service.displayName} API key。配置完成后，返回本群选择 ${serviceLabel}。`}
-        {onOpenSecrets && <Button size="sm" onClick={() => onOpenSecrets(service.provider)}>设置密钥</Button>}
-      </InlineNotice>}
-    </> : provider.startsWith('decision:') ? <InlineNotice title="决策服务暂不可用" tone="warning">请重新读取设置或更新本机服务。{onOpenSecrets && <Button size="sm" onClick={() => onOpenSecrets(provider.slice(9))}>检查密钥设置</Button>}</InlineNotice>
-      : !nativeReady ? <InlineNotice title={provider === 'claude-agent' && claude.checking ? '正在检查 Claude 登录…' : `${backendLabel(provider)} 尚未就绪`} tone="warning">
-        {provider === 'claude-agent' && claude.checking ? '检查完成后即可选择模型。' : '完成安装与登录后，就可以用它判断本群消息。'}
-        {onOpenProviders && <Button size="sm" onClick={onOpenProviders}>设置 Provider</Button>}
-        {provider === 'claude-agent' && !claude.checking && <Button size="sm" onClick={() => void claude.check(true)}>检查登录</Button>}
-      </InlineNotice> : <Catalog key={provider} botId={botId} backend={provider} purpose="judge">{catalog => <DecisionModelChoices
-        provider={provider} selection={selection} catalog={catalog} disabled={disabled} custom={custom} onCustom={setCustom} onChange={onChange}/>}</Catalog>}
-    {error && <p className="gd-note" role="alert">{error}</p>}
+    {viewed && !ready(viewed) && <InlineNotice title={`${viewed === 'typesafe' ? 'Jev' : backendLabel(viewed)} 尚未就绪`} tone="warning">
+      {viewed === 'typesafe' ? '请到决策模型设置检查密钥。' : '请先安装并登录 Provider。'}
+      {viewed === 'typesafe' ? onOpenSecrets && <Button size="sm" onClick={() => onOpenSecrets('typesafe')}>设置决策模型</Button> : onOpenProviders && <Button size="sm" onClick={onOpenProviders}>设置 Provider</Button>}
+    </InlineNotice>}
+    {onOpenSecrets && <button type="button" className="gd-text-action" onClick={() => onOpenSecrets(viewed || undefined)}>设置 → 决策模型</button>}
   </div>;
 }
 

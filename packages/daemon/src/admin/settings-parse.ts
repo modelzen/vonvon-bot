@@ -42,6 +42,9 @@ const selection: Rule = value => shape({
 const judgeSelection: Rule = value => shape({
   kind: one('default')
 })(value) || shape({
+  kind: one('provider'),
+  provider: one('codex-appserver', 'claude-agent', 'typesafe')
+})(value) || shape({
   kind: one('llm'),
   backend: text,
   model: text,
@@ -127,7 +130,13 @@ const schemas: Record<string, Record<string, Rule>> = {
   host: {
     execution: shape({
       codexBin: path
-    })
+    }),
+    judge: shape({ byProvider: value => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+      return Object.entries(value).every(([provider, choice]) =>
+        text(provider) && !['__proto__','constructor','prototype'].includes(provider) && shape({ model: text, effort: one(...REASONING_EFFORTS), custom: bool }, true)(choice)
+        && Object.hasOwn(choice as object, 'model'));
+    } })
   },
 };
 export function parseSettingsScope(input: unknown): SettingsScope {

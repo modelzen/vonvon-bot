@@ -146,7 +146,7 @@ else process.exit(0);
       return { ok: true };
     },
     settings: {
-      read: async () => host,
+      read: async () => ({ ...host, sections: { ...host.sections, judge: { stored: { byProvider: {} }, effective: { byProvider: { 'codex-appserver': { model: 'gpt-6-luna' }, 'claude-agent': { model: 'haiku' }, typesafe: { model: 'jev-latest' } } }, revision: 'judge-token', access: { kind: 'writable' as const }, apply: [] } } }),
       save: async () => ({ kind: 'rejected', fields: [{ field: 'fixture', message: 'fixture' }] }),
       act: async () => ({ kind: 'rejected', fields: [{ field: 'fixture', message: 'fixture' }] }),
       models: async query => ({ backend: query.backend, models: [], state: 'unavailable', source: 'backend-provided', observedAt: new Date().toISOString(), titleEfforts: [] }),

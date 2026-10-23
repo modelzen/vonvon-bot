@@ -1836,6 +1836,12 @@ D8 的三个待定项（product.md 第 11 节），u01 这样定：
 
 ## 10. 记录
 
+**2026-10-23 决策 Provider 集中配置（owner 本地试用需求）**
+- [x] 决策模型页按 Codex / Claude / TypeSafe 配置机器级模型与 Effort；Jev 明示无 Effort。
+- [x] 新建/连接智能群、群详情和规则群切智能只选决策 Provider，后续判断热读该 Provider 的全局配置。
+- [x] 旧完整群配置与旧 Bot 默认保留；用户主动改选 Provider 才跟随全局，旧 API 输入继续兼容。
+- [ ] owner 在 Mac mini 对本次配置与建群交互验收。计划见 `docs/plans/decision-provider-profiles.md`。
+
 切片合入时在这里补。
 
 **卸载步骤**（s08b 填）

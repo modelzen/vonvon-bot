@@ -490,7 +490,7 @@ describe('the 状态与诊断 row (product.md 3.1 第 8 条)', () => {
 });
 
 it('the page reads on entering it, and the search lists it (s23g2 做法)', () => {
-  expect(text(html(<SecretsPanel onOpenLogs={noop} onOpenApplication={noop}/>))).toContain('决策模型重新读取模型服务正在读取…密钥由所有 Bot 共用。');
+  expect(text(html(<SecretsPanel onOpenLogs={noop} onOpenApplication={noop}/>))).toContain('API 密钥正在读取…密钥由所有 Bot 共用。');
   const entries = searchEntries({
     revision: 1, observedAt: 1, stale: false, host: {kind: 'connected', ownership: 'owned', version: '0.7.0'},
     agents: [], groups: [], memberships: [], tools: [], jobs: [], application: {platform: 'macos', version: '0.7.0', loginItem: false, dataPath: '/tmp/x'},

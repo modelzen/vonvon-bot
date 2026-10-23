@@ -22,7 +22,7 @@ vi.mock('react', async original => ({
 }));
 vi.mock('../src/client-context', () => ({useClient: () => harness.client}));
 vi.mock('../src/directory-picker', () => ({useDirectoryPicker: () => async () => null}));
-vi.mock('../src/settings/GroupDesignSettings', () => ({useProviders: () => [{id: 'codex-appserver', displayName: 'Codex'}, {id: 'claude-agent', displayName: 'Claude'}], DecisionFields: () => null}));
+vi.mock('../src/settings/GroupDesignSettings', () => ({useProviders: (tools: ToolState[]) => tools?.filter(item => item.installation === 'installed' && item.authentication === 'signedIn').map(item => ({id: item.tool === 'codex' ? 'codex-appserver' : 'claude-agent', displayName: item.tool})), DecisionFields: () => null}));
 vi.mock('../src/settings/DraftGuard', () => ({useDraftGuard: () => ({navigate: (action: () => void) => action()}), useDraft: (_dirty: boolean, draft: typeof harness.draft) => {harness.draft = draft;}}));
 
 const agent = agentSchema.parse({id: 'cli_join', name: 'Bot', enabled: true, running: true, connection: 'connected', activation: 'active'});
@@ -104,85 +104,46 @@ it('keeps an unavailable hand-picked Provider visible and blocks submission unti
   ui.provider.props.onChange('codex'); ui = render(false, changed);
   expect(ui.provider.props.value).toBe('codex');
 });
-it('uses the backend recommendation for smart groups without writing a group override', async () => {
+it('requires a provider choice and sends only provider selection for a new smart group', async () => {
   let ui = chooseSmart(); await settled(); ui = render();
-  expect(ui.submit.props.disabled).toBe(false);
-  expect(ui.all.some(node => node.props.description?.includes?.('推荐小模型'))).toBe(true);
+  expect(ui.submit.props.disabled).toBe(true);
+  ui.decision.props.onChange({kind: 'provider', provider: 'codex-appserver'});
+  ui = render(); expect(ui.submit.props.disabled).toBe(false);
   await ui.submit.props.onClick();
-  expect(harness.client.collaboration).toHaveBeenCalledWith(expect.objectContaining({action: 'createProject', conversation: 'smart'}));
   const create = harness.client.collaboration.mock.calls.find(([request]) => request.action === 'createProject')?.[0] as Record<string, unknown>;
-  expect(create).not.toHaveProperty('judge');
-  expect(onChanged).toHaveBeenCalledWith({agentId: agent.id, chatId: 'oc_created'});
+  expect(create).toMatchObject({action: 'createProject', conversation: 'smart', tool: 'codex', judge: {kind: 'provider', provider: 'codex-appserver'}});
+  expect(Object.keys(create.judge as object)).toEqual(['kind', 'provider']);
 });
-it('selects a live small-model fallback and sends it explicitly when the daemon summary came from an offline default', async () => {
-  harness.catalogModels = [{id: 'gpt-6.1-luna', hidden: false, isDefault: false, supportedEfforts: ['minimal', 'low']}];
-  let ui = chooseSmart(); await settled(); ui = render();
-  expect(ui.submit.props.disabled).toBe(false);
-  expect(ui.all.some(node => node.props.description?.includes?.('gpt-6.1-luna'))).toBe(true);
-  await ui.submit.props.onClick();
-  expect(harness.client.collaboration).toHaveBeenCalledWith(expect.objectContaining({action: 'createProject', judge: {kind: 'llm', backend: 'codex-appserver', model: 'gpt-6.1-luna', effort: 'minimal'}}));
+it('keeps judgment Provider independent from the execution Provider', async () => {
+  const tools = [readyCodex[0]!, {tool: 'claude', installation: 'installed', authentication: 'signedIn', version: '1'}] as ToolState[];
+  let ui = render(false, tools); ui.name.props.onChange({target: {value: '新名称'}}); ui.conversation.props.onChange('smart');
+  await settled(); ui = render(false, tools);
+  ui.decision.props.onChange({kind: 'provider', provider: 'claude-agent'});
+  ui = render(false, tools); await ui.submit.props.onClick();
+  expect(harness.client.collaboration).toHaveBeenCalledWith(expect.objectContaining({action: 'createProject', tool: 'codex', judge: {kind: 'provider', provider: 'claude-agent'}}));
 });
-it('does not use the prior live catalog while the dialog is suspended and reopened', async () => {
-  let ui = chooseSmart(); await settled(); ui = render();
-  expect(ui.submit.props.disabled).toBe(false);
-  render(false, readyCodex, undefined, vi.fn(), vi.fn(), false);
-  ui = render();
-  expect(ui.submit.props.disabled).toBe(true);
-  await settled(); ui = render();
-  expect(ui.submit.props.disabled).toBe(false);
-});
-it('reprobes native models after a Provider version changes', async () => {
-  let ui = chooseSmart(); await settled(); ui = render();
-  expect(ui.submit.props.disabled).toBe(false);
-  const probes = harness.client.collaboration.mock.calls.filter(([request]) => request.action === 'providerModels').length;
-  const upgraded: ToolState[] = [{...readyCodex[0]!, version: '2'}];
-  ui = render(false, upgraded);
-  expect(ui.submit.props.disabled).toBe(true);
-  expect(harness.client.collaboration.mock.calls.filter(([request]) => request.action === 'providerModels')).toHaveLength(probes + 1);
-  await settled(); ui = render(false, upgraded);
-  expect(ui.submit.props.disabled).toBe(false);
-});
-it('blocks smart creation when the resumed Bot decision read fails, despite an older valid view', async () => {
-  let ui = chooseSmart(); await settled(); ui = render();
-  expect(ui.submit.props.disabled).toBe(false);
-  render(false, readyCodex, undefined, vi.fn(), vi.fn(), false);
-  harness.client.settings.mockRejectedValueOnce(new Error('无法重读 Bot 设置'));
-  ui = render();
-  expect(ui.submit.props.disabled).toBe(true);
-  await settled(); ui = render();
-  expect(ui.submit.props.disabled).toBe(true);
-  expect(ui.all.some(node => node.props.description?.includes?.('无法重读 Bot 设置'))).toBe(true);
-  await ui.submit.props.onClick();
-  expect(harness.client.collaboration.mock.calls.some(([request]) => request.action === 'createProject')).toBe(false);
-});
-it('does not accept a fallback or failed live model probe as a ready recommendation', async () => {
-  harness.catalogState = 'unavailable';
+it('never copies an old Bot model snapshot into a new group', async () => {
+  harness.selection = {kind: 'llm', backend: 'codex-appserver', model: 'old-model'};
   let ui = chooseSmart(); await settled(); ui = render();
   expect(ui.submit.props.disabled).toBe(true);
-  await ui.submit.props.onClick();
-  expect(harness.client.collaboration.mock.calls.some(([request]) => request.action === 'createProject')).toBe(false);
+  ui.decision.props.onChange({kind: 'provider', provider: 'codex-appserver'});
+  ui = render(); await ui.submit.props.onClick();
+  const create = harness.client.collaboration.mock.calls.find(([request]) => request.action === 'createProject')?.[0] as Record<string, unknown>;
+  expect(create.judge).toEqual({kind: 'provider', provider: 'codex-appserver'});
 });
-it('sends a selected group decision override atomically for bind and preserves its chat id', async () => {
+it('binds an existing group with an explicit provider selection', async () => {
   let ui = chooseSmart(true); await settled(); ui = render(true);
-  const edit = ui.all.find(node => node.props.children === '修改')!;
-  edit.props.onClick(); ui = render(true);
-  expect(ui.submit.props.disabled).toBe(true);
-  ui.decision.props.onChange({kind: 'llm', backend: 'codex-appserver', model: 'gpt-6-luna'});
-  ui = render(true);
-  await ui.submit.props.onClick();
-  expect(harness.client.run).toHaveBeenCalledWith(expect.objectContaining({type: 'bindGroup', groupId: 'oc_existing', judge: {kind: 'llm', backend: 'codex-appserver', model: 'gpt-6-luna'}}));
+  ui.decision.props.onChange({kind: 'provider', provider: 'codex-appserver'});
+  ui = render(true); await ui.submit.props.onClick();
+  expect(harness.client.run).toHaveBeenCalledWith(expect.objectContaining({type: 'bindGroup', groupId: 'oc_existing', judge: {kind: 'provider', provider: 'codex-appserver'}}));
   expect(onChanged).toHaveBeenCalledWith({agentId: agent.id, chatId: 'oc_existing'});
-  expect(harness.draft?.save).toBeUndefined();
 });
-it('keeps decision-service key status in the submit guard', async () => {
-  harness.selection = {kind: 'decision', provider: 'actual', model: 'jev-actual'};
+it('blocks unavailable judgment Provider even when save is invoked directly', async () => {
   let ui = chooseSmart(); await settled(); ui = render();
-  expect(ui.submit.props.disabled).toBe(true);
+  ui.decision.props.onChange({kind: 'provider', provider: 'claude-agent'});
+  ui = render(); expect(ui.submit.props.disabled).toBe(true);
   await ui.submit.props.onClick();
   expect(harness.client.collaboration.mock.calls.some(([request]) => request.action === 'createProject')).toBe(false);
-  harness.keySet = true;
-  harness.effects = []; ui = render(); await settled(); ui = render();
-  expect(ui.submit.props.disabled).toBe(false);
 });
 it('blocks missing, signed-out, unknown, and too-old Providers even when handlers are invoked directly', async () => {
   for (const bad of [
@@ -217,13 +178,4 @@ it('offers Provider settings with no usable Provider and restores create after r
   expect(ui.provider.props.value).toBe('codex');
   await ui.submit.props.onClick();
   expect(harness.client.collaboration).toHaveBeenCalledWith(expect.objectContaining({tool: 'codex'}));
-});
-it('rejects smart decision models whose native Provider became unavailable', async () => {
-  let ui = chooseSmart(); await settled(); ui = render();
-  ui.all.find(node => node.props.children === '修改')!.props.onClick(); ui = render();
-  ui.decision.props.onChange({kind: 'llm', backend: 'claude-agent', model: 'model'});
-  ui = render();
-  expect(ui.submit.props.disabled).toBe(true);
-  await ui.submit.props.onClick();
-  expect(harness.client.collaboration.mock.calls.some(([request]) => request.action === 'createProject')).toBe(false);
 });

@@ -12,7 +12,7 @@ import {Catalog, Editor, ProjectPanel, type Section} from './SettingsPanel';
 import {PersonaEditor} from './PersonaEditor';
 import {SettingChoices} from './SettingChoices';
 import {providerBackends, providerUsable} from '../setup/provider-state';
-import {DecisionFields, decisionProviderProblem} from './DecisionFields';
+import {DecisionFields, providerDecisionProblem} from './DecisionFields';
 export {DecisionFields} from './DecisionFields';
 import {AnnouncedReadonlyMessages, hasReadonlyMessage, type ReadonlyMessage} from './readonly-messages';
 import './group-design-settings.css';
@@ -63,13 +63,6 @@ export function useProviders(tools?: readonly ToolState[]) {
 function providerChoices(providers: Provider[], current: string) {
   return [...providers.map(provider => ({value: provider.id, label: provider.displayName, disabled: false})), ...(!providers.some(provider => provider.id === current) && current ? [{value: current, label: `${backendLabel(current)}（当前不可用）`, disabled: true}] : [])];
 }
-function decisionProblem(selection: JudgeSelectionView, providers: Provider[], services?: DecisionModelsView): string | undefined {
-  if (!isKnownJudgeSelection(selection) || selection.kind === 'default') return '请选择决策模型。';
-  if (selection.kind === 'llm') return providers.some(provider => provider.id === selection.backend) ? undefined : '此 Provider 当前不可用，请先安装并登录。';
-  const service = services?.find(item => item.provider === selection.provider);
-  if (!service || service.keyUnreadable || !service.keySet) return '请先设置可用的决策模型密钥。';
-  return service.models.some(model => model.id === selection.model) ? undefined : '此决策模型已不可用。';
-}
 export function GroupDesignSettings(props: Props) {
   return <GroupSettingsLoader key={`${props.scope.botId}:${props.scope.projectName}`} {...props}/>;
 }
@@ -100,7 +93,6 @@ export function GroupSettingsContent({view, refresh, tab, tools, botName = 'Bot'
   const providers = useProviders(tools);
   const outerReadonly = useContext(AnnouncedReadonlyMessages);
   const sections = view.sections;
-  const [judgeProvider, setJudgeProvider] = useState<string>();
   const modelCatalog = useRef<ModelCatalog | undefined>(undefined);
   const rememberCatalog = useCallback((catalog: ModelCatalog | undefined) => {modelCatalog.current = catalog;}, []);
   async function save(section: keyof GroupSections, patch: object, revision: string): Promise<SettingsReply> {
@@ -110,8 +102,8 @@ export function GroupSettingsContent({view, refresh, tab, tools, botName = 'Bot'
   }
   if (decisionSetupOnly) return sections.judge ? <Editor title="决策模型" section={sections.judge} allowUnchanged submitLabel="保存并使用智能模式" afterSave={onDecisionSaved}
     save={(patch, revision) => save('judge',patch,revision)}
-    validate={value => decisionProviderProblem(value.selection, judgeProvider, view.identity.backend) ?? decisionProblem(value.selection, providers, view.decisionModels)}
-    render={(draft,set,disabled,_commit,resetKey) => <DecisionFields initial key={resetKey} botId={view.scope.botId} groupBackend={view.identity.backend} value={draft.selection} effective={sections.judge!.effective.selection} onChange={selection=>set({selection})} disabled={disabled} providers={providers} services={view.decisionModels} onProviderChange={setJudgeProvider} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets}/>}/> : <MissingSection/>;
+    validate={value => providerDecisionProblem(value.selection, providers, view.decisionModels)}
+    render={(draft,set,disabled,_commit,resetKey) => <DecisionFields initial key={resetKey} botId={view.scope.botId} groupBackend={view.identity.backend} value={draft.selection} effective={sections.judge!.effective.selection} onChange={selection=>set({selection})} disabled={disabled} providers={providers} services={view.decisionModels} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets}/>}/> : <MissingSection/>;
   const relevant: (Section<unknown> | undefined)[] = tab === 'capabilities' ? [sections.skills, sections.presentation]
     : tab === 'profile' ? [sections.profile] : tab === 'model' ? [sections.modelAccess]
     : tab === 'workspace' ? [sections.workspace, sections.permission]
@@ -151,9 +143,9 @@ export function GroupSettingsContent({view, refresh, tab, tools, botName = 'Bot'
         {responseHeader}
         {view.identity.kind === 'smart' && <>
           {sections.judge ? <Editor title="决策模型" section={sections.judge} save={(patch, revision) => save('judge', patch, revision)}
-            validate={value => decisionProviderProblem(value.selection, judgeProvider, view.identity.backend) ?? decisionProblem(value.selection, providers, view.decisionModels)}
+            validate={value => providerDecisionProblem(value.selection, providers, view.decisionModels)}
             render={(draft, set, disabled, _commit, resetKey) => <DecisionFields key={resetKey} botId={view.scope.botId} groupBackend={view.identity.backend} value={draft.selection} effective={sections.judge!.effective.selection}
-              onChange={selection => set({selection})} disabled={disabled} providers={providers} services={view.decisionModels} onProviderChange={setJudgeProvider} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets}/>}/> : <MissingSection/>}
+              onChange={selection => set({selection})} disabled={disabled} providers={providers} services={view.decisionModels} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets}/>}/> : <MissingSection/>}
           {sections.smartRules ? <Editor title="判断规则" section={sections.smartRules} save={(patch, revision) => save('smartRules', patch, revision)} render={(draft, set, disabled) => <>
             <div className="gd-section-heading gd-prompt-toolbar"><span className="gd-note">保存后，下次判断生效</span><button type="button" className="gd-text-action" disabled={disabled || draft.respond === DEFAULT_SMART_RULES.respond && draft.newTopic === DEFAULT_SMART_RULES.newTopic} onClick={() => set({...DEFAULT_SMART_RULES})}>恢复默认</button></div>
             <label className="gd-prompt"><span>什么时候回复</span><textarea aria-label="什么时候回复" rows={8} maxLength={30000} value={draft.respond} disabled={disabled} onChange={event => set({...draft, respond: event.target.value})}/></label>

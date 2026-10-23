@@ -124,7 +124,7 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
     <Dialog open={dialog === 'history'} title={`${group.name} · ${agent.name}`} onClose={() => setDialog(null)}><div id={settingAnchor("会话管理")}>{agent.running ? <ConversationPanel agentId={agent.id} groupId={group.id} projectName={member.name} conversation={conversation} request={client.collaboration}/> : <p>Bot 运行后可查看对话记录。</p>}</div></Dialog>
     <Dialog open={dialog === 'help'} title="在群里使用" onClose={() => setDialog(null)}><GroupUsage conversation={conversation} botName={agent.name}/></Dialog>
     <Dialog open={dialog === 'smart'} title="设置智能模式" onClose={() => guard.navigate(() => setDialog(null))}>
-      <p className="group-control-note">选择用于判断回复时机的模型。</p>
+      <p className="group-control-note">选择判断 Provider，模型与 Effort 使用决策模型页中的配置。</p>
       {dialog === 'smart' && <GroupDesignSettings scope={{kind:'project',botId:member.agentId,projectName:member.name}} tab="response" tools={snapshot.tools} decisionSetupOnly onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets} onDecisionSaved={async () => {if (await update({conversation:'smart'})) setDialog(null); else throw new Error('决策模型已保存，未能切换聊天方式，请重试。');}}/>}
     </Dialog>
     <ConfirmDialog open={dialog === 'remove'} title="解除这个群的绑定？" confirmLabel="解除绑定" tone="danger" pending={busy} onCancel={() => setDialog(null)} onConfirm={() => {setDialog(null); void update({},true);}} description={`解除 ${agent.name} 与「${group.name}」的关联。Bot 加入的群会退出；Bot 创建的群会尝试转交群主。本地目录和文件保留。`}/>

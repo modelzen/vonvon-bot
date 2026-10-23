@@ -42,6 +42,10 @@ export function judgeChoiceOptions(input: {
       decision.push({value: selected, label: `${decisionModels?.find(service => service.provider === known.provider)?.displayName ?? known.provider} 的 ${known.model}`, selection: known});
     }
   }
+  if (known?.kind === 'provider') {
+    selected = 'provider';
+    language.push({value: selected, label: judgeLabel(known, decisionModels), selection: known});
+  }
   const unknown: JudgeChoiceOption | undefined = known ? undefined : {value: 'unknown', label: '这个版本不认识的设置，判断时当没设', disabled: true};
   if (unknown) selected = 'unknown';
   return {follow, language, decision, unknown, selected};
@@ -56,6 +60,7 @@ export function judgeLabel(selection: JudgeSelectionView, decisionModels?: Decis
   if (!isKnownJudgeSelection(selection)) return '这个版本的网页不认识的设置';
   switch (selection.kind) {
     case 'default': return '各后端的默认小模型';
+    case 'provider': return `${selection.provider === 'codex-appserver' ? 'Codex' : selection.provider === 'claude-agent' ? 'Claude' : 'Jev'}（跟随决策模型页配置）`;
     case 'llm': return `${selection.model}${selection.effort ? `（推理强度 ${selection.effort}）` : ''}`;
     case 'decision': {
       const service = decisionModels?.find(service => service.provider === selection.provider);

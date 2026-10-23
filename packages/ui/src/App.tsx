@@ -860,7 +860,7 @@ function DesktopApp() {
               </SettingsGroup>
             </>
           )}
-          {page === "secrets" && <SecretsPanel onOpenApplication={() => openPage("application")}
+          {page === "secrets" && <SecretsPanel onOpenProviders={() => openPage("providers")} onOpenApplication={() => openPage("application")}
             onOpenLogs={() => { openPage("diagnostics"); setSearchTarget({page: "diagnostics", section: "daemon 日志"}); }}/>}
           {page === "diagnostics" && <DiagnosticsPanel snapshot={snapshot} ready={ready} busy={busy} run={run}
             onOpenSetup={() => openPage("setup")} onOpenEnvironment={() => openPage("environment")} onOpenSecrets={() => openPage("secrets")}

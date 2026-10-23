@@ -62,6 +62,7 @@ export const paths = {
   cacheDir: appDir,
   /** bot 注册表：保存的全部 bot + 当前选中的 appId */
   botsFile: join(appDir, 'bots.json'),
+  judgeModelsFile: join(appDir, 'judge-models.json'),
   /** app id / 租户 / 偏好（当前 bot；不含明文密钥） */
   get configFile(): string {
     return join(currentBotDir, 'config.json');

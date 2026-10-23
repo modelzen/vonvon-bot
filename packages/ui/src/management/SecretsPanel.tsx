@@ -9,6 +9,7 @@ import {
   MEANWHILE, OLD_DAEMON, errorText, keyDiagnosis, keyFlows, keyStatus, removalCopy, rereads, resultCopy, secretsReader, testTone, testedText,
   unreadNotes, useCount, useName, useNote, type FillFlow, type KeyFlows, type RowState, type SecretsRead, type SecretsView,
 } from './secretsModel';
+import {DecisionProviderSettings} from './DecisionProviderSettings';
 import './secrets.css';
 
 /** Reads the list on entering a page and on coming back to the window: nothing in the snapshot changes when a key does
@@ -218,7 +219,7 @@ export function RemoveKeyDialog({removal, service, view, onCancel, onConfirm}: {
  * 试一次; the page shows only whether a key is in and its last four. A dialog can close while its requests run, and
  * their result lands in the key's row; focus then goes back to the row, to its first button that can be pressed.
  */
-export function SecretsPanel({onOpenLogs, onOpenApplication}: {onOpenLogs: () => void; onOpenApplication: () => void}) {
+export function SecretsPanel({onOpenLogs, onOpenApplication, onOpenProviders}: {onOpenLogs: () => void; onOpenApplication: () => void; onOpenProviders?: () => void}) {
   const client = useClient();
   const {read, reader} = useSecrets();
   const [{rows, fill}, setFlows] = useState<KeyFlows>({rows: {}});
@@ -279,7 +280,7 @@ export function SecretsPanel({onOpenLogs, onOpenApplication}: {onOpenLogs: () =>
   } else {
     body = <>
       {read.kind === 'ready' && read.problem && <InlineNotice tone="warning" title="未能刷新密钥">{`${read.problem}。保留上次读取的内容。`}</InlineNotice>}
-      <SettingsGroup label="模型服务" id={settingAnchor('决策模型')}
+      <SettingsGroup label="API 密钥" id={settingAnchor('决策模型')}
         footer="密钥由所有 Bot 共用。Codex 和 Claude 使用各自的本机登录。">
         {!view ? <SettingsRow title="正在读取…"/>
           : !view.services.length ? <SettingsRow title="暂无需要密钥的服务"/>
@@ -294,6 +295,7 @@ export function SecretsPanel({onOpenLogs, onOpenApplication}: {onOpenLogs: () =>
   }
   return <div className="page-stack secrets-page" ref={page}>
     {header}
+    <DecisionProviderSettings services={view?.services} onOpenProviders={onOpenProviders}/>
     {body}
     <FillKeyDialog flow={fillService ? fill : undefined} service={fillService} onClose={flows.close}
       onSubmit={value => void flows.save(value)} onAgain={flows.again} onRetest={() => void flows.retest()}/>

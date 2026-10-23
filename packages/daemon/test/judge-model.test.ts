@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readClaudeUserSettings, readConfiguredClaudeModel } from '../src/agent/claude-agent/configured-model';
 import type { AgentBackend, JudgeCall, ModelInfo, ReasoningEffort } from '../src/agent/types';
 import { createJudge } from '../src/judge/judge';
+import { judgeModelsFile, writeJudgeModels } from '../src/judge/global-models';
 import { claudeJudgeDefault, codexJudgeDefault, defaultJudgeModel, fitJudgeEffort, judgeEffort, parseStoredJudge, resolveJudgeModel } from '../src/judge/model';
 import type { JudgeSelectionStored } from '../src/judge/types';
 
@@ -246,4 +247,39 @@ describe('decision models (s23d stores them, s23f calls them)', () => {
     expect(judgeFn).not.toHaveBeenCalled();
     expect(listModels).not.toHaveBeenCalled();
   });
+});
+
+it('a provider-only group hot reads the host model and calls the selected backend across task providers', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'judge-provider-global-')); dirs.push(root);
+  const calls: Array<{ backend: string; model: string; effort?: ReasoningEffort }> = [];
+  const backendFor = (id: string) => ({ id, displayName: id, listModels: async () => [],
+    peekModels: () => undefined,
+    judge: async (call: JudgeCall) => { calls.push({ backend: id, model: call.model, effort: call.effort }); return { text: '{"decision":"skip","reason":""}' }; },
+  } as unknown as AgentBackend);
+  const judge = createJudge({ backendFor, judgeModelsRoot: root,
+    readPrompt: async () => ({ source: 'default', text: 'S', path: '' }), cwd: async () => '/j' });
+  const req = { variant: 'main' as const, appId: 'cli_a', botName: 'P',
+    group: { chatId: 'oc_g', name: 'g', backend: 'codex-appserver', judge: { kind: 'provider' as const, provider: 'claude-agent' as const } },
+    context: [], message: { at: 0, from: 'user' as const, name: 'u', text: 't' } };
+  await writeJudgeModels({ byProvider: { 'claude-agent': { model: 'first', effort: 'low', custom: true } } }, root);
+  expect(await judge.judge(req)).toMatchObject({ backend: 'claude-agent', model: 'first', effort: 'low', modelSource: 'group' });
+  await writeJudgeModels({ byProvider: { 'claude-agent': { model: 'second', effort: 'high', custom: true } } }, root);
+  expect(await judge.judge(req)).toMatchObject({ backend: 'claude-agent', model: 'second', effort: 'high' });
+  expect(calls).toEqual([{ backend: 'claude-agent', model: 'first', effort: 'low' }, { backend: 'claude-agent', model: 'second', effort: 'high' }]);
+  expect(await judge.judge({ ...req, group: { ...req.group, judge: { kind: 'provider', provider: 'missing' } as never } }))
+    .toMatchObject({ decision: 'skip', error: { kind: 'unavailable' } });
+  writeFileSync(judgeModelsFile(root), '{bad');
+  expect(await judge.judge(req)).toMatchObject({ decision: 'skip', error: { kind: 'failed' } });
+  expect(calls).toHaveLength(2);
+});
+
+it('provider defaults follow the selected live catalog and an override without effort uses its lowest level', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'judge-provider-default-')); dirs.push(root);
+  const choice = { kind: 'provider' as const, provider: 'codex-appserver' as const };
+  const available = [model('gpt-6.1-sol', ['high', 'low'])];
+  expect(resolveJudgeModel('codex-appserver', { group: choice }, available, undefined, root))
+    .toEqual({ model: 'gpt-6.1-sol', effort: 'low', modelSource: 'group' });
+  await writeJudgeModels({ byProvider: { 'codex-appserver': { model: 'gpt-6.1-sol' } } }, root);
+  expect(resolveJudgeModel('codex-appserver', { group: choice }, available, undefined, root))
+    .toEqual({ model: 'gpt-6.1-sol', effort: 'low', modelSource: 'group' });
 });

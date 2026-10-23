@@ -21,7 +21,8 @@ export type JudgeDecision = 'skip' | 'main' | 'topic' | 'reply';
  */
 export type JudgeSelectionStored =
   | { kind: 'llm'; backend: string; model: string; effort?: ReasoningEffort; custom?: true }
-  | { kind: 'decision'; provider: string; model: string };
+  | { kind: 'decision'; provider: string; model: string }
+  | { kind: 'provider'; provider: 'codex-appserver' | 'claude-agent' | 'typesafe' };
 
 export interface JudgeLine {
   /** message id: what an anchor names (s25b); never rendered */

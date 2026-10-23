@@ -534,7 +534,7 @@ export interface AccountUsageBundle {
  */
 export type BackendDepState = 'installed' | 'not-installed' | 'external-missing';
 
-export type BackendLogin = { state: 'signedIn' | 'signedOut' | 'unknown'; message: string };
+export type BackendLogin = { state: 'signedIn' | 'signedOut' | 'notRequired' | 'unknown'; message: string };
 
 /** A backend's environment probe（doctor / onboarding / DM 体检卡共用）。 */
 export interface BackendProbe {
