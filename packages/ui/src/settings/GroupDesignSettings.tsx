@@ -18,7 +18,7 @@ export {DecisionFields} from './DecisionFields';
 import {AnnouncedReadonlyMessages, hasReadonlyMessage, type ReadonlyMessage} from './readonly-messages';
 import './group-design-settings.css';
 
-/** 权限 holds the permission editor s31c had under 工作区; the workspace itself is the project's (memory design §5.4). */
+/** 模型与权限 shares one settings view; permission remains a compatible internal section key. */
 export type GroupSettingsTab = 'capabilities' | 'role' | 'model' | 'response' | 'permission';
 const SUPPLEMENT_MAX = 5_000;
 type Scope = ProjectSettingsView['scope'];
@@ -108,7 +108,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, botName = 'Bot'
     validate={value => providerDecisionProblem(value.selection, providers, view.decisionModels)}
     render={(draft,set,disabled,_commit,resetKey) => <DecisionFields initial key={resetKey} botId={view.scope.botId} groupBackend={view.identity.backend} value={draft.selection} effective={sections.judge!.effective.selection} onChange={selection=>set({selection})} disabled={disabled} providers={providers} services={view.decisionModels} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets}/>}/> : <MissingSection/>;
   const relevant: (Section<unknown> | undefined)[] = tab === 'capabilities' ? [sections.skills, sections.presentation]
-    : tab === 'role' ? [sections.role] : tab === 'model' ? [sections.modelAccess]
+    : tab === 'role' ? [sections.role] : tab === 'model' ? [sections.modelAccess, sections.permission]
     : tab === 'permission' ? [sections.permission]
     : [...(view.identity.kind !== 'smart' ? [sections.response] : []), ...(view.identity.backend !== 'claude-agent' ? [sections.run] : []), sections.permission, sections.presentation, ...(view.identity.kind === 'smart' ? [sections.judge, sections.smartRules] : [])];
   const notices: ReadonlyMessage[] = [];
@@ -137,7 +137,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, botName = 'Bot'
         render={(draft, set, disabled) => <ModelAccessFields botId={view.scope.botId} value={draft} onChange={set} disabled={disabled} providers={providers} onCatalog={rememberCatalog}
           permissionName={sections.permission.stored.options.tiers.find(tier => tier.tier === sections.permission.stored.mode)?.name} savedBackend={view.identity.backend}/>}
         validate={value => providers.some(provider => provider.id === value.backend) ? modelAccessProblem(value, modelCatalog.current) : '此 Provider 当前不可用，请先安装并登录。'}/> : <MissingSection/>)}
-      {tab === 'permission' && <ProjectPanel view={view} refresh={refresh} partition="permission" independent/>}
+      {(tab === 'model' || tab === 'permission') && <ProjectPanel view={view} refresh={refresh} partition="permission" independent/>}
       {tab === 'response' && <>
         {responseHeader}
         {view.identity.kind === 'smart' && <>
