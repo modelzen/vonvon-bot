@@ -37,9 +37,9 @@ describe('decision model request (s23f 做法（问法）)', () => {
           type: 'choice',
           instructions: { rules: 'SMART 原文', question: '`new_message` 发在群主区。按 `rules`，bot（`bot_name`）该怎么处理它？' },
           criteria: {
-            skip: '不回：闲聊、寒暄、"好的""收到"这类话；说给别人的话；别人已经在处理或答过；bot 说不出新的有用的东西；拿不准',
-            main: '在主区回：需要 bot 回应，接着主区正在聊的事，或者一两句就能答完',
-            topic: '开新话题回：需要 bot 回应，而且是一件新的事，要来回好几轮，或者要查、要改、要写东西',
+            skip: '不回：按 `rules`，不回应这条消息',
+            main: '在主区回：按 `rules`，在群主区回应这条消息',
+            topic: '开新话题回：按 `rules`，为这条消息创建新话题并在其中回应',
           },
         },
         // a person's lines naming no one only: the ones a topic may open under
@@ -58,6 +58,18 @@ describe('decision model request (s23f 做法（问法）)', () => {
     expect(state.recent_messages).toHaveLength(shown);
     expect(state.recent_messages[0]!.id).toBe(`m${shown}`);
     expect(state.recent_messages.at(-1)).toMatchObject({ id: 'm1', speaker: '人29' });
+  });
+
+  it('keeps user response policy in rules instead of contradicting it in the fixed choice criteria', () => {
+    const rules = '收到和闲聊也需要回应。拿不准时仍然回应。所有群主区消息都创建话题。';
+    for (const variant of ['main', 'topic'] as const) {
+      const { questions } = decisionBody(req(variant), rules, 'jev-latest');
+      expect(questions.decision.instructions).toMatchObject({rules});
+      for (const criterion of Object.values(questions.decision.criteria)) {
+        expect(criterion).toContain('按 `rules`');
+        expect(criterion).not.toMatch(/闲聊|寒暄|收到|拿不准|新的事|一两句/);
+      }
+    }
   });
 
   it('asks each variant its options, 不回 first; only main asks the anchor, at most 10 lines, none when no line fits', () => {
