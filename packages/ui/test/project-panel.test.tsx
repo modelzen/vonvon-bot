@@ -5,6 +5,7 @@ import { createClient } from "../../client/src/client";
 import { ClientProvider } from "../src/client-context";
 import { appliedNotice, ConversationRow, conversationNote } from "../src/management/ProjectPanel";
 import { groupJudgeVisible, membershipSettingsKey, ProjectPanel as GroupSettings } from "../src/settings/SettingsPanel";
+import { GroupAttentionStatus } from "../src/settings/GroupAttentionStatus";
 
 const client = createClient({ isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {} });
 const section = <const T,>(stored: T) => ({ stored, effective: stored, revision: "r", access: { kind: "writable" as const }, apply: [] });
@@ -82,6 +83,26 @@ it("s28a: only smart groups with a judge section expose the judge model", () => 
   }
   expect(settings("smart")).not.toContain('aria-label="判断模型"');
   expect(groupJudgeVisible(view("smart"))).toBe(false);
+});
+
+it('shows live attention beneath smart group response, before its judge model, only while both views are smart', () => {
+  const member = membershipSchema.parse({id: '["cli_fixture","oc_demo"]', agentId: 'cli_fixture', groupId: 'oc_demo',
+    name: 'demo', directory: '/tmp/demo', backend: 'codex-appserver', conversation: 'smart', response: 'mention',
+    permission: {administrator: 'full', member: 'full', network: false}, stale: false, enabled: true});
+  const agent = {id: member.agentId, name: 'Bot', enabled: true, running: true, connection: 'connected', activation: 'active' as const,
+    diagnostics: {notReplied: [], deniedScopes: [], attention: [{groupId: member.groupId, main: {mode: 'focus' as const, intervalMs: 60_000}, focusedTopics: 2, watchedTopics: 1}]}};
+  const attention = (conversation = member.conversation) => <GroupAttentionStatus agent={agent} membership={{...member, conversation}} connected/>;
+  const render = (kind: string, slot = attention()) => renderToStaticMarkup(<ClientProvider client={client}>
+    <GroupSettings view={view(kind, {judge})} refresh={async () => {}} attentionStatus={slot}/>
+  </ClientProvider>);
+  const html = render('smart');
+  expect(html).toContain('当前关注状态');
+  expect(html).toContain('专注中');
+  expect(html.indexOf('由 Bot 判断')).toBeLessThan(html.indexOf('当前关注状态'));
+  expect(html.indexOf('当前关注状态')).toBeLessThan(html.indexOf('aria-label="判断模型"'));
+  // Either source can arrive first during a conversation-mode change.
+  for (const kind of ['multi', 'single']) expect(render(kind)).not.toContain('当前关注状态');
+  for (const conversation of ['threads', 'shared'] as const) expect(render('smart', attention(conversation))).not.toContain('当前关注状态');
 });
 
 it("s28a: following the Bot's decision model still explains a missing key", () => {

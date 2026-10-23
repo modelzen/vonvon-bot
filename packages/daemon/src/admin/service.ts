@@ -292,6 +292,7 @@ export interface BotLiveStatus {
 
 /** 项目快照——effective 值（缺省已按 registry 的单一事实源解析），UI 直接渲染。 */
 export interface AdminProject {
+  enabled?: boolean;
   avatarDataUrl?: string;
   name: string;
   chatId: string;
@@ -527,6 +528,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     const result = projects.map((p, index) => ({
       avatarDataUrl: groupAvatars.get(botId, p.chatId),
       name: p.name,
+      enabled: p.enabled !== false,
       chatId: p.chatId,
       cwd: p.cwd,
       blank: p.blank,

@@ -35,7 +35,7 @@ type AgentScope = { kind: "agent"; botId: AgentId };
 type ProjectScope = { kind: "project"; botId: AgentId; projectName: string };
 type PanelProps =
   | {scope: 'agent'; target: AgentScope}
-  | {scope: 'project'; target: ProjectScope; onOpenSecrets?: () => void}
+  | {scope: 'project'; target: ProjectScope; onOpenSecrets?: () => void; attentionStatus?: ReactNode}
   | {scope: 'host'; target: {kind: 'host'}};
 const isAgentView = (view: SettingsView): view is AgentSettingsView =>
   view.scope.kind === "agent" && "administrators" in view;
@@ -1305,10 +1305,12 @@ export function ProjectPanel({
   view,
   refresh,
   onOpenSecrets,
+  attentionStatus,
 }: {
   view: ProjectSettingsView;
   refresh: () => Promise<void>;
   onOpenSecrets?: () => void;
+  attentionStatus?: ReactNode;
 }) {
   const client = useClient();
   const [memberId, setMemberId] = useState("");
@@ -1514,9 +1516,9 @@ export function ProjectPanel({
         )}
       </SettingsGroup>
       {/* 智能 has no 免@: a judgement decides (s25c). The group keeps its anchor, so search still lands here. */}
-      {view.identity.kind === "smart" ? <SettingsGroup id={settingAnchor("群内响应")} label="群内响应">
+      {view.identity.kind === "smart" ? <><SettingsGroup id={settingAnchor("群内响应")} label="群内响应">
         <SettingsRow title="免 @" value="由 Bot 判断" description="智能开话题没有免 @，回不回由 Bot 判断。" />
-      </SettingsGroup> : <Editor
+      </SettingsGroup>{attentionStatus}</> : <Editor
         title="群内响应"
         section={response}
         save={(draft, revision) => save("response", draft, revision)}
@@ -1958,7 +1960,7 @@ function ScopedSettingsPanel(props: PanelProps) {
   const content = isAgentView(view) && props.scope === 'agent' ? (
     <AgentPanel view={view} refresh={refresh} />
   ) : isProjectView(view) && props.scope === 'project' ? (
-    <ProjectPanel view={view} refresh={refresh} onOpenSecrets={props.onOpenSecrets} />
+    <ProjectPanel view={view} refresh={refresh} onOpenSecrets={props.onOpenSecrets} attentionStatus={props.attentionStatus} />
   ) : isHostView(view) ? (
     <HostPanel view={view} refresh={refresh} />
   ) : null;
