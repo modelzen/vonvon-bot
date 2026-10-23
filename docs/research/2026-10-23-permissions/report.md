@@ -59,6 +59,10 @@ owner 问：群设置里的"工作目录权限"（只读、读写、完全访问
 | R3 | app-server（只读档） | profile 里没放开 Codex 的安装目录 | 无 | 每条命令都失败：`bwrap: execvp …/codex-linux-x64/vendor/…/codex: No such file or directory` |
 | W0 | app-server（读写档） | 根可写，八个受保护路径设成只读 | 无 | `thread/start` 失败：`bwrap: Can't bind mount … on …/ws/.claude: No such file or directory`（工作区里没有 `.claude`） |
 
+- s31e 第 0 步（Codex 0.163.0）：A 安装目录放开后命令、工作区内读正常、外读拒绝；B 复现缺失路径挂载失败；C 已有配置不可写、缺失 .mcp.json 可建；D deny 缺失路径仍启动失败，采用方案 1。E 精确只读放开 resolv.conf 的真实文件后，两档关网失败、开网 200。F 取消；F2、F3 在全新工作区里新建 .codex 规则和配置均被 Codex 自己对根 .codex 的原生保护拒绝，不是 vonvon 的“仅存在路径”条目挡住；建不出来，所以没有规则或配置可加载，CODEX_LINUX_WRITE_OK=true。这一依赖只由被测的最低版本 0.163.0 间接保证，今后升级 Codex 必须重跑 F2、F3。探针使用实际 codexFilesystem，见 packages/daemon/scripts/probe-codex-linux.py；补查：`touch ../outside-test` 返回 0，但写的是沙箱临时父目录，宿主没有该文件；无用户规则的独立探针也复现。因此验收期望改为“宿主上没有该文件”，不能把这个返回码当作宿主文件已写入。
+
+- s31e 审查补测（任务 166，同版 0.163.0）：事先建好 `.codex/config.toml`、`.agents/skills/x/SKILL.md`，生产策略保留已有路径显式只读，两档共四次 thread/start 与 echo/cat 均成功，没有挂载冲突，保护路径写法不变。独立二进制复制到临时 HOME，护栏返回 `kind: 'file'`，两档均能执行 echo/cat 工作区文件，但读不到二进制旁的测试文件。可用探针的 `--review-only` 只跑这六项，HOME/CODEX_HOME 仍完全隔离。
+
 由此得出：
 
 - **用户 rules 绕过沙箱：属实。** 在 vonvon 实际走的 app-server 路径上，用户层一条 allow 规则就让只读群读到了工作区以外的文件。#486 在 Mac（0.162.1）上也测到了，用户层和工作区层都会；app-server 没有关规则的开关（`--ignore-rules` 只有 `codex exec` 有），换 `CODEX_HOME` 又带不走登录。owner 定不修（owner 2026-10-23："点过总是允许为啥还要限制""也不必说明"）。

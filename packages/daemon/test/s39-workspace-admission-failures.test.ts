@@ -35,7 +35,7 @@ vi.mock('../src/agent/codex-appserver/client-pool', async original => ({
   ...await original<typeof import('../src/agent/codex-appserver/client-pool')>(),
   takeWarmClient: rpc.take, refillWarmPool: rpc.refill, connectGated: vi.fn(),
 }));
-vi.mock('../src/agent/codex-appserver/locate', () => ({ resolveCodexBin: () => '/fake/codex', codexVersionAsync: vi.fn() }));
+vi.mock('../src/agent/codex-appserver/locate', () => ({ resolveCodexBin: () => '/fake/codex', codexVersionAsync: vi.fn(async () => 'codex-cli 0.163.0'), cachedCodexVersion: () => undefined }));
 
 let root: string;
 let primary: string;
