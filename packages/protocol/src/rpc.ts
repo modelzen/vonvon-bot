@@ -8,6 +8,7 @@ import { desktopSnapshotSchema } from "./domain.js";
 import { adminRequestSchema, adminReplySchema } from "./admin.js";
 import { directoryRequestSchema, directoryReplySchema } from "./directory.js";
 import { libraryRequestSchema, libraryReplySchema } from "./library.js";
+import { memoryRequestSchema, memoryReplySchema } from "./memory.js";
 
 const id = z.string().min(1);
 export const requestSchema = z.discriminatedUnion("method", [
@@ -20,6 +21,7 @@ export const requestSchema = z.discriminatedUnion("method", [
   z.object({type:z.literal("request"),id,method:z.literal("admin"),payload:adminRequestSchema}).strict(),
   z.object({type:z.literal("request"),id,method:z.literal("directory"),payload:directoryRequestSchema}).strict(),
   z.object({type:z.literal("request"),id,method:z.literal("library"),payload:libraryRequestSchema}).strict(),
+  z.object({type:z.literal("request"),id,method:z.literal("memory"),payload:memoryRequestSchema}).strict(),
 ]);
 export type Request = z.infer<typeof requestSchema>;
 export const responseSchema = z.discriminatedUnion("method", [
@@ -32,6 +34,7 @@ export const responseSchema = z.discriminatedUnion("method", [
   z.object({type:z.literal("response"),id,method:z.literal("admin"),payload:adminReplySchema}).strict(),
   z.object({type:z.literal("response"),id,method:z.literal("directory"),payload:directoryReplySchema}).strict(),
   z.object({type:z.literal("response"),id,method:z.literal("library"),payload:libraryReplySchema}).strict(),
+  z.object({type:z.literal("response"),id,method:z.literal("memory"),payload:memoryReplySchema}).strict(),
 ]);
 export type Response = z.infer<typeof responseSchema>;
 export const errorEnvelopeSchema = z.object({

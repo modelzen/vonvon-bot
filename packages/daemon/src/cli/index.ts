@@ -28,6 +28,8 @@ program.hook('preAction', async (_command, action) => {
   if (parent === 'service' || (parent === 'bot' && action.name() !== 'repair-dir') || parent === 'group' || parent === 'settings' || parent === 'feishu' || action.name() === '__daemon-control') return;
   // project list only reads files published with tmp + rename (the library, bots.json, each projects.json), like secrets get
   if (parent === 'project') return;
+  // memory reads and writes the entry files under their own kernel mutex, so it takes no lease either; in a Bot's session its writes refuse in the handler (commands/memory.ts)
+  if (parent === 'memory') return;
   // in a Bot's session secrets list, set and remove only refuse (s23g): before the lease, whose socket a sandbox may forbid, and the data root
   if (parent === 'secrets' && action.name() !== 'get' && inBotSession(process.env)) return;
   if (action.name() === 'run') {
@@ -149,6 +151,26 @@ const project = program.command('project').description('List projects: the folde
 project.command('list').description('List projects with their folders and the groups that use them').option('--json', 'Print JSON').action(async (options: Json) => {
   await (await import('./commands/project')).runProjectList(io(options));
 });
+const memory = program.command('memory').description('Read and change memory entries: a project\'s or a bot\'s');
+const memoryScope = (command: Command) => command.option('--project <project>', 'Project name or id (prj_…)').option('--bot <appId>', 'Bot id: its own memory').option('--json', 'Print JSON');
+const memoryContext = async (options: Json) => (await import('./commands/memory')).terminalMemoryContext(io(options));
+type MemoryOptions = Json & { project?: string; bot?: string; branch?: string; revision: string; text?: string };
+memoryScope(memory.command('list').description('List the entries by branch')).action(async (options: MemoryOptions) => {
+  await (await import('./commands/memory')).runMemoryList(options, await memoryContext(options));
+});
+memoryScope(memory.command('export').description('One markdown document per branch')).action(async (options: MemoryOptions) => {
+  await (await import('./commands/memory')).runMemoryExport(options, await memoryContext(options));
+});
+memoryScope(memory.command('add <text>').description('Add an entry (refused in a Bot session)').option('--branch <name>', 'Branch; a new name opens one, none means 其他'))
+  .action(async (text: string, options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryAdd(text, options, await memoryContext(options)); });
+memoryScope(memory.command('edit <itemId>').description('Change an entry (refused in a Bot session)').requiredOption('--revision <n>', 'The revision vonvon memory list shows').option('--text <text>', 'New text').option('--branch <name>', 'Move to this branch'))
+  .action(async (itemId: string, options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryEdit(itemId, options, await memoryContext(options)); });
+memoryScope(memory.command('forget <itemId>').description('Archive an entry (refused in a Bot session)').requiredOption('--revision <n>', 'The revision vonvon memory list shows'))
+  .action(async (itemId: string, options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryForget(itemId, options, await memoryContext(options)); });
+memoryScope(memory.command('branch-rename <from> <to>').description('Rename a branch (refused in a Bot session)'))
+  .action(async (from: string, to: string, options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryBranch('rename', from, to, options, await memoryContext(options)); });
+memoryScope(memory.command('branch-merge <from> <into>').description('Merge a branch into another (refused in a Bot session)'))
+  .action(async (from: string, into: string, options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryBranch('merge', from, into, options, await memoryContext(options)); });
 const settings = program.command('settings').description('Read and change bot, group and session settings');
 type Target = Json & { bot?: string; group?: string; session?: string; revision?: string; reason?: string };
 const scoped = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--session <threadId>', 'Session thread id').option('--json', 'Print JSON');

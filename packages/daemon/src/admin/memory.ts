@@ -1,0 +1,92 @@
+import { memoryReplySchema, type MemoryReply, type MemoryRequest, type MemoryScopeRef } from '@vonvon/protocol';
+import { loadBots } from '../config/bots';
+import { botDir } from '../config/paths';
+import { libraryLocation, readLibrary, type LibraryLocation } from '../project/library';
+import { RpcError } from '../server/errors';
+import {
+  botMemoryLocation, dmMemoryLocation, MemoryStore, projectMemoryLocation, transferItem,
+  type BranchResult, type ItemResult, type MemoryActor, type Refused,
+} from '../bot/memory-store';
+
+/**
+ * 记忆的 `memory` RPC 在 host 一侧的实现（记忆设计 §2.5）。桌面端和 `vonvon memory` 都走它：条目库有 `'memory'`
+ * 内核互斥，所以不必经 IPC 分流，bot 跑不跑都能直接写。来源由这里填：桌面端是 `ui`，命令行是 `cli`，都是主人本机、可信。
+ */
+export interface MemoryAdminDeps {
+  library?: LibraryLocation;
+  /** `bots/<appId>/` of a bot that exists; throws for one that does not */
+  botDirectory?: (botId: string) => Promise<string>;
+  origin?: 'ui' | 'cli';
+  now?: () => number;
+}
+
+const APP_ID = /^[A-Za-z0-9_.-]{1,200}$/;
+async function defaultBotDirectory(botId: string): Promise<string> {
+  if (!APP_ID.test(botId) || botId === '.' || botId === '..') throw new RpcError('invalid_request', 'bot id 无效');
+  if (!(await loadBots()).bots.some(bot => bot.appId === botId)) throw new RpcError('invalid_request', '没有这个 Bot');
+  return botDir(botId);
+}
+
+export async function memoryStoreFor(scope: MemoryScopeRef, deps: MemoryAdminDeps = {}): Promise<MemoryStore> {
+  const options = deps.now ? { now: deps.now } : {};
+  if (scope.kind === 'project') {
+    const library = deps.library ?? libraryLocation();
+    const project = (await readLibrary(library)).projects.find(candidate => candidate.id === scope.projectId);
+    if (!project) throw new RpcError('invalid_request', '没有这个项目');
+    const limit = (project as { memoryLimit?: unknown }).memoryLimit;
+    return new MemoryStore(projectMemoryLocation(project.id, { library, ...(typeof limit === 'number' && Number.isInteger(limit) && limit > 0 ? { limit } : {}) }), options);
+  }
+  const directory = await (deps.botDirectory ?? defaultBotDirectory)(scope.botId);
+  return new MemoryStore(scope.kind === 'bot' ? botMemoryLocation(directory) : dmMemoryLocation(directory, scope.openId), options);
+}
+
+type Result = ItemResult | BranchResult | Refused;
+function replyOf(result: Result): MemoryReply {
+  if (result.ok) {
+    if ('item' in result) return { kind: 'item', item: result.item, branchApplied: result.branchApplied, ...(result.newBranch ? { newBranch: true } : {}) };
+    return { kind: 'branches', branches: result.branches, moved: result.moved };
+  }
+  if (result.reason === 'conflict') return { kind: 'conflict', message: result.message, ...('current' in result && result.current ? { current: result.current } : {}) };
+  return { kind: 'refused', reason: result.reason, message: result.message };
+}
+
+export async function memoryAction(request: MemoryRequest, deps: MemoryAdminDeps = {}): Promise<MemoryReply> {
+  const origin = deps.origin ?? 'ui';
+  const actor: MemoryActor = { role: origin === 'cli' ? 'cli' : 'desktop' };
+  const botIdOf = (scope: MemoryScopeRef): string => scope.kind === 'project' ? '' : scope.botId;
+  const store = await memoryStoreFor(request.scope, deps);
+  const checked = (reply: MemoryReply): MemoryReply => memoryReplySchema.parse(reply);
+  switch (request.type) {
+    case 'list': return checked({ kind: 'list', ...await store.read() });
+    case 'add': return checked(replyOf(await store.add({
+      text: request.text, ...(request.branch === undefined ? {} : { branch: request.branch }), trust: 'trusted', actor,
+      source: { via: origin, botId: botIdOf(request.scope), actorRole: actor.role },
+    })));
+    case 'edit': return checked(replyOf(await store.edit({
+      itemId: request.itemId, revision: request.revision, actor,
+      ...(request.text === undefined ? {} : { text: request.text }), ...(request.branch === undefined ? {} : { branch: request.branch }),
+    })));
+    case 'archive': return checked(replyOf(await store.archive({ itemId: request.itemId, revision: request.revision, actor })));
+    case 'restore': return checked(replyOf(await store.restore({ itemId: request.itemId, revision: request.revision, actor })));
+    case 'confirm': return checked(replyOf(await store.confirm({ itemId: request.itemId, revision: request.revision, actor })));
+    case 'purge': {
+      const result = await store.purge({ itemId: request.itemId, actor });
+      return checked(result.ok ? { kind: 'purged' } : replyOf(result));
+    }
+    case 'undo': return checked(replyOf(await store.undo({ eventId: request.eventId, actor })));
+    case 'branchRename': return checked(replyOf(await store.branchRename({ from: request.from, to: request.to, actor })));
+    case 'branchMerge': return checked(replyOf(await store.branchMerge({ from: request.from, into: request.into, actor })));
+    case 'export': return checked({ kind: 'exported', files: await store.exportBranches() });
+    case 'events': return checked({ kind: 'events', events: await store.events(request.itemId) });
+    case 'promote': {
+      if (request.scope.kind !== 'project') throw new RpcError('invalid_request', '只能把项目记忆移到 Bot 记忆');
+      const to = await memoryStoreFor({ kind: 'bot', botId: request.botId }, deps);
+      return checked(replyOf(await transferItem({ from: store, to, itemId: request.itemId, revision: request.revision, via: 'promoted', actor, ...(request.branch === undefined ? {} : { branch: request.branch }) })));
+    }
+    case 'move': {
+      if (request.scope.kind !== 'bot') throw new RpcError('invalid_request', '只能把 Bot 记忆移回项目');
+      const to = await memoryStoreFor({ kind: 'project', projectId: request.to.projectId }, deps);
+      return checked(replyOf(await transferItem({ from: store, to, itemId: request.itemId, revision: request.revision, via: 'moved', actor, ...(request.branch === undefined ? {} : { branch: request.branch }) })));
+    }
+  }
+}

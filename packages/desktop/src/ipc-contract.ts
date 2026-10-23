@@ -12,6 +12,7 @@ export const desktopChannels = {
   admin: 'desktop:client:admin',
   directory: 'desktop:client:directory',
   library: 'desktop:client:library',
+  memory: 'desktop:client:memory',
   close: 'desktop:client:close',
   subscribe: 'desktop:subscribe',
   external: 'desktop:shell:external',
