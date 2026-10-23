@@ -203,7 +203,8 @@ function toolGroupTitle(tools: readonly ToolEntry[]): string {
   const failed = unique.filter(tool => tool.status === 'error').length;
   const running = unique.some(tool => tool.status === 'running');
   const status = running ? 'running' : failed ? 'failed' : 'completed';
-  return `<font color='grey'>${unique.length} 项操作</font>${failed ? ` <font color='red'>· ${String(failed)} 项失败</font>` : ''} ${statusSymbol(status)}`;
+  return [`<font color='grey'>${unique.length} 项操作</font>`,
+    failed ? `<font color='red'>· ${String(failed)} 项失败</font>` : '', statusSymbol(status)].filter(Boolean).join(' ');
 }
 
 function codeBlock(value: string, language = ''): string {
@@ -229,7 +230,7 @@ export function processTitle(
   const label = elapsedMs === undefined || !Number.isFinite(elapsedMs) ? '执行过程' : `${status === 'running' ? '已处理' : '用时'} ${formatElapsed(elapsedMs)}`;
   const mark = status === 'running' ? 'running' : status === 'done' ? 'completed'
     : status === 'interrupted' ? 'stopped' : status === 'error' ? 'failed' : 'unknown';
-  return `<font color='grey'>${label}${status === 'idle_timeout' ? ' · 已超时' : ''}</font> ${statusSymbol(mark)}`;
+  return [`<font color='grey'>${label}${status === 'idle_timeout' ? ' · 已超时' : ''}</font>`, statusSymbol(mark)].filter(Boolean).join(' ');
 }
 
 export function formatElapsed(milliseconds: number): string {

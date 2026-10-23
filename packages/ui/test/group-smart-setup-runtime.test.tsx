@@ -1,9 +1,10 @@
 import {beforeEach, expect, it, vi} from 'vitest';
 import {isValidElement, type ReactElement, type ReactNode} from 'react';
-import {agentIdSchema, groupIdSchema, membershipIdSchema, type DesktopSnapshot, type ProjectRecord, type ProjectSettingsView, type SettingsReply, type SettingsRequest} from '@vonvon/protocol';
+import {agentIdSchema, groupIdSchema, membershipIdSchema, type DesktopSnapshot, type Membership, type ProjectRecord, type ProjectSettingsView, type SettingsReply, type SettingsRequest} from '@vonvon/protocol';
 import {GroupWorkspace} from '../src/GroupWorkspace';
 import {GroupDesignSettings, GroupSettingsContent} from '../src/settings/GroupDesignSettings';
 import {Editor} from '../src/settings/SettingsPanel';
+import {GroupAttentionStatus} from '../src/management/GroupAttentionStatus';
 
 type Slot = {states: unknown[]; refs: Array<{current: unknown}>; effects: Array<{deps?: unknown[]; cleanup?: () => void}>; memos: Array<{deps?: unknown[]; value: unknown}>; state: number; ref: number; effect: number; memo: number};
 const harness = vi.hoisted(() => ({slots: {} as Record<string, Slot>, active: '', pending: [] as Array<() => void>, client: {collaboration: vi.fn(), settings: vi.fn(), environment: vi.fn(), snapshot: vi.fn()}}));
@@ -79,6 +80,59 @@ beforeEach(() => {
   harness.client.settings.mockImplementation(async (request: SettingsRequest) => {if (request.type === 'read') {events.push('read-settings'); return {kind: 'view', view};} if (request.type === 'save') {events.push('save-decision'); return save(request);} throw new Error(`unexpected settings ${request.type}`);});
   harness.client.collaboration.mockImplementation(async request => {if (request.action === 'project') {events.push('read-project'); return {kind: 'project', project};} if (request.action === 'editProject') {events.push('edit-project'); project = {...project, kind: 'smart', revision: 'project-r2'}; return {kind: 'applied', project};} throw new Error(`unexpected collaboration ${request.action}`);});
 });
+
+it('shows attention beside the smart conversation control on 回复规则 and hides it while either mode source changes', async () => {
+  let liveMember: Membership = {...member, conversation: 'smart', enabled: true};
+  project = {...project, kind: 'smart'};
+  view = {...view, identity: {...view.identity, kind: 'smart'}};
+  harness.client.collaboration.mockImplementation(async request => {
+    if (request.action === 'project') return {kind: 'project', project};
+    if (request.action === 'editProject') {
+      project = {...project, kind: request.conversation === 'shared' ? 'single' : 'smart', revision: 'project-r2'};
+      return {kind: 'applied', project};
+    }
+    throw new Error(`unexpected collaboration ${request.action}`);
+  });
+  function inspect() {
+    const workspace = nodes(renderAt('attention-workspace', () => GroupWorkspace({member: liveMember, agent, group,
+      snapshot: {...snapshot, memberships: [liveMember]}, initialTab: 'response', onBot: () => {}, onBotProfile: () => {},
+      onOpenTools: () => {}, onOpenSecrets: () => {}, onChanged: changed})));
+    const settings = workspace.find(node => node.type === GroupDesignSettings && !node.props.decisionSetupOnly)!;
+    const loader = GroupDesignSettings(settings.props as any) as Element;
+    const loaded = nodes(renderAt('attention-loader', () => (loader.type as (props: any) => ReactNode)(loader.props)))
+      .find(node => node.type === GroupSettingsContent);
+    const content = loaded ? nodes(renderAt('attention-content', () => GroupSettingsContent(loaded.props as any))) : [];
+    return {workspace, content, header: nodes(settings.props.responseHeader)};
+  }
+  async function settled() {inspect(); await flush(); inspect(); await flush(); return inspect();}
+  let ui = await settled();
+  const headerAttention = ui.header.find(node => node.type === GroupAttentionStatus)!;
+  expect(headerAttention).toBeDefined();
+  expect(headerAttention.props).toMatchObject({agent, membership: liveMember, connected: true});
+  expect(ui.header.some(node => node.props.label === '聊天方式')).toBe(true);
+  expect(ui.content.some(node => node.type === GroupAttentionStatus)).toBe(true);
+
+  ui.workspace.find(node => node.type === 'button' && node.props.children === '个性与记忆')!.props.onClick();
+  ui = await settled();
+  expect(ui.content.some(node => node.type === GroupAttentionStatus)).toBe(false);
+  ui.workspace.find(node => node.type === 'button' && node.props.children === '回复规则')!.props.onClick();
+  ui = await settled();
+  expect(ui.content.some(node => node.type === GroupAttentionStatus)).toBe(true);
+
+  // A snapshot can change before the accepted ProjectRecord, or vice versa.
+  liveMember = {...liveMember, conversation: 'shared'};
+  ui = await settled();
+  expect(ui.content.some(node => node.type === GroupAttentionStatus)).toBe(false);
+  liveMember = {...liveMember, conversation: 'smart'};
+  ui = await settled();
+  expect(ui.content.some(node => node.type === GroupAttentionStatus)).toBe(true);
+  ui.header.find(node => node.props.label === '聊天方式' && node.props.onChange)!.props.onChange('shared');
+  ui = await settled();
+  expect(project.kind).toBe('single');
+  expect(liveMember.conversation).toBe('smart');
+  expect(ui.content.some(node => node.type === GroupAttentionStatus)).toBe(false);
+});
+
 it('validates a selection, waits for decision persistence, then changes the mode with the observed project revision', async () => {
   let ui = await openSmart();
   expect(ui.dialog.props.open).toBe(true); expect(ui.mode.props.value).toBe('shared');

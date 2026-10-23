@@ -207,7 +207,7 @@ test('each group setting belongs to the corresponding five-page surface', () => 
     assert.equal(groupTabForSection(entry?.destination.section), tab, query);
   }
   const smart = searchEntries({...snapshot, memberships: [{...snapshot.memberships[0]!, conversation: 'smart'}]});
-  for (const query of ['什么时候回复', '什么时候创建新话题']) {
+  for (const query of ['什么时候回复', '什么时候创建新话题', '什么时候回应', '什么时候不回应', '消息在群主区时', '消息已经在话题里时']) {
     const entry = findEntries(smart, query)[0];
     assert.equal(entry?.destination.section, '判断规则');
     assert.equal(groupTabForSection(entry?.destination.section), 'response');

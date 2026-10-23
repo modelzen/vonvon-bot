@@ -49,7 +49,7 @@ export function buildSubagentSection(input: SubagentSectionInput): { elements: C
     const label = [tint(`${row.name.slice(0, 20)}${task ? `：${task}` : ''}`),
       tint(`${row.stepCount} 步${full ? ` · ${formatElapsed((row.endedAt ?? now) - row.startedAt)}` : ''}`)].join(separator);
     const note = statusNote(row);
-    return `${label} ${statusSymbol(statusOf(row))}${note ? ` ${note}` : ''}`;
+    return [label, statusSymbol(statusOf(row)), note].filter(Boolean).join(' ');
   };
   const iconLine = (content: string, token: string): CardElement => ({
     ...md(content), icon: { tag: 'standard_icon', token, color: 'grey' },
@@ -72,7 +72,7 @@ export function buildSubagentSection(input: SubagentSectionInput): { elements: C
       const presentation = toolPresentation({ ...step, status: step.status === 'failed' ? 'error' : step.status });
       const command = presentation.command?.slice(0, 60).replace(/[<>&*_`\[\]~]/gu, ch => `&#${ch.charCodeAt(0)};`);
       const status = step.status === 'done' ? 'completed' : step.status;
-      return iconLine(`${command ?? presentation.label} ${statusSymbol(status)}`, presentation.icon);
+      return iconLine([command ?? presentation.label, statusSymbol(status)].filter(Boolean).join(' '), presentation.icon);
     });
     const detailed = [...(omitted > 0 ? [md(`<font color='grey'>前面还有 ${omitted} 步</font>`)] : []),
       ...(steps.length ? steps : [md('还没有步骤')])];

@@ -133,10 +133,11 @@ it('uses the selected robot identity and the existing command, search and file i
   expect(icons).toContain('search_outlined');
   expect(icons).toContain('wiki-book_outlined');
   const text = json(built);
-  expect(text).toContain(`opencli twitter search SpaceX ${statusSymbol('completed')}`);
-  expect(text).toContain(`搜索 SpaceX ${statusSymbol('running')}`);
+  const contents = objects(built).map(o => o.content);
+  expect(contents).toContain('opencli twitter search SpaceX');
+  expect(contents).toContain('搜索 SpaceX');
   expect(text).toContain(`读取 report.md ${statusSymbol('failed')}`);
-  expect(text).not.toMatch(/🔄|✅|❌/);
+  expect(text).not.toMatch(/🔄|✅|❌|◌|✓/);
 });
 
 it('uses the same state symbols as the parent process without replacing identity and operation icons', () => {
@@ -147,9 +148,9 @@ it('uses the same state symbols as the parent process without replacing identity
   const built = section(list);
   const headers = panels(built).map(panel => (panel.header as { title: { content: string } }).title.content);
   expect(headers[0]).toContain('name0!</font>');
-  expect(headers[0]).toContain(statusSymbol('running'));
+  expect(headers[0]).toContain('7 步 · 1分钟 12秒</font>');
   expect(headers[0]).not.toContain('：');
-  expect(headers[1]).toContain(statusSymbol('completed'));
+  expect(headers.slice(0, 2).join(' ')).not.toMatch(/◌|✓|color='(?:blue|green)'/);
   expect(headers[2]).toContain(statusSymbol('failed'));
   expect(headers[3]).toContain(statusSymbol('stopped'));
   expect(headers.join(' ')).not.toMatch(/运行中|已完成|失败|已停止/);

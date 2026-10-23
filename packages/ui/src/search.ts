@@ -38,7 +38,7 @@ const membershipGroups: readonly Group[] = [
   {title: '工作目录权限', fields: [item('权限档'), item('允许网络访问')]},
   {title: '聊天方式', fields: [item('聊天方式', ['会话方式', '智能模式', '智能开话题'], {field: ''})]},
   {title: '决策模型', smartOnly: true, aliases: ['判断模型'], fields: [item('决策 Provider', ['判断模型', 'Jev', 'TypeSafe'], {field: ''}), item('决策 Effort', ['判断的推理强度'], {field: '', guide: '先选择语言模型，再设置 Effort。'}), item('自定义决策模型 ID', ['判断的手填模型 id'], {field: '', guide: '选择语言模型 Provider，再点「自定义模型 ID」。'})]},
-  {title: '判断规则', smartOnly: true, fields: [item('什么时候回复', ['响应提示词']), item('什么时候创建新话题', ['新话题提示词'])]},
+  {title: '判断规则', smartOnly: true, fields: [item('判断规则', ['什么时候回应', '什么时候不回应', '消息在群主区时', '消息已经在话题里时', '什么时候回复', '什么时候创建新话题', '响应提示词', '新话题提示词'])]},
   {title: '群内响应', ordinaryOnly: true, fields: [item('不 @ 也能发起任务', ['免 @'])]},
   {title: '运行中来了消息', fields: [item('运行中来了消息', ['运行中收到新消息', '待处理消息策略', '插话', '排队', 'steer', 'queue'])]},
   {title: '响应成员', fields: [item('从群成员选择', ['选择响应成员']), item('添加成员 Open ID'), item('移除成员', [], {field: '', guide: '在响应成员列表中选择要移除的成员。'}), item('允许所有成员', ['清空白名单'], {field: '', guide: '设置了成员白名单后，可清空白名单。'})]},

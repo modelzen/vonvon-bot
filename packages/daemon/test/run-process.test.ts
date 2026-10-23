@@ -61,7 +61,7 @@ describe('ordered run process', () => {
       { kind: 'tool', tool: { id: 'two', kind: 'command', title: 'ls', status: 'running' } },
     ]);
     const group = body[0] as { header: { title: { content: string } } };
-    expect(group.header.title.content).toBe("<font color='grey'>2 项操作</font> <font color='red'>· 1 项失败</font> <font color='blue'>◌</font>");
+    expect(group.header.title.content).toBe("<font color='grey'>2 项操作</font> <font color='red'>· 1 项失败</font>");
     expect(JSON.stringify(body)).not.toContain('正在执行');
   });
 
@@ -87,7 +87,7 @@ describe('ordered run process', () => {
   });
 
   it('keeps timeout explicit while using the shared process mark', () => {
-    expect(processTitle('idle_timeout', 3_000)).toBe("<font color='grey'>用时 3秒 · 已超时</font> <font color='orange'>?</font>");
+    expect(processTitle('idle_timeout', 3_000)).toBe("<font color='grey'>用时 3秒 · 已超时</font> <font color='orange'>!</font>");
     expect(processTitle('error', 3_000)).toBe("<font color='grey'>用时 3秒</font> <font color='red'>×</font>");
   });
 });

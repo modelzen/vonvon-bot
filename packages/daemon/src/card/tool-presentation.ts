@@ -18,7 +18,7 @@ export function toolPresentation(tool: ToolInput): ToolAction & { readonly label
   const preview = action.preview ? ` · ${escapeInline(short(action.preview, 80))}` : '';
   const label = `${escapeInline(`${action.action}${subject}`)}${preview}`;
   const status = tool.status === 'running' ? 'running' : tool.status === 'error' ? 'failed' : 'completed';
-  return { ...action, label, header: `<font color='grey'>${label}</font> ${statusSymbol(status)}` };
+  return { ...action, label, header: [`<font color='grey'>${label}</font>`, statusSymbol(status)].filter(Boolean).join(' ') };
 }
 
 export function toolArguments(detail: string | undefined): Record<string, unknown> | undefined {

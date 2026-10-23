@@ -14,7 +14,7 @@ import { log } from '../core/logger';
 import { createCooldown } from './cooldown';
 import { decisionBody, decisionProvider, readDecision, type DecisionProvider } from './decision';
 import { parseStoredJudge, resolveJudgeModel, judgeBackendId } from './model';
-import { SMART_FACTS_GUIDANCE, judgeAnchors, judgeSchema, judgeSystem, parseVerdict, renderJudgeInput } from './prompt';
+import { DEFAULT_SMART_PROMPT, SMART_FACTS_GUIDANCE, judgeAnchors, judgeSchema, judgeSystem, parseVerdict, renderJudgeInput } from './prompt';
 import { readSmartPrompt, SmartPromptError, composeSmartRules } from './smart-file';
 import { DecisionError } from './typesafe';
 import type { JudgeErrorKind, JudgeRequest, JudgeResult } from './types';
@@ -135,7 +135,7 @@ export function createJudge(deps: JudgeDeps): Judge {
   const noticedPrompts = new Set<string>();
   const notePrompt = (req: JudgeRequest, prompt: Awaited<ReturnType<typeof readSmartPrompt>>): void => {
     const key = `${req.appId}:${req.group.chatId}`;
-    if (prompt.source === 'default' || prompt.text.includes(SMART_FACTS_GUIDANCE) || noticedPrompts.has(key)) return;
+    if (prompt.source === 'default' || prompt.text === DEFAULT_SMART_PROMPT || prompt.text.includes(SMART_FACTS_GUIDANCE) || noticedPrompts.has(key)) return;
     noticedPrompts.add(key);
     reportCustomPromptNotice(req.group.chatId);
   };
