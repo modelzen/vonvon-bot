@@ -1,0 +1,9 @@
+.join-group-flow .join-group-flow__agent {display:flex;align-items:center;gap:10px;min-width:0;font-size:13px;color:var(--color-text);font-weight:500;}
+.join-group-flow__agent > span:last-child {min-width:0;overflow-wrap:anywhere;}
+.join-group-flow .join-group-flow__agent .collaboration-avatar {flex-shrink:0;}
+.join-group-flow .join-group-flow__modes {width:100%;padding:3px;background:var(--color-surface-muted);border:1px solid var(--color-border);border-radius:9px;}
+.join-group-flow .join-group-flow__modes .ui-button {flex:1;min-height:32px;border-radius:6px;}
+.join-group-flow .join-group-flow__hint {font-size:12px;line-height:1.65;color:var(--color-text-secondary);}
+.join-group-flow .join-group-list > button:focus-visible {outline:2px solid var(--color-accent);outline-offset:-3px;}
+@media(hover:hover) and (pointer:fine){.join-group-flow .join-group-list > button:hover:not(:disabled){background:var(--color-surface-hover);}}
+@media(pointer:coarse){.join-group-flow .join-group-flow__modes .ui-button{min-height:44px;}}

@@ -1,4 +1,5 @@
 import {describe,expect,it,vi} from 'vitest';
+import {DEFAULT_SMART_RULES} from '@vonvon/protocol';
 import {prepareNewGroupSettings} from '../src/project/initial-settings';
 import {parseBindGroupInput} from '../src/admin/groups';
 import {parseCollaborationRequest} from '../src/admin/collaboration';
@@ -12,6 +13,7 @@ describe('new group configuration admission',()=>{
     expect(settings.modelAccess).toEqual({backend:'codex-appserver',models:['work-model'],efforts:['low','high']});
     expect(settings.profile).toEqual({persona:'',memory:'',inheritPersona:true,inheritMemory:true});
     expect(settings.skills).toEqual({disabledPaths:[]});
+    expect(settings.smartRules).toEqual(DEFAULT_SMART_RULES);
   });
   it('admits smart creation without a group override so the runtime inherits Bot or Provider defaults',async()=>{
     const deps=helper();

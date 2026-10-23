@@ -192,21 +192,21 @@ export const testTone = (outcome: Tested['outcome']): Tone =>
   outcome === 'ok' ? 'success' : outcome === 'busy' || outcome === 'network' || outcome === 'timeout' ? 'warning' : 'danger';
 
 export const testedText = (tested: Tested): string =>
-  tested.outcome === 'saveFailed' ? `没存上：${tested.message}` : tested.outcome === 'refused' ? `没试成：${tested.message}` : `试了一次：${tested.message}`;
+  tested.outcome === 'saveFailed' ? `保存失败：${tested.message}` : tested.outcome === 'refused' ? `验证失败：${tested.message}` : `验证结果：${tested.message}`;
 
 /** The result step of the fill dialog; 能用 closes it instead (owner 没看稿子，按推荐：v1-plan 第 5 节). */
 export function resultCopy(tested: Tested, service: string, last4?: string): {tone: Tone; title: string; body: string; footer: 'replace' | 'done' | 'retry' | 'again'} {
-  const saved = `key 已经存下${last4 ? `（末四位 ${last4}）` : ''}`;
+  const saved = `密钥已保存${last4 ? `（末四位 ${last4}）` : ''}`;
   switch (tested.outcome) {
     case 'ok': return {tone: 'success', title: tested.message, body: `${saved}。`, footer: 'done'};
-    case 'auth': return {tone: 'danger', title: tested.message, body: `${saved}，但判断会出错；换一个再填。`, footer: 'replace'};
-    case 'busy': return {tone: 'warning', title: tested.message, body: `${saved}。稍后再点"试一次"确认。`, footer: 'done'};
-    case 'network': return {tone: 'warning', title: tested.message, body: `${saved}，只是这次没试成。网络好了点"试一次"再看。`, footer: 'retry'};
-    case 'timeout': return {tone: 'warning', title: tested.message, body: `${saved}，只是这次没试成。稍后点"试一次"再看。`, footer: 'retry'};
+    case 'auth': return {tone: 'danger', title: tested.message, body: `${saved}，但无法用于智能判断。请更换密钥。`, footer: 'replace'};
+    case 'busy': return {tone: 'warning', title: tested.message, body: `${saved}。请稍后重新验证。`, footer: 'done'};
+    case 'network': return {tone: 'warning', title: tested.message, body: `${saved}。连接恢复后可重新验证。`, footer: 'retry'};
+    case 'timeout': return {tone: 'warning', title: tested.message, body: `${saved}。本次验证超时，请重试。`, footer: 'retry'};
     case 'failed': return {tone: 'danger', title: tested.message, footer: 'done',
-      body: tested.status !== undefined && tested.status >= 400 ? `${saved}。多半是账号或权限的问题，去 ${service} 的控制台看看。` : `${saved}，稍后再试一次。`};
-    case 'refused': return {tone: 'danger', title: '没试成', body: `${tested.message}。${saved}。`, footer: 'retry'};
-    case 'saveFailed': return {tone: 'danger', title: '没做成', body: `没存上：${tested.message}。key 没有存，再试一次或者等一会。`, footer: 'again'};
+      body: tested.status !== undefined && tested.status >= 400 ? `${saved}。请检查 ${service} 账号及权限。` : `${saved}。请稍后重新验证。`};
+    case 'refused': return {tone: 'danger', title: '验证失败', body: `${tested.message}。${saved}。`, footer: 'retry'};
+    case 'saveFailed': return {tone: 'danger', title: '保存失败', body: `${tested.message}。密钥未保存，请重试。`, footer: 'again'};
   }
 }
 
@@ -216,10 +216,10 @@ export const choice = (service: Pick<SecretService, 'displayName' | 'models'>): 
 
 export function keyStatus(service: SecretService): {text: string; tone: Tone} {
   switch (service.status) {
-    case 'set': return {text: `已填${service.last4 ? ` ••••${service.last4}` : ''}`, tone: 'success'};
-    case 'missing': return {text: '还没填', tone: 'warning'};
-    case 'invalid': return {text: '存着的 key 不能用', tone: 'danger'};
-    case 'unreadable': return {text: '读不了', tone: 'danger'};
+    case 'set': return {text: `已添加${service.last4 ? ` ••••${service.last4}` : ''}`, tone: 'success'};
+    case 'missing': return {text: '未添加', tone: 'warning'};
+    case 'invalid': return {text: '密钥无效', tone: 'danger'};
+    case 'unreadable': return {text: '读取失败', tone: 'danger'};
   }
 }
 

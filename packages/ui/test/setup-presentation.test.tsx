@@ -4,6 +4,7 @@ import type {AdminSetupStatus, Agent, ApplicationService, DesktopSnapshot, Servi
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
 import {SetupChecklist} from '../src/setup/SetupChecklist';
+import {WelcomeSetup} from '../src/setup/WelcomeSetup';
 import {BOT_ADDED_WARNING, JOIN_SCOPE_WARNING, LINGER_OFF_WARNING, RECALL_WARNING, botSteps, linuxSteps, recentServiceFailure, remoteStepsDone, scopeStep, serviceStep, toolSteps} from '@vonvon/protocol';
 
 const agent: Agent = {id: 'cli_setup' as Agent['id'], name: '小助手', enabled: true, running: true, connection: 'connected', activation: 'active'};
@@ -95,6 +96,32 @@ it('starts a new machine with the tools and the scan step', () => {
   expect(html).toContain('扫码建飞书应用');
   expect(html).toContain('注册 Bot');
   expect(html).not.toContain('添加 Bot');
+});
+
+it('starts the welcome with Provider preparation before Bot scanning', () => {
+  const html = renderToStaticMarkup(<ClientProvider client={client}>
+    <WelcomeSetup snapshot={snapshot([])} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}} codexJobs={null}/>
+  </ClientProvider>);
+  expect(html).toContain('先准备一个 Provider');
+  expect(html).toContain('准备 Provider');
+  expect(html).toContain('创建 Bot');
+  expect(html).toContain('连接群');
+  expect(html).not.toContain('扫码创建 Bot');
+  expect(html).toContain('Codex');
+  expect(html).toContain('未安装');
+  expect(html).not.toContain('工具与后台运行');
+  expect(html).not.toContain('首次运行清单');
+});
+
+it('preserves existing Bot Feishu checks while its Provider still needs attention', () => {
+  const html = renderToStaticMarkup(<ClientProvider client={client}>
+    <WelcomeSetup snapshot={snapshot([agent])} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenGroups={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}} codexJobs={null}/>
+  </ClientProvider>);
+  expect(html).toContain('小助手');
+  expect(html).toContain('正在检测…');
+  expect(html).toContain('先准备一个 Provider');
+  expect(html).toContain('企业租户里新权限可能要管理员审核');
+  expect(html).not.toContain('扫码创建 Bot');
 });
 
 it('says 检查中 for Claude until its login is asked, never 无法确认 before the first ask (s19)', () => {
@@ -270,4 +297,17 @@ it('shows the Linux group between the tools and the service, with commands in a 
   expect(html).toContain('<pre class="setup-step-commands">sudo apt install bubblewrap</pre>');
   expect(html).toContain('systemd 用户服务。退出 SSH 后也要在线，安装时打开 linger。');
   expect(html).not.toContain('Codex 的权限档');
+});
+
+it('shows connection settings without first-use progress after a group is bound', () => {
+  const current = snapshot([agent]);
+  // Losing Provider readiness after binding must not restart first-use onboarding.
+  current.tools = [tool({tool: 'codex', authentication: 'signedOut'})];
+  current.memberships = [{id: 'bound', agentId: agent.id, groupId: 'oc_bound'}] as DesktopSnapshot['memberships'];
+  const html = renderToStaticMarkup(<ClientProvider client={client}>
+    <WelcomeSetup snapshot={current} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenGroups={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}} codexJobs={null}/>
+  </ClientProvider>);
+  expect(html).toContain('飞书连接');
+  expect(html).not.toContain('连接到群聊');
+  expect(html).not.toContain('aria-label="开始使用"');
 });

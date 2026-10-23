@@ -75,7 +75,7 @@ export interface SubagentRow {
   name: string;
   task: string;
   status: 'running' | 'completed' | 'failed' | 'stopped';
-  steps: Array<{ stepId: string; title: string; status: 'running' | 'done' | 'failed' }>;
+  steps: Array<{ stepId: string; title: string; status: 'running' | 'done' | 'failed'; kind?: ToolKind; detail?: string }>;
   result?: string;
   stoppable: boolean;
   stepCount: number;
@@ -258,7 +258,7 @@ export function reduce(state: RunState, evt: AgentEvent, now = Date.now()): RunS
         if (evt.status === 'running') {
           if (row.steps.some(step => step.stepId === evt.stepId)) return row;
           return { ...row, stepCount: row.stepCount + 1, steps: [...row.steps, { stepId: evt.stepId, title: evt.title,
-            status: evt.status }].slice(-5) };
+            status: evt.status, kind: evt.kind, detail: evt.detail }].slice(-5) };
         }
         return { ...row, steps: row.steps.map(step => step.stepId === evt.stepId
           ? { ...step, status: evt.status } : step) };

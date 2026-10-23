@@ -1,0 +1,228 @@
+import {beforeEach, expect, it, vi} from 'vitest';
+import {isValidElement, type ReactElement, type ReactNode} from 'react';
+import type {Agent, DesktopSnapshot, EnvironmentToolState, ToolState} from '@vonvon/protocol';
+import {ProviderManager, ProviderPreparation, ProviderSetup} from '../src/setup/ProviderSetup';
+import {WelcomeSetup} from '../src/setup/WelcomeSetup';
+
+type Provider = 'codex' | 'claude';
+type Element = ReactElement<Record<string, any>>;
+const harness = vi.hoisted(() => ({
+  state: [] as unknown[], index: 0, effectIndex: 0,
+  effects: [] as Array<{deps?: unknown[]}>, pending: [] as Array<() => void>,
+  canContinue: false, issue: '', bundled: false, cli: undefined as EnvironmentToolState | undefined,
+  installProvider: vi.fn(), installTool: vi.fn(async () => ({kind: 'applied', message: '已更新'})), connect: vi.fn(), verify: vi.fn(), read: vi.fn(), cancelInstall: vi.fn(),
+  request: vi.fn(async (request: {type: string}) => request.type === 'backendVersion'
+    ? {kind: 'backendVersion', latest: '1.1'} : {kind: 'applied', message: '已卸载'}),
+  onContinue: vi.fn(), onCreateBot: vi.fn(), onRegister: vi.fn(),
+}));
+vi.mock('react', async original => ({
+  ...await original<typeof import('react')>(),
+  useState: (initial: unknown) => {
+    const index = harness.index++;
+    if (!(index in harness.state)) harness.state[index] = initial;
+    return [harness.state[index], (next: unknown) => {harness.state[index] = typeof next === 'function' ? next(harness.state[index]) : next;}];
+  },
+  useEffect: (effect: () => void, deps?: unknown[]) => {
+    const index = harness.effectIndex++;
+    const prior = harness.effects[index]?.deps;
+    if (prior && deps && deps.length === prior.length && deps.every((value, at) => Object.is(value, prior[at]))) return;
+    harness.effects[index] = {deps};
+    harness.pending.push(effect);
+  },
+}));
+vi.mock('../src/client-context', () => ({useShellCapabilities: () => undefined}));
+vi.mock('../src/setup/useProviderSetup', () => ({useProviderSetup: (provider: Provider, snapshot: DesktopSnapshot) => ({
+  tool: snapshot.tools.find(item => item.tool === provider), tools: provider === 'claude' ? [harness.cli ?? {tool: 'claude', installation: 'managed', version: '1.0', latestVersion: '1.1', executable: '/managed/claude', canUninstall: true}] : [],
+  entry: {id: provider === 'claude' ? 'claude-agent' : 'codex-appserver', bundled: harness.bundled, installedVersion: '0.3.296', depState: snapshot.tools.find(item => item.tool === provider)?.installation === 'missing' ? 'missing' : 'installed', canUninstall: snapshot.tools.find(item => item.tool === provider)?.installation !== 'missing'},
+  check: harness.canContinue ? {state: 'ready', models: [{id: 'model-1', displayName: 'Model 1'}]} : undefined,
+  issue: harness.issue, working: false, activeInstall: undefined, relevantToolInstall: undefined,
+  activeLogin: undefined, activeCodexJob: undefined, canContinue: harness.canContinue,
+  installProvider: harness.installProvider, installTool: harness.installTool, connect: harness.connect, verify: harness.verify,
+  read: harness.read, cancelInstall: harness.cancelInstall,
+  request: harness.request,
+})}));
+vi.mock('../src/setup/BridgeImportPanel', () => ({BridgeImportPanel: () => <div data-testid="bridge-import">Bridge 导入</div>}));
+vi.mock('../src/setup/SetupChecklist', () => ({SetupChecklist: ({botsOnly}: {botsOnly?: boolean}) => <div data-testid="feishu-checks">{botsOnly ? '飞书配置检查' : '设置检查'}</div>}));
+
+function nodes(node: ReactNode): Element[] {
+  if (Array.isArray(node)) return node.flatMap(nodes);
+  if (!isValidElement<Record<string, any>>(node)) return [];
+  return [node, ...nodes(node.props.children), ...nodes(node.props.icon)];
+}
+const tool = (name: Provider, installation: ToolState['installation'], authentication: ToolState['authentication']): ToolState => ({tool: name, installation, authentication, version: installation === 'installed' ? '1.0' : null});
+const bot: Agent = {id: 'cli_existing' as Agent['id'], name: '已有 Bot', enabled: true, running: true, connection: 'connected', activation: 'active'};
+function snapshot(tools: ToolState[], agents: Agent[] = []): DesktopSnapshot {
+  return {revision: 1, observedAt: 1, stale: false, host: {kind: 'connected', ownership: 'owned', version: 'test'},
+    tools, agents, groups: [], memberships: [], jobs: [], application: {platform: 'macos', version: 'test', loginItem: false, dataPath: '/test'}};
+}
+const run = vi.fn(async () => ({kind: 'applied' as const, revision: 1}));
+function resetRender() {harness.index = harness.effectIndex = 0;}
+function renderManager(props: Parameters<typeof ProviderManager>[0]) {
+  resetRender();
+  const view = nodes(ProviderManager(props));
+  for (const effect of harness.pending.splice(0)) effect();
+  return view;
+}
+function button(all: Element[], label: string): Element {
+  const found = all.find(node => [node.props.children].flat().join('') === label && typeof node.props.onClick === 'function');
+  if (!found) throw new Error(`button ${label} missing`);
+  return found;
+}
+beforeEach(() => {
+  harness.state = []; harness.effects = []; harness.pending = []; harness.index = harness.effectIndex = 0; harness.canContinue = false; harness.issue = ''; harness.cli = undefined; harness.bundled = false;
+  vi.clearAllMocks();
+});
+
+it.each([
+  ['missing', 'unknown'], ['installed', 'unknown'], ['installed', 'signedOut'],
+] as const)('keeps scan unavailable while Provider is %s / %s', (installation, authentication) => {
+  const data = snapshot([tool('codex', installation, authentication)]);
+  const first = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onCreateBot: harness.onCreateBot, onOpenEnvironment: () => {}, onNotice: () => {}, codexJobs: null}));
+  expect(first.some(node => node.type === ProviderSetup)).toBe(true);
+  expect(first.some(node => node.props.children === '扫码创建 Bot')).toBe(false);
+  expect(first.some(node => node.props['data-testid'] === 'bridge-import')).toBe(false); // nested BridgeImportPanel remains reachable
+  expect(first.some(node => typeof node.type === 'function' && node.type.name === 'BridgeImportPanel')).toBe(true);
+  resetRender();
+  const card = nodes(ProviderPreparation({provider: 'codex', snapshot: data, ready: true, busy: false, run, onContinue: harness.onContinue}));
+  expect(button(card, '继续').props.disabled).toBe(true);
+  button(card, '继续').props.onClick();
+  expect(harness.onContinue).not.toHaveBeenCalled();
+  expect(harness.onCreateBot).not.toHaveBeenCalled();
+});
+
+it('changes Provider explicitly, then Continue opens Bot creation with the same Provider', () => {
+  const data = snapshot([tool('codex', 'installed', 'signedIn'), tool('claude', 'installed', 'signedIn')]);
+  resetRender();
+  let welcome = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onCreateBot: harness.onCreateBot, onOpenEnvironment: () => {}, onNotice: () => {}, codexJobs: null}));
+  const setup = welcome.find(node => node.type === ProviderSetup)!;
+  expect(setup).toBeTruthy();
+  resetRender();
+  let choices = nodes(ProviderSetup(setup.props as any));
+  const claude = choices.find(node => node.props['aria-pressed'] === false && node.props.children?.[1]?.props?.children === 'Claude');
+  expect(claude).toBeTruthy();
+  claude!.props.onClick();
+  resetRender();
+  choices = nodes(ProviderSetup(setup.props as any));
+  expect(choices.find(node => node.type === ProviderPreparation)?.props.provider).toBe('claude');
+  harness.canContinue = true;
+  resetRender();
+  const card = nodes(ProviderPreparation({...setup.props, provider: 'claude'} as any));
+  button(card, '继续').props.onClick();
+  resetRender();
+  welcome = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onCreateBot: harness.onCreateBot, onOpenEnvironment: () => {}, onNotice: () => {}, codexJobs: null}));
+  expect(welcome.some(node => node.props.children === '扫码创建 Bot')).toBe(true);
+  button(welcome, '扫码创建 Bot').props.onClick();
+  expect(harness.onCreateBot).toHaveBeenCalledWith('claude');
+  expect(harness.onRegister).not.toHaveBeenCalled();
+});
+
+it('keeps existing Bot Feishu checks and group action after Provider is ready', () => {
+  const data = snapshot([tool('codex', 'installed', 'signedIn')], [bot]);
+  resetRender();
+  const welcome = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onOpenGroups: () => {}, onOpenEnvironment: () => {}, onNotice: () => {}, codexJobs: null}));
+  expect(welcome.some(node => node.props.children === '选择群聊')).toBe(true);
+  expect(welcome.some(node => node.type.name === 'SetupChecklist' && node.props.botsOnly)).toBe(true);
+  expect(welcome.some(node => node.type.name === 'BridgeImportPanel')).toBe(true);
+});
+
+it('keeps Provider management entry, version, update and owned uninstall actions available', async () => {
+  const data = snapshot([tool('codex', 'installed', 'signedIn'), tool('claude', 'installed', 'signedIn')]);
+  const manager = renderManager({snapshot: data, ready: true, busy: false, run});
+  expect(manager.filter(node => node.props.className === 'provider-list-row')).toHaveLength(2);
+  resetRender();
+  const detail = nodes(ProviderPreparation({provider: 'claude', snapshot: data, ready: true, busy: false, run, management: true}));
+  button(detail, '更新 SDK').props.onClick();
+  expect(harness.installProvider).toHaveBeenCalledWith(true);
+  button(detail, '检查版本').props.onClick();
+  expect(harness.request).toHaveBeenCalledWith({type: 'backendVersion', id: 'claude-agent'});
+  button(detail, '卸载 SDK').props.onClick();
+  resetRender();
+  const confirm = nodes(ProviderPreparation({provider: 'claude', snapshot: data, ready: true, busy: false, run, management: true})).find(node => node.props.title === '卸载 Claude Agent SDK');
+  expect(confirm?.props.open).toBe(true);
+  confirm!.props.onConfirm();
+  await Promise.resolve();
+  expect(harness.request).toHaveBeenCalledWith({type: 'backendUninstall', id: 'claude-agent'});
+  expect(detail.some(node => node.props.children === '模型来源')).toBe(true);
+});
+
+it('switches a visible Codex detail to Claude when search reveals Claude in the same Provider page', () => {
+  const data = snapshot([tool('codex', 'installed', 'signedIn'), tool('claude', 'installed', 'signedIn')]);
+  const props = {snapshot: data, ready: true, busy: false, run};
+  let view = renderManager({...props, reveal: 'codex'});
+  expect(view.find(node => node.type === ProviderPreparation)?.props.provider).toBe('codex');
+  view = renderManager({...props, reveal: 'claude'});
+  // React applies the reveal effect after this render; the next render must use the new choice.
+  view = renderManager({...props, reveal: 'claude'});
+  expect(view.find(node => node.type === ProviderPreparation)?.props.provider).toBe('claude');
+});
+
+it('keeps Claude CLI management inside its details with update, auth check and owned uninstall', async () => {
+  const data = snapshot([tool('claude', 'installed', 'signedIn')]);
+  resetRender();
+  let detail = nodes(ProviderPreparation({provider: 'claude', snapshot: data, ready: true, busy: false, run, management: true}));
+  expect(detail.some(node => node.type === 'summary' && [node.props.children].flat().join('') === 'Claude Code · 已安装')).toBe(true);
+  button(detail, '更新 Claude Code').props.onClick();
+  expect(harness.installTool).toHaveBeenCalledWith('claude', true);
+  button(detail, '检查授权').props.onClick();
+  expect(harness.request).toHaveBeenCalledWith({type: 'authStatus', tool: 'claude'});
+  button(detail, '卸载 Claude Code 托管副本').props.onClick();
+  resetRender();
+  detail = nodes(ProviderPreparation({provider: 'claude', snapshot: data, ready: true, busy: false, run, management: true}));
+  const confirm = detail.find(node => node.props.title === '卸载 Claude Code 托管副本');
+  expect(confirm?.props.open).toBe(true);
+  confirm!.props.onConfirm();
+  await Promise.resolve();
+  expect(harness.request).toHaveBeenCalledWith({type: 'uninstall', tool: 'claude'});
+});
+
+
+it('keeps a detected Claude Code CLI separate from the missing Agent SDK', () => {
+  const data = snapshot([tool('claude', 'missing', 'signedIn')]);
+  const manager = renderManager({snapshot: data, ready: true, busy: false, run});
+  expect(manager.some(node => node.props.children === '缺少运行组件')).toBe(true);
+  resetRender();
+  const detail = nodes(ProviderPreparation({provider: 'claude', snapshot: data, ready: true, busy: false, run, management: true, onContinue: harness.onContinue}));
+  expect(detail.some(node => node.type === 'strong' && [node.props.children].flat().join('') === '安装 Claude Agent SDK')).toBe(true);
+  expect(detail.some(node => node.type === 'summary' && [node.props.children].flat().join('') === 'Claude Code · 已安装')).toBe(true);
+  expect(detail.some(node => node.type === 'dd' && node.props.children === '/managed/claude')).toBe(true);
+  expect(detail.some(node => node.type === 'dd' && node.props.children === '1.0')).toBe(true);
+  expect(button(detail, '继续').props.disabled).toBe(true);
+  button(detail, '安装 SDK').props.onClick();
+  expect(harness.installProvider).toHaveBeenCalledWith(false);
+  expect(harness.installTool).not.toHaveBeenCalled();
+  button(detail, '更新 Claude Code').props.onClick();
+  expect(harness.installTool).toHaveBeenCalledWith('claude', true);
+});
+
+
+it('describes an undetected Claude Code CLI without conflating it with SDK readiness', () => {
+  harness.cli = {tool: 'claude', installation: 'missing', version: null, executable: null, canUninstall: false};
+  const data = snapshot([tool('claude', 'installed', 'signedIn')]);
+  resetRender();
+  const detail = nodes(ProviderPreparation({provider: 'claude', snapshot: data, ready: true, busy: false, run, management: true}));
+  expect(detail.some(node => node.type === 'summary' && [node.props.children].flat().join('') === 'Claude Code · 未检测到')).toBe(true);
+  button(detail, '更新 SDK').props.onClick();
+  expect(harness.installProvider).toHaveBeenCalledWith(true);
+  button(detail, '安装 Claude Code').props.onClick();
+  expect(harness.installTool).toHaveBeenCalledWith('claude', false);
+});
+
+it('bundled Claude starts with account connection, keeps CLI management and has no SDK install actions', () => {
+  harness.bundled = true;
+  const data = snapshot([tool('claude', 'installed', 'signedOut')]);
+  resetRender();
+  const detail = nodes(ProviderPreparation({provider: 'claude', snapshot: data, ready: true, busy: false, run, management: true, onContinue: harness.onContinue}));
+  expect(detail.filter(node => node.props.className === 'provider-step')).toHaveLength(1);
+  expect(detail.some(node => node.type === 'strong' && node.props.children === '连接账号')).toBe(true);
+  expect(detail.some(node => node.type === 'dd' && node.props.children === '应用内置 · 随应用更新')).toBe(true);
+  expect(detail.some(node => node.type === 'dd' && node.props.children === '0.3.296')).toBe(true);
+  for (const label of ['安装 SDK', '更新 SDK', '卸载 SDK', '检查版本']) {
+    expect(detail.some(node => node.props.children === label && typeof node.props.onClick === 'function')).toBe(false);
+  }
+  button(detail, '连接').props.onClick();
+  expect(harness.connect).toHaveBeenCalledOnce();
+  button(detail, '更新 Claude Code').props.onClick();
+  expect(harness.installTool).toHaveBeenCalledWith('claude', true);
+  expect(button(detail, '继续').props.disabled).toBe(true);
+  expect(harness.installProvider).not.toHaveBeenCalled();
+});

@@ -17,7 +17,13 @@ extraResources:
   - from: stage/daemon
     to: daemon
     filter:
-      - "**/*"
+      - "dist/**/*"
+      - "bin/**/*"
+      - "package.json"
+      - "LICENSE*"
+      - "NOTICE"
+      - "PROVENANCE.md"
+      - "import-core.json"
   - from: stage/ui
     to: ui/dist
     filter:
