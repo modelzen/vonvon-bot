@@ -64,16 +64,11 @@ export function MachinePanel({request, agents, reveal, macos = false}: {request:
       : !status.service.installed);
 
   return <>
-    <SettingsGroup id={settingAnchor('命令行工具')} label="命令行工具" footer="安装后在新终端输入 vonvon。">
-      <SettingsRow title="vonvon" description={!shell?.repairCli ? '修复功能由桌面版提供。' : status?.cli.kind==='error'?status.cli.message:status?.cli.bin??'正在检查…'}
-        value={!status ? message ? '状态未知' : '正在检查…' : status.cli.kind==='ready'?'已安装':'需要修复'}
-        trailing={<Button size="sm" disabled={busy || !shell?.repairCli} onClick={() => {if (shell?.repairCli) void runShell(shell.repairCli);}}>修复</Button>} />
-    </SettingsGroup>
     <SettingsGroup id={settingAnchor('daemon 运行')} label="daemon 运行" action={<Button size="sm" disabled={busy} onClick={() => void run({type: 'status'})}>刷新状态</Button>}>
       <SettingsRow title="运行方式"
         description={status?.host?.ownership === 'attached' ? '当前由外部服务管理。' : '接收飞书消息并运行 Bot。'}
         value={!status ? '状态未知' : status.host ? (status.host.ownership === 'owned' ? '桌面管理' : '外部服务') : '已停止'} />
-      <SettingsRow title="daemon 服务" description={!shell?.startHost ? '启动功能由桌面版提供；命令行：vonvon daemon start。停止服务可能中断正在进行的 Bot 任务。' : '停止服务可能中断正在进行的 Bot 任务。'}
+      <SettingsRow title="daemon 服务" description={!shell?.startHost ? '启动功能由桌面版提供。停止服务可能中断正在进行的 Bot 任务。' : '停止服务可能中断正在进行的 Bot 任务。'}
         trailing={<span className="settings-inline-actions">
           <Button size="sm" disabled={busy || !!status?.host || !shell?.startHost} onClick={() => {if (shell?.startHost) void runShell(shell.startHost);}}>启动 daemon</Button>
           <Button size="sm" disabled={busy || status?.host?.ownership !== 'owned'} onClick={() => setConfirm({type: 'stopHost'})}>停止 daemon</Button>
@@ -81,17 +76,17 @@ export function MachinePanel({request, agents, reveal, macos = false}: {request:
       {status?.temporaryAgent && <SettingsRow title="临时运行 Bot" description="默认 Bot 选择未改变。" value={status.temporaryAgent} />}
     </SettingsGroup>
 
-    <SettingsGroup id={settingAnchor('后台服务')} label="后台服务" footer={macos ? '开启「登录电脑时启动」后，退出 App 仍可运行 Bot。' : '在终端运行 vonvon service install，装成 systemd 用户服务，崩溃后自动重启。'}>
+    <SettingsGroup id={settingAnchor('后台服务')} label="后台服务" footer={macos ? '开启「登录电脑时启动」后，退出 App 仍可运行 Bot。' : '后台服务可在应用退出后继续运行 Bot。'}>
       <SettingsRow title="系统服务" description={service ? service.platformName : '正在读取服务状态…'}
         value={service && (service.state ? SERVICE_STATE_TEXT[service.state] : `${service.installed ? '已安装' : '未安装'} · ${service.running ? '运行中' : '已停止'}`)} />
-      <SettingsRow title="服务运行" description={!shell?.service ? '桌面版提供；命令行：vonvon daemon start / stop。' : '已安装的服务可单独启动或停止。'}
+      <SettingsRow title="服务运行" description={!shell?.service ? '请在桌面版中启动或停止服务。' : '已安装的服务可单独启动或停止。'}
         trailing={<span className="settings-inline-actions">
           <Button size="sm" disabled={busy || !shell?.service || serviceDisabled('start')} onClick={() => setConfirm({type: 'service', action: 'start'})}>启动服务</Button>
           <Button size="sm" disabled={busy || !shell?.service || serviceDisabled('stop')} onClick={() => setConfirm({type: 'service', action: 'stop'})}>停止服务</Button>
         </span>} />
       <details ref={advanced} className="settings-disclosure">
         <summary>高级</summary>
-        <SettingsRow title="仅运行指定 Bot" description={!shell?.startHost ? '启动功能由桌面版提供；命令行临时运行：vonvon daemon run --bot <Bot ID>。' : '临时运行前需停止当前 daemon。此操作不会修改默认启用列表。'}
+        <SettingsRow title="仅运行指定 Bot" description={!shell?.startHost ? '请在桌面版中选择要临时运行的 Bot。' : '临时运行前需停止当前 daemon。此操作不会修改默认启用列表。'}
           trailing={<span className="settings-inline-actions">
             <select aria-label="临时运行的 Bot" value={bot} onChange={event => setBot(event.target.value)} disabled={busy}>
               <option value="">选择 Bot</option>

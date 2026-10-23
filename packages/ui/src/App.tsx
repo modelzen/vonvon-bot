@@ -850,7 +850,7 @@ function DesktopApp() {
                 <LoginServiceRow application={snapshot.application} busy={busy} onToggle={enabled => void runShell(async () => setNotice({message: await toggleService(enabled, client, shell), error: false}))}/>
               </SettingsGroup>
               <UpdatePanel request={client.machine} attached={host.kind === 'connected' && host.ownership === 'attached'}/>
-              <details className="today-advanced-settings"><summary>高级运行设置<span>命令行、后台服务与执行程序</span><ChevronRight size={14} aria-hidden="true"/></summary><div>
+              <details className="today-advanced-settings"><summary>高级运行设置<span>后台服务与执行程序</span><ChevronRight size={14} aria-hidden="true"/></summary><div>
                 <MachinePanel reveal={searchTarget?.reveal} request={client.machine} agents={snapshot.agents} macos={snapshot.application.platform === 'macos'}/>
                 <SettingsPanel scope="host" target={{ kind: "host" }} />
               </div></details>

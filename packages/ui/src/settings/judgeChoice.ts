@@ -68,5 +68,5 @@ export function judgeKeyNotice(selection: JudgeSelectionView | undefined, decisi
   const service = decisionModels?.find(service => service.provider === selection.provider);
   if (!service) return;
   if (service.keyUnreadable) return {title: '读不了密钥库', text: `看不出填没填 ${service.displayName} 的 key，读得了之前${MEANWHILE}。`};
-  if (!service.keySet) return {title: '还没填 key', text: `还没填 ${service.displayName} 的 key，填之前${MEANWHILE}。在密钥页填，或者在终端运行 vonvon secrets set ${service.keyId}，按提示粘贴。`};
+  if (!service.keySet) return {title: '还没填 key', text: `还没填 ${service.displayName} 的 key，填之前${MEANWHILE}。请在决策模型页添加密钥。`};
 }

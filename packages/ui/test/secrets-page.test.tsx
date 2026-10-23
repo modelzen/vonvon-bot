@@ -211,7 +211,7 @@ describe('the key row', () => {
     expect(uses).toContain('2 个 Bot · 3 个飞书群');
     expect(text(html(<UsesRow service={service({inUse: []})} view={view(service({inUse: []}))}/>))).toBe('');
     const unread = text(html(<UsesRow service={service({inUse: []})} view={view(service({inUse: []}), {botsUnreadable: true, unreadBots: 2})}/>));
-    expect(unread).toContain('Bot 清单（bots.json）读不了，谁选了它没算进来；vonvon daemon logs 里的 secrets.bots-unreadable 有原因。');
+    expect(unread).toContain('Bot 清单（bots.json）读不了，谁选了它没算进来；请在日志中查看 Bot 清单读取失败的原因。');
     expect(unread).toContain('有 2 个 Bot 的设置读不了，没算进来');
     expect(unread).toContain('Bot 清单读不了');
   });
@@ -433,13 +433,13 @@ describe('the removal', () => {
     expect(dialog(service({inUse: []}))).toContain('现在没有 Bot 或飞书群选它，删了不影响任何群。');
     // what could not be read is said once, with where the log says why
     const unread = dialog(service({inUse: []}), view(service({inUse: []}), {botsUnreadable: true}));
-    expect(unread).toContain('Bot 清单读不了，不知道谁选了它；vonvon daemon logs 里的 secrets.bots-unreadable 有原因。选了它的飞书群删了以后要判断的消息按出错处理');
+    expect(unread).toContain('Bot 清单读不了，不知道谁选了它；请在日志中查看 Bot 清单读取失败的原因。选了它的飞书群删了以后要判断的消息按出错处理');
     expect(unread.match(/读不了/g)).toHaveLength(1);
     const some = dialog(service({inUse: []}), view(service({inUse: []}), {unreadBots: 1}));
-    expect(some).toContain('有 1 个 Bot 的设置读不了，不知道它们选没选它；vonvon daemon logs 里的 secrets.bot-unreadable 有原因。选了它的');
+    expect(some).toContain('有 1 个 Bot 的设置读不了，不知道它们选没选它；请在日志中查看 Bot 设置读取失败的原因。选了它的');
     expect(some.match(/读不了/g)).toHaveLength(1);
     // with some listed, the note stays under the lists
-    expect(dialog(service(), view(service(), {unreadBots: 1}))).toContain('有 1 个 Bot 的设置读不了，没算进来；vonvon daemon logs 里的 secrets.bot-unreadable 有原因。');
+    expect(dialog(service(), view(service(), {unreadBots: 1}))).toContain('有 1 个 Bot 的设置读不了，没算进来；请在日志中查看 Bot 设置读取失败的原因。');
     const invalid = dialog(service({status: 'invalid', last4: undefined}));
     expect(invalid).toContain('存着的这串不能用，现在已经按没填处理。只删本机存的这一份。');
     expect(invalid).toContain('存着的这串不能用，下面这些现在已经按没填处理，删了也一样；重新填就恢复。');

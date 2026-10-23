@@ -277,11 +277,10 @@ export function SecretsPanel({onOpenLogs, onOpenApplication}: {onOpenLogs: () =>
   } else if (read.kind === 'failed') {
     body = <InlineNotice tone="danger" title="密钥读取失败">{read.problem}</InlineNotice>;
   } else {
-    const services = view?.services;
     body = <>
       {read.kind === 'ready' && read.problem && <InlineNotice tone="warning" title="未能刷新密钥">{`${read.problem}。保留上次读取的内容。`}</InlineNotice>}
       <SettingsGroup label="模型服务" id={settingAnchor('决策模型')}
-        footer={<>密钥由所有 Bot 共用。Codex 和 Claude 使用各自的本机登录。<details className="secrets-cli-help"><summary>通过命令行管理密钥</summary><p><code>vonvon secrets list</code>{(services ?? []).map(service => <span key={service.keyId}>、<code>vonvon secrets set {service.keyId}</code>（按提示粘贴，不回显）、<code>vonvon secrets remove {service.keyId}</code></span>)}</p></details></>}>
+        footer="密钥由所有 Bot 共用。Codex 和 Claude 使用各自的本机登录。">
         {!view ? <SettingsRow title="正在读取…"/>
           : !view.services.length ? <SettingsRow title="暂无需要密钥的服务"/>
             : view.services.map(service => <Fragment key={service.keyId}>
