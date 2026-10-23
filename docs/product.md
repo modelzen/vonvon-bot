@@ -470,7 +470,7 @@ bot 自己开的话题（比如上面主区例子里的「订单接口 500」）
 | 其余工作区和仓库 | `runtimeWorkspaceRoots`（实验字段）加逐路径的读写权限 | `additionalDirectories` 加沙箱的根列表。只读档把每个根（cwd 和附加的）都列进沙箱的 `denyWrite`：只列 cwd 时，Bash 能写附加的根，还能在里面提交；都列上后哪个根都写不进（e04b，Mac 上单次实测） |
 | skill 和 MCP（能力包） | `thread/start` 的 `selectedCapabilityRoots`（实验字段）指向能力包：按会话生效，带 MCP，恢复后保留，不用也没法重传；只能在 `thread/start` 给，要插件清单，只在 0.163.0 测过（第 9 节第 21 项）。替换原来进程级的 `skills/extraRoots/set`。会话层禁掉用户自己的 skill | `plugins: [{type:'local', path}]` 指向同一个能力包，起会话和恢复时都传；加 `skills` 白名单 |
 | 记忆所在的目录 | 不给 agent：记忆和角色设定只由 daemon 写，agent 经 memory 工具或隐藏块提出（3.6），数据目录里的 `library/` 和 bot 目录限读（第 9 节第 20 项） | 同左：不进 `additionalDirectories`，不进沙箱可写目录，`canUseTool` 不对它放行 |
-| 各个根里两家的配置文件（见上） | 只读、读写档在权限配置里按路径设成只读 | 只读、读写档用沙箱的 `filesystem.denyWrite` 加 `Edit(//…)` 拒绝规则（写绝对路径） |
+| 各个根里两家的配置文件（见上） | 只读、读写档在权限配置里按路径设成只读；Linux 只加已存在的路径，原本没有的 `.mcp.json`、`.claude/` 配置可新建（s31e） | 只读、读写档用沙箱的 `filesystem.denyWrite` 加 `Edit(//…)` 拒绝规则（写绝对路径） |
 | 会话层的 MCP | 会话配置的 `mcp_servers`：用户全局的 MCP 在这里写 `enabled: false` 关掉（实测，e05）。读写档（`feishu` 权限配置）下不配 `default_tools_approval_mode: "approve"` 时，调用被拒过一次（0.162.1）；只读档和完全访问档没测，能力包里的 MCP 也没测（第 9 节第 21 项） | `mcpServers`：今天 bot 的会话不传，只有辅助查询传空对象（`D/agent/claude-agent/backend.ts:104`） |
 
 - 实验字段的风险：Codex.app 会自己升级，字段改名或删掉时，多工作区和 skill 隔离会悄悄失效。所以第一版定 Codex 的最低版本；调用实验字段失败时直接报错，不悄悄退回单目录。Codex 对拼错的字段名和配置键不报错，直接忽略，所以生没生效由 vonvon 自己核对：`runtimeWorkspaceRoots` 看回包里的回显，MCP 看 `mcpServerStatus/list`（会话层信任时它不列主工作区项目配置里的 MCP，`docs/research/2026-10-16-bot-home/multi-workspace.md` 3.2），skill 看 `skills/list`，对不上就报错（e05）。
@@ -594,7 +594,7 @@ s31 起 Claude 通过 `canUseTool` 接上选项题、计划确认和完全访问
   - 各个根里两家的配置文件（3.6）在读写档下用拒绝规则挡：e02、e03b 测到 `.claude/` 下和 `.mcp.json` 的 Write 在 `acceptEdits` 下也走回调；加了拒绝规则后不进回调、直接被拒（e03b，只测了主工作区）。
 - Codex 三档都保留 `never`：模型知道不能申请，就不会白白尝试。`never` 下没有标成只读的 MCP 工具会被拒（`approval-ux.md` 1.5），vonvon 自己的 MCP 要配 `approve`（第 9 节第 2 项）。
 - 中途改档不用重开会话：Codex 每一轮的 `turn/start` 能带新的设置，Claude 运行中能 `setPermissionMode`，升档降档都是下一轮生效（实测，e02 第 3 节）。升到完全访问要求会话启动时带 `allowDangerouslySkipPermissions`，所以每条会话启动时都带上；resume 不恢复上次的档（`settingSources` 为空时测的），每次都明确传。Codex 一半还是推断。
-- Linux 上 Codex 的只读、读写档今天直接拒绝启动（`D/agent/codex-appserver/backend.ts` 的 `sandboxParams`），所以 Linux 上的 Codex 只能用完全访问，界面写明。被拉进的已有群默认只读，在 Linux 上用 Codex 时起不来：bot 回一句说明，等主人在设置里明确改成完全访问，不自动放开。（s20b 已改）
+- Linux 上 Codex 0.163.0 及以上支持只读、工作区可写：会话权限 profile 放开 Codex 安装目录的只读访问，工作区以外的文件读不到。低版本或测不出版本时，前两档置灰并说明原因；不自动改成完全访问。Linux 只给已经存在的受保护路径加只读条目，原本没有的 `.mcp.json`、`.claude/` 配置能被新建；Codex 自己的原生保护仍阻止新建 `.codex/rules` 和 `.codex/config.toml`（0.163.0 实测，s31e）。工作区外的写入不会留到电脑上。
 
 **完全访问下还会问什么。** 不问权限。Claude 自己在任何模式下都会停下来问的少数几类，照样发卡问，和 Claude 自己的行为一致，比如用户在自己的 Claude 设置里写了"这类操作必须问"、删除关键目录（`approval-ux.md` 2.2）。这种卡只有主人和管理员能点，15 分钟没人点按拒绝。只读、读写两档下，这几类直接拒绝。实测里 `bypassPermissions` 下，没有规则时只有 AskUserQuestion 走到回调，写 `.claude/` 下的文件也直接放行（e02 第 1 节）。规则在 Mac 上测了项目设置里的（e03b，SDK 0.3.296，`settingSources: ['user', 'project']`，单次）：Bash 命中 ask 规则时进回调，放行后照常执行；命中 deny 规则直接被拒，不进回调；普通 Bash 不进回调。s31 在 Linux SDK 0.3.296 实测：项目和隔离用户层的 Bash ask、Edit ask 均进回调并标成 `rule`；删除临时工作区根进 `safetyCheck` 回调（实测拒绝），普通子目录删除不进回调。读写档的 `.claude/rules/`、`.mcp.json` 敏感路径提示同样是 `safetyCheck`，按真实路径判断后放行；完全访问档它们不进回调。这里只报告实测范围，不承诺每一种删除都要确认。`docs/plans/s31.md` 第 6.2 节的 Mac 补验已完成，见 `docs/v1-plan.md` 的 s31 Mac 补验记录；删除工作区根与敏感路径的本轮专项证据来自 Linux。
 
@@ -686,7 +686,7 @@ owner 说过"崩溃报错就好了"，让 Claude 斟酌。自动重启是 Claude
 - `vonvon open --print`：打印链接、端口和一行 `ssh -L` 示例，并提醒链接里带着凭据，别贴给别人。今天没有图形界面时 `vonvon open` 会失败（`D/cli/commands/open.ts:24`）。（s20a 已改）
 - 界面在 Linux 上会显示成"这台 Windows 电脑"（`D/server/snapshot.ts:29`、`packages/ui/src/App.tsx:861-865`），要改。（s20a 已改）
 - Linux 上不显示"登录时启动"开关。
-- 第一版不做 Linux 上从 bridge 自动导入。Linux 上的 Codex 只能用完全访问（3.8）。
+- 第一版不做 Linux 上从 bridge 自动导入。Linux 上 Codex 0.163.0 以上可用只读、工作区可写（3.8）。
 
 **暂停的 PR。** 都关闭，有用的代码搬进新的后台服务 PR：
 - #285（V5 的启动路由：拿锁前检查，`daemon start` 改走服务管理器）：它的约 120 行源码和测试搬过去，删掉 Windows 的部分，修好 issue #287（持锁的进程崩溃后，PID 被无关进程复用，会被误判成"已经有 daemon 在跑"，服务从此不再重试）。
@@ -724,7 +724,7 @@ owner 说过"崩溃报错就好了"，让 Claude 斟酌。自动重启是 Claude
 - 空闲超时默认从 120 秒改成 10 分钟（`D/config/schema.ts:318`）。等人回答选项卡、确认卡时看门狗暂停（3.8）。卡片分清"没输出"和"网络失败"，给重试按钮。bridge 用户说的"超时"大多是这个看门狗。
 - 群里允许使用 bot 的成员都能领取文件。今天只有发起人能领（bridge issue #43）。
 - 预填的应用名"Codex Bridge"、残留的 bridge 命令名和链接全部改掉（`D/bot/wizard.ts:59-62`）。
-- 云文档评论 @bot 的会话：沿用"每篇文档一个目录"，带角色设定和 Bot 记忆的“合作方式”分支，“关于你”“团队和人”不带，不带项目记忆，不解析隐藏块（回复挂在文档里，所有读者可见）。权限能设，和群一样三档加高级设置（3.8，2026-10-23 起联网跟着档走，没有单独的网络开关），和后端、模型一起放在评论设置里；没设时跟 bot 默认的档（今天 bot 默认是工作区可写，和私聊一样）。今天的代码不传档位，等于完全访问。Linux 上用 Codex 时只能完全访问，照 3.8 处理：只读、读写档起不来，在评论里回一句说明，等主人明确改成完全访问，不自动放开。评论没单独设档、bot 默认又是读写时，Linux 上用 Codex 的每条评论都只回这句说明，改评论设置或把 bot 默认改成完全访问都行。能设是 owner 2026-10-18 定的；默认值 Claude 先定、owner 同日确认，理由和私聊默认读写一样（第 11 节，`docs/v1-plan.md` 第 5 节）。
+- 云文档评论 @bot 的会话：沿用"每篇文档一个目录"，带角色设定和 Bot 记忆的“合作方式”分支，“关于你”“团队和人”不带，不带项目记忆，不解析隐藏块（回复挂在文档里，所有读者可见）。权限能设，和群一样三档加高级设置（3.8，2026-10-23 起联网跟着档走，没有单独的网络开关），和后端、模型一起放在评论设置里；没设时跟 bot 默认的档（今天 bot 默认是工作区可写，和私聊一样）。今天的代码不传档位，等于完全访问。Linux 上用 Codex 时，0.163.0 以上可用前两档；版本太旧或测不出时照 3.8 回说明，等主人升级或换档，不自动放开。能设是 owner 2026-10-18 定的；默认值 Claude 先定、owner 同日确认，理由和私聊默认读写一样（第 11 节，`docs/v1-plan.md` 第 5 节）。
 - 咖啡一下（把本机 Claude Code、Codex CLI 的审批转到飞书私聊）第一版拿掉：界面、私聊设置和 daemon 里的代码都删，owner 2026-10-15 说用不上。迁移时卸掉 bridge 装的 hook，见第 5 节。
 
 ## 4. 私聊

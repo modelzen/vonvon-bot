@@ -11,7 +11,7 @@ vi.mock('../src/agent/codex-appserver/client-pool', async importOriginal => ({
   ...await importOriginal<typeof import('../src/agent/codex-appserver/client-pool')>(),
   takeWarmClient: rpc.take, refillWarmPool: rpc.refill, connectGated: vi.fn(),
 }));
-vi.mock('../src/agent/codex-appserver/locate', () => ({ resolveCodexBin: () => '/fake/codex', codexVersionAsync: vi.fn() }));
+vi.mock('../src/agent/codex-appserver/locate', () => ({ resolveCodexBin: () => '/fake/codex', codexVersionAsync: vi.fn(async () => 'codex-cli 0.163.0'), cachedCodexVersion: () => undefined }));
 const profile: SessionProfile = {
   instructions: 'Preserve these instructions', env: { SESSION_TEST: 'yes' }, nativeSettings: { automaticMemory: false },
   additionalRoots: [{ path: '/repo2', access: 'write' }, { path: '/reference', access: 'read' }], capabilityPackages: [], mcpServers: [],
@@ -46,7 +46,7 @@ for (const mode of ['qa', 'write', 'full'] as const) {
       const backend = new CodexAppServerBackend();
       const thread = action === 'start' ? await backend.startThread(options(mode))
         : await backend.resumeThread({ ...options(mode), sessionId: 'test-thread' });
-      const params = codexSessionParams(options(mode));
+      const params = codexSessionParams(options(mode), 'codex-cli 0.163.0');
       expect(rpc.request).toHaveBeenCalledWith(`thread/${action}`, { ...params, ...(action === 'resume' ? { threadId: 'test-thread' } : {}) });
       expect(params).toMatchObject({ runtimeWorkspaceRoots: ['/workspace', '/repo2', '/reference'], developerInstructions: expect.stringContaining(profile.instructions) });
       expect(params).toMatchObject({ config: { shell_environment_policy: { set: { SESSION_TEST: 'yes' } } } });
@@ -56,7 +56,7 @@ for (const mode of ['qa', 'write', 'full'] as const) {
       } else {
         for (const path of ['/workspace', '/repo2', '/reference']) {
           expect(params).toMatchObject({ config: { permissions: { feishu: { filesystem: {
-            [path]: { '.': mode === 'qa' || path === '/reference' ? 'read' : 'write', ...Object.fromEntries(CODEX_PROTECTED_PATHS.map(target => [target, 'read'])) },
+            [path]: { '.': mode === 'qa' || path === '/reference' ? 'read' : 'write', ...(process.platform === 'linux' ? {} : Object.fromEntries(CODEX_PROTECTED_PATHS.map(target => [target, 'read']))) },
           } } } } });
         }
         expect(params).toMatchObject({ config: { permissions: { feishu: { filesystem: { ':workspace_roots': { '.': 'read' }, '/private/tmp': { '.': 'read' }, '/private/var/tmp': { '.': 'read' } } } } } });
@@ -95,10 +95,10 @@ describe('native echo admission releases refused clients', () => {
 
 it('rejects restricted platforms and conflicting/nested roots before acquiring a process', async () => {
   const backend = new CodexAppServerBackend();
-  vi.mocked(fullOnly.codexConfinesReads).mockReturnValue(false);
-  await expect(backend.startThread(options())).rejects.toThrow('只能用完全访问');
+  const refusal = vi.spyOn(fullOnly, 'codexTierUnavailable').mockReturnValue('测不出 Codex 的版本');
+  await expect(backend.startThread(options())).rejects.toThrow('版本');
   expect(rpc.take).not.toHaveBeenCalled();
-  vi.mocked(fullOnly.codexConfinesReads).mockReturnValue(true);
+  refusal.mockRestore();
   for (const roots of [
     [{ path: '/workspace', access: 'read' }],
     [{ path: '/workspace/.claude/skills/injected', access: 'write' }],

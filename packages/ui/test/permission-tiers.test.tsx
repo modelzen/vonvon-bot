@@ -9,7 +9,7 @@ import {SettingChoices} from '../src/settings/SettingChoices';
 import {permissionValue} from './permission-fixture';
 
 const client = createClient({ isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {} });
-const REASON = "Linux 上的 Codex 暂时只能用完全访问，没有沙箱。";
+const REASON = "这台电脑上的 Codex 版本太旧（0.162.0），只读和工作区可写要 0.163.0 以上，升级后就能选。";
 const section = <T,>(stored: T) => ({ stored, effective: stored, revision: "r", access: { kind: "writable" as const }, apply: [] });
 const view = (permission = permissionValue('qa'), fullOnly?: string): ProjectSettingsView => ({
   scope: { kind: "project", botId: "cli_fixture" as ProjectSettingsView["scope"]["botId"], projectName: "demo" },

@@ -61,7 +61,7 @@ describe('provider 权限表', () => {
     expect(generic.backend).toBe('fixture-provider');
     expect(generic.tiers(mac).map(info => info.native)).toEqual(['', '', '']);
     expect(codex.strength(mac)).toBe('系统沙箱管住命令的读、写和联网：工作区以外的文件读不到，也改不了。');
-    expect(codex.strength({ platform: 'linux', fullOnly: '原因' })).toBe('Linux 上的 Codex 暂时只能用完全访问，没有沙箱。');
+    expect(codex.strength({ platform: 'linux', fullOnly: '原因' })).toBe('原因');
     expect(claude.strength(mac)).toBe('只读、工作区可写档下，命令和读写文件的工具都挡得住 vonvon 存的别的群、别的项目、私聊的资料（包括记忆）；工作区和 bot 的 skill 读得到。');
     expect(claude.strength({ platform: 'linux' })).toContain('会话开着时新建的群、项目、bot 目录，命令读得到');
     expect(claude.strength(mac)).not.toContain('目录名看得到');
@@ -79,6 +79,20 @@ describe('provider 权限表', () => {
     expect(tableEnv({}, 'darwin')).toEqual({ platform: 'darwin' });
     expect(tierInfo(codex, mac, 'write')).toEqual(codex.tiers(mac)[1]);
   });
+});
+
+it('Linux 原生沙箱按版本开放权限，并说明不存在配置路径的保护范围', () => {
+  const supported = { platform: 'linux', codexVersion: 'codex-cli 0.163.0' } as const;
+  expect(codex.tiers(supported).map(row => row.unavailable)).toEqual([undefined, undefined, undefined]);
+  expect(codex.strength(supported)).toContain('工作区里原来没有的 .mcp.json、.claude/ 这类配置，能被新建。');
+  for (const codexVersion of ['codex-cli 0.162.0', 'codex-cli 0.163.0-alpha.1', null]) {
+    const rows = codex.tiers({ platform: 'linux', codexVersion });
+    const reason = codexVersion === null ? '测不出 Codex 的版本' : '0.163.0 正式版以上';
+    expect(rows[0].unavailable).toContain(reason);
+    expect(rows[1].unavailable).toContain(reason);
+    if (codexVersion) expect(rows[0].unavailable).toContain(codexVersion);
+    expect(rows[2].unavailable).toBeUndefined();
+  }
 });
 
 describe('Codex 自定义', () => {

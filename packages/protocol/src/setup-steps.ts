@@ -141,15 +141,12 @@ function claudeStep(tool: ToolState | undefined, checking = false): SetupStep {
 /** Linux only (s20a): what the qa and write modes need, under the tools. Neither step counts toward 还差几步 or 可以用了,
  * and neither changes a mode or a system setting: they explain and give the commands. A missing tool has no step. */
 export function linuxSteps(tools: readonly ToolState[]): SetupStep[] {
-  const codex = tools.find(tool => tool.tool === 'codex');
   const claude = tools.find(tool => tool.tool === 'claude');
   const steps: SetupStep[] = [];
-  if (codex && codex.installation !== 'missing') steps.push({id: 'codex-linux', title: 'Codex 的权限', status: '只能用完全访问', tone: 'neutral', done: true, detail: CODEX_LINUX, actions: []});
   if (claude && claude.installation !== 'missing') steps.push(claudeSandboxStep(claude.sandbox));
   return steps;
 }
 
-const CODEX_LINUX = 'Linux 上的 Codex 暂时只能用完全访问，没有沙箱。这两档的群不起会话，有人 @ 它时回一句说明。要用 Codex 的群，在群设置里把权限改成「完全访问」，或者在终端运行 vonvon settings set --group <群 id> permission.mode=full。完全访问下 Codex 能读写这个账号能碰到的所有文件，群里有别人时先想清楚。不会自动改。';
 const FULL_INSTEAD = '不想改的话，这台主机上用 Claude 的群就用完全访问。';
 const SANDBOX_MISSING = 'Claude 在只读、读写档下用 bubblewrap 沙箱把命令关在工作区里，缺了这两档的回合会失败（Sandbox required but unavailable），完全访问不受影响。别的发行版用自己的包管理器装 bubblewrap 和 socat；装好后一分钟内这里会更新。';
 const SANDBOX_APPARMOR = `Ubuntu 23.10 起默认不让普通程序建用户命名空间（kernel.apparmor_restrict_unprivileged_userns = 1），bwrap 起不来，只读、读写档的回合会失败。给 bwrap 单独加一份 AppArmor 配置就行，不用全局关掉这个限制，命令见下；${FULL_INSTEAD}`;

@@ -80,13 +80,13 @@ it('s36b2: offers topic conversations and keeps threads 免 @ on by default', ()
   expect(shownResponse('threads', undefined)).toBe('all');
 });
 
-it('s36b2: shows topic binding choices, restricted permissions and Linux Codex guidance only when binding', () => {
+it('s36b2: shows topic binding choices and read-only permissions when binding', () => {
   const client = createClient({isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {}});
   const agent = agentSchema.parse({id: 'cli_join', name: 'Test Bot', enabled: true, running: true, connection: 'connected', activation: 'active'});
-  const render = (bind: boolean, linux: boolean, topic = true) => renderToStaticMarkup(
+  const render = (bind: boolean, topic = true) => renderToStaticMarkup(
     createElement(ClientProvider, {client, children: createElement(DirectoryPickerProvider, {children:
       createElement(DraftGuardProvider, {children: createElement(JoinGroupDialog, {
-        agent, linux, tools: [{tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '1'}], ...(bind ? {initialGroup: {chatId: 'oc_topic', name: 'Topic', addedAt: 0, topic}} : {}),
+        agent, tools: [{tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '1'}], ...(bind ? {initialGroup: {chatId: 'oc_topic', name: 'Topic', addedAt: 0, topic}} : {}),
         onClose: () => {}, onChanged: async () => {},
       })}),
     })}),
@@ -97,13 +97,11 @@ it('s36b2: shows topic binding choices, restricted permissions and Linux Codex g
   expect(topic).not.toContain('整群一条会话');
   expect(topic).toContain('只读（不联网）');
   expect(topic).not.toContain('网络关闭');
-  expect(topic).toContain('Linux 上的 Codex 只能用完全访问');
-  expect(render(true, false)).not.toContain('Linux 上的 Codex 只能用完全访问');
-  const create = render(false, true);
+  expect(topic).not.toContain('连接后，在群设置中改为完全访问才能使用。');
+  const create = render(false);
   expect(create.match(/role="radio"/g)).toHaveLength(3);
   expect(create).not.toContain('只读（不联网）');
-  expect(create).not.toContain('Linux 上的 Codex 只能用完全访问');
-  expect(render(true, true, false).match(/role="radio"/g)).toHaveLength(3);
+  expect(render(true, false).match(/role="radio"/g)).toHaveLength(3);
 });
 
 it('requires an explicit ready judgment Provider for smart setup', () => {
