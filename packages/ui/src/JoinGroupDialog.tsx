@@ -2,7 +2,7 @@ import {RpcError} from '@vonvon/client/browser';
 import {useClient} from './client-context';
 import {useDirectoryPicker} from './directory-picker';
 import {useEffect, useRef, useState} from 'react';
-import type {Agent, AgentSettingsView, CommandResult, Conversation, FolderChoice, PendingGroup, JudgeSelectionView, DecisionModelsView, ToolState} from '@vonvon/protocol';
+import type {Agent, AgentSettingsView, DesktopSnapshot, ProjectId, CommandResult, Conversation, FolderChoice, PendingGroup, JudgeSelectionView, DecisionModelsView, ToolState} from '@vonvon/protocol';
 import {conversationCopy, topicConversationCopy, toolSchema, groupDecisionSchema} from '@vonvon/protocol';
 import {Button, ChoiceGroup, FormField, InlineNotice} from './reference/components/ui';
 import {Dialog} from './reference/components/ui/Dialog';
@@ -13,6 +13,7 @@ import {SettingChoices} from './settings/SettingChoices';
 import {DecisionFields, useProviders} from './settings/GroupDesignSettings';
 import {providerDecisionProblem} from './settings/DecisionFields';
 import {AgentAvatar} from './AgentAvatar';
+import {crossGroupWarning, defaultProjectChoice, type ProjectChoice} from './project-model';
 import './setup/join-group.css';
 import {providerBackends, providerUsable} from './setup/provider-state';
 
@@ -75,8 +76,8 @@ export function initialGroupProvider(initialProvider?: ProviderTool, tools?: Too
   if (initialProvider && ready(initialProvider)) return initialProvider;
   return (['codex', 'claude'] as const).find(ready);
 }
-type Props = {linux?: boolean; open?: boolean; agent: Agent; pending?: PendingAgentGroups; initialGroup?: PendingGroup; initialProvider?: ProviderTool; tools?: ToolState[]; onClose: () => void; onChanged: (target: {agentId: Agent['id']; chatId: string}) => Promise<void>; onOpenProviders?: () => void; onOpenDecisionModel?: () => void};
-export function JoinGroupDialog({linux, open = true, agent, pending, initialGroup, initialProvider, tools, onClose, onChanged, onOpenProviders, onOpenDecisionModel}: Props) {
+type Props = {snapshot?: DesktopSnapshot; linux?: boolean; open?: boolean; agent: Agent; pending?: PendingAgentGroups; initialGroup?: PendingGroup; initialProvider?: ProviderTool; tools?: ToolState[]; onClose: () => void; onChanged: (target: {agentId: Agent['id']; chatId: string}) => Promise<void>; onOpenProviders?: () => void; onOpenDecisionModel?: () => void};
+export function JoinGroupDialog({snapshot, linux, open = true, agent, pending, initialGroup, initialProvider, tools, onClose, onChanged, onOpenProviders, onOpenDecisionModel}: Props) {
   const {navigate} = useDraftGuard();
   const client = useClient();
   const pickDirectory = useDirectoryPicker();
@@ -102,6 +103,9 @@ export function JoinGroupDialog({linux, open = true, agent, pending, initialGrou
   const [name, setName] = useState(initialGroup?.name ?? '');
   const [folder, setFolder] = useState<FolderChoice>();
   const [existingDirectory, setExistingDirectory] = useState(false);
+  // 项目 (§5.6): what the daemon remembers for this group, and the owner's own pick over the default.
+  const [previousId, setPreviousId] = useState<ProjectId>();
+  const [pickedProject, setPickedProject] = useState<ProjectChoice>();
   // A snapshot refresh can improve the suggested default, but never replaces a hand pick.
   const [pickedTool, setPickedTool] = useState<ProviderTool | undefined>(undefined);
   const ready = (provider: ProviderTool) => providerUsable(tools?.find(item => item.tool === provider));
@@ -118,20 +122,38 @@ export function JoinGroupDialog({linux, open = true, agent, pending, initialGrou
   const [manual, setManual] = useState<Extract<CommandResult, {kind: 'groups'}>>();
   const active = useRef(true);
   useEffect(() => {active.current = true; return () => {active.current = false;};}, []);
+  const bindingGroup = mode.kind === 'bind' ? mode.group.chatId : undefined;
+  useEffect(() => {
+    setPreviousId(undefined);
+    if (!open || !bindingGroup) return;
+    let current = true;
+    void (async () => {
+      try {
+        const reply = await client.library({type: 'previous', agentId: agent.id, groupId: bindingGroup as never});
+        if (current && reply.kind === 'previous') setPreviousId(reply.project?.id);
+      } catch { /* an older daemon, or none connected: the default is then a new project */ }
+    })();
+    return () => {current = false;};
+  }, [client, agent.id, bindingGroup, open]);
+  const projects = snapshot?.projects ?? [];
+  const projectChoice: ProjectChoice = pickedProject ?? (snapshot ? defaultProjectChoice(snapshot, bindingGroup, previousId) : {kind: 'new'});
+  const joined = projectChoice.kind === 'join' ? projects.find(item => item.id === projectChoice.id) : undefined;
+  // A group the daemon remembers a project for is picked up again when no project is named, so 新建 is not offered for it.
+  const previousProject = previousId ? projects.find(item => item.id === previousId) : undefined;
   const nameProblem = projectNameProblem(name);
   const freeAt = shownResponse(conversation, response);
   const decisionFresh = open && decisionReady.serial === decisionSerial.current && decisionReady.epoch === decisionOpenEpoch.current;
   const judgeProblem = conversation === 'smart' ? decisionReadError || (!decisionFresh ? '正在读取决策模型设置，请稍候。' : judgeSetupProblem(judge, decisionView?.decisionModels, providers.map(item => item.id))) : undefined;
-  const dirty = Boolean(name !== (mode.kind === 'bind' ? mode.group.name : '') || folder || existingDirectory || pickedTool !== undefined || conversation || response);
-  function discard() {setName(''); setFolder(undefined); setExistingDirectory(false); setPickedTool(undefined); setConversation(undefined); setResponse(undefined); setJudge({kind: 'default'});}
+  const dirty = Boolean(name !== (mode.kind === 'bind' ? mode.group.name : '') || folder || existingDirectory || pickedProject || pickedTool !== undefined || conversation || response);
+  function discard() {setName(''); setPickedProject(undefined); setFolder(undefined); setExistingDirectory(false); setPickedTool(undefined); setConversation(undefined); setResponse(undefined); setJudge({kind: 'default'});}
   function close() {if (!busy) navigate(() => {active.current = false; onClose();});}
   function switchMode(next: Mode) {
     if (busy) return;
-    navigate(() => {setMode(next); setName(next.kind === 'bind' ? next.group.name : ''); setFolder(undefined); setExistingDirectory(false); setError('');});
+    navigate(() => {setMode(next); setPickedProject(undefined); setName(next.kind === 'bind' ? next.group.name : ''); setFolder(undefined); setExistingDirectory(false); setError('');});
   }
   async function save() {
     if (busy || mode.kind === 'existing' || locked) return false;
-    if (!name.trim() || (existingDirectory && !folder)) {setError('请填写名称并选择工作目录。'); return false;}
+    if (!name.trim() || (!joined && existingDirectory && !folder)) {setError('请填写名称并选择工作目录。'); return false;}
     if (!conversation) {setError('请选择会话方式。'); return false;}
     if (!tool || !ready(tool)) {setError('请先安装并登录 Provider。'); return false;}
     if (conversation === 'smart' && (decisionReady.serial !== decisionSerial.current || decisionReady.epoch !== decisionOpenEpoch.current)) {setError('正在读取决策模型设置，请稍候。'); return false;}
@@ -143,9 +165,11 @@ export function JoinGroupDialog({linux, open = true, agent, pending, initialGrou
     if (nameProblem) {setError(nameProblem); return false;}
     setBusy(true); setError('');
     try {
+      // Joining a project: its folder is the project's, so none is sent.
+      const where = joined ? {folder: {kind: 'default' as const}, project: joined.id} : {folder: existingDirectory && folder ? {kind: 'existing' as const, folderToken: folder.token} : {kind: 'default' as const}};
       const reply = mode.kind === 'create'
-        ? await client.collaboration({action: 'createProject', agentId: agent.id, name: name.trim(), folder: existingDirectory && folder ? {kind: 'existing', folderToken: folder.token} : {kind: 'default'}, tool, conversation, ...picked, ...decision})
-        : await client.run({type: 'bindGroup', agentId: agent.id, groupId: mode.group.chatId, projectName: name.trim(), folder: existingDirectory && folder ? {kind: 'existing', folderToken: folder.token} : {kind: 'default'}, tool, conversation, ...picked, ...decision});
+        ? await client.collaboration({action: 'createProject', agentId: agent.id, name: name.trim(), ...where, tool, conversation, ...picked, ...decision})
+        : await client.run({type: 'bindGroup', agentId: agent.id, groupId: mode.group.chatId, projectName: name.trim(), ...where, tool, conversation, ...picked, ...decision});
       if (!reply || reply.kind !== 'applied') {setError(reply && 'message' in reply && typeof reply.message === 'string' ? reply.message : '操作未完成，请重试。'); return false;}
       const chatId = mode.kind === 'bind' ? mode.group.chatId : 'project' in reply ? reply.project?.chatId : undefined;
       if (!chatId) {
@@ -201,9 +225,20 @@ export function JoinGroupDialog({linux, open = true, agent, pending, initialGrou
         {manual && <><div className="join-group-list" aria-label="已经加入的飞书群">{manual.groups.map(group => <button type="button" key={group.id} disabled={busy || group.bound} onClick={() => switchMode({kind: 'bind', group: {chatId: group.id, name: group.name, addedAt: 0, hasOtherBots: group.hasOtherBots}})}><span>{group.name}</span><small>{group.bound ? '已连接' : '连接'}</small></button>)}</div>{!manual.groups.length && <p>未找到群聊，请确认 Bot 已加入。</p>}{manual.nextCursor && <Button disabled={busy} onClick={() => void findGroups(manual.nextCursor)}>加载更多</Button>}</>}
       </> : <>
         <FormField label={mode.kind === 'create' ? '飞书群名称' : '本地绑定名称'} error={nameProblem}><input aria-label={mode.kind === 'create' ? '飞书群名称' : '本地绑定名称'} placeholder={mode.kind === 'create' ? '例如：产品讨论' : undefined} autoComplete="off" maxLength={100} disabled={busy} value={name} onChange={event => setName(event.target.value)} /></FormField>
+        {projects.length > 0 && <SettingsGroup>
+          <SettingsRow className="group-choice-row" title="项目" trailing={<SettingChoices label="项目" disabled={busy} value={joined ? 'join' : 'new'} choices={[
+            {value: 'new', label: `新建项目「${name.trim() || '…'}」`, disabled: Boolean(previousProject)},
+            {value: 'join', label: previousProject && projectChoice.kind === 'join' && projectChoice.reason === 'previous' ? `接回项目「${previousProject.name}」` : '加入已有项目'}]}
+            onChange={value => setPickedProject(value === 'new' ? {kind: 'new'} : {kind: 'join', id: (joined ?? projects[0]!).id, reason: 'picked'})}/>}/>
+          {joined && <SettingsRow title="加入哪个项目" trailing={<select className="settings-field" aria-label="选择项目" disabled={busy} value={joined.id} onChange={event => setPickedProject({kind: 'join', id: event.target.value as ProjectId, reason: 'picked'})}>
+            {projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}/>}
+          {joined && projectChoice.kind === 'join' && projectChoice.reason === 'sibling' && <p className="join-group-flow__hint">同一个群的 Bot 默认共用项目；要分开就新建。</p>}
+          {previousProject && <p className="join-group-flow__hint">这个群以前绑过项目「{previousProject.name}」，默认接回；要换就加入别的项目。</p>}
+        </SettingsGroup>}
+        {crossGroupWarning(joined, bindingGroup) && <InlineNotice title="两个群会共用这个项目" tone="warning">{crossGroupWarning(joined, bindingGroup)}</InlineNotice>}
         <SettingsGroup>
-          <SettingsRow className="group-choice-row" title="工作区" trailing={<SettingChoices label="目录来源" disabled={busy} value={existingDirectory ? 'existing' : 'default'} choices={[{value: 'default', label: '新建目录'}, {value: 'existing', label: '选择目录'}]} onChange={value => {setExistingDirectory(value === 'existing'); setFolder(undefined);}}/>} />
-          {existingDirectory && <SettingsRow title="主目录" value={folder?.displayPath ?? '未选择'} trailing={<Button disabled={busy} onClick={() => void chooseFolder()}>选择文件夹</Button>}/> }
+          {joined ? <SettingsRow title="项目主目录" value={joined.directory}/> : <SettingsRow className="group-choice-row" title="工作区" trailing={<SettingChoices label="目录来源" disabled={busy} value={existingDirectory ? 'existing' : 'default'} choices={[{value: 'default', label: '新建目录'}, {value: 'existing', label: '选择目录'}]} onChange={value => {setExistingDirectory(value === 'existing'); setFolder(undefined);}}/>} />}
+          {!joined && existingDirectory && <SettingsRow title="主目录" value={folder?.displayPath ?? '未选择'} trailing={<Button disabled={busy} onClick={() => void chooseFolder()}>选择文件夹</Button>}/> }
           <SettingsRow className="group-choice-row" title="Provider" trailing={<SettingChoices<ProviderTool | ''> label="执行工具" disabled={busy} value={tool ?? ''} choices={[{value: 'codex', label: 'Codex', disabled: !ready('codex')}, {value: 'claude', label: 'Claude', disabled: !ready('claude')}]} onChange={value => {if ((value === 'codex' || value === 'claude') && ready(value)) setPickedTool(toolSchema.parse(value));}}/>} />
           {(!tool || !ready(tool)) && <SettingsRow title="Provider 尚未就绪" description={tool ? '当前选择不可用，请重新登录或主动选择其他 Provider。' : '请先安装并登录 Codex 或 Claude。'} trailing={onOpenProviders && <Button disabled={busy} onClick={onOpenProviders}>设置 Provider</Button>}/>}
           {mode.kind === 'bind' && <SettingsRow title="权限档和网络" value="只读 · 网络关闭" />}
@@ -221,7 +256,7 @@ export function JoinGroupDialog({linux, open = true, agent, pending, initialGrou
           <SettingsRow className="group-choice-row" title="响应方式" trailing={<SettingChoices label="免 @" disabled={busy} value={freeAt} choices={[{value: 'all', label: '无需 @'}, {value: 'mention', label: '仅 @ 时'}]} onChange={value => setResponse(value === 'all' ? 'all' : 'mention')}/>} />
         </SettingsGroup>}
         {linux && mode.kind === 'bind' && tool === 'codex' && <InlineNotice title="Linux 上的 Codex 只能用完全访问" tone="info">连接后，在群设置中改为完全访问才能使用。</InlineNotice>}
-        <Button variant="primary" loading={busy} disabled={locked || !tool || !ready(tool) || !name.trim() || Boolean(nameProblem) || (existingDirectory && !folder) || !conversation || Boolean(judgeProblem)} onClick={() => void save()}>{mode.kind === 'create' ? '创建并连接' : '连接并发送欢迎卡片'}</Button>
+        <Button variant="primary" loading={busy} disabled={locked || !tool || !ready(tool) || !name.trim() || Boolean(nameProblem) || (!joined && existingDirectory && !folder) || !conversation || Boolean(judgeProblem)} onClick={() => void save()}>{mode.kind === 'create' ? '创建并连接' : '连接并发送欢迎卡片'}</Button>
       </>}
       {mode.kind === 'create' && lock && <CreationLockNotice failure={lock} />}
       {error && <InlineNotice title="操作未完成" tone="danger">{error}</InlineNotice>}

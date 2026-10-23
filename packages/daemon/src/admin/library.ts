@@ -9,11 +9,11 @@ import { log } from '../core/logger';
 import { acquireSingleInstanceLock, readSingleInstanceHolder } from '../core/single-instance';
 import { migrateRoleFiles } from '../bot/role-files';
 import { assertBridgeImportReservation } from '../import/bridge/reservation';
-import { listProjectsIn, mutateProject, withStoredRows, type Project } from '../project/registry';
+import { listProjectsIn, mutateProject, previousProjectIdIn, withStoredRows, type Project } from '../project/registry';
 import { detachSessionsForChatIn } from '../bot/session-store';
 import {
-  isProjectId, libraryLocation, LibraryError, newProjectId, ownLibrary, PROJECT_NAME_MAX, projectWithMainFolder, readLibrary, resolveDirectory, sameMainFolder,
-  setLibraryWorkspace, workspaceMirror,
+  deleteLibraryProject, isProjectId, libraryLocation, LibraryError, newProjectId, ownLibrary, PROJECT_NAME_MAX, projectWithMainFolder, readLibrary, resolveDirectory, sameMainFolder,
+  renameLibraryProject, setLibraryWorkspace, workspaceMirror,
   type LibraryProject, type LibraryWorkspace, type ResolvedDirectory,
 } from '../project/library';
 import { AdminWriteError } from './ops';
@@ -481,6 +481,12 @@ export interface HostLibrary {
   workspace(request: WorkspaceRequest): Promise<WorkspaceChange>;
   /** Drops one override of the project's workspace: `repositories` back to each bot's default, `workspaces` to no extra folders. */
   resetOverride(projectId: string, key: 'workspaces' | 'repositories'): Promise<WorkspaceChange>;
+  /** A project's own name (§5.3); no binding row holds it, so nothing fans out. */
+  rename(request: { projectId: string; revision: number; name: string }): Promise<LibraryProject>;
+  /** The project a group of this bot was bound to before it was unbound, if the library still has it. */
+  previous(botId: string, chatId: string): Promise<{ id: string; name: string } | undefined>;
+  /** Deletes a project no binding uses (§5.3); refused while any bot has a row of it. */
+  remove(request: { projectId: string; revision: number }): Promise<void>;
 }
 
 /** The workspace as the library holds it, admitted: canonical folders, inside the places a workspace may be. */
@@ -546,6 +552,23 @@ export function createHostLibrary(deps: LibraryHostDeps = {}): HostLibrary {
   return {
     overview: libraryOverview,
     workspace: request => serial(() => change(request)),
+    previous: async (botId, chatId) => {
+      const id = await previousProjectIdIn(botPaths(botId).projectsFile, chatId);
+      const project = id ? (await readLibrary()).projects.find(item => item.id === id) : undefined;
+      return project ? { id: project.id, name: project.name } : undefined;
+    },
+    rename: request => serial(async () => {
+      if (deps.readonlyPreview) throw new AdminWriteError('预览模式不能改项目，请先启动 daemon');
+      return (await ownLibrary(draft => renameLibraryProject(draft, request))).project;
+    }),
+    remove: request => serial(async () => {
+      if (deps.readonlyPreview) throw new AdminWriteError('预览模式不能删项目，请先启动 daemon');
+      await ownLibrary(async draft => {
+        // Read-only on the rows, so allowed under `library` (lock order bots, library, projects, memory).
+        if ((await bindingBots(request.projectId)).length) throw new AdminWriteError('这个项目还有群在用，先让群解绑或换到别的项目');
+        await deleteLibraryProject(draft, request);
+      });
+    }),
     resetOverride: (projectId, key) => serial(async () => {
       const project = (await readLibrary()).projects.find(item => item.id === projectId);
       if (!project) throw new LibraryError('not-found', '项目不存在，请刷新');

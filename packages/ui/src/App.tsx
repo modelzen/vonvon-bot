@@ -20,7 +20,9 @@ import {
 import { AppShell } from "./LocalShell";
 import { AgentAvatar } from './AgentAvatar';
 import { GroupAvatar } from './GroupAvatar';
-import { GroupDirectory, type GroupDirectoryState } from './GroupDirectory';
+import { ProjectDirectory, projectEntries, type ProjectDirectoryState } from './ProjectDirectory';
+import { ProjectPage } from './ProjectPage';
+import { deleteAgentDescription } from './project-model';
 import {
   SettingsGroup,
   SettingsRow,
@@ -134,7 +136,7 @@ function DesktopApp() {
   const [setupProvider, setSetupProvider] = useState<SetupProvider>();
   const [page, setPage] = useState<Page>("home");
   const [settingsReturn, setSettingsReturn] = useState<{page: Page; route: CollaborationRoute; label: string}>();
-  const [groupDirectoryState, setGroupDirectoryState] = useState<GroupDirectoryState>({query: '', expanded: {}});
+  const [projectDirectoryState, setProjectDirectoryState] = useState<ProjectDirectoryState>({query: '', expanded: {}});
   const [groupTabs, setGroupTabs] = useState<Record<string, GroupDesignTab>>({});
   const [featureId, setFeatureId] = useState<string>();
   const feature = uiFeatures.find(item => item.id === featureId && item.slot === "page");
@@ -149,6 +151,16 @@ function DesktopApp() {
   const [notice, setNotice] = useState<{ message: string; error: boolean }>();
   const pendingGroups = usePendingGroups(snapshot);
   const [attachedNotice, setAttachedNotice] = useState(true);
+  // The Bot's own memory entries, counted for the 移除本地 Bot confirmation; left out when it cannot be read.
+  const [botMemory, setBotMemory] = useState<number>();
+  const deletingAgent = modal?.kind === 'deleteAgent' ? modal.agentId : undefined;
+  useEffect(() => {
+    setBotMemory(undefined);
+    if (!deletingAgent) return;
+    let active = true;
+    void client.memory({type: 'list', scope: {kind: 'bot', botId: deletingAgent}}).then(reply => {if (active && reply.kind === 'list') setBotMemory(reply.used);}).catch(() => undefined);
+    return () => {active = false;};
+  }, [client, deletingAgent]);
   useEffect(() => {
     function keydown(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
@@ -231,7 +243,7 @@ function DesktopApp() {
     setSettingsReturn(undefined);
     setFeatureId(undefined);
     setPage('collaboration');
-    setRoute({kind: 'list', view: 'groups'});
+    setRoute({kind: 'list', view: 'projects'});
     setJoinedTarget(target.chatId ? {agentId: target.agentId, chatId: target.chatId} : undefined);
     const refreshed = await run({type: 'refresh'});
     if (refreshed.kind === 'refused' || refreshed.kind === 'outcomeUnknown') setJoinedTarget(undefined);
@@ -282,13 +294,19 @@ function DesktopApp() {
         ? {kind: 'list', view: routeView(current)}
         : next.kind === 'agent'
           ? {kind: 'agent', id: next.id, pane: {kind: 'groups'}}
-          : next.kind === 'group'
-            ? (() => {const member = snapshot.memberships.find(item => item.groupId === next.id); return member ? openMembership({kind:'group',id:next.id}, member.id, snapshot) : {kind:'group' as const,id:next.id};})()
+          : next.kind === 'project'
+            ? {kind: 'project', id: next.id, pane: {kind: 'map'}}
             : openMembership(current, next.id, snapshot));
       setPage("collaboration");
       setSettingsReturn(undefined);
       setNotice(undefined);
     });
+  }
+  /** A group opens the project it belongs to, or its binding when no project owns it yet. */
+  function openGroup(groupId: string) {
+    const member = snapshot?.memberships.find(item => item.groupId === groupId);
+    if (!member) return;
+    select(member.projectId && snapshot?.projects?.some(item => item.id === member.projectId) ? {kind: 'project', id: member.projectId} : {kind: 'membership', id: member.id});
   }
   function changeRoute(next: (current: CollaborationRoute) => CollaborationRoute) {
     navigate(() => {
@@ -376,18 +394,14 @@ function DesktopApp() {
       : member
         ? snapshot.agents.find((item) => item.id === member.agentId)
         : undefined;
-  const group =
-    selection.kind === "group"
-      ? snapshot.groups.find((item) => item.id === selection.id)
-      : member
-        ? snapshot.groups.find((item) => item.id === member.groupId)
-        : undefined;
+  const group = member ? snapshot.groups.find((item) => item.id === member.groupId) : undefined;
+  const project = selection.kind === "project" ? snapshot.projects?.find((item) => item.id === selection.id) : undefined;
   const titles: Record<Page, string> = {
     home: "概览",
     settings: "设置",
     collaboration: member
       ? `${group?.name ?? '飞书群'} · ${agent?.name ?? 'Bot'}`
-      : (agent?.name ?? group?.name ?? (view === "agents" ? "Bot" : "群聊")),
+      : (agent?.name ?? project?.name ?? (view === "agents" ? "Bot" : "项目")),
     setup: "飞书连接",
     bridgeImport: "导入 Bridge",
     environment: "工具与连接",
@@ -405,9 +419,11 @@ function DesktopApp() {
       : undefined;
   const parentLabel = route.kind === 'membership'
     ? route.parent.kind === 'agent'
-      ? snapshot.agents.find(item => item.id === route.parent.id)?.name ?? 'Bot'
-      : '群聊列表'
-    : routeView(route) === 'agents' ? 'Bot 列表' : '群聊列表';
+      ? snapshot.agents.find(item => item.id === (route.parent.kind === 'agent' ? route.parent.id : undefined))?.name ?? 'Bot'
+      : route.parent.kind === 'project'
+        ? snapshot.projects?.find(item => item.id === (route.parent.kind === 'project' ? route.parent.id : undefined))?.name ?? '项目'
+        : '项目列表'
+    : routeView(route) === 'agents' ? 'Bot 列表' : '项目列表';
   function membershipRows(
     members: Membership[],
     perspective: CollaborationView,
@@ -470,7 +486,7 @@ function DesktopApp() {
         backLabel={`返回 ${settingsReturn?.label ?? parentLabel}`}
         onBack={
           settingsReturn ? returnFromSettings : !feature && page === "collaboration" && route.kind !== 'list'
-            ? () => changeRoute(current => current.kind === 'membership' && current.parent.kind === 'group' ? {kind:'list',view:'groups'} : routeBack(current))
+            ? () => changeRoute(routeBack)
             : undefined
         }
       >
@@ -478,13 +494,13 @@ function DesktopApp() {
           {['usage', 'application', 'diagnostics'].includes(page) && <header className="today-page-heading"><h1>{titles[page]}</h1></header>}
           {feature ? <FeaturePage feature={feature} /> : <>
           {page === 'collaboration' && route.kind !== 'list' && <nav className="collaboration-breadcrumb" aria-label="当前位置">
-            <button type="button" onClick={() => openList(view)}>{view === 'agents' ? 'Bot' : '群聊'}</button>
+            <button type="button" onClick={() => openList(view)}>{view === 'agents' ? 'Bot' : '项目'}</button>
             <ChevronRight size={12} aria-hidden="true" />
             {route.kind === 'membership' && <>
               <button type="button" onClick={() => changeRoute(routeBack)}>{parentLabel}</button>
               <ChevronRight size={12} aria-hidden="true" />
             </>}
-            <span aria-current="page">{route.kind === 'membership' ? route.parent.kind === 'agent' ? group?.name ?? '飞书群' : agent?.name ?? 'Bot' : agent?.name ?? group?.name ?? '内容已变化'}</span>
+            <span aria-current="page">{route.kind === 'membership' ? route.parent.kind === 'agent' ? group?.name ?? '飞书群' : agent?.name ?? 'Bot' : agent?.name ?? project?.name ?? '内容已变化'}</span>
           </nav>}
           {pendingGroups.map(page => {
             const owner = snapshot.agents.find(item => item.id === page.agentId);
@@ -524,7 +540,7 @@ function DesktopApp() {
               保留上次成功读取的群配置。读取恢复前请勿重复绑定。
             </InlineNotice>
           )}
-          {page === "home" && snapshot.agents.length > 0 && <TodayHome snapshot={snapshot} onAgent={id => select({kind: "agent", id})} onGroup={id => select({kind: "group", id})} onSetup={() => openPage("setup")} onRegister={() => void register()} disabled={!ready || busy}/>}
+          {page === "home" && snapshot.agents.length > 0 && <TodayHome snapshot={snapshot} onAgent={id => select({kind: "agent", id})} onGroup={openGroup} onSetup={() => openPage("setup")} onRegister={() => void register()} disabled={!ready || busy}/>}
           {page === "settings" && <SettingsHome onNavigate={openPage} onFeature={id => navigate(() => setFeatureId(id))}/>}
           {page === "collaboration" && (
             <>
@@ -620,22 +636,23 @@ function DesktopApp() {
                           </div>
                         </section>
                       )
-                    : <GroupDirectory snapshot={snapshot} state={groupDirectoryState} onStateChange={setGroupDirectoryState} statusFor={agentListStatus}
-                        onMembership={id => select({kind: 'membership', id})}/>}
+                    : <ProjectDirectory snapshot={snapshot} state={projectDirectoryState} onStateChange={setProjectDirectoryState} statusFor={agentListStatus}
+                        onProject={id => select({kind: 'project', id})} onMembership={id => select({kind: 'membership', id})}
+                        onNewProject={ready && snapshot.agents.length ? () => snapshot.agents.length === 1 ? openJoin(snapshot.agents[0]!.id) : openList('agents') : undefined}/>}
                   {!(view === "agents"
                     ? snapshot.agents.length
-                    : snapshot.groups.length) && (
+                    : projectEntries(snapshot).length) && (
                     <div className="collaboration-empty">
                       <Bot size={28} />
                       <h3>
                         {view === "agents"
                           ? "注册你的第一个 Bot"
-                          : "还没有连接的飞书群"}
+                          : "还没有项目"}
                       </h3>
                       <p>
                         {view === "agents"
                           ? "连接飞书机器人，再让它加入群开始协作。"
-                          : "在 Bot 页面选择已加入的飞书群并绑定工作目录。"}
+                          : "把一个飞书群连到 Bot 上，就会有一个项目。"}
                       </p>
                       {view === "agents" && (
                         <Button
@@ -769,42 +786,22 @@ function DesktopApp() {
                   </div>}
                 </>
               )}
-              {selection.kind === "group" && group && (
-                <>
-                  <header className="collaboration-profile">
-                    <GroupAvatar group={group} large />
-                    <div>
-                      <span className="collaboration-profile__kind">飞书群</span>
-                      <h2>{group.name}</h2>
-                      <p>
-                        {
-                          snapshot.memberships.filter(
-                            (m) => m.groupId === group.id,
-                          ).length
-                        }{" "}
-                        个 Bot
-                      </p>
-                    </div>
-                  </header>
-                  <SettingsGroup label="这个群中的 Bot">
-                    {membershipRows(
-                      snapshot.memberships.filter(
-                        (m) => m.groupId === group.id,
-                      ),
-                      "groups",
-                    )}
-                  </SettingsGroup>
-                </>
-              )}
+              {selection.kind === "project" && project && route.kind === 'project' && <ProjectPage key={project.id} project={project} snapshot={snapshot} pane={route.pane} tools={snapshot.tools}
+                onPane={pane => changeRoute(current => current.kind === 'project' ? {...current, pane} : current)}
+                onMembership={id => select({kind: 'membership', id})}
+                onChanged={async () => {await run({type: 'refresh'});}}
+                onDeleted={() => openList('projects')}
+                onOpenTools={() => openContextSettings('environment')} onOpenProviders={() => openContextSettings('providers')} onOpenSecrets={() => openContextSettings('secrets')}/>}
               {member && agent && group && <GroupWorkspace key={member.id} member={member} agent={agent} group={group} snapshot={snapshot}
                 revealHistory={searchTarget?.reveal === "group-history"} initialTab={searchTarget ? groupTabForSection(searchTarget.section) : groupTabs[member.id]} onTabChange={tab => setGroupTabs(current => ({...current,[member.id]:tab}))}
                 onBot={next => select({kind:'membership',id:next.id})}
                 onBotProfile={() => changeRoute(() => ({kind:'agent',id:agent.id,pane:{kind:'profile'}}))}
+                onProject={id => select({kind: 'project', id})}
                 onOpenTools={() => openContextSettings('environment')} onOpenProviders={() => openContextSettings('providers')} onOpenSecrets={() => openContextSettings('secrets')}
                 onChanged={async () => {await run({type:'refresh'});}}/>}
-              {((route.kind === 'agent' && !agent) || (route.kind === 'group' && !group) || (route.kind === 'membership' && (!member || !agent || !group))) && (
+              {((route.kind === 'agent' && !agent) || (route.kind === 'project' && !project) || (route.kind === 'membership' && (!member || !agent || !group))) && (
                 <InlineNotice title="内容暂不可用">
-                  {route.kind === 'membership' ? '这条群内协作或关联的 Bot、飞书群已变化。请返回上一级并刷新。' : '这个 Bot 或飞书群已变化。请返回列表并刷新。'}
+                  {route.kind === 'membership' ? '这条群内协作或关联的 Bot、飞书群已变化。请返回上一级并刷新。' : '这个 Bot 或项目已变化。请返回列表并刷新。'}
                 </InlineNotice>
               )}
             </>
@@ -872,7 +869,7 @@ function DesktopApp() {
       <PendingGroupToasts pages={pendingGroups} agents={snapshot.agents} hidden={modal !== null} onContinue={(owner, group) => openJoin(owner.id, group)} />
       {modal?.kind === 'join' && (() => {
         const owner = snapshot.agents.find(item => item.id === modal.agentId);
-        return owner ? <JoinGroupDialog key={`${owner.id}:${modal.group?.chatId ?? 'new'}`} agent={owner} tools={snapshot.tools} initialProvider={modal.provider} open={!modal.suspended} onOpenProviders={() => configureJoinProvider()} onOpenDecisionModel={() => configureJoinProvider('secrets')} linux={snapshot.application.platform === 'linux'} initialGroup={modal.group} pending={pendingGroups.find(item => item.agentId === owner.id)} onClose={() => setModal(null)} onChanged={joined} /> : null;
+        return owner ? <JoinGroupDialog key={`${owner.id}:${modal.group?.chatId ?? 'new'}`} snapshot={snapshot} agent={owner} tools={snapshot.tools} initialProvider={modal.provider} open={!modal.suspended} onOpenProviders={() => configureJoinProvider()} onOpenDecisionModel={() => configureJoinProvider('secrets')} linux={snapshot.application.platform === 'linux'} initialGroup={modal.group} pending={pendingGroups.find(item => item.agentId === owner.id)} onClose={() => setModal(null)} onChanged={joined} /> : null;
       })()}
       <Dialog
         open={modal !== null && modal.kind !== "deleteAgent" && modal.kind !== "join"}
@@ -928,7 +925,7 @@ function DesktopApp() {
         title="移除本地 Bot"
         description={
           modal?.kind === "deleteAgent"
-            ? `将移除「${modal.name}」的本地注册信息、凭据、群绑定、设置和会话记录。飞书开发者平台中的应用不会删除。请确认这个 Bot 已停用并停止运行。`
+            ? deleteAgentDescription(modal.name, snapshot.memberships.filter(item => item.agentId === modal.agentId).length, botMemory)
             : ""
         }
         tone="danger"

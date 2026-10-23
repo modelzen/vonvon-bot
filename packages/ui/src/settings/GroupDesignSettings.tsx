@@ -18,7 +18,9 @@ export {DecisionFields} from './DecisionFields';
 import {AnnouncedReadonlyMessages, hasReadonlyMessage, type ReadonlyMessage} from './readonly-messages';
 import './group-design-settings.css';
 
-export type GroupSettingsTab = 'capabilities' | 'profile' | 'model' | 'workspace' | 'response';
+/** 权限 holds the permission editor s31c had under 工作区; the workspace itself is the project's (memory design §5.4). */
+export type GroupSettingsTab = 'capabilities' | 'role' | 'model' | 'response' | 'permission';
+const SUPPLEMENT_MAX = 5_000;
 type Scope = ProjectSettingsView['scope'];
 type GroupSections = ProjectSettingsView['sections'];
 type ModelAccess = NonNullable<GroupSections['modelAccess']>['stored'];
@@ -106,8 +108,8 @@ export function GroupSettingsContent({view, refresh, tab, tools, botName = 'Bot'
     validate={value => providerDecisionProblem(value.selection, providers, view.decisionModels)}
     render={(draft,set,disabled,_commit,resetKey) => <DecisionFields initial key={resetKey} botId={view.scope.botId} groupBackend={view.identity.backend} value={draft.selection} effective={sections.judge!.effective.selection} onChange={selection=>set({selection})} disabled={disabled} providers={providers} services={view.decisionModels} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets}/>}/> : <MissingSection/>;
   const relevant: (Section<unknown> | undefined)[] = tab === 'capabilities' ? [sections.skills, sections.presentation]
-    : tab === 'profile' ? [sections.profile] : tab === 'model' ? [sections.modelAccess]
-    : tab === 'workspace' ? [sections.workspace, sections.permission]
+    : tab === 'role' ? [sections.role] : tab === 'model' ? [sections.modelAccess]
+    : tab === 'permission' ? [sections.permission]
     : [...(view.identity.kind !== 'smart' ? [sections.response] : []), ...(view.identity.backend !== 'claude-agent' ? [sections.run] : []), sections.permission, sections.presentation, ...(view.identity.kind === 'smart' ? [sections.judge, sections.smartRules] : [])];
   const notices: ReadonlyMessage[] = [];
   for (const section of relevant) if (section?.access.kind === 'readonly' && !hasReadonlyMessage([...outerReadonly, ...notices], section.access)) notices.push(section.access);
@@ -124,22 +126,17 @@ export function GroupSettingsContent({view, refresh, tab, tools, botName = 'Bot'
           render={(draft, _set, disabled, commit) => <SettingsRow title="语音转文字" trailing={<Toggle className="settings-row-switch" label="语音转文字" aria-label="语音转文字" checked={draft.voiceEnabled} disabled={disabled} onChange={event => void commit({voiceEnabled: event.target.checked})}/>}/>}/>}
         {onOpenTools && <SettingsGroup><SettingsRow title="工具与连接" description="安装与授权" trailing={<Button size="sm" onClick={onOpenTools}>管理<ChevronRight size={13}/></Button>}/></SettingsGroup>}
       </>}
-      {tab === 'profile' && (sections.profile && view.botProfile ? <Editor title="个性与记忆" section={sections.profile} save={(patch, revision) => save('profile', patch, revision)}
+      {tab === 'role' && (sections.role ? <Editor title="补充职责" section={sections.role} save={(patch, revision) => save('role', patch, revision)}
+        validate={value => [...value.supplement].length > SUPPLEMENT_MAX ? `补充职责最多 ${SUPPLEMENT_MAX} 字。` : undefined}
         render={(draft, set, disabled) => <>
-          <PersonaEditor label="个性" value={draft.persona} onChange={persona => set({...draft, persona})} disabled={disabled} maxLength={30000}
-            inheritance={{enabled: draft.inheritPersona, source: view.botProfile!.persona, botName, onChange: inheritPersona => set({...draft, inheritPersona})}}/>
-          <PersonaEditor label="记忆" value={draft.memory} onChange={memory => set({...draft, memory})} disabled={disabled} maxLength={30000}
-            inheritance={{enabled: draft.inheritMemory, source: view.botProfile!.memory, botName, onChange: inheritMemory => set({...draft, inheritMemory})}}/>
+          <PersonaEditor label="补充职责" value={draft.supplement} onChange={supplement => set({...draft, supplement})} disabled={disabled}
+            placeholder="这个 Bot 在本项目里多做什么、少做什么。角色设定（→ Bot 页）始终生效，这里只写补充；冲突时以这里为准。"/>
+          <p className="gd-note">{[...draft.supplement].length} / {SUPPLEMENT_MAX} 字。智能判断会优先看这一段。</p>
         </>}/> : <MissingSection/>)}
       {tab === 'model' && (sections.modelAccess ? <Editor title="可用模型" section={sections.modelAccess} save={(patch, revision) => save('modelAccess', patch, revision)}
         render={(draft, set, disabled) => <ModelAccessFields botId={view.scope.botId} value={draft} onChange={set} disabled={disabled} providers={providers} onCatalog={rememberCatalog}/>}
         validate={value => providers.some(provider => provider.id === value.backend) ? modelAccessProblem(value, modelCatalog.current) : '此 Provider 当前不可用，请先安装并登录。'}/> : <MissingSection/>)}
-      {tab === 'workspace' && <>
-        {sections.workspace ? <Editor title="工作区" section={sections.workspace} save={(patch, revision) => save('workspace', patch, revision)}
-          render={(draft, set, disabled) => <WorkspaceFields value={draft} onChange={set} disabled={disabled}/>}
-          validate={value => value.directories.includes(value.primary) ? undefined : '请选择一个主目录。'}/> : <MissingSection/>}
-        <ProjectPanel view={view} refresh={refresh} partition="workspace" independent/>
-      </>}
+      {tab === 'permission' && <ProjectPanel view={view} refresh={refresh} partition="permission" independent/>}
       {tab === 'response' && <>
         {responseHeader}
         {view.identity.kind === 'smart' && <>
@@ -200,7 +197,7 @@ export function ModelAccessChoices({value, onChange, catalog, disabled, onCatalo
   </>;
 }
 
-function WorkspaceFields({value, onChange, disabled}: {value: Workspace; onChange: (value: Workspace) => void; disabled: boolean}) {
+export function WorkspaceFields({value, onChange, disabled}: {value: Workspace; onChange: (value: Workspace) => void; disabled: boolean}) {
   const pick = useDirectoriesPicker();
   const [error, setError] = useState<string>();
   const [picking, setPicking] = useState(false);

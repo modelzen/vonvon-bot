@@ -55,4 +55,12 @@ describe('lossless admin state and pinned projection', () => {
     expect(projected.agents[0]?.connection).toBe('disconnected');
     expect(projected.stale).toBe(true);
   });
+
+  it('D8: shows the mode a group really runs in, not the stored tier a custom permission makes wider', async () => {
+    const narrow: AdminProject = { ...project, name: 'narrow', chatId: 'oc_narrow', backend: 'claude-agent', mode: 'full', network: false,
+      custom: { backend: 'claude-agent', settings: { permissionMode: 'default', network: 'all' } } } as AdminProject;
+    const state = await readAdminState({ listBots: async () => [bot], listProjects: async () => [narrow, { ...project, name: 'plain', chatId: 'oc_plain', mode: 'write' }] });
+    const memberships = desktopSnapshotSchema.parse({ ...empty, ...projectState(state, empty, new Set()) }).memberships;
+    expect(memberships.map(member => [member.permission.administrator, member.effectMode])).toEqual([['full', 'qa'], ['write', 'write']]);
+  });
 });

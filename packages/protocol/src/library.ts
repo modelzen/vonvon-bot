@@ -14,6 +14,12 @@ export const libraryRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("list") }).strict(),
   /** The one way a project's workspace changes: the library first, then every binding's mirror, every group's sessions archived. */
   z.object({ type: z.literal("workspace"), projectId: projectIdSchema, revision: z.number().int().min(1), workspace: libraryWorkspaceSchema }).strict(),
+  /** A project's name is its own: it does not follow a group's name (§5.3). */
+  z.object({ type: z.literal("rename"), projectId: projectIdSchema, revision: z.number().int().min(1), name: z.string().trim().min(1).max(100).regex(/^[^/\\\x00-\x1f]+$/) }).strict(),
+  /** The project this bot's group was bound to before it was unbound, which binding it again picks up (§5.6). */
+  z.object({ type: z.literal("previous"), agentId: agentIdSchema, groupId: groupIdSchema }).strict(),
+  /** Only a project no binding uses; its memory and events go with it. */
+  z.object({ type: z.literal("delete"), projectId: projectIdSchema, revision: z.number().int().min(1) }).strict(),
 ]);
 export type LibraryRequest = z.infer<typeof libraryRequestSchema>;
 
@@ -35,6 +41,9 @@ export const libraryReplySchema = z.discriminatedUnion("kind", [
     /** Per binding that followed: `archived` = its folders and sessions are done; `failed` = left as it was, repaired at the next daemon start. */
     rebound: z.array(z.object({ agentId: agentIdSchema, groupId: groupIdSchema.optional(), state: z.enum(["archived", "failed"]), message: z.string().optional() })),
   }),
+  z.object({ kind: z.literal("renamed"), project: libraryProjectSchema.omit({ bindings: true }) }),
+  z.object({ kind: z.literal("previous"), project: z.object({ id: projectIdSchema, name: z.string() }).optional() }),
+  z.object({ kind: z.literal("deleted"), projectId: projectIdSchema }),
 ]);
 export type LibraryReply = z.infer<typeof libraryReplySchema>;
 export type LibraryClient = (request: LibraryRequest) => Promise<LibraryReply>;
