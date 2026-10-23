@@ -1,5 +1,5 @@
 import { setDiagnosticsSink } from '../src/bot/diagnostics';
-import { SMART_FACTS_GUIDANCE } from '../src/judge/prompt';
+import { DEFAULT_SMART_PROMPT, SMART_FACTS_GUIDANCE, judgeSystem } from '../src/judge/prompt';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderProcessCleanupError } from '../src/agent/owned-process';
 import { JudgeCallError, type AgentBackend, type JudgeCall, type JudgeCallOutput, type ModelInfo } from '../src/agent/types';
@@ -702,6 +702,9 @@ it('notices the effective custom prompt once per bot/group per judge lifetime, i
   source = 'group'; text = SMART_FACTS_GUIDANCE;
   await judge.judge(req());
   expect(notices).toEqual([]);
+  text = DEFAULT_SMART_PROMPT;
+  await judge.judge(req());
+  expect(notices).toEqual([]);
   text = 'unchanged group override';
   await Promise.all([judge.judge(req()), judge.judge(req())]);
   expect(notices).toEqual(['oc_g']);
@@ -724,5 +727,43 @@ it('dispatches the explicit decision Provider and both group rules to the actual
   expect(claude.calls[0]!.system).toContain('需要帮助时响应');
   expect(claude.calls[0]!.system).toContain('独立问题新建话题');
   expect(readPrompt).not.toHaveBeenCalled();
+  await judge.shutdown();
+});
+
+it.each(['main', 'topic'] as const)('sends a complete custom or explicitly empty document verbatim to the LLM judge in %s', async (variant) => {
+  const f = fakeBackend();
+  f.answer(async () => ({ text: '{"decision":"skip","reason":"按规则"}' }));
+  const readPrompt = vi.fn(async () => ({ source: 'bot' as const, text: 'must not fall back', path: '/old' }));
+  const judge = make(f.backend, {readPrompt});
+  for (const text of ['  ## 我自己的标题\n收到也要回应，始终在原处回复。\n', '']) {
+    const result = await judge.judge(req(variant, {group: {...req().group, smartRules: {respond: text, newTopic: ''}}}));
+    expect(result).toMatchObject({promptSource: 'group', decision: 'skip'});
+    expect(f.calls.at(-1)!.system).toBe(judgeSystem(text, variant));
+  }
+  expect(readPrompt).not.toHaveBeenCalled();
+  await judge.shutdown();
+});
+
+it.each(['main', 'topic'] as const)('sends a complete custom or explicitly empty document verbatim to the decision judge in %s', async (variant) => {
+  const f = fakeBackend();
+  const readPrompt = vi.fn(async () => ({ source: 'bot' as const, text: 'must not fall back', path: '/old' }));
+  const sent: Array<{questions: {decision: {instructions: {rules: string}; criteria: Record<string, string>}}}> = [];
+  const judge = make(f.backend, {
+    readPrompt,
+    getSecret: async () => 'ts_TESTKEY0000',
+    fetch: async (_, init) => {
+      const body = JSON.parse(init!.body as string) as (typeof sent)[number];
+      sent.push(body);
+      const probabilities = Object.fromEntries(Object.keys(body.questions.decision.criteria).map(key => [key, key === 'skip' ? 1 : 0]));
+      return new Response(JSON.stringify({answers: {decision: {choice: 'skip', probabilities}}}), {status: 200});
+    },
+  });
+  for (const text of ['  ## 我自己的标题\n收到也要回应，始终在原处回复。\n', '']) {
+    const result = await judge.judge(req(variant, {group: {...req().group, judge: {kind: 'decision', provider: 'typesafe', model: 'jev-latest'}, smartRules: {respond: text, newTopic: ''}}}));
+    expect(result).toMatchObject({promptSource: 'group', provider: 'typesafe', decision: 'skip'});
+    expect(sent.at(-1)!.questions.decision.instructions.rules).toBe(text);
+  }
+  expect(readPrompt).not.toHaveBeenCalled();
+  expect(f.backend.judge).not.toHaveBeenCalled();
   await judge.shutdown();
 });
