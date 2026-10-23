@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { REASONING_EFFORTS } from '../agent/types';
+import { TIER_NETWORK } from '../agent/permission/types';
 
 export const ModelSelectionSchema = z.strictObject({
   kind: z.enum(['catalog', 'custom']),
@@ -12,6 +13,7 @@ export const BotDefaultsSchema = z.strictObject({
   backend: z.string().min(1).refine((value) => value === value.trim(), 'Must not have surrounding whitespace').optional(),
   model: ModelSelectionSchema.optional(),
   permission: z.enum(['qa', 'write', 'full']).optional(),
+  /** Legacy file compatibility only; since s31c, network is derived from permission. */
   network: z.boolean().optional(),
 });
 
@@ -37,11 +39,12 @@ export function parseBotDefaults(raw: unknown): BotDefaults | undefined {
 }
 
 export function resolveBotDefaults(defaults: BotDefaults | undefined): ResolvedBotDefaults {
+  const permission = defaults?.permission ?? 'write';
   return {
     backend: defaults?.backend ?? null,
     model: defaults?.model ?? null,
-    permission: defaults?.permission ?? 'write',
-    network: defaults?.network ?? true,
+    permission,
+    network: TIER_NETWORK[permission],
   };
 }
 

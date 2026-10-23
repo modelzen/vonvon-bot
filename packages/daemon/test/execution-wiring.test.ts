@@ -166,16 +166,16 @@ describe('an existing session keeps its backend', () => {
     expect(fake.records.get('omt_t')).toMatchObject({ backend: CODEX, cwd: baseMoved, model: 'gpt-old' });
   });
 
-  it("keeps an old group on Codex, full access and no network under a Claude, read-write, networked bot default, for an old topic and a new one", async () => {
+  it("keeps an old group on Codex, full access with network under a Claude, read-write, networked bot default, for an old topic and a new one", async () => {
     fake.records.set('omt_old', record('omt_old'));
     const o = setup({ defaults: { backend: CLAUDE, model: { kind: 'custom', id: 'sonnet-x' }, permission: 'write', network: true } });
     await o.onMessage(message('old topic', 'omt_old'));
     await finished();
-    expect(codex.resumeThread).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'old-omt_old', mode: 'full', network: false }));
+    expect(codex.resumeThread).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'old-omt_old', mode: 'full', network: true }));
     await o.onMessage(message('a new topic'));
     await vi.waitFor(() => expect(codex.startThread).toHaveBeenCalled());
     expect(claude.startThread).not.toHaveBeenCalled();
-    expect(codex.startThread).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-default', mode: 'full', network: false }));
+    expect(codex.startThread).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-default', mode: 'full', network: true }));
   });
 });
 

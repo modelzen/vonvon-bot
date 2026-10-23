@@ -44,15 +44,24 @@ describe('callback decision table', () => {
   it.each(['qa', 'write'] as const)('%s gates network including loopback', async mode => {
     for (const tool of ['SandboxNetworkAccess', 'WebFetch', 'WebSearch']) {
       for (const host of ['example.com', '127.0.0.1']) {
-        expect(await decide(tier(mode), call(tool, { host }), 'callback')).toMatchObject({ kind: 'deny', message: expect.stringContaining('关了网络') });
+        expect(await decide(tier(mode), call(tool, { host }), 'callback')).toMatchObject({ kind: 'deny', message: expect.stringContaining('这个群的权限不联网') });
         expect(await decide(tier(mode, true), call(tool, { host }), 'callback')).toEqual({ kind: 'allow' });
       }
     }
   });
+  it.each([
+    { mode: 'qa', network: false },
+    { mode: 'write', network: true },
+    { mode: 'qa', network: true },
+  ] as const)('keeps vonvon settings tools available at $mode/network $network', async ({ mode, network }) => {
+    const request = call('mcp__vonvon_bot__settings_set', { section: 'presentation', patch: {} });
+    expect(await decide(tier(mode, network), request, 'callback')).toEqual({ kind: 'allow' });
+    expect(await decide(tier(mode, network), request, 'hook')).toEqual({ kind: 'continue' });
+  });
   it.each(['qa', 'write'] as const)('%s refuses every explicit ask rule, across tool categories', async mode => {
     for (const tool of ['Bash', 'Write', 'Read', 'mcp__probe__ping', 'Agent', 'WebFetch', 'SandboxNetworkAccess']) {
       expect(await decide(tier(mode, true), call(tool, { file_path: `${cwd}/f` }, { decisionReasonType: 'rule' }), 'callback', fsx))
-        .toMatchObject({ kind: 'deny', message: expect.stringContaining('要人确认') });
+        .toMatchObject({ kind: 'deny', message: expect.stringContaining(`这个群的权限是${mode === 'qa' ? '只读' : '工作区可写'}`) });
     }
     expect(ownAsk(call('Read', {}, { decisionReasonType: 'rule' }))).toBe('rule');
     for (const extra of [{}, { decisionReasonType: 'workingDir' }, { decisionReasonType: 'safetyCheck' }]) expect(ownAsk(call('Read', {}, extra))).toBe('other');
@@ -67,7 +76,7 @@ describe('callback decision table', () => {
   });
   it('checks writes and reports missing input', async () => {
     expect(await decide(tier('write'), call('Write', { file_path: `${cwd}/f` }), 'callback', fsx)).toEqual({ kind: 'allow' });
-    expect(await decide(tier('qa'), call('Write', { file_path: `${cwd}/f` }), 'callback', fsx)).toMatchObject({ kind: 'deny', message: expect.stringContaining('只读') });
+    expect(await decide(tier('qa'), call('Write', { file_path: `${cwd}/f` }), 'callback', fsx)).toMatchObject({ kind: 'deny', message: expect.stringContaining('权限是只读') });
     expect(await decide(tier('write'), call('Write', { file_path: '/elsewhere/f' }), 'callback', fsx)).toMatchObject({ kind: 'deny', message: expect.stringContaining('工作区以外') });
     expect(await decide(tier('write'), call('Write'), 'callback', fsx)).toMatchObject({ kind: 'deny', message: expect.stringContaining('出错') });
   });

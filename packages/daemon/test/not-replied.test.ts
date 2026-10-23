@@ -150,8 +150,8 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
     expect(records()).toEqual([{ at: msg.createTime, groupId: 'oc_demo', place: 'main', reason: 'tier-unavailable', backend: 'codex', ref: msg.messageId.slice(-6) }]);
     expect(fake.send).toHaveBeenCalledOnce();
     expect(fake.send).toHaveBeenCalledWith('oc_demo', expect.anything(), { replyTo: msg.messageId, replyInThread: false });
-    expect(replies()[0]).toContain('这个群是「只读」档');
-    expect(replies()[0]).toContain('把「权限档」改成「完全访问」');
+    expect(replies()[0]).toContain('这个群的权限是「只读」');
+    expect(replies()[0]).toContain('换成「完全访问」');
     expect(replies()[0]).toContain('`vonvon settings set --group oc_demo permission.mode=full`');
   });
 
@@ -162,7 +162,16 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
     expect(startThread).not.toHaveBeenCalled();
     expect(records().map(record => [record.reason, record.place])).toEqual([['tier-unavailable', 'topic']]);
     expect(fake.send).toHaveBeenCalledWith('oc_demo', expect.anything(), { replyTo: msg.messageId, replyInThread: true });
-    expect(replies()[0]).toContain('这个群是「读写」档');
+    expect(replies()[0]).toContain('这个群的权限是「工作区可写」');
+  });
+
+  it('refuses a custom read-only effect even when the stored tier is full', async () => {
+    fake.project = { ...base, mode: 'full', custom: { backend: 'codex-appserver', settings: { sandbox: 'read-only', network: true } } };
+    await orchestrator.onMessage(message());
+    expect(startThread).not.toHaveBeenCalled();
+    expect(records().map(record => record.reason)).toEqual(['tier-unavailable']);
+    expect(replies()[0]).toContain('权限是「只读」');
+    expect(replies()[0]).toContain('换成「完全访问」');
   });
 
   it('answers a 免@ group once in 10 minutes, an @ every time, and notes every message', async () => {
@@ -195,13 +204,13 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
     expect(replies()).toHaveLength(2);
   });
 
-  it('refuses everyone\'s turn in a 只读 group, naming 权限档 and permission.mode', async () => {
+  it('refuses everyone\'s turn in a 只读 group, naming 权限 and permission.mode', async () => {
     await orchestrator.onMessage(message({ senderId: 'ou_guest', threadId: 'omt_topic' }));
     await orchestrator.onMessage(message({ threadId: 'omt_topic' }));
     expect(startThread).not.toHaveBeenCalled();
     expect(records().map(record => record.reason)).toEqual(['tier-unavailable', 'tier-unavailable']);
     for (const reply of replies()) {
-      expect(reply).toContain('把「权限档」改成「完全访问」');
+      expect(reply).toContain('换成「完全访问」');
       expect(reply).toContain('permission.mode=full');
       expect(reply).not.toContain('guestMode');
     }
