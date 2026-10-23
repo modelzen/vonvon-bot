@@ -10,6 +10,7 @@ export const adminProjectSchema = z.object({
   mode: permissionSchema,
   /** @deprecated since s15c always equal to the group's one tier; kept so clients from before s15c still parse */
   guestMode: permissionSchema,
+  /** The effective network access, including native custom settings. */
   network: z.boolean(), backend: z.string(), allowedUsersCount: z.number(),
   sessionCount: z.number(), createdAt: z.number(),
 });

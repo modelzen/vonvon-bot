@@ -198,7 +198,7 @@ test('each group setting belongs to the corresponding five-page surface', () => 
     ['本群个性', 'profile', '个性与记忆'], ['本群记忆', 'profile', '个性与记忆'],
     ['模型 Provider', 'model', '可用模型'], ['可用 Effort', 'model', '可用模型'],
     ['主目录', 'workspace', '工作区'], ['代码仓库', 'workspace', '工作区'],
-    ['允许网络访问', 'workspace', '工作目录权限'],
+    ['权限', 'workspace', '权限'], ['能挡到什么', 'workspace', '权限'],
     ['聊天方式', 'response', '聊天方式'], ['显示模型', 'response', '消息与提醒'],
     ['显示工具调用', 'response', '消息与提醒'], ['从群成员选择', 'response', '响应成员'],
   ]) {

@@ -14,6 +14,7 @@ import { addProject, bindNoMention, bindProject, listProjectsIn, sessionModeOf, 
 import { directoryContext, legacyDirectoryProblems } from './directory-audit';
 import { DirectoryError, directoryError } from '../config/directory-errors';
 import type { PermissionMode } from '../agent/types';
+import { TIER_NETWORK } from '../agent/permission';
 import { DEFAULT_BACKEND_ID, effectiveDefaultBackend, isBackendEntryInstalled } from '../agent';
 import { catalogById, isInstallable, projectCreatableBackends } from '../agent/catalog';
 import { setAnnouncement } from './announcement';
@@ -70,8 +71,6 @@ export interface CreateProjectInput {
    *  for a single backend) → the effective default the runtime used to fall back to, written into the row so the
    *  group never follows a later default (s36d1). */
   backend?: string;
-  /** allow the sandboxed shell to reach the network (default false). */
-  network?: boolean;
   /** Stops every Feishu call of this creation, for the daemon's shutdown. */
   signal?: AbortSignal;
   /** One budget for every Feishu call: token, create, admin, announcement and welcome. Default {@link CREATION_BUDGET_MS}. */
@@ -140,8 +139,6 @@ export interface JoinGroupInput {
   mode?: PermissionMode;
   /** agent backend chosen at bind time (fixed afterwards — no switching). */
   backend?: string;
-  /** allow the sandboxed shell to reach the network (default false). */
-  network?: boolean;
 }
 
 /**
@@ -201,7 +198,7 @@ export async function createProject(channel: Pick<LarkChannel, 'rawClient'>, req
   await assertBotIdentity(input.bot);
   const initialSettings = await prepareNewGroupSettings({backend, kind:input.kind, judge:input.judge});
   const row = { ...initialSettings, createdAt: Date.now(), origin: 'created' as const, mode, backend,
-    network: input.network ?? false, creationRequestId: input.requestId,
+    network: TIER_NETWORK[mode], creationRequestId: input.requestId,
     ...(input.requestSignature === undefined ? {} : { creationRequestSignature: input.requestSignature }) };
   const noMention = entryNoMention(input);
 
@@ -295,7 +292,7 @@ export async function joinExistingGroup(channel: LarkChannel, request: JoinGroup
       const initialSettings = await prepareNewGroupSettings({backend:input.backend || defaultBackend,kind:input.kind,judge:input.judge});
       const workspace = existingPath ? await admitExistingDirectory(existingPath, location.dataRoot) : restored ?? await scope.prepareDefault();
       return { ...workspace, ...initialSettings, createdAt: Date.now(), origin: 'joined', addedBy: input.addedBy,
-        mode, backend: input.backend || defaultBackend, network: input.network ?? false };
+        mode, backend: input.backend || defaultBackend, network: TIER_NETWORK[mode] };
     }, location);
     await retireBoundPendingGroup(pendingGroupsFile(location.file), binding.project.chatId);
     return binding;

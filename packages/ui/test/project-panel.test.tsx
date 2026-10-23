@@ -1,3 +1,4 @@
+import {permissionValue} from './permission-fixture';
 import { expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { agentIdSchema, membershipSchema, type ProjectSettingsView } from "@vonvon/protocol";
@@ -13,7 +14,7 @@ type ViewOptions = Pick<ProjectSettingsView, "decisionModels"> & Pick<ProjectSet
 const view = (kind: string, options: ViewOptions = {}): ProjectSettingsView => ({
   scope: { kind: "project", botId: agentIdSchema.parse("cli_fixture"), projectName: "demo" },
   sections: {
-    permission: section({ mode: "full" as const, guestMode: "full" as const, network: false }),
+    permission: section(permissionValue()),
     response: section({ noMention: true }),
     model: section({ selection: { kind: "default" as const } }),
     ...(options.run ? { run: options.run } : {}),

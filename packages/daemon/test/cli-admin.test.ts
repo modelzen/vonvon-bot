@@ -143,13 +143,13 @@ it('bot status prints the service step after the tools without counting it', asy
   const sandboxed = harness({ snapshot: async () => ({ ...snapshot([agent('cli_a')], [], tools), application: { platform: 'linux', version: '1', loginItem: false, dataPath: '/x' } }), admin: async () => ({ kind: 'setupStatus', status: setup }) });
   await runBotStatus(undefined, sandboxed.io(), sandboxed.daemon);
   const out = sandboxed.out();
-  expect(out).toMatch(/· Codex 的权限档：只能用完全访问\n    Linux 上 Codex 的沙箱只挡写/);
-  expect(out).toContain("! Claude 的权限档：被 AppArmor 挡住\n");
+  expect(out).toMatch(/· Codex 的权限：只能用完全访问\n    Linux 上的 Codex 暂时只能用完全访问/);
+  expect(out).toContain("! Claude 的权限：被 AppArmor 挡住\n");
   // The commands are not indented: an indented closing EOF would not end the heredoc when pasted into a shell.
   expect(out).toContain(["\n\nsudo tee /etc/apparmor.d/bwrap >/dev/null <<'EOF'", 'abi <abi/4.0>,', 'include <tunables/global>',
     'profile bwrap /usr/bin/bwrap flags=(unconfined) {', '  userns,', '  include if exists <local/bwrap>', '}', 'EOF',
     'sudo apparmor_parser -r /etc/apparmor.d/bwrap\n\n'].join('\n'));
-  expect(out.indexOf('Claude 的权限档')).toBeLessThan(out.indexOf('后台服务'));
+  expect(out.indexOf('Claude 的权限')).toBeLessThan(out.indexOf('后台服务'));
   expect(out).toMatch(/全部就绪。\n$/);
   sandboxed.clear(); await runBotStatus(undefined, sandboxed.io(true), sandboxed.daemon);
   expect(JSON.parse(sandboxed.out())).toMatchObject({ ready: true, steps: expect.arrayContaining([expect.objectContaining({ id: 'claude-sandbox', done: false })]) });
@@ -268,7 +268,7 @@ it('group bind sends an absolute folder, the chosen token and the pending name',
   await runGroupBind('oc_pay', { folder: 'pay', conversation: 'multi' }, h.io(), h.daemon, host);
   expect(directory).toHaveBeenCalledWith({ type: 'choose', path: join(home, 'work', 'pay') });
   expect(run).toHaveBeenLastCalledWith({ type: 'bindGroup', agentId: 'cli_a', groupId: 'oc_pay', projectName: '支付组', folder: { kind: 'existing', folderToken: token }, tool: 'codex', conversation: 'threads' });
-  expect(h.out()).toBe(`已绑定 支付组（oc_pay）→ ${join(home, 'work', 'pay')} · Codex · 多会话（@ 我开新会话） · 免 @ 开\nLinux 上 Codex 只能用完全访问，运行：vonvon settings set --group oc_pay permission.mode=full\n`);
+  expect(h.out()).toBe(`已绑定 支付组（oc_pay）→ ${join(home, 'work', 'pay')} · Codex · 多会话（@ 我开新会话） · 免 @ 开\nLinux 上的 Codex 暂时只能用完全访问，没有沙箱。运行：vonvon settings set --group oc_pay permission.mode=full\n`);
   await runGroupBind('oc_pay', { folder: '~/work/pay', name: '新名字', tool: 'claude', conversation: 'single' }, h.io(), h.daemon, host);
   expect(directory).toHaveBeenLastCalledWith({ type: 'choose', path: join(home, 'work', 'pay') });
   expect(run).toHaveBeenLastCalledWith(expect.objectContaining({ projectName: '新名字', tool: 'claude', conversation: 'shared' }));
@@ -332,7 +332,8 @@ it('s25c: settings on a 智能 group leave 免@ out of get and print the daemon\
 });
 
 it('settings set parses values as JSON or text and names the bad field', () => {
-  expect(parseAssignments('project', ['permission.mode=full', 'permission.network=false'])).toEqual({ section: 'permission', patch: { mode: 'full', network: false } });
+  expect(parseAssignments('project', ['permission.mode=full'])).toEqual({ section: 'permission', patch: { mode: 'full' } });
+  expect(parseAssignments('project', ['permission.custom={"sandbox":"read-only","network":true}']).patch).toEqual({ custom: { sandbox: 'read-only', network: true } });
   expect(parseAssignments('agent', ['run.maxConcurrentRuns=3']).patch).toEqual({ maxConcurrentRuns: 3 });
   expect(parseAssignments('agent', ['paths.projectsRootDir=null']).patch).toEqual({ projectsRootDir: null });
   expect(parseAssignments('session', ['model.selection={"kind":"explicit","model":"gpt-5.5","effort":"medium"}']).patch).toEqual({ selection: { kind: 'explicit', model: 'gpt-5.5', effort: 'medium' } });
@@ -341,8 +342,8 @@ it('settings set parses values as JSON or text and names the bad field', () => {
   for (const text of ['null', '[]', '{}']) expect(() => parseAssignments('agent', [`comments.backend=${text}`])).toThrow('comments.backend');
   for (const [kind, args, message] of [
     ['project', ['permission.mode=bad'], 'permission.mode 只能是 qa、write、full'],
-    ['project', ['permission.nope=1'], 'permission 没有 nope 这一项。可以改的有：mode、network'],
-    ['project', ['permission.guestMode=full'], '「普通成员权限」去掉了：一个群只有一个权限档，群里谁说话都用它。改 permission.mode。'],
+    ['project', ['permission.nope=1'], 'permission 没有 nope 这一项。可以改的有：mode、custom'],
+    ['project', ['permission.guestMode=full'], '「普通成员权限」去掉了：一个群只有一个权限，群里谁说话都用它。改 permission.mode。'],
     ['project', ['permission.mode=full', 'cards.showModel=off'], '一次只能改一节；permission 和 cards 分两次改。'],
     ['agent', ['cliBridge.agents={}'], '咖啡一下第一版已拿掉，不能改。'],
     ['project', ['compact.autoCompact=false'], '自动压缩现在一直开着，不能关了。'],
@@ -355,6 +356,29 @@ it('settings set parses values as JSON or text and names the bad field', () => {
     ['project', ['model.selection={"kind":"x"}'], 'model.selection 的 kind 只能是 default 或 explicit'],
     ['project', ['mode=full'], '写成 节.项=值，例如 permission.mode=full'],
   ] as const) expect(() => parseAssignments(kind, args), message).toThrow(message);
+});
+
+it('permission network is refused locally and custom settings round trip through the CLI', async () => {
+  const scope = { kind: 'project', botId: 'cli_a', projectName: 'pay' };
+  let permission = { mode: 'qa', custom: null as Record<string, unknown> | null,
+    options: { customSummary: undefined as string | undefined, legacy: false } };
+  const settings = vi.fn(async (request: { type: string; edit?: { patch: Record<string, unknown> } }): Promise<unknown> => {
+    if (request.type === 'sessions') return { kind: 'sessions', sessions: [] };
+    if (request.type === 'read') return { kind: 'view', view: { scope, identity: {}, sections: { permission: section(permission) } } };
+    permission = { ...permission, custom: request.edit!.patch.custom as Record<string, unknown>,
+      options: { customSummary: '沙箱模式：只读（read-only）；网络：开', legacy: false } };
+    return { kind: 'saved', result: { kind: 'saved', section: { scope, section: 'permission', value: section(permission) }, effects: [] } };
+  });
+  const h = harness({ snapshot: one(undefined, [member('cli_a', 'oc_pay', 'pay')]), settings });
+  await expect(runSettingsSet(['permission.network=true'], { group: 'pay' }, h.io(), h.daemon)).rejects.toThrow('联网已经并进');
+  expect(h.connect).not.toHaveBeenCalled();
+  await runSettingsSet(['permission.custom={"sandbox":"read-only","network":true}'], { group: 'pay' }, h.io(), h.daemon);
+  expect(settings).toHaveBeenLastCalledWith({ type: 'save', edit: { scope, section: 'permission', revision: 'rev-mode', patch: { custom: { sandbox: 'read-only', network: true } } } });
+  h.clear(); await runSettingsGet('permission', { group: 'pay' }, h.io(), h.daemon);
+  expect(h.out()).toContain('权限：自定义（沙箱模式：只读（read-only）；网络：开）');
+  permission.options.legacy = true;
+  h.clear(); await runSettingsGet('permission', { group: 'pay' }, h.io(), h.daemon);
+  expect(h.out()).toContain('（从旧版的联网开关转来）');
 });
 
 it('settings set saves with the section revision and explains each refusal', async () => {
@@ -416,7 +440,7 @@ it('settings get prints each section, gives the view as JSON, and lists a group\
   expect(Object.keys(JSON.parse(h.out()).view.sections)).toEqual(['cards', 'comments']);
   h.clear(); await runSettingsGet(undefined, { group: 'pay' }, h.io(), h.daemon);
   const out = h.out();
-  expect(out).toContain('群 pay（oc_pay）· Codex · 多会话（@ 我开新会话） · /home/u/pay\n[permission]（只读：这个 Bot 没在运行，运行起来后才能改设置）\n  mode = qa\n  Linux 上只能选完全访问。\n');
+  expect(out).toContain('群 pay（oc_pay）· Codex · 多会话（@ 我开新会话） · /home/u/pay\n[permission]（只读：这个 Bot 没在运行，运行起来后才能改设置）\n  mode = qa\n  权限：只读\n  Linux 上只能选完全访问。\n');
   expect(out).toContain('会话（最近 2 个，共 2 个；看单个会话：vonvon settings get --session <id>）');
   expect(out.indexOf('omt_new')).toBeLessThan(out.indexOf('omt_old'));
   expect(out).toContain(`gpt-5.5  ${'修'.repeat(40)}…\n`);

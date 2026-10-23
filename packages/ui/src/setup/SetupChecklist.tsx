@@ -87,7 +87,7 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
       {tools.steps.map((step, index) => stepRow(step, index))}
     </SettingsGroup>
     {codexJobs}
-    {linux.length ? <SettingsGroup label="Linux 上的权限档">{linux.map((step, index) => stepRow(step, index))}</SettingsGroup> : null}
+    {linux.length ? <SettingsGroup label="Linux 上的权限">{linux.map((step, index) => stepRow(step, index))}</SettingsGroup> : null}
     <SettingsGroup label="后台运行" footer={SERVICE_FOOTER[snapshot.application.platform]}>
       {stepRow(serviceStep(snapshot.application), 0)}
     </SettingsGroup>

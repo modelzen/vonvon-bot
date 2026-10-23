@@ -33,6 +33,7 @@ const fake = vi.hoisted(() => ({
   events: [] as unknown[],
   startError: undefined as Error | undefined,
   fullOnly: undefined as string | undefined,
+  backendId: undefined as string | undefined,
   cardError: undefined as unknown,
   stream: undefined as (() => AsyncIterable<unknown>) | undefined,
   aborted: vi.fn(),
@@ -52,7 +53,7 @@ vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_context: unkn
 vi.mock('../src/project/registry', async original => ({ ...await original<object>(), getProjectByChatId: async () => fake.project }));
 vi.mock('../src/agent', async original => ({
   ...await original<object>(),
-  createBackend: (id: string) => ({ id, listModels: async () => [], startThread, fullAccessOnly: () => fake.fullOnly }),
+  createBackend: (id: string) => ({ id: fake.backendId ?? id, listModels: async () => [], startThread, fullAccessOnly: () => fake.fullOnly }),
 }));
 vi.mock('../src/bot/session-store', async original => ({ ...await original<object>(), getSession: async () => undefined, upsertSession: async () => undefined }));
 vi.mock('../src/card/managed', async original => ({ ...await original<object>(), sendManagedCard: fake.card }));
@@ -98,6 +99,7 @@ beforeEach(() => {
   fake.events = [{ type: 'done', turnId: 'turn-fixture' }];
   fake.startError = undefined;
   fake.fullOnly = undefined;
+  fake.backendId = undefined;
   fake.cardError = undefined;
   fake.stream = undefined;
   start();
@@ -255,21 +257,64 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
       await vi.waitFor(() => expect(fake.card).toHaveBeenCalledOnce());
       const sent = JSON.stringify(fake.card.mock.calls[0]?.[2]);
       expect(sent).toContain(`"v":${PERMISSION_CARD_VERSION}`);
-      expect(sent).toContain('现在是🔒 项目内只读');
+      expect(sent).toContain('现在是只读');
       expect(fake.log.info).toHaveBeenCalledWith('console', 'permission-refused', { project: 'demo', mode: 'full', reason: 'old-card' });
       expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa' });
       expect(JSON.parse(readFileSync(paths.projectsFile, 'utf8')).projects[0]).toMatchObject({ mode: 'full', guestMode: 'qa' });
     } finally { await removeProject('demo'); }
   });
 
-  it('keeps a stored 只读 when the DM card is saved with the tier dropdowns left alone', async () => {
-    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: workspace, createdAt: 1, blank: false, mode: 'qa' });
+  it.each([undefined, { backend: 'codex-appserver', settings: { sandbox: 'read-only', network: true } }])('keeps the tier/custom and replies when the dropdown is left alone (%s)', async custom => {
+    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: workspace, createdAt: 1, blank: false, mode: 'qa', custom });
+    const before = readFileSync(paths.projectsFile, 'utf8');
     try {
       // The card presets no tier it cannot offer, so an untouched dropdown sends nothing.
       await orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
         action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo', v: PERMISSION_CARD_VERSION } }, raw: { action: { form_value: { network: 'on' } } } } as never);
+      await vi.waitFor(() => expect(fake.send).toHaveBeenCalledWith('ou_owner', { markdown: '没有改动。' }, { replyTo: 'om_card' }));
+      expect(fake.card).not.toHaveBeenCalled();
+      expect(readFileSync(paths.projectsFile, 'utf8')).toBe(before);
+    } finally { await removeProject('demo'); }
+  });
+
+  it.each([['qa', false], ['write', true], ['full', true]] as const)('DM choosing %s clears custom and saves network %s', async (mode, network) => {
+    fake.fullOnly = undefined;
+    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: workspace, createdAt: 1, blank: false, mode: 'write', network: false,
+      custom: { backend: 'codex-appserver', settings: { sandbox: 'workspace-write', network: false } } });
+    try {
+      await orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
+        action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo', v: PERMISSION_CARD_VERSION } }, raw: { action: { form_value: { mode } } } } as never);
       await vi.waitFor(() => expect(fake.card).toHaveBeenCalledOnce());
-      expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa', network: true });
+      const saved = await getProjectByName('demo');
+      expect(saved).toMatchObject({ mode, network });
+      expect(saved).not.toHaveProperty('custom');
+      expect(JSON.parse(readFileSync(paths.projectsFile, 'utf8')).projects[0]).not.toHaveProperty('custom');
+    } finally { await removeProject('demo'); }
+  });
+
+  it('uses the group backend table when refreshing a custom card even if the runtime id differs', async () => {
+    fake.backendId = 'synthetic-runtime-alias';
+    await orchestrator.shutdown(); start();
+    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: workspace, createdAt: 1, blank: false, mode: 'qa', backend: 'codex-appserver',
+      custom: { backend: 'codex-appserver', settings: { sandbox: 'read-only', network: true } } });
+    try {
+      await orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
+        action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo', v: PERMISSION_CARD_VERSION - 1 } }, raw: { action: { form_value: {} } } } as never);
+      await vi.waitFor(() => expect(fake.card).toHaveBeenCalledOnce());
+      expect(JSON.stringify(fake.card.mock.calls[0]?.[2])).toContain('现在是自定义：沙箱模式：只读（read-only）；网络：开');
+    } finally { await removeProject('demo'); }
+  });
+
+  it('refreshes a previous network-switch card without writing either field', async () => {
+    fake.fullOnly = undefined;
+    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: workspace, createdAt: 1, blank: false, mode: 'qa', network: false });
+    try {
+      await orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
+        action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo', v: PERMISSION_CARD_VERSION - 1 } },
+        raw: { action: { form_value: { mode: 'write', network: 'on' } } } } as never);
+      await vi.waitFor(() => expect(fake.card).toHaveBeenCalledOnce());
+      expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa', network: false });
+      expect(JSON.stringify(fake.card.mock.calls[0]?.[2])).not.toContain('"name":"network"');
     } finally { await removeProject('demo'); }
   });
 

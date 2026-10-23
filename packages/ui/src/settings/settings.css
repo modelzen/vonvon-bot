@@ -114,6 +114,10 @@
 .setting-choices--stacked { flex-direction: column; }
 .setting-choices--stacked .setting-choice,
 .setting-choices--stacked .setting-choice > span { width: 100%; }
+.setting-choice > .setting-choice-copy { align-items: flex-start; flex-direction: column; gap: 4px; }
+.setting-choice-copy strong { font-size: 13px; font-weight: 600; }
+.setting-choice-copy small { color: var(--color-text-secondary); font-size: 12px; font-weight: 400; }
+.permission-note { margin: 0; padding: 12px 16px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.55; }
 .collaboration-window .ss-row.group-choice-row {
   flex-wrap: wrap;
   gap: 10px;

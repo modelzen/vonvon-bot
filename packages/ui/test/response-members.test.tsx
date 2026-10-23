@@ -1,3 +1,4 @@
+import {permissionValue} from './permission-fixture';
 import { expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { agentIdSchema, type ProjectSettingsView } from '@vonvon/protocol';
@@ -9,7 +10,7 @@ const section = <const T,>(stored: T) => ({ stored, effective: stored, revision:
 function view(): ProjectSettingsView {
   return { scope: {kind: 'project', botId: agentIdSchema.parse('cli_fixture'), projectName: 'demo'},
     identity: {chatId:'oc_fixture', backend:'codex-appserver', cwd:'/fixture', kind:'smart'},
-    sections: {permission: section({mode:'full',guestMode:'full',network:false}), response:section({noMention:false}), model:section({selection:{kind:'default'}})},
+    sections: {permission: section(permissionValue()), response:section({noMention:false}), model:section({selection:{kind:'default'}})},
     members: {openIds:['ou_saved_missing'], revision:'r', roster:{state:'partial',otherBots:true,entries:[{openId:'ou_bot_peer',name:'同名',kind:'bot'},{openId:'ou_person',name:'同名',kind:'person'}]}} };
 }
 const render = (v: ProjectSettingsView) => renderToStaticMarkup(<ClientProvider client={client}><ProjectPanel view={v} refresh={async()=>{}} /></ClientProvider>);

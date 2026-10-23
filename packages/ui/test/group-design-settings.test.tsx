@@ -1,3 +1,4 @@
+import {permissionValue} from './permission-fixture';
 import {expect, it} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {DEFAULT_SMART_RULES, agentIdSchema, type ModelCatalog, type ProjectSettingsView} from '@vonvon/protocol';
@@ -15,7 +16,7 @@ const fixture = (): ProjectSettingsView => ({
   botProfile: {persona: 'Bot 的个性原文', memory: 'Bot 的记忆原文'},
   skills: [{name: '实际技能', description: '从 Provider 发现', path: 'claude:actual', source: 'provider', enabled: true}],
   sections: {
-    permission: section({mode: 'full', guestMode: 'full', network: false}), response: section({noMention: false}), model: section({selection: {kind: 'default'}}),
+    permission: section(permissionValue()), response: section({noMention: false}), model: section({selection: {kind: 'default'}}),
     profile: section({persona: '本群补充', memory: '本群记忆', inheritPersona: true, inheritMemory: false}),
     modelAccess: section({backend: 'codex-appserver', models: ['actual-a'], efforts: ['low']}),
     workspace: section({primary: '/one', directories: ['/one', '/two'], repositories: ['/repo-a', '/repo-b']}),

@@ -27,6 +27,7 @@ const inputSchema = z.strictObject({
     z.strictObject({ kind: z.literal('existing'), path: absolute }),
   ]),
   kind: z.enum(['single', 'multi']), noMention: z.boolean(), backend: text,
+  // s31c: retained only for old evidence/signatures; new prepares always capture false.
   mode: z.enum(permissionSchema.options), network: z.boolean(),
 });
 const snapshotSchema = z.strictObject({
@@ -70,7 +71,7 @@ function validateRecord(raw: unknown, key: Key): CreationRecord {
 function transition(current: CreationRecord | undefined, change: Change, key: Key): CreationRecord {
   if (change.kind === 'prepare') {
     if (change.bot.appId !== key.appId || change.bot.tenant !== key.tenant) throw new Error('Creation account mismatch');
-    const captured = { bot: change.bot, operatorOpenId: change.operatorOpenId, input: change.input };
+    const captured = { bot: change.bot, operatorOpenId: change.operatorOpenId, input: { ...change.input, network: false } };
     if (current) {
       if (current.snapshot.signature !== signature(captured) || JSON.stringify(current.snapshot.bot) !== JSON.stringify(change.bot)) throw new Error('Creation operation input conflict');
       return current;
