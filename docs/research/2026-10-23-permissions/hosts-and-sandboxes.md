@@ -52,7 +52,7 @@
 
 ## 3. Paseo（getpaseo/paseo）
 
-来源：浅克隆 `4b9b2fe`（2026-10-23）时 git 对象拉取失败，下列内容来自 raw.githubusercontent.com 读取的源文件，未读到全文的地方已标注。2026-10-14 的记录见 `/home/ops/vonvon/worktrees/dev-read/docs/research/2026-10-14-session-approval-service/approval-ux.md` 第 4 节，下面只补新内容。
+来源：浅克隆 `4b9b2fe`（2026-10-23）时 git 对象拉取失败，下列内容来自 raw.githubusercontent.com 读取的源文件，未读到全文的地方已标注。2026-10-14 的记录见 `docs/research/2026-10-14-session-approval-service/approval-ux.md` 第 4 节，下面只补新内容。
 
 - **provider 列表**（页面 `packages/server/src/server/agent/providers/`）：`claude/`、`codex/`、`opencode/`、`pi/`、`omp/`，以及 ACP 系：`acp-agent.ts`、`generic-acp-agent.ts`、`copilot-`、`cursor-`、`kimi-`、`kiro-`、`trae-acp-agent.ts`。`CLAUDE.md` 列支持的 agent：Claude Code、Codex、GitHub Copilot、OpenCode、Pi、Antigravity、Muse Code。
 - **mode 来源（ACP 系）**（源码 `acp-agent.ts`，`deriveModesFromACP`）：agent 自报，不写死。顺序：session 响应的 `availableModes` → category 为 `mode` 的 select config option → `fallbackModes`（默认空）。模型取 `availableModels` → `model` option；思考级别取 `thought_level` option。`docs/custom-providers.md`：自定义 ACP provider 在 `agents.providers` 里 `extends: "acp"` + `command`，"Models and modes are discovered dynamically at runtime from the agent process"。
