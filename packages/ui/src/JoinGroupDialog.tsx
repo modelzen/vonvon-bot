@@ -12,6 +12,7 @@ import type {PendingAgentGroups} from './pending-groups';
 import {SettingChoices} from './settings/SettingChoices';
 import {judgeLabel} from './settings/judgeChoice';
 import {DecisionFields, useProviders} from './settings/GroupDesignSettings';
+import {decisionProviderProblem} from './settings/DecisionFields';
 import {AgentAvatar} from './AgentAvatar';
 import './setup/join-group.css';
 import {providerBackends, providerSignature, providerUsable} from './setup/provider-state';
@@ -114,6 +115,7 @@ export function JoinGroupDialog({linux, open = true, agent, pending, initialGrou
   if (!open) decisionOpenEpoch.current++;
   const [decisionReady, setDecisionReady] = useState({serial: -1, epoch: -1});
   const providers = useProviders(tools);
+  const [judgeProvider, setJudgeProvider] = useState<string>();
   const liveEpoch = useRef(0);
   if (!open) liveEpoch.current++;
   const [live, setLive] = useState<Partial<Record<ProviderTool, {state: 'ready' | 'unavailable'; models: ModelCatalog['models']; observedFor: string; epoch: number}>>>({});
@@ -187,7 +189,7 @@ export function JoinGroupDialog({linux, open = true, agent, pending, initialGrou
   const shownModel = recommendedOverride ?? resolved;
   const decisionSummary = decisionReadError || (!decisionView ? '正在读取推荐决策模型…' : defaultProblem
     ?? (shownModel ? `${resolved?.source === 'default' ? '推荐小模型' : '沿用 Bot 设置'} · ${shownModel.model}${shownModel.effort ? ` · ${shownModel.effort}` : tool === 'claude' ? ' · 关闭思考' : ' · 不指定推理强度'}` : '正在读取…'));
-  const editedProblem = judge.kind === 'default' ? '请选择决策模型。' : judgeSetupProblem(judge, decisionView?.decisionModels, providers.filter(item => liveBackends.includes(item.id)).map(item => item.id))
+  const editedProblem = judge.kind === 'default' ? '请选择决策模型。' : decisionProviderProblem(judge, judgeProvider, backend ?? '') ?? judgeSetupProblem(judge, decisionView?.decisionModels, providers.filter(item => liveBackends.includes(item.id)).map(item => item.id))
     ?? (selectedProvider && live[selectedProvider]?.state !== 'ready' ? '决策 Provider 模型目录暂不可用。' : undefined)
     ?? (isKnownJudgeSelection(judge) && judge.kind === 'llm' && selectedProvider && !judge.custom && !live[selectedProvider]?.models.some(model => model.id === judge.model) ? '此决策模型不在当前 Provider 的实时目录中。' : undefined);
   const judgeProblem = conversation === 'smart' ? decisionReadError || (!decisionFresh ? '正在读取 Bot 的决策模型，请稍候。' : editJudge ? editedProblem : defaultProblem) : undefined;
@@ -282,7 +284,8 @@ export function JoinGroupDialog({linux, open = true, agent, pending, initialGrou
         </FormField>
         {conversation === 'smart' && <SettingsGroup label="决策模型">
           <SettingsRow title={editJudge ? '自定义' : '默认模型'} description={editJudge ? '本群使用下方选定的模型。' : decisionSummary} trailing={<>{defaultProblem && onOpenDecisionModel && <Button disabled={busy} onClick={onOpenDecisionModel}>设置决策模型</Button>}<Button disabled={busy} onClick={() => {setEditJudge(value => !value); setJudge({kind: 'default'});}}>{editJudge ? '沿用默认' : '修改'}</Button></>}/>
-          {editJudge && <DecisionFields initial botId={agent.id} groupBackend={tool ? providerBackends[tool] : ''} value={judge} effective={decisionView?.sections.judge?.effective.selection ?? {kind: 'default'}} onChange={setJudge} disabled={busy} providers={providers.filter(item => liveBackends.includes(item.id))} services={decisionView?.decisionModels} onOpenSecrets={onOpenDecisionModel}/>}
+          {editJudge && <DecisionFields initial botId={agent.id} groupBackend={tool ? providerBackends[tool] : ''} value={judge} effective={decisionView?.sections.judge?.effective.selection ?? {kind: 'default'}} onChange={setJudge} onProviderChange={setJudgeProvider} disabled={busy} providers={providers.filter(item => liveBackends.includes(item.id))} services={decisionView?.decisionModels} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenDecisionModel}/>}
+          {editJudge && editedProblem && <p className="gd-note" role="status">{editedProblem}</p>}
           {decisionReadError && <Button size="sm" disabled={busy} onClick={() => void readDecision()}>重试读取</Button>}
         </SettingsGroup>}
         {mode.kind === 'bind' && mode.group.hasOtherBots && <p className="join-group-flow__hint">群内 Bot 都使用智能模式后，可互相 @ 并判断是否接话。</p>}

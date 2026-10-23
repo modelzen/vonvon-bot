@@ -93,6 +93,8 @@ it('rejects missing catalogs and model/Effort combinations with no intersection'
 });
 it('restores separate smart prompts and response controls without Bot default actions', () => {
   const html = render('response');
+  expect(html.indexOf('决策模型')).toBeLessThan(html.indexOf('判断规则'));
+  expect(html.indexOf('实际回复和执行任务')).toBeLessThan(html.indexOf('判断规则'));
   expect(html).toContain('什么时候回复'); expect(html).toContain('响应规则原文');
   expect(html).toContain('什么时候创建新话题'); expect(html).toContain('新话题规则原文');
   expect(html).toContain('响应成员'); expect(html).toContain('完成提醒'); expect(html).toContain('显示模型');

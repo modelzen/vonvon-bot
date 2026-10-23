@@ -12,6 +12,8 @@ import {Catalog, Editor, ProjectPanel, type Section} from './SettingsPanel';
 import {PersonaEditor} from './PersonaEditor';
 import {SettingChoices} from './SettingChoices';
 import {providerBackends, providerUsable} from '../setup/provider-state';
+import {DecisionFields, decisionProviderProblem} from './DecisionFields';
+export {DecisionFields} from './DecisionFields';
 import {AnnouncedReadonlyMessages, hasReadonlyMessage, type ReadonlyMessage} from './readonly-messages';
 import './group-design-settings.css';
 
@@ -28,6 +30,7 @@ type Props = {
   botName?: string;
   groupName?: string;
   onOpenTools?: () => void;
+  onOpenProviders?: () => void;
   onOpenSecrets?: () => void;
   responseHeader?: ReactNode;
   decisionSetupOnly?: boolean;
@@ -92,11 +95,12 @@ function GroupSettingsLoader(props: Props) {
   </div>;
 }
 
-export function GroupSettingsContent({view, refresh, tab, tools, botName = 'Bot', groupName, onOpenTools, onOpenSecrets, responseHeader, decisionSetupOnly, onDecisionSaved}: Omit<Props, 'scope'> & {view: ProjectSettingsView; refresh: () => Promise<void>}) {
+export function GroupSettingsContent({view, refresh, tab, tools, botName = 'Bot', groupName, onOpenTools, onOpenProviders, onOpenSecrets, responseHeader, decisionSetupOnly, onDecisionSaved}: Omit<Props, 'scope'> & {view: ProjectSettingsView; refresh: () => Promise<void>}) {
   const client = useClient();
   const providers = useProviders(tools);
   const outerReadonly = useContext(AnnouncedReadonlyMessages);
   const sections = view.sections;
+  const [judgeProvider, setJudgeProvider] = useState<string>();
   const modelCatalog = useRef<ModelCatalog | undefined>(undefined);
   const rememberCatalog = useCallback((catalog: ModelCatalog | undefined) => {modelCatalog.current = catalog;}, []);
   async function save(section: keyof GroupSections, patch: object, revision: string): Promise<SettingsReply> {
@@ -106,8 +110,8 @@ export function GroupSettingsContent({view, refresh, tab, tools, botName = 'Bot'
   }
   if (decisionSetupOnly) return sections.judge ? <Editor title="决策模型" section={sections.judge} allowUnchanged submitLabel="保存并使用智能模式" afterSave={onDecisionSaved}
     save={(patch, revision) => save('judge',patch,revision)}
-    validate={value => decisionProblem(value.selection, providers, view.decisionModels)}
-    render={(draft,set,disabled,_commit,resetKey) => <DecisionFields key={resetKey} botId={view.scope.botId} groupBackend={view.identity.backend} value={draft.selection} effective={sections.judge!.effective.selection} onChange={selection=>set({selection})} disabled={disabled} providers={providers} services={view.decisionModels} onOpenSecrets={onOpenSecrets}/>}/> : <MissingSection/>;
+    validate={value => decisionProviderProblem(value.selection, judgeProvider, view.identity.backend) ?? decisionProblem(value.selection, providers, view.decisionModels)}
+    render={(draft,set,disabled,_commit,resetKey) => <DecisionFields initial key={resetKey} botId={view.scope.botId} groupBackend={view.identity.backend} value={draft.selection} effective={sections.judge!.effective.selection} onChange={selection=>set({selection})} disabled={disabled} providers={providers} services={view.decisionModels} onProviderChange={setJudgeProvider} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets}/>}/> : <MissingSection/>;
   const relevant: (Section<unknown> | undefined)[] = tab === 'capabilities' ? [sections.skills, sections.presentation]
     : tab === 'profile' ? [sections.profile] : tab === 'model' ? [sections.modelAccess]
     : tab === 'workspace' ? [sections.workspace, sections.permission]
@@ -146,15 +150,15 @@ export function GroupSettingsContent({view, refresh, tab, tools, botName = 'Bot'
       {tab === 'response' && <>
         {responseHeader}
         {view.identity.kind === 'smart' && <>
+          {sections.judge ? <Editor title="决策模型" section={sections.judge} save={(patch, revision) => save('judge', patch, revision)}
+            validate={value => decisionProviderProblem(value.selection, judgeProvider, view.identity.backend) ?? decisionProblem(value.selection, providers, view.decisionModels)}
+            render={(draft, set, disabled, _commit, resetKey) => <DecisionFields key={resetKey} botId={view.scope.botId} groupBackend={view.identity.backend} value={draft.selection} effective={sections.judge!.effective.selection}
+              onChange={selection => set({selection})} disabled={disabled} providers={providers} services={view.decisionModels} onProviderChange={setJudgeProvider} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets}/>}/> : <MissingSection/>}
           {sections.smartRules ? <Editor title="判断规则" section={sections.smartRules} save={(patch, revision) => save('smartRules', patch, revision)} render={(draft, set, disabled) => <>
             <div className="gd-section-heading gd-prompt-toolbar"><span className="gd-note">保存后，下次判断生效</span><button type="button" className="gd-text-action" disabled={disabled || draft.respond === DEFAULT_SMART_RULES.respond && draft.newTopic === DEFAULT_SMART_RULES.newTopic} onClick={() => set({...DEFAULT_SMART_RULES})}>恢复默认</button></div>
             <label className="gd-prompt"><span>什么时候回复</span><textarea aria-label="什么时候回复" rows={8} maxLength={30000} value={draft.respond} disabled={disabled} onChange={event => set({...draft, respond: event.target.value})}/></label>
             <label className="gd-prompt"><span>什么时候创建新话题</span><textarea aria-label="什么时候创建新话题" rows={4} maxLength={30000} value={draft.newTopic} disabled={disabled} onChange={event => set({...draft, newTopic: event.target.value})}/></label>
           </>}/> : <MissingSection/>}
-          {sections.judge ? <Editor title="决策模型" section={sections.judge} save={(patch, revision) => save('judge', patch, revision)}
-            validate={value => decisionProblem(value.selection, providers, view.decisionModels)}
-            render={(draft, set, disabled, _commit, resetKey) => <DecisionFields key={resetKey} botId={view.scope.botId} groupBackend={view.identity.backend} value={draft.selection} effective={sections.judge!.effective.selection}
-              onChange={selection => set({selection})} disabled={disabled} providers={providers} services={view.decisionModels} onOpenSecrets={onOpenSecrets}/>}/> : <MissingSection/>}
         </>}
         {view.identity.kind !== 'smart' && <ProjectPanel view={view} refresh={refresh} partition="response" independent hideJudge/>}
         <details className="gd-disclosure"><summary>响应成员</summary><ProjectPanel view={view} refresh={refresh} partition="members" independent hideJudge/></details>
@@ -272,43 +276,6 @@ function AddSkillDialog({open, onClose, botId, chatId, botName, groupName}: {ope
       <p className="gd-note">添加完成后发送 /skill-done，再回来重新读取。</p>{notice && <p role="status">{notice}</p>}
     </div>
   </Dialog>;
-}
-
-export function DecisionFields({botId, groupBackend, value, effective, onChange, disabled, providers, services, onOpenSecrets, initial = false}: {
-  botId: AgentId; groupBackend: string; value: JudgeSelectionView; effective: JudgeSelectionView; onChange: (value: JudgeSelectionView) => void; disabled: boolean;
-  providers: Provider[]; services?: DecisionModelsView; onOpenSecrets?: (provider?: string) => void; initial?: boolean;
-}) {
-  const known = isKnownJudgeSelection(value) ? value : undefined;
-  const active = known?.kind === 'default' && isKnownJudgeSelection(effective) ? effective : known;
-  const [provider, setProvider] = useState(active?.kind === 'decision' ? `decision:${active.provider}` : active?.kind === 'llm' ? active.backend ?? groupBackend : groupBackend);
-  const [custom, setCustom] = useState(known?.kind === 'llm' && Boolean(known.custom));
-  const service = services?.find(item => `decision:${item.provider}` === provider);
-  const serviceReady = (item: DecisionModelsView[number]) => item.keySet && !item.keyUnreadable;
-  const nativeReady = providers.some(item => item.id === provider);
-  const currentService = provider.startsWith('decision:') && !service ? [{value: provider, label: `${provider.slice(9)}（当前不可用）`, disabled: true}] : [];
-  const options = [...providerChoices(providers, provider.startsWith('decision:') ? groupBackend : provider), ...(services ?? []).map(item => ({value: `decision:${item.provider}`, label: item.models.some(model => model.displayName === 'Jev') ? 'Jev' : item.displayName, disabled: !serviceReady(item)})), ...currentService];
-  return <div className="gd-model-fields">
-    {known?.kind === 'default' && <p className="gd-note" role="status">{initial ? '请选择决策模型。' : <>请选择本群的决策模型。当前使用兼容设置：{active?.kind === 'llm' || active?.kind === 'decision' ? active.model : '服务默认模型'}。</>}</p>}
-    {!known && <p className="gd-note" role="alert">当前客户端无法编辑已保存的决策模型类型。</p>}
-    <fieldset><legend>Provider</legend><SettingChoices label="决策 Provider" value={provider} disabled={disabled} choices={options} onChange={next => {if (!options.some(option => option.value === next && !option.disabled)) return; setProvider(next); setCustom(false); onChange({kind: 'default'});}}/></fieldset>
-    {service ? <>
-      <fieldset><legend>模型</legend>{service.models.map(model => <label className="gd-model-choice" key={model.id}><input type="radio" name={`decision-${botId}`} disabled={disabled || !serviceReady(service)} checked={known?.kind === 'decision' && known.provider === service.provider && known.model === model.id} onChange={() => {if (!disabled && serviceReady(service)) onChange({kind: 'decision', provider: service.provider, model: model.id});}}/><span><strong>{model.displayName}</strong></span></label>)}</fieldset>
-      {(service.keyUnreadable || !service.keySet) && <InlineNotice title={service.keyUnreadable ? '无法读取密钥' : '需要添加密钥'} tone="warning">{service.keyUnreadable ? '暂时无法确认密钥状态。' : '添加后才能使用此决策模型。'}{onOpenSecrets && <Button size="sm" onClick={() => onOpenSecrets(service.provider)}>设置密钥</Button>}</InlineNotice>}
-    </> : <>{!nativeReady && <p className="gd-note" role="status">此 Provider 暂不可用。完成安装与登录后可继续，原配置已保留。</p>}{provider && <Catalog key={provider} botId={botId} backend={provider} purpose="judge">{catalog => {
-      const selection = known?.kind === 'llm' ? known : undefined;
-      const efforts = custom ? catalog?.titleEfforts ?? [] : catalog?.models.find(model => model.id === selection?.model)?.supportedEfforts ?? [];
-      return <>
-        <fieldset><legend>模型</legend>{!custom && (catalog?.models.filter(model => !model.hidden) ?? []).map(model => <label className="gd-model-choice" key={model.id}><input type="radio" name={`decision-${botId}`} disabled={disabled || !nativeReady} checked={selection?.model === model.id && (selection.backend ?? groupBackend) === provider} onChange={() => {if (!disabled && nativeReady) onChange({kind: 'llm', backend: provider, model: model.id});}}/><span><strong>{model.displayName}</strong></span></label>)}
-          {custom && <input className="settings-field" aria-label="自定义决策模型 ID" disabled={disabled || !nativeReady} placeholder="模型 ID" value={selection?.custom ? selection.model : ''} onChange={event => {if (!disabled && nativeReady) onChange(event.target.value.trim() ? {kind: 'llm', backend: provider, model: event.target.value.trim(), custom: true} : {kind: 'default'});}}/>}
-          <button type="button" className="gd-text-action" disabled={disabled || !nativeReady} onClick={() => {if (!disabled && nativeReady) setCustom(!custom);}}>{custom ? '从目录选择' : '自定义模型 ID'}</button>
-          {custom && <p className="gd-note">请确认模型 ID 正确；自定义模型不经过目录校验。</p>}
-          {catalog?.state === 'fallback' && catalog.error && <p className="gd-note" role="status">{catalog.error}</p>}
-          {catalog?.state === 'unavailable' && <p className="gd-note" role="status">{catalog.error || '模型目录暂不可用。'}</p>}
-        </fieldset>
-        {selection && (selection.backend ?? groupBackend) === provider && <fieldset><legend>Effort</legend><SettingChoices label="决策 Effort" value={selection.effort ?? ''} disabled={disabled || !nativeReady} choices={[{value: '', label: '默认'}, ...[...new Set([...efforts, ...(selection.effort ? [selection.effort] : [])])].map(effort => ({value: effort, label: effort}))]} onChange={effort => {if (disabled || !nativeReady) return; const {effort: _old, ...rest} = selection; const selected = efforts.find(item => item === effort); onChange({...rest, ...(selected ? {effort: selected} : {})});}}/></fieldset>}
-      </>;
-    }}</Catalog>}</>}
-  </div>;
 }
 
 export function AgentProfileSettings({botId}: {botId: AgentId}) {

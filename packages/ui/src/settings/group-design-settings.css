@@ -123,3 +123,10 @@
 }
 
 .gd-prompt-toolbar { padding: 8px 16px 0; }
+
+.gd-decision-fields { gap: 16px; }
+.gd-decision-purpose { margin: 0; color: var(--color-text-secondary); font-size: 13px; line-height: 1.65; text-wrap: pretty; }
+.gd-decision-model-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.gd-decision-select { width: min(100%, 320px); min-width: 0; }
+.gd-decision-fields .gd-note { margin: 0; }
+.gd-decision-fields fieldset .gd-note { margin-top: 8px; }
