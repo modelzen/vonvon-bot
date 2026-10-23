@@ -52,6 +52,8 @@ export const contextPreviewReplySchema = z.object({
       items: z.object({ bot: count, trusted: count, untrusted: count }).strict(),
       /** What the model said it used (its own word, `<vonvon-mem>`); `text` is left out for an entry gone since. */
       used: z.array(z.object({ id: z.string(), text: z.string().optional() }).strict()),
+      /** Hidden-block entries the daemon did not take (3.4), one reason each; no text is kept. */
+      missed: z.array(z.string()).optional(),
     }).strict().optional(),
   }).strict().optional(),
   judge: z.object({

@@ -56,6 +56,9 @@ import {SearchDialog} from './SearchDialog';
 import {flushSync} from 'react-dom';
 import {GroupWorkspace, groupTabForSection, type GroupDesignTab} from './GroupWorkspace';
 import {BotMap} from './BotMap';
+import {MEMORY_SEEN_EVENT} from './MemoryMap';
+import {MigrationBanner} from './MigrationBanner';
+import {newTag, sumCounts, useNewCounts} from './new-counts';
 import {ShareUsagePanel, UsagePanel} from './management/UsagePanel';
 import {EnvironmentPanel} from './management/EnvironmentPanel';
 import {ProviderManager} from './setup/ProviderSetup';
@@ -136,6 +139,7 @@ function DesktopApp() {
   const [setupProvider, setSetupProvider] = useState<SetupProvider>();
   const [page, setPage] = useState<Page>("home");
   const [settingsReturn, setSettingsReturn] = useState<{page: Page; route: CollaborationRoute; label: string}>();
+  const newCounts = useNewCounts(snapshot?.revision, MEMORY_SEEN_EVENT);
   const [projectDirectoryState, setProjectDirectoryState] = useState<ProjectDirectoryState>({query: '', expanded: {}});
   const [groupTabs, setGroupTabs] = useState<Record<string, GroupDesignTab>>({});
   const [featureId, setFeatureId] = useState<string>();
@@ -476,6 +480,7 @@ function DesktopApp() {
       <AppShell
         page={page}
         view={view}
+        newCounts={{bots: sumCounts(newCounts.bots), projects: sumCounts(newCounts.projects)}}
         title={feature?.label ?? titles[page]}
         firstUse={!snapshot.agents.length}
         onNavigate={openPage}
@@ -620,7 +625,7 @@ function DesktopApp() {
                                     <small title={agent.readError || undefined}>
                                       {agent.readError
                                         ? "群配置读取失败"
-                                        : `飞书 · ${groupCount} 个群聊`}
+                                        : `飞书 · ${groupCount} 个群聊${newCounts.bots[agent.id] ? ` · ${newTag(newCounts.bots[agent.id])}` : ''}`}
                                     </small>
                                   </span>
                                   {status.tone !== 'success' && <span className={`settings-entity-row__value settings-entity-row__value--${status.tone}`}>{status.label}</span>}
@@ -636,9 +641,9 @@ function DesktopApp() {
                           </div>
                         </section>
                       )
-                    : <ProjectDirectory snapshot={snapshot} state={projectDirectoryState} onStateChange={setProjectDirectoryState} statusFor={agentListStatus}
+                    : <><MigrationBanner snapshot={snapshot}/><ProjectDirectory newCounts={newCounts.projects} snapshot={snapshot} state={projectDirectoryState} onStateChange={setProjectDirectoryState} statusFor={agentListStatus}
                         onProject={id => select({kind: 'project', id})} onMembership={id => select({kind: 'membership', id})}
-                        onNewProject={ready && snapshot.agents.length ? () => snapshot.agents.length === 1 ? openJoin(snapshot.agents[0]!.id) : openList('agents') : undefined}/>}
+                        onNewProject={ready && snapshot.agents.length ? () => snapshot.agents.length === 1 ? openJoin(snapshot.agents[0]!.id) : openList('agents') : undefined}/></>}
                   {!(view === "agents"
                     ? snapshot.agents.length
                     : projectEntries(snapshot).length) && (

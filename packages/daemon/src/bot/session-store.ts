@@ -91,7 +91,7 @@ export interface SessionContext {
   /** A compaction ended since: the next turn hands over everything again. */
   fullRedeliverDue?: boolean;
   memory?: Record<string, MemoryDelivered>;
-  lastTurn?: { at: number; injected: number; used: string[] };
+  lastTurn?: { at: number; injected: number; used: string[]; /** reasons of the hidden blocks not taken (3.4), no text */ missed?: string[] };
 }
 
 /** A recalled message the session got: its id and send time, who sent it, and

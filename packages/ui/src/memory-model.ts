@@ -8,6 +8,15 @@ export type MemoryKind = 'bot' | 'project';
 /** A branch as the map draws it: its active entries newest first, and how many of them wait to be confirmed. */
 export type BranchView = {name: string; fixed: boolean; items: MemoryItem[]; pending: number};
 
+/** §5.8: the entries and branches written since the page was last opened, and the ones archived to make room. */
+export type Marks = {ids: ReadonlySet<string>; branches: ReadonlySet<string>; madeRoom: ReadonlySet<string>};
+export const noMarks: Marks = {ids: new Set(), branches: new Set(), madeRoom: new Set()};
+export const marksOf = (list: Pick<MemoryList, 'newIds' | 'newBranches' | 'madeRoom'>): Marks => ({ids: new Set(list.newIds), branches: new Set(list.newBranches), madeRoom: new Set(list.madeRoom)});
+/** Marks of the first reading stay for as long as the page is open: the 新 does not vanish when the page marks itself seen; later ones join. */
+export const joinMarks = (a: Marks, b: Marks): Marks => ({ids: new Set([...a.ids, ...b.ids]), branches: new Set([...a.branches, ...b.branches]), madeRoom: new Set([...a.madeRoom, ...b.madeRoom])});
+/** How many leaves of a branch are new. */
+export const branchNewCount = (view: Pick<BranchView, 'items'>, marks?: Pick<Marks, 'ids'>): number => marks ? view.items.filter(item => marks.ids.has(item.id)).length : 0;
+
 const codePoints = (value: string) => Array.from(value).length;
 const newest = (a: MemoryItem, b: MemoryItem) => b.updatedAt - a.updatedAt || (a.id < b.id ? 1 : -1);
 

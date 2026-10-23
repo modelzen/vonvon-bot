@@ -14,6 +14,8 @@ export type MapNode = {
   /** pending = a dashed frame (待确认); muted = archived; match = a search hit; dim = a search miss */
   tone?: 'pending' | 'muted' | 'match' | 'dim';
   selected?: boolean;
+  /** A dot before the label: written since the owner last opened this page (§5.8). */
+  fresh?: boolean;
   children?: MapNode[];
   /** Left out: the node has no fold. Given: the arrow shows and `onToggle` flips it. */
   open?: boolean;
@@ -93,9 +95,10 @@ function MapBox({node, dragging, setDragging}: {node: MapNode; dragging?: string
       },
     } : {}),
   };
-  return <div className="mm-box" data-kind={node.kind} data-tone={node.tone} data-selected={node.selected || undefined} data-drop={canDrop ? (over ? 'over' : 'ready') : undefined} {...events}>
+  return <div className="mm-box" data-kind={node.kind} data-tone={node.tone} data-selected={node.selected || undefined} data-fresh={node.fresh || undefined} data-drop={canDrop ? (over ? 'over' : 'ready') : undefined} {...events}>
     <div className="mm-main" role="treeitem" aria-selected={node.selected} aria-expanded={foldable ? node.open : undefined}>
       {foldable && <button type="button" className="mm-fold" aria-label={node.open ? '收起' : '展开'} aria-expanded={node.open} onClick={node.onToggle}>{node.open ? '−' : '+'}</button>}
+      {node.fresh && <span className="mm-new" role="img" aria-label="新"/>}
       {node.content ?? (node.onClick
         ? <button type="button" className="mm-label" onClick={node.onClick}>{node.label}{node.meta && <small>{node.meta}</small>}</button>
         : <span className="mm-label">{node.label}{node.meta && <small>{node.meta}</small>}</span>)}

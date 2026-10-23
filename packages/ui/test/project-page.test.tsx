@@ -5,6 +5,7 @@ import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
 import {DirectoryPickerProvider} from '../src/directory-picker';
 import {DraftGuardProvider} from '../src/settings/DraftGuard';
+import {INSTRUCTION_FILES_NOTE} from '../src/context-model';
 import {ProjectPage} from '../src/ProjectPage';
 import type {ProjectPane} from '../src/collaboration-navigation';
 
@@ -58,7 +59,9 @@ it('never shows the project instruction file, its path, its content or its modif
   requests.length=0;
   for(const pane of [{kind:'map'},{kind:'workspace'},{kind:'context'}] as ProjectPane[]){
     const html=render(two,pane);
-    expect(html).not.toMatch(/AGENTS\.md|CLAUDE\.md/);
+    // 模型看到什么 ends with the one fixed sentence (D6), which names the files without reading or showing any of them
+    expect(html.split(INSTRUCTION_FILES_NOTE)).toHaveLength(pane.kind==='context'?2:1);
+    expect(html.replace(INSTRUCTION_FILES_NOTE,'')).not.toMatch(/AGENTS\.md|CLAUDE\.md/);
     expect(html).not.toMatch(/修改时间|最后修改|mtime/i);
     expect(html).not.toMatch(/\d{4}-\d{2}-\d{2}/);
   }

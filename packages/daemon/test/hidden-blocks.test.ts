@@ -3,7 +3,7 @@ import type { AgentEvent } from '../src/agent/types';
 import { redactAgentEvents } from '../src/core/token-redact';
 import {
   createHiddenBlockFilter, escapeInboundMarkers, extractHiddenBlocks, forgetMemoryNonce, hiddenBlockInstructions, HIDDEN_BLOCKS_PER_TURN,
-  memoryNonce, MEMORY_FULL_NOTICE, noteMissedBlocks, rotateMemoryNonce, stripHiddenText, takeMemoryNotices, type FoundBlocks,
+  memoryNonce, MEMORY_FULL_NOTICE, noteMissedBlocks, rotateMemoryNonce, stripHiddenText, takeLastMissed, takeMemoryNotices, type FoundBlocks,
 } from '../src/bot/hidden-blocks';
 import { sanitizeContext, weaveQuote } from '../src/bot/context-weave';
 import { stripBridgeMessageEnvelope } from '../src/bot/session-title';
@@ -180,6 +180,14 @@ describe('notices for blocks that were not recorded', () => {
     expect(lines[1]).toContain('上一轮有 2 条没记上');
     expect(lines[1]).toContain('像密钥');
     expect(takeMemoryNotices('s-n')).toEqual([]);
+  });
+  it('keeps the reasons of the last turn for the desktop, one each and no text, taken once', () => {
+    noteMissedBlocks('s-d', ['memory-full', 'looks-like-secret', 'looks-like-secret']);
+    expect(takeLastMissed('s-d')).toEqual(['项目记忆满了', '像密钥', '像密钥']);
+    expect(takeLastMissed('s-d')).toEqual([]);
+    noteMissedBlocks('s-d', ['bad-nonce']);
+    noteMissedBlocks('s-d', []);
+    expect(takeLastMissed('s-d')).toEqual([]);
   });
   it('says nothing when nothing was missed', () => {
     noteMissedBlocks('s-m', []);

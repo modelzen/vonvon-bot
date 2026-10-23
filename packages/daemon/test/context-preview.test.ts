@@ -118,6 +118,16 @@ describe('contextPreview', () => {
     expect((await w.preview(true)).session!.lastTurn!.used[0]).toEqual({ id: kept });
   });
 
+  it('carries the hidden blocks the daemon did not take, as reasons only', async () => {
+    const w = await world();
+    const src = await w.sources();
+    const settled = settleTurn(contextOf(assemble(src), 'n0n0n0', 10), '好', 40).context;
+    w.sessions([record({ context: { ...settled, lastTurn: { ...settled.lastTurn!, missed: ['像密钥', '项目记忆满了'] } } })]);
+    expect((await w.preview(true)).session!.lastTurn!.missed).toEqual(['像密钥', '项目记忆满了']);
+    w.sessions([record({ context: settled })]);
+    expect((await w.preview(true)).session!.lastTurn).not.toHaveProperty('missed');
+  });
+
   it('shows the newest live session of the group unless one is asked for', async () => {
     const w = await world();
     w.sessions([record({ threadId: 'old', updatedAt: 10 }), record({ threadId: 'new', updatedAt: 90 }), record({ threadId: 'gone', updatedAt: 99, detached: true }), record({ threadId: 'other', chatId: 'oc_other', updatedAt: 99 })]);

@@ -1,5 +1,5 @@
 import type { AgentEntries, AgentPlace, TurnMemory, TurnScope } from '../agent/entry/registry';
-import { createHiddenBlockFilter, escapeInboundMarkers, memoryNonce, noteMissedBlocks, takeMemoryNotices, type FoundBlocks, type RawBlock } from './hidden-blocks';
+import { createHiddenBlockFilter, escapeInboundMarkers, memoryNonce, noteMissedBlocks, takeLastMissed, takeMemoryNotices, type FoundBlocks, type RawBlock } from './hidden-blocks';
 import type { MemoryWriter } from './memory-writer';
 import { redactAgentEvents } from '../core/token-redact';
 import { buildJudgeFacts, judgeFactRead, sameNameWord } from './judge-facts';
@@ -1109,6 +1109,8 @@ export function createOrchestrator(
   const turnStores = new WeakMap<AgentThread, TurnStores>();
   /** The `<vonvon-mem>` markers the stream filter took out of this turn's reply: the final card text no longer has them. */
   const turnMarks = new WeakMap<AgentThread, RawBlock[]>();
+  /** Hidden blocks not taken this turn, kept until the turn's usage is settled (the order of the two is not fixed). */
+  const lastMissed = new WeakMap<AgentThread, string[]>();
   /** The end of a turn: which entries the model said it used goes into the session's `lastTurn` and the memory's `usage.json`. */
   function noteTurnUsage(thread: AgentThread, replyText: string, key: string | undefined): void {
     const marks = turnMarks.get(thread);
@@ -1116,6 +1118,9 @@ export function createOrchestrator(
     const delivered = contextDelivered.get(thread);
     if (!delivered) return;
     const { context, used } = settleTurn(delivered, replyText, Date.now(), marks);
+    const missed = lastMissed.get(thread);
+    lastMissed.delete(thread);
+    if (missed?.length && context.lastTurn) context.lastTurn = { ...context.lastTurn, missed };
     contextDelivered.set(thread, { ...delivered, lastTurn: context.lastTurn });
     // Only lastTurn goes to the record: a compaction that ended meanwhile keeps its mark there.
     if (key && !key.startsWith('pending:') && context.lastTurn) {
@@ -1324,7 +1329,15 @@ export function createOrchestrator(
         memory.applyBlocks({ found, nonce: sessionNonce(thread), ctx: { turn: turn.turn, ...(turn.triggerMessageId ? { triggerMessageId: turn.triggerMessageId } : {}) } }),
         new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), 15_000); timer.unref?.(); }),
       ]);
-      if (outcome) noteMissedBlocks(key, outcome.missed);
+      if (outcome) {
+        noteMissedBlocks(key, outcome.missed);
+        // The turn's usage may already be settled: its `lastTurn` gets the reasons too (taken here, not left for the next turn).
+        const reasons = takeLastMissed(key);
+        if (reasons.length && !key.startsWith('pending:')) {
+          void trackTask(patchSession(key, s => (s.context?.lastTurn ? { context: { ...s.context, lastTurn: { ...s.context.lastTurn, missed: reasons } } } : {})).catch(() => undefined));
+          lastMissed.set(thread, reasons);
+        }
+      }
       else log.warn('memory', 'hidden-block-timeout', {});
     } catch (error) {
       log.fail('memory.hidden-block', error, {});

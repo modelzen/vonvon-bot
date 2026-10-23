@@ -10,11 +10,14 @@ import {groupDesignTabs} from './GroupWorkspace';
 import {bindingRows, otherProjectNotices, projectDeletable, workspaceRisks} from './project-model';
 import {settingAnchor} from './search';
 import {MemoryMap} from './MemoryMap';
+import {ContextPanel, LastTurnNotice} from './ContextPanel';
 import type {MapNode} from './MindMap';
 import type {ProjectPane} from './collaboration-navigation';
 import './group-workspace.css';
 
 const failText = (error: unknown, fallback = '操作未完成，请重试。') => error instanceof Error ? error.message : fallback;
+/** §5.7 empty state of a project's memory. */
+export const projectMemoryEmpty = '还没有。群里说“记住……”，或者 Bot 自己判断值得记时会挂到下面的分支上。Bot 在群里说了“记住了”，就是记了；所有新记的都会在这里标“新”。';
 const conversationLabel = {threads: '多会话', shared: '单会话', smart: '智能'} as const;
 export const projectTabs: readonly [ProjectPane['kind'], string][] = [['map', '导图'], ['workspace', '工作区'], ['context', '模型看到什么']];
 
@@ -80,7 +83,7 @@ export function ProjectPage({project, snapshot, pane, tools, onPane, onMembershi
     {error && <InlineNotice title="读取未完成" tone="warning">{error}<Button size="sm" onClick={() => void refresh()}>重试</Button></InlineNotice>}
     {tab === 'map' && <ProjectMap project={project} snapshot={snapshot} library={library} onMembership={onMembership} onAddGroup={onAddGroup}/>}
     {tab === 'workspace' && <ProjectWorkspace project={project} snapshot={snapshot} library={library} refresh={async () => {await refresh(); await onChanged();}}/>}
-    {tab === 'context' && <section id={settingAnchor('模型看到什么')} aria-label="模型看到什么"><p className="group-control-note">这一页会列出 vonvon 交给模型的角色设定和记忆。现在还没有开放。</p></section>}
+    {tab === 'context' && <ProjectContext project={project} snapshot={snapshot} onPane={onPane}/>}
     {pane.kind === 'group' && only && onlyAgent && onlyGroup && <div className="project-page-group" aria-label={`${onlyGroup.name} 的设置`}>
       <p className="group-control-note">{onlyAgent.name} 在 {onlyGroup.name} 里的设置。聊天方式、对话记录和解除绑定在<button type="button" className="gd-text-action" onClick={() => guard.navigate(() => onMembership(only.id))}>群设置页</button>。</p>
       <GroupDesignSettings scope={{kind: 'project', botId: only.agentId, projectName: only.name}} tab={pane.tab as GroupSettingsTab} tools={tools} botName={onlyAgent.name} groupName={onlyGroup.name}
@@ -89,6 +92,23 @@ export function ProjectPage({project, snapshot, pane, tools, onPane, onMembershi
     <RenameDialog open={dialog === 'rename'} project={project} library={library} onClose={() => setDialog(null)} onDone={async () => {setDialog(null); await refresh(); await onChanged();}}/>
     <DeleteDialog open={dialog === 'delete'} project={project} library={library} onClose={() => setDialog(null)} onDone={async () => {setDialog(null); await onChanged(); onDeleted();}}/>
   </div>;
+}
+
+/** 模型看到什么 for this project (§5.5): one Bot in one group at a time; a project with several bindings picks which. */
+function ProjectContext({project, snapshot, onPane}: {project: SnapshotProject; snapshot: DesktopSnapshot; onPane: (pane: ProjectPane) => void}) {
+  const [at, setAt] = useState(0);
+  const binding = project.bindings[Math.min(at, project.bindings.length - 1)];
+  const label = (item: {agentId: AgentId; groupId: string}) => `${snapshot.agents.find(agent => agent.id === item.agentId)?.name ?? 'Bot'} · ${snapshot.groups.find(group => group.id === item.groupId)?.name ?? '一个群'}`;
+  const member = binding && snapshot.memberships.find(item => item.agentId === binding.agentId && item.groupId === binding.groupId);
+  return <section id={settingAnchor('模型看到什么')} aria-label="模型看到什么">
+    {!binding ? <p className="group-control-note">没有群在用这个项目，没有 Bot 会读到它。</p> : <>
+      {project.bindings.length > 1 && <label className="group-control-note">看哪个 Bot 在哪个群里<select className="settings-field" aria-label="看哪个绑定" value={at} onChange={event => setAt(Number(event.target.value))}>
+        {project.bindings.map((item, index) => <option key={`${item.agentId}|${item.groupId}`} value={index}>{label(item)}</option>)}</select></label>}
+      <ContextPanel agentId={binding.agentId} groupId={binding.groupId} projectId={project.id} revision={snapshot.revision}
+        title={`${label(binding)}${member ? ` · ${backendLabel(member.backend)}` : ''}`}
+        go={{projectMemory: () => onPane({kind: 'map'}), ...(project.bindings.length === 1 ? {supplement: () => onPane({kind: 'group', tab: 'role'})} : {})}}/>
+    </>}
+  </section>;
 }
 
 function ProjectMap({project, snapshot, library, onMembership, onAddGroup}: {project: SnapshotProject; snapshot: DesktopSnapshot; library?: LibraryProject; onMembership: (id: MembershipId) => void; onAddGroup?: (agentId: AgentId, projectId: ProjectId) => void}) {
@@ -117,8 +137,9 @@ function ProjectMap({project, snapshot, library, onMembership, onAddGroup}: {pro
   const groups: MapNode = {id: 'groups', kind: 'section', label: '群和 Bot', meta: String(rows.length), open: open.groups ?? true, onToggle: () => setOpen(current => ({...current, groups: !(current.groups ?? true)})), children: [...bindingNodes, addNode]};
   return <section id={settingAnchor('群和 Bot')} className="project-map" aria-label="导图">
     <MemoryMap scope={{kind: 'project', projectId: project.id}} rootLabel={project.name} mode="direct" memoryLabel="项目记忆" targets={targets} after={[groups]}
+      above={<LastTurnNotice bindings={project.bindings} revision={snapshot.revision} names={item => `${snapshot.groups.find(group => group.id === item.groupId)?.name ?? '一个群'} · ${snapshot.agents.find(agent => agent.id === item.agentId)?.name ?? 'Bot'}`}/>}
       note="共用这个项目的群里，Bot 都会读到这些记忆。"
-      empty="还没有。群里说“记住……”，或者 Bot 自己判断值得记时会挂到下面的分支上。Bot 在群里说了“记住了”，就是记了。"/>
+      empty={projectMemoryEmpty}/>
     {!rows.length && <p className="group-control-note">没有群在用这个项目。从“群和 Bot”里把一个群加进来，或删除这个项目。</p>}
     {notices.map(notice => <InlineNotice key={notice.memberId} title="同一个群里的另一个 Bot 用的是别的项目" tone="warning"
       actions={<Button size="sm" onClick={() => onMembership(notice.memberId)}>去设置</Button>}>

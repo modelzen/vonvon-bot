@@ -15,6 +15,7 @@ import {ConversationPanel} from './management/ConversationPanel';
 import {GroupAttentionStatus} from './management/GroupAttentionStatus';
 import {appliedNotice, removalNotice} from './management/ProjectPanel';
 import {groupUrl, openExternalUrl} from './url-actions';
+import {ContextPanel} from './ContextPanel';
 import './group-workspace.css';
 
 export type GroupDesignTab = GroupSettingsTab;
@@ -55,7 +56,7 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
   running.current = agent.running;
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [dialog, setDialog] = useState<'help'|'history'|'remove'|'smart'|'project'|null>(null);
+  const [dialog, setDialog] = useState<'help'|'history'|'remove'|'smart'|'project'|'context'|null>(null);
   const [nextProject, setNextProject] = useState('');
   const menu = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
@@ -126,12 +127,17 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
     {memberProject && <p className="group-project-line" id={settingAnchor("所在项目")}>项目：<strong>{memberProject.name}</strong>
       {onProject && <button type="button" className="gd-text-action" onClick={() => guard.navigate(() => onProject(memberProject.id))}>项目页</button>}
       <button type="button" className="gd-text-action" disabled={!available || busy || !otherProjects.length} onClick={() => guard.navigate(() => {setNextProject(otherProjects[0]?.id ?? ''); setDialog('project');})}>换到别的项目…</button></p>}
-    <nav className="group-design-tabs" aria-label="群设置">{groupDesignTabs.map(([value,label]) => <button type="button" key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => guard.navigate(() => {setTab(value); onTabChange?.(value);})}>{label}</button>)}</nav>
+    <nav className="group-design-tabs" aria-label="群设置">{groupDesignTabs.map(([value,label]) => <button type="button" key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => guard.navigate(() => {setTab(value); onTabChange?.(value);})}>{label}</button>)}
+      <button type="button" className="group-context-button" onClick={() => setDialog('context')}>模型看到什么</button></nav>
     {tab === 'role' && <p className="group-control-note">{agent.name} 的角色设定在 Bot 页，所有项目通用。<button type="button" className="gd-text-action" onClick={() => guard.navigate(onBotProfile)}>到 Bot 页</button></p>}
     {error && <InlineNotice title="操作未完成" tone="warning">{error}</InlineNotice>}
     {notice && <p role="status" className="group-control-note">{notice}</p>}
     <GroupDesignSettings key={`${member.id}:${version}`} scope={{kind:'project',botId:member.agentId,projectName:member.name}} tab={tab} tools={snapshot.tools} botName={agent.name} groupName={group.name} onOpenTools={onOpenTools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets} responseHeader={conversationControl}/>
     <Dialog open={dialog === 'history'} title={`${group.name} · ${agent.name}`} onClose={() => setDialog(null)}><div id={settingAnchor("会话管理")}>{agent.running ? <ConversationPanel agentId={agent.id} groupId={group.id} projectName={member.name} conversation={conversation} request={client.collaboration}/> : <p>Bot 运行后可查看对话记录。</p>}</div></Dialog>
+    <Dialog open={dialog === 'context'} title="模型看到什么" onClose={() => setDialog(null)}>
+      {dialog === 'context' && <ContextPanel agentId={member.agentId} groupId={member.groupId} projectId={member.projectId} revision={snapshot.revision} title={`${agent.name} · ${group.name}`}
+        go={{role: () => {setDialog(null); onBotProfile();}, botMemory: () => {setDialog(null); onBotProfile();}, supplement: () => {setDialog(null); setTab('role'); onTabChange?.('role');}, ...(member.projectId && onProject ? {projectMemory: () => {setDialog(null); onProject(member.projectId!);}} : {})}}/>}
+    </Dialog>
     <Dialog open={dialog === 'help'} title="在群里使用" onClose={() => setDialog(null)}><GroupUsage conversation={conversation} botName={agent.name}/></Dialog>
     <Dialog open={dialog === 'smart'} title="设置智能模式" onClose={() => guard.navigate(() => setDialog(null))}>
       <p className="group-control-note">选择判断 Provider，模型与 Effort 使用决策模型页中的配置。</p>

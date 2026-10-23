@@ -14,6 +14,8 @@ type Props = {
   onMembership: (id: MembershipId) => void;
   /** Adding a group is what makes a project; left out, no 新建项目 button. */
   onNewProject?: () => void;
+  /** 新记忆 per project since its page was last opened (§5.8). */
+  newCounts?: Readonly<Record<string, number>>;
 };
 /** Rows no project owns yet (bound since the last daemon start, or from an older daemon) sit under this key. */
 const UNLINKED = 'unlinked';
@@ -32,7 +34,7 @@ export function projectEntries(snapshot: DesktopSnapshot): Entry[] {
 
 // Intent: find a project, see which groups and Bots share it, open the project or one binding.
 // The list is the group directory's outline with the project as the parent row (owner leads the final visual pass).
-export function ProjectDirectory({snapshot, state, onStateChange, statusFor, onProject, onMembership, onNewProject}: Props) {
+export function ProjectDirectory({snapshot, state, onStateChange, statusFor, onProject, onMembership, onNewProject, newCounts}: Props) {
   const agents = new Map(snapshot.agents.map(agent => [agent.id, agent]));
   const groups = new Map(snapshot.groups.map(group => [group.id as string, group]));
   const directory = projectEntries(snapshot);
@@ -66,7 +68,7 @@ export function ProjectDirectory({snapshot, state, onStateChange, statusFor, onP
                 onKeyDown={event => {if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {event.preventDefault(); toggle(entry.key, event.key === 'ArrowRight');}}}>
                 <ChevronRight className="group-directory-disclosure" size={13} aria-hidden="true"/>
                 <span className="collaboration-avatar"><FolderKanban size={15} aria-hidden="true"/></span><span className="group-directory-name" title={entry.name}>{entry.name}</span>
-                <span className="group-directory-count">{entry.empty ? '没有群' : `${new Set(entry.members.map(member => member.groupId)).size} 个群 · ${new Set(entry.members.map(member => member.agentId)).size} 个 Bot`}</span>
+                <span className="group-directory-count">{entry.empty ? '没有群' : `${new Set(entry.members.map(member => member.groupId)).size} 个群 · ${new Set(entry.members.map(member => member.agentId)).size} 个 Bot`}{entry.id && newCounts?.[entry.id] ? ` · 新 ${newCounts[entry.id]}` : ''}</span>
                 <span className="group-directory-avatar-stack" aria-hidden="true">
                   {[...new Map(entry.members.map(member => [member.agentId, member])).values()].slice(0, 4).map(member => {const agent = agents.get(member.agentId); return agent ? <AgentAvatar key={member.agentId} agent={agent}/> : <span key={member.agentId} className="collaboration-avatar agent"><Bot size={12}/></span>;})}
                 </span>

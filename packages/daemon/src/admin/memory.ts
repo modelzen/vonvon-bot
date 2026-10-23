@@ -1,5 +1,6 @@
 import { memoryReplySchema, type MemoryReply, type MemoryRequest, type MemoryScopeRef } from '@vonvon/protocol';
 import { loadBots } from '../config/bots';
+import { markSeen, marksFrom, readSeen, seenKey, type SeenPage } from './memory-seen';
 import { botDir } from '../config/paths';
 import { libraryLocation, readLibrary, type LibraryLocation } from '../project/library';
 import { RpcError } from '../server/errors';
@@ -50,14 +51,50 @@ function replyOf(result: Result): MemoryReply {
   return { kind: 'refused', reason: result.reason, message: result.message };
 }
 
+/** One page's list with the 新 marks against the time its owner last opened it (5.8). */
+async function listWithMarks(store: MemoryStore, scope: MemoryScopeRef, deps: MemoryAdminDeps): Promise<MemoryReply> {
+  const view = await store.read();
+  const page: SeenPage | undefined = scope.kind === 'project' ? { kind: 'project', projectId: scope.projectId } : scope.kind === 'bot' ? { kind: 'bot', botId: scope.botId } : undefined;
+  if (!page) return { kind: 'list', ...view };
+  const library = deps.library ?? libraryLocation();
+  const [seen, events] = await Promise.all([readSeen(library), store.events()]);
+  const marks = marksFrom(events, view.items, seen[seenKey(page)] ?? 0);
+  return { kind: 'list', ...view, newIds: [...marks.ids], newBranches: [...marks.branches], madeRoom: [...marks.madeRoom] };
+}
+
+/** 导航和列表上的数：每个项目、每个 Bot 上次打开以后新了几条。读不出来的那一份不算。 */
+async function newCounts(deps: MemoryAdminDeps): Promise<MemoryReply> {
+  const library = deps.library ?? libraryLocation();
+  const seen = await readSeen(library);
+  const count = async (scope: MemoryScopeRef): Promise<number> => {
+    try {
+      const store = await memoryStoreFor(scope, deps);
+      const [view, events] = await Promise.all([store.read(), store.events()]);
+      const key = scope.kind === 'project' ? seenKey({ kind: 'project', projectId: scope.projectId }) : scope.kind === 'bot' ? seenKey({ kind: 'bot', botId: scope.botId }) : '';
+      return marksFrom(events, view.items, seen[key] ?? 0).ids.size;
+    } catch { return 0; }
+  };
+  const projects: Record<string, number> = {};
+  for (const project of (await readLibrary(library)).projects) { const n = await count({ kind: 'project', projectId: project.id }); if (n) projects[project.id] = n; }
+  const bots: Record<string, number> = {};
+  for (const bot of (await loadBots()).bots) { const n = await count({ kind: 'bot', botId: bot.appId }); if (n) bots[bot.appId] = n; }
+  return { kind: 'newCounts', projects, bots };
+}
+
 export async function memoryAction(request: MemoryRequest, deps: MemoryAdminDeps = {}): Promise<MemoryReply> {
   const origin = deps.origin ?? 'ui';
+  if (request.type === 'newCounts') return memoryReplySchema.parse(await newCounts(deps));
+  if (request.type === 'seen') {
+    const at = (deps.now ?? Date.now)();
+    await markSeen(deps.library ?? libraryLocation(), request.page, at);
+    return { kind: 'seen', at };
+  }
   const actor: MemoryActor = { role: origin === 'cli' ? 'cli' : 'desktop' };
   const botIdOf = (scope: MemoryScopeRef): string => scope.kind === 'project' ? '' : scope.botId;
   const store = await memoryStoreFor(request.scope, deps);
   const checked = (reply: MemoryReply): MemoryReply => memoryReplySchema.parse(reply);
   switch (request.type) {
-    case 'list': return checked({ kind: 'list', ...await store.read() });
+    case 'list': return checked(await listWithMarks(store, request.scope, deps));
     case 'add': return checked(replyOf(await store.add({
       text: request.text, ...(request.branch === undefined ? {} : { branch: request.branch }), trust: 'trusted', actor,
       source: { via: origin, botId: botIdOf(request.scope), actorRole: actor.role },
