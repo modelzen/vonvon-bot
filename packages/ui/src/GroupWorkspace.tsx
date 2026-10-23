@@ -12,6 +12,7 @@ import {SettingChoices} from './settings/SettingChoices';
 import {GroupDesignSettings} from './settings/GroupDesignSettings';
 import {useDraftGuard} from './settings/DraftGuard';
 import {ConversationPanel} from './management/ConversationPanel';
+import {GroupAttentionStatus} from './management/GroupAttentionStatus';
 import {appliedNotice, removalNotice} from './management/ProjectPanel';
 import {groupUrl, openExternalUrl} from './url-actions';
 import './group-workspace.css';
@@ -106,10 +107,10 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
   }
   const available = agent.running && !!project && !member.stale;
   const conversation = project ? modeToConversation(project.kind) : member.conversation;
-  const conversationControl = <section id={settingAnchor("聊天方式")} className="group-conversation-choice" aria-label="聊天方式">
+  const conversationControl = <div className="group-conversation-layout"><section id={settingAnchor("聊天方式")} className="group-conversation-choice" aria-label="聊天方式">
     <h3>聊天方式</h3><SettingChoices label="聊天方式" value={conversation} disabled={!available || busy} choices={[{value:'threads',label:'多会话'},{value:'shared',label:'单会话'},{value:'smart',label:'智能'}]} onChange={next => guard.navigate(() => {if (next === 'smart' && conversation !== 'smart') setDialog('smart'); else void update({conversation:next});})}/>
     <p className="group-control-note">{conversation === 'smart' ? '按回复规则接话，并判断是否另开话题。' : conversation === 'threads' ? '主区 @ Bot 开启新话题，每个话题独立对话。' : '全群共用一段对话。'}</p>
-  </section>;
+  </section>{conversation === 'smart' && member.conversation === 'smart' && <GroupAttentionStatus agent={agent} membership={member} connected={snapshot.host.kind === 'connected' && !snapshot.stale}/>}</div>;
   return <div className="group-design-workspace">
     <header className="group-design-heading"><GroupAvatar group={group} large/><h2>{group.name}</h2><Button size="sm" className="group-open-button" aria-label="在飞书打开此群" onClick={() => void openExternalUrl(groupUrl(group.id),'group',shell).catch(error => setError(String(error.message ?? error)))}><span className="group-open-label">飞书</span><ArrowUpRight size={13} aria-hidden="true"/></Button>
       <details ref={menu} className="group-context-menu"><summary aria-label="群操作"><MoreHorizontal size={18}/></summary><div>{([['help','使用说明'],['history','对话记录'],['remove','解除群绑定…']] as const).map(([action,label]) => <button type="button" key={action} disabled={action === 'remove' && !available} onClick={event => {event.currentTarget.closest('details')?.removeAttribute('open'); guard.navigate(() => setDialog(action));}}>{label}</button>)}</div></details>
