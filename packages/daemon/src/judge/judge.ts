@@ -58,6 +58,8 @@ export interface JudgeDeps {
   getSecret?: (id: string) => Promise<string | undefined>;
   /** a decision model's HTTP calls */
   fetch?: typeof fetch;
+  /** Testable data root for the host-wide judge model snapshot. */
+  judgeModelsRoot?: string;
 }
 
 /** Ends a judgement early; the reason of the shared AbortController. */
@@ -204,8 +206,10 @@ export function createJudge(deps: JudgeDeps): Judge {
   }
 
   /** A stored setting, or nothing (logged once per layer and value) when it cannot be used. */
-  function storedJudge(value: unknown, layer: string) {
+  function storedJudge(value: unknown, layer: string, active = true) {
     const parsed = parseStoredJudge(value, catalogBackendIds());
+    if (active && (value as { kind?: unknown } | null)?.kind === 'provider' && parsed.why)
+      throw new JudgeFail('unavailable', `决策 Provider 设置无效：${parsed.why}`);
     if (parsed.why) {
       const key = `${layer}\n${JSON.stringify(value)}`;
       if (!ignored.has(key)) {
@@ -294,11 +298,14 @@ export function createJudge(deps: JudgeDeps): Judge {
     aborted.catch(() => undefined);
 
     try {
-      const backend = deps.backendFor(judgeBackendId(base.backend, storedJudge(req.group.judge, req.group.chatId)));
+      const groupChoice = storedJudge(req.group.judge, req.group.chatId);
+      const botChoice = storedJudge(req.botJudge, 'bot', !groupChoice);
+      const activeChoice = groupChoice ?? (botChoice?.kind === 'provider' ? botChoice : undefined);
+      const backend = deps.backendFor(judgeBackendId(base.backend, activeChoice));
       const models = backend.peekModels?.();
       base = {
         ...base, backend: backend.id,
-        ...resolveJudgeModel(backend.id, { group: storedJudge(req.group.judge, req.group.chatId), bot: storedJudge(req.botJudge, 'bot') }, models),
+        ...resolveJudgeModel(backend.id, { group: groupChoice, bot: botChoice }, models, undefined, deps.judgeModelsRoot),
       };
       /** Steps 4 to 6, for a backend or a decision model's provider (`id`): the cooldown, a slot, the cooldown
        * again (a judgement that ran while this one queued may have just started one), the call. The call keeps

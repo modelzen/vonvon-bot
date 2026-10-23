@@ -99,7 +99,7 @@ export const environmentReplySchema = z.discriminatedUnion("kind", [
   z.object({kind:z.literal("backendVersion"), id:z.string(), installed:z.string().nullable(), latest:z.string().nullable(), hasUpdate:z.boolean().nullable()}),
   z.object({kind:z.literal("profiles"), profiles:z.array(environmentProfileSchema)}),
   z.object({kind:z.literal("auth"), tool:environmentToolSchema, state:z.enum(["signedIn", "signedOut", "unknown"]), message:z.string()}),
-  z.object({kind:z.literal("backendLogin"), id:z.string(), state:z.enum(["signedIn", "signedOut", "unknown"]), message:z.string()}),
+  z.object({kind:z.literal("backendLogin"), id:z.string(), state:z.enum(["signedIn", "signedOut", "notRequired", "unknown"]), message:z.string()}),
   z.object({kind:z.literal("operation"), operation:environmentOperationSchema.nullable()}),
   z.object({kind:z.literal("toolInstall"), operation:toolInstallOperationSchema.nullable()}),
   z.object({kind:z.literal("applied"), message:z.string()}),

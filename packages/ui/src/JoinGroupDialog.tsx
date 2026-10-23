@@ -2,20 +2,19 @@ import {RpcError} from '@vonvon/client/browser';
 import {useClient} from './client-context';
 import {useDirectoryPicker} from './directory-picker';
 import {useEffect, useRef, useState} from 'react';
-import type {Agent, AgentSettingsView, CommandResult, Conversation, FolderChoice, PendingGroup, JudgeSelectionView, DecisionModelsView, ToolState, ModelCatalog} from '@vonvon/protocol';
-import {conversationCopy, topicConversationCopy, toolSchema, isKnownJudgeSelection, groupDecisionSchema} from '@vonvon/protocol';
+import type {Agent, AgentSettingsView, CommandResult, Conversation, FolderChoice, PendingGroup, JudgeSelectionView, DecisionModelsView, ToolState} from '@vonvon/protocol';
+import {conversationCopy, topicConversationCopy, toolSchema, groupDecisionSchema} from '@vonvon/protocol';
 import {Button, ChoiceGroup, FormField, InlineNotice} from './reference/components/ui';
 import {Dialog} from './reference/components/ui/Dialog';
 import {SettingsGroup, SettingsRow} from './reference/components/system-settings';
 import {useDraft, useDraftGuard} from './settings/DraftGuard';
 import type {PendingAgentGroups} from './pending-groups';
 import {SettingChoices} from './settings/SettingChoices';
-import {judgeLabel} from './settings/judgeChoice';
 import {DecisionFields, useProviders} from './settings/GroupDesignSettings';
-import {decisionProviderProblem} from './settings/DecisionFields';
+import {providerDecisionProblem} from './settings/DecisionFields';
 import {AgentAvatar} from './AgentAvatar';
 import './setup/join-group.css';
-import {providerBackends, providerSignature, providerUsable} from './setup/provider-state';
+import {providerBackends, providerUsable} from './setup/provider-state';
 
 type Mode = {kind: 'create'} | {kind: 'existing'} | {kind: 'bind'; group: PendingGroup};
 /** product.md 3.4: in this order, title plus one line, nothing preselected or marked as recommended. */
@@ -66,37 +65,10 @@ export function CreationLockNotice({failure}: {failure: CreationFailure}) {
     ? <InlineNotice title="群已建好，但没存上" tone="warning">{failure.message}</InlineNotice>
     : <InlineNotice title="不确定建好没有" tone="warning">{CREATION_UNKNOWN}要重试，关掉这个窗口再建。</InlineNotice>;
 }
-export function judgeSetupProblem(selection: JudgeSelectionView, services?: DecisionModelsView, usableBackends?: readonly string[]): string | undefined {
-  if (!isKnownJudgeSelection(selection) || selection.kind === 'default') return '请选择决策模型。';
-  if (selection.kind === 'llm') return groupDecisionSchema.safeParse(selection).success && (usableBackends === undefined || usableBackends.includes(selection.backend ?? '')) ? undefined : '请选择已安装并登录的 Provider 和有效的决策模型。';
-  const service = services?.find(item => item.provider === selection.provider);
-  if (!service) return '无法读取决策模型，请重试。';
-  if (!service.models.some(model => model.id === selection.model)) return '此决策模型已不可用。';
-  if (service.keyUnreadable) return '无法读取决策模型密钥。';
-  if (!service.keySet) return '请先添加决策模型密钥。';
-  return undefined;
+export function judgeSetupProblem(selection: JudgeSelectionView, services?: DecisionModelsView, usableBackends: readonly string[] = []): string | undefined {
+  return providerDecisionProblem(selection, usableBackends.map(id => ({id, displayName: id})), services);
 }
 type ProviderTool = 'codex' | 'claude';
-/** The Bot's saved decision model is inherited by new smart groups. A default is not a prior choice. */
-export function globalDecisionProblem(view: AgentSettingsView | undefined, tool: ProviderTool | undefined, tools?: readonly ToolState[], liveBackends?: readonly string[]): string | undefined {
-  if (!view) return '无法读取 Bot 的决策模型，请重试。';
-  const selection = view.sections.judge?.stored.selection;
-  if (!selection || !isKnownJudgeSelection(selection)) return '无法读取 Bot 的决策模型，请重试。';
-  if (selection.kind === 'default' || selection.kind === 'llm' && tool && selection.backend && selection.backend !== providerBackends[tool]) {
-    if (!tool || !providerUsable(tools?.find(item => item.tool === tool)) || !liveBackends?.includes(providerBackends[tool])) return '推荐模型暂不可用，请先检查 Provider。';
-    return view.judgeByBackend?.[providerBackends[tool]]?.model ? undefined : '无法读取推荐决策模型，请重试。';
-  }
-  if (selection.kind === 'decision') {
-    const service = view.decisionModels?.find(item => item.provider === selection.provider);
-    if (!service || !service.models.some(model => model.id === selection.model)) return '已配置的决策模型当前不可用。';
-    if (service.keyUnreadable) return '无法确认决策模型密钥，请先检查设置。';
-    if (!service.keySet) return '请先设置决策模型密钥。';
-    return undefined;
-  }
-  const backend = selection.backend ?? (tool ? providerBackends[tool] : undefined);
-  const provider = (Object.entries(providerBackends) as Array<[ProviderTool, string]>).find(([, id]) => id === backend)?.[0];
-  return provider && providerUsable(tools?.find(item => item.tool === provider)) && liveBackends?.includes(backend!) ? undefined : '已配置的决策 Provider 当前不可用。';
-}
 /** A setup suggestion is accepted only if the current snapshot says it can run. */
 export function initialGroupProvider(initialProvider?: ProviderTool, tools?: ToolState[]): ProviderTool | undefined {
   const ready = (provider: ProviderTool) => providerUsable(tools?.find(item => item.tool === provider));
@@ -115,39 +87,17 @@ export function JoinGroupDialog({linux, open = true, agent, pending, initialGrou
   if (!open) decisionOpenEpoch.current++;
   const [decisionReady, setDecisionReady] = useState({serial: -1, epoch: -1});
   const providers = useProviders(tools);
-  const [judgeProvider, setJudgeProvider] = useState<string>();
-  const liveEpoch = useRef(0);
-  if (!open) liveEpoch.current++;
-  const [live, setLive] = useState<Partial<Record<ProviderTool, {state: 'ready' | 'unavailable'; models: ModelCatalog['models']; observedFor: string; epoch: number}>>>({});
   async function readDecision() {
     const serial = ++decisionSerial.current;
     const epoch = decisionOpenEpoch.current;
     try {
       const reply = await client.settings({type: 'read', scope: {kind: 'agent', botId: agent.id}});
       if (serial !== decisionSerial.current) return;
-      if (reply.kind !== 'view' || !('administrators' in reply.view) || reply.view.scope.kind !== 'agent') throw new Error(reply.kind === 'refused' ? reply.message : '无法读取 Bot 设置。');
-      setDecisionView(reply.view);
-      setDecisionReady({serial, epoch});
-      setDecisionReadError('');
-    } catch (failure) {if (serial === decisionSerial.current) setDecisionReadError(failure instanceof Error ? failure.message : '无法读取 Bot 设置。');}
+      if (reply.kind !== 'view' || !('administrators' in reply.view) || reply.view.scope.kind !== 'agent') throw new Error(reply.kind === 'refused' ? reply.message : '无法读取决策模型设置。');
+      setDecisionView(reply.view); setDecisionReady({serial, epoch}); setDecisionReadError('');
+    } catch (failure) {if (serial === decisionSerial.current) setDecisionReadError(failure instanceof Error ? failure.message : '无法读取决策模型设置。');}
   }
   useEffect(() => {if (open) void readDecision(); return () => {decisionSerial.current++;};}, [client, agent.id, open]);
-  const liveKey = tools?.map(item => `${item.tool}:${providerSignature(item)}`).join('|');
-  useEffect(() => {
-    if (!open) return;
-    let active = true;
-    const epoch = liveEpoch.current;
-    setLive({});
-    for (const provider of ['codex', 'claude'] as const) {
-      const state = tools?.find(item => item.tool === provider);
-      if (!providerUsable(state)) continue;
-      const observedFor = providerSignature(state);
-      void client.collaboration({action: 'providerModels', backend: providerBackends[provider]}).then(reply => {
-        if (active) setLive(previous => ({...previous, [provider]: reply.kind === 'providerModels' ? {state: reply.state, models: reply.models, observedFor, epoch} : {state: 'unavailable', models: [], observedFor, epoch}}));
-      }).catch(() => {if (active) setLive(previous => ({...previous, [provider]: {state: 'unavailable', models: [], observedFor, epoch}}));});
-    }
-    return () => {active = false;};
-  }, [client, open, liveKey]);
   const [mode, setMode] = useState<Mode>(initialGroup ? {kind: 'bind', group: initialGroup} : {kind: 'create'});
   const [name, setName] = useState(initialGroup?.name ?? '');
   const [folder, setFolder] = useState<FolderChoice>();
@@ -156,7 +106,6 @@ export function JoinGroupDialog({linux, open = true, agent, pending, initialGrou
   const [pickedTool, setPickedTool] = useState<ProviderTool | undefined>(undefined);
   const ready = (provider: ProviderTool) => providerUsable(tools?.find(item => item.tool === provider));
   const tool = pickedTool ?? initialGroupProvider(initialProvider, tools);
-  const [editJudge, setEditJudge] = useState(false);
   const [judge, setJudge] = useState<JudgeSelectionView>({kind: 'default'});
   const [conversation, setConversation] = useState<Conversation>();
   /** Set once the user picks 免@ by hand; until then it follows the 会话方式. */
@@ -171,30 +120,10 @@ export function JoinGroupDialog({linux, open = true, agent, pending, initialGrou
   useEffect(() => {active.current = true; return () => {active.current = false;};}, []);
   const nameProblem = projectNameProblem(name);
   const freeAt = shownResponse(conversation, response);
-  const selectedBackend = isKnownJudgeSelection(judge) && judge.kind === 'llm' ? judge.backend ?? (tool ? providerBackends[tool] : undefined) : undefined;
-  const selectedProvider = (Object.entries(providerBackends) as Array<[ProviderTool, string]>).find(([, backend]) => backend === selectedBackend)?.[0];
-  const liveBackends = (Object.entries(providerBackends) as Array<[ProviderTool, string]>).filter(([provider]) => open && ready(provider) && live[provider]?.state === 'ready' && live[provider]?.epoch === liveEpoch.current && live[provider]?.observedFor === providerSignature(tools?.find(item => item.tool === provider)) && Boolean(live[provider]?.models.length)).map(([, backend]) => backend);
-  const backend = tool ? providerBackends[tool] : undefined;
-  const resolved = backend ? decisionView?.judgeByBackend?.[backend] : undefined;
-  const visible = tool && liveBackends.includes(providerBackends[tool]) ? live[tool]?.models.filter(model => !model.hidden) ?? [] : [];
-  const alternate = resolved?.source === 'default' && !visible.some(model => model.id === resolved.model)
-    ? tool === 'codex' ? visible.find(model => model.id === 'gpt-6-luna') ?? visible.find(model => model.id.endsWith('-luna')) ?? visible.find(model => model.isDefault) ?? visible[0]
-      : visible.find(model => model.id.toLowerCase().includes('haiku')) ?? visible.find(model => model.isDefault) ?? visible[0]
-    : undefined;
-  const lowestEffort = alternate && tool === 'codex' ? (['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const).find(level => alternate.supportedEfforts.includes(level)) : undefined;
-  const recommendedOverride = alternate && backend ? {kind: 'llm' as const, backend, model: alternate.id, ...(lowestEffort ? {effort: lowestEffort} : {})} : undefined;
   const decisionFresh = open && decisionReady.serial === decisionSerial.current && decisionReady.epoch === decisionOpenEpoch.current;
-  const defaultProblem = decisionReadError || (!decisionFresh ? '正在读取 Bot 的决策模型，请稍候。' : globalDecisionProblem(decisionView, tool, tools, liveBackends)
-    ?? (resolved && !resolved.provider && !visible.some(model => model.id === resolved.model) && !recommendedOverride ? '推荐模型不在当前 Provider 的实时目录中。' : undefined));
-  const shownModel = recommendedOverride ?? resolved;
-  const decisionSummary = decisionReadError || (!decisionView ? '正在读取推荐决策模型…' : defaultProblem
-    ?? (shownModel ? `${resolved?.source === 'default' ? '推荐小模型' : '沿用 Bot 设置'} · ${shownModel.model}${shownModel.effort ? ` · ${shownModel.effort}` : tool === 'claude' ? ' · 关闭思考' : ' · 不指定推理强度'}` : '正在读取…'));
-  const editedProblem = judge.kind === 'default' ? '请选择决策模型。' : decisionProviderProblem(judge, judgeProvider, backend ?? '') ?? judgeSetupProblem(judge, decisionView?.decisionModels, providers.filter(item => liveBackends.includes(item.id)).map(item => item.id))
-    ?? (selectedProvider && live[selectedProvider]?.state !== 'ready' ? '决策 Provider 模型目录暂不可用。' : undefined)
-    ?? (isKnownJudgeSelection(judge) && judge.kind === 'llm' && selectedProvider && !judge.custom && !live[selectedProvider]?.models.some(model => model.id === judge.model) ? '此决策模型不在当前 Provider 的实时目录中。' : undefined);
-  const judgeProblem = conversation === 'smart' ? decisionReadError || (!decisionFresh ? '正在读取 Bot 的决策模型，请稍候。' : editJudge ? editedProblem : defaultProblem) : undefined;
-  const dirty = Boolean(name !== (mode.kind === 'bind' ? mode.group.name : '') || folder || existingDirectory || pickedTool !== undefined || conversation || response || editJudge);
-  function discard() {setName(''); setFolder(undefined); setExistingDirectory(false); setPickedTool(undefined); setConversation(undefined); setResponse(undefined); setEditJudge(false); setJudge({kind: 'default'});}
+  const judgeProblem = conversation === 'smart' ? decisionReadError || (!decisionFresh ? '正在读取决策模型设置，请稍候。' : judgeSetupProblem(judge, decisionView?.decisionModels, providers.map(item => item.id))) : undefined;
+  const dirty = Boolean(name !== (mode.kind === 'bind' ? mode.group.name : '') || folder || existingDirectory || pickedTool !== undefined || conversation || response);
+  function discard() {setName(''); setFolder(undefined); setExistingDirectory(false); setPickedTool(undefined); setConversation(undefined); setResponse(undefined); setJudge({kind: 'default'});}
   function close() {if (!busy) navigate(() => {active.current = false; onClose();});}
   function switchMode(next: Mode) {
     if (busy) return;
@@ -205,12 +134,12 @@ export function JoinGroupDialog({linux, open = true, agent, pending, initialGrou
     if (!name.trim() || (existingDirectory && !folder)) {setError('请填写名称并选择工作目录。'); return false;}
     if (!conversation) {setError('请选择会话方式。'); return false;}
     if (!tool || !ready(tool)) {setError('请先安装并登录 Provider。'); return false;}
-    if (conversation === 'smart' && (decisionReady.serial !== decisionSerial.current || decisionReady.epoch !== decisionOpenEpoch.current)) {setError('正在读取 Bot 的决策模型，请稍候。'); return false;}
+    if (conversation === 'smart' && (decisionReady.serial !== decisionSerial.current || decisionReady.epoch !== decisionOpenEpoch.current)) {setError('正在读取决策模型设置，请稍候。'); return false;}
     if (judgeProblem) {setError(judgeProblem); return false;}
     const picked = sentResponse(mode.kind, conversation, freeAt);
-    const selectedJudge = conversation === 'smart' && editJudge ? groupDecisionSchema.safeParse(judge) : undefined;
+    const selectedJudge = conversation === 'smart' ? groupDecisionSchema.safeParse(judge) : undefined;
     if (selectedJudge && !selectedJudge.success) {setError('请选择有效的决策模型。'); return false;}
-    const decision = selectedJudge?.success ? {judge: selectedJudge.data} : conversation === 'smart' && recommendedOverride ? {judge: recommendedOverride} : {};
+    const decision = selectedJudge?.success ? {judge: selectedJudge.data} : {};
     if (nameProblem) {setError(nameProblem); return false;}
     setBusy(true); setError('');
     try {
@@ -282,10 +211,9 @@ export function JoinGroupDialog({linux, open = true, agent, pending, initialGrou
         <FormField label="会话方式">
           <ChoiceGroup<Conversation | ''> label="会话方式" aria-required disabled={busy} value={conversation ?? ''} options={conversationsFor(mode.kind === 'bind' && mode.group.topic === true)} onChange={value => {if (value) {setConversation(value); setResponse(picked => keptResponse(value, picked));}}} />
         </FormField>
-        {conversation === 'smart' && <SettingsGroup label="决策模型">
-          <SettingsRow title={editJudge ? '自定义' : '默认模型'} description={editJudge ? '本群使用下方选定的模型。' : decisionSummary} trailing={<>{defaultProblem && onOpenDecisionModel && <Button disabled={busy} onClick={onOpenDecisionModel}>设置决策模型</Button>}<Button disabled={busy} onClick={() => {setEditJudge(value => !value); setJudge({kind: 'default'});}}>{editJudge ? '沿用默认' : '修改'}</Button></>}/>
-          {editJudge && <DecisionFields initial botId={agent.id} groupBackend={tool ? providerBackends[tool] : ''} value={judge} effective={decisionView?.sections.judge?.effective.selection ?? {kind: 'default'}} onChange={setJudge} onProviderChange={setJudgeProvider} disabled={busy} providers={providers.filter(item => liveBackends.includes(item.id))} services={decisionView?.decisionModels} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenDecisionModel}/>}
-          {editJudge && editedProblem && <p className="gd-note" role="status">{editedProblem}</p>}
+        {conversation === 'smart' && <SettingsGroup label="判断 Provider">
+          <DecisionFields initial botId={agent.id} groupBackend={tool ? providerBackends[tool] : ''} value={judge} effective={decisionView?.sections.judge?.effective.selection ?? {kind: 'default'}} onChange={setJudge} disabled={busy} providers={providers} services={decisionView?.decisionModels} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenDecisionModel}/>
+          {judgeProblem && <p className="gd-note" role="status">{judgeProblem}</p>}
           {decisionReadError && <Button size="sm" disabled={busy} onClick={() => void readDecision()}>重试读取</Button>}
         </SettingsGroup>}
         {mode.kind === 'bind' && mode.group.hasOtherBots && <p className="join-group-flow__hint">群内 Bot 都使用智能模式后，可互相 @ 并判断是否接话。</p>}

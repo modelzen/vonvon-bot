@@ -693,3 +693,13 @@ it('requires an explicit group decision model before switching to smart mode', a
     expect(fixture.send).not.toHaveBeenCalled();
   } finally { await app.shutdown(); }
 });
+it('rechecks a provider-only group before enabling smart mode', async () => {
+  backend(); (fixture.backend as {loginStatus?: () => Promise<{state:'signedOut';message:string}>}).loginStatus = async () => ({state:'signedOut',message:''});
+  const app = orchestrator();
+  try {
+    await updateProject('demo', { judge: { kind: 'provider', provider: 'codex-appserver' } });
+    const revision = projectRevision((await getProjectByName('demo'))!);
+    await expect(app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart' })).rejects.toThrow('尚未登录');
+    expect((await getProjectByName('demo'))?.smart).not.toBe(true);
+  } finally { await app.shutdown(); }
+});

@@ -27,6 +27,7 @@ import type * as T from './settings-types';
 import { offlineModelCatalog, rememberModelCatalog } from './model-catalog';
 import { readBotProfile, readGroupProfile, updateBotProfile } from '../bot/group-profile';
 import { discoverGroupSkills, discoverLocalGroupSkills } from '../agent/group-skills';
+import { validateProviderJudge } from '../project/initial-settings';
 export type * from './settings-types';
 export { parseSettingsAction, parseSettingsEdit, parseSettingsScope, parseModelQuery, SettingsInputError } from './settings-parse';
 export function settingsRevision(value: unknown): string {
@@ -380,6 +381,12 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
   async function validateJudgeSelection(value: T.JudgeSelection, layerBackend: string, group: boolean): Promise<JudgeSelectionStored | undefined> {
     if (value.kind === 'default')
       return undefined;
+    if (value.kind === 'provider') {
+      await validateProviderJudge(value.provider, { backendFor: deps.backendFor, readKey: deps.getSecret }).catch((error: unknown) => {
+        throw new SettingsInputError(error instanceof Error ? error.message : '无法验证决策 Provider');
+      });
+      return { kind: 'provider', provider: value.provider };
+    }
     const id = parseModelId(value.model);
     if (!id.ok)
       throw new SettingsInputError(id.message);
@@ -424,8 +431,11 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
   }
   /** What a group on `backend` judges with (design 2.5), as a selection. */
   function judgeEffective(backend: string, layers: { group?: JudgeSelectionStored; bot?: JudgeSelectionStored }): T.AgentSections['judge'] {
-    const actualBackend = layers.group?.kind === 'llm' ? layers.group.backend : backend;
+    const active = layers.group ?? layers.bot;
+    const actualBackend = layers.group?.kind === 'llm' ? layers.group.backend
+      : active?.kind === 'provider' && active.provider !== 'typesafe' ? active.provider : backend;
     const { model, effort, provider } = resolveJudgeModel(actualBackend, layers, peekModels(actualBackend));
+    if (active?.kind === 'provider') return { selection: active };
     return { selection: provider ? { kind: 'decision', provider, model } : { kind: 'llm', backend: actualBackend, model, ...(effort ? { effort } : {}) } };
   }
   /** Every decision model this version calls, and whether its key is filled in by the judge's rule (an unreadable
@@ -524,10 +534,11 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       };
       const botJudge = storedJudge(cfg.preferences?.judge);
       sections.judge.effective = judgeEffective(botJudge?.kind === 'llm' ? botJudge.backend : botBackendId(cfg.preferences), { bot: botJudge });
-      const botDecides = sections.judge.effective.selection.kind === 'decision';
+      const botDecides = sections.judge.effective.selection.kind === 'decision' || (sections.judge.effective.selection.kind === 'provider' && sections.judge.effective.selection.provider === 'typesafe');
       const judgeByBackend: NonNullable<T.AgentSettingsView['judgeByBackend']> = {};
       for (const id of backendIds()) {
-        const { model, effort, provider, modelSource } = resolveJudgeModel(id, { bot: botJudge }, peekModels(id));
+        const judgeBackend = botJudge?.kind === 'provider' && botJudge.provider !== 'typesafe' ? botJudge.provider : id;
+        const { model, effort, provider, modelSource } = resolveJudgeModel(judgeBackend, { bot: botJudge }, peekModels(judgeBackend));
         judgeByBackend[id] = { model, ...(effort ? { effort } : {}), ...(provider ? { provider } : {}), source: modelSource === 'bot' ? 'bot' : 'default' };
       }
       const text = await instructions.read();
@@ -578,7 +589,9 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       };
       sections.judge.effective = judgeEffective(backendId, { group: storedJudge(p.judge), bot: storedJudge(cfg.preferences?.judge) });
       // a decision model gets none of a backend's extras
-      const judgeNote = sections.judge.effective.selection.kind === 'llm' ? JUDGE_NOTES[String(sections.judge.effective.selection.backend ?? backendId)] : undefined;
+      const judgeSelection = sections.judge.effective.selection;
+      const judgeNote = judgeSelection.kind === 'llm' ? JUDGE_NOTES[String(judgeSelection.backend ?? backendId)]
+        : judgeSelection.kind === 'provider' && judgeSelection.provider !== 'typesafe' ? JUDGE_NOTES[String(judgeSelection.provider)] : undefined;
       const fullOnly = deps.backendFor(backendId).fullAccessOnly?.();
       let skillView: Pick<T.ProjectSettingsView, 'skills' | 'skillsError'>;
       if (deps.offline) {
@@ -606,7 +619,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           openIds: [...(p.allowedUsers ?? [])],
           revision: settingsRevision([botId, p.name, p.chatId, p.allowedUsers ?? []])
         },
-        smartPrompt: p.smartRules ? { ...await smartPromptView(p.chatId, judgeNote ? [judgeNote] : [], sections.judge.effective.selection.kind === 'decision'), source: 'group', text: composeSmartRules(p.smartRules) } : await smartPromptView(p.chatId, judgeNote ? [judgeNote] : [], sections.judge.effective.selection.kind === 'decision'),
+        smartPrompt: p.smartRules ? { ...await smartPromptView(p.chatId, judgeNote ? [judgeNote] : [], sections.judge.effective.selection.kind === 'decision' || (sections.judge.effective.selection.kind === 'provider' && sections.judge.effective.selection.provider === 'typesafe')), source: 'group', text: composeSmartRules(p.smartRules) } : await smartPromptView(p.chatId, judgeNote ? [judgeNote] : [], sections.judge.effective.selection.kind === 'decision' || (sections.judge.effective.selection.kind === 'provider' && sections.judge.effective.selection.provider === 'typesafe')),
         decisionModels: await decisionModels()
       };
     }
@@ -637,7 +650,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
   /** After a decision model is chosen without its key (owner: choose first, fill in later): what happens meanwhile
    * and how to fill it in, as one more effect line, which the command line and the web page show as they are. */
   async function keyMissing(selection: T.JudgeSelectionView | undefined): Promise<string | undefined> {
-    if (selection?.kind !== 'decision')
+    if (selection?.kind !== 'decision' && !(selection?.kind === 'provider' && selection.provider === 'typesafe'))
       return undefined;
     const chosen = (await decisionModels()).find(m => m.provider === selection.provider);
     return chosen && !chosen.keySet ? keyMissingText(chosen) : undefined;

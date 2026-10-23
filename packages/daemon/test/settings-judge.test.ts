@@ -31,7 +31,7 @@ const LISTS: Record<string, ModelInfo[]> = {
 };
 const fake = (id: string, list: ModelInfo[]) => ({
   id, displayName: id === 'claude-agent' ? 'Claude' : 'Codex', doctor: async () => ({ ok: true }), supportedModes: ['qa', 'write', 'full'],
-  listModels: async () => list, peekModels: () => list,
+  listModels: async () => list, peekModels: () => list, loginStatus: async () => ({state:'signedIn',message:''}),
 } as unknown as AgentBackend);
 let backends: Record<string, AgentBackend>;
 const botDir = () => join(paths.appDir, 'bot');
@@ -342,6 +342,24 @@ describe('judge settings: the view', () => {
     await writeFile(join(botDir(), 'SMART.md'), 'x'.repeat(8001));
     a = await o.read(agent) as AgentSettingsView;
     expect(a.smartPrompt).toMatchObject({ error: 'SMART.md 超过 8000 字', path: join(botDir(), 'SMART.md'), text: '' });
+  });
+});
+
+describe('provider-only group settings admission', () => {
+  it('rejects a provider change after login expires and accepts it after login returns', async () => {
+    backends['claude-agent'] = { ...fake('claude-agent', LISTS['claude-agent']!), loginStatus: async () => ({ state: 'signedOut', message: '' }) } as AgentBackend;
+    const choice = { kind: 'provider' as const, provider: 'claude-agent' as const };
+    expect(messageOf(await save(project, choice))).toContain('尚未登录');
+    expect((await getProjectByName('demo'))?.judge).toBeUndefined();
+    backends['claude-agent'] = fake('claude-agent', LISTS['claude-agent']!);
+    expect((await save(project, choice)).kind).toBe('saved');
+    expect((await getProjectByName('demo'))?.judge).toEqual(choice);
+  });
+  it('checks the TypeSafe key before saving a provider selection', async () => {
+    const choice = { kind: 'provider' as const, provider: 'typesafe' as const };
+    expect(messageOf(await save(project, choice))).toContain('密钥');
+    secrets = { 'typesafe-api-key': 'ts_TESTKEY0000' };
+    expect((await save(project, choice)).kind).toBe('saved');
   });
 });
 

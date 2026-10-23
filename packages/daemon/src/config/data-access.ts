@@ -9,7 +9,7 @@ export class DataAccessError extends Error {}
  * at all (macOS: a bad `.locks` directory); admin/secrets.ts tells the two apart by it. */
 export const MUTEX_TIMEOUT = 'DATA_MUTEX_TIMEOUT';
 /** `service` serializes `vonvon service install|uninstall`, whoever runs it: the terminal, the daemon's helper or the desktop's. */
-type MutexRole = 'admission' | 'host' | 'keystore' | 'service' | 'bots' | 'projects' | 'creation';
+type MutexRole = 'admission' | 'host' | 'judge-models' | 'keystore' | 'service' | 'bots' | 'projects' | 'creation';
 export interface DataLease { release(): void }
 /** A held coordination mutex. `closeMutex` releases it; the kernel releases it when the process dies. */
 export interface Mutex { readonly role: MutexRole }

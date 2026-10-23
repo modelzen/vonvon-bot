@@ -6,6 +6,7 @@ import { parseModelId } from '../agent/model-id';
 import { getSessionTitleEfforts } from '../config/schema';
 import { REASONING_EFFORTS, type ModelInfo, type ReasoningEffort } from '../agent/types';
 import type { JudgeResult, JudgeSelectionStored } from './types';
+import { JUDGE_PROVIDERS, readJudgeModelsSync, type JudgeProvider } from './global-models';
 
 // Which model judges (design 2.2, 2.3): the group's setting, else the bot's, each only for the
 // backend it was stored for, else the backend's default small model.
@@ -133,6 +134,10 @@ export function parseStoredJudge(value: unknown, backends: readonly string[]): {
   if (value === undefined || value === null) return {};
   if (typeof value !== 'object' || Array.isArray(value)) return { why: '不是对象' };
   const v = value as Record<string, unknown>;
+  if (v.kind === 'provider') {
+    if (typeof v.provider !== 'string' || !JUDGE_PROVIDERS.includes(v.provider as JudgeProvider)) return { why: '不认识决策 Provider' };
+    return { value: { kind: 'provider', provider: v.provider as JudgeProvider } };
+  }
   if (v.kind === 'decision') {
     if (typeof v.provider !== 'string' || !DECISION_PROVIDER_ID.test(v.provider)) return { why: '决策模型的 provider 不对' };
     const id = typeof v.model === 'string' ? parseModelId(v.model) : undefined;
@@ -166,9 +171,18 @@ export function resolveJudgeModel(
   layers: { group?: JudgeSelectionStored; bot?: JudgeSelectionStored },
   models: ModelInfo[] | undefined,
   readClaude?: ClaudeUserSettings,
+  globalRoot?: string,
 ): Pick<JudgeResult, 'model' | 'effort' | 'provider' | 'modelSource'> {
   for (const source of ['group', 'bot'] as const) {
     const chosen = layers[source];
+    if (chosen?.kind === 'provider') {
+      const selected = readJudgeModelsSync(globalRoot).byProvider[chosen.provider];
+      if (chosen.provider === 'typesafe') return { model: selected?.model ?? 'jev-latest', provider: 'typesafe', modelSource: source };
+      if (!selected) return { ...defaultJudgeModel(chosen.provider, models, readClaude), modelSource: source };
+      const effort = selected.effort ? fitJudgeEffort(selected.model, selected.effort, models, selected.custom)
+        : chosen.provider === CLAUDE_BACKEND_ID ? undefined : judgeEffort(selected.model, models, selected.custom);
+      return { model: selected.model, ...(effort ? { effort } : {}), modelSource: source };
+    }
     if (chosen?.kind === 'decision') return { model: chosen.model, provider: chosen.provider, modelSource: source };
     if (!chosen || (source === 'bot' && chosen.backend !== backendId)) continue;
     const effort = chosen.effort ? fitJudgeEffort(chosen.model, chosen.effort, models, chosen.custom)
@@ -180,5 +194,5 @@ export function resolveJudgeModel(
 
 /** The group may judge with another provider than the one running its tasks. */
 export function judgeBackendId(taskBackend: string, group: JudgeSelectionStored | undefined): string {
-  return group?.kind === 'llm' ? group.backend : taskBackend;
+  return group?.kind === 'llm' ? group.backend : group?.kind === 'provider' && group.provider !== 'typesafe' ? group.provider : taskBackend;
 }
