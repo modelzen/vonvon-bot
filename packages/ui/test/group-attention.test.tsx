@@ -79,14 +79,15 @@ it('uses the selected group within the selected bot and never leaks another bot 
   expect(topics(wrongBot)).toBe('');
   expect(reading(wrongBot)).not.toContain('留意中');
   const wrongGroup = render({agent: withAttention([other])});
-  expect(value(wrongGroup)).toBe('—');
-  expect(reading(wrongGroup)).toContain('暂无关注状态');
+  expect(value(wrongGroup)).toBe('0/100');
+  expect(reading(wrongGroup)).toContain('待互动');
+  expect(topics(wrongGroup)).toBe('');
 });
 
-it('keeps topic-only attention and does not invent a main-area state', () => {
+it('shows an idle main area while preserving independent topic attention', () => {
   const html = show(state({main: undefined}));
-  expect(value(html)).toBe('—');
-  expect(reading(html)).toContain('暂无关注状态');
+  expect(value(html)).toBe('0/100');
+  expect(reading(html)).toContain('待互动');
   expect(topics(html)).toContain('2 个专注 · 1 个留意');
   expect(reading(html)).not.toContain('专注中');
   expect(reading(html)).not.toContain('留意中');
@@ -102,8 +103,10 @@ it('does not interpolate or round an unrecognized interval into a score', () => 
 
 it('distinguishes absent records from a daemon that does not provide attention', () => {
   const empty = render({agent: withAttention([])});
-  expect(value(empty)).toBe('—');
-  expect(reading(empty)).toContain('暂无关注状态');
+  expect(value(empty)).toBe('0/100');
+  expect(reading(empty)).toContain('待互动');
+  expect(reading(empty)).toContain('收到主区消息后，关注度自动更新。');
+  expect(empty).toContain('data-tone="idle"');
   expect(topics(empty)).toBe('');
   expect(reading(empty)).not.toContain('当前版本未提供关注状态');
   for (const missing of [withAttention(undefined), agent]) {
@@ -116,6 +119,32 @@ it('distinguishes absent records from a daemon that does not provide attention',
     expect(value(html)).toBe('—');
     expect(reading(html)).toContain('暂无关注状态');
   }
+});
+
+it('keeps unavailable empty snapshots unknown and updates an idle reading on arrival', () => {
+  const emptyAgent = withAttention([]);
+  for (const props of [
+    {connected: false},
+    {membership: {...membership, stale: true}},
+    {membership: {...membership, enabled: false}},
+    {agent: {...emptyAgent, running: false}},
+  ]) {
+    const html = render({agent: emptyAgent, ...props});
+    expect(value(html)).toBe('—');
+    expect(reading(html)).not.toContain('待互动');
+  }
+  const arrived = show(state({main: {mode: 'watch', intervalMs: 60_000}}));
+  expect(value(arrived)).toBe('75/100');
+  expect(reading(arrived)).toContain('留意中');
+  expect(reading(arrived)).not.toContain('待互动');
+});
+
+it.each(['no-glance', 'named-only'] as const)('does not call a topic-only %s restriction idle', kind => {
+  const html = show(state({main: undefined, budget: {kind, until: now + 60_000}}));
+  expect(value(html)).toBe('0/100');
+  expect(reading(html)).toContain(kind === 'no-glance' ? '暂停扫视' : '仅处理真人直接找它的消息');
+  expect(reading(html)).not.toContain('待互动');
+  expect(html).toContain('data-tone="paused"');
 });
 
 it.each([

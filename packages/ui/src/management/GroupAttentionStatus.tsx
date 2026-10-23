@@ -38,7 +38,6 @@ export function GroupAttentionStatus({agent, membership, connected}: {
     : membership.enabled === false ? '项目已停用，暂停关注'
     : membership.enabled === undefined ? '项目状态暂不可读'
     : !agent.diagnostics?.attention ? '当前版本未提供关注状态'
-    : !state ? '暂无关注状态'
     : until !== undefined && until <= now ? '关注状态待更新'
     : undefined;
   const budget = state?.budget?.kind;
@@ -49,18 +48,21 @@ export function GroupAttentionStatus({agent, membership, connected}: {
 
   const namedOnly = budget === 'named-only';
   const focus = state?.main?.mode === 'focus';
-  const score = unavailable ? undefined : namedOnly ? 0 : !state?.main ? undefined
+  // A supported, current snapshot can legitimately have no main-area record
+  // before the next arrival. Keep this idle state separate from missing data.
+  const idle = !unavailable && !state?.main && !namedOnly && !paused;
+  const score = unavailable ? undefined : namedOnly ? 0 : !state?.main ? 0
     : focus ? 100 : paused ? 0 : watchScores[state.main.intervalMs];
   const status = unavailable ?? (namedOnly ? '仅处理真人直接找它的消息'
-    : !state?.main ? '主区暂无关注状态' : focus ? '专注中' : paused ? '暂停扫视' : '留意中');
+    : focus ? '专注中' : paused ? '暂停扫视' : idle ? '待互动' : '留意中');
   const description = unavailable ? undefined
     : namedOnly ? '@、引用或回复 Bot 发起的话题根消息仍会判断。'
-    : !state?.main ? undefined
     : focus ? '新消息到达就判断是否接话。'
     : paused ? '判断额度暂满，恢复后继续查看。'
+    : idle ? '收到主区消息后，关注度自动更新。'
     : `攒一批消息再看 · 当前间隔 ${intervalText}`;
 
-  const tone = score === undefined ? 'unknown' : score === 0 ? 'paused' : focus ? 'focus' : 'watch';
+  const tone = score === undefined ? 'unknown' : idle ? 'idle' : score === 0 ? 'paused' : focus ? 'focus' : 'watch';
   const segmentLength = Math.PI * 68 / 4;
   return <section className="group-attention" data-tone={tone} aria-label="主区关注度">
     <div className="group-attention__reading">
@@ -84,7 +86,7 @@ export function GroupAttentionStatus({agent, membership, connected}: {
               <dl>
                 <div><dt>100</dt><dd>专注，来消息就判断</dd></div>
                 <div><dt>75 / 50 / 25</dt><dd>留意，间隔 1 / 3 / 5 分钟</dd></div>
-                <div><dt>0</dt><dd>暂停主动查看，仍处理真人直接找它的消息</dd></div>
+                <div><dt>0</dt><dd>待互动或暂停主动查看，仍处理真人直接找它的消息</dd></div>
               </dl>
               <Popover.Description>按现有档位折算，不代表回复概率。话题单独关注；消息多时会提前查看。</Popover.Description>
             </Popover.Popup>
@@ -92,7 +94,7 @@ export function GroupAttentionStatus({agent, membership, connected}: {
         </Popover.Portal>
       </Popover.Root>
       <div className="group-attention__copy"><span className="group-attention__heading">主区关注度</span><strong className="group-attention__status"><span aria-hidden="true"/>{status}</strong>{description && <p>{description}</p>}
-        {!unavailable && !namedOnly && <p className="group-attention__topics">话题：{state?.focusedTopics ?? 0} 个专注 · {state?.watchedTopics ?? 0} 个{paused ? '暂停扫视' : '留意'}</p>}
+        {!unavailable && !namedOnly && state && <p className="group-attention__topics">话题：{state.focusedTopics} 个专注 · {state.watchedTopics} 个{paused ? '暂停扫视' : '留意'}</p>}
       </div>
     </div>
     {!unavailable && paused && <p className="group-attention__note">扫视已暂停，专注中的位置仍会判断新消息。</p>}
