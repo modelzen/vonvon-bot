@@ -46,7 +46,7 @@ import {
 } from "@vonvon/protocol";
 import type { CollaborationView, Page } from "./collaboration-model";
 import {SettingsPanel,membershipSettingsKey,membershipSettingsTarget} from "./settings/SettingsPanel";
-import {GroupAttentionStatus} from './settings/GroupAttentionStatus';
+import {GroupAttentionStatus} from './management/GroupAttentionStatus';
 import {DraftGuardProvider, useDraftGuard} from './settings/DraftGuard';
 import {diagnosticsSection, searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
 import {initialRoute, openMembership, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type AgentPane, type CollaborationRoute, type MembershipPane} from './collaboration-navigation';
@@ -808,6 +808,7 @@ function DesktopApp() {
                     <button type="button" onClick={() => changeRoute(() => ({kind: 'agent', id: agent.id, pane: {kind: 'settings'}}))}>Bot 设置</button>
                     <button type="button" onClick={() => changeRoute(() => ({kind: 'group', id: group.id}))}>查看飞书群</button>
                   </div>
+                  <GroupAttentionStatus agent={agent} membership={member} connected={host.kind === 'connected' && !snapshot.stale} />
                   <DetailTabs first="会话与状态" second="群内设置" selected={detail.kind === 'membership-settings' ? 'settings' : 'overview'} onSelect={next => membershipPane(next === 'overview' ? {kind: 'activity'} : {kind: 'settings'})}/>
                   {detail.kind !== 'membership-settings' ? <>
                   <SettingsGroup label="群内协作">
@@ -826,8 +827,7 @@ function DesktopApp() {
                   <p className="collaboration-scope-note">这里只配置 {agent.name} 在 {group.name} 中的工作目录、响应方式和权限。</p>
                   <ProjectPanel key={`manage-${member.id}`} scope={{kind: 'project', agentId: agent.id, groupId: group.id, projectName: member.name}} request={client.collaboration} onChanged={async () => {await run({type: 'refresh'});}}>
                     <SettingsGroup id={settingAnchor('历史会话')} label="历史会话"><SettingsRow title="会话与状态" trailing={<Button size="sm" onClick={() => membershipPane({kind: 'activity'})}>查看历史会话</Button>} /></SettingsGroup>
-                    <SettingsPanel key={membershipSettingsKey(member)} scope="project" target={membershipSettingsTarget(member)} onOpenSecrets={() => openPage("secrets")}
-                      attentionStatus={<GroupAttentionStatus agent={agent} membership={member} connected={host.kind === 'connected' && !snapshot.stale} />} />
+                    <SettingsPanel key={membershipSettingsKey(member)} scope="project" target={membershipSettingsTarget(member)} onOpenSecrets={() => openPage("secrets")} />
                   </ProjectPanel>
                   </>}
                   </div>

@@ -47,11 +47,6 @@
   overflow-wrap: anywhere;
   user-select: text;
 }
-.group-attention .ss-row__value {
-  white-space: normal;
-  overflow-wrap: anywhere;
-  font-variant-numeric: tabular-nums;
-}
 .settings-operation-message {
   margin: 0;
   padding: 10px 14px;
