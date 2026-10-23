@@ -317,7 +317,7 @@ export const sessionViewSchema = z.object({
 });
 export const hostViewSchema = z.object({
   scope: z.object({ kind: z.literal("host") }),
-  sections: sections(hostSectionSchemas),
+  sections: sections(hostSectionSchemas).partial({ judge: true }),
   runtime: z.object({
     codexBin: z.string().nullable(),
     fallbackCwd: z.string(),
