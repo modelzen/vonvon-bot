@@ -94,7 +94,7 @@ export const downgradeText: Record<NonNullable<MemorySource['downgraded']>, stri
   steered: '这一轮被插话，只记在本项目',
   'not-typed': '不是主人手打的消息，只记在本项目',
   'not-in-message': '由主人触发，内容不在主人这条消息里，只记在本项目',
-  quota: 'Bot 记忆已满，只记在本项目',
+  quota: 'Bot 记忆这一轮已写过一条，只记在本项目',
 };
 const when = (at: number) => {const date = new Date(at); return `${date.getMonth() + 1}-${date.getDate()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;};
 

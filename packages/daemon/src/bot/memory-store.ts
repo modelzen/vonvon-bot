@@ -352,19 +352,28 @@ export class MemoryStore {
     if (!raw) return { verified: true, problems: [] };
     const record = await readRegular(this.file('integrity.json'), 64 * 1024).catch(() => undefined);
     let known: string[] = [];
+    let flagged = false;
     try {
-      const parsed = record ? JSON.parse(record.toString('utf8')) as { sha256?: unknown; previous?: unknown } : undefined;
+      const parsed = record ? JSON.parse(record.toString('utf8')) as { sha256?: unknown; previous?: unknown; unverified?: unknown } : undefined;
       known = [parsed?.sha256, parsed?.previous].filter((value): value is string => typeof value === 'string');
+      flagged = parsed?.unverified === true;
     } catch { /* 当作没有记录 */ }
     if (!known.length) return { verified: false, problems: ['缺少完整性记录，memory.json 可能被外部改过'] };
+    // 一次写入发现文件对不上，就把记录标成"未确认"，一直带到主人确认（reseal）为止：普通写入不能把外部改动洗成可信
+    if (flagged) return { verified: false, problems: ['memory.json 被外部改过，主人确认之前可信条目不注入'] };
     // 记录里有上一份的 hash：快照改名和记录写入之间被杀时，两种都是我们写的
     return known.includes(sha256(raw)) ? { verified: true, problems: [] } : { verified: false, problems: ['memory.json 被外部改过'] };
   }
 
   /** Lock-free: the snapshot, plus the events after it. */
   async read(): Promise<MemoryView> {
-    const { state, problems, raw } = await this.load();
-    const integrity = await this.verify(raw);
+    let { state, problems, raw } = await this.load();
+    let integrity = await this.verify(raw);
+    // 没加锁读：快照和记录之间正好有别人写完两次，就对不上。重读一次再下结论
+    if (!integrity.verified) {
+      ({ state, problems, raw } = await this.load());
+      integrity = await this.verify(raw);
+    }
     return this.view(state, [...problems, ...integrity.problems], integrity.verified);
   }
 
@@ -409,11 +418,12 @@ export class MemoryStore {
 
   // -- writing --------------------------------------------------------------------------------------------------
 
-  private transact<T>(operation: (tx: Transaction) => T | Promise<T>): Promise<T> {
+  private transact<T>(operation: (tx: Transaction) => T | Promise<T>, options: { reseal?: boolean } = {}): Promise<T> {
     return serially(this.location.lockDir, () => holdMemoryDirectory(this.location.lockDir, async () => {
       await mkdir(this.location.dir, { recursive: true, mode: 0o700 });
       await this.sweepTemporaries();
       const loaded = await this.load();
+      const pre = await this.verify(loaded.raw);
       const events: MemoryEvent[] = [];
       const scrubbed = new Set<string>();
       const now = this.now();
@@ -430,7 +440,7 @@ export class MemoryStore {
       };
       const result = await operation(tx);
       // A tail replayed from the log is written back too, so the snapshot catches up.
-      if (events.length || loaded.replayed || loaded.log.torn) await this.persist(loaded.state, events, scrubbed, loaded.log, loaded.raw);
+      if (events.length || loaded.replayed || loaded.log.torn) await this.persist(loaded.state, events, scrubbed, loaded.log, loaded.raw, !pre.verified && !options.reseal);
       return result;
     }));
   }
@@ -448,7 +458,7 @@ export class MemoryStore {
     }
   }
 
-  private async persist(state: State, events: MemoryEvent[], scrubbed: ReadonlySet<string>, log: { events: MemoryEvent[]; validBytes: number; torn: boolean }, previousRaw: Buffer | undefined): Promise<void> {
+  private async persist(state: State, events: MemoryEvent[], scrubbed: ReadonlySet<string>, log: { events: MemoryEvent[]; validBytes: number; torn: boolean }, previousRaw: Buffer | undefined, unverified = false): Promise<void> {
     const eventsPath = this.file('events.jsonl');
     const lines = events.map(event => `${JSON.stringify(event)}\n`).join('');
     if (scrubbed.size) {
@@ -484,7 +494,7 @@ export class MemoryStore {
       // The record names the new file and the one it replaces: a kill between this and the rename leaves either one valid.
       const integrityTmp = `${this.file('integrity.json')}.tmp-${stamp}`;
       try {
-        await writeFileDurably(integrityTmp, `${JSON.stringify({ sha256: sha256(body), ...(previousRaw ? { previous: sha256(previousRaw) } : {}), at: this.now() })}\n`);
+        await writeFileDurably(integrityTmp, `${JSON.stringify({ sha256: sha256(body), ...(previousRaw ? { previous: sha256(previousRaw) } : {}), at: this.now(), ...(unverified ? { unverified: true } : {}) })}\n`);
         await rename(integrityTmp, this.file('integrity.json'));
       } catch (error) { await unlink(integrityTmp).catch(() => undefined); throw error; }
       await this.options.beforeSnapshotRename?.();
@@ -643,7 +653,7 @@ export class MemoryStore {
     return this.transact(async tx => {
       // an empty change still writes the snapshot and its record
       tx.emit({ kind: 'edit', actor: { role: 'desktop' } });
-    });
+    }, { reseal: true });
   }
 
   // -- branches ---------------------------------------------------------------------------------------------------

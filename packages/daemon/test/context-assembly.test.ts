@@ -154,6 +154,32 @@ describe('what a turn adds', () => {
     expect(update.context.nonce).toBe('abc123');
   });
 
+  it('keeps the opening mark accepted after a compaction hands over everything under a new one', async () => {
+    const s = stores();
+    await add(s.project, '发版改到周四', '决定', ownerSays());
+    const known = { ...(await delivered(s)), fullRedeliverDue: true };
+    const src = await sources(s);
+    const update = await planTurnUpdate(src, assemble(src), known);
+    expect(update.context.nonce).not.toBe('abc123');
+    expect(update.context.previousNonces).toContain('abc123');
+    // the next small update keeps both
+    const later = await planTurnUpdate(src, assemble(src), update.context);
+    expect(later.context.previousNonces).toContain('abc123');
+  });
+
+  it('tells a hidden-block session that project memory is full before a write fails', async () => {
+    const s = stores();
+    await add(s.project, '发版改到周四', '决定', ownerSays());
+    const known = await delivered(s);
+    const src = await sources(s);
+    const a = assemble(src);
+    a.cur.project!.view = { ...a.cur.project!.view, used: a.cur.project!.view.limit };
+    const hidden = await planTurnUpdate(src, a, known, Date.now(), { hiddenBlocks: true });
+    expect(hidden.text).toContain('项目记忆满了');
+    const tools = await planTurnUpdate(src, a, known, Date.now(), {});
+    expect(tools.text).toBeUndefined();
+  });
+
   it('hands over only the new entry when one is added, with its branch', async () => {
     const s = stores();
     await add(s.project, '发版改到周四', '决定', ownerSays());

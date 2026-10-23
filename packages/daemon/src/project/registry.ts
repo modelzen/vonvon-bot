@@ -539,7 +539,7 @@ export function bindProject(input: ProjectBinding, prepareNew: (previous?: Previ
     if (binding.cwd.kind === 'existing' && prepared.cwd !== binding.cwd.path) throw new Error('工作目录已改变，请重新选择');
     const project: Project = { ...prepared, name: binding.name, chatId: binding.chatId,
       noMention: binding.noMention, ...storedMode(binding.kind),
-      ...(binding.project ? { projectId: binding.project.id, migration: { ...prepared.migration, library: Date.now() } } : {}) };
+      ...(binding.project ? { projectId: binding.project.id, migration: { ...prepared.migration, library: Date.now(), memory: Date.now() } } : {}) };
     projects.push(project);
     return { kind: 'bound', project: await write(location, projects, project) };
   }, target);

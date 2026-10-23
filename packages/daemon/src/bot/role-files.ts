@@ -164,10 +164,10 @@ async function patchState(path: string, change: (current: Record<string, unknown
     await rename(tmp, path);
   } catch (error) { await unlink(tmp).catch(() => undefined); throw error; }
 }
-/** Records the hash of a `SOUL.md` this daemon just wrote (integrity.json). */
+/** Records the hash of a `SOUL.md` this daemon just wrote (role-integrity.json; the memory store keeps its own integrity.json). */
 export async function recordSoulHash(appId: string, content: string): Promise<void> {
   const dir = (await memoryDir(appId, true))!;
-  await patchState(join(dir, 'integrity.json'), current => ({
+  await patchState(join(dir, 'role-integrity.json'), current => ({
     ...current, files: { ...(isRecord(current.files) ? current.files : {}), 'SOUL.md': { sha256: sha256(content), at: Date.now() } },
   }));
 }
@@ -207,7 +207,7 @@ export interface RoleView extends ParsedRole {
 
 async function integrityOf(appId: string, content: string | undefined): Promise<RoleIntegrity> {
   const dir = await memoryDir(appId, false);
-  const files = dir ? (await readState(join(dir, 'integrity.json'))).files : undefined;
+  const files = dir ? (await readState(join(dir, 'role-integrity.json'))).files : undefined;
   const entry = isRecord(files) && isRecord(files['SOUL.md']) ? files['SOUL.md'].sha256 : undefined;
   if (typeof entry !== 'string') return 'untracked';
   return content !== undefined && sha256(content) === entry ? 'ok' : 'changed';

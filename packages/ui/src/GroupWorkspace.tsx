@@ -144,7 +144,7 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
       {dialog === 'smart' && <GroupDesignSettings scope={{kind:'project',botId:member.agentId,projectName:member.name}} tab="response" tools={snapshot.tools} decisionSetupOnly onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets} onDecisionSaved={async () => {if (await update({conversation:'smart'})) setDialog(null); else throw new Error('决策模型已保存，未能切换聊天方式，请重试。');}}/>}
     </Dialog>
     <ConfirmDialog open={dialog === 'project'} title="换到别的项目？" confirmLabel="换过去" pending={busy} onCancel={() => setDialog(null)} onConfirm={() => {setDialog(null); if (nextProject) void update({project: nextProject as ProjectId});}}
-      description={`${agent.name} 在「${group.name}」里的记忆、工作区和会话都换成所选项目的，这个群现有的会话会归档，下一轮重新开场。原来的项目和它的记忆保留。`}>
+      description={`${agent.name} 在「${group.name}」里的记忆、工作区和会话都换成所选项目的，这个群现有的会话会归档，下一轮重新开场。原来的项目和它的记忆保留。所选项目的记忆、工作区文件和会话历史，现在和以后绑在这个项目上的群的人，都能通过 Bot 间接看到。`}>
       <label className="group-control-note">换到 <select aria-label="选择项目" value={nextProject} onChange={event => setNextProject(event.target.value)}>{otherProjects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
     </ConfirmDialog>
     <ConfirmDialog open={dialog === 'remove'} title="解除这个群的绑定？" confirmLabel="解除绑定" tone="danger" pending={busy} onCancel={() => setDialog(null)} onConfirm={() => {setDialog(null); void update({},true);}} description={`解除 ${agent.name} 与「${group.name}」的关联。Bot 加入的群会退出；Bot 创建的群会尝试转交群主。本地目录和文件保留。`}/>

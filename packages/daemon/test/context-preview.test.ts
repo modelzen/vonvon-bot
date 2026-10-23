@@ -74,7 +74,8 @@ describe('contextPreview', () => {
     expect(reply.next.sections.find(section => section.key === 'projectMemory')).toMatchObject({ items: 2 });
     expect(reply.next.sections.find(section => section.key === 'role')!.chars).toBeGreaterThan(10);
     expect(reply.next.sections.find(section => section.key === 'supplement')!.chars).toBe(4);
-    expect(reply.next.tools).toContain('memory_add');
+    // a Codex group has no memory tools: it leaves hidden blocks instead
+    expect(reply.next.tools).toEqual([]);
   });
 
   it('shows the live session column only while the bot runs, and says which sections the session has not been handed yet', async () => {

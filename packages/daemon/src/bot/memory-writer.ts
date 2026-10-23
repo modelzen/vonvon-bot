@@ -4,6 +4,7 @@ import { botDir } from '../config/paths';
 import { libraryLocation, isProjectId, type LibraryLocation } from '../project/library';
 import { decideAdd, decideEdit, type AddDecision, type MemoryPlace, type MemoryTurn, type RequestedScope } from './memory-authority';
 import { normalizeBranchName } from './memory-branches';
+import { findSecretShape } from './memory-secret-shape';
 import type { FoundBlocks } from './hidden-blocks';
 import { botMemoryLocation, MemoryStore, projectMemoryLocation, type ItemResult, type MemoryActor, type Refused } from './memory-store';
 
@@ -72,7 +73,8 @@ const MESSAGES = {
 } as const;
 const cleanWhy = (why: string | undefined): string | undefined => {
   const text = why?.replace(/\s+/g, ' ').trim();
-  return text ? Array.from(text).slice(0, 200).join('') : undefined;
+  // 像密钥的理由整句丢掉：why 会进 memory.json 和 events.jsonl
+  return text && !findSecretShape(text) ? Array.from(text).slice(0, 200).join('') : undefined;
 };
 
 const sameDecision = (a: AddDecision, b: AddDecision): boolean => JSON.stringify(a) === JSON.stringify(b);

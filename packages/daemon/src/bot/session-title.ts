@@ -27,6 +27,10 @@ const BRIDGE_QUOTE_PREFIX =
  * the first bare `[/飞书]` line is the block's own. */
 const BRIDGE_RECORD_BLOCK_PREFIX =
   /^\[飞书 · [^\r\n]*\]\r?\n(?:(?!\[\/飞书\][ \t]*(?:\r?\n|$))[^\r\n]*\r?\n)*\[\/飞书\][ \t]*(?:\r?\n[ \t]*){0,2}/u;
+/** The hidden settings update (context-assembly): holds Bot memory and the mark, never title or history material.
+ * Inbound text has its look-alike brackets escaped, so the first closing line is the block's own. */
+const BRIDGE_SETTINGS_UPDATE_PREFIX =
+  /^\[vonvon 设置更新 [^\r\n]*\]\r?\n[\s\S]*?\r?\n\[\/vonvon 设置更新\][ \t]*(?:\r?\n[ \t]*){0,2}/u;
 /** The preface handle-message.retryPrompt puts before a replayed turn's input
  * when [重试] is tapped; the reason is the only part that varies. */
 const BRIDGE_RETRY_PREFIX =
@@ -77,6 +81,7 @@ export function stripBridgeMessageEnvelope(text: string): string {
   do {
     previous = out;
     out = out
+      .replace(BRIDGE_SETTINGS_UPDATE_PREFIX, '')
       .replace(BRIDGE_RETRY_PREFIX, '')
       .replace(BRIDGE_RECORD_BLOCK_PREFIX, '')
       .replace(BRIDGE_INITIATIVE_PREFIX, '')

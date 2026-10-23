@@ -256,7 +256,8 @@ async function migrateBotMemory(bot: BotEntry, options: LibraryStartupOptions): 
   const files = await botFiles(bot.appId);
   const shared = await readText(files, { kind: 'public-memory' });
   if (shared.trim()) {
-    await importSharedMemory(new MemoryStore(botMemoryLocation(botDir(bot.appId))), { importFile: 'memory/shared.md', text: shared, botId: bot.appId });
+    const result = await importSharedMemory(new MemoryStore(botMemoryLocation(botDir(bot.appId))), { importFile: 'memory/shared.md', text: shared, botId: bot.appId });
+    if (result.rejected) log.warn('library', 'memory_import_rejected', { botId: bot.appId, source: 'shared', rejected: result.rejected });
   }
   const library = await readLibrary();
   const done = new Map<string, { supplement: string }>();
@@ -278,7 +279,10 @@ async function migrateBotMemory(bot: BotEntry, options: LibraryStartupOptions): 
       importFile = `groups/${row.chatId}/memory/group.md`;
       trusted = false;
     }
-    if (memory.trim()) await importGroupMemory(store, { importFile, text: memory, botId: bot.appId, chatId: row.chatId, trusted });
+    if (memory.trim()) {
+      const result = await importGroupMemory(store, { importFile, text: memory, botId: bot.appId, chatId: row.chatId, trusted });
+      if (result.rejected) log.warn('library', 'memory_import_rejected', { botId: bot.appId, source: 'group', rejected: result.rejected });
+    }
     done.set(row.chatId, { supplement });
   }
   if (!done.size) return 0;
@@ -474,9 +478,12 @@ export async function prepareLibraryAtStartup(options: LibraryStartupOptions = {
     }
   }
   if (rolesMerged) log.info('library', 'roles_merged', { count: rolesMerged });
-  // Step B, after A (it needs the rows' projects) and R (the role files are settled).
+  // Step B, after A (it needs the rows' projects) and R (the role files are settled). A bot whose rows A could not read
+  // has nothing B could read either: it is in `failed` once and tried again at the next start.
+  const unread = new Set(report.failed.map(failure => failure.botId));
   report.memoryMigrated = 0;
   for (const bot of bots) {
+    if (unread.has(bot.appId)) continue;
     try { report.memoryMigrated += await migrateBotMemory(bot, options); }
     catch (error) {
       report.failed.push({ botId: bot.appId, error: messageOf(error) });

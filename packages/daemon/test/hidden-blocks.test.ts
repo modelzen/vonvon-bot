@@ -35,11 +35,26 @@ describe('stripping hidden blocks from a whole text', () => {
   it('strips blocks inside code fences too, and a quoted attribute may hold a ">"', () => {
     expect(stripHiddenText('```\n<vonvon-remember n="1" branch="a>b">x</vonvon-remember>\n```')).toBe('```\n\n```');
   });
-  it('drops an unclosed block through the end of the message', () => {
+  it('does not record an unclosed block, and gives the text after its opening tag back instead of eating the reply', () => {
     const { text, found } = extractHiddenBlocks('好的。<vonvon-remember n="7f3a" scope="project">发版改');
-    expect(text).toBe('好的。');
+    expect(text).toBe('好的。发版改');
     expect(found.dropped).toBe(1);
     expect(found.remember).toEqual([]);
+  });
+  it('treats a usage marker written without the slash as self-closing, so the answer after it stays', () => {
+    const { text, found } = extractHiddenBlocks('按周四发。<vonvon-mem n="7f3a" used="b:1">好的，就这样。');
+    expect(text).toBe('按周四发。好的，就这样。');
+    expect(found.mem[0]?.attrs).toMatchObject({ used: 'b:1' });
+  });
+  it('keeps prose that mentions the tag: a remember tag without n= is not a block', () => {
+    expect(stripHiddenText('我会在回复末尾放 <vonvon-remember> 块，再说一句话。')).toBe('我会在回复末尾放 <vonvon-remember> 块，再说一句话。');
+    expect(stripHiddenText('放 <vonvon-remember')).toBe('放 <vonvon-remember');
+  });
+  it('gives the text back when an unclosed body outgrows the limit', () => {
+    const long = 'x'.repeat(4_500);
+    const { text, found } = extractHiddenBlocks(`好。<vonvon-remember n="7f3a">${long}`);
+    expect(found.dropped).toBe(1);
+    expect(text).toBe(`好。${long}`);
   });
   it('does not touch look-alike tags or ordinary angle brackets', () => {
     for (const text of ['<vonvon-memory>x</vonvon-memory>', '<vonvon-remembered>', 'a < b and <div>', '<vonvon-', '1 <vonvon-mem']) {
@@ -106,16 +121,19 @@ describe('streaming through redactAgentEvents', () => {
   it('drops an unclosed block when the stream ends and does not parse it', async () => {
     const onTurnEnd = vi.fn();
     const out = await drain(redactAgentEvents(source([...deltas('a', ['好。<vonvon-remember n="7f3a">发版']), { type: 'done', turnId: 't' }]), createHiddenBlockFilter({ onTurnEnd })));
-    expect(shown(out)).toBe('好。');
+    expect(shown(out)).toBe('好。发版');
     expect(onTurnEnd).toHaveBeenCalledOnce();
     expect(onTurnEnd.mock.calls[0]![0]).toMatchObject({ remember: [], dropped: 1 });
   });
-  it('does not touch thinking and behaves as before without a filter', async () => {
+  it('behaves as before without a filter, and strips blocks out of thinking without recording them', async () => {
     const events: AgentEvent[] = [{ type: 'thinking_delta', itemId: 't', delta: BLOCK }, ...deltas('a', ['普通文字'])];
     const out = await drain(redactAgentEvents(source(events)));
     expect(out).toEqual(events);
-    const filtered = await drain(redactAgentEvents(source(events), createHiddenBlockFilter()));
-    expect(filtered[0]).toMatchObject({ type: 'thinking_delta', delta: BLOCK });
+    const onTurnEnd = vi.fn();
+    const filtered = await drain(redactAgentEvents(source([...events, { type: 'thinking', itemId: 't2', text: `想想${BLOCK}` }, { type: 'done', turnId: 't' }]), createHiddenBlockFilter({ onTurnEnd })));
+    expect(filtered.filter(event => event.type === 'thinking_delta').map(event => (event as { delta: string }).delta).join('')).not.toContain('vonvon-remember');
+    expect(filtered.find(event => event.type === 'thinking')).toMatchObject({ text: '想想' });
+    expect(onTurnEnd).not.toHaveBeenCalled();
   });
   it('strips a usage marker across the stream too', async () => {
     const out = await drain(redactAgentEvents(source(deltas('a', ['按周四发。<vonvon-mem n="7f3a" us', 'ed="b:1"/>'])), createHiddenBlockFilter()));

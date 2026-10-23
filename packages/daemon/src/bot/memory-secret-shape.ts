@@ -25,6 +25,10 @@ const PATTERNS: ReadonlyArray<readonly [SecretShape, RegExp]> = [
 const APP_SECRET = /(?<![A-Za-z0-9])(?=[A-Za-z0-9]{32}(?![A-Za-z0-9]))(?=[A-Za-z0-9]*[a-z])(?=[A-Za-z0-9]*[A-Z0-9])[A-Za-z0-9]{32}(?![A-Za-z0-9])/;
 const LONG_TOKEN = /[A-Za-z0-9_+=-]{32,}|[A-Za-z0-9+/]{40,}={0,2}/g;
 const GIT_SHA = /^[0-9a-f]{40}$/;
+// 飞书的 open_id / chat_id / union_id（ou_ oc_ om_ + 32 位小写十六进制）和 32 位十六进制的 trace id 不是密钥
+const FEISHU_ID = /^o[cum]_[0-9a-f]{32}$/;
+const HEX_ID = /^[0-9a-f]{32}$/;
+const isIdentifier = (token: string): boolean => FEISHU_ID.test(token) || HEX_ID.test(token);
 
 function entropy(value: string): number {
   const counts = new Map<string, number>();
@@ -38,9 +42,9 @@ function entropy(value: string): number {
 export function findSecretShape(text: string): SecretShape | undefined {
   for (const [shape, pattern] of PATTERNS) if (pattern.test(text)) return shape;
   const secret = APP_SECRET.exec(text);
-  if (secret && /[0-9]/.test(secret[0]) && entropy(secret[0]) >= 3.5) return 'app-secret';
+  if (secret && !isIdentifier(secret[0]) && /[0-9]/.test(secret[0]) && entropy(secret[0]) >= 3.5) return 'app-secret';
   for (const [token] of text.matchAll(LONG_TOKEN)) {
-    if (GIT_SHA.test(token)) continue;
+    if (GIT_SHA.test(token) || isIdentifier(token)) continue;
     // ≥ 32 high-entropy characters with letters and digits both; long words and plain base names are not that.
     // A token joined by - or _ (a slug like deploy-config-staging-us-west-2) counts only when it also mixes cases.
     const words = /[-_]/.test(token) && !(/[a-z]/.test(token) && /[A-Z]/.test(token));

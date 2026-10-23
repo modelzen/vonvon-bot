@@ -114,6 +114,7 @@ export async function memoryAction(request: MemoryRequest, deps: MemoryAdminDeps
     case 'branchRename': return checked(replyOf(await store.branchRename({ from: request.from, to: request.to, actor })));
     case 'branchMerge': return checked(replyOf(await store.branchMerge({ from: request.from, into: request.into, actor })));
     case 'export': return checked({ kind: 'exported', files: await store.exportBranches() });
+    case 'reseal': { await store.reseal(); return checked({ kind: 'sealed' }); }
     case 'events': return checked({ kind: 'events', events: await store.events(request.itemId) });
     case 'promote': {
       if (request.scope.kind !== 'project') throw new RpcError('invalid_request', '只能把项目记忆移到 Bot 记忆');

@@ -1,5 +1,5 @@
 import type { MemoryStore } from './memory-store';
-import type { MemoryDelivered, SessionContext } from './session-store';
+import { acceptedNonces, type MemoryDelivered, type SessionContext } from './session-store';
 import type { RawBlock } from './hidden-blocks';
 import { parseUsageBlocks, parseUsageMarkers } from './usage-marker';
 
@@ -23,7 +23,8 @@ export function settleTurn(
   marks: readonly RawBlock[] = [],
 ): { context: SessionContext; used: string[] } {
   const ids = deliveredIds(context);
-  const used = [...new Set([...parseUsageBlocks(marks, context.nonce, ids), ...parseUsageMarkers(replyText, context.nonce, ids)])];
+  const nonces = acceptedNonces(context);
+  const used = [...new Set([...parseUsageBlocks(marks, nonces, ids), ...parseUsageMarkers(replyText, nonces, ids)])];
   return { context: { ...context, lastTurn: { at, injected: ids.size, used } }, used };
 }
 

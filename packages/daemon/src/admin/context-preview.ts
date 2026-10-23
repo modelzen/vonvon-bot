@@ -1,4 +1,5 @@
 import type { ContextPreviewReply, ContextPreviewRequest } from '@vonvon/protocol';
+import { groupBackendId } from '../config/execution';
 import { loadBots } from '../config/bots';
 import { botPaths } from '../config/paths';
 import { assemble, judgeContext, loadContextSources, type Assembled, type ContextSources, type Section } from '../bot/context-assembly';
@@ -110,7 +111,8 @@ export async function contextPreview(request: ContextPreviewRequest, deps: Conte
     next: {
       sections: nextSections(src, a),
       items: { bot: a.cur.bot?.items.length ?? 0, trusted: project?.items.filter(item => item.trust === 'trusted').length ?? 0, untrusted: project?.items.filter(item => item.trust === 'untrusted').length ?? 0 },
-      tools: [...VONVON_TOOL_NAMES],
+      // Only Claude has the memory tools; every other backend leaves hidden blocks instead.
+      tools: row && groupBackendId(row) !== 'claude-agent' ? [] : [...VONVON_TOOL_NAMES],
     },
     ...(record ? { session: sessionOf(record, src, a) } : {}),
     judge: judgeOf(src, row),

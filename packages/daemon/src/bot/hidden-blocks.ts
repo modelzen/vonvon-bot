@@ -17,8 +17,9 @@ const BODY_MAX = 4_000;
 /** 开始标签一直找不到 `>` 的上限，再长就当它不是标签 */
 const OPEN_TAG_MAX = 2_000;
 
-const OPENERS = ['<vonvon-remember', '<vonvon-mem'] as const;
-const OPEN_RE = /<vonvon-(remember|mem)(?=[\s/>])/;
+const OPENERS = ['<vonvon-remember', '<vonvon-mem', '</vonvon-mem>'] as const;
+/** An opening tag, or a stray `</vonvon-mem>` (a usage marker is self-closing, a model may still add one) */
+const OPEN_RE = /<(?:vonvon-(remember|mem)(?=[\s/>])|\/vonvon-mem>)/;
 
 export interface RawBlock { attrs: Record<string, string>; body: string }
 export interface FoundBlocks {
@@ -59,6 +60,7 @@ class BlockScanner {
   private attrs: Record<string, string> = {};
   private body = '';
   private overflow = false;
+  private overflowText = '';
 
   push(chunk: string): string {
     this.buf += chunk;
@@ -69,6 +71,7 @@ class BlockScanner {
         if (open) {
           out += this.buf.slice(0, open.index);
           this.buf = this.buf.slice(open.index + open[0].length);
+          if (!open[1]) continue;
           this.kind = open[1] as 'remember' | 'mem';
           this.mode = 'tag';
           continue;
@@ -88,14 +91,26 @@ class BlockScanner {
           else if (char === '>') { end = index; break; }
         }
         if (end < 0) {
-          if (this.buf.length > OPEN_TAG_MAX) { this.found.dropped++; this.buf = ''; this.mode = 'text'; }
+          if (this.buf.length > OPEN_TAG_MAX) {
+            // 太长，不是标签：原样还给正文，免得吞掉后面的回复
+            this.found.dropped++;
+            out += `<vonvon-${this.kind}`;
+            this.mode = 'text';
+            continue;
+          }
           return out;
         }
         const inside = this.buf.slice(0, end);
         this.buf = this.buf.slice(end + 1);
         const selfClosing = inside.trimEnd().endsWith('/');
         this.attrs = parseAttrs(selfClosing ? inside.trimEnd().slice(0, -1) : inside);
-        if (selfClosing) { this.record(''); this.mode = 'text'; continue; }
+        // 使用标记永远是自闭合；隐藏块没有 n= 就不是块（多半是回复里提到了标签），原样还给正文
+        if (this.kind === 'remember' && !selfClosing && !('n' in this.attrs)) {
+          out += `<vonvon-${this.kind}${inside}>`;
+          this.mode = 'text';
+          continue;
+        }
+        if (selfClosing || this.kind === 'mem') { this.record(''); this.mode = 'text'; continue; }
         this.body = '';
         this.overflow = false;
         this.mode = 'body';
@@ -114,6 +129,14 @@ class BlockScanner {
       const keep = Math.min(this.buf.length, close.length - 1);
       this.absorb(this.buf.slice(0, this.buf.length - keep));
       this.buf = this.buf.slice(this.buf.length - keep);
+      if (this.overflow) {
+        // 正文超长还没闭合：整块丢掉记忆，但已收的文字还给正文，不吞后面的回复
+        this.found.dropped++;
+        this.buf = this.overflowText + this.buf;
+        this.overflow = false; this.overflowText = ''; this.body = '';
+        this.mode = 'text';
+        continue;
+      }
       return out;
     }
   }
@@ -121,23 +144,24 @@ class BlockScanner {
   private absorb(piece: string): void {
     if (this.overflow) return;
     this.body += piece;
-    if (this.body.length > BODY_MAX) { this.overflow = true; this.body = ''; }
+    if (this.body.length > BODY_MAX) { this.overflow = true; this.overflowText = this.body; this.body = ''; }
   }
 
   private record(body: string): void {
-    if (this.overflow) { this.found.dropped++; this.overflow = false; return; }
+    if (this.overflow) { this.found.dropped++; this.overflow = false; this.overflowText = ''; return; }
     if (this.kind === 'mem') { this.found.mem.push({ attrs: this.attrs, body }); return; }
     if (this.found.remember.length >= HIDDEN_BLOCKS_PER_TURN) { this.found.dropped++; return; }
     this.found.remember.push({ attrs: this.attrs, body: body.trim() });
   }
 
-  /** 流结束：开始标签或正文没闭合的整段丢掉，只留可能是标签前缀、结果不是的尾巴 */
+  /** 流结束：开始标签或正文没闭合的块不记，但标签之后的文字还给正文（回复里提到标签不能吞掉后面的话） */
   end(): string {
     if (this.mode === 'text') { const rest = this.buf; this.buf = ''; return rest; }
     this.found.dropped++;
     log.warn('memory', 'hidden-block-unclosed', { kind: this.kind });
-    this.buf = ''; this.body = ''; this.mode = 'text';
-    return '';
+    const rest = this.mode === 'tag' ? `<vonvon-${this.kind}${this.buf}` : (this.overflow ? this.overflowText : this.body) + this.buf;
+    this.buf = ''; this.body = ''; this.overflow = false; this.overflowText = ''; this.mode = 'text';
+    return rest;
   }
 }
 
@@ -176,8 +200,15 @@ export function createHiddenBlockFilter(options: HiddenBlockFilterOptions = {}):
     if (!scanner) { scanner = new BlockScanner(); scanners.set(itemId, scanner); }
     return scanner;
   };
-  const reset = (): void => { scanners.clear(); finals.clear(); last = undefined; };
+  const thinking = new Map<string, BlockScanner>();
+  const reset = (): void => { scanners.clear(); finals.clear(); thinking.clear(); last = undefined; };
   return {
+    thinkDelta(itemId, text) {
+      let scanner = thinking.get(itemId);
+      if (!scanner) { scanner = new BlockScanner(); thinking.set(itemId, scanner); }
+      return scanner.push(text);
+    },
+    thinkFinal(text) { return stripHiddenText(text); },
     delta(itemId, text) {
       last = itemId;
       return scannerOf(itemId).push(text);

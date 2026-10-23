@@ -88,10 +88,17 @@ export interface SessionContext {
   versions: Record<string, string>;
   /** Random per session, changed at each whole redelivery; the update blocks and `<vonvon-mem>` carry it. */
   nonce: string;
+  /** Marks this session was given before (the opening's, earlier redeliveries'): the model may still use them, so they still count. */
+  previousNonces?: string[];
   /** A compaction ended since: the next turn hands over everything again. */
   fullRedeliverDue?: boolean;
   memory?: Record<string, MemoryDelivered>;
   lastTurn?: { at: number; injected: number; used: string[]; /** reasons of the hidden blocks not taken (3.4), no text */ missed?: string[] };
+}
+
+/** Every mark the session may be using: the current one first. */
+export function acceptedNonces(context: Pick<SessionContext, 'nonce' | 'previousNonces'> | undefined): string[] {
+  return context ? [context.nonce, ...(context.previousNonces ?? [])] : [];
 }
 
 /** A recalled message the session got: its id and send time, who sent it, and

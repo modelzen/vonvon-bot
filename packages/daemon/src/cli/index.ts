@@ -167,6 +167,8 @@ memoryScope(memory.command('edit <itemId>').description('Change an entry (refuse
   .action(async (itemId: string, options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryEdit(itemId, options, await memoryContext(options)); });
 memoryScope(memory.command('forget <itemId>').description('Archive an entry (refused in a Bot session)').requiredOption('--revision <n>', 'The revision vonvon memory list shows'))
   .action(async (itemId: string, options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryForget(itemId, options, await memoryContext(options)); });
+memoryScope(memory.command('reseal').description('Accept memory.json as it is now after it was changed outside the daemon (refused in a Bot session)'))
+  .action(async (options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryReseal(options, await memoryContext(options)); });
 memoryScope(memory.command('branch-rename <from> <to>').description('Rename a branch (refused in a Bot session)'))
   .action(async (from: string, to: string, options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryBranch('rename', from, to, options, await memoryContext(options)); });
 memoryScope(memory.command('branch-merge <from> <into>').description('Merge a branch into another (refused in a Bot session)'))

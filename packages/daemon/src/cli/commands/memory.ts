@@ -53,6 +53,7 @@ function show(ctx: MemoryContext, reply: MemoryReply): void {
     case 'conflict': print(ctx.io, [`没改：${reply.message}`], reply); ctx.exit(1); return;
     case 'refused': print(ctx.io, [`没做：${reply.message}`], reply); ctx.exit(1); return;
     case 'branches': print(ctx.io, [`分支：${reply.branches.map(branch => branch.name).join('、')}${reply.moved ? `（挪了 ${reply.moved} 条）` : ''}`], reply); return;
+    case 'sealed': print(ctx.io, ['已确认，可信条目恢复注入'], reply); return;
     case 'purged': print(ctx.io, ['已彻底删除'], reply); return;
     case 'list': {
       const human = [`${reply.used} / ${reply.limit}${reply.verified ? '' : '  （memory.json 不是 daemon 上次写的，可信条目这一轮不注入）'}`];
@@ -95,6 +96,12 @@ export async function runMemoryForget(itemId: string, options: MemoryScopeOption
   const revision = Number(options.revision);
   if (!Number.isInteger(revision) || revision < 1) { ctx.warn('--revision 要是条目的版本号（vonvon memory list 里的 r 数字）。\n'); ctx.exit(2); return; }
   if (scope) show(ctx, await ctx.run({ type: 'archive', scope, itemId, revision }));
+}
+/** The owner has looked at what changed outside the daemon and accepts it: trusted entries are injected again. */
+export async function runMemoryReseal(options: MemoryScopeOptions, ctx: MemoryContext): Promise<void> {
+  if (refusedInSession(ctx)) return;
+  const scope = await scopeOf(options, ctx);
+  if (scope) show(ctx, await ctx.run({ type: 'reseal', scope }));
 }
 export async function runMemoryBranch(kind: 'rename' | 'merge', from: string, to: string, options: MemoryScopeOptions, ctx: MemoryContext): Promise<void> {
   if (refusedInSession(ctx)) return;

@@ -115,6 +115,8 @@ export const memoryRequestSchema = z.discriminatedUnion("type", [
   z.object({type:z.literal("purge"),scope:memoryScopeRefSchema,itemId:id}).strict(),
   z.object({type:z.literal("undo"),scope:memoryScopeRefSchema,eventId:id}).strict(),
   z.object({type:z.literal("export"),scope:memoryScopeRefSchema}).strict(),
+  /** 主人看过被外部改过的 memory.json 的差异，认下现在的内容：重写完整性记录，可信条目恢复注入（设计 2.4） */
+  z.object({type:z.literal("reseal"),scope:memoryScopeRefSchema}).strict(),
   z.object({type:z.literal("events"),scope:memoryScopeRefSchema,itemId:id}).strict(),
   /** 设计 5.8：记下主人这次打开这一页的时间，下次 `list` 只标这之后的（`library/seen.json`，不碰条目和 revision） */
   z.object({type:z.literal("seen"),page:z.discriminatedUnion("kind",[
@@ -159,6 +161,7 @@ export const memoryReplySchema = z.discriminatedUnion("kind", [
   z.object({kind:z.literal("exported"),files:z.array(z.object({branch:z.string(),markdown:z.string()}))}),
   z.object({kind:z.literal("events"),events:z.array(memoryEventSchema)}),
   z.object({kind:z.literal("purged")}),
+  z.object({kind:z.literal("sealed")}),
 ]);
 export type MemoryReply = z.infer<typeof memoryReplySchema>;
 

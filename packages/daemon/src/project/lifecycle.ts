@@ -268,7 +268,7 @@ export async function createProject(channel: Pick<LarkChannel, 'rawClient'>, req
           kind: input.kind, noMention, project: { id: joined.id } }, async () => ({ ...mirror, ...row }), location)).project;
       } else if (explicit) {
         const project = await newBindingProject(input.bot, { chatId, name }, explicit);
-        saved = { ...row, ...explicit, name, chatId, noMention, ...storedMode(input.kind), projectId: project.id, migration: { library: Date.now() } };
+        saved = { ...row, ...explicit, name, chatId, noMention, ...storedMode(input.kind), projectId: project.id, migration: { library: Date.now(), memory: Date.now() } };
         await addProject(saved, location);
       } else {
         saved = (await withBotGroupBinding(input.bot, { chatId, name, projectsRootDir: root }, async scope => {

@@ -98,6 +98,11 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, note, empty, tar
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, scopeKey]);
   useEffect(() => {setList(undefined); setMarks(noMarks); setSelected(undefined); setEditing(undefined); void reload(); return () => {serial.current++;};}, [reload]);
+  // What the bot writes does not change the snapshot: look again while the page is open, so a new leaf shows up marked 新.
+  useEffect(() => {
+    const timer = window.setInterval(() => {if (document.visibilityState === 'visible') void reload();}, 8_000);
+    return () => window.clearInterval(timer);
+  }, [reload]);
 
   const views = useMemo(() => list ? branchViews(list) : {branches: [], archived: []}, [list]);
   const plan = useMemo(() => searchPlan([...views.branches, ...views.archived], query), [views, query]);
@@ -173,7 +178,7 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, note, empty, tar
     {above}
     {nothing && empty && <p className="group-control-note">{empty}</p>}
     {error && <InlineNotice title="读取未完成" tone="warning">{error}<Button size="sm" onClick={() => void reload()}>重试</Button></InlineNotice>}
-    {list && !list.verified && <InlineNotice title="记忆文件在 vonvon 之外被改过" tone="warning">可信条目暂时不会交给模型，请检查后再用。</InlineNotice>}
+    {list && !list.verified && <InlineNotice title="记忆文件在 vonvon 之外被改过" tone="warning">可信条目暂时不会交给模型。检查下面的条目，没问题就确认。<Button size="sm" disabled={busy} onClick={() => void act({type: 'reseal', scope}, '已确认，下一轮起可信条目照常交给模型。')}>检查过了，照现在的用</Button></InlineNotice>}
     {list?.problems.map(problem => <p className="group-control-note" role="status" key={problem}>{problem}</p>)}
     {notice && <p className="group-control-note" role="status">{notice}</p>}
     {adding && <form className="memory-add" onSubmit={event => {

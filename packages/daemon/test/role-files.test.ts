@@ -24,6 +24,7 @@ vi.mock('../src/config/paths', async () => {
   };
 });
 
+import { botMemoryLocation, MemoryStore } from '../src/bot/memory-store';
 import { prepareLibraryAtStartup } from '../src/admin/library';
 import { assemble, loadContextSources } from '../src/bot/context-assembly';
 import {
@@ -90,7 +91,7 @@ describe('saving the role', () => {
     expect(saved).toMatchObject({ identity: '发布助手', notes: '旧 SOUL 全文', headed: true, integrity: 'ok' });
     expect(get('SOUL.md')).toBe('## 身份与职责\n发布助手\n\n## 其他说明\n旧 SOUL 全文\n');
     expect(statSync(botFile('AGENTS.md')).mtimeMs).toBe(before);
-    const integrity = JSON.parse(get('memory', 'integrity.json'));
+    const integrity = JSON.parse(get('memory', 'role-integrity.json'));
     expect(integrity.files['SOUL.md'].sha256).toMatch(/^[0-9a-f]{64}$/);
     const events = get('memory', 'role-events.jsonl').trim().split('\n').map(line => JSON.parse(line));
     expect(events).toHaveLength(1);
@@ -146,7 +147,7 @@ describe('migration step R', () => {
     expect(statSync(botFile('memory', 'originals', 'AGENTS.md')).mode & 0o777).toBe(0o600);
     expect(get('AGENTS.md')).toBe('');
     expect(JSON.parse(get('memory', 'import-state.json')).role).toMatchObject({ merged: true });
-    expect(JSON.parse(get('memory', 'integrity.json')).files['SOUL.md']).toBeDefined();
+    expect(JSON.parse(get('memory', 'role-integrity.json')).files['SOUL.md']).toBeDefined();
     expect((await readRole(APP)).mergedNotice).toBe(true);
     expect(await migrateRoleFiles(APP)).toBe('marked');
     expect(count(get('SOUL.md'), '不改线上')).toBe(1);
@@ -236,5 +237,16 @@ describe('migration step R', () => {
     // a second start changes nothing
     await prepareLibraryAtStartup();
     expect(get('SOUL.md')).toBe('规矩甲');
+  });
+});
+
+describe('integrity files', () => {
+  it('a Bot memory write does not wipe the SOUL.md hash, and an outside edit is then still reported', async () => {
+    put('SOUL.md', '');
+    await updateRole(APP, current => ({ ...current, identity: '助手' }));
+    await new MemoryStore(botMemoryLocation(join(fixture.root, 'bots', APP))).add({ text: '记一条', source: { via: 'ui', botId: '', actorRole: 'desktop' }, trust: 'trusted', actor: { role: 'desktop' } });
+    expect((await readRole(APP)).integrity).toBe('ok');
+    put('SOUL.md', '## 身份与职责\n被改了\n');
+    expect((await readRole(APP)).integrity).toBe('changed');
   });
 });

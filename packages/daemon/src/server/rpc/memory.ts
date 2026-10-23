@@ -1,8 +1,17 @@
 import type { MemoryReply, MemoryRequest } from '@vonvon/protocol';
 import { memoryAction } from '../../admin/memory';
+import { NotWiredYetError, type AdminService } from '../../admin/service';
 import type { RpcOutcome } from '../rpc';
 
-/** Nothing in the snapshot shows memory yet (the counts come with the pages), so every request is a read: no rebuild, no revision. */
-export async function memoryRpc(request: MemoryRequest): Promise<RpcOutcome<MemoryReply>> {
-  return { kind: 'read', value: await memoryAction(request) };
+const READS = new Set<MemoryRequest['type']>(['list', 'export', 'events', 'newCounts', 'seen']);
+
+/**
+ * Reads change nothing, so they stay reads (no rebuild, no revision). Every other request writes memory files: the
+ * read-only preview process (no daemon, no lease) refuses them, and the daemon answers them as mutations.
+ */
+export async function memoryRpc(service: AdminService, request: MemoryRequest): Promise<RpcOutcome<MemoryReply>> {
+  if (READS.has(request.type)) return { kind: 'read', value: await memoryAction(request) };
+  if (service.readonlyPreview) throw new NotWiredYetError('记忆修改');
+  const value = await memoryAction(request);
+  return { kind: 'mutation', reply: () => value };
 }

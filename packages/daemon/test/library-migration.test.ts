@@ -85,7 +85,7 @@ describe('startup migration step A', () => {
     for (const [appId, chatId, cwd] of [['cli_a', 'oc_pay', pay], ['cli_a', 'oc_web', web], ['cli_b', 'oc_rel', release]] as const) {
       const stored_ = stored(appId).find(item => item.chatId === chatId)!;
       expect(stored_.cwd).toBe(cwd);
-      expect(stored_.migration).toEqual({ library: NOW });
+      expect(stored_.migration).toEqual({ library: NOW, memory: NOW });
       const project = projects.find(item => item.id === stored_.projectId)!;
       expect(project).toMatchObject({ migratedFrom: { botId: appId, chatId }, revision: 1, createdAt: 1_000, workspace: { primary: cwd, additional: [] } });
     }
@@ -204,7 +204,7 @@ describe('startup migration step A', () => {
     await run();
     const before = readFileSync(rowsFile('cli_a'), 'utf8');
     const warn = vi.spyOn(log, 'warn');
-    expect(await run()).toEqual({ linked: 0, created: 0, failed: [], drift: [] });
+    expect(await run()).toEqual({ linked: 0, created: 0, failed: [], drift: [], memoryMigrated: 0 });
     expect(warn.mock.calls.filter(call => call[1] === 'row_skipped')).toEqual([]);
     expect(readFileSync(rowsFile('cli_a'), 'utf8')).toBe(before);
     warn.mockRestore();
@@ -227,7 +227,7 @@ describe('startup migration step A', () => {
     rows('cli_a', [row('支付组', 'oc_pay', folder('pay'))]);
     await run();
     const files = [readFileSync(rowsFile('cli_a'), 'utf8'), readFileSync(libraryLocation(fixture.root).file, 'utf8')];
-    expect(await run({ now: () => NOW + 1 })).toEqual({ linked: 0, created: 0, failed: [], drift: [] });
+    expect(await run({ now: () => NOW + 1 })).toEqual({ linked: 0, created: 0, failed: [], drift: [], memoryMigrated: 0 });
     expect([readFileSync(rowsFile('cli_a'), 'utf8'), readFileSync(libraryLocation(fixture.root).file, 'utf8')]).toEqual(files);
   });
 
@@ -293,7 +293,7 @@ describe('startup migration step A', () => {
     expect(await run()).toEqual({ linked: 0, created: 0, failed: [], drift: [] });
     expect(existsSync(libraryLocation(fixture.root).dir)).toBe(true);
     bots([{ appId: 'cli_a', botName: '小支' }]);
-    expect(await run()).toEqual({ linked: 0, created: 0, failed: [], drift: [] });
+    expect(await run()).toEqual({ linked: 0, created: 0, failed: [], drift: [], memoryMigrated: 0 });
     expect(() => readFileSync(libraryLocation(fixture.root).file)).toThrow();
   });
 

@@ -67,7 +67,8 @@ export function defaultProjectChoice(snapshot: DesktopSnapshot, groupId: string 
 /** Joining a project another group uses lets the two groups' people see each other's project through the Bots (§5.6). */
 export function crossGroupWarning(project: SnapshotProject | undefined, groupId: string | undefined): string | undefined {
   if (!project || !project.bindings.some(binding => binding.groupId !== groupId)) return undefined;
-  return '加入后，两个群的人会通过 Bot 互相间接看到：项目记忆、工作区文件和可恢复的会话历史；以后新增的也一样。';
+  const others = new Set(project.bindings.filter(binding => binding.groupId !== groupId).map(binding => binding.groupId)).size;
+  return `加入后，这个项目现有的 ${others} 个群和这个群的人会通过 Bot 互相间接看到：项目记忆、工作区文件和可恢复的会话历史；以后新增的也一样。`;
 }
 
 /** What 移除本地 Bot asks the owner to confirm: what goes (counted) and what stays with the projects (§5.2). */

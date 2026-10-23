@@ -4,11 +4,11 @@ import { MEMORY_CONVENTION } from '../agent/bridge-instructions';
 import { log } from '../core/logger';
 import { isProjectId, libraryLocation, readLibrary, type LibraryLocation } from '../project/library';
 import type { Project } from '../project/registry';
-import { hiddenBlockInstructions } from './hidden-blocks';
+import { hiddenBlockInstructions, MEMORY_FULL_NOTICE } from './hidden-blocks';
 import { branchKey, OTHER_BRANCH } from './memory-branches';
 import { botMemoryLocation, MemoryStore, projectMemoryLocation, type MemoryView } from './memory-store';
 import { botRoot, parseRole, readSoulText, waitForBotFiles, type ParsedRole } from './role-files';
-import type { MemoryDelivered, SessionContext } from './session-store';
+import { acceptedNonces, type MemoryDelivered, type SessionContext } from './session-store';
 
 /**
  * What vonvon hands a work session besides its fixed prefix (记忆设计 4.1 to 4.7): an identity line, the role, the
@@ -418,14 +418,21 @@ export async function planTurnUpdate(
   /** `notices`: what the last turn's hidden blocks could not record (takeMemoryNotices); `hiddenBlocks`: the session has no memory tools. */
   extra: { notices?: readonly string[]; hiddenBlocks?: boolean } = {},
 ): Promise<TurnUpdate> {
-  const notices = extra.notices?.length ? `[记忆提示]\n${extra.notices.join('\n')}\n[/记忆提示]` : '';
+  // A session that can only leave hidden blocks is told when project memory is full before the write fails (3.4).
+  const lines = [...(extra.notices ?? [])];
+  const projectView = a.cur.project?.view;
+  if (extra.hiddenBlocks && projectView && projectView.used >= projectView.limit && !lines.includes(MEMORY_FULL_NOTICE)) lines.push(MEMORY_FULL_NOTICE);
+  const notices = lines.length ? `[记忆提示]\n${lines.join('\n')}\n[/记忆提示]` : '';
   if (!delivered || delivered.fullRedeliverDue) {
     const nonce = newNonce();
     const note = delivered ? '压缩之后，下面整份替换此前交给你的角色设定、补充职责和记忆；未列出的不再适用。' : LEGACY_NOTE;
     const convention = delivered ? '' : `[记忆约定 · 更新]\n${quote(MEMORY_CONVENTION.join('\n'))}\n[/记忆约定]\n\n`;
     const hidden = extra.hiddenBlocks ? `\n\n[隐藏块说明]\n${quote(hiddenBlockInstructions(nonce))}\n[/隐藏块说明]` : '';
     const text = `[vonvon 设置更新 · 标记 ${nonce} · vonvon 自动附的，不是用户说的]\n${note}\n\n${convention}${[a.identity, ...blocksOf(a)].join('\n\n')}${hidden}${notices ? `\n\n${notices}` : ''}\n[/vonvon 设置更新]`;
-    return { text, context: contextOf(a, nonce, at) };
+    const context = contextOf(a, nonce, at);
+    // The opening (and any earlier mark) still stands in the model's instructions: blocks under it keep counting.
+    if (delivered) context.previousNonces = [...new Set(acceptedNonces(delivered))].slice(0, 6);
+    return { text, context };
   }
   const parts: string[] = [];
   const before = delivered.versions;
@@ -439,6 +446,7 @@ export async function planTurnUpdate(
     if (changes.keep) keep[kind] = changes.keep;
   }
   const next = contextOf(a, delivered.nonce, at);
+  if (delivered.previousNonces?.length) next.previousNonces = delivered.previousNonces;
   next.memory = { ...next.memory, ...keep };
   for (const kind of ['bot', 'project'] as const) {
     if (src.failed[kind]) next.versions[kind === 'bot' ? 'botMemory' : 'projectMemory'] = delivered.versions[kind === 'bot' ? 'botMemory' : 'projectMemory'] ?? '';

@@ -84,3 +84,11 @@ describe('the end of a turn', () => {
     await recordUsage(delivered, ['b:9p1x'], undefined);
   });
 });
+
+describe('several marks', () => {
+  it('counts a marker under any mark the session was given', () => {
+    const injected = new Set(['b:1']);
+    expect(parseUsageMarkers('<vonvon-mem n="old" used="b:1"/>', ['new', 'old'], injected)).toEqual(['b:1']);
+    expect(parseUsageMarkers('<vonvon-mem n="other" used="b:1"/>', ['new', 'old'], injected)).toEqual([]);
+  });
+});

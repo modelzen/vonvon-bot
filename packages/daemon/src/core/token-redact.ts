@@ -46,6 +46,10 @@ type Delta = Extract<AgentEvent, { type: 'text_delta' | 'thinking_delta' }>;
  * 四条路径都过它。只管 `text_delta` / `text`，不动思考。
  */
 export interface AssistantTextFilter {
+  /** 思考文字只剥不收：流式 delta（可选，没有就不过滤） */
+  thinkDelta?(itemId: string, text: string): string;
+  /** 思考终态整段只剥不收 */
+  thinkFinal?(text: string): string;
   /** 一段流式 delta 进、能给人看的部分出（可能是空串） */
   delta(itemId: string, text: string): string;
   /** 这个 item 的流结束了，吐出还扣着的尾巴（没闭合的块丢掉） */
@@ -81,7 +85,8 @@ export function redactAgentEvents(events: AsyncIterable<AgentEvent>, filter?: As
         if (key !== undefined && id !== key) continue;
         tails.delete(id);
         const delta = redactTokens(event.delta);
-        const visible = filter && event.type === 'text_delta' ? filter.delta(event.itemId, delta) : delta;
+        const visible = filter && event.type === 'text_delta' ? filter.delta(event.itemId, delta)
+          : filter?.thinkDelta && event.type === 'thinking_delta' ? filter.thinkDelta(event.itemId, delta) : delta;
         if (visible || !filter || event.type !== 'text_delta') yield redactStrings({ ...event, delta: visible });
       }
     }
@@ -133,7 +138,9 @@ export function redactAgentEvents(events: AsyncIterable<AgentEvent>, filter?: As
           if (start > 0 || text.length === 0) tails.delete(key);
           if (start < text.length) tails.set(key, { ...event, delta: text.slice(start) });
           if (start > 0 || text.length === 0) {
-            const visible = filter && event.type === 'text_delta' ? filter.delta(event.itemId, text.slice(0, start)) : text.slice(0, start);
+            const piece = text.slice(0, start);
+            const visible = filter && event.type === 'text_delta' ? filter.delta(event.itemId, piece)
+              : filter?.thinkDelta && event.type === 'thinking_delta' ? filter.thinkDelta(event.itemId, piece) : piece;
             if (visible || !filter || event.type !== 'text_delta') yield redactStrings({ ...event, delta: visible });
           }
           continue;
@@ -143,6 +150,10 @@ export function redactAgentEvents(events: AsyncIterable<AgentEvent>, filter?: As
           if (filter && event.type === 'text') {
             yield* residue(event.itemId);
             yield redactStrings({ ...event, text: filter.final(event.itemId, redactTokens(event.text)) });
+            continue;
+          }
+          if (filter?.thinkFinal && event.type === 'thinking') {
+            yield redactStrings({ ...event, text: filter.thinkFinal(redactTokens(event.text)) });
             continue;
           }
         } else if (event.type === 'done' || event.type === 'error') {

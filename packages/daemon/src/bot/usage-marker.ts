@@ -12,8 +12,8 @@ const ID = /^[A-Za-z0-9_-]{1,60}(?::[A-Za-z0-9_-]{1,40})?$/;
 /** A turn that lists more than this many is not telling which ones it used. */
 const MAX_USED = 50;
 
-export function parseUsageMarkers(text: string, nonce: string, injected: ReadonlySet<string>): string[] {
-  if (!nonce || !text.includes('<vonvon-mem')) return [];
+export function parseUsageMarkers(text: string, nonce: string | readonly string[], injected: ReadonlySet<string>): string[] {
+  if (!nonce.length || !text.includes('<vonvon-mem')) return [];
   const attributes: Array<Record<string, string | undefined>> = [];
   for (const marker of text.matchAll(MARKER)) {
     const found: Record<string, string> = {};
@@ -27,14 +27,14 @@ export function parseUsageMarkers(text: string, nonce: string, injected: Readonl
  * The same check on markers the event stream's filter already took out of the text (bot/hidden-blocks.ts `found.mem`, attribute
  * names lower-cased): by the time the card is final the text no longer holds them.
  */
-export function parseUsageBlocks(blocks: ReadonlyArray<{ attrs: Record<string, string | undefined> }>, nonce: string, injected: ReadonlySet<string>): string[] {
-  return nonce ? usedFrom(blocks.map(block => block.attrs), nonce, injected) : [];
+export function parseUsageBlocks(blocks: ReadonlyArray<{ attrs: Record<string, string | undefined> }>, nonce: string | readonly string[], injected: ReadonlySet<string>): string[] {
+  return nonce.length ? usedFrom(blocks.map(block => block.attrs), nonce, injected) : [];
 }
 
-function usedFrom(markers: ReadonlyArray<Record<string, string | undefined>>, nonce: string, injected: ReadonlySet<string>): string[] {
+function usedFrom(markers: ReadonlyArray<Record<string, string | undefined>>, nonce: string | readonly string[], injected: ReadonlySet<string>): string[] {
   const used: string[] = [];
   for (const attributes of markers) {
-    if (attributes.n !== nonce) continue;
+    if (attributes.n === undefined || !(typeof nonce === 'string' ? attributes.n === nonce : nonce.includes(attributes.n))) continue;
     for (const raw of (attributes.used ?? '').split(/[\s,，、;；]+/)) {
       const id = raw.trim();
       if (ID.test(id) && injected.has(id) && !used.includes(id)) used.push(id);

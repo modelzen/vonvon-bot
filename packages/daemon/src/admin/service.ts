@@ -114,6 +114,8 @@ import type { AdminWriteOp } from './ops';
  * 切目录会把在跑 bot 的 paths 指到别的 bot（第一棒遗留的坑，本棒修掉）。
  */
 export interface AdminService {
+  /** true only in the read-only preview process: it refuses every write, memory writes included */
+  readonlyPreview?: boolean;
   collaboration?(botId: string, request: CollaborationRequest): Promise<unknown>;
   /** The project library (admin/library.ts): its workspace is changed only through here. */
   library?: HostLibrary;
@@ -629,6 +631,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
   }
 
   return {
+    readonlyPreview: deps.readonlyPreview === true,
     accountUsage(force) {
       if (closing) return Promise.reject(new Error('daemon 正在退出'));
       const read = Promise.resolve().then(() => (deps.fetchAccountUsage ?? fetchUsageBundle)(force));
