@@ -105,8 +105,8 @@ it('shows a red bar per paused bot that starts it alone again, and the paused da
 
 it('says what the list holds when a bot has nothing', () => {
   const html = render([agent]);
-  expect(html).toContain('最近没有没回的消息');
-  expect(html).toContain('daemon 重启后清空');
+  expect(html).toContain('暂无未回复记录');
+  expect(html).toContain('重启后台服务后清空');
   expect(html).not.toContain('条没回');
 });
 
@@ -158,7 +158,7 @@ it('lists the groups an older version put in a wrong directory, only when there 
   expect(html).toContain('「发布群」用的是某个 Bot 自己的目录');
   expect(html).toContain('「点」在 Vonvon 的数据目录里');
   expect(html).toContain('「家」用的是 Vonvon 数据目录的上级文件夹');
-  expect(html).toContain('点「更换目录」');
+  expect(html).toContain('请在群设置的「工作区」中更换目录。原文件不会自动迁移。');
   expect(render([agent])).not.toContain('群目录');
 });
 

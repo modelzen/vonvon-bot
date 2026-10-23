@@ -56,6 +56,7 @@ export const backendEntrySchema = z.object({
   id: z.string().regex(/^[a-z0-9-]{1,80}$/),
   displayName: z.string().max(160),
   depKind: z.string().max(40),
+  bundled: z.boolean().optional(),
   depState: z.string().max(40),
   installable: z.boolean(),
   version: z.string().nullable(),

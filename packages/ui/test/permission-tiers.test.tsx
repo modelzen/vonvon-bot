@@ -22,27 +22,28 @@ const view = (fullOnly?: string): ProjectSettingsView => ({
 const render = (fullOnly?: string) => renderToStaticMarkup(
   <ClientProvider client={client}><ProjectPanel view={view(fullOnly)} refresh={async () => {}} /></ClientProvider>,
 );
-const select = (html: string, label: string) => html.match(new RegExp(`<select aria-label="${label}"[^>]*>(.*?)</select>`))?.[1] ?? "";
+const radio = (html: string, value: string) => [...html.matchAll(/<input\b[^>]*type="radio"[^>]*\/>/g)]
+  .map(([input]) => input).find(input => input.includes(`value="${value}"`)) ?? '';
 
 it("greys out 只读 and 读写 when the backend is full-only, keeps the stored 只读 selected, and says why", () => {
   const html = render(REASON);
-  const options = select(html, "权限档");
-  expect(options).toContain('<option value="qa" disabled="" selected="">只读</option>');
-  expect(options).toContain('<option value="write" disabled="">读写</option>');
-  expect(options).toContain('<option value="full">完全访问</option>');
+  expect(radio(html, 'qa')).toContain('disabled=""');
+  expect(radio(html, 'qa')).toContain('checked=""');
+  expect(radio(html, 'write')).toContain('disabled=""');
+  expect(radio(html, 'full')).not.toContain('disabled=""');
   expect(html.indexOf(REASON)).toBeGreaterThan(html.indexOf("权限档"));
 });
 
 it("has one tier for the whole group (s15c)", () => {
   const html = render();
-  expect(html.match(/<select aria-label="[^"]*权限[^"]*"/g)).toEqual(['<select aria-label="权限档"']);
+  expect(html.match(/role="radiogroup" aria-label="[^"]*权限[^"]*"/g)).toEqual(['role="radiogroup" aria-label="权限档"']);
   expect(html).not.toContain("普通成员权限");
   expect(html).not.toContain("管理员权限");
 });
 
 it("offers every tier when the backend can confine reads", () => {
   const html = render();
-  expect(html).not.toContain("disabled=\"\">只读");
-  expect(select(html, "权限档")).toContain('<option value="qa" selected="">只读</option>');
+  for (const value of ['qa', 'write', 'full']) expect(radio(html, value)).not.toContain('disabled=""');
+  expect(radio(html, 'qa')).toContain('checked=""');
   expect(html).not.toContain(REASON);
 });

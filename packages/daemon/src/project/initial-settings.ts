@@ -1,4 +1,4 @@
-import {groupDecisionSchema, type GroupDecision} from '@vonvon/protocol';
+import {DEFAULT_SMART_RULES, groupDecisionSchema, type GroupDecision} from '@vonvon/protocol';
 import {createBackend} from '../agent';
 import type {AgentBackend, ModelInfo} from '../agent/types';
 import {resolveProjectModelAccess} from '../config/execution';
@@ -44,7 +44,7 @@ export async function prepareNewGroupSettings(input:{backend:string; kind:Sessio
     profile:{persona:'',memory:'',inheritPersona:true,inheritMemory:true},
     skills:{disabledPaths:[]},
     presentation:{voiceEnabled:true,showToolCalls:false,showModel:'running',completionMode:'manual',longTaskMinutes:5},
-    smartRules:{respond:'被 @、有人提问或需要我的能力时回应；闲聊和已解决的问题不主动接话。',newTopic:'出现一个需要独立跟进的新任务时创建话题；已有话题继续在原处回复。'},
+    smartRules:{...DEFAULT_SMART_RULES},
     ...(judge ? {judge:judge.kind === 'decision' ? judge : {kind:'llm' as const,backend:judge.backend,model:judge.model,...(judge.effort ? {effort:judge.effort}:{}),...(judge.custom ? {custom:true as const}:{})}}:{}),
   };
 }

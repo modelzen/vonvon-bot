@@ -1,9 +1,9 @@
 import {createElement} from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {expect, it} from 'vitest';
-import {agentSchema, collaborationRequestSchema} from '@vonvon/protocol';
+import {agentSchema, collaborationRequestSchema, toolStateSchema} from '@vonvon/protocol';
 import {RpcError} from '@vonvon/client/browser';
-import {CONVERSATIONS, CREATION_UNKNOWN, JoinGroupDialog, CreationLockNotice, conversationsFor, creationFailure, keptResponse, projectNameProblem, sentResponse, shownResponse} from '../src/JoinGroupDialog';
+import {CONVERSATIONS, CREATION_UNKNOWN, JoinGroupDialog, CreationLockNotice, conversationsFor, creationFailure, keptResponse, projectNameProblem, sentResponse, shownResponse, judgeSetupProblem, initialGroupProvider} from '../src/JoinGroupDialog';
 import {canSaveAll, DraftGuardProvider} from '../src/settings/DraftGuard';
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
@@ -86,7 +86,7 @@ it('s36b2: shows topic binding choices, restricted permissions and Linux Codex g
   const render = (bind: boolean, linux: boolean, topic = true) => renderToStaticMarkup(
     createElement(ClientProvider, {client, children: createElement(DirectoryPickerProvider, {children:
       createElement(DraftGuardProvider, {children: createElement(JoinGroupDialog, {
-        agent, linux, ...(bind ? {initialGroup: {chatId: 'oc_topic', name: 'Topic', addedAt: 0, topic}} : {}),
+        agent, linux, tools: [{tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '1'}], ...(bind ? {initialGroup: {chatId: 'oc_topic', name: 'Topic', addedAt: 0, topic}} : {}),
         onClose: () => {}, onChanged: async () => {},
       })}),
     })}),
@@ -96,7 +96,7 @@ it('s36b2: shows topic binding choices, restricted permissions and Linux Codex g
   expect(topic).toContain('按话题聊');
   expect(topic).not.toContain('整群一条会话');
   expect(topic).toContain('权限档和网络');
-  expect(topic).toContain('只读 · 网络关（设置好以后在群详情页改）');
+  expect(topic).toContain('只读 · 网络关闭');
   expect(topic).toContain('Linux 上的 Codex 只能用完全访问');
   expect(render(true, false)).not.toContain('Linux 上的 Codex 只能用完全访问');
   const create = render(false, true);
@@ -104,4 +104,27 @@ it('s36b2: shows topic binding choices, restricted permissions and Linux Codex g
   expect(create).not.toContain('权限档和网络');
   expect(create).not.toContain('Linux 上的 Codex 只能用完全访问');
   expect(render(true, true, false).match(/role="radio"/g)).toHaveLength(3);
+});
+
+it('requires a real explicit decision model and a readable key for smart setup', () => {
+  expect(judgeSetupProblem({kind: 'default'})).toContain('请选择');
+  expect(judgeSetupProblem({kind: 'llm', backend: 'codex-appserver', model: 'real-model', effort: 'low'})).toBeUndefined();
+  const choice = {kind: 'decision' as const, provider: 'actual', model: 'jev-actual'};
+  const services = [{provider: 'actual', displayName: 'Actual', keyId: 'key', models: [{id: 'jev-actual', displayName: 'Jev'}], keySet: false}];
+  expect(judgeSetupProblem(choice, services)).toContain('添加');
+  expect(judgeSetupProblem(choice, [{...services[0]!, keySet: false, keyUnreadable: true}])).toContain('无法读取');
+  expect(judgeSetupProblem(choice, [{...services[0]!, keySet: true}])).toBeUndefined();
+  expect(judgeSetupProblem({...choice, model: 'missing'}, [{...services[0]!, keySet: true}])).toContain('不可用');
+});
+
+it('starts with a ready Provider and rejects an unavailable setup suggestion', () => {
+  const states = [
+    toolStateSchema.parse({tool: 'codex', installation: 'missing', authentication: 'signedOut', version: null}),
+    toolStateSchema.parse({tool: 'claude', installation: 'installed', authentication: 'signedIn', version: '1'}),
+  ];
+  expect(initialGroupProvider(undefined, states)).toBe('claude');
+  expect(initialGroupProvider('codex', states)).toBe('claude');
+  expect(initialGroupProvider(undefined, states.map(item => item.tool === 'codex' ? {...item, installation: 'installed', authentication: 'signedIn'} : item))).toBe('codex');
+  expect(initialGroupProvider(undefined, states.map(item => ({...item, authentication: 'unknown'})))).toBeUndefined();
+  expect(initialGroupProvider(undefined, states.map(item => ({...item, compatibility: {status: 'tooOld', minimumVersion: '2'}})))).toBeUndefined();
 });

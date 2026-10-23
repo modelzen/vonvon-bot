@@ -67,10 +67,31 @@ export async function verifyUniversalApp({ app, version, teamIdentifier, execute
   if (bundleVersion.trim() !== version || buildVersion.trim() !== version || core.version !== version || core.license !== 'UNLICENSED') {
     throw new Error('App/Core product version or first-party license mismatch');
   }
+  if (!Array.isArray(core.bundledBackends) || !core.bundledBackends.includes('claude-agent')) {
+    throw new Error('Universal app must declare the bundled Claude SDK');
+  }
+  const sdkRoot = join(app, 'Contents/Resources/daemon/node_modules/@anthropic-ai/claude-agent-sdk');
+  const sdk = JSON.parse(await readFile(join(sdkRoot, 'package.json'), 'utf8'));
+  if (sdk.name !== '@anthropic-ai/claude-agent-sdk' || !/^\d+\.\d+\.\d+$/.test(sdk.version ?? '')) {
+    throw new Error('Universal app has an invalid bundled Claude SDK');
+  }
+  const nativeArchitectures = new Map();
+  for (const [suffix, arch] of [['arm64', 'arm64'], ['x64', 'x86_64']]) {
+    const nativeName = `@anthropic-ai/claude-agent-sdk-darwin-${suffix}`;
+    const relative = `Contents/Resources/daemon/node_modules/@anthropic-ai/claude-agent-sdk/node_modules/@anthropic-ai/claude-agent-sdk-darwin-${suffix}/claude`;
+    const metadata = JSON.parse(await readFile(join(app, `${relative}/../package.json`), 'utf8'));
+    if (metadata.name !== nativeName || metadata.version !== sdk.version || sdk.optionalDependencies?.[nativeName] !== sdk.version) {
+      throw new Error(`Universal app Claude ${suffix} native package does not match SDK ${sdk.version}`);
+    }
+    nativeArchitectures.set(relative, arch);
+  }
   for (const name of ['LICENSE.bridge', 'LICENSE.paseo', 'NOTICE', 'PROVENANCE.md']) {
     if (!(await readFile(join(app, 'Contents/Resources/daemon', name))).length) throw new Error(`Missing ${name}`);
   }
   const paths = await machoFiles(app);
+  for (const relative of nativeArchitectures.keys()) {
+    if (!paths.includes(join(app, relative))) throw new Error(`Missing Claude native Mach-O: ${relative}`);
+  }
   if (!paths.some(path => path.includes('/Contents/MacOS/')) || !paths.some(path => path.includes('Electron Framework.framework/'))) {
     throw new Error('No complete Electron Mach-O runtime found in universal app');
   }
@@ -78,7 +99,9 @@ export async function verifyUniversalApp({ app, version, teamIdentifier, execute
   for (const path of paths) {
     const { stdout } = await execute('/usr/bin/lipo', ['-archs', path]);
     const archs = stdout.trim().split(/\s+/).sort();
-    if (archs.join(',') !== 'arm64,x86_64') throw new Error(`Non-universal bundled runtime: ${path.slice(app.length + 1)}`);
+    const relative = path.slice(app.length + 1);
+    const expectedThin = nativeArchitectures.get(relative);
+    if (archs.join(',') !== (expectedThin ?? 'arm64,x86_64')) throw new Error(`Unexpected bundled runtime architecture: ${relative}`);
     await execute('/usr/bin/codesign', ['--verify', '--strict', path]);
     architectures.push({ path: path.slice(app.length + 1), archs });
   }

@@ -3,12 +3,23 @@ import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DEFAULT_SMART_PROMPT } from '../src/judge/prompt';
-import { readSmartPrompt, SmartPromptError } from '../src/judge/smart-file';
+import { DEFAULT_SMART_RULES } from '@vonvon/protocol';
+import { DEFAULT_SMART_PROMPT, LEGACY_DEFAULT_SMART_PROMPT } from '../src/judge/prompt';
+import { readSmartPrompt, SmartPromptError, composeSmartRules, resolveSmartRules, rulesFromSmartPrompt } from '../src/judge/smart-file';
 
 const APP = 'cli_a1_b-2';
 const CHAT = 'oc_group1';
 const dirs: string[] = [];
+it('uses one default in runtime and editable fields, leaving explicit custom rules intact', () => {
+  expect(composeSmartRules(DEFAULT_SMART_RULES)).toBe(DEFAULT_SMART_PROMPT);
+  for (const rules of [{respond: '', newTopic: ''}, {respond: LEGACY_DEFAULT_SMART_PROMPT, newTopic: ''}, {respond: '被 @、有人提问或需要我的能力时回应；闲聊和已解决的问题不主动接话。', newTopic: '出现一个需要独立跟进的新任务时创建话题；已有话题继续在原处回复。'}]) {
+    expect(resolveSmartRules(rules)).toEqual(DEFAULT_SMART_RULES);
+    expect(composeSmartRules(rules)).toBe(DEFAULT_SMART_PROMPT);
+  }
+  const custom = {respond: '只回管理员；不要创建话题', newTopic: ''};
+  expect(resolveSmartRules(custom)).toEqual(custom);
+  expect(rulesFromSmartPrompt({source: 'bot', text: custom.respond, path: '/SMART.md'})).toEqual(custom);
+});
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });

@@ -20,3 +20,4 @@ export * from "./display.js";
 export * from "./group-decision.js";
 
 export * from './mcp.js';
+export * from './smart-rules.js';

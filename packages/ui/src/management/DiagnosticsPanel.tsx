@@ -21,7 +21,7 @@ const badge = (status: string, tone: StepTone) => <StatusBadge tone={tone} varia
 /** 连接: the checklist's 长连接 step, plus a paused bot or daemon, a child that is down or a switch waiting for a restart. */
 function connectionView(agent: Agent, hostPaused: boolean): Pick<SetupStep, 'status' | 'tone' | 'detail'> {
   if (agent.enabled && agent.paused) return {status: '已暂停', tone: 'danger', detail: `10 分钟内崩溃了 ${agent.paused.crashes} 次，见上面的红条。`};
-  if (agent.enabled && agent.lockHeld) return {status: '等待占用的进程退出', tone: 'warning', detail: `另一个进程${agent.lockHeld.pid ? `（PID ${agent.lockHeld.pid}）` : ''}占着这个 Bot；它退出后会自动接上。`};
+  if (agent.enabled && agent.lockHeld) return {status: '等待占用的进程退出', tone: 'warning', detail: agent.lockHeld.message ?? `另一个进程${agent.lockHeld.pid ? `（PID ${agent.lockHeld.pid}）` : ''}占着这个 Bot；它退出后会自动接上。`};
   if (!agent.readError && agent.enabled && !agent.running) return {status: '没在运行', tone: 'warning', detail: hostPaused ? 'daemon 已暂停，见上面的红条。' : '可能正在崩溃重启，或者要重启 daemon 才生效；一直这样时看下面的日志。'};
   if (!agent.readError && !agent.enabled && agent.running) return {status: '待生效', tone: 'neutral', detail: '停用要重启 daemon 后才生效。'};
   if (agent.enabled && agent.connection === 'reconnecting') return {status: '重连中', tone: 'neutral'};
@@ -60,7 +60,7 @@ export function setupView(agent: Agent, read: SetupRead | undefined): {badge: Re
 }
 
 function NotRepliedList({records, agent, snapshot, now}: {records: readonly NotReplied[]; agent: Agent; snapshot: DesktopSnapshot; now: number}) {
-  if (!records.length) return <>最近没有没回的消息。这里只记 @ 了这个 Bot、按群设置该它回、智能模式判断过却没回、或者自己接话后没说话的消息；daemon 重启后清空。</>;
+  if (!records.length) return <>暂无未回复记录。<details className="diagnostics-note"><summary>记录范围</summary><p>记录被 @、群设置要求回复、智能判断后未回复，以及主动接话后未发送的消息。重启后台服务后清空。</p></details></>;
   const groups = new Map(snapshot.groups.map(group => [group.id as string, group.name]));
   return <ul className="diagnostics-replies">{records.map(record => {
     const text = NOT_REPLIED_TEXT[record.reason];
@@ -90,7 +90,7 @@ export const DIRECTORY_PROBLEM_TEXT: Record<DirectoryProblem, string> = {
 function DirectoryProblems({members}: {members: readonly Membership[]}) {
   return <>
     <ul className="diagnostics-scopes">{members.map(member => <li key={member.id}>「{member.name}」{DIRECTORY_PROBLEM_TEXT[member.directoryProblem!]}：<code>{member.directory}</code></li>)}</ul>
-    这些群的目录是旧版本定下的。到群的「项目运行」里点「更换目录」换一个文件夹，原来的文件不会自动搬过去。
+    请在群设置的「工作区」中更换目录。原文件不会自动迁移。
   </>;
 }
 
@@ -141,11 +141,11 @@ function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
     <SettingsRow title="连接" description={connection.detail} trailing={badge(connection.status, connection.tone)}/>
     <SettingsRow title="飞书设置" description={read?.problem && !read.status ? read.problem
       : setup.warnings.length ? <ul className="diagnostics-scopes">{setup.warnings.map(text => <li key={text}>{text}</li>)}</ul> : undefined}
-      trailing={<span className="setup-step-trailing">{setup.badge}<Button size="sm" onClick={onOpenSetup}>打开清单</Button></span>}/>
+      trailing={<span className="setup-step-trailing">{setup.badge}<Button size="sm" onClick={onOpenSetup}>检查连接</Button></span>}/>
     <SettingsRow title="缺的权限" description={scopes.lines.length ? <ul className="diagnostics-scopes">{scopes.lines}</ul> : undefined}
       trailing={<span className="setup-step-trailing">{scopes.badge}{grantUrl && scopes.lines.length > 0 && <Button size="sm"
         onClick={() => void openExternalUrl(grantUrl, 'app-console', shell).catch(error => onError(error instanceof Error ? error.message : '无法打开开发者后台。'))}>一键开权限</Button>}</span>}/>
-    <SettingsRow title="后端" description={toolText || '还没有绑定群'}/>
+    <SettingsRow title="Provider" description={toolText || '尚未连接群聊'}/>
     {misplaced.length > 0 && <SettingsRow title="群目录" description={<DirectoryProblems members={misplaced}/>} trailing={badge(`${misplaced.length} 个群放错了位置`, 'warning')}/>}
     <SmartDiagnostics agent={agent} snapshot={snapshot} now={now}/>
     <SettingsRow title="最近没回的消息" description={<NotRepliedList records={records} agent={agent} snapshot={snapshot} now={now}/>}/>

@@ -3,8 +3,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { agentIdSchema, membershipSchema, type ProjectSettingsView } from "@vonvon/protocol";
 import { createClient } from "../../client/src/client";
 import { ClientProvider } from "../src/client-context";
-import { appliedNotice, ConversationRow, conversationNote } from "../src/management/ProjectPanel";
+import { appliedNotice, ConversationRow, conversationNote, removalNotice } from "../src/management/ProjectPanel";
 import { groupJudgeVisible, membershipSettingsKey, ProjectPanel as GroupSettings } from "../src/settings/SettingsPanel";
+import {AnnouncedReadonlyMessages, OFFLINE_SETTINGS_MESSAGE} from "../src/settings/readonly-messages";
 
 const client = createClient({ isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {} });
 const section = <const T,>(stored: T) => ({ stored, effective: stored, revision: "r", access: { kind: "writable" as const }, apply: [] });
@@ -23,6 +24,8 @@ const view = (kind: string, options: ViewOptions = {}): ProjectSettingsView => (
   members: { openIds: [], revision: "m" },
 });
 const settings = (kind: string, options: ViewOptions = {}) => renderToStaticMarkup(<ClientProvider client={client}><GroupSettings view={view(kind, options)} refresh={async () => {}} /></ClientProvider>);
+const radioOptions = (html: string) => [...html.matchAll(/<input\b[^>]*type="radio"[^>]*\/>/g)]
+  .map(([input]) => [input.match(/value="([^"]+)"/)?.[1], input.includes('checked=""')]);
 
 it("s25c: a 智能 group's settings show 免 @ as the Bot's call, with no switch; other groups keep the switch", () => {
   const smart = settings("smart");
@@ -37,8 +40,9 @@ it("s25c: a 智能 group's settings show 免 @ as the Bot's call, with no switch
 
 it("s25c: the group page picks among the three 会话方式 in 3.4's order", () => {
   const html = renderToStaticMarkup(<ConversationRow target="smart" current="smart" disabled={false} onChange={() => {}} />);
-  const options = [...html.matchAll(/<option value="(\w+)"( selected="")?>([^<]+)<\/option>/g)].map(match => [match[1], match[3], Boolean(match[2])]);
-  expect(options).toEqual([["threads", "@ 我开新会话", false], ["shared", "整群一条会话", false], ["smart", "智能开话题", true]]);
+  expect(html).toContain('role="radiogroup" aria-label="项目会话方式"');
+  expect(radioOptions(html)).toEqual([["threads", false], ["shared", false], ["smart", true]]);
+  for (const label of ['@ 我开新会话', '整群一条会话', '智能开话题']) expect(html).toContain(label);
   expect(html).toContain("主区一条会话，不用 @ 我也会看情况接话；聊到新的事，我自己开话题、起新会话");
 });
 
@@ -62,6 +66,16 @@ it("s25c: a save's warning is its own sentence; a removal's failed group step ke
   expect(appliedNotice("项目绑定已解除，目录已保留。", { warning: "permission denied" }))
     .toBe("项目绑定已解除，目录已保留。 飞书群后续操作未完成：permission denied");
   expect(appliedNotice("项目已更新。", {}, "")).toBe("项目已更新。");
+});
+
+it('distinguishes removal of the local binding from the Feishu group outcome', () => {
+  expect(removalNotice({groupEffect: 'left'})).toContain('Bot 已退出飞书群');
+  expect(removalNotice({groupEffect: 'transferred'})).toContain('已转交飞书群主');
+  const failed = removalNotice({groupEffect: 'failed', warning: 'permission denied'});
+  expect(failed).toContain('群绑定已解除，工作目录和文件已保留');
+  expect(failed).toContain('飞书群后续操作未完成：permission denied');
+  expect(failed).not.toContain('Bot 已退出');
+  expect(removalNotice({groupEffect: 'failed'})).toContain('请在飞书中检查');
 });
 
 const judge: NonNullable<ProjectSettingsView["sections"]["judge"]> = {
@@ -96,12 +110,11 @@ it("s28a: following the Bot's decision model still explains a missing key", () =
 
 it("s28a: Codex groups offer run policy choices and show the effective policy", () => {
   const html = settings("multi", { run });
-  const select = html.match(/<select[^>]*aria-label="运行中来了消息"[^>]*>(.*?)<\/select>/s)?.[1];
-  expect(select).toBeDefined();
-  const options = [...(select ?? "").matchAll(/<option value="([^"]+)"( selected="")?>([^<]+)<\/option>/g)]
-    .map(match => [match[1], match[3], Boolean(match[2])]);
-  expect(options).toEqual([["default", "跟着 Bot 默认", true], ["steer", "插话", false], ["queue", "排队", false]]);
-  expect(html).toContain("现在是插话");
+  const policy = html.match(/role="radiogroup" aria-label="运行中来了消息">(.*?)<\/span><\/label><\/span>/s)?.[1];
+  expect(policy).toBeDefined();
+  expect(radioOptions(policy ?? '')).toEqual([["default", true], ["steer", false], ["queue", false]]);
+  for (const label of ['跟着 Bot 默认', '插话', '排队']) expect(policy).toContain(label);
+  expect(html).toContain("当前：插话");
 });
 
 it("s28a: Claude groups explain queueing without a selector; old daemons omit the row", () => {
@@ -119,4 +132,33 @@ it('s28c: the conversation row recommends smart with other bots, including when 
     expect(renderToStaticMarkup(<ConversationRow target={target} current={target} disabled={false} onChange={() => {}} otherBots />)).toContain(hint);
     expect(renderToStaticMarkup(<ConversationRow target={target} current={target} disabled={false} onChange={() => {}} />)).not.toContain(hint);
   }
+});
+
+
+it('announces repeated readonly reasons once without hiding field-specific restrictions', () => {
+  const blocked = view('multi', {run});
+  for (const section of Object.values(blocked.sections)) {
+    if (section) section.access = {kind: 'readonly', ...OFFLINE_SETTINGS_MESSAGE};
+  }
+  blocked.sections.model.access = {kind: 'readonly', reason: 'owner-offline', message: '模型配置正在恢复，请稍后重试。'};
+  const html = renderToStaticMarkup(<ClientProvider client={client}><GroupSettings view={blocked} refresh={async () => {}} /></ClientProvider>);
+  expect(html.split(OFFLINE_SETTINGS_MESSAGE.message)).toHaveLength(2);
+  expect(html).toContain('模型配置正在恢复，请稍后重试。');
+  expect(html).toContain('Bot 管理员与所有者始终可用');
+  for (const input of html.matchAll(/<input\b[^>]*type="radio"[^>]*\/>/g)) expect(input[0]).toContain('disabled=""');
+});
+
+it('retains distinct readonly warnings when a parent already explains the stopped Bot', () => {
+  const blocked = view('multi');
+  for (const section of Object.values(blocked.sections)) {
+    if (section) section.access = {kind: 'readonly', ...OFFLINE_SETTINGS_MESSAGE};
+  }
+  blocked.sections.model.access = {kind: 'readonly', reason: 'owner-offline', message: '模型配置恢复失败，文件已保留。'};
+  const html = renderToStaticMarkup(<ClientProvider client={client}>
+    <AnnouncedReadonlyMessages.Provider value={[OFFLINE_SETTINGS_MESSAGE]}>
+      <GroupSettings view={blocked} refresh={async () => {}} />
+    </AnnouncedReadonlyMessages.Provider>
+  </ClientProvider>);
+  expect(html).not.toContain(OFFLINE_SETTINGS_MESSAGE.message);
+  expect(html).toContain('模型配置恢复失败，文件已保留。');
 });

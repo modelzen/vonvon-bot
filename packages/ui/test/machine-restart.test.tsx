@@ -80,9 +80,9 @@ it('offers start only when a desktop shell supplies the capability', () => {
 
 it('leaves installing and uninstalling the service to the 登录电脑时启动 switch', () => {
   const html = renderToStaticMarkup(<ClientProvider client={client}><MachinePanel request={async () => running} agents={[]} macos /></ClientProvider>);
-  expect(html).toContain('打开「登录电脑时启动」后，daemon 跑在后台服务里，退出桌面后仍运行。');
+  expect(html).toContain('开启「登录电脑时启动」后，退出 App 仍可运行 Bot。');
   for (const gone of ['安装并启动', '卸载后台服务']) expect(html).not.toContain(gone);
-  expect(html).toContain('停止后台服务');
+  expect(html).toContain('停止服务');
 });
 
 it('names the terminal command instead of the macOS switch elsewhere', () => {

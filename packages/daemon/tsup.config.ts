@@ -1,8 +1,7 @@
 import { defineConfig } from 'tsup';
 
-// @anthropic-ai/claude-agent-sdk 是「按需下载」后端依赖（不在 dependencies，故 tsup
-// 默认会把它打进 dist）——显式外置：dist 只保留运行时 import，真正加载走 loadBackendDep
-// （桥/全局/用户私装目录三路探测），未装则 Web 出「下载」按钮。
+// SDK 保留运行时 import：桌面包在 Resources/daemon 内置完整依赖，
+// 独立 CLI 仍可按需安装到用户目录。由 loadBackendDep 统一解析。
 const external = ['@anthropic-ai/claude-agent-sdk'];
 
 export default defineConfig([

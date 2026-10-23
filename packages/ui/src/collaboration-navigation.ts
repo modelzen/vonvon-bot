@@ -2,7 +2,7 @@ import type {AgentId, DesktopSnapshot, GroupId, MembershipId} from '@vonvon/prot
 import type {CollaborationView} from './collaboration-model';
 import type {Destination, DetailPane, Selection} from './search';
 
-export type AgentPane = {kind: 'groups'} | {kind: 'settings'};
+export type AgentPane = {kind: 'groups'} | {kind: 'profile'} | {kind: 'settings'};
 export type MembershipPane = {kind: 'activity'} | {kind: 'settings'};
 export type CollaborationRoute =
   | {kind: 'list'; view: CollaborationView}
@@ -45,7 +45,7 @@ export function openMembership(route: CollaborationRoute, id: MembershipId, snap
         : routeView(route) === 'agents'
           ? {kind: 'agent' as const, id: member.agentId, pane: {kind: 'groups' as const}}
           : {kind: 'group' as const, id: member.groupId};
-  return {kind: 'membership', id, pane: {kind: 'activity'}, parent};
+  return {kind: 'membership', id, pane: {kind: 'settings'}, parent};
 }
 
 export function routeBack(route: CollaborationRoute): CollaborationRoute {
@@ -60,7 +60,7 @@ export function routeFromSearch(destination: Destination, snapshot: DesktopSnaps
   if (!selection || selection.kind === 'overview') return {route: {kind: 'list', view: destination.view ?? 'agents'}};
   if (selection.kind === 'agent') {
     if (!snapshot.agents.some(item => item.id === selection.id)) return {route: {kind: 'list', view: 'agents'}, missing: '这个 Bot 已不存在，已返回 Bot 列表。'};
-    return {route: {kind: 'agent', id: selection.id, pane: destination.detail?.kind === 'agent-settings' ? {kind: 'settings'} : {kind: 'groups'}}};
+    return {route: {kind: 'agent', id: selection.id, pane: destination.reveal === 'agent-profile' ? {kind:'profile'} : destination.detail?.kind === 'agent-settings' ? {kind: 'settings'} : {kind: 'groups'}}};
   }
   if (selection.kind === 'group') {
     if (!snapshot.groups.some(item => item.id === selection.id)) return {route: {kind: 'list', view: 'groups'}, missing: '这个飞书群已不存在，已返回群聊列表。'};
@@ -73,4 +73,11 @@ export function routeFromSearch(destination: Destination, snapshot: DesktopSnaps
     : undefined;
   if (!parent) return {route: {kind: 'list', view: 'groups'}, missing: '这条群内协作的飞书群已不存在，已返回群聊列表。'};
   return {route: {kind: 'membership', id: member.id, parent, pane: destination.detail?.kind === 'membership-settings' ? {kind: 'settings'} : {kind: 'activity'}}};
+}
+
+/** A create/bind reply may arrive before the next snapshot contains its membership. */
+export function joinedGroupRoute(snapshot: DesktopSnapshot, target: {agentId: AgentId; chatId: string}): CollaborationRoute | undefined {
+  const member = snapshot.memberships.find(item => item.agentId === target.agentId && item.groupId === target.chatId);
+  if (!member || !snapshot.groups.some(group => group.id === member.groupId)) return undefined;
+  return openMembership({kind: 'group', id: member.groupId}, member.id, snapshot);
 }

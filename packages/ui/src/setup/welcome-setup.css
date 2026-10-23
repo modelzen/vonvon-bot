@@ -1,0 +1,122 @@
+.welcome-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: var(--settings-content-width, 840px);
+  min-width: 0;
+  margin: 0 auto;
+}
+
+.welcome-setup__intro {padding: 2px 0 4px;}
+.welcome-setup__intro h1 {
+  margin: 0;
+  font-size: var(--font-size-page-title);
+  line-height: 1.3;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-tight);
+  text-wrap: balance;
+}
+.welcome-setup__intro > p {
+  margin: 6px 0 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-body);
+  line-height: 1.55;
+}
+
+.welcome-setup__connect {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-xs);
+}
+.welcome-setup__scan-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-canvas);
+  color: var(--color-text-secondary);
+}
+.welcome-setup__connect-copy {min-width: 0;}
+.welcome-setup__connect h2 {
+  margin: 0;
+  font-size: var(--font-size-body);
+  line-height: 1.4;
+  font-weight: var(--font-weight-medium);
+}
+.welcome-setup__connect p {
+  margin: 4px 0 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-body);
+  line-height: 1.55;
+}
+.welcome-setup__connect > .ui-button {grid-column: 3; justify-self: end;}
+.welcome-setup__connect--alternative {grid-template-columns: 34px minmax(0, 1fr) auto; padding-block: 12px;}
+.welcome-setup__connect--alternative > .ui-button {grid-column: 3;}
+.welcome-setup__actions {display: flex; gap: 8px; flex-wrap: wrap;}
+.welcome-setup .ui-button {min-height: 32px;}
+.welcome-setup .setup-checklist {gap: 16px;}
+
+.welcome-setup__tools {border-top: 1px solid var(--color-border);}
+.welcome-setup__tools > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 0;
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  list-style: none;
+}
+.welcome-setup__tools > summary::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  margin: 0 3px;
+  flex-shrink: 0;
+  border-right: 1.5px solid var(--color-text-tertiary);
+  border-bottom: 1.5px solid var(--color-text-tertiary);
+  transform: rotate(-45deg);
+}
+.welcome-setup__tools[open] > summary::after {transform: rotate(45deg);}
+.welcome-setup__tools > summary::-webkit-details-marker {display: none;}
+.welcome-setup__tools > summary .ui-status-badge {
+  margin-left: auto;
+  font-weight: var(--font-weight-regular);
+  font-size: var(--font-size-caption);
+}
+.welcome-setup__tools > div {display: flex; flex-direction: column; gap: 16px; padding: 8px 0;}
+.welcome-setup__tools summary:focus-visible,
+.bridge-import summary:focus-visible {outline: 2px solid var(--color-accent); outline-offset: 3px; border-radius: 4px;}
+
+@media (max-width: 600px) {
+  .welcome-setup__connect {grid-template-columns: 40px minmax(0, 1fr);}
+  .welcome-setup__connect > .ui-button {grid-column: 2;}
+}
+
+@media (max-width: 360px) {
+  .welcome-setup__connect {padding: 12px; gap: 10px;}
+  .welcome-setup__connect--alternative {grid-template-columns: 30px minmax(0, 1fr);}
+  .welcome-setup__connect--alternative > .ui-button {grid-column: 2;}
+  .welcome-setup__tools > summary {flex-wrap: wrap;}
+  .welcome-setup__tools > summary .ui-status-badge {font-size: var(--font-size-caption);}
+}
+
+@media (pointer: coarse) {
+  .welcome-setup .ui-button,
+  .welcome-setup__tools > summary {min-height: 44px;}
+}
+.welcome-provider-summary {display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--color-text-secondary);}
+.welcome-provider-summary img {width: 18px; height: 18px; object-fit: contain;}
+.welcome-provider-summary button {margin-left: auto; font: inherit; color: var(--color-accent); background: transparent; border: none; cursor: pointer; padding: 8px 0 8px 10px;}
+.welcome-setup > .bridge-import {margin-top: 8px;}
