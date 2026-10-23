@@ -8,7 +8,7 @@ import {GroupUsage} from './GroupUsage';
 import {settingAnchor} from './search';
 import {Button, InlineNotice, Toggle} from './reference/components/ui';
 import {Dialog, ConfirmDialog} from './reference/components/ui/Dialog';
-import {SettingChoices} from './settings/SettingChoices';
+import {ConversationSlider} from './settings/ConversationSlider';
 import {GroupDesignSettings, type GroupSettingsTab} from './settings/GroupDesignSettings';
 import {useDraftGuard} from './settings/DraftGuard';
 import {ConversationPanel} from './management/ConversationPanel';
@@ -122,8 +122,7 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
   const otherProjects = (snapshot.projects ?? []).filter(item => item.id !== member.projectId);
   const conversation = project ? modeToConversation(project.kind) : member.conversation;
   const conversationControl = <div className="group-conversation-layout"><section id={settingAnchor("聊天方式")} className="group-conversation-choice" aria-label="聊天方式">
-    <h3>聊天方式</h3><SettingChoices label="聊天方式" value={conversation} disabled={!available || busy} choices={[{value:'threads',label:'多会话'},{value:'shared',label:'单会话'},{value:'smart',label:'智能'}]} onChange={next => guard.navigate(() => {if (next === 'smart' && conversation !== 'smart') setDialog('smart'); else void update({conversation:next});})}/>
-    <p className="group-control-note">{conversation === 'smart' ? '按回复规则接话，并判断是否另开话题。' : conversation === 'threads' ? '主区 @ Bot 开启新话题，每个话题独立对话。' : '全群共用一段对话。'}</p>
+    <h3>聊天方式</h3><ConversationSlider label="聊天方式" value={conversation} disabled={!available || busy} onChange={next => guard.navigate(() => {if (next === 'smart' && conversation !== 'smart') setDialog('smart'); else void update({conversation:next});})}/>
   </section>{conversation === 'smart' && member.conversation === 'smart' && <GroupAttentionStatus agent={agent} membership={member} connected={snapshot.host.kind === 'connected' && !snapshot.stale}/>}</div>;
   return <div className="group-design-workspace">
     <header className="group-design-heading"><GroupAvatar group={group} large/><h2>{group.name}</h2><Button size="sm" className="group-open-button" aria-label="在飞书打开此群" onClick={() => void openExternalUrl(groupUrl(group.id),'group',shell).catch(error => setError(String(error.message ?? error)))}><span className="group-open-label">飞书</span><ArrowUpRight size={13} aria-hidden="true"/></Button>
