@@ -38,7 +38,8 @@ import type {
 } from '@larksuiteoapi/node-sdk';
 import { DEFAULT_BACKEND_ID, effectiveDefaultBackend, backendIds, createBackend, isBackendEntryInstalled } from '../agent';
 import { BackendNotInstalledError } from '../agent/backend-loader';
-import { CodexFullOnlyError, fullOnlyReply } from '../agent/codex-appserver/full-only';
+import { CodexFullOnlyError } from '../agent/codex-appserver/full-only';
+import { permissionTable, tableEnv, tierInfo, unavailableTierReply } from '../agent/permission';
 import { errorKindFromText, type AgentErrorKind } from '../agent/error-kind';
 import { feishuError, scopeDenial } from '../utils/feishu-error';
 import type { NotReplied, NotRepliedReason } from '@vonvon/protocol';
@@ -2199,7 +2200,7 @@ export function createOrchestrator(
       if (stopped()) return;
       if (trig.createTime <= takenAt() || seen || (wake && active.get(ts.sessionKey)?.woven?.has(msg.messageId))) { superseded(); return; }
     }
-    const refused = await refuseFullOnly(trig, project, ts);
+    const refused = await refuseUnavailableTier(trig, project, ts);
     if (stopped() || refused) return;
     // A settings/resume lock may have arrived during the final read, before this turn was reserved.
     if (wake && (projectMutations.has(msg.chatId) || resumePublications.has(msg.chatId))) {
@@ -2448,7 +2449,7 @@ export function createOrchestrator(
         submitSmart(msg, await classifySalience(msg));
         return;
       }
-      if (await refuseFullOnly(msg, project, ts)) return;
+      if (await refuseUnavailableTier(msg, project, ts)) return;
       if (goalObjective) {
         if (!(await goalCapable(project, ts.sessionKey))) {
           await denyGoal(msg, false);
@@ -2512,7 +2513,7 @@ export function createOrchestrator(
         submitSmart(msg, await classifySalience(msg), await topicMine(msg));
         return;
       }
-      if (await refuseFullOnly(msg, project, ts)) return;
+      if (await refuseUnavailableTier(msg, project, ts)) return;
       if (goalObjective) {
         if (!(await goalCapable(project, ts.sessionKey))) {
           await denyGoal(msg, true);
@@ -2563,7 +2564,7 @@ export function createOrchestrator(
         await denyGoal(msg, false);
         return;
       }
-      if (await refuseFullOnly(msg, project, turnPerm(project))) return;
+      if (await refuseUnavailableTier(msg, project, turnPerm(project))) return;
       void trackTask(addReaction(msg.messageId, 'OKR'));
       startTopicDirectly(msg, goalObjective, project, true);
       return;
@@ -2584,7 +2585,7 @@ export function createOrchestrator(
       log.info('intake', 'unknown-cmd', { name });
       return;
     }
-    if (await refuseFullOnly(msg, project, turnPerm(project))) return;
+    if (await refuseUnavailableTier(msg, project, turnPerm(project))) return;
     startTopicDirectly(msg, text, project);
   };
 
@@ -2767,31 +2768,32 @@ export function createOrchestrator(
     return { sessionKey: baseKey, ...turnPerm(project) };
   }
 
-  /** When each group last got the full-only explanation (see refuseFullOnly). */
-  const fullOnlyNoted = new Map<string, number>();
+  /** When each group last got the unavailable-tier explanation (see refuseUnavailableTier). */
+  const unavailableTierNoted = new Map<string, number>();
   const unboundNoted = new Map<string, number>();
-  /** A 只读 or 读写 turn where the backend runs only in 完全访问 (Codex on Linux): no session starts and
+  /** A turn in a tier unavailable on this backend: no session starts and
    * nothing is downloaded or woven first. The message is noted and the group told why, in place: every
    * human @, and a bot or 免@ message only when the group got no explanation in the last {@link FULL_ONLY_QUIET_MS}. */
-  async function refuseFullOnly(msg: NormalizedMessage, project: Project, perm: TurnPerm): Promise<boolean> {
+  async function refuseUnavailableTier(msg: NormalizedMessage, project: Project, perm: TurnPerm): Promise<boolean> {
     const mode = perm.mode ?? 'full';
-    if (mode === 'full') return false;
     const be = groupBackend(project);
-    if (!be.fullAccessOnly?.()) return false;
-    log.info('intake', 'reject', { reason: 'full-only', mode });
+    const table = permissionTable(be.id);
+    const env = tableEnv(be);
+    if (!tierInfo(table, env, mode).unavailable) return false;
+    log.info('intake', 'reject', { reason: 'tier-unavailable', mode });
     noteNotReplied(msg, 'tier-unavailable', { backendId: be.id });
     const now = Date.now();
-    const last = fullOnlyNoted.get(msg.chatId);
+    const last = unavailableTierNoted.get(msg.chatId);
     if ((!msg.mentionedBot || fromBot(msg)) && now - (last ?? -Infinity) < FULL_ONLY_QUIET_MS) return true;
     // Stamped before sending so 免@ messages arriving meanwhile stay quiet; put back if the send fails.
-    fullOnlyNoted.set(msg.chatId, now);
+    unavailableTierNoted.set(msg.chatId, now);
     // The command needs --bot when the host has several bots (pickBot); an unreadable registry counts as one.
     const several = await loadBots().then((reg) => reg.bots.length > 1, () => false);
-    const markdown = fullOnlyReply(msg.chatId, mode, several ? cfg.accounts.app.id : undefined);
+    const markdown = unavailableTierReply(msg.chatId, table, env, mode, several ? cfg.accounts.app.id : undefined);
     const sent = await channel.send(msg.chatId, { markdown }, { replyTo: msg.messageId, replyInThread: Boolean(msg.threadId) }).then(() => true, () => false);
-    if (!sent && fullOnlyNoted.get(msg.chatId) === now) {
-      if (last === undefined) fullOnlyNoted.delete(msg.chatId);
-      else fullOnlyNoted.set(msg.chatId, last);
+    if (!sent && unavailableTierNoted.get(msg.chatId) === now) {
+      if (last === undefined) unavailableTierNoted.delete(msg.chatId);
+      else unavailableTierNoted.set(msg.chatId, last);
     }
     return true;
   }
@@ -3551,7 +3553,7 @@ export function createOrchestrator(
   async function resolveThread(
     threadId: string,
     chatId: string,
-    perm?: { mode?: PermissionMode; network?: boolean },
+    perm: TurnPerm,
   ): Promise<{ thread: AgentThread | undefined; recreated: boolean; reason?: RecreateReason }> {
     const live = sessions.get(threadId);
     if (live) {
@@ -3594,11 +3596,11 @@ export function createOrchestrator(
       const resumed = await resumeWith(be, {
         cwd: rec.cwd,
         sessionId: rec.sessionId,
-        profile: await profileOf(project, rec.cwd, be, perm?.mode),
+        profile: await profileOf(project, rec.cwd, be, perm.mode),
         model: rec.model,
         effort: rec.effort,
-        mode: perm?.mode,
-        network: perm?.network,
+        mode: perm.mode,
+        network: perm.network,
       }, { kind: 'group', chatId });
       trackSession(threadId, resumed);
       // 自愈观测：resume 来源=持久化记录（区分「resume 自愈」与 LIVE 快路径的
@@ -3613,11 +3615,11 @@ export function createOrchestrator(
       const cwd = workCwd(project, rec);
       const fresh = await startWith(be, {
         cwd,
-        profile: await profileOf(project, cwd, be, perm?.mode),
+        profile: await profileOf(project, cwd, be, perm.mode),
         model: rec.model,
         effort: rec.effort,
-        mode: perm?.mode ?? project?.mode,
-        network: perm?.network ?? project?.network,
+        mode: perm.mode,
+        network: perm.network,
       }, { kind: 'group', chatId });
       trackSession(threadId, fresh);
       lastUsage.delete(threadId);
