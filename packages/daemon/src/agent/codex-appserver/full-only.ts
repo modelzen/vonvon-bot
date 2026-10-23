@@ -1,17 +1,39 @@
-/** Whether Codex's sandbox keeps reads, not only writes, inside the workspace on `platform`. Only
- * macOS Seatbelt does; on Linux it blocks writes and leaves reads open (product.md 3.8). */
-export function codexConfinesReads(platform: NodeJS.Platform = process.platform): boolean {
-  return platform === 'darwin';
+import type { PermissionMode } from '../types';
+
+export const CODEX_LINUX_MIN_VERSION = '0.163.0';
+export const CODEX_LINUX_WRITE_OK: boolean = true;
+
+export function codexConfinesReads(platform: NodeJS.Platform = process.platform, version: string | null = null): boolean {
+  if (platform === 'darwin') return true;
+  if (platform !== 'linux') return false;
+  const parsed = version?.match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!parsed) return false;
+  const actual = parsed.slice(1).map(Number);
+  const minimum = CODEX_LINUX_MIN_VERSION.split('.').map(Number);
+  for (const [index, part] of actual.entries()) {
+    const required = minimum[index] ?? 0;
+    if (part !== required) return part > required;
+  }
+  return true;
 }
 
-/** Why a Codex group on this host can only be set to 完全访问: the settings' reason. */
-export const CODEX_FULL_ONLY =
-  'Linux 上 Codex 的沙箱只挡写、不限制读，vonvon 不在 Linux 上用 Codex 的只读、工作区可写权限，只能选完全访问。完全访问下 Codex 能读写这个账号能碰到的所有文件，群里有别人时先想清楚。';
+export function codexFullOnlyReason(version: string | null): string {
+  if (!version?.match(/(\d+)\.(\d+)\.(\d+)/)) return '测不出 Codex 的版本，只读和工作区可写暂时不能用。请升级 Codex 后重启 daemon。';
+  return `这台电脑上的 Codex 版本太旧（${version}），只读和工作区可写要 ${CODEX_LINUX_MIN_VERSION} 以上，升级后就能选。`;
+}
 
-/** Thrown before spawning when a 只读 or 读写 Codex session would start where reads are not confined. */
+export function codexTierUnavailable(tier: PermissionMode, platform: NodeJS.Platform, version: string | null): string | undefined {
+  if (tier === 'full') return undefined;
+  if (!codexConfinesReads(platform, version)) return codexFullOnlyReason(version);
+  if (tier === 'write' && platform === 'linux' && !CODEX_LINUX_WRITE_OK) {
+    return 'Linux 上的 Codex 还挡不住工作区里新建的 Codex 配置，工作区可写暂时不能用。';
+  }
+  return undefined;
+}
+
 export class CodexFullOnlyError extends Error {
-  constructor() {
-    super('Linux 上的 Codex 只能用完全访问（它的沙箱只挡写、不限制读），这一轮没有开始。请主人在群设置里把权限改成「完全访问」，不会自动改。');
+  constructor(reason: string = codexFullOnlyReason(null)) {
+    super(`${reason}这一轮没有开始，不会自动改权限。`);
     this.name = 'CodexFullOnlyError';
   }
 }

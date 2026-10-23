@@ -872,7 +872,7 @@ function DesktopApp() {
       <PendingGroupToasts pages={pendingGroups} agents={snapshot.agents} hidden={modal !== null} onContinue={(owner, group) => openJoin(owner.id, group)} />
       {modal?.kind === 'join' && (() => {
         const owner = snapshot.agents.find(item => item.id === modal.agentId);
-        return owner ? <JoinGroupDialog key={`${owner.id}:${modal.group?.chatId ?? 'new'}`} agent={owner} tools={snapshot.tools} initialProvider={modal.provider} open={!modal.suspended} onOpenProviders={() => configureJoinProvider()} onOpenDecisionModel={() => configureJoinProvider('secrets')} linux={snapshot.application.platform === 'linux'} initialGroup={modal.group} pending={pendingGroups.find(item => item.agentId === owner.id)} onClose={() => setModal(null)} onChanged={joined} /> : null;
+        return owner ? <JoinGroupDialog key={`${owner.id}:${modal.group?.chatId ?? 'new'}`} agent={owner} tools={snapshot.tools} initialProvider={modal.provider} open={!modal.suspended} onOpenProviders={() => configureJoinProvider()} onOpenDecisionModel={() => configureJoinProvider('secrets')} initialGroup={modal.group} pending={pendingGroups.find(item => item.agentId === owner.id)} onClose={() => setModal(null)} onChanged={joined} /> : null;
       })()}
       <Dialog
         open={modal !== null && modal.kind !== "deleteAgent" && modal.kind !== "join"}

@@ -28,7 +28,7 @@ const section = (stored: object, revision = `rev-${Object.keys(stored)[0]}`, eff
 /** A fake client behind the real withDaemon, with timers short enough to hit. */
 function harness(client: Partial<Record<'snapshot' | 'run' | 'admin' | 'settings' | 'directory' | 'watchSnapshots' | 'onError', (request: never) => unknown>>) {
   const close = vi.fn(async () => {});
-  const connect = vi.fn(async () => ({ close, ...client }) as unknown as VonvonClient);
+  const connect = vi.fn(async () => ({ close, settings: async () => ({ kind: 'view', view: { scope: { kind: 'project', botId: 'cli_a', projectName: 'pay' }, sections: {}, identity: {} } }), ...client }) as unknown as VonvonClient);
   const daemon: Daemon = fn => withDaemon(fn, connect, { local: 50, feishu: 50 });
   let out = '';
   return { close, connect, daemon, io: (json = false) => ({ json, write: (text: string) => { out += text; } }), out: () => out, clear: () => { out = ''; } };
@@ -137,13 +137,13 @@ it('bot status prints the service step after the tools without counting it', asy
   const linux = harness({ snapshot: status({ platform: 'linux', version: '1', loginItem: false, dataPath: '/x', service: { state: 'not-installed', skipped: false } }), admin: async () => ({ kind: 'setupStatus', status: setup }) });
   await runBotStatus(undefined, linux.io(), linux.daemon);
   expect(linux.out()).toContain('· 后台服务：没装\n    在终端运行 vonvon service install，装成 systemd 用户服务，崩溃后自动重启。\n全部就绪。\n');
-  // s20a: the Linux steps follow the tools and are not counted either.
+  // Linux only adds the Claude sandbox setup step.
   const tools: ToolState[] = [{ tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '0.156.1' },
     { tool: 'claude', installation: 'installed', authentication: 'unknown', version: '0.3.296', sandbox: { bwrap: '/usr/bin/bwrap', socat: true, userns: 'apparmor' } }];
   const sandboxed = harness({ snapshot: async () => ({ ...snapshot([agent('cli_a')], [], tools), application: { platform: 'linux', version: '1', loginItem: false, dataPath: '/x' } }), admin: async () => ({ kind: 'setupStatus', status: setup }) });
   await runBotStatus(undefined, sandboxed.io(), sandboxed.daemon);
   const out = sandboxed.out();
-  expect(out).toMatch(/· Codex 的权限：只能用完全访问\n    Linux 上的 Codex 暂时只能用完全访问/);
+  expect(out).not.toContain('Codex 的权限：只能用完全访问');
   expect(out).toContain("! Claude 的权限：被 AppArmor 挡住\n");
   // The commands are not indented: an indented closing EOF would not end the heredoc when pasted into a shell.
   expect(out).toContain(["\n\nsudo tee /etc/apparmor.d/bwrap >/dev/null <<'EOF'", 'abi <abi/4.0>,', 'include <tunables/global>',
@@ -268,7 +268,7 @@ it('group bind sends an absolute folder, the chosen token and the pending name',
   await runGroupBind('oc_pay', { folder: 'pay', conversation: 'multi' }, h.io(), h.daemon, host);
   expect(directory).toHaveBeenCalledWith({ type: 'choose', path: join(home, 'work', 'pay') });
   expect(run).toHaveBeenLastCalledWith({ type: 'bindGroup', agentId: 'cli_a', groupId: 'oc_pay', projectName: '支付组', folder: { kind: 'existing', folderToken: token }, tool: 'codex', conversation: 'threads' });
-  expect(h.out()).toBe(`已绑定 支付组（oc_pay）→ ${join(home, 'work', 'pay')} · Codex · 多会话（@ 我开新会话） · 免 @ 开\nLinux 上的 Codex 暂时只能用完全访问，没有沙箱。运行：vonvon settings set --group oc_pay permission.mode=full\n`);
+  expect(h.out()).toBe(`已绑定 支付组（oc_pay）→ ${join(home, 'work', 'pay')} · Codex · 多会话（@ 我开新会话） · 免 @ 开\n`);
   await runGroupBind('oc_pay', { folder: '~/work/pay', name: '新名字', tool: 'claude', conversation: 'single' }, h.io(), h.daemon, host);
   expect(directory).toHaveBeenLastCalledWith({ type: 'choose', path: join(home, 'work', 'pay') });
   expect(run).toHaveBeenLastCalledWith(expect.objectContaining({ projectName: '新名字', tool: 'claude', conversation: 'shared' }));

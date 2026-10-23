@@ -623,7 +623,7 @@ export function buildJoinGroupFormCard(
     formItems.push(note(`🧠 后端 Agent：**${backends[0]!.label}**（绑定后固定）`));
   }
   formItems.push(note('🔒 权限：只读（不联网）。设置好以后在群详情页或私聊里改。'));
-  if (opts.fullOnly) formItems.push(note(`ℹ️ ${tierInfo(permissionTable(DEFAULT_BACKEND_ID), { platform: process.platform, fullOnly: opts.fullOnly }, 'qa').unavailable} 选 Codex 也能绑定，@ 我时我会回一句说明。要用，绑定后在群设置里改成完全访问。`));
+  if (opts.fullOnly) formItems.push(note(`ℹ️ ${opts.fullOnly} 选 Codex 也能绑定，@ 我时我会回一句说明。要用，绑定后在群设置里改成完全访问。`));
   formItems.push(...sessionModeItems('绑定', { a: DM.joinGroupSubmit, chatId: opts.chatId, ...(opts.topic ? { t: 'topic' } : {}) }, opts.topic));
   if (opts.hasOtherBots) formItems.push(note('群里还有别的 bot。几个 bot 都选智能，它们才能互相 @、各自判断接不接话。'));
   const group = opts.name ? `「${opts.name}」` : '一个群（没读到群名）';

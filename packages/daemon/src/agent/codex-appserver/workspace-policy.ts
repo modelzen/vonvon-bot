@@ -1,4 +1,8 @@
-import { isAbsolute, join, normalize, relative, sep } from 'node:path';
+import { isAbsolute, join, normalize, relative, sep, dirname, parse, resolve } from 'node:path';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { paths } from '../../config/paths';
+import { log } from '../../core/logger';
 import { z } from 'zod';
 import type { SessionProfile } from '../session-profile';
 import type { PermissionMode } from '../types';
@@ -46,15 +50,61 @@ export function codexWorkspaceRoots(opts: { cwd: string; mode?: PermissionMode; 
   return roots;
 }
 
-export function codexFilesystem(roots: readonly Root[], mode: 'qa' | 'write') {
+export type CodexInstallRoot = { path: string; kind: 'dir' | 'file' };
+const installRoots = new Map<string, { root: CodexInstallRoot; bin: string }>();
+const PackageSchema = z.object({ name: z.literal('@openai/codex') });
+
+function safeInstallRoot(candidate: CodexInstallRoot, bin: string, roots: readonly Root[]): CodexInstallRoot {
+  const shared = new Set([parse(candidate.path).root, homedir(), '/usr', '/usr/bin', '/usr/local', '/usr/local/bin', '/bin', '/opt']);
+  if (candidate.kind === 'dir' && (shared.has(candidate.path) || contains(candidate.path, paths.appDir)
+    || roots.some(root => contains(candidate.path, root.path)))) {
+    return { path: bin, kind: 'file' };
+  }
+  return candidate;
+}
+
+/** Resolve Codex's own runtime files, without granting access to shared directories. */
+export function codexInstallRoot(bin: string, roots: readonly Root[] = []): CodexInstallRoot {
+  const cached = installRoots.get(bin);
+  if (cached) return safeInstallRoot(cached.root, cached.bin, roots);
+  let target: string;
+  try { target = realpathSync(bin); }
+  catch (error) {
+    target = resolve(bin);
+    log.fail('agent', error, { phase: 'codex-install-root' });
+  }
+  let directory = dirname(target);
+  let candidate: CodexInstallRoot = { path: directory, kind: 'dir' };
+  for (;;) {
+    try {
+      const raw: unknown = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'));
+      if (PackageSchema.safeParse(raw).success) { candidate = { path: directory, kind: 'dir' }; break; }
+    } catch {}
+    const parent = dirname(directory);
+    if (parent === directory) break;
+    directory = parent;
+  }
+  candidate = safeInstallRoot(candidate, target, []);
+  installRoots.set(bin, { root: candidate, bin: target });
+  return safeInstallRoot(candidate, target, roots);
+}
+
+export function codexFilesystem(roots: readonly Root[], mode: 'qa' | 'write', installRoot?: CodexInstallRoot,
+  platform: NodeJS.Platform = process.platform, network = false) {
   const entries = roots.map(root => [root.path, {
     '.': mode === 'qa' ? 'read' : root.access,
-    ...Object.fromEntries(CODEX_PROTECTED_PATHS.map(path => [path, 'read'])),
+    ...Object.fromEntries(CODEX_PROTECTED_PATHS.filter(path => {
+      if (platform !== 'linux') return true;
+      try { lstatSync(join(root.path, path)); return true; } catch { return false; }
+    }).map(path => [path, 'read'])),
   }]);
-  // 0.162.1 scratch_access_roots retains explicit read restrictions as exclusions
-  // from implicit scratch grants. More-specific workspace entries remain writable.
+  const runtime: Record<string, { '.': string }> = {};
+  if (installRoot) runtime[installRoot.path] = { '.': 'read' };
+  if (platform === 'linux' && network) {
+    try { runtime[realpathSync('/etc/resolv.conf')] = { '.': 'read' }; } catch {}
+  }
   return { ':minimal': 'read', ':workspace_roots': { '.': 'read' },
-    '/private/tmp': { '.': 'read' }, '/private/var/tmp': { '.': 'read' }, ...Object.fromEntries(entries) };
+    '/private/tmp': { '.': 'read' }, '/private/var/tmp': { '.': 'read' }, ...runtime, ...Object.fromEntries(entries) };
 }
 
 const SandboxSchema = z.discriminatedUnion('type', [

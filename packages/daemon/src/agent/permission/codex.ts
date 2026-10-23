@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import { codexTierUnavailable } from '../codex-appserver/full-only';
+import { cachedCodexVersion, resolveCodexBin } from '../codex-appserver/locate';
+import type { TableEnv } from './types';
 import { PermissionInputError, permissionTiers, type PermissionTable, type Tier } from './types';
 
 const schema = z.object({
@@ -15,16 +18,34 @@ function mode(sandbox: z.infer<typeof schema>['sandbox']): Tier {
   return sandbox === 'read-only' ? 'qa' : sandbox === 'workspace-write' ? 'write' : 'full';
 }
 
+function versionFor(env: TableEnv): string | null | undefined {
+  if (env.codexVersion !== undefined) return env.codexVersion;
+  const bin = resolveCodexBin();
+  return bin ? cachedCodexVersion(bin) : undefined;
+}
+
 export const codexTable: PermissionTable = {
   backend: 'codex-appserver',
-  tiers: env => permissionTiers(env, {
-    qa: 'Codex：Read Only（read-only 沙箱）',
-    write: 'Codex：Default（workspace-write），比 Codex 自带的多开了网络',
-    full: 'Codex：Full Access（danger-full-access）',
-  }),
-  strength: env => env.fullOnly
-    ? 'Linux 上的 Codex 暂时只能用完全访问，没有沙箱。'
-    : '系统沙箱管住命令的读、写和联网：工作区以外的文件读不到，也改不了。',
+  tiers: env => {
+    const version = versionFor(env);
+    const rows = permissionTiers(env, {
+      qa: 'Codex：Read Only（read-only 沙箱）',
+      write: 'Codex：Default（workspace-write），比 Codex 自带的多开了网络',
+      full: 'Codex：Full Access（danger-full-access）',
+    });
+    for (const row of rows) {
+      const reason = codexTierUnavailable(row.tier, env.platform, version ?? null);
+      if (reason && version !== undefined) row.unavailable = reason;
+    }
+    return rows;
+  },
+  strength: env => {
+    const version = versionFor(env);
+    const reason = env.fullOnly ?? (version === undefined ? undefined : codexTierUnavailable('qa', env.platform, version));
+    if (reason) return reason;
+    return '系统沙箱管住命令的读、写和联网：工作区以外的文件读不到，也改不了。'
+      + (env.platform === 'linux' ? '工作区里原来没有的 .mcp.json、.claude/ 这类配置，能被新建。' : '');
+  },
   parseCustom,
   matchTier(settings) {
     const value = parseCustom(settings);

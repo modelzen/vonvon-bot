@@ -69,11 +69,11 @@ it('lists a group\'s queued messages a restart dropped as one record with their 
     .toContain('在原处回一句请重发没成功（最新那条撤回了），请告诉发消息的人重发。');
 });
 
-it('gives the full-only fix command, with --bot only when the host has several bots', () => {
+it('offers another tier or a Codex upgrade, with --bot only when the host has several bots', () => {
   const refused = {...agent, diagnostics: {deniedScopes: [], notReplied: [record({reason: 'tier-unavailable', backend: 'codex'})]}};
   const one = render([refused]);
-  expect(one).toContain('Linux 上的 Codex 只能用完全访问，这个群是只读或工作区可写，这一轮没开始');
-  expect(one).toContain('在群内设置里把「权限」改成「完全访问」，或者运行 vonvon settings set --group oc_bound_group permission.mode=full。');
+  expect(one).toContain('这个群的权限档位在当前 Codex 环境不可用，这一轮没开始');
+  expect(one).toContain('在群设置里换一档，或者升级 Codex。也可以运行 vonvon settings set --group oc_bound_group permission.mode=full。');
   expect(one).not.toContain('guestMode');
   const two = render([refused, {...agent, id: 'cli_other' as Agent['id'], name: '另一个'}]);
   expect(two).toContain('vonvon settings set --bot cli_diag --group oc_bound_group permission.mode=full');

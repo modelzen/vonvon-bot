@@ -23,6 +23,7 @@ export interface TierInfo {
 export interface PermissionEffect { mode: Tier; network: boolean }
 export interface TableEnv {
   platform: NodeJS.Platform;
+  codexVersion?: string | null;
   fullOnly?: string;
   supportedModes?: readonly Tier[];
 }

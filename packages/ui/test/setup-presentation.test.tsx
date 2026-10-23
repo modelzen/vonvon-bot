@@ -234,23 +234,21 @@ it('keeps a running Linux service done without linger, with a warning, and says 
 });
 
 const sandboxed = (sandbox?: NonNullable<ToolState['sandbox']>) => linuxSteps([tool({tool: 'codex'}), tool({tool: 'claude', ...(sandbox ? {sandbox} : {})})]);
-it('adds the Codex note and the Claude sandbox on Linux, only for tools that are installed', () => {
+it('adds only the Claude sandbox on Linux for installed tools', () => {
   expect(linuxSteps([tool({tool: 'codex', installation: 'missing'}), tool({tool: 'claude', installation: 'missing'})])).toEqual([]);
-  const [codex, claude] = sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'ok'});
-  expect(codex).toMatchObject({id: 'codex-linux', title: 'Codex 的权限', status: '只能用完全访问', tone: 'neutral', done: true, actions: []});
-  expect(codex?.detail).toContain('vonvon settings set --group <群 id> permission.mode=full');
+  const [claude] = sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'ok'});
   expect(claude).toMatchObject({id: 'claude-sandbox', status: '可以用', tone: 'success', done: true, commands: undefined});
-  expect(linuxSteps([tool({tool: 'codex', installation: 'unknown'})]).map(step => step.id)).toEqual(['codex-linux']);
-  expect(sandboxed()[1]).toMatchObject({status: '无法确认', tone: 'neutral'});
-  expect(sandboxed({bwrap: null, socat: false, userns: 'unchecked'})[1]).toMatchObject({status: '缺 bwrap、socat', tone: 'warning', commands: ['sudo apt install bubblewrap socat']});
-  expect(sandboxed({bwrap: '/usr/bin/bwrap', socat: false, userns: 'ok'})[1]).toMatchObject({status: '缺 socat', commands: ['sudo apt install socat']});
-  const apparmor = sandboxed({bwrap: '/home/u/bin/bwrap', socat: true, userns: 'apparmor'})[1];
+  expect(linuxSteps([tool({tool: 'codex', installation: 'unknown'})])).toEqual([]);
+  expect(sandboxed()[0]).toMatchObject({status: '无法确认', tone: 'neutral'});
+  expect(sandboxed({bwrap: null, socat: false, userns: 'unchecked'})[0]).toMatchObject({status: '缺 bwrap、socat', tone: 'warning', commands: ['sudo apt install bubblewrap socat']});
+  expect(sandboxed({bwrap: '/usr/bin/bwrap', socat: false, userns: 'ok'})[0]).toMatchObject({status: '缺 socat', commands: ['sudo apt install socat']});
+  const apparmor = sandboxed({bwrap: '/home/u/bin/bwrap', socat: true, userns: 'apparmor'})[0];
   expect(apparmor).toMatchObject({status: '被 AppArmor 挡住', tone: 'warning', done: false});
   expect(apparmor?.commands).toContain('profile bwrap /home/u/bin/bwrap flags=(unconfined) {');
   expect(apparmor?.commands?.at(-1)).toBe('sudo apparmor_parser -r /etc/apparmor.d/bwrap');
-  expect(sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'disabled', detail: 'kernel.unprivileged_userns_clone'})[1]).toMatchObject({status: '用户命名空间被关掉了', commands: ['sudo sysctl -w kernel.unprivileged_userns_clone=1']});
-  expect(sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'disabled', detail: 'user.max_user_namespaces'})[1]?.commands).toEqual(['sudo sysctl -w user.max_user_namespaces=15000']);
-  const failed = sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'failed', detail: 'bwrap: setting up uid map: Permission denied'})[1];
+  expect(sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'disabled', detail: 'kernel.unprivileged_userns_clone'})[0]).toMatchObject({status: '用户命名空间被关掉了', commands: ['sudo sysctl -w kernel.unprivileged_userns_clone=1']});
+  expect(sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'disabled', detail: 'user.max_user_namespaces'})[0]?.commands).toEqual(['sudo sysctl -w user.max_user_namespaces=15000']);
+  const failed = sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'failed', detail: 'bwrap: setting up uid map: Permission denied'})[0];
   expect(failed).toMatchObject({status: '沙箱起不来', commands: ['/usr/bin/bwrap --ro-bind / / --dev /dev --unshare-all --die-with-parent true']});
   expect(failed?.detail).toContain('bwrap 试跑失败：bwrap: setting up uid map: Permission denied。');
 });

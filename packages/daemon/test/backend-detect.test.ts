@@ -11,6 +11,7 @@ const detectState = { codexBin: null as string | null, codexVersion: null as str
 vi.mock('../src/agent/codex-appserver/locate', () => ({
   resolveCodexBin: vi.fn(() => detectState.codexBin),
   codexVersionAsync: vi.fn(async () => detectState.codexVersion),
+  cachedCodexVersion: () => detectState.codexVersion ?? undefined,
 }));
 
 import { detectAgents, effectiveDefaultBackend } from '../src/agent/detect';

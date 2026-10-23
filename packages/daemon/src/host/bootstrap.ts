@@ -3,6 +3,7 @@ import { paths } from '../config/paths';
 import { acquireMutex, closeMutex, DataAccessError } from '../config/data-access';
 import { listenerCloseUnconfirmed, observeShutdown, type ShutdownControl } from './lifecycle';
 import { readServiceCodexBin } from '../service/codex-bin';
+import { codexVersionAsync, resolveCodexBin } from '../agent/codex-appserver/locate';
 import { acquirePidLock, getPidLockInfo, isPidLockOwnerRunning, PidLockError, publishPidLock, readRunningPidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
 import { verifyPidLockOwner } from '../server/owner-verification';
 import { readStartupRegistration } from '../service/startup';
@@ -100,6 +101,14 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       const codexBin = readServiceCodexBin();
       if (codexBin === null) delete process.env.CODEX_BIN;
       else if (codexBin !== undefined) process.env.CODEX_BIN = codexBin;
+    }
+    // The supervisor and each bot child have their own version cache. Warm it after
+    // applying the managed binary selection, without holding startup on the probe.
+    try {
+      const bin = resolveCodexBin();
+      if (bin) void codexVersionAsync(bin).catch(error => log.fail('daemon-startup', error, { phase: 'codex-version' }));
+    } catch (error) {
+      log.fail('daemon-startup', error, { phase: 'codex-version' });
     }
     // JP-VPS acceptance seam (s17): a real uncaught exception or rejection in a host, 2 s into the run.
     const seam = process.env.VONVON_TEST_CRASH;

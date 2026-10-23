@@ -6,7 +6,7 @@ import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
 import { BackendNotInstalledError } from '../src/agent/backend-loader';
-import { CODEX_FULL_ONLY, CodexFullOnlyError } from '../src/agent/codex-appserver/full-only';
+import { codexFullOnlyReason, CodexFullOnlyError } from '../src/agent/codex-appserver/full-only';
 import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
 import { DM, PERMISSION_CARD_VERSION } from '../src/card/dm-cards';
 import { addProject, getProjectByName, removeProject, type Project } from '../src/project/registry';
@@ -142,7 +142,9 @@ describe('gates', () => {
   });
 });
 
-describe('Codex that runs only in 完全访问 (Linux)', () => {
+const CODEX_FULL_ONLY = codexFullOnlyReason('codex-cli 0.162.0');
+
+describe('Codex too old for restricted permissions', () => {
   beforeEach(() => { fake.fullOnly = CODEX_FULL_ONLY; });
 
   it('answers an @ in the main area without starting a session', async () => {

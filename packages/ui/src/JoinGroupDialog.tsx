@@ -75,8 +75,8 @@ export function initialGroupProvider(initialProvider?: ProviderTool, tools?: Too
   if (initialProvider && ready(initialProvider)) return initialProvider;
   return (['codex', 'claude'] as const).find(ready);
 }
-type Props = {linux?: boolean; open?: boolean; agent: Agent; pending?: PendingAgentGroups; initialGroup?: PendingGroup; initialProvider?: ProviderTool; tools?: ToolState[]; onClose: () => void; onChanged: (target: {agentId: Agent['id']; chatId: string}) => Promise<void>; onOpenProviders?: () => void; onOpenDecisionModel?: () => void};
-export function JoinGroupDialog({linux, open = true, agent, pending, initialGroup, initialProvider, tools, onClose, onChanged, onOpenProviders, onOpenDecisionModel}: Props) {
+type Props = {open?: boolean; agent: Agent; pending?: PendingAgentGroups; initialGroup?: PendingGroup; initialProvider?: ProviderTool; tools?: ToolState[]; onClose: () => void; onChanged: (target: {agentId: Agent['id']; chatId: string}) => Promise<void>; onOpenProviders?: () => void; onOpenDecisionModel?: () => void};
+export function JoinGroupDialog({open = true, agent, pending, initialGroup, initialProvider, tools, onClose, onChanged, onOpenProviders, onOpenDecisionModel}: Props) {
   const {navigate} = useDraftGuard();
   const client = useClient();
   const pickDirectory = useDirectoryPicker();
@@ -220,7 +220,6 @@ export function JoinGroupDialog({linux, open = true, agent, pending, initialGrou
         {freeAt && <SettingsGroup>
           <SettingsRow className="group-choice-row" title="响应方式" trailing={<SettingChoices label="免 @" disabled={busy} value={freeAt} choices={[{value: 'all', label: '无需 @'}, {value: 'mention', label: '仅 @ 时'}]} onChange={value => setResponse(value === 'all' ? 'all' : 'mention')}/>} />
         </SettingsGroup>}
-        {linux && mode.kind === 'bind' && tool === 'codex' && <InlineNotice title="Linux 上的 Codex 只能用完全访问" tone="info">连接后，在群设置中改为完全访问才能使用。</InlineNotice>}
         <Button variant="primary" loading={busy} disabled={locked || !tool || !ready(tool) || !name.trim() || Boolean(nameProblem) || (existingDirectory && !folder) || !conversation || Boolean(judgeProblem)} onClick={() => void save()}>{mode.kind === 'create' ? '创建并连接' : '连接并发送欢迎卡片'}</Button>
       </>}
       {mode.kind === 'create' && lock && <CreationLockNotice failure={lock} />}
