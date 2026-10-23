@@ -11,7 +11,8 @@ import { controlDesktopService, type DesktopServiceStatus } from '../host/servic
 import { liveServiceActionRecord, readServiceSkipped } from '../service/action-report';
 import { isTranslocated, runtimeDistribution, type Distribution } from '../service/distribution';
 import { bridgeVersion } from '../core/version';
-import { projectState } from './projection';
+import { projectLibrary, projectState } from './projection';
+import { libraryLocation, readLibrary } from '../project/library';
 import { readAdminState } from './state';
 import {readRecentConversations} from './recent-conversations';
 
@@ -119,6 +120,8 @@ export async function createSnapshotStore(options: {
     // The report and the skip flag are files, re-read here: a helper's result shows within one 5 s rebuild.
     const service = serviceView();
     const projected = projectState(state, snapshot, new Set());
+    // An unreadable library keeps the last list: the bindings still show, and the next read tries again.
+    const projects = await readLibrary(libraryLocation(root)).then(library => projectLibrary(library.projects, projected.memberships), () => snapshot.projects ?? []);
     options.diagnostics?.retain(new Set(projected.agents.map(agent => agent.id)));
     const agents = projected.agents.map(agent => {
       const diagnostics = options.diagnostics?.view(agent.id);
@@ -130,7 +133,7 @@ export async function createSnapshotStore(options: {
     const login = claudeLogin?.();
     const shownTools = login ? tools.map(tool => tool.tool === 'claude' && tool.installation === 'installed' ? { ...tool, authentication: login.state, message: login.message } : tool) : tools;
     const next = {
-      ...snapshot, ...projected, agents, tools: shownTools,
+      ...snapshot, ...projected, projects, agents, tools: shownTools,
       application: { ...base, loginItem, ...(service ? { service } : {}), ...(options.crashes ? { crashes: options.crashes.application(Date.now()) } : {}) },
       jobs: options.jobs(),
       recentConversations: await readRecentConversations(root,projected.memberships),

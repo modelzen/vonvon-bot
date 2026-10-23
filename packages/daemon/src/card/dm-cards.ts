@@ -589,6 +589,11 @@ function sessionModeItems(verb: string, value: ActionValue, topic = false): Card
   ];
 }
 
+/** The 项目 pick from the setup card: 'join' (also when left unpicked) or 'new'. Anything else counts as unpicked. */
+export function parseProjectPick(formValue: Record<string, unknown> | undefined): 'join' | 'new' {
+  return formValue?.project === 'new' ? 'new' : 'join';
+}
+
 /** The 免@ pick from {@link sessionModeItems}; undefined when left unpicked. */
 export function parseNoMentionPick(formValue: Record<string, unknown> | undefined): boolean | undefined {
   const v = formValue?.noMention;
@@ -604,7 +609,10 @@ export function parseNoMentionPick(formValue: Record<string, unknown> | undefine
  */
 export function buildJoinGroupFormCard(
   opts: { chatId: string; name?: string; cwd?: string; error?: string; backends?: SelectOption[];
-    backend?: string; topic?: boolean; hasOtherBots?: boolean; addedBy?: { name?: string }; fullOnly?: string },
+    backend?: string; topic?: boolean; hasOtherBots?: boolean; addedBy?: { name?: string }; fullOnly?: string;
+    /** The project another bot already works in for this group: the card then offers it next to a new one. Only the name
+     * goes on the card; the daemon looks the project up again on submit, so no id can be posted back (§5.6). */
+    sibling?: { name: string } },
 ): CardObject {
   const elements: CardElement[] = [];
   if (opts.error) elements.push(md(`❌ **绑定失败**：${opts.error}`));
@@ -621,6 +629,15 @@ export function buildJoinGroupFormCard(
     );
   } else if (backends.length === 1) {
     formItems.push(note(`🧠 后端 Agent：**${backends[0]!.label}**（绑定后固定）`));
+  }
+  if (opts.sibling) {
+    formItems.push(
+      note('📁 项目：同一个群的 Bot 默认共用项目；要分开就新建。别的项目只能在网页端选。'),
+      selectMenu({ name: 'project', placeholder: '选择项目', initial: 'join', options: [
+        { label: `加入本群已有的项目「${opts.sibling.name}」`, value: 'join' },
+        { label: `新建项目「${opts.name || '本群'}」`, value: 'new' },
+      ] }),
+    );
   }
   formItems.push(note('🔒 权限：只读（不联网）。设置好以后在群详情页或私聊里改。'));
   if (opts.fullOnly) formItems.push(note(`ℹ️ ${tierInfo(permissionTable(DEFAULT_BACKEND_ID), { platform: process.platform, fullOnly: opts.fullOnly }, 'qa').unavailable} 选 Codex 也能绑定，@ 我时我会回一句说明。要用，绑定后在群设置里改成完全访问。`));

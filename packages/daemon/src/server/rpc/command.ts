@@ -49,7 +49,7 @@ export async function commandRpc(options: { service: AdminService; jobs: Jobs; p
       await requireRunningAgent(service, request.agentId);
       if (!service.bindGroup) return unsupported();
       if (request.conversation === 'smart' && request.response !== undefined) throw new RpcError('invalid_request', `${SMART_NO_MENTION}。`);
-      await service.bindGroup(request.agentId, { chatId: request.groupId, projectName: request.projectName, directory: request.folder.kind === 'existing' ? await directory.resolve(request.folder.folderToken) : undefined, backend: request.tool === 'codex' ? 'codex-appserver' : 'claude-agent', kind: conversationToMode(request.conversation), ...(request.judge ? {judge:request.judge} : {}), ...(request.response ? { noMention: request.response === 'all' } : {}) });
+      await service.bindGroup(request.agentId, { chatId: request.groupId, projectName: request.projectName, directory: request.folder.kind === 'existing' ? await directory.resolve(request.folder.folderToken) : undefined, ...(request.project ? { project: request.project } : {}), backend: request.tool === 'codex' ? 'codex-appserver' : 'claude-agent', kind: conversationToMode(request.conversation), ...(request.judge ? {judge:request.judge} : {}), ...(request.response ? { noMention: request.response === 'all' } : {}) });
       return applied;
     }
     case 'setPermission': case 'setResponse': {

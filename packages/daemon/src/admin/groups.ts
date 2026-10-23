@@ -8,6 +8,7 @@ import { isAbsolute } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { bindModeFor, joinExistingGroup } from '../project/lifecycle';
 import { listProjects, type Project, type SessionMode } from '../project/registry';
+import { isProjectId } from '../project/library';
 import { log } from '../core/logger';
 import { feishuError, scopeDenial } from '../utils/feishu-error';
 import { AdminWriteError } from './ops';
@@ -16,6 +17,8 @@ export interface BindGroupInput {
   chatId: string;
   projectName: string;
   directory?: string;
+  /** Join this library project (its id) instead of making one; with no folder and no project, a group unbound before comes back to its own. */
+  project?: string;
   backend: 'codex-appserver' | 'claude-agent';
   kind: SessionMode;
   /** 免@; left out → 3.4's default for `kind`. 智能 has none and refuses it. */
@@ -48,8 +51,9 @@ export class InvalidGroupInput extends Error { readonly code = 'INVALID_GROUP_IN
 export const SMART_NO_MENTION = '智能开话题由 Bot 判断回不回，没有免 @';
 
 export function parseBindGroupInput(raw: Record<string, unknown>): BindGroupInput {
-  const { chatId, projectName, directory, backend, kind, noMention, judge } = raw;
-  if (Object.keys(raw).some(key => !['chatId', 'projectName', 'directory', 'backend', 'kind', 'noMention', 'judge'].includes(key)) ||
+  const { chatId, projectName, directory, project, backend, kind, noMention, judge } = raw;
+  if (Object.keys(raw).some(key => !['chatId', 'projectName', 'directory', 'project', 'backend', 'kind', 'noMention', 'judge'].includes(key)) ||
+      (project !== undefined && (!isProjectId(project) || directory !== undefined)) ||
       typeof chatId !== 'string' || !/^oc_[\w-]{1,200}$/.test(chatId) ||
       typeof projectName !== 'string' || !projectName.trim() || projectName.length > 200 || /[\x00-\x1f]/.test(projectName) ||
       (directory !== undefined && (typeof directory !== 'string' || !isAbsolute(directory) || directory.length > 4096 || /[\x00-\x1f]/.test(directory))) ||
@@ -58,7 +62,7 @@ export function parseBindGroupInput(raw: Record<string, unknown>): BindGroupInpu
   }
   if (judge !== undefined && !groupDecisionSchema.safeParse(judge).success) throw new InvalidGroupInput('决策模型设置无效');
   if (kind === 'smart' && noMention !== undefined) throw new InvalidGroupInput(SMART_NO_MENTION);
-  return { chatId, projectName: projectName.trim(), directory, backend, kind, ...(judge === undefined ? {} : {judge: groupDecisionSchema.parse(judge)}), ...(noMention === undefined ? {} : { noMention }) };
+  return { chatId, projectName: projectName.trim(), directory, ...(project === undefined ? {} : { project }), backend, kind, ...(judge === undefined ? {} : {judge: groupDecisionSchema.parse(judge)}), ...(noMention === undefined ? {} : { noMention }) };
 }
 
 export function parseJoinedGroups(raw: unknown): JoinedGroups {
@@ -126,7 +130,7 @@ export function createGroupExecutor(channel: LarkChannel, identity: BotIdentity,
     if (membership.code !== 0 || typeof membership.data?.is_in_chat !== 'boolean') refused('bind-group', membership, '无法确认机器人群成员身份');
     if (!membership.data.is_in_chat) throw new AdminWriteError('机器人不在此群中');
     try {
-      return await joinExistingGroup(channel, { bot, name: input.projectName, chatId: input.chatId, existingPath: directory, projectsRootDir, backend: input.backend, kind: input.kind, noMention: input.noMention, judge: input.judge, mode: bindModeFor(input.backend) }, location);
+      return await joinExistingGroup(channel, { bot, name: input.projectName, chatId: input.chatId, existingPath: directory, project: input.project, projectsRootDir, backend: input.backend, kind: input.kind, noMention: input.noMention, judge: input.judge, mode: bindModeFor(input.backend) }, location);
     } catch (error) {
       throw new AdminWriteError(error instanceof Error ? error.message : '群绑定失败');
     }

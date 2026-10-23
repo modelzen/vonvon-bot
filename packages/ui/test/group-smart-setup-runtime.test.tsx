@@ -113,7 +113,7 @@ it('shows attention beside the smart conversation control on 回复规则 and hi
   expect(ui.header.some(node => node.props.label === '聊天方式')).toBe(true);
   expect(ui.content.some(node => node.type === GroupAttentionStatus)).toBe(true);
 
-  ui.workspace.find(node => node.type === 'button' && node.props.children === '个性与记忆')!.props.onClick();
+  ui.workspace.find(node => node.type === 'button' && node.props.children === '补充职责')!.props.onClick();
   ui = await settled();
   expect(ui.content.some(node => node.type === GroupAttentionStatus)).toBe(false);
   ui.workspace.find(node => node.type === 'button' && node.props.children === '回复规则')!.props.onClick();

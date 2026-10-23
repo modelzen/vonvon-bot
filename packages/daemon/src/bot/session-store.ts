@@ -68,8 +68,37 @@ export interface SessionRecord {
    * ordinary turn and then dropped (product.md 3.5 "撤回和编辑"). Ids, times and
    * open_ids only, never text. Older records lack it. */
   recalls?: RecallNote[];
+  /** What the session was last handed of vonvon's role, supplement and memory (bot/context-assembly.ts). A record
+   * without it is an older session: its next turn gets the whole thing again. */
+  context?: SessionContext;
   createdAt: number;
   updatedAt: number;
+}
+
+/** What one memory looked like when the session last got it: `[text hash, branch, 1 if trusted]` per active entry. */
+export interface MemoryDelivered {
+  storeId: string;
+  lastEventId?: string;
+  /** The branch list the model was told, in order. */
+  branches: string[];
+  items: Record<string, [string, string, 0 | 1]>;
+}
+export interface SessionContext {
+  /** Section → version of what was last delivered. */
+  versions: Record<string, string>;
+  /** Random per session, changed at each whole redelivery; the update blocks and `<vonvon-mem>` carry it. */
+  nonce: string;
+  /** Marks this session was given before (the opening's, earlier redeliveries'): the model may still use them, so they still count. */
+  previousNonces?: string[];
+  /** A compaction ended since: the next turn hands over everything again. */
+  fullRedeliverDue?: boolean;
+  memory?: Record<string, MemoryDelivered>;
+  lastTurn?: { at: number; injected: number; used: string[]; /** reasons of the hidden blocks not taken (3.4), no text */ missed?: string[] };
+}
+
+/** Every mark the session may be using: the current one first. */
+export function acceptedNonces(context: Pick<SessionContext, 'nonce' | 'previousNonces'> | undefined): string[] {
+  return context ? [context.nonce, ...(context.previousNonces ?? [])] : [];
 }
 
 /** A recalled message the session got: its id and send time, who sent it, and
@@ -292,14 +321,14 @@ function withLock<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-async function write(store: StoreFile, beforeCommit?: () => void): Promise<void> {
-  await mkdir(dirname(paths.sessionsFile), { recursive: true });
-  const tmp = `${paths.sessionsFile}.tmp-${process.pid}-${randomUUID()}`;
+async function write(store: StoreFile, beforeCommit?: () => void, file: string = paths.sessionsFile): Promise<void> {
+  await mkdir(dirname(file), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}-${randomUUID()}`;
   const body: StoreFile = { ...store, version: FILE_VERSION };
   try {
     await writeFile(tmp, `${JSON.stringify(body, null, 2)}\n`, 'utf8');
     beforeCommit?.();
-    await rename(tmp, paths.sessionsFile);
+    await rename(tmp, file);
   } finally { await unlink(tmp).catch(() => undefined); }
 }
 
@@ -312,15 +341,24 @@ export async function getSession(threadId: string): Promise<SessionRecord | unde
 }
 
 export async function detachSessionsForChat<T>(chatId: string, commit: () => Promise<T>): Promise<T> {
+  return detachSessionsForChatIn(paths.sessionsFile, chatId, commit);
+}
+
+/**
+ * {@link detachSessionsForChat} on a named sessions.json, for the host archiving the sessions of a bot that is not
+ * running (a workspace change reaches every bot of a project, memory design §2.1). Only safe while no process owns
+ * that bot's files: the in-process lock here does not cover another process.
+ */
+export async function detachSessionsForChatIn<T>(file: string, chatId: string, commit: () => Promise<T>): Promise<T> {
   return withLock(async () => {
-    const store = await read();
+    const store = await readStoreIn(file);
     const original = structuredClone(store);
     for (const session of store.sessions) if (session.chatId === chatId) session.detached = true;
-    await write(store);
+    await write(store, undefined, file);
     try {
       return await commit();
     } catch (error) {
-      await write(original);
+      await write(original, undefined, file);
       throw error;
     }
   });
