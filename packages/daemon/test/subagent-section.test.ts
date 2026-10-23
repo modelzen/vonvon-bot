@@ -1,6 +1,8 @@
 import { expect, it } from 'vitest';
-import { buildSubagentSection, subagentElementIds } from '../src/card/subagent-section';
+import { buildSubagentSection, subagentElementIds, SUBAGENT_COMPONENT_BUDGET } from '../src/card/subagent-section';
+import { RUNTIME_SUBAGENT_ICON, RUNTIME_TERMINAL_ICON } from '../src/card/runtime-card-icons';
 import { buildRunCard, buildRunCardPlain } from '../src/card/run-card';
+import { statusSymbol } from '../src/card/process-status';
 import { initialState, reduce, type SubagentRow, type RunState } from '../src/card/run-state';
 const rows = (n: number): SubagentRow[] => Array.from({ length: n }, (_, i) => ({ id: `id${i}`, name: `name${i}!`, task: `task${i}!`, status: 'running', startedAt: i, stepCount: 7,
   steps: Array.from({ length: 5 }, (_, j) => ({ stepId: String(j), title: `step${j}`, status: 'done' })), stoppable: true }));
@@ -13,10 +15,14 @@ const buttons = (value: unknown) => objects(value).filter(o => o.tag === 'button
 const panels = (value: unknown) => objects(value).filter(o => o.tag === 'collapsible_panel');
 const valueOf = (value: unknown) => objects(value).find(o => o.a);
 const json = JSON.stringify;
+const visible = (value: unknown) => json(value).replace(/<[^>]*>/gu, '');
+const budget = (built: ReturnType<typeof section>) => built.components + panels(built).length * 2;
+// Native icon properties are not standalone card components.
+const componentObjects = (value: unknown) => objects(value).filter(o => o.tag && o.tag !== 'standard_icon' && o.tag !== 'custom_icon');
 it('renders stable collapsed identities, total steps, results and routed stop controls', () => {
   const list = rows(2); list[1] = { ...list[1]!, status: 'completed', result: 'review passed', endedAt: 1000 };
   const built = section(list), text = json(built);
-  expect(text).toContain('子 agent · 1 个在跑 · 1 个已完成');
+  expect(visible(built)).toContain('子 agent · 1 个运行中 · 1 个已完成');
   expect(panels(built)).toHaveLength(2);
   expect(panels(built).every(p => p.expanded === false)).toBe(true);
   expect(text).toContain('前面还有 2 步'); expect(text).toContain('review passed');
@@ -38,15 +44,16 @@ it('suppresses controls for un-stoppable, plain and terminal cards', () => {
   expect(json(buildRunCardPlain({ rs }))).not.toContain('run.stopSub');
   const text = json(buildRunCard({ rs: { ...rs, terminal: 'done', subagents: rows(40) }, cardKey: 'm1' }));
   for (const r of rows(40)) expect(text).toContain(`${r.name}：${r.task}`);
-  expect(text.match(/没收到结束消息/g)).toHaveLength(40); expect(text).toContain('⚠️');
+  expect(text.match(/没收到结束消息/g)).toHaveLength(40); expect(text).toContain(statusSymbol('unknown'));
   expect(text).not.toMatch(/run.stopSub|run.subPage/);
 });
-it('keeps waiting visible and terminal labels in headers, with nesting', () => {
+it('keeps waiting visible and terminal status marks in headers, with nesting', () => {
   const list = rows(4); list[1]!.parentId = 'id0'; list[2]!.parentId = 'id1'; list[3]!.parentId = 'absent';
   expect(panels(section(list)).map(p => p.margin)).toEqual(['0px 0px 0px 0px', '0px 0px 0px 16px', '0px 0px 0px 32px', '0px 0px 0px 16px']);
   list[1]!.status = 'failed'; list[2]!.status = 'stopped';
   const text = json(section(list, { waiting: { subagentId: 'id0', label: '⏸ 等 张三 回答（见下方卡片）' } }));
-  expect(text.match(/见下方卡片/g)).toHaveLength(1); expect(text).toContain(' · 失败'); expect(text).toContain(' · 已停止');
+  expect(text.match(/见下方卡片/g)).toHaveLength(1); expect(text).toContain(statusSymbol('failed')); expect(text).toContain(statusSymbol('stopped'));
+  expect(text).toContain(statusSymbol('waiting')); expect(text).not.toContain('⏸');
   const built = section(rows(9), { waiting: { subagentId: 'id8', label: '⏸ 等 张三 回答（见下方卡片）' } });
   expect(panels(built).slice(0, 8).map(p => p.element_id)).toContain(subagentElementIds('id8').panel);
   expect(panels(built).slice(0, 8).map(p => p.element_id)).not.toContain(subagentElementIds('id0').panel);
@@ -56,14 +63,14 @@ it('prioritizes active and failed rows and summarizes completed overflow', () =>
   const list = rows(12).map((r, i) => ({ ...r, status: i < 3 ? 'running' : i === 3 ? 'failed' : 'completed' } satisfies SubagentRow));
   const built = section(list);
   expect(panels(built).slice(0, 8).map(p => p.element_id)).toEqual(list.slice(0, 8).map(r => subagentElementIds(r.id).panel));
-  expect(json(built)).toContain('另有 4 个已完成'); expect(built.components).toBeLessThanOrEqual(34);
+  expect(json(built)).toContain('另有 4 个已完成'); expect(budget(built)).toBeLessThanOrEqual(SUBAGENT_COMPONENT_BUDGET);
 });
 it('paginates all active overflow with stable unique controls and bounded budget', () => {
   const small = section(rows(12)); expect(buttons(small)).toHaveLength(12); expect(json(small)).not.toContain('sp_next');
   const identities: unknown[] = [];
   for (const page of [0, 1]) {
     const built = section(rows(40), { page }), more = panels(built).at(-1)!;
-    expect(built.components).toBeLessThanOrEqual(84);
+    expect(budget(built)).toBeLessThanOrEqual(SUBAGENT_COMPONENT_BUDGET);
     const ids = objects(built).flatMap(o => o.element_id ? [o.element_id] : []);
     expect(new Set(ids).size).toBe(ids.length);
     expect(json(more)).toContain(`下一页（${page + 1}/2）`);
@@ -85,8 +92,10 @@ it('integrates section before answer with shared process budget and waiting foot
       { kind: 'text', id: `progress${i}`, content: `progress${i}`, streaming: false },
     ] satisfies RunState['blocks']).flat(),
     { kind: 'text', id: 'answer', content: 'final answer', streaming: false }] };
-  const card = buildRunCard({ rs }), without = buildRunCard({ rs: { ...rs, subagents: [] } });
-  expect(objects(card).filter(o => o.tag).length - objects(without).filter(o => o.tag).length).toBeLessThanOrEqual(2);
+  const card = buildRunCard({ rs });
+  // Flat steps and nested parent panels consume different amounts of the
+  // shared budget. Check its limit instead of comparing their object counts.
+  expect(componentObjects(card).length).toBeLessThanOrEqual(120);
   expect(json(card).indexOf('tool0')).toBeLessThan(json(card).indexOf('name0!'));
   expect(json(card).indexOf('name0!')).toBeLessThan(json(card).indexOf('final answer'));
   const waiting = { ...rs, subagents: rows(1), awaitingSubagents: true as const };
@@ -104,8 +113,69 @@ it('keeps every reducer identity reachable across pages beyond 64 children', () 
   const visible = new Set<unknown>();
   for (let page = 0; page < 3; page++) {
     const built = section(state.subagents, { page });
-    expect(built.components).toBeLessThanOrEqual(84);
+    expect(budget(built)).toBeLessThanOrEqual(SUBAGENT_COMPONENT_BUDGET);
     for (const b of buttons(built)) { const value = valueOf(b); if (value?.a === 'run.stopSub') visible.add(value.subagentId); }
   }
   expect([...visible].sort()).toEqual(state.subagents.map(row => row.id).sort());
+});
+
+it('uses the selected robot identity and the existing command, search and file icons', () => {
+  const list = rows(1);
+  list[0]!.steps = [
+    { stepId: 'shell', title: 'opencli twitter search SpaceX', kind: 'command', status: 'done' },
+    { stepId: 'search', title: '搜索 SpaceX', kind: 'search', status: 'running' },
+    { stepId: 'file', title: '读取 report.md', kind: 'file', status: 'failed' },
+  ];
+  const built = section(list);
+  const icons = objects(built).filter(o => o.tag === 'standard_icon').map(o => o.token);
+  expect(icons).toContain(RUNTIME_SUBAGENT_ICON);
+  expect(icons).toContain(RUNTIME_TERMINAL_ICON);
+  expect(icons).toContain('search_outlined');
+  expect(icons).toContain('wiki-book_outlined');
+  const text = json(built);
+  expect(text).toContain(`opencli twitter search SpaceX ${statusSymbol('completed')}`);
+  expect(text).toContain(`搜索 SpaceX ${statusSymbol('running')}`);
+  expect(text).toContain(`读取 report.md ${statusSymbol('failed')}`);
+  expect(text).not.toMatch(/🔄|✅|❌/);
+});
+
+it('uses the same state symbols as the parent process without replacing identity and operation icons', () => {
+  const list = rows(4);
+  list[0]!.task = '';
+  list[1]!.status = 'completed'; list[2]!.status = 'failed'; list[3]!.status = 'stopped';
+  list[2]!.steps = [{ stepId: 'failed', title: 'opencli reddit read SpaceX', kind: 'command', status: 'failed' }];
+  const built = section(list);
+  const headers = panels(built).map(panel => (panel.header as { title: { content: string } }).title.content);
+  expect(headers[0]).toContain('name0!</font>');
+  expect(headers[0]).toContain(statusSymbol('running'));
+  expect(headers[0]).not.toContain('：');
+  expect(headers[1]).toContain(statusSymbol('completed'));
+  expect(headers[2]).toContain(statusSymbol('failed'));
+  expect(headers[3]).toContain(statusSymbol('stopped'));
+  expect(headers.join(' ')).not.toMatch(/运行中|已完成|失败|已停止/);
+  expect(json(built)).not.toContain('在跑');
+  const failedStep = objects(built).find(o => typeof o.content === 'string' && o.content.includes('opencli reddit read SpaceX'))!;
+  expect(failedStep.content).toContain(statusSymbol('failed'));
+  expect(failedStep.icon).toMatchObject({ token: RUNTIME_TERMINAL_ICON, color: 'grey' });
+  const pending = section(list, { waiting: { subagentId: list[0]!.id, label: '等张三回答' } });
+  expect(json(pending)).toContain(statusSymbol('waiting'));
+  expect(visible(pending)).toContain('1 个等待处理');
+  const unknown = section(rows(1), { running: false, terminal: 'done' });
+  expect(visible(unknown)).toContain('1 个状态未知');
+  expect(visible(unknown)).not.toContain('1 个运行中');
+});
+
+it('compacts crowded agent details without losing steps, results or stop controls', () => {
+  const list = rows(40);
+  for (const row of list) {
+    row.result = `result-${row.id}`;
+    row.steps = row.steps.map((step, i) => ({ ...step, title: `command-${row.id}-${i}`, kind: 'command' }));
+  }
+  const built = section(list), text = json(built);
+  expect(budget(built)).toBeLessThanOrEqual(SUBAGENT_COMPONENT_BUDGET);
+  expect(buttons(built)).toHaveLength(33);
+  for (const row of list.slice(0, 8)) {
+    for (const step of row.steps) expect(text).toContain(step.title);
+    expect(text).toContain(row.result);
+  }
 });

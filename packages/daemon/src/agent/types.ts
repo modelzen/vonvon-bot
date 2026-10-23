@@ -191,7 +191,7 @@ export function parseAskRequest(raw: unknown): AskRequest {
 /** Normalized stream events, mapped from app-server notifications. */
 export type AgentEvent =
   | { type: 'subagent_start'; id: string; parentId?: string; name: string; task: string; stoppable: boolean }
-  | { type: 'subagent_step'; id: string; stepId: string; title: string; status: 'running' | 'done' | 'failed' }
+  | { type: 'subagent_step'; id: string; stepId: string; title: string; status: 'running' | 'done' | 'failed'; kind?: ToolKind; detail?: string }
   | { type: 'subagent_status'; id: string; status: 'running' | 'completed' | 'failed' | 'stopped'; result?: string }
   | { type: 'system'; threadId: string }
   | { type: 'turn_started'; turnId: string }

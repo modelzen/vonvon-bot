@@ -169,8 +169,12 @@ describe('Claude 子 agent 事件', () => {
     expect(mapper.map(tools)).toEqual([]);
     mapper.map(startAgent());
     expect(mapper.map(tools)).toEqual(['one', 'two'].map((stepId) => ({
-      type: 'subagent_step', id: 'child', stepId, title: '读取 a.ts', status: 'running',
+      type: 'subagent_step', id: 'child', stepId, title: '读取 a.ts', status: 'running', kind: 'file', detail: undefined,
     })));
+    expect(mapper.map(child('assistant', [{ type: 'tool_use', id: 'bash', name: 'Bash',
+      input: { command: 'pwd', description: '检查目录' } }]))).toEqual([
+      { type: 'subagent_step', id: 'child', stepId: 'bash', title: 'pwd', status: 'running', kind: 'command', detail: '检查目录' },
+    ]);
     expect(mapper.map(child('user', [
       { type: 'tool_result', tool_use_id: 'two', is_error: true },
       { type: 'tool_result', tool_use_id: 'one' },
