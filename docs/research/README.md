@@ -241,3 +241,10 @@ codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次�
 | 报告 | 内容 | 说明 |
 | --- | --- | --- |
 | [provider-design](2026-10-22-provider-design/report.md) | HarnessRouter、Magpie 固定源码与 UI 参考；Provider 首次准备、日常管理及群模型范围 | 方案与独立交互设计稿，等待 owner 确认；未改实际应用 |
+
+## 2026-10-23 工作目录权限
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [report](2026-10-23-permissions/report.md) | 沿用 bridge 的三档在多 provider 下是否合理；owner 定的方向（透传各家原生设置、越界拒绝、不做外层沙箱）；Codex 在 Linux 上的实测 | 实测证实用户 `~/.codex/rules` 的 allow 规则能绕过沙箱（#486）；0.163.0 的权限 profile 在 Linux 上能挡读 |
+| [native-codex-claude-gemini](2026-10-23-permissions/native-codex-claude-gemini.md)、[native-other-agents](2026-10-23-permissions/native-other-agents.md)、[hosts-and-sandboxes](2026-10-23-permissions/hosts-and-sandboxes.md) | 15 家 agent 的原生权限模型；ACP、Zed、Paseo 等宿主和外层沙箱的做法 | 子代理据文档和源码写成，没有核实记录，用前核对 |
