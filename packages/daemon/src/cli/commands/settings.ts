@@ -231,6 +231,15 @@ export async function runSettingsGet(section: string | undefined, target: Target
       const permission = value.stored as ProjectSettingsView['sections']['permission']['stored'];
       const options = permission.options;
       human.push(`  权限：${options?.invalid ? '高级设置读不出来，现在按只读跑' : options?.customSummary ? `自定义（${options.customSummary}）${options.legacy ? '（从旧版的联网开关转来）' : ''}` : TIER_NAMES[permission.mode]}`);
+      if (options?.fields?.length) {
+        human.push('    高级设置（permission.custom）：');
+        for (const field of options.fields) {
+          const values = field.kind === 'choice' ? field.choices?.map(choice => choice.value).join(' | ')
+            : field.kind === 'switch' ? 'true | false' : '["github.com", …]';
+          const condition = field.showWhen ? `（${field.showWhen.key}=${field.showWhen.in.join(' | ')} 时）` : '';
+          human.push(`      ${field.key}  ${field.label}：${values ?? ''}${condition}`);
+        }
+      }
     }
     if (name === 'permission' && fullOnly) human.push(`  ${fullOnly}`);
     if (name === 'judge') {

@@ -14,6 +14,7 @@ function parseCustom(raw: unknown): z.infer<typeof schema> {
 function mode(sandbox: z.infer<typeof schema>['sandbox']): Tier {
   return sandbox === 'read-only' ? 'qa' : sandbox === 'workspace-write' ? 'write' : 'full';
 }
+const sandboxes = { qa: 'read-only', write: 'workspace-write', full: 'danger-full-access' } as const;
 
 export const codexTable: PermissionTable = {
   backend: 'codex-appserver',
@@ -25,6 +26,14 @@ export const codexTable: PermissionTable = {
   strength: env => env.fullOnly
     ? 'Linux 上的 Codex 暂时只能用完全访问，没有沙箱。'
     : '系统沙箱管住命令的读、写和联网：工作区以外的文件读不到，也改不了。',
+  fields: env => [
+    { key: 'sandbox', label: '沙箱模式', native: 'sandbox', kind: 'choice', choices: permissionTiers(env).map(info => ({
+      value: sandboxes[info.tier], label: info.name, native: sandboxes[info.tier],
+      hint: info.unavailable ?? info.summary.replace(/，(?:不|能)联网/, ''),
+    })) },
+    { key: 'network', label: '网络', native: 'network', kind: 'switch', showWhen: { key: 'sandbox', in: ['read-only', 'workspace-write'] } },
+  ],
+  expand: tier => ({ sandbox: sandboxes[tier], network: tier !== 'qa' }),
   parseCustom,
   matchTier(settings) {
     const value = parseCustom(settings);

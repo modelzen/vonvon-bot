@@ -35,6 +35,8 @@ vi.mock('../src/agent', async (original) => ({ ...await original<object>(), crea
 vi.mock('../src/project/registry', async (original) => ({
   ...await original<object>(),
   getProjectByChatId: async () => fake.project,
+  getProjectByName: async (name: string) => fake.project.name === name ? fake.project : undefined,
+  mutateProject: async (_name: string, change: (project: typeof fake.project) => void | Promise<void>) => { await change(fake.project); return fake.project; },
 }));
 vi.mock('../src/bot/context-weave', async (original) => ({
   ...await original<object>(),
@@ -184,6 +186,64 @@ describe('a live session written elsewhere (checkNative)', () => {
     expect(fake.backend.resumeThread).toHaveBeenCalledTimes(1);
     expect(live.t.close).not.toHaveBeenCalled();
     expect(live.consumed).toHaveLength(2);
+  });
+});
+
+describe('live permission binding', () => {
+  it('rebinds a cached full thread after the group becomes read-only even without eviction', async () => {
+    fake.project.mode = 'full'; fake.project.network = true;
+    fake.records.set('chat', record('chat'));
+    const first = thread('old-chat'), second = thread('old-chat');
+    fake.backend.resumeThread.mockResolvedValueOnce(first.t).mockResolvedValueOnce(second.t);
+    const o = setup(); await turn(o, message('一'));
+    Object.assign(fake.project, {mode: 'qa', network: false});
+    await turn(o, message('二'));
+    expect(first.t.close).toHaveBeenCalledOnce(); expect(first.consumed).toHaveLength(1); expect(second.consumed).toHaveLength(1);
+    expect(fake.backend.resumeThread).toHaveBeenLastCalledWith(expect.objectContaining({mode: 'qa', network: false}));
+  });
+  it.each([
+    {domains: ['example.org'], sandbox: true},
+    {domains: ['github.com'], sandbox: false},
+  ])('rebinds a native-only change without changing mode/network: %j', async change => {
+    const settings = {permissionMode: 'acceptEdits', sandbox: true, network: 'domains', domains: ['github.com']};
+    Object.assign(fake.project, {backend: 'claude-agent', mode: 'write', network: false, custom: {backend: 'claude-agent', settings}});
+    fake.records.set('chat', record('chat', {backend: 'claude-agent'}));
+    const first = thread('old-chat'), second = thread('old-chat');
+    fake.backend.resumeThread.mockResolvedValueOnce(first.t).mockResolvedValueOnce(second.t);
+    const o = setup(); await turn(o, message('一'));
+    fake.project.custom = {backend: 'claude-agent', settings: {...settings, ...change}};
+    await turn(o, message('二'));
+    expect(first.t.close).toHaveBeenCalledOnce();
+    expect(fake.backend.resumeThread).toHaveBeenLastCalledWith(expect.objectContaining({mode: 'write', network: true, native: expect.objectContaining(change)}));
+  });
+  it('keeps the live binding when native object keys are reordered without a value change', async () => {
+    Object.assign(fake.project, {backend: 'claude-agent', mode: 'write', custom: {backend: 'claude-agent', settings: {permissionMode: 'acceptEdits', sandbox: true, network: 'domains', domains: ['github.com']}}});
+    fake.records.set('chat', record('chat', {backend: 'claude-agent'}));
+    const first = thread('old-chat'); fake.backend.resumeThread.mockResolvedValue(first.t);
+    const o = setup(); await turn(o, message('一'));
+    fake.project.custom = {backend: 'claude-agent', settings: {domains: ['github.com'], network: 'domains', sandbox: true, permissionMode: 'acceptEdits'}};
+    await turn(o, message('二'));
+    expect(first.t.close).not.toHaveBeenCalled(); expect(first.consumed).toHaveLength(2);
+    expect(fake.backend.resumeThread).toHaveBeenCalledOnce();
+  });
+  it.each(['start', 'resume'])('rejects a stale in-flight %s that a permission save could not yet evict', async method => {
+    Object.assign(fake.project, {mode: 'full', network: true});
+    if (method === 'resume') fake.records.set('chat', record('chat'));
+    const first = thread('old-chat'), second = thread('old-chat');
+    let finish!: (thread: typeof first.t) => void;
+    const create = method === 'resume' ? fake.backend.resumeThread : fake.backend.startThread;
+    create.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;})).mockResolvedValueOnce(second.t);
+    const o = setup(), before = finals();
+    await o.onMessage(message('旧权限已读、provider还在准备'));
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create).toHaveBeenLastCalledWith(expect.objectContaining({mode: 'full', network: true}));
+    await o.adminExecute({kind: 'setPermissionMode', project: 'test', mode: 'qa'});
+    expect(first.t.close).not.toHaveBeenCalled(); // The save's eviction had no cached thread to close.
+    finish(first.t);
+    await vi.waitFor(() => expect(finals()).toBe(before + 1));
+    expect(first.t.close).toHaveBeenCalledOnce(); expect(first.consumed).toHaveLength(0); expect(second.consumed).toHaveLength(1);
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create).toHaveBeenLastCalledWith(expect.objectContaining({mode: 'qa', network: false}));
   });
 });
 

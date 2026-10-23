@@ -1,6 +1,6 @@
 import type { BotProfile, GroupProfile, ProjectModelAccess, ProjectWorkspace, ProjectSmartRules, ProjectSkills, ProjectPresentation } from '../project/registry';
 import type { ModelInfo, PermissionMode, ReasoningEffort } from '../agent/types';
-import type { TierInfo } from '../agent/permission';
+import type { NativeField, TierInfo } from '../agent/permission';
 import type { ModelDisplayMode, PendingPolicy, ResolvedCompletionReminderConfig } from '../config/schema';
 import type { VoiceAction, VoiceView } from '../voice/types';
 export type SettingsScope = {
@@ -127,6 +127,8 @@ export interface ProjectSections {
     options: {
       tiers: TierInfo[];
       strength: string;
+      fields: NativeField[];
+      expanded: Record<PermissionMode, Record<string, unknown>>;
       customSummary?: string;
       legacy?: boolean;
       invalid?: boolean;

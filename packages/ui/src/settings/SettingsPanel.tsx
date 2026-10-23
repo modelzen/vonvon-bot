@@ -31,6 +31,7 @@ import {useDraft} from './DraftGuard';
 import {settingAnchor} from '../search';
 import {JudgeModelChoice} from './JudgeModelChoice';
 import {SettingChoices} from './SettingChoices';
+import {NativePermissionFields, nativePermissionPatch} from './NativePermissionFields';
 import {AnnouncedReadonlyMessages, hasReadonlyMessage, type ReadonlyMessage} from './readonly-messages';
 
 type AgentScope = { kind: "agent"; botId: AgentId };
@@ -106,6 +107,8 @@ export function Editor<T extends object>({
   submitLabel = '保存',
   allowUnchanged = false,
   afterSave,
+  showSave = false,
+  savedNotice,
   initialDraft,
 }: {
   title: string;
@@ -122,6 +125,8 @@ export function Editor<T extends object>({
   submitLabel?: string;
   allowUnchanged?: boolean;
   afterSave?: () => Promise<void>;
+  showSave?: boolean;
+  savedNotice?: (stored: T) => string | undefined;
   /** Text shown in the form from the start but not saved until the person saves (a prefilled draft). */
   initialDraft?: Partial<T>;
 }) {
@@ -173,7 +178,7 @@ export function Editor<T extends object>({
     const canonical = reply.result.section.value;
     priorRevision.current = confirmed.revision;
     setConfirmed({ ...confirmed, stored: canonical.stored as T, effective: canonical.effective as T, revision: canonical.revision, apply: canonical.apply });
-    setNotice(reply.result.effects.map(item => item.detail).join(' ') || '已保存。');
+    setNotice(savedNotice?.(canonical.stored as T) ?? (reply.result.effects.map(item => item.detail).join(' ') || '已保存。'));
     return true;
   }
   function noteConflict(reply: SettingsReply) {
@@ -272,7 +277,7 @@ export function Editor<T extends object>({
       }
     >
       {render(value, edit, disabled, commit, `${confirmed.revision}:${discardVersion}`)}
-      {(dirty || allowUnchanged) && <div className="settings-edit-actions">
+      {(dirty || allowUnchanged || showSave) && <div className="settings-edit-actions">
         {dirty && <Button
           size="sm"
           disabled={!dirty || disabled}
@@ -1134,6 +1139,23 @@ function AgentPanel({
   );
 }
 type PermissionView = ProjectSettingsView['sections']['permission']['stored'];
+export function NativePermissionEditor({section, provider, save}: {section: Section<PermissionView>; provider: string; save: (patch: Partial<PermissionView>, revision: string) => Promise<SettingsReply>}) {
+  const fields = section.stored.options.fields;
+  if (!fields?.length) return null;
+  const initial = section.stored.custom ?? section.stored.options.expanded[section.stored.mode];
+  return <details className="membership-settings-details"><summary>高级设置</summary>
+    <Editor title="高级设置" section={section} showSave
+      savedNotice={stored => stored.custom === null ? `和「${stored.options.tiers.find(tier => tier.tier === stored.mode)?.name ?? stored.mode}」一样，已存成这一档。` : undefined}
+      save={(patch, revision) => save({custom: nativePermissionPatch(fields, patch.custom ?? initial)}, revision)}
+      render={(draft, set, disabled) => <>
+        <p className="permission-note">这里只列 {provider} 自己支持的设置。群里没人确认，要确认的操作一律拒绝，所以没有“问不问”的设置。换 provider 时会清掉。</p>
+        <NativePermissionFields fields={fields} value={draft.custom ?? draft.options.expanded[draft.mode]} disabled={disabled} onChange={value => {
+          const unchanged = JSON.stringify(nativePermissionPatch(fields, value)) === JSON.stringify(nativePermissionPatch(fields, initial));
+          set({...draft, custom: unchanged ? section.stored.custom : value});
+        }}/>
+      </>}/>
+  </details>;
+}
 // Intent: the group owner compares the provider's three levels before granting access.
 // Hierarchy: level names lead; native names and enforcement stay secondary. Existing
 // surface/border tokens, system type and 4px spacing keep this within the settings UI.
@@ -1275,6 +1297,7 @@ export function ProjectPanel({
         save={(draft, revision) => save("permission", draft, revision)}
         render={(draft, _set, disabled, commit) => <PermissionFields value={draft} disabled={disabled} onChange={patch => void commit(patch)}/>}
       />
+      <NativePermissionEditor section={permission} provider={backendLabel(view.identity.backend)} save={(patch, revision) => save('permission', patch, revision)}/>
       </>}
       {(!partition || partition === 'members') && <>
       {!partition && <h2 className="membership-settings-heading">回复规则</h2>}
