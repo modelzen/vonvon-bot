@@ -2028,7 +2028,7 @@ export function createOrchestrator(
       persona: personality.persona, memory: personality.memory,
       facts,
       variant: item.variant, appId: cfg.accounts.app.id, botName: channel.botIdentity?.name ?? '',
-      group: { chatId: project.chatId, name: project.name, backend: project.backend, judge: project.judge },
+      group: { chatId: project.chatId, name: project.name, backend: project.backend, judge: project.judge, smartRules: project.smartRules },
       botJudge: cfg.preferences?.judge, ...(title ? { topicTitle: title } : {}),
       context, message: look?.glance ? { ...line, fresh: true as const } : line,
       ...(why ? { why } : {}),

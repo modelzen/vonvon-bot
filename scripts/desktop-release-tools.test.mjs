@@ -89,7 +89,16 @@ async function appFixture(t) {
   const h = await fixture(t);
   const app = join(h.root, 'Vonvon Bot.app');
   const core = 'Vonvon Bot.app/Contents/Resources/daemon/';
-  await h.put(`${core}package.json`, JSON.stringify({ version, license: 'UNLICENSED' }));
+  await h.put(`${core}package.json`, JSON.stringify({ version, license: 'UNLICENSED', bundledBackends: ['claude-agent'] }));
+  const sdk = `${core}node_modules/@anthropic-ai/claude-agent-sdk/`;
+  await h.put(`${sdk}package.json`, JSON.stringify({ name: '@anthropic-ai/claude-agent-sdk', version: '0.3.296', optionalDependencies: {
+    '@anthropic-ai/claude-agent-sdk-darwin-arm64': '0.3.296', '@anthropic-ai/claude-agent-sdk-darwin-x64': '0.3.296',
+  } }));
+  for (const arch of ['arm64', 'x64']) {
+    const native = `${sdk}node_modules/@anthropic-ai/claude-agent-sdk-darwin-${arch}/`;
+    await h.put(`${native}package.json`, JSON.stringify({ name: `@anthropic-ai/claude-agent-sdk-darwin-${arch}`, version: '0.3.296' }));
+    await h.put(`${native}claude`, Buffer.from('feedfacf00000000', 'hex'));
+  }
   for (const name of ['LICENSE.bridge', 'LICENSE.paseo', 'NOTICE', 'PROVENANCE.md']) await h.put(core + name, `third-party ${name}`);
   for (const path of ['Contents/MacOS/Vonvon Bot', 'Contents/Frameworks/Electron Framework.framework/Electron Framework',
     'Contents/Frameworks/Vonvon Helper.app/Contents/MacOS/Vonvon Helper']) {
@@ -97,7 +106,10 @@ async function appFixture(t) {
   }
   const execute = async (command, args) => {
     if (command.endsWith('PlistBuddy')) return { stdout: `${version}\n`, stderr: '' };
-    if (command.endsWith('lipo')) return { stdout: 'x86_64 arm64\n', stderr: '' };
+    if (command.endsWith('lipo')) {
+      const native = args[1].match(/claude-agent-sdk-darwin-(arm64|x64)\/claude$/)?.[1];
+      return { stdout: native ? (native === 'arm64' ? 'arm64\n' : 'x86_64\n') : 'x86_64 arm64\n', stderr: '' };
+    }
     if (args.includes('--entitlements')) return { stdout: '<?xml version="1.0"?><plist version="1.0"><dict><key>com.apple.security.cs.allow-jit</key><true/></dict></plist>', stderr: '' };
     return { stdout: '', stderr: `Authority=Developer ID Application: Test\nTeamIdentifier=${teamIdentifier}\nflags=0x10000(runtime)\n` };
   };
@@ -107,23 +119,27 @@ async function appFixture(t) {
 test('verification reads actual Core metadata, third-party declarations and every Mach-O', async t => {
   const h = await appFixture(t);
   const result = await verifyUniversalApp(h.options);
-  assert.equal(result.architectures.length, 3);
-  assert.ok(result.architectures.every(file => file.archs.join(',') === 'arm64,x86_64'));
+  assert.equal(result.architectures.length, 5);
+  assert.equal(result.architectures.filter(file => file.archs.length === 1).length, 2);
   assert.deepEqual(result.entitlementChecks.map(entry => entry.entitlements), [
     { 'com.apple.security.cs.allow-jit': true }, { 'com.apple.security.cs.allow-jit': true },
   ]);
   await verifyDmg(h.release.dmg, teamIdentifier, h.execute);
 });
 
-for (const variant of ['Core version', 'first-party license', 'third-party declaration', 'single arch', 'unsigned', 'wrong team', 'broad entitlements', 'false JIT', 'unknown entitlement']) {
+for (const variant of ['Core version', 'first-party license', 'third-party declaration', 'missing Claude native', 'mismatched Claude native', 'fat Claude native', 'single arch', 'unsigned', 'wrong team', 'broad entitlements', 'false JIT', 'unknown entitlement']) {
   test(`verification refuses ${variant}`, async t => {
     const h = await appFixture(t);
-    if (variant === 'Core version') await h.put(`${h.core}package.json`, JSON.stringify({ version: '0.1.0', license: 'UNLICENSED' }));
-    if (variant === 'first-party license') await h.put(`${h.core}package.json`, JSON.stringify({ version, license: 'MIT' }));
+    if (variant === 'Core version') await h.put(`${h.core}package.json`, JSON.stringify({ version: '0.1.0', license: 'UNLICENSED', bundledBackends: ['claude-agent'] }));
+    if (variant === 'first-party license') await h.put(`${h.core}package.json`, JSON.stringify({ version, license: 'MIT', bundledBackends: ['claude-agent'] }));
     if (variant === 'third-party declaration') await rm(join(h.root, h.core, 'NOTICE'));
+    const native = `${h.core}node_modules/@anthropic-ai/claude-agent-sdk/node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64/`;
+    if (variant === 'missing Claude native') await rm(join(h.root, native, 'claude'));
+    if (variant === 'mismatched Claude native') await h.put(`${native}package.json`, JSON.stringify({ name: '@anthropic-ai/claude-agent-sdk-darwin-x64', version: '0.0.1' }));
     const execute = async (command, args) => {
       if (variant === 'unsigned' && args.includes('--verify')) throw new Error('invalid signature');
       if (variant === 'single arch' && command.endsWith('lipo')) return { stdout: 'arm64', stderr: '' };
+      if (variant === 'fat Claude native' && command.endsWith('lipo') && args[1].includes('claude-agent-sdk-darwin-x64/claude')) return { stdout: 'arm64 x86_64', stderr: '' };
       const result = await h.execute(command, args);
       if (variant === 'wrong team') result.stderr = result.stderr.replace(teamIdentifier, 'OTHERTEAM1');
       if (variant === 'broad entitlements' && args.includes('--entitlements')) result.stdout = result.stdout.replace('</dict>', '<key>com.apple.security.cs.disable-library-validation</key><true/></dict>');
