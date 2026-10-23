@@ -29,7 +29,7 @@ it('omits decision choices on older daemons', () => {
 });
 it('shows missing key instructions and the optional secrets button', () => {
   const html = render(jev, {onOpenSecrets: () => {}});
-  expect(html).toContain('vonvon secrets set typesafe-api-key');
+  expect(html).toContain('请在决策模型页添加密钥');
   expect(html).toContain(MEANWHILE);
   expect(html).toContain('去密钥页');
   expect(render(jev)).not.toContain('去密钥页');
@@ -38,14 +38,14 @@ it('shows missing key instructions and the optional secrets button', () => {
   expect(render(jev, {decisionModels: decisions({keyUnreadable: true})})).toContain('读不了密钥库');
 });
 it('shows inherited missing keys only when the saved and draft settings follow', () => {
-  expect(render({kind: 'default'}, {effective: jev, showInheritedKey: true})).toContain('vonvon secrets set');
-  expect(render({kind: 'default'}, {effective: jev, showInheritedKey: false})).not.toContain('vonvon secrets set');
+  expect(render({kind: 'default'}, {effective: jev, showInheritedKey: true})).toContain('请在决策模型页添加密钥');
+  expect(render({kind: 'default'}, {effective: jev, showInheritedKey: false})).not.toContain('请在决策模型页添加密钥');
 });
 it('describes the effective model while the draft previews its own missing key', () => {
   const html = render(jev, {effective: {kind: 'llm', model: 'gpt-6-luna'}});
   expect(html).toContain('现在判断用：gpt-6-luna');
   expect(html).not.toContain('现在判断用：TypeSafe');
-  expect(html).toContain('vonvon secrets set');
+  expect(html).toContain('请在决策模型页添加密钥');
   expect(render(jev)).not.toContain('现在判断用');
 });
 it('shows a custom model in its text field', () => {

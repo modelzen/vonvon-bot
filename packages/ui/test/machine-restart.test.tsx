@@ -85,8 +85,8 @@ it('leaves installing and uninstalling the service to the 登录电脑时启动 
   expect(html).toContain('停止服务');
 });
 
-it('names the terminal command instead of the macOS switch elsewhere', () => {
+it('explains background service behavior without terminal instructions', () => {
   const html = renderToStaticMarkup(<ClientProvider client={client}><MachinePanel request={async () => running} agents={[]} /></ClientProvider>);
-  expect(html).toContain('在终端运行 vonvon service install，装成 systemd 用户服务，崩溃后自动重启。');
+  expect(html).toContain('后台服务可在应用退出后继续运行 Bot。');
   expect(html).not.toContain('登录电脑时启动');
 });

@@ -146,7 +146,7 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
           {!bundled && (provider === 'codex' ? source?.canUninstall : state.entry?.canUninstall) && <Button size="sm" disabled={disabled || installing || connecting} onClick={() => setUninstallOpen(true)}>{provider === 'claude' ? '卸载 SDK' : '卸载托管副本'}</Button>}
         </div>{managementNotice && <p className="provider-check" role="status">{managementNotice}</p>}
       </div>
-      {provider === 'claude' && <details className="provider-cli"><summary>Claude Code · {cliLabel}</summary><p>用于账号授权，也可在终端独立使用。</p>
+      {provider === 'claude' && <details className="provider-cli"><summary>Claude Code · {cliLabel}</summary><p>用于 Claude 账号授权。</p>
         <dl><div><dt>安装来源</dt><dd>{!source ? '正在检测…' : source.installation === 'managed' ? 'Vonvon 管理' : source?.installation === 'external' ? '本机已有' : '未检测到'}</dd></div>{source?.version && <div><dt>当前版本</dt><dd>{source.version}</dd></div>}{source?.executable && <div><dt>安装位置</dt><dd>{source.executable}</dd></div>}{source?.latestVersion && <div><dt>最新版本</dt><dd>{source.latestVersion}</dd></div>}</dl>
         <div className="provider-management-actions"><Button size="sm" disabled={disabled || installing || !source} onClick={() => void manageCli(source?.installation === 'missing' ? 'install' : 'update')}>{source?.installation === 'missing' ? '安装 Claude Code' : '更新 Claude Code'}</Button>
           <Button size="sm" disabled={disabled || source?.installation === 'missing'} onClick={() => void manageCli('authStatus')}>检查授权</Button>

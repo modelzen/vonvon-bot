@@ -53,7 +53,7 @@ test('s53: application owner and scanner search reveal their administrator rows'
 test('rare field, aliases, and multi-term scope queries resolve to their real category', () => {
   assert.equal(findEntries(entries, '清空白名单')[0]?.destination.detail?.kind, 'membership-settings');
   assert.equal(findEntries(entries, 'App Secret')[0]?.destination.reveal, 'profile-add');
-  assert.equal(findEntries(entries, '修复命令行工具')[0]?.destination.section, '命令行工具');
+  assert.equal(findEntries(entries, '修复命令行工具').length, 0);
 });
 
 test('s02b: 咖啡一下 and its Hook settings are gone from search', () => {

@@ -105,7 +105,7 @@ it("s28a: following the Bot's decision model still explains a missing key", () =
       models: [{ id: "jev-latest", displayName: "Jev" }] }],
   });
   expect(html).toContain("还没填 key");
-  expect(html).toContain("vonvon secrets set typesafe-api-key");
+  expect(html).toContain("请在决策模型页添加密钥");
 });
 
 it("s28a: Codex groups offer run policy choices and show the effective policy", () => {

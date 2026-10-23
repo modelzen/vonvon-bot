@@ -540,6 +540,8 @@ export async function startDesktop(): Promise<void> {
         { label: '显示 Vonvon Bot', click: show },
         { label: '退出 Vonvon Bot', accelerator: 'CmdOrCtrl+Q', click: requestQuit },
       ] },
+      // macOS routes editing shortcuts, including Cmd+V in password fields, through native menu roles.
+      { role: 'editMenu', label: '编辑' },
     ]));
     await current.loadFile(uiIndex);
     if (repairNotice) void dialog.showMessageBox(current, { type: 'warning', title: 'Vonvon Bot', message: repairNotice, buttons: ['OK'] }).catch(() => {});

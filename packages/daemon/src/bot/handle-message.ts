@@ -18,6 +18,7 @@ import { createSkillChat } from './skill-chat';
 import { projectRevision, projectView, type CollaborationRequest } from '../admin/collaboration';
 import { AdminWriteError } from '../admin/ops';
 import { createSettingsOwner, materializeGroupSettings } from '../admin/settings';
+import { validateProviderJudge } from '../project/initial-settings';
 import type { HostSettings } from '../admin/settings-types';
 import type { AdminWriteResult } from '../admin/ops';
 import { registerVoiceConsole } from './voice-console';
@@ -6242,7 +6243,13 @@ export function createOrchestrator(
         if (request.enabled !== undefined) patch.enabled = request.enabled;
         // The page sends the 会话方式 it shows, so an unchanged one (智能 included) is left alone (s25c).
         const mode = request.kind;
-        if (mode === 'smart' && sessionModeOf(project) !== 'smart' && !parseStoredJudge(project.judge, backendIds()).value) throw new AdminWriteError('请先在本群回复规则中设置决策模型，再开启智能模式');
+        if (mode === 'smart' && sessionModeOf(project) !== 'smart') {
+          const selected = parseStoredJudge(project.judge, backendIds()).value;
+          if (!selected) throw new AdminWriteError('请先在本群回复规则中设置决策模型，再开启智能模式');
+          if (selected.kind === 'provider') await validateProviderJudge(selected.provider, { backendFor }).catch((error: unknown) => {
+            throw new AdminWriteError(error instanceof Error ? error.message : '无法确认决策 Provider');
+          });
+        }
         const commit = () => mutateProject(project.name, latest => {
           if (projectRevision(latest) !== request.expectedRevision) throw new AdminWriteError('项目设置已改变，请刷新后重试');
           // Switching 会话方式 leaves 免@ as it was (3.4): pin the value it read as before. 智能 has none, so leaving it

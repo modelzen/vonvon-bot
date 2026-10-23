@@ -41,6 +41,9 @@ export type JudgeSelection = {
   kind: 'decision';
   provider: string;
   model: string;
+} | {
+  kind: 'provider';
+  provider: 'codex-appserver' | 'claude-agent' | 'typesafe';
 };
 /** What a view shows: a known kind, or a stored kind this version does not know, as stored (never saved). */
 export type JudgeSelectionView = JudgeSelection | {
@@ -139,6 +142,7 @@ export interface HostSections {
   execution: {
     codexBin: string | null;
   };
+  judge: { byProvider: Record<string, { model: string; effort?: ReasoningEffort; custom?: boolean }> };
 }
 export type SettingsAccess = {
   kind: 'writable';
