@@ -83,10 +83,12 @@ it('Linux 原生沙箱按版本开放权限，并说明不存在配置路径的�
   const supported = { platform: 'linux', codexVersion: 'codex-cli 0.163.0' } as const;
   expect(codex.tiers(supported).map(row => row.unavailable)).toEqual([undefined, undefined, undefined]);
   expect(codex.strength(supported)).toContain('工作区里原来没有的 .mcp.json、.claude/ 这类配置，能被新建。');
-  for (const codexVersion of ['codex-cli 0.162.0', null]) {
+  for (const codexVersion of ['codex-cli 0.162.0', 'codex-cli 0.163.0-alpha.1', null]) {
     const rows = codex.tiers({ platform: 'linux', codexVersion });
-    expect(rows[0].unavailable).toContain('版本');
-    expect(rows[1].unavailable).toContain('版本');
+    const reason = codexVersion === null ? '测不出 Codex 的版本' : '0.163.0 正式版以上';
+    expect(rows[0].unavailable).toContain(reason);
+    expect(rows[1].unavailable).toContain(reason);
+    if (codexVersion) expect(rows[0].unavailable).toContain(codexVersion);
     expect(rows[2].unavailable).toBeUndefined();
   }
 });

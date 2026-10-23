@@ -21,7 +21,7 @@ export function codexConfinesReads(platform: NodeJS.Platform = process.platform,
 
 export function codexFullOnlyReason(version: string | null): string {
   if (!version?.match(/(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?/)) return '测不出 Codex 的版本，只读和工作区可写暂时不能用。请升级 Codex 后重启 daemon。';
-  return `这台电脑上的 Codex 版本太旧（${version}），只读和工作区可写要 ${CODEX_LINUX_MIN_VERSION} 以上，升级后就能选。`;
+  return `这台电脑上的 Codex 是 ${version}，只读和工作区可写要 ${CODEX_LINUX_MIN_VERSION} 正式版以上，升级后就能选。`;
 }
 
 export function codexTierUnavailable(tier: PermissionMode, platform: NodeJS.Platform, version: string | null): string | undefined {
