@@ -1,4 +1,4 @@
-import { isAbsolute, join, normalize, relative, sep, dirname, parse, resolve } from 'node:path';
+import { isAbsolute, join, normalize, relative, sep, dirname, parse, resolve, basename } from 'node:path';
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { paths } from '../../config/paths';
@@ -55,9 +55,14 @@ const installRoots = new Map<string, { root: CodexInstallRoot; bin: string }>();
 const PackageSchema = z.object({ name: z.literal('@openai/codex') });
 
 function safeInstallRoot(candidate: CodexInstallRoot, bin: string, roots: readonly Root[]): CodexInstallRoot {
-  const shared = new Set([parse(candidate.path).root, homedir(), '/usr', '/usr/bin', '/usr/local', '/usr/local/bin', '/bin', '/opt']);
-  if (candidate.kind === 'dir' && (shared.has(candidate.path) || contains(candidate.path, paths.appDir)
-    || roots.some(root => contains(candidate.path, root.path)))) {
+  const depth = relative(parse(candidate.path).root, candidate.path).split(sep).filter(Boolean).length;
+  const credentialRoots = [join(homedir(), '.codex'), resolve(process.env.CODEX_HOME ?? join(homedir(), '.codex'))]
+    .flatMap(path => {
+      try { return [path, realpathSync(path)]; } catch { return [path]; }
+    });
+  if (candidate.kind === 'dir' && (depth <= 2 || ['bin', 'sbin'].includes(basename(candidate.path))
+    || candidate.path === homedir() || credentialRoots.some(path => contains(candidate.path, path))
+    || contains(candidate.path, paths.appDir) || roots.some(root => contains(candidate.path, root.path)))) {
     return { path: bin, kind: 'file' };
   }
   return candidate;

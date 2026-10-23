@@ -13,8 +13,10 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-ROOT = Path(sys.argv[1]).resolve()
-BIN = str(Path(sys.argv[2] if len(sys.argv) > 2 else shutil.which("codex")).absolute())
+review_only = '--review-only' in sys.argv
+arguments = [arg for arg in sys.argv[1:] if arg != '--review-only']
+ROOT = Path(arguments[0]).resolve()
+BIN = str(Path(arguments[1] if len(arguments) > 1 else shutil.which("codex")).absolute())
 REPO = Path(__file__).resolve().parents[3]
 ROOT.mkdir(exist_ok=True)
 for part in ["home", "codex", "ws", "outside"]:
@@ -63,7 +65,7 @@ helper = ROOT / "profile.ts"
 helper.write_text(
     f'import {{codexFilesystem, codexInstallRoot}} from {json.dumps(str(REPO / "packages/daemon/src/agent/codex-appserver/workspace-policy.ts"))};\n'
     'const [bin, cwd, mode, network] = process.argv.slice(2);\n'
-    'console.log(JSON.stringify(codexFilesystem([{path:cwd,access:mode === "qa" ? "read" : "write"}], mode, codexInstallRoot(bin), process.platform, network === "1")));\n')
+    'const installRoot = codexInstallRoot(bin);\nconsole.log(JSON.stringify({installRoot, filesystem:codexFilesystem([{path:cwd,access:mode === "qa" ? "read" : "write"}], mode, installRoot, process.platform, network === "1")}));\n')
 subprocess.run([str(REPO / "node_modules/.bin/esbuild"), str(helper), "--bundle", "--platform=node",
                 "--format=esm", f"--outfile={ROOT / 'profile.mjs'}"], check=True, capture_output=True)
 server = ThreadingHTTPServer(("127.0.0.1", 0), Model)
@@ -74,16 +76,17 @@ threading.Thread(target=server.serve_forever, daemon=True).start()
 env = {**os.environ, "HOME": str(ROOT / "home"), "CODEX_HOME": str(ROOT / "codex"), "FAKE_KEY": "x"}
 
 
-def turn(label, cmd, mode="write", network=False, workspace="ws", override=None):
+def turn(label, cmd, mode="write", network=False, workspace="ws", override=None, executable=BIN):
     global command
     command = cmd
     cwd = ROOT / workspace
     cwd.mkdir(exist_ok=True)
-    filesystem = json.loads(subprocess.check_output([
-        "node", str(ROOT / "profile.mjs"), BIN, str(cwd), mode, str(int(network))], env=env))
+    profile = json.loads(subprocess.check_output([
+        "node", str(ROOT / "profile.mjs"), executable, str(cwd), mode, str(int(network))], env=env))
+    filesystem = profile["filesystem"]
     if override:
         filesystem[str(cwd)].update(override)
-    proc = subprocess.Popen([BIN, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    proc = subprocess.Popen([executable, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, env=env)
     pending, completed, observations = {}, threading.Event(), []
     sequence = 0
@@ -135,7 +138,7 @@ def turn(label, cmd, mode="write", network=False, workspace="ws", override=None)
                     "input": [{"type": "text", "text": "run it", "text_elements": []}]})
             if not completed.wait(60):
                 raise TimeoutError("turn/completed")
-        result = {"label": label, "start": started.get("error") or started["result"]["sandbox"],
+        result = {"label": label, "installRoot": profile["installRoot"], "start": started.get("error") or started["result"]["sandbox"],
                   "items": observations}
         print(json.dumps(result).replace(str(ROOT), "<T>"), flush=True)
     finally:
@@ -149,26 +152,54 @@ def turn(label, cmd, mode="write", network=False, workspace="ws", override=None)
 
 try:
     print("G " + subprocess.check_output([BIN, "--version"], env=env, text=True).strip(), flush=True)
-    turn("A", f"echo hi; cat inside; cat {ROOT}/outside/secret", "qa")
-    protected = ['.mcp.json', '.claude/settings.json', '.claude/settings.local.json',
-                 '.claude/skills', '.claude/commands', '.claude/agents', '.codex', '.agents/skills']
-    turn("B", "echo hi", override={p: "read" for p in protected})
-    (ROOT / "ws/.claude").mkdir(exist_ok=True)
-    (ROOT / "ws/.claude/settings.json").write_text("{}")
-    turn("C", "echo x >> .claude/settings.json; touch .mcp.json")
-    turn("D", "mkdir -p .codex/rules; touch .codex/rules/x", workspace="deny",
-         override={p: "deny" for p in protected})
-    for mode in ["qa", "write"]:
-        for network in [False, True]:
-            turn(f"E {mode} {network}", 'curl -sS --max-time 10 -o /dev/null -w "%{http_code}" https://example.com', mode, network)
-    turn("F2 create", "mkdir -p .codex/rules; printf 'prefix_rule(pattern=[\"cat\"], decision=\"allow\")\\n' > .codex/rules/x.rules", workspace="rules")
-    turn("F3 create", 'mkdir -p .codex; printf \'sandbox_mode = "danger-full-access"\\n\' > .codex/config.toml', workspace="config")
-    # New app-server process for each read; existing files are not injected by the harness.
-    for ws in ["rules", "config"]:
+    if not review_only:
+        turn("A", f"echo hi; cat inside; cat {ROOT}/outside/secret", "qa")
+        protected = ['.mcp.json', '.claude/settings.json', '.claude/settings.local.json',
+                     '.claude/skills', '.claude/commands', '.claude/agents', '.codex', '.agents/skills']
+        turn("B", "echo hi", override={p: "read" for p in protected})
+        (ROOT / "ws/.claude").mkdir(exist_ok=True)
+        (ROOT / "ws/.claude/settings.json").write_text("{}")
+        turn("C", "echo x >> .claude/settings.json; touch .mcp.json")
+        turn("D", "mkdir -p .codex/rules; touch .codex/rules/x", workspace="deny",
+             override={p: "deny" for p in protected})
         for mode in ["qa", "write"]:
-            turn(f"{ws} fresh {mode}", f"cat {ROOT}/outside/secret; touch {ROOT}/outside/x", mode, workspace=ws)
-    turn("scaffold parent", "touch ../outside-test; echo $?", workspace="scaffold")
-    print("scaffold file persisted on host: " + str((ROOT / "outside-test").exists()), flush=True)
+            for network in [False, True]:
+                turn(f"E {mode} {network}", 'curl -sS --max-time 10 -o /dev/null -w "%{http_code}" https://example.com', mode, network)
+        turn("F2 create", "mkdir -p .codex/rules; printf 'prefix_rule(pattern=[\"cat\"], decision=\"allow\")\\n' > .codex/rules/x.rules", workspace="rules")
+        turn("F3 create", 'mkdir -p .codex; printf \'sandbox_mode = "danger-full-access"\\n\' > .codex/config.toml', workspace="config")
+        # New app-server process for each read; existing files are not injected by the harness.
+        for ws in ["rules", "config"]:
+            for mode in ["qa", "write"]:
+                turn(f"{ws} fresh {mode}", f"cat {ROOT}/outside/secret; touch {ROOT}/outside/x", mode, workspace=ws)
+        turn("scaffold parent", "touch ../outside-test; echo $?", workspace="scaffold")
+        print("scaffold file persisted on host: " + str((ROOT / "outside-test").exists()), flush=True)
+
+    # Review 1: use existing native metadata with the same production read entries.
+    for workspace, path, content in [
+        ("existing-codex", ".codex/config.toml", 'sandbox_mode = "read-only"\n'),
+        ("existing-agents", ".agents/skills/x/SKILL.md", "---\nname: x\ndescription: fixture\n---\nfixture\n"),
+    ]:
+        target = ROOT / workspace / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+        (ROOT / workspace / "inside").write_text("inside-marker")
+        for mode in ["qa", "write"]:
+            turn(f"existing {path} {mode}", "echo hi; cat inside", mode, workspace=workspace)
+
+    # Review 7: copy the standalone runtime into the fake HOME, forcing file-only admission.
+    native = Path(BIN).resolve()
+    if native.suffix == ".js":
+        for parent in native.parents:
+            package = parent / "package.json"
+            if package.is_file() and json.loads(package.read_text()).get("name") == "@openai/codex":
+                native = next(parent.glob("node_modules/@openai/codex-*/vendor/*/bin/codex"))
+                break
+    standalone = ROOT / "home/codex"
+    shutil.copy2(native, standalone)
+    (ROOT / "home/guard-secret").write_text("guard-secret-marker")
+    for mode in ["qa", "write"]:
+        turn(f"file fallback {mode}", f"echo hi; cat inside; cat {ROOT}/home/guard-secret", mode,
+             executable=str(standalone))
 
 finally:
     server.shutdown()

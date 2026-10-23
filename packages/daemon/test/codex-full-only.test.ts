@@ -14,12 +14,12 @@ describe('Codex Linux permission capability', () => {
     expect(codexConfinesReads('win32', version)).toBe(false);
   });
   it('parses CLI version output and compares each numeric component', () => {
-    for (const version of [CODEX_LINUX_MIN_VERSION, `codex-cli ${CODEX_LINUX_MIN_VERSION}`, '0.164.0', '1.0.0']) {
+    for (const version of [CODEX_LINUX_MIN_VERSION, `codex-cli ${CODEX_LINUX_MIN_VERSION}`, '0.164.0', '1.0.0', '0.164.0-alpha.1', '0.163.0+build.1']) {
       expect(codexConfinesReads('linux', version)).toBe(true);
       expect(codexTierUnavailable('qa', 'linux', version)).toBeUndefined();
       expect(codexTierUnavailable('write', 'linux', version)).toBeUndefined();
     }
-    for (const version of [null, 'unknown', 'codex-cli 0.162.9', '0.99.0']) expect(codexConfinesReads('linux', version)).toBe(false);
+    for (const version of [null, 'unknown', 'codex-cli 0.162.9', '0.99.0', '0.163.0-alpha.1', 'codex-cli 0.163.0-rc.1']) expect(codexConfinesReads('linux', version)).toBe(false);
     expect(codexFullOnlyReason(null)).toContain('测不出 Codex 的版本');
   });
   it('reads only cached versions on the per-message fullAccessOnly path', () => {
