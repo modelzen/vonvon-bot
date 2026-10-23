@@ -3553,7 +3553,7 @@ export function createOrchestrator(
   async function resolveThread(
     threadId: string,
     chatId: string,
-    perm?: { mode?: PermissionMode; network?: boolean },
+    perm: TurnPerm,
   ): Promise<{ thread: AgentThread | undefined; recreated: boolean; reason?: RecreateReason }> {
     const live = sessions.get(threadId);
     if (live) {
@@ -3596,11 +3596,11 @@ export function createOrchestrator(
       const resumed = await resumeWith(be, {
         cwd: rec.cwd,
         sessionId: rec.sessionId,
-        profile: await profileOf(project, rec.cwd, be, perm?.mode),
+        profile: await profileOf(project, rec.cwd, be, perm.mode),
         model: rec.model,
         effort: rec.effort,
-        mode: perm?.mode,
-        network: perm?.network,
+        mode: perm.mode,
+        network: perm.network,
       }, { kind: 'group', chatId });
       trackSession(threadId, resumed);
       // 自愈观测：resume 来源=持久化记录（区分「resume 自愈」与 LIVE 快路径的
@@ -3615,11 +3615,11 @@ export function createOrchestrator(
       const cwd = workCwd(project, rec);
       const fresh = await startWith(be, {
         cwd,
-        profile: await profileOf(project, cwd, be, perm?.mode),
+        profile: await profileOf(project, cwd, be, perm.mode),
         model: rec.model,
         effort: rec.effort,
-        mode: perm?.mode ?? project?.mode,
-        network: perm?.network ?? project?.network,
+        mode: perm.mode,
+        network: perm.network,
       }, { kind: 'group', chatId });
       trackSession(threadId, fresh);
       lastUsage.delete(threadId);

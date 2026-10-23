@@ -71,6 +71,17 @@ type PermissionGroup = Pick<Project, 'mode' | 'network' | 'custom' | 'backend' |
 const warnedInvalidCustom = new Set<string>();
 const warnedAnonymousCustom = new WeakSet<object>();
 
+function invalidGroupPermission(group: PermissionGroup): GroupPermission {
+  const warned = group.chatId ? warnedInvalidCustom.has(group.chatId) : warnedAnonymousCustom.has(group);
+  if (!warned) {
+    if (group.chatId) warnedInvalidCustom.add(group.chatId);
+    else warnedAnonymousCustom.add(group);
+    // Rejected settings and parse errors can contain arbitrary private values.
+    log.warn('permission', 'custom-invalid');
+  }
+  return { tier: 'qa', invalid: true, effect: { mode: 'qa', network: false } };
+}
+
 /** Read native settings or preserve a legacy tier/network pair without rewriting stored rows. */
 export function groupPermission(group: PermissionGroup): GroupPermission {
   // Corrupt tiers must never become workspace-write through fromLegacy's fallback.
@@ -85,22 +96,22 @@ export function groupPermission(group: PermissionGroup): GroupPermission {
       const settings = table.parseCustom(group.custom.settings);
       return { tier, custom: settings, effect: table.effect(settings) };
     } catch {
-      const warned = group.chatId ? warnedInvalidCustom.has(group.chatId) : warnedAnonymousCustom.has(group);
-      if (!warned) {
-        if (group.chatId) warnedInvalidCustom.add(group.chatId);
-        else warnedAnonymousCustom.add(group);
-        // Rejected settings and parse errors can contain arbitrary private values.
-        log.warn('permission', 'custom-invalid');
-      }
-      return { tier: 'qa', invalid: true, effect: { mode: 'qa', network: false } };
+      return invalidGroupPermission(group);
     }
+  }
+  if (tier !== 'full' && group.network !== undefined && typeof group.network !== 'boolean') {
+    return invalidGroupPermission(group);
   }
   const network = group.network ?? false;
   if (tier !== 'full' && network !== TIER_NETWORK[tier]) {
-    const settings = table.fromLegacy(tier, network);
-    return settings
-      ? { tier, custom: settings, legacy: true, effect: table.effect(settings) }
-      : { tier, effect: { mode: tier, network } };
+    try {
+      const settings = table.fromLegacy(tier, network);
+      return settings
+        ? { tier, custom: settings, legacy: true, effect: table.effect(settings) }
+        : { tier, effect: { mode: tier, network } };
+    } catch {
+      return invalidGroupPermission(group);
+    }
   }
   return { tier, effect: { mode: tier, network: TIER_NETWORK[tier] } };
 }

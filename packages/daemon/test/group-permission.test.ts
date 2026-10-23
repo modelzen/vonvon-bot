@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as catalog from '../src/agent/catalog';
+import { codexTable } from '../src/agent/permission/codex';
 import { groupPermission } from '../src/config/execution';
 import { log } from '../src/core/logger';
 import type { Project } from '../src/project/registry';
@@ -23,6 +24,57 @@ describe('group permission effects', () => {
       tier: mode, custom: { sandbox, network: network ?? false }, legacy: true,
       effect: { mode, network: network ?? false },
     });
+  });
+
+  it.each(['x', 'false', 0, 1, null] as const)('fails closed for legacy Codex network %s', network => {
+    vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    for (const mode of ['qa', 'write'] as const) {
+      expect(groupPermission({ backend: CODEX, mode, network: network as unknown as Project['network'] }))
+        .toEqual({ tier: 'qa', invalid: true, effect: { mode: 'qa', network: false } });
+    }
+  });
+
+  it.each([undefined, 'synthetic-removed-provider'] as const)('validates legacy network when backend %s falls back to Codex', backend => {
+    vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    expect(groupPermission({ backend, mode: 'write', network: 'x' as unknown as Project['network'],
+      custom: { backend: CLAUDE, settings: { permissionMode: 'bypassPermissions', network: 'all' } } }))
+      .toEqual({ tier: 'qa', invalid: true, effect: { mode: 'qa', network: false } });
+  });
+
+  it.each(['x', 'false', 0, 1, null] as const)('keeps full access with corrupt legacy network %s', network => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    expect(groupPermission({ backend: CODEX, mode: 'full', network: network as unknown as Project['network'] }))
+      .toEqual({ tier: 'full', effect: { mode: 'full', network: true } });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when legacy native settings cannot produce a permission effect', () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(codexTable, 'fromLegacy').mockReturnValue({ sandbox: 'unsupported-future-sandbox', network: true });
+    expect(groupPermission({ backend: CODEX, mode: 'qa', network: true }))
+      .toEqual({ tier: 'qa', invalid: true, effect: { mode: 'qa', network: false } });
+    expect(warn.mock.calls).toEqual([['permission', 'custom-invalid']]);
+  });
+
+  it('warns once per group for corrupt legacy network without logging stored values', () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    const row = { chatId: 'synthetic_bad_legacy_network', backend: CODEX, mode: 'write' as const,
+      network: 'private-network-value' as unknown as Project['network'] };
+    const expected = { tier: 'qa', invalid: true, effect: { mode: 'qa', network: false } };
+    expect(groupPermission(row)).toEqual(expected);
+    expect(groupPermission({ ...row })).toEqual(expected);
+    expect(warn.mock.calls).toEqual([['permission', 'custom-invalid']]);
+    expect(groupPermission({ ...row, custom: { backend: CODEX, settings: { sandbox: 'private-sandbox-value' } } }))
+      .toEqual(expected);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(groupPermission({ ...row, chatId: 'synthetic_other_bad_legacy_network' })).toEqual(expected);
+    expect(warn.mock.calls).toEqual([['permission', 'custom-invalid'], ['permission', 'custom-invalid']]);
+    const anonymous = { mode: 'qa' as const, network: row.network };
+    expect(groupPermission(anonymous)).toEqual(expected);
+    expect(groupPermission(anonymous)).toEqual(expected);
+    expect(warn.mock.calls).toEqual([
+      ['permission', 'custom-invalid'], ['permission', 'custom-invalid'], ['permission', 'custom-invalid'],
+    ]);
   });
 
   it('keeps a legacy Claude network-off write group unchanged', () => {
