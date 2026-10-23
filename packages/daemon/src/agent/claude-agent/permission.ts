@@ -2,7 +2,7 @@ import { realpath, stat, lstat } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { HookCallback, Options } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
-import type { PermissionMode } from '../types';
+import type { PermissionMode, ReadScope } from '../types';
 import { TIER_NAMES } from '../permission/types';
 import { claudeTable, parseClaudeNative, type ClaudeNative } from '../permission/claude';
 import { log } from '../../core/logger';
@@ -19,6 +19,8 @@ export interface ClaudeAccess {
   realCwd: string;
   additionalRoots?: readonly { path: string; access: 'read' | 'write' }[];
   native?: ClaudeNative;
+  read?: ReadScope;
+  sandboxRead?: ReadScope;
   planState?: { pending: boolean; directory: string };
 }
 export function claudeAccess(mode: PermissionMode | undefined, network: boolean | undefined, cwd: string, realCwd: string, additionalRoots?: ClaudeAccess['additionalRoots'], native?: Readonly<Record<string, unknown>>): ClaudeAccess {
@@ -44,24 +46,65 @@ export const FILE_WRITE = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
 export const FILE_READ = ['Read', 'Glob', 'Grep', 'LS', 'NotebookRead'];
 const NETWORK_TOOLS = ['WebFetch', 'WebSearch'];
 const COMMAND_TOOLS = ['Bash', 'Monitor', 'PowerShell'];
+export const CONFIG_GUARD = [
+  { rel: '.mcp.json', dir: false },
+  { rel: '.claude/settings.json', dir: false },
+  { rel: '.claude/settings.local.json', dir: false },
+  { rel: '.claude/skills', dir: true },
+  { rel: '.claude/commands', dir: true },
+  { rel: '.claude/agents', dir: true },
+  { rel: '.codex', dir: true },
+  { rel: '.agents/skills', dir: true },
+] as const;
+export function guardPaths(roots: string[]): string[] {
+  return [...new Set(roots)].flatMap(root => CONFIG_GUARD.map(entry => resolve(root, entry.rel)));
+}
+export function guardRules(roots: string[]): string[] {
+  return [...new Set(roots)].flatMap(root => CONFIG_GUARD.map(entry => `Edit(/${resolve(root, entry.rel)}${entry.dir ? '/**' : ''})`));
+}
+export function guardedName(roots: string[], target: string, _platform?: NodeJS.Platform): string | undefined {
+  for (const root of roots) for (const entry of CONFIG_GUARD) {
+    const guarded = resolve(root, entry.rel);
+    if (target.toLowerCase() === guarded.toLowerCase() || (entry.dir && inside(guarded, target, true))
+      || inside(target, guarded, true)) return entry.rel;
+  }
+  return undefined;
+}
+async function guardedIdentity(roots: string[], target: string, fsx: PathFs): Promise<string | undefined> {
+  const name = guardedName(roots, target);
+  if (name) return name;
+  for (const root of roots) for (const entry of CONFIG_GUARD) {
+    try {
+      if (await within(await resolveReal(resolve(root, entry.rel), root, fsx), target, fsx)) return entry.rel;
+    } catch (error) { if (!missing(error)) throw error; }
+  }
+  return undefined;
+}
 export type ClaudePermissionOptions = Pick<Options,
   'permissionMode' | 'allowDangerouslySkipPermissions' | 'sandbox' | 'disallowedTools' | 'allowedTools' | 'hooks'>;
 export function permissionOptions(access: ClaudeAccess): ClaudePermissionOptions {
   const base = { permissionMode: access.native?.permissionMode ?? tierMode(access.mode), allowDangerouslySkipPermissions: true };
   const sandbox = access.native?.sandbox ?? access.mode !== 'full';
+  const roots = [...new Set([access.cwd, access.realCwd])];
+  const read = access.mode !== 'full' ? access.sandboxRead ?? access.read : undefined;
   if (access.mode === 'full' && !sandbox) return base;
   const domains = access.mode !== 'full' && access.native?.network === 'domains' ? access.native.domains : undefined;
   const allowedTools = domains ? domains.map(domain => `WebFetch(domain:${domain})`) : access.network ? [...NETWORK_TOOLS] : [];
   if (access.native?.permissionMode === 'auto') allowedTools.push('mcp__vonvon_bot');
   const disallowedTools = domains ? ['WebSearch'] : access.network ? [] : [...NETWORK_TOOLS];
+  if (access.mode !== 'full') disallowedTools.push(...guardRules(roots));
   if (!sandbox && access.mode !== 'full') disallowedTools.push('Monitor', 'PowerShell');
   return {
     ...base,
     ...(sandbox ? { sandbox: {
       enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false,
-      ...(access.mode !== 'full' && (access.mode === 'qa' || access.additionalRoots?.length) ? { filesystem: {
-        ...(access.mode === 'qa' ? { denyWrite: [...new Set([access.cwd, access.realCwd, ...access.additionalRoots?.map(root => root.path) ?? []])] }
-          : { allowWrite: access.additionalRoots?.filter(root => root.access === 'write').map(root => root.path) ?? [], denyWrite: access.additionalRoots?.filter(root => root.access === 'read').map(root => root.path) ?? [] }),
+      ...(access.mode !== 'full' ? { filesystem: {
+        ...(access.mode === 'write' ? { allowWrite: access.additionalRoots?.filter(root => root.access === 'write').map(root => root.path) ?? [] } : {}),
+        denyWrite: [...new Set([
+          ...(access.mode === 'qa' ? [...roots, ...access.additionalRoots?.map(root => root.path) ?? []] : access.additionalRoots?.filter(root => root.access === 'read').map(root => root.path) ?? []),
+          ...guardPaths(roots),
+        ])],
+        ...(read ? { denyRead: read.deny, allowRead: read.allow } : {}),
       } } : {}),
       ...(domains ? { network: { allowedDomains: domains, strictAllowlist: true } } : {}),
     } } : {}),
@@ -69,6 +112,7 @@ export function permissionOptions(access: ClaudeAccess): ClaudePermissionOptions
     ...(disallowedTools.length ? { disallowedTools } : {}),
     hooks: { PreToolUse: [
       { matcher: FILE_WRITE.join('|'), hooks: [fileHook(access)], timeout: 10 },
+      ...(access.mode !== 'full' && access.read ? [{ matcher: FILE_READ.join('|'), hooks: [fileHook(access)], timeout: 10 }] : []),
       ...((!sandbox && access.mode !== 'full') || access.planState ? [{ matcher: COMMAND_TOOLS.join('|'), hooks: [fileHook(access)], timeout: 10 }] : []),
       ...(domains ? [{ matcher: 'WebFetch', hooks: [fileHook(access)], timeout: 10 }] : []),
     ] },
@@ -85,7 +129,7 @@ export type Verdict = { kind: 'continue' } | { kind: 'allow' } | { kind: 'deny';
   | { kind: 'ask'; ask: 'choices' | 'confirmation' | 'permission' };
 export interface PathFs {
   realpath(p: string): Promise<string>;
-  stat(p: string): Promise<{ dev: number; ino: number }>;
+  stat(p: string): Promise<{ dev: number; ino: number; nlink?: number; isFile?(): boolean }>;
   lstat(p: string): Promise<{ isSymbolicLink?(): boolean }>;
 }
 const nativeFs: PathFs = { realpath, stat, lstat };
@@ -157,6 +201,19 @@ function sessionFs(access: ClaudeAccess): PathFs {
   }
   return fsx;
 }
+function readTarget(tool: string, input: Record<string, unknown>, cwd: string): { path: string; recursive: boolean } | undefined {
+  const path = input.file_path ?? input.notebook_path ?? input.path ?? cwd;
+  if (typeof path !== 'string') return undefined;
+  if (tool !== 'Glob') return { path, recursive: tool === 'Grep' };
+  if (typeof input.pattern !== 'string' || input.pattern.includes('\\')) return undefined;
+  const pattern = input.pattern;
+  const parts = pattern.split(sep);
+  const dynamic = parts.findIndex(part => /[*?[\]{}()]/.test(part));
+  if (dynamic < 0) return { path: isAbsolute(pattern) ? pattern : `${path}${sep}${pattern}`, recursive: false };
+  if (parts.slice(dynamic).includes('..')) return undefined;
+  const prefix = parts.slice(0, dynamic).join(sep);
+  return { path: isAbsolute(pattern) ? prefix || sep : prefix ? `${path}${sep}${prefix}` : path, recursive: true };
+}
 export async function decide(access: ClaudeAccess, call: ToolCall, origin: Origin, fsx: PathFs = sessionFs(access)): Promise<Verdict> {
   const { toolName: tool, input } = call;
   if (tool.startsWith('mcp__vonvon_bot__')) return { kind: origin === 'hook' ? 'continue' : 'allow' };
@@ -213,10 +270,38 @@ export async function decide(access: ClaudeAccess, call: ToolCall, origin: Origi
     if (input.dangerouslyDisableSandbox === true) return deny('这个群的命令只能在沙箱里跑。');
     return call.extra.decisionReasonType === 'safetyCheck' ? own() : { kind: 'allow' };
   }
+  if (FILE_READ.includes(tool) && access.mode !== 'full' && access.read) {
+    const request = readTarget(tool, input, access.cwd);
+    if (!request) return deny(PERMISSION_ERROR);
+    const { path } = request;
+    let blocked = false;
+    try {
+      const target = await resolveReal(path, access.cwd, fsx);
+      const denied = (await Promise.all(access.read.deny.map(async root => inside(root, target, true) || await within(root, target, fsx)))).some(Boolean);
+      const allowed = (await Promise.all(access.read.allow.map(root => within(root, target, fsx)))).some(Boolean);
+      blocked = denied && !allowed;
+      if (request.recursive) {
+        for (const root of access.read.deny) {
+          if (inside(target, root, true) && !(await Promise.all(access.read.allow.map(allow => within(allow, root, fsx)))).some(Boolean)) blocked = true;
+        }
+      }
+      try {
+        const entry = await fsx.stat(target);
+        if (access.read.deny.length && (entry.isFile?.() ?? true) && (entry.nlink ?? 1) > 1) blocked = true;
+      } catch (error) { if (!missing(error)) throw error; }
+    } catch (error) { if (!(error instanceof OutsideWorkspace)) throw error; blocked = true; }
+    if (blocked) return deny(`这个群的权限是${TIER_NAMES[access.mode]}，读不到 ${path.slice(0, 200)}：别的群、别的项目、私聊的资料（包括记忆）和数据目录里的网页端登录凭据被隔开了。要用的内容由 vonvon 放进指令；换个办法，或者停下来说明。`);
+    return { kind: origin === 'hook' ? 'continue' : 'allow' };
+  }
   if (!FILE_WRITE.includes(tool) || access.mode === 'full') return { kind: origin === 'hook' ? 'continue' : 'allow' };
   const path = input.file_path ?? input.notebook_path ?? input.path;
   if (typeof path !== 'string') return deny(PERMISSION_ERROR);
   const shown = path.slice(0, 200);
+  try {
+    const target = await resolveReal(path, access.cwd, fsx);
+    const guarded = await guardedIdentity([access.cwd, access.realCwd], target, fsx);
+    if (guarded) return deny(`这是 Claude 或 Codex 会自动加载的配置（${guarded}），只读、工作区可写档下不能改，只有完全访问档能改。`);
+  } catch (error) { if (!(error instanceof OutsideWorkspace)) throw error; }
   if (access.mode === 'qa') return deny(`这个群的权限是只读，不能写文件（${shown}）。换个不用写文件的办法，或者停下来说明：要写文件得请主人把群的权限改成工作区可写。`);
   let allowed: boolean;
   try {

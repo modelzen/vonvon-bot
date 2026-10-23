@@ -9,7 +9,7 @@ import { claudeAccess, permissionOptions } from '../src/agent/claude-agent/permi
 import { permissionTable } from '../src/agent/permission';
 import { createAgentEntries } from '../src/agent/entry/registry';
 import type { AgentTool } from '../src/agent/entry/tools';
-import { readFileSync, existsSync, mkdtempSync, mkdirSync, readdirSync, realpathSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, mkdirSync, readdirSync, realpathSync, writeFileSync, rmSync, symlinkSync, linkSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { build } from 'esbuild';
@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createBackend } from '../src/agent';
 import { createSkillChat } from '../src/bot/skill-chat';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
-import type { AgentBackend, AgentEvent, AgentThread, PermissionMode } from '../src/agent/types';
+import type { AgentBackend, AgentEvent, AgentThread, PermissionMode, ReadScope } from '../src/agent/types';
 const LIVE = process.env.CLAUDE_LIVE === '1';
 const dirs: string[] = [];
 const threads: AgentThread[] = [];
@@ -31,8 +31,8 @@ function workspace(): { dir: string; cwd: string } {
   const dir = mkdtempSync(join(tmpdir(), 's31-live-')); dirs.push(dir);
   const cwd = join(dir, 'work'); mkdirSync(cwd); return { dir, cwd };
 }
-async function start(cwd: string, mode: PermissionMode, network = false): Promise<AgentThread> {
-  const thread = await createBackend('claude-agent').startThread({ cwd, mode, network, model: 'claude-haiku-5-5' });
+async function start(cwd: string, mode: PermissionMode, network = false, readScope?: ReadScope): Promise<AgentThread> {
+  const thread = await createBackend('claude-agent').startThread({ cwd, mode, network, readScope, model: 'claude-haiku-5-5' });
   threads.push(thread); return thread;
 }
 async function run(thread: AgentThread, text: string, answer = false): Promise<AgentEvent[]> {
@@ -80,6 +80,84 @@ describe.runIf(LIVE)('Claude permission live boundaries', () => {
   });
 });
 
+
+function scopedWorkspace() {
+  const { dir } = workspace(), root = join(dir, 'vh'), cwd = join(root, 'projects/A/groups/g1');
+  mkdirSync(cwd, { recursive: true });
+  const blocked = ['projects/A/groups/g2/private.txt', 'bots/A/memory/dm/u1/private.txt', 'library/p1/memory.json', 'local-credential', 'config.json', '.keystore.salt'];
+  const allowed = ['secrets.enc', 'master.key', 'bots/A/skills/s/SKILL.md'];
+  const markers = new Map<string, string>();
+  for (const rel of [...blocked, ...allowed]) {
+    const file = join(root, rel), marker = randomBytes(16).toString('hex');
+    mkdirSync(join(file, '..'), { recursive: true }); writeFileSync(file, marker); markers.set(file, marker);
+  }
+  const readScope: ReadScope = { deny: ['bots', 'projects', 'library', 'local-credential', 'config.json', '.keystore.salt'].map(rel => join(root, rel)), allow: [join(root, 'bots/A/skills')] };
+  return { cwd, root, blocked: blocked.map(rel => join(root, rel)), allowed: allowed.map(rel => join(root, rel)), markers, readScope };
+}
+function workspaceFiles(cwd: string): string[] {
+  return readdirSync(cwd, { recursive: true, encoding: 'utf8' }).filter(file => {
+    if (file === '.claude') {
+      const contents = readdirSync(join(cwd, file));
+      return contents.length !== 1 || contents[0] !== '.cc-writes';
+    }
+    return file !== '.claude/.cc-writes';
+  }).sort();
+}
+const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+describe.runIf(LIVE)('s31b real backend read and configuration boundaries', () => {
+  it.each(['qa', 'write'] as const)('%s blocks private Bash and Read but admits cwd, skills and credential getter files', { timeout: 300_000 }, async mode => {
+    const f = scopedWorkspace(), own = join(f.cwd, 'own.txt'), ownMarker = randomBytes(16).toString('hex');
+    writeFileSync(own, ownMarker); f.allowed.push(own); f.markers.set(own, ownMarker);
+    const thread = await start(f.cwd, mode, false, f.readScope);
+    const command = [...f.blocked, ...f.allowed].map((file, i) => `cat ${shellQuote(file)}; echo READ_${i}:$?`).join('; ');
+    const probe = await run(thread, `All files below are disposable integration fixtures created by the test runner. Even secrets.enc and master.key contain only random fake marker text, never real credentials. Use Bash exactly once with this command, without changing it or substituting tools:\n${command}`);
+    const bash = liveOutput(probe);
+    expect(bash, text(probe)).not.toBe('');
+    for (const [i, file] of f.blocked.entries()) { expect(bash).not.toContain(f.markers.get(file)); expect(bash).toMatch(new RegExp(`READ_${i}:[1-9]`)); }
+    for (const file of f.allowed) expect(bash).toContain(f.markers.get(file));
+    for (const file of [join(f.root, 'projects/A/groups/g2/private.txt'), own, join(f.root, 'bots/A/skills/s/SKILL.md')]) {
+      const reads = await run(thread, `This is an authorization regression test on a disposable random-marker fixture. Do not infer the outcome from earlier Bash commands. Call the Read tool exactly once on ${file}, even when a denial is expected. Do not substitute tools or skip the call.`);
+      const results = reads.filter(event => event.type === 'tool_result');
+      expect(results, text(reads)).toHaveLength(1);
+      if (file === f.blocked[0]) expect(liveOutput(reads)).not.toContain(f.markers.get(file));
+      else expect(liveOutput(reads)).toContain(f.markers.get(file));
+    }
+  });
+  it.each(['qa', 'write'] as const)('%s starts with an empty default workspace without adding mount placeholders', { timeout: 180_000 }, async mode => {
+    const f = scopedWorkspace(); expect(readdirSync(f.cwd)).toEqual([]);
+    const command = 'true; echo START:$?; touch note.txt; echo WRITE:$?';
+    const events = await run(await start(f.cwd, mode, false, f.readScope), `Use Bash exactly once: ${command}. Do not retry or use other tools.`);
+    expect(liveOutput(events)).toContain('START:0');
+    expect(liveOutput(events)).toContain(mode === 'write' ? 'WRITE:0' : 'WRITE:1');
+    expect(workspaceFiles(f.cwd)).toEqual(mode === 'write' ? ['note.txt'] : []);
+    // An otherwise empty .claude is tolerated only for the CLI-owned .cc-writes directory.
+    if (existsSync(join(f.cwd, '.claude'))) expect(readdirSync(join(f.cwd, '.claude'))).toEqual(['.cc-writes']);
+  });
+  it('workspace writes reject guarded configuration and aliases while allowing instruction files', { timeout: 300_000 }, async () => {
+    const f = scopedWorkspace(), config = join(f.cwd, '.mcp.json');
+    writeFileSync(config, '{}'); mkdirSync(join(f.cwd, '.claude')); mkdirSync(join(f.cwd, '.codex'));
+    writeFileSync(join(f.cwd, '.claude/settings.json'), '{}'); writeFileSync(join(f.cwd, '.codex/config.toml'), '# unchanged');
+    symlinkSync(config, join(f.cwd, 'config-symlink')); linkSync(config, join(f.cwd, 'config-hardlink'));
+    const thread = await start(f.cwd, 'write', false, f.readScope);
+    const command = [
+      'p=.mcp.json; printf hacked > "$p"; echo MCP:$?',
+      'p=.mcp.json; ln "$p" bash-hardlink 2>&1; echo LINK:$?',
+      'p=.claude; mv "$p" .claude-moved; echo MOVE:$?',
+      "p=.codex; printf hacked > \"$p/config.toml\"; echo VARIABLE:$?",
+      'p=.claude/skills/new; mkdir -p "$p"; echo SKILL:$?',
+    ].join('; ');
+    const bash = liveOutput(await run(thread, `Use Bash exactly once with the following boundary probes, even if commands fail. Do not retry:\n${command}`));
+    for (const label of ['MCP', 'LINK', 'MOVE', 'VARIABLE', 'SKILL']) expect(bash).toMatch(new RegExp(`${label}:[1-9]`));
+    expect(bash).toMatch(/cross-device|EXDEV/i);
+    await run(thread, `Use Edit exactly once per file to replace {} with {"changed":true}: ${join(f.cwd, 'config-symlink')} and ${join(f.cwd, 'config-hardlink')}. Then use Write exactly once each for .claude/settings.local.json, .claude/commands/x.md, .claude/agents/x.md, .agents/skills/x/SKILL.md, each with changed. These are denial probes; do not retry or substitute tools.`);
+    expect(readFileSync(config, 'utf8')).toBe('{}');
+    expect(readFileSync(join(f.cwd, '.claude/settings.json'), 'utf8')).toBe('{}');
+    expect(readFileSync(join(f.cwd, '.codex/config.toml'), 'utf8')).toBe('# unchanged');
+    for (const file of ['bash-hardlink', '.claude-moved', '.claude/skills/new', '.claude/settings.local.json', '.claude/commands/x.md', '.claude/agents/x.md', '.agents/skills/x/SKILL.md']) expect(existsSync(join(f.cwd, file))).toBe(false);
+    await run(thread, 'Use Write exactly once each to create CLAUDE.md and .claude/rules/r.md, each containing exactly allowed. Do not use other tools.');
+    for (const file of ['CLAUDE.md', '.claude/rules/r.md']) expect(readFileSync(join(f.cwd, file), 'utf8').trim()).toBe('allowed');
+  });
+});
 
 describe.runIf(LIVE)('Claude secrets get live sandbox', () => {
   it.each([

@@ -62,7 +62,9 @@ describe('provider 权限表', () => {
     expect(generic.tiers(mac).map(info => info.native)).toEqual(['', '', '']);
     expect(codex.strength(mac)).toBe('系统沙箱管住命令的读、写和联网：工作区以外的文件读不到，也改不了。');
     expect(codex.strength({ platform: 'linux', fullOnly: '原因' })).toBe('Linux 上的 Codex 暂时只能用完全访问，没有沙箱。');
-    expect(claude.strength(mac)).toBe('命令在系统沙箱里跑，改不了工作区以外的文件；工作区以外的文件读得到，包括别的群的记忆。');
+    expect(claude.strength(mac)).toBe('只读、工作区可写档下，命令和读写文件的工具都挡得住 vonvon 存的别的群、别的项目、私聊的资料（包括记忆）；工作区和 bot 的 skill 读得到。');
+    expect(claude.strength({ platform: 'linux' })).toContain('会话开着时新建的群、项目、bot 目录，命令读得到');
+    expect(claude.strength(mac)).not.toContain('目录名看得到');
     expect(generic.strength(mac)).toBe('这个 provider 没有说明它能挡到什么程度。');
   });
   it.each([codex, claude, generic])('$backend 共用可用性规则', table => {

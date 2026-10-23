@@ -1,8 +1,8 @@
-import { mkdtemp, mkdir, symlink, rm, realpath, access as fsAccess } from 'node:fs/promises';
+import { mkdtemp, mkdir, symlink, link, writeFile, rm, realpath, access as fsAccess } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { claudeAccess, decide, fileHook, inside, ownAsk, permissionOptions, resolveReal, resumeMode, within, type PathFs, type ToolCall } from '../src/agent/claude-agent/permission';
+import { claudeAccess, decide, fileHook, guardPaths, guardRules, guardedName, inside, ownAsk, permissionOptions, resolveReal, resumeMode, within, type PathFs, type ToolCall } from '../src/agent/claude-agent/permission';
 import { log } from '../src/core/logger';
 const cwd = '/v/Work';
 const tier = (mode: 'qa' | 'write' | 'full', network = false) => claudeAccess(mode, network, cwd, cwd);
@@ -10,7 +10,7 @@ const call = (toolName: string, input: Record<string, unknown> = {}, extra: Reco
 const fsx: PathFs = {
   realpath: async p => p,
   lstat: async () => ({}),
-  stat: async p => ({ dev: 1, ino: p === cwd ? 10 : 11 }),
+  stat: async p => ({ dev: 1, ino: p === cwd ? 10 : [...p].reduce((n, c) => n * 31 + c.charCodeAt(0), 0) }),
 };
 const dirs: string[] = [];
 afterEach(async () => { vi.restoreAllMocks(); await Promise.all(dirs.splice(0).map(p => rm(p, { recursive: true, force: true }))); });
@@ -111,7 +111,7 @@ describe('Claude native permission boundaries', () => {
   it.each(['off', 'all', 'domains'])('pre-allows only the daemon MCP server in auto with network %s, retaining network rules', network => {
     const options = permissionOptions(nativeAccess({ permissionMode: 'auto', network, ...(network === 'domains' ? { domains: ['example.com'] } : {}) }));
     expect(options.allowedTools).toEqual(network === 'domains' ? ['WebFetch(domain:example.com)', 'mcp__vonvon_bot'] : network === 'all' ? ['WebFetch', 'WebSearch', 'mcp__vonvon_bot'] : ['mcp__vonvon_bot']);
-    expect(options.disallowedTools).toEqual(network === 'off' ? ['WebFetch', 'WebSearch'] : network === 'domains' ? ['WebSearch'] : undefined);
+    expect(options.disallowedTools).toEqual([...(network === 'off' ? ['WebFetch', 'WebSearch'] : network === 'domains' ? ['WebSearch'] : []), ...guardRules([cwd])]);
   });
   it('does not add the Bash hook to unsandboxed bypassPermissions', () => {
     expect(permissionOptions(nativeAccess({ permissionMode: 'bypassPermissions', sandbox: false })).hooks).toBeUndefined();
@@ -119,7 +119,7 @@ describe('Claude native permission boundaries', () => {
   it('applies strict sandbox domains and scoped WebFetch rules, with callback checks for every host', async () => {
     const access = nativeAccess({ permissionMode: 'acceptEdits', network: 'domains', domains: ['example.com', '*.npmjs.org'] });
     expect(permissionOptions(access)).toMatchObject({ sandbox: { network: { allowedDomains: ['example.com', '*.npmjs.org'], strictAllowlist: true } },
-      allowedTools: ['WebFetch(domain:example.com)', 'WebFetch(domain:*.npmjs.org)'], disallowedTools: ['WebSearch'] });
+      allowedTools: ['WebFetch(domain:example.com)', 'WebFetch(domain:*.npmjs.org)'], disallowedTools: expect.arrayContaining(['WebSearch', ...guardRules([cwd])]) });
     for (const [host, allowed] of [['example.com', true], ['registry.npmjs.org', true], ['npmjs.org', false], ['example.org', false], ['example.com.evil.test', false]] as const) {
       for (const request of [call('SandboxNetworkAccess', { host }), call('WebFetch', { url: `https://${host}/` })]) {
         expect((await decide(access, request, 'callback')).kind).toBe(allowed ? 'allow' : 'deny');
@@ -160,16 +160,16 @@ describe('Claude permission tiers', () => {
     const opts = permissionOptions(tier('write'));
     expect(opts).toMatchObject({ permissionMode: 'acceptEdits', allowDangerouslySkipPermissions: true,
       sandbox: { enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false },
-      disallowedTools: ['WebFetch', 'WebSearch'], hooks: { PreToolUse: [{ matcher: 'Write|Edit|MultiEdit|NotebookEdit', timeout: 10 }] } });
-    expect(opts.sandbox?.filesystem).toBeUndefined();
+      disallowedTools: expect.arrayContaining(['WebFetch', 'WebSearch', ...guardRules([cwd])]), hooks: { PreToolUse: [{ matcher: 'Write|Edit|MultiEdit|NotebookEdit', timeout: 10 }] } });
+    expect(opts.sandbox?.filesystem?.denyWrite).toEqual(guardPaths([cwd]));
     expect(opts.sandbox?.network).toBeUndefined();
     expect(opts.allowedTools).toBeUndefined();
     expect(permissionOptions(tier('write', true)).allowedTools).toEqual(['WebFetch', 'WebSearch']);
-    expect(permissionOptions(tier('write', true)).disallowedTools).toBeUndefined();
+    expect(permissionOptions(tier('write', true)).disallowedTools).toEqual(guardRules([cwd]));
   });
   it('qa leaves write tools available for meaningful denials and denies both cwd identities', () => {
-    expect(permissionOptions(tier('qa'))).toMatchObject({ permissionMode: 'default', sandbox: { filesystem: { denyWrite: [cwd] } }, disallowedTools: ['WebFetch', 'WebSearch'] });
-    expect(permissionOptions(claudeAccess('qa', false, '/alias', cwd)).sandbox?.filesystem?.denyWrite).toEqual(['/alias', cwd]);
+    expect(permissionOptions(tier('qa'))).toMatchObject({ permissionMode: 'default', sandbox: { filesystem: { denyWrite: [cwd, ...guardPaths([cwd])] } }, disallowedTools: expect.arrayContaining(['WebFetch', 'WebSearch']) });
+    expect(permissionOptions(claudeAccess('qa', false, '/alias', cwd)).sandbox?.filesystem?.denyWrite).toEqual(['/alias', cwd, ...guardPaths(['/alias', cwd])]);
   });
 });
 describe('callback decision table', () => {
@@ -295,4 +295,95 @@ it('checks case identities according to the actual filesystem', async () => {
     await symlink(work, join(dir, 'wORK'));
     expect(await decide(a, call('Write', { file_path: join(dir, 'wORK/f') }), 'callback')).toEqual({ kind: 'allow' });
   }
+});
+
+
+describe('Claude configuration and read isolation', () => {
+  async function layout() {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), 's31b-permission-'))); dirs.push(dir);
+    const work = join(dir, 'work'); const denied = join(dir, 'private'); const allowed = join(denied, 'skills');
+    await mkdir(work); await mkdir(allowed, { recursive: true });
+    return { dir, work, denied, allowed };
+  }
+  it('generates guards for both workspace paths and leaves allowed instruction files writable', async () => {
+    const { dir, work } = await layout();
+    const alias = join(dir, 'alias'); await symlink(work, alias);
+    const a = claudeAccess('write', false, alias, work);
+    const opts = permissionOptions(a);
+    expect(opts.sandbox?.filesystem?.denyWrite).toEqual(guardPaths([alias, work]));
+    expect(opts.disallowedTools).toEqual(expect.arrayContaining(guardRules([alias, work])));
+    for (const path of ['.mcp.json', '.MCP.JSON', '.claude/settings.json', '.claude/skills/a', '.codex/config.toml', '.agents/skills/a', '.claude']) {
+      for (const origin of ['hook', 'callback'] as const) {
+        expect(await decide(a, call('Write', { file_path: join(alias, path) }), origin)).toMatchObject({ kind: 'deny', message: expect.stringContaining('自动加载的配置') });
+      }
+    }
+    for (const path of ['CLAUDE.md', 'AGENTS.md', '.claude/rules/r.md']) {
+      expect(await decide(a, call('Write', { file_path: join(work, path) }), 'callback')).toEqual({ kind: 'allow' });
+    }
+    expect(guardedName([work], join(work, '.codex-extra/file'))).toBeUndefined();
+  });
+  it('rejects symbolic and hard links to configuration files', async () => {
+    const { work } = await layout();
+    await writeFile(join(work, '.mcp.json'), '{}');
+    await symlink(join(work, '.mcp.json'), join(work, 'symbolic'));
+    await link(join(work, '.mcp.json'), join(work, 'hard'));
+    for (const mode of ['qa', 'write'] as const) for (const origin of ['hook', 'callback'] as const) {
+      for (const path of ['symbolic', 'hard']) {
+        expect(await decide(claudeAccess(mode, false, work, work), call('Edit', { file_path: join(work, path) }), origin)).toMatchObject({ kind: 'deny', message: expect.stringContaining('自动加载的配置') });
+      }
+    }
+  });
+  it('uses expanded sandbox lists but coarse read checks for both hooks and callbacks', async () => {
+    const { work, denied, allowed } = await layout();
+    await writeFile(join(denied, 'secret'), 'secret'); await writeFile(join(allowed, 'SKILL.md'), 'skill');
+    const credential = join(work, '../local-credential'); const secrets = join(work, '../secrets.enc');
+    await writeFile(credential, 'private'); await writeFile(secrets, 'encrypted');
+    await symlink(join(denied, 'secret'), join(work, 'escape'));
+    await link(join(denied, 'secret'), join(work, 'hard'));
+    for (const mode of ['qa', 'write'] as const) {
+      const a = claudeAccess(mode, false, work, work);
+      a.read = { deny: [denied, credential], allow: [work, allowed] };
+      a.sandboxRead = { deny: [join(denied, 'secret')], allow: [work, allowed] };
+      expect(permissionOptions(a).sandbox?.filesystem?.denyRead).toEqual(a.sandboxRead.deny);
+      expect(permissionOptions(a).hooks?.PreToolUse?.some(entry => entry.matcher === 'Read|Glob|Grep|LS|NotebookRead')).toBe(true);
+      for (const origin of ['hook', 'callback'] as const) {
+        for (const path of [join(denied, 'new/secret'), join(work, 'escape'), join(work, 'hard'), credential]) {
+          expect(await decide(a, call('Read', { file_path: path }), origin)).toMatchObject({ kind: 'deny', message: expect.stringContaining('读不到') });
+        }
+        for (const path of [join(allowed, 'SKILL.md'), join(work, 'x'), secrets, '/etc/hosts']) {
+          expect(await decide(a, call('Read', { file_path: path }), origin)).toEqual({ kind: origin === 'hook' ? 'continue' : 'allow' });
+        }
+      }
+      const unrestricted = claudeAccess(mode, false, work, work);
+      expect(await decide(unrestricted, call('Read', { file_path: join(work, 'hard') }), 'callback')).toEqual({ kind: 'allow' });
+      const result = await fileHook(a)({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: join(work, 'escape') }, tool_use_id: 'tool', session_id: 's', transcript_path: '', cwd: work }, 'tool', { signal: new AbortController().signal });
+      expect(result).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+    }
+  });
+  it('checks Glob traversal roots without treating Grep content patterns as paths', async () => {
+    const { dir, work, denied } = await layout();
+    const a = claudeAccess('write', false, work, work);
+    a.read = { deny: [denied], allow: [work] };
+    for (const origin of ['hook', 'callback'] as const) {
+      for (const input of [
+        { pattern: `${denied}/**/*.json` },
+        { pattern: '../private/**/*.json' },
+        { pattern: '**/*.json', path: denied },
+        { pattern: `${dir}/**/*.json` },
+        { pattern: '**/../private/*.json' },
+      ]) expect(await decide(a, call('Glob', input), origin)).toMatchObject({ kind: 'deny' });
+      for (const input of [{ pattern: '**/*.ts' }, { pattern: '*.ts', path: work }]) {
+        expect(await decide(a, call('Glob', input), origin)).toEqual({ kind: origin === 'hook' ? 'continue' : 'allow' });
+      }
+      expect(await decide(a, call('Grep', { pattern: `${denied}/**/../secret` }), origin)).toEqual({ kind: origin === 'hook' ? 'continue' : 'allow' });
+      expect(await decide(a, call('Grep', { pattern: 'PRIVATE', path: dir }), origin)).toMatchObject({ kind: 'deny' });
+      expect(await decide(a, call('Grep', { pattern: 'ordinary', path: work }), origin)).toEqual({ kind: origin === 'hook' ? 'continue' : 'allow' });
+    }
+  });
+  it('does not apply read scope or guards after native mode resolves to full', async () => {
+    const a = nativeAccess({ permissionMode: 'bypassPermissions', sandbox: true });
+    a.read = { deny: [cwd], allow: [] };
+    expect(permissionOptions(a).sandbox?.filesystem).toBeUndefined();
+    expect(await decide(a, call('Read', { file_path: join(cwd, '.mcp.json') }), 'hook')).toEqual({ kind: 'continue' });
+  });
 });
