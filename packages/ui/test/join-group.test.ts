@@ -106,15 +106,13 @@ it('s36b2: shows topic binding choices, restricted permissions and Linux Codex g
   expect(render(true, true, false).match(/role="radio"/g)).toHaveLength(3);
 });
 
-it('requires a real explicit decision model and a readable key for smart setup', () => {
+it('requires an explicit ready judgment Provider for smart setup', () => {
   expect(judgeSetupProblem({kind: 'default'})).toContain('请选择');
-  expect(judgeSetupProblem({kind: 'llm', backend: 'codex-appserver', model: 'real-model', effort: 'low'})).toBeUndefined();
-  const choice = {kind: 'decision' as const, provider: 'actual', model: 'jev-actual'};
-  const services = [{provider: 'actual', displayName: 'Actual', keyId: 'key', models: [{id: 'jev-actual', displayName: 'Jev'}], keySet: false}];
-  expect(judgeSetupProblem(choice, services)).toContain('添加');
-  expect(judgeSetupProblem(choice, [{...services[0]!, keySet: false, keyUnreadable: true}])).toContain('无法读取');
-  expect(judgeSetupProblem(choice, [{...services[0]!, keySet: true}])).toBeUndefined();
-  expect(judgeSetupProblem({...choice, model: 'missing'}, [{...services[0]!, keySet: true}])).toContain('不可用');
+  expect(judgeSetupProblem({kind: 'provider', provider: 'codex-appserver'}, undefined, ['codex-appserver'])).toBeUndefined();
+  expect(judgeSetupProblem({kind: 'provider', provider: 'claude-agent'}, undefined, ['codex-appserver'])).toContain('不可用');
+  const services = [{provider: 'typesafe', displayName: 'TypeSafe', keyId: 'key', models: [{id: 'jev', displayName: 'Jev'}], keySet: false}];
+  expect(judgeSetupProblem({kind: 'provider', provider: 'typesafe'}, services)).toContain('密钥');
+  expect(judgeSetupProblem({kind: 'provider', provider: 'typesafe'}, [{...services[0]!, keySet: true}])).toBeUndefined();
 });
 
 it('starts with a ready Provider and rejects an unavailable setup suggestion', () => {

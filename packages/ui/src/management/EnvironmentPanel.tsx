@@ -293,8 +293,8 @@ function BackendActions({ backend, actions }: { backend: BackendEntry; actions: 
   </div>;
 }
 
-const loginLabels: Record<BackendLogin["state"], string> = { signedIn: "已登录", signedOut: "未登录", unknown: "无法确认" };
-const loginTones: Record<BackendLogin["state"], "success" | "warning" | "neutral"> = { signedIn: "success", signedOut: "warning", unknown: "neutral" };
+const loginLabels: Record<BackendLogin["state"], string> = { signedIn: "已登录", signedOut: "未登录", notRequired: "无需登录", unknown: "无法确认" };
+const loginTones: Record<BackendLogin["state"], "success" | "warning" | "neutral"> = { signedIn: "success", signedOut: "warning", notRequired: "success", unknown: "neutral" };
 
 function BackendRow({ backend, actions, login, onCheckLogin }: { backend: BackendEntry; actions: BackendActionsProps; login?: BackendLogin; onCheckLogin: () => void }) {
   const sdk = backend.id === "claude-agent" && backend.depKind === "npm-ondemand";

@@ -91,6 +91,7 @@ function respond(msg) {
     return reply(msg.id, { config: { mcp_servers: Object.fromEntries(names.map((n) => [n, { command: 'x', enabled: true }])) }, origins: {}, layers: null });
   }
   if (m === 'skills/list') return reply(msg.id, { data: [{ cwd: p.cwds[0], skills: read('skills', []), errors: [] }] });
+  if (m === 'account/read') return reply(msg.id, read('account', {requiresOpenaiAuth:true,account:{type:'chatgpt'}}));
   if (m === 'model/list') {
     if (read('model-list-error', false)) return send({ id: msg.id, error: { code: -32000, message: 'no list' } });
     return reply(msg.id, { data: [{ id: 'gpt-6-luna', isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'low' }] }] });
@@ -223,6 +224,20 @@ const failure = (p: Promise<unknown>): Promise<unknown> => p.then(() => new Erro
 const threadOf = (r: { params: Record<string, any> }) => r.params.threadId as string;
 
 describe('Codex 判断进程：参数和结果', () => {
+  it('reads fresh account state before admitting a provider choice', async () => {
+    const backend = new CodexAppServerBackend();
+    for (const [account, state] of [
+      [{requiresOpenaiAuth:true,account:{type:'chatgpt'}}, 'signedIn'],
+      [{requiresOpenaiAuth:true,account:null}, 'signedOut'],
+      [{requiresOpenaiAuth:false,account:null}, 'notRequired'],
+      [{requiresOpenaiAuth:'bad',account:null}, 'unknown'],
+    ] as const) {
+      fake.set('account', account);
+      expect((await backend.loginStatus({refresh:true})).state).toBe(state);
+    }
+    expect(fake.requests('account/read')).toHaveLength(4);
+    expect(fake.requests('account/read').every(request=>request.params.refreshToken===true)).toBe(true);
+  });
   it('thread/start 带齐判断参数，盘点出的 MCP 和个人 skill 都关掉；turn/start 带 model、effort、outputSchema、summary', async () => {
     fake.set('mcp', [['global_probe']]);
     fake.set('skills', [{ name: 'user-skill-x', scope: 'user' }, { name: 'repo-skill', scope: 'repo' }, { name: 'sys', scope: 'system' }]);

@@ -101,6 +101,12 @@ describe('keyStatus and describeKeystoreError (s23g)', () => {
 });
 
 describe('who chose a key: the judge\'s own resolution (s23g)', () => {
+  it('still lists TypeSafe use when the host judge model file is corrupt', async () => {
+    await writeFile(paths.botsFile, JSON.stringify({ version: 1, bots: [{ name: 'a', appId: 'cli_a', tenant: 'feishu', createdAt: 1 }] }));
+    await bot('cli_a', 'a', undefined, [group('oc_a', 'a', { ...smart, judge: { kind: 'provider', provider: 'typesafe' } })]);
+    await writeFile(join(paths.appDir, 'judge-models.json'), '{bad');
+    expect((await typesafe()).inUse).toEqual([{ agentId: 'cli_a', agentName: 'a', groupId: 'oc_a', groupName: 'a' }]);
+  });
   it('lists the bot default, smart groups that use it, and a group outside 智能 that chose it itself; counts unread bots', async () => {
     await writeFile(paths.botsFile, JSON.stringify({ version: 1, bots: ['cli_a', 'cli_b', 'cli_c', 'cli_d'].map(appId => ({ name: appId, appId, tenant: 'feishu', createdAt: 1, ...(appId === 'cli_a' ? { botName: '值班助手' } : {}) })) }));
     await bot('cli_a', '值班助手', JEV, [

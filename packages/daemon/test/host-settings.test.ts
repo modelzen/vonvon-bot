@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { createHostSettings } from '../src/admin/host-settings';
 import { readServiceCodexBin, saveServiceCodexBin } from '../src/service/codex-bin';
 import type { HostSettingsView } from '../src/admin/settings-types';
+import { acquireMutex, closeMutex } from '../src/config/data-access';
+import { parseSettingsEdit } from '../src/admin/settings-parse';
 
 const homes: string[] = [];
 afterEach(async () => { await Promise.all(homes.splice(0).map(home => rm(home, { recursive: true, force: true }))); });
@@ -91,5 +93,51 @@ describe('Host executable settings', () => {
     expect(Object.keys(view.runtime).sort()).toEqual(['codexBin', 'fallbackCwd', 'platform']);
     expect(f.settings).not.toHaveProperty('act');
     expect(await readFile(route, 'utf8')).toBe('{"botId":"cli_old"}\n');
+  });
+});
+
+describe('global judge model settings', () => {
+  it('parses and preserves a newer provider choice, but rejects changing it', async () => {
+    const f = await fixture();
+    await writeFile(join(f.appDir, 'judge-models.json'), JSON.stringify({version:1,byProvider:{future:{model:'future-one'}}}));
+    const view = await f.read();
+    const edit = {scope:{kind:'host'},section:'judge',revision:view.sections.judge.revision,
+      patch:{byProvider:{future:{model:'future-one'},'codex-appserver':{model:'custom-one',custom:true}}}};
+    expect(parseSettingsEdit(edit)).toMatchObject(edit);
+    expect((await f.settings.save(parseSettingsEdit(edit))).kind).toBe('saved');
+    expect((await f.read()).sections.judge.stored.byProvider.future).toEqual({model:'future-one'});
+    const changed = await f.read();
+    expect((await f.settings.save(parseSettingsEdit({ ...edit, revision: changed.sections.judge.revision,
+      patch:{byProvider:{future:{model:'future-two'}}} }))).kind).toBe('rejected');
+  });
+  it('saves while the daemon owns host and serializes competing judge writers', async () => {
+    const f = await fixture();
+    const other = createHostSettings({ appDir: f.appDir });
+    const first = await f.read();
+    const hostLock = await acquireMutex(f.appDir, 'host');
+    try {
+      const base = { scope: { kind: 'host' as const }, section: 'judge' as const, revision: first.sections.judge.revision };
+      const results = await Promise.all([
+        f.settings.save({ ...base, patch: { byProvider: { typesafe: { model: 'jev-latest' } } } }),
+        other.save({ ...base, patch: { byProvider: { 'codex-appserver': { model: 'custom-one', custom: true } } } }),
+      ]);
+      expect(results.map(result => result.kind).sort()).toEqual(['conflict', 'saved']);
+    } finally { await closeMutex(hostLock); }
+  });
+  it('saves overrides with CAS across host service instances and reads effective defaults', async () => {
+    const f = await fixture();
+    const other = createHostSettings({ appDir: f.appDir });
+    const first = await f.read();
+    expect(Object.keys(first.sections.judge.effective.byProvider).sort()).toEqual(['claude-agent', 'codex-appserver', 'typesafe']);
+    expect(first.sections.judge.stored.byProvider).toEqual({});
+    const edit = { scope: { kind: 'host' as const }, section: 'judge' as const, revision: first.sections.judge.revision,
+      patch: { byProvider: { 'codex-appserver': { model: 'gateway/model', effort: 'high' as const, custom: true } } } };
+    expect((await f.settings.save(edit)).kind).toBe('saved');
+    const fresh = await other.read({ kind: 'host' });
+    if (!('runtime' in fresh)) throw new Error('Expected host view');
+    expect(fresh.sections.judge.effective.byProvider['codex-appserver']).toEqual(edit.patch.byProvider['codex-appserver']);
+    expect((await other.save({ ...edit, patch: { byProvider: { 'codex-appserver': { model: 'other', custom: true } } } })).kind).toBe('conflict');
+    expect((await other.save({ ...edit, revision: fresh.sections.judge.revision,
+      patch: { byProvider: { typesafe: { model: 'jev-latest', effort: 'high' } } } })).kind).toBe('rejected');
   });
 });

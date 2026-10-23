@@ -56,11 +56,13 @@ const judgeKinds = {
     provider: z.string().trim().min(1).max(100),
     model: z.string().trim().min(1).max(1000),
   }),
+  provider: z.object({ kind: z.literal("provider"), provider: z.enum(["codex-appserver", "claude-agent", "typesafe"]) }),
 };
 const judgeSelection = z.discriminatedUnion("kind", [
   judgeKinds.default.strict(),
   judgeKinds.llm.strict(),
   judgeKinds.decision.strict(),
+  judgeKinds.provider.strict(),
 ]);
 export const judgeSectionSchema = z.object({ selection: judgeSelection });
 /** The judge kinds this version knows; a view carries others as sent. */
@@ -69,7 +71,7 @@ export const JUDGE_SELECTION_KINDS: readonly string[] = Object.keys(judgeKinds);
  * parses as sent, so the rest of the view still shows; a known kind with extra fields drops them. */
 const judgeViewSection = z.object({
   selection: z.union([
-    z.discriminatedUnion("kind", [judgeKinds.default, judgeKinds.llm, judgeKinds.decision]),
+    z.discriminatedUnion("kind", [judgeKinds.default, judgeKinds.llm, judgeKinds.decision, judgeKinds.provider]),
     z
       .object({ kind: z.string().min(1).max(100).refine((kind) => !JUDGE_SELECTION_KINDS.includes(kind)) })
       .passthrough(),
@@ -138,6 +140,7 @@ export const projectSectionSchemas = {
 export const sessionSectionSchemas = { model: z.object({ selection }) };
 export const hostSectionSchemas = {
   execution: z.object({ codexBin: z.string().nullable() }),
+  judge: z.object({ byProvider: z.record(z.string(), z.object({ model: z.string().trim().min(1).max(1000), effort: effort.optional(), custom: z.boolean().optional() })) }),
 };
 
 /** A session's Feishu thread id; the CLI checks `--session` with it before connecting. */
@@ -314,7 +317,7 @@ export const sessionViewSchema = z.object({
 });
 export const hostViewSchema = z.object({
   scope: z.object({ kind: z.literal("host") }),
-  sections: sections(hostSectionSchemas),
+  sections: sections(hostSectionSchemas).partial({ judge: true }),
   runtime: z.object({
     codexBin: z.string().nullable(),
     fallbackCwd: z.string(),
@@ -367,7 +370,7 @@ const editablePatches: Record<
     ]),
   ),
   session: { model: sessionSectionSchemas.model.partial().strict() },
-  host: { execution: hostSectionSchemas.execution.partial().strict() },
+  host: { execution: hostSectionSchemas.execution.partial().strict(), judge: hostSectionSchemas.judge.partial().strict() },
 };
 export const editSchema = z
   .object({
@@ -413,6 +416,12 @@ export type SettingsEdit =
       section: "execution";
       revision: string;
       patch: Partial<z.infer<typeof hostSectionSchemas.execution>>;
+    }
+  | {
+      scope: Extract<SettingsScope, { kind: "host" }>;
+      section: "judge";
+      revision: string;
+      patch: Partial<z.infer<typeof hostSectionSchemas.judge>>;
     };
 export const actionSchema = z.discriminatedUnion("kind", [
   z

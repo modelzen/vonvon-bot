@@ -238,8 +238,8 @@ export function useCount(uses: readonly SecretUse[], between = ' · '): string {
   return groups ? `${bots} 个 Bot${between}${groups} 个飞书群` : `${bots} 个 Bot`;
 }
 
-const BOTS_LOG = 'vonvon daemon logs 里的 secrets.bots-unreadable 有原因。';
-const BOT_LOG = 'vonvon daemon logs 里的 secrets.bot-unreadable 有原因。';
+const BOTS_LOG = '请在日志中查看 Bot 清单读取失败的原因。';
+const BOT_LOG = '请在日志中查看 Bot 设置读取失败的原因。';
 
 /** Whose choices `inUse` is missing, and where the log says why: the command line's words. */
 export const unreadNotes = (view: Pick<SecretsView, 'botsUnreadable' | 'unreadBots'>): string[] => [

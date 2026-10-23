@@ -49,7 +49,6 @@ const formerly: Readonly<Record<string, string>> = {'后端状态': 'Host 状态
 const globalGroups: readonly {page: Page; section: string; fields: readonly Target[]}[] = [
   {page: 'usage', section: '智能模式的判断次数', fields: [item('判断次数', ['判断', '按 Bot 看'], {field: ''})]},
   {page: 'application', section: '启动选项', fields: [item('运行状态'), item('重启后台服务', ['重启 daemon']), item('登录电脑时启动', ['开机启动'])]},
-  {page: 'application', section: '命令行工具', fields: [item('vonvon', ['CLI', '修复命令行工具'])]},
   {page: 'application', section: 'daemon 运行', fields: [item('运行方式'), item('daemon 服务', ['启动 daemon', '停止 daemon']), item('临时运行 Bot', [], {guide: '仅运行指定 Bot 时显示当前临时运行状态。'})]},
   {page: 'application', section: '后台服务', fields: [item('系统服务'), item('安装并启动', ['安装并启动后台服务']), item('服务运行', ['启动已安装服务', '停止后台服务并关闭自启']), item('卸载后台服务'), item('仅运行指定 Bot', [], {reveal: 'machine-advanced'}), ...['进程 PID', '上次退出', '服务定义', '标准输出', '错误日志'].map(title => item(title, [], {reveal: 'machine-advanced'}))]},
   {page: 'application', section: '软件更新', fields: [item('桌面版'), item('更新状态'), item('可用版本'), item('检查更新', ['检查桌面更新']), item('下载更新', [], {guide: '有可用更新时显示下载操作。'}), item('安装更新', [], {guide: '下载完成后显示安装操作。'}), item('发布说明')]},

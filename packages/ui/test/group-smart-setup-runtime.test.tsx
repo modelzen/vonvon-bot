@@ -36,7 +36,7 @@ const readyTools: DesktopSnapshot['tools'] = [{tool: 'codex', installation: 'ins
 const snapshot: DesktopSnapshot = {revision: 1, observedAt: 1, stale: false, host: {kind: 'connected', ownership: 'owned', version: 'test'}, agents: [agent], groups: [group], memberships: [member], tools: readyTools, jobs: [], application: {platform: 'macos', version: 'test', loginItem: false, dataPath: '/test'}};
 const section = <T,>(stored: T, revision = 'settings-r1') => ({stored, effective: stored, revision, access: {kind: 'writable' as const}, apply: []});
 const fixture = (): ProjectSettingsView => ({scope: {kind: 'project', botId, projectName: member.name}, identity: {chatId: groupId, backend: 'codex-appserver', cwd: '/project', kind: 'single'}, sections: {permission: section({mode: 'full', guestMode: 'qa', network: false}), response: section({noMention: false}), model: section({selection: {kind: 'default'}}), judge: section({selection: {kind: 'default'}})}, members: {openIds: [], revision: 'members-r1'}});
-const selection = {kind: 'llm' as const, backend: 'codex-appserver', model: 'actual-model', effort: 'high' as const};
+const selection = {kind: 'provider' as const, provider: 'codex-appserver' as const};
 let view = fixture();
 let project: ProjectRecord;
 let events: string[];
@@ -137,7 +137,7 @@ it('validates a selection, waits for decision persistence, then changes the mode
   let ui = await openSmart();
   expect(ui.dialog.props.open).toBe(true); expect(ui.mode.props.value).toBe('shared');
   ui.submit!.props.onClick(); ui = await settle();
-  expect(messages(ui)).toContain('请选择决策模型');
+  expect(messages(ui)).toContain('请选择判断 Provider');
   expect(harness.client.settings.mock.calls.some(([request]) => request.type === 'save')).toBe(false);
   ui.decision!.props.onChange(selection); ui = render();
   let resolve!: (reply: SettingsReply) => void;
@@ -192,7 +192,20 @@ it.each(['signedOut', 'unknown'] as const)('blocks a stale decision choice when 
   expect(ui.decision!.props.providers).toEqual([]);
   events = []; ui.submit!.props.onClick(); ui = await settle();
   expect(events).toEqual([]);
-  expect(messages(ui)).toContain('此 Provider 当前不可用');
+  expect(messages(ui)).toContain('此判断 Provider 当前不可用');
   expect(ui.dialog.props.open).toBe(true);
   expect(ui.mode.props.value).toBe('shared');
+});
+
+it('does not rewrite a legacy group decision when switching to smart until a provider is chosen', async () => {
+  const legacy = {kind: 'llm' as const, backend: 'codex-appserver', model: 'old-model', effort: 'high' as const};
+  view.sections.judge = section({selection: legacy});
+  let ui = await openSmart();
+  expect(ui.decision!.props.value).toEqual(legacy);
+  ui.submit!.props.onClick(); ui = await settle();
+  expect(messages(ui)).toContain('请选择判断 Provider');
+  expect(harness.client.settings.mock.calls.some(([request]) => request.type === 'save')).toBe(false);
+  ui.decision!.props.onChange(selection); ui = render(); ui.submit!.props.onClick(); ui = await settle();
+  const request = harness.client.settings.mock.calls.find(([request]) => request.type === 'save')?.[0] as Extract<SettingsRequest, {type: 'save'}>;
+  expect(request.edit.patch).toEqual({selection});
 });

@@ -6,7 +6,7 @@ import {parseCollaborationRequest} from '../src/admin/collaboration';
 import type {ModelInfo} from '../src/agent/types';
 
 const models:ModelInfo[]=[{id:'work-model',displayName:'Work',description:'',isDefault:true,hidden:false,supportedEfforts:['low','high'],defaultEffort:'low'}];
-const helper=()=>({backendFor:vi.fn((_id:string)=>({peekModels:()=>models,listModels:vi.fn(async()=>models)})),readKey:vi.fn(async()=>undefined as string|undefined)});
+const helper=()=>({backendFor:vi.fn((_id:string)=>({peekModels:()=>models,listModels:vi.fn(async()=>models),loginStatus:vi.fn(async()=>({state:'signedIn' as 'signedIn'|'signedOut',message:''}))})),readKey:vi.fn(async()=>undefined as string|undefined),readJudgeModels:vi.fn(async()=>({byProvider:{}}))});
 describe('new group configuration admission',()=>{
   it('freezes explicit group settings without depending on Bot defaults',async()=>{
     const settings=await prepareNewGroupSettings({backend:'codex-appserver',kind:'multi'},helper());
@@ -47,5 +47,24 @@ describe('new group configuration admission',()=>{
     expect(parseBindGroupInput({chatId:'oc_a',projectName:'a',backend:'codex-appserver',kind:'smart',judge})).toMatchObject({judge});
     expect(parseCollaborationRequest({action:'createProject',requestId:'a'.repeat(20),name:'a',backend:'codex-appserver',kind:'smart',judge})).toMatchObject({judge});
     expect(()=>parseBindGroupInput({chatId:'oc_a',projectName:'a',backend:'codex-appserver',kind:'smart',judge:{...judge,command:'bad'}})).toThrow('设置无效');
+  });
+  it('accepts a provider-only group choice and checks its current shared credential', async()=>{
+    const deps=helper();
+    const judge={kind:'provider' as const,provider:'typesafe' as const};
+    await expect(prepareNewGroupSettings({backend:'codex-appserver',kind:'smart',judge},deps)).rejects.toThrow('密钥');
+    deps.readKey.mockResolvedValue('fixture-key');
+    expect((await prepareNewGroupSettings({backend:'codex-appserver',kind:'smart',judge},deps)).judge).toEqual(judge);
+    expect(parseBindGroupInput({chatId:'oc_a',projectName:'a',backend:'codex-appserver',kind:'smart',judge})).toMatchObject({judge});
+    expect(()=>parseBindGroupInput({chatId:'oc_a',projectName:'a',backend:'codex-appserver',kind:'smart',judge:{...judge,model:'jev-latest'}})).toThrow('设置无效');
+  });
+  it('accepts a Provider default from its live catalog when Luna is absent', async()=>{
+    const deps=helper();
+    const judge={kind:'provider' as const,provider:'codex-appserver' as const};
+    expect((await prepareNewGroupSettings({backend:'codex-appserver',kind:'smart',judge},deps)).judge).toEqual(judge);
+  });
+  it('rejects a selected Provider after its login expires', async()=>{
+    const deps=helper();
+    deps.backendFor.mockImplementation(()=>({peekModels:()=>models,listModels:vi.fn(async()=>models),loginStatus:vi.fn(async()=>({state:'signedOut' as 'signedIn'|'signedOut',message:''}))}));
+    await expect(prepareNewGroupSettings({backend:'codex-appserver',kind:'smart',judge:{kind:'provider',provider:'claude-agent'}},deps)).rejects.toThrow('尚未登录');
   });
 });

@@ -768,6 +768,16 @@ export class CodexAppServerBackend implements AgentBackend {
     return { ok: true, version, location: bin };
   }
 
+  async loginStatus(opts?: { refresh?: boolean }): Promise<import('../types').BackendLogin> {
+    try {
+      const account = await utilityRequest<{ requiresOpenaiAuth: boolean; account: unknown }>('account/read', { refreshToken: opts?.refresh === true });
+      if (account.requiresOpenaiAuth === false) return { state: 'notRequired', message: '当前 Provider 不需要 OpenAI 登录。' };
+      if (account.requiresOpenaiAuth === true && account.account && typeof account.account === 'object') return { state: 'signedIn', message: '已登录。' };
+      if (account.requiresOpenaiAuth === true && account.account === null) return { state: 'signedOut', message: '尚未登录。' };
+    } catch { /* preserve an unknown state; callers must not treat it as signed in */ }
+    return { state: 'unknown', message: '无法确认 Codex 登录状态。' };
+  }
+
   async listModels(): Promise<ModelInfo[]> {
     if (this.modelCache) return this.modelCache;
     if (!resolveCodexBin()) return OFFLINE_CODEX_MODELS;
