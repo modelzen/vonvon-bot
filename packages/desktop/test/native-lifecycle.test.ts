@@ -108,7 +108,7 @@ import { startDesktop, desktopResources } from '../src/main.js';
 import { changeLoginItem, repairServiceAtStartup } from '../src/login-item.js';
 import { AttachError } from '../src/attach.js';
 import { ConnectionError, RpcError } from '@vonvon/client/browser';
-import { autoUpdater, dialog, net } from 'electron';
+import { autoUpdater, dialog, Menu, net } from 'electron';
 
 type MockApp = EventEmitter & { requestSingleInstanceLock: ReturnType<typeof vi.fn>; quit: ReturnType<typeof vi.fn>; getAppPath: ReturnType<typeof vi.fn> };
 type MockWindow = EventEmitter & {
@@ -194,6 +194,15 @@ async function downloadUpdate(): Promise<void> {
 }
 
 describe('updater final install lifecycle', () => {
+  it('provides native editing shortcuts while preserving quit confirmation', () => {
+    const menu = vi.mocked(Menu.setApplicationMenu).mock.lastCall?.[0] as unknown as Array<{
+      role?: string; label?: string; submenu?: Array<{ label?: string; click?: () => void }>;
+    }>;
+    expect(menu).toContainEqual({ role: 'editMenu', label: '编辑' });
+    menu[0]?.submenu?.find(item => item.label === '退出 Vonvon Bot')?.click?.();
+    expect(fake.bridge.requestQuit).toHaveBeenCalledOnce();
+    expect(app.quit).not.toHaveBeenCalled();
+  });
   it('exposes CLI repair and observation without changing the daemon owner', async () => {
     await expect(actions.observeCli()).resolves.toMatchObject({ kind: 'error', message: 'absent' });
     await expect(actions.repairCli()).resolves.toEqual({ type: 'done', message: 'installed' });
