@@ -36,11 +36,11 @@ export function groupTabForSection(section?: string): GroupDesignTab {
 }
 
 type Props = {member: Membership; agent: Agent; group: Group; snapshot: DesktopSnapshot; initialTab?: GroupDesignTab; revealHistory?: boolean; onTabChange?: (tab:GroupDesignTab) => void;
-  onBot: (member: Membership) => void; onBotProfile: () => void; onOpenTools: () => void; onOpenSecrets: () => void; onChanged: () => Promise<void>};
+  onBot: (member: Membership) => void; onBotProfile: () => void; onOpenTools: () => void; onOpenProviders?: () => void; onOpenSecrets: () => void; onChanged: () => Promise<void>};
 // Intent: configure one Bot within one group, without exposing session management as navigation.
 // Hierarchy: target first, five established pages second. Quiet inset surfaces and system type
 // share Today's 4px spacing rhythm; history/help remain contextual actions in the toolbar.
-export function GroupWorkspace({member, agent, group, snapshot, initialTab, revealHistory, onTabChange, onBot, onBotProfile, onOpenTools, onOpenSecrets, onChanged}: Props) {
+export function GroupWorkspace({member, agent, group, snapshot, initialTab, revealHistory, onTabChange, onBot, onBotProfile, onOpenTools, onOpenProviders, onOpenSecrets, onChanged}: Props) {
   const client = useClient();
   const shell = useShellCapabilities();
   const guard = useDraftGuard();
@@ -120,12 +120,12 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
     <nav className="group-design-tabs" aria-label="群设置">{groupDesignTabs.map(([value,label]) => <button type="button" key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => guard.navigate(() => {setTab(value); onTabChange?.(value);})}>{label}</button>)}</nav>
     {error && <InlineNotice title="操作未完成" tone="warning">{error}</InlineNotice>}
     {notice && <p role="status" className="group-control-note">{notice}</p>}
-    <GroupDesignSettings key={`${member.id}:${version}`} scope={{kind:'project',botId:member.agentId,projectName:member.name}} tab={tab} tools={snapshot.tools} botName={agent.name} groupName={group.name} onOpenTools={onOpenTools} onOpenSecrets={onOpenSecrets} responseHeader={conversationControl}/>
+    <GroupDesignSettings key={`${member.id}:${version}`} scope={{kind:'project',botId:member.agentId,projectName:member.name}} tab={tab} tools={snapshot.tools} botName={agent.name} groupName={group.name} onOpenTools={onOpenTools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets} responseHeader={conversationControl}/>
     <Dialog open={dialog === 'history'} title={`${group.name} · ${agent.name}`} onClose={() => setDialog(null)}><div id={settingAnchor("会话管理")}>{agent.running ? <ConversationPanel agentId={agent.id} groupId={group.id} projectName={member.name} conversation={conversation} request={client.collaboration}/> : <p>Bot 运行后可查看对话记录。</p>}</div></Dialog>
     <Dialog open={dialog === 'help'} title="在群里使用" onClose={() => setDialog(null)}><GroupUsage conversation={conversation} botName={agent.name}/></Dialog>
     <Dialog open={dialog === 'smart'} title="设置智能模式" onClose={() => guard.navigate(() => setDialog(null))}>
       <p className="group-control-note">选择用于判断回复时机的模型。</p>
-      {dialog === 'smart' && <GroupDesignSettings scope={{kind:'project',botId:member.agentId,projectName:member.name}} tab="response" tools={snapshot.tools} decisionSetupOnly onOpenSecrets={onOpenSecrets} onDecisionSaved={async () => {if (await update({conversation:'smart'})) setDialog(null); else throw new Error('决策模型已保存，未能切换聊天方式，请重试。');}}/>}
+      {dialog === 'smart' && <GroupDesignSettings scope={{kind:'project',botId:member.agentId,projectName:member.name}} tab="response" tools={snapshot.tools} decisionSetupOnly onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets} onDecisionSaved={async () => {if (await update({conversation:'smart'})) setDialog(null); else throw new Error('决策模型已保存，未能切换聊天方式，请重试。');}}/>}
     </Dialog>
     <ConfirmDialog open={dialog === 'remove'} title="解除这个群的绑定？" confirmLabel="解除绑定" tone="danger" pending={busy} onCancel={() => setDialog(null)} onConfirm={() => {setDialog(null); void update({},true);}} description={`解除 ${agent.name} 与「${group.name}」的关联。Bot 加入的群会退出；Bot 创建的群会尝试转交群主。本地目录和文件保留。`}/>
   </div>;

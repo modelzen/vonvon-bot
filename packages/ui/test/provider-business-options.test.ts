@@ -17,11 +17,15 @@ it('keeps a saved unavailable model Provider visible but disabled', () => {
   expect(html).toContain('配置已保留');
 });
 
-it('keeps a saved unavailable decision Provider read-only and blocks missing-key services', () => {
+it('keeps unavailable decision Providers visible and open for setup guidance', () => {
   const html = render(createElement(DecisionFields, {botId, groupBackend: 'codex-appserver', value: {kind: 'llm', backend: 'claude-agent', model: 'haiku'}, effective: {kind: 'default'}, onChange: () => {}, disabled: false, providers: [], services: [{provider: 'actual', displayName: 'Actual', keyId: 'actual-key', models: [{id: 'jev', displayName: 'Jev'}], keySet: false}]}));
-  expect(html).toContain('Claude（当前不可用）');
-  expect(html).toContain('配置已保留');
-  expect(html).toMatch(/<input[^>]*disabled=""[^>]*value="decision:actual"/);
+  expect(html).toContain('Claude 尚未就绪');
+  expect(html).toContain('检查登录');
+  for (const provider of ['codex-appserver', 'claude-agent', 'decision:actual']) {
+    const input = html.match(new RegExp(`<input[^>]*value="${provider}"[^>]*>`))?.[0];
+    expect(input).toBeDefined();
+    expect(input).not.toContain('disabled');
+  }
 });
 it('does not validate model access against an offline fallback catalog', () => {
   const catalog = {backend: 'codex-appserver', state: 'fallback' as const, source: 'static-fallback' as const, observedAt: 0, titleEfforts: ['low' as const], models: [{id: 'gpt-6-luna', displayName: 'Luna', description: '', isDefault: true, hidden: false, supportedEfforts: ['low' as const], defaultEffort: 'low' as const}]};
