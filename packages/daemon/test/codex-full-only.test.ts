@@ -22,6 +22,12 @@ describe('Codex Linux permission capability', () => {
     for (const version of [null, 'unknown', 'codex-cli 0.162.9', '0.99.0', '0.163.0-alpha.1', 'codex-cli 0.163.0-rc.1']) expect(codexConfinesReads('linux', version)).toBe(false);
     expect(codexFullOnlyReason(null)).toContain('测不出 Codex 的版本');
   });
+  it.each(['0.163.0-alpha.1', 'codex-cli 0.163.0-rc.1'])(
+    'explains the stable minimum while preserving the detected prerelease: %s', version => {
+      const reason = codexTierUnavailable('qa', 'linux', version);
+      expect(reason).toContain(`Codex 是 ${version}`);
+      expect(reason).toContain(`${CODEX_LINUX_MIN_VERSION} 正式版以上`);
+    });
   it('reads only cached versions on the per-message fullAccessOnly path', () => {
     locate.version = undefined;
     expect(new CodexAppServerBackend().fullAccessOnly()).toBeUndefined();
