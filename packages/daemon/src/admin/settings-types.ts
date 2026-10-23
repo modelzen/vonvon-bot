@@ -1,5 +1,6 @@
 import type { BotProfile, GroupProfile, ProjectModelAccess, ProjectWorkspace, ProjectSmartRules, ProjectSkills, ProjectPresentation } from '../project/registry';
 import type { ModelInfo, PermissionMode, ReasoningEffort } from '../agent/types';
+import type { TierInfo } from '../agent/permission';
 import type { ModelDisplayMode, PendingPolicy, ResolvedCompletionReminderConfig } from '../config/schema';
 import type { VoiceAction, VoiceView } from '../voice/types';
 export type SettingsScope = {
@@ -119,9 +120,17 @@ export interface ProjectSections {
   presentation: ProjectPresentation;
   permission: {
     mode: PermissionMode;
+    custom: Record<string, unknown> | null;
     /** @deprecated since s15c always equal to `mode`, never saved; kept so clients from before s15c still parse the view */
     guestMode: PermissionMode;
     network: boolean;
+    options: {
+      tiers: TierInfo[];
+      strength: string;
+      customSummary?: string;
+      legacy?: boolean;
+      invalid?: boolean;
+    };
   };
   response: {
     noMention: boolean;
@@ -262,7 +271,7 @@ type SectionEdit<S, M> = {
   };
 }[keyof M];
 /** What a save may set in a group's settings: the view's `permission.guestMode` is output only. */
-type ProjectEdits = Omit<ProjectSections, 'permission'> & { permission: Omit<ProjectSections['permission'], 'guestMode'> };
+type ProjectEdits = Omit<ProjectSections, 'permission'> & { permission: Pick<ProjectSections['permission'], 'mode' | 'custom'> };
 export type BotSettingsEdit = SectionEdit<AgentSettingsView['scope'], AgentSections> | SectionEdit<ProjectSettingsView['scope'], ProjectEdits> | SectionEdit<SessionSettingsView['scope'], SessionSections>;
 export type SettingsEdit = BotSettingsEdit | SectionEdit<HostSettingsView['scope'], HostSections>;
 type SectionView<S, M> = {

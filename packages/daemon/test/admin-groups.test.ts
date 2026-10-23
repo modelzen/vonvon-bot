@@ -213,6 +213,13 @@ describe('desktop group commands in the owning bot', () => {
     expect(fixture.message).toHaveBeenCalledTimes(1);
   });
 
+  it.each([['qa', false], ['write', true], ['full', true]] as const)('joining an existing group writes %s with network %s', async (mode, network) => {
+    const fixture = channelFixture();
+    const project = await joinExistingGroup(fixture.channel, { name: `Tier ${mode}`, chatId: `oc_tier_${mode}`, existingPath: await workspace(), kind: 'multi', mode });
+    expect(project).toMatchObject({ mode, network });
+    expect((await listProjects()).find(row => row.chatId === project.chatId)).toMatchObject({ mode, network });
+  });
+
   it('rejects protected explicit workspaces before binding or creating a group', async () => {
     const fixture = channelFixture();
     const value = { name: 'Protected', existingPath: paths.appDir, kind: 'multi' as const };
@@ -253,7 +260,7 @@ describe('desktop group commands in the owning bot', () => {
       await expect(joinExistingGroup(fixture.channel, { ...value, ...patch })).rejects.toThrow('不可修改');
     }
     await expect(joinExistingGroup(fixture.channel, { ...value, chatId: 'oc_name_conflict', existingPath: await workspace() })).rejects.toThrow('项目名');
-    expect(await joinExistingGroup(fixture.channel, { ...value, name: ' Conflicts ', mode: 'full', network: true, addedBy: 'ou_changed', noMention: true })).toEqual(first);
+    expect(await joinExistingGroup(fixture.channel, { ...value, name: ' Conflicts ', mode: 'full', addedBy: 'ou_changed', noMention: true })).toEqual(first);
     expect(await readFile(paths.projectsFile, 'utf8')).toBe(bytes);
     expect(fixture.message).toHaveBeenCalledTimes(1);
   });

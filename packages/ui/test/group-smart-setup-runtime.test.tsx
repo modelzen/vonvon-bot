@@ -1,3 +1,4 @@
+import {permissionValue} from './permission-fixture';
 import {beforeEach, expect, it, vi} from 'vitest';
 import {isValidElement, type ReactElement, type ReactNode} from 'react';
 import {agentIdSchema, groupIdSchema, membershipIdSchema, type DesktopSnapshot, type Membership, type ProjectRecord, type ProjectSettingsView, type SettingsReply, type SettingsRequest} from '@vonvon/protocol';
@@ -35,7 +36,7 @@ const member = {id: membershipIdSchema.parse('smart-group'), agentId: botId, gro
 const readyTools: DesktopSnapshot['tools'] = [{tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '1'}];
 const snapshot: DesktopSnapshot = {revision: 1, observedAt: 1, stale: false, host: {kind: 'connected', ownership: 'owned', version: 'test'}, agents: [agent], groups: [group], memberships: [member], tools: readyTools, jobs: [], application: {platform: 'macos', version: 'test', loginItem: false, dataPath: '/test'}};
 const section = <T,>(stored: T, revision = 'settings-r1') => ({stored, effective: stored, revision, access: {kind: 'writable' as const}, apply: []});
-const fixture = (): ProjectSettingsView => ({scope: {kind: 'project', botId, projectName: member.name}, identity: {chatId: groupId, backend: 'codex-appserver', cwd: '/project', kind: 'single'}, sections: {permission: section({mode: 'full', guestMode: 'qa', network: false}), response: section({noMention: false}), model: section({selection: {kind: 'default'}}), judge: section({selection: {kind: 'default'}})}, members: {openIds: [], revision: 'members-r1'}});
+const fixture = (): ProjectSettingsView => ({scope: {kind: 'project', botId, projectName: member.name}, identity: {chatId: groupId, backend: 'codex-appserver', cwd: '/project', kind: 'single'}, sections: {permission: section(permissionValue()), response: section({noMention: false}), model: section({selection: {kind: 'default'}}), judge: section({selection: {kind: 'default'}})}, members: {openIds: [], revision: 'members-r1'}});
 const selection = {kind: 'provider' as const, provider: 'codex-appserver' as const};
 let view = fixture();
 let project: ProjectRecord;

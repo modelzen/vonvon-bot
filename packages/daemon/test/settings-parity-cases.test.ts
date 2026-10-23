@@ -98,7 +98,7 @@ it.each(edgeCases)('$id accepts $section boundary $field', async ({ section, pat
 const projectCases = [
   { id: 'CARD-010', section: 'response', patch: { noMention: true }, field: 'noMention', expected: true },
   { id: 'CARD-012', section: 'permission', patch: { mode: 'write' }, field: 'mode', expected: 'write' },
-  { id: 'CARD-014', section: 'permission', patch: { network: true }, field: 'network', expected: true },
+  { id: 'CARD-014', section: 'permission', patch: { custom: { sandbox: 'read-only', network: true } }, field: 'network', expected: true },
 ] as const;
 
 describe('project settings persist in projects.json and isolate group scope', () => {
@@ -131,8 +131,8 @@ it('CARD-013 s15c: 普通成员权限 is gone, a guestMode patch is refused and 
   await updateProject('demo', { mode: 'write' });
   const before = await settings.read(project) as ProjectSettingsView;
   // Output only, for clients from before s15c: always the group's one tier.
-  expect(before.sections.permission.stored).toEqual({ mode: 'write', guestMode: 'write', network: false });
-  expect(before.sections.permission.effective).toEqual({ mode: 'write', guestMode: 'write', network: false });
+  expect(before.sections.permission.stored).toMatchObject({ mode: 'write', guestMode: 'write', network: false });
+  expect(before.sections.permission.effective).toMatchObject({ mode: 'write', guestMode: 'write', network: false });
   const file = await readFile(paths.projectsFile, 'utf8');
   await expect(settings.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { guestMode: 'qa' } } as unknown as SettingsEdit)).rejects.toThrow('设置字段、类型或范围无效');
   expect(await readFile(paths.projectsFile, 'utf8')).toBe(file);

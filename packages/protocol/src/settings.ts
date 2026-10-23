@@ -125,10 +125,20 @@ export const agentSectionSchemas = {
   judge: judgeSectionSchema,
 };
 const tier = z.enum(["qa", "write", "full"]);
+export const permissionTierSchema = z.object({
+  tier, name: z.string(), summary: z.string(), native: z.string(), unavailable: z.string().optional(),
+});
+export const permissionOptionsSchema = z.object({
+  tiers: z.array(permissionTierSchema).length(3),
+  strength: z.string(),
+  customSummary: z.string().optional(),
+  legacy: z.boolean().optional(),
+  invalid: z.boolean().optional(),
+});
 /** What a save may set in a group's settings; the view adds the deprecated `permission.guestMode`. */
 export const projectEditableSchemas = {
   profile: groupProfile, role: projectRole, modelAccess, workspace, smartRules, skills, presentation,
-  permission: z.object({ mode: tier, network: z.boolean() }),
+  permission: z.object({ mode: tier, custom: z.record(z.string(), z.unknown()).nullable() }),
   response: z.object({ noMention: z.boolean() }),
   model: z.object({ selection }),
   /** 运行中来了消息 for this group; stored "default" inherits the bot's `run.pendingPolicy` */
@@ -140,6 +150,9 @@ export const projectSectionSchemas = {
   permission: projectEditableSchemas.permission.extend({
     /** @deprecated since s15c always equal to `mode`, never saved; kept so clients from before s15c still parse the view */
     guestMode: tier,
+    /** @deprecated s31c: networking follows the tier; this is the effect for old clients. */
+    network: z.boolean(),
+    options: permissionOptionsSchema,
   }),
 };
 export const sessionSectionSchemas = { model: z.object({ selection }) };

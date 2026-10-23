@@ -31,13 +31,12 @@ import {
 import {
   noMentionOf,
   sessionModeOf,
-  effectiveMode,
   listProjectsIn,
   type SessionMode,
 } from '../project/registry';
 import { isRetiredKey, listSessionsIn } from '../bot/session-store';
 import { loadConfig } from '../config/store';
-import { groupBackendId } from '../config/execution';
+import { groupBackendId, groupPermission } from '../config/execution';
 import { resolveAppSecret } from '../config/secret-resolver';
 import { createAgentAvatarProvider, createGroupAvatarProvider } from './avatar';
 import { diagnoseEventSubscription, type EventDiagnosis } from '../utils/event-diagnosis';
@@ -143,7 +142,7 @@ export interface AdminService {
   setPermissionMode(
     botId: string,
     projectName: string,
-    opts: { mode: PermissionMode; network?: boolean },
+    opts: { mode: PermissionMode },
   ): Promise<void>;
   /** ✋ 免@ 开关（写）。 */
   setNoMention(botId: string, projectName: string, on: boolean): Promise<void>;
@@ -550,9 +549,9 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       kind: sessionModeOf(p),
       origin: p.origin ?? 'created',
       noMention: noMentionOf(p),
-      mode: effectiveMode(p),
-      guestMode: effectiveMode(p),
-      network: p.network ?? false,
+      mode: groupPermission(p).effect.mode,
+      guestMode: groupPermission(p).effect.mode,
+      network: groupPermission(p).effect.network,
       // What the group's sessions actually start on: its own backend, else Codex (s36d2).
       backend: groupBackendId(p),
       allowedUsersCount: p.allowedUsers?.length ?? 0,
@@ -747,13 +746,12 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     async setPermissionMode(
       botId: string,
       projectName: string,
-      opts: { mode: PermissionMode; network?: boolean },
+      opts: { mode: PermissionMode },
     ): Promise<void> {
-      await executeWrite(botId, '🔐 设置权限档', {
+      await executeWrite(botId, '🔐 设置权限', {
         kind: 'setPermissionMode',
         project: projectName,
         mode: opts.mode,
-        network: opts.network,
       });
     },
 

@@ -95,13 +95,13 @@ it('s36b2: shows topic binding choices, restricted permissions and Linux Codex g
   expect(topic.match(/role="radio"/g)).toHaveLength(2);
   expect(topic).toContain('按话题聊');
   expect(topic).not.toContain('整群一条会话');
-  expect(topic).toContain('权限档和网络');
-  expect(topic).toContain('只读 · 网络关闭');
+  expect(topic).toContain('只读（不联网）');
+  expect(topic).not.toContain('网络关闭');
   expect(topic).toContain('Linux 上的 Codex 只能用完全访问');
   expect(render(true, false)).not.toContain('Linux 上的 Codex 只能用完全访问');
   const create = render(false, true);
   expect(create.match(/role="radio"/g)).toHaveLength(3);
-  expect(create).not.toContain('权限档和网络');
+  expect(create).not.toContain('只读（不联网）');
   expect(create).not.toContain('Linux 上的 Codex 只能用完全访问');
   expect(render(true, true, false).match(/role="radio"/g)).toHaveLength(3);
 });

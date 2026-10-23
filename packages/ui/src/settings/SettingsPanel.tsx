@@ -1133,6 +1133,26 @@ function AgentPanel({
     </>
   );
 }
+type PermissionView = ProjectSettingsView['sections']['permission']['stored'];
+// Intent: the group owner compares the provider's three levels before granting access.
+// Hierarchy: level names lead; native names and enforcement stay secondary. Existing
+// surface/border tokens, system type and 4px spacing keep this within the settings UI.
+export function PermissionFields({value, disabled, onChange}: {value: PermissionView; disabled: boolean; onChange: (patch: Pick<PermissionView, 'mode'>) => void}) {
+  const {options} = value;
+  return <>
+    {options.invalid ? <p className="permission-note" role="status">高级设置读不出来，现在按只读跑。选一档重新设置。</p>
+      : value.custom && <p className="permission-note" role="status">自定义：{options.customSummary}{options.legacy && '（从旧版的联网开关转来）'}</p>}
+    <SettingsRow className="group-choice-row" title="权限" trailing={<SettingChoices
+      label="权限" stacked value={value.custom || options.invalid ? '' : value.mode} disabled={disabled}
+      choices={options.tiers.map(tier => ({value: tier.tier, label: tier.name, disabled: Boolean(tier.unavailable), description: <>
+        <small>{tier.summary}</small>{tier.native && <small>{tier.native}</small>}{tier.unavailable && <small>{tier.unavailable}</small>}
+      </>}))}
+      onChange={mode => onChange({mode})}
+    />}/>
+    <p className="permission-note" id={settingAnchor('能挡到什么')}>能挡到什么：{options.strength}</p>
+  </>;
+}
+
 export function ProjectPanel({
   view,
   refresh,
@@ -1217,10 +1237,6 @@ export function ProjectPanel({
     if (visibleSections.filter(candidate => candidate.access.kind === 'readonly' && hasReadonlyMessage([access], candidate.access)).length > 1) repeatedReadonly.push(access);
   }
   const groupReadonly = [...announcedReadonly, ...repeatedReadonly];
-  // Codex on Linux: 只读 and 读写 are greyed out; a stored one still shows (product.md 3.8).
-  const fullOnly = view.identity.fullOnly;
-  const tiers = ([["qa", "只读"], ["write", "读写"], ["full", "完全访问"]] as const)
-    .map(([value, label]) => ({ value, label, disabled: Boolean(fullOnly) && value !== "full" }));
   return (
     <AnnouncedReadonlyMessages.Provider value={groupReadonly}>
       {repeatedReadonly.map(access => <p className="settings-readonly-notice" role="status" key={`${access.reason}:${access.message}`}>{access.message}</p>)}
@@ -1254,38 +1270,10 @@ export function ProjectPanel({
       {(!partition || partition === 'permission') && <>
       {!partition && <h2 className="membership-settings-heading">权限</h2>}
       <Editor
-        title="工作目录权限"
+        title="权限"
         section={permission}
         save={(draft, revision) => save("permission", draft, revision)}
-        render={(draft, set, disabled, commit) => (
-          <>
-            <SettingsRow
-              className="group-choice-row"
-              title="权限档"
-              description={fullOnly}
-              trailing={
-                <SettingChoices
-                  label="权限档"
-                  value={draft.mode}
-                  disabled={disabled}
-                  choices={tiers}
-                  onChange={(mode) => void commit({ mode })}
-                />
-              }
-            />
-            <SettingsRow
-              title="允许网络访问"
-              trailing={
-                <Switch
-                  label="允许网络访问"
-                  value={draft.network}
-                  disabled={disabled}
-                  onChange={(network) => void commit({ network })}
-                />
-              }
-            />
-          </>
-        )}
+        render={(draft, _set, disabled, commit) => <PermissionFields value={draft} disabled={disabled} onChange={patch => void commit(patch)}/>}
       />
       </>}
       {(!partition || partition === 'members') && <>

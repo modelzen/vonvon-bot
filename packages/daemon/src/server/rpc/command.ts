@@ -1,4 +1,6 @@
 import { conversationToMode, groupIdSchema, pendingGroupsSchema, type Command, type CommandResult } from '@vonvon/protocol';
+import { TIER_NETWORK } from '../../agent/permission';
+import { log } from '../../core/logger';
 import { SMART_NO_MENTION } from '../../admin/groups';
 import type { AdminService } from '../../admin/service';
 import type { ShutdownControl } from '../../host/lifecycle';
@@ -53,7 +55,13 @@ export async function commandRpc(options: { service: AdminService; jobs: Jobs; p
     case 'setPermission': case 'setResponse': {
       const member = snapshots.current().memberships.find(member => member.id === request.membershipId);
       if (!member || member.stale) throw new RpcError('invalid_membership', '群绑定不存在或状态已失效，请刷新后重试。');
-      if (request.type === 'setPermission') await service.setPermissionMode(member.agentId, member.name, { mode: request.administrator, network: request.network });
+      if (request.type === 'setPermission') {
+        if (request.network !== undefined && request.network !== TIER_NETWORK[request.administrator]) {
+          throw new RpcError('invalid_request', '联网已经并进权限的档位：只读不联网，工作区可写联网，完全访问不限制。只读又要联网这类组合，用高级设置 permission.custom。');
+        }
+        if (request.network !== undefined) log.warn('permission', 'rpc-network-ignored');
+        await service.setPermissionMode(member.agentId, member.name, { mode: request.administrator });
+      }
       else await service.setNoMention(member.agentId, member.name, request.response === 'all');
       return applied;
     }

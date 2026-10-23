@@ -200,7 +200,7 @@ test('each group setting belongs to the corresponding five-page surface', () => 
     ['添加技能', 'capabilities', '技能'], ['语音转文字', 'capabilities', '语音'],
     ['补充职责', 'role', '补充职责'], ['本群个性', 'role', '补充职责'],
     ['模型 Provider', 'model', '可用模型'], ['可用 Effort', 'model', '可用模型'],
-    ['权限档', 'permission', '工作目录权限'], ['允许网络访问', 'permission', '工作目录权限'],
+    ['权限', 'permission', '权限'], ['能挡到什么', 'permission', '权限'],
     ['聊天方式', 'response', '聊天方式'], ['显示模型', 'response', '消息与提醒'],
     ['显示工具调用', 'response', '消息与提醒'], ['从群成员选择', 'response', '响应成员'],
   ]) {

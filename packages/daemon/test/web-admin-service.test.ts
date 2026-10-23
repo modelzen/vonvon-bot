@@ -188,6 +188,19 @@ describe('createReadonlyAdminService · 只读方法（显式路径，不碰全�
     expect((await service.listProjects(BOT_A))[0]?.enabled).toBe(true);
   });
 
+  it('listProjects exposes custom permission effects rather than the stored full tier', async () => {
+    const location = { file: botPaths(BOT_A).projectsFile, dataRoot: paths.appDir };
+    try {
+      await mutateProject('proj-a', p => {
+        p.mode = 'full'; p.network = true;
+        p.custom = { backend: 'codex-appserver', settings: { sandbox: 'read-only', network: false } };
+      }, undefined, location);
+      expect((await service.listProjects(BOT_A))[0]).toMatchObject({ mode: 'qa', guestMode: 'qa', network: false });
+    } finally {
+      await mutateProject('proj-a', p => { p.mode = 'write'; delete p.network; delete p.custom; }, undefined, location);
+    }
+  });
+
   it('listProjects：per-bot 隔离（B 的项目读不到 A 的数据），且 effective 默认后端回填', async () => {
     const projects = await service.listProjects(BOT_B);
     expect(projects).toHaveLength(1);
@@ -300,14 +313,14 @@ describe('createAdminService · daemon 进程内（executeWrite + liveStatus 注
       executeWrite: async (botId, op) => void calls.push({ botId, op }),
     });
     await daemon.switchBackend(BOT_A, 'proj-a', 'codex-appserver');
-    await daemon.setPermissionMode(BOT_A, 'proj-a', { mode: 'qa', network: true });
+    await daemon.setPermissionMode(BOT_A, 'proj-a', { mode: 'qa' });
     await daemon.setNoMention(BOT_A, 'proj-a', false);
     await daemon.setCompletionReminder(BOT_A, { mode: 'long', longTaskMinutes: 8 });
     expect(calls).toEqual([
       { botId: BOT_A, op: { kind: 'switchBackend', project: 'proj-a', backend: 'codex-appserver' } },
       {
         botId: BOT_A,
-        op: { kind: 'setPermissionMode', project: 'proj-a', mode: 'qa', network: true },
+        op: { kind: 'setPermissionMode', project: 'proj-a', mode: 'qa' },
       },
       { botId: BOT_A, op: { kind: 'setNoMention', project: 'proj-a', on: false } },
       { botId: BOT_A, op: { kind: 'setCompletionReminder', mode: 'long', longTaskMinutes: 8 } },

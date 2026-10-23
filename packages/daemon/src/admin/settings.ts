@@ -6,10 +6,11 @@ import { JUDGE_SELECTION_KINDS } from '@vonvon/protocol';
 import type { AgentBackend, ModelInfo, ReasoningEffort } from '../agent/types';
 import { backendIds } from '../agent';
 import { parseModelId } from '../agent/model-id';
+import { permissionTable, PermissionInputError, tableEnv, tierInfo, TIER_NETWORK } from '../agent/permission';
 import { getCompletionReminderConfig, getMaxConcurrentRuns, getModelDisplay, getPendingPolicy, getRunIdleTimeoutMs, getSessionTitleConfig, getSessionTitleEfforts, getShowToolCalls, resolveOwner, type AppConfig, type AppPreferences } from '../config/schema';
 import { paths } from '../config/paths';
 import { admitDirectorySettings, resolveProjectsRootDir } from '../config/directories';
-import { botBackendId, groupBackendId, resolveCommentsExecution, resolveModelPreference, resolveProjectModelAccess, projectModelAllowed } from '../config/execution';
+import { botBackendId, groupBackendId, groupPermission, resolveCommentsExecution, resolveModelPreference, resolveProjectModelAccess, projectModelAllowed } from '../config/execution';
 import { isProjectId } from '../project/library';
 import { effectiveMode, getProjectByName, listProjects, mutateProject, noMentionOf, pendingPolicyOf, sessionModeOf, type Project, type ProjectWorkspace } from '../project/registry';
 import { getSession, listSessions, isRetiredKey, mutateSession, RETIRED_KEY_TEXT, type SessionRecord } from '../bot/session-store';
@@ -194,7 +195,10 @@ function agentRaw(p: AppPreferences, section: keyof T.AgentSections): unknown {
     case 'judge': return p.judge;
   }
 }
-function projectData(p: Project): T.ProjectSections {
+function projectData(p: Project, backend: AgentBackend): T.ProjectSections {
+  const perm = groupPermission(p);
+  const table = permissionTable(groupBackendId(p));
+  const env = tableEnv(backend);
   return {
     profile: p.profile ?? { persona: '', memory: '', inheritPersona: true, inheritMemory: true },
     role: { supplement: p.supplement ?? '' },
@@ -204,9 +208,16 @@ function projectData(p: Project): T.ProjectSections {
     skills: p.skills ?? { disabledPaths: [] },
     presentation: p.presentation ?? { voiceEnabled: false, showToolCalls: true, showModel: 'off', completionMode: 'manual', longTaskMinutes: 5 },
     permission: {
-      mode: effectiveMode(p),
-      guestMode: effectiveMode(p),
-      network: p.network ?? false
+      mode: perm.tier,
+      custom: perm.custom ?? null,
+      guestMode: perm.tier,
+      network: perm.effect.network,
+      options: {
+        tiers: [...table.tiers(env)], strength: table.strength(env),
+        ...(perm.custom ? { customSummary: table.describe(perm.custom) } : {}),
+        ...(perm.legacy ? { legacy: true } : {}),
+        ...(perm.invalid ? { invalid: true } : {}),
+      }
     },
     response: {
       noMention: noMentionOf(p)
@@ -233,7 +244,7 @@ function projectRaw(p: Project, section: keyof T.ProjectSections): unknown {
   if (section === 'role') return [p.name, p.chatId, p.supplement ?? null];
   if (section === 'workspace') return [p.name, p.chatId, p.cwd, p.directories];
   if (['profile', 'modelAccess', 'smartRules', 'skills', 'presentation'].includes(section)) return [p.name, p.chatId, p[section as 'profile']];
-  const data = section === 'permission' ? [p.mode, p.network] : section === 'response' ? p.noMention : section === 'run' ? p.pendingPolicy : section === 'judge' ? p.judge : [p.defaultModel, p.defaultEffort, p.defaultModelCustom === true];
+  const data = section === 'permission' ? [p.mode, p.network, p.custom] : section === 'response' ? p.noMention : section === 'run' ? p.pendingPolicy : section === 'judge' ? p.judge : [p.defaultModel, p.defaultEffort, p.defaultModelCustom === true];
   return [p.name, p.chatId, p.cwd, p.backend, data];
 }
 function sessionRaw(s: SessionRecord): unknown {
@@ -249,6 +260,8 @@ function makeSection<V>(stored: V, raw: unknown, access: T.SettingsAccess, apply
   };
 }
 class Conflict extends Error {
+}
+class Unchanged extends Error {
 }
 function check(actual: unknown, revision: string): void {
   if (settingsRevision(actual) !== revision)
@@ -507,7 +520,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     };
   }
   async function projectSettings(p: Project): Promise<T.ProjectSections> {
-    const result = projectData(p);
+    const result = projectData(p, deps.backendFor(groupBackendId(p)));
     // `profile` is only a record of what the row held before the memory migration; the runtime reads `role` and the entries.
     result.role = { supplement: supplementOf(p) };
     result.modelAccess = resolveProjectModelAccess({ bot: cfg.preferences, group: p }, peekModels(groupBackendId(p)));
@@ -848,8 +861,15 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               p.directories = { ...p.directories, workspaces: { primary: p.cwd, additional: admittedWorkspace!.directories.filter(path => path !== p.cwd) }, repositories: admittedWorkspace!.repositories };
               break;
             case 'modelAccess': {
+              const previousBackend = groupBackendId(p);
+              const currentTier = groupPermission(p).tier;
               p.modelAccess = { ...original.modelAccess, ...e.patch };
               p.backend = p.modelAccess.backend;
+              if (groupBackendId(p) !== previousBackend) {
+                delete p.custom;
+                p.mode = currentTier;
+                p.network = TIER_NETWORK[currentTier];
+              }
               if (!p.defaultModel || !p.modelAccess.models.includes(p.defaultModel)) { p.defaultModel = p.modelAccess.models[0]; delete p.defaultModelCustom; }
               const supported = allowedCatalog?.find(m => m.id === p.defaultModel)?.supportedEfforts;
               const allowed = supported ? p.modelAccess.efforts.filter(effort => supported.includes(effort)) : p.modelAccess.efforts;
@@ -857,19 +877,38 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               break;
             }
             case 'permission': {
-              const next = {
-                ...p,
-                ...e.patch
-              };
-              const backend = deps.backendFor(groupBackendId(p));
-              const supported = backend.supportedModes;
-              if (supported && !supported.includes(effectiveMode(next)))
-                throw new SettingsInputError('后端不支持此权限档位');
-              // Only the tier this save sets: a stored 只读 stays, and network can still change.
-              const fullOnly = backend.fullAccessOnly?.();
-              if (fullOnly && e.patch.mode !== undefined && e.patch.mode !== 'full')
-                throw new SettingsInputError(fullOnly);
-              Object.assign(p, e.patch);
+              if (e.patch.mode !== undefined && e.patch.custom !== undefined && e.patch.custom !== null)
+                throw new SettingsInputError('选档和高级设置一次只改一个');
+              if (e.patch.mode === undefined && e.patch.custom === null) {
+                const current = groupPermission(p);
+                if (current.custom || current.legacy || current.invalid)
+                  throw new SettingsInputError('清掉高级设置时要同时选一档，例如 permission.mode=qa。');
+                throw new Unchanged();
+              }
+              const backendId = groupBackendId(p);
+              const table = permissionTable(backendId);
+              let mode = e.patch.mode ?? effectiveMode(p);
+              let network = TIER_NETWORK[mode];
+              let custom: Project['custom'];
+              if (e.patch.custom !== undefined && e.patch.custom !== null) {
+                let settings: Record<string, unknown>;
+                try { settings = table.parseCustom(e.patch.custom); }
+                catch (error) {
+                  if (error instanceof PermissionInputError) throw new SettingsInputError(error.message);
+                  throw error;
+                }
+                const matched = table.matchTier(settings);
+                const effect = table.effect(settings);
+                mode = matched ?? effect.mode;
+                network = matched ? TIER_NETWORK[matched] : effect.network;
+                if (!matched) custom = { backend: backendId, settings };
+              }
+              const unavailable = tierInfo(table, tableEnv(deps.backendFor(backendId)), mode).unavailable;
+              if (unavailable) throw new SettingsInputError(unavailable);
+              p.mode = mode;
+              p.network = network;
+              if (custom) p.custom = custom;
+              else delete p.custom;
               break;
             }
             case 'response':
@@ -904,7 +943,11 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             case 'judge':
               storeJudge(p, judge!, groupBackendId(p));
           }
-        }, commitOptions);
+        }, commitOptions).catch(error => {
+          if (error instanceof Unchanged) return undefined;
+          throw error;
+        });
+        if (!p) return { kind: 'saved', section: await sectionView(e), effects: [] };
         if (['permission', 'workspace', 'skills', 'modelAccess', 'profile', 'role'].includes(e.section)) {
           try {
             await deps.evictLiveSessionsForChat(p.chatId);

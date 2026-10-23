@@ -38,7 +38,7 @@ const membershipGroups: readonly Group[] = [
   {title: '语音', fields: [item('语音转文字', ['启用语音', '语音识别'])]},
   {title: '补充职责', aliases: ['本群职责', '角色补充'], fields: [item('补充职责', ['本群个性', '这个 Bot 在本项目里多做什么'], {field: ''})]},
   {title: '可用模型', aliases: ['模型', '执行工具'], fields: [item('模型 Provider', ['执行后端'], {field: ''}), item('允许使用的模型', ['模型多选'], {field: ''}), item('可用 Effort', ['推理强度', 'Effort 多选'], {field: ''})]},
-  {title: '工作目录权限', aliases: ['权限', '能挡到什么', '高级设置'], fields: [item('权限档'), item('允许网络访问')]},
+  {title: '权限', aliases: ['工作目录权限', '高级设置'], fields: [item('权限'), item('能挡到什么')]},
   {title: '聊天方式', fields: [item('聊天方式', ['会话方式', '智能模式', '智能开话题'], {field: ''})]},
   {title: '决策模型', smartOnly: true, aliases: ['判断模型'], fields: [item('决策 Provider', ['判断模型', 'Jev', 'TypeSafe'], {field: ''}), item('决策 Effort', ['判断的推理强度'], {field: '', guide: '先选择语言模型，再设置 Effort。'}), item('自定义决策模型 ID', ['判断的手填模型 id'], {field: '', guide: '选择语言模型 Provider，再点「自定义模型 ID」。'})]},
   {title: '判断规则', smartOnly: true, fields: [item('判断规则', ['什么时候回应', '什么时候不回应', '消息在群主区时', '消息已经在话题里时', '什么时候回复', '什么时候创建新话题', '响应提示词', '新话题提示词'])]},

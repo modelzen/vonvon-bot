@@ -1,3 +1,4 @@
+import {permissionValue} from './permission-fixture';
 import {expect, it} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {DEFAULT_SMART_RULES, agentIdSchema, type ModelCatalog, type ProjectSettingsView} from '@vonvon/protocol';
@@ -16,7 +17,7 @@ const fixture = (): ProjectSettingsView => ({
   botProfile: {persona: 'Bot 的个性原文', memory: 'Bot 的记忆原文'},
   skills: [{name: '实际技能', description: '从 Provider 发现', path: 'claude:actual', source: 'provider', enabled: true}],
   sections: {
-    permission: section({mode: 'full', guestMode: 'full', network: false}), response: section({noMention: false}), model: section({selection: {kind: 'default'}}),
+    permission: section(permissionValue()), response: section({noMention: false}), model: section({selection: {kind: 'default'}}),
     profile: section({persona: '本群补充', memory: '本群记忆', inheritPersona: true, inheritMemory: false}),
     role: section({supplement: '本项目里多做发版检查'}),
     modelAccess: section({backend: 'codex-appserver', models: ['actual-a'], efforts: ['low']}),
@@ -76,11 +77,9 @@ it('P6: the group page has five tabs, the permission editor is on 权限 and the
   expect(groupDesignTabs.map(([value]) => value)).not.toContain('workspace');
   for (const section of ['权限', '能挡到什么', '高级设置', '工作目录权限']) expect(groupTabForSection(section)).toBe('permission');
   const html = render('permission');
-  expect(html).toContain('工作目录权限');
-  expect(html).toContain('权限档');
-  expect(html).toContain('允许网络访问');
+  expect(html).toContain('能挡到什么');
   for (const tab of ['capabilities', 'role', 'model', 'response'] as const) {
-    expect(render(tab)).not.toContain('权限档');
+    expect(render(tab)).not.toContain('能挡到什么');
     expect(render(tab)).not.toContain('<h3>代码仓库</h3>');
   }
 });

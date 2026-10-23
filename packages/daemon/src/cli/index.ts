@@ -186,7 +186,8 @@ scoped(settings.command('set <section.key=value...>').description('Change fields
   .addHelpText('after', `
 Examples:
   vonvon settings set --group oc_xxx permission.mode=full
-  vonvon settings set --group oc_xxx permission.mode=write permission.network=true
+  vonvon settings set --group oc_xxx permission.mode=write
+  vonvon settings set --group oc_xxx permission.custom='{"sandbox":"read-only","network":true}'
   vonvon settings set cards.showToolCalls=false
   vonvon settings set --group oc_xxx model.selection='{"kind":"explicit","model":"gpt-5.5","effort":"medium"}'
   vonvon settings set judge.selection='{"kind":"llm","model":"gpt-6-luna","effort":"low"}'
