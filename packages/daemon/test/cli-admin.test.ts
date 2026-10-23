@@ -361,12 +361,17 @@ it('settings set parses values as JSON or text and names the bad field', () => {
 it('permission network is refused locally and custom settings round trip through the CLI', async () => {
   const scope = { kind: 'project', botId: 'cli_a', projectName: 'pay' };
   let permission = { mode: 'qa', custom: null as Record<string, unknown> | null,
-    options: { customSummary: undefined as string | undefined, legacy: false } };
+    options: { customSummary: undefined as string | undefined, legacy: false, fields: [
+      {key: 'permissionMode', label: '权限模式', native: 'permission mode', kind: 'choice', choices: ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'].map(value => ({value, label: value, native: value}))},
+      {key: 'sandbox', label: '命令沙箱', native: 'sandbox', kind: 'switch'},
+      {key: 'network', label: '网络', native: 'network', kind: 'choice', choices: ['off', 'all', 'domains'].map(value => ({value, label: value, native: value}))},
+      {key: 'domains', label: '允许的网站', native: 'allowedDomains', kind: 'domains', showWhen: {key: 'network', in: ['domains']}},
+    ] } };
   const settings = vi.fn(async (request: { type: string; edit?: { patch: Record<string, unknown> } }): Promise<unknown> => {
     if (request.type === 'sessions') return { kind: 'sessions', sessions: [] };
     if (request.type === 'read') return { kind: 'view', view: { scope, identity: {}, sections: { permission: section(permission) } } };
     permission = { ...permission, custom: request.edit!.patch.custom as Record<string, unknown>,
-      options: { customSummary: '沙箱模式：只读（read-only）；网络：开', legacy: false } };
+      options: { ...permission.options, customSummary: '沙箱模式：只读（read-only）；网络：开', legacy: false } };
     return { kind: 'saved', result: { kind: 'saved', section: { scope, section: 'permission', value: section(permission) }, effects: [] } };
   });
   const h = harness({ snapshot: one(undefined, [member('cli_a', 'oc_pay', 'pay')]), settings });
@@ -376,6 +381,11 @@ it('permission network is refused locally and custom settings round trip through
   expect(settings).toHaveBeenLastCalledWith({ type: 'save', edit: { scope, section: 'permission', revision: 'rev-mode', patch: { custom: { sandbox: 'read-only', network: true } } } });
   h.clear(); await runSettingsGet('permission', { group: 'pay' }, h.io(), h.daemon);
   expect(h.out()).toContain('权限：自定义（沙箱模式：只读（read-only）；网络：开）');
+  expect(h.out()).toContain('高级设置（permission.custom）：');
+  expect(h.out()).toContain('permissionMode  权限模式：default | acceptEdits | plan | auto | bypassPermissions');
+  expect(h.out()).toContain('sandbox  命令沙箱：true | false');
+  expect(h.out()).toContain('network  网络：off | all | domains');
+  expect(h.out()).toContain('domains  允许的网站：["github.com", …]（network=domains 时）');
   permission.options.legacy = true;
   h.clear(); await runSettingsGet('permission', { group: 'pay' }, h.io(), h.daemon);
   expect(h.out()).toContain('（从旧版的联网开关转来）');
@@ -444,7 +454,7 @@ it('settings get prints each section, gives the view as JSON, and lists a group\
   expect(out).toContain('会话（最近 2 个，共 2 个；看单个会话：vonvon settings get --session <id>）');
   expect(out.indexOf('omt_new')).toBeLessThan(out.indexOf('omt_old'));
   expect(out).toContain(`gpt-5.5  ${'修'.repeat(40)}…\n`);
-  await expect(runSettingsGet('nope', {}, h.io(), h.daemon)).rejects.toThrow('没有 nope 这一节。可以看的有：profile、cards、run、completion、comments、titles、paths、access、judge');
+  await expect(runSettingsGet('nope', {}, h.io(), h.daemon)).rejects.toThrow('没有 nope 这一节。可以看的有：profile、role、cards、run、completion、comments、titles、paths、access、judge');
 });
 
 it('judge: set takes the selection JSON, get prints a row per backend and the prompt source, get judge the whole prompt', async () => {

@@ -22,10 +22,11 @@ vi.mock('../src/bot/steer-delivery', async original => { const real = await orig
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown, fn: () => unknown) => fn() }));
 vi.mock('../src/agent', async (original) => ({ ...await original<object>(), createBackend: () => fake.backend }));
 // Queue timing uses a deterministic profile; filesystem profile delivery has its own tests.
-vi.mock('../src/bot/group-profile', async original => ({ ...await original<object>(), readGroupPersonality: async () => ({
-  bot: { persona: '', memory: '' }, group: { persona: '', memory: '', inheritPersona: true, inheritMemory: true },
-  persona: '', memory: '', instructions: '', version: 'fixture-empty',
-}) }));
+vi.mock('../src/bot/context-assembly', async original => ({
+  ...await original<object>(),
+  loadContextSources: async () => ({ place: { kind: 'comment' }, botName: 'fixture', soul: '', role: { identity: '', notes: '', headed: false }, supplement: '', failed: {} }),
+  planTurnUpdate: async () => ({ context: { versions: {}, nonce: 'fixture' } }),
+}));
 vi.mock('../src/project/registry', async (original) => ({
   ...await original<object>(),
   getProjectByChatId: async () => ({ name: 'test', chatId: 'chat', cwd: '/test', groupMode: fake.groupMode, ...(fake.projectKind ? { kind: fake.projectKind } : {}), ...(fake.groupPolicy ? { pendingPolicy: fake.groupPolicy } : {}) }),

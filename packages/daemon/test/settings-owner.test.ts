@@ -13,6 +13,7 @@ import { getSession, RETIRED_KEY_TEXT, upsertSession } from '../src/bot/session-
 import { createAdminIpcCaller, createAdminIpcResponder } from '../src/admin/ipc';
 import type { AppConfig } from '../src/config/schema';
 import type { AgentBackend } from '../src/agent/types';
+import { permissionTable } from '../src/agent/permission';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
@@ -303,6 +304,36 @@ describe('s31c permission settings', () => {
     expect(after.sections.permission.stored).toMatchObject({ mode: 'qa', options: { tiers: [expect.objectContaining({ tier: 'qa', unavailable: 'only full here' }), expect.anything(), expect.anything()] } });
   });
 });
+describe('s31d native permission settings', () => {
+  const claude = permissionTable('claude-agent');
+  it.each([
+    [{ permissionMode: 'acceptEdits', sandbox: true, network: 'all' }, 'write', true, false],
+    [{ permissionMode: 'plan' }, 'qa', false, true],
+    [{ permissionMode: 'default', network: 'domains', domains: ['github.com'] }, 'qa', false, true],
+    [{ permissionMode: 'bypassPermissions', sandbox: true }, 'write', true, true],
+    [{ permissionMode: 'plan', network: 'domains', domains: ['github.com'] }, 'qa', false, true],
+  ] as const)('saves %j using conservative downgrade fields and shows native effects', async (raw, mode, network, hasCustom) => {
+    await updateProject('demo', { backend: 'claude-agent' });
+    const { owner } = await fixture({ backendFor: id => ({ ...backend, id }) });
+    const before = await owner.read(project) as ProjectSettingsView;
+    expect((await owner.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { custom: raw } })).kind).toBe('saved');
+    const saved = (await getProjectByName('demo'))!;
+    expect(saved).toMatchObject({ mode, network });
+    expect(saved.custom).toEqual(hasCustom ? { backend: 'claude-agent', settings: claude.parseCustom(raw) } : undefined);
+    const after = (await owner.read(project) as ProjectSettingsView).sections.permission.stored;
+    expect(after.network).toBe(claude.effect(claude.parseCustom(raw)).network);
+    expect(after.options.fields).toEqual(claude.fields({ platform: process.platform }));
+    expect(after.options.expanded.write).toEqual(claude.expand('write'));
+    expect(after.options.customSummary).toBe(hasCustom ? claude.describe(raw) : undefined);
+  });
+  it('checks the native effect tier even when downgrade fields are read-only', async () => {
+    await updateProject('demo', { backend: 'claude-agent' });
+    const { owner } = await fixture({ backendFor: () => ({ ...backend, supportedModes: ['qa'] }) });
+    const before = await owner.read(project) as ProjectSettingsView;
+    expect(await owner.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { custom: { permissionMode: 'plan' } } })).toMatchObject({ kind: 'rejected', fields: [{ message: '这个 provider 没有这一档。' }] });
+    expect((await getProjectByName('demo'))!).not.toHaveProperty('custom');
+  });
+});
 it('s21: a group overrides 运行中来了消息, "default" goes back to the bot, Claude shows queue', async () => {
   const { owner } = await fixture();
   let view = await owner.read(project) as ProjectSettingsView;
@@ -325,7 +356,7 @@ it('s12: a stored autoCompact:false is ignored on read and the switch cannot be 
   await updateProject('demo', JSON.parse('{"autoCompact":false}') as Parameters<typeof updateProject>[1]);
   const { owner } = await fixture();
   const view = await owner.read(project) as ProjectSettingsView;
-  expect(Object.keys(view.sections).sort()).toEqual(['judge', 'model', 'modelAccess', 'permission', 'presentation', 'profile', 'response', 'run', 'skills', 'smartRules', 'workspace']);
+  expect(Object.keys(view.sections).sort()).toEqual(['judge', 'model', 'modelAccess', 'permission', 'presentation', 'profile', 'response', 'role', 'run', 'skills', 'smartRules', 'workspace']);
   expect(JSON.stringify(view)).not.toContain('autoCompact');
   expect(() => parseSettingsEdit({ scope: project, section: 'compact', revision: 'x', patch: { autoCompact: true } })).toThrow('设置字段、类型或范围无效');
   expect(JSON.parse(await readFile(paths.projectsFile, 'utf8')).projects[0]).toMatchObject({ autoCompact: false });
@@ -339,7 +370,7 @@ it('s02c1, s02c5: an old config.json with 咖啡一下 settings loads, reads wit
   cfg = await loadConfig() as AppConfig;
   const { owner } = await fixture();
   const view = await owner.read(agent) as AgentSettingsView;
-  expect(Object.keys(view.sections)).toEqual(['profile', 'cards', 'run', 'completion', 'comments', 'titles', 'paths', 'access', 'judge']);
+  expect(Object.keys(view.sections)).toEqual(['profile', 'role', 'cards', 'run', 'completion', 'comments', 'titles', 'paths', 'access', 'judge']);
   expect(view).not.toHaveProperty('cliRuntime');
   expect(JSON.stringify(view)).not.toMatch(/cliBridge|notifyScope|keepAwake/);
   expect((await owner.save({ scope: agent, section: 'cards', revision: view.sections.cards.revision, patch: { showToolCalls: false } })).kind).toBe('saved');

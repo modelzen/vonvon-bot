@@ -1,5 +1,6 @@
 import type { AgentEntry, AgentThread, AgentToolReply } from '../types';
 import { log } from '../../core/logger';
+import type { MemoryTurn } from '../../bot/memory-authority';
 import { sessionInfoTool, ToolRefusal, type AgentTool, type ToolContext } from './tools';
 
 export interface AgentPlace { kind: 'group' | 'p2p' | 'doc'; chatId?: string; docId?: string }
@@ -10,11 +11,19 @@ export interface TurnFacts {
   retry: boolean;
   initiative: boolean;
   wake: boolean;
+  /** 触发消息是本人手打的 text/post，不是合并转发、卡片、附件（记忆的出处核对用，§3.2 第 3 条） */
+  typed?: boolean;
+  /** 触发消息正文，没经过引用、转发、记录块的编织（记忆的出处核对用，§3.2 第 4 条） */
+  triggerText?: string;
 }
+/** 隐藏块在 `done` 前要用的这一轮的事实：现取，不是开轮时的快照 */
+export interface TurnMemory { turn(): MemoryTurn | undefined; place: AgentPlace; triggerMessageId?: string }
 export interface TurnScope { readonly id: number; close(): void }
 export interface AgentEntries {
   issue(place: AgentPlace): AgentEntry;
   openTurn(thread: AgentThread, facts: TurnFacts): TurnScope;
+  /** 这一轮对记忆的事实（`memoryTurn()` 一调就绑定当前这一轮）；线程不是这个 daemon 发过入口的返回 undefined */
+  memoryTurn(thread: AgentThread): TurnMemory | undefined;
   noteSteer(thread: AgentThread, sender: { openId?: string; kind: 'user' | 'bot' | 'unknown' }): void;
   closeAll(reason: 'shutdown'): void;
 }
@@ -44,6 +53,12 @@ interface TurnAuth {
   id: number;
   facts: TurnFacts;
   human: boolean;
+  /** 开轮时的事实：这一轮是谁触发的（记忆的 `turn.kind`），不随插话变 */
+  kind: MemoryTurn['kind'];
+  /** 被不是触发人的人插过话（`noteSteer`），记忆写入据此降级 */
+  steered: boolean;
+  /** 这一轮写进 Bot 记忆的条数，含正在写的（一轮一条） */
+  botWrites: number;
   active: boolean;
   controller: AbortController;
 }
@@ -97,6 +112,33 @@ export function createAgentEntries(opts: {
     if (!opts.isAdmin(auth.facts.requesterOpenId ?? '')) return refused('not-admin');
     if (!(opts.chatSettingsOn?.() ?? true)) return refused('switch-off');
   }
+  /** 记忆类工具的授权：不要求人、角色，只要求入口还活着、这一轮还在进行；人不人、什么角色只影响落点（§3.2） */
+  function authorizeMemory(grant: Grant, auth: TurnAuth | undefined): Failure | undefined {
+    if (grant.thread && !grant.thread.isAlive()) revoke(grant);
+    if (grant.phase === 'revoked') return failure('revoked');
+    if (grant.place.kind === 'doc') return failure('unknown-tool');
+    if (!auth) return refused('unknown-origin');
+    if (!auth.active || grant.turn !== auth) return refused('turn-ended');
+  }
+  const roleOf = (auth: TurnAuth): MemoryTurn['role'] => {
+    const openId = auth.facts.requesterOpenId ?? '';
+    if (auth.facts.requesterKind !== 'user' || !openId) return 'bot';
+    return opts.isOwner(openId) ? 'owner' : opts.isAdmin(openId) ? 'admin' : 'member';
+  };
+  function memoryTurnOf(grant: Grant, auth: TurnAuth): MemoryTurn | undefined {
+    if (grant.phase !== 'attached' || (grant.thread && !grant.thread.isAlive())) return undefined;
+    const kind = grant.place.kind;
+    return {
+      kind: auth.kind, steered: auth.steered, role: roleOf(auth),
+      ...(auth.facts.requesterOpenId ? { openId: auth.facts.requesterOpenId } : {}),
+      place: kind === 'group' ? 'group' : kind === 'p2p' ? 'dm' : 'comment',
+      ...(grant.place.chatId ? { chatId: grant.place.chatId } : {}),
+      active: auth.active && grant.turn === auth,
+      typed: auth.facts.typed === true,
+      ...(auth.facts.triggerText !== undefined ? { triggerText: auth.facts.triggerText } : {}),
+      botWrites: auth.botWrites,
+    };
+  }
   function issue(place: AgentPlace): AgentEntry {
     for (const old of grants) if (old.thread && !old.thread.isAlive()) revoke(old);
     const capped = grants.size >= 1024;
@@ -121,14 +163,16 @@ export function createAgentEntries(opts: {
       if (!tool) return finishLog(failure('unknown-tool'));
       const runTool = tool.run.bind(tool);
       const settings = tool.class === 'settings';
+      const memory = tool.class === 'memory';
+      const gated = settings || memory;
       // Only Codex declares releaseAfterRun (false before its first accepted turn).
       const auth = grant.thread?.releaseAfterRun !== undefined ? grant.firstTurn
         : origin?.toolUseId ? grant.origins.get(origin.toolUseId) : undefined;
-      if (settings) {
-        const refusal = authorizeNow(grant, auth);
+      if (gated) {
+        const refusal = memory ? authorizeMemory(grant, auth) : authorizeNow(grant, auth);
         if (refusal?.reason === 'unknown-origin' && origin?.toolUseId && grant.origins.has(origin.toolUseId)) return finishLog(refused('turn-ended'));
         if (refusal) return finishLog(refusal);
-        if (grant.settingRunning && grant.queue.length >= 8) return finishLog(failure('busy'));
+        if (settings && grant.settingRunning && grant.queue.length >= 8) return finishLog(failure('busy'));
       }
       const parsed = tool.input.safeParse(args);
       if (!parsed.success) return finishLog({ ok: false, code: 'bad-args', message: `参数不对：${parsed.error.issues.map(i => `${i.path.join('.') || '<root>'}：${i.code}`).join('；')}。` });
@@ -161,23 +205,33 @@ export function createAgentEntries(opts: {
           settle(reply);
         };
         const onGrantAbort = () => stop(failure('revoked'));
+        const authNow = (): Failure | undefined => memory ? authorizeMemory(grant, auth) : authorizeNow(grant, auth);
         const onTurnAbort = () => {
-          if (!committed) stop(authorizeNow(grant, auth) ?? refused('turn-ended'));
+          if (committed) return;
+          // 记忆类：插话也会触发这个信号，但那一轮没结束，只影响落点，不打断调用
+          if (memory) { const refusal = authNow(); if (refusal) stop(refusal); }
+          else stop(authNow() ?? refused('turn-ended'));
         };
         const timer = setTimeout(() => stop(failure('timeout')), Math.max(0, deadline - Date.now()));
         grant.controller.signal.addEventListener('abort', onGrantAbort, { once: true });
-        if (settings) auth?.controller.signal.addEventListener('abort', onTurnAbort, { once: true });
+        if (gated) auth?.controller.signal.addEventListener('abort', onTurnAbort, { once: true });
         const check = (reserveMs: number) => {
           if (interruption) throw new ToolRefusal(interruption);
           if (!running || settled || committed) throw new Error('Tool call is not running');
-          const refusal = authorizeNow(grant, auth);
+          const refusal = authNow();
           if (refusal) throw new ToolRefusal(refusal);
           if (Date.now() > deadline - reserveMs) throw new ToolRefusal(failure('timeout'));
         };
         async function execute() {
           const ctx: ToolContext = { signal: controller.signal, place: grant.place, notAfter: deadline, get admin() { return !!grant.turn?.active && grant.turn.human && opts.isAdmin(grant.turn.facts.requesterOpenId ?? ''); }, get writeRefusal() { return authorizeNow(grant, auth); } };
-          if (settings && auth) {
-            ctx.turn = { id: auth.id, requesterOpenId: auth.facts.requesterOpenId ?? '', triggerMessageId: auth.facts.triggerMessageId ?? '', role: opts.isOwner(auth.facts.requesterOpenId ?? '') ? 'owner' : 'admin' };
+          if (memory && auth) {
+            ctx.turn = { id: auth.id, requesterOpenId: auth.facts.requesterOpenId ?? '', triggerMessageId: auth.facts.triggerMessageId ?? '', role: roleOf(auth) };
+            ctx.memoryTurn = () => memoryTurnOf(grant, auth);
+            ctx.reserveBotWrite = () => { if (auth.botWrites >= 1) return false; auth.botWrites++; return true; };
+            ctx.releaseBotWrite = () => { auth.botWrites = Math.max(0, auth.botWrites - 1); };
+          }
+          if (gated && auth) {
+            if (settings) ctx.turn = { id: auth.id, requesterOpenId: auth.facts.requesterOpenId ?? '', triggerMessageId: auth.facts.triggerMessageId ?? '', role: opts.isOwner(auth.facts.requesterOpenId ?? '') ? 'owner' : 'admin' };
             ctx.commit = async write => {
               check(0);
               let guarded = false;
@@ -188,7 +242,8 @@ export function createAgentEntries(opts: {
                 committed = true;
               };
               const result = await write(guard);
-              if (!guarded) {
+              // 记忆写入在被拒（满了、重复、像密钥）时根本走不到提交点，这是正常的；设置写入走不到才是 bug
+              if (!guarded && !memory) {
                 const error = new Error('Settings write did not call its commit guard');
                 log.fail('agent.commit-unguarded', error, { tool: name });
                 throw error;
@@ -215,9 +270,9 @@ export function createAgentEntries(opts: {
         }
         function run() {
           if (settled) return;
-          if (settings) {
-            const refusal = authorizeNow(grant, auth);
-            if (refusal) { settle(refusal); grant.queue.shift()?.(); return; }
+          if (gated) {
+            const refusal = authNow();
+            if (refusal) { settle(refusal); if (settings) grant.queue.shift()?.(); return; }
           }
           if (Date.now() >= deadline) { stop(failure('timeout')); grant.queue.shift()?.(); return; }
           if (grant.active >= 4) { settle(failure('busy')); if (settings) grant.queue.shift()?.(); return; }
@@ -235,7 +290,8 @@ export function createAgentEntries(opts: {
         if (grant.thread && !grant.thread.isAlive()) revoke(grant);
         if (grant.phase === 'revoked') throw new ToolRefusal(failure('revoked'));
         if (grant.phase === 'capacity') return [];
-        return tools.filter(tool => tool.class !== 'settings' || grant.place.kind === 'p2p')
+        // 评论会话（doc）只给读类工具；写记忆的在群和私聊里给
+        return tools.filter(tool => tool.class === 'read' || (tool.class === 'memory' ? grant.place.kind !== 'doc' : grant.place.kind === 'p2p'))
           .map(({ name, description, input }) => ({ name, description, input }));
       },
       call,
@@ -256,7 +312,10 @@ export function createAgentEntries(opts: {
     issue,
     openTurn(thread, facts) {
       const grant = threads.get(thread);
-      const auth: TurnAuth = { id: ++nextTurn, facts: { ...facts }, active: true, controller: new AbortController(), human: facts.requesterKind === 'user' && !!facts.requesterOpenId && !!facts.triggerMessageId && !facts.retry && !facts.initiative && !facts.wake };
+      const auth: TurnAuth = { id: ++nextTurn, facts: { ...facts }, active: true, controller: new AbortController(), human: facts.requesterKind === 'user' && !!facts.requesterOpenId && !!facts.triggerMessageId && !facts.retry && !facts.initiative && !facts.wake,
+        steered: false, botWrites: 0,
+        kind: facts.wake ? 'wake' : facts.initiative ? 'initiative' : facts.retry ? 'retry'
+          : facts.requesterKind === 'user' && !!facts.requesterOpenId && !!facts.triggerMessageId ? 'human' : 'bot' };
       if (grant && grant.phase === 'attached') {
         if (grant.turn?.active) log.warn('agent', 'turn-overlap', {});
         end(grant.turn);
@@ -265,10 +324,17 @@ export function createAgentEntries(opts: {
       } else end(auth);
       return { id: auth.id, close() { end(auth); } };
     },
+    memoryTurn(thread) {
+      const grant = threads.get(thread);
+      const auth = grant?.turn;
+      if (!grant || !auth) return undefined;
+      return { turn: () => memoryTurnOf(grant, auth), place: { ...grant.place }, ...(auth.facts.triggerMessageId ? { triggerMessageId: auth.facts.triggerMessageId } : {}) };
+    },
     noteSteer(thread, sender) {
       const auth = threads.get(thread)?.turn;
       if (auth && !(sender.kind === 'user' && sender.openId && sender.openId === auth.facts.requesterOpenId)) {
         auth.human = false;
+        auth.steered = true;
         auth.controller.abort();
       }
     },

@@ -28,14 +28,28 @@ export interface TableEnv {
   supportedModes?: readonly Tier[];
 }
 export class PermissionInputError extends Error {}
+export interface NativeChoice { value: string; label: string; native: string; hint?: string }
+export interface NativeField {
+  key: string;
+  label: string;
+  native: string;
+  kind: 'choice' | 'switch' | 'domains';
+  choices?: NativeChoice[];
+  hint?: string;
+  showWhen?: { key: string; in: Array<string | boolean> };
+}
 export interface PermissionTable {
   backend: string;
   tiers(env: TableEnv): readonly [TierInfo, TierInfo, TierInfo];
   strength(env: TableEnv): string;
+  fields(env: TableEnv): NativeField[];
+  expand(tier: Tier): Record<string, unknown>;
   /** 校验自定义设置、补默认值，返回新对象；无效时抛 PermissionInputError。 */
   parseCustom(raw: unknown): Record<string, unknown>;
   matchTier(settings: Record<string, unknown>): Tier | undefined;
   effect(settings: Record<string, unknown>): PermissionEffect;
+  /** 降级时旧版读到的效果，不能比自定义更宽。 */
+  stored?(settings: Record<string, unknown>): PermissionEffect;
   describe(settings: Record<string, unknown>): string;
   fromLegacy(mode: Exclude<Tier, 'full'>, network: boolean): Record<string, unknown> | undefined;
 }

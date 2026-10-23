@@ -1,6 +1,6 @@
 import {beforeEach, expect, it, vi} from 'vitest';
 import {isValidElement, type ReactElement, type ReactNode} from 'react';
-import {agentSchema, type ToolState} from '@vonvon/protocol';
+import {agentSchema, desktopSnapshotSchema, type DesktopSnapshot, type ToolState} from '@vonvon/protocol';
 import {JoinGroupDialog} from '../src/JoinGroupDialog';
 
 const harness = vi.hoisted(() => ({
@@ -178,4 +178,78 @@ it('offers Provider settings with no usable Provider and restores create after r
   expect(ui.provider.props.value).toBe('codex');
   await ui.submit.props.onClick();
   expect(harness.client.collaboration).toHaveBeenCalledWith(expect.objectContaining({tool: 'codex'}));
+});
+
+// P6: the 项目 row of the 建群/加群 dialog (memory design §5.6).
+const pay = 'prj_00000001', web = 'prj_00000002';
+const projectSnapshot = (memberships: Array<{agentId: string; groupId: string; projectId: string}>) => desktopSnapshotSchema.parse({
+  revision: 1, observedAt: 0, stale: false, host: {kind: 'connected', ownership: 'owned', version: '1'},
+  agents: [{id: 'cli_join', name: 'Bot', enabled: true, running: true, connection: 'connected', activation: 'active'}, {id: 'cli_other', name: '小发', enabled: true, running: true, connection: 'connected', activation: 'active'}],
+  groups: [{id: 'oc_existing', name: '已有群'}, {id: 'oc_elsewhere', name: '别的群'}],
+  projects: [
+    {id: pay, name: '支付组', revision: 1, directory: '/w/pay', bindings: memberships.filter(item => item.projectId === pay).map(({agentId, groupId}) => ({agentId, groupId}))},
+    {id: web, name: '官网', revision: 1, directory: '/w/web', bindings: memberships.filter(item => item.projectId === web).map(({agentId, groupId}) => ({agentId, groupId}))},
+  ],
+  memberships: memberships.map(item => ({id: JSON.stringify([item.agentId, item.groupId]), ...item, name: 'x', directory: '/r', backend: 'codex-appserver', conversation: 'threads', response: 'mention', permission: {administrator: 'qa', member: 'qa', network: false}, stale: false})),
+  tools: [], jobs: [], application: {platform: 'macos', version: '1', loginItem: false, dataPath: '/t'},
+});
+function renderProject(snapshot: DesktopSnapshot) {
+  harness.stateIndex = harness.refIndex = harness.memoIndex = harness.effectIndex = 0;
+  const all = nodes(JoinGroupDialog({agent, open: true, onClose, onChanged, tools: readyCodex, snapshot, initialGroup: {chatId: 'oc_existing', name: '已有群', addedAt: 0}}));
+  return {
+    all,
+    name: all.find(node => node.type === 'input' && node.props['aria-label'])!,
+    conversation: all.find(node => node.props.label === '会话方式' && node.props.onChange)!,
+    project: all.find(node => node.props.label === '项目' && node.props.onChange),
+    picker: all.find(node => node.type === 'select' && node.props['aria-label'] === '选择项目'),
+    submit: all.find(node => node.props.variant === 'primary' && node.props.loading !== undefined)!,
+  };
+}
+async function bindWith(snapshot: DesktopSnapshot, previous?: string, change?: (ui: ReturnType<typeof renderProject>) => void) {
+  (harness.client as any).library = vi.fn(async () => ({kind: 'previous', ...(previous ? {project: {id: previous, name: '接回的'}} : {})}));
+  renderProject(snapshot); await settled();
+  let ui = renderProject(snapshot);
+  ui.conversation.props.onChange('threads');
+  ui = renderProject(snapshot);
+  change?.(ui);
+  ui = renderProject(snapshot);
+  await ui.submit.props.onClick();
+  return {ui, request: harness.client.run.mock.calls.at(-1)?.[0] as Record<string, unknown>};
+}
+it('P6: a group another Bot already works in joins that Bot\'s project by default, with no folder of its own', async () => {
+  const snapshot = projectSnapshot([{agentId: 'cli_other', groupId: 'oc_existing', projectId: pay}]);
+  const {ui, request} = await bindWith(snapshot);
+  expect(ui.project!.props.value).toBe('join');
+  expect(ui.picker!.props.value).toBe(pay);
+  expect(ui.all.some(node => node.props.title === '项目主目录' && node.props.value === '/w/pay')).toBe(true);
+  expect(ui.all.some(node => node.props.title === '工作区')).toBe(false);
+  expect(request).toMatchObject({type: 'bindGroup', groupId: 'oc_existing', project: pay, folder: {kind: 'default'}});
+  // the same group: no warning about two groups seeing each other
+  expect(ui.all.some(node => node.props.title === '两个群会共用这个项目')).toBe(false);
+});
+it('P6: with no project in sight the default is a new one, and no project is sent', async () => {
+  const snapshot = projectSnapshot([{agentId: 'cli_other', groupId: 'oc_elsewhere', projectId: pay}]);
+  const {ui, request} = await bindWith(snapshot);
+  expect(ui.project!.props.value).toBe('new');
+  expect(ui.picker).toBeUndefined();
+  expect(ui.project!.props.choices[0].label).toBe('新建项目「已有群」');
+  expect(request).not.toHaveProperty('project');
+  expect(ui.all.some(node => node.props.title === '工作区')).toBe(true);
+});
+it('P6: picking another project\'s group warns that two groups see each other, and sends that project', async () => {
+  const snapshot = projectSnapshot([{agentId: 'cli_other', groupId: 'oc_elsewhere', projectId: pay}]);
+  const {ui, request} = await bindWith(snapshot, undefined, ui => ui.project!.props.onChange('join'));
+  expect(ui.picker!.props.value).toBe(pay);
+  const warning = ui.all.find(node => node.props.title === '两个群会共用这个项目')!;
+  expect(warning.props.children).toContain('互相间接看到');
+  expect(request).toMatchObject({project: pay, folder: {kind: 'default'}});
+});
+it('P6: a group that had a project is offered that project again, and cannot start a new one the daemon would not honour', async () => {
+  const snapshot = projectSnapshot([{agentId: 'cli_other', groupId: 'oc_elsewhere', projectId: pay}]);
+  const {ui, request} = await bindWith(snapshot, web);
+  expect(ui.project!.props.value).toBe('join');
+  expect(ui.picker!.props.value).toBe(web);
+  expect(ui.project!.props.choices[0].disabled).toBe(true);
+  expect(ui.project!.props.choices[1].label).toBe('接回项目「官网」');
+  expect(request).toMatchObject({project: web});
 });

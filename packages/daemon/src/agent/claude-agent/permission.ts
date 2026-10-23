@@ -1,9 +1,12 @@
 import { realpath, stat, lstat } from 'node:fs/promises';
-import { dirname, isAbsolute, relative, sep } from 'node:path';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { HookCallback, Options } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import type { PermissionMode } from '../types';
 import { TIER_NAMES } from '../permission/types';
+import { claudeTable, parseClaudeNative, type ClaudeNative } from '../permission/claude';
+import { log } from '../../core/logger';
+export type { ClaudeNative } from '../permission/claude';
 
 /** Claude tiers use default/acceptEdits/bypassPermissions. The sandbox proxy is
  * not an offline boundary: SandboxNetworkAccess must be denied by the callback.
@@ -15,32 +18,60 @@ export interface ClaudeAccess {
   cwd: string;
   realCwd: string;
   additionalRoots?: readonly { path: string; access: 'read' | 'write' }[];
+  native?: ClaudeNative;
+  planState?: { pending: boolean; directory: string };
 }
-export function claudeAccess(mode: PermissionMode | undefined, network: boolean | undefined, cwd: string, realCwd: string, additionalRoots?: ClaudeAccess['additionalRoots']): ClaudeAccess {
-  return { mode: mode ?? 'full', network: network ?? false, cwd, realCwd, ...(additionalRoots?.length ? { additionalRoots } : {}) };
+export function claudeAccess(mode: PermissionMode | undefined, network: boolean | undefined, cwd: string, realCwd: string, additionalRoots?: ClaudeAccess['additionalRoots'], native?: Readonly<Record<string, unknown>>): ClaudeAccess {
+  const base = { mode: mode ?? 'full', network: network ?? false, cwd, realCwd, ...(additionalRoots?.length ? { additionalRoots } : {}) };
+  if (native === undefined) return base;
+  try {
+    const parsed = parseClaudeNative(native);
+    return { ...base, ...claudeTable.effect(parsed), native: parsed,
+      ...(parsed.permissionMode === 'plan' ? { planState: { pending: true, directory: resolve(realCwd, '.claude/plans') } } : {}) };
+  } catch {
+    log.warn('claude-native', 'invalid');
+    return { ...base, mode: 'qa', network: false };
+  }
 }
 export function tierMode(mode: PermissionMode): 'default' | 'acceptEdits' | 'bypassPermissions' {
   return mode === 'qa' ? 'default' : mode === 'write' ? 'acceptEdits' : 'bypassPermissions';
 }
+export function resumeMode(access: ClaudeAccess): 'default' | 'acceptEdits' | 'auto' | 'bypassPermissions' {
+  const mode = access.native?.permissionMode;
+  return mode === 'plan' ? 'acceptEdits' : mode ?? tierMode(access.mode);
+}
 export const FILE_WRITE = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
 export const FILE_READ = ['Read', 'Glob', 'Grep', 'LS', 'NotebookRead'];
 const NETWORK_TOOLS = ['WebFetch', 'WebSearch'];
+const COMMAND_TOOLS = ['Bash', 'Monitor', 'PowerShell'];
 export type ClaudePermissionOptions = Pick<Options,
   'permissionMode' | 'allowDangerouslySkipPermissions' | 'sandbox' | 'disallowedTools' | 'allowedTools' | 'hooks'>;
 export function permissionOptions(access: ClaudeAccess): ClaudePermissionOptions {
-  const base = { permissionMode: tierMode(access.mode), allowDangerouslySkipPermissions: true };
-  if (access.mode === 'full') return base;
+  const base = { permissionMode: access.native?.permissionMode ?? tierMode(access.mode), allowDangerouslySkipPermissions: true };
+  const sandbox = access.native?.sandbox ?? access.mode !== 'full';
+  if (access.mode === 'full' && !sandbox) return base;
+  const domains = access.mode !== 'full' && access.native?.network === 'domains' ? access.native.domains : undefined;
+  const allowedTools = domains ? domains.map(domain => `WebFetch(domain:${domain})`) : access.network ? [...NETWORK_TOOLS] : [];
+  if (access.native?.permissionMode === 'auto') allowedTools.push('mcp__vonvon_bot');
+  const disallowedTools = domains ? ['WebSearch'] : access.network ? [] : [...NETWORK_TOOLS];
+  if (!sandbox && access.mode !== 'full') disallowedTools.push('Monitor', 'PowerShell');
   return {
     ...base,
-    sandbox: {
+    ...(sandbox ? { sandbox: {
       enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false,
-      ...(access.mode === 'qa' || access.additionalRoots?.length ? { filesystem: {
+      ...(access.mode !== 'full' && (access.mode === 'qa' || access.additionalRoots?.length) ? { filesystem: {
         ...(access.mode === 'qa' ? { denyWrite: [...new Set([access.cwd, access.realCwd, ...access.additionalRoots?.map(root => root.path) ?? []])] }
           : { allowWrite: access.additionalRoots?.filter(root => root.access === 'write').map(root => root.path) ?? [], denyWrite: access.additionalRoots?.filter(root => root.access === 'read').map(root => root.path) ?? [] }),
       } } : {}),
-    },
-    ...(access.network ? { allowedTools: NETWORK_TOOLS } : { disallowedTools: NETWORK_TOOLS }),
-    hooks: { PreToolUse: [{ matcher: FILE_WRITE.join('|'), hooks: [fileHook(access)], timeout: 10 }] },
+      ...(domains ? { network: { allowedDomains: domains, strictAllowlist: true } } : {}),
+    } } : {}),
+    ...(allowedTools.length ? { allowedTools } : {}),
+    ...(disallowedTools.length ? { disallowedTools } : {}),
+    hooks: { PreToolUse: [
+      { matcher: FILE_WRITE.join('|'), hooks: [fileHook(access)], timeout: 10 },
+      ...((!sandbox && access.mode !== 'full') || access.planState ? [{ matcher: COMMAND_TOOLS.join('|'), hooks: [fileHook(access)], timeout: 10 }] : []),
+      ...(domains ? [{ matcher: 'WebFetch', hooks: [fileHook(access)], timeout: 10 }] : []),
+    ] },
   };
 }
 export type Origin = 'hook' | 'callback';
@@ -55,7 +86,7 @@ export type Verdict = { kind: 'continue' } | { kind: 'allow' } | { kind: 'deny';
 export interface PathFs {
   realpath(p: string): Promise<string>;
   stat(p: string): Promise<{ dev: number; ino: number }>;
-  lstat(p: string): Promise<unknown>;
+  lstat(p: string): Promise<{ isSymbolicLink?(): boolean }>;
 }
 const nativeFs: PathFs = { realpath, stat, lstat };
 const fsError = z.object({ code: z.string() });
@@ -114,6 +145,7 @@ export const PERMISSION_ERROR = '权限检查出错，这一步先不做。';
 export const PERMISSION_TIMEOUT = '权限检查超时，这一步先不做。';
 export const NO_TURN = '现在没有在进行的对话，没法问人。按你自己的判断继续，或者停下来说明。';
 const deny = (message: string): Verdict => ({ kind: 'deny', message });
+const PLAN_PENDING = '现在是先出方案阶段，方案确认前不能改文件、不能跑命令。先把方案写出来。';
 // Keep directory identity in this session, never across resumed sessions.
 const sessions = new WeakMap<ClaudeAccess, PathFs>();
 function sessionFs(access: ClaudeAccess): PathFs {
@@ -127,15 +159,50 @@ function sessionFs(access: ClaudeAccess): PathFs {
 }
 export async function decide(access: ClaudeAccess, call: ToolCall, origin: Origin, fsx: PathFs = sessionFs(access)): Promise<Verdict> {
   const { toolName: tool, input } = call;
+  if (tool.startsWith('mcp__vonvon_bot__')) return { kind: origin === 'hook' ? 'continue' : 'allow' };
+  const own = (): Verdict => deny(`这一步 Claude 标成了要人确认（${call.decisionReason ?? '命中了设置里的规则'}）。这个群的权限是${TIER_NAMES[access.mode]}，这类操作直接拒绝。换个办法，或者停下来说明。`);
+  if (origin === 'callback' && call.extra.decisionReasonType === 'mode') return access.planState?.pending ? deny(PLAN_PENDING) : own();
+  if (access.planState?.pending) {
+    if (COMMAND_TOOLS.includes(tool)) return deny(PLAN_PENDING);
+    if (FILE_WRITE.includes(tool)) {
+      const path = input.file_path ?? input.notebook_path ?? input.path;
+      if (typeof path !== 'string') return deny(PLAN_PENDING);
+      try {
+        const absolute = isAbsolute(path) ? path : `${access.cwd}${sep}${path}`;
+        if (![access.planState.directory, resolve(access.cwd, '.claude/plans')].some(root => inside(root, absolute))) return deny(PLAN_PENDING);
+        // The fixed draft directory must not alias the workspace or another write root.
+        for (const component of [dirname(access.planState.directory), access.planState.directory]) {
+          try { if ((await fsx.lstat(component)).isSymbolicLink?.()) return deny(PLAN_PENDING); }
+          catch (error) { if (!missing(error)) throw error; }
+        }
+        const directory = await resolveReal(access.planState.directory, access.cwd, fsx);
+        const target = await resolveReal(path, access.cwd, fsx);
+        if (!inside(directory, target)) return deny(PLAN_PENDING);
+      } catch (error) { if (!(error instanceof OutsideWorkspace)) throw error; return deny(PLAN_PENDING); }
+    }
+  }
+  if (COMMAND_TOOLS.includes(tool) && access.native?.sandbox === false && access.mode !== 'full') {
+    return deny('这个群关了命令沙箱，命令要人确认，群里没人确认，这一步不做。换个办法，或者停下来说明。');
+  }
   if (origin === 'callback') {
     if (tool === 'AskUserQuestion') return { kind: 'ask', ask: 'choices' };
     if (tool === 'ExitPlanMode') return { kind: 'ask', ask: 'confirmation' };
     if (tool === 'EnterPlanMode') return { kind: 'allow' };
     if (access.mode === 'full') return { kind: 'ask', ask: 'permission' };
   }
-  const own = (): Verdict => deny(`这一步 Claude 标成了要人确认（${call.decisionReason ?? '命中了设置里的规则'}）。这个群的权限是${TIER_NAMES[access.mode]}，这类操作直接拒绝。换个办法，或者停下来说明。`);
   if (origin === 'callback' && ownAsk(call) === 'rule') return own();
-  if (origin === 'callback' && ['SandboxNetworkAccess', ...NETWORK_TOOLS].includes(tool)) {
+  if (['SandboxNetworkAccess', ...NETWORK_TOOLS].includes(tool)
+    && (origin === 'callback' || (tool === 'WebFetch' && access.native?.network === 'domains'))) {
+    if (access.native?.network === 'domains') {
+      if (tool === 'WebSearch') return deny('这个群只允许访问指定的网站，不能搜索。');
+      let host = typeof input.host === 'string' ? input.host.toLowerCase() : '';
+      if (tool === 'WebFetch') {
+        try { host = new URL(String(input.url)).hostname; } catch { host = ''; }
+      }
+      if (host && access.native.domains.some(domain => domain.startsWith('*.') ? host.endsWith(domain.slice(1)) : host === domain)) return { kind: origin === 'hook' ? 'continue' : 'allow' };
+      const domains = access.native.domains;
+      return deny(`这个群只允许访问这些网站：${domains.slice(0, 5).join('、')}${domains.length > 5 ? `等 ${domains.length} 个` : ''}，连不上 ${host.slice(0, 100) || '外网'}。换个办法，或者停下来说明。`);
+    }
     if (access.network) return { kind: 'allow' };
     const host = tool === 'SandboxNetworkAccess' && typeof input.host === 'string' ? input.host.slice(0, 100) : '外网';
     const next = access.mode === 'write' ? '要联网得请主人在群设置里重新选一次工作区可写，或者改成完全访问。'

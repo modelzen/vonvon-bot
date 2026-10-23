@@ -7,15 +7,19 @@ import { isComplete } from '../config/schema';
 import { listProjectsIn, mutateProject } from '../project/registry';
 import { listSessionsIn } from '../bot/session-store';
 import { DEFAULT_COMMENT_INSTRUCTIONS } from '../bot/comments';
-import { createSettingsOwner, offlineSettings, SettingsInputError, isLocalSettingsSection } from './settings';
+import { createSettingsOwner, offlineSettings, SettingsInputError, isLocalSettingsSection, workspaceRevision } from './settings';
+import { admitLibraryWorkspace, type HostLibrary } from './library';
+import { AdminWriteError } from './ops';
+import { isProjectId, LibraryError, readLibrary } from '../project/library';
 import { createHostSettings } from './host-settings';
 import type { AdminServiceDeps } from './service';
-import type { HostSettings, SettingsAccess, SettingsSave, SettingsActionResult, SettingsView, ModelCatalog } from './settings-types';
+import type { BotSettingsEdit, HostSettings, ProjectSettingsView, SettingsAccess, SettingsSave, SettingsActionResult, SettingsSection, SettingsSectionView, SettingsView, ModelCatalog } from './settings-types';
+import type { ProjectWorkspace } from '../project/registry';
 import { acquireMutex, closeMutex } from '../config/data-access';
 import { loadBots } from '../config/bots';
 import { acquireSingleInstanceLock, readSingleInstanceHolder } from '../core/single-instance';
 import { assertBridgeImportReservation } from '../import/bridge/reservation';
-export function createSettingsService(deps: AdminServiceDeps): HostSettings {
+export function createSettingsService(deps: AdminServiceDeps, library?: HostLibrary): HostSettings {
   const host = createHostSettings({
     readonly: deps.readonlyPreview
   });
@@ -52,6 +56,45 @@ export function createSettingsService(deps: AdminServiceDeps): HostSettings {
       return !readSingleInstanceHolder(botId, file);
     } catch { return false; }
   };
+  /**
+   * A workspace save for a group of a library project: the workspace is the project's, so it is written in the
+   * library and every group and bot of the project follows (admin/library.ts), instead of in the bot's own row. Left to
+   * the bot when the row has no project. Same checks the bot's own save made: the revision the page read, the primary
+   * among the folders; the section it answers with is read back from where the bot's files now are.
+   */
+  async function saveWorkspace(edit: Extract<BotSettingsEdit, { scope: { kind: 'project' } }>): Promise<SettingsSave | undefined> {
+    if (!library || deps.readonlyPreview) return undefined;
+    const botId = edit.scope.botId;
+    const row = (await listProjectsIn(botPaths(botId).projectsFile)).find(item => item.name === edit.scope.projectName);
+    if (!row || !isProjectId(row.projectId)) return undefined;
+    const project = (await readLibrary()).projects.find(item => item.id === row.projectId);
+    if (!project) return undefined;
+    const workspaceSection = async (): Promise<SettingsSection<ProjectWorkspace>> => {
+      const view = await host.read(edit.scope);
+      const section = view.scope.kind === 'project' ? (view as ProjectSettingsView).sections.workspace : undefined;
+      if (!section) throw new SettingsInputError('无效设置分区');
+      return section;
+    };
+    const sectionOf = async (): Promise<SettingsSectionView> => ({ scope: edit.scope, section: 'workspace', value: await workspaceSection() });
+    if (workspaceRevision(botId, row) !== edit.revision) return { kind: 'conflict', current: await sectionOf() };
+    const value = { ...(await workspaceSection()).stored, ...edit.patch as Partial<ProjectWorkspace> };
+    const rejected = (message: string): SettingsSave => ({ kind: 'rejected', fields: [{ field: 'settings', message }] });
+    if (!value.directories.includes(value.primary)) return rejected('主目录必须在工作区目录中');
+    let change;
+    try {
+      change = await library.workspace({ projectId: project.id,
+        workspace: { primary: value.primary, additional: value.directories.filter(path => path !== value.primary), repositories: value.repositories } });
+    } catch (error) {
+      if (error instanceof LibraryError || error instanceof AdminWriteError) return rejected(error.message);
+      throw error;
+    }
+    const section = await sectionOf();
+    const lagging = change.rebound.filter(item => item.state === 'failed').length;
+    return { kind: 'saved', section, effects: [
+      ...section.value.apply.filter(item => item.fields.some(field => Object.hasOwn(edit.patch as object, field))),
+      ...(lagging ? [{ fields: ['primary'], when: 'restart' as const, detail: `设置已保存，但有 ${lagging} 个绑定没跟上，下次启动 daemon 时会修好` }] : []),
+    ] };
+  }
   return {
     async read(scope) {
       if (scope.kind === 'host')
@@ -67,6 +110,10 @@ export function createSettingsService(deps: AdminServiceDeps): HostSettings {
       if (edit.scope.kind === 'host')
         return host.save(edit);
       const botId = edit.scope.botId;
+      if (edit.scope.kind === 'project' && edit.section === 'workspace') {
+        const saved = await saveWorkspace(edit as Extract<BotSettingsEdit, { scope: { kind: 'project' } }>);
+        if (saved) return saved;
+      }
       if (!await owned(botId)) {
         if (!isLocalSettingsSection(edit.scope.kind, edit.section) || !await stopped(edit.scope.botId)) return { kind: 'unavailable', reason: unavailable() };
         // Keep registration and the actual Bot process excluded across read/CAS/write. A stale

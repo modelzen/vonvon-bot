@@ -92,6 +92,10 @@ const smartPrompt = z.object({
   error: z.string().optional(),
 });
 export const profile = z.object({ persona: z.string().max(30000), memory: z.string().max(30000) });
+/** 角色设定（记忆设计 2.3）：`SOUL.md` 的两段。读取不卡长度（旧文件可以很长），写入的上限由 daemon 查。 */
+export const roleSettings = z.object({ identity: z.string().max(70000), notes: z.string().max(70000) });
+/** 补充职责（原"本群个性"）：绑定行的 `supplement`。 */
+const projectRole = z.object({ supplement: z.string().max(30000) });
 const groupProfile = profile.extend({ inheritPersona: z.boolean(), inheritMemory: z.boolean() });
 const modelAccess = z.object({ backend: z.string().min(1).max(1000), models: z.array(z.string().trim().min(1).max(1000)).max(1000), efforts: z.array(effort).max(8) });
 const workspace = z.object({ primary: z.string().min(1).max(4096), directories: z.array(z.string().min(1).max(4096)).min(1).max(1000), repositories: z.array(z.string().min(1).max(4096)).max(1000) });
@@ -100,6 +104,7 @@ const skills = z.object({ disabledPaths: z.array(z.string().min(1).max(4096)).ma
 const presentation = z.object({ voiceEnabled: z.boolean(), showToolCalls: z.boolean(), showModel: z.enum(["off", "running", "always"]).optional(), completionMode: z.enum(["manual", "long", "failures", "always"]), longTaskMinutes: z.number().int().min(1).max(1440) });
 export const agentSectionSchemas = {
   profile,
+  role: roleSettings,
   cards: z.object({
     showToolCalls: z.boolean(),
     showModel: z.enum(["off", "running", "always"]),
@@ -123,16 +128,24 @@ const tier = z.enum(["qa", "write", "full"]);
 export const permissionTierSchema = z.object({
   tier, name: z.string(), summary: z.string(), native: z.string(), unavailable: z.string().optional(),
 });
+export const permissionFieldSchema = z.object({
+  key: z.string(), label: z.string(), native: z.string(), kind: z.enum(["choice", "switch", "domains"]),
+  choices: z.array(z.object({ value: z.string(), label: z.string(), native: z.string(), hint: z.string().optional() }).strict()).optional(),
+  hint: z.string().optional(),
+  showWhen: z.object({ key: z.string(), in: z.array(z.union([z.string(), z.boolean()])) }).strict().optional(),
+}).strict();
 export const permissionOptionsSchema = z.object({
   tiers: z.array(permissionTierSchema).length(3),
   strength: z.string(),
+  fields: z.array(permissionFieldSchema),
+  expanded: z.object({ qa: z.record(z.string(), z.unknown()), write: z.record(z.string(), z.unknown()), full: z.record(z.string(), z.unknown()) }).strict(),
   customSummary: z.string().optional(),
   legacy: z.boolean().optional(),
   invalid: z.boolean().optional(),
 });
 /** What a save may set in a group's settings; the view adds the deprecated `permission.guestMode`. */
 export const projectEditableSchemas = {
-  profile: groupProfile, modelAccess, workspace, smartRules, skills, presentation,
+  profile: groupProfile, role: projectRole, modelAccess, workspace, smartRules, skills, presentation,
   permission: z.object({ mode: tier, custom: z.record(z.string(), z.unknown()).nullable() }),
   response: z.object({ noMention: z.boolean() }),
   model: z.object({ selection }),
@@ -247,7 +260,22 @@ const decisionModels = z
 export const agentViewSchema = z.object({
   scope: z.object({ kind: z.literal("agent"), botId: agentIdSchema }),
   /** `judge`, `smartPrompt` and `judgeByBackend` came in s23d: a daemon from before sends none. */
-  sections: sections(agentSectionSchemas).extend({ profile: section(profile).optional(), judge: section(judgeViewSection).optional() }),
+  sections: sections(agentSectionSchemas).extend({ profile: section(profile).optional(), role: section(roleSettings).optional(), judge: section(judgeViewSection).optional() }),
+  /** `role` came with the memory redesign (P3): a daemon from before sends none. */
+  roleInfo: z
+    .object({
+      /** 身份与职责的草稿，只用飞书应用名；只在编辑器里，主人点保存才写进文件 */
+      draft: z.string().optional(),
+      /** SOUL.md 里有两个标题之一；没有就是旧文件，整份显示成其他说明 */
+      headed: z.boolean(),
+      /** 旧文件或合并来的文字超过写入上限：能打开，提示精简 */
+      oversized: z.boolean(),
+      /** 原来 AGENTS.md 里的内容已并到其他说明末尾，编辑器提示一次 */
+      mergedNotice: z.boolean(),
+      /** SOUL.md 是不是在 vonvon 之外被改过（只是告警） */
+      integrity: z.enum(["ok", "untracked", "changed"]),
+    })
+    .optional(),
   smartPrompt: smartPrompt.optional(),
   /** per backend, what this bot's groups on it judge with: the bot has no backend of its own */
   judgeByBackend: z
@@ -298,7 +326,7 @@ export const projectViewSchema = z.object({
   }),
   /** `run` came in s21, `judge` and `smartPrompt` in s23d: a daemon from before sends none, and this view still parses. */
   sections: sections(projectSectionSchemas).extend({
-    profile: section(groupProfile).optional(), modelAccess: section(modelAccess).optional(), workspace: section(workspace).optional(), smartRules: section(smartRules).optional(), skills: section(skills).optional(), presentation: section(presentation).optional(),
+    profile: section(groupProfile).optional(), role: section(projectRole).optional(), modelAccess: section(modelAccess).optional(), workspace: section(workspace).optional(), smartRules: section(smartRules).optional(), skills: section(skills).optional(), presentation: section(presentation).optional(),
     run: section(projectSectionSchemas.run).optional(),
     judge: section(judgeViewSection).optional(),
   }),

@@ -79,7 +79,7 @@ describe('group permission effects', () => {
 
   it('keeps a legacy Claude network-off write group unchanged', () => {
     expect(groupPermission({ backend: CLAUDE, mode: 'write', network: false })).toEqual({
-      tier: 'write', custom: { permissionMode: 'acceptEdits', network: 'off' }, legacy: true,
+      tier: 'write', custom: { permissionMode: 'acceptEdits', network: 'off', sandbox: true, domains: [] }, legacy: true,
       effect: { mode: 'write', network: false },
     });
   });
@@ -88,11 +88,17 @@ describe('group permission effects', () => {
     const settings = Object.freeze({ permissionMode: 'default', network: 'all' });
     const custom = Object.freeze({ backend: CLAUDE, settings });
     const group = Object.freeze({ backend: CLAUDE, mode: 'full' as const, network: false, custom });
-    expect(groupPermission(group)).toEqual({ tier: 'full', custom: settings, effect: { mode: 'qa', network: true } });
+    expect(groupPermission(group)).toEqual({ tier: 'full', custom: { ...settings, sandbox: true, domains: [] }, effect: { mode: 'qa', network: true } });
     expect(groupPermission(group).custom).not.toBe(settings);
     expect(group.custom).toBe(custom);
     expect(groupPermission({ mode: 'write', network: true, custom: { backend: CODEX, settings: { sandbox: 'read-only' } } }))
       .toEqual({ tier: 'write', custom: { sandbox: 'read-only', network: false }, effect: { mode: 'qa', network: false } });
+  });
+  it('uses native plan/domain effects instead of the narrower downgrade fields', () => {
+    const settings = { permissionMode: 'plan', network: 'domains', domains: ['github.com'] };
+    expect(groupPermission({ backend: CLAUDE, mode: 'qa', network: false, custom: { backend: CLAUDE, settings } })).toEqual({
+      tier: 'qa', custom: { ...settings, sandbox: true }, effect: { mode: 'write', network: true },
+    });
   });
 
   it('ignores custom settings from another backend, including when modelAccess selects the backend', () => {

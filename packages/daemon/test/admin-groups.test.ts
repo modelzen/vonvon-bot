@@ -95,7 +95,8 @@ describe('desktop group commands in the owning bot', () => {
     expect(saved.projects[0]).not.toHaveProperty('addedBy');
     expect(saved.projects[0]).toMatchObject({ kind: 'multi', noMention: true });
     await expect(caller.call({ kind: 'bindGroup', input: { ...input(dir), kind: 'single' } })).rejects.toThrow('不可修改');
-    await expect(caller.call({ kind: 'bindGroup', input: { ...input(dir), chatId: 'oc_other' } })).rejects.toThrow('项目名');
+    await expect(caller.call({ kind: 'bindGroup', input: { ...input(dir), chatId: 'oc_other' } })).rejects.toThrow('已经是项目「First」的主目录');
+    await expect(caller.call({ kind: 'bindGroup', input: { ...input(await workspace()), chatId: 'oc_other' } })).rejects.toThrow('项目名');
     const page = await caller.call({ kind: 'joinedGroups', cursor: 'cursor1' });
     expect(page).toEqual({ groups: [{ chatId: 'oc_a', name: 'Group A', bound: true }], nextCursor: 'page2' });
     expect(fixture.list).toHaveBeenCalledWith({ params: { page_size: 50, page_token: 'cursor1' } });
@@ -105,7 +106,7 @@ describe('desktop group commands in the owning bot', () => {
     const dir = await workspace();
     const execute = createGroupExecutor(channelFixture().channel);
     expect(await execute({ kind: 'bindGroup', input: { ...input(dir), chatId: 'oc_s21a', projectName: 'S21 A', kind: 'single' } })).toMatchObject({ kind: 'single', noMention: false });
-    expect(await execute({ kind: 'bindGroup', input: { ...input(dir), chatId: 'oc_s21b', projectName: 'S21 B', kind: 'single', noMention: true } })).toMatchObject({ kind: 'single', noMention: true });
+    expect(await execute({ kind: 'bindGroup', input: { ...input(await workspace()), chatId: 'oc_s21b', projectName: 'S21 B', kind: 'single', noMention: true } })).toMatchObject({ kind: 'single', noMention: true });
     // Binding the same group again with another 免@ is not a silent success.
     await expect(execute({ kind: 'bindGroup', input: { ...input(dir), chatId: 'oc_s21a', projectName: 'S21 A', kind: 'single', noMention: true } })).rejects.toThrow('免 @ 请在群设置里改');
     expect(await execute({ kind: 'bindGroup', input: { ...input(dir), chatId: 'oc_s21a', projectName: 'S21 A', kind: 'single', noMention: false } })).toMatchObject({ noMention: false });
@@ -136,7 +137,7 @@ describe('desktop group commands in the owning bot', () => {
     expect(fixture.message).toHaveBeenCalledTimes(1);
     await expect(execute({ kind: 'bindGroup', input: { ...smart, kind: 'single' } })).rejects.toThrow('不可修改');
     // A 免@ reaching the entry with 智能 (a DM card's shared form) is dropped, never stored on.
-    const picked = await joinExistingGroup(fixture.channel, { name: 'S25c picked', chatId: 'oc_s25c_picked', existingPath: dir, kind: 'smart', judge, noMention: true });
+    const picked = await joinExistingGroup(fixture.channel, { name: 'S25c picked', chatId: 'oc_s25c_picked', existingPath: await workspace(), kind: 'smart', judge, noMention: true });
     expect(picked).toMatchObject({ kind: 'single', smart: true, noMention: false });
   });
 
@@ -170,11 +171,12 @@ describe('desktop group commands in the owning bot', () => {
     const queue = createPendingGroups({ file: pendingGroupsFile(paths.projectsFile), eligible: async () => true, verify: async () => ({ state: 'ready', name: 'DM', topic: false }), onError: error => { throw error; } });
     await queue.add('oc_dm', 'ou_actual_sender');
     await queue.refresh();
-    const dm = await joinExistingGroup(fixture.channel, { name: 'DM', chatId: 'oc_dm', existingPath: dir, addedBy: 'ou_actual_sender', kind: 'multi' });
+    const dmDir = await workspace();
+    const dm = await joinExistingGroup(fixture.channel, { name: 'DM', chatId: 'oc_dm', existingPath: dmDir, addedBy: 'ou_actual_sender', kind: 'multi' });
     expect(dm.addedBy).toBe('ou_actual_sender');
     expect(dm.noMention).toBe(true); // 3.4: 多会话 defaults 免@ on, written down at bind
     expect(await readPendingGroups(pendingGroupsFile(paths.projectsFile))).toEqual([]);
-    const retried = await execute({ kind: 'bindGroup', input: { ...input(dir), projectName: 'DM', chatId: 'oc_dm' } });
+    const retried = await execute({ kind: 'bindGroup', input: { ...input(dmDir), projectName: 'DM', chatId: 'oc_dm' } });
     expect(retried).toEqual(dm);
     expect(fixture.message).toHaveBeenCalledTimes(2);
   });
@@ -189,7 +191,7 @@ describe('desktop group commands in the owning bot', () => {
       expect(dm.chatId).toBe('oc_corrupt_dm');
       expect((await listProjects()).find(project => project.chatId === dm.chatId)).toEqual(dm);
       const execute = createGroupExecutor(fixture.channel);
-      const value = { ...input(dir), projectName: 'Corrupt queue desktop', chatId: 'oc_corrupt_desktop' };
+      const value = { ...input(await workspace()), projectName: 'Corrupt queue desktop', chatId: 'oc_corrupt_desktop' };
       const desktop = await execute({ kind: 'bindGroup', input: value });
       expect(desktop).toMatchObject({ chatId: value.chatId });
       expect(await execute({ kind: 'bindGroup', input: value })).toEqual(desktop);
@@ -257,7 +259,7 @@ describe('desktop group commands in the owning bot', () => {
     for (const patch of [{ name: 'Different' }, { existingPath: await workspace() }, { backend: 'claude-agent' }, { kind: 'single' as const }, { noMention: false }]) {
       await expect(joinExistingGroup(fixture.channel, { ...value, ...patch })).rejects.toThrow('不可修改');
     }
-    await expect(joinExistingGroup(fixture.channel, { ...value, chatId: 'oc_name_conflict' })).rejects.toThrow('项目名');
+    await expect(joinExistingGroup(fixture.channel, { ...value, chatId: 'oc_name_conflict', existingPath: await workspace() })).rejects.toThrow('项目名');
     expect(await joinExistingGroup(fixture.channel, { ...value, name: ' Conflicts ', mode: 'full', addedBy: 'ou_changed', noMention: true })).toEqual(first);
     expect(await readFile(paths.projectsFile, 'utf8')).toBe(bytes);
     expect(fixture.message).toHaveBeenCalledTimes(1);

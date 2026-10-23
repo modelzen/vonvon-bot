@@ -48,6 +48,15 @@ describe('a group', () => {
       .toMatchObject({ permission: 'write', network: false, sources: { permission: 'group', network: 'group' } });
   });
 
+  it('passes normalized Claude native settings while corrupt custom stays read-only without native', () => {
+    const settings = { permissionMode: 'plan', network: 'domains', domains: ['example.com'] };
+    expect(resolveExecution({ group: group({ backend: CLAUDE, mode: 'qa', custom: { backend: CLAUDE, settings } }) }))
+      .toMatchObject({ permission: 'write', network: true, custom: { ...settings, sandbox: true } });
+    const invalid = resolveExecution({ group: group({ backend: CLAUDE, mode: 'full', custom: { backend: CLAUDE, settings: { permissionMode: 'invalid' } } }) });
+    expect(invalid).toMatchObject({ permission: 'qa', network: false });
+    expect(invalid).not.toHaveProperty('custom');
+  });
+
   it('runs Codex when it has no backend, even with a Claude bot default', () => {
     const r = resolveExecution({ bot: bot({ defaults: { backend: CLAUDE } }), group: group() });
     expect(r.backend).toBe(CODEX);

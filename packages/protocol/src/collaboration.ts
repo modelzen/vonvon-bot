@@ -1,7 +1,7 @@
 import { z } from "zod";
 import {groupDecisionSchema} from "./group-decision.js";
 import {modelCatalogSchema} from "./settings.js";
-import { agentIdSchema, conversationSchema, folderTokenSchema, folderSelectionSchema, groupIdSchema, replyModeSchema, toolSchema } from "./domain.js";
+import { agentIdSchema, conversationSchema, folderTokenSchema, folderSelectionSchema, groupIdSchema, projectIdSchema, replyModeSchema, toolSchema } from "./domain.js";
 
 const projectName = z.string().trim().min(1).max(100).regex(/^[^/\\\x00-\x1f]+$/);
 const threadId = z.string().min(1).max(1000);
@@ -17,9 +17,9 @@ const folder = folderSelectionSchema;
 
 export const collaborationRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("providerModels"), backend }).strict(),
-  z.object({ action: z.literal("createProject"), agentId: agentIdSchema, name: projectName, folder, tool: toolSchema, conversation, judge: groupDecisionSchema.optional(), response: replyModeSchema.optional() }).strict(),
+  z.object({ action: z.literal("createProject"), agentId: agentIdSchema, name: projectName, folder, project: projectIdSchema.optional(), tool: toolSchema, conversation, judge: groupDecisionSchema.optional(), response: replyModeSchema.optional() }).strict(),
   z.object({ action: z.literal("project"), ...target }).strict(),
-  z.object({ action: z.literal("editProject"), ...target, expectedRevision: revision, folderToken: folderTokenSchema.optional(), conversation: conversation.optional(), enabled: z.boolean().optional() }).strict(),
+  z.object({ action: z.literal("editProject"), ...target, expectedRevision: revision, folderToken: folderTokenSchema.optional(), project: projectIdSchema.optional(), conversation: conversation.optional(), enabled: z.boolean().optional() }).strict(),
   z.object({ action: z.literal("removeProject"), ...target, expectedRevision: revision }).strict(),
   z.object({ action: z.literal("history"), ...target }).strict(),
   z.object({ action: z.literal("context"), ...sessionTarget }).strict(),

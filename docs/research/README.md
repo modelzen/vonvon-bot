@@ -248,3 +248,9 @@ codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次�
 | --- | --- | --- |
 | [report](2026-10-23-permissions/report.md) | 沿用 bridge 的三档在多 provider 下是否合理；owner 定的方向（透传各家原生设置、越界拒绝、不做外层沙箱）；Codex 在 Linux 上的实测 | 实测证实用户 `~/.codex/rules` 的 allow 规则能绕过沙箱（#486）；0.163.0 的权限 profile 在 Linux 上能挡读 |
 | [native-codex-claude-gemini](2026-10-23-permissions/native-codex-claude-gemini.md)、[native-other-agents](2026-10-23-permissions/native-other-agents.md)、[hosts-and-sandboxes](2026-10-23-permissions/hosts-and-sandboxes.md) | 15 家 agent 的原生权限模型；ACP、Zed、Paseo 等宿主和外层沙箱的做法 | 子代理据文档和源码写成，没有核实记录，用前核对 |
+
+## 2026-10-23 个性、记忆与项目
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [README](2026-10-23-memory-persona/README.md) | 十份调研：Today 等消费级产品、OpenClaw、Hermes、Letta/mem0/LangMem、编码 agent 的记忆机制、人设和作用域，以及 vonvon 当前实现（dev `9b113b6`）的存储、运行时和界面 | 子代理据源码和文档写成，没有独立核实记录，用前核对；结论落在 `docs/plans/memory-projects.md` |

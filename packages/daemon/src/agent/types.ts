@@ -382,6 +382,8 @@ export interface StartThreadOptions {
   /** let the sandboxed agent's shell reach the network (qa/write only; full is
    * always networked). Default false. */
   network?: boolean;
+  /** Validated provider-native group permission settings; only Claude consumes them. */
+  native?: Readonly<Record<string, unknown>>;
 }
 
 export interface ResumeThreadOptions extends StartThreadOptions {

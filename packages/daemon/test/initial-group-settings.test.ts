@@ -11,7 +11,8 @@ describe('new group configuration admission',()=>{
   it('freezes explicit group settings without depending on Bot defaults',async()=>{
     const settings=await prepareNewGroupSettings({backend:'codex-appserver',kind:'multi'},helper());
     expect(settings.modelAccess).toEqual({backend:'codex-appserver',models:['work-model'],efforts:['low','high']});
-    expect(settings.profile).toEqual({persona:'',memory:'',inheritPersona:true,inheritMemory:true});
+    // no `profile`: the role is the bot's file and the supplement and memory start empty (P4a)
+    expect(settings.profile).toBeUndefined();
     expect(settings.skills).toEqual({disabledPaths:[]});
     expect(settings.smartRules).toEqual(DEFAULT_SMART_RULES);
   });

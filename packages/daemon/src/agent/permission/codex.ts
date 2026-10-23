@@ -17,6 +17,7 @@ function parseCustom(raw: unknown): z.infer<typeof schema> {
 function mode(sandbox: z.infer<typeof schema>['sandbox']): Tier {
   return sandbox === 'read-only' ? 'qa' : sandbox === 'workspace-write' ? 'write' : 'full';
 }
+const sandboxes = { qa: 'read-only', write: 'workspace-write', full: 'danger-full-access' } as const;
 
 function versionFor(env: TableEnv): string | null | undefined {
   if (env.codexVersion !== undefined) return env.codexVersion;
@@ -46,6 +47,14 @@ export const codexTable: PermissionTable = {
     return '系统沙箱管住命令的读、写和联网：工作区以外的文件读不到，也改不了。'
       + (env.platform === 'linux' ? '工作区里原来没有的 .mcp.json、.claude/ 这类配置，能被新建。' : '');
   },
+  fields: env => [
+    { key: 'sandbox', label: '沙箱模式', native: 'sandbox', kind: 'choice', choices: codexTable.tiers(env).map(info => ({
+      value: sandboxes[info.tier], label: info.name, native: sandboxes[info.tier],
+      hint: info.unavailable ?? info.summary.replace(/，(?:不|能)联网/, ''),
+    })) },
+    { key: 'network', label: '网络', native: 'network', kind: 'switch', showWhen: { key: 'sandbox', in: ['read-only', 'workspace-write'] } },
+  ],
+  expand: tier => ({ sandbox: sandboxes[tier], network: tier !== 'qa' }),
   parseCustom,
   matchTier(settings) {
     const value = parseCustom(settings);

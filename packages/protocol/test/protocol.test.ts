@@ -17,7 +17,7 @@ import {
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
 const permissionOptions = {
   tiers: ["qa", "write", "full"].map(tier => ({ tier, name: "权限", summary: "说明", native: "" })),
-  strength: "能力说明",
+  strength: "能力说明", fields: [], expanded: { qa: {}, write: {}, full: {} },
 };
 
 describe("pinned contract extraction", () => {

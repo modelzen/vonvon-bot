@@ -2,6 +2,7 @@ import type { AdminCollaborationOp } from './collaboration';
 import type { BotSettingsScope, ModelQuery } from './settings-types';
 import { GroupUpstreamError, InvalidGroupInput, type AdminGroupOp } from './groups';
 import { AdminWriteError, type AdminWriteOp } from './ops';
+import type { AdminLibraryOp } from './library';
 
 /**
  * supervisor ↔ bot 子进程的管理面 IPC（node 'ipc' stdio / process.send）。
@@ -23,7 +24,7 @@ export const ADMIN_IPC_REQ = 'fcb.admin.req' as const;
 export const ADMIN_IPC_RES = 'fcb.admin.res' as const;
 
 export type AdminSettingsReadOp = { kind: 'settingsRead'; scope: BotSettingsScope } | { kind: 'settingsModels'; query: ModelQuery };
-export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | { kind: 'status' };
+export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | { kind: 'status' };
 
 export interface AdminIpcRequest {
   fcb: typeof ADMIN_IPC_REQ;

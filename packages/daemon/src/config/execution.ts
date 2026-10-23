@@ -34,6 +34,7 @@ export interface ResolvedExecution {
   backend: string;
   permission: PermissionMode;
   network: boolean;
+  custom?: Record<string, unknown>;
   /** `primary` is the group's cwd; with no group, the bot's (undefined when it has none). */
   workspaces: { primary?: string; additional: string[] };
   repositories: string[];
@@ -166,6 +167,7 @@ export function resolveExecution({ bot, group }: ExecutionLayers): ResolvedExecu
       backend,
       permission: permission.effect.mode,
       network: permission.effect.network,
+      ...(permission.custom ? { custom: permission.custom } : {}),
       // The group's own directory only, not the bot's other workspaces (v1-plan 第 5 节).
       workspaces: { primary: group.cwd, additional: group.directories?.workspaces?.additional ?? [] },
       ...shared,

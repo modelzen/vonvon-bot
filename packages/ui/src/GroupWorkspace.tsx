@@ -1,6 +1,6 @@
 import {useEffect, useRef, useState} from 'react';
 import {ArrowUpRight, Check, MoreHorizontal} from 'lucide-react';
-import {modeToConversation, type Agent, type Conversation, type DesktopSnapshot, type Group, type Membership, type ProjectRecord} from '@vonvon/protocol';
+import {modeToConversation, type Agent, type Conversation, type DesktopSnapshot, type Group, type Membership, type ProjectId, type ProjectRecord} from '@vonvon/protocol';
 import {useClient, useShellCapabilities} from './client-context';
 import {AgentAvatar} from './AgentAvatar';
 import {GroupAvatar} from './GroupAvatar';
@@ -9,24 +9,25 @@ import {settingAnchor} from './search';
 import {Button, InlineNotice, Toggle} from './reference/components/ui';
 import {Dialog, ConfirmDialog} from './reference/components/ui/Dialog';
 import {SettingChoices} from './settings/SettingChoices';
-import {GroupDesignSettings} from './settings/GroupDesignSettings';
+import {GroupDesignSettings, type GroupSettingsTab} from './settings/GroupDesignSettings';
 import {useDraftGuard} from './settings/DraftGuard';
 import {ConversationPanel} from './management/ConversationPanel';
 import {GroupAttentionStatus} from './management/GroupAttentionStatus';
 import {appliedNotice, removalNotice} from './management/ProjectPanel';
 import {groupUrl, openExternalUrl} from './url-actions';
+import {ContextPanel} from './ContextPanel';
 import './group-workspace.css';
 
-export type GroupDesignTab = 'capabilities' | 'profile' | 'model' | 'workspace' | 'response';
-export const groupDesignTabs: readonly [GroupDesignTab, string][] = [['capabilities','能力'],['profile','个性与记忆'],['model','模型'],['workspace','工作区'],['response','回复规则']];
+export type GroupDesignTab = GroupSettingsTab;
+export const groupDesignTabs: readonly [GroupDesignTab, string][] = [['capabilities','能力'],['role','补充职责'],['model','模型'],['response','回复规则'],['permission','权限']];
 export function groupTabForSection(section?: string): GroupDesignTab {
   switch (section) {
-    case '个性与记忆': return 'profile';
+    case '补充职责': return 'role';
     case '可用模型': return 'model';
-    case '工作区':
     case '权限':
+    case '工作目录权限':
     case '能挡到什么':
-    case '工作目录权限': return 'workspace';
+    case '高级设置': return 'permission';
     case '聊天方式':
     case '决策模型':
     case '判断规则':
@@ -39,11 +40,11 @@ export function groupTabForSection(section?: string): GroupDesignTab {
 }
 
 type Props = {member: Membership; agent: Agent; group: Group; snapshot: DesktopSnapshot; initialTab?: GroupDesignTab; revealHistory?: boolean; onTabChange?: (tab:GroupDesignTab) => void;
-  onBot: (member: Membership) => void; onBotProfile: () => void; onOpenTools: () => void; onOpenProviders?: () => void; onOpenSecrets: () => void; onChanged: () => Promise<void>};
+  onBot: (member: Membership) => void; onBotProfile: () => void; onProject?: (id: ProjectId) => void; onOpenTools: () => void; onOpenProviders?: () => void; onOpenSecrets: () => void; onChanged: () => Promise<void>};
 // Intent: configure one Bot within one group, without exposing session management as navigation.
 // Hierarchy: target first, five established pages second. Quiet inset surfaces and system type
 // share Today's 4px spacing rhythm; history/help remain contextual actions in the toolbar.
-export function GroupWorkspace({member, agent, group, snapshot, initialTab, revealHistory, onTabChange, onBot, onBotProfile, onOpenTools, onOpenProviders, onOpenSecrets, onChanged}: Props) {
+export function GroupWorkspace({member, agent, group, snapshot, initialTab, revealHistory, onTabChange, onBot, onBotProfile, onProject, onOpenTools, onOpenProviders, onOpenSecrets, onChanged}: Props) {
   const client = useClient();
   const shell = useShellCapabilities();
   const guard = useDraftGuard();
@@ -55,7 +56,8 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
   running.current = agent.running;
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [dialog, setDialog] = useState<'help'|'history'|'remove'|'smart'|null>(null);
+  const [dialog, setDialog] = useState<'help'|'history'|'remove'|'smart'|'project'|'context'|null>(null);
+  const [nextProject, setNextProject] = useState('');
   const menu = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
     const ownerDocument = menu.current?.ownerDocument;
@@ -89,7 +91,7 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
     return () => {active = false;};
   }, [client, member.id, member.name, agent.running]);
   const sameProject = (other: ProjectRecord) => project && ['name','chatId','cwd','kind','backend','enabled'].every(key => other[key as keyof ProjectRecord] === project[key as keyof ProjectRecord]);
-  async function update(change: {enabled?: boolean; conversation?: Conversation}, remove = false) {
+  async function update(change: {enabled?: boolean; conversation?: Conversation; project?: ProjectId}, remove = false) {
     if (!project || saving.current || !running.current) return false;
     saving.current = true; setBusy(true); setError(''); setNotice('');
     try {
@@ -108,6 +110,8 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
     finally {saving.current = false; setBusy(false);}
   }
   const available = agent.running && !!project && !member.stale;
+  const memberProject = snapshot.projects?.find(item => item.id === member.projectId);
+  const otherProjects = (snapshot.projects ?? []).filter(item => item.id !== member.projectId);
   const conversation = project ? modeToConversation(project.kind) : member.conversation;
   const conversationControl = <div className="group-conversation-layout"><section id={settingAnchor("聊天方式")} className="group-conversation-choice" aria-label="聊天方式">
     <h3>聊天方式</h3><SettingChoices label="聊天方式" value={conversation} disabled={!available || busy} choices={[{value:'threads',label:'多会话'},{value:'shared',label:'单会话'},{value:'smart',label:'智能'}]} onChange={next => guard.navigate(() => {if (next === 'smart' && conversation !== 'smart') setDialog('smart'); else void update({conversation:next});})}/>
@@ -120,16 +124,29 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
     <div id={settingAnchor("群设置")} className="group-design-context"><div role="group" aria-label="本群 Bot" className="group-bot-picker">{snapshot.memberships.filter(item => item.groupId === group.id).map(item => {const bot = snapshot.agents.find(bot => bot.id === item.agentId); return bot && <button type="button" key={item.id} aria-pressed={member.id === item.id} title={bot.name} onClick={() => guard.navigate(() => onBot(item))}><AgentAvatar agent={bot}/><span>{bot.name}</span>{member.id === item.id && <Check size={12}/>}</button>;})}</div>
       {project ? <Toggle aria-label={`在本群使用 ${agent.name}`} label="在本群使用" checked={project.enabled} disabled={!available || busy} onChange={event => {const enabled=event.target.checked; guard.navigate(() => {void update({enabled});});}}/> : <span className="group-control-note">{!agent.enabled ? 'Bot 已停用' : !agent.running ? 'Bot 未运行' : '读取中…'}</span>}
     </div>
-    <nav className="group-design-tabs" aria-label="群设置">{groupDesignTabs.map(([value,label]) => <button type="button" key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => guard.navigate(() => {setTab(value); onTabChange?.(value);})}>{label}</button>)}</nav>
+    {memberProject && <p className="group-project-line" id={settingAnchor("所在项目")}>项目：<strong>{memberProject.name}</strong>
+      {onProject && <button type="button" className="gd-text-action" onClick={() => guard.navigate(() => onProject(memberProject.id))}>项目页</button>}
+      <button type="button" className="gd-text-action" disabled={!available || busy || !otherProjects.length} onClick={() => guard.navigate(() => {setNextProject(otherProjects[0]?.id ?? ''); setDialog('project');})}>换到别的项目…</button></p>}
+    <nav className="group-design-tabs" aria-label="群设置">{groupDesignTabs.map(([value,label]) => <button type="button" key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => guard.navigate(() => {setTab(value); onTabChange?.(value);})}>{label}</button>)}
+      <button type="button" className="group-context-button" onClick={() => setDialog('context')}>模型看到什么</button></nav>
+    {tab === 'role' && <p className="group-control-note">{agent.name} 的角色设定在 Bot 页，所有项目通用。<button type="button" className="gd-text-action" onClick={() => guard.navigate(onBotProfile)}>到 Bot 页</button></p>}
     {error && <InlineNotice title="操作未完成" tone="warning">{error}</InlineNotice>}
     {notice && <p role="status" className="group-control-note">{notice}</p>}
     <GroupDesignSettings key={`${member.id}:${version}`} scope={{kind:'project',botId:member.agentId,projectName:member.name}} tab={tab} tools={snapshot.tools} botName={agent.name} groupName={group.name} onOpenTools={onOpenTools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets} responseHeader={conversationControl}/>
     <Dialog open={dialog === 'history'} title={`${group.name} · ${agent.name}`} onClose={() => setDialog(null)}><div id={settingAnchor("会话管理")}>{agent.running ? <ConversationPanel agentId={agent.id} groupId={group.id} projectName={member.name} conversation={conversation} request={client.collaboration}/> : <p>Bot 运行后可查看对话记录。</p>}</div></Dialog>
+    <Dialog open={dialog === 'context'} title="模型看到什么" onClose={() => setDialog(null)}>
+      {dialog === 'context' && <ContextPanel agentId={member.agentId} groupId={member.groupId} projectId={member.projectId} revision={snapshot.revision} title={`${agent.name} · ${group.name}`}
+        go={{role: () => {setDialog(null); onBotProfile();}, botMemory: () => {setDialog(null); onBotProfile();}, supplement: () => {setDialog(null); setTab('role'); onTabChange?.('role');}, ...(member.projectId && onProject ? {projectMemory: () => {setDialog(null); onProject(member.projectId!);}} : {})}}/>}
+    </Dialog>
     <Dialog open={dialog === 'help'} title="在群里使用" onClose={() => setDialog(null)}><GroupUsage conversation={conversation} botName={agent.name}/></Dialog>
     <Dialog open={dialog === 'smart'} title="设置智能模式" onClose={() => guard.navigate(() => setDialog(null))}>
       <p className="group-control-note">选择判断 Provider，模型与 Effort 使用决策模型页中的配置。</p>
       {dialog === 'smart' && <GroupDesignSettings scope={{kind:'project',botId:member.agentId,projectName:member.name}} tab="response" tools={snapshot.tools} decisionSetupOnly onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets} onDecisionSaved={async () => {if (await update({conversation:'smart'})) setDialog(null); else throw new Error('决策模型已保存，未能切换聊天方式，请重试。');}}/>}
     </Dialog>
+    <ConfirmDialog open={dialog === 'project'} title="换到别的项目？" confirmLabel="换过去" pending={busy} onCancel={() => setDialog(null)} onConfirm={() => {setDialog(null); if (nextProject) void update({project: nextProject as ProjectId});}}
+      description={`${agent.name} 在「${group.name}」里的记忆、工作区和会话都换成所选项目的，这个群现有的会话会归档，下一轮重新开场。原来的项目和它的记忆保留。所选项目的记忆、工作区文件和会话历史，现在和以后绑在这个项目上的群的人，都能通过 Bot 间接看到。`}>
+      <label className="group-control-note">换到 <select aria-label="选择项目" value={nextProject} onChange={event => setNextProject(event.target.value)}>{otherProjects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+    </ConfirmDialog>
     <ConfirmDialog open={dialog === 'remove'} title="解除这个群的绑定？" confirmLabel="解除绑定" tone="danger" pending={busy} onCancel={() => setDialog(null)} onConfirm={() => {setDialog(null); void update({},true);}} description={`解除 ${agent.name} 与「${group.name}」的关联。Bot 加入的群会退出；Bot 创建的群会尝试转交群主。本地目录和文件保留。`}/>
   </div>;
 }
