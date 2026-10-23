@@ -1,10 +1,11 @@
-import { mkdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
-import { projectSectionSchemas } from '@vonvon/protocol';
+import { z } from 'zod';
 import { paths } from '../config/paths';
-import { acquireMutex, closeMutex } from '../config/data-access';
-import type { PermissionMode, ReasoningEffort } from '../agent/types';
+import { acquireMutex, closeMutex, holdMutexRole } from '../config/data-access';
+import { syncDirectory } from '../config/bot-namespace';
+import { REASONING_EFFORTS, type PermissionMode, type ReasoningEffort } from '../agent/types';
 import { admitDirectoryChanges, parseDirectorySettings, type DirectorySettings } from '../config/directories';
 import type { JudgeSelectionStored } from '../judge/types';
 
@@ -95,6 +96,11 @@ export interface Project {
   /** 智能模式的判断模型，覆盖 bot 层的（s23c）。`backend` 一定是存的时候群的后端；群后来换了后端，
    * 这一项不再适用、也不删。手改坏了当没设（parseStoredJudge）。 */
   judge?: JudgeSelectionStored;
+  /** 这一行（某个 bot 在某个群）属于项目库里的哪个项目（project/library.ts）。host 启动时补上（记忆设计 7.1 步骤 A）；
+   * 旧 daemon 不认这个键，读写都原样带着。不是字符串、或者库里没有这个项目，下次启动重新补。 */
+  projectId?: string;
+  /** 记忆设计 7.1 的分步标记，每步做完的时间（epoch ms）：`library` = 步骤 A，`memory` = 步骤 B。 */
+  migration?: { library?: number; memory?: number };
 }
 
 /**
@@ -196,14 +202,19 @@ async function read(file = paths.projectsFile): Promise<Project[]> {
 export async function listProjectsIn(file: string): Promise<Project[]> {
   try {
     const text = await readFile(file, 'utf8');
-    const parsed = JSON.parse(text) as Partial<StoreFile>;
-    if (!parsed || !Array.isArray(parsed.projects) || parsed.projects.some(p => !p || typeof p !== 'object' || typeof p.name !== 'string' || typeof p.cwd !== 'string')) throw new Error('项目注册表格式无效');
-    for (const project of parsed.projects) { parseDirectorySettings(project.directories); validateGroupSettings(project as unknown as Record<string, unknown>); }
-    return parsed.projects.map(foldGuestTier);
+    return storedRows(JSON.parse(text)).map(foldGuestTier);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw err;
   }
+}
+
+/** The rows of a parsed projects.json, as stored (no fold); any malformed row fails the whole file. */
+function storedRows(parsed: unknown): Project[] {
+  const file = parsed as Partial<StoreFile> | null;
+  if (!file || !Array.isArray(file.projects) || file.projects.some(p => !p || typeof p !== 'object' || typeof p.name !== 'string' || typeof p.cwd !== 'string')) throw new Error('项目注册表格式无效');
+  for (const project of file.projects) { parseDirectorySettings(project.directories); validateGroupSettings(project as unknown as Record<string, unknown>); }
+  return file.projects;
 }
 
 /**
@@ -242,8 +253,12 @@ export async function splitTierChats(file = paths.projectsFile): Promise<Map<str
 
 export type RegistryLocation = Readonly<{ file: string; dataRoot: string }>;
 let opChain: Promise<unknown> = Promise.resolve();
+/** Lock order bots → library → projects (data-access.ts): inside an operation here, `library` and another `projects` are refused. */
 function ownProjects<T>(operation: (location: RegistryLocation) => Promise<T>, target: RegistryLocation = { file: paths.projectsFile, dataRoot: paths.appDir }): Promise<T> {
   const captured = { ...target };
+  return holdMutexRole('projects', () => queueProjects(operation, captured));
+}
+function queueProjects<T>(operation: (location: RegistryLocation) => Promise<T>, captured: RegistryLocation): Promise<T> {
   const run = opChain.then(async () => {
     await mkdir(dirname(captured.file), { recursive: true });
     const parent = await realpath(dirname(captured.file));
@@ -283,16 +298,31 @@ function directoryRows(raw: unknown): DirectoryRow[] {
   });
 }
 
+/**
+ * The stored shape of a row's settings blocks: the registry's own copy (memory design §2.2), equal today to the
+ * protocol's section schemas they were checked with, so a later protocol change to a section (`profile` → `role`)
+ * cannot make rows already on disk unreadable. New fields get their limits where they are written, not here: one
+ * row that fails here fails the whole file.
+ */
+const storedSectionSchemas = {
+  profile: z.object({ persona: z.string().max(30000), memory: z.string().max(30000), inheritPersona: z.boolean(), inheritMemory: z.boolean() }),
+  modelAccess: z.object({ backend: z.string().min(1).max(1000), models: z.array(z.string().trim().min(1).max(1000)).max(1000), efforts: z.array(z.enum(REASONING_EFFORTS)).max(8) }),
+  smartRules: z.object({ respond: z.string().max(30000), newTopic: z.string().max(30000) }),
+  skills: z.object({ disabledPaths: z.array(z.string().min(1).max(4096)).max(1000) }),
+  presentation: z.object({ voiceEnabled: z.boolean(), showToolCalls: z.boolean(), showModel: z.enum(['off', 'running', 'always']).optional(),
+    completionMode: z.enum(['manual', 'long', 'failures', 'always']), longTaskMinutes: z.number().int().min(1).max(1440) }),
+};
+
 /** Explicit group settings never silently fall back to broader Bot permissions when malformed. */
 function validateGroupSettings(row: Record<string, unknown>): void {
   for (const key of ['profile', 'modelAccess', 'smartRules', 'skills', 'presentation'] as const) {
-    if (row[key] !== undefined && !projectSectionSchemas[key].safeParse(row[key]).success) throw new Error(`Invalid group settings: ${key}`);
+    if (row[key] !== undefined && !storedSectionSchemas[key].safeParse(row[key]).success) throw new Error(`Invalid group settings: ${key}`);
   }
   const access = row.modelAccess as ProjectModelAccess | undefined;
   if (access && (!access.models.length || new Set(access.models).size !== access.models.length || new Set(access.efforts).size !== access.efforts.length)) throw new Error('Invalid group settings: modelAccess');
 }
 
-async function writeStored(location: RegistryLocation, body: Record<string, unknown>, previous: Record<string, unknown>, beforeCommit?: () => void): Promise<void> {
+async function writeStored(location: RegistryLocation, body: Record<string, unknown>, previous: Record<string, unknown>, beforeCommit?: () => void, durable = false): Promise<void> {
   // Both callers own detached rows and a separate previous disk snapshot.
   const next = body;
   const oldProjects = directoryRows(previous.projects);
@@ -319,13 +349,20 @@ async function writeStored(location: RegistryLocation, body: Record<string, unkn
   const serialized = `${JSON.stringify(next, null, 2)}\n`;
   const tmp = `${location.file}.tmp-${process.pid}-${randomUUID()}`;
   try {
-    await writeFile(tmp, serialized, 'utf8');
+    if (durable) {
+      const file = await open(tmp, 'wx');
+      let failed = false;
+      try { await file.writeFile(serialized, 'utf8'); await file.sync(); }
+      catch (error) { failed = true; throw error; }
+      finally { try { await file.close(); } catch (error) { if (!failed) throw error; } }
+    } else await writeFile(tmp, serialized, 'utf8');
     beforeCommit?.();
     await rename(tmp, location.file);
   } catch (error) {
     await unlink(tmp).catch(() => undefined);
     throw error;
   }
+  if (durable) await syncDirectory(dirname(location.file));
 }
 
 export interface ProjectCommitOptions { beforeCommit?: () => void }
@@ -355,6 +392,23 @@ export async function setTierMergePending(chats: readonly string[]): Promise<voi
     else delete stored[TIER_MERGE_PENDING];
     await writeStored(location, stored, previous);
   });
+}
+
+/**
+ * Runs `operation` on the rows of `target` as stored (no fold: a pre-s15c `guestMode` stays for
+ * {@link splitTierChats}) under the projects owner, and writes them back when it returns true. For keys the rest of
+ * the daemon does not read yet (`projectId`, `migration`): its callers add keys and leave a row's directories alone.
+ * The write is synced before and after the rename: the startup migration rewrites every bot's file once, stopped
+ * bots' too, and a power cut must not leave one of them empty (an empty file stops that bot from starting).
+ */
+export function withStoredRows(target: RegistryLocation, operation: (rows: Project[]) => Promise<boolean>): Promise<void> {
+  return ownProjects(async location => {
+    const stored = await readStored(location.file);
+    if (stored.projects === undefined) return;
+    const rows = storedRows(stored);
+    const previous: Record<string, unknown> = JSON.parse(JSON.stringify(stored));
+    if (await operation(rows)) await writeStored(location, { ...stored, version: FILE_VERSION, projects: rows }, previous, undefined, true);
+  }, target);
 }
 
 export async function listProjects(): Promise<Project[]> {

@@ -26,6 +26,8 @@ program.hook('preAction', async (_command, action) => {
   // Like daemon getSecret, it only reads the atomically published keystore and takes no lease.
   if (parent === 'secrets' && action.name() === 'get') return;
   if (parent === 'service' || (parent === 'bot' && action.name() !== 'repair-dir') || parent === 'group' || parent === 'settings' || parent === 'feishu' || action.name() === '__daemon-control') return;
+  // project list only reads files published with tmp + rename (the library, bots.json, each projects.json), like secrets get
+  if (parent === 'project') return;
   // in a Bot's session secrets list, set and remove only refuse (s23g): before the lease, whose socket a sandbox may forbid, and the data root
   if (parent === 'secrets' && action.name() !== 'get' && inBotSession(process.env)) return;
   if (action.name() === 'run') {
@@ -143,6 +145,10 @@ group.command('bind <groupId>').description('Bind a group (oc_…) to a folder')
   .action(async (groupId: string, options: Json & { folder: string; name?: string; tool: string; conversation?: string; response?: string; bot?: string }) => {
     await (await import('./commands/group')).runGroupBind(groupId, options, io(options));
   });
+const project = program.command('project').description('List projects: the folders and memory groups share');
+project.command('list').description('List projects with their folders and the groups that use them').option('--json', 'Print JSON').action(async (options: Json) => {
+  await (await import('./commands/project')).runProjectList(io(options));
+});
 const settings = program.command('settings').description('Read and change bot, group and session settings');
 type Target = Json & { bot?: string; group?: string; session?: string; revision?: string; reason?: string };
 const scoped = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--session <threadId>', 'Session thread id').option('--json', 'Print JSON');
