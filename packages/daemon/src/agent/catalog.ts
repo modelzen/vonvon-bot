@@ -22,7 +22,8 @@ export type BackendAccess = 'app-server' | 'sdk' | 'acp';
  *   'npm-ondemand'  npm 包，按需装到用户私装目录（库类 / bin 类两形态）。
  *                   **唯一可一键下载的类型。** 库类（无 binName）走 import + require.resolve；
  *                   bin 类（有 binName）被 spawn、走 node_modules/.bin 路径（见 backend-loader）。
- *                   当前内置后端均非此类（codex 是 external-cli），保留以备将来挂新后端。
+ *                   打包版可将 SDK 随应用提供；是否内置由 daemon/package.json 的
+ *                   bundledBackends 声明，不改变开发态按需加载的依赖类型。
  *   'npm-external'  外部 npm 包，用户自管（当前内置后端无此类，保留给未来不便按需装的包）。
  */
 export type DepKind = 'external-cli' | 'npm-ondemand' | 'npm-external';
@@ -104,8 +105,7 @@ export const BACKEND_CATALOG: readonly BackendCatalogEntry[] = [
     displayName: 'Claude',
     access: 'sdk',
     dep: {
-      // 打包版不带 SDK，按需下载到用户目录。开发时仓库的 devDependency（锁同一个版本）
-      // 经 require.resolve 也能找到，所以 dev 下始终判为「已装」。
+      // 开发态从仓库依赖解析；桌面打包态由 bundledBackends 标记随应用提供的 SDK。
       kind: 'npm-ondemand',
       pkg: '@anthropic-ai/claude-agent-sdk',
       version: CLAUDE_AGENT_SDK_VERSION,

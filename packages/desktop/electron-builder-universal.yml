@@ -14,6 +14,9 @@ mac:
   entitlementsInherit: entitlements.plist
   notarize: false
   gatekeeperAssess: false
+  # Both architecture packages are present unchanged in each staged app. Bun self-extracts
+  # its own native executable; @electron/universal must keep these two thin binaries intact.
+  x64ArchFiles: 'Contents/Resources/daemon/node_modules/@anthropic-ai/claude-agent-sdk/node_modules/@anthropic-ai/claude-agent-sdk-darwin-{arm64,x64}/claude'
   # Localization data is sealed by its enclosing framework, not independently executable.
   signIgnore:
     - '/Resources/[^/]+\.lproj/locale\.pak$'

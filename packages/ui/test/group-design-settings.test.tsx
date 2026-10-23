@@ -1,6 +1,6 @@
 import {expect, it} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
-import {agentIdSchema, type ModelCatalog, type ProjectSettingsView} from '@vonvon/protocol';
+import {DEFAULT_SMART_RULES, agentIdSchema, type ModelCatalog, type ProjectSettingsView} from '@vonvon/protocol';
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
 import {DirectoryPickerProvider} from '../src/directory-picker';
@@ -107,4 +107,15 @@ it('announces shared readonly reasons once but preserves independent safety reas
   const html = render('response', view);
   expect(html.match(/共同不可编辑原因/g)).toHaveLength(1);
   expect(html.match(/独有权限限制/g)).toHaveLength(1);
+});
+
+it('shows actual default text in both editable prompt fields with a restore action', () => {
+  const view = fixture();
+  view.sections.smartRules = section({...DEFAULT_SMART_RULES});
+  const html = render('response', view);
+  expect(html).toContain('直接叫你的名字');
+  expect(html).toContain('出现独立的新任务');
+  expect(html).toMatch(/<textarea[^>]*aria-label="什么时候回复"[^>]*>先看/);
+  expect(html).toMatch(/<textarea[^>]*aria-label="什么时候创建新话题"[^>]*>接着当前讨论/);
+  expect(html).toContain('恢复默认');
 });

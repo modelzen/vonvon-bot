@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { paths } from '../config/paths';
 import type { BackendCatalogEntry } from './catalog';
 
@@ -35,6 +35,35 @@ export class BackendNotInstalledError extends Error {
  * 文件本身不需真实存在（实验 C）。挂在 backendsDir 根 → 解析 backendsDir/node_modules。 */
 function userAnchor(): string {
   return join(paths.backendsDir, '__backend_anchor__.cjs');
+}
+
+/** Only the staged desktop daemon declares bundledBackends. A checkout's devDependency is not bundled. */
+function daemonMetadataPath(): string | null {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 8; i++) {
+    const file = join(dir, 'package.json');
+    try {
+      const metadata = JSON.parse(readFileSync(file, 'utf8')) as { name?: string };
+      if (metadata.name === '@vonvon/daemon') return file;
+    } catch { /* continue towards the package root */ }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+/** Desktop bundle marker, independent of whether a local checkout can resolve the SDK. */
+export function isBundledBackend(id: string, metadataFile: string | null = daemonMetadataPath()): boolean {
+  if (!metadataFile) return false;
+  try {
+    const metadata = JSON.parse(readFileSync(metadataFile, 'utf8')) as { name?: string; bundledBackends?: unknown };
+    return metadata.name === '@vonvon/daemon'
+      && Array.isArray(metadata.bundledBackends)
+      && metadata.bundledBackends.includes(id);
+  } catch {
+    return false;
+  }
 }
 
 /** Node 的 ESM「找不到模块」错误码族（不同 Node 版本/路径写法可能给不同码）。 */
@@ -142,28 +171,31 @@ export function isBackendPackageInUserDir(pkg: string, binName?: string): boolea
 }
 
 /**
- * 已装后端的版本号（读其 package.json 的 version）。先查用户私装目录（按需下载落点），
- * 再查 bridge 自身 node_modules（dev/worktree）。读不到 → null。绝不抛错。bin 类与库类
- * 都适用（都是 node_modules/<pkg>/package.json）。供后端管理页展示「当前版本」用。
+ * 已装后端的版本号。库类优先读取 daemon 自身实际解析到的包，与 loadBackendDep 的
+ * bare import 顺序一致；SDK 不开放 package.json 子路径，所以由入口文件回溯包根。
+ * 回退用户私装目录也覆盖 bin-only 包。读不到 → null，绝不抛错。
  */
 export function installedBackendVersion(pkg: string): string | null {
-  const readVer = (file: string): string | null => {
+  const readVer = (file: string): { name?: string; version?: string } | null => {
     try {
-      const j = JSON.parse(readFileSync(file, 'utf8')) as { version?: string };
-      return typeof j.version === 'string' ? j.version : null;
+      return JSON.parse(readFileSync(file, 'utf8')) as { name?: string; version?: string };
     } catch {
       return null;
     }
   };
-  // ① 用户私装目录。
-  const inUser = join(paths.backendsDir, 'node_modules', ...pkg.split('/'), 'package.json');
-  const v1 = readVer(inUser);
-  if (v1) return v1;
-  // ② bridge 自身（dev/worktree）：用 createRequire 解析包的 package.json 路径。
+  // ① daemon 自身的解析结果与 loadBackendDep 的 bare import 命中同一包。
   try {
-    const resolved = createRequire(import.meta.url).resolve(`${pkg}/package.json`);
-    return readVer(resolved);
-  } catch {
-    return null;
-  }
+    let dir = dirname(createRequire(import.meta.url).resolve(pkg));
+    for (let i = 0; i < 16; i++) {
+      const metadata = readVer(join(dir, 'package.json'));
+      if (metadata?.name === pkg) return typeof metadata.version === 'string' ? metadata.version : null;
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch { /* not available here; try the user's package */ }
+  // ② 用户私装目录（also handles bin-only packages without an exported entry).
+  const inUser = join(paths.backendsDir, 'node_modules', ...pkg.split('/'), 'package.json');
+  const metadata = readVer(inUser);
+  return metadata?.name === pkg && typeof metadata.version === 'string' ? metadata.version : null;
 }

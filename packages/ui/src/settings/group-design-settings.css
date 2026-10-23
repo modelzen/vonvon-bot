@@ -121,3 +121,5 @@
 @media (prefers-contrast: more) {
   .gd-model-choice:has(input:checked), .gd-effort-choice:has(input:checked) { outline: 1px solid currentColor; outline-offset: -1px; }
 }
+
+.gd-prompt-toolbar { padding: 8px 16px 0; }

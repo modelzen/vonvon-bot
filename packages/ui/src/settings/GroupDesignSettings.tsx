@@ -1,4 +1,5 @@
 import {useCallback, useContext, useEffect, useRef, useState, type ReactNode} from 'react';
+import {DEFAULT_SMART_RULES} from '@vonvon/protocol';
 import {ChevronRight, Folder, GitBranch, Plus, RefreshCw, Search, X} from 'lucide-react';
 import {backendLabel, isKnownJudgeSelection, type AgentId, type AgentSettingsView, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ProjectSettingsView, type SettingsReply, type ToolState} from '@vonvon/protocol';
 import {useClient, useShellCapabilities} from '../client-context';
@@ -145,14 +146,15 @@ export function GroupSettingsContent({view, refresh, tab, tools, botName = 'Bot'
       {tab === 'response' && <>
         {responseHeader}
         {view.identity.kind === 'smart' && <>
+          {sections.smartRules ? <Editor title="判断规则" section={sections.smartRules} save={(patch, revision) => save('smartRules', patch, revision)} render={(draft, set, disabled) => <>
+            <div className="gd-section-heading gd-prompt-toolbar"><span className="gd-note">保存后，下次判断生效</span><button type="button" className="gd-text-action" disabled={disabled || draft.respond === DEFAULT_SMART_RULES.respond && draft.newTopic === DEFAULT_SMART_RULES.newTopic} onClick={() => set({...DEFAULT_SMART_RULES})}>恢复默认</button></div>
+            <label className="gd-prompt"><span>什么时候回复</span><textarea aria-label="什么时候回复" rows={8} maxLength={30000} value={draft.respond} disabled={disabled} onChange={event => set({...draft, respond: event.target.value})}/></label>
+            <label className="gd-prompt"><span>什么时候创建新话题</span><textarea aria-label="什么时候创建新话题" rows={4} maxLength={30000} value={draft.newTopic} disabled={disabled} onChange={event => set({...draft, newTopic: event.target.value})}/></label>
+          </>}/> : <MissingSection/>}
           {sections.judge ? <Editor title="决策模型" section={sections.judge} save={(patch, revision) => save('judge', patch, revision)}
             validate={value => decisionProblem(value.selection, providers, view.decisionModels)}
             render={(draft, set, disabled, _commit, resetKey) => <DecisionFields key={resetKey} botId={view.scope.botId} groupBackend={view.identity.backend} value={draft.selection} effective={sections.judge!.effective.selection}
               onChange={selection => set({selection})} disabled={disabled} providers={providers} services={view.decisionModels} onOpenSecrets={onOpenSecrets}/>}/> : <MissingSection/>}
-          {sections.smartRules ? <Editor title="判断规则" section={sections.smartRules} save={(patch, revision) => save('smartRules', patch, revision)} render={(draft, set, disabled) => <>
-            <label className="gd-prompt"><span>什么时候回复</span><textarea aria-label="什么时候回复" rows={4} maxLength={30000} value={draft.respond} disabled={disabled} onChange={event => set({...draft, respond: event.target.value})}/></label>
-            <label className="gd-prompt"><span>什么时候创建新话题</span><textarea aria-label="什么时候创建新话题" rows={4} maxLength={30000} value={draft.newTopic} disabled={disabled} onChange={event => set({...draft, newTopic: event.target.value})}/></label>
-          </>}/> : <MissingSection/>}
         </>}
         {view.identity.kind !== 'smart' && <ProjectPanel view={view} refresh={refresh} partition="response" independent hideJudge/>}
         <details className="gd-disclosure"><summary>响应成员</summary><ProjectPanel view={view} refresh={refresh} partition="members" independent hideJudge/></details>
