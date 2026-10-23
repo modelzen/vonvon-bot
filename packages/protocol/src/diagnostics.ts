@@ -68,8 +68,8 @@ export const NOT_REPLIED_TEXT: Record<NotRepliedReason, Text> = {
   "codex-too-old": { reason: () => "Codex 版本太旧，服务端不让它用这个模型", next: () => "在本机环境里更新 Codex。" },
   "tool-missing": { reason: r => r.backend === "claude" ? "Claude Agent SDK 还没下载" : "Codex 没装好", next: () => "去本机环境安装。" },
   "tier-unavailable": {
-    reason: () => "Linux 上的 Codex 只能用完全访问，这个群是只读或读写档，这一轮没开始",
-    next: (r, bot) => `在群内设置里把「权限档」改成「完全访问」，或者运行 vonvon settings set${bot?.several ? ` --bot ${bot.id}` : ""} --group ${r.groupId} permission.mode=full。`,
+    reason: () => "Linux 上的 Codex 只能用完全访问，这个群是只读或工作区可写，这一轮没开始",
+    next: (r, bot) => `在群内设置里把「权限」改成「完全访问」，或者运行 vonvon settings set${bot?.several ? ` --bot ${bot.id}` : ""} --group ${r.groupId} permission.mode=full。`,
   },
   "missing-scope": { reason: r => `飞书拒绝了：缺 ${r.detail ?? "权限"}`, next: () => "在上面「缺的权限」里一键开权限，开完发布一个新版本。" },
   quota: { reason: r => `${tool(r)} 的用量到上限了`, next: () => "用量恢复后再发。" },

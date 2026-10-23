@@ -21,7 +21,7 @@ import {
   type SessionTitleAiConfig,
 } from '../config/schema';
 import { conversationCopy, modeToConversation, topicConversationCopy } from '@vonvon/protocol';
-import { effectiveMode, noMentionOf, ruleKind, sessionModeOf, type Project } from '../project/registry';
+import { noMentionOf, ruleKind, sessionModeOf, type Project } from '../project/registry';
 import {
   DEFAULT_BACKEND_ID,
   REASONING_EFFORTS,
@@ -31,7 +31,8 @@ import {
   type ReasoningEffort,
 } from '../agent/types';
 import { catalogById } from '../agent/catalog';
-import { groupBackendId, resolveCommentsExecution } from '../config/execution';
+import { groupBackendId, groupPermission, resolveCommentsExecution } from '../config/execution';
+import { permissionTable, tierInfo, type PermissionTable, type TableEnv } from '../agent/permission';
 import { CUSTOM_MODEL_OPTION, MODEL_ID_MAX_LENGTH, parseModelId } from '../agent/model-id';
 import type { SessionRecord } from '../bot/session-store';
 import { labelScope } from '../config/scopes';
@@ -115,7 +116,7 @@ export const DM = {
   // 🤖 默认模型/强度：新话题的起始模型 + 推理强度（选完提交的下拉表单子卡，仿权限卡）
   modelDefault: 'dm.proj.modelDefault',
   modelDefaultSubmit: 'dm.proj.modelDefault.submit',
-  // 🔐 权限：codex 沙箱的权限档 + 联网，做成下拉表单（选+提交）
+  // 🔐 权限：群里所有人共用的权限，做成下拉表单（选+提交）
   permission: 'dm.proj.perm',
   permissionSubmit: 'dm.proj.perm.submit',
   // 🧠 后端 backend/backendSubmit 已移除：后端改为「创建时选定、运行时固定、不支持切换」，
@@ -603,7 +604,7 @@ export function parseNoMentionPick(formValue: Record<string, unknown> | undefine
  */
 export function buildJoinGroupFormCard(
   opts: { chatId: string; name?: string; cwd?: string; error?: string; backends?: SelectOption[];
-    backend?: string; topic?: boolean; hasOtherBots?: boolean; addedBy?: { name?: string }; fullOnly?: boolean },
+    backend?: string; topic?: boolean; hasOtherBots?: boolean; addedBy?: { name?: string }; fullOnly?: string },
 ): CardObject {
   const elements: CardElement[] = [];
   if (opts.error) elements.push(md(`❌ **绑定失败**：${opts.error}`));
@@ -621,8 +622,8 @@ export function buildJoinGroupFormCard(
   } else if (backends.length === 1) {
     formItems.push(note(`🧠 后端 Agent：**${backends[0]!.label}**（绑定后固定）`));
   }
-  formItems.push(note('🔒 权限档：只读 · 网络：关。设置好以后在群详情页或私聊里改。'));
-  if (opts.fullOnly) formItems.push(note('ℹ️ 这台电脑是 Linux：选 Codex 也能绑定，但只读档跑不起来，@ 我时我会回一句说明。要用，绑定后在群设置里改成完全访问（它能读写这个账号能碰到的所有文件）。'));
+  formItems.push(note('🔒 权限：只读（不联网）。设置好以后在群详情页或私聊里改。'));
+  if (opts.fullOnly) formItems.push(note(`ℹ️ ${tierInfo(permissionTable(DEFAULT_BACKEND_ID), { platform: process.platform, fullOnly: opts.fullOnly }, 'qa').unavailable} 选 Codex 也能绑定，@ 我时我会回一句说明。要用，绑定后在群设置里改成完全访问。`));
   formItems.push(...sessionModeItems('绑定', { a: DM.joinGroupSubmit, chatId: opts.chatId, ...(opts.topic ? { t: 'topic' } : {}) }, opts.topic));
   if (opts.hasOtherBots) formItems.push(note('群里还有别的 bot。几个 bot 都选智能，它们才能互相 @、各自判断接不接话。'));
   const group = opts.name ? `「${opts.name}」` : '一个群（没读到群名）';
@@ -1561,65 +1562,44 @@ export function buildAddAdminCard(members: { openId: string; name: string }[]): 
   );
 }
 
-/** Permission tiers, escalating, each with a one-line plain-language description
- * (no "cwd" jargon — "项目文件夹"). */
-const MODE_OPTS: { value: PermissionMode; label: string; desc: string }[] = [
-  { value: 'qa', label: '🔒 项目内只读', desc: '只能查看项目文件夹里的内容，不会改任何文件' },
-  { value: 'write', label: '✏️ 项目内读写', desc: '能查看并修改项目文件夹里的文件，但碰不到文件夹外' },
-  { value: 'full', label: '⚠️ 完全访问', desc: '能读写整台电脑上的任何文件' },
-];
-
 /** Short label for a tier (falls back to the raw value). Exported for the
  * backend-switch validation's rejection message (handle-message). */
 export function tierLabel(m: PermissionMode): string {
-  return MODE_OPTS.find((o) => o.value === m)?.label ?? m;
+  return tierInfo(permissionTable(DEFAULT_BACKEND_ID), { platform: process.platform }, m)?.name ?? m;
 }
 
-/** Tier dropdown options: "label — desc" so the meaning shows in the menu. */
-const TIER_SELECT_OPTS: SelectOption[] = MODE_OPTS.map((o) => ({ label: `${o.label} — ${o.desc}`, value: o.value }));
-
-/** A project's one tier, for the 项目设置 card. */
-export function permissionSummary(p: Pick<Project, 'mode'>): string {
-  return tierLabel(effectiveMode(p));
+type PermissionProject = Pick<Project, 'mode' | 'network' | 'custom' | 'backend' | 'modelAccess'>;
+/** The effective permission, including native settings, for the 项目设置 card. */
+export function permissionSummary(p: PermissionProject): string {
+  const permission = groupPermission(p);
+  if (permission.invalid) return '高级设置读不出来，现在按只读跑';
+  return permission.custom
+    ? `自定义（${permissionTable(groupBackendId(p)).describe(permission.custom)}）${permission.legacy ? '（从旧版的联网开关转来）' : ''}`
+    : tierLabel(permission.tier);
 }
 
-/** Version in the 🔐 card's submit value since s15c. A card sent before has none: left alone on a full-only
- * backend, its 普通用户档 dropdown submits nothing, so the form alone cannot tell it from this one. */
-export const PERMISSION_CARD_VERSION = 2;
+/** Old cards included a separate network field; they must be refreshed before saving. */
+export const PERMISSION_CARD_VERSION = 3;
 
-/**
- * 🔐 权限表单卡（DM「项目设置 → 🔐 权限」）。一个下拉选权限档，群里所有人都用这一档（s15c），
- * 外加联网开关。用 selectMenu(表单收值、提交时才读、不锁卡)而非即时按钮——选完点提交；提交
- * handler 落盘 + 驱逐活跃会话让新档立刻生效。`fullOnly`（后端在这台主机上只能完全访问时的原因）
- * 给了时，下拉只剩完全访问，并写明现在的档和原因；存的不是完全访问时下拉不预选，提示写"不选就不改"，
- * 只改联网时提交里没有它，存的档不动（product.md 3.8 不自动放开）。
- */
-export function buildPermissionCard(p: Pick<Project, 'name' | 'mode' | 'network'>, fullOnly?: string): CardObject {
-  const network = p.network ?? false;
-  const options = fullOnly ? TIER_SELECT_OPTS.filter((o) => o.value === 'full') : TIER_SELECT_OPTS;
-  const tier = effectiveMode(p);
-  /** A stored tier this card cannot offer is not preset: left alone, the dropdown submits nothing. */
-  const tierSelect = fullOnly && tier !== 'full'
-    ? selectMenu({ name: 'mode', placeholder: `现在是${tierLabel(tier)}，不选就不改`, options })
-    : selectMenu({ name: 'mode', placeholder: '选择权限档', options, initial: tier });
+/** One available-tier dropdown; custom/unavailable settings are never preselected. */
+export function buildPermissionCard(p: Pick<Project, 'name'> & PermissionProject, table: PermissionTable, env: TableEnv): CardObject {
+  const permission = groupPermission(p);
+  const tiers = table.tiers(env);
+  const options = tiers.filter(info => !info.unavailable).map(info => ({ label: `${info.name} — ${info.summary}`, value: info.tier }));
+  const current = tierInfo(table, env, permission.tier);
+  const unselected = permission.custom || permission.invalid || current.unavailable;
+  const tierSelect = selectMenu({ name: 'mode', placeholder: unselected ? `现在是${permission.custom ? '自定义' : current.name}，不选就不改` : '选择权限',
+    options, ...(unselected ? {} : { initial: permission.tier }) });
   return card(
     [
       md(`**🔐 权限** · ${p.name}`),
-      note('codex 沙箱的访问范围。群里所有人都用这一档。'),
-      ...(fullOnly ? [note(`现在是${tierLabel(tier)}。${fullOnly}`)] : []),
+      note('群里所有人都用这一档。'),
+      ...(permission.invalid ? [note('高级设置读不出来，现在按只读跑。选一档重新设置。')]
+        : permission.custom ? [note(`现在是自定义：${table.describe(permission.custom)}。选一档就回到那一档；不选就不改。`)] : []),
+      ...(current.unavailable ? [note(`现在是${current.name}。${current.unavailable}`)] : []),
       form('perm', [
-        md('🔒 **权限档**'),
+        md('🔒 **权限**'),
         tierSelect,
-        md('🌐 **联网**（只对只读 / 读写档有意义；完全访问恒联网）'),
-        selectMenu({
-          name: 'network',
-          placeholder: '联网开关',
-          options: [
-            { label: '关（默认，更安全）', value: 'off' },
-            { label: '开', value: 'on' },
-          ],
-          initial: network ? 'on' : 'off',
-        }),
         actions([submitButton('✅ 保存权限', { a: DM.permissionSubmit, n: p.name, v: PERMISSION_CARD_VERSION }, 'primary', 'submit_perm')]),
       ]),
       note('保存会断开本项目正在进行的会话，让新档位立即生效。'),
@@ -1800,6 +1780,8 @@ export function buildProjectSettingsCard(
     | 'cwd'
     | 'mode'
     | 'network'
+    | 'custom'
+    | 'modelAccess'
     | 'backend'
     | 'defaultModel'
     | 'defaultEffort'
@@ -1816,7 +1798,7 @@ export function buildProjectSettingsCard(
       note(`${kindLabel(project)}${project.cwd ? `   ·   📂 \`${project.cwd}\`` : ''}`),
       hr(),
       actions([button('🔐 权限', { a: DM.permission, n: project.name }, 'primary')]),
-      note(`当前 ${permissionSummary(project)}　·　codex 沙箱可访问的范围，群里所有人都用这一档。`),
+      note(`当前 ${permissionSummary(project)}　·　群里所有人都用这一档。`),
       hr(),
       md('🧠 后端'),
       note(

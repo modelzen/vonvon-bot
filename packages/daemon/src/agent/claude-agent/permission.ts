@@ -138,7 +138,9 @@ export async function decide(access: ClaudeAccess, call: ToolCall, origin: Origi
   if (origin === 'callback' && ['SandboxNetworkAccess', ...NETWORK_TOOLS].includes(tool)) {
     if (access.network) return { kind: 'allow' };
     const host = tool === 'SandboxNetworkAccess' && typeof input.host === 'string' ? input.host.slice(0, 100) : '外网';
-    return deny(`这个群的权限不联网，连不上 ${host}。不要再试着联网，换个办法，或者停下来说明：要联网得请主人把群的权限改成工作区可写或完全访问。`);
+    const next = access.mode === 'write' ? '要联网得请主人在群设置里重新选一次工作区可写，或者改成完全访问。'
+      : '要联网得请主人把群的权限改成工作区可写或完全访问。';
+    return deny(`这个群的权限不联网，连不上 ${host}。不要再试着联网，换个办法，或者停下来说明：${next}`);
   }
   if (origin === 'callback' && tool === 'Bash') {
     if (input.dangerouslyDisableSandbox === true) return deny('这个群的命令只能在沙箱里跑。');

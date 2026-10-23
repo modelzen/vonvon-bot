@@ -237,7 +237,7 @@ const sandboxed = (sandbox?: NonNullable<ToolState['sandbox']>) => linuxSteps([t
 it('adds the Codex note and the Claude sandbox on Linux, only for tools that are installed', () => {
   expect(linuxSteps([tool({tool: 'codex', installation: 'missing'}), tool({tool: 'claude', installation: 'missing'})])).toEqual([]);
   const [codex, claude] = sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'ok'});
-  expect(codex).toMatchObject({id: 'codex-linux', title: 'Codex 的权限档', status: '只能用完全访问', tone: 'neutral', done: true, actions: []});
+  expect(codex).toMatchObject({id: 'codex-linux', title: 'Codex 的权限', status: '只能用完全访问', tone: 'neutral', done: true, actions: []});
   expect(codex?.detail).toContain('vonvon settings set --group <群 id> permission.mode=full');
   expect(claude).toMatchObject({id: 'claude-sandbox', status: '可以用', tone: 'success', done: true, commands: undefined});
   expect(linuxSteps([tool({tool: 'codex', installation: 'unknown'})]).map(step => step.id)).toEqual(['codex-linux']);
@@ -282,8 +282,8 @@ it('puts the service step in its own group after the tools', () => {
   expect(other).toContain('1. 后台服务');
   expect(other).not.toContain('LaunchAgent');
   expect(other).not.toContain('<span>打开</span>');
-  expect(other).not.toContain('Linux 上的权限档');
-  expect(html).not.toContain('Linux 上的权限档');
+  expect(other).not.toContain('Linux 上的权限');
+  expect(html).not.toContain('Linux 上的权限');
 });
 
 it('shows the Linux group between the tools and the service, with commands in a block', () => {
@@ -291,9 +291,10 @@ it('shows the Linux group between the tools and the service, with commands in a 
     <SetupChecklist snapshot={{...snapshot([]), tools: [tool({tool: 'claude', sandbox: {bwrap: null, socat: true, userns: 'unchecked'}})], application: {...snapshot([]).application, platform: 'linux', service: service()}}}
       ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}} codexJobs={null}/>
   </ClientProvider>);
-  expect(html.indexOf('后端')).toBeLessThan(html.indexOf('Linux 上的权限档'));
-  expect(html.indexOf('Linux 上的权限档')).toBeLessThan(html.indexOf('后台运行'));
-  expect(html).toContain('1. Claude 的权限档');
+  expect(html.indexOf('后端')).toBeLessThan(html.indexOf('Linux 上的权限'));
+  expect(html.indexOf('Linux 上的权限')).toBeLessThan(html.indexOf('后台运行'));
+  expect(html).not.toContain('Linux 上的权限档');
+  expect(html).toContain('1. Claude 的权限');
   expect(html).toContain('<pre class="setup-step-commands">sudo apt install bubblewrap</pre>');
   expect(html).toContain('systemd 用户服务。退出 SSH 后也要在线，安装时打开 linger。');
   expect(html).not.toContain('Codex 的权限档');

@@ -144,12 +144,12 @@ export function linuxSteps(tools: readonly ToolState[]): SetupStep[] {
   const codex = tools.find(tool => tool.tool === 'codex');
   const claude = tools.find(tool => tool.tool === 'claude');
   const steps: SetupStep[] = [];
-  if (codex && codex.installation !== 'missing') steps.push({id: 'codex-linux', title: 'Codex 的权限档', status: '只能用完全访问', tone: 'neutral', done: true, detail: CODEX_LINUX, actions: []});
+  if (codex && codex.installation !== 'missing') steps.push({id: 'codex-linux', title: 'Codex 的权限', status: '只能用完全访问', tone: 'neutral', done: true, detail: CODEX_LINUX, actions: []});
   if (claude && claude.installation !== 'missing') steps.push(claudeSandboxStep(claude.sandbox));
   return steps;
 }
 
-const CODEX_LINUX = 'Linux 上 Codex 的沙箱只挡写、不限制读，vonvon 不在 Linux 上用 Codex 的只读、读写档，这两档的群不起会话，有人 @ 它时回一句说明，免@ 触发时每个群 10 分钟最多回一次。要用 Codex 的群，在群设置里把权限档改成「完全访问」，或者在终端运行 vonvon settings set --group <群 id> permission.mode=full。完全访问下 Codex 能读写这个账号能碰到的所有文件，群里有别人时先想清楚。不会自动改。';
+const CODEX_LINUX = 'Linux 上的 Codex 暂时只能用完全访问，没有沙箱。这两档的群不起会话，有人 @ 它时回一句说明。要用 Codex 的群，在群设置里把权限改成「完全访问」，或者在终端运行 vonvon settings set --group <群 id> permission.mode=full。完全访问下 Codex 能读写这个账号能碰到的所有文件，群里有别人时先想清楚。不会自动改。';
 const FULL_INSTEAD = '不想改的话，这台主机上用 Claude 的群就用完全访问。';
 const SANDBOX_MISSING = 'Claude 在只读、读写档下用 bubblewrap 沙箱把命令关在工作区里，缺了这两档的回合会失败（Sandbox required but unavailable），完全访问不受影响。别的发行版用自己的包管理器装 bubblewrap 和 socat；装好后一分钟内这里会更新。';
 const SANDBOX_APPARMOR = `Ubuntu 23.10 起默认不让普通程序建用户命名空间（kernel.apparmor_restrict_unprivileged_userns = 1），bwrap 起不来，只读、读写档的回合会失败。给 bwrap 单独加一份 AppArmor 配置就行，不用全局关掉这个限制，命令见下；${FULL_INSTEAD}`;
@@ -163,7 +163,7 @@ const apparmorCommands = (bwrap: string): string[] => [
 
 function claudeSandboxStep(sandbox: ClaudeSandbox | undefined): SetupStep {
   const step = (status: string, tone: StepTone, detail?: string, commands?: string[]): SetupStep =>
-    ({id: 'claude-sandbox', title: 'Claude 的权限档', status, tone, done: tone === 'success', detail, actions: [], commands});
+    ({id: 'claude-sandbox', title: 'Claude 的权限', status, tone, done: tone === 'success', detail, actions: [], commands});
   if (!sandbox) return step('无法确认', 'neutral');
   const missing = [...(sandbox.bwrap ? [] : ['bwrap']), ...(sandbox.socat ? [] : ['socat'])];
   if (!sandbox.bwrap || missing.length) return step(`缺 ${missing.join('、')}`, 'warning', SANDBOX_MISSING, [`sudo apt install ${missing.map(name => name === 'bwrap' ? 'bubblewrap' : name).join(' ')}`]);

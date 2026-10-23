@@ -48,7 +48,7 @@ describe('s36d1 createProject', () => {
     const project = await createProject({ rawClient: fake.client }, value);
     const cwd = join(groups(), 'Stable');
     expect(project).toMatchObject({ cwd, blank: true, directories: { workspaces: { primary: cwd, additional: [] } }, origin: 'created', mode: 'full',
-      backend: 'claude-agent', network: false, creationRequestId: value.requestId, kind: 'multi', noMention: true });
+      backend: 'claude-agent', network: true, creationRequestId: value.requestId, kind: 'multi', noMention: true });
     expect((await listProjects()).find(p => p.chatId === project.chatId)).toEqual(project);
     expect(Object.values(await allocations()).find(a => a.chatId === project.chatId)).toMatchObject({ state: 'ready', namespaceRoot: cwd });
     expect(fake.creates()).toHaveLength(1);
@@ -56,6 +56,11 @@ describe('s36d1 createProject', () => {
     expect(savedAtAdmin).toBe(true);
     expect(fake.requests.map(r => r.path)).toEqual(expect.arrayContaining(['/open-apis/im/v1/messages', `/open-apis/docx/v1/chats/${project.chatId}/announcement/blocks`]));
     expect(fake.open()).toBe(0);
+  });
+
+  it.each([['qa', false], ['write', true]] as const)('creates %s with tier-derived network %s', async (mode, network) => {
+    const project = await createProject({ rawClient: fakeLark().client }, input(`Permission-${mode}`, { mode }));
+    expect(project).toMatchObject({ mode, network });
   });
 
   it('adds a suffix beside an existing directory and keeps every odd name below groups', async () => {

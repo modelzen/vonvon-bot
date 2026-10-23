@@ -24,6 +24,8 @@ export function groupTabForSection(section?: string): GroupDesignTab {
     case '个性与记忆': return 'profile';
     case '可用模型': return 'model';
     case '工作区':
+    case '权限':
+    case '能挡到什么':
     case '工作目录权限': return 'workspace';
     case '聊天方式':
     case '决策模型':
