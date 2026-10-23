@@ -47,6 +47,11 @@ it('keeps Bot source read-only inside the group editor and inheritance optional 
   const bot = renderToStaticMarkup(<PersonaEditor label="个性" value="源内容" onChange={() => {}}/>);
   expect(bot).toContain('aria-label="Bot 个性"');
   expect(bot).not.toContain('继承');
+  // the Bot's role editor is the two sections of SOUL.md, nothing else
+  const role = renderToStaticMarkup(<><PersonaEditor label="身份与职责" value="助手" onChange={() => {}} maxLength={500}/><PersonaEditor label="其他说明" value="" onChange={() => {}}/></>);
+  expect(role).toContain('aria-label="Bot 身份与职责"');
+  expect(role).toContain('aria-label="Bot 其他说明"');
+  expect(role.match(/<textarea/g)).toHaveLength(2);
 });
 it('shows discovered skills and no fabricated tool authorization state', () => {
   const html = render('capabilities');

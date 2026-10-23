@@ -7,6 +7,7 @@ import { admitDirectorySettings } from '../config/directories';
 import { directoryFailure, DirectoryError } from '../config/directory-errors';
 import { log } from '../core/logger';
 import { acquireSingleInstanceLock, readSingleInstanceHolder } from '../core/single-instance';
+import { migrateRoleFiles } from '../bot/role-files';
 import { assertBridgeImportReservation } from '../import/bridge/reservation';
 import { listProjectsIn, mutateProject, withStoredRows, type Project } from '../project/registry';
 import { detachSessionsForChatIn } from '../bot/session-store';
@@ -400,6 +401,16 @@ export async function prepareLibraryAtStartup(options: LibraryStartupOptions = {
       log.fail('library', error, { phase: 'migrate', botId: bot.appId });
     }
   }
+  // Step R, per bot directory and independent of A: a bot whose rows failed above still gets its role files tidied.
+  let rolesMerged = 0;
+  for (const bot of bots) {
+    try { if ((await migrateRoleFiles(bot.appId)) === 'merged') rolesMerged++; }
+    catch (error) {
+      report.failed.push({ botId: bot.appId, error: messageOf(error) });
+      log.fail('library', error, { phase: 'role', botId: bot.appId });
+    }
+  }
+  if (rolesMerged) log.info('library', 'roles_merged', { count: rolesMerged });
   if (report.linked) log.info('library', 'migrated', { linked: report.linked, created: report.created });
   try { await checkDrift(bots, report); }
   catch (error) { log.fail('library', error, { phase: 'drift' }); }

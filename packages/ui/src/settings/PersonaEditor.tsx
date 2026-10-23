@@ -3,7 +3,7 @@ import {CornerDownRight, Plus, X} from 'lucide-react';
 import './group-design-settings.css';
 
 type Props = {
-  label: '个性' | '记忆';
+  label: '个性' | '记忆' | '身份与职责' | '其他说明';
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
