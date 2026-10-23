@@ -1,25 +1,22 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {Download, Pencil, Trash2} from 'lucide-react';
-import {backendLabel, type Agent, type AgentId, type DesktopSnapshot, type LibraryProject, type LibraryReply, type MembershipId, type ProjectId, type SnapshotProject, type ToolState} from '@vonvon/protocol';
+import {backendLabel, type Agent, type AgentId, type DesktopSnapshot, type GroupId, type LibraryProject, type LibraryReply, type MembershipId, type ProjectId, type SnapshotProject, type ToolState} from '@vonvon/protocol';
 import {useClient} from './client-context';
 import {Button, InlineNotice} from './reference/components/ui';
 import {ConfirmDialog, Dialog} from './reference/components/ui/Dialog';
-import {WorkspaceFields, GroupDesignSettings, type GroupSettingsTab} from './settings/GroupDesignSettings';
+import {GroupDesignSettings, WorkspaceFields} from './settings/GroupDesignSettings';
 import {useDraft, useDraftGuard} from './settings/DraftGuard';
-import {groupDesignTabs} from './GroupWorkspace';
 import {bindingRows, otherProjectNotices, projectDeletable, workspaceRisks} from './project-model';
 import {settingAnchor} from './search';
 import {MemoryMap} from './MemoryMap';
-import {ContextPanel, LastTurnNotice} from './ContextPanel';
 import type {MapNode} from './MindMap';
 import type {ProjectPane} from './collaboration-navigation';
+import {useInheritedContent} from './inherited-content';
 import './group-workspace.css';
 
 const failText = (error: unknown, fallback = '操作未完成，请重试。') => error instanceof Error ? error.message : fallback;
-/** §5.7 empty state of a project's memory. */
-export const projectMemoryEmpty = '还没有。群里说“记住……”，或者 Bot 自己判断值得记时会挂到下面的分支上。Bot 在群里说了“记住了”，就是记了；所有新记的都会在这里标“新”。';
 const conversationLabel = {threads: '多会话', shared: '单会话', smart: '智能'} as const;
-export const projectTabs: readonly [ProjectPane['kind'], string][] = [['map', '导图'], ['workspace', '工作区'], ['context', '模型看到什么']];
+export const projectTabs: readonly [ProjectPane['kind'], string][] = [['map', '记忆'], ['workspace', '工作区']];
 
 /** One file out of a project's per-branch markdown export (memory.export), for 删除项目 to hand over before the memory goes. */
 export function exportText(name: string, files: readonly {branch: string; markdown: string}[]): string {
@@ -60,16 +57,14 @@ type Props = {
   onOpenTools?: () => void;
   onOpenProviders?: () => void;
   onOpenSecrets?: () => void;
+  onBotProfile?: (id: AgentId) => void;
 };
 // Intent: one project, its groups and Bots, and the workspace they share. Pages are plain: the owner leads a later visual pass.
-export function ProjectPage({project, snapshot, pane, tools, onPane, onMembership, onChanged, onDeleted, onAddGroup, onOpenTools, onOpenProviders, onOpenSecrets}: Props) {
+export function ProjectPage({project, snapshot, pane, onPane, onMembership, onChanged, onDeleted, onAddGroup, onBotProfile}: Props) {
   const guard = useDraftGuard();
   const {library, error, refresh} = useLibraryProject(project.id, snapshot.revision);
   const [dialog, setDialog] = useState<'rename' | 'delete' | null>(null);
-  const only = project.bindings.length === 1 ? snapshot.memberships.find(item => item.agentId === project.bindings[0]!.agentId && item.groupId === project.bindings[0]!.groupId) : undefined;
-  const onlyAgent = only && snapshot.agents.find(agent => agent.id === only.agentId);
-  const onlyGroup = only && snapshot.groups.find(group => group.id === only.groupId);
-  const tab = pane.kind === 'group' && !only ? 'map' : pane.kind;
+  const tab = pane.kind === 'workspace' ? 'workspace' : 'map';
   return <div className="group-design-workspace project-page">
     <header className="group-design-heading">
       <h2 title={project.name}>项目「{project.name}」</h2>
@@ -78,40 +73,21 @@ export function ProjectPage({project, snapshot, pane, tools, onPane, onMembershi
     </header>
     <nav className="group-design-tabs" aria-label="项目页">
       {projectTabs.map(([kind, label]) => <button type="button" key={kind} aria-current={tab === kind ? 'page' : undefined} onClick={() => guard.navigate(() => onPane({kind} as ProjectPane))}>{label}</button>)}
-      {only && groupDesignTabs.map(([value, label]) => <button type="button" key={value} aria-current={pane.kind === 'group' && pane.tab === value ? 'page' : undefined} onClick={() => guard.navigate(() => onPane({kind: 'group', tab: value}))}>{label}</button>)}
     </nav>
     {error && <InlineNotice title="读取未完成" tone="warning">{error}<Button size="sm" onClick={() => void refresh()}>重试</Button></InlineNotice>}
-    {tab === 'map' && <ProjectMap project={project} snapshot={snapshot} library={library} onMembership={onMembership} onAddGroup={onAddGroup}/>}
+    {tab === 'map' && <ProjectMemoryMap project={project} snapshot={snapshot} library={library} onMembership={onMembership} onAddGroup={onAddGroup} onBotProfile={onBotProfile}/>}
     {tab === 'workspace' && <ProjectWorkspace project={project} snapshot={snapshot} library={library} refresh={async () => {await refresh(); await onChanged();}}/>}
-    {tab === 'context' && <ProjectContext project={project} snapshot={snapshot} onPane={onPane}/>}
-    {pane.kind === 'group' && only && onlyAgent && onlyGroup && <div className="project-page-group" aria-label={`${onlyGroup.name} 的设置`}>
-      <p className="group-control-note">{onlyAgent.name} 在 {onlyGroup.name} 里的设置。聊天方式、对话记录和解除绑定在<button type="button" className="gd-text-action" onClick={() => guard.navigate(() => onMembership(only.id))}>群设置页</button>。</p>
-      <GroupDesignSettings scope={{kind: 'project', botId: only.agentId, projectName: only.name}} tab={pane.tab as GroupSettingsTab} tools={tools} botName={onlyAgent.name} groupName={onlyGroup.name}
-        onOpenTools={onOpenTools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets}/>
-    </div>}
     <RenameDialog open={dialog === 'rename'} project={project} library={library} onClose={() => setDialog(null)} onDone={async () => {setDialog(null); await refresh(); await onChanged();}}/>
     <DeleteDialog open={dialog === 'delete'} project={project} library={library} onClose={() => setDialog(null)} onDone={async () => {setDialog(null); await onChanged(); onDeleted();}}/>
   </div>;
 }
 
-/** 模型看到什么 for this project (§5.5): one Bot in one group at a time; a project with several bindings picks which. */
-function ProjectContext({project, snapshot, onPane}: {project: SnapshotProject; snapshot: DesktopSnapshot; onPane: (pane: ProjectPane) => void}) {
-  const [at, setAt] = useState(0);
-  const binding = project.bindings[Math.min(at, project.bindings.length - 1)];
-  const label = (item: {agentId: AgentId; groupId: string}) => `${snapshot.agents.find(agent => agent.id === item.agentId)?.name ?? 'Bot'} · ${snapshot.groups.find(group => group.id === item.groupId)?.name ?? '一个群'}`;
-  const member = binding && snapshot.memberships.find(item => item.agentId === binding.agentId && item.groupId === binding.groupId);
-  return <section id={settingAnchor('模型看到什么')} aria-label="模型看到什么">
-    {!binding ? <p className="group-control-note">没有群在用这个项目，没有 Bot 会读到它。</p> : <>
-      {project.bindings.length > 1 && <label className="group-control-note">看哪个 Bot 在哪个群里<select className="settings-field" aria-label="看哪个绑定" value={at} onChange={event => setAt(Number(event.target.value))}>
-        {project.bindings.map((item, index) => <option key={`${item.agentId}|${item.groupId}`} value={index}>{label(item)}</option>)}</select></label>}
-      <ContextPanel agentId={binding.agentId} groupId={binding.groupId} projectId={project.id} revision={snapshot.revision}
-        title={`${label(binding)}${member ? ` · ${backendLabel(member.backend)}` : ''}`}
-        go={{projectMemory: () => onPane({kind: 'map'}), ...(project.bindings.length === 1 ? {supplement: () => onPane({kind: 'group', tab: 'role'})} : {})}}/>
-    </>}
-  </section>;
-}
-
-function ProjectMap({project, snapshot, library, onMembership, onAddGroup}: {project: SnapshotProject; snapshot: DesktopSnapshot; library?: LibraryProject; onMembership: (id: MembershipId) => void; onAddGroup?: (agentId: AgentId, projectId: ProjectId) => void}) {
+export function ProjectMemoryMap({project, snapshot, library, onMembership, onAddGroup, groupsInitiallyOpen = true, selectedAgentId, selectedGroupId, onBotProfile, initialRoleMembershipId}: {groupsInitiallyOpen?: boolean; project: SnapshotProject; snapshot: DesktopSnapshot; library?: LibraryProject; onMembership: (id: MembershipId) => void; onAddGroup?: (agentId: AgentId, projectId: ProjectId) => void; selectedAgentId?: AgentId; selectedGroupId?: GroupId; onBotProfile?: (id: AgentId) => void; initialRoleMembershipId?: MembershipId}) {
+  const guard = useDraftGuard();
+  const [roleId, setRoleId] = useState<MembershipId | undefined>(initialRoleMembershipId);
+  useEffect(() => {if (initialRoleMembershipId) setRoleId(initialRoleMembershipId);}, [initialRoleMembershipId]);
+  const inherited = useInheritedContent({project, snapshot, selectedAgentId, selectedGroupId, onBotProfile,
+    beforeInspect: inspect => guard.navigate(() => {setRoleId(undefined); inspect();})});
   const rows = bindingRows(snapshot, project, library);
   const notices = otherProjectNotices(snapshot, project);
   const [open, setOpen] = useState<Record<string, boolean>>({});
@@ -126,6 +102,17 @@ function ProjectMap({project, snapshot, library, onMembership, onAddGroup}: {pro
     tone: row.state === 'ok' ? undefined : 'muted',
     ...(row.member ? {onClick: () => onMembership(row.member!.id), menu: [{id: 'unbind', label: `不再用${row.bot}处理这个群…`, onSelect: () => onMembership(row.member!.id)}]} : {}),
   }));
+  const roleRows = rows.filter(row => (!selectedAgentId || row.agentId === selectedAgentId) && (!selectedGroupId || row.groupId === selectedGroupId));
+  const roleRow = roleRows.find(row => row.member && row.member.id === roleId && row.member.projectId === project.id);
+  const roles: MapNode = {id: 'group-roles', kind: 'section', label: '本群角色', meta: String(roleRows.length),
+    open: open.roles ?? true, onToggle: () => setOpen(current => ({...current, roles: !(current.roles ?? true)})),
+    children: roleRows.map(row => {
+      const member = row.member;
+      const available = member?.projectId === project.id;
+      return {id: `role:${row.agentId}:${row.groupId}`, kind: 'leaf', label: `${row.group} · ${row.bot}`, selected: Boolean(member && member.id === roleId),
+        meta: available ? '点击编辑' : '暂不可用', tone: available ? undefined : 'muted',
+        ...(member && available ? {onClick: () => {if (member.id !== roleId) guard.navigate(() => {inherited.close(); setRoleId(member.id);});}} : {})};
+    })};
   // Candidates for 把一个群加进来: the project's own Bots first, then the rest; one candidate opens the dialog at once.
   const inProject = new Set(project.bindings.map(binding => binding.agentId as string));
   const agents = [...snapshot.agents].sort((a, b) => Number(inProject.has(b.id)) - Number(inProject.has(a.id)));
@@ -134,17 +121,19 @@ function ProjectMap({project, snapshot, library, onMembership, onAddGroup}: {pro
     ? {id: 'add-group', kind: 'action', label: '+ 把一个群加进来…', open: Boolean(open['add-group']), onToggle: () => setOpen(current => ({...current, 'add-group': !current['add-group']})),
       children: agents.map(agent => ({id: `add:${agent.id}`, kind: 'action' as const, label: `用 ${agent.name}`, onClick: () => add(agent)}))}
     : {id: 'add-group', kind: 'action', label: '+ 把一个群加进来…', ...(agents[0] && onAddGroup ? {onClick: () => add(agents[0]!)} : {})};
-  const groups: MapNode = {id: 'groups', kind: 'section', label: '群和 Bot', meta: String(rows.length), open: open.groups ?? true, onToggle: () => setOpen(current => ({...current, groups: !(current.groups ?? true)})), children: [...bindingNodes, addNode]};
-  return <section id={settingAnchor('群和 Bot')} className="project-map" aria-label="导图">
-    <MemoryMap scope={{kind: 'project', projectId: project.id}} rootLabel={project.name} mode="direct" memoryLabel="项目记忆" targets={targets} after={[groups]}
-      above={<LastTurnNotice bindings={project.bindings} revision={snapshot.revision} names={item => `${snapshot.groups.find(group => group.id === item.groupId)?.name ?? '一个群'} · ${snapshot.agents.find(agent => agent.id === item.agentId)?.name ?? 'Bot'}`}/>}
-      note="共用这个项目的群里，Bot 都会读到这些记忆。"
-      empty={projectMemoryEmpty}/>
-    {!rows.length && <p className="group-control-note">没有群在用这个项目。从“群和 Bot”里把一个群加进来，或删除这个项目。</p>}
-    {notices.map(notice => <InlineNotice key={notice.memberId} title="同一个群里的另一个 Bot 用的是别的项目" tone="warning"
-      actions={<Button size="sm" onClick={() => onMembership(notice.memberId)}>去设置</Button>}>
-      {notice.bot} 在 {notice.group} 用的是项目「{notice.project}」，记忆和目录和这里不通。在 {notice.bot} 的群设置页可以换到这个项目。
-    </InlineNotice>)}
+  const groupNotices: MapNode[] = notices.map(notice => ({id: `other-project:${notice.memberId}`, kind: 'leaf', label: `${notice.bot} 在 ${notice.group} 用的是项目「${notice.project}」`, meta: '记忆和目录独立 →', onClick: () => onMembership(notice.memberId)}));
+  const groups: MapNode = {id: 'groups', kind: 'section', label: '群和 Bot', meta: String(rows.length), open: open.groups ?? groupsInitiallyOpen, onToggle: () => setOpen(current => ({...current, groups: !(current.groups ?? groupsInitiallyOpen)})), children: [...bindingNodes,
+    ...(!rows.length ? [{id: 'no-groups', kind: 'leaf' as const, label: '没有群在用这个项目', tone: 'muted' as const}] : []),
+    ...groupNotices, ...(onAddGroup ? [addNode] : [])]};
+  const panel = roleRow?.member ? <div className="memory-role-panel">
+    <p className="group-control-note">{roleRow.group} · {roleRow.bot}</p>
+    <GroupDesignSettings key={roleRow.member.id} scope={{kind: 'project', botId: roleRow.agentId, projectName: roleRow.member.name}} tab="role" tools={snapshot.tools} botName={roleRow.bot} groupName={roleRow.group}/>
+  </div> : inherited.panel;
+  return <section id={settingAnchor('群和 Bot')} className="project-map" aria-label="记忆导图">
+    <MemoryMap scope={{kind: 'project', projectId: project.id}} rootLabel={project.name} mode="direct" memoryLabel="项目记忆" targets={targets} before={[...(roleRows.length ? [roles] : []), ...inherited.nodes]} after={[groups]}
+      panel={panel} panelKey={roleRow?.member?.id ?? inherited.selectedId} panelTitle={roleRow ? '本群角色' : '继承内容 · 只读'}
+      onPanelClose={() => guard.navigate(() => {setRoleId(undefined); inherited.close();})}
+      beforeLeafSelect={select => guard.navigate(() => {setRoleId(undefined); inherited.close(); select();})}/>
   </section>;
 }
 

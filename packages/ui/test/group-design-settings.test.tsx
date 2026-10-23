@@ -37,12 +37,12 @@ const catalog: ModelCatalog = {backend: 'codex-appserver', state: 'ready', sourc
   {id: 'actual-b', displayName: '实际模型 B', description: '', isDefault: false, hidden: false, supportedEfforts: ['high'], defaultEffort: 'high'},
   {id: 'no-effort', displayName: '无 Effort 模型', description: '', isDefault: false, hidden: false, supportedEfforts: [], defaultEffort: 'none'},
 ]};
-it('P6: the group page has 补充职责 in place of 个性与记忆, and no Bot persona or memory to inherit', () => {
+it('keeps the group role editor separate from stored memories', () => {
   const html = render('role');
-  expect(html).toContain('aria-label="补充职责"');
+  expect(html).toContain('aria-label="本群角色"');
   expect(html).toContain('本项目里多做发版检查');
-  expect(html).toContain('角色设定（→ Bot 页）始终生效');
-  expect(html).toContain('智能判断会优先看这一段');
+  expect(html).toContain('留空时使用 Bot 页的角色设定');
+  expect(html).not.toContain('智能判断会优先看这一段');
   expect(html).not.toContain('继承');
   expect(html).not.toContain('Bot 的个性原文');
   expect(html).not.toContain('Bot 的记忆原文');
@@ -73,7 +73,7 @@ it('shows discovered skills and no fabricated tool authorization state', () => {
   expect(render('capabilities', failed)).not.toContain('尚未发现技能');
 });
 it('P6: the group page has five tabs, the permission editor is on 权限 and the workspace is not on the group page', () => {
-  expect(groupDesignTabs.map(([, label]) => label)).toEqual(['能力', '补充职责', '模型', '回复规则', '权限']);
+  expect(groupDesignTabs.map(([, label]) => label)).toEqual(['能力', '记忆', '模型', '回复规则', '权限']);
   expect(groupDesignTabs.map(([value]) => value)).not.toContain('workspace');
   for (const section of ['权限', '能挡到什么', '高级设置', '工作目录权限']) expect(groupTabForSection(section)).toBe('permission');
   const html = render('permission');
