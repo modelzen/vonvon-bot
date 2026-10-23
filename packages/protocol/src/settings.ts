@@ -123,9 +123,17 @@ const tier = z.enum(["qa", "write", "full"]);
 export const permissionTierSchema = z.object({
   tier, name: z.string(), summary: z.string(), native: z.string(), unavailable: z.string().optional(),
 });
+export const permissionFieldSchema = z.object({
+  key: z.string(), label: z.string(), native: z.string(), kind: z.enum(["choice", "switch", "domains"]),
+  choices: z.array(z.object({ value: z.string(), label: z.string(), native: z.string(), hint: z.string().optional() }).strict()).optional(),
+  hint: z.string().optional(),
+  showWhen: z.object({ key: z.string(), in: z.array(z.union([z.string(), z.boolean()])) }).strict().optional(),
+}).strict();
 export const permissionOptionsSchema = z.object({
   tiers: z.array(permissionTierSchema).length(3),
   strength: z.string(),
+  fields: z.array(permissionFieldSchema),
+  expanded: z.object({ qa: z.record(z.string(), z.unknown()), write: z.record(z.string(), z.unknown()), full: z.record(z.string(), z.unknown()) }).strict(),
   customSummary: z.string().optional(),
   legacy: z.boolean().optional(),
   invalid: z.boolean().optional(),

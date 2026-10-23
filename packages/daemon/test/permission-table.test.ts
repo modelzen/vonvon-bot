@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { permissionFieldSchema, permissionOptionsSchema } from '@vonvon/protocol';
 import {
   PermissionInputError, TIER_NAMES, TIER_NETWORK, TIER_SUMMARY,
   permissionTable, tableEnv, tierInfo, unavailableTierReply,
@@ -10,6 +11,32 @@ const claude = permissionTable('claude-agent');
 const generic = permissionTable('fixture-provider');
 
 describe('provider 权限表', () => {
+  it.each([codex, claude])('$backend 高级字段有中文名，一档展开可解析并折叠回原档', table => {
+    for (const tier of ['qa', 'write', 'full'] as const) {
+      expect(table.parseCustom(table.expand(tier))).toEqual(table.expand(tier));
+      expect(table.matchTier(table.expand(tier))).toBe(tier);
+    }
+    for (const field of table.fields(mac)) {
+      expect(field.label).toMatch(/[\u4e00-\u9fff]/);
+      expect(table.expand('write')).toHaveProperty(field.key);
+      expect(permissionFieldSchema.parse(field)).toEqual(field);
+    }
+  });
+  it('协议拒绝高级字段和展开表里的额外结构键', () => {
+    const field = claude.fields(mac)[0]!;
+    expect(permissionFieldSchema.safeParse({ ...field, extra: true }).success).toBe(false);
+    expect(permissionFieldSchema.safeParse({ ...field, choices: [{ ...field.choices![0], extra: true }] }).success).toBe(false);
+    expect(permissionFieldSchema.safeParse({ ...field, showWhen: { key: 'network', in: ['domains'], extra: true } }).success).toBe(false);
+    const value = { tiers: [...claude.tiers(mac)], strength: claude.strength(mac), fields: claude.fields(mac), expanded: { qa: claude.expand('qa'), write: claude.expand('write'), full: claude.expand('full') } };
+    expect(permissionOptionsSchema.parse(value)).toEqual(value);
+    expect(permissionOptionsSchema.safeParse({ ...value, expanded: { ...value.expanded, extra: {} } }).success).toBe(false);
+  });
+  it('Codex 的沙箱字段携带不可用原因，网络只在非完全访问时显示', () => {
+    expect(codex.fields({ platform: 'linux', fullOnly: '原因' })[0]?.choices?.map(choice => choice.hint)).toEqual(['原因', '原因', TIER_SUMMARY.full]);
+    expect(codex.fields(mac)[0]?.choices?.map(choice => choice.hint)).toEqual(['能看工作区，不改文件。', '能改工作区里的文件。', TIER_SUMMARY.full]);
+    expect(codex.fields(mac)[1]?.showWhen).toEqual({ key: 'sandbox', in: ['read-only', 'workspace-write'] });
+    expect(claude.fields(mac)[0]?.choices?.map(choice => choice.value)).toEqual(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']);
+  });
   it.each([codex, claude, generic])('$backend 的档名相同、中文且不超过五字，顺序和联网固定', table => {
     expect(table.tiers(mac).map(info => info.tier)).toEqual(['qa', 'write', 'full']);
     for (const info of table.tiers(mac)) {
@@ -84,10 +111,12 @@ describe('Codex 自定义', () => {
 describe('Claude 自定义', () => {
   it('严格校验，补网络默认值，返回新对象', () => {
     const raw = { permissionMode: 'default', network: 'all' };
-    expect(claude.parseCustom(raw)).toEqual(raw);
+    expect(claude.parseCustom(raw)).toEqual({ ...raw, sandbox: true, domains: [] });
     expect(claude.parseCustom(raw)).not.toBe(raw);
-    expect(claude.parseCustom({ permissionMode: 'default' })).toEqual({ permissionMode: 'default', network: 'off' });
-    for (const value of [null, [], 'default', {}, { ...raw, extra: true }, { permissionMode: 'auto' }, { permissionMode: 'default', network: true }]) {
+    expect(claude.parseCustom({ permissionMode: 'default' })).toEqual({ permissionMode: 'default', network: 'off', sandbox: true, domains: [] });
+    expect(claude.parseCustom({ permissionMode: 'acceptEdits', network: 'off' })).toMatchObject({ sandbox: true, domains: [] });
+    expect(claude.parseCustom({ permissionMode: 'bypassPermissions' })).toMatchObject({ sandbox: false });
+    for (const value of [null, [], 'default', {}, { ...raw, extra: true }, { permissionMode: 'dontAsk' }, { permissionMode: 'default', network: true }]) {
       expect(() => claude.parseCustom(value)).toThrow(PermissionInputError);
       expect(() => claude.parseCustom(value)).toThrow(/必须/);
     }
@@ -102,11 +131,29 @@ describe('Claude 自定义', () => {
     expect(claude.effect(settings)).toEqual({ mode: permissionMode === 'default' ? 'qa' : permissionMode === 'acceptEdits' ? 'write' : 'full', network: permissionMode === 'bypassPermissions' || network === 'all' });
   });
   it('中文说明、完全访问忽略网络、旧值转换', () => {
-    expect(claude.describe({ permissionMode: 'default', network: 'all' })).toBe('权限模式：手动确认（default）；网络：全部');
-    expect(claude.describe({ permissionMode: 'acceptEdits', network: 'off' })).toBe('权限模式：自动接受编辑（acceptEdits）；网络：关');
-    expect(claude.describe({ permissionMode: 'bypassPermissions', network: 'off' })).toBe('权限模式：跳过权限检查（bypassPermissions）');
-    expect(claude.fromLegacy('qa', true)).toEqual({ permissionMode: 'default', network: 'all' });
-    expect(claude.fromLegacy('write', false)).toEqual({ permissionMode: 'acceptEdits', network: 'off' });
+    expect(claude.describe({ permissionMode: 'default', network: 'all' })).toBe('权限模式：手动确认（default）；命令沙箱：开；网络：全部');
+    expect(claude.describe({ permissionMode: 'acceptEdits', network: 'off' })).toBe('权限模式：自动接受编辑（acceptEdits）；命令沙箱：开；网络：关');
+    expect(claude.describe({ permissionMode: 'bypassPermissions', network: 'off' })).toBe('权限模式：跳过权限检查（bypassPermissions）；命令沙箱：关');
+    expect(claude.fromLegacy('qa', true)).toEqual({ permissionMode: 'default', network: 'all', sandbox: true, domains: [] });
+    expect(claude.fromLegacy('write', false)).toEqual({ permissionMode: 'acceptEdits', network: 'off', sandbox: true, domains: [] });
+  });
+  it('网站名单规范化、去重，其他网络模式清空名单，非法名单拒绝', () => {
+    const raw = { permissionMode: 'default', network: 'domains', domains: [' GitHub.com ', 'github.com', '*.npmjs.org'] };
+    expect(claude.parseCustom(raw)).toMatchObject({ domains: ['github.com', '*.npmjs.org'], sandbox: true });
+    expect(claude.parseCustom({ ...raw, network: 'off' })).toMatchObject({ domains: [] });
+    expect(() => claude.parseCustom({ ...raw, domains: [] })).toThrow('只允许这些网站时，至少写一个网站。');
+    for (const domains of [['a b'], ['https://github.com'], ['localhost'], ['*.'], Array(51).fill('github.com')]) expect(() => claude.parseCustom({ ...raw, domains })).toThrow(PermissionInputError);
+    expect(claude.effect(raw)).toEqual({ mode: 'qa', network: true });
+    expect(claude.describe({ ...raw, permissionMode: 'plan' })).toBe('权限模式：先出方案（plan）；命令沙箱：开；网络：只允许 github.com 等 2 个网站');
+  });
+  it.each(['plan', 'auto', 'bypassPermissions'] as const)('%s 的新组合不折叠，执行效果和降级存盘分开', permissionMode => {
+    for (const network of ['off', 'all', 'domains']) {
+      const value = { permissionMode, sandbox: true, network, domains: ['github.com'] };
+      expect(claude.matchTier(value)).toBeUndefined();
+      expect(claude.effect(value)).toEqual({ mode: permissionMode === 'bypassPermissions' ? 'full' : 'write', network: permissionMode === 'bypassPermissions' || network !== 'off' });
+      expect(claude.stored?.(value)).toEqual({ mode: permissionMode === 'plan' ? 'qa' : 'write', network: network === 'domains' ? false : permissionMode === 'bypassPermissions' || network !== 'off' });
+    }
+    if (permissionMode !== 'bypassPermissions') expect(claude.matchTier({ permissionMode, sandbox: false })).toBeUndefined();
   });
 });
 
@@ -116,6 +163,8 @@ describe('通用表和不可用档回复', () => {
     expect(() => generic.parseCustom({})).toThrow(PermissionInputError);
     expect(generic.fromLegacy('write', false)).toBeUndefined();
     expect(generic.matchTier({})).toBeUndefined();
+    expect(generic.fields(mac)).toEqual([]);
+    expect(generic.expand('write')).toEqual({});
   });
   it('优先最近的更高可用档，并保留可选的 bot 参数', () => {
     const reply = unavailableTierReply('fixture-group', codex, { platform: 'linux', fullOnly: '只能选完全访问。' }, 'qa', 'fixture-bot');

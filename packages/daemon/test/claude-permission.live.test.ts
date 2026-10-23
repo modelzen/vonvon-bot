@@ -1,4 +1,15 @@
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { createServer as createHttpsServer } from 'node:https';
+import type { AddressInfo } from 'node:net';
+import type { Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { z } from 'zod';
+import { loadBackendDep } from '../src/agent/backend-loader';
+import { ClaudeAgentBackend, type ClaudeSdkFacade } from '../src/agent/claude-agent/backend';
+import { claudeAccess, permissionOptions } from '../src/agent/claude-agent/permission';
+import { permissionTable } from '../src/agent/permission';
+import { createAgentEntries } from '../src/agent/entry/registry';
+import type { AgentTool } from '../src/agent/entry/tools';
+import { readFileSync, existsSync, mkdtempSync, mkdirSync, readdirSync, realpathSync, writeFileSync, rmSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { build } from 'esbuild';
@@ -102,3 +113,145 @@ describe.runIf(LIVE)('Claude secrets get live sandbox', () => {
     expect(readdirSync(root, { recursive: true }).sort()).toEqual(before);
   });
 });
+
+// The same authenticated probes gate the native option set and exercise production wiring.
+// Supply auth in the command environment; every SDK child gets a fresh HOME/config.
+async function advanced(native: Record<string, unknown>, setup?: (dir: string, cwd: string, config: string) => Promise<void>, tools?: AgentTool[]) {
+  const { dir, cwd } = workspace(), config = join(dir, 'config');
+  mkdirSync(config); mkdirSync(join(dir, 'home')); await setup?.(dir, cwd, config);
+  const sdk = await loadBackendDep<ClaudeSdkFacade>('@anthropic-ai/claude-agent-sdk');
+  const used: Array<{ name: string; input: Record<string, unknown> }> = [], resets: string[] = [];
+  const facade: ClaudeSdkFacade = { ...sdk, query: params => {
+    const q = sdk.query({ ...params, options: { ...params.options, persistSession: false, maxTurns: 16,
+      env: { ...params.options?.env, HOME: join(dir, 'home'), CLAUDE_CONFIG_DIR: config },
+      systemPrompt: { type: 'preset', preset: 'claude_code', append: 'Integration test in a temporary workspace. Call each requested tool once, continue after denials, never substitute tools, never read credentials.' } } });
+    return new Proxy(q, { get(target, key) {
+      if (key === 'setPermissionMode') return async (mode: Parameters<Query['setPermissionMode']>[0]) => { resets.push(mode); return target.setPermissionMode(mode); };
+      if (key === Symbol.asyncIterator) return async function* () { for await (const msg of target) {
+        if (msg.type === 'assistant') for (const block of msg.message.content) if (block.type === 'tool_use') used.push({ name: block.name, input: z.record(z.string(), z.unknown()).parse(block.input) });
+        yield msg;
+      } };
+      const value = Reflect.get(target, key); return typeof value === 'function' ? value.bind(target) : value;
+    } }) satisfies Query;
+  } };
+  const entries = tools ? createAgentEntries({ appId: 'fixture', isAdmin: () => true, isOwner: () => true, tools }) : undefined;
+  const entry = entries?.issue({ kind: 'p2p' });
+  const table = permissionTable('claude-agent'), effect = table.effect(table.parseCustom(native));
+  const thread = await new ClaudeAgentBackend(async () => facade, () => undefined).startThread({ cwd, ...effect, native, model: process.env.ANTHROPIC_MODEL ?? 'haiku', entry });
+  threads.push(thread); entry?.attach(thread);
+  let seq = 0;
+  return { dir, cwd, used, resets, async turn(prompt: string, approve = false) {
+    const active = entries?.openTurn(thread, { requesterKind: 'user', requesterOpenId: 'fixture', triggerMessageId: `m${++seq}`, retry: false, initiative: false, wake: false });
+    const result = thread.runStreamed({ text: prompt }), events: AgentEvent[] = [];
+    try { for await (const event of result.events) {
+      events.push(event);
+      if (approve && event.type === 'ask' && event.request.kind === 'confirmation')
+        await result.respondToAsk?.(event.request.id, { kind: 'answered', answer: { kind: 'confirmation', decision: 'proceed' } });
+    } } finally { active?.close(); }
+    expect(events.some(e => e.type === 'error' && !e.willRetry)).toBe(false); expect(events.some(e => e.type === 'done')).toBe(true);
+    return events;
+  }, async close() { await thread.close(); entries?.closeAll('shutdown'); } };
+}
+const liveOutput = (events: AgentEvent[]) => events.flatMap(e => e.type === 'tool_result' ? [e.output ?? ''] : []).join('\n');
+const curl = (host: string) => `curl -sS -m 10 -o /dev/null -w 'HTTP:%{http_code}' https://${host}`;
+describe.runIf(LIVE)('advanced Claude permissions live', () => {
+  it('A: strict domain sandbox admits one host and refuses the other', { timeout: 180_000 }, async () => {
+    const t = await advanced({ permissionMode: 'acceptEdits', network: 'domains', domains: ['example.com'] });
+    try { const events = await t.turn(`Use Bash separately and once for each command: ${curl('example.com')} ; ${curl('example.org')}. Do not retry.`);
+      const output = liveOutput(events); expect(t.used.filter(x => x.name === 'Bash')).toHaveLength(2);
+      expect(output).toContain('HTTP:200'); expect(output).toContain('HTTP:000'); expect(output).toMatch(/denied|allow list|只允许/);
+    } finally { await t.close(); }
+  });
+  it('B: WebFetch domain rules and cross-host redirect boundary', { timeout: 300_000 }, async () => {
+    const t = await advanced({ permissionMode: 'acceptEdits', network: 'domains', domains: ['example.com', '*.example.net'] }, async (_dir, cwd, config) => {
+      const settings = JSON.stringify({ permissions: { allow: ['WebFetch'] } }); mkdirSync(join(cwd, '.claude'));
+      writeFileSync(join(config, 'settings.json'), settings); writeFileSync(join(cwd, '.claude/settings.json'), settings);
+    });
+    try { const events = await t.turn('Use WebFetch once each: https://example.com ; https://example.org ; https://www.example.net . Ask for page title. Do not substitute.');
+      expect(t.used.filter(x => x.name === 'WebFetch')).toHaveLength(3); expect(liveOutput(events)).toContain('只允许'); expect(liveOutput(events)).toContain('Example Domain');
+    } finally { await t.close(); }
+    // A local TLS service is needed because WebFetch upgrades loopback HTTP to HTTPS.
+    const { dir } = workspace(), ca = join(dir, 'ca.pem'), key = join(dir, 'key.pem'), cfg = join(dir, 'cert.cnf');
+    writeFileSync(cfg, '[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=v3\n[dn]\nCN=probe\n[v3]\nbasicConstraints=critical,CA:TRUE\nsubjectAltName=IP:127.0.0.1,DNS:localhost.\n');
+    execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-keyout', key, '-out', ca, '-config', cfg], { stdio: 'ignore' });
+    const hits: string[] = [], marker = randomBytes(12).toString('hex'); let port = 0;
+    const server = createHttpsServer({ key: readFileSync(key), cert: readFileSync(ca) }, (req, res) => {
+      const host = req.headers.host?.split(':')[0] ?? ''; hits.push(`${host}${req.url}`);
+      if (req.url === '/redirect') { res.writeHead(302, { Location: `https://localhost.:${port}/target` }); res.end(); }
+      else { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(`<p>${marker}</p>`); }
+    });
+    await new Promise<void>(resolve => server.listen(0, '::', resolve)); port = (server.address() as AddressInfo).port;
+    // This is the domain boundary itself, using the production options with only
+    // the fixture's loopback names injected after schema validation (public UI excludes IPs).
+    const sdk = await loadBackendDep<ClaudeSdkFacade>('@anthropic-ai/claude-agent-sdk');
+    const runLocal = async (allowed: string[], urls: string[]) => {
+      const queue = new LivePrompt(), calls: string[] = [];
+      const access = claudeAccess('write', true, dir, dir, undefined, { permissionMode: 'acceptEdits', network: 'domains', domains: ['example.com'] });
+      const options = permissionOptions({ ...access, native: { ...access.native!, domains: allowed } });
+      const q = sdk.query({ prompt: queue, options: { ...options, cwd: dir, persistSession: false, maxTurns: 8, model: process.env.ANTHROPIC_MODEL ?? 'haiku',
+        env: { ...process.env, NODE_EXTRA_CA_CERTS: ca, SSL_CERT_FILE: ca }, allowedTools: allowed.map(d => `WebFetch(domain:${d})`),
+        canUseTool: async (tool, input) => { calls.push(String(input.url ?? input.host ?? tool)); const host = new URL(String(input.url)).hostname; return allowed.includes(host) ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'host refused' }; } } });
+      queue.push(`Use WebFetch exactly once for each URL, report exact returned content, do not follow redirects yourself: ${urls.join(' ; ')}. Do not use other tools.`);
+      const results: unknown[] = [];
+      try { for await (const msg of q) { results.push(msg); if (msg.type === 'result') { expect(msg.is_error).toBe(false); break; } } } finally { queue.end(); q.close(); }
+      return { output: JSON.stringify(results), calls };
+    };
+    try {
+      const preflight = await runLocal(['127.0.0.1', 'localhost.'], [`https://127.0.0.1:${port}/source`, `https://localhost.:${port}/target`]);
+      expect(preflight.output).toContain(marker); expect(hits).toContain('127.0.0.1/source'); expect(hits).toContain('localhost./target'); hits.length = 0;
+      const redirect = await runLocal(['127.0.0.1'], [`https://127.0.0.1:${port}/redirect`]);
+      expect(hits).toContain('127.0.0.1/redirect'); expect(hits).not.toContain('localhost./target'); expect(redirect.output).not.toContain(marker); expect(redirect.output).toContain('REDIRECT DETECTED');
+    } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+  });
+  it('C: every native plan turn confirms before writing', { timeout: 300_000 }, async () => {
+    const t = await advanced({ permissionMode: 'plan' });
+    try { for (const name of ['a.txt', 'b.txt']) {
+      const before = t.used.length, events = await t.turn(`Create ${name} with hi. First write a brief plan and call ExitPlanMode, then use Write after confirmation. Do not use Bash.`, true);
+      expect(events.some(e => e.type === 'ask' && e.request.kind === 'confirmation')).toBe(true); expect(existsSync(join(t.cwd, name))).toBe(true); expect(liveOutput(events)).not.toContain('在工作区以外');
+      for (const call of t.used.slice(before)) if (call.name === 'Write' && String(call.input.file_path).includes('/plans/')) expect(realpathSync(resolve(t.cwd, String(call.input.file_path))).startsWith(realpathSync(t.cwd) + '/')).toBe(true);
+      const tools = t.used.slice(before).map(x => x.name); expect(tools.indexOf('ExitPlanMode')).toBeLessThan(tools.lastIndexOf('Write'));
+    } expect(t.resets).toEqual(['plan', 'plan']); } finally { await t.close(); }
+  });
+  it.each(['default', 'acceptEdits'] as const)('D: %s sandbox-off Bash hook beats both allow settings and disabled hooks', { timeout: 300_000 }, async mode => {
+    for (const disableAllHooks of [false, true]) {
+      const marker = randomBytes(12).toString('hex');
+      const t = await advanced({ permissionMode: mode, sandbox: false }, async (dir, cwd, config) => {
+        writeFileSync(join(dir, 'outside'), marker); mkdirSync(join(cwd, '.claude'));
+        const permissions = { allow: ['Bash(ls:*)', 'Bash(cat:*)'] };
+        writeFileSync(join(config, 'settings.json'), JSON.stringify({ permissions })); writeFileSync(join(cwd, '.claude/settings.json'), JSON.stringify({ permissions, disableAllHooks }));
+      });
+      try { const events = await t.turn(`Use Bash once each and separately, even after denials: ls ; cat ${join(t.dir, 'outside')} ; echo x > out.txt . Do not substitute.`);
+        expect(t.used.filter(x => x.name === 'Bash')).toHaveLength(3); expect(existsSync(join(t.cwd, 'out.txt'))).toBe(false); expect(liveOutput(events)).not.toContain(marker); expect(liveOutput(events).match(/关了命令沙箱/g)?.length).toBe(3);
+      } finally { await t.close(); }
+    }
+  });
+  it('E: auto keeps workspace and offline boundaries', { timeout: 180_000 }, async () => {
+    const t = await advanced({ permissionMode: 'auto', network: 'off' });
+    try { const events = await t.turn(`Use Bash: touch x ; then Write ${join(t.dir, 'outside')} with hi ; then Bash: ${curl('example.com')}. Use each tool once, do not combine or retry.`);
+      expect(t.used.map(x => x.name)).toEqual(['Bash', 'Write', 'Bash']); expect(existsSync(join(t.cwd, 'x'))).toBe(true); expect(existsSync(join(t.dir, 'outside'))).toBe(false); expect(liveOutput(events)).not.toContain('HTTP:200');
+    } finally { await t.close(); }
+  });
+  it('F: bypass with sandbox confines Bash but permits native Write and network', { timeout: 180_000 }, async () => {
+    const t = await advanced({ permissionMode: 'bypassPermissions', sandbox: true });
+    try { const events = await t.turn(`Use Bash once: touch ${join(t.dir, 'x')} ; Write once: ${join(t.dir, 'y')} with hi ; Bash once: ${curl('example.com')}. Do not retry or combine.`);
+      expect(t.used.map(x => x.name)).toEqual(['Bash', 'Write', 'Bash']); expect(existsSync(join(t.dir, 'x'))).toBe(false); expect(existsSync(join(t.dir, 'y'))).toBe(true); expect(liveOutput(events)).toContain('HTTP:200');
+    } finally { await t.close(); }
+  });
+  it.each(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'] as const)('G: own MCP works in every %s combination, before a plan', { timeout: 600_000 }, async permissionMode => {
+    for (const sandbox of [true, false]) for (const network of ['off', 'domains']) {
+      let called = 0, marker = '';
+      const tool: AgentTool = { name: 'probe_note', class: 'settings', description: 'Write the probe note before planning.', input: z.object({}), async run() { called++; writeFileSync(marker, 'called'); return { proof: 'PROBE_NOTE_OK' }; } };
+      const t = await advanced({ permissionMode, sandbox, network, ...(network === 'domains' ? { domains: ['example.com'] } : {}) }, undefined, [tool]); marker = join(t.dir, 'probe-note');
+      try { await t.turn('First call mcp__vonvon_bot__probe_note. Only after its response, write a two-line plan and call ExitPlanMode. Do not implement anything or call other tools.', true);
+        expect(called).toBeGreaterThan(0); expect(existsSync(marker)).toBe(true);
+        if (permissionMode === 'plan') expect(t.used.findIndex(x => x.name === 'mcp__vonvon_bot__probe_note')).toBeLessThan(t.used.findIndex(x => x.name === 'ExitPlanMode'));
+      } finally { await t.close(); }
+    }
+  });
+});
+class LivePrompt implements AsyncIterable<SDKUserMessage> {
+  private value?: SDKUserMessage; private waiter?: (result: IteratorResult<SDKUserMessage>) => void; private done = false;
+  push(content: string) { this.value = { type: 'user', message: { role: 'user', content }, parent_tool_use_id: null }; this.waiter?.({ value: this.value, done: false }); if (this.waiter) this.value = undefined; this.waiter = undefined; }
+  end() { this.done = true; this.waiter?.({ value: undefined, done: true }); }
+  [Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> { return { next: () => { if (this.value) { const value = this.value; this.value = undefined; return Promise.resolve({ value, done: false }); } if (this.done) return Promise.resolve({ value: undefined, done: true }); return new Promise(resolve => { this.waiter = resolve; }); } }; }
+}

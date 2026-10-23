@@ -1603,6 +1603,7 @@ export function buildPermissionCard(p: Pick<Project, 'name'> & PermissionProject
         actions([submitButton('✅ 保存权限', { a: DM.permissionSubmit, n: p.name, v: PERMISSION_CARD_VERSION }, 'primary', 'submit_perm')]),
       ]),
       note('保存会断开本项目正在进行的会话，让新档位立即生效。'),
+      note('高级设置在网页端的群详情里改，或者直接跟我说，例如“把这个群的 Claude 改成先出方案”。'),
       actions([button('⬅️ 返回设置', { a: DM.projectSettings, n: p.name })]),
     ],
     { header: { title: '🔐 权限', template: 'blue' } },

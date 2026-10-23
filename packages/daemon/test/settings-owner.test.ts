@@ -13,6 +13,7 @@ import { getSession, RETIRED_KEY_TEXT, upsertSession } from '../src/bot/session-
 import { createAdminIpcCaller, createAdminIpcResponder } from '../src/admin/ipc';
 import type { AppConfig } from '../src/config/schema';
 import type { AgentBackend } from '../src/agent/types';
+import { permissionTable } from '../src/agent/permission';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
@@ -301,6 +302,36 @@ describe('s31c permission settings', () => {
     expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa', network: false });
     const after = await owner.read(project) as ProjectSettingsView;
     expect(after.sections.permission.stored).toMatchObject({ mode: 'qa', options: { tiers: [expect.objectContaining({ tier: 'qa', unavailable: 'only full here' }), expect.anything(), expect.anything()] } });
+  });
+});
+describe('s31d native permission settings', () => {
+  const claude = permissionTable('claude-agent');
+  it.each([
+    [{ permissionMode: 'acceptEdits', sandbox: true, network: 'all' }, 'write', true, false],
+    [{ permissionMode: 'plan' }, 'qa', false, true],
+    [{ permissionMode: 'default', network: 'domains', domains: ['github.com'] }, 'qa', false, true],
+    [{ permissionMode: 'bypassPermissions', sandbox: true }, 'write', true, true],
+    [{ permissionMode: 'plan', network: 'domains', domains: ['github.com'] }, 'qa', false, true],
+  ] as const)('saves %j using conservative downgrade fields and shows native effects', async (raw, mode, network, hasCustom) => {
+    await updateProject('demo', { backend: 'claude-agent' });
+    const { owner } = await fixture({ backendFor: id => ({ ...backend, id }) });
+    const before = await owner.read(project) as ProjectSettingsView;
+    expect((await owner.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { custom: raw } })).kind).toBe('saved');
+    const saved = (await getProjectByName('demo'))!;
+    expect(saved).toMatchObject({ mode, network });
+    expect(saved.custom).toEqual(hasCustom ? { backend: 'claude-agent', settings: claude.parseCustom(raw) } : undefined);
+    const after = (await owner.read(project) as ProjectSettingsView).sections.permission.stored;
+    expect(after.network).toBe(claude.effect(claude.parseCustom(raw)).network);
+    expect(after.options.fields).toEqual(claude.fields({ platform: process.platform }));
+    expect(after.options.expanded.write).toEqual(claude.expand('write'));
+    expect(after.options.customSummary).toBe(hasCustom ? claude.describe(raw) : undefined);
+  });
+  it('checks the native effect tier even when downgrade fields are read-only', async () => {
+    await updateProject('demo', { backend: 'claude-agent' });
+    const { owner } = await fixture({ backendFor: () => ({ ...backend, supportedModes: ['qa'] }) });
+    const before = await owner.read(project) as ProjectSettingsView;
+    expect(await owner.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { custom: { permissionMode: 'plan' } } })).toMatchObject({ kind: 'rejected', fields: [{ message: '这个 provider 没有这一档。' }] });
+    expect((await getProjectByName('demo'))!).not.toHaveProperty('custom');
   });
 });
 it('s21: a group overrides 运行中来了消息, "default" goes back to the bot, Claude shows queue', async () => {

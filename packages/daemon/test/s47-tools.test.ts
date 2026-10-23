@@ -12,7 +12,7 @@ const projectScope = { kind: 'project', botId, projectName: 'visible' } satisfie
 const section = <T>(value: T): SettingsSection<T> => ({ stored: value, effective: value, revision: 'held', access: { kind: 'writable' }, apply: [] });
 const permission = permissionTable('codex-appserver');
 const sections: ProjectSettingsView['sections'] = {
-  permission: section({ mode: 'qa', guestMode: 'qa', network: false, custom: null, options: { tiers: [...permission.tiers({ platform: 'darwin' })], strength: permission.strength({ platform: 'darwin' }) } }), response: section({ noMention: false }),
+  permission: section({ mode: 'qa', guestMode: 'qa', network: false, custom: null, options: { tiers: [...permission.tiers({ platform: 'darwin' })], strength: permission.strength({ platform: 'darwin' }), fields: permission.fields({ platform: 'darwin' }), expanded: { qa: permission.expand('qa'), write: permission.expand('write'), full: permission.expand('full') } } }), response: section({ noMention: false }),
   model: section({ selection: { kind: 'default' } }), run: section({ pendingPolicy: 'default' }), judge: section({ selection: { kind: 'default' } }),
 };
 const projects: Project[] = [

@@ -1,8 +1,9 @@
 import { mkdtemp, mkdir, symlink, rm, realpath, access as fsAccess } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { claudeAccess, decide, fileHook, inside, ownAsk, permissionOptions, resolveReal, within, type PathFs, type ToolCall } from '../src/agent/claude-agent/permission';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { claudeAccess, decide, fileHook, inside, ownAsk, permissionOptions, resolveReal, resumeMode, within, type PathFs, type ToolCall } from '../src/agent/claude-agent/permission';
+import { log } from '../src/core/logger';
 const cwd = '/v/Work';
 const tier = (mode: 'qa' | 'write' | 'full', network = false) => claudeAccess(mode, network, cwd, cwd);
 const call = (toolName: string, input: Record<string, unknown> = {}, extra: Record<string, unknown> = {}): ToolCall => ({ toolName, input, extra });
@@ -12,7 +13,81 @@ const fsx: PathFs = {
   stat: async p => ({ dev: 1, ino: p === cwd ? 10 : 11 }),
 };
 const dirs: string[] = [];
-afterEach(async () => { await Promise.all(dirs.splice(0).map(p => rm(p, { recursive: true, force: true }))); });
+afterEach(async () => { vi.restoreAllMocks(); await Promise.all(dirs.splice(0).map(p => rm(p, { recursive: true, force: true }))); });
+const nativeAccess = (native: Record<string, unknown>) => claudeAccess('full', true, cwd, cwd, undefined, native);
+describe('Claude native permission boundaries', () => {
+  it.each(['plan', 'auto'] as const)('runs %s natively and resumes the appropriate mode after confirmation', permissionMode => {
+    const access = nativeAccess({ permissionMode });
+    expect(permissionOptions(access).permissionMode).toBe(permissionMode);
+    expect(access).toMatchObject({ mode: 'write', network: false });
+    expect(resumeMode(access)).toBe(permissionMode === 'plan' ? 'acceptEdits' : 'auto');
+    expect(resumeMode(tier('qa'))).toBe('default');
+  });
+  it('rejects malformed native settings without logging their contents or trusting full access', () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    const access = nativeAccess({ permissionMode: 'private-invalid-mode', privateToken: 'private-value' });
+    expect(access).toEqual({ mode: 'qa', network: false, cwd, realCwd: cwd });
+    expect(permissionOptions(access).permissionMode).toBe('default');
+    expect(warn.mock.calls).toEqual([['claude-native', 'invalid']]);
+  });
+  it('retains the sandbox but no filesystem restrictions for bypassPermissions', async () => {
+    const access = nativeAccess({ permissionMode: 'bypassPermissions', sandbox: true });
+    const options = permissionOptions(access);
+    expect(options).toMatchObject({ permissionMode: 'bypassPermissions', sandbox: { enabled: true } });
+    expect(options.sandbox?.filesystem).toBeUndefined();
+    expect(access.network).toBe(true);
+    expect(await decide(access, call('Write', { file_path: '/outside/x' }), 'hook', fsx)).toEqual({ kind: 'continue' });
+  });
+  it.each(['default', 'acceptEdits', 'plan', 'auto'] as const)('blocks unsandboxed Bash for %s in both the hook and callback', async permissionMode => {
+    const access = nativeAccess({ permissionMode, sandbox: false });
+    const options = permissionOptions(access);
+    expect(options.sandbox).toBeUndefined();
+    const hook = options.hooks?.PreToolUse?.find(entry => entry.matcher === 'Bash')?.hooks[0];
+    expect(hook).toBeTypeOf('function');
+    const input = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'tool', session_id: 's', transcript_path: '', cwd } as const;
+    expect(await hook?.(input, 'tool', { signal: new AbortController().signal }))
+      .toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny', permissionDecisionReason: expect.stringContaining('关了命令沙箱') } });
+    expect(await decide(access, call('Bash', { command: 'ls' }, { decisionReasonType: 'rule' }), 'callback'))
+      .toMatchObject({ kind: 'deny', message: expect.stringContaining('关了命令沙箱') });
+  });
+  it('does not add the Bash hook to unsandboxed bypassPermissions', () => {
+    expect(permissionOptions(nativeAccess({ permissionMode: 'bypassPermissions', sandbox: false })).hooks).toBeUndefined();
+  });
+  it('applies strict sandbox domains and scoped WebFetch rules, with callback checks for every host', async () => {
+    const access = nativeAccess({ permissionMode: 'acceptEdits', network: 'domains', domains: ['example.com', '*.npmjs.org'] });
+    expect(permissionOptions(access)).toMatchObject({ sandbox: { network: { allowedDomains: ['example.com', '*.npmjs.org'], strictAllowlist: true } },
+      allowedTools: ['WebFetch(domain:example.com)', 'WebFetch(domain:*.npmjs.org)'], disallowedTools: ['WebSearch'] });
+    for (const [host, allowed] of [['example.com', true], ['registry.npmjs.org', true], ['npmjs.org', false], ['example.org', false], ['example.com.evil.test', false]] as const) {
+      for (const request of [call('SandboxNetworkAccess', { host }), call('WebFetch', { url: `https://${host}/` })]) {
+        expect((await decide(access, request, 'callback')).kind).toBe(allowed ? 'allow' : 'deny');
+      }
+    }
+    expect(await decide(access, call('WebFetch', { url: 'invalid' }), 'callback')).toMatchObject({ kind: 'deny' });
+    expect(await decide(access, call('WebSearch'), 'callback')).toMatchObject({ kind: 'deny', message: expect.stringContaining('不能搜索') });
+  });
+  it('uses a WebFetch hook to enforce domains even when broad allow rules skip the callback', async () => {
+    const access = nativeAccess({ permissionMode: 'acceptEdits', network: 'domains', domains: ['example.com', '*.npmjs.org'] });
+    const hook = permissionOptions(access).hooks?.PreToolUse?.find(entry => entry.matcher === 'WebFetch')?.hooks[0];
+    expect(hook).toBeTypeOf('function');
+    for (const [host, allowed] of [['example.com', true], ['registry.npmjs.org', true], ['example.org', false], ['npmjs.org', false]] as const) {
+      const result = await hook?.({ hook_event_name: 'PreToolUse', tool_name: 'WebFetch', tool_input: { url: `https://${host}/` },
+        tool_use_id: 'tool', session_id: 's', transcript_path: '', cwd }, 'tool', { signal: new AbortController().signal });
+      expect(result).toEqual(allowed ? {} : { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining(`连不上 ${host}`) } });
+    }
+  });
+  it.each([
+    { permissionMode: 'plan' }, { permissionMode: 'default', sandbox: false },
+    { permissionMode: 'acceptEdits', sandbox: false }, { permissionMode: 'auto', network: 'domains', domains: ['example.com'] },
+    { permissionMode: 'bypassPermissions', sandbox: true },
+  ])('always leaves daemon-owned MCP tools available, even with ask rules: %j', async native => {
+    const access = nativeAccess(native);
+    const request = call('mcp__vonvon_bot__settings_set', {}, { decisionReasonType: 'rule' });
+    expect(await decide(access, request, 'callback')).toEqual({ kind: 'allow' });
+    expect(await decide(access, request, 'hook')).toEqual({ kind: 'continue' });
+    expect(await fileHook(access)({ hook_event_name: 'PreToolUse', tool_name: request.toolName, tool_input: {}, tool_use_id: 'tool', session_id: 's', transcript_path: '', cwd }, 'tool', { signal: new AbortController().signal })).toEqual({});
+  });
+});
 describe('Claude permission tiers', () => {
   it('full and undefined retain historical unrestricted mode', () => {
     expect(permissionOptions(tier('full'))).toEqual({ permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true });

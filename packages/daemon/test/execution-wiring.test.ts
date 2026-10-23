@@ -122,12 +122,13 @@ function message(text: string, threadId?: string): NormalizedMessage {
   return { messageId: `msg-${++seq}`, chatId: 'chat', chatType: 'group', ...(threadId ? { threadId } : {}),
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false };
 }
-function setup(preferences: AppPreferences = {}) {
+function setup(preferences: AppPreferences = {}, createdTopicId?: string) {
   const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' }, ...preferences } };
   const ok = async () => ({ code: 0, data: { message_id: `om_${++seq}`, items: [] } });
   const channel = { send: fake.send, rawClient: {
     cardkit: { v1: { card: { create: async ({ data }: { data: { data: string } }) => { fake.cards.push(data.data); return { data: { card_id: 'card' } }; } } } },
-    im: { v1: { message: { get: ok, list: ok, reply: ok, create: ok }, chat: { get: async () => { throw new Error('no scope'); } }, messageReaction: { create: fake.reactions, delete: async () => ({}) } } },
+    im: { v1: { message: { get: createdTopicId ? async () => ({ data: { items: [{ thread_id: createdTopicId }] } }) : ok,
+      list: ok, reply: ok, create: ok }, chat: { get: async () => { throw new Error('no scope'); } }, messageReaction: { create: fake.reactions, delete: async () => ({}) } } },
   } };
   orchestrator = createOrchestrator(channel as never, cfg, '/fallback');
   return orchestrator;
@@ -156,6 +157,20 @@ afterEach(async () => {
 });
 
 describe('an existing session keeps its backend', () => {
+  it.each(['fresh', 'resume', 'recreate'] as const)('passes native Claude settings through %s', async path => {
+    const settings = { permissionMode: 'plan', network: 'domains', domains: ['example.com'] };
+    fake.project = { ...fake.project, backend: CLAUDE, mode: 'qa', custom: { backend: CLAUDE, settings } };
+    if (path !== 'fresh') fake.records.set('omt_native', record('omt_native', { backend: CLAUDE }));
+    if (path === 'recreate') claude.resumeThread.mockRejectedValueOnce(new Error('synthetic resume failure'));
+    // A bot-opened topic needs Feishu's resulting thread id before its final card can settle.
+    await setup({}, path === 'fresh' ? 'omt_native' : undefined).onMessage(message('native turn', path === 'fresh' ? undefined : 'omt_native'));
+    await vi.waitFor(() => expect(path === 'resume' ? claude.resumeThread : claude.startThread).toHaveBeenCalled());
+    const expected = expect.objectContaining({ mode: 'write', network: true, native: { ...settings, sandbox: true } });
+    if (path !== 'fresh') expect(claude.resumeThread).toHaveBeenCalledWith(expected);
+    if (path !== 'resume') expect(claude.startThread).toHaveBeenCalledWith(expected);
+    await finished();
+    expect(fake.records.get('omt_native')).toMatchObject({ backend: CLAUDE });
+  });
   it("rebuilds a session whose cwd changed on the record's backend and model, in the new cwd", async () => {
     fake.project = { ...fake.project, cwd: baseMoved, backend: CLAUDE };
     fake.records.set('omt_t', record('omt_t'));

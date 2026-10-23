@@ -2754,13 +2754,13 @@ export function createOrchestrator(
   }
 
   /** A turn's resolved permission: the group's one tier, whoever sends (s15c). */
-  type TurnPerm = { mode?: PermissionMode; network?: boolean };
+  type TurnPerm = Pick<StartThreadOptions, 'mode' | 'network' | 'native'>;
 
   /** The group's tier and network for `project`; none without a group (私聊 waits for s49). */
   function turnPerm(project: Project | undefined): TurnPerm {
     if (!project) return {};
     const exec = execOf(project);
-    return { mode: exec.permission, network: exec.network };
+    return { mode: exec.permission, network: exec.network, ...(exec.custom ? { native: exec.custom } : {}) };
   }
 
   /** As {@link turnPerm}, plus the session key: the place itself, one session for everyone. */
@@ -3156,7 +3156,7 @@ export function createOrchestrator(
         let tResolveDone = tIntake;
         const resolveP = resolveThread(sessionKey, msg.chatId, {
           mode: perm.mode,
-          network: perm.network,
+          network: perm.network, native: perm.native,
         }).then((r) => {
           tResolveDone = Date.now();
           return r;
@@ -3345,7 +3345,7 @@ export function createOrchestrator(
           // Rebuilt after the cwd changed: the record's backend, as its model is (s36d2).
           const cwd = workCwd(project);
           const be = sessionBackendOf(prior, project);
-          thread = await startWith(be, { cwd, model, effort, mode: perm.mode, network: perm.network, profile: await profileOf(project, cwd, be, perm.mode) }, { kind: 'group', chatId: msg.chatId });
+          thread = await startWith(be, { cwd, model, effort, mode: perm.mode, network: perm.network, native: perm.native, profile: await profileOf(project, cwd, be, perm.mode) }, { kind: 'group', chatId: msg.chatId });
           trackSession(sessionKey, thread);
           // 自愈观测：来源=全新会话（无持久化记录），与 resume-ok/resume-recreate
           // 互斥——三者其一 + agent 层的 spawn/prewarm-hit 即可还原完整恢复路径。
@@ -3431,7 +3431,7 @@ export function createOrchestrator(
           // ref was resolved against `/` and rejected as image-outside-cwd.
           cwd: workCwd(project, prior),
           mode: perm.mode,
-          network: perm.network,
+          network: perm.network, native: perm.native,
           // The backend resolveThread routed by: the record's, else the project's.
           backendId: sessionBackendOf(prior, project).id,
           summary: stripFileTokens(summaryText ?? text).slice(0, 80) || '(本轮任务)',
@@ -3600,7 +3600,7 @@ export function createOrchestrator(
         model: rec.model,
         effort: rec.effort,
         mode: perm.mode,
-        network: perm.network,
+        network: perm.network, native: perm.native,
       }, { kind: 'group', chatId });
       trackSession(threadId, resumed);
       // 自愈观测：resume 来源=持久化记录（区分「resume 自愈」与 LIVE 快路径的
@@ -3619,7 +3619,7 @@ export function createOrchestrator(
         model: rec.model,
         effort: rec.effort,
         mode: perm.mode,
-        network: perm.network,
+        network: perm.network, native: perm.native,
       }, { kind: 'group', chatId });
       trackSession(threadId, fresh);
       lastUsage.delete(threadId);
@@ -3693,7 +3693,7 @@ export function createOrchestrator(
       let tResolveDone = tIntake;
       const threadP = (async () => {
         const { model, effort } = await pickGroupDefault(project, be, prefer);
-        const thread = await startWith(be, { cwd, model, effort, mode: perm.mode, network: perm.network, profile: await profileOf(project, cwd, be, perm.mode) }, { kind: 'group', chatId: msg.chatId });
+        const thread = await startWith(be, { cwd, model, effort, mode: perm.mode, network: perm.network, native: perm.native, profile: await profileOf(project, cwd, be, perm.mode) }, { kind: 'group', chatId: msg.chatId });
         tResolveDone = Date.now();
         return { thread, model, effort };
       })();
@@ -3775,7 +3775,7 @@ export function createOrchestrator(
         modelCustom: isCustomDefault(prefer, model),
         cwd,
         mode: perm.mode,
-        network: perm.network,
+        network: perm.network, native: perm.native,
         summary: stripFileTokens(text).slice(0, 80) || '(空)',
         requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg),
         requestedAt: msg.createTime || tIntake,
@@ -4006,7 +4006,7 @@ export function createOrchestrator(
       try {
         ({ thread } = await resolveThread(sessionKey, msg.chatId, {
           mode: perm.mode,
-          network: perm.network,
+          network: perm.network, native: perm.native,
         }));
         if (!thread) {
           await reply('这个会话还没开始，先发条消息聊两句再 `/compact`。');
@@ -4166,7 +4166,7 @@ export function createOrchestrator(
           model,
           effort,
           mode: perm.mode,
-          network: perm.network,
+          network: perm.network, native: perm.native,
           profile: await profileOf(project, cwd, be, perm.mode),
         }, { kind: 'group', chatId: msg.chatId });
         // Close + evict the parked live thread (a separate app-server proc); its
@@ -6391,7 +6391,7 @@ export function createOrchestrator(
     try {
       if (request.action === 'clear') {
         if (ruleKind(project) !== 'single' || key !== perm.sessionKey) throw new AdminWriteError('只有单会话群可以清空当前上下文');
-        const fresh = await startWith(sessionBackend, { cwd: project.cwd, model: record.model, effort: record.effort, mode: perm.mode, network: perm.network, profile: await profileOf(project, project.cwd, sessionBackend, perm.mode) }, { kind: 'group', chatId: project.chatId });
+        const fresh = await startWith(sessionBackend, { cwd: project.cwd, model: record.model, effort: record.effort, mode: perm.mode, network: perm.network, native: perm.native, profile: await profileOf(project, project.cwd, sessionBackend, perm.mode) }, { kind: 'group', chatId: project.chatId });
         // The local clock, not a Feishu createTime like the other watermarks: this
         // is the main-area session, which no back-fill reads until s14 (it must
         // then allow for clock skew, or use the newest createTime it has).
@@ -6418,7 +6418,7 @@ export function createOrchestrator(
       }
       const root = await channel.send(project.chatId, { markdown: `桌面端启动目标：${request.objective}` }, replyTo ? { replyTo, replyInThread: true } : undefined);
       launched = true;
-      void trackRun(launchGoalRun({ chatId: project.chatId, replyTo: root.messageId, thread, firstText: request.objective, knownThreadId: key, cwd: project.cwd, mode: perm.mode, network: perm.network, model: record.model, effort: record.effort, flat: ruleKind(project) === 'single', backendId: sessionBackend.id, requesterOpenId: owner, requesterKind: 'user', titleSource: { text: request.objective, rawContentType: 'text' } })).catch(error => log.fail('desktop', error));
+      void trackRun(launchGoalRun({ chatId: project.chatId, replyTo: root.messageId, thread, firstText: request.objective, knownThreadId: key, cwd: project.cwd, mode: perm.mode, network: perm.network, native: perm.native, model: record.model, effort: record.effort, flat: ruleKind(project) === 'single', backendId: sessionBackend.id, requesterOpenId: owner, requesterKind: 'user', titleSource: { text: request.objective, rawContentType: 'text' } })).catch(error => log.fail('desktop', error));
       return { ok: true, threadId: key };
     } finally {
       if (!launched && active.get(key) === reserved) active.delete(key);
@@ -6536,6 +6536,7 @@ export function createOrchestrator(
     mode?: PermissionMode;
     /** Remote image refs are fetched only when this is on, in every tier. */
     network?: boolean;
+    native?: StartThreadOptions['native'];
     summary?: string;
     /** first turn is a 🔁 重试: the original input it wraps (QueuedTurn.replayText) */
     replayText?: string;
