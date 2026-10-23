@@ -12,7 +12,8 @@ import { fileComponentCount, renderFileAnswer, type InlineFiles } from '../card/
 import type { CardDispatcher } from '../card/dispatcher';
 import { isChatAllowed, isUserAllowedInProject, type AppConfig } from '../config/schema';
 import { log } from '../core/logger';
-import { effectiveMode, type Project } from '../project/registry';
+import type { Project } from '../project/registry';
+import { groupPermission } from '../config/execution';
 import { checkUploadPath, uploadPlan } from '../provider/outbound/policy';
 
 export const FILE_GET = 'file.get';
@@ -57,7 +58,7 @@ type Authorize = (context: FileContext, openId: string) => Promise<PermissionMod
 interface FileClick { messageId: string; chatId: string; operator?: { openId?: string } }
 
 const CLAIM_DENIED = '当前无权获取此文件：只有本群能使用 bot 的成员可以领取';
-const TIER_DENIED = '当前无权获取此文件：它在项目目录之外，这个群现在的权限档拿不到';
+const TIER_DENIED = '当前无权获取此文件：它在项目目录之外，这个群现在的权限拿不到';
 
 /**
  * Who may claim a file linked in a bot answer (product.md 3.12): anyone allowed
@@ -72,7 +73,7 @@ export function fileClaimMode(
   if (!openId || !isChatAllowed(cfg, record.chatId)) return undefined;
   if (!project || project.enabled === false || project.cwd !== record.cwd) return undefined;
   if (!isUserAllowedInProject(cfg, project, openId)) return undefined;
-  return effectiveMode(project);
+  return groupPermission(project).effect.mode;
 }
 
 /** Raw IM responses return message_position; message_app_link is sometimes

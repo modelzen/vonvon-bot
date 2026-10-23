@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { convertBridgeSnapshot, idleTimeoutMigrationMessage, type BridgeSnapshot } from '../src/import/bridge/conversion';
 import { getRunIdleTimeoutMs, isAdmin } from '../src/config/schema';
-import { resolveExecution } from '../src/config/execution';
+import { groupPermission, resolveExecution } from '../src/config/execution';
 import { noMentionOf, sessionModeOf, stricterTier } from '../src/project/registry';
 import { isRetiredKey, sessionTitleJobKey } from '../src/bot/session-store';
 
@@ -56,8 +56,17 @@ describe('bridge conversion (new pure boundary contract)', () => {
     expect(bot).toBeDefined();
     const group = bot?.projects.projects[0];
     expect(group).toMatchObject({ cwd: '/synthetic/a', blank: true, kind: 'multi', noMention: true, mode: 'full', network: false, backend: 'codex-appserver' });
-    expect(resolveExecution({ bot: { defaults: { backend: 'claude-agent', permission: 'qa', network: true } }, group })).toMatchObject({ backend: 'codex-appserver', permission: 'full', network: false });
+    expect(resolveExecution({ bot: { defaults: { backend: 'claude-agent', permission: 'qa', network: true } }, group })).toMatchObject({ backend: 'codex-appserver', permission: 'full', network: true });
     if (group) expect(sessionModeOf(group)).toBe('multi');
+  });
+  it('preserves a legacy read-only/network-on pair for groupPermission to read as custom', () => {
+    const source = snapshot();
+    Object.assign(source.bots[0]?.projects.projects[0] ?? {}, { mode: 'qa', network: true });
+    const group = converted(source).bots[0]?.projects.projects[0];
+    expect(group).toMatchObject({ mode: 'qa', network: true });
+    if (!group) throw new Error('fixture');
+    expect(groupPermission(group)).toEqual({ tier: 'qa', custom: { sandbox: 'read-only', network: true },
+      legacy: true, effect: { mode: 'qa', network: true } });
   });
   it.each(['multi', 'single'] as const)('retains rule %s and all explicit group overrides', kind => {
     const source = snapshot();

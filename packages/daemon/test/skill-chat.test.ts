@@ -23,9 +23,9 @@ async function fixture() {
   }));
   const resume = vi.fn(create);
   const backend = { id: 'codex-appserver', startThread: create, resumeThread: resume, listModels: async () => [{ id: 'model', displayName: 'model', supportedEfforts: ['high'], defaultEffort: 'high', isDefault: true, hidden: false }] } as unknown as AgentBackend;
-  const project = { name: 'Target group', chatId: 'target_group', cwd: workspace, blank: false, createdAt: 1, backend: backend.id };
+  const project: import('../src/project/registry').Project = { name: 'Target group', chatId: 'target_group', cwd: workspace, blank: false, createdAt: 1, backend: backend.id };
   const chat = createSkillChat({ cfg: { accounts: { app: { id: 'current_bot', secret: 'fake', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' } } }, backendFor: () => backend, project: async id => id === project.chatId ? project : undefined, send: sent, file: join(root, 'private-state.json') });
-  return { root, workspace, chat, create, resume, sent };
+  return { root, workspace, chat, create, resume, sent, project };
 }
 
 describe('targeted private skill conversation', () => {
@@ -47,6 +47,17 @@ describe('targeted private skill conversation', () => {
     expect(t.resume).toHaveBeenCalledWith(expect.objectContaining({ cwd: join(t.workspace, '.agents', 'skills'), sessionId: 'native-session' }));
     await t.chat.handle(message('/skill-done'));
     expect(await t.chat.handle(message('open menu'))).toBe(false);
+    await t.chat.close();
+  });
+  it.each([
+    { mode: 'full', network: false, expected: true },
+    { mode: 'write', network: false, expected: false },
+    { mode: 'qa', network: true, expected: true },
+  ] as const)('uses the group network effect for $mode/$network', async ({ mode, network, expected }) => {
+    const t = await fixture();
+    Object.assign(t.project, { mode, network });
+    await t.chat.handle(message('/skill-add target_group write reports'));
+    expect(t.create).toHaveBeenCalledWith(expect.objectContaining({ mode: 'write', network: expected }));
     await t.chat.close();
   });
   it('closes a newly started thread if the progress message fails', async () => {

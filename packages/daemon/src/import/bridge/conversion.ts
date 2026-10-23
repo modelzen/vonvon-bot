@@ -191,7 +191,7 @@ function convertSnapshot(raw: unknown): BridgeConversion {
       }
       const resolved = resolveExecution({ group: { ...rest, mode } });
       return { ...rest, kind: row.kind ?? 'multi', noMention: noMentionOf(rest), mode,
-        network: resolved.network, backend: resolved.backend };
+        network: rest.network ?? false, backend: resolved.backend };
     });
     const sessions: SessionRecord[] = [];
     for (const row of bot.sessions.sessions) {
