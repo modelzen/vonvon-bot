@@ -106,6 +106,7 @@ export function Editor<T extends object>({
   submitLabel = '保存',
   allowUnchanged = false,
   afterSave,
+  initialDraft,
 }: {
   title: string;
   section: Section<T>;
@@ -121,11 +122,13 @@ export function Editor<T extends object>({
   submitLabel?: string;
   allowUnchanged?: boolean;
   afterSave?: () => Promise<void>;
+  /** Text shown in the form from the start but not saved until the person saves (a prefilled draft). */
+  initialDraft?: Partial<T>;
 }) {
   const announcedReadonly = useContext(AnnouncedReadonlyMessages);
   const [confirmed, setConfirmed] = useState(section);
   const [discardVersion, setDiscardVersion] = useState(0);
-  const [draft, setDraft] = useState<Partial<T>>({});
+  const [draft, setDraft] = useState<Partial<T>>(initialDraft ?? {});
   const [immediate, setImmediate] = useState<
     | { kind: 'idle' }
     | { kind: 'pending'; patch: Partial<T> }
@@ -1161,7 +1164,7 @@ export function ProjectPanel({
   view: ProjectSettingsView;
   refresh: () => Promise<void>;
   onOpenSecrets?: () => void;
-  partition?: 'model' | 'workspace' | 'response' | 'members' | 'run';
+  partition?: 'model' | 'permission' | 'response' | 'members' | 'run';
   independent?: boolean;
   hideJudge?: boolean;
 }) {
@@ -1221,7 +1224,7 @@ export function ProjectPanel({
     judge = view.sections.judge;
   const visibleSections = [
     ...(!partition || partition === 'model' ? [model] : []),
-    ...(!partition || partition === 'workspace' || partition === 'members' ? [permission] : []),
+    ...(!partition || partition === 'permission' || partition === 'members' ? [permission] : []),
     ...(!partition ? [permission] : []),
     ...((!partition || partition === 'response') && view.identity.kind !== "smart" ? [response] : []),
     ...((!partition || partition === 'response') && !hideJudge && groupJudgeVisible(view) && judge ? [judge] : []),
@@ -1264,8 +1267,8 @@ export function ProjectPanel({
       <SettingsGroup label="执行后端"><SettingsRow title="执行工具" value={view.identity.backend === "codex-appserver" ? "Codex" : view.identity.backend === "claude-agent" ? "Claude" : view.identity.backend} /></SettingsGroup>
       <details className="membership-settings-details"><summary>话题模型</summary><SessionPicker view={view} /></details>
       </>}
-      {(!partition || partition === 'workspace') && <>
-      {!partition && <h2 className="membership-settings-heading">工作区</h2>}
+      {(!partition || partition === 'permission') && <>
+      {!partition && <h2 className="membership-settings-heading">权限</h2>}
       <Editor
         title="权限"
         section={permission}

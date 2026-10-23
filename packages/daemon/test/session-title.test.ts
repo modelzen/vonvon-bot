@@ -279,3 +279,13 @@ describe('BOT_WAKE_NOTE', () => {
     expect(BOT_WAKE_NOTE('「」')).toContain('另一个 bot「另一个 bot」发的');
   });
 });
+
+describe('the hidden settings update', () => {
+  it('is not title or history material, wherever it sits before the user text', () => {
+    const update = '[vonvon 设置更新 · 标记 ab12cd · vonvon 自动附的，不是用户说的]\n[Bot 记忆]\n主人下个月做手术\n[/vonvon 设置更新]';
+    expect(stripBridgeMessageEnvelope(`${update}\n\n帮我看看这个`)).toBe('帮我看看这个');
+    const out = stripBridgeMessageEnvelope(`${update}\n\n[本条消息的发信人：张三（open_id：ou_1）]\n帮我看看这个`);
+    expect(out).not.toContain('手术');
+    expect(out).not.toContain('ab12cd');
+  });
+});

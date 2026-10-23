@@ -45,13 +45,10 @@ vi.mock('../src/project/registry', async (original) => ({
   splitTierChats: async () => new Map(),
 }));
 // Ownership assertions use exact fake-clock ticks; personality file I/O has its own tests.
-vi.mock('../src/bot/group-profile', async original => ({
+vi.mock('../src/bot/context-assembly', async original => ({
   ...await original<object>(),
-  readGroupPersonality: async () => ({
-    bot: { persona: '', memory: '' },
-    group: { persona: '', memory: '', inheritPersona: true, inheritMemory: true },
-    persona: '', memory: '', instructions: '', version: 'fixture-empty',
-  }),
+  loadContextSources: async () => ({ place: { kind: 'comment' }, botName: 'fixture', soul: '', role: { identity: '', notes: '', headed: false }, supplement: '', failed: {} }),
+  planTurnUpdate: async () => ({ context: { versions: {}, nonce: 'fixture' } }),
 }));
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),

@@ -1,4 +1,5 @@
 import type { HistoryTool, HistoryTurn, ThreadHistory } from '../agent/types';
+import { stripHiddenText } from '../bot/hidden-blocks';
 import { stripBridgeMessageEnvelope } from '../bot/session-title';
 import {
   card,
@@ -50,7 +51,8 @@ const PANEL_SHELL = 360;
 const BODY_BUDGET = 18_000;
 
 export function buildHistoryCard(state: HistoryCardState): CardObject {
-  const { history } = state;
+  // 隐藏块（记忆设计 §3.4）在历史里也不露：native 历史是模型原样的输出，这里剥掉
+  const history: ThreadHistory = { ...state.history, turns: state.history.turns.map(turn => ({ ...turn, assistantText: stripHiddenText(turn.assistantText), reasoning: stripHiddenText(turn.reasoning) })) };
   const elements: CardElement[] = [metaNote(state)];
 
   if (history.turns.length === 0) {

@@ -158,7 +158,7 @@ it('lists the groups an older version put in a wrong directory, only when there 
   expect(html).toContain('「发布群」用的是某个 Bot 自己的目录');
   expect(html).toContain('「点」在 Vonvon 的数据目录里');
   expect(html).toContain('「家」用的是 Vonvon 数据目录的上级文件夹');
-  expect(html).toContain('请在群设置的「工作区」中更换目录。原文件不会自动迁移。');
+  expect(html).toContain('请在项目页的「工作区」中更换目录。原文件不会自动迁移。');
   expect(render([agent])).not.toContain('群目录');
 });
 

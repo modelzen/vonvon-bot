@@ -1,19 +1,22 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'vitest';
-import {agentIdSchema, groupIdSchema, membershipIdSchema, type DesktopSnapshot} from '@vonvon/protocol';
+import {agentIdSchema, groupIdSchema, membershipIdSchema, projectIdSchema, type DesktopSnapshot} from '@vonvon/protocol';
 import {findEntries, searchEntries, settingAnchor} from '../src/search';
 import {groupTabForSection} from '../src/GroupWorkspace';
+import {routeFromSearch} from '../src/collaboration-navigation';
 
 const agentId = agentIdSchema.parse('cli_searchagent');
 const groupId = groupIdSchema.parse('oc_searchgroup');
 const membershipId = membershipIdSchema.parse('searchmember');
+const projectId = projectIdSchema.parse('prj_0a0b0c0d');
 const snapshot: DesktopSnapshot = {
   revision: 1, observedAt: Date.now(), stale: false,
   host: {kind: 'connected', ownership: 'owned', version: '0.7.0'},
   agents: [{id: agentId, name: '研发助手', enabled: true, running: true, connection: 'connected', activation: 'active'}],
   groups: [{id: groupId, name: '研发群'}],
-  memberships: [{id: membershipId, agentId, groupId, name: '研发项目', directory: '/tmp/research', backend: 'codex-appserver', conversation: 'threads', response: 'mention', permission: {administrator: 'full', member: 'qa', network: false}, stale: false}],
+  projects: [{id: projectId, name: '研发项目组', revision: 1, directory: '/tmp/research', bindings: [{agentId, groupId}]}],
+  memberships: [{id: membershipId, projectId, agentId, groupId, name: '研发项目', directory: '/tmp/research', backend: 'codex-appserver', conversation: 'threads', response: 'mention', permission: {administrator: 'full', member: 'qa', network: false}, stale: false}],
   tools: [], jobs: [],
   application: {platform: 'macos', version: '0.7.0', loginItem: false, dataPath: '/tmp/test'},
 };
@@ -173,7 +176,7 @@ test('s28c: member picker label and alias navigate to the bound group response-m
     const result = findEntries(entries, query)[0];
     assert.equal(result?.title, '从群成员选择');
     assert.deepEqual(result?.destination, {
-      page: 'collaboration', view: 'groups', selection: {kind: 'membership', id: membershipId},
+      page: 'collaboration', view: 'projects', selection: {kind: 'membership', id: membershipId},
       detail: {kind: 'membership-settings'}, section: '响应成员', field: '从群成员选择',
       reveal: undefined, guide: undefined,
     });
@@ -195,10 +198,9 @@ test('s28c: the manual Open ID entry remains searchable alongside the picker', (
 test('each group setting belongs to the corresponding five-page surface', () => {
   for (const [query, tab, section] of [
     ['添加技能', 'capabilities', '技能'], ['语音转文字', 'capabilities', '语音'],
-    ['本群个性', 'profile', '个性与记忆'], ['本群记忆', 'profile', '个性与记忆'],
+    ['补充职责', 'role', '补充职责'], ['本群个性', 'role', '补充职责'],
     ['模型 Provider', 'model', '可用模型'], ['可用 Effort', 'model', '可用模型'],
-    ['主目录', 'workspace', '工作区'], ['代码仓库', 'workspace', '工作区'],
-    ['权限', 'workspace', '权限'], ['能挡到什么', 'workspace', '权限'],
+    ['权限', 'permission', '权限'], ['能挡到什么', 'permission', '权限'],
     ['聊天方式', 'response', '聊天方式'], ['显示模型', 'response', '消息与提醒'],
     ['显示工具调用', 'response', '消息与提醒'], ['从群成员选择', 'response', '响应成员'],
   ]) {
@@ -212,6 +214,32 @@ test('each group setting belongs to the corresponding five-page surface', () => 
     assert.equal(entry?.destination.section, '判断规则');
     assert.equal(groupTabForSection(entry?.destination.section), 'response');
   }
+});
+
+test('P6: the workspace is the project\'s: its settings open the project page, not a group', () => {
+  for (const query of ['主目录', '代码仓库']) {
+    const entry = findEntries(entries, query).find(item => item.destination.selection?.kind === 'project');
+    assert.deepEqual(entry?.destination.selection, {kind: 'project', id: projectId}, query);
+    assert.equal(entry?.destination.section, '工作区');
+    assert.equal(routeFromSearch(entry!.destination, snapshot)?.route.kind, 'project');
+    assert.deepEqual(routeFromSearch(entry!.destination, snapshot)?.route, {kind: 'project', id: projectId, pane: {kind: 'workspace'}});
+  }
+  // no group-level entry for it any more
+  assert.ok(!entries.some(entry => entry.destination.selection?.kind === 'membership' && entry.destination.section === '工作区'));
+  for (const section of ['权限', '能挡到什么', '高级设置', '工作目录权限']) assert.equal(groupTabForSection(section), 'permission', section);
+  assert.equal(groupTabForSection('个性与记忆'), 'capabilities');
+});
+
+test('P6: the project is a search target by its name and by its groups', () => {
+  for (const query of ['研发项目组', '研发群']) {
+    const entry = findEntries(entries, query).find(item => item.id === projectId);
+    assert.equal(entry?.context, '项目', query);
+    assert.deepEqual(entry?.destination, {page: 'collaboration', view: 'projects', selection: {kind: 'project', id: projectId}});
+  }
+  // a group no project owns yet is found by name and opens its binding
+  const unlinked = searchEntries({...snapshot, projects: [], memberships: [{...snapshot.memberships[0]!, projectId: undefined}]});
+  assert.deepEqual(findEntries(unlinked, '研发群').find(item => item.id === groupId)?.destination.selection, {kind: 'membership', id: membershipId});
+  assert.equal(findEntries(entries, '').find(item => item.id === 'projects')?.title, '项目');
 });
 
 test('Bot profile has its own route and former Bot-only group settings no longer point there', () => {

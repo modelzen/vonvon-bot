@@ -5,13 +5,14 @@ import { sessionModeOf, type Project, type SessionMode } from '../project/regist
 import { groupBackendId } from '../config/execution';
 import { InvalidGroupInput, SMART_NO_MENTION } from './groups';
 import { SHARE_SECTIONS, type ShareSectionKey } from '../card/usage-cards';
+import { isProjectId } from '../project/library';
 
 export type ProjectTarget = { projectName: string; chatId: string };
 export type CollaborationRequest =
-  | { action: 'createProject'; requestId: string; name: string; directory?: string; kind: SessionMode; noMention?: boolean; judge?: GroupDecision; backend: 'codex-appserver' | 'claude-agent' }
+  | { action: 'createProject'; requestId: string; name: string; directory?: string; /** join this library project instead of making one (project/library.ts) */ project?: string; kind: SessionMode; noMention?: boolean; judge?: GroupDecision; backend: 'codex-appserver' | 'claude-agent' }
   | ({ [K in 'project' | 'history']: { action: K } & ProjectTarget }['project' | 'history'])
   | ({ action: 'shareUsage'; sections?: ShareSectionKey[] } & ProjectTarget)
-  | ({ action: 'editProject'; expectedRevision: string; directory?: string; kind?: SessionMode; enabled?: boolean } & ProjectTarget)
+  | ({ action: 'editProject'; expectedRevision: string; directory?: string; /** 换到别的项目: this library project's id */ project?: string; kind?: SessionMode; enabled?: boolean } & ProjectTarget)
   | ({ action: 'removeProject'; expectedRevision: string } & ProjectTarget)
   | ({ [K in 'context' | 'clear' | 'compact']: { action: K; threadId: string } & ProjectTarget }['context' | 'clear' | 'compact'])
   | ({ action: 'resume'; sessionId: string; backend: string } & ProjectTarget)
@@ -30,8 +31,8 @@ export function projectView(project: Project) {
 export function parseCollaborationRequest(raw: Record<string, unknown>): CollaborationRequest {
   const str = (key: string, max = 4096) => typeof raw[key] === 'string' && (raw[key] as string).trim().length > 0 && (raw[key] as string).length <= max && !(key === 'objective' ? /[\x00-\x08\x0b\x0c\x0e-\x1f]/ : /[\x00-\x1f]/).test(raw[key] as string);
   const allowed: Record<string, string[]> = {
-    createProject: ['requestId','name','directory','kind','noMention','backend','judge'], project: [], history: [], shareUsage: ['sections'],
-    editProject: ['expectedRevision','directory','kind','enabled'], removeProject: ['expectedRevision'],
+    createProject: ['requestId','name','directory','project','kind','noMention','backend','judge'], project: [], history: [], shareUsage: ['sections'],
+    editProject: ['expectedRevision','directory','project','kind','enabled'], removeProject: ['expectedRevision'],
     context: ['threadId'], clear: ['threadId'], compact: ['threadId'], resume: ['sessionId','backend'],
     startGoal: ['threadId','objective'], stop: ['threadId','runId'], stopSubagent: ['threadId','runId','subagentId'], endGoal: ['threadId','runId'], reminder: ['threadId','runId','requested'], usage: ['force'],
   };
@@ -42,12 +43,14 @@ export function parseCollaborationRequest(raw: Record<string, unknown>): Collabo
   if (Object.keys(raw).some(key => !keys.includes(key)) || (target && (!str('projectName',200) || !str('chatId',204) || !/^oc_[\w-]+$/.test(raw.chatId as string)))) throw new InvalidGroupInput('项目标识无效');
   for (const key of allowed[action]!) {
     if (key === 'sections' || key === 'judge') continue;
-    if (['directory','kind','noMention','enabled','force'].includes(key) && raw[key] === undefined) continue;
+    if (['directory','project','kind','noMention','enabled','force'].includes(key) && raw[key] === undefined) continue;
     if (['noMention','enabled','force','requested'].includes(key)) { if (typeof raw[key] !== 'boolean') throw new InvalidGroupInput('布尔参数无效'); }
     else if (!str(key, key === 'objective' ? 16000 : 4096)) throw new InvalidGroupInput('协作参数无效');
   }
   if (raw.judge !== undefined && !groupDecisionSchema.safeParse(raw.judge).success) throw new InvalidGroupInput('决策模型设置无效');
   if (raw.directory !== undefined && !isAbsolute(raw.directory as string)) throw new InvalidGroupInput('文件夹必须为绝对路径');
+  if (raw.project !== undefined && !isProjectId(raw.project)) throw new InvalidGroupInput('项目标识无效');
+  if (raw.project !== undefined && raw.directory !== undefined) throw new InvalidGroupInput('加入已有项目时不能再选文件夹');
   if (raw.kind !== undefined && raw.kind !== 'single' && raw.kind !== 'multi' && raw.kind !== 'smart') throw new InvalidGroupInput('会话类型无效');
   if (raw.kind === 'smart' && raw.noMention !== undefined) throw new InvalidGroupInput(SMART_NO_MENTION);
   if (raw.sections !== undefined && (!Array.isArray(raw.sections) || raw.sections.length > SHARE_SECTIONS.length || raw.sections.some(section => typeof section !== 'string' || !SHARE_SECTIONS.some(option => option.key === section)))) throw new InvalidGroupInput('分享区块无效');

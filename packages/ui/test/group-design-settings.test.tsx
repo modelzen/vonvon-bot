@@ -5,7 +5,8 @@ import {DEFAULT_SMART_RULES, agentIdSchema, type ModelCatalog, type ProjectSetti
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
 import {DirectoryPickerProvider} from '../src/directory-picker';
-import {GroupSettingsContent, ModelAccessChoices, modelAccessProblem, type GroupSettingsTab} from '../src/settings/GroupDesignSettings';
+import {GroupSettingsContent, ModelAccessChoices, modelAccessProblem, WorkspaceFields, type GroupSettingsTab} from '../src/settings/GroupDesignSettings';
+import {groupDesignTabs, groupTabForSection} from '../src/GroupWorkspace';
 import {PersonaEditor} from '../src/settings/PersonaEditor';
 
 const client = createClient({isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {}});
@@ -18,6 +19,7 @@ const fixture = (): ProjectSettingsView => ({
   sections: {
     permission: section(permissionValue()), response: section({noMention: false}), model: section({selection: {kind: 'default'}}),
     profile: section({persona: '本群补充', memory: '本群记忆', inheritPersona: true, inheritMemory: false}),
+    role: section({supplement: '本项目里多做发版检查'}),
     modelAccess: section({backend: 'codex-appserver', models: ['actual-a'], efforts: ['low']}),
     workspace: section({primary: '/one', directories: ['/one', '/two'], repositories: ['/repo-a', '/repo-b']}),
     skills: section({disabledPaths: []}),
@@ -35,19 +37,25 @@ const catalog: ModelCatalog = {backend: 'codex-appserver', state: 'ready', sourc
   {id: 'actual-b', displayName: '实际模型 B', description: '', isDefault: false, hidden: false, supportedEfforts: ['high'], defaultEffort: 'high'},
   {id: 'no-effort', displayName: '无 Effort 模型', description: '', isDefault: false, hidden: false, supportedEfforts: [], defaultEffort: 'none'},
 ]};
-it('keeps Bot source read-only inside the group editor and inheritance optional for each field', () => {
-  const html = render('profile');
-  expect(html).toContain('aria-label="继承的 Bot 个性"');
-  expect(html).toContain('Bot 的个性原文');
-  expect(html).toContain('aria-label="移除 Bot 个性继承"');
-  expect(html).toContain('继承 Bot 记忆');
+it('P6: the group page has 补充职责 in place of 个性与记忆, and no Bot persona or memory to inherit', () => {
+  const html = render('role');
+  expect(html).toContain('aria-label="补充职责"');
+  expect(html).toContain('本项目里多做发版检查');
+  expect(html).toContain('角色设定（→ Bot 页）始终生效');
+  expect(html).toContain('智能判断会优先看这一段');
+  expect(html).not.toContain('继承');
+  expect(html).not.toContain('Bot 的个性原文');
   expect(html).not.toContain('Bot 的记忆原文');
-  expect(html).toContain('aria-label="本群个性"');
-  expect(html).toContain('本群补充');
-  expect(html).not.toContain('添加 Bot 记忆');
+  const missing = fixture(); delete missing.sections.role;
+  expect(render('role', missing)).toContain('这项设置暂不可用');
   const bot = renderToStaticMarkup(<PersonaEditor label="个性" value="源内容" onChange={() => {}}/>);
   expect(bot).toContain('aria-label="Bot 个性"');
   expect(bot).not.toContain('继承');
+  // the Bot's role editor is the two sections of SOUL.md, nothing else
+  const role = renderToStaticMarkup(<><PersonaEditor label="身份与职责" value="助手" onChange={() => {}} maxLength={500}/><PersonaEditor label="其他说明" value="" onChange={() => {}}/></>);
+  expect(role).toContain('aria-label="Bot 身份与职责"');
+  expect(role).toContain('aria-label="Bot 其他说明"');
+  expect(role.match(/<textarea/g)).toHaveLength(2);
 });
 it('shows discovered skills and no fabricated tool authorization state', () => {
   const html = render('capabilities');
@@ -64,8 +72,21 @@ it('shows discovered skills and no fabricated tool authorization state', () => {
   expect(render('capabilities', failed)).toContain(failed.skillsError);
   expect(render('capabilities', failed)).not.toContain('尚未发现技能');
 });
+it('P6: the group page has five tabs, the permission editor is on 权限 and the workspace is not on the group page', () => {
+  expect(groupDesignTabs.map(([, label]) => label)).toEqual(['能力', '补充职责', '模型', '回复规则', '权限']);
+  expect(groupDesignTabs.map(([value]) => value)).not.toContain('workspace');
+  for (const section of ['权限', '能挡到什么', '高级设置', '工作目录权限']) expect(groupTabForSection(section)).toBe('permission');
+  const html = render('permission');
+  expect(html).toContain('能挡到什么');
+  for (const tab of ['capabilities', 'role', 'model', 'response'] as const) {
+    expect(render(tab)).not.toContain('能挡到什么');
+    expect(render(tab)).not.toContain('<h3>代码仓库</h3>');
+  }
+});
 it('keeps one primary among peer directories and no primary repository', () => {
-  const html = render('workspace');
+  const html = renderToStaticMarkup(<ClientProvider client={client}><DirectoryPickerProvider>
+    <WorkspaceFields value={{primary: '/one', directories: ['/one', '/two'], repositories: ['/repo-a', '/repo-b']}} onChange={() => {}} disabled={false}/>
+  </DirectoryPickerProvider></ClientProvider>);
   expect(html).toContain('/one'); expect(html).toContain('/two');
   expect(html.match(/class="gd-primary-label"/g)).toHaveLength(1);
   expect(html).toContain('请先选择其他主目录');
