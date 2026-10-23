@@ -148,6 +148,8 @@ import { join } from 'node:path';
 import { botMemoryLocation, MemoryStore, projectMemoryLocation } from '../src/bot/memory-store';
 import { libraryLocation } from '../src/project/library';
 import { parseRole } from '../src/bot/role-files';
+import { createMemoryWriter } from '../src/bot/memory-writer';
+import { hiddenBlockInstructions } from '../src/bot/hidden-blocks';
 
 const until = (check: () => void) => vi.waitFor(check, { interval: 5 });
 const dirs: string[] = [];
@@ -170,7 +172,7 @@ async function memory() {
     if (!result.ok) throw new Error(result.message);
     return result.item.id;
   };
-  return { add, usage: () => project.readUsage() };
+  return { add, usage: () => project.readUsage(), dir };
 }
 const injected = (run: ReturnType<typeof thread>): string[] => run.t.injectContext.mock.calls.map(call => String(call[0]));
 
@@ -268,7 +270,8 @@ describe('what the model says it used (4.5)', () => {
     expect(turn.used).toEqual([id]);
     expect(turn.injected).toBe(1);
     expect(turn.at).toBeGreaterThan(1);
-    expect(Object.keys(await mem.usage())).toEqual([id]);
+    // usage.json is written in the background after lastTurn
+    await until(async () => expect(Object.keys(await mem.usage())).toEqual([id]));
     // a marker with another mark counts for nothing
     await o.onMessage(message('second'));
     await until(() => expect(run.consumed).toHaveLength(2));
@@ -276,5 +279,68 @@ describe('what the model says it used (4.5)', () => {
     run.turns[1]!.resolve();
     await until(() => expect((fake.record.context as { lastTurn: { used: string[] } }).lastTurn.used).toEqual([]));
     expect((await mem.usage())[id]!.useCount).toBe(1);
+  });
+});
+
+describe('one runtime for context, hidden blocks and usage', () => {
+  /** An orchestrator with the real memory writer and agent entries over the same stores the fake sources read. */
+  async function runtime() {
+    const mem = await memory();
+    const writer = createMemoryWriter({ botId: 'app', botDirectory: join(mem.dir, 'bots', 'app'), library: libraryLocation(mem.dir), projectIdOf: async () => PROJECT });
+    const entries = createAgentEntries({ appId: 'app', isAdmin: () => false, isOwner: id => id === 'owner', tools: [] });
+    const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: 'steer', access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' } } };
+    const channel = { send: fake.send, rawClient: { im: { v1: { message: { get: async () => ({ data: { items: [{ thread_id: 'new-topic' }] } }) }, messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) } } } } };
+    orchestrator = createOrchestrator(channel as never, cfg, '/test', undefined, { entries, memory: writer });
+    return { mem, o: orchestrator };
+  }
+  const markOf = (instructions: string): string => /设置标记：([0-9a-f]+)。/.exec(instructions)![1]!;
+
+  it('tells a Codex session how to leave a block under the same mark as its settings mark, and takes that block', async () => {
+    const { mem, o } = await runtime();
+    const run = thread();
+    fake.record = { absent: true };
+    fake.backend.startThread.mockResolvedValue(run.t);
+    await o.onMessage(message('first'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const instructions = String(fake.backend.startThread.mock.calls[0]![0].profile.instructions);
+    const nonce = markOf(instructions);
+    expect(instructions).toContain(hiddenBlockInstructions(nonce));
+    run.emit({ type: 'text', itemId: 'answer', text: `好，记住了。\n<vonvon-remember n="${nonce}" scope="project" branch="决定" claim="self">回滚窗口是晚上十点后</vonvon-remember>\n<vonvon-remember n="forged" scope="project" claim="self">不会记</vonvon-remember>` });
+    run.turns[0]!.resolve();
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('card', 'final', expect.anything()));
+    const view = await new MemoryStore(projectMemoryLocation(PROJECT, { library: libraryLocation(mem.dir) })).read();
+    const written = view.items.filter(item => item.text.includes('回滚窗口'));
+    expect(written).toHaveLength(1);
+    // the next update carries the new entry and the notice about the block that was not taken, under the same mark
+    await o.onMessage(message('second'));
+    await until(() => expect(run.consumed).toHaveLength(2));
+    const updates = injected(run);
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toContain(`+ ${written[0]!.id}`);
+    expect(updates[0]).toContain('标记不对');
+    expect(updates[0]).toContain(`标记 ${nonce}`);
+    run.turns[1]!.resolve();
+  });
+
+  it('does not tell a Claude session about hidden blocks and does not take them, but still reads its usage markers', async () => {
+    const { mem, o } = await runtime();
+    const id = await mem.add('发版改到周四');
+    fake.backend.id = 'claude-agent';
+    try {
+      const run = thread();
+      fake.record = { absent: true };
+      fake.backend.startThread.mockResolvedValue(run.t);
+      await o.onMessage(message('first'));
+      await until(() => expect(run.consumed).toHaveLength(1));
+      const instructions = String(fake.backend.startThread.mock.calls[0]![0].profile.instructions);
+      expect(instructions).not.toContain('<vonvon-remember');
+      const nonce = markOf(instructions);
+      run.emit({ type: 'text', itemId: 'answer', text: `周四。\n<vonvon-remember n="${nonce}" scope="project" claim="self">不该记</vonvon-remember>\n<vonvon-mem n="${nonce}" used="${id}"/>` });
+      run.turns[0]!.resolve();
+      await until(() => expect(fake.log.info).toHaveBeenCalledWith('card', 'final', expect.anything()));
+      await until(async () => expect(Object.keys(await mem.usage())).toEqual([id]));
+      const view = await new MemoryStore(projectMemoryLocation(PROJECT, { library: libraryLocation(mem.dir) })).read();
+      expect(view.items.some(item => item.text.includes('不该记'))).toBe(false);
+    } finally { fake.backend.id = 'codex'; }
   });
 });

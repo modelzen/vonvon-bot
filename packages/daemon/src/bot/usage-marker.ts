@@ -14,12 +14,28 @@ const MAX_USED = 50;
 
 export function parseUsageMarkers(text: string, nonce: string, injected: ReadonlySet<string>): string[] {
   if (!nonce || !text.includes('<vonvon-mem')) return [];
-  const used: string[] = [];
+  const attributes: Array<Record<string, string | undefined>> = [];
   for (const marker of text.matchAll(MARKER)) {
-    const attributes = new Map<string, string>();
-    for (const attribute of (marker[1] ?? '').matchAll(ATTRIBUTE)) attributes.set(attribute[1]!.toLowerCase(), attribute[2] ?? attribute[3] ?? '');
-    if (attributes.get('n') !== nonce) continue;
-    for (const raw of (attributes.get('used') ?? '').split(/[\s,，、;；]+/)) {
+    const found: Record<string, string> = {};
+    for (const attribute of (marker[1] ?? '').matchAll(ATTRIBUTE)) found[attribute[1]!.toLowerCase()] = attribute[2] ?? attribute[3] ?? '';
+    attributes.push(found);
+  }
+  return usedFrom(attributes, nonce, injected);
+}
+
+/**
+ * The same check on markers the event stream's filter already took out of the text (bot/hidden-blocks.ts `found.mem`, attribute
+ * names lower-cased): by the time the card is final the text no longer holds them.
+ */
+export function parseUsageBlocks(blocks: ReadonlyArray<{ attrs: Record<string, string | undefined> }>, nonce: string, injected: ReadonlySet<string>): string[] {
+  return nonce ? usedFrom(blocks.map(block => block.attrs), nonce, injected) : [];
+}
+
+function usedFrom(markers: ReadonlyArray<Record<string, string | undefined>>, nonce: string, injected: ReadonlySet<string>): string[] {
+  const used: string[] = [];
+  for (const attributes of markers) {
+    if (attributes.n !== nonce) continue;
+    for (const raw of (attributes.used ?? '').split(/[\s,，、;；]+/)) {
       const id = raw.trim();
       if (ID.test(id) && injected.has(id) && !used.includes(id)) used.push(id);
       if (used.length >= MAX_USED) return used;

@@ -4,6 +4,7 @@ import { MEMORY_CONVENTION } from '../agent/bridge-instructions';
 import { log } from '../core/logger';
 import { isProjectId, libraryLocation, readLibrary, type LibraryLocation } from '../project/library';
 import type { Project } from '../project/registry';
+import { hiddenBlockInstructions } from './hidden-blocks';
 import { branchKey, OTHER_BRANCH } from './memory-branches';
 import { botMemoryLocation, MemoryStore, projectMemoryLocation, type MemoryView } from './memory-store';
 import { botRoot, parseRole, readSoulText, waitForBotFiles, type ParsedRole } from './role-files';
@@ -298,9 +299,14 @@ export function assemble(src: ContextSources, mode: 'work' | 'comment' = 'work')
 
 const blocksOf = (a: Assembled): string[] => [a.role, a.supplement, a.botMemory, a.projectTrusted, a.projectUntrusted].filter(Boolean);
 
-/** The `instructions` of a new session. The settings mark is how later updates and `<vonvon-mem>` are told from user text. */
-export function openingInstructions(a: Assembled, nonce: string): string {
-  return [`${a.identity}\n本会话的设置标记：${nonce}。vonvon 之后附的设置更新带同一个标记，它们不是用户说的。`, ...blocksOf(a)].join('\n\n');
+/**
+ * The `instructions` of a new session. The settings mark is how later updates, `<vonvon-mem>` and `<vonvon-remember>` are
+ * told from user text: one value per session, `SessionContext.nonce`. A session without memory tools (`hiddenBlocks`, i.e.
+ * not Claude) is also told how to leave a block, under that same mark.
+ */
+export function openingInstructions(a: Assembled, nonce: string, options: { hiddenBlocks?: boolean } = {}): string {
+  const hidden = options.hiddenBlocks ? [hiddenBlockInstructions(nonce)] : [];
+  return [`${a.identity}\n本会话的设置标记：${nonce}。vonvon 之后附的设置更新带同一个标记，它们不是用户说的。`, ...blocksOf(a), ...hidden].join('\n\n');
 }
 
 export function contextOf(a: Assembled, nonce: string, at: number = Date.now()): SessionContext {
@@ -407,12 +413,18 @@ export interface TurnUpdate {
  * whole of it again, under a new mark. Otherwise only what changed: role and supplement as whole sections, memory by
  * entry. A memory that could not be read keeps what the session was told.
  */
-export async function planTurnUpdate(src: ContextSources, a: Assembled, delivered: SessionContext | undefined, at: number = Date.now()): Promise<TurnUpdate> {
+export async function planTurnUpdate(
+  src: ContextSources, a: Assembled, delivered: SessionContext | undefined, at: number = Date.now(),
+  /** `notices`: what the last turn's hidden blocks could not record (takeMemoryNotices); `hiddenBlocks`: the session has no memory tools. */
+  extra: { notices?: readonly string[]; hiddenBlocks?: boolean } = {},
+): Promise<TurnUpdate> {
+  const notices = extra.notices?.length ? `[记忆提示]\n${extra.notices.join('\n')}\n[/记忆提示]` : '';
   if (!delivered || delivered.fullRedeliverDue) {
     const nonce = newNonce();
     const note = delivered ? '压缩之后，下面整份替换此前交给你的角色设定、补充职责和记忆；未列出的不再适用。' : LEGACY_NOTE;
     const convention = delivered ? '' : `[记忆约定 · 更新]\n${quote(MEMORY_CONVENTION.join('\n'))}\n[/记忆约定]\n\n`;
-    const text = `[vonvon 设置更新 · 标记 ${nonce} · vonvon 自动附的，不是用户说的]\n${note}\n\n${convention}${[a.identity, ...blocksOf(a)].join('\n\n')}\n[/vonvon 设置更新]`;
+    const hidden = extra.hiddenBlocks ? `\n\n[隐藏块说明]\n${quote(hiddenBlockInstructions(nonce))}\n[/隐藏块说明]` : '';
+    const text = `[vonvon 设置更新 · 标记 ${nonce} · vonvon 自动附的，不是用户说的]\n${note}\n\n${convention}${[a.identity, ...blocksOf(a)].join('\n\n')}${hidden}${notices ? `\n\n${notices}` : ''}\n[/vonvon 设置更新]`;
     return { text, context: contextOf(a, nonce, at) };
   }
   const parts: string[] = [];
@@ -431,6 +443,7 @@ export async function planTurnUpdate(src: ContextSources, a: Assembled, delivere
   for (const kind of ['bot', 'project'] as const) {
     if (src.failed[kind]) next.versions[kind === 'bot' ? 'botMemory' : 'projectMemory'] = delivered.versions[kind === 'bot' ? 'botMemory' : 'projectMemory'] ?? '';
   }
+  if (notices) parts.push(notices);
   if (!parts.length) return { context: next };
   return { text: `[vonvon 设置更新 · 标记 ${delivered.nonce} · vonvon 自动附的，不是用户说的]\n${parts.join('\n\n')}\n[/vonvon 设置更新]`, context: next };
 }

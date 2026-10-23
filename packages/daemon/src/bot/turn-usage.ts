@@ -1,6 +1,7 @@
 import type { MemoryStore } from './memory-store';
 import type { MemoryDelivered, SessionContext } from './session-store';
-import { parseUsageMarkers } from './usage-marker';
+import type { RawBlock } from './hidden-blocks';
+import { parseUsageBlocks, parseUsageMarkers } from './usage-marker';
 
 /** The memory stores a turn's entries came from, to put the use in the right `usage.json`. */
 export interface TurnStores { bot?: MemoryStore; project?: MemoryStore }
@@ -16,9 +17,13 @@ export function deliveredIds(context: SessionContext): Set<string> {
  * The end of a turn (4.5): which entries the model said it used, checked against what the session holds, recorded in
  * `lastTurn`. Whether anything is listed does not change what the next turn hands over, so the versions stay.
  */
-export function settleTurn(context: SessionContext, replyText: string, at: number = Date.now()): { context: SessionContext; used: string[] } {
+export function settleTurn(
+  context: SessionContext, replyText: string, at: number = Date.now(),
+  /** The `<vonvon-mem>` markers the stream filter took out of the reply (the reply text no longer has them). */
+  marks: readonly RawBlock[] = [],
+): { context: SessionContext; used: string[] } {
   const ids = deliveredIds(context);
-  const used = parseUsageMarkers(replyText, context.nonce, ids);
+  const used = [...new Set([...parseUsageBlocks(marks, context.nonce, ids), ...parseUsageMarkers(replyText, context.nonce, ids)])];
   return { context: { ...context, lastTurn: { at, injected: ids.size, used } }, used };
 }
 

@@ -1,5 +1,5 @@
 import type { AgentEntries, AgentPlace, TurnMemory, TurnScope } from '../agent/entry/registry';
-import { createHiddenBlockFilter, escapeInboundMarkers, memoryNonce, noteMissedBlocks, type FoundBlocks } from './hidden-blocks';
+import { createHiddenBlockFilter, escapeInboundMarkers, memoryNonce, noteMissedBlocks, takeMemoryNotices, type FoundBlocks, type RawBlock } from './hidden-blocks';
 import type { MemoryWriter } from './memory-writer';
 import { redactAgentEvents } from '../core/token-redact';
 import { buildJudgeFacts, judgeFactRead, sameNameWord } from './judge-facts';
@@ -1071,6 +1071,13 @@ export function createOrchestrator(
       nameOf: openId => names.peek(openId), chatNames: async () => new Map((await listProjects()).map(row => [row.chatId, row.name] as const)), ...(options.skipBotMemory ? { skipBotMemory: true } : {}),
     });
   }
+  /** Claude has the memory tools and never hidden blocks (3.4); every other backend is told how to leave a block and gets it parsed. */
+  const hiddenBlocksFor = (backendId: string | undefined): boolean => backendFor(backendId).id !== 'claude-agent';
+  /**
+   * The one mark of a session (4.1): the opening, the update blocks, `<vonvon-mem>` and `<vonvon-remember>` all carry
+   * `SessionContext.nonce`. A thread with no context yet (a private chat, a comment) falls back to the per-session value.
+   */
+  const sessionNonce = (thread: AgentThread): string => contextDelivered.get(thread)?.nonce ?? memoryNonce(thread.sessionId);
   /** The context a new session was opened with, by the profile object it was opened from (4.2: the record exists only later). */
   const openings = new WeakMap<object, SessionContext>();
   /** What each live thread has been handed; a resumed thread reads its record on its first turn. */
@@ -1085,7 +1092,7 @@ export function createOrchestrator(
     const assembled = sources ? assemble(sources, project ? 'work' : 'comment') : undefined;
     const nonce = newNonce();
     const skills = project ? await groupSkillProfile({ backend, cwd, directories: execution.workspaces.additional, disabledPaths: project.skills?.disabledPaths }) : undefined;
-    const profile = assembled || skills ? { instructions: assembled ? openingInstructions(assembled, nonce) : '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: [], capabilityPackages: [], mcpServers: [], ...(skills ? { skills } : {}) } : undefined;
+    const profile = assembled || skills ? { instructions: assembled ? openingInstructions(assembled, nonce, { hiddenBlocks: hiddenBlocksFor(backend.id) }) : '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: [], capabilityPackages: [], mcpServers: [], ...(skills ? { skills } : {}) } : undefined;
     const built = await executionSessionProfile({ execution: { ...execution, permission: permission ?? execution.permission }, cwd, backend: backend.id, scope: project ? 'group' : 'ungrouped', profile });
     if (assembled && built) openings.set(built, contextOf(assembled, nonce));
     return built;
@@ -1100,11 +1107,15 @@ export function createOrchestrator(
   }
   /** The memories a thread's turn was assembled from: where the entries the model says it used are counted (4.5). */
   const turnStores = new WeakMap<AgentThread, TurnStores>();
+  /** The `<vonvon-mem>` markers the stream filter took out of this turn's reply: the final card text no longer has them. */
+  const turnMarks = new WeakMap<AgentThread, RawBlock[]>();
   /** The end of a turn: which entries the model said it used goes into the session's `lastTurn` and the memory's `usage.json`. */
   function noteTurnUsage(thread: AgentThread, replyText: string, key: string | undefined): void {
+    const marks = turnMarks.get(thread);
+    turnMarks.delete(thread);
     const delivered = contextDelivered.get(thread);
     if (!delivered) return;
-    const { context, used } = settleTurn(delivered, replyText);
+    const { context, used } = settleTurn(delivered, replyText, Date.now(), marks);
     contextDelivered.set(thread, { ...delivered, lastTurn: context.lastTurn });
     // Only lastTurn goes to the record: a compaction that ended meanwhile keeps its mark there.
     if (key && !key.startsWith('pending:') && context.lastTurn) {
@@ -1113,7 +1124,7 @@ export function createOrchestrator(
     }
     void trackTask(recordUsage(context, used, turnStores.get(thread)));
   }
-  async function preparePersonality(thread: AgentThread, chatId: string, input: AgentInput, key?: string): Promise<AgentInput> {
+  async function preparePersonality(thread: AgentThread, chatId: string, input: AgentInput, key?: string, backendId?: string): Promise<AgentInput> {
     const project = await getProjectByChatId(chatId);
     if (!project) return input;
     const persisted = key && !key.startsWith('pending:');
@@ -1121,7 +1132,9 @@ export function createOrchestrator(
     const delivered = contextDelivered.get(thread) ?? (persisted ? (await getSession(key))?.context : undefined);
     const sources = await contextSourcesFor(project);
     const assembled = assemble(sources);
-    const update = await planTurnUpdate(sources, assembled, delivered);
+    // What the last turn's hidden blocks could not record goes into this turn's update (3.4); the update carries the entries
+    // written since because the sources above are read now, at the start of the turn.
+    const update = await planTurnUpdate(sources, assembled, delivered, Date.now(), { notices: takeMemoryNotices(thread.sessionId), hiddenBlocks: hiddenBlocksFor(backendId) });
     contextDelivered.set(thread, update.context);
     turnStores.set(thread, { ...(assembled.cur.bot ? { bot: assembled.cur.bot.store } : {}), ...(assembled.cur.project ? { project: assembled.cur.project.store } : {}) });
     if (!update.text) return input;
@@ -1291,8 +1304,15 @@ export function createOrchestrator(
    * 时，才在 `done` 之前解析最后一条消息里的块。评论里不解析（`applyBlocks` 里按位置再关一道）。
    */
   function hiddenBlockFilter(thread: AgentThread, backendId: string | undefined, turn: TurnMemory | undefined) {
-    const parse = memory && turn && turn.place.kind !== 'doc' && backendId !== 'claude-agent';
-    return createHiddenBlockFilter(parse ? { onTurnEnd: found => applyHiddenBlocks(thread, turn, found) } : {});
+    const parse = memory && turn && turn.place.kind !== 'doc' && hiddenBlocksFor(backendId);
+    turnMarks.delete(thread);
+    return createHiddenBlockFilter({
+      onTurnEnd: async found => {
+        // Usage markers are read for every backend, whatever the blocks do: the text the card ends with no longer has them.
+        if (found.mem.length) turnMarks.set(thread, found.mem);
+        if (parse) await applyHiddenBlocks(thread, turn, found);
+      },
+    });
   }
   async function applyHiddenBlocks(thread: AgentThread, turn: TurnMemory, found: FoundBlocks): Promise<void> {
     if (!memory) return;
@@ -1301,7 +1321,7 @@ export function createOrchestrator(
     try {
       // 写不进去也不拖住这一轮的收尾；超时以后轮次一结束，提交点前的重判会把这次写入拒掉
       const outcome = await Promise.race([
-        memory.applyBlocks({ found, nonce: memoryNonce(key), ctx: { turn: turn.turn, ...(turn.triggerMessageId ? { triggerMessageId: turn.triggerMessageId } : {}) } }),
+        memory.applyBlocks({ found, nonce: sessionNonce(thread), ctx: { turn: turn.turn, ...(turn.triggerMessageId ? { triggerMessageId: turn.triggerMessageId } : {}) } }),
         new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), 15_000); timer.unref?.(); }),
       ]);
       if (outcome) noteMissedBlocks(key, outcome.missed);
@@ -7080,7 +7100,7 @@ export function createOrchestrator(
         if (!projectModelAllowed(currentProject, turnBackend.id, turnModel, turnEffort, currentProject?.modelAccess ? await listModels(turnBackend) : undefined)) {
           throw new Error('当前模型或 Effort 已不在本群可用范围，请用 /model 重新选择。若已更换 Provider，请创建新会话。');
         }
-        turnInput = await preparePersonality(opts.thread, opts.chatId, turnInput, opts.knownThreadId);
+        turnInput = await preparePersonality(opts.thread, opts.chatId, turnInput, opts.knownThreadId, opts.backendId);
         const run = opts.thread.runStreamed(turnInput, { model: turnModel, effort: turnEffort });
         let unseen = currentTurn.seen;
         titleTurnAttempted = true;
@@ -7940,7 +7960,7 @@ export function createOrchestrator(
       const currentProject = await getProjectByChatId(opts.chatId);
       const goalBackend = backendFor(opts.backendId);
       if (!projectModelAllowed(currentProject, goalBackend.id, opts.model, opts.effort, currentProject?.modelAccess ? await listModels(goalBackend) : undefined)) throw new Error('当前模型或 Effort 已不在本群可用范围，请用 /model 重新选择。');
-      const goalContext = await preparePersonality(opts.thread, opts.chatId, {}, opts.knownThreadId);
+      const goalContext = await preparePersonality(opts.thread, opts.chatId, {}, opts.knownThreadId, opts.backendId);
       const run = opts.thread.runGoal(goalContext.text ? `${goalContext.text}\n\n目标：${objective}` : objective);
       state.run = run;
       // ⏹ 终止: clear the goal first (so it won't reactivate on resume), then end
