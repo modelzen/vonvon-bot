@@ -503,6 +503,9 @@ export interface QueuedTurn {
    * (turn_started), never when it is queued or dequeued: a dropped queue or a
    * refused turn/start must leave it for the next back-fill. */
   seen?: SeenMark;
+  /** The message that triggered this turn, when {@link seen} is not set (a new topic's first turn): what the turn's
+   * memory facts count as typed by a person (agent/entry/registry.ts `openTurn`). */
+  triggerMessageId?: string;
   /** How {@link seen} moves the watermark (session-store.nextSeen); 'id' when unset. */
   seenHow?: SeenHow;
   /** Other bots' cards its record block wove while they were still streaming (SessionRecord.streaming). */
@@ -3934,6 +3937,7 @@ export function createOrchestrator(
         requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg),
         requestedAt: msg.createTime || tIntake,
         seenAt: msg.createTime,
+        triggerMessageId: msg.messageId,
         // The topic session's oldest line: the opening's first main line, else the trigger (s15).
         from: section ? section.main[0]?.createTime || msg.createTime : undefined,
         openTopic: anchor
@@ -6730,6 +6734,8 @@ export function createOrchestrator(
     openTopic?: TopicSighting['first'];
     /** The trigger, marked seen once the host accepts the first turn (see QueuedTurn.seen). */
     seen?: SeenMark;
+    /** See QueuedTurn.triggerMessageId. */
+    triggerMessageId?: string;
     seenHow?: SeenHow;
     /** The first turn's record block: cards still streaming, the ids it carried, the topics it quoted and whether it had the table (see QueuedTurn). */
     streaming?: SeenMark[];
@@ -7074,6 +7080,7 @@ export function createOrchestrator(
         summary: opts.summary,
         replayText: opts.replayText,
         seen: opts.seen,
+        triggerMessageId: opts.triggerMessageId,
         seenHow: opts.seenHow,
         streaming: opts.streaming,
         woven: opts.woven,
@@ -7097,7 +7104,7 @@ export function createOrchestrator(
         state.requesterKind = currentTurn.requesterKind;
         turnScope = entries?.openTurn(opts.thread, {
           requesterOpenId: currentTurn.requesterOpenId, requesterKind: currentTurn.requesterKind,
-          triggerMessageId: currentTurn.seen?.id, retry: currentTurn.replayText !== undefined,
+          triggerMessageId: currentTurn.seen?.id ?? currentTurn.triggerMessageId, retry: currentTurn.replayText !== undefined,
           initiative: Boolean(currentTurn.initiative), wake: Boolean(currentTurn.wake),
           ...(currentTurn.memoryTrigger ? { typed: currentTurn.memoryTrigger.typed, triggerText: currentTurn.memoryTrigger.text } : {}),
         });

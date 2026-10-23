@@ -326,7 +326,7 @@ describe('s39a production profile delivery', () => {
     await setup({ directories: { repositories: [repository] } }).onMessage(message('new topic'));
     await vi.waitFor(() => expect(claude.startThread).toHaveBeenCalled());
     expect(claude.startThread).toHaveBeenCalledWith(expect.objectContaining({ cwd }));
-    const profile = claude.startThread.mock.calls[0]?.[0].profile;
+    const profile = claude.startThread.mock.calls[0]?.[0].profile as { instructions: string };
     expect(profile).toMatchObject({
       additionalRoots: roots(extra, repository),
       capabilityPackages: [], env: {}, mcpServers: [], nativeSettings: { automaticMemory: false },

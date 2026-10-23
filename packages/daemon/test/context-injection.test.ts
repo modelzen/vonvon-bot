@@ -322,6 +322,24 @@ describe('one runtime for context, hidden blocks and usage', () => {
     run.turns[1]!.resolve();
   });
 
+  it('counts the owner\'s @ in the main area, which opens a new topic, as typed by a person: the block is trusted', async () => {
+    const { mem, o } = await runtime();
+    const run = thread();
+    fake.record = { absent: true };
+    fake.backend.startThread.mockResolvedValue(run.t);
+    try {
+      await o.onMessage({ ...message('记住：每周四发版'), threadId: undefined, raw: { sender: { sender_type: 'user', sender_id: { open_id: 'owner' } } } } as NormalizedMessage);
+      await until(() => expect(run.consumed).toHaveLength(1));
+      const nonce = markOf(String(fake.backend.startThread.mock.calls[0]![0].profile.instructions));
+      run.emit({ type: 'text', itemId: 'answer', text: `好，记住了。\n<vonvon-remember n="${nonce}" scope="project" branch="约定" claim="asked">每周四发版</vonvon-remember>` });
+      run.turns[0]!.resolve();
+      await until(() => expect(fake.log.info).toHaveBeenCalledWith('card', 'final', expect.anything()));
+      const view = await new MemoryStore(projectMemoryLocation(PROJECT, { library: libraryLocation(mem.dir) })).read();
+      const written = view.items.find(item => item.text === '每周四发版');
+      expect(written).toMatchObject({ trust: 'trusted', source: { turn: { kind: 'human' }, actorRole: 'owner' } });
+    } finally { /* nothing to restore */ }
+  });
+
   it('does not tell a Claude session about hidden blocks and does not take them, but still reads its usage markers', async () => {
     const { mem, o } = await runtime();
     const id = await mem.add('发版改到周四');
