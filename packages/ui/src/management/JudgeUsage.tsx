@@ -32,7 +32,7 @@ export function JudgeUsageRows({read, onRead}: {read: JudgeUsageRead; onRead: ()
   const logNote = '原因在状态与诊断页底部的 daemon 日志（judge usage-unreadable）。';
   return <SettingsGroup id={settingAnchor('智能模式的判断次数')} label="智能模式的判断次数"
     action={<Button size="sm" onClick={onRead}>重新读取</Button>}
-    footer="按这台电脑的日期算，最近 14 天。发起了调用的才算一次（连不上也算）；没填 key、冷却中、到了每小时上限没判断的不算。最多晚几秒。">
+    footer={<details className="usage-counting-note"><summary>最近 14 天 · 按本机日期统计</summary><p>计入已发起的调用，包括连接失败。不计入缺少密钥、冷却期或达到小时上限而跳过的判断；数据可能延迟几秒。</p></details>}>
     {read.kind === 'loading' && <SettingsRow title="正在读取判断次数"/>}
     {read.kind === 'failed' && <SettingsRow title="判断次数读取失败" description={read.problem}/>}
     {read.kind === 'ready' && read.problem && <SettingsRow title="判断次数读取失败" description={read.problem}/>}

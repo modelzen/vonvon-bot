@@ -75,8 +75,28 @@ if (npmVersion !== pinnedNpm) throw new Error(`Installed npm ${npmVersion} is no
 await cp(npmSource, join(stage, 'npm'), { recursive: true, dereference: true });
 
 const daemonMetadata = JSON.parse(await readFile(join(daemonSource, 'package.json'), 'utf8'));
+const sdkPackage = '@anthropic-ai/claude-agent-sdk';
+const sdkVersion = daemonMetadata.devDependencies[sdkPackage];
+const sdkSource = dirname(createRequire(join(daemonSource, 'package.json')).resolve(sdkPackage));
+const installedSdk = JSON.parse(await readFile(join(sdkSource, 'package.json'), 'utf8'));
+if (installedSdk.version !== sdkVersion) throw new Error(`Installed Claude Agent SDK ${installedSdk.version} is not the pinned ${sdkVersion}. Run npm ci.`);
 await stageDaemon(daemonStage, {
   name: daemonMetadata.name, version, type: 'module', bin: daemonMetadata.bin,
   license: daemonMetadata.license, author: daemonMetadata.author,
-  dependencies: daemonMetadata.dependencies,
-});
+  dependencies: { ...daemonMetadata.dependencies, [sdkPackage]: sdkVersion },
+  bundledBackends: ['claude-agent'],
+}, { compact: true });
+// A resolvable SDK alone is insufficient: the matching native runtime must also
+// be present. Fail the build instead of offering an unusable built-in Provider.
+const sdkRequire = createRequire(join(daemonStage, 'node_modules', sdkPackage, 'package.json'));
+const runtimePackage = `${sdkPackage}-${process.platform}-${process.arch}`;
+const runtimeRoot = (sdkRequire.resolve.paths(runtimePackage) ?? []).map(path => join(path, runtimePackage));
+let runtimeFound = false;
+for (const path of runtimeRoot) {
+  try {
+    const runtime = JSON.parse(await readFile(join(path, 'package.json'), 'utf8'));
+    await access(join(path, 'claude'));
+    if (runtime.version === sdkVersion) { runtimeFound = true; break; }
+  } catch {}
+}
+if (!runtimeFound) throw new Error(`Missing staged Claude runtime ${runtimePackage}@${sdkVersion}. Run npm ci with optional dependencies.`);

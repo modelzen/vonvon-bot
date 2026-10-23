@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildRunCard } from '../src/card/run-card';
 import { RunRender } from '../src/card/run-render';
-import { buildProcessBody } from '../src/card/run-process';
+import { buildProcessBody, processTitle } from '../src/card/run-process';
 import { initialState, reduce, type Block } from '../src/card/run-state';
 
 afterEach(() => vi.useRealTimers());
@@ -53,5 +53,41 @@ describe('ordered run process', () => {
     expect(panel.elements[0]!.content).toContain('```bash\necho hi\n```');
     expect(panel.elements[0]!.content).toContain('````\n```\ninner\n```\n````');
     expect(panel.elements[0]!.content).toContain('**退出码** `1`');
+  });
+
+  it('shows a running group and its failed count together', () => {
+    const body = buildProcessBody([
+      { kind: 'tool', tool: { id: 'one', kind: 'command', title: 'pwd', status: 'error' } },
+      { kind: 'tool', tool: { id: 'two', kind: 'command', title: 'ls', status: 'running' } },
+    ]);
+    const group = body[0] as { header: { title: { content: string } } };
+    expect(group.header.title.content).toBe("<font color='grey'>2 项操作</font> <font color='red'>· 1 项失败</font>");
+    expect(JSON.stringify(body)).not.toContain('正在执行');
+  });
+
+  it('uses one failure mark when a group has finished with errors', () => {
+    const body = buildProcessBody([
+      { kind: 'tool', tool: { id: 'one', kind: 'command', title: 'pwd', status: 'error' } },
+      { kind: 'tool', tool: { id: 'two', kind: 'command', title: 'ls', status: 'done' } },
+    ]);
+    const group = body[0] as { header: { title: { content: string } } };
+    expect(group.header.title.content).toBe("<font color='grey'>2 项操作</font> <font color='red'>· 1 项失败</font> <font color='red'>×</font>");
+  });
+
+  it.each([
+    ['running', false],
+    ['done', true],
+    ['error', false],
+  ] as const)('shows the no-output search explanation only after completion (%s)', (status, explained) => {
+    const body = buildProcessBody([{ kind: 'tool', tool: {
+      id: 'search', kind: 'search', title: '联网搜索：query', status,
+    } }]);
+    const json = JSON.stringify(body);
+    expect(json.includes('搜索结果已用于作答，不单独回传')).toBe(explained);
+  });
+
+  it('keeps timeout explicit while using the shared process mark', () => {
+    expect(processTitle('idle_timeout', 3_000)).toBe("<font color='grey'>用时 3秒 · 已超时</font> <font color='orange'>!</font>");
+    expect(processTitle('error', 3_000)).toBe("<font color='grey'>用时 3秒</font> <font color='red'>×</font>");
   });
 });

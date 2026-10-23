@@ -229,3 +229,15 @@ codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次�
 | 报告 | 内容 | 说明 |
 |---|---|---|
 | [local-distribution](2026-10-20-s65/local-distribution.md) | 签名 dmg/zip、13 个 Mach-O、5 份最窄权限、arm64/Rosetta 启动与本地更新模板 | 首次错误 target 作者停止及 Rosetta 首轮未就绪均保留；未公证/发布/安装 owner app |
+
+## 2026-10-21 能力页与工具连接
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [capabilities-ux](2026-10-21-capabilities-ux/report.md) | 对照 Codex、Claude Code、OpenClaw、VS Code 官方文档，梳理 Skills 来源、工作区增删、CLI 安装授权和 MCP 管理 | 只读文档与源码；用户选择工作区优先；仅交互原型落地，未修改后端 |
+
+## 2026-10-22 Provider 设计参考
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [provider-design](2026-10-22-provider-design/report.md) | HarnessRouter、Magpie 固定源码与 UI 参考；Provider 首次准备、日常管理及群模型范围 | 方案与独立交互设计稿，等待 owner 确认；未改实际应用 |

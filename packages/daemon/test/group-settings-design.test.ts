@@ -1,7 +1,9 @@
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
 import { mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { agentViewSchema, projectViewSchema } from '@vonvon/protocol';
+import { agentViewSchema, projectViewSchema, DEFAULT_SMART_RULES } from '@vonvon/protocol';
+import { DEFAULT_SMART_PROMPT, LEGACY_DEFAULT_SMART_PROMPT } from '../src/judge/prompt';
+import { composeSmartRules } from '../src/judge/smart-file';
 import { botPaths, paths } from '../src/config/paths';
 import { saveConfig } from '../src/config/store';
 import { createSettingsOwner, materializeGroupSettings, type SettingsOwnerDeps } from '../src/admin/settings';
@@ -100,6 +102,29 @@ it('preserves the complete legacy SMART text and saves both prompt areas with CA
   expect((await owner.save(edit)).kind).toBe('saved');
   expect((await owner.save(edit)).kind).toBe('conflict');
   expect((await getProjectByName('demo'))!.smartRules).toEqual({ respond: oldSmart, newTopic: '遇到独立问题才创建' });
+});
+
+it('shows both default rule fields and preserves the other field on a partial save', async () => {
+  const owner = createSettingsOwner({...deps(), readSmartPrompt: async () => ({source: 'default', path: '/fixture/SMART.md', text: DEFAULT_SMART_PROMPT})});
+  const p = await view(owner);
+  expect(p.sections.smartRules!.stored).toEqual(DEFAULT_SMART_RULES);
+  expect(composeSmartRules(p.sections.smartRules!.stored)).toBe(p.smartPrompt!.text);
+  const result = await owner.save({scope, section: 'smartRules', revision: p.sections.smartRules!.revision, patch: {respond: '仅响应测试请求'}});
+  expect(result.kind).toBe('saved');
+  expect((await getProjectByName('demo'))!.smartRules).toEqual({respond: '仅响应测试请求', newTopic: DEFAULT_SMART_RULES.newTopic});
+});
+
+it('updates exact materialized defaults consistently in the view and runtime, preserving custom edits', async () => {
+  await mutateProject('demo', p => { p.smartRules = {respond: LEGACY_DEFAULT_SMART_PROMPT, newTopic: ''}; });
+  const owner = createSettingsOwner(deps());
+  const p = await view(owner);
+  expect(p.sections.smartRules!.stored).toEqual(DEFAULT_SMART_RULES);
+  expect(p.smartPrompt!.text).toBe(DEFAULT_SMART_PROMPT);
+  expect(composeSmartRules((await getProjectByName('demo'))!.smartRules!)).toBe(DEFAULT_SMART_PROMPT);
+  const custom = {respond: `${LEGACY_DEFAULT_SMART_PROMPT}\n只在工作时间回复`, newTopic: ''};
+  await mutateProject('demo', p => { p.smartRules = custom; });
+  expect((await view(owner)).sections.smartRules!.stored).toEqual(custom);
+  expect(composeSmartRules(custom)).toContain(custom.respond);
 });
 
 it('canonicalizes a selected workspace and rejects a duplicate or a primary outside its directory list', async () => {

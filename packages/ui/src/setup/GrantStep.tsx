@@ -13,7 +13,7 @@ import './setup.css';
 export const GRANT_POLL_MS = 5_000;
 /** Bot 设置 re-reads slowly until the user opens the grant link there, then at {@link GRANT_POLL_MS}. */
 export const GRANT_ROW_POLL_MS = 30_000;
-export const PUBLISH_NOTE = '在飞书确认后，要创建版本并发布才生效；首次运行清单会继续检测。';
+export const PUBLISH_NOTE = '在飞书确认后，要创建版本并发布才生效；这里会继续检测配置状态。';
 
 /** Runs `tick` now, then again `intervalMs` after each run settles, for as long as it resolves true.
  * The returned function stops it; a run already in flight is not interrupted. */
@@ -116,7 +116,7 @@ export function GrantStep({agentId, onOpenChecklist, onDone}: {agentId: AgentId;
     {view.note && <p className="collaboration-footnote" role="status">{view.note}</p>}
     {error && <p className="settings-operation-message" role="alert">{error}</p>}
     <div className="desktop-actions">
-      <Button onClick={onOpenChecklist}>去首次运行清单</Button>
+      <Button onClick={onOpenChecklist}>查看连接与设置</Button>
       <Button variant={view.done ? 'primary' : 'secondary'} onClick={onDone}>完成</Button>
     </div>
   </>;

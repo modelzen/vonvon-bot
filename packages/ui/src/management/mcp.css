@@ -1,0 +1,40 @@
+.mcp-panel { display: grid; gap: 12px; min-width: 0; }
+.mcp-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-inline: 12px; }
+.mcp-heading h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.mcp-heading > div, .mcp-entry-actions { display: flex; align-items: center; gap: 7px; }
+.mcp-panel > .setting-choices { justify-self: start; margin-left: 12px; }
+.mcp-list { border: 1px solid var(--color-border); border-radius: 12px; overflow: hidden; background: var(--color-surface); }
+.mcp-entry + .mcp-entry { border-top: 1px solid var(--color-border); }
+.mcp-entry > summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 60px; padding: 12px 14px; }
+.mcp-entry > summary::-webkit-details-marker { display: none; }
+.mcp-entry > summary > span { display: grid; gap: 3px; min-width: 0; }
+.mcp-entry strong { font-size: 13px; line-height: 1.5; font-weight: 500; overflow-wrap: anywhere; }
+.mcp-entry small { color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.mcp-entry > summary > svg { flex: none; color: var(--color-text-secondary); }
+.mcp-entry[open] > summary > svg { transform: rotate(180deg); }
+.mcp-entry-detail { padding: 0 14px 14px; }
+.mcp-entry-detail dl { margin: 0 0 10px; display: grid; gap: 8px; }
+.mcp-entry-detail dl > div { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; font-size: 12px; line-height: 1.5; }
+.mcp-entry-detail dt { flex: none; color: var(--color-text-secondary); }
+.mcp-entry-detail dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+.mcp-source { margin-inline: 12px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
+.mcp-source summary { cursor: pointer; }
+.mcp-source span, .mcp-source code { display: block; margin-top: 5px; overflow-wrap: anywhere; font-size: 12px; }
+.mcp-empty { margin: 0; padding: 18px 14px; color: var(--color-text-secondary); font-size: 12px; }
+.mcp-note { margin: 0; color: var(--color-text-secondary); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.mcp-panel > .mcp-note { padding-inline: 12px; }
+.mcp-form, .mcp-authorization { display: grid; gap: 14px; min-width: 0; }
+.mcp-form input, .mcp-form textarea, .mcp-authorization textarea { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-surface); color: var(--color-text); font: inherit; font-size: 13px; line-height: 1.5; }
+.mcp-form textarea, .mcp-authorization textarea { resize: vertical; }
+.mcp-form-advanced > summary { margin-bottom: 10px; cursor: pointer; font-size: 12px; color: var(--color-text-secondary); }
+.mcp-env-row { display: grid; grid-template-columns: 1fr 1fr 28px; align-items: center; gap: 7px; margin-bottom: 8px; }
+.mcp-remove-env { width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 5px; background: none; color: var(--color-text-secondary); cursor: pointer; }
+.mcp-remove-env:focus-visible, .mcp-entry summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.mcp-authorization > p { margin: 0; font-size: 13px; line-height: 1.6; }
+.mcp-authorization textarea { font-family: var(--font-mono, monospace); font-size: 12px; }
+@media (hover: hover) and (pointer: fine) { .mcp-entry > summary:hover, .mcp-remove-env:not(:disabled):hover { background: var(--color-surface-muted); } }
+
+.mcp-entry > summary:active { background: var(--color-surface-muted); }
+.mcp-entry-detail { margin-inline: 14px; padding: 12px 0 14px; border-top: 1px solid var(--color-border); }
+.mcp-heading > div { flex-wrap: wrap; justify-content: flex-end; }
+.mcp-source summary:focus-visible, .mcp-form-advanced summary:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 3px; border-radius: 3px; }
