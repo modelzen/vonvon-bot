@@ -4,7 +4,7 @@ import { existsSync, rmSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { paths, botPaths, useBotDir } from '../src/config/paths';
 import { seedBots } from './helpers/bot-fixture';
-import { addProject } from '../src/project/registry';
+import { addProject, mutateProject } from '../src/project/registry';
 import { upsertSession } from '../src/bot/session-store';
 import {
   createAdminService,
@@ -164,6 +164,7 @@ describe('createReadonlyAdminService · 只读方法（显式路径，不碰全�
     const p = projects[0]!;
     expect(p.name).toBe('proj-a');
     expect(p.kind).toBe('multi');
+    expect(p.enabled).toBe(true); // Old stored projects without the flag are enabled.
     expect(p.origin).toBe('created'); // 缺省回填
     expect(p.mode).toBe('write');
     expect(p.guestMode).toBe('write'); // s15c: deprecated mirror of the one tier
@@ -173,6 +174,18 @@ describe('createReadonlyAdminService · 只读方法（显式路径，不碰全�
     expect(p.backend).toBe('codex-appserver'); // 显式设的后端原样透传
     expect(p.allowedUsersCount).toBe(1);
     expect(p.sessionCount).toBe(2); // oc_other 的 t3、停用的 t1#guest / t2#admin 不算
+  });
+
+  it('listProjects：读取外部保存的停用状态，恢复旧项目的缺省启用状态', async () => {
+    const location = {file: botPaths(BOT_A).projectsFile, dataRoot: paths.appDir};
+    try {
+      await mutateProject('proj-a', project => {project.enabled = false;}, undefined, location);
+      expect((await service.listProjects(BOT_A))[0]?.enabled).toBe(false);
+      expect((await service.listProjects(BOT_B))[0]?.enabled).toBe(true);
+    } finally {
+      await mutateProject('proj-a', project => {delete project.enabled;}, undefined, location);
+    }
+    expect((await service.listProjects(BOT_A))[0]?.enabled).toBe(true);
   });
 
   it('listProjects：per-bot 隔离（B 的项目读不到 A 的数据），且 effective 默认后端回填', async () => {

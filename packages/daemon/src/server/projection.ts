@@ -15,7 +15,7 @@ export function projectState(state: AdminState, previous: DesktopSnapshot, pendi
       continue;
     }
     // A 智能 group's `response` is always mention and means nothing: it has no 免@ (s25c).
-    for (const project of bot.projects) memberships.push({ id: membershipIdSchema.parse(JSON.stringify([bot.appId, project.chatId])), agentId, groupId: groupIdSchema.parse(project.chatId), name: project.name, ...(project.avatarDataUrl ? { avatarDataUrl: project.avatarDataUrl } : {}), directory: project.cwd, ...(project.directoryProblem ? { directoryProblem: project.directoryProblem } : {}), backend: project.backend, conversation: modeToConversation(project.kind), response: project.noMention ? 'all' : 'mention', permission: { administrator: project.mode, member: project.mode, network: project.network }, stale: false });
+    for (const project of bot.projects) memberships.push({ id: membershipIdSchema.parse(JSON.stringify([bot.appId, project.chatId])), agentId, groupId: groupIdSchema.parse(project.chatId), name: project.name, ...(project.avatarDataUrl ? { avatarDataUrl: project.avatarDataUrl } : {}), directory: project.cwd, ...(project.directoryProblem ? { directoryProblem: project.directoryProblem } : {}), backend: project.backend, ...(project.enabled === undefined ? {} : { enabled: project.enabled }), conversation: modeToConversation(project.kind), response: project.noMention ? 'all' : 'mention', permission: { administrator: project.mode, member: project.mode, network: project.network }, stale: false });
   }
   const groups = new Map<string, Group>();
   for (const member of memberships) {
