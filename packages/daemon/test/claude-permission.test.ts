@@ -16,6 +16,20 @@ const dirs: string[] = [];
 afterEach(async () => { vi.restoreAllMocks(); await Promise.all(dirs.splice(0).map(p => rm(p, { recursive: true, force: true }))); });
 const nativeAccess = (native: Record<string, unknown>) => claudeAccess('full', true, cwd, cwd, undefined, native);
 describe('Claude native permission boundaries', () => {
+  it('uses literal absolute SDK rule prefixes and filesystem guards', () => {
+    expect(guardRules(['/workspace'])).toEqual([
+      'Edit(//workspace/.mcp.json)', 'Edit(//workspace/.claude/settings.json)',
+      'Edit(//workspace/.claude/settings.local.json)', 'Edit(//workspace/.claude/skills/**)',
+      'Edit(//workspace/.claude/commands/**)', 'Edit(//workspace/.claude/agents/**)',
+      'Edit(//workspace/.codex/**)', 'Edit(//workspace/.agents/skills/**)',
+    ]);
+    expect(guardPaths(['/workspace'])).toEqual([
+      '/workspace/.mcp.json', '/workspace/.claude/settings.json',
+      '/workspace/.claude/settings.local.json', '/workspace/.claude/skills',
+      '/workspace/.claude/commands', '/workspace/.claude/agents',
+      '/workspace/.codex', '/workspace/.agents/skills',
+    ]);
+  });
   it.each(['plan', 'auto'] as const)('runs %s natively and resumes the appropriate mode after confirmation', permissionMode => {
     const access = nativeAccess({ permissionMode });
     expect(permissionOptions(access).permissionMode).toBe(permissionMode);
@@ -371,6 +385,9 @@ describe('Claude configuration and read isolation', () => {
         { pattern: '**/*.json', path: denied },
         { pattern: `${dir}/**/*.json` },
         { pattern: '**/../private/*.json' },
+        { pattern: '{../vh,zz}/bots/**' },
+        { pattern: '{../vh/bots,zz}/**' },
+        { pattern: 'safe..name/*.json' },
       ]) expect(await decide(a, call('Glob', input), origin)).toMatchObject({ kind: 'deny' });
       for (const input of [{ pattern: '**/*.ts' }, { pattern: '*.ts', path: work }]) {
         expect(await decide(a, call('Glob', input), origin)).toEqual({ kind: origin === 'hook' ? 'continue' : 'allow' });

@@ -38,13 +38,21 @@ export async function linuxReadScope(scope: ReadScope, realCwd: string): Promise
     if (!inside(canonical, realCwd) || canonical === realCwd) { deny.push(path); continue; }
     let cursor = path;
     for (const component of relative(canonical, realCwd).split(sep)) {
-      const entries = await readdir(cursor);
+      let entries: string[];
+      try { entries = await readdir(cursor); }
+      catch (error) {
+        log.warn('claude-read-scope', 'list-failed', { error });
+        throw new ReadScopeError('没法读取数据目录里的群列表，只读、工作区可写档暂时不能启动。请主人检查数据目录的访问权限。');
+      }
       if (entries.length > 2000) {
         log.warn('claude-read-scope', 'too-many-entries', { count: entries.length });
         throw new ReadScopeError('数据目录里的群太多，Linux 上的只读、工作区可写档没法把它们一一隔开。请主人在群详情页把这个群的工作区换到数据目录以外。');
       }
       for (const entry of entries) {
-        if (entry !== component) deny.push(...await pathsFor(join(cursor, entry), 'deny'));
+        if (entry !== component) {
+          const sibling = join(cursor, entry);
+          deny.push(...(await pathsFor(sibling, 'deny')).filter(candidate => candidate === sibling || !inside(candidate, realCwd)));
+        }
       }
       cursor = join(cursor, component);
     }

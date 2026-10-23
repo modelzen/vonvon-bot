@@ -62,7 +62,7 @@ describe('provider 权限表', () => {
     expect(generic.tiers(mac).map(info => info.native)).toEqual(['', '', '']);
     expect(codex.strength(mac)).toBe('系统沙箱管住命令的读、写和联网：工作区以外的文件读不到，也改不了。');
     expect(codex.strength({ platform: 'linux', fullOnly: '原因' })).toBe('原因');
-    expect(claude.strength(mac)).toBe('只读、工作区可写档下，命令和读写文件的工具都挡得住 vonvon 存的别的群、别的项目、私聊的资料（包括记忆）；工作区和 bot 的 skill 读得到。');
+    expect(claude.strength(mac)).toBe('只读、工作区可写档下，命令和读写文件的工具都挡得住 vonvon 存的别的群、别的项目、私聊的资料（包括记忆）；工作区和 bot 的 skill 读得到。高级设置选「跳过权限检查」时，即使命令沙箱开着，也不限制读取别的群、项目和私聊资料。');
     expect(claude.strength({ platform: 'linux' })).toContain('会话开着时新建的群、项目、bot 目录，命令读得到');
     expect(claude.strength(mac)).not.toContain('目录名看得到');
     expect(generic.strength(mac)).toBe('这个 provider 没有说明它能挡到什么程度。');
@@ -149,7 +149,8 @@ describe('Claude 自定义', () => {
   it('中文说明、完全访问忽略网络、旧值转换', () => {
     expect(claude.describe({ permissionMode: 'default', network: 'all' })).toBe('权限模式：手动确认（default）；命令沙箱：开；网络：全部');
     expect(claude.describe({ permissionMode: 'acceptEdits', network: 'off' })).toBe('权限模式：自动接受编辑（acceptEdits）；命令沙箱：开；网络：关');
-    expect(claude.describe({ permissionMode: 'bypassPermissions' })).toBe('权限模式：跳过权限检查（bypassPermissions）；命令沙箱：关');
+    expect(claude.describe({ permissionMode: 'bypassPermissions' })).toBe('权限模式：跳过权限检查（bypassPermissions）；命令沙箱：关；不限制读取别的群、项目和私聊资料');
+    expect(claude.describe({ permissionMode: 'bypassPermissions', sandbox: true })).toBe('权限模式：跳过权限检查（bypassPermissions）；命令沙箱：开；不限制读取别的群、项目和私聊资料');
     expect(claude.fromLegacy('qa', true)).toEqual({ permissionMode: 'default', network: 'all', sandbox: true, domains: [] });
     expect(claude.fromLegacy('write', false)).toEqual({ permissionMode: 'acceptEdits', network: 'off', sandbox: true, domains: [] });
   });

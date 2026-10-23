@@ -205,12 +205,11 @@ function readTarget(tool: string, input: Record<string, unknown>, cwd: string): 
   const path = input.file_path ?? input.notebook_path ?? input.path ?? cwd;
   if (typeof path !== 'string') return undefined;
   if (tool !== 'Glob') return { path, recursive: tool === 'Grep' };
-  if (typeof input.pattern !== 'string' || input.pattern.includes('\\')) return undefined;
+  if (typeof input.pattern !== 'string' || input.pattern.includes('\\') || input.pattern.includes('..')) return undefined;
   const pattern = input.pattern;
   const parts = pattern.split(sep);
   const dynamic = parts.findIndex(part => /[*?[\]{}()]/.test(part));
   if (dynamic < 0) return { path: isAbsolute(pattern) ? pattern : `${path}${sep}${pattern}`, recursive: false };
-  if (parts.slice(dynamic).includes('..')) return undefined;
   const prefix = parts.slice(0, dynamic).join(sep);
   return { path: isAbsolute(pattern) ? prefix || sep : prefix ? `${path}${sep}${prefix}` : path, recursive: true };
 }

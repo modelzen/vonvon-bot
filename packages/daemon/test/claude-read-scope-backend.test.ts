@@ -1,3 +1,4 @@
+import * as fs from 'node:fs/promises';
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -5,6 +6,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ClaudeAgentBackend, type ClaudeSdkFacade } from '../src/agent/claude-agent/backend';
 import { linuxReadScope, realScope, ReadScopeError } from '../src/agent/claude-agent/read-scope';
 import { log } from '../src/core/logger';
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, readdir: vi.fn(actual.readdir) };
+});
 
 const dirs: string[] = [];
 const nativePlatform = process.platform;
@@ -56,6 +62,24 @@ describe('Claude read scope preparation', () => {
     for (const parent of [join(root, 'projects'), join(root, 'projects/A'), join(root, 'projects/A/groups'), cwd]) expect(linux.deny).not.toContain(parent);
     expect(coarse.deny).toContain(join(root, 'projects'));
     expect(linux.allow).toEqual([cwd]);
+  });
+  it('hides failed enumeration behind a Chinese error and logs the cause', async () => {
+    const { cwd, scope } = await layout();
+    const coarse = await realScope(scope, cwd, cwd);
+    const error = Object.assign(new Error("EACCES: permission denied, scandir '/private/data'"), { code: 'EACCES' });
+    vi.spyOn(fs, 'readdir').mockRejectedValueOnce(error);
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    await expect(linuxReadScope(coarse, cwd)).rejects.toEqual(new ReadScopeError('没法读取数据目录里的群列表，只读、工作区可写档暂时不能启动。请主人检查数据目录的访问权限。'));
+    expect(warn).toHaveBeenCalledWith('claude-read-scope', 'list-failed', { error });
+  });
+  it('keeps sibling links without denying their workspace or ancestor targets', async () => {
+    const { root, cwd, scope, g2 } = await layout();
+    const groups = join(root, 'projects/A/groups');
+    const alias = join(groups, 'alias'), up = join(groups, 'up'), other = join(groups, 'other');
+    await symlink(cwd, alias); await symlink(join(root, 'projects/A'), up); await symlink(g2, other);
+    const linux = await linuxReadScope(await realScope(scope, cwd, cwd), cwd);
+    expect(linux.deny).toEqual(expect.arrayContaining([alias, up, other, g2]));
+    for (const path of [cwd, groups, join(root, 'projects/A'), join(root, 'projects')]) expect(linux.deny).not.toContain(path);
   });
   it('rejects a level with 2001 entries and logs its count', async () => {
     const { root, cwd, scope } = await layout();
