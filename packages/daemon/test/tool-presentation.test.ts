@@ -5,8 +5,8 @@ import { toolPresentation } from '../src/card/tool-presentation';
 
 describe('toolPresentation', () => {
   it.each([
-    ['running', "<font color='grey'>运行命令</font> <font color='blue'>◌</font>"],
-    ['done', "<font color='grey'>运行命令</font> <font color='green'>✓</font>"],
+    ['running', "<font color='grey'>运行命令</font>"],
+    ['done', "<font color='grey'>运行命令</font>"],
     ['error', "<font color='grey'>运行命令</font> <font color='red'>×</font>"],
   ] as const)('keeps a generic %s command out of its semantic heading', (status, header) => {
     const command = 'npm test -- --runInBand';
@@ -24,9 +24,9 @@ describe('toolPresentation', () => {
   });
 
   it.each([
-    ["sed -n '1,240p' /Users/clay/.agents/skills/agent-reach/SKILL.md", 'setting-inter_outlined', "<font color='grey'>读取 agent-reach 技能</font> <font color='green'>✓</font>"],
-    ["sed -n '1,240p' '/tmp/a file.txt'", 'wiki-book_outlined', "<font color='grey'>读取 a file.txt</font> <font color='green'>✓</font>"],
-    ['head -n 20 -- "/tmp/notes one.md"', 'wiki-book_outlined', "<font color='grey'>读取 notes one.md</font> <font color='green'>✓</font>"],
+    ["sed -n '1,240p' /Users/clay/.agents/skills/agent-reach/SKILL.md", 'setting-inter_outlined', "<font color='grey'>读取 agent-reach 技能</font>"],
+    ["sed -n '1,240p' '/tmp/a file.txt'", 'wiki-book_outlined', "<font color='grey'>读取 a file.txt</font>"],
+    ['head -n 20 -- "/tmp/notes one.md"', 'wiki-book_outlined', "<font color='grey'>读取 notes one.md</font>"],
   ])('recognizes a simple read without repeating its command: %s', (command, icon, header) => {
     const presentation = toolPresentation({ title: command, kind: 'command', status: 'done' });
 
@@ -43,7 +43,7 @@ describe('toolPresentation', () => {
       icon: 'search_outlined',
       action: '搜索网页',
       subject: 'OpenAI 3 PM',
-      header: "<font color='grey'>搜索网页 OpenAI 3 PM</font> <font color='green'>✓</font>",
+      header: "<font color='grey'>搜索网页 OpenAI 3 PM</font>",
       command,
     }));
     expect(presentation.header).not.toContain('mcporter');
@@ -56,7 +56,7 @@ describe('toolPresentation', () => {
       icon: 'plugin_outlined',
       action: '使用',
       subject: 'lark 集成',
-      header: "<font color='grey'>使用 lark 集成</font> <font color='blue'>◌</font>",
+      header: "<font color='grey'>使用 lark 集成</font>",
       command,
     }));
   });
@@ -73,7 +73,7 @@ describe('toolPresentation', () => {
     expect(toolPresentation({ title: command, kind: 'command', status: 'done' })).toEqual(expect.objectContaining({
       icon: RUNTIME_TERMINAL_ICON,
       action: '运行命令',
-      header: "<font color='grey'>运行命令</font> <font color='green'>✓</font>",
+      header: "<font color='grey'>运行命令</font>",
       command,
     }));
   });
@@ -83,7 +83,7 @@ describe('toolPresentation', () => {
 
     expect(toolPresentation({ title: command, kind: 'command', status: 'done' })).toEqual(expect.objectContaining({
       icon: 'search_outlined',
-      header: "<font color='grey'>搜索网页 OpenAI | Anthropic</font> <font color='green'>✓</font>",
+      header: "<font color='grey'>搜索网页 OpenAI | Anthropic</font>",
       command,
     }));
   });
@@ -95,10 +95,10 @@ describe('toolPresentation', () => {
   });
 });
 
-it('uses one native Markdown status symbol mapping for every process state', () => {
+it('omits routine state marks and keeps colored marks for attention states', () => {
   expect(['running', 'completed', 'failed', 'stopped', 'waiting', 'unknown'].map(status =>
     statusSymbol(status as Parameters<typeof statusSymbol>[0]))).toEqual([
-    "<font color='blue'>◌</font>", "<font color='green'>✓</font>", "<font color='red'>×</font>",
-    "<font color='grey'>□</font>", "<font color='orange'>Ⅱ</font>", "<font color='orange'>?</font>",
+    '', '', "<font color='red'>×</font>",
+    "<font color='grey'>□</font>", "<font color='orange'>Ⅱ</font>", "<font color='orange'>!</font>",
   ]);
 });
