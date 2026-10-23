@@ -106,6 +106,8 @@ export interface AddInput {
   actor: MemoryActor;
   /** 缺省 `add`；移层时是 `promote` / `move` */
   eventKind?: Extract<MemoryEventKind, 'add' | 'promote' | 'move'>;
+  /** 提交点前同步调一次（工具的 commit guard 接这里）：抛错就不写。拿到互斥、查完上限和重复之后、写事件之前 */
+  beforeCommit?: () => void;
 }
 export interface EditInput {
   itemId: string;
@@ -113,8 +115,9 @@ export interface EditInput {
   text?: string;
   branch?: string;
   actor: MemoryActor;
+  beforeCommit?: () => void;
 }
-export interface ItemChange { itemId: string; revision: number; actor: MemoryActor }
+export interface ItemChange { itemId: string; revision: number; actor: MemoryActor; beforeCommit?: () => void }
 
 export interface ImportEntry {
   text: string;
@@ -540,6 +543,7 @@ export class MemoryStore {
       }
       if (this.usageOf(state).used >= this.location.limit) return this.fullRefusal(state);
       const resolved = resolveBranch(state.branches, input.branch, { existingOnly: input.existingOnly ?? false });
+      input.beforeCommit?.();
       const item: MemoryItem = {
         id: this.newItemId(state), scope: this.location.scope, text, branch: resolved.name, state: 'active', trust: input.trust,
         source: input.source, createdAt: tx.now, updatedAt: tx.now, revision: 1,
@@ -567,6 +571,7 @@ export class MemoryStore {
       if (input.text !== undefined) { const bad = this.checkText(text); if (bad) return bad; }
       const resolved = input.branch === undefined ? { name: found.branch, newBranch: false } : resolveBranch(tx.state.branches, input.branch);
       if (text === found.text && resolved.name === found.branch) return { ok: true, item: found, branchApplied: found.branch, usage: this.usageOf(tx.state) };
+      input.beforeCommit?.();
       // 非主人、非桌面端改了文本，原来的"可信"不再成立
       const manager = input.actor.role === 'owner' || input.actor.role === 'admin' || input.actor.role === 'desktop' || input.actor.role === 'cli';
       const trust = text !== found.text && !manager ? 'untrusted' : found.trust;
@@ -597,6 +602,7 @@ export class MemoryStore {
     return this.transact(tx => {
       const found = this.target(tx, input.itemId, input.revision);
       if (!('id' in found)) return found;
+      input.beforeCommit?.();
       return this.setState(tx, found, 'archive', input.actor, input.reason ? { reason: input.reason } : {});
     });
   }

@@ -1,4 +1,6 @@
-import type { AgentEntries, AgentPlace, TurnScope } from '../agent/entry/registry';
+import type { AgentEntries, AgentPlace, TurnMemory, TurnScope } from '../agent/entry/registry';
+import { createHiddenBlockFilter, escapeInboundMarkers, memoryNonce, noteMissedBlocks, type FoundBlocks } from './hidden-blocks';
+import type { MemoryWriter } from './memory-writer';
 import { redactAgentEvents } from '../core/token-redact';
 import { buildJudgeFacts, judgeFactRead, sameNameWord } from './judge-facts';
 import { bareText, smartSalience, type Salience, type SalienceDeps } from './salience';
@@ -519,7 +521,11 @@ export interface QueuedTurn {
   /** The smart mode joined in on its own (TurnExtra.initiative): its card goes if it ends with nothing to say (s25b). */
   initiative?: true;
   wake?: TurnExtra['wake'];
+  /** The trigger message as typed, for the memory provenance check (记忆设计 §3.2); absent for a bot's message and a retry. */
+  memoryTrigger?: MemoryTrigger;
 }
+/** What the memory write rules look at in the trigger message: that a person typed it, and its own words (no quote, forward or record block). */
+export interface MemoryTrigger { typed: boolean; text: string }
 
 /** A resumed session's title for its record and topic. Without a native name
  * the backend's preview is the first prompt as the bot wove it, record block
@@ -1033,9 +1039,10 @@ export function createOrchestrator(
   /** `droppedFile`: where a shutdown keeps the queued messages it drops (s18c). No default: without it, nothing is
    * kept or answered (tests, and every caller but `daemon run`). */
   // Only daemon run supplies judgeUsageFile; tests that omit it do not persist usage.
-  options?: { entries?: AgentEntries; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention },
+  options?: { entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention },
 ): Orchestrator {
   const entries = options?.entries;
+  const memory = options?.memory;
   const bindingBot = options?.bot ? { ...options.bot } : undefined;
   /** Lazily-constructed backends by id — one instance per backend for the whole
    * bridge (mirrors the old single-instance shape; codex stays the default). */
@@ -1279,6 +1286,31 @@ export function createOrchestrator(
     catch (error) { entry.revoke('start-failed'); throw error; }
   }
 
+  /**
+   * 助手正文里的隐藏块（记忆设计 §3.4）：所有出口都剥；只有群和私聊里普通的一轮、会话用的是 Codex（Claude 有工具，不认隐藏块）
+   * 时，才在 `done` 之前解析最后一条消息里的块。评论里不解析（`applyBlocks` 里按位置再关一道）。
+   */
+  function hiddenBlockFilter(thread: AgentThread, backendId: string | undefined, turn: TurnMemory | undefined) {
+    const parse = memory && turn && turn.place.kind !== 'doc' && backendId !== 'claude-agent';
+    return createHiddenBlockFilter(parse ? { onTurnEnd: found => applyHiddenBlocks(thread, turn, found) } : {});
+  }
+  async function applyHiddenBlocks(thread: AgentThread, turn: TurnMemory, found: FoundBlocks): Promise<void> {
+    if (!memory) return;
+    const key = thread.sessionId;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      // 写不进去也不拖住这一轮的收尾；超时以后轮次一结束，提交点前的重判会把这次写入拒掉
+      const outcome = await Promise.race([
+        memory.applyBlocks({ found, nonce: memoryNonce(key), ctx: { turn: turn.turn, ...(turn.triggerMessageId ? { triggerMessageId: turn.triggerMessageId } : {}) } }),
+        new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), 15_000); timer.unref?.(); }),
+      ]);
+      if (outcome) noteMissedBlocks(key, outcome.missed);
+      else log.warn('memory', 'hidden-block-timeout', {});
+    } catch (error) {
+      log.fail('memory.hidden-block', error, {});
+    } finally { clearTimeout(timer); }
+  }
+
   function trackSession(key: string, thread: AgentThread): void {
     if (shuttingDown) {
       void trackTask(thread.close());
@@ -1513,6 +1545,11 @@ export function createOrchestrator(
     return (msg.rawContentType === 'text' || msg.rawContentType === 'post') && msg.content.trim().length > 0
       && !messageHasImages(msg) && !messageHasFiles(msg)
       && !msg.mentionAll && !msg.mentions.some((m) => !m.isBot);
+  }
+  /** A turn's trigger for the memory write rules; none for a bot's message or a retry (neither is a person typing). */
+  function memoryTriggerOf(msg: NormalizedMessage, extra: Partial<Pick<TurnExtra, 'replayText' | 'wake' | 'initiative'>> | undefined): { memoryTrigger?: MemoryTrigger } {
+    if (fromBot(msg) || extra?.replayText !== undefined) return {};
+    return { memoryTrigger: { typed: typedCandidate(msg), text: msg.content.trim() } };
   }
   /** Who sent a message, as the topic registry records it. */
   function senderOf(msg: NormalizedMessage): TopicPerson {
@@ -2221,7 +2258,7 @@ export function createOrchestrator(
       } else noteNotReplied(msg, 'group-updating');
       return;
     }
-    const text = wake?.text ?? msg.content.trim();
+    const text = wake?.text ?? escapeInboundMarkers(msg.content.trim());
     if (sessionModeOf(project) !== 'smart') { noteNotReplied(msg, 'group-updating'); return; }
     // A list changed during judgement must still exclude this bot before it starts a turn.
     if (wake && hasAudience(project) && !(wake.sender.openId && isUserAllowedInProject(cfg, project, wake.sender.openId))) {
@@ -2448,7 +2485,7 @@ export function createOrchestrator(
       }
     }
 
-    const text = msg.content.trim();
+    const text = escapeInboundMarkers(msg.content.trim());
     const cmd = parseCommand(text);
     // `/goal <objective>` anywhere in the message → a persistent autonomous goal
     // run (OKR reaction as the receipt, streaming cards, then a terminal card).
@@ -3176,6 +3213,7 @@ export function createOrchestrator(
         origin: originFor(msg, flat),
         ...(extra?.initiative ? { initiative: true as const } : {}),
         wake: extra?.wake,
+        ...memoryTriggerOf(msg, extra),
       });
       dropRetries(sessionKey);
       log.info('intake', 'queued', { depth: existing.queue.length });
@@ -3513,6 +3551,7 @@ export function createOrchestrator(
           ...(recreateReason && !unused ? { sessionNotice: sessionChangeNotice(recreateReason, Boolean(topicId)) } : {}),
           ...(extra?.initiative ? { initiative: true as const } : {}),
           wake: extra?.wake,
+          ...memoryTriggerOf(msg, extra),
         };
         if (recreateReason) log.info('agent', 'session-changed', { sessionKey, reason: recreateReason, ...(unused ? { unused } : {}) });
         if (goal) await trackRun(launchGoalRun(launchOpts));
@@ -3845,6 +3884,7 @@ export function createOrchestrator(
           : { id: msg.messageId, from: senderOf(msg), at: msg.createTime || undefined, text: msg.content },
         ...(extra?.initiative ? { initiative: true as const } : {}),
         wake: extra?.wake,
+        ...memoryTriggerOf(msg, extra),
         backendId: be.id,
         titleJobKey,
         titleSource,
@@ -6590,6 +6630,7 @@ export function createOrchestrator(
     /** Whether the group was smart when this run started. */
     smart?: true;
     wake?: TurnExtra['wake'];
+    memoryTrigger?: MemoryTrigger;
     /** true on first reply that creates the topic; subsequent replies use replyTo only */
     replyInThread?: boolean;
     thread: AgentThread;
@@ -6851,6 +6892,7 @@ export function createOrchestrator(
     let queuedCard = slot.queuedCard;
     reaction?.started(); // slot acquired → flip OneSecond → Typing
     let turnScope: TurnScope | undefined;
+    let turnMemory: TurnMemory | undefined;
     let askTurn: AskTurn | undefined;
     let firstCardSent = false;
     let titleStart: Promise<boolean> | undefined;
@@ -6979,6 +7021,7 @@ export function createOrchestrator(
         from: opts.from,
         ...(opts.initiative ? { initiative: opts.initiative } : {}),
         wake: opts.wake,
+        ...(opts.memoryTrigger ? { memoryTrigger: opts.memoryTrigger } : {}),
       };
       noted = currentTurn;
       // Recall notes a turn of this run said; only a queued turn says the newer ones (s15).
@@ -6994,7 +7037,9 @@ export function createOrchestrator(
           requesterOpenId: currentTurn.requesterOpenId, requesterKind: currentTurn.requesterKind,
           triggerMessageId: currentTurn.seen?.id, retry: currentTurn.replayText !== undefined,
           initiative: Boolean(currentTurn.initiative), wake: Boolean(currentTurn.wake),
+          ...(currentTurn.memoryTrigger ? { typed: currentTurn.memoryTrigger.typed, triggerText: currentTurn.memoryTrigger.text } : {}),
         });
+        turnMemory = turnScope ? entries?.memoryTurn(opts.thread) : undefined;
         dropRetries(topicThreadId); // an older card's [重试] would replay out of order
         if (titleTurnAttempted && !titleStart && opts.titleJobKey) {
           // A prior turn/start was rejected before turn_started. If a queued
@@ -7265,7 +7310,7 @@ export function createOrchestrator(
           fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) originalInterrupt(); },
         });
         const guarded = withIdleTimeout(
-          redactAgentEvents(run.events),
+          redactAgentEvents(run.events, hiddenBlockFilter(opts.thread, opts.backendId, turnMemory)),
           idleMs,
           () => {
             timedOut = true;
@@ -7937,7 +7982,7 @@ export function createOrchestrator(
       // Child questions can outlive a parent turn; their watchdog holds do too.
       const idlePause = createIdlePause();
       state.idlePause = idlePause;
-      const guarded = withIdleTimeout(redactAgentEvents(run.events), GOAL_IDLE_MS, () => {
+      const guarded = withIdleTimeout(redactAgentEvents(run.events, createHiddenBlockFilter()), GOAL_IDLE_MS, () => {
         idledOut = true;
       }, stop, run.lastActivity, idlePause);
       const originalInterrupt = state.interrupt;
@@ -8232,7 +8277,7 @@ export function createOrchestrator(
             let stopAsk!: () => void;
             const askStopped = new Promise<void>(resolve => { stopAsk = resolve; });
             const idleMs = currentIdleMs();
-            const guarded = withIdleTimeout(redactAgentEvents(run.events), idleMs, () => {
+            const guarded = withIdleTimeout(redactAgentEvents(run.events, createHiddenBlockFilter()), idleMs, () => {
               timedOut = true;
             }, askStopped, run.lastActivity);
             try {

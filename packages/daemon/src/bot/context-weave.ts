@@ -1,3 +1,4 @@
+import { escapeInboundMarkers } from './hidden-blocks';
 import type { LarkChannel, NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import { log } from '../core/logger';
 import { labelScope } from '../config/scopes';
@@ -831,7 +832,8 @@ function replaceKey(text: string, key: string, by: string): string {
  */
 export function sanitizeContext(s: string, maxLen: number, oneLine: boolean, links = false): string {
   if (!s) return '';
-  let out = s
+  // vonvon's own markers (hidden blocks, injected-section tags) inside someone else's words are made unparseable (记忆设计 §3.4).
+  let out = escapeInboundMarkers(s)
     // eslint-disable-next-line no-control-regex
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '') // drop control chars (keep \t \n \r)
     .replace(/\r\n?/g, '\n');
