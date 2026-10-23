@@ -74,7 +74,6 @@ export async function prepareNewGroupSettings(input:{backend:string; kind:Sessio
   }
   return {
     modelAccess,
-    profile:{persona:'',memory:'',inheritPersona:true,inheritMemory:true},
     skills:{disabledPaths:[]},
     presentation:{voiceEnabled:true,showToolCalls:false,showModel:'running',completionMode:'manual',longTaskMinutes:5},
     smartRules:{...DEFAULT_SMART_RULES},

@@ -69,3 +69,10 @@
 @media (prefers-contrast: more) {
   .group-design-tabs > button[aria-current=page], .group-bot-picker > button[aria-pressed=true] { outline: 1px solid currentColor; outline-offset: -1px; }
 }
+.group-project-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 2px; font-size: 12px; color: var(--color-text-secondary); }
+.project-page-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+.project-binding-list { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 4px; }
+.project-binding { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 6px 12px; border: 0; border-radius: 8px; background: var(--color-surface-muted); color: var(--color-text); font: inherit; text-align: left; }
+.project-binding > small { margin-left: auto; color: var(--color-text-tertiary); font-size: 11px; }
+.project-binding > small + * { flex: none; }
+.project-binding:disabled { opacity: .7; }

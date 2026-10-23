@@ -4,6 +4,8 @@ import type { HostSettings, SettingsScope, SettingsSave } from '../../admin/sett
 import type { JoinedGroups } from '../../admin/groups';
 import { settingsGet, settingsSet, settingsAccess, feishuGroups, feishuMembers, type FeishuMembers } from '../../admin/structured-commands';
 import type { Project } from '../../project/registry';
+import type { MemoryWriter } from '../../bot/memory-writer';
+import { createMemoryTools } from './memory-tools';
 import { sessionInfoTool, ToolRefusal, type AgentTool, type ToolContext } from './tools';
 
 class NoWriteResult extends Error { constructor(readonly result: SettingsSave) { super('No write'); } }
@@ -14,6 +16,8 @@ export function createCommandTools(deps: {
   projects(): Promise<Project[]>;
   groups(cursor?: string): Promise<JoinedGroups>;
   members(chatId: string, cursor?: string): Promise<FeishuMembers>;
+  /** 给了就多注册 memory_add / memory_update / memory_forget / memory_list（§3.3） */
+  memory?: MemoryWriter;
 }): AgentTool[] {
   const denied = () => new ToolRefusal({ ok: false, code: 'refused', message: '目标不存在或没有权限。' });
   async function visible(scope: SettingsScope, ctx: ToolContext) {
@@ -102,5 +106,5 @@ export function createCommandTools(deps: {
       if (!(ctx.admin && ctx.place.kind === 'p2p') && (ctx.place.kind !== 'group' || chatId !== ctx.place.chatId)) throw denied();
       return result;
     },
-  }];
+  }, ...(deps.memory ? createMemoryTools(deps.memory) : [])];
 }

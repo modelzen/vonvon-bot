@@ -3,6 +3,7 @@ import { NotWiredYetError } from '../admin/service';
 import { GroupUpstreamError, InvalidGroupInput } from '../admin/groups';
 import { SettingsInputError } from '../admin/settings-parse';
 import { CodexSetupConflict } from '../agent/codex-appserver/setup';
+import { LibraryError } from '../project/library';
 
 export class RpcError extends Error {
   constructor(readonly code: string, message: string) { super(message); }
@@ -13,7 +14,7 @@ export function unsupported(): never {
 
 export function getRpcErrorCode(error: unknown): string {
   if (error instanceof RpcError) return error.code;
-  if (error instanceof AdminWriteError || error instanceof CodexSetupConflict) return 'conflict';
+  if (error instanceof AdminWriteError || error instanceof CodexSetupConflict || error instanceof LibraryError) return 'conflict';
   if (error instanceof GroupUpstreamError) return 'upstream';
   if (error instanceof InvalidGroupInput || error instanceof SettingsInputError || error instanceof URIError) return 'invalid_request';
   if (error instanceof NotWiredYetError) return 'unsupported';

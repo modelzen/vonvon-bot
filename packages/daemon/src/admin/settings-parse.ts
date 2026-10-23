@@ -7,6 +7,8 @@ type Rule = (value: unknown) => boolean;
 const bool: Rule = value => typeof value === 'boolean';
 const isPlainObject: Rule = value => value !== null && typeof value === 'object' && !Array.isArray(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 const body: Rule = value => typeof value === 'string' && value.length <= 30000;
+/** A legacy SOUL.md may be longer than the other texts; the daemon enforces the write limits. */
+const roleBody: Rule = value => typeof value === 'string' && value.length <= 70000;
 const selector: Rule = value => typeof value === 'string' && value.length > 0 && value.length <= 4096 && !/[\r\n\0]/.test(value);
 const text: Rule = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000;
 const one = (...values: readonly unknown[]): Rule => value => values.includes(value);
@@ -66,6 +68,7 @@ const title: Rule = value => shape({
 const schemas: Record<string, Record<string, Rule>> = {
   agent: {
     profile: shape({ persona: body, memory: body }, true),
+    role: shape({ identity: roleBody, notes: roleBody }, true),
     cards: shape({
       showToolCalls: bool,
       showModel: one('off', 'running', 'always')
@@ -101,6 +104,7 @@ const schemas: Record<string, Record<string, Rule>> = {
   },
   project: {
     profile: shape({ persona: body, memory: body, inheritPersona: bool, inheritMemory: bool }, true),
+    role: shape({ supplement: body }, true),
     modelAccess: shape({ backend: text, models: value => array(text)(value) && (value as unknown[]).length > 0, efforts: array(one(...REASONING_EFFORTS)) }, true),
     workspace: shape({ primary: value => value !== null && path(value), directories: array(value => value !== null && path(value)), repositories: array(value => value !== null && path(value)) }, true),
     smartRules: shape({ respond: body, newTopic: body }, true),

@@ -1,4 +1,6 @@
-import { agentIdSchema, groupIdSchema, membershipIdSchema, modeToConversation, type DesktopSnapshot, type Agent, type Membership, type Group } from '@vonvon/protocol';
+import { agentIdSchema, groupIdSchema, membershipIdSchema, modeToConversation, projectIdSchema, type DesktopSnapshot, type Agent, type Membership, type Group, type SnapshotProject } from '@vonvon/protocol';
+import { groupPermission } from '../config/execution';
+import type { LibraryProject } from '../project/library';
 import type { AdminState } from './state';
 
 // Ported from desktop/main/projection.ts at fab5237.
@@ -16,7 +18,7 @@ export function projectState(state: AdminState, previous: DesktopSnapshot, pendi
     }
     // AdminProject.mode/network already carry groupPermission's resolved effects.
     // A 智能 group's `response` is always mention and means nothing: it has no 免@ (s25c).
-    for (const project of bot.projects) memberships.push({ id: membershipIdSchema.parse(JSON.stringify([bot.appId, project.chatId])), agentId, groupId: groupIdSchema.parse(project.chatId), name: project.name, ...(project.avatarDataUrl ? { avatarDataUrl: project.avatarDataUrl } : {}), directory: project.cwd, ...(project.directoryProblem ? { directoryProblem: project.directoryProblem } : {}), backend: project.backend, ...(project.enabled === undefined ? {} : { enabled: project.enabled }), conversation: modeToConversation(project.kind), response: project.noMention ? 'all' : 'mention', permission: { administrator: project.mode, member: project.mode, network: project.network }, stale: false });
+    for (const project of bot.projects) memberships.push({ id: membershipIdSchema.parse(JSON.stringify([bot.appId, project.chatId])), agentId, groupId: groupIdSchema.parse(project.chatId), name: project.name, ...(project.avatarDataUrl ? { avatarDataUrl: project.avatarDataUrl } : {}), directory: project.cwd, ...(projectIdSchema.safeParse(project.projectId).success ? { projectId: projectIdSchema.parse(project.projectId) } : {}), ...(project.directoryProblem ? { directoryProblem: project.directoryProblem } : {}), backend: project.backend, ...(project.enabled === undefined ? {} : { enabled: project.enabled }), conversation: modeToConversation(project.kind), effectMode: groupPermission(project).effect.mode, response: project.noMention ? 'all' : 'mention', permission: { administrator: project.mode, member: project.mode, network: project.network }, stale: false });
   }
   const groups = new Map<string, Group>();
   for (const member of memberships) {
@@ -24,4 +26,12 @@ export function projectState(state: AdminState, previous: DesktopSnapshot, pendi
     groups.set(member.groupId, { id: member.groupId, name: member.name, ...(avatarDataUrl ? { avatarDataUrl } : {}) });
   }
   return { agents, memberships, groups: [...groups.values()], stale: agents.some(agent => !!agent.readError) };
+}
+
+/** The library's projects with the bindings the memberships name them for (memory design §2.5). */
+export function projectLibrary(projects: readonly LibraryProject[], memberships: DesktopSnapshot['memberships']): SnapshotProject[] {
+  return projects.map(project => ({
+    id: projectIdSchema.parse(project.id), name: project.name, revision: project.revision, directory: project.workspace.primary,
+    bindings: memberships.filter(member => member.projectId === project.id && !member.stale).map(member => ({ agentId: member.agentId, groupId: member.groupId })),
+  }));
 }
