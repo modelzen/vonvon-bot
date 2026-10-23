@@ -31,7 +31,7 @@ export function ConversationSlider({label, value, disabled, onChange}: {
   return <Tooltip.Provider delay={250}>
     <div className="conversation-slider" data-disabled={disabled || undefined}>
       <div className="conversation-slider-rail" style={{'--conversation-position': `${selected * 50}%`} as CSSProperties}>
-        <div className="conversation-slider-track" aria-hidden="true"><span/>{modes.map((item, index) => <i key={item.value} style={{left: `${index * 50}%`}}/>)}</div>
+        <div className="conversation-slider-track" aria-hidden="true"><span/>{modes.map((item, index) => <i key={item.value} data-active={index <= selected || undefined} style={{left: `${index * 50}%`}}/>)}</div>
         <input type="range" min={0} max={2} step={1} value={selected} disabled={disabled} aria-label={label}
           aria-valuetext={mode.label} aria-describedby={descriptionId}
           onPointerDown={event => {if (disabled || event.button !== 0) return; interaction.current = 'pointer'; event.currentTarget.setPointerCapture(event.pointerId);}}
