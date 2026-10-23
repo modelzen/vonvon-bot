@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import { codexTierUnavailable } from '../codex-appserver/full-only';
+import { cachedCodexVersion, resolveCodexBin } from '../codex-appserver/locate';
+import type { TableEnv } from './types';
 import { PermissionInputError, permissionTiers, type PermissionTable, type Tier } from './types';
 
 const schema = z.object({
@@ -16,18 +19,36 @@ function mode(sandbox: z.infer<typeof schema>['sandbox']): Tier {
 }
 const sandboxes = { qa: 'read-only', write: 'workspace-write', full: 'danger-full-access' } as const;
 
+function versionFor(env: TableEnv): string | null | undefined {
+  if (env.codexVersion !== undefined) return env.codexVersion;
+  const bin = resolveCodexBin();
+  return bin ? cachedCodexVersion(bin) : undefined;
+}
+
 export const codexTable: PermissionTable = {
   backend: 'codex-appserver',
-  tiers: env => permissionTiers(env, {
-    qa: 'Codex：Read Only（read-only 沙箱）',
-    write: 'Codex：Default（workspace-write），比 Codex 自带的多开了网络',
-    full: 'Codex：Full Access（danger-full-access）',
-  }),
-  strength: env => env.fullOnly
-    ? 'Linux 上的 Codex 暂时只能用完全访问，没有沙箱。'
-    : '系统沙箱管住命令的读、写和联网：工作区以外的文件读不到，也改不了。',
+  tiers: env => {
+    const version = versionFor(env);
+    const rows = permissionTiers(env, {
+      qa: 'Codex：Read Only（read-only 沙箱）',
+      write: 'Codex：Default（workspace-write），比 Codex 自带的多开了网络',
+      full: 'Codex：Full Access（danger-full-access）',
+    });
+    for (const row of rows) {
+      const reason = codexTierUnavailable(row.tier, env.platform, version ?? null);
+      if (reason && version !== undefined) row.unavailable = reason;
+    }
+    return rows;
+  },
+  strength: env => {
+    const version = versionFor(env);
+    const reason = env.fullOnly ?? (version === undefined ? undefined : codexTierUnavailable('qa', env.platform, version));
+    if (reason) return reason;
+    return '系统沙箱管住命令的读、写和联网：工作区以外的文件读不到，也改不了。'
+      + (env.platform === 'linux' ? '工作区里原来没有的 .mcp.json、.claude/ 这类配置，能被新建。' : '');
+  },
   fields: env => [
-    { key: 'sandbox', label: '沙箱模式', native: 'sandbox', kind: 'choice', choices: permissionTiers(env).map(info => ({
+    { key: 'sandbox', label: '沙箱模式', native: 'sandbox', kind: 'choice', choices: codexTable.tiers(env).map(info => ({
       value: sandboxes[info.tier], label: info.name, native: sandboxes[info.tier],
       hint: info.unavailable ?? info.summary.replace(/，(?:不|能)联网/, ''),
     })) },

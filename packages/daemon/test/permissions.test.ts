@@ -1,9 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { effectiveMode, type Project } from '../src/project/registry';
 import { CodexAppServerBackend, sandboxParams } from '../src/agent/codex-appserver/backend';
-import { CODEX_FULL_ONLY, CodexFullOnlyError } from '../src/agent/codex-appserver/full-only';
+import { codexFullOnlyReason, CodexFullOnlyError } from '../src/agent/codex-appserver/full-only';
 import { AUTO_COMPACT_RETIRED, buildGroupSettingsCard, buildPermissionCard, buildProjectSettingsCard, PERMISSION_CARD_VERSION } from '../src/card/dm-cards';
 import { permissionTable, type TableEnv } from '../src/agent/permission';
+
+vi.mock('../src/agent/codex-appserver/locate', () => ({ resolveCodexBin: () => '/fixture/codex', cachedCodexVersion: () => undefined }));
+const CODEX_FULL_ONLY = codexFullOnlyReason('codex-cli 0.162.0');
 
 describe('effectiveMode', () => {
   it('defaults missing mode to full (legacy data unaffected)', () => {
@@ -39,7 +42,7 @@ describe('sandboxParams', () => {
     }
   });
 
-  // qa/write read-confinement is enforceable only on macOS (Seatbelt): assert the profile shape there.
+  // Assert the native macOS profile independently of the Linux version gate.
   it('darwin: qa → read-only confined to workspace, network off', () => {
     withPlatform('darwin', () => {
       const p = sandboxParams('qa', false) as any;
@@ -66,14 +69,14 @@ describe('sandboxParams', () => {
         expect(() => sandboxParams('write', true)).toThrow(CodexFullOnlyError);
         expect(sandboxParams('full', false)).toEqual({ sandbox: 'danger-full-access' });
       });
-      expect(() => sandboxParams('qa', false, plat)).toThrow('Linux 上的 Codex 只能用完全访问');
+      expect(() => sandboxParams('qa', false, plat)).toThrow('测不出 Codex 的版本');
     }
   });
 
-  it('the Codex backend says it is full-only everywhere but macOS', () => {
+  it('the Codex backend defers the final check when the version cache is empty', () => {
     const backend = new CodexAppServerBackend();
     expect(withPlatform('darwin', () => backend.fullAccessOnly())).toBeUndefined();
-    for (const plat of ['linux', 'win32'] as const) expect(withPlatform(plat, () => backend.fullAccessOnly())).toBe(CODEX_FULL_ONLY);
+    for (const plat of ['linux', 'win32'] as const) expect(withPlatform(plat, () => backend.fullAccessOnly())).toBeUndefined();
   });
 });
 

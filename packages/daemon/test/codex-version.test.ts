@@ -2,7 +2,7 @@ import { chmod, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { codexVersion } from '../src/agent/codex-appserver/locate';
+import { cachedCodexVersion, codexVersion, codexVersionAsync } from '../src/agent/codex-appserver/locate';
 import { CODEX_MIN_VERSION, CODEX_VERIFIED_VERSION, classifyCodexVersion, compareCodexVersions, parseCodexVersion } from '../src/agent/codex-appserver/version';
 import { withBinDirectory } from '../src/platform/tool-path';
 
@@ -48,6 +48,19 @@ describe('PATH for codex children', () => {
     expect(withBinDirectory('/usr/local/bin/codex', '/usr/local/bin:/usr/bin', '/home/u', 'linux'))
       .toBe(['/usr/local/bin', '/usr/bin', '/home/u/.local/bin'].join(delimiter));
     expect(withBinDirectory('codex', '/usr/bin', '/home/u', 'linux')).toBe(['/usr/bin', '/usr/local/bin', '/home/u/.local/bin'].join(delimiter));
+  });
+
+  it.skipIf(process.platform === 'win32')('distinguishes a failed version probe from an unprobed CLI and retries after repair', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'vonvon-version-retry-')); dirs.push(dir);
+    const bin = join(dir, 'codex');
+    await writeFile(bin, `#!${process.execPath}\nprocess.exit(1);\n`);
+    await chmod(bin, 0o755);
+    expect(cachedCodexVersion(bin)).toBeUndefined();
+    expect(await codexVersionAsync(bin)).toBeNull();
+    expect(cachedCodexVersion(bin)).toBeNull();
+    await writeFile(bin, `#!${process.execPath}\nconsole.log('codex-cli 0.163.0');\n`);
+    expect(await codexVersionAsync(bin)).toBe('codex-cli 0.163.0');
+    expect(cachedCodexVersion(bin)).toBe('codex-cli 0.163.0');
   });
 
   // The interpreter has a name found only next to the launcher, as nvm's `node` is

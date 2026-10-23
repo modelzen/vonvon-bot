@@ -18,7 +18,7 @@ vi.mock('../src/agent/codex-appserver/client-pool', async importOriginal => ({
   takeWarmClient: rpc.take, refillWarmPool: rpc.refill, utilityRequest: vi.fn(), connectGated: vi.fn(),
 }));
 vi.mock('../src/agent/codex-appserver/locate', () => ({
-  resolveCodexBin: () => '/fake/codex', codexVersionAsync: vi.fn(),
+  resolveCodexBin: () => '/fake/codex', codexVersionAsync: vi.fn(async () => 'codex-cli 0.163.0'), cachedCodexVersion: () => undefined,
 }));
 
 const explicit: SessionProfile = {
@@ -150,6 +150,8 @@ for (const field of ['capabilityPackages', 'mcpServers'] as const) {
   vi.spyOn(fullOnly, 'codexConfinesReads').mockReturnValue(true);
   const backend = new CodexAppServerBackend();
   const cwd = mkdtempSync(join(tmpdir(), 'profile-restricted-'));
+  writeFileSync(join(cwd, '.mcp.json'), '{}');
+  mkdirSync(join(cwd, '.claude/skills'), { recursive: true });
   threads.push(await backend.startThread({ cwd, mode: 'write', network: false, profile: explicit }));
   expect(rpc.request).toHaveBeenCalledWith('thread/start', expect.objectContaining({
     config: expect.objectContaining({
