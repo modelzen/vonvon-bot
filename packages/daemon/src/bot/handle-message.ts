@@ -1206,21 +1206,58 @@ export function createOrchestrator(
     }
   };
   const sessions = new Map<string, AgentThread>();
+  const threadPermissions = new WeakMap<AgentThread, string>();
+  class ThreadPermissionChanged extends Error {}
+  function permissionFingerprint(opts: Pick<StartThreadOptions, 'mode' | 'network' | 'native'>): string {
+    const stable = (value: unknown): unknown => Array.isArray(value) ? value.map(stable)
+      : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, stable(item)])) : value;
+    return JSON.stringify(stable({mode: opts.mode ?? 'full', network: opts.network ?? false, native: opts.native ?? null}));
+  }
+  async function closeForPermission(thread: AgentThread): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const closing = thread.close();
+    void trackTask(closing.catch(error => log.fail('agent', error, {phase: 'thread-close'})));
+    try {
+      await Promise.race([closing, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new ThreadPermissionChanged('旧权限会话还没关闭，请稍后重试。')), RELEASE_WAIT_MS); })]);
+    } catch (error) {
+      if (error instanceof ThreadPermissionChanged) throw error;
+      throw new ThreadPermissionChanged('旧权限会话没能关闭，请稍后重试。', {cause: error});
+    } finally { clearTimeout(timer); }
+  }
+  /** A save can finish while a provider is starting, before eviction can see its thread. */
+  async function createWithPermission<T extends StartThreadOptions>(be: AgentBackend, original: T, place: AgentPlace, create: (opts: T) => Promise<AgentThread>): Promise<AgentThread> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let opts = original;
+      const project = place.kind === 'group' && place.chatId ? await getProjectByChatId(place.chatId) : undefined;
+      if (project) {
+        const perm = turnPerm(project);
+        if (permissionFingerprint(opts) !== permissionFingerprint(perm))
+          opts = {...opts, ...perm, native: perm.native, profile: await profileOf(project, opts.cwd, be, perm.mode)};
+      }
+      const entry = entries?.issue(place);
+      let thread: AgentThread;
+      try { thread = await create({...opts, ...(entry ? {entry} : {})}); entry?.attach(thread); }
+      catch (error) { entry?.revoke('start-failed'); throw error; }
+      const fingerprint = permissionFingerprint(opts);
+      threadPermissions.set(thread, fingerprint);
+      let current: Project | undefined;
+      try { current = place.kind === 'group' && place.chatId ? await getProjectByChatId(place.chatId) : undefined; }
+      catch (error) { entry?.revoke('start-failed'); await closeForPermission(thread); throw error; }
+      if (!current || permissionFingerprint(turnPerm(current)) === fingerprint) return thread;
+      entry?.revoke('closed');
+      await closeForPermission(thread);
+    }
+    throw new ThreadPermissionChanged('群的权限在准备会话时变了，请重新发一次。');
+  }
   /** M-3 空闲 reaper 的轮次时钟：每次进 LIVE 缓存（trackSession）/ 每轮收尾
    * （touchSession）打点；空闲时长 = now − 最后打点。 */
   const sessionTouchedAt = new Map<string, number>();
   /** sessions.set + 打点 —— 所有放进 LIVE 缓存的会话一律走这里。 */
   async function startWith(be: AgentBackend, opts: StartThreadOptions, place: AgentPlace): Promise<AgentThread> {
-    if (!entries) return be.startThread(opts);
-    const entry = entries.issue(place);
-    try { const thread = await be.startThread({ ...opts, entry }); entry.attach(thread); return thread; }
-    catch (error) { entry.revoke('start-failed'); throw error; }
+    return createWithPermission(be, opts, place, options => be.startThread(options));
   }
   async function resumeWith(be: AgentBackend, opts: ResumeThreadOptions, place: AgentPlace): Promise<AgentThread> {
-    if (!entries) return be.resumeThread(opts);
-    const entry = entries.issue(place);
-    try { const thread = await be.resumeThread({ ...opts, entry }); entry.attach(thread); return thread; }
-    catch (error) { entry.revoke('start-failed'); throw error; }
+    return createWithPermission(be, opts, place, options => be.resumeThread(options));
   }
 
   function trackSession(key: string, thread: AgentThread): void {
@@ -3534,14 +3571,9 @@ export function createOrchestrator(
     }
   }
 
-  /** Reuse an in-memory codex thread, else resume from the persisted store.
-   * `perm` carries the bound project's CURRENT permission tier (mode/network),
-   * applied when we (re)start a thread here. A LIVE thread keeps the sandbox it
-   * was started with (codex binds it at thread/start and never re-reads it), so
-   * a tier change can only take effect by EVICTING the live thread first — see
-   * evictLiveSessionsForChat, called from the 🔐 权限 handlers. Without that
-   * eviction the fast-path below would silently keep a 'full' thread running
-   * after the admin switched to read-only.
+  /** Reuse a LIVE thread only while its bound permission fingerprint still matches.
+   * Always reread the group: the caller's permission snapshot may predate a save,
+   * and an in-flight provider start may not have been visible to that save's eviction.
    *
    * Returns `recreated: true` ONLY when the stored session can't be continued:
    * the resume FAILED and we fell back to a brand-new codex thread (`reason:
@@ -3555,21 +3587,26 @@ export function createOrchestrator(
     chatId: string,
     perm: TurnPerm,
   ): Promise<{ thread: AgentThread | undefined; recreated: boolean; reason?: RecreateReason }> {
+    let project: Project | undefined;
     const live = sessions.get(threadId);
     if (live) {
       if (live.isAlive()) {
         const elsewhere = await writtenElsewhere(threadId, live);
         const prior = elsewhere ? undefined : await getSession(threadId).catch(() => undefined);
+        project = await getProjectByChatId(chatId);
+        if (project) perm = turnPerm(project);
+        const permissionChanged = threadPermissions.get(live) !== permissionFingerprint(perm);
         // Evicted while it looked (a tier change, the reaper): resume below like any other.
         if (sessions.get(threadId) === live && live.isAlive()) {
-          if (!elsewhere) {
+          if (!elsewhere && !permissionChanged) {
             noteCompaction(threadId, chatId, live, prior);
             return { thread: live, recreated: false };
           }
           // Someone else wrote the session (a terminal turn or /compact, s15b): this
           // process never rereads it, so reconnect from the file below.
           sessions.delete(threadId);
-          void trackTask(live.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
+          if (permissionChanged) await closeForPermission(live);
+          else void trackTask(live.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
         }
       } else {
         // app-server 子进程已死（崩溃/被 kill）：死线程留在缓存只会反复失败，
@@ -3585,7 +3622,8 @@ export function createOrchestrator(
     // v1 records read back as the codex default). A project switching backends
     // later must not strand existing sessions on the wrong runtime; the project
     // is still consulted for cwd / tier defaults on the recreate path below.
-    const project = await getProjectByChatId(chatId);
+    project = await getProjectByChatId(chatId);
+    if (project) perm = turnPerm(project);
     if (project && rec.cwd !== project.cwd) {
       lastUsage.delete(threadId); // a new session: the meter starts over
       return { thread: undefined, recreated: true, reason: 'cwd-changed' };
@@ -3611,7 +3649,7 @@ export function createOrchestrator(
     } catch (err) {
       log.fail('agent', err, { phase: 'resume-on-turn', threadId });
       // Open in a terminal or the Codex app (s15b): say so and keep the session.
-      if (err instanceof SessionInUseError || err instanceof CodexWorkspaceLayoutError) throw err;
+      if (err instanceof SessionInUseError || err instanceof CodexWorkspaceLayoutError || err instanceof ThreadPermissionChanged) throw err;
       const cwd = workCwd(project, rec);
       const fresh = await startWith(be, {
         cwd,

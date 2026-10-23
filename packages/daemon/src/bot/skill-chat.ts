@@ -75,7 +75,10 @@ export function createSkillChat(input: {
     const model = models.find(item => item.id === project.defaultModel) ?? models[0];
     if (!model) throw new Error('请先为目标群选择可用模型和 Effort');
     const effort: ReasoningEffort | undefined = model.supportedEfforts.includes(model.defaultEffort) ? model.defaultEffort : model.supportedEfforts[0];
-    const options = { cwd, model: model.id, effort, mode: 'write' as const, network: resolveExecution({ group: project }).network,
+    const execution = resolveExecution({ group: project });
+    const native = backendId === 'claude-agent' && execution.custom?.network === 'domains'
+      ? { permissionMode: 'acceptEdits', sandbox: true, network: 'domains', domains: [...(execution.custom.domains as string[])] } : undefined;
+    const options = { cwd, model: model.id, effort, mode: 'write' as const, network: execution.network, ...(native ? { native } : {}),
       profile: { instructions: `你在私聊中为 Bot ${JSON.stringify(input.cfg.accounts.app.id)} 的群 ${JSON.stringify(project.name)}（${project.chatId}）创建或修改 Skill。当前目录是该群工作区的技能目录。只操作当前目录里的技能文件，不修改其他目录、全局设置或其他群。每个技能一个子目录，入口 SKILL.md 带 name 和 description 的 YAML frontmatter。需要脚本或资源时放入该技能子目录。需求不清楚时用普通回复提问；不要调用 AskUserQuestion。完成后说明技能名和实际创建的文件；不要声称已安装 CLI 或获得授权。`, env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: [], capabilityPackages: [], mcpServers: [] } };
     // Resumption failure never silently destroys the prior conversation.
     const thread = target.sessionId && target.cwd === cwd ? await backend.resumeThread({ ...options, sessionId: target.sessionId }) : await backend.startThread(options);

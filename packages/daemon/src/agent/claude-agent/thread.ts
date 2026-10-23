@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ClaudeSdkFacade } from './backend';
 import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import type { Options, PermissionResult, Query, SDKMessage, SDKUserMessage, SettingSource } from '@anthropic-ai/claude-agent-sdk';
 import { log } from '../../core/logger';
 import type {
@@ -92,6 +93,8 @@ export const AUTO_COMPACT_SETTINGS = {
 /** Hard ceiling on a manual /compact (a summarization turn) so a wedged process
  * can't hang the「压缩中」card forever. Mirrors codex's COMPACT_TIMEOUT_MS. */
 const COMPACT_TIMEOUT_MS = 120_000;
+const PLAN_MODE_TIMEOUT_MS = 10_000;
+const PLAN_RESET_FAILED = '这一轮没能回到先出方案的状态，先停下，请再发一次';
 
 /** ⏹: how long to wait for interrupt() to end the turn before hard-aborting the
  * query. interrupt() reliably stops a STREAMING turn but HANGS when a blocking
@@ -304,7 +307,8 @@ export class ClaudeAgentThread implements AgentThread {
   private readonly access: ClaudeAccess;
   private readonly permissionFs: PathFs | undefined;
   private readonly pending = new Map<string, {
-    turnId?: string; settle(result: PermissionResult): void; toResult: BridgedAsk['toResult'];
+    turnId?: string; signal: AbortSignal; planConfirmation?: boolean;
+    settle(result: PermissionResult): void; toResult: BridgedAsk['toResult'];
   }>();
   /** maxTokens from the last getContextUsage(), for the next turn's mid-turn readings */
   private contextWindow: number | undefined;
@@ -352,9 +356,9 @@ export class ClaudeAgentThread implements AgentThread {
       ...(cfg.additionalDirectories?.length ? { additionalDirectories: cfg.additionalDirectories } : {}),
       ...(cfg.skills ? { skills: cfg.skills } : {}),
       ...(cfg.env ? { env: cfg.env } : {}),
-      // SDK plansDirectory is relative to cwd; plan files stay inside the existing write boundary.
+      // SDK consumes an absolute path; plan files stay inside the existing write boundary.
       settings: cfg.access.native?.permissionMode === 'plan'
-        ? { ...AUTO_COMPACT_SETTINGS, plansDirectory: '.claude/plans' } : AUTO_COMPACT_SETTINGS,
+        ? { ...AUTO_COMPACT_SETTINGS, plansDirectory: cfg.access.planState?.directory ?? resolve(cfg.access.realCwd, '.claude/plans') } : AUTO_COMPACT_SETTINGS,
       ...(mcpServers.vonvon_bot ? { mcpServers } : {}),
       // permission tier (permissionMode / sandbox / canUseTool / disallowedTools)
       ...cfg.permission,
@@ -407,7 +411,7 @@ export class ClaudeAgentThread implements AgentThread {
           askSink({ kind: 'ask_cancelled', requestId: id });
         };
         this.pending.set(id, {
-          turnId: this.currentTurnId, toResult: bridged.toResult,
+          turnId: this.currentTurnId, signal, planConfirmation: bridged.planConfirmation, toResult: bridged.toResult,
           settle: (result) => { signal.removeEventListener('abort', abort); resolve(result); },
         });
         signal.addEventListener('abort', abort, { once: true });
@@ -421,16 +425,27 @@ export class ClaudeAgentThread implements AgentThread {
     }
   }
 
-  private respondToAsk(id: string, resolution: AskResolution): Promise<void> {
+  private async respondToAsk(id: string, resolution: AskResolution): Promise<void> {
     const pending = this.pending.get(id);
     if (!pending) {
       log.info('agent', 'claude-ask-late', { id });
-      return Promise.resolve();
+      return;
     }
     this.pending.delete(id);
     log.info('agent', 'claude-ask', { id, reason: resolution.kind === 'unanswered' ? resolution.reason : resolution.kind });
-    pending.settle(pending.toResult(resolution));
-    return Promise.resolve();
+    let result = pending.toResult(resolution);
+    if (pending.planConfirmation && result.behavior === 'allow') {
+      try {
+        await this.setPlanMode('acceptEdits');
+        if (this.dead || pending.signal.aborted || !this.turnInFlight || pending.turnId !== this.currentTurnId)
+          result = { behavior: 'deny', message: '这一轮已经结束，先不要按这个方案做。' };
+        else if (this.access.planState) this.access.planState.pending = false;
+      } catch (err) {
+        log.fail('agent', err, { phase: 'setPermissionMode' });
+        result = { behavior: 'deny', message: '权限检查出错，这一步先不做。' };
+      }
+    }
+    pending.settle(result);
   }
 
   private dropAsks(reason: 'turn-ended' | 'stopped', turnId?: string): void {
@@ -471,10 +486,40 @@ export class ClaudeAgentThread implements AgentThread {
     }
   }
 
-  private resetPlanMode(): Promise<void> {
-    return this.access.native?.permissionMode === 'plan'
-      ? this.query.setPermissionMode('plan').catch(err => log.fail('agent', err, { phase: 'setPermissionMode' }))
-      : Promise.resolve();
+  private async setPlanMode(mode: 'plan' | 'acceptEdits'): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const { signal } = this.abortController;
+    let abort: (() => void) | undefined;
+    try {
+      await Promise.race([
+        Promise.resolve().then(() => this.query.setPermissionMode(mode)),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Claude permission mode timed out')), PLAN_MODE_TIMEOUT_MS);
+          abort = () => reject(new Error('Claude session closed'));
+          signal.addEventListener('abort', abort, { once: true });
+          if (signal.aborted) abort();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (abort) signal.removeEventListener('abort', abort);
+    }
+  }
+
+  private async resetPlanMode(sink: (item: TurnItem) => void): Promise<boolean> {
+    if (this.access.native?.permissionMode !== 'plan') return !this.dead;
+    if (this.access.planState) this.access.planState.pending = true;
+    try {
+      await this.setPlanMode('plan');
+      return !this.dead;
+    } catch (err) {
+      if (this.dead) return false;
+      log.fail('agent', err, { phase: 'setPermissionMode' });
+      // Queue the precise error before close lets the query pump report its end.
+      sink({ kind: 'error', err: new Error(PLAN_RESET_FAILED) });
+      await this.close();
+      return false;
+    }
   }
 
   runStreamed(input: AgentInput, turn?: TurnOptions): AgentRun {
@@ -491,7 +536,6 @@ export class ClaudeAgentThread implements AgentThread {
       this.query.setModel(turn.model).catch((err) => log.fail('agent', err, { phase: 'setModel' }));
     }
     if (turn?.effort) this.effort = turn.effort;
-    const permissionReady = this.resetPlanMode();
 
     const mapper = createTurnMapper({ cwd: this.cwd, contextWindow: this.contextWindow });
     const inbox = new Inbox<TurnItem>();
@@ -505,13 +549,16 @@ export class ClaudeAgentThread implements AgentThread {
     // base64-encodes the files first (async), pushed as soon as ready. A build
     // failure (encoding is best-effort, so this shouldn't fire) still pushes the
     // text alone rather than leaving the turn waiting forever on `inbox`.
-    void permissionReady.then(() => toUserMessage(input)).then(
-      (m) => this.input.push(m),
-      (err) => {
+    void this.resetPlanMode(mySink).then(async ready => {
+      if (!ready) return;
+      try {
+        const message = await toUserMessage(input);
+        if (!this.dead) this.input.push(message);
+      } catch (err) {
         log.fail('agent', err, { backend: 'claude-agent', phase: 'build-user-message' });
-        this.input.push(textUserMessage(input.text ?? ''));
-      },
-    );
+        if (!this.dead) this.input.push(textUserMessage(input.text ?? ''));
+      }
+    });
 
     const self = this;
     let query: Query | undefined = this.query;
@@ -629,7 +676,9 @@ export class ClaudeAgentThread implements AgentThread {
     this.sink = mySink;
     this.askSink = mySink;
 
-    void this.resetPlanMode().then(() => this.input.push(textUserMessage(goalPrompt(objective))));
+    void this.resetPlanMode(mySink).then(ready => {
+      if (ready) this.input.push(textUserMessage(goalPrompt(objective)));
+    });
 
     const self = this;
     let query: Query | undefined = this.query;
