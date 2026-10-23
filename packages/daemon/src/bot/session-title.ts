@@ -1,4 +1,5 @@
 import { personName } from './context-weave';
+import { stripHiddenText } from './hidden-blocks';
 
 /** Maximum title length shown in the host resume UI (Unicode code points). */
 export const SESSION_TITLE_MAX_CHARS = 36;
@@ -84,7 +85,7 @@ export function stripBridgeMessageEnvelope(text: string): string {
       .replace(BRIDGE_SENDER_PREFIX, '')
       .replace(BRIDGE_QUOTE_PREFIX, '');
   } while (out !== previous);
-  return out.replace(BRIDGE_FILE_MANIFEST_SUFFIX, '');
+  return stripHiddenText(out.replace(BRIDGE_FILE_MANIFEST_SUFFIX, ''));
 }
 
 export interface SessionTitleSourceResource {
