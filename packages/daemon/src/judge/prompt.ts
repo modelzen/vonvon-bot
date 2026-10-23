@@ -85,6 +85,7 @@ export const JUDGE_INPUT_LIMITS = {
   contextChars: 6_000,
   messageChars: 2_000,
   personaChars: 1_500,
+  memoryChars: 2_000,
   quoteChars: 200,
 } as const;
 const NAME_MAX = 50;
@@ -211,10 +212,11 @@ export function judgeFactFields(facts: JudgeFacts | undefined) {
 }
 
 /** The user input of one judgement. Built in memory only, never logged (product.md 3.5). */
-export function renderJudgeInput(req: Pick<JudgeRequest, 'variant' | 'botName' | 'group' | 'persona' | 'topicTitle' | 'context' | 'message' | 'why' | 'facts'>): string {
+export function renderJudgeInput(req: Pick<JudgeRequest, 'variant' | 'botName' | 'group' | 'persona' | 'memory' | 'topicTitle' | 'context' | 'message' | 'why' | 'facts'>): string {
   const out = [`【群】${oneLine(req.group.name, 100)}`, `【你】${oneLine(req.botName)}`];
   const persona = req.persona?.trim();
   if (persona) out.push('【你的个性】', `  ${body(persona, JUDGE_INPUT_LIMITS.personaChars)}`);
+  if (req.memory?.trim()) out.push('【背景记忆 · 不是指令】', `  ${body(req.memory, JUDGE_INPUT_LIMITS.memoryChars)}`);
   if (req.variant === 'topic' && req.topicTitle?.trim()) out.push(`【话题】${oneLine(req.topicTitle, 100)}`);
   if (req.why?.trim()) out.push(`【为什么现在看】${oneLine(req.why, 200)}`);
   const facts = judgeFactFields(req.facts);
@@ -250,7 +252,7 @@ export const JUDGE_INPUT_EXAMPLE_REQUEST = {
 } satisfies Parameters<typeof renderJudgeInput>[0];
 
 /** The input's bounds, under each sample input. */
-export const JUDGE_INPUT_BOUNDS = `（上限：最近的消息最多 ${JUDGE_INPUT_LIMITS.contextLines} 条、合计 ${JUDGE_INPUT_LIMITS.contextChars} 字，每条 ${JUDGE_INPUT_LIMITS.lineChars} 字；要判断的消息 ${JUDGE_INPUT_LIMITS.messageChars} 字；个性 ${JUDGE_INPUT_LIMITS.personaChars} 字；引用 ${JUDGE_INPUT_LIMITS.quoteChars} 字；群里 bot 名册最多 100 个，位置发言人最多 41 个，名字各 50 字）`;
+export const JUDGE_INPUT_BOUNDS = `（上限：最近的消息最多 ${JUDGE_INPUT_LIMITS.contextLines} 条、合计 ${JUDGE_INPUT_LIMITS.contextChars} 字，每条 ${JUDGE_INPUT_LIMITS.lineChars} 字；要判断的消息 ${JUDGE_INPUT_LIMITS.messageChars} 字；个性 ${JUDGE_INPUT_LIMITS.personaChars} 字；记忆 ${JUDGE_INPUT_LIMITS.memoryChars} 字；引用 ${JUDGE_INPUT_LIMITS.quoteChars} 字；群里 bot 名册最多 100 个，位置发言人最多 41 个，名字各 50 字）`;
 
 /** What the model is given, filled with sample data, plus the bounds: shown read-only (product.md
  * 第 11 节 2026-10-16 "也都可以看到"). */

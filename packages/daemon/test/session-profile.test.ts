@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
@@ -123,11 +123,10 @@ describe('Claude session profile reaches SDK query options', () => {
   }
 });
 
-for (const field of ['additionalRoots', 'capabilityPackages', 'mcpServers'] as const) {
+for (const field of ['capabilityPackages', 'mcpServers'] as const) {
   const unsupported: SessionProfile = {
     ...explicit,
-    ...(field === 'additionalRoots' ? { additionalRoots: [{ path: '/other', access: 'read' as const }] }
-      : field === 'capabilityPackages' ? { capabilityPackages: [{ path: '/package' }] }
+    ...(field === 'capabilityPackages' ? { capabilityPackages: [{ path: '/package' }] }
         : { mcpServers: [{ name: 'test' }] }),
   };
   for (const action of ['start', 'resume'] as const) {
@@ -135,7 +134,7 @@ for (const field of ['additionalRoots', 'capabilityPackages', 'mcpServers'] as c
       const options = { cwd: '/repo', mode: 'full' as const, profile: unsupported };
       const codex = new CodexAppServerBackend();
       const claude = claudeFixture();
-      for (const backend of field === 'additionalRoots' ? [claude.backend] : [codex, claude.backend]) {
+      for (const backend of [codex, claude.backend]) {
         await expect(action === 'start' ? backend.startThread(options)
           : backend.resumeThread({ ...options, sessionId: 'saved' })).rejects.toThrow('s39');
       }
@@ -177,4 +176,22 @@ it('keeps the built-in vonvon_bot name out of unsupported profile MCP configurat
   }
   expect(claude.load).not.toHaveBeenCalled();
   expect(rpc.take).not.toHaveBeenCalled();
+});
+
+for (const action of ['start', 'resume'] as const) it(`Claude ${action} forwards admitted directories and native skill selection`, async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'vonvon-profile-directories-')));
+  try {
+    vi.stubEnv('CLAUDE_CONFIG_DIR', root);
+    mkdirSync(join(root, 'projects', '-repo'), { recursive: true });
+    writeFileSync(join(root, 'projects', '-repo', 'saved.jsonl'), `${JSON.stringify({ type: 'user', uuid: 'saved-message', message: { role: 'user', content: 'hello' } })}\n`);
+    const extra = join(root, 'second'); mkdirSync(extra);
+    const { backend, query } = claudeFixture();
+    const options = { cwd: root, mode: 'write' as const, profile: { ...explicit, additionalRoots: [{ path: extra, access: 'write' as const }], skills: { disabledPaths: ['claude:disabled'], enabledNames: ['enabled'] } } };
+    const thread = action === 'start' ? await backend.startThread(options) : await backend.resumeThread({ ...options, sessionId: 'saved' });
+    try {
+      const supplied = query.mock.calls[0]?.[0]?.options;
+      expect({ directories: supplied?.additionalDirectories, skills: supplied?.skills, filesystem: supplied?.sandbox?.filesystem })
+        .toEqual({ directories: [extra], skills: ['enabled'], filesystem: { allowWrite: [extra], denyWrite: [] } });
+    } finally { await thread.close(); }
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
