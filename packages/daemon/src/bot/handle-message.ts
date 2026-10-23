@@ -1295,22 +1295,65 @@ export function createOrchestrator(
     }
   };
   const sessions = new Map<string, AgentThread>();
+  const threadPermissions = new WeakMap<AgentThread, string>();
+  class ThreadPermissionChanged extends Error {}
+  function permissionFingerprint(opts: Pick<StartThreadOptions, 'mode' | 'network' | 'native'>): string {
+    const stable = (value: unknown): unknown => Array.isArray(value) ? value.map(stable)
+      : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, stable(item)])) : value;
+    return JSON.stringify(stable({mode: opts.mode ?? 'full', network: opts.network ?? false, native: opts.native ?? null}));
+  }
+  async function closeForPermission(thread: AgentThread): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const closing = thread.close();
+    void trackTask(closing.catch(error => log.fail('agent', error, {phase: 'thread-close'})));
+    try {
+      await Promise.race([closing, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new ThreadPermissionChanged('旧权限会话还没关闭，请稍后重试。')), RELEASE_WAIT_MS); })]);
+    } catch (error) {
+      if (error instanceof ThreadPermissionChanged) throw error;
+      throw new ThreadPermissionChanged('旧权限会话没能关闭，请稍后重试。', {cause: error});
+    } finally { clearTimeout(timer); }
+  }
+  /** The profile a thread was actually started with: a permission save can swap in a rebuilt one (and its opening). */
+  const profileUsed = new WeakMap<AgentThread, object>();
+  /** A save can finish while a provider is starting, before eviction can see its thread. */
+  async function createWithPermission<T extends StartThreadOptions>(be: AgentBackend, original: T, place: AgentPlace, create: (opts: T) => Promise<AgentThread>): Promise<AgentThread> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let opts = original;
+      const project = place.kind === 'group' && place.chatId ? await getProjectByChatId(place.chatId) : undefined;
+      if (project) {
+        const perm = turnPerm(project);
+        if (permissionFingerprint(opts) !== permissionFingerprint(perm))
+          opts = {...opts, ...perm, native: perm.native, profile: await profileOf(project, opts.cwd, be, perm.mode)};
+      }
+      const entry = entries?.issue(place);
+      let thread: AgentThread;
+      try { thread = await create({...opts, ...(entry ? {entry} : {})}); entry?.attach(thread); }
+      catch (error) { entry?.revoke('start-failed'); throw error; }
+      if (opts.profile) profileUsed.set(thread, opts.profile);
+      const fingerprint = permissionFingerprint(opts);
+      threadPermissions.set(thread, fingerprint);
+      let current: Project | undefined;
+      try { current = place.kind === 'group' && place.chatId ? await getProjectByChatId(place.chatId) : undefined; }
+      catch (error) { entry?.revoke('start-failed'); await closeForPermission(thread); throw error; }
+      if (!current || permissionFingerprint(turnPerm(current)) === fingerprint) return thread;
+      entry?.revoke('closed');
+      await closeForPermission(thread);
+    }
+    throw new ThreadPermissionChanged('群的权限在准备会话时变了，请重新发一次。');
+  }
   /** M-3 空闲 reaper 的轮次时钟：每次进 LIVE 缓存（trackSession）/ 每轮收尾
    * （touchSession）打点；空闲时长 = now − 最后打点。 */
   const sessionTouchedAt = new Map<string, number>();
   /** sessions.set + 打点 —— 所有放进 LIVE 缓存的会话一律走这里。 */
   async function startWith(be: AgentBackend, opts: StartThreadOptions, place: AgentPlace): Promise<AgentThread> {
-    const opening = opts.profile ? openings.get(opts.profile) : undefined;
-    if (!entries) { const thread = await be.startThread(opts); if (opening) contextDelivered.set(thread, opening); return thread; }
-    const entry = entries.issue(place);
-    try { const thread = await be.startThread({ ...opts, entry }); entry.attach(thread); if (opening) contextDelivered.set(thread, opening); return thread; }
-    catch (error) { entry.revoke('start-failed'); throw error; }
+    const thread = await createWithPermission(be, opts, place, options => be.startThread(options));
+    const used = profileUsed.get(thread);
+    const opening = used ? openings.get(used) : undefined;
+    if (opening) contextDelivered.set(thread, opening);
+    return thread;
   }
   async function resumeWith(be: AgentBackend, opts: ResumeThreadOptions, place: AgentPlace): Promise<AgentThread> {
-    if (!entries) return be.resumeThread(opts);
-    const entry = entries.issue(place);
-    try { const thread = await be.resumeThread({ ...opts, entry }); entry.attach(thread); return thread; }
-    catch (error) { entry.revoke('start-failed'); throw error; }
+    return createWithPermission(be, opts, place, options => be.resumeThread(options));
   }
 
   /**
@@ -2893,13 +2936,13 @@ export function createOrchestrator(
   }
 
   /** A turn's resolved permission: the group's one tier, whoever sends (s15c). */
-  type TurnPerm = { mode?: PermissionMode; network?: boolean };
+  type TurnPerm = Pick<StartThreadOptions, 'mode' | 'network' | 'native'>;
 
   /** The group's tier and network for `project`; none without a group (私聊 waits for s49). */
   function turnPerm(project: Project | undefined): TurnPerm {
     if (!project) return {};
     const exec = execOf(project);
-    return { mode: exec.permission, network: exec.network };
+    return { mode: exec.permission, network: exec.network, ...(exec.custom ? { native: exec.custom } : {}) };
   }
 
   /** As {@link turnPerm}, plus the session key: the place itself, one session for everyone. */
@@ -3296,7 +3339,7 @@ export function createOrchestrator(
         let tResolveDone = tIntake;
         const resolveP = resolveThread(sessionKey, msg.chatId, {
           mode: perm.mode,
-          network: perm.network,
+          network: perm.network, native: perm.native,
         }).then((r) => {
           tResolveDone = Date.now();
           return r;
@@ -3485,7 +3528,7 @@ export function createOrchestrator(
           // Rebuilt after the cwd changed: the record's backend, as its model is (s36d2).
           const cwd = workCwd(project);
           const be = sessionBackendOf(prior, project);
-          thread = await startWith(be, { cwd, model, effort, mode: perm.mode, network: perm.network, profile: await profileOf(project, cwd, be, perm.mode) }, { kind: 'group', chatId: msg.chatId });
+          thread = await startWith(be, { cwd, model, effort, mode: perm.mode, network: perm.network, native: perm.native, profile: await profileOf(project, cwd, be, perm.mode) }, { kind: 'group', chatId: msg.chatId });
           trackSession(sessionKey, thread);
           // 自愈观测：来源=全新会话（无持久化记录），与 resume-ok/resume-recreate
           // 互斥——三者其一 + agent 层的 spawn/prewarm-hit 即可还原完整恢复路径。
@@ -3573,7 +3616,7 @@ export function createOrchestrator(
           // ref was resolved against `/` and rejected as image-outside-cwd.
           cwd: workCwd(project, prior),
           mode: perm.mode,
-          network: perm.network,
+          network: perm.network, native: perm.native,
           // The backend resolveThread routed by: the record's, else the project's.
           backendId: sessionBackendOf(prior, project).id,
           summary: stripFileTokens(summaryText ?? text).slice(0, 80) || '(本轮任务)',
@@ -3677,14 +3720,9 @@ export function createOrchestrator(
     }
   }
 
-  /** Reuse an in-memory codex thread, else resume from the persisted store.
-   * `perm` carries the bound project's CURRENT permission tier (mode/network),
-   * applied when we (re)start a thread here. A LIVE thread keeps the sandbox it
-   * was started with (codex binds it at thread/start and never re-reads it), so
-   * a tier change can only take effect by EVICTING the live thread first — see
-   * evictLiveSessionsForChat, called from the 🔐 权限 handlers. Without that
-   * eviction the fast-path below would silently keep a 'full' thread running
-   * after the admin switched to read-only.
+  /** Reuse a LIVE thread only while its bound permission fingerprint still matches.
+   * Always reread the group: the caller's permission snapshot may predate a save,
+   * and an in-flight provider start may not have been visible to that save's eviction.
    *
    * Returns `recreated: true` ONLY when the stored session can't be continued:
    * the resume FAILED and we fell back to a brand-new codex thread (`reason:
@@ -3698,21 +3736,26 @@ export function createOrchestrator(
     chatId: string,
     perm: TurnPerm,
   ): Promise<{ thread: AgentThread | undefined; recreated: boolean; reason?: RecreateReason }> {
+    let project: Project | undefined;
     const live = sessions.get(threadId);
     if (live) {
       if (live.isAlive()) {
         const elsewhere = await writtenElsewhere(threadId, live);
         const prior = elsewhere ? undefined : await getSession(threadId).catch(() => undefined);
+        project = await getProjectByChatId(chatId);
+        if (project) perm = turnPerm(project);
+        const permissionChanged = threadPermissions.get(live) !== permissionFingerprint(perm);
         // Evicted while it looked (a tier change, the reaper): resume below like any other.
         if (sessions.get(threadId) === live && live.isAlive()) {
-          if (!elsewhere) {
+          if (!elsewhere && !permissionChanged) {
             noteCompaction(threadId, chatId, live, prior);
             return { thread: live, recreated: false };
           }
           // Someone else wrote the session (a terminal turn or /compact, s15b): this
           // process never rereads it, so reconnect from the file below.
           sessions.delete(threadId);
-          void trackTask(live.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
+          if (permissionChanged) await closeForPermission(live);
+          else void trackTask(live.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
         }
       } else {
         // app-server 子进程已死（崩溃/被 kill）：死线程留在缓存只会反复失败，
@@ -3728,7 +3771,8 @@ export function createOrchestrator(
     // v1 records read back as the codex default). A project switching backends
     // later must not strand existing sessions on the wrong runtime; the project
     // is still consulted for cwd / tier defaults on the recreate path below.
-    const project = await getProjectByChatId(chatId);
+    project = await getProjectByChatId(chatId);
+    if (project) perm = turnPerm(project);
     if (project && rec.cwd !== project.cwd) {
       lastUsage.delete(threadId); // a new session: the meter starts over
       return { thread: undefined, recreated: true, reason: 'cwd-changed' };
@@ -3744,13 +3788,14 @@ export function createOrchestrator(
         model: rec.model,
         effort: rec.effort,
         mode: perm.mode,
-        network: perm.network,
+        network: perm.network, native: perm.native,
       }, { kind: 'group', chatId });
       trackSession(threadId, resumed);
       // The opening handed to a resumed session carries a new mark. Claude takes its system append again on resume, so that
       // opening is what it now holds (the record's mark stays accepted); Codex keeps the instructions it was started with,
       // so it keeps the record's context and also accepts the mark of the opening that was built.
-      const reopened = resumeProfile ? openings.get(resumeProfile) : undefined;
+      const reopenedProfile = profileUsed.get(resumed) ?? resumeProfile;
+      const reopened = reopenedProfile ? openings.get(reopenedProfile) : undefined;
       if (reopened) {
         if (!hiddenBlocksFor(be.id)) {
           const context: SessionContext = { ...reopened, previousNonces: [...new Set(acceptedNonces(rec.context))].slice(0, 6) };
@@ -3768,7 +3813,7 @@ export function createOrchestrator(
     } catch (err) {
       log.fail('agent', err, { phase: 'resume-on-turn', threadId });
       // Open in a terminal or the Codex app (s15b): say so and keep the session.
-      if (err instanceof SessionInUseError || err instanceof CodexWorkspaceLayoutError) throw err;
+      if (err instanceof SessionInUseError || err instanceof CodexWorkspaceLayoutError || err instanceof ThreadPermissionChanged) throw err;
       const cwd = workCwd(project, rec);
       const fresh = await startWith(be, {
         cwd,
@@ -3776,7 +3821,7 @@ export function createOrchestrator(
         model: rec.model,
         effort: rec.effort,
         mode: perm.mode,
-        network: perm.network,
+        network: perm.network, native: perm.native,
       }, { kind: 'group', chatId });
       trackSession(threadId, fresh);
       lastUsage.delete(threadId);
@@ -3850,7 +3895,7 @@ export function createOrchestrator(
       let tResolveDone = tIntake;
       const threadP = (async () => {
         const { model, effort } = await pickGroupDefault(project, be, prefer);
-        const thread = await startWith(be, { cwd, model, effort, mode: perm.mode, network: perm.network, profile: await profileOf(project, cwd, be, perm.mode) }, { kind: 'group', chatId: msg.chatId });
+        const thread = await startWith(be, { cwd, model, effort, mode: perm.mode, network: perm.network, native: perm.native, profile: await profileOf(project, cwd, be, perm.mode) }, { kind: 'group', chatId: msg.chatId });
         tResolveDone = Date.now();
         return { thread, model, effort };
       })();
@@ -3932,7 +3977,7 @@ export function createOrchestrator(
         modelCustom: isCustomDefault(prefer, model),
         cwd,
         mode: perm.mode,
-        network: perm.network,
+        network: perm.network, native: perm.native,
         summary: stripFileTokens(text).slice(0, 80) || '(空)',
         requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg),
         requestedAt: msg.createTime || tIntake,
@@ -4165,7 +4210,7 @@ export function createOrchestrator(
       try {
         ({ thread } = await resolveThread(sessionKey, msg.chatId, {
           mode: perm.mode,
-          network: perm.network,
+          network: perm.network, native: perm.native,
         }));
         if (!thread) {
           await reply('这个会话还没开始，先发条消息聊两句再 `/compact`。');
@@ -4326,7 +4371,7 @@ export function createOrchestrator(
           model,
           effort,
           mode: perm.mode,
-          network: perm.network,
+          network: perm.network, native: perm.native,
           profile: await profileOf(project, cwd, be, perm.mode),
         }, { kind: 'group', chatId: msg.chatId });
         // Close + evict the parked live thread (a separate app-server proc); its
@@ -6571,7 +6616,7 @@ export function createOrchestrator(
     try {
       if (request.action === 'clear') {
         if (ruleKind(project) !== 'single' || key !== perm.sessionKey) throw new AdminWriteError('只有单会话群可以清空当前上下文');
-        const fresh = await startWith(sessionBackend, { cwd: project.cwd, model: record.model, effort: record.effort, mode: perm.mode, network: perm.network, profile: await profileOf(project, project.cwd, sessionBackend, perm.mode) }, { kind: 'group', chatId: project.chatId });
+        const fresh = await startWith(sessionBackend, { cwd: project.cwd, model: record.model, effort: record.effort, mode: perm.mode, network: perm.network, native: perm.native, profile: await profileOf(project, project.cwd, sessionBackend, perm.mode) }, { kind: 'group', chatId: project.chatId });
         // The local clock, not a Feishu createTime like the other watermarks: this
         // is the main-area session, which no back-fill reads until s14 (it must
         // then allow for clock skew, or use the newest createTime it has).
@@ -6598,7 +6643,7 @@ export function createOrchestrator(
       }
       const root = await channel.send(project.chatId, { markdown: `桌面端启动目标：${request.objective}` }, replyTo ? { replyTo, replyInThread: true } : undefined);
       launched = true;
-      void trackRun(launchGoalRun({ chatId: project.chatId, replyTo: root.messageId, thread, firstText: request.objective, knownThreadId: key, cwd: project.cwd, mode: perm.mode, network: perm.network, model: record.model, effort: record.effort, flat: ruleKind(project) === 'single', backendId: sessionBackend.id, requesterOpenId: owner, requesterKind: 'user', titleSource: { text: request.objective, rawContentType: 'text' } })).catch(error => log.fail('desktop', error));
+      void trackRun(launchGoalRun({ chatId: project.chatId, replyTo: root.messageId, thread, firstText: request.objective, knownThreadId: key, cwd: project.cwd, mode: perm.mode, network: perm.network, native: perm.native, model: record.model, effort: record.effort, flat: ruleKind(project) === 'single', backendId: sessionBackend.id, requesterOpenId: owner, requesterKind: 'user', titleSource: { text: request.objective, rawContentType: 'text' } })).catch(error => log.fail('desktop', error));
       return { ok: true, threadId: key };
     } finally {
       if (!launched && active.get(key) === reserved) active.delete(key);
@@ -6717,6 +6762,7 @@ export function createOrchestrator(
     mode?: PermissionMode;
     /** Remote image refs are fetched only when this is on, in every tier. */
     network?: boolean;
+    native?: StartThreadOptions['native'];
     summary?: string;
     /** first turn is a 🔁 重试: the original input it wraps (QueuedTurn.replayText) */
     replayText?: string;

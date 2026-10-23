@@ -214,6 +214,7 @@ function projectData(p: Project, backend: AgentBackend): T.ProjectSections {
       network: perm.effect.network,
       options: {
         tiers: [...table.tiers(env)], strength: table.strength(env),
+        fields: table.fields(env), expanded: { qa: table.expand('qa'), write: table.expand('write'), full: table.expand('full') },
         ...(perm.custom ? { customSummary: table.describe(perm.custom) } : {}),
         ...(perm.legacy ? { legacy: true } : {}),
         ...(perm.invalid ? { invalid: true } : {}),
@@ -888,6 +889,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               const backendId = groupBackendId(p);
               const table = permissionTable(backendId);
               let mode = e.patch.mode ?? effectiveMode(p);
+              let effectMode = mode;
               let network = TIER_NETWORK[mode];
               let custom: Project['custom'];
               if (e.patch.custom !== undefined && e.patch.custom !== null) {
@@ -899,11 +901,13 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
                 }
                 const matched = table.matchTier(settings);
                 const effect = table.effect(settings);
-                mode = matched ?? effect.mode;
-                network = matched ? TIER_NETWORK[matched] : effect.network;
+                const stored = table.stored?.(settings) ?? effect;
+                effectMode = matched ?? effect.mode;
+                mode = matched ?? stored.mode;
+                network = matched ? TIER_NETWORK[matched] : stored.network;
                 if (!matched) custom = { backend: backendId, settings };
               }
-              const unavailable = tierInfo(table, tableEnv(deps.backendFor(backendId)), mode).unavailable;
+              const unavailable = tierInfo(table, tableEnv(deps.backendFor(backendId)), effectMode).unavailable;
               if (unavailable) throw new SettingsInputError(unavailable);
               p.mode = mode;
               p.network = network;

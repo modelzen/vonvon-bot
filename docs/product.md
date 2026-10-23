@@ -551,7 +551,7 @@ owner 的话："确认卡、选项卡、授权卡这些需要用户交互、用�
 | 工作区可写 | 能改工作区里的文件，能联网 | Default（workspace-write，开网；比 Codex 自带的 Default 多开了网络） | Edit automatically（`acceptEdits` 模式），命令在沙箱里，开网 |
 | 完全访问 | 不限制，你这个账号能做的它都能做 | Full Access（danger-full-access） | Bypass permissions（`bypassPermissions`） |
 
-高级设置：Codex 有沙箱模式（sandbox）和网络（network）；Claude 有权限模式（permission mode：手动确认、自动接受编辑、先出方案、跳过权限检查，自动判断看 s31d 的实测）、命令沙箱（sandbox）、网络（关、全部、只允许这些网站）。先出方案：每一轮先出方案，主人或管理员在确认卡上点［按这个方案做］后按自动接受编辑动手。
+高级设置：Codex 有沙箱模式（sandbox）和网络（network）；Claude 有权限模式（permission mode：手动确认、自动接受编辑、先出方案、跳过权限检查，自动判断（auto，s31d Mac 实测通过））、命令沙箱（sandbox）、网络（关、全部、只允许这些网站）。先出方案：每一轮先出方案，主人或管理员在确认卡上点［按这个方案做］后按自动接受编辑动手。 2026-10-23 Mac 在 SDK 0.3.296 上实测：自动判断守住工作区外写和关网边界，列入高级设置；五种模式、沙箱开关和网站名单下，自身 MCP 工具初测的 20 种组合都可调用，plan 在出方案前也可调用；审查后 bypass 只接受不限网络，有效公开组合为 18 种，auto 显式允许自身 MCP。跳过权限检查加命令沙箱开时，Bash 写不进工作区以外，Write 仍能写工作区外，curl 能联网；这一组合不限制 Write。网站名单使用 strictAllowlist，跨主机重定向只返回新地址，不自动取内容。先出方案的群，方案文件会存在工作区的 .claude/plans/ 里。
 
 以后接的 provider，各写一张展开表，例子（还没接）：
 

@@ -635,7 +635,7 @@ export class ClaudeAgentBackend implements AgentBackend {
     const profile = resolveSessionProfile(opts.profile, { additionalRoots: true });
     const sdk = await this.sdkLoader();
     const realCwd = await realpath(opts.cwd).catch(() => opts.cwd);
-    const access = claudeAccess(opts.mode, opts.network, opts.cwd, realCwd, await Promise.all(profile.additionalRoots.map(async root => ({ ...root, path: await realpath(root.path) }))));
+    const access = claudeAccess(opts.mode, opts.network, opts.cwd, realCwd, await Promise.all(profile.additionalRoots.map(async root => ({ ...root, path: await realpath(root.path) }))), opts.native);
     return new ClaudeAgentThread({
       sessionId: randomUUID(),
       resume: false,
@@ -661,7 +661,7 @@ export class ClaudeAgentBackend implements AgentBackend {
     const sdk = await this.sdkLoader();
     const transcript = await transcriptMark(await assertSessionSaved(opts.sessionId), opts.sessionId);
     const realCwd = await realpath(opts.cwd).catch(() => opts.cwd);
-    const access = claudeAccess(opts.mode, opts.network, opts.cwd, realCwd, await Promise.all(profile.additionalRoots.map(async root => ({ ...root, path: await realpath(root.path) }))));
+    const access = claudeAccess(opts.mode, opts.network, opts.cwd, realCwd, await Promise.all(profile.additionalRoots.map(async root => ({ ...root, path: await realpath(root.path) }))), opts.native);
     return new ClaudeAgentThread({
       sessionId: opts.sessionId,
       resume: true,

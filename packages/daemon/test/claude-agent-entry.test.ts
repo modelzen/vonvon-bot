@@ -35,16 +35,18 @@ function fixture(withSdk = true, stream?: AsyncIterable<SDKMessage>) {
   return { registered, backend: new ClaudeAgentBackend(async () => sdk, () => undefined), query,
     options: () => options, invoke: (args: object, extra: unknown) => { if (!invoke) throw Error('missing handler'); return invoke(args, extra); } };
 }
-it.each(['start', 'resume'] as const)('%s carries entry separately from the serializable profile', async action => {
+it.each([
+  ['start', undefined], ['resume', undefined], ['start', { permissionMode: 'plan' }], ['resume', { permissionMode: 'plan' }],
+] as const)('%s carries entry separately from the serializable profile with native %j', async (action, native) => {
   const root = mkdtempSync(join(tmpdir(), 's46-sdk-'));
   vi.stubEnv('CLAUDE_CONFIG_DIR', root);
   mkdirSync(join(root, 'projects', '-fixture'), { recursive: true });
   writeFileSync(join(root, 'projects', '-fixture', 'saved.jsonl'), JSON.stringify({ type: 'user', uuid: 'm', message: { role: 'user', content: 'fixture' } }) + '\n');
   const e = entry(), f = fixture();
-  threads.push(action === 'start' ? await f.backend.startThread({ cwd: root, mode: 'qa', entry: e })
-    : await f.backend.resumeThread({ cwd: root, mode: 'qa', entry: e, sessionId: 'saved' }));
+  threads.push(action === 'start' ? await f.backend.startThread({ cwd: root, mode: 'qa', entry: e, native })
+    : await f.backend.resumeThread({ cwd: root, mode: 'qa', entry: e, sessionId: 'saved', native }));
   expect(f.options()?.mcpServers?.vonvon_bot).toMatchObject({ type: 'sdk', name: 'vonvon_bot' });
-  expect(f.options()).toMatchObject({ permissionMode: 'default', sandbox: { enabled: true }, settings: { autoMemoryEnabled: false } });
+  expect(f.options()).toMatchObject({ permissionMode: native ? 'plan' : 'default', sandbox: { enabled: true }, settings: { autoMemoryEnabled: false } });
   expect(f.options()?.env?.VONVON_SESSION).toBe('1');
   await expect(f.invoke({}, { _meta: { 'claudecode/toolUseId': 'u1' } })).resolves.toEqual({ content: [{ type: 'text', text: '{"v":1}' }] });
   expect(e.call).toHaveBeenLastCalledWith('session_info', {}, { toolUseId: 'u1' });
@@ -63,7 +65,7 @@ it.each([true, false])('keeps sessions usable without entry or without SDK MCP e
 it.each(['qa', 'write', 'full'] as const)('preserves %s permission decisions for vonvon MCP', async mode => {
   const verdict = await decide(claudeAccess(mode, false, '/fixture', '/fixture'),
     { toolName: 'mcp__vonvon_bot__session_info', input: {}, extra: {} }, 'callback');
-  expect(verdict).toMatchObject(mode === 'full' ? { kind: 'ask', ask: 'permission' } : { kind: 'allow' });
+  expect(verdict).toEqual({ kind: 'allow' });
 });
 
 it.each([0, 255, 256])('keeps streamed/full duplicate origins in their original turn after %i other IDs', async count => {

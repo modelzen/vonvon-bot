@@ -1,10 +1,12 @@
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { parseAskRequest, type AskRequest, type AskResolution } from '../types.js';
-import type { ClaudeAccess, ToolCall } from './permission.js';
+import { resumeMode, type ClaudeAccess, type ToolCall } from './permission.js';
 
 export interface BridgedAsk {
   request: AskRequest;
+  /** The thread must apply acceptEdits before releasing the pending-plan guard. */
+  planConfirmation?: boolean;
   toResult(resolution: AskResolution): PermissionResult;
 }
 const questionsSchema = z.object({ questions: z.array(z.object({
@@ -60,12 +62,12 @@ export function bridgeAsk(id: string, ask: 'choices' | 'confirmation' | 'permiss
         detail: plan ? plan.slice(0, 2000) + (plan.length > 2000 ? '…（完整方案见上面的运行卡）' : '') : 'Claude 写好了方案，想开始按它做（方案见上面的运行卡）。',
         acceptedConsequence: 'Claude 按这个方案开始做。', declinedConsequence: 'Claude 不按这个方案做，等你说怎么改。',
       });
-      return { request, toResult(resolution) {
+      return { request, planConfirmation: call.toolName === 'ExitPlanMode' && !!access.planState, toResult(resolution) {
         if (resolution.kind === 'unanswered') return resolution.reason === 'timeout'
           ? deny('用户 15 分钟没有确认这个方案，先不要按它做，停下来说明。') : unanswered(resolution.reason);
         if (resolution.answer.kind !== 'confirmation' || resolution.answer.decision !== 'proceed')
           return deny('用户不同意这个方案，会自己说想怎么做。先停下，等用户的下一条消息。');
-        const mode = access.mode === 'qa' ? 'default' : access.mode === 'write' ? 'acceptEdits' : 'bypassPermissions';
+        const mode = resumeMode(access);
         return { behavior: 'allow', updatedInput: input, updatedPermissions: [{ type: 'setMode', mode, destination: 'session' }] };
       } };
     }
