@@ -23,5 +23,17 @@ export async function libraryRpc(service: AdminService, request: LibraryRequest)
         project: { id, name, revision, workspace: change.project.workspace },
         rebound: change.rebound.map(item => ({ agentId: item.botId, ...(item.chatId ? { groupId: item.chatId } : {}), state: item.state, ...(item.error ? { message: item.error } : {}) })) }) };
     }
+    case 'previous': {
+      const project = await library.previous(request.agentId, request.groupId);
+      return { kind: 'read', value: libraryReplySchema.parse({ kind: 'previous', ...(project ? { project } : {}) }) };
+    }
+    case 'rename': {
+      const project = await library.rename({ projectId: request.projectId, revision: request.revision, name: request.name });
+      return { kind: 'mutation', reply: () => libraryReplySchema.parse({ kind: 'renamed', project: { id: project.id, name: project.name, revision: project.revision, workspace: project.workspace } }) };
+    }
+    case 'delete': {
+      await library.remove({ projectId: request.projectId, revision: request.revision });
+      return { kind: 'mutation', reply: () => libraryReplySchema.parse({ kind: 'deleted', projectId: request.projectId }) };
+    }
   }
 }

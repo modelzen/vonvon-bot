@@ -14,7 +14,7 @@ export function AppShell(props: {page: Page; view: CollaborationView; title: str
       {!props.firstUse && <nav className="today-primary-nav" aria-label="主要导航">
         <button type="button" aria-current={props.page === 'home' ? 'page' : undefined} onClick={() => props.onNavigate('home')}>概览</button>
         <button type="button" aria-current={props.page === 'collaboration' && props.view === 'agents' ? 'page' : undefined} onClick={() => props.onOpenList('agents')}>Bot</button>
-        <button type="button" aria-current={props.page === 'collaboration' && props.view === 'groups' ? 'page' : undefined} onClick={() => props.onOpenList('groups')}>群聊</button>
+        <button type="button" aria-current={props.page === 'collaboration' && props.view === 'projects' ? 'page' : undefined} onClick={() => props.onOpenList('projects')}>项目</button>
       </nav>}
       <div className="today-header-actions">
         <button type="button" className="today-icon-button" aria-label="搜索设置、Bot 或项目" title="搜索 · ⌘K" onClick={props.onSearch}><Search size={17} strokeWidth={1.7}/></button>

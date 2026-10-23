@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, readdir, realpath, rename, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, realpath, rename, rm, unlink } from 'node:fs/promises';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
@@ -328,6 +328,39 @@ export async function setLibraryWorkspace(draft: LibraryDraft, change: { project
   project.revision += 1;
   await draft.commit();
   return { project, changed: true };
+}
+
+/** Renames a project inside {@link ownLibrary}. Names stay unique in the library; the same name again changes nothing, not even the revision. */
+export async function renameLibraryProject(draft: LibraryDraft, change: { projectId: string; revision: number; name: string }): Promise<{ project: LibraryProject; changed: boolean }> {
+  const project = draft.projects.find(item => item.id === change.projectId);
+  if (!project) throw new LibraryError('not-found', '项目不存在，请刷新');
+  if (project.revision !== change.revision) throw new LibraryError('revision', '项目已改变，请刷新后重试');
+  const name = change.name.trim();
+  if (!name || name.length > PROJECT_NAME_MAX) throw new LibraryError('name-taken', '项目名无效');
+  if (project.name === name) return { project, changed: false };
+  const owner = draft.projects.find(item => item.id !== project.id && item.name === name);
+  if (owner) throw new LibraryError('name-taken', `已经有一个叫「${name}」的项目`, { id: owner.id, name: owner.name });
+  project.name = name;
+  project.revision += 1;
+  await draft.commit();
+  return { project, changed: true };
+}
+
+/**
+ * Deletes a project inside {@link ownLibrary}: the library entry first, then its own directory (memory and events go
+ * with it). The caller has checked that no binding row names it. The directory name comes from {@link projectDirectory},
+ * which refuses anything that is not a project id.
+ */
+export async function deleteLibraryProject(draft: LibraryDraft, change: { projectId: string; revision: number }, location?: LibraryLocation): Promise<LibraryProject> {
+  const index = draft.projects.findIndex(item => item.id === change.projectId);
+  if (index < 0) throw new LibraryError('not-found', '项目不存在，请刷新');
+  const project = draft.projects[index]!;
+  if (project.revision !== change.revision) throw new LibraryError('revision', '项目已改变，请刷新后重试');
+  const directory = projectDirectory(project.id, location);
+  draft.projects.splice(index, 1);
+  await draft.commit();
+  await rm(directory, { recursive: true, force: true });
+  return project;
 }
 
 /** The `cwd`, `blank` and `directories` of a binding row that mirrors `workspace` (§2.1); the one place that shapes them. */

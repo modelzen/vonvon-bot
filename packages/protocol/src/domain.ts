@@ -165,6 +165,8 @@ export const membershipSchema = z.object({
   /** Absent when the directory is fine, and from daemons before s36c2d. */
   directoryProblem: directoryProblemSchema.optional(),
   conversation: conversationSchema, response: replyModeSchema,
+  /** The mode the group really runs in (the daemon's `groupPermission(row).effect.mode`), which the stored `permission` tier can be wider than: a custom permission or s31d's native settings make it narrower (D8). Absent from older daemons; no client guesses it from `permission`. */
+  effectMode: permissionSchema.optional(),
   /** Actual project activation; older daemons omit this field. */
   enabled: z.boolean().optional(),
   permission: z.object({
