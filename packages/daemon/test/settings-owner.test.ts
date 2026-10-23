@@ -17,7 +17,7 @@ import type { AgentBackend } from '../src/agent/types';
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
   const appDir = mkdtempSync(join(tmpdir(), 'settings-owner-'));
-  return { paths: { appDir, configFile: join(appDir, 'config.json'), projectsFile: join(appDir, 'projects.json'), sessionsFile: join(appDir, 'sessions.json'), commentInstructionsFile: join(appDir, 'instructions.md'), commentsRootDir: join(appDir, 'comments') } };
+  return { botDir: (id: string) => join(appDir, 'bots', id), botPaths: (id: string) => ({ dir: join(appDir, 'bots', id) }), paths: { appDir, configFile: join(appDir, 'config.json'), projectsFile: join(appDir, 'projects.json'), sessionsFile: join(appDir, 'sessions.json'), commentInstructionsFile: join(appDir, 'instructions.md'), commentsRootDir: join(appDir, 'comments') } };
 });
 const botId = 'cli_fixture';
 const agent = { kind: 'agent' as const, botId };
@@ -217,7 +217,7 @@ it('s12: a stored autoCompact:false is ignored on read and the switch cannot be 
   await updateProject('demo', JSON.parse('{"autoCompact":false}') as Parameters<typeof updateProject>[1]);
   const { owner } = await fixture();
   const view = await owner.read(project) as ProjectSettingsView;
-  expect(Object.keys(view.sections).sort()).toEqual(['judge', 'model', 'permission', 'response', 'run']);
+  expect(Object.keys(view.sections).sort()).toEqual(['judge', 'model', 'modelAccess', 'permission', 'presentation', 'profile', 'response', 'run', 'skills', 'smartRules', 'workspace']);
   expect(JSON.stringify(view)).not.toContain('autoCompact');
   expect(() => parseSettingsEdit({ scope: project, section: 'compact', revision: 'x', patch: { autoCompact: true } })).toThrow('设置字段、类型或范围无效');
   expect(JSON.parse(await readFile(paths.projectsFile, 'utf8')).projects[0]).toMatchObject({ autoCompact: false });
@@ -231,7 +231,7 @@ it('s02c1, s02c5: an old config.json with 咖啡一下 settings loads, reads wit
   cfg = await loadConfig() as AppConfig;
   const { owner } = await fixture();
   const view = await owner.read(agent) as AgentSettingsView;
-  expect(Object.keys(view.sections)).toEqual(['cards', 'run', 'completion', 'comments', 'titles', 'paths', 'access', 'judge']);
+  expect(Object.keys(view.sections)).toEqual(['profile', 'cards', 'run', 'completion', 'comments', 'titles', 'paths', 'access', 'judge']);
   expect(view).not.toHaveProperty('cliRuntime');
   expect(JSON.stringify(view)).not.toMatch(/cliBridge|notifyScope|keepAwake/);
   expect((await owner.save({ scope: agent, section: 'cards', revision: view.sections.cards.revision, patch: { showToolCalls: false } })).kind).toBe('saved');

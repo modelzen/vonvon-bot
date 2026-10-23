@@ -16,7 +16,7 @@ import type { AgentBackend } from '../src/agent/types';
 
 vi.mock('../src/config/paths', () => {
   const root = mkdtempSync(join(tmpdir(), 'settings-parity-'));
-  return { paths: { appDir: root, configFile: join(root, 'config.json'), projectsFile: join(root, 'projects.json'), sessionsFile: join(root, 'sessions.json'), commentInstructionsFile: join(root, 'instructions.md'), commentsRootDir: join(root, 'comments') } };
+  return { botDir: (id: string) => join(root, 'bots', id), botPaths: (id: string) => ({ dir: join(root, 'bots', id) }), paths: { appDir: root, configFile: join(root, 'config.json'), projectsFile: join(root, 'projects.json'), sessionsFile: join(root, 'sessions.json'), commentInstructionsFile: join(root, 'instructions.md'), commentsRootDir: join(root, 'comments') } };
 });
 
 const botId = 'cli_fixture';

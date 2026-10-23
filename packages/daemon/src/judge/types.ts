@@ -63,11 +63,13 @@ export interface JudgeRequest {
   /** the 你 of the prompt */
   botName: string;
   /** the group's backend and its judge model override (unchecked, as stored) */
-  group: Pick<Project, 'chatId' | 'name' | 'backend' | 'judge'>;
+  group: Pick<Project, 'chatId' | 'name' | 'backend' | 'judge' | 'smartRules'>;
   /** `cfg.preferences.judge` as stored; the judge layer checks it (parseStoredJudge) */
   botJudge?: unknown;
   /** a summary of the bot's personality (SOUL.md from s38 on), cut to 1,500 characters */
   persona?: string;
+  /** Memory is a separate bounded context field so a long persona cannot erase it. */
+  memory?: string;
   /** topic variant: the topic's title */
   topicTitle?: string;
   /** oldest first, without the message to judge */

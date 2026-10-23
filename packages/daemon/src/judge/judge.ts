@@ -13,9 +13,9 @@ import { paths } from '../config/paths';
 import { log } from '../core/logger';
 import { createCooldown } from './cooldown';
 import { decisionBody, decisionProvider, readDecision, type DecisionProvider } from './decision';
-import { parseStoredJudge, resolveJudgeModel } from './model';
+import { parseStoredJudge, resolveJudgeModel, judgeBackendId } from './model';
 import { SMART_FACTS_GUIDANCE, judgeAnchors, judgeSchema, judgeSystem, parseVerdict, renderJudgeInput } from './prompt';
-import { readSmartPrompt, SmartPromptError } from './smart-file';
+import { readSmartPrompt, SmartPromptError, composeSmartRules } from './smart-file';
 import { DecisionError } from './typesafe';
 import type { JudgeErrorKind, JudgeRequest, JudgeResult } from './types';
 
@@ -294,7 +294,7 @@ export function createJudge(deps: JudgeDeps): Judge {
     aborted.catch(() => undefined);
 
     try {
-      const backend = deps.backendFor(base.backend);
+      const backend = deps.backendFor(judgeBackendId(base.backend, storedJudge(req.group.judge, req.group.chatId)));
       const models = backend.peekModels?.();
       base = {
         ...base, backend: backend.id,
@@ -348,7 +348,7 @@ export function createJudge(deps: JudgeDeps): Judge {
         if (!provider) throw new JudgeFail('unavailable', `这个版本不认识决策模型 ${base.provider.slice(0, 40)}`);
         let sent: ReturnType<typeof decisionBody> | undefined;
         const work = (async () => {
-          const prompt = await readPrompt(req.appId, req.group.chatId);
+          const prompt = req.group.smartRules ? { source: 'group' as const, path: '', text: composeSmartRules(req.group.smartRules) } : await readPrompt(req.appId, req.group.chatId);
           if (!ctl.signal.aborted) notePrompt(req, prompt);
           base = { ...base, promptSource: prompt.source, promptHash: promptHashOf(prompt.text) };
           const key = await readKey(provider);
@@ -376,7 +376,7 @@ export function createJudge(deps: JudgeDeps): Judge {
       // Steps 3 to 6 race the shared controller: a stuck file read, queue or backend still returns
       // on time.
       const work = (async (): Promise<JudgeCallOutput> => {
-        const prompt = await readPrompt(req.appId, req.group.chatId);
+        const prompt = req.group.smartRules ? { source: 'group' as const, path: '', text: composeSmartRules(req.group.smartRules) } : await readPrompt(req.appId, req.group.chatId);
         if (!ctl.signal.aborted) notePrompt(req, prompt);
         base = { ...base, promptSource: prompt.source, promptHash: promptHashOf(prompt.text) };
         if (!backend.judge) throw new JudgeFail('unavailable', `${backend.displayName} 不支持判断`);

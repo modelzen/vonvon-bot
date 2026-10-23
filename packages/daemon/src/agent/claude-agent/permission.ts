@@ -13,9 +13,10 @@ export interface ClaudeAccess {
   network: boolean;
   cwd: string;
   realCwd: string;
+  additionalRoots?: readonly { path: string; access: 'read' | 'write' }[];
 }
-export function claudeAccess(mode: PermissionMode | undefined, network: boolean | undefined, cwd: string, realCwd: string): ClaudeAccess {
-  return { mode: mode ?? 'full', network: network ?? false, cwd, realCwd };
+export function claudeAccess(mode: PermissionMode | undefined, network: boolean | undefined, cwd: string, realCwd: string, additionalRoots?: ClaudeAccess['additionalRoots']): ClaudeAccess {
+  return { mode: mode ?? 'full', network: network ?? false, cwd, realCwd, ...(additionalRoots?.length ? { additionalRoots } : {}) };
 }
 export function tierMode(mode: PermissionMode): 'default' | 'acceptEdits' | 'bypassPermissions' {
   return mode === 'qa' ? 'default' : mode === 'write' ? 'acceptEdits' : 'bypassPermissions';
@@ -32,7 +33,10 @@ export function permissionOptions(access: ClaudeAccess): ClaudePermissionOptions
     ...base,
     sandbox: {
       enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false,
-      ...(access.mode === 'qa' ? { filesystem: { denyWrite: [...new Set([access.cwd, access.realCwd])] } } : {}),
+      ...(access.mode === 'qa' || access.additionalRoots?.length ? { filesystem: {
+        ...(access.mode === 'qa' ? { denyWrite: [...new Set([access.cwd, access.realCwd, ...access.additionalRoots?.map(root => root.path) ?? []])] }
+          : { allowWrite: access.additionalRoots?.filter(root => root.access === 'write').map(root => root.path) ?? [], denyWrite: access.additionalRoots?.filter(root => root.access === 'read').map(root => root.path) ?? [] }),
+      } } : {}),
     },
     ...(access.network ? { allowedTools: NETWORK_TOOLS } : { disallowedTools: NETWORK_TOOLS }),
     hooks: { PreToolUse: [{ matcher: FILE_WRITE.join('|'), hooks: [fileHook(access)], timeout: 10 }] },
@@ -145,7 +149,12 @@ export async function decide(access: ClaudeAccess, call: ToolCall, origin: Origi
   const shown = path.slice(0, 200);
   if (access.mode === 'qa') return deny(`这个群是只读档，不能写文件（${shown}）。换个不用写文件的办法，或者停下来说明：要写文件得请主人把群改成读写档。`);
   let allowed: boolean;
-  try { allowed = await within(access.realCwd, await resolveReal(path, access.cwd, fsx), fsx); }
+  try {
+    const target = await resolveReal(path, access.cwd, fsx);
+    const roots = [access.realCwd, ...access.additionalRoots?.filter(root => root.access === 'write').map(root => root.path) ?? []];
+    allowed = (await Promise.all(roots.map(root => within(root, target, fsx)))).some(Boolean);
+    if ((await Promise.all((access.additionalRoots ?? []).filter(root => root.access === 'read').map(root => within(root.path, target, fsx)))).some(Boolean)) allowed = false;
+  }
   catch (error) { if (!(error instanceof OutsideWorkspace)) throw error; allowed = false; }
   if (!allowed) return deny(`这个群是读写档，只能写工作区里的文件，${shown} 在工作区以外。改写到工作区里，或者停下来说明。`);
   return { kind: origin === 'hook' ? 'continue' : 'allow' };
