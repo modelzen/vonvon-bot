@@ -110,6 +110,19 @@ describe('synchronous desktop facade', () => {
     expect(h.calls.filter(value => value === desktopChannels.chooseExecutablePath)).toHaveLength(3);
   });
 
+  it('validates every directory returned by the native chooser and preserves cancellation', async () => {
+    const h = harness();
+    const {shell}=createDesktopFacades(h.transport);
+    h.replies.set(desktopChannels.chooseDirectoryPaths, async()=>({ok:true,value:['/tmp/a','/tmp/b']}));
+    await expect(shell.chooseDirectoryPaths(true)).resolves.toEqual(['/tmp/a','/tmp/b']);
+    h.replies.set(desktopChannels.chooseDirectoryPaths, async()=>({ok:true,value:null}));
+    await expect(shell.chooseDirectoryPaths(false)).resolves.toBeNull();
+    for (const value of [123, ['/tmp/a',false],[''],['bad\0path'],Array(65).fill('/tmp/a')]) {
+      h.replies.set(desktopChannels.chooseDirectoryPaths, async()=>({ok:true,value}));
+      await expect(shell.chooseDirectoryPaths(true)).rejects.toThrow('Invalid desktop response');
+    }
+  });
+
   it('registers its receiver before subscribing and delivers the newest snapshot once', async () => {
     const h = harness();
     let resolveSeed!: (value: unknown) => void;

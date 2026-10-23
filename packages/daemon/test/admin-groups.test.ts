@@ -118,9 +118,12 @@ describe('desktop group commands in the owning bot', () => {
     const dir = await workspace();
     const fixture = channelFixture();
     const execute = createGroupExecutor(fixture.channel);
-    expect(parseBindGroupInput({ ...input(dir), kind: 'smart' })).toMatchObject({ kind: 'smart' });
-    for (const noMention of [true, false]) expect(() => parseBindGroupInput({ ...input(dir), kind: 'smart', noMention })).toThrow('没有免 @');
-    const smart = { ...input(dir), chatId: 'oc_s25c', projectName: 'S25c', kind: 'smart' as const };
+    const judge = {kind:'llm' as const,backend:'codex-appserver' as const,model:'fixture-judge',custom:true};
+    expect(parseBindGroupInput({ ...input(dir), kind: 'smart' })).toMatchObject({kind: 'smart'});
+    expect(parseBindGroupInput({ ...input(dir), kind: 'smart' })).not.toHaveProperty('judge');
+    expect(parseBindGroupInput({ ...input(dir), kind: 'smart', judge })).toMatchObject({ kind: 'smart', judge });
+    for (const noMention of [true, false]) expect(() => parseBindGroupInput({ ...input(dir), kind: 'smart', judge, noMention })).toThrow('没有免 @');
+    const smart = { ...input(dir), chatId: 'oc_s25c', projectName: 'S25c', kind: 'smart' as const, judge };
     const bound = await execute({ kind: 'bindGroup', input: smart });
     expect(bound).toMatchObject({ kind: 'single', smart: true, noMention: false });
     expect(fixture.message).toHaveBeenCalledTimes(1);
@@ -133,7 +136,7 @@ describe('desktop group commands in the owning bot', () => {
     expect(fixture.message).toHaveBeenCalledTimes(1);
     await expect(execute({ kind: 'bindGroup', input: { ...smart, kind: 'single' } })).rejects.toThrow('不可修改');
     // A 免@ reaching the entry with 智能 (a DM card's shared form) is dropped, never stored on.
-    const picked = await joinExistingGroup(fixture.channel, { name: 'S25c picked', chatId: 'oc_s25c_picked', existingPath: dir, kind: 'smart', noMention: true });
+    const picked = await joinExistingGroup(fixture.channel, { name: 'S25c picked', chatId: 'oc_s25c_picked', existingPath: dir, kind: 'smart', judge, noMention: true });
     expect(picked).toMatchObject({ kind: 'single', smart: true, noMention: false });
   });
 

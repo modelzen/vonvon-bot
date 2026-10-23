@@ -124,6 +124,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     return closing;
   };
   try {
+    await orchestrator.initialize?.();
     channel.on('message', orchestrator.onMessage);
     channel.on('cardAction', orchestrator.dispatcher.handle);
     channel.on('comment', orchestrator.onComment);

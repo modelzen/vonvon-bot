@@ -5,7 +5,7 @@ import { basename, join } from 'node:path';
 import type { AccountUsageBundle } from '../src/agent/types';
 import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
-import { addProject, getProjectByName, removeProject, updateProject } from '../src/project/registry';
+import { addProject, getProjectByName, mutateProject, removeProject, updateProject } from '../src/project/registry';
 import { getSession, listSessions, upsertSession } from '../src/bot/session-store';
 import { createOrchestrator } from '../src/bot/handle-message';
 import { parseCollaborationRequest, projectRevision } from '../src/admin/collaboration';
@@ -57,7 +57,7 @@ const target = { projectName: 'demo', chatId: 'oc_demo' };
 const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' } } };
 function backend() {
   const thread = { sessionId: 'fresh', isAlive: () => true, close: vi.fn(async () => {}), compact: vi.fn(async () => ({ usage: { usedTokens: 20, contextWindow: 100 } })) };
-  const backend = { id: 'codex-appserver', displayName: 'Codex (app-server)', listModels: async () => [], startThread: vi.fn(async () => thread), resumeThread: vi.fn(async () => thread), listThreads: vi.fn(async () => [{ sessionId: 'past', preview: 'historic', createdAt: 1, updatedAt: 2 }]), readHistory: vi.fn(async () => ({ name: 'historic', preview: '', turns: [], totalTurns: 0 })) };
+  const backend = { id: 'codex-appserver', displayName: 'Codex (app-server)', listModels: async () => [{ id: 'gpt-5.5', displayName: 'GPT', supportedEfforts: ['medium' as const], defaultEffort: 'medium' as const, isDefault: true, hidden: false }], startThread: vi.fn(async () => thread), resumeThread: vi.fn(async () => thread), listThreads: vi.fn(async () => [{ sessionId: 'past', preview: 'historic', createdAt: 1, updatedAt: 2 }]), readHistory: vi.fn(async () => ({ name: 'historic', preview: '', turns: [], totalTurns: 0 })) };
   fixture.backend = backend;
   return { ...backend, thread };
 }
@@ -71,7 +71,7 @@ beforeEach(async () => {
   await rm(paths.projectsFile, { force: true }); await rm(paths.sessionsFile, { force: true });
   fixture.failProjectsWrite = false; fixture.holdProjectsWrite = undefined;
   fixture.leave.mockReset(); fixture.send.mockClear();
-  await addProject({ name: 'demo', chatId: 'oc_demo', cwd: workspace, kind: 'single', blank: false, origin: 'joined', createdAt: 1, backend: 'codex-appserver' });
+  await addProject({ name: 'demo', chatId: 'oc_demo', cwd: workspace, kind: 'single', blank: false, origin: 'joined', createdAt: 1, backend: 'codex-appserver', judge: { kind: 'llm', backend: 'codex-appserver', model: 'gpt-5.5', effort: 'medium' } });
   await upsertSession({ threadId: 'oc_demo', chatId: 'oc_demo', cwd: workspace, sessionId: 'old', backend: 'codex-appserver', summary: 'old', createdAt: 1, updatedAt: 1 });
 });
 afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
@@ -390,9 +390,9 @@ it('s25c: 多会话 and 智能 archive each other\'s sessions, as 多会话 and 
 });
 it('s25c: parses 智能 from the web and refuses a 免@ with it', () => {
   expect(parseCollaborationRequest({ action: 'editProject', ...target, expectedRevision: 'x', kind: 'smart' })).toMatchObject({ kind: 'smart' });
-  expect(parseCollaborationRequest({ action: 'createProject', requestId: 'r'.repeat(16), name: 'n', kind: 'smart', backend: 'codex-appserver' })).toMatchObject({ kind: 'smart' });
+  expect(parseCollaborationRequest({ action: 'createProject', requestId: 'r'.repeat(16), name: 'n', kind: 'smart', judge: { kind: 'llm', backend: 'codex-appserver', model: 'gpt-5.5' }, backend: 'codex-appserver' })).toMatchObject({ kind: 'smart' });
   for (const noMention of [true, false]) {
-    expect(() => parseCollaborationRequest({ action: 'createProject', requestId: 'r'.repeat(16), name: 'n', kind: 'smart', noMention, backend: 'codex-appserver' })).toThrow('没有免 @');
+    expect(() => parseCollaborationRequest({ action: 'createProject', requestId: 'r'.repeat(16), name: 'n', kind: 'smart', judge: { kind: 'llm', backend: 'codex-appserver', model: 'gpt-5.5' }, noMention, backend: 'codex-appserver' })).toThrow('没有免 @');
   }
   expect(() => parseCollaborationRequest({ action: 'editProject', ...target, expectedRevision: 'x', kind: 'later' })).toThrow('会话类型无效');
 });
@@ -680,5 +680,16 @@ it('captures real bot-added events for desktop while retaining DM binding and cl
     await app.onBotAddedToChat({ chatId: 'oc_queue_failure', operator: { openId: 'ou_owner' } });
     expect(fixture.send).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(fixture.send.mock.calls.at(-1))).toContain('oc_queue_failure');
+  } finally { await app.shutdown(); }
+});
+
+it('requires an explicit group decision model before switching to smart mode', async () => {
+  backend(); const app = orchestrator();
+  try {
+    await mutateProject('demo', project => { delete project.judge; });
+    const revision = projectRevision((await getProjectByName('demo'))!);
+    await expect(app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart' })).rejects.toThrow('决策模型');
+    expect(await getProjectByName('demo')).not.toHaveProperty('smart');
+    expect(fixture.send).not.toHaveBeenCalled();
   } finally { await app.shutdown(); }
 });

@@ -200,9 +200,9 @@ describe('execution roots admission', () => {
     execution.repositories = [];
     expect(await executionSessionProfile({ ...f, execution, backend: CODEX, scope: 'group' })).toBeUndefined();
   });
-  it('keeps Claude and ungrouped single-root profiles unchanged but admits group primary', async () => {
+  it('admits both providers and keeps ungrouped single-root profiles unchanged', async () => {
     const execution = resolveExecution({ group: group({ directories: { repositories: ['/missing/repo'] } }) });
-    expect(await executionSessionProfile({ execution, cwd: '/missing', backend: CLAUDE, scope: 'group' })).toBeUndefined();
+    await expect(executionSessionProfile({ execution, cwd: '/missing', backend: CLAUDE, scope: 'group' })).rejects.toThrow();
     execution.repositories = [];
     await expect(executionSessionProfile({ execution, cwd: '/missing', backend: CODEX, scope: 'group' })).rejects.toThrow();
     expect(await executionSessionProfile({ execution, cwd: '/missing', backend: CODEX, scope: 'ungrouped' })).toBeUndefined();

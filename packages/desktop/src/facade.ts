@@ -213,6 +213,12 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
       .then(value => readResult(value, parseExecutablePath), error => {
         throw error instanceof Error ? new Error(error.message) : new Error('Desktop request failed');
       }),
+    chooseDirectoryPaths: multiple => transport.invoke(desktopChannels.chooseDirectoryPaths, multiple)
+      .then(value => readResult(value, paths => {
+        if (paths === null) return null;
+        if (!Array.isArray(paths) || paths.length > 64 || paths.some(path => typeof path !== 'string' || !path || path.includes('\0'))) throw new Error('Invalid desktop response');
+        return paths as string[];
+      })),
     startHost: bot => transport.invoke(desktopChannels.startHost, { type: 'startHost', ...(bot === undefined ? {} : { bot }) })
       .then(value => readResult(value, value => machineReplySchema.parse(value))),
     service: action => transport.invoke(desktopChannels.service, { type: 'service', action })

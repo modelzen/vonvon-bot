@@ -8,7 +8,7 @@ const verificationHosts = new Set([
   ...registrationHosts, "auth.openai.com", "chatgpt.com",
   "claude.ai", "console.anthropic.com", "platform.claude.com",
 ]);
-export type ExternalUrlKind = "registration" | "authorization" | "verification" | "event-settings" | "app-console" | "group" | "releases";
+export type ExternalUrlKind = "registration" | "authorization" | "verification" | "event-settings" | "app-console" | "group" | "bot-chat" | "releases";
 
 export function allowedExternalUrl(value: string, kind: ExternalUrlKind): string | null {
   try {
@@ -32,6 +32,9 @@ export function allowedExternalUrl(value: string, kind: ExternalUrlKind): string
       case "group":
         if (url.hostname !== "applink.feishu.cn" ||
             !new Set(["/client/chat/open", "/client/thread/open"]).has(url.pathname)) return null;
+        break;
+      case "bot-chat":
+        if (url.hostname !== "applink.feishu.cn" || url.pathname !== "/client/bot/open" || !/^cli_[A-Za-z0-9_-]+$/.test(url.searchParams.get('appId') ?? '') || [...url.searchParams.keys()].some(key => key !== 'appId') || url.hash) return null;
         break;
       case "releases":
         if (url.hostname !== "github.com" || url.pathname !== "/modelzen/vonvon-bot/releases") return null;
@@ -79,4 +82,8 @@ export function groupUrl(groupId: string, threadId?: string): string {
   if (threadId && /^omt_[A-Za-z0-9_-]+$/.test(threadId))
     return `https://applink.feishu.cn/client/thread/open?open_chat_id=${group}&open_thread_id=${encodeURIComponent(threadId)}&thread_position=0`;
   return `https://applink.feishu.cn/client/chat/open?openChatId=${group}`;
+}
+
+export function botChatUrl(botId: string): string {
+  return `https://applink.feishu.cn/client/bot/open?appId=${encodeURIComponent(botId)}`;
 }

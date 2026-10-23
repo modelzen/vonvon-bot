@@ -15,6 +15,7 @@ export const desktopChannels = {
   subscribe: 'desktop:subscribe',
   external: 'desktop:shell:external',
   chooseExecutablePath: 'desktop:shell:chooseExecutablePath',
+  chooseDirectoryPaths: 'desktop:shell:chooseDirectoryPaths',
   startHost: 'desktop:shell:startHost',
   service: 'desktop:shell:service',
   setLoginItem: 'desktop:shell:setLoginItem',
@@ -48,7 +49,7 @@ export type DesktopEvent =
   | { type: 'quitRequested' };
 
 export type DesktopShell = Required<Pick<ShellCapabilities,
-  'openExternal' | 'chooseExecutablePath' | 'checkDesktopUpdate' | 'installDesktopUpdate' |
+  'openExternal' | 'chooseExecutablePath' | 'chooseDirectoryPaths' | 'checkDesktopUpdate' | 'installDesktopUpdate' |
   'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem'>>;
 
 export interface DesktopResources {
@@ -72,6 +73,7 @@ export interface DesktopBridge {
 
 export interface ShellActions {
   chooseExecutablePath(): Promise<string | null>;
+  chooseDirectoryPaths(multiple: boolean): Promise<string[] | null>;
   startHost(bot?: string): Promise<MachineReply>;
   /** Expect disconnection before sending the machine-page stop, then wait for this daemon to exit. */
   stopHost(previous: AttachedDaemon['identity'], send: () => Promise<MachineReply>): Promise<MachineReply>;

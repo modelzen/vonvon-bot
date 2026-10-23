@@ -21,7 +21,7 @@ afterAll(async () => {
 });
 vi.mock('../src/config/paths', () => {
   const appDir = mkdtempSync(join(tmpdir(), 'baselines-'));
-  return { paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json'), commentsRootDir: join(appDir, 'comments') } };
+  return { botPaths: (appId: string) => ({ dir: join(appDir, 'bots', appId), configFile: join(appDir, 'bots', appId, 'config.json') }), paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json'), commentsRootDir: join(appDir, 'comments') } };
 });
 afterAll(() => rmSync(paths.appDir, { recursive: true, force: true }));
 
