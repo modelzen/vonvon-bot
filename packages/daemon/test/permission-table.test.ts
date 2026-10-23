@@ -124,7 +124,7 @@ describe('Claude 自定义', () => {
   it.each([
     ['default', 'off', 'qa'], ['default', 'all', undefined],
     ['acceptEdits', 'off', undefined], ['acceptEdits', 'all', 'write'],
-    ['bypassPermissions', 'off', 'full'], ['bypassPermissions', 'all', 'full'],
+    ['bypassPermissions', 'all', 'full'],
   ])('%s/%s 的等价档和执行效果', (permissionMode, network, tier) => {
     const settings = { permissionMode, network };
     expect(claude.matchTier(settings)).toBe(tier);
@@ -133,7 +133,7 @@ describe('Claude 自定义', () => {
   it('中文说明、完全访问忽略网络、旧值转换', () => {
     expect(claude.describe({ permissionMode: 'default', network: 'all' })).toBe('权限模式：手动确认（default）；命令沙箱：开；网络：全部');
     expect(claude.describe({ permissionMode: 'acceptEdits', network: 'off' })).toBe('权限模式：自动接受编辑（acceptEdits）；命令沙箱：开；网络：关');
-    expect(claude.describe({ permissionMode: 'bypassPermissions', network: 'off' })).toBe('权限模式：跳过权限检查（bypassPermissions）；命令沙箱：关');
+    expect(claude.describe({ permissionMode: 'bypassPermissions' })).toBe('权限模式：跳过权限检查（bypassPermissions）；命令沙箱：关');
     expect(claude.fromLegacy('qa', true)).toEqual({ permissionMode: 'default', network: 'all', sandbox: true, domains: [] });
     expect(claude.fromLegacy('write', false)).toEqual({ permissionMode: 'acceptEdits', network: 'off', sandbox: true, domains: [] });
   });
@@ -146,14 +146,25 @@ describe('Claude 自定义', () => {
     expect(claude.effect(raw)).toEqual({ mode: 'qa', network: true });
     expect(claude.describe({ ...raw, permissionMode: 'plan' })).toBe('权限模式：先出方案（plan）；命令沙箱：开；网络：只允许 github.com 等 2 个网站');
   });
-  it.each(['plan', 'auto', 'bypassPermissions'] as const)('%s 的新组合不折叠，执行效果和降级存盘分开', permissionMode => {
+  it.each(['plan', 'auto'] as const)('%s 的新组合不折叠，执行效果和降级存盘分开', permissionMode => {
     for (const network of ['off', 'all', 'domains']) {
       const value = { permissionMode, sandbox: true, network, domains: ['github.com'] };
       expect(claude.matchTier(value)).toBeUndefined();
-      expect(claude.effect(value)).toEqual({ mode: permissionMode === 'bypassPermissions' ? 'full' : 'write', network: permissionMode === 'bypassPermissions' || network !== 'off' });
-      expect(claude.stored?.(value)).toEqual({ mode: permissionMode === 'plan' ? 'qa' : 'write', network: network === 'domains' ? false : permissionMode === 'bypassPermissions' || network !== 'off' });
+      expect(claude.effect(value)).toEqual({ mode: 'write', network: network !== 'off' });
+      expect(claude.stored?.(value)).toEqual({ mode: permissionMode === 'plan' ? 'qa' : 'write', network: network !== 'domains' && network !== 'off' });
     }
-    if (permissionMode !== 'bypassPermissions') expect(claude.matchTier({ permissionMode, sandbox: false })).toBeUndefined();
+    expect(claude.matchTier({ permissionMode, sandbox: false })).toBeUndefined();
+  });
+  it.each([true, false])('跳过权限检查的沙箱 %s 只接受不限网络和空名单', sandbox => {
+    for (const network of [undefined, 'all']) {
+      const value = { permissionMode: 'bypassPermissions', sandbox, network, domains: [] };
+      expect(claude.parseCustom(value)).toMatchObject({ network: 'all', domains: [] });
+      expect(claude.matchTier(value)).toBe(sandbox ? undefined : 'full');
+      expect(claude.effect(value)).toEqual({ mode: 'full', network: true });
+      expect(claude.stored?.(value)).toEqual({ mode: sandbox ? 'write' : 'full', network: true });
+    }
+    for (const patch of [{ network: 'off' }, { network: 'domains', domains: ['github.com'] }, { network: 'all', domains: ['github.com'] }, { domains: ['github.com'] }])
+      expect(() => claude.parseCustom({ permissionMode: 'bypassPermissions', sandbox, ...patch })).toThrow('跳过权限检查时不限网络，不能设网络');
   });
 });
 

@@ -5,11 +5,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentBackend, AgentEvent, StartThreadOptions } from '../src/agent/types';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import { createSkillChat } from '../src/bot/skill-chat';
+import { claudeAccess, permissionOptions } from '../src/agent/claude-agent/permission';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 function message(text: string, senderId = 'owner'): NormalizedMessage { return { content: text, senderId, chatId: 'private_chat', chatType: 'p2p', messageId: `message_${text.length}` } as NormalizedMessage; }
-async function fixture() {
+async function fixture(backendId = 'codex-appserver') {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'vonvon-skill-chat-'))); roots.push(root);
   const workspace = join(root, 'workspace'); await mkdir(workspace);
   const sent = vi.fn(async (..._args: unknown[]) => {});
@@ -22,7 +23,7 @@ async function fixture() {
     })() })),
   }));
   const resume = vi.fn(create);
-  const backend = { id: 'codex-appserver', startThread: create, resumeThread: resume, listModels: async () => [{ id: 'model', displayName: 'model', supportedEfforts: ['high'], defaultEffort: 'high', isDefault: true, hidden: false }] } as unknown as AgentBackend;
+  const backend = { id: backendId, startThread: create, resumeThread: resume, listModels: async () => [{ id: 'model', displayName: 'model', supportedEfforts: ['high'], defaultEffort: 'high', isDefault: true, hidden: false }] } as unknown as AgentBackend;
   const project: import('../src/project/registry').Project = { name: 'Target group', chatId: 'target_group', cwd: workspace, blank: false, createdAt: 1, backend: backend.id };
   const chat = createSkillChat({ cfg: { accounts: { app: { id: 'current_bot', secret: 'fake', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' } } }, backendFor: () => backend, project: async id => id === project.chatId ? project : undefined, send: sent, file: join(root, 'private-state.json') });
   return { root, workspace, chat, create, resume, sent, project };
@@ -58,6 +59,22 @@ describe('targeted private skill conversation', () => {
     Object.assign(t.project, { mode, network });
     await t.chat.handle(message('/skill-add target_group write reports'));
     expect(t.create).toHaveBeenCalledWith(expect.objectContaining({ mode: 'write', network: expected }));
+    await t.chat.close();
+  });
+  it('keeps Claude skill creation writable only in its skill directory with the group domain allowlist', async () => {
+    const t = await fixture('claude-agent');
+    t.project.custom = { backend: 'claude-agent', settings: { permissionMode: 'plan', sandbox: false, network: 'domains', domains: ['github.com', '*.npmjs.org'] } };
+    await t.chat.handle(message('/skill-add target_group create reports'));
+    await t.chat.handle(message('Also add examples'));
+    for (const call of [t.create.mock.calls[0]!, t.resume.mock.calls[0]!]) {
+      const opts = call[0];
+      expect(opts).toMatchObject({cwd: join(t.workspace, '.claude', 'skills'), mode: 'write', network: true,
+        native: {permissionMode: 'acceptEdits', sandbox: true, network: 'domains', domains: ['github.com', '*.npmjs.org']}, profile: {additionalRoots: []}});
+      const sdk = permissionOptions(claudeAccess(opts.mode, opts.network, opts.cwd, opts.cwd, [], opts.native));
+      expect(sdk).toMatchObject({permissionMode: 'acceptEdits', sandbox: {enabled: true, network: {allowedDomains: ['github.com', '*.npmjs.org'], strictAllowlist: true}}, disallowedTools: ['WebSearch']});
+      expect(sdk.allowedTools).toEqual(expect.arrayContaining(['WebFetch(domain:github.com)', 'WebFetch(domain:*.npmjs.org)']));
+      expect(sdk.allowedTools).not.toContain('WebFetch');
+    }
     await t.chat.close();
   });
   it('closes a newly started thread if the progress message fails', async () => {

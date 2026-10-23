@@ -10,10 +10,15 @@ const schema = z.object({
 }).strict();
 export type ClaudeNative = z.infer<typeof schema> & { sandbox: boolean };
 export function parseClaudeNative(raw: unknown): ClaudeNative {
+  const input = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : undefined;
+  if (input?.permissionMode === 'bypassPermissions' && (input.network !== undefined && input.network !== 'all'
+    || input.domains !== undefined && (!Array.isArray(input.domains) || input.domains.length !== 0)))
+    throw new PermissionInputError('跳过权限检查时不限网络，不能设网络');
   const result = schema.safeParse(raw);
   if (!result.success)
     throw new PermissionInputError('Claude 高级设置无效：permissionMode 必须是 default、acceptEdits、plan、auto 或 bypassPermissions；sandbox 必须是布尔值；network 必须是 off、all 或 domains；domains 最多 50 个有效网站，不能有其他字段。');
   const value = result.data;
+  if (value.permissionMode === 'bypassPermissions') value.network = 'all';
   const domains = value.network === 'domains' ? [...new Set(value.domains)] : [];
   if (value.network === 'domains' && !domains.length)
     throw new PermissionInputError('只允许这些网站时，至少写一个网站。');
