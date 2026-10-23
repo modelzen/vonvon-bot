@@ -14,6 +14,7 @@ import { OwnedProviderProcess, ProviderProcessExitError } from '../owned-process
 import { log } from '../../core/logger';
 import type {
   AgentBackend,
+  AgentSkill,
   AgentCapabilities,
   AgentThread,
   BackendLogin,
@@ -327,9 +328,9 @@ async function* idleClaudeInput(signal: AbortSignal): AsyncGenerator<never, void
 export class ClaudeAgentBackend implements AgentBackend {
   readonly profileCapabilities = {
     instructions: { channel: 'system-append', replaceOnResume: false },
-    additionalRoots: false, directoryAccess: false, capabilityPackages: false, mcpServers: false,
+    additionalRoots: true, directoryAccess: true, capabilityPackages: false, mcpServers: false,
     env: true, disableNativeMemory: true,
-    reapplyOnResume: ['env', 'nativeSettings'],
+    reapplyOnResume: ['env', 'nativeSettings', 'additionalRoots', 'directoryAccess'],
   } satisfies SessionProfileCapabilities;
   readonly id = 'claude-agent';
   readonly displayName = 'Claude';
@@ -426,6 +427,22 @@ export class ClaudeAgentBackend implements AgentBackend {
       abortController.abort();
       query?.close();
     }
+  }
+
+  async listSkills({ cwd, directories = [] }: { cwd: string; directories?: string[] }): Promise<AgentSkill[]> {
+    const sdk = await this.sdkLoader();
+    const abortController = new AbortController();
+    const query = sdk.query({ prompt: idleClaudeInput(abortController.signal), options: {
+      ...helperQueryOptions(cwd), settingSources: BRIDGE_SETTING_SOURCES,
+      skills: 'all', additionalDirectories: directories, abortController,
+    } });
+    try {
+      const commands = await withAbortDeadline(query.supportedCommands(), abortController, MODEL_DISCOVERY_TIMEOUT_MS, 'skill discovery');
+      // The SDK is authoritative about user, workspace, plugin and synced sources.
+      // Its public catalog gives no paths; stable qualified names are native selectors.
+      return commands.filter(command => !command.builtin).map(command => ({ path: `claude:${command.name}`,
+        name: command.name, description: command.description, source: 'provider', enabled: true }));
+    } finally { abortController.abort(); query.close(); }
   }
 
   async listModels(): Promise<ModelInfo[]> {
@@ -615,10 +632,10 @@ export class ClaudeAgentBackend implements AgentBackend {
   }
 
   async startThread(opts: StartThreadOptions): Promise<AgentThread> {
-    const profile = resolveSessionProfile(opts.profile);
+    const profile = resolveSessionProfile(opts.profile, { additionalRoots: true });
     const sdk = await this.sdkLoader();
     const realCwd = await realpath(opts.cwd).catch(() => opts.cwd);
-    const access = claudeAccess(opts.mode, opts.network, opts.cwd, realCwd);
+    const access = claudeAccess(opts.mode, opts.network, opts.cwd, realCwd, await Promise.all(profile.additionalRoots.map(async root => ({ ...root, path: await realpath(root.path) }))));
     return new ClaudeAgentThread({
       sessionId: randomUUID(),
       resume: false,
@@ -629,6 +646,8 @@ export class ClaudeAgentBackend implements AgentBackend {
       permission: permissionOptions(access),
       systemPromptAppend: profile.instructions,
       settingSources: BRIDGE_SETTING_SOURCES,
+      additionalDirectories: profile.additionalRoots.map(root => root.path),
+      ...(profile.skills?.enabledNames ? { skills: [...profile.skills.enabledNames] } : {}),
       env: sessionClaudeEnv(profile.env),
       query: sdk.query,
       entry: opts.entry,
@@ -638,11 +657,11 @@ export class ClaudeAgentBackend implements AgentBackend {
   }
 
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {
-    const profile = resolveSessionProfile(opts.profile);
+    const profile = resolveSessionProfile(opts.profile, { additionalRoots: true });
     const sdk = await this.sdkLoader();
     const transcript = await transcriptMark(await assertSessionSaved(opts.sessionId), opts.sessionId);
     const realCwd = await realpath(opts.cwd).catch(() => opts.cwd);
-    const access = claudeAccess(opts.mode, opts.network, opts.cwd, realCwd);
+    const access = claudeAccess(opts.mode, opts.network, opts.cwd, realCwd, await Promise.all(profile.additionalRoots.map(async root => ({ ...root, path: await realpath(root.path) }))));
     return new ClaudeAgentThread({
       sessionId: opts.sessionId,
       resume: true,
@@ -654,6 +673,8 @@ export class ClaudeAgentBackend implements AgentBackend {
       permission: permissionOptions(access),
       systemPromptAppend: profile.instructions,
       settingSources: BRIDGE_SETTING_SOURCES,
+      additionalDirectories: profile.additionalRoots.map(root => root.path),
+      ...(profile.skills?.enabledNames ? { skills: [...profile.skills.enabledNames] } : {}),
       env: sessionClaudeEnv(profile.env),
       query: sdk.query,
       entry: opts.entry,

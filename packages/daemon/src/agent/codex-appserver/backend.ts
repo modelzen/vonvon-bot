@@ -1,6 +1,7 @@
 import { log } from '../../core/logger';
 import type {
   AgentBackend,
+  AgentSkill,
   AgentEntry,
   AgentEvent,
   AgentInput,
@@ -90,6 +91,7 @@ export function codexSessionParams(opts: StartThreadOptions): Record<string, unk
       ...(typeof sandbox.config === 'object' ? sandbox.config : {}),
       projects: { [opts.cwd]: { trust_level: 'trusted' } },
       ...NATIVE_MEMORY_OFF,
+      ...(profile.skills?.disabledPaths.length ? { skills: { config: profile.skills.disabledPaths.map(path => ({ path, enabled: false })) } } : {}),
       shell_environment_policy: { set: profile.env },
     },
   };
@@ -618,6 +620,11 @@ class CodexThread implements AgentThread {
     return [...events, ...mapped.events];
   }
 
+  async injectContext(text: string): Promise<void> {
+    await this.client.request('thread/inject_items', { threadId: this.sessionId,
+      items: [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text }] }] });
+  }
+
   async clearGoal(): Promise<void> {
     await this.client.request('thread/goal/clear', { threadId: this.sessionId });
   }
@@ -722,6 +729,15 @@ export class CodexAppServerBackend implements AgentBackend {
   readonly id = 'codex-appserver';
   readonly displayName = 'Codex (app-server)';
   private modelCache: ModelInfo[] | null = null;
+
+  async listSkills({ cwd }: { cwd: string; directories?: string[] }): Promise<AgentSkill[]> {
+    const result = await utilityRequest<{ data: Array<{ cwd: string; skills: Array<{ path: string; name: string; description: string; scope: string; enabled: boolean }>; errors?: Array<{ message: string }> }> }>('skills/list', { cwds: [cwd], forceReload: true });
+    const row = result.data.find(item => item.cwd === cwd) ?? result.data[0];
+    if (!row) throw new Error('Codex 未返回技能目录');
+    if (row.errors?.length) throw new Error(`Codex 技能目录读取失败：${row.errors.map(error => error.message).join('；')}`);
+    return row.skills.map(skill => ({ path: skill.path, name: skill.name, description: skill.description,
+      source: skill.scope === 'repo' ? 'workspace' : skill.scope === 'user' ? 'user' : 'provider', enabled: skill.enabled }));
+  }
 
   constructor(private readonly titleDeps: CodexTitleBackendDeps = DEFAULT_TITLE_DEPS) {}
 

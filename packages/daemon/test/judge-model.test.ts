@@ -32,10 +32,11 @@ describe('judge default model', () => {
     expect(codexJudgeDefault(undefined)).toEqual({ model: 'gpt-6-luna', effort: 'low' });
   });
 
-  it('falls back to another *-luna in the list', () => {
+  it('chooses a visible small model in the live list, then an available default', () => {
     expect(codexJudgeDefault([LUNA, model('gpt-6.1-luna', ['minimal'])])).toEqual({ model: 'gpt-6-luna', effort: 'low' });
     expect(codexJudgeDefault([model('gpt-6.1-sol', ['low']), model('gpt-6.1-luna', ['medium', 'low'])])).toEqual({ model: 'gpt-6.1-luna', effort: 'low' });
-    expect(codexJudgeDefault([model('gpt-6.1-sol', ['low'])])).toEqual({ model: 'gpt-6-luna', effort: 'low' });
+    expect(codexJudgeDefault([model('gpt-6.1-sol', ['low'])])).toEqual({ model: 'gpt-6.1-sol', effort: 'low' });
+    expect(codexJudgeDefault([{...LUNA, hidden: true}, {...model('gpt-6.1-sol', ['minimal']), isDefault: true}])).toEqual({ model: 'gpt-6.1-sol', effort: 'minimal' });
   });
 
   it('Claude judges on haiku unless a gateway is set', () => {
@@ -110,9 +111,9 @@ describe('judge model layers (design 2.2)', () => {
       .toEqual({ model: 'g', effort: 'high', modelSource: 'group' });
   });
 
-  it('rows 2 and 3: a group setting for another backend (the group switched) falls to the bot for this one', () => {
+  it('an explicit group judge keeps its provider after the task provider changes', () => {
     expect(resolveJudgeModel('claude-agent', { group: llm('codex-appserver', 'g'), bot: llm('claude-agent', 'sonnet') }, undefined, noClaude))
-      .toEqual({ model: 'sonnet', modelSource: 'bot' });
+      .toEqual({ model: 'g', modelSource: 'group' });
     expect(resolveJudgeModel('codex-appserver', { bot: llm('codex-appserver', 'b', { effort: 'medium' }) }, undefined))
       .toEqual({ model: 'b', effort: 'medium', modelSource: 'bot' });
   });
@@ -121,7 +122,7 @@ describe('judge model layers (design 2.2)', () => {
     expect(resolveJudgeModel('claude-agent', { bot: llm('codex-appserver', 'gpt-6-luna') }, undefined, noClaude))
       .toEqual({ model: 'haiku', modelSource: 'default' });
     expect(resolveJudgeModel('codex-appserver', { group: llm('claude-agent', 'haiku'), bot: llm('claude-agent', 'haiku') }, undefined))
-      .toEqual({ model: 'gpt-6-luna', effort: 'low', modelSource: 'default' });
+      .toEqual({ model: 'haiku', modelSource: 'group' });
     expect(resolveJudgeModel('codex-appserver', {}, undefined)).toEqual({ model: 'gpt-6-luna', effort: 'low', modelSource: 'default' });
   });
 
@@ -223,8 +224,8 @@ describe('decision models (s23d stores them, s23f calls them)', () => {
     for (const id of IDS) expect(resolveJudgeModel(id, { bot: jev }, undefined, noClaude)).toEqual({ model: 'jev-latest', provider: 'typesafe', modelSource: 'bot' });
     expect(resolveJudgeModel('claude-agent', { group: jev, bot: llm('claude-agent', 'sonnet') }, undefined)).toMatchObject({ provider: 'typesafe', modelSource: 'group' });
     expect(resolveJudgeModel('codex-appserver', { group: llm('codex-appserver', 'g'), bot: jev }, undefined)).toEqual({ model: 'g', modelSource: 'group' });
-    // a group setting for another backend no longer applies: the bot's decision model does
-    expect(resolveJudgeModel('claude-agent', { group: llm('codex-appserver', 'g'), bot: jev }, undefined)).toMatchObject({ provider: 'typesafe', modelSource: 'bot' });
+    // The explicit group judge stays selected across task providers.
+    expect(resolveJudgeModel('claude-agent', { group: llm('codex-appserver', 'g'), bot: jev }, undefined)).toMatchObject({ model: 'g', modelSource: 'group' });
   });
 
   it('the judge never calls a backend for a decision model: one this version does not know is unavailable and skips for both variants', async () => {

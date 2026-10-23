@@ -33,7 +33,7 @@ export interface VoiceService {
   action(action: VoiceAction): Promise<void>;
   /** Await pending settings writes and diagnostics without starting a probe. */
   settled(): Promise<void>;
-  transcribe(audio: Buffer, durationMs?: number): Promise<Transcription>;
+  transcribe(audio: Buffer, durationMs?: number, enabledOverride?: boolean): Promise<Transcription>;
 }
 
 export interface VoiceView {

@@ -1,14 +1,28 @@
 import { mkdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
+import { projectSectionSchemas } from '@vonvon/protocol';
 import { paths } from '../config/paths';
 import { acquireMutex, closeMutex } from '../config/data-access';
 import type { PermissionMode, ReasoningEffort } from '../agent/types';
 import { admitDirectoryChanges, parseDirectorySettings, type DirectorySettings } from '../config/directories';
 import type { JudgeSelectionStored } from '../judge/types';
 
+export interface BotProfile { persona: string; memory: string }
+export interface GroupProfile extends BotProfile { inheritPersona: boolean; inheritMemory: boolean }
+export interface ProjectModelAccess { backend: string; models: string[]; efforts: ReasoningEffort[] }
+export interface ProjectWorkspace { primary: string; directories: string[]; repositories: string[] }
+export interface ProjectSmartRules { respond: string; newTopic: string }
+export interface ProjectSkills { disabledPaths: string[] }
+export interface ProjectPresentation { voiceEnabled: boolean; showToolCalls: boolean; showModel?: 'off' | 'running' | 'always'; completionMode: 'manual' | 'long' | 'failures' | 'always'; longTaskMinutes: number }
+
 /** A project = a Feishu group bound to a fixed working directory. */
 export interface Project {
+  profile?: GroupProfile;
+  modelAccess?: ProjectModelAccess;
+  smartRules?: ProjectSmartRules;
+  skills?: ProjectSkills;
+  presentation?: ProjectPresentation;
   /** unique project name (also the group name) */
   name: string;
   enabled?: boolean;
@@ -184,7 +198,7 @@ export async function listProjectsIn(file: string): Promise<Project[]> {
     const text = await readFile(file, 'utf8');
     const parsed = JSON.parse(text) as Partial<StoreFile>;
     if (!parsed || !Array.isArray(parsed.projects) || parsed.projects.some(p => !p || typeof p !== 'object' || typeof p.name !== 'string' || typeof p.cwd !== 'string')) throw new Error('项目注册表格式无效');
-    for (const project of parsed.projects) parseDirectorySettings(project.directories);
+    for (const project of parsed.projects) { parseDirectorySettings(project.directories); validateGroupSettings(project as unknown as Record<string, unknown>); }
     return parsed.projects.map(foldGuestTier);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
@@ -269,12 +283,22 @@ function directoryRows(raw: unknown): DirectoryRow[] {
   });
 }
 
+/** Explicit group settings never silently fall back to broader Bot permissions when malformed. */
+function validateGroupSettings(row: Record<string, unknown>): void {
+  for (const key of ['profile', 'modelAccess', 'smartRules', 'skills', 'presentation'] as const) {
+    if (row[key] !== undefined && !projectSectionSchemas[key].safeParse(row[key]).success) throw new Error(`Invalid group settings: ${key}`);
+  }
+  const access = row.modelAccess as ProjectModelAccess | undefined;
+  if (access && (!access.models.length || new Set(access.models).size !== access.models.length || new Set(access.efforts).size !== access.efforts.length)) throw new Error('Invalid group settings: modelAccess');
+}
+
 async function writeStored(location: RegistryLocation, body: Record<string, unknown>, previous: Record<string, unknown>, beforeCommit?: () => void): Promise<void> {
   // Both callers own detached rows and a separate previous disk snapshot.
   const next = body;
   const oldProjects = directoryRows(previous.projects);
   const nextProjects = directoryRows(next.projects);
   for (const row of nextProjects) {
+    validateGroupSettings(row);
     const directories = parseDirectorySettings(row.directories);
     const old = oldProjects.find(project => project.chatId === row.chatId && project.name === row.name);
     const oldDirectories = parseDirectorySettings(old?.directories);
@@ -464,14 +488,14 @@ export async function removeProject(name: string, beforeRemove?: (project: Proje
   });
 }
 
-export async function mutateProject(name: string, mutate: (project: Project) => void | Promise<void>, options?: ProjectCommitOptions): Promise<Project> {
+export async function mutateProject(name: string, mutate: (project: Project) => void | Promise<void>, options?: ProjectCommitOptions, location?: RegistryLocation): Promise<Project> {
   return ownProjects(async location => {
     const projects = await read(location.file);
     const project = projects.find(item => item.name === name);
     if (!project) throw new Error('项目不存在');
     await mutate(project);
     return write(location, projects, project, options);
-  });
+  }, location);
 }
 
 /** Remove exactly one raw directory override; other keys/settings are retained. */

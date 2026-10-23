@@ -20,17 +20,17 @@
   --font-size-body: 13px;
   --font-size-secondary: 12px;
   --font-size-caption: 11px; /* the smallest size; nothing uses 10px */
-  /* Older rem steps: against the 13px root they come out smaller than their names (md is 10.6px). u03 moves
-     their users onto the scale above and then removes them. */
-  --font-size-2xs: 0.625rem;
-  --font-size-xs: 0.6875rem;
-  --font-size-sm: 0.75rem;
-  --font-size-md: 0.8125rem;
-  --font-size-lg: 0.9375rem;
-  --font-size-xl: 1.0625rem;
-  --font-size-2xl: 1.3125rem;
-  --font-size-3xl: 1.75rem;
-  --font-size-4xl: 2rem;
+  /* Legacy component aliases use the same readable scale as the settings UI.
+     The 13px root must not shrink form labels and descriptions below 11px. */
+  --font-size-2xs: var(--font-size-caption);
+  --font-size-xs: var(--font-size-caption);
+  --font-size-sm: var(--font-size-secondary);
+  --font-size-md: var(--font-size-body);
+  --font-size-lg: var(--font-size-title);
+  --font-size-xl: 17px;
+  --font-size-2xl: 21px;
+  --font-size-3xl: 28px;
+  --font-size-4xl: 32px;
   /* PingFang only has fixed weights, so these four are all there are. */
   --font-weight-regular: 400;
   --font-weight-medium: 500;
