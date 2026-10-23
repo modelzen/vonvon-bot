@@ -201,8 +201,8 @@ test('each group setting belongs to its visible page or expandable editor', () =
     ['补充职责', 'role', '本群角色'], ['本群个性', 'role', '本群角色'],
     ['项目记忆', 'memory', '记忆'],
     ['模型 Provider', 'model', '可用模型'], ['可用 Effort', 'model', '可用模型'],
-    ['权限', 'permission', '权限'], ['能挡到什么', 'permission', '权限'], ['高级设置', 'permission', '权限'],
-    ['聊天方式', 'response', '聊天方式'], ['显示模型', 'response', '消息与提醒'],
+    ['权限', 'model', '权限'], ['能挡到什么', 'model', '权限'], ['高级设置', 'model', '权限'],
+    ['沟通方式', 'response', '聊天方式'], ['回复规则', 'response', '聊天方式'], ['聊天方式', 'response', '聊天方式'], ['显示模型', 'response', '消息与提醒'],
     ['显示工具调用', 'response', '消息与提醒'], ['从群成员选择', 'response', '响应成员'],
   ]) {
     const entry = findEntries(entries, query!).find(item => item.destination.selection?.kind === 'membership');
@@ -227,7 +227,7 @@ test('P6: the workspace is the project\'s: its settings open the project page, n
   }
   // no group-level entry for it any more
   assert.ok(!entries.some(entry => entry.destination.selection?.kind === 'membership' && entry.destination.section === '工作区'));
-  for (const section of ['权限', '能挡到什么', '高级设置', '工作目录权限']) assert.equal(groupTabForSection(section), 'permission', section);
+  for (const section of ['权限', '能挡到什么', '高级设置', '工作目录权限']) assert.equal(groupTabForSection(section), 'model', section);
   assert.equal(groupTabForSection('个性与记忆'), 'capabilities');
 });
 

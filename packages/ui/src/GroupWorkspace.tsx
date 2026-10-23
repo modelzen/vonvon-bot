@@ -19,18 +19,23 @@ import {ProjectMemoryMap} from './ProjectPage';
 import './group-workspace.css';
 
 export type GroupDesignTab = GroupSettingsTab | 'memory';
-export const groupDesignTabs: readonly [GroupDesignTab, string][] = [['capabilities','能力'],['memory','记忆'],['model','模型'],['response','回复规则'],['permission','权限']];
+export const groupDesignTabs: readonly [GroupDesignTab, string][] = [['model','模型与权限'],['capabilities','能力'],['response','沟通方式'],['memory','记忆']];
 export function groupTabForSection(section?: string): GroupDesignTab {
   switch (section) {
     case '记忆':
     case '项目记忆': return 'memory';
     case '本群角色':
     case '补充职责': return 'role';
+    case undefined:
+    case '群设置':
+    case '模型与权限':
     case '可用模型': return 'model';
     case '权限':
     case '工作目录权限':
     case '能挡到什么':
-    case '高级设置': return 'permission';
+    case '高级设置': return 'model';
+    case '沟通方式':
+    case '回复规则':
     case '聊天方式':
     case '决策模型':
     case '判断规则':
@@ -45,13 +50,13 @@ export function groupTabForSection(section?: string): GroupDesignTab {
 type Props = {member: Membership; agent: Agent; group: Group; snapshot: DesktopSnapshot; initialTab?: GroupDesignTab; revealHistory?: boolean; onTabChange?: (tab:GroupDesignTab) => void;
   onBot: (member: Membership) => void; onBotProfile: () => void; onProject?: (id: ProjectId) => void; onOpenTools: () => void; onOpenProviders?: () => void; onOpenSecrets: () => void; onChanged: () => Promise<void>};
 // Intent: configure one Bot within one group, without exposing session management as navigation.
-// Hierarchy: target first, five established pages second. Quiet inset surfaces and system type
+// Hierarchy: target first, four settings pages second. Quiet inset surfaces and system type
 // share Today's 4px spacing rhythm; history/help remain contextual actions in the toolbar.
 export function GroupWorkspace({member, agent, group, snapshot, initialTab, revealHistory, onTabChange, onBot, onBotProfile, onProject, onOpenTools, onOpenProviders, onOpenSecrets, onChanged}: Props) {
   const client = useClient();
   const shell = useShellCapabilities();
   const guard = useDraftGuard();
-  const [tab, setTab] = useState<GroupDesignTab>(initialTab === 'role' ? 'memory' : initialTab ?? 'capabilities');
+  const [tab, setTab] = useState<GroupDesignTab>(initialTab === 'role' ? 'memory' : initialTab === 'permission' ? 'model' : initialTab ?? 'model');
   const [project, setProject] = useState<ProjectRecord>();
   const [busy, setBusy] = useState(false);
   const saving = useRef(false);
@@ -82,7 +87,7 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
   const [version, setVersion] = useState(0);
   useEffect(() => {if (revealHistory) setDialog('history');}, [revealHistory]);
   const target = {agentId: member.agentId, groupId: member.groupId, projectName: member.name};
-  useEffect(() => {if (initialTab) setTab(initialTab === 'role' ? 'memory' : initialTab);}, [initialTab]);
+  useEffect(() => {if (initialTab) setTab(initialTab === 'role' ? 'memory' : initialTab === 'permission' ? 'model' : initialTab);}, [initialTab]);
   useEffect(() => {
     if (!agent.running) return;
     let active = true;

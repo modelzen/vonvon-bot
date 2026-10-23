@@ -83,7 +83,7 @@ beforeEach(() => {
   harness.client.collaboration.mockImplementation(async request => {if (request.action === 'project') {events.push('read-project'); return {kind: 'project', project};} if (request.action === 'editProject') {events.push('edit-project'); project = {...project, kind: 'smart', revision: 'project-r2'}; return {kind: 'applied', project};} throw new Error(`unexpected collaboration ${request.action}`);});
 });
 
-it('shows attention beside the smart conversation control on 回复规则 and hides it while either mode source changes', async () => {
+it('shows attention beside the smart conversation control on 沟通方式 and hides it while either mode source changes', async () => {
   let liveMember: Membership = {...member, conversation: 'smart', enabled: true};
   project = {...project, kind: 'smart'};
   view = {...view, identity: {...view.identity, kind: 'smart'}};
@@ -118,7 +118,7 @@ it('shows attention beside the smart conversation control on 回复规则 and hi
   ui.workspace.find(node => node.type === 'button' && node.props.children === '记忆')!.props.onClick();
   ui = await settled();
   expect(ui.content.some(node => node.type === GroupAttentionStatus)).toBe(false);
-  ui.workspace.find(node => node.type === 'button' && node.props.children === '回复规则')!.props.onClick();
+  ui.workspace.find(node => node.type === 'button' && node.props.children === '沟通方式')!.props.onClick();
   ui = await settled();
   expect(ui.content.some(node => node.type === GroupAttentionStatus)).toBe(true);
 
