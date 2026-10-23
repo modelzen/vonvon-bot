@@ -155,6 +155,8 @@ export const membershipSchema = z.object({
   /** Absent when the directory is fine, and from daemons before s36c2d. */
   directoryProblem: directoryProblemSchema.optional(),
   conversation: conversationSchema, response: replyModeSchema,
+  /** Actual project activation; older daemons omit this field. */
+  enabled: z.boolean().optional(),
   permission: z.object({
     administrator: permissionSchema,
     /** @deprecated since s15c always equal to the group's one tier; kept so clients from before s15c still parse */

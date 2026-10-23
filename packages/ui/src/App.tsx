@@ -46,6 +46,7 @@ import {
 } from "@vonvon/protocol";
 import type { CollaborationView, Page } from "./collaboration-model";
 import {SettingsPanel,membershipSettingsKey,membershipSettingsTarget} from "./settings/SettingsPanel";
+import {GroupAttentionStatus} from './settings/GroupAttentionStatus';
 import {DraftGuardProvider, useDraftGuard} from './settings/DraftGuard';
 import {diagnosticsSection, searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
 import {initialRoute, openMembership, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type AgentPane, type CollaborationRoute, type MembershipPane} from './collaboration-navigation';
@@ -825,7 +826,8 @@ function DesktopApp() {
                   <p className="collaboration-scope-note">这里只配置 {agent.name} 在 {group.name} 中的工作目录、响应方式和权限。</p>
                   <ProjectPanel key={`manage-${member.id}`} scope={{kind: 'project', agentId: agent.id, groupId: group.id, projectName: member.name}} request={client.collaboration} onChanged={async () => {await run({type: 'refresh'});}}>
                     <SettingsGroup id={settingAnchor('历史会话')} label="历史会话"><SettingsRow title="会话与状态" trailing={<Button size="sm" onClick={() => membershipPane({kind: 'activity'})}>查看历史会话</Button>} /></SettingsGroup>
-                    <SettingsPanel key={membershipSettingsKey(member)} scope="project" target={membershipSettingsTarget(member)} onOpenSecrets={() => openPage("secrets")} />
+                    <SettingsPanel key={membershipSettingsKey(member)} scope="project" target={membershipSettingsTarget(member)} onOpenSecrets={() => openPage("secrets")}
+                      attentionStatus={<GroupAttentionStatus agent={agent} membership={member} connected={host.kind === 'connected' && !snapshot.stale} />} />
                   </ProjectPanel>
                   </>}
                   </div>

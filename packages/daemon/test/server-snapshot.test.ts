@@ -2,7 +2,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AdminBot } from '../src/admin/service';
+import { desktopSnapshotSchema, type DesktopSnapshot } from '@vonvon/protocol';
+import type { AdminBot, AdminProject } from '../src/admin/service';
 import type { DesktopServiceStatus } from '../src/host/service';
 import { createSnapshotStore, type SnapshotStore } from '../src/server/snapshot';
 import { environmentRpc } from '../src/server/rpc/environment';
@@ -17,6 +18,33 @@ const noManager = async (): Promise<DesktopServiceStatus> => ({ supported: false
 const bot: AdminBot = { appId: 'cli_test', name: 'test', tenant: 'feishu', active: false, current: true, running: false, completionReminder: { mode: 'failures', longTaskMinutes: 3 } };
 
 describe('snapshot commit queue', () => {
+  it('publishes external project enable changes even when attention remains unchanged, preserving older providers', async () => {
+    let enabled: boolean | undefined = true;
+    const project: AdminProject = {name: 'attention', chatId: 'oc_attention', cwd: '/tmp/attention', blank: false,
+      kind: 'smart', origin: 'created', noMention: false, mode: 'full', guestMode: 'full', network: false,
+      backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1};
+    const diagnostics = {notReplied: [], deniedScopes: [], attention: [{groupId: project.chatId,
+      main: {mode: 'focus' as const, intervalMs: 60_000}, focusedTopics: 2, watchedTopics: 1}]};
+    const frames: DesktopSnapshot[] = [];
+    const store = await createSnapshotStore({
+      service: {listBots: async () => [{...bot, active: true, running: true, connection: 'connected'}],
+        listProjects: async () => [{...project, ...(enabled === undefined ? {} : {enabled})}]},
+      jobs: () => [], readTools: async () => [], readService: noManager,
+      publish: state => {frames.push(desktopSnapshotSchema.parse(state));},
+      diagnostics: {view: () => diagnostics, retain: () => {}},
+    });
+    stores.push(store);
+    expect(desktopSnapshotSchema.parse(store.current()).memberships[0]?.enabled).toBe(true);
+    for (const value of [false, true]) {enabled = value; await store.rebuild();}
+    expect(frames.map(frame => frame.memberships[0]?.enabled)).toEqual([false, true]);
+    expect(frames.map(frame => frame.revision)).toEqual([2, 3]);
+    for (const frame of frames) expect(frame.agents[0]?.diagnostics).toEqual(diagnostics);
+    // An older provider may omit the new field; neither projection nor schema invents a value.
+    enabled = undefined;
+    await store.rebuild();
+    expect(desktopSnapshotSchema.parse(store.current()).memberships[0]).not.toHaveProperty('enabled');
+  });
+
   it('starts at one without an event and publishes before a matching writer reply', async () => {
     let enabled = false;
     let probes = 0;
