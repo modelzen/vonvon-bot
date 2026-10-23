@@ -25,9 +25,25 @@ describe('Codex runtime read boundary', () => {
     const launch = join(root, 'codex'); symlinkSync(target, launch);
     expect(codexInstallRoot(launch)).toEqual({ path: pkg, kind: 'dir' });
   });
-  it('allows a dedicated standalone runtime directory', () => {
+  it.each(['usr/local/lib/node_modules/@openai/codex', 'home/.nvm/versions/node/v22.0.0/lib/node_modules/@openai/codex'])(
+    'keeps a deep npm package directory readable: %s', layout => {
+      const root = fixture(); host.home = join(root, 'home');
+      const pkg = join(root, layout);
+      mkdirSync(join(pkg, 'bin'), { recursive: true });
+      writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name: '@openai/codex' }));
+      expect(codexInstallRoot(binary(join(pkg, 'bin/codex.js')))).toEqual({ path: pkg, kind: 'dir' });
+    });
+  it.each(['home/Downloads', 'usr/local/lib', 'home/.local/lib'])(
+    'does not expose a deep standalone directory without a package marker: %s', layout => {
+      const root = fixture(); host.home = join(root, 'home');
+      const directory = join(root, layout); mkdirSync(directory, { recursive: true });
+      const bin = binary(join(directory, 'codex'));
+      expect(codexInstallRoot(bin)).toEqual({ path: bin, kind: 'file' });
+    });
+  it('grants only the executable for a standalone runtime without a package marker', () => {
     const root = join(fixture(), 'runtime'); mkdirSync(root);
-    expect(codexInstallRoot(binary(join(root, 'codex')))).toEqual({ path: root, kind: 'dir' });
+    const bin = binary(join(root, 'codex'));
+    expect(codexInstallRoot(bin)).toEqual({ path: bin, kind: 'file' });
   });
   it('grants only the binary in the home or a common installation directory', () => {
     host.home = fixture();
@@ -59,6 +75,7 @@ describe('Codex runtime read boundary', () => {
   });
   it('checks fallback paths and cached directories against workspace ancestors', () => {
     const root = join(fixture(), 'runtime'); mkdirSync(root); const bin = join(root, 'missing-codex');
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@openai/codex' }));
     expect(codexInstallRoot(bin)).toEqual({ path: root, kind: 'dir' });
     expect(codexInstallRoot(bin, [{ path: join(root, 'workspace'), access: 'write' }])).toEqual({ path: bin, kind: 'file' });
   });

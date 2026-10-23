@@ -79,7 +79,7 @@ export function codexInstallRoot(bin: string, roots: readonly Root[] = []): Code
     log.fail('agent', error, { phase: 'codex-install-root' });
   }
   let directory = dirname(target);
-  let candidate: CodexInstallRoot = { path: directory, kind: 'dir' };
+  let candidate: CodexInstallRoot = { path: target, kind: 'file' };
   for (;;) {
     try {
       const raw: unknown = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'));
