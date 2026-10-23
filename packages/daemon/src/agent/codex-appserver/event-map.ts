@@ -341,7 +341,7 @@ export function mapChildNotification(id: string, n: ServerNotification, child: C
       if (n.method === 'item/completed' && item.type === 'agentMessage') return { events: [], patch: { result: item.text.slice(0, 600) } };
       if (!['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'webSearch'].includes(item.type)) return { events: [] };
       const ev = n.method === 'item/started' ? mapItemStart(item) : mapItemComplete(item);
-      if (ev?.type === 'tool_use') return { events: [{ type: 'subagent_step', id, stepId: item.id, title: ev.title, status: 'running' }] };
+      if (ev?.type === 'tool_use') return { events: [{ type: 'subagent_step', id, stepId: item.id, title: ev.title, status: 'running', kind: ev.kind, detail: ev.detail }] };
       if (ev?.type === 'tool_result') return { events: [{ type: 'subagent_step', id, stepId: item.id, title: '', status: ev.exitCode != null && ev.exitCode !== 0 ? 'failed' : 'done' }] };
       return { events: [] };
     }

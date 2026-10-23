@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { RUNTIME_TERMINAL_ICON, serializeRuntimeCard } from '../src/card/runtime-card-icons';
+import { RUNTIME_SUBAGENT_ICON, RUNTIME_TERMINAL_ICON, serializeRuntimeCard } from '../src/card/runtime-card-icons';
 import { installAtGuard } from '../src/card/at-guard';
 import { buildAskCard } from '../src/card/ask-card';
 import { buildGoalDoneCard } from '../src/card/goal-card';
@@ -51,6 +51,43 @@ describe('runtime terminal icon serialization', () => {
     input.body.elements.push({ tag: 'markdown', content: 'later mutation' });
     finish({ data: { image_key: 'img_terminal' } });
     expect(await result).not.toContain('later mutation');
+  });
+
+  it('caches robot and terminal images independently without changing other icons', async () => {
+    const create = vi.fn().mockResolvedValueOnce({ data: { image_key: 'img_terminal' } })
+      .mockResolvedValueOnce({ data: { image_key: 'img_robot' } });
+    const bot = client(create);
+    const input = { elements: [
+      { tag: 'standard_icon', token: RUNTIME_SUBAGENT_ICON },
+      ...terminalCard().body.elements,
+    ] };
+    const [first, second] = await Promise.all([serializeRuntimeCard(input, bot), serializeRuntimeCard(input, bot)]);
+    expect(first).toBe(second);
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(first).elements).toEqual([
+      { tag: 'custom_icon', img_key: 'img_robot' },
+      { tag: 'custom_icon', img_key: 'img_terminal' },
+      { tag: 'standard_icon', token: 'search_outlined' },
+      { tag: 'markdown', content: RUNTIME_TERMINAL_ICON },
+    ]);
+    expect(create.mock.calls[0]![0].data.image.equals(create.mock.calls[1]![0].data.image)).toBe(false);
+  });
+
+  it('keeps the native robot fallback when only its upload fails', async () => {
+    const create = vi.fn().mockResolvedValueOnce({ data: { image_key: 'img_terminal' } })
+      .mockRejectedValueOnce(new Error('robot offline'));
+    const bot = client(create);
+    const input = { elements: [
+      { tag: 'standard_icon', token: RUNTIME_TERMINAL_ICON },
+      { tag: 'standard_icon', token: RUNTIME_SUBAGENT_ICON, color: 'grey' },
+    ] };
+    const first = await serializeRuntimeCard(input, bot);
+    expect(JSON.parse(first).elements).toEqual([
+      { tag: 'custom_icon', img_key: 'img_terminal' },
+      input.elements[1],
+    ]);
+    expect(await serializeRuntimeCard(input, bot)).toBe(first);
+    expect(create).toHaveBeenCalledTimes(2);
   });
 
   it('does not upload when the frame needs no terminal icon or the client has no image API', async () => {
