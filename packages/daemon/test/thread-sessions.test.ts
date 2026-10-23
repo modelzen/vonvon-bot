@@ -79,6 +79,8 @@ function thread(sessionId: string) {
     close: vi.fn(async () => undefined),
     abort: vi.fn(async () => undefined),
     steer: vi.fn(async () => undefined),
+    // Match Codex's native context channel; user-input assertions stay separate from settings.
+    injectContext: vi.fn(async (_text: string) => undefined),
     runStreamed(input: AgentInput) {
       consumed.push(input);
       return {

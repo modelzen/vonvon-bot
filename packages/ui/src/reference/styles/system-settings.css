@@ -1911,7 +1911,7 @@ html[data-desktop-platform="macos"] .ss-toolbar__drag-region {
 }
 
 .ui-dialog--md {
-  width: min(480px, calc(100vw - 32px));
+  width: min(560px, calc(100vw - 32px));
 }
 
 .ui-dialog--lg {

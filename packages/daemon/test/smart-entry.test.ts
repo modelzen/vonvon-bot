@@ -17,7 +17,9 @@ import { DM, GS, SMART_NO_MENTION_NOTE } from '../src/card/dm-cards';
 // only Feishu, the agent and the judge are fakes.
 vi.mock('../src/config/paths', () => {
   const appDir = mkdtempSync(join(tmpdir(), 'smart-entry-'));
-  return { paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json'), commentsRootDir: join(appDir, 'comments'), botsFile: join(appDir, 'bots.json') } };
+  const botDir = (appId: string) => join(appDir, 'bots', appId);
+  const botPaths = (appId: string) => { const dir = botDir(appId); return { dir, configFile: join(dir, 'config.json'), projectsFile: join(dir, 'projects.json'), sessionsFile: join(dir, 'sessions.json') }; };
+  return { botDir, botPaths, paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json'), commentsRootDir: join(appDir, 'comments'), botsFile: join(appDir, 'bots.json') } };
 });
 afterAll(() => rmSync(paths.appDir, { recursive: true, force: true }));
 
@@ -72,7 +74,7 @@ beforeEach(async () => {
   fake.updated = [];
   await rm(paths.projectsFile, { force: true });
   await rm(paths.sessionsFile, { force: true });
-  await addProject({ name: 'entry', chatId: CHAT, cwd: paths.appDir, kind: 'single', blank: false, origin: 'joined', createdAt: 1, backend: 'codex-appserver', mode: 'full', noMention: true });
+  await addProject({ name: 'entry', chatId: CHAT, cwd: paths.appDir, kind: 'single', blank: false, origin: 'joined', createdAt: 1, backend: 'codex-appserver', mode: 'full', noMention: true, judge: { kind: 'llm', backend: 'codex-appserver', model: 'gpt-6-luna', effort: 'low' } });
   fake.judge.mockImplementation(async (_req: JudgeRequest): Promise<JudgeResult> =>
     ({ decision: 'skip', reason: '闲聊', backend: 'codex-appserver', model: 'm', modelSource: 'default', promptSource: 'default', ms: 1 }));
   setDiagnosticsSink(event => events.push(event));

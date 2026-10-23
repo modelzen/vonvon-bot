@@ -16,7 +16,7 @@ import {
 } from './ipc-contract.js';
 
 const externalKinds: readonly ExternalUrlKind[] = [
-  'registration', 'authorization', 'verification', 'event-settings', 'app-console', 'group', 'releases',
+  'registration', 'authorization', 'verification', 'event-settings', 'app-console', 'group', 'bot-chat', 'releases',
 ];
 
 export async function openAllowedExternal(raw: unknown): Promise<void> {
@@ -291,6 +291,10 @@ export function installBridge(
     register(desktopChannels.repairCli, 0, noArg,
       () => actions.repairCli().then(reply => machineReplySchema.parse(reply)));
     register(desktopChannels.chooseExecutablePath, 0, noArg, () => actions.chooseExecutablePath());
+    register(desktopChannels.chooseDirectoryPaths, 1, value => {
+      if (typeof value !== 'boolean') throw new Error('Invalid directory request');
+      return value;
+    }, value => actions.chooseDirectoryPaths(value));
     register(desktopChannels.checkDesktopUpdate, 0, noArg, () => actions.checkDesktopUpdate());
     register(desktopChannels.installDesktopUpdate, 0, noArg, () => actions.installDesktopUpdate());
     register(desktopChannels.hide, 0, noArg, async () => { actions.hide(); });

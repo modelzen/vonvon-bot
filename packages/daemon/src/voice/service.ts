@@ -159,8 +159,9 @@ export function createVoiceService(
       await actionChain;
       await testJob;
     },
-    async transcribe(audio, durationMs) {
-      if (!config().enabled) return { reason: '语音转文字未启用' };
+    async transcribe(audio, durationMs, enabledOverride) {
+      const enabled = () => enabledOverride ?? config().enabled;
+      if (!enabled()) return { reason: '语音转文字未启用' };
       if (audio.length > MAX_VOICE_BYTES) return { reason: '语音超过 20 MB 处理上限' };
       if (durationMs && durationMs > MAX_VOICE_DURATION_MS) return { reason: '语音超过飞书 60 秒限制' };
       const current = normalizeHealth(config().feishu);
@@ -168,12 +169,12 @@ export function createVoiceService(
       const epoch = generation;
       try {
         if (current.state !== 'ready' && current.state !== 'permission_ready') await feishu.checkPermission();
-        if (epoch !== generation || !config().enabled) return { reason: '语音设置已变更，请重发' };
+        if (epoch !== generation || !enabled()) return { reason: '语音设置已变更，请重发' };
         const pcm = await decode(audio);
-        if (epoch !== generation || !config().enabled) return { reason: '语音设置已变更，请重发' };
+        if (epoch !== generation || !enabled()) return { reason: '语音设置已变更，请重发' };
         const text = await feishu.recognize(pcm);
         await recordHealth({ state: 'ready', message: '最近一次识别成功' }, epoch);
-        if (epoch !== generation || !config().enabled) return { reason: '语音设置已变更，请重发' };
+        if (epoch !== generation || !enabled()) return { reason: '语音设置已变更，请重发' };
         return { text, provider: 'feishu' };
       } catch (err) {
         return { reason: await recordFailure(err, epoch) };

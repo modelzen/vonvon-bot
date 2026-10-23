@@ -1,6 +1,6 @@
 import { mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { app, autoUpdater, BrowserWindow, dialog, Menu, net, type Tray, type WebContents } from 'electron';
 import { resolveDataRoot } from '../../daemon/src/config/data-root.js';
@@ -155,6 +155,8 @@ export async function startDesktop(): Promise<void> {
     if (terminating) return;
     const paths = desktopResources(app.getAppPath(), app.isPackaged);
     const uiIndex = realpathSync(paths.uiIndex);
+    // Use this build's brand asset even when macOS cached an older bundle icon.
+    if (process.platform === 'darwin') app.dock?.setIcon(join(dirname(uiIndex), 'vonvon-logo.png'));
     const uiUrl = pathToFileURL(uiIndex).href;
     const preload = realpathSync(paths.preload);
     const icon = realpathSync(paths.trayPng);
@@ -192,10 +194,10 @@ export async function startDesktop(): Promise<void> {
     }
 
     window = new BrowserWindow({
-      width: 1100,
-      height: 760,
-      minWidth: 780,
-      minHeight: 560,
+      width: 1000,
+      height: 800,
+      minWidth: 760,
+      minHeight: 640,
       show: false,
       webPreferences: {
         preload,
@@ -508,6 +510,13 @@ export async function startDesktop(): Promise<void> {
         });
         return result.canceled ? null : result.filePaths[0] ?? null;
       },
+      chooseDirectoryPaths: async multiple => {
+        const result = await dialog.showOpenDialog(current, {
+          title: '选择目录',
+          properties: multiple ? ['openDirectory', 'multiSelections'] : ['openDirectory'],
+        });
+        return result.canceled ? null : result.filePaths;
+      },
       checkDesktopUpdate: () => updater.check(),
       installDesktopUpdate: async () => {
         try { return await updater.install(); }
@@ -528,8 +537,8 @@ export async function startDesktop(): Promise<void> {
     tray = createDesktopTray(icon, show, requestQuit);
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       { label: 'Vonvon Bot', submenu: [
-        { label: 'Show Vonvon Bot', click: show },
-        { label: 'Quit Vonvon Bot', click: requestQuit },
+        { label: '显示 Vonvon Bot', click: show },
+        { label: '退出 Vonvon Bot', accelerator: 'CmdOrCtrl+Q', click: requestQuit },
       ] },
     ]));
     await current.loadFile(uiIndex);
