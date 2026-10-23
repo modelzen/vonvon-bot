@@ -6,6 +6,7 @@ import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
 import { BackendNotInstalledError } from '../src/agent/backend-loader';
+import { ClaudeAgentBackend, ReadScopeError, type ClaudeSdkFacade } from '../src/agent/claude-agent/backend';
 import { codexFullOnlyReason, CodexFullOnlyError } from '../src/agent/codex-appserver/full-only';
 import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
 import { DM, PERMISSION_CARD_VERSION } from '../src/card/dm-cards';
@@ -391,6 +392,36 @@ describe('failed turns', () => {
     await orchestrator.onMessage(message());
     await vi.waitFor(() => expect(records()).toHaveLength(1));
     expect(records()[0]).toMatchObject({ reason: 'tool-missing', backend: 'codex' });
+  });
+
+  it.each(['main', 'topic'] as const)('shows a real Claude read-scope startup error and diagnoses it in the %s area', async place => {
+    fake.project = { ...base, kind: place === 'main' ? 'single' : 'multi', backend: 'claude-agent' };
+    const sdk: ClaudeSdkFacade = {
+      query: vi.fn(() => { throw new Error('read-scope rejection must precede the native query'); }),
+      listSessions: vi.fn(async () => []), getSessionInfo: vi.fn(async () => undefined),
+      getSessionMessages: vi.fn(async () => []), renameSession: vi.fn(async () => undefined),
+    };
+    const backend = new ClaudeAgentBackend(async () => sdk);
+    startThread.mockImplementationOnce(async () => {
+      try {
+        await backend.startThread({ cwd: workspace, mode: 'qa', readScope: { deny: [workspace], allow: [] } });
+      } catch (error) {
+        expect(error).toBeInstanceOf(ReadScopeError);
+        throw error;
+      }
+      throw new Error('the protected workspace must reject startup');
+    });
+    const msg = message(place === 'topic' ? { threadId: 'omt_topic' } : {});
+    await orchestrator.onMessage(msg);
+    const explanation = '工作区放在了数据目录或它的上级，只读、工作区可写档没法把别的群隔开。请主人在群详情页换一个工作区。';
+    await vi.waitFor(() => expect(records()).toHaveLength(1));
+    await vi.waitFor(() => expect(fake.send).toHaveBeenCalledWith(msg.chatId, { markdown: `❌ ${explanation}` }, {
+      replyTo: msg.messageId, replyInThread: place === 'topic',
+    }));
+    expect(startThread).toHaveBeenCalledOnce();
+    expect(sdk.query).not.toHaveBeenCalled();
+    expect(records()[0]).toMatchObject({ reason: 'failed', detail: explanation, backend: 'claude', place });
+    expect(failureReason({ error: new ReadScopeError(explanation) })).toEqual({ reason: 'failed', detail: explanation });
   });
 
   it('notes a card Feishu refused for a scope, and the scope for 缺的权限', async () => {

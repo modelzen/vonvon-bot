@@ -312,15 +312,14 @@ describe('Claude backend native session titles', () => {
     expect(query).toHaveBeenCalledOnce(); // successful discovery is cached
     expect(modelQuery.close).toHaveBeenCalledOnce();
 
-    await expect(backend.readSessionTitle('/repo', 'session-1')).resolves.toBe('原生标题');
-    getSessionInfo.mockResolvedValueOnce({
-      sessionId: 'session-1',
-      summary: '只有摘要和首条消息，不能当作 customTitle',
-      firstPrompt: '首条消息',
-      customTitle: undefined,
-      lastModified: 3,
-    });
+    const config = claudeConfig(['projects/renamed-folder/session-1.jsonl']);
+    const transcript = join(config, 'projects/renamed-folder/session-1.jsonl');
+    writeFileSync(transcript, '{"type":"ai-title","aiTitle":"CLI 自动标题"}\n');
     await expect(backend.readSessionTitle('/repo', 'session-1')).resolves.toBeUndefined();
+    writeFileSync(transcript, '{"type":"custom-title","customTitle":" 原生标题 "}\n');
+    await expect(backend.readSessionTitle('/repo', 'session-1')).resolves.toBe('原生标题');
+    await expect(backend.readSessionTitle('/repo', 'missing-session')).resolves.toBeUndefined();
+    expect(getSessionInfo).not.toHaveBeenCalled();
     await backend.setSessionTitle('/repo', 'session-1', ' 新原生标题 ');
     expect(renameSession).toHaveBeenCalledWith('session-1', '新原生标题', { dir: '/repo' });
 

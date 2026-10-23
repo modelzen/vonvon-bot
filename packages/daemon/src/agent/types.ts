@@ -371,7 +371,11 @@ export interface AgentEntry {
   revoke(reason: 'closed' | 'start-failed' | 'dead' | 'shutdown'): void;
 }
 
+/** Claude restricted tiers deny these paths and reopen only their allowed subtrees. */
+export interface ReadScope { deny: string[]; allow: string[] }
+
 export interface StartThreadOptions {
+  readScope?: ReadScope;
   entry?: AgentEntry;
   profile?: SessionProfile;
   cwd: string;
