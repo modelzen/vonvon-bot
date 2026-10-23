@@ -18,7 +18,7 @@ import type { AgentBackend, ModelInfo, ReasoningEffort } from '../src/agent/type
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
   const appDir = mkdtempSync(join(tmpdir(), 'settings-judge-'));
-  return { paths: { appDir, configFile: join(appDir, 'config.json'), projectsFile: join(appDir, 'projects.json'), sessionsFile: join(appDir, 'sessions.json'), commentInstructionsFile: join(appDir, 'instructions.md'), commentsRootDir: join(appDir, 'comments') } };
+  return { botDir: (id: string) => join(appDir, 'bots', id), botPaths: (id: string) => ({ dir: join(appDir, 'bots', id) }), paths: { appDir, configFile: join(appDir, 'config.json'), projectsFile: join(appDir, 'projects.json'), sessionsFile: join(appDir, 'sessions.json'), commentInstructionsFile: join(appDir, 'instructions.md'), commentsRootDir: join(appDir, 'comments') } };
 });
 
 const botId = 'cli_fixture';
@@ -223,10 +223,10 @@ describe('judge settings: checks (design 2.4)', () => {
     expect(await probes(project, 'judge', { selection: { kind: 'llm', model: 'missing' } })).toEqual({ kind: 'rejected', probes: 0 });
   });
 
-  it('a group takes only its own backend, which it fills in when left out', async () => {
-    expect(messageOf(await save(project, { kind: 'llm', backend: 'claude-agent', model: 'haiku', custom: true }))).toBe('这个群用 Codex，判断模型要选 Codex 的模型');
+  it('a group can judge with another provider and fills its task provider in when omitted', async () => {
+    expect(messageOf(await save(project, { kind: 'llm', backend: 'claude-agent', model: 'haiku', custom: true }))).toBe('saved');
     await updateProject('demo', { backend: 'claude-agent' });
-    expect(messageOf(await save(project, { kind: 'llm', backend: 'codex-appserver', model: 'gpt-6-luna' }))).toBe('这个群用 Claude，判断模型要选 Claude 的模型');
+    expect(messageOf(await save(project, { kind: 'llm', backend: 'codex-appserver', model: 'gpt-6-luna' }))).toBe('saved');
     expect((await save(project, { kind: 'llm', model: 'sonnet' })).kind).toBe('saved');
     expect((await getProjectByName('demo'))?.judge).toEqual({ kind: 'llm', backend: 'claude-agent', model: 'sonnet' });
   });
@@ -253,7 +253,7 @@ describe('judge settings: the view', () => {
     await updateProject('demo', { backend: 'claude-agent' });
     p = await o.read(project) as ProjectSettingsView;
     expect(p.sections.judge.stored.selection).toMatchObject({ backend: 'codex-appserver', effort: 'high' });
-    expect(p.sections.judge.effective.selection).toEqual({ kind: 'llm', backend: 'claude-agent', model: 'sonnet' });
+    expect(p.sections.judge.effective.selection).toEqual({ kind: 'llm', backend: 'codex-appserver', model: 'gpt-6-luna', effort: 'high' });
   });
 
   it('a decision model on the bot applies to every backend; a group can still choose its own', async () => {

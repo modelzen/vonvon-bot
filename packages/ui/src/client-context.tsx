@@ -5,6 +5,7 @@ import type { DesktopUpdate, MachineReply } from "@vonvon/protocol";
 export type ShellCapabilities = {
   openExternal?: (url: string) => Promise<void>;
   chooseExecutablePath?: () => Promise<string | null>;
+  chooseDirectoryPaths?: (multiple: boolean) => Promise<string[] | null>;
   setLoginItem?: (enabled: boolean) => Promise<void>;
   hideWindow?: () => Promise<void>;
   quit?: () => Promise<void>;

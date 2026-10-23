@@ -89,7 +89,15 @@ const smartPrompt = z.object({
   /** SMART.md exists but cannot be used: judgements fail until it is fixed */
   error: z.string().optional(),
 });
+export const profile = z.object({ persona: z.string().max(30000), memory: z.string().max(30000) });
+const groupProfile = profile.extend({ inheritPersona: z.boolean(), inheritMemory: z.boolean() });
+const modelAccess = z.object({ backend: z.string().min(1).max(1000), models: z.array(z.string().trim().min(1).max(1000)).max(1000), efforts: z.array(effort).max(8) });
+const workspace = z.object({ primary: z.string().min(1).max(4096), directories: z.array(z.string().min(1).max(4096)).min(1).max(1000), repositories: z.array(z.string().min(1).max(4096)).max(1000) });
+const smartRules = z.object({ respond: z.string().max(30000), newTopic: z.string().max(30000) });
+const skills = z.object({ disabledPaths: z.array(z.string().min(1).max(4096)).max(1000) });
+const presentation = z.object({ voiceEnabled: z.boolean(), showToolCalls: z.boolean(), showModel: z.enum(["off", "running", "always"]).optional(), completionMode: z.enum(["manual", "long", "failures", "always"]), longTaskMinutes: z.number().int().min(1).max(1440) });
 export const agentSectionSchemas = {
+  profile,
   cards: z.object({
     showToolCalls: z.boolean(),
     showModel: z.enum(["off", "running", "always"]),
@@ -112,6 +120,7 @@ export const agentSectionSchemas = {
 const tier = z.enum(["qa", "write", "full"]);
 /** What a save may set in a group's settings; the view adds the deprecated `permission.guestMode`. */
 export const projectEditableSchemas = {
+  profile: groupProfile, modelAccess, workspace, smartRules, skills, presentation,
   permission: z.object({ mode: tier, network: z.boolean() }),
   response: z.object({ noMention: z.boolean() }),
   model: z.object({ selection }),
@@ -222,7 +231,7 @@ const decisionModels = z
 export const agentViewSchema = z.object({
   scope: z.object({ kind: z.literal("agent"), botId: agentIdSchema }),
   /** `judge`, `smartPrompt` and `judgeByBackend` came in s23d: a daemon from before sends none. */
-  sections: sections(agentSectionSchemas).extend({ judge: section(judgeViewSection).optional() }),
+  sections: sections(agentSectionSchemas).extend({ profile: section(profile).optional(), judge: section(judgeViewSection).optional() }),
   smartPrompt: smartPrompt.optional(),
   /** per backend, what this bot's groups on it judge with: the bot has no backend of its own */
   judgeByBackend: z
@@ -263,6 +272,9 @@ export const responseRosterSchema = z.object({
 export type ResponseRoster = z.infer<typeof responseRosterSchema>;
 
 export const projectViewSchema = z.object({
+  botProfile: profile.optional(),
+  skillsError: z.string().optional(),
+  skills: z.array(z.object({ path: z.string(), name: z.string(), description: z.string(), source: z.enum(["workspace", "user", "provider"]), enabled: z.boolean() })).optional(),
   scope: z.object({
     kind: z.literal("project"),
     botId: agentIdSchema,
@@ -270,6 +282,7 @@ export const projectViewSchema = z.object({
   }),
   /** `run` came in s21, `judge` and `smartPrompt` in s23d: a daemon from before sends none, and this view still parses. */
   sections: sections(projectSectionSchemas).extend({
+    profile: section(groupProfile).optional(), modelAccess: section(modelAccess).optional(), workspace: section(workspace).optional(), smartRules: section(smartRules).optional(), skills: section(skills).optional(), presentation: section(presentation).optional(),
     run: section(projectSectionSchemas.run).optional(),
     judge: section(judgeViewSection).optional(),
   }),

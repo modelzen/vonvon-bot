@@ -105,9 +105,9 @@ export function Dialog(props: {
     <AnimatePresence>
       {props.open && (
         <motion.div
-          animate={{ opacity: 1 }}
+          animate={{ opacity: 1, pointerEvents: "auto" }}
           className={props.variant === "search" ? "ui-dialog-backdrop ui-dialog-backdrop--search" : "ui-dialog-backdrop"}
-          exit={{ opacity: 0 }}
+          exit={{ opacity: 0, pointerEvents: "none" }}
           initial={{ opacity: 0 }}
           onMouseDown={(event) => {
             if (event.currentTarget === event.target && dismissible) props.onClose?.();
@@ -120,7 +120,7 @@ export function Dialog(props: {
             aria-labelledby={titleId}
             aria-modal="true"
             className={`ui-dialog ui-dialog--${props.size ?? "md"}${props.variant === "search" ? " ui-dialog--search" : ""}`}
-            exit={{ opacity: 0, scale: reduceMotion ? 1 : 0.985, y: reduceMotion ? 0 : 7 }}
+            exit={{ opacity: 0, scale: reduceMotion ? 1 : 0.975, y: reduceMotion ? 0 : 10 }}
             initial={{ opacity: 0, scale: reduceMotion ? 1 : 0.975, y: reduceMotion ? 0 : 10 }}
             ref={panelRef}
             role="dialog"

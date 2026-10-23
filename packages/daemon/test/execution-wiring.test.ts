@@ -321,12 +321,16 @@ describe('s39a production profile delivery', () => {
     expect(codex.startThread).not.toHaveBeenCalled();
     expect(fake.records.get('omt_t')).toMatchObject({ sessionId: 'old-omt_t', cwd });
   });
-  it('keeps Claude profile empty with configured additional roots', async () => {
+  it('delivers the current group profile and configured roots to Claude', async () => {
     fake.project = { ...fake.project, backend: CLAUDE };
     await setup({ directories: { repositories: [repository] } }).onMessage(message('new topic'));
     await vi.waitFor(() => expect(claude.startThread).toHaveBeenCalled());
     expect(claude.startThread).toHaveBeenCalledWith(expect.objectContaining({ cwd }));
-    expect(claude.startThread.mock.calls[0]?.[0].profile).toBeUndefined();
+    expect(claude.startThread.mock.calls[0]?.[0].profile).toEqual({
+      additionalRoots: roots(extra, repository),
+      capabilityPackages: [], env: {}, mcpServers: [], nativeSettings: { automaticMemory: false },
+      instructions: '当前 Bot："app"；当前群："g"。\n\n用某个仓库或附加工作区前，先阅读那里适用的 AGENTS.md 或 CLAUDE.md；附加根不保证原生加载其说明文件。',
+    });
   });
   it('delivers current group roots through clear while retaining the stored backend', async () => {
     fake.project = { ...fake.project, kind: 'single', backend: CLAUDE };

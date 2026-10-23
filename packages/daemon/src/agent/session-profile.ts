@@ -4,6 +4,8 @@ import { SESSION_ENV } from '../config/session-env';
 /** Session requirements, independent of either provider's configuration keys. */
 export interface SessionProfile {
   instructions: string;
+  /** Native context filtering only; files and CLI permissions are unchanged. */
+  skills?: { disabledPaths: readonly string[]; enabledNames?: readonly string[] };
   env: Readonly<Record<string, string>>;
   nativeSettings: { automaticMemory: false };
   additionalRoots: readonly { path: string; access: 'read' | 'write' }[];
@@ -38,5 +40,6 @@ export function resolveSessionProfile(input?: SessionProfile, capabilities?: { a
     additionalRoots: input?.additionalRoots ?? [],
     capabilityPackages: [],
     mcpServers: [],
+    ...(input?.skills ? { skills: input.skills } : {}),
   };
 }

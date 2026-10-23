@@ -17,4 +17,6 @@ export * from "./diagnostics.js";
 export * from "./crash.js";
 export * from "./display.js";
 
+export * from "./group-decision.js";
+
 export * from './mcp.js';

@@ -3,8 +3,8 @@ import type { SessionProfile } from '../agent/session-profile';
 import { admitDirectorySettings } from './directories';
 import { paths } from './paths';
 import { catalogById } from '../agent/catalog';
-import { DEFAULT_BACKEND_ID, type PermissionMode, type ReasoningEffort } from '../agent/types';
-import { effectiveMode, type Project } from '../project/registry';
+import { DEFAULT_BACKEND_ID, type PermissionMode, type ReasoningEffort, type ModelInfo } from '../agent/types';
+import { effectiveMode, type Project, type ProjectModelAccess } from '../project/registry';
 import { resolveBotDefaults } from './defaults';
 import type { AppPreferences, PendingPolicy } from './schema';
 
@@ -41,7 +41,7 @@ export interface ResolvedExecution {
 }
 
 export type GroupLayer = Pick<Project,
-  'backend' | 'mode' | 'network' | 'cwd' | 'directories' | 'pendingPolicy' | 'defaultModel' | 'defaultEffort' | 'defaultModelCustom'>;
+  'backend' | 'mode' | 'network' | 'cwd' | 'directories' | 'pendingPolicy' | 'defaultModel' | 'defaultEffort' | 'defaultModelCustom' | 'modelAccess'>;
 export type ExecutionLayers = { bot?: AppPreferences; group?: GroupLayer };
 
 /** A backend id still in the catalog; a removed one counts as unset, as backendFor does. */
@@ -51,8 +51,8 @@ function known(id: string | undefined): string | undefined {
 }
 
 /** A group's backend: its own, else Codex (old rows). Never the bot default (3.2, 3.11). */
-export function groupBackendId(group: Pick<Project, 'backend'> | undefined): string {
-  return known(group?.backend) ?? DEFAULT_BACKEND_ID;
+export function groupBackendId(group: Pick<Project, 'backend' | 'modelAccess'> | undefined): string {
+  return known(group?.modelAccess?.backend ?? group?.backend) ?? DEFAULT_BACKEND_ID;
 }
 
 /** The bot's default backend: for places with no group, and for the bot's default model. */
@@ -68,6 +68,11 @@ export function botBackendId(bot: AppPreferences | undefined): string {
  * compared are the ones sessions run on and saves check against: a removed id counts as Codex.
  */
 export function resolveModelPreference({ bot, group }: ExecutionLayers, backendId: string): ModelPreference | undefined {
+  if (group?.modelAccess) {
+    if (group.modelAccess.backend !== backendId) return undefined;
+    const model = group.defaultModel && group.modelAccess.models.includes(group.defaultModel) ? group.defaultModel : group.modelAccess.models[0];
+    return model ? { model, effort: group.defaultEffort && group.modelAccess.efforts.includes(group.defaultEffort) ? group.defaultEffort : group.modelAccess.efforts[0], custom: group.defaultModelCustom === true && model === group.defaultModel, source: 'group' } : undefined;
+  }
   if (group?.defaultModel && groupBackendId(group) === backendId) {
     return { model: group.defaultModel, effort: group.defaultEffort, custom: group.defaultModelCustom === true, source: 'group' };
   }
@@ -152,10 +157,10 @@ export async function executionSessionProfile({ execution, cwd, backend, scope, 
   profile?: SessionProfile;
   dataDir?: string;
 }): Promise<SessionProfile | undefined> {
-  // s39c owns Claude delivery; do not turn its existing sessions into unsupported profiles.
-  if (backend !== DEFAULT_BACKEND_ID) return profile;
+  // Both providers receive admitted workspace roots through their native session adapters.
+  if (backend !== DEFAULT_BACKEND_ID && backend !== 'claude-agent') return profile;
   const [firstAdditional, ...otherAdditional] = execution.workspaces.additional;
-  if (scope === 'ungrouped' && firstAdditional === undefined && execution.repositories.length === 0) return profile;
+  if ((scope === 'ungrouped' || backend === 'claude-agent') && firstAdditional === undefined && execution.repositories.length === 0) return profile;
   const actualCwd = await realpath(cwd);
   // Groups admit the real execution cwd, never a configured primary substituted for a
   // stored session's cwd. Comments retain their existing bot-owned per-document cwd.
@@ -181,5 +186,37 @@ export async function executionSessionProfile({ execution, cwd, backend, scope, 
     additionalRoots: [...profile?.additionalRoots ?? [], ...[...roots].map(path => ({ path, access }))],
     capabilityPackages: profile?.capabilityPackages ?? [],
     mcpServers: profile?.mcpServers ?? [],
+    ...(profile?.skills ? { skills: profile.skills } : {}),
   };
+}
+
+/** Legacy rows keep their current defaults until the first explicit group save freezes them. */
+export function resolveProjectModelAccess({ bot, group }: { bot?: AppPreferences; group: GroupLayer }, catalog: ModelInfo[] = []): ProjectModelAccess {
+  if (group.modelAccess) return { ...group.modelAccess, models: [...group.modelAccess.models], efforts: [...group.modelAccess.efforts] };
+  const backend = groupBackendId(group);
+  const preferred = resolveModelPreference({ bot, group }, backend);
+  const chosen = preferred?.model ?? catalog.find(m => m.isDefault && !m.hidden)?.id ?? catalog.find(m => !m.hidden)?.id;
+  const info = catalog.find(m => m.id === chosen);
+  return { backend, models: chosen ? [chosen] : [], efforts: preferred?.effort ? [preferred.effort] : info?.supportedEfforts ?? [] };
+}
+
+/** Both command pickers and the final provider call must enforce the same group allowset. */
+export function projectModelAllowed(project: Pick<Project, 'modelAccess'> | undefined, backend: string, model: string | undefined, effort?: ReasoningEffort, catalog?: ModelInfo[]): boolean {
+  const access = project?.modelAccess;
+  if (!access) return true;
+  if (backend !== access.backend || !model || !access.models.includes(model)) return false;
+  const info = catalog?.find(m => m.id === model);
+  if (info?.hidden) return false;
+  if (info && info.supportedEfforts.length === 0) return true;
+  return effort !== undefined && access.efforts.includes(effort) && (!info || info.supportedEfforts.includes(effort));
+}
+export function projectModelCatalog(project: Pick<Project, 'modelAccess'> | undefined, backend: string, catalog: ModelInfo[]): ModelInfo[] {
+  const access = project?.modelAccess;
+  if (!access) return catalog;
+  if (backend !== access.backend) return [];
+  return catalog.filter(model => !model.hidden && access.models.includes(model.id)).flatMap(model => {
+    const supportedEfforts = model.supportedEfforts.filter(e => access.efforts.includes(e));
+    if (model.supportedEfforts.length && !supportedEfforts.length) return [];
+    return [{ ...model, supportedEfforts, defaultEffort: supportedEfforts.includes(model.defaultEffort) ? model.defaultEffort : supportedEfforts[0] ?? model.defaultEffort }];
+  });
 }

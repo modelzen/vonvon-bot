@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { allowedExternalUrl, groupUrl, openExternalUrl, copyAuthorizationUrl, copyFeedback, copyShortcut } from "../src/url-actions";
+import { allowedExternalUrl, botChatUrl, groupUrl, openExternalUrl, copyAuthorizationUrl, copyFeedback, copyShortcut } from "../src/url-actions";
 
 it("accepts each old main process destination for its own action", () => {
   for (const host of ["accounts.feishu.cn", "accounts.larksuite.com", "open.feishu.cn", "open.larksuite.com"]) {
@@ -72,4 +72,11 @@ it("selects the link for a manual copy when the clipboard refuses", async () => 
   } finally { vi.unstubAllGlobals(); }
   expect(copyFeedback("copied")).toBe("已复制");
   expect([copyShortcut("MacIntel"), copyShortcut("iPad"), copyShortcut("Win32"), copyShortcut("Linux x86_64")]).toEqual(["⌘C", "⌘C", "Ctrl+C", "Ctrl+C"]);
+});
+
+it('opens the intended Bot private chat without prefilled messages or other destinations', () => {
+  const url=botChatUrl('cli_example');
+  expect(allowedExternalUrl(url,'bot-chat')).toBe(url);
+  for (const suffix of ['&text=send-this','#message','&redirect=https://evil.test']) expect(allowedExternalUrl(url+suffix,'bot-chat')).toBeNull();
+  expect(allowedExternalUrl(botChatUrl('oc_group'),'bot-chat')).toBeNull();
 });

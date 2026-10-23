@@ -29,7 +29,7 @@ beforeEach(async () => {
   state.root = await mkdtemp(join(tmpdir(), 's47-writers-'));
   cfg = { accounts: { app: { id: botId, tenant: 'feishu', secret: { source: 'exec', id: 'synthetic' } } }, preferences: {} };
   await saveConfig(cfg);
-  await addProject({ name: 'fixture', chatId: 'fixture-chat', cwd: '/fixture', blank: true, createdAt: 1, noMention: false });
+  await addProject({ name: 'fixture', chatId: 'oc_fixture_chat', cwd: '/fixture', blank: true, createdAt: 1, noMention: false });
 });
 afterEach(async () => { vi.useRealTimers(); await rm(state.root, { recursive: true, force: true }); });
 const backend: AgentBackend = { id: 'codex-appserver', displayName: 'fixture', isAvailable: async () => true, doctor: async () => ({ ok: true, version: 'fixture' }), listModels: async () => [], listThreads: async () => [], readHistory: async () => { throw Error('unused'); }, startThread: async () => { throw Error('unused'); }, resumeThread: async () => { throw Error('unused'); } };
@@ -104,7 +104,7 @@ describe('s47 real settings writers behind agent authorization', () => {
   });
   it.each(interruptions)('session wait followed by %s keeps its model unchanged', async kind => {
     if (kind === 'deadline') vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
-    await upsertSession({ threadId: 'session-fixture', chatId: 'fixture-chat', sessionId: 'native-fixture', backend: 'codex-appserver', cwd: '/fixture', model: 'held-model', effort: 'high', createdAt: 1, updatedAt: 1, summary: '' });
+    await upsertSession({ threadId: 'session-fixture', chatId: 'oc_fixture_chat', sessionId: 'native-fixture', backend: 'codex-appserver', cwd: '/fixture', model: 'held-model', effort: 'high', createdAt: 1, updatedAt: 1, summary: '' });
     const f = fixture(), sessionScope = { kind: 'session', botId, threadId: 'session-fixture' } satisfies Parameters<typeof f.settings.read>[0];
     const view = await f.settings.read(sessionScope);
     if (!('model' in view.sections)) throw Error('wrong view');

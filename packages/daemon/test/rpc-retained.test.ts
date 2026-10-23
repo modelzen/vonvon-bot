@@ -3,8 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { agentIdSchema } from '@vonvon/protocol';
-import { createBackend } from '../src/agent';
-import { UsageError, type UsageErrorKind } from '../src/agent/types';
+import { UsageError, type UsageErrorKind, type AgentBackend, type ModelInfo } from '../src/agent/types';
 import { createAppPreferencesWriter } from '../src/admin/ops';
 import { createSettingsOwner } from '../src/admin/settings';
 import type { AppConfig } from '../src/config/schema';
@@ -15,6 +14,15 @@ const botId = agentIdSchema.parse('cli_retained');
 const agent = { kind: 'agent' as const, botId };
 const project = { kind: 'project' as const, botId, projectName: 'demo' };
 const privateText = 'Bearer secret at /private/auth.json';
+
+// Settings reads now inspect the model catalog. Keep this real RPC/disk fixture offline.
+const fixtureModels: ModelInfo[] = [{ id: 'gpt-6-luna', displayName: 'Fixture model', description: '', hidden: false, isDefault: true, supportedEfforts: ['low'], defaultEffort: 'low' }];
+function fixtureBackend(id: string): AgentBackend {
+  if (id !== 'codex-appserver' && id !== 'claude-agent') throw new Error('Unknown fixture backend');
+  return { id, displayName: 'Fixture provider', isAvailable: async () => true, doctor: async () => ({ ok: true, version: 'fixture' }),
+    listModels: async () => fixtureModels, peekModels: () => fixtureModels, listThreads: async () => [],
+    readHistory: async () => { throw new Error('unused'); }, startThread: async () => { throw new Error('unused'); }, resumeThread: async () => { throw new Error('unused'); } };
+}
 
 async function settingsFixture() {
   const home = await mkdtemp(join(tmpdir(), 'vonvon-settings-ws-'));
@@ -32,7 +40,7 @@ async function settingsFixture() {
   const owner = createSettingsOwner({
     cfg,
     writePreferences: createAppPreferencesWriter({ cfg, persistConfig: async next => writeFile(configFile, JSON.stringify(next)) }),
-    backendFor: createBackend,
+    backendFor: fixtureBackend,
     evictLiveSessionsForChat: async () => {},
     readProject,
     listProjects: async () => [JSON.parse(await readFile(projectFile, 'utf8')) as Project],
@@ -72,7 +80,7 @@ describe('retained settings behavior over real WebSocket', () => {
 
       const readProject = await client.call({ type: 'request', id: 'read-project', method: 'settings', payload: { type: 'read', scope: project } });
       if (readProject.type !== 'response' || readProject.method !== 'settings' || readProject.payload.kind !== 'view' || !('response' in readProject.payload.view.sections)) throw new Error('project view missing');
-      expect(Object.keys(readProject.payload.view.sections).sort()).toEqual(['judge', 'model', 'permission', 'response', 'run']);
+      expect(Object.keys(readProject.payload.view.sections).sort()).toEqual(['judge', 'model', 'modelAccess', 'permission', 'presentation', 'profile', 'response', 'run', 'skills', 'smartRules', 'workspace']);
       const responseRevision = readProject.payload.view.sections.response.revision;
       const response = await client.call({ type: 'request', id: 'save-project', method: 'settings', payload: { type: 'save', edit: { scope: project, section: 'response', revision: responseRevision, patch: { noMention: false } } } });
       expect(response).toMatchObject({ type: 'response', method: 'settings', payload: { kind: 'saved', result: { kind: 'saved', section: { scope: project, section: 'response', value: { stored: { noMention: false } } } } } });

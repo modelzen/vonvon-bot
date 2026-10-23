@@ -5,6 +5,8 @@ export class SettingsInputError extends Error {
 }
 type Rule = (value: unknown) => boolean;
 const bool: Rule = value => typeof value === 'boolean';
+const body: Rule = value => typeof value === 'string' && value.length <= 30000;
+const selector: Rule = value => typeof value === 'string' && value.length > 0 && value.length <= 4096 && !/[\r\n\0]/.test(value);
 const text: Rule = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000;
 const one = (...values: readonly unknown[]): Rule => value => values.includes(value);
 const integer = (min: number, max: number): Rule => value => typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
@@ -59,6 +61,7 @@ const title: Rule = value => shape({
 })(value);
 const schemas: Record<string, Record<string, Rule>> = {
   agent: {
+    profile: shape({ persona: body, memory: body }, true),
     cards: shape({
       showToolCalls: bool,
       showModel: one('off', 'running', 'always')
@@ -93,6 +96,12 @@ const schemas: Record<string, Record<string, Rule>> = {
     }),
   },
   project: {
+    profile: shape({ persona: body, memory: body, inheritPersona: bool, inheritMemory: bool }, true),
+    modelAccess: shape({ backend: text, models: value => array(text)(value) && (value as unknown[]).length > 0, efforts: array(one(...REASONING_EFFORTS)) }, true),
+    workspace: shape({ primary: value => value !== null && path(value), directories: array(value => value !== null && path(value)), repositories: array(value => value !== null && path(value)) }, true),
+    smartRules: shape({ respond: body, newTopic: body }, true),
+    skills: shape({ disabledPaths: array(selector) }, true),
+    presentation: shape({ voiceEnabled: bool, showToolCalls: bool, showModel: one('off', 'running', 'always'), completionMode: one('manual', 'long', 'failures', 'always'), longTaskMinutes: integer(1, 1440) }, true),
     permission: shape({
       mode: one('qa', 'write', 'full'),
       network: bool
