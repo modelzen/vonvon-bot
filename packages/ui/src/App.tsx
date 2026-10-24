@@ -22,6 +22,7 @@ import { AgentAvatar } from './AgentAvatar';
 import {OperationActivity} from './management/OperationActivity';
 import { GroupAvatar } from './GroupAvatar';
 import {BotGroupList} from './BotGroupList';
+import './bot-management.css';
 import { GroupDirectory, type GroupDirectoryState } from './GroupDirectory';
 import { ProjectDirectory, projectEntries, type ProjectDirectoryState } from './ProjectDirectory';
 import { ProjectPage } from './ProjectPage';
@@ -70,7 +71,7 @@ import {WelcomeSetup} from './setup/WelcomeSetup';
 import {BridgeImportPanel} from './setup/BridgeImportPanel';
 import {TodayHome, SettingsHome} from './TodayHome';
 import {LoginServiceRow, deviceTitle, toggleService} from './setup/service-toggle';
-import {GrantStep, ScopeGrantRow, jobToCancel, withRegisteredAgent, type RegisterModal} from './setup/GrantStep';
+import {GrantStep, BotConnectionSettings, jobToCancel, withRegisteredAgent, type RegisterModal} from './setup/GrantStep';
 import {MachinePanel} from './management/MachinePanel';
 import {DiagnosticsPanel} from './management/DiagnosticsPanel';
 import {SecretsPanel} from './management/SecretsPanel';
@@ -120,7 +121,7 @@ function DetailTabs({selected, onSelect, first, second}: {selected: 'overview' |
 }
 function BotDetailTabs({selected, onSelect}: {selected: AgentPane['kind']; onSelect: (pane: AgentPane) => void}) {
   return <nav className="collaboration-detail-tabs" aria-label="Bot 详情">
-    {([{kind: 'groups', label: '群聊'}, {kind: 'profile', label: '记忆'}, {kind: 'settings', label: '管理 Bot'}] as const).map(pane =>
+    {([{kind: 'groups', label: '群聊'}, {kind: 'profile', label: '记忆'}, {kind: 'settings', label: '设置'}] as const).map(pane =>
       <button key={pane.kind} type="button" aria-current={selected === pane.kind ? 'page' : undefined} className={selected === pane.kind ? 'is-selected' : ''} onClick={() => onSelect({kind: pane.kind})}>{pane.label}</button>)}
   </nav>;
 }
@@ -693,16 +694,19 @@ function DesktopApp() {
               )}
               {selection.kind === "agent" && agent && (
                 <>
+                  <div className="bot-detail-header">
                   <header className="collaboration-profile">
                     <AgentAvatar agent={agent} large />
-                    <div>
-                      <span className="collaboration-profile__kind">Bot</span>
-                      <h2>{agent.name}</h2>
+                    <div className="bot-detail-identity">
+                      <div className="bot-detail-name-status">
+                        <h2>{agent.name}</h2>
+                        {pendingActivation?.agentId === agent.id ? <OperationActivity key={`${agent.id}:${pendingActivation.enabled}`} label={pendingActivation.enabled ? '启用中' : '停用中'} state={pendingActivation.enabled ? 'connecting' : 'working'}/>
+                        : <span className="bot-detail-connection-status" data-tone={agentListStatus(agent).tone} role="status"><i aria-hidden="true"/>{agentListStatus(agent).label}</span>}
+                      </div>
                     </div>
-                    {pendingActivation?.agentId === agent.id ? <OperationActivity key={`${agent.id}:${pendingActivation.enabled}`} label={pendingActivation.enabled ? '启用中' : '停用中'} state={pendingActivation.enabled ? 'connecting' : 'working'}/>
-                      : <StatusBadge tone={agentListStatus(agent).tone}>{agentListStatus(agent).label}</StatusBadge>}
                   </header>
                   <div className="bot-detail-navigation"><BotDetailTabs selected={route.kind === 'agent' ? route.pane.kind : 'groups'} onSelect={agentPane}/></div>
+                  </div>
                   {route.kind === 'agent' && route.pane.kind === 'profile' ? <BotMap agentId={agent.id} snapshot={snapshot} onProject={id => select({kind: 'project', id})}/> : detail.kind !== 'agent-settings' ? <>
                   <BotGroupList
                     snapshot={snapshot}
@@ -729,15 +733,11 @@ function DesktopApp() {
                       }
                     />
                   </SettingsGroup>
-                  <SettingsGroup label="连接与权限" id={settingAnchor('连接与权限')}>
-                    <SettingsRow title="应用 ID" value={<code>{agent.id}</code>} />
-                    <SettingsRow title="连接与设置" description="检测权限、事件与发布状态。" onClick={() => openPage("setup")} />
-                    <ScopeGrantRow key={`grant-${agent.id}`} agentId={agent.id} disabled={busy || !ready} onError={message => setNotice({message, error: true})}/>
-                    <SettingsRow title="刷新飞书凭据" description="重新扫码，保留群聊、会话和设置。"
-                      trailing={<Button size="sm" disabled={busy || !ready} onClick={() => void register(agent.id)}>重新扫码</Button>}/>
-                    <SettingsRow title="状态与诊断" description="查看连接问题与运行日志。"
-                      trailing={<Button size="sm" onClick={() => { openPage("diagnostics"); setSearchTarget({page: "diagnostics", section: diagnosticsSection(agent.id)}); }}>查看</Button>}/>
-                  </SettingsGroup>
+                  <BotConnectionSettings key={`connection-${agent.id}`} agent={agent} disabled={busy || !ready}
+                    onError={message => setNotice({message, error: true})}
+                    onSetup={() => openPage("setup")}
+                    onRefreshCredentials={() => void register(agent.id)}
+                    onDiagnostics={() => { openPage("diagnostics"); setSearchTarget({page: "diagnostics", section: diagnosticsSection(agent.id)}); }}/>
                   <SettingsPanel
                     key={`agent-${agent.id}`}
                     scope="agent"

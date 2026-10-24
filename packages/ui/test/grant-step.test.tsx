@@ -5,7 +5,7 @@ import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
 import {
   GRANT_POLL_MS, GRANT_ROW_POLL_MS, GrantStep, PUBLISH_NOTE, ScopeGrantRow, grantView, jobToCancel, pollEvery,
-  registeredAgentId, scopesSettled, watchScopeStatus, withRegisteredAgent, type ScopeRead,
+  connectionNeedsAttention, registeredAgentId, scopesSettled, watchScopeStatus, withRegisteredAgent, type ScopeRead,
 } from '../src/setup/GrantStep';
 import {JOIN_SCOPE_WARNING} from '@vonvon/protocol';
 
@@ -178,4 +178,25 @@ it('renders the Bot 设置 grant row disabled until the status arrives', () => {
   expect(html).toContain('飞书权限');
   expect(html).toContain('data-search-title="飞书权限"');
   expect(html).toMatch(/<button[^>]*disabled=""[^>]*><span>一键开权限<\/span><\/button>/);
+});
+
+const connectedAgent = {id: agentId, name: 'Vonvon', enabled: true, running: true, connection: 'connected' as const, activation: 'active' as const};
+it('expands connection repair for unreadable, missing and partially granted permissions', () => {
+  const granted = status({missingRequired: [], missingJoinScopes: []});
+  expect(connectionNeedsAttention(connectedAgent, {})).toBe(false);
+  expect(connectionNeedsAttention(connectedAgent, {status: granted})).toBe(false);
+  expect(connectionNeedsAttention(connectedAgent, {status: granted, problem: 'timeout'})).toBe(true);
+  expect(connectionNeedsAttention(connectedAgent, {problem: 'offline'})).toBe(true);
+  expect(connectionNeedsAttention(connectedAgent, {status: status({})})).toBe(true);
+  expect(connectionNeedsAttention(connectedAgent, {status: status({missingRequired: ['im:resource']})})).toBe(true);
+  expect(connectionNeedsAttention(connectedAgent, {status: status({missingRequired: [], missingJoinScopes: ['im:chat:readonly']})})).toBe(true);
+});
+it('distinguishes a deliberately disabled Bot from interrupted or pending connections', () => {
+  const granted = {status: status({missingRequired: [], missingJoinScopes: []})};
+  expect(connectionNeedsAttention({...connectedAgent, enabled: false, running: false, connection: 'disconnected'}, granted)).toBe(false);
+  expect(connectionNeedsAttention({...connectedAgent, connection: 'disconnected'}, granted)).toBe(true);
+  expect(connectionNeedsAttention({...connectedAgent, connection: 'reconnecting'}, granted)).toBe(true);
+  expect(connectionNeedsAttention({...connectedAgent, enabled: false}, granted)).toBe(true);
+  expect(connectionNeedsAttention({...connectedAgent, readError: 'cannot read'}, granted)).toBe(true);
+  expect(connectionNeedsAttention({...connectedAgent, activation: 'restartRequired'}, granted)).toBe(true);
 });
