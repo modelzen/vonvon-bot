@@ -52,7 +52,7 @@ import {
 import type { CollaborationView, Page } from "./collaboration-model";
 import {SettingsPanel} from "./settings/SettingsPanel";
 import {DraftGuardProvider, useDraftGuard} from './settings/DraftGuard';
-import {diagnosticsSection, searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
+import {decisionProviderSection, diagnosticsSection, searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
 import {initialRoute, openMembership, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type AgentPane, type CollaborationRoute, joinedGroupRoute} from './collaboration-navigation';
 import {SearchDialog} from './SearchDialog';
 import {flushSync} from 'react-dom';
@@ -256,11 +256,12 @@ function DesktopApp() {
     const refreshed = await run({type: 'refresh'});
     if (refreshed.kind === 'refused' || refreshed.kind === 'outcomeUnknown') setJoinedTarget(undefined);
   }
-  function configureJoinProvider(next: 'providers' | 'secrets' = 'providers') {
+  function configureJoinProvider(next: 'providers' | 'secrets' = 'providers', provider?: string) {
     // Keep the dialog mounted so its name, directory and conversation choice survive.
     setModal(current => current?.kind === 'join' ? {...current, suspended: true} : current);
     setSettingsReturn({page, route, label: '添加飞书群'});
     setPage(next);
+    setSearchTarget(next === 'secrets' ? {page: next, section: decisionProviderSection(provider)} : undefined);
   }
   async function run(
     command: Command,
@@ -347,11 +348,12 @@ function DesktopApp() {
     });
   }
   function openPage(next: Page) { navigate(() => { setModal(current => current?.kind === 'join' && current.suspended ? null : current); setJoinedTarget(undefined); setPage(next); setFeatureId(undefined); setSettingsReturn(undefined); }); }
-  function openContextSettings(next: Page) {
+  function openContextSettings(next: Page, section?: string) {
     navigate(() => {
       const selected = route.kind === 'membership' ? snapshot?.memberships.find(item => item.id === route.id) : undefined;
       const label = selected ? snapshot?.groups.find(item => item.id === selected.groupId)?.name ?? '群设置' : 'Bot 设置';
       setSettingsReturn({page, route, label}); setPage(next); setFeatureId(undefined);
+      setSearchTarget(section ? {page: next, section} : undefined);
     });
   }
   function returnFromSettings() {
@@ -808,13 +810,13 @@ function DesktopApp() {
                 onChanged={async () => {await run({type: 'refresh'});}}
                 onDeleted={() => openList('projects')}
                 onAddGroup={(agentId, projectId) => navigate(() => setModal({kind: 'join', agentId, project: projectId}))}
-                onOpenTools={() => openContextSettings('environment')} onOpenProviders={() => openContextSettings('providers')} onOpenSecrets={() => openContextSettings('secrets')}/>}
+                onOpenTools={() => openContextSettings('environment')} onOpenProviders={() => openContextSettings('providers')} onOpenSecrets={provider => openContextSettings('secrets', decisionProviderSection(provider))}/>}
               {member && agent && group && <GroupWorkspace key={member.id} member={member} agent={agent} group={group} snapshot={snapshot}
                 revealHistory={searchTarget?.reveal === "group-history"} initialTab={searchTarget ? groupTabForSection(searchTarget.section) : groupTabs[member.id]} onTabChange={tab => setGroupTabs(current => ({...current,[member.id]:tab}))}
                 onBot={next => select({kind:'membership',id:next.id})}
                 onBotProfile={() => changeRoute(() => ({kind:'agent',id:agent.id,pane:{kind:'profile'}}))}
                 onProject={id => select({kind: 'project', id})}
-                onOpenTools={() => openContextSettings('environment')} onOpenProviders={() => openContextSettings('providers')} onOpenSecrets={() => openContextSettings('secrets')}
+                onOpenTools={() => openContextSettings('environment')} onOpenProviders={() => openContextSettings('providers')} onOpenSecrets={provider => openContextSettings('secrets', decisionProviderSection(provider))}
                 onChanged={async () => {await run({type:'refresh'});}}/>}
               {((route.kind === 'agent' && !agent) || (route.kind === 'group' && !group) || (route.kind === 'project' && !project) || (route.kind === 'membership' && (!member || !agent || !group))) && (
                 <InlineNotice title="内容暂不可用">
@@ -886,7 +888,7 @@ function DesktopApp() {
       <PendingGroupToasts pages={pendingGroups} agents={snapshot.agents} hidden={modal !== null} onContinue={(owner, group) => openJoin(owner.id, group)} />
       {modal?.kind === 'join' && (() => {
         const owner = snapshot.agents.find(item => item.id === modal.agentId);
-        return owner ? <JoinGroupDialog key={`${owner.id}:${modal.group?.chatId ?? 'new'}:${modal.project ?? ''}`} snapshot={snapshot} agent={owner} tools={snapshot.tools} initialProvider={modal.provider} initialProject={modal.project} open={!modal.suspended} onOpenProviders={() => configureJoinProvider()} onOpenDecisionModel={() => configureJoinProvider('secrets')} initialGroup={modal.group} pending={pendingGroups.find(item => item.agentId === owner.id)} onClose={() => setModal(null)} onChanged={joined} /> : null;
+        return owner ? <JoinGroupDialog key={`${owner.id}:${modal.group?.chatId ?? 'new'}:${modal.project ?? ''}`} snapshot={snapshot} agent={owner} tools={snapshot.tools} initialProvider={modal.provider} initialProject={modal.project} open={!modal.suspended} onOpenProviders={() => configureJoinProvider()} onOpenDecisionModel={provider => configureJoinProvider('secrets', provider)} initialGroup={modal.group} pending={pendingGroups.find(item => item.agentId === owner.id)} onClose={() => setModal(null)} onChanged={joined} /> : null;
       })()}
       <Dialog
         open={modal !== null && modal.kind !== "deleteAgent" && modal.kind !== "join"}
