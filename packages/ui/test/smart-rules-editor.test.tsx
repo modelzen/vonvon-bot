@@ -40,7 +40,7 @@ it('keeps selected terminal newlines when copying a range rather than serializin
   expect(smartRulesTextFromDom(root(line(text('第一段')), line(br()), line(text('第二段'))), false, false)).toBe('第一段\n\n第二段');
 });
 it('renders one labeled writing surface with four headings and readonly guidance', () => {
-  const html = renderToStaticMarkup(<SmartRulesEditor value={DEFAULT_SMART_RULES_TEXT} onChange={() => {}}/>);
+  const html = renderToStaticMarkup(<SmartRulesEditor expanded={false} onExpandedChange={() => {}} value={DEFAULT_SMART_RULES_TEXT} onChange={() => {}}/>);
   expect(html.match(/data-remove-heading/g)).toHaveLength(4);
   expect(html.match(/role="textbox"/g)).toHaveLength(1);
   expect(html).toContain('aria-multiline="true"');
@@ -48,7 +48,7 @@ it('renders one labeled writing surface with four headings and readonly guidance
   expect(html).toContain('话题内只判断是否回应');
 });
 it('keeps empty user rules empty instead of displaying the default as their content', () => {
-  const html = renderToStaticMarkup(<SmartRulesEditor value="" onChange={() => {}} disabled/>);
+  const html = renderToStaticMarkup(<SmartRulesEditor expanded={false} onExpandedChange={() => {}} value="" onChange={() => {}} disabled/>);
   expect(html).not.toContain('data-rule-heading');
   expect(html).toContain('data-empty="true"');
   expect(html).toContain('contentEditable="false"');
