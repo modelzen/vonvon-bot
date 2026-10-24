@@ -15,6 +15,6 @@
 - Codex 浏览器加载本工作树真实 `GroupSettingsContent` / `Editor` / `AppShell` 与样式，使用 9 项隔离示例技能及内存 client；不是复制的 SkillsList 原型，也没有连接真实 Bot。
 - 验证搜索无结果为 0 / 9，可清除恢复；开关经原 Editor 保存成功路径将启用数在 9 / 8 之间更新；最后一项滚动可达，完整详情可读，关闭后焦点回到触发项。长列表高度 240px、内容约 625px。浏览器无 error 日志。
 
-本地验收入口为 `http://127.0.0.1:5190/`，由工作树 `.audit/capabilities/` 的隔离 harness 提供，模拟数据写入仅在内存。截图为该目录 `implemented.png`。这些本机产物不进发布包；真实 App 安装、真实 daemon 保存与最终 owner 产品验收尚未执行。
+验证时由工作树 `.audit/capabilities/` 的隔离 harness 提供页面，模拟数据写入仅在内存。产品代码提交为 `449c28a0048b448891b91dd52f19d35cc6752479`。验收 bundle 与截图随后保留在本任务 research 工作树的 `prototypes/vonvon-group-redesign/public/capabilities-implemented-449c28a/` 和 `evidence/detail-02-implemented.png`；持续查看入口为 `http://127.0.0.1:5188/capabilities-implemented-449c28a/`。这些本机产物不进发布包；真实 App 安装、真实 daemon 保存与最终 owner 产品验收尚未执行。
 
 owner 的“采用建议”记录为设计选择，不伪称为对提交后真实 App 的验收通过。
