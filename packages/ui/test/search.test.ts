@@ -176,7 +176,7 @@ test('s28c: member picker label and alias navigate to the bound group response-m
     const result = findEntries(entries, query)[0];
     assert.equal(result?.title, '从群成员选择');
     assert.deepEqual(result?.destination, {
-      page: 'collaboration', view: 'projects', selection: {kind: 'membership', id: membershipId},
+      page: 'collaboration', view: 'groups', selection: {kind: 'membership', id: membershipId},
       detail: {kind: 'membership-settings'}, section: '响应成员', field: '从群成员选择',
       reveal: undefined, guide: undefined,
     });
@@ -195,13 +195,14 @@ test('s28c: the manual Open ID entry remains searchable alongside the picker', (
 });
 
 
-test('each group setting belongs to its surface, including the combined model and permission tab', () => {
+test('each group setting belongs to its visible page or expandable editor, including compact model and permission summaries', () => {
   for (const [query, tab, section] of [
     ['添加技能', 'capabilities', '技能'], ['语音转文字', 'capabilities', '语音'],
-    ['补充职责', 'role', '补充职责'], ['本群个性', 'role', '补充职责'],
+    ['补充职责', 'role', '本群角色'], ['本群个性', 'role', '本群角色'],
+    ['项目记忆', 'memory', '记忆'],
     ['模型 Provider', 'model', '执行模型'], ['可用 Effort', 'model', '执行模型'],
     ['权限', 'model', '权限'], ['能挡到什么', 'model', '权限'], ['高级设置', 'model', '权限'],
-    ['聊天方式', 'response', '聊天方式'], ['显示模型', 'response', '消息与提醒'],
+    ['沟通方式', 'response', '聊天方式'], ['回复规则', 'response', '聊天方式'], ['聊天方式', 'response', '聊天方式'], ['显示模型', 'response', '消息与提醒'],
     ['显示工具调用', 'response', '消息与提醒'], ['从群成员选择', 'response', '响应成员'],
   ]) {
     const entry = findEntries(entries, query!).find(item => item.destination.selection?.kind === 'membership');
@@ -251,10 +252,12 @@ test('P6: the project is a search target by its name and by its groups', () => {
     assert.equal(entry?.context, '项目', query);
     assert.deepEqual(entry?.destination, {page: 'collaboration', view: 'projects', selection: {kind: 'project', id: projectId}});
   }
-  // a group no project owns yet is found by name and opens its binding
+  // Every group remains its own search target, even when projects are available.
   const unlinked = searchEntries({...snapshot, projects: [], memberships: [{...snapshot.memberships[0]!, projectId: undefined}]});
-  assert.deepEqual(findEntries(unlinked, '研发群').find(item => item.id === groupId)?.destination.selection, {kind: 'membership', id: membershipId});
-  assert.equal(findEntries(entries, '').find(item => item.id === 'projects')?.title, '项目');
+  assert.deepEqual(findEntries(unlinked, '研发群').find(item => item.id === groupId)?.destination.selection, {kind: 'group', id: groupId});
+  assert.deepEqual(findEntries(entries, '研发群').find(item => item.id === groupId)?.destination.selection, {kind: 'group', id: groupId});
+  assert.equal(findEntries(entries, '').find(item => item.id === 'groups')?.title, '群组');
+  assert.equal(findEntries(entries, '项目管理')[0]?.destination.view, 'projects');
 });
 
 test('Bot profile has its own route and former Bot-only group settings no longer point there', () => {
@@ -291,4 +294,13 @@ test('MCP search stays in central tool management', () => {
     assert.equal(result?.destination.section, 'MCP');
     assert.equal(result?.destination.selection, undefined);
   }
+});
+
+
+test('project memory search opens the group memory tab directly', () => {
+  const entry = findEntries(entries, '项目记忆')[0]!;
+  assert.deepEqual(entry.destination.selection, {kind: 'membership', id: membershipId});
+  assert.equal(entry.destination.view, 'groups');
+  assert.equal(groupTabForSection(entry.destination.section), 'memory');
+  assert.equal(findEntries(entries, '模型看到什么').length, 0);
 });

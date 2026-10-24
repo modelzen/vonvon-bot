@@ -1,17 +1,18 @@
 /* The memory mind map: a horizontal tree, root on the left. A narrow window draws it as an indented tree. */
-.mm { overflow-x: auto; padding: 8px 4px 16px; color: var(--color-text); font-size: 13px; }
+.mm { overflow-x: auto; padding: var(--space-4) var(--space-1) var(--space-6); color: var(--color-text); font-size: 13px; }
 .mm-tree { display: flex; align-items: center; width: max-content; min-width: 0; }
-.mm-self { flex: none; padding: 3px 0; }
-.mm-children { position: relative; display: flex; flex-direction: column; padding-left: 28px; }
+.mm > .mm-tree { min-height: 320px; }
+.mm-self { flex: none; padding: var(--space-1) 0; }
+.mm-children { position: relative; display: flex; flex-direction: column; gap: var(--space-1); padding-left: 32px; }
 .mm-links { position: absolute; left: 0; top: 0; color: var(--color-border-strong, var(--color-border)); pointer-events: none; }
 .mm-box { position: relative; display: flex; align-items: center; gap: 2px; max-width: 320px; min-height: 32px; padding: 2px 4px 2px 8px; border: 1px solid var(--color-border); border-radius: 9px; background: var(--color-surface); }
 .mm-main { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .mm-label { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; padding: 4px 2px; border: 0; background: none; color: inherit; font: inherit; line-height: 1.45; text-align: left; overflow-wrap: anywhere; }
 button.mm-label { cursor: pointer; }
-.mm-label > small { flex: none; color: var(--color-text-secondary); font-size: 11px; white-space: nowrap; }
+.mm-label > small { flex: none; color: var(--color-text-secondary); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .mm-new { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--color-accent); }
 .mm-box[data-fresh] { border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 7%, var(--color-surface)); }
-.mm-fold { flex: none; width: 20px; height: 20px; padding: 0; border: 1px solid var(--color-border); border-radius: 50%; background: var(--color-surface-muted); color: var(--color-text-secondary); font: inherit; font-size: 12px; line-height: 1; cursor: pointer; }
+.mm-fold { flex: none; width: 24px; height: 24px; padding: 0; border: 1px solid var(--color-border); border-radius: 50%; background: var(--color-surface-muted); color: var(--color-text-secondary); font: inherit; font-size: 12px; line-height: 1; cursor: pointer; }
 .mm-box[data-kind=root] { border-width: 2px; border-radius: 18px; padding: 6px 14px; font-weight: 650; font-size: 15px; background: var(--color-surface-muted); }
 .mm-box[data-kind=section] { font-weight: 600; background: var(--color-surface-muted); }
 .mm-box[data-kind=leaf] { max-width: 360px; }
@@ -25,7 +26,7 @@ button.mm-label { cursor: pointer; }
 .mm-box[data-drop=ready] { border-color: var(--color-accent); border-style: dashed; }
 .mm-box[data-drop=over] { border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 18%, var(--color-surface)); }
 .mm-menu { position: relative; flex: none; }
-.mm-menu > summary { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; list-style: none; cursor: pointer; color: var(--color-text-secondary); }
+.mm-menu > summary { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; list-style: none; cursor: pointer; color: var(--color-text-secondary); }
 .mm-menu > summary::-webkit-details-marker { display: none; }
 .mm-menu[open] > summary { background: var(--color-surface-muted); color: var(--color-text); }
 .mm-menu > div { position: absolute; z-index: 20; left: 0; top: 28px; width: 168px; padding: 5px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface); box-shadow: 0 8px 28px #0000001a, 0 2px 6px #00000008; }
@@ -38,6 +39,7 @@ button.mm-label { cursor: pointer; }
 @media (max-width: 720px) {
   .mm { overflow-x: visible; }
   .mm-tree { display: block; width: auto; }
+  .mm > .mm-tree { min-height: 0; }
   .mm-children { padding-left: 18px; margin-left: 8px; border-left: 1.5px solid var(--color-border); }
   .mm-links { display: none; }
   .mm-box { max-width: none; }
@@ -45,23 +47,24 @@ button.mm-label { cursor: pointer; }
 }
 
 /* Toolbar, add form, side panel */
-.memory-map { display: grid; gap: 10px; min-width: 0; }
-.memory-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.memory-toolbar > strong { flex: 1 1 auto; font-size: 13px; }
+.memory-map { display: grid; gap: var(--space-3); min-width: 0; container-type: inline-size; }
+.memory-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 .memory-search { display: inline-flex; align-items: center; gap: 5px; min-height: 30px; padding: 0 8px; border: 1px solid var(--color-border); border-radius: 8px; color: var(--color-text-secondary); }
 .memory-search input { width: 140px; border: 0; background: none; font: inherit; font-size: 12px; color: var(--color-text); outline: none; }
-.memory-add { display: grid; grid-template-columns: 1fr; gap: 6px; padding: 10px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface-muted); }
+.memory-add { width: 300px; max-width: 100%; display: grid; grid-template-columns: 1fr; gap: 6px; padding: 10px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface-muted); }
 .memory-add > textarea, .memory-add > input { width: 100%; font: inherit; font-size: 13px; color: var(--color-text); }
 .memory-add > button { justify-self: end; }
-.memory-body { display: flex; align-items: flex-start; gap: 16px; min-width: 0; }
-.memory-canvas { flex: 1 1 auto; min-width: 0; overflow: auto; }
-.memory-panel { flex: 0 0 280px; max-width: 100%; display: grid; gap: 8px; padding: 12px; border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-surface); }
+.memory-body { display: grid; align-items: start; gap: var(--space-4); min-width: 0; }
+.memory-canvas { min-width: 0; }
+.memory-panel { min-width: 0; display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-surface); }
+.memory-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); font-size: 13px; }
 .memory-panel h3 { margin: 0; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
 .memory-panel h4 { margin: 6px 0 0; font-size: 12px; }
 .memory-source, .memory-history { display: grid; gap: 4px; margin: 0; padding-left: 16px; font-size: 12px; line-height: 1.55; color: var(--color-text-secondary); }
 .memory-history > li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .memory-role-panel { display: grid; gap: 8px; }
-@media (max-width: 900px) { .memory-body { flex-direction: column; } .memory-panel { flex-basis: auto; width: 100%; } }
+/* Keep the full map visible in the app's usual window; a wide canvas can host the details beside it. */
+@container (min-width: 1200px) { .memory-body:has(.memory-panel) { grid-template-columns: minmax(0, 1fr) 320px; } }
 
 /* 模型看到什么 (§5.5) */
 .context-panel { display: grid; gap: 10px; min-width: 0; }
@@ -76,3 +79,12 @@ button.mm-label { cursor: pointer; }
 .context-items ul { margin: 2px 0 0; padding-left: 18px; line-height: 1.55; }
 .context-last-turn { display: grid; gap: 2px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Immediate, quiet feedback keeps the diagram anchored while the user works. */
+.mm-fold:active, .mm-menu > summary:active, button.mm-label:active { background: var(--color-surface-muted); }
+.mm :is(button, summary):focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.memory-search:focus-within { border-color: var(--color-accent); outline: 2px solid color-mix(in srgb, var(--color-accent) 25%, transparent); }
+@media (prefers-contrast: more) {
+  .mm-links { color: var(--color-text-secondary); }
+  .mm-box { border-color: var(--color-text-secondary); }
+}

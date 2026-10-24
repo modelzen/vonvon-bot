@@ -3,7 +3,7 @@ import {CornerDownRight, Plus, X} from 'lucide-react';
 import './group-design-settings.css';
 
 type Props = {
-  label: '个性' | '记忆' | '身份与职责' | '其他说明' | '补充职责';
+  label: '个性' | '记忆' | '身份与职责' | '其他说明' | '补充职责' | '本群角色';
   placeholder?: string;
   value: string;
   onChange: (value: string) => void;
@@ -40,7 +40,7 @@ export function PersonaEditor({label, value, onChange, disabled = false, maxLeng
         </div>
         <p>{inheritance.source || `Bot 尚未填写${label}`}</p>
       </div>}
-      <textarea ref={input} id={`${id}-text`} aria-label={label === '补充职责' ? label : `${inheritance ? '本群' : 'Bot '}${label}`} rows={5} value={value} maxLength={maxLength} disabled={disabled}
+      <textarea ref={input} id={`${id}-text`} aria-label={(label === '补充职责' || label === '本群角色') ? label : `${inheritance ? '本群' : 'Bot '}${label}`} rows={5} value={value} maxLength={maxLength} disabled={disabled}
         placeholder={placeholder ?? (inheritance?.enabled ? `补充本群${label}…` : `填写${label}…`)} onChange={event => onChange(event.target.value)}/>
     </div>
   </section>;
