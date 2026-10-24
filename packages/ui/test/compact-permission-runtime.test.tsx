@@ -5,13 +5,13 @@ import {Dialog} from '../src/reference/components/ui/Dialog';
 import {permissionValue} from './permission-fixture';
 
 type Slot = {state: unknown[]; refs: Array<{current: unknown}>; si: number; ri: number};
-const h = vi.hoisted(() => ({slots: {} as Record<string, Slot>, active: ''}));
+const h = vi.hoisted(() => ({slots: {} as Record<string, Slot>, guards: {} as Record<string, boolean>, active: ''}));
 vi.mock('react', async original => ({...await original<typeof import('react')>(),
   useState: (initial: unknown) => {const slot = h.slots[h.active]!; const i = slot.si++; if (!(i in slot.state)) slot.state[i] = typeof initial === 'function' ? initial() : initial; return [slot.state[i], (next: unknown) => {slot.state[i] = typeof next === 'function' ? next(slot.state[i]) : next;}];},
   useRef: (initial: unknown) => {const slot = h.slots[h.active]!; return slot.refs[slot.ri++] ??= {current: initial};},
   useContext: () => [], useEffect: () => {},
 }));
-vi.mock('../src/settings/DraftGuard', () => ({useDraft: () => {}}));
+vi.mock('../src/settings/DraftGuard', () => ({useDraft: (dirty: boolean) => {h.guards[h.active] = dirty;}}));
 type Element = ReactElement<Record<string, any>>;
 function nodes(node: ReactNode): Element[] {
   if (Array.isArray(node)) return node.flatMap(nodes);
@@ -36,18 +36,23 @@ const stored = () => {
 function setup(save: ReturnType<typeof vi.fn>, access: Section<ReturnType<typeof stored>>['access'] = {kind: 'writable'}) {
   const value = stored();
   const section = {stored: value, effective: value, revision: 'r1', access, apply: []};
+  // AnimatePresence may retain a closed or replaced editor during its exit. Keep
+  // those mounted instances, with React's key identity, until the test ends.
+  const retainedEditors = new Map<string, Element>();
   function render() {
     const summary = at('summary', () => PermissionSummary({section, provider: 'Codex', save}));
     const dialog = summary.find(node => node.type === Dialog)!;
     const editorNode = summary.find(node => node.type === Editor);
-    if (!editorNode) delete h.slots.editor;
-    const editor = editorNode ? at('editor', () => Editor(editorNode.props as any)) : [];
+    const editorKey = editorNode ? `editor:${editorNode.key ?? 'unkeyed'}` : undefined;
+    if (editorNode && editorKey) retainedEditors.set(editorKey, editorNode);
+    const renderedEditors = new Map([...retainedEditors].map(([key, retained]) => [key, at(key, () => Editor(retained.props as any))]));
+    const editor = editorKey ? renderedEditors.get(editorKey)! : [];
     return {summary, dialog, editor, fields: editor.find(node => node.type === PermissionFields)};
   }
   return {section, render};
 }
 async function flush() {for (let i = 0; i < 12; i++) await Promise.resolve();}
-beforeEach(() => {h.slots = {}; vi.clearAllMocks();});
+beforeEach(() => {h.slots = {}; h.guards = {}; vi.clearAllMocks();});
 
 it('shows a custom permission summary, edits tiers locally and saves only the chosen mode', async () => {
   const save = vi.fn(); const {section, render} = setup(save);
@@ -72,8 +77,24 @@ it.each(['cancel', 'dismiss'] as const)('discards an unconfirmed tier on %s with
   ui.fields!.props.onChange({mode: 'full'}); ui = render();
   if (action === 'cancel') button(ui.summary, '取消').props.onClick(); else ui.dialog.props.onClose();
   ui = render(); expect(ui.dialog.props.open).toBe(false); expect(save).not.toHaveBeenCalled();
+  expect(Object.values(h.guards).some(Boolean)).toBe(false);
   button(ui.summary, '修改权限').props.onClick(); ui = render();
   expect(ui.fields!.props.value).toMatchObject({mode: 'write', custom: {sandbox: 'workspace-write', network: false}});
+});
+
+it.each(['cancel', 'dismiss'] as const)('reopens from confirmed permissions immediately after %s while the outgoing editor is retained', action => {
+  const save = vi.fn(); const {render} = setup(save);
+  let ui = render(); button(ui.summary, '修改权限').props.onClick(); ui = render();
+  ui.fields!.props.onChange({mode: 'full'}); ui = render();
+  expect(Object.values(h.guards).some(Boolean)).toBe(true);
+  if (action === 'cancel') button(ui.summary, '取消').props.onClick(); else ui.dialog.props.onClose();
+  // Reopen before rendering a closed frame or allowing the exit animation to end.
+  button(ui.summary, '修改权限').props.onClick(); ui = render();
+  expect(ui.dialog.props.open).toBe(true);
+  expect(ui.fields!.props.value).toMatchObject({mode: 'write', custom: {sandbox: 'workspace-write', network: false}});
+  expect(button(ui.editor, '保存权限').props.disabled).toBe(true);
+  expect(Object.values(h.guards).some(Boolean)).toBe(false);
+  expect(save).not.toHaveBeenCalled();
 });
 
 it('retains a failed permission draft for retry and disables dismissal while saving', async () => {
