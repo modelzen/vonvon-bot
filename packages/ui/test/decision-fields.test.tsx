@@ -111,7 +111,7 @@ it.each([
   props.value = {kind: 'provider', provider} as JudgeSelectionView;
   const link = render().find(node => node.type === Button && node.props.className === 'gd-decision-config-link')!;
   expect(link.props['aria-label']).toBe(label);
-  expect(renderToStaticMarkup(<>{link.props.children}</>)).toContain('修改配置');
+  expect(renderToStaticMarkup(<>{link.props.children}</>)).toContain('修改');
   expect(link.props.disabled).toBe(false);
   link.props.onClick();
   expect(props.onOpenSecrets).toHaveBeenCalledExactlyOnceWith(provider);
@@ -156,7 +156,8 @@ it.each([
   const values = ui.find(node => node.props.className === 'gd-decision-config-values')!;
   const text = renderToStaticMarkup(<>{values.props.children}</>);
   expect(text).toContain(profile.model);
-  expect(text).toContain(effort);
+  if (provider !== 'typesafe') expect(text).toContain(effort);
+  else expect(ui.some(node => node.props['aria-label'] === '思考等级')).toBe(false);
   expect(ui.some(node => node.props.className === 'gd-decision-configured')).toBe(true);
 });
 it('shows the group’s retained model instead of presenting shared configuration as active', () => {
@@ -172,5 +173,5 @@ it('does not invent a model or show configured when shared configuration cannot 
   const ui = render();
   expect(ui.some(node => node.props.className === 'gd-decision-config-values')).toBe(false);
   expect(ui.some(node => node.props.className === 'gd-decision-configured')).toBe(false);
-  expect(ui.some(node => node.props.children === '未能读取模型配置，请打开设置检查。')).toBe(true);
+  expect(ui.some(node => node.props.children === '配置读取失败')).toBe(true);
 });

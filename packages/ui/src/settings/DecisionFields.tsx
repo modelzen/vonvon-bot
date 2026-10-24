@@ -71,22 +71,20 @@ export function DecisionFields({groupBackend, value, effective, onChange, disabl
     </InlineNotice>}
     {onOpenSecrets && <div className="gd-decision-config">
       <div className="gd-decision-config-copy">
-        <div className="gd-decision-config-title"><strong>当前配置</strong>
-          {viewed && configured && <span className="gd-decision-configured" role="status"><Check size={13} aria-hidden="true"/>已配置</span>}
-        </div>
-        {viewed && (profile ? <dl className="gd-decision-config-values">
-          <div><dt>模型</dt><dd>{profile.model}</dd></div>
-          <div><dt>思考等级</dt><dd>{viewed === 'typesafe' ? '不支持单独设置' : 'effort' in profile && profile.effort ? profile.effort : viewed === 'claude-agent' ? '关闭思考' : '自动（最低支持档位）'}</dd></div>
-        </dl> : <p role="status">{configuration?.kind === 'failed' || configuration?.kind === 'ready' ? '未能读取模型配置，请打开设置检查。' : '正在读取模型配置…'}</p>)}
-        {viewed === 'typesafe' && <p><span className="gd-decision-key-state" data-state={keyState} role="status">
+        {viewed && (profile ? <span className="gd-decision-config-values">
+          {configured && <span className="gd-decision-configured" role="status" aria-label="已配置" title="已配置"><Check size={13} aria-hidden="true"/></span>}
+          <span title={viewed === 'typesafe' ? 'Jev 不支持单独设置思考等级' : undefined}>{profile.model}</span>
+          {viewed !== 'typesafe' && <><span aria-hidden="true">·</span><span aria-label="思考等级">{'effort' in profile && profile.effort ? profile.effort : viewed === 'claude-agent' ? '关闭思考' : '自动（最低支持档位）'}</span></>}
+        </span> : <span role="status">{configuration?.kind === 'failed' || configuration?.kind === 'ready' ? '配置读取失败' : '正在读取配置…'}</span>)}
+        {viewed === 'typesafe' && <><span aria-hidden="true">·</span><span className="gd-decision-key-state" data-state={keyState} role="status">
           {keyState === 'added' ? '密钥已添加' : keyState === 'missing' ? '尚未添加密钥' : '密钥状态未知'}
-        </span></p>}
-        <p>{legacy ? '本群仍使用独立配置；选择「使用统一配置」后才跟随设置。' : '在设置中统一管理，使用同一 Provider 的群共用。'}</p>
+        </span></>}
       </div>
       <Button type="button" variant="ghost" size="sm" className="gd-decision-config-link" disabled={disabled}
         aria-label={providerName ? `修改 ${providerName} 配置` : undefined}
+        title={legacy ? '本群仍使用独立配置；选择「使用统一配置」后才跟随设置。' : '修改统一配置，使用同一 Provider 的群共用。'}
         onClick={() => onOpenSecrets(viewed || undefined)}>
-        {providerName ? '修改配置' : '管理决策模型'}<ChevronRight size={14} aria-hidden="true"/>
+        {providerName ? '修改' : '管理决策模型'}<ChevronRight size={14} aria-hidden="true"/>
       </Button>
     </div>}
   </div>;
