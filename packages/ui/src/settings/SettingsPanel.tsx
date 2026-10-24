@@ -120,6 +120,7 @@ export function Editor<T extends object>({
     disabled: boolean,
     commit: (patch: Partial<T>) => Promise<void>,
     resetKey: string,
+    discard: () => void,
   ) => ReactNode;
   save: (patch: Partial<T>, revision: string) => Promise<SettingsReply>;
   validate?: (value: T) => string | undefined;
@@ -277,7 +278,7 @@ export function Editor<T extends object>({
           : effectText(section) === '下一条消息生效' ? undefined : effectText(section)
       }
     >
-      {render(value, edit, disabled, commit, `${confirmed.revision}:${discardVersion}`)}
+      {render(value, edit, disabled, commit, `${confirmed.revision}:${discardVersion}`, discard)}
       {(dirty || allowUnchanged || showSave) && <div className="settings-edit-actions">
         {dirty && <Button
           size="sm"
@@ -1180,13 +1181,15 @@ export function PermissionFields({value, disabled, onChange}: {value: Permission
 export function PermissionSummary({section, provider, save}: {section: Section<PermissionView>; provider: string; save: (patch: Partial<PermissionView>, revision: string) => Promise<SettingsReply>}) {
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
+  const [editSession, setEditSession] = useState(0);
+  const discardChoice = useRef<(() => void) | undefined>(undefined);
   const announcedReadonly = useContext(AnnouncedReadonlyMessages);
   const value = section.stored;
   const currentTier = value.options.tiers.find(tier => tier.tier === value.mode);
   const invalid = Boolean(value.options.invalid);
   const description = invalid ? '高级设置读不出来，现在按只读运行。'
     : value.custom ? value.options.customSummary : currentTier?.summary;
-  const close = () => {if (!pending) setOpen(false);};
+  const close = () => {if (!pending) {discardChoice.current?.(); setOpen(false);}};
   async function saveTier(patch: Partial<PermissionView>, revision: string) {
     setPending(true);
     try {return await save({mode: patch.mode ?? section.stored.mode}, revision);}
@@ -1197,16 +1200,19 @@ export function PermissionSummary({section, provider, save}: {section: Section<P
       footer={section.access.kind === 'readonly' && !hasReadonlyMessage(announcedReadonly, section.access) ? section.access.message : undefined}>
       <SettingsRow title={invalid ? '只读（设置异常）' : value.custom ? '自定义权限' : currentTier?.name ?? value.mode}
         description={description}
-        trailing={<span data-search-title="修改权限"><Button size="sm" onClick={() => setOpen(true)}>{section.access.kind === 'readonly' ? '查看权限' : '修改权限'}</Button></span>}/>
+        trailing={<span data-search-title="修改权限"><Button size="sm" onClick={() => {setEditSession(session => session + 1); setOpen(true);}}>{section.access.kind === 'readonly' ? '查看权限' : '修改权限'}</Button></span>}/>
     </SettingsGroup>
     <NativePermissionEditor section={section} provider={provider} save={save}/>
     <Dialog open={open} title="执行权限" description={section.access.kind === 'readonly' ? section.access.message : `设置 ${provider} 在本群中的执行范围。选择后保存才会生效。`} onClose={pending ? undefined : close}
       footer={<Button disabled={pending} onClick={close}>取消</Button>}>
       <div className="permission-dialog">
-        <Editor title="权限" section={section} showSave submitLabel="保存权限"
+        <Editor key={editSession} title="权限" section={section} showSave submitLabel="保存权限"
           save={saveTier} afterSave={async () => setOpen(false)}
-          render={(draft, set, disabled) => <PermissionFields value={draft} disabled={disabled}
-            onChange={({mode}) => set({...draft, mode, custom: null, options: draft.options.invalid ? {...draft.options, invalid: false} : draft.options})}/>}/>
+          render={(draft, set, disabled, _commit, _resetKey, discard) => {
+            discardChoice.current = discard;
+            return <PermissionFields value={draft} disabled={disabled}
+              onChange={({mode}) => set({...draft, mode, custom: null, options: draft.options.invalid ? {...draft.options, invalid: false} : draft.options})}/>;
+          }}/>
       </div>
     </Dialog>
   </>;
