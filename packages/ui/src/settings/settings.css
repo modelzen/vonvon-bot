@@ -10,6 +10,17 @@
 .settings-inline-actions {
   padding: 0;
 }
+.conversation-run-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.conversation-run-orb {
+  display: inline-flex;
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
 .settings-row-switch .ui-toggle__copy {
   position: absolute;
   width: 1px;
