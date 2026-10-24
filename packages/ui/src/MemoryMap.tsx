@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useMemo, useRef, useState, type ReactNode} from 'react';
-import {Download, Plus, Search} from 'lucide-react';
+import {Search} from 'lucide-react';
 import type {MemoryEvent, MemoryItem, MemoryScopeRef} from '@vonvon/protocol';
 import {useClient, useShellCapabilities} from './client-context';
 import {Button, InlineNotice} from './reference/components/ui';
@@ -29,17 +29,17 @@ type Props = {
   /** `wrapped`: one 「Bot 记忆」 node holds the branches (Bot page). `direct`: the branches hang on the root (project page). */
   mode: 'wrapped' | 'direct';
   memoryLabel: string;
-  note?: ReactNode;
-  empty?: ReactNode;
   targets: MemoryTargets;
   /** Nodes drawn before and after the memory, which the page owns (角色设定, 项目, 群和 Bot). */
   before?: MapNode[];
   after?: MapNode[];
   /** Replaces the leaf side panel while the page has its own open (the role editor). */
   panel?: ReactNode;
+  panelTitle?: string;
+  panelKey?: string;
+  onPanelClose?: () => void;
   onLeafSelected?: () => void;
-  /** Lines between the toolbar and the map (the project page's 最近一轮 and 没记上, §5.3). */
-  above?: ReactNode;
+  beforeLeafSelect?: (select: () => void) => void;
 };
 /** Fired on `window` when a page has marked itself seen, so the counts on the navigation and the lists are read again (§5.8). */
 export const MEMORY_SEEN_EVENT = 'vonvon:memory-seen';
@@ -62,7 +62,7 @@ function download(name: string, text: string) {
 }
 
 /** One memory (a Bot's or a project's) as a mind map with its toolbar, notices, dialogs and the side panel of the selected leaf (§5.7). */
-export function MemoryMap({scope, rootLabel, mode, memoryLabel, note, empty, targets, before = [], after = [], panel, onLeafSelected, above}: Props) {
+export function MemoryMap({scope, rootLabel, mode, memoryLabel, targets, before = [], after = [], panel, panelTitle = '角色设定', panelKey, onPanelClose, onLeafSelected, beforeLeafSelect}: Props) {
   const client = useClient();
   const scopeKey = scope.kind === 'bot' ? `bot:${scope.botId}` : `project:${scope.projectId}`;
   const [list, setList] = useState<MemoryList>();
@@ -76,6 +76,13 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, note, empty, tar
   const [flipped, setFlipped] = useState<ReadonlySet<string>>(new Set());
   const [dialog, setDialog] = useState<Dialogs>();
   const [marks, setMarks] = useState<Marks>(noMarks);
+  const panelRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!panelKey || !panelRef.current) return;
+    const anchor = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+    panelRef.current.scrollIntoView({block: 'nearest'});
+    return () => {if (anchor?.isConnected) anchor.focus();};
+  }, [panelKey]);
   const serial = useRef(0);
   /** The page is marked seen once per opening, after the first reading has shown what is new (§5.8). */
   const seenSent = useRef('');
@@ -148,7 +155,10 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, note, empty, tar
       {id: 'add', label: '在这支加一条', onSelect: () => setAdding({branch: view.name, text: ''})},
       ...(branchCanChange(view) ? [{id: 'rename', label: '改名', onSelect: () => setDialog({kind: 'rename', branch: view.name})}, {id: 'merge', label: '合并到…', onSelect: () => setDialog({kind: 'merge', branch: view.name})}] : []),
     ],
-    onLeaf: (item, archived) => {setSelected(item.id); onLeafSelected?.(); if (!archived) setEditing({id: item.id, text: item.text});},
+    onLeaf: (item, archived) => {
+      const select = () => {setSelected(item.id); onLeafSelected?.(); setEditing(archived ? undefined : {id: item.id, text: item.text});};
+      if (beforeLeafSelect) beforeLeafSelect(select); else select();
+    },
     leafContent: item => editing?.id === item.id ? <form className="mm-editor" onSubmit={event => {
       event.preventDefault();
       if (editing.text.trim() && editing.text !== item.text) void act({type: 'edit', scope, itemId: item.id, revision: item.revision, text: editing.text}, '已保存。').then(ok => ok && setEditing(undefined));
@@ -159,29 +169,9 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, note, empty, tar
     </form> : undefined,
   });
   const memoryFresh = [...views.branches, ...views.archived].reduce((sum, view) => sum + branchNewCount(view, marks), 0);
-  const archivedCount = views.archived.reduce((sum, view) => sum + view.items.length, 0);
-  const memory: MapNode[] = mode === 'wrapped'
-    ? [{id: 'memory', kind: 'section', label: memoryLabel, meta: list ? `${list.used} / ${list.limit}${memoryFresh ? ` · 新 ${memoryFresh}` : ''}` : undefined, open: isOpen('memory', true), onToggle: () => flip('memory'), children: [...branchNodes, ...archiveNode]}]
-    : [...branchNodes, ...archiveNode];
-  const root: MapNode = {id: 'root', kind: 'root', label: rootLabel, children: [...before, ...memory, ...after]};
-
-  const item = selected ? items.get(selected) : undefined;
-  const nothing = list && list.used === 0 && !archivedCount;
-  return <section className="memory-map" aria-label={memoryLabel}>
-    <div className="memory-toolbar">
-      <strong>{memoryLabel}{list ? ` ${list.used} / ${list.limit}` : ''}{memoryFresh > 0 && ` · 新 ${memoryFresh}`}</strong>
-      <Button size="sm" disabled={!list || busy} onClick={() => setAdding({branch: '', text: ''})}><Plus size={13} aria-hidden="true"/>添加</Button>
-      <Button size="sm" disabled={!list} onClick={() => void exportAll()}><Download size={13} aria-hidden="true"/>导出</Button>
-      <label className="memory-search"><Search size={13} aria-hidden="true"/><input type="search" aria-label="搜索记忆" placeholder="搜索" value={query} onChange={event => setQuery(event.target.value)}/></label>
-    </div>
-    {note && <p className="group-control-note">{note}</p>}
-    {above}
-    {nothing && empty && <p className="group-control-note">{empty}</p>}
-    {error && <InlineNotice title="读取未完成" tone="warning">{error}<Button size="sm" onClick={() => void reload()}>重试</Button></InlineNotice>}
-    {list && !list.verified && <InlineNotice title="记忆文件在 vonvon 之外被改过" tone="warning">可信条目暂时不会交给模型。检查下面的条目，没问题就确认。<Button size="sm" disabled={busy} onClick={() => void act({type: 'reseal', scope}, '已确认，下一轮起可信条目照常交给模型。')}>检查过了，照现在的用</Button></InlineNotice>}
-    {list?.problems.map(problem => <p className="group-control-note" role="status" key={problem}>{problem}</p>)}
-    {notice && <p className="group-control-note" role="status">{notice}</p>}
-    {adding && <form className="memory-add" onSubmit={event => {
+  const startAdding = () => {if (list && !busy) setAdding({branch: '', text: ''});};
+  const addNode: MapNode = {id: 'add-memory', kind: 'action', label: '+ 添加记忆', ...(list && !busy ? {onClick: startAdding} : {}),
+    ...(adding ? {content: <form className="memory-add" onSubmit={event => {
       event.preventDefault();
       void act({type: 'add', scope, text: adding.text, ...(adding.branch.trim() ? {branch: adding.branch.trim()} : {})}, '已添加。').then(ok => ok && setAdding(undefined));
     }}>
@@ -190,10 +180,27 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, note, empty, tar
       <datalist id="memory-branches">{views.branches.map(view => <option key={view.name} value={view.name}/>)}</datalist>
       <Button size="sm" type="button" onClick={() => setAdding(undefined)}>放弃</Button>
       <Button size="sm" variant="primary" type="submit" loading={busy} disabled={!adding.text.trim()}>添加</Button>
-    </form>}
+    </form>} : {})};
+  const memory: MapNode[] = mode === 'wrapped'
+    ? [{id: 'memory', kind: 'section', label: memoryLabel, meta: list ? `${list.used} / ${list.limit}${memoryFresh ? ` · 新 ${memoryFresh}` : ''}` : undefined, open: isOpen('memory', true), onToggle: () => flip('memory'), children: [...branchNodes, ...archiveNode, addNode]}]
+    : [...branchNodes, ...archiveNode, addNode];
+  const root: MapNode = {id: 'root', kind: 'root', label: rootLabel, children: [...before, ...memory, ...after],
+    ...(mode === 'direct' && list ? {meta: `${list.used} / ${list.limit}${memoryFresh ? ` · 新 ${memoryFresh}` : ''}`} : {}),
+    menu: list ? [{id: 'add', label: '添加记忆', onSelect: startAdding}, {id: 'export', label: '导出记忆', onSelect: () => void exportAll()}] : undefined};
+
+  const item = selected ? items.get(selected) : undefined;
+  return <section className="memory-map" aria-label={memoryLabel}>
+    <div className="memory-toolbar">
+      <label className="memory-search"><Search size={13} aria-hidden="true"/><input type="search" aria-label="搜索记忆" placeholder="搜索" value={query} onChange={event => setQuery(event.target.value)}/></label>
+    </div>
+    {error && <InlineNotice title="读取未完成" tone="warning">{error}<Button size="sm" onClick={() => void reload()}>重试</Button></InlineNotice>}
+    {list && !list.verified && <InlineNotice title="记忆文件在 vonvon 之外被改过" tone="warning">可信条目暂时不会交给模型。检查下面的条目，没问题就确认。<Button size="sm" disabled={busy} onClick={() => void act({type: 'reseal', scope}, '已确认，下一轮起可信条目照常交给模型。')}>检查过了，照现在的用</Button></InlineNotice>}
+    {list?.problems.map(problem => <p className="group-control-note" role="status" key={problem}>{problem}</p>)}
+    {notice && <p className="group-control-note" role="status">{notice}</p>}
     <div className="memory-body">
       <div className="memory-canvas"><MindMap root={root} label={`${rootLabel}的记忆导图`}/>{!list && !error && <p className="gd-empty" role="status">正在读取记忆…</p>}</div>
-      {(panel || item) && <aside className="memory-panel" aria-label="详情">
+      {(panel || item) && <aside ref={panelRef} className="memory-panel" aria-label="详情">
+        <div className="memory-panel-heading"><strong>{panel ? panelTitle : '记忆详情'}</strong><Button size="sm" aria-label="关闭详情" onClick={() => {setSelected(undefined); onPanelClose?.();}}>关闭</Button></div>
         {panel ?? (item && <LeafPanel key={item.id} item={item} scope={scope} targets={targets} version={list?.lastEventId} onUndone={() => reload()} busy={busy} act={act}/>)}
       </aside>}
     </div>

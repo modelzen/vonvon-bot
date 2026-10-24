@@ -19,7 +19,9 @@ import {
 } from "lucide-react";
 import { AppShell } from "./LocalShell";
 import { AgentAvatar } from './AgentAvatar';
+import {OperationActivity} from './management/OperationActivity';
 import { GroupAvatar } from './GroupAvatar';
+import { GroupDirectory, type GroupDirectoryState } from './GroupDirectory';
 import { ProjectDirectory, projectEntries, type ProjectDirectoryState } from './ProjectDirectory';
 import { ProjectPage } from './ProjectPage';
 import { deleteAgentDescription } from './project-model';
@@ -117,7 +119,7 @@ function DetailTabs({selected, onSelect, first, second}: {selected: 'overview' |
 }
 function BotDetailTabs({selected, onSelect}: {selected: AgentPane['kind']; onSelect: (pane: AgentPane) => void}) {
   return <nav className="collaboration-detail-tabs" aria-label="Bot 详情">
-    {([{kind: 'groups', label: '群聊'}, {kind: 'profile', label: '导图'}, {kind: 'settings', label: '管理 Bot'}] as const).map(pane =>
+    {([{kind: 'groups', label: '群聊'}, {kind: 'profile', label: '记忆'}, {kind: 'settings', label: '管理 Bot'}] as const).map(pane =>
       <button key={pane.kind} type="button" aria-current={selected === pane.kind ? 'page' : undefined} className={selected === pane.kind ? 'is-selected' : ''} onClick={() => onSelect({kind: pane.kind})}>{pane.label}</button>)}
   </nav>;
 }
@@ -140,6 +142,7 @@ function DesktopApp() {
   const [page, setPage] = useState<Page>("home");
   const [settingsReturn, setSettingsReturn] = useState<{page: Page; route: CollaborationRoute; label: string}>();
   const newCounts = useNewCounts(snapshot?.revision, MEMORY_SEEN_EVENT);
+  const [groupDirectoryState, setGroupDirectoryState] = useState<GroupDirectoryState>({query: '', expanded: {}});
   const [projectDirectoryState, setProjectDirectoryState] = useState<ProjectDirectoryState>({query: '', expanded: {}});
   const [groupTabs, setGroupTabs] = useState<Record<string, GroupDesignTab>>({});
   const [featureId, setFeatureId] = useState<string>();
@@ -151,6 +154,7 @@ function DesktopApp() {
   const [joinedTarget, setJoinedTarget] = useState<{agentId: AgentId; chatId: string}>();
   const [pending, setPending] = useState(0);
   const busy = pending > 0;
+  const [pendingActivation, setPendingActivation] = useState<{agentId: AgentId; enabled: boolean} | null>(null);
   const modalGeneration = useRef(0);
   const [notice, setNotice] = useState<{ message: string; error: boolean }>();
   const pendingGroups = usePendingGroups(snapshot);
@@ -247,7 +251,7 @@ function DesktopApp() {
     setSettingsReturn(undefined);
     setFeatureId(undefined);
     setPage('collaboration');
-    setRoute({kind: 'list', view: 'projects'});
+    setRoute({kind: 'list', view: 'groups'});
     setJoinedTarget(target.chatId ? {agentId: target.agentId, chatId: target.chatId} : undefined);
     const refreshed = await run({type: 'refresh'});
     if (refreshed.kind === 'refused' || refreshed.kind === 'outcomeUnknown') setJoinedTarget(undefined);
@@ -283,6 +287,11 @@ function DesktopApp() {
       setPending((count) => count - 1);
     }
   }
+  async function setAgentEnabled(agentId: AgentId, enabled: boolean) {
+    setPendingActivation({agentId, enabled});
+    try { await run({type: 'setAgentEnabled', agentId, enabled}); }
+    finally { setPendingActivation(null); }
+  }
   async function runShell(operation: () => Promise<void>): Promise<void> {
     setPending(count => count + 1);
     setNotice(undefined);
@@ -298,6 +307,8 @@ function DesktopApp() {
         ? {kind: 'list', view: routeView(current)}
         : next.kind === 'agent'
           ? {kind: 'agent', id: next.id, pane: {kind: 'groups'}}
+          : next.kind === 'group'
+            ? {kind: 'group', id: next.id}
           : next.kind === 'project'
             ? {kind: 'project', id: next.id, pane: {kind: 'map'}}
             : openMembership(current, next.id, snapshot));
@@ -306,11 +317,10 @@ function DesktopApp() {
       setNotice(undefined);
     });
   }
-  /** A group opens the project it belongs to, or its binding when no project owns it yet. */
+  /** Group entry points keep the group/Bot hierarchy, independent of shared projects. */
   function openGroup(groupId: string) {
-    const member = snapshot?.memberships.find(item => item.groupId === groupId);
-    if (!member) return;
-    select(member.projectId && snapshot?.projects?.some(item => item.id === member.projectId) ? {kind: 'project', id: member.projectId} : {kind: 'membership', id: member.id});
+    const group = snapshot?.groups.find(item => item.id === groupId);
+    if (group) select({kind: 'group', id: group.id});
   }
   function changeRoute(next: (current: CollaborationRoute) => CollaborationRoute) {
     navigate(() => {
@@ -398,14 +408,15 @@ function DesktopApp() {
       : member
         ? snapshot.agents.find((item) => item.id === member.agentId)
         : undefined;
-  const group = member ? snapshot.groups.find((item) => item.id === member.groupId) : undefined;
+  const group = selection.kind === "group" ? snapshot.groups.find(item => item.id === selection.id)
+    : member ? snapshot.groups.find((item) => item.id === member.groupId) : undefined;
   const project = selection.kind === "project" ? snapshot.projects?.find((item) => item.id === selection.id) : undefined;
   const titles: Record<Page, string> = {
     home: "概览",
     settings: "设置",
     collaboration: member
       ? `${group?.name ?? '飞书群'} · ${agent?.name ?? 'Bot'}`
-      : (agent?.name ?? project?.name ?? (view === "agents" ? "Bot" : "项目")),
+      : (agent?.name ?? group?.name ?? project?.name ?? (view === "agents" ? "Bot" : view === "groups" ? "群组" : "项目管理")),
     setup: "飞书连接",
     bridgeImport: "导入 Bridge",
     environment: "工具与连接",
@@ -426,8 +437,8 @@ function DesktopApp() {
       ? snapshot.agents.find(item => item.id === (route.parent.kind === 'agent' ? route.parent.id : undefined))?.name ?? 'Bot'
       : route.parent.kind === 'project'
         ? snapshot.projects?.find(item => item.id === (route.parent.kind === 'project' ? route.parent.id : undefined))?.name ?? '项目'
-        : '项目列表'
-    : routeView(route) === 'agents' ? 'Bot 列表' : '项目列表';
+        : route.parent.kind === 'group' ? '群组列表' : '项目列表'
+    : routeView(route) === 'agents' ? 'Bot 列表' : routeView(route) === 'groups' ? '群组列表' : '项目列表';
   function membershipRows(
     members: Membership[],
     perspective: CollaborationView,
@@ -491,7 +502,7 @@ function DesktopApp() {
         backLabel={`返回 ${settingsReturn?.label ?? parentLabel}`}
         onBack={
           settingsReturn ? returnFromSettings : !feature && page === "collaboration" && route.kind !== 'list'
-            ? () => changeRoute(routeBack)
+            ? () => changeRoute(current => current.kind === 'membership' && current.parent.kind === 'group' ? {kind: 'list', view: 'groups'} : routeBack(current))
             : undefined
         }
       >
@@ -499,13 +510,13 @@ function DesktopApp() {
           {['usage', 'application', 'diagnostics'].includes(page) && <header className="today-page-heading"><h1>{titles[page]}</h1></header>}
           {feature ? <FeaturePage feature={feature} /> : <>
           {page === 'collaboration' && route.kind !== 'list' && <nav className="collaboration-breadcrumb" aria-label="当前位置">
-            <button type="button" onClick={() => openList(view)}>{view === 'agents' ? 'Bot' : '项目'}</button>
+            <button type="button" onClick={() => openList(view)}>{view === 'agents' ? 'Bot' : view === 'groups' ? '群组' : '项目管理'}</button>
             <ChevronRight size={12} aria-hidden="true" />
             {route.kind === 'membership' && <>
-              <button type="button" onClick={() => changeRoute(routeBack)}>{parentLabel}</button>
+              <button type="button" onClick={() => changeRoute(routeBack)}>{route.parent.kind === 'group' ? group?.name ?? '飞书群' : parentLabel}</button>
               <ChevronRight size={12} aria-hidden="true" />
             </>}
-            <span aria-current="page">{route.kind === 'membership' ? route.parent.kind === 'agent' ? group?.name ?? '飞书群' : agent?.name ?? 'Bot' : agent?.name ?? project?.name ?? '内容已变化'}</span>
+            <span aria-current="page">{route.kind === 'membership' ? route.parent.kind === 'agent' ? group?.name ?? '飞书群' : agent?.name ?? 'Bot' : agent?.name ?? group?.name ?? project?.name ?? '内容已变化'}</span>
           </nav>}
           {pendingGroups.map(page => {
             const owner = snapshot.agents.find(item => item.id === page.agentId);
@@ -603,6 +614,7 @@ function DesktopApp() {
                           <div className="settings-entity-group__surface">
                             {snapshot.agents.map((agent) => {
                               const status = agentListStatus(agent);
+                              const activating = pendingActivation?.agentId === agent.id ? pendingActivation : null;
                               const groupCount = new Set(
                                 snapshot.memberships
                                   .filter((member) => member.agentId === agent.id)
@@ -628,7 +640,8 @@ function DesktopApp() {
                                         : `飞书 · ${groupCount} 个群聊${newCounts.bots[agent.id] ? ` · ${newTag(newCounts.bots[agent.id])}` : ''}`}
                                     </small>
                                   </span>
-                                  {status.tone !== 'success' && <span className={`settings-entity-row__value settings-entity-row__value--${status.tone}`}>{status.label}</span>}
+                                  {activating ? <span className="settings-entity-row__value"><OperationActivity key={`${agent.id}:${activating.enabled}`} label={activating.enabled ? '启用中' : '停用中'} state={activating.enabled ? 'connecting' : 'working'}/></span>
+                                    : status.tone !== 'success' && <span className={`settings-entity-row__value settings-entity-row__value--${status.tone}`}>{status.label}</span>}
                                   <ChevronRight
                                     aria-hidden="true"
                                     className="settings-entity-row__chevron"
@@ -641,23 +654,25 @@ function DesktopApp() {
                           </div>
                         </section>
                       )
+                    : view === "groups" ? <><MigrationBanner snapshot={snapshot}/><GroupDirectory snapshot={snapshot} state={groupDirectoryState} onStateChange={setGroupDirectoryState} statusFor={agentListStatus}
+                        onMembership={id => select({kind: 'membership', id})} onProjects={() => openList('projects')} newCounts={newCounts.projects}/></>
                     : <><MigrationBanner snapshot={snapshot}/><ProjectDirectory newCounts={newCounts.projects} snapshot={snapshot} state={projectDirectoryState} onStateChange={setProjectDirectoryState} statusFor={agentListStatus}
                         onProject={id => select({kind: 'project', id})} onMembership={id => select({kind: 'membership', id})}
                         onNewProject={ready && snapshot.agents.length ? () => snapshot.agents.length === 1 ? openJoin(snapshot.agents[0]!.id) : openList('agents') : undefined}/></>}
                   {!(view === "agents"
                     ? snapshot.agents.length
-                    : projectEntries(snapshot).length) && (
+                    : view === "groups" ? snapshot.groups.length : projectEntries(snapshot).length) && (
                     <div className="collaboration-empty">
                       <Bot size={28} />
                       <h3>
                         {view === "agents"
                           ? "注册你的第一个 Bot"
-                          : "还没有项目"}
+                          : view === "groups" ? "还没有连接的飞书群" : "还没有项目"}
                       </h3>
                       <p>
                         {view === "agents"
                           ? "连接飞书机器人，再让它加入群开始协作。"
-                          : "把一个飞书群连到 Bot 上，就会有一个项目。"}
+                          : view === "groups" ? "在 Bot 页面选择已加入的飞书群并绑定工作目录。" : "把一个飞书群连到 Bot 上，就会有一个项目。"}
                       </p>
                       {view === "agents" && (
                         <Button
@@ -681,11 +696,8 @@ function DesktopApp() {
                       <span className="collaboration-profile__kind">Bot</span>
                       <h2>{agent.name}</h2>
                     </div>
-                    <StatusBadge
-                      tone={agentListStatus(agent).tone}
-                    >
-                      {agentListStatus(agent).label}
-                    </StatusBadge>
+                    {pendingActivation?.agentId === agent.id ? <OperationActivity key={`${agent.id}:${pendingActivation.enabled}`} label={pendingActivation.enabled ? '启用中' : '停用中'} state={pendingActivation.enabled ? 'connecting' : 'working'}/>
+                      : <StatusBadge tone={agentListStatus(agent).tone}>{agentListStatus(agent).label}</StatusBadge>}
                   </header>
                   <div className="bot-detail-navigation"><BotDetailTabs selected={route.kind === 'agent' ? route.pane.kind : 'groups'} onSelect={agentPane}/></div>
                   {route.kind === 'agent' && route.pane.kind === 'profile' ? <BotMap agentId={agent.id} snapshot={snapshot} onProject={id => select({kind: 'project', id})}/> : detail.kind !== 'agent-settings' ? <>
@@ -729,13 +741,7 @@ function DesktopApp() {
                           label="启用 Bot"
                           checked={agent.enabled}
                           disabled={busy || !ready}
-                          onChange={(event) =>
-                            void run({
-                              type: "setAgentEnabled",
-                              agentId: agent.id,
-                              enabled: event.target.checked,
-                            })
-                          }
+                          onChange={(event) => void setAgentEnabled(agent.id, event.target.checked)}
                         />
                       }
                     />
@@ -791,8 +797,13 @@ function DesktopApp() {
                   </div>}
                 </>
               )}
+              {selection.kind === "group" && group && <>
+                <header className="collaboration-profile"><GroupAvatar group={group} large/><div><span className="collaboration-profile__kind">飞书群</span><h2>{group.name}</h2><p>{snapshot.memberships.filter(item => item.groupId === group.id).length} 个 Bot</p></div></header>
+                <SettingsGroup label="这个群中的 Bot">{membershipRows(snapshot.memberships.filter(item => item.groupId === group.id), 'groups')}</SettingsGroup>
+              </>}
               {selection.kind === "project" && project && route.kind === 'project' && <ProjectPage key={project.id} project={project} snapshot={snapshot} pane={route.pane} tools={snapshot.tools}
                 onPane={pane => changeRoute(current => current.kind === 'project' ? {...current, pane} : current)}
+                onBotProfile={id => changeRoute(() => ({kind: 'agent', id, pane: {kind: 'profile'}}))}
                 onMembership={id => select({kind: 'membership', id})}
                 onChanged={async () => {await run({type: 'refresh'});}}
                 onDeleted={() => openList('projects')}
@@ -805,9 +816,9 @@ function DesktopApp() {
                 onProject={id => select({kind: 'project', id})}
                 onOpenTools={() => openContextSettings('environment')} onOpenProviders={() => openContextSettings('providers')} onOpenSecrets={() => openContextSettings('secrets')}
                 onChanged={async () => {await run({type:'refresh'});}}/>}
-              {((route.kind === 'agent' && !agent) || (route.kind === 'project' && !project) || (route.kind === 'membership' && (!member || !agent || !group))) && (
+              {((route.kind === 'agent' && !agent) || (route.kind === 'group' && !group) || (route.kind === 'project' && !project) || (route.kind === 'membership' && (!member || !agent || !group))) && (
                 <InlineNotice title="内容暂不可用">
-                  {route.kind === 'membership' ? '这条群内协作或关联的 Bot、飞书群已变化。请返回上一级并刷新。' : '这个 Bot 或项目已变化。请返回列表并刷新。'}
+                  {route.kind === 'membership' ? '这条群内协作或关联的 Bot、飞书群已变化。请返回上一级并刷新。' : '这个 Bot、飞书群或项目已变化。请返回列表并刷新。'}
                 </InlineNotice>
               )}
             </>

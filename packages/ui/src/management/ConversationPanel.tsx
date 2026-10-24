@@ -8,6 +8,7 @@ import "../settings/settings.css";
 import {useShellCapabilities} from '../client-context';
 import {groupUrl, openExternalUrl} from '../url-actions';
 import {SettingChoices} from '../settings/SettingChoices';
+import { ThinkingOrb } from 'thinking-orbs';
 
 type Props = {
   agentId: AgentId;
@@ -68,6 +69,16 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
   }, [selected, target]);
 
   const run = context?.threadId === selected ? context.run : null;
+  const runKey = run ? `${selected}\0${run.id}` : null;
+  const [orbRunKey, setOrbRunKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (!runKey) {
+      setOrbRunKey(null);
+      return;
+    }
+    const timer = setTimeout(() => setOrbRunKey(runKey), 2000);
+    return () => clearTimeout(timer);
+  }, [runKey]);
   useEffect(() => {
     if (!run || !selected) return;
     let active = true;
@@ -116,7 +127,7 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
       <SettingsRow title="会话操作" description={conversation === "threads" ? "多会话支持压缩上下文；清空仅适用于主区会话。" : undefined} trailing={<div className="settings-inline-actions"><Button size="sm" disabled={busy || conversation === "threads"} onClick={() => void execute({ action: "clear", ...target, threadId: selected }, "已开始新会话。")}>清空会话</Button><Button size="sm" disabled={busy} onClick={() => void execute({ action: "compact", ...target, threadId: selected }, "上下文已压缩。")}>压缩上下文</Button></div>} />
       <SettingsRow title="自主任务目标" trailing={<div className="settings-inline-actions"><input aria-label="自主任务目标" className="settings-field" value={objective} maxLength={4000} onChange={(event) => setObjective(event.target.value)} placeholder="输入目标" /><Button size="sm" disabled={busy || !objective.trim()} onClick={() => void execute({ action: "startGoal", ...target, threadId: selected, objective: objective.trim() }, "目标任务已开始。")}>开始</Button></div>} />
       {run && <>
-        <SettingsRow title="正在运行" value={run.goal ? "自主目标" : "当前任务"} trailing={<div className="settings-inline-actions"><Button size="sm" variant="danger" disabled={busy || !run.canStop} onClick={() => void execute({ action: "stop", ...target, threadId: selected, runId: run.id }, "已请求停止任务。")}>停止</Button><Button size="sm" disabled={busy || !run.canEndGoal} onClick={() => void execute({ action: "endGoal", ...target, threadId: selected, runId: run.id }, "已结束目标。")}>结束目标</Button></div>} />
+        <SettingsRow title="正在运行" value={<span className="conversation-run-label"><span className="conversation-run-orb">{orbRunKey === runKey && <ThinkingOrb state="working" size={20} theme="light" aria-hidden="true" />}</span>{run.goal ? "自主目标" : "当前任务"}</span>} trailing={<div className="settings-inline-actions"><Button size="sm" variant="danger" disabled={busy || !run.canStop} onClick={() => void execute({ action: "stop", ...target, threadId: selected, runId: run.id }, "已请求停止任务。")}>停止</Button><Button size="sm" disabled={busy || !run.canEndGoal} onClick={() => void execute({ action: "endGoal", ...target, threadId: selected, runId: run.id }, "已结束目标。")}>结束目标</Button></div>} />
         {run.subagents?.map((subagent) => <SettingsRow key={subagent.id} title={`${subagent.name}：${Array.from(subagent.task).slice(0, 40).join("")}`} value={{ running: "运行中", completed: "已完成", failed: "失败", stopped: "已停止" }[subagent.status]} trailing={subagent.status === "running" && subagent.stoppable ? <Button size="sm" disabled={busy} onClick={() => void execute({ action: "stopSubagent", ...target, threadId: selected, runId: run.id, subagentId: subagent.id }, "已请求停止子 agent。")}>停止</Button> : undefined} />)}
         <SettingsRow title="完成时提醒" value={run.reminderRequested ? "已开启" : "未开启"} trailing={<Button size="sm" disabled={busy || !run.canRemind} onClick={() => void execute({ action: "reminder", ...target, threadId: selected, runId: run.id, requested: !run.reminderRequested }, run.reminderRequested ? "已关闭提醒。" : "已开启提醒。")}>{run.reminderRequested ? "关闭提醒" : "开启提醒"}</Button>} />
       </>}

@@ -1,0 +1,12 @@
+.operation-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.operation-activity__orb {
+  display: inline-flex;
+  flex: none;
+  width: 20px;
+  height: 20px;
+}

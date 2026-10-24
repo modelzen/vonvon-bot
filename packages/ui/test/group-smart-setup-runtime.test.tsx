@@ -6,6 +6,8 @@ import {GroupWorkspace} from '../src/GroupWorkspace';
 import {GroupDesignSettings, GroupSettingsContent} from '../src/settings/GroupDesignSettings';
 import {Editor} from '../src/settings/SettingsPanel';
 import {GroupAttentionStatus} from '../src/management/GroupAttentionStatus';
+import {OperationActivity} from '../src/management/OperationActivity';
+import {ConversationSlider} from '../src/settings/ConversationSlider';
 
 type Slot = {states: unknown[]; refs: Array<{current: unknown}>; effects: Array<{deps?: unknown[]; cleanup?: () => void}>; memos: Array<{deps?: unknown[]; value: unknown}>; state: number; ref: number; effect: number; memo: number};
 const harness = vi.hoisted(() => ({slots: {} as Record<string, Slot>, active: '', pending: [] as Array<() => void>, client: {collaboration: vi.fn(), settings: vi.fn(), environment: vi.fn(), snapshot: vi.fn()}}));
@@ -15,6 +17,7 @@ vi.mock('react', async original => {
     useState: (initial: unknown) => {const slot = harness.slots[harness.active]!; const index = slot.state++; if (!(index in slot.states)) slot.states[index] = typeof initial === 'function' ? initial() : initial; return [slot.states[index], (next: unknown) => {slot.states[index] = typeof next === 'function' ? next(slot.states[index]) : next;}];},
     useRef: (initial: unknown) => {const slot = harness.slots[harness.active]!; return slot.refs[slot.ref++] ??= {current: initial};},
     useContext: () => [],
+    useId: () => 'conversation-description',
     useCallback: (callback: unknown, deps?: unknown[]) => memo(() => callback, deps),
     useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => {const slot = harness.slots[harness.active]!; const index = slot.effect++; const old = slot.effects[index]; if (old?.deps && deps && deps.length === old.deps.length && deps.every((value, at) => Object.is(value, old.deps![at]))) return; harness.pending.push(() => {old?.cleanup?.(); slot.effects[index] = {deps, cleanup: effect() || undefined};});},
   };
@@ -53,6 +56,7 @@ function render() {
   let editor: Element[] = [];
   if (dialog.props.open) {
     const settings = nodes(dialog).find(node => node.type === GroupDesignSettings)!;
+    if (!settings) return {workspace, content: [], header: []};
     const loader = GroupDesignSettings(settings.props as any) as Element;
     const content = nodes(renderAt('loader', () => (loader.type as (props: any) => ReactNode)(loader.props))).find(node => node.type === GroupSettingsContent);
     if (content) {
@@ -82,7 +86,44 @@ beforeEach(() => {
   harness.client.collaboration.mockImplementation(async request => {if (request.action === 'project') {events.push('read-project'); return {kind: 'project', project};} if (request.action === 'editProject') {events.push('edit-project'); project = {...project, kind: 'smart', revision: 'project-r2'}; return {kind: 'applied', project};} throw new Error(`unexpected collaboration ${request.action}`);});
 });
 
-it('shows attention beside the smart conversation control on 回复规则 and hides it while either mode source changes', async () => {
+it('previews a drag across the middle mode and submits only its released destination', () => {
+  const onChange = vi.fn();
+  const inspect = () => nodes(renderAt('slider', () => ConversationSlider({label: '聊天方式', value: 'threads', onChange}))).find(node => node.type === 'input')!;
+  let input = inspect();
+  input.props.onPointerDown({button: 0, pointerId: 1, currentTarget: {setPointerCapture: vi.fn()}});
+  input.props.onChange({currentTarget: {value: '1'}}); input = inspect();
+  expect(input.props['aria-valuetext']).toBe('连续交谈'); expect(onChange).not.toHaveBeenCalled();
+  input.props.onChange({currentTarget: {value: '2'}}); input = inspect();
+  expect(input.props['aria-valuetext']).toBe('智能'); expect(onChange).not.toHaveBeenCalled();
+  input.props.onPointerUp(); input.props.onLostPointerCapture();
+  expect(onChange).toHaveBeenCalledExactlyOnceWith('smart');
+  // Opening or cancelling the smart setup does not make the preview the saved mode.
+  expect(inspect().props['aria-valuetext']).toBe('独立话题');
+});
+
+it.each(['onPointerCancel', 'onLostPointerCapture'])('cancels a drag on %s without saving a mode', event => {
+  const onChange = vi.fn();
+  const inspect = () => nodes(renderAt('slider', () => ConversationSlider({label: '聊天方式', value: 'shared', onChange}))).find(node => node.type === 'input')!;
+  let input = inspect();
+  input.props.onPointerDown({button: 0, pointerId: 1, currentTarget: {setPointerCapture: vi.fn()}});
+  input.props.onChange({currentTarget: {value: '2'}}); input = inspect();
+  input.props[event](); input.props.onPointerUp();
+  expect(onChange).not.toHaveBeenCalled(); expect(inspect().props['aria-valuetext']).toBe('连续交谈');
+});
+
+it('commits a keyboard gesture once and cancels a pending gesture if the control is disabled', () => {
+  const onChange = vi.fn(); let disabled = false;
+  const inspect = () => nodes(renderAt('slider', () => ConversationSlider({label: '聊天方式', value: 'threads', disabled, onChange}))).find(node => node.type === 'input')!;
+  let input = inspect(); input.props.onKeyDown({key: 'End'});
+  input.props.onChange({currentTarget: {value: '2'}}); input = inspect();
+  expect(onChange).not.toHaveBeenCalled(); input.props.onKeyUp({key: 'End'}); input.props.onBlur();
+  expect(onChange).toHaveBeenCalledExactlyOnceWith('smart'); onChange.mockClear();
+  input = inspect(); input.props.onKeyDown({key: 'ArrowRight'}); input.props.onChange({currentTarget: {value: '1'}});
+  disabled = true; input = inspect(); input.props.onKeyUp({key: 'ArrowRight'});
+  expect(onChange).not.toHaveBeenCalled(); expect(input.props['aria-valuetext']).toBe('独立话题');
+});
+
+it('shows attention beside the smart conversation control on 沟通方式 and hides it while either mode source changes', async () => {
   let liveMember: Membership = {...member, conversation: 'smart', enabled: true};
   project = {...project, kind: 'smart'};
   view = {...view, identity: {...view.identity, kind: 'smart'}};
@@ -99,6 +140,7 @@ it('shows attention beside the smart conversation control on 回复规则 and hi
       snapshot: {...snapshot, memberships: [liveMember]}, initialTab: 'response', onBot: () => {}, onBotProfile: () => {},
       onOpenTools: () => {}, onOpenSecrets: () => {}, onChanged: changed})));
     const settings = workspace.find(node => node.type === GroupDesignSettings && !node.props.decisionSetupOnly)!;
+    if (!settings) return {workspace, content: [], header: []};
     const loader = GroupDesignSettings(settings.props as any) as Element;
     const loaded = nodes(renderAt('attention-loader', () => (loader.type as (props: any) => ReactNode)(loader.props)))
       .find(node => node.type === GroupSettingsContent);
@@ -113,10 +155,10 @@ it('shows attention beside the smart conversation control on 回复规则 and hi
   expect(ui.header.some(node => node.props.label === '聊天方式')).toBe(true);
   expect(ui.content.some(node => node.type === GroupAttentionStatus)).toBe(true);
 
-  ui.workspace.find(node => node.type === 'button' && node.props.children === '补充职责')!.props.onClick();
+  ui.workspace.find(node => node.type === 'button' && node.props.children === '记忆')!.props.onClick();
   ui = await settled();
   expect(ui.content.some(node => node.type === GroupAttentionStatus)).toBe(false);
-  ui.workspace.find(node => node.type === 'button' && node.props.children === '回复规则')!.props.onClick();
+  ui.workspace.find(node => node.type === 'button' && node.props.children === '沟通方式')!.props.onClick();
   ui = await settled();
   expect(ui.content.some(node => node.type === GroupAttentionStatus)).toBe(true);
 
@@ -209,4 +251,31 @@ it('does not rewrite a legacy group decision when switching to smart until a pro
   ui.decision!.props.onChange(selection); ui = render(); ui.submit!.props.onClick(); ui = await settle();
   const request = harness.client.settings.mock.calls.find(([request]) => request.type === 'save')?.[0] as Extract<SettingsRequest, {type: 'save'}>;
   expect(request.edit.patch).toEqual({selection});
+});
+
+it.each([
+  {enabled: false, reply: 'applied', label: '本群停用中'},
+  {enabled: true, reply: 'refused', label: '本群启用中'},
+] as const)('shows group lifecycle activity only while the $label request is pending', async ({enabled, reply, label}) => {
+  project = {...project, enabled: !enabled};
+  let resolve!: (value: unknown) => void;
+  harness.client.collaboration.mockImplementation(async request => {
+    if (request.action === 'project') return {kind: 'project', project};
+    if (request.action === 'editProject') return new Promise(done => {resolve = done;});
+    throw new Error(`unexpected collaboration ${request.action}`);
+  });
+  const inspect = () => nodes(renderAt('lifecycle-workspace', () => GroupWorkspace({member, agent, group, snapshot,
+    initialTab: 'response', onBot: () => {}, onBotProfile: () => {}, onOpenTools: () => {}, onOpenSecrets: () => {}, onChanged: changed})));
+  inspect(); await flush(); let ui = inspect();
+  expect(ui.some(node => node.type === OperationActivity)).toBe(false);
+  const toggle = ui.find(node => node.props['aria-label'] === `在本群使用 ${agent.name}`)!;
+  toggle.props.onChange({target: {checked: enabled}});
+  await flush(); ui = inspect();
+  expect(harness.client.collaboration).toHaveBeenCalledWith(expect.objectContaining({action: 'editProject', enabled}));
+  expect(ui.find(node => node.type === OperationActivity)?.props.label).toBe(label);
+  expect(ui.find(node => node.props['aria-label'] === `在本群使用 ${agent.name}`)?.props.disabled).toBe(true);
+  resolve(reply === 'applied' ? {kind: 'applied', project: {...project, enabled, revision: 'project-r2'}} : {kind: 'refused', message: '保存失败'});
+  await flush(); ui = inspect();
+  expect(ui.some(node => node.type === OperationActivity)).toBe(false);
+  if (reply === 'refused') expect(ui.some(node => node.props.title === '操作未完成')).toBe(true);
 });
