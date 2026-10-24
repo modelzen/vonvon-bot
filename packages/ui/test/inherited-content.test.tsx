@@ -77,6 +77,17 @@ it('keeps all inherited nodes readonly while letting a leaf reveal its full text
   expect(callbacks.inspect).toHaveBeenLastCalledWith(expect.objectContaining({text: '记忆 a', item: expect.objectContaining({id: 'a'})}));
 });
 
+it('places selected inherited detail and source inside its readonly leaf', () => {
+  const selected = item('a');
+  const detail = {id: 'inherited:cli_a:item:a', bot: {id: botId, name: '小支'}, title: '合作方式', text: selected.text, item: selected, note: '待确认'};
+  const callbacks = {...actions(), selected: detail.id, detail, source: ['来自发布群'], onBotProfile: vi.fn()};
+  const tree = inheritedNodes({id: botId, name: '小支'}, {role: {error: '无角色'}, memory: {value: memory([selected])}}, callbacks);
+  const leaf = flatten(tree).find(node => node.id === detail.id)!;
+  expect(leaf.children?.map(node => node.label)).toEqual(['记忆 a', '待确认', '来自发布群', '来自 小支 · 只读', '到 Bot 页修改 →']);
+  for (const node of flatten(tree)) expect(node.onDelete).toBeUndefined();
+  leaf.children?.at(-1)?.onClick?.(); expect(callbacks.onBotProfile).toHaveBeenCalledWith(botId);
+});
+
 it('marks excluded Bot memory with its reason and keeps that branch folded', () => {
   const callbacks = actions();
   const content: InheritedContent = {role: {error: '无角色'}, memory: {value: memory([item('a'), item('u', {trust: 'untrusted'}), item('old', {state: 'archived'})], false)}};

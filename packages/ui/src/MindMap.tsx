@@ -38,7 +38,8 @@ export type MapNode = {
  * A hand-written horizontal tree (§5.7): HTML nodes, SVG connectors between a node and its children, the root on the left.
  * A narrow window draws the same tree indented (CSS only); every action stays on the nodes. No chart library.
  */
-export function MindMap({root, label, beforeLocalToggle}: {root: MapNode; label: string; beforeLocalToggle?: (toggle: () => void) => void}) {
+export function MindMap({root, label, beforeLocalToggle, beforeSelect, inlineMenus = false}: {root: MapNode; label: string; beforeLocalToggle?: (toggle: () => void) => void; beforeSelect?: (select: () => void) => void; inlineMenus?: boolean}) {
+  const [menuId, setMenuId] = useState<string>();
   const [dragging, setDragging] = useState<string>();
   const [activeId, setActiveId] = useState<string>();
   const [localFolds, setLocalFolds] = useState<ReadonlySet<string>>(new Set());
@@ -49,7 +50,18 @@ export function MindMap({root, label, beforeLocalToggle}: {root: MapNode; label:
   const prefix = useId();
   const visible: MapNode[] = [];
   const visit = (node: MapNode) => {visible.push(node); if (!folded(node)) node.children?.forEach(visit);};
-  visit(root);
+  const withMenu = (node: MapNode): MapNode => {
+    const opened = inlineMenus && menuId === node.id && Boolean(node.menu?.length);
+    return {...node, ...(opened ? {open: true, onToggle: () => setMenuId(undefined)} : {}),
+      ...(node.children || opened ? {children: [...(node.children ?? []).map(withMenu), ...(opened ? [{
+        id: `menu:${node.id}`, kind: 'section' as const, label: '操作', fixed: false, children: [
+          ...node.menu!.map(entry => ({id: `menu:${node.id}:${entry.id}`, kind: 'action' as const, label: entry.label, fixed: false, onClick: () => {setMenuId(undefined); entry.onSelect();}})),
+          {id: `menu:${node.id}:close`, kind: 'action' as const, label: '收起操作', fixed: false, onClick: () => setMenuId(undefined)},
+        ],
+      }] : [])]} : {})};
+  };
+  const displayRoot = inlineMenus ? withMenu(root) : root;
+  visit(displayRoot);
   const active = visible.find(node => node.id === activeId) ?? (activeId === undefined ? visible.find(node => node.selected) : undefined);
   const externalSelected = visible.find(node => node.selected)?.id;
   useLayoutEffect(() => {if (externalSelected) setActiveId(externalSelected);}, [externalSelected]);
@@ -72,7 +84,7 @@ export function MindMap({root, label, beforeLocalToggle}: {root: MapNode; label:
   };
   return <div ref={container} className="mm" role="tree" aria-label={label} tabIndex={0}
     aria-activedescendant={active ? `${prefix}-${active.id}` : undefined}
-    onClick={event => {if (!(event.target as HTMLElement).closest('.mm-box')) {setActiveId(''); container.current?.focus();}}}
+    onClick={event => {if (!(event.target as HTMLElement).closest('.mm-box')) {setMenuId(undefined); setActiveId(''); container.current?.focus();}}}
     onKeyDown={event => {
       const target = event.target as HTMLElement;
       if (target !== capture.current && (target.closest('input, textarea, select, [contenteditable]') || target.closest('summary, [role=menu]'))) return;
@@ -88,12 +100,12 @@ export function MindMap({root, label, beforeLocalToggle}: {root: MapNode; label:
       onCompositionStart={() => {composing.current = true;}}
       onCompositionEnd={event => {composing.current = false; beginTyping(event.currentTarget.value); event.currentTarget.value = '';}}
       onChange={event => {if (!composing.current) {beginTyping(event.currentTarget.value); event.currentTarget.value = '';}}}/>
-    <MapTree node={root} localFolds={localFolds} toggleLocal={id => {const toggle = () => setLocalFolds(current => {const next = new Set(current); if (!next.delete(id)) next.add(id); return next;}); if (beforeLocalToggle) beforeLocalToggle(toggle); else toggle();}} dragging={dragging} setDragging={setDragging} selected={selected} prefix={prefix}
-      select={node => {setActiveId(node.selected === undefined ? node.id : undefined); node.onClick?.(); if (!node.onEdit) container.current?.focus({preventScroll: true});}}/>
+    <MapTree node={displayRoot} inlineMenus={inlineMenus} openMenu={node => {const open = () => setMenuId(current => current === node.id ? undefined : node.id); if (beforeSelect) beforeSelect(open); else open();}} localFolds={localFolds} toggleLocal={id => {const toggle = () => setLocalFolds(current => {const next = new Set(current); if (!next.delete(id)) next.add(id); return next;}); if (beforeLocalToggle) beforeLocalToggle(toggle); else toggle();}} dragging={dragging} setDragging={setDragging} selected={selected} prefix={prefix}
+      select={node => {const select = () => {setActiveId(node.selected === undefined ? node.id : undefined); node.onClick?.(); if (!node.onEdit) container.current?.focus({preventScroll: true});}; if (beforeSelect) beforeSelect(select); else select();}}/>
   </div>;
 }
 
-type TreeProps = {node: MapNode; dragging?: string; setDragging: (value?: string) => void; selected?: string; prefix: string; select: (node: MapNode) => void; localFolds: ReadonlySet<string>; toggleLocal: (id: string) => void};
+type TreeProps = {node: MapNode; inlineMenus?: boolean; openMenu?: (node: MapNode) => void; dragging?: string; setDragging: (value?: string) => void; selected?: string; prefix: string; select: (node: MapNode) => void; localFolds: ReadonlySet<string>; toggleLocal: (id: string) => void};
 function MapTree(props: TreeProps) {
   const {node} = props;
   const folded = node.onToggle ? node.open === false : props.localFolds.has(node.id) ? node.open !== false : node.open === false;
@@ -146,7 +158,7 @@ function Links({count, children}: {count: number; children: ReactNode}) {
   </div>;
 }
 
-function MapBox({node, dragging, setDragging, selected, prefix, select, folded, foldable, toggle}: TreeProps & {folded: boolean; foldable: boolean; toggle: () => void}) {
+function MapBox({node, dragging, setDragging, selected, prefix, select, folded, foldable, toggle, inlineMenus, openMenu}: TreeProps & {folded: boolean; foldable: boolean; toggle: () => void}) {
   const [over, setOver] = useState(false);
   const menu = useRef<HTMLDetailsElement>(null);
   const canDrop = Boolean(node.drop && dragging !== undefined && node.drop.accepts(dragging));
@@ -165,7 +177,7 @@ function MapBox({node, dragging, setDragging, selected, prefix, select, folded, 
       },
     } : {}),
   };
-  return <div className="mm-box" data-kind={node.kind} data-tone={node.tone} data-selected={isSelected || undefined} data-fixed={fixed || undefined} data-actions={Boolean(node.onAdd || foldable) || undefined} data-fresh={node.fresh || undefined} onContextMenu={event => {if (menu.current) {event.preventDefault(); menu.current.open = true;}}} data-drop={canDrop ? (over ? 'over' : 'ready') : undefined} {...events}>
+  return <div className="mm-box" data-kind={node.kind} data-tone={node.tone} data-selected={isSelected || undefined} data-fixed={fixed || undefined} data-actions={Boolean(node.onAdd || foldable) || undefined} data-fresh={node.fresh || undefined} onContextMenu={event => {if (inlineMenus && node.menu?.length) {event.preventDefault(); openMenu?.(node);} else if (menu.current) {event.preventDefault(); menu.current.open = true;}}} data-drop={canDrop ? (over ? 'over' : 'ready') : undefined} {...events}>
     <div className="mm-main" id={`${prefix}-${node.id}`} role="treeitem" aria-selected={isSelected} aria-expanded={foldable ? !folded : undefined}>
       {node.fresh && <span className="mm-new" role="img" aria-label="新"/>}
       {node.content ?? <button type="button" className="mm-label" onClick={event => {
@@ -179,7 +191,7 @@ function MapBox({node, dragging, setDragging, selected, prefix, select, folded, 
     {foldable && (folded || !isSelected) && <button type="button" className="mm-fold" data-collapsed={folded || undefined}
       aria-label={folded ? '展开' : '收起'} aria-expanded={!folded} onClick={toggle}>{folded ? node.childCount ?? node.children?.length : <ChevronLeft size={16} strokeWidth={2} aria-hidden="true"/>}</button>}
 
-    {node.menu && node.menu.length > 0 && <details ref={menu} className="mm-menu" onToggle={event => {
+    {!inlineMenus && node.menu && node.menu.length > 0 && <details ref={menu} className="mm-menu" onToggle={event => {
       const details = event.currentTarget;
       const popup = details.querySelector<HTMLElement>('[role=menu]');
       if (!details.open || !popup) return;
