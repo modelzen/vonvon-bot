@@ -52,6 +52,16 @@ function choices(props: Parameters<typeof ModelAccessChoices>[0]) {
 }
 beforeEach(() => {for (const slot of Object.values(h.slots)) for (const effect of slot.effects) effect.cleanup?.(); h.slots = {}; h.pending = []; h.draft = undefined; vi.clearAllMocks();});
 
+it('keeps a manual Provider check available while healthy without changing the model draft', () => {
+  const check = vi.fn(); const changed = vi.fn();
+  const all = at('healthy-provider', () => ModelAccessFields({botId: agentIdSchema.parse('cli_check'), value: initial(), onChange: changed, disabled: false,
+    providers: [{id: catalog.backend, displayName: 'Codex'}], onCheckProviders: check, checkingProviders: false}));
+  const action = all.find(node => node.props.label === '重新检查 Provider')!;
+  expect(action.props.disabled).toBe(false);
+  action.props.onClick();
+  expect(check).toHaveBeenCalledOnce(); expect(changed).not.toHaveBeenCalled();
+});
+
 it('keeps unselected models out of the normal page and preserves checked models across searches', () => {
   let value = initial();
   const changed = vi.fn((next: Value) => {value = next;});
