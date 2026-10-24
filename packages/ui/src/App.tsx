@@ -21,6 +21,7 @@ import { AppShell } from "./LocalShell";
 import { AgentAvatar } from './AgentAvatar';
 import {OperationActivity} from './management/OperationActivity';
 import { GroupAvatar } from './GroupAvatar';
+import {BotGroupList} from './BotGroupList';
 import { GroupDirectory, type GroupDirectoryState } from './GroupDirectory';
 import { ProjectDirectory, projectEntries, type ProjectDirectoryState } from './ProjectDirectory';
 import { ProjectPage } from './ProjectPage';
@@ -703,34 +704,14 @@ function DesktopApp() {
                   </header>
                   <div className="bot-detail-navigation"><BotDetailTabs selected={route.kind === 'agent' ? route.pane.kind : 'groups'} onSelect={agentPane}/></div>
                   {route.kind === 'agent' && route.pane.kind === 'profile' ? <BotMap agentId={agent.id} snapshot={snapshot} onProject={id => select({kind: 'project', id})}/> : detail.kind !== 'agent-settings' ? <>
-                  <SettingsGroup
-                    label="已加入的飞书群"
-                    action={
-                      <Button
-                        size="sm"
-                        disabled={busy || !ready || !agent.enabled}
-                        onClick={() => void openJoin(agent.id)}
-                      >
-                        加入飞书群
-                      </Button>
-                    }
-                  >
-                    <div className="settings-entity-group__surface">
-                      {membershipRows(
-                        snapshot.memberships.filter(
-                          (m) => m.agentId === agent.id,
-                        ),
-                        "agents",
-                      )}
-                      {!snapshot.memberships.some(
-                        (m) => m.agentId === agent.id,
-                      ) && (
-                        <SettingsRow
-                          title={agent.readError ? "群配置读取失败" : "尚未绑定飞书群"}
-                        />
-                      )}
-                    </div>
-                  </SettingsGroup>
+                  <BotGroupList
+                    snapshot={snapshot}
+                    agent={agent}
+                    busy={busy || !ready}
+                    status={agentListStatus(agent)}
+                    onJoin={() => void openJoin(agent.id)}
+                    onMembership={id => select({kind: 'membership', id})}
+                  />
                   </> : <div className="agent-settings-page">
                   <SettingsGroup className="agent-activation" id={settingAnchor('Bot 身份')}>
                     <SettingsRow
