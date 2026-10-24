@@ -144,7 +144,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, botName = 'Bot'
       {tab === 'response' && <>
         {responseHeader}
         {view.identity.kind === 'smart' && <>
-          {sections.judge ? <Editor title="决策模型" section={sections.judge} save={(patch, revision) => save('judge', patch, revision)}
+          {sections.judge ? <Editor title="决策模型" section={sections.judge} autoSave save={(patch, revision) => save('judge', patch, revision)}
             validate={value => providerDecisionProblem(value.selection, providers, view.decisionModels)}
             render={(draft, set, disabled, _commit, resetKey) => <DecisionFields key={resetKey} botId={view.scope.botId} groupBackend={view.identity.backend} value={draft.selection} effective={sections.judge!.effective.selection}
               onChange={selection => set({selection})} disabled={disabled} providers={providers} services={view.decisionModels} configuration={decisionConfiguration} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets}/>}/> : <MissingSection/>}

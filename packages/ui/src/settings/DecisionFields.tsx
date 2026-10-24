@@ -1,4 +1,3 @@
-import {useState} from 'react';
 import {Check, ChevronRight} from 'lucide-react';
 import {backendLabel, isKnownJudgeSelection, type AgentId, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ToolState} from '@vonvon/protocol';
 import {Button, InlineNotice, SelectControl} from '../reference/components/ui';
@@ -39,7 +38,7 @@ export function DecisionFields({groupBackend, value, effective, onChange, disabl
 }) {
   const saved = savedDecisionProvider(value, groupBackend);
   const inherited = initial ? undefined : savedDecisionProvider(effective, groupBackend);
-  const [viewed, setViewed] = useState(saved ?? inherited ?? '');
+  const viewed = saved ?? inherited ?? '';
   const service = services?.find(item => item.provider === 'typesafe');
   const ready = (id: string) => id === 'typesafe' ? Boolean(service?.keySet && !service.keyUnreadable) : providers.some(item => item.id === id);
   const choices = providerIds.map(id => ({value: id, label: id === 'typesafe' ? 'Jev' : backendLabel(id), disabled: !ready(id)}));
@@ -62,7 +61,7 @@ export function DecisionFields({groupBackend, value, effective, onChange, disabl
     {!isKnownJudgeSelection(value) && <p className="gd-note" role="alert">当前客户端无法编辑已保存的决策设置。</p>}
     <fieldset><legend>判断 Provider</legend><SettingChoices label="判断 Provider" value={viewed} disabled={disabled} choices={choices} onChange={next => {
       if (disabled || !providerIds.some(id => id === next) || !ready(next)) return;
-      setViewed(next); onProviderChange?.(next); onChange({kind: 'provider', provider: next as DecisionProvider});
+      onProviderChange?.(next); onChange({kind: 'provider', provider: next as DecisionProvider});
     }}/></fieldset>
     {!viewed && <p className="gd-note">选择一个已就绪的 Provider。</p>}
     {viewed && !ready(viewed) && <InlineNotice title={`${viewed === 'typesafe' ? 'Jev' : backendLabel(viewed)} 尚未就绪`} tone="warning">
