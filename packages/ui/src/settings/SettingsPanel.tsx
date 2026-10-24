@@ -113,6 +113,7 @@ export function Editor<T extends object>({
   initialDraft,
   renderLayout,
   prepareSave,
+  autoSave = false,
 }: {
   title: string;
   section: Section<T>;
@@ -137,6 +138,8 @@ export function Editor<T extends object>({
   renderLayout?: (editor: {content: ReactNode; submit: () => Promise<boolean>; discard: () => void; pending: boolean; canSave: boolean}) => ReactNode;
   /** Build a payload from the complete selected form value, before sparse-draft keys are lost. */
   prepareSave?: (patch: Partial<T>, value: T) => Partial<T>;
+  /** Discrete choices commit immediately; failed choices return to the confirmed value. */
+  autoSave?: boolean;
 }) {
   const announcedReadonly = useContext(AnnouncedReadonlyMessages);
   const [confirmed, setConfirmed] = useState(section);
@@ -151,6 +154,7 @@ export function Editor<T extends object>({
   const [conflict, setConflict] = useState(false);
   const [conflictCurrent, setConflictCurrent] = useState<Section<T>>();
   const priorRevision = useRef<string | undefined>(undefined);
+  const autoSavePending = useRef(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   useEffect(() => {
@@ -163,13 +167,20 @@ export function Editor<T extends object>({
     else { setConfirmed(section); setConflict(false); }
   }, [section, confirmed.revision, draft, immediate.kind, pendingManual]);
   const dirty = Object.keys(draft).length > 0;
-  const guarded = dirty || immediate.kind !== 'idle' || pendingManual;
-  const disabled = pendingManual || immediate.kind !== 'idle' || section.access.kind === "readonly" || conflict;
-  const value = { ...confirmed.stored, ...draft, ...(immediate.kind === 'idle' ? {} : immediate.patch) };
+  const guarded = dirty || immediate.kind === 'pending' || !autoSave && immediate.kind === 'failed' || pendingManual;
+  const disabled = pendingManual || (autoSave ? immediate.kind === 'pending' : immediate.kind !== 'idle') || section.access.kind === "readonly" || conflict;
+  const value = { ...confirmed.stored, ...draft, ...(immediate.kind === 'idle' || autoSave && immediate.kind === 'failed' ? {} : immediate.patch) };
   function edit(next: T) {
+    if (autoSave && (disabled || autoSavePending.current)) return;
     const changed: Partial<T> = {};
     for (const key of Object.keys(next) as (keyof T)[]) {
       if (JSON.stringify(next[key]) !== JSON.stringify(value[key])) changed[key] = next[key];
+    }
+    if (autoSave) {
+      const invalid = validate?.(next);
+      if (invalid) {setError(invalid); return;}
+      void commit(changed);
+      return;
     }
     setDraft(current => {
       const updated = { ...current, ...changed };
@@ -196,7 +207,8 @@ export function Editor<T extends object>({
     setConflict(true);
   }
   async function commit(patch: Partial<T>): Promise<void> {
-    if (disabled || !Object.keys(patch).length) return;
+    if (disabled || autoSave && autoSavePending.current || !Object.keys(patch).length) return;
+    if (autoSave) autoSavePending.current = true;
     setImmediate({kind: 'pending', patch});
     setError(undefined); setNotice(undefined);
     try {
@@ -208,10 +220,13 @@ export function Editor<T extends object>({
       }
     } catch (error) {
       setImmediate({kind: 'failed', patch, message: error instanceof Error ? error.message : '保存失败。'});
+    } finally {
+      autoSavePending.current = false;
     }
   }
   async function retry(): Promise<string | undefined> {
-    if (immediate.kind !== 'failed' || conflict || section.access.kind === 'readonly') return undefined;
+    if (immediate.kind !== 'failed' || conflict || section.access.kind === 'readonly' || autoSave && autoSavePending.current) return undefined;
+    if (autoSave) autoSavePending.current = true;
     const patch = immediate.patch;
     setImmediate({kind: 'pending', patch});
     try {
@@ -226,6 +241,8 @@ export function Editor<T extends object>({
     } catch (error) {
       setImmediate({kind: 'failed', patch, message: error instanceof Error ? error.message : '保存失败。'});
       return undefined;
+    } finally {
+      autoSavePending.current = false;
     }
   }
   async function submit(): Promise<boolean> {
@@ -302,24 +319,24 @@ export function Editor<T extends object>({
           {submitLabel}
         </Button>
       </div>}
-      {immediate.kind === 'pending' && <InlineNotice title="正在保存">这项设置正在保存。</InlineNotice>}
-      {immediate.kind === 'failed' && <InlineNotice title="保存未完成" tone="danger">
+      {immediate.kind === 'pending' && (autoSave ? <p className="settings-save-status" role="status">正在切换…</p> : <InlineNotice title="正在保存">这项设置正在保存。</InlineNotice>)}
+      {immediate.kind === 'failed' && <InlineNotice title={autoSave ? '切换未完成' : '保存未完成'} tone="danger">
         {immediate.message}
         <div className="settings-edit-actions">
           <Button size="sm" disabled={conflict} onClick={() => void retry()}>重试</Button>
-          <Button size="sm" onClick={() => setImmediate({kind: 'idle'})}>放弃这项修改</Button>
+          <Button size="sm" onClick={() => setImmediate({kind: 'idle'})}>{autoSave ? '保留原设置' : '放弃这项修改'}</Button>
         </div>
       </InlineNotice>}
       {conflict && <InlineNotice title="设置已在别处更改" tone="danger">
-        当前草稿已保留。重新读取后可基于最新设置修改。
-        <Button size="sm" onClick={discard}>重新读取并放弃草稿</Button>
+        {autoSave ? '请重新读取最新设置后再切换。' : '当前草稿已保留。重新读取后可基于最新设置修改。'}
+        <Button size="sm" onClick={discard}>{autoSave ? '重新读取' : '重新读取并放弃草稿'}</Button>
       </InlineNotice>}
       {error && (
         <InlineNotice title="保存未完成" tone="danger">
           {error}
         </InlineNotice>
       )}
-      {notice && <InlineNotice title="本次修改已保存">{notice}{dirty ? ' 其他修改尚未保存。' : ''}</InlineNotice>}
+      {notice && !autoSave && <InlineNotice title="本次修改已保存">{notice}{dirty ? ' 其他修改尚未保存。' : ''}</InlineNotice>}
     </SettingsGroup>
   );
   return renderLayout ? renderLayout({content, submit, discard, pending: pendingManual || immediate.kind === 'pending', canSave: !disabled && (dirty || allowUnchanged)}) : content;
