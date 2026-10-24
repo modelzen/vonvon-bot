@@ -1,0 +1,34 @@
+/* Keep Bot identity and navigation available while its settings scroll. */
+.collaboration-window .bot-detail-header {
+  position: sticky; top: 0; z-index: 10;
+  display: grid; gap: 12px;
+  padding: 12px var(--settings-page-padding) 14px;
+  margin: -12px calc(-1 * var(--settings-page-padding)) -2px;
+  background: var(--color-canvas); border-bottom: 1px solid var(--color-border);
+}
+.collaboration-window .bot-detail-header .collaboration-profile { margin: 0; align-items: center; gap: 12px; min-height: 50px; }
+.collaboration-window .bot-detail-header .collaboration-avatar.large { width: 48px; height: 48px; border-radius: 12px; }
+.bot-detail-identity { min-width: 0; }
+.bot-detail-name-status { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.collaboration-window .bot-detail-name-status h2 { margin: 0; font-size: 21px; font-weight: 650; line-height: 26px; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.bot-detail-connection-status {
+  --bot-state-color: var(--color-text-secondary);
+  display: inline-flex; align-items: center; gap: 5px; min-height: 20px; box-sizing: border-box;
+  padding: 1px 7px; border: 1px solid color-mix(in srgb, var(--bot-state-color) 17%, transparent); border-radius: 999px;
+  background: color-mix(in srgb, var(--bot-state-color) 5%, var(--color-canvas)); color: var(--bot-state-color);
+  font-size: 11px; font-weight: 500; line-height: 16px; white-space: nowrap;
+}
+.bot-detail-connection-status[data-tone=success] { --bot-state-color: var(--color-status-success); }
+.bot-detail-connection-status[data-tone=warning] { --bot-state-color: var(--color-status-warning); }
+.bot-detail-connection-status i { width: 5px; height: 5px; flex: none; border-radius: 50%; background: var(--bot-state-color); }
+.settings-content-scroll:has(.bot-detail-header) { scroll-padding-block-start: 132px; }
+.collaboration-window .bot-settings-connection > summary { gap: 12px; min-height: 66px; }
+.bot-settings-connection-title { flex: 1; min-width: 0; }
+.bot-settings-connection-title code { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.collaboration-window .bot-settings-connection > summary .ui-status-badge { font-weight: 400; white-space: nowrap; }
+.collaboration-window .bot-settings-connection[open] > summary { border-bottom: 1px solid var(--color-separator); }
+.collaboration-window .bot-settings-connection[open] > .ss-section { margin: 0; }
+.collaboration-window .bot-settings-connection > .ss-section > .ss-group { border: 0; border-radius: 0; box-shadow: none; }
+.bot-settings-connection .setup-step-warning[role=status] { margin: 12px 16px; }
+.collaboration-window .agent-settings-page .ss-section__header:has(.bot-settings-refresh) { min-height: 28px; margin-bottom: 6px; }
+.bot-settings-refresh { width: 28px; height: 28px; color: var(--color-text-secondary); }

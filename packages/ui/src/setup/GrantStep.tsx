@@ -1,6 +1,6 @@
-import {useEffect, useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
 import type {VonvonClient} from '@vonvon/client/browser';
-import type {AdminSetupStatus, AgentId, Job, JobId} from '@vonvon/protocol';
+import type {AdminSetupStatus, Agent, AgentId, Job, JobId} from '@vonvon/protocol';
 import {useClient, useShellCapabilities} from '../client-context';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {Button, StatusBadge} from '../reference/components/ui';
@@ -8,6 +8,7 @@ import {openExternalUrl} from '../url-actions';
 import {scopeStep, type StepTone} from '@vonvon/protocol';
 import {stepDescription} from './SetupChecklist';
 import './setup.css';
+import {settingAnchor} from '../search';
 
 /** Faster than the checklist (10 s): the user is waiting on this one screen. */
 export const GRANT_POLL_MS = 5_000;
@@ -125,9 +126,13 @@ export function GrantStep({agentId, onOpenChecklist, onDone}: {agentId: AgentId;
 /** Bot 设置 → 连接与权限: the same grant link. It re-reads slowly, so a failed read or a grant made elsewhere
  * shows up, and at the dialog's pace once the user opened the link here. */
 export function ScopeGrantRow({agentId, disabled, onError}: {agentId: AgentId; disabled: boolean; onError: (message: string) => void}) {
-  const shell = useShellCapabilities();
   const [opened, setOpened] = useState(false);
   const read = useScopeStatus(agentId, opened ? GRANT_POLL_MS : GRANT_ROW_POLL_MS);
+  return <ScopeGrantRowContent read={read} disabled={disabled} onError={onError} onOpened={() => setOpened(true)}/>;
+}
+
+function ScopeGrantRowContent({read, disabled, onError, onOpened}: {read: ScopeRead; disabled: boolean; onError: (message: string) => void; onOpened: () => void}) {
+  const shell = useShellCapabilities();
   const view = grantView(read, false);
   const url = view.grantUrl;
   return <SettingsRow title="飞书权限"
@@ -139,6 +144,36 @@ export function ScopeGrantRow({agentId, disabled, onError}: {agentId: AgentId; d
     trailing={<span className="setup-step-trailing">
       <StatusBadge tone={view.tone} variant="pill">{view.status}</StatusBadge>
       <Button size="sm" disabled={disabled || !url}
-        onClick={() => { if (url) void openExternalUrl(url, 'app-console', shell).then(() => setOpened(true), error => onError(error instanceof Error ? error.message : '无法打开飞书开发者后台。')); }}>一键开权限</Button>
+        onClick={() => { if (url) void openExternalUrl(url, 'app-console', shell).then(onOpened, error => onError(error instanceof Error ? error.message : '无法打开飞书开发者后台。')); }}>一键开权限</Button>
     </span>}/>;
+}
+
+/** A failed latest read must not look healthy just because a previous read succeeded. */
+export function connectionNeedsAttention(agent: Agent, read: ScopeRead): boolean {
+  const view = grantView(read, false);
+  return Boolean(read.problem || (read.status && (!view.done || view.warnings?.length)) || agent.readError ||
+    (agent.enabled && agent.connection !== 'connected') || (!agent.enabled && agent.running) || agent.activation === 'restartRequired');
+}
+
+/** One poll supplies both the collapsed summary and the full grant controls. */
+export function BotConnectionSettings({agent, disabled, onError, onSetup, onRefreshCredentials, onDiagnostics}: {
+  agent: Agent; disabled: boolean; onError: (message: string) => void;
+  onSetup: () => void; onRefreshCredentials: () => void; onDiagnostics: () => void;
+}) {
+  const [openedGrant, setOpenedGrant] = useState(false);
+  const read = useScopeStatus(agent.id, openedGrant ? GRANT_POLL_MS : GRANT_ROW_POLL_MS);
+  const view = grantView(read.problem ? {problem: read.problem} : read, false);
+  const details = useRef<HTMLDetailsElement>(null);
+  const attention = connectionNeedsAttention(agent, read);
+  useEffect(() => { if (attention && details.current) details.current.open = true; }, [attention]);
+  return <details ref={details} className="agent-settings-disclosure bot-settings-connection" id={settingAnchor('连接与权限')}>
+    <summary><span className="bot-settings-connection-title">连接与权限<small data-search-title="应用 ID">应用 ID · <code>{agent.id}</code></small></span><StatusBadge tone={view.tone}>{view.status}</StatusBadge></summary>
+    <SettingsGroup>
+      <SettingsRow title="连接与设置" description="检测权限、事件与发布状态。" onClick={onSetup}/>
+      {read.problem && read.status && <p className="setup-step-warning" role="status">读不到最新权限状态：{read.problem}</p>}
+      <ScopeGrantRowContent read={read} disabled={disabled} onError={onError} onOpened={() => setOpenedGrant(true)}/>
+      <SettingsRow title="刷新飞书凭据" description="重新扫码，保留群聊、会话和设置。" trailing={<Button size="sm" disabled={disabled} onClick={onRefreshCredentials}>重新扫码</Button>}/>
+      <SettingsRow title="状态与诊断" description="查看连接问题与运行日志。" trailing={<Button size="sm" onClick={onDiagnostics}>查看</Button>}/>
+    </SettingsGroup>
+  </details>;
 }
