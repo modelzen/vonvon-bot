@@ -462,10 +462,13 @@ export function Catalog({
   const client = useClient();
   const [catalog, setCatalog] = useState<ModelCatalog>();
   const [error, setError] = useState<string>();
+  const [attempt, setAttempt] = useState(0);
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     let active = true;
     setCatalog(undefined);
     setError(undefined);
+    setLoading(true);
     void client
       .settings({ type: "models", query: { botId, backend, purpose } })
       .then((reply) => {
@@ -481,11 +484,11 @@ export function Catalog({
           setError(
             failure instanceof Error ? failure.message : "模型目录暂不可用。",
           );
-      });
+      }).finally(() => { if (active) setLoading(false); });
     return () => {
       active = false;
     };
-  }, [botId, backend, purpose]);
+  }, [client, botId, backend, purpose, attempt]);
   return (
     <>
       {error && (
@@ -494,6 +497,9 @@ export function Catalog({
         </InlineNotice>
       )}
       {children(catalog)}
+      {(error || catalog && catalog.state !== 'ready') && <div className="settings-edit-actions">
+        <Button size="sm" disabled={loading} onClick={() => setAttempt(value => value + 1)}>重新读取模型</Button>
+      </div>}
     </>
   );
 }

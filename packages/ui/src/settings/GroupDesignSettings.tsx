@@ -2,17 +2,16 @@ import {useCallback, useContext, useEffect, useRef, useState, type ReactNode} fr
 import {smartRulesText} from '@vonvon/protocol';
 import {ChevronRight, Folder, GitBranch, Plus, RefreshCw, Search, X} from 'lucide-react';
 import {backendLabel, isKnownJudgeSelection, type AgentId, type AgentSettingsView, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ProjectSettingsView, type SettingsReply, type ToolState} from '@vonvon/protocol';
-import {useClient, useShellCapabilities} from '../client-context';
+import {useClient} from '../client-context';
 import {useDirectoriesPicker} from '../directory-picker';
-import {Button, InlineNotice, SelectControl, Toggle} from '../reference/components/ui';
+import {Button, IconButton, InlineNotice, SelectControl, Toggle} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
-import {botChatUrl, copyShortcut, openExternalUrl} from '../url-actions';
 import {Catalog, Editor, ProjectPanel, type Section} from './SettingsPanel';
 import {PersonaEditor} from './PersonaEditor';
 import {SmartRulesEditor, SMART_RULES_MAX_LENGTH} from './SmartRulesEditor';
 import {SettingChoices} from './SettingChoices';
-import {providerBackends, providerUsable} from '../setup/provider-state';
+import {useProviderDiscovery} from './useProviderDiscovery';
 import {DecisionFields, providerDecisionProblem} from './DecisionFields';
 export {DecisionFields} from './DecisionFields';
 import {AnnouncedReadonlyMessages, hasReadonlyMessage, type ReadonlyMessage} from './readonly-messages';
@@ -49,21 +48,7 @@ function MissingSection() {
   return <InlineNotice title="这项设置暂不可用" tone="warning">请更新并重新连接本机服务。</InlineNotice>;
 }
 export function useProviders(tools?: readonly ToolState[]) {
-  const client = useClient();
-  const readiness = tools?.map(tool => `${tool.tool}:${tool.installation}:${tool.compatibility?.status}:${tool.authentication}`).join('|');
-  const key = readiness ?? 'snapshot';
-  const [result, setResult] = useState<{key: string; providers: Provider[]}>({key, providers: []});
-  useEffect(() => {
-    let active = true;
-    setResult({key, providers: []});
-    void Promise.all([client.environment({type: 'backendCatalog'}), tools ? Promise.resolve(tools) : client.snapshot().then(snapshot => snapshot.tools)]).then(([reply, states]) => {
-      if (active) setResult({key, providers: reply.kind === 'backends' ? reply.entries.filter(entry =>
-        (Object.entries(providerBackends) as Array<['codex' | 'claude', string]>).some(([tool, backend]) => backend === entry.id && providerUsable(states.find(item => item.tool === tool)))
-      ).map(entry => ({id: entry.id, displayName: entry.displayName})) : []});
-    }).catch(() => {if (active) setResult({key, providers: []});});
-    return () => {active = false;};
-  }, [client, readiness]);
-  return result.key === key ? result.providers : [];
+  return useProviderDiscovery(tools).providers;
 }
 function providerChoices(providers: Provider[], current: string) {
   return [...providers.map(provider => ({value: provider.id, label: provider.displayName, disabled: false})), ...(!providers.some(provider => provider.id === current) && current ? [{value: current, label: `${backendLabel(current)}（当前不可用）`, disabled: true}] : [])];
@@ -93,9 +78,10 @@ function GroupSettingsLoader(props: Props) {
   </div>;
 }
 
-export function GroupSettingsContent({view, refresh, tab, tools, botName = 'Bot', groupName, onOpenTools, onOpenProviders, onOpenSecrets, responseHeader, decisionSetupOnly, onDecisionSaved}: Omit<Props, 'scope'> & {view: ProjectSettingsView; refresh: () => Promise<void>}) {
+export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, onOpenProviders, onOpenSecrets, responseHeader, decisionSetupOnly, onDecisionSaved}: Omit<Props, 'scope'> & {view: ProjectSettingsView; refresh: () => Promise<void>}) {
   const client = useClient();
-  const providers = useProviders(tools);
+  const discovery = useProviderDiscovery(tools);
+  const providers = discovery.providers;
   const outerReadonly = useContext(AnnouncedReadonlyMessages);
   const sections = view.sections;
   const decisionConfiguration = useDecisionConfiguration(Boolean(decisionSetupOnly || tab === 'response' && view.identity.kind === 'smart'));
@@ -119,11 +105,15 @@ export function GroupSettingsContent({view, refresh, tab, tools, botName = 'Bot'
   return <AnnouncedReadonlyMessages.Provider value={[...outerReadonly, ...notices]}>
     {notices.map(notice => <p className="settings-readonly-notice" role="status" key={`${notice.reason}:${notice.message}`}>{notice.message}</p>)}
     <div className="gd-page">
+      {(tab === 'response' || (tab === 'model' && (discovery.checking || discovery.message))) && <div className="gd-provider-discovery" role="status">
+        {discovery.checking ? '正在检查 Provider 登录状态…' : discovery.message}
+        {!discovery.checking && <Button size="sm" variant="ghost" onClick={discovery.retry}>重新检查 Provider</Button>}
+      </div>}
       {tab === 'capabilities' && <>
         {sections.skills && view.skills ? <Editor title="技能" section={sections.skills} save={(patch, revision) => save('skills', patch, revision)}
           render={(draft, _set, disabled, commit) => <SkillsList skills={view.skills!} disabledPaths={draft.disabledPaths} disabled={disabled}
             onToggle={(path, enabled) => void commit({disabledPaths: toggleItem(draft.disabledPaths, path, !enabled)})}
-            botId={view.scope.botId} chatId={view.identity.chatId} botName={botName} groupName={groupName ?? view.scope.projectName} refresh={refresh}/>}/> : view.skillsError ? <InlineNotice title="技能尚未读取" tone="warning">{view.skillsError}<Button size="sm" onClick={() => void refresh()}>重新读取</Button></InlineNotice> : <MissingSection/>}
+            refresh={refresh}/>}/> : view.skillsError ? <InlineNotice title="技能尚未读取" tone="warning">{view.skillsError}<Button size="sm" onClick={() => void refresh()}>重新读取</Button></InlineNotice> : <MissingSection/>}
         {view.skills && view.skillsError && <p className="gd-note" role="status">{view.skillsError}</p>}
         {sections.presentation && <Editor title="语音" section={sections.presentation} save={(patch, revision) => save('presentation', patch, revision)}
           render={(draft, _set, disabled, commit) => <SettingsRow title="语音转文字" trailing={<Toggle className="settings-row-switch" label="语音转文字" aria-label="语音转文字" checked={draft.voiceEnabled} disabled={disabled} onChange={event => void commit({voiceEnabled: event.target.checked})}/>}/>}/>}
@@ -138,6 +128,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, botName = 'Bot'
         </>}/> : <MissingSection/>)}
       {tab === 'model' && (sections.modelAccess ? <Editor title="执行模型" section={sections.modelAccess} save={(patch, revision) => save('modelAccess', patch, revision)}
         render={(draft, set, disabled) => <ModelAccessFields botId={view.scope.botId} value={draft} onChange={set} disabled={disabled} providers={providers} onCatalog={rememberCatalog}
+          onCheckProviders={discovery.retry} checkingProviders={discovery.checking}
           onOpenProviders={onOpenProviders} permissionName={sections.permission.stored.options.tiers.find(tier => tier.tier === sections.permission.stored.mode)?.name} savedBackend={view.identity.backend}/>}
         validate={value => providers.some(provider => provider.id === value.backend) ? modelAccessProblem(value, modelCatalog.current) : '此 Provider 当前不可用，请先安装并登录。'}/> : <MissingSection/>)}
       {(tab === 'model' || tab === 'permission') && <ProjectPanel view={view} refresh={refresh} partition="permission" independent/>}
@@ -176,14 +167,15 @@ export function modelAccessProblem(value: ModelAccess, catalog?: ModelCatalog): 
   const incompatible = catalog.models.filter(model => value.models.includes(model.id) && model.supportedEfforts.length > 0 && !model.supportedEfforts.some(effort => value.efforts.includes(effort)));
   return incompatible.length ? `请选择 ${incompatible.map(model => model.displayName).join('、')} 支持的 Effort。` : undefined;
 }
-export function ModelAccessFields({botId, value, onChange, disabled, providers, onCatalog, permissionName, savedBackend, onOpenProviders}: {botId: AgentId; value: ModelAccess; onChange: (value: ModelAccess) => void; disabled: boolean; providers: Provider[]; onCatalog?: (catalog: ModelCatalog | undefined) => void; permissionName?: string; savedBackend?: string; onOpenProviders?: () => void}) {
+export function ModelAccessFields({botId, value, onChange, disabled, providers, onCatalog, permissionName, savedBackend, onOpenProviders, onCheckProviders, checkingProviders}: {botId: AgentId; value: ModelAccess; onChange: (value: ModelAccess) => void; disabled: boolean; providers: Provider[]; onCatalog?: (catalog: ModelCatalog | undefined) => void; permissionName?: string; savedBackend?: string; onOpenProviders?: () => void; onCheckProviders?: () => void; checkingProviders?: boolean}) {
   const available = providers.some(provider => provider.id === value.backend);
   const choices = providerChoices(providers, value.backend);
   return <div className="gd-model-fields gd-model-fields--compact">
     <div className="gd-model-summary-row gd-model-provider-row"><span className="gd-model-summary-label">Provider</span>
       <div className="gd-model-provider-control"><SelectControl label="模型 Provider" className="gd-model-provider-select" options={choices} value={value.backend} disabled={disabled}
         onChange={backend => {if (!disabled && backend !== value.backend && providers.some(provider => provider.id === backend)) onChange({backend, models: [], efforts: []});}}/>
-        <span className="gd-model-provider-state">{available ? '可用' : '当前不可用'}</span></div>
+        <span className="gd-model-provider-state">{available ? '可用' : '当前不可用'}</span>
+        {onCheckProviders && <IconButton size="sm" variant="ghost" label="重新检查 Provider" title="重新检查 Provider 登录状态" disabled={checkingProviders} onClick={onCheckProviders}><RefreshCw size={14}/></IconButton>}</div>
       {onOpenProviders && <Button size="sm" variant="ghost" onClick={onOpenProviders}>查看状态<ChevronRight size={13}/></Button>}
     </div>
     {permissionName && value.backend !== savedBackend && <p className="gd-model-compact-notice" role="status">换 Provider 后，权限仍是「{permissionName}」；自定义设置会清掉。</p>}
@@ -228,12 +220,10 @@ export function WorkspaceFields({value, onChange, disabled}: {value: Workspace; 
   </>;
 }
 
-function SkillsList({skills, disabledPaths, disabled, onToggle, refresh, ...target}: {
+function SkillsList({skills, disabledPaths, disabled, onToggle, refresh}: {
   skills: NonNullable<ProjectSettingsView['skills']>; disabledPaths: string[]; disabled: boolean; onToggle: (path: string, enabled: boolean) => void; refresh: () => Promise<void>;
-  botId: AgentId; chatId: string; botName: string; groupName: string;
 }) {
   const [selected, setSelected] = useState<(typeof skills)[number]>();
-  const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState('');
   const needle = query.trim().toLocaleLowerCase();
   const visible = skills.filter(skill => `${skill.name} ${skill.description ?? ''}`.toLocaleLowerCase().includes(needle))
@@ -241,7 +231,7 @@ function SkillsList({skills, disabledPaths, disabled, onToggle, refresh, ...targ
   return <>
     <div className="gd-section-heading gd-skill-heading">
       <label className="gd-skill-search"><Search size={14} aria-hidden="true"/><input type="search" aria-label="搜索技能" placeholder="搜索技能" value={query} onChange={event => setQuery(event.target.value)}/></label>
-      <div className="gd-skill-actions"><button type="button" className="gd-text-action" onClick={() => void refresh()}><RefreshCw size={13}/>重新读取</button><Button size="sm" disabled={disabled} onClick={() => setAdding(true)}><Plus size={13}/>添加技能</Button></div>
+      <div className="gd-skill-actions"><button type="button" className="gd-text-action" onClick={() => void refresh()}><RefreshCw size={13}/>重新读取</button></div>
     </div>
     {visible.length ? visible.map(skill => <div className="gd-skill-row" key={skill.path}>
       <button type="button" className="gd-skill-detail" onClick={() => setSelected(skill)}><span><strong>{skill.name}</strong>{skill.description && <small>{skill.description}</small>}{!skill.enabled && !disabledPaths.includes(skill.path) && <small>Provider 已停用</small>}</span><ChevronRight size={14}/></button>
@@ -250,27 +240,8 @@ function SkillsList({skills, disabledPaths, disabled, onToggle, refresh, ...targ
     <Dialog open={Boolean(selected)} title={selected?.name ?? '技能'} onClose={() => setSelected(undefined)} footer={<Button onClick={() => setSelected(undefined)}>完成</Button>}>
       {selected && <dl className="gd-skill-facts"><div><dt>说明</dt><dd>{selected.description || '未提供说明'}</dd></div><div><dt>来源</dt><dd>{{workspace: '本群工作区', user: '用户目录', provider: 'Provider'}[selected.source]}</dd></div><div><dt>位置</dt><dd>{selected.path}</dd></div></dl>}
     </Dialog>
-    <AddSkillDialog {...target} open={adding} onClose={() => setAdding(false)}/>
   </>;
 }
-function AddSkillDialog({open, onClose, botId, chatId, botName, groupName}: {open: boolean; onClose: () => void; botId: AgentId; chatId: string; botName: string; groupName: string}) {
-  const shell = useShellCapabilities();
-  const [notice, setNotice] = useState('');
-  const field = useRef<HTMLTextAreaElement>(null);
-  const command = `/skill-add ${chatId} `;
-  useEffect(() => {if (open) setNotice('');}, [open]);
-  async function copy() {
-    try {await navigator.clipboard.writeText(command); setNotice('已复制');}
-    catch {field.current?.focus(); field.current?.select(); setNotice(`按 ${copyShortcut()} 复制`);}
-  }
-  return <Dialog open={open} onClose={onClose} title="添加技能" footer={<><Button onClick={() => void copy()}>复制指令</Button><Button variant="primary" onClick={() => void openExternalUrl(botChatUrl(botId), 'bot-chat', shell).catch(error => setNotice(failText(error)))}>打开私聊</Button></>}>
-    <div className="gd-add-skill"><div className="gd-target">{groupName}<small>{botName} · 本群工作区</small></div>
-      <p>在私聊中粘贴指令，补充你想添加的技能。</p><textarea ref={field} aria-label="添加技能指令" readOnly value={command} rows={2} className="settings-field"/>
-      <p className="gd-note">添加完成后发送 /skill-done，再回来重新读取。</p>{notice && <p role="status">{notice}</p>}
-    </div>
-  </Dialog>;
-}
-
 export function AgentProfileSettings({botId, onSaved}: {botId: AgentId; onSaved?: () => void}) {
   return <AgentProfileLoader key={botId} botId={botId} onSaved={onSaved}/>;
 }

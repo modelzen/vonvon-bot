@@ -8,7 +8,7 @@ import {SelectControl} from '../src/reference/components/ui';
 import {Dialog} from '../src/reference/components/ui/Dialog';
 
 type Slot = {state: unknown[]; refs: Array<{current: unknown}>; effects: Array<{deps?: unknown[]; cleanup?: () => void}>; si: number; ri: number; ei: number};
-const h = vi.hoisted(() => ({slots: {} as Record<string, Slot>, active: '', pending: [] as Array<() => void>, client: {settings: vi.fn()}}));
+const h = vi.hoisted(() => ({slots: {} as Record<string, Slot>, active: '', pending: [] as Array<() => void>, draft: undefined as {save: () => Promise<boolean>} | undefined, client: {settings: vi.fn()}}));
 vi.mock('react', async original => ({...await original<typeof import('react')>(),
   useState: (initial: unknown) => {const slot = h.slots[h.active]!; const i = slot.si++; if (!(i in slot.state)) slot.state[i] = typeof initial === 'function' ? initial() : initial; return [slot.state[i], (next: unknown) => {slot.state[i] = typeof next === 'function' ? next(slot.state[i]) : next;}];},
   useRef: (initial: unknown) => {const slot = h.slots[h.active]!; return slot.refs[slot.ri++] ??= {current: initial};},
@@ -16,7 +16,7 @@ vi.mock('react', async original => ({...await original<typeof import('react')>()
   useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => {const slot = h.slots[h.active]!; const i = slot.ei++; const old = slot.effects[i]; if (old?.deps && deps && deps.length === old.deps.length && deps.every((value, at) => Object.is(value, old.deps![at]))) return; h.pending.push(() => {old?.cleanup?.(); slot.effects[i] = {deps, cleanup: effect() || undefined};});},
   useMemo: (make: () => unknown) => make(),
 }));
-vi.mock('../src/settings/DraftGuard', () => ({useDraft: () => {}}));
+vi.mock('../src/settings/DraftGuard', () => ({useDraft: (dirty: boolean, draft: {save: () => Promise<boolean>}) => {h.draft = dirty ? draft : undefined;}}));
 vi.mock('../src/client-context', () => ({useClient: () => h.client, useShellCapabilities: () => undefined}));
 
 type Element = ReactElement<Record<string, any>>;
@@ -50,7 +50,17 @@ function choices(props: Parameters<typeof ModelAccessChoices>[0]) {
   const component = at('choice-wrapper', () => ModelAccessChoices(props)).find(node => node.type === CompactModelSelection)!;
   return at('choices', () => CompactModelSelection(component.props as any));
 }
-beforeEach(() => {for (const slot of Object.values(h.slots)) for (const effect of slot.effects) effect.cleanup?.(); h.slots = {}; h.pending = []; vi.clearAllMocks();});
+beforeEach(() => {for (const slot of Object.values(h.slots)) for (const effect of slot.effects) effect.cleanup?.(); h.slots = {}; h.pending = []; h.draft = undefined; vi.clearAllMocks();});
+
+it('keeps a manual Provider check available while healthy without changing the model draft', () => {
+  const check = vi.fn(); const changed = vi.fn();
+  const all = at('healthy-provider', () => ModelAccessFields({botId: agentIdSchema.parse('cli_check'), value: initial(), onChange: changed, disabled: false,
+    providers: [{id: catalog.backend, displayName: 'Codex'}], onCheckProviders: check, checkingProviders: false}));
+  const action = all.find(node => node.props.label === '重新检查 Provider')!;
+  expect(action.props.disabled).toBe(false);
+  action.props.onClick();
+  expect(check).toHaveBeenCalledOnce(); expect(changed).not.toHaveBeenCalled();
+});
 
 it('keeps unselected models out of the normal page and preserves checked models across searches', () => {
   let value = initial();
@@ -110,6 +120,28 @@ it('edits model and Effort independently and persists only through the existing 
   expect(button(ui.editor, '保存')).toBeUndefined();
 });
 
+it('saves the current model draft through Save and Leave once the native catalog is ready', async () => {
+  const value = initial();
+  const section = {stored: value, effective: value, revision: 'r1', access: {kind: 'writable' as const}, apply: []};
+  const save = vi.fn(async (patch: Partial<Value>) => ({kind: 'saved', result: {kind: 'saved', section: {value: {...section, stored: {...value, ...patch}, effective: {...value, ...patch}, revision: 'r2'}}, effects: []}} as any));
+  const render = () => {
+    const editor = at('leave-editor', () => Editor({title: '执行模型', section, save, validate: draft => modelAccessProblem(draft, catalog),
+      render: (draft, onChange, disabled) => <CompactModelSelection value={draft} onChange={onChange} disabled={disabled} catalog={catalog}/>}));
+    const compact = editor.find(node => node.type === CompactModelSelection)!;
+    return {editor, choices: at('leave-picker', () => CompactModelSelection(compact.props as any))};
+  };
+  let ui = render();
+  button(ui.choices, '选择模型').props.onClick(); ui = render();
+  checkbox(ui.choices, '允许本群使用 Beta').props.onChange({target: {checked: true}}); ui = render();
+  button(ui.choices, '完成').props.onClick(); ui = render();
+  expect(h.draft).toBeDefined();
+  expect(await h.draft!.save()).toBe(true);
+  ui = render();
+  expect(save.mock.calls).toEqual([[{models: ['alpha', 'beta']}, 'r1']]);
+  expect(h.draft).toBeUndefined();
+  expect(button(ui.editor, '保存')).toBeUndefined();
+});
+
 it('retains saved values in unavailable catalogs and permits read-only inspection', () => {
   const value: Value = {...initial(), models: ['retired'], efforts: ['high']};
   const changed = vi.fn();
@@ -124,6 +156,51 @@ it('retains saved values in unavailable catalogs and permits read-only inspectio
   expect(checkbox(all, '允许本群使用 high Effort').props.checked).toBe(true);
   expect(checkbox(all, '允许本群使用 high Effort').props.disabled).toBe(true);
   expect(changed).not.toHaveBeenCalled(); expect(value.models).toEqual(['retired']);
+});
+
+it.each(['loading', 'fallback', 'other-provider'] as const)('does not create unsaveable choices while the catalog is %s', state => {
+  const value = initial();
+  const changed = vi.fn();
+  const current = state === 'loading' ? undefined : {...catalog, state: state === 'fallback' ? 'fallback' as const : 'ready' as const, backend: state === 'other-provider' ? 'claude-agent' : value.backend};
+  const render = () => choices({value, catalog: current, disabled: false, onChange: changed});
+  let all = render();
+  button(all, '查看模型').props.onClick(); all = render();
+  expect(all.filter(node => node.type === 'input' && node.props.type === 'checkbox').every(node => node.props.disabled)).toBe(true);
+  expect(button(all, '完成').props.disabled).toBe(true);
+  button(all, '完成').props.onClick();
+  expect(changed).not.toHaveBeenCalled();
+  dialog(all).props.onClose(); all = render();
+  button(all, '查看强度').props.onClick(); all = render();
+  expect(checkbox(all, '允许本群使用 low Effort').props.disabled).toBe(true);
+  expect(checkbox(all, '允许本群使用 high Effort').props.checked).toBe(true);
+  expect(button(all, '完成').props.disabled).toBe(true);
+  expect(value).toEqual(initial());
+});
+
+it.each(['fallback', 'failed'] as const)('retries the same Provider after a %s catalog without losing the page draft', async failure => {
+  const value = {...initial(), models: ['alpha', 'beta']};
+  const changed = vi.fn();
+  if (failure === 'failed') h.client.settings.mockRejectedValueOnce(new Error('目录读取失败'));
+  else h.client.settings.mockResolvedValueOnce({kind: 'models', catalog: {...catalog, state: 'fallback'}});
+  h.client.settings.mockResolvedValueOnce({kind: 'models', catalog});
+  const render = () => {
+    const all = at('retry-catalog', () => Catalog({botId: agentIdSchema.parse('cli_retry'), backend: value.backend, purpose: 'project',
+      children: current => <CompactModelSelection value={value} catalog={current} disabled={false} onChange={changed}/>}));
+    const component = all.find(node => node.type === CompactModelSelection)!;
+    return {all, choices: at('retry-picker', () => CompactModelSelection(component.props as any))};
+  };
+  let ui = render(); await flush(); ui = render();
+  expect(button(ui.choices, '查看模型')).toBeDefined();
+  button(ui.all, '重新读取模型').props.onClick(); ui = render(); await flush(); ui = render();
+  expect(h.client.settings).toHaveBeenCalledTimes(2);
+  expect(h.client.settings).toHaveBeenLastCalledWith({type: 'models', query: {botId: 'cli_retry', backend: value.backend, purpose: 'project'}});
+  expect(button(ui.all, '重新读取模型')).toBeUndefined();
+  button(ui.choices, '选择模型').props.onClick(); ui = render();
+  expect(checkbox(ui.choices, '允许本群使用 Alpha').props.checked).toBe(true);
+  expect(checkbox(ui.choices, '允许本群使用 Beta').props.checked).toBe(true);
+  expect(checkbox(ui.choices, '允许本群使用 Beta').props.disabled).toBe(false);
+  expect(changed).not.toHaveBeenCalled();
+  expect(value.models).toEqual(['alpha', 'beta']);
 });
 
 it('blocks a stale picker draft after the parent setting changes, then reloads the new selection explicitly', () => {
