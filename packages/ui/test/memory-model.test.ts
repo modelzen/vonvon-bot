@@ -65,6 +65,15 @@ it('draws 还有 N 条 past 8 leaves, a dashed frame for 待确认, and archived
   expect(node(archive, 'i:x')!.drag).toBeUndefined();
 });
 
+it('never duplicates a custom category editor into its archived category of the same name', () => {
+  const content = '正在改名';
+  const {branches, archive} = build([item('live', '发版'), item('old', '发版', {state: 'archived'})], '', {
+    branchContent: view => view.name === '发版' ? content : undefined,
+  });
+  expect(node(branches, 'b:发版')!.content).toBe(content);
+  expect(node(archive, 'a:发版')!.content).toBeUndefined();
+});
+
 it('a search highlights the hits, opens the branch they are in and dims the rest', () => {
   const items = [item('hit', '发版', {text: '发版通知发在发布群'}), item('miss', '决定', {text: '别的事'}), item('other', '发版', {text: '周四发'})];
   const {branches} = build(items, '发布群', {isOpen: (_id, initially) => initially});

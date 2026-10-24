@@ -65,6 +65,8 @@ it('shows only add on a selected expanded parent, and a persistent count when co
   const child: MapNode = {id: 'child', kind: 'leaf', label: '内容'};
   const make = (open: boolean) => renderToStaticMarkup(<MindMap label="交互" root={{id: 'root', label: '分类', kind: 'branch', selected: true, open, onToggle: vi.fn(), onAdd: vi.fn(), childCount: 7, children: [child]}}/>);
   expect(make(true)).toContain('class="mm-add"');
+  expect(make(true)).toContain('lucide-plus');
+  expect(make(true)).not.toContain('>+</button>');
   expect(make(true)).not.toContain('class="mm-fold"');
   expect(make(false)).not.toContain('class="mm-add"');
   expect(make(false)).toContain('data-collapsed="true"');
