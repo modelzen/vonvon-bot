@@ -5,7 +5,6 @@ import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
 import {DirectoryPickerProvider} from '../src/directory-picker';
 import {DraftGuardProvider} from '../src/settings/DraftGuard';
-import {INSTRUCTION_FILES_NOTE} from '../src/context-model';
 import {ProjectPage} from '../src/ProjectPage';
 import type {ProjectPane} from '../src/collaboration-navigation';
 
@@ -25,17 +24,17 @@ const render=(snapshot:DesktopSnapshot,pane:ProjectPane)=>renderToStaticMarkup(<
   <ProjectPage project={snapshot.projects![0]!} snapshot={snapshot} pane={pane} onPane={vi.fn()} onMembership={vi.fn()} onChanged={async()=>{}} onDeleted={vi.fn()}/>
 </DirectoryPickerProvider></DraftGuardProvider></ClientProvider>);
 
-it('has the three project tabs, rename and delete, and no group tabs while two groups share the project',()=>{
+it('has memory and workspace tabs, rename and delete, and no group tabs while two groups share the project',()=>{
   const html=render(two,{kind:'map'});
   expect(html).toContain('项目「支付组」');
-  for(const label of ['导图','工作区','模型看到什么'])expect(html).toContain(`>${label}</button>`);
+  for(const label of ['记忆','工作区'])expect(html).toContain(`>${label}</button>`);
   expect(html).toContain('重命名');expect(html).toContain('删除项目…');
-  for(const label of ['补充职责','回复规则','权限'])expect(html).not.toContain(`>${label}</button>`);
+  for(const label of ['模型与权限','能力','沟通方式','补充职责','回复规则','权限'])expect(html).not.toContain(`>${label}</button>`);
 });
-it('adds the one binding\'s settings tabs when a project has a single group and Bot',()=>{
+it('keeps group settings on the group page even for a project with one binding',()=>{
   const one=make([row('cli_a','oc_pay','qa')]);
   const html=render(one,{kind:'map'});
-  for(const label of ['模型与权限','能力','补充职责','回复规则'])expect(html).toContain(`>${label}</button>`);
+  for(const label of ['模型与权限','能力','沟通方式','补充职责','模型','回复规则','权限','模型看到什么'])expect(html).not.toContain(`>${label}</button>`);
   // a group pane asked of a project that has two bindings falls back to the map
   expect(render(two,{kind:'group',tab:'permission'})).toContain('id="setting-%E7%BE%A4%E5%92%8C%20Bot"');
 });
@@ -59,9 +58,8 @@ it('never shows the project instruction file, its path, its content or its modif
   requests.length=0;
   for(const pane of [{kind:'map'},{kind:'workspace'},{kind:'context'}] as ProjectPane[]){
     const html=render(two,pane);
-    // 模型看到什么 ends with the one fixed sentence (D6), which names the files without reading or showing any of them
-    expect(html.split(INSTRUCTION_FILES_NOTE)).toHaveLength(pane.kind==='context'?2:1);
-    expect(html.replace(INSTRUCTION_FILES_NOTE,'')).not.toMatch(/AGENTS\.md|CLAUDE\.md/);
+    expect(html).not.toContain('模型看到什么');
+    expect(html).not.toMatch(/AGENTS\.md|CLAUDE\.md/);
     expect(html).not.toMatch(/修改时间|最后修改|mtime/i);
     expect(html).not.toMatch(/\d{4}-\d{2}-\d{2}/);
   }

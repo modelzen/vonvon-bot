@@ -19,7 +19,7 @@ import {AnnouncedReadonlyMessages, hasReadonlyMessage, type ReadonlyMessage} fro
 import {CompactModelSelection} from './CompactModelSelection';
 import './group-design-settings.css';
 
-/** 权限 holds the permission editor s31c had under 工作区; the workspace itself is the project's (memory design §5.4). */
+/** 模型与权限 shares one settings view; permission remains a compatible internal section key. */
 export type GroupSettingsTab = 'capabilities' | 'role' | 'model' | 'response' | 'permission';
 const SUPPLEMENT_MAX = 5_000;
 type Scope = ProjectSettingsView['scope'];
@@ -127,12 +127,12 @@ export function GroupSettingsContent({view, refresh, tab, tools, botName = 'Bot'
           render={(draft, _set, disabled, commit) => <SettingsRow title="语音转文字" trailing={<Toggle className="settings-row-switch" label="语音转文字" aria-label="语音转文字" checked={draft.voiceEnabled} disabled={disabled} onChange={event => void commit({voiceEnabled: event.target.checked})}/>}/>}/>}
         {onOpenTools && <SettingsGroup><SettingsRow title="工具与连接" description="安装与授权" trailing={<Button size="sm" onClick={onOpenTools}>管理<ChevronRight size={13}/></Button>}/></SettingsGroup>}
       </>}
-      {tab === 'role' && (sections.role ? <Editor title="补充职责" section={sections.role} save={(patch, revision) => save('role', patch, revision)}
-        validate={value => [...value.supplement].length > SUPPLEMENT_MAX ? `补充职责最多 ${SUPPLEMENT_MAX} 字。` : undefined}
+      {tab === 'role' && (sections.role ? <Editor title="本群角色" section={sections.role} save={(patch, revision) => save('role', patch, revision)}
+        validate={value => [...value.supplement].length > SUPPLEMENT_MAX ? `本群角色最多 ${SUPPLEMENT_MAX} 字。` : undefined}
         render={(draft, set, disabled) => <>
-          <PersonaEditor label="补充职责" value={draft.supplement} onChange={supplement => set({...draft, supplement})} disabled={disabled}
-            placeholder="这个 Bot 在本项目里多做什么、少做什么。角色设定（→ Bot 页）始终生效，这里只写补充；冲突时以这里为准。"/>
-          <p className="gd-note">{[...draft.supplement].length} / {SUPPLEMENT_MAX} 字。智能判断会优先看这一段。</p>
+          <PersonaEditor label="本群角色" value={draft.supplement} onChange={supplement => set({...draft, supplement})} disabled={disabled}
+            placeholder="例如：在这个群负责发版检查和排障。留空时使用 Bot 页的角色设定。"/>
+          <p className="gd-note">{[...draft.supplement].length} / {SUPPLEMENT_MAX} 字。</p>
         </>}/> : <MissingSection/>)}
       {tab === 'model' && (sections.modelAccess ? <Editor title="执行模型" section={sections.modelAccess} save={(patch, revision) => save('modelAccess', patch, revision)}
         render={(draft, set, disabled) => <ModelAccessFields botId={view.scope.botId} value={draft} onChange={set} disabled={disabled} providers={providers} onCatalog={rememberCatalog}

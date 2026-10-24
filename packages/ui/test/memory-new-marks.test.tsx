@@ -4,7 +4,6 @@ import {desktopSnapshotSchema, type ContextPreviewReply, type MemoryItem} from '
 import {MindMap, type MapNode} from '../src/MindMap';
 import {AppShell} from '../src/LocalShell';
 import {ProjectDirectory} from '../src/ProjectDirectory';
-import {projectMemoryEmpty} from '../src/ProjectPage';
 import {ContextPanelView} from '../src/ContextPanel';
 import {branchViews, joinMarks, marksOf, noMarks, searchPlan} from '../src/memory-model';
 import {memoryNodes} from '../src/memory-nodes';
@@ -74,11 +73,6 @@ it('shows the counts on the navigation, in the project list and in the Bot list,
   expect(sumCounts({a: 2, b: 3})).toBe(5);
   expect(countsOf({kind: 'newCounts', projects: {p: 1}, bots: {b: 2}})).toEqual({projects: {p: 1}, bots: {b: 2}});
   expect(countsOf({kind: 'purged'})).toEqual({projects: {}, bots: {}});
-});
-
-it('says in the empty project memory that the Bot saying 记住了 means it was recorded and that new ones are marked 新', () => {
-  expect(projectMemoryEmpty).toContain('Bot 在群里说了“记住了”，就是记了');
-  expect(projectMemoryEmpty).toContain('所有新记的都会在这里标“新”');
 });
 
 const reply = (over: Partial<ContextPreviewReply> = {}): ContextPreviewReply => ({
