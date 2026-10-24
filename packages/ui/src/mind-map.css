@@ -6,6 +6,7 @@
 .mm-engine me-tpc > .mm-slot, .mm-engine .mm-slot * { pointer-events: auto; }
 .mm-engine me-epd { display: none !important; }
 .mm-engine me-children[hidden] { display: none !important; }
+.mm-engine me-children me-parent { margin-top: 5px; margin-bottom: 5px; }
 .mm-slot { display: block; width: max-content; max-width: min(360px, 55vw); }
 .mm-static { padding: 20px; overflow: auto; }
 .mm-static-branch { margin: 8px 0 8px 22px; }
