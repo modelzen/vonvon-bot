@@ -1,6 +1,6 @@
 import {useLayoutEffect, useRef, useState} from 'react';
 import type MindElixir from 'mind-elixir';
-import type {MainLineParams, NodeObj} from 'mind-elixir';
+import type {MainLineParams, NodeObj, SubLineParams} from 'mind-elixir';
 import 'mind-elixir/style.css';
 
 export type CanvasNode = {id: string; expanded: boolean; children: CanvasNode[]};
@@ -13,20 +13,27 @@ export function canvasStructure(node: CanvasNode): string {
   return JSON.stringify([node.id, node.expanded, node.children.map(canvasStructure)]);
 }
 
-/** Start at the root's right edge, then make a short trunk and a rounded fork. */
-export function mainBranchPath({pT, pL, pW, pH, cT, cL, cH}: MainLineParams): string {
-  const startX = pL + pW;
-  const startY = pT + pH / 2;
-  const endX = cL;
-  const endY = cT + cH / 2;
+function roundedBranch(startX: number, startY: number, endX: number, endY: number, trunkLength: number): string {
   const gap = endX - startX;
   if (gap <= 0 || Math.abs(endY - startY) < 2) return `M ${startX} ${startY} H ${endX}`;
-  const trunkX = startX + Math.min(30, gap / 2);
+  const trunkX = startX + Math.min(trunkLength, gap / 2);
   const radius = Math.max(0, Math.min(12, (endX - trunkX) / 2, Math.abs(endY - startY) / 2));
   if (radius < 1) return `M ${startX} ${startY} H ${trunkX} V ${endY} H ${endX}`;
   const turn = Math.sign(endY - startY);
   const verticalX = trunkX + radius;
   return `M ${startX} ${startY} H ${trunkX} Q ${verticalX} ${startY} ${verticalX} ${startY + turn * radius} V ${endY - turn * radius} Q ${verticalX} ${endY} ${verticalX + radius} ${endY} H ${endX}`;
+}
+
+/** Start at the root's right edge, then make a short trunk and a rounded fork. */
+export function mainBranchPath({pT, pL, pW, pH, cT, cL, cH}: MainLineParams): string {
+  return roundedBranch(pL + pW, pT + pH / 2, cL, cT + cH / 2, 30);
+}
+
+/** MindElixir passes parent rectangles; account for its topic padding at each depth. */
+export function subBranchPath(this: Engine, {pT, pL, pW, pH, cT, cL, cH, isFirst}: SubLineParams): string {
+  const inset = Number.parseFloat(this.container.style.getPropertyValue('--node-gap-x')) || 22;
+  return roundedBranch(pL + pW - (isFirst ? 0 : inset), pT + pH / 2,
+    cL + inset, cT + cH / 2, 12);
 }
 
 const slotHTML = (id: string) => `<span class="mm-slot" data-mm-slot="${encodeURIComponent(id)}"></span>`;
@@ -182,6 +189,7 @@ export function useMindMapCanvas(tree: CanvasNode, anchorId?: string, editingId?
         scaleMin: .45, scaleMax: 2, compact: false, theme: {
           name: 'Vonvon', type: 'light', palette: ['#7658d9', '#8d72e3', '#a18aea', '#7658d9'],
           generateMainBranch: mainBranchPath,
+          generateSubBranch: subBranchPath,
           cssVar: {'--node-gap-x': '22px', '--node-gap-y': '10px', '--main-gap-x': '62px', '--main-gap-y': '14px',
             '--map-padding': '36px', '--topic-padding': '0px', '--bgcolor': 'transparent',
             '--main-color': '#7658d9', '--color': 'var(--color-text)', '--selected': '#7658d9',
