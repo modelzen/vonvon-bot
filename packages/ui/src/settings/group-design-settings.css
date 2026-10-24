@@ -60,13 +60,15 @@
 .gd-skill-search input { flex: 1; width: 100%; min-width: 0; min-height: 30px; padding: 4px 0; border: 0; outline: 0; background: transparent; color: var(--color-text); font: inherit; font-size: 12px; }
 .gd-skill-search:focus-within { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .gd-skill-search input:focus-visible { outline: 0; box-shadow: none; }
-.gd-skill-actions { display: flex; align-items: center; justify-content: flex-end; flex: none; gap: 8px; margin-left: auto; }
+.gd-skill-actions { display: flex; align-items: center; justify-content: flex-end; flex: none; gap: 14px; margin-left: auto; }
+.gd-skill-count { font-size: 11px; line-height: 1.5; color: var(--color-text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.gd-skill-list { max-height: 240px; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-width: thin; scroll-padding: 8px; }
 .gd-skill-row { display: flex; align-items: center; gap: 16px; padding: 14px 16px; }
 .gd-skill-row + .gd-skill-row { border-top: 1px solid var(--color-border); }
 .gd-skill-detail { display: flex; align-items: center; gap: 12px; padding: 0; border: 0; background: none; text-align: left; color: var(--color-text); min-width: 0; flex: 1; cursor: pointer; }
 .gd-skill-detail > span { flex: 1; min-width: 0; }
 .gd-skill-detail strong { font-size: 13px; line-height: 1.5; font-weight: 550; display: block; overflow-wrap: anywhere; }
-.gd-skill-detail small { margin-top: 3px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.gd-skill-detail small { margin-top: 3px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 .gd-skill-detail > svg { flex: none; color: var(--color-text-tertiary); }
 .gd-skill-facts { display: grid; gap: 12px; margin: 0; }
 .gd-skill-facts > div { display: grid; gap: 4px; }
@@ -84,6 +86,10 @@
 @media (hover: hover) and (pointer: fine) {
   .gd-text-action:not(:disabled):hover, .gd-icon-action:not(:disabled):hover { background: var(--color-surface-muted); color: var(--color-text); }
   .gd-skill-detail:hover strong { color: var(--color-accent); }
+}
+@media (max-width: 600px) {
+  .gd-skill-actions { justify-content: space-between; flex: 1 1 100%; }
+  .gd-skill-list { max-height: 230px; }
 }
 @media (max-width: 460px) {
   .gd-skill-search { flex-basis: 100%; max-width: none; }
