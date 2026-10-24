@@ -225,15 +225,18 @@ function SkillsList({skills, disabledPaths, disabled, onToggle, refresh}: {
   const needle = query.trim().toLocaleLowerCase();
   const visible = skills.filter(skill => `${skill.name} ${skill.description ?? ''}`.toLocaleLowerCase().includes(needle))
     .sort((a,b) => ({workspace:0,user:1,provider:2}[a.source] - {workspace:0,user:1,provider:2}[b.source]));
+  const enabledCount = skills.filter(skill => skill.enabled && !disabledPaths.includes(skill.path)).length;
   return <>
     <div className="gd-section-heading gd-skill-heading">
       <label className="gd-skill-search"><Search size={14} aria-hidden="true"/><input type="search" aria-label="搜索技能" placeholder="搜索技能" value={query} onChange={event => setQuery(event.target.value)}/></label>
-      <div className="gd-skill-actions"><button type="button" className="gd-text-action" onClick={() => void refresh()}><RefreshCw size={13}/>重新读取</button></div>
+      <div className="gd-skill-actions"><span className="gd-skill-count">{needle ? `${visible.length} / ${skills.length} 项` : `${skills.length} 项 · ${enabledCount} 已启用`}</span><button type="button" className="gd-text-action" onClick={() => void refresh()}><RefreshCw size={13}/>重新读取</button></div>
     </div>
+    <div className="gd-skill-list">
     {visible.length ? visible.map(skill => <div className="gd-skill-row" key={skill.path}>
       <button type="button" className="gd-skill-detail" onClick={() => setSelected(skill)}><span><strong>{skill.name}</strong>{skill.description && <small>{skill.description}</small>}{!skill.enabled && !disabledPaths.includes(skill.path) && <small>Provider 已停用</small>}</span><ChevronRight size={14}/></button>
       <Toggle className="settings-row-switch" label={`使用 ${skill.name}`} aria-label={`使用 ${skill.name}`} checked={skill.enabled && !disabledPaths.includes(skill.path)} disabled={disabled || !skill.enabled && !disabledPaths.includes(skill.path)} onChange={event => onToggle(skill.path, event.target.checked)}/>
     </div>) : <div className="gd-empty" role="status">{skills.length ? <>没有匹配的技能。<button type="button" className="gd-text-action" onClick={() => setQuery('')}>清除搜索</button></> : '工作区中尚未发现技能。'}</div>}
+    </div>
     <Dialog open={Boolean(selected)} title={selected?.name ?? '技能'} onClose={() => setSelected(undefined)} footer={<Button onClick={() => setSelected(undefined)}>完成</Button>}>
       {selected && <dl className="gd-skill-facts"><div><dt>说明</dt><dd>{selected.description || '未提供说明'}</dd></div><div><dt>来源</dt><dd>{{workspace: '本群工作区', user: '用户目录', provider: 'Provider'}[selected.source]}</dd></div><div><dt>位置</dt><dd>{selected.path}</dd></div></dl>}
     </Dialog>
