@@ -1,5 +1,5 @@
 import {Bot, ChevronRight, ChevronsDownUp, ChevronsUpDown, Search, X} from 'lucide-react';
-import {backendLabel, type Agent, type DesktopSnapshot, type GroupId, type MembershipId} from '@vonvon/protocol';
+import {backendLabel, type Agent, type DesktopSnapshot, type GroupId, type Membership, type MembershipId} from '@vonvon/protocol';
 import {AgentAvatar} from './AgentAvatar';
 import {GroupAvatar} from './GroupAvatar';
 import './group-directory.css';
@@ -15,13 +15,10 @@ type Props = {
   newCounts?: Readonly<Record<string, number>>;
 };
 
-// Intent: find a group, expand its Bots, and configure the exact membership.
-// Hierarchy: group names anchor a Finder-like outline; indented Bot rows are the actions.
-// Palette/surfaces: existing macOS paper and graphite tokens; blue only for interaction.
-// Depth: one inset white list, quiet group separators and connecting tree lines.
-// Typography: 13px semibold groups, medium Bot names, 11px secondary metadata.
-// Normal connection is silent; only exceptions appear beside the Bot name, with no status column.
-// Spacing: 4px rhythm, 52px group rows, 44px Bot rows; secondary columns hide on narrow views.
+// Keep the group → Bot tree and its membership navigation. The sticky toolbar keeps search
+// and expansion reachable; unavailable bindings remain visible even when a group is collapsed.
+// Existing canvas/surface tokens, 13px names and 11px metadata preserve the compact Mac layout.
+// Only groups with no available Bot are muted; partially available groups retain their name contrast.
 export function GroupDirectory({snapshot, state, onStateChange, statusFor, onMembership, newCounts}: Props) {
   const agents = new Map(snapshot.agents.map(agent => [agent.id, agent]));
   const directory = snapshot.groups.map(group => ({group, members: snapshot.memberships.filter(member => member.groupId === group.id)}));
@@ -33,44 +30,61 @@ export function GroupDirectory({snapshot, state, onStateChange, statusFor, onMem
   const toggle = (id: GroupId, expanded = !isExpanded(id)) => onStateChange({...state, expanded: {...state.expanded, [id]: expanded}});
   const search = (value: string) => onStateChange({query: value, expanded: {}});
   const botCount = new Set(visible.flatMap(({members}) => members.map(member => member.agentId))).size;
-  return <section className="group-directory" aria-label="群组列表">
+  const memberStatus = (member: Membership): Status => {
+    const agent = agents.get(member.agentId);
+    if (member.stale) return {label: '状态过期', tone: 'warning'};
+    if (member.enabled === false) return {label: '本群已停用', tone: 'neutral'};
+    if (!agent) return {label: 'Bot 暂不可用', tone: 'warning'};
+    const status = statusFor(agent);
+    return status.label === '已停用' ? {...status, label: 'Bot 已停用'} : status;
+  };
+  const toggleAll = () => onStateChange({...state, expanded: {...state.expanded, ...Object.fromEntries(visible.map(({group}) => [group.id, !hasExpanded]))}});
+  return <section className="group-directory group-directory--groups" aria-label="群组列表">
     <header className="group-directory-heading">
-      <div><h1>群组</h1><span>{snapshot.groups.length} 个群聊</span></div>
+      <div><h1>群组</h1><span>{query ? `${visible.length} / ${snapshot.groups.length}` : snapshot.groups.length} 个群聊 · {botCount} 个 Bot</span></div>
       {directory.length > 0 && <label className="group-directory-search"><Search size={14} aria-hidden="true"/>
         <input aria-label="搜索群聊或 Bot" placeholder="搜索群聊或 Bot" value={state.query} onChange={event => search(event.target.value)}/>
         {state.query && <button type="button" aria-label="清除群聊搜索" onClick={() => search('')}><X size={13}/></button>}
       </label>}
+      {directory.length > 0 && <button className="group-directory-toggle" type="button" disabled={!visible.length} onClick={toggleAll}>
+        {hasExpanded ? <ChevronsDownUp size={14}/> : <ChevronsUpDown size={14}/>}{hasExpanded ? '全部收起' : '全部展开'}
+      </button>}
     </header>
     {directory.length > 0 && <div className="group-directory-surface">
-      <div className="group-directory-columns" aria-hidden="true"><span>群聊与 Bot</span><span>Provider</span><span>会话方式</span></div>
       {visible.length ? <ul className="group-directory-list">
         {visible.map(({group, members}) => {
           const expanded = isExpanded(group.id);
+          const exceptions = members.map(memberStatus).filter(status => status.tone !== 'success');
+          const unavailable = members.length > 0 && exceptions.length === members.length;
+          const labels = [...new Set(exceptions.map(status => status.label))];
+          const summary = !exceptions.length ? undefined : labels.length === 1 && unavailable ? labels[0] : `${exceptions.length} 个 Bot 不可用`;
+          const summaryTone = exceptions.some(status => status.tone === 'warning') ? 'warning' : 'neutral';
           const newCount = [...new Set(members.flatMap(member => member.projectId ?? []))].reduce((sum, id) => sum + (newCounts?.[id] ?? 0), 0);
           const listId = `group-directory-bots-${encodeURIComponent(group.id)}`;
-          return <li className="group-directory-item" key={group.id}>
+          return <li className="group-directory-item" data-unavailable={unavailable || undefined} key={group.id}>
             <div className="group-directory-group-row">
               <button type="button" className="group-directory-identity" aria-expanded={expanded} aria-controls={listId} onClick={() => toggle(group.id)}
                 onKeyDown={event => {if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {event.preventDefault(); toggle(group.id, event.key === 'ArrowRight');}}}>
                 <ChevronRight className="group-directory-disclosure" size={13} aria-hidden="true"/>
                 <GroupAvatar group={group}/><span className="group-directory-name" title={group.name}>{group.name}</span>
                 <span className="group-directory-count">{members.length} 个 Bot{newCount ? ` · 新 ${newCount}` : ''}</span>
-                <span className="group-directory-avatar-stack" aria-hidden="true">
+                {summary && <span className="group-directory-summary" data-tone={summaryTone}>{summary}</span>}
+                {!expanded && <span className="group-directory-avatar-stack" aria-hidden="true">
                   {members.slice(0, 4).map(member => {const agent = agents.get(member.agentId); return agent ? <AgentAvatar key={member.id} agent={agent}/> : <span key={member.id} className="collaboration-avatar agent"><Bot size={12}/></span>;})}
                   {members.length > 4 && <span className="group-directory-overflow">+{members.length - 4}</span>}
-                </span>
+                </span>}
               </button>
             </div>
             <ul className="group-directory-bots" id={listId} aria-label={`${group.name}的 Bot`} hidden={!expanded}>
               {members.map(member => {
                 const agent = agents.get(member.agentId);
-                const status: Status = member.stale ? {label: '状态过期', tone: 'warning'} : agent ? statusFor(agent) : {label: 'Bot 暂不可用', tone: 'warning'};
+                const status = memberStatus(member);
                 const provider = backendLabel(member.backend);
                 const icon = member.backend === 'codex-appserver' ? './agent-icons/codex-light.png' : member.backend === 'claude-agent' ? './agent-icons/claude-code.svg' : undefined;
-                return <li key={member.id}><button type="button" className="group-directory-bot" aria-label={`设置 ${group.name} 中的 ${agent?.name ?? member.agentId}`} disabled={!agent} onClick={() => onMembership(member.id)}>
+                return <li key={member.id}><button type="button" className="group-directory-bot" data-unavailable={status.tone !== 'success' || undefined} aria-label={`设置 ${group.name} 中的 ${agent?.name ?? member.agentId}`} disabled={!agent} onClick={() => onMembership(member.id)}>
                   <span className="group-directory-bot-identity">{agent ? <AgentAvatar agent={agent}/> : <span className="collaboration-avatar agent"><Bot size={15}/></span>}<strong title={agent?.name ?? member.agentId}>{agent?.name ?? member.agentId}</strong>{status.tone !== 'success' && <span className="group-directory-status" data-tone={status.tone}>{status.label}</span>}</span>
                   <span className="group-directory-provider" title={provider === member.backend ? `${provider}（暂不支持修改）` : provider}>{icon && <img src={icon} alt=""/>}{provider === member.backend ? `${provider}（暂不支持修改）` : provider}</span>
-                  <span className="group-directory-mode">{{threads: '多会话', shared: '单会话', smart: '智能'}[member.conversation]}</span>
+                  <span className="group-directory-mode">{{threads: '独立话题', shared: '连续交谈', smart: '智能'}[member.conversation]}</span>
                   <span className="group-directory-trailing"><ChevronRight size={13} aria-hidden="true"/></span>
                 </button></li>;
               })}
@@ -79,11 +93,6 @@ export function GroupDirectory({snapshot, state, onStateChange, statusFor, onMem
           </li>;
         })}
       </ul> : <div className="group-directory-empty">没有找到匹配的群聊或 Bot</div>}
-      <footer className="group-directory-footer"><span>{visible.length} 个群聊<span aria-hidden="true"> · </span>{botCount} 个 Bot</span>
-        <button type="button" disabled={!visible.length} onClick={() => onStateChange({...state, expanded: {...state.expanded, ...Object.fromEntries(visible.map(({group}) => [group.id, !hasExpanded]))}})}>
-          {hasExpanded ? <ChevronsDownUp size={13}/> : <ChevronsUpDown size={13}/>}{hasExpanded ? '全部收起' : '全部展开'}
-        </button>
-      </footer>
     </div>}
   </section>;
 }
