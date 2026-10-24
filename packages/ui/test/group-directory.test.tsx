@@ -18,10 +18,10 @@ const snapshot = desktopSnapshotSchema.parse({
   memberships: [['cli_one', 'oc_one', 'prj_00000001'], ['cli_two', 'oc_one', 'prj_00000002'], ['cli_one', 'oc_two', 'prj_00000001']].map(([agentId, groupId, projectId]) => ({id: JSON.stringify([agentId, groupId]), agentId, groupId, projectId, name: groupId, directory: '/tmp/r', backend: 'codex-appserver', conversation: 'threads', response: 'mention', permission: {administrator: 'qa', member: 'qa', network: false}, stale: false})),
   tools: [], jobs: [], application: {platform: 'macos', version: '0.7.6', loginItem: false, dataPath: '/tmp/review'},
 });
-function harness(data = snapshot) {
+function harness(data = snapshot, statusFor: Parameters<typeof GroupDirectory>[0]['statusFor'] = () => ({label: '', tone: 'success'})) {
   let state: GroupDirectoryState = {query: '', expanded: {}};
   const onMembership = vi.fn();
-  const render = () => nodes(GroupDirectory({snapshot: data, state, onStateChange: next => {state = next;}, statusFor: () => ({label: '', tone: 'success'}), onMembership}));
+  const render = () => nodes(GroupDirectory({snapshot: data, state, onStateChange: next => {state = next;}, statusFor, onMembership}));
   return {render, onMembership, state: () => state};
 }
 
@@ -49,6 +49,47 @@ it('keeps the original group tree available with an old daemon', () => {
   const h = harness({...snapshot, projects: undefined, memberships: snapshot.memberships.map(({projectId: _drop, ...member}) => member)});
   expect(h.render().filter(node => node.props.className === 'group-directory-identity')).toHaveLength(2);
   expect(h.onMembership).not.toHaveBeenCalled();
+});
+
+it('summarizes unavailable bindings without muting a group that still has an available Bot', () => {
+  const h = harness({...snapshot, memberships: snapshot.memberships.map((member, index) => ({...member, enabled: index === 1}))});
+  const groups = h.render().filter(node => node.props.className === 'group-directory-item');
+  expect(groups.map(group => group.props['data-unavailable'])).toEqual([undefined, true]);
+  const summary = (group: Element) => nodes(group).find(node => node.props.className === 'group-directory-summary')!.props.children;
+  expect(groups.map(summary)).toEqual(['1 个 Bot 不可用', '本群已停用']);
+  const unavailableRow = h.render().find(node => node.props.className === 'group-directory-bot' && node.props['data-unavailable'])!;
+  expect(unavailableRow.props.disabled).toBe(false);
+  unavailableRow.props.onClick();
+  expect(h.onMembership).toHaveBeenCalledWith(snapshot.memberships[0]!.id);
+});
+
+it.each([
+  ['stopped', 'Bot 已停用', 'neutral'],
+  ['disconnected', '未连接', 'neutral'],
+  ['stale', '状态过期', 'warning'],
+  ['missing', 'Bot 暂不可用', 'warning'],
+] as const)('shows %s status in a collapsed group', (kind, label, tone) => {
+  const h = harness({
+    ...snapshot,
+    agents: kind === 'missing' ? [] : snapshot.agents,
+    memberships: snapshot.memberships.map(member => ({...member, stale: kind === 'stale'})),
+  }, () => kind === 'stopped' ? {label: '已停用', tone: 'neutral'} : {label: '未连接', tone: 'neutral'});
+  const group = h.render().filter(node => node.props.className === 'group-directory-item')[1]!;
+  expect(nodes(group).find(node => node.props.className === 'group-directory-bots')!.props.hidden).toBe(true);
+  const summary = nodes(group).find(node => node.props.className === 'group-directory-summary')!;
+  expect([summary.props.children, summary.props['data-tone'], group.props['data-unavailable']]).toEqual([label, tone, true]);
+});
+
+it('applies the toolbar expansion action to search results and disables it for empty results', () => {
+  const h = harness();
+  const toolbarAction = () => h.render().find(node => node.props.className === 'group-directory-toggle')!;
+  h.render().find(node => node.type === 'input')!.props.onChange({target: {value: '发布'}});
+  toolbarAction().props.onClick();
+  expect(h.state()).toEqual({query: '发布', expanded: {oc_two: false}});
+  toolbarAction().props.onClick();
+  expect(h.state().expanded).toEqual({oc_two: true});
+  h.render().find(node => node.type === 'input')!.props.onChange({target: {value: '没有这个群'}});
+  expect(toolbarAction().props.disabled).toBe(true);
 });
 
 it('uses 群组 as the primary destination while retaining project memory counts', () => {
