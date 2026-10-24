@@ -65,8 +65,14 @@ it('keeps disabled and same-value safeguards for the longer selection panel', ()
   expect(changed).toHaveBeenCalledExactlyOnceWith('claude');
 });
 
-it('can keep an extensible Provider list in a dropdown regardless of option count', () => {
-  expect(render({presentation: 'dropdown'}).props.items).toBe(options);
+it('keeps icons in short segments and in the dropdown used by an extended Provider list', () => {
+  const getOptionIcon = (value: string) => <img src={`./${value}.svg`} alt=""/>;
+  const compact = render({value: 'codex', getOptionIcon});
+  expect(compact.props.role).toBe('radiogroup');
+  expect(nodes(compact).filter(node => node.type === 'img').map(node => node.props.src)).toEqual(['./codex.svg', './claude.svg']);
   const extended = Array.from({length: 12}, (_, index) => ({value: `provider-${index}`, label: `Provider ${index}`}));
-  expect(render({presentation: 'dropdown', options: extended}).props.items).toBe(extended);
+  const dropdown = render({value: 'provider-0', options: extended, getOptionIcon});
+  expect(dropdown.props.items).toBe(extended);
+  expect(nodes(dropdown).filter(node => node.type === 'img')).toHaveLength(13);
+  expect(render({options: [...options, {value: 'openrouter', label: 'OpenRouter'}, {value: 'deepseek', label: 'DeepSeek'}], getOptionIcon}).props.items).toHaveLength(4);
 });

@@ -104,11 +104,11 @@ it('keeps one primary among peer directories and no primary repository', () => {
   expect(repositories).not.toContain('设为主目录');
   expect(html).not.toContain('附加目录');
 });
-it('uses the same multiselect field for models and Effort without listing unselected choices', () => {
+it('keeps the original compact summary controls for models and Effort', () => {
   const html = renderToStaticMarkup(<ModelAccessChoices value={{backend: catalog.backend, models: ['actual-a', 'actual-b'], efforts: ['low']}} catalog={catalog} disabled={false} onChange={() => {}}/>);
   expect(html).toContain('思考强度');
   expect(html).toContain('选择模型'); expect(html).toContain('选择强度');
-  expect(html.match(/class="gd-multiselect-field"/g)).toHaveLength(2);
+  expect(html.match(/gd-model-edit-control/g)).toHaveLength(2);
   expect(html).not.toContain('type="checkbox"');
   expect(html).toContain('实际模型 A'); expect(html).toContain('实际模型 B');
   expect(html).not.toContain('无 Effort 模型');
