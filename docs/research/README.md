@@ -268,3 +268,9 @@ codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次�
 | 报告 | 内容 | 说明 |
 |---|---|---|
 | [rules-editor-height](2026-10-24-rules-editor-height/report.md) | 保留规则正文，默认短窗口、底部展开与收起 | 基于 dev 8a7dabe1；owner 已批准预览设计，实际实现待本地验收；未替换 App |
+
+## 2026-10-24 导图直接编辑组件
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [report](2026-10-24-mind-map-editor/report.md) | Mind Elixir、React Flow、SimpleMindMap 对图中编辑和固定结构节点的支持；当前角色与记忆编辑入口差异 | 官方文档与源码调研；后续按 owner 的包体要求沿用自写 HTML/SVG，未引入候选库 |

@@ -1,6 +1,6 @@
 import type {ReactNode} from 'react';
 import type {MemoryItem} from '@vonvon/protocol';
-import type {MapMenuItem, MapNode} from './MindMap';
+import type {MapEditStart, MapMenuItem, MapNode} from './MindMap';
 import {branchNewCount, shownLeaves, type BranchView, type Marks, type SearchPlan} from './memory-model';
 
 export type NodeInput = {
@@ -16,8 +16,16 @@ export type NodeInput = {
   leafMenu: (item: MemoryItem) => MapMenuItem[];
   branchMenu: (view: BranchView) => MapMenuItem[];
   onLeaf: (item: MemoryItem, archived: boolean) => void;
+  onLeafEdit?: (item: MemoryItem, start?: MapEditStart) => void;
+  onLeafDelete?: (item: MemoryItem) => void;
+  onLeafAdd?: (item: MemoryItem) => void;
+  onBranchAdd?: (view: BranchView) => void;
+  onBranchEdit?: (view: BranchView, start?: MapEditStart) => void;
+  onBranchDelete?: (view: BranchView) => void;
   /** The in-place editor, when this leaf is being edited. */
   leafContent: (item: MemoryItem) => ReactNode | undefined;
+  branchContent?: (view: BranchView) => ReactNode | undefined;
+  branchAddContent?: (view: BranchView) => ReactNode | undefined;
   /** A leaf dropped on a branch of the same memory. */
   moveTo: (itemId: string, branch: string) => void;
 };
@@ -33,6 +41,9 @@ export function memoryNodes(input: NodeInput): {branches: MapNode[]; archive: Ma
       meta: [archived && input.marks?.madeRoom.has(item.id) ? '为腾位归档' : '', item.trust === 'untrusted' && !archived ? '待确认' : ''].filter(Boolean).join(' · ') || undefined,
       ...(input.marks?.ids.has(item.id) ? {fresh: true} : {}),
       onClick: () => input.onLeaf(item, archived), menu: input.leafMenu(item), ...(archived ? {} : {drag: item.id}), ...(content ? {content} : {}),
+      ...(!archived && input.onLeafEdit ? {onEdit: (start?: MapEditStart) => input.onLeafEdit?.(item, start)} : {}),
+      ...(!archived && input.onLeafDelete ? {onDelete: () => input.onLeafDelete?.(item)} : {}),
+      ...(!archived && input.onLeafAdd ? {onAdd: () => input.onLeafAdd?.(item)} : {}),
     };
   };
   const newTag = (view: BranchView) => {
@@ -42,14 +53,22 @@ export function memoryNodes(input: NodeInput): {branches: MapNode[]; archive: Ma
   const branch = (view: BranchView, archived: boolean): MapNode => {
     const id = `${archived ? 'a' : 'b'}:${view.name}`;
     const {shown, hidden} = shownLeaves(view.items, isOpen(`m:${id}`, false), plan.leaves);
+    const content = input.branchContent?.(view);
+    const addContent = !archived ? input.branchAddContent?.(view) : undefined;
     const more: MapNode[] = hidden > 0 ? [{id: `m:${id}`, kind: 'more', label: `还有 ${hidden} 条`, onClick: () => flip(`m:${id}`)}] : [];
     const hit = plan.active && plan.branches.has(view.name);
     return {
       id, kind: 'branch', label: view.name, open: isOpen(id, plan.active ? hit : !archived), onToggle: () => flip(id),
+      ...(content ? {content} : {}),
       tone: archived ? 'muted' : plan.active ? (plan.named.has(view.name) ? 'match' : hit ? undefined : 'dim') : undefined,
       meta: `${view.items.length}${view.pending ? ` · 待确认 ${view.pending}` : ''}${newTag(view)}`,
       menu: archived ? [] : input.branchMenu(view),
-      children: [...shown.map(item => leaf(item, archived)), ...more],
+      fixed: archived || view.fixed,
+      childCount: view.items.length,
+      ...(!archived && input.onBranchAdd ? {onAdd: () => input.onBranchAdd?.(view)} : {}),
+      ...(!archived && !view.fixed && input.onBranchEdit ? {onEdit: (start?: MapEditStart) => input.onBranchEdit?.(view, start)} : {}),
+      ...(!archived && !view.fixed && input.onBranchDelete ? {onDelete: () => input.onBranchDelete?.(view)} : {}),
+      children: [...shown.map(item => leaf(item, archived)), ...more, ...(addContent ? [{id: `add:${view.name}`, kind: 'action' as const, label: '新记忆', content: addContent}] : [])],
       ...(archived ? {} : {drop: {accepts: (dragged: string) => items.get(dragged)?.state === 'active' && items.get(dragged)?.branch !== view.name, onDrop: (dragged: string) => input.moveTo(dragged, view.name)}}),
     };
   };

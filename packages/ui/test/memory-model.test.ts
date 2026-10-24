@@ -1,7 +1,7 @@
 import {expect, it, vi} from 'vitest';
 import type {MemoryItem, MemoryReply} from '@vonvon/protocol';
 import {
-  branchCanChange, branchNameProblem, branchViews, downgradeText, exportFileName, LEAF_LIMIT, leafActions, mergeTargets, moveRequest, roleUsage, runMemory, searchPlan, shownLeaves, sourceLines, sourceProject,
+  archiveBranchItems, branchCanChange, branchNameProblem, branchViews, downgradeText, exportFileName, LEAF_LIMIT, leafActions, mergeTargets, moveRequest, roleUsage, runMemory, searchPlan, shownLeaves, sourceLines, sourceProject,
 } from '../src/memory-model';
 import {memoryNodes} from '../src/memory-nodes';
 import type {MapNode} from '../src/MindMap';
@@ -24,6 +24,13 @@ it('lists the fixed branches first and always, newest leaf first, with the archi
   expect(branches[1]!.items).toEqual([]);
   expect(branches[3]).toMatchObject({fixed: false, pending: 1});
   expect(archived.map(view => [view.name, view.items.length])).toEqual([['决定', 1]]);
+});
+
+it('does not resurrect an archived-only custom category in the active map, while keeping its restore path', () => {
+  const views = branchViews({branches: [branch('决定', true)], items: [item('old', '发版', {state: 'archived'})]});
+  expect(views.branches.map(view => view.name)).toEqual(['决定']);
+  expect(views.archived.map(view => view.name)).toEqual(['发版']);
+  expect(node(memoryNodes({views, plan: searchPlan([...views.branches, ...views.archived], ''), items: new Map(), isOpen: (_id, initially) => initially, flip: vi.fn(), leafMenu: () => [], branchMenu: () => [], onLeaf: vi.fn(), leafContent: () => undefined, moveTo: vi.fn()}).archive, 'i:old')).toBeDefined();
 });
 
 it('keeps a branch to its newest 8 leaves and puts the rest behind 还有 N 条', () => {
@@ -76,6 +83,48 @@ it('the fixed branches have no 改名 or 合并 in their menu, and cannot be mer
   expect(node(branches, 'b:发版')!.menu!.map(entry => entry.id)).toEqual(['add', 'rename']);
   expect(branchCanChange({fixed: true})).toBe(false);
   expect(mergeTargets(branchViews({items: [], branches: [branch('决定', true), branch('发版', false)]}).branches, '发版')).toEqual(['决定']);
+});
+
+it('keeps selection separate from inline edits, protects fixed categories and archived entries, and offers local add', () => {
+  const onLeaf = vi.fn(); const onLeafEdit = vi.fn(); const onLeafDelete = vi.fn();
+  const onLeafAdd = vi.fn(); const onBranchAdd = vi.fn(); const onBranchEdit = vi.fn(); const onBranchDelete = vi.fn();
+  const active = item('a', '发版', {revision: 7});
+  const archived = item('old', '发版', {state: 'archived'});
+  const {branches, archive} = build([active, archived], '', {onLeaf, onLeafEdit, onLeafDelete, onLeafAdd, onBranchAdd, onBranchEdit, onBranchDelete});
+  const leaf = node(branches, 'i:a')!;
+  leaf.onClick?.();
+  expect(onLeaf).toHaveBeenCalledWith(active, false);
+  expect(onLeafEdit).not.toHaveBeenCalled();
+  leaf.onEdit?.({text: '新文字'});
+  leaf.onDelete?.();
+  leaf.onAdd?.();
+  expect(onLeafEdit).toHaveBeenCalledWith(active, {text: '新文字'});
+  expect(onLeafDelete).toHaveBeenCalledWith(active);
+  expect(onLeafAdd).toHaveBeenCalledWith(active);
+  const fixed = node(branches, 'b:决定')!;
+  expect(fixed.fixed).toBe(true);
+  expect(fixed.onEdit).toBeUndefined();
+  expect(fixed.onDelete).toBeUndefined();
+  fixed.onAdd?.();
+  expect(onBranchAdd).toHaveBeenCalledWith(expect.objectContaining({name: '决定'}));
+  const custom = node(branches, 'b:发版')!;
+  custom.onEdit?.();
+  custom.onDelete?.();
+  expect(onBranchEdit).toHaveBeenCalledWith(expect.objectContaining({name: '发版'}), undefined);
+  expect(onBranchDelete).toHaveBeenCalledWith(expect.objectContaining({name: '发版'}));
+  expect(custom.childCount).toBe(1);
+  expect(node(archive, 'i:old')!.onDelete).toBeUndefined();
+});
+
+it('archives a custom category item by item with each frozen revision and stops on conflict', async () => {
+  const memory = vi.fn().mockResolvedValueOnce({kind: 'item', item: item('a', '发版', {state: 'archived', revision: 8})})
+    .mockResolvedValueOnce({kind: 'conflict', message: 'changed'});
+  const result = await archiveBranchItems({memory}, scope, [item('a', '发版', {revision: 7}), item('b', '发版', {revision: 4}), item('c', '发版')]);
+  expect(result).toMatchObject({archived: 1, failure: {ok: false, conflict: true}});
+  expect(memory.mock.calls.map(([request]) => request)).toEqual([
+    {type: 'archive', scope, itemId: 'a', revision: 7},
+    {type: 'archive', scope, itemId: 'b', revision: 4},
+  ]);
 });
 
 it('dropping a leaf on another branch asks for the move; the same branch or an archived leaf does not take it', () => {

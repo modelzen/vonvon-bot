@@ -21,20 +21,21 @@ const codePoints = (value: string) => Array.from(value).length;
 const newest = (a: MemoryItem, b: MemoryItem) => b.updatedAt - a.updatedAt || (a.id < b.id ? 1 : -1);
 
 /**
- * The branches of one memory, the daemon's order (fixed ones first) with a branch an entry names but the list lacks added
- * at the end, and the archived entries grouped by the branch they came from. A branch with no entries stays: the fixed ones
- * always show, with 0.
+ * The branches of one memory, the daemon's order (fixed ones first) with a missing active entry branch added at the end.
+ * Archived entries stay grouped by their old branch without reviving an empty custom branch in the active map.
+ * A fixed branch with no entries always shows with 0.
  */
 export function branchViews(list: Pick<MemoryList, 'items' | 'branches'>): {branches: BranchView[]; archived: BranchView[]} {
   const names = list.branches.map(branch => branch.name);
-  for (const item of list.items) if (!names.includes(item.branch)) names.push(item.branch);
+  for (const item of list.items) if (item.state === 'active' && !names.includes(item.branch)) names.push(item.branch);
   const fixed = new Set(list.branches.filter(branch => branch.fixed).map(branch => branch.name));
   const view = (name: string, state: MemoryItem['state']): BranchView => {
     const items = list.items.filter(item => item.branch === name && item.state === state).sort(newest);
     return {name, fixed: fixed.has(name), items, pending: items.filter(item => item.trust === 'untrusted').length};
   };
   const ordered = [...names.filter(name => fixed.has(name)), ...names.filter(name => !fixed.has(name))];
-  return {branches: ordered.map(name => view(name, 'active')), archived: ordered.map(name => view(name, 'archived')).filter(branch => branch.items.length)};
+  const archivedNames = [...new Set([...ordered, ...list.items.filter(item => item.state === 'archived').map(item => item.branch)])];
+  return {branches: ordered.map(name => view(name, 'active')), archived: archivedNames.map(name => view(name, 'archived')).filter(branch => branch.items.length)};
 }
 
 /** The leaves a branch draws: its newest 8, or all of them once 还有 N 条 was opened or a search wants the matches seen. */
@@ -128,6 +129,17 @@ export async function runMemory(client: {memory(request: MemoryRequest): Promise
     if (reply.kind === 'refused') return {ok: false, message: reply.message};
     return {ok: true, reply};
   } catch (failure) {return {ok: false, message: failure instanceof Error ? failure.message : '操作未完成，请重试。'};}
+}
+
+/** Archive a custom branch's active entries in order, stopping at the first refusal or revision conflict. */
+export async function archiveBranchItems(client: {memory(request: MemoryRequest): Promise<MemoryReply>}, scope: Extract<MemoryRequest, {type: 'archive'}>['scope'], items: readonly Pick<MemoryItem, 'id' | 'revision'>[]): Promise<{archived: number; failure?: Extract<Outcome, {ok: false}>}> {
+  let archived = 0;
+  for (const item of items) {
+    const outcome = await runMemory(client, {type: 'archive', scope, itemId: item.id, revision: item.revision});
+    if (!outcome.ok) return {archived, failure: outcome};
+    archived++;
+  }
+  return {archived};
 }
 
 /** The edit that moves a leaf to another branch of the same memory, with the revision the page saw (§5.7); none when it is already there. */

@@ -46,7 +46,7 @@ it('the Bot page is a map centred on the Bot: 角色设定 with its two leaves, 
   const html = wrap(<BotMap agentId={'cli_a' as never} snapshot={snapshot} onProject={vi.fn()}/>);
   for (const text of ['小支', '角色设定', '身份与职责', '其他说明', 'Bot 记忆', '项目', '支付组 →']) expect(html).toContain(text);
   expect(html).not.toContain('群友说的、Bot 自己观察到的永远进不了这里');
-  expect(html).toContain('+ 添加记忆');
+  expect(html).toContain('添加记忆');
   expect(html).not.toMatch(/AGENTS\.md|CLAUDE\.md/);
   expect(html).not.toContain('模型看到什么');
 });
@@ -58,4 +58,21 @@ it('the project page map has 群和 Bot as a branch with the bindings and the �
   expect(html).toContain('+ 把一个群加进来…');
   expect(html).toContain('不再用小支处理这个群…');
   expect(html).not.toContain('共用这个项目的群里，Bot 都会读到这些记忆');
+});
+
+
+it('shows only add on a selected expanded parent, and a persistent count when collapsed', () => {
+  const child: MapNode = {id: 'child', kind: 'leaf', label: '内容'};
+  const make = (open: boolean) => renderToStaticMarkup(<MindMap label="交互" root={{id: 'root', label: '分类', kind: 'branch', selected: true, open, onToggle: vi.fn(), onAdd: vi.fn(), childCount: 7, children: [child]}}/>);
+  expect(make(true)).toContain('class="mm-add"');
+  expect(make(true)).not.toContain('class="mm-fold"');
+  expect(make(false)).not.toContain('class="mm-add"');
+  expect(make(false)).toContain('data-collapsed="true"');
+  expect(make(false)).toContain('>7</button>');
+});
+
+it('marks protected nodes by background state while editable deletable leaves remain plain', () => {
+  const html = renderToStaticMarkup(<MindMap label="固定" root={{id: 'fixed', kind: 'root', label: '固定', children: [{id: 'mutable', kind: 'leaf', label: '可删除', onDelete: vi.fn()}]}}/>);
+  expect(html.match(/data-fixed="true"/g)).toHaveLength(1);
+  expect(html).not.toContain('锁');
 });
