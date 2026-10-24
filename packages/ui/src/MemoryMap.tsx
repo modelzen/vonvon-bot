@@ -4,7 +4,7 @@ import {useClient} from './client-context';
 import {MindMap, type MapEditStart, type MapMenuItem, type MapNode} from './MindMap';
 import {MapInlineEditor, type MapInlineEditorSession} from './MapInlineEditor';
 import {
-  archiveBranchItems, branchCanChange, branchNameProblem, branchNewCount, branchRoom, branchViews, exportFileName, joinMarks, leafActions, marksOf, moveRequest, noMarks, runMemory, searchPlan, sourceProject,
+  archiveBranchItems, branchCanChange, branchNameProblem, branchNewCount, branchRoom, branchViews, exportFileName, joinMarks, leafActions, marksOf, moveRequest, noMarks, runMemory, sameJson, searchPlan, sourceProject,
   type BranchView, type LeafAction, type Marks, type MemoryList,
 } from './memory-model';
 import {memoryNodes} from './memory-nodes';
@@ -66,6 +66,7 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, targets, before 
   const [action, setAction] = useState<MemoryMapAction>();
   const [searching, setSearching] = useState(false);
   const [marks, setMarks] = useState<Marks>(noMarks);
+  const listCache = useRef<{scopeKey: string; value?: MemoryList}>({scopeKey});
   const serial = useRef(0);
   const draftOpen = useRef(false);
   const editorSession = useRef<MapInlineEditorSession | null>(null);
@@ -89,9 +90,14 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, targets, before 
       if (request !== serial.current) return;
       if (reply.kind !== 'list') throw new Error('记忆暂时读不到。');
       if (draftOpen.current && !force) return;
-      setList(reply); setError(undefined);
-      // the first reading's marks stay while the page is open; what is written meanwhile joins them
-      setMarks(current => joinMarks(current, marksOf(reply)));
+      const cached = listCache.current;
+      if (cached.scopeKey !== scopeKey || !sameJson(cached.value, reply)) {
+        listCache.current = {scopeKey, value: reply};
+        setList(reply);
+        // The first reading's marks stay while the page is open; later ones join only if the reply changed.
+        setMarks(current => joinMarks(current, marksOf(reply)));
+      }
+      setError(undefined);
       if (seenSent.current !== scopeKey) {
         seenSent.current = scopeKey;
         const page = scope.kind === 'bot' ? {kind: 'bot' as const, botId: scope.botId} : {kind: 'project' as const, projectId: scope.projectId};
@@ -101,7 +107,7 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, targets, before 
     // `scope` is rebuilt by the parent every render; its key is what says the memory changed
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, scopeKey]);
-  useEffect(() => {setList(undefined); setMarks(noMarks); setSelected(undefined); setEditing(undefined); setAdding(undefined); setDetailsOpen(false); setAction(undefined); setSearching(false); setQuery(''); void reload(true); return () => {serial.current++;};}, [reload]);
+  useEffect(() => {listCache.current = {scopeKey}; setList(undefined); setMarks(noMarks); setSelected(undefined); setEditing(undefined); setAdding(undefined); setDetailsOpen(false); setAction(undefined); setSearching(false); setQuery(''); void reload(true); return () => {serial.current++;};}, [reload, scopeKey]);
   // What the bot writes does not change the snapshot: look again while the page is open, so a new leaf shows up marked 新.
   useEffect(() => {
     const timer = window.setInterval(() => {if (document.visibilityState === 'visible') void reload();}, 8_000);

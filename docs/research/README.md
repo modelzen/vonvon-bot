@@ -280,3 +280,9 @@ codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次�
 | 报告 | 内容 | 说明 |
 | --- | --- | --- |
 | [report](2026-10-24-mind-map-editor/report.md) | Mind Elixir、React Flow、SimpleMindMap 对图中编辑和固定结构节点的支持；当前角色与记忆编辑入口差异 | 官方文档与源码调研；后续按 owner 的包体要求沿用自写 HTML/SVG，未引入候选库 |
+
+## 2026-10-25 导图库与画布性能
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [report](2026-10-25-mind-map-library/report.md) | Mind Elixir 5.15.1 固定版本、实际包体测量、旧 renderer 闲置轮询的观察器开销与接入约束 | owner 允许引入库；旧版18节点实际测量，最终 UI/App 验收另记 |
