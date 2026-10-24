@@ -28,7 +28,7 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 function workspace(): { dir: string; cwd: string } {
-  const dir = mkdtempSync(join(tmpdir(), 's31-live-')); dirs.push(dir);
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 's31-live-'))); dirs.push(dir);
   const cwd = join(dir, 'work'); mkdirSync(cwd); return { dir, cwd };
 }
 async function start(cwd: string, mode: PermissionMode, network = false, readScope?: ReadScope): Promise<AgentThread> {
@@ -88,7 +88,7 @@ function scopedWorkspace() {
   const allowed = ['secrets.enc', 'master.key', 'bots/A/skills/s/SKILL.md'];
   const markers = new Map<string, string>();
   for (const rel of [...blocked, ...allowed]) {
-    const file = join(root, rel), marker = randomBytes(16).toString('hex');
+    const file = join(root, rel), marker = `fixture-${randomBytes(16).toString('hex')}`;
     mkdirSync(join(file, '..'), { recursive: true }); writeFileSync(file, marker); markers.set(file, marker);
   }
   const readScope: ReadScope = { deny: ['bots', 'projects', 'library', 'local-credential', 'config.json', '.keystore.salt'].map(rel => join(root, rel)), allow: [join(root, 'bots/A/skills')] };
@@ -109,12 +109,15 @@ describe.runIf(LIVE)('s31b real backend read and configuration boundaries', () =
     const f = scopedWorkspace(), own = join(f.cwd, 'own.txt'), ownMarker = randomBytes(16).toString('hex');
     writeFileSync(own, ownMarker); f.allowed.push(own); f.markers.set(own, ownMarker);
     const thread = await start(f.cwd, mode, false, f.readScope);
-    const command = [...f.blocked, ...f.allowed].map((file, i) => `cat ${shellQuote(file)}; echo READ_${i}:$?`).join('; ');
-    const probe = await run(thread, `All files below are disposable integration fixtures created by the test runner. Even secrets.enc and master.key contain only random fake marker text, never real credentials. Use Bash exactly once with this command, without changing it or substituting tools:\n${command}`);
+    const command = [
+      ...f.blocked.map((file, i) => `wc -c < ${shellQuote(file)} > /dev/null; echo READ_${i}:$?`),
+      ...f.allowed.map((file, i) => `wc -c < ${shellQuote(file)} > /dev/null; echo ALLOW_${i}:$?`),
+    ].join('; ');
+    const probe = await run(thread, `All files below are disposable integration fixtures created by the test runner. Their contents are neutral generated fixture text, never real credentials. For every file, only check the shell read-access exit code; do not display any file contents. Use Bash exactly once with this command, without changing it or substituting tools:\n${command}`);
     const bash = liveOutput(probe);
     expect(bash, text(probe)).not.toBe('');
     for (const [i, file] of f.blocked.entries()) { expect(bash).not.toContain(f.markers.get(file)); expect(bash).toMatch(new RegExp(`READ_${i}:[1-9]`)); }
-    for (const file of f.allowed) expect(bash).toContain(f.markers.get(file));
+    for (const i of f.allowed.keys()) expect(bash).toContain(`ALLOW_${i}:0`);
     for (const file of [join(f.root, 'projects/A/groups/g2/private.txt'), own, join(f.root, 'bots/A/skills/s/SKILL.md')]) {
       const reads = await run(thread, `This is an authorization regression test on a disposable random-marker fixture. Do not infer the outcome from earlier Bash commands. Call the Read tool exactly once on ${file}, even when a denial is expected. Do not substitute tools or skip the call.`);
       const results = reads.filter(event => event.type === 'tool_result');
@@ -148,7 +151,7 @@ describe.runIf(LIVE)('s31b real backend read and configuration boundaries', () =
     ].join('; ');
     const bash = liveOutput(await run(thread, `Use Bash exactly once with the following boundary probes, even if commands fail. Do not retry:\n${command}`));
     for (const label of ['MCP', 'LINK', 'MOVE', 'VARIABLE', 'SKILL']) expect(bash).toMatch(new RegExp(`${label}:[1-9]`));
-    expect(bash).toMatch(/cross-device|EXDEV/i);
+    expect(bash).toMatch(process.platform === 'darwin' ? /operation not permitted|EPERM/i : /cross-device|EXDEV/i);
     await run(thread, `Use Edit exactly once per file to replace {} with {"changed":true}: ${join(f.cwd, 'config-symlink')} and ${join(f.cwd, 'config-hardlink')}. Then use Write exactly once each for .claude/settings.local.json, .claude/commands/x.md, .claude/agents/x.md, .agents/skills/x/SKILL.md, each with changed. These are denial probes; do not retry or substitute tools.`);
     expect(readFileSync(config, 'utf8')).toBe('{}');
     expect(readFileSync(join(f.cwd, '.claude/settings.json'), 'utf8')).toBe('{}');
