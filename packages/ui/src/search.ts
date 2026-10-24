@@ -10,6 +10,9 @@ export type SearchEntry = {id: string; title: string; context: string; aliases: 
 export const settingAnchor = (title: string) => `setting-${encodeURIComponent(title)}`;
 /** One bot's section on the 状态与诊断 page. */
 export const diagnosticsSection = (agentId: string) => `Bot 状态 ${agentId}`;
+/** Shared model configuration opened from a group's decision Provider. */
+export const decisionProviderSection = (provider?: string) =>
+  provider && ['codex-appserver', 'claude-agent', 'typesafe'].includes(provider) ? `决策配置 ${provider}` : 'Provider 配置';
 
 type Target = {title: string; aliases?: readonly string[]; reveal?: SearchReveal; guide?: string; field?: string};
 type Group = {title: string; aliases?: readonly string[]; fields: readonly Target[]; smartOnly?: boolean; ordinaryOnly?: boolean};
