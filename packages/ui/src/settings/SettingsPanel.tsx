@@ -33,6 +33,7 @@ import {JudgeModelChoice} from './JudgeModelChoice';
 import {SettingChoices} from './SettingChoices';
 import {NativePermissionFields, nativePermissionPatch} from './NativePermissionFields';
 import {AnnouncedReadonlyMessages, hasReadonlyMessage, type ReadonlyMessage} from './readonly-messages';
+import './permission-summary.css';
 
 type AgentScope = { kind: "agent"; botId: AgentId };
 type ProjectScope = { kind: "project"; botId: AgentId; projectName: string };
@@ -110,6 +111,8 @@ export function Editor<T extends object>({
   showSave = false,
   savedNotice,
   initialDraft,
+  renderLayout,
+  prepareSave,
 }: {
   title: string;
   section: Section<T>;
@@ -119,6 +122,7 @@ export function Editor<T extends object>({
     disabled: boolean,
     commit: (patch: Partial<T>) => Promise<void>,
     resetKey: string,
+    discard: () => void,
   ) => ReactNode;
   save: (patch: Partial<T>, revision: string) => Promise<SettingsReply>;
   validate?: (value: T) => string | undefined;
@@ -129,6 +133,10 @@ export function Editor<T extends object>({
   savedNotice?: (stored: T) => string | undefined;
   /** Text shown in the form from the start but not saved until the person saves (a prefilled draft). */
   initialDraft?: Partial<T>;
+  /** A dialog can own its header and footer while reusing draft and revision handling. */
+  renderLayout?: (editor: {content: ReactNode; submit: () => Promise<boolean>; discard: () => void; pending: boolean; canSave: boolean}) => ReactNode;
+  /** Build a payload from the complete selected form value, before sparse-draft keys are lost. */
+  prepareSave?: (patch: Partial<T>, value: T) => Partial<T>;
 }) {
   const announcedReadonly = useContext(AnnouncedReadonlyMessages);
   const [confirmed, setConfirmed] = useState(section);
@@ -192,7 +200,7 @@ export function Editor<T extends object>({
     setImmediate({kind: 'pending', patch});
     setError(undefined); setNotice(undefined);
     try {
-      const reply = await save(patch, confirmed.revision);
+      const reply = await save(prepareSave ? prepareSave(patch, {...value, ...patch}) : patch, confirmed.revision);
       if (accept(reply)) setImmediate({kind: 'idle'});
       else {
         noteConflict(reply);
@@ -207,7 +215,7 @@ export function Editor<T extends object>({
     const patch = immediate.patch;
     setImmediate({kind: 'pending', patch});
     try {
-      const reply = await save(patch, confirmed.revision);
+      const reply = await save(prepareSave ? prepareSave(patch, {...value, ...patch}) : patch, confirmed.revision);
       if (accept(reply) && reply.kind === 'saved' && reply.result.kind === 'saved') {
         setImmediate({kind: 'idle'});
         return reply.result.section.value.revision;
@@ -235,7 +243,7 @@ export function Editor<T extends object>({
     setError(undefined);
     setNotice(undefined);
     try {
-      const result = await save(patch, revision);
+      const result = await save(prepareSave ? prepareSave(patch, value) : patch, revision);
       noteConflict(result);
       const failure = errorText(result);
       if (failure) { setError(failure); return false; }
@@ -266,18 +274,18 @@ export function Editor<T extends object>({
     setError(undefined);
   }
   useDraft(guarded, {title, save: submit, discard});
-  return (
+  const content = (
     <SettingsGroup
-      id={settingAnchor(title)}
-      label={title}
+      id={renderLayout ? undefined : settingAnchor(title)}
+      label={renderLayout ? undefined : title}
       footer={
         section.access.kind === "readonly"
           ? hasReadonlyMessage(announcedReadonly, section.access) ? undefined : section.access.message
           : effectText(section) === '下一条消息生效' ? undefined : effectText(section)
       }
     >
-      {render(value, edit, disabled, commit, `${confirmed.revision}:${discardVersion}`)}
-      {(dirty || allowUnchanged || showSave) && <div className="settings-edit-actions">
+      {render(value, edit, disabled, commit, `${confirmed.revision}:${discardVersion}`, discard)}
+      {!renderLayout && (dirty || allowUnchanged || showSave) && <div className="settings-edit-actions">
         {dirty && <Button
           size="sm"
           disabled={!dirty || disabled}
@@ -314,6 +322,7 @@ export function Editor<T extends object>({
       {notice && <InlineNotice title="本次修改已保存">{notice}{dirty ? ' 其他修改尚未保存。' : ''}</InlineNotice>}
     </SettingsGroup>
   );
+  return renderLayout ? renderLayout({content, submit, discard, pending: pendingManual || immediate.kind === 'pending', canSave: !disabled && (dirty || allowUnchanged)}) : content;
 }
 export function Text({
   label,
@@ -1159,19 +1168,66 @@ export function NativePermissionEditor({section, provider, save}: {section: Sect
 // Intent: the group owner compares the provider's three levels before granting access.
 // Hierarchy: level names lead; native names and enforcement stay secondary. Existing
 // surface/border tokens, system type and 4px spacing keep this within the settings UI.
-export function PermissionFields({value, disabled, onChange}: {value: PermissionView; disabled: boolean; onChange: (patch: Pick<PermissionView, 'mode'>) => void}) {
+export function PermissionFields({value, disabled, onChange, provider}: {value: PermissionView; disabled: boolean; onChange: (patch: Partial<Pick<PermissionView, 'mode' | 'custom'>>) => void; provider?: string}) {
   const {options} = value;
-  return <>
-    {options.invalid ? <p className="permission-note" role="status">高级设置读不出来，现在按只读跑。选一档重新设置。</p>
-      : value.custom && <p className="permission-note" role="status">自定义：{options.customSummary}{options.legacy && '（从旧版的联网开关转来）'}</p>}
-    <SettingsRow className="group-choice-row" title="权限" trailing={<SettingChoices
-      label="权限" stacked value={value.custom || options.invalid ? '' : value.mode} disabled={disabled}
-      choices={options.tiers.map(tier => ({value: tier.tier, label: tier.name, disabled: Boolean(tier.unavailable), description: <>
+  const fields = options.fields ?? [];
+  type Choice = PermissionView['mode'] | 'custom';
+  const choices: {value: Choice; label: string; disabled?: boolean; description: ReactNode}[] = options.tiers.map(tier => ({value: tier.tier, label: tier.name, disabled: Boolean(tier.unavailable), description: <>
         <small>{tier.summary}</small>{tier.native && <small>{tier.native}</small>}{tier.unavailable && <small>{tier.unavailable}</small>}
-      </>}))}
-      onChange={mode => onChange({mode})}
-    />}/>
+      </>}));
+  if (fields.length || value.custom) choices.push({value: 'custom', label: '自定义', disabled: !fields.length, description: <small>{fields.length ? `使用${provider ? ` ${provider} ` : ' Provider '}提供的原生设置。` : '当前 Provider 未提供可编辑字段，仅可查看已保存的设置。'}</small>});
+  return <div className="permission-fields">
+    {options.invalid && <p className="permission-note" role="status">自定义设置读不出来，现在按只读跑。选择预设重新设置。</p>}
+    <SettingChoices<Choice> label="权限" stacked value={options.invalid ? '' : value.custom ? 'custom' : value.mode} disabled={disabled}
+      choices={choices} onChange={choice => choice === 'custom' ? onChange({custom: {...(value.custom ?? options.expanded[value.mode])}}) : onChange({mode: choice})}/>
+    {value.custom && <section className="permission-custom-fields" aria-label="自定义权限设置">
+      {fields.length ? <>
+        <p className="permission-note">这里只列{provider ? ` ${provider} ` : ' Provider '}自己支持的设置。群里没人确认，要确认的操作一律拒绝。换 Provider 时会清掉自定义设置。</p>
+        <NativePermissionFields fields={fields} value={value.custom} disabled={disabled} onChange={custom => onChange({custom})}/>
+      </> : <p className="permission-note">自定义：{options.customSummary}</p>}
+      {options.legacy && <p className="permission-note">当前自定义设置从旧版的联网开关转来。</p>}
+    </section>}
     <p className="permission-note" id={settingAnchor('能挡到什么')}>能挡到什么：{options.strength}</p>
+  </div>;
+}
+
+/** Keep the current grant readable; compare the provider's levels only while editing. */
+export function PermissionSummary({section, provider, save}: {section: Section<PermissionView>; provider: string; save: (patch: Partial<PermissionView>, revision: string) => Promise<SettingsReply>}) {
+  const [open, setOpen] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [editSession, setEditSession] = useState(0);
+  const discardChoice = useRef<(() => void) | undefined>(undefined);
+  const announcedReadonly = useContext(AnnouncedReadonlyMessages);
+  const value = section.stored;
+  const currentTier = value.options.tiers.find(tier => tier.tier === value.mode);
+  const invalid = Boolean(value.options.invalid);
+  const description = invalid ? '自定义设置读不出来，现在按只读运行。'
+    : value.custom ? value.options.customSummary : currentTier?.summary;
+  const close = () => {if (!pending) {discardChoice.current?.(); setOpen(false);}};
+  async function savePermission(patch: Partial<PermissionView>, revision: string) {
+    setPending(true);
+    try {return await save(patch, revision);}
+    finally {setPending(false);}
+  }
+  return <>
+    <SettingsGroup label="执行权限" id={settingAnchor('权限')} className="permission-summary"
+      footer={section.access.kind === 'readonly' && !hasReadonlyMessage(announcedReadonly, section.access) ? section.access.message : undefined}>
+      <SettingsRow title={invalid ? '只读（设置异常）' : value.custom ? '自定义权限' : currentTier?.name ?? value.mode}
+        description={description}
+        trailing={<span data-search-title="修改权限"><Button size="sm" onClick={() => {setEditSession(session => session + 1); setOpen(true);}}>{section.access.kind === 'readonly' ? '查看权限' : '修改权限'}</Button></span>}/>
+    </SettingsGroup>
+    <Editor key={editSession} title="执行权限" section={section} save={savePermission} afterSave={async () => setOpen(false)}
+      prepareSave={(_patch, draft) => draft.custom ? {custom: nativePermissionPatch(draft.options.fields ?? [], draft.custom)} : {mode: draft.mode}}
+      validate={draft => draft.custom && !draft.options.fields?.length ? '当前 Provider 未提供可编辑的自定义权限，请选择预设。' : undefined}
+      render={(draft, set, disabled) => <PermissionFields value={draft} provider={provider} disabled={disabled}
+        onChange={patch => set({...draft, ...patch, ...(patch.mode ? {custom: null} : {}), options: draft.options.invalid ? {...draft.options, invalid: false} : draft.options})}/>}
+      renderLayout={editor => {
+        discardChoice.current = editor.discard;
+        return <Dialog open={open} title="执行权限" description={section.access.kind === 'readonly' ? section.access.message : `设置 ${provider} 在本群中的执行范围，选择预设或自定义后保存。`} onClose={pending || editor.pending ? undefined : close}
+          footer={<><Button disabled={pending || editor.pending} onClick={close}>取消</Button><Button variant="primary" loading={pending || editor.pending} disabled={!editor.canSave} onClick={() => void editor.submit()}>保存权限</Button></>}>
+          <div className="permission-dialog">{editor.content}</div>
+        </Dialog>;
+      }}/>
   </>;
 }
 
@@ -1290,14 +1346,7 @@ export function ProjectPanel({
       <details className="membership-settings-details"><summary>话题模型</summary><SessionPicker view={view} /></details>
       </>}
       {(!partition || partition === 'permission') && <>
-      {!partition && <h2 className="membership-settings-heading">权限</h2>}
-      <Editor
-        title="权限"
-        section={permission}
-        save={(draft, revision) => save("permission", draft, revision)}
-        render={(draft, _set, disabled, commit) => <PermissionFields value={draft} disabled={disabled} onChange={patch => void commit(patch)}/>}
-      />
-      <NativePermissionEditor section={permission} provider={backendLabel(view.identity.backend)} save={(patch, revision) => save('permission', patch, revision)}/>
+      <PermissionSummary section={permission} provider={backendLabel(view.identity.backend)} save={(patch, revision) => save('permission', patch, revision)}/>
       </>}
       {(!partition || partition === 'members') && <>
       {!partition && <h2 className="membership-settings-heading">回复规则</h2>}
