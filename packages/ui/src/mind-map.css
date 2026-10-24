@@ -56,22 +56,10 @@
   .mm-box { max-width: min(360px, 100%); width: max-content; }
 }
 
-/* Toolbar, add form, side panel */
-.memory-map { display: grid; gap: var(--space-3); min-width: 0; container-type: inline-size; }
-.memory-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
-.memory-search { display: inline-flex; align-items: center; gap: 5px; min-height: 30px; padding: 0 8px; border: 1px solid var(--color-border); border-radius: 8px; color: var(--color-text-secondary); }
-.memory-search input { width: 140px; border: 0; background: none; font: inherit; font-size: 12px; color: var(--color-text); outline: none; }
-.memory-body { display: grid; align-items: start; gap: var(--space-4); min-width: 0; }
-.memory-canvas { min-width: 0; }
-.memory-panel { min-width: 0; display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-surface); }
-.memory-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); font-size: 13px; }
-.memory-panel h3 { margin: 0; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
-.memory-panel h4 { margin: 6px 0 0; font-size: 12px; }
-.memory-source, .memory-history { display: grid; gap: 4px; margin: 0; padding-left: 16px; font-size: 12px; line-height: 1.55; color: var(--color-text-secondary); }
-.memory-history > li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.memory-role-panel { display: grid; gap: 8px; }
-/* Keep the full map visible in the app's usual window; a wide canvas can host the details beside it. */
-@container (min-width: 1200px) { .memory-body:has(.memory-panel) { grid-template-columns: minmax(0, 1fr) 320px; } }
+/* The memory page has one canvas; all controls and feedback belong to its nodes. */
+.memory-map, .memory-canvas { min-width: 0; }
+.mm-search-input { width: 180px; min-width: 80px; border: 0; padding: 2px 0; background: transparent; color: inherit; font: inherit; outline: none; }
+.mm-box[data-kind=action]:not([data-selected]) { background: transparent; }
 
 /* 模型看到什么 (§5.5) */
 .context-panel { display: grid; gap: 10px; min-width: 0; }
@@ -90,7 +78,6 @@
 /* Immediate, quiet feedback keeps the diagram anchored while the user works. */
 .mm-fold:active, .mm-menu > summary:active { background: var(--color-surface-muted); }
 .mm :is(button, summary):focus-visible { outline: 2px solid var(--mm-accent); outline-offset: 2px; }
-.memory-search:focus-within { border-color: var(--color-accent); outline: 2px solid color-mix(in srgb, var(--color-accent) 25%, transparent); }
 @media (prefers-contrast: more) {
   .mm-links { color: var(--color-text-secondary); }
   .mm-box { border-color: var(--color-text-secondary); }

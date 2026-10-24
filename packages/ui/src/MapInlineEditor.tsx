@@ -10,6 +10,7 @@ export function MapInlineEditor({value, label = '编辑节点', busy = false, po
   session?: RefObject<MapInlineEditorSession | null>;
 }) {
   const initial = useRef(value);
+  const sessionHandle = useRef<MapInlineEditorSession | null>(null);
   const editor = useRef<HTMLSpanElement>(null);
   const submitting = useRef<Promise<boolean> | null>(null);
   const composing = useRef(false);
@@ -33,7 +34,8 @@ export function MapInlineEditor({value, label = '编辑节点', busy = false, po
   }, []);
   useLayoutEffect(() => {
     if (!session) return;
-    const handle: MapInlineEditorSession = {commit: () => commit(), focus: () => editor.current?.focus({preventScroll: true})};
+    const handle = sessionHandle.current ??= {commit: () => commit(), focus: () => editor.current?.focus({preventScroll: true})};
+    handle.commit = () => commit();
     session.current = handle;
     return () => {if (session.current === handle) session.current = null;};
   });

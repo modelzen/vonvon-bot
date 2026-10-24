@@ -19,6 +19,7 @@ vi.mock('react', async original => {
     useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => {const i = h.ei++; const old = h.effects[i]; if (old?.deps && deps && deps.every((value, at) => Object.is(value, old.deps![at]))) return; h.pending.push(() => {old?.cleanup?.(); h.effects[i] = {deps, cleanup: effect() || undefined};});},
   };
 });
+vi.mock('../src/settings/DraftGuard', () => ({useInlineDraft: () => {}}));
 vi.mock('../src/client-context', () => ({useClient: () => h.client, useShellCapabilities: () => ({})}));
 
 type Element = ReactElement<Record<string, any>>;
@@ -125,7 +126,7 @@ it.each(['keyboard', 'menu'] as const)('successful %s leaf archive clears that l
   leaf.onClick?.();
   leaf = find(render(), 'i:a');
   if (path === 'keyboard') {leaf.onEdit?.(); expect(find(render(), 'i:a').content).toBeDefined();}
-  else {leaf.menu!.find(action => action.id === 'details')!.onSelect(); expect(renderPage().all.some(element => element.type === 'aside')).toBe(true);}
+  else {leaf.menu!.find(action => action.id === 'details')!.onSelect(); expect(find(render(), 'i:a').children?.length).toBeGreaterThan(0);}
   leaf = find(render(), 'i:a');
   if (path === 'keyboard') leaf.onDelete?.(); else leaf.menu!.find(action => action.id === 'delete')!.onSelect();
   await flush();
@@ -150,7 +151,7 @@ it.each(['keyboard', 'menu'] as const)('failed %s leaf archive keeps its selecti
   const after = renderPage();
   expect(find(after.root, 'i:a').selected).toBe(true);
   if (path === 'keyboard') expect(find(after.root, 'i:a').content).toBeDefined();
-  else expect(after.all.some(element => element.type === 'aside')).toBe(true);
+  else expect(find(after.root, 'i:a').children?.length).toBeGreaterThan(0);
   expect(h.client.memory.mock.calls.filter(([request]) => request.type === 'archive')).toHaveLength(1);
 });
 
@@ -236,4 +237,26 @@ it('clears a validation notice when the original valid text is restored', async 
   expect(await editor(find(render(), 'i:a')).onCommit('记忆 a')).toBe(true);
   expect(h.state).not.toContain('记忆内容不能为空。');
   expect(find(render(), 'i:a').content).toBeUndefined();
+});
+
+
+it('keeps search and feedback inside the tree without an external frame', async () => {
+  render(); await flush();
+  render().menu!.find(entry => entry.id === 'search')!.onSelect();
+  const page = renderPage();
+  expect(find(page.root, 'search').content).toBeDefined();
+  expect(page.all.some(element => ['aside', 'input', 'dialog'].includes(String(element.type)))).toBe(false);
+});
+
+it('commits a memory draft before opening a page-owned role node', async () => {
+  const onClick = vi.fn();
+  const before: MapNode[] = [{id: 'role', kind: 'leaf', label: '角色', onClick}];
+  render({before}); await flush(); find(render({before}), 'i:a').onEdit?.();
+  const draft = editor(find(render({before}), 'i:a'));
+  const focus = vi.fn(); draft.session.current = {commit: async () => false, focus};
+  find(render({before}), 'role').onClick?.(); await flush();
+  expect(onClick).not.toHaveBeenCalled(); expect(focus).toHaveBeenCalledOnce();
+  draft.session.current = {commit: () => draft.onCommit('记忆 a'), focus};
+  find(render({before}), 'role').onClick?.(); await flush();
+  expect(onClick).toHaveBeenCalledOnce();
 });
