@@ -103,11 +103,11 @@ it('keeps one primary among peer directories and no primary repository', () => {
   expect(repositories).not.toContain('设为主目录');
   expect(html).not.toContain('附加目录');
 });
-it('shows independent compact model and Effort summaries without permanently listing every catalog option', () => {
+it('shows full selected model names and edits Effort directly without listing unselected models', () => {
   const html = renderToStaticMarkup(<ModelAccessChoices value={{backend: catalog.backend, models: ['actual-a', 'actual-b'], efforts: ['low']}} catalog={catalog} disabled={false} onChange={() => {}}/>);
   expect(html).toContain('思考强度'); expect(html).toContain('Effort');
-  expect(html).toContain('选择模型'); expect(html).toContain('选择强度');
-  expect(html).not.toContain('type="checkbox"');
+  expect(html).toContain('选择模型'); expect(html).not.toContain('选择强度');
+  expect(html).toContain('允许本群使用 low Effort'); expect(html).toContain('允许本群使用 high Effort');
   expect(html).toContain('实际模型 A'); expect(html).toContain('实际模型 B');
   expect(html).not.toContain('无 Effort 模型');
   expect(html).toContain('请选择 实际模型 B 支持的 Effort');

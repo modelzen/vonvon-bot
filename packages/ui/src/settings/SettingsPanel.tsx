@@ -445,6 +445,7 @@ export function Catalog({
   const client = useClient();
   const [catalog, setCatalog] = useState<ModelCatalog>();
   const [error, setError] = useState<string>();
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let active = true;
     setCatalog(undefined);
@@ -468,14 +469,17 @@ export function Catalog({
     return () => {
       active = false;
     };
-  }, [botId, backend, purpose]);
+  }, [client, botId, backend, purpose, attempt]);
+  const unavailable = catalog && catalog.state !== "ready";
   return (
     <>
-      {error && (
-        <InlineNotice title="模型目录暂不可用" tone="warning">
-          {error}
-        </InlineNotice>
+      {(error || unavailable) && (
+        <div className="gd-model-catalog-status" role="status">
+          <span>{error || catalog?.error || '暂时无法读取模型，已保存的选择仍保留。'}</span>
+          <Button size="sm" variant="ghost" onClick={() => setAttempt(value => value + 1)}>重新读取</Button>
+        </div>
       )}
+      {!catalog && !error && <p className="gd-model-compact-note" role="status">正在读取模型…</p>}
       {children(catalog)}
     </>
   );
@@ -1168,6 +1172,16 @@ export function NativePermissionEditor({section, provider, save}: {section: Sect
 // Intent: the group owner compares the provider's three levels before granting access.
 // Hierarchy: level names lead; native names and enforcement stay secondary. Existing
 // surface/border tokens, system type and 4px spacing keep this within the settings UI.
+function hasAdditionalPermissionChoices(value: PermissionView): boolean {
+  const fields = value.options.fields ?? [];
+  if (!fields.length) return false;
+  // A single unconditional choice adds nothing when every native value is already
+  // one of the three presets. Other field shapes can form new combinations.
+  const field = fields[0];
+  if (fields.length !== 1 || !field || field.kind !== 'choice' || field.showWhen || !field.choices?.length) return true;
+  const presets = Object.values(value.options.expanded).map(expanded => nativePermissionPatch(fields, expanded)[field.key]);
+  return field.choices.some(choice => !presets.includes(choice.value));
+}
 export function PermissionFields({value, disabled, onChange, provider}: {value: PermissionView; disabled: boolean; onChange: (patch: Partial<Pick<PermissionView, 'mode' | 'custom'>>) => void; provider?: string}) {
   const {options} = value;
   const fields = options.fields ?? [];
@@ -1175,7 +1189,7 @@ export function PermissionFields({value, disabled, onChange, provider}: {value: 
   const choices: {value: Choice; label: string; disabled?: boolean; description: ReactNode}[] = options.tiers.map(tier => ({value: tier.tier, label: tier.name, disabled: Boolean(tier.unavailable), description: <>
         <small>{tier.summary}</small>{tier.native && <small>{tier.native}</small>}{tier.unavailable && <small>{tier.unavailable}</small>}
       </>}));
-  if (fields.length || value.custom) choices.push({value: 'custom', label: '自定义', disabled: !fields.length, description: <small>{fields.length ? `使用${provider ? ` ${provider} ` : ' Provider '}提供的原生设置。` : '当前 Provider 未提供可编辑字段，仅可查看已保存的设置。'}</small>});
+  if (hasAdditionalPermissionChoices(value) || value.custom || options.invalid) choices.push({value: 'custom', label: '自定义', disabled: !fields.length, description: <small>{fields.length ? `使用${provider ? ` ${provider} ` : ' Provider '}提供的原生设置。` : '当前 Provider 未提供可编辑字段，仅可查看已保存的设置。'}</small>});
   return <div className="permission-fields">
     {options.invalid && <p className="permission-note" role="status">自定义设置读不出来，现在按只读跑。选择预设重新设置。</p>}
     <SettingChoices<Choice> label="权限" stacked value={options.invalid ? '' : value.custom ? 'custom' : value.mode} disabled={disabled}
@@ -1223,7 +1237,7 @@ export function PermissionSummary({section, provider, save}: {section: Section<P
         onChange={patch => set({...draft, ...patch, ...(patch.mode ? {custom: null} : {}), options: draft.options.invalid ? {...draft.options, invalid: false} : draft.options})}/>}
       renderLayout={editor => {
         discardChoice.current = editor.discard;
-        return <Dialog open={open} title="执行权限" description={section.access.kind === 'readonly' ? section.access.message : `设置 ${provider} 在本群中的执行范围，选择预设或自定义后保存。`} onClose={pending || editor.pending ? undefined : close}
+        return <Dialog open={open} title="执行权限" description={section.access.kind === 'readonly' ? section.access.message : `设置 ${provider} 在本群中的执行范围，选择所需权限后保存。`} onClose={pending || editor.pending ? undefined : close}
           footer={<><Button disabled={pending || editor.pending} onClick={close}>取消</Button><Button variant="primary" loading={pending || editor.pending} disabled={!editor.canSave} onClick={() => void editor.submit()}>保存权限</Button></>}>
           <div className="permission-dialog">{editor.content}</div>
         </Dialog>;

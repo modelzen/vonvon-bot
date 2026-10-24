@@ -53,6 +53,45 @@ it("shows provider names and summaries in one tier group, with no network switch
   expect(html).not.toContain("管理员权限");
 });
 
+it('omits custom when its sole native choice only repeats the three presets', () => {
+  const permission = permissionValue('write');
+  permission.options.fields = [{key: 'sandbox', label: '沙箱', native: 'sandbox', kind: 'choice', choices: [
+    {value: 'read-only', label: '只读', native: 'read-only'},
+    {value: 'workspace-write', label: '工作区可写', native: 'workspace-write'},
+    {value: 'danger-full-access', label: '完全访问', native: 'danger-full-access'},
+  ]}];
+  permission.options.expanded = {
+    qa: {sandbox: 'read-only'}, write: {sandbox: 'workspace-write'}, full: {sandbox: 'danger-full-access'},
+  };
+  expect(radio(render(permission), 'custom')).toBe('');
+
+  permission.custom = {sandbox: 'workspace-write'};
+  expect(radio(render(permission), 'custom')).toContain('checked=""');
+  permission.custom = null;
+  permission.options.invalid = true;
+  expect(radio(render(permission), 'custom')).not.toBe('');
+});
+
+it('keeps custom for independent fields, extra native values and conditional choices', () => {
+  const permission = permissionValue('write');
+  permission.options.fields = [{key: 'sandbox', label: '沙箱', native: 'sandbox', kind: 'choice', choices: [
+    {value: 'read-only', label: '只读', native: 'read-only'},
+    {value: 'workspace-write', label: '工作区可写', native: 'workspace-write'},
+    {value: 'danger-full-access', label: '完全访问', native: 'danger-full-access'},
+  ]}];
+  permission.options.expanded = {
+    qa: {sandbox: 'read-only'}, write: {sandbox: 'workspace-write'}, full: {sandbox: 'danger-full-access'},
+  };
+  permission.options.fields.push({key: 'network', label: '网络', native: 'network', kind: 'switch'});
+  expect(radio(render(permission), 'custom')).not.toBe('');
+  permission.options.fields.pop();
+  permission.options.fields[0]!.choices!.push({value: 'limited', label: '受限', native: 'limited'});
+  expect(radio(render(permission), 'custom')).not.toBe('');
+  permission.options.fields[0]!.choices!.pop();
+  permission.options.fields[0]!.showWhen = {key: 'network', in: [true]};
+  expect(radio(render(permission), 'custom')).not.toBe('');
+});
+
 it("ignores the deprecated identity.fullOnly field when the table offers every tier", () => {
   const html = renderPanel(permissionValue('qa'), REASON);
   expect(html).toContain('只读');
