@@ -37,7 +37,7 @@ const projectGroups: readonly Group[] = [
 ];
 const membershipGroups: readonly Group[] = [
   {title: '群设置', aliases: ['群绑定'], fields: [item('在本群使用', ['启用', '停用', '在这个群中使用 Bot'], {field: ''})]},
-  {title: '技能', aliases: ['能力', 'Skill'], fields: [item('添加技能', ['添加 Skill']), item('使用技能', ['启用技能', '关闭技能'], {field: ''})]},
+  {title: '技能', aliases: ['能力', 'Skill'], fields: [item('使用技能', ['启用技能', '关闭技能'], {field: ''})]},
   {title: '语音', fields: [item('语音转文字', ['启用语音', '语音识别'])]},
   {title: '本群角色', aliases: ['本群职责', '角色补充', '补充职责', '本群个性'], fields: [item('本群角色', ['本群个性', '补充职责'], {field: ''})]},
   {title: '记忆', aliases: ['思维导图'], fields: [item('项目记忆', ['群记忆', '记忆导图'], {field: ''})]},

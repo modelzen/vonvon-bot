@@ -17,7 +17,6 @@ import { assemble, judgeContext, loadContextSources, openingInstructions, planTu
 import { groupSkillProfile } from '../agent/group-skills';
 import { parseStoredJudge } from '../judge/model';
 import { presentationConfig } from './group-presentation';
-import { createSkillChat } from './skill-chat';
 import { projectRevision, projectView, type CollaborationRequest } from '../admin/collaboration';
 import { AdminWriteError } from '../admin/ops';
 import { applyMirror, mirrorProjectIntoBot, siblingProjectOfChat, type AdminLibraryOp } from '../admin/library';
@@ -1522,9 +1521,6 @@ export function createOrchestrator(
   // then commits it to LIVE — concurrent clicks cannot erase one another.
   const writePreferences = createAppPreferencesWriter({ cfg });
   const voice = createVoiceService(cfg, writePreferences);
-  const skillChat = createSkillChat({ cfg, backendFor, project: getProjectByChatId,
-    send: async (chatId, text, replyTo) => { await channel.send(chatId, { markdown: text }, { replyTo }); } });
-  onStop.add(() => { void skillChat.close(); });
   const orderContext = createIntakeQueue();
   const orderTurns = createIntakeQueue();
   // pendingPolicy is read per-message (settings card can change it live)
@@ -2461,7 +2457,6 @@ export function createOrchestrator(
     if (msg.chatType === 'p2p') {
       if (await syncCopy.skip(msg, true)) return;
       if (!fromBot(msg) && typedCandidate(msg) && asks.dmText({ openId: msg.senderId, text: msg.content.trim(), messageId: msg.messageId, createTime: msg.createTime })) return;
-      if (!fromBot(msg) && typedCandidate(msg) && await skillChat.handle(msg)) return;
       await handleDmConsole(channel, cfg, msg);
       return;
     }
@@ -8912,7 +8907,6 @@ export function createOrchestrator(
       try { cleanup.push(operation()); }
       catch (error) { shutdownErrors.add(error); }
     };
-    startCleanup(() => skillChat.close());
     startCleanup(closeOwnedProviderProcesses);
     startCleanup(shutdownResidentClients);
     const dropped = { queued: 0, held: 0, compacts: 0 };

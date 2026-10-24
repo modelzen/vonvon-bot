@@ -81,10 +81,6 @@
 .gd-prompt { display: grid; gap: 9px; padding: 14px 16px; }
 .gd-prompt > span { font-size: 13px; font-weight: 500; }
 .gd-prompt textarea { min-height: 110px; padding: 10px 12px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-surface); }
-.gd-target { padding: 14px; background: var(--color-surface-muted); border: 1px solid var(--color-border); border-radius: 8px; font-size: 13px; }
-.gd-target small { display: block; font-size: 11px; color: var(--color-text-secondary); margin-top: 4px; }
-.gd-add-skill { display: grid; gap: 14px; }
-.gd-add-skill p { margin: 0; font-size: 13px; line-height: 1.6; }
 @media (hover: hover) and (pointer: fine) {
   .gd-text-action:not(:disabled):hover, .gd-icon-action:not(:disabled):hover { background: var(--color-surface-muted); color: var(--color-text); }
   .gd-skill-detail:hover strong { color: var(--color-accent); }
@@ -140,3 +136,4 @@
 .gd-decision-config-link::after { content: ''; position: absolute; inset: -6px 0; }
 .gd-decision-config-link > span { display: inline-flex; align-items: center; gap: 2px; }
 
+.gd-provider-discovery { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.6; }
