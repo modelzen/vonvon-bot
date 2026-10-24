@@ -1,7 +1,7 @@
 import {expect, it, vi} from 'vitest';
 import type {MemoryItem, MemoryReply} from '@vonvon/protocol';
 import {
-  archiveBranchItems, branchCanChange, branchNameProblem, branchViews, downgradeText, exportFileName, LEAF_LIMIT, leafActions, mergeTargets, moveRequest, roleUsage, runMemory, searchPlan, shownLeaves, sourceLines, sourceProject,
+  archiveBranchItems, branchCanChange, branchNameProblem, branchViews, downgradeText, exportFileName, joinMarks, LEAF_LIMIT, leafActions, mergeTargets, moveRequest, roleUsage, runMemory, sameJson, searchPlan, shownLeaves, sourceLines, sourceProject,
 } from '../src/memory-model';
 import {memoryNodes} from '../src/memory-nodes';
 import type {MapNode} from '../src/MindMap';
@@ -24,6 +24,28 @@ it('lists the fixed branches first and always, newest leaf first, with the archi
   expect(branches[1]!.items).toEqual([]);
   expect(branches[3]).toMatchObject({fixed: false, pending: 1});
   expect(archived.map(view => [view.name, view.items.length])).toEqual([['决定', 1]]);
+});
+
+it('groups many historical archived categories without reviving them in the active map', () => {
+  const archived = Array.from({length: 200}, (_, at) => item(`old-${at}`, `旧分类${at}`, {state: 'archived', updatedAt: at}));
+  const views = branchViews({branches: [branch('决定', true), branch('其他', true)], items: [item('active', '临时分类'), ...archived]});
+  expect(views.branches.map(view => view.name)).toEqual(['决定', '其他', '临时分类']);
+  expect(views.archived.map(view => view.name)).toEqual(archived.map(entry => entry.branch));
+  expect(views.archived.every(view => view.items.length === 1)).toBe(true);
+});
+
+it('compares all JSON fields and keeps unchanged mark sets by identity', () => {
+  const reply = {kind: 'list', items: [item('a', '决定')], branches: [branch('决定', true)], verified: true, problems: [], lastEventId: 'e1', newIds: ['a'], newBranches: [], madeRoom: []};
+  expect(sameJson(reply, {newBranches: [], madeRoom: [], ...reply})).toBe(true);
+  expect(sameJson(reply, {...reply, verified: false})).toBe(false);
+  expect(sameJson(reply, {...reply, problems: ['changed']})).toBe(false);
+  expect(sameJson(reply, {...reply, lastEventId: 'e2'})).toBe(false);
+  expect(sameJson(reply, {...reply, newIds: ['b']})).toBe(false);
+  expect(sameJson(reply, {...reply, newBranches: ['发版']})).toBe(false);
+  expect(sameJson(reply, {...reply, madeRoom: ['old']})).toBe(false);
+  const first = {ids: new Set(['a']), branches: new Set(['发版']), madeRoom: new Set<string>()};
+  expect(joinMarks(first, {ids: new Set(['a']), branches: new Set(), madeRoom: new Set()})).toBe(first);
+  expect(joinMarks(first, {ids: new Set(), branches: new Set(), madeRoom: new Set(['old'])}).madeRoom.has('old')).toBe(true);
 });
 
 it('does not resurrect an archived-only custom category in the active map, while keeping its restore path', () => {

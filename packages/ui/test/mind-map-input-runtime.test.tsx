@@ -3,6 +3,7 @@ import {MindMap, type MapNode} from '../src/MindMap';
 import {MapInlineEditor} from '../src/MapInlineEditor';
 
 vi.mock('react', async original => ({...await original<typeof import('react')>(), useId: () => 'tree', useLayoutEffect: () => {}, useState: (value: unknown) => [value, vi.fn()], useRef: (value: unknown) => ({current: value})}));
+vi.mock('../src/MindMapCanvas', () => ({useMindMapCanvas: () => ({host: {current: null}, slots: new Map()})}));
 const preventDefault = vi.fn();
 const stopPropagation = vi.fn();
 beforeEach(() => vi.clearAllMocks());

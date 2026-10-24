@@ -13,9 +13,23 @@ export type Marks = {ids: ReadonlySet<string>; branches: ReadonlySet<string>; ma
 export const noMarks: Marks = {ids: new Set(), branches: new Set(), madeRoom: new Set()};
 export const marksOf = (list: Pick<MemoryList, 'newIds' | 'newBranches' | 'madeRoom'>): Marks => ({ids: new Set(list.newIds), branches: new Set(list.newBranches), madeRoom: new Set(list.madeRoom)});
 /** Marks of the first reading stay for as long as the page is open: the 新 does not vanish when the page marks itself seen; later ones join. */
-export const joinMarks = (a: Marks, b: Marks): Marks => ({ids: new Set([...a.ids, ...b.ids]), branches: new Set([...a.branches, ...b.branches]), madeRoom: new Set([...a.madeRoom, ...b.madeRoom])});
+export const joinMarks = (a: Marks, b: Marks): Marks => {
+  const added = (left: ReadonlySet<string>, right: ReadonlySet<string>) => [...right].some(value => !left.has(value));
+  if (!added(a.ids, b.ids) && !added(a.branches, b.branches) && !added(a.madeRoom, b.madeRoom)) return a;
+  return {ids: new Set([...a.ids, ...b.ids]), branches: new Set([...a.branches, ...b.branches]), madeRoom: new Set([...a.madeRoom, ...b.madeRoom])};
+};
 /** How many leaves of a branch are new. */
 export const branchNewCount = (view: Pick<BranchView, 'items'>, marks?: Pick<Marks, 'ids'>): number => marks ? view.items.filter(item => marks.ids.has(item.id)).length : 0;
+
+/** RPC replies are JSON values; compare every field, including marks and integrity state, before replacing UI state. */
+export function sameJson(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
+  if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((value, at) => sameJson(value, b[at]));
+  const left = a as Record<string, unknown>, right = b as Record<string, unknown>;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every(key => Object.prototype.hasOwnProperty.call(right, key) && sameJson(left[key], right[key]));
+}
 
 const codePoints = (value: string) => Array.from(value).length;
 const newest = (a: MemoryItem, b: MemoryItem) => b.updatedAt - a.updatedAt || (a.id < b.id ? 1 : -1);
@@ -27,15 +41,22 @@ const newest = (a: MemoryItem, b: MemoryItem) => b.updatedAt - a.updatedAt || (a
  */
 export function branchViews(list: Pick<MemoryList, 'items' | 'branches'>): {branches: BranchView[]; archived: BranchView[]} {
   const names = list.branches.map(branch => branch.name);
-  for (const item of list.items) if (item.state === 'active' && !names.includes(item.branch)) names.push(item.branch);
+  const active = new Map<string, MemoryItem[]>(), archived = new Map<string, MemoryItem[]>();
+  const activeNames = new Set(names);
+  for (const item of list.items) {
+    const groups = item.state === 'active' ? active : archived;
+    const group = groups.get(item.branch);
+    if (group) group.push(item); else groups.set(item.branch, [item]);
+    if (item.state === 'active' && !activeNames.has(item.branch)) {names.push(item.branch); activeNames.add(item.branch);}
+  }
   const fixed = new Set(list.branches.filter(branch => branch.fixed).map(branch => branch.name));
-  const view = (name: string, state: MemoryItem['state']): BranchView => {
-    const items = list.items.filter(item => item.branch === name && item.state === state).sort(newest);
+  const view = (name: string, groups: Map<string, MemoryItem[]>): BranchView => {
+    const items = [...(groups.get(name) ?? [])].sort(newest);
     return {name, fixed: fixed.has(name), items, pending: items.filter(item => item.trust === 'untrusted').length};
   };
   const ordered = [...names.filter(name => fixed.has(name)), ...names.filter(name => !fixed.has(name))];
-  const archivedNames = [...new Set([...ordered, ...list.items.filter(item => item.state === 'archived').map(item => item.branch)])];
-  return {branches: ordered.map(name => view(name, 'active')), archived: archivedNames.map(name => view(name, 'archived')).filter(branch => branch.items.length)};
+  const archivedNames = [...new Set([...ordered, ...archived.keys()])];
+  return {branches: ordered.map(name => view(name, active)), archived: archivedNames.filter(name => archived.has(name)).map(name => view(name, archived))};
 }
 
 /** The leaves a branch draws: its newest 8, or all of them once 还有 N 条 was opened or a search wants the matches seen. */
