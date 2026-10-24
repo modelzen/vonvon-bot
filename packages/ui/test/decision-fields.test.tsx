@@ -27,10 +27,28 @@ beforeEach(() => {
 });
 it('starts unselected and writes only the chosen judgment Provider', () => {
   expect(choice().props.value).toBe('');
+  expect(choice().props.choices.map((item: {value: string; label: string}) => [item.value, item.label])).toEqual([
+    [codex.id, 'Codex'], [claude.id, 'Claude'], ['typesafe', 'Jev'],
+  ]);
+  expect(changed).not.toHaveBeenCalled();
+  expect(render().some(node => node.props.children === '选择一个已就绪的 Provider。')).toBe(true);
   choice().props.onChange(codex.id);
   expect(changed).toHaveBeenCalledExactlyOnceWith({kind: 'provider', provider: codex.id});
   expect(choice().props.value).toBe(codex.id);
   expect(render().some(node => node.props.label === '决策模型' || node.props.label === '决策 Effort')).toBe(false);
+});
+it('keeps Jev selection explicit and preserves readonly Provider choices', () => {
+  props.services = services.map(service => ({...service, keySet: true}));
+  expect(choice().props.value).toBe('');
+  expect(changed).not.toHaveBeenCalled();
+  choice().props.onChange('typesafe');
+  expect(changed).toHaveBeenCalledExactlyOnceWith({kind: 'provider', provider: 'typesafe'});
+  expect(choice().props.value).toBe('typesafe');
+  changed.mockClear();
+  props.disabled = true;
+  expect(choice().props.disabled).toBe(true);
+  choice().props.onChange(codex.id);
+  expect(changed).not.toHaveBeenCalled();
 });
 it('disables providers that are not ready in the current snapshot or service state', () => {
   const options = choice().props.choices as Array<{value: string; disabled?: boolean}>;
