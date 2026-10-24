@@ -1,5 +1,5 @@
 import {useRef, useState} from 'react';
-import {ChevronDown, Search} from 'lucide-react';
+import {Check, ChevronDown, Search} from 'lucide-react';
 import type {ModelCatalog, ProjectSettingsView} from '@vonvon/protocol';
 import {Button, InlineNotice} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
@@ -44,31 +44,43 @@ export function CompactModelSelection({value, onChange, catalog, disabled}: {
   return <>
     <div className="gd-model-summary-row">
       <span className="gd-model-summary-label">允许的模型</span>
-      <div className="gd-model-summary-value">
-        <strong>{selectedModels.slice(0, 2).join('、') || '尚未选择模型'}{selectedModels.length > 2 && ` · 另 ${selectedModels.length - 2} 个`}</strong>
-        {selectedModels.length > 0 && <small>已选 {selectedModels.length} 个</small>}
+      <div className="gd-model-summary-value gd-model-summary-tags">
+        {selectedModels.length ? <>{selectedModels.slice(0, 2).map((name, index) => <span className="gd-selection-tag" key={value.models[index]} title={name}>{name}</span>)}
+          {selectedModels.length > 2 && <span className="gd-selection-count" title={selectedModels.slice(2).join('、')} aria-label={`另 ${selectedModels.length - 2} 个模型`}>+{selectedModels.length - 2}</span>}</>
+          : <span className="gd-model-empty-value">尚未选择模型</span>}
       </div>
       <Button size="sm" variant="ghost" onClick={() => open('models')}>{editingDisabled ? '查看模型' : '选择模型'}<ChevronDown size={13}/></Button>
     </div>
     <div className="gd-model-summary-row">
       <span className="gd-model-summary-label">思考强度<small>Effort</small></span>
-      <div className="gd-model-summary-value"><strong>{value.efforts.slice(0, 3).join('、') || '尚未选择强度'}{value.efforts.length > 3 && ` · 另 ${value.efforts.length - 3} 档`}</strong></div>
+      <div className="gd-model-summary-value gd-model-summary-tags">{value.efforts.length ? <>{value.efforts.slice(0, 3).map(effort => <span className="gd-selection-tag gd-selection-tag--effort" key={effort}>{effort}</span>)}
+        {value.efforts.length > 3 && <span className="gd-selection-count" title={value.efforts.slice(3).join('、')} aria-label={`另 ${value.efforts.length - 3} 档强度`}>+{value.efforts.length - 3}</span>}</>
+        : <span className="gd-model-empty-value">尚未选择强度</span>}</div>
       <Button size="sm" variant="ghost" onClick={() => open('efforts')}>{editingDisabled ? '查看强度' : '选择强度'}<ChevronDown size={13}/></Button>
     </div>
     <Dialog open={Boolean(picker)} title={picker === 'efforts' ? '选择可用强度' : '选择可用模型'}
       description={editingDisabled ? '当前配置仅可查看，已保存的选择仍保留。' : picker === 'efforts' ? '与模型独立选择；群内仅显示对应模型支持的强度。完成后在页面保存。' : '可多选。完成后在页面保存更改。'}
       initialFocusRef={picker === 'models' ? searchRef : undefined} onClose={() => setPicker(undefined)}
-      footer={<><span className="gd-model-picker-count" role="status">已选 {pending.length} 项</span><Button onClick={() => setPicker(undefined)}>取消</Button><Button variant="primary" disabled={editingDisabled || selectionChanged || picker === 'models' && !pending.length} onClick={complete}>完成</Button></>}>
+      footer={<><span className="gd-model-picker-count" role="status"><span className="gd-selection-count">{pending.length}</span>已选{picker === 'efforts' ? '强度' : '模型'}</span><Button onClick={() => setPicker(undefined)}>取消</Button><Button variant="primary" disabled={editingDisabled || selectionChanged || picker === 'models' && !pending.length} onClick={complete}>完成</Button></>}>
       {selectionChanged && <InlineNotice title="模型设置已在别处更改" tone="warning">当前选择已保留。重新读取后再修改，避免覆盖新设置。<Button size="sm" onClick={() => {if (picker) open(picker);}}>重新读取并放弃选择</Button></InlineNotice>}
       {picker === 'models' ? <div className="gd-model-picker">
-        <label className="gd-model-picker-search"><Search size={14} aria-hidden="true"/><input ref={searchRef} type="search" aria-label="搜索模型" placeholder="搜索模型名称或 ID" value={query} onChange={event => setQuery(event.target.value)}/></label>
+        <label className="gd-model-picker-search"><Search size={16} aria-hidden="true"/><input ref={searchRef} type="search" aria-label="搜索模型" placeholder="搜索模型名称或 ID" value={query} onChange={event => setQuery(event.target.value)}/></label>
+        <div className="gd-model-picker-heading"><span>可用模型</span><small>可多选</small></div>
         <div className="gd-model-picker-options">
-          {visibleModels.map(model => <label className="gd-model-choice" key={model.id}><input type="checkbox" checked={pending.includes(model.id)} disabled={editingDisabled} aria-label={`允许本群使用 ${model.displayName}`} onChange={event => setPending(current => toggleItem(current, model.id, event.target.checked))}/><span title={model.displayName.toLocaleLowerCase().replace(/[\s_-]+/g, '') !== model.id.toLocaleLowerCase().replace(/[\s_-]+/g, '') ? model.id : undefined}><strong>{model.displayName}</strong></span></label>)}
-          {visibleUnlisted.map(id => <label key={id} className="gd-model-choice" data-unavailable><input type="checkbox" checked={pending.includes(id)} disabled={editingDisabled} aria-label={`移除未列出的模型 ${id}`} onChange={event => setPending(current => toggleItem(current, id, event.target.checked))}/><span><strong>{id}</strong><small>已保存，当前目录未列出</small></span></label>)}
+          {visibleModels.map(model => <label className="gd-model-option" key={model.id}><input className="gd-model-option-input" type="checkbox" checked={pending.includes(model.id)} disabled={editingDisabled} aria-label={`允许本群使用 ${model.displayName}`} onChange={event => setPending(current => toggleItem(current, model.id, event.target.checked))}/>
+            <span className="gd-model-option-mark" aria-hidden="true"><Check size={12} strokeWidth={2.5}/></span>
+            <span className="gd-model-option-copy" title={model.displayName.toLocaleLowerCase().replace(/[\s_-]+/g, '') !== model.id.toLocaleLowerCase().replace(/[\s_-]+/g, '') ? model.id : undefined}><strong>{model.displayName}</strong>{model.description.trim() && <small>{model.description}</small>}</span>
+            <span className="gd-model-option-state" aria-hidden="true">{pending.includes(model.id) ? '已选' : ''}</span>
+          </label>)}
+          {visibleUnlisted.map(id => <label key={id} className="gd-model-option" data-unavailable><input className="gd-model-option-input" type="checkbox" checked={pending.includes(id)} disabled={editingDisabled} aria-label={`移除未列出的模型 ${id}`} onChange={event => setPending(current => toggleItem(current, id, event.target.checked))}/>
+            <span className="gd-model-option-mark" aria-hidden="true"><Check size={12} strokeWidth={2.5}/></span><span className="gd-model-option-copy"><strong>{id}</strong><small>已保存，当前目录未列出</small></span>
+            <span className="gd-model-option-state" aria-hidden="true">{pending.includes(id) ? '已选' : ''}</span>
+          </label>)}
           {!visibleModels.length && !visibleUnlisted.length && <p className="gd-model-picker-empty" role="status">{query.trim() ? '没有匹配的模型。' : catalog ? catalog.error || '当前没有可选模型。' : '正在读取模型…'}</p>}
         </div>
-      </div> : <div className="gd-model-picker-options">
-        {efforts.map(effort => <label className="gd-model-choice" key={effort}><input type="checkbox" checked={pending.includes(effort)} disabled={editingDisabled} aria-label={`允许本群使用 ${effort} Effort`} onChange={event => setPending(current => toggleItem(current, effort, event.target.checked))}/><span><strong>{effort}</strong></span></label>)}
+      </div> : <div className="gd-effort-picker">
+        <div className="gd-model-picker-heading"><span>允许的强度</span><small>可多选</small></div>
+        <div className="gd-effort-picker-grid">{efforts.map(effort => <label className="gd-effort-option" key={effort}><input className="gd-model-option-input" type="checkbox" checked={pending.includes(effort)} disabled={editingDisabled} aria-label={`允许本群使用 ${effort} Effort`} onChange={event => setPending(current => toggleItem(current, effort, event.target.checked))}/><span className="gd-model-option-mark" aria-hidden="true"><Check size={12} strokeWidth={2.5}/></span><strong>{effort}</strong></label>)}</div>
         {!efforts.length && <p className="gd-model-picker-empty" role="status">{catalog ? '当前模型没有可选强度。' : '正在读取强度…'}</p>}
       </div>}
     </Dialog>

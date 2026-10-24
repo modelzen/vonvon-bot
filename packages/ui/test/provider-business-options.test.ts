@@ -1,33 +1,67 @@
 import {Children, createElement, isValidElement, type ReactNode} from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
-import {expect, it} from 'vitest';
+import {expect, it, vi} from 'vitest';
 import {agentIdSchema, type ProjectSettingsView} from '@vonvon/protocol';
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
 import {DecisionFields, GroupSettingsContent, ModelAccessFields, modelAccessProblem} from '../src/settings/GroupDesignSettings';
 import {Editor} from '../src/settings/SettingsPanel';
+import {SelectControl} from '../src/reference/components/ui';
 import {permissionValue} from './permission-fixture';
 
 const client = createClient({isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {}});
 const botId = agentIdSchema.parse('cli_provider_options');
 const render = (child: ReturnType<typeof createElement>) => renderToStaticMarkup(createElement(ClientProvider, {client, children: child}));
+const providerProps = {botId, value: {backend: 'codex-appserver', models: ['alpha'], efforts: ['low' as const]}, onChange: () => {}, disabled: false, providers: [{id: 'codex-appserver', displayName: 'Codex'}]};
+function nodes(node: ReactNode): Array<ReturnType<typeof createElement>> {
+  return Children.toArray(node).flatMap(child => isValidElement<{children?: ReactNode}>(child) ? [child, ...nodes(child.props.children)] : []);
+}
+const selector = (props = providerProps) => nodes(ModelAccessFields(props)).find(node => node.type === SelectControl)!;
+
+it('keeps Provider a labelled combobox even when only one Provider is currently available', () => {
+  const html = render(createElement(ModelAccessFields, providerProps));
+  expect(html.match(/<button\b[^>]*aria-label="模型 Provider"[^>]*>/)?.[0]).toContain('role="combobox"');
+  expect(selector().props.options).toEqual([{value: 'codex-appserver', label: 'Codex', disabled: false}]);
+});
+
+it('offers available Providers and clears dependent choices only for a valid different Provider', () => {
+  const changed = vi.fn();
+  const control = selector({...providerProps, onChange: changed, providers: [...providerProps.providers, {id: 'claude-agent', displayName: 'Claude'}]});
+  expect(control.props.options.map((item: {value: string}) => item.value)).toEqual(['codex-appserver', 'claude-agent']);
+  control.props.onChange('codex-appserver'); control.props.onChange('unknown-provider');
+  expect(changed).not.toHaveBeenCalled();
+  control.props.onChange('claude-agent');
+  expect(changed).toHaveBeenCalledExactlyOnceWith({backend: 'claude-agent', models: [], efforts: []});
+});
+
+it('disables readonly Provider changes without clearing saved model choices', () => {
+  const changed = vi.fn(); const props = {...providerProps, disabled: true, onChange: changed, providers: [...providerProps.providers, {id: 'claude-agent', displayName: 'Claude'}]};
+  const control = selector(props);
+  expect(control.props.disabled).toBe(true);
+  control.props.onChange('claude-agent'); expect(changed).not.toHaveBeenCalled();
+  const html = render(createElement(ModelAccessFields, props));
+  expect(html.match(/<button\b[^>]*aria-label="模型 Provider"[^>]*>/)?.[0]).toContain('disabled=""');
+  expect(html).toContain('alpha');
+});
 
 it('keeps saved unavailable Provider and model choices readable without offering unavailable Provider edits', () => {
   const html = render(createElement(ModelAccessFields, {botId, value: {backend: 'claude-agent', models: ['haiku'], efforts: []}, onChange: () => {}, disabled: false, providers: []}));
   expect(html).toContain('Claude'); expect(html).toContain('当前不可用');
-  expect(html).not.toContain('role="radiogroup" aria-label="模型 Provider"');
+  expect(html).toContain('role="combobox"');
+  const control = selector({...providerProps, value: {backend: 'claude-agent', models: ['haiku'], efforts: []}, providers: []});
+  expect(control.props.options).toEqual([{value: 'claude-agent', label: 'Claude（当前不可用）', disabled: true}]);
   expect(html).toContain('haiku'); expect(html).toContain('查看模型');
   expect(html).toContain('选择仍保留');
 });
 
-it('explains the retained tier and cleared advanced settings when changing Provider', () => {
+it('explains the retained tier and cleared custom settings when changing Provider', () => {
   const props = {botId, value: {backend: 'claude-agent', models: [], efforts: []}, onChange: () => {}, disabled: false,
     providers: [{id: 'codex-appserver', displayName: 'Codex'}, {id: 'claude-agent', displayName: 'Claude'}],
     savedBackend: 'codex-appserver', permissionName: '工作区可写'};
   const html = render(createElement(ModelAccessFields, props));
-  expect(html).toContain('权限仍是「工作区可写」；高级设置会清掉。');
+  expect(html).toContain('权限仍是「工作区可写」；自定义设置会清掉。');
   expect(html).not.toContain('能改工作区里的文件，能联网。');
-  expect(render(createElement(ModelAccessFields, {...props, value: {...props.value, backend: props.savedBackend}}))).not.toContain('高级设置会清掉');
+  expect(render(createElement(ModelAccessFields, {...props, value: {...props.value, backend: props.savedBackend}}))).not.toContain('自定义设置会清掉');
 });
 
 it('uses the invalid custom view’s qa tier in the provider-change hint', () => {
@@ -46,7 +80,7 @@ it('uses the invalid custom view’s qa tier in the provider-change hint', () =>
     return findEditor(content).props.render({...view.sections.modelAccess!.stored, backend: 'claude-agent'}, () => {}, false);
   }
   const html = render(createElement(ChangedProvider));
-  expect(html).toContain('权限仍是「只读」；高级设置会清掉。');
+  expect(html).toContain('权限仍是「只读」；自定义设置会清掉。');
   expect(html).not.toContain('恢复原来保存的权限档');
   expect(html).not.toContain('可能比当前的只读更宽');
 });

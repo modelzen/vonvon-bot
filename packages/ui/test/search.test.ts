@@ -224,7 +224,7 @@ test('model and permission search targets reach visible compact summaries with t
     assert.equal(entry?.destination.field, '', query);
     assert.equal(groupTabForSection(entry?.destination.section), 'model', query);
   }
-  for (const query of ['权限', '能挡到什么']) {
+  for (const query of ['权限', '能挡到什么', '自定义权限', '高级设置']) {
     const entry = findEntries(entries, query).find(item => item.destination.selection?.kind === 'membership' && item.destination.field === '修改权限');
     assert.equal(entry?.destination.section, '权限', query);
     assert.equal(entry?.destination.field, '修改权限', query);

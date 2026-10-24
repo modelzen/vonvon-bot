@@ -1,20 +1,23 @@
 import {beforeEach, expect, it, vi} from 'vitest';
 import {isValidElement, type ReactElement, type ReactNode} from 'react';
-import type {ModelCatalog} from '@vonvon/protocol';
-import {ModelAccessChoices, modelAccessProblem} from '../src/settings/GroupDesignSettings';
+import {agentIdSchema, type ModelCatalog} from '@vonvon/protocol';
+import {ModelAccessChoices, ModelAccessFields, modelAccessProblem} from '../src/settings/GroupDesignSettings';
 import {CompactModelSelection} from '../src/settings/CompactModelSelection';
-import {Editor} from '../src/settings/SettingsPanel';
+import {Catalog, Editor} from '../src/settings/SettingsPanel';
+import {SelectControl} from '../src/reference/components/ui';
 import {Dialog} from '../src/reference/components/ui/Dialog';
 
-type Slot = {state: unknown[]; refs: Array<{current: unknown}>; si: number; ri: number};
-const h = vi.hoisted(() => ({slots: {} as Record<string, Slot>, active: ''}));
+type Slot = {state: unknown[]; refs: Array<{current: unknown}>; effects: Array<{deps?: unknown[]; cleanup?: () => void}>; si: number; ri: number; ei: number};
+const h = vi.hoisted(() => ({slots: {} as Record<string, Slot>, active: '', pending: [] as Array<() => void>, client: {settings: vi.fn()}}));
 vi.mock('react', async original => ({...await original<typeof import('react')>(),
   useState: (initial: unknown) => {const slot = h.slots[h.active]!; const i = slot.si++; if (!(i in slot.state)) slot.state[i] = typeof initial === 'function' ? initial() : initial; return [slot.state[i], (next: unknown) => {slot.state[i] = typeof next === 'function' ? next(slot.state[i]) : next;}];},
   useRef: (initial: unknown) => {const slot = h.slots[h.active]!; return slot.refs[slot.ri++] ??= {current: initial};},
-  useContext: () => [], useEffect: () => {}, useCallback: (fn: unknown) => fn,
+  useContext: () => [], useCallback: (fn: unknown) => fn,
+  useEffect: (effect: () => (() => void) | void, deps?: unknown[]) => {const slot = h.slots[h.active]!; const i = slot.ei++; const old = slot.effects[i]; if (old?.deps && deps && deps.length === old.deps.length && deps.every((value, at) => Object.is(value, old.deps![at]))) return; h.pending.push(() => {old?.cleanup?.(); slot.effects[i] = {deps, cleanup: effect() || undefined};});},
   useMemo: (make: () => unknown) => make(),
 }));
 vi.mock('../src/settings/DraftGuard', () => ({useDraft: () => {}}));
+vi.mock('../src/client-context', () => ({useClient: () => h.client, useShellCapabilities: () => undefined}));
 
 type Element = ReactElement<Record<string, any>>;
 type Value = Parameters<typeof ModelAccessChoices>[0]['value'];
@@ -25,9 +28,11 @@ function nodes(node: ReactNode): Element[] {
   return [node, ...nodes(node.props.children), ...nodes(node.props.footer)];
 }
 function at(name: string, make: () => ReactNode) {
-  const slot = h.slots[name] ??= {state: [], refs: [], si: 0, ri: 0};
-  h.active = name; slot.si = slot.ri = 0;
-  return nodes(make());
+  const slot = h.slots[name] ??= {state: [], refs: [], effects: [], si: 0, ri: 0, ei: 0};
+  h.active = name; slot.si = slot.ri = slot.ei = 0;
+  const result = nodes(make());
+  for (const effect of h.pending.splice(0)) effect();
+  return result;
 }
 const catalog: ModelCatalog = {backend: 'codex-appserver', state: 'ready', source: 'backend-provided', observedAt: 1, titleEfforts: ['low', 'high'], models: [
   {id: 'alpha', displayName: 'Alpha', description: '', isDefault: true, hidden: false, supportedEfforts: ['low', 'high'], defaultEffort: 'low'},
@@ -45,7 +50,7 @@ function choices(props: Parameters<typeof ModelAccessChoices>[0]) {
   const component = at('choice-wrapper', () => ModelAccessChoices(props)).find(node => node.type === CompactModelSelection)!;
   return at('choices', () => CompactModelSelection(component.props as any));
 }
-beforeEach(() => {h.slots = {}; vi.clearAllMocks();});
+beforeEach(() => {for (const slot of Object.values(h.slots)) for (const effect of slot.effects) effect.cleanup?.(); h.slots = {}; h.pending = []; vi.clearAllMocks();});
 
 it('keeps unselected models out of the normal page and preserves checked models across searches', () => {
   let value = initial();
@@ -134,4 +139,55 @@ it('blocks a stale picker draft after the parent setting changes, then reloads t
   expect(checkbox(all, '允许本群使用 Alpha').props.checked).toBe(false);
   expect(checkbox(all, '允许本群使用 Beta').props.checked).toBe(true);
   expect(button(all, '完成').props.disabled).toBe(false);
+});
+
+it('loads the changed Provider catalog, stages its model and Effort choices, and saves only after both validate', async () => {
+  const value = initial(); const section = {stored: value, effective: value, revision: 'r1', access: {kind: 'writable' as const}, apply: []};
+  const otherCatalog: ModelCatalog = {...catalog, backend: 'claude-agent', titleEfforts: ['high'], models: [{...catalog.models[1]!, id: 'claude-model', displayName: 'Claude Model'}]};
+  const save = vi.fn(async (patch: Partial<Value>) => {
+    const stored = {...value, ...patch};
+    return {kind: 'saved', result: {kind: 'saved', section: {value: {...section, stored, effective: stored, revision: 'r2'}}, effects: []}} as any;
+  });
+  h.client.settings.mockImplementation(async request => ({kind: 'models', catalog: request.query.backend === otherCatalog.backend ? otherCatalog : catalog}));
+  let liveCatalog: ModelCatalog | undefined;
+  const rememberCatalog = (next: ModelCatalog | undefined) => {liveCatalog = next;};
+  const render = () => {
+    const editor = at('provider-editor', () => Editor({title: '执行模型', section, save, validate: next => modelAccessProblem(next, liveCatalog),
+      render: (draft, onChange, disabled) => <ModelAccessFields botId={agentIdSchema.parse('cli_switch')} value={draft} onChange={onChange} disabled={disabled} onCatalog={rememberCatalog}
+        providers={[{id: catalog.backend, displayName: 'Codex'}, {id: otherCatalog.backend, displayName: 'Claude'}]}/>}));
+    const fields = editor.find(node => node.type === ModelAccessFields)!;
+    const all = at('provider-fields', () => ModelAccessFields(fields.props as any));
+    const loader = all.find(node => node.type === Catalog)!;
+    const backend = loader.props.backend;
+    const loaded = at(`catalog:${backend}`, () => Catalog(loader.props as any));
+    const choice = loaded.find(node => node.type === ModelAccessChoices)!;
+    const wrapped = at(`choice:${backend}`, () => ModelAccessChoices(choice.props as any));
+    const compact = wrapped.find(node => node.type === CompactModelSelection)!;
+    return {editor, provider: all.find(node => node.type === SelectControl && node.props.label === '模型 Provider')!, choices: at(`compact:${backend}`, () => CompactModelSelection(compact.props as any)), value: fields.props.value};
+  };
+  let ui = render(); await flush(); ui = render();
+  ui.provider.props.onChange(otherCatalog.backend); ui = render();
+  expect(ui.value).toEqual({backend: otherCatalog.backend, models: [], efforts: []});
+  expect(save).not.toHaveBeenCalled();
+  expect(h.client.settings).toHaveBeenCalledWith({type: 'models', query: {botId: 'cli_switch', backend: otherCatalog.backend, purpose: 'project'}});
+  button(ui.editor, '保存').props.onClick(); await flush(); ui = render();
+  expect(save).not.toHaveBeenCalled();
+  button(ui.choices, '选择模型').props.onClick(); ui = render();
+  checkbox(ui.choices, '允许本群使用 Claude Model').props.onChange({target: {checked: true}}); ui = render();
+  button(ui.choices, '取消').props.onClick(); ui = render();
+  expect(ui.value.models).toEqual([]); expect(save).not.toHaveBeenCalled();
+  button(ui.editor, '放弃修改').props.onClick(); ui = render();
+  expect(ui.value).toEqual(value); expect(save).not.toHaveBeenCalled();
+  ui.provider.props.onChange(otherCatalog.backend); ui = render();
+  button(ui.choices, '选择模型').props.onClick(); ui = render();
+  checkbox(ui.choices, '允许本群使用 Claude Model').props.onChange({target: {checked: true}}); ui = render();
+  button(ui.choices, '完成').props.onClick(); ui = render();
+  button(ui.editor, '保存').props.onClick(); await flush(); ui = render();
+  expect(save).not.toHaveBeenCalled();
+  button(ui.choices, '选择强度').props.onClick(); ui = render();
+  checkbox(ui.choices, '允许本群使用 high Effort').props.onChange({target: {checked: true}}); ui = render();
+  button(ui.choices, '完成').props.onClick(); ui = render();
+  expect(save).not.toHaveBeenCalled();
+  button(ui.editor, '保存').props.onClick(); await flush(); ui = render();
+  expect(save.mock.calls).toEqual([[{backend: otherCatalog.backend, models: ['claude-model'], efforts: ['high']}, 'r1']]);
 });

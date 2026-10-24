@@ -51,7 +51,7 @@ owner 截图与实机一致：七个模型各占一整行，宽行里只有名�
 | 允许的模型 | 前 1–2 个已选名称 + 其余数量；右侧“选择模型” | 打开有搜索的复选列表；已选数量始终可见，保留多选 |
 | 思考强度（Effort） | 已选项的短摘要；右侧“选择强度” | 独立的多选面板，只展示当前目录支持的选项；提示模型兼容性 |
 | 权限 | 当前档位 + 一句实际范围；右侧“修改” | 展开三档完整对比后再选择，保留现有权限提交逻辑与后果说明 |
-| 高级权限 | 收起的“高级设置” | 保留 dev 原生字段、当前值、校验和独立保存动作 |
+| 自定义权限 | 与三档预设并列的“自定义”选项 | 原生字段在同一权限弹窗内编辑，统一保存；保留校验和后端规范化 |
 
 具体规则：
 
@@ -168,7 +168,7 @@ Designeer 的作用是提供经过筛选的参考入口。本方案中的缺陷�
 | 配色与可读性 | OKLCH、Color.review、Huetone | 检查现有灰阶、禁用态、选中态和警告态；以对比度验证为准，不仅凭肉眼调浅 |
 | 动效 | Motion Primitives、NumberFlow、60fps | 借鉴面板和状态变化；项目已有 Motion，通常无需新增动效库 |
 
-官方入口：[资源目录](https://designeer.xyz/resources)、[灵感目录](https://designeer.xyz/inspiration)、[网站介绍](https://designeer.xyz/info)。前轮已实际读到首页和介绍页，资源与灵感条目另由官网搜索收录内容核对；本轮继续直接访问受到 Cloudflare 限制。没有验证 Designeer WebMCP，也不把它作为落地前提。未假装已查看这些外部产品的全部付费案例。
+官方入口：[资源目录](https://designeer.xyz/resources)、[灵感目录](https://designeer.xyz/inspiration)、[网站介绍](https://designeer.xyz/info)。本轮通过 owner 已登录的 Chrome 实际查看 Tools、Info 与 Resources，确认其为独立策划的目录，资源页收录 Component Gallery、shadcn/ui、Motion Primitives 等。公开抓取受到 Cloudflare 限制，未绕过验证。官网介绍及可用插件目录中未发现 Designeer 专用 Skill/MCP 安装入口，不将其作为落地前提；项目已有 Base UI，现成 interface-design 与 emil-design-eng 技能可直接用于组件打磨。未假装已查看这些外部产品的全部付费案例。
 
 实现参考：[Base UI Dialog](https://base-ui.com/react/components/dialog) 支持定位式面板和焦点管理；[Motion 无障碍说明](https://motion.dev/docs/react-accessibility) 给出 reduced motion 支持。这里只取设计模式，不复制外部品牌外观。
 
