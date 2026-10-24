@@ -4,7 +4,7 @@ import {ChevronRight, Folder, GitBranch, Plus, RefreshCw, Search, X} from 'lucid
 import {backendLabel, isKnownJudgeSelection, type AgentId, type AgentSettingsView, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ProjectSettingsView, type SettingsReply, type ToolState} from '@vonvon/protocol';
 import {useClient} from '../client-context';
 import {useDirectoriesPicker} from '../directory-picker';
-import {Button, InlineNotice, SelectControl, Toggle} from '../reference/components/ui';
+import {Button, IconButton, InlineNotice, SelectControl, Toggle} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {Catalog, Editor, ProjectPanel, type Section} from './SettingsPanel';
@@ -103,7 +103,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
   return <AnnouncedReadonlyMessages.Provider value={[...outerReadonly, ...notices]}>
     {notices.map(notice => <p className="settings-readonly-notice" role="status" key={`${notice.reason}:${notice.message}`}>{notice.message}</p>)}
     <div className="gd-page">
-      {(tab === 'model' || tab === 'response') && <div className="gd-model-compact-note" role="status">
+      {(tab === 'response' || (tab === 'model' && (discovery.checking || discovery.message))) && <div className="gd-provider-discovery" role="status">
         {discovery.checking ? '正在检查 Provider 登录状态…' : discovery.message}
         {!discovery.checking && <Button size="sm" variant="ghost" onClick={discovery.retry}>重新检查 Provider</Button>}
       </div>}
@@ -126,6 +126,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
         </>}/> : <MissingSection/>)}
       {tab === 'model' && (sections.modelAccess ? <Editor title="执行模型" section={sections.modelAccess} save={(patch, revision) => save('modelAccess', patch, revision)}
         render={(draft, set, disabled) => <ModelAccessFields botId={view.scope.botId} value={draft} onChange={set} disabled={disabled} providers={providers} onCatalog={rememberCatalog}
+          onCheckProviders={discovery.retry} checkingProviders={discovery.checking}
           onOpenProviders={onOpenProviders} permissionName={sections.permission.stored.options.tiers.find(tier => tier.tier === sections.permission.stored.mode)?.name} savedBackend={view.identity.backend}/>}
         validate={value => providers.some(provider => provider.id === value.backend) ? modelAccessProblem(value, modelCatalog.current) : '此 Provider 当前不可用，请先安装并登录。'}/> : <MissingSection/>)}
       {(tab === 'model' || tab === 'permission') && <ProjectPanel view={view} refresh={refresh} partition="permission" independent/>}
@@ -164,14 +165,15 @@ export function modelAccessProblem(value: ModelAccess, catalog?: ModelCatalog): 
   const incompatible = catalog.models.filter(model => value.models.includes(model.id) && model.supportedEfforts.length > 0 && !model.supportedEfforts.some(effort => value.efforts.includes(effort)));
   return incompatible.length ? `请选择 ${incompatible.map(model => model.displayName).join('、')} 支持的 Effort。` : undefined;
 }
-export function ModelAccessFields({botId, value, onChange, disabled, providers, onCatalog, permissionName, savedBackend, onOpenProviders}: {botId: AgentId; value: ModelAccess; onChange: (value: ModelAccess) => void; disabled: boolean; providers: Provider[]; onCatalog?: (catalog: ModelCatalog | undefined) => void; permissionName?: string; savedBackend?: string; onOpenProviders?: () => void}) {
+export function ModelAccessFields({botId, value, onChange, disabled, providers, onCatalog, permissionName, savedBackend, onOpenProviders, onCheckProviders, checkingProviders}: {botId: AgentId; value: ModelAccess; onChange: (value: ModelAccess) => void; disabled: boolean; providers: Provider[]; onCatalog?: (catalog: ModelCatalog | undefined) => void; permissionName?: string; savedBackend?: string; onOpenProviders?: () => void; onCheckProviders?: () => void; checkingProviders?: boolean}) {
   const available = providers.some(provider => provider.id === value.backend);
   const choices = providerChoices(providers, value.backend);
   return <div className="gd-model-fields gd-model-fields--compact">
     <div className="gd-model-summary-row gd-model-provider-row"><span className="gd-model-summary-label">Provider</span>
       <div className="gd-model-provider-control"><SelectControl label="模型 Provider" className="gd-model-provider-select" options={choices} value={value.backend} disabled={disabled}
         onChange={backend => {if (!disabled && backend !== value.backend && providers.some(provider => provider.id === backend)) onChange({backend, models: [], efforts: []});}}/>
-        <span className="gd-model-provider-state">{available ? '可用' : '当前不可用'}</span></div>
+        <span className="gd-model-provider-state">{available ? '可用' : '当前不可用'}</span>
+        {onCheckProviders && <IconButton size="sm" variant="ghost" label="重新检查 Provider" title="重新检查 Provider 登录状态" disabled={checkingProviders} onClick={onCheckProviders}><RefreshCw size={14}/></IconButton>}</div>
       {onOpenProviders && <Button size="sm" variant="ghost" onClick={onOpenProviders}>查看状态<ChevronRight size={13}/></Button>}
     </div>
     {permissionName && value.backend !== savedBackend && <p className="gd-model-compact-notice" role="status">换 Provider 后，权限仍是「{permissionName}」；自定义设置会清掉。</p>}

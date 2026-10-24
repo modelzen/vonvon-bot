@@ -126,3 +126,5 @@
 .gd-decision-select { width: min(100%, 320px); min-width: 0; }
 .gd-decision-fields .gd-note { margin: 0; }
 .gd-decision-fields fieldset .gd-note { margin-top: 8px; }
+
+.gd-provider-discovery { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.6; }
