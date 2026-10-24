@@ -13,6 +13,7 @@ import {GroupDesignSettings, type GroupSettingsTab} from './settings/GroupDesign
 import {useDraftGuard} from './settings/DraftGuard';
 import {ConversationPanel} from './management/ConversationPanel';
 import {GroupAttentionStatus} from './management/GroupAttentionStatus';
+import {OperationActivity} from './management/OperationActivity';
 import {appliedNotice, removalNotice} from './management/ProjectPanel';
 import {groupUrl, openExternalUrl} from './url-actions';
 import {ProjectMemoryMap} from './ProjectPage';
@@ -61,6 +62,7 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
   const [tab, setTab] = useState<GroupDesignTab>(initialTab === 'role' ? 'memory' : initialTab === 'permission' ? 'model' : initialTab ?? 'model');
   const [project, setProject] = useState<ProjectRecord>();
   const [busy, setBusy] = useState(false);
+  const [pendingEnabled, setPendingEnabled] = useState<boolean | null>(null);
   const saving = useRef(false);
   const running = useRef(agent.running);
   running.current = agent.running;
@@ -104,6 +106,7 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
   async function update(change: {enabled?: boolean; conversation?: Conversation; project?: ProjectId}, remove = false) {
     if (!project || saving.current || !running.current) return false;
     saving.current = true; setBusy(true); setError(''); setNotice('');
+    if (change.enabled !== undefined) setPendingEnabled(change.enabled);
     try {
       const current = await client.collaboration({action:'project', ...target});
       if (!running.current) throw new Error('Bot 已停止，操作未保存。');
@@ -117,7 +120,7 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
       await onChanged();
       return true;
     } catch (failure) {setError(failure instanceof Error ? failure.message : '操作未保存。'); return false;}
-    finally {saving.current = false; setBusy(false);}
+    finally {saving.current = false; setBusy(false); setPendingEnabled(null);}
   }
   const available = agent.running && !!project && !member.stale;
   const memberProject = snapshot.projects?.find(item => item.id === member.projectId);
@@ -131,7 +134,7 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
       <details ref={menu} className="group-context-menu"><summary aria-label="群操作"><MoreHorizontal size={18}/></summary><div>{([['help','使用说明'],['history','对话记录'],['remove','解除群绑定…']] as const).map(([action,label]) => <button type="button" key={action} disabled={action === 'remove' && !available} onClick={event => {event.currentTarget.closest('details')?.removeAttribute('open'); guard.navigate(() => setDialog(action));}}>{label}</button>)}</div></details>
     </header>
     <div className="group-design-scope"><div id={settingAnchor("群设置")} className="group-design-context"><div role="group" aria-label="本群 Bot" className="group-bot-picker">{snapshot.memberships.filter(item => item.groupId === group.id).map(item => {const bot = snapshot.agents.find(bot => bot.id === item.agentId); return bot && <button type="button" key={item.id} aria-pressed={member.id === item.id} title={bot.name} onClick={() => guard.navigate(() => onBot(item))}><AgentAvatar agent={bot}/><span>{bot.name}</span>{member.id === item.id && <Check size={12}/>}</button>;})}</div>
-      {project ? <Toggle aria-label={`在本群使用 ${agent.name}`} label="在本群使用" checked={project.enabled} disabled={!available || busy} onChange={event => {const enabled=event.target.checked; guard.navigate(() => {void update({enabled});});}}/> : <span className="group-control-note">{!agent.enabled ? 'Bot 已停用' : !agent.running ? 'Bot 未运行' : '读取中…'}</span>}
+      {project ? <span className="group-enable-control">{pendingEnabled !== null && <OperationActivity key={`${member.id}:${pendingEnabled}`} label={pendingEnabled ? '本群启用中' : '本群停用中'} state={pendingEnabled ? 'connecting' : 'working'}/>}<Toggle aria-label={`在本群使用 ${agent.name}`} label="在本群使用" checked={project.enabled} disabled={!available || busy} onChange={event => {const enabled=event.target.checked; guard.navigate(() => {void update({enabled});});}}/></span> : <span className="group-control-note">{!agent.enabled ? 'Bot 已停用' : !agent.running ? 'Bot 未运行' : '读取中…'}</span>}
     </div>
     {memberProject && <p className="group-project-line" id={settingAnchor("所在项目")}>项目：<strong>{memberProject.name}</strong>
       {onProject && <button type="button" className="gd-text-action" onClick={() => guard.navigate(() => onProject(memberProject.id))}>项目页</button>}
