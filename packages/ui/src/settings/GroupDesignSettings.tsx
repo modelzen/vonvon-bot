@@ -35,7 +35,7 @@ type Props = {
   groupName?: string;
   onOpenTools?: () => void;
   onOpenProviders?: () => void;
-  onOpenSecrets?: () => void;
+  onOpenSecrets?: (provider?: string) => void;
   responseHeader?: ReactNode;
   decisionSetupOnly?: boolean;
   onDecisionSaved?: () => Promise<void>;

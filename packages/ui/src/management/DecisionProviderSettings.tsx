@@ -4,6 +4,7 @@ import {useClient} from '../client-context';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {Button, InlineNotice, SelectControl} from '../reference/components/ui';
 import {Editor} from '../settings/SettingsPanel';
+import {decisionProviderSection, settingAnchor} from '../search';
 
 type Configuration = NonNullable<HostSettingsView['sections']['judge']>['stored'];
 type Profile = Configuration['byProvider'][string];
@@ -33,7 +34,7 @@ export function DecisionProviderFields({value, defaults, catalogs, services, dis
       const selected = models.find(model => model.id === profile.model);
       const efforts = native ? profile.custom ? customEfforts[provider.id] ?? [] : catalog?.models.find(model => model.id === profile.model)?.supportedEfforts ?? [] : [];
       const update = (next: Profile) => onChange({byProvider: {...value.byProvider, [provider.id]: next}});
-      return <section className="decision-provider-config" aria-label={`${provider.name} 决策配置`} key={provider.id}>
+      return <section className="decision-provider-config" id={settingAnchor(decisionProviderSection(provider.id))} aria-label={`${provider.name} 决策配置`} key={provider.id}>
         <div className="decision-provider-heading"><h3>{provider.name}</h3>
         </div>
         <SettingsRow title="模型" trailing={profile.custom

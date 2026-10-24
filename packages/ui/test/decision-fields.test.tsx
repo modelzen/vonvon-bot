@@ -3,6 +3,8 @@ import {isValidElement, type ReactElement, type ReactNode} from 'react';
 import {agentIdSchema, type DecisionModelsView, type JudgeSelectionView} from '@vonvon/protocol';
 import {DecisionFields, providerDecisionProblem} from '../src/settings/DecisionFields';
 import {SettingChoices} from '../src/settings/SettingChoices';
+import {renderToStaticMarkup} from 'react-dom/server';
+import {Button} from '../src/reference/components/ui';
 
 const state = vi.hoisted(() => ({values: [] as unknown[], index: 0}));
 vi.mock('react', async original => ({...await original<typeof import('react')>(), useState: (initial: unknown) => {
@@ -100,4 +102,26 @@ it('keeps an unavailable saved provider visible and does not silently switch it'
   expect(choice(ui).props.value).toBe(claude.id);
   expect(providerDecisionProblem(props.value, [codex], services)).toContain('不可用');
   expect(changed).not.toHaveBeenCalled();
+});
+it.each([
+  [codex.id, '配置 Codex'],
+  [claude.id, '配置 Claude'],
+  ['typesafe', '配置 Jev'],
+])('opens the selected shared configuration even when %s is unavailable', (provider, label) => {
+  props.value = {kind: 'provider', provider} as JudgeSelectionView;
+  const link = render().find(node => node.type === Button && node.props.className === 'gd-decision-config-link')!;
+  expect(renderToStaticMarkup(<>{link.props.children}</>)).toContain(label);
+  expect(link.props.disabled).toBe(false);
+  link.props.onClick();
+  expect(props.onOpenSecrets).toHaveBeenCalledExactlyOnceWith(provider);
+  expect(changed).not.toHaveBeenCalled();
+});
+it('offers general configuration before a Provider is selected and respects disabled state', () => {
+  let link = render().find(node => node.props.className === 'gd-decision-config-link')!;
+  expect(renderToStaticMarkup(<>{link.props.children}</>)).toContain('管理决策模型');
+  link.props.onClick();
+  expect(props.onOpenSecrets).toHaveBeenCalledExactlyOnceWith(undefined);
+  props.disabled = true;
+  link = render().find(node => node.props.className === 'gd-decision-config-link')!;
+  expect(link.props.disabled).toBe(true);
 });

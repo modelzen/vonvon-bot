@@ -76,7 +76,7 @@ export function initialGroupProvider(initialProvider?: ProviderTool, tools?: Too
   if (initialProvider && ready(initialProvider)) return initialProvider;
   return (['codex', 'claude'] as const).find(ready);
 }
-type Props = {snapshot?: DesktopSnapshot; open?: boolean; agent: Agent; pending?: PendingAgentGroups; initialGroup?: PendingGroup; initialProvider?: ProviderTool; /** Start the 项目 row on joining this project (the project page's 把一个群加进来…). */ initialProject?: ProjectId; tools?: ToolState[]; onClose: () => void; onChanged: (target: {agentId: Agent['id']; chatId: string}) => Promise<void>; onOpenProviders?: () => void; onOpenDecisionModel?: () => void};
+type Props = {snapshot?: DesktopSnapshot; open?: boolean; agent: Agent; pending?: PendingAgentGroups; initialGroup?: PendingGroup; initialProvider?: ProviderTool; /** Start the 项目 row on joining this project (the project page's 把一个群加进来…). */ initialProject?: ProjectId; tools?: ToolState[]; onClose: () => void; onChanged: (target: {agentId: Agent['id']; chatId: string}) => Promise<void>; onOpenProviders?: () => void; onOpenDecisionModel?: (provider?: string) => void};
 export function JoinGroupDialog({snapshot, open = true, agent, pending, initialGroup, initialProvider, initialProject, tools, onClose, onChanged, onOpenProviders, onOpenDecisionModel}: Props) {
   const {navigate} = useDraftGuard();
   const client = useClient();
