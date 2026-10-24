@@ -57,8 +57,9 @@ it('keeps unselected models out of the normal page and preserves checked models 
   const changed = vi.fn((next: Value) => {value = next;});
   const render = () => choices({value, catalog, disabled: false, onChange: changed});
   let all = render();
-  expect(all.some(node => node.type === 'input' && node.props.type === 'checkbox')).toBe(false);
-  expect(button(all, '选择模型')).toBeDefined(); expect(button(all, '选择强度')).toBeDefined();
+  expect(checkbox(all, '允许本群使用 Alpha')).toBeUndefined();
+  expect(checkbox(all, '允许本群使用 low Effort')).toBeDefined();
+  expect(button(all, '选择模型')).toBeDefined(); expect(button(all, '选择强度')).toBeUndefined();
   button(all, '选择模型').props.onClick(); all = render();
   search(all).props.onChange({target: {value: 'Beta'}}); all = render();
   expect(checkbox(all, '允许本群使用 Alpha')).toBeUndefined();
@@ -70,7 +71,8 @@ it('keeps unselected models out of the normal page and preserves checked models 
   expect(value).toEqual({...initial(), models: ['alpha', 'beta']});
   expect(changed).toHaveBeenCalledOnce();
   expect(dialog(all)).toBeUndefined();
-  expect(all.some(node => node.type === 'input' && node.props.type === 'checkbox')).toBe(false);
+  expect(checkbox(all, '允许本群使用 Alpha')).toBeUndefined();
+  expect(checkbox(all, '允许本群使用 low Effort')).toBeDefined();
 });
 
 it.each(['cancel', 'dismiss'] as const)('discards a local model selection on %s and reopens from the saved parent draft', action => {
@@ -101,9 +103,7 @@ it('edits model and Effort independently and persists only through the existing 
   checkbox(ui.choices, '允许本群使用 Beta').props.onChange({target: {checked: true}}); ui = render();
   button(ui.choices, '完成').props.onClick(); ui = render();
   expect(save).not.toHaveBeenCalled(); expect(button(ui.editor, '保存')).toBeDefined();
-  button(ui.choices, '选择强度').props.onClick(); ui = render();
   checkbox(ui.choices, '允许本群使用 low Effort').props.onChange({target: {checked: false}}); ui = render();
-  button(ui.choices, '完成').props.onClick(); ui = render();
   expect(save).not.toHaveBeenCalled();
   button(ui.editor, '保存').props.onClick(); await flush(); ui = render();
   expect(save.mock.calls).toEqual([[{models: ['alpha', 'beta'], efforts: ['high']}, 'r1']]);
@@ -120,7 +120,6 @@ it('retains saved values in unavailable catalogs and permits read-only inspectio
   expect(saved.props.checked).toBe(true); expect(saved.props.disabled).toBe(true);
   expect(button(all, '完成')?.props.disabled ?? true).toBe(true);
   dialog(all).props.onClose(); all = render();
-  button(all, '查看强度').props.onClick(); all = render();
   expect(checkbox(all, '允许本群使用 high Effort').props.checked).toBe(true);
   expect(checkbox(all, '允许本群使用 high Effort').props.disabled).toBe(true);
   expect(changed).not.toHaveBeenCalled(); expect(value.models).toEqual(['retired']);
@@ -184,10 +183,29 @@ it('loads the changed Provider catalog, stages its model and Effort choices, and
   button(ui.choices, '完成').props.onClick(); ui = render();
   button(ui.editor, '保存').props.onClick(); await flush(); ui = render();
   expect(save).not.toHaveBeenCalled();
-  button(ui.choices, '选择强度').props.onClick(); ui = render();
   checkbox(ui.choices, '允许本群使用 high Effort').props.onChange({target: {checked: true}}); ui = render();
-  button(ui.choices, '完成').props.onClick(); ui = render();
   expect(save).not.toHaveBeenCalled();
   button(ui.editor, '保存').props.onClick(); await flush(); ui = render();
   expect(save.mock.calls).toEqual([[{backend: otherCatalog.backend, models: ['claude-model'], efforts: ['high']}, 'r1']]);
+});
+
+it('retries a failed catalog read without changing the parent selection', async () => {
+  const value = initial();
+  h.client.settings.mockResolvedValueOnce({kind: 'refused', message: '目录服务暂不可用'}).mockResolvedValueOnce({kind: 'models', catalog});
+  const render = () => at('retry-catalog', () => Catalog({botId: agentIdSchema.parse('cli_retry'), backend: value.backend, purpose: 'project', children: current => <span>{current?.state ?? 'loading'}</span>}));
+  render(); await flush(); let all = render();
+  expect(all.filter(node => node.props.children === '目录服务暂不可用')).toHaveLength(1);
+  button(all, '重新读取').props.onClick(); render(); await flush(); all = render();
+  expect(h.client.settings).toHaveBeenCalledTimes(2);
+  expect(all.some(node => node.props.children === 'ready')).toBe(true);
+  expect(value).toEqual(initial());
+});
+
+it('preserves saved Effort selections while the catalog is still loading', () => {
+  const changed = vi.fn();
+  const all = choices({value: initial(), disabled: false, onChange: changed});
+  const low = checkbox(all, '允许本群使用 low Effort');
+  expect(low.props.checked).toBe(true); expect(low.props.disabled).toBe(true);
+  low.props.onChange({target: {checked: false}});
+  expect(changed).not.toHaveBeenCalled();
 });

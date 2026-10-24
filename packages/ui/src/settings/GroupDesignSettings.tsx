@@ -181,8 +181,8 @@ export function ModelAccessFields({botId, value, onChange, disabled, providers, 
     <div className="gd-model-summary-row gd-model-provider-row"><span className="gd-model-summary-label">Provider</span>
       <div className="gd-model-provider-control"><SelectControl label="模型 Provider" className="gd-model-provider-select" options={choices} value={value.backend} disabled={disabled}
         onChange={backend => {if (!disabled && backend !== value.backend && providers.some(provider => provider.id === backend)) onChange({backend, models: [], efforts: []});}}/>
-        <span className="gd-model-provider-state">{available ? '可用' : '当前不可用'}</span></div>
-      {onOpenProviders && <Button size="sm" variant="ghost" onClick={onOpenProviders}>查看状态<ChevronRight size={13}/></Button>}
+        <span className="gd-model-provider-state">{available ? '' : '当前不可用'}</span></div>
+      {onOpenProviders && <Button size="sm" variant="ghost" onClick={onOpenProviders}>Provider 设置<ChevronRight size={13}/></Button>}
     </div>
     {permissionName && value.backend !== savedBackend && <p className="gd-model-compact-notice" role="status">换 Provider 后，权限仍是「{permissionName}」；自定义设置会清掉。</p>}
     {!available && <div className="gd-model-compact-notice" role="status"><span>此 Provider 暂不可用，已保存的选择仍保留。</span>{onOpenProviders && <Button size="sm" onClick={onOpenProviders}>检查 Provider</Button>}</div>}
@@ -194,9 +194,7 @@ export function ModelAccessChoices({value, onChange, catalog, disabled, onCatalo
   const problem = modelAccessProblem(value, catalog);
   return <>
     <CompactModelSelection value={value} onChange={onChange} catalog={catalog} disabled={disabled}/>
-    <p className="gd-model-compact-note">群内只显示允许的模型及其支持的强度。</p>
-    {catalog?.state === 'fallback' && catalog.error && <p className="gd-model-compact-note" role="status">{catalog.error}</p>}
-    {problem && catalog && <p className="gd-model-compact-note" role="status">{problem}</p>}
+    {problem && catalog?.state === 'ready' && <p className="gd-model-compact-note" role="status">{problem}</p>}
   </>;
 }
 
