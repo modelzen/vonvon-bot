@@ -62,7 +62,8 @@
 .gd-skill-search input:focus-visible { outline: 0; box-shadow: none; }
 .gd-skill-actions { display: flex; align-items: center; justify-content: flex-end; flex: none; gap: 14px; margin-left: auto; }
 .gd-skill-count { font-size: 11px; line-height: 1.5; color: var(--color-text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.gd-skill-list { max-height: 240px; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-width: thin; scroll-padding: 8px; }
+/* At either end of the list, let wheel/trackpad input continue scrolling the page. */
+.gd-skill-list { max-height: 240px; overflow-y: auto; scrollbar-width: thin; scroll-padding: 8px; }
 .gd-skill-row { display: flex; align-items: center; gap: 16px; padding: 14px 16px; }
 .gd-skill-row + .gd-skill-row { border-top: 1px solid var(--color-border); }
 .gd-skill-detail { display: flex; align-items: center; gap: 12px; padding: 0; border: 0; background: none; text-align: left; color: var(--color-text); min-width: 0; flex: 1; cursor: pointer; }
