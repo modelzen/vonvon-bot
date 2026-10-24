@@ -4,7 +4,7 @@ import {ChevronRight, Folder, GitBranch, Plus, RefreshCw, Search, X} from 'lucid
 import {backendLabel, isKnownJudgeSelection, type AgentId, type AgentSettingsView, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ProjectSettingsView, type SettingsReply, type ToolState} from '@vonvon/protocol';
 import {useClient, useShellCapabilities} from '../client-context';
 import {useDirectoriesPicker} from '../directory-picker';
-import {Button, InlineNotice, Toggle} from '../reference/components/ui';
+import {Button, InlineNotice, SelectControl, Toggle} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {botChatUrl, copyShortcut, openExternalUrl} from '../url-actions';
@@ -16,6 +16,7 @@ import {providerBackends, providerUsable} from '../setup/provider-state';
 import {DecisionFields, providerDecisionProblem} from './DecisionFields';
 export {DecisionFields} from './DecisionFields';
 import {AnnouncedReadonlyMessages, hasReadonlyMessage, type ReadonlyMessage} from './readonly-messages';
+import {CompactModelSelection} from './CompactModelSelection';
 import './group-design-settings.css';
 
 /** 模型与权限 shares one settings view; permission remains a compatible internal section key. */
@@ -133,9 +134,9 @@ export function GroupSettingsContent({view, refresh, tab, tools, botName = 'Bot'
             placeholder="例如：在这个群负责发版检查和排障。留空时使用 Bot 页的角色设定。"/>
           <p className="gd-note">{[...draft.supplement].length} / {SUPPLEMENT_MAX} 字。</p>
         </>}/> : <MissingSection/>)}
-      {tab === 'model' && (sections.modelAccess ? <Editor title="可用模型" section={sections.modelAccess} save={(patch, revision) => save('modelAccess', patch, revision)}
+      {tab === 'model' && (sections.modelAccess ? <Editor title="执行模型" section={sections.modelAccess} save={(patch, revision) => save('modelAccess', patch, revision)}
         render={(draft, set, disabled) => <ModelAccessFields botId={view.scope.botId} value={draft} onChange={set} disabled={disabled} providers={providers} onCatalog={rememberCatalog}
-          permissionName={sections.permission.stored.options.tiers.find(tier => tier.tier === sections.permission.stored.mode)?.name} savedBackend={view.identity.backend}/>}
+          onOpenProviders={onOpenProviders} permissionName={sections.permission.stored.options.tiers.find(tier => tier.tier === sections.permission.stored.mode)?.name} savedBackend={view.identity.backend}/>}
         validate={value => providers.some(provider => provider.id === value.backend) ? modelAccessProblem(value, modelCatalog.current) : '此 Provider 当前不可用，请先安装并登录。'}/> : <MissingSection/>)}
       {(tab === 'model' || tab === 'permission') && <ProjectPanel view={view} refresh={refresh} partition="permission" independent/>}
       {tab === 'response' && <>
@@ -173,29 +174,29 @@ export function modelAccessProblem(value: ModelAccess, catalog?: ModelCatalog): 
   const incompatible = catalog.models.filter(model => value.models.includes(model.id) && model.supportedEfforts.length > 0 && !model.supportedEfforts.some(effort => value.efforts.includes(effort)));
   return incompatible.length ? `请选择 ${incompatible.map(model => model.displayName).join('、')} 支持的 Effort。` : undefined;
 }
-export function ModelAccessFields({botId, value, onChange, disabled, providers, onCatalog, permissionName, savedBackend}: {botId: AgentId; value: ModelAccess; onChange: (value: ModelAccess) => void; disabled: boolean; providers: Provider[]; onCatalog?: (catalog: ModelCatalog | undefined) => void; permissionName?: string; savedBackend?: string}) {
+export function ModelAccessFields({botId, value, onChange, disabled, providers, onCatalog, permissionName, savedBackend, onOpenProviders}: {botId: AgentId; value: ModelAccess; onChange: (value: ModelAccess) => void; disabled: boolean; providers: Provider[]; onCatalog?: (catalog: ModelCatalog | undefined) => void; permissionName?: string; savedBackend?: string; onOpenProviders?: () => void}) {
   const available = providers.some(provider => provider.id === value.backend);
-  return <div className="gd-model-fields">
-    <fieldset><legend>Provider</legend><SettingChoices label="模型 Provider" choices={providerChoices(providers, value.backend)} value={value.backend} disabled={disabled} onChange={backend => {if (providers.some(provider => provider.id === backend)) onChange({backend, models: [], efforts: []});}}/></fieldset>
-    {permissionName && value.backend !== savedBackend && <p className="gd-note" role="status">换 provider 以后，权限还是「{permissionName}」；高级设置会清掉。</p>}
-    {!available && <p className="gd-note" role="status">此 Provider 暂不可用。完成安装与登录后可继续，原配置已保留。</p>}
+  const choices = providerChoices(providers, value.backend);
+  return <div className="gd-model-fields gd-model-fields--compact">
+    <div className="gd-model-summary-row"><span className="gd-model-summary-label">Provider</span>
+      <div className="gd-model-provider-control"><SelectControl label="模型 Provider" className="gd-model-provider-select" options={choices} value={value.backend} disabled={disabled}
+        onChange={backend => {if (!disabled && backend !== value.backend && providers.some(provider => provider.id === backend)) onChange({backend, models: [], efforts: []});}}/>
+        <span className="gd-model-provider-state">{available ? '可用' : '当前不可用'}</span></div>
+      {onOpenProviders && <Button size="sm" variant="ghost" onClick={onOpenProviders}>查看状态<ChevronRight size={13}/></Button>}
+    </div>
+    {permissionName && value.backend !== savedBackend && <p className="gd-model-compact-notice" role="status">换 Provider 后，权限仍是「{permissionName}」；自定义设置会清掉。</p>}
+    {!available && <div className="gd-model-compact-notice" role="status"><span>此 Provider 暂不可用，已保存的选择仍保留。</span>{onOpenProviders && <Button size="sm" onClick={onOpenProviders}>检查 Provider</Button>}</div>}
     <Catalog key={value.backend} botId={botId} backend={value.backend} purpose="project">{catalog => <ModelAccessChoices value={value} onChange={onChange} catalog={catalog?.backend === value.backend ? catalog : undefined} disabled={disabled || !available} onCatalog={onCatalog}/>}</Catalog>
   </div>;
 }
 export function ModelAccessChoices({value, onChange, catalog, disabled, onCatalog}: {value: ModelAccess; onChange: (value: ModelAccess) => void; catalog?: ModelCatalog; disabled: boolean; onCatalog?: (catalog: ModelCatalog | undefined) => void}) {
   useEffect(() => {onCatalog?.(catalog);}, [catalog, onCatalog]);
-  const models = catalog?.models.filter(model => !model.hidden) ?? [];
-  const efforts = [...new Set([...(catalog?.models.flatMap(model => model.supportedEfforts) ?? []), ...value.efforts])];
   const problem = modelAccessProblem(value, catalog);
   return <>
-    <fieldset><legend>可用模型</legend><div className="gd-model-list">
-      {models.map(model => <label className="gd-model-choice" key={model.id}><input type="checkbox" checked={value.models.includes(model.id)} disabled={disabled || catalog?.state === 'unavailable'} aria-label={`允许本群使用 ${model.displayName}`} onChange={event => onChange({...value, models: toggleItem(value.models, model.id, event.target.checked)})}/><span title={model.displayName.toLocaleLowerCase().replace(/[\s_-]+/g, '') !== model.id.toLocaleLowerCase().replace(/[\s_-]+/g, '') ? model.id : undefined}><strong>{model.displayName}</strong></span></label>)}
-      {value.models.filter(id => !models.some(model => model.id === id)).map(id => <label key={id} className="gd-model-choice" data-unavailable><input type="checkbox" checked disabled={disabled} aria-label={`移除未列出的模型 ${id}`} onChange={() => onChange({...value, models: value.models.filter(model => model !== id)})}/><span><strong>{id}</strong><small>已保存，当前目录未列出</small></span></label>)}
-      {!models.length && !value.models.length && <p className="gd-note">{catalog ? catalog.error || '当前没有可选模型。' : '正在读取模型…'}</p>}
-    </div></fieldset>
-    {efforts.length > 0 && <fieldset><legend>可用 Effort</legend><div className="gd-efforts">{efforts.map(effort => <label className="gd-effort-choice" key={effort}><input type="checkbox" checked={value.efforts.includes(effort)} disabled={disabled} aria-label={`允许本群使用 ${effort} Effort`} onChange={event => onChange({...value, efforts: toggleItem(value.efforts, effort, event.target.checked)})}/>{effort}</label>)}</div><p className="gd-note">群内切换时，只显示所选模型支持的 Effort。</p></fieldset>}
-    {catalog?.state === 'fallback' && catalog.error && <p className="gd-note" role="status">{catalog.error}</p>}
-    {problem && catalog && <p className="gd-note" role="status">{problem}</p>}
+    <CompactModelSelection value={value} onChange={onChange} catalog={catalog} disabled={disabled}/>
+    <p className="gd-model-compact-note">群内只显示允许的模型及其支持的强度。</p>
+    {catalog?.state === 'fallback' && catalog.error && <p className="gd-model-compact-note" role="status">{catalog.error}</p>}
+    {problem && catalog && <p className="gd-model-compact-note" role="status">{problem}</p>}
   </>;
 }
 

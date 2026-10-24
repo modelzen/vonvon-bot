@@ -29,12 +29,12 @@ it('has memory and workspace tabs, rename and delete, and no group tabs while tw
   expect(html).toContain('项目「支付组」');
   for(const label of ['记忆','工作区'])expect(html).toContain(`>${label}</button>`);
   expect(html).toContain('重命名');expect(html).toContain('删除项目…');
-  for(const label of ['补充职责','回复规则','权限'])expect(html).not.toContain(`>${label}</button>`);
+  for(const label of ['模型与权限','能力','沟通方式','补充职责','回复规则','权限'])expect(html).not.toContain(`>${label}</button>`);
 });
 it('keeps group settings on the group page even for a project with one binding',()=>{
   const one=make([row('cli_a','oc_pay','qa')]);
   const html=render(one,{kind:'map'});
-  for(const label of ['能力','补充职责','模型','回复规则','权限','模型看到什么'])expect(html).not.toContain(`>${label}</button>`);
+  for(const label of ['模型与权限','能力','沟通方式','补充职责','模型','回复规则','权限','模型看到什么'])expect(html).not.toContain(`>${label}</button>`);
   // a group pane asked of a project that has two bindings falls back to the map
   expect(render(two,{kind:'group',tab:'permission'})).toContain('id="setting-%E7%BE%A4%E5%92%8C%20Bot"');
 });

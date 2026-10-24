@@ -195,12 +195,12 @@ test('s28c: the manual Open ID entry remains searchable alongside the picker', (
 });
 
 
-test('each group setting belongs to its visible page or expandable editor', () => {
+test('each group setting belongs to its visible page or expandable editor, including compact model and permission summaries', () => {
   for (const [query, tab, section] of [
     ['添加技能', 'capabilities', '技能'], ['语音转文字', 'capabilities', '语音'],
     ['补充职责', 'role', '本群角色'], ['本群个性', 'role', '本群角色'],
     ['项目记忆', 'memory', '记忆'],
-    ['模型 Provider', 'model', '可用模型'], ['可用 Effort', 'model', '可用模型'],
+    ['模型 Provider', 'model', '执行模型'], ['可用 Effort', 'model', '执行模型'],
     ['权限', 'model', '权限'], ['能挡到什么', 'model', '权限'], ['高级设置', 'model', '权限'],
     ['沟通方式', 'response', '聊天方式'], ['回复规则', 'response', '聊天方式'], ['聊天方式', 'response', '聊天方式'], ['显示模型', 'response', '消息与提醒'],
     ['显示工具调用', 'response', '消息与提醒'], ['从群成员选择', 'response', '响应成员'],
@@ -214,6 +214,21 @@ test('each group setting belongs to its visible page or expandable editor', () =
     const entry = findEntries(smart, query)[0];
     assert.equal(entry?.destination.section, '判断规则');
     assert.equal(groupTabForSection(entry?.destination.section), 'response');
+  }
+});
+
+test('model and permission search targets reach visible compact summaries with their edit entry points', () => {
+  for (const query of ['模型 Provider', '允许使用的模型', '可用 Effort']) {
+    const entry = findEntries(entries, query).find(item => item.destination.selection?.kind === 'membership');
+    assert.equal(entry?.destination.section, '执行模型', query);
+    assert.equal(entry?.destination.field, '', query);
+    assert.equal(groupTabForSection(entry?.destination.section), 'model', query);
+  }
+  for (const query of ['权限', '能挡到什么', '自定义权限', '高级设置']) {
+    const entry = findEntries(entries, query).find(item => item.destination.selection?.kind === 'membership' && item.destination.field === '修改权限');
+    assert.equal(entry?.destination.section, '权限', query);
+    assert.equal(entry?.destination.field, '修改权限', query);
+    assert.equal(groupTabForSection(entry?.destination.section), 'model', query);
   }
 });
 
