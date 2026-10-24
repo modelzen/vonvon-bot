@@ -6,19 +6,13 @@
 .gd-model-provider-control { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .gd-model-provider-select { width: 180px; max-width: 100%; min-width: 0; }
 .gd-model-provider-state { font-size: 11px; color: var(--color-text-secondary); }
-.gd-model-selection-value { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
-.gd-selected-models { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
-.gd-selected-model { padding: 5px 9px; border-radius: 6px; background: var(--color-surface-muted); color: var(--color-text); font-size: 12px; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; }
-.gd-model-change { flex: none; color: var(--color-accent); }
-.gd-model-change > span { display: flex; align-items: center; gap: 3px; }
-.gd-model-edit-value--empty { font-size: 12px; color: var(--color-text-tertiary); }
-.gd-inline-efforts { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.gd-inline-effort { display: inline-flex; position: relative; align-items: center; gap: 4px; min-height: 30px; padding: 5px 9px; border: 1px solid var(--color-border); border-radius: 6px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; cursor: pointer; }
-.gd-inline-effort > svg { visibility: hidden; }
-.gd-inline-effort:has(input:checked) { color: var(--color-accent); border-color: color-mix(in srgb, var(--color-accent) 25%, var(--color-border)); background: color-mix(in srgb, var(--color-accent) 7%, var(--color-surface)); }
-.gd-inline-effort:has(input:checked) > svg { visibility: visible; }
-.gd-inline-effort:has(input:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: 2px; }
-.gd-inline-effort:has(input:disabled) { cursor: default; opacity: .6; }
+.gd-multiselect-field { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; min-height: 38px; padding: 6px 10px; border: 1px solid var(--color-border-strong); border-radius: var(--control-radius, 8px); background: var(--color-surface); color: var(--color-text); text-align: left; font: inherit; cursor: pointer; }
+.gd-multiselect-values { display: flex; flex: 1; align-items: center; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.gd-multiselect-tag { padding: 3px 7px; border-radius: 4px; background: var(--color-surface-muted); color: var(--color-text); font-size: 12px; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; }
+.gd-multiselect-placeholder { padding-block: 3px; color: var(--color-text-tertiary); font-size: 12px; }
+.gd-multiselect-field > svg { flex: none; color: var(--color-text-tertiary); }
+.gd-multiselect-field:disabled { cursor: default; color: var(--color-text-secondary); }
+.gd-multiselect-field:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .gd-model-compact-notice { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; padding: 8px 12px; border-radius: 6px; background: var(--color-status-warning-bg); color: var(--color-status-warning); font-size: 12px; line-height: 1.5; }
 .gd-model-compact-note { margin: 0; padding: 8px 16px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.6; }
 .gd-selection-count { display: inline-flex; align-items: center; justify-content: center; flex: none; min-width: 25px; height: 23px; padding: 0 6px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface-muted); color: var(--color-text-secondary); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -70,8 +64,5 @@
 .gd-model-catalog-status { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; padding: 8px 16px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
 .gd-model-catalog-status > span { flex: 1; min-width: 180px; overflow-wrap: anywhere; }
 .gd-model-catalog-status .ui-button { flex: none; color: var(--color-accent); }
-@media (hover: hover) and (pointer: fine) {
-  .gd-inline-effort:not(:has(input:disabled)):hover { border-color: var(--color-accent); }
-}
-@media (pointer: coarse) { .gd-inline-effort { min-height: 44px; } }
-@media (forced-colors: active) { .gd-inline-effort:has(input:checked) { border-color: Highlight; color: Highlight; } }
+@media (hover: hover) and (pointer: fine) { .gd-multiselect-field:not(:disabled):hover { border-color: var(--color-accent); } }
+@media (pointer: coarse) { .gd-multiselect-field { min-height: 44px; } }

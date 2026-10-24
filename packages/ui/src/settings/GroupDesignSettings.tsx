@@ -124,7 +124,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
             placeholder="例如：在这个群负责发版检查和排障。留空时使用 Bot 页的角色设定。"/>
           <p className="gd-note">{[...draft.supplement].length} / {SUPPLEMENT_MAX} 字。</p>
         </>}/> : <MissingSection/>)}
-      {tab === 'model' && (sections.modelAccess ? <Editor title="执行模型" section={sections.modelAccess} save={(patch, revision) => save('modelAccess', patch, revision)}
+      {tab === 'model' && (sections.modelAccess ? <Editor title="可用模型" section={sections.modelAccess} save={(patch, revision) => save('modelAccess', patch, revision)}
         render={(draft, set, disabled) => <ModelAccessFields botId={view.scope.botId} value={draft} onChange={set} disabled={disabled} providers={providers} onCatalog={rememberCatalog}
           onOpenProviders={onOpenProviders} permissionName={sections.permission.stored.options.tiers.find(tier => tier.tier === sections.permission.stored.mode)?.name} savedBackend={view.identity.backend}/>}
         validate={value => providers.some(provider => provider.id === value.backend) ? modelAccessProblem(value, modelCatalog.current) : '此 Provider 当前不可用，请先安装并登录。'}/> : <MissingSection/>)}
@@ -169,7 +169,7 @@ export function ModelAccessFields({botId, value, onChange, disabled, providers, 
   const choices = providerChoices(providers, value.backend);
   return <div className="gd-model-fields gd-model-fields--compact">
     <div className="gd-model-summary-row gd-model-provider-row"><span className="gd-model-summary-label">Provider</span>
-      <div className="gd-model-provider-control"><SelectControl label="模型 Provider" className="gd-model-provider-select" options={choices} value={value.backend} disabled={disabled}
+      <div className="gd-model-provider-control"><SelectControl label="模型 Provider" presentation="dropdown" className="gd-model-provider-select" options={choices} value={value.backend} disabled={disabled}
         onChange={backend => {if (!disabled && backend !== value.backend && providers.some(provider => provider.id === backend)) onChange({backend, models: [], efforts: []});}}/>
         <span className="gd-model-provider-state">{available ? '' : '当前不可用'}</span></div>
       {onOpenProviders && <Button size="sm" variant="ghost" onClick={onOpenProviders}>Provider 设置<ChevronRight size={13}/></Button>}
