@@ -6,6 +6,7 @@ import {GroupWorkspace} from '../src/GroupWorkspace';
 import {GroupDesignSettings, GroupSettingsContent} from '../src/settings/GroupDesignSettings';
 import {Editor} from '../src/settings/SettingsPanel';
 import {GroupAttentionStatus} from '../src/management/GroupAttentionStatus';
+import {OperationActivity} from '../src/management/OperationActivity';
 import {ConversationSlider} from '../src/settings/ConversationSlider';
 
 type Slot = {states: unknown[]; refs: Array<{current: unknown}>; effects: Array<{deps?: unknown[]; cleanup?: () => void}>; memos: Array<{deps?: unknown[]; value: unknown}>; state: number; ref: number; effect: number; memo: number};
@@ -250,4 +251,31 @@ it('does not rewrite a legacy group decision when switching to smart until a pro
   ui.decision!.props.onChange(selection); ui = render(); ui.submit!.props.onClick(); ui = await settle();
   const request = harness.client.settings.mock.calls.find(([request]) => request.type === 'save')?.[0] as Extract<SettingsRequest, {type: 'save'}>;
   expect(request.edit.patch).toEqual({selection});
+});
+
+it.each([
+  {enabled: false, reply: 'applied', label: '本群停用中'},
+  {enabled: true, reply: 'refused', label: '本群启用中'},
+] as const)('shows group lifecycle activity only while the $label request is pending', async ({enabled, reply, label}) => {
+  project = {...project, enabled: !enabled};
+  let resolve!: (value: unknown) => void;
+  harness.client.collaboration.mockImplementation(async request => {
+    if (request.action === 'project') return {kind: 'project', project};
+    if (request.action === 'editProject') return new Promise(done => {resolve = done;});
+    throw new Error(`unexpected collaboration ${request.action}`);
+  });
+  const inspect = () => nodes(renderAt('lifecycle-workspace', () => GroupWorkspace({member, agent, group, snapshot,
+    initialTab: 'response', onBot: () => {}, onBotProfile: () => {}, onOpenTools: () => {}, onOpenSecrets: () => {}, onChanged: changed})));
+  inspect(); await flush(); let ui = inspect();
+  expect(ui.some(node => node.type === OperationActivity)).toBe(false);
+  const toggle = ui.find(node => node.props['aria-label'] === `在本群使用 ${agent.name}`)!;
+  toggle.props.onChange({target: {checked: enabled}});
+  await flush(); ui = inspect();
+  expect(harness.client.collaboration).toHaveBeenCalledWith(expect.objectContaining({action: 'editProject', enabled}));
+  expect(ui.find(node => node.type === OperationActivity)?.props.label).toBe(label);
+  expect(ui.find(node => node.props['aria-label'] === `在本群使用 ${agent.name}`)?.props.disabled).toBe(true);
+  resolve(reply === 'applied' ? {kind: 'applied', project: {...project, enabled, revision: 'project-r2'}} : {kind: 'refused', message: '保存失败'});
+  await flush(); ui = inspect();
+  expect(ui.some(node => node.type === OperationActivity)).toBe(false);
+  if (reply === 'refused') expect(ui.some(node => node.props.title === '操作未完成')).toBe(true);
 });
