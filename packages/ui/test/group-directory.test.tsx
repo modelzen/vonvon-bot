@@ -20,9 +20,9 @@ const snapshot = desktopSnapshotSchema.parse({
 });
 function harness(data = snapshot) {
   let state: GroupDirectoryState = {query: '', expanded: {}};
-  const onMembership = vi.fn(), onProjects = vi.fn();
-  const render = () => nodes(GroupDirectory({snapshot: data, state, onStateChange: next => {state = next;}, statusFor: () => ({label: '', tone: 'success'}), onMembership, onProjects}));
-  return {render, onMembership, onProjects, state: () => state};
+  const onMembership = vi.fn();
+  const render = () => nodes(GroupDirectory({snapshot: data, state, onStateChange: next => {state = next;}, statusFor: () => ({label: '', tone: 'success'}), onMembership}));
+  return {render, onMembership, state: () => state};
 }
 
 it('groups by Feishu group even when one group has different projects and two groups share a project', () => {
@@ -45,11 +45,9 @@ it('retains the tree search and expansion when opening a binding and rendering i
   expect(h.render().find(node => node.props.className === 'group-directory-bots')!.props.hidden).toBe(true);
 });
 
-it('keeps the original group tree available with an old daemon and offers project management separately', () => {
+it('keeps the original group tree available with an old daemon', () => {
   const h = harness({...snapshot, projects: undefined, memberships: snapshot.memberships.map(({projectId: _drop, ...member}) => member)});
   expect(h.render().filter(node => node.props.className === 'group-directory-identity')).toHaveLength(2);
-  h.render().find(node => node.props.className === 'project-directory-open')!.props.onClick();
-  expect(h.onProjects).toHaveBeenCalledOnce();
   expect(h.onMembership).not.toHaveBeenCalled();
 });
 
