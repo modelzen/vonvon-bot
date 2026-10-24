@@ -1,0 +1,20 @@
+.ui-select-segments { display: inline-flex; align-items: stretch; width: var(--control-field-width, 260px); max-width: 100%; min-width: 0; height: var(--control-height, 32px); padding: 2px; border: 1px solid var(--color-border); border-radius: var(--control-radius, 8px); background: var(--color-surface-muted); }
+.ui-select-segment { position: relative; display: flex; flex: 1 1 auto; align-items: center; justify-content: center; min-width: 0; border-radius: calc(var(--control-radius, 8px) - 3px); cursor: pointer; }
+.ui-select-segment input { position: absolute; width: 1px; height: 1px; margin: 0; padding: 0; overflow: hidden; clip-path: inset(50%); }
+.ui-select-segment > span { display: block; min-width: 0; overflow: hidden; padding: 0 6px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.35; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.ui-select-segment:has(input:checked) { background: var(--color-surface); box-shadow: 0 1px 2px #10182810; }
+.ui-select-segment:has(input:checked) > span { color: var(--color-text); font-weight: 550; }
+.ui-select-segment:has(input:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.ui-select-segment:has(input:disabled) { cursor: default; }
+.ui-select-segment:has(input:disabled) > span { color: var(--color-text-tertiary); }
+.ui-select-segments[aria-disabled="true"] { opacity: .55; }
+@media (hover: hover) and (pointer: fine) {
+  .ui-select-segment:not(:has(input:disabled)):not(:has(input:checked)):hover { background: var(--color-surface-hover); }
+}
+@media (pointer: coarse) {
+  .ui-select-segments[role="radiogroup"] { height: auto; min-height: 44px; }
+  .ui-select-segment { min-height: 44px; }
+}
+@media (forced-colors: active) {
+  .ui-select-segment:has(input:checked) { outline: 1px solid Highlight; outline-offset: -1px; }
+}

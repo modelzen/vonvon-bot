@@ -41,7 +41,7 @@ const catalog: ModelCatalog = {backend: 'codex-appserver', state: 'ready', sourc
 ]};
 const initial = (): Value => ({backend: catalog.backend, models: ['alpha'], efforts: ['low', 'high']});
 function text(node: ReactNode): string {if (typeof node === 'string' || typeof node === 'number') return String(node); if (Array.isArray(node)) return node.map(text).join(''); return isValidElement<{children?: ReactNode}>(node) ? text(node.props.children) : '';}
-const button = (all: Element[], label: string) => all.find(node => text(node.props.children) === label && node.props.onClick)!;
+const button = (all: Element[], label: string) => all.find(node => (node.props['aria-label'] === label || text(node.props.children) === label) && node.props.onClick)!;
 const checkbox = (all: Element[], label: string) => all.find(node => node.type === 'input' && node.props['aria-label'] === label)!;
 const dialog = (all: Element[]) => all.find(node => node.type === Dialog && node.props.open)!;
 const search = (all: Element[]) => all.find(node => node.type === 'input' && node.props['aria-label'] === '搜索模型')!;

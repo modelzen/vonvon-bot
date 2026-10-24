@@ -1,5 +1,5 @@
 import {useRef, useState} from 'react';
-import {Check, ChevronDown, Search} from 'lucide-react';
+import {Check, Pencil, Search} from 'lucide-react';
 import type {ModelCatalog, ProjectSettingsView} from '@vonvon/protocol';
 import {Button, InlineNotice} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
@@ -42,21 +42,19 @@ export function CompactModelSelection({value, onChange, catalog, disabled}: {
     setPicker(undefined);
   }
   return <>
-    <div className="gd-model-summary-row">
+    <div className="gd-model-summary-row gd-model-summary-row--value">
       <span className="gd-model-summary-label">允许的模型</span>
-      <div className="gd-model-summary-value gd-model-summary-tags">
-        {selectedModels.length ? <>{selectedModels.slice(0, 2).map((name, index) => <span className="gd-selection-tag" key={value.models[index]} title={name}>{name}</span>)}
-          {selectedModels.length > 2 && <span className="gd-selection-count" title={selectedModels.slice(2).join('、')} aria-label={`另 ${selectedModels.length - 2} 个模型`}>+{selectedModels.length - 2}</span>}</>
-          : <span className="gd-model-empty-value">尚未选择模型</span>}
-      </div>
-      <Button size="sm" variant="ghost" onClick={() => open('models')}>{editingDisabled ? '查看模型' : '选择模型'}<ChevronDown size={13}/></Button>
+      <Button size="sm" className="gd-model-edit-control" aria-label={editingDisabled ? '查看模型' : '选择模型'} aria-haspopup="dialog" aria-expanded={picker === 'models'} title={selectedModels.join('、') || '尚未选择模型'} onClick={() => open('models')}>
+        <span className={`gd-model-edit-value${selectedModels.length ? '' : ' gd-model-edit-value--empty'}`}>{selectedModels.slice(0, 2).join('、') || '尚未选择模型'}</span>
+        {selectedModels.length > 2 && <small>+{selectedModels.length - 2}</small>}<Pencil size={14} aria-hidden="true"/>
+      </Button>
     </div>
-    <div className="gd-model-summary-row">
+    <div className="gd-model-summary-row gd-model-summary-row--value">
       <span className="gd-model-summary-label">思考强度<small>Effort</small></span>
-      <div className="gd-model-summary-value gd-model-summary-tags">{value.efforts.length ? <>{value.efforts.slice(0, 3).map(effort => <span className="gd-selection-tag gd-selection-tag--effort" key={effort}>{effort}</span>)}
-        {value.efforts.length > 3 && <span className="gd-selection-count" title={value.efforts.slice(3).join('、')} aria-label={`另 ${value.efforts.length - 3} 档强度`}>+{value.efforts.length - 3}</span>}</>
-        : <span className="gd-model-empty-value">尚未选择强度</span>}</div>
-      <Button size="sm" variant="ghost" onClick={() => open('efforts')}>{editingDisabled ? '查看强度' : '选择强度'}<ChevronDown size={13}/></Button>
+      <Button size="sm" className="gd-model-edit-control" aria-label={editingDisabled ? '查看强度' : '选择强度'} aria-haspopup="dialog" aria-expanded={picker === 'efforts'} title={value.efforts.join('、') || '尚未选择强度'} onClick={() => open('efforts')}>
+        <span className={`gd-model-edit-value${value.efforts.length ? '' : ' gd-model-edit-value--empty'}`}>{value.efforts.slice(0, 3).join(' / ') || '尚未选择强度'}</span>
+        {value.efforts.length > 3 && <small>+{value.efforts.length - 3}</small>}<Pencil size={14} aria-hidden="true"/>
+      </Button>
     </div>
     <Dialog open={Boolean(picker)} title={picker === 'efforts' ? '选择可用强度' : '选择可用模型'}
       description={editingDisabled ? '当前配置仅可查看，已保存的选择仍保留。' : picker === 'efforts' ? '与模型独立选择；群内仅显示对应模型支持的强度。完成后在页面保存。' : '可多选。完成后在页面保存更改。'}
