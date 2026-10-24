@@ -133,8 +133,13 @@
 .gd-decision-config { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; padding-top: 12px; border-top: 1px solid var(--color-separator); }
 .gd-decision-config-copy { flex: 1 1 240px; min-width: 0; }
 .gd-decision-config-copy p { margin: 0; font-size: 12px; line-height: 1.6; color: var(--color-text-secondary); }
-.gd-decision-config-copy p:first-child { margin-bottom: 4px; font-size: 13px; font-weight: 500; color: var(--color-text); }
-.gd-decision-config-title { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; }
+.gd-decision-config-title { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 8px; font-size: 13px; color: var(--color-text); }
+.gd-decision-config-title strong { font-weight: 500; }
+.gd-decision-configured { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 400; color: var(--color-status-success); }
+.gd-decision-config-values { display: flex; flex-wrap: wrap; gap: 4px 24px; margin: 0 0 8px; font-size: 13px; line-height: 1.6; }
+.gd-decision-config-values > div { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.gd-decision-config-values dt { flex-shrink: 0; color: var(--color-text-secondary); font-size: 12px; }
+.gd-decision-config-values dd { margin: 0; overflow-wrap: anywhere; color: var(--color-text); }
 .gd-decision-key-state { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 400; color: var(--color-text-secondary); }
 .gd-decision-key-state[data-state="added"] { color: var(--color-status-success); }
 .gd-decision-key-state[data-state="missing"] { color: var(--color-status-warning); }
