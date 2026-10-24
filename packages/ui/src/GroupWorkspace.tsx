@@ -68,7 +68,7 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
   running.current = agent.running;
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [dialog, setDialog] = useState<'help'|'history'|'remove'|'smart'|'project'|null>(null);
+  const [dialog, setDialog] = useState<'help'|'history'|'remove'|'project'|null>(null);
   const [nextProject, setNextProject] = useState('');
   const menu = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
@@ -127,7 +127,7 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
   const otherProjects = (snapshot.projects ?? []).filter(item => item.id !== member.projectId);
   const conversation = project ? modeToConversation(project.kind) : member.conversation;
   const conversationControl = <div className="group-conversation-layout"><section id={settingAnchor("聊天方式")} className="group-conversation-choice" aria-label="聊天方式">
-    <h3>聊天方式</h3><ConversationSlider label="聊天方式" value={conversation} disabled={!available || busy} onChange={next => guard.navigate(() => {if (next === 'smart' && conversation !== 'smart') setDialog('smart'); else void update({conversation:next});})}/>
+    <h3>聊天方式</h3><ConversationSlider label="聊天方式" value={conversation} disabled={!available || busy} onChange={next => guard.navigate(() => {void update({conversation:next});})}/>
   </section>{conversation === 'smart' && member.conversation === 'smart' && <GroupAttentionStatus agent={agent} membership={member} connected={snapshot.host.kind === 'connected' && !snapshot.stale}/>}</div>;
   return <div className="group-design-workspace">
     <header className="group-design-heading"><GroupAvatar group={group} large/><h2>{group.name}</h2><Button size="sm" className="group-open-button" aria-label="在飞书打开此群" onClick={() => void openExternalUrl(groupUrl(group.id),'group',shell).catch(error => setError(String(error.message ?? error)))}><span className="group-open-label">飞书</span><ArrowUpRight size={13} aria-hidden="true"/></Button>
@@ -147,10 +147,6 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
     </section> : <GroupDesignSettings key={`${member.id}:${version}`} scope={{kind:'project',botId:member.agentId,projectName:member.name}} tab={tab} tools={snapshot.tools} botName={agent.name} groupName={group.name} onOpenTools={onOpenTools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets} responseHeader={conversationControl}/>}
     <Dialog open={dialog === 'history'} title={`${group.name} · ${agent.name}`} onClose={() => setDialog(null)}><div id={settingAnchor("会话管理")}>{agent.running ? <ConversationPanel agentId={agent.id} groupId={group.id} projectName={member.name} conversation={conversation} request={client.collaboration}/> : <p>Bot 运行后可查看对话记录。</p>}</div></Dialog>
     <Dialog open={dialog === 'help'} title="在群里使用" onClose={() => setDialog(null)}><GroupUsage conversation={conversation} botName={agent.name}/></Dialog>
-    <Dialog open={dialog === 'smart'} title="设置智能模式" onClose={() => guard.navigate(() => setDialog(null))}>
-      <p className="group-control-note">选择判断 Provider，模型与 Effort 使用决策模型页中的配置。</p>
-      {dialog === 'smart' && <GroupDesignSettings scope={{kind:'project',botId:member.agentId,projectName:member.name}} tab="response" tools={snapshot.tools} decisionSetupOnly onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets} onDecisionSaved={async () => {if (await update({conversation:'smart'})) setDialog(null); else throw new Error('决策模型已保存，未能切换聊天方式，请重试。');}}/>}
-    </Dialog>
     <ConfirmDialog open={dialog === 'project'} title="换到别的项目？" confirmLabel="换过去" pending={busy} onCancel={() => setDialog(null)} onConfirm={() => {setDialog(null); if (nextProject) void update({project: nextProject as ProjectId});}}
       description={`${agent.name} 在「${group.name}」里的记忆、工作区和会话都换成所选项目的，这个群现有的会话会归档，下一轮重新开场。原来的项目和它的记忆保留。所选项目的记忆、工作区文件和会话历史，现在和以后绑在这个项目上的群的人，都能通过 Bot 间接看到。`}>
       <label className="group-control-note">换到 <select aria-label="选择项目" value={nextProject} onChange={event => setNextProject(event.target.value)}>{otherProjects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
