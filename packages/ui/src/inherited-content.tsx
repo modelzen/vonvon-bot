@@ -3,7 +3,7 @@ import type {VonvonClient} from '@vonvon/client/browser';
 import type {AgentId, DesktopSnapshot, GroupId, MemoryItem, SnapshotProject} from '@vonvon/protocol';
 import {useClient} from './client-context';
 import type {MapNode} from './MindMap';
-import {branchViews, sourceLines, type MemoryList} from './memory-model';
+import {branchViews, sameJson, sourceLines, type MemoryList} from './memory-model';
 
 type Read<T> = {value: T; error?: never} | {value?: never; error: string};
 type Role = {identity: string; notes: string; changed: boolean};
@@ -146,7 +146,10 @@ export function useInheritedContent({project, snapshot, selectedAgentId, selecte
     const refresh = async () => {
       const request = ++serial;
       const found = await Promise.all(bots.map(async bot => [bot.id, await readInheritedContent(client, bot.id)] as const));
-      if (active && request === serial) setResult({key, values: Object.fromEntries(found)});
+      if (active && request === serial) {
+        const values = Object.fromEntries(found);
+        setResult(current => current.key === key && sameJson(current.values, values) ? current : {key, values});
+      }
     };
     void refresh();
     // Like project memory, inherited memory can change without a desktop snapshot revision.

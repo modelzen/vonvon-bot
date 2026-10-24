@@ -18,10 +18,11 @@ const tree: MapNode = {id: 'root', kind: 'root', label: '支付组', children: [
   {id: 'b3', kind: 'branch', label: '发版', drop: {accepts: () => true, onDrop: vi.fn()}},
 ]};
 
-it('draws HTML nodes with SVG connectors to the children of an open node, and none under a folded one', () => {
+it('retains semantic node content before the library mounts, and hides folded descendants', () => {
   const html = renderToStaticMarkup(<MindMap root={tree} label="导图"/>);
   expect(html).toContain('role="tree"');
-  expect(html.match(/<svg class="mm-links"/g)).toHaveLength(2);
+  expect(html).toContain('class="mm-static"');
+  expect(html).not.toContain('class="mm-links"');
   expect(html).toContain('发版改到周四');
   expect(html).not.toContain('不应出现');
   expect(html).toContain('aria-expanded="false"');

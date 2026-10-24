@@ -4,11 +4,12 @@ import type {MemoryItem, MemoryReply} from '@vonvon/protocol';
 import {MemoryMap} from '../src/MemoryMap';
 import {MindMap, type MapNode} from '../src/MindMap';
 import {MapInlineEditor} from '../src/MapInlineEditor';
+import {useInheritedContent} from '../src/inherited-content';
 
 type Effect = {deps?: unknown[]; cleanup?: () => void};
 const h = vi.hoisted(() => ({
   state: [] as unknown[], refs: [] as Array<{current: unknown}>, memos: [] as Array<{deps?: unknown[]; value: unknown}>, effects: [] as Effect[], pending: [] as Array<() => void>,
-  si: 0, ri: 0, mi: 0, ei: 0, client: {memory: vi.fn()},
+  si: 0, ri: 0, mi: 0, ei: 0, interval: undefined as undefined | (() => void), client: {memory: vi.fn(), settings: vi.fn()},
 }));
 vi.mock('react', async original => {
   const memo = (factory: () => unknown, deps?: unknown[]) => {const i = h.mi++; const old = h.memos[i]; if (old?.deps && deps && deps.every((value, at) => Object.is(value, old.deps![at]))) return old.value; const value = factory(); h.memos[i] = {value, deps}; return value;};
@@ -44,9 +45,10 @@ async function flush() {for (let i = 0; i < 10; i++) await Promise.resolve();}
 const find = (root: MapNode, id: string): MapNode => {const walk = (entry: MapNode): MapNode[] => [entry, ...(entry.children ?? []).flatMap(walk)]; return walk(root).find(entry => entry.id === id)!;};
 const editor = (node: MapNode) => {const content = node.content as Element; expect(content?.type).toBe(MapInlineEditor); return content.props;};
 beforeEach(() => {
-  h.state = []; h.refs = []; h.memos = []; h.effects = []; h.pending = []; vi.clearAllMocks();
+  h.state = []; h.refs = []; h.memos = []; h.effects = []; h.pending = []; h.interval = undefined; vi.clearAllMocks();
   h.client.memory.mockImplementation(async (request: {type: string}) => request.type === 'list' ? list([item('a'), item('b')]) : {kind: 'seen'});
-  vi.stubGlobal('window', {setInterval: () => 1, clearInterval: () => {}, dispatchEvent: () => {}});
+  vi.stubGlobal('window', {setInterval: (fn: () => void) => {h.interval = fn; return 1;}, clearInterval: () => {}, dispatchEvent: () => {}});
+  vi.stubGlobal('document', {visibilityState: 'visible'});
 });
 
 it('keeps an empty existing leaf draft and validates without sending an edit', async () => {
@@ -259,4 +261,63 @@ it('commits a memory draft before opening a page-owned role node', async () => {
   draft.session.current = {commit: () => draft.onCommit('记忆 a'), focus};
   find(render({before}), 'role').onClick?.(); await flush();
   expect(onClick).toHaveBeenCalledOnce();
+});
+
+it('keeps the same list and marks references on an unchanged poll, but updates integrity and new marks', async () => {
+  let current = list([item('a')]);
+  h.client.memory.mockImplementation(async (request: {type: string}) => request.type === 'list' ? structuredClone(current) : {kind: 'seen'});
+  render(); await flush(); render();
+  const first = h.state[0];
+  const firstMarks = h.state.find(value => value && typeof value === 'object' && 'ids' in value);
+  h.interval?.(); await flush(); render();
+  expect(h.state[0]).toBe(first);
+  expect(h.state.find(value => value && typeof value === 'object' && 'ids' in value)).toBe(firstMarks);
+
+  current = {...current, verified: false, problems: ['外部改过'], lastEventId: 'e2', newIds: ['a'], newBranches: ['发版'], madeRoom: ['old']} as MemoryReply;
+  h.interval?.(); await flush(); render();
+  expect(h.state[0]).not.toBe(first);
+  expect(h.state[0]).toMatchObject({verified: false, problems: ['外部改过'], lastEventId: 'e2', newIds: ['a']});
+  const changedMarks = h.state.find(value => value && typeof value === 'object' && 'ids' in value) as {ids: Set<string>; branches: Set<string>; madeRoom: Set<string>};
+  expect([...changedMarks.ids]).toEqual(['a']);
+  expect([...changedMarks.branches]).toEqual(['发版']);
+  expect([...changedMarks.madeRoom]).toEqual(['old']);
+});
+
+it('resets the list comparison cache when the memory scope changes', async () => {
+  h.client.memory.mockImplementation(async (request: {type: string}) => request.type === 'list' ? list([item('a')]) : {kind: 'seen'});
+  render(); await flush(); render();
+  const first = h.state[0];
+  const scope2 = {kind: 'project', projectId: 'prj_2'} as const;
+  render({scope: scope2}); await flush(); render({scope: scope2});
+  expect(h.client.memory.mock.calls.some(([request]) => request.type === 'list' && request.scope.projectId === 'prj_2')).toBe(true);
+  expect(h.state[0]).not.toBe(first);
+});
+
+it('polls inherited role and memory, retaining an equal result but showing an external role edit', async () => {
+  const project = {bindings: [{agentId: 'bot_a', groupId: 'g1'}, {agentId: 'bot_b', groupId: 'g1'}]};
+  const snapshot = {revision: 1, agents: [{id: 'bot_a', name: '甲'}, {id: 'bot_b', name: '乙'}], groups: [], projects: [], memberships: []};
+  const botItem = (id: string) => ({...item(id), scope: {kind: 'bot'}, source: {via: 'ui', botId: id, actorRole: 'desktop'}});
+  let verified = true;
+  let identity = '角色';
+  h.client.settings.mockImplementation(async (request: {scope: {botId: string}}) => ({kind: 'view', view: {scope: {kind: 'agent', botId: request.scope.botId}, administrators: {}, sections: {role: {stored: {identity, notes: '说明'}}}}}));
+  h.client.memory.mockImplementation(async (request: {scope: {botId: string}}) => ({...list([botItem(request.scope.botId) as MemoryItem]), verified}));
+  const run = (selectedAgentId = 'bot_a') => {h.si = h.ri = h.mi = h.ei = 0; useInheritedContent({project, snapshot, selectedAgentId} as never); for (const effect of h.pending.splice(0)) effect();};
+  run(); await flush(); run();
+  const first = h.state[0];
+  expect(h.client.settings).toHaveBeenCalledTimes(1);
+  h.interval?.(); await flush(); run();
+  expect(h.client.settings).toHaveBeenCalledTimes(2);
+  expect(h.state[0]).toBe(first);
+  identity = '别页改过的角色';
+  h.interval?.(); await flush(); run();
+  expect(h.state[0]).not.toBe(first);
+  expect(h.state[0]).toMatchObject({values: {bot_a: {role: {value: {identity}}}}});
+  const afterRole = h.state[0];
+  verified = false;
+  h.interval?.(); await flush(); run();
+  expect(h.state[0]).not.toBe(afterRole);
+  expect(h.state[0]).toMatchObject({values: {bot_a: {memory: {value: {verified: false}}}}});
+  run('bot_b'); await flush(); run('bot_b');
+  expect(h.state[0]).toMatchObject({key: 'bot_b'});
+  expect(h.client.settings).toHaveBeenCalledTimes(5);
 });
