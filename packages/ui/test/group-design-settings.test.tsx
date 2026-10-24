@@ -61,7 +61,8 @@ it('shows discovered skills and no fabricated tool authorization state', () => {
   const html = render('capabilities');
   expect(html).toContain('实际技能');
   expect(html).toContain('aria-label="使用 实际技能"');
-  expect(html).toContain('添加技能');
+  expect(html).not.toContain('添加技能');
+  expect(html).toContain('重新读取');
   expect(html).toContain('工具与连接');
   expect(html).not.toContain('待安装');
   expect(html).not.toContain('待授权');

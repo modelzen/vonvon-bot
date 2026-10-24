@@ -197,7 +197,7 @@ test('s28c: the manual Open ID entry remains searchable alongside the picker', (
 
 test('each group setting belongs to its visible page or expandable editor, including compact model and permission summaries', () => {
   for (const [query, tab, section] of [
-    ['添加技能', 'capabilities', '技能'], ['语音转文字', 'capabilities', '语音'],
+    ['使用技能', 'capabilities', '技能'], ['语音转文字', 'capabilities', '语音'],
     ['补充职责', 'role', '本群角色'], ['本群个性', 'role', '本群角色'],
     ['项目记忆', 'memory', '记忆'],
     ['模型 Provider', 'model', '执行模型'], ['可用 Effort', 'model', '执行模型'],
