@@ -103,7 +103,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
   return <AnnouncedReadonlyMessages.Provider value={[...outerReadonly, ...notices]}>
     {notices.map(notice => <p className="settings-readonly-notice" role="status" key={`${notice.reason}:${notice.message}`}>{notice.message}</p>)}
     <div className="gd-page">
-      {(tab === 'model' || tab === 'response') && (discovery.checking || discovery.message) && <div className="gd-provider-discovery" role="status">
+      {(tab === 'response' || (tab === 'model' && (discovery.checking || discovery.message))) && <div className="gd-provider-discovery" role="status">
         {discovery.checking ? '正在检查 Provider 登录状态…' : discovery.message}
         {!discovery.checking && <Button size="sm" variant="ghost" onClick={discovery.retry}>重新检查 Provider</Button>}
       </div>}
