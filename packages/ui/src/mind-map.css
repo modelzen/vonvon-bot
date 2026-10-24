@@ -1,10 +1,18 @@
-/* Lightweight HTML/SVG mind map, with a shared action position at the end of each node. */
-.mm { --mm-accent: var(--color-icon-purple, #7658d9); position: relative; overflow-x: auto; padding: 28px 38px 40px 6px; color: var(--color-text); font-size: 14px; outline: none; }
-.mm-tree { display: flex; align-items: center; width: max-content; min-width: 0; }
-.mm > .mm-tree { min-height: 320px; }
-.mm-self { flex: none; padding: 8px 0; }
-.mm-children { position: relative; display: flex; flex-direction: column; gap: 8px; padding-left: 64px; }
-.mm-links { position: absolute; left: 0; top: 0; color: color-mix(in srgb, var(--mm-accent) 55%, var(--color-border)); pointer-events: none; }
+/* The library owns the camera, links and branch geometry; React owns the slots. */
+.mm { --mm-accent: var(--color-icon-purple, #7658d9); position: relative; width: 100%; height: clamp(440px, 72vh, 780px); overflow: hidden; color: var(--color-text); font-size: 14px; outline: none; }
+.mm-engine { position: absolute !important; inset: 0; width: 100%; height: 100%; }
+.mm-engine .map-container { width: 100%; height: 100%; overflow: hidden !important; background: transparent; --map-padding: 36px; --main-gap-x: 62px; --main-gap-y: 14px; --node-gap-x: 22px; --node-gap-y: 10px; --topic-padding: 0px; }
+.mm-engine me-root me-tpc, .mm-engine me-main me-tpc { padding: 0 !important; border: 0 !important; border-radius: 0 !important; background: transparent !important; color: inherit !important; box-shadow: none !important; font: inherit !important; }
+.mm-engine me-tpc > .mm-slot, .mm-engine .mm-slot * { pointer-events: auto; }
+.mm-engine me-epd { display: none !important; }
+.mm-engine me-children[hidden] { display: none !important; }
+.mm-engine me-children me-parent { margin-top: 5px; margin-bottom: 5px; }
+.mm-slot { display: block; width: max-content; max-width: min(360px, 55vw); }
+.mm-static { padding: 20px; overflow: auto; }
+.mm-static-branch { margin: 8px 0 8px 22px; }
+.mm-static > .mm-static-branch { margin-left: 0; }
+.mm-home { position: absolute; z-index: 11; right: 12px; bottom: 12px; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 7px; background: color-mix(in srgb, var(--color-surface) 80%, transparent); color: var(--color-text-secondary); cursor: pointer; }
+.mm-home:hover, .mm-home:focus-visible { background: var(--color-surface-muted); color: var(--color-text); }
 .mm-box { position: relative; display: flex; align-items: center; gap: 2px; max-width: 320px; min-height: 36px; padding: 5px 10px; border: 1px solid transparent; border-radius: 7px; background: transparent; }
 .mm-box[data-actions]::after { content: ""; position: absolute; z-index: 1; left: 100%; top: 0; width: 36px; height: 100%; }
 .mm-box[data-fixed] { background: var(--color-surface-muted); }
@@ -44,17 +52,10 @@
 .mm-menu button { display: block; width: 100%; padding: 7px 9px; border: 0; border-radius: 6px; background: none; color: inherit; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
 .mm-menu button:hover { background: var(--color-surface-muted); }
 .mm-menu button[data-danger] { color: var(--color-status-danger, #c43c35); }
-.mm-inline-editor { display: block; width: max-content; min-width: 48px; max-width: min(320px, 65vw); min-height: 21px; white-space: pre-wrap; overflow-wrap: anywhere; outline: none; font: inherit; line-height: 1.5; cursor: text; }
+.mm-inline-editor { display: block; width: max-content; min-width: 48px; max-width: min(320px, 65vw); min-height: 21px; max-height: min(320px, 50vh); overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; outline: none; font: inherit; line-height: 1.5; cursor: text; }
 .mm-inline-editor[aria-busy] { opacity: .65; }
 .mm-input-capture { position: absolute; left: 0; top: 50%; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; pointer-events: none; }
-@media (max-width: 720px) {
-  .mm { overflow-x: visible; padding-right: 38px; }
-  .mm-tree { display: block; width: auto; }
-  .mm > .mm-tree { min-height: 0; }
-  .mm-children { padding-left: 24px; margin-left: 8px; border-left: 1px solid var(--color-border); }
-  .mm-links { display: none; }
-  .mm-box { max-width: min(360px, 100%); width: max-content; }
-}
+@media (max-width: 720px) { .mm { height: clamp(400px, 68vh, 680px); } .mm-box { max-width: min(320px, 72vw); } }
 
 /* The memory page has one canvas; all controls and feedback belong to its nodes. */
 .memory-map, .memory-canvas { min-width: 0; }
