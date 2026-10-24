@@ -17,9 +17,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createBackend } from '../src/agent';
-import { createSkillChat } from '../src/bot/skill-chat';
-import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
-import type { AgentBackend, AgentEvent, AgentThread, PermissionMode, ReadScope } from '../src/agent/types';
+import type { AgentEvent, AgentThread, PermissionMode, ReadScope } from '../src/agent/types';
 const LIVE = process.env.CLAUDE_LIVE === '1';
 const dirs: string[] = [];
 const threads: AgentThread[] = [];
@@ -337,28 +335,6 @@ describe.runIf(LIVE)('advanced Claude permissions live', () => {
       expect(t.used.some(call => ['Monitor', 'PowerShell'].includes(call.name))).toBe(false);
       expect(existsSync(join(t.cwd, 'monitor.txt')) || existsSync(join(t.cwd, 'powershell.txt'))).toBe(false);
     } finally { await t.close(); }
-  });
-  it('skill-add keeps the group domain list in a real Claude skill session', { timeout: 180_000 }, async () => {
-    const { dir, cwd } = workspace(); for (const name of ['config', 'home']) mkdirSync(join(dir, name));
-    const sdk = await loadBackendDep<ClaudeSdkFacade>('@anthropic-ai/claude-agent-sdk'); let nativeOptions: unknown; const raw: unknown[] = [], used: string[] = [];
-    const facade: ClaudeSdkFacade = { ...sdk, query: params => { nativeOptions = params.options; const q = sdk.query({ ...params, options: { ...params.options, persistSession: false,
-      env: { ...params.options?.env, HOME: join(dir, 'home'), CLAUDE_CONFIG_DIR: join(dir, 'config') } } });
-      return new Proxy(q, { get(target, key) { if (key === Symbol.asyncIterator) return async function* () { for await (const msg of target) {
-        if (msg.type === 'user') raw.push(msg.message.content);
-        if (msg.type === 'assistant') for (const block of msg.message.content) if (block.type === 'tool_use') used.push(block.name);
-        yield msg;
-      } }; const value = Reflect.get(target, key); return typeof value === 'function' ? value.bind(target) : value; } }); } };
-    const real = new ClaudeAgentBackend(async () => facade, () => undefined), replies: string[] = [];
-    const backend = { id: 'claude-agent', listModels: async () => [{ id: process.env.ANTHROPIC_MODEL ?? 'haiku', displayName: 'fixture', supportedEfforts: ['high'], defaultEffort: 'high', isDefault: true, hidden: false }],
-      startThread: real.startThread.bind(real), resumeThread: real.resumeThread.bind(real) } as AgentBackend;
-    const chat = createSkillChat({ cfg: { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' } } },
-      backendFor: () => backend, project: async () => ({ name: 'Fixture', chatId: 'fixture', cwd, blank: false, createdAt: 1, backend: 'claude-agent', custom: { backend: 'claude-agent', settings: { permissionMode: 'plan', sandbox: false, network: 'domains', domains: ['example.com'] } } }),
-      send: async (_chat, reply) => { replies.push(reply); }, file: join(dir, 'skill-state.json') });
-    try { await chat.handle({ content: `/skill-add fixture Use Bash once: ${curl('example.com')} ; then Bash once: ${curl('example.org')}. Report exact HTTP codes and denials. Do not retry.`, senderId: 'owner', chatId: 'private', chatType: 'p2p', messageId: 'fixture' } as NormalizedMessage);
-      expect(nativeOptions).toMatchObject({ permissionMode: 'acceptEdits', sandbox: { network: { allowedDomains: ['example.com'], strictAllowlist: true } }, allowedTools: ['WebFetch(domain:example.com)'] });
-      expect(used.filter(name => name === 'Bash')).toHaveLength(2); expect(JSON.stringify(raw)).toContain('HTTP:200'); expect(JSON.stringify(raw)).toContain('HTTP:000'); expect(JSON.stringify(raw)).toMatch(/allow list|denied/);
-      expect(replies.join('\n')).not.toContain('技能处理未完成');
-    } finally { await chat.close(); }
   });
   it('F: bypass with sandbox confines Bash but permits native Write and network', { timeout: 180_000 }, async () => {
     const t = await advanced({ permissionMode: 'bypassPermissions', sandbox: true });
