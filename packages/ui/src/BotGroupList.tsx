@@ -45,6 +45,7 @@ export function BotGroupList({snapshot, agent, busy, status, onJoin, onMembershi
         return <button
           type="button"
           className="bot-group-list__row"
+          data-unavailable={rowStatus.tone !== 'success' || undefined}
           key={member.id}
           aria-label={`设置 ${agent.name} 在 ${group.name} 中的行为，Provider：${provider}，沟通方式：${mode}${exception ? `，${exception}` : ''}`}
           onClick={() => onMembership(member.id)}
