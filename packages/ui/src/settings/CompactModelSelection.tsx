@@ -1,5 +1,5 @@
 import {useRef, useState} from 'react';
-import {Check, ChevronsUpDown, Search} from 'lucide-react';
+import {Check, Eye, Pencil, Search} from 'lucide-react';
 import type {ModelCatalog, ProjectSettingsView} from '@vonvon/protocol';
 import {Button, InlineNotice} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
@@ -26,6 +26,7 @@ export function CompactModelSelection({value, onChange, catalog, disabled}: {
   const efforts = [...new Set([...(catalog?.models.flatMap(model => model.supportedEfforts) ?? []), ...value.efforts])];
   const catalogReady = catalog?.state === 'ready' && catalog.backend === value.backend;
   const editingDisabled = disabled || !catalogReady;
+  const EditIcon = editingDisabled ? Eye : Pencil;
   const selectionChanged = Boolean(picker) && baseline !== JSON.stringify(value);
   const options: Record<Picker, Option[]> = {
     models: [
@@ -35,7 +36,7 @@ export function CompactModelSelection({value, onChange, catalog, disabled}: {
     efforts: efforts.map(effort => ({id: effort, label: effort})),
   };
   const fields: {id: Picker; label: string; noun: string; selected: string[]; empty: string}[] = [
-    {id: 'models', label: '模型', noun: '模型', selected: value.models.map(id => models.find(model => model.id === id)?.displayName ?? id), empty: '选择模型'},
+    {id: 'models', label: '允许的模型', noun: '模型', selected: value.models.map(id => models.find(model => model.id === id)?.displayName ?? id), empty: '选择模型'},
     {id: 'efforts', label: '思考强度', noun: '强度', selected: value.efforts, empty: catalogReady && !efforts.length ? '此 Provider 未提供思考强度' : '选择强度'},
   ];
   const activeField = fields.find(field => field.id === picker);
@@ -55,10 +56,10 @@ export function CompactModelSelection({value, onChange, catalog, disabled}: {
   return <>
     {fields.map(field => <div className="gd-model-summary-row gd-model-summary-row--value" key={field.id}>
       <span className="gd-model-summary-label">{field.label}</span>
-      <button type="button" className="gd-multiselect-field" disabled={field.id === 'efforts' && catalogReady && !efforts.length} aria-label={`${editingDisabled ? '查看' : '选择'}${field.noun}`} aria-haspopup="dialog" aria-expanded={picker === field.id} onClick={() => open(field.id)}>
-        <span className="gd-multiselect-values">{field.selected.length ? field.selected.map((label, index) => <span className="gd-multiselect-tag" key={value[field.id][index]}>{label}</span>) : <span className="gd-multiselect-placeholder">{field.empty}</span>}</span>
-        <ChevronsUpDown size={14} aria-hidden="true"/>
-      </button>
+      <Button size="sm" className="gd-model-edit-control" disabled={field.id === 'efforts' && catalogReady && !efforts.length} aria-label={`${editingDisabled ? '查看' : '选择'}${field.noun}`} aria-haspopup="dialog" aria-expanded={picker === field.id} title={field.selected.join('、') || field.empty} onClick={() => open(field.id)}>
+        <span className={`gd-model-edit-value${field.selected.length ? '' : ' gd-model-edit-value--empty'}`}>{field.selected.slice(0, 2).join('、') || field.empty}</span>
+        {field.selected.length > 2 && <small>+{field.selected.length - 2}</small>}<EditIcon size={14} aria-hidden="true"/>
+      </Button>
     </div>)}
     <Dialog open={Boolean(picker)} title={`选择可用${activeField?.noun ?? '模型'}`}
       description={editingDisabled ? '当前配置仅可查看，已保存的选择仍保留。' : `选择本群可以使用的${activeField?.noun ?? '模型'}，可多选。完成后保存更改。`}

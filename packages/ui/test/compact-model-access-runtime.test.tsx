@@ -310,7 +310,6 @@ it('takes an extensible Provider list as data and clears dependent choices when 
   const value = {...initial(), backend: 'provider-0'}; const changed = vi.fn();
   const all = at('many-providers', () => ModelAccessFields({botId: agentIdSchema.parse('cli_many'), providers, value, onChange: changed, disabled: false}));
   const selector = all.find(node => node.type === SelectControl)!;
-  expect(selector.props.presentation).toBe('dropdown');
   expect(selector.props.options).toHaveLength(12);
   selector.props.onChange('provider-11');
   expect(changed).toHaveBeenCalledExactlyOnceWith({backend: 'provider-11', models: [], efforts: []});

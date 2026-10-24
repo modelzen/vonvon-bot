@@ -1,20 +1,22 @@
-.gd-model-fields.gd-model-fields--compact { gap: 0; padding: 4px 16px; }
-.gd-model-summary-row { display: grid; grid-template-columns: 104px minmax(0, 1fr); align-items: center; gap: 16px; min-height: 58px; padding: 12px 0; }
-.gd-model-summary-row ~ .gd-model-summary-row { border-top: 1px solid var(--color-border); }
-.gd-model-summary-label { font-size: 13px; font-weight: 500; color: var(--color-text); }
-.gd-model-provider-row { grid-template-columns: 104px minmax(0, 1fr) auto; }
-.gd-model-provider-control { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.gd-model-provider-select { width: 180px; max-width: 100%; min-width: 0; }
+.gd-model-fields.gd-model-fields--compact { gap: 0; padding: 0; }
+.gd-model-summary-row { display: grid; grid-template-columns: 116px minmax(0, 1fr); align-items: center; gap: 12px; min-height: 60px; margin: 0 16px; padding: 12px 0; }
+.gd-model-summary-row ~ .gd-model-summary-row { border-top: 1px solid var(--color-separator); }
+.gd-model-summary-label { font-size: 13px; color: var(--color-text); }
+.gd-model-provider-row { grid-template-columns: 116px minmax(0, 1fr) auto; }
+.gd-model-provider-control { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-width: 0; }
+.gd-model-provider-select { flex: 0 1 var(--control-field-width, 260px); width: var(--control-field-width, 260px); max-width: 100%; min-width: 0; height: var(--control-height, 32px); }
+/* The Codex asset includes transparent padding; match its visible mark to Claude. */
+.ui-select-option-icon > .gd-provider-icon--codex { width: 22px; height: 22px; max-width: none; }
 .gd-model-provider-state { font-size: 11px; color: var(--color-text-secondary); }
-.gd-multiselect-field { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; min-height: 38px; padding: 6px 10px; border: 1px solid var(--color-border-strong); border-radius: var(--control-radius, 8px); background: var(--color-surface); color: var(--color-text); text-align: left; font: inherit; cursor: pointer; }
-.gd-multiselect-values { display: flex; flex: 1; align-items: center; flex-wrap: wrap; gap: 5px; min-width: 0; }
-.gd-multiselect-tag { padding: 3px 7px; border-radius: 4px; background: var(--color-surface-muted); color: var(--color-text); font-size: 12px; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; }
-.gd-multiselect-placeholder { padding-block: 3px; color: var(--color-text-tertiary); font-size: 12px; }
-.gd-multiselect-field > svg { flex: none; color: var(--color-text-tertiary); }
-.gd-multiselect-field:disabled { cursor: default; color: var(--color-text-secondary); }
-.gd-multiselect-field:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
-.gd-model-compact-notice { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; padding: 8px 12px; border-radius: 6px; background: var(--color-status-warning-bg); color: var(--color-status-warning); font-size: 12px; line-height: 1.5; }
-.gd-model-compact-note { margin: 0; padding: 8px 16px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.6; }
+.gd-model-summary-row > .gd-model-edit-control { width: var(--control-field-width, 260px); max-width: 100%; min-width: 0; height: var(--control-height, 32px); min-height: var(--control-height, 32px); padding: 0 10px; border: 1px solid var(--color-border-strong); border-radius: var(--control-radius, 8px); background: var(--color-surface); color: var(--color-text); text-align: left; box-shadow: var(--card-shadow); }
+.gd-model-edit-control > span { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; }
+.gd-model-edit-value { flex: 1; min-width: 0; overflow: hidden; font-size: 12px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.gd-model-edit-value--empty { color: var(--color-text-tertiary); }
+.gd-model-edit-control small { flex: none; font-size: 11px; color: var(--color-text-secondary); }
+.gd-model-edit-control svg { flex: none; color: var(--color-text-tertiary); }
+.gd-model-summary-row > .gd-model-edit-control:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.gd-model-compact-notice { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin: 0 16px 8px; padding: 8px 12px; border-radius: 6px; background: var(--color-status-warning-bg); color: var(--color-status-warning); font-size: 12px; line-height: 1.5; }
+.gd-model-compact-note { margin: 0; padding: 10px 16px; border-top: 1px solid var(--color-separator); color: var(--color-text-secondary); font-size: 12px; line-height: 1.6; }
 .gd-selection-count { display: inline-flex; align-items: center; justify-content: center; flex: none; min-width: 25px; height: 23px; padding: 0 6px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface-muted); color: var(--color-text-secondary); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .gd-model-picker { display: grid; gap: 10px; }
 .gd-model-picker-search { display: flex; align-items: center; gap: 9px; padding: 0 12px; min-height: 40px; margin-bottom: 4px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface-muted); color: var(--color-text-tertiary); }
@@ -44,11 +46,11 @@
 .gd-model-picker-count { display: inline-flex; align-items: center; gap: 7px; margin-right: auto; color: var(--color-text-secondary); font-size: 11px; }
 .gd-model-picker-count > .gd-selection-count { border-color: transparent; background: color-mix(in srgb, var(--color-accent) 9%, var(--color-surface)); color: var(--color-accent); }
 @media (max-width: 600px) {
-  .gd-model-summary-row { grid-template-columns: minmax(0, 1fr); gap: 8px; padding-block: 12px; }
+  .gd-model-summary-row { grid-template-columns: minmax(0, 1fr); gap: 8px; margin-inline: 12px; padding-block: 12px; }
   .gd-model-provider-row { grid-template-columns: minmax(0, 1fr) auto; }
   .gd-model-provider-control { grid-column: 1 / -1; grid-row: 2; }
   .gd-model-provider-row > button { grid-column: 2; grid-row: 1; }
-  .gd-model-provider-select { width: 100%; }
+  .gd-model-compact-notice { margin-inline: 12px; }
 }
 @media (hover: hover) and (pointer: fine) {
   .gd-model-option:not(:has(input:disabled)):hover { border-color: var(--color-border-strong); background: var(--color-surface-muted); }
@@ -64,5 +66,5 @@
 .gd-model-catalog-status { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; padding: 8px 16px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
 .gd-model-catalog-status > span { flex: 1; min-width: 180px; overflow-wrap: anywhere; }
 .gd-model-catalog-status .ui-button { flex: none; color: var(--color-accent); }
-@media (hover: hover) and (pointer: fine) { .gd-multiselect-field:not(:disabled):hover { border-color: var(--color-accent); } }
-@media (pointer: coarse) { .gd-multiselect-field { min-height: 44px; } }
+@media (hover: hover) and (pointer: fine) { .gd-model-summary-row > .gd-model-edit-control:not(:disabled):hover { border-color: var(--color-accent); background: var(--color-surface-muted); } }
+@media (pointer: coarse) { .gd-model-summary-row > .gd-model-edit-control { min-height: 44px; } }
