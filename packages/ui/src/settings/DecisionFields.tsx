@@ -3,6 +3,7 @@ import {Check, ChevronRight} from 'lucide-react';
 import {backendLabel, isKnownJudgeSelection, type AgentId, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ToolState} from '@vonvon/protocol';
 import {Button, InlineNotice, SelectControl} from '../reference/components/ui';
 import {SettingChoices} from './SettingChoices';
+import type {DecisionConfigurationState} from './useDecisionConfiguration';
 
 type Provider = {id: string; displayName: string};
 type Selection = Extract<JudgeSelectionView, {kind: 'llm'}>;
@@ -30,9 +31,10 @@ export function providerDecisionProblem(value: JudgeSelectionView, providers: Pr
   return providers.some(item => item.id === value.provider) ? undefined : '此判断 Provider 当前不可用，请先安装并登录。';
 }
 
-export function DecisionFields({groupBackend, value, effective, onChange, disabled, providers, services, onOpenProviders, onOpenSecrets, onProviderChange, initial = false}: {
+export function DecisionFields({groupBackend, value, effective, onChange, disabled, providers, services, configuration, onOpenProviders, onOpenSecrets, onProviderChange, initial = false}: {
   botId: AgentId; groupBackend: string; value: JudgeSelectionView; effective: JudgeSelectionView; onChange: (value: JudgeSelectionView) => void; disabled: boolean;
   providers: Provider[]; services?: DecisionModelsView; tools?: readonly ToolState[];
+  configuration?: DecisionConfigurationState;
   onProviderChange?: (provider: string) => void; onOpenProviders?: () => void; onOpenSecrets?: (provider?: string) => void; initial?: boolean;
 }) {
   const saved = savedDecisionProvider(value, groupBackend);
@@ -45,6 +47,10 @@ export function DecisionFields({groupBackend, value, effective, onChange, disabl
   const legacy = isKnownJudgeSelection(value) && (value.kind === 'llm' || value.kind === 'decision' || value.kind === 'default' && Boolean(inherited));
   const providerName = viewed === 'typesafe' ? 'Jev' : viewed ? backendLabel(viewed) : undefined;
   const keyState = !service || service.keyUnreadable ? 'unknown' : service.keySet ? 'added' : 'missing';
+  const currentSelection = isKnownJudgeSelection(value) && value.kind === 'default' ? effective : value;
+  const independent = isKnownJudgeSelection(currentSelection) && (currentSelection.kind === 'llm' || currentSelection.kind === 'decision') ? currentSelection : undefined;
+  const profile = independent ?? (configuration?.kind === 'ready' ? configuration.configuration.byProvider[viewed] : undefined);
+  const configured = Boolean(profile && (viewed !== 'typesafe' || keyState === 'added'));
   return <div className="gd-model-fields gd-decision-fields">
     <p className="gd-decision-purpose">判断群消息要不要回复、回在哪里，以及是否创建新话题。实际回复和执行任务使用本群的执行 Provider。</p>
     {legacy && <div className="gd-note" role="status">当前群保留旧决策模型设置。改用「设置 → 决策模型」中此 Provider 的模型和推理强度：
@@ -65,18 +71,22 @@ export function DecisionFields({groupBackend, value, effective, onChange, disabl
     </InlineNotice>}
     {onOpenSecrets && <div className="gd-decision-config">
       <div className="gd-decision-config-copy">
-        <p className="gd-decision-config-title"><span>{viewed === 'typesafe' ? '模型与 API 密钥' : '模型与推理强度'}</span>
-          {viewed === 'typesafe' && <span className="gd-decision-key-state" data-state={keyState} role="status">
-            {keyState === 'added' && <Check size={13} aria-hidden="true"/>}
-            {keyState === 'added' ? '密钥已添加' : keyState === 'missing' ? '尚未添加密钥' : '密钥状态未知'}
-          </span>}
-        </p>
-        <p>在设置中统一管理，使用同一 Provider 的群共用。</p>
+        <div className="gd-decision-config-title"><strong>当前配置</strong>
+          {viewed && configured && <span className="gd-decision-configured" role="status"><Check size={13} aria-hidden="true"/>已配置</span>}
+        </div>
+        {viewed && (profile ? <dl className="gd-decision-config-values">
+          <div><dt>模型</dt><dd>{profile.model}</dd></div>
+          <div><dt>思考等级</dt><dd>{viewed === 'typesafe' ? '不支持单独设置' : 'effort' in profile && profile.effort ? profile.effort : viewed === 'claude-agent' ? '关闭思考' : '自动（最低支持档位）'}</dd></div>
+        </dl> : <p role="status">{configuration?.kind === 'failed' || configuration?.kind === 'ready' ? '未能读取模型配置，请打开设置检查。' : '正在读取模型配置…'}</p>)}
+        {viewed === 'typesafe' && <p><span className="gd-decision-key-state" data-state={keyState} role="status">
+          {keyState === 'added' ? '密钥已添加' : keyState === 'missing' ? '尚未添加密钥' : '密钥状态未知'}
+        </span></p>}
+        <p>{legacy ? '本群仍使用独立配置；选择「使用统一配置」后才跟随设置。' : '在设置中统一管理，使用同一 Provider 的群共用。'}</p>
       </div>
       <Button type="button" variant="ghost" size="sm" className="gd-decision-config-link" disabled={disabled}
-        aria-label={providerName ? `管理 ${providerName} 配置` : undefined}
+        aria-label={providerName ? `修改 ${providerName} 配置` : undefined}
         onClick={() => onOpenSecrets(viewed || undefined)}>
-        {providerName ? '管理配置' : '管理决策模型'}<ChevronRight size={14} aria-hidden="true"/>
+        {providerName ? '修改配置' : '管理决策模型'}<ChevronRight size={14} aria-hidden="true"/>
       </Button>
     </div>}
   </div>;

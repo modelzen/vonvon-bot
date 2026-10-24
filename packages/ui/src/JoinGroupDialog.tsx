@@ -1,3 +1,4 @@
+import {useDecisionConfiguration} from './settings/useDecisionConfiguration';
 import {RpcError} from '@vonvon/client/browser';
 import {useClient} from './client-context';
 import {useDirectoryPicker} from './directory-picker';
@@ -112,6 +113,7 @@ export function JoinGroupDialog({snapshot, open = true, agent, pending, initialG
   const tool = pickedTool ?? initialGroupProvider(initialProvider, tools);
   const [judge, setJudge] = useState<JudgeSelectionView>({kind: 'default'});
   const [conversation, setConversation] = useState<Conversation>();
+  const decisionConfiguration = useDecisionConfiguration(open && conversation === 'smart');
   /** Set once the user picks 免@ by hand; until then it follows the 会话方式. */
   const [response, setResponse] = useState<'all' | 'mention'>();
   const [busy, setBusy] = useState(false);
@@ -247,7 +249,7 @@ export function JoinGroupDialog({snapshot, open = true, agent, pending, initialG
           <ChoiceGroup<Conversation | ''> label="会话方式" aria-required disabled={busy} value={conversation ?? ''} options={conversationsFor(mode.kind === 'bind' && mode.group.topic === true)} onChange={value => {if (value) {setConversation(value); setResponse(picked => keptResponse(value, picked));}}} />
         </FormField>
         {conversation === 'smart' && <SettingsGroup label="判断 Provider">
-          <DecisionFields initial botId={agent.id} groupBackend={tool ? providerBackends[tool] : ''} value={judge} effective={decisionView?.sections.judge?.effective.selection ?? {kind: 'default'}} onChange={setJudge} disabled={busy} providers={providers} services={decisionView?.decisionModels} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenDecisionModel}/>
+          <DecisionFields initial botId={agent.id} groupBackend={tool ? providerBackends[tool] : ''} value={judge} effective={decisionView?.sections.judge?.effective.selection ?? {kind: 'default'}} onChange={setJudge} disabled={busy} providers={providers} services={decisionView?.decisionModels} configuration={decisionConfiguration} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenDecisionModel}/>
           {judgeProblem && <p className="gd-note" role="status">{judgeProblem}</p>}
           {decisionReadError && <Button size="sm" disabled={busy} onClick={() => void readDecision()}>重试读取</Button>}
         </SettingsGroup>}
