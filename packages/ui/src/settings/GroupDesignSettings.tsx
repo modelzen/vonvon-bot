@@ -1,6 +1,6 @@
 import {useCallback, useContext, useEffect, useRef, useState, type ReactNode} from 'react';
 import {smartRulesText} from '@vonvon/protocol';
-import {ChevronRight, Folder, GitBranch, Plus, RefreshCw, Search, X} from 'lucide-react';
+import {Blocks, ChevronRight, Folder, GitBranch, Plus, RefreshCw, Search, X} from 'lucide-react';
 import {backendLabel, isKnownJudgeSelection, type AgentId, type AgentSettingsView, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ProjectSettingsView, type SettingsReply, type ToolState} from '@vonvon/protocol';
 import {useClient} from '../client-context';
 import {useDirectoriesPicker} from '../directory-picker';
@@ -50,6 +50,10 @@ export function useProviders(tools?: readonly ToolState[]) {
 }
 function providerChoices(providers: Provider[], current: string) {
   return [...providers.map(provider => ({value: provider.id, label: provider.displayName, disabled: false})), ...(!providers.some(provider => provider.id === current) && current ? [{value: current, label: `${backendLabel(current)}（当前不可用）`, disabled: true}] : [])];
+}
+function providerIcon(backend: string) {
+  const path = backend === 'codex-appserver' ? './agent-icons/codex-light.png' : backend === 'claude-agent' ? './agent-icons/claude-code.svg' : undefined;
+  return path ? <img src={path} className={backend === 'codex-appserver' ? 'gd-provider-icon--codex' : undefined} alt="" width={16} height={16}/> : <Blocks size={16} aria-hidden="true"/>;
 }
 export function GroupDesignSettings(props: Props) {
   return <GroupSettingsLoader key={`${props.scope.botId}:${props.scope.projectName}`} {...props}/>;
@@ -120,7 +124,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
             placeholder="例如：在这个群负责发版检查和排障。留空时使用 Bot 页的角色设定。"/>
           <p className="gd-note">{[...draft.supplement].length} / {SUPPLEMENT_MAX} 字。</p>
         </>}/> : <MissingSection/>)}
-      {tab === 'model' && (sections.modelAccess ? <Editor title="执行模型" section={sections.modelAccess} save={(patch, revision) => save('modelAccess', patch, revision)}
+      {tab === 'model' && (sections.modelAccess ? <Editor title="可用模型" section={sections.modelAccess} save={(patch, revision) => save('modelAccess', patch, revision)}
         render={(draft, set, disabled) => <ModelAccessFields botId={view.scope.botId} value={draft} onChange={set} disabled={disabled} providers={providers} onCatalog={rememberCatalog}
           onCheckProviders={discovery.retry} checkingProviders={discovery.checking}
           onOpenProviders={onOpenProviders} permissionName={sections.permission.stored.options.tiers.find(tier => tier.tier === sections.permission.stored.mode)?.name} savedBackend={view.identity.backend}/>}
@@ -166,11 +170,11 @@ export function ModelAccessFields({botId, value, onChange, disabled, providers, 
   const choices = providerChoices(providers, value.backend);
   return <div className="gd-model-fields gd-model-fields--compact">
     <div className="gd-model-summary-row gd-model-provider-row"><span className="gd-model-summary-label">Provider</span>
-      <div className="gd-model-provider-control"><SelectControl label="模型 Provider" className="gd-model-provider-select" options={choices} value={value.backend} disabled={disabled}
+      <div className="gd-model-provider-control"><SelectControl label="模型 Provider" getOptionIcon={providerIcon} className="gd-model-provider-select" options={choices} value={value.backend} disabled={disabled}
         onChange={backend => {if (!disabled && backend !== value.backend && providers.some(provider => provider.id === backend)) onChange({backend, models: [], efforts: []});}}/>
-        <span className="gd-model-provider-state">{available ? '可用' : '当前不可用'}</span>
+        {!available && <span className="gd-model-provider-state">当前不可用</span>}
         {onCheckProviders && <IconButton size="sm" variant="ghost" label="重新检查 Provider" title="重新检查 Provider 登录状态" disabled={checkingProviders} onClick={onCheckProviders}><RefreshCw size={14}/></IconButton>}</div>
-      {onOpenProviders && <Button size="sm" variant="ghost" onClick={onOpenProviders}>查看状态<ChevronRight size={13}/></Button>}
+      {onOpenProviders && <Button size="sm" variant="ghost" onClick={onOpenProviders}>Provider 设置<ChevronRight size={13}/></Button>}
     </div>
     {permissionName && value.backend !== savedBackend && <p className="gd-model-compact-notice" role="status">换 Provider 后，权限仍是「{permissionName}」；自定义设置会清掉。</p>}
     {!available && <div className="gd-model-compact-notice" role="status"><span>此 Provider 暂不可用，已保存的选择仍保留。</span>{onOpenProviders && <Button size="sm" onClick={onOpenProviders}>检查 Provider</Button>}</div>}
@@ -182,9 +186,8 @@ export function ModelAccessChoices({value, onChange, catalog, disabled, onCatalo
   const problem = modelAccessProblem(value, catalog);
   return <>
     <CompactModelSelection value={value} onChange={onChange} catalog={catalog} disabled={disabled}/>
-    <p className="gd-model-compact-note">群内只显示允许的模型及其支持的强度。</p>
-    {catalog?.state === 'fallback' && catalog.error && <p className="gd-model-compact-note" role="status">{catalog.error}</p>}
-    {problem && catalog && <p className="gd-model-compact-note" role="status">{problem}</p>}
+    {problem && catalog?.state === 'ready' && <p className="gd-model-compact-note" role="status">{problem}</p>}
+    {!problem && <p className="gd-model-compact-note">群内只显示允许的模型及其支持的强度。</p>}
   </>;
 }
 
