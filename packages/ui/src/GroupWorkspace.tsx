@@ -27,6 +27,8 @@ export function groupTabForSection(section?: string): GroupDesignTab {
     case '本群角色':
     case '补充职责': return 'role';
     case undefined:
+    case '执行模型':
+    case '执行权限':
     case '群设置':
     case '模型与权限':
     case '可用模型': return 'model';
@@ -50,7 +52,7 @@ export function groupTabForSection(section?: string): GroupDesignTab {
 type Props = {member: Membership; agent: Agent; group: Group; snapshot: DesktopSnapshot; initialTab?: GroupDesignTab; revealHistory?: boolean; onTabChange?: (tab:GroupDesignTab) => void;
   onBot: (member: Membership) => void; onBotProfile: () => void; onProject?: (id: ProjectId) => void; onOpenTools: () => void; onOpenProviders?: () => void; onOpenSecrets: () => void; onChanged: () => Promise<void>};
 // Intent: configure one Bot within one group, without exposing session management as navigation.
-// Hierarchy: target first, four settings pages second. Quiet inset surfaces and system type
+// Hierarchy: target first, Bot/project scope next, then compact settings pages. System type
 // share Today's 4px spacing rhythm; history/help remain contextual actions in the toolbar.
 export function GroupWorkspace({member, agent, group, snapshot, initialTab, revealHistory, onTabChange, onBot, onBotProfile, onProject, onOpenTools, onOpenProviders, onOpenSecrets, onChanged}: Props) {
   const client = useClient();
@@ -128,12 +130,12 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
     <header className="group-design-heading"><GroupAvatar group={group} large/><h2>{group.name}</h2><Button size="sm" className="group-open-button" aria-label="在飞书打开此群" onClick={() => void openExternalUrl(groupUrl(group.id),'group',shell).catch(error => setError(String(error.message ?? error)))}><span className="group-open-label">飞书</span><ArrowUpRight size={13} aria-hidden="true"/></Button>
       <details ref={menu} className="group-context-menu"><summary aria-label="群操作"><MoreHorizontal size={18}/></summary><div>{([['help','使用说明'],['history','对话记录'],['remove','解除群绑定…']] as const).map(([action,label]) => <button type="button" key={action} disabled={action === 'remove' && !available} onClick={event => {event.currentTarget.closest('details')?.removeAttribute('open'); guard.navigate(() => setDialog(action));}}>{label}</button>)}</div></details>
     </header>
-    <div id={settingAnchor("群设置")} className="group-design-context"><div role="group" aria-label="本群 Bot" className="group-bot-picker">{snapshot.memberships.filter(item => item.groupId === group.id).map(item => {const bot = snapshot.agents.find(bot => bot.id === item.agentId); return bot && <button type="button" key={item.id} aria-pressed={member.id === item.id} title={bot.name} onClick={() => guard.navigate(() => onBot(item))}><AgentAvatar agent={bot}/><span>{bot.name}</span>{member.id === item.id && <Check size={12}/>}</button>;})}</div>
+    <div className="group-design-scope"><div id={settingAnchor("群设置")} className="group-design-context"><div role="group" aria-label="本群 Bot" className="group-bot-picker">{snapshot.memberships.filter(item => item.groupId === group.id).map(item => {const bot = snapshot.agents.find(bot => bot.id === item.agentId); return bot && <button type="button" key={item.id} aria-pressed={member.id === item.id} title={bot.name} onClick={() => guard.navigate(() => onBot(item))}><AgentAvatar agent={bot}/><span>{bot.name}</span>{member.id === item.id && <Check size={12}/>}</button>;})}</div>
       {project ? <Toggle aria-label={`在本群使用 ${agent.name}`} label="在本群使用" checked={project.enabled} disabled={!available || busy} onChange={event => {const enabled=event.target.checked; guard.navigate(() => {void update({enabled});});}}/> : <span className="group-control-note">{!agent.enabled ? 'Bot 已停用' : !agent.running ? 'Bot 未运行' : '读取中…'}</span>}
     </div>
     {memberProject && <p className="group-project-line" id={settingAnchor("所在项目")}>项目：<strong>{memberProject.name}</strong>
       {onProject && <button type="button" className="gd-text-action" onClick={() => guard.navigate(() => onProject(memberProject.id))}>项目页</button>}
-      <button type="button" className="gd-text-action" disabled={!available || busy || !otherProjects.length} onClick={() => guard.navigate(() => {setNextProject(otherProjects[0]?.id ?? ''); setDialog('project');})}>换到别的项目…</button></p>}
+      <button type="button" className="gd-text-action" disabled={!available || busy || !otherProjects.length} onClick={() => guard.navigate(() => {setNextProject(otherProjects[0]?.id ?? ''); setDialog('project');})}>换到别的项目…</button></p>}</div>
     <nav className="group-design-tabs" aria-label="群设置">{groupDesignTabs.map(([value,label]) => <button type="button" key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => guard.navigate(() => {setTab(value); onTabChange?.(value);})}>{label}</button>)}</nav>
     {error && <InlineNotice title="操作未完成" tone="warning">{error}</InlineNotice>}
     {notice && <p role="status" className="group-control-note">{notice}</p>}

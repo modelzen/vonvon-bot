@@ -1,17 +1,18 @@
 /* Group identity, Bot selection, then the settings surface. */
-.group-design-workspace { display: grid; gap: 22px; min-width: 0; }
-.group-design-heading { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.group-design-heading > h2 { flex: 1; min-width: 0; margin: 0; font-size: 22px; font-weight: 650; line-height: 1.3; letter-spacing: -.025em; overflow-wrap: anywhere; }
-.group-design-heading .collaboration-avatar.group { width: 38px; height: 38px; }
+.group-design-workspace { display: grid; gap: 16px; min-width: 0; }
+.group-design-heading { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.group-design-heading > h2 { flex: 1; min-width: 0; margin: 0; font-size: 20px; font-weight: 650; line-height: 1.3; letter-spacing: -.025em; overflow-wrap: anywhere; }
+.group-design-heading .collaboration-avatar.group { width: 34px; height: 34px; }
 .group-design-heading > button { flex: none; }
 .group-open-button > span { display: inline-flex; align-items: center; gap: 5px; }
 .group-open-button svg { flex: none; color: var(--color-text-secondary); }
-.group-design-context { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; padding: 8px 10px; border-radius: 12px; background: var(--color-surface-muted); }
+.group-design-scope { display: grid; gap: 6px; min-width: 0; }
+.group-design-context { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; }
 .group-design-context > .ui-toggle { flex: none; }
 .group-bot-picker { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; }
-.group-bot-picker > button { display: flex; align-items: center; gap: 7px; min-width: 0; max-width: 220px; min-height: 36px; padding: 5px 8px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--color-text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
+.group-bot-picker > button { display: flex; align-items: center; gap: 7px; min-width: 0; max-width: 220px; min-height: 32px; padding: 4px 8px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--color-text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
 .group-bot-picker > button[aria-pressed=true] { background: var(--color-surface); border-color: var(--color-border); color: var(--color-text); box-shadow: 0 1px 3px #00000008; font-weight: 550; }
-.group-bot-picker .collaboration-avatar.agent { width: 24px; height: 24px; font-size: 12px; }
+.group-bot-picker .collaboration-avatar.agent { width: 20px; height: 20px; font-size: 11px; }
 .group-bot-picker > button > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .group-bot-picker > button > svg { flex: none; color: var(--color-text-secondary); }
 .group-design-tabs { display: flex; justify-self: start; max-width: 100%; gap: 3px; padding: 3px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface-muted); }
@@ -49,7 +50,7 @@
   .group-context-menu > summary:hover, .group-context-menu button:not(:disabled):hover { background: var(--color-surface-muted); }
 }
 @media (max-width: 560px) {
-  .group-design-workspace { gap: 18px; }
+  .group-design-workspace { gap: 14px; }
   .group-design-tabs { justify-self: stretch; }
   .group-design-tabs > button { padding-inline: 8px; }
   .group-design-context { align-items: flex-start; flex-wrap: wrap; gap: 10px; }
@@ -69,7 +70,7 @@
 @media (prefers-contrast: more) {
   .group-design-tabs > button[aria-current=page], .group-bot-picker > button[aria-pressed=true] { outline: 1px solid currentColor; outline-offset: -1px; }
 }
-.group-project-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 2px; font-size: 12px; color: var(--color-text-secondary); }
+.group-project-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 2px; font-size: 12px; line-height: 1.6; color: var(--color-text-secondary); }
 .project-page-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
 .project-binding-list { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 4px; }
 .project-binding { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 6px 12px; border: 0; border-radius: 8px; background: var(--color-surface-muted); color: var(--color-text); font: inherit; text-align: left; }

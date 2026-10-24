@@ -21,9 +21,10 @@ const view = (permission = permissionValue('qa'), fullOnly?: string): ProjectSet
   identity: { chatId: "oc_demo", backend: "codex-appserver", cwd: "/tmp/demo", kind: "multi", ...(fullOnly ? { fullOnly } : {}) },
   members: { openIds: [], revision: "m" },
 });
-const render = (permission = permissionValue('qa'), fullOnly?: string) => renderToStaticMarkup(
+const renderPanel = (permission = permissionValue('qa'), fullOnly?: string) => renderToStaticMarkup(
   <ClientProvider client={client}><ProjectPanel view={view(permission, fullOnly)} refresh={async () => {}} /></ClientProvider>,
 );
+const render = (permission = permissionValue('qa')) => renderToStaticMarkup(<PermissionFields value={permission} disabled={false} onChange={() => {}}/>);
 const radio = (html: string, value: string) => [...html.matchAll(/<input\b[^>]*type="radio"[^>]*\/>/g)]
   .map(([input]) => input).find(input => input.includes(`value="${value}"`)) ?? '';
 
@@ -53,10 +54,11 @@ it("shows provider names and summaries in one tier group, with no network switch
 });
 
 it("ignores the deprecated identity.fullOnly field when the table offers every tier", () => {
-  const html = render(permissionValue('qa'), REASON);
-  for (const value of ['qa', 'write', 'full']) expect(radio(html, value)).not.toContain('disabled=""');
-  expect(radio(html, 'qa')).toContain('checked=""');
+  const html = renderPanel(permissionValue('qa'), REASON);
+  expect(html).toContain('只读');
   expect(html).not.toContain(REASON);
+  expect(html).toContain('修改权限');
+  expect(html).not.toContain('<summary>高级设置</summary>');
 });
 
 it.each([false, true])('leaves all tiers unselected for a custom permission, legacy=%s', legacy => {
@@ -68,12 +70,13 @@ it.each([false, true])('leaves all tiers unselected for a custom permission, leg
   expect(html).toContain(`自定义：${permission.options.customSummary}`);
   expect(html.includes('从旧版的联网开关转来')).toBe(legacy);
   for (const value of ['qa', 'write', 'full']) expect(radio(html, value)).not.toContain('checked=""');
+  expect(radio(html, 'custom')).toContain('checked=""');
 });
 
 it('shows invalid custom settings as read-only fallback without preselecting a tier', () => {
   const permission = permissionValue('qa'); permission.options.invalid = true;
   const html = render(permission);
-  expect(html).toContain('高级设置读不出来，现在按只读跑。选一档重新设置。');
+  expect(html).toContain('自定义设置读不出来，现在按只读跑。选择预设重新设置。');
   for (const value of ['qa', 'write', 'full']) expect(radio(html, value)).not.toContain('checked=""');
 });
 

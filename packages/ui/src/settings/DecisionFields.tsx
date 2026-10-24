@@ -51,10 +51,11 @@ export function DecisionFields({groupBackend, value, effective, onChange, disabl
       }}>使用统一配置</Button>
     </div>}
     {!isKnownJudgeSelection(value) && <p className="gd-note" role="alert">当前客户端无法编辑已保存的决策设置。</p>}
-    <fieldset><legend>判断 Provider</legend><SettingChoices label="判断 Provider" value={viewed} disabled={disabled} choices={[{value: '', label: '请选择', disabled: true}, ...choices]} onChange={next => {
+    <fieldset><legend>判断 Provider</legend><SettingChoices label="判断 Provider" value={viewed} disabled={disabled} choices={choices} onChange={next => {
       if (disabled || !providerIds.some(id => id === next) || !ready(next)) return;
       setViewed(next); onProviderChange?.(next); onChange({kind: 'provider', provider: next as DecisionProvider});
     }}/></fieldset>
+    {!viewed && <p className="gd-note">选择一个已就绪的 Provider。</p>}
     {viewed && !ready(viewed) && <InlineNotice title={`${viewed === 'typesafe' ? 'Jev' : backendLabel(viewed)} 尚未就绪`} tone="warning">
       {viewed === 'typesafe' ? '请到决策模型设置检查密钥。' : '请先安装并登录 Provider。'}
       {viewed === 'typesafe' ? onOpenSecrets && <Button size="sm" onClick={() => onOpenSecrets('typesafe')}>设置决策模型</Button> : onOpenProviders && <Button size="sm" onClick={onOpenProviders}>设置 Provider</Button>}
