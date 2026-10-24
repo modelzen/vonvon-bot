@@ -54,28 +54,13 @@ function saved(request: Extract<SettingsRequest, {type: 'save'}>): SettingsReply
 }
 function render() {
   const workspace = nodes(renderAt('workspace', () => GroupWorkspace({member, agent, group, snapshot, initialTab: 'response', onBot: () => {}, onBotProfile: () => {}, onOpenTools: () => {}, onOpenSecrets: () => {}, onChanged: changed})));
-  const dialog = workspace.find(node => node.props.title === '设置智能模式')!;
-  let editor: Element[] = [];
-  if (dialog.props.open) {
-    const settings = nodes(dialog).find(node => node.type === GroupDesignSettings)!;
-    if (!settings) return {workspace, content: [], header: []};
-    const loader = GroupDesignSettings(settings.props as any) as Element;
-    const content = nodes(renderAt('loader', () => (loader.type as (props: any) => ReactNode)(loader.props))).find(node => node.type === GroupSettingsContent);
-    if (content) {
-      const edit = renderAt('content', () => GroupSettingsContent(content.props as any)) as Element;
-      editor = nodes(renderAt('editor', () => Editor(edit.props as any)));
-    }
-  }
-  return {workspace, dialog, editor,
-    mode: workspace.find(node => node.props.label === '聊天方式' && node.props.onChange)!,
-    decision: editor.find(node => node.props.onChange && 'effective' in node.props),
-    submit: editor.find(node => node.props.children === '保存并使用智能模式' && node.props.onClick),
-  };
+  return {workspace, mode: workspace.find(node => node.props.label === '聊天方式' && node.props.onChange)!};
 }
+
 async function flush() {for (let i = 0; i < 16; i++) await Promise.resolve();}
 async function settle() {await flush(); render(); await flush(); return render();}
 async function openSmart() {render(); let ui = await settle(); ui.mode.props.onChange('smart'); render(); return settle();}
-function messages(ui: ReturnType<typeof render>) {return [...ui.workspace, ...ui.editor].flatMap(node => [node.props.title, typeof node.props.children === 'string' ? node.props.children : '']).join('\n');}
+function messages(ui: ReturnType<typeof render>) {return ui.workspace.flatMap(node => [node.props.title, typeof node.props.children === 'string' ? node.props.children : '']).join('\n');}
 beforeEach(() => {
   for (const slot of Object.values(harness.slots)) for (const effect of slot.effects) effect.cleanup?.();
   harness.slots = {}; harness.pending = []; vi.clearAllMocks(); view = fixture(); events = [];
@@ -99,7 +84,7 @@ it('previews a drag across the middle mode and submits only its released destina
   expect(input.props['aria-valuetext']).toBe('智能'); expect(onChange).not.toHaveBeenCalled();
   input.props.onPointerUp(); input.props.onLostPointerCapture();
   expect(onChange).toHaveBeenCalledExactlyOnceWith('smart');
-  // Opening or cancelling the smart setup does not make the preview the saved mode.
+  // The preview stays controlled by the saved mode until persistence completes.
   expect(inspect().props['aria-valuetext']).toBe('独立话题');
 });
 
@@ -141,7 +126,7 @@ it('shows attention beside the smart conversation control on 沟通方式 and hi
     const workspace = nodes(renderAt('attention-workspace', () => GroupWorkspace({member: liveMember, agent, group,
       snapshot: {...snapshot, memberships: [liveMember]}, initialTab: 'response', onBot: () => {}, onBotProfile: () => {},
       onOpenTools: () => {}, onOpenSecrets: () => {}, onChanged: changed})));
-    const settings = workspace.find(node => node.type === GroupDesignSettings && !node.props.decisionSetupOnly)!;
+    const settings = workspace.find(node => node.type === GroupDesignSettings)!;
     if (!settings) return {workspace, content: [], header: []};
     const loader = GroupDesignSettings(settings.props as any) as Element;
     const loaded = nodes(renderAt('attention-loader', () => (loader.type as (props: any) => ReactNode)(loader.props)))
@@ -178,81 +163,50 @@ it('shows attention beside the smart conversation control on 沟通方式 and hi
   expect(ui.content.some(node => node.type === GroupAttentionStatus)).toBe(false);
 });
 
-it('validates a selection, waits for decision persistence, then changes the mode with the observed project revision', async () => {
-  let ui = await openSmart();
-  expect(ui.dialog.props.open).toBe(true); expect(ui.mode.props.value).toBe('shared');
-  ui.submit!.props.onClick(); ui = await settle();
-  expect(messages(ui)).toContain('请选择判断 Provider');
-  expect(harness.client.settings.mock.calls.some(([request]) => request.type === 'save')).toBe(false);
-  ui.decision!.props.onChange(selection); ui = render();
-  let resolve!: (reply: SettingsReply) => void;
-  let request!: Extract<SettingsRequest, {type: 'save'}>;
-  save = incoming => {request = incoming; return new Promise(done => {resolve = done;});};
-  events = []; ui.submit!.props.onClick(); ui = await settle();
-  expect(events).toEqual(['save-decision']); expect(ui.submit!.props.disabled).toBe(true); expect(ui.dialog.props.open).toBe(true);
-  resolve(saved(request)); ui = await settle();
-  expect(events).toEqual(['save-decision', 'read-settings', 'read-project', 'edit-project']);
-  expect(request.edit).toMatchObject({scope: view.scope, section: 'judge', revision: 'settings-r1', patch: {selection}});
+it.each([
+  {kind: 'provider', provider: 'typesafe'},
+  {kind: 'llm', backend: 'codex-appserver', model: 'old-model', effort: 'high'},
+  {kind: 'default'},
+] as const)('switches directly to smart with the saved $kind decision, without a dialog or settings rewrite', async existing => {
+  view.sections.judge = section({selection: existing});
+  const ui = await openSmart();
+  expect(ui.workspace.some(node => node.props.title === '设置智能模式')).toBe(false);
+  expect(ui.mode.props.value).toBe('smart');
   expect(harness.client.collaboration).toHaveBeenLastCalledWith({action: 'editProject', agentId: botId, groupId, projectName: member.name, expectedRevision: 'project-r1', conversation: 'smart'});
-  expect(ui.dialog.props.open).toBe(false); expect(ui.mode.props.value).toBe('smart'); expect(changed).toHaveBeenCalledOnce();
-});
-it('keeps the decision draft and dialog open when the decision save fails, without editing the group', async () => {
-  let ui = await openSmart(); ui.decision!.props.onChange(selection); ui = render();
-  save = async () => ({kind: 'saved', result: {kind: 'rejected', fields: [{field: 'selection', message: '模型不可用'}]}});
-  events = []; ui.submit!.props.onClick(); ui = await settle();
-  expect(events).toEqual(['save-decision']); expect(ui.dialog.props.open).toBe(true); expect(ui.mode.props.value).toBe('shared');
-  expect(ui.decision!.props.value).toEqual(selection); expect(messages(ui)).toContain('模型不可用');
-  expect(messages(ui)).not.toContain('本次修改已保存'); expect(changed).not.toHaveBeenCalled();
-});
-it('keeps the smart dialog open when mode change fails after saving the decision, and reports no success', async () => {
-  let ui = await openSmart(); ui.decision!.props.onChange(selection); ui = render();
-  harness.client.collaboration.mockImplementation(async request => request.action === 'project' ? {kind: 'project', project} : {kind: 'refused', message: '群连接暂不可用'});
-  ui.submit!.props.onClick(); ui = await settle();
-  expect(ui.dialog.props.open).toBe(true); expect(ui.mode.props.value).toBe('shared');
-  expect(ui.decision!.props.value).toEqual(selection); expect(messages(ui)).toContain('决策模型已保存，未能切换聊天方式');
-  expect(ui.submit!.props.disabled).toBe(false);
-  expect(messages(ui)).not.toContain('设置已在别处更改');
-  expect(messages(ui)).not.toContain('本次修改已保存'); expect(changed).not.toHaveBeenCalled();
-  harness.client.collaboration.mockImplementation(async request => request.action === 'project' ? {kind: 'project', project} : {kind: 'applied', project: {...project, kind: 'smart', revision: 'project-r2'}});
-  ui.submit!.props.onClick(); ui = await settle();
-  const saves = harness.client.settings.mock.calls.filter(([request]) => request.type === 'save');
-  expect(saves).toHaveLength(2);
-  expect(saves[1]![0].edit).toMatchObject({revision: 'settings-r2', patch: {selection}});
-  expect(ui.dialog.props.open).toBe(false); expect(ui.mode.props.value).toBe('smart'); expect(changed).toHaveBeenCalledOnce();
-});
-it('can confirm an already configured decision without making a spurious field edit', async () => {
-  view.sections.judge = section({selection}); let ui = await openSmart();
-  expect(ui.submit!.props.disabled).toBe(false); ui.submit!.props.onClick(); ui = await settle();
-  expect(harness.client.settings).toHaveBeenCalledWith({type: 'save', edit: {scope: view.scope, section: 'judge', revision: 'settings-r1', patch: {selection}}});
-  expect(ui.dialog.props.open).toBe(false); expect(ui.mode.props.value).toBe('smart');
-});
-
-it.each(['signedOut', 'unknown'] as const)('blocks a stale decision choice when the live Provider state becomes %s', async authentication => {
-  let ui = await openSmart();
-  ui.decision!.props.onChange(selection); ui = await settle();
-  expect(ui.decision!.props.providers.map((provider: {id: string}) => provider.id)).toContain('codex-appserver');
-  // The separate RPC mock deliberately remains signed in: the current page snapshot wins.
-  snapshot.tools = [{...readyTools[0]!, authentication}];
-  ui = await settle();
-  expect(ui.decision!.props.providers).toEqual([]);
-  events = []; ui.submit!.props.onClick(); ui = await settle();
-  expect(events).toEqual([]);
-  expect(messages(ui)).toContain('此判断 Provider 当前不可用');
-  expect(ui.dialog.props.open).toBe(true);
-  expect(ui.mode.props.value).toBe('shared');
-});
-
-it('does not rewrite a legacy group decision when switching to smart until a provider is chosen', async () => {
-  const legacy = {kind: 'llm' as const, backend: 'codex-appserver', model: 'old-model', effort: 'high' as const};
-  view.sections.judge = section({selection: legacy});
-  let ui = await openSmart();
-  expect(ui.decision!.props.value).toEqual(legacy);
-  ui.submit!.props.onClick(); ui = await settle();
-  expect(messages(ui)).toContain('请选择判断 Provider');
   expect(harness.client.settings.mock.calls.some(([request]) => request.type === 'save')).toBe(false);
-  ui.decision!.props.onChange(selection); ui = render(); ui.submit!.props.onClick(); ui = await settle();
-  const request = harness.client.settings.mock.calls.find(([request]) => request.type === 'save')?.[0] as Extract<SettingsRequest, {type: 'save'}>;
-  expect(request.edit.patch).toEqual({selection});
+  expect(view.sections.judge!.stored.selection).toEqual(existing);
+  expect(changed).toHaveBeenCalledOnce();
+});
+
+it('keeps the confirmed mode until the direct switch finishes and serializes repeated gestures', async () => {
+  render(); let ui = await settle();
+  let resolve!: (reply: unknown) => void;
+  harness.client.collaboration.mockImplementation(async request => request.action === 'project' ? {kind: 'project', project} : new Promise(done => {resolve = done;}));
+  const choose = ui.mode.props.onChange;
+  choose('smart'); choose('smart'); ui = await settle();
+  expect(ui.mode.props.value).toBe('shared'); expect(ui.mode.props.disabled).toBe(true);
+  expect(harness.client.collaboration.mock.calls.filter(([request]) => request.action === 'editProject')).toHaveLength(1);
+  resolve({kind: 'applied', project: {...project, kind: 'smart', revision: 'project-r2'}});
+  ui = await settle();
+  expect(ui.mode.props.value).toBe('smart'); expect(ui.mode.props.disabled).toBe(false);
+});
+
+it('reports a failed direct switch inline and allows retry from the original mode', async () => {
+  harness.client.collaboration.mockImplementation(async request => request.action === 'project' ? {kind: 'project', project} : {kind: 'refused', message: '群连接暂不可用'});
+  let ui = await openSmart();
+  expect(ui.mode.props.value).toBe('shared'); expect(ui.mode.props.disabled).toBe(false);
+  expect(messages(ui)).toContain('群连接暂不可用'); expect(changed).not.toHaveBeenCalled();
+  harness.client.collaboration.mockImplementation(async request => request.action === 'project' ? {kind: 'project', project} : {kind: 'applied', project: {...project, kind: 'smart', revision: 'project-r2'}});
+  ui.mode.props.onChange('smart'); ui = await settle();
+  expect(ui.mode.props.value).toBe('smart'); expect(changed).toHaveBeenCalledOnce();
+});
+
+it('does not overwrite a concurrent group change when switching directly', async () => {
+  render(); let ui = await settle();
+  project = {...project, backend: 'claude-agent', revision: 'project-r2'};
+  ui.mode.props.onChange('smart'); ui = await settle();
+  expect(ui.mode.props.value).toBe('shared'); expect(messages(ui)).toContain('群设置已在别处修改');
+  expect(harness.client.collaboration.mock.calls.some(([request]) => request.action === 'editProject')).toBe(false);
 });
 
 it.each([
