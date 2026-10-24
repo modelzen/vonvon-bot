@@ -53,7 +53,7 @@ export function memoryNodes(input: NodeInput): {branches: MapNode[]; archive: Ma
   const branch = (view: BranchView, archived: boolean): MapNode => {
     const id = `${archived ? 'a' : 'b'}:${view.name}`;
     const {shown, hidden} = shownLeaves(view.items, isOpen(`m:${id}`, false), plan.leaves);
-    const content = input.branchContent?.(view);
+    const content = archived ? undefined : input.branchContent?.(view);
     const addContent = !archived ? input.branchAddContent?.(view) : undefined;
     const more: MapNode[] = hidden > 0 ? [{id: `m:${id}`, kind: 'more', label: `还有 ${hidden} 条`, onClick: () => flip(`m:${id}`)}] : [];
     const hit = plan.active && plan.branches.has(view.name);

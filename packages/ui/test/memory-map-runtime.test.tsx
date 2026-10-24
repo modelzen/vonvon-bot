@@ -32,12 +32,13 @@ function list(items: MemoryItem[]): MemoryReply {return {kind: 'list', scope: {k
   used: items.filter(entry => entry.state === 'active').length, limit: 100, verified: true, problems: [], newIds: [], newBranches: [], madeRoom: [],
 } as MemoryReply;}
 const props = {scope: {kind: 'project', projectId: 'prj_1'} as const, rootLabel: '项目', mode: 'direct' as const, memoryLabel: '项目记忆', targets: {botName: () => 'Bot', groupName: () => '群'}};
-function render(extra: Partial<Parameters<typeof MemoryMap>[0]> = {}) {
+function renderPage(extra: Partial<Parameters<typeof MemoryMap>[0]> = {}) {
   h.si = h.ri = h.mi = h.ei = 0;
   const all = nodes(MemoryMap({...props, ...extra}));
   for (const effect of h.pending.splice(0)) effect();
-  return all.find(element => element.type === MindMap)!.props.root as MapNode;
+  return {root: all.find(element => element.type === MindMap)!.props.root as MapNode, all};
 }
+function render(extra: Partial<Parameters<typeof MemoryMap>[0]> = {}) {return renderPage(extra).root;}
 async function flush() {for (let i = 0; i < 10; i++) await Promise.resolve();}
 const find = (root: MapNode, id: string): MapNode => {const walk = (entry: MapNode): MapNode[] => [entry, ...(entry.children ?? []).flatMap(walk)]; return walk(root).find(entry => entry.id === id)!;};
 const editor = (node: MapNode) => {const content = node.content as Element; expect(content?.type).toBe(MapInlineEditor); return content.props;};
@@ -110,4 +111,129 @@ it('runs the role draft guard before edit and add; typing a custom category supp
   root = render({beforeLeafSelect}); find(root, 'b:发版').onEdit?.({text: '新'});
   blocked.at(-1)!();
   expect(editor(find(render({beforeLeafSelect}), 'b:发版')).value).toBe('新');
+});
+
+it.each(['keyboard', 'menu'] as const)('successful %s leaf archive clears that leaf selection, details and draft', async path => {
+  let current = list([item('a'), item('b')]);
+  h.client.memory.mockImplementation(async (request: {type: string}) => {
+    if (request.type === 'list') return current;
+    if (request.type === 'archive') {current = list([{...item('a', '发版', 4), state: 'archived'}, item('b')]); return {kind: 'item', item: {...item('a', '发版', 4), state: 'archived'}};}
+    return {kind: 'seen'};
+  });
+  render(); await flush();
+  let leaf = find(render(), 'i:a');
+  leaf.onClick?.();
+  leaf = find(render(), 'i:a');
+  if (path === 'keyboard') {leaf.onEdit?.(); expect(find(render(), 'i:a').content).toBeDefined();}
+  else {leaf.menu!.find(action => action.id === 'details')!.onSelect(); expect(renderPage().all.some(element => element.type === 'aside')).toBe(true);}
+  leaf = find(render(), 'i:a');
+  if (path === 'keyboard') leaf.onDelete?.(); else leaf.menu!.find(action => action.id === 'delete')!.onSelect();
+  await flush();
+  const after = renderPage();
+  expect(find(after.root, 'i:a').selected).toBe(false);
+  expect(find(after.root, 'i:a').content).toBeUndefined();
+  expect(after.all.some(element => element.type === 'aside')).toBe(false);
+});
+
+it.each(['keyboard', 'menu'] as const)('failed %s leaf archive keeps its selection, details and draft', async path => {
+  h.client.memory.mockImplementation(async (request: {type: string}) => request.type === 'list' ? list([item('a'), item('b')])
+    : request.type === 'archive' ? {kind: 'refused', reason: 'not-allowed', message: '不能删除'} : {kind: 'seen'});
+  render(); await flush();
+  let leaf = find(render(), 'i:a');
+  leaf.onClick?.();
+  leaf = find(render(), 'i:a');
+  if (path === 'keyboard') leaf.onEdit?.();
+  else leaf.menu!.find(action => action.id === 'details')!.onSelect();
+  leaf = find(render(), 'i:a');
+  if (path === 'keyboard') leaf.onDelete?.(); else leaf.menu!.find(action => action.id === 'delete')!.onSelect();
+  await flush();
+  const after = renderPage();
+  expect(find(after.root, 'i:a').selected).toBe(true);
+  if (path === 'keyboard') expect(find(after.root, 'i:a').content).toBeDefined();
+  else expect(after.all.some(element => element.type === 'aside')).toBe(true);
+  expect(h.client.memory.mock.calls.filter(([request]) => request.type === 'archive')).toHaveLength(1);
+});
+
+it('refuses another selection or add when the current inline draft cannot commit', async () => {
+  render(); await flush();
+  find(render(), 'i:a').onEdit?.();
+  const draft = editor(find(render(), 'i:a'));
+  const focus = vi.fn();
+  const commit = vi.fn(() => draft.onCommit(''));
+  draft.session.current = {commit, focus};
+  const root = render();
+  find(root, 'i:b').onClick?.();
+  await flush();
+  expect(commit).toHaveBeenCalledOnce(); expect(focus).toHaveBeenCalledOnce();
+  expect(find(render(), 'i:b').selected).toBe(false);
+  expect(find(render(), 'i:a').content).toBeDefined();
+  find(render(), 'b:发版').onAdd?.(); await flush();
+  expect(commit).toHaveBeenCalledTimes(2);
+  expect(find(render(), 'b:发版').children!.some(child => child.id === 'add:发版')).toBe(false);
+});
+
+it('waits for the pending inline commit before selecting another leaf', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => {release = resolve;});
+  render(); await flush();
+  find(render(), 'i:a').onEdit?.();
+  const draft = editor(find(render(), 'i:a'));
+  const commit = vi.fn(async () => {await gate; return draft.onCommit('记忆 a');});
+  draft.session.current = {commit, focus: vi.fn()};
+  find(render(), 'i:b').onClick?.();
+  expect(find(render(), 'i:b').selected).toBe(false);
+  expect(find(render(), 'i:a').content).toBeDefined();
+  release(); await flush();
+  expect(commit).toHaveBeenCalledOnce();
+  expect(find(render(), 'i:b').selected).toBe(true);
+  expect(find(render(), 'i:a').content).toBeUndefined();
+});
+
+it('focuses the current editor handle when a pending validation fails after the handle refreshes', async () => {
+  let finish!: (ok: boolean) => void;
+  const pending = new Promise<boolean>(resolve => {finish = resolve;});
+  render(); await flush(); find(render(), 'i:a').onEdit?.();
+  const draft = editor(find(render(), 'i:a'));
+  draft.session.current = {commit: () => pending, focus: vi.fn()};
+  find(render(), 'i:b').onClick?.();
+  const focus = vi.fn();
+  draft.session.current = {commit: vi.fn(), focus};
+  finish(false); await flush();
+  expect(focus).toHaveBeenCalledOnce();
+  expect(find(render(), 'i:b').selected).toBe(false);
+  expect(find(render(), 'i:a').content).toBeDefined();
+});
+
+it('keeps a category expanded when its leaf draft is invalid', async () => {
+  render(); await flush(); find(render(), 'i:a').onEdit?.();
+  const draft = editor(find(render(), 'i:a'));
+  const focus = vi.fn();
+  draft.session.current = {commit: () => draft.onCommit(''), focus};
+  find(render(), 'b:发版').onToggle?.(); await flush();
+  expect(find(render(), 'b:发版').open).toBe(true);
+  expect(find(render(), 'i:a').content).toBeDefined();
+  expect(focus).toHaveBeenCalledOnce();
+});
+
+it('waits for a valid leaf draft before folding its category', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => {release = resolve;});
+  render(); await flush(); find(render(), 'i:a').onEdit?.();
+  const draft = editor(find(render(), 'i:a'));
+  draft.session.current = {commit: async () => {await gate; return draft.onCommit('记忆 a');}, focus: vi.fn()};
+  find(render(), 'b:发版').onToggle?.();
+  expect(find(render(), 'b:发版').open).toBe(true);
+  release(); await flush();
+  expect(find(render(), 'b:发版').open).toBe(false);
+  expect(find(render(), 'i:a').content).toBeUndefined();
+});
+
+
+it('clears a validation notice when the original valid text is restored', async () => {
+  render(); await flush(); find(render(), 'i:a').onEdit?.();
+  expect(await editor(find(render(), 'i:a')).onCommit('')).toBe(false);
+  expect(h.state).toContain('记忆内容不能为空。');
+  expect(await editor(find(render(), 'i:a')).onCommit('记忆 a')).toBe(true);
+  expect(h.state).not.toContain('记忆内容不能为空。');
+  expect(find(render(), 'i:a').content).toBeUndefined();
 });

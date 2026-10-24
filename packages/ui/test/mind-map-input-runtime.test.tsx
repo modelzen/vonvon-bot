@@ -42,16 +42,29 @@ it('Enter and Escape commit current text once, and never commit an unfinished IM
   editor.props.onCompositionEnd();
   editor.props.onKeyDown(event('Escape'));
   editor.props.onBlur();
+  await Promise.resolve();
   expect(onCommit).toHaveBeenCalledExactlyOnceWith('中文草稿');
   resolve(true); await Promise.resolve();
 });
 
-it('an empty existing item validates through commit; an empty new draft cancels', () => {
+it('an empty existing item validates through commit; an empty new draft cancels', async () => {
   const onCommit = vi.fn(() => false); const onCancel = vi.fn();
   const existing = MapInlineEditor({value: '原文', onCommit, onCancel});
   existing.props.ref.current = {innerText: ''}; existing.props.onKeyDown(event('Enter'));
+  await Promise.resolve();
   expect(onCommit).toHaveBeenCalledWith(''); expect(onCancel).not.toHaveBeenCalled();
   const adding = MapInlineEditor({value: '', onCommit, onCancel, cancelWhenEmpty: true});
   adding.props.ref.current = {innerText: ''}; adding.props.onBlur();
   expect(onCancel).toHaveBeenCalledOnce();
+});
+
+
+it('defers blur during composition and commits the completed Chinese text afterwards', async () => {
+  const onCommit = vi.fn(() => true);
+  const editor = MapInlineEditor({value: '', onCommit});
+  editor.props.ref.current = {innerText: '中文组合完成'};
+  editor.props.onCompositionStart(); editor.props.onBlur();
+  await Promise.resolve(); expect(onCommit).not.toHaveBeenCalled();
+  editor.props.onCompositionEnd(); await Promise.resolve();
+  expect(onCommit).toHaveBeenCalledExactlyOnceWith('中文组合完成');
 });

@@ -1,5 +1,5 @@
 import {useId, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode} from 'react';
-import {MoreHorizontal} from 'lucide-react';
+import {ChevronLeft, MoreHorizontal, Plus} from 'lucide-react';
 import './mind-map.css';
 
 export type MapMenuItem = {id: string; label: string; onSelect: () => void; danger?: boolean};
@@ -38,15 +38,17 @@ export type MapNode = {
  * A hand-written horizontal tree (§5.7): HTML nodes, SVG connectors between a node and its children, the root on the left.
  * A narrow window draws the same tree indented (CSS only); every action stays on the nodes. No chart library.
  */
-export function MindMap({root, label}: {root: MapNode; label: string}) {
+export function MindMap({root, label, beforeLocalToggle}: {root: MapNode; label: string; beforeLocalToggle?: (toggle: () => void) => void}) {
   const [dragging, setDragging] = useState<string>();
   const [activeId, setActiveId] = useState<string>();
+  const [localFolds, setLocalFolds] = useState<ReadonlySet<string>>(new Set());
+  const folded = (node: MapNode) => node.onToggle ? node.open === false : localFolds.has(node.id) ? node.open !== false : node.open === false;
   const container = useRef<HTMLDivElement>(null);
   const capture = useRef<HTMLTextAreaElement>(null);
   const composing = useRef(false);
   const prefix = useId();
   const visible: MapNode[] = [];
-  const visit = (node: MapNode) => {visible.push(node); if (node.open !== false) node.children?.forEach(visit);};
+  const visit = (node: MapNode) => {visible.push(node); if (!folded(node)) node.children?.forEach(visit);};
   visit(root);
   const active = visible.find(node => node.id === activeId) ?? (activeId === undefined ? visible.find(node => node.selected) : undefined);
   const externalSelected = visible.find(node => node.selected)?.id;
@@ -54,7 +56,7 @@ export function MindMap({root, label}: {root: MapNode; label: string}) {
   const selected = active?.id;
   const editing = active?.content !== undefined;
   useLayoutEffect(() => {
-    if (active?.onEdit && !editing && capture.current) {
+    if (active?.onEdit && !editing && capture.current && (document.activeElement === document.body || container.current?.contains(document.activeElement))) {
       const box = document.getElementById(`${prefix}-${active.id}`)?.getBoundingClientRect();
       const bounds = container.current?.getBoundingClientRect();
       if (box && bounds && container.current) {
@@ -86,21 +88,20 @@ export function MindMap({root, label}: {root: MapNode; label: string}) {
       onCompositionStart={() => {composing.current = true;}}
       onCompositionEnd={event => {composing.current = false; beginTyping(event.currentTarget.value); event.currentTarget.value = '';}}
       onChange={event => {if (!composing.current) {beginTyping(event.currentTarget.value); event.currentTarget.value = '';}}}/>
-    <MapTree node={root} dragging={dragging} setDragging={setDragging} selected={selected} prefix={prefix}
+    <MapTree node={root} localFolds={localFolds} toggleLocal={id => {const toggle = () => setLocalFolds(current => {const next = new Set(current); if (!next.delete(id)) next.add(id); return next;}); if (beforeLocalToggle) beforeLocalToggle(toggle); else toggle();}} dragging={dragging} setDragging={setDragging} selected={selected} prefix={prefix}
       select={node => {setActiveId(node.selected === undefined ? node.id : undefined); node.onClick?.(); if (!node.onEdit) container.current?.focus({preventScroll: true});}}/>
   </div>;
 }
 
-type TreeProps = {node: MapNode; dragging?: string; setDragging: (value?: string) => void; selected?: string; prefix: string; select: (node: MapNode) => void};
+type TreeProps = {node: MapNode; dragging?: string; setDragging: (value?: string) => void; selected?: string; prefix: string; select: (node: MapNode) => void; localFolds: ReadonlySet<string>; toggleLocal: (id: string) => void};
 function MapTree(props: TreeProps) {
   const {node} = props;
-  const [localFolded, setLocalFolded] = useState(false);
-  const folded = node.onToggle ? node.open === false : localFolded || node.open === false;
+  const folded = node.onToggle ? node.open === false : props.localFolds.has(node.id) ? node.open !== false : node.open === false;
   const kids = node.children ?? [];
   const foldable = kids.length > 0 || (node.childCount ?? 0) > 0;
   return <div className="mm-tree" role="none">
     <div className="mm-self" role="none"><MapBox {...props} folded={folded} foldable={foldable}
-      toggle={() => {if (!folded) props.select(node); if (node.onToggle) node.onToggle(); else setLocalFolded(value => !value);}}/></div>
+      toggle={() => {if (node.onToggle) node.onToggle(); else props.toggleLocal(node.id);}}/></div>
     {kids.length > 0 && !folded && <Links count={kids.length}>
       {kids.map(child => <MapTree {...props} key={child.id} node={child}/>) }
     </Links>}
@@ -153,7 +154,7 @@ function MapBox({node, dragging, setDragging, selected, prefix, select, folded, 
   const fixed = node.fixed ?? !node.onDelete;
   const drop = node.drop;
   const events = {
-    ...(node.drag ? {draggable: true, onDragStart: (event: DragEvent) => {event.dataTransfer.setData('text/plain', node.drag!); event.dataTransfer.effectAllowed = 'move'; setDragging(node.drag);}, onDragEnd: () => {setDragging(undefined); setOver(false);}} : {}),
+    ...(node.drag && !node.content ? {draggable: true, onDragStart: (event: DragEvent) => {event.dataTransfer.setData('text/plain', node.drag!); event.dataTransfer.effectAllowed = 'move'; setDragging(node.drag);}, onDragEnd: () => {setDragging(undefined); setOver(false);}} : {}),
     ...(drop ? {
       onDragOver: (event: DragEvent) => {if (canDrop) {event.preventDefault(); setOver(true);}},
       onDragLeave: () => setOver(false),
@@ -164,7 +165,7 @@ function MapBox({node, dragging, setDragging, selected, prefix, select, folded, 
       },
     } : {}),
   };
-  return <div className="mm-box" data-kind={node.kind} data-tone={node.tone} data-selected={isSelected || undefined} data-fixed={fixed || undefined} data-fresh={node.fresh || undefined} onContextMenu={event => {if (menu.current) {event.preventDefault(); menu.current.open = true; menu.current.querySelector('button')?.focus();}}} data-drop={canDrop ? (over ? 'over' : 'ready') : undefined} {...events}>
+  return <div className="mm-box" data-kind={node.kind} data-tone={node.tone} data-selected={isSelected || undefined} data-fixed={fixed || undefined} data-actions={Boolean(node.onAdd || foldable) || undefined} data-fresh={node.fresh || undefined} onContextMenu={event => {if (menu.current) {event.preventDefault(); menu.current.open = true;}}} data-drop={canDrop ? (over ? 'over' : 'ready') : undefined} {...events}>
     <div className="mm-main" id={`${prefix}-${node.id}`} role="treeitem" aria-selected={isSelected} aria-expanded={foldable ? !folded : undefined}>
       {node.fresh && <span className="mm-new" role="img" aria-label="新"/>}
       {node.content ?? <button type="button" className="mm-label" onClick={event => {
@@ -174,11 +175,31 @@ function MapBox({node, dragging, setDragging, selected, prefix, select, folded, 
         {node.label}{node.meta && <small>{node.meta}</small>}
       </button>}
     </div>
-    {isSelected && !folded && node.onAdd && <button type="button" className="mm-add" aria-label="添加记忆" title="添加记忆" onClick={node.onAdd}>+</button>}
+    {isSelected && !folded && node.onAdd && <button type="button" className="mm-add" aria-label="添加记忆" title="添加记忆" onClick={node.onAdd}><Plus size={18} strokeWidth={2} aria-hidden="true"/></button>}
     {foldable && (folded || !isSelected) && <button type="button" className="mm-fold" data-collapsed={folded || undefined}
-      aria-label={folded ? '展开' : '收起'} aria-expanded={!folded} onClick={toggle}>{folded ? node.childCount ?? node.children?.length : '‹'}</button>}
+      aria-label={folded ? '展开' : '收起'} aria-expanded={!folded} onClick={toggle}>{folded ? node.childCount ?? node.children?.length : <ChevronLeft size={16} strokeWidth={2} aria-hidden="true"/>}</button>}
 
-    {node.menu && node.menu.length > 0 && <details ref={menu} className="mm-menu" onBlur={event => {if (!event.currentTarget.contains(event.relatedTarget as Node | null)) event.currentTarget.open = false;}}>
+    {node.menu && node.menu.length > 0 && <details ref={menu} className="mm-menu" onToggle={event => {
+      const details = event.currentTarget;
+      const popup = details.querySelector<HTMLElement>('[role=menu]');
+      if (!details.open || !popup) return;
+      const bounds = details.closest('.mm')!.getBoundingClientRect();
+      const left = Math.max(8, bounds.left + 8), right = Math.min(window.innerWidth - 8, bounds.right - 8);
+      const top = Math.max(8, bounds.top + 8), bottom = Math.min(window.innerHeight - 8, bounds.bottom - 8);
+      popup.style.transform = ''; popup.style.maxHeight = `${Math.max(80, bottom - top)}px`;
+      const rect = popup.getBoundingClientRect();
+      const x = Math.max(left - rect.left, Math.min(0, right - rect.right));
+      const y = Math.max(top - rect.top, Math.min(0, bottom - rect.bottom));
+      popup.style.transform = `translate(${x}px, ${y}px)`;
+      popup.querySelector('button')?.focus({preventScroll: true});
+    }} onKeyDown={event => {
+      if (!event.currentTarget.open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {event.preventDefault(); event.stopPropagation(); event.currentTarget.open = true; return;}
+      if (event.key === 'Escape') {event.preventDefault(); event.stopPropagation(); event.currentTarget.open = false; event.currentTarget.closest('.mm-box')?.querySelector<HTMLButtonElement>('.mm-label')?.focus({preventScroll: true});}
+      const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role=menuitem]'));
+      const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+      const next = event.key === 'ArrowDown' ? (at + 1) % buttons.length : event.key === 'ArrowUp' ? (at - 1 + buttons.length) % buttons.length : event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : undefined;
+      if (next !== undefined) {event.preventDefault(); event.stopPropagation(); buttons[next]?.focus({preventScroll: true});}
+    }} onBlur={event => {if (!event.currentTarget.contains(event.relatedTarget as Node | null)) event.currentTarget.open = false;}}>
       <summary aria-label="更多操作" title="更多操作"><MoreHorizontal size={14} aria-hidden="true"/></summary>
       <div role="menu">{node.menu.map(item => <button type="button" role="menuitem" key={item.id} data-danger={item.danger || undefined}
         onClick={event => {event.currentTarget.closest('details')?.removeAttribute('open'); item.onSelect();}}>{item.label}</button>)}</div>
