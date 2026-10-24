@@ -3,6 +3,8 @@ import {isValidElement, type ReactElement, type ReactNode} from 'react';
 import {agentIdSchema, type DecisionModelsView, type JudgeSelectionView} from '@vonvon/protocol';
 import {DecisionFields, providerDecisionProblem} from '../src/settings/DecisionFields';
 import {SettingChoices} from '../src/settings/SettingChoices';
+import {renderToStaticMarkup} from 'react-dom/server';
+import {Button} from '../src/reference/components/ui';
 
 const state = vi.hoisted(() => ({values: [] as unknown[], index: 0}));
 vi.mock('react', async original => ({...await original<typeof import('react')>(), useState: (initial: unknown) => {
@@ -100,4 +102,76 @@ it('keeps an unavailable saved provider visible and does not silently switch it'
   expect(choice(ui).props.value).toBe(claude.id);
   expect(providerDecisionProblem(props.value, [codex], services)).toContain('不可用');
   expect(changed).not.toHaveBeenCalled();
+});
+it.each([
+  [codex.id, '修改 Codex 配置'],
+  [claude.id, '修改 Claude 配置'],
+  ['typesafe', '修改 Jev 配置'],
+])('opens the selected shared configuration even when %s is unavailable', (provider, label) => {
+  props.value = {kind: 'provider', provider} as JudgeSelectionView;
+  const link = render().find(node => node.type === Button && node.props.className === 'gd-decision-config-link')!;
+  expect(link.props['aria-label']).toBe(label);
+  expect(renderToStaticMarkup(<>{link.props.children}</>)).toContain('修改');
+  expect(link.props.disabled).toBe(false);
+  link.props.onClick();
+  expect(props.onOpenSecrets).toHaveBeenCalledExactlyOnceWith(provider);
+  expect(changed).not.toHaveBeenCalled();
+});
+it('offers general configuration before a Provider is selected and respects disabled state', () => {
+  let link = render().find(node => node.props.className === 'gd-decision-config-link')!;
+  expect(renderToStaticMarkup(<>{link.props.children}</>)).toContain('管理决策模型');
+  link.props.onClick();
+  expect(props.onOpenSecrets).toHaveBeenCalledExactlyOnceWith(undefined);
+  props.disabled = true;
+  link = render().find(node => node.props.className === 'gd-decision-config-link')!;
+  expect(link.props.disabled).toBe(true);
+});
+it.each([
+  [true, false, '密钥已添加'],
+  [false, false, '尚未添加密钥'],
+  [true, true, '密钥状态未知'],
+])('shows the actual Jev key state (set=%s, unreadable=%s)', (keySet, keyUnreadable, label) => {
+  props.value = {kind: 'provider', provider: 'typesafe'};
+  props.services = services.map(service => ({...service, keySet, keyUnreadable}));
+  const status = render().find(node => node.props.className === 'gd-decision-key-state')!;
+  expect(renderToStaticMarkup(<>{status.props.children}</>)).toContain(label);
+  expect(changed).not.toHaveBeenCalled();
+});
+it('does not treat an unavailable key state as a missing key', () => {
+  props.value = {kind: 'provider', provider: 'typesafe'};
+  props.services = undefined;
+  const status = render().find(node => node.props.className === 'gd-decision-key-state')!;
+  expect(renderToStaticMarkup(<>{status.props.children}</>)).toBe('密钥状态未知');
+});
+it.each([
+  [codex.id, {model: 'gpt-6-luna', effort: 'low' as const}, 'low'],
+  [codex.id, {model: 'gpt-6-sol'}, '自动（最低支持档位）'],
+  [claude.id, {model: 'haiku'}, '关闭思考'],
+  ['typesafe', {model: 'jev-latest'}, '不支持单独设置'],
+])('shows the configured model and thinking level for %s', (provider, profile, effort) => {
+  props.value = {kind: 'provider', provider} as JudgeSelectionView;
+  props.services = services.map(service => ({...service, keySet: true}));
+  props.configuration = {kind: 'ready', configuration: {byProvider: {[provider]: profile}}};
+  const ui = render();
+  const values = ui.find(node => node.props.className === 'gd-decision-config-values')!;
+  const text = renderToStaticMarkup(<>{values.props.children}</>);
+  expect(text).toContain(profile.model);
+  if (provider !== 'typesafe') expect(text).toContain(effort);
+  else expect(ui.some(node => node.props['aria-label'] === '思考等级')).toBe(false);
+  expect(ui.some(node => node.props.className === 'gd-decision-configured')).toBe(true);
+});
+it('shows the group’s retained model instead of presenting shared configuration as active', () => {
+  props.value = {kind: 'llm', backend: codex.id, model: 'legacy-model', effort: 'high'};
+  props.configuration = {kind: 'ready', configuration: {byProvider: {[codex.id]: {model: 'shared-model', effort: 'low'}}}};
+  const values = render().find(node => node.props.className === 'gd-decision-config-values')!;
+  const text = renderToStaticMarkup(<>{values.props.children}</>);
+  expect(text).toContain('legacy-model'); expect(text).toContain('high'); expect(text).not.toContain('shared-model');
+});
+it('does not invent a model or show configured when shared configuration cannot be read', () => {
+  props.value = {kind: 'provider', provider: codex.id};
+  props.configuration = {kind: 'failed'};
+  const ui = render();
+  expect(ui.some(node => node.props.className === 'gd-decision-config-values')).toBe(false);
+  expect(ui.some(node => node.props.className === 'gd-decision-configured')).toBe(false);
+  expect(ui.some(node => node.props.children === '配置读取失败')).toBe(true);
 });

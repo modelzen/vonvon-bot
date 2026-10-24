@@ -56,7 +56,7 @@ type Props = {
   onAddGroup?: (agentId: AgentId, projectId: ProjectId) => void;
   onOpenTools?: () => void;
   onOpenProviders?: () => void;
-  onOpenSecrets?: () => void;
+  onOpenSecrets?: (provider?: string) => void;
   onBotProfile?: (id: AgentId) => void;
 };
 // Intent: one project, its groups and Bots, and the workspace they share. Pages are plain: the owner leads a later visual pass.
