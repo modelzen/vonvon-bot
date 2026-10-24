@@ -126,5 +126,14 @@
 .gd-decision-select { width: min(100%, 320px); min-width: 0; }
 .gd-decision-fields .gd-note { margin: 0; }
 .gd-decision-fields fieldset .gd-note { margin-top: 8px; }
+.gd-decision-config { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.gd-decision-config-copy, .gd-decision-config-values { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; color: var(--color-text-secondary); font-size: 12px; line-height: 1.6; }
+.gd-decision-config-values > span { overflow-wrap: anywhere; }
+.gd-decision-configured { display: inline-flex; align-items: center; color: var(--color-status-success); }
+.gd-decision-key-state[data-state="added"] { color: var(--color-status-success); }
+.gd-decision-key-state[data-state="missing"] { color: var(--color-status-warning); }
+.gd-decision-fields .gd-decision-config .gd-decision-config-link.ui-button { position: relative; flex: 0 0 auto; min-height: 28px; height: 28px; padding: 0 4px; border-color: transparent; background: transparent; color: var(--color-accent); font-size: 12px; }
+.gd-decision-config-link::after { content: ''; position: absolute; inset: -6px 0; }
+.gd-decision-config-link > span { display: inline-flex; align-items: center; gap: 2px; }
 
 .gd-provider-discovery { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.6; }

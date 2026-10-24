@@ -330,3 +330,4 @@
     width: 100%;
   }
 }
+.settings-save-status { margin: 0; padding: 0 16px 12px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }

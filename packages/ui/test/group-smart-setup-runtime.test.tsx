@@ -8,6 +8,8 @@ import {Editor} from '../src/settings/SettingsPanel';
 import {GroupAttentionStatus} from '../src/management/GroupAttentionStatus';
 import {OperationActivity} from '../src/management/OperationActivity';
 import {ConversationSlider} from '../src/settings/ConversationSlider';
+import {DecisionFields} from '../src/settings/DecisionFields';
+import {SettingChoices} from '../src/settings/SettingChoices';
 
 type Slot = {states: unknown[]; refs: Array<{current: unknown}>; effects: Array<{deps?: unknown[]; cleanup?: () => void}>; memos: Array<{deps?: unknown[]; value: unknown}>; state: number; ref: number; effect: number; memo: number};
 const harness = vi.hoisted(() => ({slots: {} as Record<string, Slot>, active: '', pending: [] as Array<() => void>, client: {collaboration: vi.fn(), settings: vi.fn(), environment: vi.fn(), snapshot: vi.fn()}}));
@@ -278,4 +280,56 @@ it.each([
   await flush(); ui = inspect();
   expect(ui.some(node => node.type === OperationActivity)).toBe(false);
   if (reply === 'refused') expect(ui.some(node => node.props.title === '操作未完成')).toBe(true);
+});
+
+function renderInstantDecision() {
+  const content = nodes(renderAt('instant-content', () => GroupSettingsContent({view, refresh: async () => {}, tab: 'response', tools: readyTools, onOpenSecrets: () => {}})));
+  const editor = content.find(node => node.type === Editor && node.props.title === '决策模型')!;
+  const rendered = nodes(renderAt('instant-editor', () => Editor(editor.props as any)));
+  return {rendered, decision: rendered.find(node => node.type === DecisionFields)!};
+}
+async function settleInstantDecision() {renderInstantDecision(); await flush(); renderInstantDecision(); await flush(); return renderInstantDecision();}
+function prepareInstantDecision() {
+  view = {...view, identity: {...view.identity, kind: 'smart'}, sections: {...view.sections, judge: section({selection: {kind: 'provider', provider: 'typesafe'}})},
+    decisionModels: [{provider: 'typesafe', displayName: 'TypeSafe', keyId: 'typesafe-api-key', keySet: true, models: [{id: 'jev-latest', displayName: 'Jev'}]}]};
+}
+function saveCalls() {return harness.client.settings.mock.calls.filter(([request]) => request.type === 'save');}
+
+it('saves an existing smart group’s Provider on selection without Save, and serializes repeated clicks', async () => {
+  prepareInstantDecision(); let ui = await settleInstantDecision();
+  let resolve!: (reply: SettingsReply) => void;
+  let request!: Extract<SettingsRequest, {type: 'save'}>;
+  save = incoming => {request = incoming; return new Promise(done => {resolve = done;});};
+  const select = ui.decision.props.onChange;
+  select(selection); select(selection);
+  ui = renderInstantDecision();
+  expect(saveCalls()).toHaveLength(1);
+  expect(request.edit).toMatchObject({section: 'judge', revision: 'settings-r1', patch: {selection}});
+  expect(ui.decision.props.value).toEqual(selection); expect(ui.decision.props.disabled).toBe(true);
+  expect(ui.rendered.some(node => node.props.children === '保存' || node.props.children === '放弃修改')).toBe(false);
+  resolve(saved(request)); ui = await settleInstantDecision();
+  expect(ui.decision.props.value).toEqual(selection); expect(ui.decision.props.disabled).toBe(false);
+  expect(ui.rendered.some(node => node.props.title === '本次修改已保存')).toBe(false);
+});
+
+it.each(['rejected', 'transport'])('restores the confirmed Provider after an automatic %s failure and permits another selection', async kind => {
+  prepareInstantDecision(); let ui = await settleInstantDecision();
+  save = async () => {if (kind === 'transport') throw new Error('连接暂不可用'); return {kind: 'saved', result: {kind: 'rejected', fields: [{field: 'selection', message: '模型暂不可用'}]}};};
+  ui.decision.props.onChange(selection); ui = await settleInstantDecision();
+  expect(ui.decision.props.value).toEqual({kind: 'provider', provider: 'typesafe'});
+  expect(nodes(DecisionFields(ui.decision.props as any)).find(node => node.type === SettingChoices)!.props.value).toBe('typesafe');
+  expect(ui.decision.props.disabled).toBe(false);
+  expect(ui.rendered.some(node => node.props.title === '切换未完成')).toBe(true);
+  expect(ui.rendered.some(node => node.props.children === '保存')).toBe(false);
+  save = async request => saved(request);
+  ui.decision.props.onChange(selection); ui = await settleInstantDecision();
+  expect(ui.decision.props.value).toEqual(selection); expect(saveCalls()).toHaveLength(2);
+});
+
+it('does not automatically save a readonly decision choice', async () => {
+  prepareInstantDecision(); view.sections.judge!.access = {kind: 'readonly', reason: 'bot-stopped', message: '只读'} as any;
+  const ui = await settleInstantDecision();
+  expect(ui.decision.props.disabled).toBe(true);
+  ui.decision.props.onChange(selection);
+  expect(saveCalls()).toHaveLength(0);
 });
