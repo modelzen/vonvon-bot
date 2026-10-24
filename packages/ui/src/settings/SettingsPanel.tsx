@@ -33,6 +33,7 @@ import {JudgeModelChoice} from './JudgeModelChoice';
 import {SettingChoices} from './SettingChoices';
 import {NativePermissionFields, nativePermissionPatch} from './NativePermissionFields';
 import {AnnouncedReadonlyMessages, hasReadonlyMessage, type ReadonlyMessage} from './readonly-messages';
+import './permission-summary.css';
 
 type AgentScope = { kind: "agent"; botId: AgentId };
 type ProjectScope = { kind: "project"; botId: AgentId; projectName: string };
@@ -1175,6 +1176,42 @@ export function PermissionFields({value, disabled, onChange}: {value: Permission
   </>;
 }
 
+/** Keep the current grant readable; compare the provider's levels only while editing. */
+export function PermissionSummary({section, provider, save}: {section: Section<PermissionView>; provider: string; save: (patch: Partial<PermissionView>, revision: string) => Promise<SettingsReply>}) {
+  const [open, setOpen] = useState(false);
+  const [pending, setPending] = useState(false);
+  const announcedReadonly = useContext(AnnouncedReadonlyMessages);
+  const value = section.stored;
+  const currentTier = value.options.tiers.find(tier => tier.tier === value.mode);
+  const invalid = Boolean(value.options.invalid);
+  const description = invalid ? '高级设置读不出来，现在按只读运行。'
+    : value.custom ? value.options.customSummary : currentTier?.summary;
+  const close = () => {if (!pending) setOpen(false);};
+  async function saveTier(patch: Partial<PermissionView>, revision: string) {
+    setPending(true);
+    try {return await save({mode: patch.mode ?? section.stored.mode}, revision);}
+    finally {setPending(false);}
+  }
+  return <>
+    <SettingsGroup label="执行权限" id={settingAnchor('权限')} className="permission-summary"
+      footer={section.access.kind === 'readonly' && !hasReadonlyMessage(announcedReadonly, section.access) ? section.access.message : undefined}>
+      <SettingsRow title={invalid ? '只读（设置异常）' : value.custom ? '自定义权限' : currentTier?.name ?? value.mode}
+        description={description}
+        trailing={<span data-search-title="修改权限"><Button size="sm" onClick={() => setOpen(true)}>{section.access.kind === 'readonly' ? '查看权限' : '修改权限'}</Button></span>}/>
+    </SettingsGroup>
+    <NativePermissionEditor section={section} provider={provider} save={save}/>
+    <Dialog open={open} title="执行权限" description={section.access.kind === 'readonly' ? section.access.message : `设置 ${provider} 在本群中的执行范围。选择后保存才会生效。`} onClose={pending ? undefined : close}
+      footer={<Button disabled={pending} onClick={close}>取消</Button>}>
+      <div className="permission-dialog">
+        <Editor title="权限" section={section} showSave submitLabel="保存权限"
+          save={saveTier} afterSave={async () => setOpen(false)}
+          render={(draft, set, disabled) => <PermissionFields value={draft} disabled={disabled}
+            onChange={({mode}) => set({...draft, mode, custom: null, options: draft.options.invalid ? {...draft.options, invalid: false} : draft.options})}/>}/>
+      </div>
+    </Dialog>
+  </>;
+}
+
 export function ProjectPanel({
   view,
   refresh,
@@ -1290,6 +1327,7 @@ export function ProjectPanel({
       <details className="membership-settings-details"><summary>话题模型</summary><SessionPicker view={view} /></details>
       </>}
       {(!partition || partition === 'permission') && <>
+      {partition === 'permission' ? <PermissionSummary section={permission} provider={backendLabel(view.identity.backend)} save={(patch, revision) => save('permission', patch, revision)}/> : <>
       {!partition && <h2 className="membership-settings-heading">权限</h2>}
       <Editor
         title="权限"
@@ -1298,6 +1336,7 @@ export function ProjectPanel({
         render={(draft, _set, disabled, commit) => <PermissionFields value={draft} disabled={disabled} onChange={patch => void commit(patch)}/>}
       />
       <NativePermissionEditor section={permission} provider={backendLabel(view.identity.backend)} save={(patch, revision) => save('permission', patch, revision)}/>
+      </>}
       </>}
       {(!partition || partition === 'members') && <>
       {!partition && <h2 className="membership-settings-heading">回复规则</h2>}

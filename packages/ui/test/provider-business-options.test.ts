@@ -12,11 +12,12 @@ const client = createClient({isOpen: () => true, onMessage: () => {}, onClose: (
 const botId = agentIdSchema.parse('cli_provider_options');
 const render = (child: ReturnType<typeof createElement>) => renderToStaticMarkup(createElement(ClientProvider, {client, children: child}));
 
-it('keeps a saved unavailable model Provider visible but disabled', () => {
+it('keeps saved unavailable Provider and model choices readable without offering unavailable Provider edits', () => {
   const html = render(createElement(ModelAccessFields, {botId, value: {backend: 'claude-agent', models: ['haiku'], efforts: []}, onChange: () => {}, disabled: false, providers: []}));
-  expect(html).toContain('Claude（当前不可用）');
-  expect(html).toMatch(/<input[^>]*disabled=""[^>]*value="claude-agent"/);
-  expect(html).toContain('配置已保留');
+  expect(html).toContain('Claude'); expect(html).toContain('当前不可用');
+  expect(html).not.toContain('role="radiogroup" aria-label="模型 Provider"');
+  expect(html).toContain('haiku'); expect(html).toContain('查看模型');
+  expect(html).toContain('选择仍保留');
 });
 
 it('explains the retained tier and cleared advanced settings when changing Provider', () => {
@@ -24,7 +25,7 @@ it('explains the retained tier and cleared advanced settings when changing Provi
     providers: [{id: 'codex-appserver', displayName: 'Codex'}, {id: 'claude-agent', displayName: 'Claude'}],
     savedBackend: 'codex-appserver', permissionName: '工作区可写'};
   const html = render(createElement(ModelAccessFields, props));
-  expect(html).toContain('换 provider 以后，权限还是「工作区可写」；高级设置会清掉。');
+  expect(html).toContain('权限仍是「工作区可写」；高级设置会清掉。');
   expect(html).not.toContain('能改工作区里的文件，能联网。');
   expect(render(createElement(ModelAccessFields, {...props, value: {...props.value, backend: props.savedBackend}}))).not.toContain('高级设置会清掉');
 });
@@ -45,19 +46,19 @@ it('uses the invalid custom view’s qa tier in the provider-change hint', () =>
     return findEditor(content).props.render({...view.sections.modelAccess!.stored, backend: 'claude-agent'}, () => {}, false);
   }
   const html = render(createElement(ChangedProvider));
-  expect(html).toContain('权限还是「只读」；高级设置会清掉。');
+  expect(html).toContain('权限仍是「只读」；高级设置会清掉。');
   expect(html).not.toContain('恢复原来保存的权限档');
   expect(html).not.toContain('可能比当前的只读更宽');
 });
 
-it('keeps unavailable decision Providers visible and open for setup guidance', () => {
-  const html = render(createElement(DecisionFields, {botId, groupBackend: 'codex-appserver', value: {kind: 'llm', backend: 'claude-agent', model: 'haiku'}, effective: {kind: 'default'}, onChange: () => {}, disabled: false, providers: [], services: [{provider: 'actual', displayName: 'Actual', keyId: 'actual-key', models: [{id: 'jev', displayName: 'Jev'}], keySet: false}]}));
+it('keeps unavailable decision Providers visible and disabled while exposing their setup guidance', () => {
+  const html = render(createElement(DecisionFields, {botId, groupBackend: 'codex-appserver', value: {kind: 'llm', backend: 'claude-agent', model: 'haiku'}, effective: {kind: 'default'}, onChange: () => {}, disabled: false, providers: [], onOpenProviders: () => {}, services: [{provider: 'typesafe', displayName: 'TypeSafe', keyId: 'typesafe-api-key', models: [{id: 'jev', displayName: 'Jev'}], keySet: false}]}));
   expect(html).toContain('Claude 尚未就绪');
-  expect(html).toContain('检查登录');
-  for (const provider of ['codex-appserver', 'claude-agent', 'decision:actual']) {
+  expect(html).toContain('设置 Provider');
+  for (const provider of ['codex-appserver', 'claude-agent', 'typesafe']) {
     const input = html.match(new RegExp(`<input[^>]*value="${provider}"[^>]*>`))?.[0];
     expect(input).toBeDefined();
-    expect(input).not.toContain('disabled');
+    expect(input).toContain('disabled');
   }
 });
 it('does not validate model access against an offline fallback catalog', () => {

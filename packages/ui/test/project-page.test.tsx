@@ -35,7 +35,7 @@ it('has the three project tabs, rename and delete, and no group tabs while two g
 it('adds the one binding\'s settings tabs when a project has a single group and Bot',()=>{
   const one=make([row('cli_a','oc_pay','qa')]);
   const html=render(one,{kind:'map'});
-  for(const label of ['能力','补充职责','模型','回复规则','权限'])expect(html).toContain(`>${label}</button>`);
+  for(const label of ['模型与权限','能力','补充职责','回复规则'])expect(html).toContain(`>${label}</button>`);
   // a group pane asked of a project that has two bindings falls back to the map
   expect(render(two,{kind:'group',tab:'permission'})).toContain('id="setting-%E7%BE%A4%E5%92%8C%20Bot"');
 });

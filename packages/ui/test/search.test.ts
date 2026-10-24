@@ -195,12 +195,12 @@ test('s28c: the manual Open ID entry remains searchable alongside the picker', (
 });
 
 
-test('each group setting belongs to the corresponding five-page surface', () => {
+test('each group setting belongs to its surface, including the combined model and permission tab', () => {
   for (const [query, tab, section] of [
     ['添加技能', 'capabilities', '技能'], ['语音转文字', 'capabilities', '语音'],
     ['补充职责', 'role', '补充职责'], ['本群个性', 'role', '补充职责'],
-    ['模型 Provider', 'model', '可用模型'], ['可用 Effort', 'model', '可用模型'],
-    ['权限', 'permission', '权限'], ['能挡到什么', 'permission', '权限'], ['高级设置', 'permission', '权限'],
+    ['模型 Provider', 'model', '执行模型'], ['可用 Effort', 'model', '执行模型'],
+    ['权限', 'model', '权限'], ['能挡到什么', 'model', '权限'], ['高级设置', 'model', '权限'],
     ['聊天方式', 'response', '聊天方式'], ['显示模型', 'response', '消息与提醒'],
     ['显示工具调用', 'response', '消息与提醒'], ['从群成员选择', 'response', '响应成员'],
   ]) {
@@ -216,6 +216,21 @@ test('each group setting belongs to the corresponding five-page surface', () => 
   }
 });
 
+test('model and permission search targets reach visible compact summaries with their edit entry points', () => {
+  for (const query of ['模型 Provider', '允许使用的模型', '可用 Effort']) {
+    const entry = findEntries(entries, query).find(item => item.destination.selection?.kind === 'membership');
+    assert.equal(entry?.destination.section, '执行模型', query);
+    assert.equal(entry?.destination.field, '', query);
+    assert.equal(groupTabForSection(entry?.destination.section), 'model', query);
+  }
+  for (const query of ['权限', '能挡到什么']) {
+    const entry = findEntries(entries, query).find(item => item.destination.selection?.kind === 'membership' && item.destination.field === '修改权限');
+    assert.equal(entry?.destination.section, '权限', query);
+    assert.equal(entry?.destination.field, '修改权限', query);
+    assert.equal(groupTabForSection(entry?.destination.section), 'model', query);
+  }
+});
+
 test('P6: the workspace is the project\'s: its settings open the project page, not a group', () => {
   for (const query of ['主目录', '代码仓库']) {
     const entry = findEntries(entries, query).find(item => item.destination.selection?.kind === 'project');
@@ -226,7 +241,7 @@ test('P6: the workspace is the project\'s: its settings open the project page, n
   }
   // no group-level entry for it any more
   assert.ok(!entries.some(entry => entry.destination.selection?.kind === 'membership' && entry.destination.section === '工作区'));
-  for (const section of ['权限', '能挡到什么', '高级设置', '工作目录权限']) assert.equal(groupTabForSection(section), 'permission', section);
+  for (const section of ['权限', '能挡到什么', '高级设置', '工作目录权限']) assert.equal(groupTabForSection(section), 'model', section);
   assert.equal(groupTabForSection('个性与记忆'), 'capabilities');
 });
 

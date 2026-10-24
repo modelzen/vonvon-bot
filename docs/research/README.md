@@ -254,3 +254,9 @@ codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次�
 | 报告 | 内容 | 说明 |
 | --- | --- | --- |
 | [README](2026-10-23-memory-persona/README.md) | 十份调研：Today 等消费级产品、OpenClaw、Hermes、Letta/mem0/LangMem、编码 agent 的记忆机制、人设和作用域，以及 vonvon 当前实现（dev `9b113b6`）的存储、运行时和界面 | 子代理据源码和文档写成，没有独立核实记录，用前核对；结论落在 `docs/plans/memory-projects.md` |
+
+## 2026-10-24 Designeer 与当前 App UI / UX
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [report](2026-10-24-designeer-ui-ux/report.md)、[首批实施](2026-10-24-designeer-ui-ux/implementation.md) | 九项发现，首批实现紧凑模型 / Effort、权限摘要和群页头；Designeer 参考映射；修改与合入均基于 dev | 395 项 UI 测试通过；实际构建页面以隔离演示数据检查；本地 App 待 owner 验收，其余优化另批实施 |
