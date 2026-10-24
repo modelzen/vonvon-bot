@@ -2,19 +2,26 @@ import {beforeEach, expect, it, vi} from 'vitest';
 import {isValidElement, type ReactElement, type ReactNode} from 'react';
 import {desktopSnapshotSchema} from '@vonvon/protocol';
 import {ProjectMemoryMap} from '../src/ProjectPage';
+import {BotMap} from '../src/BotMap';
 import {MemoryMap} from '../src/MemoryMap';
-import {GroupDesignSettings} from '../src/settings/GroupDesignSettings';
 import type {MapNode} from '../src/MindMap';
 
-const harness = vi.hoisted(() => ({states: [] as unknown[], at: 0, pending: [] as Array<() => void>, beforeInspect: undefined as undefined | ((inspect: () => void) => void), close: vi.fn()}));
+const h = vi.hoisted(() => ({states: [] as unknown[], at: 0, scope: undefined as unknown, guarded: vi.fn(), beginEdit: vi.fn(), close: vi.fn(), inspect: undefined as undefined | ((action: () => void) => void)}));
 vi.mock('react', async original => ({...await original<typeof import('react')>(),
-  useState: (initial: unknown) => {const index = harness.at++; if (!(index in harness.states)) harness.states[index] = typeof initial === 'function' ? initial() : initial; return [harness.states[index], (next: unknown) => {harness.states[index] = typeof next === 'function' ? next(harness.states[index]) : next;}];},
+  useState: (initial: unknown) => {const index = h.at++; if (!(index in h.states)) h.states[index] = typeof initial === 'function' ? initial() : initial; return [h.states[index], (next: unknown) => {h.states[index] = typeof next === 'function' ? next(h.states[index]) : next;}];},
   useEffect: () => {}, useMemo: (make: () => unknown) => make(),
 }));
-vi.mock('../src/settings/DraftGuard', () => ({useDraftGuard: () => ({navigate: (action: () => void) => harness.pending.push(action)}), useDraft: () => {}}));
-vi.mock('../src/inherited-content', () => ({useInheritedContent: (options: {beforeInspect?: (inspect: () => void) => void}) => {
-  harness.beforeInspect = options.beforeInspect;
-  return {nodes: [], panel: undefined, close: harness.close};
+vi.mock('../src/settings/DraftGuard', () => ({useDraftGuard: () => ({navigate: (action: () => void) => action()}), useDraft: () => {}}));
+vi.mock('../src/client-context', () => ({useClient: () => ({memory: vi.fn()})}));
+vi.mock('../src/role-map', () => ({useRoleMap: (scope: unknown) => {
+  h.scope = scope;
+  return {role: scope ? {fields: (scope as {kind: string}).kind === 'agent' ? {identity: '机器人身份', notes: '先写结论'} : {supplement: '负责发版检查。'}, readonly: undefined} : undefined,
+    content: (_field: string, id: string) => <span data-role-editor={id}/>, beginEdit: h.beginEdit,
+    withSavedDraft: (action: () => void) => {h.guarded(); action();}, statusNodes: [{id: 'role-status', kind: 'leaf', label: '角色提示'}]};
+}}));
+vi.mock('../src/inherited-content', () => ({useInheritedContent: (options: {beforeInspect?: (action: () => void) => void}) => {
+  h.inspect = options.beforeInspect;
+  return {nodes: [], close: h.close};
 }}));
 
 const snapshot = desktopSnapshotSchema.parse({
@@ -27,65 +34,59 @@ const snapshot = desktopSnapshotSchema.parse({
 });
 type Element = ReactElement<Record<string, any>>;
 function nodes(node: ReactNode): Element[] {if (Array.isArray(node)) return node.flatMap(nodes); return isValidElement<Record<string, any>>(node) ? [node, ...nodes(node.props.children)] : [];}
-function render(extra: Partial<Parameters<typeof ProjectMemoryMap>[0]> = {}) {
-  harness.at = 0;
-  const tree = ProjectMemoryMap({project: snapshot.projects![0]!, snapshot, onMembership: vi.fn(), ...extra});
-  return nodes(tree).find(node => node.type === MemoryMap)!;
-}
+function render(extra: Partial<Parameters<typeof ProjectMemoryMap>[0]> = {}) {h.at = 0; const tree = ProjectMemoryMap({project: snapshot.projects![0]!, snapshot, onMembership: vi.fn(), ...extra}); return nodes(tree).find(node => node.type === MemoryMap)!;}
 const roles = (map: Element) => (map.props.before as MapNode[]).find(node => node.id === 'group-roles')!.children!;
-const editor = (map: Element) => nodes(map.props.panel).find(node => node.type === GroupDesignSettings);
-const approve = () => {harness.pending.shift()!();};
-beforeEach(() => {harness.states = []; harness.at = 0; harness.pending = []; harness.beforeInspect = undefined; vi.clearAllMocks();});
+beforeEach(() => {h.states = []; h.at = 0; h.scope = undefined; h.inspect = undefined; vi.clearAllMocks();});
 
-it('keeps group role editors unmounted until a map leaf is opened, then edits the selected binding only', () => {
-  let map = render();
-  expect(editor(map)).toBeUndefined();
-  expect(roles(map)).toHaveLength(2);
-  roles(map)[0]!.onClick!();
-  expect(editor(render())).toBeUndefined();
-  approve(); map = render();
-  expect(editor(map)?.props).toMatchObject({tab: 'role', scope: {kind: 'project', botId: 'cli_a', projectName: 'binding-oc_pay'}});
-  roles(map)[1]!.onClick!();
-  expect(editor(render())?.props.scope.botId).toBe('cli_a');
-  approve();
-  expect(editor(render())?.props.scope.botId).toBe('cli_b');
+it('keeps Bot identity and notes as readable, directly editable map nodes', () => {
+  h.at = 0;
+  let map = nodes(BotMap({agentId: snapshot.agents[0]!.id, snapshot, onProject: vi.fn()})).find(node => node.type === MemoryMap)!;
+  expect(map.props.panel).toBeUndefined(); expect(map.props.beforeInteraction).toBeDefined();
+  const roleNodes = (map.props.before as MapNode[])[0]!.children!;
+  expect(roleNodes[0]?.label).toContain('机器人身份'); expect(roleNodes[0]?.onDelete).toBeUndefined();
+  roleNodes[0]!.onClick?.(); h.at = 0;
+  map = nodes(BotMap({agentId: snapshot.agents[0]!.id, snapshot, onProject: vi.fn()})).find(node => node.type === MemoryMap)!;
+  const identity = (map.props.before as MapNode[])[0]!.children![0]!;
+  expect(identity.children?.[0]?.label).toBe('机器人身份');
+  identity.onEdit?.(); expect(h.beginEdit).toHaveBeenCalledWith('identity', undefined);
 });
 
-it('guards switching from an open role editor to project memory, inherited content, or closing details', () => {
+it('renders the selected group role as editable child nodes inside the map, without a panel', () => {
+  const map = render({initialRoleMembershipId: snapshot.memberships[0]!.id});
+  expect(map.props.panel).toBeUndefined(); expect(map.props.panelKey).toBeUndefined();
+  expect(h.scope).toEqual({kind: 'project', botId: 'cli_a', projectName: 'binding-oc_pay'});
+  const first = roles(map)[0]!;
+  expect(first.children?.map(node => node.id)).toContain('role:cli_a:oc_pay:text');
+  expect(first.children?.[0]?.label).toBe('负责发版检查。');
+  expect(first.children?.[0]?.content).toBeDefined();
+  first.children?.[0]?.onEdit?.(); expect(h.beginEdit).toHaveBeenCalledWith('supplement', undefined);
+  expect(first.onDelete).toBeUndefined();
+});
+
+it('selects only the requested binding and keeps inherited inspection in the map', () => {
+  let map = render(); expect(h.scope).toBeUndefined();
+  roles(map)[1]!.onClick?.(); map = render();
+  expect(h.scope).toEqual({kind: 'project', botId: 'cli_b', projectName: 'binding-oc_release'});
+  h.close.mockClear();
+  const inspect = vi.fn(); h.inspect?.(inspect);
+  expect(inspect).toHaveBeenCalledOnce(); expect(h.close).not.toHaveBeenCalled();
+  map = render(); expect(h.scope).toBeUndefined();
+});
+
+it('shares the role session guard with map selection and clears role selection only for memory leaf actions', () => {
   let map = render({initialRoleMembershipId: snapshot.memberships[0]!.id});
-  expect(editor(map)).toBeDefined();
-  const select = vi.fn();
-  map.props.beforeLeafSelect(select);
-  expect(select).not.toHaveBeenCalled(); expect(editor(render())).toBeDefined();
-  approve(); expect(select).toHaveBeenCalledOnce(); expect(editor(render())).toBeUndefined();
-
-  roles(render())[0]!.onClick!(); approve(); map = render();
-  const inspect = vi.fn(); harness.beforeInspect!(inspect);
-  expect(inspect).not.toHaveBeenCalled(); expect(editor(render())).toBeDefined();
-  approve(); expect(inspect).toHaveBeenCalledOnce(); expect(editor(render())).toBeUndefined();
-
-  roles(render())[0]!.onClick!(); approve(); map = render();
-  map.props.onPanelClose(); expect(editor(render())).toBeDefined();
-  approve(); expect(editor(render())).toBeUndefined();
+  const action = vi.fn(); map.props.beforeInteraction(action);
+  expect(h.guarded).toHaveBeenCalledOnce(); expect(action).toHaveBeenCalledOnce();
+  expect(h.scope).toBeDefined();
+  map.props.beforeLeafSelect(action); map = render();
+  expect(h.scope).toBeUndefined(); expect(h.close).toHaveBeenCalledOnce();
 });
 
-it('limits role leaves to the selected group and Bot and supports the existing role search entry', () => {
-  const member = snapshot.memberships[1]!;
-  const map = render({selectedAgentId: member.agentId, selectedGroupId: member.groupId, initialRoleMembershipId: member.id});
-  expect(roles(map)).toHaveLength(1);
-  expect(roles(map)[0]!.label).toBe('发布群 · 小发');
-  expect(editor(map)?.props.scope).toEqual({kind: 'project', botId: member.agentId, projectName: member.name});
-});
-
-it('does not open an editor for a stale binding that now belongs to another project', () => {
-  const changed = {...snapshot, memberships: snapshot.memberships.map(member => ({...member, projectId: 'prj_00000002' as typeof member.projectId}))};
-  const map = render({snapshot: changed, initialRoleMembershipId: snapshot.memberships[0]!.id});
-  expect(editor(map)).toBeUndefined();
-  for (const role of roles(map)) {expect(role.onClick).toBeUndefined(); expect(role.meta).toBe('暂不可用');}
-});
-
-it('keeps missing binding roles unavailable and unselected without mounting an editor', () => {
-  const map = render({snapshot: {...snapshot, memberships: []}});
-  expect(editor(map)).toBeUndefined();
-  for (const role of roles(map)) {expect(role.onClick).toBeUndefined(); expect(role.selected).toBe(false);}
+it('keeps stale and missing bindings unavailable', () => {
+  const stale = {...snapshot, memberships: snapshot.memberships.map(member => ({...member, projectId: 'prj_00000002' as typeof member.projectId}))};
+  let map = render({snapshot: stale, initialRoleMembershipId: snapshot.memberships[0]!.id});
+  expect(h.scope).toBeUndefined();
+  for (const row of roles(map)) {expect(row.onEdit).toBeUndefined(); expect(row.onClick).toBeUndefined(); expect(row.meta).toBe('暂不可用');}
+  map = render({snapshot: {...snapshot, memberships: []}});
+  for (const row of roles(map)) expect(row.onClick).toBeUndefined();
 });
