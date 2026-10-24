@@ -76,3 +76,5 @@
 .project-binding > small { margin-left: auto; color: var(--color-text-tertiary); font-size: 11px; }
 .project-binding > small + * { flex: none; }
 .project-binding:disabled { opacity: .7; }
+
+/* Keep the memory map primary; existing role overrides remain a quiet optional editor. */
