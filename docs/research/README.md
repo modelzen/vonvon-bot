@@ -268,3 +268,15 @@ codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次�
 | [report](2026-10-24-designeer-ui-ux/report.md)、[首批实施](2026-10-24-designeer-ui-ux/implementation.md) | 九项发现，首批实现紧凑模型 / Effort、权限摘要和群页头；Designeer 参考映射；修改与合入均基于 dev | 以当前 App b83acfa2 校正共同基线；432 项 UI 测试通过；网页以隔离演示数据对比，待 owner 验收，其余优化另批实施 |
 | [公共组件统一](2026-10-24-designeer-ui-ux/component-foundation.md) | 概览/Bot/群组/设置公共组件、统一控件尺寸及 Libraries.dev 适用位置 | 444 项 UI 测试通过；网页尺寸、多行字段与任务 / Bot / 群聊操作状态绑定的 ThinkingOrb；owner 已要求合入 dev，跳过 CI 并重编译重启 App |
 | [模型保存与 Provider 检测](2026-10-24-designeer-ui-ux/save-provider-fix.md) | 修复实时目录误标为 fallback、Claude unknown 未探测即隐藏和不可保存草稿；保留真实目录验证 | UI 460 项、daemon 定向回归及 typecheck 通过；App 实测另记 |
+
+## 2026-10-24 判断规则编辑窗口
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [rules-editor-height](2026-10-24-rules-editor-height/report.md) | 保留规则正文，默认短窗口、底部展开与收起 | 基于 dev 8a7dabe1；owner 已批准预览设计，实际实现待本地验收；未替换 App |
+
+## 2026-10-24 导图直接编辑组件
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [report](2026-10-24-mind-map-editor/report.md) | Mind Elixir、React Flow、SimpleMindMap 对图中编辑和固定结构节点的支持；当前角色与记忆编辑入口差异 | 官方文档与源码调研；后续按 owner 的包体要求沿用自写 HTML/SVG，未引入候选库 |
