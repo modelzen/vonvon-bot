@@ -5,7 +5,7 @@ import {Activity, ArrowUpRight, ArrowRight, ChartNoAxesColumn, ChevronRight, Cpu
 import type {AgentId, DesktopSnapshot, GroupId} from '@vonvon/protocol';
 import {AgentAvatar} from './AgentAvatar';
 import {GroupAvatar} from './GroupAvatar';
-import {Button} from './reference/components/ui';
+import {Button, IconButton} from './reference/components/ui';
 import {uiFeatures} from './features';
 import type {Page} from './collaboration-model';
 
@@ -24,14 +24,14 @@ export function TodayHome({snapshot, onAgent, onGroup, onSetup, onRegister, disa
       <header><h2>你的 Bot</h2><Button variant="ghost" disabled={disabled} onClick={onRegister}><Plus size={14}/>添加</Button></header>
       <div className="today-list-surface">{snapshot.agents.map(bot => <div className="today-entity-row today-bot-row" key={bot.id}>
         <button type="button" className="today-bot-info" onClick={() => onAgent(bot.id)} aria-label={`查看 ${bot.name}`}><AgentAvatar agent={bot}/><span className="today-entity-copy"><strong>{bot.name}</strong><small>{groupCount(bot.id)} 个群聊{(bot.readError || !bot.enabled || bot.connection !== 'connected') && <><span aria-hidden="true">·</span>{bot.readError ? '配置读取失败' : !bot.enabled ? '已停用' : bot.connection === 'connecting' || bot.connection === 'reconnecting' ? '正在连接' : '未连接'}</>}</small></span></button>
-        <button type="button" className="today-icon-button" aria-label={`在飞书打开 ${bot.name}`} title="在飞书打开" onClick={()=>void open(botChatUrl(bot.id),'bot-chat')}><ArrowUpRight size={17}/></button>
+        <IconButton type="button" variant="ghost" className="today-icon-button" label={`在飞书打开 ${bot.name}`} title="在飞书打开" onClick={()=>void open(botChatUrl(bot.id),'bot-chat')}><ArrowUpRight size={17}/></IconButton>
       </div>)}</div>
     </section>
     <section className="today-home-section" aria-label="最近对话">
       <header><h2>最近对话</h2></header>
       {recent?.items.length ? <div className="today-list-surface">{recent.items.map(item => {const group=snapshot.groups.find(group=>group.id===item.groupId);const bot=snapshot.agents.find(bot=>bot.id===item.agentId);return <div className="today-entity-row today-recent-row" key={`${item.agentId}:${item.threadId}`}>
         <button type="button" className="today-recent-open" aria-label={`在飞书打开 ${group?.name ?? '群聊'} 的对话`} onClick={()=>void open(groupUrl(item.groupId,item.threadId),'group')}><span className="today-entity-copy"><strong>{group?.name ?? '群聊'}<span className="today-recent-bot">{bot?.name}</span></strong><small>{item.summary || '查看对话'}</small></span></button>
-        <button type="button" className="today-icon-button" title="群设置" aria-label={`设置 ${group?.name ?? '群聊'}`} onClick={()=>onGroup(item.groupId)}><ChevronRight size={14}/></button>
+        <IconButton type="button" variant="ghost" className="today-icon-button" title="群设置" label={`设置 ${group?.name ?? '群聊'}`} onClick={()=>onGroup(item.groupId)}><ChevronRight size={14}/></IconButton>
       </div>;})}</div> : <p className="today-recent-empty">{recent?.unavailableBots ? '暂时无法读取对话记录。' : '在飞书开始对话，最近的内容会显示在这里。'}</p>}
       {!!recent?.items.length && !!recent.unavailableBots && <p className="gd-note">部分 Bot 的记录暂时无法读取。</p>}
     </section>

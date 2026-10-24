@@ -1,4 +1,5 @@
 import { Select } from "@base-ui/react/select";
+import "./select-control.css";
 import {
   Check,
   CheckCircle2,
@@ -447,6 +448,7 @@ export function NumberStepper(props: {
 
 export function SelectControl<T extends string>(props: {
   "aria-describedby"?: string;
+  "aria-labelledby"?: string;
   "aria-invalid"?: boolean | "false" | "grammar" | "spelling" | "true";
   "aria-required"?: boolean | "false" | "true";
   className?: string;
@@ -457,12 +459,36 @@ export function SelectControl<T extends string>(props: {
   options: readonly SelectionOption<T>[];
   value: T;
 }) {
+  const radioName = useId();
+  const labelWidth = (label: string) => Array.from(label).reduce((width, character) => width + (/[^\u0000-\u00ff]/.test(character) ? 2 : 1), 0);
+  const shortOptions = props.options.length > 0 && props.options.length <= 5
+    && props.options.every(option => typeof option.label === "string" && labelWidth(option.label) <= 16 && !option.description)
+    && props.options.reduce((total, option) => total + labelWidth(option.label as string), 0) <= 34;
+  if (shortOptions) return (
+    <div
+      aria-describedby={props["aria-describedby"]}
+      aria-disabled={props.disabled || undefined}
+      aria-invalid={props["aria-invalid"]}
+      aria-label={props.label}
+      aria-labelledby={props["aria-labelledby"]}
+      aria-required={props["aria-required"]}
+      className={classNames("ui-select-segments", props.className)}
+      id={props.id}
+      role="radiogroup"
+    >
+      {props.options.map(option => <label className="ui-select-segment" key={option.value} title={option.label as string}>
+        <input type="radio" name={radioName} value={option.value} checked={props.value === option.value} disabled={props.disabled || option.disabled}
+          onChange={() => {if (!props.disabled && !option.disabled && option.value !== props.value) props.onChange(option.value);}}/>
+        <span>{option.label}</span>
+      </label>)}
+    </div>
+  );
   return (
     <Select.Root
       disabled={props.disabled}
       items={props.options}
       onValueChange={(value) => {
-        if (value !== null) props.onChange(value);
+        if (!props.disabled && value !== null && value !== props.value && props.options.some(option => option.value === value && !option.disabled)) props.onChange(value);
       }}
       value={props.value}
     >
@@ -470,6 +496,7 @@ export function SelectControl<T extends string>(props: {
         aria-describedby={props["aria-describedby"]}
         aria-invalid={props["aria-invalid"]}
         aria-label={props.label}
+        aria-labelledby={props["aria-labelledby"]}
         aria-required={props["aria-required"]}
         className={classNames("ui-select-control", props.className)}
         id={props.id}

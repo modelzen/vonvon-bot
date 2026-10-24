@@ -260,3 +260,5 @@ codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次�
 | 报告 | 内容 | 说明 |
 | --- | --- | --- |
 | [report](2026-10-24-designeer-ui-ux/report.md)、[首批实施](2026-10-24-designeer-ui-ux/implementation.md) | 九项发现，首批实现紧凑模型 / Effort、权限摘要和群页头；Designeer 参考映射；修改与合入均基于 dev | 以当前 App b83acfa2 校正共同基线；432 项 UI 测试通过；网页以隔离演示数据对比，待 owner 验收，其余优化另批实施 |
+
+| [公共组件统一](2026-10-24-designeer-ui-ux/component-foundation.md) | 概览/Bot/群组/设置公共组件、统一控件尺寸及 Libraries.dev 适用位置 | 440 项 UI 测试通过；网页尺寸、多行字段与真实任务状态绑定的 ThinkingOrb；owner 已要求合入 dev，跳过 CI 并重编译重启 App |

@@ -64,12 +64,18 @@
   --settings-group-radius: 12px;
   --settings-row-height: 48px;
   --settings-row-described-height: 60px;
-  --settings-row-padding: 8px 12px;
-  --settings-control-height: 28px;
-  --settings-control-radius: 6px;
+  --settings-row-padding: 12px 16px;
+  --control-height: 32px;
+  --control-height-lg: 36px;
+  --control-radius: 8px;
+  --control-field-width: 260px;
+  --card-radius: 12px;
+  --card-shadow: 0 1px 2px rgb(16 24 40 / 1.6%);
+  --settings-control-height: var(--control-height);
+  --settings-control-radius: var(--control-radius);
   --settings-toggle-width: 30px;
   --settings-toggle-height: 18px;
-  --settings-segmented-height: 28px;
+  --settings-segmented-height: var(--control-height);
 
   --radius-xs: 0.375rem;
   --radius-sm: 0.5rem;
