@@ -197,7 +197,7 @@ test('s28c: the manual Open ID entry remains searchable alongside the picker', (
 
 test('each group setting belongs to the corresponding five-page surface', () => {
   for (const [query, tab, section] of [
-    ['添加技能', 'capabilities', '技能'], ['语音转文字', 'capabilities', '语音'],
+    ['使用技能', 'capabilities', '技能'], ['语音转文字', 'capabilities', '语音'],
     ['补充职责', 'role', '补充职责'], ['本群个性', 'role', '补充职责'],
     ['模型 Provider', 'model', '可用模型'], ['可用 Effort', 'model', '可用模型'],
     ['权限', 'permission', '权限'], ['能挡到什么', 'permission', '权限'], ['高级设置', 'permission', '权限'],

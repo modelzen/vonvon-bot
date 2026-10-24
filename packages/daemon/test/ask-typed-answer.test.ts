@@ -623,6 +623,18 @@ describe('s33b sensitive ask intake', () => {
     run.turns[0]!.resolve();
   });
 
+  it('routes retired skill commands and follow-up text to the ordinary private console', async () => {
+    const o = setup();
+    for (const content of ['/skill-add chat write reports', 'Also support markdown reports', '/skill-done']) {
+      const incoming = message(content, { chatType: 'p2p', chatId: 'dm', threadId: undefined });
+      await o.onMessage(incoming);
+      expect(fake.dmConsole).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), incoming);
+    }
+    expect(fake.dmConsole).toHaveBeenCalledTimes(3);
+    expect(fake.backend.startThread).not.toHaveBeenCalled();
+    expect(fake.backend.resumeThread).not.toHaveBeenCalled();
+  });
+
   it.each(['bot', 'attachment'] as const)('keeps p2p %s messages in the console without answering', async kind => {
     const run = thread(); const o = await started(run, { threadId: undefined });
     await secretVisible(run);
