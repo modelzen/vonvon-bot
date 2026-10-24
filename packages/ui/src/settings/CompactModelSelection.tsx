@@ -1,86 +1,85 @@
-import {useRef, useState} from 'react';
-import {Check, Eye, Pencil, Search} from 'lucide-react';
+import {useState} from 'react';
+import {Combobox} from '@base-ui/react/combobox';
+import {Check, ChevronDown, Search} from 'lucide-react';
 import type {ModelCatalog, ProjectSettingsView} from '@vonvon/protocol';
-import {Button, InlineNotice} from '../reference/components/ui';
-import {Dialog} from '../reference/components/ui/Dialog';
 import './compact-model-selection.css';
 
 type ModelAccess = NonNullable<ProjectSettingsView['sections']['modelAccess']>['stored'];
 type Picker = 'models' | 'efforts';
 type Option = {id: string; label: string; description?: string; unavailable?: boolean};
-const toggleItem = <T,>(items: T[], value: T, checked: boolean) => checked ? [...new Set([...items, value])] : items.filter(item => item !== value);
+const effortLabels: Record<string, string> = {none: '不启用', minimal: '最低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: 'Max', ultra: 'Ultra'};
 
-/** Both fields use the same summary, picker and staged selection behavior. */
+/** Menu selections update the section draft; only the section Save persists them. */
 export function CompactModelSelection({value, onChange, catalog, disabled}: {
   value: ModelAccess;
   onChange: (value: ModelAccess) => void;
   catalog?: ModelCatalog;
   disabled: boolean;
 }) {
-  const [picker, setPicker] = useState<Picker>();
-  const [pending, setPending] = useState<string[]>([]);
+  const [picker, setPicker] = useState<{id: Picker; backend: string}>();
   const [query, setQuery] = useState('');
-  const [baseline, setBaseline] = useState('');
-  const searchRef = useRef<HTMLInputElement>(null);
-  const models = catalog?.models.filter(model => !model.hidden) ?? [];
-  const efforts = [...new Set([...(catalog?.models.flatMap(model => model.supportedEfforts) ?? []), ...value.efforts])];
-  const catalogReady = catalog?.state === 'ready' && catalog.backend === value.backend;
+  const matchingCatalog = catalog?.backend === value.backend ? catalog : undefined;
+  const models = matchingCatalog?.models.filter(model => !model.hidden) ?? [];
+  const efforts = [...new Set([...(matchingCatalog?.models.flatMap(model => model.supportedEfforts) ?? []), ...value.efforts])];
+  const catalogReady = matchingCatalog?.state === 'ready';
   const editingDisabled = disabled || !catalogReady;
-  const EditIcon = editingDisabled ? Eye : Pencil;
-  const selectionChanged = Boolean(picker) && baseline !== JSON.stringify(value);
   const options: Record<Picker, Option[]> = {
     models: [
       ...models.map(model => ({id: model.id, label: model.displayName, description: model.description})),
       ...value.models.filter(id => !models.some(model => model.id === id)).map(id => ({id, label: id, description: '已保存，当前目录未列出', unavailable: true})),
     ],
-    efforts: efforts.map(effort => ({id: effort, label: effort})),
+    efforts: efforts.map(effort => ({id: effort, label: effortLabels[effort] ?? effort})),
   };
-  const fields: {id: Picker; label: string; noun: string; selected: string[]; empty: string}[] = [
-    {id: 'models', label: '允许的模型', noun: '模型', selected: value.models.map(id => models.find(model => model.id === id)?.displayName ?? id), empty: '选择模型'},
-    {id: 'efforts', label: '思考强度', noun: '强度', selected: value.efforts, empty: catalogReady && !efforts.length ? '此 Provider 未提供思考强度' : '选择强度'},
+  const fields: {id: Picker; label: string; noun: string}[] = [
+    {id: 'models', label: '允许的模型', noun: '模型'},
+    {id: 'efforts', label: '思考强度', noun: '强度'},
   ];
-  const activeField = fields.find(field => field.id === picker);
-  const visibleOptions = picker ? options[picker].filter(option => `${option.label} ${option.id}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) : [];
-  function open(next: Picker) {
-    setPending([...value[next]]);
-    setBaseline(JSON.stringify(value));
-    setQuery('');
-    setPicker(next);
-  }
-  function complete() {
-    if (!picker || editingDisabled || selectionChanged || picker === 'models' && pending.length === 0) return;
-    if (picker === 'models') onChange({...value, models: pending});
-    else onChange({...value, efforts: pending as ModelAccess['efforts']});
-    setPicker(undefined);
-  }
-  return <>
-    {fields.map(field => <div className="gd-model-summary-row gd-model-summary-row--value" key={field.id}>
+  return <>{fields.map(field => {
+    const open = picker?.id === field.id && picker.backend === value.backend;
+    const currentQuery = open ? query : '';
+    const items = options[field.id];
+    const visible = items.filter(option => `${option.label} ${option.id}`.toLocaleLowerCase().includes(currentQuery.trim().toLocaleLowerCase()));
+    const unsupported = field.id === 'efforts' && catalogReady && !efforts.length;
+    const selectedLabels = value[field.id].map(id => items.find(option => option.id === id)?.label ?? id);
+    return <div className="gd-model-summary-row gd-model-summary-row--value" key={field.id}>
       <span className="gd-model-summary-label">{field.label}</span>
-      <Button size="sm" className="gd-model-edit-control" disabled={field.id === 'efforts' && catalogReady && !efforts.length} aria-label={`${editingDisabled ? '查看' : '选择'}${field.noun}`} aria-haspopup="dialog" aria-expanded={picker === field.id} title={field.selected.join('、') || field.empty} onClick={() => open(field.id)}>
-        <span className={`gd-model-edit-value${field.selected.length ? '' : ' gd-model-edit-value--empty'}`}>{field.selected.slice(0, 2).join('、') || field.empty}</span>
-        {field.selected.length > 2 && <small>+{field.selected.length - 2}</small>}<EditIcon size={14} aria-hidden="true"/>
-      </Button>
-    </div>)}
-    <Dialog open={Boolean(picker)} title={`选择可用${activeField?.noun ?? '模型'}`}
-      description={editingDisabled ? '当前配置仅可查看，已保存的选择仍保留。' : `选择本群可以使用的${activeField?.noun ?? '模型'}，可多选。完成后保存更改。`}
-      initialFocusRef={searchRef} onClose={() => setPicker(undefined)}
-      footer={<><span className="gd-model-picker-count" role="status"><span className="gd-selection-count">{pending.length}</span>已选{activeField?.noun ?? '模型'}</span><Button onClick={() => setPicker(undefined)}>取消</Button><Button variant="primary" disabled={editingDisabled || selectionChanged || picker === 'models' && !pending.length} onClick={complete}>完成</Button></>}>
-      {selectionChanged && <InlineNotice title="模型设置已在别处更改" tone="warning">当前选择已保留。重新读取后再修改，避免覆盖新设置。<Button size="sm" onClick={() => {if (picker) open(picker);}}>重新读取并放弃选择</Button></InlineNotice>}
-      <div className="gd-model-picker">
-        <label className="gd-model-picker-search"><Search size={16} aria-hidden="true"/><input ref={searchRef} type="search" aria-label={`搜索${activeField?.noun ?? '模型'}`} placeholder={`搜索${activeField?.noun ?? '模型'}`} value={query} onChange={event => setQuery(event.target.value)}/></label>
-        <div className="gd-model-picker-heading"><span>可用{activeField?.noun ?? '模型'}</span><small>可多选</small></div>
-        <div className="gd-model-picker-options">
-          {visibleOptions.map(option => <label className="gd-model-option" key={option.id} data-unavailable={option.unavailable || undefined}>
-            <input className="gd-model-option-input" type="checkbox" checked={pending.includes(option.id)} disabled={editingDisabled}
-              aria-label={picker === 'efforts' ? `允许本群使用 ${option.id} Effort` : option.unavailable ? `移除未列出的模型 ${option.id}` : `允许本群使用 ${option.label}`}
-              onChange={event => {if (!editingDisabled) setPending(current => toggleItem(current, option.id, event.target.checked));}}/>
-            <span className="gd-model-option-mark" aria-hidden="true"><Check size={12} strokeWidth={2.5}/></span>
-            <span className="gd-model-option-copy" title={option.label.toLocaleLowerCase().replace(/[\s_-]+/g, '') !== option.id.toLocaleLowerCase().replace(/[\s_-]+/g, '') ? option.id : undefined}><strong>{option.label}</strong>{option.description?.trim() && <small>{option.description}</small>}</span>
-            <span className="gd-model-option-state" aria-hidden="true">{pending.includes(option.id) ? '已选' : ''}</span>
-          </label>)}
-          {!visibleOptions.length && <p className="gd-model-picker-empty" role="status">{query.trim() ? `没有匹配的${activeField?.noun ?? '模型'}。` : catalogReady && picker === 'efforts' ? '此 Provider 未提供思考强度。' : catalog ? catalog.error || '当前没有可选项。' : '正在读取…'}</p>}
-        </div>
-      </div>
-    </Dialog>
-  </>;
+      <Combobox.Root key={`${value.backend}:${field.id}`} multiple modal={false} open={open}
+        items={items.map(option => option.id)} filteredItems={visible.map(option => option.id)} value={value[field.id]}
+        inputValue={currentQuery} onInputValueChange={(next, details) => {
+          // Keep filtered results in place while selecting multiple models.
+          if (details.reason === 'input-clear') {details.cancel(); return;}
+          setQuery(next);
+        }}
+        itemToStringLabel={id => items.find(option => option.id === id)?.label ?? id}
+        onOpenChange={next => {setPicker(next ? {id: field.id, backend: value.backend} : undefined); setQuery('');}}
+        onValueChange={next => {
+          if (editingDisabled) return;
+          if (field.id === 'models') onChange({...value, models: next});
+          else onChange({...value, efforts: next as ModelAccess['efforts']});
+        }}>
+        <Combobox.Trigger className="gd-model-selection-control" disabled={unsupported}
+          aria-label={`${editingDisabled ? '查看' : '选择'}${field.noun}`} title={unsupported ? '此 Provider 未提供思考强度' : selectedLabels.join('、') || `选择${field.noun}`}>
+          <span>{unsupported ? '此 Provider 未提供思考强度' : `已选择 ${value[field.id].length} 个`}</span>
+          {!unsupported && <ChevronDown size={14} aria-hidden="true"/>}
+        </Combobox.Trigger>
+        <Combobox.Portal>
+          <Combobox.Positioner side="bottom" align="start" sideOffset={5} collisionPadding={12} className="gd-model-menu-positioner">
+            <Combobox.Popup className="gd-model-menu" aria-label={`可用${field.noun}`}>
+              {field.id === 'models' && <label className="gd-model-menu-search"><Search size={14} aria-hidden="true"/><Combobox.Input type="search" aria-label="搜索模型" placeholder="搜索模型"/></label>}
+              <Combobox.List className="gd-model-menu-list" aria-label={`可用${field.noun}`}>
+                {visible.map(option => <Combobox.Item key={option.id} value={option.id} className="gd-model-menu-item" disabled={editingDisabled}
+                  aria-label={field.id === 'efforts' ? `允许本群使用 ${option.id} Effort` : option.unavailable ? `移除未列出的模型 ${option.id}` : `允许本群使用 ${option.label}`}
+                  title={option.description || (option.label !== option.id ? option.id : undefined)}>
+                  <span className="gd-model-menu-copy"><span>{option.label}</span>{option.unavailable && <small>{option.description}</small>}</span>
+                  <Combobox.ItemIndicator className="gd-model-menu-check" keepMounted><Check size={16} strokeWidth={1.8} aria-hidden="true"/></Combobox.ItemIndicator>
+                </Combobox.Item>)}
+              </Combobox.List>
+              <Combobox.Empty className="gd-model-menu-empty">{currentQuery.trim() ? `没有匹配的${field.noun}。` : matchingCatalog ? matchingCatalog.error || '当前没有可选项。' : '正在读取…'}</Combobox.Empty>
+              {editingDisabled && <p className="gd-model-menu-note">当前仅可查看，已保存的选择仍保留。</p>}
+            </Combobox.Popup>
+          </Combobox.Positioner>
+        </Combobox.Portal>
+      </Combobox.Root>
+    </div>;
+  })}</>;
 }
