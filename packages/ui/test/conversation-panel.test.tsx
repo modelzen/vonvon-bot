@@ -15,7 +15,8 @@ vi.mock("react", async (original) => ({
   ...await original<typeof import("react")>(),
   useState: (initial: unknown) => {
     const index = harness.index++;
-    const value = index < harness.state.length ? harness.state[index] : initial;
+    if (!Object.hasOwn(harness.state, index)) harness.state[index] = initial;
+    const value = harness.state[index];
     return [value, (next: unknown) => { harness.state[index] = next; }];
   },
   useEffect: (effect: () => (() => void) | void) => { harness.effects.push(effect); },
@@ -37,8 +38,11 @@ const context: Extract<CollaborationReply, { kind: "context" }> = {
   kind: "context", threadId: "thread", usage: null,
   run: { id: "run", goal: false, canStop: true, canEndGoal: false, canRemind: false, reminderRequested: false, subagents },
 };
-function render(request: CollaborationClient, current = context) {
-  harness.state = [{ kind: "history", sessions: [{ threadId: "thread", summary: "demo", sessionId: "session", backend: "codex-appserver", cwd: "/fixture", updatedAt: 1 }], threads: [], backend: "codex-appserver" }, "thread", current];
+function render(request: CollaborationClient, current = context, preserveState = false) {
+  if (!preserveState) harness.state = [];
+  harness.state[0] = { kind: "history", sessions: [{ threadId: "thread", summary: "demo", sessionId: "session", backend: "codex-appserver", cwd: "/fixture", updatedAt: 1 }], threads: [], backend: "codex-appserver" };
+  harness.state[1] = "thread";
+  harness.state[2] = current;
   harness.index = 0;
   harness.effects = [];
   harness.rows = [];
@@ -66,7 +70,7 @@ it("s34b: polls live context every three seconds and cancels on cleanup or idle"
   vi.useFakeTimers();
   const request = vi.fn<CollaborationClient>(async () => context);
   render(request);
-  const poll = harness.effects[2];
+  const poll = harness.effects[3];
   expect(poll).toBeDefined();
   const cleanup = poll?.();
   await vi.advanceTimersByTimeAsync(2999);
@@ -77,7 +81,49 @@ it("s34b: polls live context every three seconds and cancels on cleanup or idle"
   await vi.advanceTimersByTimeAsync(6000);
   expect(request).toHaveBeenCalledTimes(1);
   render(request, { ...context, run: null });
-  expect(harness.effects[2]?.()).toBeUndefined();
+  expect(harness.effects[3]?.()).toBeUndefined();
   await vi.advanceTimersByTimeAsync(6000);
   expect(request).toHaveBeenCalledTimes(1);
+});
+
+it("shows one inline orb only after two seconds and clears it with the run", async () => {
+  vi.useFakeTimers();
+  const request = vi.fn<CollaborationClient>(async () => context);
+  expect(render(request)).not.toContain("<canvas");
+  const cleanup = harness.effects[2]?.();
+  await vi.advanceTimersByTimeAsync(1999);
+  expect(render(request, context, true)).not.toContain("<canvas");
+  await vi.advanceTimersByTimeAsync(1);
+  expect(render(request, context, true).match(/<canvas/g)).toHaveLength(1);
+  cleanup?.();
+  expect(render(request, { ...context, run: null }, true)).not.toContain("<canvas");
+});
+
+it("does not reveal an orb after a short run has ended", async () => {
+  vi.useFakeTimers();
+  const request = vi.fn<CollaborationClient>(async () => context);
+  render(request);
+  const cleanup = harness.effects[2]?.();
+  await vi.advanceTimersByTimeAsync(1000);
+  cleanup?.();
+  expect(render(request, { ...context, run: null }, true)).not.toContain("<canvas");
+  harness.effects[2]?.();
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(render(request, { ...context, run: null }, true)).not.toContain("<canvas");
+});
+
+it("cancels the old delay and starts a fresh one when the run changes", async () => {
+  vi.useFakeTimers();
+  const request = vi.fn<CollaborationClient>(async () => context);
+  render(request);
+  const cleanup = harness.effects[2]?.();
+  await vi.advanceTimersByTimeAsync(1500);
+  cleanup?.();
+  const replacement = { ...context, run: { ...context.run!, id: "replacement" } };
+  expect(render(request, replacement, true)).not.toContain("<canvas");
+  harness.effects[2]?.();
+  await vi.advanceTimersByTimeAsync(500);
+  expect(render(request, replacement, true)).not.toContain("<canvas");
+  await vi.advanceTimersByTimeAsync(1500);
+  expect(render(request, replacement, true).match(/<canvas/g)).toHaveLength(1);
 });
