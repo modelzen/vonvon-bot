@@ -18,11 +18,12 @@ function nodes(node: ReactNode): Array<ReturnType<typeof createElement>> {
 }
 const selector = (props = providerProps) => nodes(ModelAccessFields(props)).find(node => node.type === SelectControl)!;
 
-it('keeps a single available Provider in the labelled adaptive selector', () => {
+it('keeps a single available Provider in the original segmented control with its icon', () => {
   const html = render(createElement(ModelAccessFields, providerProps));
-  expect(html.match(/<div\b[^>]*aria-label="模型 Provider"[^>]*>/)?.[0]).toContain('role="radiogroup"');
-  const input = html.match(/<input[^>]*type="radio"[^>]*>/)?.[0];
-  expect(input).toContain('checked=""'); expect(input).toContain('value="codex-appserver"'); expect(input).not.toContain('disabled');
+  expect(html).toContain('role="radiogroup"');
+  expect(html).toContain('src="./agent-icons/codex-light.png"');
+  expect(html).toContain('type="radio"');
+  expect(html).toContain('>Codex</span>');
   expect(selector().props.options).toEqual([{value: 'codex-appserver', label: 'Codex', disabled: false}]);
 });
 
@@ -32,8 +33,8 @@ it('offers available Providers and clears dependent choices only for a valid dif
   expect(control.props.options.map((item: {value: string}) => item.value)).toEqual(['codex-appserver', 'claude-agent']);
   const html = render(createElement(ModelAccessFields, {...providerProps, providers: [...providerProps.providers, {id: 'claude-agent', displayName: 'Claude'}]}));
   expect(html).toContain('role="radiogroup"');
-  const radios = [...html.matchAll(/<input[^>]*type="radio"[^>]*>/g)].map(([input]) => input);
-  expect(radios).toHaveLength(2); expect(radios.every(input => !input.includes('disabled'))).toBe(true);
+  expect(html).toContain('src="./agent-icons/codex-light.png"');
+  expect(html).toContain('src="./agent-icons/claude-code.svg"');
   control.props.onChange('codex-appserver'); control.props.onChange('unknown-provider');
   expect(changed).not.toHaveBeenCalled();
   control.props.onChange('claude-agent');
@@ -46,9 +47,9 @@ it('disables readonly Provider changes without clearing saved model choices', ()
   expect(control.props.disabled).toBe(true);
   control.props.onChange('claude-agent'); expect(changed).not.toHaveBeenCalled();
   const html = render(createElement(ModelAccessFields, props));
-  expect(html.match(/<div\b[^>]*aria-label="模型 Provider"[^>]*>/)?.[0]).toContain('aria-disabled="true"');
-  const radios = [...html.matchAll(/<input[^>]*type="radio"[^>]*>/g)].map(([input]) => input);
-  expect(radios).toHaveLength(2); expect(radios.every(input => input.includes('disabled=""'))).toBe(true);
+  const radios = html.match(/<input\b[^>]*type="radio"[^>]*>/g) ?? [];
+  expect(radios).toHaveLength(2);
+  expect(radios.every(radio => radio.includes('disabled=""'))).toBe(true);
   expect(html).toContain('alpha');
 });
 

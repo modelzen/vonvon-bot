@@ -64,3 +64,15 @@ it('keeps disabled and same-value safeguards for the longer selection panel', ()
   panel.props.onValueChange('claude');
   expect(changed).toHaveBeenCalledExactlyOnceWith('claude');
 });
+
+it('keeps icons in short segments and in the dropdown used by an extended Provider list', () => {
+  const getOptionIcon = (value: string) => <img src={`./${value}.svg`} alt=""/>;
+  const compact = render({value: 'codex', getOptionIcon});
+  expect(compact.props.role).toBe('radiogroup');
+  expect(nodes(compact).filter(node => node.type === 'img').map(node => node.props.src)).toEqual(['./codex.svg', './claude.svg']);
+  const extended = Array.from({length: 12}, (_, index) => ({value: `provider-${index}`, label: `Provider ${index}`}));
+  const dropdown = render({value: 'provider-0', options: extended, getOptionIcon});
+  expect(dropdown.props.items).toBe(extended);
+  expect(nodes(dropdown).filter(node => node.type === 'img')).toHaveLength(13);
+  expect(render({options: [...options, {value: 'openrouter', label: 'OpenRouter'}, {value: 'deepseek', label: 'DeepSeek'}], getOptionIcon}).props.items).toHaveLength(4);
+});

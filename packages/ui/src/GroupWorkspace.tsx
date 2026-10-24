@@ -55,7 +55,7 @@ type Props = {member: Membership; agent: Agent; group: Group; snapshot: DesktopS
 // Intent: configure one Bot within one group, without exposing session management as navigation.
 // Hierarchy: target first, Bot/project scope next, then compact settings pages. System type
 // share Today's 4px spacing rhythm; history/help remain contextual actions in the toolbar.
-export function GroupWorkspace({member, agent, group, snapshot, initialTab, revealHistory, onTabChange, onBot, onBotProfile, onProject, onOpenTools, onOpenProviders, onOpenSecrets, onChanged}: Props) {
+export function GroupWorkspace({member, agent, group, snapshot, initialTab, revealHistory, onTabChange, onBot, onBotProfile, onOpenTools, onOpenProviders, onOpenSecrets, onChanged}: Props) {
   const client = useClient();
   const shell = useShellCapabilities();
   const guard = useDraftGuard();
@@ -68,8 +68,7 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
   running.current = agent.running;
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [dialog, setDialog] = useState<'help'|'history'|'remove'|'project'|null>(null);
-  const [nextProject, setNextProject] = useState('');
+  const [dialog, setDialog] = useState<'help'|'history'|'remove'|null>(null);
   const menu = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
     const ownerDocument = menu.current?.ownerDocument;
@@ -124,7 +123,6 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
   }
   const available = agent.running && !!project && !member.stale;
   const memberProject = snapshot.projects?.find(item => item.id === member.projectId);
-  const otherProjects = (snapshot.projects ?? []).filter(item => item.id !== member.projectId);
   const conversation = project ? modeToConversation(project.kind) : member.conversation;
   const conversationControl = <div className="group-conversation-layout"><section id={settingAnchor("聊天方式")} className="group-conversation-choice" aria-label="聊天方式">
     <h3>聊天方式</h3><ConversationSlider label="聊天方式" value={conversation} disabled={!available || busy} onChange={next => guard.navigate(() => {void update({conversation:next});})}/>
@@ -136,9 +134,7 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
     <div className="group-design-scope"><div id={settingAnchor("群设置")} className="group-design-context"><div role="group" aria-label="本群 Bot" className="group-bot-picker">{snapshot.memberships.filter(item => item.groupId === group.id).map(item => {const bot = snapshot.agents.find(bot => bot.id === item.agentId); return bot && <button type="button" key={item.id} aria-pressed={member.id === item.id} title={bot.name} onClick={() => guard.navigate(() => onBot(item))}><AgentAvatar agent={bot}/><span>{bot.name}</span>{member.id === item.id && <Check size={12}/>}</button>;})}</div>
       {project ? <span className="group-enable-control">{pendingEnabled !== null && <OperationActivity key={`${member.id}:${pendingEnabled}`} label={pendingEnabled ? '本群启用中' : '本群停用中'} state={pendingEnabled ? 'connecting' : 'working'}/>}<Toggle aria-label={`在本群使用 ${agent.name}`} label="在本群使用" checked={project.enabled} disabled={!available || busy} onChange={event => {const enabled=event.target.checked; guard.navigate(() => {void update({enabled});});}}/></span> : <span className="group-control-note">{!agent.enabled ? 'Bot 已停用' : !agent.running ? 'Bot 未运行' : '读取中…'}</span>}
     </div>
-    {memberProject && <p className="group-project-line" id={settingAnchor("所在项目")}>项目：<strong>{memberProject.name}</strong>
-      {onProject && <button type="button" className="gd-text-action" onClick={() => guard.navigate(() => onProject(memberProject.id))}>项目页</button>}
-      <button type="button" className="gd-text-action" disabled={!available || busy || !otherProjects.length} onClick={() => guard.navigate(() => {setNextProject(otherProjects[0]?.id ?? ''); setDialog('project');})}>换到别的项目…</button></p>}</div>
+    </div>
     <nav className="group-design-tabs" aria-label="群设置">{groupDesignTabs.map(([value,label]) => <button type="button" key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => guard.navigate(() => {setTab(value); onTabChange?.(value);})}>{label}</button>)}</nav>
     {error && <InlineNotice title="操作未完成" tone="warning">{error}</InlineNotice>}
     {notice && <p role="status" className="group-control-note">{notice}</p>}
@@ -147,10 +143,6 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
     </section> : <GroupDesignSettings key={`${member.id}:${version}`} scope={{kind:'project',botId:member.agentId,projectName:member.name}} tab={tab} tools={snapshot.tools} botName={agent.name} groupName={group.name} onOpenTools={onOpenTools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets} responseHeader={conversationControl}/>}
     <Dialog open={dialog === 'history'} title={`${group.name} · ${agent.name}`} onClose={() => setDialog(null)}><div id={settingAnchor("会话管理")}>{agent.running ? <ConversationPanel agentId={agent.id} groupId={group.id} projectName={member.name} conversation={conversation} request={client.collaboration}/> : <p>Bot 运行后可查看对话记录。</p>}</div></Dialog>
     <Dialog open={dialog === 'help'} title="在群里使用" onClose={() => setDialog(null)}><GroupUsage conversation={conversation} botName={agent.name}/></Dialog>
-    <ConfirmDialog open={dialog === 'project'} title="换到别的项目？" confirmLabel="换过去" pending={busy} onCancel={() => setDialog(null)} onConfirm={() => {setDialog(null); if (nextProject) void update({project: nextProject as ProjectId});}}
-      description={`${agent.name} 在「${group.name}」里的记忆、工作区和会话都换成所选项目的，这个群现有的会话会归档，下一轮重新开场。原来的项目和它的记忆保留。所选项目的记忆、工作区文件和会话历史，现在和以后绑在这个项目上的群的人，都能通过 Bot 间接看到。`}>
-      <label className="group-control-note">换到 <select aria-label="选择项目" value={nextProject} onChange={event => setNextProject(event.target.value)}>{otherProjects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-    </ConfirmDialog>
     <ConfirmDialog open={dialog === 'remove'} title="解除这个群的绑定？" confirmLabel="解除绑定" tone="danger" pending={busy} onCancel={() => setDialog(null)} onConfirm={() => {setDialog(null); void update({},true);}} description={`解除 ${agent.name} 与「${group.name}」的关联。Bot 加入的群会退出；Bot 创建的群会尝试转交群主。本地目录和文件保留。`}/>
   </div>;
 }

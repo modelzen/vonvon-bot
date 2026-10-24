@@ -1,11 +1,11 @@
 import {beforeEach, expect, it, vi} from 'vitest';
 import {isValidElement, type ReactElement, type ReactNode} from 'react';
+import {Combobox} from '@base-ui/react/combobox';
 import {agentIdSchema, type ModelCatalog} from '@vonvon/protocol';
 import {ModelAccessChoices, ModelAccessFields, modelAccessProblem} from '../src/settings/GroupDesignSettings';
 import {CompactModelSelection} from '../src/settings/CompactModelSelection';
 import {Catalog, Editor} from '../src/settings/SettingsPanel';
 import {SelectControl} from '../src/reference/components/ui';
-import {Dialog} from '../src/reference/components/ui/Dialog';
 
 type Slot = {state: unknown[]; refs: Array<{current: unknown}>; effects: Array<{deps?: unknown[]; cleanup?: () => void}>; si: number; ri: number; ei: number};
 const h = vi.hoisted(() => ({slots: {} as Record<string, Slot>, active: '', pending: [] as Array<() => void>, draft: undefined as {save: () => Promise<boolean>} | undefined, client: {settings: vi.fn()}}));
@@ -24,7 +24,6 @@ type Value = Parameters<typeof ModelAccessChoices>[0]['value'];
 function nodes(node: ReactNode): Element[] {
   if (Array.isArray(node)) return node.flatMap(nodes);
   if (!isValidElement<Record<string, any>>(node)) return [];
-  if (node.type === Dialog && !node.props.open) return [node];
   return [node, ...nodes(node.props.children), ...nodes(node.props.footer)];
 }
 function at(name: string, make: () => ReactNode) {
@@ -41,10 +40,9 @@ const catalog: ModelCatalog = {backend: 'codex-appserver', state: 'ready', sourc
 ]};
 const initial = (): Value => ({backend: catalog.backend, models: ['alpha'], efforts: ['low', 'high']});
 function text(node: ReactNode): string {if (typeof node === 'string' || typeof node === 'number') return String(node); if (Array.isArray(node)) return node.map(text).join(''); return isValidElement<{children?: ReactNode}>(node) ? text(node.props.children) : '';}
-const button = (all: Element[], label: string) => all.find(node => (node.props['aria-label'] === label || text(node.props.children) === label) && node.props.onClick)!;
-const checkbox = (all: Element[], label: string) => all.find(node => node.type === 'input' && node.props['aria-label'] === label)!;
-const dialog = (all: Element[]) => all.find(node => node.type === Dialog && node.props.open)!;
-const search = (all: Element[]) => all.find(node => node.type === 'input' && node.props['aria-label'] === '搜索模型')!;
+const button = (all: Element[], label: string) => all.find(node => node.props['aria-label'] === label || text(node.props.children) === label)!;
+const picker = (all: Element[], field: 'models' | 'efforts') => all.filter(node => node.type === Combobox.Root)[field === 'models' ? 0 : 1]!;
+const item = (all: Element[], label: string) => all.find(node => node.type === Combobox.Item && node.props['aria-label'] === label)!;
 async function flush() {for (let i = 0; i < 12; i++) await Promise.resolve();}
 function choices(props: Parameters<typeof ModelAccessChoices>[0]) {
   const component = at('choice-wrapper', () => ModelAccessChoices(props)).find(node => node.type === CompactModelSelection)!;
@@ -62,37 +60,42 @@ it('keeps a manual Provider check available while healthy without changing the m
   expect(check).toHaveBeenCalledOnce(); expect(changed).not.toHaveBeenCalled();
 });
 
-it('keeps unselected models out of the normal page and preserves checked models across searches', () => {
+it('filters the model menu and updates the page draft immediately while it stays open', () => {
   let value = initial();
   const changed = vi.fn((next: Value) => {value = next;});
   const render = () => choices({value, catalog, disabled: false, onChange: changed});
   let all = render();
-  expect(all.some(node => node.type === 'input' && node.props.type === 'checkbox')).toBe(false);
   expect(button(all, '选择模型')).toBeDefined(); expect(button(all, '选择强度')).toBeDefined();
-  button(all, '选择模型').props.onClick(); all = render();
-  search(all).props.onChange({target: {value: 'Beta'}}); all = render();
-  expect(checkbox(all, '允许本群使用 Alpha')).toBeUndefined();
-  checkbox(all, '允许本群使用 Beta').props.onChange({target: {checked: true}}); all = render();
-  search(all).props.onChange({target: {value: 'Alpha'}}); all = render();
-  expect(checkbox(all, '允许本群使用 Alpha').props.checked).toBe(true);
-  expect(changed).not.toHaveBeenCalled();
-  button(all, '完成').props.onClick(); all = render();
+  expect(picker(all, 'models').props.open).toBe(false);
+  picker(all, 'models').props.onOpenChange(true); all = render();
+  expect(picker(all, 'models').props.open).toBe(true);
+  picker(all, 'models').props.onInputValueChange('Beta', {reason: 'input-change', cancel: vi.fn()}); all = render();
+  expect(picker(all, 'models').props.filteredItems).toEqual(['beta']);
+  expect(item(all, '允许本群使用 Beta').props.value).toBe('beta');
+  picker(all, 'models').props.onValueChange(['alpha', 'beta']); all = render();
   expect(value).toEqual({...initial(), models: ['alpha', 'beta']});
   expect(changed).toHaveBeenCalledOnce();
-  expect(dialog(all)).toBeUndefined();
-  expect(all.some(node => node.type === 'input' && node.props.type === 'checkbox')).toBe(false);
+  expect(picker(all, 'models').props.open).toBe(true);
+  const cancelClear = vi.fn();
+  picker(all, 'models').props.onInputValueChange('', {reason: 'input-clear', cancel: cancelClear}); all = render();
+  expect(cancelClear).toHaveBeenCalledOnce();
+  expect(picker(all, 'models').props.filteredItems).toEqual(['beta']);
+  picker(all, 'models').props.onInputValueChange('Alpha', {reason: 'input-change', cancel: vi.fn()}); all = render();
+  expect(picker(all, 'models').props.filteredItems).toEqual(['alpha']);
+  expect(picker(all, 'models').props.value).toEqual(['alpha', 'beta']);
 });
 
-it.each(['cancel', 'dismiss'] as const)('discards a local model selection on %s and reopens from the saved parent draft', action => {
+it('keeps a selected model in the page draft when the menu closes', () => {
   let value = initial(); const changed = vi.fn((next: Value) => {value = next;});
   const render = () => choices({value, catalog, disabled: false, onChange: changed});
-  let all = render(); button(all, '选择模型').props.onClick(); all = render();
-  checkbox(all, '允许本群使用 Beta').props.onChange({target: {checked: true}}); all = render();
-  if (action === 'cancel') button(all, '取消').props.onClick(); else dialog(all).props.onClose();
-  all = render(); expect(changed).not.toHaveBeenCalled(); expect(value).toEqual(initial());
-  button(all, '选择模型').props.onClick(); all = render();
-  expect(checkbox(all, '允许本群使用 Beta').props.checked).toBe(false);
-  expect(checkbox(all, '允许本群使用 Alpha').props.checked).toBe(true);
+  let all = render(); picker(all, 'models').props.onOpenChange(true); all = render();
+  picker(all, 'models').props.onValueChange(['alpha', 'beta']); all = render();
+  picker(all, 'models').props.onOpenChange(false); all = render();
+  expect(picker(all, 'models').props.open).toBe(false);
+  expect(value.models).toEqual(['alpha', 'beta']);
+  picker(all, 'models').props.onOpenChange(true); all = render();
+  expect(picker(all, 'models').props.value).toEqual(['alpha', 'beta']);
+  expect(changed).toHaveBeenCalledOnce();
 });
 
 it('edits model and Effort independently and persists only through the existing section save', async () => {
@@ -107,13 +110,11 @@ it('edits model and Effort independently and persists only through the existing 
     const choices = editor.find(node => node.type === ModelAccessChoices)!;
     return {editor, choices: at('choice-component', () => CompactModelSelection(choices.props as any))};
   };
-  let ui = render(); button(ui.choices, '选择模型').props.onClick(); ui = render();
-  checkbox(ui.choices, '允许本群使用 Beta').props.onChange({target: {checked: true}}); ui = render();
-  button(ui.choices, '完成').props.onClick(); ui = render();
+  let ui = render(); picker(ui.choices, 'models').props.onOpenChange(true); ui = render();
+  picker(ui.choices, 'models').props.onValueChange(['alpha', 'beta']); ui = render();
   expect(save).not.toHaveBeenCalled(); expect(button(ui.editor, '保存')).toBeDefined();
-  button(ui.choices, '选择强度').props.onClick(); ui = render();
-  checkbox(ui.choices, '允许本群使用 low Effort').props.onChange({target: {checked: false}}); ui = render();
-  button(ui.choices, '完成').props.onClick(); ui = render();
+  picker(ui.choices, 'efforts').props.onOpenChange(true); ui = render();
+  picker(ui.choices, 'efforts').props.onValueChange(['high']); ui = render();
   expect(save).not.toHaveBeenCalled();
   button(ui.editor, '保存').props.onClick(); await flush(); ui = render();
   expect(save.mock.calls).toEqual([[{models: ['alpha', 'beta'], efforts: ['high']}, 'r1']]);
@@ -131,9 +132,8 @@ it('saves the current model draft through Save and Leave once the native catalog
     return {editor, choices: at('leave-picker', () => CompactModelSelection(compact.props as any))};
   };
   let ui = render();
-  button(ui.choices, '选择模型').props.onClick(); ui = render();
-  checkbox(ui.choices, '允许本群使用 Beta').props.onChange({target: {checked: true}}); ui = render();
-  button(ui.choices, '完成').props.onClick(); ui = render();
+  picker(ui.choices, 'models').props.onOpenChange(true); ui = render();
+  picker(ui.choices, 'models').props.onValueChange(['alpha', 'beta']); ui = render();
   expect(h.draft).toBeDefined();
   expect(await h.draft!.save()).toBe(true);
   ui = render();
@@ -147,14 +147,16 @@ it('retains saved values in unavailable catalogs and permits read-only inspectio
   const changed = vi.fn();
   const unavailable: ModelCatalog = {...catalog, state: 'unavailable', models: [], error: '模型目录读取失败'};
   const render = () => choices({value, catalog: unavailable, disabled: false, onChange: changed});
-  let all = render(); button(all, '查看模型').props.onClick(); all = render();
-  const saved = checkbox(all, '移除未列出的模型 retired');
-  expect(saved.props.checked).toBe(true); expect(saved.props.disabled).toBe(true);
-  expect(button(all, '完成')?.props.disabled ?? true).toBe(true);
-  dialog(all).props.onClose(); all = render();
-  button(all, '查看强度').props.onClick(); all = render();
-  expect(checkbox(all, '允许本群使用 high Effort').props.checked).toBe(true);
-  expect(checkbox(all, '允许本群使用 high Effort').props.disabled).toBe(true);
+  let all = render(); picker(all, 'models').props.onOpenChange(true); all = render();
+  expect(picker(all, 'models').props.value).toEqual(['retired']);
+  expect(item(all, '移除未列出的模型 retired').props.disabled).toBe(true);
+  picker(all, 'models').props.onValueChange([]); all = render();
+  expect(value.models).toEqual(['retired']);
+  picker(all, 'models').props.onOpenChange(false); all = render();
+  picker(all, 'efforts').props.onOpenChange(true); all = render();
+  expect(picker(all, 'efforts').props.value).toEqual(['high']);
+  expect(item(all, '允许本群使用 high Effort').props.disabled).toBe(true);
+  picker(all, 'efforts').props.onValueChange([]); all = render();
   expect(changed).not.toHaveBeenCalled(); expect(value.models).toEqual(['retired']);
 });
 
@@ -164,16 +166,15 @@ it.each(['loading', 'fallback', 'other-provider'] as const)('does not create uns
   const current = state === 'loading' ? undefined : {...catalog, state: state === 'fallback' ? 'fallback' as const : 'ready' as const, backend: state === 'other-provider' ? 'claude-agent' : value.backend};
   const render = () => choices({value, catalog: current, disabled: false, onChange: changed});
   let all = render();
-  button(all, '查看模型').props.onClick(); all = render();
-  expect(all.filter(node => node.type === 'input' && node.props.type === 'checkbox').every(node => node.props.disabled)).toBe(true);
-  expect(button(all, '完成').props.disabled).toBe(true);
-  button(all, '完成').props.onClick();
+  picker(all, 'models').props.onOpenChange(true); all = render();
+  expect(all.filter(node => node.type === Combobox.Item).every(node => node.props.disabled)).toBe(true);
+  picker(all, 'models').props.onValueChange([]);
   expect(changed).not.toHaveBeenCalled();
-  dialog(all).props.onClose(); all = render();
-  button(all, '查看强度').props.onClick(); all = render();
-  expect(checkbox(all, '允许本群使用 low Effort').props.disabled).toBe(true);
-  expect(checkbox(all, '允许本群使用 high Effort').props.checked).toBe(true);
-  expect(button(all, '完成').props.disabled).toBe(true);
+  picker(all, 'models').props.onOpenChange(false); all = render();
+  picker(all, 'efforts').props.onOpenChange(true); all = render();
+  expect(item(all, '允许本群使用 low Effort').props.disabled).toBe(true);
+  expect(picker(all, 'efforts').props.value).toEqual(['low', 'high']);
+  picker(all, 'efforts').props.onValueChange([]);
   expect(value).toEqual(initial());
 });
 
@@ -195,30 +196,24 @@ it.each(['fallback', 'failed'] as const)('retries the same Provider after a %s c
   expect(h.client.settings).toHaveBeenCalledTimes(2);
   expect(h.client.settings).toHaveBeenLastCalledWith({type: 'models', query: {botId: 'cli_retry', backend: value.backend, purpose: 'project'}});
   expect(button(ui.all, '重新读取模型')).toBeUndefined();
-  button(ui.choices, '选择模型').props.onClick(); ui = render();
-  expect(checkbox(ui.choices, '允许本群使用 Alpha').props.checked).toBe(true);
-  expect(checkbox(ui.choices, '允许本群使用 Beta').props.checked).toBe(true);
-  expect(checkbox(ui.choices, '允许本群使用 Beta').props.disabled).toBe(false);
+  picker(ui.choices, 'models').props.onOpenChange(true); ui = render();
+  expect(picker(ui.choices, 'models').props.value).toEqual(['alpha', 'beta']);
+  expect(item(ui.choices, '允许本群使用 Beta').props.disabled).toBe(false);
   expect(changed).not.toHaveBeenCalled();
   expect(value.models).toEqual(['alpha', 'beta']);
 });
 
-it('blocks a stale picker draft after the parent setting changes, then reloads the new selection explicitly', () => {
+it('reflects an external parent update immediately while the menu is open', () => {
   let value = initial(); const changed = vi.fn((next: Value) => {value = next;});
   const render = () => choices({value, catalog, disabled: false, onChange: changed});
-  let all = render(); button(all, '选择模型').props.onClick(); all = render();
-  checkbox(all, '允许本群使用 Beta').props.onChange({target: {checked: true}}); all = render();
+  let all = render(); picker(all, 'models').props.onOpenChange(true); all = render();
   value = {...value, models: ['beta']}; all = render();
-  expect(button(all, '完成').props.disabled).toBe(true);
-  expect(all.find(node => node.props.title === '模型设置已在别处更改')).toBeDefined();
+  expect(picker(all, 'models').props.open).toBe(true);
+  expect(picker(all, 'models').props.value).toEqual(['beta']);
   expect(changed).not.toHaveBeenCalled();
-  button(all, '重新读取并放弃选择').props.onClick(); all = render();
-  expect(checkbox(all, '允许本群使用 Alpha').props.checked).toBe(false);
-  expect(checkbox(all, '允许本群使用 Beta').props.checked).toBe(true);
-  expect(button(all, '完成').props.disabled).toBe(false);
 });
 
-it('loads the changed Provider catalog, stages its model and Effort choices, and saves only after both validate', async () => {
+it('loads the changed Provider catalog, edits model and Effort drafts, and saves only after both validate', async () => {
   const value = initial(); const section = {stored: value, effective: value, revision: 'r1', access: {kind: 'writable' as const}, apply: []};
   const otherCatalog: ModelCatalog = {...catalog, backend: 'claude-agent', titleEfforts: ['high'], models: [{...catalog.models[1]!, id: 'claude-model', displayName: 'Claude Model'}]};
   const save = vi.fn(async (patch: Partial<Value>) => {
@@ -247,24 +242,90 @@ it('loads the changed Provider catalog, stages its model and Effort choices, and
   expect(ui.value).toEqual({backend: otherCatalog.backend, models: [], efforts: []});
   expect(save).not.toHaveBeenCalled();
   expect(h.client.settings).toHaveBeenCalledWith({type: 'models', query: {botId: 'cli_switch', backend: otherCatalog.backend, purpose: 'project'}});
+  await flush(); ui = render();
   button(ui.editor, '保存').props.onClick(); await flush(); ui = render();
   expect(save).not.toHaveBeenCalled();
-  button(ui.choices, '选择模型').props.onClick(); ui = render();
-  checkbox(ui.choices, '允许本群使用 Claude Model').props.onChange({target: {checked: true}}); ui = render();
-  button(ui.choices, '取消').props.onClick(); ui = render();
-  expect(ui.value.models).toEqual([]); expect(save).not.toHaveBeenCalled();
+  picker(ui.choices, 'models').props.onOpenChange(true); ui = render();
+  picker(ui.choices, 'models').props.onValueChange(['claude-model']); ui = render();
+  picker(ui.choices, 'models').props.onOpenChange(false); ui = render();
+  expect(ui.value.models).toEqual(['claude-model']); expect(save).not.toHaveBeenCalled();
   button(ui.editor, '放弃修改').props.onClick(); ui = render();
   expect(ui.value).toEqual(value); expect(save).not.toHaveBeenCalled();
   ui.provider.props.onChange(otherCatalog.backend); ui = render();
-  button(ui.choices, '选择模型').props.onClick(); ui = render();
-  checkbox(ui.choices, '允许本群使用 Claude Model').props.onChange({target: {checked: true}}); ui = render();
-  button(ui.choices, '完成').props.onClick(); ui = render();
+  picker(ui.choices, 'models').props.onOpenChange(true); ui = render();
+  picker(ui.choices, 'models').props.onValueChange(['claude-model']); ui = render();
   button(ui.editor, '保存').props.onClick(); await flush(); ui = render();
   expect(save).not.toHaveBeenCalled();
-  button(ui.choices, '选择强度').props.onClick(); ui = render();
-  checkbox(ui.choices, '允许本群使用 high Effort').props.onChange({target: {checked: true}}); ui = render();
-  button(ui.choices, '完成').props.onClick(); ui = render();
+  picker(ui.choices, 'efforts').props.onOpenChange(true); ui = render();
+  picker(ui.choices, 'efforts').props.onValueChange(['high']); ui = render();
   expect(save).not.toHaveBeenCalled();
   button(ui.editor, '保存').props.onClick(); await flush(); ui = render();
   expect(save.mock.calls).toEqual([[{backend: otherCatalog.backend, models: ['claude-model'], efforts: ['high']}, 'r1']]);
+});
+
+it('retries a failed catalog read without changing the parent selection', async () => {
+  const value = initial();
+  h.client.settings.mockResolvedValueOnce({kind: 'refused', message: '目录服务暂不可用'}).mockResolvedValueOnce({kind: 'models', catalog});
+  const render = () => at('retry-catalog', () => Catalog({botId: agentIdSchema.parse('cli_retry'), backend: value.backend, purpose: 'project', children: current => <span>{current?.state ?? 'loading'}</span>}));
+  render(); await flush(); let all = render();
+  expect(all.filter(node => node.props.children === '目录服务暂不可用')).toHaveLength(1);
+  button(all, '重新读取模型').props.onClick(); render(); await flush(); all = render();
+  expect(h.client.settings).toHaveBeenCalledTimes(2);
+  expect(all.some(node => node.props.children === 'ready')).toBe(true);
+  expect(value).toEqual(initial());
+});
+
+it('preserves saved Effort selections while the catalog is still loading', () => {
+  const changed = vi.fn();
+  let all = choices({value: initial(), disabled: false, onChange: changed});
+  picker(all, 'efforts').props.onOpenChange(true); all = choices({value: initial(), disabled: false, onChange: changed});
+  expect(picker(all, 'efforts').props.value).toEqual(['low', 'high']);
+  expect(item(all, '允许本群使用 low Effort').props.disabled).toBe(true);
+  picker(all, 'efforts').props.onValueChange(['high']);
+  expect(changed).not.toHaveBeenCalled();
+});
+
+it('keeps an Effort change in the page draft after closing the menu', () => {
+  let value = initial(); const changed = vi.fn((next: Value) => {value = next;});
+  const render = () => choices({value, catalog, disabled: false, onChange: changed});
+  let all = render(); picker(all, 'efforts').props.onOpenChange(true); all = render();
+  picker(all, 'efforts').props.onValueChange(['low']); all = render();
+  picker(all, 'efforts').props.onOpenChange(false); all = render();
+  expect(value.efforts).toEqual(['low']);
+  picker(all, 'efforts').props.onOpenChange(true); all = render();
+  expect(picker(all, 'efforts').props.value).toEqual(['low']);
+  expect(changed).toHaveBeenCalledOnce();
+});
+
+it('takes an extensible Provider list as data and clears dependent choices when switching', () => {
+  const providers = Array.from({length: 12}, (_, index) => ({id: `provider-${index}`, displayName: `Provider ${index}`}));
+  const value = {...initial(), backend: 'provider-0'}; const changed = vi.fn();
+  const all = at('many-providers', () => ModelAccessFields({botId: agentIdSchema.parse('cli_many'), providers, value, onChange: changed, disabled: false}));
+  const selector = all.find(node => node.type === SelectControl)!;
+  expect(selector.props.options).toHaveLength(12);
+  selector.props.onChange('provider-11');
+  expect(changed).toHaveBeenCalledExactlyOnceWith({backend: 'provider-11', models: [], efforts: []});
+});
+
+it('does not offer a meaningless picker for a Provider without Effort support', () => {
+  const value = {...initial(), efforts: []};
+  const noEffortCatalog = {...catalog, models: catalog.models.map(model => ({...model, supportedEfforts: []}))};
+  const all = choices({value, catalog: noEffortCatalog, disabled: false, onChange: vi.fn()});
+  expect(button(all, '选择强度').props.disabled).toBe(true);
+  expect(text(button(all, '选择强度').props.children)).toContain('此 Provider 未提供思考强度');
+});
+
+it('lets the page draft become empty but blocks saving without a model', async () => {
+  const value = initial(); const section = {stored: value, effective: value, revision: 'r1', access: {kind: 'writable' as const}, apply: []};
+  const save = vi.fn();
+  const render = () => {
+    const editor = at('empty-editor', () => Editor({title: '可用模型', section, save, validate: draft => modelAccessProblem(draft, catalog),
+      render: (draft, onChange, disabled) => <CompactModelSelection value={draft} onChange={onChange} disabled={disabled} catalog={catalog}/>}));
+    const compact = editor.find(node => node.type === CompactModelSelection)!;
+    return {editor, choices: at('empty-picker', () => CompactModelSelection(compact.props as any))};
+  };
+  let ui = render(); picker(ui.choices, 'models').props.onValueChange([]); ui = render();
+  expect(picker(ui.choices, 'models').props.value).toEqual([]);
+  button(ui.editor, '保存').props.onClick(); await flush();
+  expect(save).not.toHaveBeenCalled();
 });
