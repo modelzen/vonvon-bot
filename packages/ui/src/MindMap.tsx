@@ -1,4 +1,4 @@
-import {useEffect, useRef, useState, type DragEvent, type ReactNode} from 'react';
+import {useLayoutEffect, useRef, useState, type DragEvent, type ReactNode} from 'react';
 import {MoreHorizontal} from 'lucide-react';
 import './mind-map.css';
 
@@ -53,26 +53,35 @@ function MapTree({node, dragging, setDragging}: TreeProps) {
 function Links({count, children}: {count: number; children: ReactNode}) {
   const column = useRef<HTMLDivElement>(null);
   const [paths, setPaths] = useState<{height: number; ends: number[]}>({height: 0, ends: []});
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = column.current;
     if (!element) return;
+    const nodes = Array.from(element.children).flatMap(child => {
+      const self = child.querySelector(':scope > .mm-self');
+      return self instanceof HTMLElement ? [{tree: child, self}] : [];
+    });
     const measure = () => {
-      const ends = Array.from(element.children).flatMap(child => {
-        const self = child.querySelector(':scope > .mm-self');
-        return self instanceof HTMLElement ? [(child as HTMLElement).offsetTop + self.offsetTop + self.offsetHeight / 2] : [];
+      const bounds = element.getBoundingClientRect();
+      const ends = nodes.map(({self}) => {
+        // Both .mm-tree and .mm-self can have this column as their offsetParent.
+        // Compare viewport rectangles so a child's vertical offset is counted only once.
+        const box = self.getBoundingClientRect();
+        return box.top - bounds.top + box.height / 2;
       });
-      setPaths(previous => previous.height === element.offsetHeight && previous.ends.length === ends.length && previous.ends.every((end, at) => end === ends[at]) ? previous : {height: element.offsetHeight, ends});
+      setPaths(previous => previous.height === bounds.height && previous.ends.length === ends.length && previous.ends.every((end, at) => end === ends[at]) ? previous : {height: bounds.height, ends});
     };
     measure();
     if (typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(measure);
     observer.observe(element);
+    // Two subtrees can change height while the whole column keeps the same height.
+    for (const {tree, self} of nodes) {observer.observe(tree); observer.observe(self);}
     return () => observer.disconnect();
-  }, [count]);
+  }, [count, children]);
   const middle = paths.height / 2;
   return <div className="mm-children" role="group" ref={column}>
-    <svg className="mm-links" aria-hidden="true" width="28" height={paths.height || undefined} viewBox={`0 0 28 ${paths.height || 1}`}>
-      {paths.ends.map((end, at) => <path key={at} d={`M0 ${middle} C14 ${middle} 14 ${end} 28 ${end}`} fill="none" stroke="currentColor" strokeWidth="1.2"/>)}
+    <svg className="mm-links" aria-hidden="true" width="32" height={paths.height || undefined} viewBox={`0 0 32 ${paths.height || 1}`}>
+      {paths.ends.map((end, at) => <path key={at} d={`M0 ${middle} C16 ${middle} 16 ${end} 32 ${end}`} fill="none" stroke="currentColor" strokeWidth="1.2"/>)}
     </svg>
     {children}
   </div>;

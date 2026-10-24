@@ -42,11 +42,13 @@ const snapshot: DesktopSnapshot = desktopSnapshotSchema.parse({
 });
 const wrap = (node: React.ReactNode) => renderToStaticMarkup(<ClientProvider client={client}><DraftGuardProvider><DirectoryPickerProvider>{node}</DirectoryPickerProvider></DraftGuardProvider></ClientProvider>);
 
-it('the Bot page is a map centred on the Bot: 角色设定 with its two leaves, Bot 记忆 with its note, and the projects it works in', () => {
+it('the Bot page is a map centred on the Bot: 角色设定 with its two leaves, Bot 记忆, and the projects it works in', () => {
   const html = wrap(<BotMap agentId={'cli_a' as never} snapshot={snapshot} onProject={vi.fn()}/>);
   for (const text of ['小支', '角色设定', '身份与职责', '其他说明', 'Bot 记忆', '项目', '支付组 →']) expect(html).toContain(text);
-  expect(html).toContain('群友说的、Bot 自己观察到的永远进不了这里');
+  expect(html).not.toContain('群友说的、Bot 自己观察到的永远进不了这里');
+  expect(html).toContain('+ 添加记忆');
   expect(html).not.toMatch(/AGENTS\.md|CLAUDE\.md/);
+  expect(html).not.toContain('模型看到什么');
 });
 
 it('the project page map has 群和 Bot as a branch with the bindings and the 把一个群加进来 leaf, and folds nothing it does not own', () => {
@@ -55,5 +57,5 @@ it('the project page map has 群和 Bot as a branch with the bindings and the �
   expect(html).toContain('支付组群 · 小支');
   expect(html).toContain('+ 把一个群加进来…');
   expect(html).toContain('不再用小支处理这个群…');
-  expect(html).toContain('共用这个项目的群里，Bot 都会读到这些记忆');
+  expect(html).not.toContain('共用这个项目的群里，Bot 都会读到这些记忆');
 });
