@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { AppShell } from "./LocalShell";
 import { AgentAvatar } from './AgentAvatar';
+import {OperationActivity} from './management/OperationActivity';
 import { GroupAvatar } from './GroupAvatar';
 import { GroupDirectory, type GroupDirectoryState } from './GroupDirectory';
 import { ProjectDirectory, projectEntries, type ProjectDirectoryState } from './ProjectDirectory';
@@ -153,6 +154,7 @@ function DesktopApp() {
   const [joinedTarget, setJoinedTarget] = useState<{agentId: AgentId; chatId: string}>();
   const [pending, setPending] = useState(0);
   const busy = pending > 0;
+  const [pendingActivation, setPendingActivation] = useState<{agentId: AgentId; enabled: boolean} | null>(null);
   const modalGeneration = useRef(0);
   const [notice, setNotice] = useState<{ message: string; error: boolean }>();
   const pendingGroups = usePendingGroups(snapshot);
@@ -284,6 +286,11 @@ function DesktopApp() {
     } finally {
       setPending((count) => count - 1);
     }
+  }
+  async function setAgentEnabled(agentId: AgentId, enabled: boolean) {
+    setPendingActivation({agentId, enabled});
+    try { await run({type: 'setAgentEnabled', agentId, enabled}); }
+    finally { setPendingActivation(null); }
   }
   async function runShell(operation: () => Promise<void>): Promise<void> {
     setPending(count => count + 1);
@@ -607,6 +614,7 @@ function DesktopApp() {
                           <div className="settings-entity-group__surface">
                             {snapshot.agents.map((agent) => {
                               const status = agentListStatus(agent);
+                              const activating = pendingActivation?.agentId === agent.id ? pendingActivation : null;
                               const groupCount = new Set(
                                 snapshot.memberships
                                   .filter((member) => member.agentId === agent.id)
@@ -632,7 +640,8 @@ function DesktopApp() {
                                         : `飞书 · ${groupCount} 个群聊${newCounts.bots[agent.id] ? ` · ${newTag(newCounts.bots[agent.id])}` : ''}`}
                                     </small>
                                   </span>
-                                  {status.tone !== 'success' && <span className={`settings-entity-row__value settings-entity-row__value--${status.tone}`}>{status.label}</span>}
+                                  {activating ? <span className="settings-entity-row__value"><OperationActivity key={`${agent.id}:${activating.enabled}`} label={activating.enabled ? '启用中' : '停用中'} state={activating.enabled ? 'connecting' : 'working'}/></span>
+                                    : status.tone !== 'success' && <span className={`settings-entity-row__value settings-entity-row__value--${status.tone}`}>{status.label}</span>}
                                   <ChevronRight
                                     aria-hidden="true"
                                     className="settings-entity-row__chevron"
@@ -687,11 +696,8 @@ function DesktopApp() {
                       <span className="collaboration-profile__kind">Bot</span>
                       <h2>{agent.name}</h2>
                     </div>
-                    <StatusBadge
-                      tone={agentListStatus(agent).tone}
-                    >
-                      {agentListStatus(agent).label}
-                    </StatusBadge>
+                    {pendingActivation?.agentId === agent.id ? <OperationActivity key={`${agent.id}:${pendingActivation.enabled}`} label={pendingActivation.enabled ? '启用中' : '停用中'} state={pendingActivation.enabled ? 'connecting' : 'working'}/>
+                      : <StatusBadge tone={agentListStatus(agent).tone}>{agentListStatus(agent).label}</StatusBadge>}
                   </header>
                   <div className="bot-detail-navigation"><BotDetailTabs selected={route.kind === 'agent' ? route.pane.kind : 'groups'} onSelect={agentPane}/></div>
                   {route.kind === 'agent' && route.pane.kind === 'profile' ? <BotMap agentId={agent.id} snapshot={snapshot} onProject={id => select({kind: 'project', id})}/> : detail.kind !== 'agent-settings' ? <>
@@ -735,13 +741,7 @@ function DesktopApp() {
                           label="启用 Bot"
                           checked={agent.enabled}
                           disabled={busy || !ready}
-                          onChange={(event) =>
-                            void run({
-                              type: "setAgentEnabled",
-                              agentId: agent.id,
-                              enabled: event.target.checked,
-                            })
-                          }
+                          onChange={(event) => void setAgentEnabled(agent.id, event.target.checked)}
                         />
                       }
                     />

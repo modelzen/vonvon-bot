@@ -9,6 +9,8 @@
 .group-design-scope { display: grid; gap: 6px; min-width: 0; }
 .group-design-context { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; }
 .group-design-context > .ui-toggle { flex: none; }
+.group-enable-control { display: inline-flex; align-items: center; justify-content: flex-end; gap: 10px; flex: none; }
+.group-enable-control .operation-activity { color: var(--color-text-secondary); font-size: 12px; }
 .group-bot-picker { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; }
 .group-bot-picker > button { display: flex; align-items: center; gap: 7px; min-width: 0; max-width: 220px; min-height: 32px; padding: 4px 8px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--color-text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
 .group-bot-picker > button[aria-pressed=true] { background: var(--color-surface); border-color: var(--color-border); color: var(--color-text); box-shadow: 0 1px 3px #00000008; font-weight: 550; }
@@ -54,6 +56,7 @@
   .group-design-tabs { justify-self: stretch; }
   .group-design-tabs > button { padding-inline: 8px; }
   .group-design-context { align-items: flex-start; flex-wrap: wrap; gap: 10px; }
+  .group-enable-control { margin-left: auto; flex-wrap: wrap; }
 }
 @media (max-width: 400px) {
   .group-design-heading { gap: 8px; }
