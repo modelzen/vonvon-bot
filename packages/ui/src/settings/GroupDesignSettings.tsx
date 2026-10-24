@@ -178,7 +178,7 @@ export function ModelAccessFields({botId, value, onChange, disabled, providers, 
   const available = providers.some(provider => provider.id === value.backend);
   const choices = providerChoices(providers, value.backend);
   return <div className="gd-model-fields gd-model-fields--compact">
-    <div className="gd-model-summary-row"><span className="gd-model-summary-label">Provider</span>
+    <div className="gd-model-summary-row gd-model-provider-row"><span className="gd-model-summary-label">Provider</span>
       <div className="gd-model-provider-control"><SelectControl label="模型 Provider" className="gd-model-provider-select" options={choices} value={value.backend} disabled={disabled}
         onChange={backend => {if (!disabled && backend !== value.backend && providers.some(provider => provider.id === backend)) onChange({backend, models: [], efforts: []});}}/>
         <span className="gd-model-provider-state">{available ? '可用' : '当前不可用'}</span></div>
