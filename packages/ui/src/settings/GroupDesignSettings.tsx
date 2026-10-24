@@ -86,6 +86,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
   const providers = discovery.providers;
   const outerReadonly = useContext(AnnouncedReadonlyMessages);
   const sections = view.sections;
+  const [rulesExpanded, setRulesExpanded] = useState(false);
   const decisionConfiguration = useDecisionConfiguration(tab === 'response' && view.identity.kind === 'smart');
   const modelCatalog = useRef<ModelCatalog | undefined>(undefined);
   const rememberCatalog = useCallback((catalog: ModelCatalog | undefined) => {modelCatalog.current = catalog;}, []);
@@ -139,7 +140,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
               onChange={selection => set({selection})} disabled={disabled} providers={providers} services={view.decisionModels} configuration={decisionConfiguration} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets}/>}/> : <MissingSection/>}
           {sections.smartRules ? <Editor title="判断规则" section={sections.smartRules} save={(patch, revision) => save('smartRules', patch, revision)}
             validate={draft => smartRulesText(draft).length > SMART_RULES_MAX_LENGTH ? `规则超过 ${SMART_RULES_MAX_LENGTH} 字，请缩短后保存。` : undefined}
-            render={(draft, set, disabled, _commit, resetKey) => <SmartRulesEditor key={resetKey} value={smartRulesText(draft)} disabled={disabled} onChange={respond => set({respond, newTopic: ''})}/>}/> : <MissingSection/>}
+            render={(draft, set, disabled, _commit, resetKey) => <SmartRulesEditor key={resetKey} expanded={rulesExpanded} onExpandedChange={setRulesExpanded} value={smartRulesText(draft)} disabled={disabled} onChange={respond => set({respond, newTopic: ''})}/>}/> : <MissingSection/>}
         </>}
         {view.identity.kind !== 'smart' && <ProjectPanel view={view} refresh={refresh} partition="response" independent hideJudge/>}
         <details className="gd-disclosure"><summary>响应成员</summary><ProjectPanel view={view} refresh={refresh} partition="members" independent hideJudge/></details>
