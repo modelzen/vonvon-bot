@@ -1,7 +1,8 @@
+import {RefreshCw} from 'lucide-react';
 import {useClient, useShellCapabilities} from '../client-context';
 import type {VonvonClient} from '@vonvon/client/browser';
 import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { Button, FormField, InlineNotice, Toggle } from "../reference/components/ui";
+import { Button, IconButton, FormField, InlineNotice, Toggle } from "../reference/components/ui";
 import { Dialog } from "../reference/components/ui/Dialog";
 import {
   SettingsGroup,
@@ -114,8 +115,10 @@ export function Editor<T extends object>({
   renderLayout,
   prepareSave,
   autoSave = false,
+  headerAction,
 }: {
   title: string;
+  headerAction?: ReactNode;
   section: Section<T>;
   render: (
     draft: T,
@@ -295,6 +298,7 @@ export function Editor<T extends object>({
     <SettingsGroup
       id={renderLayout ? undefined : settingAnchor(title)}
       label={renderLayout ? undefined : title}
+      action={headerAction}
       footer={
         section.access.kind === "readonly"
           ? hasReadonlyMessage(announcedReadonly, section.access) ? undefined : section.access.message
@@ -760,7 +764,7 @@ function AgentPanel({
     access = view.sections.access;
   return (
     <>
-      <Editor title="运行上限" section={run} save={(draft, revision) => save("run", draft, revision)}
+      <Editor title="运行上限" headerAction={<IconButton size="sm" variant="ghost" className="bot-settings-refresh" label="重新读取设置" title="重新读取此 Bot 的所有设置" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>} section={run} save={(draft, revision) => save("run", draft, revision)}
         render={(draft,set,disabled) => <>
           <SettingsRow title="同时处理的任务" trailing={<NumberField label="最大并发任务" value={draft.maxConcurrentRuns} min={1} max={50} disabled={disabled} onChange={maxConcurrentRuns => set({...draft,maxConcurrentRuns})}/>}/>
           {run.effective.maxConcurrentRuns !== run.stored.maxConcurrentRuns && <SettingsRow title="当前运行上限" value={String(run.effective.maxConcurrentRuns)} description="重启后使用新上限。"/>}
@@ -775,9 +779,9 @@ function AgentPanel({
             : undefined
         }
       >
-        <SettingsRow title="飞书语音权限" value={voice.feishu.message}/>
         <SettingsRow
-          title="权限与测试"
+          title="飞书语音权限"
+          description={voice.feishu.message}
           trailing={
             <div className="settings-inline-actions">
               <Button
@@ -1923,7 +1927,7 @@ function ScopedSettingsPanel(props: PanelProps) {
   ) : null;
   return (
     <>
-      <div className="settings-scope-bar"><Button size="sm" onClick={() => void refresh()}>重新读取</Button></div>
+      {props.scope !== "agent" && <div className="settings-scope-bar"><Button size="sm" onClick={() => void refresh()}>重新读取</Button></div>}
       {status}
       {content}
     </>
