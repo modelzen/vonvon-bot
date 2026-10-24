@@ -34,7 +34,7 @@ const projectGroups: readonly Group[] = [
 ];
 const membershipGroups: readonly Group[] = [
   {title: '群设置', aliases: ['群绑定'], fields: [item('在本群使用', ['启用', '停用', '在这个群中使用 Bot'], {field: ''})]},
-  {title: '技能', aliases: ['能力', 'Skill'], fields: [item('添加技能', ['添加 Skill']), item('使用技能', ['启用技能', '关闭技能'], {field: ''})]},
+  {title: '技能', aliases: ['能力', 'Skill'], fields: [item('使用技能', ['启用技能', '关闭技能'], {field: ''})]},
   {title: '语音', fields: [item('语音转文字', ['启用语音', '语音识别'])]},
   {title: '补充职责', aliases: ['本群职责', '角色补充'], fields: [item('补充职责', ['本群个性', '这个 Bot 在本项目里多做什么'], {field: ''})]},
   {title: '可用模型', aliases: ['模型', '执行工具'], fields: [item('模型 Provider', ['执行后端'], {field: ''}), item('允许使用的模型', ['模型多选'], {field: ''}), item('可用 Effort', ['推理强度', 'Effort 多选'], {field: ''})]},
