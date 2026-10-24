@@ -1,5 +1,6 @@
 import {useEffect, useRef, useState} from 'react';
-import {ArrowUpRight, Check, MoreHorizontal} from 'lucide-react';
+import {ArrowUpRight, Check, ChevronDown, MoreHorizontal} from 'lucide-react';
+import {Select} from '@base-ui/react/select';
 import {modeToConversation, type Agent, type Conversation, type DesktopSnapshot, type Group, type Membership, type ProjectId, type ProjectRecord} from '@vonvon/protocol';
 import {useClient, useShellCapabilities} from './client-context';
 import {AgentAvatar} from './AgentAvatar';
@@ -122,20 +123,43 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
     finally {saving.current = false; setBusy(false); setPendingEnabled(null);}
   }
   const available = agent.running && !!project && !member.stale;
+  const groupBots = snapshot.memberships.filter(item => item.groupId === group.id).flatMap(item => {
+    const bot = snapshot.agents.find(candidate => candidate.id === item.agentId);
+    return bot ? [{item, bot}] : [];
+  });
   const memberProject = snapshot.projects?.find(item => item.id === member.projectId);
   const conversation = project ? modeToConversation(project.kind) : member.conversation;
   const conversationControl = <div className="group-conversation-layout"><section id={settingAnchor("聊天方式")} className="group-conversation-choice" aria-label="聊天方式">
     <h3>聊天方式</h3><ConversationSlider label="聊天方式" value={conversation} disabled={!available || busy} onChange={next => guard.navigate(() => {void update({conversation:next});})}/>
   </section>{conversation === 'smart' && member.conversation === 'smart' && <GroupAttentionStatus agent={agent} membership={member} connected={snapshot.host.kind === 'connected' && !snapshot.stale}/>}</div>;
   return <div className="group-design-workspace">
-    <header className="group-design-heading"><GroupAvatar group={group} large/><h2>{group.name}</h2><Button size="sm" className="group-open-button" aria-label="在飞书打开此群" onClick={() => void openExternalUrl(groupUrl(group.id),'group',shell).catch(error => setError(String(error.message ?? error)))}><span className="group-open-label">飞书</span><ArrowUpRight size={13} aria-hidden="true"/></Button>
-      <details ref={menu} className="group-context-menu"><summary aria-label="群操作"><MoreHorizontal size={18}/></summary><div>{([['help','使用说明'],['history','对话记录'],['remove','解除群绑定…']] as const).map(([action,label]) => <button type="button" key={action} disabled={action === 'remove' && !available} onClick={event => {event.currentTarget.closest('details')?.removeAttribute('open'); guard.navigate(() => setDialog(action));}}>{label}</button>)}</div></details>
+    <header id={settingAnchor("群设置")} className="config-header">
+      <div className="config-header-identity">
+        <div className="config-group-title"><GroupAvatar group={group} large/><h2 title={group.name}>{group.name}</h2></div>
+        <span className="config-context-divider" aria-hidden="true"/>
+        <Select.Root items={groupBots.map(({item,bot}) => ({value:item.id,label:bot.name}))} value={member.id} onValueChange={value => {
+          if (!value || value === member.id) return;
+          const selected = groupBots.find(({item}) => item.id === value);
+          if (selected) guard.navigate(() => onBot(selected.item));
+        }}>
+          <Select.Trigger className="header-bot-select" aria-label="选择本群 Bot" title={agent.name}>
+            <AgentAvatar agent={agent}/><Select.Value className="header-bot-select-value"/><Select.Icon><ChevronDown size={13} aria-hidden="true"/></Select.Icon>
+          </Select.Trigger>
+          <Select.Portal><Select.Positioner align="start" alignItemWithTrigger={false} sideOffset={6} collisionPadding={8} className="ui-select-control__positioner header-bot-positioner">
+            <Select.Popup className="ui-select-control__popup header-bot-popup"><div className="header-bot-popup-label">本群 Bot · {groupBots.length}</div><Select.List className="ui-select-control__list">
+              {groupBots.map(({item,bot}) => <Select.Item value={item.id} key={item.id} className="ui-select-control__option"><Select.ItemIndicator className="ui-select-control__indicator"><Check size={13} aria-hidden="true"/></Select.ItemIndicator><Select.ItemText>{bot.name}</Select.ItemText></Select.Item>)}
+            </Select.List></Select.Popup>
+          </Select.Positioner></Select.Portal>
+        </Select.Root>
+        <div className="config-header-actions"><Button size="sm" variant="ghost" className="config-feishu" aria-label="在飞书打开此群" onClick={() => void openExternalUrl(groupUrl(group.id),'group',shell).catch(error => setError(String(error.message ?? error)))}><span className="group-open-label">飞书</span><ArrowUpRight size={13} aria-hidden="true"/></Button>
+          <details ref={menu} className="group-context-menu"><summary aria-label="群操作"><MoreHorizontal size={18}/></summary><div>{([['help','使用说明'],['history','对话记录'],['remove','解除群绑定…']] as const).map(([action,label]) => <button type="button" key={action} disabled={action === 'remove' && !available} onClick={event => {event.currentTarget.closest('details')?.removeAttribute('open'); guard.navigate(() => setDialog(action));}}>{label}</button>)}</div></details>
+        </div>
+      </div>
+      <div className="config-header-navigation">
+        <nav className="group-design-tabs config-tabs" aria-label="群设置">{groupDesignTabs.map(([value,label]) => <button type="button" key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => guard.navigate(() => {setTab(value); onTabChange?.(value);})}>{label}</button>)}</nav>
+        {project ? <span className="config-enable group-enable-control">{pendingEnabled !== null && <OperationActivity key={`${member.id}:${pendingEnabled}`} label={pendingEnabled ? '本群启用中' : '本群停用中'} state={pendingEnabled ? 'connecting' : 'working'}/>}<Toggle aria-label={`在本群使用 ${agent.name}`} label="在本群使用" checked={project.enabled} disabled={!available || busy} onChange={event => {const enabled=event.target.checked; guard.navigate(() => {void update({enabled});});}}/></span> : <span className="group-control-note">{!agent.enabled ? 'Bot 已停用' : !agent.running ? 'Bot 未运行' : '读取中…'}</span>}
+      </div>
     </header>
-    <div className="group-design-scope"><div id={settingAnchor("群设置")} className="group-design-context"><div role="group" aria-label="本群 Bot" className="group-bot-picker">{snapshot.memberships.filter(item => item.groupId === group.id).map(item => {const bot = snapshot.agents.find(bot => bot.id === item.agentId); return bot && <button type="button" key={item.id} aria-pressed={member.id === item.id} title={bot.name} onClick={() => guard.navigate(() => onBot(item))}><AgentAvatar agent={bot}/><span>{bot.name}</span>{member.id === item.id && <Check size={12}/>}</button>;})}</div>
-      {project ? <span className="group-enable-control">{pendingEnabled !== null && <OperationActivity key={`${member.id}:${pendingEnabled}`} label={pendingEnabled ? '本群启用中' : '本群停用中'} state={pendingEnabled ? 'connecting' : 'working'}/>}<Toggle aria-label={`在本群使用 ${agent.name}`} label="在本群使用" checked={project.enabled} disabled={!available || busy} onChange={event => {const enabled=event.target.checked; guard.navigate(() => {void update({enabled});});}}/></span> : <span className="group-control-note">{!agent.enabled ? 'Bot 已停用' : !agent.running ? 'Bot 未运行' : '读取中…'}</span>}
-    </div>
-    </div>
-    <nav className="group-design-tabs" aria-label="群设置">{groupDesignTabs.map(([value,label]) => <button type="button" key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => guard.navigate(() => {setTab(value); onTabChange?.(value);})}>{label}</button>)}</nav>
     {error && <InlineNotice title="操作未完成" tone="warning">{error}</InlineNotice>}
     {notice && <p role="status" className="group-control-note">{notice}</p>}
     {tab === 'memory' ? <section id={settingAnchor('记忆')} aria-label="记忆">
