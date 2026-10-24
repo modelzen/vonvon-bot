@@ -657,7 +657,7 @@ function DesktopApp() {
                         </section>
                       )
                     : view === "groups" ? <><MigrationBanner snapshot={snapshot}/><GroupDirectory snapshot={snapshot} state={groupDirectoryState} onStateChange={setGroupDirectoryState} statusFor={agentListStatus}
-                        onMembership={id => select({kind: 'membership', id})} onProjects={() => openList('projects')} newCounts={newCounts.projects}/></>
+                        onMembership={id => select({kind: 'membership', id})} newCounts={newCounts.projects}/></>
                     : <><MigrationBanner snapshot={snapshot}/><ProjectDirectory newCounts={newCounts.projects} snapshot={snapshot} state={projectDirectoryState} onStateChange={setProjectDirectoryState} statusFor={agentListStatus}
                         onProject={id => select({kind: 'project', id})} onMembership={id => select({kind: 'membership', id})}
                         onNewProject={ready && snapshot.agents.length ? () => snapshot.agents.length === 1 ? openJoin(snapshot.agents[0]!.id) : openList('agents') : undefined}/></>}
