@@ -1,0 +1,14 @@
+.permission-summary .ss-row { padding-block: 16px; gap: 16px; }
+.permission-summary .ss-row__copy { min-width: 0; }
+.permission-summary .ss-row__title { font-weight: 600; }
+.permission-summary .ss-row__description { max-width: 56ch; line-height: 1.55; }
+.permission-summary .ss-row__trailing { flex: none; }
+.permission-dialog { display: grid; gap: 16px; }
+.permission-dialog .ss-section { margin: 0; }
+.permission-dialog .membership-settings-details { margin: 0; }
+.permission-dialog .group-choice-row { align-items: stretch; }
+.permission-dialog .permission-note { line-height: 1.6; }
+@media (max-width: 440px) {
+  .permission-summary .ss-row { flex-wrap: wrap; gap: 12px; }
+  .permission-summary .ss-row__copy { flex-basis: calc(100% - 100px); }
+}

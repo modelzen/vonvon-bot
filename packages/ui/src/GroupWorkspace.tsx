@@ -19,15 +19,18 @@ import {ContextPanel} from './ContextPanel';
 import './group-workspace.css';
 
 export type GroupDesignTab = GroupSettingsTab;
-export const groupDesignTabs: readonly [GroupDesignTab, string][] = [['capabilities','能力'],['role','补充职责'],['model','模型'],['response','回复规则'],['permission','权限']];
+export const groupDesignTabs: readonly [GroupDesignTab, string][] = [['model','模型与权限'],['capabilities','能力'],['role','补充职责'],['response','回复规则']];
 export function groupTabForSection(section?: string): GroupDesignTab {
   switch (section) {
     case '补充职责': return 'role';
+    case undefined:
+    case '执行模型':
+    case '执行权限':
     case '可用模型': return 'model';
     case '权限':
     case '工作目录权限':
     case '能挡到什么':
-    case '高级设置': return 'permission';
+    case '高级设置': return 'model';
     case '聊天方式':
     case '决策模型':
     case '判断规则':
@@ -42,13 +45,13 @@ export function groupTabForSection(section?: string): GroupDesignTab {
 type Props = {member: Membership; agent: Agent; group: Group; snapshot: DesktopSnapshot; initialTab?: GroupDesignTab; revealHistory?: boolean; onTabChange?: (tab:GroupDesignTab) => void;
   onBot: (member: Membership) => void; onBotProfile: () => void; onProject?: (id: ProjectId) => void; onOpenTools: () => void; onOpenProviders?: () => void; onOpenSecrets: () => void; onChanged: () => Promise<void>};
 // Intent: configure one Bot within one group, without exposing session management as navigation.
-// Hierarchy: target first, five established pages second. Quiet inset surfaces and system type
+// Hierarchy: target first, Bot/project scope next, then compact settings pages. System type
 // share Today's 4px spacing rhythm; history/help remain contextual actions in the toolbar.
 export function GroupWorkspace({member, agent, group, snapshot, initialTab, revealHistory, onTabChange, onBot, onBotProfile, onProject, onOpenTools, onOpenProviders, onOpenSecrets, onChanged}: Props) {
   const client = useClient();
   const shell = useShellCapabilities();
   const guard = useDraftGuard();
-  const [tab, setTab] = useState<GroupDesignTab>(initialTab ?? 'capabilities');
+  const [tab, setTab] = useState<GroupDesignTab>(initialTab === 'permission' ? 'model' : initialTab ?? 'model');
   const [project, setProject] = useState<ProjectRecord>();
   const [busy, setBusy] = useState(false);
   const saving = useRef(false);
@@ -79,7 +82,7 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
   const [version, setVersion] = useState(0);
   useEffect(() => {if (revealHistory) setDialog('history');}, [revealHistory]);
   const target = {agentId: member.agentId, groupId: member.groupId, projectName: member.name};
-  useEffect(() => {if (initialTab) setTab(initialTab);}, [initialTab]);
+  useEffect(() => {if (initialTab) setTab(initialTab === 'permission' ? 'model' : initialTab);}, [initialTab]);
   useEffect(() => {
     if (!agent.running) return;
     let active = true;
@@ -121,12 +124,12 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
     <header className="group-design-heading"><GroupAvatar group={group} large/><h2>{group.name}</h2><Button size="sm" className="group-open-button" aria-label="在飞书打开此群" onClick={() => void openExternalUrl(groupUrl(group.id),'group',shell).catch(error => setError(String(error.message ?? error)))}><span className="group-open-label">飞书</span><ArrowUpRight size={13} aria-hidden="true"/></Button>
       <details ref={menu} className="group-context-menu"><summary aria-label="群操作"><MoreHorizontal size={18}/></summary><div>{([['help','使用说明'],['history','对话记录'],['remove','解除群绑定…']] as const).map(([action,label]) => <button type="button" key={action} disabled={action === 'remove' && !available} onClick={event => {event.currentTarget.closest('details')?.removeAttribute('open'); guard.navigate(() => setDialog(action));}}>{label}</button>)}</div></details>
     </header>
-    <div id={settingAnchor("群设置")} className="group-design-context"><div role="group" aria-label="本群 Bot" className="group-bot-picker">{snapshot.memberships.filter(item => item.groupId === group.id).map(item => {const bot = snapshot.agents.find(bot => bot.id === item.agentId); return bot && <button type="button" key={item.id} aria-pressed={member.id === item.id} title={bot.name} onClick={() => guard.navigate(() => onBot(item))}><AgentAvatar agent={bot}/><span>{bot.name}</span>{member.id === item.id && <Check size={12}/>}</button>;})}</div>
+    <div className="group-design-scope"><div id={settingAnchor("群设置")} className="group-design-context"><div role="group" aria-label="本群 Bot" className="group-bot-picker">{snapshot.memberships.filter(item => item.groupId === group.id).map(item => {const bot = snapshot.agents.find(bot => bot.id === item.agentId); return bot && <button type="button" key={item.id} aria-pressed={member.id === item.id} title={bot.name} onClick={() => guard.navigate(() => onBot(item))}><AgentAvatar agent={bot}/><span>{bot.name}</span>{member.id === item.id && <Check size={12}/>}</button>;})}</div>
       {project ? <Toggle aria-label={`在本群使用 ${agent.name}`} label="在本群使用" checked={project.enabled} disabled={!available || busy} onChange={event => {const enabled=event.target.checked; guard.navigate(() => {void update({enabled});});}}/> : <span className="group-control-note">{!agent.enabled ? 'Bot 已停用' : !agent.running ? 'Bot 未运行' : '读取中…'}</span>}
     </div>
     {memberProject && <p className="group-project-line" id={settingAnchor("所在项目")}>项目：<strong>{memberProject.name}</strong>
       {onProject && <button type="button" className="gd-text-action" onClick={() => guard.navigate(() => onProject(memberProject.id))}>项目页</button>}
-      <button type="button" className="gd-text-action" disabled={!available || busy || !otherProjects.length} onClick={() => guard.navigate(() => {setNextProject(otherProjects[0]?.id ?? ''); setDialog('project');})}>换到别的项目…</button></p>}
+      <button type="button" className="gd-text-action" disabled={!available || busy || !otherProjects.length} onClick={() => guard.navigate(() => {setNextProject(otherProjects[0]?.id ?? ''); setDialog('project');})}>换到别的项目…</button></p>}</div>
     <nav className="group-design-tabs" aria-label="群设置">{groupDesignTabs.map(([value,label]) => <button type="button" key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => guard.navigate(() => {setTab(value); onTabChange?.(value);})}>{label}</button>)}
       <button type="button" className="group-context-button" onClick={() => setDialog('context')}>模型看到什么</button></nav>
     {tab === 'role' && <p className="group-control-note">{agent.name} 的角色设定在 Bot 页，所有项目通用。<button type="button" className="gd-text-action" onClick={() => guard.navigate(onBotProfile)}>到 Bot 页</button></p>}
