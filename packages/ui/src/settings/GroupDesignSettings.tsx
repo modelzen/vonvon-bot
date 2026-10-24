@@ -37,8 +37,6 @@ type Props = {
   onOpenProviders?: () => void;
   onOpenSecrets?: (provider?: string) => void;
   responseHeader?: ReactNode;
-  decisionSetupOnly?: boolean;
-  onDecisionSaved?: () => Promise<void>;
 };
 const failText = (error: unknown) => error instanceof Error ? error.message : '暂时无法读取，请重试。';
 const pathName = (path: string) => path.split(/[\\/]/).filter(Boolean).at(-1) || path;
@@ -78,13 +76,13 @@ function GroupSettingsLoader(props: Props) {
   </div>;
 }
 
-export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, onOpenProviders, onOpenSecrets, responseHeader, decisionSetupOnly, onDecisionSaved}: Omit<Props, 'scope'> & {view: ProjectSettingsView; refresh: () => Promise<void>}) {
+export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, onOpenProviders, onOpenSecrets, responseHeader}: Omit<Props, 'scope'> & {view: ProjectSettingsView; refresh: () => Promise<void>}) {
   const client = useClient();
   const discovery = useProviderDiscovery(tools);
   const providers = discovery.providers;
   const outerReadonly = useContext(AnnouncedReadonlyMessages);
   const sections = view.sections;
-  const decisionConfiguration = useDecisionConfiguration(Boolean(decisionSetupOnly || tab === 'response' && view.identity.kind === 'smart'));
+  const decisionConfiguration = useDecisionConfiguration(tab === 'response' && view.identity.kind === 'smart');
   const modelCatalog = useRef<ModelCatalog | undefined>(undefined);
   const rememberCatalog = useCallback((catalog: ModelCatalog | undefined) => {modelCatalog.current = catalog;}, []);
   async function save(section: keyof GroupSections, patch: object, revision: string): Promise<SettingsReply> {
@@ -92,10 +90,6 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
     if (reply.kind === 'saved' && reply.result.kind === 'saved') await refresh();
     return reply;
   }
-  if (decisionSetupOnly) return sections.judge ? <Editor title="决策模型" section={sections.judge} allowUnchanged submitLabel="保存并使用智能模式" afterSave={onDecisionSaved}
-    save={(patch, revision) => save('judge',patch,revision)}
-    validate={value => providerDecisionProblem(value.selection, providers, view.decisionModels)}
-    render={(draft,set,disabled,_commit,resetKey) => <DecisionFields initial key={resetKey} botId={view.scope.botId} groupBackend={view.identity.backend} value={draft.selection} effective={sections.judge!.effective.selection} onChange={selection=>set({selection})} disabled={disabled} providers={providers} services={view.decisionModels} configuration={decisionConfiguration} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets}/>}/> : <MissingSection/>;
   const relevant: (Section<unknown> | undefined)[] = tab === 'capabilities' ? [sections.skills, sections.presentation]
     : tab === 'role' ? [sections.role] : tab === 'model' ? [sections.modelAccess, sections.permission]
     : tab === 'permission' ? [sections.permission]
