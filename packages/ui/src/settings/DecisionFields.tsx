@@ -1,5 +1,5 @@
 import {useState} from 'react';
-import {ChevronRight} from 'lucide-react';
+import {Check, ChevronRight} from 'lucide-react';
 import {backendLabel, isKnownJudgeSelection, type AgentId, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ToolState} from '@vonvon/protocol';
 import {Button, InlineNotice, SelectControl} from '../reference/components/ui';
 import {SettingChoices} from './SettingChoices';
@@ -44,6 +44,7 @@ export function DecisionFields({groupBackend, value, effective, onChange, disabl
   if (saved && !choices.some(item => item.value === saved)) choices.push({value: saved as DecisionProvider, label: backendLabel(saved), disabled: true});
   const legacy = isKnownJudgeSelection(value) && (value.kind === 'llm' || value.kind === 'decision' || value.kind === 'default' && Boolean(inherited));
   const providerName = viewed === 'typesafe' ? 'Jev' : viewed ? backendLabel(viewed) : undefined;
+  const keyState = !service || service.keyUnreadable ? 'unknown' : service.keySet ? 'added' : 'missing';
   return <div className="gd-model-fields gd-decision-fields">
     <p className="gd-decision-purpose">判断群消息要不要回复、回在哪里，以及是否创建新话题。实际回复和执行任务使用本群的执行 Provider。</p>
     {legacy && <div className="gd-note" role="status">当前群保留旧决策模型设置。改用「设置 → 决策模型」中此 Provider 的模型和推理强度：
@@ -64,12 +65,18 @@ export function DecisionFields({groupBackend, value, effective, onChange, disabl
     </InlineNotice>}
     {onOpenSecrets && <div className="gd-decision-config">
       <div className="gd-decision-config-copy">
-        <p>{viewed === 'typesafe' ? '模型与 API 密钥' : '模型与推理强度'}</p>
+        <p className="gd-decision-config-title"><span>{viewed === 'typesafe' ? '模型与 API 密钥' : '模型与推理强度'}</span>
+          {viewed === 'typesafe' && <span className="gd-decision-key-state" data-state={keyState} role="status">
+            {keyState === 'added' && <Check size={13} aria-hidden="true"/>}
+            {keyState === 'added' ? '密钥已添加' : keyState === 'missing' ? '尚未添加密钥' : '密钥状态未知'}
+          </span>}
+        </p>
         <p>在设置中统一管理，使用同一 Provider 的群共用。</p>
       </div>
       <Button type="button" variant="ghost" size="sm" className="gd-decision-config-link" disabled={disabled}
+        aria-label={providerName ? `管理 ${providerName} 配置` : undefined}
         onClick={() => onOpenSecrets(viewed || undefined)}>
-        {providerName ? `配置 ${providerName}` : '管理决策模型'}<ChevronRight size={14} aria-hidden="true"/>
+        {providerName ? '管理配置' : '管理决策模型'}<ChevronRight size={14} aria-hidden="true"/>
       </Button>
     </div>}
   </div>;

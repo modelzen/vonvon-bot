@@ -104,13 +104,14 @@ it('keeps an unavailable saved provider visible and does not silently switch it'
   expect(changed).not.toHaveBeenCalled();
 });
 it.each([
-  [codex.id, '配置 Codex'],
-  [claude.id, '配置 Claude'],
-  ['typesafe', '配置 Jev'],
+  [codex.id, '管理 Codex 配置'],
+  [claude.id, '管理 Claude 配置'],
+  ['typesafe', '管理 Jev 配置'],
 ])('opens the selected shared configuration even when %s is unavailable', (provider, label) => {
   props.value = {kind: 'provider', provider} as JudgeSelectionView;
   const link = render().find(node => node.type === Button && node.props.className === 'gd-decision-config-link')!;
-  expect(renderToStaticMarkup(<>{link.props.children}</>)).toContain(label);
+  expect(link.props['aria-label']).toBe(label);
+  expect(renderToStaticMarkup(<>{link.props.children}</>)).toContain('管理配置');
   expect(link.props.disabled).toBe(false);
   link.props.onClick();
   expect(props.onOpenSecrets).toHaveBeenCalledExactlyOnceWith(provider);
@@ -124,4 +125,21 @@ it('offers general configuration before a Provider is selected and respects disa
   props.disabled = true;
   link = render().find(node => node.props.className === 'gd-decision-config-link')!;
   expect(link.props.disabled).toBe(true);
+});
+it.each([
+  [true, false, '密钥已添加'],
+  [false, false, '尚未添加密钥'],
+  [true, true, '密钥状态未知'],
+])('shows the actual Jev key state (set=%s, unreadable=%s)', (keySet, keyUnreadable, label) => {
+  props.value = {kind: 'provider', provider: 'typesafe'};
+  props.services = services.map(service => ({...service, keySet, keyUnreadable}));
+  const status = render().find(node => node.props.className === 'gd-decision-key-state')!;
+  expect(renderToStaticMarkup(<>{status.props.children}</>)).toContain(label);
+  expect(changed).not.toHaveBeenCalled();
+});
+it('does not treat an unavailable key state as a missing key', () => {
+  props.value = {kind: 'provider', provider: 'typesafe'};
+  props.services = undefined;
+  const status = render().find(node => node.props.className === 'gd-decision-key-state')!;
+  expect(renderToStaticMarkup(<>{status.props.children}</>)).toBe('密钥状态未知');
 });
