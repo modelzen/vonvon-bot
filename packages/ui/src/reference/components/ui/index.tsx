@@ -453,6 +453,7 @@ export function SelectControl<T extends string>(props: {
   "aria-required"?: boolean | "false" | "true";
   className?: string;
   disabled?: boolean;
+  presentation?: "adaptive" | "dropdown";
   id?: string;
   label: string;
   onChange: (value: T) => void;
@@ -464,7 +465,7 @@ export function SelectControl<T extends string>(props: {
   const shortOptions = props.options.length > 0 && props.options.length <= 5
     && props.options.every(option => typeof option.label === "string" && labelWidth(option.label) <= 16 && !option.description)
     && props.options.reduce((total, option) => total + labelWidth(option.label as string), 0) <= 34;
-  if (shortOptions) return (
+  if (shortOptions && props.presentation !== "dropdown") return (
     <div
       aria-describedby={props["aria-describedby"]}
       aria-disabled={props.disabled || undefined}

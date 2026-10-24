@@ -58,8 +58,8 @@ it('keeps unselected models out of the normal page and preserves checked models 
   const render = () => choices({value, catalog, disabled: false, onChange: changed});
   let all = render();
   expect(checkbox(all, '允许本群使用 Alpha')).toBeUndefined();
-  expect(checkbox(all, '允许本群使用 low Effort')).toBeDefined();
-  expect(button(all, '选择模型')).toBeDefined(); expect(button(all, '选择强度')).toBeUndefined();
+  expect(checkbox(all, '允许本群使用 low Effort')).toBeUndefined();
+  expect(button(all, '选择模型')).toBeDefined(); expect(button(all, '选择强度')).toBeDefined();
   button(all, '选择模型').props.onClick(); all = render();
   search(all).props.onChange({target: {value: 'Beta'}}); all = render();
   expect(checkbox(all, '允许本群使用 Alpha')).toBeUndefined();
@@ -72,7 +72,7 @@ it('keeps unselected models out of the normal page and preserves checked models 
   expect(changed).toHaveBeenCalledOnce();
   expect(dialog(all)).toBeUndefined();
   expect(checkbox(all, '允许本群使用 Alpha')).toBeUndefined();
-  expect(checkbox(all, '允许本群使用 low Effort')).toBeDefined();
+  expect(checkbox(all, '允许本群使用 low Effort')).toBeUndefined();
 });
 
 it.each(['cancel', 'dismiss'] as const)('discards a local model selection on %s and reopens from the saved parent draft', action => {
@@ -103,7 +103,9 @@ it('edits model and Effort independently and persists only through the existing 
   checkbox(ui.choices, '允许本群使用 Beta').props.onChange({target: {checked: true}}); ui = render();
   button(ui.choices, '完成').props.onClick(); ui = render();
   expect(save).not.toHaveBeenCalled(); expect(button(ui.editor, '保存')).toBeDefined();
+  button(ui.choices, '选择强度').props.onClick(); ui = render();
   checkbox(ui.choices, '允许本群使用 low Effort').props.onChange({target: {checked: false}}); ui = render();
+  button(ui.choices, '完成').props.onClick(); ui = render();
   expect(save).not.toHaveBeenCalled();
   button(ui.editor, '保存').props.onClick(); await flush(); ui = render();
   expect(save.mock.calls).toEqual([[{models: ['alpha', 'beta'], efforts: ['high']}, 'r1']]);
@@ -142,6 +144,7 @@ it('retains saved values in unavailable catalogs and permits read-only inspectio
   expect(saved.props.checked).toBe(true); expect(saved.props.disabled).toBe(true);
   expect(button(all, '完成')?.props.disabled ?? true).toBe(true);
   dialog(all).props.onClose(); all = render();
+  button(all, '查看强度').props.onClick(); all = render();
   expect(checkbox(all, '允许本群使用 high Effort').props.checked).toBe(true);
   expect(checkbox(all, '允许本群使用 high Effort').props.disabled).toBe(true);
   expect(changed).not.toHaveBeenCalled(); expect(value.models).toEqual(['retired']);
@@ -159,9 +162,10 @@ it.each(['loading', 'fallback', 'other-provider'] as const)('does not create uns
   button(all, '完成').props.onClick();
   expect(changed).not.toHaveBeenCalled();
   dialog(all).props.onClose(); all = render();
+  button(all, '查看强度').props.onClick(); all = render();
   expect(checkbox(all, '允许本群使用 low Effort').props.disabled).toBe(true);
   expect(checkbox(all, '允许本群使用 high Effort').props.checked).toBe(true);
-  expect(button(all, '完成')).toBeUndefined();
+  expect(button(all, '完成').props.disabled).toBe(true);
   expect(value).toEqual(initial());
 });
 
@@ -249,7 +253,9 @@ it('loads the changed Provider catalog, stages its model and Effort choices, and
   button(ui.choices, '完成').props.onClick(); ui = render();
   button(ui.editor, '保存').props.onClick(); await flush(); ui = render();
   expect(save).not.toHaveBeenCalled();
+  button(ui.choices, '选择强度').props.onClick(); ui = render();
   checkbox(ui.choices, '允许本群使用 high Effort').props.onChange({target: {checked: true}}); ui = render();
+  button(ui.choices, '完成').props.onClick(); ui = render();
   expect(save).not.toHaveBeenCalled();
   button(ui.editor, '保存').props.onClick(); await flush(); ui = render();
   expect(save.mock.calls).toEqual([[{backend: otherCatalog.backend, models: ['claude-model'], efforts: ['high']}, 'r1']]);
@@ -269,9 +275,41 @@ it('retries a failed catalog read without changing the parent selection', async 
 
 it('preserves saved Effort selections while the catalog is still loading', () => {
   const changed = vi.fn();
-  const all = choices({value: initial(), disabled: false, onChange: changed});
+  let all = choices({value: initial(), disabled: false, onChange: changed});
+  button(all, '查看强度').props.onClick(); all = choices({value: initial(), disabled: false, onChange: changed});
   const low = checkbox(all, '允许本群使用 low Effort');
   expect(low.props.checked).toBe(true); expect(low.props.disabled).toBe(true);
   low.props.onChange({target: {checked: false}});
   expect(changed).not.toHaveBeenCalled();
+});
+
+it('cancels a pending Effort selection just like the model picker', () => {
+  const value = initial(); const changed = vi.fn();
+  const render = () => choices({value, catalog, disabled: false, onChange: changed});
+  let all = render(); button(all, '选择强度').props.onClick(); all = render();
+  checkbox(all, '允许本群使用 high Effort').props.onChange({target: {checked: false}}); all = render();
+  expect(changed).not.toHaveBeenCalled();
+  button(all, '取消').props.onClick(); all = render();
+  button(all, '选择强度').props.onClick(); all = render();
+  expect(checkbox(all, '允许本群使用 high Effort').props.checked).toBe(true);
+  expect(changed).not.toHaveBeenCalled();
+});
+
+it('takes an extensible Provider list as data and clears dependent choices when switching', () => {
+  const providers = Array.from({length: 12}, (_, index) => ({id: `provider-${index}`, displayName: `Provider ${index}`}));
+  const value = {...initial(), backend: 'provider-0'}; const changed = vi.fn();
+  const all = at('many-providers', () => ModelAccessFields({botId: agentIdSchema.parse('cli_many'), providers, value, onChange: changed, disabled: false}));
+  const selector = all.find(node => node.type === SelectControl)!;
+  expect(selector.props.presentation).toBe('dropdown');
+  expect(selector.props.options).toHaveLength(12);
+  selector.props.onChange('provider-11');
+  expect(changed).toHaveBeenCalledExactlyOnceWith({backend: 'provider-11', models: [], efforts: []});
+});
+
+it('does not offer a meaningless picker for a Provider without Effort support', () => {
+  const value = {...initial(), efforts: []};
+  const noEffortCatalog = {...catalog, models: catalog.models.map(model => ({...model, supportedEfforts: []}))};
+  const all = choices({value, catalog: noEffortCatalog, disabled: false, onChange: vi.fn()});
+  expect(button(all, '选择强度').props.disabled).toBe(true);
+  expect(text(button(all, '选择强度').props.children)).toContain('此 Provider 未提供思考强度');
 });

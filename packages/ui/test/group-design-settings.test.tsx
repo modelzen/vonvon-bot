@@ -81,7 +81,7 @@ it('orders four group tabs, keeps compact model and permission settings together
   for (const section of ['沟通方式', '回复规则', '聊天方式']) expect(groupTabForSection(section)).toBe('response');
   for (const section of ['记忆', '项目记忆']) expect(groupTabForSection(section)).toBe('memory');
   const html = render('model');
-  expect(html).toContain('执行模型'); expect(html).toContain('执行权限');
+  expect(html).toContain('可用模型'); expect(html).toContain('执行权限');
   expect(html).toContain('修改权限');
   expect(html).not.toContain('role="radiogroup" aria-label="权限"');
   expect(html).not.toContain('<h3>代码仓库</h3>');
@@ -104,11 +104,12 @@ it('keeps one primary among peer directories and no primary repository', () => {
   expect(repositories).not.toContain('设为主目录');
   expect(html).not.toContain('附加目录');
 });
-it('shows full selected model names and edits Effort directly without listing unselected models', () => {
+it('uses the same multiselect field for models and Effort without listing unselected choices', () => {
   const html = renderToStaticMarkup(<ModelAccessChoices value={{backend: catalog.backend, models: ['actual-a', 'actual-b'], efforts: ['low']}} catalog={catalog} disabled={false} onChange={() => {}}/>);
-  expect(html).toContain('思考强度'); expect(html).toContain('Effort');
-  expect(html).toContain('选择模型'); expect(html).not.toContain('选择强度');
-  expect(html).toContain('允许本群使用 low Effort'); expect(html).toContain('允许本群使用 high Effort');
+  expect(html).toContain('思考强度');
+  expect(html).toContain('选择模型'); expect(html).toContain('选择强度');
+  expect(html.match(/class="gd-multiselect-field"/g)).toHaveLength(2);
+  expect(html).not.toContain('type="checkbox"');
   expect(html).toContain('实际模型 A'); expect(html).toContain('实际模型 B');
   expect(html).not.toContain('无 Effort 模型');
   expect(html).toContain('请选择 实际模型 B 支持的 Effort');

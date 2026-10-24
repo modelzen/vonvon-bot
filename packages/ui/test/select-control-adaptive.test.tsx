@@ -64,3 +64,9 @@ it('keeps disabled and same-value safeguards for the longer selection panel', ()
   panel.props.onValueChange('claude');
   expect(changed).toHaveBeenCalledExactlyOnceWith('claude');
 });
+
+it('can keep an extensible Provider list in a dropdown regardless of option count', () => {
+  expect(render({presentation: 'dropdown'}).props.items).toBe(options);
+  const extended = Array.from({length: 12}, (_, index) => ({value: `provider-${index}`, label: `Provider ${index}`}));
+  expect(render({presentation: 'dropdown', options: extended}).props.items).toBe(extended);
+});
