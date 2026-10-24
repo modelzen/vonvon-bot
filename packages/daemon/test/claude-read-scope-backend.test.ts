@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -14,9 +15,9 @@ vi.mock('node:fs/promises', async importOriginal => {
 
 const dirs: string[] = [];
 const nativePlatform = process.platform;
-afterEach(async () => { vi.restoreAllMocks(); Object.defineProperty(process, 'platform', { value: nativePlatform }); await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
+afterEach(async () => { vi.restoreAllMocks(); vi.mocked(fs.readdir).mockReset(); Object.defineProperty(process, 'platform', { value: nativePlatform }); await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
 async function layout() {
-  const root = await mkdtemp(join(tmpdir(), 'vonvon-read-scope-')); dirs.push(root);
+  const root = realpathSync(await mkdtemp(join(tmpdir(), 'vonvon-read-scope-'))); dirs.push(root);
   const cwd = join(root, 'projects/A/groups/g1');
   const g2 = join(root, 'projects/A/groups/g2');
   const bots = join(root, 'bots'); const library = join(root, 'library');
