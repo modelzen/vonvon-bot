@@ -12,7 +12,6 @@ type Props = {
   onStateChange: (state: GroupDirectoryState) => void;
   statusFor: (agent: Agent) => Status;
   onMembership: (id: MembershipId) => void;
-  onProjects?: () => void;
   newCounts?: Readonly<Record<string, number>>;
 };
 
@@ -23,7 +22,7 @@ type Props = {
 // Typography: 13px semibold groups, medium Bot names, 11px secondary metadata.
 // Normal connection is silent; only exceptions appear beside the Bot name, with no status column.
 // Spacing: 4px rhythm, 52px group rows, 44px Bot rows; secondary columns hide on narrow views.
-export function GroupDirectory({snapshot, state, onStateChange, statusFor, onMembership, onProjects, newCounts}: Props) {
+export function GroupDirectory({snapshot, state, onStateChange, statusFor, onMembership, newCounts}: Props) {
   const agents = new Map(snapshot.agents.map(agent => [agent.id, agent]));
   const directory = snapshot.groups.map(group => ({group, members: snapshot.memberships.filter(member => member.groupId === group.id)}));
   const query = state.query.trim().toLocaleLowerCase();
@@ -37,7 +36,6 @@ export function GroupDirectory({snapshot, state, onStateChange, statusFor, onMem
   return <section className="group-directory" aria-label="群组列表">
     <header className="group-directory-heading">
       <div><h1>群组</h1><span>{snapshot.groups.length} 个群聊</span></div>
-      {onProjects && <button type="button" className="project-directory-open" onClick={onProjects}>项目管理<ChevronRight size={13} aria-hidden="true"/></button>}
       {directory.length > 0 && <label className="group-directory-search"><Search size={14} aria-hidden="true"/>
         <input aria-label="搜索群聊或 Bot" placeholder="搜索群聊或 Bot" value={state.query} onChange={event => search(event.target.value)}/>
         {state.query && <button type="button" aria-label="清除群聊搜索" onClick={() => search('')}><X size={13}/></button>}
