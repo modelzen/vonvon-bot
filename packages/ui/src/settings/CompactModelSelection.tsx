@@ -27,7 +27,8 @@ export function CompactModelSelection({value, onChange, catalog, disabled}: {
   const visibleModels = models.filter(model => `${model.displayName} ${model.id}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const unlistedModels = value.models.filter(id => !models.some(model => model.id === id));
   const visibleUnlisted = unlistedModels.filter(id => id.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
-  const editingDisabled = disabled || catalog?.state !== 'ready';
+  const catalogReady = catalog?.state === 'ready' && catalog.backend === value.backend;
+  const editingDisabled = disabled || !catalogReady;
   const selectionChanged = Boolean(picker) && baseline !== JSON.stringify(value);
   function open(next: Picker) {
     setPending([...value[next]]);

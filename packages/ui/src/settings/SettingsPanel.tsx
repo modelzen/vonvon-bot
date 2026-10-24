@@ -446,10 +446,12 @@ export function Catalog({
   const [catalog, setCatalog] = useState<ModelCatalog>();
   const [error, setError] = useState<string>();
   const [attempt, setAttempt] = useState(0);
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     let active = true;
     setCatalog(undefined);
     setError(undefined);
+    setLoading(true);
     void client
       .settings({ type: "models", query: { botId, backend, purpose } })
       .then((reply) => {
@@ -465,7 +467,7 @@ export function Catalog({
           setError(
             failure instanceof Error ? failure.message : "模型目录暂不可用。",
           );
-      });
+      }).finally(() => { if (active) setLoading(false); });
     return () => {
       active = false;
     };
@@ -476,11 +478,12 @@ export function Catalog({
       {(error || unavailable) && (
         <div className="gd-model-catalog-status" role="status">
           <span>{error || catalog?.error || '暂时无法读取模型，已保存的选择仍保留。'}</span>
-          <Button size="sm" variant="ghost" onClick={() => setAttempt(value => value + 1)}>重新读取</Button>
+          <Button size="sm" variant="ghost" disabled={loading} onClick={() => setAttempt(value => value + 1)}>重新读取模型</Button>
         </div>
       )}
       {!catalog && !error && <p className="gd-model-compact-note" role="status">正在读取模型…</p>}
       {children(catalog)}
+
     </>
   );
 }

@@ -11,7 +11,7 @@ import {Catalog, Editor, ProjectPanel, type Section} from './SettingsPanel';
 import {PersonaEditor} from './PersonaEditor';
 import {SmartRulesEditor, SMART_RULES_MAX_LENGTH} from './SmartRulesEditor';
 import {SettingChoices} from './SettingChoices';
-import {providerBackends, providerUsable} from '../setup/provider-state';
+import {useProviderDiscovery} from './useProviderDiscovery';
 import {DecisionFields, providerDecisionProblem} from './DecisionFields';
 export {DecisionFields} from './DecisionFields';
 import {AnnouncedReadonlyMessages, hasReadonlyMessage, type ReadonlyMessage} from './readonly-messages';
@@ -47,21 +47,7 @@ function MissingSection() {
   return <InlineNotice title="这项设置暂不可用" tone="warning">请更新并重新连接本机服务。</InlineNotice>;
 }
 export function useProviders(tools?: readonly ToolState[]) {
-  const client = useClient();
-  const readiness = tools?.map(tool => `${tool.tool}:${tool.installation}:${tool.compatibility?.status}:${tool.authentication}`).join('|');
-  const key = readiness ?? 'snapshot';
-  const [result, setResult] = useState<{key: string; providers: Provider[]}>({key, providers: []});
-  useEffect(() => {
-    let active = true;
-    setResult({key, providers: []});
-    void Promise.all([client.environment({type: 'backendCatalog'}), tools ? Promise.resolve(tools) : client.snapshot().then(snapshot => snapshot.tools)]).then(([reply, states]) => {
-      if (active) setResult({key, providers: reply.kind === 'backends' ? reply.entries.filter(entry =>
-        (Object.entries(providerBackends) as Array<['codex' | 'claude', string]>).some(([tool, backend]) => backend === entry.id && providerUsable(states.find(item => item.tool === tool)))
-      ).map(entry => ({id: entry.id, displayName: entry.displayName})) : []});
-    }).catch(() => {if (active) setResult({key, providers: []});});
-    return () => {active = false;};
-  }, [client, readiness]);
-  return result.key === key ? result.providers : [];
+  return useProviderDiscovery(tools).providers;
 }
 function providerChoices(providers: Provider[], current: string) {
   return [...providers.map(provider => ({value: provider.id, label: provider.displayName, disabled: false})), ...(!providers.some(provider => provider.id === current) && current ? [{value: current, label: `${backendLabel(current)}（当前不可用）`, disabled: true}] : [])];
@@ -93,7 +79,8 @@ function GroupSettingsLoader(props: Props) {
 
 export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, onOpenProviders, onOpenSecrets, responseHeader, decisionSetupOnly, onDecisionSaved}: Omit<Props, 'scope'> & {view: ProjectSettingsView; refresh: () => Promise<void>}) {
   const client = useClient();
-  const providers = useProviders(tools);
+  const discovery = useProviderDiscovery(tools);
+  const providers = discovery.providers;
   const outerReadonly = useContext(AnnouncedReadonlyMessages);
   const sections = view.sections;
   const modelCatalog = useRef<ModelCatalog | undefined>(undefined);
@@ -116,6 +103,10 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
   return <AnnouncedReadonlyMessages.Provider value={[...outerReadonly, ...notices]}>
     {notices.map(notice => <p className="settings-readonly-notice" role="status" key={`${notice.reason}:${notice.message}`}>{notice.message}</p>)}
     <div className="gd-page">
+      {(tab === 'model' || tab === 'response') && (discovery.checking || discovery.message) && <div className="gd-model-compact-note" role="status">
+        {discovery.checking ? '正在检查 Provider 登录状态…' : discovery.message}
+        {!discovery.checking && <Button size="sm" variant="ghost" onClick={discovery.retry}>重新检查 Provider</Button>}
+      </div>}
       {tab === 'capabilities' && <>
         {sections.skills && view.skills ? <Editor title="技能" section={sections.skills} save={(patch, revision) => save('skills', patch, revision)}
           render={(draft, _set, disabled, commit) => <SkillsList skills={view.skills!} disabledPaths={draft.disabledPaths} disabled={disabled}

@@ -361,7 +361,14 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           error: '后端当前不可用，请检查安装或登录状态'
         };
       const listed = await backend.listModels();
-      if (listed.length) await rememberModelCatalog(query.backend, listed, base.observedAt).catch(() => undefined);
+      // Native backends also return a static list on discovery failure. Only their
+      // successful discovery populates peekModels; fallback must not become a
+      // confirmed catalog or overwrite a previously confirmed disk snapshot.
+      const native = backend.peekModels?.();
+      if (native?.length) {
+        await rememberModelCatalog(query.backend, native, base.observedAt).catch(() => undefined);
+        return { ...base, models: native, state: 'ready' };
+      }
       return { ...base, models: listed, state: 'fallback' };
     }
     catch {
@@ -539,8 +546,10 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
   async function validateModelAccess(value: T.ProjectSections['modelAccess'], previous: T.ProjectSections['modelAccess']): Promise<ModelInfo[]> {
     if (!backendIds().includes(value.backend)) throw new SettingsInputError('请选择支持的 Provider');
     if (!value.models.length || new Set(value.models).size !== value.models.length || new Set(value.efforts).size !== value.efforts.length) throw new SettingsInputError('至少选择一个模型，模型和 Effort 不能重复');
-    const peeked = peekModels(value.backend);
-    const catalog = peeked?.length ? peeked : (await models({ botId, backend: value.backend, purpose: 'project' })).models;
+    const discovered = await models({ botId, backend: value.backend, purpose: 'project' });
+    // Fallback metadata cannot authorize new models, efforts, or a provider
+    // switch. An empty trusted catalog retains the existing subset-only path.
+    const catalog = discovered.state === 'ready' ? discovered.models : [];
     for (const id of value.models) {
       if (!parseModelId(id).ok) throw new SettingsInputError('模型 ID 无效');
       const model = catalog.find(m => m.id === id && !m.hidden);
