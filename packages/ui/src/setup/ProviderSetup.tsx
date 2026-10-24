@@ -1,8 +1,8 @@
 import {useEffect, useState} from 'react';
-import {ArrowRight, Check, ChevronRight, LoaderCircle} from 'lucide-react';
+import {ArrowRight, Check, ChevronRight, LoaderCircle, RefreshCw, Package, KeyRound} from 'lucide-react';
 import type {CollaborationReply, Command, CommandResult, DesktopSnapshot, ToolState} from '@vonvon/protocol';
 import {ConfirmDialog} from '../reference/components/ui/Dialog';
-import {Button} from '../reference/components/ui';
+import {Button, IconButton} from '../reference/components/ui';
 import {useClient, useShellCapabilities} from '../client-context';
 import {openExternalUrl} from '../url-actions';
 import {settingAnchor} from '../search';
@@ -36,7 +36,7 @@ export function ProviderManager(props: Props & {reveal?: 'codex' | 'claude'}) {
   const [selected, setSelected] = useState<SetupProvider | null>();
   useEffect(() => {if (props.reveal) setSelected(props.reveal);}, [props.reveal]);
   const provider = selected === undefined ? props.reveal : selected;
-  if (provider) return <section className="provider-setup" aria-label="Provider" id={settingAnchor(providerNames[provider])}>
+  if (provider) return <section className={provider === 'codex' ? 'provider-setup provider-detail--compact' : 'provider-setup'} aria-label="Provider" id={settingAnchor(providerNames[provider])}>
     <header className="provider-detail-heading"><img src={providerIcons[provider]} alt=""/><div><nav className="provider-breadcrumb" aria-label="Provider 路径"><button type="button" onClick={() => setSelected(null)}>Provider</button><ChevronRight size={14} aria-hidden="true"/><h1 aria-current="page">{providerNames[provider]}</h1></nav><p>{provider === 'codex' ? 'OpenAI' : 'Anthropic'}</p></div></header>
     <ProviderPreparation key={provider} {...props} provider={provider} management/>
   </section>;
@@ -77,6 +77,7 @@ function ProviderModelPreview({provider, tool, ready}: {provider: SetupProvider;
 }
 
 export function ProviderPreparation({provider, snapshot, ready, busy, run, onContinue, management = false}: Props & {provider: SetupProvider; management?: boolean}) {
+  const compact = management && provider === 'codex';
   const state = useProviderSetup(provider, snapshot, ready, run);
   const shell = useShellCapabilities();
   const [linkError, setLinkError] = useState('');
@@ -114,21 +115,21 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
   return <div className="provider-preparation">
     {provider === 'claude' && <p className="provider-check">{bundled ? '已内置 Claude 运行组件，可复用本机 Claude Code 登录。' : 'Vonvon 通过 Agent SDK 运行 Claude，可复用本机 Claude Code 登录。'}</p>}
     <div className="provider-steps">
-      {!bundled && <div className="provider-step"><span className={`provider-step__number${installed ? ' is-complete' : ''}`}>{installed ? <Check size={13}/> : '1'}</span>
-        <div className="provider-step__copy"><strong>安装 {componentName}</strong><span>{installLabel}</span></div>
+      {!bundled && <div className="provider-step"><span className={`provider-step__number${installed ? ' is-complete' : ''}`}>{compact ? <Package size={16}/> : installed ? <Check size={13}/> : '1'}</span>
+        <div className="provider-step__copy"><strong>{compact ? componentName : `安装 ${componentName}`}</strong><span>{installLabel}</span></div>
         {installing ? <Button size="sm" disabled={!ready} onClick={() => void state.cancelInstall()}>取消</Button>
           : !installed ? <Button size="sm" disabled={disabled} onClick={() => void state.installProvider(state.tool?.compatibility?.status === 'tooOld')}>{state.tool?.compatibility?.status === 'tooOld' ? (provider === 'claude' ? '更新 SDK' : '更新') : (provider === 'claude' ? '安装 SDK' : '安装')}</Button>
-          : <Check size={16} className="provider-ready-icon" aria-label="已安装"/>}
+          : compact ? null : <Check size={16} className="provider-ready-icon" aria-label="已安装"/>}
       </div>}
-      <div className="provider-step"><span className={`provider-step__number${auth && installed ? ' is-complete' : ''}`}>{auth && installed ? <Check size={13}/> : bundled ? '1' : '2'}</span>
-        <div className="provider-step__copy"><strong>{state.tool?.authentication === 'notRequired' ? '模型连接' : '连接账号'}</strong><span>{authLabel}</span></div>
-        {auth ? <Button size="sm" variant="ghost" disabled={disabled || connecting || state.check?.state === 'checking'} onClick={() => void state.verify()}>重新检测</Button>
+      <div className="provider-step"><span className={`provider-step__number${auth && installed ? ' is-complete' : ''}`}>{compact ? <KeyRound size={16}/> : auth && installed ? <Check size={13}/> : bundled ? '1' : '2'}</span>
+        <div className="provider-step__copy"><strong>{state.tool?.authentication === 'notRequired' ? '模型连接' : compact ? '账号连接' : '连接账号'}</strong><span>{authLabel}</span></div>
+        {auth ? (compact ? <IconButton label="重新检测连接" title="重新检测连接" variant="ghost" disabled={disabled || connecting || state.check?.state === 'checking'} onClick={() => void state.verify()}><RefreshCw size={15}/></IconButton> : <Button size="sm" variant="ghost" disabled={disabled || connecting || state.check?.state === 'checking'} onClick={() => void state.verify()}>重新检测</Button>)
           : <Button size="sm" disabled={disabled || !installed || connecting || installing || state.check?.state === 'checking'} onClick={() => void state.connect()}>连接</Button>}
       </div>
     </div>
     {!auth && installed && !connecting && <div className="provider-existing"><span>已有账号或 API 配置？</span><button type="button" disabled={disabled || state.check?.state === 'checking'} onClick={() => void state.verify()}>检测现有配置</button></div>}
     {state.check?.state === 'checking' && installed && auth && <p className="provider-check" role="status"><LoaderCircle size={14} className="provider-spinner"/>正在读取可用模型…</p>}
-    {state.canContinue && <p className="provider-check provider-check--ready" role="status"><Check size={14}/>{name} 已准备好<span>· {state.check?.models?.length ?? 0} 个模型</span></p>}
+    {state.canContinue && !compact && <p className="provider-check provider-check--ready" role="status"><Check size={14}/>{name} 已准备好<span>· {state.check?.models?.length ?? 0} 个模型</span></p>}
     {(state.issue || state.check?.message || linkError) && <div className="provider-problem" role="status"><p>{state.issue || state.check?.message || linkError}</p><Button size="sm" disabled={disabled || state.check?.state === 'checking'} onClick={() => {void state.read().catch(() => {}); void state.verify();}}>重新检测</Button></div>}
     {state.activeCodexJob && <div className="provider-authorization" role="status">
       {state.activeCodexJob.phase === 'authorizing' ? <><p>在 ChatGPT 授权页面输入此代码。</p><code>{state.activeCodexJob.userCode}</code><Button size="sm" disabled={disabled || !state.activeCodexJob.verificationUrl} onClick={() => {if (state.activeCodexJob?.phase === 'authorizing' && state.activeCodexJob.verificationUrl) void open(state.activeCodexJob.verificationUrl, 'authorization');}}>打开授权页面</Button></> : <p>{'message' in state.activeCodexJob ? state.activeCodexJob.message : '正在连接…'}</p>}
@@ -139,7 +140,7 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
     {onContinue && <footer className="provider-footer"><Button variant="primary" disabled={!state.canContinue || busy} icon={<ArrowRight size={15}/>} onClick={() => {if (state.canContinue) onContinue(provider);}}>继续</Button></footer>}
     {management && <>
       {state.check?.state === 'ready' && <details className="provider-models" open><summary><span>可用模型</span><span>{state.check.models?.length ?? 0}</span></summary><div className="provider-models__list">{state.check.models?.map(model => <div key={model.id}><strong title={model.id}>{model.displayName || model.id}</strong></div>)}</div></details>}
-      <div className="provider-meta"><h2>{bundled ? '运行组件' : provider === 'claude' ? 'Agent SDK 安装信息' : '安装信息'}</h2><dl><div><dt>安装来源</dt><dd>{bundled ? '应用内置 · 随应用更新' : provider === 'claude' ? !state.entry ? '正在检测…' : state.entry.depState === 'installed' ? 'Vonvon 管理' : '未安装' : !source ? '正在检测…' : source.installation === 'managed' ? 'Vonvon 管理' : source?.installation === 'external' ? '本机已有' : '未安装'}</dd></div>{bundled && <div><dt>版本</dt><dd>{state.entry?.installedVersion ?? state.tool?.version ?? '待检测'}</dd></div>}{source?.executable && provider === 'codex' && <div><dt>安装位置</dt><dd>{source.executable}</dd></div>}<div><dt>模型来源</dt><dd>{state.tool?.authentication === 'notRequired' ? '现有 API 配置' : 'Provider 原生配置'}</dd></div></dl>
+      <div className="provider-meta"><h2>{bundled ? '运行组件' : provider === 'claude' ? 'Agent SDK 安装信息' : '安装信息'}</h2><dl><div><dt>安装来源</dt><dd>{bundled ? '应用内置 · 随应用更新' : provider === 'claude' ? !state.entry ? '正在检测…' : state.entry.depState === 'installed' ? 'Vonvon 管理' : '未安装' : !source ? '正在检测…' : source.installation === 'managed' ? 'Vonvon 管理' : source?.installation === 'external' ? '本机已有' : '未安装'}</dd></div>{bundled && <div><dt>版本</dt><dd>{state.entry?.installedVersion ?? state.tool?.version ?? '待检测'}</dd></div>}<div><dt>模型来源</dt><dd>{state.tool?.authentication === 'notRequired' ? '现有 API 配置' : 'Provider 原生配置'}</dd></div></dl>{source?.executable && provider === 'codex' && <details className="provider-install-path"><summary>安装位置</summary><code>{source.executable}</code></details>}
         <div className="provider-management-actions">{!bundled && <Button size="sm" disabled={disabled || installing} onClick={() => void checkVersion()}>检查版本</Button>}
           {installed && auth && <Button size="sm" disabled={disabled || connecting || installing} onClick={() => void state.connect()}>重新连接账号</Button>}
           {installed && !bundled && <Button size="sm" disabled={disabled || installing || connecting} onClick={() => void state.installProvider(true)}>{provider === 'claude' ? '更新 SDK' : `更新 ${name}`}</Button>}
