@@ -2,10 +2,8 @@ import {useCallback, useEffect, useMemo, useState} from 'react';
 import type {VonvonClient} from '@vonvon/client/browser';
 import type {AgentId, DesktopSnapshot, GroupId, MemoryItem, SnapshotProject} from '@vonvon/protocol';
 import {useClient} from './client-context';
-import {Button} from './reference/components/ui';
 import type {MapNode} from './MindMap';
 import {branchViews, sourceLines, type MemoryList} from './memory-model';
-import './inherited-content.css';
 
 type Read<T> = {value: T; error?: never} | {value?: never; error: string};
 type Role = {identity: string; notes: string; changed: boolean};
@@ -55,6 +53,9 @@ type NodeActions = {
   isOpen: (id: string, initially: boolean) => boolean;
   toggle: (id: string) => void;
   selected?: string;
+  detail?: InheritedDetail;
+  source?: string[];
+  onBotProfile?: (id: AgentId) => void;
   retry?: () => void;
 };
 const preview = (text: string) => {const single = text.replace(/\s+/g, ' ').trim(); return [...single].length > 80 ? [...single].slice(0, 80).join('') + '…' : single;};
@@ -86,6 +87,13 @@ export function inheritedNodes(bot: InheritedBot, content: InheritedContent | un
   if (!content) return section(prefix, `来自 ${bot.name}`, [{id: `${prefix}:loading`, kind: 'leaf', label: '正在读取…'}], true, '只读');
   const leaf = (detail: Omit<InheritedDetail, 'bot'>, label: string, meta?: string): MapNode => ({
     id: detail.id, kind: 'leaf', label, meta, selected: actions.selected === detail.id, onClick: () => actions.inspect({...detail, bot}),
+    ...(actions.detail?.id === detail.id ? {children: [
+      {id: `${detail.id}:full`, kind: 'leaf', label: actions.detail.text},
+      ...(actions.detail.note ? [{id: `${detail.id}:note`, kind: 'leaf' as const, label: actions.detail.note, tone: 'muted' as const}] : []),
+      ...(actions.source ?? []).map((line, index) => ({id: `${detail.id}:source:${index}`, kind: 'leaf' as const, label: line, tone: 'muted' as const})),
+      {id: `${detail.id}:readonly`, kind: 'leaf', label: `来自 ${bot.name} · 只读`, tone: 'muted'},
+      ...(actions.onBotProfile ? [{id: `${detail.id}:bot`, kind: 'action' as const, label: '到 Bot 页修改 →', onClick: () => actions.onBotProfile!(bot.id)}] : []),
+    ]} : {}),
   });
   const role = content.role.value;
   const roleNodes = role ? ([['identity', '身份与职责'], ['notes', '其他说明']] as const).map(([key, title]) => {
@@ -103,14 +111,14 @@ export function inheritedNodes(bot: InheritedBot, content: InheritedContent | un
       const id = `${prefix}:branch:${branch.name}`;
       const all = actions.isOpen(`${id}:more`, false);
       return section(id, branch.name, [
-        ...branch.items.slice(0, all ? undefined : 8).map(item => leaf({id: `${prefix}:item:${item.id}`, title: item.branch, text: item.text, item}, item.text)),
+        ...branch.items.slice(0, all ? undefined : 8).map(item => leaf({id: `${prefix}:item:${item.id}`, title: item.branch, text: item.text, item}, preview(item.text))),
         ...(!all && branch.items.length > 8 ? [{id: `${id}:more`, kind: 'more' as const, label: `还有 ${branch.items.length - 8} 条`, onClick: () => actions.toggle(`${id}:more`)}] : []),
       ], true, String(branch.items.length));
     });
     if (!included.length) memoryNodes.push({id: `${prefix}:empty`, kind: 'leaf', label: '暂无可继承的 Bot 记忆', tone: 'muted'});
     if (excluded.length) memoryNodes.push(section(`${prefix}:excluded`, '暂未带入', excluded.map(item => {
       const note = exclusionNote(item, memory.verified);
-      return {...leaf({id: `${prefix}:excluded:${item.id}`, title: item.branch, text: item.text, item, note}, item.text, item.trust !== 'trusted' ? '待确认' : '文件待确认'), tone: 'pending' as const};
+      return {...leaf({id: `${prefix}:excluded:${item.id}`, title: item.branch, text: item.text, item, note}, preview(item.text), item.trust !== 'trusted' ? '待确认' : '文件待确认'), tone: 'pending' as const};
     }), false, String(excluded.length)));
     for (const [index, problem] of memory.problems.entries()) memoryNodes.push({id: `${prefix}:problem:${index}`, kind: 'leaf', label: problem, tone: 'muted'});
   }
@@ -147,22 +155,15 @@ export function useInheritedContent({project, snapshot, selectedAgentId, selecte
     // The IDs identify the requests; names are rendered from the current snapshot below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, key, snapshot.revision, retry]);
-  const nodes = bots.map(bot => inheritedNodes(bot, result.key === key ? result.values[bot.id] : undefined, {
-    inspect: detail => {const inspect = () => setSelected(detail); if (beforeInspect) beforeInspect(inspect); else inspect();}, selected: selected?.id, isOpen: (id, initially) => open[id] ?? initially,
-    toggle: id => setOpen(current => ({...current, [id]: !(current[id] ?? (id.endsWith(':excluded') || id.endsWith(':more') ? false : true))})),
-    retry: () => setRetry(value => value + 1),
-  }));
   const current = selected && bots.find(bot => bot.id === selected.bot.id);
   const detail = current && result.key === key ? currentInheritedDetail(selected, result.values[current.id]) : undefined;
   const lines = detail?.item ? sourceLines(detail.item, {bot: id => snapshot.agents.find(agent => agent.id === id)?.name ?? 'Bot', group: id => snapshot.groups.find(group => group.id === id)?.name ?? '一个群'}) : [];
-  const panel = detail && current ? <div className="inherited-detail">
-    <h3>{detail.title}</h3>
-    <p className="group-control-note">来自 {current.name} · 只读</p>
-    <p className="inherited-detail-text">{detail.text}</p>
-    {detail.note && <p className="group-control-note">{detail.note}</p>}
-    {lines.length > 0 && <ul className="memory-source">{lines.map(line => <li key={line}>{line}</li>)}</ul>}
-    <p className="group-control-note">这份内容由 Bot 统一设置，在项目里只能查看。</p>
-    {onBotProfile && <Button size="sm" onClick={() => onBotProfile(current.id)}>到 Bot 页修改</Button>}
-  </div> : undefined;
-  return {nodes, panel, close, selectedId: detail?.id};
+  const nodes = bots.map(bot => inheritedNodes(bot, result.key === key ? result.values[bot.id] : undefined, {
+    inspect: next => {const inspect = () => setSelected(next); if (beforeInspect) beforeInspect(inspect); else inspect();}, selected: detail?.id, detail: bot.id === current?.id ? detail : undefined,
+    source: bot.id === current?.id ? lines : undefined, onBotProfile,
+    isOpen: (id, initially) => open[id] ?? initially,
+    toggle: id => setOpen(value => ({...value, [id]: !(value[id] ?? (id.endsWith(':excluded') || id.endsWith(':more') ? false : true))})),
+    retry: () => setRetry(value => value + 1),
+  }));
+  return {nodes, close, selectedId: detail?.id};
 }

@@ -56,7 +56,8 @@ it('the project page map has 群和 Bot as a branch with the bindings and the �
   expect(html).toContain('群和 Bot');
   expect(html).toContain('支付组群 · 小支');
   expect(html).toContain('+ 把一个群加进来…');
-  expect(html).toContain('不再用小支处理这个群…');
+  expect(html).not.toContain('mm-menu');
+  expect(html).not.toContain('memory-panel');
   expect(html).not.toContain('共用这个项目的群里，Bot 都会读到这些记忆');
 });
 
@@ -77,4 +78,12 @@ it('marks protected nodes by background state while editable deletable leaves re
   const html = renderToStaticMarkup(<MindMap label="固定" root={{id: 'fixed', kind: 'root', label: '固定', children: [{id: 'mutable', kind: 'leaf', label: '可删除', onDelete: vi.fn()}]}}/>);
   expect(html.match(/data-fixed="true"/g)).toHaveLength(1);
   expect(html).not.toContain('锁');
+});
+
+
+it('keeps operation menus in the diagram when inline menu mode is enabled', () => {
+  const html = renderToStaticMarkup(<MindMap root={tree} label="导图" inlineMenus/>);
+  expect(html).not.toContain('<details');
+  expect(html).not.toContain('role="menu"');
+  expect(html).toContain('发版改到周四');
 });

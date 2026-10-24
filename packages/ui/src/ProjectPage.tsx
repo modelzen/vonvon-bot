@@ -4,7 +4,7 @@ import {backendLabel, type Agent, type AgentId, type DesktopSnapshot, type Group
 import {useClient} from './client-context';
 import {Button, InlineNotice} from './reference/components/ui';
 import {ConfirmDialog, Dialog} from './reference/components/ui/Dialog';
-import {GroupDesignSettings, WorkspaceFields} from './settings/GroupDesignSettings';
+import {WorkspaceFields} from './settings/GroupDesignSettings';
 import {useDraft, useDraftGuard} from './settings/DraftGuard';
 import {bindingRows, otherProjectNotices, projectDeletable, workspaceRisks} from './project-model';
 import {settingAnchor} from './search';
@@ -12,6 +12,7 @@ import {MemoryMap} from './MemoryMap';
 import type {MapNode} from './MindMap';
 import type {ProjectPane} from './collaboration-navigation';
 import {useInheritedContent} from './inherited-content';
+import {useRoleMap} from './role-map';
 import './group-workspace.css';
 
 const failText = (error: unknown, fallback = '操作未完成，请重试。') => error instanceof Error ? error.message : fallback;
@@ -83,13 +84,15 @@ export function ProjectPage({project, snapshot, pane, onPane, onMembership, onCh
 }
 
 export function ProjectMemoryMap({project, snapshot, library, onMembership, onAddGroup, groupsInitiallyOpen = true, selectedAgentId, selectedGroupId, onBotProfile, initialRoleMembershipId}: {groupsInitiallyOpen?: boolean; project: SnapshotProject; snapshot: DesktopSnapshot; library?: LibraryProject; onMembership: (id: MembershipId) => void; onAddGroup?: (agentId: AgentId, projectId: ProjectId) => void; selectedAgentId?: AgentId; selectedGroupId?: GroupId; onBotProfile?: (id: AgentId) => void; initialRoleMembershipId?: MembershipId}) {
-  const guard = useDraftGuard();
   const [roleId, setRoleId] = useState<MembershipId | undefined>(initialRoleMembershipId);
   useEffect(() => {if (initialRoleMembershipId) setRoleId(initialRoleMembershipId);}, [initialRoleMembershipId]);
-  const inherited = useInheritedContent({project, snapshot, selectedAgentId, selectedGroupId, onBotProfile,
-    beforeInspect: inspect => guard.navigate(() => {setRoleId(undefined); inspect();})});
   const rows = bindingRows(snapshot, project, library);
   const notices = otherProjectNotices(snapshot, project);
+  const roleRows = rows.filter(row => (!selectedAgentId || row.agentId === selectedAgentId) && (!selectedGroupId || row.groupId === selectedGroupId));
+  const roleRow = roleRows.find(row => row.member && row.member.id === roleId && row.member.projectId === project.id);
+  const role = useRoleMap(roleRow?.member ? {kind: 'project', botId: roleRow.agentId, projectName: roleRow.member.name} : undefined);
+  const inherited = useInheritedContent({project, snapshot, selectedAgentId, selectedGroupId, onBotProfile,
+    beforeInspect: inspect => {setRoleId(undefined); inspect();}});
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const targets = useMemo(() => ({
     bots: [...new Set(project.bindings.map(binding => binding.agentId))].map(id => ({id, name: snapshot.agents.find(agent => agent.id === id)?.name ?? id})),
@@ -102,16 +105,20 @@ export function ProjectMemoryMap({project, snapshot, library, onMembership, onAd
     tone: row.state === 'ok' ? undefined : 'muted',
     ...(row.member ? {onClick: () => onMembership(row.member!.id), menu: [{id: 'unbind', label: `不再用${row.bot}处理这个群…`, onSelect: () => onMembership(row.member!.id)}]} : {}),
   }));
-  const roleRows = rows.filter(row => (!selectedAgentId || row.agentId === selectedAgentId) && (!selectedGroupId || row.groupId === selectedGroupId));
-  const roleRow = roleRows.find(row => row.member && row.member.id === roleId && row.member.projectId === project.id);
   const roles: MapNode = {id: 'group-roles', kind: 'section', label: '本群角色', meta: String(roleRows.length),
     open: open.roles ?? true, onToggle: () => setOpen(current => ({...current, roles: !(current.roles ?? true)})),
     children: roleRows.map(row => {
       const member = row.member;
       const available = member?.projectId === project.id;
       return {id: `role:${row.agentId}:${row.groupId}`, kind: 'leaf', label: `${row.group} · ${row.bot}`, selected: Boolean(member && member.id === roleId),
-        meta: available ? '点击编辑' : '暂不可用', tone: available ? undefined : 'muted',
-        ...(member && available ? {onClick: () => {if (member.id !== roleId) guard.navigate(() => {inherited.close(); setRoleId(member.id);});}} : {})};
+        meta: available ? roleRow?.member?.id === member?.id ? role.role ? `${[...(role.role.fields.supplement ?? '')].length} / 5000 字` : '正在读取…' : '单击查看' : '暂不可用', tone: available ? undefined : 'muted',
+        ...(member && available ? {onClick: () => {if (member.id !== roleId) {inherited.close(); setRoleId(member.id);}},
+          ...(member.id === roleId && role.role && !role.role.readonly ? {onEdit: (start?: import('./MindMap').MapEditStart) => role.beginEdit('supplement', start)} : {})} : {}),
+        ...(member?.id === roleId ? {children: [...(role.role ? [{id: `role:${row.agentId}:${row.groupId}:text`, kind: 'leaf' as const,
+          label: role.role.fields.supplement?.trim() || '留空时使用 Bot 页的角色设定。',
+          content: role.content('supplement', `role:${row.agentId}:${row.groupId}:text`),
+          ...(!role.role.readonly ? {onEdit: (start?: import('./MindMap').MapEditStart) => role.beginEdit('supplement', start)} : {})}] : []), ...role.statusNodes]} : {}),
+      };
     })};
   // Candidates for 把一个群加进来: the project's own Bots first, then the rest; one candidate opens the dialog at once.
   const inProject = new Set(project.bindings.map(binding => binding.agentId as string));
@@ -125,15 +132,9 @@ export function ProjectMemoryMap({project, snapshot, library, onMembership, onAd
   const groups: MapNode = {id: 'groups', kind: 'section', label: '群和 Bot', meta: String(rows.length), open: open.groups ?? groupsInitiallyOpen, onToggle: () => setOpen(current => ({...current, groups: !(current.groups ?? groupsInitiallyOpen)})), children: [...bindingNodes,
     ...(!rows.length ? [{id: 'no-groups', kind: 'leaf' as const, label: '没有群在用这个项目', tone: 'muted' as const}] : []),
     ...groupNotices, ...(onAddGroup ? [addNode] : [])]};
-  const panel = roleRow?.member ? <div className="memory-role-panel">
-    <p className="group-control-note">{roleRow.group} · {roleRow.bot}</p>
-    <GroupDesignSettings key={roleRow.member.id} scope={{kind: 'project', botId: roleRow.agentId, projectName: roleRow.member.name}} tab="role" tools={snapshot.tools} botName={roleRow.bot} groupName={roleRow.group}/>
-  </div> : inherited.panel;
   return <section id={settingAnchor('群和 Bot')} className="project-map" aria-label="记忆导图">
     <MemoryMap scope={{kind: 'project', projectId: project.id}} rootLabel={project.name} mode="direct" memoryLabel="项目记忆" targets={targets} before={[...(roleRows.length ? [roles] : []), ...inherited.nodes]} after={[groups]}
-      panel={panel} panelKey={roleRow?.member?.id ?? inherited.selectedId} panelTitle={roleRow ? '本群角色' : '继承内容 · 只读'}
-      onPanelClose={() => guard.navigate(() => {setRoleId(undefined); inherited.close();})}
-      beforeLeafSelect={select => guard.navigate(() => {setRoleId(undefined); inherited.close(); select();})}/>
+      beforeInteraction={role.withSavedDraft} beforeLeafSelect={select => {setRoleId(undefined); inherited.close(); select();}}/>
   </section>;
 }
 
