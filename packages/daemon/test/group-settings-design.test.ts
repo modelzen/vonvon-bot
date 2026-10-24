@@ -200,7 +200,7 @@ it('reads stopped-Bot local skills and model metadata without probing or startin
   expect(catalog).toMatchObject({ state: 'fallback', models: [{ id: 'cached', supportedEfforts: ['high'] }] });
   expect(catalog.error).toContain('本机模型缓存');
   expect(offlineBackend.listModels).not.toHaveBeenCalled(); expect(offlineBackend.doctor).not.toHaveBeenCalled();
-  expect((await owner.save({ scope, section: 'modelAccess', revision: p.sections.modelAccess!.revision, patch: { backend: 'codex-appserver', models: ['cached'], efforts: ['high'] } })).kind).toBe('saved');
+  expect((await owner.save({ scope, section: 'modelAccess', revision: p.sections.modelAccess!.revision, patch: { backend: 'codex-appserver', models: ['cached'], efforts: ['high'] } })).kind).toBe('rejected');
 });
 
 it('prefers persisted observed metadata, falls back honestly, and preserves group model-display on migration', async () => {
@@ -270,4 +270,46 @@ it('writes a group supplement to the row only, and shows a row the migration has
   // a row the migration has handled does not fall back to its old persona
   await mutateProject('demo', async current => { delete current.supplement; current.migration = { memory: 1 }; });
   expect((await view(owner)).sections.role!.stored).toEqual({ supplement: '' });
+});
+
+it.each([false, true])('rejects new models, efforts and provider switches from fallback catalogs while allowing existing subsets (offline=%s)', async offline => {
+  await mutateProject('demo', p => { p.modelAccess = { backend: 'codex-appserver', models: ['a', 'b'], efforts: ['high'] }; });
+  const owner = createSettingsOwner({ ...deps(), offline, backendFor: id => ({ ...backend, id, peekModels: () => offline ? models : undefined }) });
+  const before = await view(owner);
+  const disk = await readFile(paths.projectsFile, 'utf8');
+  for (const patch of [
+    { models: ['a', 'b', 'flat'], efforts: ['high'] },
+    { models: ['a'], efforts: ['low', 'high'] },
+    { backend: 'claude-agent', models: ['a'], efforts: ['high'] },
+  ] satisfies Array<Partial<NonNullable<Project['modelAccess']>>>) {
+    expect((await owner.save({ scope, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch })).kind).toBe('rejected');
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(disk);
+  }
+  expect((await owner.save({ scope, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch: { models: ['a'], efforts: ['high'] } })).kind).toBe('saved');
+  expect((await getProjectByName('demo'))?.modelAccess).toEqual({ backend: 'codex-appserver', models: ['a'], efforts: ['high'] });
+});
+
+it('accepts and persists a newly discovered native model when saving model access', async () => {
+  await mutateProject('demo', p => { p.modelAccess = { backend: 'codex-appserver', models: ['a'], efforts: ['high'] }; });
+  let native: ModelInfo[] | undefined;
+  const owner = createSettingsOwner({ ...deps(), backendFor: () => ({ ...backend, peekModels: () => native, listModels: async () => { native = models; return models; } }) });
+  const before = await view(owner);
+  expect((await owner.save({ scope, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch: { models: ['a', 'b'], efforts: ['high'] } })).kind).toBe('saved');
+  expect((await getProjectByName('demo'))?.modelAccess).toEqual({ backend: 'codex-appserver', models: ['a', 'b'], efforts: ['high'] });
+});
+
+it('rejects new choices from a populated native cache after the provider becomes unavailable', async () => {
+  await mutateProject('demo', p => { p.modelAccess = { backend: 'codex-appserver', models: ['a'], efforts: ['high'] }; });
+  const listModels = vi.fn(async () => models);
+  const owner = createSettingsOwner({ ...deps(), backendFor: id => ({ ...backend, id, doctor: async () => ({ ok: false, version: null }), listModels }) });
+  const before = await view(owner);
+  const disk = await readFile(paths.projectsFile, 'utf8');
+  for (const patch of [
+    { models: ['a', 'b'], efforts: ['high'] },
+    { backend: 'claude-agent', models: ['a'], efforts: ['high'] },
+  ] satisfies Array<Partial<NonNullable<Project['modelAccess']>>>) {
+    expect((await owner.save({ scope, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch })).kind).toBe('rejected');
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(disk);
+  }
+  expect(listModels).not.toHaveBeenCalled();
 });

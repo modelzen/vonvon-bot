@@ -13,6 +13,7 @@ import { getSession, RETIRED_KEY_TEXT, upsertSession } from '../src/bot/session-
 import { createAdminIpcCaller, createAdminIpcResponder } from '../src/admin/ipc';
 import type { AppConfig } from '../src/config/schema';
 import type { AgentBackend } from '../src/agent/types';
+import { offlineModelCatalog, rememberModelCatalog } from '../src/admin/model-catalog';
 import { permissionTable } from '../src/agent/permission';
 
 vi.mock('../src/config/paths', async () => {
@@ -24,7 +25,8 @@ const botId = 'cli_fixture';
 const agent = { kind: 'agent' as const, botId };
 const project = { kind: 'project' as const, botId, projectName: 'demo' };
 const session = { kind: 'session' as const, botId, threadId: 'omt_fixture' };
-const backend = { id: 'codex-appserver', doctor: async () => ({ ok: true }), supportedModes: ['qa', 'write', 'full'], listModels: async () => [{ id: 'fixture-model', displayName: 'Fixture', description: '', defaultEffort: 'high', supportedEfforts: ['low', 'high'], isDefault: true, hidden: false }] } as unknown as AgentBackend;
+const fixtureModels = [{ id: 'fixture-model', displayName: 'Fixture', description: '', defaultEffort: 'high', supportedEfforts: ['low', 'high'], isDefault: true, hidden: false }] as Awaited<ReturnType<AgentBackend['listModels']>>;
+const backend = { id: 'codex-appserver', doctor: async () => ({ ok: true }), supportedModes: ['qa', 'write', 'full'], listModels: async () => fixtureModels, peekModels: () => fixtureModels } as unknown as AgentBackend;
 let cfg: AppConfig;
 async function fixture(overrides: Partial<SettingsOwnerDeps> = {}) {
   const writer = createAppPreferencesWriter({ cfg });
@@ -470,4 +472,51 @@ it('shows Feishu administrator sources and prevents their local removal', async 
     expect((await owner.act({ kind: 'adminMember', botId, openId: 'ou_admin', membership: 'absent', revision: view.administrators.revision })).kind).toBe('saved');
     expect(cfg.preferences?.access?.admins).toContain('ou_feishu_admin');
   } finally { roles.mockRestore(); }
+});
+
+describe('model catalog availability', () => {
+  const query = { botId, backend: 'codex-appserver', purpose: 'project' as const };
+
+  it('marks successful native discovery ready and saves its actual catalog for offline use', async () => {
+    const native = await backend.listModels();
+    let discovered: typeof native | undefined;
+    const { owner } = await fixture({ backendFor: () => ({
+      ...backend,
+      listModels: async () => { discovered = native; return native; },
+      peekModels: () => discovered,
+    }) });
+    const catalog = await owner.models(query);
+    expect(catalog).toMatchObject({ state: 'ready', models: native });
+    expect(await offlineModelCatalog(query.backend)).toMatchObject({ models: native, observedAt: catalog.observedAt });
+    // Cached backend instances retain confirmed native metadata between reads.
+    expect((await owner.models(query)).state).toBe('ready');
+  });
+
+  it.each([undefined, () => undefined, () => []])('keeps unconfirmed lists fallback without replacing a confirmed disk snapshot (%s)', async peekModels => {
+    const native = await backend.listModels();
+    await rememberModelCatalog(query.backend, native, '2026-10-01T00:00:00.000Z');
+    const fallback = [{ ...native[0]!, id: 'offline-fallback' }];
+    const { owner } = await fixture({ backendFor: () => ({ ...backend, listModels: async () => fallback, peekModels }) });
+    expect(await owner.models(query)).toMatchObject({ state: 'fallback', models: fallback });
+    expect(await offlineModelCatalog(query.backend)).toMatchObject({ models: native, observedAt: '2026-10-01T00:00:00.000Z' });
+  });
+
+  it('keeps explicit offline reads fallback even with a populated native cache and never probes', async () => {
+    const native = await backend.listModels();
+    await rememberModelCatalog(query.backend, native, '2026-10-01T00:00:00.000Z');
+    const doctor = vi.fn();
+    const listModels = vi.fn();
+    const { owner } = await fixture({ offline: true, backendFor: () => ({ ...backend, doctor, listModels, peekModels: () => native }) });
+    expect(await owner.models(query)).toMatchObject({ state: 'fallback', models: native });
+    expect(doctor).not.toHaveBeenCalled();
+    expect(listModels).not.toHaveBeenCalled();
+  });
+
+  it('does not treat an old native cache as ready when the backend probe fails', async () => {
+    const native = await backend.listModels();
+    const listModels = vi.fn(async () => native);
+    const { owner } = await fixture({ backendFor: () => ({ ...backend, doctor: async () => ({ ok: false, version: null }), listModels, peekModels: () => native }) });
+    expect(await owner.models(query)).toMatchObject({ state: 'unavailable', models: [] });
+    expect(listModels).not.toHaveBeenCalled();
+  });
 });
