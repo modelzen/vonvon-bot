@@ -104,13 +104,14 @@ it('keeps one primary among peer directories and no primary repository', () => {
   expect(repositories).not.toContain('设为主目录');
   expect(html).not.toContain('附加目录');
 });
-it('keeps the original compact summary controls for models and Effort', () => {
+it('shows matching model and Effort count triggers without inline option lists', () => {
   const html = renderToStaticMarkup(<ModelAccessChoices value={{backend: catalog.backend, models: ['actual-a', 'actual-b'], efforts: ['low']}} catalog={catalog} disabled={false} onChange={() => {}}/>);
   expect(html).toContain('思考强度');
   expect(html).toContain('选择模型'); expect(html).toContain('选择强度');
-  expect(html.match(/gd-model-edit-control/g)).toHaveLength(2);
+  expect(html).toContain('已选择 2 个'); expect(html).toContain('已选择 1 个');
+  expect(html.match(/gd-model-selection-control/g)).toHaveLength(2);
   expect(html).not.toContain('type="checkbox"');
-  expect(html).toContain('实际模型 A'); expect(html).toContain('实际模型 B');
+  expect(html).not.toContain('>实际模型 A<'); expect(html).not.toContain('>实际模型 B<');
   expect(html).not.toContain('无 Effort 模型');
   expect(html).toContain('请选择 实际模型 B 支持的 Effort');
 });
