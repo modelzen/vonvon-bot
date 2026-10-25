@@ -1,5 +1,6 @@
+import {RefreshCw} from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button, InlineNotice } from "../reference/components/ui";
+import { Button, IconButton, InlineNotice } from "../reference/components/ui";
 import { SettingsGroup, SettingsRow } from "../reference/components/system-settings";
 import {settingAnchor} from '../search';
 import type { AgentId, Conversation, GroupId } from "@vonvon/protocol";
@@ -123,7 +124,7 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
   return <div id={settingAnchor('会话管理')}>
     {current && <SettingsGroup label="当前会话" footer="清空和压缩只作用于当前会话。">
       <SettingsRow title="会话" value={current.summary || current.threadId} />
-      <SettingsRow title="上下文" value={context?.usage ? `${context.usage.used.toLocaleString()} / ${context.usage.window?.toLocaleString() ?? "未知窗口"}` : "暂无可用统计"} trailing={<Button size="sm" onClick={() => void request({ action: "context", ...target, threadId: selected }).then((reply) => { if (reply.kind === "context") setContext(reply); else if (reply.kind === "refused") setError(reply.message); })}>刷新</Button>} />
+      <SettingsRow title="上下文" value={context?.usage ? `${context.usage.used.toLocaleString()} / ${context.usage.window?.toLocaleString() ?? "未知窗口"}` : "暂无可用统计"} trailing={<IconButton size="sm" variant="ghost" label="刷新" title="刷新会话上下文" onClick={() => void request({ action: "context", ...target, threadId: selected }).then((reply) => { if (reply.kind === "context") setContext(reply); else if (reply.kind === "refused") setError(reply.message); })}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>} />
       <SettingsRow title="会话操作" description={conversation === "threads" ? "多会话支持压缩上下文；清空仅适用于主区会话。" : undefined} trailing={<div className="settings-inline-actions"><Button size="sm" disabled={busy || conversation === "threads"} onClick={() => void execute({ action: "clear", ...target, threadId: selected }, "已开始新会话。")}>清空会话</Button><Button size="sm" disabled={busy} onClick={() => void execute({ action: "compact", ...target, threadId: selected }, "上下文已压缩。")}>压缩上下文</Button></div>} />
       <SettingsRow title="自主任务目标" trailing={<div className="settings-inline-actions"><input aria-label="自主任务目标" className="settings-field" value={objective} maxLength={4000} onChange={(event) => setObjective(event.target.value)} placeholder="输入目标" /><Button size="sm" disabled={busy || !objective.trim()} onClick={() => void execute({ action: "startGoal", ...target, threadId: selected, objective: objective.trim() }, "目标任务已开始。")}>开始</Button></div>} />
       {run && <>
@@ -132,7 +133,7 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
         <SettingsRow title="完成时提醒" value={run.reminderRequested ? "已开启" : "未开启"} trailing={<Button size="sm" disabled={busy || !run.canRemind} onClick={() => void execute({ action: "reminder", ...target, threadId: selected, runId: run.id, requested: !run.reminderRequested }, run.reminderRequested ? "已关闭提醒。" : "已开启提醒。")}>{run.reminderRequested ? "关闭提醒" : "开启提醒"}</Button>} />
       </>}
     </SettingsGroup>}
-    <SettingsGroup label="历史会话" action={<Button size="sm" disabled={busy} onClick={() => void refresh()}>刷新</Button>} footer="可以在飞书打开已绑定的话题。可恢复的旧会话会重新绑定到此项目。">
+    <SettingsGroup label="历史会话" action={<IconButton size="sm" variant="ghost" label="刷新" title="刷新历史会话" disabled={busy} onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>} footer="可以在飞书打开已绑定的话题。可恢复的旧会话会重新绑定到此项目。">
       <SettingsRow title="搜索" trailing={<input aria-label="搜索历史会话" className="settings-field" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="标题、摘要或会话 ID" />} />
       <SettingsRow title="筛选" trailing={<SettingChoices label="筛选历史会话" value={filter} disabled={false} onChange={setFilter} choices={[{value: 'all', label: '全部'}, {value: 'bound', label: '已绑定'}, {value: 'resumable', label: '可恢复'}]}/>} />
       {sessions.map((item) => <SettingsRow key={item.threadId} title={item.summary || "未命名会话"} description={`${new Date(item.updatedAt).toLocaleString()} · ${item.backend} · ${item.cwd}${item.detached ? " · 已归档" : ""}`} trailing={<Button size="sm" onClick={() => void openExternalUrl(groupUrl(groupId, item.threadId), 'group', shell).catch(error => setError(error instanceof Error ? error.message : '无法打开飞书群。'))}>在飞书打开</Button>} />)}

@@ -1,8 +1,9 @@
+import {RefreshCw} from 'lucide-react';
 import {Fragment, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode} from 'react';
 import {formatTime, keyProblem, type SecretService} from '@vonvon/protocol';
 import {useClient} from '../client-context';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
-import {Button, FormField, InlineNotice, StatusBadge, type StatusTone} from '../reference/components/ui';
+import {Button, IconButton, FormField, InlineNotice, StatusBadge, type StatusTone} from '../reference/components/ui';
 import {ConfirmDialog, Dialog} from '../reference/components/ui/Dialog';
 import {settingAnchor} from '../search';
 import {
@@ -267,7 +268,7 @@ export function SecretsPanel({onOpenLogs, onOpenApplication, onOpenProviders}: {
   }
 
   const header = <div className="environment-lead today-page-heading"><h1>决策模型</h1>
-    <Button size="sm" loading={reloading} disabled={read.kind === 'loading'} onClick={() => void reload()}>重新读取</Button></div>;
+    <IconButton size="sm" variant="ghost" label="重新读取" title="重新读取密钥状态" loading={reloading} disabled={read.kind === 'loading'} onClick={() => void reload()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></div>;
   const fillService = fill && view?.services.find(service => service.keyId === fill.keyId);
   const removeService = removal && view?.services.find(service => service.keyId === removal.keyId);
   let body: ReactNode;

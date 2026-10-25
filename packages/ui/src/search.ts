@@ -55,13 +55,12 @@ const membershipGroups: readonly Group[] = [
 const formerly: Readonly<Record<string, string>> = {'后端状态': 'Host 状态', '后端版本': 'Host 版本', '当前账号配置': '当前 Profile'};
 const globalGroups: readonly {page: Page; section: string; fields: readonly Target[]}[] = [
   {page: 'usage', section: '智能模式的判断次数', fields: [item('判断次数', ['判断', '按 Bot 看'], {field: ''})]},
-  {page: 'application', section: '启动选项', fields: [item('运行状态'), item('重启后台服务', ['重启 daemon']), item('登录电脑时启动', ['开机启动'])]},
+  {page: 'application', section: '启动选项', fields: [item('后台运行', ['运行状态', '重启后台服务', '重启后台', '重启 daemon']), item('登录电脑时启动', ['开机启动'])]},
   {page: 'application', section: 'daemon 运行', fields: [item('运行方式'), item('daemon 服务', ['启动 daemon', '停止 daemon']), item('临时运行 Bot', [], {guide: '仅运行指定 Bot 时显示当前临时运行状态。'})]},
-  {page: 'application', section: '后台服务', fields: [item('系统服务'), item('安装并启动', ['安装并启动后台服务']), item('服务运行', ['启动已安装服务', '停止后台服务并关闭自启']), item('卸载后台服务'), item('仅运行指定 Bot', [], {reveal: 'machine-advanced'}), ...['进程 PID', '上次退出', '服务定义', '标准输出', '错误日志'].map(title => item(title, [], {reveal: 'machine-advanced'}))]},
-  {page: 'application', section: '软件更新', fields: [item('桌面版'), item('更新状态'), item('可用版本'), item('检查更新', ['检查桌面更新']), item('下载更新', [], {guide: '有可用更新时显示下载操作。'}), item('安装更新', [], {guide: '下载完成后显示安装操作。'}), item('发布说明')]},
+  {page: 'application', section: '后台服务', fields: [item('系统服务'), item('服务运行', ['启动已安装服务']), item('仅运行指定 Bot', [], {reveal: 'machine-advanced'}), ...['进程 PID', '上次退出', '服务定义', '标准输出', '错误日志'].map(title => item(title, [], {reveal: 'machine-advanced'}))]},
+  {page: 'application', section: '软件更新', fields: [item('桌面版', [], {field: ''}), item('更新状态', [], {field: ''}), item('可用版本', [], {field: ''}), item('检查更新', ['检查桌面更新']), item('下载更新', [], {guide: '有可用更新时显示下载操作。'}), item('安装更新', [], {field: '安装并重启', guide: '下载完成后显示安装操作。'}), item('发布说明')]},
   {page: 'application', section: '外部 Core / CLI', fields: [item('Core 来源'), item('当前版本'), item('可用版本'), item('检查 Core 更新'), item('更新外部 Core'), item('更新进度', ['查看 Core 更新进度'])]},
   {page: 'application', section: 'Codex 可执行文件', fields: [item('Codex 可执行文件', ['执行文件路径', '执行程序'], {field: ''}), item('已保存路径', ['Codex 路径']), item('当前路径配置'), item('本次所选', ['选择 Codex 可执行文件', '选择文件', '更改路径']), item('恢复自动检测'), item('未绑定工作目录时的运行后备'), item('保存路径', ['Codex 可执行文件路径'], {field: '本次所选', guide: '更改路径后，在弹窗中保存。'})]},
-  {page: 'application', section: '窗口与退出', fields: [item('隐藏到托盘'), item('退出 Vonvon Bot', ['退出应用'])]},
   {page: 'environment', section: '本机环境', fields: [item('重新检测')]},
   ...(['Codex', 'Claude'] as const).map(section => ({page: 'providers' as const, section, fields: ['安装', '更新', '登录', '检查授权', '重新登录', '安装托管副本', '重新安装最新版', '停用托管副本', '安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', ...(section === 'Codex' ? ['后端状态', '后端版本'] : ['Claude Agent SDK', '安装后端', '检查后端版本', '更新后端', '卸载后端'])].map(title => item(`${title} ${section}`, [title, ...(formerly[title] ? [formerly[title]] : [])], {field: '', reveal: section === 'Codex' ? 'codex' : 'claude', guide: '在 Provider 详情查看状态和可用操作。'}))})),
   {page: 'environment', section: toolNames['lark-cli'], fields: ['安装', '更新', '登录', '检查授权', '重新登录', '安装托管副本', '重新安装最新版', '停用托管副本', '安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', '当前账号配置'].map(title => item(`${title} 飞书 CLI`, [title, ...(formerly[title] ? [formerly[title]] : [])], {field: title, reveal: 'lark-tool', guide: ['安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', '当前账号配置'].includes(title) ? undefined : '此操作是否可用取决于飞书 CLI 的安装与授权状态。'}))},
@@ -80,7 +79,7 @@ function expand(id: string, context: string, base: Destination, groups: readonly
     ];
   });
 }
-export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
+export function searchEntries(snapshot: DesktopSnapshot, capabilities: {externalCoreAvailable?: boolean} = {}): SearchEntry[] {
   const pages: readonly {id: string; title: string; aliases: readonly string[]; page: Page; view?: CollaborationView}[] = [
     {id: 'agents', title: 'Bot', aliases: ['机器人', '注册 Bot', '添加 Bot', '加入飞书群并设置工作目录'], page: 'collaboration', view: 'agents'},
     {id: 'bridgeImport', title: '导入 Bridge', aliases: ['feishu-codex-bridge', 'Feishu Codex Bridge', '迁移', '旧版导入', '恢复导入'], page: 'bridgeImport'},
@@ -95,7 +94,7 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
     {id: 'diagnostics', title: '状态与诊断', aliases: ['日志', '数据目录', '连接', '没回的消息', '缺的权限'], page: 'diagnostics'},
   ];
   const entries: SearchEntry[] = pages.map(page => ({id: page.id, title: page.title, context: '页面', aliases: page.aliases, destination: {page: page.page, view: page.view, selection: page.view ? {kind: 'overview'} : undefined}, kind: 'page'}));
-  for (const group of globalGroups) group.fields.forEach((field, index) => entries.push({
+  for (const group of globalGroups.filter(group => group.section !== '外部 Core / CLI' || capabilities.externalCoreAvailable)) group.fields.forEach((field, index) => entries.push({
     id: `global-${group.page}-${group.section}-${index}`, title: field.title, context: group.section, aliases: field.aliases ?? [], destination: {page: group.page, section: group.section, field: field.field ?? field.title, reveal: field.reveal, guide: field.guide}, kind: 'setting',
   }));
   for (const agent of snapshot.agents) {

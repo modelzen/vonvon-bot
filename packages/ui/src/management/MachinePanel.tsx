@@ -1,5 +1,6 @@
 import {useEffect, useRef, useState} from 'react';
-import {Button} from '../reference/components/ui';
+import {RefreshCw} from 'lucide-react';
+import {Button, IconButton} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import type {MachineRequest, MachineRequestHandler, MachineReply, ServiceState} from '@vonvon/protocol';
@@ -58,13 +59,10 @@ export function MachinePanel({request, agents, reveal, macos = false}: {request:
     finally { setBusy(false); }
   };
   const service = status?.service;
-  const serviceDisabled = (action: 'start' | 'stop') =>
-    !status || (action === 'start'
-      ? !status.service.installed || status.service.running || status.host?.ownership === 'attached'
-      : !status.service.installed);
+  const serviceStartDisabled = !status || !status.service.installed || status.service.running || status.host?.ownership === 'attached';
 
   return <>
-    <SettingsGroup id={settingAnchor('daemon 运行')} label="daemon 运行" action={<Button size="sm" disabled={busy} onClick={() => void run({type: 'status'})}>刷新状态</Button>}>
+    <SettingsGroup id={settingAnchor('daemon 运行')} label="daemon 运行" action={<IconButton size="sm" variant="ghost" label="刷新状态" title="刷新后台运行状态" disabled={busy} onClick={() => void run({type: 'status'})}><RefreshCw size={15} strokeWidth={1.7}/></IconButton>}>
       <SettingsRow title="运行方式"
         description={status?.host?.ownership === 'attached' ? '当前由外部服务管理。' : '接收飞书消息并运行 Bot。'}
         value={!status ? '状态未知' : status.host ? (status.host.ownership === 'owned' ? '桌面管理' : '外部服务') : '已停止'} />
@@ -79,10 +77,9 @@ export function MachinePanel({request, agents, reveal, macos = false}: {request:
     <SettingsGroup id={settingAnchor('后台服务')} label="后台服务" footer={macos ? '开启「登录电脑时启动」后，退出 App 仍可运行 Bot。' : '后台服务可在应用退出后继续运行 Bot。'}>
       <SettingsRow title="系统服务" description={service ? service.platformName : '正在读取服务状态…'}
         value={service && (service.state ? SERVICE_STATE_TEXT[service.state] : `${service.installed ? '已安装' : '未安装'} · ${service.running ? '运行中' : '已停止'}`)} />
-      <SettingsRow title="服务运行" description={!shell?.service ? '请在桌面版中启动或停止服务。' : '已安装的服务可单独启动或停止。'}
+      <SettingsRow title="服务运行" description={!shell?.service ? '请在桌面版中启动服务。' : '启动已安装的后台服务。'}
         trailing={<span className="settings-inline-actions">
-          <Button size="sm" disabled={busy || !shell?.service || serviceDisabled('start')} onClick={() => setConfirm({type: 'service', action: 'start'})}>启动服务</Button>
-          <Button size="sm" disabled={busy || !shell?.service || serviceDisabled('stop')} onClick={() => setConfirm({type: 'service', action: 'stop'})}>停止服务</Button>
+          <Button size="sm" disabled={busy || !shell?.service || serviceStartDisabled} onClick={() => setConfirm({type: 'service', action: 'start'})}>启动服务</Button>
         </span>} />
       <details ref={advanced} className="settings-disclosure">
         <summary>高级</summary>

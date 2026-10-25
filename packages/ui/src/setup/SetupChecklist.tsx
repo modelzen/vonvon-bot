@@ -1,8 +1,9 @@
+import {RefreshCw} from 'lucide-react';
 import {useState, type ReactNode} from 'react';
 import type {AgentId, Command, CommandResult, DesktopSnapshot} from '@vonvon/protocol';
 import {useClient, useShellCapabilities} from '../client-context';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
-import {Button, StatusBadge} from '../reference/components/ui';
+import {Button, IconButton, StatusBadge} from '../reference/components/ui';
 import {openExternalUrl} from '../url-actions';
 import {botSteps, linuxSteps, serviceStep, toolSteps, type SetupStep, type StepAction} from '@vonvon/protocol';
 import {skipService, toggleService} from './service-toggle';
@@ -74,7 +75,10 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
       description={stepDescription(step)}
       trailing={<span className="setup-step-trailing">
         <StatusBadge tone={step.tone}>{step.status}</StatusBadge>
-        {step.actions.map(action => <Button key={action.kind + action.label} size="sm" variant={action.kind === 'serviceInstall' && action.primary ? 'primary' : undefined}
+        {step.actions.map(action => action.kind === 'serviceRecheck'
+          ? <IconButton key={action.kind + action.label} size="sm" variant="ghost" label={action.label} title={action.label}
+            loading={working === `${agentId ?? 'tools'}:${action.kind}`} disabled={busy || !ready} onClick={() => void act(action, agentId)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
+          : <Button key={action.kind + action.label} size="sm" variant={action.kind === 'serviceInstall' && action.primary ? 'primary' : undefined}
           loading={working === `${agentId ?? 'tools'}:${action.kind}` || (action.kind === 'claudeLogin' && claudeLogin.checking)}
           disabled={busy || !ready} onClick={() => void act(action, agentId)}>{action.label}</Button>)}
       </span>}/>;
@@ -100,7 +104,7 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
       const steps = botSteps(agent, read?.status, read?.problem);
       const left = steps.filter(step => !step.done).length;
       return <SettingsGroup key={agent.id} label={<>{agent.name} <StatusBadge tone={left ? 'warning' : 'success'}>{left ? `还差 ${left} 步` : '全部完成'}</StatusBadge></>}
-        action={<Button size="sm" loading={read?.checking} disabled={!ready} onClick={() => void recheck(agent.id)}>重新检测</Button>}
+        action={<IconButton size="sm" variant="ghost" label="重新检测" title="重新检测" loading={read?.checking} disabled={!ready} onClick={() => void recheck(agent.id)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}
         footer={<>企业租户里新权限可能要管理员审核。{read?.status && read.problem ? `上次检测失败：${read.problem}` : ''}</>}>
         {steps.map((step, index) => stepRow(step, index, agent.id))}
       </SettingsGroup>;
