@@ -78,9 +78,6 @@
 .group-directory--groups .group-directory-heading { position:sticky; top:0; z-index:5; background:var(--color-canvas); padding-block:12px; margin-top:-12px; margin-bottom:12px; column-gap:8px; }
 .group-directory--groups .group-directory-heading > div { margin-right:auto; gap:12px; }
 .group-directory--groups .group-directory-search { width:230px; margin-left:0; }
-.group-directory--groups .group-directory-toggle { display:flex; align-items:center; justify-content:center; gap:6px; height:32px; padding:0 10px; border:1px solid var(--color-border); border-radius:8px; background:var(--color-surface); color:var(--color-text-secondary); font:inherit; font-size:12px; white-space:nowrap; }
-.group-directory--groups .group-directory-toggle:disabled { opacity:.45; }
-.group-directory--groups .group-directory-toggle:hover:not(:disabled) { background:var(--color-surface-hover); }
 .group-directory--groups .group-directory-surface { --group-directory-cols:minmax(0,1fr) 140px 112px 20px; }
 .group-directory--groups .group-directory-item + .group-directory-item { border-top-color:color-mix(in srgb,var(--color-border) 65%,transparent); }
 .group-directory--groups .group-directory-identity { gap:10px; }

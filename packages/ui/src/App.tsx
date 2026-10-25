@@ -3,6 +3,7 @@ import {copyAuthorizationUrl, copyFeedback, groupUrl, openExternalUrl} from './u
 import {uiFeatures} from './features';
 import {PendingGroupToasts} from './PendingGroupToasts';
 import {JoinGroupDialog} from './JoinGroupDialog';
+import {SelectJoinBotDialog} from './SelectJoinBotDialog';
 import {usePendingGroups} from './pending-groups';
 import type {PendingGroup, ProjectId} from '@vonvon/protocol';
 import { useEffect, useRef, useState } from "react";
@@ -78,6 +79,7 @@ import {UpdatePanel} from './management/UpdatePanel';
 
 type Modal =
   | RegisterModal
+  | {kind: 'selectJoinBot'}
   | { kind: "join"; agentId: AgentId; group?: PendingGroup; provider?: SetupProvider; project?: ProjectId; suspended?: boolean }
   | { kind: "collaboration"; membership: Membership }
   | { kind: "shareUsage" }
@@ -678,7 +680,8 @@ function DesktopApp() {
                         </section>
                       )
                     : view === "groups" ? <><MigrationBanner snapshot={snapshot}/><GroupDirectory snapshot={snapshot} state={groupDirectoryState} onStateChange={setGroupDirectoryState} statusFor={agentListStatus}
-                        onMembership={id => select({kind: 'membership', id})} newCounts={newCounts.projects}/></>
+                        onMembership={id => select({kind: 'membership', id})} newCounts={newCounts.projects}
+                        onJoin={() => navigate(() => setModal({kind: 'selectJoinBot'}))} joinDisabled={!ready || busy || !snapshot.agents.some(agent => agent.enabled && !agent.readError)}/></>
                     : <><MigrationBanner snapshot={snapshot}/><ProjectDirectory newCounts={newCounts.projects} snapshot={snapshot} state={projectDirectoryState} onStateChange={setProjectDirectoryState} statusFor={agentListStatus}
                         onProject={id => select({kind: 'project', id})} onMembership={id => select({kind: 'membership', id})}
                         onNewProject={ready && snapshot.agents.length ? () => snapshot.agents.length === 1 ? openJoin(snapshot.agents[0]!.id) : openList('agents') : undefined}/></>}
@@ -695,7 +698,7 @@ function DesktopApp() {
                       <p>
                         {view === "agents"
                           ? "连接飞书机器人，再让它加入群开始协作。"
-                          : view === "groups" ? "在 Bot 页面选择已加入的飞书群并绑定工作目录。" : "把一个飞书群连到 Bot 上，就会有一个项目。"}
+                          : view === "groups" ? "点击「拉 Bot 入群」，选择 Bot 并连接已有飞书群。" : "把一个飞书群连到 Bot 上，就会有一个项目。"}
                       </p>
                       {view === "agents" && (
                         <Button
@@ -861,12 +864,13 @@ function DesktopApp() {
       </AppShell>
       {searchOpen && <SearchDialog open entries={searchEntries(snapshot, {externalCoreAvailable})} onClose={() => setSearchOpen(false)} onSelect={openSearchResult}/>}
       <PendingGroupToasts pages={pendingGroups} agents={snapshot.agents} hidden={modal !== null} onContinue={(owner, group) => openJoin(owner.id, group)} />
+      {modal?.kind === 'selectJoinBot' && <SelectJoinBotDialog snapshot={snapshot} onSelect={id => openJoin(id)} onClose={() => setModal(null)}/>}
       {modal?.kind === 'join' && (() => {
         const owner = snapshot.agents.find(item => item.id === modal.agentId);
         return owner ? <JoinGroupDialog key={`${owner.id}:${modal.group?.chatId ?? 'new'}:${modal.project ?? ''}`} snapshot={snapshot} agent={owner} tools={snapshot.tools} initialProvider={modal.provider} open={!modal.suspended} onOpenProviders={() => configureJoinProvider()} onOpenDecisionModel={provider => configureJoinProvider('secrets', provider)} initialGroup={modal.group} pending={pendingGroups.find(item => item.agentId === owner.id)} onClose={() => setModal(null)} onChanged={joined} /> : null;
       })()}
       <Dialog
-        open={modal !== null && modal.kind !== "deleteAgent" && modal.kind !== "join"}
+        open={modal !== null && modal.kind !== "deleteAgent" && modal.kind !== "join" && modal.kind !== 'selectJoinBot'}
         onClose={() => void closeModal()}
         title={
           modal?.kind === "register"

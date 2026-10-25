@@ -1,9 +1,8 @@
 import {createElement} from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {expect, it} from 'vitest';
-import {agentSchema, collaborationRequestSchema, toolStateSchema} from '@vonvon/protocol';
-import {RpcError} from '@vonvon/client/browser';
-import {CONVERSATIONS, CREATION_UNKNOWN, JoinGroupDialog, CreationLockNotice, conversationsFor, creationFailure, keptResponse, projectNameProblem, sentResponse, shownResponse, judgeSetupProblem, initialGroupProvider} from '../src/JoinGroupDialog';
+import {agentSchema, toolStateSchema} from '@vonvon/protocol';
+import {CONVERSATIONS, JoinGroupDialog, conversationsFor, keptResponse, projectNameProblem, sentResponse, shownResponse, judgeSetupProblem, initialGroupProvider} from '../src/JoinGroupDialog';
 import {canSaveAll, DraftGuardProvider} from '../src/settings/DraftGuard';
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
@@ -12,42 +11,20 @@ import {DirectoryPickerProvider} from '../src/directory-picker';
 it('rejects the names the protocol would refuse, before submit', () => {
   for (const name of ['前端/后端', 'a\\b', '换\n行', '制\t表']) {
     expect(projectNameProblem(name)).toBeDefined();
-    expect(collaborationRequestSchema.safeParse({action: 'createProject', agentId: 'cli_join', name, folder: {kind: 'default'}, tool: 'codex', conversation: 'threads'}).success).toBe(false);
   }
   expect(projectNameProblem('前端/后端')).toContain('/ 或 \\');
-  // The dialog sends the trimmed name, like the protocol's own trim.
+  // The dialog trims the local binding name before sending it.
   for (const name of ['研发群', '（未命名群）', 'A-B_C.d 1', ' 末尾换行\n']) {
     expect(projectNameProblem(name)).toBeUndefined();
-    expect(collaborationRequestSchema.safeParse({action: 'createProject', agentId: 'cli_join', name, folder: {kind: 'default'}, tool: 'codex', conversation: 'threads'}).success).toBe(true);
   }
 });
 
 it('offers 保存并离开 only when every open draft can be saved', () => {
   const save = async () => true;
   expect(canSaveAll([{save}, {save}])).toBe(true);
-  // JoinGroupDialog registers no save: saving would create a real Feishu group.
+  // JoinGroupDialog requires the user to choose and bind a group explicitly.
   expect(canSaveAll([{}])).toBe(false);
   expect(canSaveAll([{save}, {}])).toBe(false);
-});
-
-it('s36d1: says a creation may have made a group unless the daemon itself refused it', () => {
-  expect(creationFailure(new RpcError('conflict', '项目名「x」已存在'))).toEqual({kind: 'refused', message: '项目名「x」已存在'});
-  expect(creationFailure(new RpcError('invalid_folder_token', '目录选择已过期，请重新选择。'))).toEqual({kind: 'refused', message: '目录选择已过期，请重新选择。'});
-  for (const failure of [new RpcError('outcome_unknown', 'anything'), new Error('Daemon connection closed'), new Error('Daemon response method or envelope mismatch'), 'thrown']) {
-    expect(creationFailure(failure)).toEqual({kind: 'unknown', message: CREATION_UNKNOWN});
-  }
-  expect(renderToStaticMarkup(createElement(CreationLockNotice, {failure: creationFailure(new Error('Daemon connection closed'))}))).toContain(`${CREATION_UNKNOWN}要重试，关掉这个窗口再建。`);
-});
-
-it('s36d1: locks the form on a group created and not saved, with the daemon\'s binding guide and no retry advice', () => {
-  const guide = '群「x」已建好，但没存上：project disk failure。请在网页「加入现有飞书群」→「查找已经加入的群」里选它绑定，不要再建。绑回来是只读，要完全访问就到群设置里改';
-  // Anything but a refusal locks the form (JoinGroupDialog's catch), so a second click cannot make a second group.
-  const unsaved = creationFailure(new RpcError('created_unsaved', guide));
-  expect(unsaved).toEqual({kind: 'unsaved', message: guide});
-  const notice = renderToStaticMarkup(createElement(CreationLockNotice, {failure: unsaved}));
-  expect(notice).toContain(guide);
-  expect(notice).toContain('群已建好，但没存上');
-  expect(notice).not.toContain('重试');
 });
 
 it('uses the same communication vocabulary as Bot settings, and 智能 has no 免@ to show or send', () => {
@@ -64,11 +41,10 @@ it('uses the same communication vocabulary as Bot settings, and 智能 has no �
   // Nor out of it: picked 关 under 多会话, then 智能, then 多会话 again shows 多会话's default (审查低).
   expect(shownResponse('threads', keptResponse('threads', keptResponse('smart', 'mention')))).toBe('all');
   expect(keptResponse('shared', 'all')).toBe('all');
-  for (const kind of ['create', 'bind'] as const) expect(sentResponse(kind, 'smart', shownResponse('smart', 'all'))).toEqual({});
-  expect(sentResponse('bind', 'shared', 'mention')).toEqual({});
-  expect(sentResponse('create', 'shared', 'mention')).toEqual({response: 'mention'});
-  expect(sentResponse('create', 'threads', 'all')).toEqual({});
-  expect(collaborationRequestSchema.safeParse({action: 'createProject', agentId: 'cli_join', name: 'n', folder: {kind: 'default'}, tool: 'codex', conversation: 'smart'}).success).toBe(true);
+  expect(sentResponse('smart', shownResponse('smart', 'all'))).toEqual({});
+  expect(sentResponse('shared', 'mention')).toEqual({});
+  expect(sentResponse('shared', 'all')).toEqual({response: 'all'});
+  expect(sentResponse('threads', 'all')).toEqual({});
 });
 
 it('s36b2: offers topic conversations and keeps threads 免 @ on by default', () => {
@@ -100,9 +76,12 @@ it('s36b2: shows topic binding choices and read-only permissions when binding', 
   expect(topic).toContain('只读（不联网）');
   expect(topic).not.toContain('网络关闭');
   expect(topic).not.toContain('连接后，在群设置中改为完全访问才能使用。');
-  const create = render(false);
-  expect(create.match(/role="radio"/g)).toHaveLength(3);
-  expect(create).not.toContain('只读（不联网）');
+  const existing = render(false);
+  expect(existing).toContain('在飞书群的');
+  expect(existing).toContain('查找已经加入的群');
+  expect(existing).not.toContain('创建群聊');
+  expect(existing).not.toContain('创建并连接');
+  expect(existing).not.toContain('沟通方式');
   expect(render(true, false).match(/role="radio"/g)).toHaveLength(3);
 });
 

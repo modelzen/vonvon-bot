@@ -1,7 +1,8 @@
-import {Bot, ChevronRight, ChevronsDownUp, ChevronsUpDown, Search, X} from 'lucide-react';
+import {Bot, ChevronRight, Search, X} from 'lucide-react';
 import {backendLabel, type Agent, type DesktopSnapshot, type GroupId, type Membership, type MembershipId} from '@vonvon/protocol';
 import {AgentAvatar} from './AgentAvatar';
 import {GroupAvatar} from './GroupAvatar';
+import {JoinGroupButtonCandidates} from './JoinGroupButton';
 import './group-directory.css';
 
 type Status = {label: string; tone: 'warning' | 'neutral' | 'success'};
@@ -12,21 +13,22 @@ type Props = {
   onStateChange: (state: GroupDirectoryState) => void;
   statusFor: (agent: Agent) => Status;
   onMembership: (id: MembershipId) => void;
+  onJoin: () => void;
+  joinDisabled?: boolean;
   newCounts?: Readonly<Record<string, number>>;
 };
 
 // Keep the group → Bot tree and its membership navigation. The sticky toolbar keeps search
-// and expansion reachable; unavailable bindings remain visible even when a group is collapsed.
+// and the join entry reachable; each group retains its own expansion control.
 // Existing canvas/surface tokens, 13px names and 11px metadata preserve the compact Mac layout.
 // Only groups with no available Bot are muted; partially available groups retain their name contrast.
-export function GroupDirectory({snapshot, state, onStateChange, statusFor, onMembership, newCounts}: Props) {
+export function GroupDirectory({snapshot, state, onStateChange, statusFor, onMembership, onJoin, joinDisabled, newCounts}: Props) {
   const agents = new Map(snapshot.agents.map(agent => [agent.id, agent]));
   const directory = snapshot.groups.map(group => ({group, members: snapshot.memberships.filter(member => member.groupId === group.id)}));
   const query = state.query.trim().toLocaleLowerCase();
   const visible = directory.filter(({group, members}) => !query || [group.name, ...members.flatMap(member => [agents.get(member.agentId)?.name ?? member.agentId, backendLabel(member.backend)])].some(text => text.toLocaleLowerCase().includes(query)));
   const initialGroup = directory.find(item => item.members.length > 1)?.group.id ?? directory[0]?.group.id;
   const isExpanded = (id: GroupId) => state.expanded[id] ?? (query ? true : id === initialGroup);
-  const hasExpanded = visible.some(({group}) => isExpanded(group.id));
   const toggle = (id: GroupId, expanded = !isExpanded(id)) => onStateChange({...state, expanded: {...state.expanded, [id]: expanded}});
   const search = (value: string) => onStateChange({query: value, expanded: {}});
   const botCount = new Set(visible.flatMap(({members}) => members.map(member => member.agentId))).size;
@@ -38,7 +40,6 @@ export function GroupDirectory({snapshot, state, onStateChange, statusFor, onMem
     const status = statusFor(agent);
     return status.label === '已停用' ? {...status, label: 'Bot 已停用'} : status;
   };
-  const toggleAll = () => onStateChange({...state, expanded: {...state.expanded, ...Object.fromEntries(visible.map(({group}) => [group.id, !hasExpanded]))}});
   return <section className="group-directory group-directory--groups" aria-label="群组列表">
     <header className="group-directory-heading">
       <div><h1>群组</h1><span>{query ? `${visible.length} / ${snapshot.groups.length}` : snapshot.groups.length} 个群聊 · {botCount} 个 Bot</span></div>
@@ -46,10 +47,8 @@ export function GroupDirectory({snapshot, state, onStateChange, statusFor, onMem
         <input aria-label="搜索群聊或 Bot" placeholder="搜索群聊或 Bot" value={state.query} onChange={event => search(event.target.value)}/>
         {state.query && <button type="button" aria-label="清除群聊搜索" onClick={() => search('')}><X size={13}/></button>}
       </label>}
-      {directory.length > 0 && <button className="group-directory-toggle" type="button" disabled={!visible.length} onClick={toggleAll}>
-        {hasExpanded ? <ChevronsDownUp size={14}/> : <ChevronsUpDown size={14}/>}{hasExpanded ? '全部收起' : '全部展开'}
-      </button>}
     </header>
+    <JoinGroupButtonCandidates disabled={joinDisabled} onClick={onJoin}/>
     {directory.length > 0 && <div className="group-directory-surface">
       {visible.length ? <ul className="group-directory-list">
         {visible.map(({group, members}) => {

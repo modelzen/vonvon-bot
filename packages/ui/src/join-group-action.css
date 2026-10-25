@@ -1,0 +1,38 @@
+.join-group-candidates { margin:0 0 20px; padding:16px 20px 20px; border:1px solid var(--color-border); border-radius:var(--card-radius,12px); background:var(--color-surface); }
+.join-group-candidates__hint { margin-bottom:16px; color:var(--color-text-tertiary); font-size:11px; }
+.join-group-candidates__list { display:flex; flex-wrap:wrap; gap:24px 28px; }
+.join-group-candidates__item { display:flex; flex-direction:column; align-items:flex-start; gap:10px; }
+.join-group-candidates__label { color:var(--color-text-secondary); font-size:11px; }
+.join-group-action { position:relative; display:inline-flex; flex:none; vertical-align:middle; border-radius:var(--control-radius,8px); }
+.join-group-action__art { display:inline-flex; pointer-events:none; }
+.join-group-action .join-group-action__art .join-group-action__button { color:transparent; }
+.join-group-action__art .join-group-action__button > svg { visibility:hidden; }
+.join-group-action .join-group-action__button.join-group-action__control { position:absolute; inset:0; width:100%; height:100%; background:transparent; border-color:transparent; }
+.join-group-action__still { display:inline-flex; }
+.join-group-action__beam { display:inline-flex; border-radius:var(--control-radius,8px); }
+.join-group-action .join-group-action__button { display:inline-flex; align-items:center; justify-content:center; gap:8px; height:var(--control-height-lg,36px); padding:0 15px; border:1px solid color-mix(in srgb,var(--color-accent) 22%,var(--color-border)); border-radius:var(--control-radius,8px); background:var(--color-surface); color:var(--color-text); font:500 var(--font-size-body,13px)/1.4 var(--font-family-system); white-space:nowrap; cursor:pointer; transition:transform 150ms var(--ease-standard); }
+.join-group-action__button > svg { flex:none; color:var(--color-accent); }
+.join-group-action:has(button:focus-visible) { outline:2px solid var(--color-focus); outline-offset:3px; }
+.join-group-action .join-group-action__button:focus-visible { outline:none; box-shadow:none; }
+.join-group-action[data-disabled] { opacity:.45; }
+.join-group-action .join-group-action__button:disabled { cursor:default; }
+/* Keep a real frame of the library's Line effect visible while idle. Negative
+   delay completes its entrance without changing the original palette or layers. */
+.join-group-action__beam,
+.join-group-action__beam::before,
+.join-group-action__beam::after,
+.join-group-action__beam > [data-beam-bloom] { animation-delay:-1800ms!important; animation-play-state:paused!important; }
+.join-group-action__still .join-group-action__beam,
+.join-group-action__still .join-group-action__beam::before,
+.join-group-action__still .join-group-action__beam::after,
+.join-group-action__still .join-group-action__beam > [data-beam-bloom] { animation-play-state:paused!important; }
+.bot-group-list .join-group-candidates { margin:0; border:0; border-bottom:1px solid var(--color-border); border-radius:0; }
+@media (hover:hover) and (pointer:fine) and (prefers-reduced-motion:no-preference) {
+  .join-group-action__beam[data-moving]:not([data-paused]),
+  .join-group-action__beam[data-moving]:not([data-paused])::before,
+  .join-group-action__beam[data-moving]:not([data-paused])::after,
+  .join-group-action__beam[data-moving]:not([data-paused]) > [data-beam-bloom] { animation-play-state:running!important; }
+  .join-group-action .join-group-action__button:active:not(:disabled) { transform:scale(.98); }
+}
+@media (prefers-reduced-motion:reduce) { .join-group-action .join-group-action__button { transition:none; } }
+@media (pointer:coarse) { .join-group-action .join-group-action__button { min-height:44px; } }
