@@ -1,5 +1,5 @@
-import {RefreshCw} from 'lucide-react';
-import type {ReactNode} from 'react';
+import {ChevronDown, RefreshCw} from 'lucide-react';
+import {useRef, useState, type ReactNode} from 'react';
 import {
   CUSTOM_PROMPT_NOTICE, NOT_REPLIED_TEXT, OPTIONAL_SCOPE_EFFECTS, SCOPE_DENIAL_PLACE_TEXT, backendLabel, botSteps, connectionStep, crashText, formatTime, toolSteps,
   type AdminSetupStatus, type Agent, type Command, type CommandResult, type CrashEntry, type DesktopSnapshot, type DirectoryProblem, type Membership, type NotReplied, type SetupStep, type StepAction, type StepTone,
@@ -137,8 +137,32 @@ function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
     const step = tools.find(item => item.title === backendLabel(backend));
     return `${backendLabel(backend)}${step ? ` ${step.status}` : ''}（${count} 个群）`;
   }).join('；');
-  return <SettingsGroup id={settingAnchor(diagnosticsSection(agent.id))}
-    label={<span className="diagnostics-bot"><AgentAvatar agent={agent}/>{agent.name}{total > 0 && <StatusBadge tone="warning">{`${total} 条没回`}</StatusBadge>}</span>}>
+  const steps = read?.status ? botSteps(agent, read.status) : [];
+  const pending = steps.filter(step => !step.done);
+  const permissionUnknown = read?.status && read.status.scopes.missingRequired === undefined;
+  const disabled = !agent.readError && !agent.enabled && !agent.running;
+  const summary = agent.readError ? connection.detail ?? '配置读取失败'
+    : read?.problem ? `飞书设置读取失败：${read.problem}`
+    : disabled ? '已停用，诊断记录仍可查看'
+    : !agent.enabled ? connection.detail ?? connection.status
+    : connection.tone === 'danger' || connection.tone === 'warning' ? connection.detail ?? connection.status
+    : agent.connection === 'reconnecting' ? '正在重新连接飞书'
+    : !read?.status ? '正在读取飞书设置…'
+    : misplaced.length ? `${misplaced.length} 个群的工作目录需要调整`
+    : (agent.diagnostics?.deniedScopes?.length ?? 0) > 0 ? '有权限曾被飞书拒绝，请查看记录'
+    : pending.length ? `待完成：${pending.map(step => step.title).join('、')}`
+    : permissionUnknown ? '权限状态暂时读不到'
+    : setup.warnings.length ? setup.warnings[0]
+    : '飞书设置完成 · 权限完整';
+  const needsCheck = agent.enabled && (Boolean(read?.problem || agent.readError) || misplaced.length > 0 || (agent.diagnostics?.deniedScopes?.length ?? 0) > 0 || pending.length > 0 || setup.warnings.length > 0 || ['danger','warning'].includes(connection.tone));
+  return <details id={settingAnchor(diagnosticsSection(agent.id))} className={`diag-bot ${!agent.enabled ? 'diag-bot--disabled' : ''}`}>
+    <summary aria-label={`查看 ${agent.name} 的诊断`}>
+      <AgentAvatar agent={agent}/>
+      <span className="diag-bot-copy"><span className="diag-bot-name">{agent.name}</span><span className={`diag-bot-note ${needsCheck ? 'diag-bot-note--warning' : ''}`}>{summary}</span></span>
+      <span className="diag-bot-meta">{badge(disabled ? '已停用' : connection.status, disabled ? 'neutral' : connection.tone)}{total > 0 && <span className="diag-record-count">{total} 条未回复记录</span>}</span>
+      <ChevronDown className="diag-chevron" size={14} aria-hidden="true"/>
+    </summary>
+    <div className="diag-bot-body"><SettingsGroup label="详细诊断">
     <SettingsRow title="连接" description={connection.detail} trailing={badge(connection.status, connection.tone)}/>
     <SettingsRow title="飞书设置" description={read?.problem && !read.status ? read.problem
       : setup.warnings.length ? <ul className="diagnostics-scopes">{setup.warnings.map(text => <li key={text}>{text}</li>)}</ul> : undefined}
@@ -151,7 +175,8 @@ function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
     <SmartDiagnostics agent={agent} snapshot={snapshot} now={now}/>
     <SettingsRow title="最近没回的消息" description={<NotRepliedList records={records} agent={agent} snapshot={snapshot} now={now}/>}/>
     {crashes && <SettingsRow title="最近的崩溃" description={<CrashList records={crashes} now={now}/>}/>}
-  </SettingsGroup>;
+    </SettingsGroup></div>
+  </details>;
 }
 
 /** The red bars (3.10): the paused daemon's alone, whose 恢复运行 restarts it with a new chain that ends the bots' pauses
@@ -169,18 +194,9 @@ function CrashBars({snapshot, ready, busy, run}: {snapshot: DesktopSnapshot; rea
   </div>)}</>;
 }
 
-/** The daemon log at the bottom of the page, scrolled to and focused. */
-function showLog() {
-  const section = document.getElementById(settingAnchor('daemon 日志'));
-  if (!section) return;
-  section.tabIndex = -1;
-  section.scrollIntoView({block: 'start'});
-  section.focus({preventScroll: true});
-}
-
 /** 状态与诊断 (product.md 3.1 item 8): the red bar of a crash pause, this machine's tools, its decision models' keys
  * (s23g2) and the daemon's crashes, then each bot's connection, setup, scopes, tools, misplaced group directories,
- * recent not-replied messages and crashes, then the daemon log. */
+ * recent not-replied messages and crashes, with the daemon log beside the machine details. */
 export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpenEnvironment, onOpenSecrets, onNotice}: {
   snapshot: DesktopSnapshot; ready: boolean; busy: boolean;
   run: (command: Command) => Promise<CommandResult>;
@@ -188,6 +204,16 @@ export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpe
   onNotice: (message: string, error: boolean) => void;
 }) {
   const client = useClient();
+  const [logOpen, setLogOpen] = useState(false);
+  const logRef = useRef<HTMLDetailsElement>(null);
+  function showLog() {
+    const section = logRef.current;
+    if (!section) return;
+    section.open = true;
+    setLogOpen(true);
+    section.scrollIntoView({block: 'nearest'});
+    section.querySelector('summary')?.focus({preventScroll: true});
+  }
   const secrets = useSecrets();
   const {reads, recheck} = useSetupStatus(snapshot.agents.map(agent => agent.id), {poll: false});
   const claudeLogin = useClaudeLoginCheck(snapshot.tools, message => onNotice(message, true));
@@ -210,21 +236,27 @@ export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpe
     return <Button size="sm" loading={action.kind === 'claudeLogin' && claudeLogin.checking} disabled={busy || !ready} onClick={() => act(action)}>{action.label}</Button>;
   }
   const crashes = snapshot.application.crashes;
-  return <div className="page-stack diagnostics-page">
+  return <div className="page-stack diagnostics-page diagnostics-layout">
+    <header className="diag-heading today-page-heading" id={settingAnchor('诊断概况')}>
+      <div><h1>状态与诊断</h1><p><span data-search-title="daemon 版本">后台 {host.kind === 'connected' ? host.version : '未连接'}</span><span>·</span><span data-search-title="最近读取">最近读取 {snapshot.observedAt ? formatTime(snapshot.observedAt) : '尚未读取'}</span></p></div>
+      <div className="diag-heading-actions"><IconButton size="sm" variant="ghost" label="重新检查" title="刷新快照、飞书设置与密钥状态" loading={checking} disabled={busy || !ready} onClick={() => void recheckAll().catch(error => onNotice(error instanceof Error ? error.message : '重新检查没有完成。', true))}><RefreshCw size={16} strokeWidth={1.7} aria-hidden="true"/></IconButton></div>
+    </header>
     <CrashBars snapshot={snapshot} ready={ready} busy={busy} run={run}/>
-    <SettingsGroup label="这台电脑" id={settingAnchor('这台电脑')}
-      action={<IconButton size="sm" variant="ghost" label="重新检查" title="重新检查" loading={checking} disabled={busy || !ready} onClick={() => void recheckAll().catch(error => onNotice(error instanceof Error ? error.message : '重新检查没有完成。', true))}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}
-      footer="后端每分钟检查一次；Claude 的登录在打开这一页或点「检查登录」时检查。">
-      <SettingsRow title="daemon 版本" value={host.kind === 'connected' ? host.version : '未知'}/>
-      {tools.map(step => <SettingsRow key={step.id} title={step.title} description={stepDescription(step)}
-        trailing={<span className="setup-step-trailing">{badge(step.status, step.tone)}{toolAction(step)}</span>}/>)}
+    <SettingsGroup label="这台电脑" id={settingAnchor('这台电脑')} className="diag-machine"
+      footer="Provider 每分钟检查一次；Claude 登录可单独检查。">
+      {tools.map(step => <SettingsRow key={step.id} title={step.title} description={stepDescription(step)} trailing={<span className="setup-step-trailing">{badge(step.status, step.tone)}{toolAction(step)}</span>}/>)}
       <KeyDiagnosticsRows read={secrets.read} onOpenSecrets={onOpenSecrets} onShowLog={showLog}/>
-      <SettingsRow title="数据目录" value={<code>{snapshot.application.dataPath}</code>}/>
-      <SettingsRow title="最近读取" value={snapshot.observedAt ? formatTime(snapshot.observedAt) : '尚未读取'}/>
-      {crashes && <SettingsRow title="最近的崩溃" description={<CrashList records={crashes.records.filter(record => !record.appId)} now={Date.now()}/>}/>}
+      <details className="diag-runtime"><summary>运行详情<ChevronDown size={13} aria-hidden="true"/></summary><div>
+        <SettingsRow title="数据目录" value={<code>{snapshot.application.dataPath}</code>}/>
+        {crashes && <SettingsRow title="最近的崩溃" description={<CrashList records={crashes.records.filter(record => !record.appId)} now={Date.now()}/>}/>}
+      </div></details>
+      <details className="diag-log-disclosure" id={settingAnchor('daemon 日志')} ref={logRef} onToggle={event => setLogOpen(event.currentTarget.open)}>
+        <summary className="diag-log-disclosure-trigger" data-search-title="后台日志"><span>后台日志</span><ChevronDown size={13} aria-hidden="true"/></summary>
+        {logOpen && <LogPanel request={client.machine}/>}
+      </details>
     </SettingsGroup>
-    {snapshot.agents.map(agent => <BotDiagnostics key={agent.id} agent={agent} snapshot={snapshot} read={reads[agent.id]} tools={tools}
-      onOpenSetup={onOpenSetup} onError={message => onNotice(message, true)}/>)}
-    <LogPanel request={client.machine}/>
+    <section className="diag-bots" aria-label="Bot 状态"><div className="diag-section-heading"><h2>Bot 状态</h2><span>{snapshot.agents.length} 个 Bot</span></div>
+      <div className="diag-bot-list">{!snapshot.agents.length && <p className="diag-empty">尚未添加 Bot。添加后会显示连接状态和诊断记录。</p>}{snapshot.agents.map(agent => <BotDiagnostics key={agent.id} agent={agent} snapshot={snapshot} read={reads[agent.id]} tools={tools} onOpenSetup={onOpenSetup} onError={message => onNotice(message, true)}/>)}</div>
+    </section>
   </div>;
 }
