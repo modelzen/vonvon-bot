@@ -1,13 +1,14 @@
 import {useEffect, useRef, useState} from 'react';
+import {ArrowUpRight, Check, ChevronDown, RefreshCw, ShieldCheck, TriangleAlert} from 'lucide-react';
 import type {VonvonClient} from '@vonvon/client/browser';
 import type {AdminSetupStatus, Agent, AgentId, Job, JobId} from '@vonvon/protocol';
 import {useClient, useShellCapabilities} from '../client-context';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
-import {Button, StatusBadge} from '../reference/components/ui';
+import {Button, IconButton, StatusBadge} from '../reference/components/ui';
 import {openExternalUrl} from '../url-actions';
 import {scopeStep, type StepTone} from '@vonvon/protocol';
-import {stepDescription} from './SetupChecklist';
 import './setup.css';
+import './grant-step.css';
 import {settingAnchor} from '../search';
 
 /** Faster than the checklist (10 s): the user is waiting on this one screen. */
@@ -35,7 +36,7 @@ export function registeredAgentId(job: Job | undefined, refresh: boolean | undef
 }
 
 /** The 注册 Bot dialog. `agentId` is set once a first registration succeeds; the dialog then shows the grant step. */
-export type RegisterModal = {kind: 'register'; jobId: JobId; refresh?: boolean; agentId?: AgentId};
+export type RegisterModal = {kind: 'register'; jobId: JobId; refresh?: boolean; refreshAgentId?: AgentId; initialAgentIds?: readonly AgentId[]; agentId?: AgentId};
 /** The dialog after a snapshot. Job views expire after a while, so it keeps the new bot's id itself. */
 export function withRegisteredAgent(modal: RegisterModal, jobs: readonly Job[]): RegisterModal {
   if (modal.agentId) return modal;
@@ -71,10 +72,11 @@ export function watchScopeStatus(client: Pick<VonvonClient, 'admin'>, agentId: A
   });
   return () => { live = false; stop(); };
 }
-export function useScopeStatus(agentId: AgentId, pollMs: number): ScopeRead {
+/** Changing `retry` restarts the watcher immediately and drops any older in-flight answer. */
+export function useScopeStatus(agentId: AgentId, pollMs: number, retry = 0): ScopeRead {
   const client = useClient();
   const [read, setRead] = useState<ScopeRead>({});
-  useEffect(() => watchScopeStatus(client, agentId, pollMs, setRead), [client, agentId, pollMs]);
+  useEffect(() => watchScopeStatus(client, agentId, pollMs, setRead), [client, agentId, pollMs, retry]);
   return read;
 }
 
@@ -93,34 +95,56 @@ export function grantView(read: ScopeRead, opened: boolean): GrantView {
   return {...base, status: step.status, tone: step.tone, done: false, detail: step.detail, items: step.items, note: opened ? PUBLISH_NOTE : undefined};
 }
 
+/** The registration dialog cannot advance on a cached successful result after the latest read failed. */
+export function grantStepView(read: ScopeRead, opened: boolean): GrantView {
+  return grantView(read.problem ? {problem: read.problem} : read, opened);
+}
+
 /** Step 2 of 注册 Bot: the bot exists, now grant its Feishu scopes. Events, callback and publishing stay on the checklist. */
-export function GrantStep({agentId, onOpenChecklist, onDone}: {agentId: AgentId; onOpenChecklist: () => void; onDone: () => void}) {
+export function GrantStep({agentId, onReadyChange}: {agentId: AgentId; onReadyChange?: (ready: boolean) => void}) {
   const shell = useShellCapabilities();
-  const read = useScopeStatus(agentId, GRANT_POLL_MS);
+  const [retry, setRetry] = useState(0);
+  const read = useScopeStatus(agentId, GRANT_POLL_MS, retry);
   const [opened, setOpened] = useState(false);
   const [error, setError] = useState('');
-  const view = grantView(read, opened);
+  const view = grantStepView(read, opened);
+  const ready = view.done && !view.warnings?.length;
+  const unknown = Boolean(read.status && read.status.scopes.missingRequired === undefined);
+  useEffect(() => { onReadyChange?.(ready); }, [onReadyChange, ready]);
   async function grant(url: string) {
     setError('');
     try { await openExternalUrl(url, 'app-console', shell); setOpened(true); }
     catch (failure) { setError(failure instanceof Error ? failure.message : '无法打开飞书开发者后台。'); }
   }
-  return <>
-    <p>Bot 已注册。下一步：一键开权限，在飞书开发者后台确认预选好的权限。</p>
-    <SettingsGroup label="第 2 步 · 开权限">
-      <SettingsRow title="权限" description={stepDescription(view)}
-        trailing={<span className="setup-step-trailing">
-          <StatusBadge tone={view.tone} variant="pill">{view.status}</StatusBadge>
-          {view.grantUrl && (!view.done || view.warnings?.length) ? <Button size="sm" variant={view.done ? 'secondary' : 'primary'} onClick={() => { if (view.grantUrl) void grant(view.grantUrl); }}>一键开权限</Button> : null}
-        </span>}/>
-    </SettingsGroup>
-    {view.note && <p className="collaboration-footnote" role="status">{view.note}</p>}
-    {error && <p className="settings-operation-message" role="alert">{error}</p>}
-    <div className="desktop-actions">
-      <Button onClick={onOpenChecklist}>查看连接与设置</Button>
-      <Button variant={view.done ? 'primary' : 'secondary'} onClick={onDone}>完成</Button>
+  return <section className="registration-grant" aria-label="开通飞书权限">
+    <div className="registration-grant-heading">
+      <span className="registration-grant-icon"><ShieldCheck size={21} aria-hidden="true"/></span>
+      <div>
+        <h3>{ready ? '权限已开通' : read.problem || unknown ? '暂时无法确认权限' : '开通飞书权限'}</h3>
+        <p>{ready ? '接下来检查事件、回调与发布状态。' : read.problem ? 'Bot 已注册成功，稍后可以继续配置。' : '在飞书确认预选权限，然后创建版本并发布。'}</p>
+      </div>
     </div>
-  </>;
+    {read.problem ? <div className="registration-grant-warning" role="alert">
+      <TriangleAlert size={16} aria-hidden="true"/><span>{read.problem}</span>
+      <IconButton label="重新检测权限" title="重新检测权限" size="sm" variant="ghost" onClick={() => setRetry(value => value + 1)}><RefreshCw size={14} aria-hidden="true"/></IconButton>
+    </div> : ready ? <div className="registration-grant-success" role="status"><Check size={16} aria-hidden="true"/><span>必需权限已全部开通</span></div> : <div className="registration-grant-card">
+      <div className="registration-grant-card-heading">
+        <span><strong>飞书权限</strong><small data-tone={view.tone} role="status">{view.done ? '必需权限已开通' : view.status}</small></span>
+        <div className="registration-grant-actions">
+          {unknown && <IconButton label="重新检测权限" title="重新检测权限" size="sm" variant="ghost" onClick={() => setRetry(value => value + 1)}><RefreshCw size={14} aria-hidden="true"/></IconButton>}
+          {view.grantUrl && <Button size="sm" variant={view.done ? 'secondary' : 'primary'} onClick={() => { if (view.grantUrl) void grant(view.grantUrl); }}>一键开权限<ArrowUpRight size={13} aria-hidden="true"/></Button>}
+        </div>
+      </div>
+      {unknown && view.detail && <p className="registration-grant-detail">{view.detail}</p>}
+      {view.items?.length ? <details className="registration-grant-permissions">
+        <summary>查看缺少的权限<ChevronDown size={13} aria-hidden="true"/></summary>
+        <div>{view.items.map(item => <code key={item}>{item}</code>)}</div>
+      </details> : null}
+    </div>}
+    {view.warnings?.map(warning => <p key={warning} className="registration-grant-warning" role="status"><TriangleAlert size={16} aria-hidden="true"/><span>{warning}</span></p>)}
+    {opened && !ready && <p className="registration-grant-note" role="status">{PUBLISH_NOTE}</p>}
+    {error && <p className="registration-grant-warning" role="alert"><TriangleAlert size={16} aria-hidden="true"/><span>{error}</span></p>}
+  </section>;
 }
 
 /** Bot 设置 → 连接与权限: the same grant link. It re-reads slowly, so a failed read or a grant made elsewhere
