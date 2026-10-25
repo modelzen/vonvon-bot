@@ -17,7 +17,8 @@ import type { TenantBrand } from '../config/schema';
  * scope、网络不通、接口报错都归这里——只告知、绝不阻塞启动（项目既有策略）。
  *
  * 注意：此查询只检测「事件配置」；不能据此断言 card.action.trigger 已配置。
- * 卡片回调由 Bot 接收真实 cardAction 后记录验证证据，尚未收到时保留人工确认。
+ * 卡片回调配置由 card-callback-diagnosis 读取应用信息中的 callback_info；
+ * Bot 收到真实 cardAction 后的验证证据和人工确认另外保留，不能互相代替。
  */
 
 const ENDPOINTS: Record<TenantBrand, string> = {
@@ -34,11 +35,10 @@ const networkReason = (err: unknown): string =>
 export const REQUIRED_EVENTS = ['im.message.receive_v1'] as const;
 
 /**
- * 可选功能各自依赖的事件：缺了只是对应功能静默关闭（机器人菜单 / 文档评论回复 /
+ * 可选功能各自依赖的事件：缺了只是对应功能静默关闭（文档评论回复 /
  * 加入存量群绑定与自动解绑 / 表情回复驱动 / 撤回说明），不影响诊断状态，仅在结果里单列提醒。
  */
 export const OPTIONAL_EVENTS = [
-  'application.bot.menu_v6',
   'drive.notice.comment_add_v1',
   'im.chat.member.bot.added_v1',
   'im.chat.member.bot.deleted_v1',

@@ -224,7 +224,7 @@ describe('buildDoctorCard — 事件订阅诊断（版本信息 API）', () => {
           version: '1.0.2',
           events: ['im.message.receive_v1'],
           missingRequired: [],
-          missingOptional: ['application.bot.menu_v6'],
+          missingOptional: ['drive.notice.comment_add_v1'],
         },
         eventConfigUrl: EVT_URL,
       }),
@@ -233,7 +233,7 @@ describe('buildDoctorCard — 事件订阅诊断（版本信息 API）', () => {
     expect(json).toContain('事件订阅：✅');
     expect(json).toContain('v1.0.2');
     expect(json).toContain('可选事件未订阅');
-    expect(json).toContain('application.bot.menu_v6');
+    expect(json).toContain('drive.notice.comment_add_v1');
     expect((card as { header: { template: string } }).header.template).toBe('blue');
   });
 

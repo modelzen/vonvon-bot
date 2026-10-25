@@ -7,7 +7,7 @@ import type {SetupRead} from '../src/setup/useSetupStatus';
 const h = vi.hoisted(() => ({
   state: [] as unknown[], index: 0,
   reads: {} as Record<string, unknown>,
-  recheck: vi.fn(), admin: vi.fn(),
+  recheck: vi.fn(), admin: vi.fn(), openExternal: vi.fn(),
 }));
 vi.mock('react', async original => ({...await original<typeof import('react')>(),
   useState: (initial: unknown) => {
@@ -18,6 +18,7 @@ vi.mock('react', async original => ({...await original<typeof import('react')>()
 }));
 vi.mock('../src/client-context', () => ({useClient: () => ({admin: h.admin}), useShellCapabilities: () => ({})}));
 vi.mock('../src/setup/useSetupStatus', () => ({useSetupStatus: () => ({reads: h.reads, recheck: h.recheck})}));
+vi.mock('../src/url-actions', () => ({openExternalUrl: (...args: unknown[]) => h.openExternal(...args)}));
 
 type Element = ReactElement<Record<string, any>>;
 function nodes(node: ReactNode): Element[] {
@@ -52,12 +53,13 @@ function render(value: DesktopSnapshot = snapshot) {
   return nodes(FeishuConnections({snapshot: value, ready: true, busy: false, run, onRegister, onOpenGroups, onOpenEnvironment: () => {}, onNotice, codexJobs: null}));
 }
 const section = (all: Element[]) => all.find(node => node.type === 'section' && String(node.props['aria-label'] ?? '').endsWith('的配置检查'))!;
-const button = (all: Element[], label: string) => all.find(node => node.props.onClick && text(node.props.children) === label)!;
+const button = (all: Element[], label: string) => all.find(node => node.props.onClick && (text(node.props.children) === label || node.props['aria-label'] === label))!;
 const flush = async () => {for (let i = 0; i < 12; i++) await Promise.resolve();};
 
 beforeEach(() => {
   h.state = []; h.index = 0; h.reads = {}; h.recheck.mockReset().mockResolvedValue(undefined); h.admin.mockReset().mockResolvedValue({kind: 'applied'});
   run.mockClear(); onRegister.mockClear(); onOpenGroups.mockClear(); onNotice.mockClear();
+  h.openExternal.mockReset().mockResolvedValue(undefined);
 });
 
 it('shows one Bot at a time in the six Feishu checks and switches without mixing results', () => {
@@ -76,9 +78,9 @@ it('shows one Bot at a time in the six Feishu checks and switches without mixing
   expect(all.find(node => node.type === 'button' && node.props.title === '二号 Bot')?.props['aria-pressed']).toBe(true);
 });
 
-it('confirms and revokes card callbacks only for the currently selected Bot', async () => {
+it('confirms and revokes unverified card callbacks only for the currently selected Bot', async () => {
   h.reads[first.id] = {status: done(first.id, false), checking: false} satisfies SetupRead;
-  h.reads[second.id] = {status: done(second.id), checking: false} satisfies SetupRead;
+  h.reads[second.id] = {status: {...done(second.id), cardCallback: {confirmed: true, configuration: {state: 'unchecked'}}}, checking: false} satisfies SetupRead;
   let all = render();
   button(all, '我已配置').props.onClick(); await flush();
   expect(h.admin).toHaveBeenCalledExactlyOnceWith({type: 'confirmCardCallback', agentId: first.id, confirmed: true});
@@ -128,4 +130,61 @@ it('keeps a disabled Bot selectable for inspection while its sibling stays activ
   expect(section(all).props['aria-label']).toBe('二号 Bot 的配置检查');
   expect(text(all)).toContain('未启用');
   expect(all.find(node => node.type === 'button' && node.props.title === '一号 Bot')?.props.disabled).not.toBe(true);
+});
+
+it('hides row actions when configuration is healthy, including historical manual confirmation', () => {
+  for (const cardCallback of [
+    {confirmed: false, configuration: {state: 'configured' as const, mode: 'websocket' as const}},
+    {confirmed: true},
+    {confirmed: true, verifiedAt: 1_792_900_000_000},
+  ]) {
+    h.reads[first.id] = {status: {...done(first.id), cardCallback}, checking: false} satisfies SetupRead;
+    const all = render();
+    expect(text(section(all))).toContain('已完成 6 / 6');
+    expect(nodes(section(all)).some(node => node.props.className === 'feishu-connections__inline-actions')).toBe(false);
+    expect(button(all, '事件与回调')).toBeUndefined();
+    expect(button(all, '撤销确认')).toBeUndefined();
+  }
+});
+
+it('keeps optional event remediation beside that status and opens the selected Bot URL', async () => {
+  h.reads[first.id] = {status: done(first.id), checking: false} satisfies SetupRead;
+  h.reads[second.id] = {status: {...done(second.id), event: {state: 'ok', missingOptional: ['im.message.recalled_v1']}}, checking: false} satisfies SetupRead;
+  let all = render();
+  expect(button(all, '打开事件设置')).toBeUndefined();
+  all.find(node => node.type === 'button' && node.props.title === '二号 Bot')!.props.onClick();
+  all = render();
+  expect(text(section(all))).toContain('已完成 6 / 6');
+  const result = all.find(node => node.props.className === 'feishu-connections__step-result' && text(node).includes('已订阅接收消息'))!;
+  expect(button(nodes(result), '打开事件设置')).toBeDefined();
+  button(all, '打开事件设置').props.onClick(); await flush();
+  expect(h.openExternal).toHaveBeenLastCalledWith(done(second.id).eventConfigUrl, 'event-settings', {});
+});
+
+it.each([
+  ['必要权限缺失', {scopes: {missingRequired: ['im:message'], grantUrl: done(first.id).scopes.grantUrl}}, '一键开权限'],
+  ['缺少群信息权限', {scopes: {missingRequired: [], missingJoinScopes: ['im:chat:readonly'], grantUrl: done(first.id).scopes.grantUrl}}, '一键开权限'],
+  ['权限检测失败', {scopes: {grantUrl: done(first.id).scopes.grantUrl}}, '一键开权限'],
+  ['缺少消息订阅', {event: {state: 'missing'}}, '打开事件设置'],
+  ['回调缺失', {cardCallback: {confirmed: false, configuration: {state: 'missing'}}}, '打开回调设置'],
+  ['回调方式错误', {cardCallback: {confirmed: false, configuration: {state: 'wrong-mode', mode: 'webhook'}}}, '打开回调设置'],
+  ['回调无法确认但有历史记录', {cardCallback: {confirmed: true, verifiedAt: 1_792_900_000_000, configuration: {state: 'unchecked'}}}, '打开回调设置'],
+  ['尚未发布', {event: {state: 'unpublished'}}, '打开开发者后台'],
+] satisfies [string, Partial<AdminSetupStatus>, string][])('keeps %s actions in the corresponding status row', (_name, patch, label) => {
+  h.reads[first.id] = {status: {...done(first.id), ...patch}, checking: false} satisfies SetupRead;
+  const all = render();
+  const results = all.filter(node => node.props.className === 'feishu-connections__step-result');
+  expect(results.some(result => button(nodes(result), label))).toBe(true);
+});
+
+it('offers reauthorization for invalid credentials and waits before offering downstream fixes', () => {
+  h.reads[first.id] = {status: {...done(first.id), credentials: {ok: false, reason: '凭据失效'},
+    scopes: {grantUrl: done(first.id).scopes.grantUrl}, event: {state: 'unchecked'},
+    cardCallback: {confirmed: false, configuration: {state: 'unchecked'}}}, checking: false} satisfies SetupRead;
+  const all = render();
+  expect(button(all, '重新扫码')).toBeDefined();
+  expect(text(all)).toContain('等待凭据恢复');
+  for (const label of ['一键开权限', '打开事件设置', '打开回调设置', '我已配置', '打开开发者后台']) {
+    expect(button(all, label)).toBeUndefined();
+  }
 });

@@ -48,7 +48,8 @@ export function useSetupStatus(agentIds: readonly AgentId[], {poll: polling = tr
       if (reply.kind !== 'cardCallbackStatus') { callbackReadUnsupported.current = true; return; }
       const previous = statuses.current[agentId];
       if (!previous) return;
-      const status = {...previous, cardCallback: reply.cardCallback};
+      // Local receipts cannot replace the result of the separate remote configuration read.
+      const status = {...previous, cardCallback: {...reply.cardCallback, configuration: previous.cardCallback.configuration}};
       statuses.current[agentId] = status;
       setReads(current => ({...current, [agentId]: {...current[agentId], status, checking: false}}));
     } catch (error) {

@@ -213,20 +213,12 @@ export function buildScopeGrantUrl(
   return `https://${host}/app/${encodeURIComponent(appId)}/auth?q=${q}`;
 }
 
-/**
- * Developer-console "事件与回调" page for the app. Unlike scopes there is **no**
- * `?q=` pre-select and **no** API to subscribe events/callbacks for a self-built
- * app — both the 事件配置 (im.message.receive_v1, application.bot.menu_v6) and
- * 回调配置 (card.action.trigger / 卡片回传交互) tabs must be filled in by hand.
- * The best we can do is deep-link to the page and auto-open it. The subscription
- * *state* IS readable though (app-version API, see utils/event-diagnosis.ts), so
- * run/doctor diagnose precisely and announce once the config takes effect.
- */
 /** The app's own page on the developer console; versions and publishing are under it. */
 export function buildAppConsoleUrl(appId: string, tenant: TenantBrand): string {
   return `https://${HOSTS[tenant]}/app/${encodeURIComponent(appId)}`;
 }
 
+/** Shared console page for event and callback configuration. The app only reads their state. */
 export function buildEventConfigUrl(appId: string, tenant: TenantBrand): string {
   return `https://${HOSTS[tenant]}/app/${encodeURIComponent(appId)}/event`;
 }

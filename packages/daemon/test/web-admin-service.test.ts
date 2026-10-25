@@ -1,7 +1,7 @@
 import { pendingGroupsSchema } from '@vonvon/protocol';
 import { createPendingGroups, pendingGroupsFile } from '../src/project/pending-groups';
 import { existsSync, rmSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, botPaths, useBotDir } from '../src/config/paths';
 import { seedBots } from './helpers/bot-fixture';
 import { addProject, mutateProject } from '../src/project/registry';
@@ -367,9 +367,10 @@ describe('createAdminService · daemon 进程内（executeWrite + liveStatus 注
 });
 
 describe('createAdminService · getSetupStatus（初始化 checklist 聚合）', () => {
-  // 真飞书 API 一律 mock（绝不打真网络）：token / bot-info / scopes / app_versions。
+  // 真飞书 API 一律 mock：token / bot-info / scopes / app_versions / application。
   // 写一个带明文 secret 的完整 config.json（resolveAppSecret 直接吃明文）到 bot 目录。
   const SETUP_BOT = 'cli_setupbot';
+  const configuredCallback = { state: 'configured', mode: 'websocket' };
 
   function writeCompleteConfig(tenant: 'feishu' | 'lark' = 'feishu'): void {
     const dir = botPaths(SETUP_BOT).dir;
@@ -380,7 +381,7 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
     );
   }
 
-  function stubFetch(opts: { grantedScopes: string[]; eventEvents: string[]; published?: boolean }): typeof fetch {
+  function stubFetch(opts: { grantedScopes: string[]; eventEvents: string[]; published?: boolean; callbackInfo?: unknown }): typeof fetch {
     return (async (input: unknown): Promise<Response> => {
       const u = String(input);
       const json = (body: unknown): Response =>
@@ -400,12 +401,23 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
           data: opts.published === false ? { items: [] } : { items: [{ version: '1.0.0', status: 1, events: opts.eventEvents }] },
         });
       }
+      if (u.includes(`/application/v6/applications/${SETUP_BOT}?`)) {
+        return json({ code: 0, data: { app: { callback_info: opts.callbackInfo ?? {
+          callback_type: 'websocket', subscribed_callbacks: ['card.action.trigger'],
+        } } } });
+      }
       throw new Error('unexpected fetch ' + u);
     }) as unknown as typeof fetch;
   }
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  beforeEach(() => {
+    // Manual confirmation tests also call the aggregate endpoint: never let them
+    // silently contact real Feishu when no test-specific stub was installed.
+    vi.stubGlobal('fetch', stubFetch({ grantedScopes: [], eventEvents: ['im.message.receive_v1'] }));
   });
 
   beforeAll(async () => {
@@ -464,7 +476,7 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
     expect(s.connection.running).toBe(false); // 没锁文件 + 预览态
     expect(s.eventConfigUrl).toContain('/app/cli_setupbot/event');
     expect(s.consoleUrl).toBe('https://open.feishu.cn/app/cli_setupbot');
-    expect(s.cardCallback).toEqual({ confirmed: false });
+    expect(s.cardCallback).toEqual({ confirmed: false, configuration: configuredCallback });
   });
 
   it('卡片回调勾选按 Bot 存在 setup.json，重开后还在；文件坏了按未勾选', async () => {
@@ -472,13 +484,13 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
     rmSync(botPaths(SETUP_BOT).setupFile, { force: true });
     const svc = createAdminService({});
     await svc.confirmCardCallback(SETUP_BOT, true);
-    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: true });
+    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: true, configuration: configuredCallback });
     expect(statSync(botPaths(SETUP_BOT).setupFile).mode & 0o777).toBe(0o600);
-    expect((await createAdminService({}).getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: true });
+    expect((await createAdminService({}).getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: true, configuration: configuredCallback });
     await svc.confirmCardCallback(SETUP_BOT, false);
-    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: false });
+    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: false, configuration: configuredCallback });
     writeFileSync(botPaths(SETUP_BOT).setupFile, '{not json');
-    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: false });
+    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: false, configuration: configuredCallback });
   });
 
   it('不认识的 Bot、目录已删的 Bot 和只读预览都不写卡片回调勾选', async () => {
@@ -509,11 +521,52 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
       await expect(svc.getCardCallbackStatus!('cli_missing')).rejects.toThrow('没有这个 Bot');
       expect(fetch).not.toHaveBeenCalled();
       vi.stubGlobal('fetch', stubFetch({ grantedScopes: [], eventEvents: ['im.message.receive_v1'] }));
-      expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: true, verifiedAt });
+      expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: true, verifiedAt, configuration: configuredCallback });
     } finally {
       rmSync(cardCallbackFile(SETUP_BOT), { force: true });
       rmSync(botPaths(SETUP_BOT).setupFile, { force: true });
     }
+  });
+
+  it('远程配置已订阅不生成本机确认或真实回调证据；刷新会反映配置变化', async () => {
+    writeCompleteConfig();
+    rmSync(botPaths(SETUP_BOT).setupFile, { force: true });
+    rmSync(cardCallbackFile(SETUP_BOT), { force: true });
+    const svc = createReadonlyAdminService();
+    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: false, configuration: configuredCallback });
+    expect(await svc.getCardCallbackStatus!(SETUP_BOT)).toEqual({ confirmed: false });
+    expect(existsSync(botPaths(SETUP_BOT).setupFile)).toBe(false);
+    expect(existsSync(cardCallbackFile(SETUP_BOT))).toBe(false);
+    vi.stubGlobal('fetch', stubFetch({ grantedScopes: [], eventEvents: ['im.message.receive_v1'], callbackInfo: { callback_type: 'websocket', subscribed_callbacks: [] } }));
+    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: false, configuration: { state: 'missing', mode: 'websocket' } });
+  });
+
+  it.each([
+    [{ callback_type: 'webhook', subscribed_callbacks: ['card.action.trigger'] }, { state: 'wrong-mode', mode: 'webhook' }],
+    [{ callback_type: 'websocket' }, { state: 'unchecked', mode: 'websocket', reason: '应用接口未返回可识别的回调订阅列表' }],
+  ])('回调配置诊断不覆盖本机已验证的证据：%j', async (callbackInfo, configuration) => {
+    writeCompleteConfig();
+    const verifiedAt = 1_790_000_000_000;
+    await recordCardCallback(SETUP_BOT, verifiedAt);
+    vi.stubGlobal('fetch', stubFetch({ grantedScopes: [], eventEvents: ['im.message.receive_v1'], callbackInfo }));
+    try {
+      expect((await createReadonlyAdminService().getSetupStatus(SETUP_BOT)).cardCallback)
+        .toEqual({ confirmed: true, verifiedAt, configuration });
+    } finally {
+      rmSync(cardCallbackFile(SETUP_BOT), { force: true });
+    }
+  });
+
+  it('读取回调配置缺权限时，凭据、事件订阅仍返回各自的检测结果', async () => {
+    writeCompleteConfig();
+    const base = stubFetch({ grantedScopes: [], eventEvents: ['im.message.receive_v1'] });
+    vi.stubGlobal('fetch', (async (input: unknown, init?: RequestInit) => String(input).includes(`/applications/${SETUP_BOT}?`)
+      ? new Response(JSON.stringify({ code: 99991672, msg: 'denied' }), { status: 400 })
+      : base(input as string, init)) as typeof fetch);
+    const status = await createReadonlyAdminService().getSetupStatus(SETUP_BOT);
+    expect(status.credentials).toEqual({ ok: true });
+    expect(status.event.state).toBe('ok');
+    expect(status.cardCallback.configuration).toEqual({ state: 'unchecked', reason: '没有读取应用配置的权限，请检查飞书应用权限后重试' });
   });
 
   it.each([
@@ -532,6 +585,7 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
     const s = await createReadonlyAdminService().getSetupStatus(SETUP_BOT);
     expect(s.credentials).toEqual({ ok: false, reason: '飞书接口 10 秒没有响应', unreachable: true });
     expect(s.event).toEqual({ state: 'unchecked', reason: '飞书接口 10 秒没有响应' });
+    expect(s.cardCallback.configuration).toEqual({ state: 'unchecked', reason: '飞书接口 10 秒没有响应' });
   });
 
   it('缺 scope + 事件未发布：missingRequired 非空、event=unpublished', async () => {
@@ -583,6 +637,7 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
     const s = await svc.getSetupStatus(SETUP_BOT);
     expect(s.credentials.ok).toBe(false);
     expect(s.event.state).toBe('unchecked');
+    expect(s.cardCallback.configuration).toEqual({ state: 'unchecked', reason: '配置缺失，无法诊断卡片回调' });
     expect(s.scopes.grantUrl).toContain('/auth?q='); // 深链总归得给
   });
 });
