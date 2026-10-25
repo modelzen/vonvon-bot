@@ -67,7 +67,7 @@ export type Tool = z.infer<typeof toolSchema>;
 const empty = <T extends string>(type: T) =>
   z.object({ type: z.literal(type) }).strict();
 export const commandSchema = z.discriminatedUnion("type", [
-  empty("refresh"),
+  z.object({type: z.literal("refresh"), tools: z.boolean().optional()}).strict(),
   z.object({type: z.literal("listPendingGroups"), agentId: agentIdSchema}).strict(),
   z.object({type: z.literal("openEventSettings"), url: z.string().regex(/^https:\/\/open\.(?:feishu\.cn|larksuite\.com)\/app\/cli_[\w-]{1,200}\/event$/)}).strict(),
   empty("registerAgent"),

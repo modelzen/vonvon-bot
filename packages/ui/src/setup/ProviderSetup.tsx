@@ -89,13 +89,16 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
   const bundled = provider === 'claude' && state.entry?.bundled === true;
   const installed = providerInstalled(state.tool);
   const auth = providerAuthenticated(state.tool);
+  const detectionUnknown = !state.tool || state.tool.installation === 'unknown';
+  const needsUpdate = !detectionUnknown && state.tool?.compatibility?.status === 'tooOld';
+  const checking = state.check?.state === 'checking';
   const installing = Boolean(state.activeInstall || state.relevantToolInstall);
   const connecting = Boolean(state.activeLogin || state.activeCodexJob);
   const disabled = !ready || busy || state.working;
   const source = state.tools.find(item => item.tool === provider);
   const cliLabel = !source ? '正在检测…' : source.installation === 'missing' ? '未检测到' : '已安装';
-  const installLabel = installing ? '正在安装…' : installed ? `已安装${state.tool?.version ? ` · ${state.tool.version}` : ''}` : state.tool?.compatibility?.status === 'tooOld' ? '需要更新' : state.tool?.installation === 'missing' ? '未安装' : '待检测';
-  const authLabel = connecting ? '等待授权' : !installed ? (bundled ? '运行组件不可用' : '安装后连接') : state.check?.state === 'checking' ? '正在检查…' : state.tool?.authentication === 'notRequired' ? '使用现有配置' : auth ? '已连接' : state.tool?.authentication === 'signedOut' ? '尚未连接' : '暂时无法确认';
+  const installLabel = installing ? '正在安装…' : installed ? `已安装${state.tool?.version ? ` · ${state.tool.version}` : ''}` : needsUpdate ? '需要更新' : state.tool?.installation === 'missing' ? '未安装' : checking || !state.check && !state.issue ? '正在检测…' : '检测异常';
+  const authLabel = connecting ? '等待授权' : detectionUnknown ? '等待检测结果' : !installed ? (bundled ? '运行组件不可用' : needsUpdate ? '更新后连接' : '安装后连接') : state.check?.state === 'checking' ? '正在检查…' : state.tool?.authentication === 'notRequired' ? '使用现有配置' : auth ? '已连接' : state.tool?.authentication === 'signedOut' ? '尚未连接' : '暂时无法确认';
   async function open(url: string, target: 'authorization' | 'verification') {
     setLinkError('');
     try {await openExternalUrl(url, target, shell);} catch {setLinkError('无法打开授权页面，请重试。');}
@@ -116,21 +119,22 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
     {provider === 'claude' && <p className="provider-check">{bundled ? '已内置 Claude 运行组件，可复用本机 Claude Code 登录。' : 'Vonvon 通过 Agent SDK 运行 Claude，可复用本机 Claude Code 登录。'}</p>}
     <div className="provider-steps">
       {!bundled && <div className="provider-step"><span className={`provider-step__number${installed ? ' is-complete' : ''}`}>{compact ? <Package size={16}/> : installed ? <Check size={13}/> : '1'}</span>
-        <div className="provider-step__copy"><strong>{compact ? componentName : `安装 ${componentName}`}</strong><span>{installLabel}</span></div>
+        <div className="provider-step__copy"><strong>{compact ? componentName : `${detectionUnknown ? '检测' : '安装'} ${componentName}`}</strong><span>{installLabel}</span></div>
         {installing ? <Button size="sm" disabled={!ready} onClick={() => void state.cancelInstall()}>取消</Button>
-          : !installed ? <Button size="sm" disabled={disabled} onClick={() => void state.installProvider(state.tool?.compatibility?.status === 'tooOld')}>{state.tool?.compatibility?.status === 'tooOld' ? (provider === 'claude' ? '更新 SDK' : '更新') : (provider === 'claude' ? '安装 SDK' : '安装')}</Button>
+          : detectionUnknown ? <Button size="sm" disabled={disabled || checking} onClick={() => void state.verify()}>重新检测</Button>
+          : !installed ? <Button size="sm" disabled={disabled} onClick={() => void state.installProvider(needsUpdate)}>{needsUpdate ? (provider === 'claude' ? '更新 SDK' : '更新') : (provider === 'claude' ? '安装 SDK' : '安装')}</Button>
           : compact ? null : <Check size={16} className="provider-ready-icon" aria-label="已安装"/>}
       </div>}
       <div className="provider-step"><span className={`provider-step__number${auth && installed ? ' is-complete' : ''}`}>{compact ? <KeyRound size={16}/> : auth && installed ? <Check size={13}/> : bundled ? '1' : '2'}</span>
         <div className="provider-step__copy"><strong>{state.tool?.authentication === 'notRequired' ? '模型连接' : compact ? '账号连接' : '连接账号'}</strong><span>{authLabel}</span></div>
-        {auth ? (compact ? <IconButton label="重新检测连接" title="重新检测连接" variant="ghost" disabled={disabled || connecting || state.check?.state === 'checking'} onClick={() => void state.verify()}><RefreshCw size={15}/></IconButton> : <Button size="sm" variant="ghost" disabled={disabled || connecting || state.check?.state === 'checking'} onClick={() => void state.verify()}>重新检测</Button>)
+        {detectionUnknown ? bundled && <Button size="sm" disabled={disabled || checking} onClick={() => void state.verify()}>重新检测</Button> : auth ? (compact ? <IconButton label="重新检测连接" title="重新检测连接" variant="ghost" disabled={disabled || connecting || state.check?.state === 'checking'} onClick={() => void state.verify()}><RefreshCw size={15}/></IconButton> : <Button size="sm" variant="ghost" disabled={disabled || connecting || state.check?.state === 'checking'} onClick={() => void state.verify()}>重新检测</Button>)
           : <Button size="sm" disabled={disabled || !installed || connecting || installing || state.check?.state === 'checking'} onClick={() => void state.connect()}>连接</Button>}
       </div>
     </div>
     {!auth && installed && !connecting && <div className="provider-existing"><span>已有账号或 API 配置？</span><button type="button" disabled={disabled || state.check?.state === 'checking'} onClick={() => void state.verify()}>检测现有配置</button></div>}
     {state.check?.state === 'checking' && installed && auth && <p className="provider-check" role="status"><LoaderCircle size={14} className="provider-spinner"/>正在读取可用模型…</p>}
     {state.canContinue && !compact && <p className="provider-check provider-check--ready" role="status"><Check size={14}/>{name} 已准备好<span>· {state.check?.models?.length ?? 0} 个模型</span></p>}
-    {(state.issue || state.check?.message || linkError) && <div className="provider-problem" role="status"><p>{state.issue || state.check?.message || linkError}</p><Button size="sm" disabled={disabled || state.check?.state === 'checking'} onClick={() => {void state.read().catch(() => {}); void state.verify();}}>重新检测</Button></div>}
+    {(state.issue || state.check?.message || linkError) && <div className="provider-problem" role="status"><p>{state.issue || state.check?.message || linkError}</p>{!detectionUnknown && <Button size="sm" disabled={disabled || state.check?.state === 'checking'} onClick={() => {void state.read().catch(() => {}); void state.verify();}}>重新检测</Button>}</div>}
     {state.activeCodexJob && <div className="provider-authorization" role="status">
       {state.activeCodexJob.phase === 'authorizing' ? <><p>在 ChatGPT 授权页面输入此代码。</p><code>{state.activeCodexJob.userCode}</code><Button size="sm" disabled={disabled || !state.activeCodexJob.verificationUrl} onClick={() => {if (state.activeCodexJob?.phase === 'authorizing' && state.activeCodexJob.verificationUrl) void open(state.activeCodexJob.verificationUrl, 'authorization');}}>打开授权页面</Button></> : <p>{'message' in state.activeCodexJob ? state.activeCodexJob.message : '正在连接…'}</p>}
       <Button size="sm" variant="ghost" disabled={disabled} onClick={() => {if(state.activeCodexJob) void run({type:'cancelJob', jobId:state.activeCodexJob.id});}}>取消连接</Button>
@@ -140,7 +144,7 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
     {onContinue && <footer className="provider-footer"><Button variant="primary" disabled={!state.canContinue || busy} icon={<ArrowRight size={15}/>} onClick={() => {if (state.canContinue) onContinue(provider);}}>继续</Button></footer>}
     {management && <>
       {state.check?.state === 'ready' && <details className="provider-models" open><summary><span>可用模型</span><span>{state.check.models?.length ?? 0}</span></summary><div className="provider-models__list">{state.check.models?.map(model => <div key={model.id}><strong title={model.id}>{model.displayName || model.id}</strong></div>)}</div></details>}
-      <div className="provider-meta"><h2>{bundled ? '运行组件' : provider === 'claude' ? 'Agent SDK 安装信息' : '安装信息'}</h2><dl><div><dt>安装来源</dt><dd>{bundled ? '应用内置 · 随应用更新' : provider === 'claude' ? !state.entry ? '正在检测…' : state.entry.depState === 'installed' ? 'Vonvon 管理' : '未安装' : !source ? '正在检测…' : source.installation === 'managed' ? 'Vonvon 管理' : source?.installation === 'external' ? '本机已有' : '未安装'}</dd></div>{bundled && <div><dt>版本</dt><dd>{state.entry?.installedVersion ?? state.tool?.version ?? '待检测'}</dd></div>}<div><dt>模型来源</dt><dd>{state.tool?.authentication === 'notRequired' ? '现有 API 配置' : 'Provider 原生配置'}</dd></div></dl>{source?.executable && provider === 'codex' && <details className="provider-install-path"><summary>安装位置</summary><code>{source.executable}</code></details>}
+      <div className="provider-meta"><h2>{bundled ? '运行组件' : provider === 'claude' ? 'Agent SDK 安装信息' : '安装信息'}</h2><dl><div><dt>安装来源</dt><dd>{bundled ? '应用内置 · 随应用更新' : detectionUnknown ? checking ? '正在检测…' : '暂时无法确认' : provider === 'claude' ? !state.entry ? '正在检测…' : state.entry.depState === 'installed' ? 'Vonvon 管理' : '未安装' : !source ? '正在检测…' : source.installation === 'managed' ? 'Vonvon 管理' : source?.installation === 'external' ? '本机已有' : '未安装'}</dd></div>{bundled && <div><dt>版本</dt><dd>{state.entry?.installedVersion ?? state.tool?.version ?? '待检测'}</dd></div>}<div><dt>模型来源</dt><dd>{state.tool?.authentication === 'notRequired' ? '现有 API 配置' : 'Provider 原生配置'}</dd></div></dl>{source?.executable && provider === 'codex' && <details className="provider-install-path"><summary>安装位置</summary><code>{source.executable}</code></details>}
         <div className="provider-management-actions">{!bundled && <Button size="sm" disabled={disabled || installing} onClick={() => void checkVersion()}>检查版本</Button>}
           {installed && auth && <Button size="sm" disabled={disabled || connecting || installing} onClick={() => void state.connect()}>重新连接账号</Button>}
           {installed && !bundled && <Button size="sm" disabled={disabled || installing || connecting} onClick={() => void state.installProvider(true)}>{provider === 'claude' ? '更新 SDK' : `更新 ${name}`}</Button>}
