@@ -161,7 +161,8 @@ describe('save and 试一次', () => {
 describe('the key row', () => {
   it('set: the last four in the pill, then 试一次, 换 key and a ghost 删除', () => {
     const markup = row(service());
-    expect(text(markup)).toContain('TypeSafe 密钥用于 Jev 智能判断。');
+    expect(text(markup)).toContain('API 密钥');
+    expect(text(markup)).not.toContain('密钥用于');
     expect(markup).toContain('已添加 ••••7f3a');
     expect([...markup.matchAll(/<button[^>]*class="([^"]+)"[^>]*>(?:<svg.*?<\/svg>)?<span>([^<]+)<\/span>/g)].map(m => [m[2], m[1].match(/ui-button--(\w+)/)![1]]))
       .toEqual([['验证', 'secondary'], ['更换', 'secondary'], ['删除', 'ghost']]);
@@ -490,7 +491,7 @@ describe('the 状态与诊断 row (product.md 3.1 第 8 条)', () => {
 });
 
 it('the page reads on entering it, and the search lists it (s23g2 做法)', () => {
-  expect(text(html(<SecretsPanel onOpenLogs={noop} onOpenApplication={noop}/>))).toContain('API 密钥正在读取…密钥由所有 Bot 共用。');
+  expect(text(html(<SecretsPanel onOpenLogs={noop} onOpenApplication={noop}/>))).toContain('TypeSafe · Jev正在读取…');
   const entries = searchEntries({
     revision: 1, observedAt: 1, stale: false, host: {kind: 'connected', ownership: 'owned', version: '0.7.0'},
     agents: [], groups: [], memberships: [], tools: [], jobs: [], application: {platform: 'macos', version: '0.7.0', loginItem: false, dataPath: '/tmp/x'},

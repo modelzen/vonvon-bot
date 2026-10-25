@@ -54,7 +54,7 @@ export function judgeEffortChoices(value: Extract<JudgeSelection, {kind: 'llm'}>
   const efforts = value.custom ? catalog?.titleEfforts : catalog?.models.find(model => model.id === value.model)?.supportedEfforts;
   const available = [...(efforts ?? [])];
   if (value.effort && !available.includes(value.effort)) available.push(value.effort);
-  return [{value: '', label: backend === 'claude-agent' ? '默认（关思考）' : '默认（最低一档）'}, ...available.map(effort => ({value: effort, label: effort}))];
+  return [{value: '', label: backend === 'claude-agent' ? '默认（关闭思考）' : '默认'}, ...available.map(effort => ({value: effort, label: effort === 'none' ? '关闭思考' : effort}))];
 }
 export function judgeLabel(selection: JudgeSelectionView, decisionModels?: DecisionModelsView): string {
   if (!isKnownJudgeSelection(selection)) return '这个版本的网页不认识的设置';

@@ -23,3 +23,5 @@
 @media (forced-colors: active) {
   .ui-select-segment:has(input:checked) { outline: 1px solid Highlight; outline-offset: -1px; }
 }
+
+.ui-select-control__recommendation {margin-left:auto; flex:none; padding:0 5px; border-radius:4px; background:var(--color-surface-muted); color:var(--color-text-secondary); font-size:10px; font-weight:400; line-height:16px;}

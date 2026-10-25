@@ -145,7 +145,8 @@ it('does not treat an unavailable key state as a missing key', () => {
 });
 it.each([
   [codex.id, {model: 'gpt-6-luna', effort: 'low' as const}, 'low'],
-  [codex.id, {model: 'gpt-6-sol'}, '自动（最低支持档位）'],
+  [codex.id, {model: 'gpt-6-sol'}, '默认'],
+  [codex.id, {model: 'gpt-6-sol', effort: 'none' as const}, '关闭思考'],
   [claude.id, {model: 'haiku'}, '关闭思考'],
   ['typesafe', {model: 'jev-latest'}, '不支持单独设置'],
 ])('shows the configured model and thinking level for %s', (provider, profile, effort) => {

@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { defaultCodexDecisionEffort, recommendedDecisionEffort } from '@vonvon/protocol';
 import { readClaudeUserSettings, readConfiguredClaudeModel } from '../src/agent/claude-agent/configured-model';
 import type { AgentBackend, JudgeCall, ModelInfo, ReasoningEffort } from '../src/agent/types';
 import { createJudge } from '../src/judge/judge';
@@ -18,13 +19,23 @@ const model = (id: string, supportedEfforts: ReasoningEffort[]): ModelInfo => ({
 const LUNA = model('gpt-6-luna', ['max', 'low', 'medium', 'high', 'xhigh']);
 
 describe('judge default model', () => {
-  it('takes the lowest effort the list gives', () => {
+  it('recommends thinking off, otherwise low, without inventing an unsupported level', () => {
+    expect(recommendedDecisionEffort(['minimal', 'low', 'high'])).toBe('low');
+    expect(recommendedDecisionEffort(['low', 'none'])).toBe('none');
+    expect(recommendedDecisionEffort(['minimal', 'high'])).toBeUndefined();
+    expect(recommendedDecisionEffort([])).toBeUndefined();
+  });
+
+  it('defaults to the recommendation before the lowest supported fallback', () => {
     expect(judgeEffort('gpt-6-luna', [LUNA])).toBe('low');
+    expect(judgeEffort('m', [model('m', ['high', 'minimal', 'low'])])).toBe('low');
     expect(judgeEffort('m', [model('m', ['high', 'minimal', 'medium'])])).toBe('minimal');
-    expect(judgeEffort('m', [model('m', ['low', 'none'])])).toBe('none');
+    expect(judgeEffort('m', [model('m', ['low', 'none', 'minimal'])])).toBe('none');
     expect(judgeEffort('m', [model('m', [])])).toBeUndefined();
+    expect(judgeEffort('gpt-6-luna', [model('gpt-6-luna', [])])).toBeUndefined();
     expect(judgeEffort('gpt-6-luna', [LUNA], true)).toBeUndefined();
     expect(judgeEffort('my-gw/qwen', [LUNA], true)).toBeUndefined();
+    expect(defaultCodexDecisionEffort('gpt-6-luna', ['future'])).toBeUndefined();
   });
 
   it('without a cached list: gpt-6-luna gets low, other models nothing', () => {
@@ -127,9 +138,10 @@ describe('judge model layers (design 2.2)', () => {
     expect(resolveJudgeModel('codex-appserver', {}, undefined)).toEqual({ model: 'gpt-6-luna', effort: 'low', modelSource: 'default' });
   });
 
-  it('a setting without effort: Codex the lowest the list gives, none for custom ids and for Claude', () => {
-    const list = [model('m', ['high', 'medium'])];
-    expect(resolveJudgeModel('codex-appserver', { bot: llm('codex-appserver', 'm') }, list)).toEqual({ model: 'm', effort: 'medium', modelSource: 'bot' });
+  it('a setting without effort uses the recommendation, while custom ids and Claude omit effort', () => {
+    const list = [model('m', ['high', 'minimal', 'low'])];
+    expect(resolveJudgeModel('codex-appserver', { bot: llm('codex-appserver', 'm') }, list)).toEqual({ model: 'm', effort: 'low', modelSource: 'bot' });
+    expect(resolveJudgeModel('codex-appserver', { group: llm('codex-appserver', 'm') }, [model('m', ['low', 'none'])])).toEqual({ model: 'm', effort: 'none', modelSource: 'group' });
     expect(resolveJudgeModel('codex-appserver', { bot: llm('codex-appserver', 'm', { custom: true }) }, list)).toEqual({ model: 'm', modelSource: 'bot' });
     expect(resolveJudgeModel('claude-agent', { group: llm('claude-agent', 'gpt-6-luna') }, [LUNA])).toEqual({ model: 'gpt-6-luna', modelSource: 'group' });
   });
@@ -203,6 +215,8 @@ describe('a chosen effort fitted to the model (Rakazo 第二轮 A6)', () => {
   });
 
   it('resolveJudgeModel sends the fitted effort, on Claude too', () => {
+    expect(resolveJudgeModel('codex-appserver', { bot: llm('codex-appserver', 'm', { effort: 'minimal' }) }, [model('m', ['minimal', 'low', 'none'])]))
+      .toEqual({ model: 'm', effort: 'minimal', modelSource: 'bot' });
     expect(resolveJudgeModel('codex-appserver', { bot: llm('codex-appserver', 'gpt-6-luna', { effort: 'minimal' }) }, [LUNA]))
       .toEqual({ model: 'gpt-6-luna', effort: 'low', modelSource: 'bot' });
     expect(resolveJudgeModel('claude-agent', { group: llm('claude-agent', 'm', { effort: 'medium' }) }, [twoLevels]))
@@ -273,13 +287,18 @@ it('a provider-only group hot reads the host model and calls the selected backen
   expect(calls).toHaveLength(2);
 });
 
-it('provider defaults follow the selected live catalog and an override without effort uses its lowest level', async () => {
+it('provider defaults follow the live catalog and an override without effort uses its recommendation', async () => {
   const root = mkdtempSync(join(tmpdir(), 'judge-provider-default-')); dirs.push(root);
   const choice = { kind: 'provider' as const, provider: 'codex-appserver' as const };
-  const available = [model('gpt-6.1-sol', ['high', 'low'])];
+  const available = [model('gpt-6.1-sol', ['high', 'minimal', 'low'])];
   expect(resolveJudgeModel('codex-appserver', { group: choice }, available, undefined, root))
     .toEqual({ model: 'gpt-6.1-sol', effort: 'low', modelSource: 'group' });
   await writeJudgeModels({ byProvider: { 'codex-appserver': { model: 'gpt-6.1-sol' } } }, root);
   expect(resolveJudgeModel('codex-appserver', { group: choice }, available, undefined, root))
     .toEqual({ model: 'gpt-6.1-sol', effort: 'low', modelSource: 'group' });
+  expect(resolveJudgeModel('codex-appserver', { group: choice }, [model('gpt-6.1-sol', ['minimal', 'none', 'low'])], undefined, root))
+    .toEqual({ model: 'gpt-6.1-sol', effort: 'none', modelSource: 'group' });
+  await writeJudgeModels({ byProvider: { 'codex-appserver': { model: 'gpt-6.1-sol', effort: 'minimal' } } }, root);
+  expect(resolveJudgeModel('codex-appserver', { group: choice }, available, undefined, root))
+    .toEqual({ model: 'gpt-6.1-sol', effort: 'minimal', modelSource: 'group' });
 });
