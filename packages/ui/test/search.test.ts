@@ -346,7 +346,8 @@ test('Bot profile has its own route and former Bot-only group settings no longer
 });
 
 test('history actions explicitly reveal the contextual history panel and preserve their target', () => {
-  for (const query of ['历史会话', '搜索历史会话', '恢复会话', '清空会话', '压缩上下文', '自主任务目标']) {
+  for (const removed of ['自主任务目标']) assert.equal(findEntries(entries, removed).length, 0);
+  for (const query of ['历史会话', '搜索历史会话', '恢复会话', '清空会话', '压缩上下文']) {
     const result = findEntries(entries, query)[0];
     assert.equal(result?.destination.reveal, 'group-history', query);
     assert.equal(result?.destination.section, '会话管理', query);
