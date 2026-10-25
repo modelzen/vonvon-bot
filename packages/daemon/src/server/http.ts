@@ -169,6 +169,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
         case 'contextPreview': return finish(peer, await contextPreviewRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'contextPreview', payload }));
         case 'directory': {
           if (request.payload.type === 'list') { peer.send({ type: 'response', id, method: 'directory', payload: await directory.list(request.payload.path) }); return; }
+          if (request.payload.type === 'suggest') { peer.send({ type: 'response', id, method: 'directory', payload: await directory.suggest(request.payload.query) }); return; }
           const folder = await directory.choose(request.payload.path);
           return finish(peer, { kind: 'mutation', reply: () => ({ kind: 'folderChosen' as const, folder }) }, payload => ({ type: 'response', id, method: 'directory', payload }));
         }
