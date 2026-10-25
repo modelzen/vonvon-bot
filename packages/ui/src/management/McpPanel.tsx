@@ -101,7 +101,7 @@ export function McpPanel({refreshKey = 0}: {refreshKey?: number}) {
     {notice && <p className="mcp-note" role="status">{notice}</p>}
     {adding && current && <AddMcpDialog provider={provider} revision={current.revision} onSave={add} onRefresh={refresh} onClose={() => setAdding(false)}/>}
     <ConfirmDialog open={Boolean(removing)} title={`移除 ${removing?.name ?? 'MCP'}？`} description={`将从 ${providerName(provider)} 用户配置移除，使用此配置的 Bot 都会受影响。`} confirmLabel="移除" tone="danger" pending={busy} error={removeError}
-      onCancel={() => {if (!busy) setRemoving(undefined);}} onConfirm={() => void remove()}><p className="mcp-note">只移除本机配置，保留远端服务。</p>{current?.status === 'conflict' && <Button disabled={busy || loading} onClick={async () => {const latest = await refresh(); if (latest?.status === 'ready') {if (!latest.entries.some(entry => entry.name === removing?.name)) {setRemoving(undefined); setNotice('该连接已从配置中移除。');} else setRemoveError('已重新读取，请确认后再次移除。');}}}>重新读取</Button>}</ConfirmDialog>
+      onCancel={() => {if (!busy) setRemoving(undefined);}} onConfirm={() => void remove()}><p className="mcp-note">只移除本机配置，保留远端服务。</p>{current?.status === 'conflict' && <IconButton size="sm" variant="ghost" label="重新读取" title="重新读取" disabled={busy || loading} onClick={async () => {const latest = await refresh(); if (latest?.status === 'ready') {if (!latest.entries.some(entry => entry.name === removing?.name)) {setRemoving(undefined); setNotice('该连接已从配置中移除。');} else setRemoveError('已重新读取，请确认后再次移除。');}}}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}</ConfirmDialog>
     <McpAuthorizationDialog provider={provider} entry={authorizing} onClose={() => setAuthorizing(undefined)}/>
   </section>;
 }
@@ -186,7 +186,7 @@ export function AddMcpDialog({provider, revision, onSave, onRefresh, onClose}: {
         </details>
       </>}
       {error && <InlineNotice title="添加未完成" tone="warning">{error}</InlineNotice>}
-      {conflict && <Button disabled={pending} onClick={async () => {setPending(true); try {const latest = await onRefresh(); if (latest?.status === 'ready') {baseline.current = latest.revision; setConflict(false); setError('已重新读取，请确认后再次添加。');} else setError('仍无法读取最新配置，草稿已保留。');} finally {setPending(false);}}}>重新读取并保留草稿</Button>}
+      {conflict && <IconButton size="sm" variant="ghost" label="重新读取并保留草稿" title="重新读取并保留草稿" disabled={pending} onClick={async () => {setPending(true); try {const latest = await onRefresh(); if (latest?.status === 'ready') {baseline.current = latest.revision; setConflict(false); setError('已重新读取，请确认后再次添加。');} else setError('仍无法读取最新配置，草稿已保留。');} finally {setPending(false);}}}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}
     </div>
   </Dialog>;
 }

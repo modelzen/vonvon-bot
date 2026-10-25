@@ -75,7 +75,7 @@ function GroupSettingsLoader(props: Props) {
   }, [client, botId, projectName]);
   useEffect(() => {void refresh(); return () => {serial.current++;};}, [refresh]);
   return <div className="group-design-settings">
-    {error && <InlineNotice tone="warning" title="读取未完成">{error}<Button size="sm" onClick={() => void refresh()}>重试</Button></InlineNotice>}
+    {error && <InlineNotice tone="warning" title="读取未完成">{error}<IconButton size="sm" variant="ghost" label="重试" title="重试" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></InlineNotice>}
     {view ? <GroupSettingsContent {...props} view={view} refresh={refresh}/> : !error && <p className="gd-empty" role="status">正在读取…</p>}
   </div>;
 }
@@ -106,13 +106,13 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
     <div className="gd-page">
       {(tab === 'response' || (tab === 'model' && (discovery.checking || discovery.message))) && <div className="gd-provider-discovery" role="status">
         {discovery.checking ? '正在检查 Provider 登录状态…' : discovery.message}
-        {!discovery.checking && <Button size="sm" variant="ghost" onClick={discovery.retry}>重新检查 Provider</Button>}
+        {!discovery.checking && <IconButton size="sm" variant="ghost" label="重新检查 Provider" title="重新检查 Provider" onClick={discovery.retry}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}
       </div>}
       {tab === 'capabilities' && <>
         {sections.skills && view.skills ? <Editor title="技能" section={sections.skills} save={(patch, revision) => save('skills', patch, revision)}
           render={(draft, _set, disabled, commit) => <SkillsList skills={view.skills!} disabledPaths={draft.disabledPaths} disabled={disabled}
             onToggle={(path, enabled) => void commit({disabledPaths: toggleItem(draft.disabledPaths, path, !enabled)})}
-            refresh={refresh}/>}/> : view.skillsError ? <InlineNotice title="技能尚未读取" tone="warning">{view.skillsError}<Button size="sm" onClick={() => void refresh()}>重新读取</Button></InlineNotice> : <MissingSection/>}
+            refresh={refresh}/>}/> : view.skillsError ? <InlineNotice title="技能尚未读取" tone="warning">{view.skillsError}<IconButton size="sm" variant="ghost" label="重新读取" title="重新读取" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></InlineNotice> : <MissingSection/>}
         {view.skills && view.skillsError && <p className="gd-note" role="status">{view.skillsError}</p>}
         {sections.presentation && <Editor title="语音" section={sections.presentation} save={(patch, revision) => save('presentation', patch, revision)}
           render={(draft, _set, disabled, commit) => <SettingsRow title="语音转文字" trailing={<Toggle className="settings-row-switch" label="语音转文字" aria-label="语音转文字" checked={draft.voiceEnabled} disabled={disabled} onChange={event => void commit({voiceEnabled: event.target.checked})}/>}/>}/>}
@@ -230,7 +230,7 @@ function SkillsList({skills, disabledPaths, disabled, onToggle, refresh}: {
   return <>
     <div className="gd-section-heading gd-skill-heading">
       <label className="gd-skill-search"><Search size={14} aria-hidden="true"/><input type="search" aria-label="搜索技能" placeholder="搜索技能" value={query} onChange={event => setQuery(event.target.value)}/></label>
-      <div className="gd-skill-actions"><span className="gd-skill-count">{needle ? `${visible.length} / ${skills.length} 项` : `${skills.length} 项 · ${enabledCount} 已启用`}</span><button type="button" className="gd-text-action" onClick={() => void refresh()}><RefreshCw size={13}/>重新读取</button></div>
+      <div className="gd-skill-actions"><span className="gd-skill-count">{needle ? `${visible.length} / ${skills.length} 项` : `${skills.length} 项 · ${enabledCount} 已启用`}</span><IconButton size="sm" variant="ghost" label="重新读取" title="重新读取技能" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></div>
     </div>
     <div className="gd-skill-list">
     {visible.length ? visible.map(skill => <div className="gd-skill-row" key={skill.path}>
@@ -261,7 +261,7 @@ function AgentProfileLoader({botId, onSaved}: {botId: AgentId; onSaved?: () => v
     } catch (failure) {if (request === serial.current) setError(failText(failure));}
   }, [client, botId]);
   useEffect(() => {void refresh(); return () => {serial.current++;};}, [refresh]);
-  return <div className="group-design-settings">{error && <InlineNotice title="读取未完成" tone="warning">{error}<Button size="sm" onClick={() => void refresh()}>重试</Button></InlineNotice>}
+  return <div className="group-design-settings">{error && <InlineNotice title="读取未完成" tone="warning">{error}<IconButton size="sm" variant="ghost" label="重试" title="重试" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></InlineNotice>}
     {view?.sections.role ? <>
       {view.roleInfo?.mergedNotice && <p className="settings-readonly-notice" role="status">原来 AGENTS.md 里的内容已并到「其他说明」末尾。</p>}
       {view.roleInfo?.oversized && <p className="settings-readonly-notice" role="status">这份角色设定比现在的上限长，能打开，下次修改时请精简。</p>}

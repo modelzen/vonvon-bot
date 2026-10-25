@@ -57,14 +57,17 @@ export const IconButton = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTM
   label: string;
   variant?: "default" | "ghost" | "danger";
   size?: "sm" | "md" | "lg";
-}>(({ children, className, label, variant = "default", size = "md", ...props }, ref) => (
+  loading?: boolean;
+}>(({ children, className, label, variant = "default", size = "md", loading = false, disabled, ...props }, ref) => (
   <button
     {...props}
     aria-label={label}
     className={classNames("ui-icon-button", `ui-icon-button--${variant}`, `ui-icon-button--${size}`, className)}
+    disabled={disabled || loading}
+    aria-busy={loading || undefined}
     ref={ref}
   >
-    {children}
+    {loading ? <LoaderCircle aria-hidden="true" className="ui-button__spinner" size={15} /> : children}
   </button>
 ));
 IconButton.displayName = "IconButton";

@@ -12,7 +12,6 @@ import {
   ChevronRight,
   ListChecks,
   MessageSquare,
-  Monitor,
   Plus,
   Terminal,
   X,
@@ -142,6 +141,21 @@ function DesktopApp() {
   const [route, setRoute] = useState<CollaborationRoute>(initialRoute);
   const [setupProvider, setSetupProvider] = useState<SetupProvider>();
   const [page, setPage] = useState<Page>("home");
+  const [externalCoreAvailable, setExternalCoreAvailable] = useState(false);
+  const connectedVersion = snapshot?.host.kind === 'connected' ? snapshot.host.version : undefined;
+  useEffect(() => {
+    if (snapshot?.host.kind !== 'connected') {setExternalCoreAvailable(false); return;}
+    if (page !== 'application' && !searchOpen) return;
+    let active = true;
+    setExternalCoreAvailable(false);
+    void (async () => {
+      try {
+        const reply = await client.admin({type: 'daemonStatus'});
+        if (active) setExternalCoreAvailable(reply.kind === 'daemonStatus' && reply.status.distribution?.kind === 'global-npm');
+      } catch { if (active) setExternalCoreAvailable(false); }
+    })();
+    return () => {active = false;};
+  }, [client, page, searchOpen, snapshot?.host.kind, connectedVersion]);
   const [settingsReturn, setSettingsReturn] = useState<{page: Page; route: CollaborationRoute; label: string}>();
   const newCounts = useNewCounts(snapshot?.revision, MEMORY_SEEN_EVENT);
   const [groupDirectoryState, setGroupDirectoryState] = useState<GroupDirectoryState>({query: '', expanded: {}});
@@ -511,7 +525,7 @@ function DesktopApp() {
         }
       >
         <div className="page-stack">
-          {['application', 'diagnostics'].includes(page) && <header className="today-page-heading"><h1>{titles[page]}</h1></header>}
+          {page === 'diagnostics' && <header className="today-page-heading"><h1>{titles[page]}</h1></header>}
           {feature ? <FeaturePage feature={feature} /> : <>
           {page === 'collaboration' && route.kind !== 'list' && <nav className="collaboration-breadcrumb" aria-label="当前位置">
             <button type="button" onClick={() => openList(view)}>{view === 'agents' ? 'Bot' : view === 'groups' ? '群组' : '项目管理'}</button>
@@ -812,50 +826,25 @@ function DesktopApp() {
           {page === "environment" && <><EnvironmentPanel reveal={searchTarget?.reveal} codexBusy={snapshot.jobs.some(job => (job.type === "loginCodex" || job.type === "installCodex") && isActive(job))} request={client.environment} onCodexLogin={async () => {await run({type: "startCodexLogin"});}} codexJobs={snapshot.jobs.filter(job => job.type === "loginCodex" || job.type === "installCodex").map(job => <JobPanel key={job.id} job={job} run={run} busy={busy}/>)}/></>}
           {page === "usage" && <UsagePanel request={client.collaboration} onOpenEnvironment={() => openPage('environment')} onOpenShare={() => setModal({kind: 'shareUsage'})}/>}
           {page === "application" && (
-            <>
-              <SettingsGroup label="这台设备">
-                <SettingsRow
-                  icon={Monitor}
-                  title={deviceTitle(snapshot.application.platform)}
-                  value={`v${snapshot.application.version}`}
-                />
-              </SettingsGroup>
-              <SettingsGroup label="启动选项" id={settingAnchor('启动选项')}>
-                <SettingsRow
-                  title="运行状态"
-                  value={
-                    host.kind === "connected"
-                      ? host.ownership === "owned"
-                        ? "由本机启动"
-                        : "已接续现有服务"
-                      : "尚未连接"
-                  }
-                />
-                <SettingsRow
-                  title="重启后台服务"
-                  description="重新加载已保存的 Bot 设置。"
-                  trailing={
-                    <Button
-                      size="sm"
-                      disabled={busy || host.kind !== "connected"}
-                      onClick={() => void run({ type: "restartHost" })}
-                    >
-                      重启
-                    </Button>
-                  }
-                />
-                <LoginServiceRow application={snapshot.application} busy={busy} onToggle={enabled => void runShell(async () => setNotice({message: await toggleService(enabled, client, shell), error: false}))}/>
-              </SettingsGroup>
-              <UpdatePanel request={client.machine} attached={host.kind === 'connected' && host.ownership === 'attached'}/>
-              <details className="today-advanced-settings"><summary>高级运行设置<span>后台服务与执行程序</span><ChevronRight size={14} aria-hidden="true"/></summary><div>
-                <MachinePanel reveal={searchTarget?.reveal} request={client.machine} agents={snapshot.agents} macos={snapshot.application.platform === 'macos'}/>
-                <SettingsPanel scope="host" target={{ kind: "host" }} />
-              </div></details>
-              <SettingsGroup label="窗口与退出" id={settingAnchor('窗口与退出')} footer="关闭窗口会留在菜单栏或托盘继续运行。退出应用后，daemon 和 Bot 会继续在后台运行。">
-                <SettingsRow title="隐藏到托盘" value={!shell?.hideWindow ? '桌面版提供' : undefined} trailing={<Button size="sm" disabled={!shell?.hideWindow} onClick={() => {if (shell?.hideWindow) void runShell(shell.hideWindow);}}>隐藏窗口</Button>} />
-                <SettingsRow title="退出 Vonvon Bot" value={!shell?.quit ? '桌面版提供' : undefined} trailing={<Button size="sm" disabled={busy || !shell?.quit} onClick={() => {const quit = shell?.quit; if (quit) navigate(() => void runShell(quit));}}>退出应用</Button>} />
-              </SettingsGroup>
-            </>
+            <div className="application-page">
+              <header className="application-heading today-page-heading"><h1>应用与启动</h1></header>
+              <UpdatePanel request={client.machine} externalCoreAvailable={externalCoreAvailable}
+                attached={host.kind === 'connected' && host.ownership === 'attached'}
+                version={snapshot.application.version} device={deviceTitle(snapshot.application.platform)}
+                advancedSettings={<>
+                  <MachinePanel reveal={searchTarget?.reveal} request={client.machine} agents={snapshot.agents} macos={snapshot.application.platform === 'macos'}/>
+                  <SettingsPanel scope="host" target={{kind: 'host'}}/>
+                </>}>
+                <SettingsGroup label="启动选项" id={settingAnchor('启动选项')} footer="关闭窗口会隐藏 Dock 图标，应用仍在状态栏运行。可从状态栏重新打开或退出。">
+                  <SettingsRow title="后台运行"
+                    description={host.kind === 'connected'
+                      ? `${host.ownership === 'owned' ? '由本机启动' : '已接续现有服务'} · 重新加载已保存的 Bot 设置`
+                      : '尚未连接'}
+                    trailing={<Button size="sm" disabled={busy || host.kind !== 'connected'} onClick={() => void run({type: 'restartHost'})}>重启后台</Button>}/>
+                  <LoginServiceRow application={snapshot.application} busy={busy} onToggle={enabled => void runShell(async () => setNotice({message: await toggleService(enabled, client, shell), error: false}))}/>
+                </SettingsGroup>
+              </UpdatePanel>
+            </div>
           )}
           {page === "secrets" && <SecretsPanel onOpenProviders={() => openPage("providers")} onOpenApplication={() => openPage("application")}
             onOpenLogs={() => { openPage("diagnostics"); setSearchTarget({page: "diagnostics", section: "daemon 日志"}); }}/>}
@@ -865,7 +854,7 @@ function DesktopApp() {
           </>}
         </div>
       </AppShell>
-      {searchOpen && <SearchDialog open entries={searchEntries(snapshot)} onClose={() => setSearchOpen(false)} onSelect={openSearchResult}/>}
+      {searchOpen && <SearchDialog open entries={searchEntries(snapshot, {externalCoreAvailable})} onClose={() => setSearchOpen(false)} onSelect={openSearchResult}/>}
       <PendingGroupToasts pages={pendingGroups} agents={snapshot.agents} hidden={modal !== null} onContinue={(owner, group) => openJoin(owner.id, group)} />
       {modal?.kind === 'join' && (() => {
         const owner = snapshot.agents.find(item => item.id === modal.agentId);

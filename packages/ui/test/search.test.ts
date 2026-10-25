@@ -34,10 +34,61 @@ test('every literal configuration row label in the current desktop UI is indexed
     'src/management/ConversationPanel.tsx',
     'src/App.tsx',
   ].map(path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')).join('\n') + botSettings;
-  const labels = [...source.matchAll(/<SettingsRow\s+(?:[^>]*?\s)?title="([^"]+)"/gs)].map(match => match[1]!);
+  const labels = [...source.matchAll(/<SettingsRow\b[^<>]*?\btitle="([^"]+)"/gs)].map(match => match[1]!);
   const transient = new Set(['正在读取当前设置…', '正在读取项目', '正在读取群内设置', '没有匹配的会话', '群配置读取失败', '尚未绑定飞书群']);
-  const missing = [...new Set(labels)].filter(label => !transient.has(label) && !entries.some(entry => entry.title === label || entry.aliases.includes(label)));
+  const allAvailableEntries = searchEntries(snapshot, {externalCoreAvailable: true});
+  const missing = [...new Set(labels)].filter(label => !transient.has(label) && !allAvailableEntries.some(entry => entry.title === label || entry.aliases.includes(label)));
   assert.deepEqual(missing, []);
+});
+
+test('application search exposes external Core controls only for a supported installation', () => {
+  for (const catalog of [entries, searchEntries(snapshot, {externalCoreAvailable: false})]) {
+    assert.ok(!catalog.some(entry => entry.destination.section === '外部 Core / CLI'));
+    assert.deepEqual(findEntries(catalog, '检查 Core 更新'), []);
+  }
+  const available = searchEntries(snapshot, {externalCoreAvailable: true});
+  for (const query of ['Core 来源', '检查 Core 更新', '更新外部 Core', '查看 Core 更新进度']) {
+    const result = findEntries(available, query)[0];
+    assert.equal(result?.destination.page, 'application', query);
+    assert.equal(result?.destination.section, '外部 Core / CLI', query);
+  }
+});
+
+test('application search omits unsupported service controls and keeps real daemon actions', () => {
+  for (const query of ['安装并启动', '安装并启动后台服务', '卸载后台服务', '停止后台服务并关闭自启']) {
+    assert.deepEqual(findEntries(entries, query), [], query);
+  }
+  for (const query of ['启动 daemon', '停止 daemon']) {
+    const result = findEntries(entries, query)[0];
+    assert.equal(result?.destination.page, 'application', query);
+    assert.equal(result?.destination.section, 'daemon 运行', query);
+    assert.equal(result?.destination.field, 'daemon 服务', query);
+  }
+});
+
+test('application search points old startup and update labels to the compact controls', () => {
+  for (const query of ['运行状态', '重启后台服务', '重启 daemon']) {
+    const destination = findEntries(entries, query)[0]?.destination;
+    assert.equal(destination?.page, 'application', query);
+    assert.equal(destination?.section, '启动选项', query);
+    assert.equal(destination?.field, '后台运行', query);
+  }
+  for (const query of ['桌面版', '更新状态', '可用版本']) {
+    const destination = findEntries(entries, query)[0]?.destination;
+    assert.equal(destination?.page, 'application', query);
+    assert.equal(destination?.section, '软件更新', query);
+    assert.equal(destination?.field, '', query);
+  }
+  for (const query of ['检查更新', '下载更新', '发布说明']) {
+    const destination = findEntries(entries, query)[0]?.destination;
+    assert.equal(destination?.page, 'application', query);
+    assert.equal(destination?.section, '软件更新', query);
+    assert.equal(destination?.field, query, query);
+  }
+  const install = findEntries(entries, '安装更新')[0]?.destination;
+  assert.equal(install?.page, 'application');
+  assert.equal(install?.section, '软件更新');
+  assert.equal(install?.field, '安装并重启');
 });
 
 test('s53: application owner and scanner search reveal their administrator rows', () => {
