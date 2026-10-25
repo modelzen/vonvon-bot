@@ -36,9 +36,15 @@
 }
 /* Local search is synchronous. Hold the library's bottom glow at rest rather
    than implying background work; keep its mask clear of text and focus rings. */
-.desktop-search-glow { position: absolute; inset: 0 1px 1px; pointer-events: none; clip-path: inset(0 round 12px 12px 0 0); mask-image: linear-gradient(to top, #000 0 4px, transparent 28px); }
+.desktop-search-glow {
+  position: absolute;
+  inset: 0 14% 1px;
+  pointer-events: none;
+  mask-image: linear-gradient(to top, #000 0 2px, transparent 20px), linear-gradient(to right, transparent, #000 10% 90%, transparent);
+  mask-composite: intersect;
+}
 /* Line's gradients use fixed pixel radii. Stretch its decorative canvas to
-   cover the whole input at both desktop and narrow dialog widths. */
+   fill the centered glow area at both desktop and narrow dialog widths. */
 .desktop-search-glow__beam { width: 20%; height: 100%; transform: scaleX(5); transform-origin: left bottom; --beam-stroke-opacity: 0; }
 .desktop-search-glow__beam,
 .desktop-search-glow__beam::before,
