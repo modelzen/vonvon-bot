@@ -24,16 +24,16 @@ function choice(ui = render()) {return ui.find(node => node.type === SettingChoi
 beforeEach(() => {
   state.values = []; state.index = 0; changed.mockReset();
   props = {botId: agentIdSchema.parse('cli_decision'), groupBackend: codex.id, value: {kind: 'default'}, effective: {kind: 'default'}, onChange: changed,
-    disabled: false, providers: [codex], services, onOpenProviders: vi.fn(), onOpenSecrets: vi.fn()};
+    disabled: false, providers: [codex], services, configuration: {kind: 'ready', configuration: {defaultProvider: 'codex-appserver', byProvider: {'codex-appserver': {model: 'gpt-6-luna', effort: 'low'}, 'claude-agent': {model: 'haiku'}, typesafe: {model: 'jev-latest'}}}}, onOpenProviders: vi.fn(), onOpenSecrets: vi.fn()};
   changed.mockImplementation(value => {props.value = value;});
 });
-it('starts unselected and writes only the chosen judgment Provider', () => {
-  expect(choice().props.value).toBe('');
+it('starts with the global default and writes only an explicit judgment Provider override', () => {
+  expect(choice().props.value).toBe('default');
   expect(choice().props.choices.map((item: {value: string; label: string}) => [item.value, item.label])).toEqual([
-    [codex.id, 'Codex'], [claude.id, 'Claude'], ['typesafe', 'Jev'],
+    ['default', '默认'], [codex.id, 'Codex'], [claude.id, 'Claude'], ['typesafe', 'Jev'],
   ]);
   expect(changed).not.toHaveBeenCalled();
-  expect(render().some(node => node.props.children === '选择一个已就绪的 Provider。')).toBe(true);
+  expect(render().some(node => node.props.children === '选择一个已就绪的 Provider。')).toBe(false);
   choice().props.onChange(codex.id);
   expect(changed).toHaveBeenCalledExactlyOnceWith({kind: 'provider', provider: codex.id});
   expect(choice().props.value).toBe(codex.id);
@@ -41,7 +41,7 @@ it('starts unselected and writes only the chosen judgment Provider', () => {
 });
 it('keeps Jev selection explicit and preserves readonly Provider choices', () => {
   props.services = services.map(service => ({...service, keySet: true}));
-  expect(choice().props.value).toBe('');
+  expect(choice().props.value).toBe('default');
   expect(changed).not.toHaveBeenCalled();
   choice().props.onChange('typesafe');
   expect(changed).toHaveBeenCalledExactlyOnceWith({kind: 'provider', provider: 'typesafe'});
@@ -80,16 +80,31 @@ it('does not offer same-provider migration while the legacy provider is unavaila
   migrate.props.onClick();
   expect(changed).not.toHaveBeenCalled();
 });
-it('migrates a legacy default inherited from the only ready provider without selecting another', () => {
+it('keeps a stored default following the host profile instead of copying the Bot snapshot', () => {
   props.value = {kind: 'default'};
-  props.effective = {kind: 'llm', backend: codex.id, model: 'inherited-model', effort: 'low'};
+  props.effective = {kind: 'llm', backend: codex.id, model: 'inherited-model', effort: 'high'};
   const ui = render();
-  expect(choice(ui).props.value).toBe(codex.id);
+  expect(choice(ui).props.value).toBe('default');
   expect(changed).not.toHaveBeenCalled();
-  const migrate = ui.find(node => node.props.children === '使用统一配置')!;
-  expect(migrate.props.disabled).toBe(false);
-  migrate.props.onClick();
-  expect(changed).toHaveBeenCalledExactlyOnceWith({kind: 'provider', provider: codex.id});
+  expect(ui.some(node => node.props.children === '使用统一配置')).toBe(false);
+  const values = ui.find(node => node.props.className === 'gd-decision-config-values')!;
+  const text = renderToStaticMarkup(<>{values.props.children}</>);
+  expect(text).toContain('gpt-6-luna'); expect(text).not.toContain('inherited-model');
+});
+it('switches an explicit group override back to the current host default', () => {
+  props.value = {kind: 'provider', provider: 'typesafe'};
+  choice().props.onChange('default');
+  expect(changed).toHaveBeenCalledExactlyOnceWith({kind: 'default'});
+  expect(choice().props.value).toBe('default');
+});
+it.each([{kind: 'loading'}, {kind: 'failed'}, {kind: 'ready', configuration: {byProvider: {}}}] as const)('does not allow choosing a default while configuration is %j', configuration => {
+  props.configuration = configuration;
+  props.value = {kind: 'provider', provider: codex.id};
+  const option = choice().props.choices.find((item: {value: string}) => item.value === 'default');
+  expect(option.disabled).toBe(true);
+  choice().props.onChange('default');
+  expect(changed).not.toHaveBeenCalled();
+  expect(providerDecisionProblem({kind: 'default'}, [codex], services, configuration)).toBeDefined();
 });
 it('does not offer migration for a decision kind this client cannot interpret', () => {
   props.value = {kind: 'future'};
@@ -117,7 +132,8 @@ it.each([
   expect(props.onOpenSecrets).toHaveBeenCalledExactlyOnceWith(provider);
   expect(changed).not.toHaveBeenCalled();
 });
-it('offers general configuration before a Provider is selected and respects disabled state', () => {
+it('offers general configuration when the host default is missing and respects disabled state', () => {
+  props.configuration = {kind: 'ready', configuration: {byProvider: {}}};
   let link = render().find(node => node.props.className === 'gd-decision-config-link')!;
   expect(renderToStaticMarkup(<>{link.props.children}</>)).toContain('管理决策模型');
   link.props.onClick();

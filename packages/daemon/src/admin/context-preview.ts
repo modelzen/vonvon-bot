@@ -1,4 +1,5 @@
 import type { ContextPreviewReply, ContextPreviewRequest } from '@vonvon/protocol';
+import { judgeBackendId, resolveJudgeModel } from '../judge/model';
 import { groupBackendId } from '../config/execution';
 import { loadBots } from '../config/bots';
 import { botPaths } from '../config/paths';
@@ -81,9 +82,14 @@ function sessionOf(record: SessionRecord, src: ContextSources, a: Assembled): No
   };
 }
 
-function judgeOf(src: ContextSources, row: Pick<Project, 'judge'> | undefined): ContextPreviewReply['judge'] {
+function judgeOf(src: ContextSources, row: Pick<Project, 'judge' | 'backend'> | undefined): ContextPreviewReply['judge'] {
   const judged = judgeContext(src);
-  const selection = row?.judge;
+  let selection = row?.judge;
+  if (selection?.kind === 'default') {
+    const backend = judgeBackendId(groupBackendId(row!), selection);
+    const resolved = resolveJudgeModel(backend, { group: selection }, undefined);
+    selection = resolved.provider ? { kind:'decision', provider:resolved.provider, model:resolved.model } : { kind:'llm', backend, model:resolved.model };
+  }
   const thirdParty = selection?.kind === 'decision' || (selection?.kind === 'provider' && selection.provider === 'typesafe');
   const label = !selection ? undefined : selection.kind === 'llm' ? `${selection.backend} ${selection.model}` : selection.kind === 'decision' ? `${selection.provider} ${selection.model}` : selection.provider;
   return { via: thirdParty ? 'third-party' : 'local', ...(label ? { label } : {}), roleChars: chars(judged.role), memoryItems: judged.memory ? judged.memory.split('\n').length : 0, memoryChars: chars(judged.memory) };

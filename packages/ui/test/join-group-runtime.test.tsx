@@ -1,23 +1,48 @@
 import {beforeEach, expect, it, vi} from 'vitest';
 import {isValidElement, type ReactElement, type ReactNode} from 'react';
-import {agentSchema, desktopSnapshotSchema, type DesktopSnapshot, type ToolState} from '@vonvon/protocol';
+import {agentSchema, desktopSnapshotSchema, type ToolState, type DirectoryReply} from '@vonvon/protocol';
+import {RpcError} from '@vonvon/client/browser';
 import {JoinGroupDialog} from '../src/JoinGroupDialog';
+import {DirectorySearchStep} from '../src/DirectorySearchStep';
 
 const harness = vi.hoisted(() => ({
-  state: [] as unknown[], refs: [] as Array<{current: unknown}>, memos: [] as Array<{deps?: unknown[]; value: unknown}>, effects: [] as Array<{deps?: unknown[]}>,
+  state: [] as unknown[], refs: [] as Array<{current: unknown}>, memos: [] as Array<{deps?: unknown[]; value: unknown}>, effects: [] as Array<{deps?: unknown[]; cleanup?: () => void}>,
   stateIndex: 0, refIndex: 0, memoIndex: 0, effectIndex: 0,
+  deferEffects: false, pendingEffects: [] as Array<() => void>,
   draft: undefined as undefined | {save?: () => Promise<boolean>; discard: () => void},
   selection: {kind: 'default'} as {kind: string; backend?: string; model?: string; provider?: string},
-  keySet: false,
+  keySet: true, keyUnreadable: false,
+  defaultProvider: 'codex-appserver' as string | undefined,
+  hostError: '', agentError: '', hostPending: undefined as Promise<unknown> | undefined, agentPending: undefined as Promise<unknown> | undefined,
   catalogState: 'ready' as 'ready' | 'unavailable',
   catalogModels: [{id: 'gpt-6-luna', hidden: false, isDefault: true, supportedEfforts: ['low']}] as Array<{id: string; hidden: boolean; isDefault: boolean; supportedEfforts: string[]}>,
-  client: {collaboration: vi.fn(async (request: {action: string}) => request.action === 'providerModels' ? {kind: 'providerModels', state: harness.catalogState, models: harness.catalogModels} : {kind: 'applied', project: {chatId: 'oc_created'}}), run: vi.fn(async () => ({kind: 'applied'})), settings: vi.fn(async () => ({kind: 'view', view: {scope: {kind: 'agent'}, administrators: {}, sections: {judge: {stored: {selection: harness.selection}, effective: {selection: harness.selection}}}, judgeByBackend: {'codex-appserver': {model: 'gpt-6-luna', effort: 'low', source: 'default'}, 'claude-agent': {model: 'haiku', source: 'default'}}, decisionModels: [{provider: 'actual', displayName: 'Actual', models: [{id: 'jev-actual', displayName: 'Jev'}], keySet: harness.keySet}]}}))},
+  client: {
+    collaboration: vi.fn(async (request: {action: string}) => request.action === 'providerModels' ? {kind: 'providerModels', state: harness.catalogState, models: harness.catalogModels} : {kind: 'applied', project: {chatId: 'oc_created'}}),
+    run: vi.fn(async () => ({kind: 'applied'})),
+    directory: vi.fn(),
+    settings: vi.fn(async (request: {scope: {kind: string}}): Promise<any> => {
+      if (request.scope.kind === 'host') {
+        if (harness.hostError) throw new Error(harness.hostError);
+        if (harness.hostPending) return harness.hostPending;
+        return {kind: 'view', view: {scope: {kind: 'host'}, runtime: {}, sections: {judge: {effective: {
+          ...(harness.defaultProvider ? {defaultProvider: harness.defaultProvider} : {}),
+          byProvider: {'codex-appserver': {model: 'gpt-6-luna', effort: 'low'}, 'claude-agent': {model: 'haiku'}, typesafe: {model: 'jev-latest'}},
+        }}}}};
+      }
+      if (harness.agentError) throw new Error(harness.agentError);
+      if (harness.agentPending) return harness.agentPending;
+      return {kind: 'view', view: {scope: {kind: 'agent'}, administrators: {}, sections: {judge: {stored: {selection: harness.selection}, effective: {selection: harness.selection}}},
+        judgeByBackend: {'codex-appserver': {model: 'gpt-6-luna', effort: 'low', source: 'default'}, 'claude-agent': {model: 'haiku', source: 'default'}},
+        decisionModels: [{provider: 'typesafe', displayName: 'TypeSafe', models: [{id: 'jev-latest', displayName: 'Jev'}], keySet: harness.keySet, keyUnreadable: harness.keyUnreadable}]}};
+    }),
+  },
 }));
 vi.mock('react', async original => ({
   ...await original<typeof import('react')>(),
+  useId: () => 'join-directory-results',
   useState: (initial: unknown) => {const index = harness.stateIndex++; if (!(index in harness.state)) harness.state[index] = initial; return [harness.state[index], (next: unknown) => {harness.state[index] = typeof next === 'function' ? next(harness.state[index]) : next;}];},
   useRef: (initial: unknown) => harness.refs[harness.refIndex++] ??= {current: initial},
-  useEffect: (callback: () => void, deps?: unknown[]) => {const index = harness.effectIndex++; const old = harness.effects[index]; if (old?.deps && deps && deps.every((item, at) => Object.is(item, old.deps![at]))) return; harness.effects[index] = {deps}; callback();},
+  useEffect: (callback: () => void | (() => void), deps?: unknown[]) => {const index = harness.effectIndex++; const old = harness.effects[index]; if (old?.deps && deps && deps.every((item, at) => Object.is(item, old.deps![at]))) return; const run = () => {old?.cleanup?.(); const cleanup = callback(); harness.effects[index] = {deps, ...(typeof cleanup === 'function' ? {cleanup} : {})};}; if (harness.deferEffects) harness.pendingEffects.push(run); else run();},
   useMemo: (factory: () => unknown, deps?: unknown[]) => {const index = harness.memoIndex++; const old = harness.memos[index]; if (old?.deps && deps && deps.every((item, at) => Object.is(item, old.deps![at]))) return old.value; const value = factory(); harness.memos[index] = {value, deps}; return value;},
 }));
 vi.mock('../src/client-context', () => ({useClient: () => harness.client}));
@@ -32,7 +57,7 @@ type Element = ReactElement<Record<string, any>>;
 function nodes(node: ReactNode): Element[] {
   if (Array.isArray(node)) return node.flatMap(nodes);
   if (!isValidElement<Record<string, any>>(node)) return [];
-  return [node, ...nodes(node.props.children), ...nodes(node.props.trailing)];
+  return [node, ...nodes(node.props.children), ...nodes(node.props.trailing), ...nodes(node.props.footer), ...nodes(node.props.actions), ...nodes(node.props.title)];
 }
 const readyCodex: ToolState[] = [{tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '1'}];
 function render(bind = false, tools: ToolState[] = readyCodex, initialProvider?: 'codex' | 'claude', onOpenProviders = vi.fn(), onOpenDecisionModel = vi.fn(), open = true) {
@@ -41,7 +66,7 @@ function render(bind = false, tools: ToolState[] = readyCodex, initialProvider?:
   return {
     all,
     name: all.find(node => node.type === 'input' && node.props['aria-label'])!,
-    conversation: all.find(node => node.props.label === '会话方式' && node.props.onChange)!,
+    conversation: all.find(node => node.props.label === '沟通方式' && node.props.onChange)!,
     provider: all.find(node => node.props.label === '执行工具' && node.props.onChange)!,
     decision: all.find(node => node.props.initial === true)!,
     submit: all.find(node => node.props.variant === 'primary' && node.props.loading !== undefined)!,
@@ -51,11 +76,12 @@ function render(bind = false, tools: ToolState[] = readyCodex, initialProvider?:
 function chooseSmart(bind = false) {
   const ui = render(bind); ui.name.props.onChange({target: {value: '新名称'}}); ui.conversation.props.onChange('smart'); return render(bind);
 }
-async function settled() {await Promise.resolve(); await Promise.resolve();}
+async function settled() {for (let i = 0; i < 6; i++) await Promise.resolve();}
 beforeEach(() => {
   harness.state = []; harness.refs = []; harness.memos = []; harness.effects = [];
-  harness.draft = undefined;
-  harness.selection = {kind: 'default'}; harness.keySet = false; harness.catalogState = 'ready';
+  harness.draft = undefined; harness.deferEffects = false; harness.pendingEffects = [];
+  harness.selection = {kind: 'default'}; harness.keySet = true; harness.keyUnreadable = false; harness.catalogState = 'ready';
+  harness.defaultProvider = 'codex-appserver'; harness.hostError = ''; harness.agentError = ''; harness.hostPending = undefined; harness.agentPending = undefined;
   harness.catalogModels = [{id: 'gpt-6-luna', hidden: false, isDefault: true, supportedEfforts: ['low']}];
   vi.clearAllMocks();
 });
@@ -104,46 +130,91 @@ it('keeps an unavailable hand-picked Provider visible and blocks submission unti
   ui.provider.props.onChange('codex'); ui = render(false, changed);
   expect(ui.provider.props.value).toBe('codex');
 });
-it('requires a provider choice and sends only provider selection for a new smart group', async () => {
-  let ui = chooseSmart(); await settled(); ui = render();
-  expect(ui.submit.props.disabled).toBe(true);
-  ui.decision.props.onChange({kind: 'provider', provider: 'codex-appserver'});
-  ui = render(); expect(ui.submit.props.disabled).toBe(false);
+it.each([false, true])('uses the configured default for smart groups without an inline model chooser (bind=%s)', async bind => {
+  let ui = chooseSmart(bind); await settled(); ui = render(bind);
+  expect(ui.decision).toBeUndefined();
+  expect(ui.all.some(node => node.props.label === '判断 Provider')).toBe(false);
+  expect(ui.submit.props.disabled).toBe(false);
   await ui.submit.props.onClick();
-  const create = harness.client.collaboration.mock.calls.find(([request]) => request.action === 'createProject')?.[0] as Record<string, unknown>;
-  expect(create).toMatchObject({action: 'createProject', conversation: 'smart', tool: 'codex', judge: {kind: 'provider', provider: 'codex-appserver'}});
-  expect(Object.keys(create.judge as object)).toEqual(['kind', 'provider']);
+  const request = bind ? harness.client.run.mock.calls.at(-1)?.[0] : harness.client.collaboration.mock.calls.find(([request]) => request.action === 'createProject')?.[0];
+  expect(request).toMatchObject({conversation: 'smart', tool: 'codex', judge: {kind: 'default'}});
+  expect(request).not.toHaveProperty('project');
+  expect(onChanged).toHaveBeenCalledWith({agentId: agent.id, chatId: bind ? 'oc_existing' : 'oc_created'});
 });
-it('keeps judgment Provider independent from the execution Provider', async () => {
+it('keeps the default judgment Provider independent from the execution Provider', async () => {
+  harness.defaultProvider = 'claude-agent';
   const tools = [readyCodex[0]!, {tool: 'claude', installation: 'installed', authentication: 'signedIn', version: '1'}] as ToolState[];
   let ui = render(false, tools); ui.name.props.onChange({target: {value: '新名称'}}); ui.conversation.props.onChange('smart');
-  await settled(); ui = render(false, tools);
-  ui.decision.props.onChange({kind: 'provider', provider: 'claude-agent'});
-  ui = render(false, tools); await ui.submit.props.onClick();
-  expect(harness.client.collaboration).toHaveBeenCalledWith(expect.objectContaining({action: 'createProject', tool: 'codex', judge: {kind: 'provider', provider: 'claude-agent'}}));
+  await settled(); ui = render(false, tools); await settled(); ui = render(false, tools);
+  expect(ui.submit.props.disabled).toBe(false);
+  await ui.submit.props.onClick();
+  expect(harness.client.collaboration).toHaveBeenCalledWith(expect.objectContaining({action: 'createProject', tool: 'codex', judge: {kind: 'default'}}));
 });
 it('never copies an old Bot model snapshot into a new group', async () => {
   harness.selection = {kind: 'llm', backend: 'codex-appserver', model: 'old-model'};
   let ui = chooseSmart(); await settled(); ui = render();
-  expect(ui.submit.props.disabled).toBe(true);
-  ui.decision.props.onChange({kind: 'provider', provider: 'codex-appserver'});
-  ui = render(); await ui.submit.props.onClick();
+  expect(ui.submit.props.disabled).toBe(false);
+  await ui.submit.props.onClick();
   const create = harness.client.collaboration.mock.calls.find(([request]) => request.action === 'createProject')?.[0] as Record<string, unknown>;
-  expect(create.judge).toEqual({kind: 'provider', provider: 'codex-appserver'});
+  expect(create.judge).toEqual({kind: 'default'});
 });
-it('binds an existing group with an explicit provider selection', async () => {
-  let ui = chooseSmart(true); await settled(); ui = render(true);
-  ui.decision.props.onChange({kind: 'provider', provider: 'codex-appserver'});
-  ui = render(true); await ui.submit.props.onClick();
-  expect(harness.client.run).toHaveBeenCalledWith(expect.objectContaining({type: 'bindGroup', groupId: 'oc_existing', judge: {kind: 'provider', provider: 'codex-appserver'}}));
-  expect(onChanged).toHaveBeenCalledWith({agentId: agent.id, chatId: 'oc_existing'});
-});
-it('blocks unavailable judgment Provider even when save is invoked directly', async () => {
+it.each([
+  ['missing default', undefined, false, false],
+  ['unavailable Provider', 'claude-agent', false, false],
+  ['missing Jev key', 'typesafe', false, false],
+  ['unreadable Jev key', 'typesafe', true, true],
+] as const)('blocks smart setup with %s even when save is invoked directly', async (_name, provider, keySet, keyUnreadable) => {
+  harness.defaultProvider = provider; harness.keySet = keySet; harness.keyUnreadable = keyUnreadable;
   let ui = chooseSmart(); await settled(); ui = render();
-  ui.decision.props.onChange({kind: 'provider', provider: 'claude-agent'});
-  ui = render(); expect(ui.submit.props.disabled).toBe(true);
+  expect(ui.submit.props.disabled).toBe(true);
+  expect(ui.decision).toBeUndefined();
+  expect(ui.all.some(node => node.props.children === '前往设置')).toBe(true);
   await ui.submit.props.onClick();
   expect(harness.client.collaboration.mock.calls.some(([request]) => request.action === 'createProject')).toBe(false);
+});
+it('allows Jev as the global default once its key is ready', async () => {
+  harness.defaultProvider = 'typesafe'; harness.keySet = true;
+  let ui = chooseSmart(); await settled(); ui = render();
+  expect(ui.submit.props.disabled).toBe(false);
+  await ui.submit.props.onClick();
+  expect(harness.client.collaboration).toHaveBeenCalledWith(expect.objectContaining({judge: {kind: 'default'}}));
+});
+it.each(['host', 'agent'] as const)('preserves the draft but blocks save while %s configuration is being re-read after settings', async scope => {
+  let ui = chooseSmart(); await settled(); ui = render();
+  expect(ui.submit.props.disabled).toBe(false);
+  render(false, readyCodex, undefined, vi.fn(), vi.fn(), false);
+  if (scope === 'host') harness.hostPending = new Promise(() => {});
+  else harness.agentPending = new Promise(() => {});
+  ui = render();
+  expect(ui.name.props.value).toBe('新名称');
+  expect(ui.conversation.props.value).toBe('smart');
+  expect(ui.submit.props.disabled).toBe(true);
+  await ui.submit.props.onClick();
+  await settled(); ui = render();
+  expect(ui.submit.props.disabled).toBe(true);
+  expect(harness.client.collaboration.mock.calls.some(([request]) => request.action === 'createProject')).toBe(false);
+});
+it.each(['host', 'agent'] as const)('keeps the draft and offers a retry when %s configuration fails', async scope => {
+  if (scope === 'host') harness.hostError = '配置读取失败'; else harness.agentError = '密钥状态读取失败';
+  let ui = chooseSmart(); await settled(); ui = render();
+  expect(ui.submit.props.disabled).toBe(true);
+  await ui.submit.props.onClick();
+  expect(harness.client.collaboration.mock.calls.some(([request]) => request.action === 'createProject')).toBe(false);
+  const retry = ui.all.find(node => /重试|重新读取/.test(node.props.label ?? ''));
+  expect(retry).toBeDefined();
+  harness.hostError = ''; harness.agentError = '';
+  retry!.props.onClick(); await settled(); ui = render(); await settled(); ui = render();
+  expect(ui.name.props.value).toBe('新名称');
+  expect(ui.conversation.props.value).toBe('smart');
+  expect(ui.submit.props.disabled).toBe(false);
+});
+it('keeps a possibly-created group locked against duplicate creation', async () => {
+  let ui = render(); ui.name.props.onChange({target: {value: '新名称'}}); ui.conversation.props.onChange('threads');
+  harness.client.collaboration.mockRejectedValueOnce(new RpcError('outcome_unknown', '网络断开'));
+  ui = render(); await ui.submit.props.onClick(); await settled(); ui = render();
+  expect(ui.submit.props.disabled).toBe(true);
+  await ui.submit.props.onClick();
+  expect(harness.client.collaboration.mock.calls.filter(([request]) => request.action === 'createProject')).toHaveLength(1);
 });
 it('blocks missing, signed-out, unknown, and too-old Providers even when handlers are invoked directly', async () => {
   for (const bad of [
@@ -180,76 +251,81 @@ it('offers Provider settings with no usable Provider and restores create after r
   expect(harness.client.collaboration).toHaveBeenCalledWith(expect.objectContaining({tool: 'codex'}));
 });
 
-// P6: the 项目 row of the 建群/加群 dialog (memory design §5.6).
-const pay = 'prj_00000001', web = 'prj_00000002';
-const projectSnapshot = (memberships: Array<{agentId: string; groupId: string; projectId: string}>) => desktopSnapshotSchema.parse({
+// Existing project records remain internal: connecting a group never exposes or sends project reuse.
+const projectSnapshot = desktopSnapshotSchema.parse({
   revision: 1, observedAt: 0, stale: false, host: {kind: 'connected', ownership: 'owned', version: '1'},
-  agents: [{id: 'cli_join', name: 'Bot', enabled: true, running: true, connection: 'connected', activation: 'active'}, {id: 'cli_other', name: '小发', enabled: true, running: true, connection: 'connected', activation: 'active'}],
-  groups: [{id: 'oc_existing', name: '已有群'}, {id: 'oc_elsewhere', name: '别的群'}],
-  projects: [
-    {id: pay, name: '支付组', revision: 1, directory: '/w/pay', bindings: memberships.filter(item => item.projectId === pay).map(({agentId, groupId}) => ({agentId, groupId}))},
-    {id: web, name: '官网', revision: 1, directory: '/w/web', bindings: memberships.filter(item => item.projectId === web).map(({agentId, groupId}) => ({agentId, groupId}))},
-  ],
-  memberships: memberships.map(item => ({id: JSON.stringify([item.agentId, item.groupId]), ...item, name: 'x', directory: '/r', backend: 'codex-appserver', conversation: 'threads', response: 'mention', permission: {administrator: 'qa', member: 'qa', network: false}, stale: false})),
-  tools: [], jobs: [], application: {platform: 'macos', version: '1', loginItem: false, dataPath: '/t'},
+  agents: [agent], groups: [{id: 'oc_existing', name: '已有群'}],
+  projects: [{id: 'prj_00000001', name: '已有项目', revision: 1, directory: '/w/existing', bindings: [{agentId: agent.id, groupId: 'oc_existing'}]}],
+  memberships: [], tools: [], jobs: [], application: {platform: 'macos', version: '1', loginItem: false, dataPath: '/t'},
 });
-function renderProject(snapshot: DesktopSnapshot) {
+it('does not show project reuse or send an explicit project even when the snapshot contains existing projects', async () => {
   harness.stateIndex = harness.refIndex = harness.memoIndex = harness.effectIndex = 0;
-  const all = nodes(JoinGroupDialog({agent, open: true, onClose, onChanged, tools: readyCodex, snapshot, initialGroup: {chatId: 'oc_existing', name: '已有群', addedAt: 0}}));
-  return {
-    all,
-    name: all.find(node => node.type === 'input' && node.props['aria-label'])!,
-    conversation: all.find(node => node.props.label === '会话方式' && node.props.onChange)!,
-    project: all.find(node => node.props.label === '项目' && node.props.onChange),
-    picker: all.find(node => node.type === 'select' && node.props['aria-label'] === '选择项目'),
-    submit: all.find(node => node.props.variant === 'primary' && node.props.loading !== undefined)!,
+  const all = nodes(JoinGroupDialog({agent, open: true, onClose, onChanged, tools: readyCodex, snapshot: projectSnapshot, initialGroup: {chatId: 'oc_existing', name: '已有群', addedAt: 0}}));
+  expect(all.some(node => node.props.label === '项目' || node.props['aria-label'] === '选择项目' || node.props.title === '项目主目录')).toBe(false);
+  expect(all.some(node => node.props.title === '工作目录')).toBe(true);
+  all.find(node => node.props.label === '沟通方式' && node.props.onChange)!.props.onChange('threads');
+  const ui = render(true); await ui.submit.props.onClick();
+  expect(harness.client.run).toHaveBeenCalledWith(expect.objectContaining({type: 'bindGroup', groupId: 'oc_existing', folder: {kind: 'default'}}));
+  expect(harness.client.run.mock.calls.at(-1)?.[0]).not.toHaveProperty('project');
+});
+
+it('locks directory navigation during async admission and restores focus after the chosen directory returns to the form', async () => {
+  vi.useFakeTimers(); harness.deferEffects = true;
+  const flushEffects = () => {for (const effect of harness.pendingEffects.splice(0)) effect();};
+  // Use an independent hook range for the real nested DirectorySearchStep.
+  const childOffset = 100;
+  const renderDirectory = (step: Element) => {
+    harness.stateIndex = harness.refIndex = harness.memoIndex = harness.effectIndex = childOffset;
+    const child = nodes(DirectorySearchStep(step.props as Parameters<typeof DirectorySearchStep>[0]));
+    flushEffects();
+    return child;
   };
-}
-async function bindWith(snapshot: DesktopSnapshot, previous?: string, change?: (ui: ReturnType<typeof renderProject>) => void) {
-  (harness.client as any).library = vi.fn(async () => ({kind: 'previous', ...(previous ? {project: {id: previous, name: '接回的'}} : {})}));
-  renderProject(snapshot); await settled();
-  let ui = renderProject(snapshot);
-  ui.conversation.props.onChange('threads');
-  ui = renderProject(snapshot);
-  change?.(ui);
-  ui = renderProject(snapshot);
-  await ui.submit.props.onClick();
-  return {ui, request: harness.client.run.mock.calls.at(-1)?.[0] as Record<string, unknown>};
-}
-it('P6: a group another Bot already works in joins that Bot\'s project by default, with no folder of its own', async () => {
-  const snapshot = projectSnapshot([{agentId: 'cli_other', groupId: 'oc_existing', projectId: pay}]);
-  const {ui, request} = await bindWith(snapshot);
-  expect(ui.project!.props.value).toBe('join');
-  expect(ui.picker!.props.value).toBe(pay);
-  expect(ui.all.some(node => node.props.title === '项目主目录' && node.props.value === '/w/pay')).toBe(true);
-  expect(ui.all.some(node => node.props.title === '工作区')).toBe(false);
-  expect(request).toMatchObject({type: 'bindGroup', groupId: 'oc_existing', project: pay, folder: {kind: 'default'}});
-  // the same group: no warning about two groups seeing each other
-  expect(ui.all.some(node => node.props.title === '两个群会共用这个项目')).toBe(false);
-});
-it('P6: with no project in sight the default is a new one, and no project is sent', async () => {
-  const snapshot = projectSnapshot([{agentId: 'cli_other', groupId: 'oc_elsewhere', projectId: pay}]);
-  const {ui, request} = await bindWith(snapshot);
-  expect(ui.project!.props.value).toBe('new');
-  expect(ui.picker).toBeUndefined();
-  expect(ui.project!.props.choices[0].label).toBe('新建项目「已有群」');
-  expect(request).not.toHaveProperty('project');
-  expect(ui.all.some(node => node.props.title === '工作区')).toBe(true);
-});
-it('P6: picking another project\'s group warns that two groups see each other, and sends that project', async () => {
-  const snapshot = projectSnapshot([{agentId: 'cli_other', groupId: 'oc_elsewhere', projectId: pay}]);
-  const {ui, request} = await bindWith(snapshot, undefined, ui => ui.project!.props.onChange('join'));
-  expect(ui.picker!.props.value).toBe(pay);
-  const warning = ui.all.find(node => node.props.title === '两个群会共用这个项目')!;
-  expect(warning.props.children).toContain('互相间接看到');
-  expect(request).toMatchObject({project: pay, folder: {kind: 'default'}});
-});
-it('P6: a group that had a project is offered that project again, and cannot start a new one the daemon would not honour', async () => {
-  const snapshot = projectSnapshot([{agentId: 'cli_other', groupId: 'oc_elsewhere', projectId: pay}]);
-  const {ui, request} = await bindWith(snapshot, web);
-  expect(ui.project!.props.value).toBe('join');
-  expect(ui.picker!.props.value).toBe(web);
-  expect(ui.project!.props.choices[0].disabled).toBe(true);
-  expect(ui.project!.props.choices[1].label).toBe('接回项目「官网」');
-  expect(request).toMatchObject({project: web});
+  let activeElement = 'body';
+  const focus = vi.fn();
+  const commitDirectoryTrigger = (all: Element[]) => {
+    const trigger = all.find(node => node.type === 'button' && node.props['aria-label'] === '选择工作目录')!;
+    // Browser focus() cannot focus a disabled button. Commit refs before passive effects.
+    trigger.props.ref.current = {focus: () => {focus(); if (!trigger.props.disabled) activeElement = '选择工作目录';}};
+    return trigger;
+  };
+  let finishChoose!: (reply: DirectoryReply) => void;
+  const folder = {token: '00000000-0000-4000-8000-000000000001', displayPath: '/host/team'};
+  harness.client.directory.mockImplementation(request => request.type === 'suggest'
+    ? Promise.resolve({kind: 'suggestions', root: '/host', path: '/host', parent: null, truncated: false, entries: [{name: 'team', path: '/host/team', hidden: false}]})
+    : new Promise<DirectoryReply>(resolve => {finishChoose = resolve;}));
+  try {
+    let ui = render(); flushEffects();
+    ui.name.props.onChange({target: {value: '保留的群名称'}});
+    ui.all.find(node => node.props.label === '目录来源')!.props.onChange('existing');
+    ui = render(); flushEffects();
+    const step = ui.all.find(node => node.type === DirectorySearchStep)!;
+    renderDirectory(step);
+    await vi.advanceTimersByTimeAsync(200); await settled();
+    let directory = renderDirectory(step);
+    directory.find(node => node.type === 'button' && node.props.className === 'join-directory-select')!.props.onClick();
+    directory = renderDirectory(step); // choosing=true notifies the parent that admission is pending.
+    ui = render(); flushEffects();
+    expect(ui.all.find(node => node.props.children === '返回')!.props.disabled).toBe(true);
+    expect(ui.all.find(node => node.props.label === '返回添加群聊')!.props.disabled).toBe(true);
+    expect(ui.dialog.props.onClose).toBeUndefined();
+    expect(harness.client.directory).toHaveBeenLastCalledWith({type: 'choose', path: '/host/team'});
+
+    finishChoose({kind: 'folderChosen', folder}); await settled();
+    ui = render();
+    const disabledTrigger = commitDirectoryTrigger(ui.all); flushEffects();
+    expect(ui.name.props.value).toBe('保留的群名称');
+    expect(ui.all.some(node => node.props.title === folder.displayPath)).toBe(true);
+    expect(disabledTrigger.props.disabled).toBe(true);
+    expect(focus).not.toHaveBeenCalled(); // Must wait for the child's unmount to release busy.
+
+    for (const effect of harness.effects.slice(childOffset)) effect?.cleanup?.();
+    harness.effects.length = childOffset;
+    ui = render(); const enabledTrigger = commitDirectoryTrigger(ui.all); flushEffects();
+    expect(enabledTrigger.props.disabled).toBe(false);
+    expect(focus).toHaveBeenCalledOnce();
+    expect(activeElement).toBe('选择工作目录');
+  } finally {
+    for (const effect of harness.effects) effect?.cleanup?.();
+    harness.pendingEffects = []; harness.deferEffects = false; vi.useRealTimers();
+  }
 });

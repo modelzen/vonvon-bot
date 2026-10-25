@@ -20,7 +20,15 @@ export function decisionProviderProblem(value: JudgeSelectionView, viewed: strin
   const saved = savedDecisionProvider(value, groupBackend);
   return saved === viewed ? undefined : '请选择当前 Provider。';
 }
-export function providerDecisionProblem(value: JudgeSelectionView, providers: Provider[], services?: DecisionModelsView): string | undefined {
+export function providerDecisionProblem(value: JudgeSelectionView, providers: Provider[], services?: DecisionModelsView, configuration?: DecisionConfigurationState): string | undefined {
+  if (isKnownJudgeSelection(value) && value.kind === 'default') {
+    if (configuration?.kind === 'failed') return '无法读取默认决策模型，请重新读取。';
+    if (configuration?.kind !== 'ready') return '正在读取默认决策模型，请稍候。';
+    const provider = configuration.configuration.defaultProvider;
+    if (!provider) return '请先在设置中选定默认决策模型。';
+    if (!configuration.configuration.byProvider[provider]?.model.trim()) return '默认决策模型配置无效，请前往设置。';
+    return providerDecisionProblem({kind: 'provider', provider}, providers, services);
+  }
   if (!isKnownJudgeSelection(value) || value.kind !== 'provider') return '请选择判断 Provider。';
   if (value.provider === 'typesafe') {
     const service = services?.find(item => item.provider === 'typesafe');
@@ -38,16 +46,19 @@ export function DecisionFields({groupBackend, value, effective, onChange, disabl
 }) {
   const saved = savedDecisionProvider(value, groupBackend);
   const inherited = initial ? undefined : savedDecisionProvider(effective, groupBackend);
-  const viewed = saved ?? inherited ?? '';
+  const followsDefault = isKnownJudgeSelection(value) && value.kind === 'default';
+  const globalProvider = configuration?.kind === 'ready' ? configuration.configuration.defaultProvider : undefined;
+  const viewed = followsDefault ? globalProvider ?? inherited ?? '' : saved ?? inherited ?? '';
+  const defaultProblem = providerDecisionProblem({kind: 'default'}, providers, services, configuration);
   const service = services?.find(item => item.provider === 'typesafe');
   const ready = (id: string) => id === 'typesafe' ? Boolean(service?.keySet && !service.keyUnreadable) : providers.some(item => item.id === id);
-  const choices = providerIds.map(id => ({value: id, label: id === 'typesafe' ? 'Jev' : backendLabel(id), disabled: !ready(id)}));
+  const choices: Array<{value: string; label: string; disabled: boolean}> = [{value: 'default', label: '默认', disabled: Boolean(defaultProblem)}, ...providerIds.map(id => ({value: id, label: id === 'typesafe' ? 'Jev' : backendLabel(id), disabled: !ready(id)}))];
   if (saved && !choices.some(item => item.value === saved)) choices.push({value: saved as DecisionProvider, label: backendLabel(saved), disabled: true});
-  const legacy = isKnownJudgeSelection(value) && (value.kind === 'llm' || value.kind === 'decision' || value.kind === 'default' && Boolean(inherited));
+  const legacy = isKnownJudgeSelection(value) && (value.kind === 'llm' || value.kind === 'decision');
   const providerName = viewed === 'typesafe' ? 'Jev' : viewed ? backendLabel(viewed) : undefined;
   const keyState = !service || service.keyUnreadable ? 'unknown' : service.keySet ? 'added' : 'missing';
-  const currentSelection = isKnownJudgeSelection(value) && value.kind === 'default' ? effective : value;
-  const independent = isKnownJudgeSelection(currentSelection) && (currentSelection.kind === 'llm' || currentSelection.kind === 'decision') ? currentSelection : undefined;
+  const currentSelection = followsDefault ? undefined : value;
+  const independent = currentSelection && isKnownJudgeSelection(currentSelection) && (currentSelection.kind === 'llm' || currentSelection.kind === 'decision') ? currentSelection : undefined;
   const profile = independent ?? (configuration?.kind === 'ready' ? configuration.configuration.byProvider[viewed] : undefined);
   const configured = Boolean(profile && (viewed !== 'typesafe' || keyState === 'added'));
   return <div className="gd-model-fields gd-decision-fields">
@@ -59,11 +70,14 @@ export function DecisionFields({groupBackend, value, effective, onChange, disabl
       }}>使用统一配置</Button>
     </div>}
     {!isKnownJudgeSelection(value) && <p className="gd-note" role="alert">当前客户端无法编辑已保存的决策设置。</p>}
-    <fieldset><legend>判断 Provider</legend><SettingChoices label="判断 Provider" value={viewed} disabled={disabled} choices={choices} onChange={next => {
-      if (disabled || !providerIds.some(id => id === next) || !ready(next)) return;
+    <fieldset><legend>判断 Provider</legend><SettingChoices label="判断 Provider" value={followsDefault ? 'default' : viewed} disabled={disabled} choices={choices} onChange={next => {
+      if (disabled) return;
+      if (next === 'default') {if (!defaultProblem) onChange({kind: 'default'}); return;}
+      if (!providerIds.some(id => id === next) || !ready(next)) return;
       onProviderChange?.(next); onChange({kind: 'provider', provider: next as DecisionProvider});
     }}/></fieldset>
-    {!viewed && <p className="gd-note">选择一个已就绪的 Provider。</p>}
+    {followsDefault && defaultProblem && <p className="gd-note" role="status">{defaultProblem}</p>}
+    {!followsDefault && !viewed && <p className="gd-note">选择一个已就绪的 Provider。</p>}
     {viewed && !ready(viewed) && <InlineNotice title={`${viewed === 'typesafe' ? 'Jev' : backendLabel(viewed)} 尚未就绪`} tone="warning">
       {viewed === 'typesafe' ? '请到决策模型设置检查密钥。' : '请先安装并登录 Provider。'}
       {viewed !== 'typesafe' && onOpenProviders && <Button size="sm" onClick={onOpenProviders}>设置 Provider</Button>}
@@ -71,6 +85,7 @@ export function DecisionFields({groupBackend, value, effective, onChange, disabl
     {onOpenSecrets && <div className="gd-decision-config">
       <div className="gd-decision-config-copy">
         {viewed && (profile ? <span className="gd-decision-config-values">
+          {followsDefault && <span>默认 · {providerName}</span>}
           {configured && <span className="gd-decision-configured" role="status" aria-label="已配置" title="已配置"><Check size={13} aria-hidden="true"/></span>}
           <span title={viewed === 'typesafe' ? 'Jev 不支持单独设置思考等级' : undefined}>{profile.model}</span>
           {viewed !== 'typesafe' && <><span aria-hidden="true">·</span><span aria-label="思考等级">{'effort' in profile && profile.effort ? profile.effort === 'none' ? '关闭思考' : profile.effort : viewed === 'claude-agent' ? '关闭思考' : '默认'}</span></>}

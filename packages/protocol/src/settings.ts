@@ -36,7 +36,8 @@ const title = z.discriminatedUnion("enabled", [
 ]);
 /**
  * The smart-mode judge model of a layer (s23d, product.md 3.4). `default` removes the layer: the bot
- * then judges on each backend's default small model, a group inherits the bot. `llm`, a language
+ * then judges on each backend's default small model. A group reset stores a host-default marker;
+ * legacy groups without a stored marker retain their existing Bot/backend inheritance. `llm`, a language
  * model: `backend` says whose model id it is; left out, the group's backend, or the bot's default
  * backend for the bot. `decision`, a decision model: no backend, it applies to groups on every
  * backend (s23f lists and calls them).
@@ -166,7 +167,7 @@ export const projectSectionSchemas = {
 export const sessionSectionSchemas = { model: z.object({ selection }) };
 export const hostSectionSchemas = {
   execution: z.object({ codexBin: z.string().nullable() }),
-  judge: z.object({ byProvider: z.record(z.string(), z.object({ model: z.string().trim().min(1).max(1000), effort: effort.optional(), custom: z.boolean().optional() })) }),
+  judge: z.object({ defaultProvider: z.enum(['codex-appserver', 'claude-agent', 'typesafe']).optional(), byProvider: z.record(z.string(), z.object({ model: z.string().trim().min(1).max(1000), effort: effort.optional(), custom: z.boolean().optional() })) }),
 };
 
 /** A session's Feishu thread id; the CLI checks `--session` with it before connecting. */
@@ -316,6 +317,8 @@ export const responseRosterSchema = z.object({
 export type ResponseRoster = z.infer<typeof responseRosterSchema>;
 
 export const projectViewSchema = z.object({
+  /** Distinguishes the stored host-default marker from an older absent group override. */
+  judgeInheritsHostDefault: z.boolean().optional(),
   botProfile: profile.optional(),
   skillsError: z.string().optional(),
   skills: z.array(z.object({ path: z.string(), name: z.string(), description: z.string(), source: z.enum(["workspace", "user", "provider"]), enabled: z.boolean() })).optional(),

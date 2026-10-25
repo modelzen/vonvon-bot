@@ -683,14 +683,13 @@ it('captures real bot-added events for desktop while retaining DM binding and cl
   } finally { await app.shutdown(); }
 });
 
-it('requires an explicit group decision model before switching to smart mode', async () => {
+it('enabling smart mode preserves absent legacy Bot inheritance instead of selecting a new host default', async () => {
   backend(); const app = orchestrator();
   try {
     await mutateProject('demo', project => { delete project.judge; });
     const revision = projectRevision((await getProjectByName('demo'))!);
-    await expect(app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart' })).rejects.toThrow('决策模型');
-    expect(await getProjectByName('demo')).not.toHaveProperty('smart');
-    expect(fixture.send).not.toHaveBeenCalled();
+    expect(await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart' })).toMatchObject({ok:true});
+    expect((await getProjectByName('demo'))?.judge).toBeUndefined();
   } finally { await app.shutdown(); }
 });
 it('rechecks a provider-only group before enabling smart mode', async () => {
@@ -702,4 +701,35 @@ it('rechecks a provider-only group before enabling smart mode', async () => {
     await expect(app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart' })).rejects.toThrow('尚未登录');
     expect((await getProjectByName('demo'))?.smart).not.toBe(true);
   } finally { await app.shutdown(); }
+});
+
+it('switching a legacy host-default group to smart stores a concrete snapshot',async()=>{
+  backend(); (fixture.backend as {loginStatus?:()=>Promise<{state:'signedIn';message:string}>}).loginStatus=async()=>({state:'signedIn',message:''});
+  const app=orchestrator();
+  try {
+    await updateProject('demo',{judge:{kind:'default'}});
+    const revision=projectRevision((await getProjectByName('demo'))!);
+    expect(await app.collaboration({action:'editProject',...target,expectedRevision:revision,kind:'smart'})).toMatchObject({ok:true,project:{kind:'smart'}});
+    expect((await getProjectByName('demo'))?.judge).toEqual({kind:'llm',backend:'codex-appserver',model:'gpt-5.5',effort:'medium'});
+  } finally {await app.shutdown();}
+});
+
+it('enabling smart preserves a group snapshot after the host default changes',async()=>{
+  backend(); const app=orchestrator();
+  try {
+    const {writeJudgeModels}=await import('../src/judge/global-models');
+    await writeJudgeModels({defaultProvider:'typesafe',byProvider:{typesafe:{model:'jev-latest'}}});
+    const row=(await getProjectByName('demo'))!;
+    expect(await app.collaboration({action:'editProject',...target,expectedRevision:projectRevision(row),kind:'smart'})).toMatchObject({ok:true});
+    expect((await getProjectByName('demo'))?.judge).toEqual(row.judge);
+  } finally {await rm(join(paths.appDir,'judge-models.json'),{force:true});await app.shutdown();}
+});
+it('refuses enabling smart with a Jev snapshot whose key was removed',async()=>{
+  backend(); const app=orchestrator();
+  try {
+    await updateProject('demo',{judge:{kind:'decision',provider:'typesafe',model:'jev-latest'}});
+    const row=(await getProjectByName('demo'))!;
+    await expect(app.collaboration({action:'editProject',...target,expectedRevision:projectRevision(row),kind:'smart'})).rejects.toThrow('密钥');
+    expect((await getProjectByName('demo'))?.smart).not.toBe(true);
+  } finally {await app.shutdown();}
 });

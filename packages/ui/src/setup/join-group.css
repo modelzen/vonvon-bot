@@ -7,3 +7,36 @@
 .join-group-flow .join-group-list > button:focus-visible {outline:2px solid var(--color-accent);outline-offset:-3px;}
 @media(hover:hover) and (pointer:fine){.join-group-flow .join-group-list > button:hover:not(:disabled){background:var(--color-surface-hover);}}
 @media(pointer:coarse){.join-group-flow .join-group-flow__modes .ui-button{min-height:44px;}}
+
+/* Compact group setup; fixed title and footer keep actions reachable while scrolling. */
+.ui-dialog:has(.join-group-flow,.join-directory-search) {width:min(100%,620px)}
+.ui-dialog:has(.join-group-flow,.join-directory-search)>.ui-dialog__header{padding:20px 24px 16px;flex-shrink:0}
+.join-group-title{display:flex;align-items:center;justify-content:space-between;gap:20px;width:100%;min-width:0}
+.join-group-agent{display:inline-flex;align-items:center;gap:8px;min-width:0;max-width:52%;font-size:12px;color:var(--color-text-secondary);font-weight:400;letter-spacing:0}
+.join-group-agent .collaboration-avatar{width:24px;height:24px;flex:0 0 24px;border-radius:6px}
+.join-group-agent>span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ui-dialog:has(.join-group-flow,.join-directory-search)>.ui-dialog__content{padding:16px 24px;overscroll-behavior:contain}
+.ui-dialog:has(.join-group-flow,.join-directory-search)>.ui-dialog__footer{padding:12px 24px;flex-shrink:0;background:var(--color-surface)}
+.join-group-flow{gap:16px}
+.join-group-flow .ss-section{margin:0}
+.join-group-flow .ss-row{min-height:48px;padding:8px 16px}
+.join-group-flow .ss-row__value{overflow-wrap:anywhere}
+.join-group-flow .ss-row .setting-choices{width:auto;display:inline-flex;flex-wrap:wrap;gap:2px;padding:2px;border:1px solid var(--color-border);border-radius:8px;background:var(--color-surface-muted)}
+.join-group-flow .ss-row .setting-choice>span{min-height:28px;padding:4px 10px;border:1px solid transparent;background:transparent;border-radius:5px;font-size:12px;font-weight:400;white-space:nowrap}
+.join-group-flow .ss-row .setting-choice input:checked+span{background:var(--color-surface);border-color:var(--color-border);box-shadow:var(--shadow-xs);color:var(--color-text);font-weight:500}
+.join-group-flow .join-group-flow__modes{border-color:var(--color-border);padding:3px}
+.join-group-flow .ui-form-field{gap:8px}
+.join-group-flow .ui-choice-group{background:var(--color-surface);border:1px solid var(--color-border);border-radius:10px}
+.join-group-flow .ui-choice{padding-block:10px}
+.join-group-flow .join-group-flow__hint{margin:0}
+@media(max-width:600px){.ui-dialog:has(.join-group-flow,.join-directory-search)>:is(.ui-dialog__header,.ui-dialog__content,.ui-dialog__footer){padding-inline:16px}.join-group-title{gap:12px}.join-group-agent{max-width:48%}}
+@media(prefers-reduced-motion:reduce){.join-group-flow *{scroll-behavior:auto}}
+.join-group-heading{display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
+.join-directory-field{display:flex;align-items:center;gap:10px;width:calc(100% - 32px);margin:0 16px 12px;padding:9px 10px;border:1px solid var(--color-border);border-radius:6px;background:var(--color-surface);color:var(--color-text-secondary);text-align:left;font-size:12px;cursor:pointer}
+.join-directory-field>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.join-directory-field>svg{flex-shrink:0}
+.join-directory-field:hover{background:var(--color-surface-muted);color:var(--color-text)}
+.join-decision-problem{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px;color:var(--color-text-secondary);padding:8px 12px;border:1px solid var(--color-border);border-radius:8px}
+.join-decision-actions{display:flex;flex-shrink:0}
+
+.ui-dialog:has(.join-directory-search)>.ui-dialog__content{padding-top:0}

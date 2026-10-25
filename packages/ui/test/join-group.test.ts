@@ -50,11 +50,11 @@ it('s36d1: locks the form on a group created and not saved, with the daemon\'s b
   expect(notice).not.toContain('重试');
 });
 
-it('s25c: lists the three 会话方式 in 3.4\'s order and words, and 智能 has no 免@ to show or send', () => {
+it('uses the same communication vocabulary as Bot settings, and 智能 has no 免@ to show or send', () => {
   expect(CONVERSATIONS).toEqual([
-    {value: 'threads', label: '@ 我开新会话', description: '在主区 @ 我就开一个话题，一个话题一条会话，几件事各聊各的'},
-    {value: 'shared', label: '整群一条会话', description: '主区一条会话，上下文一直连着；想另起一件事，开个话题和我聊'},
-    {value: 'smart', label: '智能开话题', description: '主区一条会话，不用 @ 我也会看情况接话；聊到新的事，我自己开话题、起新会话'},
+    {value: 'threads', label: '独立话题', description: '主区 @ Bot 开启新话题，每个话题独立交谈、各自记住上下文。'},
+    {value: 'shared', label: '连续交谈', description: '全群接着聊，共用一段对话和上下文。'},
+    {value: 'smart', label: '智能', description: '根据判断规则，自己决定何时接话、何时另开话题。'},
   ]);
   expect(shownResponse(undefined, undefined)).toBeUndefined();
   expect(shownResponse('threads', undefined)).toBe('all');
@@ -73,8 +73,8 @@ it('s25c: lists the three 会话方式 in 3.4\'s order and words, and 智能 has
 
 it('s36b2: offers topic conversations and keeps threads 免 @ on by default', () => {
   expect(conversationsFor(true)).toEqual([
-    {value: 'threads', label: '按话题聊', description: '一个话题一条会话，几件事各聊各的'},
-    {value: 'smart', label: '智能开话题', description: '一个话题一条会话，不用 @ 我也会看情况接话'},
+    {value: 'threads', label: '独立话题', description: '主区 @ Bot 开启新话题，每个话题独立交谈、各自记住上下文。'},
+    {value: 'smart', label: '智能', description: '根据判断规则，自己决定何时接话、何时另开话题。'},
   ]);
   expect(conversationsFor(false)).toEqual(CONVERSATIONS);
   expect(shownResponse('threads', undefined)).toBe('all');
@@ -93,8 +93,10 @@ it('s36b2: shows topic binding choices and read-only permissions when binding', 
   );
   const topic = render(true, true);
   expect(topic.match(/role="radio"/g)).toHaveLength(2);
-  expect(topic).toContain('按话题聊');
-  expect(topic).not.toContain('整群一条会话');
+  expect(topic).toContain('独立话题');
+  expect(topic).toContain('沟通方式');
+  expect(topic).not.toContain('会话方式');
+  expect(topic).not.toContain('连续交谈');
   expect(topic).toContain('只读（不联网）');
   expect(topic).not.toContain('网络关闭');
   expect(topic).not.toContain('连接后，在群设置中改为完全访问才能使用。');
@@ -104,13 +106,18 @@ it('s36b2: shows topic binding choices and read-only permissions when binding', 
   expect(render(true, false).match(/role="radio"/g)).toHaveLength(3);
 });
 
-it('requires an explicit ready judgment Provider for smart setup', () => {
-  expect(judgeSetupProblem({kind: 'default'})).toContain('请选择');
-  expect(judgeSetupProblem({kind: 'provider', provider: 'codex-appserver'}, undefined, ['codex-appserver'])).toBeUndefined();
-  expect(judgeSetupProblem({kind: 'provider', provider: 'claude-agent'}, undefined, ['codex-appserver'])).toContain('不可用');
+it('accepts the host default only after configuration and its provider are ready', () => {
+  const defaultSelection = {kind: 'default'} as const;
+  const codexConfiguration = {kind: 'ready', configuration: {defaultProvider: 'codex-appserver', byProvider: {'codex-appserver': {model: 'gpt-6-luna'}}}} as const;
+  expect(judgeSetupProblem(defaultSelection)).toBeDefined();
+  expect(judgeSetupProblem(defaultSelection, undefined, ['codex-appserver'], {kind: 'failed'})).toBeDefined();
+  expect(judgeSetupProblem(defaultSelection, undefined, ['codex-appserver'], {kind: 'ready', configuration: {byProvider: {}}})).toBeDefined();
+  expect(judgeSetupProblem(defaultSelection, undefined, ['codex-appserver'], codexConfiguration)).toBeUndefined();
+  expect(judgeSetupProblem(defaultSelection, undefined, ['claude-agent'], codexConfiguration)).toContain('不可用');
   const services = [{provider: 'typesafe', displayName: 'TypeSafe', keyId: 'key', models: [{id: 'jev', displayName: 'Jev'}], keySet: false}];
-  expect(judgeSetupProblem({kind: 'provider', provider: 'typesafe'}, services)).toContain('密钥');
-  expect(judgeSetupProblem({kind: 'provider', provider: 'typesafe'}, [{...services[0]!, keySet: true}])).toBeUndefined();
+  const jevConfiguration = {kind: 'ready', configuration: {defaultProvider: 'typesafe', byProvider: {typesafe: {model: 'jev'}}}} as const;
+  expect(judgeSetupProblem(defaultSelection, services, [], jevConfiguration)).toContain('密钥');
+  expect(judgeSetupProblem(defaultSelection, [{...services[0]!, keySet: true}], [], jevConfiguration)).toBeUndefined();
 });
 
 it('starts with a ready Provider and rejects an unavailable setup suggestion', () => {
