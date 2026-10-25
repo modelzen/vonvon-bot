@@ -1,5 +1,7 @@
 # Vonvon Bot 第一版计划
 
+**2026-10-25 全局搜索验收调整：** owner 认可紧凑搜索预览，按 [全局搜索整理](plans/search-dialog-polish.md) 实现。合入远端 dev、跳过 CI、更新本机 App 按 owner 本次明确指示执行；本地检查和安装结果记录在 PR。
+
 这份计划把定稿的 `docs/product.md` 拆成里程碑、切片和实验。第一版做什么以 product.md 为准，本文不加它没有的功能，两者冲突时以 product.md 为准。每合入一片，就在本文第 3 节的清单里把它勾掉，写上 PR 号。本文随代码 PR 一起改，不为它另开文档 PR。同时最多两个产品 PR 在飞（`AGENTS.md`），所以切片分两条线做，见本文第 1 节。
 
 切片和实验的 PR 不用 owner 认可：按 `AGENTS.md`，由 Claude 找另一个模型审查、CI 通过后合入。product.md 的修订按本文 4.2 分两类，只有改了承诺或范围的才等 owner。owner 出面的时候：里程碑验收；被叫去做决定；本文第 8 节列的提前准备的事。
