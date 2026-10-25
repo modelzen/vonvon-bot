@@ -7,6 +7,7 @@ import {uiFeatures} from './features';
 export function AppShell(props: {page: Page; view: CollaborationView; title: string; children: ReactNode; firstUse?: boolean; newCounts?: {bots: number; projects: number}; onNavigate: (page: Page) => void; onOpenList: (view: CollaborationView) => void; onBack?: () => void; backLabel?: string; onSearch?: () => void; selectedFeature?: string; onFeatureNavigate?: (id: string) => void}) {
   const isSettings = !['home', 'collaboration'].includes(props.page) || Boolean(props.selectedFeature);
   return <div className="settings-window collaboration-window today-window" data-first-use={props.firstUse || undefined}>
+    <div className="desktop-titlebar" aria-hidden="true"/>
     <header className="today-app-header">
       <button type="button" className="today-brand" onClick={() => props.onNavigate('home')} aria-label="Vonvon Bot 概览" title="Vonvon Bot">
         <img src="./vonvon-logo.png" alt=""/><strong>Vonvon Bot</strong>
