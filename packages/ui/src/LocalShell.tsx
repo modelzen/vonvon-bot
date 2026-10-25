@@ -2,6 +2,7 @@ import type {ReactNode} from 'react';
 import {ArrowLeft, Search, Settings} from 'lucide-react';
 import type {CollaborationView, Page} from './collaboration-model';
 import {uiFeatures} from './features';
+import {NavigationIndicator} from './NavigationIndicator';
 
 // One compact toolbar at every window size; first use only exposes useful destinations.
 export function AppShell(props: {page: Page; view: CollaborationView; title: string; children: ReactNode; firstUse?: boolean; newCounts?: {bots: number; projects: number}; onNavigate: (page: Page) => void; onOpenList: (view: CollaborationView) => void; onBack?: () => void; backLabel?: string; onSearch?: () => void; selectedFeature?: string; onFeatureNavigate?: (id: string) => void}) {
@@ -13,9 +14,10 @@ export function AppShell(props: {page: Page; view: CollaborationView; title: str
         <img src="./vonvon-logo.png" alt=""/><strong>Vonvon Bot</strong>
       </button>
       {!props.firstUse && <nav className="today-primary-nav" aria-label="主要导航">
+        <NavigationIndicator activeIndex={props.page === 'home' ? 0 : props.page === 'collaboration' ? props.view === 'agents' ? 1 : 2 : null}/>
         <button type="button" aria-current={props.page === 'home' ? 'page' : undefined} onClick={() => props.onNavigate('home')}>灵感</button>
-        <button type="button" aria-current={props.page === 'collaboration' && props.view === 'agents' ? 'page' : undefined} onClick={() => props.onOpenList('agents')}>Bot{props.newCounts?.bots ? <small className="today-nav-count" aria-label={`新记忆 ${props.newCounts.bots} 条`}>{props.newCounts.bots}</small> : null}</button>
-        <button type="button" aria-current={props.page === 'collaboration' && props.view !== 'agents' ? 'page' : undefined} onClick={() => props.onOpenList('groups')}>群组{props.newCounts?.projects ? <small className="today-nav-count" aria-label={`新记忆 ${props.newCounts.projects} 条`}>{props.newCounts.projects}</small> : null}</button>
+        <button type="button" aria-current={props.page === 'collaboration' && props.view === 'agents' ? 'page' : undefined} onClick={() => props.onOpenList('agents')}>Bot{props.newCounts?.bots ? <small className="today-nav-count" title={`新记忆 ${props.newCounts.bots} 条`} aria-label={`新记忆 ${props.newCounts.bots} 条`}>{props.newCounts.bots > 99 ? '99+' : props.newCounts.bots}</small> : null}</button>
+        <button type="button" aria-current={props.page === 'collaboration' && props.view !== 'agents' ? 'page' : undefined} onClick={() => props.onOpenList('groups')}>群组{props.newCounts?.projects ? <small className="today-nav-count" title={`新记忆 ${props.newCounts.projects} 条`} aria-label={`新记忆 ${props.newCounts.projects} 条`}>{props.newCounts.projects > 99 ? '99+' : props.newCounts.projects}</small> : null}</button>
       </nav>}
       <div className="today-header-actions">
         <button type="button" className="today-icon-button" aria-label="搜索设置、Bot 或群组" title="搜索 · ⌘K" onClick={props.onSearch}><Search size={17} strokeWidth={1.7}/></button>
