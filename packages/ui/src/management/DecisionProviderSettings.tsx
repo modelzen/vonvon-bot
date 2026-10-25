@@ -3,7 +3,7 @@ import {useCallback, useEffect, useRef, useState, type ReactNode} from 'react';
 import {type HostSettingsView, type SecretService, type SettingsReply} from '@vonvon/protocol';
 import {useClient} from '../client-context';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
-import {Button, IconButton, InlineNotice} from '../reference/components/ui';
+import {IconButton, InlineNotice} from '../reference/components/ui';
 import {Editor} from '../settings/SettingsPanel';
 import {decisionProviderSection, settingAnchor} from '../search';
 
@@ -67,7 +67,7 @@ export function DecisionProviderSettings({services, onOpenProviders, onManageKey
   const modelAction = <IconButton size="sm" variant="ghost" label="重新读取配置与模型" title="重新读取配置与模型" disabled={loading} onClick={() => {void refresh(); void refreshCatalogs();}}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>;
   return <>
     {error && <InlineNotice tone="warning" title="配置读取失败" actions={<IconButton size="sm" variant="ghost" label="重试" title="重新读取 Provider 配置" loading={loading} onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}>{error}</InlineNotice>}
-    {section ? <Editor title="模型配置" section={section} save={save}
+    {section ? <Editor title="模型配置" section={section} autoSave save={save}
       validate={value => {
         const provider = value.defaultProvider ?? section.effective.defaultProvider;
         if (!provider) return '请选择默认决策模型。';
@@ -75,7 +75,7 @@ export function DecisionProviderSettings({services, onOpenProviders, onManageKey
         if (provider === 'typesafe' && services?.find(service => service.provider === provider)?.status !== 'set') return '请先配置可用的 Jev 密钥。';
         return undefined;
       }}
-      renderLayout={editor => <div className="decision-model-editor" data-writable={section.access.kind === 'writable'}>{editor.content}{(editor.canSave || editor.pending) && <div className="decision-save-bar"><span>模型选择尚未保存</span><Button size="sm" disabled={editor.pending} onClick={editor.discard}>放弃修改</Button><Button size="sm" variant="primary" loading={editor.pending} onClick={() => void editor.submit()}>保存模型配置</Button></div>}</div>}
+      renderLayout={editor => <div className="decision-model-editor" data-writable={section.access.kind === 'writable'}>{editor.content}</div>}
       render={(value, change, disabled) => <DecisionProviderFields value={value} defaults={section.effective} catalogs={catalogs} services={services} disabled={disabled} onChange={change} onOpenProviders={onOpenProviders} onManageKey={onManageKey} keyContent={keyContent} keyUses={keyUses} keyAction={keyAction} modelAction={modelAction}/>}/>
       : <><SettingsGroup label="Provider 配置"><SettingsRow title={loading ? '正在读取配置…' : '当前服务暂不支持统一配置'} description={loading ? undefined : '请更新并重新连接本机服务。'}/></SettingsGroup><SettingsGroup label="Jev 密钥" id={settingAnchor('决策模型')} action={keyAction}>{keyContent}{keyUses}</SettingsGroup></>}
   </>;
