@@ -10,7 +10,7 @@ import { isBackendPackageInUserDir } from './backend-loader';
 import { fixNativeHelperPerms } from './native-helpers';
 
 /**
- * 按需后端依赖的安装执行器（npm-ondemand 包；通用基础设施，当前内置后端未用）。
+ * 按需后端依赖的安装执行器（npm-ondemand 包；Claude SDK 使用此托管安装流程）。
  *
  * 装到用户私装目录 {@link paths.backendsDir}（永远用户可写，零 sudo/brew——见
  * design/backend-catalog-ondemand.md §2.2 方案A）。流程：
@@ -268,20 +268,46 @@ async function installInTurn(
   return result;
 }
 
-/** 卸载一个按需后端依赖（省空间 / 重装前清理）。绝不抛错。 */
+/** 卸载一个按需后端依赖（省空间 / 重装前清理）。绝不抛错。
+ * npm 负责同步 package.json / lockfile 并回收不再使用的依赖（包括 hoisted 平台二进制）；
+ * 仍被其他已安装后端使用的共享依赖保留。整个 npm 进程和校验都持有同一个 mutation 队列位置。 */
 export type UninstallResult = 'not-installed' | 'uninstalled' | 'failed';
 
 export function uninstallBackendDep(pkg: string, opts?: { binName?: string }): Promise<UninstallResult> {
   return enqueueMutation('uninstall', pkg, async () => {
     const bareName = stripVersion(pkg);
     if (!isBackendPackageInUserDir(bareName, opts?.binName)) return 'not-installed';
-    await rollback(bareName);
-    return isBackendPackageInUserDir(bareName, opts?.binName) ? 'failed' : 'uninstalled';
+    try {
+      await ensureBackendsDir();
+      const npm = npmInvocation();
+      const args = [
+        ...npm.args, 'uninstall', bareName, '--prefix', paths.backendsDir,
+        '--save', '--include=optional', '--ignore-scripts', '--no-audit', '--no-fund', '--no-progress',
+        '--cache', paths.npmCacheDir,
+      ];
+      log.info('agent', 'backend-uninstall-start', { pkg, npm: npm.args[0] ?? 'PATH' });
+      const ok = await new Promise<boolean>((resolve) => {
+        const child = spawnProcess(npm.command, args, { stdio: 'ignore', env: { ...process.env, ...npm.env } });
+        let failed = false;
+        child.on('error', () => { failed = true; });
+        // 等 close 后才释放共享前缀，失败时也不能和下一次安装同时修改 node_modules。
+        child.on('close', (code) => resolve(code === 0 && !failed));
+      });
+      if (!ok || isBackendPackageInUserDir(bareName, opts?.binName)) {
+        log.warn('agent', 'backend-uninstall-failed', { pkg });
+        return 'failed';
+      }
+      log.info('agent', 'backend-uninstall-done', { pkg });
+      return 'uninstalled';
+    } catch (err) {
+      log.fail('agent', err, { phase: 'backend-uninstall', pkg });
+      return 'failed';
+    }
   });
 }
 
 /** rm -rf backendsDir/node_modules/<pkg> + 从 package.json 移除条目 + 删 package-lock.json
- * （半装回滚 / 卸载）。绝不抛错。 */
+ * （安装失败后的半装回滚；显式卸载由 npm 处理完整依赖树）。绝不抛错。 */
 async function rollback(bareName: string): Promise<void> {
   // scoped 包名（@scope/name）是两级目录，rm 整个包目录即可（@scope 空壳无害留着）。
   const target = join(paths.backendsDir, 'node_modules', ...bareName.split('/'));

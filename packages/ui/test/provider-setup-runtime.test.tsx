@@ -80,6 +80,30 @@ it('installs the Claude CLI then starts login when SDK is already installed', as
   expect(actions.lastIndexOf('startLogin')).toBeGreaterThan(actions.lastIndexOf('install'));
 });
 
+it('installs a missing Claude SDK only after the user requests it, even when Claude Code is present', async () => {
+  const missing = snapshot([{tool: 'claude', installation: 'missing', authentication: 'unknown', version: null}]);
+  h.client.snapshot.mockResolvedValue(missing);
+  const originalEnvironment = h.client.environment.getMockImplementation()!;
+  h.client.environment.mockImplementation(async (request: {type: string}) => request.type === 'backendCatalog'
+    ? {kind: 'backends', entries: [{id: 'claude-agent', depState: 'missing', canInstall: true, canUninstall: false}]}
+    : request.type === 'scan' ? {kind: 'tools', tools: [{tool: 'claude', installation: 'external', executable: '/existing/claude', version: '1', canUninstall: false}]}
+    : request.type === 'backendInstall' ? {kind: 'backendInstall', operationId: 'sdk-install-1'}
+    : originalEnvironment(request));
+
+  render('claude', missing); await flush();
+  await render('claude', missing).verify();
+  const state = render('claude', missing);
+  expect(state.entry?.depState).toBe('missing');
+  expect(state.canContinue).toBe(false);
+  expect(h.client.environment.mock.calls.some(([request]) => ['install', 'update', 'backendInstall', 'startLogin', 'backendLogin'].includes(request.type))).toBe(false);
+  expect(h.client.collaboration).not.toHaveBeenCalled();
+
+  await state.installProvider();
+  expect(h.client.environment).toHaveBeenCalledWith({type: 'backendInstall', id: 'claude-agent', update: false});
+  expect(h.client.environment.mock.calls.filter(([request]) => request.type === 'backendInstall')).toHaveLength(1);
+  expect(h.client.environment.mock.calls.some(([request]) => ['install', 'update', 'startLogin'].includes(request.type))).toBe(false);
+});
+
 it('polls a pending tool install so it can be cancelled before the install request settles', async () => {
   vi.useFakeTimers();
   try {
@@ -153,15 +177,15 @@ it('retains a failed detection message and recovers through a tool refresh witho
   expect(h.client.environment.mock.calls.some(([request]) => ['install', 'update', 'backendInstall'].includes(request.type))).toBe(false);
 });
 
-it('checks again instead of installing when an installation action sees unknown state', async () => {
-  const unknown = snapshot([{tool: 'codex', installation: 'unknown', authentication: 'unknown', version: null}]);
+it.each(['codex', 'claude'] as const)('checks again instead of installing when a %s installation action sees unknown state', async provider => {
+  const unknown = snapshot([{tool: provider, installation: 'unknown', authentication: 'unknown', version: null}]);
   h.client.snapshot.mockResolvedValue(unknown);
-  render('codex', unknown); await flush();
+  render(provider, unknown); await flush();
   const before = run.mock.calls.length;
-  await render('codex', unknown).installProvider();
+  await render(provider, unknown).installProvider();
   expect(run.mock.calls.length).toBe(before + 1);
   expect(run).toHaveBeenLastCalledWith({type: 'refresh', tools: true});
-  expect(render('codex', unknown).check?.message).toBe('暂时无法确认安装状态，请重新检测。');
+  expect(render(provider, unknown).check?.message).toBe('暂时无法确认安装状态，请重新检测。');
   expect(h.client.environment.mock.calls.some(([request]) => ['install', 'update', 'backendInstall'].includes(request.type))).toBe(false);
 });
 

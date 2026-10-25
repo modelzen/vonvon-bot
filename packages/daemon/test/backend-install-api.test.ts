@@ -6,15 +6,14 @@ import type { BackendProbe } from '../src/agent/types';
 // 避免真机探测（codex 是否装会让断言飘）。installBackendDep 这里不用（service 走
 // 注入的 deps.installBackend），但 index 仍需导出它（service import 了）。
 //
-// 现实只有 codex-appserver 一个真实后端（external-cli，非 installable）。为保住「安装
-// API 通用机制」（版本 pin 拼包名、库类/ bin 类 binName 透传、501 预览态）的覆盖，本
-// mock 额外塞两条**纯合成的假后端**（fake-lib / fake-bin，npm-ondemand），走 installable
-// 分支验证委托逻辑——它们不对应任何真实后端，只是 catalog 派生机制的最小夹具。
+// Claude 使用真实 catalog 条目，验证用户选择后的托管安装生命周期。
+// fake-lib / fake-bin 额外覆盖库类版本 pin 与 bin 类安装器透传等通用分支。
 
 // vi.mock 会被 hoist 到文件顶部 → 共享常量也得 hoist（vi.hoisted）才能被工厂引用。
 const { CATALOG, doctorResults } = vi.hoisted(() => {
   const doctorResults: Record<string, BackendProbe> = {
     'codex-appserver': { ok: true, version: '1.2.3' },
+    'claude-agent': { ok: false, version: null, hint: '未安装，点下载', depState: 'not-installed', installable: true },
     'fake-lib': { ok: false, version: null, hint: '未安装，点下载', depState: 'not-installed', installable: true },
     'fake-bin': { ok: false, version: null, hint: '未安装，点下载', depState: 'not-installed', installable: true },
   };
@@ -65,39 +64,47 @@ const { CATALOG, doctorResults } = vi.hoisted(() => {
   return { CATALOG, doctorResults };
 });
 
-vi.mock('../src/agent', () => ({
-  DEFAULT_BACKEND_ID: 'codex-appserver',
-  BACKEND_CATALOG: CATALOG,
-  // 镜像真实 visibleCatalog：滤掉 hidden（本 mock 三条均不 hidden → 全列，验证聚合机制本身）。
-  visibleCatalog: () => CATALOG.filter((e) => !(e as { hidden?: boolean }).hidden),
-  backendIds: () => CATALOG.map((e) => e.id),
-  createBackend: (id: string) => ({
-    id,
-    displayName: CATALOG.find((e) => e.id === id)?.displayName ?? id,
-    doctor: async (): Promise<BackendProbe> => doctorResults[id] ?? { ok: false, version: null },
-  }),
-  catalogById: (id: string) => CATALOG.find((e) => e.id === id),
-  isInstallable: (entry: { dep: { kind: string } }) => entry.dep.kind === 'npm-ondemand',
-  effectiveDefaultBackend: async () => 'codex-appserver',
-  installBackendDep: vi.fn(),
-  isBackendInstalledInUserDir: () => false,
-  installedBackendVersion: vi.fn(() => null),
-  latestNpmVersion: vi.fn(async () => null),
-}));
-vi.mock('../src/agent/backend-loader', () => ({ isBundledBackend: vi.fn(() => false) }));
+vi.mock('../src/agent', async () => {
+  const { catalogById } = await import('../src/agent/catalog');
+  const entries = [...CATALOG, catalogById('claude-agent')!];
+  return {
+    DEFAULT_BACKEND_ID: 'codex-appserver',
+    BACKEND_CATALOG: entries,
+    // 镜像真实 visibleCatalog：滤掉 hidden（本 mock 条目均不 hidden → 全列，验证聚合机制本身）。
+    visibleCatalog: () => entries.filter((e) => !(e as { hidden?: boolean }).hidden),
+    backendIds: () => entries.map((e) => e.id),
+    createBackend: (id: string) => ({
+      id,
+      displayName: entries.find((e) => e.id === id)?.displayName ?? id,
+      doctor: async (): Promise<BackendProbe> => doctorResults[id] ?? { ok: false, version: null },
+    }),
+    catalogById: (id: string) => entries.find((e) => e.id === id),
+    isInstallable: (entry: { dep: { kind: string } }) => entry.dep.kind === 'npm-ondemand',
+    effectiveDefaultBackend: async () => 'codex-appserver',
+    installBackendDep: vi.fn(),
+    isBackendInstalledInUserDir: vi.fn(() => false),
+    installedBackendVersion: vi.fn(() => null),
+    latestNpmVersion: vi.fn(async () => null),
+  };
+});
 
-import { installedBackendVersion, latestNpmVersion } from '../src/agent';
-import { isBundledBackend } from '../src/agent/backend-loader';
+import { installedBackendVersion, isBackendInstalledInUserDir, latestNpmVersion } from '../src/agent';
+import { CLAUDE_AGENT_SDK_VERSION } from '../src/agent/catalog';
 import { createAdminService, NotWiredYetError } from '../src/admin/service';
 
-afterEach(() => { vi.clearAllMocks(); vi.mocked(isBundledBackend).mockReturnValue(false); });
+afterEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(installedBackendVersion).mockReturnValue(null);
+  vi.mocked(isBackendInstalledInUserDir).mockReturnValue(false);
+  doctorResults['claude-agent'] = { ok: false, version: null, hint: '未安装，点下载', depState: 'not-installed', installable: true };
+});
 
 describe('listBackendCatalog · 状态聚合', () => {
   it('聚合 catalog + 三态 depState/installable/version/approxSize + 默认标记', async () => {
     const svc = createAdminService();
     const out = await svc.listBackendCatalog();
     expect(out.defaultBackend).toBe('codex-appserver');
-    expect(out.entries.map((e) => e.id)).toEqual(['codex-appserver', 'fake-lib', 'fake-bin']);
+    expect(out.entries.map((e) => e.id)).toEqual(['codex-appserver', 'fake-lib', 'fake-bin', 'claude-agent']);
 
     const codex = out.entries.find((e) => e.id === 'codex-appserver')!;
     expect(codex).toMatchObject({
@@ -130,22 +137,44 @@ describe('listBackendCatalog · 状态聚合', () => {
   });
 });
 
-describe('installBackend · installer 委托 + 守门', () => {
-  it('内置后端的下载、更新、卸载均拒绝且不碰用户安装器', async () => {
-    vi.mocked(isBundledBackend).mockImplementation(id => id === 'fake-lib');
-    const install = vi.fn();
-    const uninstall = vi.fn();
+describe('Claude 托管安装生命周期', () => {
+  it('只在用户明确安装/更新/卸载时调用安装器，读取状态不会自动下载', async () => {
+    const pkg = '@anthropic-ai/claude-agent-sdk';
+    const install = vi.fn(async () => {
+      doctorResults['claude-agent'] = { ok: true, version: CLAUDE_AGENT_SDK_VERSION, depState: 'installed' };
+      vi.mocked(installedBackendVersion).mockImplementation(name => name === pkg ? CLAUDE_AGENT_SDK_VERSION : null);
+      vi.mocked(isBackendInstalledInUserDir).mockImplementation(entry => entry.id === 'claude-agent');
+      return { ok: true, code: 0, aborted: false, tail: 'done' };
+    });
+    const uninstall = vi.fn(async () => {
+      doctorResults['claude-agent'] = { ok: false, version: null, depState: 'not-installed', installable: true };
+      vi.mocked(installedBackendVersion).mockReturnValue(null);
+      vi.mocked(isBackendInstalledInUserDir).mockReturnValue(false);
+      return 'uninstalled' as const;
+    });
     const svc = createAdminService({ installBackend: install, uninstallBackend: uninstall });
-    expect((await svc.installBackend('fake-lib')).tail).toContain('更新 Vonvon Bot 应用');
-    expect((await svc.installBackend('fake-lib', undefined, undefined, { update: true })).tail).toContain('更新 Vonvon Bot 应用');
-    expect((await svc.uninstallBackend('fake-lib')).message).toContain('不能在这里卸载');
+    const claude = async () => (await svc.listBackendCatalog()).entries.find(entry => entry.id === 'claude-agent')!;
+    expect(await claude()).toMatchObject({ depKind: 'npm-ondemand', depState: 'not-installed', installable: true, canUninstall: false });
+    expect(await svc.backendVersion('claude-agent')).toEqual({ installed: null, latest: CLAUDE_AGENT_SDK_VERSION, hasUpdate: false });
     expect(install).not.toHaveBeenCalled();
     expect(uninstall).not.toHaveBeenCalled();
-    const row = (await svc.listBackendCatalog()).entries.find(entry => entry.id === 'fake-lib')!;
-    expect(row).toMatchObject({ bundled: true, installable: false, canUninstall: false });
-    vi.mocked(installedBackendVersion).mockReturnValueOnce('0.3.296');
-    expect(await svc.backendVersion('fake-lib')).toEqual({ installed: '0.3.296', latest: '0.3.296', hasUpdate: false });
+
+    expect(await svc.installBackend('claude-agent')).toMatchObject({ ok: true });
+    expect(install).toHaveBeenLastCalledWith(`${pkg}@${CLAUDE_AGENT_SDK_VERSION}`, undefined, undefined, { binName: undefined });
+    expect(await claude()).toMatchObject({ depState: 'installed', installable: false, canUninstall: true, installedVersion: CLAUDE_AGENT_SDK_VERSION });
+    expect(install).toHaveBeenCalledTimes(1);
+    expect(await svc.installBackend('claude-agent', undefined, undefined, { update: true })).toMatchObject({ ok: true });
+    expect(install).toHaveBeenCalledTimes(2);
+    expect(install).toHaveBeenLastCalledWith(`${pkg}@${CLAUDE_AGENT_SDK_VERSION}`, undefined, undefined, { binName: undefined });
+
+    expect(await svc.uninstallBackend('claude-agent')).toMatchObject({ ok: true });
+    expect(uninstall).toHaveBeenCalledExactlyOnceWith(pkg, { binName: undefined });
+    expect(await claude()).toMatchObject({ depState: 'not-installed', installable: true, canUninstall: false, installedVersion: null });
+    expect(install).toHaveBeenCalledTimes(2);
   });
+});
+
+describe('installBackend · installer 委托 + 守门', () => {
   it('库类 installable 后端委托 installer（带版本 pin、binName=undefined），透传进度/结果', async () => {
     const installer = vi.fn(async (pkg: string, onProgress?: (c: string) => void) => {
       onProgress?.('added 1 package\n');

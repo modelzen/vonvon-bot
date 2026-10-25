@@ -19,6 +19,7 @@ files:
   - package.json
   - "!node_modules/**"
 asar: true
+afterPack: ../../scripts/desktop-backend-policy.mjs
 extraResources:
   - from: stage/daemon
     to: daemon

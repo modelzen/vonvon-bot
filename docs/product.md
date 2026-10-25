@@ -699,7 +699,7 @@ owner 说过"崩溃报错就好了"，让 Claude 斟酌。自动重启是 Claude
 
 **后端**：只有 Codex 和 Claude，每个群可选。
 - Codex 用用户自己装的，第一版定最低版本和验证过的版本，在首次运行和诊断页检查。今天只读版本号用来显示（`D/agent/codex-appserver/backend.ts:540-552`）。
-- Claude 用 Claude Agent SDK，复用用户本机 Claude 的登录，和 Paseo 的 claude provider 一样。SDK 锁定一个验证过的版本。桌面 App 内置 SDK 及对应架构的运行程序，首次使用不再安装 SDK，随 App 更新；独立 CLI 保留按需安装。Claude Code CLI 独立检测和管理，不把 CLI 是否安装当作 SDK 的安装状态。登录政策见第 8 节。
+- Claude 用 Claude Agent SDK，复用用户本机 Claude 的登录，和 Paseo 的 claude provider 一样。SDK 锁定一个验证过的版本。桌面 App 和独立 CLI 均不携带 SDK 或 Claude 原生运行程序；用户选择安装后，由 Vonvon 下载到用户托管目录，并提供更新和卸载。打开页面、检测 Provider 或启动 App 不自动安装。Claude Code CLI 独立检测和管理，不把 CLI 是否安装当作 SDK 的安装状态。登录政策见第 8 节。（owner 2026-10-25 要求恢复按需托管安装）
 - 修模型列表的兜底，允许手填模型 id。DeepSeek、Kimi 走 Claude 的设置（bridge issue #37、#38、#40、#41，都是模型列表兜底的问题）。
 
 **飞书权限**：
@@ -763,7 +763,7 @@ bot 的角色设定、记忆、skill 导入后为空，行为和今天一样。
 - 私聊控制台没了。
 - 要补一项新权限 `im:message:readonly`。
 
-**失去**：Windows、WSL 上的用法（bridge issue #1、#23、#42 的用户，占比不知道，bridge 没有遥测）。owner 说原来没有 Linux 用户，所以不做 Linux 上的导入。还会失去日志、缓存、旧目录已下载的 Claude SDK（桌面 App 已内置，无需重新下载）和 Codex Fast。咖啡一下也没了（3.12）：迁移时卸掉 bridge 装进 Claude Code 和 Codex CLI 的 hook，之后这两处的审批照常在终端里问。
+**失去**：Windows、WSL 上的用法（bridge issue #1、#23、#42 的用户，占比不知道，bridge 没有遥测）。owner 说原来没有 Linux 用户，所以不做 Linux 上的导入。还会失去日志、缓存、旧目录已下载的 Claude SDK（需要时由用户选择后重新下载到托管目录）和 Codex Fast。咖啡一下也没了（3.12）：迁移时卸掉 bridge 装进 Claude Code 和 Codex CLI 的 hook，之后这两处的审批照常在终端里问。
 
 **怎么迁**（只做 macOS）：
 1. 桌面端首次运行发现 `~/.feishu-codex-bridge`，就显示导入页。

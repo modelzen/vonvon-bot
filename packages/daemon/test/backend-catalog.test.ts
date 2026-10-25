@@ -16,7 +16,6 @@ import { backendIds, createBackend } from '../src/agent';
 import {
   BackendNotInstalledError,
   isBackendDepInstalled,
-  isBundledBackend,
   installedBackendVersion,
   loadBackendDep,
 } from '../src/agent/backend-loader';
@@ -25,7 +24,7 @@ import { paths } from '../src/config/paths';
 
 /**
  * 棒A 地基：catalog↔REGISTRY 配对、按需加载器三路径、installer 命令构建（不真跑
- * npm）、智能默认规则、ensureAnyAgent 放行。当前内置后端仅 codex（claude 系已移除）。
+ * npm）、智能默认规则、ensureAnyAgent 放行。Claude SDK 由用户选择后托管安装。
  */
 
 describe('catalog ↔ REGISTRY 配对（防漏注册）', () => {
@@ -47,8 +46,15 @@ describe('catalog ↔ REGISTRY 配对（防漏注册）', () => {
     }
   });
 
-  it('唯一内置后端 codex 是 external-cli（bridge 不负责装，doctor 探 PATH）', () => {
+  it('codex 是 external-cli（bridge 不负责装，doctor 探 PATH）', () => {
     expect(catalogById('codex-appserver')?.dep.kind).toBe('external-cli');
+  });
+
+  it('Claude SDK 是用户可选择的按需下载后端', () => {
+    const entry = catalogById('claude-agent')!;
+    expect(entry.dep.kind).toBe('npm-ondemand');
+    expect(isInstallable(entry)).toBe(true);
+    expect(entry.blurb).toContain('按需下载');
   });
 
   it('Codex 版本查询使用官方 @openai/codex npm 包', () => {
@@ -140,16 +146,6 @@ describe('backend-loader：按需依赖加载（三路径）', () => {
     expect(installedBackendVersion(pkg)).toBe(CLAUDE_AGENT_SDK_VERSION);
   });
 
-  it('仅 daemon 元数据的 bundledBackends 声明内置，开发态依赖不算', () => {
-    const metadata = join(userDir, 'package.json');
-    writeFileSync(metadata, JSON.stringify({ name: '@vonvon/daemon', bundledBackends: ['claude-agent'] }));
-    expect(isBundledBackend('claude-agent', metadata)).toBe(true);
-    expect(isBundledBackend('codex-appserver', metadata)).toBe(false);
-    writeFileSync(metadata, JSON.stringify({ name: 'other', bundledBackends: ['claude-agent'] }));
-    expect(isBundledBackend('claude-agent', metadata)).toBe(false);
-    expect(isBundledBackend('claude-agent')).toBe(false);
-  });
-
   it('② 用户私装目录解析：bridge 自身没有的包，从 backendsDir 加载', async () => {
     // 在临时用户目录里造一个 bridge 自身绝无的假包，证明走第②条（createRequire 锚 backendsDir）。
     const pkgName = 'fcb-fake-ondemand-pkg';
@@ -161,11 +157,36 @@ describe('backend-loader：按需依赖加载（三路径）', () => {
     expect(isBackendDepInstalled(pkgName)).toBe(true);
     const mod = await loadBackendDep<{ marker: string }>(pkgName);
     expect(mod.marker).toBe('from-user-dir');
+    expect(installedBackendVersion(pkgName)).toBe('1.0.0');
+  });
+
+  it('用户目录的 exports 隐藏 package.json 时仍能读取安装版本', () => {
+    const pkgName = 'fcb-fake-exports-ondemand';
+    const pkgDir = join(userDir, 'node_modules', pkgName);
+    mkdirSync(pkgDir, { recursive: true });
+    writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({
+      name: pkgName, version: '2.1.0', exports: './index.mjs',
+    }));
+    writeFileSync(join(pkgDir, 'index.mjs'), 'export const marker = "exports";\n');
+    expect(isBackendDepInstalled(pkgName)).toBe(true);
+    expect(installedBackendVersion(pkgName)).toBe('2.1.0');
+  });
+
+  it('用户已装包的运行错误保留原错误，不误报成可以下载的未安装', async () => {
+    const pkgName = 'fcb-fake-broken-ondemand';
+    const pkgDir = join(userDir, 'node_modules', pkgName);
+    mkdirSync(pkgDir, { recursive: true });
+    writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: pkgName, version: '1.0.0', main: 'index.mjs' }));
+    writeFileSync(join(pkgDir, 'index.mjs'), 'throw new Error("fixture failed during initialization");\n');
+    expect(isBackendDepInstalled(pkgName)).toBe(true);
+    await expect(loadBackendDep(pkgName)).rejects.toThrow('fixture failed during initialization');
+    await expect(loadBackendDep(pkgName)).rejects.not.toBeInstanceOf(BackendNotInstalledError);
   });
 
   it('③ 两处都没有：抛 BackendNotInstalledError（携带包名）', async () => {
     const ghost = 'fcb-definitely-not-installed-anywhere';
     expect(isBackendDepInstalled(ghost)).toBe(false);
+    expect(installedBackendVersion(ghost)).toBeNull();
     await expect(loadBackendDep(ghost)).rejects.toBeInstanceOf(BackendNotInstalledError);
     await expect(loadBackendDep(ghost)).rejects.toMatchObject({ pkg: ghost });
   });
@@ -214,7 +235,7 @@ describe('installer：命令构建（不真跑 npm）', () => {
   });
 });
 
-describe('按需依赖装没装的两态（isBackendDepInstalled —— 通用机制，codex 系内置后端不用但基础设施保留）', () => {
+describe('按需依赖装没装的两态（isBackendDepInstalled）', () => {
   it('bridge 自身依赖可解析 → true；两处都没有的幽灵包 → false', () => {
     // 已装样例用仍在的 bridge 自身依赖（cross-spawn），不耦合已删后端的包名。
     expect(isBackendDepInstalled('cross-spawn')).toBe(true);
