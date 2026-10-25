@@ -455,6 +455,8 @@ export function SelectControl<T extends string>(props: {
   "aria-invalid"?: boolean | "false" | "grammar" | "spelling" | "true";
   "aria-required"?: boolean | "false" | "true";
   className?: string;
+  /** Keep related fields consistent even when their option counts differ. */
+  presentation?: "auto" | "dropdown";
   disabled?: boolean;
   getOptionIcon?: (value: T) => ReactNode;
   id?: string;
@@ -465,7 +467,7 @@ export function SelectControl<T extends string>(props: {
 }) {
   const radioName = useId();
   const labelWidth = (label: string) => Array.from(label).reduce((width, character) => width + (/[^\u0000-\u00ff]/.test(character) ? 2 : 1), 0);
-  const shortOptions = props.options.length > 0 && props.options.length <= 5
+  const shortOptions = props.presentation !== "dropdown" && props.options.length > 0 && props.options.length <= 5
     && props.options.every(option => typeof option.label === "string" && labelWidth(option.label) <= 16 && !option.description)
     && props.options.reduce((total, option) => total + labelWidth(option.label as string) + (props.getOptionIcon ? 3 : 0), 0) <= 34;
   const optionLabel = (option: SelectionOption<T>) => props.getOptionIcon
@@ -535,6 +537,7 @@ export function SelectControl<T extends string>(props: {
                     <Check aria-hidden="true" size={13} strokeWidth={2.6} />
                   </Select.ItemIndicator>
                   <Select.ItemText>{optionLabel(option)}</Select.ItemText>
+                  {option.recommended && <span className="ui-select-control__recommendation">推荐</span>}
                 </Select.Item>
               ))}
             </Select.List>
@@ -546,6 +549,8 @@ export function SelectControl<T extends string>(props: {
 }
 
 export interface SelectionOption<T extends string> {
+  /** Quiet hint shown in the dropdown menu, never in its selected value. */
+  recommended?: boolean;
   value: T;
   label: ReactNode;
   description?: ReactNode;

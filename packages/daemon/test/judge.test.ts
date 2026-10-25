@@ -2,7 +2,7 @@ import { setDiagnosticsSink } from '../src/bot/diagnostics';
 import { DEFAULT_SMART_PROMPT, SMART_FACTS_GUIDANCE, judgeSystem } from '../src/judge/prompt';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderProcessCleanupError } from '../src/agent/owned-process';
-import { JudgeCallError, type AgentBackend, type JudgeCall, type JudgeCallOutput, type ModelInfo } from '../src/agent/types';
+import { JudgeCallError, type AgentBackend, type JudgeCall, type JudgeCallOutput, type ModelInfo, type ReasoningEffort } from '../src/agent/types';
 import { createJudge, JUDGE_NAMED_TIMEOUT_MS, JUDGE_SETTLE_MS, MODEL_LIST_RETRY_MS, type JudgeDeps } from '../src/judge/judge';
 import { SmartPromptError } from '../src/judge/smart-file';
 import type { JudgeErrorKind, JudgeRequest, JudgeResult, JudgeVariant } from '../src/judge/types';
@@ -113,6 +113,21 @@ describe('judge', () => {
     expect(verdict).toMatchObject({ ref: '123456', decision: 'topic', inputTokens: 10, cachedTokens: 2, outputTokens: 3, reasoningTokens: 1 });
     // never the text, the reason or the prompt
     expect(JSON.stringify(fake.log.info.mock.calls)).not.toMatch(/新的事|你好|SMART/);
+  });
+
+  it.each([
+    { efforts: ['minimal', 'low', 'high'], expected: 'low' },
+    { efforts: ['minimal', 'none', 'low'], expected: 'none' },
+    { efforts: [], expected: undefined },
+  ] as { efforts: ReasoningEffort[]; expected: ReasoningEffort | undefined }[])('sends the catalog-supported recommendation $expected to the backend', async ({ efforts, expected }) => {
+    const f = fakeBackend();
+    f.setModels([{ id: 'available-small-luna', displayName: 'Small', description: '', supportedEfforts: efforts,
+      defaultEffort: 'high', isDefault: false, hidden: false }]);
+    const result = await make(f.backend).judge(req());
+    expect(result.model).toBe('available-small-luna');
+    expect(f.calls[0]!.model).toBe('available-small-luna');
+    expect(result.effort).toBe(expected);
+    expect(f.calls[0]!.effort).toBe(expected);
   });
 
   it('hashes the prompt body consistently, and has no hash when closed before reading', async () => {
@@ -268,7 +283,7 @@ describe('judge', () => {
     expect(f.backend.listModels).toHaveBeenCalledTimes(2);
     // once cached, the effort comes from the list
     f.setModels([{ id: 'gpt-6-luna', displayName: '', description: '', supportedEfforts: ['minimal', 'low'], defaultEffort: 'low', isDefault: true, hidden: false }]);
-    expect((await judge.judge(req())).effort).toBe('minimal');
+    expect((await judge.judge(req())).effort).toBe('low');
     expect(f.backend.listModels).toHaveBeenCalledTimes(2);
   });
 

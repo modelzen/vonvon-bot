@@ -57,9 +57,9 @@ it('shows a custom model in its text field', () => {
 it('offers backend-specific default effort and selects the saved effort', () => {
   const value = {kind: 'llm', model: 'gpt-6-luna', effort: 'low'} satisfies JudgeSelectionView;
   expect(render(value)).toContain('aria-label="判断的推理强度"');
-  expect(render(value)).toContain('默认（最低一档）');
+  expect(render(value)).toContain('<option value="">默认</option>');
   expect(render(value)).toContain('<option value="low" selected="">low</option>');
-  expect(render(value, {backend: 'claude-agent'})).toContain('默认（关思考）');
+  expect(render(value, {backend: 'claude-agent'})).toContain('默认（关闭思考）');
 });
 it('identifies a saved model missing from an available populated catalog', () => {
   expect(render({kind: 'llm', model: 'gone'})).toContain('<option value="lm:1" selected="">gone（已保存，当前目录里没有）</option>');

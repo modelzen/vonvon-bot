@@ -5,7 +5,6 @@ import {useClient} from '../client-context';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {Button, IconButton, FormField, InlineNotice, StatusBadge, type StatusTone} from '../reference/components/ui';
 import {ConfirmDialog, Dialog} from '../reference/components/ui/Dialog';
-import {settingAnchor} from '../search';
 import {
   MEANWHILE, OLD_DAEMON, errorText, keyDiagnosis, keyFlows, keyStatus, removalCopy, rereads, resultCopy, secretsReader, testTone, testedText,
   unreadNotes, useCount, useName, useNote, type FillFlow, type KeyFlows, type RowState, type SecretsRead, type SecretsView,
@@ -43,7 +42,7 @@ export function KeyRow({service, view, row, onFill, onReplace, onRemove, onTest,
 }) {
   const status = keyStatus(service);
   const busy = Boolean(row.busy);
-  const purpose = `用于 ${service.models.map(model => model.displayName).join('、') || service.displayName} 智能判断。`;
+  const purpose = service.status === 'set' ? '' : '添加后即可使用 Jev 智能判断。';
   const meanwhile = service.inUse.length || view.botsUnreadable || view.unreadBots
     ? `${service.status === 'invalid' ? '重新填' : '填'}之前，选了它的 Bot 和飞书群${MEANWHILE}。` : '';
   const line = row.busy === 'saving' ? <StatusBadge tone="neutral">正在保存…</StatusBadge>
@@ -77,7 +76,7 @@ export function KeyRow({service, view, row, onFill, onReplace, onRemove, onTest,
       actions = <Button size="sm" variant="ghost" disabled={busy} onClick={onOpenLogs}>查看日志</Button>;
       break;
   }
-  return <SettingsRow className={keyRowClass(service.keyId)} title={`${service.displayName} 密钥`} description={description}
+  return <SettingsRow className={keyRowClass(service.keyId)} title="API 密钥" description={service.status === 'set' && !line ? undefined : description}
     trailing={<span className="setup-step-trailing">{pill(status.text, status.tone)}{actions}</span>}/>;
 }
 /** No wrapper around a row: the group's separators go between sibling rows. */
@@ -97,8 +96,10 @@ export function UsesRow({service, view}: {service: SecretService; view: SecretsV
     </>
     : notesOf(notes);
   // the count stays by the title however long the list (多角度审查 B4)
-  return <SettingsRow className="secrets-uses-row" title="使用范围" description={description}
-    trailing={view.botsUnreadable ? pill('Bot 清单读不了', 'warning') : service.inUse.length ? <StatusBadge>{useCount(service.inUse)}</StatusBadge> : undefined}/>;
+  return <details className="decision-uses-disclosure" open={notes.length ? true : undefined}>
+    <summary><span>使用范围</span><span className="decision-uses-count">{view.botsUnreadable ? 'Bot 清单读不了' : useCount(service.inUse)}<span aria-hidden="true" className="decision-uses-chevron">›</span></span></summary>
+    <div className="decision-uses-content">{description}</div>
+  </details>;
 }
 
 const fillDescription = (flow: FillFlow) => flow.replacing
@@ -267,8 +268,8 @@ export function SecretsPanel({onOpenLogs, onOpenApplication, onOpenProviders}: {
     try { await reader.read(); } finally { setReloading(false); }
   }
 
-  const header = <div className="environment-lead today-page-heading"><h1>决策模型</h1>
-    <IconButton size="sm" variant="ghost" label="重新读取" title="重新读取密钥状态" loading={reloading} disabled={read.kind === 'loading'} onClick={() => void reload()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></div>;
+  const keyRefresh = <IconButton size="sm" variant="ghost" label="重新读取" title="重新读取密钥状态" loading={reloading} disabled={read.kind === 'loading'} onClick={() => void reload()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>;
+  const header = <div className="environment-lead today-page-heading"><h1>决策模型</h1></div>;
   const fillService = fill && view?.services.find(service => service.keyId === fill.keyId);
   const removeService = removal && view?.services.find(service => service.keyId === removal.keyId);
   let body: ReactNode;
@@ -281,23 +282,20 @@ export function SecretsPanel({onOpenLogs, onOpenApplication, onOpenProviders}: {
   } else {
     body = <>
       {read.kind === 'ready' && read.problem && <InlineNotice tone="warning" title="未能刷新密钥">{`${read.problem}。保留上次读取的内容。`}</InlineNotice>}
-      <SettingsGroup label="API 密钥" id={settingAnchor('决策模型')}
-        footer="密钥由所有 Bot 共用。Codex 和 Claude 使用各自的本机登录。">
+      <div className="decision-key-content">
         {!view ? <SettingsRow title="正在读取…"/>
           : !view.services.length ? <SettingsRow title="暂无需要密钥的服务"/>
             : view.services.map(service => <Fragment key={service.keyId}>
               <KeyRow service={service} view={view} row={rows[service.keyId] ?? {}}
                 onFill={() => flows.open(service.keyId, false)} onReplace={() => flows.open(service.keyId, true, service.last4)}
                 onRemove={() => setRemoval({keyId: service.keyId, pending: false})} onTest={() => void flows.test(service.keyId)} onOpenLogs={onOpenLogs}/>
-              <UsesRow service={service} view={view}/>
             </Fragment>)}
-      </SettingsGroup>
+      </div>
     </>;
   }
   return <div className="page-stack secrets-page" ref={page}>
     {header}
-    <DecisionProviderSettings services={view?.services} onOpenProviders={onOpenProviders}/>
-    {body}
+    <DecisionProviderSettings services={view?.services} onOpenProviders={onOpenProviders} keyContent={body} keyUses={view?.services.map(service => <UsesRow key={service.keyId} service={service} view={view}/>)} keyAction={keyRefresh}/>
     <FillKeyDialog flow={fillService ? fill : undefined} service={fillService} onClose={flows.close}
       onSubmit={value => void flows.save(value)} onAgain={flows.again} onRetest={() => void flows.retest()}/>
     <RemoveKeyDialog removal={removeService ? removal : undefined} service={removeService} view={view}

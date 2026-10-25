@@ -1,6 +1,7 @@
 import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { defaultCodexDecisionEffort, defaultCodexDecisionModel } from '@vonvon/protocol';
 import { claudeConfigDir, readClaudeUserSettings } from '../agent/claude-agent/configured-model';
 import { parseModelId } from '../agent/model-id';
 import { getSessionTitleEfforts } from '../config/schema';
@@ -11,34 +12,23 @@ import { JUDGE_PROVIDERS, readJudgeModelsSync, type JudgeProvider } from './glob
 // Which model judges (design 2.2, 2.3): the group's setting, else the bot's, each only for the
 // backend it was stored for, else the backend's default small model.
 
-export const CODEX_JUDGE_MODEL = 'gpt-6-luna';
-/** gpt-6-luna's lowest effort (JP-VPS models_cache, client 0.163.0, 2026-10-16: low to max, no minimal). */
-const CODEX_JUDGE_EFFORT: ReasoningEffort = 'low';
+export const CODEX_JUDGE_MODEL = defaultCodexDecisionModel();
 export const CLAUDE_JUDGE_MODEL = 'haiku';
 const CLAUDE_BACKEND_ID = 'claude-agent';
 
 /**
- * The effort a Codex judgement sends when none was chosen: the lowest the cached list gives the
- * model; none for a model that supports no effort, for a hand-typed id (a gateway model may refuse
- * the key) and for a listed model while the list is not cached yet. The default gpt-6-luna is known
- * to start at `low`, so it gets that without the list.
+ * The effort a Codex judgement sends when none was chosen: disable thinking when supported,
+ * otherwise low. Only models that support neither use their lowest supported level. Hand-typed
+ * ids and unavailable catalogs keep the key absent, except the known Luna low fallback.
  */
 export function judgeEffort(model: string, models: ModelInfo[] | undefined, custom = false): ReasoningEffort | undefined {
-  if (custom) return undefined;
   const info = models?.find((m) => m.id === model);
-  if (!info) return model === CODEX_JUDGE_MODEL ? CODEX_JUDGE_EFFORT : undefined;
-  return REASONING_EFFORTS.find((effort) => info.supportedEfforts.includes(effort));
+  return defaultCodexDecisionEffort(model, info?.supportedEfforts, custom);
 }
 
 /** Prefer the small Luna model. Once discovery has a visible catalog, choose only from it. */
 export function codexJudgeDefault(models: ModelInfo[] | undefined): { model: string; effort?: ReasoningEffort } {
-  const visible = models?.filter(item => !item.hidden);
-  const model = visible?.length
-    ? (visible.find(item => item.id === CODEX_JUDGE_MODEL)
-      ?? visible.find(item => item.id.endsWith('-luna'))
-      ?? visible.find(item => item.isDefault)
-      ?? visible[0]!).id
-    : CODEX_JUDGE_MODEL;
+  const model = defaultCodexDecisionModel(models);
   const effort = judgeEffort(model, models);
   return effort ? { model, effort } : { model };
 }
@@ -163,8 +153,8 @@ export function parseStoredJudge(value: unknown, backends: readonly string[]): {
  * The model for a group on backend `backendId` (design 2.2): the group's setting when it is a
  * decision model or stored for this backend, else the bot's likewise, else the default small model.
  * A decision model applies on every backend (product.md 3.4). A chosen effort is fitted to the model
- * ({@link fitJudgeEffort}); a setting without one gets the default rule (2.3): Codex the lowest the
- * list gives, Claude none (thinking off).
+ * ({@link fitJudgeEffort}); a setting without one gets the default rule: Codex thinking off when
+ * supported, otherwise low (or a supported fallback), Claude none (thinking off).
  */
 export function resolveJudgeModel(
   backendId: string,
