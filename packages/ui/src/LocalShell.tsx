@@ -9,11 +9,11 @@ export function AppShell(props: {page: Page; view: CollaborationView; title: str
   return <div className="settings-window collaboration-window today-window" data-first-use={props.firstUse || undefined}>
     <div className="desktop-titlebar" aria-hidden="true"/>
     <header className="today-app-header">
-      <button type="button" className="today-brand" onClick={() => props.onNavigate('home')} aria-label="Vonvon Bot 概览" title="Vonvon Bot">
+      <button type="button" className="today-brand" onClick={() => props.onNavigate('home')} aria-label="Vonvon Bot 灵感" title="Vonvon Bot">
         <img src="./vonvon-logo.png" alt=""/><strong>Vonvon Bot</strong>
       </button>
       {!props.firstUse && <nav className="today-primary-nav" aria-label="主要导航">
-        <button type="button" aria-current={props.page === 'home' ? 'page' : undefined} onClick={() => props.onNavigate('home')}>概览</button>
+        <button type="button" aria-current={props.page === 'home' ? 'page' : undefined} onClick={() => props.onNavigate('home')}>灵感</button>
         <button type="button" aria-current={props.page === 'collaboration' && props.view === 'agents' ? 'page' : undefined} onClick={() => props.onOpenList('agents')}>Bot{props.newCounts?.bots ? <small className="today-nav-count" aria-label={`新记忆 ${props.newCounts.bots} 条`}>{props.newCounts.bots}</small> : null}</button>
         <button type="button" aria-current={props.page === 'collaboration' && props.view !== 'agents' ? 'page' : undefined} onClick={() => props.onOpenList('groups')}>群组{props.newCounts?.projects ? <small className="today-nav-count" aria-label={`新记忆 ${props.newCounts.projects} 条`}>{props.newCounts.projects}</small> : null}</button>
       </nav>}

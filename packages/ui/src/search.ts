@@ -82,6 +82,7 @@ function expand(id: string, context: string, base: Destination, groups: readonly
 }
 export function searchEntries(snapshot: DesktopSnapshot, capabilities: {externalCoreAvailable?: boolean} = {}): SearchEntry[] {
   const pages: readonly {id: string; title: string; aliases: readonly string[]; page: Page; view?: CollaborationView}[] = [
+    {id: 'home', title: '灵感', aliases: ['首页', '概览'], page: 'home'},
     {id: 'agents', title: 'Bot', aliases: ['机器人', '注册 Bot', '添加 Bot', '加入飞书群并设置工作目录'], page: 'collaboration', view: 'agents'},
     {id: 'bridgeImport', title: '导入 Bridge', aliases: ['feishu-codex-bridge', 'Feishu Codex Bridge', '迁移', '旧版导入', '恢复导入'], page: 'bridgeImport'},
     {id: 'setup', title: '连接与设置', aliases: ['首次运行清单', '后端', '准备执行工具', '扫码', '开权限', '一键开权限', '事件订阅', '卡片回调', '发布版本', '长连接'], page: 'setup'},
