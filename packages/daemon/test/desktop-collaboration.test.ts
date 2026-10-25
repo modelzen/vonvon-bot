@@ -39,12 +39,14 @@ vi.mock('../src/config/paths', async () => {
   return { paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), botsFile: join(appDir, 'bots.json'), commentInstructionsFile: join(appDir, 'instructions.md'), commentsRootDir: join(appDir, 'comments'), projectsRootDir: join(appDir, 'projects') },
     botPaths: () => ({ projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json') }) };
 });
-const fixture = vi.hoisted(() => ({ failProjectsWrite: false, holdProjectsWrite: undefined as Promise<void> | undefined, reachedProjectsWrite: () => {}, backend: undefined as unknown, leave: vi.fn(), send: vi.fn(async () => ({ messageId: 'om_sent' })), usage: vi.fn<() => Promise<AccountUsageBundle>>(async () => ({ profile: { topInvocations: [], dailyBuckets: [] }, usage: { main: {}, extras: [], fetchedAt: 1 } })) }));
+const fixture = vi.hoisted(() => ({ failProjectsWrite: false, holdProjectsWrite: undefined as Promise<void> | undefined, reachedProjectsWrite: () => {}, failSessionsWrite: false, holdSessionsWrite: undefined as Promise<void> | undefined, reachedSessionsWrite: () => {}, backend: undefined as unknown, leave: vi.fn(), send: vi.fn(async () => ({ messageId: 'om_sent' })), usage: vi.fn<() => Promise<AccountUsageBundle>>(async () => ({ profile: { topInvocations: [], dailyBuckets: [] }, usage: { main: {}, extras: [], fetchedAt: 1 } })) }));
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>();
   return { ...actual, rename: async (...args: Parameters<typeof actual.rename>) => {
     if (fixture.failProjectsWrite && basename(String(args[1])) === 'projects.json') throw new Error('project disk failure');
     if (fixture.holdProjectsWrite && basename(String(args[1])) === 'projects.json') { fixture.reachedProjectsWrite(); await fixture.holdProjectsWrite; }
+    if (fixture.failSessionsWrite && basename(String(args[1])) === 'sessions.json') throw new Error('session disk failure');
+    if (fixture.holdSessionsWrite && basename(String(args[1])) === 'sessions.json') { fixture.reachedSessionsWrite(); await fixture.holdSessionsWrite; }
     return actual.rename(...args);
   } };
 });
@@ -56,7 +58,7 @@ vi.mock('../src/core/logger', () => ({ log: { info() {}, warn() {}, fail() {} },
 const target = { projectName: 'demo', chatId: 'oc_demo' };
 const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' } } };
 function backend() {
-  const thread = { sessionId: 'fresh', isAlive: () => true, close: vi.fn(async () => {}), compact: vi.fn(async () => ({ usage: { usedTokens: 20, contextWindow: 100 } })) };
+  const thread = { sessionId: 'fresh', isAlive: () => true, close: vi.fn(async () => {}), compact: vi.fn(async (): Promise<{ usage: { usedTokens: number; contextWindow: number | null } | null }> => ({ usage: { usedTokens: 20, contextWindow: 100 } })) };
   const backend = { id: 'codex-appserver', displayName: 'Codex (app-server)', listModels: async () => [{ id: 'gpt-5.5', displayName: 'GPT', supportedEfforts: ['medium' as const], defaultEffort: 'medium' as const, isDefault: true, hidden: false }], startThread: vi.fn(async () => thread), resumeThread: vi.fn(async () => thread), listThreads: vi.fn(async () => [{ sessionId: 'past', preview: 'historic', createdAt: 1, updatedAt: 2 }]), readHistory: vi.fn(async () => ({ name: 'historic', preview: '', turns: [], totalTurns: 0 })) };
   fixture.backend = backend;
   return { ...backend, thread };
@@ -70,7 +72,9 @@ beforeEach(async () => {
   await rm(pendingGroupsFile(paths.projectsFile), { force: true });
   await rm(paths.projectsFile, { force: true }); await rm(paths.sessionsFile, { force: true });
   fixture.failProjectsWrite = false; fixture.holdProjectsWrite = undefined;
+  fixture.failSessionsWrite = false; fixture.holdSessionsWrite = undefined;
   fixture.leave.mockReset(); fixture.send.mockClear();
+  vi.mocked(updateManagedCard).mockClear();
   await addProject({ name: 'demo', chatId: 'oc_demo', cwd: workspace, kind: 'single', blank: false, origin: 'joined', createdAt: 1, backend: 'codex-appserver', judge: { kind: 'llm', backend: 'codex-appserver', model: 'gpt-5.5', effort: 'medium' } });
   await upsertSession({ threadId: 'oc_demo', chatId: 'oc_demo', cwd: workspace, sessionId: 'old', backend: 'codex-appserver', summary: 'old', createdAt: 1, updatedAt: 1 });
 });
@@ -129,6 +133,7 @@ it('returns backend-wide history and only compacts the matching bound session', 
   try {
     expect(await app.collaboration({ action: 'history', ...target })).toMatchObject({ threads: [{ sessionId: 'past' }], sessions: [{ sessionId: 'old' }] });
     await expect(app.collaboration({ action: 'compact', ...target, threadId: 'oc_other' })).rejects.toThrow('不属于');
+    expect(fixture.send).not.toHaveBeenCalled();
     await app.collaboration({ action: 'compact', ...target, threadId: 'oc_demo' });
     expect(be.thread.compact).toHaveBeenCalledOnce();
     expect(await app.collaboration({ action: 'context', ...target, threadId: 'oc_demo' })).toMatchObject({ usage: { used: 20, window: 100 }, run: null });
@@ -145,6 +150,118 @@ it('clears a flat binding with its model settings and keeps old backend history 
     await expect(app.collaboration({ action: 'resume', ...target, sessionId: 'foreign', backend: 'codex-appserver' })).rejects.toThrow('不属于');
   } finally { await app.shutdown(); }
 });
+
+it('announces a desktop clear in the main area only after the new binding is committed', async () => {
+  backend(); const app = orchestrator();
+  let release!: () => void;
+  let saving = false;
+  fixture.holdSessionsWrite = new Promise<void>(resolve => { release = resolve; });
+  fixture.reachedSessionsWrite = () => { saving = true; };
+  const clearing = app.collaboration({ action: 'clear', ...target, threadId: 'oc_demo' });
+  try {
+    await vi.waitFor(() => expect(saving).toBe(true));
+    expect(await getSession('oc_demo')).toMatchObject({ sessionId: 'old' });
+    expect(fixture.send).not.toHaveBeenCalled();
+    fixture.holdSessionsWrite = undefined; release();
+    expect(await clearing).toMatchObject({ ok: true, threadId: 'oc_demo', message: '已开始新会话。' });
+    expect(await getSession('oc_demo')).toMatchObject({ sessionId: 'fresh' });
+    expect(fixture.send).toHaveBeenCalledExactlyOnceWith('oc_demo', {
+      markdown: '已开始新会话（桌面端操作）。群聊记录和长期记忆保留，接下来从新的上下文继续。',
+    }, undefined);
+  } finally { fixture.holdSessionsWrite = undefined; release(); await clearing.catch(() => {}); await app.shutdown(); }
+});
+
+it('does not announce a clear that failed to save its replacement session', async () => {
+  const be = backend(); const app = orchestrator();
+  try {
+    fixture.failSessionsWrite = true;
+    await expect(app.collaboration({ action: 'clear', ...target, threadId: 'oc_demo' })).rejects.toThrow('session disk failure');
+    expect(await getSession('oc_demo')).toMatchObject({ sessionId: 'old' });
+    expect(be.thread.close).toHaveBeenCalledOnce();
+    expect(fixture.send).not.toHaveBeenCalled();
+  } finally { fixture.failSessionsWrite = false; await app.shutdown(); }
+});
+
+it('announces compaction after completion and includes token changes only when both readings exist', async () => {
+  const be = backend(); const app = orchestrator();
+  let release!: () => void;
+  be.thread.compact.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ usage: { usedTokens: 20000, contextWindow: 100000 } }); }));
+  const compacting = app.collaboration({ action: 'compact', ...target, threadId: 'oc_demo' });
+  try {
+    await vi.waitFor(() => expect(be.thread.compact).toHaveBeenCalledOnce());
+    expect(fixture.send).not.toHaveBeenCalled();
+    release();
+    expect(await compacting).toMatchObject({ ok: true, message: '上下文已压缩。' });
+    expect(fixture.send).toHaveBeenCalledExactlyOnceWith('oc_demo', { markdown: '上下文已压缩（桌面端操作）。' }, undefined);
+
+    be.thread.compact.mockResolvedValueOnce({ usage: { usedTokens: 5000, contextWindow: 100000 } });
+    await app.collaboration({ action: 'compact', ...target, threadId: 'oc_demo' });
+    expect(fixture.send).toHaveBeenLastCalledWith('oc_demo', { markdown: '上下文已压缩（桌面端操作）。上下文用量：20,000 → 5,000 tokens。' }, undefined);
+    be.thread.compact.mockResolvedValueOnce({ usage: null });
+    await app.collaboration({ action: 'compact', ...target, threadId: 'oc_demo' });
+    expect(fixture.send).toHaveBeenLastCalledWith('oc_demo', { markdown: '上下文已压缩（桌面端操作）。' }, undefined);
+  } finally { release?.(); await compacting.catch(() => {}); await app.shutdown(); }
+});
+
+it('posts a topic compaction receipt to that topic and never to the main area', async () => {
+  const be = backend(); await updateProject('demo', { kind: 'multi' });
+  await upsertSession({ threadId: 'omt_selected', chatId: 'oc_demo', cwd: workspace, sessionId: 'selected', backend: be.id, summary: 'Selected topic', createdAt: 1, updatedAt: 1 });
+  const list = vi.fn(async () => ({ code: 0, data: { items: [{ message_id: 'om_topic_root', chat_id: 'oc_demo', thread_id: 'omt_selected' }] } }));
+  const app = orchestrator({ send: fixture.send, rawClient: { im: { v1: { message: { list } } } } });
+  try {
+    await app.collaboration({ action: 'compact', ...target, threadId: 'omt_selected' });
+    expect(list).toHaveBeenCalledExactlyOnceWith({ params: { container_id_type: 'thread', container_id: 'omt_selected', page_size: 1 } });
+    expect(be.thread.compact).toHaveBeenCalledOnce();
+    expect(fixture.send).toHaveBeenCalledExactlyOnceWith('oc_demo', { markdown: '上下文已压缩（桌面端操作）。' }, { replyTo: 'om_topic_root', replyInThread: true });
+  } finally { await app.shutdown(); }
+});
+
+it.each([
+  { code: 0, data: { items: [] } },
+  { code: 230001, data: { items: [{ message_id: 'om_wrong' }] } },
+  { code: 0, data: { items: [{ message_id: 'om_wrong', chat_id: 'oc_elsewhere', thread_id: 'omt_selected' }] } },
+  { code: 0, data: { items: [{ message_id: 'om_wrong', chat_id: 'oc_demo', thread_id: 'omt_elsewhere' }] } },
+])('refuses an unavailable or mismatched topic before compacting or announcing: %j', async lookup => {
+  const be = backend(); await updateProject('demo', { kind: 'multi' });
+  await upsertSession({ threadId: 'omt_selected', chatId: 'oc_demo', cwd: workspace, sessionId: 'selected', backend: be.id, summary: 'Selected topic', createdAt: 1, updatedAt: 1 });
+  const app = orchestrator({ send: fixture.send, rawClient: { im: { v1: { message: { list: async () => lookup } } } } });
+  try {
+    await expect(app.collaboration({ action: 'compact', ...target, threadId: 'omt_selected' })).rejects.toBeInstanceOf(AdminWriteError);
+    expect(be.thread.compact).not.toHaveBeenCalled();
+    expect(be.resumeThread).not.toHaveBeenCalled();
+    expect(fixture.send).not.toHaveBeenCalled();
+    expect(await getSession('omt_selected')).toMatchObject({ sessionId: 'selected' });
+  } finally { await app.shutdown(); }
+});
+
+it('does not send a success receipt when the backend rejects compaction', async () => {
+  const be = backend(); const app = orchestrator();
+  be.thread.compact.mockRejectedValueOnce(new Error('compaction rejected'));
+  try {
+    await expect(app.collaboration({ action: 'compact', ...target, threadId: 'oc_demo' })).rejects.toThrow('compaction rejected');
+    expect(fixture.send).not.toHaveBeenCalled();
+  } finally { await app.shutdown(); }
+});
+
+it.each(['clear', 'compact', 'resume'] as const)('keeps a completed %s applied and carries a delivery warning through RPC', async action => {
+  const be = backend(); const app = orchestrator();
+  const collaboration = async (_botId: string, request: unknown) => app.collaboration(request as never);
+  const service = { listBots: async () => [{ appId: bot.appId, active: true, running: true }], collaboration };
+  const request = collaborationRequestSchema.parse({ action, agentId: bot.appId, projectName: target.projectName, groupId: target.chatId,
+    ...(action === 'resume' ? { sessionId: 'past', backend: be.id } : { threadId: 'oc_demo' }) });
+  fixture.send.mockRejectedValueOnce(new Error('delivery not acknowledged'));
+  try {
+    const result = await collaborationRpc(service as never, {} as never, request);
+    if (result.kind !== 'mutation') throw new Error('Expected successful mutation');
+    expect(result.reply({} as never)).toMatchObject({ kind: 'applied', threadId: 'oc_demo', warning: '操作已生效，但未能确认飞书回执已送达，请到群里确认；无需重复执行。' });
+    if (action === 'compact') {
+      expect(be.thread.compact).toHaveBeenCalledOnce();
+      expect(await app.collaboration({ action: 'context', ...target, threadId: 'oc_demo' })).toMatchObject({ usage: { used: 20, window: 100 } });
+    } else expect(await getSession('oc_demo')).toMatchObject({ sessionId: action === 'clear' ? 'fresh' : 'past' });
+    expect(fixture.send).toHaveBeenCalledOnce();
+  } finally { await app.shutdown(); }
+});
+
 it('lists resumable sessions by the person\'s words, not the woven sender line', async () => {
   backend();
   const woven = weaveSender('修一下登录', { senderId: 'ou_secret_id', senderName: '张三' });
@@ -192,6 +309,7 @@ it.each([
     await app.collaboration({ action: 'resume', ...target, sessionId: 'past', backend: 'codex-appserver' });
     const card = JSON.stringify(fixture.send.mock.calls.find(call => JSON.stringify(call).includes('已恢复历史会话')));
     expect(card).toContain('**🤖 Codex**');
+    expect(card).toContain('桌面端操作');
     expect(card).toContain('更早的 2 轮 Codex 仍保留');
     expect(card).not.toMatch(/app-server|open_id|ou_secret_id|发信人/);
     expect(await getSession('oc_demo')).toMatchObject({ sessionId: 'past', summary });
@@ -624,6 +742,92 @@ it('fences visible topic replies until resume owns the resolved topic key', asyn
     expect(be.thread.close).not.toHaveBeenCalled();
   } finally { await app.shutdown(); }
 });
+
+it('keeps the new topic pending until its resumed binding is committed, then updates that same card', async () => {
+  const be = backend(); await updateProject('demo', { kind: 'multi' });
+  const get = vi.fn(async () => ({ code: 0, data: { items: [{ thread_id: 'omt_resumed' }] } }));
+  const channel = { send: fixture.send, rawClient: { im: { v1: { message: { get } } } } };
+  const app = orchestrator(channel);
+  let release!: () => void;
+  let saving = false;
+  fixture.holdSessionsWrite = new Promise<void>(resolve => { release = resolve; });
+  fixture.reachedSessionsWrite = () => { saving = true; };
+  const resuming = app.collaboration({ action: 'resume', ...target, sessionId: 'past', backend: be.id });
+  try {
+    await vi.waitFor(() => expect(saving).toBe(true));
+    expect(await getSession('omt_resumed')).toBeUndefined();
+    expect(fixture.send).toHaveBeenNthCalledWith(1, 'oc_demo', { markdown: '从桌面端恢复历史会话' });
+    expect(fixture.send).toHaveBeenNthCalledWith(2, channel, 'oc_demo', expect.any(Object), 'om_sent', true);
+    const pending = JSON.stringify(fixture.send.mock.calls);
+    expect(pending).toContain('正在恢复历史会话');
+    expect(pending).not.toContain('会话已恢复');
+    expect(pending).not.toContain('已恢复历史会话');
+    expect(updateManagedCard).not.toHaveBeenCalled();
+
+    fixture.holdSessionsWrite = undefined; release();
+    expect(await resuming).toMatchObject({ ok: true, threadId: 'omt_resumed', message: '已恢复会话。' });
+    expect(await getSession('omt_resumed')).toMatchObject({ sessionId: 'past' });
+    expect(updateManagedCard).toHaveBeenCalledExactlyOnceWith(channel, 'om_sent', expect.any(Object));
+    expect(JSON.stringify(vi.mocked(updateManagedCard).mock.calls[0])).toContain('会话已恢复');
+    expect(JSON.stringify(vi.mocked(updateManagedCard).mock.calls[0])).toContain('桌面端操作');
+    expect(fixture.send).toHaveBeenCalledTimes(2);
+  } finally { fixture.holdSessionsWrite = undefined; release(); await resuming.catch(() => {}); await app.shutdown(); }
+});
+
+it('updates a topic to failed without claiming success when its resumed binding cannot be saved', async () => {
+  const be = backend(); await updateProject('demo', { kind: 'multi' });
+  const get = vi.fn(async () => ({ code: 0, data: { items: [{ thread_id: 'omt_unsaved' }] } }));
+  const channel = { send: fixture.send, rawClient: { im: { v1: { message: { get } } } } };
+  const app = orchestrator(channel);
+  fixture.failSessionsWrite = true;
+  try {
+    await expect(app.collaboration({ action: 'resume', ...target, sessionId: 'past', backend: be.id })).rejects.toThrow('session disk failure');
+    expect(await getSession('omt_unsaved')).toBeUndefined();
+    expect(updateManagedCard).toHaveBeenCalledExactlyOnceWith(channel, 'om_sent', expect.any(Object));
+    const updated = JSON.stringify(vi.mocked(updateManagedCard).mock.calls[0]);
+    expect(updated).toContain('未恢复历史会话');
+    expect(updated).toContain('session disk failure');
+    expect(JSON.stringify(fixture.send.mock.calls) + updated).not.toMatch(/会话已恢复|已恢复历史会话/);
+  } finally { fixture.failSessionsWrite = false; await app.shutdown(); }
+});
+
+it.each(['false', 'rejected'] as const)('keeps a topic bound when the successful receipt update returns %s', async failure => {
+  const be = backend(); await updateProject('demo', { kind: 'multi' });
+  const get = vi.fn(async () => ({ code: 0, data: { items: [{ thread_id: 'omt_bound' }] } }));
+  const channel = { send: fixture.send, rawClient: { im: { v1: { message: { get } } } } };
+  const app = orchestrator(channel);
+  if (failure === 'false') vi.mocked(updateManagedCard).mockResolvedValueOnce(false);
+  else vi.mocked(updateManagedCard).mockRejectedValueOnce(new Error('update acknowledgement lost'));
+  try {
+    expect(await app.collaboration({ action: 'resume', ...target, sessionId: 'past', backend: be.id })).toMatchObject({
+      ok: true, threadId: 'omt_bound', warning: '操作已生效，但未能确认飞书回执已送达，请到群里确认；无需重复执行。',
+    });
+    expect(await getSession('omt_bound')).toMatchObject({ sessionId: 'past' });
+    expect(updateManagedCard).toHaveBeenCalledOnce();
+    expect(fixture.send).toHaveBeenCalledTimes(2);
+  } finally { await app.shutdown(); }
+});
+
+it('does not publish resume success when another topic binds the same session while Feishu resolves the new topic', async () => {
+  const be = backend(); await updateProject('demo', { kind: 'multi' });
+  let resolveTopic!: (value: unknown) => void;
+  const get = vi.fn(() => new Promise(resolve => { resolveTopic = resolve; }));
+  const app = orchestrator({ send: fixture.send, rawClient: { im: { v1: { message: { get } } } } });
+  const resuming = app.collaboration({ action: 'resume', ...target, sessionId: 'past', backend: be.id });
+  const rejected = expect(resuming).rejects.toThrow('话题「Existing holder」');
+  try {
+    await vi.waitFor(() => expect(get).toHaveBeenCalledOnce());
+    await upsertSession({ threadId: 'omt_holder', chatId: 'oc_demo', cwd: workspace, sessionId: 'past', backend: be.id, summary: 'Existing holder', createdAt: 1, updatedAt: 1 });
+    resolveTopic({ code: 0, data: { items: [{ thread_id: 'omt_new' }] } });
+    await rejected;
+    expect(await getSession('omt_new')).toBeUndefined();
+    expect(await getSession('omt_holder')).toMatchObject({ sessionId: 'past' });
+    const published = JSON.stringify(fixture.send.mock.calls) + JSON.stringify(vi.mocked(updateManagedCard).mock.calls);
+    expect(published).toContain('未恢复历史会话');
+    expect(published).not.toMatch(/会话已恢复|已恢复历史会话/);
+  } finally { resolveTopic?.({ code: 0, data: { items: [] } }); await rejected.catch(() => {}); await app.shutdown(); }
+});
+
 it('closes prepared backend work when a concurrent settings writer changes the project revision', async () => {
   const be = backend(); await updateProject('demo', { kind: 'multi' });
   let release!: (value: typeof be.thread) => void;
