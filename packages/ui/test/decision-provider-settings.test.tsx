@@ -12,7 +12,7 @@ function nodes(node: ReactNode): Element[] {
   return [node, ...nodes(node.props.children), ...(node.type === SettingsRow ? nodes(node.props.trailing) : [])];
 }
 const defaults = {byProvider: {'codex-appserver': {model: 'luna', effort: 'low' as const}, 'claude-agent': {model: 'haiku'}, typesafe: {model: 'jev-latest'}}};
-const model = (id: string, supportedEfforts: Array<'low' | 'high'>) => ({id, displayName: id, description: '', hidden: false, isDefault: false, defaultEffort: 'low' as const, supportedEfforts});
+const model = (id: string, supportedEfforts: Array<'none' | 'minimal' | 'low' | 'high'>) => ({id, displayName: id, description: '', hidden: false, isDefault: false, defaultEffort: 'low' as const, supportedEfforts});
 const catalogs = {
   'codex-appserver': {kind: 'providerModels' as const, backend: 'codex-appserver' as const, state: 'ready' as const, models: [model('luna', ['low', 'high']), model('other', ['low']), {...model('hidden', []), hidden: true}]},
   'claude-agent': {kind: 'providerModels' as const, backend: 'claude-agent' as const, state: 'ready' as const, models: [model('haiku', []), model('sonnet', ['low', 'high'])]},
@@ -23,7 +23,7 @@ it('configures all three Providers without a Bot and only shows supported effort
   const input = props(); const ui = nodes(DecisionProviderFields(input));
   expect(select(ui, 'Codex 决策模型').props.value).toBe('luna');
   expect(select(ui, 'Codex 决策模型').props.options.map((item: {value: string}) => item.value)).toEqual(['luna', 'other']);
-  expect(select(ui, 'Codex 决策 Effort').props.options.map((item: {value: string}) => item.value)).toEqual(['', 'low', 'high']);
+  expect(select(ui, 'Codex 决策 Effort').props.options.map((item: {value: string}) => item.value)).toEqual(['low', 'high']);
   expect(select(ui, 'Claude 决策 Effort').props.disabled).toBe(true);
   expect(select(ui, 'TypeSafe · Jev 决策模型').props.value).toBe('jev-latest');
   expect(ui.some(node => node.type === SelectControl && node.props.label === 'TypeSafe · Jev 决策 Effort')).toBe(false);
@@ -33,7 +33,7 @@ it('saves only the edited Provider and resets model-specific effort when switchi
   const input = {...props(), value: {byProvider: {'claude-agent': {model: 'haiku'}}}};
   const ui = nodes(DecisionProviderFields(input));
   select(ui, 'Codex 决策模型').props.onChange('other');
-  expect(input.onChange).toHaveBeenCalledWith({byProvider: {'claude-agent': {model: 'haiku'}, 'codex-appserver': {model: 'other'}}});
+  expect(input.onChange).toHaveBeenCalledWith({byProvider: {'claude-agent': {model: 'haiku'}, 'codex-appserver': {model: 'other', effort: 'low'}}});
   input.onChange.mockClear();
   select(ui, 'Codex 决策 Effort').props.onChange('high');
   expect(input.onChange).toHaveBeenCalledWith({byProvider: {'claude-agent': {model: 'haiku'}, 'codex-appserver': {model: 'luna', effort: 'high'}}});
@@ -53,4 +53,50 @@ it('lets custom model IDs preserve the other Provider settings', () => {
   const ui = nodes(DecisionProviderFields(input));
   ui.find(node => node.type === 'input' && node.props['aria-label'] === 'Codex 决策模型 ID')!.props.onChange({target: {value: 'custom-b'}});
   expect(input.onChange).toHaveBeenCalledWith({byProvider: {'codex-appserver': {model: 'custom-b', custom: true}, typesafe: {model: 'jev-latest'}}});
+});
+it('uses the discovered default for an unsaved profile without writing it', () => {
+  const input = {...props(), catalogs: {...catalogs, 'codex-appserver': {...catalogs['codex-appserver'], models: [model('fallback', ['minimal', 'low']), {...model('preferred', ['none', 'low']), isDefault: true}]}}};
+  const ui = nodes(DecisionProviderFields(input));
+  expect(select(ui, 'Codex 决策模型').props.value).toBe('preferred');
+  const effort = select(ui, 'Codex 决策 Effort');
+  expect(effort.props.value).toBe('none');
+  expect(effort.props.options.find((option: {recommended?: boolean}) => option.recommended)).toEqual({value: 'none', label: '关闭思考', recommended: true});
+  expect(input.onChange).not.toHaveBeenCalled();
+});
+it('keeps both effort controls as dropdowns and recommends low ahead of minimal', () => {
+  const input = {...props(), catalogs: {...catalogs, 'codex-appserver': {...catalogs['codex-appserver'], models: [model('luna', ['minimal', 'low', 'high'])]}}};
+  const ui = nodes(DecisionProviderFields(input));
+  const effort = select(ui, 'Codex 决策 Effort');
+  expect(effort.props.presentation).toBe('dropdown');
+  expect(select(ui, 'Claude 决策 Effort').props.presentation).toBe('dropdown');
+  expect(effort.props.value).toBe('low');
+  expect(effort.props.options.filter((option: {recommended?: boolean}) => option.recommended).map((option: {value: string}) => option.value)).toEqual(['low']);
+});
+it.each(['minimal', 'high'] as const)('preserves an explicitly saved %s instead of applying the recommendation', effort => {
+  const input = {...props(), value: {byProvider: {'codex-appserver': {model: 'luna', effort}}}, catalogs: {...catalogs, 'codex-appserver': {...catalogs['codex-appserver'], models: [model('luna', ['none', 'minimal', 'low', 'high'])]}}};
+  expect(select(nodes(DecisionProviderFields(input)), 'Codex 决策 Effort').props.value).toBe(effort);
+  expect(input.onChange).not.toHaveBeenCalled();
+});
+it('selects none for a newly selected model that supports disabling thought, and guards readonly edits', () => {
+  const input = {...props(), catalogs: {...catalogs, 'codex-appserver': {...catalogs['codex-appserver'], models: [model('luna', ['low']), model('no-thought', ['none', 'low'])]}}};
+  select(nodes(DecisionProviderFields(input)), 'Codex 决策模型').props.onChange('no-thought');
+  expect(input.onChange).toHaveBeenCalledExactlyOnceWith({byProvider: {'codex-appserver': {model: 'no-thought', effort: 'none'}}});
+  input.onChange.mockClear();
+  select(nodes(DecisionProviderFields({...input, disabled: true})), 'Codex 决策模型').props.onChange('no-thought');
+  expect(input.onChange).not.toHaveBeenCalled();
+});
+it('does not invent a supported effort or recommendation for a custom model', () => {
+  const input = {...props(), value: {byProvider: {'codex-appserver': {model: 'custom-a', custom: true}}}};
+  const effort = select(nodes(DecisionProviderFields(input)), 'Codex 决策 Effort');
+  expect(effort.props.value).toBe('');
+  expect(effort.props.options[0]).toMatchObject({value: '', label: '未指定'});
+  expect(effort.props.options.some((option: {recommended?: boolean}) => option.recommended)).toBe(false);
+  expect(input.onChange).not.toHaveBeenCalled();
+});
+it('allows removing a custom model effort without claiming that the model supports none', () => {
+  const input = {...props(), value: {byProvider: {'codex-appserver': {model: 'custom-a', custom: true, effort: 'high' as const}}}};
+  const effort = select(nodes(DecisionProviderFields(input)), 'Codex 决策 Effort');
+  expect(effort.props.options[0]).toMatchObject({value: '', label: '未指定'});
+  effort.props.onChange('');
+  expect(input.onChange).toHaveBeenCalledExactlyOnceWith({byProvider: {'codex-appserver': {model: 'custom-a', custom: true}}});
 });

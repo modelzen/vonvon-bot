@@ -76,3 +76,11 @@ it('keeps icons in short segments and in the dropdown used by an extended Provid
   expect(nodes(dropdown).filter(node => node.type === 'img')).toHaveLength(13);
   expect(render({options: [...options, {value: 'openrouter', label: 'OpenRouter'}, {value: 'deepseek', label: 'DeepSeek'}], getOptionIcon}).props.items).toHaveLength(4);
 });
+it('can consistently present short lists as dropdowns with recommendation outside the selected label', () => {
+  const recommended = [{value: 'none', label: '关闭思考', recommended: true}, {value: 'low', label: 'low'}];
+  const ui = render({presentation: 'dropdown', value: 'none', options: recommended});
+  expect(ui.props.items).toBe(recommended);
+  expect(nodes(ui).filter(node => node.type === 'input')).toHaveLength(0);
+  expect(nodes(ui).filter(node => node.props.className === 'ui-select-control__recommendation').map(node => node.props.children)).toEqual(['推荐']);
+  expect(ui.props.items.find((option: {value: string}) => option.value === 'none').label).toBe('关闭思考');
+});

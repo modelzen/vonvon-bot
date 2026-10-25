@@ -233,6 +233,22 @@ describe('judge settings: checks (design 2.4)', () => {
 });
 
 describe('judge settings: the view', () => {
+  it('displays the same recommended effort as the runtime without rewriting stored choices', async () => {
+    backends['codex-appserver'] = fake('codex-appserver', [model('gpt-6-luna', ['minimal', 'low', 'high'])]);
+    await save(agent, { kind: 'llm', model: 'gpt-6-luna' });
+    let view = await owner().read(agent) as AgentSettingsView;
+    expect(view.sections.judge.stored.selection).not.toHaveProperty('effort');
+    expect(view.sections.judge.effective.selection).toMatchObject({ effort: 'low' });
+    expect(view.judgeByBackend?.['codex-appserver']).toMatchObject({ effort: 'low' });
+    backends['codex-appserver'] = fake('codex-appserver', [model('gpt-6-luna', ['minimal', 'none', 'low'])]);
+    view = await owner().read(agent) as AgentSettingsView;
+    expect(view.sections.judge.effective.selection).toMatchObject({ effort: 'none' });
+    await save(agent, { kind: 'llm', model: 'gpt-6-luna', effort: 'minimal' });
+    view = await owner().read(agent) as AgentSettingsView;
+    expect(view.sections.judge.stored.selection).toMatchObject({ effort: 'minimal' });
+    expect(view.sections.judge.effective.selection).toMatchObject({ effort: 'minimal' });
+  });
+
   it('effective follows design 2.2; judgeByBackend has a row per backend', async () => {
     let o = owner();
     let a = await o.read(agent) as AgentSettingsView;
