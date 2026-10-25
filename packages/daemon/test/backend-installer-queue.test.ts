@@ -57,7 +57,7 @@ class HeldChild extends EventEmitter {
   readonly stdout = new EventEmitter();
   readonly stderr = new EventEmitter();
   readonly kill = vi.fn();
-  constructor(readonly pkg: string) { super(); }
+  constructor(readonly pkg: string, readonly action: 'install' | 'uninstall' = 'install') { super(); }
 }
 let home = '';
 let previous: Pick<typeof paths, 'backendsDir' | 'npmCacheDir'>;
@@ -76,7 +76,11 @@ async function packageFiles(pkg: string, root = paths.backendsDir) {
   await writeFile(join(directory, 'index.cjs'), 'module.exports = {};');
 }
 async function finish(child: HeldChild, code = 0) {
-  if (code === 0) await packageFiles(child.pkg.replace(/@[^@]+$/, ''));
+  if (code === 0) {
+    const bare = child.pkg.replace(/@[^@]+$/, '');
+    if (child.action === 'uninstall') await rm(join(paths.backendsDir, 'node_modules', bare), { recursive: true, force: true });
+    else await packageFiles(bare);
+  }
   child.emit('close', code);
 }
 const eventually = async (check: () => void) => vi.waitFor(check, { timeout: 2000, interval: 10 });
@@ -87,7 +91,8 @@ beforeEach(async () => {
   automaticClose = false;
   controls.preparations = 0;
   controls.spawn = args => {
-    const child = new HeldChild(args[args.indexOf('install') + 1] ?? 'unknown'); children.push(child);
+    const action = args.includes('uninstall') ? 'uninstall' : 'install';
+    const child = new HeldChild(args[args.indexOf(action) + 1] ?? 'unknown', action); children.push(child);
     if (automaticClose) setImmediate(() => child.emit('close', 1));
     return child;
   };
@@ -120,6 +125,14 @@ describe('bundled npm', () => {
     expect(seen[0]?.env).toMatchObject({ ELECTRON_RUN_AS_NODE: '1', npm_config_update_notifier: 'false' });
     await finish(children[0]!);
     expect((await install).ok).toBe(true);
+    const removal = own(uninstallBackendDep('fixture-a'));
+    await eventually(() => expect(children).toHaveLength(2));
+    expect(seen[1]?.command).toBe(process.execPath);
+    expect(seen[1]?.args.slice(0, 3)).toEqual([cli, 'uninstall', 'fixture-a']);
+    expect(seen[1]?.args).toEqual(expect.arrayContaining(['--prefix', paths.backendsDir, '--save', '--ignore-scripts']));
+    expect(seen[1]?.env).toMatchObject({ ELECTRON_RUN_AS_NODE: '1', npm_config_update_notifier: 'false' });
+    await finish(children[1]!);
+    expect(await removal).toBe('uninstalled');
   });
 });
 
@@ -151,6 +164,9 @@ describe('shared backend prefix mutation ownership', () => {
     expect(uninstalled).toBe(false);
     await finish(children[0]!);
     await install.operation.done;
+    await eventually(() => expect(children).toHaveLength(2));
+    expect(children[1]?.action).toBe('uninstall');
+    await finish(children[1]!);
     const outcome = await removal;
     expect(outcome.kind).toBe('mutation');
     if (outcome.kind === 'mutation') expect(await outcome.reply(snapshot)).toMatchObject({ kind: 'applied' });
@@ -170,6 +186,9 @@ describe('shared backend prefix mutation ownership', () => {
     // 有 pin 的后端，更新也装 pin。
     expect(children[1]?.pkg).toBe('fixture-b@1.0.0');
     await finish(children[1]!); expect((await second).ok).toBe(true);
+    await eventually(() => expect(children).toHaveLength(3));
+    expect(children[2]?.action).toBe('uninstall');
+    await finish(children[2]!);
     expect(await remove).toMatchObject({ ok: true });
     expect(existsSync(join(paths.backendsDir, 'node_modules/fixture-b/package.json'))).toBe(false);
   });
@@ -244,6 +263,37 @@ describe('shared backend prefix mutation ownership', () => {
     expect(children).toHaveLength(0);
   });
 
+  it('holds the prefix until uninstall closes after an error, then releases the next install', async () => {
+    await packageFiles('fixture-a');
+    const removal = own(uninstallBackendDep('fixture-a'));
+    await eventually(() => expect(children).toHaveLength(1));
+    expect(children[0]?.action).toBe('uninstall');
+    children[0]!.emit('error', new Error('fixture npm error'));
+    const install = own(installBackendDep('fixture-b'));
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(children).toHaveLength(1);
+    children[0]!.emit('close', 0);
+    expect(await removal).toBe('failed');
+    expect(existsSync(join(paths.backendsDir, 'node_modules/fixture-a/package.json'))).toBe(true);
+    await eventually(() => expect(children).toHaveLength(2));
+    await finish(children[1]!);
+    expect((await install).ok).toBe(true);
+  });
+
+  it('reports failed uninstall on spawn throw or nonzero exit without destructive fallback', async () => {
+    await packageFiles('fixture-a');
+    const spawn = controls.spawn;
+    controls.spawn = () => { throw new Error('fixture spawn failed'); };
+    expect(await own(uninstallBackendDep('fixture-a'))).toBe('failed');
+    expect(existsSync(join(paths.backendsDir, 'node_modules/fixture-a/package.json'))).toBe(true);
+    controls.spawn = spawn;
+    const removal = own(uninstallBackendDep('fixture-a'));
+    await eventually(() => expect(children).toHaveLength(1));
+    children[0]!.emit('close', 1);
+    expect(await removal).toBe('failed');
+    expect(existsSync(join(paths.backendsDir, 'node_modules/fixture-a/package.json'))).toBe(true);
+  });
+
   it('keeps absent uninstall read-only and preserves the uninjected absent reply', async () => {
     expect(await own(uninstallBackendDep('fixture-a'))).toBe('not-installed');
     expect(existsSync(paths.backendsDir)).toBe(false);
@@ -257,7 +307,10 @@ describe('shared backend prefix mutation ownership', () => {
     expect(existsSync(join(paths.backendsDir, 'node_modules/fixture-bin/package.json'))).toBe(true);
     await mkdir(join(paths.backendsDir, 'node_modules/.bin'), { recursive: true });
     await writeFile(join(paths.backendsDir, 'node_modules/.bin/fixture-command'), 'inert surviving shim');
-    expect(await own(uninstallBackendDep('fixture-bin', { binName: 'fixture-command' }))).toBe('failed');
+    const remove = own(uninstallBackendDep('fixture-bin', { binName: 'fixture-command' }));
+    await eventually(() => expect(children).toHaveLength(1));
+    await finish(children[0]!);
+    expect(await remove).toBe('failed');
   });
 
   it('normalizes a synchronous service throw to terminal replay and releases the identical slot', async () => {
@@ -317,7 +370,10 @@ describe('production backend presence helpers on real files', () => {
     await packageFiles('zod');
     expect(isBackendDepInstalled('zod')).toBe(true);
     const svc = createAdminService({ uninstallBackend: uninstallBackendDep });
-    const result = await svc.uninstallBackend('fixture-dev');
+    const removal = own(svc.uninstallBackend('fixture-dev'));
+    await eventually(() => expect(children).toHaveLength(1));
+    await finish(children[0]!);
+    const result = await removal;
     expect(existsSync(join(paths.backendsDir, 'node_modules/zod/package.json'))).toBe(false);
     expect(isBackendDepInstalled('zod')).toBe(true);
     expect(result).toMatchObject({ ok: true });
