@@ -110,6 +110,53 @@ it('commits a keyboard gesture once and cancels a pending gesture if the control
   expect(onChange).not.toHaveBeenCalled(); expect(input.props['aria-valuetext']).toBe('独立话题');
 });
 
+const sliderPointer = (clientX: number, pointerId = 1, isPrimary = true) => ({
+  button: 0, pointerId, isPrimary, clientX,
+  currentTarget: {setPointerCapture: vi.fn(), getBoundingClientRect: () => ({left: 100, width: 300})},
+});
+it('follows the pointer continuously but persists only the nearest released mode', () => {
+  const onChange = vi.fn();
+  const inspect = () => nodes(renderAt('slider', () => ConversationSlider({label: '聊天方式', value: 'threads', onChange}))).find(node => node.type === 'input')!;
+  let input = inspect();
+  input.props.onPointerDown(sliderPointer(114));
+  input.props.onPointerMove(sliderPointer(277.2)); input = inspect();
+  expect(input.props['aria-valuetext']).toBe('连续交谈');
+  expect(onChange).not.toHaveBeenCalled();
+  input.props.onPointerMove(sliderPointer(600)); input = inspect();
+  expect(input.props['aria-valuetext']).toBe('智能');
+  input.props.onPointerUp(sliderPointer(600));
+  expect(onChange).toHaveBeenCalledExactlyOnceWith('smart');
+});
+it('ignores a second pointer while the first pointer is selecting a mode', () => {
+  const onChange = vi.fn();
+  const inspect = () => nodes(renderAt('slider', () => ConversationSlider({label: '聊天方式', value: 'threads', onChange}))).find(node => node.type === 'input')!;
+  let input = inspect(); input.props.onPointerDown(sliderPointer(114));
+  input.props.onPointerMove(sliderPointer(250)); input = inspect();
+  input.props.onPointerDown(sliderPointer(386, 2, false));
+  input.props.onPointerMove(sliderPointer(386, 2, false));
+  input.props.onPointerUp(sliderPointer(386, 2, false)); input = inspect();
+  input.props.onPointerCancel(sliderPointer(386, 2, false));
+  input.props.onLostPointerCapture(sliderPointer(386, 2, false)); input = inspect();
+  expect(input.props['aria-valuetext']).toBe('连续交谈');
+  expect(onChange).not.toHaveBeenCalled();
+  input.props.onPointerUp(sliderPointer(250));
+  expect(onChange).toHaveBeenCalledExactlyOnceWith('shared');
+});
+it('does not save more native range events after Escape cancels a captured drag', () => {
+  const onChange = vi.fn();
+  const inspect = () => nodes(renderAt('slider', () => ConversationSlider({label: '聊天方式', value: 'threads', onChange}))).find(node => node.type === 'input')!;
+  let input = inspect(); input.props.onPointerDown(sliderPointer(114));
+  input.props.onPointerMove(sliderPointer(386)); input = inspect();
+  input.props.onKeyDown({key: 'Escape', preventDefault: vi.fn()});
+  input.props.onChange({currentTarget: {value: '2'}}); input.props.onPointerMove(sliderPointer(386));
+  input.props.onPointerUp(sliderPointer(386)); input = inspect();
+  expect(onChange).not.toHaveBeenCalled();
+  expect(input.props['aria-valuetext']).toBe('独立话题');
+  input.props.onKeyDown({key: 'ArrowRight'}); input.props.onChange({currentTarget: {value: '1'}});
+  input = inspect(); input.props.onKeyUp({key: 'ArrowRight'});
+  expect(onChange).toHaveBeenCalledExactlyOnceWith('shared');
+});
+
 it('shows attention beside the smart conversation control on 沟通方式 and hides it while either mode source changes', async () => {
   let liveMember: Membership = {...member, conversation: 'smart', enabled: true};
   project = {...project, kind: 'smart'};
