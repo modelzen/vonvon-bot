@@ -84,6 +84,7 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
   const [uninstallOpen, setUninstallOpen] = useState(false);
   const [cliUninstall, setCliUninstall] = useState(false);
   const [managementNotice, setManagementNotice] = useState('');
+  const [versionCheck, setVersionCheck] = useState<{signature: string; installed: string | null; latest: string | null}>();
   const name = providerNames[provider];
   const componentName = provider === 'claude' ? 'Claude Agent SDK' : name;
   const bundled = provider === 'claude' && state.entry?.bundled === true;
@@ -96,8 +97,13 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
   const connecting = Boolean(state.activeLogin || state.activeCodexJob);
   const disabled = !ready || busy || state.working;
   const source = state.tools.find(item => item.tool === provider);
+  const versionSignature = JSON.stringify([providerSignature(state.tool), source?.executable, source?.version]);
+  const checkedVersion = versionCheck?.signature === versionSignature ? versionCheck : undefined;
+  const currentVersion = provider === 'codex' && checkedVersion ? checkedVersion.installed
+    : detectionUnknown ? null : state.tool?.version?.replace(/^codex-cli\s+/, '') ?? source?.version ?? null;
+  const latestVersion = checkedVersion ? checkedVersion.latest : source?.latestVersion;
   const cliLabel = !source ? '正在检测…' : source.installation === 'missing' ? '未检测到' : '已安装';
-  const installLabel = installing ? '正在安装…' : installed ? `已安装${state.tool?.version ? ` · ${state.tool.version}` : ''}` : needsUpdate ? '需要更新' : state.tool?.installation === 'missing' ? '未安装' : checking || !state.check && !state.issue ? '正在检测…' : '检测异常';
+  const installLabel = installing ? '正在安装…' : installed ? `已安装${currentVersion ? ` · ${currentVersion}` : ''}` : needsUpdate ? '需要更新' : state.tool?.installation === 'missing' ? '未安装' : checking || !state.check && !state.issue ? '正在检测…' : '检测异常';
   const authLabel = connecting ? '等待授权' : detectionUnknown ? '等待检测结果' : !installed ? (bundled ? '运行组件不可用' : needsUpdate ? '更新后连接' : '安装后连接') : state.check?.state === 'checking' ? '正在检查…' : state.tool?.authentication === 'notRequired' ? '使用现有配置' : auth ? '已连接' : state.tool?.authentication === 'signedOut' ? '尚未连接' : '暂时无法确认';
   async function open(url: string, target: 'authorization' | 'verification') {
     setLinkError('');
@@ -105,7 +111,10 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
   }
   async function checkVersion() {
     const reply = await state.request({type: 'backendVersion', id: provider === 'codex' ? 'codex-appserver' : 'claude-agent'});
-    if (reply?.kind === 'backendVersion') setManagementNotice(reply.latest ? `${provider === 'claude' ? '验证版本' : '最新版本'}：${reply.latest}` : '暂时无法查询最新版本。');
+    if (reply?.kind === 'backendVersion') {
+      if (provider === 'codex') setVersionCheck({signature: versionSignature, installed: reply.installed, latest: reply.latest});
+      else setManagementNotice(reply.latest ? `验证版本：${reply.latest}` : '暂时无法查询最新版本。');
+    }
   }
   async function manageCli(action: 'install' | 'update' | 'uninstall' | 'authStatus') {
     const reply = await (action === 'install' || action === 'update' ? state.installTool('claude', action === 'update') : state.request({type: action, tool: 'claude'}));
@@ -144,7 +153,10 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
     {onContinue && <footer className="provider-footer"><Button variant="primary" disabled={!state.canContinue || busy} icon={<ArrowRight size={15}/>} onClick={() => {if (state.canContinue) onContinue(provider);}}>继续</Button></footer>}
     {management && <>
       {state.check?.state === 'ready' && <details className="provider-models" open><summary><span>可用模型</span><span>{state.check.models?.length ?? 0}</span></summary><div className="provider-models__list">{state.check.models?.map(model => <div key={model.id}><strong title={model.id}>{model.displayName || model.id}</strong></div>)}</div></details>}
-      <div className="provider-meta"><h2>{bundled ? '运行组件' : provider === 'claude' ? 'Agent SDK 安装信息' : '安装信息'}</h2><dl><div><dt>安装来源</dt><dd>{bundled ? '应用内置 · 随应用更新' : detectionUnknown ? checking ? '正在检测…' : '暂时无法确认' : provider === 'claude' ? !state.entry ? '正在检测…' : state.entry.depState === 'installed' ? 'Vonvon 管理' : '未安装' : !source ? '正在检测…' : source.installation === 'managed' ? 'Vonvon 管理' : source?.installation === 'external' ? '本机已有' : '未安装'}</dd></div>{bundled && <div><dt>版本</dt><dd>{state.entry?.installedVersion ?? state.tool?.version ?? '待检测'}</dd></div>}<div><dt>模型来源</dt><dd>{state.tool?.authentication === 'notRequired' ? '现有 API 配置' : 'Provider 原生配置'}</dd></div></dl>{source?.executable && provider === 'codex' && <details className="provider-install-path"><summary>安装位置</summary><code>{source.executable}</code></details>}
+      <div className="provider-meta"><h2>{bundled ? '运行组件' : provider === 'claude' ? 'Agent SDK 安装信息' : '安装信息'}</h2><dl><div><dt>安装来源</dt><dd>{bundled ? '应用内置 · 随应用更新' : detectionUnknown ? checking ? '正在检测…' : '暂时无法确认' : provider === 'claude' ? !state.entry ? '正在检测…' : state.entry.depState === 'installed' ? 'Vonvon 管理' : '未安装' : !source ? '正在检测…' : source.installation === 'managed' ? 'Vonvon 管理' : source?.installation === 'external' ? '本机已有' : '未安装'}</dd></div>{bundled && <div><dt>版本</dt><dd>{state.entry?.installedVersion ?? state.tool?.version ?? '待检测'}</dd></div>}{provider === 'codex' && <>
+        <div><dt>当前版本</dt><dd>{currentVersion ?? (state.tool?.installation === 'missing' ? '未安装' : '暂时无法确认')}</dd></div>
+        <div><dt>最新版本</dt><dd>{latestVersion ?? (!source && !checkedVersion ? '正在检测…' : '暂时无法查询')}</dd></div>
+      </>}<div><dt>模型来源</dt><dd>{state.tool?.authentication === 'notRequired' ? '现有 API 配置' : 'Provider 原生配置'}</dd></div></dl>{source?.executable && provider === 'codex' && <details className="provider-install-path"><summary>安装位置</summary><code>{source.executable}</code></details>}
         <div className="provider-management-actions">{!bundled && <Button size="sm" disabled={disabled || installing} onClick={() => void checkVersion()}>检查版本</Button>}
           {installed && auth && <Button size="sm" disabled={disabled || connecting || installing} onClick={() => void state.connect()}>重新连接账号</Button>}
           {installed && !bundled && <Button size="sm" disabled={disabled || installing || connecting} onClick={() => void state.installProvider(true)}>{provider === 'claude' ? '更新 SDK' : `更新 ${name}`}</Button>}
