@@ -88,6 +88,10 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
   const sections = view.sections;
   const [rulesExpanded, setRulesExpanded] = useState(false);
   const decisionConfiguration = useDecisionConfiguration(tab === 'response' && view.identity.kind === 'smart');
+  // Legacy absent settings followed Bot/backend defaults. Show that effective choice until the
+  // owner explicitly chooses the new host default, so resetting is a real saved transition.
+  const judgeSection = sections.judge && view.judgeInheritsHostDefault === false && sections.judge.stored.selection.kind === 'default'
+    ? {...sections.judge, stored: sections.judge.effective} : sections.judge;
   const modelCatalog = useRef<ModelCatalog | undefined>(undefined);
   const rememberCatalog = useCallback((catalog: ModelCatalog | undefined) => {modelCatalog.current = catalog;}, []);
   async function save(section: keyof GroupSections, patch: object, revision: string): Promise<SettingsReply> {
@@ -134,8 +138,8 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
       {tab === 'response' && <>
         {responseHeader}
         {view.identity.kind === 'smart' && <>
-          {sections.judge ? <Editor title="决策模型" section={sections.judge} autoSave save={(patch, revision) => save('judge', patch, revision)}
-            validate={value => providerDecisionProblem(value.selection, providers, view.decisionModels)}
+          {judgeSection ? <Editor title="决策模型" section={judgeSection} autoSave save={(patch, revision) => save('judge', patch, revision)}
+            validate={value => providerDecisionProblem(value.selection, providers, view.decisionModels, decisionConfiguration)}
             render={(draft, set, disabled, _commit, resetKey) => <DecisionFields key={resetKey} botId={view.scope.botId} groupBackend={view.identity.backend} value={draft.selection} effective={sections.judge!.effective.selection}
               onChange={selection => set({selection})} disabled={disabled} providers={providers} services={view.decisionModels} configuration={decisionConfiguration} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets}/>}/> : <MissingSection/>}
           {sections.smartRules ? <Editor title="判断规则" section={sections.smartRules} save={(patch, revision) => save('smartRules', patch, revision)}

@@ -136,12 +136,12 @@ const schemas: Record<string, Record<string, Rule>> = {
     execution: shape({
       codexBin: path
     }),
-    judge: shape({ byProvider: value => {
+    judge: shape({ defaultProvider: one('codex-appserver', 'claude-agent', 'typesafe'), byProvider: value => {
       if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
       return Object.entries(value).every(([provider, choice]) =>
         text(provider) && !['__proto__','constructor','prototype'].includes(provider) && shape({ model: text, effort: one(...REASONING_EFFORTS), custom: bool }, true)(choice)
         && Object.hasOwn(choice as object, 'model'));
-    } })
+    } }, true)
   },
 };
 export function parseSettingsScope(input: unknown): SettingsScope {

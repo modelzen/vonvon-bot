@@ -13,9 +13,12 @@ import { decisionProvider } from './decision';
 export const JUDGE_PROVIDERS = ['codex-appserver', 'claude-agent', 'typesafe'] as const;
 export type JudgeProvider = typeof JUDGE_PROVIDERS[number];
 export type JudgeModelChoice = { model: string; effort?: ReasoningEffort; custom?: boolean };
-export type JudgeModels = { byProvider: Record<string, JudgeModelChoice> };
+export type JudgeModels = { defaultProvider?: JudgeProvider; byProvider: Record<string, JudgeModelChoice> };
+export const DEFAULT_JUDGE_PROVIDER: JudgeProvider = 'codex-appserver';
+/** Missing old configuration has a stable default; availability never silently switches providers. */
+export function defaultJudgeProvider(stored: JudgeModels): JudgeProvider { return stored.defaultProvider ?? DEFAULT_JUDGE_PROVIDER; }
 const choice = z.object({ model: z.string(), effort: z.enum(REASONING_EFFORTS).optional(), custom: z.boolean().optional() }).strict();
-const fileSchema = z.object({ version: z.literal(1), byProvider: z.record(z.string(), choice) }).strict();
+const fileSchema = z.object({ version: z.literal(1), defaultProvider: z.enum(JUDGE_PROVIDERS).optional(), byProvider: z.record(z.string(), choice) }).strict();
 
 export class JudgeModelsError extends Error {}
 export function judgeModelsFile(root = paths.appDir): string { return join(root, 'judge-models.json'); }
@@ -29,7 +32,7 @@ function parseSnapshot(text: string): JudgeModels {
       || (value.effort && provider !== 'typesafe' && !getSessionTitleEfforts(provider).includes(value.effort)))
       throw new JudgeModelsError(`${provider} 的决策模型设置无效`);
   }
-  return { byProvider: parsed.byProvider };
+  return { ...(parsed.defaultProvider ? { defaultProvider: parsed.defaultProvider } : {}), byProvider: parsed.byProvider };
 }
 
 /** Read on every judgement. Missing means defaults; a corrupt explicit choice fails closed. */
@@ -62,7 +65,7 @@ export function defaultProviderChoice(provider: JudgeProvider): JudgeModelChoice
 }
 
 export function effectiveJudgeModels(stored: JudgeModels): JudgeModels {
-  return { byProvider: Object.fromEntries(JUDGE_PROVIDERS.map(provider => [provider, stored.byProvider[provider] ?? defaultProviderChoice(provider)])) };
+  return { defaultProvider: defaultJudgeProvider(stored), byProvider: Object.fromEntries(JUDGE_PROVIDERS.map(provider => [provider, stored.byProvider[provider] ?? defaultProviderChoice(provider)])) };
 }
 
 export async function resolveProviderChoice(provider: JudgeProvider, root = paths.appDir): Promise<JudgeModelChoice> {

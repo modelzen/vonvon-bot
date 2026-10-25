@@ -11,7 +11,7 @@ function nodes(node: ReactNode): Element[] {
   if (!isValidElement<Record<string, any>>(node)) return [];
   return [node, ...nodes(node.props.children), ...(node.type === SettingsRow ? nodes(node.props.trailing) : [])];
 }
-const defaults = {byProvider: {'codex-appserver': {model: 'luna', effort: 'low' as const}, 'claude-agent': {model: 'haiku'}, typesafe: {model: 'jev-latest'}}};
+const defaults = {defaultProvider: 'codex-appserver' as const, byProvider: {'codex-appserver': {model: 'luna', effort: 'low' as const}, 'claude-agent': {model: 'haiku'}, typesafe: {model: 'jev-latest'}}};
 const model = (id: string, supportedEfforts: Array<'none' | 'minimal' | 'low' | 'high'>) => ({id, displayName: id, description: '', hidden: false, isDefault: false, defaultEffort: 'low' as const, supportedEfforts});
 const catalogs = {
   'codex-appserver': {kind: 'providerModels' as const, backend: 'codex-appserver' as const, state: 'ready' as const, models: [model('luna', ['low', 'high']), model('other', ['low']), {...model('hidden', []), hidden: true}]},
@@ -99,4 +99,28 @@ it('allows removing a custom model effort without claiming that the model suppor
   expect(effort.props.options[0]).toMatchObject({value: '', label: '未指定'});
   effort.props.onChange('');
   expect(input.onChange).toHaveBeenCalledExactlyOnceWith({byProvider: {'codex-appserver': {model: 'custom-a', custom: true}}});
+});
+
+it('shows the configured global default without changing any profile', () => {
+  const input = {...props(), value: {defaultProvider: 'claude-agent' as const, byProvider: {'codex-appserver': {model: 'custom-codex'}}}};
+  const ui = nodes(DecisionProviderFields(input));
+  const control = select(ui, '默认决策模型');
+  expect(control.props.value).toBe('claude-agent');
+  expect(control.props.options.map((option: {value: string}) => option.value)).toEqual(['codex-appserver', 'claude-agent', 'typesafe']);
+  expect(input.onChange).not.toHaveBeenCalled();
+  control.props.onChange('typesafe');
+  expect(input.onChange).toHaveBeenCalledExactlyOnceWith({defaultProvider: 'typesafe', byProvider: {'codex-appserver': {model: 'custom-codex'}}});
+});
+it('preserves the selected global default while editing one provider profile', () => {
+  const input = {...props(), value: {defaultProvider: 'typesafe' as const, byProvider: {'claude-agent': {model: 'haiku'}}}};
+  const ui = nodes(DecisionProviderFields(input));
+  select(ui, 'Codex 决策模型').props.onChange('other');
+  expect(input.onChange).toHaveBeenCalledExactlyOnceWith({defaultProvider: 'typesafe', byProvider: {'claude-agent': {model: 'haiku'}, 'codex-appserver': {model: 'other', effort: 'low'}}});
+});
+it('displays the effective global default until explicitly changed and guards disabled changes', () => {
+  const input = props();
+  expect(select(nodes(DecisionProviderFields(input)), '默认决策模型').props.value).toBe('codex-appserver');
+  expect(input.onChange).not.toHaveBeenCalled();
+  select(nodes(DecisionProviderFields({...input, disabled: true})), '默认决策模型').props.onChange('typesafe');
+  expect(input.onChange).not.toHaveBeenCalled();
 });

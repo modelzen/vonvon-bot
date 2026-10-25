@@ -8,7 +8,7 @@ import { parseModelId } from '../agent/model-id';
 import { getSessionTitleEfforts } from '../config/schema';
 import { discoverProviderModels } from './model-catalog';
 import { decisionProvider } from '../judge/decision';
-import { JUDGE_PROVIDERS, effectiveJudgeModels, readJudgeModels, writeJudgeModels, type JudgeModelChoice, type JudgeModels } from '../judge/global-models';
+import { JUDGE_PROVIDERS, effectiveJudgeModels, readJudgeModels, writeJudgeModels, type JudgeModels } from '../judge/global-models';
 import { readServiceCodexBin, saveServiceCodexBin } from '../service/codex-bin';
 import type { ApplyEffect, HostSettings, HostSettingsView, SettingsSave, SettingsSectionView } from './settings-types';
 
@@ -23,7 +23,7 @@ export function createHostSettings(options: {
     : options.runningCodexBin;
   let writes: Promise<unknown> = Promise.resolve();
   const effect: ApplyEffect = { fields: ['codexBin'], when: 'restart', detail: '已保存，下次启动 daemon 时使用；当前会话保持原来的执行程序。' };
-  const judgeEffect: ApplyEffect = { fields: ['byProvider'], when: 'next-message', detail: '跟随统一配置的智能群在下一次判断使用最新模型设置。' };
+  const judgeEffect: ApplyEffect = { fields: ['byProvider', 'defaultProvider'], when: 'next-message', detail: '跟随统一配置的智能群在下一次判断使用最新模型设置。' };
   async function view(): Promise<HostSettingsView> {
     const stored = readServiceCodexBin(appDir);
     const judge = await readJudgeModels(appDir);
@@ -89,9 +89,13 @@ export function createHostSettings(options: {
         if (edit.section === 'judge') {
           const patch = edit.patch as Partial<JudgeModels>;
           if (current.sections.judge.access.kind === 'readonly') return { kind: 'unavailable', reason: current.sections.judge.access };
-          if (!patch.byProvider || typeof patch.byProvider !== 'object' || Array.isArray(patch.byProvider))
+          if ((patch.byProvider !== undefined && (!patch.byProvider || typeof patch.byProvider !== 'object' || Array.isArray(patch.byProvider))) || (patch.byProvider === undefined && patch.defaultProvider === undefined))
             return { kind: 'rejected', fields: [{ field: 'byProvider', message: '请提供各 Provider 的模型设置。' }] };
-          const proposed: JudgeModels = { byProvider: patch.byProvider as Record<string, JudgeModelChoice> };
+          if (patch.defaultProvider !== undefined && !JUDGE_PROVIDERS.includes(patch.defaultProvider))
+            return { kind: 'rejected', fields: [{ field: 'defaultProvider', message: '请选择有效的默认决策 Provider。' }] };
+          // Older clients do not send this field; their model edits must preserve the current default.
+          const defaultProvider = patch.defaultProvider ?? current.sections.judge.stored.defaultProvider;
+          const proposed: JudgeModels = { ...(defaultProvider ? { defaultProvider } : {}), byProvider: patch.byProvider ?? current.sections.judge.stored.byProvider };
           if (JSON.stringify(current.sections.judge.stored) === JSON.stringify(proposed)) return { kind: 'saved', section: section(current, 'judge'), effects: [] };
           if (current.sections.judge.revision !== edit.revision) return { kind: 'conflict', current: section(current, 'judge') };
           const message = await validateJudge(proposed, current.sections.judge.stored);
@@ -103,7 +107,7 @@ export function createHostSettings(options: {
             // A newer daemon may have added another provider. Preserve it when this client saves known choices.
             const newer = Object.fromEntries(Object.entries(current.sections.judge.stored.byProvider)
               .filter(([provider]) => !JUDGE_PROVIDERS.includes(provider as typeof JUDGE_PROVIDERS[number])));
-            await writeJudgeModels({ byProvider: { ...newer, ...proposed.byProvider } }, appDir);
+            await writeJudgeModels({ ...proposed, byProvider: { ...newer, ...proposed.byProvider } }, appDir);
           } finally { await closeMutex(mutex); }
           return { kind: 'saved', section: section(await view(), 'judge'), effects: [judgeEffect] };
         }

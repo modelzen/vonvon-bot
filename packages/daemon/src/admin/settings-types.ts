@@ -29,7 +29,7 @@ export type ModelSelection = {
   /** a hand-typed id, not checked against the model list (product.md 3.11) */
   custom?: boolean;
 };
-/** The judge model of a layer (s23d); `default` removes the layer. See the protocol's judgeSelection. */
+/** The judge model of a layer; group `default` follows the host while Bot `default` removes its override. */
 export type JudgeSelection = {
   kind: 'default';
 } | {
@@ -157,7 +157,7 @@ export interface HostSections {
   execution: {
     codexBin: string | null;
   };
-  judge: { byProvider: Record<string, { model: string; effort?: ReasoningEffort; custom?: boolean }> };
+  judge: { defaultProvider?: 'codex-appserver' | 'claude-agent' | 'typesafe'; byProvider: Record<string, { model: string; effort?: ReasoningEffort; custom?: boolean }> };
 }
 export type SettingsAccess = {
   kind: 'writable';
@@ -217,6 +217,7 @@ export interface AgentSettingsView {
   decisionModels?: DecisionModelsView;
 }
 export interface ProjectSettingsView {
+  judgeInheritsHostDefault?: boolean;
   scope: Extract<SettingsScope, {
     kind: 'project';
   }>;

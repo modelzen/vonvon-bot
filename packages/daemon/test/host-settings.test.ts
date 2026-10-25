@@ -97,6 +97,22 @@ describe('Host executable settings', () => {
 });
 
 describe('global judge model settings', () => {
+  it('has a stable legacy default and saves default-only edits without discarding profiles', async()=>{
+    const f=await fixture();
+    const first=await f.read();
+    expect(first.sections.judge.effective.defaultProvider).toBe('codex-appserver');
+    expect(first.sections.judge.stored.defaultProvider).toBeUndefined();
+    const profile={typesafe:{model:'jev-latest'}};
+    expect((await f.settings.save(parseSettingsEdit({scope:{kind:'host'},section:'judge',revision:first.sections.judge.revision,patch:{defaultProvider:'typesafe',byProvider:profile}}))).kind).toBe('saved');
+    const selected=await f.read();
+    expect(selected.sections.judge.effective.defaultProvider).toBe('typesafe');
+    expect((await f.settings.save(parseSettingsEdit({scope:{kind:'host'},section:'judge',revision:selected.sections.judge.revision,patch:{defaultProvider:'claude-agent'}}))).kind).toBe('saved');
+    const switched=await f.read();
+    expect(switched.sections.judge.stored).toEqual({defaultProvider:'claude-agent',byProvider:profile});
+    expect((await f.settings.save(parseSettingsEdit({scope:{kind:'host'},section:'judge',revision:switched.sections.judge.revision,patch:{byProvider:{}}}))).kind).toBe('saved');
+    expect((await f.read()).sections.judge.stored.defaultProvider).toBe('claude-agent');
+    expect(()=>parseSettingsEdit({scope:{kind:'host'},section:'judge',revision:'r',patch:{defaultProvider:'unknown'}})).toThrow();
+  });
   it('parses and preserves a newer provider choice, but rejects changing it', async () => {
     const f = await fixture();
     await writeFile(join(f.appDir, 'judge-models.json'), JSON.stringify({version:1,byProvider:{future:{model:'future-one'}}}));

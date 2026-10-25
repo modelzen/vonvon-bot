@@ -22,7 +22,7 @@ import { AdminWriteError } from '../admin/ops';
 import { applyMirror, mirrorProjectIntoBot, siblingProjectOfChat, type AdminLibraryOp } from '../admin/library';
 import { isProjectId, readLibrary, type LibraryProject } from '../project/library';
 import { createSettingsOwner, materializeGroupSettings } from '../admin/settings';
-import { validateProviderJudge } from '../project/initial-settings';
+import { validateDefaultJudge, validateProviderJudge } from '../project/initial-settings';
 import type { HostSettings } from '../admin/settings-types';
 import type { AdminWriteResult } from '../admin/ops';
 import { registerVoiceConsole } from './voice-console';
@@ -6469,8 +6469,14 @@ export function createOrchestrator(
         const mode = request.kind;
         if (mode === 'smart' && sessionModeOf(project) !== 'smart') {
           const selected = parseStoredJudge(project.judge, backendIds()).value;
-          if (!selected) throw new AdminWriteError('请先在本群回复规则中设置决策模型，再开启智能模式');
-          if (selected.kind === 'provider') await validateProviderJudge(selected.provider, { backendFor }).catch((error: unknown) => {
+          if (!selected && project.judge !== undefined) throw new AdminWriteError('本群决策模型设置无效，请重新选择');
+          if (!selected || selected.kind === 'default') {
+            await validateDefaultJudge({ backendFor }).catch((error: unknown) => {
+              throw new AdminWriteError(error instanceof Error ? error.message : '无法确认默认决策模型');
+            });
+            patch.judge = { kind: 'default' };
+          }
+          if (selected?.kind === 'provider') await validateProviderJudge(selected.provider, { backendFor }).catch((error: unknown) => {
             throw new AdminWriteError(error instanceof Error ? error.message : '无法确认决策 Provider');
           });
         }
