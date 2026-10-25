@@ -1,13 +1,11 @@
-import {Check, ChevronRight} from 'lucide-react';
-import {backendLabel, isKnownJudgeSelection, type AgentId, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ToolState} from '@vonvon/protocol';
-import {Button, InlineNotice, SelectControl} from '../reference/components/ui';
-import {SettingChoices} from './SettingChoices';
+import {isKnownJudgeSelection, type AgentId, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ToolState} from '@vonvon/protocol';
+import {SelectControl} from '../reference/components/ui';
 import type {DecisionConfigurationState} from './useDecisionConfiguration';
+import {DecisionPicker, type DecisionPickerValue, type DecisionCatalogs} from './DecisionPicker';
+import {useDecisionCatalogs} from './useDecisionCatalogs';
 
 type Provider = {id: string; displayName: string};
 type Selection = Extract<JudgeSelectionView, {kind: 'llm'}>;
-const providerIds = ['codex-appserver', 'claude-agent', 'typesafe'] as const;
-type DecisionProvider = typeof providerIds[number];
 export function savedDecisionProvider(value: JudgeSelectionView, groupBackend: string): string | undefined {
   if (!isKnownJudgeSelection(value)) return undefined;
   if (value.kind === 'provider') return value.provider;
@@ -29,78 +27,49 @@ export function providerDecisionProblem(value: JudgeSelectionView, providers: Pr
     if (!configuration.configuration.byProvider[provider]?.model.trim()) return '默认决策模型配置无效，请前往设置。';
     return providerDecisionProblem({kind: 'provider', provider}, providers, services);
   }
-  if (!isKnownJudgeSelection(value) || value.kind !== 'provider') return '请选择判断 Provider。';
-  if (value.provider === 'typesafe') {
+  if (!isKnownJudgeSelection(value)) return '当前客户端无法编辑已保存的决策设置。';
+  const provider = value.kind === 'llm' ? value.backend : value.kind === 'provider' || value.kind === 'decision' ? value.provider : undefined;
+  if (!provider) return '请选择决策模型。';
+  if ((value.kind === 'llm' || value.kind === 'decision') && !value.model.trim()) return '请填写模型 ID。';
+  if (provider === 'typesafe') {
     const service = services?.find(item => item.provider === 'typesafe');
     if (!service || service.keyUnreadable) return '无法读取 Jev 密钥，请检查决策模型设置。';
     return service.keySet ? undefined : '请先添加 Jev 密钥。';
   }
-  return providers.some(item => item.id === value.provider) ? undefined : '此判断 Provider 当前不可用，请先安装并登录。';
+  return providers.some(item => item.id === provider) ? undefined : '此决策 Provider 当前不可用，请先安装并登录。';
 }
 
-export function DecisionFields({groupBackend, value, effective, onChange, disabled, providers, services, configuration, onOpenProviders, onOpenSecrets, onProviderChange, initial = false}: {
+/** Legacy markers are displayed through their server-resolved snapshot, never through live host state. */
+export function groupDecisionPickerValue(value: JudgeSelectionView, effective: JudgeSelectionView, groupBackend: string): DecisionPickerValue | undefined {
+  if (!isKnownJudgeSelection(value)) return undefined;
+  const selection = value.kind === 'default' || value.kind === 'provider' ? effective : value;
+  if (!isKnownJudgeSelection(selection)) return undefined;
+  if (selection.kind === 'decision') return {provider: selection.provider, model: selection.model};
+  if (selection.kind === 'llm') return {provider: selection.backend ?? groupBackend, model: selection.model, ...(selection.effort ? {effort: selection.effort} : {}), ...(selection.custom ? {custom: true} : {})};
+  return undefined;
+}
+
+export function DecisionFields({groupBackend, value, effective, onChange, disabled, providers, services, catalogs: suppliedCatalogs, onOpenProviders, onOpenSecrets, onProviderChange}: {
   botId: AgentId; groupBackend: string; value: JudgeSelectionView; effective: JudgeSelectionView; onChange: (value: JudgeSelectionView) => void; disabled: boolean;
-  providers: Provider[]; services?: DecisionModelsView; tools?: readonly ToolState[];
-  configuration?: DecisionConfigurationState;
+  providers: Provider[]; services?: DecisionModelsView; catalogs?: DecisionCatalogs; tools?: readonly ToolState[]; configuration?: DecisionConfigurationState;
   onProviderChange?: (provider: string) => void; onOpenProviders?: () => void; onOpenSecrets?: (provider?: string) => void; initial?: boolean;
 }) {
-  const saved = savedDecisionProvider(value, groupBackend);
-  const inherited = initial ? undefined : savedDecisionProvider(effective, groupBackend);
-  const followsDefault = isKnownJudgeSelection(value) && value.kind === 'default';
-  const globalProvider = configuration?.kind === 'ready' ? configuration.configuration.defaultProvider : undefined;
-  const viewed = followsDefault ? globalProvider ?? inherited ?? '' : saved ?? inherited ?? '';
-  const defaultProblem = providerDecisionProblem({kind: 'default'}, providers, services, configuration);
+  const {catalogs: loadedCatalogs} = useDecisionCatalogs(suppliedCatalogs === undefined);
+  const catalogs = suppliedCatalogs ?? loadedCatalogs;
   const service = services?.find(item => item.provider === 'typesafe');
-  const ready = (id: string) => id === 'typesafe' ? Boolean(service?.keySet && !service.keyUnreadable) : providers.some(item => item.id === id);
-  const choices: Array<{value: string; label: string; disabled: boolean}> = [{value: 'default', label: '默认', disabled: Boolean(defaultProblem)}, ...providerIds.map(id => ({value: id, label: id === 'typesafe' ? 'Jev' : backendLabel(id), disabled: !ready(id)}))];
-  if (saved && !choices.some(item => item.value === saved)) choices.push({value: saved as DecisionProvider, label: backendLabel(saved), disabled: true});
-  const legacy = isKnownJudgeSelection(value) && (value.kind === 'llm' || value.kind === 'decision');
-  const providerName = viewed === 'typesafe' ? 'Jev' : viewed ? backendLabel(viewed) : undefined;
-  const keyState = !service || service.keyUnreadable ? 'unknown' : service.keySet ? 'added' : 'missing';
-  const currentSelection = followsDefault ? undefined : value;
-  const independent = currentSelection && isKnownJudgeSelection(currentSelection) && (currentSelection.kind === 'llm' || currentSelection.kind === 'decision') ? currentSelection : undefined;
-  const profile = independent ?? (configuration?.kind === 'ready' ? configuration.configuration.byProvider[viewed] : undefined);
-  const configured = Boolean(profile && (viewed !== 'typesafe' || keyState === 'added'));
-  return <div className="gd-model-fields gd-decision-fields">
-    <p className="gd-decision-purpose">判断群消息要不要回复、回在哪里，以及是否创建新话题。实际回复和执行任务使用本群的执行 Provider。</p>
-    {legacy && <div className="gd-note" role="status">当前群保留旧决策模型设置。改用「设置 → 决策模型」中此 Provider 的模型和推理强度：
-      <Button size="sm" disabled={disabled || !viewed || !ready(viewed)} onClick={() => {
-        if (disabled || !providerIds.some(id => id === viewed) || !ready(viewed)) return;
-        onChange({kind: 'provider', provider: viewed as DecisionProvider});
-      }}>使用统一配置</Button>
-    </div>}
-    {!isKnownJudgeSelection(value) && <p className="gd-note" role="alert">当前客户端无法编辑已保存的决策设置。</p>}
-    <fieldset><legend>判断 Provider</legend><SettingChoices label="判断 Provider" value={followsDefault ? 'default' : viewed} disabled={disabled} choices={choices} onChange={next => {
-      if (disabled) return;
-      if (next === 'default') {if (!defaultProblem) onChange({kind: 'default'}); return;}
-      if (!providerIds.some(id => id === next) || !ready(next)) return;
-      onProviderChange?.(next); onChange({kind: 'provider', provider: next as DecisionProvider});
-    }}/></fieldset>
-    {followsDefault && defaultProblem && <p className="gd-note" role="status">{defaultProblem}</p>}
-    {!followsDefault && !viewed && <p className="gd-note">选择一个已就绪的 Provider。</p>}
-    {viewed && !ready(viewed) && <InlineNotice title={`${viewed === 'typesafe' ? 'Jev' : backendLabel(viewed)} 尚未就绪`} tone="warning">
-      {viewed === 'typesafe' ? '请到决策模型设置检查密钥。' : '请先安装并登录 Provider。'}
-      {viewed !== 'typesafe' && onOpenProviders && <Button size="sm" onClick={onOpenProviders}>设置 Provider</Button>}
-    </InlineNotice>}
-    {onOpenSecrets && <div className="gd-decision-config">
-      <div className="gd-decision-config-copy">
-        {viewed && (profile ? <span className="gd-decision-config-values">
-          {followsDefault && <span>默认 · {providerName}</span>}
-          {configured && <span className="gd-decision-configured" role="status" aria-label="已配置" title="已配置"><Check size={13} aria-hidden="true"/></span>}
-          <span title={viewed === 'typesafe' ? 'Jev 不支持单独设置思考等级' : undefined}>{profile.model}</span>
-          {viewed !== 'typesafe' && <><span aria-hidden="true">·</span><span aria-label="思考等级">{'effort' in profile && profile.effort ? profile.effort === 'none' ? '关闭思考' : profile.effort : viewed === 'claude-agent' ? '关闭思考' : '默认'}</span></>}
-        </span> : <span role="status">{configuration?.kind === 'failed' || configuration?.kind === 'ready' ? '配置读取失败' : '正在读取配置…'}</span>)}
-        {viewed === 'typesafe' && <><span aria-hidden="true">·</span><span className="gd-decision-key-state" data-state={keyState} role="status">
-          {keyState === 'added' ? '密钥已添加' : keyState === 'missing' ? '尚未添加密钥' : '密钥状态未知'}
-        </span></>}
-      </div>
-      <Button type="button" variant="ghost" size="sm" className="gd-decision-config-link" disabled={disabled}
-        aria-label={providerName ? `修改 ${providerName} 配置` : undefined}
-        title={legacy ? '本群仍使用独立配置；选择「使用统一配置」后才跟随设置。' : '修改统一配置，使用同一 Provider 的群共用。'}
-        onClick={() => onOpenSecrets(viewed || undefined)}>
-        {providerName ? '修改' : '管理决策模型'}<ChevronRight size={14} aria-hidden="true"/>
-      </Button>
-    </div>}
+  const selection = groupDecisionPickerValue(value, effective, groupBackend);
+  const editable = isKnownJudgeSelection(value);
+  return <div className="gd-decision-fields">
+    {!editable && <p className="gd-note" role="alert">当前客户端无法编辑已保存的决策设置。</p>}
+    <DecisionPicker value={selection} catalogs={catalogs} jevModels={service?.models} context="group" disabled={disabled || !editable}
+      availableProviders={providers.map(provider => provider.id)} keyState={!services ? 'loading' : !service || service.keyUnreadable ? 'unreadable' : service.keySet ? 'ready' : 'missing'}
+      onOpenProviders={onOpenProviders} onManageKey={onOpenSecrets ? () => onOpenSecrets('typesafe') : undefined}
+      onChange={next => {
+        if (disabled || !editable) return;
+        onProviderChange?.(next.provider);
+        if (next.provider === 'typesafe') onChange({kind: 'decision', provider: next.provider, model: next.model});
+        else {const {provider, ...profile} = next; onChange({kind: 'llm', backend: provider, ...profile});}
+      }}/>
   </div>;
 }
 

@@ -128,7 +128,7 @@ it('rejects missing catalogs and model/Effort combinations with no intersection'
 it('combines legacy smart prompts in one editor without losing either custom rule', () => {
   const html = render('response');
   expect(html.indexOf('决策模型')).toBeLessThan(html.indexOf('判断规则'));
-  expect(html.indexOf('实际回复和执行任务')).toBeLessThan(html.indexOf('判断规则'));
+  expect(html).toContain('aria-label="选择决策模型"');
   expect(html).toContain('响应规则原文'); expect(html).toContain('新话题规则原文');
   expect(html.match(/role="textbox"/g)).toHaveLength(1);
   expect(html).toContain('contentEditable="true"');
@@ -157,16 +157,17 @@ it('shows the actual default in one writing surface with four removable headings
   expect(html).toContain('恢复默认');
 });
 
-it('preserves a legacy inherited model until the group explicitly adopts the host default', () => {
+it('shows the server-resolved group model without migration or follow-global actions', () => {
   const view = fixture();
-  view.judgeInheritsHostDefault = false;
   view.sections.judge = {...section({selection: {kind: 'default'} as const}), effective: {selection: {kind: 'llm', backend: 'codex-appserver', model: 'legacy-group-model', effort: 'high'}}};
-  const legacy = render('response', view);
-  expect(legacy).toContain('当前群保留旧决策模型设置');
-  expect(legacy).toContain('使用统一配置');
-  view.judgeInheritsHostDefault = true;
-  const followsHost = render('response', view);
-  expect(followsHost).not.toContain('当前群保留旧决策模型设置');
-  expect(followsHost).not.toContain('使用统一配置');
-  expect(followsHost).toContain('正在读取默认决策模型');
+  for (const flag of [false, true]) {
+    view.judgeInheritsHostDefault = flag;
+    const html = render('response', view);
+    expect(html).toContain('legacy-group-model');
+    expect(html).toContain('high');
+    expect(html).toContain('aria-label="选择决策模型"');
+    expect(html).not.toContain('使用统一配置');
+    expect(html).not.toContain('跟随全局默认');
+    expect(html).not.toContain('正在读取默认决策模型');
+  }
 });

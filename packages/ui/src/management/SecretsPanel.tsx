@@ -155,7 +155,7 @@ export function FillKeyDialog({flow, service, onClose, onSubmit, onAgain, onRete
     event.preventDefault();
     submit();
   }
-  const title = `${flow.replacing ? '更换' : '添加'} ${service.displayName} 密钥`;
+  const title = `${flow.replacing ? '更换' : '添加'} ${service.provider === 'typesafe' ? 'Jev' : service.displayName} 密钥`;
   const progress = (text: string) => <div className="secrets-dialog-progress" role="status">{text}</div>;
   const tail = flow.last4 ? `（末四位 ${flow.last4}）` : '';
   let content: ReactNode;
@@ -295,7 +295,13 @@ export function SecretsPanel({onOpenLogs, onOpenApplication, onOpenProviders}: {
   }
   return <div className="page-stack secrets-page" ref={page}>
     {header}
-    <DecisionProviderSettings services={view?.services} onOpenProviders={onOpenProviders} keyContent={body} keyUses={view?.services.map(service => <UsesRow key={service.keyId} service={service} view={view}/>)} keyAction={keyRefresh}/>
+    <DecisionProviderSettings services={view?.services} onOpenProviders={onOpenProviders} onManageKey={() => {
+      const service = view?.services.find(item => item.provider === 'typesafe');
+      if (service && (service.status === 'missing' || service.status === 'invalid')) {flows.open(service.keyId, false); return;}
+      const target = page.current?.querySelector<HTMLElement>(service ? `.${keyRowClass(service.keyId)}` : '.decision-key-content');
+      target?.scrollIntoView({block: 'center', behavior: 'smooth'});
+      target?.querySelector<HTMLElement>('button:not([disabled])')?.focus({preventScroll: true});
+    }} keyContent={body} keyUses={view?.services.map(service => <UsesRow key={service.keyId} service={service} view={view}/>)} keyAction={keyRefresh}/>
     <FillKeyDialog flow={fillService ? fill : undefined} service={fillService} onClose={flows.close}
       onSubmit={value => void flows.save(value)} onAgain={flows.again} onRetest={() => void flows.retest()}/>
     <RemoveKeyDialog removal={removeService ? removal : undefined} service={removeService} view={view}

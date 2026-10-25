@@ -9,7 +9,7 @@ import {GroupAttentionStatus} from '../src/management/GroupAttentionStatus';
 import {OperationActivity} from '../src/management/OperationActivity';
 import {ConversationSlider} from '../src/settings/ConversationSlider';
 import {DecisionFields} from '../src/settings/DecisionFields';
-import {SettingChoices} from '../src/settings/SettingChoices';
+import {DecisionPicker} from '../src/settings/DecisionPicker';
 
 type Slot = {states: unknown[]; refs: Array<{current: unknown}>; effects: Array<{deps?: unknown[]; cleanup?: () => void}>; memos: Array<{deps?: unknown[]; value: unknown}>; state: number; ref: number; effect: number; memo: number};
 const harness = vi.hoisted(() => ({slots: {} as Record<string, Slot>, active: '', pending: [] as Array<() => void>, client: {collaboration: vi.fn(), settings: vi.fn(), environment: vi.fn(), snapshot: vi.fn()}}));
@@ -42,7 +42,7 @@ const readyTools: DesktopSnapshot['tools'] = [{tool: 'codex', installation: 'ins
 const snapshot: DesktopSnapshot = {revision: 1, observedAt: 1, stale: false, host: {kind: 'connected', ownership: 'owned', version: 'test'}, agents: [agent], groups: [group], memberships: [member], tools: readyTools, jobs: [], application: {platform: 'macos', version: 'test', loginItem: false, dataPath: '/test'}};
 const section = <T,>(stored: T, revision = 'settings-r1') => ({stored, effective: stored, revision, access: {kind: 'writable' as const}, apply: []});
 const fixture = (): ProjectSettingsView => ({scope: {kind: 'project', botId, projectName: member.name}, identity: {chatId: groupId, backend: 'codex-appserver', cwd: '/project', kind: 'single'}, sections: {permission: section(permissionValue()), response: section({noMention: false}), model: section({selection: {kind: 'default'}}), judge: section({selection: {kind: 'default'}})}, members: {openIds: [], revision: 'members-r1'}});
-const selection = {kind: 'provider' as const, provider: 'codex-appserver' as const};
+const selection = {kind: 'llm' as const, backend: 'codex-appserver', model: 'gpt-6-luna', effort: 'low' as const};
 let view = fixture();
 let project: ProjectRecord;
 let events: string[];
@@ -244,12 +244,12 @@ function renderInstantDecision() {
 }
 async function settleInstantDecision() {renderInstantDecision(); await flush(); renderInstantDecision(); await flush(); return renderInstantDecision();}
 function prepareInstantDecision() {
-  view = {...view, identity: {...view.identity, kind: 'smart'}, sections: {...view.sections, judge: section({selection: {kind: 'provider', provider: 'typesafe'}})},
+  view = {...view, identity: {...view.identity, kind: 'smart'}, sections: {...view.sections, judge: section({selection: {kind: 'decision', provider: 'typesafe', model: 'jev-latest'}})},
     decisionModels: [{provider: 'typesafe', displayName: 'TypeSafe', keyId: 'typesafe-api-key', keySet: true, models: [{id: 'jev-latest', displayName: 'Jev'}]}]};
 }
 function saveCalls() {return harness.client.settings.mock.calls.filter(([request]) => request.type === 'save');}
 
-it('saves an existing smart group’s Provider on selection without Save, and serializes repeated clicks', async () => {
+it('saves an existing smart group’s concrete model and effort on selection without Save, and serializes repeated clicks', async () => {
   prepareInstantDecision(); let ui = await settleInstantDecision();
   let resolve!: (reply: SettingsReply) => void;
   let request!: Extract<SettingsRequest, {type: 'save'}>;
@@ -266,12 +266,12 @@ it('saves an existing smart group’s Provider on selection without Save, and se
   expect(ui.rendered.some(node => node.props.title === '本次修改已保存')).toBe(false);
 });
 
-it.each(['rejected', 'transport'])('restores the confirmed Provider after an automatic %s failure and permits another selection', async kind => {
+it.each(['rejected', 'transport'])('restores the confirmed model after an automatic %s failure and permits another selection', async kind => {
   prepareInstantDecision(); let ui = await settleInstantDecision();
   save = async () => {if (kind === 'transport') throw new Error('连接暂不可用'); return {kind: 'saved', result: {kind: 'rejected', fields: [{field: 'selection', message: '模型暂不可用'}]}};};
   ui.decision.props.onChange(selection); ui = await settleInstantDecision();
-  expect(ui.decision.props.value).toEqual({kind: 'provider', provider: 'typesafe'});
-  expect(nodes(DecisionFields(ui.decision.props as any)).find(node => node.type === SettingChoices)!.props.value).toBe('typesafe');
+  expect(ui.decision.props.value).toEqual({kind: 'decision', provider: 'typesafe', model: 'jev-latest'});
+  expect(nodes(renderAt('decision-fields', () => DecisionFields(ui.decision.props as any))).find(node => node.type === DecisionPicker)!.props.value).toEqual({provider: 'typesafe', model: 'jev-latest'});
   expect(ui.decision.props.disabled).toBe(false);
   expect(ui.rendered.some(node => node.props.title === '切换未完成')).toBe(true);
   expect(ui.rendered.some(node => node.props.children === '保存')).toBe(false);
@@ -286,4 +286,26 @@ it('does not automatically save a readonly decision choice', async () => {
   expect(ui.decision.props.disabled).toBe(true);
   ui.decision.props.onChange(selection);
   expect(saveCalls()).toHaveLength(0);
+});
+it('retains loaded model catalogs across automatic-save editor remounts without duplicate discovery', async () => {
+  prepareInstantDecision();
+  harness.client.collaboration.mockImplementation(async request => {
+    if (request.action !== 'providerModels') throw new Error(`unexpected collaboration ${request.action}`);
+    const isCodex = request.backend === 'codex-appserver';
+    return {kind: 'providerModels', backend: request.backend, state: 'ready', models: [{id: isCodex ? 'gpt-6-luna' : 'haiku', displayName: isCodex ? 'Luna' : 'Haiku', description: '', hidden: false, isDefault: true, defaultEffort: 'low', supportedEfforts: ['low', 'high']}]};
+  });
+  let ui = await settleInstantDecision();
+  const catalogs = ui.decision.props.catalogs;
+  expect(catalogs['codex-appserver'].models[0].id).toBe('gpt-6-luna');
+  expect(catalogs['claude-agent'].models[0].id).toBe('haiku');
+  const before = nodes(renderAt('decision-mount-before-save', () => DecisionFields(ui.decision.props as any))).find(node => node.type === DecisionPicker)!;
+  expect(before.props.catalogs).toBe(catalogs);
+  ui.decision.props.onChange(selection);
+  ui = await settleInstantDecision();
+  // A successful save changes the Editor revision and remounts its DecisionFields child.
+  const after = nodes(renderAt('decision-mount-after-save', () => DecisionFields(ui.decision.props as any))).find(node => node.type === DecisionPicker)!;
+  expect(after.props.catalogs).toBe(catalogs);
+  expect(after.props.value).toMatchObject({provider: 'codex-appserver', model: 'gpt-6-luna', effort: 'low'});
+  await flush();
+  expect(harness.client.collaboration.mock.calls.filter(([request]) => request.action === 'providerModels')).toHaveLength(2);
 });

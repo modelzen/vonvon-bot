@@ -224,7 +224,7 @@ describe('the fill dialog', () => {
 
   it('asks with an uncontrolled, hidden field the password managers are told to skip, wired to its label and words', () => {
     const markup = dialog(flow());
-    expect(text(markup)).toContain('添加 TypeSafe 密钥');
+    expect(text(markup)).toContain('添加 Jev 密钥');
     expect(text(markup)).toContain('密钥仅保存在本机，保存后自动验证。');
     const input = markup.match(/<input[^>]*>/)![0];
     expect(input).toContain('type="password"');
@@ -241,14 +241,21 @@ describe('the fill dialog', () => {
     expect(markup).not.toContain('<form');
     expect(markup).toMatch(/<button[^>]*disabled=""[^>]*><span>保存并验证<\/span>/);
     expect(markup).toContain('aria-pressed="false"');
-    expect(text(dialog(flow({replacing: true, was: '7f3a'}), service()))).toContain('更换 TypeSafe 密钥将替换末四位为 7f3a 的密钥。');
+    expect(text(dialog(flow({replacing: true, was: '7f3a'}), service()))).toContain('更换 Jev 密钥将替换末四位为 7f3a 的密钥。');
+  });
+
+  it('uses Jev only for the TypeSafe editor title and keeps other service names and source errors', () => {
+    expect(text(dialog(flow(), service({provider: 'another-service', displayName: 'Another Service'})))).toContain('添加 Another Service 密钥');
+    const result = text(dialog(flow({step: 'result', last4: 'abcd', result: tested('auth', 'TypeSafe 不认这个 key')})));
+    expect(result).toContain('添加 Jev 密钥');
+    expect(result).toContain('TypeSafe 不认这个 key');
   });
 
   it('shows each request while it runs, closable, with the header and the pressed button kept in place (多角度审查 B2)', () => {
     expect(text(dialog(flow({step: 'saving'})))).toContain('正在保存…关闭');
     // the list has the new last four by now: the header names the one it opened with
     const testing = dialog(flow({step: 'testing', replacing: true, was: '7f3a', last4: 'abcd'}), service({last4: 'abcd'}));
-    expect(text(testing)).toContain('更换 TypeSafe 密钥将替换末四位为 7f3a 的密钥。密钥仅保存在本机。已保存（末四位 abcd），正在验证…');
+    expect(text(testing)).toContain('更换 Jev 密钥将替换末四位为 7f3a 的密钥。密钥仅保存在本机。已保存（末四位 abcd），正在验证…');
     expect(testing).toContain('role="status"');
     const pressed = (markup: string) => [...markup.matchAll(/<button[^>]*>(?:<svg.*?<\/svg>)?<span>([^<]+)<\/span><\/button>/g)].map(m => [m[1], /disabled=""/.test(m[0]), m[0].includes('ui-button__spinner')]);
     expect(pressed(testing)).toEqual([['关闭', false, false], ['保存并验证', true, true]]);
@@ -491,7 +498,7 @@ describe('the 状态与诊断 row (product.md 3.1 第 8 条)', () => {
 });
 
 it('the page reads on entering it, and the search lists it (s23g2 做法)', () => {
-  expect(text(html(<SecretsPanel onOpenLogs={noop} onOpenApplication={noop}/>))).toContain('TypeSafe · Jev正在读取…');
+  expect(text(html(<SecretsPanel onOpenLogs={noop} onOpenApplication={noop}/>))).toContain('Jev 密钥正在读取…');
   const entries = searchEntries({
     revision: 1, observedAt: 1, stale: false, host: {kind: 'connected', ownership: 'owned', version: '0.7.0'},
     agents: [], groups: [], memberships: [], tools: [], jobs: [], application: {platform: 'macos', version: '0.7.0', loginItem: false, dataPath: '/tmp/x'},

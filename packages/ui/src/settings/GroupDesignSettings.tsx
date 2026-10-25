@@ -16,7 +16,7 @@ import {DecisionFields, providerDecisionProblem} from './DecisionFields';
 export {DecisionFields} from './DecisionFields';
 import {AnnouncedReadonlyMessages, hasReadonlyMessage, type ReadonlyMessage} from './readonly-messages';
 import {CompactModelSelection} from './CompactModelSelection';
-import {useDecisionConfiguration} from './useDecisionConfiguration';
+import {useDecisionCatalogs} from './useDecisionCatalogs';
 import './group-design-settings.css';
 
 /** 模型与权限 shares one settings view; permission remains a compatible internal section key. */
@@ -87,10 +87,10 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
   const outerReadonly = useContext(AnnouncedReadonlyMessages);
   const sections = view.sections;
   const [rulesExpanded, setRulesExpanded] = useState(false);
-  const decisionConfiguration = useDecisionConfiguration(tab === 'response' && view.identity.kind === 'smart');
-  // Legacy absent settings followed Bot/backend defaults. Show that effective choice until the
-  // owner explicitly chooses the new host default, so resetting is a real saved transition.
-  const judgeSection = sections.judge && view.judgeInheritsHostDefault === false && sections.judge.stored.selection.kind === 'default'
+  const {catalogs: decisionCatalogs} = useDecisionCatalogs(tab === 'response' && view.identity.kind === 'smart');
+  // Render the server-resolved, independent snapshot for older marker-based groups.
+  const storedJudge = sections.judge?.stored.selection;
+  const judgeSection = sections.judge && storedJudge && isKnownJudgeSelection(storedJudge) && (storedJudge.kind === 'default' || storedJudge.kind === 'provider')
     ? {...sections.judge, stored: sections.judge.effective} : sections.judge;
   const modelCatalog = useRef<ModelCatalog | undefined>(undefined);
   const rememberCatalog = useCallback((catalog: ModelCatalog | undefined) => {modelCatalog.current = catalog;}, []);
@@ -139,9 +139,9 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
         {responseHeader}
         {view.identity.kind === 'smart' && <>
           {judgeSection ? <Editor title="决策模型" section={judgeSection} autoSave save={(patch, revision) => save('judge', patch, revision)}
-            validate={value => providerDecisionProblem(value.selection, providers, view.decisionModels, decisionConfiguration)}
+            validate={value => providerDecisionProblem(value.selection, providers, view.decisionModels)}
             render={(draft, set, disabled, _commit, resetKey) => <DecisionFields key={resetKey} botId={view.scope.botId} groupBackend={view.identity.backend} value={draft.selection} effective={sections.judge!.effective.selection}
-              onChange={selection => set({selection})} disabled={disabled} providers={providers} services={view.decisionModels} configuration={decisionConfiguration} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets}/>}/> : <MissingSection/>}
+              onChange={selection => set({selection})} disabled={disabled} providers={providers} services={view.decisionModels} catalogs={decisionCatalogs} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets}/>}/> : <MissingSection/>}
           {sections.smartRules ? <Editor title="判断规则" section={sections.smartRules} save={(patch, revision) => save('smartRules', patch, revision)}
             validate={draft => smartRulesText(draft).length > SMART_RULES_MAX_LENGTH ? `规则超过 ${SMART_RULES_MAX_LENGTH} 字，请缩短后保存。` : undefined}
             render={(draft, set, disabled, _commit, resetKey) => <SmartRulesEditor key={resetKey} expanded={rulesExpanded} onExpandedChange={setRulesExpanded} value={smartRulesText(draft)} disabled={disabled} onChange={respond => set({respond, newTopic: ''})}/>}/> : <MissingSection/>}
