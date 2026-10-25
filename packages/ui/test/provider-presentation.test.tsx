@@ -205,6 +205,24 @@ it('keeps Claude SDK version checks labelled as the verified version', async () 
   expect(installationInfo(nodes(detail.find(node => node.props.className === 'provider-meta')?.props.children), '最新版本')).toBeUndefined();
 });
 
+it('does not revive an old version check after switching from installation A to B and back to A', async () => {
+  const props = {provider: 'codex' as const, snapshot: snapshot([tool('codex', 'installed', 'signedIn')]), ready: true, busy: false, run, management: true};
+  function render() {
+    resetRender();
+    const detail = nodes(ProviderPreparation(props));
+    for (const effect of harness.pending.splice(0)) effect();
+    return detail;
+  }
+  const original = {tool: 'codex' as const, installation: 'external' as const, version: '1.0', latestVersion: '1.2', executable: '/a/codex', canUninstall: false};
+  harness.codex = original;
+  await button(render(), '检查版本').props.onClick();
+  expect(installationInfo(render(), '最新版本')).toBe('1.1');
+  harness.codex = {...original, executable: '/b/codex'};
+  render();
+  harness.codex = original;
+  expect(installationInfo(render(), '最新版本')).toBe('1.2');
+});
+
 it('switches a visible Codex detail to Claude when search reveals Claude in the same Provider page', () => {
   const data = snapshot([tool('codex', 'installed', 'signedIn'), tool('claude', 'installed', 'signedIn')]);
   const props = {snapshot: data, ready: true, busy: false, run};
