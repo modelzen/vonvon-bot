@@ -156,3 +156,17 @@ it('shows the actual default in one writing surface with four removable headings
   expect(html).toContain('话题内只判断是否回应');
   expect(html).toContain('恢复默认');
 });
+
+it('preserves a legacy inherited model until the group explicitly adopts the host default', () => {
+  const view = fixture();
+  view.judgeInheritsHostDefault = false;
+  view.sections.judge = {...section({selection: {kind: 'default'} as const}), effective: {selection: {kind: 'llm', backend: 'codex-appserver', model: 'legacy-group-model', effort: 'high'}}};
+  const legacy = render('response', view);
+  expect(legacy).toContain('当前群保留旧决策模型设置');
+  expect(legacy).toContain('使用统一配置');
+  view.judgeInheritsHostDefault = true;
+  const followsHost = render('response', view);
+  expect(followsHost).not.toContain('当前群保留旧决策模型设置');
+  expect(followsHost).not.toContain('使用统一配置');
+  expect(followsHost).toContain('正在读取默认决策模型');
+});

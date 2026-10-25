@@ -191,7 +191,7 @@ async function mainFolderOwner(workspace: Pick<Project, 'cwd'>): Promise<Library
 /** A main folder that is a project's already is refused before a group is made: sharing it means joining that project. */
 async function assertMainFolderFree(workspace: Pick<Project, 'cwd'>): Promise<void> {
   const owner = await mainFolderOwner(workspace);
-  if (owner) throw new LibraryError('primary-taken', `这个文件夹已经是项目「${owner.name}」的主目录。要共用请加入项目「${owner.name}」`, { id: owner.id, name: owner.name });
+  if (owner) throw new LibraryError('primary-taken', `这个文件夹已经是项目「${owner.name}」的主目录。请选择其他目录`, { id: owner.id, name: owner.name });
 }
 
 /** Makes the project a new binding of a folder belongs to, before its row (§2.1). `workspace` is admitted. */

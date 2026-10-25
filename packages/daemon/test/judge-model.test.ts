@@ -302,3 +302,23 @@ it('provider defaults follow the live catalog and an override without effort use
   expect(resolveJudgeModel('codex-appserver', { group: choice }, available, undefined, root))
     .toEqual({ model: 'gpt-6.1-sol', effort: 'minimal', modelSource: 'group' });
 });
+
+it('a host-default group hot follows provider/model/effort and overrides legacy Bot selection',async()=>{
+  const root=mkdtempSync(join(tmpdir(),'judge-host-default-')); dirs.push(root);
+  const calls:Array<{backend:string;model:string;effort?:ReasoningEffort}>=[];
+  const backendFor=(id:string)=>({id,displayName:id,listModels:async()=>[],peekModels:()=>undefined,judge:async(call:JudgeCall)=>{calls.push({backend:id,model:call.model,effort:call.effort});return {text:'{"decision":"skip","reason":""}'};}} as unknown as AgentBackend);
+  const judge=createJudge({backendFor,getSecret:async()=>undefined,judgeModelsRoot:root,readPrompt:async()=>({source:'default',text:'S',path:''}),cwd:async()=>'/j'});
+  const req={variant:'main' as const,appId:'cli_a',botName:'P',group:{chatId:'oc_g',name:'g',backend:'codex-appserver',judge:{kind:'default' as const}},botJudge:{kind:'llm',backend:'codex-appserver',model:'old-bot-model'},context:[],message:{at:0,from:'user' as const,name:'u',text:'t'}};
+  await writeJudgeModels({defaultProvider:'claude-agent',byProvider:{'claude-agent':{model:'first',effort:'low',custom:true}}},root);
+  expect(await judge.judge(req)).toMatchObject({backend:'claude-agent',model:'first',effort:'low',modelSource:'default'});
+  await writeJudgeModels({defaultProvider:'codex-appserver',byProvider:{'codex-appserver':{model:'second',effort:'high',custom:true}}},root);
+  expect(await judge.judge(req)).toMatchObject({backend:'codex-appserver',model:'second',effort:'high',modelSource:'default'});
+  await writeJudgeModels({defaultProvider:'typesafe',byProvider:{typesafe:{model:'jev-latest'}}},root);
+  expect(await judge.judge(req)).toMatchObject({model:'jev-latest',provider:'typesafe',decision:'skip',error:{kind:'key'}});
+  expect(calls).toHaveLength(2);
+  expect(await judge.judge({...req,group:{...req.group,judge:{kind:'default',provider:'codex-appserver'} as never}})).toMatchObject({decision:'skip',error:{kind:'unavailable'}});
+  writeFileSync(judgeModelsFile(root),'{"version":1,"defaultProvider":"missing","byProvider":{}}');
+  expect(await judge.judge(req)).toMatchObject({decision:'skip',error:{kind:'failed'}});
+  expect(calls).toHaveLength(2);
+  await judge.shutdown();
+});
