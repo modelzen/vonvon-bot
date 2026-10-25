@@ -69,7 +69,6 @@ import {
   type UninstallResult,
   type InstallProgress,
 } from '../agent';
-import { isBundledBackend } from '../agent/backend-loader';
 import type { AccountUsageBundle, BackendDepState, BackendLogin, BackendProbe, PermissionMode } from '../agent/types';
 import { log, readRecentLogs } from '../core/logger';
 import {
@@ -423,8 +422,6 @@ export interface AdminBackendCatalogEntry {
   blurb?: string;
   /** 依赖类型（external-cli / npm-ondemand / npm-external）。 */
   depKind: string;
-  /** 桌面安装包随 daemon 提供，更新随应用发布。旧协议缺省为 false。 */
-  bundled?: boolean;
   /** 安装态三态：installed / not-installed（可一键装）/ external-missing（手动装）。 */
   depState: BackendDepState;
   /** 可一键按需下载（npm-ondemand 且当前未装 → true）。 */
@@ -433,9 +430,9 @@ export interface AdminBackendCatalogEntry {
   approxSizeMB?: number;
   /** 探测到的版本（external-cli 的 codex --version 等；未装/无版本 → null）。 */
   version: string | null;
-  /** 实际优先加载的包版本（开发依赖、桌面内置或用户安装）。 */
+  /** 实际优先加载的包版本（开发依赖或用户托管安装）。 */
   installedVersion: string | null;
-  /** 能否一键卸载（内置组件恒为 false）。 */
+  /** 能否一键卸载（仅用户目录中的托管安装）。 */
   canUninstall: boolean;
   /** !installed 时的人读提示（external 给手动装法 / npm-ondemand 给「点下载」）。 */
   hint?: string;
@@ -959,9 +956,6 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       if (!entry) {
         return { ok: false, code: null, aborted: false, tail: `未知后端「${id}」` };
       }
-      if (isBundledBackend(entry.id)) {
-        return { ok: false, code: null, aborted: false, tail: `「${entry.displayName}」已随桌面应用内置，请通过更新 Vonvon Bot 应用更新。` };
-      }
       // 仅 installable（npm-ondemand）可一键装；external-cli（codex）给手动装法。
       if (!isInstallable(entry)) {
         return {
@@ -984,9 +978,6 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     async uninstallBackend(id): Promise<{ ok: boolean; message: string }> {
       const entry = catalogById(id);
       if (!entry) return { ok: false, message: `未知后端「${id}」` };
-      if (isBundledBackend(entry.id)) {
-        return { ok: false, message: `「${entry.displayName}」已随桌面应用内置，不能在这里卸载；请通过更新 Vonvon Bot 应用更新。` };
-      }
       if (entry.dep.kind === 'external-cli') {
         // codex 等外部 CLI 是你系统自管的（全局 npm / Codex.app / CODEX_BIN），桥只用不卸，
         // 删了会破坏运行中的会话。引导用户自行处置，绝不替删。
@@ -1017,7 +1008,6 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       const entry = catalogById(id);
       if (!entry?.dep.pkg) return { installed: null, latest: null, hasUpdate: false };
       const installed = installedBackendVersion(entry.dep.pkg);
-      if (isBundledBackend(entry.id)) return { installed, latest: installed, hasUpdate: false };
       // 有 pin 时目标就是 pin：装的版本和它不同（更新或更旧）都提示更新，更新会装回 pin。
       const pinned = entry.dep.version;
       if (pinned) return { installed, latest: pinned, hasUpdate: !!installed && installed !== pinned };
@@ -1194,7 +1184,6 @@ async function catalogEntryStatus(
     .doctor({ force: true })
     .catch(() => undefined);
   const ok = probe?.ok === true;
-  const bundled = isBundledBackend(entry.id);
   // depState：installed（探测通过）/ not-installed（npm-ondemand 可一键装）/
   // external-missing（external-cli / npm-external 缺失，需手动装）。优先用 doctor
   // 自报的 depState（npm-ondemand 未装时的 not-installed），否则按 ok + installable 推。
@@ -1208,16 +1197,13 @@ async function catalogEntryStatus(
     access: entry.access,
     blurb: entry.blurb,
     depKind: entry.dep.kind,
-    bundled: bundled || undefined,
     depState,
-    installable: !bundled && depState === 'not-installed' && isInstallable(entry),
+    installable: depState === 'not-installed' && isInstallable(entry),
     approxSizeMB: entry.dep.approxSizeMB,
     version: probe?.version ?? null,
     installedVersion: entry.dep.pkg ? installedBackendVersion(entry.dep.pkg) : null,
-    canUninstall: !bundled && isInstallable(entry) && isBackendInstalledInUserDir(entry),
-    hint: ok ? undefined : (bundled
-      ? `「${entry.displayName}」随桌面应用内置；如组件不可用，请更新 Vonvon Bot 应用。`
-      : (probe?.hint ?? entry.dep.detectHint)),
+    canUninstall: isInstallable(entry) && isBackendInstalledInUserDir(entry),
+    hint: ok ? undefined : (probe?.hint ?? entry.dep.detectHint),
     isDefault: entry.id === defaultBackend,
     supportedModes: entry.supportedModes,
   };
