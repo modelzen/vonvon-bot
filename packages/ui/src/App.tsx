@@ -70,7 +70,9 @@ import {WelcomeSetup} from './setup/WelcomeSetup';
 import {BridgeImportPanel} from './setup/BridgeImportPanel';
 import {TodayHome, SettingsHome} from './TodayHome';
 import {LoginServiceRow, deviceTitle, toggleService} from './setup/service-toggle';
-import {GrantStep, BotConnectionSettings, jobToCancel, withRegisteredAgent, type RegisterModal} from './setup/GrantStep';
+import {BotConnectionSettings, jobToCancel, withRegisteredAgent, type RegisterModal} from './setup/GrantStep';
+import {RegistrationDialog} from './setup/RegistrationDialog';
+import {createRegistrationRetry} from './setup/registration-retry';
 import {MachinePanel} from './management/MachinePanel';
 import {DiagnosticsPanel} from './management/DiagnosticsPanel';
 import {SecretsPanel} from './management/SecretsPanel';
@@ -138,6 +140,7 @@ function DesktopApp() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchTarget, setSearchTarget] = useState<Destination>();
   const [snapshot, setSnapshot] = useState<DesktopSnapshot>();
+  const latestSnapshot = useRef<DesktopSnapshot | undefined>(undefined);
   const [route, setRoute] = useState<CollaborationRoute>(initialRoute);
   const [setupProvider, setSetupProvider] = useState<SetupProvider>();
   const [page, setPage] = useState<Page>("home");
@@ -172,6 +175,9 @@ function DesktopApp() {
   const busy = pending > 0;
   const [pendingActivation, setPendingActivation] = useState<{agentId: AgentId; enabled: boolean} | null>(null);
   const modalGeneration = useRef(0);
+  const registrationPending = useRef(false);
+  const retryRegistrationFlow = useRef(createRegistrationRetry());
+  const [registrationBusy, setRegistrationBusy] = useState(false);
   const [notice, setNotice] = useState<{ message: string; error: boolean }>();
   const pendingGroups = usePendingGroups(snapshot);
   const [attachedNotice, setAttachedNotice] = useState(true);
@@ -253,6 +259,7 @@ function DesktopApp() {
   useEffect(
     () =>
       client.watchSnapshots((next) => {
+        latestSnapshot.current = next;
         setSnapshot(next);
         setModal(current => current?.kind === "register" ? withRegisteredAgent(current, next.jobs) : current);
         document.documentElement.dataset.desktopPlatform =
@@ -402,10 +409,37 @@ function DesktopApp() {
   }
   async function register(agentId?: AgentId, provider?: SetupProvider) {
     if (!agentId && !provider && !snapshot?.agents.length) {openPage('setup'); return;}
+    if (registrationPending.current) return;
+    registrationPending.current = true;
+    const generation = ++modalGeneration.current;
+    const current = () => generation === modalGeneration.current;
+    const initialAgentIds = latestSnapshot.current?.agents.map(agent => agent.id) ?? [];
     if (provider) {setSetupProvider(provider); setPage('setup');}
-    const result = await run(agentId ? {type: "refreshAgentCredentials", agentId} : { type: "registerAgent" });
-    if (result.kind === "started")
-      setModal({ kind: "register", jobId: result.jobId, refresh: Boolean(agentId) });
+    try {
+      const result = await run(agentId ? {type: "refreshAgentCredentials", agentId} : {type: "registerAgent"}, current);
+      if (result.kind === 'started') {
+        if (current()) setModal(withRegisteredAgent({kind: 'register', jobId: result.jobId, refresh: Boolean(agentId), refreshAgentId: agentId, initialAgentIds}, latestSnapshot.current?.jobs ?? []));
+        else await run({type: 'cancelJob', jobId: result.jobId}, () => false);
+      }
+    } finally { registrationPending.current = false; }
+  }
+  async function retryRegistration() {
+    if (modal?.kind !== 'register' || !latestSnapshot.current || registrationPending.current) return;
+    registrationPending.current = true;
+    setRegistrationBusy(true);
+    setNotice(undefined);
+    const generation = modalGeneration.current;
+    const current = () => generation === modalGeneration.current;
+    try {
+      const result = await retryRegistrationFlow.current({modal, current,
+        latest: () => latestSnapshot.current!, read: () => client.snapshot(),
+        run: command => run(command, current)});
+      if (!current()) return;
+      if (result.kind === 'ready') {
+        setNotice(undefined);
+        setModal(result.modal);
+      } else if (result.kind === 'blocked') setNotice({message: result.message, error: true});
+    } finally { registrationPending.current = false; setRegistrationBusy(false); }
   }
   function openJoin(agentId: AgentId, group?: PendingGroup, provider?: SetupProvider) {
     navigate(() => setModal({kind: 'join', agentId, group, provider}));
@@ -413,7 +447,7 @@ function DesktopApp() {
   async function closeModal() {
     const generation = ++modalGeneration.current;
     const cancel = modal?.kind === "register" ? jobToCancel(modal) : undefined;
-    if (cancel) await run({ type: "cancelJob", jobId: cancel });
+    if (cancel) await run({ type: "cancelJob", jobId: cancel }, () => generation === modalGeneration.current);
     if (generation === modalGeneration.current) setModal(null);
   }
   if (!snapshot)
@@ -865,8 +899,11 @@ function DesktopApp() {
         const owner = snapshot.agents.find(item => item.id === modal.agentId);
         return owner ? <JoinGroupDialog key={`${owner.id}:${modal.group?.chatId ?? 'new'}:${modal.project ?? ''}`} snapshot={snapshot} agent={owner} tools={snapshot.tools} initialProvider={modal.provider} open={!modal.suspended} onOpenProviders={() => configureJoinProvider()} onOpenDecisionModel={provider => configureJoinProvider('secrets', provider)} initialGroup={modal.group} pending={pendingGroups.find(item => item.agentId === owner.id)} onClose={() => setModal(null)} onChanged={joined} /> : null;
       })()}
+      {modal?.kind === 'register' && <RegistrationDialog modal={modal} job={registration} busy={busy || registrationBusy} feedback={feedback}
+        onClose={() => void closeModal()} onRetry={() => void retryRegistration()}
+        onChecklist={() => {++modalGeneration.current; setModal(null); openPage('setup');}}/>}
       <Dialog
-        open={modal !== null && modal.kind !== "deleteAgent" && modal.kind !== "join"}
+        open={modal !== null && modal.kind !== "deleteAgent" && modal.kind !== "join" && modal.kind !== 'register'}
         onClose={() => void closeModal()}
         title={
           modal?.kind === "register"
@@ -880,12 +917,6 @@ function DesktopApp() {
       >
         <div className="page-stack">
           {feedback}
-          {modal?.kind === "register" && modal.agentId && (
-            <GrantStep key={modal.agentId} agentId={modal.agentId} onOpenChecklist={() => { setModal(null); openPage("setup"); }} onDone={() => {setModal(null); openPage("setup");}} />
-          )}
-          {modal?.kind === "register" && !modal.agentId && registration && (
-            <><p>{modal.refresh ? "重新扫码刷新这个 Bot 的凭据，保留群绑定、会话和设置。请用这个 Bot 的管理员身份扫码。" : "用飞书扫码，随后完成权限配置。"}</p><JobPanel job={registration} run={run} busy={busy} /></>
-          )}
           {modal?.kind === "collaboration" && (
             <>
               <p>
