@@ -683,12 +683,12 @@ it('captures real bot-added events for desktop while retaining DM binding and cl
   } finally { await app.shutdown(); }
 });
 
-it('requires an explicit group decision model before switching to smart mode', async () => {
+it('validates the host default before switching an unconfigured group to smart mode', async () => {
   backend(); const app = orchestrator();
   try {
     await mutateProject('demo', project => { delete project.judge; });
     const revision = projectRevision((await getProjectByName('demo'))!);
-    await expect(app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart' })).rejects.toThrow('决策模型');
+    await expect(app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart' })).rejects.toThrow('尚未登录');
     expect(await getProjectByName('demo')).not.toHaveProperty('smart');
     expect(fixture.send).not.toHaveBeenCalled();
   } finally { await app.shutdown(); }
@@ -702,4 +702,15 @@ it('rechecks a provider-only group before enabling smart mode', async () => {
     await expect(app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart' })).rejects.toThrow('尚未登录');
     expect((await getProjectByName('demo'))?.smart).not.toBe(true);
   } finally { await app.shutdown(); }
+});
+
+it('switching a group to smart stores the validated host-default marker',async()=>{
+  backend(); (fixture.backend as {loginStatus?:()=>Promise<{state:'signedIn';message:string}>}).loginStatus=async()=>({state:'signedIn',message:''});
+  const app=orchestrator();
+  try {
+    await mutateProject('demo',project=>{delete project.judge;});
+    const revision=projectRevision((await getProjectByName('demo'))!);
+    expect(await app.collaboration({action:'editProject',...target,expectedRevision:revision,kind:'smart'})).toMatchObject({ok:true,project:{kind:'smart'}});
+    expect((await getProjectByName('demo'))?.judge).toEqual({kind:'default'});
+  } finally {await app.shutdown();}
 });

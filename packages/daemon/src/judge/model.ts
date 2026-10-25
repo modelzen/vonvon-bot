@@ -7,7 +7,7 @@ import { parseModelId } from '../agent/model-id';
 import { getSessionTitleEfforts } from '../config/schema';
 import { REASONING_EFFORTS, type ModelInfo, type ReasoningEffort } from '../agent/types';
 import type { JudgeResult, JudgeSelectionStored } from './types';
-import { JUDGE_PROVIDERS, readJudgeModelsSync, type JudgeProvider } from './global-models';
+import { defaultJudgeProvider, JUDGE_PROVIDERS, readJudgeModelsSync, type JudgeProvider, type JudgeModels } from './global-models';
 
 // Which model judges (design 2.2, 2.3): the group's setting, else the bot's, each only for the
 // backend it was stored for, else the backend's default small model.
@@ -124,6 +124,7 @@ export function parseStoredJudge(value: unknown, backends: readonly string[]): {
   if (value === undefined || value === null) return {};
   if (typeof value !== 'object' || Array.isArray(value)) return { why: '不是对象' };
   const v = value as Record<string, unknown>;
+  if (v.kind === 'default') return Object.keys(v).length === 1 ? { value: { kind: 'default' } } : { why: '默认决策设置有多余字段' };
   if (v.kind === 'provider') {
     if (typeof v.provider !== 'string' || !JUDGE_PROVIDERS.includes(v.provider as JudgeProvider)) return { why: '不认识决策 Provider' };
     return { value: { kind: 'provider', provider: v.provider as JudgeProvider } };
@@ -162,16 +163,20 @@ export function resolveJudgeModel(
   models: ModelInfo[] | undefined,
   readClaude?: ClaudeUserSettings,
   globalRoot?: string,
+  globalModels?: JudgeModels,
 ): Pick<JudgeResult, 'model' | 'effort' | 'provider' | 'modelSource'> {
   for (const source of ['group', 'bot'] as const) {
     const chosen = layers[source];
-    if (chosen?.kind === 'provider') {
-      const selected = readJudgeModelsSync(globalRoot).byProvider[chosen.provider];
-      if (chosen.provider === 'typesafe') return { model: selected?.model ?? 'jev-latest', provider: 'typesafe', modelSource: source };
-      if (!selected) return { ...defaultJudgeModel(chosen.provider, models, readClaude), modelSource: source };
+    if (chosen?.kind === 'provider' || chosen?.kind === 'default') {
+      const stored = globalModels ?? readJudgeModelsSync(globalRoot);
+      const provider = chosen.kind === 'default' ? defaultJudgeProvider(stored) : chosen.provider;
+      const selected = stored.byProvider[provider];
+      const modelSource = chosen.kind === 'default' ? 'default' : source;
+      if (provider === 'typesafe') return { model: selected?.model ?? 'jev-latest', provider: 'typesafe', modelSource };
+      if (!selected) return { ...defaultJudgeModel(provider, models, readClaude), modelSource };
       const effort = selected.effort ? fitJudgeEffort(selected.model, selected.effort, models, selected.custom)
-        : chosen.provider === CLAUDE_BACKEND_ID ? undefined : judgeEffort(selected.model, models, selected.custom);
-      return { model: selected.model, ...(effort ? { effort } : {}), modelSource: source };
+        : provider === CLAUDE_BACKEND_ID ? undefined : judgeEffort(selected.model, models, selected.custom);
+      return { model: selected.model, ...(effort ? { effort } : {}), modelSource };
     }
     if (chosen?.kind === 'decision') return { model: chosen.model, provider: chosen.provider, modelSource: source };
     if (!chosen || (source === 'bot' && chosen.backend !== backendId)) continue;
@@ -183,6 +188,10 @@ export function resolveJudgeModel(
 }
 
 /** The group may judge with another provider than the one running its tasks. */
-export function judgeBackendId(taskBackend: string, group: JudgeSelectionStored | undefined): string {
+export function judgeBackendId(taskBackend: string, group: JudgeSelectionStored | undefined, globalRoot?: string, globalModels?: JudgeModels): string {
+  if (group?.kind === 'default') {
+    const provider = defaultJudgeProvider(globalModels ?? readJudgeModelsSync(globalRoot));
+    return provider === 'typesafe' ? taskBackend : provider;
+  }
   return group?.kind === 'llm' ? group.backend : group?.kind === 'provider' && group.provider !== 'typesafe' ? group.provider : taskBackend;
 }

@@ -13,6 +13,7 @@ import { paths } from '../config/paths';
 import { log } from '../core/logger';
 import { createCooldown } from './cooldown';
 import { decisionBody, decisionProvider, readDecision, type DecisionProvider } from './decision';
+import { readJudgeModelsSync } from './global-models';
 import { parseStoredJudge, resolveJudgeModel, judgeBackendId } from './model';
 import { DEFAULT_SMART_PROMPT, SMART_FACTS_GUIDANCE, judgeAnchors, judgeSchema, judgeSystem, parseVerdict, renderJudgeInput } from './prompt';
 import { readSmartPrompt, SmartPromptError, composeSmartRules } from './smart-file';
@@ -208,7 +209,7 @@ export function createJudge(deps: JudgeDeps): Judge {
   /** A stored setting, or nothing (logged once per layer and value) when it cannot be used. */
   function storedJudge(value: unknown, layer: string, active = true) {
     const parsed = parseStoredJudge(value, catalogBackendIds());
-    if (active && (value as { kind?: unknown } | null)?.kind === 'provider' && parsed.why)
+    if (active && ['provider', 'default'].includes(String((value as { kind?: unknown } | null)?.kind)) && parsed.why)
       throw new JudgeFail('unavailable', `决策 Provider 设置无效：${parsed.why}`);
     if (parsed.why) {
       const key = `${layer}\n${JSON.stringify(value)}`;
@@ -300,12 +301,14 @@ export function createJudge(deps: JudgeDeps): Judge {
     try {
       const groupChoice = storedJudge(req.group.judge, req.group.chatId);
       const botChoice = storedJudge(req.botJudge, 'bot', !groupChoice);
-      const activeChoice = groupChoice ?? (botChoice?.kind === 'provider' ? botChoice : undefined);
-      const backend = deps.backendFor(judgeBackendId(base.backend, activeChoice));
+      const activeChoice = groupChoice ?? (botChoice?.kind === 'provider' || botChoice?.kind === 'default' ? botChoice : undefined);
+      // A default-provider switch cannot split one judgement across two host snapshots.
+      const globalModels = activeChoice?.kind === 'default' ? readJudgeModelsSync(deps.judgeModelsRoot) : undefined;
+      const backend = deps.backendFor(judgeBackendId(base.backend, activeChoice, deps.judgeModelsRoot, globalModels));
       const models = backend.peekModels?.();
       base = {
         ...base, backend: backend.id,
-        ...resolveJudgeModel(backend.id, { group: groupChoice, bot: botChoice }, models, undefined, deps.judgeModelsRoot),
+        ...resolveJudgeModel(backend.id, { group: groupChoice, bot: botChoice }, models, undefined, deps.judgeModelsRoot, globalModels),
       };
       /** Steps 4 to 6, for a backend or a decision model's provider (`id`): the cooldown, a slot, the cooldown
        * again (a judgement that ran while this one queued may have just started one), the call. The call keeps

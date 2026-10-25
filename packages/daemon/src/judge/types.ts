@@ -14,12 +14,14 @@ export type JudgeDecision = 'skip' | 'main' | 'topic' | 'reply';
 
 /**
  * The judge model a bot (`preferences.judge`) or a group (`Project.judge`) stores (design 2.1).
+ * A group's `default` marker follows host defaults and bypasses legacy Bot inheritance.
  * `llm`, a language model: `backend` says whose model id this is, and the layer applies only to
  * groups on that backend. `decision`, a decision model (product.md 3.4): no backend, the layer
  * applies to groups on every backend; s23f calls it. An unknown kind reads as unset and is never
  * rewritten.
  */
 export type JudgeSelectionStored =
+  | { kind: 'default' }
   | { kind: 'llm'; backend: string; model: string; effort?: ReasoningEffort; custom?: true }
   | { kind: 'decision'; provider: string; model: string }
   | { kind: 'provider'; provider: 'codex-appserver' | 'claude-agent' | 'typesafe' };

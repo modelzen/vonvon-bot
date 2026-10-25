@@ -9,6 +9,7 @@ import { createSettingsOwner, type SettingsOwnerDeps } from '../src/admin/settin
 import { parseModelQuery, parseSettingsEdit } from '../src/admin/settings-parse';
 import type { AgentSettingsView, JudgeSelection, ProjectSettingsView } from '../src/admin/settings-types';
 import { addProject, getProjectByName, updateProject } from '../src/project/registry';
+import {writeJudgeModels} from '../src/judge/global-models';
 import { readSmartPrompt } from '../src/judge/smart-file';
 import { DEFAULT_SMART_PROMPT, JUDGE_CLAUDE_NOTE, JUDGE_CODEX_NOTE, JUDGE_FORMAT_LINES, JUDGE_INPUT_EXAMPLE } from '../src/judge/prompt';
 import { DECISION_FORMAT_LINES, DECISION_INPUT_EXAMPLE, keyMissingText } from '../src/judge/decision';
@@ -82,7 +83,7 @@ beforeEach(async () => {
 afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
 
 describe('judge settings: store and remove (design 2.1, 2.5)', () => {
-  it('saves both layers with the backend filled in, and default removes the field', async () => {
+  it('saves both layers and resetting a group stores the host-default marker', async () => {
     expect(await save(agent, { kind: 'llm', model: 'gpt-6-luna', effort: 'low' })).toMatchObject({
       kind: 'saved', effects: [{ when: 'next-message', detail: '智能模式的下一次判断就用新模型' }],
       section: { value: { stored: { selection: { kind: 'llm', backend: 'codex-appserver', model: 'gpt-6-luna', effort: 'low' } } } },
@@ -91,11 +92,26 @@ describe('judge settings: store and remove (design 2.1, 2.5)', () => {
     expect((await save(project, { kind: 'llm', model: 'my-gw/qwen3-coder', custom: true })).kind).toBe('saved');
     expect((await getProjectByName('demo'))?.judge).toEqual({ kind: 'llm', backend: 'codex-appserver', model: 'my-gw/qwen3-coder', custom: true });
     expect((await save(project, { kind: 'default' })).kind).toBe('saved');
-    expect(await getProjectByName('demo')).not.toHaveProperty('judge');
+    expect((await getProjectByName('demo'))?.judge).toEqual({kind:'default'});
     expect((await save(agent, { kind: 'default' })).kind).toBe('saved');
     expect((await loadConfig()).preferences).not.toHaveProperty('judge');
   });
 
+  it('a smart group resets to the host default and reports the actual effective provider',async()=>{
+    await updateProject('demo',{kind:'single',smart:true});
+    await writeJudgeModels({defaultProvider:'typesafe',byProvider:{typesafe:{model:'jev-latest'}}});
+    expect(messageOf(await save(project,{kind:'default'}))).toContain('密钥');
+    secrets['typesafe-api-key']='fixture-key';
+    expect((await save(project,{kind:'default'})).kind).toBe('saved');
+    const view=await owner().read(project) as ProjectSettingsView;
+    expect(view.sections.judge.stored.selection).toEqual({kind:'default'});
+    expect(view.judgeInheritsHostDefault).toBe(true);
+    expect(view.sections.judge.effective.selection).toEqual({kind:'decision',provider:'typesafe',model:'jev-latest'});
+    expect((await getProjectByName('demo'))?.judge).toEqual({kind:'default'});
+    await writeJudgeModels({defaultProvider:'claude-agent',byProvider:{'claude-agent':{model:'sonnet',effort:'low'}}});
+    const fresh=await owner().read(project) as ProjectSettingsView;
+    expect(fresh.sections.judge.effective.selection).toEqual({kind:'llm',backend:'claude-agent',model:'sonnet',effort:'low'});
+  });
   it('the bot layer leaves out the backend: the bot default backend (s36a), Codex when it has none', async () => {
     cfg.preferences = { defaults: { backend: 'claude-agent' } };
     await saveConfig(cfg);

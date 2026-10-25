@@ -19,6 +19,7 @@ vi.mock('../src/config/paths', async () => {
 vi.mock('../src/config/bots', async original => ({ ...await original<object>(), loadBots: async () => ({ version: 1, bots: [{ appId: 'cli_a', name: 'a' }] }) }));
 
 import { assemble, contextOf, loadContextSources, planTurnUpdate } from '../src/bot/context-assembly';
+import {writeJudgeModels} from '../src/judge/global-models';
 import { contextPreview } from '../src/admin/context-preview';
 import { createLibraryProject, libraryLocation } from '../src/project/library';
 import { botMemoryLocation, MemoryStore, projectMemoryLocation } from '../src/bot/memory-store';
@@ -61,6 +62,13 @@ async function world(options: { judge?: unknown } = {}) {
 const record = (extra: Record<string, unknown>) => ({ threadId: 'topic1', chatId: CHAT, cwd: work, sessionId: 'host', backend: 'codex-appserver', summary: '', createdAt: 1, updatedAt: 50, ...extra });
 
 describe('contextPreview', () => {
+  it('describes the actual host-default decision route instead of the task provider',async()=>{
+    const w=await world({judge:{kind:'default'}});
+    await writeJudgeModels({defaultProvider:'typesafe',byProvider:{typesafe:{model:'jev-latest'}}});
+    expect((await w.preview(false)).judge).toMatchObject({via:'third-party',label:'typesafe jev-latest'});
+    await writeJudgeModels({defaultProvider:'claude-agent',byProvider:{'claude-agent':{model:'custom-judge',custom:true}}});
+    expect((await w.preview(false)).judge).toMatchObject({via:'local',label:'claude-agent custom-judge'});
+  });
   it('is the same assembly the session is handed, and the reply parses', async () => {
     const w = await world();
     await w.add(w.store, '发版改到周四', '决定');

@@ -37,7 +37,7 @@ export function DecisionProviderFields({value, defaults, catalogs, services, dis
       : services?.find(service => service.provider === provider.id)?.models ?? [{id: 'jev-latest', displayName: 'Jev'}];
     const selected = models.find(model => model.id === profile.model);
     const efforts = native ? profile.custom ? customEfforts[provider.id] ?? [] : catalog?.models.find(model => model.id === profile.model)?.supportedEfforts ?? [] : [];
-    const update = (next: Profile) => {if (!disabled) onChange({byProvider: {...value.byProvider, [provider.id]: next}});};
+    const update = (next: Profile) => {if (!disabled) onChange({...value, byProvider: {...value.byProvider, [provider.id]: next}});};
     const effortControl = effortChoices({provider: provider.id, model: profile.model, stored: profile.effort, efforts,
       custom: Boolean(profile.custom), catalogReady: catalog?.state === 'ready' && Boolean(selected)});
     function chooseModel(model: string) {
@@ -67,7 +67,18 @@ export function DecisionProviderFields({value, defaults, catalogs, services, dis
       </div>}
     </section>;
   }
+  const defaultProvider = value.defaultProvider ?? defaults.defaultProvider;
+  const defaultOptions = [...nativeProviders, {id: 'typesafe', name: 'Jev'}].map(provider => {
+    const profile = value.byProvider[provider.id] ?? defaults.byProvider[provider.id];
+    const model = catalogs[provider.id]?.models.find(item => item.id === profile?.model)?.displayName ?? profile?.model;
+    return {value: provider.id, label: `${provider.name}${model ? ` · ${model}` : ''}`};
+  });
   return <>
+    <SettingsGroup>
+      <SettingsRow className="decision-default-row" title="默认决策模型" description="群聊可单独指定。" trailing={<SelectControl presentation="dropdown" label="默认决策模型" value={defaultProvider ?? ''} disabled={disabled}
+        options={[...(!defaultProvider ? [{value: '', label: '选择默认模型', disabled: true}] : []), ...defaultOptions]}
+        onChange={provider => {if (!disabled && (provider === 'codex-appserver' || provider === 'claude-agent' || provider === 'typesafe')) onChange({...value, defaultProvider: provider});}}/>}/>
+    </SettingsGroup>
     <SettingsGroup label="Codex 与 Claude" action={modelAction}>
       {nativeProviders.map(providerFields)}
     </SettingsGroup>
