@@ -31,7 +31,7 @@ it('gives the reason and the button for each unfinished step', () => {
   expect(steps.connection?.actions).toEqual([{kind: 'enable', label: '启用 Bot'}]);
   expect(steps.event).toMatchObject({done: false, status: '上线后才能确认'});
   expect(steps.publish?.detail).toContain('等管理员审核通过');
-  expect(steps.callback?.actions.map(action => action.label)).toEqual(['打开事件设置', '我已配置']);
+  expect(steps.callback?.actions.map(action => action.label)).toEqual(['打开回调设置', '我已配置']);
   expect(steps.publish?.actions).toEqual([{kind: 'open', label: '打开开发者后台', url: fresh.consoleUrl, target: 'app-console'}]);
   expect(remoteStepsDone(fresh)).toBe(false);
 });
@@ -160,12 +160,12 @@ it('warns about the join-group scope without turning the 权限 step red', () =>
 });
 
 it('names the bot-added event in the events step as a warning only', () => {
-  const ok = byId(botSteps(agent, {...done, event: {state: 'ok', version: '1.0.2', missingOptional: ['im.chat.member.bot.added_v1', 'application.bot.menu_v6']}}));
-  expect(ok.event).toMatchObject({done: true, tone: 'success', items: ['im.chat.member.bot.added_v1', 'application.bot.menu_v6'], warnings: [BOT_ADDED_WARNING]});
+  const ok = byId(botSteps(agent, {...done, event: {state: 'ok', version: '1.0.2', missingOptional: ['im.chat.member.bot.added_v1', 'drive.notice.comment_add_v1']}}));
+  expect(ok.event).toMatchObject({done: true, tone: 'success', items: ['im.chat.member.bot.added_v1', 'drive.notice.comment_add_v1'], warnings: [BOT_ADDED_WARNING]});
   expect(BOT_ADDED_WARNING).toContain('机器人进群');
   const missing = byId(botSteps(agent, {...done, event: {state: 'missing', version: '1.0.0', missingRequired: ['im.message.receive_v1'], missingOptional: ['im.chat.member.bot.added_v1']}}));
   expect(missing.event).toMatchObject({done: false, status: '缺少接收消息事件', warnings: [BOT_ADDED_WARNING]});
-  expect(byId(botSteps(agent, {...done, event: {state: 'ok', version: '1.0.2', missingOptional: ['application.bot.menu_v6']}})).event?.warnings).toBeUndefined();
+  expect(byId(botSteps(agent, {...done, event: {state: 'ok', version: '1.0.2', missingOptional: ['drive.notice.comment_add_v1']}})).event?.warnings).toBeUndefined();
   // s15: an unsubscribed recall event says what the bot then misses, next to bot-added.
   expect(byId(botSteps(agent, {...done, event: {state: 'ok', version: '1.0.2', missingOptional: ['im.chat.member.bot.added_v1', 'im.message.recalled_v1']}})).event?.warnings).toEqual([BOT_ADDED_WARNING, RECALL_WARNING]);
   expect(RECALL_WARNING).toContain('撤回');

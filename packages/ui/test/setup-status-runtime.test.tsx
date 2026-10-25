@@ -105,3 +105,17 @@ it('does not apply a late local result or schedule more work after leaving the p
   expect(h.state[0]).toBe(state);
   expect(h.client.admin).toHaveBeenCalledTimes(2);
 });
+
+it('keeps remote configuration through local callback polling and still notices explicit removal', async () => {
+  const configured = {...status(false), cardCallback: {confirmed: false, configuration: {state: 'configured' as const, mode: 'websocket' as const}}};
+  h.client.admin.mockResolvedValueOnce({kind: 'setupStatus', status: configured})
+    .mockResolvedValueOnce({kind: 'cardCallbackStatus', cardCallback: {confirmed: false}})
+    .mockResolvedValueOnce({kind: 'setupStatus', status: {...status(true, 1234), cardCallback: {confirmed: true, verifiedAt: 1234, configuration: {state: 'missing'}}}})
+    .mockResolvedValue({kind: 'setupStatus', status: {...configured, cardCallback: {...configured.cardCallback, verifiedAt: 1234}}});
+  render(); await flush();
+  await vi.advanceTimersByTimeAsync(SETUP_POLL_MS);
+  expect(render().reads[id]?.status?.cardCallback).toEqual(configured.cardCallback);
+  expect(h.client.admin.mock.calls.map(([request]) => request.type)).toEqual(['setupStatus', 'cardCallbackStatus']);
+  await render().recheck(id); await flush();
+  expect(h.client.admin.mock.calls.slice(2).every(([request]) => request.type === 'setupStatus')).toBe(true);
+});

@@ -71,7 +71,16 @@ export const adminSetupStatusSchema = z.object({
   consoleUrl: z.string(),
   /** Confirmed manually or by receiving a real callback. Only receipt supplies
    * verifiedAt (Unix milliseconds); old hosts can still return confirmed alone. */
-  cardCallback: z.object({ confirmed: z.boolean(), verifiedAt: z.number().int().positive().max(8_640_000_000_000_000).optional() }),
+  cardCallback: z.object({
+    confirmed: z.boolean(),
+    verifiedAt: z.number().int().positive().max(8_640_000_000_000_000).optional(),
+    /** Current remote configuration is independent of local confirmation and past receipts. */
+    configuration: z.object({
+      state: z.enum(['configured', 'missing', 'wrong-mode', 'unchecked']),
+      mode: z.enum(['websocket', 'webhook']).optional(),
+      reason: z.string().optional(),
+    }).optional(),
+  }),
 });
 export type AdminSetupStatus = z.infer<typeof adminSetupStatusSchema>;
 
