@@ -2,7 +2,7 @@ import {Bot, ChevronRight, Search, X} from 'lucide-react';
 import {backendLabel, type Agent, type DesktopSnapshot, type GroupId, type Membership, type MembershipId} from '@vonvon/protocol';
 import {AgentAvatar} from './AgentAvatar';
 import {GroupAvatar} from './GroupAvatar';
-import {JoinGroupButtonCandidates} from './JoinGroupButton';
+import {JoinGroupButton} from './JoinGroupButton';
 import './group-directory.css';
 
 type Status = {label: string; tone: 'warning' | 'neutral' | 'success'};
@@ -47,8 +47,8 @@ export function GroupDirectory({snapshot, state, onStateChange, statusFor, onMem
         <input aria-label="搜索群聊或 Bot" placeholder="搜索群聊或 Bot" value={state.query} onChange={event => search(event.target.value)}/>
         {state.query && <button type="button" aria-label="清除群聊搜索" onClick={() => search('')}><X size={13}/></button>}
       </label>}
+      <JoinGroupButton disabled={joinDisabled} onClick={onJoin}/>
     </header>
-    <JoinGroupButtonCandidates disabled={joinDisabled} onClick={onJoin}/>
     {directory.length > 0 && <div className="group-directory-surface">
       {visible.length ? <ul className="group-directory-list">
         {visible.map(({group, members}) => {

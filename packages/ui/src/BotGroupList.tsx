@@ -1,7 +1,7 @@
 import {ChevronRight} from 'lucide-react';
 import {backendLabel, type Agent, type DesktopSnapshot, type MembershipId} from '@vonvon/protocol';
 import {GroupAvatar} from './GroupAvatar';
-import {JoinGroupButtonCandidates} from './JoinGroupButton';
+import {JoinGroupButton} from './JoinGroupButton';
 import {SettingsGroup, SettingsRow} from './reference/components/system-settings';
 import './bot-group-list.css';
 
@@ -26,9 +26,9 @@ export function BotGroupList({snapshot, agent, busy, status, onJoin, onMembershi
   return <SettingsGroup
     className="bot-group-list"
     label={<><span>已加入的飞书群</span><span className="bot-group-list__count">{members.length}</span></>}
+    action={<JoinGroupButton disabled={busy || !agent.enabled || Boolean(agent.readError)} onClick={onJoin}/>}
     footer={members.length ? '点击群聊，调整这个 Bot 在该群中的设置。' : undefined}
   >
-    <JoinGroupButtonCandidates disabled={busy || !agent.enabled || Boolean(agent.readError)} onClick={onJoin}/>
     {members.length ? <div className="bot-group-list__rows">
       {members.map(member => {
         const group = groups.get(member.groupId);

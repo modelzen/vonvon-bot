@@ -3,7 +3,7 @@ import {isValidElement, type ReactElement, type ReactNode} from 'react';
 import {desktopSnapshotSchema} from '@vonvon/protocol';
 import {GroupDirectory, type GroupDirectoryState} from '../src/GroupDirectory';
 import {AppShell} from '../src/LocalShell';
-import {JoinGroupButtonCandidates} from '../src/JoinGroupButton';
+import {JoinGroupButton} from '../src/JoinGroupButton';
 
 type Element = ReactElement<Record<string, any>>;
 function nodes(node: ReactNode): Element[] {
@@ -85,7 +85,7 @@ it.each([
 it('keeps the join entry available through empty searches without changing the group tree', () => {
   const h = harness();
   h.render().find(node => node.type === 'input')!.props.onChange({target: {value: '没有这个群'}});
-  const action = h.render().find(node => node.type === JoinGroupButtonCandidates)!;
+  const action = h.render().find(node => node.type === JoinGroupButton)!;
   expect(action.props.disabled).not.toBe(true);
   action.props.onClick();
   expect(h.onJoin).toHaveBeenCalledOnce();
@@ -95,7 +95,7 @@ it('keeps the join entry available through empty searches without changing the g
 
 it('shows the same join entry before the first group has been connected', () => {
   const h = harness({...snapshot, groups: [], memberships: []});
-  h.render().find(node => node.type === JoinGroupButtonCandidates)!.props.onClick();
+  h.render().find(node => node.type === JoinGroupButton)!.props.onClick();
   expect(h.onJoin).toHaveBeenCalledOnce();
 });
 
