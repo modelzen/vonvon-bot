@@ -1,5 +1,5 @@
 import {beforeEach, expect, it, vi} from 'vitest';
-import type {DesktopSnapshot} from '@vonvon/protocol';
+import type {DesktopSnapshot, ToolState} from '@vonvon/protocol';
 import {useProviderSetup} from '../src/setup/useProviderSetup';
 
 type Effect = {deps?: unknown[]; cleanup?: () => void};
@@ -20,7 +20,7 @@ vi.mock('../src/client-context', () => ({useClient: () => h.client}));
 
 const model = {id: 'native', displayName: 'Native', description: '', supportedEfforts: ['medium'], defaultEffort: 'medium', isDefault: true, hidden: false};
 const tool = (provider: 'codex' | 'claude', authentication: 'signedIn' | 'unknown' | 'signedOut' = 'signedIn') => ({tool: provider, installation: 'installed', authentication, version: '1'});
-const snapshot = (tools: ReturnType<typeof tool>[]) => ({tools, jobs: []}) as unknown as DesktopSnapshot;
+const snapshot = (tools: ToolState[] | ReturnType<typeof tool>[]) => ({tools, jobs: []}) as unknown as DesktopSnapshot;
 const run = vi.fn(async () => ({kind: 'applied', revision: 1} as const));
 function render(provider: 'codex' | 'claude', value: DesktopSnapshot, ready = true) {
   h.si = h.ri = h.mi = h.ei = 0;
@@ -126,4 +126,118 @@ it('does not let an old Provider response mark the new choice ready', async () =
   const result = render('claude', claude);
   expect(result.canContinue).toBe(false);
   expect(result.check?.provider).toBe('claude');
+});
+
+
+it('retains a failed detection message and recovers through a tool refresh without installing', async () => {
+  const failed = snapshot([{tool: 'codex', installation: 'unknown', authentication: 'unknown', version: null, message: '检测 Codex 失败：进程清理异常'}]);
+  h.client.snapshot.mockResolvedValue(failed);
+  expect(render('codex', failed).issue).toBe('检测 Codex 失败：进程清理异常');
+  await flush();
+  let state = render('codex', failed);
+  expect(state.check?.state).toBe('unavailable');
+  expect(state.check?.message).toBe('检测 Codex 失败：进程清理异常');
+  expect(state.canContinue).toBe(false);
+  expect(h.client.collaboration).not.toHaveBeenCalled();
+  expect(run).toHaveBeenLastCalledWith({type: 'refresh', tools: true});
+
+  const recovered = snapshot([tool('codex')]);
+  h.client.snapshot.mockResolvedValue(recovered);
+  await state.verify();
+  state = render('codex', recovered);
+  await flush();
+  state = render('codex', recovered);
+  expect(state.canContinue).toBe(true);
+  expect(state.issue).toBeUndefined();
+  expect(state.check?.message).toBeUndefined();
+  expect(h.client.environment.mock.calls.some(([request]) => ['install', 'update', 'backendInstall'].includes(request.type))).toBe(false);
+});
+
+it('checks again instead of installing when an installation action sees unknown state', async () => {
+  const unknown = snapshot([{tool: 'codex', installation: 'unknown', authentication: 'unknown', version: null}]);
+  h.client.snapshot.mockResolvedValue(unknown);
+  render('codex', unknown); await flush();
+  const before = run.mock.calls.length;
+  await render('codex', unknown).installProvider();
+  expect(run.mock.calls.length).toBe(before + 1);
+  expect(run).toHaveBeenLastCalledWith({type: 'refresh', tools: true});
+  expect(render('codex', unknown).check?.message).toBe('暂时无法确认安装状态，请重新检测。');
+  expect(h.client.environment.mock.calls.some(([request]) => ['install', 'update', 'backendInstall'].includes(request.type))).toBe(false);
+});
+
+it('keeps an absent detection result unavailable and retryable', async () => {
+  const absent = snapshot([]);
+  h.client.snapshot.mockResolvedValue(absent);
+  render('codex', absent); await flush();
+  const state = render('codex', absent);
+  expect(state.canContinue).toBe(false);
+  expect(state.check?.state).toBe('unavailable');
+  expect(state.check?.message).toBe('暂时无法确认安装状态，请重新检测。');
+  expect(h.client.collaboration).not.toHaveBeenCalled();
+});
+
+
+it.each(['signedIn', 'signedOut'] as const)('refreshes recovered %s installation metadata without letting the older scan overwrite it', async authentication => {
+  const unknown = snapshot([{tool: 'codex', installation: 'unknown', authentication: 'unknown', version: null, message: '检测失败'}]);
+  h.client.snapshot.mockResolvedValue(unknown);
+  const oldScan = deferred<unknown>();
+  const originalEnvironment = h.client.environment.getMockImplementation()!;
+  let scans = 0;
+  const external = {tool: 'codex', installation: 'external', version: '1', executable: '/existing/codex', canUninstall: false};
+  h.client.environment.mockImplementation(async (request: {type: string}) => request.type === 'scan'
+    ? ++scans === 1 ? oldScan.promise : {kind: 'tools', tools: [external]}
+    : originalEnvironment(request));
+  render('codex', unknown); await flush();
+  const recovered = snapshot([tool('codex', authentication)]);
+  h.client.snapshot.mockResolvedValue(recovered);
+  await render('codex', unknown).verify();
+  expect(render('codex', recovered).tools).toEqual([external]);
+  oldScan.resolve({kind: 'tools', tools: [{tool: 'codex', installation: 'missing', version: null, executable: null, canUninstall: false}]});
+  await flush();
+  expect(render('codex', recovered).tools).toEqual([external]);
+});
+
+
+it.each([
+  {tool: 'codex', installation: 'missing', authentication: 'unknown', version: null, message: '尚未安装 Codex'},
+  {tool: 'codex', installation: 'installed', authentication: 'signedOut', version: '1', message: '当前 Codex：/existing/codex'},
+  {tool: 'codex', installation: 'installed', authentication: 'unknown', version: '0.1', compatibility: {status: 'tooOld'}, message: '请更新 Codex'},
+] as ToolState[])('does not turn expected $installation / $authentication status text into a detection error', async current => {
+  const value = snapshot([current]);
+  h.client.snapshot.mockResolvedValue(value);
+  render('codex', value); await flush();
+  const state = render('codex', value);
+  expect(state.check?.message).toBeUndefined();
+  expect(state.issue).toBeUndefined();
+});
+
+
+it.each(['absent', 'missing'] as const)('repairs %s source metadata when a recovered snapshot supersedes the old verification', async initialSource => {
+  const unknown = snapshot([{tool: 'codex', installation: 'unknown', authentication: 'unknown', version: null, message: '检测失败'}]);
+  h.client.snapshot.mockResolvedValue(unknown);
+  const originalEnvironment = h.client.environment.getMockImplementation()!;
+  const missing = {tool: 'codex', installation: 'missing', version: null, executable: null, canUninstall: false};
+  const external = {tool: 'codex', installation: 'external', version: '1', executable: '/existing/codex', canUninstall: false};
+  let scans = 0;
+  h.client.environment.mockImplementation(async (request: {type: string}) => request.type === 'scan'
+    ? {kind: 'tools', tools: ++scans === 1 ? initialSource === 'missing' ? [missing] : [] : [external]}
+    : originalEnvironment(request));
+  render('codex', unknown); await flush();
+  const state = render('codex', unknown);
+  expect(state.tools).toEqual(initialSource === 'missing' ? [missing] : []);
+
+  const oldRefresh = deferred<{kind: 'applied'; revision: number}>();
+  run.mockReturnValueOnce(oldRefresh.promise);
+  const oldVerification = state.verify();
+  const recovered = snapshot([tool('codex')]);
+  h.client.snapshot.mockResolvedValue(recovered);
+  // App receives the daemon's refreshed snapshot before its command promise settles.
+  // The signature effect starts a newer verify with an already-installed tool closure.
+  render('codex', recovered); await flush();
+  expect(render('codex', recovered).tools).toEqual([external]);
+  expect(scans).toBe(2);
+  oldRefresh.resolve({kind: 'applied', revision: 2});
+  await oldVerification; await flush();
+  expect(render('codex', recovered).tools).toEqual([external]);
+  expect(render('codex', recovered).canContinue).toBe(true);
 });
