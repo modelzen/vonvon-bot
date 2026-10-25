@@ -107,9 +107,9 @@ export function DirectorySearchStep({onChoose, onBusyChange}: {
           </button>
           <IconButton size="sm" variant="ghost" label={`浏览 ${entry.name} 的子目录`} disabled={choosing} onClick={() => browse(entry.path)}><ChevronRight size={15}/></IconButton>
         </div>)}
-      {!loading && !entries.length && !error && <p className="join-directory-empty">没有匹配的目录，可输入完整路径。</p>}
+      {!loading && !entries.length && !error && <p className="join-directory-empty">{truncated ? '未在当前搜索范围找到目录，可输入完整路径。' : '没有匹配的目录，可输入完整路径。'}</p>}
     </div>
-    {truncated && !loading && !error && <p className="join-directory-hint">仅显示部分目录，可输入更具体的名称或路径。</p>}
+    {truncated && entries.length > 0 && !loading && !error && <p className="join-directory-hint">仅显示部分目录，可输入更具体的名称或路径。</p>}
     {error && <div className="join-directory-error" role="alert"><span>{error}</span>
       <IconButton size="sm" variant="ghost" label="重试读取目录" disabled={choosing} onClick={() => setRevision(value => value + 1)}><RefreshCw size={15}/></IconButton>
     </div>}
