@@ -46,8 +46,8 @@ const context: Context = {
   kind: "context", threadId: "thread", usage: null,
   run: { id: "run", goal: false, canStop: true, canEndGoal: false, canRemind: false, reminderRequested: false, subagents },
 };
-function render(request: CollaborationClient, current = context, options: { busy?: boolean; conversation?: Conversation } = {}) {
-  harness.state = [history, "thread", current, "", "all", "", options.busy ?? false, "", ""];
+function render(request: CollaborationClient, current = context, options: { busy?: boolean; conversation?: Conversation; preserve?: boolean } = {}) {
+  if (!options.preserve) harness.state = [history, "thread", current, "", "all", options.busy ?? false, "", "", ""];
   harness.index = 0;
   harness.effects = [];
   harness.buttons = [];
@@ -70,7 +70,7 @@ async function click(label: string) {
   const action = button(label);
   expect(action.disabled).toBeFalsy();
   action.onClick?.({} as MouseEvent<HTMLButtonElement>);
-  await vi.waitFor(() => expect(harness.state[6]).toBe(false));
+  await vi.waitFor(() => expect(harness.state[5]).toBe(false));
 }
 afterEach(() => { vi.useRealTimers(); });
 
@@ -85,33 +85,69 @@ it("shows child names, tasks and statuses, and stops only the selected stoppable
   expect(request).toHaveBeenCalledWith({ action: "stopSubagent", ...target, threadId: "thread", runId: "run", subagentId: "one" });
 });
 
-it("honors run capabilities, conversation mode and pending operations", () => {
+it("honors run capabilities and pending operations", () => {
   const request = requestFixture();
   render(request);
   expect(button("停止").disabled).toBe(false);
   expect(button("结束目标").disabled).toBe(true);
   expect(button("开启提醒").disabled).toBe(true);
-  expect(button("开始").disabled).toBe(true);
-  expect(button("清空会话").disabled).toBe(false);
-
-  render(request, context, { conversation: "threads" });
-  expect(button("清空会话").disabled).toBe(true);
-  expect(button("压缩上下文").disabled).toBe(false);
 
   render(request, { ...context, run: { ...context.run!, canStop: false } });
   expect(button("停止").disabled).toBe(true);
 
   render(request, context, { busy: true });
-  for (const label of ["停止", "停止子 agent 数文件", "结束目标", "开启提醒", "压缩上下文", "清空会话"])
+  for (const label of ["停止", "停止子 agent 数文件", "结束目标", "开启提醒"])
     expect(button(label).disabled).toBe(true);
 });
 
+it("keeps clear restricted to the main conversation and disables mutations while pending", () => {
+  const request = requestFixture();
+  render(request, context);
+  expect(button("清空会话").disabled).toBe(false);
+  render(request, context, { conversation: "threads" });
+  expect(button("清空会话").disabled).toBe(true);
+  expect(button("压缩上下文").disabled).toBe(false);
+  render(request, context, { busy: true });
+  expect(button("清空会话").disabled).toBe(true);
+  expect(button("压缩上下文").disabled).toBe(true);
+});
+
+it("keeps successful mutation feedback and shows an unconfirmed Feishu receipt separately", async () => {
+  const warning = "操作已生效，但未能确认飞书回执已送达。无需重复执行。";
+  const request = requestFixture();
+  request.mockImplementation(async command => command.action === "context" ? context : command.action === "history" ? history : { kind: "applied", message: "上下文已压缩。", warning });
+  render(request);
+  await click("压缩上下文");
+  const html = render(request, context, { preserve: true });
+  expect(html).toContain("上下文已压缩。");
+  expect(html).toContain("飞书回执未确认");
+  expect(html).toContain(warning);
+  expect(html).not.toContain("会话操作未完成");
+  expect(request.mock.calls.filter(([command]) => command.action === "compact")).toHaveLength(1);
+});
+
+it("keeps controls for an existing goal without offering to create a goal", async () => {
+  const current = { ...context, run: { ...context.run!, goal: true, canEndGoal: true } };
+  const request = requestFixture(current);
+  const html = render(request, current);
+  expect(html).not.toContain("自主任务目标");
+  expect(harness.buttons.some(item => item.children === "开始")).toBe(false);
+  expect(html).toContain("自主目标运行中");
+  await click("结束目标");
+  expect(request).toHaveBeenCalledWith({ action: "endGoal", ...target, threadId: "thread", runId: "run" });
+  expect(request.mock.calls.some(([command]) => command.action === "startGoal")).toBe(false);
+
+  const idle = render(request, { ...context, run: null });
+  expect(idle).not.toContain("自主任务目标");
+  expect(harness.buttons.some(item => item.children === "开始")).toBe(false);
+});
+
 it.each([
+  ["压缩上下文", { action: "compact" }],
+  ["清空会话", { action: "clear" }],
   ["停止", { action: "stop", runId: "run" }],
   ["结束目标", { action: "endGoal", runId: "run" }],
   ["开启提醒", { action: "reminder", runId: "run", requested: true }],
-  ["压缩上下文", { action: "compact" }],
-  ["清空会话", { action: "clear" }],
 ] as const)("keeps the selected conversation and run in the %s request", async (label, action) => {
   const current = { ...context, run: { ...context.run!, canEndGoal: true, canRemind: true } };
   const request = requestFixture(current);
