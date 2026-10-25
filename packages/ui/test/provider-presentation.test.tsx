@@ -84,7 +84,7 @@ it.each([
   const data = snapshot([tool('codex', installation, authentication)]);
   const first = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onCreateBot: harness.onCreateBot, onOpenEnvironment: () => {}, onNotice: () => {}, codexJobs: null}));
   expect(first.some(node => node.type === ProviderSetup)).toBe(true);
-  expect(first.some(node => node.props.children === '扫码创建 Bot')).toBe(false);
+  expect(first.some(node => node.props.children === '添加 Bot')).toBe(false);
   expect(first.some(node => node.props['data-testid'] === 'bridge-import')).toBe(false); // nested BridgeImportPanel remains reachable
   expect(first.some(node => typeof node.type === 'function' && node.type.name === 'BridgeImportPanel')).toBe(true);
   resetRender();
@@ -115,8 +115,8 @@ it('changes Provider explicitly, then Continue opens Bot creation with the same 
   button(card, '继续').props.onClick();
   resetRender();
   welcome = nodes(WelcomeSetup({snapshot: data, ready: true, busy: false, run, onRegister: harness.onRegister, onCreateBot: harness.onCreateBot, onOpenEnvironment: () => {}, onNotice: () => {}, codexJobs: null}));
-  expect(welcome.some(node => node.props.children === '扫码创建 Bot')).toBe(true);
-  button(welcome, '扫码创建 Bot').props.onClick();
+  expect(welcome.some(node => node.props.children === '添加 Bot')).toBe(true);
+  button(welcome, '添加 Bot').props.onClick();
   expect(harness.onCreateBot).toHaveBeenCalledWith('claude');
   expect(harness.onRegister).not.toHaveBeenCalled();
 });

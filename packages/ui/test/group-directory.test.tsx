@@ -3,6 +3,7 @@ import {isValidElement, type ReactElement, type ReactNode} from 'react';
 import {desktopSnapshotSchema} from '@vonvon/protocol';
 import {GroupDirectory, type GroupDirectoryState} from '../src/GroupDirectory';
 import {AppShell} from '../src/LocalShell';
+import {JoinGroupButton} from '../src/JoinGroupButton';
 
 type Element = ReactElement<Record<string, any>>;
 function nodes(node: ReactNode): Element[] {
@@ -21,8 +22,9 @@ const snapshot = desktopSnapshotSchema.parse({
 function harness(data = snapshot, statusFor: Parameters<typeof GroupDirectory>[0]['statusFor'] = () => ({label: '', tone: 'success'})) {
   let state: GroupDirectoryState = {query: '', expanded: {}};
   const onMembership = vi.fn();
-  const render = () => nodes(GroupDirectory({snapshot: data, state, onStateChange: next => {state = next;}, statusFor, onMembership}));
-  return {render, onMembership, state: () => state};
+  const onJoin = vi.fn();
+  const render = () => nodes(GroupDirectory({snapshot: data, state, onStateChange: next => {state = next;}, statusFor, onMembership, onJoin}));
+  return {render, onMembership, onJoin, state: () => state};
 }
 
 it('groups by Feishu group even when one group has different projects and two groups share a project', () => {
@@ -80,16 +82,21 @@ it.each([
   expect([summary.props.children, summary.props['data-tone'], group.props['data-unavailable']]).toEqual([label, tone, true]);
 });
 
-it('applies the toolbar expansion action to search results and disables it for empty results', () => {
+it('keeps the join entry available through empty searches without changing the group tree', () => {
   const h = harness();
-  const toolbarAction = () => h.render().find(node => node.props.className === 'group-directory-toggle')!;
-  h.render().find(node => node.type === 'input')!.props.onChange({target: {value: '发布'}});
-  toolbarAction().props.onClick();
-  expect(h.state()).toEqual({query: '发布', expanded: {oc_two: false}});
-  toolbarAction().props.onClick();
-  expect(h.state().expanded).toEqual({oc_two: true});
   h.render().find(node => node.type === 'input')!.props.onChange({target: {value: '没有这个群'}});
-  expect(toolbarAction().props.disabled).toBe(true);
+  const action = h.render().find(node => node.type === JoinGroupButton)!;
+  expect(action.props.disabled).not.toBe(true);
+  action.props.onClick();
+  expect(h.onJoin).toHaveBeenCalledOnce();
+  expect(h.state()).toEqual({query: '没有这个群', expanded: {}});
+  expect(h.render().some(node => node.props.className === 'group-directory-toggle')).toBe(false);
+});
+
+it('shows the same join entry before the first group has been connected', () => {
+  const h = harness({...snapshot, groups: [], memberships: []});
+  h.render().find(node => node.type === JoinGroupButton)!.props.onClick();
+  expect(h.onJoin).toHaveBeenCalledOnce();
 });
 
 it('uses 群组 as the primary destination while retaining project memory counts', () => {

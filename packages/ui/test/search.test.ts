@@ -195,8 +195,9 @@ test('Codex executable path editing searches open the application control', () =
   assert.equal(findEntries(entries, '安装位置 Codex')[0]?.destination.page, 'providers');
 });
 
-test('注册 Bot is the one name, and the old word and the grant button still find their places', () => {
+test('adding a Bot and the legacy registration wording still find the Bot list', () => {
   assert.equal(findEntries(entries, '添加 Bot')[0]?.id, 'agents');
+  assert.equal(findEntries(entries, '注册 Bot')[0]?.id, 'agents');
   const empty = searchEntries({...snapshot, agents: [], memberships: []});
   assert.ok(!JSON.stringify(empty).includes('添加 Bot。'));
   const grant = findEntries(entries, '飞书权限')[0];
