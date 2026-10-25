@@ -7,6 +7,7 @@ import type { AdminBot, AdminProject } from '../src/admin/service';
 import type { DesktopServiceStatus } from '../src/host/service';
 import { createSnapshotStore, type SnapshotStore } from '../src/server/snapshot';
 import { environmentRpc } from '../src/server/rpc/environment';
+import { commandRpc } from '../src/server/rpc/command';
 import { writeServiceActionRecord, writeServiceSkipped, type ServiceActionRecord } from '../src/service/action-report';
 
 vi.mock('../src/agent', () => ({ createBackend: () => ({ doctor: async () => ({ ok: false, version: null, depState: 'not-installed' }) }) }));
@@ -83,6 +84,25 @@ describe('snapshot commit queue', () => {
     stores.push(store);
     expect(store.current().tools[0]).toMatchObject({ tool: 'codex', version: 'codex-cli 0.120.0', compatibility: { status: 'tooOld', minimum: '0.156.1' } });
     expect(store.current().tools[1]).toMatchObject({ tool: 'claude', installation: 'missing' });
+  });
+
+  it('keeps probe errors visible and retries only on an explicit tool refresh', async () => {
+    const failure = new Error('此前 Codex 子进程清理未确认，请先退出并检查');
+    const probe = vi.fn().mockImplementationOnce(() => {throw failure;}).mockResolvedValue({
+      installation: 'installed', authentication: 'signedIn', version: 'codex-cli 0.162.1', executable: '/bin/codex',
+    });
+    const service = {listBots: async () => [], listProjects: async () => [], codexSetup: probe};
+    const store = await createSnapshotStore({service, jobs: () => [], readService: noManager, publish: () => {}});
+    stores.push(store);
+    expect(store.current().tools[0]).toMatchObject({installation: 'unknown', authentication: 'unknown', message: failure.message});
+    const options = {service: service as never, jobs: {} as never, peer: {} as never, directory: {} as never, snapshots: store, port: 0};
+    await commandRpc(options, {type: 'refresh'});
+    expect(probe).toHaveBeenCalledTimes(1);
+    const outcome = await commandRpc(options, {type: 'refresh', tools: true});
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(store.current().tools[0]).toMatchObject({installation: 'installed', authentication: 'signedIn', version: 'codex-cli 0.162.1'});
+    expect(store.current().tools[0]).not.toHaveProperty('message');
+    expect(outcome.kind).toBe('mutation');
   });
 
   it('reads tools once more when asked during a read, so a fresh login is not lost', async () => {

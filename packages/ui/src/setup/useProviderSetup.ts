@@ -82,13 +82,18 @@ export function useProviderSetup(provider: SetupProvider, snapshot: DesktopSnaps
           accept(login);
         }
       }
-      await run({type: 'refresh'});
+      await run({type: 'refresh', tools: true});
       if (!currentRequest()) return;
       const current = (await client.snapshot()).tools.find(item => item.tool === provider);
       if (!currentRequest()) return;
       const currentSignature = providerSignature(current);
+      const source = tools.find(item => item.tool === provider);
+      if (current?.installation === 'installed' && (!tool || tool.installation === 'unknown' || !source || source.installation === 'missing')) {
+        await readReplies([{type: 'scan'}], infoSequence);
+        if (!currentRequest()) return;
+      }
       if (!providerInstalled(current) || !providerAuthenticated(current)) {
-        if (currentRequest()) setCheck({state: 'unavailable', provider, signature: currentSignature});
+        if (currentRequest()) setCheck({state: 'unavailable', provider, signature: currentSignature, message: !current || current.installation === 'unknown' ? current?.message || '暂时无法确认安装状态，请重新检测。' : providerInstalled(current) && current.authentication === 'unknown' ? current.message : undefined});
         return;
       }
       const models = await client.collaboration({action: 'providerModels', backend});
@@ -98,7 +103,7 @@ export function useProviderSetup(provider: SetupProvider, snapshot: DesktopSnaps
     } catch (error) {
       if (currentRequest()) setCheck({state: 'unavailable', provider, signature: '', message: errorText(error)});
     }
-  }, [client, provider, backend, accept, run]);
+  }, [client, provider, backend, accept, run, readReplies, tool, tools]);
   // run is supplied by App and can change on every snapshot; keep effects tied to native state.
   const latest = useRef({read, pollStatus, verify}); latest.current = {read, pollStatus, verify};
   useEffect(() => {mounted.current = true; return () => {mounted.current = false; sequence.current++; infoSequence.current++; statusSequence.current++;};}, []);
@@ -129,6 +134,7 @@ export function useProviderSetup(provider: SetupProvider, snapshot: DesktopSnaps
     finally {if (mounted.current && providerNow.current === provider) setPendingToolInstall(false);}
   }
   async function installProvider(update = false) {
+    if (!tool || tool.installation === 'unknown') {await verify(); return;}
     sequence.current++; setCheck(undefined);
     const reply = await (provider === 'codex' ? installTool('codex', update) : request({type: 'backendInstall', id: backend, update}));
     if (!mounted.current || providerNow.current !== provider) return;
@@ -184,7 +190,7 @@ export function useProviderSetup(provider: SetupProvider, snapshot: DesktopSnaps
     : toolInstall?.id === observedToolInstallId.current && toolInstall?.kind === 'failed' ? toolInstall.message
     : login?.id === observedLoginId.current && (login?.kind === 'failed' || login?.kind === 'timedOut') ? login.message : undefined;
   const canContinue = ready && !working && !activeInstall && !relevantToolInstall && !activeLogin && !activeCodexJob && providerInstalled(tool) && providerAuthenticated(tool) && check?.state === 'ready' && check.provider === provider && Boolean(check.models?.length) && check.signature === signature;
-  return {tool, tools, entry, check, issue: issue || operationMessage, working, activeInstall, relevantToolInstall, activeLogin, activeCodexJob, canContinue, verify, read, installProvider, connect,
+  return {tool, tools, entry, check, issue: issue || operationMessage || (tool?.installation === 'unknown' || providerInstalled(tool) && tool?.authentication === 'unknown' ? tool?.message : undefined), working, activeInstall, relevantToolInstall, activeLogin, activeCodexJob, canContinue, verify, read, installProvider, connect,
     cancelInstall: () => activeInstall ? request({type: 'cancelBackendInstall', operationId: activeInstall.operationId}) : relevantToolInstall ? request({type: 'cancelInstall', operationId: relevantToolInstall.id}) : undefined,
     cancelLogin: () => activeLogin ? request({type: 'cancelLogin', operationId: activeLogin.id}) : undefined,
     installTool, request};
