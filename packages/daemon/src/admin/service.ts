@@ -10,6 +10,7 @@ import type { HostSettings } from './settings-types';
 import type { AdminSettingsReadOp } from './ipc';
 import { CodexSetupService, type CodexSetup, type CodexJob, type CodexJobType } from '../agent/codex-appserver/setup';
 import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
+import { compareCodexVersions, parseCodexVersion } from '../agent/codex-appserver/version';
 import { fetchUsageBundle } from '../agent/usage';
 import { parseJoinedGroups, parseGroupMembers, type GroupMembers, type AdminGroupOp, type BindGroupInput, type JoinedGroups } from './groups';
 import { voiceView } from '../voice/view';
@@ -1016,13 +1017,21 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     async backendVersion(id): Promise<{ installed: string | null; latest: string | null; hasUpdate: boolean }> {
       const entry = catalogById(id);
       if (!entry?.dep.pkg) return { installed: null, latest: null, hasUpdate: false };
-      const installed = installedBackendVersion(entry.dep.pkg);
+      // Codex is an executable (managed, PATH, app bundle or CODEX_BIN), not a
+      // library resolved from our node_modules. Force the runtime's own probe so
+      // an upgrade at the same path cannot leave this explicit check cached.
+      const installed = entry.id === 'codex-appserver'
+        ? parseCodexVersion((await createBackend(entry.id).doctor({ force: true }).catch(() => null))?.version)
+        : installedBackendVersion(entry.dep.pkg);
       if (isBundledBackend(entry.id)) return { installed, latest: installed, hasUpdate: false };
       // 有 pin 时目标就是 pin：装的版本和它不同（更新或更旧）都提示更新，更新会装回 pin。
       const pinned = entry.dep.version;
       if (pinned) return { installed, latest: pinned, hasUpdate: !!installed && installed !== pinned };
-      const latest = await latestNpmVersion(entry.dep.pkg).catch(() => null);
-      const hasUpdate = !!installed && !!latest && cmpSemver(latest, installed) > 0;
+      const published = await latestNpmVersion(entry.dep.pkg).catch(() => null);
+      const latest = entry.id === 'codex-appserver' ? parseCodexVersion(published) : published;
+      const hasUpdate = !!installed && !!latest && (entry.id === 'codex-appserver'
+        ? compareCodexVersions(latest, installed)
+        : cmpSemver(latest, installed)) > 0;
       return { installed, latest, hasUpdate };
     },
 
@@ -1213,7 +1222,9 @@ async function catalogEntryStatus(
     installable: !bundled && depState === 'not-installed' && isInstallable(entry),
     approxSizeMB: entry.dep.approxSizeMB,
     version: probe?.version ?? null,
-    installedVersion: entry.dep.pkg ? installedBackendVersion(entry.dep.pkg) : null,
+    installedVersion: entry.id === 'codex-appserver'
+      ? parseCodexVersion(probe?.version)
+      : entry.dep.pkg ? installedBackendVersion(entry.dep.pkg) : null,
     canUninstall: !bundled && isInstallable(entry) && isBackendInstalledInUserDir(entry),
     hint: ok ? undefined : (bundled
       ? `「${entry.displayName}」随桌面应用内置；如组件不可用，请更新 Vonvon Bot 应用。`

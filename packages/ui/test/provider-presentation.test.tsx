@@ -1,6 +1,6 @@
 import {beforeEach, expect, it, vi} from 'vitest';
 import {isValidElement, type ReactElement, type ReactNode} from 'react';
-import type {Agent, DesktopSnapshot, EnvironmentToolState, ToolState} from '@vonvon/protocol';
+import type {Agent, DesktopSnapshot, EnvironmentReply, EnvironmentToolState, ToolState} from '@vonvon/protocol';
 import {ProviderManager, ProviderPreparation, ProviderSetup} from '../src/setup/ProviderSetup';
 import {WelcomeSetup} from '../src/setup/WelcomeSetup';
 
@@ -9,10 +9,10 @@ type Element = ReactElement<Record<string, any>>;
 const harness = vi.hoisted(() => ({
   state: [] as unknown[], index: 0, effectIndex: 0,
   effects: [] as Array<{deps?: unknown[]}>, pending: [] as Array<() => void>,
-  canContinue: false, check: undefined as {state: 'checking' | 'unavailable'; message?: string} | undefined, issue: '', bundled: false, cli: undefined as EnvironmentToolState | undefined,
+  canContinue: false, check: undefined as {state: 'checking' | 'unavailable'; message?: string} | undefined, issue: '', bundled: false, cli: undefined as EnvironmentToolState | undefined, codex: undefined as EnvironmentToolState | undefined,
   installProvider: vi.fn(), installTool: vi.fn(async () => ({kind: 'applied', message: '已更新'})), connect: vi.fn(), verify: vi.fn(), read: vi.fn(), cancelInstall: vi.fn(),
-  request: vi.fn(async (request: {type: string}) => request.type === 'backendVersion'
-    ? {kind: 'backendVersion', latest: '1.1'} : {kind: 'applied', message: '已卸载'}),
+  request: vi.fn(async (request: {type: string; id?: string}): Promise<EnvironmentReply> => request.type === 'backendVersion'
+    ? {kind: 'backendVersion', id: request.id!, installed: '1.0', latest: '1.1', hasUpdate: true} : {kind: 'applied', message: '已卸载'}),
   onContinue: vi.fn(), onCreateBot: vi.fn(), onRegister: vi.fn(),
 }));
 vi.mock('react', async original => ({
@@ -32,7 +32,7 @@ vi.mock('react', async original => ({
 }));
 vi.mock('../src/client-context', () => ({useShellCapabilities: () => undefined}));
 vi.mock('../src/setup/useProviderSetup', () => ({useProviderSetup: (provider: Provider, snapshot: DesktopSnapshot) => ({
-  tool: snapshot.tools.find(item => item.tool === provider), tools: provider === 'claude' ? [harness.cli ?? {tool: 'claude', installation: 'managed', version: '1.0', latestVersion: '1.1', executable: '/managed/claude', canUninstall: true}] : [],
+  tool: snapshot.tools.find(item => item.tool === provider), tools: provider === 'claude' ? [harness.cli ?? {tool: 'claude', installation: 'managed', version: '1.0', latestVersion: '1.1', executable: '/managed/claude', canUninstall: true}] : harness.codex ? [harness.codex] : [],
   entry: {id: provider === 'claude' ? 'claude-agent' : 'codex-appserver', bundled: harness.bundled, installedVersion: '0.3.296', depState: snapshot.tools.find(item => item.tool === provider)?.installation === 'missing' ? 'missing' : 'installed', canUninstall: snapshot.tools.find(item => item.tool === provider)?.installation !== 'missing'},
   check: harness.canContinue ? {state: 'ready', models: [{id: 'model-1', displayName: 'Model 1'}]} : harness.check,
   issue: harness.issue, working: false, activeInstall: undefined, relevantToolInstall: undefined,
@@ -68,8 +68,13 @@ function button(all: Element[], label: string): Element {
   if (!found) throw new Error(`button ${label} missing`);
   return found;
 }
+function installationInfo(all: Element[], label: string): ReactNode {
+  const row = all.find(node => node.type === 'div' && Array.isArray(node.props.children)
+    && node.props.children[0]?.type === 'dt' && node.props.children[0].props.children === label);
+  return row?.props.children[1]?.props.children;
+}
 beforeEach(() => {
-  harness.state = []; harness.effects = []; harness.pending = []; harness.index = harness.effectIndex = 0; harness.canContinue = false; harness.check = undefined; harness.issue = ''; harness.cli = undefined; harness.bundled = false;
+  harness.state = []; harness.effects = []; harness.pending = []; harness.index = harness.effectIndex = 0; harness.canContinue = false; harness.check = undefined; harness.issue = ''; harness.cli = undefined; harness.codex = undefined; harness.bundled = false;
   vi.clearAllMocks();
 });
 
@@ -143,6 +148,79 @@ it('keeps Provider management entry, version, update and owned uninstall actions
   await Promise.resolve();
   expect(harness.request).toHaveBeenCalledWith({type: 'backendUninstall', id: 'claude-agent'});
   expect(detail.some(node => node.props.children === '模型来源')).toBe(true);
+});
+
+it('shows the current selected Codex and latest official version separately', () => {
+  harness.codex = {tool: 'codex', installation: 'managed', version: '0.164.0', latestVersion: '0.165.0', executable: '/managed/codex', canUninstall: true};
+  const data = snapshot([{...tool('codex', 'installed', 'signedIn'), version: 'codex-cli 0.164.0'}]);
+  const detail = nodes(ProviderPreparation({provider: 'codex', snapshot: data, ready: true, busy: false, run, management: true}));
+  expect(installationInfo(detail, '当前版本')).toBe('0.164.0');
+  expect(installationInfo(detail, '最新版本')).toBe('0.165.0');
+});
+
+it('refreshes both Codex versions and its installed label from the check response', async () => {
+  harness.codex = {tool: 'codex', installation: 'managed', version: '0.162.1', latestVersion: '0.163.0', executable: '/managed/codex', canUninstall: true};
+  const props = {provider: 'codex' as const, snapshot: snapshot([{...tool('codex', 'installed', 'signedIn'), version: 'codex-cli 0.162.1'}]), ready: true, busy: false, run, management: true};
+  harness.request.mockResolvedValueOnce({kind: 'backendVersion', id: 'codex-appserver', installed: '0.164.0', latest: '0.165.0', hasUpdate: true});
+  let detail = nodes(ProviderPreparation(props));
+  await button(detail, '检查版本').props.onClick();
+  expect(harness.request).toHaveBeenCalledWith({type: 'backendVersion', id: 'codex-appserver'});
+  resetRender(); detail = nodes(ProviderPreparation(props));
+  expect(installationInfo(detail, '当前版本')).toBe('0.164.0');
+  expect(installationInfo(detail, '最新版本')).toBe('0.165.0');
+  expect(detail.some(node => node.props.children === '已安装 · 0.164.0')).toBe(true);
+  expect(detail.some(node => node.props.children === '已安装 · 0.162.1')).toBe(false);
+});
+
+it('replaces prior Codex versions with explicit unknown values when a new check cannot confirm them', async () => {
+  harness.codex = {tool: 'codex', installation: 'managed', version: '0.162.1', latestVersion: '0.163.0', executable: '/managed/codex', canUninstall: true};
+  const props = {provider: 'codex' as const, snapshot: snapshot([tool('codex', 'installed', 'signedIn')]), ready: true, busy: false, run, management: true};
+  harness.request.mockResolvedValueOnce({kind: 'backendVersion', id: 'codex-appserver', installed: '0.164.0', latest: '0.164.0', hasUpdate: false});
+  await button(nodes(ProviderPreparation(props)), '检查版本').props.onClick();
+  resetRender();
+  harness.request.mockResolvedValueOnce({kind: 'backendVersion', id: 'codex-appserver', installed: null, latest: null, hasUpdate: false});
+  await button(nodes(ProviderPreparation(props)), '检查版本').props.onClick();
+  resetRender(); const detail = nodes(ProviderPreparation(props));
+  expect(installationInfo(detail, '当前版本')).toBe('暂时无法确认');
+  expect(installationInfo(detail, '最新版本')).toBe('暂时无法查询');
+  expect(detail.some(node => node.props.children === '已安装 · 0.164.0')).toBe(false);
+});
+
+it('discards a checked Codex version when the selected installation changes', async () => {
+  const props = {provider: 'codex' as const, snapshot: snapshot([{...tool('codex', 'installed', 'signedIn'), version: 'codex-cli 0.164.0'}]), ready: true, busy: false, run, management: true};
+  harness.request.mockResolvedValueOnce({kind: 'backendVersion', id: 'codex-appserver', installed: '0.164.0', latest: '0.165.0', hasUpdate: true});
+  await button(nodes(ProviderPreparation(props)), '检查版本').props.onClick();
+  harness.codex = {tool: 'codex', installation: 'external', version: '0.166.0', latestVersion: '0.166.0', executable: '/external/codex', canUninstall: false};
+  resetRender();
+  const detail = nodes(ProviderPreparation({...props, snapshot: snapshot([{...tool('codex', 'installed', 'signedIn'), version: 'codex-cli 0.166.0'}])}));
+  expect(installationInfo(detail, '当前版本')).toBe('0.166.0');
+  expect(installationInfo(detail, '最新版本')).toBe('0.166.0');
+});
+
+it('keeps Claude SDK version checks labelled as the verified version', async () => {
+  const props = {provider: 'claude' as const, snapshot: snapshot([tool('claude', 'installed', 'signedIn')]), ready: true, busy: false, run, management: true};
+  await button(nodes(ProviderPreparation(props)), '检查版本').props.onClick();
+  resetRender(); const detail = nodes(ProviderPreparation(props));
+  expect(detail.some(node => node.props.children === '验证版本：1.1')).toBe(true);
+  expect(installationInfo(nodes(detail.find(node => node.props.className === 'provider-meta')?.props.children), '最新版本')).toBeUndefined();
+});
+
+it('does not revive an old version check after switching from installation A to B and back to A', async () => {
+  const props = {provider: 'codex' as const, snapshot: snapshot([tool('codex', 'installed', 'signedIn')]), ready: true, busy: false, run, management: true};
+  function render() {
+    resetRender();
+    const detail = nodes(ProviderPreparation(props));
+    for (const effect of harness.pending.splice(0)) effect();
+    return detail;
+  }
+  const original = {tool: 'codex' as const, installation: 'external' as const, version: '1.0', latestVersion: '1.2', executable: '/a/codex', canUninstall: false};
+  harness.codex = original;
+  await button(render(), '检查版本').props.onClick();
+  expect(installationInfo(render(), '最新版本')).toBe('1.1');
+  harness.codex = {...original, executable: '/b/codex'};
+  render();
+  harness.codex = original;
+  expect(installationInfo(render(), '最新版本')).toBe('1.2');
 });
 
 it('switches a visible Codex detail to Claude when search reveals Claude in the same Provider page', () => {
