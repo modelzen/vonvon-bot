@@ -30,3 +30,23 @@ it('keeps the source icon on other desktop platforms', () => {
   expect(fake.source.resize).not.toHaveBeenCalled();
   expect(fake.image).toBe(fake.source);
 });
+
+it('offers Chinese open and quit actions without revealing the window just to open the macOS menu', () => {
+  const show = vi.fn();
+  const quit = vi.fn();
+  createDesktopTray('/app/assets/tray.png', show, quit, 'darwin');
+  const menu = fake.tray.setContextMenu.mock.lastCall?.[0] as Array<{label?: string; type?: string; click?: () => void}>;
+  expect(menu.map(item => item.label ?? item.type)).toEqual(['打开 Vonvon Bot', 'separator', '退出 Vonvon Bot']);
+  menu[0]?.click?.();
+  expect(show).toHaveBeenCalledOnce();
+  expect(quit).not.toHaveBeenCalled();
+  menu[2]?.click?.();
+  expect(quit).toHaveBeenCalledOnce();
+  expect(fake.tray.on).not.toHaveBeenCalledWith('click', expect.anything());
+});
+
+it('still opens the window from a tray click on Linux', () => {
+  const show = vi.fn();
+  createDesktopTray('/app/assets/tray.png', show, vi.fn(), 'linux');
+  expect(fake.tray.on).toHaveBeenCalledWith('click', show);
+});

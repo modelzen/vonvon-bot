@@ -835,7 +835,7 @@ function DesktopApp() {
                   <MachinePanel reveal={searchTarget?.reveal} request={client.machine} agents={snapshot.agents} macos={snapshot.application.platform === 'macos'}/>
                   <SettingsPanel scope="host" target={{kind: 'host'}}/>
                 </>}>
-                <SettingsGroup label="启动选项" id={settingAnchor('启动选项')} footer="关闭窗口或退出应用后，Bot 会继续在后台运行。">
+                <SettingsGroup label="启动选项" id={settingAnchor('启动选项')} footer="关闭窗口会隐藏 Dock 图标，应用仍在状态栏运行。可从状态栏重新打开或退出。">
                   <SettingsRow title="后台运行"
                     description={host.kind === 'connected'
                       ? `${host.ownership === 'owned' ? '由本机启动' : '已接续现有服务'} · 重新加载已保存的 Bot 设置`
