@@ -40,7 +40,7 @@ const catalog: ModelCatalog = {backend: 'codex-appserver', state: 'ready', sourc
 ]};
 const initial = (): Value => ({backend: catalog.backend, models: ['alpha'], efforts: ['low', 'high']});
 function text(node: ReactNode): string {if (typeof node === 'string' || typeof node === 'number') return String(node); if (Array.isArray(node)) return node.map(text).join(''); return isValidElement<{children?: ReactNode}>(node) ? text(node.props.children) : '';}
-const button = (all: Element[], label: string) => all.find(node => node.props['aria-label'] === label || text(node.props.children) === label)!;
+const button = (all: Element[], label: string) => all.find(node => node.props.label === label || node.props['aria-label'] === label || text(node.props.children) === label)!;
 const picker = (all: Element[], field: 'models' | 'efforts') => all.filter(node => node.type === Combobox.Root)[field === 'models' ? 0 : 1]!;
 const item = (all: Element[], label: string) => all.find(node => node.type === Combobox.Item && node.props['aria-label'] === label)!;
 async function flush() {for (let i = 0; i < 12; i++) await Promise.resolve();}

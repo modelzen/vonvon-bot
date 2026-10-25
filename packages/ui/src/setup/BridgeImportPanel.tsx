@@ -1,8 +1,8 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
-import {ArrowRight, Check, Download, LoaderCircle} from 'lucide-react';
+import {ArrowRight, Check, Download, LoaderCircle, RefreshCw} from 'lucide-react';
 import type {BridgeImportReply, BridgeImportStep, BridgeImportView, BridgePreflight, DesktopSnapshot, MachineRequestHandler} from '@vonvon/protocol';
 import {useClient} from '../client-context';
-import {Button, InlineNotice, StatusBadge} from '../reference/components/ui';
+import {Button, IconButton, InlineNotice, StatusBadge} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
 import './bridge-import.css';
 
@@ -122,7 +122,9 @@ export function BridgeImportPanel({ready, busy, platform, onDetected, showUnavai
     <section className="bridge-import-card" aria-label="Bridge 导入">
       <span className="bridge-import-card__icon"><Download size={20} aria-hidden="true"/></span>
       <div className="bridge-import-card__copy"><h2>{entry.title}</h2><p>{entry.detail}</p></div>
-      <Button size="sm" variant={completed || !found ? 'secondary' : 'primary'} loading={operation === 'detect'} disabled={busy || !ready || Boolean(operation)} onClick={inspect} icon={<ArrowRight size={14} aria-hidden="true"/>}>{entry.label}</Button>
+      {entry.label === '重新检测' || entry.label === '重新检查'
+        ? <IconButton size="sm" variant="ghost" label={entry.label} title={entry.label} loading={operation === 'detect'} disabled={busy || !ready || Boolean(operation)} onClick={inspect}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
+        : <Button size="sm" variant={completed || !found ? 'secondary' : 'primary'} loading={operation === 'detect'} disabled={busy || !ready || Boolean(operation)} onClick={inspect} icon={<ArrowRight size={14} aria-hidden="true"/>}>{entry.label}</Button>}
     </section>
     <Dialog open={open} title="从 Bridge 导入" description="一次导入全部 Bot，沿用原来的飞书应用。" size="md"
       onClose={working ? undefined : () => setOpen(false)} dismissible={!working}
@@ -132,7 +134,7 @@ export function BridgeImportPanel({ready, busy, platform, onDetected, showUnavai
         {progress && <span className="bridge-import__footer-note">请保持 Vonvon 运行，完成后会显示结果。</span>}
       </> : <>
         <Button disabled={working} onClick={() => setOpen(false)}>稍后再说</Button>
-        {retryAction === 'detect' || !reply?.preflight?.canImport || !reply.preflight.bots.length || issue ? <Button variant="primary" loading={operation === retryAction} disabled={busy || !ready || progress} onClick={recheck}>{retryAction === 'detect' ? '重新检测' : '重新检查'}</Button>
+        {retryAction === 'detect' || !reply?.preflight?.canImport || !reply.preflight.bots.length || issue ? <IconButton size="sm" variant="ghost" label={retryAction === 'detect' ? '重新检测' : '重新检查'} title={retryAction === 'detect' ? '重新检测' : '重新检查'} loading={operation === retryAction} disabled={busy || !ready || progress} onClick={recheck}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
           : <Button variant="primary" loading={operation === 'start'} disabled={!canStartBridgeImport(reply.preflight, accepted, working || Boolean(issue))} onClick={() => void read('start')}>开始导入</Button>}
       </>}>
       <div className="bridge-import">

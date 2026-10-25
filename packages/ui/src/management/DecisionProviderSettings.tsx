@@ -1,8 +1,9 @@
+import {RefreshCw} from 'lucide-react';
 import {useCallback, useEffect, useRef, useState} from 'react';
 import type {CollaborationReply, HostSettingsView, SecretService, SettingsReply} from '@vonvon/protocol';
 import {useClient} from '../client-context';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
-import {Button, InlineNotice, SelectControl} from '../reference/components/ui';
+import {Button, IconButton, InlineNotice, SelectControl} from '../reference/components/ui';
 import {Editor} from '../settings/SettingsPanel';
 import {decisionProviderSection, settingAnchor} from '../search';
 
@@ -97,11 +98,11 @@ export function DecisionProviderSettings({services, onOpenProviders}: {services?
   }
   const section = view?.sections.judge;
   return <>
-    {error && <InlineNotice tone="warning" title="配置读取失败" actions={<Button size="sm" loading={loading} onClick={() => void refresh()}>重试</Button>}>{error}</InlineNotice>}
+    {error && <InlineNotice tone="warning" title="配置读取失败" actions={<IconButton size="sm" variant="ghost" label="重试" title="重新读取 Provider 配置" loading={loading} onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}>{error}</InlineNotice>}
     {section ? <Editor title="Provider 配置" section={section} save={save}
       validate={value => Object.values(value.byProvider).some(profile => !profile.model.trim()) ? '请填写模型 ID。' : undefined}
       render={(value, change, disabled) => <DecisionProviderFields value={value} defaults={section.effective} catalogs={catalogs} services={services} disabled={disabled} onChange={change} onOpenProviders={onOpenProviders}/>}/>
       : <SettingsGroup label="Provider 配置"><SettingsRow title={loading ? '正在读取配置…' : '当前服务暂不支持统一配置'} description={loading ? undefined : '请更新并重新连接本机服务。'}/></SettingsGroup>}
-    <div className="decision-config-reload"><Button size="sm" disabled={loading} onClick={() => {void refresh(); void refreshCatalogs();}}>重新读取配置与模型</Button></div>
+    <div className="decision-config-reload"><IconButton size="sm" variant="ghost" label="重新读取配置与模型" title="重新读取配置与模型" disabled={loading} onClick={() => {void refresh(); void refreshCatalogs();}}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></div>
   </>;
 }

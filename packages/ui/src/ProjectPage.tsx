@@ -1,8 +1,8 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {Download, Pencil, Trash2} from 'lucide-react';
+import {RefreshCw, Download, Pencil, Trash2} from 'lucide-react';
 import {backendLabel, type Agent, type AgentId, type DesktopSnapshot, type GroupId, type LibraryProject, type LibraryReply, type MembershipId, type ProjectId, type SnapshotProject, type ToolState} from '@vonvon/protocol';
 import {useClient} from './client-context';
-import {Button, InlineNotice} from './reference/components/ui';
+import {Button, IconButton, InlineNotice} from './reference/components/ui';
 import {ConfirmDialog, Dialog} from './reference/components/ui/Dialog';
 import {WorkspaceFields} from './settings/GroupDesignSettings';
 import {useDraft, useDraftGuard} from './settings/DraftGuard';
@@ -75,7 +75,7 @@ export function ProjectPage({project, snapshot, pane, onPane, onMembership, onCh
     <nav className="group-design-tabs" aria-label="项目页">
       {projectTabs.map(([kind, label]) => <button type="button" key={kind} aria-current={tab === kind ? 'page' : undefined} onClick={() => guard.navigate(() => onPane({kind} as ProjectPane))}>{label}</button>)}
     </nav>
-    {error && <InlineNotice title="读取未完成" tone="warning">{error}<Button size="sm" onClick={() => void refresh()}>重试</Button></InlineNotice>}
+    {error && <InlineNotice title="读取未完成" tone="warning">{error}<IconButton size="sm" variant="ghost" label="重试" title="重新读取项目" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></InlineNotice>}
     {tab === 'map' && <ProjectMemoryMap project={project} snapshot={snapshot} library={library} onMembership={onMembership} onAddGroup={onAddGroup} onBotProfile={onBotProfile}/>}
     {tab === 'workspace' && <ProjectWorkspace project={project} snapshot={snapshot} library={library} refresh={async () => {await refresh(); await onChanged();}}/>}
     <RenameDialog open={dialog === 'rename'} project={project} library={library} onClose={() => setDialog(null)} onDone={async () => {setDialog(null); await refresh(); await onChanged();}}/>

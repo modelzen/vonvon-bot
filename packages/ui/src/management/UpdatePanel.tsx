@@ -1,14 +1,17 @@
+import type {ReactNode} from 'react';
+import {ChevronRight,ArrowUpRight} from 'lucide-react';
 import {useState} from 'react';
 import {Button} from '../reference/components/ui';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {useDraftGuard} from '../settings/DraftGuard';
 import type {MachineReply, MachineRequest, MachineRequestHandler, DesktopUpdate} from '@vonvon/protocol';
 import '../settings/settings.css';
+import './application.css';
 import {settingAnchor} from '../search';
 import {useShellCapabilities} from '../client-context';
 import {openExternalUrl} from '../url-actions';
 
-export function UpdatePanel({request, attached}: {request: MachineRequestHandler; attached: boolean}) {
+export function UpdatePanel({request, attached,externalCoreAvailable,version,device,children,advancedSettings}: {request: MachineRequestHandler; attached: boolean; externalCoreAvailable:boolean; version:string;device:string;children:ReactNode;advancedSettings:ReactNode}) {
   const shell = useShellCapabilities();
   const {navigate} = useDraftGuard();
   const [desktop, setDesktop] = useState<DesktopUpdate>();
@@ -45,23 +48,27 @@ export function UpdatePanel({request, attached}: {request: MachineRequestHandler
       : desktop?.state === 'current' ? '已是最新版本'
         : desktop?.state === 'unavailable' ? '更新源不可用' : '尚未检查';
   return <>
-    <SettingsGroup id={settingAnchor('软件更新')} label="软件更新" footer="检查更新不会自动安装。">
-      <SettingsRow title="桌面版" value={desktop?.current ?? '尚未检查'} />
-      <SettingsRow title="更新状态" description={desktop?.message} value={desktopState} />
-      {desktop?.latest && <SettingsRow title="可用版本" value={desktop.latest} />}
-      <SettingsRow title="检查更新" description={!shell?.checkDesktopUpdate ? '桌面更新由桌面版提供。' : undefined} trailing={<Button size="sm" disabled={busy || !shell?.checkDesktopUpdate} onClick={() => {if (shell?.checkDesktopUpdate) void runDesktop(shell.checkDesktopUpdate);}}>检查更新</Button>} />
-      {(desktop?.state === 'available' || desktop?.state === 'downloaded') && <SettingsRow
-        title={desktop.state === 'downloaded' ? '安装更新' : '下载更新'}
-        trailing={<Button size="sm" disabled={busy || !shell?.installDesktopUpdate} onClick={() => {
-          const install = shell?.installDesktopUpdate;
-          if (!install) return;
-          if (desktop.state === 'downloaded') navigate(() => void runDesktop(install));
-          else void runDesktop(install);
-        }}>{desktop.state === 'downloaded' ? '安装并重启' : '下载更新'}</Button>} />}
-      <SettingsRow title="发布说明" trailing={<Button size="sm" disabled={busy} onClick={() => void openExternalUrl('https://github.com/modelzen/vonvon-bot/releases', 'releases', shell).catch(error => setDesktopMessage(error instanceof Error ? error.message : '无法打开发布说明。'))}>查看</Button>} />
-      {desktopMessage && <p className="settings-operation-message" role="status">{desktopMessage}</p>}
-    </SettingsGroup>
-    <SettingsGroup id={settingAnchor('外部 Core / CLI')} label="外部 Core / CLI" footer={attached ? '更新外部 Core 不会更改桌面版本。' : '内置 Core 随桌面更新，无需单独安装。'}>
+    <section className="application-update-card" aria-label="软件更新" id={settingAnchor('软件更新')}>
+      <div className="application-update-main">
+        <img className="application-app-icon" src="./vonvon-logo.png" alt=""/>
+        <div className="application-app-copy"><strong>Vonvon Bot</strong><span>{device} · v{desktop?.current ?? version}</span></div>
+        <Button size="sm" disabled={busy || !shell?.checkDesktopUpdate} onClick={() => {if(shell?.checkDesktopUpdate) void runDesktop(shell.checkDesktopUpdate);}}>检查更新</Button>
+      </div>
+      <div className="application-update-status">
+        <span>{desktopState}{desktop?.latest && desktop.state !== 'current' ? ` · v${desktop.latest}` : ''}</span>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => void openExternalUrl('https://github.com/modelzen/vonvon-bot/releases','releases',shell).catch(error=>setDesktopMessage(error instanceof Error ? error.message : '无法打开发布说明。'))}>发布说明<ArrowUpRight size={12}/></Button>
+      </div>
+      {desktop?.message && <p className="application-update-message">{desktop.message}</p>}
+      {(desktop?.state === 'available' || desktop?.state === 'downloaded') && <div className="application-update-install"><span>{desktop.state === 'downloaded' ? '更新已准备好，安装后将重新打开应用。' : '检查更新不会自动安装。'}</span><Button size="sm" disabled={busy || !shell?.installDesktopUpdate} onClick={() => {const install=shell?.installDesktopUpdate;if(!install)return;if(desktop.state==='downloaded')navigate(()=>void runDesktop(install));else void runDesktop(install);}}>{desktop.state==='downloaded'?'安装并重启':'下载更新'}</Button></div>}
+      {desktopMessage && <p className="application-update-error" role="status">{desktopMessage}</p>}
+      {!shell?.checkDesktopUpdate && <p className="application-update-message">桌面更新由桌面版提供。</p>}
+    </section>
+    {!desktop && <p className="application-update-footnote">检查更新不会自动安装。</p>}
+    {children}
+    <details className="today-advanced-settings application-advanced">
+      <summary>高级运行设置<span>{externalCoreAvailable ? '外部程序更新、后台服务与执行程序' : '后台服务与执行程序'}</span><ChevronRight size={14}/></summary>
+      <div>
+    {externalCoreAvailable && <SettingsGroup id={settingAnchor('外部 Core / CLI')} label="外部 Core / CLI" footer="更新外部 Core 不会更改桌面版本。">
       <SettingsRow title="Core 来源" value={core ? (core.distribution.kind === 'global-npm' ? '全局 npm 安装' : '非全局 npm 安装') : '尚未检查'} />
       {core && <SettingsRow title="当前版本" value={core.current} />}
       {core && <SettingsRow title="可用版本" value={core.latest ?? '更新源不可用'} />}
@@ -69,6 +76,8 @@ export function UpdatePanel({request, attached}: {request: MachineRequestHandler
       <SettingsRow title="更新外部 Core" trailing={<Button size="sm" disabled={busy || !attached || core?.distribution.kind !== 'global-npm' || !core?.hasUpdate} onClick={() => void run({type: 'applyCoreUpdate'}, 'core')}>更新外部 Core</Button>} />
       <SettingsRow title="更新进度" trailing={<Button size="sm" disabled={busy || !attached} onClick={() => void run({type: 'coreUpdateStatus'}, 'core')}>查看 Core 更新进度</Button>} />
       {coreMessage && <p className="settings-operation-message" role="status">{coreMessage}</p>}
-    </SettingsGroup>
+    </SettingsGroup>}
+    {advancedSettings}
+    </div></details>
   </>;
 }
