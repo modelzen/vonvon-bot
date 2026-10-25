@@ -16,6 +16,7 @@ import { AdminWriteError, type AdminWriteOp } from '../src/admin/ops';
 import type { CodexSetupService } from '../src/agent/codex-appserver/setup';
 import * as clientPool from '../src/agent/codex-appserver/client-pool';
 import { REQUIRED_SCOPES } from '../src/config/scopes';
+import { cardCallbackFile, recordCardCallback } from '../src/config/card-callback';
 
 // 把整个 ~/.feishu-codex-bridge 指到临时目录，绝不碰真实用户数据。fixture 通过
 // bots/registry/session-store 模块的导出写入（useBotDir 切目录后写）——服务层读
@@ -489,6 +490,30 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
     writeCompleteConfig();
     await expect(createReadonlyAdminService().confirmCardCallback(SETUP_BOT, true)).rejects.toThrow('卡片回调勾选');
     expect(existsSync(botPaths(SETUP_BOT).setupFile)).toBe(false);
+  });
+
+  it('真实回调证据重开后保留，取消人工勾选不影响验证；轻量读取不调用飞书', async () => {
+    writeCompleteConfig();
+    rmSync(botPaths(SETUP_BOT).setupFile, { force: true });
+    const fetch = vi.fn(() => { throw new Error('must not contact Feishu'); });
+    vi.stubGlobal('fetch', fetch);
+    const svc = createAdminService({});
+    const verifiedAt = 1_790_000_000_000;
+    try {
+      expect(await svc.getCardCallbackStatus!(SETUP_BOT)).toEqual({ confirmed: false });
+      await svc.confirmCardCallback(SETUP_BOT, true);
+      expect(await svc.getCardCallbackStatus!(SETUP_BOT)).toEqual({ confirmed: true });
+      await Promise.all([recordCardCallback(SETUP_BOT, verifiedAt), svc.confirmCardCallback(SETUP_BOT, false)]);
+      expect(await createReadonlyAdminService().getCardCallbackStatus!(SETUP_BOT)).toEqual({ confirmed: true, verifiedAt });
+      expect(await svc.getCardCallbackStatus!(BOT_B)).toEqual({ confirmed: false });
+      await expect(svc.getCardCallbackStatus!('cli_missing')).rejects.toThrow('没有这个 Bot');
+      expect(fetch).not.toHaveBeenCalled();
+      vi.stubGlobal('fetch', stubFetch({ grantedScopes: [], eventEvents: ['im.message.receive_v1'] }));
+      expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: true, verifiedAt });
+    } finally {
+      rmSync(cardCallbackFile(SETUP_BOT), { force: true });
+      rmSync(botPaths(SETUP_BOT).setupFile, { force: true });
+    }
   });
 
   it.each([

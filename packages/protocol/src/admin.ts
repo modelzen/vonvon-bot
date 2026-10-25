@@ -69,8 +69,9 @@ export const adminSetupStatusSchema = z.object({
   eventConfigUrl: z.string(),
   /** The app's page on the developer console (versions and publishing are there). */
   consoleUrl: z.string(),
-  /** card.action.trigger has no read API, so the owner ticks it by hand (s04). */
-  cardCallback: z.object({ confirmed: z.boolean() }),
+  /** Confirmed manually or by receiving a real callback. Only receipt supplies
+   * verifiedAt (Unix milliseconds); old hosts can still return confirmed alone. */
+  cardCallback: z.object({ confirmed: z.boolean(), verifiedAt: z.number().int().positive().max(8_640_000_000_000_000).optional() }),
 });
 export type AdminSetupStatus = z.infer<typeof adminSetupStatusSchema>;
 
@@ -104,6 +105,8 @@ export const adminRequestSchema = z.discriminatedUnion("type", [
   z.object({type:z.literal("diagnosis"),agentId:agentIdSchema.optional()}).strict(),
   z.object({type:z.literal("hostDoctor")}).strict(),
   z.object({type:z.literal("setupStatus"),agentId:agentIdSchema}).strict(),
+  /** Local receipt evidence only; no Feishu calls. */
+  z.object({type:z.literal("cardCallbackStatus"),agentId:agentIdSchema}).strict(),
   z.object({type:z.literal("confirmCardCallback"),agentId:agentIdSchema,confirmed:z.boolean()}).strict(),
   z.object({type:z.literal("daemonStatus")}).strict(),
   z.object({type:z.literal("codexSetup")}).strict(),
@@ -125,6 +128,7 @@ export const adminReplySchema = z.discriminatedUnion("kind", [
   z.object({kind:z.literal("diagnosis"),bot:z.string().optional(),backends:z.array(adminBackendStatusSchema),event:eventDiagnosisSchema.optional(),eventConfigUrl:z.string().optional()}),
   z.object({kind:z.literal("hostDoctor"),doctor:adminHostDoctorSchema}),
   z.object({kind:z.literal("setupStatus"),status:adminSetupStatusSchema}),
+  z.object({kind:z.literal("cardCallbackStatus"),cardCallback:adminSetupStatusSchema.shape.cardCallback}),
   z.object({kind:z.literal("daemonStatus"),status:daemonStatusSchema}),
   z.object({kind:z.literal("codexSetup"),setup:codexSetupSchema}),
   z.object({kind:z.literal("logs"),text:z.string()}),

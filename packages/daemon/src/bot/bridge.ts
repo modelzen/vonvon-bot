@@ -22,6 +22,7 @@ import { paths } from '../config/paths';
 import { setTierMergePending, splitTierChats } from '../project/registry';
 import type { PermissionMode } from '../agent/types';
 import { onCrashSync } from '../host/crash-guard';
+import { createCardCallbackRecorder } from '../config/card-callback';
 
 export interface BridgeOptions {
   identity: BotIdentity;
@@ -64,6 +65,9 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   await mergeTiers();
   const app = opts.cfg.accounts.app;
   const channel = createBridgeChannel(app, opts.appSecret);
+  const cardCallbacks = createCardCallbackRecorder(app.id, {
+    onError: error => log.fail('setup', error, { phase: 'card-callback-verification', appId: app.id }),
+  });
 
   // 记忆写入（工具和隐藏块共用）：群绑定的项目取自绑定行，Bot 记忆在 bots/<appId>/ 下
   const memory = createMemoryWriter({
@@ -116,6 +120,8 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     // Replies and card updates go over HTTP, which this does not close. allSettled handles a rejection at once: it must
     // not wait unhandled while the orchestrator drains.
     const transportClosing = Promise.allSettled([channel.disconnect()]);
+    // Drain evidence received before disconnect completed; it runs independently of the business handlers.
+    const callbacksClosing = transportClosing.then(() => cardCallbacks.close());
     const groupsClosing = Promise.allSettled([...groupTasks]);
     const orchestratorClosing = orchestrator.shutdown();
     closing = (async () => {
@@ -128,6 +134,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
       for (const result of await transportClosing) {
         if (result.status === 'rejected') { log.fail('ws', result.reason, { phase: 'disconnect' }); errors.push(result.reason); }
       }
+      await callbacksClosing;
       if (errors.length) throw new AggregateError(errors, 'Bridge cleanup failed');
     })().finally(offCrash);
     return closing;
@@ -135,7 +142,10 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   try {
     await orchestrator.initialize?.();
     channel.on('message', orchestrator.onMessage);
-    channel.on('cardAction', orchestrator.dispatcher.handle);
+    channel.on('cardAction', event => {
+      cardCallbacks.received();
+      return orchestrator.dispatcher.handle(event);
+    });
     channel.on('comment', orchestrator.onComment);
     channel.on('botAdded', orchestrator.onBotAddedToChat);
     channel.on('reaction', orchestrator.onReaction);

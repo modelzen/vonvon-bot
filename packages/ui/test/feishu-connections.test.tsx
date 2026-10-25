@@ -85,10 +85,25 @@ it('confirms and revokes card callbacks only for the currently selected Bot', as
   expect(h.recheck).toHaveBeenCalledExactlyOnceWith(first.id);
   all.find(node => node.type === 'button' && node.props.title === '二号 Bot')!.props.onClick();
   all = render();
-  button(all, '取消勾选').props.onClick(); await flush();
+  expect(text(section(all))).toContain('已手动确认');
+  button(all, '撤销确认').props.onClick(); await flush();
   expect(h.admin).toHaveBeenLastCalledWith({type: 'confirmCardCallback', agentId: second.id, confirmed: false});
   expect(h.recheck).toHaveBeenLastCalledWith(second.id);
   expect(h.admin).toHaveBeenCalledTimes(2);
+});
+
+it('shows received callbacks as verified without a manual confirmation action', () => {
+  h.reads[first.id] = {status: done(first.id, false), checking: false} satisfies SetupRead;
+  let all = render();
+  expect(text(section(all))).toContain('待验证');
+  expect(button(all, '我已配置')).toBeDefined();
+  h.reads[first.id] = {status: {...done(first.id), cardCallback: {confirmed: true, verifiedAt: 1_792_900_000_000}}, checking: false} satisfies SetupRead;
+  all = render();
+  expect(text(section(all))).toContain('已验证');
+  expect(text(section(all))).toContain('已完成 6 / 6');
+  expect(button(all, '我已配置')).toBeUndefined();
+  expect(button(all, '撤销确认')).toBeUndefined();
+  expect(h.admin).not.toHaveBeenCalled();
 });
 
 it('keeps a failed or stale read visible instead of claiming setup is complete', () => {

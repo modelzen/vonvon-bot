@@ -61,9 +61,11 @@ export function botSteps(agent: Agent, status: AdminSetupStatus | undefined, pro
         : event.state === 'unpublished'
           ? {id: 'event', title: '事件订阅', status: '上线后才能确认', tone: 'neutral', done: false, detail: '在事件设置里选"使用长连接接收事件"，添加"接收消息"（im.message.receive_v1）。版本上线后这里会自动确认。', actions: [eventSettings]}
           : {id: 'event', title: '事件订阅', status: '无法确认', tone: 'neutral', done: false, detail: event.reason, actions: [eventSettings]},
-    status.cardCallback.confirmed
-      ? {id: 'callback', title: '卡片回调', status: '已勾选', tone: 'success', done: true, actions: [{kind: 'confirmCallback', label: '取消勾选', confirmed: false}]}
-      : {id: 'callback', title: '卡片回调', status: '请手动确认', tone: 'neutral', done: false, detail: '飞书没有接口能查这一项。在"事件与回调"的回调配置里，同样选长连接，添加"卡片回传交互"（card.action.trigger），配好后勾上。', actions: [eventSettings, {kind: 'confirmCallback', label: '我已配置', confirmed: true}]},
+    status.cardCallback.verifiedAt
+      ? {id: 'callback', title: '卡片回调', status: '已验证', tone: 'success', done: true, detail: '已收到过这个 Bot 的真实卡片回调（card.action.trigger）。', actions: []}
+      : status.cardCallback.confirmed
+        ? {id: 'callback', title: '卡片回调', status: '已手动确认', tone: 'success', done: true, detail: '你已确认完成配置，尚未收到真实卡片回调。', actions: [{kind: 'confirmCallback', label: '撤销确认', confirmed: false}]}
+        : {id: 'callback', title: '卡片回调', status: '待验证', tone: 'neutral', done: false, detail: '尚未收到真实卡片回调，收到后会自动验证。若还没配置，在"事件与回调"的回调配置里选长连接，添加"卡片回传交互"（card.action.trigger）；配置完成后也可以手动确认。', actions: [eventSettings, {kind: 'confirmCallback', label: '我已配置', confirmed: true}]},
     event.state === 'unpublished'
       ? {id: 'publish', title: '发布', status: '还没有上线的版本', tone: 'warning', done: false, detail: '在开发者后台的"版本管理与发布"里创建并发布一个版本；已经提交的，等管理员审核通过后这里会变绿。改过权限、事件或回调后，也要再发布一次。', actions: [{kind: 'open', label: '打开开发者后台', url: status.consoleUrl, target: 'app-console'}]}
       : event.state === 'unchecked'
