@@ -1,3 +1,4 @@
+import {RefreshCw} from 'lucide-react';
 import {useDecisionConfiguration} from './settings/useDecisionConfiguration';
 import {RpcError} from '@vonvon/client/browser';
 import {useClient} from './client-context';
@@ -5,7 +6,7 @@ import {useDirectoryPicker} from './directory-picker';
 import {useEffect, useRef, useState} from 'react';
 import type {Agent, AgentSettingsView, DesktopSnapshot, ProjectId, CommandResult, Conversation, FolderChoice, PendingGroup, JudgeSelectionView, DecisionModelsView, ToolState} from '@vonvon/protocol';
 import {conversationCopy, topicConversationCopy, toolSchema, groupDecisionSchema} from '@vonvon/protocol';
-import {Button, ChoiceGroup, FormField, InlineNotice} from './reference/components/ui';
+import {Button, IconButton, ChoiceGroup, FormField, InlineNotice} from './reference/components/ui';
 import {Dialog} from './reference/components/ui/Dialog';
 import {SettingsGroup, SettingsRow} from './reference/components/system-settings';
 import {useDraft, useDraftGuard} from './settings/DraftGuard';
@@ -251,7 +252,7 @@ export function JoinGroupDialog({snapshot, open = true, agent, pending, initialG
         {conversation === 'smart' && <SettingsGroup label="判断 Provider">
           <DecisionFields initial botId={agent.id} groupBackend={tool ? providerBackends[tool] : ''} value={judge} effective={decisionView?.sections.judge?.effective.selection ?? {kind: 'default'}} onChange={setJudge} disabled={busy} providers={providers} services={decisionView?.decisionModels} configuration={decisionConfiguration} tools={tools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenDecisionModel}/>
           {judgeProblem && <p className="gd-note" role="status">{judgeProblem}</p>}
-          {decisionReadError && <Button size="sm" disabled={busy} onClick={() => void readDecision()}>重试读取</Button>}
+          {decisionReadError && <IconButton size="sm" variant="ghost" label="重试读取" title="重新读取决策配置" disabled={busy} onClick={() => void readDecision()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}
         </SettingsGroup>}
         {mode.kind === 'bind' && mode.group.hasOtherBots && <p className="join-group-flow__hint">群内 Bot 都使用智能模式后，可互相 @ 并判断是否接话。</p>}
         {freeAt && <SettingsGroup>

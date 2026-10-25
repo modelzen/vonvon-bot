@@ -333,7 +333,8 @@ export function Editor<T extends object>({
       </InlineNotice>}
       {conflict && <InlineNotice title="设置已在别处更改" tone="danger">
         {autoSave ? '请重新读取最新设置后再切换。' : '当前草稿已保留。重新读取后可基于最新设置修改。'}
-        <Button size="sm" onClick={discard}>{autoSave ? '重新读取' : '重新读取并放弃草稿'}</Button>
+        {autoSave ? <IconButton size="sm" variant="ghost" label="重新读取" title="重新读取最新设置" onClick={discard}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
+          : <Button size="sm" onClick={discard}>重新读取并放弃草稿</Button>}
       </InlineNotice>}
       {error && (
         <InlineNotice title="保存未完成" tone="danger">
@@ -499,7 +500,7 @@ export function Catalog({
       {(error || unavailable) && (
         <div className="gd-model-catalog-status" role="status">
           <span>{error || catalog?.error || '暂时无法读取模型，已保存的选择仍保留。'}</span>
-          <Button size="sm" variant="ghost" disabled={loading} onClick={() => setAttempt(value => value + 1)}>重新读取模型</Button>
+          <IconButton size="sm" variant="ghost" label="重新读取模型" title="重新读取模型" disabled={loading} onClick={() => setAttempt(value => value + 1)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
         </div>
       )}
       {!catalog && !error && <p className="gd-model-compact-note" role="status">正在读取模型…</p>}
@@ -784,7 +785,7 @@ function AgentPanel({
           description={voice.feishu.message}
           trailing={
             <div className="settings-inline-actions">
-              <Button
+              <IconButton label="重新检测" title="重新检测飞书语音权限" variant="ghost"
                 size="sm"
                 disabled={cards.access.kind === "readonly"}
                 onClick={() =>
@@ -797,9 +798,7 @@ function AgentPanel({
                     },
                   })
                 }
-              >
-                重新检测
-              </Button>
+              ><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
               <Button
                 size="sm"
                 disabled={cards.access.kind === "readonly"}
@@ -1420,7 +1419,7 @@ export function ProjectPanel({
               {roster?.entries.filter(entry => !view.members.openIds.includes(entry.openId)).map(entry =>
                 <option key={entry.openId} value={entry.openId}>{memberLabel(entry.openId)}</option>)}
             </select>
-            <Button size="sm" onClick={() => void refresh()}>重新读取成员</Button>
+            <IconButton size="sm" variant="ghost" label="重新读取成员" title="重新读取成员" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
           </div>}
         />
         <SettingsRow
@@ -1571,7 +1570,7 @@ function SessionPicker({ view }: { view: ProjectSettingsView }) {
     <SettingsGroup
       label="话题模型"
         id={settingAnchor("话题模型")}
-      action={<Button onClick={() => setRefresh((value) => value + 1)}>刷新话题</Button>}
+      action={<IconButton size="sm" variant="ghost" label="刷新话题" title="刷新话题" onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}
       footer="模型从该会话下一轮生效。"
     >
       {error && (
@@ -1914,7 +1913,7 @@ function ScopedSettingsPanel(props: PanelProps) {
     </InlineNotice>
   ) : null;
   if (!view) return (
-    <SettingsGroup label="设置" action={<Button size="sm" onClick={() => void refresh()}>重新读取</Button>}>
+    <SettingsGroup label="设置" action={<IconButton size="sm" variant="ghost" label="重新读取" title="重新读取" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}>
       {status ?? <SettingsRow title="正在读取当前设置…" />}
     </SettingsGroup>
   );
@@ -1927,7 +1926,7 @@ function ScopedSettingsPanel(props: PanelProps) {
   ) : null;
   return (
     <>
-      {props.scope !== "agent" && <div className="settings-scope-bar"><Button size="sm" onClick={() => void refresh()}>重新读取</Button></div>}
+      {props.scope !== "agent" && <div className="settings-scope-bar"><IconButton size="sm" variant="ghost" label="重新读取" title="重新读取" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></div>}
       {status}
       {content}
     </>

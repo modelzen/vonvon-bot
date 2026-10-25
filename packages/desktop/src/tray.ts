@@ -11,10 +11,11 @@ export function createDesktopTray(pngPath: string, show: () => void, quit: () =>
   const tray = new Tray(icon);
   tray.setToolTip('Vonvon Bot');
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Show Vonvon Bot', click: show },
+    { label: '打开 Vonvon Bot', click: show },
     { type: 'separator' },
-    { label: 'Quit Vonvon Bot', click: quit },
+    { label: '退出 Vonvon Bot', click: quit },
   ]));
-  tray.on('click', show);
+  // macOS opens the status menu on click; only its Open item should reveal the window.
+  if (platform !== 'darwin') tray.on('click', show);
   return tray;
 }

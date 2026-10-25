@@ -1,3 +1,4 @@
+import {RefreshCw} from 'lucide-react';
 import type {ReactNode} from 'react';
 import {
   CUSTOM_PROMPT_NOTICE, NOT_REPLIED_TEXT, OPTIONAL_SCOPE_EFFECTS, SCOPE_DENIAL_PLACE_TEXT, backendLabel, botSteps, connectionStep, crashText, formatTime, toolSteps,
@@ -6,7 +7,7 @@ import {
 import {useClient, useShellCapabilities} from '../client-context';
 import {AgentAvatar} from '../AgentAvatar';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
-import {Button, StatusBadge} from '../reference/components/ui';
+import {Button, IconButton, StatusBadge} from '../reference/components/ui';
 import {diagnosticsSection, settingAnchor} from '../search';
 import {stepDescription} from '../setup/SetupChecklist';
 import {useClaudeLoginCheck} from '../setup/useClaudeLoginCheck';
@@ -212,7 +213,7 @@ export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpe
   return <div className="page-stack diagnostics-page">
     <CrashBars snapshot={snapshot} ready={ready} busy={busy} run={run}/>
     <SettingsGroup label="这台电脑" id={settingAnchor('这台电脑')}
-      action={<Button size="sm" loading={checking} disabled={busy || !ready} onClick={() => void recheckAll().catch(error => onNotice(error instanceof Error ? error.message : '重新检查没有完成。', true))}>重新检查</Button>}
+      action={<IconButton size="sm" variant="ghost" label="重新检查" title="重新检查" loading={checking} disabled={busy || !ready} onClick={() => void recheckAll().catch(error => onNotice(error instanceof Error ? error.message : '重新检查没有完成。', true))}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}
       footer="后端每分钟检查一次；Claude 的登录在打开这一页或点「检查登录」时检查。">
       <SettingsRow title="daemon 版本" value={host.kind === 'connected' ? host.version : '未知'}/>
       {tools.map(step => <SettingsRow key={step.id} title={step.title} description={stepDescription(step)}

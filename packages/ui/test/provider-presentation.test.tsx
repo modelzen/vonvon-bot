@@ -64,7 +64,7 @@ function renderManager(props: Parameters<typeof ProviderManager>[0]) {
   return view;
 }
 function button(all: Element[], label: string): Element {
-  const found = all.find(node => [node.props.children].flat().join('') === label && typeof node.props.onClick === 'function');
+  const found = all.find(node => (node.props.label === label || node.props['aria-label'] === label || [node.props.children].flat().join('') === label) && typeof node.props.onClick === 'function');
   if (!found) throw new Error(`button ${label} missing`);
   return found;
 }

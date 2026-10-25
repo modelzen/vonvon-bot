@@ -1,7 +1,8 @@
+import {RefreshCw} from 'lucide-react';
 import {useEffect, useMemo, useState} from 'react';
 import type {AdminReply, AdminRequest, JudgeUsageDay} from '@vonvon/protocol';
 import {useClient} from '../client-context';
-import {Button} from '../reference/components/ui';
+import {IconButton} from '../reference/components/ui';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {settingAnchor} from '../search';
 import {errorText} from './secretsModel';
@@ -31,7 +32,7 @@ export function JudgeUsageRows({read, onRead}: {read: JudgeUsageRead; onRead: ()
   const empty = view && !view.unreadBots && !view.botsUnreadable && view.days.every(day => day.total === 0);
   const logNote = '原因在状态与诊断页底部的 daemon 日志（judge usage-unreadable）。';
   return <SettingsGroup id={settingAnchor('智能模式的判断次数')} label="智能模式的判断次数"
-    action={<Button size="sm" onClick={onRead}>重新读取</Button>}
+    action={<IconButton size="sm" variant="ghost" label="重新读取" title="重新读取判断次数" onClick={onRead}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}
     footer={<details className="usage-counting-note"><summary>最近 14 天 · 按本机日期统计</summary><p>计入已发起的调用，包括连接失败。不计入缺少密钥、冷却期或达到小时上限而跳过的判断；数据可能延迟几秒。</p></details>}>
     {read.kind === 'loading' && <SettingsRow title="正在读取判断次数"/>}
     {read.kind === 'failed' && <SettingsRow title="判断次数读取失败" description={read.problem}/>}
