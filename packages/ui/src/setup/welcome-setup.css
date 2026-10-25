@@ -62,7 +62,7 @@
 .welcome-setup__connect > :is(.ui-button,.glow-button) {grid-column: 3; justify-self: end;}
 .welcome-setup__connect--alternative {grid-template-columns: 34px minmax(0, 1fr) auto; padding-block: 12px;}
 .welcome-setup__connect--alternative > .ui-button {grid-column: 3;}
-.welcome-setup__actions {display: flex; gap: 8px; flex-wrap: wrap;}
+.welcome-setup__actions {display: flex; align-items: center; gap: 8px; flex-wrap: wrap;}
 .welcome-setup .ui-button {min-height: 32px;}
 .welcome-setup .setup-checklist {gap: 16px;}
 

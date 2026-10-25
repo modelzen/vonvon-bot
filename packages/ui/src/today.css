@@ -42,7 +42,7 @@ html, body { min-width: 320px; min-height: 0; }
 .today-state-dot { display: inline-block; flex: none; width: 5px; height: 5px; border-radius: 50%; background: #8d8d93; }
 .today-state-dot[data-connected] { background: var(--color-status-success); }
 .today-connection-note > .today-state-dot { background: var(--color-status-warning); }
-.today-home-section > header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 0 4px 8px; min-height: var(--control-height, 32px); }
+.today-home-section > header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 0 0 8px; min-height: var(--control-height, 32px); }
 .today-home-section h2 { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 13px; font-weight: 600; }
 .today-home-section h2 > span { color: var(--color-text-tertiary); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .today-list-surface { overflow: hidden; border: 1px solid var(--color-border); border-radius: var(--card-radius, 12px); background: var(--color-surface); box-shadow: var(--card-shadow, none); }

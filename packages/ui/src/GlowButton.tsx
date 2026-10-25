@@ -2,7 +2,7 @@ import {useEffect, useRef, useState} from 'react';
 import {BorderBeam} from 'border-beam';
 import './glow-button.css';
 
-type Props = {children: string; disabled?: boolean; onClick: () => void};
+type Props = {children: string; size?: 'sm' | 'md'; disabled?: boolean; onClick: () => void};
 // One complete Line sweep in border-beam 1.4.1. Leaving the button doesn't
 // interrupt it; the finished sweep crossfades back to the quiet idle glow.
 const SWEEP_MS = 3100;
@@ -14,7 +14,7 @@ function ButtonArtwork({children}: {children: string}) {
   </span>;
 }
 
-export function GlowButton({children, disabled = false, onClick}: Props) {
+export function GlowButton({children, size = 'sm', disabled = false, onClick}: Props) {
   const [moving, setMoving] = useState(false);
   const [cycle, setCycle] = useState(0);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -37,7 +37,7 @@ export function GlowButton({children, disabled = false, onClick}: Props) {
     clearTimeout(timer.current);
     timer.current = setTimeout(() => setMoving(false), SWEEP_MS);
   }
-  return <span className="glow-button" data-disabled={disabled || undefined} data-moving={moving || undefined}
+  return <span className="glow-button" data-size={size} data-disabled={disabled || undefined} data-moving={moving || undefined}
     onPointerEnter={event => {if (event.pointerType === 'mouse') play();}}>
     <span className="glow-button__art" aria-hidden="true">
       {disabled ? <ButtonArtwork>{children}</ButtonArtwork> : <>
