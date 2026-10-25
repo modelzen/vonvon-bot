@@ -98,6 +98,7 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
   const disabled = !ready || busy || state.working;
   const source = state.tools.find(item => item.tool === provider);
   const versionSignature = JSON.stringify([providerSignature(state.tool), source?.executable, source?.version]);
+  useEffect(() => setVersionCheck(undefined), [versionSignature]);
   const checkedVersion = versionCheck?.signature === versionSignature ? versionCheck : undefined;
   const currentVersion = provider === 'codex' && checkedVersion ? checkedVersion.installed
     : detectionUnknown ? null : state.tool?.version?.replace(/^codex-cli\s+/, '') ?? source?.version ?? null;
