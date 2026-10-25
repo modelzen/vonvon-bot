@@ -31,7 +31,7 @@ import { supplementOf } from '../bot/context-assembly';
 import { botFiles, readRole, readSoulText, readText, roleDraft, roleProblem, updateRole, waitForBotFiles } from '../bot/role-files';
 import { loadBots } from '../config/bots';
 import { discoverGroupSkills, discoverLocalGroupSkills } from '../agent/group-skills';
-import { validateDefaultJudge, validateProviderJudge } from '../project/initial-settings';
+import { snapshotDefaultJudge, snapshotProviderJudge, requireDecisionKey } from '../project/initial-settings';
 export type * from './settings-types';
 export { parseSettingsAction, parseSettingsEdit, parseSettingsScope, parseModelQuery, SettingsInputError } from './settings-parse';
 export function settingsRevision(value: unknown): string {
@@ -417,25 +417,24 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       return undefined;
     }
   };
-  /** Returns what to store: group `default` is a host-inheritance marker; Bot `default` removes its override. A language model is stored with its
-   * backend: a group's must be the group's, or the judge would ignore it; the bot's is its default
-   * backend unless it says otherwise. A listed model is checked against the list the backend holds
+  /** Returns what to store: group defaults become concrete snapshots; Bot `default` removes its override.
+   * A group can use a decision backend independently of its task backend. The Bot layer keeps its
+   * existing backend-scoped inheritance. A listed model is checked against the list the backend holds
    * (what the judge fits the effort with), else a fresh catalog, except while the catalog cannot be
    * read: then the choice and its effort are kept as given, and each judgement fits the effort to the
-   * model (Rakazo 第二轮 A6). A decision model is checked for its shape only. */
+   * model (Rakazo 第二轮 A6). A decision model also requires a readable, configured credential. */
   async function validateJudgeSelection(value: T.JudgeSelection, layerBackend: string, group: boolean): Promise<JudgeSelectionStored | undefined> {
     if (value.kind === 'default') {
       if (!group) return undefined;
-      await validateDefaultJudge({ backendFor: deps.backendFor, readKey: deps.getSecret }).catch((error: unknown) => {
+      return snapshotDefaultJudge({ backendFor: deps.backendFor, readKey: deps.getSecret }).catch((error: unknown) => {
         throw new SettingsInputError(error instanceof Error ? error.message : '无法验证默认决策模型');
       });
-      return { kind: 'default' };
     }
     if (value.kind === 'provider') {
-      await validateProviderJudge(value.provider, { backendFor: deps.backendFor, readKey: deps.getSecret }).catch((error: unknown) => {
+      const choice=await snapshotProviderJudge(value.provider, { backendFor: deps.backendFor, readKey: deps.getSecret }).catch((error: unknown) => {
         throw new SettingsInputError(error instanceof Error ? error.message : '无法验证决策 Provider');
       });
-      return { kind: 'provider', provider: value.provider };
+      return group ? choice : { kind: 'provider', provider: value.provider };
     }
     const id = parseModelId(value.model);
     if (!id.ok)
@@ -446,6 +445,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       // any model id, as a hand-typed one: a wrong one fails its judgements as `model` and cools (s23f)
       if (!decisionProvider(value.provider))
         throw new SettingsInputError(`没有 ${value.provider} 这家决策模型，现在有：${decisionProviders().map(p => `${p.displayName}（${p.id}）`).join('、')}`);
+      await requireDecisionKey(value.provider,deps.getSecret).catch((error:unknown)=>{ throw new SettingsInputError(error instanceof Error?error.message:'无法验证决策模型密钥'); });
       return { kind: 'decision', provider: value.provider, model: id.id };
     }
     const backend = value.backend ?? layerBackend;
@@ -484,7 +484,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     const active = layers.group ?? layers.bot;
     const actualBackend = judgeBackendId(backend, layers.group ?? (layers.bot?.kind === 'llm' ? undefined : layers.bot));
     const { model, effort, provider } = resolveJudgeModel(actualBackend, layers, peekModels(actualBackend));
-    if (active?.kind === 'provider') return { selection: active };
+    if (active?.kind === 'provider' && !layers.group) return { selection: active };
     return { selection: provider ? { kind: 'decision', provider, model } : { kind: 'llm', backend: actualBackend, model, ...(effort ? { effort } : {}) } };
   }
   /** Every decision model this version calls, and whether its key is filled in by the judge's rule (an unreadable

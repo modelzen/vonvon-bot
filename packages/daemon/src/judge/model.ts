@@ -9,8 +9,7 @@ import { REASONING_EFFORTS, type ModelInfo, type ReasoningEffort } from '../agen
 import type { JudgeResult, JudgeSelectionStored } from './types';
 import { defaultJudgeProvider, JUDGE_PROVIDERS, readJudgeModelsSync, type JudgeProvider, type JudgeModels } from './global-models';
 
-// Which model judges (design 2.2, 2.3): the group's setting, else the bot's, each only for the
-// backend it was stored for, else the backend's default small model.
+// Group choices use their own decision backend. Legacy Bot inheritance remains backend-scoped.
 
 export const CODEX_JUDGE_MODEL = defaultCodexDecisionModel();
 export const CLAUDE_JUDGE_MODEL = 'haiku';
@@ -151,8 +150,8 @@ export function parseStoredJudge(value: unknown, backends: readonly string[]): {
 }
 
 /**
- * The model for a group on backend `backendId` (design 2.2): the group's setting when it is a
- * decision model or stored for this backend, else the bot's likewise, else the default small model.
+ * The model for a group: its independent decision choice, else the Bot's setting on the task
+ * backend, else the default small model. Legacy host references are resolved until snapshotted.
  * A decision model applies on every backend (product.md 3.4). A chosen effort is fitted to the model
  * ({@link fitJudgeEffort}); a setting without one gets the default rule: Codex thinking off when
  * supported, otherwise low (or a supported fallback), Claude none (thinking off).

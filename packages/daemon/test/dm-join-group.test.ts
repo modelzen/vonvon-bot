@@ -1,4 +1,6 @@
 import { rm } from 'node:fs/promises';
+import {join} from 'node:path';
+import {writeJudgeModels} from '../src/judge/global-models';
 import type { CardActionEvent } from '@larksuiteoapi/node-sdk';
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
 import type { AppConfig } from '../src/config/schema';
@@ -17,7 +19,8 @@ vi.mock('../src/config/paths', async () => {
 });
 const fixture = vi.hoisted(() => ({ send: vi.fn(async (..._args: unknown[]) => ({ messageId: 'om_result', cardId: 'card' })) }));
 // Keep both selectable backends available so error cards can preserve the selection.
-vi.mock('../src/agent', async original => ({ ...await original<object>(), isBackendEntryInstalled: () => true, createBackend: () => ({ id: 'codex-appserver', listModels: async () => [{ id: 'default', displayName: 'Default', supportedEfforts: ['medium'], defaultEffort: 'medium', isDefault: true, hidden: false }] }), effectiveDefaultBackend: async () => 'codex-appserver' }));
+vi.mock('../src/agent', async original => ({ ...await original<object>(), isBackendEntryInstalled: () => true, createBackend: () => ({ id: 'codex-appserver', loginStatus:async()=>({state:'signedIn',message:''}), listModels: async () => [{ id: 'default', displayName: 'Default', supportedEfforts: ['medium'], defaultEffort: 'medium', isDefault: true, hidden: false }] }), effectiveDefaultBackend: async () => 'codex-appserver' }));
+vi.mock('../src/config/keystore', async original=>({...await original<object>(),getSecret:async()=>undefined}));
 vi.mock('../src/card/managed', () => ({ sendManagedCard: fixture.send, updateManagedCard: vi.fn(async () => true) }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, warn() {}, fail() {} }, withTrace: (_context: unknown, callback: () => unknown) => callback() }));
 
@@ -26,6 +29,7 @@ const bot = { appId: 'cli_fixture', tenant: 'feishu' as const, createdAt: 1, reg
 beforeEach(async () => {
   await seedBots({ version: 1, bots: [{ ...bot, name: 'fixture' }] });
   await rm(paths.projectsFile, { force: true });
+  await rm(join(paths.appDir,'judge-models.json'),{force:true});
   fixture.send.mockClear();
 });
 afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
@@ -52,11 +56,21 @@ it('binds 按话题聊 as multi with default 免@ on and a topic result label', 
     expect(await getProjectByName('Topic')).toMatchObject({ kind: 'multi', noMention: true, origin: 'joined', mode: 'qa', network: false });
   } finally { await orchestrator.shutdown(); }
 });
-it('guides smart binding to the web decision model picker without creating a group', async () => {
+it('smart DM binding snapshots the global default independently of the task backend', async () => {
+  await writeJudgeModels({defaultProvider:'codex-appserver',byProvider:{'codex-appserver':{model:'default',effort:'medium'}}});
   const { orchestrator } = app();
   try {
-    await orchestrator.dispatcher.handle(submit('Smart', 'smart'));
-    expect(await reply()).toContain('请在网页端连接智能群，并选择决策模型');
+    await orchestrator.dispatcher.handle(submit('Smart', 'smart',''));
+    expect(await reply()).toContain('已绑定群');
+    expect(await getProjectByName('Smart')).toMatchObject({kind:'single',smart:true,backend:'claude-agent',judge:{kind:'llm',backend:'codex-appserver',model:'default',effort:'medium'}});
+  } finally { await orchestrator.shutdown(); }
+});
+it('smart DM binding refuses a default Jev with no key before saving the binding', async () => {
+  await writeJudgeModels({defaultProvider:'typesafe',byProvider:{typesafe:{model:'jev-latest'}}});
+  const { orchestrator } = app();
+  try {
+    await orchestrator.dispatcher.handle(submit('Smart', 'smart',''));
+    expect(await reply()).toContain('密钥');
     expect(await getProjectByName('Smart')).toBeUndefined();
   } finally { await orchestrator.shutdown(); }
 });

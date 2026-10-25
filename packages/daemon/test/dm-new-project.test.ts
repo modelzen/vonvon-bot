@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { CardActionEvent } from '@larksuiteoapi/node-sdk';
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
 import type { AppConfig } from '../src/config/schema';
+import {writeJudgeModels} from '../src/judge/global-models';
 import { paths } from '../src/config/paths';
 import { getProjectByName } from '../src/project/registry';
 import { createOrchestrator, dmCreationId } from '../src/bot/handle-message';
@@ -19,7 +20,8 @@ vi.mock('../src/config/paths', async () => {
 });
 const fixture = vi.hoisted(() => ({ send: vi.fn(async (..._args: unknown[]) => ({ messageId: 'om_result', cardId: 'card' })) }));
 // One backend: the form shows no picker, so the group gets the effective default written in.
-vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: (id: string) => ({ id, listModels: async () => [{ id: 'fixture-model', displayName: 'Fixture', description: '', hidden: false, isDefault: true, supportedEfforts: ['medium' as const], defaultEffort: 'medium' as const }] }), effectiveDefaultBackend: async () => 'claude-agent' }));
+vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: (id: string) => ({ id, loginStatus:async()=>({state:'signedIn',message:''}), listModels: async () => [{ id: 'fixture-model', displayName: 'Fixture', description: '', hidden: false, isDefault: true, supportedEfforts: ['medium' as const], defaultEffort: 'medium' as const }] }), effectiveDefaultBackend: async () => 'claude-agent' }));
+vi.mock('../src/config/keystore', async original=>({...await original<object>(),getSecret:async()=>undefined}));
 vi.mock('../src/card/managed', () => ({ sendManagedCard: fixture.send, updateManagedCard: vi.fn(async () => true) }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, warn() {}, fail() {} }, withTrace: (_context: unknown, callback: () => unknown) => callback() }));
 
@@ -28,6 +30,7 @@ const bot = { appId: 'cli_fixture', tenant: 'feishu' as const, createdAt: 1, reg
 beforeEach(async () => {
   await seedBots({ version: 1, bots: [{ ...bot, name: 'fixture' }] });
   await rm(paths.projectsFile, { force: true });
+  await rm(join(paths.appDir,'judge-models.json'),{force:true});
   fixture.send.mockClear();
 });
 afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
@@ -170,4 +173,27 @@ it('allows a Feishu application administrator into the DM project creation actio
     expect(await reply(1)).toContain('已创建项目');
     expect(fake.creates()[0]?.data).toMatchObject({ user_id_list: ['ou_app_admin'] });
   } finally { await orchestrator.shutdown(); roles.mockRestore(); }
+});
+
+it('smart DM creation copies the global default without another model-selection step',async()=>{
+  await writeJudgeModels({defaultProvider:'codex-appserver',byProvider:{'codex-appserver':{model:'fixture-model',effort:'medium'}}});
+  const {fake,orchestrator}=app();
+  try {
+    const event=submit('Smart DM');event.action.value={a:DM.newProjectSubmit,kind:'smart',__r:'1'};
+    await orchestrator.dispatcher.handle(event);
+    expect(await reply(1)).toContain('已创建项目');
+    expect(fake.creates()).toHaveLength(1);
+    expect(await getProjectByName('Smart DM')).toMatchObject({kind:'single',smart:true,backend:'claude-agent',judge:{kind:'llm',backend:'codex-appserver',model:'fixture-model',effort:'medium'}});
+  } finally {await orchestrator.shutdown();}
+});
+it('smart DM creation refuses a default Jev with no key before asking Feishu to create a group',async()=>{
+  await writeJudgeModels({defaultProvider:'typesafe',byProvider:{typesafe:{model:'jev-latest'}}});
+  const {fake,orchestrator}=app();
+  try {
+    const event=submit('Missing key');event.action.value={a:DM.newProjectSubmit,kind:'smart',__r:'1'};
+    await orchestrator.dispatcher.handle(event);
+    expect(await reply(1)).toContain('密钥');
+    expect(fake.creates()).toHaveLength(0);
+    expect(await getProjectByName('Missing key')).toBeUndefined();
+  } finally {await orchestrator.shutdown();}
 });
