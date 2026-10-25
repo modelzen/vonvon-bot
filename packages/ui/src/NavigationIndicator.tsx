@@ -3,7 +3,9 @@ import {Liquid, type MoveTuning} from 'liquid-gooey';
 
 type Position = {x: number; y: number; width: number; height: number};
 type Highlight = {position: Position; animate: boolean; generation: number};
-const move = {stretch: 0.18, trail: 0.15, advanced: {force: 0.18, stiffness: 500, damping: 30}} satisfies MoveTuning;
+// Match the accepted preview's effective tuning: it used the public stretch
+// value and the library defaults for the trailing droplet and arrival spring.
+const move = {springiness: 0.5, wobble: 0.5, stretch: 0.18, trail: 0.575} satisfies MoveTuning;
 
 // Decorative only: the existing navigation buttons keep their handlers, focus,
 // current-page semantics and memory counts. Measure them instead of assuming
