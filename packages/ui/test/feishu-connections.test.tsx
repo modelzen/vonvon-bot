@@ -7,7 +7,7 @@ import type {SetupRead} from '../src/setup/useSetupStatus';
 const h = vi.hoisted(() => ({
   state: [] as unknown[], index: 0,
   reads: {} as Record<string, unknown>,
-  recheck: vi.fn(), admin: vi.fn(),
+  recheck: vi.fn(), admin: vi.fn(), openExternal: vi.fn(),
 }));
 vi.mock('react', async original => ({...await original<typeof import('react')>(),
   useState: (initial: unknown) => {
@@ -18,6 +18,7 @@ vi.mock('react', async original => ({...await original<typeof import('react')>()
 }));
 vi.mock('../src/client-context', () => ({useClient: () => ({admin: h.admin}), useShellCapabilities: () => ({})}));
 vi.mock('../src/setup/useSetupStatus', () => ({useSetupStatus: () => ({reads: h.reads, recheck: h.recheck})}));
+vi.mock('../src/url-actions', () => ({openExternalUrl: (...args: unknown[]) => h.openExternal(...args)}));
 
 type Element = ReactElement<Record<string, any>>;
 function nodes(node: ReactNode): Element[] {
@@ -58,6 +59,7 @@ const flush = async () => {for (let i = 0; i < 12; i++) await Promise.resolve();
 beforeEach(() => {
   h.state = []; h.index = 0; h.reads = {}; h.recheck.mockReset().mockResolvedValue(undefined); h.admin.mockReset().mockResolvedValue({kind: 'applied'});
   run.mockClear(); onRegister.mockClear(); onOpenGroups.mockClear(); onNotice.mockClear();
+  h.openExternal.mockReset().mockResolvedValue(undefined);
 });
 
 it('shows one Bot at a time in the six Feishu checks and switches without mixing results', () => {
@@ -128,4 +130,27 @@ it('keeps a disabled Bot selectable for inspection while its sibling stays activ
   expect(section(all).props['aria-label']).toBe('二号 Bot 的配置检查');
   expect(text(all)).toContain('未启用');
   expect(all.find(node => node.type === 'button' && node.props.title === '一号 Bot')?.props.disabled).not.toBe(true);
+});
+
+it('keeps an event and callback settings entry after every check is complete', () => {
+  h.reads[first.id] = {status: {...done(first.id), cardCallback: {confirmed: false, configuration: {state: 'configured', mode: 'websocket'}}}, checking: false} satisfies SetupRead;
+  const all = render();
+  expect(text(section(all))).toContain('已完成 6 / 6');
+  expect(text(section(all))).toContain('已配置 · 长连接');
+  expect(button(all, '事件与回调')).toBeDefined();
+  expect(button(all, '我已配置')).toBeUndefined();
+});
+
+it('opens the selected Bot settings from both persistent and nearby event actions', async () => {
+  h.reads[first.id] = {status: done(first.id), checking: false} satisfies SetupRead;
+  h.reads[second.id] = {status: {...done(second.id), event: {state: 'ok', missingOptional: ['application.bot.menu_v6']}}, checking: false} satisfies SetupRead;
+  let all = render();
+  button(all, '事件与回调').props.onClick(); await flush();
+  expect(h.openExternal).toHaveBeenLastCalledWith(done(first.id).eventConfigUrl, 'event-settings', {});
+  all.find(node => node.type === 'button' && node.props.title === '二号 Bot')!.props.onClick();
+  all = render();
+  for (const label of ['事件与回调', '打开事件设置']) {
+    button(all, label).props.onClick(); await flush();
+    expect(h.openExternal).toHaveBeenLastCalledWith(done(second.id).eventConfigUrl, 'event-settings', {});
+  }
 });

@@ -41,6 +41,7 @@ import { groupBackendId, groupPermission } from '../config/execution';
 import { resolveAppSecret } from '../config/secret-resolver';
 import { createAgentAvatarProvider, createGroupAvatarProvider } from './avatar';
 import { diagnoseEventSubscription, type EventDiagnosis } from '../utils/event-diagnosis';
+import { diagnoseCardCallbackConfiguration, type CardCallbackConfiguration } from '../utils/card-callback-diagnosis';
 import { validateAppCredentials } from '../utils/feishu-auth';
 import { buildAppConsoleUrl, buildScopeGrantUrl, buildEventConfigUrl } from '../config/scopes';
 import { readCardCallbackStatus, writeSetupProgress } from '../config/setup-progress';
@@ -368,12 +369,12 @@ export interface AdminSetupStatus {
    * grantUrl 始终给（预选全部 scope，缺啥点一次补齐）。
    */
   scopes: { missingRequired?: string[]; missingJoinScopes?: string[]; missingOptional?: string[]; grantUrl: string };
-  /** 开发者后台「事件与回调」配置页深链（事件订阅没写 API，只能引导手动配 + 发版本）。 */
+  /** 开发者后台「事件与回调」配置页深链。 */
   eventConfigUrl: string;
   /** 开发者后台这个应用的首页（版本管理与发布在里面）。 */
   consoleUrl: string;
-  /** ⑤ 收到真实卡片回调后自动验证；尚未收到时仍支持本机人工确认。 */
-  cardCallback: { confirmed: boolean; verifiedAt?: number };
+  /** ⑤ 飞书配置、真实回调证据和本机人工确认分别记录，配置查询不写入本机确认。 */
+  cardCallback: { confirmed: boolean; verifiedAt?: number; configuration?: CardCallbackConfiguration };
 }
 
 /** 扫码注册成功：基本信息 + adminOpenId（扫码人 = owner）。
@@ -844,13 +845,14 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         return {
           ...base,
           credentials: { ok: false, reason: '配置缺失（这个 Bot 还没注册完，或者文件损坏了）' },
+          cardCallback: { ...base.cardCallback, configuration: { state: 'unchecked', reason: '配置缺失，无法诊断卡片回调' } },
           connection: { running: run.running, connection: run.connection },
           event: { state: 'unchecked', reason: '配置缺失，无法诊断事件订阅' },
           scopes: { grantUrl: buildScopeGrantUrl(botId, tenant) },
         };
       }
 
-      // ①③④ 都要密钥——解析一次，三段共用（探活拿 scope、事件诊断各打各的只读 API）。
+      // 各项远程诊断都要密钥——解析一次，共用凭据调用各自的只读 API。
       let secret: string | undefined;
       try {
         secret = await resolveAppSecret(cfg);
@@ -858,6 +860,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         return {
           ...base,
           credentials: { ok: false, reason: err instanceof Error ? err.message : String(err) },
+          cardCallback: { ...base.cardCallback, configuration: { state: 'unchecked', reason: '密钥不可解析' } },
           connection: { running: run.running, connection: run.connection },
           event: { state: 'unchecked', reason: '密钥不可解析' },
           scopes: { grantUrl: buildScopeGrantUrl(botId, tenant) },
@@ -865,8 +868,8 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       }
 
       const { app } = cfg.accounts;
-      // ①+④ 探活同时拿 botName / missingScopes；③ 事件诊断并发。各自绝不抛错。
-      const [validation, event] = await Promise.all([
+      // 探活、事件订阅、卡片回调配置并发；本地回调证据保持独立。
+      const [validation, event, configuration] = await Promise.all([
         validateAppCredentials(app.id, secret, app.tenant).catch((err) => ({
           ok: false as const,
           reason: err instanceof Error ? err.message : String(err),
@@ -874,6 +877,9 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         })),
         diagnoseEventSubscription(app.id, secret, app.tenant).catch(
           (err): EventDiagnosis => ({ state: 'unchecked', reason: err instanceof Error ? err.message : String(err) }),
+        ),
+        diagnoseCardCallbackConfiguration(app.id, secret, app.tenant).catch(
+          (): CardCallbackConfiguration => ({ state: 'unchecked', reason: '无法读取卡片回调配置，请稍后重试' }),
         ),
       ]);
 
@@ -883,6 +889,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         credentials: validation.ok ? { ok: true } : { ok: false, reason: validation.reason, ...(validation.unreachable ? { unreachable: true } : {}) },
         connection: { running: run.running, connection: run.connection },
         event,
+        cardCallback: { ...base.cardCallback, configuration },
         scopes: {
           missingRequired: validation.ok ? validation.missingScopes : undefined,
           missingJoinScopes: validation.ok ? validation.missingJoinScopes : undefined,

@@ -1,5 +1,5 @@
 import {useState} from 'react';
-import {ArrowRight, Check, RefreshCw} from 'lucide-react';
+import {ArrowRight, ArrowUpRight, Check, RefreshCw} from 'lucide-react';
 import {botSteps, type Agent, type AgentId, type StepAction} from '@vonvon/protocol';
 import {AgentAvatar} from '../AgentAvatar';
 import {Button, IconButton, StatusBadge} from '../reference/components/ui';
@@ -29,6 +29,7 @@ export function FeishuConnections({snapshot, ready, busy, run, onRegister, onOpe
   const agent = snapshot.agents.find(agent => agent.id === selected) ?? snapshot.agents[0];
   if (!agent) return null;
   const read = reads[agent.id];
+  const eventConfigUrl = read?.status?.eventConfigUrl;
   const steps = botSteps(agent, read?.status, read?.problem);
 
   async function act(action: StepAction, agentId: AgentId) {
@@ -75,6 +76,9 @@ export function FeishuConnections({snapshot, ready, busy, run, onRegister, onOpe
         <h2>配置检查</h2>
         <span className="feishu-connections__count">{read?.problem ? '检测结果待更新' : read?.status
           ? `已完成 ${steps.filter(step => step.done).length} / ${steps.length}` : '正在读取飞书配置…'}</span>
+        {eventConfigUrl && <Button size="sm" variant="ghost" disabled={!ready || busy}
+          icon={<ArrowUpRight size={14} aria-hidden="true"/>}
+          onClick={() => void act({kind: 'open', label: '事件与回调', url: eventConfigUrl, target: 'event-settings'}, agent.id)}>事件与回调</Button>}
         <IconButton size="sm" variant="ghost" label="重新检测" title="重新检测" loading={read?.checking}
           disabled={!ready} onClick={() => void recheck(agent.id)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
       </div>

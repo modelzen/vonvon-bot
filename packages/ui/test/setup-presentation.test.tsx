@@ -31,7 +31,7 @@ it('gives the reason and the button for each unfinished step', () => {
   expect(steps.connection?.actions).toEqual([{kind: 'enable', label: '启用 Bot'}]);
   expect(steps.event).toMatchObject({done: false, status: '上线后才能确认'});
   expect(steps.publish?.detail).toContain('等管理员审核通过');
-  expect(steps.callback?.actions.map(action => action.label)).toEqual(['打开事件设置', '我已配置']);
+  expect(steps.callback?.actions.map(action => action.label)).toEqual(['打开回调设置', '我已配置']);
   expect(steps.publish?.actions).toEqual([{kind: 'open', label: '打开开发者后台', url: fresh.consoleUrl, target: 'app-console'}]);
   expect(remoteStepsDone(fresh)).toBe(false);
 });
