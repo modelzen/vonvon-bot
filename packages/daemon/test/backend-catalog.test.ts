@@ -57,6 +57,10 @@ describe('catalog ↔ REGISTRY 配对（防漏注册）', () => {
     expect(entry.blurb).toContain('按需下载');
   });
 
+  it('Codex 版本查询使用官方 @openai/codex npm 包', () => {
+    expect(catalogById('codex-appserver')?.dep.pkg).toBe('@openai/codex');
+  });
+
   it('external-cli（codex）不可一键下载（isInstallable=false）', () => {
     expect(isInstallable(catalogById('codex-appserver')!)).toBe(false);
   });
