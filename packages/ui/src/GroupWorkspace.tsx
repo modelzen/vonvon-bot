@@ -5,6 +5,7 @@ import {modeToConversation, type Agent, type Conversation, type DesktopSnapshot,
 import {useClient, useShellCapabilities} from './client-context';
 import {AgentAvatar} from './AgentAvatar';
 import {GroupAvatar} from './GroupAvatar';
+import {NavigationIndicator} from './NavigationIndicator';
 import {GroupUsage} from './GroupUsage';
 import {settingAnchor} from './search';
 import {Button, InlineNotice, Toggle} from './reference/components/ui';
@@ -158,7 +159,10 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
         </div>
       </div>
       <div className="config-header-navigation">
-        <nav className="group-design-tabs config-tabs" aria-label="群设置">{groupDesignTabs.map(([value,label]) => <button type="button" key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => guard.navigate(() => {setTab(value); onTabChange?.(value);})}>{label}</button>)}</nav>
+        <nav className="group-design-tabs config-tabs gooey-tabs" aria-label="群设置">
+          <NavigationIndicator activeIndex={groupDesignTabs.findIndex(([value]) => tab === value)}/>
+          {groupDesignTabs.map(([value,label]) => <button type="button" key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => guard.navigate(() => {setTab(value); onTabChange?.(value);})}>{label}</button>)}
+        </nav>
         {project ? <span className="config-enable group-enable-control">{pendingEnabled !== null && <OperationActivity key={`${member.id}:${pendingEnabled}`} label={pendingEnabled ? '本群启用中' : '本群停用中'} state={pendingEnabled ? 'connecting' : 'working'}/>}<Toggle aria-label={`在本群使用 ${agent.name}`} label="在本群使用" checked={project.enabled} disabled={!available || busy} onChange={event => {const enabled=event.target.checked; guard.navigate(() => {void update({enabled});});}}/></span> : <span className="group-control-note">{!agent.enabled ? 'Bot 已停用' : !agent.running ? 'Bot 未运行' : '读取中…'}</span>}
       </div>
     </header>

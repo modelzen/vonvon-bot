@@ -107,8 +107,9 @@
 .config-header-actions .group-context-menu > summary { width: 32px; height: 32px; }
 .config-header-actions .group-context-menu > div { top: 36px; }
 .config-header-navigation { justify-content: space-between; gap: 18px; }
-.config-tabs { height: 34px; padding: 2px; gap: 2px; border: 0; border-radius: 8px; background: color-mix(in srgb, var(--color-text) 4%, var(--color-canvas)); box-shadow: inset 0 1px 1px #00000002; }
-.config-tabs > button { min-height: 28px; padding: 3px 14px; border-radius: 5px; font-size: 12px; line-height: 1.4; }
+.config-tabs { height: 36px; padding: 4px; gap: 0; border: 0; border-radius: 10px; background: #eaeaed; box-shadow: inset 0 0 0 1px #00000005; }
+.config-tabs > button { min-height: 28px; padding: 3px 14px; border-radius: 7px; color: #626268; font-size: 12px; line-height: 1.4; }
+.config-tabs > button[aria-current=page] { color: #242427; }
 .config-enable.group-enable-control { min-width: 0; margin-left: 0; flex: none; flex-wrap: nowrap; }
 .config-enable .ui-toggle { flex-direction: row-reverse; gap: 8px; }
 .config-enable .ui-toggle__label { color: var(--color-text-secondary); font-size: 12px; font-weight: 400; }
@@ -138,7 +139,7 @@
 @media (max-width: 380px) {
   .config-enable .ui-toggle__copy { display: none; }
   .config-header-navigation { gap: 6px; }
-  .config-tabs > button { padding-inline: 4px; font-size: 10.5px; }
+  .config-tabs > button { padding-inline: 4px; }
 }
 @media (pointer: coarse) {
   .config-header { grid-template-rows: minmax(44px, auto) minmax(44px, auto); }

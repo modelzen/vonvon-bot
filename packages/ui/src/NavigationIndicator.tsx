@@ -1,5 +1,6 @@
 import {useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {Liquid, type MoveTuning} from 'liquid-gooey';
+import './navigation-indicator.css';
 
 type Position = {x: number; y: number; width: number; height: number};
 type Highlight = {position: Position; animate: boolean; generation: number};
@@ -73,10 +74,10 @@ export function NavigationIndicator({activeIndex}: {activeIndex: number | null})
     return () => observer.disconnect();
   }, [activeIndex]);
 
-  return <span ref={root} className="today-nav-highlight" aria-hidden="true" data-ready={Boolean(highlight && !staticOnly) || undefined}>
-    {highlight && !staticOnly && <Liquid key={highlight.generation} className="today-nav-liquid" fill="var(--color-surface)" blur={4} contrast={18} shadow="0 1px 3px rgba(0,0,0,.1)">
+  return <span ref={root} className="navigation-indicator" aria-hidden="true" data-ready={Boolean(highlight && !staticOnly) || undefined}>
+    {highlight && !staticOnly && <Liquid key={highlight.generation} className="navigation-indicator__liquid" fill="var(--color-surface)" blur={4} contrast={18} shadow="0 1px 3px rgba(0,0,0,.1)">
       <Liquid.Item effect="move" move={move}>
-        <span className="today-nav-indicator" data-moving={highlight.animate || undefined} style={{
+        <span className="navigation-indicator__shape" data-moving={highlight.animate || undefined} style={{
           width: highlight.position.width, height: highlight.position.height,
           transform: `translate(${highlight.position.x}px, ${highlight.position.y}px)`,
         }}/>

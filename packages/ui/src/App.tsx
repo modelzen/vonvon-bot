@@ -5,6 +5,7 @@ import {PendingGroupToasts} from './PendingGroupToasts';
 import {JoinGroupDialog} from './JoinGroupDialog';
 import {SelectJoinBotDialog} from './SelectJoinBotDialog';
 import {GlowButton} from './GlowButton';
+import {NavigationIndicator} from './NavigationIndicator';
 import {usePendingGroups} from './pending-groups';
 import type {PendingGroup, ProjectId} from '@vonvon/protocol';
 import { useEffect, useRef, useState } from "react";
@@ -123,7 +124,8 @@ function DetailTabs({selected, onSelect, first, second}: {selected: 'overview' |
   </nav>;
 }
 function BotDetailTabs({selected, onSelect}: {selected: AgentPane['kind']; onSelect: (pane: AgentPane) => void}) {
-  return <nav className="collaboration-detail-tabs" aria-label="Bot 详情">
+  return <nav className="collaboration-detail-tabs gooey-tabs" aria-label="Bot 详情">
+    <NavigationIndicator activeIndex={selected === 'groups' ? 0 : selected === 'profile' ? 1 : 2}/>
     {([{kind: 'groups', label: '群聊'}, {kind: 'profile', label: '记忆'}, {kind: 'settings', label: '设置'}] as const).map(pane =>
       <button key={pane.kind} type="button" aria-current={selected === pane.kind ? 'page' : undefined} className={selected === pane.kind ? 'is-selected' : ''} onClick={() => onSelect({kind: pane.kind})}>{pane.label}</button>)}
   </nav>;

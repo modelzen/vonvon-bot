@@ -1,11 +1,12 @@
 import {useEffect, useState} from 'react';
-import {ArrowRight, Check, ChevronRight, LoaderCircle, RefreshCw, Package, KeyRound} from 'lucide-react';
+import {ArrowRight, Check, ChevronRight, RefreshCw, Package, KeyRound} from 'lucide-react';
 import type {CollaborationReply, Command, CommandResult, DesktopSnapshot, ToolState} from '@vonvon/protocol';
 import {ConfirmDialog} from '../reference/components/ui/Dialog';
 import {Button, IconButton} from '../reference/components/ui';
 import {useClient, useShellCapabilities} from '../client-context';
 import {openExternalUrl} from '../url-actions';
 import {settingAnchor} from '../search';
+import {OperationActivity} from '../management/OperationActivity';
 import {preferredProvider, providerBackends, providerIcons, providerInstalled, providerAuthenticated, providerNames, providerSignature, type SetupProvider} from './provider-state';
 import {useProviderSetup} from './useProviderSetup';
 import './provider-setup.css';
@@ -141,14 +142,14 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
       </div>
     </div>
     {!auth && installed && !connecting && <div className="provider-existing"><span>已有账号或 API 配置？</span><button type="button" disabled={disabled || state.check?.state === 'checking'} onClick={() => void state.verify()}>检测现有配置</button></div>}
-    {state.check?.state === 'checking' && installed && auth && <p className="provider-check" role="status"><LoaderCircle size={14} className="provider-spinner"/>正在读取可用模型…</p>}
+    {state.check?.state === 'checking' && installed && auth && <p className="provider-check"><OperationActivity label="正在读取可用模型…" state="connecting"/></p>}
     {state.canContinue && !compact && <p className="provider-check provider-check--ready" role="status"><Check size={14}/>{name} 已准备好<span>· {state.check?.models?.length ?? 0} 个模型</span></p>}
     {(state.issue || state.check?.message || linkError) && <div className="provider-problem" role="status"><p>{state.issue || state.check?.message || linkError}</p>{!detectionUnknown && <IconButton size="sm" variant="ghost" label="重新检测" title="重新检测" disabled={disabled || state.check?.state === 'checking'} onClick={() => {void state.read().catch(() => {}); void state.verify();}}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}</div>}
-    {state.activeCodexJob && <div className="provider-authorization" role="status">
-      {state.activeCodexJob.phase === 'authorizing' ? <><p>在 ChatGPT 授权页面输入此代码。</p><code>{state.activeCodexJob.userCode}</code><Button size="sm" disabled={disabled || !state.activeCodexJob.verificationUrl} onClick={() => {if (state.activeCodexJob?.phase === 'authorizing' && state.activeCodexJob.verificationUrl) void open(state.activeCodexJob.verificationUrl, 'authorization');}}>打开授权页面</Button></> : <p>{'message' in state.activeCodexJob ? state.activeCodexJob.message : '正在连接…'}</p>}
+    {state.activeCodexJob && <div className="provider-authorization" role={state.activeCodexJob.phase === 'authorizing' ? 'status' : undefined}>
+      {state.activeCodexJob.phase === 'authorizing' ? <><p>在 ChatGPT 授权页面输入此代码。</p><code>{state.activeCodexJob.userCode}</code><Button size="sm" disabled={disabled || !state.activeCodexJob.verificationUrl} onClick={() => {if (state.activeCodexJob?.phase === 'authorizing' && state.activeCodexJob.verificationUrl) void open(state.activeCodexJob.verificationUrl, 'authorization');}}>打开授权页面</Button></> : <p><OperationActivity key={state.activeCodexJob.id} label={'message' in state.activeCodexJob ? state.activeCodexJob.message : '正在连接…'} state="connecting"/></p>}
       <Button size="sm" variant="ghost" disabled={disabled} onClick={() => {if(state.activeCodexJob) void run({type:'cancelJob', jobId:state.activeCodexJob.id});}}>取消连接</Button>
     </div>}
-    {state.activeLogin && <div className="provider-authorization" role="status"><p>在 Claude 授权页面完成连接。</p>{state.activeLogin.url ? <Button size="sm" onClick={() => {if(state.activeLogin?.url) void open(state.activeLogin.url, 'verification');}}>打开授权页面</Button> : <span>正在打开授权页面…</span>}<Button size="sm" variant="ghost" disabled={disabled} onClick={() => void state.cancelLogin()}>取消连接</Button></div>}
+    {state.activeLogin && <div className="provider-authorization" role={state.activeLogin.url ? 'status' : undefined}><p>在 Claude 授权页面完成连接。</p>{state.activeLogin.url ? <Button size="sm" onClick={() => {if(state.activeLogin?.url) void open(state.activeLogin.url, 'verification');}}>打开授权页面</Button> : <OperationActivity key={state.activeLogin.id} label="正在打开授权页面…" state="connecting"/>}<Button size="sm" variant="ghost" disabled={disabled} onClick={() => void state.cancelLogin()}>取消连接</Button></div>}
     {provider === 'codex' && !state.activeCodexJob && snapshot.jobs.filter(job => job.type === 'loginCodex').at(-1)?.phase === 'failed' && <p className="provider-problem" role="status">上次连接未完成，可以重新连接。</p>}
     {onContinue && <footer className="provider-footer"><Button variant="primary" disabled={!state.canContinue || busy} icon={<ArrowRight size={15}/>} onClick={() => {if (state.canContinue) onContinue(provider);}}>继续</Button></footer>}
     {management && <>
