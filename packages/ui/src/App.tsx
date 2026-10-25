@@ -225,7 +225,13 @@ function DesktopApp() {
       const control = searchTarget?.field ? controls.find(element => element.getAttribute('aria-label') === searchTarget.field || element.textContent?.trim() === searchTarget.field) : undefined;
       if (searchTarget?.field && !row && !control) return false;
       const candidate = row ?? control;
-      if (candidate?.closest('details:not([open]), [hidden]')) return false;
+      // A matching field may live in a nested disclosure (for example machine runtime details).
+      let disclosure = candidate?.closest('details');
+      while (disclosure) {
+        disclosure.open = true;
+        disclosure = disclosure.parentElement?.closest('details') ?? null;
+      }
+      if (candidate?.closest('[hidden]')) return false;
       const target = candidate && !candidate.closest('[hidden]') ? candidate.querySelector<HTMLElement>('input, select, textarea, button') ?? candidate : section;
       target.scrollIntoView({block: 'center'});
       if (!target.matches('input, select, textarea, button')) target.tabIndex = -1;
@@ -525,7 +531,6 @@ function DesktopApp() {
         }
       >
         <div className="page-stack">
-          {page === 'diagnostics' && <header className="today-page-heading"><h1>{titles[page]}</h1></header>}
           {feature ? <FeaturePage feature={feature} /> : <>
           {page === 'collaboration' && route.kind !== 'list' && <nav className="collaboration-breadcrumb" aria-label="当前位置">
             <button type="button" onClick={() => openList(view)}>{view === 'agents' ? 'Bot' : view === 'groups' ? '群组' : '项目管理'}</button>
