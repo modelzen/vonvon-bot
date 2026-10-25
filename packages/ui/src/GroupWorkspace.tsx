@@ -1,5 +1,5 @@
 import {useEffect, useRef, useState} from 'react';
-import {ArrowUpRight, Check, ChevronDown, MoreHorizontal} from 'lucide-react';
+import {ArrowUpRight, BookOpen, Check, ChevronDown, MessageSquare, MoreHorizontal} from 'lucide-react';
 import {Select} from '@base-ui/react/select';
 import {modeToConversation, type Agent, type Conversation, type DesktopSnapshot, type Group, type Membership, type ProjectId, type ProjectRecord} from '@vonvon/protocol';
 import {useClient, useShellCapabilities} from './client-context';
@@ -55,7 +55,7 @@ type Props = {member: Membership; agent: Agent; group: Group; snapshot: DesktopS
   onBot: (member: Membership) => void; onBotProfile: () => void; onProject?: (id: ProjectId) => void; onOpenTools: () => void; onOpenProviders?: () => void; onOpenSecrets: (provider?: string) => void; onChanged: () => Promise<void>};
 // Intent: configure one Bot within one group, without exposing session management as navigation.
 // Hierarchy: target first, Bot/project scope next, then compact settings pages. System type
-// share Today's 4px spacing rhythm; history/help remain contextual actions in the toolbar.
+// share Today's 4px spacing rhythm; history/help stay visible, and the group name opens Feishu.
 export function GroupWorkspace({member, agent, group, snapshot, initialTab, revealHistory, onTabChange, onBot, onBotProfile, onOpenTools, onOpenProviders, onOpenSecrets, onChanged}: Props) {
   const client = useClient();
   const shell = useShellCapabilities();
@@ -135,7 +135,7 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
   return <div className="group-design-workspace">
     <header id={settingAnchor("群设置")} className="config-header">
       <div className="config-header-identity">
-        <div className="config-group-title"><GroupAvatar group={group} large/><h2 title={group.name}>{group.name}</h2></div>
+        <div className="config-group-title"><GroupAvatar group={group} large/><h2><button type="button" className="config-group-link" title="在飞书打开此群" aria-label={`在飞书打开 ${group.name}`} onClick={() => void openExternalUrl(groupUrl(group.id),'group',shell).catch(error => setError(String(error.message ?? error)))}><span>{group.name}</span><ArrowUpRight size={14} aria-hidden="true"/></button></h2></div>
         <span className="config-context-divider" aria-hidden="true"/>
         <Select.Root items={groupBots.map(({item,bot}) => ({value:item.id,label:bot.name}))} value={member.id} onValueChange={value => {
           if (!value || value === member.id) return;
@@ -151,8 +151,10 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
             </Select.List></Select.Popup>
           </Select.Positioner></Select.Portal>
         </Select.Root>
-        <div className="config-header-actions"><Button size="sm" variant="ghost" className="config-feishu" aria-label="在飞书打开此群" onClick={() => void openExternalUrl(groupUrl(group.id),'group',shell).catch(error => setError(String(error.message ?? error)))}><span className="group-open-label">飞书</span><ArrowUpRight size={13} aria-hidden="true"/></Button>
-          <details ref={menu} className="group-context-menu"><summary aria-label="群操作"><MoreHorizontal size={18}/></summary><div>{([['help','使用说明'],['history','对话记录'],['remove','解除群绑定…']] as const).map(([action,label]) => <button type="button" key={action} disabled={action === 'remove' && !available} onClick={event => {event.currentTarget.closest('details')?.removeAttribute('open'); guard.navigate(() => setDialog(action));}}>{label}</button>)}</div></details>
+        <div className="config-header-actions">
+          <Button size="sm" className="config-history" icon={<MessageSquare size={14} aria-hidden="true"/>} onClick={() => guard.navigate(() => setDialog('history'))}>对话记录</Button>
+          <Button size="sm" variant="ghost" className="config-help" icon={<BookOpen size={14} aria-hidden="true"/>} onClick={() => guard.navigate(() => setDialog('help'))}>使用说明</Button>
+          <details ref={menu} className="group-context-menu"><summary aria-label="群操作"><MoreHorizontal size={18}/></summary><div>{([['history','对话记录'],['help','使用说明']] as const).map(([action,label]) => <button className="group-menu-shortcut" type="button" key={action} onClick={event => {event.currentTarget.closest('details')?.removeAttribute('open'); guard.navigate(() => setDialog(action));}}>{label}</button>)}<button type="button" disabled={!available} onClick={event => {event.currentTarget.closest('details')?.removeAttribute('open'); guard.navigate(() => setDialog('remove'));}}>解除群绑定…</button></div></details>
         </div>
       </div>
       <div className="config-header-navigation">
