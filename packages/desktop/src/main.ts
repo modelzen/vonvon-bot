@@ -75,15 +75,45 @@ export async function startDesktop(): Promise<void> {
   let restartCancel: AbortController | undefined;
   let passive: { cancel: AbortController; done: Promise<void> } | undefined;
   let stopping: Promise<MachineReply> | undefined;
+  let wantsVisible = true;
+  let visibilityRevision = 0;
+  let restoringDock: Promise<void> | undefined;
 
   const show = (): void => {
+    if (quitting || terminating || cleanupPromise) return;
+    wantsVisible = true;
+    const revision = ++visibilityRevision;
     if (!window || window.isDestroyed()) {
       focusWhenReady = true;
       return;
     }
-    if (window.isMinimized()) window.restore();
-    window.show();
-    window.focus();
+    const current = window;
+    const reveal = (): void => {
+      // Dock restoration is asynchronous. A later close or quit must win, including
+      // hiding a Dock icon that a completed show() has just brought back.
+      if (!wantsVisible || quitting || terminating || cleanupPromise) {
+        app.dock?.hide();
+        return;
+      }
+      if (revision !== visibilityRevision || current !== window || current.isDestroyed()) return;
+      focusWhenReady = false;
+      if (current.isMinimized()) current.restore();
+      current.show();
+      current.focus();
+    };
+    if (app.dock && !app.dock.isVisible()) {
+      restoringDock ??= app.dock.show().finally(() => { restoringDock = undefined; });
+      // Still offer the window if macOS refuses Dock restoration.
+      void restoringDock.then(reveal, reveal);
+    } else reveal();
+  };
+
+  const hide = (): void => {
+    wantsVisible = false;
+    focusWhenReady = false;
+    visibilityRevision += 1;
+    if (window && !window.isDestroyed()) window.hide();
+    app.dock?.hide();
   };
 
   const requestQuit = (): void => {
@@ -97,6 +127,7 @@ export async function startDesktop(): Promise<void> {
   };
 
   const cleanup = (): Promise<void> => cleanupPromise ??= (async () => {
+    hide();
     let closeFailure: unknown;
     restartCancel?.abort();
     try {
@@ -237,11 +268,11 @@ export async function startDesktop(): Promise<void> {
     current.on('close', event => {
       if (!quitting && !terminating) {
         event.preventDefault();
-        current.hide();
+        hide();
       }
     });
     current.once('ready-to-show', () => {
-      if (!terminating) show();
+      if (!terminating && wantsVisible) show();
     });
     async function reattachReady(bot?: string): Promise<void> {
       const ready = await manager.ensureReady(0, bot);
@@ -530,7 +561,7 @@ export async function startDesktop(): Promise<void> {
           throw error;
         }
       },
-      hide: () => current.hide(),
+      hide,
       confirmQuit,
       connectionLost: showConnectionLost,
     });
@@ -538,7 +569,6 @@ export async function startDesktop(): Promise<void> {
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       { label: 'Vonvon Bot', submenu: [
         { label: '显示 Vonvon Bot', click: show },
-        { label: '退出 Vonvon Bot', accelerator: 'CmdOrCtrl+Q', click: requestQuit },
       ] },
       // macOS routes editing shortcuts, including Cmd+V in password fields, through native menu roles.
       { role: 'editMenu', label: '编辑' },

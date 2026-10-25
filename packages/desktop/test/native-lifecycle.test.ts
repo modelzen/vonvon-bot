@@ -21,6 +21,13 @@ const fake = vi.hoisted(() => ({
   verified: vi.fn(async (): Promise<VerifiedDaemon | null> => null),
   running: vi.fn(async (_previous: { pid: number; startedAt: string }) => false),
   tray: { destroy: vi.fn() },
+  dock: {
+    visible: true,
+    isVisible: vi.fn(() => fake.dock.visible),
+    show: vi.fn(async () => { fake.dock.visible = true; }),
+    hide: vi.fn(() => { fake.dock.visible = false; }),
+    setIcon: vi.fn(),
+  },
   openExternal: vi.fn(async () => {}),
   updateConfiguration: vi.fn(async () => ({ signed: true, manifestURL: 'https://updates.example.test/manifest.json' })),
   root: '/tmp/vonvon-native-test-root',
@@ -54,6 +61,7 @@ vi.mock('electron', async () => {
     constructor(readonly options: unknown) { super(); fake.window = this; }
   }
   class MockApp extends EventEmitter {
+    dock: typeof fake.dock | undefined = fake.dock;
     requestSingleInstanceLock = vi.fn(() => false);
     quit = vi.fn();
     whenReady = vi.fn(async () => {});
@@ -109,8 +117,9 @@ import { changeLoginItem, repairServiceAtStartup } from '../src/login-item.js';
 import { AttachError } from '../src/attach.js';
 import { ConnectionError, RpcError } from '@vonvon/client/browser';
 import { autoUpdater, dialog, Menu, net } from 'electron';
+import { createDesktopTray } from '../src/tray.js';
 
-type MockApp = EventEmitter & { requestSingleInstanceLock: ReturnType<typeof vi.fn>; quit: ReturnType<typeof vi.fn>; getAppPath: ReturnType<typeof vi.fn> };
+type MockApp = EventEmitter & { dock: typeof fake.dock | undefined; requestSingleInstanceLock: ReturnType<typeof vi.fn>; quit: ReturnType<typeof vi.fn>; getAppPath: ReturnType<typeof vi.fn> };
 type MockWindow = EventEmitter & {
   visible: boolean;
   destroyed: boolean;
@@ -158,6 +167,11 @@ beforeEach(async () => {
   app.requestSingleInstanceLock.mockReturnValue(true);
   app.getAppPath.mockReturnValue(appPath);
   app.quit.mockClear();
+  app.dock = fake.dock;
+  fake.dock.visible = true;
+  fake.dock.isVisible.mockClear();
+  fake.dock.hide.mockClear();
+  fake.dock.show.mockReset().mockImplementation(async () => { fake.dock.visible = true; });
   fake.bridge.requestQuit.mockClear();
   fake.bridge.dispose.mockClear().mockResolvedValue(undefined);
   fake.bridge.replaceOwner.mockClear().mockResolvedValue(undefined);
@@ -194,13 +208,18 @@ async function downloadUpdate(): Promise<void> {
 }
 
 describe('updater final install lifecycle', () => {
-  it('provides native editing shortcuts while preserving quit confirmation', () => {
+  it('keeps editing shortcuts and routes explicit quit only from the tray through draft confirmation', () => {
     const menu = vi.mocked(Menu.setApplicationMenu).mock.lastCall?.[0] as unknown as Array<{
-      role?: string; label?: string; submenu?: Array<{ label?: string; click?: () => void }>;
+      role?: string; label?: string; submenu?: Array<{ role?: string; label?: string; accelerator?: string; click?: () => void }>;
     }>;
     expect(menu).toContainEqual({ role: 'editMenu', label: '编辑' });
-    menu[0]?.submenu?.find(item => item.label === '退出 Vonvon Bot')?.click?.();
+    const items = menu.flatMap(item => [item, ...item.submenu ?? []]);
+    expect(items.some(item => item.role === 'quit' || item.label?.includes('退出'))).toBe(false);
+    expect(menu.flatMap(item => item.submenu ?? []).some(item => /\+Q$/i.test(item.accelerator ?? ''))).toBe(false);
+    const trayQuit = vi.mocked(createDesktopTray).mock.lastCall?.[2];
+    trayQuit?.();
     expect(fake.bridge.requestQuit).toHaveBeenCalledOnce();
+    expect(fake.bridge.dispose).not.toHaveBeenCalled();
     expect(app.quit).not.toHaveBeenCalled();
   });
   it('exposes CLI repair and observation without changing the daemon owner', async () => {
@@ -824,15 +843,89 @@ describe('native window lifecycle', () => {
     expect(desktopResources(appPath, false).preload).toBe(join(appPath, 'dist', 'preload.cjs'));
   });
 
-  it('hides on close and reopens on second instance while preserving the owner', () => {
+  it('hides the window and Dock on close, then restores both on a second instance', async () => {
     const close = { preventDefault: vi.fn() };
     window.emit('close', close);
     expect(close.preventDefault).toHaveBeenCalledOnce();
     expect(window.visible).toBe(false);
+    expect(fake.dock.visible).toBe(false);
+    expect(fake.tray.destroy).not.toHaveBeenCalled();
     app.emit('second-instance');
-    expect(window.visible).toBe(true);
+    await vi.waitFor(() => expect(window.visible).toBe(true));
+    expect(fake.dock.show).toHaveBeenCalledOnce();
+    expect(fake.dock.visible).toBe(true);
     expect(window.focus).toHaveBeenCalled();
     expect(fake.bridge.dispose).not.toHaveBeenCalled();
+  });
+
+  it('uses the same hide and restore paths for renderer hide, tray open and application activation', async () => {
+    const trayShow = vi.mocked(createDesktopTray).mock.lastCall?.[1];
+    for (const reopen of [trayShow, () => app.emit('activate')]) {
+      actions.hide();
+      expect(window.visible).toBe(false);
+      expect(fake.dock.visible).toBe(false);
+      reopen?.();
+      await vi.waitFor(() => expect(window.visible).toBe(true));
+      expect(fake.dock.visible).toBe(true);
+    }
+    expect(fake.bridge.dispose).not.toHaveBeenCalled();
+    expect(fake.tray.destroy).not.toHaveBeenCalled();
+  });
+
+  it('lets a later close win over delayed Dock restoration without losing the tray', async () => {
+    actions.hide();
+    window.show.mockClear();
+    let restored!: () => void;
+    fake.dock.show.mockImplementationOnce(() => new Promise<void>(resolve => { restored = () => { fake.dock.visible = true; resolve(); }; }));
+    app.emit('activate');
+    window.emit('close', { preventDefault: vi.fn() });
+    restored();
+    await vi.waitFor(() => expect(fake.dock.visible).toBe(false));
+    expect(window.show).not.toHaveBeenCalled();
+    expect(window.visible).toBe(false);
+    expect(fake.tray.destroy).not.toHaveBeenCalled();
+  });
+
+  it('coalesces pending Dock restoration and honors the newest reopen intent', async () => {
+    actions.hide();
+    window.show.mockClear();
+    let restored!: () => void;
+    fake.dock.show.mockImplementationOnce(() => new Promise<void>(resolve => { restored = () => { fake.dock.visible = true; resolve(); }; }));
+    app.emit('activate');
+    actions.hide();
+    app.emit('second-instance');
+    expect(fake.dock.show).toHaveBeenCalledOnce();
+    restored();
+    await vi.waitFor(() => expect(window.visible).toBe(true));
+    expect(fake.dock.visible).toBe(true);
+    expect(window.show).toHaveBeenCalledOnce();
+  });
+
+  it.each(['quit', 'update cleanup'] as const)('does not revive the window or Dock when restoration completes after %s', async stop => {
+    if (stop === 'update cleanup') await downloadUpdate();
+    actions.hide();
+    window.show.mockClear();
+    let restored!: () => void;
+    fake.dock.show.mockImplementationOnce(() => new Promise<void>(resolve => { restored = () => { fake.dock.visible = true; resolve(); }; }));
+    app.emit('activate');
+    await (stop === 'quit' ? actions.confirmQuit() : actions.installDesktopUpdate());
+    restored();
+    await vi.waitFor(() => expect(fake.dock.visible).toBe(false));
+    expect(window.show).not.toHaveBeenCalled();
+    expect(window.destroyed).toBe(true);
+    expect(fake.tray.destroy).toHaveBeenCalledOnce();
+    expect(fake.bridge.dispose).toHaveBeenCalledOnce();
+    expect(fake.owner.dispose).not.toHaveBeenCalled();
+  });
+
+  it('preserves window hide and restore on platforms without a Dock API', () => {
+    app.dock = undefined;
+    actions.hide();
+    expect(window.visible).toBe(false);
+    app.emit('activate');
+    expect(window.visible).toBe(true);
+    expect(fake.dock.hide).not.toHaveBeenCalled();
+    expect(fake.dock.show).not.toHaveBeenCalled();
   });
 
   it('reissues an explicit quit after cancellation, then closes the desktop only after confirmation', async () => {
