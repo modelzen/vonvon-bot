@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import QRCode from "qrcode";
 import { ChevronDown, RefreshCw } from "lucide-react";
-import { Button, StatusBadge } from "../reference/components/ui";
+import { Button, IconButton, StatusBadge } from "../reference/components/ui";
 import { ConfirmDialog, Dialog } from "../reference/components/ui/Dialog";
 import { useDraft } from "../settings/DraftGuard";
 import { presentTool, profileTokenLabel, toolNames } from "./environmentPresentation";
@@ -222,12 +222,12 @@ export function EnvironmentPanel({ request, reveal }: Props) {
   return <section className="environment-panel" aria-label="本机环境" id={settingAnchor('本机环境')}>
     <header className="environment-lead today-page-heading">
       <h1>工具与连接</h1>
-      <Button size="sm" icon={<RefreshCw size={15} />} disabled={busy} onClick={() => void refresh()}>重新检测</Button>
+      <IconButton label="重新检测" title="重新检测本机工具与连接" disabled={busy} onClick={() => void refresh()}><RefreshCw size={15}/></IconButton>
     </header>
     {notice && <p className="environment-notice" role="status">{notice}</p>}
     {running && !progressOpen && <div className="environment-notice" role="status">{toolNames[running.tool]} 正在{running.update ? "更新" : "安装"}。<Button size="sm" onClick={() => setProgressOpen(true)}>返回进度</Button></div>}
     <div className="environment-groups">
-      <DependencyGroup title="飞书 CLI" description="读写飞书文档、消息等内容。">
+      <DependencyGroup title="本机工具" description="读写飞书文档、消息等内容。">
         {tools.filter((tool) => tool.tool === "lark-cli").map((tool) => <ToolRow key={tool.tool} reveal={reveal === 'lark-tool'} tool={tool} auth={auth[tool.tool]} profiles={profiles} busy={busy || Boolean(running)} running={running?.tool === tool.tool} onIntent={setIntent} onCheckAuth={checkAuth} onLogin={() => void act({ type: "startLogin", tool: tool.tool })} onProgress={() => setProgressOpen(true)} onManageProfiles={() => setProfilesOpen(true)} />)}
       </DependencyGroup>
       {otherBackends.length > 0 && <DependencyGroup title="其他 Provider">
@@ -274,7 +274,7 @@ export function EnvironmentPanel({ request, reveal }: Props) {
 }
 
 function DependencyGroup({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
-  return <section className="environment-dependency"><header><h3>{title}</h3></header><div className="environment-tool-list">{children}</div>{description && <p className="environment-group-description">{description}</p>}</section>;
+  return <section className="environment-dependency"><header><h3>{title}</h3>{description && <p>{description}</p>}</header><div className="environment-tool-list">{children}</div></section>;
 }
 
 type BackendActionsProps = {
