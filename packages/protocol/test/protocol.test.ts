@@ -43,10 +43,12 @@ describe("pinned contract extraction", () => {
       {type:"removeSecret",keyId:"typesafe-api-key"},{type:"testSecret",keyId:"typesafe-api-key"},
     ];
     for (const payload of adminRequests) expect(adminRequestSchema.safeParse(payload).success).toBe(true);
-    for (const payload of [{type:"list"},{type:"list",path:"/tmp"},{type:"choose",path:"/tmp"}]) {
+    for (const payload of [{type:"list"},{type:"list",path:"/tmp"},{type:"suggest",query:"~/Projects/vonvon"},{type:"choose",path:"/tmp"}]) {
       expect(directoryRequestSchema.safeParse(payload).success).toBe(true);
     }
     expect(directoryReplySchema.parse({kind:"entries",path:"/tmp",parent:null,entries:[{name:"p",path:"/tmp/p",hidden:false}],truncated:false}).kind).toBe("entries");
+    expect(directoryReplySchema.parse({kind:"suggestions",root:"/home",path:null,parent:null,entries:[{name:"project",path:"/home/project",hidden:false}],truncated:true}).kind).toBe("suggestions");
+    expect(directoryRequestSchema.safeParse({type:"suggest",query:"x".repeat(4097)}).success).toBe(false);
     expect(directoryReplySchema.parse({kind:"folderChosen",folder:{token:randomUUID(),displayPath:"/tmp/p"}}).kind).toBe("folderChosen");
     const backend = {id:"codex",name:"Codex",ok:true,version:"1",isDefault:true};
     const daemon = {installed:false,running:true,selfHosted:true,version:"1",supported:false};
