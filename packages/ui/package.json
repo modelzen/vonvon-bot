@@ -20,7 +20,8 @@
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "zod": "3.25.76",
-    "thinking-orbs": "0.3.2"
+    "thinking-orbs": "0.3.2",
+    "border-beam": "1.4.1"
   },
   "devDependencies": {
     "@types/react": "19.1.10",

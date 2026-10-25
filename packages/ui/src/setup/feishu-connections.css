@@ -15,7 +15,7 @@
 
 .feishu-connections__heading {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 20px;
@@ -315,7 +315,7 @@
 @container settings-content (max-width: 600px) {
   .feishu-connections__checks-heading {flex-wrap: wrap; gap: 4px 12px;}
   .feishu-connections__heading {align-items: flex-start;}
-  .feishu-connections__heading .welcome-setup__actions {flex-direction: column-reverse; align-items: stretch;}
+  .feishu-connections__heading .welcome-setup__actions {flex-direction: column-reverse; align-items: flex-end;}
   .feishu-connections__bot {min-width: 135px;}
   .feishu-connections__step {padding: 12px; gap: 9px;}
   .feishu-connections__step-heading {flex-wrap: wrap;}
