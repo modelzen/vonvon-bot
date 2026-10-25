@@ -64,3 +64,17 @@
 .environment-login-details summary { cursor: pointer; padding-block: 4px; }
 .environment-login-details small { display: block; margin-top: 5px; }
 @media (prefers-reduced-motion: reduce) { .environment-chevron { transition: none; } }
+
+/* Compact tools-and-connections page, accepted in the local preview. */
+.environment-panel{gap:20px}
+.environment-panel > .environment-lead.today-page-heading{position:sticky;top:0;z-index:5;background:var(--color-canvas);padding-block:4px 10px}
+.environment-panel .environment-lead .ui-icon-button{width:32px;height:32px}
+.environment-panel .environment-groups{gap:28px}
+.environment-panel .environment-dependency>header{display:flex;align-items:baseline;gap:12px;margin:0 4px 10px;min-height:18px}
+.environment-panel .environment-dependency>header p{margin:0;font-size:12px;font-weight:400;color:var(--color-text-secondary);line-height:1.5}
+.environment-panel .environment-tool-summary{padding:10px 14px;min-height:68px}
+.environment-panel .environment-disclosure{grid-template-columns:28px minmax(0,1fr) auto 15px;gap:12px}
+.environment-panel .environment-tool-copy{gap:3px}
+.environment-panel .environment-tool-copy strong{font-weight:550}
+.environment-panel .environment-primary{gap:8px}
+@container settings-content (max-width:560px){.environment-panel .environment-dependency>header{flex-wrap:wrap;gap:4px 12px}.environment-panel .environment-tool-summary{grid-template-columns:1fr}.environment-panel .environment-primary{padding-left:44px}}
