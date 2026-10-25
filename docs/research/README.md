@@ -286,3 +286,9 @@ codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次�
 | 报告 | 内容 | 说明 |
 | --- | --- | --- |
 | [report](2026-10-25-mind-map-library/report.md) | Mind Elixir 5.15.1 固定版本、实际包体测量、旧 renderer 闲置轮询的观察器开销与接入约束 | owner 允许引入库；旧版18节点实际测量，最终 UI/App 验收另记 |
+
+## 2026-10-25 macOS App 体积
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [report](2026-10-25-app-size/report.md) | 0.7.13 arm64 App 623.76 MB 构成；恢复 Claude 按需托管安装后 0.7.14 实测 365.21 MB、ZIP 156.54 MB | 基线 6f5589b7；签名包与隔离安装、更新、重启、卸载通过，owner 验收待做 |

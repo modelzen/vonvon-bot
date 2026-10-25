@@ -1,12 +1,12 @@
 import { createRequire } from 'node:module';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { paths } from '../config/paths';
 import type { BackendCatalogEntry } from './catalog';
 
 /**
- * 按需后端依赖的加载器（npm-ondemand 包，库类 / bin 类；通用基础设施，当前内置后端未用）。
+ * 按需后端依赖的加载器（npm-ondemand 包，库类 / bin 类；Claude SDK 走库类）。
  *
  * 真机验证过的解析方案（design/backend-catalog-ondemand.md §2.1，实验 C/D/F）：
  *   ① 先试 bridge 自身的 node_modules —— 直接 `await import(pkg)`（bare specifier）。
@@ -35,35 +35,6 @@ export class BackendNotInstalledError extends Error {
  * 文件本身不需真实存在（实验 C）。挂在 backendsDir 根 → 解析 backendsDir/node_modules。 */
 function userAnchor(): string {
   return join(paths.backendsDir, '__backend_anchor__.cjs');
-}
-
-/** Only the staged desktop daemon declares bundledBackends. A checkout's devDependency is not bundled. */
-function daemonMetadataPath(): string | null {
-  let dir = dirname(fileURLToPath(import.meta.url));
-  for (let i = 0; i < 8; i++) {
-    const file = join(dir, 'package.json');
-    try {
-      const metadata = JSON.parse(readFileSync(file, 'utf8')) as { name?: string };
-      if (metadata.name === '@vonvon/daemon') return file;
-    } catch { /* continue towards the package root */ }
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
-}
-
-/** Desktop bundle marker, independent of whether a local checkout can resolve the SDK. */
-export function isBundledBackend(id: string, metadataFile: string | null = daemonMetadataPath()): boolean {
-  if (!metadataFile) return false;
-  try {
-    const metadata = JSON.parse(readFileSync(metadataFile, 'utf8')) as { name?: string; bundledBackends?: unknown };
-    return metadata.name === '@vonvon/daemon'
-      && Array.isArray(metadata.bundledBackends)
-      && metadata.bundledBackends.includes(id);
-  } catch {
-    return false;
-  }
 }
 
 /** Node 的 ESM「找不到模块」错误码族（不同 Node 版本/路径写法可能给不同码）。 */

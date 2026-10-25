@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsup';
 
-// SDK 保留运行时 import：桌面包在 Resources/daemon 内置完整依赖，
-// 独立 CLI 仍可按需安装到用户目录。由 loadBackendDep 统一解析。
+// SDK 保留运行时 import：桌面和独立 CLI 均在用户选择后安装到托管目录，
+// 不将开发依赖打进产物。由 loadBackendDep 统一解析。
 const external = ['@anthropic-ai/claude-agent-sdk'];
 
 export default defineConfig([
