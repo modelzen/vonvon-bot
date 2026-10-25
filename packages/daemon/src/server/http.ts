@@ -58,6 +58,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
   let acquiredJobs: Jobs | undefined;
   let acquiredLogs: LogFollowers | undefined;
   let acquiredEnvironment: EnvironmentService | undefined;
+  let acquiredDirectory: Awaited<ReturnType<typeof createDirectoryBrowser>> | undefined;
   let acquiredSockets: ReturnType<typeof createSocketServer> | undefined;
   let snapshots: SnapshotStore | undefined;
   let port = options.port ?? 0;
@@ -80,6 +81,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
     void owner.catch(() => undefined);
     for (const cleanup of [
       () => acquiredSockets?.beginDrain(),
+      () => acquiredDirectory?.close(),
       () => Promise.resolve().then(() => options.service.close?.()),
       () => acquiredJobs?.close(),
       () => acquiredEnvironment?.close(),
@@ -129,7 +131,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
       resolveCodex: () => resolveCodexBin({ force: true }), nodePath: process.execPath,
     });
     const { credential, machineId } = await readLocalIdentity(paths.appDir);
-    const directory = await createDirectoryBrowser();
+    const directory = acquiredDirectory = await createDirectoryBrowser();
     const server = acquiredServer = createServer((request, response) => {
       void serveWebUi(request, response).then(served => {
         if (!served) { response.writeHead(404); response.end(); }
