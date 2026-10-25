@@ -2,10 +2,11 @@ import {useState} from 'react';
 import {conversationTime} from './conversation-time';
 import {useShellCapabilities} from './client-context';
 import {botChatUrl,groupUrl,openExternalUrl} from './url-actions';
-import {Activity, ArrowUpRight, ArrowRight, ChartNoAxesColumn, ChevronRight, Settings, Cpu, Download, Link, Plus, Settings2, Wrench, type LucideIcon} from 'lucide-react';
+import {Activity, ArrowUpRight, ArrowRight, ChartNoAxesColumn, ChevronRight, Settings, Cpu, Download, Link, Settings2, Wrench, type LucideIcon} from 'lucide-react';
 import type {AgentId, DesktopSnapshot, GroupId} from '@vonvon/protocol';
 import {AgentAvatar} from './AgentAvatar';
-import {Button, IconButton} from './reference/components/ui';
+import {GlowButton} from './GlowButton';
+import {IconButton} from './reference/components/ui';
 import {uiFeatures} from './features';
 import type {Page} from './collaboration-model';
 
@@ -21,7 +22,7 @@ export function TodayHome({snapshot, onAgent, onGroup, onSetup, onRegister, disa
     {!snapshot.stale && attention.length > 0 && <button type="button" className="today-connection-note" onClick={onSetup}><span className="today-state-dot"/><span>{attention.length} 个 Bot 需要检查连接</span><ArrowRight size={14}/></button>}
     {error && <p role="alert" className="gd-note gd-warning">{error}</p>}
     <section className="today-home-section" aria-label="你的 Bot">
-      <header><h2>你的 Bot</h2><Button variant="ghost" disabled={disabled} onClick={onRegister}><Plus size={14}/>添加</Button></header>
+      <header><h2>你的 Bot</h2><GlowButton disabled={disabled} onClick={onRegister}>添加 Bot</GlowButton></header>
       <div className="today-list-surface">{snapshot.agents.map(bot => <div className="today-entity-row today-bot-row" key={bot.id}>
         <button type="button" className="today-bot-info" onClick={() => onAgent(bot.id)} aria-label={`查看 ${bot.name}`}><AgentAvatar agent={bot}/><span className="today-entity-copy"><strong title={bot.name}>{bot.name}</strong></span><small className="overview-bot-meta">{groupCount(bot.id)} 个群聊{(bot.readError || !bot.enabled || bot.connection !== 'connected') && <><span aria-hidden="true">·</span>{bot.readError ? '配置读取失败' : !bot.enabled ? '已停用' : bot.connection === 'connecting' || bot.connection === 'reconnecting' ? '正在连接' : '未连接'}</>}</small></button>
         <IconButton type="button" variant="ghost" className="today-icon-button" label={`在飞书打开 ${bot.name}`} title="在飞书打开" onClick={()=>void open(botChatUrl(bot.id),'bot-chat')}><ArrowUpRight size={17}/></IconButton>

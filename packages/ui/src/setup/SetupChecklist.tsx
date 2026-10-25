@@ -1,3 +1,4 @@
+import {GlowButton} from '../GlowButton';
 import {RefreshCw} from 'lucide-react';
 import {useState, type ReactNode} from 'react';
 import type {AgentId, Command, CommandResult, DesktopSnapshot} from '@vonvon/protocol';
@@ -115,7 +116,7 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
     </details>}
     {!compact && !botsOnly && <SettingsGroup label={snapshot.agents.length ? '再注册一个 Bot' : '第一步'}>
       <SettingsRow title="扫码建飞书应用" description="用飞书扫码，自动建好飞书应用并保存凭据。建好后这里会接着检测权限、事件和发布。"
-        trailing={<Button size="sm" variant={snapshot.agents.length ? 'secondary' : 'primary'} disabled={busy || !ready} onClick={() => onRegister()}>注册 Bot</Button>}/>
+        trailing={<GlowButton disabled={busy || !ready} onClick={() => onRegister()}>添加 Bot</GlowButton>}/>
     </SettingsGroup>}
   </div>;
 }

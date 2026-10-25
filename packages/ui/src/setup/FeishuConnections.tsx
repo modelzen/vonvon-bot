@@ -1,3 +1,4 @@
+import {GlowButton} from '../GlowButton';
 import {useState} from 'react';
 import {ArrowRight, ArrowUpRight, Check, RefreshCw} from 'lucide-react';
 import {botSteps, type Agent, type AgentId, type StepAction} from '@vonvon/protocol';
@@ -60,7 +61,7 @@ export function FeishuConnections({snapshot, ready, busy, run, onRegister, onOpe
       <header className="feishu-connections__heading">
         <div className="welcome-setup__intro"><h1>飞书连接</h1><p>管理 Bot 的连接与权限。</p></div>
         <div className="welcome-setup__actions">
-          <Button size="sm" disabled={!ready || busy} onClick={() => onRegister()}>创建 Bot</Button>
+          <GlowButton disabled={!ready || busy} onClick={() => onRegister()}>添加 Bot</GlowButton>
           {onOpenGroups && <Button size="sm" variant="primary" disabled={!ready || busy} onClick={onOpenGroups}
             icon={<ArrowRight size={15} aria-hidden="true"/>}>连接群聊</Button>}
         </div>

@@ -4,6 +4,7 @@ import {uiFeatures} from './features';
 import {PendingGroupToasts} from './PendingGroupToasts';
 import {JoinGroupDialog} from './JoinGroupDialog';
 import {SelectJoinBotDialog} from './SelectJoinBotDialog';
+import {GlowButton} from './GlowButton';
 import {usePendingGroups} from './pending-groups';
 import type {PendingGroup, ProjectId} from '@vonvon/protocol';
 import { useEffect, useRef, useState } from "react";
@@ -13,7 +14,6 @@ import {
   ChevronRight,
   ListChecks,
   MessageSquare,
-  Plus,
   Terminal,
   X,
 } from "lucide-react";
@@ -649,10 +649,9 @@ function DesktopApp() {
                   />
                   <SettingsRow
                     icon={Bot}
-                    title="注册 Bot"
-                    disabled={!ready || busy}
-                    onClick={() => void register()}
-                    value="飞书扫码注册"
+                    title="添加 Bot"
+                    description="飞书扫码注册"
+                    trailing={<GlowButton disabled={!ready || busy} onClick={() => void register()}>添加 Bot</GlowButton>}
                   />
                   <SettingsRow
                     icon={MessageSquare}
@@ -663,7 +662,7 @@ function DesktopApp() {
               )}
               {selection.kind === "overview" && (
                 <>
-                  {view === 'agents' && <header className="today-page-heading today-page-heading--actions"><div><h1>Bot</h1><span>{snapshot.agents.length} 个 Bot</span></div><Button icon={<Plus size={14}/>} disabled={!ready || busy} onClick={() => void register()}>注册 Bot</Button></header>}
+                  {view === 'agents' && <header className="today-page-heading today-page-heading--actions"><div><h1>Bot</h1><span>{snapshot.agents.length} 个 Bot</span></div><GlowButton disabled={!ready || busy} onClick={() => void register()}>添加 Bot</GlowButton></header>}
                   {view === "agents"
                     ? snapshot.agents.length > 0 && (
                         <section
@@ -735,14 +734,12 @@ function DesktopApp() {
                           : view === "groups" ? "点击「拉 Bot 入群」，选择 Bot 并连接已有飞书群。" : "把一个飞书群连到 Bot 上，就会有一个项目。"}
                       </p>
                       {view === "agents" && (
-                        <Button
-                          size="sm"
-                          icon={<Plus size={14} />}
+                        <GlowButton
                           disabled={!ready || busy}
                           onClick={() => void register()}
                         >
-                          注册 Bot
-                        </Button>
+                          添加 Bot
+                        </GlowButton>
                       )}
                     </div>
                   )}
