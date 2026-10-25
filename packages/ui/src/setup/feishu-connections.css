@@ -159,17 +159,6 @@
   min-width: 40px;
 }
 
-.feishu-connections__settings-link {
-  color: var(--color-text-secondary);
-  font-weight: 400;
-}
-
-.feishu-connections__settings-link > span {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
 .feishu-connections__steps {
   list-style: none;
   padding: 0;
@@ -262,21 +251,49 @@
   font-size: 10px;
 }
 
-.feishu-connections__step-actions {
+.feishu-connections__step-result {
   display: flex;
-  gap: 7px;
-  margin-top: 11px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
   flex-wrap: wrap;
 }
 
 .feishu-connections__inline-actions {
   display: flex;
   align-items: center;
-  margin: -3px 0;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .feishu-connections__inline-actions button {
+  position: relative;
+  min-height: 28px;
+  min-width: 62px;
   font-size: 11px;
+}
+
+/* Keep the compact visual button easy to hit within its own row. */
+.feishu-connections__inline-actions button::after {
+  content: '';
+  position: absolute;
+  inset: -6px 0;
+}
+
+.feishu-connections__inline-actions button > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.feishu-connections__step.has-actions {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.feishu-connections__step.has-actions .feishu-connections__number {
+  margin-top: 4px;
 }
 
 .feishu-connections__stale {
@@ -301,5 +318,7 @@
   .feishu-connections__heading .welcome-setup__actions {flex-direction: column-reverse; align-items: stretch;}
   .feishu-connections__bot {min-width: 135px;}
   .feishu-connections__step {padding: 12px; gap: 9px;}
+  .feishu-connections__step-heading {flex-wrap: wrap;}
+  .feishu-connections__step-result {gap: 8px; margin-left: auto;}
   .feishu-connections__step + .feishu-connections__step::before {left: 41px; right: 12px;}
 }
