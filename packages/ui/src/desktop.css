@@ -80,3 +80,38 @@ html,body,#root{height:100%;margin:0;overflow:hidden}button,input,select,textare
   }
 }
 html,body{min-width:780px;min-height:560px}
+
+/* Electron's native controls sit above this first row; the existing toolbar is the second row. */
+.desktop-titlebar { display: none; }
+html[data-desktop-chrome="silver"] .today-window {
+  grid-template-rows: 34px auto minmax(0, 1fr);
+}
+html[data-desktop-chrome="silver"] .desktop-titlebar {
+  display: block;
+  grid-column: 1 / -1;
+  height: 34px;
+  background: #e7e8ec;
+  box-shadow: inset 0 -1px rgb(0 0 0 / 10%);
+  -webkit-app-region: drag;
+}
+html[data-desktop-chrome="silver"] .today-app-header :is(.today-brand, .today-primary-nav, .today-header-actions) {
+  -webkit-app-region: no-drag;
+}
+html[data-desktop-chrome="silver"] .ui-dialog-backdrop {
+  top: 34px;
+}
+html[data-desktop-chrome="silver"] .ui-dialog {
+  max-height: calc(100dvh - 66px);
+}
+html[data-desktop-chrome="silver"][data-desktop-fullscreen="true"] .today-window {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+html[data-desktop-chrome="silver"][data-desktop-fullscreen="true"] .desktop-titlebar {
+  display: none;
+}
+html[data-desktop-chrome="silver"][data-desktop-fullscreen="true"] .ui-dialog-backdrop {
+  top: 0;
+}
+html[data-desktop-chrome="silver"][data-desktop-fullscreen="true"] .ui-dialog {
+  max-height: calc(100dvh - 32px);
+}
