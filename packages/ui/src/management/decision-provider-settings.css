@@ -17,8 +17,6 @@
 .secrets-page .decision-uses-disclosure[open] .decision-uses-chevron {transform:rotate(-90deg);}
 .secrets-page .decision-uses-content {padding:0 0 14px;line-height:1.65;color:var(--color-text-secondary);overflow-wrap:anywhere;}
 .secrets-page .decision-uses-content .secrets-uses {margin-top:0;gap:6px;}
-.secrets-page .decision-save-bar {position:sticky;bottom:0;z-index:4;display:flex;align-items:center;gap:8px;padding:12px 0;background:var(--color-canvas);}
-.secrets-page .decision-save-bar > span {flex:1;color:var(--color-text-secondary);font-size:12px;}
 
 .secrets-page .decision-key-content .ss-row {min-height:70px;}
 .secrets-page .decision-key-content .setup-step-trailing {flex-wrap:wrap;}
