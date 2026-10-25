@@ -90,7 +90,7 @@ export const BACKEND_CATALOG: readonly BackendCatalogEntry[] = [
     access: 'app-server',
     dep: {
       kind: 'external-cli',
-      pkg: 'codex',
+      pkg: '@openai/codex',
       detectHint: '未找到 codex CLI（设 CODEX_BIN、装 Codex.app，或 npm i -g @openai/codex）',
       installCmd: 'npm i -g @openai/codex（或装 Codex.app / 设 CODEX_BIN），然后 codex login',
     },
