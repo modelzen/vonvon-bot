@@ -23,13 +23,13 @@ const entry: McpReply['entries'][number] = {name: 'docs', transport: 'http', sou
 const view: McpReply = {type: 'mcp', provider: 'codex', status: 'ready', cliAvailable: true, revision: 'r1', configPath: '/native/config', entries: [entry]};
 type Element = ReactElement<Record<string, any>>;
 function nodes(node: ReactNode): Element[] {if (Array.isArray(node)) return node.flatMap(nodes); if (!isValidElement<Record<string, any>>(node)) return []; return [node, ...nodes(node.props.children), ...nodes(node.props.trailing), ...nodes(node.props.footer)];}
-function render(make: () => ReactNode = () => McpPanel({})) {harness.stateIndex = harness.refIndex = harness.effectIndex = harness.memoIndex = 0; const all = nodes(make()); for (const effect of harness.pending.splice(0)) effect(); return {all, button: (text: string) => all.find(node => node.props.children === text && node.props.onClick)!, by: (prop: string) => all.find(node => prop in node.props)!};}
+function render(make: () => ReactNode = () => McpPanel({})) {harness.stateIndex = harness.refIndex = harness.effectIndex = harness.memoIndex = 0; const all = nodes(make()); for (const effect of harness.pending.splice(0)) effect(); return {all, button: (text: string) => all.find(node => (node.props.label ?? node.props.children) === text && node.props.onClick)!, by: (prop: string) => all.find(node => prop in node.props)!};}
 async function flush() {for (let i = 0; i < 8; i++) await Promise.resolve();}
 beforeEach(() => {harness.state = []; harness.refs = []; harness.effects = []; harness.memos = []; harness.pending = []; harness.draft = undefined; vi.clearAllMocks(); harness.client.machine.mockResolvedValue(view);});
 it('retains the prior list and disables writes when refresh fails', async () => {
   render(); await flush(); let ui = render(); expect(ui.by('view').props.view.entries).toEqual([entry]);
   harness.client.machine.mockRejectedValueOnce(new Error('secret detail'));
-  await ui.button('重新读取').props.onClick(); await flush(); ui = render();
+  await ui.button('重新读取 MCP 配置').props.onClick(); await flush(); ui = render();
   expect(ui.by('view').props.view.entries).toEqual([entry]); expect(ui.by('view').props.disabled).toBe(true); expect(ui.button('添加').props.disabled).toBe(true);
   expect(JSON.stringify(ui.all.map(node => node.props.children))).not.toContain('secret detail');
 });
