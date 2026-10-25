@@ -43,7 +43,7 @@ import { createAgentAvatarProvider, createGroupAvatarProvider } from './avatar';
 import { diagnoseEventSubscription, type EventDiagnosis } from '../utils/event-diagnosis';
 import { validateAppCredentials } from '../utils/feishu-auth';
 import { buildAppConsoleUrl, buildScopeGrantUrl, buildEventConfigUrl } from '../config/scopes';
-import { readSetupProgress, writeSetupProgress } from '../config/setup-progress';
+import { readCardCallbackStatus, writeSetupProgress } from '../config/setup-progress';
 import { refreshBotCredentials } from '../bot/refresh-bot';
 import { registerBotFromCredentials } from '../bot/register-bot';
 import {
@@ -169,7 +169,9 @@ export interface AdminService {
    * 生效」。绝不 throw——每段独立降级。
    */
   getSetupStatus(botId: string): Promise<AdminSetupStatus>;
-  /** 首次运行清单里"卡片回调"那一步：飞书没有读接口，由主人手动勾上。 */
+  /** Local receipt evidence and manual confirmation only; no Feishu API calls. */
+  getCardCallbackStatus?(botId: string): Promise<AdminSetupStatus['cardCallback']>;
+  /** 人工确认仅修改手动标记；撤销不能清除已收到真实回调的证据。 */
   confirmCardCallback(botId: string, confirmed: boolean): Promise<void>;
   /**
    * 扫码注册一个机器人（day-0 主路径）：编排 SDK registerApp 扫码会话 → 拿明文密钥
@@ -370,8 +372,8 @@ export interface AdminSetupStatus {
   eventConfigUrl: string;
   /** 开发者后台这个应用的首页（版本管理与发布在里面）。 */
   consoleUrl: string;
-  /** ⑤ 卡片回调（card.action.trigger）没有读接口，由主人在首次运行清单里手动勾上。 */
-  cardCallback: { confirmed: boolean };
+  /** ⑤ 收到真实卡片回调后自动验证；尚未收到时仍支持本机人工确认。 */
+  cardCallback: { confirmed: boolean; verifiedAt?: number };
 }
 
 /** 扫码注册成功：基本信息 + adminOpenId（扫码人 = owner）。
@@ -810,6 +812,11 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       return readRecentLogs({ maxBytes: opts?.maxBytes ?? 64 * 1024 });
     },
 
+    async getCardCallbackStatus(botId: string): Promise<AdminSetupStatus['cardCallback']> {
+      if (!(await loadBots()).bots.some(bot => bot.appId === botId)) throw new Error('没有这个 Bot。');
+      return readCardCallbackStatus(botId);
+    },
+
     async getSetupStatus(botId: string): Promise<AdminSetupStatus> {
       const reg = await loadBots();
       const entry = reg.bots.find((b) => b.appId === botId);
@@ -820,7 +827,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         botName: entry?.botName,
         eventConfigUrl: buildEventConfigUrl(botId, tenant),
         consoleUrl: buildAppConsoleUrl(botId, tenant),
-        cardCallback: { confirmed: (await readSetupProgress(botId)).cardCallbackConfirmed },
+        cardCallback: await readCardCallbackStatus(botId),
       };
 
       // ② 长连接：真实状态优先（daemon 内），否则锁文件探测——绝不抛错。

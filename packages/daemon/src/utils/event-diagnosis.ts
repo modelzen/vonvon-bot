@@ -3,8 +3,8 @@ import type { TenantBrand } from '../config/schema';
 /**
  * 事件订阅自动诊断（research/01 的「最大增量点」）。
  *
- * 飞书对「添加事件 / 回调 / 发布版本」没有任何**写入类** OpenAPI，但提供了只读的
- * 「获取应用版本列表」（`GET /application/v6/applications/:app_id/app_versions`），
+ * 此诊断只调用「获取应用版本列表」
+ * （`GET /application/v6/applications/:app_id/app_versions`），不修改应用配置。
  * 响应里每个版本的 `event_infos[].event_type` 是事件 ID，`events` 是本地化名称，
  * `status` 为 1 表示审核通过/已上架。
  * 凭它可把「@机器人没反应」从"等用户发现"变成启动/doctor/诊断卡上的精确三态：
@@ -16,8 +16,8 @@ import type { TenantBrand } from '../config/schema';
  * 第四态 `unchecked` 是优雅降级：缺 `application:application.app_version:readonly`
  * scope、网络不通、接口报错都归这里——只告知、绝不阻塞启动（项目既有策略）。
  *
- * 注意：事件列表只含「事件配置」标签页的事件；「回调配置」（card.action.trigger
- * 卡片回传交互）不在其中，**无法检测**——相关提示仍须保留人工指引。
+ * 注意：此查询只检测「事件配置」；不能据此断言 card.action.trigger 已配置。
+ * 卡片回调由 Bot 接收真实 cardAction 后记录验证证据，尚未收到时保留人工确认。
  */
 
 const ENDPOINTS: Record<TenantBrand, string> = {
