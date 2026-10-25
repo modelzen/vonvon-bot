@@ -38,9 +38,9 @@
    than implying background work; keep its mask clear of text and focus rings. */
 .desktop-search-glow {
   position: absolute;
-  inset: 0 14% 1px;
+  inset: 0 24% 1px;
   pointer-events: none;
-  mask-image: linear-gradient(to top, #000 0 2px, transparent 20px), linear-gradient(to right, transparent, #000 10% 90%, transparent);
+  mask-image: linear-gradient(to top, #000 0 1px, transparent 16px), linear-gradient(to right, transparent, #000 10% 90%, transparent);
   mask-composite: intersect;
 }
 /* Line's gradients use fixed pixel radii. Stretch its decorative canvas to
