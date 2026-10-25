@@ -38,3 +38,30 @@
 .mcp-entry-detail { margin-inline: 14px; padding: 12px 0 14px; border-top: 1px solid var(--color-border); }
 .mcp-heading > div { flex-wrap: wrap; justify-content: flex-end; }
 .mcp-source summary:focus-visible, .mcp-form-advanced summary:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 3px; border-radius: 3px; }
+
+/* Compact tools-and-connections page, accepted in the local preview. */
+.environment-panel .mcp-panel{gap:10px}
+.environment-panel .mcp-heading{padding-inline:4px;gap:12px;min-height:32px;flex-wrap:wrap}
+.environment-panel .mcp-heading .mcp-title-group{display:flex;align-items:center;gap:16px}
+.environment-panel .mcp-heading .mcp-toolbar-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
+.environment-panel .mcp-heading .setting-choices{display:inline-flex;gap:2px;padding:2px;border:1px solid var(--color-border);border-radius:7px;background:var(--color-surface-muted)}
+.environment-panel .mcp-heading .setting-choices .setting-choice>span{border:0!important;box-shadow:none;padding:4px 10px;border-radius:5px;min-height:24px;background:transparent;color:var(--color-text-secondary);font-size:12px;font-weight:500;line-height:16px}
+.environment-panel .mcp-heading .setting-choice:has(input:checked)>span{background:var(--color-surface);color:var(--color-text);box-shadow:0 1px 3px #0000000d}
+.environment-panel .mcp-heading .setting-choice:has(input:focus-visible)>span{outline:2px solid var(--color-accent);outline-offset:2px}
+.environment-panel .mcp-entry>summary{display:flex;align-items:center;gap:12px;min-height:66px;padding:12px 16px}
+.environment-panel .mcp-entry>summary .mcp-transport{display:flex;align-items:center;justify-content:center;width:30px;height:30px;flex:0 0 30px;border-radius:7px;background:var(--color-surface-muted);color:var(--color-text-secondary)}
+.environment-panel .mcp-entry>summary .mcp-entry-copy{flex:1;min-width:0;gap:2px}
+.environment-panel .mcp-entry-copy>strong,.environment-panel .mcp-entry-copy>small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.environment-panel .mcp-entry-disabled .mcp-entry-copy>strong{color:var(--color-text-secondary)}
+.environment-panel .mcp-entry>summary .mcp-disabled-badge{display:inline-flex;flex:none;padding:2px 6px;border:1px solid var(--color-border);background:var(--color-surface-muted);color:var(--color-text-secondary);border-radius:5px;font-size:11px;line-height:16px}
+.environment-panel .mcp-entry[open]>summary .mcp-transport svg{transform:none}
+.environment-panel .mcp-entry>summary .mcp-chevron{color:var(--color-text-tertiary)}
+.environment-panel .mcp-entry-detail{margin-inline:58px 16px;padding-top:12px}
+.environment-panel .mcp-entry-actions{justify-content:flex-end}
+.environment-panel .mcp-source{margin:0 4px}
+.environment-panel .mcp-source>summary{padding-block:4px}
+@container settings-content (max-width:560px){.environment-panel .mcp-heading .mcp-title-group{gap:10px}.environment-panel .mcp-entry>summary{gap:10px;padding-inline:12px}.environment-panel .mcp-entry-detail{margin-inline:12px}}
+.environment-panel .mcp-heading .mcp-title-group{flex-wrap:nowrap;justify-content:flex-start}
+.environment-panel .mcp-heading h3{white-space:nowrap}
+.environment-panel .mcp-heading .setting-choices{width:auto;flex-wrap:nowrap;flex:none}
+.environment-panel .mcp-heading{position:sticky;top:46px;z-index:4;background:var(--color-canvas);padding-block:6px}

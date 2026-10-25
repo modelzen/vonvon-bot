@@ -1,9 +1,9 @@
 import {settingAnchor} from '../search';
 import {useCallback, useEffect, useId, useRef, useState} from 'react';
-import {ChevronDown, Plus, X} from 'lucide-react';
+import {ChevronDown, Plus, X, RefreshCw, Terminal, Globe, Plug} from 'lucide-react';
 import {mcpConfigSchema, type MachineReply, type MachineRequest} from '@vonvon/protocol';
 import {useClient} from '../client-context';
-import {Button, FormField, InlineNotice} from '../reference/components/ui';
+import {Button, IconButton, FormField, InlineNotice} from '../reference/components/ui';
 import {ConfirmDialog, Dialog} from '../reference/components/ui/Dialog';
 import {SettingChoices} from '../settings/SettingChoices';
 import {useDraft, useDraftGuard} from '../settings/DraftGuard';
@@ -88,8 +88,9 @@ export function McpPanel({refreshKey = 0}: {refreshKey?: number}) {
     } catch {setRemoveError(safeFailure);} finally {setBusy(false);}
   }
   return <section className="mcp-panel" id={settingAnchor('MCP')} aria-label="MCP 连接">
-    <header className="mcp-heading"><h3>MCP 连接</h3><div><Button size="sm" disabled={loading || busy || adding} onClick={() => void refresh()}>重新读取</Button><Button size="sm" icon={<Plus size={13}/>} disabled={!writable || adding} onClick={() => {setNotice(''); setAdding(true);}}>添加</Button></div></header>
-    <SettingChoices label="MCP Provider" value={provider} choices={providers} disabled={busy || adding} onChange={next => navigate(() => {setProvider(next); setError(''); setNotice(''); setRemoving(undefined); setAuthorizing(undefined);})}/>
+    <header className="mcp-heading"><div className="mcp-title-group"><h3>MCP 连接</h3>
+      <SettingChoices label="MCP Provider" value={provider} choices={providers} disabled={busy || adding} onChange={next => navigate(() => {setProvider(next); setError(''); setNotice(''); setRemoving(undefined); setAuthorizing(undefined);})}/>
+    </div><div className="mcp-toolbar-actions"><IconButton size="sm" label="重新读取 MCP 配置" title="重新读取 MCP 配置" disabled={loading || busy || adding} onClick={() => void refresh()}><RefreshCw size={14}/></IconButton><Button size="sm" icon={<Plus size={13}/>} disabled={!writable || adding} onClick={() => {setNotice(''); setAdding(true);}}>添加</Button></div></header>
     {error && <InlineNotice title="读取未完成" tone="warning">{error}{current?.entries.length ? ' 下面保留上次读取的列表。' : ''}</InlineNotice>}
     {loading && !current && <p className="mcp-empty" role="status">正在读取…</p>}
     {current && <>
@@ -107,8 +108,8 @@ export function McpPanel({refreshKey = 0}: {refreshKey?: number}) {
 
 export function McpEntries({view, disabled, onAuthorize, onRemove}: {view: McpView; disabled: boolean; onAuthorize: (entry: Entry) => void; onRemove: (entry: Entry) => void}) {
   return <div className="mcp-list">
-    {view.entries.length ? view.entries.map(entry => <details className="mcp-entry" key={entry.name}>
-      <summary><span><strong>{entry.name}</strong><small>{mcpSummary(entry)}{!entry.enabled ? ' · 配置中已停用' : ''}</small></span><ChevronDown size={14}/></summary>
+    {view.entries.length ? view.entries.map(entry => <details className={`mcp-entry${entry.enabled ? "" : " mcp-entry-disabled"}`} key={entry.name}>
+      <summary><span className="mcp-transport" title={entry.transport === 'stdio' ? '本机命令' : entry.transport === 'unknown' ? '其他配置' : '远程地址'}>{entry.transport === 'stdio' ? <Terminal size={16}/> : entry.transport === 'unknown' ? <Plug size={16}/> : <Globe size={16}/>}</span><span className="mcp-entry-copy"><strong title={entry.name}>{entry.name}</strong><small title={mcpSummary(entry)}>{mcpSummary(entry)}</small></span>{!entry.enabled && <span className="mcp-disabled-badge">已停用</span>}<ChevronDown className="mcp-chevron" size={14}/></summary>
       <div className="mcp-entry-detail"><dl>
         <div><dt>连接方式</dt><dd>{entry.transport === 'stdio' ? '本机命令' : entry.transport === 'unknown' ? '其他' : entry.transport.toUpperCase()}</dd></div>
         {entry.envNames.length > 0 && <div><dt>环境变量</dt><dd>{entry.envNames.join('、')}</dd></div>}
