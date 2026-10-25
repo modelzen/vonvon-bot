@@ -20,9 +20,14 @@ html, body { min-width: 320px; min-height: 0; }
 .today-header-actions { display: flex; justify-self: end; align-items: center; gap: 4px; grid-column: 3; }
 .today-icon-button { width: var(--control-height, 32px); height: var(--control-height, 32px); padding: 0; display: grid; place-items: center; border: 0; border-radius: var(--control-radius, 8px); background: transparent; color: var(--color-text-secondary); }
 .today-icon-button[aria-current] { background: color-mix(in srgb, var(--color-text) 8%, transparent); color: var(--color-text); }
-.today-primary-nav { display: flex; padding: 2px; gap: 2px; border-radius: 8px; background: color-mix(in srgb, var(--color-text) 5%, transparent); box-shadow: inset 0 0 0 1px rgb(0 0 0 / 3%); }
-.today-primary-nav button { min-width: 62px; min-height: 28px; padding: 3px 14px; border: 0; border-radius: 6px; color: var(--color-text-secondary); background: transparent; font-size: 12px; font-weight: 500; transition: none; }
+.today-primary-nav { position: relative; display: flex; padding: 4px; gap: 0; border-radius: 10px; background: color-mix(in srgb, var(--color-text) 5%, transparent); box-shadow: inset 0 0 0 1px rgb(0 0 0 / 3%); }
+.today-primary-nav button { position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center; min-width: 68px; min-height: 28px; padding: 3px 12px; border: 0; border-radius: 7px; color: var(--color-text-secondary); background: transparent; font-size: 13px; font-weight: 500; white-space: nowrap; transition: none; }
 .today-primary-nav button[aria-current] { background: var(--color-surface); color: var(--color-text); box-shadow: 0 1px 3px rgb(0 0 0 / 11%), 0 0 0 .5px rgb(0 0 0 / 5%); }
+.today-primary-nav:has(.today-nav-highlight[data-ready]) button[aria-current] { background: transparent; box-shadow: none; }
+.today-nav-highlight { position: absolute; inset: 0; pointer-events: none; }
+.today-nav-liquid { width: 100%; height: 100%; }
+.today-nav-indicator { position: absolute; left: 0; top: 0; display: block; border-radius: 7px; background: transparent; }
+.today-nav-indicator[data-moving] { transition: transform 200ms var(--ease-standard); }
 .today-window .settings-main-pane { display: flex; flex-direction: column; }
 .today-window .settings-content-scroll { flex: 1; scrollbar-width: thin; }
 .today-window .settings-content-page { padding-bottom: 0; }
@@ -117,6 +122,12 @@ html, body { min-width: 320px; min-height: 0; }
   .ui-dialog__header, .ui-dialog__content, .ui-dialog__footer { padding: 16px; }
   .ui-dialog__footer { flex-wrap: wrap; }
 }
+@media (max-width: 440px) {
+  .today-window:not([data-first-use]) .today-app-header { grid-template-columns: minmax(0, 1fr) auto; }
+  .today-window:not([data-first-use]) .today-brand { display: none; }
+  .today-window:not([data-first-use]) .today-primary-nav { justify-self: start; }
+  .today-window:not([data-first-use]) .today-header-actions { grid-column: 2; }
+}
 @media (pointer: coarse) {
   .today-window { --settings-control-height: 44px; }
   .today-icon-button { width: 44px; height: 44px; }
@@ -125,6 +136,7 @@ html, body { min-width: 320px; min-height: 0; }
   .today-primary-nav button { min-width: 44px; padding-inline: 6px; }
 }
 @media (prefers-reduced-motion: reduce) {
+  .today-nav-indicator { transition: none; }
   .today-window :is(button,.ui-toggle__track,.ui-toggle__thumb) { transition: none; }
   .today-window :is(.ui-button,.ui-icon-button,.today-icon-button):active:not(:disabled):not(:focus-visible) { transform: none; }
 }
