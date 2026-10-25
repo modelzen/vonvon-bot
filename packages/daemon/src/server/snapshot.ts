@@ -102,7 +102,10 @@ export async function createSnapshotStore(options: {
   let closed = false;
   const readTools = options.readTools ?? (async (): Promise<ToolState[]> => {
     const [codex, claude, sandbox] = await Promise.all([
-      options.service.codexSetup?.().catch(() => undefined),
+      Promise.resolve().then(() => options.service.codexSetup?.()).catch((error: unknown) => ({
+        installation: 'unknown' as const, authentication: 'unknown' as const, version: null,
+        message: error instanceof Error ? error.message : 'Codex 状态检测失败，请重新检测。',
+      })),
       createBackend('claude-agent').doctor({ force: true }).catch(() => undefined),
       // Linux only: two PATH scans and one 8 ms bwrap run, cheaper than the Codex processes above.
       probeClaudeSandbox().catch(() => undefined),
