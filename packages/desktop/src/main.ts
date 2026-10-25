@@ -7,6 +7,7 @@ import { resolveDataRoot } from '../../daemon/src/config/data-root.js';
 import { attachExisting, AttachError } from './attach.js';
 import { installBridge, openAllowedExternal } from './bridge.js';
 import type { AttachedDaemon, DesktopBridge, DesktopResources } from './ipc-contract.js';
+import { desktopFullScreenChannel } from './ipc-contract.js';
 import { createDesktopTray } from './tray.js';
 import { DesktopUpdater } from './updates.js';
 import { desktopUpdateConfiguration } from './update-configuration.js';
@@ -230,6 +231,11 @@ export async function startDesktop(): Promise<void> {
       minWidth: 760,
       minHeight: 640,
       show: false,
+      backgroundColor: '#f5f5f7',
+      titleBarStyle: 'hidden',
+      ...(process.platform === 'darwin'
+        ? { trafficLightPosition: { x: 12, y: 10 } }
+        : { titleBarOverlay: { color: '#e7e8ec', symbolColor: '#5f6068', height: 34 } }),
       webPreferences: {
         preload,
         sandbox: true,
@@ -241,6 +247,12 @@ export async function startDesktop(): Promise<void> {
     const current = window;
     const authorizedDocument = (): boolean => !current.webContents.isDestroyed() &&
       current.webContents.mainFrame?.url === uiUrl;
+    const publishFullScreen = (value: boolean): void => {
+      if (authorizedDocument()) current.webContents.send(desktopFullScreenChannel, value);
+    };
+    current.on('enter-full-screen', () => publishFullScreen(true));
+    current.on('leave-full-screen', () => publishFullScreen(false));
+    current.webContents.on('did-finish-load', () => publishFullScreen(current.isFullScreen()));
     current.webContents.setWindowOpenHandler(({ url }) => {
       if (authorizedDocument()) void openAllowedExternal(url).catch(() => {
         dialog.showMessageBoxSync(current, {
