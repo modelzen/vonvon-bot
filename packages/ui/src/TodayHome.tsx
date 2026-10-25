@@ -18,7 +18,7 @@ export function TodayHome({snapshot, onAgent, onGroup, onSetup, onRegister, disa
   const groupCount = (id: AgentId) => new Set(snapshot.memberships.filter(member => member.agentId === id).map(member => member.groupId)).size;
   async function open(url:string,kind:'bot-chat'|'group') {try {await openExternalUrl(url,kind,shell); setError('');} catch (error) {setError(error instanceof Error ? error.message : '无法打开飞书。');}}
   return <div className="today-home">
-    <header className="today-intro"><h1>概览</h1>{snapshot.stale && <span role="status">正在更新…</span>}</header>
+    <header className="today-intro"><h1>灵感</h1>{snapshot.stale && <span role="status">正在更新…</span>}</header>
     {!snapshot.stale && attention.length > 0 && <button type="button" className="today-connection-note" onClick={onSetup}><span className="today-state-dot"/><span>{attention.length} 个 Bot 需要检查连接</span><ArrowRight size={14}/></button>}
     {error && <p role="alert" className="gd-note gd-warning">{error}</p>}
     <section className="today-home-section" aria-label="你的 Bot">

@@ -150,6 +150,11 @@ test('results are complete, ranked, uniquely identified, and have valid destinat
   assert.equal(new Set(catalog.map(entry => entry.id)).size, catalog.length);
   assert.ok(catalog.every(entry => !entry.destination.section || settingAnchor(entry.destination.section).startsWith('setting-')));
   assert.equal(findEntries(entries, '')[0]?.id, 'agents');
+  for (const query of ['灵感', '首页', '概览']) {
+    const home = findEntries(entries, query)[0];
+    assert.equal(home?.title, '灵感', query);
+    assert.equal(home?.destination.page, 'home', query);
+  }
 });
 
 test('conditional settings lead to existing parent controls', () => {

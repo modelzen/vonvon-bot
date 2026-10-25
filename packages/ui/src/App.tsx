@@ -472,7 +472,7 @@ function DesktopApp() {
     : member ? snapshot.groups.find((item) => item.id === member.groupId) : undefined;
   const project = selection.kind === "project" ? snapshot.projects?.find((item) => item.id === selection.id) : undefined;
   const titles: Record<Page, string> = {
-    home: "概览",
+    home: "灵感",
     settings: "设置",
     collaboration: member
       ? `${group?.name ?? '飞书群'} · ${agent?.name ?? 'Bot'}`
