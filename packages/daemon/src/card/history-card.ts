@@ -29,6 +29,11 @@ export interface HistoryCardState {
   /** The group's backend as users know it (`AgentBackend.displayName`: Codex, Claude). */
   backendName: string;
   history: ThreadHistory;
+  /** Desktop actions identify their origin without exposing request metadata. */
+  source?: 'desktop';
+  /** A new topic cannot promise continuity until its binding is committed. */
+  status?: 'pending' | 'restored' | 'failed';
+  error?: string;
 }
 
 // Per-field truncation — Feishu 400s a card if any element nears ~30KB, so the
@@ -51,9 +56,19 @@ const PANEL_SHELL = 360;
 const BODY_BUDGET = 18_000;
 
 export function buildHistoryCard(state: HistoryCardState): CardObject {
+  const source = state.source === 'desktop' ? [note('桌面端操作')] : [];
+  if (state.status === 'pending' || state.status === 'failed') {
+    const pending = state.status === 'pending';
+    const title = pending ? '正在恢复历史会话' : '未恢复历史会话';
+    return card([metaNote(state), ...source, hr(), md(pending
+      ? '正在绑定会话，请稍候；完成后会更新这张卡片。'
+      : `这个话题没有接上会话。${state.error ?? '请回到原入口确认后重试。'}`)], {
+      header: { title, template: pending ? 'turquoise' : 'orange' }, summary: title,
+    });
+  }
   // 隐藏块（记忆设计 §3.4）在历史里也不露：native 历史是模型原样的输出，这里剥掉
   const history: ThreadHistory = { ...state.history, turns: state.history.turns.map(turn => ({ ...turn, assistantText: stripHiddenText(turn.assistantText), reasoning: stripHiddenText(turn.reasoning) })) };
-  const elements: CardElement[] = [metaNote(state)];
+  const elements: CardElement[] = [metaNote(state), ...source];
 
   if (history.turns.length === 0) {
     elements.push(

@@ -1,4 +1,4 @@
-import {ArrowUpRight, Bot, ChevronDown, History as HistoryIcon, MessageSquare, RefreshCw, Search, Target} from 'lucide-react';
+import {ArrowUpRight, Bot, ChevronDown, History as HistoryIcon, MessageSquare, RefreshCw, Search} from 'lucide-react';
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {Button, IconButton, InlineNotice} from '../reference/components/ui';
 import {settingAnchor} from '../search';
@@ -18,7 +18,6 @@ type Props = {
   agentId: AgentId;
   projectName: string;
   groupId: GroupId;
-  /** 单会话 and 智能 have one main-area session, so both can clear it. */
   conversation: Conversation;
   request: CollaborationClient;
 };
@@ -35,10 +34,10 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
   const [context, setContext] = useState<Context>();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "bound" | "resumable">("all");
-  const [objective, setObjective] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [warning, setWarning] = useState("");
 
   const refresh = useCallback(async () => {
     const reply = await requestRef.current({ action: "history", ...target });
@@ -90,11 +89,13 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
     setBusy(true);
     setError("");
     setNotice("");
+    setWarning("");
     try {
       const reply = await request(action);
       if (reply.kind === "refused") { setError(reply.message); return; }
       if (reply.kind !== "applied") { setError("daemon 返回了意外结果，请重试。"); return; }
       setNotice(reply.message || success);
+      setWarning(reply.warning ?? "");
       await refresh();
       if (selected) {
         const next = await request({ action: "context", ...target, threadId: selected });
@@ -137,12 +138,8 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
           <Button size="sm" disabled={busy} onClick={() => void execute({ action: "compact", ...target, threadId: selected }, "上下文已压缩。")}>压缩上下文</Button>
           <Button size="sm" variant="ghost" disabled={busy || conversation === "threads"} onClick={() => void execute({ action: "clear", ...target, threadId: selected }, "已开始新会话。")}>清空会话</Button>
         </div>
-        <p className="conversation-panel-note">{conversation === "threads" ? "多会话支持压缩上下文；清空仅适用于主区会话。" : "清空和压缩只作用于当前会话。"}</p>
+        <p className="conversation-panel-note">{conversation === "threads" ? "多会话支持压缩上下文；清空仅适用于主区会话。" : "清空和压缩只作用于当前会话，结果会同步到飞书。"}</p>
       </div>
-      <details className="conversation-panel-goal">
-        <summary><Target size={14} strokeWidth={1.7} aria-hidden="true"/><span>自主任务目标</span><ChevronDown size={13} aria-hidden="true"/></summary>
-        <div><input aria-label="自主任务目标" value={objective} maxLength={4000} onChange={event => setObjective(event.target.value)} placeholder="输入目标"/><Button size="sm" disabled={busy || !objective.trim()} onClick={() => void execute({ action: "startGoal", ...target, threadId: selected, objective: objective.trim() }, "目标任务已开始。")}>开始</Button></div>
-      </details>
       {run && <section className="conversation-panel-run" aria-label="正在运行">
         <div className="conversation-panel-run-heading">
           <strong role="status"><span className="conversation-panel-running-dot" aria-hidden="true"/>{run.goal ? '自主目标运行中' : '当前任务运行中'}</strong>
@@ -199,5 +196,6 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
     </section>
     {error && <InlineNotice title="会话操作未完成" tone="danger">{error}</InlineNotice>}
     {notice && <InlineNotice title="会话已更新">{notice}</InlineNotice>}
+    {warning && <InlineNotice title="飞书回执未确认" tone="warning">{warning}</InlineNotice>}
   </div>;
 }

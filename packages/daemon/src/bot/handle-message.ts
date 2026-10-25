@@ -6362,6 +6362,36 @@ export function createOrchestrator(
     if (!identity || identity.run !== state.run) { identity = { run: state.run, id: randomUUID() }; runIds.set(state, identity); }
     return identity.id;
   };
+  const DESKTOP_RECEIPT_WARNING = '操作已生效，但未能确认飞书回执已送达，请到群里确认；无需重复执行。';
+  type DesktopSessionResult = { ok: true; threadId: string; message: string; warning?: string };
+  /** One send only: a rejected promise can mean Feishu accepted the message but its reply was lost. */
+  async function desktopReceipt(chatId: string, key: string, markdown: string, replyTo?: string): Promise<boolean> {
+    try {
+      const sent = await channel.send(chatId, { markdown }, replyTo ? { replyTo, replyInThread: true } : undefined);
+      recent.addOwn(key, chatId, { id: sent.messageId, at: Date.now(), text: markdown });
+      return true;
+    } catch (error) {
+      log.fail('desktop', error, { phase: 'session-receipt', threadId: key });
+      return false;
+    }
+  }
+  /** A topic receipt must stay in that topic. Resolve it before any session mutation. */
+  async function desktopTopicReply(chatId: string, key: string): Promise<string | undefined> {
+    if (isMainKey(key, chatId)) return undefined;
+    const messages = await channel.rawClient.im.v1.message.list({ params: { container_id_type: 'thread', container_id: key, page_size: 1 } });
+    const message = messages.data?.items?.[0];
+    if (messages.code !== 0 || !message?.message_id || (message.chat_id && message.chat_id !== chatId) || (message.thread_id && message.thread_id !== key)) {
+      throw new AdminWriteError('无法定位原飞书话题，请在飞书确认话题仍然存在');
+    }
+    return message.message_id;
+  }
+  async function updateHistoryReceipt(messageId: string, state: HistoryCardState): Promise<boolean> {
+    try { return await updateManagedCard(channel, messageId, buildHistoryCard(state)); }
+    catch (error) {
+      log.fail('card', error, { phase: 'resume-history-update', messageId });
+      return false;
+    }
+  }
   async function collaboration(request: CollaborationRequest): Promise<unknown> {
     const owner = resolveOwner(cfg);
     if (!owner) throw new AdminWriteError('请先给这个 Bot 配置飞书管理员');
@@ -6538,19 +6568,23 @@ export function createOrchestrator(
       active.set(key, reserved);
       if (ruleKind(project) !== 'single') resumePublications.add(project.chatId);
       let publishedKey: string | undefined;
+      let topicCard: string | undefined;
+      let cardState: HistoryCardState | undefined;
+      let applied: DesktopSessionResult | undefined;
       try {
         const history = await be.readHistory(project.cwd, request.sessionId);
+        cardState = { cwd: project.cwd, projectName: project.name, backendName: backendLabel(be), history, source: 'desktop' };
         let threadId = key;
-        let topicCard: string | undefined;
         if (ruleKind(project) !== 'single') {
           const root = await channel.send(project.chatId, { markdown: '从桌面端恢复历史会话' });
-          const sent = await sendManagedCard(channel, project.chatId, buildHistoryCard({ cwd: project.cwd, projectName: project.name, backendName: backendLabel(be), history }), root.messageId, true);
+          recent.addOwn(project.chatId, project.chatId, { id: root.messageId, at: Date.now(), text: '从桌面端恢复历史会话' });
+          const sent = await sendManagedCard(channel, project.chatId, buildHistoryCard({ ...cardState, status: 'pending' }), root.messageId, true);
           topicCard = sent.messageId;
           const tid = await getThreadId(channel, sent.messageId, 4);
           if (!tid) throw new AdminWriteError('已创建话题，但飞书尚未返回话题标识；会话未绑定');
           noteOpenedTopic(project.chatId, tid, { id: root.messageId, from: { kind: 'self' }, at: Date.now(), text: resumedTitle(history) });
           threadId = turnSession(tid, project).sessionKey;
-          if (active.has(threadId)) throw new AdminWriteError('新话题已有任务，会话未切换');
+          if (active.has(threadId) || sessions.has(threadId)) throw new AdminWriteError('新话题已有任务，会话未切换');
           active.set(threadId, reserved);
           publishedKey = threadId;
         }
@@ -6562,22 +6596,32 @@ export function createOrchestrator(
           if (topicCard) await noteUnbound(project.chatId, topicCard, inUseText(taken));
           throw new AdminWriteError(inUseText(taken));
         }
-        // Bound now, so neither of these fails the resume (as the card's flat path).
-        if (ruleKind(project) === 'single') {
-          await sendManagedCard(channel, project.chatId, buildHistoryCard({ cwd: project.cwd, projectName: project.name, backendName: backendLabel(be), history }))
-            .catch(error => log.fail('desktop', error, { phase: 'resume-history-single' }));
-        }
+        // Commit the local swap before announcing success; delivery never changes the operation's result.
         const old = sessions.get(threadId); sessions.delete(threadId);
         if (old) await old.close().catch(error => log.fail('desktop', error, { phase: 'resume-thread-close' }));
         lastUsage.delete(threadId);
         dropRetries(threadId);
-        return { ok: true, threadId };
+        applied = { ok: true, threadId, message: '已恢复会话。' };
+        if (topicCard) {
+          if (!await updateHistoryReceipt(topicCard, cardState)) applied.warning = DESKTOP_RECEIPT_WARNING;
+        } else {
+          await sendManagedCard(channel, project.chatId, buildHistoryCard(cardState)).catch(error => {
+            log.fail('desktop', error, { phase: 'resume-history-single' });
+            applied!.warning = DESKTOP_RECEIPT_WARNING;
+          });
+        }
+        return applied;
+      } catch (error) {
+        if (!applied && topicCard && cardState) await updateHistoryReceipt(topicCard, { ...cardState, status: 'failed', error: error instanceof Error ? error.message : String(error) });
+        throw error;
       } finally {
         resumePublications.delete(project.chatId);
         if (publishedKey && active.get(publishedKey) === reserved) active.delete(publishedKey);
         if (active.get(key) === reserved) active.delete(key);
         const dropped = askAgain(reserved.queue, project.chatId, ruleKind(project) === 'single' ? 'main' : 'topic', 'occupied', '会话被占用');
-        if (dropped) await channel.send(project.chatId, { markdown: `切回期间收到的 ${dropped} 条消息未执行，请重发。` });
+        if (dropped && !await desktopReceipt(project.chatId, publishedKey ?? project.chatId, `切回期间收到的 ${dropped} 条消息未执行，请重发。`, topicCard)) {
+          if (applied) applied.warning = DESKTOP_RECEIPT_WARNING;
+        }
       }
     }
     if (isRetiredKey(request.threadId)) throw new AdminWriteError(RETIRED_KEY_TEXT);
@@ -6613,6 +6657,8 @@ export function createOrchestrator(
     active.set(key, reserved);
     let launched = false;
     let compacted: AgentThread | undefined;
+    let applied: DesktopSessionResult | undefined;
+    let replyTo: string | undefined;
     try {
       if (request.action === 'clear') {
         if (ruleKind(project) !== 'single' || key !== perm.sessionKey) throw new AdminWriteError('只有单会话群可以清空当前上下文');
@@ -6623,19 +6669,29 @@ export function createOrchestrator(
         const now = Date.now();
         try { await upsertSession({ ...record, ...contextField(fresh), sessionId: fresh.sessionId, summary: '(新会话)', lastSeenAt: now, seen: undefined, from: now, recalls: undefined, createdAt: now, updatedAt: now }); }
         catch (error) { await fresh.close(); throw error; }
-        const old = sessions.get(key); if (old) await old.close();
+        const old = sessions.get(key); if (old) await old.close().catch(error => log.fail('desktop', error, { phase: 'clear-thread-close' }));
         trackSession(key, fresh); lastUsage.delete(key); dropRetries(key);
-        return { ok: true, threadId: key };
+        applied = { ok: true, threadId: key, message: '已开始新会话。' };
+        if (!await desktopReceipt(project.chatId, key, '已开始新会话（桌面端操作）。群聊记录和长期记忆保留，接下来从新的上下文继续。')) applied.warning = DESKTOP_RECEIPT_WARNING;
+        return applied;
       }
+      if (request.action === 'compact') replyTo = await desktopTopicReply(project.chatId, key);
       const { thread } = await resolveThread(key, project.chatId, perm);
       if (!thread) throw new AdminWriteError('会话尚未开始');
       if (request.action === 'compact') {
         compacted = thread;
+        const before = meterOf(key, record, thread)?.used;
         const result = await thread.compact();
+        markTopicsDue(key, project.chatId, thread.sessionId);
+        markContextDue(thread, key);
         if (result.usage) lastUsage.set(key, { used: result.usage.usedTokens, window: result.usage.contextWindow }); else lastUsage.delete(key);
-        return { ok: true, threadId: key };
+        const after = result.usage?.usedTokens;
+        const measured = typeof before === 'number' && Number.isFinite(before) && before >= 0 && typeof after === 'number' && Number.isFinite(after) && after >= 0;
+        const markdown = `上下文已压缩（桌面端操作）。${measured ? `上下文用量：${before.toLocaleString('en-US')} → ${after.toLocaleString('en-US')} tokens。` : ''}`;
+        applied = { ok: true, threadId: key, message: '上下文已压缩。' };
+        if (!await desktopReceipt(project.chatId, key, markdown, replyTo)) applied.warning = DESKTOP_RECEIPT_WARNING;
+        return applied;
       }
-      let replyTo: string | undefined;
       if (ruleKind(project) !== 'single') {
         const messages = await channel.rawClient.im.v1.message.list({ params: { container_id_type: 'thread', container_id: key, page_size: 1 } });
         replyTo = messages.data?.items?.[0]?.message_id;
@@ -6649,7 +6705,9 @@ export function createOrchestrator(
       if (!launched && active.get(key) === reserved) active.delete(key);
       releaseIdle(key, compacted);
       const dropped = !launched ? askAgain(reserved.queue, project.chatId, isMainKey(key, project.chatId) ? 'main' : 'topic', 'occupied', '会话被占用') : 0;
-      if (dropped) await channel.send(project.chatId, { markdown: `操作期间收到的 ${dropped} 条消息未执行，请重发。` });
+      if (dropped && (isMainKey(key, project.chatId) || replyTo) && !await desktopReceipt(project.chatId, key, `操作期间收到的 ${dropped} 条消息未执行，请重发。`, replyTo)) {
+        if (applied) applied.warning = DESKTOP_RECEIPT_WARNING;
+      }
     }
   }
 
