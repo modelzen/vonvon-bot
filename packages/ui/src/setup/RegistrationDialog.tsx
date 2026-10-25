@@ -83,7 +83,6 @@ export function RegistrationScan({job, refresh, busy, onRetry}: {job?: Job; refr
     {refresh && <p className="registration-refresh-note">请用这个 Bot 的管理员身份扫码，群聊、会话和设置会保留。</p>}
     <div className="registration-qr"><img src={job.image} alt="飞书注册二维码"/></div>
     <p className="registration-expires">有效期至 {new Date(job.expiresAt).toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'})}</p>
-    {job.status && <p className="registration-copy-note" role="status">{job.status}</p>}
     <div className="registration-link-actions">
       <Button size="sm" disabled={busy} onClick={() => void open(job.url)}><ExternalLink size={14} aria-hidden="true"/>打开链接</Button>
       <Button size="sm" disabled={busy} onClick={() => void copy(job.url)}><Copy size={14} aria-hidden="true"/>{copied === '已复制' ? '已复制' : '复制链接'}</Button>
