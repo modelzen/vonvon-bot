@@ -84,9 +84,9 @@
 /* Keep the memory map primary; existing role overrides remain a quiet optional editor. */
 
 /* The group context stays in view while its settings scroll. */
-.config-header { position: sticky; top: 0; z-index: 4; display: grid; grid-template-rows: 34px 34px; gap: 12px; min-width: 0; padding: 8px 0 12px; background: var(--color-canvas); box-shadow: 0 1px 0 var(--color-border); }
+.config-header { position: sticky; top: 0; z-index: 4; display: grid; grid-template-rows: auto auto; gap: 12px; min-width: 0; padding: 8px 0 12px; background: var(--color-canvas); box-shadow: 0 1px 0 var(--color-border); }
 .config-header-identity, .config-header-navigation { display: flex; align-items: center; min-width: 0; }
-.config-header-identity { gap: 12px; }
+.config-header-identity { gap: 12px; min-height: 34px; }
 .config-group-title { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 0 1 auto; max-width: 45%; }
 .config-group-title .collaboration-avatar.group { width: 28px; height: 28px; flex: none; }
 .config-group-title h2 { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 18px; font-weight: 650; line-height: 1.3; letter-spacing: -.025em; }
@@ -102,10 +102,9 @@
 .header-bot-popup-label { padding: 7px 10px 8px; color: var(--color-text-tertiary); font-size: 11px; font-weight: 500; }
 .header-bot-popup .ui-select-control__option { min-width: 0; }
 .header-bot-popup .ui-select-control__option > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.config-header-actions { display: flex; align-items: center; gap: 3px; margin-left: auto; flex: none; }
-.config-header-actions .ui-button { height: 30px; min-height: 30px; border-color: transparent; background: transparent; box-shadow: none; color: var(--color-text-secondary); font-size: 12px; }
-.config-feishu { padding: 4px 9px; }
-.config-header-actions .group-context-menu > summary { width: 30px; height: 30px; }
+.config-header-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; flex: none; }
+.config-header-actions .ui-button { height: 32px; min-height: 32px; gap: 6px; padding-inline: 10px; white-space: nowrap; border-color: transparent; background: transparent; box-shadow: none; color: var(--color-text-secondary); font-size: 12px; }
+.config-header-actions .group-context-menu > summary { width: 32px; height: 32px; }
 .config-header-actions .group-context-menu > div { top: 36px; }
 .config-header-navigation { justify-content: space-between; gap: 18px; }
 .config-tabs { height: 34px; padding: 2px; gap: 2px; border: 0; border-radius: 8px; background: color-mix(in srgb, var(--color-text) 4%, var(--color-canvas)); box-shadow: inset 0 1px 1px #00000002; }
@@ -132,8 +131,6 @@
   .config-group-title { gap: 6px; max-width: 24%; }
   .config-group-title .collaboration-avatar.group { width: 24px; height: 24px; }
   .config-group-title h2 { font-size: 16px; }
-  .config-feishu .group-open-label { display: none; }
-  .config-header-actions .config-feishu { width: 28px; padding: 3px; }
   .header-bot-select { min-width: 80px; max-width: 150px; padding-inline: 4px; }
   .config-tabs > button { padding-inline: 7px; font-size: 11px; }
   .config-header-identity { gap: 7px; }
@@ -151,4 +148,32 @@
   .config-header-actions .ui-button, .config-enable .ui-toggle { min-width: 44px; }
   .header-bot-select { height: 44px; }
   .config-header-actions .group-context-menu > summary { min-width: 44px; }
+}
+
+/* Group links share their identity; frequent actions remain visible. */
+.config-group-link { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; height: 34px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; cursor: pointer; text-align: left; }
+.config-group-link > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.config-group-link > svg { flex: none; color: var(--color-text-tertiary); }
+.config-group-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.config-group-link:active { opacity: .72; }
+.config-header-actions .config-history { background: var(--color-surface); border-color: var(--color-border); color: var(--color-text); box-shadow: 0 1px 2px #00000004; }
+.config-header-actions .config-help { color: var(--color-text-secondary); }
+.group-context-menu .group-menu-shortcut { display: none; }
+@media (hover: hover) and (pointer: fine) {
+  .config-group-link:hover > span { text-decoration: underline; text-decoration-color: var(--color-border); text-underline-offset: 4px; }
+  .config-group-link:hover > svg { color: var(--color-text); }
+  .config-header-actions .ui-button:hover { background: var(--color-surface-hover); }
+}
+@media (max-width: 720px) {
+  .config-header-identity { gap: 8px; }
+  .config-group-title { max-width: 50%; }
+  .config-context-divider { display: none; }
+  .header-bot-select { min-width: 80px; max-width: 45%; }
+  .config-header-actions .config-history, .config-header-actions .config-help { display: none; }
+  .group-context-menu .group-menu-shortcut { display: block; }
+  .config-header-navigation { flex-wrap: wrap; gap: 12px; }
+  .config-enable.group-enable-control { margin-left: auto; }
+}
+@media (pointer: coarse) {
+  .config-group-link { min-height: 44px; }
 }
