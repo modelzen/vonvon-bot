@@ -6,6 +6,7 @@ import {backendLabel, type AgentId, type Conversation, type GroupId, type Collab
 import {useShellCapabilities} from '../client-context';
 import {groupUrl, openExternalUrl} from '../url-actions';
 import {SettingChoices} from '../settings/SettingChoices';
+import {OperationActivity} from './OperationActivity';
 import '../settings/settings.css';
 import './conversation-panel.css';
 
@@ -142,7 +143,7 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
       </div>
       {run && <section className="conversation-panel-run" aria-label="正在运行">
         <div className="conversation-panel-run-heading">
-          <strong role="status"><span className="conversation-panel-running-dot" aria-hidden="true"/>{run.goal ? '自主目标运行中' : '当前任务运行中'}</strong>
+          <strong><OperationActivity key={run.id} label={run.goal ? '自主目标运行中' : '当前任务运行中'}/></strong>
           <div className="conversation-panel-run-actions">
             <Button size="sm" variant="danger" disabled={busy || !run.canStop} onClick={() => void execute({ action: "stop", ...target, threadId: selected, runId: run.id }, "已请求停止任务。")}>停止</Button>
             <Button size="sm" disabled={busy || !run.canEndGoal} onClick={() => void execute({ action: "endGoal", ...target, threadId: selected, runId: run.id }, "已结束目标。")}>结束目标</Button>

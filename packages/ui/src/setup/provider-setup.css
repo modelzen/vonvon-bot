@@ -35,11 +35,14 @@
 .provider-check {display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 6px; color: var(--color-text-secondary); font-size: 12px; margin: 2px 0 0;}
 .provider-check--ready {color: var(--color-status-success);}
 .provider-check > span {color: var(--color-text-tertiary);}
+.provider-check > .operation-activity {color: inherit;}
 .provider-problem {display: flex; align-items: center; gap: 10px; background: color-mix(in srgb, var(--color-status-warning) 5%, var(--color-surface)); border: 1px solid color-mix(in srgb, var(--color-status-warning) 20%, var(--color-border)); border-radius: 10px; padding: 12px; font-size: 12px; overflow-wrap: anywhere;}
 .provider-problem p {margin: 0; flex: 1; min-width: 0; line-height: 1.6;}
 .provider-problem > .ui-button {flex-shrink: 0;}
 .provider-authorization {padding: 20px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;}
 .provider-authorization p {margin: 0; width: 100%; font-size: 12px; color: var(--color-text-secondary);}
+.provider-authorization .operation-activity {min-width: 0; white-space: normal;}
+.provider-authorization > .operation-activity {font-size: 12px; color: var(--color-text-secondary);}
 .provider-authorization code {font-size: 24px; font-weight: 600; letter-spacing: .12em; width: 100%; margin-block: 8px; font-variant-numeric: tabular-nums; user-select: all;}
 .provider-breadcrumb {display:flex;align-items:center;flex-wrap:wrap;gap:8px;}
 .provider-breadcrumb button {font-size:13px;color:var(--color-text-secondary);}
@@ -79,13 +82,11 @@
 .provider-models__list > div + div {border-top: 1px solid var(--color-border);}
 .provider-models strong {font-size: 12px; font-weight: 500;}
 .provider-models__list span {font-size: 12px; color: var(--color-text-secondary); overflow-wrap: anywhere;}
-.provider-spinner {animation: provider-spin .8s linear infinite;}
-@keyframes provider-spin {to {transform: rotate(360deg);}}
 .provider-choice:focus-visible,.provider-existing button:focus-visible,.provider-list-row:focus-visible,.provider-breadcrumb button:focus-visible,.provider-models > summary:focus-visible,.provider-cli > summary:focus-visible {outline: 2px solid var(--color-accent); outline-offset: 3px;}
 @media (hover: hover) and (pointer: fine) {.provider-choice:hover,.provider-list-row:hover,.provider-models > summary:hover {background: var(--color-surface-hover);}}
 @media (max-width: 400px) {.provider-progress {gap: 8px; font-size: 11px;}.provider-progress li + li::before {width: 8px; margin-right: 0;}.provider-choice {padding: 16px 30px 16px 12px; gap: 4px 8px;}.provider-step {gap: 9px; padding-inline: 12px;}}
 @media (pointer: coarse) {.provider-setup .ui-button,.provider-existing button,.provider-breadcrumb button {min-height: 44px;}}
-@media (prefers-reduced-motion: reduce) {.provider-choice {transition: none;}.provider-choice:active {transform: none;}.provider-spinner {animation: none;}}
+@media (prefers-reduced-motion: reduce) {.provider-choice {transition: none;}.provider-choice:active {transform: none;}}
 .provider-management-actions {display: flex; flex-wrap: wrap; gap: 8px;}
 .provider-cli {border-top: 1px solid var(--color-border); padding-top: 12px; font-size: 12px;}
 .provider-cli summary {cursor: pointer; font-weight: 500; padding-block: 10px;}

@@ -1,4 +1,5 @@
 import {useEffect, useId, useRef, useState} from 'react';
+import {BorderBeam} from 'border-beam';
 import {
   Activity, AppWindow, ArrowRight, Bot, Brain, Cable, ChartColumn, Cpu, FolderOpen,
   Info, LayoutGrid, PanelTop, Search, Settings2, Users, X, type LucideIcon,
@@ -58,6 +59,11 @@ export function SearchDialog({open, entries, onClose, onSelect}: {
   return <Dialog open={open} title="搜索 Vonvon Bot" variant="search" onClose={onClose} initialFocusRef={input}>
     <div className="desktop-search">
       <div className="desktop-search-heading">
+        <div className="desktop-search-glow" aria-hidden="true">
+          <BorderBeam size="line" colorVariant="colorful" theme="light" strength={0.5} className="desktop-search-glow__beam">
+            <div className="desktop-search-glow__surface"/>
+          </BorderBeam>
+        </div>
         <Search size={19} strokeWidth={1.8} aria-hidden="true"/>
         <input
           ref={input} role="combobox" aria-label="搜索设置、Bot 或飞书群" aria-autocomplete="list"
