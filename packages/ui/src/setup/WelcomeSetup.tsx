@@ -3,6 +3,7 @@ import {useState} from 'react';
 import {toolSteps} from '@vonvon/protocol';
 import {Button} from '../reference/components/ui';
 import {BridgeImportPanel} from './BridgeImportPanel';
+import {FeishuConnections} from './FeishuConnections';
 import {SetupChecklist, type SetupChecklistProps} from './SetupChecklist';
 import {ProviderSetup, SetupProgress} from './ProviderSetup';
 import {providerIcons, providerNames, providerSignature, type SetupProvider} from './provider-state';
@@ -25,6 +26,7 @@ export function WelcomeSetup(props: Props) {
     setPrepared({provider, signature: providerSignature(props.snapshot.tools.find(tool => tool.tool === provider))});
     props.onProviderPrepared?.(provider);
   }
+  if (connected && hasBots) return <FeishuConnections {...props}/>;
   return <div className="welcome-setup">
     {!connected && <BridgeImportPanel ready={props.ready} busy={props.busy} platform={props.snapshot.application.platform}/>}
     {!connected && <SetupProgress step={needsProvider ? 1 : hasBots ? 3 : 2}/>}
