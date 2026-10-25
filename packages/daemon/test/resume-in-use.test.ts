@@ -282,8 +282,12 @@ describe('/resume in a group where each topic is a session', () => {
       expect(await bound('past')).toHaveLength(1);
       const refused = [webOutcome.includes('这条会话正在本群的话题「historic」里用着'), cardOutcome.includes('这条会话正在本群的话题「historic」里用着')];
       expect(refused.filter(Boolean)).toHaveLength(1);
-      // Both opened a topic; the one left without the session says so.
-      expect(fake.cards.filter((c) => c.json.includes('已恢复历史会话'))).toHaveLength(2);
+      // Both opened a topic; the desktop card waits for binding before claiming success.
+      expect(fake.cards.filter((c) => c.json.includes('已恢复历史会话'))).toHaveLength(1);
+      const webCard = fake.cards.find(c => c.json.includes('正在恢复历史会话'));
+      expect(webCard).toBeDefined();
+      expect(fake.updates.filter(update => update.id === webCard!.id).at(-1)?.json)
+        .toContain(webOutcome === 'ok' ? '已恢复历史会话' : '未恢复历史会话');
       await until(() => expect(send.mock.calls.filter((call) => JSON.stringify(call[1]).includes('这个话题没有接上会话'))).toHaveLength(1));
     } finally { await app.shutdown(); }
   });

@@ -1214,6 +1214,7 @@ describe('bot wake fallbacks and queued turns (s27a)', () => {
       await send(first);
       if (place === 'main') await decide(first, result('main'));
       await vi.waitFor(() => expect(fake.finals).toHaveLength(1)); await settle();
+      if (place === 'topic') fake.list.mockResolvedValueOnce({ code: 0, data: { items: [{ message_id: 'om_compact_root', chat_id: CHAT, thread_id: key }] } });
       compact = orchestrator.collaboration({ action: 'compact', projectName: 'demo', chatId: CHAT, threadId: key });
       await entered.promise;
       const bot = says('BOT_DURING_COMPACT', { at: true, ...location });
@@ -1227,7 +1228,7 @@ describe('bot wake fallbacks and queued turns (s27a)', () => {
       expect(records().filter(record => record.reason === 'bot-wake-dropped')).toEqual([
         expect.objectContaining({ place, detail: '会话被占用' }),
       ]);
-      expect(fake.send).toHaveBeenLastCalledWith(CHAT, { markdown: '操作期间收到的 1 条消息未执行，请重发。' });
+      expect(fake.send).toHaveBeenLastCalledWith(CHAT, { markdown: '操作期间收到的 1 条消息未执行，请重发。' }, place === 'topic' ? { replyTo: 'om_compact_root', replyInThread: true } : undefined);
       expect(fake.inputs).toHaveLength(1);
     } finally { gate.resolve(); await compact; list.mockRestore(); }
   });
