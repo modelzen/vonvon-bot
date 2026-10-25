@@ -62,7 +62,7 @@ Electron Framework 的 298.25 MB 内，主二进制 201.69 MB，资源目录 76.
 
 当前 SDK 随桌面 App 内置，是 build.mjs 显式加入 staged dependencies 的行为，并检查匹配的原生运行时存在。整个 SDK 及其专属依赖约 257.22 MB，其中 240.66 MB 是二进制；对我们自己的 JavaScript 做 minify 无法明显缩小它。
 
-由基线扣除 SDK 树的初步文件算术为 366.54 MB；实际 0.7.14 产物为 365.21 MB，差异还包含签名资源清单与依赖图变化。首次使用 Claude 需要联网下载，使用后的总磁盘占用未必减少，只是由用户决定是否安装到 App 外的托管目录。
+由基线扣除 SDK 树的初步文件算术为 366.54 MB；实际 0.7.14 产物为 365.22 MB，差异还包含签名资源清单与依赖图变化。首次使用 Claude 需要联网下载，使用后的总磁盘占用未必减少，只是由用户决定是否安装到 App 外的托管目录。
 
 另一种方案是复用用户已有 Claude 安装，但需要验证 SDK 与运行时版本兼容，不能直接认定所有用户都已安装。
 
@@ -92,16 +92,16 @@ Tauri 在 macOS 使用系统 WKWebView，可以避免随 App 携带 Chromium。�
 
 ## 0.7.14 实施结果
 
-以 `dev` 的 `d72c2c3f005a907a052d8ffbd7267441920937ad` 为基线，移除桌面 SDK staging、universal Claude 下载和内置标记，恢复用户主动安装、更新和卸载。build、afterPack、universal 验证均拒绝夹带 Claude SDK、原生平台包和 Claude Code。Electron、npm、语言资源、现有语音功能保留。
+以 `dev` 的 `d72c2c3f005a907a052d8ffbd7267441920937ad` 为初始基线，随后同步 `a74d5226` 的工具页改动，最终产物源码为 `e57df0617625b985ca8358e88e074419b67a7fe3`。移除桌面 SDK staging、universal Claude 下载和内置标记，恢复用户主动安装、更新和卸载。build、afterPack、universal 验证均拒绝夹带 Claude SDK、原生平台包和 Claude Code。Electron、npm、语言资源、现有语音功能保留。
 
 | 口径 | 0.7.14 arm64 实测 | 相对 0.7.13 |
 | --- | ---: | ---: |
-| 普通文件逻辑长度 | 365,207,320 bytes / 365.21 MB | 减少 258.56 MB / 41.45% |
-| 普通文件分配块合计 | 376,438,784 bytes / 376.44 MB | 非 APFS 独占空间口径 |
-| ditto ZIP | 156,538,133 bytes / 156.54 MB | 减少 111.87 MB / 41.68% |
+| 普通文件逻辑长度 | 365,217,790 bytes / 365.22 MB | 减少 258.54 MB / 41.45% |
+| 普通文件分配块合计 | 376,446,976 bytes / 376.45 MB | 非 APFS 独占空间口径 |
+| ditto ZIP | 156,539,813 bytes / 156.54 MB | 减少 111.87 MB / 41.68% |
 | 普通文件数 | 4,274 | 减少 2,692 |
 
-新包构成：Electron 299.96 MB，daemon 41.58 MB，npm 12.26 MB，app.asar 与外置 UI 8.31 MB，其他 3.11 MB；Claude 为 0。签名产物在本机 `Downloads/Vonvon-Bot-managed-Claude-0.7.14-20261025/`，不是已发布版本。
+新包构成：Electron 299.96 MB，daemon 41.58 MB，npm 12.26 MB，app.asar 与外置 UI 8.32 MB，其他 3.11 MB；Claude 为 0。签名产物在本机 `Downloads/Vonvon-Bot-managed-Claude-0.7.14-20261025/`，不是已发布版本。
 
 真实安装在本轮隔离用户目录进行，使用 App 自带 npm 和 Electron Node 模式。SDK 与 arm64 原生包均为固定版本 0.3.296；安装后 backends 为 280.50 MB，npm 下载缓存约 143.32 MB，二者均在 App 外。卸载不清公共 npm 缓存，保留后续安装复用；不能把 App 缩小等同于启用 Claude 后总占用同比下降。
 
