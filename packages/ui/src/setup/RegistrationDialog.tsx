@@ -1,9 +1,10 @@
 import {useEffect, useRef, useState, type ReactNode} from 'react';
-import {ArrowRight, Check, ChevronDown, Copy, ExternalLink, LoaderCircle, RefreshCw} from 'lucide-react';
+import {ArrowRight, Check, ChevronDown, Copy, ExternalLink, RefreshCw} from 'lucide-react';
 import type {Job} from '@vonvon/protocol';
 import {useShellCapabilities} from '../client-context';
 import {Button} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
+import {OperationActivity} from '../management/OperationActivity';
 import {copyAuthorizationUrl, copyFeedback, openExternalUrl} from '../url-actions';
 import {GrantStep, type RegisterModal} from './GrantStep';
 import {canRetryRegistration} from './registration-retry';
@@ -73,9 +74,9 @@ export function RegistrationScan({job, refresh, busy, onRetry}: {job?: Job; refr
     <p>{expired ? '重新获取后，用飞书扫码继续。' : job && 'message' in job ? job.message : '注册状态已过期，请重新获取二维码。'}</p>
     <Button variant="primary" disabled={busy} loading={busy} onClick={onRetry}><RefreshCw size={14} aria-hidden="true"/>{expired ? '重新获取二维码' : '重新扫码'}</Button>
   </div>;
-  if (job?.phase !== 'qr') return <div className="registration-recovery" role="status">
-    {job?.phase === 'succeeded' ? <div className="registration-recovery-icon"><Check size={27} aria-hidden="true"/></div> : <LoaderCircle className="registration-spinner" size={28} aria-hidden="true"/>}
-    <h3>{job?.phase === 'succeeded' ? refresh ? '凭据已刷新' : 'Bot 已注册' : refresh ? '正在刷新凭据' : '正在注册 Bot'}</h3>
+  if (job?.phase !== 'qr') return <div className="registration-recovery" role={job?.phase === 'succeeded' ? 'status' : undefined}>
+    {job?.phase === 'succeeded' && <div className="registration-recovery-icon"><Check size={27} aria-hidden="true"/></div>}
+    <h3>{job?.phase === 'succeeded' ? refresh ? '凭据已刷新' : 'Bot 已注册' : <OperationActivity key={job?.id} label={refresh ? '正在刷新凭据' : '正在注册 Bot'} state="connecting"/>}</h3>
     <p>{job && 'message' in job ? job.message : '正在等待注册状态…'}</p>
   </div>;
   return <div className="registration-scan">

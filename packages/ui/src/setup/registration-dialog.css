@@ -30,9 +30,6 @@
 .registration-recovery-icon { display: grid; place-items: center; width: 66px; height: 66px; background: #f1f3f6; border-radius: 18px; color: #8c9aaa; margin-bottom: 19px; }
 .registration-recovery h3 { margin-bottom: 8px; }
 .registration-recovery p { font-size: 12px; color: #8c949f; line-height: 1.6; margin: 0 0 24px; overflow-wrap: anywhere; }
-.registration-spinner { color: #8295ac; margin-bottom: 22px; animation: registration-spin 1s linear infinite; }
-@keyframes registration-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .registration-spinner { animation: none; } }
 @media (max-width: 430px) {
   .ui-dialog:has(.registration-content) .ui-dialog__content { padding: 18px; }
   .ui-dialog:has(.registration-content) .ui-dialog__footer { padding: 12px 14px; }
