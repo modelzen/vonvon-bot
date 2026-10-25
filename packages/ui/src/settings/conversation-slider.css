@@ -1,24 +1,27 @@
-.conversation-slider { --conversation-thumb: color-mix(in srgb, var(--color-text) 74%, var(--color-surface)); --conversation-track: color-mix(in srgb, var(--color-text) 12%, var(--color-surface)); width: 100%; max-width: 480px; min-width: 0; }
-.conversation-slider-rail { position: relative; height: 44px; margin-inline: calc(100% / 6 - 14px); }
-.conversation-slider-track { position: absolute; inset: 20px 14px auto; height: 4px; border-radius: 4px; background: var(--conversation-track); }
-.conversation-slider-track::before, .conversation-slider-track::after { content: ''; position: absolute; top: 0; width: 26px; height: 4px; }
+.conversation-slider { --conversation-track: color-mix(in srgb, var(--color-text) 18%, var(--color-surface)); --conversation-signal: linear-gradient(90deg, var(--color-accent), var(--color-icon-purple)); width: 100%; max-width: 352px; min-width: 0; }
+.conversation-slider-rail { position: relative; height: 44px; margin-inline: calc(100% / 6 - 9px); }
+.conversation-slider-track { position: absolute; inset: 21px 9px auto; height: 2px; border-radius: 2px; background: var(--conversation-track); }
+.conversation-slider-track::before, .conversation-slider-track::after { content: ''; position: absolute; top: 0; width: 16px; height: 2px; }
 .conversation-slider-track::before { right: calc(100% - 1px); background: linear-gradient(90deg, transparent, var(--conversation-track)); }
 .conversation-slider-track::after { left: calc(100% - 1px); background: linear-gradient(90deg, var(--conversation-track), transparent); }
-.conversation-slider-art { position: absolute; inset: 0 14px; pointer-events: none; z-index: 1; }
-.conversation-slider-liquid { width: 100%; height: 100%; }
-.conversation-slider-thumb { position: absolute; left: -14px; top: 8px; display: block; width: 28px; height: 28px; border-radius: 50%; background: transparent; }
-.conversation-slider-thumb[data-static] { background: var(--conversation-thumb); box-shadow: 0 1px 3px #0000001a; }
-.conversation-slider-thumb[data-moving] { transition: transform 180ms var(--ease-standard); }
+.conversation-slider-signal { position: absolute; inset: 0; border-radius: inherit; background: var(--conversation-signal); transform-origin: left center; }
+.conversation-slider-track > i { position: absolute; top: -1px; width: 4px; height: 4px; border-radius: 50%; background: var(--conversation-track); transform: translateX(-50%); }
+.conversation-slider-track > i[data-active] { background: var(--color-accent); }
+.conversation-slider-art { position: absolute; inset: 0 9px; pointer-events: none; z-index: 1; }
+.conversation-slider-thumb { box-sizing: border-box; position: absolute; left: -9px; top: 13px; display: block; width: 18px; height: 18px; border: 1.5px solid var(--color-accent); border-radius: 50%; background: var(--color-surface); box-shadow: 0 1px 3px #00000014; }
+.conversation-slider-thumb::after { content: ''; position: absolute; inset: 4px; border-radius: 50%; background: var(--conversation-signal); }
+.conversation-slider-thumb[data-moving], .conversation-slider-signal[data-moving] { transition: transform 180ms var(--ease-standard); }
 .conversation-slider-rail > input { position: absolute; z-index: 2; inset: 0; width: 100%; height: 44px; margin: 0; padding: 0; border: 0; appearance: none; background: transparent; cursor: grab; touch-action: pan-y; }
 .conversation-slider-rail > input:active { cursor: grabbing; }
-.conversation-slider-rail > input::-webkit-slider-runnable-track { height: 4px; background: transparent; }
-.conversation-slider-rail > input::-webkit-slider-thumb { appearance: none; width: 28px; height: 28px; margin-top: -12px; border: 0; border-radius: 50%; background: transparent; box-shadow: none; }
-.conversation-slider-rail > input::-moz-range-track { height: 4px; background: transparent; }
-.conversation-slider-rail > input::-moz-range-thumb { box-sizing: border-box; width: 28px; height: 28px; border: 0; border-radius: 50%; background: transparent; box-shadow: none; }
+.conversation-slider[aria-busy=true] .conversation-slider-rail > input { cursor: progress; }
+.conversation-slider-rail > input::-webkit-slider-runnable-track { height: 2px; background: transparent; }
+.conversation-slider-rail > input::-webkit-slider-thumb { appearance: none; width: 18px; height: 18px; margin-top: -8px; border: 0; border-radius: 50%; background: transparent; box-shadow: none; }
+.conversation-slider-rail > input::-moz-range-track { height: 2px; background: transparent; }
+.conversation-slider-rail > input::-moz-range-thumb { box-sizing: border-box; width: 18px; height: 18px; border: 0; border-radius: 50%; background: transparent; box-shadow: none; }
 .conversation-slider-rail > input:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; border-radius: 8px; }
 .conversation-slider-labels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .conversation-slider-label { min-height: 32px; padding: 4px 2px; border: 0; border-radius: 6px; background: transparent; color: var(--color-text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
-.conversation-slider-label[aria-pressed=true] { color: var(--color-text); font-weight: 600; }
+.conversation-slider-label[aria-pressed=true] { color: var(--color-accent); font-weight: 600; }
 .conversation-slider-label:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
 .conversation-slider-description { margin-top: 8px; min-height: 3.1em; }
 .conversation-slider[data-disabled] .conversation-slider-rail { opacity: .45; }
@@ -33,8 +36,9 @@
 @media (prefers-contrast: more) {
   .conversation-slider-track, .conversation-slider-thumb, .conversation-mode-tooltip { outline: 1px solid currentColor; }
 }
-@media (prefers-reduced-motion: reduce) { .conversation-slider-thumb { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .conversation-slider-thumb, .conversation-slider-signal { transition: none; } }
 @media (forced-colors: active) {
-  .conversation-slider { --conversation-thumb: ButtonText; --conversation-track: GrayText; }
-  .conversation-slider-thumb { forced-color-adjust: none; }
+  .conversation-slider { --conversation-track: GrayText; --conversation-signal: ButtonText; }
+  .conversation-slider-thumb { border-color: ButtonText; background: Canvas; forced-color-adjust: none; }
+  .conversation-slider-track > i[data-active] { background: ButtonText; }
 }

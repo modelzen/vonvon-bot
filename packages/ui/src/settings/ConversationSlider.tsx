@@ -1,6 +1,5 @@
 import {useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent} from 'react';
 import {Tooltip} from '@base-ui/react/tooltip';
-import {Liquid} from 'liquid-gooey';
 import type {Conversation} from '@vonvon/protocol';
 import './conversation-slider.css';
 
@@ -10,14 +9,12 @@ export const communicationModes: readonly {value: Conversation; label: string; d
   {value: 'smart', label: '智能', description: '根据判断规则，自己决定何时接话、何时另开话题。'},
 ];
 const rangeKeys = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown']);
-const thumbSize = 28;
-const move = {stretch: 0.6, trail: 0.35};
+const thumbSize = 18;
 
 /** Keep the real range in charge of focus and keyboard semantics. */
 function ConversationThumb({position, moving, dragging}: {position: number; moving: boolean; dragging: boolean}) {
   const root = useRef<HTMLSpanElement>(null);
   const [width, setWidth] = useState<number | null>(null);
-  const [staticOnly, setStaticOnly] = useState(true);
   useLayoutEffect(() => {
     const element = root.current;
     if (!element) return;
@@ -27,32 +24,14 @@ function ConversationThumb({position, moving, dragging}: {position: number; movi
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  useEffect(() => {
-    const reduced = matchMedia('(prefers-reduced-motion: reduce)');
-    const forced = matchMedia('(forced-colors: active)');
-    const update = () => setStaticOnly(reduced.matches || forced.matches || document.hidden);
-    update();
-    reduced.addEventListener('change', update);
-    forced.addEventListener('change', update);
-    document.addEventListener('visibilitychange', update);
-    return () => {
-      reduced.removeEventListener('change', update);
-      forced.removeEventListener('change', update);
-      document.removeEventListener('visibilitychange', update);
-    };
-  }, []);
-  const liquid = !staticOnly && moving && width !== null;
-  const thumb = <span className="conversation-slider-thumb" data-static={!liquid || undefined} data-moving={liquid && !dragging || undefined}
-    style={width === null ? {left: `${position * 50}%`, transform: 'translateX(-50%)'} : {transform: `translateX(${width * position / 2}px)`}}/>;
   return <span ref={root} className="conversation-slider-art" aria-hidden="true">
-    {liquid ? <Liquid className="conversation-slider-liquid" fill="var(--conversation-thumb)" blur={6} contrast={18} shadow="0 1px 3px rgba(0,0,0,.10)">
-      <Liquid.Item effect="move" move={move}>{thumb}</Liquid.Item>
-    </Liquid> : thumb}
+    <span className="conversation-slider-thumb" data-moving={moving && !dragging || undefined}
+      style={width === null ? {left: `${position * 50}%`, transform: 'translateX(-50%)'} : {transform: `translateX(${width * position / 2}px)`}}/>
   </span>;
 }
 
-export function ConversationSlider({label, value, disabled, onChange}: {
-  label: string; value: Conversation; disabled?: boolean; onChange: (value: Conversation) => void;
+export function ConversationSlider({label, value, disabled, pending, onChange}: {
+  label: string; value: Conversation; disabled?: boolean; pending?: boolean; onChange: (value: Conversation) => void;
 }) {
   const descriptionId = useId();
   const [preview, setPreview] = useState<number | null>(null);
@@ -64,6 +43,7 @@ export function ConversationSlider({label, value, disabled, onChange}: {
   const cancelled = useRef(false);
   const animationIntent = useRef<Conversation | null>(null);
   const current = communicationModes.findIndex(mode => mode.value === value);
+  const blocked = disabled || pending;
   const selected = disabled ? current : preview ?? current;
   const mode = communicationModes[selected]!;
   function reset() {interaction.current = null; pointer.current = null; draft.current = null; setPreview(null); setPosition(null); setMoving(false);}
@@ -73,7 +53,7 @@ export function ConversationSlider({label, value, disabled, onChange}: {
     reset();
     animationIntent.current = animate && next && next.value !== value ? next.value : null;
     setMoving(animate && !disabled);
-    if (!disabled && next && next.value !== value) onChange(next.value);
+    if (!blocked && next && next.value !== value) onChange(next.value);
   }
   function follow(event: PointerEvent<HTMLInputElement>) {
     if (!Number.isFinite(event.clientX)) return;
@@ -92,20 +72,24 @@ export function ConversationSlider({label, value, disabled, onChange}: {
     if (animationIntent.current === value) animationIntent.current = null;
   }, [value, disabled]);
   return <Tooltip.Provider delay={250}>
-    <div className="conversation-slider" data-disabled={disabled || undefined}>
+    <div className="conversation-slider" data-disabled={disabled || undefined} aria-busy={pending || undefined}>
       <div className="conversation-slider-rail">
-        <div className="conversation-slider-track" aria-hidden="true"/>
+        <div className="conversation-slider-track" aria-hidden="true">
+          <span className="conversation-slider-signal" data-moving={moving && position === null || undefined} style={{transform: `scaleX(${(disabled ? current : position ?? selected) / 2})`}}/>
+          {communicationModes.map((item, index) => <i key={item.value} data-active={index <= selected || undefined} style={{left: `${index * 50}%`}}/>)}
+        </div>
         <ConversationThumb position={disabled ? current : position ?? selected} moving={moving} dragging={position !== null}/>
-        <input type="range" min={0} max={2} step={1} value={selected} disabled={disabled} aria-label={label}
+        <input type="range" min={0} max={2} step={1} value={selected} disabled={disabled} aria-disabled={blocked || undefined} aria-label={label}
           aria-valuetext={mode.label} aria-describedby={descriptionId}
           onPointerDown={event => {
+            if (pending) {event.preventDefault(); return;}
             if (disabled || event.button !== 0 || event.isPrimary === false || interaction.current === 'pointer') return;
             cancelled.current = false; interaction.current = 'pointer'; pointer.current = event.pointerId;
             setMoving(true); follow(event); event.currentTarget.setPointerCapture(event.pointerId);
           }}
-          onPointerMove={event => {if (!disabled && interaction.current === 'pointer' && pointer.current === event.pointerId) follow(event);}}
+          onPointerMove={event => {if (!blocked && interaction.current === 'pointer' && pointer.current === event.pointerId) follow(event);}}
           onChange={event => {
-            if (disabled || cancelled.current) return;
+            if (blocked || cancelled.current) return;
             const next = Number(event.currentTarget.value);
             draft.current = next; setPreview(next);
             if (!interaction.current) commit(next);
@@ -122,6 +106,7 @@ export function ConversationSlider({label, value, disabled, onChange}: {
             if (interaction.current === 'pointer' && (!event || pointer.current === event.pointerId)) {reset(); cancelled.current = false;}
           }}
           onKeyDown={event => {
+            if (pending) {if (rangeKeys.has(event.key)) event.preventDefault(); return;}
             if (event.key === 'Escape') {event.preventDefault(); cancel();}
             else if (rangeKeys.has(event.key)) {cancelled.current = false; interaction.current = 'keyboard'; setPosition(null); setMoving(false);}
           }}
@@ -130,7 +115,7 @@ export function ConversationSlider({label, value, disabled, onChange}: {
       </div>
       <div className="conversation-slider-labels">
         {communicationModes.map((item, index) => <Tooltip.Root key={item.value}>
-          <Tooltip.Trigger className="conversation-slider-label" aria-pressed={selected === index} aria-disabled={disabled || undefined}
+          <Tooltip.Trigger className="conversation-slider-label" aria-pressed={selected === index} aria-disabled={blocked || undefined}
             onClick={event => commit(index, event.detail > 0)}>{item.label}</Tooltip.Trigger>
           <Tooltip.Portal><Tooltip.Positioner side="top" sideOffset={8} collisionPadding={12}>
             <Tooltip.Popup className="conversation-mode-tooltip">{item.description}</Tooltip.Popup>
