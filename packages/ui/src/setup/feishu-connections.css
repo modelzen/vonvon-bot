@@ -117,8 +117,8 @@
 .feishu-connections__checks-heading {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 11px 16px;
+  gap: 12px;
+  padding: 4px 16px;
   border-bottom: 1px solid var(--feishu-line);
   min-height: 49px;
 }
@@ -132,8 +132,42 @@
 .feishu-connections__count {
   font-size: 11px;
   color: var(--color-text-tertiary);
-  margin-left: auto;
   font-variant-numeric: tabular-nums;
+}
+
+.feishu-connections__checks-title {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.feishu-connections__check-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.feishu-connections__check-actions > button {
+  min-height: 40px;
+}
+
+.feishu-connections__check-actions > .ui-icon-button {
+  min-width: 40px;
+}
+
+.feishu-connections__settings-link {
+  color: var(--color-text-secondary);
+  font-weight: 400;
+}
+
+.feishu-connections__settings-link > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .feishu-connections__steps {
@@ -262,6 +296,7 @@
 }
 
 @container settings-content (max-width: 600px) {
+  .feishu-connections__checks-heading {flex-wrap: wrap; gap: 4px 12px;}
   .feishu-connections__heading {align-items: flex-start;}
   .feishu-connections__heading .welcome-setup__actions {flex-direction: column-reverse; align-items: stretch;}
   .feishu-connections__bot {min-width: 135px;}

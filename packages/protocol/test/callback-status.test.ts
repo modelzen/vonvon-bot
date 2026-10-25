@@ -66,7 +66,7 @@ it('does not mistake unavailable configuration for missing subscription', () => 
 });
 
 it('puts the configuration action beside missing optional event subscriptions', () => {
-  const value = {...status({confirmed: false, configuration: {state: 'configured', mode: 'websocket'}}), event: {state: 'ok' as const, missingOptional: ['application.bot.menu_v6']}};
+  const value = {...status({confirmed: false, configuration: {state: 'configured', mode: 'websocket'}}), event: {state: 'ok' as const, missingOptional: ['drive.notice.comment_add_v1']}};
   const step = botSteps(agent, value).find(step => step.id === 'event')!;
   expect(step.done).toBe(true);
   expect(step.actions).toContainEqual({kind: 'open', label: '打开事件设置', url: value.eventConfigUrl, target: 'event-settings'});

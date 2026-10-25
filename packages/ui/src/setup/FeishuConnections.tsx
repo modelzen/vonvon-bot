@@ -73,20 +73,26 @@ export function FeishuConnections({snapshot, ready, busy, run, onRegister, onOpe
     </div>
     <section className="feishu-connections__checks" aria-label={`${agent.name} 的配置检查`}>
       <div className="feishu-connections__checks-heading">
-        <h2>配置检查</h2>
-        <span className="feishu-connections__count">{read?.problem ? '检测结果待更新' : read?.status
-          ? `已完成 ${steps.filter(step => step.done).length} / ${steps.length}` : '正在读取飞书配置…'}</span>
-        {eventConfigUrl && <Button size="sm" variant="ghost" disabled={!ready || busy}
-          icon={<ArrowUpRight size={14} aria-hidden="true"/>}
-          onClick={() => void act({kind: 'open', label: '事件与回调', url: eventConfigUrl, target: 'event-settings'}, agent.id)}>事件与回调</Button>}
-        <IconButton size="sm" variant="ghost" label="重新检测" title="重新检测" loading={read?.checking}
-          disabled={!ready} onClick={() => void recheck(agent.id)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
+        <div className="feishu-connections__checks-title">
+          <h2>配置检查</h2>
+          <span className="feishu-connections__count">{read?.problem ? '检测结果待更新' : read?.status
+            ? `已完成 ${steps.filter(step => step.done).length} / ${steps.length}` : '正在读取飞书配置…'}</span>
+        </div>
+        <div className="feishu-connections__check-actions">
+          {eventConfigUrl && <Button className="feishu-connections__settings-link" size="sm" variant="ghost" disabled={!ready || busy}
+            onClick={() => void act({kind: 'open', label: '事件与回调', url: eventConfigUrl, target: 'event-settings'}, agent.id)}>
+            事件与回调<ArrowUpRight size={13} strokeWidth={1.7} aria-hidden="true"/>
+          </Button>}
+          <IconButton size="sm" variant="ghost" label="重新检测" title="重新检测" loading={read?.checking}
+            disabled={!ready} onClick={() => void recheck(agent.id)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
+        </div>
       </div>
       {read?.status && read.problem && <p role="status" className="feishu-connections__stale">上次检测失败：{read.problem}</p>}
       <ol className="feishu-connections__steps" key={agent.id}>
         {steps.map((step, index) => {
           const detailed = Boolean(step.detail || step.items?.length || step.warnings?.length || step.commands?.length);
-          const actions = step.actions.map(action => <Button key={action.kind + action.label} size="sm"
+          // Event and callback settings share one persistent entry in this management view.
+          const actions = step.actions.filter(action => !(eventConfigUrl && action.kind === 'open' && action.target === 'event-settings')).map(action => <Button key={action.kind + action.label} size="sm"
             variant={!detailed ? 'ghost' : action.kind === 'confirmCallback' && action.confirmed ? 'primary' : undefined}
             disabled={!ready || busy} loading={working === `${agent.id}:${action.kind}`}
             onClick={() => void act(action, agent.id)}>{action.label}</Button>);

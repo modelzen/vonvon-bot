@@ -141,16 +141,15 @@ it('keeps an event and callback settings entry after every check is complete', (
   expect(button(all, '我已配置')).toBeUndefined();
 });
 
-it('opens the selected Bot settings from both persistent and nearby event actions', async () => {
+it('opens the selected Bot settings from one persistent entry without duplicate row actions', async () => {
   h.reads[first.id] = {status: done(first.id), checking: false} satisfies SetupRead;
-  h.reads[second.id] = {status: {...done(second.id), event: {state: 'ok', missingOptional: ['application.bot.menu_v6']}}, checking: false} satisfies SetupRead;
+  h.reads[second.id] = {status: {...done(second.id), event: {state: 'ok', missingOptional: ['drive.notice.comment_add_v1']}}, checking: false} satisfies SetupRead;
   let all = render();
   button(all, '事件与回调').props.onClick(); await flush();
   expect(h.openExternal).toHaveBeenLastCalledWith(done(first.id).eventConfigUrl, 'event-settings', {});
   all.find(node => node.type === 'button' && node.props.title === '二号 Bot')!.props.onClick();
   all = render();
-  for (const label of ['事件与回调', '打开事件设置']) {
-    button(all, label).props.onClick(); await flush();
-    expect(h.openExternal).toHaveBeenLastCalledWith(done(second.id).eventConfigUrl, 'event-settings', {});
-  }
+  expect(button(all, '打开事件设置')).toBeUndefined();
+  button(all, '事件与回调').props.onClick(); await flush();
+  expect(h.openExternal).toHaveBeenLastCalledWith(done(second.id).eventConfigUrl, 'event-settings', {});
 });
