@@ -2,6 +2,7 @@ import {describe,expect,it,vi} from 'vitest';
 import {DEFAULT_SMART_RULES} from '@vonvon/protocol';
 import {prepareNewGroupSettings} from '../src/project/initial-settings';
 import type {JudgeModels} from '../src/judge/global-models';
+import {judgeBackendId,resolveJudgeModel} from '../src/judge/model';
 import {parseBindGroupInput} from '../src/admin/groups';
 import {parseCollaborationRequest} from '../src/admin/collaboration';
 import type {ModelInfo} from '../src/agent/types';
@@ -14,20 +15,31 @@ describe('new group configuration admission',()=>{
     expect(settings.modelAccess).toEqual({backend:'codex-appserver',models:['work-model'],efforts:['low','high']});
     // no `profile`: the role is the bot's file and the supplement and memory start empty (P4a)
     expect(settings.profile).toBeUndefined();
-    expect(settings.judge).toEqual({kind:'default'});
+    expect(settings.judge).toEqual({kind:'llm',backend:'codex-appserver',model:'work-model',effort:'low'});
     expect(settings.skills).toEqual({disabledPaths:[]});
     expect(settings.smartRules).toEqual(DEFAULT_SMART_RULES);
   });
-  it('non-smart groups keep the host marker without requiring a configured decision provider',async()=>{
+  it('non-smart groups copy the host choice without requiring its key or login',async()=>{
     const deps=helper();
+    deps.readJudgeModels.mockResolvedValue({defaultProvider:'typesafe',byProvider:{typesafe:{model:'jev-latest'}}});
+    expect((await prepareNewGroupSettings({backend:'codex-appserver',kind:'multi'},deps)).judge).toEqual({kind:'decision',provider:'typesafe',model:'jev-latest'});
+    expect(deps.readKey).not.toHaveBeenCalled();
     deps.readJudgeModels.mockRejectedValue(new Error('unavailable'));
-    expect((await prepareNewGroupSettings({backend:'codex-appserver',kind:'multi'},deps)).judge).toEqual({kind:'default'});
-    expect(deps.readJudgeModels).not.toHaveBeenCalled();
+    await expect(prepareNewGroupSettings({backend:'codex-appserver',kind:'multi'},deps)).rejects.toThrow('unavailable');
   });
-  it('admits smart creation using the validated host default marker',async()=>{
+  it('later host provider/model/effort changes never alter the captured group choice',async()=>{
+    const deps=helper();
+    deps.readJudgeModels.mockResolvedValue({defaultProvider:'claude-agent',byProvider:{'claude-agent':{model:'work-model',effort:'high'}}});
+    const settings=await prepareNewGroupSettings({backend:'codex-appserver',kind:'smart'},deps);
+    const changed:JudgeModels={defaultProvider:'typesafe',byProvider:{'claude-agent':{model:'different',effort:'low'},typesafe:{model:'jev-new'}}};
+    const actual=judgeBackendId('codex-appserver',settings.judge,undefined,changed);
+    expect(actual).toBe('claude-agent');
+    expect(resolveJudgeModel(actual,{group:settings.judge},models,undefined,undefined,changed)).toEqual({model:'work-model',effort:'high',modelSource:'group'});
+  });
+  it('admits smart creation using a validated copy of the host default',async()=>{
     const deps=helper();
     const settings=await prepareNewGroupSettings({backend:'codex-appserver',kind:'smart'},deps);
-    expect(settings.judge).toEqual({kind:'default'});
+    expect(settings.judge).toEqual({kind:'llm',backend:'codex-appserver',model:'work-model',effort:'low'});
     expect(settings.modelAccess).toEqual({backend:'codex-appserver',models:['work-model'],efforts:['low','high']});
     expect(deps.backendFor).toHaveBeenCalledTimes(2);
     expect(deps.readKey).not.toHaveBeenCalled();
@@ -41,7 +53,7 @@ describe('new group configuration admission',()=>{
     await expect(prepareNewGroupSettings(input,deps)).rejects.toThrow('密钥');
     await expect(prepareNewGroupSettings({...input,judge:{kind:'default'}},deps)).rejects.toThrow('密钥');
     deps.readKey.mockResolvedValue('fixture-key');
-    expect((await prepareNewGroupSettings(input,deps)).judge).toEqual({kind:'default'});
+    expect((await prepareNewGroupSettings(input,deps)).judge).toEqual({kind:'decision',provider:'typesafe',model:'jev-latest'});
     expect(deps.backendFor.mock.calls.every(([id])=>id==='codex-appserver')).toBe(true);
     deps.readJudgeModels.mockResolvedValue({defaultProvider:'claude-agent',byProvider:{}});
     deps.backendFor.mockImplementation(id=>({peekModels:()=>id==='claude-agent'?[]:models,listModels:vi.fn(async()=>[]),loginStatus:vi.fn(async()=>({state:'signedOut' as 'signedIn'|'signedOut',message:''}))}));
@@ -77,14 +89,14 @@ describe('new group configuration admission',()=>{
     const judge={kind:'provider' as const,provider:'typesafe' as const};
     await expect(prepareNewGroupSettings({backend:'codex-appserver',kind:'smart',judge},deps)).rejects.toThrow('密钥');
     deps.readKey.mockResolvedValue('fixture-key');
-    expect((await prepareNewGroupSettings({backend:'codex-appserver',kind:'smart',judge},deps)).judge).toEqual(judge);
+    expect((await prepareNewGroupSettings({backend:'codex-appserver',kind:'smart',judge},deps)).judge).toEqual({kind:'decision',provider:'typesafe',model:'jev-latest'});
     expect(parseBindGroupInput({chatId:'oc_a',projectName:'a',backend:'codex-appserver',kind:'smart',judge})).toMatchObject({judge});
     expect(()=>parseBindGroupInput({chatId:'oc_a',projectName:'a',backend:'codex-appserver',kind:'smart',judge:{...judge,model:'jev-latest'}})).toThrow('设置无效');
   });
   it('accepts a Provider default from its live catalog when Luna is absent', async()=>{
     const deps=helper();
     const judge={kind:'provider' as const,provider:'codex-appserver' as const};
-    expect((await prepareNewGroupSettings({backend:'codex-appserver',kind:'smart',judge},deps)).judge).toEqual(judge);
+    expect((await prepareNewGroupSettings({backend:'codex-appserver',kind:'smart',judge},deps)).judge).toEqual({kind:'llm',backend:'codex-appserver',model:'work-model',effort:'low'});
   });
   it('rejects a selected Provider after its login expires', async()=>{
     const deps=helper();

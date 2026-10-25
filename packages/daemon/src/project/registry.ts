@@ -96,8 +96,8 @@ export interface Project {
   /** true 表示 {@link defaultModel} 是手填的 id（3.11）：不在模型列表里也照用，不回落
    * 后端默认。选回列表里的模型时写 false。 */
   defaultModelCustom?: boolean;
-  /** 智能模式的判断模型，覆盖 bot 层的（s23c）。`backend` 一定是存的时候群的后端；群后来换了后端，
-   * 这一项不再适用、也不删。手改坏了当没设（parseStoredJudge）。 */
+  /** 智能模式的判断模型，独立于执行任务的 backend。新群保存创建时默认值的快照；之后的全局修改不改变它。
+   * 旧 default/provider 引用在修改全局配置前固定为当时的有效选择。未知值保持原样。 */
   judge?: JudgeSelectionStored;
   /** 这一行（某个 bot 在某个群）属于项目库里的哪个项目（project/library.ts）。host 启动时补上（记忆设计 7.1 步骤 A）；
    * 旧 daemon 不认这个键，读写都原样带着。不是字符串、或者库里没有这个项目，下次启动重新补。 */

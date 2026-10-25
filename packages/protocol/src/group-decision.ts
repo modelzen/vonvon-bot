@@ -1,6 +1,6 @@
 import {z} from 'zod';
 
-/** New groups may follow the host default, or keep an explicit group override. */
+/** New groups copy the host default at creation; legacy default/provider requests resolve to explicit snapshots. */
 export const groupDecisionSchema = z.discriminatedUnion('kind', [
   z.object({kind:z.literal('default')}).strict(),
   z.object({kind:z.literal('provider'), provider:z.enum(['codex-appserver','claude-agent','typesafe'])}).strict(),

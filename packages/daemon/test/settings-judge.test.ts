@@ -74,7 +74,7 @@ beforeEach(async () => {
   vi.stubEnv('CLAUDE_CONFIG_DIR', join(paths.appDir, 'no-claude'));
   vi.stubEnv('ANTHROPIC_BASE_URL', '');
   backends = Object.fromEntries(Object.entries(LISTS).map(([id, list]) => [id, fake(id, list)]));
-  secrets = {};
+  secrets = {'typesafe-api-key':'fixture-key'};
   await rm(paths.appDir, { recursive: true, force: true }); await mkdir(paths.appDir, { recursive: true });
   cfg = { accounts: { app: { id: botId, tenant: 'feishu', secret: { source: 'exec', id: 's' } } }, preferences: {} } as unknown as AppConfig;
   await saveConfig(cfg);
@@ -83,7 +83,7 @@ beforeEach(async () => {
 afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
 
 describe('judge settings: store and remove (design 2.1, 2.5)', () => {
-  it('saves both layers and resetting a group stores the host-default marker', async () => {
+  it('saves both layers and resetting a group copies the current host default', async () => {
     expect(await save(agent, { kind: 'llm', model: 'gpt-6-luna', effort: 'low' })).toMatchObject({
       kind: 'saved', effects: [{ when: 'next-message', detail: '智能模式的下一次判断就用新模型' }],
       section: { value: { stored: { selection: { kind: 'llm', backend: 'codex-appserver', model: 'gpt-6-luna', effort: 'low' } } } },
@@ -92,25 +92,26 @@ describe('judge settings: store and remove (design 2.1, 2.5)', () => {
     expect((await save(project, { kind: 'llm', model: 'my-gw/qwen3-coder', custom: true })).kind).toBe('saved');
     expect((await getProjectByName('demo'))?.judge).toEqual({ kind: 'llm', backend: 'codex-appserver', model: 'my-gw/qwen3-coder', custom: true });
     expect((await save(project, { kind: 'default' })).kind).toBe('saved');
-    expect((await getProjectByName('demo'))?.judge).toEqual({kind:'default'});
+    expect((await getProjectByName('demo'))?.judge).toEqual({kind:'llm',backend:'codex-appserver',model:'gpt-6-luna',effort:'low'});
     expect((await save(agent, { kind: 'default' })).kind).toBe('saved');
     expect((await loadConfig()).preferences).not.toHaveProperty('judge');
   });
 
-  it('a smart group resets to the host default and reports the actual effective provider',async()=>{
+  it('a smart group copies the host default and keeps it when the host changes',async()=>{
+    secrets={};
     await updateProject('demo',{kind:'single',smart:true});
     await writeJudgeModels({defaultProvider:'typesafe',byProvider:{typesafe:{model:'jev-latest'}}});
     expect(messageOf(await save(project,{kind:'default'}))).toContain('密钥');
     secrets['typesafe-api-key']='fixture-key';
     expect((await save(project,{kind:'default'})).kind).toBe('saved');
     const view=await owner().read(project) as ProjectSettingsView;
-    expect(view.sections.judge.stored.selection).toEqual({kind:'default'});
-    expect(view.judgeInheritsHostDefault).toBe(true);
+    expect(view.sections.judge.stored.selection).toEqual(JEV);
+    expect(view.judgeInheritsHostDefault).toBe(false);
     expect(view.sections.judge.effective.selection).toEqual({kind:'decision',provider:'typesafe',model:'jev-latest'});
-    expect((await getProjectByName('demo'))?.judge).toEqual({kind:'default'});
+    expect((await getProjectByName('demo'))?.judge).toEqual(JEV);
     await writeJudgeModels({defaultProvider:'claude-agent',byProvider:{'claude-agent':{model:'sonnet',effort:'low'}}});
     const fresh=await owner().read(project) as ProjectSettingsView;
-    expect(fresh.sections.judge.effective.selection).toEqual({kind:'llm',backend:'claude-agent',model:'sonnet',effort:'low'});
+    expect(fresh.sections.judge.effective.selection).toEqual(JEV);
   });
   it('the bot layer leaves out the backend: the bot default backend (s36a), Codex when it has none', async () => {
     cfg.preferences = { defaults: { backend: 'claude-agent' } };
@@ -299,13 +300,15 @@ describe('judge settings: the view', () => {
     expect((await o.read(project) as ProjectSettingsView).sections.judge.effective.selection).toEqual({ kind: 'llm', backend: 'codex-appserver', model: 'gpt-6-luna', effort: 'low' });
   });
 
-  it('lists the decision models and whether each key is in; choosing one without it says how to fill it in (s23f)', async () => {
+  it('lists key status and rejects Jev selection until its key can be read', async () => {
+    secrets={};
     const o = owner();
     const listed = [{ provider: 'typesafe', displayName: 'TypeSafe', models: [{ id: 'jev-latest', displayName: 'Jev' }], keyId: 'typesafe-api-key', keySet: false }];
     expect((await o.read(agent) as AgentSettingsView).decisionModels).toEqual(listed);
     const missing = keyMissingText(listed[0]!);
     expect(missing).toContain('在网页的密钥页填，或者在终端运行 vonvon secrets set typesafe-api-key，按提示粘贴');
-    expect(await save(project, JEV)).toMatchObject({ kind: 'saved', effects: [{ detail: '智能模式的下一次判断就用新模型' }, { fields: ['selection'], when: 'next-message', detail: missing }] });
+    expect(await save(project, JEV)).toMatchObject({ kind: 'rejected', fields: [{message:expect.stringContaining('密钥')}] });
+    expect((await getProjectByName('demo'))?.judge).toBeUndefined();
     // a language model, or the key in: no such line
     expect(await save(agent, { kind: 'llm', model: 'gpt-6-luna' })).toMatchObject({ effects: [{ detail: '智能模式的下一次判断就用新模型' }] });
     secrets = { 'app-secret': 'x', 'typesafe-api-key': 'ts_TESTKEY0000' };
@@ -326,7 +329,8 @@ describe('judge settings: the view', () => {
     await save(project, { kind: 'llm', model: 'gpt-6-luna' });
     const before = await unreadable.read(project) as ProjectSettingsView;
     const saved = await unreadable.save({ scope: project, section: 'judge', revision: before.sections.judge.revision, patch: { selection: JEV } } as Parameters<typeof unreadable.save>[0]);
-    expect(saved).toMatchObject({ kind: 'saved', effects: [{ detail: '智能模式的下一次判断就用新模型' }, { detail: unread }] });
+    expect(saved).toMatchObject({ kind: 'rejected', fields: [{message:expect.stringContaining('无法读取')}] });
+    expect((await getProjectByName('demo'))?.judge).toMatchObject({kind:'llm',model:'gpt-6-luna'});
   });
 
   it('a kind this version does not know shows as stored, parses in the protocol and is never rewritten; a broken value shows as default', async () => {
@@ -385,9 +389,10 @@ describe('provider-only group settings admission', () => {
     expect((await getProjectByName('demo'))?.judge).toBeUndefined();
     backends['claude-agent'] = fake('claude-agent', LISTS['claude-agent']!);
     expect((await save(project, choice)).kind).toBe('saved');
-    expect((await getProjectByName('demo'))?.judge).toEqual(choice);
+    expect((await getProjectByName('demo'))?.judge).toEqual({kind:'llm',backend:'claude-agent',model:'haiku'});
   });
   it('checks the TypeSafe key before saving a provider selection', async () => {
+    secrets={};
     const choice = { kind: 'provider' as const, provider: 'typesafe' as const };
     expect(messageOf(await save(project, choice))).toContain('密钥');
     secrets = { 'typesafe-api-key': 'ts_TESTKEY0000' };

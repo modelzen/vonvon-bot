@@ -18,7 +18,7 @@ async function fixture() {
   const second = join(appDir, process.platform === 'win32' ? 'codex-second.cmd' : 'codex-second');
   await writeFile(first, '', { mode: 0o700 });
   await writeFile(second, '', { mode: 0o700 });
-  const settings = createHostSettings({ appDir, runningCodexBin: first });
+  const settings = createHostSettings({ appDir, runningCodexBin: first, getSecret:async()=> 'fixture-key' });
   const read = async (): Promise<HostSettingsView> => {
     const value = await settings.read({ kind: 'host' });
     if (!('runtime' in value)) throw new Error('Expected host view');
@@ -112,6 +112,16 @@ describe('global judge model settings', () => {
     expect((await f.settings.save(parseSettingsEdit({scope:{kind:'host'},section:'judge',revision:switched.sections.judge.revision,patch:{byProvider:{}}}))).kind).toBe('saved');
     expect((await f.read()).sections.judge.stored.defaultProvider).toBe('claude-agent');
     expect(()=>parseSettingsEdit({scope:{kind:'host'},section:'judge',revision:'r',patch:{defaultProvider:'unknown'}})).toThrow();
+  });
+  it('refuses missing or unreadable Jev keys, including a default-only switch',async()=>{
+    const f=await fixture();
+    const before=await f.read();
+    const edit=parseSettingsEdit({scope:{kind:'host'},section:'judge',revision:before.sections.judge.revision,patch:{defaultProvider:'typesafe'}});
+    for (const getSecret of [async()=>undefined,async()=>{throw new Error('private key error');},async()=> 'bad key']) {
+      const result=await createHostSettings({appDir:f.appDir,getSecret}).save(edit);
+      expect(result).toMatchObject({kind:'rejected',fields:[{message:expect.stringContaining('密钥')}]});
+      expect((await f.read()).sections.judge.effective.defaultProvider).toBe('codex-appserver');
+    }
   });
   it('parses and preserves a newer provider choice, but rejects changing it', async () => {
     const f = await fixture();

@@ -22,7 +22,7 @@ import { AdminWriteError } from '../admin/ops';
 import { applyMirror, mirrorProjectIntoBot, siblingProjectOfChat, type AdminLibraryOp } from '../admin/library';
 import { isProjectId, readLibrary, type LibraryProject } from '../project/library';
 import { createSettingsOwner, materializeGroupSettings } from '../admin/settings';
-import { validateDefaultJudge, validateProviderJudge } from '../project/initial-settings';
+import { snapshotDefaultJudge, snapshotProviderJudge, requireDecisionKey } from '../project/initial-settings';
 import type { HostSettings } from '../admin/settings-types';
 import type { AdminWriteResult } from '../admin/ops';
 import { registerVoiceConsole } from './voice-console';
@@ -5417,7 +5417,6 @@ export function createOrchestrator(
         let result;
         if (!name) result = buildNewProjectFormCard({ cwd: cwdIn, error: '项目名不能为空', backends });
         else if (!op) result = buildNewProjectFormCard({ name, cwd: cwdIn, error: '无法识别操作者身份', backends });
-        else if (kind === 'smart') result = buildNewProjectFormCard({ name, cwd: cwdIn, error: '请在网页端创建智能群，并选择决策模型。', backends });
         else {
           try {
             if (!bindingBot) throw new Error('缺少机器人注册身份，请重启后再建群');
@@ -5477,7 +5476,6 @@ export function createOrchestrator(
           result = buildJoinGroupFormCard({ ...formWithBots, error: '缺少群标识，请重新从进群通知里打开绑定卡' });
         else if (!name) result = buildJoinGroupFormCard({ ...formWithBots, error: '项目名不能为空' });
         else if (!op) result = buildJoinGroupFormCard({ ...formWithBots, error: '无法识别操作者身份' });
-        else if (kind === 'smart') result = buildJoinGroupFormCard({ ...formWithBots, error: '请在网页端连接智能群，并选择决策模型。' });
         else {
           try {
             if (!bindingBot) throw new Error('缺少机器人注册身份，请重启后再绑定');
@@ -6470,15 +6468,14 @@ export function createOrchestrator(
         if (mode === 'smart' && sessionModeOf(project) !== 'smart') {
           const selected = parseStoredJudge(project.judge, backendIds()).value;
           if (!selected && project.judge !== undefined) throw new AdminWriteError('本群决策模型设置无效，请重新选择');
-          if (!selected || selected.kind === 'default') {
-            await validateDefaultJudge({ backendFor }).catch((error: unknown) => {
-              throw new AdminWriteError(error instanceof Error ? error.message : '无法确认默认决策模型');
-            });
-            patch.judge = { kind: 'default' };
+          try {
+            if (selected?.kind === 'default') patch.judge = await snapshotDefaultJudge({ backendFor });
+            else if (selected?.kind === 'provider') patch.judge = await snapshotProviderJudge(selected.provider, { backendFor });
+            else if (selected?.kind === 'decision') await requireDecisionKey(selected.provider);
+            // Old groups without their own choice retain Bot inheritance. New groups already have a snapshot.
+          } catch (error) {
+            throw new AdminWriteError(error instanceof Error ? error.message : '无法确认决策模型');
           }
-          if (selected?.kind === 'provider') await validateProviderJudge(selected.provider, { backendFor }).catch((error: unknown) => {
-            throw new AdminWriteError(error instanceof Error ? error.message : '无法确认决策 Provider');
-          });
         }
         const commit = () => mutateProject(project.name, latest => {
           if (projectRevision(latest) !== request.expectedRevision) throw new AdminWriteError('项目设置已改变，请刷新后重试');

@@ -9,6 +9,9 @@ import { getSessionTitleEfforts } from '../config/schema';
 import { discoverProviderModels } from './model-catalog';
 import { decisionProvider } from '../judge/decision';
 import { JUDGE_PROVIDERS, effectiveJudgeModels, readJudgeModels, writeJudgeModels, type JudgeModels } from '../judge/global-models';
+import { getSecret } from '../config/keystore';
+import { requireDecisionKey } from '../project/initial-settings';
+import { freezeGroupJudgeReferences } from '../project/judge-snapshots';
 import { readServiceCodexBin, saveServiceCodexBin } from '../service/codex-bin';
 import type { ApplyEffect, HostSettings, HostSettingsView, SettingsSave, SettingsSectionView } from './settings-types';
 
@@ -16,6 +19,8 @@ export function createHostSettings(options: {
   appDir?: string;
   readonly?: boolean;
   runningCodexBin?: string | null;
+  getSecret?: typeof getSecret;
+  readJudgeModelsCatalog?: Parameters<typeof freezeGroupJudgeReferences>[2];
 } = {}): Pick<HostSettings, 'read' | 'save'> {
   const appDir = options.appDir ?? paths.appDir;
   const runningCodexBin = options.runningCodexBin === undefined
@@ -23,7 +28,7 @@ export function createHostSettings(options: {
     : options.runningCodexBin;
   let writes: Promise<unknown> = Promise.resolve();
   const effect: ApplyEffect = { fields: ['codexBin'], when: 'restart', detail: '已保存，下次启动 daemon 时使用；当前会话保持原来的执行程序。' };
-  const judgeEffect: ApplyEffect = { fields: ['byProvider', 'defaultProvider'], when: 'next-message', detail: '跟随统一配置的智能群在下一次判断使用最新模型设置。' };
+  const judgeEffect: ApplyEffect = { fields: ['byProvider', 'defaultProvider'], when: 'next-message', detail: '新群聊使用此默认值，已有群聊保持各自的决策模型。' };
   async function view(): Promise<HostSettingsView> {
     const stored = readServiceCodexBin(appDir);
     const judge = await readJudgeModels(appDir);
@@ -56,11 +61,17 @@ export function createHostSettings(options: {
     name === 'execution' ? { scope: { kind: 'host' }, section: name, value: current.sections.execution }
       : { scope: { kind: 'host' }, section: name, value: current.sections.judge };
   async function validateJudge(value: JudgeModels, prior: JudgeModels): Promise<string | undefined> {
+    if ((value.defaultProvider ?? 'codex-appserver') === 'typesafe' || (value.byProvider.typesafe && JSON.stringify(value.byProvider.typesafe)!==JSON.stringify(prior.byProvider.typesafe))) {
+      try { await requireDecisionKey('typesafe',options.getSecret); }
+      catch (error) { return error instanceof Error ? error.message : '无法验证决策模型密钥'; }
+    }
     for (const [provider, choice] of Object.entries(value.byProvider)) {
       if (!JUDGE_PROVIDERS.includes(provider as typeof JUDGE_PROVIDERS[number])) {
         if (JSON.stringify(choice) === JSON.stringify(prior.byProvider[provider])) continue;
         return `不认识决策 Provider ${provider}`;
       }
+      // An unrelated unchanged profile must not prevent switching away from an unavailable provider.
+      if (JSON.stringify(choice) === JSON.stringify(prior.byProvider[provider])) continue;
       const parsed = parseModelId(choice.model);
       if (!parsed.ok) return parsed.message;
       if (provider === 'typesafe') {
@@ -96,10 +107,11 @@ export function createHostSettings(options: {
           // Older clients do not send this field; their model edits must preserve the current default.
           const defaultProvider = patch.defaultProvider ?? current.sections.judge.stored.defaultProvider;
           const proposed: JudgeModels = { ...(defaultProvider ? { defaultProvider } : {}), byProvider: patch.byProvider ?? current.sections.judge.stored.byProvider };
-          if (JSON.stringify(current.sections.judge.stored) === JSON.stringify(proposed)) return { kind: 'saved', section: section(current, 'judge'), effects: [] };
-          if (current.sections.judge.revision !== edit.revision) return { kind: 'conflict', current: section(current, 'judge') };
+          const unchanged=JSON.stringify(current.sections.judge.stored) === JSON.stringify(proposed);
+          if (!unchanged && current.sections.judge.revision !== edit.revision) return { kind: 'conflict', current: section(current, 'judge') };
           const message = await validateJudge(proposed, current.sections.judge.stored);
           if (message) return { kind: 'rejected', fields: [{ field: 'byProvider', message }] };
+          if (unchanged) return { kind: 'saved', section: section(current, 'judge'), effects: [] };
           const mutex = await acquireMutex(appDir, 'judge-models', 3000);
           try {
             current = await view();
@@ -107,6 +119,8 @@ export function createHostSettings(options: {
             // A newer daemon may have added another provider. Preserve it when this client saves known choices.
             const newer = Object.fromEntries(Object.entries(current.sections.judge.stored.byProvider)
               .filter(([provider]) => !JUDGE_PROVIDERS.includes(provider as typeof JUDGE_PROVIDERS[number])));
+            try { await freezeGroupJudgeReferences(appDir,current.sections.judge.stored,options.readJudgeModelsCatalog); }
+            catch { return {kind:'rejected',fields:[{field:'defaultProvider',message:'无法保留现有群聊的决策模型，默认值未更改。请检查 Provider 与群聊数据后重试。'}]}; }
             await writeJudgeModels({ ...proposed, byProvider: { ...newer, ...proposed.byProvider } }, appDir);
           } finally { await closeMutex(mutex); }
           return { kind: 'saved', section: section(await view(), 'judge'), effects: [judgeEffect] };
