@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'vitest';
 import {agentIdSchema, groupIdSchema, membershipIdSchema, projectIdSchema, type DesktopSnapshot} from '@vonvon/protocol';
-import {findEntries, searchEntries, settingAnchor} from '../src/search';
+import {diagnosticsSection, findEntries, searchEntries, settingAnchor} from '../src/search';
 import {groupTabForSection} from '../src/GroupWorkspace';
 import {routeFromSearch} from '../src/collaboration-navigation';
 
@@ -124,6 +124,21 @@ test('usage sharing has one global result even without a group binding', () => {
     assert.equal(matches[0]?.destination.selection, undefined);
     assert.equal(findEntries(searchEntries(state), '分享 Codex 用量')[0]?.id, 'usage-share');
   }
+});
+
+test('diagnostics search points to disclosures that can open for log and Bot details', () => {
+  for (const query of ['daemon 版本', '重新检查', '最近读取']) {
+    const overview = findEntries(entries, query).find(entry => entry.destination.page === 'diagnostics');
+    assert.equal(overview?.destination.section, '诊断概况', query);
+  }
+  const directory = findEntries(entries, '数据目录').find(entry => entry.destination.page === 'diagnostics');
+  assert.equal(directory?.destination.section, '这台电脑');
+  const log = findEntries(entries, '后台日志').find(entry => entry.destination.section === 'daemon 日志');
+  assert.equal(log?.destination.page, 'diagnostics');
+  assert.equal(log?.destination.field, '后台日志');
+  assert.equal(settingAnchor(log!.destination.section!), settingAnchor('daemon 日志'));
+  const bot = findEntries(entries, '没回的消息').find(entry => entry.id === `${agentId}-diagnostics`);
+  assert.deepEqual(bot?.destination, {page: 'diagnostics', section: diagnosticsSection(agentId)});
 });
 
 test('results are complete, ranked, uniquely identified, and have valid destinations', () => {
