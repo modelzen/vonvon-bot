@@ -1,0 +1,20 @@
+.now-activity-stream{max-height:256px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;border-radius:4px;outline-offset:4px}
+.now-activity-stream:focus-visible{outline:2px solid var(--color-focus)}
+.now-decision{display:flex;align-items:center;gap:12px;min-height:64px;padding:10px 12px;border-left:1px solid var(--color-border)}
+.now-decision:not([data-decision=skip]){border-left-color:color-mix(in srgb,var(--color-accent) 55%,var(--color-border))}
+.now-decision-icon{display:grid;place-items:center;flex:none;width:20px;height:20px;color:var(--color-accent)}
+.now-decision[data-decision=skip] .now-decision-icon{color:var(--color-text-tertiary)}
+.now-decision-copy{flex:1;min-width:0}
+.now-decision-heading{display:flex;align-items:baseline;gap:16px;min-width:0;line-height:1.6}
+.now-decision-label{flex:none;font-size:12px;font-weight:500;color:var(--color-text)}
+.now-decision-group{font-size:12px;color:var(--color-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.now-decision-heading time{flex:none;margin-left:auto;color:var(--color-text-tertiary);font-size:10px;font-variant-numeric:tabular-nums}
+.now-decision-context{display:flex;align-items:center;gap:7px;min-width:0;margin-top:3px;color:var(--color-text-tertiary);font-size:11px;line-height:1.6}
+.now-decision-context>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.now-decision-context>span:first-child{max-width:45%}
+.now-decision-context>i{width:2px;height:2px;flex:none;border-radius:50%;background:currentColor}
+.now-activity-empty{margin:0;padding:18px 0;color:var(--color-text-tertiary);font-size:12px}
+.now-activity-items[data-arriving]{animation:now-decision-arrive 240ms cubic-bezier(.23,1,.32,1)}
+@keyframes now-decision-arrive{from{opacity:.6;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+@media(max-width:560px){.now-decision{padding-inline:8px;gap:8px}.now-decision-heading{gap:8px}.now-decision-label,.now-decision-group{font-size:11px}.now-decision-context{font-size:10px}}
+@media(prefers-reduced-motion:reduce){.now-activity-items[data-arriving]{animation:none}}
