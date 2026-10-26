@@ -1,15 +1,54 @@
-import {execFileSync} from 'node:child_process';
+import {execFileSync, type ChildProcess} from 'node:child_process';
 import {mkdtemp, mkdir, readFile, realpath, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {afterEach, expect, it, vi} from 'vitest';
+import {setTimeout as delay} from 'node:timers/promises';
+import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {createDirectorySuggestions, directorySuggestionWorkerSource} from '../src/server/directory-suggestions';
 
-const resources: Array<{root: string; search: ReturnType<typeof createDirectorySuggestions>}> = [];
-afterEach(async () => {
-  for (const {root, search} of resources.splice(0)) { search.close(); await rm(root, {recursive: true, force: true}); }
+// Keep process readiness and exit observation on real time while controlling only
+// the parent's product deadline. Worker filesystem calls and FIFO blocking stay real.
+const waitForIo = delay;
+const children = vi.hoisted(() => [] as Array<{child: ChildProcess; closed: Promise<void>}>);
+vi.mock('node:child_process', async original => {
+  const real = await original<typeof import('node:child_process')>();
+  return {...real, spawn: (...args: Parameters<typeof real.spawn>) => {
+    const child = real.spawn(...args);
+    children.push({child, closed: new Promise<void>(resolve => { child.once('close', () => resolve()); })});
+    return child;
+  }};
 });
-async function fixture() {
+const resources: Array<{root: string; search: ReturnType<typeof createDirectorySuggestions>}> = [];
+beforeEach(() => { vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']}); });
+afterEach(async () => {
+  const owned = resources.splice(0);
+  try {
+    for (const {search} of owned) search.close();
+    // Also reap a child that had not written its readiness marker when setup failed.
+    const spawned = children.splice(0);
+    for (const {child} of spawned) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await Promise.all(spawned.map(({closed}) => closed));
+    for (const {root} of owned) await rm(root, {recursive: true, force: true});
+  } finally { vi.useRealTimers(); }
+});
+async function waitUntil(check: () => boolean | Promise<boolean>, signal: AbortSignal): Promise<void> {
+  for (;;) {
+    signal.throwIfAborted();
+    const ready = await check();
+    signal.throwIfAborted();
+    if (ready) return;
+    await waitForIo(10, undefined, {signal});
+  }
+}
+function observed<T>(promise: Promise<T>) {
+  let state: 'pending' | 'fulfilled' | 'rejected' = 'pending';
+  // Install both handlers immediately: failed readiness must not leave an
+  // unhandled assertion promise when cleanup resolves or rejects the search.
+  const result = promise.then(value => { state = 'fulfilled'; return {kind: 'fulfilled' as const, value}; },
+    error => { state = 'rejected'; return {kind: 'rejected' as const, error: error as unknown}; });
+  return {state: () => state, result};
+}
+async function fixture(signal: AbortSignal) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'vonvon-directory-process-')));
   await mkdir(join(root, 'work', 'paseo'), {recursive: true});
   execFileSync('mkfifo', [join(root, 'blocked.pipe')]);
@@ -20,63 +59,72 @@ async function fixture() {
   resources.push({root, search});
   const ready = async (query: string) => {
     let pid = 0;
-    await vi.waitFor(async () => { pid = Number(await readFile(join(root, `ready-${query.replaceAll('/', '_')}`), 'utf8')); expect(pid).toBeGreaterThan(0); });
+    await waitUntil(async () => {
+      try { pid = Number(await readFile(join(root, `ready-${query.replaceAll('/', '_')}`), {encoding: 'utf8', signal})); }
+      catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error; }
+      return Number.isInteger(pid) && pid > 0;
+    }, signal);
     return pid;
   };
   return {root, search, ready};
 }
 const exited = (pid: number) => { try { process.kill(pid, 0); return false; } catch { return true; } };
 
-it('keeps explicit paths usable after two searches are blocked in filesystem syscalls', async () => {
-  const {root, search, ready} = await fixture();
-  const first = search.search(root, 'blocked-one');
-  const second = search.search(root, 'blocked-two');
+it('keeps explicit paths usable after two searches are blocked in filesystem syscalls', async ({signal}) => {
+  const {root, search, ready} = await fixture(signal);
+  const first = observed(search.search(root, 'blocked-one'));
+  const second = observed(search.search(root, 'blocked-two'));
   const pids = await Promise.all([ready('blocked-one'), ready('blocked-two')]);
-  const firstSettled = vi.fn();
-  void first.then(firstSettled);
+  expect(first.state()).toBe('pending');
+  expect(second.state()).toBe('pending');
+  const current = observed(search.search(root, '~/work/'));
+  // Eviction settles without advancing the product clock or waiting for old I/O.
   await Promise.resolve();
-  expect(firstSettled).not.toHaveBeenCalled();
-  const current = search.search(root, '~/work/');
-  // Eviction must settle in the next microtask, without waiting for blocked I/O
-  // or either worker timeout. New worker startup can vary under full-suite load.
-  await Promise.resolve();
-  expect(firstSettled).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({truncated: true}));
-  const result = await current;
-  expect(result.entries.map(entry => entry.name)).toEqual(['work', 'paseo']);
-  expect(result.truncated).toBe(false);
-  expect((await first).truncated).toBe(true);
+  expect(first.state()).toBe('fulfilled');
+  expect(await first.result).toMatchObject({kind: 'fulfilled', value: {truncated: true}});
+  expect(await current.result).toMatchObject({kind: 'fulfilled', value: {
+    entries: [{name: 'work'}, {name: 'paseo'}], truncated: false,
+  }});
   search.close();
-  expect((await second).truncated).toBe(true);
-  await vi.waitFor(() => expect(pids.every(exited)).toBe(true));
+  expect(await second.result).toMatchObject({kind: 'fulfilled', value: {truncated: true}});
+  await waitUntil(() => pids.every(exited), signal);
 });
 
-it('hard-times out a hung name search and kills the actual worker process', async () => {
-  const {root, search, ready} = await fixture();
-  const started = Date.now();
-  const result = search.search(root, 'blocked-name');
+it('hard-times out a hung name search and kills the actual worker process', async ({signal}) => {
+  const {root, search, ready} = await fixture(signal);
+  const result = observed(search.search(root, 'blocked-name'));
   const pid = await ready('blocked-name');
-  expect((await result).truncated).toBe(true);
-  expect(Date.now() - started).toBeLessThan(2500);
-  await vi.waitFor(() => expect(exited(pid)).toBe(true));
+  await vi.advanceTimersByTimeAsync(1499);
+  expect(result.state()).toBe('pending');
+  expect(exited(pid)).toBe(false);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(result.state()).toBe('fulfilled');
+  expect(await result.result).toMatchObject({kind: 'fulfilled', value: {truncated: true}});
+  await waitUntil(() => exited(pid), signal);
   expect((await search.search(root, '~/work/')).entries.map(entry => entry.name)).toEqual(['work', 'paseo']);
 });
 
-it('reports a timeout when an explicit path never produced a verified directory', async () => {
-  const {root, search, ready} = await fixture();
-  const result = expect(search.search(root, '~/blocked-path')).rejects.toMatchObject({code: 'directory_timeout'});
+it('reports a timeout when an explicit path never produced a verified directory', async ({signal}) => {
+  const {root, search, ready} = await fixture(signal);
+  const result = observed(search.search(root, '~/blocked-path'));
   const pid = await ready('~/blocked-path');
-  await result;
-  await vi.waitFor(() => expect(exited(pid)).toBe(true));
+  await vi.advanceTimersByTimeAsync(1499);
+  expect(result.state()).toBe('pending');
+  expect(exited(pid)).toBe(false);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(result.state()).toBe('rejected');
+  expect(await result.result).toMatchObject({kind: 'rejected', error: {code: 'directory_timeout'}});
+  await waitUntil(() => exited(pid), signal);
 });
 
-it('closes pending directory workers immediately without waiting for blocked I/O', async () => {
-  const {root, search, ready} = await fixture();
-  const result = search.search(root, 'blocked-shutdown');
+it('closes pending directory workers immediately without waiting for blocked I/O', async ({signal}) => {
+  const {root, search, ready} = await fixture(signal);
+  const result = observed(search.search(root, 'blocked-shutdown'));
   const pid = await ready('blocked-shutdown');
-  const started = Date.now();
   search.close();
-  expect((await result).truncated).toBe(true);
-  expect(Date.now() - started).toBeLessThan(250);
-  await vi.waitFor(() => expect(exited(pid)).toBe(true));
+  await Promise.resolve();
+  expect(result.state()).toBe('fulfilled');
+  expect(await result.result).toMatchObject({kind: 'fulfilled', value: {truncated: true}});
+  await waitUntil(() => exited(pid), signal);
   await expect(search.search(root, '')).rejects.toMatchObject({code: 'directory_closed'});
 });
