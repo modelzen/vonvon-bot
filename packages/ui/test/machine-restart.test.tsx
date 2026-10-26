@@ -78,15 +78,17 @@ it('offers start only when a desktop shell supplies the capability', () => {
   expect(unknown).not.toContain('已停止');
 });
 
-it('leaves installing and uninstalling the service to the 登录电脑时启动 switch', () => {
+it('leaves service installation to the login switch and removes the unsupported service stop action', () => {
   const html = renderToStaticMarkup(<ClientProvider client={client}><MachinePanel request={async () => running} agents={[]} macos /></ClientProvider>);
-  expect(html).toContain('打开「登录电脑时启动」后，daemon 跑在后台服务里，退出桌面后仍运行。');
+  expect(html).toContain('开启「登录电脑时启动」后，退出 App 仍可运行 Bot。');
   for (const gone of ['安装并启动', '卸载后台服务']) expect(html).not.toContain(gone);
-  expect(html).toContain('停止后台服务');
+  expect(html).not.toContain('<span>停止服务</span>');
+  expect(html).toContain('<span>停止 daemon</span>');
+  expect(html).toContain('<span>启动服务</span>');
 });
 
-it('names the terminal command instead of the macOS switch elsewhere', () => {
+it('explains background service behavior without terminal instructions', () => {
   const html = renderToStaticMarkup(<ClientProvider client={client}><MachinePanel request={async () => running} agents={[]} /></ClientProvider>);
-  expect(html).toContain('在终端运行 vonvon service install，装成 systemd 用户服务，崩溃后自动重启。');
+  expect(html).toContain('后台服务可在应用退出后继续运行 Bot。');
   expect(html).not.toContain('登录电脑时启动');
 });

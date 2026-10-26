@@ -13,8 +13,9 @@ import { paths } from '../config/paths';
 import { log } from '../core/logger';
 import { createCooldown } from './cooldown';
 import { decisionBody, decisionProvider, readDecision, type DecisionProvider } from './decision';
+import { readJudgeModelsSync } from './global-models';
 import { parseStoredJudge, resolveJudgeModel, judgeBackendId } from './model';
-import { SMART_FACTS_GUIDANCE, judgeAnchors, judgeSchema, judgeSystem, parseVerdict, renderJudgeInput } from './prompt';
+import { DEFAULT_SMART_PROMPT, SMART_FACTS_GUIDANCE, judgeAnchors, judgeSchema, judgeSystem, parseVerdict, renderJudgeInput } from './prompt';
 import { readSmartPrompt, SmartPromptError, composeSmartRules } from './smart-file';
 import { DecisionError } from './typesafe';
 import type { JudgeErrorKind, JudgeRequest, JudgeResult } from './types';
@@ -58,6 +59,8 @@ export interface JudgeDeps {
   getSecret?: (id: string) => Promise<string | undefined>;
   /** a decision model's HTTP calls */
   fetch?: typeof fetch;
+  /** Testable data root for the host-wide judge model snapshot. */
+  judgeModelsRoot?: string;
 }
 
 /** Ends a judgement early; the reason of the shared AbortController. */
@@ -133,7 +136,7 @@ export function createJudge(deps: JudgeDeps): Judge {
   const noticedPrompts = new Set<string>();
   const notePrompt = (req: JudgeRequest, prompt: Awaited<ReturnType<typeof readSmartPrompt>>): void => {
     const key = `${req.appId}:${req.group.chatId}`;
-    if (prompt.source === 'default' || prompt.text.includes(SMART_FACTS_GUIDANCE) || noticedPrompts.has(key)) return;
+    if (prompt.source === 'default' || prompt.text === DEFAULT_SMART_PROMPT || prompt.text.includes(SMART_FACTS_GUIDANCE) || noticedPrompts.has(key)) return;
     noticedPrompts.add(key);
     reportCustomPromptNotice(req.group.chatId);
   };
@@ -204,8 +207,10 @@ export function createJudge(deps: JudgeDeps): Judge {
   }
 
   /** A stored setting, or nothing (logged once per layer and value) when it cannot be used. */
-  function storedJudge(value: unknown, layer: string) {
+  function storedJudge(value: unknown, layer: string, active = true) {
     const parsed = parseStoredJudge(value, catalogBackendIds());
+    if (active && ['provider', 'default'].includes(String((value as { kind?: unknown } | null)?.kind)) && parsed.why)
+      throw new JudgeFail('unavailable', `决策 Provider 设置无效：${parsed.why}`);
     if (parsed.why) {
       const key = `${layer}\n${JSON.stringify(value)}`;
       if (!ignored.has(key)) {
@@ -294,11 +299,16 @@ export function createJudge(deps: JudgeDeps): Judge {
     aborted.catch(() => undefined);
 
     try {
-      const backend = deps.backendFor(judgeBackendId(base.backend, storedJudge(req.group.judge, req.group.chatId)));
+      const groupChoice = storedJudge(req.group.judge, req.group.chatId);
+      const botChoice = storedJudge(req.botJudge, 'bot', !groupChoice);
+      const activeChoice = groupChoice ?? (botChoice?.kind === 'provider' || botChoice?.kind === 'default' ? botChoice : undefined);
+      // A default-provider switch cannot split one judgement across two host snapshots.
+      const globalModels = activeChoice?.kind === 'default' ? readJudgeModelsSync(deps.judgeModelsRoot) : undefined;
+      const backend = deps.backendFor(judgeBackendId(base.backend, activeChoice, deps.judgeModelsRoot, globalModels));
       const models = backend.peekModels?.();
       base = {
         ...base, backend: backend.id,
-        ...resolveJudgeModel(backend.id, { group: storedJudge(req.group.judge, req.group.chatId), bot: storedJudge(req.botJudge, 'bot') }, models),
+        ...resolveJudgeModel(backend.id, { group: groupChoice, bot: botChoice }, models, undefined, deps.judgeModelsRoot, globalModels),
       };
       /** Steps 4 to 6, for a backend or a decision model's provider (`id`): the cooldown, a slot, the cooldown
        * again (a judgement that ran while this one queued may have just started one), the call. The call keeps

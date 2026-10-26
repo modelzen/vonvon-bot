@@ -35,10 +35,41 @@ export const groupAttentionSchema = z.object({
   budget: z.object({ kind: z.enum(["no-glance", "named-only"]), until: z.number().finite().nonnegative() }).strict().optional(),
 }).strict();
 export type GroupAttention = z.infer<typeof groupAttentionSchema>;
+/** Safe live activity only: never reasoning, message text, command lines, paths or tool arguments. */
+export const botActivitySchema = z.object({
+  id: z.string().uuid(), groupId: z.string().regex(/^oc_[A-Za-z0-9_-]{1,200}$/),
+  phase: z.enum(["processing", "thinking", "tool", "responding", "compacting", "waiting", "retrying"]),
+  startedAt: z.number().finite().nonnegative(), updatedAt: z.number().finite().nonnegative(),
+  /** Host receipt of the last heartbeat; updatedAt remains the last phase change. */
+  observedAt: z.number().finite().nonnegative().optional(),
+  toolKind: z.enum(["command", "file", "search", "tool"]).optional(),
+  activeToolCount: z.number().int().positive().max(1024).optional(),
+}).strict();
+export type BotActivity = z.infer<typeof botActivitySchema>;
+/** A successful model judgement's intent, not a receipt that a reply/topic was delivered. */
+export const botDecisionSchema = z.object({
+  id: z.string().uuid(), groupId: z.string().regex(/^oc_[A-Za-z0-9_-]{1,200}$/), place: z.enum(["main", "topic"]),
+  decision: z.enum(["skip", "main", "reply", "topic"]),
+  trigger: z.enum(["mention", "quote", "name", "focus", "glance", "bot-mention"]),
+  decidedAt: z.number().finite().nonnegative(), messageAt: z.number().finite().nonnegative(),
+  messageCount: z.number().int().positive().max(10_000).optional(),
+}).strict();
+export type BotDecision = z.infer<typeof botDecisionSchema>;
+export const BOT_ACTIVITY_STALE_MS = 60_000;
+export const botLatestActionSchema = z.object({
+  id: z.string().uuid(), groupId: z.string().regex(/^oc_[A-Za-z0-9_-]{1,200}$/),
+  kind: z.enum(["replied", "memory-saved"]), at: z.number().finite().nonnegative(),
+}).strict();
+export type BotLatestAction = z.infer<typeof botLatestActionSchema>;
+export const BOT_LATEST_ACTION_SHOWN_MS = 5 * 60_000;
 export const CUSTOM_PROMPT_NOTICE = "新版默认智能提示词新增：先看这话是对谁说的；Bot 来回几次且真人一直没说话时，除非还有明确没做完的事，不再接。你的自定义提示词保持原样，可到智能提示词里自行修改。";
 /** What a bot child reports (the `fcb.diagnostics` IPC message); s18 adds its kinds here. `times` counts one record as
  * several messages (s18c: a group's dropped queue); child and host are always the same version. */
 export const diagnosticsEventSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("activity"), activity: botActivitySchema }).strict(),
+  z.object({ kind: z.literal("activityEnded"), id: z.string().uuid() }).strict(),
+  z.object({ kind: z.literal("decision"), decision: botDecisionSchema }).strict(),
+  z.object({ kind: z.literal("latestAction"), action: botLatestActionSchema }).strict(),
   z.object({ kind: z.literal("attention"), groups: z.array(groupAttentionSchema).max(200) }).strict(),
   z.object({ kind: z.literal("customPrompt"), groupId: z.string().regex(/^oc_[A-Za-z0-9_-]{1,200}$/) }).strict(),
   z.object({ kind: z.literal("notReplied"), record: notRepliedSchema.omit({ count: true }), times: z.number().int().positive().max(10_000).optional() }).strict(),
@@ -46,7 +77,12 @@ export const diagnosticsEventSchema = z.discriminatedUnion("kind", [
 ]);
 export type DiagnosticsEvent = z.infer<typeof diagnosticsEventSchema>;
 /** Kept in the daemon's memory per bot; s18 adds its crash records as more fields. */
-export const botDiagnosticsSchema = z.object({ notReplied: z.array(notRepliedSchema), deniedScopes: z.array(deniedScopeSchema), attention: z.array(groupAttentionSchema).optional(), customPromptGroups: z.array(z.string()).optional() });
+export const botDiagnosticsSchema = z.object({
+  notReplied: z.array(notRepliedSchema), deniedScopes: z.array(deniedScopeSchema),
+  attention: z.array(groupAttentionSchema).optional(), customPromptGroups: z.array(z.string()).optional(),
+  activities: z.array(botActivitySchema).max(50).optional(), decisions: z.array(botDecisionSchema).max(30).optional(),
+  latestAction: botLatestActionSchema.optional(),
+});
 export type BotDiagnostics = z.infer<typeof botDiagnosticsSchema>;
 
 /** `bot` is the bot the record belongs to, and whether the host has more than one (a command then needs --bot). */
@@ -68,8 +104,8 @@ export const NOT_REPLIED_TEXT: Record<NotRepliedReason, Text> = {
   "codex-too-old": { reason: () => "Codex 版本太旧，服务端不让它用这个模型", next: () => "在本机环境里更新 Codex。" },
   "tool-missing": { reason: r => r.backend === "claude" ? "Claude Agent SDK 还没下载" : "Codex 没装好", next: () => "去本机环境安装。" },
   "tier-unavailable": {
-    reason: () => "Linux 上的 Codex 只能用完全访问，这个群是只读或读写档，这一轮没开始",
-    next: (r, bot) => `在群内设置里把「权限档」改成「完全访问」，或者运行 vonvon settings set${bot?.several ? ` --bot ${bot.id}` : ""} --group ${r.groupId} permission.mode=full。`,
+    reason: () => "这个群的权限档位在当前 Codex 环境不可用，这一轮没开始",
+    next: (r, bot) => `在群设置里换一档，或者升级 Codex。也可以运行 vonvon settings set${bot?.several ? ` --bot ${bot.id}` : ""} --group ${r.groupId} permission.mode=full。`,
   },
   "missing-scope": { reason: r => `飞书拒绝了：缺 ${r.detail ?? "权限"}`, next: () => "在上面「缺的权限」里一键开权限，开完发布一个新版本。" },
   quota: { reason: r => `${tool(r)} 的用量到上限了`, next: () => "用量恢复后再发。" },

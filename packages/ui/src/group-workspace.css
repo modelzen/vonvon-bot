@@ -1,0 +1,181 @@
+/* Group identity, Bot selection, then the settings surface. */
+.group-design-workspace { display: grid; gap: 16px; min-width: 0; }
+.group-design-heading { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.group-design-heading > h2 { flex: 1; min-width: 0; margin: 0; font-size: 20px; font-weight: 650; line-height: 1.3; letter-spacing: -.025em; overflow-wrap: anywhere; }
+.group-design-heading .collaboration-avatar.group { width: 34px; height: 34px; }
+.group-design-heading > button { flex: none; }
+.group-open-button > span { display: inline-flex; align-items: center; gap: 5px; }
+.group-open-button svg { flex: none; color: var(--color-text-secondary); }
+.group-design-scope { display: grid; gap: 6px; min-width: 0; }
+.group-design-context { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; }
+.group-design-context > .ui-toggle { flex: none; }
+.group-enable-control { display: inline-flex; align-items: center; justify-content: flex-end; gap: 10px; flex: none; }
+.group-enable-control .operation-activity { color: var(--color-text-secondary); font-size: 12px; }
+.group-save-status { display: inline-flex; min-width: 48px; justify-content: flex-end; align-items: center; gap: 4px; color: var(--color-text-tertiary); font-size: 11px; white-space: nowrap; }
+.group-bot-picker { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; }
+.group-bot-picker > button { display: flex; align-items: center; gap: 7px; min-width: 0; max-width: 220px; min-height: 32px; padding: 4px 8px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--color-text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
+.group-bot-picker > button[aria-pressed=true] { background: var(--color-surface); border-color: var(--color-border); color: var(--color-text); box-shadow: 0 1px 3px #00000008; font-weight: 550; }
+.group-bot-picker .collaboration-avatar.agent { width: 20px; height: 20px; font-size: 11px; }
+.group-bot-picker > button > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-bot-picker > button > svg { flex: none; color: var(--color-text-secondary); }
+.group-design-tabs { display: flex; justify-self: start; max-width: 100%; gap: 3px; padding: 3px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface-muted); }
+.group-design-tabs > button { flex: 1 1 auto; min-width: 0; min-height: 32px; padding: 5px 16px; border: 0; border-radius: 7px; background: transparent; color: var(--color-text-secondary); font: inherit; font-size: 13px; line-height: 1.5; white-space: nowrap; cursor: pointer; }
+.group-design-tabs > button[aria-current=page] { background: var(--color-surface); color: var(--color-text); box-shadow: 0 1px 3px #00000012; font-weight: 600; }
+.group-context-menu { position: relative; flex: none; }
+.group-context-menu > summary { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; list-style: none; cursor: pointer; color: var(--color-text-secondary); }
+.group-context-menu > summary::-webkit-details-marker { display: none; }
+.group-context-menu[open] > summary { background: var(--color-surface-muted); color: var(--color-text); }
+.group-context-menu > div { position: absolute; z-index: 10; right: 0; top: 38px; width: 176px; padding: 5px; border: 1px solid var(--color-border); border-radius: 11px; background: var(--color-surface); box-shadow: 0 8px 28px #0000001a, 0 2px 6px #00000008; }
+.group-context-menu button { display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 6px; background: none; color: inherit; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.group-context-menu button:last-child { margin-top: 4px; color: var(--color-status-danger, #c43c35); }
+.group-context-menu button:disabled { opacity: .4; cursor: default; }
+.group-control-note { margin: 0; color: var(--color-text-secondary); font-size: 12px; line-height: 1.55; }
+.group-conversation-layout { display: flex; align-items: center; flex-wrap: wrap; gap: 20px 28px; min-width: 0; }
+.group-conversation-layout > .group-conversation-choice { flex: 0 1 352px; min-width: 0; max-width: 100%; }
+.group-conversation-layout > .group-attention { flex: 1.4 1 300px; }
+.group-conversation-choice { display: grid; gap: 10px; }
+.group-conversation-choice h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.group-bot-profile-link { display: flex; align-items: center; justify-self: start; gap: 6px; padding: 0; border: 0; background: transparent; color: var(--color-text-secondary); font-size: 12px; cursor: pointer; }
+.group-usage-guide { display: grid; gap: 16px; font-size: 13px; }
+.group-usage-guide > div { display: flex; align-items: center; gap: 16px; }
+.group-usage-guide code { min-width: 75px; font-size: 12px; }
+.group-usage-guide p { margin: 0; line-height: 1.6; }
+.group-usage-guide > .setting-choices { display: flex; }
+.group-command-list { display: grid; margin: 0; gap: 0; }
+.group-command-list > div { display: grid; grid-template-columns: 112px 1fr; align-items: baseline; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--color-border); }
+.group-command-list > div:last-child { border-bottom: 0; }
+.group-command-list dd { margin: 0; color: var(--color-text-secondary); line-height: 1.5; }
+.group-command-admin > summary { padding: 8px 0; color: var(--color-text-secondary); font-size: 12px; cursor: pointer; }
+.group-bot-picker > button:focus-visible, .group-design-tabs > button:focus-visible, .group-context-menu > summary:focus-visible, .group-context-menu button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.group-bot-picker > button:active, .group-design-tabs > button:active, .group-context-menu > summary:active { opacity: .72; }
+@media (hover: hover) and (pointer: fine) {
+  .group-bot-picker > button:hover, .group-design-tabs > button:hover { color: var(--color-text); }
+  .group-context-menu > summary:hover, .group-context-menu button:not(:disabled):hover { background: var(--color-surface-muted); }
+}
+@media (max-width: 560px) {
+  .group-design-workspace { gap: 14px; }
+  .group-design-tabs { justify-self: stretch; }
+  .group-design-tabs > button { padding-inline: 8px; }
+  .group-design-context { align-items: flex-start; flex-wrap: wrap; gap: 10px; }
+  .group-enable-control { margin-left: auto; flex-wrap: wrap; }
+}
+@media (max-width: 400px) {
+  .group-design-heading { gap: 8px; }
+  .group-design-heading > h2 { font-size: 19px; }
+  .group-design-heading .group-open-label { display: none; }
+  .group-design-tabs > button { font-size: 12px; padding-inline: 5px; }
+  .group-bot-picker > button { max-width: 180px; }
+  .group-command-list > div { grid-template-columns: 104px 1fr; gap: 10px; }
+}
+@media (pointer: coarse) {
+  .group-design-tabs > button, .group-bot-picker > button, .group-context-menu button { min-height: 44px; }
+  .group-context-menu > summary { min-width: 44px; min-height: 44px; }
+}
+@media (prefers-contrast: more) {
+  .group-design-tabs > button[aria-current=page], .group-bot-picker > button[aria-pressed=true] { outline: 1px solid currentColor; outline-offset: -1px; }
+}
+.group-project-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 2px; font-size: 12px; line-height: 1.6; color: var(--color-text-secondary); }
+.project-page-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+.project-binding-list { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 4px; }
+.project-binding { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 6px 12px; border: 0; border-radius: 8px; background: var(--color-surface-muted); color: var(--color-text); font: inherit; text-align: left; }
+.project-binding > small { margin-left: auto; color: var(--color-text-tertiary); font-size: 11px; }
+.project-binding > small + * { flex: none; }
+.project-binding:disabled { opacity: .7; }
+
+/* Keep the memory map primary; existing role overrides remain a quiet optional editor. */
+
+/* The group context stays in view while its settings scroll. */
+.config-header { position: sticky; top: 0; z-index: 4; display: grid; grid-template-rows: auto auto; gap: 12px; min-width: 0; padding: 8px 0 12px; background: var(--color-canvas); box-shadow: 0 1px 0 var(--color-border); }
+.config-header-identity, .config-header-navigation { display: flex; align-items: center; min-width: 0; }
+.config-header-identity { gap: 12px; min-height: 34px; }
+.config-group-title { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 0 1 auto; max-width: 45%; }
+.config-group-title .collaboration-avatar.group { width: 28px; height: 28px; flex: none; }
+.config-group-title h2 { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 18px; font-weight: 650; line-height: 1.3; letter-spacing: -.025em; }
+.config-context-divider { width: 1px; height: 16px; flex: none; background: var(--color-border); }
+.header-bot-select { display: flex; align-items: center; gap: 7px; min-width: 110px; max-width: 240px; height: 30px; padding: 3px 8px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--color-text-secondary); font: 500 12px var(--font-family-system); cursor: pointer; }
+.header-bot-select .collaboration-avatar.agent { width: 19px; height: 19px; flex: none; }
+.header-bot-select-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.header-bot-select > span:last-child { display: flex; align-items: center; flex: none; color: var(--color-text-tertiary); }
+.header-bot-select[data-popup-open] { border-color: var(--color-border); background: var(--color-surface); color: var(--color-text); box-shadow: 0 1px 3px #00000008; }
+.header-bot-select:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.header-bot-positioner { z-index: 120; }
+.header-bot-popup { min-width: 220px; max-width: min(340px, calc(100vw - 16px)); }
+.header-bot-popup-label { padding: 7px 10px 8px; color: var(--color-text-tertiary); font-size: 11px; font-weight: 500; }
+.header-bot-popup .ui-select-control__option { min-width: 0; }
+.header-bot-popup .ui-select-control__option > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.config-header-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; flex: none; }
+.config-header-actions .ui-button { height: 32px; min-height: 32px; gap: 6px; padding-inline: 10px; white-space: nowrap; border-color: transparent; background: transparent; box-shadow: none; color: var(--color-text-secondary); font-size: 12px; }
+.config-header-actions .group-context-menu > summary { width: 32px; height: 32px; }
+.config-header-actions .group-context-menu > div { top: 36px; }
+.config-header-navigation { justify-content: space-between; gap: 18px; }
+.config-tabs { height: 36px; padding: 4px; gap: 0; border: 0; border-radius: 10px; background: #eaeaed; box-shadow: inset 0 0 0 1px #00000005; }
+.config-tabs > button { min-height: 28px; padding: 3px 14px; border-radius: 7px; color: #626268; font-size: 12px; line-height: 1.4; }
+.config-tabs > button[aria-current=page] { color: #242427; }
+.config-enable.group-enable-control { min-width: 0; margin-left: 0; flex: none; flex-wrap: nowrap; }
+.config-enable .ui-toggle { flex-direction: row-reverse; gap: 8px; }
+.config-enable .ui-toggle__label { color: var(--color-text-secondary); font-size: 12px; font-weight: 400; }
+.config-enable .operation-activity { white-space: nowrap; }
+@media (hover: hover) and (pointer: fine) { .header-bot-select:hover { background: var(--color-surface-hover); color: var(--color-text); } }
+@media (max-width: 600px) {
+  .config-header-identity { gap: 8px; }
+  .config-group-title { max-width: 35%; }
+  .header-bot-select { max-width: 180px; }
+  .config-header-navigation { gap: 12px; }
+  .config-tabs > button { padding-inline: 10px; }
+  .config-enable .operation-activity > span:last-child { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
+@media (max-width: 480px) {
+  .config-header-navigation { gap: 8px; }
+  .config-tabs > button { padding-inline: 7px; }
+  .config-enable:has(.operation-activity) .ui-toggle__copy { display: none; }
+}
+@media (max-width: 420px) {
+  .config-group-title { gap: 6px; max-width: 24%; }
+  .config-group-title .collaboration-avatar.group { width: 24px; height: 24px; }
+  .config-group-title h2 { font-size: 16px; }
+  .header-bot-select { min-width: 80px; max-width: 150px; padding-inline: 4px; }
+  .config-tabs > button { padding-inline: 7px; font-size: 11px; }
+  .config-header-identity { gap: 7px; }
+}
+@media (max-width: 380px) {
+  .config-enable .ui-toggle__copy { display: none; }
+  .config-header-navigation { gap: 6px; }
+  .config-tabs > button { padding-inline: 4px; }
+}
+@media (pointer: coarse) {
+  .config-header { grid-template-rows: minmax(44px, auto) minmax(44px, auto); }
+  .config-tabs { height: auto; }
+  .config-tabs > button { min-height: 44px; }
+  .header-bot-select, .config-header-actions .ui-button, .config-header-actions .group-context-menu > summary, .config-enable .ui-toggle { min-height: 44px; }
+  .config-header-actions .ui-button, .config-enable .ui-toggle { min-width: 44px; }
+  .header-bot-select { height: 44px; }
+  .config-header-actions .group-context-menu > summary { min-width: 44px; }
+}
+
+/* Group links share their identity; frequent actions remain visible. */
+.config-group-link { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; height: 34px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; cursor: pointer; text-align: left; }
+.config-group-link > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.config-group-link > svg { flex: none; color: var(--color-text-tertiary); }
+.config-group-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.config-group-link:active { opacity: .72; }
+.config-header-actions .config-history { background: var(--color-surface); border-color: var(--color-border); color: var(--color-text); box-shadow: 0 1px 2px #00000004; }
+.config-header-actions .config-help { color: var(--color-text-secondary); }
+.group-context-menu .group-menu-shortcut { display: none; }
+@media (hover: hover) and (pointer: fine) {
+  .config-group-link:hover > span { text-decoration: underline; text-decoration-color: var(--color-border); text-underline-offset: 4px; }
+  .config-group-link:hover > svg { color: var(--color-text); }
+  .config-header-actions .ui-button:hover { background: var(--color-surface-hover); }
+}
+@media (max-width: 720px) {
+  .config-header-identity { gap: 8px; }
+  .config-group-title { max-width: 50%; }
+  .config-context-divider { display: none; }
+  .header-bot-select { min-width: 80px; max-width: 45%; }
+  .config-header-actions .config-history, .config-header-actions .config-help { display: none; }
+  .group-context-menu .group-menu-shortcut { display: block; }
+  .config-header-navigation { flex-wrap: wrap; gap: 12px; }
+  .config-enable.group-enable-control { margin-left: auto; }
+}
+@media (pointer: coarse) {
+  .config-group-link { min-height: 44px; }
+}

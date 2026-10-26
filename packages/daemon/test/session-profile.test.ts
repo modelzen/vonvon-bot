@@ -18,7 +18,7 @@ vi.mock('../src/agent/codex-appserver/client-pool', async importOriginal => ({
   takeWarmClient: rpc.take, refillWarmPool: rpc.refill, utilityRequest: vi.fn(), connectGated: vi.fn(),
 }));
 vi.mock('../src/agent/codex-appserver/locate', () => ({
-  resolveCodexBin: () => '/fake/codex', codexVersionAsync: vi.fn(),
+  resolveCodexBin: () => '/fake/codex', codexVersionAsync: vi.fn(async () => 'codex-cli 0.163.0'), cachedCodexVersion: () => undefined,
 }));
 
 const explicit: SessionProfile = {
@@ -150,6 +150,8 @@ for (const field of ['capabilityPackages', 'mcpServers'] as const) {
   vi.spyOn(fullOnly, 'codexConfinesReads').mockReturnValue(true);
   const backend = new CodexAppServerBackend();
   const cwd = mkdtempSync(join(tmpdir(), 'profile-restricted-'));
+  writeFileSync(join(cwd, '.mcp.json'), '{}');
+  mkdirSync(join(cwd, '.claude/skills'), { recursive: true });
   threads.push(await backend.startThread({ cwd, mode: 'write', network: false, profile: explicit }));
   expect(rpc.request).toHaveBeenCalledWith('thread/start', expect.objectContaining({
     config: expect.objectContaining({
@@ -191,7 +193,11 @@ for (const action of ['start', 'resume'] as const) it(`Claude ${action} forwards
     try {
       const supplied = query.mock.calls[0]?.[0]?.options;
       expect({ directories: supplied?.additionalDirectories, skills: supplied?.skills, filesystem: supplied?.sandbox?.filesystem })
-        .toEqual({ directories: [extra], skills: ['enabled'], filesystem: { allowWrite: [extra], denyWrite: [] } });
+        .toEqual({ directories: [extra], skills: ['enabled'], filesystem: {
+          allowWrite: [extra],
+          denyWrite: ['.mcp.json', '.claude/settings.json', '.claude/settings.local.json', '.claude/skills',
+            '.claude/commands', '.claude/agents', '.codex', '.agents/skills'].map(path => join(root, path)),
+        } });
     } finally { await thread.close(); }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

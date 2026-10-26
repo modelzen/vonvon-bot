@@ -14,10 +14,16 @@ vi.mock('../src/config/paths', async () => {
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
   const dir = mkdtempSync(join(tmpdir(), 'one-tier-test-'));
-  return { paths: { projectsFile: join(dir, 'projects.json'), sessionsFile: join(dir, 'sessions.json') } };
+  return {
+    paths: { appDir: dir, projectsFile: join(dir, 'projects.json'), sessionsFile: join(dir, 'sessions.json') },
+    botDir: (appId: string) => join(dir, 'bots', appId),
+  };
 });
 afterAll(() => rmSync(dirname(paths.projectsFile), { recursive: true, force: true }));
 const logged = vi.hoisted(() => ({ info: [] as unknown[][], fail: [] as unknown[][], adoptFails: false }));
+vi.mock('../src/agent/codex-appserver/locate', () => ({
+  resolveCodexBin: () => null, codexVersionAsync: async () => null, cachedCodexVersion: () => undefined,
+}));
 vi.mock('../src/core/logger', () => ({
   log: { info: (...args: unknown[]) => void logged.info.push(args), warn: () => undefined, fail: (...args: unknown[]) => void logged.fail.push(args) },
   withTrace: async (_ctx: unknown, fn: () => unknown) => fn(),
@@ -155,12 +161,15 @@ describe('at bot start', () => {
     expect((await listSessions()).map((s) => [s.threadId, s.sessionId])).toEqual([['oc_a', 's-oc_a#admin']]);
     expect(logged.info).toContainEqual(['run', 'tier-merge', { chats: ['oc_a→qa'], sessions: 1, places: ['oc_a'] }]);
     expect(await rawStore()).not.toHaveProperty('tierMergePending');
-    // The row keeps guestMode until a write, so the next start merges again and moves nothing.
+    // Startup materializes group settings after the tier migration, folding guestMode.
+    // A second start neither rewrites the files nor repeats the completed migration.
+    expect((await rawProjects()).filter(p => Object.hasOwn(p, 'guestMode'))).toEqual([]);
+    logged.info.length = 0;
     const files = async () => [(await stat(paths.projectsFile)).ino, (await stat(paths.sessionsFile)).ino];
     const before = await files();
     await start();
     expect(await files()).toEqual(before);
-    expect(logged.info).toContainEqual(['run', 'tier-merge', { chats: ['oc_a→qa'], sessions: 0, places: [] }]);
+    expect(logged.info.filter(([, what]) => what === 'tier-merge')).toEqual([]);
   });
 
   it('retries after a failed start, even when a write in between dropped guestMode', async () => {

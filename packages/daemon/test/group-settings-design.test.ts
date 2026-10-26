@@ -1,7 +1,9 @@
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
 import { mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { agentViewSchema, projectViewSchema } from '@vonvon/protocol';
+import { agentViewSchema, projectViewSchema, DEFAULT_SMART_RULES } from '@vonvon/protocol';
+import { DEFAULT_SMART_PROMPT, LEGACY_DEFAULT_SMART_PROMPT } from '../src/judge/prompt';
+import { composeSmartRules } from '../src/judge/smart-file';
 import { botPaths, paths } from '../src/config/paths';
 import { saveConfig } from '../src/config/store';
 import { createSettingsOwner, materializeGroupSettings, type SettingsOwnerDeps } from '../src/admin/settings';
@@ -47,23 +49,23 @@ beforeEach(async () => {
 });
 afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
 
-it('stores independent profile fields, keeps inherited text live and conflicts on concurrent edits', async () => {
+it('keeps the old profile sections read-only and conflicts on concurrent role edits', async () => {
   const owner = createSettingsOwner(deps());
   let a = await owner.read(agent) as AgentSettingsView;
-  expect((await owner.save({ scope: agent, section: 'profile', revision: a.sections.profile!.revision, patch: { persona: '公共个性', memory: '公共记忆' } })).kind).toBe('saved');
-  let p = await view(owner);
-  expect(projectViewSchema.safeParse(p).success).toBe(true);
-  const replies = await Promise.all(['本群一', '本群二'].map(persona => owner.save({ scope, section: 'profile', revision: p.sections.profile!.revision, patch: { persona, memory: '本群记忆', inheritPersona: false, inheritMemory: true } })));
-  expect(replies.map(x => x.kind).sort()).toEqual(['conflict', 'saved']);
-  const winningPersona = replies[0]!.kind === 'saved' ? '本群一' : '本群二';
-  p = await view(owner);
-  expect(p.sections.profile!.effective).toMatchObject({ persona: winningPersona, memory: '公共记忆\n\n本群记忆' });
+  expect((await owner.save({ scope: agent, section: 'role', revision: a.sections.role!.revision, patch: { identity: '公共个性' } })).kind).toBe('saved');
   a = await owner.read(agent) as AgentSettingsView;
   agentViewSchema.parse(a);
-  await owner.save({ scope: agent, section: 'profile', revision: a.sections.profile!.revision, patch: { memory: '更新的公共记忆' } });
+  // the shared memory is the bot's memory entries now: nothing is written to the old section
+  expect(await owner.save({ scope: agent, section: 'profile', revision: a.sections.profile!.revision, patch: { memory: '公共记忆' } })).toMatchObject({ kind: 'rejected', fields: [{ message: expect.stringContaining('Bot 记忆') }] });
+  let p = await view(owner);
+  expect(projectViewSchema.safeParse(p).success).toBe(true);
+  expect(await owner.save({ scope, section: 'profile', revision: p.sections.profile!.revision, patch: { persona: '本群', memory: '本群记忆' } })).toMatchObject({ kind: 'rejected', fields: [{ message: expect.stringContaining('补充职责') }] });
+  const replies = await Promise.all(['本群一', '本群二'].map(supplement => owner.save({ scope, section: 'role', revision: p.sections.role!.revision, patch: { supplement } })));
+  expect(replies.map(x => x.kind).sort()).toEqual(['conflict', 'saved']);
   p = await view(owner);
-  expect(p.sections.profile!.stored.memory).toBe('本群记忆');
-  expect(p.sections.profile!.effective.memory).toBe('更新的公共记忆\n\n本群记忆');
+  expect(p.sections.role!.stored.supplement).toBe(replies[0]!.kind === 'saved' ? '本群一' : '本群二');
+  // the old section is only a record: it shows the row's own `profile`, never a file
+  expect(p.sections.profile!.effective).toEqual(p.sections.profile!.stored);
 });
 
 it('keeps models and efforts independent and prevents legacy project/session model writes bypassing removal', async () => {
@@ -102,6 +104,39 @@ it('preserves the complete legacy SMART text and saves both prompt areas with CA
   expect((await getProjectByName('demo'))!.smartRules).toEqual({ respond: oldSmart, newTopic: '遇到独立问题才创建' });
 });
 
+it('shows the complete default rule document and preserves the wire fields on a partial save', async () => {
+  const owner = createSettingsOwner({...deps(), readSmartPrompt: async () => ({source: 'default', path: '/fixture/SMART.md', text: DEFAULT_SMART_PROMPT})});
+  const p = await view(owner);
+  expect(p.sections.smartRules!.stored).toEqual(DEFAULT_SMART_RULES);
+  expect(composeSmartRules(p.sections.smartRules!.stored)).toBe(p.smartPrompt!.text);
+  const result = await owner.save({scope, section: 'smartRules', revision: p.sections.smartRules!.revision, patch: {respond: '仅响应测试请求'}});
+  expect(result.kind).toBe('saved');
+  expect((await getProjectByName('demo'))!.smartRules).toEqual({respond: '仅响应测试请求', newTopic: DEFAULT_SMART_RULES.newTopic});
+});
+
+it('saves and rereads a completely cleared rule document without restoring defaults or a legacy file', async () => {
+  const owner = createSettingsOwner(deps());
+  const p = await view(owner);
+  expect((await owner.save({scope, section: 'smartRules', revision: p.sections.smartRules!.revision, patch: {respond: '', newTopic: ''}})).kind).toBe('saved');
+  expect((await getProjectByName('demo'))!.smartRules).toEqual({respond: '', newTopic: ''});
+  const reloaded = await view(owner);
+  expect(reloaded.sections.smartRules!.stored).toEqual({respond: '', newTopic: ''});
+  expect(reloaded.smartPrompt!.text).toBe('');
+});
+
+it('updates exact materialized defaults consistently in the view and runtime, preserving custom edits', async () => {
+  await mutateProject('demo', p => { p.smartRules = {respond: LEGACY_DEFAULT_SMART_PROMPT, newTopic: ''}; });
+  const owner = createSettingsOwner(deps());
+  const p = await view(owner);
+  expect(p.sections.smartRules!.stored).toEqual(DEFAULT_SMART_RULES);
+  expect(p.smartPrompt!.text).toBe(DEFAULT_SMART_PROMPT);
+  expect(composeSmartRules((await getProjectByName('demo'))!.smartRules!)).toBe(DEFAULT_SMART_PROMPT);
+  const custom = {respond: `${LEGACY_DEFAULT_SMART_PROMPT}\n只在工作时间回复`, newTopic: ''};
+  await mutateProject('demo', p => { p.smartRules = custom; });
+  expect((await view(owner)).sections.smartRules!.stored).toEqual(custom);
+  expect(composeSmartRules(custom)).toContain(custom.respond);
+});
+
 it('canonicalizes a selected workspace and rejects a duplicate or a primary outside its directory list', async () => {
   const dir = join(paths.appDir, 'projects', 'fixture'); const second = join(paths.appDir, 'projects', 'second');
   await mkdir(dir, { recursive: true }); await mkdir(second, { recursive: true });
@@ -122,6 +157,16 @@ it('freezes inherited legacy choices without dropping old session model IDs or u
   const p = (await getProjectByName('demo'))!;
   expect(p.modelAccess!.models).toEqual(expect.arrayContaining(['a', 'old-gateway', 'old-topic']));
   expect(p).toMatchObject({ future: 'preserve', defaultModel: 'old-gateway', pendingPolicy: 'queue', presentation: { showToolCalls: false }, smartRules: { respond: oldSmart } });
+  // the materialization no longer writes `profile`: the role is the bot's file, the supplement and memory are the migration's
+  expect(p.profile).toBeUndefined();
+});
+
+it('leaves the folders of a row bound to a library project alone: no default repositories, no folder-guard crash at start', async () => {
+  cfg.preferences = { directories: { repositories: ['/fixture/repo'] } };
+  await mutateProject('demo', p => { p.projectId = 'prj_0123abcd'; });
+  const migration = await materializeGroupSettings({ ...deps(), readSessions: async () => [] });
+  expect(migration.updated).toEqual(['demo']);
+  expect((await getProjectByName('demo'))!.directories?.repositories).toBeUndefined();
 });
 
 it('edits only local sections while stopped, keeps live actions gated, and never steals its own process lock', async () => {
@@ -155,7 +200,7 @@ it('reads stopped-Bot local skills and model metadata without probing or startin
   expect(catalog).toMatchObject({ state: 'fallback', models: [{ id: 'cached', supportedEfforts: ['high'] }] });
   expect(catalog.error).toContain('本机模型缓存');
   expect(offlineBackend.listModels).not.toHaveBeenCalled(); expect(offlineBackend.doctor).not.toHaveBeenCalled();
-  expect((await owner.save({ scope, section: 'modelAccess', revision: p.sections.modelAccess!.revision, patch: { backend: 'codex-appserver', models: ['cached'], efforts: ['high'] } })).kind).toBe('saved');
+  expect((await owner.save({ scope, section: 'modelAccess', revision: p.sections.modelAccess!.revision, patch: { backend: 'codex-appserver', models: ['cached'], efforts: ['high'] } })).kind).toBe('rejected');
 });
 
 it('prefers persisted observed metadata, falls back honestly, and preserves group model-display on migration', async () => {
@@ -187,4 +232,84 @@ it('rejects malformed explicit group settings without broadening access or rewri
   await expect(view(createSettingsOwner(deps()))).rejects.toThrow('modelAccess');
   await expect(mutateProject('demo', p => { p.enabled = true; })).rejects.toThrow('modelAccess');
   expect(await readFile(paths.projectsFile, 'utf8')).toBe(content);
+});
+
+it('edits the role as two sections of SOUL.md and keeps the editor to those two (draft from the app name, no AGENTS.md)', async () => {
+  const owner = createSettingsOwner({ ...deps(), botName: '小支' });
+  await writeFile(join(botPaths(botId).dir, 'SOUL.md'), '旧 SOUL 全文');
+  let a = await owner.read(agent) as AgentSettingsView;
+  agentViewSchema.parse(a);
+  expect(a.sections.role!.stored).toEqual({ identity: '', notes: '旧 SOUL 全文' });
+  expect(a.roleInfo).toMatchObject({ headed: false, oversized: false, mergedNotice: false, draft: '我是「小支」，团队里的 AI 助手。我负责：' });
+  expect(await readFile(join(botPaths(botId).dir, 'SOUL.md'), 'utf8')).toBe('旧 SOUL 全文');
+  const stale = a.sections.role!.revision;
+  expect((await owner.save({ scope: agent, section: 'role', revision: stale, patch: { identity: '发布助手' } })).kind).toBe('saved');
+  expect(await readFile(join(botPaths(botId).dir, 'SOUL.md'), 'utf8')).toBe('## 身份与职责\n发布助手\n\n## 其他说明\n旧 SOUL 全文\n');
+  expect((await owner.save({ scope: agent, section: 'role', revision: stale, patch: { notes: 'x' } })).kind).toBe('conflict');
+  a = await owner.read(agent) as AgentSettingsView;
+  expect(a.roleInfo?.draft).toBeUndefined();
+  expect(await owner.save({ scope: agent, section: 'role', revision: a.sections.role!.revision, patch: { identity: '字'.repeat(501) } })).toMatchObject({ kind: 'rejected', fields: [{ message: expect.stringContaining('500') }] });
+  // the whole-file view keeps its persona for old readers but cannot rewrite the role
+  expect(await owner.save({ scope: agent, section: 'profile', revision: a.sections.profile!.revision, patch: { persona: '直接改' } })).toMatchObject({ kind: 'rejected', fields: [{ message: expect.stringContaining('角色设定') }] });
+});
+
+it('writes a group supplement to the row only, and shows a row the migration has not reached by its old persona', async () => {
+  const owner = createSettingsOwner(deps());
+  let p = await view(owner);
+  projectViewSchema.parse(p);
+  expect(p.sections.role!.stored).toEqual({ supplement: '' });
+  await mutateProject('demo', async row => { row.profile = { persona: '旧本群个性', memory: '', inheritPersona: true, inheritMemory: true }; });
+  p = await view(owner);
+  expect(p.sections.role!.stored).toEqual({ supplement: '旧本群个性' });
+  expect((await owner.save({ scope, section: 'role', revision: p.sections.role!.revision, patch: { supplement: '少说话' } })).kind).toBe('saved');
+  const row = (await getProjectByName('demo'))!;
+  expect(row.supplement).toBe('少说话');
+  expect(row.profile).toMatchObject({ persona: '旧本群个性' });
+  p = await view(owner);
+  expect(await owner.save({ scope, section: 'role', revision: p.sections.role!.revision, patch: { supplement: '字'.repeat(5001) } })).toMatchObject({ kind: 'rejected', fields: [{ message: expect.stringContaining('5000') }] });
+  // a row the migration has handled does not fall back to its old persona
+  await mutateProject('demo', async current => { delete current.supplement; current.migration = { memory: 1 }; });
+  expect((await view(owner)).sections.role!.stored).toEqual({ supplement: '' });
+});
+
+it.each([false, true])('rejects new models, efforts and provider switches from fallback catalogs while allowing existing subsets (offline=%s)', async offline => {
+  await mutateProject('demo', p => { p.modelAccess = { backend: 'codex-appserver', models: ['a', 'b'], efforts: ['high'] }; });
+  const owner = createSettingsOwner({ ...deps(), offline, backendFor: id => ({ ...backend, id, peekModels: () => offline ? models : undefined }) });
+  const before = await view(owner);
+  const disk = await readFile(paths.projectsFile, 'utf8');
+  for (const patch of [
+    { models: ['a', 'b', 'flat'], efforts: ['high'] },
+    { models: ['a'], efforts: ['low', 'high'] },
+    { backend: 'claude-agent', models: ['a'], efforts: ['high'] },
+  ] satisfies Array<Partial<NonNullable<Project['modelAccess']>>>) {
+    expect((await owner.save({ scope, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch })).kind).toBe('rejected');
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(disk);
+  }
+  expect((await owner.save({ scope, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch: { models: ['a'], efforts: ['high'] } })).kind).toBe('saved');
+  expect((await getProjectByName('demo'))?.modelAccess).toEqual({ backend: 'codex-appserver', models: ['a'], efforts: ['high'] });
+});
+
+it('accepts and persists a newly discovered native model when saving model access', async () => {
+  await mutateProject('demo', p => { p.modelAccess = { backend: 'codex-appserver', models: ['a'], efforts: ['high'] }; });
+  let native: ModelInfo[] | undefined;
+  const owner = createSettingsOwner({ ...deps(), backendFor: () => ({ ...backend, peekModels: () => native, listModels: async () => { native = models; return models; } }) });
+  const before = await view(owner);
+  expect((await owner.save({ scope, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch: { models: ['a', 'b'], efforts: ['high'] } })).kind).toBe('saved');
+  expect((await getProjectByName('demo'))?.modelAccess).toEqual({ backend: 'codex-appserver', models: ['a', 'b'], efforts: ['high'] });
+});
+
+it('rejects new choices from a populated native cache after the provider becomes unavailable', async () => {
+  await mutateProject('demo', p => { p.modelAccess = { backend: 'codex-appserver', models: ['a'], efforts: ['high'] }; });
+  const listModels = vi.fn(async () => models);
+  const owner = createSettingsOwner({ ...deps(), backendFor: id => ({ ...backend, id, doctor: async () => ({ ok: false, version: null }), listModels }) });
+  const before = await view(owner);
+  const disk = await readFile(paths.projectsFile, 'utf8');
+  for (const patch of [
+    { models: ['a', 'b'], efforts: ['high'] },
+    { backend: 'claude-agent', models: ['a'], efforts: ['high'] },
+  ] satisfies Array<Partial<NonNullable<Project['modelAccess']>>>) {
+    expect((await owner.save({ scope, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch })).kind).toBe('rejected');
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(disk);
+  }
+  expect(listModels).not.toHaveBeenCalled();
 });

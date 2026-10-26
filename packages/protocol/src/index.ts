@@ -12,6 +12,9 @@ export * from "./events.js";
 export * from "./admin.js";
 export * from "./secrets.js";
 export * from "./directory.js";
+export * from "./library.js";
+export * from "./memory.js";
+export * from "./context-preview.js";
 export * from "./setup-steps.js";
 export * from "./diagnostics.js";
 export * from "./crash.js";
@@ -20,3 +23,5 @@ export * from "./display.js";
 export * from "./group-decision.js";
 
 export * from './mcp.js';
+export * from './smart-rules.js';
+export * from './decision-effort.js';

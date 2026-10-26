@@ -7,6 +7,12 @@ const processControl = vi.hoisted(() => ({ spawn: vi.fn() }));
 const logger = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), fail: vi.fn() }));
 vi.mock('../src/platform/spawn', () => ({ spawnProcess: processControl.spawn }));
 vi.mock('../src/core/logger', () => ({ log: logger }));
+// This file owns npm child lifetime checks; CLI selection/probing is exercised
+// with real executable fixtures in backend-codex-version.test.ts.
+vi.mock('../src/agent/codex-appserver/locate', () => ({
+  resolveCodexBin: () => null,
+  cachedCodexVersion: () => undefined,
+}));
 
 import { latestNpmVersion } from '../src/agent/installer';
 import { createAdminService } from '../src/admin/service';
@@ -113,7 +119,7 @@ it('keeps the real environment backendVersion RPC pending with its npm view chil
     expect(processControl.spawn).toHaveBeenCalledOnce();
     expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
     expect(settled).toBe(false);
-    expect(logger.info).toHaveBeenCalledExactlyOnceWith('backend-version', 'term_sent', { pkg: 'codex', pid: 76547 });
+    expect(logger.info).toHaveBeenCalledExactlyOnceWith('backend-version', 'term_sent', { pkg: '@openai/codex', pid: 76547 });
     expect(logger.info).not.toHaveBeenCalledWith('backend-queue', 'reserved', expect.anything());
   } finally {
     child.emit('close', 0, null);

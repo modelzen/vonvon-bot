@@ -13,6 +13,7 @@ import type { AgentEvent, AgentRun } from '../src/agent/types';
 import { writeNodeExecutable } from './helpers/node-executable';
 
 const fixture = `
+if (process.argv.includes('--version')) { console.log('codex-cli 0.163.0'); process.exit(0); }
 const fs = require('node:fs');
 const path = require('node:path');
 let turn = 0;

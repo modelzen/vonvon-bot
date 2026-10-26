@@ -22,7 +22,6 @@ export type BackendAccess = 'app-server' | 'sdk' | 'acp';
  *   'npm-ondemand'  npm 包，按需装到用户私装目录（库类 / bin 类两形态）。
  *                   **唯一可一键下载的类型。** 库类（无 binName）走 import + require.resolve；
  *                   bin 类（有 binName）被 spawn、走 node_modules/.bin 路径（见 backend-loader）。
- *                   当前内置后端均非此类（codex 是 external-cli），保留以备将来挂新后端。
  *   'npm-external'  外部 npm 包，用户自管（当前内置后端无此类，保留给未来不便按需装的包）。
  */
 export type DepKind = 'external-cli' | 'npm-ondemand' | 'npm-external';
@@ -91,7 +90,7 @@ export const BACKEND_CATALOG: readonly BackendCatalogEntry[] = [
     access: 'app-server',
     dep: {
       kind: 'external-cli',
-      pkg: 'codex',
+      pkg: '@openai/codex',
       detectHint: '未找到 codex CLI（设 CODEX_BIN、装 Codex.app，或 npm i -g @openai/codex）',
       installCmd: 'npm i -g @openai/codex（或装 Codex.app / 设 CODEX_BIN），然后 codex login',
     },
@@ -104,8 +103,7 @@ export const BACKEND_CATALOG: readonly BackendCatalogEntry[] = [
     displayName: 'Claude',
     access: 'sdk',
     dep: {
-      // 打包版不带 SDK，按需下载到用户目录。开发时仓库的 devDependency（锁同一个版本）
-      // 经 require.resolve 也能找到，所以 dev 下始终判为「已装」。
+      // 开发态从仓库依赖解析；桌面版由用户选择后托管安装到用户目录。
       kind: 'npm-ondemand',
       pkg: '@anthropic-ai/claude-agent-sdk',
       version: CLAUDE_AGENT_SDK_VERSION,
@@ -116,7 +114,7 @@ export const BACKEND_CATALOG: readonly BackendCatalogEntry[] = [
     },
     // 必须与 ClaudeAgentBackend.supportedModes 完全一致（单测强制）。
     supportedModes: ['qa', 'write', 'full'],
-    blurb: 'Claude Code（SDK 内置，复用本机登录；qa/write 走 OS 沙箱，能力较 Codex 精简）',
+    blurb: 'Claude Code（SDK 按需下载，复用本机登录；qa/write 走 OS 沙箱，能力较 Codex 精简）',
   },
 ];
 

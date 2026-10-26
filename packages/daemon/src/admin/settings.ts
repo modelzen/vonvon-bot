@@ -6,34 +6,39 @@ import { JUDGE_SELECTION_KINDS } from '@vonvon/protocol';
 import type { AgentBackend, ModelInfo, ReasoningEffort } from '../agent/types';
 import { backendIds } from '../agent';
 import { parseModelId } from '../agent/model-id';
+import { permissionTable, PermissionInputError, tableEnv, tierInfo, TIER_NETWORK } from '../agent/permission';
 import { getCompletionReminderConfig, getMaxConcurrentRuns, getModelDisplay, getPendingPolicy, getRunIdleTimeoutMs, getSessionTitleConfig, getSessionTitleEfforts, getShowToolCalls, resolveOwner, type AppConfig, type AppPreferences } from '../config/schema';
 import { paths } from '../config/paths';
 import { admitDirectorySettings, resolveProjectsRootDir } from '../config/directories';
-import { botBackendId, groupBackendId, resolveCommentsExecution, resolveModelPreference, resolveProjectModelAccess, projectModelAllowed } from '../config/execution';
+import { botBackendId, groupBackendId, groupPermission, resolveCommentsExecution, resolveModelPreference, resolveProjectModelAccess, projectModelAllowed } from '../config/execution';
+import { isProjectId } from '../project/library';
 import { effectiveMode, getProjectByName, listProjects, mutateProject, noMentionOf, pendingPolicyOf, sessionModeOf, type Project, type ProjectWorkspace } from '../project/registry';
 import { getSession, listSessions, isRetiredKey, mutateSession, RETIRED_KEY_TEXT, type SessionRecord } from '../bot/session-store';
 import { DEFAULT_COMMENT_INSTRUCTIONS, saveCommentInstructions, syncAllCommentInstructions } from '../bot/comments';
 import { voiceView } from '../voice/view';
 import { keyStatus } from './secrets';
 import { DECISION_FORMAT_LINES, DECISION_INPUT_EXAMPLE, decisionProvider, decisionProviders, keyMissingText } from '../judge/decision';
-import { DECISION_PROVIDER_ID, parseStoredJudge, resolveJudgeModel } from '../judge/model';
+import { DECISION_PROVIDER_ID, parseStoredJudge, resolveJudgeModel, judgeBackendId } from '../judge/model';
 import { JUDGE_CLAUDE_NOTE, JUDGE_CODEX_NOTE, JUDGE_FORMAT_LINES, JUDGE_INPUT_EXAMPLE } from '../judge/prompt';
-import { readSmartPrompt, SMART_MAX_CHARS, SmartPromptError, composeSmartRules } from '../judge/smart-file';
+import { readSmartPrompt, SMART_MAX_CHARS, SmartPromptError, composeSmartRules, resolveSmartRules, rulesFromSmartPrompt } from '../judge/smart-file';
 import type { JudgeSelectionStored } from '../judge/types';
 import type { VoiceAction } from '../voice/types';
 import { probeBackends, SMART_NO_MENTION_REFUSED, type AppPreferencesWriter } from './ops';
 import { parseSettingsAction, parseSettingsEdit, SettingsInputError } from './settings-parse';
 import type * as T from './settings-types';
 import { offlineModelCatalog, rememberModelCatalog } from './model-catalog';
-import { readBotProfile, readGroupProfile, updateBotProfile } from '../bot/group-profile';
+import { supplementOf } from '../bot/context-assembly';
+import { botFiles, readRole, readSoulText, readText, roleDraft, roleProblem, updateRole, waitForBotFiles } from '../bot/role-files';
+import { loadBots } from '../config/bots';
 import { discoverGroupSkills, discoverLocalGroupSkills } from '../agent/group-skills';
+import { snapshotDefaultJudge, snapshotProviderJudge, requireDecisionKey } from '../project/initial-settings';
 export type * from './settings-types';
 export { parseSettingsAction, parseSettingsEdit, parseSettingsScope, parseModelQuery, SettingsInputError } from './settings-parse';
 export function settingsRevision(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 export function isLocalSettingsSection(kind: string, section: string): boolean {
-  return kind === 'agent' ? section === 'profile' : kind === 'project' && ['profile', 'modelAccess', 'workspace', 'smartRules', 'skills', 'presentation', 'judge', 'permission', 'response', 'run'].includes(section);
+  return kind === 'agent' ? section === 'profile' || section === 'role' : kind === 'project' && ['profile', 'role', 'modelAccess', 'workspace', 'smartRules', 'skills', 'presentation', 'judge', 'permission', 'response', 'run'].includes(section);
 }
 const writable: T.SettingsAccess = {
   kind: 'writable'
@@ -46,13 +51,16 @@ export const offlineSettings: T.SettingsAccess = {
   reason: 'owner-offline',
   message: '这个 Bot 没在运行，运行起来后才能改设置'
 };
+/** 补充职责写入时的上限（记忆设计 2.2）；读取不校验。 */
+const SUPPLEMENT_MAX = 5_000;
 export interface SettingsOwnerDeps {
+  /** the Feishu app name for the role draft; read from the bot registry when absent */
+  botName?: string;
   responseRoster?: (chatId: string) => Promise<import("@vonvon/protocol").ResponseRoster>;
   cfg: AppConfig;
   /** Local stopped-Bot editing uses cached catalogs only, never starts a provider. */
   offline?: boolean;
   localEditing?: boolean;
-  profile?: { readBot: typeof readBotProfile; readGroup: typeof readGroupProfile; updateBot: typeof updateBotProfile };
   discoverSkills?: typeof discoverGroupSkills;
   writePreferences: AppPreferencesWriter;
   backendFor: (id: string) => AgentBackend;
@@ -87,11 +95,12 @@ const agentEffects: {
   [K in keyof T.AgentSections]: T.ApplyEffect[];
 } = {
   profile: effect(['persona', 'memory'], 'next-turn', '下一轮对话使用新的个性与记忆'),
+  role: effect(['identity', 'notes'], 'next-turn', '下一轮对话使用新的角色设定'),
   cards: effect(['showToolCalls', 'showModel'], 'next-message', '后续任务卡片输出生效'),
   run: [...effect(['maxConcurrentRuns'], 'restart', '已保存的并发上限在 daemon 重启后生效'), ...effect(['pendingPolicy'], 'next-message', '下一条消息生效'), ...effect(['runIdleTimeoutSeconds'], 'next-turn', '下一次超时检测生效')],
   completion: effect(['mode', 'longTaskMinutes'], 'task-completion', '任务结束时读取最新策略'),
   comments: effect(['backend', 'selection'], 'new-comment', '下一条评论使用新设置'),
-  titles: effect(['byBackend'], 'new-session', '只影响之后新建的会话'),
+  titles: effect(['policy'], 'new-session', '只影响之后新建的会话'),
   paths: effect(['projectsRootDir'], 'new-project', '只影响之后新建的群'),
   access: effect(['allowedChats'], 'next-message', '下一条消息使用新权限'),
   judge: effect(['selection'], 'next-message', '智能模式的下一次判断就用新模型'),
@@ -140,11 +149,9 @@ function applySelection(target: {
 }
 function agentData(cfg: AppConfig): T.AgentSections {
   const p = cfg.preferences ?? {};
-  const titles: Record<string, T.TitlePolicy> = {};
-  for (const id of new Set([...backendIds(), ...Object.keys(p.sessionTitles?.byBackend ?? {})]))
-    titles[id] = getSessionTitleConfig(cfg, id);
   return {
     profile: { persona: '', memory: '' },
+    role: { identity: '', notes: '' },
     cards: {
       showToolCalls: getShowToolCalls(cfg),
       showModel: getModelDisplay(cfg)
@@ -160,7 +167,7 @@ function agentData(cfg: AppConfig): T.AgentSections {
       selection: selection(p.comments?.model, p.comments?.effort)
     },
     titles: {
-      byBackend: titles
+      policy: getSessionTitleConfig(cfg)
     },
     paths: {
       projectsRootDir: p.projectsRootDir ?? null
@@ -179,24 +186,36 @@ function agentRaw(p: AppPreferences, section: keyof T.AgentSections): unknown {
     case 'run': return [p.maxConcurrentRuns, p.runIdleTimeoutSeconds, p.pendingPolicy];
     case 'completion': return [p.completionReminder?.mode, p.completionReminder?.longTaskMinutes];
     case 'comments': return [p.comments?.backend, p.comments?.model, p.comments?.effort];
-    case 'titles': return Object.entries(p.sessionTitles?.byBackend ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([id, v]) => [id, v?.enabled, v?.model, v?.effort]);
+    case 'titles': return [p.defaults?.backend, p.sessionTitles?.policy, p.sessionTitles?.byBackend];
     case 'paths': return p.projectsRootDir ?? null;
     case 'access': return p.access?.allowedChats ?? [];
     case 'judge': return p.judge;
   }
 }
-function projectData(p: Project): T.ProjectSections {
+function projectData(p: Project, backend: AgentBackend): T.ProjectSections {
+  const perm = groupPermission(p);
+  const table = permissionTable(groupBackendId(p));
+  const env = tableEnv(backend);
   return {
     profile: p.profile ?? { persona: '', memory: '', inheritPersona: true, inheritMemory: true },
+    role: { supplement: p.supplement ?? '' },
     modelAccess: resolveProjectModelAccess({ group: p }),
     workspace: workspaceOf(p),
-    smartRules: p.smartRules ?? { respond: '', newTopic: '' },
+    smartRules: resolveSmartRules(p.smartRules ?? { respond: '', newTopic: '' }),
     skills: p.skills ?? { disabledPaths: [] },
     presentation: p.presentation ?? { voiceEnabled: false, showToolCalls: true, showModel: 'off', completionMode: 'manual', longTaskMinutes: 5 },
     permission: {
-      mode: effectiveMode(p),
-      guestMode: effectiveMode(p),
-      network: p.network ?? false
+      mode: perm.tier,
+      custom: perm.custom ?? null,
+      guestMode: perm.tier,
+      network: perm.effect.network,
+      options: {
+        tiers: [...table.tiers(env)], strength: table.strength(env),
+        fields: table.fields(env), expanded: { qa: table.expand('qa'), write: table.expand('write'), full: table.expand('full') },
+        ...(perm.custom ? { customSummary: table.describe(perm.custom) } : {}),
+        ...(perm.legacy ? { legacy: true } : {}),
+        ...(perm.invalid ? { invalid: true } : {}),
+      }
     },
     response: {
       noMention: noMentionOf(p)
@@ -212,13 +231,18 @@ function projectData(p: Project): T.ProjectSections {
     }
   };
 }
-function workspaceOf(p: Project): ProjectWorkspace {
+export function workspaceOf(p: Project): ProjectWorkspace {
   return { primary: p.cwd, directories: [p.cwd, ...p.directories?.workspaces?.additional ?? []], repositories: p.directories?.repositories ?? [] };
 }
+/** The revision a project's workspace section carries, for the host's save through the library (settings-service.ts). */
+export function workspaceRevision(botId: string, p: Project): string {
+  return settingsRevision([botId, projectRaw(p, 'workspace')]);
+}
 function projectRaw(p: Project, section: keyof T.ProjectSections): unknown {
+  if (section === 'role') return [p.name, p.chatId, p.supplement ?? null];
   if (section === 'workspace') return [p.name, p.chatId, p.cwd, p.directories];
   if (['profile', 'modelAccess', 'smartRules', 'skills', 'presentation'].includes(section)) return [p.name, p.chatId, p[section as 'profile']];
-  const data = section === 'permission' ? [p.mode, p.network] : section === 'response' ? p.noMention : section === 'run' ? p.pendingPolicy : section === 'judge' ? p.judge : [p.defaultModel, p.defaultEffort, p.defaultModelCustom === true];
+  const data = section === 'permission' ? [p.mode, p.network, p.custom] : section === 'response' ? p.noMention : section === 'run' ? p.pendingPolicy : section === 'judge' ? p.judge : [p.defaultModel, p.defaultEffort, p.defaultModelCustom === true];
   return [p.name, p.chatId, p.cwd, p.backend, data];
 }
 function sessionRaw(s: SessionRecord): unknown {
@@ -234,6 +258,8 @@ function makeSection<V>(stored: V, raw: unknown, access: T.SettingsAccess, apply
   };
 }
 class Conflict extends Error {
+}
+class Unchanged extends Error {
 }
 function check(actual: unknown, revision: string): void {
   if (settingsRevision(actual) !== revision)
@@ -267,9 +293,19 @@ function rejected(error: unknown): {
       }]
   };
 }
+/** The Feishu app name the bot was registered with, for the role draft (2.3); undefined when the registry cannot say. */
+async function registeredBotName(appId: string): Promise<string | undefined> {
+  try { return (await loadBots()).bots.find(bot => bot.appId === appId)?.botName; }
+  catch { return undefined; }
+}
+/** The whole `SOUL.md` and the old shared memory, as a read-only record: nothing reads the second file any more (P4a). */
+async function legacyBotProfile(appId: string): Promise<{ persona: string; memory: string }> {
+  await waitForBotFiles(appId);
+  const files = await botFiles(appId);
+  return { persona: await readSoulText(appId), memory: await readText(files, { kind: 'public-memory' }) };
+}
 export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
   const cfg = deps.cfg;
-  const profile = deps.profile ?? { readBot: readBotProfile, readGroup: readGroupProfile, updateBot: updateBotProfile };
   const botId = cfg.accounts.app.id;
   const access = deps.access ?? writable;
   const sectionAccess = (kind: string, section: string) => deps.localEditing && isLocalSettingsSection(kind, section) ? writable : access;
@@ -322,7 +358,14 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           error: '后端当前不可用，请检查安装或登录状态'
         };
       const listed = await backend.listModels();
-      if (listed.length) await rememberModelCatalog(query.backend, listed, base.observedAt).catch(() => undefined);
+      // Native backends also return a static list on discovery failure. Only their
+      // successful discovery populates peekModels; fallback must not become a
+      // confirmed catalog or overwrite a previously confirmed disk snapshot.
+      const native = backend.peekModels?.();
+      if (native?.length) {
+        await rememberModelCatalog(query.backend, native, base.observedAt).catch(() => undefined);
+        return { ...base, models: native, state: 'ready' };
+      }
       return { ...base, models: listed, state: 'fallback' };
     }
     catch {
@@ -371,15 +414,25 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       return undefined;
     }
   };
-  /** Returns what to store, or nothing for `default` (design 2.4). A language model is stored with its
-   * backend: a group's must be the group's, or the judge would ignore it; the bot's is its default
-   * backend unless it says otherwise. A listed model is checked against the list the backend holds
+  /** Returns what to store: group defaults become concrete snapshots; Bot `default` removes its override.
+   * A group can use a decision backend independently of its task backend. The Bot layer keeps its
+   * existing backend-scoped inheritance. A listed model is checked against the list the backend holds
    * (what the judge fits the effort with), else a fresh catalog, except while the catalog cannot be
    * read: then the choice and its effort are kept as given, and each judgement fits the effort to the
-   * model (Rakazo 第二轮 A6). A decision model is checked for its shape only. */
+   * model (Rakazo 第二轮 A6). A decision model also requires a readable, configured credential. */
   async function validateJudgeSelection(value: T.JudgeSelection, layerBackend: string, group: boolean): Promise<JudgeSelectionStored | undefined> {
-    if (value.kind === 'default')
-      return undefined;
+    if (value.kind === 'default') {
+      if (!group) return undefined;
+      return snapshotDefaultJudge({ backendFor: deps.backendFor, readKey: deps.getSecret }).catch((error: unknown) => {
+        throw new SettingsInputError(error instanceof Error ? error.message : '无法验证默认决策模型');
+      });
+    }
+    if (value.kind === 'provider') {
+      const choice=await snapshotProviderJudge(value.provider, { backendFor: deps.backendFor, readKey: deps.getSecret }).catch((error: unknown) => {
+        throw new SettingsInputError(error instanceof Error ? error.message : '无法验证决策 Provider');
+      });
+      return group ? choice : { kind: 'provider', provider: value.provider };
+    }
     const id = parseModelId(value.model);
     if (!id.ok)
       throw new SettingsInputError(id.message);
@@ -389,6 +442,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       // any model id, as a hand-typed one: a wrong one fails its judgements as `model` and cools (s23f)
       if (!decisionProvider(value.provider))
         throw new SettingsInputError(`没有 ${value.provider} 这家决策模型，现在有：${decisionProviders().map(p => `${p.displayName}（${p.id}）`).join('、')}`);
+      await requireDecisionKey(value.provider,deps.getSecret).catch((error:unknown)=>{ throw new SettingsInputError(error instanceof Error?error.message:'无法验证决策模型密钥'); });
       return { kind: 'decision', provider: value.provider, model: id.id };
     }
     const backend = value.backend ?? layerBackend;
@@ -424,8 +478,10 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
   }
   /** What a group on `backend` judges with (design 2.5), as a selection. */
   function judgeEffective(backend: string, layers: { group?: JudgeSelectionStored; bot?: JudgeSelectionStored }): T.AgentSections['judge'] {
-    const actualBackend = layers.group?.kind === 'llm' ? layers.group.backend : backend;
+    const active = layers.group ?? layers.bot;
+    const actualBackend = judgeBackendId(backend, layers.group ?? (layers.bot?.kind === 'llm' ? undefined : layers.bot));
     const { model, effort, provider } = resolveJudgeModel(actualBackend, layers, peekModels(actualBackend));
+    if (active?.kind === 'provider' && !layers.group) return { selection: active };
     return { selection: provider ? { kind: 'decision', provider, model } : { kind: 'llm', backend: actualBackend, model, ...(effort ? { effort } : {}) } };
   }
   /** Every decision model this version calls, and whether its key is filled in by the judge's rule (an unreadable
@@ -473,25 +529,28 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     };
   }
   async function projectSettings(p: Project): Promise<T.ProjectSections> {
-    const result = projectData(p);
-    result.profile = await profile.readGroup(botId, p);
+    const result = projectData(p, deps.backendFor(groupBackendId(p)));
+    // `profile` is only a record of what the row held before the memory migration; the runtime reads `role` and the entries.
+    result.role = { supplement: supplementOf(p) };
     result.modelAccess = resolveProjectModelAccess({ bot: cfg.preferences, group: p }, peekModels(groupBackendId(p)));
     if (!p.directories?.repositories) result.workspace.repositories = [...cfg.preferences?.directories?.repositories ?? []];
-    if (!p.smartRules) result.smartRules = { respond: (await (deps.readSmartPrompt ?? readSmartPrompt)(botId, p.chatId)).text, newTopic: '' };
+    if (!p.smartRules) result.smartRules = rulesFromSmartPrompt(await (deps.readSmartPrompt ?? readSmartPrompt)(botId, p.chatId));
     const completion = getCompletionReminderConfig(cfg);
     result.presentation = p.presentation ? { showModel: getModelDisplay(cfg), ...p.presentation } : { voiceEnabled: voiceView(cfg).enabled, showToolCalls: getShowToolCalls(cfg), showModel: getModelDisplay(cfg), completionMode: completion.mode, longTaskMinutes: completion.longTaskMinutes };
     return result;
   }
   async function sectionRaw(p: Project, section: keyof T.ProjectSections): Promise<unknown> {
-    if (section === 'profile' && !p.profile) return [botId, projectRaw(p, section), await profile.readGroup(botId, p)];
+    if (section === 'role' && p.supplement === undefined) return [botId, projectRaw(p, section), supplementOf(p)];
     if (section === 'smartRules' && !p.smartRules) return [botId, projectRaw(p, section), (await (deps.readSmartPrompt ?? readSmartPrompt)(botId, p.chatId)).text];
     return [botId, projectRaw(p, section)];
   }
   async function validateModelAccess(value: T.ProjectSections['modelAccess'], previous: T.ProjectSections['modelAccess']): Promise<ModelInfo[]> {
     if (!backendIds().includes(value.backend)) throw new SettingsInputError('请选择支持的 Provider');
     if (!value.models.length || new Set(value.models).size !== value.models.length || new Set(value.efforts).size !== value.efforts.length) throw new SettingsInputError('至少选择一个模型，模型和 Effort 不能重复');
-    const peeked = peekModels(value.backend);
-    const catalog = peeked?.length ? peeked : (await models({ botId, backend: value.backend, purpose: 'project' })).models;
+    const discovered = await models({ botId, backend: value.backend, purpose: 'project' });
+    // Fallback metadata cannot authorize new models, efforts, or a provider
+    // switch. An empty trusted catalog retains the existing subset-only path.
+    const catalog = discovered.state === 'ready' ? discovered.models : [];
     for (const id of value.models) {
       if (!parseModelId(id).ok) throw new SettingsInputError('模型 ID 无效');
       const model = catalog.find(m => m.id === id && !m.hidden);
@@ -507,9 +566,12 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     own(scope);
     if (scope.kind === 'agent') {
       const data = agentData(cfg);
-      data.profile = await profile.readBot(botId);
+      data.profile = await legacyBotProfile(botId);
+      const roleView = await readRole(botId);
+      data.role = { identity: roleView.identity, notes: roleView.notes };
       const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, makeSection(value, [botId, agentRaw(cfg.preferences ?? {}, key as keyof T.AgentSections)], access, agentEffects[key as keyof T.AgentSections])])) as T.AgentSettingsView['sections'];
       sections.profile = makeSection(data.profile, [botId, data.profile], sectionAccess('agent', 'profile'), agentEffects.profile);
+      sections.role = makeSection(data.role, [botId, data.role], sectionAccess('agent', 'role'), agentEffects.role);
       sections.paths.effective = {
         projectsRootDir: resolveProjectsRootDir(cfg.preferences?.projectsRootDir)
       };
@@ -524,17 +586,23 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       };
       const botJudge = storedJudge(cfg.preferences?.judge);
       sections.judge.effective = judgeEffective(botJudge?.kind === 'llm' ? botJudge.backend : botBackendId(cfg.preferences), { bot: botJudge });
-      const botDecides = sections.judge.effective.selection.kind === 'decision';
+      const botDecides = sections.judge.effective.selection.kind === 'decision' || (sections.judge.effective.selection.kind === 'provider' && sections.judge.effective.selection.provider === 'typesafe');
       const judgeByBackend: NonNullable<T.AgentSettingsView['judgeByBackend']> = {};
       for (const id of backendIds()) {
-        const { model, effort, provider, modelSource } = resolveJudgeModel(id, { bot: botJudge }, peekModels(id));
+        const judgeBackend = botJudge?.kind === 'provider' && botJudge.provider !== 'typesafe' ? botJudge.provider : id;
+        const { model, effort, provider, modelSource } = resolveJudgeModel(judgeBackend, { bot: botJudge }, peekModels(judgeBackend));
         judgeByBackend[id] = { model, ...(effort ? { effort } : {}), ...(provider ? { provider } : {}), source: modelSource === 'bot' ? 'bot' : 'default' };
       }
       const text = await instructions.read();
       const roles = getAppRoleSnapshot(botId, cfg.accounts.app.tenant);
+      const draft = data.role.identity.trim() ? '' : roleDraft(deps.botName ?? await registeredBotName(botId));
       return {
         scope,
         sections,
+        roleInfo: {
+          ...(draft ? { draft } : {}),
+          headed: roleView.headed, oversized: roleView.oversized, mergedNotice: roleView.mergedNotice, integrity: roleView.integrity,
+        },
         ownerOpenId: resolveOwner(cfg) ?? null,
         administrators: {
           feishu: { ownerOpenId: roles?.ownerOpenId ?? null, adminOpenIds: roles?.admins ?? [] },
@@ -565,10 +633,10 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       if (!p)
         throw new SettingsInputError('项目不存在');
       const data = await projectSettings(p);
-      const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, makeSection(value, [botId, projectRaw(p, key as keyof T.ProjectSections)], sectionAccess('project', key), effect(Object.keys(value), key === 'model' ? 'new-session' : key === 'permission' ? 'session-rebind' : 'next-message', key === 'model' ? '仅新会话使用项目默认模型' : key === 'judge' ? agentEffects.judge[0]!.detail : key === 'run' && p.backend === 'claude-agent' ? 'Claude 不支持插话，运行中来的消息照样排队' : '下一条消息生效'))])) as T.ProjectSettingsView['sections'];
-      for (const key of ['profile', 'smartRules'] as const) sections[key]!.revision = settingsRevision(await sectionRaw(p, key));
-      const botProfile = await profile.readBot(botId);
-      sections.profile!.effective = { ...data.profile, persona: [data.profile.inheritPersona ? botProfile.persona : '', data.profile.persona].filter(Boolean).join('\n\n'), memory: [data.profile.inheritMemory ? botProfile.memory : '', data.profile.memory].filter(Boolean).join('\n\n') };
+      const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, makeSection(value, [botId, projectRaw(p, key as keyof T.ProjectSections)], sectionAccess('project', key), effect(Object.keys(value), key === 'model' ? 'new-session' : key === 'permission' || key === 'workspace' ? 'session-rebind' : 'next-message', key === 'model' ? '仅新会话使用项目默认模型' : key === 'workspace' ? '下一轮新开会话' : key === 'judge' ? agentEffects.judge[0]!.detail : key === 'run' && p.backend === 'claude-agent' ? 'Claude 不支持插话，运行中来的消息照样排队' : '下一条消息生效'))])) as T.ProjectSettingsView['sections'];
+      for (const key of ['profile', 'role', 'smartRules'] as const) sections[key]!.revision = settingsRevision(await sectionRaw(p, key));
+      const botProfile = await legacyBotProfile(botId);
+      sections.profile!.effective = { ...data.profile };
       const backendId = groupBackendId(p);
       sections.run.effective = { pendingPolicy: pendingPolicyOf(getPendingPolicy(cfg), p) };
       // The group's default, else the bot's on the same backend (s36d2).
@@ -578,7 +646,9 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       };
       sections.judge.effective = judgeEffective(backendId, { group: storedJudge(p.judge), bot: storedJudge(cfg.preferences?.judge) });
       // a decision model gets none of a backend's extras
-      const judgeNote = sections.judge.effective.selection.kind === 'llm' ? JUDGE_NOTES[String(sections.judge.effective.selection.backend ?? backendId)] : undefined;
+      const judgeSelection = sections.judge.effective.selection;
+      const judgeNote = judgeSelection.kind === 'llm' ? JUDGE_NOTES[String(judgeSelection.backend ?? backendId)]
+        : judgeSelection.kind === 'provider' && judgeSelection.provider !== 'typesafe' ? JUDGE_NOTES[String(judgeSelection.provider)] : undefined;
       const fullOnly = deps.backendFor(backendId).fullAccessOnly?.();
       let skillView: Pick<T.ProjectSettingsView, 'skills' | 'skillsError'>;
       if (deps.offline) {
@@ -593,6 +663,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         scope,
         sections,
         botProfile,
+        judgeInheritsHostDefault: p.judge?.kind === 'default',
         ...skillView,
         identity: {
           chatId: p.chatId,
@@ -606,7 +677,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           openIds: [...(p.allowedUsers ?? [])],
           revision: settingsRevision([botId, p.name, p.chatId, p.allowedUsers ?? []])
         },
-        smartPrompt: p.smartRules ? { ...await smartPromptView(p.chatId, judgeNote ? [judgeNote] : [], sections.judge.effective.selection.kind === 'decision'), source: 'group', text: composeSmartRules(p.smartRules) } : await smartPromptView(p.chatId, judgeNote ? [judgeNote] : [], sections.judge.effective.selection.kind === 'decision'),
+        smartPrompt: p.smartRules ? { ...await smartPromptView(p.chatId, judgeNote ? [judgeNote] : [], sections.judge.effective.selection.kind === 'decision' || (sections.judge.effective.selection.kind === 'provider' && sections.judge.effective.selection.provider === 'typesafe')), source: 'group', text: composeSmartRules(p.smartRules) } : await smartPromptView(p.chatId, judgeNote ? [judgeNote] : [], sections.judge.effective.selection.kind === 'decision' || (sections.judge.effective.selection.kind === 'provider' && sections.judge.effective.selection.provider === 'typesafe')),
         decisionModels: await decisionModels()
       };
     }
@@ -637,7 +708,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
   /** After a decision model is chosen without its key (owner: choose first, fill in later): what happens meanwhile
    * and how to fill it in, as one more effect line, which the command line and the web page show as they are. */
   async function keyMissing(selection: T.JudgeSelectionView | undefined): Promise<string | undefined> {
-    if (selection?.kind !== 'decision')
+    if (selection?.kind !== 'decision' && !(selection?.kind === 'provider' && selection.provider === 'typesafe'))
       return undefined;
     const chosen = (await decisionModels()).find(m => m.provider === selection.provider);
     return chosen && !chosen.keySet ? keyMissingText(chosen) : undefined;
@@ -679,8 +750,17 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         const judge = e.section === 'judge'
           ? await prepareJudge(e.patch.selection, [botId, agentRaw(cfg.preferences ?? {}, 'judge')], e.revision, botBackendId(cfg.preferences), false)
           : undefined;
-        if (e.section === 'profile') {
-          await profile.updateBot(botId, current => { check([botId, current], e.revision); return { ...current, ...e.patch }; }, beforeCommit);
+        if (e.section === 'role') {
+          await updateRole(botId, current => {
+            check([botId, current], e.revision);
+            const next = { ...current, ...e.patch };
+            const problem = roleProblem(next, current);
+            if (problem) throw new SettingsInputError(problem);
+            return next;
+          }, { beforeCommit });
+        } else if (e.section === 'profile') {
+          // Read-only since P4a: the role has its own section and the shared memory is now the bot's memory entries.
+          throw new SettingsInputError('角色设定请在「身份与职责」「其他说明」里改；公共记忆已改为 Bot 记忆，在记忆页里改');
         } else await deps.writePreferences(async (p) => {
           check([botId, agentRaw(p, e.section as keyof T.AgentSections)], e.revision);
           switch (e.section) {
@@ -709,22 +789,11 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               break;
             }
             case 'titles': {
-              const [entry] = Object.entries(e.patch.byBackend ?? {});
-              if (!entry)
-                throw new SettingsInputError('请选择一个后端');
-              const [id, policy] = entry;
-              if (!backendIds().includes(id) || policy.enabled && !getSessionTitleEfforts(id).includes(policy.effort))
+              const legacy = Object.entries(e.patch.byBackend ?? {})[0];
+              const policy = e.patch.policy ?? (legacy && (legacy[1].enabled ? { ...legacy[1], backend: legacy[0] } : { enabled: false as const }));
+              if (!policy || policy.enabled && (!backendIds().includes(policy.backend) || !getSessionTitleEfforts(policy.backend).includes(policy.effort)))
                 throw new SettingsInputError('标题后端或推理强度无效');
-              p.sessionTitles = {
-                ...p.sessionTitles,
-                byBackend: {
-                  ...p.sessionTitles?.byBackend,
-                  [id]: {
-                    ...p.sessionTitles?.byBackend?.[id],
-                    ...policy
-                  }
-                }
-              };
+              p.sessionTitles = { ...p.sessionTitles, policy: { ...p.sessionTitles?.policy, ...policy } };
               break;
             }
             case 'paths':
@@ -759,6 +828,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         let admittedWorkspace: ProjectWorkspace | undefined;
         const allowedCatalog = e.section === 'modelAccess' ? await validateModelAccess({ ...original.modelAccess, ...e.patch }, original.modelAccess) : undefined;
         if (e.section === 'workspace') {
+          // The project holds the workspace; the host funnels a change through the library (admin/library.ts), never this row.
+          if (isProjectId(initial.projectId)) throw new SettingsInputError('这个群的工作区归项目管，请通过 daemon 修改项目的工作区');
           const value = { ...original.workspace, ...e.patch };
           if (!value.directories.includes(value.primary)) throw new SettingsInputError('主目录必须在工作区目录中');
           const admitted = await admitDirectorySettings({ workspaces: { primary: value.primary, additional: value.directories.filter(path => path !== value.primary) }, repositories: value.repositories }, { dataDir: paths.appDir });
@@ -769,13 +840,19 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           const now = await readProject(e.scope.projectName);
           if (!now)
             throw new SettingsInputError('项目不存在');
-          if (sessionModeOf(now) === 'smart' && e.patch.selection?.kind === 'default') throw new SettingsInputError('智能模式需要单独设置决策模型');
           judge = await prepareJudge(e.patch.selection, [botId, projectRaw(now, 'judge')], e.revision, groupBackendId(now), true);
         }
         const p = await changeProject(e.scope.projectName, async (p) => {
           check(await sectionRaw(p, e.section), e.revision);
           switch (e.section) {
-            case 'profile': p.profile = { ...await profile.readGroup(botId, p), ...e.patch }; break;
+            case 'profile':
+              throw new SettingsInputError('本群的个性已改为「补充职责」，本群记忆已改为项目记忆，请在对应的页面里改');
+            case 'role': {
+              const supplement = e.patch.supplement ?? original.role.supplement;
+              if (supplement !== original.role.supplement && [...supplement].length > SUPPLEMENT_MAX) throw new SettingsInputError(`补充职责最多 ${SUPPLEMENT_MAX} 字`);
+              p.supplement = supplement;
+              break;
+            }
             case 'smartRules': p.smartRules = { ...original.smartRules, ...e.patch }; break;
             case 'skills': p.skills = { ...original.skills, ...e.patch }; p.skills.disabledPaths = [...new Set(p.skills.disabledPaths)]; break;
             case 'presentation': p.presentation = { ...original.presentation, ...e.patch }; break;
@@ -784,8 +861,15 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               p.directories = { ...p.directories, workspaces: { primary: p.cwd, additional: admittedWorkspace!.directories.filter(path => path !== p.cwd) }, repositories: admittedWorkspace!.repositories };
               break;
             case 'modelAccess': {
+              const previousBackend = groupBackendId(p);
+              const currentTier = groupPermission(p).tier;
               p.modelAccess = { ...original.modelAccess, ...e.patch };
               p.backend = p.modelAccess.backend;
+              if (groupBackendId(p) !== previousBackend) {
+                delete p.custom;
+                p.mode = currentTier;
+                p.network = TIER_NETWORK[currentTier];
+              }
               if (!p.defaultModel || !p.modelAccess.models.includes(p.defaultModel)) { p.defaultModel = p.modelAccess.models[0]; delete p.defaultModelCustom; }
               const supported = allowedCatalog?.find(m => m.id === p.defaultModel)?.supportedEfforts;
               const allowed = supported ? p.modelAccess.efforts.filter(effort => supported.includes(effort)) : p.modelAccess.efforts;
@@ -793,19 +877,41 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               break;
             }
             case 'permission': {
-              const next = {
-                ...p,
-                ...e.patch
-              };
-              const backend = deps.backendFor(groupBackendId(p));
-              const supported = backend.supportedModes;
-              if (supported && !supported.includes(effectiveMode(next)))
-                throw new SettingsInputError('后端不支持此权限档位');
-              // Only the tier this save sets: a stored 只读 stays, and network can still change.
-              const fullOnly = backend.fullAccessOnly?.();
-              if (fullOnly && e.patch.mode !== undefined && e.patch.mode !== 'full')
-                throw new SettingsInputError(fullOnly);
-              Object.assign(p, e.patch);
+              if (e.patch.mode !== undefined && e.patch.custom !== undefined && e.patch.custom !== null)
+                throw new SettingsInputError('选档和高级设置一次只改一个');
+              if (e.patch.mode === undefined && e.patch.custom === null) {
+                const current = groupPermission(p);
+                if (current.custom || current.legacy || current.invalid)
+                  throw new SettingsInputError('清掉高级设置时要同时选一档，例如 permission.mode=qa。');
+                throw new Unchanged();
+              }
+              const backendId = groupBackendId(p);
+              const table = permissionTable(backendId);
+              let mode = e.patch.mode ?? effectiveMode(p);
+              let effectMode = mode;
+              let network = TIER_NETWORK[mode];
+              let custom: Project['custom'];
+              if (e.patch.custom !== undefined && e.patch.custom !== null) {
+                let settings: Record<string, unknown>;
+                try { settings = table.parseCustom(e.patch.custom); }
+                catch (error) {
+                  if (error instanceof PermissionInputError) throw new SettingsInputError(error.message);
+                  throw error;
+                }
+                const matched = table.matchTier(settings);
+                const effect = table.effect(settings);
+                const stored = table.stored?.(settings) ?? effect;
+                effectMode = matched ?? effect.mode;
+                mode = matched ?? stored.mode;
+                network = matched ? TIER_NETWORK[matched] : stored.network;
+                if (!matched) custom = { backend: backendId, settings };
+              }
+              const unavailable = tierInfo(table, tableEnv(deps.backendFor(backendId)), effectMode).unavailable;
+              if (unavailable) throw new SettingsInputError(unavailable);
+              p.mode = mode;
+              p.network = network;
+              if (custom) p.custom = custom;
+              else delete p.custom;
               break;
             }
             case 'response':
@@ -840,8 +946,12 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             case 'judge':
               storeJudge(p, judge!, groupBackendId(p));
           }
-        }, commitOptions);
-        if (['permission', 'workspace', 'skills', 'modelAccess', 'profile'].includes(e.section)) {
+        }, commitOptions).catch(error => {
+          if (error instanceof Unchanged) return undefined;
+          throw error;
+        });
+        if (!p) return { kind: 'saved', section: await sectionView(e), effects: [] };
+        if (['permission', 'workspace', 'skills', 'modelAccess', 'profile', 'role'].includes(e.section)) {
           try {
             await deps.evictLiveSessionsForChat(p.chatId);
           }
@@ -994,7 +1104,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
 
 /** Freeze historical Bot defaults into group-local settings once. Reading a settings page never
  * writes this migration; only the owning Bot startup invokes it. Fields already edited stay put. */
-export async function materializeGroupSettings(deps: Pick<SettingsOwnerDeps, 'cfg' | 'backendFor' | 'listProjects' | 'mutateProject' | 'profile' | 'readSmartPrompt'> & { readSessions?: typeof listSessions }): Promise<{ updated: string[]; deferred: string[] }> {
+export async function materializeGroupSettings(deps: Pick<SettingsOwnerDeps, 'cfg' | 'backendFor' | 'listProjects' | 'mutateProject' | 'readSmartPrompt'> & { readSessions?: typeof listSessions }): Promise<{ updated: string[]; deferred: string[] }> {
   const botId = deps.cfg.accounts.app.id;
   const sessions = await (deps.readSessions ?? listSessions)();
   const rows = await (deps.listProjects ?? listProjects)();
@@ -1015,18 +1125,17 @@ export async function materializeGroupSettings(deps: Pick<SettingsOwnerDeps, 'cf
     const oldEffectiveJudge = resolveJudgeModel(backend, { bot: oldJudge }, native);
     const judge: JudgeSelectionStored = oldEffectiveJudge.provider ? { kind: 'decision', provider: oldEffectiveJudge.provider, model: oldEffectiveJudge.model } : { kind: 'llm', backend, model: oldEffectiveJudge.model, ...(oldEffectiveJudge.effort ? { effort: oldEffectiveJudge.effort } : {}) };
     let rules = row.smartRules;
-    let groupProfile = row.profile;
     try {
-      rules ??= { respond: (await (deps.readSmartPrompt ?? readSmartPrompt)(botId, row.chatId)).text, newTopic: '' };
-      groupProfile ??= await (deps.profile?.readGroup ?? readGroupProfile)(botId, row);
+      rules ??= rulesFromSmartPrompt(await (deps.readSmartPrompt ?? readSmartPrompt)(botId, row.chatId));
     } catch { result.deferred.push(row.name); continue; }
     const before = settingsRevision(row);
     const changes: Partial<Project> = {
-      ...(!row.profile ? { profile: groupProfile } : {}),
       ...(!row.smartRules ? { smartRules: rules } : {}),
       ...(!row.modelAccess && models.length && !foreignSessions ? { modelAccess: { backend, models, efforts } } : {}),
       ...(!row.defaultModel && preference ? { defaultModel: preference.model, defaultEffort: preference.effort, defaultModelCustom: preference.custom } : {}),
-      ...(row.directories?.repositories === undefined ? { directories: { ...row.directories, repositories: [...deps.cfg.preferences?.directories?.repositories ?? []] } } : {}),
+      // A row of a library project mirrors the project's folders (memory design §2.1): left out, it runs with the bot's
+      // default repositories, as before, and the folder guard in the registry stays quiet.
+      ...(row.directories?.repositories === undefined && !isProjectId(row.projectId) ? { directories: { ...row.directories, repositories: [...deps.cfg.preferences?.directories?.repositories ?? []] } } : {}),
       ...(!row.pendingPolicy ? { pendingPolicy: getPendingPolicy(deps.cfg) } : {}),
       ...(!row.presentation || row.presentation.showModel === undefined ? { presentation: { voiceEnabled: voiceView(deps.cfg).enabled, showToolCalls: getShowToolCalls(deps.cfg), showModel: getModelDisplay(deps.cfg), completionMode: completion.mode, longTaskMinutes: completion.longTaskMinutes, ...row.presentation } } : {}),
       ...(!row.judge && judge ? { judge } : {}),

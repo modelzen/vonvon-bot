@@ -8,6 +8,7 @@ import {
 import {
   conversationLabel, localTime, pickBot, pickGroup, print, toolLabel, want, withDaemon, type Call, type Daemon, type Io,
 } from '../daemon-client';
+import { TIER_NAMES } from '../../agent/permission';
 import { keyMissingText } from '../../judge/decision';
 
 // Structural views of the protocol's zod objects: the daemon's own zod is v4, protocol's is v3 (see daemon-client).
@@ -93,7 +94,8 @@ export function parseAssignments(kind: Kind, assignments: readonly string[]): { 
   if (section === undefined) throw new Error(FORMAT);
   if (section === 'cliBridge') throw new Error('咖啡一下第一版已拿掉，不能改。');
   if (section === 'compact' && kind === 'project') throw new Error('自动压缩现在一直开着，不能关了。');
-  if (section === 'permission' && kind === 'project' && fields.has('guestMode')) throw new Error('「普通成员权限」去掉了：一个群只有一个权限档，群里谁说话都用它。改 permission.mode。');
+  if (section === 'permission' && kind === 'project' && fields.has('network')) throw new Error('联网已经并进权限的档位：只读不联网，工作区可写联网，完全访问不限制。只读又要联网这类组合，用高级设置 permission.custom。');
+  if (section === 'permission' && kind === 'project' && fields.has('guestMode')) throw new Error('「普通成员权限」去掉了：一个群只有一个权限，群里谁说话都用它。改 permission.mode。');
   const schema = Object.hasOwn(TABLES[kind], section) ? TABLES[kind][section] : undefined;
   if (!schema) throw new Error(`没有 ${section} 这一节。可以改的有：${sectionNames(kind).join('、')}`);
   // fromEntries keeps a key like __proto__ as data, so strict() reports it.
@@ -224,6 +226,20 @@ export async function runSettingsGet(section: string | undefined, target: Target
       if (!Object.hasOwn(settable, key)) continue;
       const live = effective[key];
       human.push(`  ${key} = ${show(stored)}${botJudge || JSON.stringify(live) === JSON.stringify(stored) ? '' : `（生效：${show(live)}）`}`);
+    }
+    if (name === 'permission' && view.scope.kind === 'project') {
+      const permission = value.stored as ProjectSettingsView['sections']['permission']['stored'];
+      const options = permission.options;
+      human.push(`  权限：${options?.invalid ? '高级设置读不出来，现在按只读跑' : options?.customSummary ? `自定义（${options.customSummary}）${options.legacy ? '（从旧版的联网开关转来）' : ''}` : TIER_NAMES[permission.mode]}`);
+      if (options?.fields?.length) {
+        human.push('    高级设置（permission.custom）：');
+        for (const field of options.fields) {
+          const values = field.kind === 'choice' ? field.choices?.map(choice => choice.value).join(' | ')
+            : field.kind === 'switch' ? 'true | false' : '["github.com", …]';
+          const condition = field.showWhen ? `（${field.showWhen.key}=${field.showWhen.in.join(' | ')} 时）` : '';
+          human.push(`      ${field.key}  ${field.label}：${values ?? ''}${condition}`);
+        }
+      }
     }
     if (name === 'permission' && fullOnly) human.push(`  ${fullOnly}`);
     if (name === 'judge') {

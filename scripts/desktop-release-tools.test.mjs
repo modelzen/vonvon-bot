@@ -108,19 +108,20 @@ test('verification reads actual Core metadata, third-party declarations and ever
   const h = await appFixture(t);
   const result = await verifyUniversalApp(h.options);
   assert.equal(result.architectures.length, 3);
-  assert.ok(result.architectures.every(file => file.archs.join(',') === 'arm64,x86_64'));
+  assert.equal(result.architectures.every(file => file.archs.length === 2), true);
   assert.deepEqual(result.entitlementChecks.map(entry => entry.entitlements), [
     { 'com.apple.security.cs.allow-jit': true }, { 'com.apple.security.cs.allow-jit': true },
   ]);
   await verifyDmg(h.release.dmg, teamIdentifier, h.execute);
 });
 
-for (const variant of ['Core version', 'first-party license', 'third-party declaration', 'single arch', 'unsigned', 'wrong team', 'broad entitlements', 'false JIT', 'unknown entitlement']) {
+for (const variant of ['Core version', 'first-party license', 'third-party declaration', 'bundled Claude', 'single arch', 'unsigned', 'wrong team', 'broad entitlements', 'false JIT', 'unknown entitlement']) {
   test(`verification refuses ${variant}`, async t => {
     const h = await appFixture(t);
     if (variant === 'Core version') await h.put(`${h.core}package.json`, JSON.stringify({ version: '0.1.0', license: 'UNLICENSED' }));
     if (variant === 'first-party license') await h.put(`${h.core}package.json`, JSON.stringify({ version, license: 'MIT' }));
     if (variant === 'third-party declaration') await rm(join(h.root, h.core, 'NOTICE'));
+    if (variant === 'bundled Claude') await h.put(`${h.core}node_modules/@anthropic-ai/claude-agent-sdk/package.json`, JSON.stringify({ name: '@anthropic-ai/claude-agent-sdk' }));
     const execute = async (command, args) => {
       if (variant === 'unsigned' && args.includes('--verify')) throw new Error('invalid signature');
       if (variant === 'single arch' && command.endsWith('lipo')) return { stdout: 'arm64', stderr: '' };

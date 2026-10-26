@@ -2,15 +2,20 @@ import { pendingGroupsFile, readPendingGroups, type PendingGroup } from '../proj
 import type { CollaborationRequest } from './collaboration';
 import {runtimeDistribution} from '../service/distribution';
 import { createSettingsService } from './settings-service';
+import { admitLibraryWorkspace, createHostLibrary, type AdminLibraryOp, type HostLibrary } from './library';
+import { isProjectId, readLibrary } from '../project/library';
+import { projectRevision, projectView } from './collaboration';
+import { AdminWriteError } from './ops';
 import type { HostSettings } from './settings-types';
 import type { AdminSettingsReadOp } from './ipc';
 import { CodexSetupService, type CodexSetup, type CodexJob, type CodexJobType } from '../agent/codex-appserver/setup';
 import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
+import { compareCodexVersions, parseCodexVersion } from '../agent/codex-appserver/version';
 import { fetchUsageBundle } from '../agent/usage';
 import { parseJoinedGroups, parseGroupMembers, type GroupMembers, type AdminGroupOp, type BindGroupInput, type JoinedGroups } from './groups';
 import { voiceView } from '../voice/view';
 import type { VoiceAction, VoiceView } from '../voice/types';
-import { readFile, rm } from 'node:fs/promises';
+import { readFile, realpath, rm, stat } from 'node:fs/promises';
 import { botIdentity, loadBots, setBotActivation, removeBot } from '../config/bots';
 import { botPaths, botDir } from '../config/paths';
 import { configuredProjectsRoots, directoryContext, legacyDirectoryProblems } from '../project/directory-audit';
@@ -27,19 +32,19 @@ import {
 import {
   noMentionOf,
   sessionModeOf,
-  effectiveMode,
   listProjectsIn,
   type SessionMode,
 } from '../project/registry';
 import { isRetiredKey, listSessionsIn } from '../bot/session-store';
 import { loadConfig } from '../config/store';
-import { groupBackendId } from '../config/execution';
+import { groupBackendId, groupPermission } from '../config/execution';
 import { resolveAppSecret } from '../config/secret-resolver';
 import { createAgentAvatarProvider, createGroupAvatarProvider } from './avatar';
 import { diagnoseEventSubscription, type EventDiagnosis } from '../utils/event-diagnosis';
+import { diagnoseCardCallbackConfiguration, type CardCallbackConfiguration } from '../utils/card-callback-diagnosis';
 import { validateAppCredentials } from '../utils/feishu-auth';
 import { buildAppConsoleUrl, buildScopeGrantUrl, buildEventConfigUrl } from '../config/scopes';
-import { readSetupProgress, writeSetupProgress } from '../config/setup-progress';
+import { readCardCallbackStatus, writeSetupProgress } from '../config/setup-progress';
 import { refreshBotCredentials } from '../bot/refresh-bot';
 import { registerBotFromCredentials } from '../bot/register-bot';
 import {
@@ -110,7 +115,11 @@ import type { AdminWriteOp } from './ops';
  * 切目录会把在跑 bot 的 paths 指到别的 bot（第一棒遗留的坑，本棒修掉）。
  */
 export interface AdminService {
+  /** true only in the read-only preview process: it refuses every write, memory writes included */
+  readonlyPreview?: boolean;
   collaboration?(botId: string, request: CollaborationRequest): Promise<unknown>;
+  /** The project library (admin/library.ts): its workspace is changed only through here. */
+  library?: HostLibrary;
   accountUsage(force: boolean): Promise<AccountUsageBundle>;
   settings?: HostSettings;
   codexSetup?(): Promise<CodexSetup>;
@@ -136,7 +145,7 @@ export interface AdminService {
   setPermissionMode(
     botId: string,
     projectName: string,
-    opts: { mode: PermissionMode; network?: boolean },
+    opts: { mode: PermissionMode },
   ): Promise<void>;
   /** ✋ 免@ 开关（写）。 */
   setNoMention(botId: string, projectName: string, on: boolean): Promise<void>;
@@ -161,7 +170,9 @@ export interface AdminService {
    * 生效」。绝不 throw——每段独立降级。
    */
   getSetupStatus(botId: string): Promise<AdminSetupStatus>;
-  /** 首次运行清单里"卡片回调"那一步：飞书没有读接口，由主人手动勾上。 */
+  /** Local receipt evidence and manual confirmation only; no Feishu API calls. */
+  getCardCallbackStatus?(botId: string): Promise<AdminSetupStatus['cardCallback']>;
+  /** 人工确认仅修改手动标记；撤销不能清除已收到真实回调的证据。 */
   confirmCardCallback(botId: string, confirmed: boolean): Promise<void>;
   /**
    * 扫码注册一个机器人（day-0 主路径）：编排 SDK registerApp 扫码会话 → 拿明文密钥
@@ -292,10 +303,13 @@ export interface BotLiveStatus {
 
 /** 项目快照——effective 值（缺省已按 registry 的单一事实源解析），UI 直接渲染。 */
 export interface AdminProject {
+  enabled?: boolean;
   avatarDataUrl?: string;
   name: string;
   chatId: string;
   cwd: string;
+  /** The library project this binding belongs to (project/library.ts); absent until the daemon has linked the row. */
+  projectId?: string;
   blank: boolean;
   branch?: string;
   kind: SessionMode;
@@ -355,12 +369,12 @@ export interface AdminSetupStatus {
    * grantUrl 始终给（预选全部 scope，缺啥点一次补齐）。
    */
   scopes: { missingRequired?: string[]; missingJoinScopes?: string[]; missingOptional?: string[]; grantUrl: string };
-  /** 开发者后台「事件与回调」配置页深链（事件订阅没写 API，只能引导手动配 + 发版本）。 */
+  /** 开发者后台「事件与回调」配置页深链。 */
   eventConfigUrl: string;
   /** 开发者后台这个应用的首页（版本管理与发布在里面）。 */
   consoleUrl: string;
-  /** ⑤ 卡片回调（card.action.trigger）没有读接口，由主人在首次运行清单里手动勾上。 */
-  cardCallback: { confirmed: boolean };
+  /** ⑤ 飞书配置、真实回调证据和本机人工确认分别记录，配置查询不写入本机确认。 */
+  cardCallback: { confirmed: boolean; verifiedAt?: number; configuration?: CardCallbackConfiguration };
 }
 
 /** 扫码注册成功：基本信息 + adminOpenId（扫码人 = owner）。
@@ -420,9 +434,9 @@ export interface AdminBackendCatalogEntry {
   approxSizeMB?: number;
   /** 探测到的版本（external-cli 的 codex --version 等；未装/无版本 → null）。 */
   version: string | null;
-  /** 已装在用户私装目录里的版本号（读 package.json；未装/dev devDep → null）。后端管理页展示。 */
+  /** 实际优先加载的包版本（开发依赖或用户托管安装）。 */
   installedVersion: string | null;
-  /** 能否一键卸载（npm-ondemand 且确实装在用户私装目录 → true；dev/worktree 的 devDep 不可卸）。 */
+  /** 能否一键卸载（仅用户目录中的托管安装）。 */
   canUninstall: boolean;
   /** !installed 时的人读提示（external 给手动装法 / npm-ondemand 给「点下载」）。 */
   hint?: string;
@@ -441,6 +455,8 @@ export interface AdminServiceDeps {
   executeCollaboration?: (botId: string, request: CollaborationRequest) => Promise<unknown>;
   executeGroups?: (botId: string, op: AdminGroupOp) => Promise<unknown>;
   executeWrite?: (botId: string, op: AdminWriteOp) => Promise<unknown>;
+  /** Asks a running bot process to follow a project's new workspace (admin/library.ts `AdminLibraryOp`). */
+  executeLibrary?: (botId: string, op: AdminLibraryOp) => Promise<unknown>;
   /** 实时运行状态（daemon 进程内：本进程 channel / 子进程 IPC）。返回 undefined
    * 或缺省 → 回退锁文件探测（该 bot 不归本 daemon 管，如未激活的 bot）。 */
   liveStatus?: (botId: string) => Promise<BotLiveStatus | undefined>;
@@ -527,16 +543,18 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     const result = projects.map((p, index) => ({
       avatarDataUrl: groupAvatars.get(botId, p.chatId),
       name: p.name,
+      enabled: p.enabled !== false,
       chatId: p.chatId,
       cwd: p.cwd,
+      ...(isProjectId(p.projectId) ? { projectId: p.projectId } : {}),
       blank: p.blank,
       branch: p.branch,
       kind: sessionModeOf(p),
       origin: p.origin ?? 'created',
       noMention: noMentionOf(p),
-      mode: effectiveMode(p),
-      guestMode: effectiveMode(p),
-      network: p.network ?? false,
+      mode: groupPermission(p).effect.mode,
+      guestMode: groupPermission(p).effect.mode,
+      network: groupPermission(p).effect.network,
       // What the group's sessions actually start on: its own backend, else Codex (s36d2).
       backend: groupBackendId(p),
       allowedUsersCount: p.allowedUsers?.length ?? 0,
@@ -578,12 +596,43 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     }
   }
 
+  const library = createHostLibrary({ liveStatus: deps.liveStatus, executeLibrary: deps.executeLibrary, readonlyPreview: deps.readonlyPreview });
+  /**
+   * `editProject` with a folder for a group of a library project: the folder is the project's, so it goes through the
+   * library (every group and bot of the project follows, §2.1) instead of the bot's own row. Left to the bot as it is
+   * when the row has no project. The rest of the edit (会话方式, 启停) goes on to the bot afterwards, on the row as the
+   * workspace change left it.
+   */
+  async function editProjectFolder(botId: string, request: Extract<CollaborationRequest, { action: 'editProject' }>): Promise<unknown | undefined> {
+    const files = botPaths(botId);
+    const row = (await listProjectsIn(files.projectsFile)).find(item => item.name === request.projectName && item.chatId === request.chatId);
+    if (!row || !isProjectId(row.projectId)) return undefined;
+    const project = (await readLibrary()).projects.find(item => item.id === row.projectId);
+    if (!project) return undefined;
+    if (projectRevision(row) !== request.expectedRevision) throw new AdminWriteError('项目设置已改变，请刷新后重试');
+    let directory: string;
+    try { directory = await realpath(request.directory!); } catch { throw new AdminWriteError('所选文件夹不存在'); }
+    if (!(await stat(directory)).isDirectory()) throw new AdminWriteError('所选文件夹不是目录');
+    const { primary } = await admitLibraryWorkspace({ primary: directory, additional: [] });
+    const change = await library.workspace({ projectId: project.id, refuseWhenBusy: true,
+      workspace: { ...project.workspace, primary, additional: project.workspace.additional.filter(path => path !== primary) } });
+    const fresh = (await listProjectsIn(files.projectsFile)).find(item => item.name === request.projectName && item.chatId === request.chatId);
+    if (!fresh) throw new AdminWriteError('项目已移除，请刷新');
+    const lagging = change.rebound.filter(item => item.state === 'failed').length;
+    const warning = lagging ? `工作区已改，但有 ${lagging} 个绑定没跟上，下次启动 daemon 时会修好` : undefined;
+    if (request.kind === undefined && request.enabled === undefined && request.project === undefined) return { ok: true, project: projectView(fresh), ...(warning ? { warning } : {}) };
+    const { directory: _directory, ...rest } = request;
+    const reply = await deps.executeCollaboration!(botId, { ...rest, expectedRevision: projectRevision(fresh) }) as Record<string, unknown>;
+    return warning && typeof reply === 'object' && reply !== null ? { ...reply, warning: [reply.warning, warning].filter(Boolean).join('；') } : reply;
+  }
+
   function executeWrite(botId: string, action: string, op: AdminWriteOp): Promise<void> {
     if (!deps.executeWrite) throw new NotWiredYetError(action);
     return deps.executeWrite(botId, op).then(() => undefined);
   }
 
   return {
+    readonlyPreview: deps.readonlyPreview === true,
     accountUsage(force) {
       if (closing) return Promise.reject(new Error('daemon 正在退出'));
       const read = Promise.resolve().then(() => (deps.fetchAccountUsage ?? fetchUsageBundle)(force));
@@ -594,7 +643,8 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       );
       return read;
     },
-    settings: createSettingsService(deps),
+    settings: createSettingsService(deps, library),
+    library,
     codexSetup: () => codexTools.setup(),
     startCodexJob(type) {
       if (deps.readonlyPreview || deps.daemonStartedAt === undefined) throw new NotWiredYetError('Codex 设置');
@@ -612,6 +662,10 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     },
     async collaboration(botId, request) {
       if (!deps.executeCollaboration) throw new NotWiredYetError('协作管理');
+      if (request.action === 'editProject' && request.directory !== undefined && !deps.readonlyPreview) {
+        const handled = await editProjectFolder(botId, request);
+        if (handled !== undefined) return handled;
+      }
       return deps.executeCollaboration(botId, request);
     },
     async pendingGroups(botId) {
@@ -696,13 +750,12 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     async setPermissionMode(
       botId: string,
       projectName: string,
-      opts: { mode: PermissionMode; network?: boolean },
+      opts: { mode: PermissionMode },
     ): Promise<void> {
-      await executeWrite(botId, '🔐 设置权限档', {
+      await executeWrite(botId, '🔐 设置权限', {
         kind: 'setPermissionMode',
         project: projectName,
         mode: opts.mode,
-        network: opts.network,
       });
     },
 
@@ -760,6 +813,11 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       return readRecentLogs({ maxBytes: opts?.maxBytes ?? 64 * 1024 });
     },
 
+    async getCardCallbackStatus(botId: string): Promise<AdminSetupStatus['cardCallback']> {
+      if (!(await loadBots()).bots.some(bot => bot.appId === botId)) throw new Error('没有这个 Bot。');
+      return readCardCallbackStatus(botId);
+    },
+
     async getSetupStatus(botId: string): Promise<AdminSetupStatus> {
       const reg = await loadBots();
       const entry = reg.bots.find((b) => b.appId === botId);
@@ -770,7 +828,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         botName: entry?.botName,
         eventConfigUrl: buildEventConfigUrl(botId, tenant),
         consoleUrl: buildAppConsoleUrl(botId, tenant),
-        cardCallback: { confirmed: (await readSetupProgress(botId)).cardCallbackConfirmed },
+        cardCallback: await readCardCallbackStatus(botId),
       };
 
       // ② 长连接：真实状态优先（daemon 内），否则锁文件探测——绝不抛错。
@@ -787,13 +845,14 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         return {
           ...base,
           credentials: { ok: false, reason: '配置缺失（这个 Bot 还没注册完，或者文件损坏了）' },
+          cardCallback: { ...base.cardCallback, configuration: { state: 'unchecked', reason: '配置缺失，无法诊断卡片回调' } },
           connection: { running: run.running, connection: run.connection },
           event: { state: 'unchecked', reason: '配置缺失，无法诊断事件订阅' },
           scopes: { grantUrl: buildScopeGrantUrl(botId, tenant) },
         };
       }
 
-      // ①③④ 都要密钥——解析一次，三段共用（探活拿 scope、事件诊断各打各的只读 API）。
+      // 各项远程诊断都要密钥——解析一次，共用凭据调用各自的只读 API。
       let secret: string | undefined;
       try {
         secret = await resolveAppSecret(cfg);
@@ -801,6 +860,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         return {
           ...base,
           credentials: { ok: false, reason: err instanceof Error ? err.message : String(err) },
+          cardCallback: { ...base.cardCallback, configuration: { state: 'unchecked', reason: '密钥不可解析' } },
           connection: { running: run.running, connection: run.connection },
           event: { state: 'unchecked', reason: '密钥不可解析' },
           scopes: { grantUrl: buildScopeGrantUrl(botId, tenant) },
@@ -808,8 +868,8 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       }
 
       const { app } = cfg.accounts;
-      // ①+④ 探活同时拿 botName / missingScopes；③ 事件诊断并发。各自绝不抛错。
-      const [validation, event] = await Promise.all([
+      // 探活、事件订阅、卡片回调配置并发；本地回调证据保持独立。
+      const [validation, event, configuration] = await Promise.all([
         validateAppCredentials(app.id, secret, app.tenant).catch((err) => ({
           ok: false as const,
           reason: err instanceof Error ? err.message : String(err),
@@ -817,6 +877,9 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         })),
         diagnoseEventSubscription(app.id, secret, app.tenant).catch(
           (err): EventDiagnosis => ({ state: 'unchecked', reason: err instanceof Error ? err.message : String(err) }),
+        ),
+        diagnoseCardCallbackConfiguration(app.id, secret, app.tenant).catch(
+          (): CardCallbackConfiguration => ({ state: 'unchecked', reason: '无法读取卡片回调配置，请稍后重试' }),
         ),
       ]);
 
@@ -826,6 +889,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         credentials: validation.ok ? { ok: true } : { ok: false, reason: validation.reason, ...(validation.unreachable ? { unreachable: true } : {}) },
         connection: { running: run.running, connection: run.connection },
         event,
+        cardCallback: { ...base.cardCallback, configuration },
         scopes: {
           missingRequired: validation.ok ? validation.missingScopes : undefined,
           missingJoinScopes: validation.ok ? validation.missingJoinScopes : undefined,
@@ -958,12 +1022,20 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     async backendVersion(id): Promise<{ installed: string | null; latest: string | null; hasUpdate: boolean }> {
       const entry = catalogById(id);
       if (!entry?.dep.pkg) return { installed: null, latest: null, hasUpdate: false };
-      const installed = installedBackendVersion(entry.dep.pkg);
+      // Codex is an executable (managed, PATH, app bundle or CODEX_BIN), not a
+      // library resolved from our node_modules. Force the runtime's own probe so
+      // an upgrade at the same path cannot leave this explicit check cached.
+      const installed = entry.id === 'codex-appserver'
+        ? parseCodexVersion((await createBackend(entry.id).doctor({ force: true }).catch(() => null))?.version)
+        : installedBackendVersion(entry.dep.pkg);
       // 有 pin 时目标就是 pin：装的版本和它不同（更新或更旧）都提示更新，更新会装回 pin。
       const pinned = entry.dep.version;
       if (pinned) return { installed, latest: pinned, hasUpdate: !!installed && installed !== pinned };
-      const latest = await latestNpmVersion(entry.dep.pkg).catch(() => null);
-      const hasUpdate = !!installed && !!latest && cmpSemver(latest, installed) > 0;
+      const published = await latestNpmVersion(entry.dep.pkg).catch(() => null);
+      const latest = entry.id === 'codex-appserver' ? parseCodexVersion(published) : published;
+      const hasUpdate = !!installed && !!latest && (entry.id === 'codex-appserver'
+        ? compareCodexVersions(latest, installed)
+        : cmpSemver(latest, installed)) > 0;
       return { installed, latest, hasUpdate };
     },
 
@@ -1152,7 +1224,9 @@ async function catalogEntryStatus(
     installable: depState === 'not-installed' && isInstallable(entry),
     approxSizeMB: entry.dep.approxSizeMB,
     version: probe?.version ?? null,
-    installedVersion: entry.dep.pkg ? installedBackendVersion(entry.dep.pkg) : null,
+    installedVersion: entry.id === 'codex-appserver'
+      ? parseCodexVersion(probe?.version)
+      : entry.dep.pkg ? installedBackendVersion(entry.dep.pkg) : null,
     canUninstall: isInstallable(entry) && isBackendInstalledInUserDir(entry),
     hint: ok ? undefined : (probe?.hint ?? entry.dep.detectHint),
     isDefault: entry.id === defaultBackend,

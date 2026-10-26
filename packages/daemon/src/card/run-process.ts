@@ -3,6 +3,7 @@ import { md as markdown, type CardElement } from './cards';
 import { processPanel } from './process-panel';
 import { renderRichText } from './markdown-render';
 import { toolPresentation, toolArguments } from './tool-presentation';
+import { statusSymbol } from './process-status';
 import { compactionLine } from './context-gauge';
 import type { Block, ToolEntry, RunState, Terminal } from './run-state';
 
@@ -72,7 +73,7 @@ function processUnits(
         toolGroupTitle(tools),
         tools.map(tool => toolPanel(tool)),
         false,
-        { icon: toolPresentation(tools[0]!).icon, spacing: 8 },
+        { icon: toolPresentation(tools[0]!).icon, spacing: 8, titleColor: false },
       ),
       itemCount: tools.length,
     });
@@ -110,7 +111,7 @@ function compactToolUnits(tools: readonly ToolEntry[]): ProcessUnit[] {
         toolGroupTitle(batch),
         [markdown(entries.join('\n\n'))],
         false,
-        { icon: toolPresentation(batch[0]!).icon, spacing: 8 },
+        { icon: toolPresentation(batch[0]!).icon, spacing: 8, titleColor: false },
       ),
       itemCount: batch.length,
     });
@@ -124,7 +125,7 @@ function compactToolUnits(tools: readonly ToolEntry[]): ProcessUnit[] {
       toolGroupTitle([...batch, tool]),
       [markdown([...entries, entry].join('\n\n'))],
       false,
-      { icon: toolPresentation(batch[0] ?? tool).icon, spacing: 8 },
+      { icon: toolPresentation(batch[0] ?? tool).icon, spacing: 8, titleColor: false },
     );
     if (batch.length && Buffer.byteLength(JSON.stringify(candidate), 'utf8') > COMPACT_GROUP_BUDGET) flush();
     batch.push(tool);
@@ -157,7 +158,7 @@ function toolPanel(tool: ToolEntry): CardElement {
     presentation.header,
     [markdown(toolBodyMarkdown(tool) || '_无输出_')],
     false,
-    { icon: presentation.icon, bodyIndent: 20, spacing: 8 },
+    { icon: presentation.icon, bodyIndent: 20, spacing: 8, titleColor: false },
   );
 }
 
@@ -176,9 +177,7 @@ function toolBodyMarkdown(tool: ToolEntry): string {
 
   if (tool.output !== undefined && tool.output !== '') {
     parts.push(`**${tool.status === 'error' ? '错误' : '输出'}**\n${codeBlock(truncateWithNotice(tool.output, OUTPUT_MAX))}`);
-  } else if (tool.status === 'running') {
-    parts.push('_运行中…_');
-  } else if (tool.kind === 'search') {
+  } else if (tool.kind === 'search' && tool.status === 'done') {
     parts.push('_（搜索结果已用于作答，不单独回传）_');
   }
   if (tool.exitCode !== undefined && tool.exitCode !== null) parts.push(`**退出码** \`${String(tool.exitCode)}\``);
@@ -203,7 +202,9 @@ function toolGroupTitle(tools: readonly ToolEntry[]): string {
   const unique = [...new Map(tools.map(tool => [tool.id, tool])).values()];
   const failed = unique.filter(tool => tool.status === 'error').length;
   const running = unique.some(tool => tool.status === 'running');
-  return `${running ? '正在执行' : '已执行'} ${unique.length} 项操作${failed ? ` · ${String(failed)} 项失败` : ''}`;
+  const status = running ? 'running' : failed ? 'failed' : 'completed';
+  return [`<font color='grey'>${unique.length} 项操作</font>`,
+    failed ? `<font color='red'>· ${String(failed)} 项失败</font>` : '', statusSymbol(status)].filter(Boolean).join(' ');
 }
 
 function codeBlock(value: string, language = ''): string {
@@ -227,8 +228,9 @@ export function processTitle(
   elapsedMs?: number,
 ): string {
   const label = elapsedMs === undefined || !Number.isFinite(elapsedMs) ? '执行过程' : `${status === 'running' ? '已处理' : '用时'} ${formatElapsed(elapsedMs)}`;
-  const suffix = status === 'interrupted' ? ' · 已停止' : status === 'idle_timeout' ? ' · 已超时' : status === 'error' ? ' · 失败' : '';
-  return `${status === 'error' ? '❌ ' : ''}${label}${suffix}`;
+  const mark = status === 'running' ? 'running' : status === 'done' ? 'completed'
+    : status === 'interrupted' ? 'stopped' : status === 'error' ? 'failed' : 'unknown';
+  return [`<font color='grey'>${label}${status === 'idle_timeout' ? ' · 已超时' : ''}</font>`, statusSymbol(mark)].filter(Boolean).join(' ');
 }
 
 export function formatElapsed(milliseconds: number): string {

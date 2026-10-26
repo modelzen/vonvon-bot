@@ -8,6 +8,7 @@ import { shutdownResidentClients } from '../src/agent/codex-appserver/client-poo
 import { judgeProcessStats } from '../src/agent/codex-appserver/judge-process';
 import { createJudge } from '../src/judge/judge';
 import { DEFAULT_SMART_PROMPT, JUDGE_ALLOWED } from '../src/judge/prompt';
+import { DEFAULT_SMART_RULES } from '@vonvon/protocol';
 import type { JudgeLine, JudgeRequest, JudgeVariant } from '../src/judge/types';
 import { filesWith } from './helpers/marker-scan';
 
@@ -97,6 +98,24 @@ describe.skipIf(!REAL)('真实 Codex 判断（VONVON_REAL_JUDGE=1）', () => {
   }, 60_000 * RUNS);
 
   // product.md 3.4 例子第 3、4 行，主区没点名（s25 的分类；e12 里约 2.5% 会漏回，所以只记不断言第 3 行的去向）
+  it('默认规则：回应直接称呼和问候，略过别人之间的闲聊', async () => {
+    const cases = [
+      ['小码', 'main'], ['小码你好', 'main'], ['小码在吗？', 'main'],
+      ['小码，1 加 1 等于几？', 'main'], ['今天食堂的红烧肉不错', 'skip'],
+      ['小李，你在吗？', 'skip'],
+    ] as const;
+    for (const [text, expected] of cases) {
+      const result = await judge.judge(request('main', {
+        group: {chatId: 'oc_realjudge', name: '测试群', backend: 'codex-appserver', smartRules: {...DEFAULT_SMART_RULES}, judge: {kind: 'llm', backend: 'codex-appserver', model: 'gpt-6-luna', effort: 'low'}},
+        why: text.startsWith('小码') ? '真人叫了你的完整名字' : '你现在看到了群里的一条新消息',
+        message: {at: Date.now(), from: 'user', name: '张三', text},
+      }));
+      console.log(JSON.stringify({case: text, decision: result.decision, ms: result.ms, error: result.error?.kind}));
+      expect(result.error).toBeUndefined();
+      expect(result.decision).toBe(expected);
+    }
+  }, 120_000);
+
   it('分类：发布要不要砍功能该接话，食堂闲聊不回', async () => {
     const ask = (text: string) => judge.judge(request('main', { message: { at: Date.now(), from: 'user', name: '张三', text: `${text} ${marker}` } }));
     for (let run = 0; run < RUNS; run++) {

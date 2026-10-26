@@ -67,7 +67,7 @@ function normalizedPolicy(policy: SessionTitlePolicySnapshot): SessionTitlePolic
     policy.model.trim() &&
     policy.effort
   ) {
-    return { strategy: 'model', model: policy.model.trim(), effort: policy.effort };
+    return { strategy: 'model', ...(policy.backend ? { backend: policy.backend } : {}), model: policy.model.trim(), effort: policy.effort };
   }
   return { strategy: 'truncate' };
 }
@@ -338,24 +338,22 @@ export class SessionTitleCoordinator {
     let generationError: string | undefined;
     const policy = normalizedPolicy(job.policy ?? { strategy: 'truncate' });
     if (!plan.short && policy.strategy === 'model' && policy.model && policy.effort) {
-      if (backend.generateSessionTitle) {
-        try {
-          const generated = await backend.generateSessionTitle({
-            cwd: job.cwd,
-            prompt: plan.prompt,
-            model: policy.model,
-            effort: policy.effort,
-          });
-          candidate = cleanGeneratedSessionTitle(generated ?? '', plan.fallbackTitle);
-        } catch (err) {
-          // Third-party/removed/unsupported model: never substitute another model.
-          // The deterministic no-cost first-sentence title is the complete fallback.
-          generationError = errorMessage(err);
-          candidate = plan.fallbackTitle;
-          log.info('agent', 'session-title-model-fallback', { backend: job.backend, sessionId: job.sessionId });
-        }
-      } else {
-        generationError = 'backend does not support isolated title generation';
+      try {
+        const generator = this.opts.backendFor(policy.backend ?? job.backend);
+        if (!generator.generateSessionTitle) throw new Error('backend does not support isolated title generation');
+        const generated = await generator.generateSessionTitle({
+          cwd: job.cwd,
+          prompt: plan.prompt,
+          model: policy.model,
+          effort: policy.effort,
+        });
+        candidate = cleanGeneratedSessionTitle(generated ?? '', plan.fallbackTitle);
+      } catch (err) {
+        // Third-party/removed/unsupported model: never substitute another model.
+        // The deterministic no-cost first-sentence title is the complete fallback.
+        generationError = errorMessage(err);
+        candidate = plan.fallbackTitle;
+        log.info('agent', 'session-title-model-fallback', { backend: job.backend, sessionId: job.sessionId });
       }
     }
 

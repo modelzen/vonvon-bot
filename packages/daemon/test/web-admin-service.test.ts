@@ -1,10 +1,10 @@
 import { pendingGroupsSchema } from '@vonvon/protocol';
 import { createPendingGroups, pendingGroupsFile } from '../src/project/pending-groups';
 import { existsSync, rmSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, botPaths, useBotDir } from '../src/config/paths';
 import { seedBots } from './helpers/bot-fixture';
-import { addProject } from '../src/project/registry';
+import { addProject, mutateProject } from '../src/project/registry';
 import { upsertSession } from '../src/bot/session-store';
 import {
   createAdminService,
@@ -16,6 +16,7 @@ import { AdminWriteError, type AdminWriteOp } from '../src/admin/ops';
 import type { CodexSetupService } from '../src/agent/codex-appserver/setup';
 import * as clientPool from '../src/agent/codex-appserver/client-pool';
 import { REQUIRED_SCOPES } from '../src/config/scopes';
+import { cardCallbackFile, recordCardCallback } from '../src/config/card-callback';
 
 // 把整个 ~/.feishu-codex-bridge 指到临时目录，绝不碰真实用户数据。fixture 通过
 // bots/registry/session-store 模块的导出写入（useBotDir 切目录后写）——服务层读
@@ -164,6 +165,7 @@ describe('createReadonlyAdminService · 只读方法（显式路径，不碰全�
     const p = projects[0]!;
     expect(p.name).toBe('proj-a');
     expect(p.kind).toBe('multi');
+    expect(p.enabled).toBe(true); // Old stored projects without the flag are enabled.
     expect(p.origin).toBe('created'); // 缺省回填
     expect(p.mode).toBe('write');
     expect(p.guestMode).toBe('write'); // s15c: deprecated mirror of the one tier
@@ -173,6 +175,31 @@ describe('createReadonlyAdminService · 只读方法（显式路径，不碰全�
     expect(p.backend).toBe('codex-appserver'); // 显式设的后端原样透传
     expect(p.allowedUsersCount).toBe(1);
     expect(p.sessionCount).toBe(2); // oc_other 的 t3、停用的 t1#guest / t2#admin 不算
+  });
+
+  it('listProjects：读取外部保存的停用状态，恢复旧项目的缺省启用状态', async () => {
+    const location = {file: botPaths(BOT_A).projectsFile, dataRoot: paths.appDir};
+    try {
+      await mutateProject('proj-a', project => {project.enabled = false;}, undefined, location);
+      expect((await service.listProjects(BOT_A))[0]?.enabled).toBe(false);
+      expect((await service.listProjects(BOT_B))[0]?.enabled).toBe(true);
+    } finally {
+      await mutateProject('proj-a', project => {delete project.enabled;}, undefined, location);
+    }
+    expect((await service.listProjects(BOT_A))[0]?.enabled).toBe(true);
+  });
+
+  it('listProjects exposes custom permission effects rather than the stored full tier', async () => {
+    const location = { file: botPaths(BOT_A).projectsFile, dataRoot: paths.appDir };
+    try {
+      await mutateProject('proj-a', p => {
+        p.mode = 'full'; p.network = true;
+        p.custom = { backend: 'codex-appserver', settings: { sandbox: 'read-only', network: false } };
+      }, undefined, location);
+      expect((await service.listProjects(BOT_A))[0]).toMatchObject({ mode: 'qa', guestMode: 'qa', network: false });
+    } finally {
+      await mutateProject('proj-a', p => { p.mode = 'write'; delete p.network; delete p.custom; }, undefined, location);
+    }
   });
 
   it('listProjects：per-bot 隔离（B 的项目读不到 A 的数据），且 effective 默认后端回填', async () => {
@@ -287,14 +314,14 @@ describe('createAdminService · daemon 进程内（executeWrite + liveStatus 注
       executeWrite: async (botId, op) => void calls.push({ botId, op }),
     });
     await daemon.switchBackend(BOT_A, 'proj-a', 'codex-appserver');
-    await daemon.setPermissionMode(BOT_A, 'proj-a', { mode: 'qa', network: true });
+    await daemon.setPermissionMode(BOT_A, 'proj-a', { mode: 'qa' });
     await daemon.setNoMention(BOT_A, 'proj-a', false);
     await daemon.setCompletionReminder(BOT_A, { mode: 'long', longTaskMinutes: 8 });
     expect(calls).toEqual([
       { botId: BOT_A, op: { kind: 'switchBackend', project: 'proj-a', backend: 'codex-appserver' } },
       {
         botId: BOT_A,
-        op: { kind: 'setPermissionMode', project: 'proj-a', mode: 'qa', network: true },
+        op: { kind: 'setPermissionMode', project: 'proj-a', mode: 'qa' },
       },
       { botId: BOT_A, op: { kind: 'setNoMention', project: 'proj-a', on: false } },
       { botId: BOT_A, op: { kind: 'setCompletionReminder', mode: 'long', longTaskMinutes: 8 } },
@@ -340,9 +367,10 @@ describe('createAdminService · daemon 进程内（executeWrite + liveStatus 注
 });
 
 describe('createAdminService · getSetupStatus（初始化 checklist 聚合）', () => {
-  // 真飞书 API 一律 mock（绝不打真网络）：token / bot-info / scopes / app_versions。
+  // 真飞书 API 一律 mock：token / bot-info / scopes / app_versions / application。
   // 写一个带明文 secret 的完整 config.json（resolveAppSecret 直接吃明文）到 bot 目录。
   const SETUP_BOT = 'cli_setupbot';
+  const configuredCallback = { state: 'configured', mode: 'websocket' };
 
   function writeCompleteConfig(tenant: 'feishu' | 'lark' = 'feishu'): void {
     const dir = botPaths(SETUP_BOT).dir;
@@ -353,7 +381,7 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
     );
   }
 
-  function stubFetch(opts: { grantedScopes: string[]; eventEvents: string[]; published?: boolean }): typeof fetch {
+  function stubFetch(opts: { grantedScopes: string[]; eventEvents: string[]; published?: boolean; callbackInfo?: unknown }): typeof fetch {
     return (async (input: unknown): Promise<Response> => {
       const u = String(input);
       const json = (body: unknown): Response =>
@@ -373,12 +401,23 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
           data: opts.published === false ? { items: [] } : { items: [{ version: '1.0.0', status: 1, events: opts.eventEvents }] },
         });
       }
+      if (u.includes(`/application/v6/applications/${SETUP_BOT}?`)) {
+        return json({ code: 0, data: { app: { callback_info: opts.callbackInfo ?? {
+          callback_type: 'websocket', subscribed_callbacks: ['card.action.trigger'],
+        } } } });
+      }
       throw new Error('unexpected fetch ' + u);
     }) as unknown as typeof fetch;
   }
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  beforeEach(() => {
+    // Manual confirmation tests also call the aggregate endpoint: never let them
+    // silently contact real Feishu when no test-specific stub was installed.
+    vi.stubGlobal('fetch', stubFetch({ grantedScopes: [], eventEvents: ['im.message.receive_v1'] }));
   });
 
   beforeAll(async () => {
@@ -437,7 +476,7 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
     expect(s.connection.running).toBe(false); // 没锁文件 + 预览态
     expect(s.eventConfigUrl).toContain('/app/cli_setupbot/event');
     expect(s.consoleUrl).toBe('https://open.feishu.cn/app/cli_setupbot');
-    expect(s.cardCallback).toEqual({ confirmed: false });
+    expect(s.cardCallback).toEqual({ confirmed: false, configuration: configuredCallback });
   });
 
   it('卡片回调勾选按 Bot 存在 setup.json，重开后还在；文件坏了按未勾选', async () => {
@@ -445,13 +484,13 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
     rmSync(botPaths(SETUP_BOT).setupFile, { force: true });
     const svc = createAdminService({});
     await svc.confirmCardCallback(SETUP_BOT, true);
-    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: true });
+    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: true, configuration: configuredCallback });
     expect(statSync(botPaths(SETUP_BOT).setupFile).mode & 0o777).toBe(0o600);
-    expect((await createAdminService({}).getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: true });
+    expect((await createAdminService({}).getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: true, configuration: configuredCallback });
     await svc.confirmCardCallback(SETUP_BOT, false);
-    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: false });
+    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: false, configuration: configuredCallback });
     writeFileSync(botPaths(SETUP_BOT).setupFile, '{not json');
-    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: false });
+    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: false, configuration: configuredCallback });
   });
 
   it('不认识的 Bot、目录已删的 Bot 和只读预览都不写卡片回调勾选', async () => {
@@ -463,6 +502,71 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
     writeCompleteConfig();
     await expect(createReadonlyAdminService().confirmCardCallback(SETUP_BOT, true)).rejects.toThrow('卡片回调勾选');
     expect(existsSync(botPaths(SETUP_BOT).setupFile)).toBe(false);
+  });
+
+  it('真实回调证据重开后保留，取消人工勾选不影响验证；轻量读取不调用飞书', async () => {
+    writeCompleteConfig();
+    rmSync(botPaths(SETUP_BOT).setupFile, { force: true });
+    const fetch = vi.fn(() => { throw new Error('must not contact Feishu'); });
+    vi.stubGlobal('fetch', fetch);
+    const svc = createAdminService({});
+    const verifiedAt = 1_790_000_000_000;
+    try {
+      expect(await svc.getCardCallbackStatus!(SETUP_BOT)).toEqual({ confirmed: false });
+      await svc.confirmCardCallback(SETUP_BOT, true);
+      expect(await svc.getCardCallbackStatus!(SETUP_BOT)).toEqual({ confirmed: true });
+      await Promise.all([recordCardCallback(SETUP_BOT, verifiedAt), svc.confirmCardCallback(SETUP_BOT, false)]);
+      expect(await createReadonlyAdminService().getCardCallbackStatus!(SETUP_BOT)).toEqual({ confirmed: true, verifiedAt });
+      expect(await svc.getCardCallbackStatus!(BOT_B)).toEqual({ confirmed: false });
+      await expect(svc.getCardCallbackStatus!('cli_missing')).rejects.toThrow('没有这个 Bot');
+      expect(fetch).not.toHaveBeenCalled();
+      vi.stubGlobal('fetch', stubFetch({ grantedScopes: [], eventEvents: ['im.message.receive_v1'] }));
+      expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: true, verifiedAt, configuration: configuredCallback });
+    } finally {
+      rmSync(cardCallbackFile(SETUP_BOT), { force: true });
+      rmSync(botPaths(SETUP_BOT).setupFile, { force: true });
+    }
+  });
+
+  it('远程配置已订阅不生成本机确认或真实回调证据；刷新会反映配置变化', async () => {
+    writeCompleteConfig();
+    rmSync(botPaths(SETUP_BOT).setupFile, { force: true });
+    rmSync(cardCallbackFile(SETUP_BOT), { force: true });
+    const svc = createReadonlyAdminService();
+    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: false, configuration: configuredCallback });
+    expect(await svc.getCardCallbackStatus!(SETUP_BOT)).toEqual({ confirmed: false });
+    expect(existsSync(botPaths(SETUP_BOT).setupFile)).toBe(false);
+    expect(existsSync(cardCallbackFile(SETUP_BOT))).toBe(false);
+    vi.stubGlobal('fetch', stubFetch({ grantedScopes: [], eventEvents: ['im.message.receive_v1'], callbackInfo: { callback_type: 'websocket', subscribed_callbacks: [] } }));
+    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: false, configuration: { state: 'missing', mode: 'websocket' } });
+  });
+
+  it.each([
+    [{ callback_type: 'webhook', subscribed_callbacks: ['card.action.trigger'] }, { state: 'wrong-mode', mode: 'webhook' }],
+    [{ callback_type: 'websocket' }, { state: 'unchecked', mode: 'websocket', reason: '应用接口未返回可识别的回调订阅列表' }],
+  ])('回调配置诊断不覆盖本机已验证的证据：%j', async (callbackInfo, configuration) => {
+    writeCompleteConfig();
+    const verifiedAt = 1_790_000_000_000;
+    await recordCardCallback(SETUP_BOT, verifiedAt);
+    vi.stubGlobal('fetch', stubFetch({ grantedScopes: [], eventEvents: ['im.message.receive_v1'], callbackInfo }));
+    try {
+      expect((await createReadonlyAdminService().getSetupStatus(SETUP_BOT)).cardCallback)
+        .toEqual({ confirmed: true, verifiedAt, configuration });
+    } finally {
+      rmSync(cardCallbackFile(SETUP_BOT), { force: true });
+    }
+  });
+
+  it('读取回调配置缺权限时，凭据、事件订阅仍返回各自的检测结果', async () => {
+    writeCompleteConfig();
+    const base = stubFetch({ grantedScopes: [], eventEvents: ['im.message.receive_v1'] });
+    vi.stubGlobal('fetch', (async (input: unknown, init?: RequestInit) => String(input).includes(`/applications/${SETUP_BOT}?`)
+      ? new Response(JSON.stringify({ code: 99991672, msg: 'denied' }), { status: 400 })
+      : base(input as string, init)) as typeof fetch);
+    const status = await createReadonlyAdminService().getSetupStatus(SETUP_BOT);
+    expect(status.credentials).toEqual({ ok: true });
+    expect(status.event.state).toBe('ok');
+    expect(status.cardCallback.configuration).toEqual({ state: 'unchecked', reason: '没有读取应用配置的权限，请检查飞书应用权限后重试' });
   });
 
   it.each([
@@ -481,6 +585,7 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
     const s = await createReadonlyAdminService().getSetupStatus(SETUP_BOT);
     expect(s.credentials).toEqual({ ok: false, reason: '飞书接口 10 秒没有响应', unreachable: true });
     expect(s.event).toEqual({ state: 'unchecked', reason: '飞书接口 10 秒没有响应' });
+    expect(s.cardCallback.configuration).toEqual({ state: 'unchecked', reason: '飞书接口 10 秒没有响应' });
   });
 
   it('缺 scope + 事件未发布：missingRequired 非空、event=unpublished', async () => {
@@ -532,6 +637,7 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
     const s = await svc.getSetupStatus(SETUP_BOT);
     expect(s.credentials.ok).toBe(false);
     expect(s.event.state).toBe('unchecked');
+    expect(s.cardCallback.configuration).toEqual({ state: 'unchecked', reason: '配置缺失，无法诊断卡片回调' });
     expect(s.scopes.grantUrl).toContain('/auth?q='); // 深链总归得给
   });
 });

@@ -15,6 +15,7 @@ import { PEOPLE_RETRY_MS, PEOPLE_TTL_MS } from '../src/bot/chat-people';
 import { wakeTriggerText } from '../src/bot/context-weave';
 import { AT_HINT_NOTE, BOT_WAKE_NOTE, INITIATIVE_NOTE } from '../src/bot/session-title';
 import { JUDGE_BUDGET, JudgeBudget } from '../src/bot/smart-intake';
+import type { AgentBackend, JudgeCall } from '../src/agent/types';
 import type { JudgeDeps } from '../src/judge/judge';
 import { localDay } from '../src/judge/usage';
 import type { JudgeRequest, JudgeResult } from '../src/judge/types';
@@ -178,6 +179,8 @@ const settle = async (): Promise<void> => { for (let i = 0; i < 30; i++) await n
 let orchestrator: ReturnType<typeof createOrchestrator>;
 let events: DiagnosticsEvent[] = [];
 const records = () => events.flatMap((event) => event.kind === 'notReplied' ? [event.record] : []);
+const homeDecisions = () => events.flatMap(event => event.kind === 'decision' ? [event.decision] : []);
+const latestActions = () => events.flatMap(event => event.kind === 'latestAction' ? [event.action] : []);
 const send = async (m: EventMessage, sender?: ReceiveOpts['sender']) => orchestrator.onMessage(await receive(m, { bot: BOT, ...(sender ? { sender } : {}) }));
 
 beforeEach(() => {
@@ -224,7 +227,113 @@ beforeEach(() => {
 });
 afterEach(async () => { setDiagnosticsSink(undefined); await orchestrator.shutdown(); });
 
+describe('smart rules from group settings', () => {
+  // Exercise the real intake -> judge -> provider boundary. Only the model and legacy file read are fixtures.
+  async function useRealJudge(source: 'group' | 'bot' | 'default' = 'bot', decision: 'main' | 'skip' = 'skip') {
+    const { createJudge } = await vi.importActual<typeof import('../src/judge/judge')>('../src/judge/judge');
+    const calls: JudgeCall[] = [];
+    const results: JudgeResult[] = [];
+    const readPrompt = vi.fn(async () => ({ source, text: 'LEGACY_SMART_PROMPT', path: '/fixture/SMART.md' }));
+    const backend = {
+      id: 'codex-appserver', displayName: 'Codex', listModels: async () => [],
+      judge: async (call: JudgeCall) => { calls.push(call); return { text: JSON.stringify({ decision, reason: '' }) }; },
+    } as unknown as AgentBackend;
+    const judge = createJudge({ backendFor: () => backend, readPrompt, cwd: async () => workspace });
+    fake.judge.mockImplementation(async (request: JudgeRequest) => {
+      const result = await judge.judge(request);
+      results.push(result);
+      return result;
+    });
+    fake.judgeShutdown.mockImplementation(() => judge.shutdown());
+    return { calls, results, readPrompt };
+  }
+
+  it('sends both saved group rules to the model ahead of legacy prompts and executes a reply decision', async () => {
+    fake.project = { ...base, smartRules: { respond: '遇到需要协助的技术问题就回复', newTopic: '独立的问题创建新话题' } };
+    const judge = await useRealJudge('bot', 'main');
+    await send(says('登录接口报错，请帮忙看一下'));
+    await vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
+    expect(judge.results).toEqual([expect.objectContaining({ decision: 'main', promptSource: 'group' })]);
+    expect(judge.calls[0]!.system).toContain('遇到需要协助的技术问题就回复');
+    expect(judge.calls[0]!.system).toContain('独立的问题创建新话题');
+    expect(judge.calls[0]!.system).not.toContain('LEGACY_SMART_PROMPT');
+    expect(judge.readPrompt).not.toHaveBeenCalled();
+    expect(fake.inputs[0]).toContain('登录接口报错，请帮忙看一下');
+  });
+
+  it('uses edited group rules on the next incoming message without restarting the bot', async () => {
+    fake.project = { ...base, smartRules: { respond: '仅关注部署问题', newTopic: '部署故障单开话题' } };
+    const judge = await useRealJudge();
+    await send(says('第一条消息'));
+    await vi.waitFor(() => expect(records()).toHaveLength(1));
+    fake.project = { ...base, smartRules: { respond: '也关注测试问题', newTopic: '测试失败单开话题' } };
+    await send(says('第二条消息'));
+    await vi.waitFor(() => expect(records()).toHaveLength(2));
+    expect(judge.calls).toHaveLength(2);
+    expect(judge.calls[0]!.system).toContain('仅关注部署问题');
+    expect(judge.calls[0]!.system).toContain('部署故障单开话题');
+    expect(judge.calls[1]!.system).toContain('也关注测试问题');
+    expect(judge.calls[1]!.system).toContain('测试失败单开话题');
+    expect(judge.calls[1]!.system).not.toContain('仅关注部署问题');
+    expect(judge.readPrompt).not.toHaveBeenCalled();
+  });
+
+  it.each(['group', 'bot', 'default'] as const)('keeps the legacy %s prompt source when no group rules are saved', async source => {
+    const judge = await useRealJudge(source);
+    await send(says('没有群内规则时仍使用原来的提示词'));
+    await vi.waitFor(() => expect(records()).toHaveLength(1));
+    expect(judge.readPrompt).toHaveBeenCalledExactlyOnceWith(APP, CHAT);
+    expect(judge.calls[0]!.system).toContain('LEGACY_SMART_PROMPT');
+    expect(judge.results).toEqual([expect.objectContaining({ decision: 'skip', promptSource: source })]);
+  });
+});
+
 describe('smart mode intake (s25)', () => {
+  it('publishes a successful model intent at decision time with no prompt, reason or sender content', async () => {
+    const msg = says('PRIVATE_MESSAGE', { at: true });
+    await send(msg); await judged(msg);
+    const before = Date.now();
+    await decide(msg, result('topic', { reason: 'PRIVATE_REASON' }));
+    await vi.waitFor(() => expect(homeDecisions()).toHaveLength(1));
+    const decision = homeDecisions()[0]!;
+    expect(decision).toMatchObject({ groupId: CHAT, place: 'main', decision: 'topic', trigger: 'mention', messageAt: Number(msg.create_time) });
+    expect(decision.decidedAt).toBeGreaterThanOrEqual(before);
+    expect(decision.decidedAt).toBeLessThanOrEqual(Date.now());
+    expect(decision).not.toHaveProperty('messageCount');
+    expect(JSON.stringify(decision)).not.toMatch(/PRIVATE|om_smart_|ou_owner/);
+  });
+
+  it('never publishes failed, fallback, recalled, budgeted or command paths as model decisions', async () => {
+    const failed = says('failed', { at: true });
+    await send(failed); await decide(failed, result('skip', { error: { kind: 'timeout' } }));
+    await vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
+    const recalled = says('recalled'); await send(recalled); await judged(recalled);
+    await orchestrator.onRecall({ messageId: idOf(recalled), chatId: CHAT });
+    const budget = vi.spyOn(JudgeBudget.prototype, 'take').mockReturnValue(false);
+    try { await send(says('budget')); await settle(); } finally { budget.mockRestore(); }
+    await send(says('/help', { at: true })); await settle();
+    expect(homeDecisions()).toEqual([]);
+  });
+
+  it.each(['done', 'error', 'empty', 'missing-done', 'delivery-failed'] as const)('reports a reply only after confirmed nonempty successful delivery: %s', async outcome => {
+    fake.project = { ...base, smart: false };
+    fake.finalOk = outcome !== 'delivery-failed';
+    fake.events = async function* () {
+      if (outcome !== 'empty') yield { type: 'text', itemId: 'answer', text: 'PRIVATE_ANSWER' };
+      if (outcome === 'error') yield { type: 'error', message: 'failure', willRetry: false };
+      else if (outcome !== 'missing-done') yield { type: 'done', turnId: 'completed' };
+    };
+    await send(says('question', { at: true, thread: 'omt_activity' }));
+    await vi.waitFor(() => expect(fake.finals).toHaveLength(1)); await settle();
+    expect(latestActions()).toHaveLength(outcome === 'done' ? 1 : 0);
+    if (outcome === 'done') expect(latestActions()[0]).toMatchObject({ groupId: CHAT, kind: 'replied' });
+    expect(JSON.stringify(latestActions())).not.toContain('PRIVATE_ANSWER');
+    const ended = new Set(events.flatMap(event => event.kind === 'activityEnded' ? [event.id] : []));
+    const running = events.flatMap(event => event.kind === 'activity' ? [event.activity.id] : []);
+    expect(running.length).toBeGreaterThan(0);
+    expect(running.every(id => ended.has(id))).toBe(true);
+  });
+
   it('a judgement does not hold the chat: a topic @ is answered while the main area is still judged (A1)', async () => {
     const chatter = says('这个报错是不是缓存的问题');
     await send(chatter); // returns while the judgement runs
@@ -1152,6 +1261,7 @@ describe('bot wake fallbacks and queued turns (s27a)', () => {
       await send(first);
       if (place === 'main') await decide(first, result('main'));
       await vi.waitFor(() => expect(fake.finals).toHaveLength(1)); await settle();
+      if (place === 'topic') fake.list.mockResolvedValueOnce({ code: 0, data: { items: [{ message_id: 'om_compact_root', chat_id: CHAT, thread_id: key }] } });
       compact = orchestrator.collaboration({ action: 'compact', projectName: 'demo', chatId: CHAT, threadId: key });
       await entered.promise;
       const bot = says('BOT_DURING_COMPACT', { at: true, ...location });
@@ -1165,7 +1275,7 @@ describe('bot wake fallbacks and queued turns (s27a)', () => {
       expect(records().filter(record => record.reason === 'bot-wake-dropped')).toEqual([
         expect.objectContaining({ place, detail: '会话被占用' }),
       ]);
-      expect(fake.send).toHaveBeenLastCalledWith(CHAT, { markdown: '操作期间收到的 1 条消息未执行，请重发。' });
+      expect(fake.send).toHaveBeenLastCalledWith(CHAT, { markdown: '操作期间收到的 1 条消息未执行，请重发。' }, place === 'topic' ? { replyTo: 'om_compact_root', replyInThread: true } : undefined);
       expect(fake.inputs).toHaveLength(1);
     } finally { gate.resolve(); await compact; list.mockRestore(); }
   });
@@ -1394,11 +1504,13 @@ describe('attention (s25g)', () => {
   it('44. batches three arrivals, emits one diagnostic, and backs off to three minutes', async () => {
     const a = says('BATCH_A'), b = says('BATCH_B'), c = says('BATCH_C');
     for (const msg of [a, b, c]) await send(msg); await advance(s(20));
+    const { req } = await judged(c);
     expect([...asked.keys()]).toEqual([idOf(c)]);
-    expect((await judged(c)).req.context.filter(l => l.fresh).map(l => l.id)).toEqual([idOf(a), idOf(b)]);
+    expect(req.context.filter(l => l.fresh).map(l => l.id)).toEqual([idOf(a), idOf(b)]);
     await decide(c, result('skip', { reason: '闲聊' })); await settle();
     expect(noted('judge-skip')).toHaveLength(1);
     expect(noted('judge-skip')[0]).toMatchObject({ times: 3, detail: '闲聊', ref: idOf(c).slice(-6) });
+    expect(homeDecisions()).toEqual([expect.objectContaining({ decision: 'skip', trigger: 'glance', messageCount: 3, messageAt: Number(c.create_time), decidedAt: clock })]);
     const d = says('BATCH_D'); await send(d); await advance(s(20)); expect(asked.has(idOf(d))).toBe(false);
     await advance(m(3)); expect((await judged(d)).req.why).toContain('3 分钟没看这里了');
   });
@@ -2326,6 +2438,10 @@ describe('smart reminder runtime (s27b3)', () => {
       expect(await orchestrator.collaboration({ action: 'context', projectName: 'demo', chatId: CHAT, threadId: 'omt_goal_reminder' })).toMatchObject({ run: { reminderRequested: false } });
       expect(JSON.stringify([fake.cards, fake.liveCards])).not.toContain('完成后提醒我');
       gate.resolve(); await settle(); expect(posts()).toHaveLength(0);
+      await vi.waitFor(() => expect(latestActions()).toEqual([expect.objectContaining({ groupId: CHAT, kind: 'replied' })]));
+      const ids = events.flatMap(event => event.kind === 'activity' ? [event.activity.id] : []);
+      expect(ids.length).toBeGreaterThan(0);
+      expect(events.filter(event => event.kind === 'activityEnded').map(event => event.id)).toEqual(expect.arrayContaining([...new Set(ids)]));
     } finally { gate.resolve(); }
   });
 

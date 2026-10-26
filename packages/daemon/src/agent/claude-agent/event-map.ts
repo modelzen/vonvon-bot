@@ -259,9 +259,10 @@ export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
     const out: AgentEvent[] = [];
     for (const block of msg.message.content) {
       if (block.type === 'tool_use' || block.type === 'server_tool_use') {
-        const input = block.input;
+        const input = block.input && typeof block.input === 'object' ? Object.fromEntries(Object.entries(block.input)) : {};
         out.push({ type: 'subagent_step', id: msg.agent_id, stepId: block.id,
-          title: toolTitle(block.name, input && typeof input === 'object' ? Object.fromEntries(Object.entries(input)) : {}, ctx.cwd), status: 'running' });
+          title: toolTitle(block.name, input, ctx.cwd), status: 'running',
+          kind: toolKind(block.name), detail: toolDetail(block.name, input) });
       } else if (block.type === 'tool_result') {
         out.push({ type: 'subagent_step', id: msg.agent_id, stepId: block.tool_use_id,
           title: '', status: block.is_error ? 'failed' : 'done' });

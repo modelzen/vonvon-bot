@@ -1,6 +1,7 @@
 import type { BotSettingsEdit, SettingsAction, SettingsSave, SettingsActionResult, HostSettings } from './settings-types';
 import { backendIds } from '../agent';
-import { catalogById } from '../agent/catalog';
+import { permissionTable, tableEnv, tierInfo, TIER_NETWORK } from '../agent/permission';
+import { groupBackendId, groupPermission } from '../config/execution';
 import type { AgentBackend, BackendProbe, PermissionMode, ReasoningEffort } from '../agent/types';
 import { tierLabel, type BackendProbeRow } from '../card/dm-cards';
 import {
@@ -16,6 +17,7 @@ import { loadConfig, saveConfig } from '../config/store';
 import {
   effectiveMode,
   getProjectByName,
+  mutateProject,
   sessionModeOf,
   updateProject,
   type Project,
@@ -48,7 +50,6 @@ export type AdminWriteOp =
       kind: 'setPermissionMode';
       project: string;
       mode?: PermissionMode;
-      network?: boolean;
     }
   | { kind: 'setNoMention'; project: string; on: boolean }
   | {
@@ -147,7 +148,7 @@ export function validateBackendSwitch(opts: {
     const tier = effectiveMode(opts.project);
     if (!opts.supportedModes.includes(tier)) {
       return (
-        `该后端仅支持 ${opts.supportedModes.map(tierLabel).join(' / ')} 权限档，` +
+        `该后端仅支持 ${opts.supportedModes.map(tierLabel).join(' / ')} 权限，` +
         `本项目当前为 ${tierLabel(tier)} —— 请先在「🔐 权限」调整到支持的档位再切换。`
       );
     }
@@ -221,44 +222,46 @@ export async function performBackendSwitch(opts: {
     probe,
   });
   if (reason) return { ok: false, reason };
-  await updateProject(opts.projectName, { backend: opts.target });
+  await mutateProject(opts.projectName, latest => {
+    if (groupBackendId(latest) !== opts.target) {
+      const mode = groupPermission(latest).tier;
+      latest.mode = mode;
+      latest.network = TIER_NETWORK[mode];
+      delete latest.custom;
+    }
+    latest.backend = opts.target;
+  });
   return { ok: true, project: await freshOr(opts.projectName, { ...p, backend: opts.target }) };
 }
 
 /**
- * 🔐 设置权限档（DM dm.proj.perm.submit 与 Web setPermissionMode 同源）：落盘
- * 权限档 mode / 联网，再驱逐本项目活跃会话让新档立即生效（codex 沙箱在
+ * 🔐 设置权限（DM dm.proj.perm.submit 与 Web setPermissionMode 同源）：落盘
+ * mode 和随档的联网效果、清除自定义，再驱逐本项目活跃会话让新档立即生效（codex 沙箱在
  * thread/start 绑定后不可变）。mode 缺省 = 不改。
  */
 export async function performSetPermissionMode(opts: {
   projectName: string;
   mode?: PermissionMode;
-  network?: boolean;
+  /** The active runtime backend supplies both supported modes and host sandbox availability. */
+  backendFor: (id: string) => AgentBackend;
   /** orchestrator 进程内驱逐（LIVE 线程只存在于 bot 进程内存里） */
   evictLiveSessionsForChat: (chatId: string) => Promise<void>;
 }): Promise<AdminWriteOutcome> {
   // Web 来路的档位值未经 DM 端 asTier 收窄，这里再守一道（DM 来路恒合法）。
-  if (opts.mode !== undefined && !TIERS.includes(opts.mode)) return { ok: false, reason: `未知权限档「${String(opts.mode)}」` };
+  if (opts.mode !== undefined && !TIERS.includes(opts.mode)) return { ok: false, reason: `未知权限「${String(opts.mode)}」` };
   const p = await getProjectByName(opts.projectName);
   if (!p) return { ok: false, reason: `项目「${opts.projectName}」不存在` };
-  // 后端档位兼容守门：后端在创建时选定、运行时固定（不支持切换），但权限档可改。
-  // 若把档改到该后端的 supportedModes 之外（某后端若只支持部分档，却改到档外），
-  // 新话题会在 backend.startThread 的 fail-closed 守卫处直接抛错、整群卡死。提前在这里拦住，
-  // 给清晰原因，而不是让用户改完才发现聊不了。codex（supportedModes undefined）全档放行。
-  const entry = p.backend ? catalogById(p.backend) : undefined;
-  if (entry?.supportedModes) {
-    const bad = opts.mode ?? effectiveMode(p);
-    if (!entry.supportedModes.includes(bad)) {
-      return {
-        ok: false,
-        reason:
-          `项目的后端「${entry.displayName}」仅支持 ${entry.supportedModes.map(tierLabel).join(' / ')} 权限档，` +
-          `无法改到「${tierLabel(bad)}」。该后端是创建时选定、运行时固定的；如需更低权限档，请删项目后改用 codex 后端重建。`,
-      };
-    }
-  }
-  // updateProject 跳过 undefined 值 —— 与 DM 旧写法 {...(mode?{mode}:{})} 等价。旧行的 guestMode 在这次写盘时去掉（s15c）。
-  await updateProject(opts.projectName, { mode: opts.mode, network: opts.network });
+  if (opts.mode === undefined) return { ok: true, project: p };
+  const backend = groupBackendId(p);
+  const be = opts.backendFor(backend);
+  const info = tierInfo(permissionTable(backend), tableEnv(be), opts.mode);
+  if (info.unavailable) return { ok: false, reason: info.unavailable };
+  const mode = opts.mode;
+  await mutateProject(opts.projectName, latest => {
+    latest.mode = mode;
+    latest.network = TIER_NETWORK[mode];
+    delete latest.custom;
+  });
   await opts.evictLiveSessionsForChat(p.chatId);
   return { ok: true, project: await freshOr(opts.projectName, p) };
 }
@@ -392,7 +395,7 @@ export async function runAdminWriteOp(
       return performSetPermissionMode({
         projectName: op.project,
         mode: op.mode,
-        network: op.network,
+        backendFor: deps.backendFor,
         evictLiveSessionsForChat: deps.evictLiveSessionsForChat,
       });
     case 'setNoMention':

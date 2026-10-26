@@ -1,5 +1,6 @@
 import type { BotProfile, GroupProfile, ProjectModelAccess, ProjectWorkspace, ProjectSmartRules, ProjectSkills, ProjectPresentation } from '../project/registry';
 import type { ModelInfo, PermissionMode, ReasoningEffort } from '../agent/types';
+import type { NativeField, TierInfo } from '../agent/permission';
 import type { ModelDisplayMode, PendingPolicy, ResolvedCompletionReminderConfig } from '../config/schema';
 import type { VoiceAction, VoiceView } from '../voice/types';
 export type SettingsScope = {
@@ -28,7 +29,7 @@ export type ModelSelection = {
   /** a hand-typed id, not checked against the model list (product.md 3.11) */
   custom?: boolean;
 };
-/** The judge model of a layer (s23d); `default` removes the layer. See the protocol's judgeSelection. */
+/** The judge model of a layer; group `default` follows the host while Bot `default` removes its override. */
 export type JudgeSelection = {
   kind: 'default';
 } | {
@@ -41,6 +42,9 @@ export type JudgeSelection = {
   kind: 'decision';
   provider: string;
   model: string;
+} | {
+  kind: 'provider';
+  provider: 'codex-appserver' | 'claude-agent' | 'typesafe';
 };
 /** What a view shows: a known kind, or a stored kind this version does not know, as stored (never saved). */
 export type JudgeSelectionView = JudgeSelection | {
@@ -74,8 +78,11 @@ export type TitlePolicy = {
   model: string;
   effort: ReasoningEffort;
 };
+export type GlobalTitlePolicy = { enabled: false } | (Extract<TitlePolicy, { enabled: true }> & { backend: string });
 export interface AgentSections {
   profile: BotProfile;
+  /** 角色设定：SOUL.md 的身份与职责、其他说明（记忆设计 2.3） */
+  role: { identity: string; notes: string };
   cards: {
     showToolCalls: boolean;
     showModel: ModelDisplayMode;
@@ -91,7 +98,7 @@ export interface AgentSections {
     selection: ModelSelection;
   };
   titles: {
-    byBackend: Record<string, TitlePolicy>;
+    policy: GlobalTitlePolicy;
   };
   paths: {
     projectsRootDir: string | null;
@@ -105,6 +112,8 @@ export interface AgentSections {
 }
 export interface ProjectSections {
   profile: GroupProfile;
+  /** 补充职责：绑定行的 `supplement`（P4a 之前和 `profile.persona` 双写） */
+  role: { supplement: string };
   modelAccess: ProjectModelAccess;
   workspace: ProjectWorkspace;
   smartRules: ProjectSmartRules;
@@ -112,9 +121,19 @@ export interface ProjectSections {
   presentation: ProjectPresentation;
   permission: {
     mode: PermissionMode;
+    custom: Record<string, unknown> | null;
     /** @deprecated since s15c always equal to `mode`, never saved; kept so clients from before s15c still parse the view */
     guestMode: PermissionMode;
     network: boolean;
+    options: {
+      tiers: TierInfo[];
+      strength: string;
+      fields: NativeField[];
+      expanded: Record<PermissionMode, Record<string, unknown>>;
+      customSummary?: string;
+      legacy?: boolean;
+      invalid?: boolean;
+    };
   };
   response: {
     noMention: boolean;
@@ -139,6 +158,7 @@ export interface HostSections {
   execution: {
     codexBin: string | null;
   };
+  judge: { defaultProvider?: 'codex-appserver' | 'claude-agent' | 'typesafe'; byProvider: Record<string, { model: string; effort?: ReasoningEffort; custom?: boolean }> };
 }
 export type SettingsAccess = {
   kind: 'writable';
@@ -166,7 +186,8 @@ export interface AgentSettingsView {
   scope: Extract<SettingsScope, {
     kind: 'agent';
   }>;
-  sections: Sections<Omit<AgentSections, 'profile'>> & Partial<Sections<Pick<AgentSections, 'profile'>>>;
+  sections: Sections<Omit<AgentSections, 'profile' | 'role'>> & Partial<Sections<Pick<AgentSections, 'profile' | 'role'>>>;
+  roleInfo?: { draft?: string; headed: boolean; oversized: boolean; mergedNotice: boolean; integrity: 'ok' | 'untracked' | 'changed' };
   ownerOpenId: string | null;
   administrators: {
     feishu?: { ownerOpenId: string | null; adminOpenIds: string[] };
@@ -197,10 +218,11 @@ export interface AgentSettingsView {
   decisionModels?: DecisionModelsView;
 }
 export interface ProjectSettingsView {
+  judgeInheritsHostDefault?: boolean;
   scope: Extract<SettingsScope, {
     kind: 'project';
   }>;
-  sections: Sections<Omit<ProjectSections, 'profile' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation'>> & Partial<Sections<Pick<ProjectSections, 'profile' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation'>>>;
+  sections: Sections<Omit<ProjectSections, 'profile' | 'role' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation'>> & Partial<Sections<Pick<ProjectSections, 'profile' | 'role' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation'>>>;
   botProfile?: BotProfile;
   skillsError?: string;
   skills?: Array<{ path: string; name: string; description: string; source: 'workspace' | 'user' | 'provider'; enabled: boolean }>;
@@ -253,8 +275,9 @@ type SectionEdit<S, M> = {
   };
 }[keyof M];
 /** What a save may set in a group's settings: the view's `permission.guestMode` is output only. */
-type ProjectEdits = Omit<ProjectSections, 'permission'> & { permission: Omit<ProjectSections['permission'], 'guestMode'> };
-export type BotSettingsEdit = SectionEdit<AgentSettingsView['scope'], AgentSections> | SectionEdit<ProjectSettingsView['scope'], ProjectEdits> | SectionEdit<SessionSettingsView['scope'], SessionSections>;
+type ProjectEdits = Omit<ProjectSections, 'permission'> & { permission: Pick<ProjectSections['permission'], 'mode' | 'custom'> };
+type AgentEdits = Omit<AgentSections, 'titles'> & { titles: { policy: GlobalTitlePolicy; byBackend?: Record<string, TitlePolicy> } };
+export type BotSettingsEdit = SectionEdit<AgentSettingsView['scope'], AgentEdits> | SectionEdit<ProjectSettingsView['scope'], ProjectEdits> | SectionEdit<SessionSettingsView['scope'], SessionSections>;
 export type SettingsEdit = BotSettingsEdit | SectionEdit<HostSettingsView['scope'], HostSections>;
 type SectionView<S, M> = {
   [K in keyof M]: {

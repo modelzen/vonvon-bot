@@ -42,6 +42,10 @@ export function judgeChoiceOptions(input: {
       decision.push({value: selected, label: `${decisionModels?.find(service => service.provider === known.provider)?.displayName ?? known.provider} 的 ${known.model}`, selection: known});
     }
   }
+  if (known?.kind === 'provider') {
+    selected = 'provider';
+    language.push({value: selected, label: judgeLabel(known, decisionModels), selection: known});
+  }
   const unknown: JudgeChoiceOption | undefined = known ? undefined : {value: 'unknown', label: '这个版本不认识的设置，判断时当没设', disabled: true};
   if (unknown) selected = 'unknown';
   return {follow, language, decision, unknown, selected};
@@ -50,12 +54,13 @@ export function judgeEffortChoices(value: Extract<JudgeSelection, {kind: 'llm'}>
   const efforts = value.custom ? catalog?.titleEfforts : catalog?.models.find(model => model.id === value.model)?.supportedEfforts;
   const available = [...(efforts ?? [])];
   if (value.effort && !available.includes(value.effort)) available.push(value.effort);
-  return [{value: '', label: backend === 'claude-agent' ? '默认（关思考）' : '默认（最低一档）'}, ...available.map(effort => ({value: effort, label: effort}))];
+  return [{value: '', label: backend === 'claude-agent' ? '默认（关闭思考）' : '默认'}, ...available.map(effort => ({value: effort, label: effort === 'none' ? '关闭思考' : effort}))];
 }
 export function judgeLabel(selection: JudgeSelectionView, decisionModels?: DecisionModelsView): string {
   if (!isKnownJudgeSelection(selection)) return '这个版本的网页不认识的设置';
   switch (selection.kind) {
     case 'default': return '各后端的默认小模型';
+    case 'provider': return `${selection.provider === 'codex-appserver' ? 'Codex' : selection.provider === 'claude-agent' ? 'Claude' : 'Jev'}（跟随决策模型页配置）`;
     case 'llm': return `${selection.model}${selection.effort ? `（推理强度 ${selection.effort}）` : ''}`;
     case 'decision': {
       const service = decisionModels?.find(service => service.provider === selection.provider);
@@ -68,5 +73,5 @@ export function judgeKeyNotice(selection: JudgeSelectionView | undefined, decisi
   const service = decisionModels?.find(service => service.provider === selection.provider);
   if (!service) return;
   if (service.keyUnreadable) return {title: '读不了密钥库', text: `看不出填没填 ${service.displayName} 的 key，读得了之前${MEANWHILE}。`};
-  if (!service.keySet) return {title: '还没填 key', text: `还没填 ${service.displayName} 的 key，填之前${MEANWHILE}。在密钥页填，或者在终端运行 vonvon secrets set ${service.keyId}，按提示粘贴。`};
+  if (!service.keySet) return {title: '还没填 key', text: `还没填 ${service.displayName} 的 key，填之前${MEANWHILE}。请在决策模型页添加密钥。`};
 }

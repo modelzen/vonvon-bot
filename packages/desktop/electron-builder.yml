@@ -2,6 +2,12 @@ appId: com.vonvon.bot.desktop
 productName: Vonvon Bot
 electronVersion: 44.4.5
 electronDist: ../../node_modules/electron/dist
+# Non-macOS Electron distributions use hyphenated .pak locale names.
+electronLanguages:
+  - en-US
+  - en-GB
+  - zh-CN
+  - zh-TW
 directories:
   app: stage
   output: dist/package
@@ -13,11 +19,18 @@ files:
   - package.json
   - "!node_modules/**"
 asar: true
+afterPack: ../../scripts/desktop-backend-policy.mjs
 extraResources:
   - from: stage/daemon
     to: daemon
     filter:
-      - "**/*"
+      - "dist/**/*"
+      - "bin/**/*"
+      - "package.json"
+      - "LICENSE*"
+      - "NOTICE"
+      - "PROVENANCE.md"
+      - "import-core.json"
   - from: stage/ui
     to: ui/dist
     filter:
@@ -36,7 +49,13 @@ extraResources:
       - "**/*"
 npmRebuild: false
 mac:
-  icon: ../ui/public/vonvon-logo.png
+  # macOS uses .lproj names; electron-builder does not normalize '-' and '_'.
+  electronLanguages:
+    - en
+    - en_GB
+    - zh_CN
+    - zh_TW
+  icon: assets/macos-icon.png
   category: public.app-category.developer-tools
   target:
     - dmg

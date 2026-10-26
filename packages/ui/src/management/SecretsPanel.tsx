@@ -1,15 +1,15 @@
+import {RefreshCw} from 'lucide-react';
 import {Fragment, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode} from 'react';
-import {KeyRound} from 'lucide-react';
 import {formatTime, keyProblem, type SecretService} from '@vonvon/protocol';
 import {useClient} from '../client-context';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
-import {Button, FormField, InlineNotice, PageHeader, StatusBadge, type StatusTone} from '../reference/components/ui';
+import {Button, IconButton, FormField, InlineNotice, StatusBadge, type StatusTone} from '../reference/components/ui';
 import {ConfirmDialog, Dialog} from '../reference/components/ui/Dialog';
-import {settingAnchor} from '../search';
 import {
-  MEANWHILE, OLD_DAEMON, choice, errorText, keyDiagnosis, keyFlows, keyStatus, removalCopy, rereads, resultCopy, secretsReader, testTone, testedText,
+  MEANWHILE, OLD_DAEMON, errorText, keyDiagnosis, keyFlows, keyStatus, removalCopy, rereads, resultCopy, secretsReader, testTone, testedText,
   unreadNotes, useCount, useName, useNote, type FillFlow, type KeyFlows, type RowState, type SecretsRead, type SecretsView,
 } from './secretsModel';
+import {DecisionProviderSettings} from './DecisionProviderSettings';
 import './secrets.css';
 
 /** Reads the list on entering a page and on coming back to the window: nothing in the snapshot changes when a key does
@@ -42,10 +42,10 @@ export function KeyRow({service, view, row, onFill, onReplace, onRemove, onTest,
 }) {
   const status = keyStatus(service);
   const busy = Boolean(row.busy);
-  const purpose = `决策模型 ${service.models.map(model => model.displayName).join('、') || service.displayName} 用它判断回不回。`;
+  const purpose = service.status === 'set' ? '' : '添加后即可使用 Jev 智能判断。';
   const meanwhile = service.inUse.length || view.botsUnreadable || view.unreadBots
     ? `${service.status === 'invalid' ? '重新填' : '填'}之前，选了它的 Bot 和飞书群${MEANWHILE}。` : '';
-  const line = row.busy === 'saving' ? <StatusBadge tone="neutral">正在存…</StatusBadge>
+  const line = row.busy === 'saving' ? <StatusBadge tone="neutral">正在保存…</StatusBadge>
     : row.tested ? <StatusBadge tone={testTone(row.tested.outcome)}>{`${formatTime(row.tested.at)} ${testedText(row.tested)}`}</StatusBadge> : null;
   const tested = <span className="secrets-tested" role="status">{line}</span>;
   let description: ReactNode;
@@ -54,29 +54,29 @@ export function KeyRow({service, view, row, onFill, onReplace, onRemove, onTest,
     case 'set':
       description = <>{purpose}{tested}</>;
       actions = <>
-        <Button size="sm" loading={row.busy === 'testing'} disabled={busy} onClick={onTest}>试一次</Button>
-        <Button size="sm" disabled={busy} onClick={onReplace}>换 key</Button>
+        <Button size="sm" loading={row.busy === 'testing'} disabled={busy} onClick={onTest}>验证</Button>
+        <Button size="sm" disabled={busy} onClick={onReplace}>更换</Button>
         <Button size="sm" variant="ghost" disabled={busy} onClick={onRemove}>删除</Button>
       </>;
       break;
     case 'missing':
       description = <>{purpose}{meanwhile}{tested}</>;
-      actions = <Button size="sm" variant="primary" disabled={busy} onClick={onFill}>填 key</Button>;
+      actions = <Button size="sm" variant="primary" disabled={busy} onClick={onFill}>添加密钥</Button>;
       break;
     case 'invalid':
-      description = <>存着的 key 有空格或看不见的字符，判断时当没填。重新填一次整串 key。{meanwhile}{tested}</>;
+      description = <>密钥包含空格或不可见字符，无法使用。请重新添加。{meanwhile}{tested}</>;
       actions = <>
-        <Button size="sm" variant="primary" disabled={busy} onClick={onFill}>重新填</Button>
+        <Button size="sm" variant="primary" disabled={busy} onClick={onFill}>重新添加</Button>
         <Button size="sm" variant="ghost" disabled={busy} onClick={onRemove}>删除</Button>
       </>;
       break;
     case 'unreadable':
       // the command line does not ask for a key then, and neither does this page: a save hits the same error
-      description = <>{service.problem ?? '密钥库读不了'}（<code>{service.code ?? 'UNKNOWN'}</code>）。读得了之前看不出填没填，也填不进去；选了它的 Bot 和飞书群{MEANWHILE}。原话在 daemon 日志的 <code>secrets.unreadable</code>。{tested}</>;
-      actions = <Button size="sm" variant="ghost" disabled={busy} onClick={onOpenLogs}>去看日志</Button>;
+      description = <>{service.problem ?? '密钥库读不了'}（<code>{service.code ?? 'UNKNOWN'}</code>）。暂时无法读取或保存；使用它的 Bot 和群聊{MEANWHILE}。详见日志 <code>secrets.unreadable</code>。{tested}</>;
+      actions = <Button size="sm" variant="ghost" disabled={busy} onClick={onOpenLogs}>查看日志</Button>;
       break;
   }
-  return <SettingsRow className={keyRowClass(service.keyId)} title={`${service.displayName} 的 key`} description={description}
+  return <SettingsRow className={keyRowClass(service.keyId)} title="API 密钥" description={service.status === 'set' && !line ? undefined : description}
     trailing={<span className="setup-step-trailing">{pill(status.text, status.tone)}{actions}</span>}/>;
 }
 /** No wrapper around a row: the group's separators go between sibling rows. */
@@ -86,6 +86,7 @@ const notesOf = (notes: string[]) => notes.map(note => <span className="secrets-
 
 export function UsesRow({service, view}: {service: SecretService; view: SecretsView}) {
   const notes = unreadNotes(view);
+  if (!service.inUse.length && !notes.length) return null;
   const description = service.inUse.length
     ? <>
       <ul className="secrets-uses">{service.inUse.map(use => <li key={`${use.agentId}-${use.groupId ?? ''}`}>
@@ -93,15 +94,17 @@ export function UsesRow({service, view}: {service: SecretService; view: SecretsV
       </li>)}</ul>
       {notesOf(notes)}
     </>
-    : notes.length ? notesOf(notes) : `现在没有 Bot 或飞书群选它。在智能群的群详情页把「判断模型」选成 ${choice(service)}，才用这个 key。`;
+    : notesOf(notes);
   // the count stays by the title however long the list (多角度审查 B4)
-  return <SettingsRow className="secrets-uses-row" title="谁在用" description={description}
-    trailing={view.botsUnreadable ? pill('Bot 清单读不了', 'warning') : service.inUse.length ? <StatusBadge>{useCount(service.inUse)}</StatusBadge> : undefined}/>;
+  return <details className="decision-uses-disclosure" open={notes.length ? true : undefined}>
+    <summary><span>使用范围</span><span className="decision-uses-count">{view.botsUnreadable ? 'Bot 清单读不了' : useCount(service.inUse)}<span aria-hidden="true" className="decision-uses-chevron">›</span></span></summary>
+    <div className="decision-uses-content">{description}</div>
+  </details>;
 }
 
 const fillDescription = (flow: FillFlow) => flow.replacing
-  ? `整串重填，${flow.was ? `现在的 ••••${flow.was} 会被换掉` : '现在存的那串会被换掉'}。存在本机，只有 daemon 读它，页面上只显示末四位。`
-  : '存在本机，只有 daemon 读它，页面上只显示末四位。填完马上试一次能不能用。';
+  ? `将替换${flow.was ? `末四位为 ${flow.was} 的密钥` : '当前密钥'}。密钥仅保存在本机。`
+  : '密钥仅保存在本机，保存后自动验证。';
 
 /** Enter submits the key, except while an input method is still composing. */
 export const submitsOnKey = (key: string, composing: boolean): boolean => key === 'Enter' && !composing;
@@ -152,34 +155,34 @@ export function FillKeyDialog({flow, service, onClose, onSubmit, onAgain, onRete
     event.preventDefault();
     submit();
   }
-  const title = `${flow.replacing ? '换' : '填'} ${service.displayName} 的 key`;
+  const title = `${flow.replacing ? '更换' : '添加'} ${service.provider === 'typesafe' ? 'Jev' : service.displayName} 密钥`;
   const progress = (text: string) => <div className="secrets-dialog-progress" role="status">{text}</div>;
   const tail = flow.last4 ? `（末四位 ${flow.last4}）` : '';
   let content: ReactNode;
   let footer: ReactNode;
   if (flow.step === 'input') {
-    content = <FormField htmlFor={id} label={`${service.displayName} 的 key`} error={problem}
-      description={`在 ${service.displayName} 的控制台里生成；一串可见的英文字符，不能有空格或换行。`}>
+    content = <FormField htmlFor={id} label="API 密钥" error={problem}
+      description={`从 ${service.displayName} 控制台复制完整密钥。`}>
       <div className="secrets-key-field">
-        <input id={id} ref={input} type={shown ? 'text' : 'password'} placeholder="粘贴整串 key"
+        <input id={id} ref={input} type={shown ? 'text' : 'password'} placeholder="粘贴密钥"
           autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false} data-1p-ignore="" data-lpignore="true"
           aria-describedby={`${id}-description${problem ? ` ${id}-error` : ''}`} aria-invalid={problem ? true : undefined}
           onInput={event => { setReady(Boolean(event.currentTarget.value.trim())); setProblem(undefined); }} onKeyDown={keyDown}/>
         <Button aria-pressed={shown} onClick={() => setShown(value => !value)}>{shown ? '隐藏' : '显示'}</Button>
       </div>
     </FormField>;
-    footer = <><Button onClick={close}>取消</Button><Button variant="primary" disabled={!ready} onClick={submit}>保存并试一次</Button></>;
+    footer = <><Button onClick={close}>取消</Button><Button variant="primary" disabled={!ready} onClick={submit}>保存并验证</Button></>;
   } else if (flow.step === 'saving' || flow.step === 'testing' || !flow.result) {
     // both can be closed: the result lands in the key's row (owner 没看稿子，按推荐：v1-plan 第 5 节)
-    content = progress(flow.step === 'saving' ? '正在存…' : `已存下${tail}，正在试一次…`);
+    content = progress(flow.step === 'saving' ? '正在保存…' : `已保存${tail}，正在验证…`);
     // a retest keeps the last result until the new one lands
-    footer = <><Button onClick={close}>关闭</Button><Button variant="primary" loading>{flow.result ? '再试一次' : '保存并试一次'}</Button></>;
+    footer = <><Button onClick={close}>关闭</Button><Button variant="primary" loading>{flow.result ? '重新验证' : '保存并验证'}</Button></>;
   } else {
     const copy = resultCopy(flow.result, service.displayName, flow.last4);
     content = <InlineNotice tone={copy.tone} title={copy.title}>{copy.body}</InlineNotice>;
-    footer = copy.footer === 'replace' ? <><Button onClick={close}>先这样</Button><Button ref={main} variant="primary" onClick={onAgain}>换一个</Button></>
-      : copy.footer === 'retry' ? <><Button onClick={close}>完成</Button><Button ref={main} variant="primary" onClick={onRetest}>再试一次</Button></>
-        : copy.footer === 'again' ? <><Button onClick={close}>取消</Button><Button ref={main} variant="primary" onClick={onAgain}>再试一次</Button></>
+    footer = copy.footer === 'replace' ? <><Button onClick={close}>关闭</Button><Button ref={main} variant="primary" onClick={onAgain}>更换密钥</Button></>
+      : copy.footer === 'retry' ? <><Button onClick={close}>完成</Button><Button ref={main} variant="primary" onClick={onRetest}>重新验证</Button></>
+        : copy.footer === 'again' ? <><Button onClick={close}>取消</Button><Button ref={main} variant="primary" onClick={onAgain}>重试</Button></>
           : <Button ref={main} variant="primary" onClick={close}>完成</Button>;
   }
   // one ref for the Dialog: a new one would rerun its opening effect and bounce the focus
@@ -199,7 +202,7 @@ export function RemoveKeyDialog({removal, service, view, onCancel, onConfirm}: {
   const copy = service && view ? removalCopy(service, view) : undefined;
   const list = (uses: SecretService['inUse']) => <div className="secrets-dialog-list"><ul className="secrets-uses">{uses.map(use =>
     <li key={`${use.agentId}-${use.groupId ?? ''}`}><b>{useName(use)}</b> <span className="secrets-uses__note">· {useNote(use, service!)}</span></li>)}</ul></div>;
-  return <ConfirmDialog open={Boolean(removal && copy)} title={service ? `删 ${service.displayName} 的 key？` : ''} description={copy?.description ?? ''}
+  return <ConfirmDialog open={Boolean(removal && copy)} title={service ? `删除 ${service.displayName} 密钥？` : ''} description={copy?.description ?? ''}
     tone="danger" confirmLabel="删除" pending={removal?.pending} onCancel={onCancel} onConfirm={onConfirm}>
     {copy && <div className="secrets-dialog">
       {copy.lead && <p>{copy.lead}</p>}
@@ -208,7 +211,7 @@ export function RemoveKeyDialog({removal, service, view, onCancel, onConfirm}: {
       {/* the note above already says they are not 智能群, so each line leaves it out */}
       {copy.notSmart.length > 0 && list(copy.notSmart.map(use => ({...use, notSmart: undefined})))}
       {copy.notes.map(note => <p className="secrets-dialog-note" key={note}>{note}</p>)}
-      {removal?.error && <InlineNotice tone="danger" title="没做成">{`没删：${removal.error}。key 还在。`}</InlineNotice>}
+      {removal?.error && <InlineNotice tone="danger" title="删除失败">{`${removal.error}。密钥仍保留。`}</InlineNotice>}
     </div>}
   </ConfirmDialog>;
 }
@@ -218,7 +221,7 @@ export function RemoveKeyDialog({removal, service, view, onCancel, onConfirm}: {
  * 试一次; the page shows only whether a key is in and its last four. A dialog can close while its requests run, and
  * their result lands in the key's row; focus then goes back to the row, to its first button that can be pressed.
  */
-export function SecretsPanel({onOpenLogs, onOpenApplication}: {onOpenLogs: () => void; onOpenApplication: () => void}) {
+export function SecretsPanel({onOpenLogs, onOpenApplication, onOpenProviders}: {onOpenLogs: () => void; onOpenApplication: () => void; onOpenProviders?: () => void}) {
   const client = useClient();
   const {read, reader} = useSecrets();
   const [{rows, fill}, setFlows] = useState<KeyFlows>({rows: {}});
@@ -265,37 +268,40 @@ export function SecretsPanel({onOpenLogs, onOpenApplication}: {onOpenLogs: () =>
     try { await reader.read(); } finally { setReloading(false); }
   }
 
-  const header = <PageHeader icon={KeyRound} title="密钥" description="要 key 的服务，整台机器一份，所有 Bot 共用。"
-    actions={<Button size="sm" loading={reloading} disabled={read.kind === 'loading'} onClick={() => void reload()}>重新读取</Button>}/>;
+  const keyRefresh = <IconButton size="sm" variant="ghost" label="重新读取" title="重新读取密钥状态" loading={reloading} disabled={read.kind === 'loading'} onClick={() => void reload()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>;
+  const header = <div className="environment-lead today-page-heading"><h1>决策模型</h1></div>;
   const fillService = fill && view?.services.find(service => service.keyId === fill.keyId);
   const removeService = removal && view?.services.find(service => service.keyId === removal.keyId);
   let body: ReactNode;
   if (read.kind === 'old') {
-    body = <InlineNotice tone="warning" title="daemon 比网页旧" actions={<Button size="sm" variant="ghost" onClick={onOpenApplication}>去应用与启动</Button>}>
+    body = <InlineNotice tone="warning" title="需要更新后台服务" actions={<Button size="sm" variant="ghost" onClick={onOpenApplication}>去应用与启动</Button>}>
       重启 daemon 后再开这一页。
     </InlineNotice>;
   } else if (read.kind === 'failed') {
-    body = <InlineNotice tone="danger" title="没读到密钥">{read.problem}</InlineNotice>;
+    body = <InlineNotice tone="danger" title="密钥读取失败">{read.problem}</InlineNotice>;
   } else {
-    const services = view?.services;
     body = <>
-      {read.kind === 'ready' && read.problem && <InlineNotice tone="warning" title="没读到最新的">{`${read.problem}。下面是上一次读到的。`}</InlineNotice>}
-      <SettingsGroup label="决策模型" id={settingAnchor('决策模型')}
-        footer={<>Codex 和 Claude 用本机自己的登录，vonvon 不存它们的 key。终端里也能管：<code>vonvon secrets list</code>{(services ?? []).map(service => <span key={service.keyId}>、<code>vonvon secrets set {service.keyId}</code>（按提示粘贴，不回显）、<code>vonvon secrets remove {service.keyId}</code></span>)}。</>}>
+      {read.kind === 'ready' && read.problem && <InlineNotice tone="warning" title="未能刷新密钥">{`${read.problem}。保留上次读取的内容。`}</InlineNotice>}
+      <div className="decision-key-content">
         {!view ? <SettingsRow title="正在读取…"/>
-          : !view.services.length ? <SettingsRow title="这个版本没有要 key 的服务"/>
+          : !view.services.length ? <SettingsRow title="暂无需要密钥的服务"/>
             : view.services.map(service => <Fragment key={service.keyId}>
               <KeyRow service={service} view={view} row={rows[service.keyId] ?? {}}
                 onFill={() => flows.open(service.keyId, false)} onReplace={() => flows.open(service.keyId, true, service.last4)}
                 onRemove={() => setRemoval({keyId: service.keyId, pending: false})} onTest={() => void flows.test(service.keyId)} onOpenLogs={onOpenLogs}/>
-              <UsesRow service={service} view={view}/>
             </Fragment>)}
-      </SettingsGroup>
+      </div>
     </>;
   }
   return <div className="page-stack secrets-page" ref={page}>
     {header}
-    {body}
+    <DecisionProviderSettings services={view?.services} onOpenProviders={onOpenProviders} onManageKey={() => {
+      const service = view?.services.find(item => item.provider === 'typesafe');
+      if (service && (service.status === 'missing' || service.status === 'invalid')) {flows.open(service.keyId, false); return;}
+      const target = page.current?.querySelector<HTMLElement>(service ? `.${keyRowClass(service.keyId)}` : '.decision-key-content');
+      target?.scrollIntoView({block: 'center', behavior: 'smooth'});
+      target?.querySelector<HTMLElement>('button:not([disabled])')?.focus({preventScroll: true});
+    }} keyContent={body} keyUses={view?.services.map(service => <UsesRow key={service.keyId} service={service} view={view}/>)} keyAction={keyRefresh}/>
     <FillKeyDialog flow={fillService ? fill : undefined} service={fillService} onClose={flows.close}
       onSubmit={value => void flows.save(value)} onAgain={flows.again} onRetest={() => void flows.retest()}/>
     <RemoveKeyDialog removal={removeService ? removal : undefined} service={removeService} view={view}
@@ -305,7 +311,7 @@ export function SecretsPanel({onOpenLogs, onOpenApplication}: {onOpenLogs: () =>
 
 /** The 决策模型的 key row of 这台电脑 on the 状态与诊断 page: one per service, always there (s23g2). */
 export function KeyDiagnosticsRows({read, onOpenSecrets, onShowLog}: {read: SecretsRead; onOpenSecrets: () => void; onShowLog: () => void}) {
-  const title = '决策模型的 key';
+  const title = '决策模型密钥';
   const trailing = (status: string, tone: StatusTone, action?: ReactNode) => <span className="setup-step-trailing">{pill(status, tone)}{action}</span>;
   if (read.kind === 'loading') return <SettingsRow title={title} trailing={trailing('检查中', 'neutral')}/>;
   if (read.kind === 'old') return <SettingsRow title={title} description={`${OLD_DAEMON}。`} trailing={trailing('看不到', 'neutral')}/>;

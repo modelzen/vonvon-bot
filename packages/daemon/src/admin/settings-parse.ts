@@ -5,7 +5,10 @@ export class SettingsInputError extends Error {
 }
 type Rule = (value: unknown) => boolean;
 const bool: Rule = value => typeof value === 'boolean';
+const isPlainObject: Rule = value => value !== null && typeof value === 'object' && !Array.isArray(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 const body: Rule = value => typeof value === 'string' && value.length <= 30000;
+/** A legacy SOUL.md may be longer than the other texts; the daemon enforces the write limits. */
+const roleBody: Rule = value => typeof value === 'string' && value.length <= 70000;
 const selector: Rule = value => typeof value === 'string' && value.length > 0 && value.length <= 4096 && !/[\r\n\0]/.test(value);
 const text: Rule = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000;
 const one = (...values: readonly unknown[]): Rule => value => values.includes(value);
@@ -42,6 +45,9 @@ const selection: Rule = value => shape({
 const judgeSelection: Rule = value => shape({
   kind: one('default')
 })(value) || shape({
+  kind: one('provider'),
+  provider: one('codex-appserver', 'claude-agent', 'typesafe')
+})(value) || shape({
   kind: one('llm'),
   backend: text,
   model: text,
@@ -62,6 +68,7 @@ const title: Rule = value => shape({
 const schemas: Record<string, Record<string, Rule>> = {
   agent: {
     profile: shape({ persona: body, memory: body }, true),
+    role: shape({ identity: roleBody, notes: roleBody }, true),
     cards: shape({
       showToolCalls: bool,
       showModel: one('off', 'running', 'always')
@@ -79,12 +86,12 @@ const schemas: Record<string, Record<string, Rule>> = {
       backend: text,
       selection
     }, true),
-    titles: shape({
-      byBackend: value => {
-        const map = settingsObject(value);
-        return Object.keys(map).length === 1 && Object.entries(map).every(([key, policy]) => text(key) && !['__proto__', 'constructor', 'prototype'].includes(key) && title(policy));
-      }
-    }),
+    titles: value => shape({ policy: value => shape({ enabled: one(false) })(value) || shape({
+      enabled: one(true), backend: text, model: text, effort: one(...REASONING_EFFORTS)
+    })(value) })(value) || shape({ byBackend: value => {
+      const map = settingsObject(value);
+      return Object.keys(map).length === 1 && Object.entries(map).every(([key, policy]) => text(key) && !['__proto__', 'constructor', 'prototype'].includes(key) && title(policy));
+    } })(value),
     paths: shape({
       projectsRootDir: path
     }, true),
@@ -97,6 +104,7 @@ const schemas: Record<string, Record<string, Rule>> = {
   },
   project: {
     profile: shape({ persona: body, memory: body, inheritPersona: bool, inheritMemory: bool }, true),
+    role: shape({ supplement: body }, true),
     modelAccess: shape({ backend: text, models: value => array(text)(value) && (value as unknown[]).length > 0, efforts: array(one(...REASONING_EFFORTS)) }, true),
     workspace: shape({ primary: value => value !== null && path(value), directories: array(value => value !== null && path(value)), repositories: array(value => value !== null && path(value)) }, true),
     smartRules: shape({ respond: body, newTopic: body }, true),
@@ -104,7 +112,7 @@ const schemas: Record<string, Record<string, Rule>> = {
     presentation: shape({ voiceEnabled: bool, showToolCalls: bool, showModel: one('off', 'running', 'always'), completionMode: one('manual', 'long', 'failures', 'always'), longTaskMinutes: integer(1, 1440) }, true),
     permission: shape({
       mode: one('qa', 'write', 'full'),
-      network: bool
+      custom: value => value === null || isPlainObject(value)
     }, true),
     response: shape({
       noMention: bool
@@ -127,7 +135,13 @@ const schemas: Record<string, Record<string, Rule>> = {
   host: {
     execution: shape({
       codexBin: path
-    })
+    }),
+    judge: shape({ defaultProvider: one('codex-appserver', 'claude-agent', 'typesafe'), byProvider: value => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+      return Object.entries(value).every(([provider, choice]) =>
+        text(provider) && !['__proto__','constructor','prototype'].includes(provider) && shape({ model: text, effort: one(...REASONING_EFFORTS), custom: bool }, true)(choice)
+        && Object.hasOwn(choice as object, 'model'));
+    } }, true)
   },
 };
 export function parseSettingsScope(input: unknown): SettingsScope {
@@ -166,6 +180,8 @@ export function parseSettingsEdit(input: unknown): SettingsEdit {
     throw new SettingsInputError('设置保存参数无效');
   const scope = parseSettingsScope(object.scope);
   const section = String(object.section);
+  if (scope.kind === 'project' && section === 'permission' && object.patch && typeof object.patch === 'object' && Object.hasOwn(object.patch, 'network'))
+    throw new SettingsInputError('联网已经并进权限的档位：只读不联网，工作区可写联网，完全访问不限制。只读又要联网这类组合，用高级设置 permission.custom。');
   const rule = schemas[scope.kind]?.[section];
   if (!Object.hasOwn(schemas[scope.kind]!, section) || !rule || !rule(object.patch) || Object.keys(settingsObject(object.patch)).length === 0)
     throw new SettingsInputError('设置字段、类型或范围无效');

@@ -1,7 +1,8 @@
+import {RefreshCw} from 'lucide-react';
 import {useClient, useShellCapabilities} from '../client-context';
 import type {VonvonClient} from '@vonvon/client/browser';
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { Button, FormField, InlineNotice, Toggle } from "../reference/components/ui";
+import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { Button, IconButton, FormField, InlineNotice, Toggle } from "../reference/components/ui";
 import { Dialog } from "../reference/components/ui/Dialog";
 import {
   SettingsGroup,
@@ -24,12 +25,16 @@ import {
   type SettingsReply,
   type SettingsScope,
   type SettingsView,
-  type TitlePolicy,
 } from "@vonvon/protocol";
 import "./settings.css";
 import {useDraft} from './DraftGuard';
 import {settingAnchor} from '../search';
 import {JudgeModelChoice} from './JudgeModelChoice';
+import {SettingChoices} from './SettingChoices';
+import {NativePermissionFields, nativePermissionPatch} from './NativePermissionFields';
+import {AnnouncedReadonlyMessages, hasReadonlyMessage, type ReadonlyMessage} from './readonly-messages';
+import './permission-summary.css';
+import {BotTitleSettings, BotCommentSettings} from './BotModelSettings';
 
 type AgentScope = { kind: "agent"; botId: AgentId };
 type ProjectScope = { kind: "project"; botId: AgentId; projectName: string };
@@ -45,7 +50,7 @@ const isSessionView = (view: SettingsView): view is SessionSettingsView =>
   view.scope.kind === "session" && "identity" in view && !("members" in view);
 const isHostView = (view: SettingsView): view is HostSettingsView =>
   view.scope.kind === "host" && "runtime" in view;
-type Section<T> = {
+export type Section<T> = {
   stored: T;
   effective: T;
   revision: string;
@@ -54,8 +59,6 @@ type Section<T> = {
     | { kind: "readonly"; reason: string; message: string };
   apply: { detail: string }[];
 };
-/** The backends a Bot-wide setting can pick, named as the UI names them. */
-const backendChoices = (["codex-appserver", "claude-agent"] as const).map((value) => ({ value, label: backendLabel(value) }));
 const effortOptions = [
   "none",
   "minimal",
@@ -95,13 +98,27 @@ const errorText = (reply: SettingsReply): string | undefined => {
       return "这项设置已在别处更改。请重新读取后确认。";
   }
 };
-function Editor<T extends object>({
+export function Editor<T extends object>({
   title,
   section,
   render,
   save,
+  validate,
+  submitLabel = '保存',
+  allowUnchanged = false,
+  afterSave,
+  showSave = false,
+  savedNotice,
+  initialDraft,
+  renderLayout,
+  prepareSave,
+  autoSave = false,
+  headerAction,
+  hideEffects = false,
 }: {
   title: string;
+  headerAction?: ReactNode;
+  hideEffects?: boolean;
   section: Section<T>;
   render: (
     draft: T,
@@ -109,12 +126,28 @@ function Editor<T extends object>({
     disabled: boolean,
     commit: (patch: Partial<T>) => Promise<void>,
     resetKey: string,
+    discard: () => void,
   ) => ReactNode;
   save: (patch: Partial<T>, revision: string) => Promise<SettingsReply>;
+  validate?: (value: T) => string | undefined;
+  submitLabel?: string;
+  allowUnchanged?: boolean;
+  afterSave?: () => Promise<void>;
+  showSave?: boolean;
+  savedNotice?: (stored: T) => string | undefined;
+  /** Text shown in the form from the start but not saved until the person saves (a prefilled draft). */
+  initialDraft?: Partial<T>;
+  /** A dialog can own its header and footer while reusing draft and revision handling. */
+  renderLayout?: (editor: {content: ReactNode; submit: () => Promise<boolean>; discard: () => void; pending: boolean; canSave: boolean}) => ReactNode;
+  /** Build a payload from the complete selected form value, before sparse-draft keys are lost. */
+  prepareSave?: (patch: Partial<T>, value: T) => Partial<T>;
+  /** Discrete choices commit immediately; failed choices return to the confirmed value. */
+  autoSave?: boolean;
 }) {
+  const announcedReadonly = useContext(AnnouncedReadonlyMessages);
   const [confirmed, setConfirmed] = useState(section);
   const [discardVersion, setDiscardVersion] = useState(0);
-  const [draft, setDraft] = useState<Partial<T>>({});
+  const [draft, setDraft] = useState<Partial<T>>(initialDraft ?? {});
   const [immediate, setImmediate] = useState<
     | { kind: 'idle' }
     | { kind: 'pending'; patch: Partial<T> }
@@ -124,6 +157,7 @@ function Editor<T extends object>({
   const [conflict, setConflict] = useState(false);
   const [conflictCurrent, setConflictCurrent] = useState<Section<T>>();
   const priorRevision = useRef<string | undefined>(undefined);
+  const autoSavePending = useRef(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   useEffect(() => {
@@ -136,13 +170,20 @@ function Editor<T extends object>({
     else { setConfirmed(section); setConflict(false); }
   }, [section, confirmed.revision, draft, immediate.kind, pendingManual]);
   const dirty = Object.keys(draft).length > 0;
-  const guarded = dirty || immediate.kind !== 'idle' || pendingManual;
-  const disabled = pendingManual || immediate.kind !== 'idle' || section.access.kind === "readonly" || conflict;
-  const value = { ...confirmed.stored, ...draft, ...(immediate.kind === 'idle' ? {} : immediate.patch) };
+  const guarded = dirty || immediate.kind === 'pending' || !autoSave && immediate.kind === 'failed' || pendingManual;
+  const disabled = pendingManual || (autoSave ? immediate.kind === 'pending' : immediate.kind !== 'idle') || section.access.kind === "readonly" || conflict;
+  const value = { ...confirmed.stored, ...draft, ...(immediate.kind === 'idle' || autoSave && immediate.kind === 'failed' ? {} : immediate.patch) };
   function edit(next: T) {
+    if (autoSave && (disabled || autoSavePending.current)) return;
     const changed: Partial<T> = {};
     for (const key of Object.keys(next) as (keyof T)[]) {
       if (JSON.stringify(next[key]) !== JSON.stringify(value[key])) changed[key] = next[key];
+    }
+    if (autoSave) {
+      const invalid = validate?.(next);
+      if (invalid) {setError(invalid); return;}
+      void commit(changed);
+      return;
     }
     setDraft(current => {
       const updated = { ...current, ...changed };
@@ -159,7 +200,7 @@ function Editor<T extends object>({
     const canonical = reply.result.section.value;
     priorRevision.current = confirmed.revision;
     setConfirmed({ ...confirmed, stored: canonical.stored as T, effective: canonical.effective as T, revision: canonical.revision, apply: canonical.apply });
-    setNotice(reply.result.effects.map(item => item.detail).join(' ') || '已保存。');
+    setNotice(savedNotice?.(canonical.stored as T) ?? (reply.result.effects.map(item => item.detail).join(' ') || '已保存。'));
     return true;
   }
   function noteConflict(reply: SettingsReply) {
@@ -169,11 +210,12 @@ function Editor<T extends object>({
     setConflict(true);
   }
   async function commit(patch: Partial<T>): Promise<void> {
-    if (disabled || !Object.keys(patch).length) return;
+    if (disabled || autoSave && autoSavePending.current || !Object.keys(patch).length) return;
+    if (autoSave) autoSavePending.current = true;
     setImmediate({kind: 'pending', patch});
     setError(undefined); setNotice(undefined);
     try {
-      const reply = await save(patch, confirmed.revision);
+      const reply = await save(prepareSave ? prepareSave(patch, {...value, ...patch}) : patch, confirmed.revision);
       if (accept(reply)) setImmediate({kind: 'idle'});
       else {
         noteConflict(reply);
@@ -181,14 +223,17 @@ function Editor<T extends object>({
       }
     } catch (error) {
       setImmediate({kind: 'failed', patch, message: error instanceof Error ? error.message : '保存失败。'});
+    } finally {
+      autoSavePending.current = false;
     }
   }
   async function retry(): Promise<string | undefined> {
-    if (immediate.kind !== 'failed' || conflict || section.access.kind === 'readonly') return undefined;
+    if (immediate.kind !== 'failed' || conflict || section.access.kind === 'readonly' || autoSave && autoSavePending.current) return undefined;
+    if (autoSave) autoSavePending.current = true;
     const patch = immediate.patch;
     setImmediate({kind: 'pending', patch});
     try {
-      const reply = await save(patch, confirmed.revision);
+      const reply = await save(prepareSave ? prepareSave(patch, {...value, ...patch}) : patch, confirmed.revision);
       if (accept(reply) && reply.kind === 'saved' && reply.result.kind === 'saved') {
         setImmediate({kind: 'idle'});
         return reply.result.section.value.revision;
@@ -199,33 +244,39 @@ function Editor<T extends object>({
     } catch (error) {
       setImmediate({kind: 'failed', patch, message: error instanceof Error ? error.message : '保存失败。'});
       return undefined;
+    } finally {
+      autoSavePending.current = false;
     }
   }
   async function submit(): Promise<boolean> {
+    const invalid = validate?.(value);
+    if (invalid) { setError(invalid); return false; }
     let revision = confirmed.revision;
     if (immediate.kind === 'failed') {
       const savedRevision = await retry();
       if (!savedRevision) return false;
       if (!dirty) return true;
       revision = savedRevision;
-    } else if (disabled || !dirty) return false;
-    const patch = draft;
+    } else if (disabled || !dirty && !allowUnchanged) return false;
+    const patch = dirty ? draft : value;
     setPendingManual(true);
     setError(undefined);
     setNotice(undefined);
     try {
-      const result = await save(patch, revision);
+      const result = await save(prepareSave ? prepareSave(patch, value) : patch, revision);
       noteConflict(result);
       const failure = errorText(result);
       if (failure) { setError(failure); return false; }
       if (accept(result)) {
         setDraft({});
+        await afterSave?.();
         return true;
       }
       setError('未收到保存确认，请重新读取后重试。');
       return false;
     } catch (error) {
       setError(error instanceof Error ? error.message : "保存失败。");
+      setNotice(undefined);
       return false;
     } finally {
       setPendingManual(false);
@@ -243,53 +294,57 @@ function Editor<T extends object>({
     setError(undefined);
   }
   useDraft(guarded, {title, save: submit, discard});
-  return (
+  const content = (
     <SettingsGroup
-      id={settingAnchor(title)}
-      label={title}
+      id={renderLayout ? undefined : settingAnchor(title)}
+      label={renderLayout ? undefined : title}
+      action={headerAction}
       footer={
         section.access.kind === "readonly"
-          ? section.access.message
-          : effectText(section)
+          ? hasReadonlyMessage(announcedReadonly, section.access) ? undefined : section.access.message
+          : hideEffects || effectText(section) === '下一条消息生效' ? undefined : effectText(section)
       }
     >
-      {render(value, edit, disabled, commit, `${confirmed.revision}:${discardVersion}`)}
-      {dirty && <div className="settings-edit-actions">
-        <Button
+      {render(value, edit, disabled, commit, `${confirmed.revision}:${discardVersion}`, discard)}
+      {!renderLayout && (dirty || allowUnchanged || showSave) && <div className="settings-edit-actions">
+        {dirty && <Button
           size="sm"
           disabled={!dirty || disabled}
           onClick={discard}
         >
           放弃修改
-        </Button>
+        </Button>}
         <Button
           size="sm"
-          disabled={!dirty || disabled}
+          variant="primary"
+          disabled={(!dirty && !allowUnchanged) || disabled}
           onClick={() => void submit()}
         >
-          保存
+          {submitLabel}
         </Button>
       </div>}
-      {immediate.kind === 'pending' && <InlineNotice title="正在保存">这项设置正在保存。</InlineNotice>}
-      {immediate.kind === 'failed' && <InlineNotice title="保存未完成" tone="danger">
+      {immediate.kind === 'pending' && (autoSave ? <p className="settings-save-status" role="status">正在切换…</p> : <InlineNotice title="正在保存">这项设置正在保存。</InlineNotice>)}
+      {immediate.kind === 'failed' && <InlineNotice title={autoSave ? '切换未完成' : '保存未完成'} tone="danger">
         {immediate.message}
-        <div className="settings-edit-actions">
+        <span className="settings-edit-actions">
           <Button size="sm" disabled={conflict} onClick={() => void retry()}>重试</Button>
-          <Button size="sm" onClick={() => setImmediate({kind: 'idle'})}>放弃这项修改</Button>
-        </div>
+          <Button size="sm" onClick={() => setImmediate({kind: 'idle'})}>{autoSave ? '保留原设置' : '放弃这项修改'}</Button>
+        </span>
       </InlineNotice>}
       {conflict && <InlineNotice title="设置已在别处更改" tone="danger">
-        当前草稿已保留。重新读取后可基于最新设置修改。
-        <Button size="sm" onClick={discard}>重新读取并放弃草稿</Button>
+        {autoSave ? '请重新读取最新设置后再切换。' : '当前草稿已保留。重新读取后可基于最新设置修改。'}
+        {autoSave ? <IconButton size="sm" variant="ghost" label="重新读取" title="重新读取最新设置" onClick={discard}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
+          : <Button size="sm" onClick={discard}>重新读取并放弃草稿</Button>}
       </InlineNotice>}
       {error && (
         <InlineNotice title="保存未完成" tone="danger">
           {error}
         </InlineNotice>
       )}
-      {notice && <InlineNotice title="本次修改已保存">{notice}{dirty ? ' 其他修改尚未保存。' : ''}</InlineNotice>}
+      {notice && !autoSave && <InlineNotice title="本次修改已保存">{notice}{dirty ? ' 其他修改尚未保存。' : ''}</InlineNotice>}
     </SettingsGroup>
   );
+  return renderLayout ? renderLayout({content, submit, discard, pending: pendingManual || immediate.kind === 'pending', canSave: !disabled && (dirty || allowUnchanged)}) : content;
 }
 export function Text({
   label,
@@ -398,7 +453,7 @@ function Switch({
     />
   );
 }
-function Catalog({
+export function Catalog({
   botId,
   backend,
   purpose,
@@ -412,10 +467,13 @@ function Catalog({
   const client = useClient();
   const [catalog, setCatalog] = useState<ModelCatalog>();
   const [error, setError] = useState<string>();
+  const [attempt, setAttempt] = useState(0);
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     let active = true;
     setCatalog(undefined);
     setError(undefined);
+    setLoading(true);
     void client
       .settings({ type: "models", query: { botId, backend, purpose } })
       .then((reply) => {
@@ -431,19 +489,23 @@ function Catalog({
           setError(
             failure instanceof Error ? failure.message : "模型目录暂不可用。",
           );
-      });
+      }).finally(() => { if (active) setLoading(false); });
     return () => {
       active = false;
     };
-  }, [botId, backend, purpose]);
+  }, [client, botId, backend, purpose, attempt]);
+  const unavailable = catalog && catalog.state !== "ready";
   return (
     <>
-      {error && (
-        <InlineNotice title="模型目录暂不可用" tone="warning">
-          {error}
-        </InlineNotice>
+      {(error || unavailable) && (
+        <div className="gd-model-catalog-status" role="status">
+          <span>{error || catalog?.error || '暂时无法读取模型，已保存的选择仍保留。'}</span>
+          <IconButton size="sm" variant="ghost" label="重新读取模型" title="重新读取模型" disabled={loading} onClick={() => setAttempt(value => value + 1)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
+        </div>
       )}
+      {!catalog && !error && <p className="gd-model-compact-note" role="status">正在读取模型…</p>}
       {children(catalog)}
+
     </>
   );
 }
@@ -541,7 +603,7 @@ export function ModelChoice({
       {customMode && (
         <SettingsRow
           title="自定义模型 ID"
-          description="列表里没有的模型（比如第三方网关的）。不核对，填错了下一轮会报错。"
+          description="用于目录外的模型；ID 不会预先验证，填写有误时任务会失败。"
           trailing={
             <Text
               label="自定义模型 ID"
@@ -612,28 +674,6 @@ function AgentPanel({
   const [actionMessage, setActionMessage] = useState<string>();
   const [adminId, setAdminId] = useState("");
   const [chatId, setChatId] = useState("");
-  const [instructions, setInstructions] = useState(
-    view.commentInstructions.content.text,
-  );
-  const [instructionBase, setInstructionBase] = useState(
-    view.commentInstructions.content.text,
-  );
-  useEffect(() => {
-    const saved = view.commentInstructions.content.text;
-    if (saved === instructionBase) return;
-    setInstructions((current) =>
-      current === instructionBase ? saved : current,
-    );
-    setInstructionBase(saved);
-  }, [
-    view.commentInstructions.revision,
-    view.commentInstructions.content.text,
-    instructionBase,
-  ]);
-  const [titleBackend, setTitleBackend] = useState("codex-appserver");
-  const [commentBackend, setCommentBackend] = useState(
-    view.sections.comments.stored.backend,
-  );
   async function save(
     section: keyof AgentSettingsView["sections"],
     patch: object,
@@ -662,25 +702,9 @@ function AgentPanel({
           : "操作已完成。"),
     );
     if (result.kind === "acted" && result.result.kind === "saved") {
-      if (
-        isAgentView(result.result.view) &&
-        result.result.view.commentInstructions.revision !==
-          view.commentInstructions.revision
-      )
-        setInstructions(result.result.view.commentInstructions.content.text);
       await refresh();
     }
     return result.kind === 'acted' && result.result.kind === 'saved';
-  }
-  async function saveInstructions() {
-    if (view.sections.cards.access.kind === 'readonly' || !instructions.trim()) return false;
-    const saved = await act({type: 'act', action: {
-      kind: 'commentInstructions', botId: view.scope.botId,
-      revision: view.commentInstructions.revision,
-      content: {kind: 'custom', text: instructions},
-    }});
-    if (saved) setInstructionBase(instructions);
-    return saved;
   }
   async function addAdministrator() {
     const parsed = openIdSchema.safeParse(adminId.trim());
@@ -691,206 +715,33 @@ function AgentPanel({
   }
   useDraft(Boolean(adminId), {title: '添加管理员', save: addAdministrator, discard: () => setAdminId('')});
   useDraft(Boolean(chatId), {title: '添加群 ID', save: async () => {setActionMessage('请先将群 ID 添加到列表，再保存。'); return false;}, discard: () => setChatId('')});
-  useDraft(instructions !== instructionBase, {
-    title: '评论回复规则', save: saveInstructions,
-    discard: () => setInstructions(view.commentInstructions.content.text),
-  });
   const cards = view.sections.cards,
     run = view.sections.run,
-    completion = view.sections.completion,
     voice = view.voice,
-    comments = view.sections.comments,
-    titles = view.sections.titles,
-    paths = view.sections.paths,
     access = view.sections.access;
   return (
     <>
-      <section className="agent-card-section" aria-labelledby="agent-card-heading">
-        <h3 id="agent-card-heading">飞书任务卡片</h3>
-        <div className="agent-card-cluster agent-card-display">
-          <h4>卡片显示</h4>
-      <Editor
-        title="任务卡片"
-        section={cards}
-        save={(draft, revision) => save("cards", draft, revision)}
-        render={(draft, set, disabled, commit) => (
-          <>
-            <SettingsRow
-              title="显示工具调用"
-              trailing={
-                <Switch
-                  label="显示工具调用"
-                  value={draft.showToolCalls}
-                  disabled={disabled}
-                  onChange={(value) => void commit({ showToolCalls: value })}
-                />
-              }
-            />
-            <SettingsRow
-              title="显示模型"
-              trailing={
-                <Select
-                  label="显示模型"
-                  value={draft.showModel}
-                  disabled={disabled}
-                  choices={[
-                    { value: "off", label: "不显示" },
-                    { value: "running", label: "运行时" },
-                    { value: "always", label: "始终" },
-                  ]}
-                  onChange={(value) => void commit({ showModel: value })}
-                />
-              }
-            />
-          </>
-        )}
-      />
-        </div>
-        <div className="agent-card-cluster">
-          <h4>任务行为与提醒</h4>
-      <Editor
-        title="运行策略"
-        section={run}
-        save={(draft, revision) => save("run", draft, revision)}
-        render={(draft, set, disabled, commit) => (
-          <>
-            <SettingsRow
-              title="最大并发任务"
-              trailing={
-                <NumberField
-                  label="最大并发任务"
-                  value={draft.maxConcurrentRuns}
-                  min={1}
-                  max={50}
-                  disabled={disabled}
-                  onChange={(value) =>
-                    set({ ...draft, maxConcurrentRuns: value })
-                  }
-                />
-              }
-            />
-            {run.effective.maxConcurrentRuns !==
-              run.stored.maxConcurrentRuns && (
-              <SettingsRow
-                title="当前运行并发"
-                description="已保存的上限要重启 daemon 后才生效。"
-                value={String(run.effective.maxConcurrentRuns)}
-              />
-            )}
-            <SettingsRow
-              title="空闲超时（秒，0 为关闭）"
-              trailing={
-                <NumberField
-                  label="空闲超时"
-                  value={draft.runIdleTimeoutSeconds}
-                  min={0}
-                  max={3600}
-                  disabled={disabled}
-                  onChange={(value) =>
-                    set({ ...draft, runIdleTimeoutSeconds: value })
-                  }
-                />
-              }
-            />
-            <SettingsRow
-              title="运行中来了消息"
-              description="插话交给正在跑的这一轮，排队等它跑完；Claude 只能排队。"
-              trailing={
-                <Select
-                  label="运行中来了消息"
-                  value={draft.pendingPolicy}
-                  disabled={disabled}
-                  choices={[
-                    { value: "steer", label: "插话" },
-                    { value: "queue", label: "排队" },
-                  ]}
-                  onChange={(value) => void commit({ pendingPolicy: value })}
-                />
-              }
-            />
-          </>
-        )}
-      />
-      <Editor
-        title="完成提醒"
-        section={completion}
-        save={(draft, revision) => save("completion", draft, revision)}
-        render={(draft, set, disabled, commit) => (
-          <>
-            <SettingsRow
-              title="什么时候提醒"
-              description="任务跑完后，什么时候在飞书里提醒发起人。"
-              trailing={
-                <Select
-                  label="什么时候提醒"
-                  value={draft.mode}
-                  disabled={disabled}
-                  choices={[
-                    { value: "manual", label: "手动" },
-                    { value: "long", label: "长任务" },
-                    { value: "failures", label: "失败时" },
-                    { value: "always", label: "每次" },
-                  ]}
-                  onChange={(value) => void commit({ mode: value })}
-                />
-              }
-            />
-            {draft.mode === "long" && <SettingsRow
-              title="长任务阈值（分钟）"
-              description="任务运行超过这个时长时发送提醒。"
-              trailing={
-                <NumberField
-                  label="长任务阈值"
-                  value={draft.longTaskMinutes}
-                  min={1}
-                  max={1440}
-                  disabled={disabled}
-                  onChange={(value) =>
-                    set({ ...draft, longTaskMinutes: value })
-                  }
-                />
-              }
-            />}
-          </>
-        )}
-      />
-        </div>
-      </section>
+      <Editor title="运行上限" headerAction={<IconButton size="sm" variant="ghost" className="bot-settings-refresh" label="重新读取设置" title="重新读取此 Bot 的所有设置" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>} section={run} save={(draft, revision) => save("run", draft, revision)}
+        render={(draft,set,disabled) => <>
+          <SettingsRow title="同时处理的任务" trailing={<NumberField label="最大并发任务" value={draft.maxConcurrentRuns} min={1} max={50} disabled={disabled} onChange={maxConcurrentRuns => set({...draft,maxConcurrentRuns})}/>}/>
+          {run.effective.maxConcurrentRuns !== run.stored.maxConcurrentRuns && <SettingsRow title="当前运行上限" value={String(run.effective.maxConcurrentRuns)} description="重启后使用新上限。"/>}
+          <SettingsRow title="空闲超时" description="单位秒，0 表示关闭。" trailing={<NumberField label="空闲超时" value={draft.runIdleTimeoutSeconds} min={0} max={3600} disabled={disabled} onChange={runIdleTimeoutSeconds => set({...draft,runIdleTimeoutSeconds})}/>}/>
+        </>}/>
       <SettingsGroup
         label="语音转文字"
         id={settingAnchor("语音转文字")}
         footer={
           cards.access.kind === "readonly"
             ? cards.access.message
-            : "开启后检查飞书权限；下一条语音消息使用新状态。"
+            : undefined
         }
       >
         <SettingsRow
-          title="启用语音"
+          title="飞书语音权限"
           description={voice.feishu.message}
           trailing={
-            <Switch
-              label="启用语音"
-              value={voice.enabled}
-              disabled={cards.access.kind === "readonly"}
-              onChange={(enabled) =>
-                void act({
-                  type: "act",
-                  action: {
-                    kind: "voice",
-                    botId: view.scope.botId,
-                    action: { action: enabled ? "enable" : "disable" },
-                  },
-                })
-              }
-            />
-          }
-        />
-        <SettingsRow
-          title="权限与测试"
-          trailing={
             <div className="settings-inline-actions">
-              <Button
+              <IconButton label="重新检测" title="重新检测飞书语音权限" variant="ghost"
                 size="sm"
                 disabled={cards.access.kind === "readonly"}
                 onClick={() =>
@@ -903,9 +754,7 @@ function AgentPanel({
                     },
                   })
                 }
-              >
-                重新检测
-              </Button>
+              ><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
               <Button
                 size="sm"
                 disabled={cards.access.kind === "readonly"}
@@ -926,219 +775,10 @@ function AgentPanel({
           }
         />
       </SettingsGroup>
+      <BotTitleSettings key={`titles:${view.scope.botId}`} view={view} save={save}/>
+      <BotCommentSettings key={`comments:${view.scope.botId}`} view={view} save={save} refresh={refresh}/>
       <details className="agent-settings-disclosure">
-        <summary><span>会话标题<small>生成简短名称</small></span></summary>
-      <Catalog botId={view.scope.botId} backend={titleBackend} purpose="titles">
-        {(catalog) => (
-          <Editor
-            title="新会话标题"
-            section={titles}
-            save={(draft, revision) =>
-              save(
-                "titles",
-                {
-                  byBackend: {
-                    [titleBackend]: draft.byBackend?.[titleBackend] ?? {
-                      enabled: false,
-                    },
-                  },
-                },
-                revision,
-              )
-            }
-            render={(draft, set, disabled) => {
-              const policy: TitlePolicy = draft.byBackend[titleBackend] ?? {
-                enabled: false,
-              };
-              const setPolicy = (next: TitlePolicy) =>
-                set({
-                  byBackend: { ...draft.byBackend, [titleBackend]: next },
-                });
-              return (
-                <>
-                  <SettingsRow
-                    title="后端"
-                    trailing={
-                      <Select
-                        label="标题后端"
-                        value={titleBackend}
-                        disabled={disabled}
-                        choices={backendChoices}
-                        onChange={setTitleBackend}
-                      />
-                    }
-                  />
-                  <SettingsRow
-                    title="用模型生成标题"
-                    trailing={
-                      <Switch
-                        label="用模型生成标题"
-                        value={policy.enabled}
-                        disabled={disabled}
-                        onChange={(enabled) =>
-                          setPolicy(
-                            enabled
-                              ? {
-                                  enabled: true,
-                                  model: policy.enabled ? policy.model : "",
-                                  effort: policy.enabled
-                                    ? policy.effort
-                                    : "medium",
-                                }
-                              : { enabled: false },
-                          )
-                        }
-                      />
-                    }
-                  />
-                  {policy.enabled && (
-                    <>
-                      <SettingsRow
-                        title="自定义模型 ID"
-                        description="标题允许输入未列入当前模型目录的 ID。"
-                        trailing={
-                          <Text
-                            label="标题模型 ID"
-                            value={policy.model}
-                            disabled={disabled}
-                            onChange={(model) =>
-                              setPolicy({ ...policy, model })
-                            }
-                          />
-                        }
-                      />
-                      <SettingsRow
-                        title="推理强度"
-                        trailing={
-                          <Select
-                            label="标题推理强度"
-                            value={policy.effort}
-                            disabled={disabled}
-                            choices={(
-                              catalog?.titleEfforts ?? effortOptions
-                            ).map((value) => ({ value, label: value }))}
-                            onChange={(effort) =>
-                              setPolicy({ ...policy, effort })
-                            }
-                          />
-                        }
-                      />
-                    </>
-                  )}
-                </>
-              );
-            }}
-          />
-        )}
-      </Catalog>
-      </details>
-      <details className="agent-settings-disclosure">
-        <summary><span>云文档评论<small>模型与回复规则</small></span></summary>
-      <Catalog
-        botId={view.scope.botId}
-        backend={commentBackend}
-        purpose="comments"
-      >
-        {(catalog) => (
-          <Editor
-            title="云文档评论"
-            section={comments}
-            save={(draft, revision) => save("comments", draft, revision)}
-            render={(draft, set, disabled) => (
-              <>
-                <SettingsRow
-                  title="后端"
-                  trailing={
-                    <Select
-                      label="评论后端"
-                      value={draft.backend}
-                      disabled={disabled}
-                      choices={backendChoices}
-                      onChange={(value) => {
-                        setCommentBackend(value);
-                        set({
-                          ...draft,
-                          backend: value,
-                          selection: { kind: "default" },
-                        });
-                      }}
-                    />
-                  }
-                />
-                <ModelChoice
-                  value={draft.selection}
-                  onChange={(selection) => set({ ...draft, selection })}
-                  catalog={catalog}
-                  disabled={disabled}
-                />
-              </>
-            )}
-          />
-        )}
-      </Catalog>
-      <SettingsGroup
-        label="评论回复规则"
-        id={settingAnchor("评论回复规则")}
-        footer={
-          cards.access.kind === "readonly"
-            ? cards.access.message
-            : "最多编辑 30000 字。保存后同步已有评论目录；下条新评论使用新规则。"
-        }
-      >
-        <textarea
-          aria-label="评论回复规则"
-          className="settings-instructions"
-          value={instructions}
-          maxLength={30000}
-          disabled={cards.access.kind === "readonly"}
-          onChange={(event) => setInstructions(event.target.value)}
-        />
-        <div className="settings-edit-actions">
-          <Button
-            size="sm"
-            disabled={instructions === view.commentInstructions.content.text}
-            onClick={() =>
-              setInstructions(view.commentInstructions.content.text)
-            }
-          >
-            放弃修改
-          </Button>
-          <Button
-            size="sm"
-            disabled={
-              cards.access.kind === "readonly" ||
-              !instructions.trim() ||
-              instructions === view.commentInstructions.content.text
-            }
-            onClick={() => void saveInstructions()}
-          >
-            保存规则
-          </Button>
-          <Button
-            size="sm"
-            disabled={
-              cards.access.kind === "readonly" ||
-              view.commentInstructions.content.kind === "default"
-            }
-            onClick={() =>
-              void act({
-                type: "act",
-                action: {
-                  kind: "commentInstructions",
-                  botId: view.scope.botId,
-                  revision: view.commentInstructions.revision,
-                  content: { kind: "default" },
-                },
-              })
-            }
-          >
-            恢复默认
-          </Button>
-        </div>
-      </SettingsGroup>
-      </details>
-      <details className="agent-settings-disclosure">
-        <summary><span>管理员<small>管理可操作 Bot 的人</small></span></summary>
+        <summary><span>管理员</span></summary>
       <SettingsGroup
         label="管理员"
         id={settingAnchor("管理员")}
@@ -1205,27 +845,7 @@ function AgentPanel({
       </SettingsGroup>
       </details>
       <details className="agent-settings-disclosure">
-        <summary><span>更多设置<small>工作区的默认位置与允许的飞书群</small></span></summary>
-      <Editor
-        title="工作区的默认位置"
-        section={paths}
-        save={(draft, revision) => save("paths", draft, revision)}
-        render={(draft, set, disabled) => (
-          <SettingsRow
-            title="文件夹"
-            description="新建的群在这里建自己的工作区，只影响之后新建的群。"
-            trailing={
-              <Text
-                label="工作区的默认位置"
-                value={draft.projectsRootDir ?? ""}
-                disabled={disabled}
-                placeholder="使用默认目录"
-                onChange={(value) => set({ projectsRootDir: value || null })}
-              />
-            }
-          />
-        )}
-      />
+        <summary><span>更多设置<small>允许的飞书群</small></span></summary>
       <Editor
         title="允许的飞书群"
         section={access}
@@ -1301,14 +921,114 @@ function AgentPanel({
     </>
   );
 }
+type PermissionView = ProjectSettingsView['sections']['permission']['stored'];
+export function NativePermissionEditor({section, provider, save}: {section: Section<PermissionView>; provider: string; save: (patch: Partial<PermissionView>, revision: string) => Promise<SettingsReply>}) {
+  const fields = section.stored.options.fields;
+  if (!fields?.length) return null;
+  const initial = section.stored.custom ?? section.stored.options.expanded[section.stored.mode];
+  return <details className="membership-settings-details"><summary>高级设置</summary>
+    <Editor title="高级设置" section={section} showSave
+      savedNotice={stored => stored.custom === null ? `和「${stored.options.tiers.find(tier => tier.tier === stored.mode)?.name ?? stored.mode}」一样，已存成这一档。` : undefined}
+      save={(patch, revision) => save({custom: nativePermissionPatch(fields, patch.custom ?? initial)}, revision)}
+      render={(draft, set, disabled) => <>
+        <p className="permission-note">这里只列 {provider} 自己支持的设置。群里没人确认，要确认的操作一律拒绝，所以没有“问不问”的设置。换 provider 时会清掉。</p>
+        <NativePermissionFields fields={fields} value={draft.custom ?? draft.options.expanded[draft.mode]} disabled={disabled} onChange={value => {
+          const unchanged = JSON.stringify(nativePermissionPatch(fields, value)) === JSON.stringify(nativePermissionPatch(fields, initial));
+          set({...draft, custom: unchanged ? section.stored.custom : value});
+        }}/>
+      </>}/>
+  </details>;
+}
+// Intent: the group owner compares the provider's three levels before granting access.
+// Hierarchy: level names lead; native names and enforcement stay secondary. Existing
+// surface/border tokens, system type and 4px spacing keep this within the settings UI.
+function hasAdditionalPermissionChoices(value: PermissionView): boolean {
+  const fields = value.options.fields ?? [];
+  if (!fields.length) return false;
+  // A single unconditional choice adds nothing when every native value is already
+  // one of the three presets. Other field shapes can form new combinations.
+  const field = fields[0];
+  if (fields.length !== 1 || !field || field.kind !== 'choice' || field.showWhen || !field.choices?.length) return true;
+  const presets = Object.values(value.options.expanded).map(expanded => nativePermissionPatch(fields, expanded)[field.key]);
+  return field.choices.some(choice => !presets.includes(choice.value));
+}
+export function PermissionFields({value, disabled, onChange, provider}: {value: PermissionView; disabled: boolean; onChange: (patch: Partial<Pick<PermissionView, 'mode' | 'custom'>>) => void; provider?: string}) {
+  const {options} = value;
+  const fields = options.fields ?? [];
+  type Choice = PermissionView['mode'] | 'custom';
+  const choices: {value: Choice; label: string; disabled?: boolean; description: ReactNode}[] = options.tiers.map(tier => ({value: tier.tier, label: tier.name, disabled: Boolean(tier.unavailable), description: <>
+        <small>{tier.summary}</small>{tier.native && <small>{tier.native}</small>}{tier.unavailable && <small>{tier.unavailable}</small>}
+      </>}));
+  if (hasAdditionalPermissionChoices(value) || value.custom || options.invalid) choices.push({value: 'custom', label: '自定义', disabled: !fields.length, description: <small>{fields.length ? `使用${provider ? ` ${provider} ` : ' Provider '}提供的原生设置。` : '当前 Provider 未提供可编辑字段，仅可查看已保存的设置。'}</small>});
+  return <div className="permission-fields">
+    {options.invalid && <p className="permission-note" role="status">自定义设置读不出来，现在按只读跑。选择预设重新设置。</p>}
+    <SettingChoices<Choice> label="权限" stacked value={options.invalid ? '' : value.custom ? 'custom' : value.mode} disabled={disabled}
+      choices={choices} onChange={choice => choice === 'custom' ? onChange({custom: {...(value.custom ?? options.expanded[value.mode])}}) : onChange({mode: choice})}/>
+    {value.custom && <section className="permission-custom-fields" aria-label="自定义权限设置">
+      {fields.length ? <>
+        <p className="permission-note">这里只列{provider ? ` ${provider} ` : ' Provider '}自己支持的设置。群里没人确认，要确认的操作一律拒绝。换 Provider 时会清掉自定义设置。</p>
+        <NativePermissionFields fields={fields} value={value.custom} disabled={disabled} onChange={custom => onChange({custom})}/>
+      </> : <p className="permission-note">自定义：{options.customSummary}</p>}
+      {options.legacy && <p className="permission-note">当前自定义设置从旧版的联网开关转来。</p>}
+    </section>}
+    <p className="permission-note" id={settingAnchor('能挡到什么')}>能挡到什么：{options.strength}</p>
+  </div>;
+}
+
+/** Keep the current grant readable; compare the provider's levels only while editing. */
+export function PermissionSummary({section, provider, save}: {section: Section<PermissionView>; provider: string; save: (patch: Partial<PermissionView>, revision: string) => Promise<SettingsReply>}) {
+  const [open, setOpen] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [editSession, setEditSession] = useState(0);
+  const discardChoice = useRef<(() => void) | undefined>(undefined);
+  const announcedReadonly = useContext(AnnouncedReadonlyMessages);
+  const value = section.stored;
+  const currentTier = value.options.tiers.find(tier => tier.tier === value.mode);
+  const invalid = Boolean(value.options.invalid);
+  const description = invalid ? '自定义设置读不出来，现在按只读运行。'
+    : value.custom ? value.options.customSummary : currentTier?.summary;
+  const close = () => {if (!pending) {discardChoice.current?.(); setOpen(false);}};
+  async function savePermission(patch: Partial<PermissionView>, revision: string) {
+    setPending(true);
+    try {return await save(patch, revision);}
+    finally {setPending(false);}
+  }
+  return <>
+    <SettingsGroup label="执行权限" id={settingAnchor('权限')} className="permission-summary"
+      footer={section.access.kind === 'readonly' && !hasReadonlyMessage(announcedReadonly, section.access) ? section.access.message : undefined}>
+      <SettingsRow title={invalid ? '只读（设置异常）' : value.custom ? '自定义权限' : currentTier?.name ?? value.mode}
+        description={description}
+        trailing={<span data-search-title="修改权限"><Button size="sm" onClick={() => {setEditSession(session => session + 1); setOpen(true);}}>{section.access.kind === 'readonly' ? '查看权限' : '修改权限'}</Button></span>}/>
+    </SettingsGroup>
+    <Editor key={editSession} title="执行权限" section={section} save={savePermission} afterSave={async () => setOpen(false)}
+      prepareSave={(_patch, draft) => draft.custom ? {custom: nativePermissionPatch(draft.options.fields ?? [], draft.custom)} : {mode: draft.mode}}
+      validate={draft => draft.custom && !draft.options.fields?.length ? '当前 Provider 未提供可编辑的自定义权限，请选择预设。' : undefined}
+      render={(draft, set, disabled) => <PermissionFields value={draft} provider={provider} disabled={disabled}
+        onChange={patch => set({...draft, ...patch, ...(patch.mode ? {custom: null} : {}), options: draft.options.invalid ? {...draft.options, invalid: false} : draft.options})}/>}
+      renderLayout={editor => {
+        discardChoice.current = editor.discard;
+        return <Dialog open={open} title="执行权限" description={section.access.kind === 'readonly' ? section.access.message : `设置 ${provider} 在本群中的执行范围，选择所需权限后保存。`} onClose={pending || editor.pending ? undefined : close}
+          footer={<><Button disabled={pending || editor.pending} onClick={close}>取消</Button><Button variant="primary" loading={pending || editor.pending} disabled={!editor.canSave} onClick={() => void editor.submit()}>保存权限</Button></>}>
+          <div className="permission-dialog">{editor.content}</div>
+        </Dialog>;
+      }}/>
+  </>;
+}
+
 export function ProjectPanel({
   view,
   refresh,
   onOpenSecrets,
+  partition,
+  independent = false,
+  hideJudge = false,
 }: {
   view: ProjectSettingsView;
   refresh: () => Promise<void>;
   onOpenSecrets?: () => void;
+  partition?: 'model' | 'permission' | 'response' | 'members' | 'run';
+  independent?: boolean;
+  hideJudge?: boolean;
 }) {
   const client = useClient();
   const [memberId, setMemberId] = useState("");
@@ -1358,18 +1078,32 @@ export function ProjectPanel({
     const member = roster?.entries.find(entry => entry.openId === id);
     return member ? `${member.name}${member.kind === "bot" ? " · Bot" : ""} · …${id.slice(-6)}` : `未读取到名称 · …${id.slice(-6)}`;
   };
+  const announcedReadonly = useContext(AnnouncedReadonlyMessages);
   const permission = view.sections.permission,
     response = view.sections.response,
     model = view.sections.model,
     run = view.sections.run,
     judge = view.sections.judge;
-  // Codex on Linux: 只读 and 读写 are greyed out; a stored one still shows (product.md 3.8).
-  const fullOnly = view.identity.fullOnly;
-  const tiers = ([["qa", "只读"], ["write", "读写"], ["full", "完全访问"]] as const)
-    .map(([value, label]) => ({ value, label, disabled: Boolean(fullOnly) && value !== "full" }));
+  const visibleSections = [
+    ...(!partition || partition === 'model' ? [model] : []),
+    ...(!partition || partition === 'permission' || partition === 'members' ? [permission] : []),
+    ...(!partition ? [permission] : []),
+    ...((!partition || partition === 'response') && view.identity.kind !== "smart" ? [response] : []),
+    ...((!partition || partition === 'response') && !hideJudge && groupJudgeVisible(view) && judge ? [judge] : []),
+    ...((!partition || partition === 'run') && run && view.identity.backend !== "claude-agent" ? [run] : []),
+  ];
+  const repeatedReadonly: ReadonlyMessage[] = [];
+  for (const section of visibleSections) {
+    const access = section.access;
+    if (access.kind !== 'readonly' || hasReadonlyMessage(announcedReadonly, access) || hasReadonlyMessage(repeatedReadonly, access)) continue;
+    if (visibleSections.filter(candidate => candidate.access.kind === 'readonly' && hasReadonlyMessage([access], candidate.access)).length > 1) repeatedReadonly.push(access);
+  }
+  const groupReadonly = [...announcedReadonly, ...repeatedReadonly];
   return (
-    <>
-      <h2 className="membership-settings-heading">Bot 与执行</h2>
+    <AnnouncedReadonlyMessages.Provider value={groupReadonly}>
+      {repeatedReadonly.map(access => <p className="settings-readonly-notice" role="status" key={`${access.reason}:${access.message}`}>{access.message}</p>)}
+      {(!partition || partition === 'model') && <>
+      {!partition && <h2 className="membership-settings-heading">模型</h2>}
       <Catalog
         botId={view.scope.botId}
         backend={view.identity.backend}
@@ -1393,47 +1127,18 @@ export function ProjectPanel({
         )}
       </Catalog>
       <SettingsGroup label="执行后端"><SettingsRow title="执行工具" value={view.identity.backend === "codex-appserver" ? "Codex" : view.identity.backend === "claude-agent" ? "Claude" : view.identity.backend} /></SettingsGroup>
-      <Editor
-        title="工作目录权限"
-        section={permission}
-        save={(draft, revision) => save("permission", draft, revision)}
-        render={(draft, set, disabled, commit) => (
-          <>
-            <SettingsRow
-              title="权限档"
-              description={fullOnly}
-              trailing={
-                <Select
-                  label="权限档"
-                  value={draft.mode}
-                  disabled={disabled}
-                  choices={tiers}
-                  onChange={(mode) => void commit({ mode })}
-                />
-              }
-            />
-            <SettingsRow
-              title="允许网络访问"
-              trailing={
-                <Switch
-                  label="允许网络访问"
-                  value={draft.network}
-                  disabled={disabled}
-                  onChange={(network) => void commit({ network })}
-                />
-              }
-            />
-          </>
-        )}
-      />
-      <h2 className="membership-settings-heading">成员与群消息</h2>
+      <details className="membership-settings-details"><summary>话题模型</summary><SessionPicker view={view} /></details>
+      </>}
+      {(!partition || partition === 'permission') && <>
+      <PermissionSummary section={permission} provider={backendLabel(view.identity.backend)} save={(patch, revision) => save('permission', patch, revision)}/>
+      </>}
+      {(!partition || partition === 'members') && <>
+      {!partition && <h2 className="membership-settings-heading">回复规则</h2>}
       <SettingsGroup
         label="响应成员"
         id={settingAnchor("响应成员")}
         footer={
-          permission.access.kind === "readonly"
-            ? permission.access.message
-            : "空列表表示所有群成员；Bot 管理员与所有者始终可以使用。"
+          <>{permission.access.kind === "readonly" && !hasReadonlyMessage(groupReadonly, permission.access) && <span>{permission.access.message} </span>}不选成员时向全群开放；Bot 管理员与所有者始终可用。</>
         }
       >
         {view.members.openIds.map((id) => (
@@ -1453,7 +1158,7 @@ export function ProjectPanel({
         ))}
         <SettingsRow
           title="从群成员选择"
-          description={roster?.state === "complete" ? "包含群里的 Bot。" : "名册未完整读取，已有名单保留。检查飞书群读取权限后稍等一分钟再重试，或直接输入 Open ID。"}
+          description={roster?.state === "complete" ? undefined : "成员列表不完整，已选成员保留。可检查飞书权限后重试，或输入 Open ID。"}
           trailing={<div className="settings-inline-actions">
             <select aria-label="选择响应成员" value={memberId} disabled={permission.access.kind === "readonly"}
               onChange={event => setMemberId(event.target.value)}>
@@ -1461,7 +1166,7 @@ export function ProjectPanel({
               {roster?.entries.filter(entry => !view.members.openIds.includes(entry.openId)).map(entry =>
                 <option key={entry.openId} value={entry.openId}>{memberLabel(entry.openId)}</option>)}
             </select>
-            <Button size="sm" onClick={() => void refresh()}>重新读取成员</Button>
+            <IconButton size="sm" variant="ghost" label="重新读取成员" title="重新读取成员" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
           </div>}
         />
         <SettingsRow
@@ -1513,9 +1218,11 @@ export function ProjectPanel({
           />
         )}
       </SettingsGroup>
+      </>}
+      {(!partition || partition === 'response') && <>
       {/* 智能 has no 免@: a judgement decides (s25c). The group keeps its anchor, so search still lands here. */}
       {view.identity.kind === "smart" ? <SettingsGroup id={settingAnchor("群内响应")} label="群内响应">
-        <SettingsRow title="免 @" value="由 Bot 判断" description="智能开话题没有免 @，回不回由 Bot 判断。" />
+        <SettingsRow title="免 @" value="由 Bot 判断"  />
       </SettingsGroup> : <Editor
         title="群内响应"
         section={response}
@@ -1523,7 +1230,7 @@ export function ProjectPanel({
         render={(draft, set, disabled, commit) => (
           <SettingsRow
             title="不 @ 也能发起任务"
-            description="@ 我开新会话：话题里的消息和群内支持的命令不用 @。整群一条会话：群里的普通消息不 @ 也回。切换会话方式不改这一项。"
+            description={view.identity.kind === "single" ? "开启后，群内普通消息也会得到回复。" : "话题内消息与群内命令无需 @。"}
             trailing={
               <Switch
                 label="不 @ 也能发起任务"
@@ -1535,7 +1242,7 @@ export function ProjectPanel({
           />
         )}
       />}
-      {groupJudgeVisible(view) && judge && <Catalog botId={view.scope.botId} backend={view.identity.backend} purpose="judge">
+      {!hideJudge && groupJudgeVisible(view) && judge && <Catalog botId={view.scope.botId} backend={view.identity.backend} purpose="judge">
         {(catalog) => <Editor title="判断模型" section={judge}
           save={(draft, revision) => save("judge", draft, revision)}
           render={(draft, set, disabled, _commit, resetKey) => <JudgeModelChoice key={resetKey} value={draft.selection}
@@ -1546,21 +1253,23 @@ export function ProjectPanel({
             disabled={disabled} followLabel="跟着 Bot 默认" allowCustom onOpenSecrets={onOpenSecrets} />}
         />}
       </Catalog>}
+      </>}
+      {(!partition || partition === 'run') && <>
       {run && (view.identity.backend === "claude-agent"
         ? <SettingsGroup id={settingAnchor("运行中来了消息")} label="运行中来了消息">
-          <SettingsRow title="运行中来了消息" value="排队" description="Claude 不支持插话，运行中来的消息照样排队。" />
+          <SettingsRow title="运行中来了消息" value="排队" description="Claude 不支持插话。" />
         </SettingsGroup>
         : <Editor title="运行中来了消息" section={run}
           save={(draft, revision) => save("run", draft, revision)}
-          render={(draft, _set, disabled, commit) => <SettingsRow title="运行中来了消息"
-            description={`插话交给正在跑的这一轮，排队等它跑完。现在是${run.effective.pendingPolicy === "steer" ? "插话" : "排队"}。`}
-            trailing={<Select label="运行中来了消息" value={draft.pendingPolicy} disabled={disabled}
-              choices={[{value: "default", label: "跟着 Bot 默认"}, {value: "steer", label: "插话"}, {value: "queue", label: "排队"}]}
+          render={(draft, _set, disabled, commit) => <SettingsRow className="group-choice-row" title="运行中来了消息"
+            description={`插话加入当前任务，排队等待任务结束。当前：${run.effective.pendingPolicy === "steer" ? "插话" : "排队"}。`}
+            trailing={<SettingChoices segmented label="运行中来了消息" value={independent && draft.pendingPolicy === 'default' ? run.effective.pendingPolicy : draft.pendingPolicy} disabled={disabled}
+              choices={[...(!independent ? [{value: "default" as const, label: "跟着 Bot 默认"}] : []), {value: "steer" as const, label: "插话"}, {value: "queue" as const, label: "排队"}]}
               onChange={(pendingPolicy) => void commit({pendingPolicy})} />}
           />} />)}
-      <details className="membership-settings-details"><summary>话题模型</summary><SessionPicker view={view} /></details>
+      </>}
       <ActionNotice message={notice} />
-    </>
+    </AnnouncedReadonlyMessages.Provider>
   );
 }
 function SessionPicker({ view }: { view: ProjectSettingsView }) {
@@ -1608,7 +1317,7 @@ function SessionPicker({ view }: { view: ProjectSettingsView }) {
     <SettingsGroup
       label="话题模型"
         id={settingAnchor("话题模型")}
-      action={<Button onClick={() => setRefresh((value) => value + 1)}>刷新话题</Button>}
+      action={<IconButton size="sm" variant="ghost" label="刷新话题" title="刷新话题" onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}
       footer="模型从该会话下一轮生效。"
     >
       {error && (
@@ -1714,7 +1423,7 @@ function SessionPanel({
         {error}
       </InlineNotice>
     );
-  if (!view) return <p>正在读取话题设置…</p>;
+  if (!view) return <p className="settings-operation-message" role="status">正在读取话题设置…</p>;
   const model = view.sections.model;
   return (
     <>
@@ -1951,7 +1660,7 @@ function ScopedSettingsPanel(props: PanelProps) {
     </InlineNotice>
   ) : null;
   if (!view) return (
-    <SettingsGroup label="设置" action={<Button size="sm" onClick={() => void refresh()}>重新读取</Button>}>
+    <SettingsGroup label="设置" action={<IconButton size="sm" variant="ghost" label="重新读取" title="重新读取" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}>
       {status ?? <SettingsRow title="正在读取当前设置…" />}
     </SettingsGroup>
   );
@@ -1964,7 +1673,7 @@ function ScopedSettingsPanel(props: PanelProps) {
   ) : null;
   return (
     <>
-      <div className="settings-scope-bar"><span>{view.scope.kind === 'agent' ? '当前 Bot' : view.scope.kind === 'project' ? '当前 Bot 在此群' : view.scope.kind === 'host' ? '这台设备' : '当前话题'}</span><Button size="sm" onClick={() => void refresh()}>重新读取</Button></div>
+      {props.scope !== "agent" && <div className="settings-scope-bar"><IconButton size="sm" variant="ghost" label="重新读取" title="重新读取" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></div>}
       {status}
       {content}
     </>

@@ -1,4 +1,5 @@
 import { RUNTIME_TERMINAL_ICON } from './runtime-card-icons';
+import { statusSymbol } from './process-status';
 import type { ToolEntry } from './run-state';
 
 type ToolInput = Pick<ToolEntry, 'title' | 'kind' | 'detail' | 'status'>;
@@ -11,13 +12,13 @@ interface ToolAction {
 }
 
 /** Describe an observed operation; never infer the purpose of arbitrary code. */
-export function toolPresentation(tool: ToolInput): ToolAction & { readonly header: string; } {
+export function toolPresentation(tool: ToolInput): ToolAction & { readonly label: string; readonly header: string; } {
   const action = describeTool(tool);
   const subject = action.subject ? ` ${action.subject}` : '';
-  const label = tool.status === 'running' ? `正在${action.action}${subject}`
-    : tool.status === 'error' ? `${action.action}${subject}${subject ? ' ' : ''}失败` : `已${action.action}${subject}`;
   const preview = action.preview ? ` · ${escapeInline(short(action.preview, 80))}` : '';
-  return { ...action, header: `${tool.status === 'error' ? '❌ ' : ''}${escapeInline(label)}${preview}` };
+  const label = `${escapeInline(`${action.action}${subject}`)}${preview}`;
+  const status = tool.status === 'running' ? 'running' : tool.status === 'error' ? 'failed' : 'completed';
+  return { ...action, label, header: [`<font color='grey'>${label}</font>`, statusSymbol(status)].filter(Boolean).join(' ') };
 }
 
 export function toolArguments(detail: string | undefined): Record<string, unknown> | undefined {

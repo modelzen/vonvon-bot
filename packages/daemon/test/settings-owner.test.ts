@@ -13,6 +13,8 @@ import { getSession, RETIRED_KEY_TEXT, upsertSession } from '../src/bot/session-
 import { createAdminIpcCaller, createAdminIpcResponder } from '../src/admin/ipc';
 import type { AppConfig } from '../src/config/schema';
 import type { AgentBackend } from '../src/agent/types';
+import { offlineModelCatalog, rememberModelCatalog } from '../src/admin/model-catalog';
+import { permissionTable } from '../src/agent/permission';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
@@ -23,7 +25,8 @@ const botId = 'cli_fixture';
 const agent = { kind: 'agent' as const, botId };
 const project = { kind: 'project' as const, botId, projectName: 'demo' };
 const session = { kind: 'session' as const, botId, threadId: 'omt_fixture' };
-const backend = { id: 'codex-appserver', doctor: async () => ({ ok: true }), supportedModes: ['qa', 'write', 'full'], listModels: async () => [{ id: 'fixture-model', displayName: 'Fixture', description: '', defaultEffort: 'high', supportedEfforts: ['low', 'high'], isDefault: true, hidden: false }] } as unknown as AgentBackend;
+const fixtureModels = [{ id: 'fixture-model', displayName: 'Fixture', description: '', defaultEffort: 'high', supportedEfforts: ['low', 'high'], isDefault: true, hidden: false }] as Awaited<ReturnType<AgentBackend['listModels']>>;
+const backend = { id: 'codex-appserver', doctor: async () => ({ ok: true }), supportedModes: ['qa', 'write', 'full'], listModels: async () => fixtureModels, peekModels: () => fixtureModels } as unknown as AgentBackend;
 let cfg: AppConfig;
 async function fixture(overrides: Partial<SettingsOwnerDeps> = {}) {
   const writer = createAppPreferencesWriter({ cfg });
@@ -52,13 +55,31 @@ it('serializes card and HTTP preference edits, preserves unknown nested keys and
   expect(fresh.sections.run.stored.maxConcurrentRuns).toBe(7); expect(fresh.sections.run.effective.maxConcurrentRuns).toBe(10);
   expect(fresh.sections.cards.effective.showToolCalls).toBe(false);
   await owner.save({ scope: agent, section: 'completion', revision: fresh.sections.completion.revision, patch: { mode: 'always' } });
-  await owner.save({ scope: agent, section: 'titles', revision: fresh.sections.titles.revision, patch: { byBackend: { 'codex-appserver': { enabled: false } } } });
+  await owner.save({ scope: agent, section: 'titles', revision: fresh.sections.titles.revision, patch: { policy: { enabled: false } } });
   const disk = await loadConfig() as AppConfig & { futureRoot: number };
   expect(disk.accounts).toEqual(cfg.accounts); expect(disk.secrets).toEqual(cfg.secrets); expect(disk.futureRoot).toBe(17);
   expect(disk.preferences?.completionReminder).toMatchObject({ future: true, mode: 'always' });
   expect((disk.preferences as Record<string, unknown>).cliBridge).toEqual({ enabled: false, presence: { future: 8 } }); // 咖啡一下 left it, kept as is
-  expect(disk.preferences?.sessionTitles?.byBackend?.['codex-appserver']).toMatchObject({ model: 'custom-title', future: 3, enabled: false });
+  expect(disk.preferences?.sessionTitles?.byBackend?.['codex-appserver']).toMatchObject({ model: 'custom-title', future: 3, enabled: true });
+  expect(disk.preferences?.sessionTitles?.policy).toEqual({ enabled: false });
   expect(JSON.stringify(fresh)).not.toMatch(/fixture-secret|SECRET|futurePreference|futureRoot/);
+});
+it('saves one title provider for the Bot, validates it and conflicts on stale edits', async () => {
+  const { owner } = await fixture();
+  const before = await owner.read(agent) as AgentSettingsView;
+  const policy = { enabled: true as const, backend: 'claude-agent', model: 'vendor/title', effort: 'low' as const };
+  const edit = { scope: agent, section: 'titles' as const, revision: before.sections.titles.revision, patch: { policy } };
+  expect((await owner.save(edit)).kind).toBe('saved');
+  const after = await owner.read(agent) as AgentSettingsView;
+  expect(after.sections.titles.stored).toEqual({ policy });
+  expect(after.sections.titles.effective).toEqual({ policy });
+  expect((await owner.save(edit)).kind).toBe('conflict');
+  for (const invalid of [{ ...policy, backend: 'unknown' }, { ...policy, effort: 'ultra' }]) {
+    expect((await owner.save({ ...edit, revision: after.sections.titles.revision, patch: { policy: invalid as typeof policy } })).kind).toBe('rejected');
+  }
+  expect(() => parseSettingsEdit({ ...edit, patch: { policy: { enabled: false, backend: 'claude-agent' } } })).toThrow();
+  expect((await owner.save({ ...edit, revision: after.sections.titles.revision, patch: { policy: { enabled: false } } })).kind).toBe('saved');
+  expect((await owner.read(agent) as AgentSettingsView).sections.titles.effective).toEqual({ policy: { enabled: false } });
 });
 it('checks same-section revision inside owner queue', async () => {
   const { owner } = await fixture(); const view = await owner.read(agent) as AgentSettingsView;
@@ -87,7 +108,7 @@ it('validates models, allows custom title ids, resets actual project and session
   await owner.save({ scope: session, section: 'model', revision: s.sections.model.revision, patch: { selection: { kind: 'default' } } });
   expect(await getSession(session.threadId)).not.toHaveProperty('model'); expect(await getSession(session.threadId)).not.toHaveProperty('effort');
   const a = await owner.read(agent) as AgentSettingsView;
-  expect((await owner.save({ scope: agent, section: 'titles', revision: a.sections.titles.revision, patch: { byBackend: { 'codex-appserver': { enabled: true, model: 'third-party-custom', effort: 'ultra' } } } })).kind).toBe('saved');
+  expect((await owner.save({ scope: agent, section: 'titles', revision: a.sections.titles.revision, patch: { policy: { enabled: true, backend: 'codex-appserver', model: 'third-party-custom', effort: 'ultra' } } })).kind).toBe('saved');
 });
 it('accepts hand-typed model ids for the project default and a topic, never for comments (3.11)', async () => {
   const { owner } = await fixture(); let p = await owner.read(project) as ProjectSettingsView;
@@ -175,11 +196,11 @@ it('readonly owner never permits writes; failed catalogs do not disable unrelate
 it('project persistence survives failed runtime eviction with an explicit restart effect', async () => {
   const { owner } = await fixture({ evictLiveSessionsForChat: async () => { throw new Error('busy'); } });
   const view = await owner.read(project) as ProjectSettingsView;
-  const result = await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { network: true } });
+  const result = await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { mode: 'write' } });
   expect(result.kind).toBe('saved'); if (result.kind === 'saved') expect(result.effects.some(e => e.when === 'restart')).toBe(true);
   expect((await getProjectByName('demo'))?.network).toBe(true);
 });
-it('s20b: a full-only backend says why, refuses saving 只读 or 读写, and keeps a stored 只读', async () => {
+it('s31c: a full-only backend refuses unavailable tiers and custom, while unrelated edits retain a stored 只读', async () => {
   expect((await (await fixture()).owner.read(project) as ProjectSettingsView).identity).not.toHaveProperty('fullOnly');
   await updateProject('demo', { mode: 'qa' });
   const { owner } = await fixture({ backendFor: () => ({ ...backend, fullAccessOnly: () => 'only full here' }) });
@@ -189,11 +210,149 @@ it('s20b: a full-only backend says why, refuses saving 只读 or 读写, and kee
     const result = await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch });
     expect(result).toEqual({ kind: 'rejected', fields: [{ field: 'settings', message: 'only full here' }] });
   }
-  expect((await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { network: true } })).kind).toBe('saved');
-  expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa', network: true });
+  expect((await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { custom: { sandbox: 'read-only', network: false } } }))).toEqual({ kind: 'rejected', fields: [{ field: 'settings', message: 'only full here' }] });
+  expect(view.sections.permission.stored.options.tiers[0]?.unavailable).toBe('only full here');
+  expect((await owner.save({ scope: project, section: 'presentation', revision: view.sections.presentation!.revision, patch: { showToolCalls: false } })).kind).toBe('saved');
+  expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa' });
   view = await owner.read(project) as ProjectSettingsView;
   expect((await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { mode: 'full' } })).kind).toBe('saved');
   expect((await getProjectByName('demo'))?.mode).toBe('full');
+});
+describe('s31c permission settings', () => {
+  const custom = { backend: 'codex-appserver', settings: { sandbox: 'read-only', network: true } };
+  it.each([
+    [{ mode: 'write' }, 'write', true, undefined],
+    [{ custom: { sandbox: 'workspace-write', network: true } }, 'write', true, undefined],
+    [{ custom: custom.settings }, 'qa', true, custom],
+    [{ mode: 'qa', custom: null }, 'qa', false, undefined],
+    [{ mode: 'write', custom: null }, 'write', true, undefined],
+  ] as const)('saves patch %j with canonical stored effects', async (patch, mode, network, expectedCustom) => {
+    await updateProject('demo', { mode: 'qa', network: true, custom });
+    const evict = vi.fn(async () => {});
+    const { owner } = await fixture({ evictLiveSessionsForChat: evict });
+    const before = await owner.read(project) as ProjectSettingsView;
+    expect((await owner.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch })).kind).toBe('saved');
+    const saved = (await getProjectByName('demo'))!;
+    expect(saved).toMatchObject({ mode, network });
+    expect(saved.custom).toEqual(expectedCustom);
+    if (!expectedCustom) expect(saved).not.toHaveProperty('custom');
+    expect(evict).toHaveBeenCalledOnce();
+  });
+  it('rejects choosing a tier and non-null custom settings together', async () => {
+    const { owner } = await fixture();
+    const before = await owner.read(project) as ProjectSettingsView;
+    const disk = await readFile(paths.projectsFile, 'utf8');
+    expect(await owner.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { mode: 'full', custom: custom.settings } })).toMatchObject({ kind: 'rejected', fields: [{ message: '选档和高级设置一次只改一个' }] });
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(disk);
+  });
+  it.each([
+    [{ mode: 'write', network: false }, 'write', true],
+    [{ mode: 'full', network: true, custom: { ...custom, settings: { bad: true } } }, 'qa', false],
+    [{ mode: 'qa', network: true, custom }, 'qa', false],
+  ] as const)('requires a tier when clearing custom state %j, then switches with the safe tier', async (initial, mode, network) => {
+    await updateProject('demo', initial);
+    const evict = vi.fn(async () => {});
+    const { owner } = await fixture({ backendFor: id => ({ ...backend, id }), evictLiveSessionsForChat: evict });
+    const before = await owner.read(project) as ProjectSettingsView;
+    const disk = await readFile(paths.projectsFile, 'utf8');
+    expect(await owner.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { custom: null } })).toMatchObject({ kind: 'rejected', fields: [{ message: '清掉高级设置时要同时选一档，例如 permission.mode=qa。' }] });
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(disk);
+    expect(evict).not.toHaveBeenCalled();
+    expect((await owner.save({ scope: project, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch: { backend: 'claude-agent', models: ['fixture-model'], efforts: ['high'] } })).kind).toBe('saved');
+    expect(await getProjectByName('demo')).toMatchObject({ mode, network, backend: 'claude-agent' });
+    expect((await getProjectByName('demo'))!).not.toHaveProperty('custom');
+  });
+  it.each([{}, { mode: 'full', network: false }, { mode: 'qa', network: false }] as const)('clearing absent custom is a complete no-op for %j', async initial => {
+    await updateProject('demo', initial);
+    const evict = vi.fn(async () => {});
+    const { owner } = await fixture({ backendFor: () => ({ ...backend, fullAccessOnly: () => 'only full here' }), evictLiveSessionsForChat: evict });
+    const before = await owner.read(project) as ProjectSettingsView;
+    const disk = await readFile(paths.projectsFile, 'utf8');
+    let committed = false;
+    expect(await owner.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { custom: null } }, { beforeCommit: () => { committed = true; } })).toMatchObject({ kind: 'saved', effects: [] });
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(disk);
+    expect(committed).toBe(false);
+    expect(evict).not.toHaveBeenCalled();
+  });
+  it('rejects network patches explicitly, malformed custom and unsupported tiers', async () => {
+    expect(() => parseSettingsEdit({ scope: project, section: 'permission', revision: 'r', patch: { network: true } })).toThrow('联网已经并进权限的档位');
+    for (const value of [[], 'x', 3]) expect(() => parseSettingsEdit({ scope: project, section: 'permission', revision: 'r', patch: { custom: value } })).toThrow();
+    const { owner } = await fixture({ backendFor: () => ({ ...backend, supportedModes: ['full'] }) });
+    const before = await owner.read(project) as ProjectSettingsView;
+    expect(await owner.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { custom: { sandbox: 'unknown' } } })).toMatchObject({ kind: 'rejected', fields: [{ message: expect.stringContaining('Codex 高级设置') }] });
+    expect(await owner.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { mode: 'write' } })).toMatchObject({ kind: 'rejected', fields: [{ message: '这个 provider 没有这一档。' }] });
+  });
+  it('shows legacy/custom/invalid states and includes custom in conflict revisions', async () => {
+    const { owner } = await fixture();
+    await updateProject('demo', { mode: 'write', network: false });
+    let view = await owner.read(project) as ProjectSettingsView;
+    expect(view.sections.permission.stored).toMatchObject({ network: false, custom: { sandbox: 'workspace-write', network: false }, options: { legacy: true, customSummary: expect.stringContaining('网络：关') } });
+    expect((await getProjectByName('demo'))!).not.toHaveProperty('custom');
+    await updateProject('demo', { mode: 'qa', network: true, custom });
+    view = await owner.read(project) as ProjectSettingsView;
+    expect(view.sections.permission.stored.options.customSummary).toContain('只读（read-only）');
+    expect(view.sections.permission.stored.options).not.toHaveProperty('legacy');
+    await updateProject('demo', { custom: { ...custom, settings: { sandbox: 'read-only', network: false } } });
+    const changed = await owner.read(project) as ProjectSettingsView;
+    expect(changed.sections.permission.revision).not.toBe(view.sections.permission.revision);
+    expect((await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { mode: 'write' } })).kind).toBe('conflict');
+    await updateProject('demo', { mode: 'full', custom: { ...custom, settings: { bad: true } } });
+    expect((await owner.read(project) as ProjectSettingsView).sections.permission.stored).toMatchObject({ mode: 'qa', custom: null, network: false, options: { invalid: true } });
+  });
+  it.each([true, false])('clears custom and legacy network only on a real provider switch (custom=%s)', async explicit => {
+    await updateProject('demo', { mode: 'write', network: false, ...(explicit ? { custom } : {}) });
+    const { owner } = await fixture({ backendFor: id => ({ ...backend, id }) });
+    let view = await owner.read(project) as ProjectSettingsView;
+    expect((await owner.save({ scope: project, section: 'modelAccess', revision: view.sections.modelAccess!.revision, patch: { backend: 'codex-appserver', models: ['fixture-model'], efforts: ['high'] } })).kind).toBe('saved');
+    expect((await getProjectByName('demo'))?.network).toBe(false);
+    if (explicit) expect((await getProjectByName('demo'))?.custom).toEqual(custom);
+    view = await owner.read(project) as ProjectSettingsView;
+    expect((await owner.save({ scope: project, section: 'modelAccess', revision: view.sections.modelAccess!.revision, patch: { backend: 'claude-agent', models: ['fixture-model'], efforts: ['high'] } })).kind).toBe('saved');
+    expect(await getProjectByName('demo')).toMatchObject({ mode: 'write', network: true, backend: 'claude-agent' });
+    expect((await getProjectByName('demo'))!).not.toHaveProperty('custom');
+    view = await owner.read(project) as ProjectSettingsView;
+    expect(view.sections.permission.stored.options.tiers[0]?.native).toContain('Claude：');
+    expect((await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { custom: custom.settings } })).kind).toBe('rejected');
+  });
+  it('allows switching to a provider on which the stored tier is unavailable', async () => {
+    await updateProject('demo', { backend: 'claude-agent', mode: 'qa', network: true });
+    const { owner } = await fixture({ backendFor: id => ({ ...backend, id, fullAccessOnly: () => id === 'codex-appserver' ? 'only full here' : undefined }) });
+    const before = await owner.read(project) as ProjectSettingsView;
+    expect((await owner.save({ scope: project, section: 'modelAccess', revision: before.sections.modelAccess!.revision, patch: { backend: 'codex-appserver', models: ['fixture-model'], efforts: ['high'] } })).kind).toBe('saved');
+    expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa', network: false });
+    const after = await owner.read(project) as ProjectSettingsView;
+    expect(after.sections.permission.stored).toMatchObject({ mode: 'qa', options: { tiers: [expect.objectContaining({ tier: 'qa', unavailable: 'only full here' }), expect.anything(), expect.anything()] } });
+  });
+});
+describe('s31d native permission settings', () => {
+  const claude = permissionTable('claude-agent');
+  it.each([
+    [{ permissionMode: 'acceptEdits', sandbox: true, network: 'all' }, 'write', true, false],
+    [{ permissionMode: 'plan' }, 'qa', false, true],
+    [{ permissionMode: 'default', network: 'domains', domains: ['github.com'] }, 'qa', false, true],
+    [{ permissionMode: 'bypassPermissions', sandbox: true }, 'write', true, true],
+    [{ permissionMode: 'plan', network: 'domains', domains: ['github.com'] }, 'qa', false, true],
+  ] as const)('saves %j using conservative downgrade fields and shows native effects', async (raw, mode, network, hasCustom) => {
+    await updateProject('demo', { backend: 'claude-agent' });
+    const { owner } = await fixture({ backendFor: id => ({ ...backend, id }) });
+    const before = await owner.read(project) as ProjectSettingsView;
+    expect((await owner.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { custom: raw } })).kind).toBe('saved');
+    const saved = (await getProjectByName('demo'))!;
+    expect(saved).toMatchObject({ mode, network });
+    expect(saved.custom).toEqual(hasCustom ? { backend: 'claude-agent', settings: claude.parseCustom(raw) } : undefined);
+    const after = (await owner.read(project) as ProjectSettingsView).sections.permission.stored;
+    expect(after.network).toBe(claude.effect(claude.parseCustom(raw)).network);
+    expect(after.options.fields).toEqual(claude.fields({ platform: process.platform }));
+    expect(after.options.expanded.write).toEqual(claude.expand('write'));
+    expect(after.options.customSummary).toBe(hasCustom ? claude.describe(raw) : undefined);
+  });
+  it('checks the native effect tier even when downgrade fields are read-only', async () => {
+    await updateProject('demo', { backend: 'claude-agent' });
+    const { owner } = await fixture({ backendFor: () => ({ ...backend, supportedModes: ['qa'] }) });
+    const before = await owner.read(project) as ProjectSettingsView;
+    expect(await owner.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { custom: { permissionMode: 'plan' } } })).toMatchObject({ kind: 'rejected', fields: [{ message: '这个 provider 没有这一档。' }] });
+    expect((await getProjectByName('demo'))!).not.toHaveProperty('custom');
+  });
 });
 it('s21: a group overrides 运行中来了消息, "default" goes back to the bot, Claude shows queue', async () => {
   const { owner } = await fixture();
@@ -217,7 +376,7 @@ it('s12: a stored autoCompact:false is ignored on read and the switch cannot be 
   await updateProject('demo', JSON.parse('{"autoCompact":false}') as Parameters<typeof updateProject>[1]);
   const { owner } = await fixture();
   const view = await owner.read(project) as ProjectSettingsView;
-  expect(Object.keys(view.sections).sort()).toEqual(['judge', 'model', 'modelAccess', 'permission', 'presentation', 'profile', 'response', 'run', 'skills', 'smartRules', 'workspace']);
+  expect(Object.keys(view.sections).sort()).toEqual(['judge', 'model', 'modelAccess', 'permission', 'presentation', 'profile', 'response', 'role', 'run', 'skills', 'smartRules', 'workspace']);
   expect(JSON.stringify(view)).not.toContain('autoCompact');
   expect(() => parseSettingsEdit({ scope: project, section: 'compact', revision: 'x', patch: { autoCompact: true } })).toThrow('设置字段、类型或范围无效');
   expect(JSON.parse(await readFile(paths.projectsFile, 'utf8')).projects[0]).toMatchObject({ autoCompact: false });
@@ -231,7 +390,7 @@ it('s02c1, s02c5: an old config.json with 咖啡一下 settings loads, reads wit
   cfg = await loadConfig() as AppConfig;
   const { owner } = await fixture();
   const view = await owner.read(agent) as AgentSettingsView;
-  expect(Object.keys(view.sections)).toEqual(['profile', 'cards', 'run', 'completion', 'comments', 'titles', 'paths', 'access', 'judge']);
+  expect(Object.keys(view.sections)).toEqual(['profile', 'role', 'cards', 'run', 'completion', 'comments', 'titles', 'paths', 'access', 'judge']);
   expect(view).not.toHaveProperty('cliRuntime');
   expect(JSON.stringify(view)).not.toMatch(/cliBridge|notifyScope|keepAwake/);
   expect((await owner.save({ scope: agent, section: 'cards', revision: view.sections.cards.revision, patch: { showToolCalls: false } })).kind).toBe('saved');
@@ -331,4 +490,51 @@ it('shows Feishu administrator sources and prevents their local removal', async 
     expect((await owner.act({ kind: 'adminMember', botId, openId: 'ou_admin', membership: 'absent', revision: view.administrators.revision })).kind).toBe('saved');
     expect(cfg.preferences?.access?.admins).toContain('ou_feishu_admin');
   } finally { roles.mockRestore(); }
+});
+
+describe('model catalog availability', () => {
+  const query = { botId, backend: 'codex-appserver', purpose: 'project' as const };
+
+  it('marks successful native discovery ready and saves its actual catalog for offline use', async () => {
+    const native = await backend.listModels();
+    let discovered: typeof native | undefined;
+    const { owner } = await fixture({ backendFor: () => ({
+      ...backend,
+      listModels: async () => { discovered = native; return native; },
+      peekModels: () => discovered,
+    }) });
+    const catalog = await owner.models(query);
+    expect(catalog).toMatchObject({ state: 'ready', models: native });
+    expect(await offlineModelCatalog(query.backend)).toMatchObject({ models: native, observedAt: catalog.observedAt });
+    // Cached backend instances retain confirmed native metadata between reads.
+    expect((await owner.models(query)).state).toBe('ready');
+  });
+
+  it.each([undefined, () => undefined, () => []])('keeps unconfirmed lists fallback without replacing a confirmed disk snapshot (%s)', async peekModels => {
+    const native = await backend.listModels();
+    await rememberModelCatalog(query.backend, native, '2026-10-01T00:00:00.000Z');
+    const fallback = [{ ...native[0]!, id: 'offline-fallback' }];
+    const { owner } = await fixture({ backendFor: () => ({ ...backend, listModels: async () => fallback, peekModels }) });
+    expect(await owner.models(query)).toMatchObject({ state: 'fallback', models: fallback });
+    expect(await offlineModelCatalog(query.backend)).toMatchObject({ models: native, observedAt: '2026-10-01T00:00:00.000Z' });
+  });
+
+  it('keeps explicit offline reads fallback even with a populated native cache and never probes', async () => {
+    const native = await backend.listModels();
+    await rememberModelCatalog(query.backend, native, '2026-10-01T00:00:00.000Z');
+    const doctor = vi.fn();
+    const listModels = vi.fn();
+    const { owner } = await fixture({ offline: true, backendFor: () => ({ ...backend, doctor, listModels, peekModels: () => native }) });
+    expect(await owner.models(query)).toMatchObject({ state: 'fallback', models: native });
+    expect(doctor).not.toHaveBeenCalled();
+    expect(listModels).not.toHaveBeenCalled();
+  });
+
+  it('does not treat an old native cache as ready when the backend probe fails', async () => {
+    const native = await backend.listModels();
+    const listModels = vi.fn(async () => native);
+    const { owner } = await fixture({ backendFor: () => ({ ...backend, doctor: async () => ({ ok: false, version: null }), listModels, peekModels: () => native }) });
+    expect(await owner.models(query)).toMatchObject({ state: 'unavailable', models: [] });
+    expect(listModels).not.toHaveBeenCalled();
+  });
 });

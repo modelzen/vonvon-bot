@@ -48,7 +48,7 @@ afterEach(async () => { await Promise.all(apps.splice(0).map(app => app.shutdown
 it('s36b 1: sends the owner a named, read-only setup card', async () => {
   const { app, channel } = harness(); await app.onBotAddedToChat(event());
   expect(fixture.send).toHaveBeenCalledWith(channel, 'ou_owner', expect.any(Object), undefined, false, 'open_id');
-  expect(card()).toContain('Research'); expect(card()).toContain('你把我拉进了'); expect(card()).toContain('🔒 权限档：只读 · 网络：关'); logged('bot-added', { to: 'adder', sent: 'yes' });
+  expect(card()).toContain('Research'); expect(card()).toContain('你把我拉进了'); expect(card()).toContain('🔒 权限：只读（不联网）'); logged('bot-added', { to: 'adder', sent: 'yes' });
 });
 it('s36b 2: sends an administrator their own card', async () => {
   const { app } = harness(); await app.onBotAddedToChat(event('ou_admin'));
@@ -114,7 +114,9 @@ it.each([undefined, 'claude-agent'])('s36b 17: the backend initial value follows
   const { app } = harness({ ...cfg, preferences: { ...cfg.preferences, defaults: { backend } } }); await app.onBotAddedToChat(event()); expect(card()).toContain(`"initial_option":"${backend ?? await effectiveDefaultBackend()}"`);
 });
 it.each([undefined, '这台电脑是 Linux，只能完全访问'])('s36b 18: the Linux warning follows backend capability %s (main fails)', async warning => {
-  fixture.fullOnly = warning; const { app } = harness(); await app.onBotAddedToChat(event()); expect(card().includes('这台电脑是 Linux')).toBe(Boolean(warning));
+  fixture.fullOnly = warning; const { app } = harness(); await app.onBotAddedToChat(event());
+  if (warning) expect(card()).toContain(warning);
+  else expect(card()).not.toContain('这台电脑是 Linux');
 });
 it('s36b 19: every catalog backend permits the fixed read-only setup default', () => { for (const backend of BACKEND_CATALOG) expect(bindModeFor(backend.id)).toBeUndefined(); });
 it('s36b 20: a hung sweep preserves the candidate, logs failure, and retries on redelivery (main fails)', async () => {

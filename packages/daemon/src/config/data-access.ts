@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer, type ListenOptions, type Server } from 'node:net';
@@ -8,8 +9,10 @@ export class DataAccessError extends Error {}
 /** The code on acquireMutex's error when the lock stayed held past the wait, as opposed to a lock that cannot be taken
  * at all (macOS: a bad `.locks` directory); admin/secrets.ts tells the two apart by it. */
 export const MUTEX_TIMEOUT = 'DATA_MUTEX_TIMEOUT';
-/** `service` serializes `vonvon service install|uninstall`, whoever runs it: the terminal, the daemon's helper or the desktop's. */
-type MutexRole = 'admission' | 'host' | 'keystore' | 'service' | 'bots' | 'projects' | 'creation';
+/** `service` serializes `vonvon service install|uninstall`, whoever runs it: the terminal, the daemon's helper or the desktop's.
+ * `library` is held on `<数据根>/library/` (the project library, project/library.ts); `memory` on the directory of one
+ * memory store, a project's `library/<projectId>/` or a bot's own directory, so projects never queue behind each other. */
+type MutexRole = 'admission' | 'host' | 'judge-models' | 'keystore' | 'service' | 'bots' | 'library' | 'projects' | 'memory' | 'creation';
 export interface DataLease { release(): void }
 /** A held coordination mutex. `closeMutex` releases it; the kernel releases it when the process dies. */
 export interface Mutex { readonly role: MutexRole }
@@ -105,6 +108,38 @@ function heldMutex(role: MutexRole, release: Release): Mutex {
 export function closeMutex(mutex: Mutex): Promise<void> {
   const release = mutexReleases.get(mutex);
   return release ? release() : Promise.reject(new TypeError('Not a mutex from acquireMutex.'));
+}
+
+/**
+ * The order in which one call may nest these four (memory design §2.1): bots → library → projects → memory. Holding
+ * `projects` a call never takes `library`, so a host that holds `library` and waits for a bot's `projects` cannot meet
+ * a bot that holds `projects` and waits for `library`. {@link holdMutexRole} checks it within one process; the other
+ * processes keep it because they run the same code.
+ */
+const LOCK_ORDER = ['bots', 'library', 'projects', 'memory'] as const;
+export type OrderedMutexRole = typeof LOCK_ORDER[number];
+export class LockOrderError extends DataAccessError {}
+type HeldRole = { readonly role: OrderedMutexRole; held: boolean };
+const heldRoles = new AsyncLocalStorage<readonly HeldRole[]>();
+
+/**
+ * Runs `operation` as the holder of `role`: inside it, taking `role` again or a role that comes earlier in
+ * {@link LOCK_ORDER} is refused with {@link LockOrderError} before it waits. Again is refused too: each role's
+ * operations queue one at a time in this process, so a nested one would wait for its own caller, and two memory
+ * stores held at once could be taken in opposite order by two processes. The role counts as held from this call
+ * until `operation` settles; work `operation` started and left running sees it released from then on.
+ * Only project/registry.ts (`projects`) and project/library.ts (`library`, `memory`) mark their roles; `bots` is not
+ * marked, so taking it inside the others is not caught here.
+ */
+export function holdMutexRole<T>(role: OrderedMutexRole, operation: () => Promise<T>): Promise<T> {
+  const holding = (heldRoles.getStore() ?? []).filter(entry => entry.held);
+  const later = holding.find(entry => LOCK_ORDER.indexOf(entry.role) >= LOCK_ORDER.indexOf(role));
+  if (later) return Promise.reject(new LockOrderError(`Lock order is ${LOCK_ORDER.join(' → ')}, each once: ${role} cannot be taken while ${later.role} is held.`));
+  const entry: HeldRole = { role, held: true };
+  let run: Promise<T>;
+  try { run = heldRoles.run([...holding, entry], operation); }
+  catch (error) { entry.held = false; return Promise.reject(error); }
+  return run.finally(() => { entry.held = false; });
 }
 
 const leaseDirectory = (home: string): string => join(realpathSync(home), '.access');

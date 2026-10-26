@@ -15,6 +15,10 @@ import {
 } from "../src/index.js";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
+const permissionOptions = {
+  tiers: ["qa", "write", "full"].map(tier => ({ tier, name: "权限", summary: "说明", native: "" })),
+  strength: "能力说明", fields: [], expanded: { qa: {}, write: {}, full: {} },
+};
 
 describe("pinned contract extraction", () => {
   it("parses V3 admin state without dropping legacy fields", () => {
@@ -39,10 +43,12 @@ describe("pinned contract extraction", () => {
       {type:"removeSecret",keyId:"typesafe-api-key"},{type:"testSecret",keyId:"typesafe-api-key"},
     ];
     for (const payload of adminRequests) expect(adminRequestSchema.safeParse(payload).success).toBe(true);
-    for (const payload of [{type:"list"},{type:"list",path:"/tmp"},{type:"choose",path:"/tmp"}]) {
+    for (const payload of [{type:"list"},{type:"list",path:"/tmp"},{type:"suggest",query:"~/Projects/vonvon"},{type:"choose",path:"/tmp"}]) {
       expect(directoryRequestSchema.safeParse(payload).success).toBe(true);
     }
     expect(directoryReplySchema.parse({kind:"entries",path:"/tmp",parent:null,entries:[{name:"p",path:"/tmp/p",hidden:false}],truncated:false}).kind).toBe("entries");
+    expect(directoryReplySchema.parse({kind:"suggestions",root:"/home",path:null,parent:null,entries:[{name:"project",path:"/home/project",hidden:false}],truncated:true}).kind).toBe("suggestions");
+    expect(directoryRequestSchema.safeParse({type:"suggest",query:"x".repeat(4097)}).success).toBe(false);
     expect(directoryReplySchema.parse({kind:"folderChosen",folder:{token:randomUUID(),displayPath:"/tmp/p"}}).kind).toBe("folderChosen");
     const backend = {id:"codex",name:"Codex",ok:true,version:"1",isDefault:true};
     const daemon = {installed:false,running:true,selfHosted:true,version:"1",supported:false};
@@ -143,16 +149,17 @@ describe("pinned contract extraction", () => {
     const views = [
       fixture("agent-settings.json"),
       {scope:{kind:"project",botId:"cli_fixture",projectName:"fixture"},sections:{
-        permission:section({mode:"qa",guestMode:"qa",network:false}),
+        permission:section({mode:"qa",guestMode:"qa",network:false,custom:null,options:permissionOptions}),
         response:section({noMention:false}),model:section({selection}),
       },identity:{chatId:"oc_fixture",backend:"codex-appserver",cwd:"/tmp",kind:"multi"},members:{openIds:[],revision:"r1"}},
       // s21's run section: stored "default" inherits the bot's
       {scope:{kind:"project",botId:"cli_fixture",projectName:"fixture"},sections:{
-        permission:section({mode:"qa",guestMode:"qa",network:false}),
+        permission:section({mode:"qa",guestMode:"qa",network:false,custom:null,options:permissionOptions}),
         response:section({noMention:false}),model:section({selection}),run:section({pendingPolicy:"default"}),
       },identity:{chatId:"oc_fixture",backend:"codex-appserver",cwd:"/tmp",kind:"multi"},members:{openIds:[],revision:"r1"}},
       {scope:{kind:"session",botId:"cli_fixture",threadId:"thread"},sections:{model:section({selection})},identity:{backend:"codex-appserver",sessionId:"session",chatId:"oc_fixture",projectName:"fixture"}},
       {scope:{kind:"host"},sections:{execution:section({codexBin:null})},runtime:{codexBin:null,fallbackCwd:"/tmp",platform:"macos"}},
+      {scope:{kind:"host"},sections:{execution:section({codexBin:null}),judge:section({byProvider:{"codex-appserver":{model:"luna",effort:"low"}}})},runtime:{codexBin:null,fallbackCwd:"/tmp",platform:"macos"}},
     ];
     for (const view of views) {
       const parsed = settingsViewSchema.parse(view);
@@ -164,6 +171,17 @@ describe("pinned contract extraction", () => {
     const save = (section: string, patch: unknown) => requestSchema.safeParse({type:"request",id:"1",method:"settings",payload:{type:"save",edit:{scope,section,revision:"r1",patch}}}).success;
     expect(save("response", {noMention:true})).toBe(true);
     expect(save("compact", {autoCompact:false})).toBe(false);
+  });
+  it('accepts global title settings and one-provider legacy input without exposing legacy in views', () => {
+    const save = (patch: unknown) => requestSchema.safeParse({type:'request',id:'1',method:'settings',payload:{type:'save',edit:{scope:{kind:'agent',botId:'cli_fixture'},section:'titles',revision:'r1',patch}}}).success;
+    expect(save({policy:{enabled:true,backend:'claude-agent',model:'title-model',effort:'low'}})).toBe(true);
+    expect(save({policy:{enabled:false}})).toBe(true);
+    expect(save({byBackend:{'codex-appserver':{enabled:false}}})).toBe(true);
+    expect(save({byBackend:{a:{enabled:false},b:{enabled:false}}})).toBe(false);
+    expect(save({policy:{enabled:true,model:'missing-backend',effort:'low'}})).toBe(false);
+    const view = agentViewSchema.parse(fixture('agent-settings.json'));
+    expect(view.sections.titles.stored).toHaveProperty('policy');
+    expect(view.sections.titles.stored).not.toHaveProperty('byBackend');
   });
   it("s23f: decisionModels is optional in agent and project views", () => {
     const old = fixture("agent-settings.json") as Record<string, unknown>;
@@ -201,7 +219,7 @@ describe("pinned contract extraction", () => {
       expect(agentViewSchema.safeParse({ ...old, sections: { ...old.sections, judge: section({selection:bad}) } }).success).toBe(false);
     }
     const project = {scope:{kind:"project",botId:"cli_fixture",projectName:"fixture"},sections:{
-      permission:section({mode:"qa",guestMode:"qa",network:false}),response:section({noMention:false}),model:section({selection:{kind:"default"}}),
+      permission:section({mode:"qa",guestMode:"qa",network:false,custom:null,options:permissionOptions}),response:section({noMention:false}),model:section({selection:{kind:"default"}}),
     },identity:{chatId:"oc_fixture",backend:"codex-appserver",cwd:"/tmp",kind:"multi"},members:{openIds:[],revision:"r1"}};
     expect(projectViewSchema.parse(project).sections.judge).toBeUndefined();
     expect(projectViewSchema.parse({ ...project, sections: { ...project.sections, judge: section({selection:{kind:"default"}}) }, smartPrompt: { ...prompt, error: "SMART.md 是符号链接" } }).smartPrompt?.error).toBe("SMART.md 是符号链接");
@@ -227,6 +245,11 @@ describe("pinned contract extraction", () => {
     expect(save({mode:"full"})).toBe(true);
     expect(save({guestMode:"qa"})).toBe(false);
     expect(save({mode:"full",guestMode:"qa"})).toBe(false);
+    expect(save({custom:{sandbox:"read-only",network:true}})).toBe(true);
+    expect(save({custom:null})).toBe(true);
+    expect(save({network:true})).toBe(false);
+    expect(save({options:permissionOptions})).toBe(false);
+    expect(save({custom:[]})).toBe(false);
     const membershipId = JSON.stringify(["cli_fixture","oc_fixture"]);
     expect(commandSchema.safeParse({type:"setPermission",membershipId,administrator:"full",network:false}).success).toBe(true);
     expect(commandSchema.safeParse({type:"setPermission",membershipId,administrator:"full",member:"qa",network:false}).success).toBe(false);
@@ -234,7 +257,7 @@ describe("pinned contract extraction", () => {
   it("keeps guestMode in the group's view, output only, so a client from before s15c still parses it", () => {
     const section = (value: unknown) => ({stored:value,effective:value,revision:"r1",access:{kind:"writable"},apply:[]});
     const view = (permission: object) => ({scope:{kind:"project",botId:"cli_fixture",projectName:"fixture"},sections:{
-      permission:section(permission),response:section({noMention:false}),model:section({selection:{kind:"default"}}),
+      permission:section({custom:null,options:permissionOptions,...permission}),response:section({noMention:false}),model:section({selection:{kind:"default"}}),
     },identity:{chatId:"oc_fixture",backend:"codex-appserver",cwd:"/tmp",kind:"multi"},members:{openIds:[],revision:"r1"}});
     // The permission section as clients from before s15c (4e22f1b) parse it.
     const tier = z.enum(["qa","write","full"]);
@@ -244,7 +267,7 @@ describe("pinned contract extraction", () => {
     expect(before.parse(parsed.sections.permission.effective)).toEqual({mode:"write",guestMode:"write",network:true});
     expect(projectViewSchema.safeParse(view({mode:"write",network:true})).success).toBe(false);
     expect(settingsReplySchema.parse({kind:"view",view:view({mode:"qa",guestMode:"qa",network:false})})).toMatchObject({view:{sections:{permission:{stored:{guestMode:"qa"}}}}});
-    expect(Object.keys(projectEditableSchemas.permission.shape)).toEqual(["mode","network"]);
+    expect(Object.keys(projectEditableSchemas.permission.shape)).toEqual(["mode","custom"]);
   });
   it("correlates method and payload in both directions", () => {
     expect(requestSchema.safeParse({type:"request",id:"1",method:"settings",payload:{type:"refresh"}}).success).toBe(false);

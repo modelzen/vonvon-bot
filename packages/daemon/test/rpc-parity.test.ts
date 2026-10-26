@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
-import { describe, expect, it } from 'vitest';
-import { requestSchema, responseSchema } from '@vonvon/protocol';
+import { describe, expect, it, vi } from 'vitest';
+import { membershipIdSchema, requestSchema, responseSchema } from '@vonvon/protocol';
 import type { AdminBot, AdminProject } from '../src/admin/service';
 import type { HostSettingsView } from '../src/admin/settings-types';
 import { readAdminState } from '../src/server/state';
@@ -8,7 +8,7 @@ import { fakeService, socketClient, startFixture } from './server-fixture';
 
 const bot: AdminBot = { appId: 'cli_fixture', name: 'fixture', tenant: 'feishu', active: false, current: true, running: true, pid: 42, startedAt: 12, completionReminder: { mode: 'always', longTaskMinutes: 7 } };
 const project: AdminProject = { name: 'project', chatId: 'oc_fixture', cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 2, createdAt: 1 };
-const host: HostSettingsView = { scope: { kind: 'host' }, sections: { execution: { stored: { codexBin: null }, effective: { codexBin: null }, revision: 'section-token', access: { kind: 'writable' }, apply: [] } }, runtime: { codexBin: null, fallbackCwd: '/fixture', platform: 'darwin' } };
+const host: HostSettingsView = { scope: { kind: 'host' }, sections: { execution: { stored: { codexBin: null }, effective: { codexBin: null }, revision: 'section-token', access: { kind: 'writable' }, apply: [] }, judge: { stored: { byProvider: {} }, effective: { byProvider: { 'codex-appserver': { model: 'gpt-6-luna' }, 'claude-agent': { model: 'haiku' }, typesafe: { model: 'jev-latest' } } }, revision: 'judge-token', access: { kind: 'writable' }, apply: [] } }, runtime: { codexBin: null, fallbackCwd: '/fixture', platform: 'darwin' } };
 const agentScope = { kind: 'agent', botId: bot.appId };
 const projectScope = { kind: 'project', botId: bot.appId, projectName: project.name };
 const sessionScope = { kind: 'session', botId: bot.appId, threadId: 'thread' };
@@ -29,6 +29,7 @@ function inventory(folderToken: string) {
     ['POST voice', 'settings', { type: 'act', action: { kind: 'voice', botId: bot.appId, action: { action: 'disable' } } }],
     ['POST completion-reminder', 'settings', { type: 'save', edit: { scope: agentScope, section: 'completion', revision: 'old', patch: { mode: 'always' } } }],
     ['POST permission', 'command', { type: 'setPermission', membershipId, administrator: 'write', network: true }],
+    ['POST permission without network', 'command', { type: 'setPermission', membershipId, administrator: 'qa' }],
     ['POST no-mention', 'command', { type: 'setResponse', membershipId, response: 'all' }],
     ['POST backend', 'admin', { type: 'switchBackend', agentId: bot.appId, projectName: project.name, backend: 'claude-agent' }],
     ['PATCH bot', 'command', { type: 'setAgentEnabled', agentId: bot.appId, enabled: true }],
@@ -68,7 +69,8 @@ function inventory(folderToken: string) {
 describe('route inventory parity', () => {
   it('calls every replacement route through real WebSocket and parses its reply schema', async () => {
     let active = false;
-    const service = fakeService({ listBots: async () => [{ ...bot, active }], listProjects: async () => [project], setBotEnabled: async (_id, enabled) => { active = enabled; return { ok: true, activation: 'applied', message: '' }; },
+    const setPermissionMode = vi.fn(async () => undefined);
+    const service = fakeService({ setPermissionMode, listBots: async () => [{ ...bot, active }], listProjects: async () => [project], setBotEnabled: async (_id, enabled) => { active = enabled; return { ok: true, activation: 'applied', message: '' }; },
       pendingGroups: async () => ({ groups: [] }), joinedGroups: async () => ({ groups: [] }), bindGroup: async () => project,
       collaboration: async () => ({ project: { name: project.name, chatId: project.chatId, cwd: project.cwd, kind: project.kind, backend: project.backend, enabled: true, revision: 'project-token' } }),
       startCodexJob: () => ({ id: 'fixture-job' }), codexJob: () => ({ id: 'fixture-job', type: 'install', state: 'succeeded' }),
@@ -92,8 +94,23 @@ describe('route inventory parity', () => {
           expect(frame).toMatchObject({ payload: { kind: 'applied', revision: client.frames[snapshotIndex]?.type === 'event' && client.frames[snapshotIndex]?.event === 'snapshot' ? client.frames[snapshotIndex].payload.revision : -1 } });
         }
       }
+      expect(setPermissionMode.mock.calls).toEqual([[bot.appId, project.name, { mode: 'write' }], [bot.appId, project.name, { mode: 'qa' }]]);
       expect(fixture.control.requestRestart).toHaveBeenCalledWith(fixture.api.port);
       expect(fixture.control.requestStop).toHaveBeenCalledOnce();
+      await client.close();
+    } finally { await fixture.close(); }
+  });
+
+  it.each([['write', false], ['qa', true], ['full', false]] as const)('refuses contradictory legacy RPC network for %s without calling the writer', async (administrator, network) => {
+    const setPermissionMode = vi.fn(async () => undefined);
+    const fixture = await startFixture(fakeService({ listBots: async () => [bot], listProjects: async () => [project], setPermissionMode }));
+    try {
+      const client = await socketClient(fixture.api.port, fixture.credential); await client.ready();
+      const frame = await client.call({ type: 'request', id: 'contradictory-permission', method: 'command', payload: {
+        type: 'setPermission', membershipId: membershipIdSchema.parse(JSON.stringify([bot.appId, project.chatId])), administrator, network,
+      } });
+      expect(frame).toMatchObject({ type: 'error', code: 'invalid_request', message: '联网已经并进权限的档位：只读不联网，工作区可写联网，完全访问不限制。只读又要联网这类组合，用高级设置 permission.custom。' });
+      expect(setPermissionMode).not.toHaveBeenCalled();
       await client.close();
     } finally { await fixture.close(); }
   });

@@ -114,13 +114,16 @@ export async function runGroupBind(rawGroupId: string, options: BindOptions, io:
     const projectName = command.data.projectName;
     const chosen = want('选择文件夹', await call('选择文件夹', c => c.directory({ type: 'choose', path: folder })), 'folderChosen').folder;
     const bound = await call('绑定群', c => c.run({ type: 'bindGroup', agentId: agent.id, groupId: groupId.data, projectName, folder: { kind: 'existing', folderToken: chosen.token }, tool: tool.data, conversation: conversation.data, ...sent }), { feishu: true, unknown });
-    return { revision: want('绑定群', bound, 'applied', unknown).revision, name: projectName, folder: chosen.displayPath, several: snapshot.agents.length > 1, agentId: agent.id };
+    const view = tool.data === 'codex'
+      ? want('读取群设置', await call('读取群设置', c => c.settings({ type: 'read', scope: { kind: 'project', botId: agent.id, projectName } })), 'view').view
+      : undefined;
+    const fullOnly = view && 'identity' in view && 'fullOnly' in view.identity ? view.identity.fullOnly : undefined;
+    return { fullOnly, revision: want('绑定群', bound, 'applied', unknown).revision, name: projectName, folder: chosen.displayPath, several: snapshot.agents.length > 1, agentId: agent.id };
   });
   const smart = picked === 'smart';
   const human = [`已绑定 ${result.name}（${groupId.data}）→ ${result.folder} · ${tool.data === 'codex' ? 'Codex' : 'Claude'} · ${conversationLabel(conversation.data)}${smart ? '' : ` · 免 @ ${reply === 'all' ? '开' : '关'}`}`];
-  // The group stays in qa: on Linux its Codex turns are refused with a reply until the owner picks full (s20b).
-  if (host.platform === 'linux' && tool.data === 'codex') {
-    human.push(`Linux 上 Codex 只能用完全访问，运行：vonvon settings set${result.several ? ` --bot ${result.agentId}` : ''} --group ${groupId.data} permission.mode=full`);
+  if (result.fullOnly) {
+    human.push(`${result.fullOnly} 运行：vonvon settings set${result.several ? ` --bot ${result.agentId}` : ''} --group ${groupId.data} permission.mode=full`);
   }
   print(io, human, { groupId: groupId.data, name: result.name, folder: result.folder, tool: tool.data, conversation: conversation.data, ...(smart ? {} : { response: reply }), revision: result.revision });
 }

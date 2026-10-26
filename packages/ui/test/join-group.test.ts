@@ -1,9 +1,9 @@
 import {createElement} from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {expect, it} from 'vitest';
-import {agentSchema, collaborationRequestSchema} from '@vonvon/protocol';
+import {agentSchema, collaborationRequestSchema, toolStateSchema} from '@vonvon/protocol';
 import {RpcError} from '@vonvon/client/browser';
-import {CONVERSATIONS, CREATION_UNKNOWN, JoinGroupDialog, CreationLockNotice, conversationsFor, creationFailure, keptResponse, projectNameProblem, sentResponse, shownResponse} from '../src/JoinGroupDialog';
+import {CONVERSATIONS, CREATION_UNKNOWN, JoinGroupDialog, CreationLockNotice, conversationsFor, creationFailure, keptResponse, projectNameProblem, sentResponse, shownResponse, judgeSetupProblem, initialGroupProvider} from '../src/JoinGroupDialog';
 import {canSaveAll, DraftGuardProvider} from '../src/settings/DraftGuard';
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
@@ -50,11 +50,11 @@ it('s36d1: locks the form on a group created and not saved, with the daemon\'s b
   expect(notice).not.toContain('重试');
 });
 
-it('s25c: lists the three 会话方式 in 3.4\'s order and words, and 智能 has no 免@ to show or send', () => {
+it('uses the same communication vocabulary as Bot settings, and 智能 has no 免@ to show or send', () => {
   expect(CONVERSATIONS).toEqual([
-    {value: 'threads', label: '@ 我开新会话', description: '在主区 @ 我就开一个话题，一个话题一条会话，几件事各聊各的'},
-    {value: 'shared', label: '整群一条会话', description: '主区一条会话，上下文一直连着；想另起一件事，开个话题和我聊'},
-    {value: 'smart', label: '智能开话题', description: '主区一条会话，不用 @ 我也会看情况接话；聊到新的事，我自己开话题、起新会话'},
+    {value: 'threads', label: '独立话题', description: '主区 @ Bot 开启新话题，每个话题独立交谈、各自记住上下文。'},
+    {value: 'shared', label: '连续交谈', description: '全群接着聊，共用一段对话和上下文。'},
+    {value: 'smart', label: '智能', description: '根据判断规则，自己决定何时接话、何时另开话题。'},
   ]);
   expect(shownResponse(undefined, undefined)).toBeUndefined();
   expect(shownResponse('threads', undefined)).toBe('all');
@@ -73,35 +73,61 @@ it('s25c: lists the three 会话方式 in 3.4\'s order and words, and 智能 has
 
 it('s36b2: offers topic conversations and keeps threads 免 @ on by default', () => {
   expect(conversationsFor(true)).toEqual([
-    {value: 'threads', label: '按话题聊', description: '一个话题一条会话，几件事各聊各的'},
-    {value: 'smart', label: '智能开话题', description: '一个话题一条会话，不用 @ 我也会看情况接话'},
+    {value: 'threads', label: '独立话题', description: '主区 @ Bot 开启新话题，每个话题独立交谈、各自记住上下文。'},
+    {value: 'smart', label: '智能', description: '根据判断规则，自己决定何时接话、何时另开话题。'},
   ]);
   expect(conversationsFor(false)).toEqual(CONVERSATIONS);
   expect(shownResponse('threads', undefined)).toBe('all');
 });
 
-it('s36b2: shows topic binding choices, restricted permissions and Linux Codex guidance only when binding', () => {
+it('s36b2: shows topic binding choices and read-only permissions when binding', () => {
   const client = createClient({isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {}});
   const agent = agentSchema.parse({id: 'cli_join', name: 'Test Bot', enabled: true, running: true, connection: 'connected', activation: 'active'});
-  const render = (bind: boolean, linux: boolean, topic = true) => renderToStaticMarkup(
+  const render = (bind: boolean, topic = true) => renderToStaticMarkup(
     createElement(ClientProvider, {client, children: createElement(DirectoryPickerProvider, {children:
       createElement(DraftGuardProvider, {children: createElement(JoinGroupDialog, {
-        agent, linux, ...(bind ? {initialGroup: {chatId: 'oc_topic', name: 'Topic', addedAt: 0, topic}} : {}),
+        agent, tools: [{tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '1'}], ...(bind ? {initialGroup: {chatId: 'oc_topic', name: 'Topic', addedAt: 0, topic}} : {}),
         onClose: () => {}, onChanged: async () => {},
       })}),
     })}),
   );
   const topic = render(true, true);
   expect(topic.match(/role="radio"/g)).toHaveLength(2);
-  expect(topic).toContain('按话题聊');
-  expect(topic).not.toContain('整群一条会话');
-  expect(topic).toContain('权限档和网络');
-  expect(topic).toContain('只读 · 网络关（设置好以后在群详情页改）');
-  expect(topic).toContain('Linux 上的 Codex 只能用完全访问');
-  expect(render(true, false)).not.toContain('Linux 上的 Codex 只能用完全访问');
-  const create = render(false, true);
+  expect(topic).toContain('独立话题');
+  expect(topic).toContain('沟通方式');
+  expect(topic).not.toContain('会话方式');
+  expect(topic).not.toContain('连续交谈');
+  expect(topic).toContain('只读（不联网）');
+  expect(topic).not.toContain('网络关闭');
+  expect(topic).not.toContain('连接后，在群设置中改为完全访问才能使用。');
+  const create = render(false);
   expect(create.match(/role="radio"/g)).toHaveLength(3);
-  expect(create).not.toContain('权限档和网络');
-  expect(create).not.toContain('Linux 上的 Codex 只能用完全访问');
-  expect(render(true, true, false).match(/role="radio"/g)).toHaveLength(3);
+  expect(create).not.toContain('只读（不联网）');
+  expect(render(true, false).match(/role="radio"/g)).toHaveLength(3);
+});
+
+it('accepts the host default only after configuration and its provider are ready', () => {
+  const defaultSelection = {kind: 'default'} as const;
+  const codexConfiguration = {kind: 'ready', configuration: {defaultProvider: 'codex-appserver', byProvider: {'codex-appserver': {model: 'gpt-6-luna'}}}} as const;
+  expect(judgeSetupProblem(defaultSelection)).toBeDefined();
+  expect(judgeSetupProblem(defaultSelection, undefined, ['codex-appserver'], {kind: 'failed'})).toBeDefined();
+  expect(judgeSetupProblem(defaultSelection, undefined, ['codex-appserver'], {kind: 'ready', configuration: {byProvider: {}}})).toBeDefined();
+  expect(judgeSetupProblem(defaultSelection, undefined, ['codex-appserver'], codexConfiguration)).toBeUndefined();
+  expect(judgeSetupProblem(defaultSelection, undefined, ['claude-agent'], codexConfiguration)).toContain('不可用');
+  const services = [{provider: 'typesafe', displayName: 'TypeSafe', keyId: 'key', models: [{id: 'jev', displayName: 'Jev'}], keySet: false}];
+  const jevConfiguration = {kind: 'ready', configuration: {defaultProvider: 'typesafe', byProvider: {typesafe: {model: 'jev'}}}} as const;
+  expect(judgeSetupProblem(defaultSelection, services, [], jevConfiguration)).toContain('密钥');
+  expect(judgeSetupProblem(defaultSelection, [{...services[0]!, keySet: true}], [], jevConfiguration)).toBeUndefined();
+});
+
+it('starts with a ready Provider and rejects an unavailable setup suggestion', () => {
+  const states = [
+    toolStateSchema.parse({tool: 'codex', installation: 'missing', authentication: 'signedOut', version: null}),
+    toolStateSchema.parse({tool: 'claude', installation: 'installed', authentication: 'signedIn', version: '1'}),
+  ];
+  expect(initialGroupProvider(undefined, states)).toBe('claude');
+  expect(initialGroupProvider('codex', states)).toBe('claude');
+  expect(initialGroupProvider(undefined, states.map(item => item.tool === 'codex' ? {...item, installation: 'installed', authentication: 'signedIn'} : item))).toBe('codex');
+  expect(initialGroupProvider(undefined, states.map(item => ({...item, authentication: 'unknown'})))).toBeUndefined();
+  expect(initialGroupProvider(undefined, states.map(item => ({...item, compatibility: {status: 'tooOld', minimumVersion: '2'}})))).toBeUndefined();
 });

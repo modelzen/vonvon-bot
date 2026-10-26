@@ -40,6 +40,15 @@ describe('subagent run state', () => {
     expect(state.subagents[0]?.steps[4]?.status).toBe('failed');
   });
 
+  it('keeps a child tool presentation after its completion event has no metadata', () => {
+    let state = reduce(running(), { type: 'subagent_step', id: 'a', stepId: 'command',
+      title: 'pwd', status: 'running', kind: 'command', detail: '/repo' });
+    state = reduce(state, { type: 'subagent_step', id: 'a', stepId: 'command', title: '', status: 'done' });
+    expect(state.subagents[0]?.steps[0]).toEqual({
+      stepId: 'command', title: 'pwd', status: 'done', kind: 'command', detail: '/repo',
+    });
+  });
+
   it('resumes completed rows, while failed and stopped rows remain terminal', () => {
     expect(reduce(reduce(running(), status('completed')), status('running')).subagents[0]?.status).toBe('running');
     for (const terminal of ['failed', 'stopped'] as const) {

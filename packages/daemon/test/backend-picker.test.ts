@@ -152,7 +152,7 @@ describe('validateBackendSwitch（切换校验的纯函数）', () => {
     const reason = validateBackendSwitch({ target: 'full-only', registered, project: { mode: 'qa' }, supportedModes: ['full'], probe: ok });
     expect(reason).toContain('仅支持');
     expect(reason).toContain('完全访问');
-    expect(reason).toContain('本项目当前为 🔒 项目内只读');
+    expect(reason).toContain('本项目当前为 只读');
     expect(reason).toContain('🔐 权限');
   });
 

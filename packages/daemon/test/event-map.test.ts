@@ -437,7 +437,7 @@ describe('Codex subagent mapping', () => {
     };
     for (const id of ['one', 'two']) {
       expect(mapChildNotification('child', itemStarted({ ...command, id }), child).events).toEqual([
-        { type: 'subagent_step', id: 'child', stepId: id, title: 'pwd', status: 'running' },
+        { type: 'subagent_step', id: 'child', stepId: id, title: 'pwd', status: 'running', kind: 'command', detail: '/repo' },
       ]);
     }
     for (const exitCode of [0, 1]) {

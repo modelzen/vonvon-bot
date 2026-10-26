@@ -47,8 +47,7 @@ describe('session-title settings cards', () => {
     expect(rendered).toContain('分别配置，互不影响');
     expect(rendered).toContain('会话标题');
     expect(rendered).toContain('当前策略');
-    expect(rendered).toContain('Codex：截断首句');
-    expect(rendered).toContain('Claude Code：截断首句');
+    expect(rendered).toContain('截断首句');
     expect(rendered).toContain('配置会话标题');
     expect(rendered).toContain('配置评论处理');
     expect(rendered).not.toContain('设置各后端的标题模型 / Effort');
@@ -61,7 +60,7 @@ describe('session-title settings cards', () => {
       },
     })));
     expect(rendered).toContain('Codex：AI 精炼 · openrouter/acme-title · 极高');
-    expect(rendered).toContain('Claude Code：截断首句');
+    expect(rendered).not.toContain('Claude Code：截断首句');
   });
 
   it('renders live third-party models without a provider whitelist and hides hidden models', () => {
@@ -119,7 +118,7 @@ describe('session-title settings cards', () => {
     });
   });
 
-  it('shows and preselects each backend configuration independently', () => {
+  it('keeps the global policy while browsing another provider', () => {
     const config = cfg({
       byBackend: {
         'codex-appserver': { enabled: true, model: 'openrouter/acme-title-v3', effort: 'high' },
@@ -132,8 +131,9 @@ describe('session-title settings cards', () => {
     ]);
     expect(codex).toContain('AI 精炼 · openrouter/acme-title-v3 · 高');
     expect(codex).toContain('"initial_option":"openrouter/acme-title-v3"');
-    expect(claude).toContain('AI 精炼 · vendor/claude-title · 低');
-    expect(claude).toContain('"initial_option":"vendor/claude-title"');
+    expect(claude).toContain('AI 精炼 · openrouter/acme-title-v3 · 高');
+    expect(claude).not.toContain('"initial_option":"vendor/claude-title"');
+    expect(claude).toContain('关闭 AI 标题');
   });
 
   it('falls back to custom-id mode when the configured third-party model is absent from live discovery', () => {

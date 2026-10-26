@@ -27,6 +27,8 @@ beforeEach(async () => {
 // （spawn/init/thread-start 计时、interrupt 终态）见 test/probe-appserver.mjs。
 // 假 codex app-server 在所有平台通过真实可执行入口运行。
 const FAKE_SERVER = `#!/usr/bin/env node
+// Version probes are short-lived CLI calls, not pooled app-server processes.
+if (process.argv.includes('--version')) { console.log('codex-cli 0.163.0'); process.exit(0); }
 require('fs').appendFileSync(__filename + '.count', process.pid + '\\n');
 let buf = '';
 let prewarm;

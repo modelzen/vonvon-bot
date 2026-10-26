@@ -10,10 +10,12 @@ import { assertBotIdentity, withBotGroupBinding, type BotIdentity } from '../con
 import { admitDirectorySettings, resolveProjectsRootDir } from '../config/directories';
 import { log } from '../core/logger';
 import { feishuError } from '../utils/feishu-error';
-import { addProject, bindNoMention, bindProject, listProjectsIn, sessionModeOf, storedMode, type PreviousDirectory, type Project, type RegistryLocation, type SessionMode } from './registry';
+import { addProject, bindNoMention, bindProject, listProjectsIn, previousDirectoryIn, previousProjectIdIn, sessionModeOf, storedMode, type PreviousDirectory, type Project, type RegistryLocation, type SessionMode } from './registry';
+import { createLibraryProject, LibraryError, projectWithMainFolder, readLibrary, resolveDirectory, workspaceMirror, type LibraryProject } from './library';
 import { directoryContext, legacyDirectoryProblems } from './directory-audit';
 import { DirectoryError, directoryError } from '../config/directory-errors';
 import type { PermissionMode } from '../agent/types';
+import { TIER_NETWORK } from '../agent/permission';
 import { DEFAULT_BACKEND_ID, effectiveDefaultBackend, isBackendEntryInstalled } from '../agent';
 import { catalogById, isInstallable, projectCreatableBackends } from '../agent/catalog';
 import { setAnnouncement } from './announcement';
@@ -57,6 +59,8 @@ export interface CreateProjectInput {
   ownerOpenId: string;
   /** when set, bind this existing folder; otherwise create a blank project. */
   existingPath?: string;
+  /** Join this library project (its id) instead of making one: the group uses its workspace, `existingPath` is not used. */
+  project?: string;
   /** optional config.json override for the parent directory of blank projects. */
   projectsRootDir?: string;
   /** 会话方式, required: every entry asks for it (product.md 3.4). */
@@ -70,8 +74,6 @@ export interface CreateProjectInput {
    *  for a single backend) → the effective default the runtime used to fall back to, written into the row so the
    *  group never follows a later default (s36d1). */
   backend?: string;
-  /** allow the sandboxed shell to reach the network (default false). */
-  network?: boolean;
   /** Stops every Feishu call of this creation, for the daemon's shutdown. */
   signal?: AbortSignal;
   /** One budget for every Feishu call: token, create, admin, announcement and welcome. Default {@link CREATION_BUDGET_MS}. */
@@ -129,6 +131,9 @@ export interface JoinGroupInput {
   addedBy?: string;
   /** when set, bind this existing folder; otherwise create a blank project. */
   existingPath?: string;
+  /** Join this library project (its id) instead of making one. Left out, a group unbound before comes back to the
+   * project it had, unless a folder is chosen; any other group gets a project of its own. */
+  project?: string;
   /** optional config.json override for the parent directory of blank projects. */
   projectsRootDir?: string;
   /** 会话方式, required: every entry asks for it (product.md 3.4). */
@@ -140,8 +145,6 @@ export interface JoinGroupInput {
   mode?: PermissionMode;
   /** agent backend chosen at bind time (fixed afterwards — no switching). */
   backend?: string;
-  /** allow the sandboxed shell to reach the network (default false). */
-  network?: boolean;
 }
 
 /**
@@ -174,6 +177,32 @@ async function restorableDirectory(previous: PreviousDirectory | undefined, data
   } catch { return undefined; }
 }
 
+/** The library project a binding joins, as the caller named it; refused before anything is made when it is gone. */
+async function joinableProject(id: string): Promise<LibraryProject> {
+  const project = (await readLibrary()).projects.find(item => item.id === id);
+  if (!project) throw new Error('要加入的项目不存在，请刷新后重选');
+  return project;
+}
+
+/** The project whose main folder this is, if any. */
+async function mainFolderOwner(workspace: Pick<Project, 'cwd'>): Promise<LibraryProject | undefined> {
+  return projectWithMainFolder((await readLibrary()).projects, (await resolveDirectory(workspace.cwd)).path);
+}
+/** A main folder that is a project's already is refused before a group is made: sharing it means joining that project. */
+async function assertMainFolderFree(workspace: Pick<Project, 'cwd'>): Promise<void> {
+  const owner = await mainFolderOwner(workspace);
+  if (owner) throw new LibraryError('primary-taken', `这个文件夹已经是项目「${owner.name}」的主目录。请选择其他目录`, { id: owner.id, name: owner.name });
+}
+
+/** Makes the project a new binding of a folder belongs to, before its row (§2.1). `workspace` is admitted. */
+async function newBindingProject(bot: BotIdentity, group: { chatId: string; name: string }, workspace: Pick<Project, 'cwd' | 'directories'>): Promise<{ id: string }> {
+  const additional = workspace.directories?.workspaces?.additional ?? [];
+  const repositories = workspace.directories?.repositories;
+  const primary = (await resolveDirectory(workspace.cwd)).path;
+  return createLibraryProject({ name: group.name, createdBy: { botId: bot.appId, chatId: group.chatId },
+    workspace: { primary, additional: [...additional], ...(repositories ? { repositories: [...repositories] } : {}) } });
+}
+
 /**
  * Create a project: check everything local, create a bound Feishu group (bot
  * stays owner, creator invited + promoted to admin), save its row at once, then
@@ -196,12 +225,15 @@ export async function createProject(channel: Pick<LarkChannel, 'rawClient'>, req
   assertBackendUsable(input.backend, mode);
   const backend = input.backend || await effectiveDefaultBackend().catch(() => DEFAULT_BACKEND_ID);
   const existingPath = input.existingPath ? resolve(input.existingPath) : undefined;
+  if (input.project !== undefined && existingPath) throw new Error('加入已有项目时不能再选文件夹');
+  const joined = input.project === undefined ? undefined : await joinableProject(input.project);
   const explicit = existingPath ? await admitExistingDirectory(existingPath, location.dataRoot) : undefined;
-  const root = existingPath ? '' : resolveProjectsRootDir(input.projectsRootDir);
+  if (explicit) await assertMainFolderFree(explicit);
+  const root = existingPath || joined ? '' : resolveProjectsRootDir(input.projectsRootDir);
   await assertBotIdentity(input.bot);
   const initialSettings = await prepareNewGroupSettings({backend, kind:input.kind, judge:input.judge});
   const row = { ...initialSettings, createdAt: Date.now(), origin: 'created' as const, mode, backend,
-    network: input.network ?? false, creationRequestId: input.requestId,
+    network: TIER_NETWORK[mode], creationRequestId: input.requestId,
     ...(input.requestSignature === undefined ? {} : { creationRequestSignature: input.requestSignature }) };
   const noMention = entryNoMention(input);
 
@@ -229,13 +261,23 @@ export async function createProject(channel: Pick<LarkChannel, 'rawClient'>, req
     // Saved before anything else, so a stuck admin call cannot keep a created group out of projects.json.
     let saved: Project;
     try {
-      if (explicit) {
-        saved = { ...row, ...explicit, name, chatId, noMention, ...storedMode(input.kind) };
+      if (joined) {
+        // The group uses the project's workspace; nothing is allocated for it.
+        const mirror = workspaceMirror(joined.workspace);
+        saved = (await bindProject({ name, chatId, cwd: { kind: 'existing', path: mirror.cwd }, defaultBackend: row.backend, backend: row.backend,
+          kind: input.kind, noMention, project: { id: joined.id } }, async () => ({ ...mirror, ...row }), location)).project;
+      } else if (explicit) {
+        const project = await newBindingProject(input.bot, { chatId, name }, explicit);
+        saved = { ...row, ...explicit, name, chatId, noMention, ...storedMode(input.kind), projectId: project.id, migration: { library: Date.now(), memory: Date.now() } };
         await addProject(saved, location);
       } else {
-        saved = (await withBotGroupBinding(input.bot, { chatId, name, projectsRootDir: root }, scope => bindProject({ name, chatId,
-          cwd: { kind: 'default', allocatedPath: scope.allocatedPath }, defaultBackend: row.backend, backend: row.backend, kind: input.kind, noMention },
-          async () => ({ ...await scope.prepareDefault(), ...row }), location))).project;
+        saved = (await withBotGroupBinding(input.bot, { chatId, name, projectsRootDir: root }, async scope => {
+          // The default folder is allocated first (a retry finds the same one), so the project can be made before the row.
+          const prepared = await scope.prepareDefault();
+          const project = await newBindingProject(input.bot, { chatId, name }, prepared);
+          return bindProject({ name, chatId, cwd: { kind: 'default', allocatedPath: scope.allocatedPath }, defaultBackend: row.backend, backend: row.backend,
+            kind: input.kind, noMention, project: { id: project.id } }, async () => ({ ...prepared, ...row }), location);
+        })).project;
       }
     } catch (error) { throw new CreatedButUnsavedError(chatId, name, error); }
     log.info('project', 'create', { name, chatId, cwd: saved.cwd, blank: saved.blank, kind: sessionModeOf(saved), mode, backend: saved.backend, requestId: input.requestId });
@@ -286,16 +328,42 @@ export async function joinExistingGroup(channel: LarkChannel, request: JoinGroup
   }
   const defaultBackend = await effectiveDefaultBackend().catch(() => DEFAULT_BACKEND_ID);
   const mode = input.mode ?? 'qa';
+  if (input.project !== undefined && existingPath) throw new Error('加入已有项目时不能再选文件夹');
   const result = await withBotGroupBinding(input.bot, { name, chatId: input.chatId, projectsRootDir: root }, async scope => {
+    // A group already bound answers from its row (below), before anything is made for it.
+    const bound = (await listProjectsIn(location.file)).some(row => row.chatId === input.chatId);
+    let joined: LibraryProject | undefined;
+    let workspace: Pick<Project, 'cwd' | 'blank' | 'directories'> | undefined;
+    let initialSettings: Awaited<ReturnType<typeof prepareNewGroupSettings>> | undefined;
+    let project: { id: string } | undefined;
+    if (!bound) {
+      assertBackendUsable(input.backend, mode);
+      // 接回: a group unbound before comes back to the project it had, unless a folder is chosen.
+      const previousId = input.project === undefined && !existingPath ? await previousProjectIdIn(location.file, input.chatId) : undefined;
+      joined = input.project !== undefined ? await joinableProject(input.project)
+        : previousId ? (await readLibrary()).projects.find(item => item.id === previousId) : undefined;
+      initialSettings = await prepareNewGroupSettings({backend:input.backend || defaultBackend,kind:input.kind,judge:input.judge});
+      if (joined) { workspace = workspaceMirror(joined.workspace); project = { id: joined.id }; }
+      else {
+        const restored = existingPath || scope.allocatedPath ? undefined : await restorableDirectory(await previousDirectoryIn(location.file, input.chatId), location.dataRoot, root);
+        workspace = existingPath ? await admitExistingDirectory(existingPath, location.dataRoot) : restored ?? await scope.prepareDefault();
+        // A chosen folder that is a project's already is refused; a default one (allocated for this group, or the one it
+        // had) that is a project's means the group's own binding came back.
+        if (existingPath) await assertMainFolderFree(workspace);
+        else joined = await mainFolderOwner(workspace);
+        if (joined) { workspace = workspaceMirror(joined.workspace); project = { id: joined.id }; }
+        else project = await newBindingProject(input.bot, { chatId: input.chatId, name }, workspace);
+      }
+    }
     const binding = await bindProject({ name, chatId: input.chatId,
       cwd: existingPath ? { kind: 'existing', path: cwd } : { kind: 'default', legacyPath: cwd, allocatedPath: scope.allocatedPath }, defaultBackend,
-      backend: input.backend ?? defaultBackend, kind: input.kind, noMention: entryNoMention(input) }, async previous => {
+      backend: input.backend ?? defaultBackend, kind: input.kind, noMention: entryNoMention(input), ...(project ? { project } : {}) }, async previous => {
       assertBackendUsable(input.backend, mode);
       const restored = existingPath || scope.allocatedPath ? undefined : await restorableDirectory(previous, location.dataRoot, root);
-      const initialSettings = await prepareNewGroupSettings({backend:input.backend || defaultBackend,kind:input.kind,judge:input.judge});
-      const workspace = existingPath ? await admitExistingDirectory(existingPath, location.dataRoot) : restored ?? await scope.prepareDefault();
-      return { ...workspace, ...initialSettings, createdAt: Date.now(), origin: 'joined', addedBy: input.addedBy,
-        mode, backend: input.backend || defaultBackend, network: input.network ?? false };
+      const settings = initialSettings ?? await prepareNewGroupSettings({backend:input.backend || defaultBackend,kind:input.kind,judge:input.judge});
+      const chosen = workspace ?? (existingPath ? await admitExistingDirectory(existingPath, location.dataRoot) : restored ?? await scope.prepareDefault());
+      return { ...chosen, ...settings, createdAt: Date.now(), origin: 'joined', addedBy: input.addedBy,
+        mode, backend: input.backend || defaultBackend, network: TIER_NETWORK[mode] };
     }, location);
     await retireBoundPendingGroup(pendingGroupsFile(location.file), binding.project.chatId);
     return binding;

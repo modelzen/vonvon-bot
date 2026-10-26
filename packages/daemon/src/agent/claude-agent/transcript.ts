@@ -12,6 +12,7 @@
  */
 import { access, open, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { z } from 'zod';
 import { log } from '../../core/logger';
 import { claudeConfigDir } from './configured-model';
 
@@ -39,6 +40,44 @@ export async function findTranscript(sessionId: string): Promise<string | undefi
     if (await access(path).then(() => true, () => false)) return path;
   }
   return undefined;
+}
+
+const CustomTitle = z.object({ type: z.literal('custom-title'), customTitle: z.string() });
+
+/** Read explicitly renamed titles; CLI-generated ai-title records do not count. */
+export async function readCustomTitle(path: string): Promise<string | undefined> {
+  const fh = await open(path, 'r');
+  let title: string | undefined;
+  let rest = Buffer.alloc(0);
+  const readTitle = (line: string) => {
+    if (!line.includes('"custom-title"')) return;
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      return;
+    }
+    const parsed = CustomTitle.safeParse(value);
+    if (parsed.success && parsed.data.customTitle.trim()) title = parsed.data.customTitle.trim();
+  };
+  try {
+    const chunk = Buffer.alloc(CHUNK);
+    for (;;) {
+      const { bytesRead } = await fh.read(chunk, 0, chunk.length, null);
+      if (!bytesRead) break;
+      const data = Buffer.concat([rest, chunk.subarray(0, bytesRead)]);
+      let at = 0;
+      for (let nl = data.indexOf(0x0a); nl >= 0; nl = data.indexOf(0x0a, at)) {
+        readTitle(data.toString('utf8', at, nl));
+        at = nl + 1;
+      }
+      rest = Buffer.from(data.subarray(at));
+    }
+    if (rest.length) readTitle(rest.toString('utf8'));
+    return title;
+  } finally {
+    await fh.close();
+  }
 }
 
 export interface TranscriptScan {

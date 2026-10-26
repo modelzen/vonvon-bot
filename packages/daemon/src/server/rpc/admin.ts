@@ -22,6 +22,10 @@ export async function adminRpc(service: AdminService, followLogs: (follow: boole
     case 'diagnosis': return { kind: 'read', value: await diagnosis(service, request.agentId) };
     case 'hostDoctor': return { kind: 'read', value: { kind: 'hostDoctor', doctor: await service.hostDoctor() } };
     case 'setupStatus': return { kind: 'read', value: { kind: 'setupStatus', status: await service.getSetupStatus(request.agentId) } };
+    case 'cardCallbackStatus': {
+      if (!service.getCardCallbackStatus) return unsupported();
+      return { kind: 'read', value: { kind: 'cardCallbackStatus', cardCallback: await service.getCardCallbackStatus(request.agentId) } };
+    }
     case 'confirmCardCallback': {
       await service.confirmCardCallback(request.agentId, request.confirmed);
       return { kind: 'mutation', reply: snapshot => ({ kind: 'applied', revision: snapshot.revision }) };

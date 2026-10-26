@@ -18,10 +18,18 @@ const CREDENTIAL_VARIABLES = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'A
 export function loginFromAccount(account: ClaudeAccount | undefined): ClaudeLogin | null {
   if (!account) return null;
   const provider = account.apiProvider ?? 'firstParty';
-  if (provider !== 'firstParty') return { state: 'unknown', message: `无法确认：Claude 用的是 ${provider}，本机查不了它的凭据。` };
-  if (account.subscriptionType) return { state: 'signedIn', message: `已登录 claude.ai 账号（${account.subscriptionType}）。` };
+  if (provider !== 'firstParty') return {
+    state: 'unknown', message: `无法确认：Claude 用的是 ${provider}，本机查不了它的凭据。`,
+    // SDK configuration is evidence of an API connection, not credential validity.
+    ...(/^[a-zA-Z0-9_-]{1,80}$/.test(provider) ? {account: {kind: 'api' as const, apiProvider: provider}} : {}),
+  };
+  if (account.subscriptionType) {
+    const plan = account.subscriptionType.toLowerCase();
+    const kind = plan === 'free' ? 'free' : ['pro', 'max', 'team', 'enterprise'].includes(plan) ? 'subscription' : 'unknown';
+    return { state: 'signedIn', message: `已登录 claude.ai 账号（${account.subscriptionType}）。`, account: {kind, ...(/^[a-z0-9_-]{1,80}$/.test(plan) ? {planType: plan} : {}), apiProvider: 'firstParty'} };
+  }
   const source = [account.apiKeySource, account.tokenSource].find(value => value && value !== 'none');
-  if (source) return { state: 'signedIn', message: `已登录，凭据来自 ${source}。` };
+  if (source) return { state: 'signedIn', message: `已登录，凭据来自 ${source}。`, account: {kind: account.apiKeySource && account.apiKeySource !== 'none' ? 'api' : 'unknown', apiProvider: 'firstParty'} };
   return account.tokenSource === 'none' || account.apiKeySource === 'none' ? { state: 'signedOut', message: CLAUDE_SIGNED_OUT_MESSAGE } : null;
 }
 
@@ -37,7 +45,7 @@ export function loginUnderService(login: ClaudeLogin, env: NodeJS.ProcessEnv): C
  * validated); otherwise 无法确认, never 未登录, since a keychain login may exist. */
 export function loginFromEnv(env: NodeJS.ProcessEnv, reason: string): ClaudeLogin {
   const name = CREDENTIAL_VARIABLES.find(variable => env[variable]?.trim());
-  return name ? { state: 'signedIn', message: `设置了 ${name}，没有验证过。` } : { state: 'unknown', message: `无法确认：${reason}` };
+  return name ? { state: 'signedIn', message: `设置了 ${name}，没有验证过。`, account: {kind: name === 'CLAUDE_CODE_OAUTH_TOKEN' ? 'unknown' : 'api'} } : { state: 'unknown', message: `无法确认：${reason}` };
 }
 
 /** Each probe starts the ~250 MB CLI, and the desktop snapshot asks every 60 s, so a

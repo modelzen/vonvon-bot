@@ -1,12 +1,12 @@
 import { createRequire } from 'node:module';
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { paths } from '../config/paths';
 import type { BackendCatalogEntry } from './catalog';
 
 /**
- * 按需后端依赖的加载器（npm-ondemand 包，库类 / bin 类；通用基础设施，当前内置后端未用）。
+ * 按需后端依赖的加载器（npm-ondemand 包，库类 / bin 类；Claude SDK 走库类）。
  *
  * 真机验证过的解析方案（design/backend-catalog-ondemand.md §2.1，实验 C/D/F）：
  *   ① 先试 bridge 自身的 node_modules —— 直接 `await import(pkg)`（bare specifier）。
@@ -142,28 +142,31 @@ export function isBackendPackageInUserDir(pkg: string, binName?: string): boolea
 }
 
 /**
- * 已装后端的版本号（读其 package.json 的 version）。先查用户私装目录（按需下载落点），
- * 再查 bridge 自身 node_modules（dev/worktree）。读不到 → null。绝不抛错。bin 类与库类
- * 都适用（都是 node_modules/<pkg>/package.json）。供后端管理页展示「当前版本」用。
+ * 已装后端的版本号。库类优先读取 daemon 自身实际解析到的包，与 loadBackendDep 的
+ * bare import 顺序一致；SDK 不开放 package.json 子路径，所以由入口文件回溯包根。
+ * 回退用户私装目录也覆盖 bin-only 包。读不到 → null，绝不抛错。
  */
 export function installedBackendVersion(pkg: string): string | null {
-  const readVer = (file: string): string | null => {
+  const readVer = (file: string): { name?: string; version?: string } | null => {
     try {
-      const j = JSON.parse(readFileSync(file, 'utf8')) as { version?: string };
-      return typeof j.version === 'string' ? j.version : null;
+      return JSON.parse(readFileSync(file, 'utf8')) as { name?: string; version?: string };
     } catch {
       return null;
     }
   };
-  // ① 用户私装目录。
-  const inUser = join(paths.backendsDir, 'node_modules', ...pkg.split('/'), 'package.json');
-  const v1 = readVer(inUser);
-  if (v1) return v1;
-  // ② bridge 自身（dev/worktree）：用 createRequire 解析包的 package.json 路径。
+  // ① daemon 自身的解析结果与 loadBackendDep 的 bare import 命中同一包。
   try {
-    const resolved = createRequire(import.meta.url).resolve(`${pkg}/package.json`);
-    return readVer(resolved);
-  } catch {
-    return null;
-  }
+    let dir = dirname(createRequire(import.meta.url).resolve(pkg));
+    for (let i = 0; i < 16; i++) {
+      const metadata = readVer(join(dir, 'package.json'));
+      if (metadata?.name === pkg) return typeof metadata.version === 'string' ? metadata.version : null;
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch { /* not available here; try the user's package */ }
+  // ② 用户私装目录（also handles bin-only packages without an exported entry).
+  const inUser = join(paths.backendsDir, 'node_modules', ...pkg.split('/'), 'package.json');
+  const metadata = readVer(inUser);
+  return metadata?.name === pkg && typeof metadata.version === 'string' ? metadata.version : null;
 }

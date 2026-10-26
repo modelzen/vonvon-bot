@@ -1,4 +1,5 @@
 import { Select } from "@base-ui/react/select";
+import "./select-control.css";
 import {
   Check,
   CheckCircle2,
@@ -56,14 +57,17 @@ export const IconButton = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTM
   label: string;
   variant?: "default" | "ghost" | "danger";
   size?: "sm" | "md" | "lg";
-}>(({ children, className, label, variant = "default", size = "md", ...props }, ref) => (
+  loading?: boolean;
+}>(({ children, className, label, variant = "default", size = "md", loading = false, disabled, ...props }, ref) => (
   <button
     {...props}
     aria-label={label}
     className={classNames("ui-icon-button", `ui-icon-button--${variant}`, `ui-icon-button--${size}`, className)}
+    disabled={disabled || loading}
+    aria-busy={loading || undefined}
     ref={ref}
   >
-    {children}
+    {loading ? <LoaderCircle aria-hidden="true" className="ui-button__spinner" size={15} /> : children}
   </button>
 ));
 IconButton.displayName = "IconButton";
@@ -447,22 +451,53 @@ export function NumberStepper(props: {
 
 export function SelectControl<T extends string>(props: {
   "aria-describedby"?: string;
+  "aria-labelledby"?: string;
   "aria-invalid"?: boolean | "false" | "grammar" | "spelling" | "true";
   "aria-required"?: boolean | "false" | "true";
   className?: string;
+  /** Keep related fields consistent even when their option counts differ. */
+  presentation?: "auto" | "dropdown";
   disabled?: boolean;
+  getOptionIcon?: (value: T) => ReactNode;
   id?: string;
   label: string;
   onChange: (value: T) => void;
   options: readonly SelectionOption<T>[];
   value: T;
 }) {
+  const radioName = useId();
+  const labelWidth = (label: string) => Array.from(label).reduce((width, character) => width + (/[^\u0000-\u00ff]/.test(character) ? 2 : 1), 0);
+  const shortOptions = props.presentation !== "dropdown" && props.options.length > 0 && props.options.length <= 5
+    && props.options.every(option => typeof option.label === "string" && labelWidth(option.label) <= 16 && !option.description)
+    && props.options.reduce((total, option) => total + labelWidth(option.label as string) + (props.getOptionIcon ? 3 : 0), 0) <= 34;
+  const optionLabel = (option: SelectionOption<T>) => props.getOptionIcon
+    ? <span className="ui-select-option-label"><span className="ui-select-option-icon" aria-hidden="true">{props.getOptionIcon(option.value)}</span><span>{option.label}</span></span>
+    : option.label;
+  if (shortOptions) return (
+    <div
+      aria-describedby={props["aria-describedby"]}
+      aria-disabled={props.disabled || undefined}
+      aria-invalid={props["aria-invalid"]}
+      aria-label={props.label}
+      aria-labelledby={props["aria-labelledby"]}
+      aria-required={props["aria-required"]}
+      className={classNames("ui-select-segments", props.className)}
+      id={props.id}
+      role="radiogroup"
+    >
+      {props.options.map(option => <label className="ui-select-segment" key={option.value} title={option.label as string}>
+        <input type="radio" name={radioName} value={option.value} checked={props.value === option.value} disabled={props.disabled || option.disabled}
+          onChange={() => {if (!props.disabled && !option.disabled && option.value !== props.value) props.onChange(option.value);}}/>
+        <span>{optionLabel(option)}</span>
+      </label>)}
+    </div>
+  );
   return (
     <Select.Root
       disabled={props.disabled}
       items={props.options}
       onValueChange={(value) => {
-        if (value !== null) props.onChange(value);
+        if (!props.disabled && value !== null && value !== props.value && props.options.some(option => option.value === value && !option.disabled)) props.onChange(value);
       }}
       value={props.value}
     >
@@ -470,10 +505,12 @@ export function SelectControl<T extends string>(props: {
         aria-describedby={props["aria-describedby"]}
         aria-invalid={props["aria-invalid"]}
         aria-label={props.label}
+        aria-labelledby={props["aria-labelledby"]}
         aria-required={props["aria-required"]}
         className={classNames("ui-select-control", props.className)}
         id={props.id}
       >
+        {props.getOptionIcon && props.options.some(option => option.value === props.value) && <span className="ui-select-option-icon" aria-hidden="true">{props.getOptionIcon(props.value)}</span>}
         <Select.Value className="ui-select-control__value" />
         <Select.Icon className="ui-select-control__chevron">
           <ChevronsUpDown aria-hidden="true" size={14} />
@@ -499,7 +536,8 @@ export function SelectControl<T extends string>(props: {
                   <Select.ItemIndicator className="ui-select-control__indicator">
                     <Check aria-hidden="true" size={13} strokeWidth={2.6} />
                   </Select.ItemIndicator>
-                  <Select.ItemText>{option.label}</Select.ItemText>
+                  <Select.ItemText>{optionLabel(option)}</Select.ItemText>
+                  {option.recommended && <span className="ui-select-control__recommendation">推荐</span>}
                 </Select.Item>
               ))}
             </Select.List>
@@ -511,6 +549,8 @@ export function SelectControl<T extends string>(props: {
 }
 
 export interface SelectionOption<T extends string> {
+  /** Quiet hint shown in the dropdown menu, never in its selected value. */
+  recommended?: boolean;
   value: T;
   label: ReactNode;
   description?: ReactNode;

@@ -55,15 +55,13 @@ export function botSteps(agent: Agent, status: AdminSetupStatus | undefined, pro
     scopeStep(status),
     connectionStep(agent),
     event.state === 'ok'
-      ? {id: 'event', title: '事件订阅', status: '已订阅接收消息', tone: 'success', done: true, detail: event.missingOptional?.length ? '有几项可选事件没订阅，不影响收消息。' : undefined, items: event.missingOptional, actions: [], warnings: eventWarnings}
+      ? {id: 'event', title: '事件订阅', status: '已订阅接收消息', tone: 'success', done: true, detail: event.missingOptional?.length ? '有几项可选事件没订阅，不影响收消息。' : undefined, items: event.missingOptional, actions: event.missingOptional?.length ? [eventSettings] : [], warnings: eventWarnings}
       : event.state === 'missing'
         ? {id: 'event', title: '事件订阅', status: '缺少接收消息事件', tone: 'warning', done: false, detail: '在事件设置里选"使用长连接接收事件"，添加"接收消息"（im.message.receive_v1），再发布一个新版本。', actions: [eventSettings], warnings: eventWarnings}
         : event.state === 'unpublished'
           ? {id: 'event', title: '事件订阅', status: '上线后才能确认', tone: 'neutral', done: false, detail: '在事件设置里选"使用长连接接收事件"，添加"接收消息"（im.message.receive_v1）。版本上线后这里会自动确认。', actions: [eventSettings]}
           : {id: 'event', title: '事件订阅', status: '无法确认', tone: 'neutral', done: false, detail: event.reason, actions: [eventSettings]},
-    status.cardCallback.confirmed
-      ? {id: 'callback', title: '卡片回调', status: '已勾选', tone: 'success', done: true, actions: [{kind: 'confirmCallback', label: '取消勾选', confirmed: false}]}
-      : {id: 'callback', title: '卡片回调', status: '请手动确认', tone: 'neutral', done: false, detail: '飞书没有接口能查这一项。在"事件与回调"的回调配置里，同样选长连接，添加"卡片回传交互"（card.action.trigger），配好后勾上。', actions: [eventSettings, {kind: 'confirmCallback', label: '我已配置', confirmed: true}]},
+    cardCallbackStep(status),
     event.state === 'unpublished'
       ? {id: 'publish', title: '发布', status: '还没有上线的版本', tone: 'warning', done: false, detail: '在开发者后台的"版本管理与发布"里创建并发布一个版本；已经提交的，等管理员审核通过后这里会变绿。改过权限、事件或回调后，也要再发布一次。', actions: [{kind: 'open', label: '打开开发者后台', url: status.consoleUrl, target: 'app-console'}]}
       : event.state === 'unchecked'
@@ -75,6 +73,27 @@ export function botSteps(agent: Agent, status: AdminSetupStatus | undefined, pro
   return steps.map(step => step.id === 'scopes' || step.id === 'event' || step.id === 'publish'
     ? {...step, status: '等第 1 步', tone: 'neutral', done: false, detail: '飞书应用的凭据有效后才能检测。', items: undefined, warnings: undefined}
     : step);
+}
+
+/** Configuration reads take precedence over manual confirmation and historical receipts. */
+function cardCallbackStep(status: AdminSetupStatus): SetupStep {
+  const {configuration, confirmed, verifiedAt} = status.cardCallback;
+  const base = {id: 'callback', title: '卡片回调'} as const;
+  const settings: StepAction = {kind: 'open', label: '打开回调设置', url: status.eventConfigUrl, target: 'event-settings'};
+  if (configuration?.state === 'configured') return {...base, status: '已配置 · 长连接', tone: 'success', done: true,
+    detail: verifiedAt ? '已收到过这个 Bot 的真实卡片回调（card.action.trigger）。' : undefined, actions: []};
+  if (configuration?.state === 'missing') return {...base, status: '未订阅卡片回调', tone: 'warning', done: false,
+    detail: '在回调配置里添加「卡片回传交互」（card.action.trigger），使用长连接接收回调。', actions: [settings]};
+  if (configuration?.state === 'wrong-mode') return {...base, status: '需改为长连接', tone: 'warning', done: false,
+    detail: '已订阅卡片回传交互，但当前使用请求地址接收。请在回调配置里改为长连接。', actions: [settings]};
+  const unread = configuration?.state === 'unchecked' ? `本次未能读取回调配置${configuration.reason ? `：${configuration.reason}` : '。'}` : '';
+  if (verifiedAt) return {...base, status: '已验证', tone: 'success', done: true,
+    detail: `${unread}${unread ? ' ' : ''}已收到过这个 Bot 的真实卡片回调（card.action.trigger）。`, actions: unread ? [settings] : []};
+  if (confirmed) return {...base, status: '已手动确认', tone: 'success', done: true,
+    detail: `${unread}${unread ? ' ' : ''}你已确认完成配置，尚未收到真实卡片回调。`, actions: [...(unread ? [settings] : []), {kind: 'confirmCallback', label: '撤销确认', confirmed: false}]};
+  return {...base, status: configuration ? '无法确认配置' : '待验证', tone: 'neutral', done: false,
+    detail: `${unread || '尚未收到真实卡片回调，收到后会自动验证。'} 这不代表未配置；可打开回调设置核对，或在完成配置后手动确认。`,
+    actions: [settings, {kind: 'confirmCallback', label: '我已配置', confirmed: true}]};
 }
 
 /** The 权限 step, shared by the checklist and the register dialog's grant step. Only the required
@@ -101,7 +120,11 @@ export function connectionStep(agent: Agent): SetupStep {
 
 /** Steps that only Feishu can answer; when they are all done the poller stops. */
 export function remoteStepsDone(status: AdminSetupStatus | undefined): boolean {
-  return Boolean(status && status.credentials.ok && status.scopes.missingRequired?.length === 0 && status.event.state === 'ok' && status.cardCallback.confirmed);
+  if (!status) return false;
+  const configuration = status.cardCallback.configuration;
+  const callbackDone = configuration && configuration.state !== 'unchecked'
+    ? configuration.state === 'configured' : status.cardCallback.confirmed;
+  return Boolean(status.credentials.ok && status.scopes.missingRequired?.length === 0 && status.event.state === 'ok' && callbackDone);
 }
 
 export type ToolSteps = {steps: SetupStep[]; ready: boolean};
@@ -141,15 +164,12 @@ function claudeStep(tool: ToolState | undefined, checking = false): SetupStep {
 /** Linux only (s20a): what the qa and write modes need, under the tools. Neither step counts toward 还差几步 or 可以用了,
  * and neither changes a mode or a system setting: they explain and give the commands. A missing tool has no step. */
 export function linuxSteps(tools: readonly ToolState[]): SetupStep[] {
-  const codex = tools.find(tool => tool.tool === 'codex');
   const claude = tools.find(tool => tool.tool === 'claude');
   const steps: SetupStep[] = [];
-  if (codex && codex.installation !== 'missing') steps.push({id: 'codex-linux', title: 'Codex 的权限档', status: '只能用完全访问', tone: 'neutral', done: true, detail: CODEX_LINUX, actions: []});
   if (claude && claude.installation !== 'missing') steps.push(claudeSandboxStep(claude.sandbox));
   return steps;
 }
 
-const CODEX_LINUX = 'Linux 上 Codex 的沙箱只挡写、不限制读，vonvon 不在 Linux 上用 Codex 的只读、读写档，这两档的群不起会话，有人 @ 它时回一句说明，免@ 触发时每个群 10 分钟最多回一次。要用 Codex 的群，在群设置里把权限档改成「完全访问」，或者在终端运行 vonvon settings set --group <群 id> permission.mode=full。完全访问下 Codex 能读写这个账号能碰到的所有文件，群里有别人时先想清楚。不会自动改。';
 const FULL_INSTEAD = '不想改的话，这台主机上用 Claude 的群就用完全访问。';
 const SANDBOX_MISSING = 'Claude 在只读、读写档下用 bubblewrap 沙箱把命令关在工作区里，缺了这两档的回合会失败（Sandbox required but unavailable），完全访问不受影响。别的发行版用自己的包管理器装 bubblewrap 和 socat；装好后一分钟内这里会更新。';
 const SANDBOX_APPARMOR = `Ubuntu 23.10 起默认不让普通程序建用户命名空间（kernel.apparmor_restrict_unprivileged_userns = 1），bwrap 起不来，只读、读写档的回合会失败。给 bwrap 单独加一份 AppArmor 配置就行，不用全局关掉这个限制，命令见下；${FULL_INSTEAD}`;
@@ -163,7 +183,7 @@ const apparmorCommands = (bwrap: string): string[] => [
 
 function claudeSandboxStep(sandbox: ClaudeSandbox | undefined): SetupStep {
   const step = (status: string, tone: StepTone, detail?: string, commands?: string[]): SetupStep =>
-    ({id: 'claude-sandbox', title: 'Claude 的权限档', status, tone, done: tone === 'success', detail, actions: [], commands});
+    ({id: 'claude-sandbox', title: 'Claude 的权限', status, tone, done: tone === 'success', detail, actions: [], commands});
   if (!sandbox) return step('无法确认', 'neutral');
   const missing = [...(sandbox.bwrap ? [] : ['bwrap']), ...(sandbox.socat ? [] : ['socat'])];
   if (!sandbox.bwrap || missing.length) return step(`缺 ${missing.join('、')}`, 'warning', SANDBOX_MISSING, [`sudo apt install ${missing.map(name => name === 'bwrap' ? 'bubblewrap' : name).join(' ')}`]);

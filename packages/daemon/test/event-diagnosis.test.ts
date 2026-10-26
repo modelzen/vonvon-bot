@@ -45,6 +45,7 @@ describe('diagnoseEventSubscription — 三态 + unchecked 降级', () => {
     expect(d.version).toBe('1.0.2');
     expect(d.missingRequired).toEqual([]);
     expect(d.missingOptional).toEqual([...OPTIONAL_EVENTS]); // 全缺也仍是 ok
+    expect(d.missingOptional).not.toContain('application.bot.menu_v6');
   });
 
   it('ok：必需 + 可选全订阅时 missingOptional 为空', async () => {

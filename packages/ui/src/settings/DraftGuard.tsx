@@ -4,7 +4,7 @@ import {Dialog} from '../reference/components/ui/Dialog';
 
 /** A draft without `save` is one whose save is not a harmless write (JoinGroupDialog's would create a
  * real Feishu group), so leaving only offers 继续编辑 and 放弃并离开. */
-type Draft = {title: string; save?: () => Promise<boolean>; discard: () => void};
+type Draft = {autoSave?: boolean; title: string; save?: () => Promise<boolean>; discard: () => void};
 /** 保存并离开 is offered only when every open draft can be saved. */
 export function canSaveAll(drafts: Iterable<Pick<Draft, 'save'>>): boolean {
   return [...drafts].every(draft => Boolean(draft.save));
@@ -30,6 +30,20 @@ export function DraftGuardProvider({children}: {children: ReactNode}) {
     if (destination.current) return;
     if (!drafts.current.size) { action(); return; }
     destination.current = action;
+    const pending = [...drafts.current];
+    if (pending.every(([, draft]) => draft.autoSave && draft.save)) {
+      void (async () => {
+        try {
+          for (const [id, draft] of pending) {
+            if (!await draft.save!()) return;
+            if (drafts.current.get(id) === draft) drafts.current.delete(id);
+          }
+          // A newer draft opened during the save remains on its page.
+          if (!drafts.current.size) action();
+        } finally {destination.current = null;}
+      })().catch(() => { /* Inline editors own their error feedback and retain the draft. */ });
+      return;
+    }
     setFailure(undefined);
     setSavable(canSaveAll(drafts.current.values()));
     setOpen(true);
@@ -82,4 +96,13 @@ export function useDraft(dirty: boolean, draft: Draft) {
   const guard = useContext(Context);
   const id = useId();
   useLayoutEffect(() => dirty ? guard?.register(id, draft) : undefined, [guard, id, dirty, draft]);
+}
+
+
+/** Map editors save in place before navigation; failures stay visible at the edited node. */
+export function useInlineDraft(dirty: boolean, save: () => Promise<boolean>) {
+  const latest = useRef(save);
+  latest.current = save;
+  const draft = useMemo<Draft>(() => ({title: '导图节点', autoSave: true, save: () => latest.current(), discard: () => {}}), []);
+  useDraft(dirty, draft);
 }
