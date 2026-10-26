@@ -17,14 +17,26 @@ const response = (body, { status = 200, cache = 'no-cache', type = 'application/
   status, headers: { 'content-type': type, 'cache-control': cache },
 });
 
-test('TLS bypass environment is rejected before release requests', () => {
-  assertSecureTransport({});
-  assert.throws(() => assertSecureTransport({ NODE_TLS_REJECT_UNAUTHORIZED: '0' }), /TLS verification/);
-  assert.throws(() => assertSecureTransport({ NODE_OPTIONS: '--insecure-http-parser' }), /TLS verification/);
+test('TLS bypass and trust-store overrides are rejected before release requests', async () => {
+  assertSecureTransport({}, []);
+  assertSecureTransport({ NODE_TLS_REJECT_UNAUTHORIZED: '1', NODE_OPTIONS: '--max-old-space-size=4096' }, ['--test']);
+  for (const env of [
+    { NODE_TLS_REJECT_UNAUTHORIZED: '0' }, { NODE_OPTIONS: '--insecure-http-parser' },
+    { NODE_EXTRA_CA_CERTS: '/fixture/ca.pem' }, { SSL_CERT_FILE: '/fixture/ca.pem' }, { SSL_CERT_DIR: '/fixture/certs' },
+    { NODE_OPTIONS: '--use-openssl-ca' }, { NODE_OPTIONS: '--use-system-ca' }, { NODE_OPTIONS: '--openssl-config=/fixture/openssl.cnf' },
+    { NODE_OPTIONS: '-r ./hook.cjs' }, { NODE_OPTIONS: '--require=./hook.cjs' }, { NODE_OPTIONS: '--import ./hook.mjs' }, { NODE_OPTIONS: '--experimental-loader=./hook.mjs' },
+  ]) assert.throws(() => assertSecureTransport(env, []), /TLS verification/, JSON.stringify(env));
+  for (const execArgv of [['--use-openssl-ca'], ['--import=./hook.mjs'], ['-r', './hook.cjs'], ['--loader', './hook.mjs']]) {
+    assert.throws(() => assertSecureTransport({}, execArgv), /TLS verification/, execArgv.join(' '));
+  }
+  const fetchImpl = async () => assert.fail('no request may be made');
+  await assert.rejects(readStableManifest({ env: { NODE_EXTRA_CA_CERTS: '/fixture/ca.pem' }, fetchImpl }), /TLS verification/);
+  await assert.rejects(verifyPublicRelease({ env: { SSL_CERT_FILE: '/fixture/ca.pem' }, out: '/evidence', version, sha, fetchImpl }), /TLS verification/);
+  await assert.rejects(verifyVersionedRelease({ env: { SSL_CERT_DIR: '/fixture/certs' }, out: '/evidence', version, sha, fetchImpl }), /TLS verification/);
 });
 
 test('stable baseline requires exact HTTP 200 and product-compatible strict JSON', async () => {
-  const result = await readStableManifest({ fetchImpl: async (url, options) => {
+  const result = await readStableManifest({ env: {}, fetchImpl: async (url, options) => {
     assert.equal(url, DEFAULT_MANIFEST_URL); assert.equal(options.redirect, 'error'); assert.ok(options.signal instanceof AbortSignal);
     return response(manifest);
   } });
@@ -32,18 +44,18 @@ test('stable baseline requires exact HTTP 200 and product-compatible strict JSON
   for (const value of [{ ...manifest, extra: true }, { ...manifest, version: 'x' }, { ...manifest, feedURL: 'https://other.example/feed-0.7.1.json' }, { ...manifest, feedURL: new URL('elsewhere/feed-0.7.1.json', base).href }, { ...manifest, feedURL: manifest.feedURL + '?token=secret' }]) {
     assert.throws(() => validateManifest(value));
   }
-  await assert.rejects(readStableManifest({ fetchImpl: async () => response(manifest, { type: 'text/html' }) }), /Content-Type/);
-  await assert.rejects(readStableManifest({ fetchImpl: async () => response(' '.repeat(16385)) }), /16384/);
+  await assert.rejects(readStableManifest({ env: {}, fetchImpl: async () => response(manifest, { type: 'text/html' }) }), /Content-Type/);
+  await assert.rejects(readStableManifest({ env: {}, fetchImpl: async () => response(' '.repeat(16385)) }), /16384/);
 });
 
 test('first-release missing classification never treats other failures as an empty baseline', async () => {
-  assert.deepEqual(await readStableManifest({ fetchImpl: async () => response('', { status: 404 }) }), { kind: 'missing', status: 404, code: 'HTTP404' });
+  assert.deepEqual(await readStableManifest({ env: {}, fetchImpl: async () => response('', { status: 404 }) }), { kind: 'missing', status: 404, code: 'HTTP404' });
   for (const status of [201, 301, 302, 400, 403, 500, 503]) {
-    await assert.rejects(readStableManifest({ fetchImpl: async () => response('<Error><Code>NoSuchKey</Code></Error>', { status }) }), /HTTP/);
+    await assert.rejects(readStableManifest({ env: {}, fetchImpl: async () => response('<Error><Code>NoSuchKey</Code></Error>', { status }) }), /HTTP/);
   }
-  await assert.rejects(readStableManifest({ fetchImpl: async () => response('<Error><Code>AccessDenied</Code></Error>', { status: 400 }) }), /HTTP 400/);
-  await assert.rejects(readStableManifest({ fetchImpl: async () => { throw new Error('certificate mismatch'); } }), /certificate mismatch/);
-  await assert.rejects(readStableManifest({ fetchImpl: async () => { throw new Error('timeout'); } }), /timeout/);
+  await assert.rejects(readStableManifest({ env: {}, fetchImpl: async () => response('<Error><Code>AccessDenied</Code></Error>', { status: 400 }) }), /HTTP 400/);
+  await assert.rejects(readStableManifest({ env: {}, fetchImpl: async () => { throw new Error('certificate mismatch'); } }), /certificate mismatch/);
+  await assert.rejects(readStableManifest({ env: {}, fetchImpl: async () => { throw new Error('timeout'); } }), /timeout/);
 });
 
 function fixture(t) {
@@ -96,11 +108,11 @@ test('public verification streams and hashes every artifact with cache/header an
     const file = basename(new URL(url).pathname);
     return response(data.files.get(file), { cache: file === 'manifest.json' ? 'no-cache' : 'public, max-age=31536000, immutable', type: file.endsWith('.json') ? 'application/json' : 'application/octet-stream' });
   };
-  const result = await verifyPublicRelease({ out: '/evidence', version, sha, fetchImpl });
+  const result = await verifyPublicRelease({ env: {}, out: '/evidence', version, sha, fetchImpl });
   assert.equal(result.publiclyVerified, true); assert.equal(seen.length, 4);
-  await assert.rejects(verifyPublicRelease({ out: '/evidence', version, sha, fetchImpl: async () => response(manifest, { status: 302 }) }), /HTTP 200/);
-  await assert.rejects(verifyPublicRelease({ out: '/evidence', version, sha, fetchImpl: async () => response(manifest, { cache: 'max-age=3600' }) }), /Manifest requires/);
-  await assert.rejects(verifyPublicRelease({ out: '/evidence', version, sha, fetchImpl: async () => response(manifest, { cache: 'no-cache, s-maxage=600' }) }), /CDN cache/);
+  await assert.rejects(verifyPublicRelease({ env: {}, out: '/evidence', version, sha, fetchImpl: async () => response(manifest, { status: 302 }) }), /HTTP 200/);
+  await assert.rejects(verifyPublicRelease({ env: {}, out: '/evidence', version, sha, fetchImpl: async () => response(manifest, { cache: 'max-age=3600' }) }), /Manifest requires/);
+  await assert.rejects(verifyPublicRelease({ env: {}, out: '/evidence', version, sha, fetchImpl: async () => response(manifest, { cache: 'no-cache, s-maxage=600' }) }), /CDN cache/);
 });
 
 test('public verification rejects stale versioned cache policy and altered downloads', async t => {
@@ -109,8 +121,8 @@ test('public verification rejects stale versioned cache policy and altered downl
     const file = basename(new URL(url).pathname);
     return response(change && file.endsWith('.zip') ? 'wrong bytes' : data.files.get(file), { cache: file === 'manifest.json' ? 'max-age=60' : change ? 'public, max-age=31536000, immutable' : 'max-age=60' });
   };
-  await assert.rejects(verifyPublicRelease({ out: '/evidence', version, sha, fetchImpl: async url => serve(url, false) }), /Versioned objects/);
-  await assert.rejects(verifyPublicRelease({ out: '/evidence', version, sha, fetchImpl: async url => serve(url, true) }), /SHA-256 or size/);
+  await assert.rejects(verifyPublicRelease({ env: {}, out: '/evidence', version, sha, fetchImpl: async url => serve(url, false) }), /Versioned objects/);
+  await assert.rejects(verifyPublicRelease({ env: {}, out: '/evidence', version, sha, fetchImpl: async url => serve(url, true) }), /SHA-256 or size/);
 });
 
 const versionedHeaders = file => ({ cache: file === 'manifest.json' ? 'no-cache' : 'public, max-age=31536000, immutable', type: file.endsWith('.json') ? 'application/json' : 'application/octet-stream' });
@@ -123,15 +135,15 @@ test('versioned-only verification checks feed, ZIP and DMG before the stable swi
     const file = basename(new URL(url).pathname);
     return response(override.bytes?.(file) ?? data.files.get(file), { ...versionedHeaders(file), ...override.headers?.(file) });
   };
-  const result = await verifyVersionedRelease({ out: '/evidence', version, sha, fetchImpl: serve() });
+  const result = await verifyVersionedRelease({ env: {}, out: '/evidence', version, sha, fetchImpl: serve() });
   assert.equal(result.versionedObjectsVerified, true);
   assert.equal(result.publiclyVerified, undefined);
   assert.deepEqual(result.files.map(record => record.file).sort(), [`Vonvon-Bot-${version}-universal.dmg`, `Vonvon-Bot-${version}-universal.zip`, `feed-${version}.json`]);
   assert.ok(result.files.every(record => record.url === new URL(record.file, DEFAULT_MANIFEST_URL).href && /^[a-f0-9]{64}$/.test(record.sha256)));
-  await assert.rejects(verifyVersionedRelease({ out: '/evidence', version, sha, fetchImpl: serve({ headers: file => file.startsWith('feed-') ? { type: 'application/octet-stream' } : {} }) }), /application\/json/);
-  await assert.rejects(verifyVersionedRelease({ out: '/evidence', version, sha, fetchImpl: serve({ headers: file => file.endsWith('.dmg') ? { cache: '' } : {} }) }), /Versioned objects/);
-  await assert.rejects(verifyVersionedRelease({ out: '/evidence', version, sha, fetchImpl: serve({ bytes: file => file.endsWith('.zip') ? 'wrong bytes' : undefined }) }), /SHA-256 or size/);
-  await assert.rejects(verifyVersionedRelease({ out: '/evidence', version, sha, fetchImpl: async () => response('', { status: 404 }) }), /HTTP 200/);
+  await assert.rejects(verifyVersionedRelease({ env: {}, out: '/evidence', version, sha, fetchImpl: serve({ headers: file => file.startsWith('feed-') ? { type: 'application/octet-stream' } : {} }) }), /application\/json/);
+  await assert.rejects(verifyVersionedRelease({ env: {}, out: '/evidence', version, sha, fetchImpl: serve({ headers: file => file.endsWith('.dmg') ? { cache: '' } : {} }) }), /Versioned objects/);
+  await assert.rejects(verifyVersionedRelease({ env: {}, out: '/evidence', version, sha, fetchImpl: serve({ bytes: file => file.endsWith('.zip') ? 'wrong bytes' : undefined }) }), /SHA-256 or size/);
+  await assert.rejects(verifyVersionedRelease({ env: {}, out: '/evidence', version, sha, fetchImpl: async () => response('', { status: 404 }) }), /HTTP 200/);
 });
 
 test('full public verification also requires the feed to be served as JSON', async t => {
@@ -140,7 +152,7 @@ test('full public verification also requires the feed to be served as JSON', asy
     const file = basename(new URL(url).pathname);
     return response(data.files.get(file), { ...versionedHeaders(file), ...(file.startsWith('feed-') ? { type: 'application/octet-stream' } : {}) });
   };
-  await assert.rejects(verifyPublicRelease({ out: '/evidence', version, sha, fetchImpl }), /application\/json/);
+  await assert.rejects(verifyPublicRelease({ env: {}, out: '/evidence', version, sha, fetchImpl }), /application\/json/);
 });
 
 test('CLI runs through a symlinked directory instead of silently exiting 0', async t => {

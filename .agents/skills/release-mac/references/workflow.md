@@ -31,13 +31,22 @@
   "publicManifestURL": "https://dl.vonvon.cc/bot/mac/stable/manifest.json",
   "secretIdEnv": "<已配置的环境变量名>",
   "secretKeyEnv": "<已配置的环境变量名>",
+  "sdkModule": "<COS_SDK_PREFIX>/node_modules/cos-nodejs-sdk-v5",
   "ledgerFile": "<本机发布台账绝对路径>"
 }
 ```
 
 分页和不覆盖约束以腾讯云官方 [GET Bucket](https://www.tencentcloud.com/document/product/436/30614) 与 [PUT Object](https://www.tencentcloud.com/document/product/436/7749) 为准；这里的 helper 仅调用前者。
 
-临时凭据可另指定 `securityTokenEnv`；官方 `cos-nodejs-sdk-v5` 已安装时可用 `sdkModule` 指向绝对模块路径。不要为读凭据打印环境、配置文件或 SDK 错误原文；不要把密钥值放配置、命令行、对话或 GitHub。缺项只问配置路径／profile，COS/CDN 的写权限与只读枚举分别确认。不要为了枚举临时扩宽权限。
+这份配置里的环境变量只放一个子账号的 key，这个子账号只有这个 bucket 的 GetBucket（列出对象）权限，不能写、不能删；写入用的 key 另配，不进这份配置。临时凭据可另指定 `securityTokenEnv`。helper 只在自己的进程里用这把 key 枚举，传给 `npm run build`、electron-builder、`xcrun`、`ditto`、`hdiutil`、`git` 等子进程前，会先删掉 `secretIdEnv`、`secretKeyEnv`、`securityTokenEnv` 指的这几个变量。不要为读凭据打印环境、配置文件或 SDK 错误原文；不要把密钥值放配置、命令行、对话或 GitHub。缺项只问配置路径／profile，COS 的写权限（启用了 CDN 时还有 CDN 刷新权限）与只读枚举分别确认。不要为了枚举临时扩宽权限。
+
+官方 SDK 不在仓库依赖里，装进仓库外的固定工具目录，版本写死，不在源码 worktree 里装（`git status` 门槛会拒绝）：
+
+```sh
+HOME="$T/home" npm install --prefix "$COS_SDK_PREFIX" --ignore-scripts --no-save --no-audit --no-fund cos-nodejs-sdk-v5@3.0.0
+```
+
+`COS_SDK_PREFIX` 是这个工具目录的绝对路径，例如和外部配置放在一起；`sdkModule` 必填，写 `<COS_SDK_PREFIX>/node_modules/cos-nodejs-sdk-v5`。helper 加载前核对它的 `package.json`，name 和 version 必须是 `cos-nodejs-sdk-v5` 和 `scripts/release-cos-evidence.mjs` 里的 `COS_SDK_VERSION`（现在是 3.0.0），路径不是这个形状也拒绝。升级 SDK 要改这个常量并经审查，不在运行时放宽。
 
 台账必须存在，格式 `{ "versions": ["0.7.0"] }`；确无发布历史的首发可为空数组，不能清空历史来过门槛。helper 用官方 SDK 实时完整分页列出 `bot/mac/stable/`，门槛取线上有效 manifest、所有历史 feed／安装包版本和本机台账的最高值。枚举失败、无法判定历史或台账无效就拒绝，不能接受人工编造的空列表。
 
@@ -58,7 +67,7 @@ VONVON_DESKTOP_UPDATE_CONFIG="$HOME/.vonvon-release/desktop-update.json" \
 | COS 有旧 `feed-*.json`／`Vonvon-Bot-*`，或台账有版本 | `--no-live-manifest` | 门槛取 COS 历史和台账的最高版本，state 与 inventory 记录 `baseline: {live: none, highestPublished: X}` |
 | 两边都是空的 | `--first-release` | 首发，state 与 inventory 记录 `baseline: none` |
 
-第二种是流程里写好的几条路：首发时版本化对象已经上传，owner 在 stable 关口说"先不发"；首发上传传到一半失败；首发撤回时删了 manifest。参数和情况对不上时 helper 拒绝，不会互相顶替。只有 404 才算"没有清单"：400、403、5xx、超时、重定向、TLS 错误和无效 200 一律拒绝。严禁 `curl -k`、`--insecure`、`NODE_TLS_REJECT_UNAUTHORIZED=0` 和不安全 `NODE_OPTIONS`。已有清单时按正常版本门槛，两个参数都不能用。
+第二种是流程里写好的几条路：首发时版本化对象已经上传，owner 在 stable 关口说"先不发"；首发上传传到一半失败；首发撤回时删了 manifest。参数和情况对不上时 helper 拒绝，不会互相顶替。只有 404 才算"没有清单"：400、403、5xx、超时、重定向、TLS 错误和无效 200 一律拒绝。严禁 `curl -k`、`--insecure`、`NODE_TLS_REJECT_UNAUTHORIZED=0`，也不能用 `NODE_EXTRA_CA_CERTS`、`SSL_CERT_FILE`、`SSL_CERT_DIR` 或 `NODE_OPTIONS`／Node 参数里的 `--use-openssl-ca`、`--use-system-ca`、`--openssl-config`、`--require`（`-r`）、`--import`、`--loader` 改信任链或预加载代码；helper 和复核脚本看到这些设置就拒绝。证书配错时修证书，不加 CA。已有清单时按正常版本门槛，两个参数都不能用。
 
 门槛没过时 helper 只在 `OUT/logs/` 写日志，`previous-manifest.json` 和 state 都在全部门槛通过后才写。
 

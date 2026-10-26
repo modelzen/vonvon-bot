@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { access, mkdir, open, readFile, realpath, readdir, writeFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { assertSecureTransport, readStableManifest } from './verify-public-release.mjs';
-import { readCosReleaseEvidence } from './release-cos-evidence.mjs';
+import { cosCredentialEnvNames, readCosConfig, readCosReleaseEvidence } from './release-cos-evidence.mjs';
 import { createRequire } from 'node:module';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseArgs, promisify } from 'node:util';
@@ -123,11 +123,15 @@ export async function releaseMac(options, dependencies = {}) {
   if (inside(repo, configPath)) throw new Error('Update configuration must be outside the source worktree');
   const configBytes = await readFile(configPath), config = validateConfig(await json(configPath));
   const redact = s => String(s).replaceAll(config.teamIdentifier, '<TEAM_ID>').replace(/\/Users\/[^/\s"']+/g, '/Users/<u>');
+  // The read-only COS key is only for this process's enumeration; no build tool, signer or notary child gets it.
+  const cosConfig = options.mode === 'release' || options['cos-config'] ? await readCosConfig(options['cos-config']) : undefined;
+  const secretNames = cosConfig ? cosCredentialEnvNames(cosConfig) : [];
+  const childEnv = Object.fromEntries(Object.entries(env).filter(([name]) => !secretNames.includes(name)));
   const logs = join(out, 'logs');
   await mkdir(logs, { recursive: true });
   const run = async (label, command, args) => {
     try {
-      const r = await execute(command, args, { cwd: repo, env: label === 'source-build' ? { ...env, HOME: options['build-home'] } : env, timeout: 20 * 60_000, maxBuffer: 16 * 1024 * 1024 });
+      const r = await execute(command, args, { cwd: repo, env: label === 'source-build' ? { ...childEnv, HOME: options['build-home'] } : childEnv, timeout: 20 * 60_000, maxBuffer: 16 * 1024 * 1024 });
       await writeFile(join(logs, `${label}.log`), label === 'notary-credentials' ? 'Credentials verified; history omitted.\n' : redact(r.stdout + r.stderr));
       return r;
     } catch (e) {
@@ -149,8 +153,8 @@ export async function releaseMac(options, dependencies = {}) {
     }
     let live, evidence, baseline;
     if (options.mode === 'release') {
-      live = await readStableManifest({ fetchImpl: dependencies.fetchImpl ?? fetch, url: manifestURL });
-      evidence = dependencies.cosEvidence ?? await readCosReleaseEvidence(options['cos-config'], { env });
+      live = await readStableManifest({ fetchImpl: dependencies.fetchImpl ?? fetch, url: manifestURL, env });
+      evidence = dependencies.cosEvidence ?? await readCosReleaseEvidence(options['cos-config'], { env, config: cosConfig });
       baseline = validateFirstRelease({ firstRelease: !!options['first-release'], noLiveManifest: !!options['no-live-manifest'], live, evidence });
     } else if (options['first-release'] || options['no-live-manifest']) throw new Error('--first-release and --no-live-manifest require release mode');
     checkVersionGate({ version, mode: options.mode, nextVersion: options['next-version'], liveVersion: live?.manifest?.version, firstRelease: baseline === 'none', historicalVersions: evidence?.versions });

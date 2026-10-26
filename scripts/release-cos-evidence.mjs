@@ -1,24 +1,44 @@
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { isAbsolute } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 
 // Read-only: no upload, object mutation, CDN action, or credential output.
-export async function readCosReleaseEvidence(configPath, { env = process.env, client, readJSON = async path => JSON.parse(await readFile(path, 'utf8')) } = {}) {
+// Changing the pinned SDK version is a reviewed code change, never a runtime option.
+export const COS_SDK_VERSION = '3.0.0';
+const defaultReadJSON = async path => JSON.parse(await readFile(path, 'utf8'));
+
+export async function readCosConfig(configPath, { readJSON = defaultReadJSON } = {}) {
   if (!isAbsolute(configPath ?? '')) throw new Error('Formal releases require an absolute --cos-config file');
   let config;
   try { config = await readJSON(configPath); } catch { throw new Error('Cannot read COS read-only configuration'); }
   if (!/^[a-z0-9-]+-\d+$/.test(config.bucket ?? '') || !/^[a-z]+-[a-z]+(?:-\d+)?$/.test(config.region ?? '')
     || config.prefix !== 'bot/mac/stable/' || config.publicManifestURL !== 'https://dl.vonvon.cc/bot/mac/stable/manifest.json'
     || !isAbsolute(config.ledgerFile ?? '')) throw new Error('COS configuration must identify the stable bucket, prefix, public URL and absolute ledgerFile');
+  for (const key of ['secretIdEnv', 'secretKeyEnv', 'securityTokenEnv']) {
+    if (config[key] !== undefined && !/^[A-Z][A-Z0-9_]*$/.test(config[key])) throw new Error('COS credential settings must be environment variable names, never inline credentials');
+  }
+  return config;
+}
+
+/** Names of the environment variables holding the read-only COS key; callers strip them from child processes. */
+export const cosCredentialEnvNames = config => [config.secretIdEnv, config.secretKeyEnv, config.securityTokenEnv].filter(Boolean);
+
+async function loadPinnedSdk(sdkModule, readJSON) {
+  if (!isAbsolute(sdkModule ?? '') || basename(sdkModule) !== 'cos-nodejs-sdk-v5' || basename(dirname(sdkModule)) !== 'node_modules') {
+    throw new Error(`Set sdkModule to the absolute node_modules/cos-nodejs-sdk-v5 directory of a tool prefix installed with cos-nodejs-sdk-v5@${COS_SDK_VERSION}`);
+  }
+  let manifest;
+  try { manifest = await readJSON(join(sdkModule, 'package.json')); } catch { throw new Error('Cannot read the COS SDK package.json'); }
+  if (manifest?.name !== 'cos-nodejs-sdk-v5' || manifest.version !== COS_SDK_VERSION) throw new Error(`sdkModule must be the pinned cos-nodejs-sdk-v5@${COS_SDK_VERSION}`);
+  try { return createRequire(import.meta.url)(sdkModule); } catch { throw new Error('Cannot load the pinned COS SDK; reinstall it privately'); }
+}
+
+export async function readCosReleaseEvidence(configPath, { env = process.env, client, readJSON = defaultReadJSON, config } = {}) {
+  config ??= await readCosConfig(configPath, { readJSON });
   if (!client) {
-    for (const name of [config.secretIdEnv, config.secretKeyEnv, config.securityTokenEnv].filter(Boolean)) {
-      if (!/^[A-Z][A-Z0-9_]*$/.test(name) || !env[name]) throw new Error('Required COS credential environment variable is unavailable');
-    }
     if (!config.secretIdEnv || !config.secretKeyEnv) throw new Error('Configure COS credential environment variable names, never inline credentials');
-    if (config.sdkModule && !isAbsolute(config.sdkModule)) throw new Error('sdkModule must be an absolute installed official SDK path');
-    let COS;
-    try { COS = createRequire(import.meta.url)(config.sdkModule ?? 'cos-nodejs-sdk-v5'); }
-    catch { throw new Error('Install the official cos-nodejs-sdk-v5 in the tooling environment or configure its absolute sdkModule path'); }
+    for (const name of cosCredentialEnvNames(config)) if (!env[name]) throw new Error('Required COS credential environment variable is unavailable');
+    const COS = await loadPinnedSdk(config.sdkModule, readJSON);
     client = new COS({ SecretId: env[config.secretIdEnv], SecretKey: env[config.secretKeyEnv], ...(config.securityTokenEnv ? { SecurityToken: env[config.securityTokenEnv] } : {}), Protocol: 'https:', Timeout: 15000 });
   }
   let ledger;

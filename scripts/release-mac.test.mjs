@@ -92,7 +92,8 @@ async function releaseFixture(settings = {}) {
   };
   const deps = {
     platform: 'darwin', temporaryRoots: [],
-    env: { ...process.env, VONVON_DESKTOP_UPDATE_CONFIG: configPath, NODE_TLS_REJECT_UNAUTHORIZED: '1', NODE_OPTIONS: '' },
+    // Hermetic: the host's own TLS or COS variables never leak into the scenario.
+    env: { PATH: process.env.PATH ?? '', VONVON_DESKTOP_UPDATE_CONFIG: configPath, FIXTURE_COS_SECRET_ID: 'SENTINEL-COS-ID', FIXTURE_COS_SECRET_KEY: 'SENTINEL-COS-KEY' },
     tools: { artifactRecord, verifyUniversalApp: async () => ({ architectures: ['arm64', 'x86_64'] }), verifyDmg: async () => {} },
     asar: { extractFile: () => Buffer.from(JSON.stringify(settings.embeddedConfig ?? config)) },
     plist: { parse: () => ({ 'system-entities': [{ 'mount-point': join(root, 'mounted-volume') }] }) },
@@ -279,8 +280,11 @@ async function formalFixture(settings = {}) {
   const fixture = await releaseFixture(settings);
   const notes = join(fixture.root, 'notes.txt');
   await fixture.write(notes, 'Test release notes');
+  const cosConfig = join(fixture.root, 'cos-readonly.json');
+  await fixture.writeJSON(cosConfig, { bucket: 'release-1234567890', region: 'ap-shanghai', prefix: 'bot/mac/stable/', publicManifestURL: manifestURL,
+    secretIdEnv: 'FIXTURE_COS_SECRET_ID', secretKeyEnv: 'FIXTURE_COS_SECRET_KEY', ledgerFile: join(fixture.root, 'ledger.json') });
   fixture.deps.cosEvidence = { versions: [], keys: [], checkedAt: new Date().toISOString() };
-  return { ...fixture, run: extra => releaseMac({ ...fixture.options, mode: 'release', 'notes-file': notes, ...extra }, fixture.deps) };
+  return { ...fixture, cosConfig, run: extra => releaseMac({ ...fixture.options, mode: 'release', 'notes-file': notes, 'cos-config': cosConfig, ...extra }, fixture.deps) };
 }
 
 test('explicit first release accepts only verified absence and records the empty baseline', async () => {
@@ -422,4 +426,37 @@ test('CLI entry runs through a symlinked directory', async t => {
   const result = spawnSync(process.execPath, [join(root, 'alias', 'release-mac.mjs')], { encoding: 'utf8', env: { PATH: process.env.PATH } });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Supply --version/);
+});
+
+test('read-only COS credentials never reach build, signing, notary or archive child processes', async () => {
+  const fixture = await formalFixture();
+  fixture.deps.fetchImpl = async () => liveManifest('0.6.9');
+  fixture.deps.cosEvidence = published069;
+  assert.equal((await fixture.run()).complete, true);
+  assert.ok(fixture.calls.length > 30);
+  for (const call of fixture.calls) {
+    assert.equal('FIXTURE_COS_SECRET_ID' in call.options.env || 'FIXTURE_COS_SECRET_KEY' in call.options.env, false, `${call.command} received a COS credential variable`);
+    assert.equal(Object.values(call.options.env).some(value => String(value).includes('SENTINEL-COS')), false);
+  }
+  assert.equal(fixture.calls.find(call => call.command === 'npm').options.env.VONVON_DESKTOP_UPDATE_CONFIG, fixture.deps.env.VONVON_DESKTOP_UPDATE_CONFIG);
+});
+
+test('formal release refuses a missing or malformed COS configuration before writing evidence', async t => {
+  for (const [name, extra] of [['missing', { 'cos-config': undefined }], ['relative', { 'cos-config': 'cos.json' }]]) await t.test(name, async () => {
+    const fixture = await formalFixture();
+    fixture.deps.fetchImpl = async () => liveManifest('0.6.9');
+    await assert.rejects(fixture.run(extra), /cos-config/);
+    assert.equal(fixture.calls.length, 0);
+    await assert.rejects(readFile(join(fixture.out, 'logs', 'source-head.log')), { code: 'ENOENT' });
+  });
+});
+
+test('TLS trust-store overrides in the release environment stop before any command', async t => {
+  for (const extra of [{ NODE_EXTRA_CA_CERTS: '/fixture/ca.pem' }, { SSL_CERT_FILE: '/fixture/ca.pem' }, { SSL_CERT_DIR: '/fixture/certs' }, { NODE_OPTIONS: '--use-openssl-ca' }, { NODE_OPTIONS: '--import ./hook.mjs' }, { NODE_TLS_REJECT_UNAUTHORIZED: '0' }]) await t.test(JSON.stringify(extra), async () => {
+    const fixture = await formalFixture();
+    Object.assign(fixture.deps.env, extra);
+    fixture.deps.fetchImpl = async () => assert.fail('no request may be made');
+    await assert.rejects(fixture.run(), /TLS verification/);
+    assert.equal(fixture.calls.length, 0);
+  });
 });
