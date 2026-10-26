@@ -41,6 +41,8 @@ async function settingsFixture() {
     cfg,
     writePreferences: createAppPreferencesWriter({ cfg, persistConfig: async next => writeFile(configFile, JSON.stringify(next)) }),
     backendFor: fixtureBackend,
+    // Decision-model saves validate credentials; never consult the host keystore.
+    getSecret: async id => id === 'typesafe-api-key' ? 'fixture-api-key' : undefined,
     evictLiveSessionsForChat: async () => {},
     readProject,
     listProjects: async () => [JSON.parse(await readFile(projectFile, 'utf8')) as Project],
