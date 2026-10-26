@@ -8,12 +8,12 @@ import type { AttachedDaemon } from './ipc-contract.js';
 export class AttachError extends Error {
   constructor(readonly reason: 'root' | 'owner' | 'credential' | 'connection' | 'identity' | 'close', cause?: unknown) {
     super({
-      root: 'The Vonvon data folder is unavailable.',
-      owner: 'No verified Vonvon daemon is running.',
-      credential: 'The local daemon credential is unavailable.',
-      connection: 'The running Vonvon daemon cannot accept this desktop connection.',
-      identity: 'The daemon owner changed during desktop attachment.',
-      close: 'The desktop connection did not close cleanly.',
+      root: 'Vonvon 数据目录不可用。',
+      owner: '没有找到在运行且通过校验的 Vonvon daemon。',
+      credential: '本机 daemon 凭据不可用。',
+      connection: '正在运行的 Vonvon daemon 不接受这次桌面连接。',
+      identity: '桌面连接期间 daemon 换了进程。',
+      close: '桌面连接没有正常关闭。',
     }[reason], { cause });
     this.name = 'AttachError';
   }
@@ -87,7 +87,7 @@ export async function attachExisting(root: string): Promise<AttachedDaemon> {
   } catch (cause) {
     const rejection = cause instanceof AttachError ? cause : new AttachError('identity', cause);
     try { await client.close(); }
-    catch (closeFailure) { throw new AggregateError([rejection, closeFailure], 'Daemon attachment failed and the desktop connection did not close cleanly.'); }
+    catch (closeFailure) { throw new AggregateError([rejection, closeFailure], '连接 daemon 失败，桌面连接也没有正常关闭。'); }
     throw rejection;
   }
 

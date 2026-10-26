@@ -19,6 +19,8 @@ import { changeLoginItem, followServiceHelper, repairServiceAtStartup, type Logi
 import type { CommandResult, DesktopUpdate, MachineReply } from '@vonvon/protocol';
 import { ConnectionError, RpcError } from '@vonvon/client/browser';
 
+/** 应用内更新没生效时给用户的手动下载地址，和设置页里的链接一致。 */
+const downloadPage = 'https://bot.vonvon.cc/get/';
 const restartDeadlineMs = 60_000;
 const stopDeadlineMs = 60_000;
 /** A manual start cancels passive reconnection without a connection-lost dialog. */
@@ -37,9 +39,9 @@ export function desktopResources(appPath: string, packaged: boolean): DesktopRes
 }
 
 function startupMessage(error: unknown): string {
-  if (error instanceof AttachError) return `${error.message} Start the daemon and reopen Vonvon Bot.`;
+  if (error instanceof AttachError) return `${error.message}请先启动 daemon，再重新打开 Vonvon Bot。`;
   if (error instanceof Error) return error.message;
-  return 'Vonvon Bot could not open its desktop window. Check the daemon and reopen the app.';
+  return 'Vonvon Bot 没能打开桌面窗口。请检查 daemon，再重新打开应用。';
 }
 
 export async function startDesktop(): Promise<void> {
@@ -155,7 +157,7 @@ export async function startDesktop(): Promise<void> {
     if (terminating) return;
     terminating = true;
     void cleanup().catch(() => {
-      dialog.showErrorBox('Vonvon Bot', 'The desktop connection did not close cleanly.');
+      dialog.showErrorBox('Vonvon Bot', '桌面连接没有正常关闭。');
     }).finally(() => {
       dialog.showErrorBox('Vonvon Bot', message);
       quitting = true;
@@ -168,7 +170,7 @@ export async function startDesktop(): Promise<void> {
     terminating = true;
     try { await cleanup(); }
     catch (error) {
-      dialog.showErrorBox('Vonvon Bot', 'The desktop connection did not close cleanly.');
+      dialog.showErrorBox('Vonvon Bot', '桌面连接没有正常关闭。');
       throw error;
     } finally {
       quitting = true;
@@ -265,7 +267,7 @@ export async function startDesktop(): Promise<void> {
     current.webContents.setWindowOpenHandler(({ url }) => {
       if (authorizedDocument()) void openAllowedExternal(url).catch(() => {
         dialog.showMessageBoxSync(current, {
-          type: 'warning', title: 'Vonvon Bot', message: 'This external link cannot be opened.', buttons: ['OK'],
+          type: 'warning', title: 'Vonvon Bot', message: '无法打开这个外部链接。', buttons: ['好'],
         });
       });
       return { action: 'deny' };
@@ -274,9 +276,9 @@ export async function startDesktop(): Promise<void> {
     current.webContents.on('will-frame-navigate', event => event.preventDefault());
     current.webContents.on('will-redirect', event => event.preventDefault());
     current.webContents.on('will-attach-webview', event => event.preventDefault());
-    current.webContents.on('render-process-gone', () => fatal('The desktop window stopped unexpectedly. Reopen Vonvon Bot.'));
+    current.webContents.on('render-process-gone', () => fatal('桌面窗口意外停止了。请重新打开 Vonvon Bot。'));
     current.webContents.on('did-fail-load', (_event, code, _description, _validatedUrl, isMainFrame) => {
-      if (isMainFrame && code !== -3) fatal('The desktop page could not load. Reopen Vonvon Bot.');
+      if (isMainFrame && code !== -3) fatal('桌面页面没能加载。请重新打开 Vonvon Bot。');
     });
     // 复制链接 needs clipboard-sanitized-write: Chromium checks it after a click and requests it otherwise.
     // Only the bundled page's main frame gets it; every other permission, clipboard-read included, stays denied.
@@ -312,10 +314,10 @@ export async function startDesktop(): Promise<void> {
     }
 
     async function restartHost(previous: AttachedDaemon['identity'], send: () => Promise<CommandResult>): Promise<CommandResult> {
-      if (starting || terminating || cleanupPromise) throw new StartHostRefusal('Desktop restart is unavailable.');
+      if (starting || terminating || cleanupPromise) throw new StartHostRefusal('正在启动、重启或重新连接 daemon，等它结束再重启。');
       const cancel = new AbortController();
       const cancelled = (): boolean => cancel.signal.aborted || terminating || cleanupPromise !== undefined || !bridge;
-      const refusal = (): StartHostRefusal => new StartHostRefusal('Desktop restart was cancelled.');
+      const refusal = (): StartHostRefusal => new StartHostRefusal('重启已取消。');
       const unlessCancelled = <T>(pending: Promise<T>): Promise<T> => new Promise<T>((resolve, reject) => {
         const stop = (): void => reject(refusal());
         if (cancel.signal.aborted) { stop(); return; }
@@ -344,7 +346,7 @@ export async function startDesktop(): Promise<void> {
             if (cancelled() || !bridge) { await next.dispose(); throw refusal(); }
             if (next.identity.pid !== ready.pid || next.identity.startedAt !== ready.startedAt) {
               await next.dispose();
-              throw new StartHostRefusal('The daemon owner changed during desktop restart.');
+              throw new StartHostRefusal('重启期间 daemon 被另一个进程接管了，请稍后再试。');
             }
             await unlessCancelled(bridge.replaceOwner(next));
             connectionFailureShown = false;
@@ -352,7 +354,7 @@ export async function startDesktop(): Promise<void> {
             return result;
           }
           ownerlessSince = ready ? undefined : ownerlessSince ?? Date.now();
-          if (ownerlessSince !== undefined && Date.now() - ownerlessSince >= restartDeadlineMs) throw new StartHostRefusal('The daemon did not come back after restart. Check daemon.log, then start it from Vonvon Bot.');
+          if (ownerlessSince !== undefined && Date.now() - ownerlessSince >= restartDeadlineMs) throw new StartHostRefusal('daemon 重启后没有回来。先看 daemon.log，再在 Vonvon Bot 里启动它。');
           await unlessCancelled(new Promise(resolve => setTimeout(resolve, 250)));
         }
       })().finally(() => {
@@ -415,7 +417,7 @@ export async function startDesktop(): Promise<void> {
     }
 
     async function guardedService<T>(operation: () => Promise<T>): Promise<T> {
-      if (starting || terminating || cleanupPromise) throw new StartHostRefusal('Desktop service operation is unavailable.');
+      if (starting || terminating || cleanupPromise) throw new StartHostRefusal('正在启动、重启或重新连接 daemon，等它结束再操作后台服务。');
       const run = operation().finally(() => { starting = undefined; });
       starting = run;
       return run;
@@ -508,9 +510,9 @@ export async function startDesktop(): Promise<void> {
       connectionFailureShown = true;
       dialog.showMessageBoxSync(current, {
         type: 'error',
-        title: 'Vonvon Bot connection lost',
-        message: 'The daemon connection was lost. Check the daemon, then start it again in Vonvon Bot.',
-        buttons: ['OK'],
+        title: 'Vonvon Bot 连接中断',
+        message: 'daemon 连接中断了。检查 daemon，再在 Vonvon Bot 里重新启动。',
+        buttons: ['好'],
       });
     }
 
@@ -524,14 +526,14 @@ export async function startDesktop(): Promise<void> {
       restartHost,
       stopHost,
       startHost: async bot => {
-        for (let blocker = startBlocker('Desktop startup is unavailable.'); blocker; blocker = startBlocker('Desktop startup is unavailable.')) await blocker;
+        for (let blocker = startBlocker('正在启动、重启或重新连接 daemon，等它结束再启动。'); blocker; blocker = startBlocker('正在启动、重启或重新连接 daemon，等它结束再启动。')) await blocker;
         const run = (async (): Promise<MachineReply> => {
           try {
             await reattachReady(bot);
-            return { type: 'done', message: bot === undefined ? 'Daemon started.' : 'Selected Bot started.' };
+            return { type: 'done', message: bot === undefined ? 'daemon 已启动。' : '所选 Bot 已启动。' };
           } catch (error) {
             if (error instanceof StartHostRefusal) throw error;
-            throw new StartHostRefusal('The daemon could not start and reconnect. Check daemon.log and try again.');
+            throw new StartHostRefusal('daemon 没能启动并重新连上。看看 daemon.log，再试一次。');
           }
         })().finally(() => { starting = undefined; });
         starting = run;
@@ -546,18 +548,18 @@ export async function startDesktop(): Promise<void> {
           return { type: 'done', message: action === 'install' ? '已打开登录时启动。' : '已关闭登录时启动。' };
         }
         if (action === 'start') {
-          for (let blocker = startBlocker('Desktop service operation is unavailable.'); blocker; blocker = startBlocker('Desktop service operation is unavailable.')) await blocker;
+          for (let blocker = startBlocker('正在启动、重启或重新连接 daemon，等它结束再操作后台服务。'); blocker; blocker = startBlocker('正在启动、重启或重新连接 daemon，等它结束再操作后台服务。')) await blocker;
         }
         return guardedService(async () => {
           if (action === 'stop') throw new StartHostRefusal('桌面版还不能单独停止后台服务：在终端运行 vonvon daemon stop。');
-          if ((await managerDependencies.readRegistration()).kind !== 'ours') throw new StartHostRefusal('Install the background service first.');
+          if ((await managerDependencies.readRegistration()).kind !== 'ours') throw new StartHostRefusal('先安装后台服务。');
           await reattachReady();
-          return { type: 'done', message: 'Background service started.' };
+          return { type: 'done', message: '后台服务已启动。' };
         });
       },
       chooseExecutablePath: async () => {
         const result = await dialog.showOpenDialog(current, {
-          title: 'Choose Codex executable',
+          title: '选择 Codex 可执行文件',
           properties: ['openFile'],
         });
         return result.canceled ? null : result.filePaths[0] ?? null;
@@ -576,7 +578,7 @@ export async function startDesktop(): Promise<void> {
         catch (error) {
           if (cleanupPromise) {
             terminating = true;
-            dialog.showErrorBox('Vonvon Bot', 'The desktop update failed. Reopen Vonvon Bot to try again.');
+            dialog.showErrorBox('Vonvon Bot', `桌面更新没有完成。请重新打开 Vonvon Bot 再试一次；也可以到 ${downloadPage} 重新下载安装。`);
             quitting = true;
             app.quit();
           }
@@ -603,7 +605,7 @@ export async function startDesktop(): Promise<void> {
       });
     }
     await current.loadFile(uiIndex);
-    if (repairNotice) void dialog.showMessageBox(current, { type: 'warning', title: 'Vonvon Bot', message: repairNotice, buttons: ['OK'] }).catch(() => {});
+    if (repairNotice) void dialog.showMessageBox(current, { type: 'warning', title: 'Vonvon Bot', message: repairNotice, buttons: ['好'] }).catch(() => {});
     if (focusWhenReady) show();
     if (quitWhenReady) requestQuit();
   } catch (error) {
