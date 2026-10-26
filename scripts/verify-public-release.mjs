@@ -11,7 +11,7 @@ const hashPattern = /^[a-f0-9]{64}$/;
 const parseJSON = value => { try { return JSON.parse(value); } catch { throw new Error('Invalid JSON in release evidence or HTTP response'); } };
 
 // Each of these either disables verification, swaps the trust store, or preloads code that can.
-const trustStoreOverrides = ['NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'SSL_CERT_DIR'];
+const trustStoreOverrides = ['NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_USE_SYSTEM_CA'];
 const forbiddenNodeFlag = /insecure|^--use-(?:openssl|system)-ca$|^--openssl-config(?:=|$)|^--require(?:=|$)|^-r(?:=|$)|^--import(?:=|$)|^--(?:experimental-)?loader(?:=|$)/i;
 export function assertSecureTransport(env = process.env, execArgv = process.execArgv) {
   const flags = [...String(env.NODE_OPTIONS ?? '').split(/\s+/), ...execArgv].filter(Boolean);

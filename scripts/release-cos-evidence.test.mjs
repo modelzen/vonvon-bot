@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { COS_SDK_VERSION, cosCredentialEnvNames, readCosConfig, readCosReleaseEvidence } from './release-cos-evidence.mjs';
@@ -65,4 +65,12 @@ test('the official SDK is loaded only from a pinned tool prefix', async t => {
     [{ name: 'cos-nodejs-sdk-v5', version: COS_SDK_VERSION }, { sdkModule: 'cos-nodejs-sdk-v5' }],
     [{ name: 'cos-nodejs-sdk-v5', version: COS_SDK_VERSION }, { sdkModule: join(root, 'stub') }],
   ]) await assert.rejects(readCosReleaseEvidence('/external/cos.json', { env, readJSON: read(packageJSON, overrides) }), /sdkModule|pinned/, JSON.stringify({ packageJSON, overrides }));
+});
+
+test('workflow.md installs and names the same SDK version the helper accepts', async () => {
+  const workflow = await readFile(new URL('../.agents/skills/release-mac/references/workflow.md', import.meta.url), 'utf8');
+  const installs = [...workflow.matchAll(/cos-nodejs-sdk-v5@(\d+\.\d+\.\d+)/g)].map(match => match[1]);
+  assert.ok(installs.length > 0, 'workflow.md must give the pinned install command');
+  assert.deepEqual([...new Set(installs)], [COS_SDK_VERSION]);
+  assert.match(workflow, new RegExp(`现在是 ${COS_SDK_VERSION.replaceAll('.', '\\.')}`));
 });
