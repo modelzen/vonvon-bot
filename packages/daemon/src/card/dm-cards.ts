@@ -39,7 +39,6 @@ import { labelScope } from '../config/scopes';
 import { summarizeEventDiagnosis, type EventDiagnosis } from '../utils/event-diagnosis';
 import { actions, actionsFixed, button, card, form, hr, input, linkButton, md, note, selectMenu, submitButton, type ActionValue, type CardElement, type CardObject, type SelectOption } from './cards';
 import { reasoningEffortLabel, relativeTime } from './command-cards';
-import type { DesktopRelease } from '../service/desktop-release';
 
 /** applink to open a Feishu group chat by chat_id (oc_xxx). Feishu has no
  * deep link to a specific thread/topic, so this lands in the group and the
@@ -48,8 +47,9 @@ function openChatUrl(chatId: string): string {
   return `https://applink.feishu.cn/client/chat/open?openChatId=${encodeURIComponent(chatId)}`;
 }
 
-/** Project home (matches package.json homepage/repository). */
-const REPO = 'https://github.com/modelzen/feishu-codex-bridge';
+/** 官网，和诊断卡里的"反馈"（交流群邀请链接）：闭源产品没有公开仓库和 issue 页，求助走这两个入口。 */
+const SITE_URL = 'https://bot.vonvon.cc';
+const FEEDBACK_URL = 'https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=63fo60d9-b31a-4921-a1d1-e01e3020c264';
 
 /** Fixed widths for the menu's two action rows, chosen so both rows span the
  * SAME total and align left+right: row 1 (3 buttons) at 152px each, row 2 (4
@@ -155,16 +155,12 @@ export function kindLabel(p: Pick<Project, 'kind' | 'smart'>): string {
 /** What a settings card shows in place of 免@ for a 智能 group (s25c): a judgement decides, there is nothing to set. */
 export const SMART_NO_MENTION_NOTE = '✋ 免 @：智能开话题由我判断回不回，没有这一项。';
 
-function desktopReleaseElements(release?: DesktopRelease | null): CardElement[] {
-  if (!release) return [];
+/** 官网下载页入口；`url` 为空（不是 macOS）时什么也不画。 */
+function desktopDownloadElements(url?: string | null): CardElement[] {
+  if (!url) return [];
   return [
-    md(`**Vonvon Bridge 桌面版 v${release.version} 已提供**`),
-    note('安装后可接续已有 Agent、飞书群和配置，无需重新配置。CLI 仍可单独使用。'),
-    actions(release.installers.map((installer) => linkButton(
-      installer.platform === 'macOS' ? '安装桌面版 · macOS Apple Silicon' : '安装桌面版 · Windows x64',
-      installer.url,
-      'primary',
-    ))),
+    note('macOS 桌面版的安装包在官网下载页。'),
+    actions([linkButton('🌐 打开下载页', url, 'primary')]),
     hr(),
   ];
 }
@@ -178,11 +174,10 @@ function desktopReleaseElements(release?: DesktopRelease | null): CardElement[] 
  * dm-cards stays a pure renderer — all IO (discovery file / version) lives in
  * the caller.
  */
-export function buildDmMenuCard(opts: { version?: string; desktopRelease?: DesktopRelease | null } = {}): CardObject {
-  const { version, desktopRelease } = opts;
+export function buildDmMenuCard(opts: { version?: string } = {}): CardObject {
+  const { version } = opts;
   return card(
     [
-      ...desktopReleaseElements(desktopRelease),
       md('私聊用于**建项目和管理**；具体任务请到项目群里 @我。'),
       hr(),
       // 两行按钮固定宽度、左对齐；两行宽度配平后总长相等、右边缘对齐（见 MENU_BTN_W_*）。
@@ -200,7 +195,7 @@ export function buildDmMenuCard(opts: { version?: string; desktopRelease?: Deskt
     ],
     {
       header: {
-        title: '🤖 Codex Bridge 管理台',
+        title: '🤖 Vonvon Bot 管理台',
         template: 'blue',
         textTags: version ? [{ text: `v${version}`, color: 'green' }] : undefined,
       },
@@ -214,16 +209,17 @@ const backToMenu = () => actions([button('⬅️ 菜单', { a: DM.menu })]);
 export function buildForegroundUpdateCard(info: {
   current: string;
   distribution?: 'bundled' | 'other';
-  desktopRelease?: DesktopRelease | null;
+  /** 官网下载页；不是 macOS 时为空，不画入口。 */
+  desktopDownload?: string | null;
 }): CardObject {
   return card(
     [
       md(`当前版本：**v${info.current}**`),
-      note('V2 前台 daemon 不支持在此更新。'),
+      note('前台运行的 daemon 不支持在此更新。'),
       note(info.distribution === 'bundled'
         ? '此运行时随桌面应用提供，请在桌面应用中更新。'
         : '请通过部署此运行时的来源获取新版本，再在启动终端停止旧进程并运行 `vonvon daemon run`。'),
-      ...desktopReleaseElements(info.desktopRelease),
+      ...(info.distribution === 'bundled' ? [] : desktopDownloadElements(info.desktopDownload)),
       backToMenu(),
     ],
     { header: { title: '⬆️ 更新说明', template: 'blue' } },
@@ -251,7 +247,7 @@ export function buildForegroundRestartCard(): CardObject {
   return card(
     [
       md('当前为**前台运行**。'),
-      note('V2 不支持在此重启。请在启动终端里 Ctrl+C 后重新运行 `vonvon daemon run`。重启期间机器人会离线。'),
+      note('前台运行时不支持在此重启。请在启动终端里 Ctrl+C 后重新运行 `vonvon daemon run`。重启期间机器人会离线。'),
       backToMenu(),
     ],
     { header: { title: '🔁 重启说明', template: 'orange' } },
@@ -444,14 +440,14 @@ function joinFeatureDiagnosis(i: DoctorInfo): CardElement[] {
  */
 function codexDiagnosePrompt(i: DoctorInfo): string {
   return [
-    '我在用 feishu-codex-bridge（飞书 ↔ 本地 Codex 桥接）遇到问题，请帮我定位原因并给出修复步骤。',
+    '我在用 Vonvon Bot（飞书 ↔ 本地 Codex / Claude Code）遇到问题，请帮我定位原因并给出修复步骤。',
     '',
     '【环境】',
-    `- bridge 版本：v${i.bridgeVer}`,
+    `- Vonvon Bot 版本：v${i.bridgeVer}`,
     `- codex 版本：${i.codexVer ?? '未找到（PATH / CODEX_BIN 里都没有 codex）'}`,
     `- Node：${i.node}`,
     `- 平台：${i.platform}`,
-    `- 项目仓库：${REPO}`,
+    `- 官网：${SITE_URL}`,
     '',
     '【运行快照】',
     `- codex 可用：${i.codexOk ? '是' : '否'}`,
@@ -463,9 +459,9 @@ function codexDiagnosePrompt(i: DoctorInfo): string {
     '1. 读取并分析日志，找出最近的报错或异常堆栈：',
     `   - 后台守护输出日志：${i.logStdout}`,
     `   - 后台守护错误日志：${i.logStderr}`,
-    '   （若是前台 feishu-codex-bridge run 模式，日志在启动它的终端窗口，请把终端里的报错一起发我）',
+    '   （若是前台 vonvon daemon run 模式，日志在启动它的终端窗口，请把终端里的报错一起发我）',
     `2. 判断问题属于哪类：codex 启动 / 登录、飞书鉴权或权限不足、长连接断开、还是配置缺失（配置文件：${i.configFile}）。`,
-    `3. 必要时对照仓库 README 与 issues 给方案：${REPO}/issues`,
+    `3. 必要时对照官网文档给方案：${SITE_URL}`,
     '4. 给出可直接执行的修复步骤。',
     '',
     '【我遇到的现象】',
@@ -477,7 +473,7 @@ function codexDiagnosePrompt(i: DoctorInfo): string {
  * Diagnostics card for the DM console (🩺 诊断). Top half is a quick local
  * self-check (codex + long connection + version/platform); bottom half is a
  * copy-paste code block the user hands to codex for a deep, log-backed
- * diagnosis, plus repo / issue links. Sent as a reply (terminal card) — re-open
+ * diagnosis, plus the site / feedback-group links. Sent as a reply (terminal card) — re-open
  * the console by messaging the bot.
  */
 export function buildDoctorCard(i: DoctorInfo): CardObject {
@@ -499,7 +495,7 @@ export function buildDoctorCard(i: DoctorInfo): CardObject {
       md(`- 机器人 open_id：${i.botOpenId ? `\`${i.botOpenId}\`` : '⚠️ 未能获取（凭据失效或网络不通）'}`),
       ...scopeDiagnosis(i),
       ...eventSubscriptionDiagnosis(i),
-      note(`bridge v${i.bridgeVer}　·　Node ${i.node}　·　${i.platform}`),
+      note(`Vonvon Bot v${i.bridgeVer}　·　Node ${i.node}　·　${i.platform}`),
       hr(),
       ...joinFeatureDiagnosis(i),
       hr(),
@@ -511,8 +507,8 @@ export function buildDoctorCard(i: DoctorInfo): CardObject {
       md('**让 Codex 帮你深度诊断** — 复制下面整段，到任意项目群里 **@我** 粘贴发送：'),
       md('```\n' + prompt + '\n```'),
       actions([
-        linkButton('📦 项目仓库', REPO),
-        linkButton('🐞 提 Issue', `${REPO}/issues`),
+        linkButton('🌐 官网', SITE_URL),
+        linkButton('💬 反馈', FEEDBACK_URL),
       ]),
     ],
     { header: { title: '🩺 诊断', template: hasProblem ? 'orange' : 'blue' } },

@@ -4,7 +4,6 @@ import { buildDmMenuCard } from '../card/dm-cards';
 import { sendManagedCard } from '../card/managed';
 import { log, withTrace } from '../core/logger';
 import { bridgeVersion } from '../core/version';
-import { getDesktopRelease } from '../service/desktop-release';
 
 /**
  * p2p (DM) console. Admin-gated (design §5: only admins may create / manage
@@ -23,9 +22,8 @@ export async function handleDmConsole(channel: LarkChannel, cfg: AppConfig, msg:
     }
     // The menu is a CardKit entity so dm.* button clicks can update it in place
     // (raw-JSON cards can't be patched — they flash and revert).
-    const desktopRelease = await getDesktopRelease();
     try {
-      const { messageId } = await sendManagedCard(channel, msg.chatId, buildDmMenuCard({ version: bridgeVersion(), desktopRelease }), msg.messageId);
+      const { messageId } = await sendManagedCard(channel, msg.chatId, buildDmMenuCard({ version: bridgeVersion() }), msg.messageId);
       log.info('console', 'menu-sent', { messageId });
     } catch (error) {
       log.fail('console', error, { cmd: 'menu-send' });
