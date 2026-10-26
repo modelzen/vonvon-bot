@@ -381,8 +381,7 @@ test('project memory search opens the group memory tab directly', () => {
 
 test('Bot title and comment model search targets the unified model pickers', () => {
   for (const [title, section, field] of [
-    ['Codex 标题模型', '新会话标题', '选择Codex 标题模型'],
-    ['Claude 标题模型', '新会话标题', '选择Claude 标题模型'],
+    ['标题模型', '新会话标题', ''],
     ['评论模型', '云文档评论', '选择评论模型'],
   ]) {
     const entry = entries.find(item => item.title === title && item.destination.selection?.kind === 'agent');

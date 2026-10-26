@@ -1,7 +1,7 @@
 import {beforeEach, expect, it, vi} from 'vitest';
 import {isValidElement, type ReactElement, type ReactNode} from 'react';
-import type {AgentSettingsView, ModelCatalog} from '@vonvon/protocol';
-import {BotCommentSettings, BotTitleSettings, CommentRulesEditor, TitleProviderFields} from '../src/settings/BotModelSettings';
+import type {AgentSettingsView, GlobalTitlePolicy, ModelCatalog} from '@vonvon/protocol';
+import {BotCommentSettings, BotTitleSettings, CommentRulesEditor, TitleFields} from '../src/settings/BotModelSettings';
 import {Editor} from '../src/settings/SettingsPanel';
 import {NativeModelPicker} from '../src/settings/NativeModelPicker';
 import {Toggle} from '../src/reference/components/ui';
@@ -20,14 +20,14 @@ vi.mock('../src/settings/useBotModelCatalogs', () => ({useBotModelCatalogs: () =
 vi.mock('../src/settings/DraftGuard', () => ({useDraft: (active: boolean, draft: any) => {if (active) h.drafts.set(h.key, draft); else h.drafts.delete(h.key);}}));
 
 type Element = ReactElement<Record<string, any>>;
-function nodes(node: ReactNode): Element[] {if (Array.isArray(node)) return node.flatMap(nodes); return isValidElement<Record<string, any>>(node) ? [node, ...nodes(node.props.children), ...nodes(node.props.trailing)] : [];}
+function nodes(node: ReactNode): Element[] {if (Array.isArray(node)) return node.flatMap(nodes); return isValidElement<Record<string, any>>(node) ? [node, ...nodes(node.props.children), ...nodes(node.props.trailing), ...nodes(node.props.action)] : [];}
 function at<T>(key: string, render: () => T): T {h.key = key; h.banks[key] ??= {state: [], refs: [], effects: []}; h.si = h.ri = h.ei = 0; const result = render(); for (const effect of h.pending.splice(0)) effect(); return result;}
 async function flush() {for (let i = 0; i < 12; i++) await Promise.resolve();}
 function deferred<T>() {let resolve!: (value: T) => void; let reject!: (error: unknown) => void; const promise = new Promise<T>((yes, no) => {resolve = yes; reject = no;}); return {promise, resolve, reject};}
 const codex = 'codex-appserver'; const claude = 'claude-agent';
-const policy = {enabled: true as const, model: 'title-model', effort: 'high' as const};
+const policy = {enabled: true as const, backend: codex, model: 'title-model', effort: 'high' as const};
 function fixture(text = 'Original rule', revision = 'rules-1'): AgentSettingsView {
-  const titles = {byBackend: {[codex]: policy, [claude]: {enabled: false as const}}};
+  const titles = {policy};
   const comments = {backend: codex, selection: {kind: 'default' as const}};
   const section = <T,>(stored: T) => ({stored, effective: stored, revision: 'settings-1', access: {kind: 'writable'}, apply: []});
   return {scope: {kind: 'agent', botId: 'cli_test'}, sections: {titles: section(titles), comments: section(comments), cards: section({})}, commentInstructions: {revision, maxEditLength: 30000, content: {kind: 'custom', text}}} as unknown as AgentSettingsView;
@@ -35,51 +35,73 @@ function fixture(text = 'Original rule', revision = 'rules-1'): AgentSettingsVie
 const catalog: ModelCatalog = {backend: codex, state: 'ready', source: 'backend-provided', observedAt: 1, titleEfforts: ['low', 'high'], models: [{id: 'default-model', displayName: 'Default model', description: '', isDefault: true, hidden: false, defaultEffort: 'low', supportedEfforts: ['low', 'high']}]};
 beforeEach(() => {h.banks = {}; h.pending = []; h.drafts.clear(); vi.clearAllMocks();});
 
-it('saves exactly one independent title Provider per Editor', async () => {
-  const view = fixture(); const save = vi.fn();
+it('saves one global title policy through one automatic Editor', async () => {
+  const view = fixture(); const save = vi.fn().mockResolvedValue({kind: 'refused', message: 'fixture failure'});
   const editors = at('titles', () => nodes(BotTitleSettings({view, save}))).filter(node => node.type === Editor);
-  expect(editors.map(editor => editor.props.title)).toEqual(['Codex 会话标题', 'Claude 会话标题']);
-  expect(editors.every(editor => editor.props.autoSave)).toBe(true);
-  await editors[0]!.props.save({byBackend: {[codex]: {enabled: false}, [claude]: policy}}, 'revision-codex');
-  await editors[1]!.props.save({byBackend: {[codex]: {enabled: false}, [claude]: policy}}, 'revision-claude');
-  expect(save.mock.calls).toEqual([['titles', {byBackend: {[codex]: {enabled: false}}}, 'revision-codex'], ['titles', {byBackend: {[claude]: policy}}, 'revision-claude']]);
+  expect(editors).toHaveLength(1); expect(editors[0]!.props.autoSave).toBe(true);
+  const editor = () => at('global-title-editor', () => nodes(Editor(editors[0]!.props as any))).find(node => node.type === TitleFields)!;
+  const next = {enabled: true, backend: claude, model: 'sonnet', effort: 'high'};
+  editor().props.onChange(next); await flush();
+  expect(save).toHaveBeenCalledExactlyOnceWith('titles', {policy: next}, 'settings-1');
+  expect(save.mock.calls[0]![1]).not.toHaveProperty('byBackend');
 });
 
-it('title switches emit valid policies, remember a choice, and strip custom metadata', () => {
-  const changed = vi.fn(); let current: any = policy;
-  const render = () => at('title-fields', () => nodes(TitleProviderFields({provider: {id: codex, name: 'Codex'}, policy: current, catalog, disabled: false, onChange: changed, onRetry: vi.fn()})));
+it('hides the title picker when disabled and remembers the last global model on reenable', () => {
+  const changed = vi.fn(); let current: GlobalTitlePolicy = policy;
+  const render = () => at('title-fields', () => nodes(TitleFields({policy: current, catalogs: {[codex]: catalog}, disabled: false, onChange: changed, onRetry: vi.fn()})));
   changed.mockImplementation(next => {current = next;});
+  expect(render().find(node => node.type === NativeModelPicker)).toBeDefined();
   render().find(node => node.type === Toggle)!.props.onChange({target: {checked: false}});
   expect(changed).toHaveBeenLastCalledWith({enabled: false});
+  expect(render().find(node => node.type === NativeModelPicker)).toBeUndefined();
   render().find(node => node.type === Toggle)!.props.onChange({target: {checked: true}});
   expect(changed).toHaveBeenLastCalledWith(policy);
-  render().find(node => node.type === NativeModelPicker)!.props.onChange({backend: codex, selection: {kind: 'explicit', model: 'gateway/title', effort: 'high', custom: true}});
-  expect(changed).toHaveBeenLastCalledWith({enabled: true, model: 'gateway/title', effort: 'high'});
-  render().find(node => node.type === NativeModelPicker)!.props.onChange({backend: claude, selection: {kind: 'explicit', model: 'wrong-provider', effort: 'low'}});
-  expect(changed).toHaveBeenCalledTimes(3);
 });
 
-it('enables titles with a complete catalog default and blocks readonly callbacks', () => {
-  const changed = vi.fn(); const props = {provider: {id: codex, name: 'Codex'}, policy: {enabled: false as const}, catalog, disabled: false, onChange: changed, onRetry: vi.fn()};
-  let ui = at('initial-title', () => nodes(TitleProviderFields(props)));
-  ui.find(node => node.type === Toggle)!.props.onChange({target: {checked: true}});
-  expect(changed).toHaveBeenLastCalledWith({enabled: true, model: 'default-model', effort: 'low'});
-  changed.mockClear(); ui = at('readonly-title', () => nodes(TitleProviderFields({...props, disabled: true})));
+it('switches title Provider and model atomically and strips custom metadata', () => {
+  const changed = vi.fn();
+  const ui = at('global-provider', () => nodes(TitleFields({policy, catalogs: {[codex]: catalog}, disabled: false, onChange: changed, onRetry: vi.fn()})));
+  const picker = ui.find(node => node.type === NativeModelPicker)!;
+  expect(picker.props.providerIds).toBeUndefined();
+  picker.props.onChange({backend: claude, selection: {kind: 'explicit', model: 'gateway/claude', effort: 'xhigh', custom: true}});
+  expect(changed).toHaveBeenCalledExactlyOnceWith({enabled: true, backend: claude, model: 'gateway/claude', effort: 'xhigh'});
+  picker.props.onChange({backend: claude, selection: {kind: 'default'}});
+  expect(changed).toHaveBeenCalledTimes(1);
+});
+
+it('enables a complete Codex default first and uses Claude if only that catalog is available', () => {
+  const changed = vi.fn(); const claudeCatalog = {...catalog, backend: claude};
+  for (const [key, catalogs, expectedBackend] of [['both', {[codex]: catalog, [claude]: claudeCatalog}, codex], ['claude', {[claude]: claudeCatalog}, claude]] as const) {
+    const ui = at(key, () => nodes(TitleFields({policy: {enabled: false}, catalogs, disabled: false, onChange: changed, onRetry: vi.fn()})));
+    expect(ui.find(node => node.type === NativeModelPicker)).toBeUndefined();
+    ui.find(node => node.type === Toggle)!.props.onChange({target: {checked: true}});
+    expect(changed).toHaveBeenLastCalledWith({enabled: true, backend: expectedBackend, model: 'default-model', effort: 'low'});
+  }
+});
+
+it('keeps title model callbacks readonly', () => {
+  const changed = vi.fn();
+  const ui = at('readonly-title', () => nodes(TitleFields({policy, catalogs: {[codex]: catalog}, disabled: true, onChange: changed, onRetry: vi.fn()})));
   expect(ui.find(node => node.type === Toggle)!.props.disabled).toBe(true);
   expect(ui.find(node => node.type === NativeModelPicker)!.props.disabled).toBe(true);
-  ui.find(node => node.type === Toggle)!.props.onChange({target: {checked: true}});
-  ui.find(node => node.type === NativeModelPicker)!.props.onChange({backend: codex, selection: {kind: 'explicit', model: 'x', effort: 'low'}});
+  ui.find(node => node.type === Toggle)!.props.onChange({target: {checked: false}});
+  ui.find(node => node.type === NativeModelPicker)!.props.onChange({backend: claude, selection: {kind: 'explicit', model: 'x', effort: 'low'}});
   expect(changed).not.toHaveBeenCalled();
 });
 
-it('leaves an unconfigured title disabled when discovery fails but allows a complete custom choice', () => {
-  const changed = vi.fn();
-  const ui = at('unavailable-title', () => nodes(TitleProviderFields({provider: {id: claude, name: 'Claude'}, policy: {enabled: false}, disabled: false,
-    catalog: {...catalog, backend: claude, state: 'unavailable', models: []}, onChange: changed, onRetry: vi.fn()})));
-  expect(ui.find(node => node.type === Toggle)!.props.disabled).toBe(true);
-  expect(ui.find(node => node.type === NativeModelPicker)!.props.disabled).toBe(false);
+it('opens an unsaved title choice when discovery fails and saves only a complete custom choice', () => {
+  const changed = vi.fn(); let current: GlobalTitlePolicy = {enabled: false};
+  const render = () => at('unavailable-title', () => nodes(TitleFields({policy: current, catalogs: {}, disabled: false, onChange: changed, onRetry: vi.fn()})));
+  changed.mockImplementation(next => {current = next;});
+  render().find(node => node.type === Toggle)!.props.onChange({target: {checked: true}});
+  expect(changed).not.toHaveBeenCalled();
+  let ui = render(); expect(ui.find(node => node.type === Toggle)!.props.checked).toBe(true);
+  expect(ui.find(node => node.type === NativeModelPicker)!.props.allowCustom).toBe(true);
+  ui.find(node => node.type === Toggle)!.props.onChange({target: {checked: false}});
+  expect(render().find(node => node.type === NativeModelPicker)).toBeUndefined(); expect(changed).not.toHaveBeenCalled();
+  render().find(node => node.type === Toggle)!.props.onChange({target: {checked: true}}); ui = render();
   ui.find(node => node.type === NativeModelPicker)!.props.onChange({backend: claude, selection: {kind: 'explicit', model: 'gateway/claude', effort: 'xhigh', custom: true}});
-  expect(changed).toHaveBeenCalledExactlyOnceWith({enabled: true, model: 'gateway/claude', effort: 'xhigh'});
+  expect(changed).toHaveBeenCalledExactlyOnceWith({enabled: true, backend: claude, model: 'gateway/claude', effort: 'xhigh'});
 });
 
 it('keeps inherited comment backend when changing a model and atomically saves a cross-Provider selection', async () => {

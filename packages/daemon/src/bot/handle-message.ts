@@ -1243,12 +1243,11 @@ export function createOrchestrator(
    * knows that topic yet, so a second judgement naming one meanwhile opens on its own message. */
   const openingUnder = new Set<string>();
 
-  /** Snapshot the selected backend's title policy when its native session is
-   * created. Later DM-setting changes affect future sessions only. */
-  function sessionTitlePolicy(backendId: string): SessionTitlePolicySnapshot {
-    const selected = getSessionTitleConfig(cfg, backendId);
+  /** Snapshot the Bot-wide title provider, independently of the native session provider. */
+  function sessionTitlePolicy(): SessionTitlePolicySnapshot {
+    const selected = getSessionTitleConfig(cfg);
     return selected.enabled
-      ? { strategy: 'model', model: selected.model, effort: selected.effort }
+      ? { strategy: 'model', backend: selected.backend, model: selected.model, effort: selected.effort }
       : { strategy: 'truncate' };
   }
 
@@ -1266,7 +1265,7 @@ export function createOrchestrator(
         sessionId,
         cwd,
         source,
-        policy: sessionTitlePolicy(be.id),
+        policy: sessionTitlePolicy(),
       });
     } catch (err) {
       log.fail('agent', err, { phase: 'session-title-register', backend: be.id, sessionId });
@@ -5095,7 +5094,7 @@ export function createOrchestrator(
     const selected =
       selectedBackendId && options.some((entry) => entry.id === selectedBackendId)
         ? selectedBackendId
-        : options[0]?.id ?? DEFAULT_BACKEND_ID;
+        : (() => { const policy = getSessionTitleConfig(cfg); return policy.enabled ? policy.backend : options[0]?.id ?? DEFAULT_BACKEND_ID; })();
     const models = await listModels(backendFor(selected)).catch((err) => {
       log.fail('agent', err, { phase: 'session-title-models', backend: selected });
       return [] as ModelInfo[];
@@ -5129,7 +5128,7 @@ export function createOrchestrator(
   ): void {
     if (!dmAdmin(evt.operator?.openId)) return;
     const valid = sessionTitleBackendOptions().some((entry) => entry.id === backendId);
-    if (!valid) {
+    if (config.enabled && !valid) {
       const renderInvalid = () => renderSessionTitleSettings(undefined, '⚠️ 这个 Agent 当前不可用，未保存。');
       if (freshAfterSubmit) {
         sendFreshSettingsResult(evt, renderInvalid, 'session-title-submit-validation');
@@ -5142,7 +5141,7 @@ export function createOrchestrator(
       const current = prefs.sessionTitles ?? {};
       prefs.sessionTitles = {
         ...current,
-        byBackend: { ...(current.byBackend ?? {}), [backendId]: { ...current.byBackend?.[backendId], ...config } },
+        policy: { ...current.policy, ...(config.enabled ? { ...config, backend: backendId } : { enabled: false as const }) },
       };
     }).then(
       () => true,

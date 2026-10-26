@@ -202,7 +202,7 @@ it('CARD-036 CARD-038 CARD-040 keeps comment, title and current-session model ch
   expect(await getSession(session.threadId)).toMatchObject({ model: 'fixture-model', effort: 'medium' });
   const disk = await loadConfig();
   expect(disk.preferences?.comments).toMatchObject({ backend: 'codex-appserver', model: 'fixture-model', effort: 'medium', future: 'retain' });
-  expect(disk.preferences?.sessionTitles?.byBackend?.['codex-appserver']).toMatchObject({ enabled: true, model: 'title-custom', effort: 'medium' });
+  expect(disk.preferences?.sessionTitles?.policy).toMatchObject({ enabled: true, model: 'title-custom', effort: 'medium' });
   expect((await getProjectByName('demo'))?.defaultModel).toBeUndefined();
 });
 

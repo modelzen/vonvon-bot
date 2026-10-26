@@ -55,13 +55,31 @@ it('serializes card and HTTP preference edits, preserves unknown nested keys and
   expect(fresh.sections.run.stored.maxConcurrentRuns).toBe(7); expect(fresh.sections.run.effective.maxConcurrentRuns).toBe(10);
   expect(fresh.sections.cards.effective.showToolCalls).toBe(false);
   await owner.save({ scope: agent, section: 'completion', revision: fresh.sections.completion.revision, patch: { mode: 'always' } });
-  await owner.save({ scope: agent, section: 'titles', revision: fresh.sections.titles.revision, patch: { byBackend: { 'codex-appserver': { enabled: false } } } });
+  await owner.save({ scope: agent, section: 'titles', revision: fresh.sections.titles.revision, patch: { policy: { enabled: false } } });
   const disk = await loadConfig() as AppConfig & { futureRoot: number };
   expect(disk.accounts).toEqual(cfg.accounts); expect(disk.secrets).toEqual(cfg.secrets); expect(disk.futureRoot).toBe(17);
   expect(disk.preferences?.completionReminder).toMatchObject({ future: true, mode: 'always' });
   expect((disk.preferences as Record<string, unknown>).cliBridge).toEqual({ enabled: false, presence: { future: 8 } }); // 咖啡一下 left it, kept as is
-  expect(disk.preferences?.sessionTitles?.byBackend?.['codex-appserver']).toMatchObject({ model: 'custom-title', future: 3, enabled: false });
+  expect(disk.preferences?.sessionTitles?.byBackend?.['codex-appserver']).toMatchObject({ model: 'custom-title', future: 3, enabled: true });
+  expect(disk.preferences?.sessionTitles?.policy).toEqual({ enabled: false });
   expect(JSON.stringify(fresh)).not.toMatch(/fixture-secret|SECRET|futurePreference|futureRoot/);
+});
+it('saves one title provider for the Bot, validates it and conflicts on stale edits', async () => {
+  const { owner } = await fixture();
+  const before = await owner.read(agent) as AgentSettingsView;
+  const policy = { enabled: true as const, backend: 'claude-agent', model: 'vendor/title', effort: 'low' as const };
+  const edit = { scope: agent, section: 'titles' as const, revision: before.sections.titles.revision, patch: { policy } };
+  expect((await owner.save(edit)).kind).toBe('saved');
+  const after = await owner.read(agent) as AgentSettingsView;
+  expect(after.sections.titles.stored).toEqual({ policy });
+  expect(after.sections.titles.effective).toEqual({ policy });
+  expect((await owner.save(edit)).kind).toBe('conflict');
+  for (const invalid of [{ ...policy, backend: 'unknown' }, { ...policy, effort: 'ultra' }]) {
+    expect((await owner.save({ ...edit, revision: after.sections.titles.revision, patch: { policy: invalid as typeof policy } })).kind).toBe('rejected');
+  }
+  expect(() => parseSettingsEdit({ ...edit, patch: { policy: { enabled: false, backend: 'claude-agent' } } })).toThrow();
+  expect((await owner.save({ ...edit, revision: after.sections.titles.revision, patch: { policy: { enabled: false } } })).kind).toBe('saved');
+  expect((await owner.read(agent) as AgentSettingsView).sections.titles.effective).toEqual({ policy: { enabled: false } });
 });
 it('checks same-section revision inside owner queue', async () => {
   const { owner } = await fixture(); const view = await owner.read(agent) as AgentSettingsView;
@@ -90,7 +108,7 @@ it('validates models, allows custom title ids, resets actual project and session
   await owner.save({ scope: session, section: 'model', revision: s.sections.model.revision, patch: { selection: { kind: 'default' } } });
   expect(await getSession(session.threadId)).not.toHaveProperty('model'); expect(await getSession(session.threadId)).not.toHaveProperty('effort');
   const a = await owner.read(agent) as AgentSettingsView;
-  expect((await owner.save({ scope: agent, section: 'titles', revision: a.sections.titles.revision, patch: { byBackend: { 'codex-appserver': { enabled: true, model: 'third-party-custom', effort: 'ultra' } } } })).kind).toBe('saved');
+  expect((await owner.save({ scope: agent, section: 'titles', revision: a.sections.titles.revision, patch: { policy: { enabled: true, backend: 'codex-appserver', model: 'third-party-custom', effort: 'ultra' } } })).kind).toBe('saved');
 });
 it('accepts hand-typed model ids for the project default and a topic, never for comments (3.11)', async () => {
   const { owner } = await fixture(); let p = await owner.read(project) as ProjectSettingsView;

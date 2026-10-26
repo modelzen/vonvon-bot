@@ -34,6 +34,10 @@ const title = z.discriminatedUnion("enabled", [
     })
     .strict(),
 ]);
+const globalTitle = z.discriminatedUnion("enabled", [
+  z.object({ enabled: z.literal(false) }).strict(),
+  z.object({ enabled: z.literal(true), backend: z.string().trim().min(1).max(1000), model: z.string().trim().min(1).max(1000), effort }).strict(),
+]);
 /**
  * The smart-mode judge model of a layer (s23d, product.md 3.4). `default` removes the layer: the bot
  * then judges on each backend's default small model. A group reset stores a host-default marker;
@@ -120,7 +124,7 @@ export const agentSectionSchemas = {
     longTaskMinutes: z.number(),
   }),
   comments: z.object({ backend: z.string(), selection }),
-  titles: z.object({ byBackend: z.record(title) }),
+  titles: z.object({ policy: globalTitle }),
   paths: z.object({ projectsRootDir: z.string().nullable() }),
   access: z.object({ allowedChats: z.array(groupIdSchema).max(1000) }),
   judge: judgeSectionSchema,
@@ -385,6 +389,7 @@ export type SettingsView =
   | HostSettingsView;
 export type ModelSelection = z.infer<typeof selection>;
 export type TitlePolicy = z.infer<typeof title>;
+export type GlobalTitlePolicy = z.infer<typeof globalTitle>;
 export type JudgeSelection = z.infer<typeof judgeSelection>;
 /** A view's judge selection: a known kind, or one this client does not know, as sent. */
 export type JudgeSelectionView = z.infer<typeof judgeViewSection>["selection"];
@@ -416,6 +421,12 @@ const editablePatches: Record<
   session: { model: sessionSectionSchemas.model.partial().strict() },
   host: { execution: hostSectionSchemas.execution.partial().strict(), judge: hostSectionSchemas.judge.partial().strict() },
 };
+// Old clients may submit one backend's title settings; the owner promotes it to
+// the global policy. Views expose only the single policy used by new clients.
+editablePatches.agent.titles = z.union([
+  agentSectionSchemas.titles.partial().strict(),
+  z.object({byBackend: z.record(title).refine(value => Object.keys(value).length === 1 && Object.keys(value).every(key => !['__proto__', 'constructor', 'prototype'].includes(key)))}).strict(),
+]);
 export const editSchema = z
   .object({
     scope,
