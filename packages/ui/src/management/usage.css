@@ -53,3 +53,14 @@
 @media(max-width:380px){.usage-account-heading{flex-wrap:wrap}.usage-quota-grid{flex-direction:column;gap:20px}.usage-quota+.usage-quota{border-left:0;border-top:1px solid var(--color-border);padding:16px 0 0}.usage-page-actions{gap:4px}}
 
 .usage-page-actions .ui-button{gap:6px}
+
+/* Missing dates are unknown, never zero; one keyboard stop inspects the calendar. */
+.usage-cell--unknown{background:transparent;box-shadow:inset 0 0 0 1px var(--color-border-strong)}
+.usage-cell[data-future=true]{visibility:hidden}
+.usage-cell[data-selected=true]{outline:1px solid var(--color-text-secondary);outline-offset:2px}
+.usage-heatmap__grid{outline-offset:4px;border-radius:3px}
+.usage-heatmap__grid:focus-visible{outline:2px solid var(--color-focus)}
+.usage-heatmap__hint{min-height:18px;font-variant-numeric:tabular-nums}
+.usage-activity-stats{min-width:0;max-width:100%}
+.usage-activity-stats dd{overflow-wrap:anywhere}
+@media(forced-colors:active){.usage-cell{border:1px solid CanvasText}.usage-cell--unknown{border-style:dotted}}

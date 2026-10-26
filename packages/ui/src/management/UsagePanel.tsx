@@ -3,13 +3,14 @@ import { useEffect, useRef, useState } from "react";
 import { Button, IconButton, InlineNotice } from "../reference/components/ui";
 import { SettingsGroup, SettingsRow } from "../reference/components/system-settings";
 import type { Agent, Group, Membership, MembershipId } from "@vonvon/protocol";
-import type { CollaborationClient, CollaborationReply, UsageShareSection } from "@vonvon/protocol";
+import type { CollaborationClient, UsageShareSection } from "@vonvon/protocol";
 import { settingAnchor } from "../search";
 import "./usage.css";
 import { JudgeUsageGroup } from "./JudgeUsage";
+import {UsageAccount, UsageProfile} from "./UsageContent";
+import {readUsage, type Usage} from "./usage-data";
 
-type Usage = Extract<CollaborationReply, { kind: "usage" }>["data"];
-type Profile = Usage["profile"];
+
 type Props = {
   request: CollaborationClient;
   onOpenEnvironment: () => void;
@@ -23,52 +24,6 @@ const shareSections: { key: UsageShareSection; label: string }[] = [
   { key: "limits", label: "限额进度" },
   { key: "plan", label: "套餐信息" },
 ];
-
-function amount(value: number | undefined) {
-  return value === undefined ? "未提供" : value.toLocaleString("zh-CN");
-}
-
-function windowLabel(seconds: number | undefined, fallback: string) {
-  if (!seconds) return fallback;
-  if (seconds % 86400 === 0) return `${seconds / 86400} 天限额`;
-  if (seconds % 3600 === 0) return `${seconds / 3600} 小时限额`;
-  return `${Math.round(seconds / 60)} 分钟限额`;
-}
-
-function windowValue(window: { usedPercent: number; resetAt?: number } | undefined) {
-  if (!window) return "暂不可用";
-  const reset = window.resetAt ? ` · ${new Date(window.resetAt * 1000).toLocaleString()} 重置` : "";
-  return `已用 ${window.usedPercent}%${reset}`;
-}
-
-function profileStats(profile: Profile) {
-  return [
-    { label: "累计 Token", value: amount(profile.lifetimeTokens) },
-    { label: "峰值单日 Token", value: amount(profile.peakDailyTokens) },
-    { label: "当前连续天数", value: profile.currentStreakDays === undefined ? "未提供" : `${profile.currentStreakDays} 天` },
-    { label: "最长连续天数", value: profile.longestStreakDays === undefined ? "未提供" : `${profile.longestStreakDays} 天` },
-    { label: "最长单任务", value: profile.longestTurnSec === undefined ? "未提供" : `${Math.round(profile.longestTurnSec / 60)} 分钟` },
-  ];
-}
-
-function Heatmap({ profile }: { profile: Profile }) {
-  if (!profile.dailyBuckets.length) return <SettingsRow title="每日用量" description="Codex 暂未提供每日活动记录。" />;
-  const daily = new Map(profile.dailyBuckets.map(item => [item.date, item.tokens]));
-  const maximum = Math.max(...profile.dailyBuckets.map(item => item.tokens), 0);
-  const today = new Date();
-  const utcDay = Math.floor(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()) / 86_400_000);
-  const startMonday = utcDay - ((new Date(utcDay * 86_400_000).getUTCDay() + 6) % 7) - 12 * 7;
-  const cells = Array.from({ length: utcDay - startMonday + 1 }, (_, offset) => {
-    const date = new Date((startMonday + offset) * 86_400_000).toISOString().slice(0, 10);
-    const tokens = daily.get(date) ?? 0;
-    const level = tokens === 0 || maximum === 0 ? 0 : Math.max(1, Math.ceil(tokens / maximum * 4));
-    return <span key={date} className={`usage-cell usage-cell--${level}`} title={`${date} · ${amount(tokens)} Token`} aria-label={`${date}，${amount(tokens)} Token`} />;
-  });
-  return <div className="usage-heatmap" aria-label="最近十三周每日 Token 用量">
-    <div className="usage-heatmap__grid">{cells}</div>
-    <span className="usage-heatmap__hint">最近十三周 · 悬停查看每日用量</span>
-  </div>;
-}
 
 export function UsagePanel({ request, onOpenEnvironment, onOpenShare }: Props) {
   const requestRef = useRef(request);
@@ -84,10 +39,8 @@ export function UsagePanel({ request, onOpenEnvironment, onOpenShare }: Props) {
     setLoading(true);
     setData(undefined);
     setError("");
-    void requestRef.current({ action: "usage", force: false }).then(reply => {
-      if (!active) return;
-      if (reply.kind === "usage") setData(reply.data);
-      else setError(reply.kind === "refused" ? reply.message : "无法读取 Codex 用量。");
+    void readUsage(requestRef.current).then(value => {
+      if (active) setData(value);
     }).catch((failure: unknown) => { if (active) setError(failure instanceof Error ? failure.message : "无法读取 Codex 用量。"); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -98,16 +51,13 @@ export function UsagePanel({ request, onOpenEnvironment, onOpenShare }: Props) {
     setError("");
     setNotice("");
     try {
-      const reply = await request({ action: "usage", force: true });
-      if (reply.kind === "usage") { setData(reply.data); setNotice("用量已刷新。"); }
-      else setError(reply.kind === "refused" ? reply.message : "无法读取 Codex 用量。");
+      setData(await readUsage(request, true));
+      setNotice("用量已刷新。");
     } catch (failure) { setError(failure instanceof Error ? failure.message : "无法刷新 Codex 用量。"); }
     finally { setBusy(false); }
   }
 
   const profile = data?.profile;
-  const primaryLabel = windowLabel(data?.usage.main.primary?.windowSeconds, "主要限额");
-  const secondaryLabel = windowLabel(data?.usage.main.secondary?.windowSeconds, "额外限额");
   return <div className="usage-panel usage-page">
     <header className="usage-page-heading today-page-heading">
       <h1>用量</h1><div className="usage-page-actions" id={settingAnchor('分享 Codex 用量')}>
@@ -115,56 +65,14 @@ export function UsagePanel({ request, onOpenEnvironment, onOpenShare }: Props) {
         <Button size="sm" onClick={onOpenShare}><Share2 size={14}/>分享用量</Button>
       </div>
     </header>
-    <section className="usage-account" aria-label="Codex 当前用量">
-      <header className="usage-account-heading">
-        <div className="usage-account-identity"><strong>Codex</strong><span>{profile?.displayName || '当前账号'}</span>{data?.usage.planType && <small>{data.usage.planType}</small>}</div>
-        {data && <span className="usage-read-time" title={new Date(data.usage.fetchedAt).toLocaleString()}>读取于 {new Date(data.usage.fetchedAt).toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit', hour12: false})}</span>}
-      </header>
-      <p className="usage-account-note">所有 Bot 共用本机 Codex 账号的用量</p>
-      {data ? <>
-        <div className="usage-quota-grid">
-          {data.usage.main.primary && <UsageQuota label={primaryLabel} window={data.usage.main.primary}/>}
-          {data.usage.main.secondary && <UsageQuota label={secondaryLabel} window={data.usage.main.secondary}/>}
-        </div>
-        {(!data.usage.main.primary || !data.usage.main.secondary) && <p className="usage-quota-unavailable">{[!data.usage.main.primary && primaryLabel, !data.usage.main.secondary && secondaryLabel].filter(Boolean).join('、')}暂不可用</p>}
-        {data.usage.extras.map((item, index) => <SettingsRow key={`${item.name ?? '额外限额'}-${index}`} title={item.name || '额外限额'} value={`${windowValue(item.primary)}；${windowValue(item.secondary)}`}/>)}
-      </> : <SettingsRow title={loading ? '正在读取用量' : '用量尚未读取'} description={loading ? '请稍候。' : error ? '请先刷新重试，或到本机环境检查账号状态。' : '在本机环境中登录 Codex 后可查看用量。'} trailing={!loading && <Button size="sm" onClick={onOpenEnvironment}>打开本机环境</Button>}/>}
+    <UsageAccount data={data}>
+      {!data && <SettingsRow title={loading ? '正在读取用量' : '用量尚未读取'} description={loading ? '请稍候。' : error ? '请先刷新重试，或到本机环境检查账号状态。' : '在本机环境中登录 Codex 后可查看用量。'} trailing={!loading && <Button size="sm" onClick={onOpenEnvironment}>打开本机环境</Button>}/>}
       {error && <InlineNotice title="用量读取失败" tone="warning">{error}</InlineNotice>}
       {notice && <p className="usage-operation-note" role="status">{notice}</p>}
-    </section>
-    {profile && <>
-      <SettingsGroup label="每日活动"><div className="usage-activity">
-        <Heatmap profile={profile}/>
-        <dl className="usage-activity-stats">
-          <div><dt>累计 Token</dt><dd>{amount(profile.lifetimeTokens)}</dd></div>
-          <div><dt>连续活跃</dt><dd>{profile.currentStreakDays === undefined ? '未提供' : `${profile.currentStreakDays} 天`}</dd></div>
-        </dl>
-      </div></SettingsGroup>
-      <details className="usage-details"><summary>详细统计</summary>
-      <SettingsGroup label="活动统计" footer={profile.statsAsOf ? `统计截至 ${profile.statsAsOf}` : undefined}>
-        {profileStats(profile).map(item => <SettingsRow key={item.label} title={item.label} value={item.value} />)}
-        <SettingsRow title="会话总数" value={amount(profile.totalThreads)} />
-        <SettingsRow title="技能调用总数" value={amount(profile.totalSkillsUsed)} />
-        <SettingsRow title="不同技能数" value={amount(profile.uniqueSkillsUsed)} />
-        <SettingsRow title="Fast Mode 占比" value={profile.fastModePct === undefined ? "未提供" : `${Math.round(profile.fastModePct)}%`} />
-        <SettingsRow title="常用推理强度" value={profile.mostUsedEffort ? `${profile.mostUsedEffort}${profile.mostUsedEffortPct === undefined ? "" : ` · ${Math.round(profile.mostUsedEffortPct)}%`}` : "未提供"} />
-        {profile.topInvocations.map(item => <SettingsRow key={`${item.kind}:${item.name}`} title={`${item.kind === "plugin" ? "插件" : "技能"} · ${item.name}`} value={`${amount(item.count)} 次`} />)}
-      </SettingsGroup>
-      </details>
-    </>}
+    </UsageAccount>
+    {profile && <UsageProfile profile={profile}/>}
     <JudgeUsageGroup />
   </div>;
-}
-
-function UsageQuota({label, window}: {label: string; window: {usedPercent: number; resetAt?: number}}) {
-  const used = Math.round(window.usedPercent);
-  const progress = Math.max(0, Math.min(100, window.usedPercent));
-  const reset = window.resetAt ? new Date(window.resetAt * 1000) : undefined;
-  return <section className="usage-quota" aria-label={label}>
-    <div className="usage-quota-line"><span>{label}</span><strong>{used}<small>% 已用</small></strong></div>
-    <div className="usage-progress" role="progressbar" aria-label={`${label}已用`} aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}><span style={{width: `${progress}%`}}/></div>
-    <span className="usage-reset" title={reset?.toLocaleString()}>{reset ? `${reset.toLocaleString('zh-CN', {month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false})} 重置` : '暂未提供重置时间'}</span>
-  </section>;
 }
 
 export function ShareUsagePanel({memberships, agents, groups, request}: {memberships: readonly Membership[]; agents: readonly Agent[]; groups: readonly Group[]; request: CollaborationClient}) {
