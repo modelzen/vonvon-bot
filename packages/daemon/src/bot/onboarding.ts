@@ -14,7 +14,7 @@ import { buildScopeGrantUrl, buildEventConfigUrl, labelScope } from '../config/s
 import { detectAgents } from '../agent';
 import { log } from '../core/logger';
 import { botPaths, useBotDir } from '../config/paths';
-import { ensureRegistry, currentBot, findBot, botIdentity, type BotIdentity, type BotEntry } from '../config/bots';
+import { ensureRegistry, currentBot, findBot, botIdentity, updateBotName, type BotIdentity, type BotEntry } from '../config/bots';
 import { registerBotFromCredentials } from './register-bot';
 
 export interface OnboardResult {
@@ -99,7 +99,24 @@ export async function ensureOnboarded(
   }
   const r = await validateAndReport(cfg);
   if (r === null) return null;
+  await syncBotName(identity, entry.botName, r.botName);
   return { identity, cfg, secret: r.secret, missingScopes: r.missingScopes, events: r.events };
+}
+
+/**
+ * The app was renamed in the Feishu developer console: the name `bot/v3/info` gives now replaces the saved display
+ * name, so the desktop and web pages show it (they reread bots.json on every snapshot). No name, the same name, or a
+ * failed write changes nothing and never stops the bot from starting.
+ */
+async function syncBotName(identity: BotIdentity, saved: string | undefined, reported: string | undefined): Promise<void> {
+  if (!reported?.trim() || reported === saved) return;
+  try {
+    if (await updateBotName(identity, reported) === 'updated') {
+      log.info('onboard', 'bot-name-synced', { appId: identity.appId, from: saved ?? null, to: reported });
+    }
+  } catch (error) {
+    log.fail('onboard', error, { phase: 'sync-bot-name', appId: identity.appId }, { console: false });
+  }
 }
 
 /**
@@ -152,7 +169,7 @@ export async function registerNewBot(desiredName?: string): Promise<OnboardResul
  *  event-subscription diagnosis and report it too (same notice-only policy). */
 async function validateAndReport(
   cfg: AppConfig,
-): Promise<{ secret: string; missingScopes?: string[]; events: EventDiagnosis } | null> {
+): Promise<{ secret: string; botName?: string; missingScopes?: string[]; events: EventDiagnosis } | null> {
   const secret = await resolveAppSecret(cfg);
   const v = await validateAppCredentials(cfg.accounts.app.id, secret, cfg.accounts.app.tenant);
   if (!v.ok) {
@@ -165,7 +182,7 @@ async function validateAndReport(
   noticeMissingScopes(cfg, v.missingScopes);
   const events = await diagnoseEventSubscription(cfg.accounts.app.id, secret, cfg.accounts.app.tenant);
   noticeEventDiagnosis(cfg, events);
-  return { secret, missingScopes: v.missingScopes, events };
+  return { secret, botName: v.botName, missingScopes: v.missingScopes, events };
 }
 
 function noticeMissingScopes(cfg: AppConfig, missingScopes: string[] | undefined): void {
