@@ -1,9 +1,9 @@
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DesktopUpdater, scheduleUpdateChecks } from '../src/updates.js';
+import { DesktopUpdateError, DesktopUpdater, scheduleUpdateChecks } from '../src/updates.js';
 import { desktopUpdateConfiguration } from '../src/update-configuration.js';
 
 class Driver extends EventEmitter {
@@ -38,7 +38,7 @@ describe('desktop update port', () => {
     const driver = new Driver();
     const fetch = vi.fn();
     const updater = new DesktopUpdater({ current: '1.0.0', signed: false, driver, fetch });
-    await expect(updater.check()).resolves.toMatchObject({ state: 'unavailable' });
+    await expect(updater.check()).resolves.toMatchObject({ state: 'unavailable', message: expect.stringContaining('https://bot.vonvon.cc/get/') });
     await expect(updater.install()).rejects.toThrow('请先检查桌面更新');
     expect(fetch).not.toHaveBeenCalled();
     expect(driver.checkForUpdates).not.toHaveBeenCalled();
@@ -73,23 +73,117 @@ describe('desktop update port', () => {
     expect(h.driver.checkForUpdates).not.toHaveBeenCalled();
   });
 
-  it('asks the user to retry, instead of refusing for good, while the expected version has not appeared', async () => {
+  /** A first run that downloaded 1.1.0 and asked for the install, but the running app is still 1.0.0. */
+  async function failedInstall() {
     const h = fixture();
     await h.updater.check();
     const download = h.updater.install();
     h.driver.emit('update-downloaded');
     await download;
     await h.updater.install();
+    const secondDriver = new Driver();
     const second = new DesktopUpdater({
       current: '1.0.0', signed: true, manifestURL: 'https://updates.example.test/manifest.json',
-      driver: new Driver(), fetch: h.fetch, statePath: h.statePath,
+      driver: secondDriver, fetch: h.fetch, statePath: h.statePath,
     });
-    await expect(second.check()).resolves.toMatchObject({ state: 'install-pending', latest: '1.1.0', message: expect.stringContaining('上次安装尚未生效') });
-    expect(h.fetch).toHaveBeenCalledTimes(1);
+    h.fetch.mockClear();
+    return { ...h, second, secondDriver };
+  }
+
+  it('asks the user to retry, instead of refusing for good, while the expected version has not appeared', async () => {
+    const h = await failedInstall();
+    await expect(h.second.check()).resolves.toMatchObject({ state: 'install-pending', latest: '1.1.0', message: expect.stringContaining('上次安装尚未生效') });
     expect(existsSync(h.statePath)).toBe(true);
-    await expect(second.retry()).resolves.toMatchObject({ state: 'available', latest: '1.1.0' });
+    await expect(h.second.retry()).resolves.toMatchObject({ state: 'available', latest: '1.1.0' });
     expect(existsSync(h.statePath)).toBe(false);
+  });
+
+  it('keeps reading the manifest while an install is unsettled: still pending offline, available once a newer release is out', async () => {
+    const h = await failedInstall();
+    // The same manifest every time would only repeat the pending state, but it is read each time.
+    await expect(h.second.check()).resolves.toMatchObject({ state: 'install-pending' });
+    await expect(h.second.check()).resolves.toMatchObject({ state: 'install-pending' });
     expect(h.fetch).toHaveBeenCalledTimes(2);
+    h.fetch.mockRejectedValueOnce(new TypeError('fetch failed'));
+    await expect(h.second.check()).resolves.toMatchObject({ state: 'install-pending', latest: '1.1.0' });
+    h.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ version: '1.2.0', feedURL: 'https://updates.example.test/feed' })));
+    const newer = await h.second.check();
+    expect(newer).toMatchObject({ state: 'available', latest: '1.2.0', message: expect.stringContaining('上次安装 1.1.0 没有生效') });
+    // That newer release can be downloaded right away.
+    const download = h.second.install();
+    expect(h.secondDriver.setFeedURL).toHaveBeenCalledWith({ url: 'https://updates.example.test/feed' });
+    h.secondDriver.emit('update-downloaded');
+    await expect(download).resolves.toMatchObject({ state: 'downloaded', latest: '1.2.0' });
+  });
+
+  it('does not fetch the manifest for an unsettled install when there is no signed update source', async () => {
+    const h = await failedInstall();
+    const unsigned = new DesktopUpdater({ current: '1.0.0', signed: false, driver: new Driver(), fetch: h.fetch, statePath: h.statePath });
+    await expect(unsigned.check()).resolves.toMatchObject({ state: 'install-pending' });
+    expect(h.fetch).not.toHaveBeenCalled();
+  });
+
+  it('says in Chinese, as a user-facing error, why a retry could not clear the install record', async () => {
+    const h = fixture();
+    // A directory with a file in it cannot be removed as a record, whoever runs the test.
+    mkdirSync(h.statePath);
+    writeFileSync(join(h.statePath, 'x'), '');
+    const failure = await h.updater.retry().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(DesktopUpdateError);
+    expect((failure as Error).message).toContain('https://bot.vonvon.cc/get/');
+    expect(h.fetch).not.toHaveBeenCalled();
+  });
+
+  it('answers one check at a time: a second call during a check shares its network request', async () => {
+    const h = fixture();
+    const [first, second] = await Promise.all([h.updater.check(), h.updater.check()]);
+    expect(second).toBe(first);
+    expect(h.fetch).toHaveBeenCalledTimes(1);
+    await h.updater.check();
+    expect(h.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('lets the user start the download while another check is still waiting for the network', async () => {
+    const h = fixture();
+    await h.updater.check();
+    let answer: (response: Response) => void = () => {};
+    h.fetch.mockImplementationOnce(() => new Promise<Response>(resolve => { answer = resolve; }));
+    const again = h.updater.check();
+    await vi.waitFor(() => expect(h.fetch).toHaveBeenCalledTimes(2));
+    const download = h.updater.install();
+    expect(h.driver.setFeedURL).toHaveBeenCalledWith({ url: 'https://updates.example.test/feed' });
+    h.driver.emit('update-downloaded');
+    await expect(download).resolves.toMatchObject({ state: 'downloaded', latest: '1.1.0' });
+    answer(new Response(JSON.stringify({ version: '1.1.0', feedURL: 'https://updates.example.test/feed' })));
+    // The check that was still running reports what is true now: the update is already downloaded.
+    await expect(again).resolves.toMatchObject({ state: 'downloaded' });
+  });
+
+  it('records the version the user chose to download, even when a later check sees a newer release', async () => {
+    const h = fixture();
+    await h.updater.check();
+    const download = h.updater.install();
+    h.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ version: '1.2.0', feedURL: 'https://updates.example.test/feed' })));
+    await expect(h.updater.check()).resolves.toMatchObject({ state: 'available', latest: '1.2.0' });
+    h.driver.emit('update-downloaded');
+    await expect(download).resolves.toMatchObject({ state: 'downloaded', latest: '1.1.0' });
+    await h.updater.install();
+    expect(readFileSync(h.statePath, 'utf8')).toBe('1.1.0');
+  });
+
+  it.each([
+    ['no network', () => Promise.reject(new TypeError('fetch failed')), '连不上更新服务器'],
+    ['a timeout', () => Promise.reject(Object.assign(new Error('The operation timed out'), { name: 'TimeoutError' })), '没有及时回应'],
+    ['a server error', () => Promise.resolve(new Response('', { status: 503 })), '更新服务器返回 503'],
+    ['a manifest that is not JSON', () => Promise.resolve(new Response('<html>')), '更新清单格式不对'],
+    ['a manifest without a version', () => Promise.resolve(new Response('{}')), '更新清单格式不对'],
+  ])('reports %s as a Chinese message the window may show, without the raw cause', async (_name, respond, words) => {
+    const h = fixture();
+    h.fetch.mockImplementationOnce(respond);
+    const failure = await h.updater.check().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(DesktopUpdateError);
+    expect((failure as Error).message).toContain(words);
+    expect((failure as Error).message).not.toMatch(/fetch failed|timed out|SyntaxError|ZodError/);
   });
 
   it.each([['the same version', '1.0.0'], ['a lower version', '0.9.0'], ['an unreadable record', 'not a version'], ['an empty record', '']])(

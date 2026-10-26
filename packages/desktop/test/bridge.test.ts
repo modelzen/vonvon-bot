@@ -10,6 +10,7 @@ import { ConnectionError, RpcError } from '@vonvon/client/browser';
 import { desktopChannels, type AttachedDaemon, type DesktopResources } from '../src/ipc-contract.js';
 import { ServiceActionError } from '../src/service-error.js';
 import { StartHostRefusal } from '../src/daemon-manager.js';
+import { DesktopUpdateError } from '../src/updates.js';
 
 const { handlers, openExternal, failRegistration } = vi.hoisted(() => ({
   handlers: new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>>(),
@@ -126,7 +127,7 @@ describe('desktop IPC boundary', () => {
   it('masks arbitrary errors and passes daemon messages through sanitized', async () => {
     const h = harness();
     h.actions.setLoginItem.mockRejectedValueOnce(new Error('uninstall_incomplete: SECRET_TOKEN'));
-    expect(await h.invoke(desktopChannels.setLoginItem, false)).toEqual({ ok: false, error: { kind: 'validation', message: 'Desktop request failed' } });
+    expect(await h.invoke(desktopChannels.setLoginItem, false)).toEqual({ ok: false, error: { kind: 'validation', message: '桌面端操作没有成功，请重试。' } });
     h.actions.setLoginItem.mockRejectedValueOnce(new ServiceActionError('report', '没关掉：launchctl said token=t-g1044abcdefghijklmnopqrstuvwxyz0123'));
     expect(await h.invoke(desktopChannels.setLoginItem, false)).toEqual({ ok: false, error: { kind: 'validation', message: '没关掉：launchctl said token=…' } });
     h.actions.setLoginItem.mockRejectedValueOnce(new ServiceActionError('busy'));
@@ -167,7 +168,7 @@ describe('desktop IPC boundary', () => {
     ['capitalised words after Basic', 'Basic Settings are invalid. Basic HTTP auth is off. Basic Information missing',
       'Basic Settings are invalid. Basic HTTP auth is off. Basic Information missing'],
     ['bare Feishu access tokens', 'invalid access t-g1044ghJRUIJJ5ELPPA7VQ5XWQUQAP4XMYWC4P7S here', 'invalid access … here'],
-    ['empty text', ' \u0000 ', 'Daemon request failed'],
+    ['empty text', ' \u0000 ', '后台请求失败，请重试。'],
   ])('sanitizes %s in daemon messages', (_name, raw, expected) => {
     expect(sanitizeDaemonMessage(raw)).toBe(expected);
   });
@@ -388,6 +389,17 @@ describe('desktop IPC boundary', () => {
     await h.bridge.dispose();
   });
 
+  it('shows update failures to the window as their own Chinese message, and hides other errors behind a generic one', async () => {
+    const h = harness();
+    h.actions.checkDesktopUpdate.mockRejectedValueOnce(new DesktopUpdateError('检查更新失败：连不上更新服务器，请检查网络后重试。'));
+    expect(await h.invoke(desktopChannels.checkDesktopUpdate)).toEqual({ ok: false, error: { kind: 'validation', message: '检查更新失败：连不上更新服务器，请检查网络后重试。' } });
+    h.actions.retryDesktopUpdate.mockRejectedValueOnce(new DesktopUpdateError('没能清除上次安装的记录，请到官网重新下载安装：https://bot.vonvon.cc/get/'));
+    expect(await h.invoke(desktopChannels.retryDesktopUpdate)).toMatchObject({ ok: false, error: { message: expect.stringContaining('重新下载安装') } });
+    h.actions.installDesktopUpdate.mockRejectedValueOnce(new Error('EACCES: /Users/someone/Library/secret'));
+    expect(await h.invoke(desktopChannels.installDesktopUpdate)).toEqual({ ok: false, error: { kind: 'validation', message: '桌面端操作没有成功，请重试。' } });
+    await h.bridge.dispose();
+  });
+
   it('pushes the automatic update result to a subscribed window and replays the latest one after a reload', async () => {
     const h = harness();
     const found = { state: 'available' as const, current: '1.0.0', latest: '1.1.0', message: '有新版本' };
@@ -414,7 +426,7 @@ describe('desktop IPC boundary', () => {
     expect(h.webContents.send).not.toHaveBeenCalled();
     expect(await h.invoke(desktopChannels.subscribe)).toMatchObject({ ok: true });
     expect(h.webContents.send).toHaveBeenCalledWith(desktopChannels.event,
-      { type: 'error', value: { kind: 'validation', message: 'Desktop request failed' } });
+      { type: 'error', value: { kind: 'validation', message: '桌面端操作没有成功，请重试。' } });
     expect(h.webContents.send).toHaveBeenCalledWith(desktopChannels.event, { type: 'quitRequested' });
     h.bridge.requestQuit();
     expect(h.webContents.send).toHaveBeenCalledTimes(3);

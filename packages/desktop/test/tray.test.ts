@@ -51,18 +51,18 @@ it('still opens the window from a tray click on Linux', () => {
   expect(fake.tray.on).toHaveBeenCalledWith('click', show);
 });
 
-it('adds a new-version item at the top of the menu and takes it away again', () => {
+it('adds an update item at the top of the menu and takes it away again', () => {
   const show = vi.fn();
   const tray = createDesktopTray('/app/assets/tray.png', show, vi.fn(), 'darwin');
   const labels = () => (fake.tray.setContextMenu.mock.lastCall?.[0] as Array<{label?: string; type?: string}>).map(item => item.label ?? item.type);
-  tray.setUpdate('0.7.1');
+  tray.setUpdate('有新版本 0.7.1');
   expect(labels()).toEqual(['有新版本 0.7.1', 'separator', '打开 Vonvon Bot', 'separator', '退出 Vonvon Bot']);
   expect(fake.tray.setToolTip).toHaveBeenLastCalledWith('Vonvon Bot · 有新版本 0.7.1');
   const menu = fake.tray.setContextMenu.mock.lastCall?.[0] as Array<{click?: () => void}>;
   menu[0]?.click?.();
   expect(show).toHaveBeenCalledOnce();
   const rebuilt = fake.tray.setContextMenu.mock.calls.length;
-  tray.setUpdate('0.7.1');
+  tray.setUpdate('有新版本 0.7.1');
   expect(fake.tray.setContextMenu.mock.calls.length).toBe(rebuilt);
   tray.setUpdate(undefined);
   expect(labels()).toEqual(['打开 Vonvon Bot', 'separator', '退出 Vonvon Bot']);

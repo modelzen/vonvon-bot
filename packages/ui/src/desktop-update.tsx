@@ -21,8 +21,3 @@ export function useDesktopUpdate(): Store {
   const local = useState<DesktopUpdate>();
   return shared ?? local;
 }
-
-/** 有新版本可装（可下载或已下载）时返回它的版本号，用来在设置入口上做不打扰的标记。 */
-export function newVersionOf(update: DesktopUpdate | undefined): string | undefined {
-  return update && (update.state === 'available' || update.state === 'downloaded') ? update.latest : undefined;
-}

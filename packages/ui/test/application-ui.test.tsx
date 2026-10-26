@@ -1,9 +1,9 @@
 import {expect, it} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
-import type {DesktopUpdate, MachineRequestHandler} from '@vonvon/protocol';
+import {desktopUpdateNotice, type DesktopUpdate, type MachineRequestHandler} from '@vonvon/protocol';
 import {createClient} from '../../client/src/client';
 import {ClientProvider, type ShellCapabilities} from '../src/client-context';
-import {DesktopUpdateContext, newVersionOf} from '../src/desktop-update';
+import {DesktopUpdateContext} from '../src/desktop-update';
 import {AppShell} from '../src/LocalShell';
 import {SettingsHome} from '../src/TodayHome';
 import {UpdatePanel} from '../src/management/UpdatePanel';
@@ -84,30 +84,33 @@ it('disables the retry when the shell cannot retry', () => {
   expect(withRetry.match(/<button[^>]*>(?:(?!<\/button>).)*重试<\/span><\/button>/)?.[0]).not.toContain('disabled');
 });
 
-it('only a downloadable or downloaded update marks the settings entry', () => {
+it('marks the settings entry for a waiting update and for an install that did not take effect, and for nothing else', () => {
   const update = (state: DesktopUpdate['state']): DesktopUpdate => ({state, current: '0.7.0', latest: '0.7.1', message: ''});
-  expect(newVersionOf(update('available'))).toBe('0.7.1');
-  expect(newVersionOf(update('downloaded'))).toBe('0.7.1');
-  for (const state of ['current', 'unavailable', 'install-pending'] as const) expect(newVersionOf(update(state))).toBeUndefined();
-  expect(newVersionOf(undefined)).toBeUndefined();
+  expect(desktopUpdateNotice(update('available'))).toBe('有新版本 0.7.1');
+  expect(desktopUpdateNotice(update('downloaded'))).toBe('有新版本 0.7.1');
+  expect(desktopUpdateNotice(update('install-pending'))).toBe('上次更新没装上');
+  for (const state of ['current', 'unavailable'] as const) expect(desktopUpdateNotice(update(state))).toBeUndefined();
+  expect(desktopUpdateNotice(undefined)).toBeUndefined();
 });
 
-const shell = (props: {updateVersion?: string}) => renderToStaticMarkup(
+const shell = (props: {updateNotice?: string}) => renderToStaticMarkup(
   <AppShell page="home" view="agents" title="此刻" onNavigate={() => {}} onOpenList={() => {}} {...props}><p>内容</p></AppShell>,
 );
 
 it('marks the settings button, and only it, when a new version is waiting', () => {
-  const marked = shell({updateVersion: '0.7.1'});
+  const marked = shell({updateNotice: '有新版本 0.7.1'});
   expect(marked).toContain('aria-label="设置，有新版本 0.7.1"');
   expect(marked).toContain('today-update-dot');
+  expect(shell({updateNotice: '上次更新没装上'})).toContain('aria-label="设置，上次更新没装上"');
   const plain = shell({});
   expect(plain).toContain('aria-label="设置"');
   expect(plain).not.toContain('today-update-dot');
 });
 
 it('says on the settings home which entry holds the new version', () => {
-  const home = (updateVersion?: string) => renderToStaticMarkup(<SettingsHome onNavigate={() => {}} onFeature={() => {}} updateVersion={updateVersion}/>);
-  expect(home('0.7.1')).toContain('有新版本 0.7.1');
+  const home = (updateNotice?: string) => renderToStaticMarkup(<SettingsHome onNavigate={() => {}} onFeature={() => {}} updateNotice={updateNotice}/>);
+  expect(home('有新版本 0.7.1')).toContain('有新版本 0.7.1');
+  expect(home('上次更新没装上')).toContain('上次更新没装上');
   expect(home()).not.toContain('有新版本');
   expect(home()).toContain('后台运行与更新');
 });

@@ -140,14 +140,14 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
         catch (error) { reject(error); }
       }, error => {
         if (!pending.delete(reject)) return;
-        reject(error instanceof Error ? new Error(error.message) : new Error('Desktop request failed'));
+        reject(error instanceof Error ? new Error(error.message) : new Error('桌面端操作没有成功，请重试。'));
       });
     });
   }
 
   function callShell(channel: string, ...args: unknown[]): Promise<void> {
     return transport.invoke(channel, ...args).then(value => readResult(value, parseVoid), error => {
-      throw error instanceof Error ? new Error(error.message) : new Error('Desktop request failed');
+      throw error instanceof Error ? new Error(error.message) : new Error('桌面端操作没有成功，请重试。');
     });
   }
 
@@ -221,7 +221,7 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
     openExternal: url => callShell(desktopChannels.external, url),
     chooseExecutablePath: () => transport.invoke(desktopChannels.chooseExecutablePath)
       .then(value => readResult(value, parseExecutablePath), error => {
-        throw error instanceof Error ? new Error(error.message) : new Error('Desktop request failed');
+        throw error instanceof Error ? new Error(error.message) : new Error('桌面端操作没有成功，请重试。');
       }),
     chooseDirectoryPaths: multiple => transport.invoke(desktopChannels.chooseDirectoryPaths, multiple)
       .then(value => readResult(value, paths => {

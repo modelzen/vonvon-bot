@@ -16,7 +16,7 @@ import { createDaemonDependencies, prepareDesktopRoot } from './daemon-dependenc
 import { desktopCliOptions, observeCli, registerCli } from './cli-registration.js';
 import { liveServiceActionRecord } from '../../daemon/src/service/action-report.js';
 import { changeLoginItem, followServiceHelper, repairServiceAtStartup, type LoginItemHooks, type ServiceRuntime } from './login-item.js';
-import type { CommandResult, DesktopUpdate, MachineReply } from '@vonvon/protocol';
+import { desktopUpdateNotice, type CommandResult, type DesktopUpdate, type MachineReply } from '@vonvon/protocol';
 import { ConnectionError, RpcError } from '@vonvon/client/browser';
 
 /** 应用内更新没生效时给用户的手动下载地址，和设置页里的链接一致。 */
@@ -210,9 +210,9 @@ export async function startDesktop(): Promise<void> {
         quitting = true;
       },
     });
-    // 菜单栏图标和窗口里的"有新版本"提示，都以最近一次检查的结果为准。
+    // 菜单栏菜单和窗口里的更新提示（有新版本、上次没装上），都以最近一次检查的结果为准。
     const noteUpdate = (update: DesktopUpdate): DesktopUpdate => {
-      tray?.setUpdate(update.state === 'available' || update.state === 'downloaded' ? update.latest : undefined);
+      tray?.setUpdate(desktopUpdateNotice(update));
       return update;
     };
     await updater.settleInstallState().catch(() => {});
@@ -302,11 +302,11 @@ export async function startDesktop(): Promise<void> {
       const next = await attachExisting(root);
       if (next.identity.pid !== ready.pid || next.identity.startedAt !== ready.startedAt || next.identity.listen !== ready.listen) {
         await next.dispose();
-        throw new Error('The daemon owner changed during desktop restart.');
+        throw new Error('重启期间，后台的所有者变了。');
       }
       if (terminating || !bridge) {
         await next.dispose();
-        throw new Error('Desktop startup is unavailable.');
+        throw new Error('桌面端正在退出或还没启动完，不能重新连接。');
       }
       await bridge.replaceOwner(next);
       connectionFailureShown = false;
@@ -437,7 +437,7 @@ export async function startDesktop(): Promise<void> {
 
     async function reconnectPassive(cancel: AbortController): Promise<void> {
       const stopped = (): boolean => cancel.signal.aborted || terminating || cleanupPromise !== undefined || !bridge;
-      const refusal = (): Error => new Error('Desktop reconnection was cancelled or timed out.');
+      const refusal = (): Error => new Error('重新连接已取消或超时。');
       const unlessStopped = <T>(pending: Promise<T>): Promise<T> => new Promise<T>((resolve, reject) => {
         const stop = (): void => reject(refusal());
         if (stopped()) { stop(); return; }

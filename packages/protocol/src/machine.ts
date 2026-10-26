@@ -27,6 +27,15 @@ export const coreUpdateStatusSchema = z.object({phase:z.enum(['installing','rest
 export type ServiceStatus = z.infer<typeof serviceStatusSchema>;
 export const desktopUpdateSchema = z.object({state:z.enum(['current','available','unavailable','downloaded','install-pending']),current:z.string(),latest:z.string().optional(),message:z.string()});
 export type DesktopUpdate = z.infer<typeof desktopUpdateSchema>;
+/**
+ * 设置入口、设置首页和菜单栏用的"有更新"提示。有新版本可装（可下载或已下载）写版本号；
+ * 上次安装没生效也要标出来，否则用户不进"应用与启动"就不知道自己卡在旧版本。其余状态不打扰。
+ */
+export function desktopUpdateNotice(update: DesktopUpdate | undefined): string | undefined {
+  if (!update) return undefined;
+  if (update.state === 'available' || update.state === 'downloaded') return update.latest ? `有新版本 ${update.latest}` : '有新版本';
+  return update.state === 'install-pending' ? '上次更新没装上' : undefined;
+}
 export const machineReplySchema = z.discriminatedUnion('type', [
   mcpReplySchema,
   bridgeImportReplySchema,
