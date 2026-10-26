@@ -114,9 +114,11 @@ export function Editor<T extends object>({
   prepareSave,
   autoSave = false,
   headerAction,
+  hideEffects = false,
 }: {
   title: string;
   headerAction?: ReactNode;
+  hideEffects?: boolean;
   section: Section<T>;
   render: (
     draft: T,
@@ -300,7 +302,7 @@ export function Editor<T extends object>({
       footer={
         section.access.kind === "readonly"
           ? hasReadonlyMessage(announcedReadonly, section.access) ? undefined : section.access.message
-          : effectText(section) === '下一条消息生效' ? undefined : effectText(section)
+          : hideEffects || effectText(section) === '下一条消息生效' ? undefined : effectText(section)
       }
     >
       {render(value, edit, disabled, commit, `${confirmed.revision}:${discardVersion}`, discard)}

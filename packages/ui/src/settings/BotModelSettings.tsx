@@ -1,5 +1,5 @@
 import {useEffect, useRef, useState} from 'react';
-import type {AgentSettingsView, ModelCatalog, SettingsReply, TitlePolicy} from '@vonvon/protocol';
+import type {AgentSettingsView, ModelCatalog, SettingsReply, GlobalTitlePolicy} from '@vonvon/protocol';
 import {useClient} from '../client-context';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {Button, InlineNotice, Toggle} from '../reference/components/ui';
@@ -12,53 +12,55 @@ import './bot-model-settings.css';
 
 type Save = (section: 'titles' | 'comments', patch: object, revision: string) => Promise<SettingsReply>;
 
-// Intent: a Bot owner picks a model once, with the same searchable menu as decisions.
-// Existing neutral surfaces, subtle borders, system type and 4px spacing preserve the
-// settings hierarchy: model first, effort second, status and inheritance underneath.
+// Model choice leads; one surface per setting, with only actionable labels.
 export function BotTitleSettings({view, save}: {view: AgentSettingsView; save: Save}) {
   const {catalogs, refresh} = useBotModelCatalogs(view.scope.botId, 'titles');
-  return <details className="agent-settings-disclosure bot-model-settings" id={settingAnchor('新会话标题')}>
-    <summary><span>会话标题<small>按 Provider 设置自动标题</small></span></summary>
-    <p className="bot-model-intro">为新会话生成简短标题。Codex 和 Claude 分别设置，关闭时使用消息首句。</p>
-    {nativeModelProviders.map(provider => <Editor key={provider.id} title={`${provider.name} 会话标题`} section={view.sections.titles} autoSave
-      save={(patch, revision) => save('titles', {byBackend: {[provider.id]: patch.byBackend?.[provider.id] ?? {enabled: false}}}, revision)}
-      render={(draft, set, disabled) => <TitleProviderFields provider={provider} policy={draft.byBackend[provider.id] ?? {enabled: false}}
-        catalog={catalogs[provider.id]} disabled={disabled} onRetry={() => void refresh()}
-        onChange={policy => set({...draft, byBackend: {...draft.byBackend, [provider.id]: policy}})}/>}/>)}
-  </details>;
+  return <section className="bot-model-settings bot-title-settings" id={settingAnchor('新会话标题')} aria-label="会话标题">
+    <Editor title="会话标题" section={view.sections.titles} autoSave hideEffects save={(patch, revision) => save('titles', patch, revision)}
+      renderLayout={editor => <>{editor.content}</>}
+      render={(draft, set, disabled) => <TitleFields policy={draft.policy} catalogs={catalogs} disabled={disabled} onRetry={() => void refresh()}
+        onChange={policy => set({policy})}/>}/>
+  </section>;
 }
 
-export function TitleProviderFields({provider, policy, catalog, disabled, onChange, onRetry}: {
-  provider: {id: string; name: string}; policy: TitlePolicy; catalog?: ModelCatalog; disabled: boolean;
-  onChange: (value: TitlePolicy) => void; onRetry: () => void;
+export function TitleFields({policy, catalogs, disabled, onChange, onRetry}: {
+  policy: GlobalTitlePolicy; catalogs: Partial<Record<string, ModelCatalog>>; disabled: boolean;
+  onChange: (value: GlobalTitlePolicy) => void; onRetry: () => void;
 }) {
-  const remembered = useRef<Extract<TitlePolicy, {enabled: true}> | undefined>(undefined);
-  useEffect(() => {if (policy.enabled) remembered.current = policy;}, [policy]);
-  const models = catalog?.state !== 'unavailable' ? catalog?.models.filter(model => !model.hidden) ?? [] : [];
-  const initial = models.find(model => model.isDefault) ?? models[0];
-  const enable = remembered.current ?? (initial ? {enabled: true as const, model: initial.id,
-    effort: catalog?.titleEfforts.includes(initial.defaultEffort) ? initial.defaultEffort : catalog?.titleEfforts[0] ?? 'medium'} : undefined);
-  const value: NativeModelValue = {backend: provider.id, selection: policy.enabled ? {kind: 'explicit', model: policy.model, effort: policy.effort,
-    ...(!models.some(model => model.id === policy.model) ? {custom: true} : {})} : {kind: 'default'}};
+  const remembered = useRef<Extract<GlobalTitlePolicy, {enabled: true}> | undefined>(undefined);
+  const [choosing, setChoosing] = useState(false);
+  useEffect(() => {if (policy.enabled) {remembered.current = policy; setChoosing(false);}}, [policy]);
+  const initial = nativeModelProviders.flatMap(provider => {
+    const catalog = catalogs[provider.id];
+    if (!catalog || catalog.backend !== provider.id || catalog.state === 'unavailable') return [];
+    const models = catalog.models.filter(model => !model.hidden);
+    const model = models.find(model => model.isDefault) ?? models[0];
+    return model ? [{enabled: true as const, backend: provider.id, model: model.id,
+      effort: catalog.titleEfforts.includes(model.defaultEffort) ? model.defaultEffort : catalog.titleEfforts[0] ?? 'medium'}] : [];
+  })[0];
+  const enable = remembered.current ?? initial;
+  const catalog = policy.enabled ? catalogs[policy.backend] : undefined;
+  const value: NativeModelValue = policy.enabled ? {backend: policy.backend, selection: {kind: 'explicit', model: policy.model, effort: policy.effort,
+    ...(!catalog?.models.some(model => !model.hidden && model.id === policy.model) ? {custom: true} : {})}} : {backend: 'codex-appserver', selection: {kind: 'default'}};
   return <>
-    <SettingsRow title="用模型生成标题" description={policy.enabled ? '模型与思考强度的修改会自动保存。' : '选择模型即可启用，也可以填写自定义模型 ID。'}
-      trailing={<Toggle className="settings-row-switch" label={`${provider.name} 自动生成标题`} aria-label={`${provider.name} 自动生成标题`} checked={policy.enabled}
-        disabled={disabled || !policy.enabled && !enable} onChange={event => {if (disabled) return; if (!event.target.checked) onChange({enabled: false}); else if (enable) onChange(enable);}}/>}/>
-    <NativeModelPicker label={`${provider.name} 标题模型`} value={value} catalogs={{[provider.id]: catalog}} providerIds={[provider.id]} allowCustom disabled={disabled} onRetry={onRetry}
-      onChange={next => {if (disabled || next.backend !== provider.id || next.selection.kind !== 'explicit') return;
-        onChange({enabled: true, model: next.selection.model, effort: next.selection.effort});}}/>
+    <SettingsRow title="会话标题" trailing={<Toggle className="settings-row-switch" label="自动生成会话标题" aria-label="自动生成会话标题" checked={policy.enabled || choosing}
+      disabled={disabled} onChange={event => {if (disabled) return;
+        if (!event.target.checked) {setChoosing(false); if (policy.enabled) onChange({enabled: false});}
+        else if (enable) onChange(enable); else setChoosing(true);}}/>}/>
+    {(policy.enabled || choosing) && <NativeModelPicker label="标题模型" value={value} catalogs={catalogs} allowCustom disabled={disabled} onRetry={onRetry}
+      onChange={next => {if (disabled || next.selection.kind !== 'explicit') return;
+        onChange({enabled: true, backend: next.backend, model: next.selection.model, effort: next.selection.effort});}}/>}
   </>;
 }
 
 export function BotCommentSettings({view, save, refresh}: {view: AgentSettingsView; save: Save; refresh: () => Promise<void>}) {
   const {catalogs, refresh: refreshCatalogs} = useBotModelCatalogs(view.scope.botId, 'comments');
   return <details className="agent-settings-disclosure bot-model-settings" id={settingAnchor('云文档评论')}>
-    <summary><span>云文档评论<small>模型与回复规则</small></span></summary>
-    <p className="bot-model-intro">在同一个列表中选择 Provider 和模型。模型设置自动保存，下一条新评论生效。</p>
-    <Editor title="评论模型" section={view.sections.comments} autoSave save={(patch, revision) => save('comments', patch, revision)}
+    <summary><span>云文档评论</span></summary>
+    <Editor title="评论模型" section={view.sections.comments} autoSave hideEffects save={(patch, revision) => save('comments', patch, revision)}
+      renderLayout={editor => <div id={settingAnchor('评论模型')}>{editor.content}</div>}
       render={(draft, set, disabled, _commit, resetKey) => <NativeModelPicker key={resetKey} label="评论模型" value={draft} catalogs={catalogs} allowDefault disabled={disabled}
-        inherited={draft.backend === view.sections.comments.effective.backend ? {backend: view.sections.comments.effective.backend, selection: view.sections.comments.effective.selection} : undefined} onRetry={() => void refreshCatalogs()}
-        onChange={next => {if (!disabled) set({...draft, ...next});}}/>}/>
+        onRetry={() => void refreshCatalogs()} onChange={next => {if (!disabled) set({...draft, ...next});}}/>}/>
     <CommentRulesEditor key={view.scope.botId} view={view} refresh={refresh}/>
   </details>;
 }
@@ -109,13 +111,12 @@ export function CommentRulesEditor({view, refresh}: {view: AgentSettingsView; re
     finally {saving.current = false; setPending(false);}
   }
   useDraft(dirty || pending, {title: '评论回复规则', save: () => saveRules('custom'), discard});
-  return <SettingsGroup label="评论回复规则" id={settingAnchor('评论回复规则')}
-    footer={readonly && view.sections.cards.access.kind === 'readonly' ? view.sections.cards.access.message : '保存后同步已有评论目录，下一条新评论使用新规则。'}>
-    <div className="comment-rules-toolbar"><span>{base.content.kind === 'default' ? '默认规则' : '自定义规则'}</span>
-      <Button size="sm" variant="ghost" disabled={disabled || conflict || base.content.kind === 'default' && !dirty} onClick={() => void saveRules('default')}>恢复默认</Button></div>
+  return <SettingsGroup label="回复规则" id={settingAnchor('评论回复规则')}
+    action={<Button size="sm" variant="ghost" disabled={disabled || conflict || base.content.kind === 'default' && !dirty} onClick={() => void saveRules('default')}>恢复默认</Button>}
+    footer={readonly && view.sections.cards.access.kind === 'readonly' ? view.sections.cards.access.message : undefined}>
     <div className="comment-rules-input"><textarea aria-label="评论回复规则" className="settings-instructions" value={text} maxLength={limit} disabled={disabled || conflict}
       onChange={event => {setText(event.target.value); setError(undefined); setNotice(undefined);}}/>
-      <span className="comment-rules-count" aria-live="polite">{[...text].length.toLocaleString()} / {limit.toLocaleString()}</span></div>
+      {dirty && <span className="comment-rules-count" aria-live="polite">{[...text].length.toLocaleString()} / {limit.toLocaleString()}</span>}</div>
     {(dirty || pending) && <div className="settings-edit-actions"><Button size="sm" disabled={disabled} onClick={discard}>放弃修改</Button>
       <Button size="sm" variant="primary" loading={pending} disabled={disabled || conflict || !text.trim() || [...text].length > limit} onClick={() => void saveRules('custom')}>保存规则</Button></div>}
     {conflict && dirty && <InlineNotice title="规则已在别处更改" tone="warning">当前草稿已保留。<Button size="sm" disabled={pending} onClick={discard}>重新读取并放弃草稿</Button></InlineNotice>}

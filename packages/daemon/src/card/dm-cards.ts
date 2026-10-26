@@ -1047,7 +1047,7 @@ export function parseSessionTitleFormValue(
 /**
  * Resume-title settings sub-card. The selected backend is transient UI state,
  * supplied by the caller together with that backend's live model list. Config
- * remains independent per backend under preferences.sessionTitles.byBackend.
+ * is shared by all sessions under preferences.sessionTitles.policy.
  */
 export function buildSessionTitleSettingsCard(
   cfg: AppConfig,
@@ -1056,12 +1056,13 @@ export function buildSessionTitleSettingsCard(
   models: ModelInfo[],
   notice?: string,
 ): CardObject {
+  const policy = getSessionTitleConfig(cfg);
   const curBackend =
     (selectedBackendId && backendOptions.some((backend) => backend.id === selectedBackendId)
       ? selectedBackendId
-      : backendOptions[0]?.id) ?? DEFAULT_BACKEND_ID;
+      : policy.enabled ? policy.backend : backendOptions[0]?.id) ?? DEFAULT_BACKEND_ID;
   const visible = models.filter((model) => !model.hidden && model.id.trim());
-  const configured = getSessionTitleConfig(cfg, curBackend);
+  const configured = policy.enabled && policy.backend === curBackend ? policy : { enabled: false as const };
   const configuredLive = configured.enabled ? visible.find((model) => model.id === configured.model) : undefined;
   const initialModel = configured.enabled
     ? (configuredLive?.id ?? SESSION_TITLE_CUSTOM_MODEL_OPTION)
@@ -1095,15 +1096,14 @@ export function buildSessionTitleSettingsCard(
   const elements: CardElement[] = [
     ...(notice ? [md(notice)] : []),
     note(
-      'Bridge 只为升级后新建的会话设置一次原生标题。生成前会移除发信人、引用、话题历史、附件等封装；短提问直接使用，长提问按当前 Agent 的策略处理。',
+      'Bridge 只为升级后新建的会话设置一次原生标题。生成前会移除发信人、引用、话题历史、附件等封装；短提问直接使用，长提问统一使用此处的标题模型。',
     ),
     hr(),
   ];
 
   if (backendOptions.length > 1) {
     elements.push(
-      md('🧠 **正在配置的 Agent**'),
-      note('这里只切换编辑对象；每个 Agent 分别保存，互不影响。'),
+      md('🧠 **标题 Provider**'),
       actions(
         backendOptions.map((backend) =>
           button(
@@ -1115,22 +1115,22 @@ export function buildSessionTitleSettingsCard(
       ),
     );
   } else {
-    elements.push(md(`🧠 **正在配置的 Agent**：${backendOptions[0]?.label ?? curBackend}`));
+    elements.push(md(`🧠 **标题 Provider**：${backendOptions[0]?.label ?? curBackend}`));
   }
 
   elements.push(
     md(
       `**当前方式**：${
-        configured.enabled
-          ? `AI 精炼 · ${configured.model} · ${reasoningEffortLabel(configured.effort)}`
+        policy.enabled
+          ? `AI 精炼 · ${policy.model} · ${reasoningEffortLabel(policy.effort)}`
           : '截断首句（不调用模型）'
       }`,
     ),
     actions([
       button(
-        configured.enabled ? '改为截断首句' : '✓ 截断首句（不调用模型）',
+        policy.enabled ? '关闭 AI 标题' : '✓ 截断首句（不调用模型）',
         { a: DM.sessionTitleDisable, b: curBackend },
-        configured.enabled ? 'default' : 'primary',
+        policy.enabled ? 'default' : 'primary',
       ),
     ]),
     hr(),

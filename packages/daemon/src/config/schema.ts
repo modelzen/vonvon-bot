@@ -129,8 +129,7 @@ export interface AppPreferences {
    * 自定义提示词不在这里——它落在每 bot 的 `comment-instructions.md` 文件里，由桥同步进
    * 每个文档的评论工作目录（AGENTS.md / CLAUDE.md），见 bot/comments.ts。 */
   comments?: CommentsConfig;
-  /** Bridge 新建聊天会话的 resume 标题配置。每个 agent 后端独立；
-   * 缺省/未命中的后端不调模型，直接截断清洗后的首句。 */
+  /** 所有新建聊天会话共用的标题 Provider、模型和强度。 */
   sessionTitles?: SessionTitlesConfig;
   /** 智能模式的判断模型（s23c）。带后端：只给这个后端的群用，别的后端的群用它的默认小模型。
    * 没有就是默认小模型；手改坏了当没设（parseStoredJudge），不改写。 */
@@ -147,8 +146,11 @@ export interface SessionTitleAiConfig {
 /** 某一 agent 后端的会话标题策略。开启 AI 时 model + effort 必须成对存在。 */
 export type SessionTitleBackendConfig = { enabled?: false; model?: string; effort?: ReasoningEffort } | SessionTitleAiConfig;
 
-/** 后端 id → 该后端的标题策略。不设全局模型，也不设模型白名单。 */
+export type GlobalSessionTitlePolicy = { enabled: false } | (SessionTitleAiConfig & { backend: string });
+
+/** 所有会话共用一个标题策略，byBackend 仅供旧配置迁移。 */
 export interface SessionTitlesConfig {
+  policy?: GlobalSessionTitlePolicy;
   byBackend?: Record<string, SessionTitleBackendConfig | undefined>;
 }
 
@@ -384,44 +386,39 @@ export function getCommentsConfig(cfg: AppConfig): CommentsConfig {
   return cfg.preferences?.comments ?? {};
 }
 
-/**
- * Resolve one backend's title strategy with a fail-closed default. Hand-edited
- * or stale JSON that says enabled but omits either model or effort is treated as
- * disabled, so the bridge never makes an accidental/default model call.
- */
-export function getSessionTitleConfig(cfg: AppConfig, backendId: string): ResolvedSessionTitleBackendConfig {
-  const raw = cfg.preferences?.sessionTitles?.byBackend?.[backendId];
-  const validEffort =
-    raw?.enabled === true &&
-    typeof raw.effort === 'string' &&
-    (getSessionTitleEfforts(backendId) as readonly string[]).includes(raw.effort);
-  if (raw?.enabled !== true || typeof raw.model !== 'string' || !raw.model.trim() || !validEffort) {
-    return { enabled: false };
+/** Resolve the Bot-wide policy. A present global policy always wins, including disabled.
+ * Legacy selection is stable and never depends on the conversation's backend. */
+export function getSessionTitleConfig(cfg: AppConfig, _sessionBackend?: string): GlobalSessionTitlePolicy {
+  const titles = cfg.preferences?.sessionTitles;
+  const resolve = (raw: SessionTitleBackendConfig | undefined, backend: string): GlobalSessionTitlePolicy => {
+    if (raw?.enabled !== true || typeof raw.model !== 'string' || !raw.model.trim() ||
+      !getSessionTitleEfforts(backend).includes(raw.effort)) return { enabled: false };
+    return { enabled: true, backend, model: raw.model.trim(), effort: raw.effort };
+  };
+  const known = ['codex-appserver', 'claude-agent'];
+  if (titles && Object.hasOwn(titles, 'policy')) {
+    const policy = titles.policy;
+    return policy?.enabled && known.includes(policy.backend) ? resolve(policy, policy.backend) : { enabled: false };
   }
-  return { enabled: true, model: raw.model.trim(), effort: raw.effort };
+  const preferred = cfg.preferences?.defaults?.backend ?? 'codex-appserver';
+  for (const backend of [...new Set([preferred, ...known])].filter(id => known.includes(id))) {
+    const policy = resolve(titles?.byBackend?.[backend], backend);
+    if (policy.enabled) return policy;
+  }
+  return { enabled: false };
 }
 
-/** Short DM-card summary for one backend. */
-export function summarizeSessionTitleConfig(cfg: AppConfig, backendId: string): string {
-  const resolved = getSessionTitleConfig(cfg, backendId);
-  return resolved.enabled
-    ? `AI 精炼：${resolved.model} · ${resolved.effort}`
-    : '不使用模型（截断首句）';
+export function summarizeSessionTitleConfig(cfg: AppConfig, _backendId?: string): string {
+  const resolved = getSessionTitleConfig(cfg);
+  return resolved.enabled ? `AI 精炼：${resolved.model} · ${resolved.effort}` : '不使用模型（截断首句）';
 }
 
-/** Fixed two-backend strategy list for the global-settings entry. */
 export function summarizeSessionTitles(
   cfg: AppConfig,
   effortLabel: (effort: string) => string = (effort) => effort,
 ): string {
-  const strategy = (backendId: string): string => {
-    const resolved = getSessionTitleConfig(cfg, backendId);
-    return resolved.enabled
-      ? `AI 精炼 · ${resolved.model} · ${effortLabel(resolved.effort)}`
-      : '截断首句';
-  };
-  return [
-    `- Codex：${strategy('codex-appserver')}`,
-    `- Claude Code：${strategy('claude-agent')}`,
-  ].join('\n');
+  const policy = getSessionTitleConfig(cfg);
+  if (!policy.enabled) return '截断首句';
+  const backend = policy.backend === 'claude-agent' ? 'Claude Code' : 'Codex';
+  return `${backend}：AI 精炼 · ${policy.model} · ${effortLabel(policy.effort)}`;
 }

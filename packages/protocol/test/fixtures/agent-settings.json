@@ -121,27 +121,19 @@
     },
     "titles": {
       "stored": {
-        "byBackend": {
-          "codex-appserver": {
-            "enabled": true,
-            "model": "fixture-custom-title-model",
-            "effort": "high"
-          },
-          "claude-agent": {
-            "enabled": false
-          }
+        "policy": {
+          "enabled": true,
+          "backend": "codex-appserver",
+          "model": "fixture-custom-title-model",
+          "effort": "high"
         }
       },
       "effective": {
-        "byBackend": {
-          "codex-appserver": {
-            "enabled": true,
-            "model": "fixture-custom-title-model",
-            "effort": "high"
-          },
-          "claude-agent": {
-            "enabled": false
-          }
+        "policy": {
+          "enabled": true,
+          "backend": "codex-appserver",
+          "model": "fixture-custom-title-model",
+          "effort": "high"
         }
       },
       "revision": "b1fbfef190039a21b48a54f91bf4f5eb6e920209afdcd235985481d9406f6cb1",
@@ -151,7 +143,7 @@
       "apply": [
         {
           "fields": [
-            "byBackend"
+            "policy"
           ],
           "when": "new-session",
           "detail": "只影响之后新建的会话"

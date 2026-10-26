@@ -15,6 +15,7 @@ const fake = vi.hoisted(() => ({
   createCard: vi.fn(async (..._args: unknown[]) => 'card'),
   send: vi.fn(async () => ({})),
   log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() },
+  titleRegister: vi.fn(async (..._args: unknown[]) => undefined),
   record: {} as Record<string, unknown>,
   history: vi.fn(async (..._args: unknown[]) => ({ messages: [] as unknown[], ok: true, complete: true })),
 }));
@@ -42,7 +43,7 @@ vi.mock('../src/bot/session-store', async (original) => ({
 }));
 vi.mock('../src/bot/context-weave', async (original) => ({ ...await original<object>(), fetchThreadContext: fake.history }));
 vi.mock('../src/bot/session-title-coordinator', () => ({
-  SessionTitleCoordinator: class { startRecovery() {} async shutdown() {} },
+  SessionTitleCoordinator: class { startRecovery() {} async shutdown() {} register = fake.titleRegister; },
 }));
 vi.mock('../src/card/run-card-stream', () => ({
   RunCardStream: class {
@@ -117,8 +118,8 @@ function message(text: string): NormalizedMessage {
   return { messageId: `msg-${++seq}`, chatId: 'chat', chatType: 'group', threadId: 'topic',
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false };
 }
-function setup(policy: 'steer' | 'queue' = 'steer', entries?: AgentEntries) {
-  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: policy, access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' } } };
+function setup(policy: 'steer' | 'queue' = 'steer', entries?: AgentEntries, sessionTitles?: NonNullable<AppConfig['preferences']>['sessionTitles']) {
+  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: policy, access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' }, sessionTitles } };
   const channel = { send: fake.send, rawClient: { im: { v1: { message: { get: async () => ({ data: { items: [{ thread_id: 'new-topic' }] } }) }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
@@ -145,6 +146,18 @@ afterEach(async () => {
 });
 // Keep synchronization polling well below the injected 150ms steer deadline.
 const until = (check: () => void) => vi.waitFor(check, { interval: 5 });
+
+it.each([true, false])('wires the global title policy into new sessions (enabled=%s)', async enabled => {
+  fake.record = { absent: true };
+  const run = thread();
+  fake.backend.startThread.mockResolvedValueOnce(run.t);
+  const policy = enabled ? {enabled:true as const,backend:'claude-agent',model:'title-model',effort:'low' as const} : {enabled:false as const};
+  await setup('queue', undefined, {policy}).onMessage({...message('给这个新会话起标题'),raw:{sender:{sender_type:'user'}}});
+  await until(() => expect(fake.titleRegister).toHaveBeenCalled());
+  expect(fake.titleRegister).toHaveBeenCalledWith(expect.objectContaining({backend:fake.backend.id,
+    policy:enabled ? {strategy:'model',backend:'claude-agent',model:'title-model',effort:'low'} : {strategy:'truncate'}}));
+  if (run.turns[0]) run.turns[0].resolve();
+});
 
 describe('running card token redaction', () => {
   it.each(['ordinary', 'goal'] as const)('redacts split tokens in the final %s card', async kind => {
