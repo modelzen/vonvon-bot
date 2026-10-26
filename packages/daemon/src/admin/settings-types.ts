@@ -78,6 +78,7 @@ export type TitlePolicy = {
   model: string;
   effort: ReasoningEffort;
 };
+export type GlobalTitlePolicy = { enabled: false } | (Extract<TitlePolicy, { enabled: true }> & { backend: string });
 export interface AgentSections {
   profile: BotProfile;
   /** 角色设定：SOUL.md 的身份与职责、其他说明（记忆设计 2.3） */
@@ -97,7 +98,7 @@ export interface AgentSections {
     selection: ModelSelection;
   };
   titles: {
-    byBackend: Record<string, TitlePolicy>;
+    policy: GlobalTitlePolicy;
   };
   paths: {
     projectsRootDir: string | null;
@@ -275,7 +276,8 @@ type SectionEdit<S, M> = {
 }[keyof M];
 /** What a save may set in a group's settings: the view's `permission.guestMode` is output only. */
 type ProjectEdits = Omit<ProjectSections, 'permission'> & { permission: Pick<ProjectSections['permission'], 'mode' | 'custom'> };
-export type BotSettingsEdit = SectionEdit<AgentSettingsView['scope'], AgentSections> | SectionEdit<ProjectSettingsView['scope'], ProjectEdits> | SectionEdit<SessionSettingsView['scope'], SessionSections>;
+type AgentEdits = Omit<AgentSections, 'titles'> & { titles: { policy: GlobalTitlePolicy; byBackend?: Record<string, TitlePolicy> } };
+export type BotSettingsEdit = SectionEdit<AgentSettingsView['scope'], AgentEdits> | SectionEdit<ProjectSettingsView['scope'], ProjectEdits> | SectionEdit<SessionSettingsView['scope'], SessionSections>;
 export type SettingsEdit = BotSettingsEdit | SectionEdit<HostSettingsView['scope'], HostSections>;
 type SectionView<S, M> = {
   [K in keyof M]: {

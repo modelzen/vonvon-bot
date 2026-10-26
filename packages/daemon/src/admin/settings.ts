@@ -100,7 +100,7 @@ const agentEffects: {
   run: [...effect(['maxConcurrentRuns'], 'restart', '已保存的并发上限在 daemon 重启后生效'), ...effect(['pendingPolicy'], 'next-message', '下一条消息生效'), ...effect(['runIdleTimeoutSeconds'], 'next-turn', '下一次超时检测生效')],
   completion: effect(['mode', 'longTaskMinutes'], 'task-completion', '任务结束时读取最新策略'),
   comments: effect(['backend', 'selection'], 'new-comment', '下一条评论使用新设置'),
-  titles: effect(['byBackend'], 'new-session', '只影响之后新建的会话'),
+  titles: effect(['policy'], 'new-session', '只影响之后新建的会话'),
   paths: effect(['projectsRootDir'], 'new-project', '只影响之后新建的群'),
   access: effect(['allowedChats'], 'next-message', '下一条消息使用新权限'),
   judge: effect(['selection'], 'next-message', '智能模式的下一次判断就用新模型'),
@@ -149,9 +149,6 @@ function applySelection(target: {
 }
 function agentData(cfg: AppConfig): T.AgentSections {
   const p = cfg.preferences ?? {};
-  const titles: Record<string, T.TitlePolicy> = {};
-  for (const id of new Set([...backendIds(), ...Object.keys(p.sessionTitles?.byBackend ?? {})]))
-    titles[id] = getSessionTitleConfig(cfg, id);
   return {
     profile: { persona: '', memory: '' },
     role: { identity: '', notes: '' },
@@ -170,7 +167,7 @@ function agentData(cfg: AppConfig): T.AgentSections {
       selection: selection(p.comments?.model, p.comments?.effort)
     },
     titles: {
-      byBackend: titles
+      policy: getSessionTitleConfig(cfg)
     },
     paths: {
       projectsRootDir: p.projectsRootDir ?? null
@@ -189,7 +186,7 @@ function agentRaw(p: AppPreferences, section: keyof T.AgentSections): unknown {
     case 'run': return [p.maxConcurrentRuns, p.runIdleTimeoutSeconds, p.pendingPolicy];
     case 'completion': return [p.completionReminder?.mode, p.completionReminder?.longTaskMinutes];
     case 'comments': return [p.comments?.backend, p.comments?.model, p.comments?.effort];
-    case 'titles': return Object.entries(p.sessionTitles?.byBackend ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([id, v]) => [id, v?.enabled, v?.model, v?.effort]);
+    case 'titles': return [p.defaults?.backend, p.sessionTitles?.policy, p.sessionTitles?.byBackend];
     case 'paths': return p.projectsRootDir ?? null;
     case 'access': return p.access?.allowedChats ?? [];
     case 'judge': return p.judge;
@@ -792,22 +789,11 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               break;
             }
             case 'titles': {
-              const [entry] = Object.entries(e.patch.byBackend ?? {});
-              if (!entry)
-                throw new SettingsInputError('请选择一个后端');
-              const [id, policy] = entry;
-              if (!backendIds().includes(id) || policy.enabled && !getSessionTitleEfforts(id).includes(policy.effort))
+              const legacy = Object.entries(e.patch.byBackend ?? {})[0];
+              const policy = e.patch.policy ?? (legacy && (legacy[1].enabled ? { ...legacy[1], backend: legacy[0] } : { enabled: false as const }));
+              if (!policy || policy.enabled && (!backendIds().includes(policy.backend) || !getSessionTitleEfforts(policy.backend).includes(policy.effort)))
                 throw new SettingsInputError('标题后端或推理强度无效');
-              p.sessionTitles = {
-                ...p.sessionTitles,
-                byBackend: {
-                  ...p.sessionTitles?.byBackend,
-                  [id]: {
-                    ...p.sessionTitles?.byBackend?.[id],
-                    ...policy
-                  }
-                }
-              };
+              p.sessionTitles = { ...p.sessionTitles, policy: { ...p.sessionTitles?.policy, ...policy } };
               break;
             }
             case 'paths':

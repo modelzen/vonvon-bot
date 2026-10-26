@@ -204,6 +204,8 @@ export type SessionTitlePhase =
 
 export interface SessionTitlePolicySnapshot {
   strategy: 'model' | 'truncate';
+  /** Title generation provider; absent on legacy jobs means the session provider. */
+  backend?: string;
   model?: string;
   effort?: ReasoningEffort;
 }

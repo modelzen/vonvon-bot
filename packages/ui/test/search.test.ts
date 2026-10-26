@@ -29,6 +29,7 @@ test('every literal configuration row label in the current desktop UI is indexed
   const botSettings = settings.slice(settings.indexOf('function AgentPanel('), settings.indexOf('export function ProjectPanel('));
   const source = [
     'src/settings/GroupDesignSettings.tsx',
+    'src/settings/BotModelSettings.tsx',
     'src/management/MachinePanel.tsx',
     'src/management/UpdatePanel.tsx',
     'src/management/ConversationPanel.tsx',
@@ -376,4 +377,16 @@ test('project memory search opens the group memory tab directly', () => {
   assert.equal(entry.destination.view, 'groups');
   assert.equal(groupTabForSection(entry.destination.section), 'memory');
   assert.equal(findEntries(entries, '模型看到什么').length, 0);
+});
+
+test('Bot title and comment model search targets the unified model pickers', () => {
+  for (const [title, section, field] of [
+    ['标题模型', '新会话标题', ''],
+    ['评论模型', '云文档评论', '选择评论模型'],
+  ]) {
+    const entry = entries.find(item => item.title === title && item.destination.selection?.kind === 'agent');
+    assert.equal(entry?.destination.section, section);
+    assert.equal(entry?.destination.field, field);
+  }
+  assert.ok(findEntries(entries, '评论后端').some(entry => entry.title === '评论模型'));
 });
