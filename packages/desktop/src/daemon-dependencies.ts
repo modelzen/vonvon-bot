@@ -15,7 +15,7 @@ import type { DaemonManagerDependencies } from './daemon-manager.js';
 export async function prepareDesktopRoot(selected: DataRoot): Promise<string> {
   if (selected.kind === 'fresh') await mkdir(selected.path, { recursive: true, mode: 0o700 });
   const info = await lstat(selected.path);
-  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('The Vonvon data folder must be a physical directory.');
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Vonvon 数据目录必须是真实目录，不能是符号链接。');
   return realpath(selected.path);
 }
 
@@ -42,7 +42,7 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
   async function launch(command: 'start' | 'run', port: number, bot?: string): Promise<number | undefined> {
     const distribution = classifyDistribution(join(runtime.resources, 'daemon'));
     if (!runtime.packaged || distribution.kind !== 'bundled') {
-      throw new Error('The packaged Vonvon daemon is unavailable. Build and open the desktop application.');
+      throw new Error('应用里打包的 Vonvon 后台服务不可用。请先构建并打开桌面应用。');
     }
     const env = daemonEnvironment(runtime.root, runtime.home);
     const log = await open(join(runtime.root, 'daemon.log'), 'a', 0o600);
@@ -58,7 +58,7 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
         if (detached) child.once('spawn', () => { child.unref(); resolve(child.pid); });
         else child.once('exit', (code, signal) => {
           if (code === 0) resolve(undefined);
-          else reject(new Error(`The registered daemon could not start (${signal ?? code}). Check ${join(runtime.root, 'daemon.log')}.`));
+          else reject(new Error(`已注册的后台服务没能启动（${signal ?? code}）。请查看 ${join(runtime.root, 'daemon.log')}。`));
         });
       });
     } finally { await log.close(); }
@@ -76,17 +76,17 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
         lock = await readRunningPidLock(runtime.root);
       }
       if (!lock) return null;
-      if (!lock.listen) throw new Error(`Daemon PID ${lock.pid} has not published its listener. Leave it running and try again.`);
+      if (!lock.listen) throw new Error(`后台服务（PID ${lock.pid}）还没有公布监听地址。先别关它，稍后再试。`);
       try { await verifyPidLockOwner(runtime.root, lock); }
       catch (cause) {
-        throw new Error(`Cannot authenticate daemon PID ${lock.pid} with desktop protocol ${PROTOCOL_VERSION}. Leave it running and check app/daemon compatibility and the local credential.`, { cause });
+        throw new Error(`无法验证后台服务（PID ${lock.pid}）与桌面协议 ${PROTOCOL_VERSION} 是否匹配。先别关它，检查应用和后台的版本是否兼容，以及本机凭据。`, { cause });
       }
       return { pid: lock.pid, startedAt: lock.startedAt, listen: lock.listen, ...(lock.version === undefined ? {} : { version: lock.version }) };
     },
     async readRegistration() {
       const platform = process.platform;
       // The app ships for macOS only; Linux stays so the Linux CI job reads a real definition through this mapping.
-      if (platform !== 'darwin' && platform !== 'linux') throw new Error(`Unsupported desktop platform: ${platform}.`);
+      if (platform !== 'darwin' && platform !== 'linux') throw new Error(`桌面端不支持这个系统：${platform}。`);
       const target = platform === 'darwin' ? serviceTarget({ platform, home: runtime.home, root: runtime.root })
         : serviceTarget({ platform, home: runtime.home, root: runtime.root, xdgConfigHome: process.env.XDG_CONFIG_HOME });
       const registration = await readRegistration({ target, requestedRoot: runtime.root });
@@ -105,7 +105,7 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
     async startSelectedBot(port, bot) {
       const pid = await launch('run', port, bot);
       if (pid === undefined || !Number.isInteger(pid) || pid < 1) {
-        throw new Error('The selected Bot daemon did not provide a process ID. Its startup cannot be confirmed.');
+        throw new Error('选定 Bot 的后台没有返回进程号，无法确认它是否启动成功。');
       }
       return pid;
     },
@@ -113,7 +113,7 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
       const attached = await attachExisting(runtime.root);
       try {
         if (attached.identity.pid !== expected.pid || attached.identity.startedAt !== expected.startedAt || attached.identity.listen !== expected.listen) {
-          throw new Error('The daemon owner changed during desktop startup.');
+          throw new Error('桌面启动期间，后台的所有者变了。');
         }
         return PROTOCOL_VERSION;
       } finally { await attached.dispose(); }

@@ -287,13 +287,15 @@ export function newTraceId(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
-/** Delete log files older than the retention window. Best-effort. */
+/** Delete log files older than the retention window. Best-effort: what cannot be read or deleted is logged and skipped. */
 export async function gcOldLogs(): Promise<number> {
   const dir = logsDir();
   let entries: string[];
   try {
     entries = await readdir(dir);
-  } catch {
+  } catch (error) {
+    // A data root that has not logged yet has no directory; anything else (permissions…) is worth one line.
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') log.warn('logger', 'gc_failed', { step: 'readdir', err: error instanceof Error ? error.message : String(error) });
     return 0;
   }
   const cutoff = Date.now() - LOG_RETENTION_DAYS * 86_400_000;
@@ -306,14 +308,31 @@ export async function gcOldLogs(): Promise<number> {
     try {
       await rm(join(dir, name));
       removed++;
-    } catch {
-      /* skip */
+    } catch (error) {
+      log.warn('logger', 'gc_failed', { step: 'remove', file: name, err: error instanceof Error ? error.message : String(error) });
     }
   }
   if (removed > 0) {
     log.info('logger', 'gc', { removed, retentionDays: LOG_RETENTION_DAYS });
   }
   return removed;
+}
+
+const LOG_GC_INTERVAL_MS = 86_400_000;
+
+/**
+ * Trims old daily logs once now and then once a day, for as long as the daemon runs. A failure is logged and never
+ * reaches the caller or ends the schedule. The timer does not keep the process alive; the returned function stops it.
+ */
+export function startLogGc(options: { intervalMs?: number; gc?: () => Promise<number> } = {}): () => void {
+  const gc = options.gc ?? gcOldLogs;
+  const run = (): void => {
+    void Promise.resolve().then(gc).catch((error: unknown) => log.fail('logger', error, { phase: 'gc' }));
+  };
+  run();
+  const timer = setInterval(run, options.intervalMs ?? LOG_GC_INTERVAL_MS);
+  timer.unref();
+  return () => clearInterval(timer);
 }
 
 /** Read the tail (up to maxBytes of complete JSON lines) of recent logs. */

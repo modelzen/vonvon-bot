@@ -344,7 +344,7 @@ Codex 先用隔离的 HOME 和 bridge 数据副本走完整个导入，包括故
 
 ### M11 公开发布准备（s65、s66、s67）
 
-**给 owner 什么：**（第 8 节）能在本地出已有 Developer ID 签名的 universal dmg，Intel Mac 也能装；hardened runtime 和 entitlements 明确配置，签名以 `codesign --verify --deep --strict` 验证。公证以后由 owner 定，不是本次 s65 前置。应用里检查更新并装上新版的完整承诺保留，s65 先生成本地清单和 feed，公开地址发布前填。npm 包和桌面包的许可证改成闭源（UNLICENSED）。在一台没有 bridge 的 Mac 上，从零安装、扫码、开权限，第一次对话走通，这是第 8 节第 5 条的 Mac 一半。s66：owner 2026-10-20 定不做，owner 去向 Anthropic 要确认。
+**给 owner 什么：**（第 8 节）能在本地出已有 Developer ID 签名的 universal dmg，Intel Mac 也能装；hardened runtime 和 entitlements 明确配置，签名以 `codesign --verify --deep --strict` 验证。公证以后由 owner 定，不是本次 s65 前置。应用里检查更新并装上新版的完整承诺保留，s65 先生成本地清单和 feed，公开地址发布前填。npm 包和桌面包的许可证改成闭源（UNLICENSED）。在一台没有 bridge 的 Mac 上，从零安装、扫码、开权限，第一次对话走通，这是第 8 节第 5 条的 Mac 一半。s66：owner 2026-10-20 定不做；2026-10-26 owner 说明不需要向 Anthropic 要 Claude 登录的书面确认，它不再是发布条件。
 
 **怎么验收：** owner 要做的：第 1 步里新开一个干净的 macOS 用户装 dmg，第 2 步（从零扫码走清单，到第一次对话）。其余步骤 Codex 在 M11 的预览版任务里先做完，结果写在通知里。
 
@@ -1487,7 +1487,7 @@ s46 做法：真实 A/B/K、四轮和 Bot 6 证据归属任务 125 的源码 `0e
 | [ ] | s61b | 导入暂存与密钥 | 同一事务二次快照/集合复核、复制/marker、密钥所有权/清零、完整 staged 和隐藏 RPC/CLI | 待估 | s61a2 | 数据迁移、密钥、错误路径 | 整合全部 31 项和测试用户真机；完成前 s61 不勾 |
 | [ ] | s62 | 导入事务（下）：Codex 兜底、hook、启动、回执 | 第 5 节第 6 到 9 步：找 codex，备份后卸掉 bridge 的 hook，把暂存的 bot 搬进来，启动全部 bot 等连上，写迁移标记（提交点）和回执；之后每次启动都先占 bridge 的锁，bridge 在跑某个 bot 时这个 bot 不启动并提示（详细计划 `docs/plans/s62.md`） | 1,100 | s61 | 子进程、并发、错误路径、macOS 原生 | 同一个测试用户账号里从头导入：旧会话接得上，卸掉 hook 后审批回到终端里问；第 8 步故意失败能回滚；导入后手动 run 被拒 |
 | [ ] | s63 | 导入页 | 发现 bridge 就显示导入页：预检表、"会感到的变化"和"失去"两张清单、进度、回执；清单加"可选：从 bridge 导入"，只在 macOS 显示（第 5 节） | 520 | s62、s04 | 错误路径 | 无（M10 验收前，预览版任务在测试用户账号里走一遍导入页） |
-| [ ] | s64 | bridge 最后一版（feishu-codex-bridge 仓库） | 从 0.6.14（`6698118`）开分支：看到迁移标记就拒绝启动，stop 和 status 给提示，第一次启动给主人发通知（第 5 节、第 8 节第 4 条） | 200 | s62 | 错误路径 | 无（发布前由 owner 在飞书客户端里看通知） |
+| [ ] | s64 | bridge 最后一版（feishu-codex-bridge 仓库） | 从 0.6.14（`6698118`）开分支：看到迁移标记就拒绝启动，stop 和 status 给提示，第一次启动给主人发通知（第 5 节、第 8 节第 4 条）。2026-10-26 起不挡 0.7.0：bridge 不废弃，只建议 Mac 用户改用；是否发由 owner 另定 | 200 | s62 | 错误路径 | 无（发布前由 owner 在飞书客户端里看通知） |
 
 开工要点：
 - s58、s59 不依赖 M3 到 M9，M4 之后在第二条线上做。
@@ -1515,9 +1515,9 @@ s46 做法：真实 A/B/K、四轮和 Bot 6 证据归属任务 125 的源码 `0e
 
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
-| [x] | s65 | 本地 universal 分发包、签名和更新产物 | universal dmg/zip，hardened runtime 和 entitlements，已有 Developer ID 签名；统一版本；本地更新 manifest/feed；第一方 UNLICENSED。公证以后由 owner 定，地址发布前填（owner 2026-10-20） | 900–1200（实际 611；#468） | — | macOS 原生、错误路径 | codesign --verify --deep --strict；真实双架构，Apple Silicon/Rosetta 分别启动；本地清单适配现有更新器。公开下载与完整旧版更新安装留发布前验证 |
-| — | s66 | owner 2026-10-20：不做，owner 去要确认 | 不实施 API-only 公开构建；Claude 登录书面确认仍是公开发布前事项（第 8 节第 2 条） | — | — | — | 保留 owner 获取书面确认的发布前义务 |
-| [ ] | s67 | 发布前的 Mac 验收 | 第 8 节第 5 条的 Mac 一半：在没有 bridge 的 macOS 用户上，用公开的 dmg 从零安装、扫码、开权限、第一次对话；结果写进本文第 10 节 | 30 | s65、s63；s64 已准备好即可 | — | 全部在真机和真实飞书里做，扫码由 owner 来做 |
+| [x] | s65 | 本地 universal 分发包、签名和更新产物 | universal dmg/zip，hardened runtime 和 entitlements，已有 Developer ID 签名；统一版本；本地更新 manifest/feed；第一方 UNLICENSED。公证以后由 owner 定，地址发布前填（owner 2026-10-20）；2026-10-26：公证由 owner 自己做，地址定为 dl.vonvon.cc、bot.vonvon.cc，版本 0.7.0 | 900–1200（实际 611；#468） | — | macOS 原生、错误路径 | codesign --verify --deep --strict；真实双架构，Apple Silicon/Rosetta 分别启动；本地清单适配现有更新器。公开下载与完整旧版更新安装留发布前验证 |
+| — | s66 | owner 2026-10-20：不做 | 不实施 API-only 公开构建；2026-10-26 owner 说明 Claude 登录的书面确认不需要拿，不再是发布条件（第 8 节第 2 条） | — | — | — | 无 |
+| [ ] | s67 | 发布前的 Mac 验收 | 第 8 节第 5 条的 Mac 一半：在没有 bridge 的 macOS 用户上，用公开的 dmg 从零安装、扫码、开权限、第一次对话；结果写进本文第 10 节 | 30 | s65、s63（2026-10-26：s64 不再是前提） | — | 全部在真机和真实飞书里做，扫码由 owner 来做 |
 
 开工要点：
 - s65：详细计划见 `docs/plans/s65.md`，不等最后一轮 UI。以 daemon 现有版本为产品源，desktop/stage/Core/npm 一致；协议/client 自有版本不改。正式 universal 走双架构 Electron 下载、合并后签名，preview 保留 Apple Silicon。桥接与 Paseo 的 NOTICE、LICENSE.bridge、LICENSE.paseo、PROVENANCE 继续随 npm/app 分发。真实签名、架构、Rosetta 和更新产物证据按作者结果记录，未验不勾。
@@ -1875,7 +1875,6 @@ D8 的三个待定项（product.md 第 11 节），u01 这样定：
 |---|---|---|
 | Apple 开发者的公证凭据 | owner 以后决定公证时 | owner 2026-10-20：此次 s65 不公证、不配置凭据 |
 | 公开的下载和更新地址 | 公开发布前填写；s64 通知/更新源上线前 | owner 2026-10-20 先不定；s65 做配置和本地产物，不硬编码 |
-| 向 Anthropic 要 Claude 登录的书面确认 | 公开发布前 | product.md 第 8 节第 2 条；owner 2026-10-20 定 s66 不做，owner 去要确认 |
 | 一位同事或第二个飞书账号 | e10（s18 之前）、e09（s30 之前）、M6 第 4 步、M9 第 2 和第 6 步 | 验收时要有另一个人点卡片、私聊 bot |
 | TypeSafe 的账号和 key | s23f、s23g 和 M5 第 11 步（测试 key 已给，2026-10-18） | 测试 key 存在 JP-VPS 本机，不进仓库，Claude 在 JP-VPS 上测这几处时用。Mac 上要用 Jev 时由 owner 在密钥页自己填，key 不经 GitHub 传给 Mac 上的 Codex。长期用要 owner 自己的账号和付款方式；有没有免费额度，文档没写 |
 | JP-VPS 上再加两个测试 bot | 已做（2026-10-16） | M5 要同一台机器上三个 bot（一个规则模式、两个智能模式）。owner 在 JP-VPS 的终端里扫码建了 Vonvon Bot 7、Bot 8，开发者后台由 Mac 上的 Codex 配好、发布（本文第 10 节"M3 验收期间顺带看到的"） |
@@ -1895,6 +1894,16 @@ D8 的三个待定项（product.md 第 11 节），u01 这样定：
 - 行数可能超过 1500 的片（s06、s51a 到 s51c、s59），开工后先用 `git diff --stat` 量。
 
 ## 10. 记录
+
+**2026-10-26 0.7.0 发布决定**（owner）
+
+- 首次公开发布的版本号是 0.7.0（接 bridge 的 0.6.x），只发 macOS，免费，闭源；这次不发 Linux 命令行版，Linux 的验收和 npm 发布推到以后。
+- 官网 https://bot.vonvon.cc（vonvon.cc 跳转过去），下载页 `/get/`，更新日志 `/changelog/`；安装包和更新放 https://dl.vonvon.cc（COS + CDN）。更新清单地址在构建时写进包里，之后不能改、不能做跳转，所以 0.7.0 之后每个版本都要保持它可用。
+- 公证由 owner 自己做；仓库里与公证有关的打包配置不动，也不放公证凭据。
+- bridge 不废弃，也不标“停止维护”：只建议 Mac 用户改用 Vonvon Bot，Windows 和 Linux 的 bridge 用户照常用 bridge。s64 因此不再是 0.7.0 的发布条件。
+- 发布前的代码修复（`claude/release-070`）：版本号改成 0.7.0；桌面端自动检查更新（启动约 60 秒后、之后每 24 小时加最多 1 小时随机延迟，只发现新版本，下载和安装仍由用户点）并在设置入口和菜单栏菜单里标出“有新版本”；“上次安装尚未生效”也在这几处标出，给重试和手动下载，自动检查照常联网（清单里有更高版本就按“有新版本”提示）；同一时间只查一次，检查中也能点“下载更新”；更新清单忽略未知字段；发布说明指向 /changelog/；桌面端弹窗、更新失败和启动失败的提示改中文；私聊卡去掉 bridge 旧品牌、不再查失效的 GitHub release、去掉 Windows 入口，“反馈”按钮指向官网 /#community（群邀请链接只放官网）；接回 `gcOldLogs`（启动清一次，之后每天一次）。
+- 这些修复不替代 s67（干净 Mac 从公开 dmg 走完首次对话）、物理 Intel 和 Rosetta 实测（第 8 节第 5 条）。
+- owner 同日说明，向 Anthropic 要复用本机 Claude 登录的书面确认不需要做，已从发布条件和“owner 要提前准备的事”里去掉（第 8 节第 2 条）。
 
 - 2026-10-23 owner 本地反馈：正常在线、快照有效但没有主区关注记录时，显示「0 / 100 · 待互动」及「收到主区消息后，关注度自动更新」。话题独立展示；断连、停用、接口缺失、过期等不可读状态继续显示 —，预算限制仍显示暂停原因。
 

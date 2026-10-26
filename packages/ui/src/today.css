@@ -18,7 +18,7 @@ html, body { min-width: 320px; min-height: 0; }
 .today-brand strong { font-weight: 600; }
 .today-brand img { width: 23px; height: 23px; object-fit: contain; }
 .today-header-actions { display: flex; justify-self: end; align-items: center; gap: 4px; grid-column: 3; }
-.today-icon-button { width: var(--control-height, 32px); height: var(--control-height, 32px); padding: 0; display: grid; place-items: center; border: 0; border-radius: var(--control-radius, 8px); background: transparent; color: var(--color-text-secondary); }
+.today-icon-button { position: relative; width: var(--control-height, 32px); height: var(--control-height, 32px); padding: 0; display: grid; place-items: center; border: 0; border-radius: var(--control-radius, 8px); background: transparent; color: var(--color-text-secondary); }
 .today-icon-button[aria-current] { background: color-mix(in srgb, var(--color-text) 8%, transparent); color: var(--color-text); }
 .today-primary-nav { position: relative; display: flex; padding: 4px; gap: 0; border-radius: 10px; background: #eaeaed; box-shadow: inset 0 0 0 1px #00000005; }
 .today-primary-nav button { position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center; min-width: 68px; min-height: 28px; padding: 3px 12px; border: 0; border-radius: 7px; color: #626268; background: transparent; font-size: 13px; font-weight: 500; line-height: 1.4; white-space: nowrap; transition: none; }
@@ -214,6 +214,8 @@ html, body { min-width: 320px; min-height: 0; }
 .today-advanced-settings[open] > summary > svg { transform: rotate(90deg); }
 .today-advanced-settings > div { display: grid; gap: 20px; padding: 4px 16px 16px; }
 .today-advanced-settings > summary:focus-visible { outline-offset: -3px; border-radius: 12px; }
+.today-update-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: var(--color-accent); }
+.today-icon-button > .today-update-dot { position: absolute; top: 6px; right: 6px; }
 .today-nav-count { display: inline-block; min-width: 16px; margin-left: 5px; padding: 0 5px; border-radius: 8px; background: var(--color-accent); color: var(--color-accent-contrast, #fff); font-size: 10px; font-weight: 600; line-height: 16px; text-align: center; }
 
 /* Shared compact Bot lists; conversation-first recent activity on Inspiration. */
