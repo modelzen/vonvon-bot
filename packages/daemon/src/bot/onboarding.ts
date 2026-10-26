@@ -14,8 +14,9 @@ import { buildScopeGrantUrl, buildEventConfigUrl, labelScope } from '../config/s
 import { detectAgents } from '../agent';
 import { log } from '../core/logger';
 import { botPaths, useBotDir } from '../config/paths';
-import { ensureRegistry, currentBot, findBot, botIdentity, updateBotName, type BotIdentity, type BotEntry } from '../config/bots';
+import { ensureRegistry, currentBot, findBot, botIdentity, type BotIdentity, type BotEntry } from '../config/bots';
 import { registerBotFromCredentials } from './register-bot';
+import { syncBotName } from './bot-name';
 
 export interface OnboardResult {
   identity: BotIdentity;
@@ -99,24 +100,8 @@ export async function ensureOnboarded(
   }
   const r = await validateAndReport(cfg);
   if (r === null) return null;
-  await syncBotName(identity, entry.botName, r.botName);
+  await syncBotName('onboard', identity, entry.botName, r.botName);
   return { identity, cfg, secret: r.secret, missingScopes: r.missingScopes, events: r.events };
-}
-
-/**
- * The app was renamed in the Feishu developer console: the name `bot/v3/info` gives now replaces the saved display
- * name, so the desktop and web pages show it (they reread bots.json on every snapshot). No name, the same name, or a
- * failed write changes nothing and never stops the bot from starting.
- */
-async function syncBotName(identity: BotIdentity, saved: string | undefined, reported: string | undefined): Promise<void> {
-  if (!reported?.trim() || reported === saved) return;
-  try {
-    if (await updateBotName(identity, reported) === 'updated') {
-      log.info('onboard', 'bot-name-synced', { appId: identity.appId, from: saved ?? null, to: reported });
-    }
-  } catch (error) {
-    log.fail('onboard', error, { phase: 'sync-bot-name', appId: identity.appId }, { console: false });
-  }
 }
 
 /**
