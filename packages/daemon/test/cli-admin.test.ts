@@ -102,7 +102,7 @@ it('bot status prints the checklist with its links and next steps', async () => 
   await runBotStatus(undefined, h.io(), h.daemon);
   expect(admin).toHaveBeenCalledWith({ type: 'setupStatus', agentId: 'cli_a' });
   for (const line of ['Vonvon Bot（cli_a）', '✓ 飞书应用：凭据有效', '! 权限：还缺 2 项', '    - im:message:readonly', '    - im:resource', `    一键开权限：${setup.scopes.grantUrl}`,
-    '· 卡片回调：请手动确认', '    打开事件设置：https://open.feishu.cn/app/cli_a/event', '    在网页里点「我已配置」（vonvon open）', '✓ Codex：可用 · 0.156.1', '· 后台服务：不支持', '还有 4 步没完成。']) expect(h.out()).toContain(`${line}\n`);
+    '· 卡片回调：待验证', '    打开回调设置：https://open.feishu.cn/app/cli_a/event', '    在网页里点「我已配置」（vonvon open）', '✓ Codex：可用 · 0.156.1', '· 后台服务：不支持', '还有 4 步没完成。']) expect(h.out()).toContain(`${line}\n`);
   h.clear(); await runBotStatus('cli_a', h.io(true), h.daemon);
   const json = JSON.parse(h.out());
   expect(json.steps.map((step: { id: string }) => step.id)).toEqual(['credentials', 'scopes', 'connection', 'event', 'callback', 'publish', 'codex', 'claude', 'service']);

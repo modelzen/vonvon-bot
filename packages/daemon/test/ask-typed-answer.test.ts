@@ -301,6 +301,7 @@ describe('typed ask messages at intake', () => {
     // Retain the fixture directory for inspection under the task's no-delete rule.
     const dir = realpathSync(execFileSync('mktemp', ['-d'], { encoding: 'utf8' }).trim());
     const { bin } = writeNodeExecutable(dir, 'codex', `
+if (process.argv.includes('--version')) { console.log('codex-cli 0.163.0'); process.exit(0); }
 const fs = require('node:fs');
 const path = require('node:path');
 const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
