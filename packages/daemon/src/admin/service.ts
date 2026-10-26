@@ -46,6 +46,7 @@ import { validateAppCredentials } from '../utils/feishu-auth';
 import { buildAppConsoleUrl, buildScopeGrantUrl, buildEventConfigUrl } from '../config/scopes';
 import { readCardCallbackStatus, writeSetupProgress } from '../config/setup-progress';
 import { refreshBotCredentials } from '../bot/refresh-bot';
+import { syncBotName } from '../bot/bot-name';
 import { registerBotFromCredentials } from '../bot/register-bot';
 import {
   startRegistration,
@@ -882,6 +883,11 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
           (): CardCallbackConfiguration => ({ state: 'unchecked', reason: '无法读取卡片回调配置，请稍后重试' }),
         ),
       ]);
+      // 飞书后台改了名：检查连接时就把新名字写进 bots.json，Bot 列表、群设置不用等 Bot 重启。只读预览不写；
+      // config.json 里的应用不是这个 Bot 的（文件被换过）也不写，免得把别的应用的名字记到它头上。
+      if (validation.ok && entry && app.id === entry.appId && !deps.readonlyPreview) {
+        await syncBotName('setup-status', botIdentity(entry), entry.botName, validation.botName);
+      }
 
       return {
         ...base,

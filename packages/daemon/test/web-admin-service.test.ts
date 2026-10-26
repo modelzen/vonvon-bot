@@ -1,9 +1,10 @@
 import { pendingGroupsSchema } from '@vonvon/protocol';
 import { createPendingGroups, pendingGroupsFile } from '../src/project/pending-groups';
-import { existsSync, rmSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, botPaths, useBotDir } from '../src/config/paths';
 import { seedBots } from './helpers/bot-fixture';
+import { loadBots } from '../src/config/bots';
 import { addProject, mutateProject } from '../src/project/registry';
 import { upsertSession } from '../src/bot/session-store';
 import {
@@ -477,6 +478,37 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
     expect(s.eventConfigUrl).toContain('/app/cli_setupbot/event');
     expect(s.consoleUrl).toBe('https://open.feishu.cn/app/cli_setupbot');
     expect(s.cardCallback).toEqual({ confirmed: false, configuration: configuredCallback });
+  });
+
+  it('飞书后台改了名：检查连接时 bots.json 里的显示名跟着变，句柄和 appId 不变；只读预览、凭据被拒、配置换了应用都不写', async () => {
+    const seeded = [
+      { name: 'alpha', appId: BOT_A, tenant: 'feishu' as const, botName: '阿尔法', createdAt: 1, active: true },
+      { name: 'beta', appId: BOT_B, tenant: 'lark' as const, createdAt: 2, active: false },
+      { name: 'setup', appId: SETUP_BOT, tenant: 'feishu' as const, botName: 'Vonvon Bot 6', createdAt: 3, active: false },
+    ];
+    await seedBots({ version: 1, current: BOT_A, bots: seeded });
+    const raw = (): string => readFileSync(paths.botsFile, 'utf8');
+    try {
+      writeCompleteConfig();
+      const before = raw();
+      expect((await createReadonlyAdminService().getSetupStatus(SETUP_BOT)).botName).toBe('SetupBot');
+      expect(raw()).toBe(before);
+
+      vi.stubGlobal('fetch', (async () => new Response(JSON.stringify({ code: 10014, msg: 'app secret invalid' }), { status: 400 })) as unknown as typeof fetch);
+      expect((await createAdminService({}).getSetupStatus(SETUP_BOT)).credentials.ok).toBe(false);
+      expect(raw()).toBe(before);
+
+      vi.stubGlobal('fetch', stubFetch({ grantedScopes: [], eventEvents: ['im.message.receive_v1'] }));
+      writeFileSync(botPaths(SETUP_BOT).configFile, JSON.stringify({ accounts: { app: { id: 'cli_someone_else', secret: 'plain-secret', tenant: 'feishu' } } }));
+      await createAdminService({}).getSetupStatus(SETUP_BOT);
+      expect(raw()).toBe(before);
+
+      writeCompleteConfig();
+      expect((await createAdminService({}).getSetupStatus(SETUP_BOT)).botName).toBe('SetupBot');
+      expect((await loadBots()).bots).toEqual([seeded[0], seeded[1], { ...seeded[2], botName: 'SetupBot' }]);
+    } finally {
+      await seedBots({ version: 1, current: BOT_A, bots: seeded.map(({ botName, ...bot }) => (bot.appId === SETUP_BOT ? bot : { ...bot, ...(botName ? { botName } : {}) })) });
+    }
   });
 
   it('卡片回调勾选按 Bot 存在 setup.json，重开后还在；文件坏了按未勾选', async () => {

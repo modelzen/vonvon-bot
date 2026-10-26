@@ -37,7 +37,7 @@ vi.mock('../src/config/paths', async () => {
 });
 
 import { ensureOnboarded } from '../src/bot/onboarding';
-import { loadBots, updateBotName, type BotEntry } from '../src/config/bots';
+import { botIdentity, loadBots, removeBot, setBotActivation, updateBotName, type BotEntry } from '../src/config/bots';
 import { paths } from '../src/config/paths';
 import { seedBots } from './helpers/bot-fixture';
 
@@ -71,6 +71,18 @@ describe('the display name follows a rename in Feishu', () => {
     mocks.validate.mockResolvedValue({ ok: true, botName: '小周' });
     expect(await ensureOnboarded({ bot: bot.appId })).not.toBeNull();
     expect((await loadBots()).bots[0]?.botName).toBe('小周');
+  });
+
+  it('a name with spaces around it is saved trimmed, and the same name with spaces writes nothing', async () => {
+    mocks.validate.mockResolvedValue({ ok: true, botName: '  小码 ' });
+    expect(await ensureOnboarded({ bot: bot.appId })).not.toBeNull();
+    expect((await loadBots()).bots[0]?.botName).toBe('小码');
+    expect(updateBotName).toHaveBeenCalledWith(expect.objectContaining({ appId: bot.appId }), '小码');
+    vi.mocked(updateBotName).mockClear();
+    const before = raw();
+    expect(await ensureOnboarded({ bot: bot.appId })).not.toBeNull();
+    expect(raw()).toBe(before);
+    expect(updateBotName).not.toHaveBeenCalled();
   });
 
   it('the same name writes nothing', async () => {
@@ -135,5 +147,23 @@ describe('updateBotName', () => {
     expect(raw()).toBe(before);
     expect(await updateBotName({ appId: 'cli_missing', tenant: 'feishu', createdAt: 1 }, '小码')).toBe('stale');
     expect(raw()).toBe(before);
+  });
+
+  it('a rename racing a removal and an activation change loses nothing', async () => {
+    const gone: BotEntry = { ...bot, appId: 'cli_gone', name: 'gone', botName: '要删的', registrationId: 'reg-gone', active: false };
+    const other: BotEntry = { ...bot, appId: 'cli_other', name: 'other', botName: '别的', registrationId: 'reg-other', active: false };
+    await seedBots({ version: 1, current: bot.appId, bots: [{ ...bot }, { ...gone }, { ...other }] });
+    const [removed, renamedGone, renamedOther] = await Promise.all([
+      removeBot(botIdentity(gone), { isRunning: async () => false, cleanup: async () => {} }),
+      updateBotName(botIdentity(gone), '小查'),
+      updateBotName(botIdentity(other), '小周'),
+      setBotActivation(other.appId, true),
+    ]);
+    expect(removed.kind).toBe('removed');
+    expect(renamedGone).toBe('stale');
+    expect(renamedOther).toBe('updated');
+    const saved = await loadBots();
+    expect(saved.current).toBe(bot.appId);
+    expect(saved.bots).toEqual([{ ...bot }, { ...other, botName: '小周', active: true }]);
   });
 });
