@@ -1263,7 +1263,7 @@ export function ProjectPanel({
           save={(draft, revision) => save("run", draft, revision)}
           render={(draft, _set, disabled, commit) => <SettingsRow className="group-choice-row" title="运行中来了消息"
             description={`插话加入当前任务，排队等待任务结束。当前：${run.effective.pendingPolicy === "steer" ? "插话" : "排队"}。`}
-            trailing={<SettingChoices label="运行中来了消息" value={independent && draft.pendingPolicy === 'default' ? run.effective.pendingPolicy : draft.pendingPolicy} disabled={disabled}
+            trailing={<SettingChoices segmented label="运行中来了消息" value={independent && draft.pendingPolicy === 'default' ? run.effective.pendingPolicy : draft.pendingPolicy} disabled={disabled}
               choices={[...(!independent ? [{value: "default" as const, label: "跟着 Bot 默认"}] : []), {value: "steer" as const, label: "插话"}, {value: "queue" as const, label: "排队"}]}
               onChange={(pendingPolicy) => void commit({pendingPolicy})} />}
           />} />)}

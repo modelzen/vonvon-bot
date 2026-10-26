@@ -51,8 +51,8 @@
 .environment-profile > div:last-child, .environment-profile-choice { display: flex; align-items: center; gap: 8px; }
 .environment-profile strong { font-size: 12px; }
 .environment-profile span { overflow-wrap: anywhere; color: var(--color-text-secondary); font-size: 12px; }
-.environment-form label { display: grid; gap: 5px; font-size: 12px; }
-.environment-form input:not([type="checkbox"]), .environment-form select, .environment-verification input { box-sizing: border-box; width: 100%; padding: 8px 10px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); color: inherit; font: inherit; }
+.environment-form > label, .environment-form-field { display: grid; gap: 5px; font-size: 12px; }
+.environment-form input:not([type="checkbox"]):not([type="radio"]), .environment-form select, .environment-verification input { box-sizing: border-box; width: 100%; padding: 8px 10px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); color: inherit; font: inherit; }
 .environment-form .environment-checkbox { display: flex; align-items: center; }
 .environment-form .ui-button { justify-self: start; }
 @container settings-content (max-width: 450px) { .environment-tool-summary { grid-template-columns: 1fr; } .environment-primary { padding-left: 41px; } .environment-backend { align-items: flex-start; flex-direction: column; } .environment-details { padding-left: 16px; } .environment-details dl > div { grid-template-columns: 1fr; gap: 4px; } .environment-details dd { text-align: left; } }
