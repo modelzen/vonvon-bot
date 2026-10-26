@@ -76,12 +76,12 @@ describe('automatic event checks during startup', () => {
   });
 
   it('optional omissions and missing permissions get links without opening a browser', async () => {
-    mocks.diagnosis.mockResolvedValue({ ...healthy, missingOptional: ['application.bot.menu_v6'] });
+    mocks.diagnosis.mockResolvedValue({ ...healthy, missingOptional: ['drive.notice.comment_add_v1'] });
     mocks.validate.mockResolvedValue({ ok: true, missingScopes: ['im:message:send_as_bot'] });
     const result = await ensureOnboarded({ bot: 'test' });
     expect(result?.identity).toEqual({ appId: 'cli_test', tenant: 'feishu', createdAt: 1 });
     expect(result?.events?.state).toBe('ok');
-    expect(output()).toContain('可选事件未订阅：application.bot.menu_v6');
+    expect(output()).toContain('可选事件未订阅：drive.notice.comment_add_v1');
     expect(output()).toContain('/event');
     expect(output()).toContain('/auth?');
     expect(mocks.open).not.toHaveBeenCalled();

@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { lstat, mkdir, open, readFile, readdir, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
+import { assertNoBundledClaude } from './desktop-backend-policy.mjs';
 const exec = promisify(execFile);
 const run = async (command, args) => exec(command, args, { timeout: 60000, maxBuffer: 1024 * 1024 });
 
@@ -67,6 +68,7 @@ export async function verifyUniversalApp({ app, version, teamIdentifier, execute
   if (bundleVersion.trim() !== version || buildVersion.trim() !== version || core.version !== version || core.license !== 'UNLICENSED') {
     throw new Error('App/Core product version or first-party license mismatch');
   }
+  await assertNoBundledClaude(join(app, 'Contents/Resources/daemon'));
   for (const name of ['LICENSE.bridge', 'LICENSE.paseo', 'NOTICE', 'PROVENANCE.md']) {
     if (!(await readFile(join(app, 'Contents/Resources/daemon', name))).length) throw new Error(`Missing ${name}`);
   }
@@ -78,7 +80,8 @@ export async function verifyUniversalApp({ app, version, teamIdentifier, execute
   for (const path of paths) {
     const { stdout } = await execute('/usr/bin/lipo', ['-archs', path]);
     const archs = stdout.trim().split(/\s+/).sort();
-    if (archs.join(',') !== 'arm64,x86_64') throw new Error(`Non-universal bundled runtime: ${path.slice(app.length + 1)}`);
+    const relative = path.slice(app.length + 1);
+    if (archs.join(',') !== 'arm64,x86_64') throw new Error(`Unexpected bundled runtime architecture: ${relative}`);
     await execute('/usr/bin/codesign', ['--verify', '--strict', path]);
     architectures.push({ path: path.slice(app.length + 1), archs });
   }

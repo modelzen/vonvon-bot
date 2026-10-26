@@ -3,6 +3,7 @@ import { paths } from '../config/paths';
 import { acquireMutex, closeMutex, DataAccessError } from '../config/data-access';
 import { listenerCloseUnconfirmed, observeShutdown, type ShutdownControl } from './lifecycle';
 import { readServiceCodexBin } from '../service/codex-bin';
+import { codexVersionAsync, resolveCodexBin } from '../agent/codex-appserver/locate';
 import { acquirePidLock, getPidLockInfo, isPidLockOwnerRunning, PidLockError, publishPidLock, readRunningPidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
 import { verifyPidLockOwner } from '../server/owner-verification';
 import { readStartupRegistration } from '../service/startup';
@@ -92,6 +93,12 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
     log.info('process-host', 'boot-admission', { admission: host.admission()?.reason ?? 'allowed' });
     // Recover migration before runRun reads the registry or starts any Bot; orphan providers were drained above.
     if (!process.send) await bridgeImportRuntime().recover();
+    // Also before any Bot starts (memory design §7.1 step A): every binding row, stopped bots' too, gets its project in
+    // the library. It logs what fails and never fails the start; a paused run leaves it for the next one.
+    if (!process.send && !run?.paused) {
+      try { await (await import('../admin/library')).prepareLibraryAtStartup(); }
+      catch (error) { log.fail('library', error, { phase: 'startup' }); }
+    }
     // Lane 10 hook: the value is a fake-child.mjs path; the real `vonvon daemon run` has no other seam a lane can reach.
     if (process.env.VONVON_TEST_SPAWN_FAKE_CHILD) {
       await host.spawn('codex', 'lane-10', { file: process.execPath, args: [process.env.VONVON_TEST_SPAWN_FAKE_CHILD, '--ignore-term', '--grandchildren', '1'], env: Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) });
@@ -100,6 +107,14 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       const codexBin = readServiceCodexBin();
       if (codexBin === null) delete process.env.CODEX_BIN;
       else if (codexBin !== undefined) process.env.CODEX_BIN = codexBin;
+    }
+    // The supervisor and each bot child have their own version cache. Warm it after
+    // applying the managed binary selection, without holding startup on the probe.
+    try {
+      const bin = resolveCodexBin();
+      if (bin) void codexVersionAsync(bin).catch(error => log.fail('daemon-startup', error, { phase: 'codex-version' }));
+    } catch (error) {
+      log.fail('daemon-startup', error, { phase: 'codex-version' });
     }
     // JP-VPS acceptance seam (s17): a real uncaught exception or rejection in a host, 2 s into the run.
     const seam = process.env.VONVON_TEST_CRASH;

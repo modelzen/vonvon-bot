@@ -1,0 +1,37 @@
+.ui-dialog:has(.registration-content) { width: min(480px, calc(100vw - 32px)); }
+.ui-dialog:has(.registration-content) .ui-dialog__content { padding: 20px 24px 22px; }
+.ui-dialog:has(.registration-content) .ui-dialog__footer { padding: 14px 20px; background: #fbfbfc; }
+.registration-content { display: flex; flex-direction: column; gap: 22px; }
+.registration-steps { display: flex; align-items: center; justify-content: center; gap: 12px; font-size: 11px; color: #999fa8; }
+.registration-steps > span:not(.registration-step-line) { display: flex; align-items: center; gap: 6px; }
+.registration-steps i { width: 19px; height: 19px; border-radius: 50%; display: grid; place-items: center; background: #f0f1f3; font-size: 10px; font-style: normal; }
+.registration-steps .current { color: #303b48; font-weight: 600; }
+.registration-steps .current i { background: #e8edf4; color: #3b536d; }
+.registration-steps .complete { color: #6c7a88; }
+.registration-steps .complete i { color: #438363; background: #eaf3ee; }
+.registration-step-line { width: 42px; height: 1px; background: #e2e6eb; }
+.registration-scan { display: flex; flex-direction: column; align-items: center; }
+.registration-scan h3, .registration-recovery h3 { font-size: 16px; font-weight: 600; margin: 0 0 14px; line-height: 1.4; }
+.registration-qr { width: 224px; height: 224px; max-width: 100%; border: 1px solid #e4e6ea; border-radius: 12px; padding: 6px; background: white; box-shadow: 0 2px 6px #14253505; }
+.registration-qr img { display: block; width: 100%; height: 100%; }
+.registration-expires { font-size: 11px; color: #8b929b; margin: 11px 0 17px; line-height: 1.3; font-variant-numeric: tabular-nums; }
+.registration-link-actions { display: flex; gap: 8px; align-items: center; }
+.registration-full-link { margin-top: 15px; width: 100%; text-align: center; }
+.registration-full-link summary { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: #8a919b; cursor: pointer; list-style: none; }
+.registration-full-link summary::-webkit-details-marker { display: none; }
+.registration-full-link[open] summary svg { transform: rotate(180deg); }
+.registration-full-link input { display: block; width: 100%; font-size: 11px; margin-top: 9px; background: #f7f8fa; color: #697586; }
+.registration-footer-status { font-size: 10px; line-height: 1.4; color: #959ba5; margin-right: auto; display: flex; gap: 5px; align-items: center; }
+.registration-footer-status svg { color: #719481; }
+.registration-copy-note, .registration-refresh-note { font-size: 11px; color: #76869a; line-height: 1.6; margin: 0 0 10px; }
+.registration-copy-note { margin: 10px 0; }
+.registration-error { border-radius: 7px; padding: 12px; background: #faf5ed; color: #9b793f; font-size: 11px; line-height: 1.6; margin: 13px 0 0; overflow-wrap: anywhere; }
+.registration-recovery { min-height: 315px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.registration-recovery-icon { display: grid; place-items: center; width: 66px; height: 66px; background: #f1f3f6; border-radius: 18px; color: #8c9aaa; margin-bottom: 19px; }
+.registration-recovery h3 { margin-bottom: 8px; }
+.registration-recovery p { font-size: 12px; color: #8c949f; line-height: 1.6; margin: 0 0 24px; overflow-wrap: anywhere; }
+@media (max-width: 430px) {
+  .ui-dialog:has(.registration-content) .ui-dialog__content { padding: 18px; }
+  .ui-dialog:has(.registration-content) .ui-dialog__footer { padding: 12px 14px; }
+  .registration-footer-status { max-width: 112px; }
+}

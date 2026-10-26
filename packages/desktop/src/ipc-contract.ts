@@ -2,6 +2,9 @@ import type { VonvonClient } from '@vonvon/client/browser';
 import type { BackendInstallEventPayload, CommandResult, DesktopSnapshot, DesktopUpdate, LogEventPayload, MachineReply } from '@vonvon/protocol';
 import type { ShellCapabilities } from '../../ui/src/client-context.js';
 
+/** Main-to-preload notification only; it exposes no renderer action or daemon access. */
+export const desktopFullScreenChannel = 'desktop:window:fullscreen';
+
 export const desktopChannels = {
   snapshot: 'desktop:client:snapshot',
   run: 'desktop:client:run',
@@ -11,6 +14,9 @@ export const desktopChannels = {
   machine: 'desktop:client:machine',
   admin: 'desktop:client:admin',
   directory: 'desktop:client:directory',
+  library: 'desktop:client:library',
+  memory: 'desktop:client:memory',
+  contextPreview: 'desktop:client:contextPreview',
   close: 'desktop:client:close',
   subscribe: 'desktop:subscribe',
   external: 'desktop:shell:external',

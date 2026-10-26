@@ -7,6 +7,7 @@ import { resolveDataRoot } from '../../daemon/src/config/data-root.js';
 import { attachExisting, AttachError } from './attach.js';
 import { installBridge, openAllowedExternal } from './bridge.js';
 import type { AttachedDaemon, DesktopBridge, DesktopResources } from './ipc-contract.js';
+import { desktopFullScreenChannel } from './ipc-contract.js';
 import { createDesktopTray } from './tray.js';
 import { DesktopUpdater } from './updates.js';
 import { desktopUpdateConfiguration } from './update-configuration.js';
@@ -75,15 +76,45 @@ export async function startDesktop(): Promise<void> {
   let restartCancel: AbortController | undefined;
   let passive: { cancel: AbortController; done: Promise<void> } | undefined;
   let stopping: Promise<MachineReply> | undefined;
+  let wantsVisible = true;
+  let visibilityRevision = 0;
+  let restoringDock: Promise<void> | undefined;
 
   const show = (): void => {
+    if (quitting || terminating || cleanupPromise) return;
+    wantsVisible = true;
+    const revision = ++visibilityRevision;
     if (!window || window.isDestroyed()) {
       focusWhenReady = true;
       return;
     }
-    if (window.isMinimized()) window.restore();
-    window.show();
-    window.focus();
+    const current = window;
+    const reveal = (): void => {
+      // Dock restoration is asynchronous. A later close or quit must win, including
+      // hiding a Dock icon that a completed show() has just brought back.
+      if (!wantsVisible || quitting || terminating || cleanupPromise) {
+        app.dock?.hide();
+        return;
+      }
+      if (revision !== visibilityRevision || current !== window || current.isDestroyed()) return;
+      focusWhenReady = false;
+      if (current.isMinimized()) current.restore();
+      current.show();
+      current.focus();
+    };
+    if (app.dock && !app.dock.isVisible()) {
+      restoringDock ??= app.dock.show().finally(() => { restoringDock = undefined; });
+      // Still offer the window if macOS refuses Dock restoration.
+      void restoringDock.then(reveal, reveal);
+    } else reveal();
+  };
+
+  const hide = (): void => {
+    wantsVisible = false;
+    focusWhenReady = false;
+    visibilityRevision += 1;
+    if (window && !window.isDestroyed()) window.hide();
+    app.dock?.hide();
   };
 
   const requestQuit = (): void => {
@@ -97,6 +128,7 @@ export async function startDesktop(): Promise<void> {
   };
 
   const cleanup = (): Promise<void> => cleanupPromise ??= (async () => {
+    hide();
     let closeFailure: unknown;
     restartCancel?.abort();
     try {
@@ -155,8 +187,8 @@ export async function startDesktop(): Promise<void> {
     if (terminating) return;
     const paths = desktopResources(app.getAppPath(), app.isPackaged);
     const uiIndex = realpathSync(paths.uiIndex);
-    // Use this build's brand asset even when macOS cached an older bundle icon.
-    if (process.platform === 'darwin') app.dock?.setIcon(join(dirname(uiIndex), 'vonvon-logo.png'));
+    // Use the same padded, transparent icon as the bundle, including in dev mode.
+    if (process.platform === 'darwin') app.dock?.setIcon(join(dirname(paths.trayPng), 'macos-icon.png'));
     const uiUrl = pathToFileURL(uiIndex).href;
     const preload = realpathSync(paths.preload);
     const icon = realpathSync(paths.trayPng);
@@ -199,6 +231,11 @@ export async function startDesktop(): Promise<void> {
       minWidth: 760,
       minHeight: 640,
       show: false,
+      backgroundColor: '#f5f5f7',
+      titleBarStyle: 'hidden',
+      ...(process.platform === 'darwin'
+        ? { trafficLightPosition: { x: 12, y: 10 } }
+        : { titleBarOverlay: { color: '#e7e8ec', symbolColor: '#5f6068', height: 34 } }),
       webPreferences: {
         preload,
         sandbox: true,
@@ -210,6 +247,12 @@ export async function startDesktop(): Promise<void> {
     const current = window;
     const authorizedDocument = (): boolean => !current.webContents.isDestroyed() &&
       current.webContents.mainFrame?.url === uiUrl;
+    const publishFullScreen = (value: boolean): void => {
+      if (authorizedDocument()) current.webContents.send(desktopFullScreenChannel, value);
+    };
+    current.on('enter-full-screen', () => publishFullScreen(true));
+    current.on('leave-full-screen', () => publishFullScreen(false));
+    current.webContents.on('did-finish-load', () => publishFullScreen(current.isFullScreen()));
     current.webContents.setWindowOpenHandler(({ url }) => {
       if (authorizedDocument()) void openAllowedExternal(url).catch(() => {
         dialog.showMessageBoxSync(current, {
@@ -237,11 +280,11 @@ export async function startDesktop(): Promise<void> {
     current.on('close', event => {
       if (!quitting && !terminating) {
         event.preventDefault();
-        current.hide();
+        hide();
       }
     });
     current.once('ready-to-show', () => {
-      if (!terminating) show();
+      if (!terminating && wantsVisible) show();
     });
     async function reattachReady(bot?: string): Promise<void> {
       const ready = await manager.ensureReady(0, bot);
@@ -530,7 +573,7 @@ export async function startDesktop(): Promise<void> {
           throw error;
         }
       },
-      hide: () => current.hide(),
+      hide,
       confirmQuit,
       connectionLost: showConnectionLost,
     });
@@ -538,8 +581,9 @@ export async function startDesktop(): Promise<void> {
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       { label: 'Vonvon Bot', submenu: [
         { label: '显示 Vonvon Bot', click: show },
-        { label: '退出 Vonvon Bot', accelerator: 'CmdOrCtrl+Q', click: requestQuit },
       ] },
+      // macOS routes editing shortcuts, including Cmd+V in password fields, through native menu roles.
+      { role: 'editMenu', label: '编辑' },
     ]));
     await current.loadFile(uiIndex);
     if (repairNotice) void dialog.showMessageBox(current, { type: 'warning', title: 'Vonvon Bot', message: repairNotice, buttons: ['OK'] }).catch(() => {});

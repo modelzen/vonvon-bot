@@ -11,6 +11,7 @@ import { writeNodeExecutable } from './helpers/node-executable';
 // 一个最小的假 codex app-server：应答 initialize / thread/start，收到 turn/start
 // 即自杀且不回包（模拟 app-server 中途崩溃），在所有平台运行真实子进程。
 const FAKE_SERVER = `#!/usr/bin/env node
+if (process.argv.includes('--version')) { console.log('codex-cli 0.163.0'); process.exit(0); }
 let buf = '';
 process.stdin.on('data', (d) => {
   buf += d;

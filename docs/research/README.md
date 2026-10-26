@@ -2,6 +2,19 @@
 
 这里存放 vonvon-bot 做过的调研，以后遇到同一个问题时先来这里查，不用再调研一遍。仓库目前闭源，主人决定以后再考虑要不要开源，所以这些记录可以引用内部数据。将来如果开源，要先清理这个目录。
 
+## 2026-10-26 Libraries.dev 后续适用位置
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [界面适用位置](2026-10-26-libraries-dev-fit/report.md) | 基于 dev 与已验收 Gooey 主导航，筛选详情页标签、任务 / 长等待状态及可选搜索内光 | 仅建议；复核已接入组件及保留飞书头像的决定，未改产品代码 |
+| [第二轮（排除灵感页）](2026-10-26-libraries-dev-next-pass/report.md) | 基于已合入 #545 的 dev，筛选沟通方式滑杆、工具安装及密钥验证等待 | 仅建议；排除已实施组件、无真实连接状态的 MCP 授权及不适合的材质效果 |
+
+## 2026-10-24 能力页技能列表
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [能力页局部优化](2026-10-24-capabilities-list/report.md) | owner 选择限高列表、一行简介与启用计数后的实施 | owner 已确认，补合前同步 dev 379d9d37；13 项测试、构建通过，补测 100 项滚动；用户卡顿尚未稳定复现 |
+
 ## 怎么用
 
 - 每轮调研放在一个以日期开头的目录里。目录里的事实都以那天为准，代码引用的是当天 `main` 的提交。
@@ -229,3 +242,60 @@ codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次�
 | 报告 | 内容 | 说明 |
 |---|---|---|
 | [local-distribution](2026-10-20-s65/local-distribution.md) | 签名 dmg/zip、13 个 Mach-O、5 份最窄权限、arm64/Rosetta 启动与本地更新模板 | 首次错误 target 作者停止及 Rosetta 首轮未就绪均保留；未公证/发布/安装 owner app |
+
+## 2026-10-21 能力页与工具连接
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [capabilities-ux](2026-10-21-capabilities-ux/report.md) | 对照 Codex、Claude Code、OpenClaw、VS Code 官方文档，梳理 Skills 来源、工作区增删、CLI 安装授权和 MCP 管理 | 只读文档与源码；用户选择工作区优先；仅交互原型落地，未修改后端 |
+
+## 2026-10-22 Provider 设计参考
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [provider-design](2026-10-22-provider-design/report.md) | HarnessRouter、Magpie 固定源码与 UI 参考；Provider 首次准备、日常管理及群模型范围 | 方案与独立交互设计稿，等待 owner 确认；未改实际应用 |
+
+## 2026-10-23 工作目录权限
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [report](2026-10-23-permissions/report.md) | 沿用 bridge 的三档在多 provider 下是否合理；owner 定的方向（透传各家原生设置、越界拒绝、不做外层沙箱）；Codex 在 Linux 上的实测 | 实测证实用户 `~/.codex/rules` 的 allow 规则能绕过沙箱（#486）；0.163.0 的权限 profile 在 Linux 上能挡读 |
+| [native-codex-claude-gemini](2026-10-23-permissions/native-codex-claude-gemini.md)、[native-other-agents](2026-10-23-permissions/native-other-agents.md)、[hosts-and-sandboxes](2026-10-23-permissions/hosts-and-sandboxes.md) | 15 家 agent 的原生权限模型；ACP、Zed、Paseo 等宿主和外层沙箱的做法 | 子代理据文档和源码写成，没有核实记录，用前核对 |
+
+## 2026-10-23 个性、记忆与项目
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [README](2026-10-23-memory-persona/README.md) | 十份调研：Today 等消费级产品、OpenClaw、Hermes、Letta/mem0/LangMem、编码 agent 的记忆机制、人设和作用域，以及 vonvon 当前实现（dev `9b113b6`）的存储、运行时和界面 | 子代理据源码和文档写成，没有独立核实记录，用前核对；结论落在 `docs/plans/memory-projects.md` |
+
+## 2026-10-24 Designeer 与当前 App UI / UX
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [report](2026-10-24-designeer-ui-ux/report.md)、[首批实施](2026-10-24-designeer-ui-ux/implementation.md) | 九项发现，首批实现紧凑模型 / Effort、权限摘要和群页头；Designeer 参考映射；修改与合入均基于 dev | 以当前 App b83acfa2 校正共同基线；432 项 UI 测试通过；网页以隔离演示数据对比，待 owner 验收，其余优化另批实施 |
+| [公共组件统一](2026-10-24-designeer-ui-ux/component-foundation.md) | 概览/Bot/群组/设置公共组件、统一控件尺寸及 Libraries.dev 适用位置 | 444 项 UI 测试通过；网页尺寸、多行字段与任务 / Bot / 群聊操作状态绑定的 ThinkingOrb；owner 已要求合入 dev，跳过 CI 并重编译重启 App |
+| [模型保存与 Provider 检测](2026-10-24-designeer-ui-ux/save-provider-fix.md) | 修复实时目录误标为 fallback、Claude unknown 未探测即隐藏和不可保存草稿；保留真实目录验证 | UI 460 项、daemon 定向回归及 typecheck 通过；App 实测另记 |
+
+## 2026-10-24 判断规则编辑窗口
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [rules-editor-height](2026-10-24-rules-editor-height/report.md) | 保留规则正文，默认短窗口、底部展开与收起 | 基于 dev 8a7dabe1；owner 已批准预览设计，实际实现待本地验收；未替换 App |
+
+## 2026-10-24 导图直接编辑组件
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [report](2026-10-24-mind-map-editor/report.md) | Mind Elixir、React Flow、SimpleMindMap 对图中编辑和固定结构节点的支持；当前角色与记忆编辑入口差异 | 官方文档与源码调研；后续按 owner 的包体要求沿用自写 HTML/SVG，未引入候选库 |
+
+## 2026-10-25 导图库与画布性能
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [report](2026-10-25-mind-map-library/report.md) | Mind Elixir 5.15.1 固定版本、实际包体测量、旧 renderer 闲置轮询的观察器开销与接入约束 | owner 允许引入库；旧版18节点实际测量，最终 UI/App 验收另记 |
+
+## 2026-10-25 macOS App 体积
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [report](2026-10-25-app-size/report.md) | 0.7.13 arm64 App 623.76 MB 构成；恢复 Claude 按需托管安装后 0.7.14 实测 365.22 MB、ZIP 156.54 MB | 基线 6f5589b7；签名包与隔离安装、更新、重启、卸载通过，owner 验收待做 |

@@ -41,6 +41,8 @@ async function settingsFixture() {
     cfg,
     writePreferences: createAppPreferencesWriter({ cfg, persistConfig: async next => writeFile(configFile, JSON.stringify(next)) }),
     backendFor: fixtureBackend,
+    // Decision-model saves validate credentials; never consult the host keystore.
+    getSecret: async id => id === 'typesafe-api-key' ? 'fixture-api-key' : undefined,
     evictLiveSessionsForChat: async () => {},
     readProject,
     listProjects: async () => [JSON.parse(await readFile(projectFile, 'utf8')) as Project],
@@ -80,7 +82,7 @@ describe('retained settings behavior over real WebSocket', () => {
 
       const readProject = await client.call({ type: 'request', id: 'read-project', method: 'settings', payload: { type: 'read', scope: project } });
       if (readProject.type !== 'response' || readProject.method !== 'settings' || readProject.payload.kind !== 'view' || !('response' in readProject.payload.view.sections)) throw new Error('project view missing');
-      expect(Object.keys(readProject.payload.view.sections).sort()).toEqual(['judge', 'model', 'modelAccess', 'permission', 'presentation', 'profile', 'response', 'run', 'skills', 'smartRules', 'workspace']);
+      expect(Object.keys(readProject.payload.view.sections).sort()).toEqual(['judge', 'model', 'modelAccess', 'permission', 'presentation', 'profile', 'response', 'role', 'run', 'skills', 'smartRules', 'workspace']);
       const responseRevision = readProject.payload.view.sections.response.revision;
       const response = await client.call({ type: 'request', id: 'save-project', method: 'settings', payload: { type: 'save', edit: { scope: project, section: 'response', revision: responseRevision, patch: { noMention: false } } } });
       expect(response).toMatchObject({ type: 'response', method: 'settings', payload: { kind: 'saved', result: { kind: 'saved', section: { scope: project, section: 'response', value: { stored: { noMention: false } } } } } });

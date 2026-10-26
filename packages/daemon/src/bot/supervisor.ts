@@ -543,6 +543,13 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
           if (!c.proc || !c.ipc) throw new AdminWriteError(`Bot「${c.bot.name}」的进程没在运行（正在崩溃后重启），稍后再试。`);
           return c.ipc.call(op);
         },
+        executeLibrary: async (botId, op) => {
+          const c = byAppId(botId);
+          if (!c?.enabled) throw new AdminWriteError(`Bot「${botId}」已停用，请先启用。`);
+          if (c.pause) throw new AdminWriteError(pausedWrite(c));
+          if (!c.proc || !c.ipc) throw new AdminWriteError(`Bot「${c.bot.name}」的进程没在运行（正在崩溃后重启），稍后再试。`);
+          return c.ipc.call(op, 60_000);
+        },
         liveStatus: async (botId) => {
           const c = byAppId(botId);
           if (!c?.proc || !c.ipc) return undefined;

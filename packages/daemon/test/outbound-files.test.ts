@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, realpath, rm, symlink, unlink, writeFile, truncate, rea
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { OutboundFiles, MAX_FILE_BYTES, type FileContext } from '../src/bot/outbound-files';
+import { OutboundFiles, MAX_FILE_BYTES, fileClaimMode, type FileContext } from '../src/bot/outbound-files';
 import { scanLocalFiles } from '../src/card/file-refs';
 import { placeInlineFiles, type InlineFiles } from '../src/card/inline-files';
 import { renderRichText } from '../src/card/markdown-render';
@@ -221,6 +221,24 @@ describe('click-to-get local files', () => {
     expect(upload).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { sandbox: 'read-only', network: true },
+    { sandbox: 'danger-full-access', unexpected: true },
+  ])('refuses old full-access file links after native permissions narrow or become invalid: %j', async settings => {
+    const outside = join(root, 'approved.txt');
+    await writeFile(outside, 'approved bytes');
+    const payload = values((await service.prepare(`[file](${outside})`, { ...context, mode: 'full' })).links)[0]!;
+    const project = { name: 'fixture', chatId: evt.chatId, cwd, blank: false, createdAt: 1, mode: 'full' as const,
+      custom: { backend: 'codex-appserver', settings } };
+    const cfg = { accounts: { app: { id: 'fixture', secret: 'fake', tenant: 'feishu' as const } } };
+    const authorize = async (record: FileContext, openId: string) => fileClaimMode(cfg, project, record, openId);
+    expect(await authorize(context, 'ou_owner')).toBe('qa');
+    await service.deliver(channel, evt, payload, authorize);
+    expect(upload).not.toHaveBeenCalled();
+    expect(reply).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith(evt.chatId, expect.objectContaining({ markdown: expect.stringContaining('权限拿不到') }), expect.anything());
+  });
+
   it('prepares an inside alias but uploads the canonical in-project file after click', async () => {
     await symlink(join(cwd, '测试 报告.xlsx'), join(cwd, 'alias.xlsx'));
     const payload = values((await service.prepare('[alias](alias.xlsx)', context)).links)[0]!;
@@ -250,7 +268,7 @@ describe('click-to-get local files', () => {
     const payload = values(prepared.links)[0]!;
 
     await service.deliver(channel, { ...evt, operator: { openId: 'ou_member' } }, payload, async () => 'qa');
-    expect(send.mock.calls.at(-1)![1].markdown).toContain('这个群现在的权限档拿不到');
+    expect(send.mock.calls.at(-1)![1].markdown).toContain('这个群现在的权限拿不到');
     expect(paint).not.toHaveBeenCalled();
     const manifest = JSON.parse(await readFile(join(dir, (await readdir(dir))[0]!), 'utf8'));
     expect(manifest.files[0].error).toBeUndefined();

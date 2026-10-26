@@ -4,18 +4,25 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { folderTokenSchema, type FolderChoice, type FolderToken } from '@vonvon/protocol';
 import { RpcError } from './errors';
+import { createDirectorySuggestions } from './directory-suggestions';
 
 export async function createDirectoryBrowser(home = homedir()) {
   const root = await realpath(home);
   const tokens = new Map<FolderToken, { path: string; expiresAt: number }>();
+  const suggestions = createDirectorySuggestions();
+  function contained(path: string) {
+    const rel = relative(root, path);
+    if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) throw new RpcError('outside_home', '目录必须位于用户主目录内。');
+  }
   async function canonical(path: string): Promise<string> {
     const resolved = await realpath(path);
-    const rel = relative(root, resolved);
-    if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) throw new RpcError('outside_home', '目录必须位于用户主目录内。');
+    contained(resolved);
     if (!(await stat(resolved)).isDirectory()) throw new RpcError('invalid_directory', '请选择文件夹。');
     return resolved;
   }
   return {
+    suggest: (query: string) => suggestions.search(root, query),
+    close: () => suggestions.close(),
     async list(path = root) {
       const resolved = await canonical(path);
       const children = await readdir(resolved, { withFileTypes: true });

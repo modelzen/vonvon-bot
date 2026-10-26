@@ -52,24 +52,23 @@ export function keyMissingText(m: { displayName: string; keyId: string; keyUnrea
     : `还没填 ${m.displayName} 的 key，填之前${meanwhile}。在网页的密钥页填，或者在终端运行 vonvon secrets set ${m.keyId}，按提示粘贴`;
 }
 
-// The decision question of the Jev report's Chinese runs, word for word (2.1: 30/31 right with four more questions,
-// 19/20 asked alone); the `bot_name` and `topic_title` it names are decisionBody's state keys.
-const SKIP = '不回：闲聊、寒暄、"好的""收到"这类话；说给别人的话；别人已经在处理或答过；bot 说不出新的有用的东西；拿不准';
+// Options describe the available actions only. All response policy comes from the owner's rules.
+const SKIP = '不回：按 `rules`，不回应这条消息';
 /** The options in JUDGE_ALLOWED's order, 不回 first: a Choice leans to the options asked first. */
 const QUESTIONS: Record<JudgeVariant, { question: string; criteria: Partial<Record<JudgeDecision, string>> }> = {
   main: {
     question: '`new_message` 发在群主区。按 `rules`，bot（`bot_name`）该怎么处理它？',
     criteria: {
       skip: SKIP,
-      main: '在主区回：需要 bot 回应，接着主区正在聊的事，或者一两句就能答完',
-      topic: '开新话题回：需要 bot 回应，而且是一件新的事，要来回好几轮，或者要查、要改、要写东西',
+      main: '在主区回：按 `rules`，在群主区回应这条消息',
+      topic: '开新话题回：按 `rules`，为这条消息创建新话题并在其中回应',
     },
   },
   topic: {
     question: '`new_message` 发在话题 `topic_title` 里，要回就回在这个话题里。按 `rules`，bot（`bot_name`）回不回？',
     criteria: {
       skip: SKIP,
-      reply: '回：有人在问问题、请人帮忙、讨论 bot 能帮上的事，或者接着 bot 刚才的话，或者想听 bot 的意见',
+      reply: '回：按 `rules`，在当前话题回应这条消息',
     },
   },
 };

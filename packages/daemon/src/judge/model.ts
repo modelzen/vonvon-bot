@@ -1,43 +1,33 @@
 import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { defaultCodexDecisionEffort, defaultCodexDecisionModel } from '@vonvon/protocol';
 import { claudeConfigDir, readClaudeUserSettings } from '../agent/claude-agent/configured-model';
 import { parseModelId } from '../agent/model-id';
 import { getSessionTitleEfforts } from '../config/schema';
 import { REASONING_EFFORTS, type ModelInfo, type ReasoningEffort } from '../agent/types';
 import type { JudgeResult, JudgeSelectionStored } from './types';
+import { defaultJudgeProvider, JUDGE_PROVIDERS, readJudgeModelsSync, type JudgeProvider, type JudgeModels } from './global-models';
 
-// Which model judges (design 2.2, 2.3): the group's setting, else the bot's, each only for the
-// backend it was stored for, else the backend's default small model.
+// Group choices use their own decision backend. Legacy Bot inheritance remains backend-scoped.
 
-export const CODEX_JUDGE_MODEL = 'gpt-6-luna';
-/** gpt-6-luna's lowest effort (JP-VPS models_cache, client 0.163.0, 2026-10-16: low to max, no minimal). */
-const CODEX_JUDGE_EFFORT: ReasoningEffort = 'low';
+export const CODEX_JUDGE_MODEL = defaultCodexDecisionModel();
 export const CLAUDE_JUDGE_MODEL = 'haiku';
 const CLAUDE_BACKEND_ID = 'claude-agent';
 
 /**
- * The effort a Codex judgement sends when none was chosen: the lowest the cached list gives the
- * model; none for a model that supports no effort, for a hand-typed id (a gateway model may refuse
- * the key) and for a listed model while the list is not cached yet. The default gpt-6-luna is known
- * to start at `low`, so it gets that without the list.
+ * The effort a Codex judgement sends when none was chosen: disable thinking when supported,
+ * otherwise low. Only models that support neither use their lowest supported level. Hand-typed
+ * ids and unavailable catalogs keep the key absent, except the known Luna low fallback.
  */
 export function judgeEffort(model: string, models: ModelInfo[] | undefined, custom = false): ReasoningEffort | undefined {
-  if (custom) return undefined;
   const info = models?.find((m) => m.id === model);
-  if (!info) return model === CODEX_JUDGE_MODEL ? CODEX_JUDGE_EFFORT : undefined;
-  return REASONING_EFFORTS.find((effort) => info.supportedEfforts.includes(effort));
+  return defaultCodexDecisionEffort(model, info?.supportedEfforts, custom);
 }
 
 /** Prefer the small Luna model. Once discovery has a visible catalog, choose only from it. */
 export function codexJudgeDefault(models: ModelInfo[] | undefined): { model: string; effort?: ReasoningEffort } {
-  const visible = models?.filter(item => !item.hidden);
-  const model = visible?.length
-    ? (visible.find(item => item.id === CODEX_JUDGE_MODEL)
-      ?? visible.find(item => item.id.endsWith('-luna'))
-      ?? visible.find(item => item.isDefault)
-      ?? visible[0]!).id
-    : CODEX_JUDGE_MODEL;
+  const model = defaultCodexDecisionModel(models);
   const effort = judgeEffort(model, models);
   return effort ? { model, effort } : { model };
 }
@@ -133,6 +123,11 @@ export function parseStoredJudge(value: unknown, backends: readonly string[]): {
   if (value === undefined || value === null) return {};
   if (typeof value !== 'object' || Array.isArray(value)) return { why: '不是对象' };
   const v = value as Record<string, unknown>;
+  if (v.kind === 'default') return Object.keys(v).length === 1 ? { value: { kind: 'default' } } : { why: '默认决策设置有多余字段' };
+  if (v.kind === 'provider') {
+    if (typeof v.provider !== 'string' || !JUDGE_PROVIDERS.includes(v.provider as JudgeProvider)) return { why: '不认识决策 Provider' };
+    return { value: { kind: 'provider', provider: v.provider as JudgeProvider } };
+  }
   if (v.kind === 'decision') {
     if (typeof v.provider !== 'string' || !DECISION_PROVIDER_ID.test(v.provider)) return { why: '决策模型的 provider 不对' };
     const id = typeof v.model === 'string' ? parseModelId(v.model) : undefined;
@@ -155,20 +150,33 @@ export function parseStoredJudge(value: unknown, backends: readonly string[]): {
 }
 
 /**
- * The model for a group on backend `backendId` (design 2.2): the group's setting when it is a
- * decision model or stored for this backend, else the bot's likewise, else the default small model.
+ * The model for a group: its independent decision choice, else the Bot's setting on the task
+ * backend, else the default small model. Legacy host references are resolved until snapshotted.
  * A decision model applies on every backend (product.md 3.4). A chosen effort is fitted to the model
- * ({@link fitJudgeEffort}); a setting without one gets the default rule (2.3): Codex the lowest the
- * list gives, Claude none (thinking off).
+ * ({@link fitJudgeEffort}); a setting without one gets the default rule: Codex thinking off when
+ * supported, otherwise low (or a supported fallback), Claude none (thinking off).
  */
 export function resolveJudgeModel(
   backendId: string,
   layers: { group?: JudgeSelectionStored; bot?: JudgeSelectionStored },
   models: ModelInfo[] | undefined,
   readClaude?: ClaudeUserSettings,
+  globalRoot?: string,
+  globalModels?: JudgeModels,
 ): Pick<JudgeResult, 'model' | 'effort' | 'provider' | 'modelSource'> {
   for (const source of ['group', 'bot'] as const) {
     const chosen = layers[source];
+    if (chosen?.kind === 'provider' || chosen?.kind === 'default') {
+      const stored = globalModels ?? readJudgeModelsSync(globalRoot);
+      const provider = chosen.kind === 'default' ? defaultJudgeProvider(stored) : chosen.provider;
+      const selected = stored.byProvider[provider];
+      const modelSource = chosen.kind === 'default' ? 'default' : source;
+      if (provider === 'typesafe') return { model: selected?.model ?? 'jev-latest', provider: 'typesafe', modelSource };
+      if (!selected) return { ...defaultJudgeModel(provider, models, readClaude), modelSource };
+      const effort = selected.effort ? fitJudgeEffort(selected.model, selected.effort, models, selected.custom)
+        : provider === CLAUDE_BACKEND_ID ? undefined : judgeEffort(selected.model, models, selected.custom);
+      return { model: selected.model, ...(effort ? { effort } : {}), modelSource };
+    }
     if (chosen?.kind === 'decision') return { model: chosen.model, provider: chosen.provider, modelSource: source };
     if (!chosen || (source === 'bot' && chosen.backend !== backendId)) continue;
     const effort = chosen.effort ? fitJudgeEffort(chosen.model, chosen.effort, models, chosen.custom)
@@ -179,6 +187,10 @@ export function resolveJudgeModel(
 }
 
 /** The group may judge with another provider than the one running its tasks. */
-export function judgeBackendId(taskBackend: string, group: JudgeSelectionStored | undefined): string {
-  return group?.kind === 'llm' ? group.backend : taskBackend;
+export function judgeBackendId(taskBackend: string, group: JudgeSelectionStored | undefined, globalRoot?: string, globalModels?: JudgeModels): string {
+  if (group?.kind === 'default') {
+    const provider = defaultJudgeProvider(globalModels ?? readJudgeModelsSync(globalRoot));
+    return provider === 'typesafe' ? taskBackend : provider;
+  }
+  return group?.kind === 'llm' ? group.backend : group?.kind === 'provider' && group.provider !== 'typesafe' ? group.provider : taskBackend;
 }

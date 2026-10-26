@@ -12,6 +12,7 @@ vi.mock('../src/config/paths', async () => {
   return { botDir, botPaths, paths: { appDir, projectsRootDir: join(appDir, 'projects'), botsFile: join(appDir, 'bots.json'), secretsFile: join(appDir, 'secrets.enc'), masterKeyFile: join(appDir, 'master.key') } };
 });
 
+import {writeJudgeModels} from '../src/judge/global-models';
 import { paths } from '../src/config/paths';
 import { acquireMutex, closeMutex, DataAccessError } from '../src/config/data-access';
 import { getSecret, setSecret } from '../src/config/keystore';
@@ -101,6 +102,22 @@ describe('keyStatus and describeKeystoreError (s23g)', () => {
 });
 
 describe('who chose a key: the judge\'s own resolution (s23g)', () => {
+  it('lists smart groups inheriting the host default and stops when it changes provider',async()=>{
+    await writeFile(paths.botsFile,JSON.stringify({version:1,bots:[{name:'a',appId:'cli_a',tenant:'feishu',createdAt:1}]}));
+    await bot('cli_a','a',undefined,[group('oc_a','a',{...smart,judge:{kind:'default'}}),group('oc_b','b',{judge:{kind:'default'}})]);
+    await writeJudgeModels({defaultProvider:'typesafe',byProvider:{}});
+    expect((await typesafe()).inUse).toEqual([{agentId:'cli_a',agentName:'a',groupId:'oc_a',groupName:'a',inherited:true}]);
+    await writeJudgeModels({defaultProvider:'codex-appserver',byProvider:{}});
+    expect((await typesafe()).inUse).toEqual([]);
+    await writeFile(join(paths.appDir,'judge-models.json'),'{bad');
+    expect((await secretsView()).unreadBots).toBe(1);
+  });
+  it('still lists TypeSafe use when the host judge model file is corrupt', async () => {
+    await writeFile(paths.botsFile, JSON.stringify({ version: 1, bots: [{ name: 'a', appId: 'cli_a', tenant: 'feishu', createdAt: 1 }] }));
+    await bot('cli_a', 'a', undefined, [group('oc_a', 'a', { ...smart, judge: { kind: 'provider', provider: 'typesafe' } })]);
+    await writeFile(join(paths.appDir, 'judge-models.json'), '{bad');
+    expect((await typesafe()).inUse).toEqual([{ agentId: 'cli_a', agentName: 'a', groupId: 'oc_a', groupName: 'a' }]);
+  });
   it('lists the bot default, smart groups that use it, and a group outside 智能 that chose it itself; counts unread bots', async () => {
     await writeFile(paths.botsFile, JSON.stringify({ version: 1, bots: ['cli_a', 'cli_b', 'cli_c', 'cli_d'].map(appId => ({ name: appId, appId, tenant: 'feishu', createdAt: 1, ...(appId === 'cli_a' ? { botName: '值班助手' } : {}) })) }));
     await bot('cli_a', '值班助手', JEV, [

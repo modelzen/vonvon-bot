@@ -16,6 +16,7 @@ const IS_WIN = process.platform === 'win32';
 // codex 要立刻可见）；DM 体检传 force 强制重探（路径/版本可能刚变过）。
 let binCache: string | null = null;
 const versionCache = new Map<string, string>();
+const failedVersionProbes = new Set<string>();
 
 export type CodexResolutionOptions = {
   force?: boolean;
@@ -106,6 +107,11 @@ function which(cmd: string, env: NodeJS.ProcessEnv, blockedDataRoot?: string): s
   }
 }
 
+/** Read the existing probe result without starting a child process. */
+export function cachedCodexVersion(bin: string): string | null | undefined {
+  return versionCache.get(bin) ?? (failedVersionProbes.has(bin) ? null : undefined);
+}
+
 /** Best-effort version string of the resolved codex binary（同步，CLI 场景用；
  * 卡片回调等事件循环上下文请用 {@link codexVersionAsync}）。 */
 export function codexVersion(bin: string, opts?: { force?: boolean }): string | null {
@@ -121,7 +127,13 @@ export function codexVersion(bin: string, opts?: { force?: boolean }): string | 
   } catch {
     out = null;
   }
-  if (out !== null) versionCache.set(bin, out);
+  if (out !== null) {
+    versionCache.set(bin, out);
+    failedVersionProbes.delete(bin);
+  } else {
+    versionCache.delete(bin);
+    failedVersionProbes.add(bin);
+  }
   return out;
 }
 
@@ -150,6 +162,12 @@ export async function codexVersionAsync(bin: string, opts?: { force?: boolean })
     child.on('error', () => resolve(null));
     child.on('close', (code) => resolve(code === 0 ? stdout.trim() : null));
   });
-  if (out !== null) versionCache.set(bin, out);
+  if (out !== null) {
+    versionCache.set(bin, out);
+    failedVersionProbes.delete(bin);
+  } else {
+    versionCache.delete(bin);
+    failedVersionProbes.add(bin);
+  }
   return out;
 }

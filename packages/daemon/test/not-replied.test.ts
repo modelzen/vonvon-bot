@@ -6,7 +6,8 @@ import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
 import { BackendNotInstalledError } from '../src/agent/backend-loader';
-import { CODEX_FULL_ONLY, CodexFullOnlyError } from '../src/agent/codex-appserver/full-only';
+import { ClaudeAgentBackend, ReadScopeError, type ClaudeSdkFacade } from '../src/agent/claude-agent/backend';
+import { codexFullOnlyReason, CodexFullOnlyError } from '../src/agent/codex-appserver/full-only';
 import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
 import { DM, PERMISSION_CARD_VERSION } from '../src/card/dm-cards';
 import { addProject, getProjectByName, removeProject, type Project } from '../src/project/registry';
@@ -33,6 +34,7 @@ const fake = vi.hoisted(() => ({
   events: [] as unknown[],
   startError: undefined as Error | undefined,
   fullOnly: undefined as string | undefined,
+  backendId: undefined as string | undefined,
   cardError: undefined as unknown,
   stream: undefined as (() => AsyncIterable<unknown>) | undefined,
   aborted: vi.fn(),
@@ -52,7 +54,7 @@ vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_context: unkn
 vi.mock('../src/project/registry', async original => ({ ...await original<object>(), getProjectByChatId: async () => fake.project }));
 vi.mock('../src/agent', async original => ({
   ...await original<object>(),
-  createBackend: (id: string) => ({ id, listModels: async () => [], startThread, fullAccessOnly: () => fake.fullOnly }),
+  createBackend: (id: string) => ({ id: fake.backendId ?? id, listModels: async () => [], startThread, fullAccessOnly: () => fake.fullOnly }),
 }));
 vi.mock('../src/bot/session-store', async original => ({ ...await original<object>(), getSession: async () => undefined, upsertSession: async () => undefined }));
 vi.mock('../src/card/managed', async original => ({ ...await original<object>(), sendManagedCard: fake.card }));
@@ -98,6 +100,7 @@ beforeEach(() => {
   fake.events = [{ type: 'done', turnId: 'turn-fixture' }];
   fake.startError = undefined;
   fake.fullOnly = undefined;
+  fake.backendId = undefined;
   fake.cardError = undefined;
   fake.stream = undefined;
   start();
@@ -140,7 +143,9 @@ describe('gates', () => {
   });
 });
 
-describe('Codex that runs only in 完全访问 (Linux)', () => {
+const CODEX_FULL_ONLY = codexFullOnlyReason('codex-cli 0.162.0');
+
+describe('Codex too old for restricted permissions', () => {
   beforeEach(() => { fake.fullOnly = CODEX_FULL_ONLY; });
 
   it('answers an @ in the main area without starting a session', async () => {
@@ -150,8 +155,8 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
     expect(records()).toEqual([{ at: msg.createTime, groupId: 'oc_demo', place: 'main', reason: 'tier-unavailable', backend: 'codex', ref: msg.messageId.slice(-6) }]);
     expect(fake.send).toHaveBeenCalledOnce();
     expect(fake.send).toHaveBeenCalledWith('oc_demo', expect.anything(), { replyTo: msg.messageId, replyInThread: false });
-    expect(replies()[0]).toContain('这个群是「只读」档');
-    expect(replies()[0]).toContain('把「权限档」改成「完全访问」');
+    expect(replies()[0]).toContain('这个群的权限是「只读」');
+    expect(replies()[0]).toContain('换成「完全访问」');
     expect(replies()[0]).toContain('`vonvon settings set --group oc_demo permission.mode=full`');
   });
 
@@ -162,7 +167,16 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
     expect(startThread).not.toHaveBeenCalled();
     expect(records().map(record => [record.reason, record.place])).toEqual([['tier-unavailable', 'topic']]);
     expect(fake.send).toHaveBeenCalledWith('oc_demo', expect.anything(), { replyTo: msg.messageId, replyInThread: true });
-    expect(replies()[0]).toContain('这个群是「读写」档');
+    expect(replies()[0]).toContain('这个群的权限是「工作区可写」');
+  });
+
+  it('refuses a custom read-only effect even when the stored tier is full', async () => {
+    fake.project = { ...base, mode: 'full', custom: { backend: 'codex-appserver', settings: { sandbox: 'read-only', network: true } } };
+    await orchestrator.onMessage(message());
+    expect(startThread).not.toHaveBeenCalled();
+    expect(records().map(record => record.reason)).toEqual(['tier-unavailable']);
+    expect(replies()[0]).toContain('权限是「只读」');
+    expect(replies()[0]).toContain('换成「完全访问」');
   });
 
   it('answers a 免@ group once in 10 minutes, an @ every time, and notes every message', async () => {
@@ -195,13 +209,13 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
     expect(replies()).toHaveLength(2);
   });
 
-  it('refuses everyone\'s turn in a 只读 group, naming 权限档 and permission.mode', async () => {
+  it('refuses everyone\'s turn in a 只读 group, naming 权限 and permission.mode', async () => {
     await orchestrator.onMessage(message({ senderId: 'ou_guest', threadId: 'omt_topic' }));
     await orchestrator.onMessage(message({ threadId: 'omt_topic' }));
     expect(startThread).not.toHaveBeenCalled();
     expect(records().map(record => record.reason)).toEqual(['tier-unavailable', 'tier-unavailable']);
     for (const reply of replies()) {
-      expect(reply).toContain('把「权限档」改成「完全访问」');
+      expect(reply).toContain('换成「完全访问」');
       expect(reply).toContain('permission.mode=full');
       expect(reply).not.toContain('guestMode');
     }
@@ -246,21 +260,64 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
       await vi.waitFor(() => expect(fake.card).toHaveBeenCalledOnce());
       const sent = JSON.stringify(fake.card.mock.calls[0]?.[2]);
       expect(sent).toContain(`"v":${PERMISSION_CARD_VERSION}`);
-      expect(sent).toContain('现在是🔒 项目内只读');
+      expect(sent).toContain('现在是只读');
       expect(fake.log.info).toHaveBeenCalledWith('console', 'permission-refused', { project: 'demo', mode: 'full', reason: 'old-card' });
       expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa' });
       expect(JSON.parse(readFileSync(paths.projectsFile, 'utf8')).projects[0]).toMatchObject({ mode: 'full', guestMode: 'qa' });
     } finally { await removeProject('demo'); }
   });
 
-  it('keeps a stored 只读 when the DM card is saved with the tier dropdowns left alone', async () => {
-    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: workspace, createdAt: 1, blank: false, mode: 'qa' });
+  it.each([undefined, { backend: 'codex-appserver', settings: { sandbox: 'read-only', network: true } }])('keeps the tier/custom and replies when the dropdown is left alone (%s)', async custom => {
+    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: workspace, createdAt: 1, blank: false, mode: 'qa', custom });
+    const before = readFileSync(paths.projectsFile, 'utf8');
     try {
       // The card presets no tier it cannot offer, so an untouched dropdown sends nothing.
       await orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
         action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo', v: PERMISSION_CARD_VERSION } }, raw: { action: { form_value: { network: 'on' } } } } as never);
+      await vi.waitFor(() => expect(fake.send).toHaveBeenCalledWith('ou_owner', { markdown: '没有改动。' }, { replyTo: 'om_card' }));
+      expect(fake.card).not.toHaveBeenCalled();
+      expect(readFileSync(paths.projectsFile, 'utf8')).toBe(before);
+    } finally { await removeProject('demo'); }
+  });
+
+  it.each([['qa', false], ['write', true], ['full', true]] as const)('DM choosing %s clears custom and saves network %s', async (mode, network) => {
+    fake.fullOnly = undefined;
+    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: workspace, createdAt: 1, blank: false, mode: 'write', network: false,
+      custom: { backend: 'codex-appserver', settings: { sandbox: 'workspace-write', network: false } } });
+    try {
+      await orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
+        action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo', v: PERMISSION_CARD_VERSION } }, raw: { action: { form_value: { mode } } } } as never);
       await vi.waitFor(() => expect(fake.card).toHaveBeenCalledOnce());
-      expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa', network: true });
+      const saved = await getProjectByName('demo');
+      expect(saved).toMatchObject({ mode, network });
+      expect(saved).not.toHaveProperty('custom');
+      expect(JSON.parse(readFileSync(paths.projectsFile, 'utf8')).projects[0]).not.toHaveProperty('custom');
+    } finally { await removeProject('demo'); }
+  });
+
+  it('uses the group backend table when refreshing a custom card even if the runtime id differs', async () => {
+    fake.backendId = 'synthetic-runtime-alias';
+    await orchestrator.shutdown(); start();
+    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: workspace, createdAt: 1, blank: false, mode: 'qa', backend: 'codex-appserver',
+      custom: { backend: 'codex-appserver', settings: { sandbox: 'read-only', network: true } } });
+    try {
+      await orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
+        action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo', v: PERMISSION_CARD_VERSION - 1 } }, raw: { action: { form_value: {} } } } as never);
+      await vi.waitFor(() => expect(fake.card).toHaveBeenCalledOnce());
+      expect(JSON.stringify(fake.card.mock.calls[0]?.[2])).toContain('现在是自定义：沙箱模式：只读（read-only）；网络：开');
+    } finally { await removeProject('demo'); }
+  });
+
+  it('refreshes a previous network-switch card without writing either field', async () => {
+    fake.fullOnly = undefined;
+    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: workspace, createdAt: 1, blank: false, mode: 'qa', network: false });
+    try {
+      await orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
+        action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo', v: PERMISSION_CARD_VERSION - 1 } },
+        raw: { action: { form_value: { mode: 'write', network: 'on' } } } } as never);
+      await vi.waitFor(() => expect(fake.card).toHaveBeenCalledOnce());
+      expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa', network: false });
+      expect(JSON.stringify(fake.card.mock.calls[0]?.[2])).not.toContain('"name":"network"');
     } finally { await removeProject('demo'); }
   });
 
@@ -335,6 +392,36 @@ describe('failed turns', () => {
     await orchestrator.onMessage(message());
     await vi.waitFor(() => expect(records()).toHaveLength(1));
     expect(records()[0]).toMatchObject({ reason: 'tool-missing', backend: 'codex' });
+  });
+
+  it.each(['main', 'topic'] as const)('shows a real Claude read-scope startup error and diagnoses it in the %s area', async place => {
+    fake.project = { ...base, kind: place === 'main' ? 'single' : 'multi', backend: 'claude-agent' };
+    const sdk: ClaudeSdkFacade = {
+      query: vi.fn(() => { throw new Error('read-scope rejection must precede the native query'); }),
+      listSessions: vi.fn(async () => []), getSessionInfo: vi.fn(async () => undefined),
+      getSessionMessages: vi.fn(async () => []), renameSession: vi.fn(async () => undefined),
+    };
+    const backend = new ClaudeAgentBackend(async () => sdk);
+    startThread.mockImplementationOnce(async () => {
+      try {
+        await backend.startThread({ cwd: workspace, mode: 'qa', readScope: { deny: [workspace], allow: [] } });
+      } catch (error) {
+        expect(error).toBeInstanceOf(ReadScopeError);
+        throw error;
+      }
+      throw new Error('the protected workspace must reject startup');
+    });
+    const msg = message(place === 'topic' ? { threadId: 'omt_topic' } : {});
+    await orchestrator.onMessage(msg);
+    const explanation = '工作区放在了数据目录或它的上级，只读、工作区可写档没法把别的群隔开。请主人在群详情页换一个工作区。';
+    await vi.waitFor(() => expect(records()).toHaveLength(1));
+    await vi.waitFor(() => expect(fake.send).toHaveBeenCalledWith(msg.chatId, { markdown: `❌ ${explanation}` }, {
+      replyTo: msg.messageId, replyInThread: place === 'topic',
+    }));
+    expect(startThread).toHaveBeenCalledOnce();
+    expect(sdk.query).not.toHaveBeenCalled();
+    expect(records()[0]).toMatchObject({ reason: 'failed', detail: explanation, backend: 'claude', place });
+    expect(failureReason({ error: new ReadScopeError(explanation) })).toEqual({ reason: 'failed', detail: explanation });
   });
 
   it('notes a card Feishu refused for a scope, and the scope for 缺的权限', async () => {

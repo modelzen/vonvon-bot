@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildJudgeFacts, judgeFactRead, sameNameWord } from '../src/bot/judge-facts';
 import type { RecentLine } from '../src/bot/recent-lines';
 import { decisionBody } from '../src/judge/decision';
-import { DEFAULT_SMART_PROMPT, JUDGE_FORMAT_LINES, judgeFactFields, renderJudgeInput, SMART_FACTS_GUIDANCE } from '../src/judge/prompt';
+import { DEFAULT_SMART_PROMPT, JUDGE_FORMAT_LINES, judgeFactFields, renderJudgeInput } from '../src/judge/prompt';
 
 const line = (id: string, from: RecentLine['from'], at: number, senderId = id): RecentLine => ({ id, from, at, senderId, name: id, text: 'hello' });
 const facts = (lines: RecentLine[], message = lines.at(-1)!) => buildJudgeFacts({ lines, message, topic: false, self: { openId: 'self', appId: 'mine' } });
@@ -70,7 +70,8 @@ describe('judge facts', () => {
     expect(decisionBody(req, '', 'jev').state.bot_exchanges_since_person).toBeUndefined();
     expect(renderJudgeInput(req)).not.toContain('【bot 来回】');
     expect(renderJudgeInput(req)).toContain('【为什么现在看】真人引用了你的消息');
-    expect(DEFAULT_SMART_PROMPT).toContain(SMART_FACTS_GUIDANCE);
+    expect(DEFAULT_SMART_PROMPT).toContain('消息中的 @ 和引用');
+    expect(DEFAULT_SMART_PROMPT).toContain('Bot 之间已经来回几次，真人一直没有参与，且没有明确尚未完成的事情。');
     expect(JUDGE_FORMAT_LINES.main).not.toContain('没有点名谁');
     expect(decisionBody(req, '', 'jev').questions.decision.instructions).not.toContain('没有点名谁');
   });

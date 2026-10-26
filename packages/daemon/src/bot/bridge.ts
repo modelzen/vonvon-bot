@@ -7,8 +7,10 @@ import { createGroupExecutor, type AdminGroupOp, type GroupMembers, type JoinedG
 import type { Project } from '../project/registry';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import type { AdminWriteOp } from '../admin/ops';
+import type { AdminLibraryOp } from '../admin/library';
 import { isAdmin, resolveOwner, type AppConfig } from '../config/schema';
 import { createCommandTools } from '../agent/entry/command-tools';
+import { createMemoryWriter } from './memory-writer';
 import { listProjects } from '../project/registry';
 import { createAgentEntries, type AgentEntries } from '../agent/entry/registry';
 import { log } from '../core/logger';
@@ -20,6 +22,7 @@ import { paths } from '../config/paths';
 import { setTierMergePending, splitTierChats } from '../project/registry';
 import type { PermissionMode } from '../agent/types';
 import { onCrashSync } from '../host/crash-guard';
+import { createCardCallbackRecorder } from '../config/card-callback';
 
 export interface BridgeOptions {
   identity: BotIdentity;
@@ -41,6 +44,8 @@ export interface BridgeHandle {
   collaboration: (request: CollaborationRequest) => Promise<unknown>;
   adminGroups: (op: AdminGroupOp) => Promise<JoinedGroups | GroupMembers | Project>;
   adminExecute: (op: AdminWriteOp) => Promise<AdminWriteResult>;
+  /** The host's workspace fan-out for this bot (admin/library.ts `AdminLibraryOp`). */
+  libraryExecute: (op: AdminLibraryOp) => Promise<unknown>;
   settings: HostSettings;
   /** Graceful teardown: drop the long connection first, then close every codex
    *  session (no orphan app-servers). Idempotent enough for a signal handler. */
@@ -60,12 +65,20 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   await mergeTiers();
   const app = opts.cfg.accounts.app;
   const channel = createBridgeChannel(app, opts.appSecret);
+  const cardCallbacks = createCardCallbackRecorder(app.id, {
+    onError: error => log.fail('setup', error, { phase: 'card-callback-verification', appId: app.id }),
+  });
 
+  // 记忆写入（工具和隐藏块共用）：群绑定的项目取自绑定行，Bot 记忆在 bots/<appId>/ 下
+  const memory = createMemoryWriter({
+    botId: app.id,
+    projectIdOf: async chatId => (await listProjects()).find(project => project.chatId === chatId)?.projectId,
+  });
   // 咖啡一下 (the local Claude Code / Codex hook relay) left v1 in s02b: no
   // service and no socket; s02c deleted D/cli-bridge. Since s02c2 the installed
   // hooks run an empty `vonvon hook`, and the tools ask in the terminal.
   const entries = createAgentEntries({ appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), isOwner: id => resolveOwner(opts.cfg) === id, tools: createCommandTools({
-    appId: app.id,
+    appId: app.id, memory,
     settings: { read: scope => orchestrator.settings.read(scope), save: (edit, options) => orchestrator.settings.save(edit, options), models: query => orchestrator.settings.models(query), act: action => orchestrator.settings.act(action) },
     projects: listProjects,
     groups: async cursor => {
@@ -80,7 +93,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     },
   }) });
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
-    { entries, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity });
+    { entries, memory, droppedFile: opts.droppedFile, judgeUsageFile: opts.judgeUsageFile, bot: identity });
   const roles = createAppRoleRefresher(app, opts.appSecret);
   await roles.refresh();
   let rolesStopped = false;
@@ -107,6 +120,8 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     // Replies and card updates go over HTTP, which this does not close. allSettled handles a rejection at once: it must
     // not wait unhandled while the orchestrator drains.
     const transportClosing = Promise.allSettled([channel.disconnect()]);
+    // Drain evidence received before disconnect completed; it runs independently of the business handlers.
+    const callbacksClosing = transportClosing.then(() => cardCallbacks.close());
     const groupsClosing = Promise.allSettled([...groupTasks]);
     const orchestratorClosing = orchestrator.shutdown();
     closing = (async () => {
@@ -119,6 +134,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
       for (const result of await transportClosing) {
         if (result.status === 'rejected') { log.fail('ws', result.reason, { phase: 'disconnect' }); errors.push(result.reason); }
       }
+      await callbacksClosing;
       if (errors.length) throw new AggregateError(errors, 'Bridge cleanup failed');
     })().finally(offCrash);
     return closing;
@@ -126,7 +142,10 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   try {
     await orchestrator.initialize?.();
     channel.on('message', orchestrator.onMessage);
-    channel.on('cardAction', orchestrator.dispatcher.handle);
+    channel.on('cardAction', event => {
+      cardCallbacks.received();
+      return orchestrator.dispatcher.handle(event);
+    });
     channel.on('comment', orchestrator.onComment);
     channel.on('botAdded', orchestrator.onBotAddedToChat);
     channel.on('reaction', orchestrator.onReaction);
@@ -197,7 +216,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
       void task.then(() => groupTasks.delete(task), () => groupTasks.delete(task));
       return task;
     };
-    return { channel, entries, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, settings: orchestrator.settings, shutdown };
+    return { channel, entries, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, shutdown };
   } catch (error) {
     try { await shutdown(); }
     catch (cleanupError) {

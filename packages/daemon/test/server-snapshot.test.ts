@@ -2,10 +2,12 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AdminBot } from '../src/admin/service';
+import { desktopSnapshotSchema, type DesktopSnapshot } from '@vonvon/protocol';
+import type { AdminBot, AdminProject } from '../src/admin/service';
 import type { DesktopServiceStatus } from '../src/host/service';
 import { createSnapshotStore, type SnapshotStore } from '../src/server/snapshot';
 import { environmentRpc } from '../src/server/rpc/environment';
+import { commandRpc } from '../src/server/rpc/command';
 import { writeServiceActionRecord, writeServiceSkipped, type ServiceActionRecord } from '../src/service/action-report';
 
 vi.mock('../src/agent', () => ({ createBackend: () => ({ doctor: async () => ({ ok: false, version: null, depState: 'not-installed' }) }) }));
@@ -17,6 +19,33 @@ const noManager = async (): Promise<DesktopServiceStatus> => ({ supported: false
 const bot: AdminBot = { appId: 'cli_test', name: 'test', tenant: 'feishu', active: false, current: true, running: false, completionReminder: { mode: 'failures', longTaskMinutes: 3 } };
 
 describe('snapshot commit queue', () => {
+  it('publishes external project enable changes even when attention remains unchanged, preserving older providers', async () => {
+    let enabled: boolean | undefined = true;
+    const project: AdminProject = {name: 'attention', chatId: 'oc_attention', cwd: '/tmp/attention', blank: false,
+      kind: 'smart', origin: 'created', noMention: false, mode: 'full', guestMode: 'full', network: false,
+      backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1};
+    const diagnostics = {notReplied: [], deniedScopes: [], attention: [{groupId: project.chatId,
+      main: {mode: 'focus' as const, intervalMs: 60_000}, focusedTopics: 2, watchedTopics: 1}]};
+    const frames: DesktopSnapshot[] = [];
+    const store = await createSnapshotStore({
+      service: {listBots: async () => [{...bot, active: true, running: true, connection: 'connected'}],
+        listProjects: async () => [{...project, ...(enabled === undefined ? {} : {enabled})}]},
+      jobs: () => [], readTools: async () => [], readService: noManager,
+      publish: state => {frames.push(desktopSnapshotSchema.parse(state));},
+      diagnostics: {view: () => diagnostics, retain: () => {}},
+    });
+    stores.push(store);
+    expect(desktopSnapshotSchema.parse(store.current()).memberships[0]?.enabled).toBe(true);
+    for (const value of [false, true]) {enabled = value; await store.rebuild();}
+    expect(frames.map(frame => frame.memberships[0]?.enabled)).toEqual([false, true]);
+    expect(frames.map(frame => frame.revision)).toEqual([2, 3]);
+    for (const frame of frames) expect(frame.agents[0]?.diagnostics).toEqual(diagnostics);
+    // An older provider may omit the new field; neither projection nor schema invents a value.
+    enabled = undefined;
+    await store.rebuild();
+    expect(desktopSnapshotSchema.parse(store.current()).memberships[0]).not.toHaveProperty('enabled');
+  });
+
   it('starts at one without an event and publishes before a matching writer reply', async () => {
     let enabled = false;
     let probes = 0;
@@ -55,6 +84,25 @@ describe('snapshot commit queue', () => {
     stores.push(store);
     expect(store.current().tools[0]).toMatchObject({ tool: 'codex', version: 'codex-cli 0.120.0', compatibility: { status: 'tooOld', minimum: '0.156.1' } });
     expect(store.current().tools[1]).toMatchObject({ tool: 'claude', installation: 'missing' });
+  });
+
+  it('keeps probe errors visible and retries only on an explicit tool refresh', async () => {
+    const failure = new Error('此前 Codex 子进程清理未确认，请先退出并检查');
+    const probe = vi.fn().mockImplementationOnce(() => {throw failure;}).mockResolvedValue({
+      installation: 'installed', authentication: 'signedIn', version: 'codex-cli 0.162.1', executable: '/bin/codex',
+    });
+    const service = {listBots: async () => [], listProjects: async () => [], codexSetup: probe};
+    const store = await createSnapshotStore({service, jobs: () => [], readService: noManager, publish: () => {}});
+    stores.push(store);
+    expect(store.current().tools[0]).toMatchObject({installation: 'unknown', authentication: 'unknown', message: failure.message});
+    const options = {service: service as never, jobs: {} as never, peer: {} as never, directory: {} as never, snapshots: store, port: 0};
+    await commandRpc(options, {type: 'refresh'});
+    expect(probe).toHaveBeenCalledTimes(1);
+    const outcome = await commandRpc(options, {type: 'refresh', tools: true});
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(store.current().tools[0]).toMatchObject({installation: 'installed', authentication: 'signedIn', version: 'codex-cli 0.162.1'});
+    expect(store.current().tools[0]).not.toHaveProperty('message');
+    expect(outcome.kind).toBe('mutation');
   });
 
   it('reads tools once more when asked during a read, so a fresh login is not lost', async () => {

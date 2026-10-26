@@ -17,7 +17,10 @@ afterAll(async () => {
 });
 const transport = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock('../src/platform/spawn', async original => ({ ...await original<object>(), spawnProcess: transport.spawn }));
-vi.mock('../src/agent/codex-appserver/locate', () => ({ resolveCodexBin: () => '/fixture/no-provider' }));
+vi.mock('../src/agent/codex-appserver/locate', () => ({
+  resolveCodexBin: () => '/fixture/no-provider',
+  codexVersionAsync: async () => 'codex-cli 0.163.0',
+}));
 const fake = vi.hoisted(() => ({
   project: vi.fn(),
   refreshRoles: vi.fn(async () => {}),
@@ -45,13 +48,10 @@ vi.mock('../src/project/registry', async (original) => ({
   splitTierChats: async () => new Map(),
 }));
 // Ownership assertions use exact fake-clock ticks; personality file I/O has its own tests.
-vi.mock('../src/bot/group-profile', async original => ({
+vi.mock('../src/bot/context-assembly', async original => ({
   ...await original<object>(),
-  readGroupPersonality: async () => ({
-    bot: { persona: '', memory: '' },
-    group: { persona: '', memory: '', inheritPersona: true, inheritMemory: true },
-    persona: '', memory: '', instructions: '', version: 'fixture-empty',
-  }),
+  loadContextSources: async () => ({ place: { kind: 'comment' }, botName: 'fixture', soul: '', role: { identity: '', notes: '', headed: false }, supplement: '', failed: {} }),
+  planTurnUpdate: async () => ({ context: { versions: {}, nonce: 'fixture' } }),
 }));
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),

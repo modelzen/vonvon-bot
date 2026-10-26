@@ -1,3 +1,4 @@
+import { codexAccountMetadata } from './login';
 import { log } from '../../core/logger';
 import type {
   AgentBackend,
@@ -27,47 +28,35 @@ import { isGoalTerminal, SessionInUseError } from '../types';
 import { resolveSessionProfile, type SessionProfileCapabilities } from '../session-profile';
 import { AppServerClient } from './app-server-client';
 import { admitCodexWorkspaceLayout } from './workspace-admission';
-import { codexFilesystem, codexWorkspaceRoots, verifyCodexWorkspaceEcho } from './workspace-policy';
+import { codexFilesystem, codexInstallRoot, type CodexInstallRoot, codexWorkspaceRoots, verifyCodexWorkspaceEcho } from './workspace-policy';
 import { NATIVE_MEMORY_OFF } from './memory-config';
 import { connectGated, refillWarmPool, takeWarmClient, utilityRequest } from './client-pool';
 import { mapChildNotification, mapNotification, readSubAgentActivity, readSubagentSpawn, type Child } from './event-map';
 import { runCodexJudge } from './judge-process';
-import { CODEX_FULL_ONLY, CodexFullOnlyError, codexConfinesReads } from './full-only';
-import { codexVersionAsync, resolveCodexBin } from './locate';
+import { CodexFullOnlyError, codexConfinesReads, codexFullOnlyReason, codexTierUnavailable } from './full-only';
+import { cachedCodexVersion, codexVersionAsync, resolveCodexBin } from './locate';
 import type { ServerNotification, Thread, ThreadItem, Turn, TurnStartResponse } from './protocol';
 
 const APPROVAL_POLICY = 'never';
 
-/**
- * Map a permission tier to the thread/start|resume params that enforce it.
- * 'full' (or unset) keeps the historical danger-full-access. 'qa'/'write' send a
- * custom codex permissions profile ("feishu") whose filesystem rules confine
- * BOTH reads and writes to the workspace roots (cwd). Only macOS enforces that,
- * with Seatbelt (verified: thread/start reports activePermissionProfile
- * .id="feishu", reads outside cwd like ~/.ssh are denied).
- * `:minimal` keeps the read access codex needs to run commands at all.
- *
- * fail-closed: on Linux codex's sandbox only ro-binds the disk (writes blocked,
- * READS still open — Landlock read-restriction is unimplemented) AND it does NOT
- * refuse, so a privacy tier there would silently run unconfined. We must NEVER
- * do that — so 'qa'/'write' throw {@link CodexFullOnlyError} BEFORE spawn on any
- * platform but macOS (a clear run error, never a downgrade). Group turns are
- * refused earlier, with a reply (handle-message's refuseFullOnly).
- */
+/** Build the native profile only for tiers verified on this host and version. */
 export function sandboxParams(
   mode: PermissionMode | undefined,
   network: boolean | undefined,
   platform: NodeJS.Platform = process.platform,
   roots?: ReturnType<typeof codexWorkspaceRoots>,
+  version: string | null = null,
+  installRoot?: CodexInstallRoot,
 ): Record<string, unknown> {
   if ((mode ?? 'full') === 'full') return { sandbox: 'danger-full-access' };
-  if (!codexConfinesReads(platform)) throw new CodexFullOnlyError();
+  const unavailable = codexTierUnavailable(mode ?? 'full', platform, version);
+  if (unavailable) throw new CodexFullOnlyError(unavailable);
   return {
     config: {
       default_permissions: 'feishu',
       permissions: {
         feishu: {
-          filesystem: codexFilesystem(roots ?? [], mode === 'write' ? 'write' : 'qa'),
+          filesystem: codexFilesystem(roots ?? [], mode === 'write' ? 'write' : 'qa', installRoot, platform, network),
           network: { enabled: Boolean(network) },
         },
       },
@@ -76,10 +65,12 @@ export function sandboxParams(
 }
 
 /** Rebuilt for every start/resume; never persists workspace trust to user config. */
-export function codexSessionParams(opts: StartThreadOptions): Record<string, unknown> {
+export function codexSessionParams(opts: StartThreadOptions, version: string | null = null): Record<string, unknown> {
   const profile = resolveSessionProfile(opts.profile, { additionalRoots: true });
   const roots = codexWorkspaceRoots(opts);
-  const sandbox = sandboxParams(opts.mode, opts.network, process.platform, roots);
+  const bin = resolveCodexBin();
+  const installRoot = bin && opts.mode !== 'full' ? codexInstallRoot(bin, roots) : undefined;
+  const sandbox = sandboxParams(opts.mode, opts.network, process.platform, roots, version, installRoot);
   return {
     ...sandbox,
     cwd: opts.cwd,
@@ -742,7 +733,9 @@ export class CodexAppServerBackend implements AgentBackend {
   constructor(private readonly titleDeps: CodexTitleBackendDeps = DEFAULT_TITLE_DEPS) {}
 
   fullAccessOnly(): string | undefined {
-    return codexConfinesReads() ? undefined : CODEX_FULL_ONLY;
+    const bin = resolveCodexBin();
+    const version = bin ? cachedCodexVersion(bin) : undefined;
+    return version === undefined || codexConfinesReads(process.platform, version) ? undefined : codexFullOnlyReason(version);
   }
 
   async isAvailable(): Promise<boolean> {
@@ -766,6 +759,16 @@ export class CodexAppServerBackend implements AgentBackend {
       return { ok: false, version: null, location: bin, hint: `codex --version 执行失败（${bin}）` };
     }
     return { ok: true, version, location: bin };
+  }
+
+  async loginStatus(opts?: { refresh?: boolean }): Promise<import('../types').BackendLogin> {
+    try {
+      const account = await utilityRequest<{ requiresOpenaiAuth: boolean; account: unknown }>('account/read', { refreshToken: opts?.refresh === true });
+      if (account.requiresOpenaiAuth === false) return { state: 'notRequired', message: '当前 Provider 不需要 OpenAI 登录。', account: {kind: 'api', apiProvider: 'custom'} };
+      if (account.requiresOpenaiAuth === true && account.account && typeof account.account === 'object') return { state: 'signedIn', message: '已登录。', account: codexAccountMetadata(account.account) ?? {kind: 'unknown'} };
+      if (account.requiresOpenaiAuth === true && account.account === null) return { state: 'signedOut', message: '尚未登录。' };
+    } catch { /* preserve an unknown state; callers must not treat it as signed in */ }
+    return { state: 'unknown', message: '无法确认 Codex 登录状态。' };
   }
 
   async listModels(): Promise<ModelInfo[]> {
@@ -897,7 +900,9 @@ export class CodexAppServerBackend implements AgentBackend {
     // Auto-compaction is codex's own default and stays on (s12): no
     // model_auto_compact_token_limit override, and newer codex caps any limit at
     // 90% of the window anyway.
-    const params = codexSessionParams(opts);
+    const bin = resolveCodexBin();
+    const version = bin ? await codexVersionAsync(bin) : null;
+    const params = codexSessionParams(opts, version);
     await admitCodexWorkspaceLayout(opts);
     const client = await this.spawn(opts.cwd);
     let res: { thread: { id: string } };
@@ -912,7 +917,9 @@ export class CodexAppServerBackend implements AgentBackend {
   }
 
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {
-    const params = codexSessionParams(opts);
+    const bin = resolveCodexBin();
+    const version = bin ? await codexVersionAsync(bin) : null;
+    const params = codexSessionParams(opts, version);
     await admitCodexWorkspaceLayout(opts);
     const client = await this.spawn(opts.cwd);
     let res: { thread: { id: string; turns?: Turn[] } };

@@ -85,6 +85,28 @@ describe('buildHistoryCard', () => {
     expect(json).toContain('还没有可显示的历史');
   });
 
+  it.each(['pending', 'failed'] as const)('does not promise a restored session in a desktop %s card', status => {
+    const card = buildHistoryCard({
+      cwd: '/x', backendName: 'Codex', source: 'desktop', status, error: '原会话已被另一个话题使用。',
+      history: { turns: [turn({ userText: 'Previous question', assistantText: 'Previous answer' })], totalTurns: 1 },
+    });
+    const json = JSON.stringify(card);
+    expect(json).toContain('桌面端操作');
+    expect(json).toContain(status === 'pending' ? '正在恢复历史会话' : '未恢复历史会话');
+    expect(json).not.toMatch(/会话已恢复|已恢复历史会话|直接发消息即可继续/);
+    expect(json).not.toContain('Previous answer');
+    if (status === 'failed') expect(json).toContain('原会话已被另一个话题使用。');
+  });
+
+  it('identifies a completed desktop restore while keeping normal history cards unchanged', () => {
+    const state = { cwd: '/x', backendName: 'Codex', history: { turns: [turn({ userText: 'Previous question', assistantText: 'Previous answer' })], totalTurns: 1 } };
+    const desktop = JSON.stringify(buildHistoryCard({ ...state, source: 'desktop', status: 'restored' }));
+    expect(desktop).toContain('桌面端操作');
+    expect(desktop).toContain('会话已恢复');
+    expect(desktop).toContain('Previous answer');
+    expect(JSON.stringify(buildHistoryCard(state))).not.toContain('桌面端操作');
+  });
+
   it("names the group's own backend: a Claude group never reads Codex", () => {
     const turns = [turn({ userText: '记住暗号', assistantText: '记住了。' })];
     const card = buildHistoryCard({ cwd: '/x', backendName: 'Claude', history: { turns, totalTurns: 4 } });

@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as wait } from 'node:timers/promises';
 import { fixtureNode } from './fixture-node';
 import { requestSchema, responseSchema } from '@vonvon/protocol';
 import { fakeService, socketClient, startFixture } from './server-fixture';
 
 const processTestTimeout = process.platform === 'win32' ? 90_000 : undefined;
-const readinessTimeout = process.platform === 'win32' ? 15_000 : 2_000;
 const requestTimeout = process.platform === 'win32' ? 20_000 : 3_000;
 
 async function writeTool(directory: string, name: string, script: string) {
@@ -68,20 +68,41 @@ it('serves browser daemon branches and keeps local URL and shell actions unsuppo
   } finally { await fixture.close(); }
 });
 
-it('holds the real API drain until a login child exits after stop intent', async () => {
+it('holds the real API drain until a login child exits after stop intent', async ({ signal, onTestFinished }) => {
   const dir = await mkdtemp(join(tmpdir(), 'vonvon-browser-drain-'));
-  const nodePath = await fixtureNode(dir);
   const release = join(dir, 'release');
   const started = join(dir, 'started');
-  await writeTool(dir, 'lark-cli', `#!/usr/bin/env node\nconst fs=require('node:fs');fs.writeFileSync(${JSON.stringify(started)},'started');const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(t);process.exit(0)}},20);\n`);
   let fixture: Awaited<ReturnType<typeof startFixture>> | undefined;
+  let starting: ReturnType<typeof startFixture> | undefined;
+  let cleaning: Promise<void> | undefined;
+  const cleanup = () => cleaning ??= (async () => {
+    await writeFile(release, 'go');
+    await (fixture ?? await starting?.catch(() => undefined))?.close();
+    await rm(dir, { recursive: true, force: true });
+  })();
+  // A timed-out test's body is not awaited; the hook must await the same cleanup.
+  onTestFinished(cleanup);
   try {
-    fixture = await startFixture(fakeService(), { home: dir, getDataRoot: () => dir, resolveCodex: () => null, nodePath, path: dir, fetchLatest: async () => null });
+    const nodePath = await fixtureNode(dir);
+    await writeTool(dir, 'lark-cli', `#!/usr/bin/env node\nconst fs=require('node:fs');fs.writeFileSync(${JSON.stringify(started)},'started');const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(t);process.exit(0)}},20);\n`);
+    signal.throwIfAborted();
+    fixture = await (starting = startFixture(fakeService(), { home: dir, getDataRoot: () => dir, resolveCodex: () => null, nodePath, path: dir, fetchLatest: async () => null }));
+    signal.throwIfAborted();
     const client = await socketClient(fixture.api.port, fixture.credential, 1, requestTimeout);
     await client.ready();
     const login = await client.call(requestSchema.parse({ type: 'request', id: 'login', method: 'environment', payload: { type: 'startLogin', tool: 'lark-cli' } }));
     expect(login).toMatchObject({ type: 'response', payload: { kind: 'operation', operation: { kind: 'running' } } });
-    await expect.poll(() => import('node:fs/promises').then(fs => fs.readFile(started, 'utf8').catch(() => null)), { timeout: readinessTimeout }).toBe('started');
+    // Wait for the real child to start; this tests drain ordering, not OS startup speed.
+    // The test deadline aborts both the read and timer, then finally releases the child.
+    for (;;) {
+      signal.throwIfAborted();
+      const ready = await readFile(started, { encoding: 'utf8', signal }).catch((error: unknown) => {
+        if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
+        throw error;
+      });
+      if (ready === 'started') break;
+      await wait(20, undefined, { signal });
+    }
     const stop = await client.call(requestSchema.parse({ type: 'request', id: 'stop', method: 'machine', payload: { type: 'stopHost' } }));
     expect(stop).toMatchObject({ type: 'response', payload: { type: 'done' } });
     let drained = false;
@@ -92,11 +113,7 @@ it('holds the real API drain until a login child exits after stop intent', async
     await draining;
     expect(drained).toBe(true);
     await client.close();
-  } finally {
-    await writeFile(release, 'go');
-    await fixture?.close();
-    await rm(dir, { recursive: true, force: true });
-  }
+  } finally { await cleanup(); }
 }, processTestTimeout);
 
 it('sends one valid WebSocket request for every browser protocol union variant', async () => {
@@ -146,7 +163,7 @@ else process.exit(0);
       return { ok: true };
     },
     settings: {
-      read: async () => host,
+      read: async () => ({ ...host, sections: { ...host.sections, judge: { stored: { byProvider: {} }, effective: { byProvider: { 'codex-appserver': { model: 'gpt-6-luna' }, 'claude-agent': { model: 'haiku' }, typesafe: { model: 'jev-latest' } } }, revision: 'judge-token', access: { kind: 'writable' as const }, apply: [] } } }),
       save: async () => ({ kind: 'rejected', fields: [{ field: 'fixture', message: 'fixture' }] }),
       act: async () => ({ kind: 'rejected', fields: [{ field: 'fixture', message: 'fixture' }] }),
       models: async query => ({ backend: query.backend, models: [], state: 'unavailable', source: 'backend-provided', observedAt: new Date().toISOString(), titleEfforts: [] }),

@@ -4,8 +4,8 @@ import type {AdminReply, AdminSetupStatus, AgentId, Job, JobId} from '@vonvon/pr
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
 import {
-  GRANT_POLL_MS, GRANT_ROW_POLL_MS, GrantStep, PUBLISH_NOTE, ScopeGrantRow, grantView, jobToCancel, pollEvery,
-  registeredAgentId, scopesSettled, watchScopeStatus, withRegisteredAgent, type ScopeRead,
+  GRANT_POLL_MS, GRANT_ROW_POLL_MS, GrantStep, PUBLISH_NOTE, ScopeGrantRow, grantStepView, grantView, jobToCancel, pollEvery,
+  connectionNeedsAttention, registeredAgentId, scopesSettled, watchScopeStatus, withRegisteredAgent, type ScopeRead,
 } from '../src/setup/GrantStep';
 import {JOIN_SCOPE_WARNING} from '@vonvon/protocol';
 
@@ -32,6 +32,20 @@ it('shows the missing count, then 权限已开通, with the publish note only af
   const granted = grantView({status: status({missingRequired: [], missingJoinScopes: []})}, true);
   expect(granted).toMatchObject({status: '权限已开通', tone: 'success', done: true, grantUrl});
   expect(granted.note).toBeUndefined();
+});
+
+it('never lets a failed latest registration read look healthy or ready, while settings retain their last good grant link', () => {
+  const read = {status: status({missingRequired: [], missingJoinScopes: []}), problem: '连接中断，请重试。'};
+  expect(grantStepView(read, true)).toEqual({status: '检测失败', tone: 'warning', done: false, detail: read.problem});
+  expect(grantView(read, false)).toMatchObject({done: true, grantUrl});
+  expect(grantStepView({status: read.status}, true)).toMatchObject({status: '权限已开通', done: true});
+});
+
+it('keeps unknown permissions and the optional join-scope warning visible in the registration step', () => {
+  expect(grantStepView({status: status({})}, false)).toMatchObject({status: '无法确认', done: false, grantUrl});
+  const read = {status: status({missingRequired: [], missingJoinScopes: ['im:chat:readonly']})};
+  expect(grantStepView(read, false)).toMatchObject({done: true, warnings: [JOIN_SCOPE_WARNING], grantUrl});
+  expect(scopesSettled(read.status)).toBe(false);
 });
 
 it('polls every 5 seconds until the read says stop, and stops when closed', async () => {
@@ -161,16 +175,44 @@ it('stops reading when the dialog closes and drops the answer of a read still in
   expect(onRead).not.toHaveBeenCalled();
 });
 
+it('rechecks immediately when a watcher restarts and ignores the older request that finishes later', async () => {
+  vi.useFakeTimers();
+  let resolvePrevious: (reply: AdminReply) => void = () => {};
+  const granted = status({missingRequired: [], missingJoinScopes: []});
+  const admin = vi.fn<() => Promise<AdminReply>>()
+    .mockRejectedValueOnce(new Error('暂时无法读取'))
+    .mockImplementationOnce(() => new Promise(resolve => { resolvePrevious = resolve; }))
+    .mockResolvedValue({kind: 'setupStatus', status: granted} as AdminReply);
+  const seen = reads();
+  const stop = watchScopeStatus({admin}, agentId, GRANT_POLL_MS, seen.onRead);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(grantStepView(seen.latest(), false).done).toBe(false);
+  await vi.advanceTimersByTimeAsync(GRANT_POLL_MS);
+  expect(admin).toHaveBeenCalledTimes(2);
+  // Manual recheck changes the hook's retry key: cleanup then a new immediate watcher.
+  stop();
+  const stopRecheck = watchScopeStatus({admin}, agentId, GRANT_POLL_MS, seen.onRead);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(admin).toHaveBeenCalledTimes(3);
+  expect(seen.latest()).toEqual({status: granted});
+  resolvePrevious({kind: 'setupStatus', status: status({missingRequired: ['im:resource']})} as AdminReply);
+  await vi.advanceTimersByTimeAsync(2 * GRANT_POLL_MS);
+  expect(seen.latest()).toEqual({status: granted});
+  expect(admin).toHaveBeenCalledTimes(3);
+  stopRecheck();
+});
+
 const client = createClient({isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {}});
 const render = (node: React.ReactNode) => renderToStaticMarkup(<ClientProvider client={client}>{node}</ClientProvider>);
 
-it('renders the grant step with both ways out before the first read', () => {
-  const html = render(<GrantStep agentId={agentId} onOpenChecklist={() => {}} onDone={() => {}}/>);
-  expect(html).toContain('Bot 已注册');
-  expect(html).toContain('第 2 步 · 开权限');
+it('renders compact grant content and leaves navigation to the registration dialog', () => {
+  const html = render(<GrantStep agentId={agentId}/>);
+  expect(html).toContain('开通飞书权限');
+  expect(html).toContain('创建版本并发布');
   expect(html).toContain('正在检测…');
-  expect(html).toContain('去首次运行清单');
-  expect(html).toContain('完成');
+  expect(html).not.toContain('查看连接与设置');
+  expect(html).not.toContain('稍后配置');
+  expect(html).not.toContain('检查连接');
 });
 
 it('renders the Bot 设置 grant row disabled until the status arrives', () => {
@@ -178,4 +220,25 @@ it('renders the Bot 设置 grant row disabled until the status arrives', () => {
   expect(html).toContain('飞书权限');
   expect(html).toContain('data-search-title="飞书权限"');
   expect(html).toMatch(/<button[^>]*disabled=""[^>]*><span>一键开权限<\/span><\/button>/);
+});
+
+const connectedAgent = {id: agentId, name: 'Vonvon', enabled: true, running: true, connection: 'connected' as const, activation: 'active' as const};
+it('expands connection repair for unreadable, missing and partially granted permissions', () => {
+  const granted = status({missingRequired: [], missingJoinScopes: []});
+  expect(connectionNeedsAttention(connectedAgent, {})).toBe(false);
+  expect(connectionNeedsAttention(connectedAgent, {status: granted})).toBe(false);
+  expect(connectionNeedsAttention(connectedAgent, {status: granted, problem: 'timeout'})).toBe(true);
+  expect(connectionNeedsAttention(connectedAgent, {problem: 'offline'})).toBe(true);
+  expect(connectionNeedsAttention(connectedAgent, {status: status({})})).toBe(true);
+  expect(connectionNeedsAttention(connectedAgent, {status: status({missingRequired: ['im:resource']})})).toBe(true);
+  expect(connectionNeedsAttention(connectedAgent, {status: status({missingRequired: [], missingJoinScopes: ['im:chat:readonly']})})).toBe(true);
+});
+it('distinguishes a deliberately disabled Bot from interrupted or pending connections', () => {
+  const granted = {status: status({missingRequired: [], missingJoinScopes: []})};
+  expect(connectionNeedsAttention({...connectedAgent, enabled: false, running: false, connection: 'disconnected'}, granted)).toBe(false);
+  expect(connectionNeedsAttention({...connectedAgent, connection: 'disconnected'}, granted)).toBe(true);
+  expect(connectionNeedsAttention({...connectedAgent, connection: 'reconnecting'}, granted)).toBe(true);
+  expect(connectionNeedsAttention({...connectedAgent, enabled: false}, granted)).toBe(true);
+  expect(connectionNeedsAttention({...connectedAgent, readError: 'cannot read'}, granted)).toBe(true);
+  expect(connectionNeedsAttention({...connectedAgent, activation: 'restartRequired'}, granted)).toBe(true);
 });

@@ -40,7 +40,56 @@ it('shows this machine, and 检查中 for Claude before its first login check', 
   expect(html).toContain('检查中 · 0.3.296');
   expect(html).not.toContain('登录状态无法确认');
   expect(html).toContain('/tmp/vonvon-home');
-  expect(html).toContain('daemon 日志');
+  expect(html).toContain('后台日志');
+  expect(html).toContain(`id="${settingAnchor('daemon 日志')}"`);
+});
+
+it('keeps machine details and logs reachable without reading the log until expanded', () => {
+  const html = render([agent]);
+  expect(html).toMatch(/<details class="diag-runtime"><summary>运行详情/);
+  expect(html).toContain('/tmp/vonvon-home');
+  expect(html).toMatch(new RegExp(`<details[^>]*id="${settingAnchor('daemon 日志')}"[^>]*><summary[^>]*><span>后台日志<\\/span>`));
+  expect(html).not.toContain('daemon 日志内容');
+});
+
+it('keeps detailed Bot diagnostics inside a closed disclosure with a searchable anchor', () => {
+  const html = render([agent]);
+  expect(html).toMatch(new RegExp(`<details id="${settingAnchor(diagnosticsSection(agent.id))}"[^>]*><summary`));
+  expect(html).toContain('查看 值班助手 的诊断');
+  expect(html).toContain('详细诊断');
+  expect(html).toContain('最近没回的消息');
+  expect(html).not.toContain('飞书设置完成 · 权限完整');
+});
+
+it('shows unknown tool and Bot states as unknown, not installed or healthy', () => {
+  const uncertain = {...snapshot([{...agent, readError: '配置暂时读不到'}]), tools: [
+    {tool: 'codex', installation: 'unknown', authentication: 'unknown'},
+    {tool: 'claude', installation: 'unknown', authentication: 'unknown'},
+  ] as ToolState[]};
+  const html = renderToStaticMarkup(<ClientProvider client={client}>
+    <DiagnosticsPanel snapshot={uncertain} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onOpenSetup={() => {}} onOpenEnvironment={() => {}} onOpenSecrets={() => {}} onNotice={() => {}}/>
+  </ClientProvider>);
+  expect(html).toContain('配置暂时读不到');
+  expect(html).toContain('无法确认');
+  expect(html).not.toContain('未安装');
+  expect(html).not.toContain('飞书设置完成 · 权限完整');
+});
+
+it('shows a stopped Bot in a neutral state but keeps a configuration read error visible', () => {
+  const stopped = render([{...agent, enabled: false, running: false, connection: 'disconnected'}]);
+  expect(stopped).toContain('已停用，诊断记录仍可查看');
+  expect(stopped).toContain('已停用');
+  const unreadable = render([{...agent, enabled: false, running: false, connection: 'disconnected', readError: '配置文件损坏'}]);
+  expect(unreadable).toContain('配置文件损坏');
+  expect(unreadable).toContain('读取失败');
+  expect(unreadable).not.toContain('已停用，诊断记录仍可查看');
+});
+
+it('keeps a paused Bot alert visible above its collapsed diagnostics', () => {
+  const html = render([{...agent, running: false, paused: {since: now, crashes: 3}}]);
+  expect(html.indexOf('role="alert"')).toBeLessThan(html.indexOf(`id="${settingAnchor(diagnosticsSection(agent.id))}"`));
+  expect(html).toContain('恢复运行');
+  expect(html).toContain('已暂停');
 });
 
 it('lists a bot\'s not-replied messages newest first, with the group, place, sender, count and next step', () => {
@@ -49,7 +98,7 @@ it('lists a bot\'s not-replied messages newest first, with the group, place, sen
     record({groupId: 'oc_unknown_9f8e7d', reason: 'unbound'}),
   ]}}]);
   expect(html).toContain(`id="${settingAnchor(diagnosticsSection(agent.id))}"`);
-  expect(html).toContain('11 条没回');
+  expect(html).toContain('11 条未回复记录');
   expect(html).toContain('Claude 没登录或登录过期了');
   expect(html).toContain('10 次');
   expect(html).toContain('发布群 · 话题 · 某同事 · 消息尾号 a1b2c3');
@@ -64,16 +113,16 @@ it('lists a group\'s queued messages a restart dropped as one record with their 
   expect(html).toContain('重启或停止时这条还在排队，没处理');
   expect(html).toContain('3 次');
   expect(html).toContain('已在原处回了一句请重发。');
-  expect(html).toContain('3 条没回');
+  expect(html).toContain('3 条未回复记录');
   expect(render([{...agent, diagnostics: {deniedScopes: [], notReplied: [record({reason: 'restarted', detail: '最新那条撤回了'})]}}]))
     .toContain('在原处回一句请重发没成功（最新那条撤回了），请告诉发消息的人重发。');
 });
 
-it('gives the full-only fix command, with --bot only when the host has several bots', () => {
+it('offers another tier or a Codex upgrade, with --bot only when the host has several bots', () => {
   const refused = {...agent, diagnostics: {deniedScopes: [], notReplied: [record({reason: 'tier-unavailable', backend: 'codex'})]}};
   const one = render([refused]);
-  expect(one).toContain('Linux 上的 Codex 只能用完全访问，这个群是只读或读写档，这一轮没开始');
-  expect(one).toContain('在群内设置里把「权限档」改成「完全访问」，或者运行 vonvon settings set --group oc_bound_group permission.mode=full。');
+  expect(one).toContain('这个群的权限档位在当前 Codex 环境不可用，这一轮没开始');
+  expect(one).toContain('在群设置里换一档，或者升级 Codex。也可以运行 vonvon settings set --group oc_bound_group permission.mode=full。');
   expect(one).not.toContain('guestMode');
   const two = render([refused, {...agent, id: 'cli_other' as Agent['id'], name: '另一个'}]);
   expect(two).toContain('vonvon settings set --bot cli_diag --group oc_bound_group permission.mode=full');
@@ -105,9 +154,9 @@ it('shows a red bar per paused bot that starts it alone again, and the paused da
 
 it('says what the list holds when a bot has nothing', () => {
   const html = render([agent]);
-  expect(html).toContain('最近没有没回的消息');
-  expect(html).toContain('daemon 重启后清空');
-  expect(html).not.toContain('条没回');
+  expect(html).toContain('暂无未回复记录');
+  expect(html).toContain('重启后台服务后清空');
+  expect(html).not.toContain('条未回复记录');
 });
 
 it('merges the console\'s missing scopes with the ones Feishu refused at runtime', () => {
@@ -158,7 +207,7 @@ it('lists the groups an older version put in a wrong directory, only when there 
   expect(html).toContain('「发布群」用的是某个 Bot 自己的目录');
   expect(html).toContain('「点」在 Vonvon 的数据目录里');
   expect(html).toContain('「家」用的是 Vonvon 数据目录的上级文件夹');
-  expect(html).toContain('点「更换目录」');
+  expect(html).toContain('请在项目页的「工作区」中更换目录。原文件不会自动迁移。');
   expect(render([agent])).not.toContain('群目录');
 });
 

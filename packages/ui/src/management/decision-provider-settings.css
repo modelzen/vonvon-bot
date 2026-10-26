@@ -1,0 +1,22 @@
+/* A shared default picker and a separate Jev credential card. */
+.today-window .settings-content-page > .page-stack.secrets-page {gap:12px;}
+.today-window .secrets-page > .today-page-heading {position:sticky;top:0;z-index:5;display:flex;flex-direction:column;align-items:flex-start;background:var(--color-canvas);padding:8px 0 12px;}
+.secrets-page .ss-section__header {min-height:28px;align-items:center;margin-bottom:6px;}
+.secrets-page .ss-section__action .ui-icon-button {width:28px;height:28px;min-height:28px;position:relative;}
+.secrets-page .ss-section__action .ui-icon-button::after {content:'';position:absolute;inset:-6px;}
+.secrets-page .decision-model-editor {display:grid;gap:12px;min-width:0;}
+.secrets-page .decision-model-editor > .ss-section > .ss-group {border:0;border-radius:0;box-shadow:none;background:transparent;overflow:visible;display:grid;gap:16px;}
+.secrets-page .decision-model-editor > .ss-section > .ss-group > .ss-section {border:0;margin:0;}
+.secrets-page .decision-model-editor[data-writable=true] > .ss-section > .ss-section__footer {display:none;}
+.secrets-page .decision-uses-disclosure {border-top:1px solid var(--color-separator);padding:0 16px;font-size:12px;}
+.secrets-page .decision-uses-disclosure > summary {cursor:pointer;min-height:44px;display:flex;align-items:center;justify-content:space-between;gap:16px;list-style:none;}
+.secrets-page .decision-uses-disclosure > summary::-webkit-details-marker {display:none;}
+.secrets-page .decision-uses-disclosure > summary:focus-visible {outline:2px solid var(--color-accent);outline-offset:2px;border-radius:4px;}
+.secrets-page .decision-uses-count {display:flex;align-items:center;gap:10px;color:var(--color-text-secondary);font-size:11px;}
+.secrets-page .decision-uses-chevron {font-size:20px;line-height:1;transform:rotate(90deg);}
+.secrets-page .decision-uses-disclosure[open] .decision-uses-chevron {transform:rotate(-90deg);}
+.secrets-page .decision-uses-content {padding:0 0 14px;line-height:1.65;color:var(--color-text-secondary);overflow-wrap:anywhere;}
+.secrets-page .decision-uses-content .secrets-uses {margin-top:0;gap:6px;}
+
+.secrets-page .decision-key-content .ss-row {min-height:70px;}
+.secrets-page .decision-key-content .setup-step-trailing {flex-wrap:wrap;}

@@ -107,8 +107,26 @@ async function keyUses(): Promise<{ uses: Map<string, SecretUse[]>; unreadBots: 
     const owner = { agentId: bot.appId, agentName: bot.botName || bot.name };
     const botJudge = stored(cfg.preferences?.judge);
     if (botJudge?.kind === 'decision') add(botJudge.provider, owner);
+    else if (botJudge?.kind === 'provider' && botJudge.provider === 'typesafe') add('typesafe', owner);
+    let defaultUnread = false;
     for (const p of projects) {
       const groupJudge = stored(p.judge);
+      const selected = groupJudge ?? botJudge;
+      if (selected?.kind === 'default') {
+        try {
+          const { provider } = resolveJudgeModel(groupBackendId(p), { group: groupJudge, bot: botJudge }, undefined);
+          if (p.chatId && provider && sessionModeOf(p) === 'smart') add(provider, { ...owner, groupId: p.chatId, groupName: p.name, inherited: true });
+        } catch { if (!defaultUnread) { unreadBots++; defaultUnread = true; } }
+        continue;
+      }
+      if (selected?.kind === 'provider') {
+        if (!p.chatId || selected.provider !== 'typesafe') continue;
+        const smart = sessionModeOf(p) === 'smart';
+        if (!smart && !groupJudge) continue;
+        add('typesafe', { ...owner, groupId: p.chatId, groupName: p.name,
+          ...(!groupJudge ? { inherited: true } : {}), ...(smart ? {} : { notSmart: true }) });
+        continue;
+      }
       // without a decision model in either layer the default small model is used, which needs no key
       if (!p.chatId || (groupJudge?.kind !== 'decision' && botJudge?.kind !== 'decision')) continue;
       const { provider, modelSource } = resolveJudgeModel(groupBackendId(p), { group: groupJudge, bot: botJudge }, undefined);

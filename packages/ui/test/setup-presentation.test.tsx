@@ -4,6 +4,7 @@ import type {AdminSetupStatus, Agent, ApplicationService, DesktopSnapshot, Servi
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
 import {SetupChecklist} from '../src/setup/SetupChecklist';
+import {WelcomeSetup} from '../src/setup/WelcomeSetup';
 import {BOT_ADDED_WARNING, JOIN_SCOPE_WARNING, LINGER_OFF_WARNING, RECALL_WARNING, botSteps, linuxSteps, recentServiceFailure, remoteStepsDone, scopeStep, serviceStep, toolSteps} from '@vonvon/protocol';
 
 const agent: Agent = {id: 'cli_setup' as Agent['id'], name: '小助手', enabled: true, running: true, connection: 'connected', activation: 'active'};
@@ -30,7 +31,7 @@ it('gives the reason and the button for each unfinished step', () => {
   expect(steps.connection?.actions).toEqual([{kind: 'enable', label: '启用 Bot'}]);
   expect(steps.event).toMatchObject({done: false, status: '上线后才能确认'});
   expect(steps.publish?.detail).toContain('等管理员审核通过');
-  expect(steps.callback?.actions.map(action => action.label)).toEqual(['打开事件设置', '我已配置']);
+  expect(steps.callback?.actions.map(action => action.label)).toEqual(['打开回调设置', '我已配置']);
   expect(steps.publish?.actions).toEqual([{kind: 'open', label: '打开开发者后台', url: fresh.consoleUrl, target: 'app-console'}]);
   expect(remoteStepsDone(fresh)).toBe(false);
 });
@@ -93,8 +94,34 @@ it('starts a new machine with the tools and the scan step', () => {
   expect(html).toContain('还没有能用的后端');
   expect(html).toContain('第一步');
   expect(html).toContain('扫码建飞书应用');
-  expect(html).toContain('注册 Bot');
-  expect(html).not.toContain('添加 Bot');
+  expect(html).toContain('添加 Bot');
+  expect(html).not.toContain('注册 Bot');
+});
+
+it('starts the welcome with Provider preparation before Bot scanning', () => {
+  const html = renderToStaticMarkup(<ClientProvider client={client}>
+    <WelcomeSetup snapshot={snapshot([])} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}} codexJobs={null}/>
+  </ClientProvider>);
+  expect(html).toContain('先准备一个 Provider');
+  expect(html).toContain('准备 Provider');
+  expect(html).toContain('创建 Bot');
+  expect(html).toContain('连接群');
+  expect(html).not.toContain('扫码创建 Bot');
+  expect(html).toContain('Codex');
+  expect(html).toContain('未安装');
+  expect(html).not.toContain('工具与后台运行');
+  expect(html).not.toContain('首次运行清单');
+});
+
+it('preserves existing Bot Feishu checks while its Provider still needs attention', () => {
+  const html = renderToStaticMarkup(<ClientProvider client={client}>
+    <WelcomeSetup snapshot={snapshot([agent])} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenGroups={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}} codexJobs={null}/>
+  </ClientProvider>);
+  expect(html).toContain('小助手');
+  expect(html).toContain('正在检测…');
+  expect(html).toContain('先准备一个 Provider');
+  expect(html).toContain('企业租户里新权限可能要管理员审核');
+  expect(html).not.toContain('扫码创建 Bot');
 });
 
 it('says 检查中 for Claude until its login is asked, never 无法确认 before the first ask (s19)', () => {
@@ -133,12 +160,12 @@ it('warns about the join-group scope without turning the 权限 step red', () =>
 });
 
 it('names the bot-added event in the events step as a warning only', () => {
-  const ok = byId(botSteps(agent, {...done, event: {state: 'ok', version: '1.0.2', missingOptional: ['im.chat.member.bot.added_v1', 'application.bot.menu_v6']}}));
-  expect(ok.event).toMatchObject({done: true, tone: 'success', items: ['im.chat.member.bot.added_v1', 'application.bot.menu_v6'], warnings: [BOT_ADDED_WARNING]});
+  const ok = byId(botSteps(agent, {...done, event: {state: 'ok', version: '1.0.2', missingOptional: ['im.chat.member.bot.added_v1', 'drive.notice.comment_add_v1']}}));
+  expect(ok.event).toMatchObject({done: true, tone: 'success', items: ['im.chat.member.bot.added_v1', 'drive.notice.comment_add_v1'], warnings: [BOT_ADDED_WARNING]});
   expect(BOT_ADDED_WARNING).toContain('机器人进群');
   const missing = byId(botSteps(agent, {...done, event: {state: 'missing', version: '1.0.0', missingRequired: ['im.message.receive_v1'], missingOptional: ['im.chat.member.bot.added_v1']}}));
   expect(missing.event).toMatchObject({done: false, status: '缺少接收消息事件', warnings: [BOT_ADDED_WARNING]});
-  expect(byId(botSteps(agent, {...done, event: {state: 'ok', version: '1.0.2', missingOptional: ['application.bot.menu_v6']}})).event?.warnings).toBeUndefined();
+  expect(byId(botSteps(agent, {...done, event: {state: 'ok', version: '1.0.2', missingOptional: ['drive.notice.comment_add_v1']}})).event?.warnings).toBeUndefined();
   // s15: an unsubscribed recall event says what the bot then misses, next to bot-added.
   expect(byId(botSteps(agent, {...done, event: {state: 'ok', version: '1.0.2', missingOptional: ['im.chat.member.bot.added_v1', 'im.message.recalled_v1']}})).event?.warnings).toEqual([BOT_ADDED_WARNING, RECALL_WARNING]);
   expect(RECALL_WARNING).toContain('撤回');
@@ -207,23 +234,21 @@ it('keeps a running Linux service done without linger, with a warning, and says 
 });
 
 const sandboxed = (sandbox?: NonNullable<ToolState['sandbox']>) => linuxSteps([tool({tool: 'codex'}), tool({tool: 'claude', ...(sandbox ? {sandbox} : {})})]);
-it('adds the Codex note and the Claude sandbox on Linux, only for tools that are installed', () => {
+it('adds only the Claude sandbox on Linux for installed tools', () => {
   expect(linuxSteps([tool({tool: 'codex', installation: 'missing'}), tool({tool: 'claude', installation: 'missing'})])).toEqual([]);
-  const [codex, claude] = sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'ok'});
-  expect(codex).toMatchObject({id: 'codex-linux', title: 'Codex 的权限档', status: '只能用完全访问', tone: 'neutral', done: true, actions: []});
-  expect(codex?.detail).toContain('vonvon settings set --group <群 id> permission.mode=full');
+  const [claude] = sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'ok'});
   expect(claude).toMatchObject({id: 'claude-sandbox', status: '可以用', tone: 'success', done: true, commands: undefined});
-  expect(linuxSteps([tool({tool: 'codex', installation: 'unknown'})]).map(step => step.id)).toEqual(['codex-linux']);
-  expect(sandboxed()[1]).toMatchObject({status: '无法确认', tone: 'neutral'});
-  expect(sandboxed({bwrap: null, socat: false, userns: 'unchecked'})[1]).toMatchObject({status: '缺 bwrap、socat', tone: 'warning', commands: ['sudo apt install bubblewrap socat']});
-  expect(sandboxed({bwrap: '/usr/bin/bwrap', socat: false, userns: 'ok'})[1]).toMatchObject({status: '缺 socat', commands: ['sudo apt install socat']});
-  const apparmor = sandboxed({bwrap: '/home/u/bin/bwrap', socat: true, userns: 'apparmor'})[1];
+  expect(linuxSteps([tool({tool: 'codex', installation: 'unknown'})])).toEqual([]);
+  expect(sandboxed()[0]).toMatchObject({status: '无法确认', tone: 'neutral'});
+  expect(sandboxed({bwrap: null, socat: false, userns: 'unchecked'})[0]).toMatchObject({status: '缺 bwrap、socat', tone: 'warning', commands: ['sudo apt install bubblewrap socat']});
+  expect(sandboxed({bwrap: '/usr/bin/bwrap', socat: false, userns: 'ok'})[0]).toMatchObject({status: '缺 socat', commands: ['sudo apt install socat']});
+  const apparmor = sandboxed({bwrap: '/home/u/bin/bwrap', socat: true, userns: 'apparmor'})[0];
   expect(apparmor).toMatchObject({status: '被 AppArmor 挡住', tone: 'warning', done: false});
   expect(apparmor?.commands).toContain('profile bwrap /home/u/bin/bwrap flags=(unconfined) {');
   expect(apparmor?.commands?.at(-1)).toBe('sudo apparmor_parser -r /etc/apparmor.d/bwrap');
-  expect(sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'disabled', detail: 'kernel.unprivileged_userns_clone'})[1]).toMatchObject({status: '用户命名空间被关掉了', commands: ['sudo sysctl -w kernel.unprivileged_userns_clone=1']});
-  expect(sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'disabled', detail: 'user.max_user_namespaces'})[1]?.commands).toEqual(['sudo sysctl -w user.max_user_namespaces=15000']);
-  const failed = sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'failed', detail: 'bwrap: setting up uid map: Permission denied'})[1];
+  expect(sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'disabled', detail: 'kernel.unprivileged_userns_clone'})[0]).toMatchObject({status: '用户命名空间被关掉了', commands: ['sudo sysctl -w kernel.unprivileged_userns_clone=1']});
+  expect(sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'disabled', detail: 'user.max_user_namespaces'})[0]?.commands).toEqual(['sudo sysctl -w user.max_user_namespaces=15000']);
+  const failed = sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'failed', detail: 'bwrap: setting up uid map: Permission denied'})[0];
   expect(failed).toMatchObject({status: '沙箱起不来', commands: ['/usr/bin/bwrap --ro-bind / / --dev /dev --unshare-all --die-with-parent true']});
   expect(failed?.detail).toContain('bwrap 试跑失败：bwrap: setting up uid map: Permission denied。');
 });
@@ -255,8 +280,8 @@ it('puts the service step in its own group after the tools', () => {
   expect(other).toContain('1. 后台服务');
   expect(other).not.toContain('LaunchAgent');
   expect(other).not.toContain('<span>打开</span>');
-  expect(other).not.toContain('Linux 上的权限档');
-  expect(html).not.toContain('Linux 上的权限档');
+  expect(other).not.toContain('Linux 上的权限');
+  expect(html).not.toContain('Linux 上的权限');
 });
 
 it('shows the Linux group between the tools and the service, with commands in a block', () => {
@@ -264,10 +289,24 @@ it('shows the Linux group between the tools and the service, with commands in a 
     <SetupChecklist snapshot={{...snapshot([]), tools: [tool({tool: 'claude', sandbox: {bwrap: null, socat: true, userns: 'unchecked'}})], application: {...snapshot([]).application, platform: 'linux', service: service()}}}
       ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}} codexJobs={null}/>
   </ClientProvider>);
-  expect(html.indexOf('后端')).toBeLessThan(html.indexOf('Linux 上的权限档'));
-  expect(html.indexOf('Linux 上的权限档')).toBeLessThan(html.indexOf('后台运行'));
-  expect(html).toContain('1. Claude 的权限档');
+  expect(html.indexOf('后端')).toBeLessThan(html.indexOf('Linux 上的权限'));
+  expect(html.indexOf('Linux 上的权限')).toBeLessThan(html.indexOf('后台运行'));
+  expect(html).not.toContain('Linux 上的权限档');
+  expect(html).toContain('1. Claude 的权限');
   expect(html).toContain('<pre class="setup-step-commands">sudo apt install bubblewrap</pre>');
   expect(html).toContain('systemd 用户服务。退出 SSH 后也要在线，安装时打开 linger。');
   expect(html).not.toContain('Codex 的权限档');
+});
+
+it('shows connection settings without first-use progress after a group is bound', () => {
+  const current = snapshot([agent]);
+  // Losing Provider readiness after binding must not restart first-use onboarding.
+  current.tools = [tool({tool: 'codex', authentication: 'signedOut'})];
+  current.memberships = [{id: 'bound', agentId: agent.id, groupId: 'oc_bound'}] as DesktopSnapshot['memberships'];
+  const html = renderToStaticMarkup(<ClientProvider client={client}>
+    <WelcomeSetup snapshot={current} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenGroups={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}} codexJobs={null}/>
+  </ClientProvider>);
+  expect(html).toContain('飞书连接');
+  expect(html).not.toContain('连接到群聊');
+  expect(html).not.toContain('aria-label="开始使用"');
 });

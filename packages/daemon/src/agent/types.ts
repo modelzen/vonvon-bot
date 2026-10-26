@@ -1,3 +1,4 @@
+import type { BackendAccount } from '@vonvon/protocol';
 import type { AgentToolSpec } from './entry/tools';
 import type { SessionProfile, SessionProfileCapabilities } from './session-profile';
 import { z } from 'zod';
@@ -191,7 +192,7 @@ export function parseAskRequest(raw: unknown): AskRequest {
 /** Normalized stream events, mapped from app-server notifications. */
 export type AgentEvent =
   | { type: 'subagent_start'; id: string; parentId?: string; name: string; task: string; stoppable: boolean }
-  | { type: 'subagent_step'; id: string; stepId: string; title: string; status: 'running' | 'done' | 'failed' }
+  | { type: 'subagent_step'; id: string; stepId: string; title: string; status: 'running' | 'done' | 'failed'; kind?: ToolKind; detail?: string }
   | { type: 'subagent_status'; id: string; status: 'running' | 'completed' | 'failed' | 'stopped'; result?: string }
   | { type: 'system'; threadId: string }
   | { type: 'turn_started'; turnId: string }
@@ -371,7 +372,11 @@ export interface AgentEntry {
   revoke(reason: 'closed' | 'start-failed' | 'dead' | 'shutdown'): void;
 }
 
+/** Claude restricted tiers deny these paths and reopen only their allowed subtrees. */
+export interface ReadScope { deny: string[]; allow: string[] }
+
 export interface StartThreadOptions {
+  readScope?: ReadScope;
   entry?: AgentEntry;
   profile?: SessionProfile;
   cwd: string;
@@ -382,6 +387,8 @@ export interface StartThreadOptions {
   /** let the sandboxed agent's shell reach the network (qa/write only; full is
    * always networked). Default false. */
   network?: boolean;
+  /** Validated provider-native group permission settings; only Claude consumes them. */
+  native?: Readonly<Record<string, unknown>>;
 }
 
 export interface ResumeThreadOptions extends StartThreadOptions {
@@ -534,7 +541,7 @@ export interface AccountUsageBundle {
  */
 export type BackendDepState = 'installed' | 'not-installed' | 'external-missing';
 
-export type BackendLogin = { state: 'signedIn' | 'signedOut' | 'unknown'; message: string };
+export type BackendLogin = { state: 'signedIn' | 'signedOut' | 'notRequired' | 'unknown'; message: string; account?: BackendAccount };
 
 /** A backend's environment probe（doctor / onboarding / DM 体检卡共用）。 */
 export interface BackendProbe {

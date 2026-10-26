@@ -1,10 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { botPaths } from './paths';
+import { readCardCallbackVerifiedAt } from './card-callback';
 
-/** What the first-run checklist cannot read from Feishu, kept per bot so it survives
- * a credential refresh. Today only the card callback (no read API exists). */
+/** The owner's manual checklist confirmation. Real callback evidence is stored separately by the Bot receiver. */
 export type SetupProgress = { cardCallbackConfirmed: boolean };
+
+export async function readCardCallbackStatus(appId: string): Promise<{ confirmed: boolean; verifiedAt?: number }> {
+  const [manual, verifiedAt] = await Promise.all([readSetupProgress(appId), readCardCallbackVerifiedAt(appId)]);
+  return { confirmed: manual.cardCallbackConfirmed || verifiedAt !== undefined, ...(verifiedAt !== undefined ? { verifiedAt } : {}) };
+}
 
 export async function readSetupProgress(appId: string): Promise<SetupProgress> {
   try {

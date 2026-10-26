@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkedProductVersion } from '../../scripts/product-version.mjs';
 import { stageDaemon } from '../../scripts/stage-daemon.mjs';
+import { assertNoBundledClaude } from '../../scripts/desktop-backend-policy.mjs';
 
 const version = await checkedProductVersion();
 const root = dirname(fileURLToPath(import.meta.url));
@@ -34,6 +35,7 @@ if (keys.length === 2) {
 }
 await access(join(ui, 'index.html'));
 await access(join(root, 'assets/tray.png'));
+await access(join(root, 'assets/macos-icon.png'));
 await mkdir(dist, { recursive: true });
 await build({
   absWorkingDir: root,
@@ -57,6 +59,7 @@ await cp(join(dist, 'preload.cjs'), join(stage, 'desktop/preload.cjs'));
 await cp(join(dist, 'update-config.json'), join(stage, 'dist/update-config.json'));
 await cp(ui, join(stage, 'ui'), { recursive: true });
 await cp(join(root, 'assets/tray.png'), join(stage, 'assets/tray.png'));
+await cp(join(root, 'assets/macos-icon.png'), join(stage, 'assets/macos-icon.png'));
 await writeFile(join(stage, 'package.json'), JSON.stringify({
   name: 'vonvon-bot-desktop',
   version,
@@ -79,4 +82,5 @@ await stageDaemon(daemonStage, {
   name: daemonMetadata.name, version, type: 'module', bin: daemonMetadata.bin,
   license: daemonMetadata.license, author: daemonMetadata.author,
   dependencies: daemonMetadata.dependencies,
-});
+}, { compact: true });
+await assertNoBundledClaude(daemonStage);

@@ -21,6 +21,7 @@ import { StreamingImages } from './outbound-images';
 import type { RunCardStream } from './run-card-stream';
 import { buildSubagentSection } from './subagent-section';
 import { processPanel } from './process-panel';
+import { statusSymbol } from './process-status';
 import { buildProcessBody, currentAnswerIndex, processTitle, runElapsedMs } from './run-process';
 import { runCardMeter } from './context-gauge';
 
@@ -262,8 +263,8 @@ function renderRunning(state: RunState, rc: RunCardState): CardElement[] {
   const processBlocks = state.blocks.filter((b, i) => i !== answerIdx && (rc.showTools !== false || b.kind !== 'tool'));
   const process = buildProcessBody(processBlocks, rc.images, PROCESS_COMPONENT_BUDGET - section.components - sectionPanelOverhead(section.elements), true);
   const title = processTitle(state.terminal, runElapsedMs(state));
-  if (process.length) elements.push(processPanel(title, process, true));
-  else if (state.startedAt !== undefined) elements.push(md(`<font color='grey'>${title}</font>`));
+  if (process.length) elements.push(processPanel(title, process, true, { titleColor: false }));
+  else if (state.startedAt !== undefined) elements.push(md(title));
   elements.push(...section.elements);
   const answer = answerIdx >= 0 ? (state.blocks[answerIdx] as Extract<Block, { kind: 'text' }>).content : '';
   if (answer) {
@@ -273,8 +274,8 @@ function renderRunning(state: RunState, rc: RunCardState): CardElement[] {
   // Footer: status (left) + 模型·effort footnote (right) share one row when the
   // 显示模型 pref is on; either alone falls back to a single line.
   const mEl = modelEl(rc);
-  if (rc.askWaiting) elements.push(md(rc.askWaiting));
-  else if (state.awaitingSubagents) elements.push(md(`⏳ 主回合已答完，等 ${state.subagents.filter(row => row.status === 'running').length} 个子 agent 结束`));
+  if (rc.askWaiting) elements.push(md(`${statusSymbol('waiting')} ${rc.askWaiting.replace(/^⏸️?\s*/u, '')}`));
+  else if (state.awaitingSubagents) elements.push(md(`${statusSymbol('waiting')} 主回合已答完，等 ${state.subagents.filter(row => row.status === 'running').length} 个子 agent 结束`));
   else if (state.footer && mEl) elements.push(splitRow(footerStatus(state.footer), mEl));
   else if (state.footer) elements.push(footerStatus(state.footer));
   else if (mEl) elements.push(mEl);
@@ -346,8 +347,8 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
     ? Math.max(10, Math.min(PROCESS_COMPONENT_BUDGET, 170 - fileComponentCount(answerElements))) : PROCESS_COMPONENT_BUDGET;
   const processEls = buildProcessBody(blocks, rc.images, Math.max(10, processBudget - section.components - sectionPanelOverhead(section.elements)));
   const title = processTitle(state.terminal, runElapsedMs(state));
-  if (processEls.length) elements.push(processPanel(title, processEls, false));
-  else if (state.startedAt !== undefined) elements.push(md(`<font color='grey'>${title}</font>`));
+  if (processEls.length) elements.push(processPanel(title, processEls, false, { titleColor: false }));
+  else if (state.startedAt !== undefined) elements.push(md(title));
 
   elements.push(...section.elements);
 
@@ -366,18 +367,18 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
   if (rc.continued) {
     elements.push(noteMd('已接收补充，后续输出见下一张卡片'));
   } else if (state.terminal === 'interrupted') {
-    elements.push(noteMd('_⏹ 已被中断_'));
+    elements.push(noteMd(`${statusSymbol('stopped')} 已被中断`));
   } else if (state.terminal === 'idle_timeout') {
-    elements.push(noteMd(`_⏱ ${idleLabel(state.idleTimeoutSeconds ?? 0)}没有输出，已自动停止_`));
+    elements.push(noteMd(`${statusSymbol('unknown')} ${idleLabel(state.idleTimeoutSeconds ?? 0)}没有输出，已自动停止`));
   } else if (state.terminal === 'error' && state.errorMsg) {
-    elements.push(noteMd(state.errorKind === 'network' ? `🌐 网络失败：${state.errorMsg}` : `⚠️ agent 失败：${state.errorMsg}`));
+    elements.push(noteMd(`${statusSymbol('failed')} ${state.errorKind === 'network' ? '网络失败' : 'agent 失败'}：${state.errorMsg}`));
     const advice = errorAdvice(state.errorKind, rc.retry === 'available' && Boolean(rc.cardKey), rc.backend);
     if (advice) elements.push(noteMd(advice));
   } else if (state.terminal === 'done' && !answer) {
     elements.push(noteMd('_（未返回内容）_'));
   }
   if (rc.retry === 'sent') {
-    elements.push(noteMd('_🔁 已重试，结果见下一张卡片_'));
+    elements.push(noteMd('已重试，结果见下一张卡片'));
   }
 
   for (const line of rc.handoffNotes ?? []) elements.push(greyNote(line));
@@ -481,13 +482,13 @@ export interface QueuedCardState {
 export function buildQueuedCard(qc: QueuedCardState): CardObject {
   if (qc.cancelled) {
     const els: CardElement[] = [...voiceReplyElements(qc.voiceMessages), noteMd(qc.stopped ? '_⏹ bot 停止运行了，这一轮没开始_' : '_⏹ 已取消排队_')];
-    if (qc.dropped) els.push(noteMd(`_⚠️ ${qc.dropped} 条排队消息已丢弃，请重发。_`));
+    if (qc.dropped) els.push(noteMd(`${statusSymbol('failed')} ${qc.dropped} 条排队消息已丢弃，请重发。`));
     return card(els, { summary: qc.stopped ? 'bot 停止运行了' : '已取消排队' });
   }
   if (qc.started) return card([noteMd('_🎯 排队结束，目标已开始执行_')], { summary: '已开始执行' });
   const els: CardElement[] = [
     ...voiceReplyElements(qc.voiceMessages),
-    md(`⏳ 排队中（第 **${qc.position ?? 1}** 位）`),
+    md(`${statusSymbol('waiting')} 排队中（第 **${qc.position ?? 1}** 位）`),
     noteMd('全局并发池已满（所有群/话题共享），轮到后自动开始。'),
   ];
   if (qc.completionReminder === 'requested') els.push(noteMd('_🔔 本轮结束后会提醒发起人_'));
@@ -516,7 +517,7 @@ function footerStatus(status: Exclude<FooterStatus, null>): CardElement {
   const item = FOOTER_STATUS[status];
   return {
     tag: 'markdown',
-    content: `<font color='grey'>${item.text}</font>`,
+    content: [`<font color='grey'>${item.text}</font>`, statusSymbol(status === 'retrying' ? 'waiting' : 'running')].filter(Boolean).join(' '),
     text_size: 'notation',
     icon: { tag: 'standard_icon', token: item.icon, color: 'grey' },
   };

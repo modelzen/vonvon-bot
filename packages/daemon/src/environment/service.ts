@@ -5,7 +5,7 @@ import type { McpRequest, McpReply } from "@vonvon/protocol";
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { basename, delimiter, dirname, isAbsolute, join, relative, win32 } from "node:path";
 import { spawnProcess } from "../platform/spawn";
 import { CODEX_MIN_VERSION, CODEX_VERIFIED_VERSION, classifyCodexVersion } from "../agent/codex-appserver/version";
@@ -244,6 +244,16 @@ export class EnvironmentService {
     if (selection.kind === "active") return { executable: managed, ownership: "managed" };
     if (selection.kind === "absent" && await executable(managed)) return { executable: managed, ownership: "managed" };
     const candidates = [dirname(this.nodePath), ...this.searchPath.split(delimiter), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
+    // Finder/launchd do not load shell initialization. Reuse native and nvm Claude
+    // installations after explicit PATH entries, scoped to this service's home.
+    if (tool === "claude" && process.platform !== "win32") {
+      candidates.push(join(this.home, ".local", "bin"));
+      const nvm = join(this.home, ".nvm", "versions", "node");
+      const versions = await readdir(nvm).catch(() => [] as string[]);
+      candidates.push(...versions.filter(version => /^v\d+\.\d+\.\d+$/.test(version))
+        .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+        .map(version => join(nvm, version, "bin")));
+    }
     const suffixes = process.platform === "win32" ? ["", ".com", ".exe", ".bat", ".cmd"] : [""];
     for (const directory of candidates) {
       if (!isAbsolute(directory)) continue;

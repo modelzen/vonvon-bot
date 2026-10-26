@@ -16,7 +16,7 @@ import {
 import type { AppPreferences } from '../src/config/schema';
 
 // s36d2: one resolver for what a session runs with (product.md 3.2). A group's tier, network and
-// backend are its own (old rows: full access, no network, Codex); the bot defaults are for places
+// backend are its own (old rows: full access, network on, Codex); the bot defaults are for places
 // with no group; the bot's model counts only on the bot's own backend.
 
 const CODEX = 'codex-appserver';
@@ -28,16 +28,33 @@ const bot = (extra: AppPreferences = {}): AppPreferences => ({
 });
 
 describe('a group', () => {
-  it('keeps full access and no network on an old row, whatever the bot default says', () => {
+  it('keeps full access with network on an old row, whatever the bot default says', () => {
     const r = resolveExecution({ bot: bot({ defaults: { permission: 'qa', network: true, backend: CLAUDE } }), group: group() });
     expect(r.permission).toBe('full');
-    expect(r.network).toBe(false);
+    expect(r.network).toBe(true);
     expect(r.sources).toMatchObject({ permission: 'builtin', network: 'builtin' });
   });
 
   it('uses its own tier and network', () => {
     const r = resolveExecution({ bot: bot(), group: group({ mode: 'qa', network: true }) });
     expect(r).toMatchObject({ permission: 'qa', network: true, sources: { permission: 'group', network: 'group' } });
+  });
+
+  it('uses native custom effects and derives network sources from permission', () => {
+    const custom = { backend: CLAUDE, settings: { permissionMode: 'default', network: 'all' } };
+    expect(resolveExecution({ group: group({ backend: CLAUDE, mode: 'full', custom }) }))
+      .toMatchObject({ permission: 'qa', network: true, sources: { permission: 'group', network: 'group' } });
+    expect(resolveExecution({ group: group({ mode: 'write' }) }))
+      .toMatchObject({ permission: 'write', network: false, sources: { permission: 'group', network: 'group' } });
+  });
+
+  it('passes normalized Claude native settings while corrupt custom stays read-only without native', () => {
+    const settings = { permissionMode: 'plan', network: 'domains', domains: ['example.com'] };
+    expect(resolveExecution({ group: group({ backend: CLAUDE, mode: 'qa', custom: { backend: CLAUDE, settings } }) }))
+      .toMatchObject({ permission: 'write', network: true, custom: { ...settings, sandbox: true } });
+    const invalid = resolveExecution({ group: group({ backend: CLAUDE, mode: 'full', custom: { backend: CLAUDE, settings: { permissionMode: 'invalid' } } }) });
+    expect(invalid).toMatchObject({ permission: 'qa', network: false });
+    expect(invalid).not.toHaveProperty('custom');
   });
 
   it('runs Codex when it has no backend, even with a Claude bot default', () => {
@@ -123,9 +140,17 @@ describe('no group (私聊 from s49, 云文档)', () => {
     const r = resolveExecution({ bot: { directories: { workspaces: { primary: '/bot', additional: ['/bot/x'] } } } });
     expect(r).toMatchObject({ permission: 'write', network: true, backend: CODEX, workspaces: { primary: '/bot', additional: ['/bot/x'] } });
     const set = resolveExecution({ bot: bot({ defaults: { permission: 'full', network: false, backend: CLAUDE } }) });
-    expect(set).toMatchObject({ permission: 'full', network: false, backend: CLAUDE, sources: { permission: 'bot', network: 'bot', backend: 'bot' } });
+    expect(set).toMatchObject({ permission: 'full', network: true, backend: CLAUDE, sources: { permission: 'bot', network: 'bot', backend: 'bot' } });
     expect(resolveExecution({}).workspaces).toEqual({ primary: undefined, additional: [] });
   });
+
+  it.each([['qa', true, false], ['write', false, true], ['full', false, true]] as const)(
+    'derives network from bot tier %s and ignores its legacy network %s', (permission, network, expected) => {
+      expect(resolveExecution({ bot: { defaults: { permission, network } } }))
+        .toMatchObject({ permission, network: expected, sources: { permission: 'bot', network: 'bot' } });
+      expect(resolveExecution({ bot: { defaults: { network } } }).sources.network).toBe('builtin');
+    },
+  );
 
   it("falls back to Codex for a bot default backend no longer in the catalog", () => {
     expect(botBackendId(bot({ defaults: { backend: 'claude-sdk' } }))).toBe(CODEX);
@@ -181,6 +206,16 @@ describe('execution roots admission', () => {
     ] });
     expect(result?.instructions).toContain('AGENTS.md 或 CLAUDE.md');
     expect(result?.instructions.match(/AGENTS.md 或 CLAUDE.md/g)).toHaveLength(1);
+  });
+  it('grants additional roots read access when native custom settings narrow a stored full tier', async () => {
+    const f = await fixture();
+    const execution = resolveExecution({ group: group({ cwd: f.cwd, mode: 'full',
+      custom: { backend: CODEX, settings: { sandbox: 'read-only', network: true } },
+      directories: { workspaces: { primary: f.cwd, additional: [f.extra] }, repositories: [f.repo] },
+    }) });
+    expect(execution).toMatchObject({ permission: 'qa', network: true });
+    const result = await executionSessionProfile({ ...f, execution, backend: CODEX, scope: 'group' });
+    expect(result?.additionalRoots).toEqual([{ path: f.extra, access: 'read' }, { path: f.repo, access: 'read' }]);
   });
   it('rejects new non-Git repositories and data roots before provider delivery', async () => {
     const f = await fixture();

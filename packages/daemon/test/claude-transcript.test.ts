@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { ClaudeAgentBackend, type ClaudeSdkFacade } from '../src/agent/claude-agent/backend';
 import { ClaudeAgentThread } from '../src/agent/claude-agent/thread';
-import { BRIDGE_ENTRYPOINT, findTranscript, scanTranscript } from '../src/agent/claude-agent/transcript';
+import { BRIDGE_ENTRYPOINT, findTranscript, readCustomTitle, scanTranscript } from '../src/agent/claude-agent/transcript';
 
 // s15b: the bot reads what a terminal appended to its Claude session file.
 
@@ -48,6 +48,30 @@ function transcript(content: string): string {
 }
 
 const size = (path: string) => statSync(path).size;
+
+describe('readCustomTitle', () => {
+  it('ignores automatic titles and keeps the last nonempty explicit title', async () => {
+    expect(await readCustomTitle(transcript(line({ type: 'ai-title', customTitle: 'automatic' })))).toBeUndefined();
+    const file = transcript(
+      line({ type: 'custom-title', customTitle: 'first' })
+      + '{"type":"custom-title",broken}\n'
+      + line({ type: 'custom-title', customTitle: 42 })
+      + line({ type: 'custom-title', customTitle: '  最后标题  ' })
+      + line({ type: 'custom-title', customTitle: '  ' }),
+    );
+    expect(await readCustomTitle(file)).toBe('最后标题');
+  });
+
+  it('reads a custom-title line across a 1 MB boundary and an unterminated final line', async () => {
+    const record = JSON.stringify({ type: 'custom-title', customTitle: '跨块标题' });
+    const file = transcript(`${' '.repeat((1 << 20) - 5)}\n${record}`);
+    expect(await readCustomTitle(file)).toBe('跨块标题');
+  });
+
+  it('propagates file read failures', async () => {
+    await expect(readCustomTitle(join(tempDir(), 'missing.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
 
 describe('scanTranscript', () => {
   it('only records with a uuid and another entrypoint are foreign', async () => {

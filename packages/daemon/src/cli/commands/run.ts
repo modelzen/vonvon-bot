@@ -133,6 +133,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
           if (op.kind === 'joinedGroups' || op.kind === 'groupMembers' || op.kind === 'bindGroup') return handle.adminGroups(op);
           if (op.kind === 'settingsRead') return handle.settings.read(op.scope);
           if (op.kind === 'settingsModels') return handle.settings.models(op.query);
+          if (op.kind === 'libraryWorkspaceChanged' || op.kind === 'libraryWorkspaceCheck') return handle.libraryExecute(op);
           return handle.adminExecute(op);
         },
         (msg) => void process.send?.(msg),
@@ -164,6 +165,10 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
               );
             }
             return handle.adminExecute(op);
+          },
+          executeLibrary: async (botId, op) => {
+            if (botId !== ownAppId) throw new AdminWriteError('这个 Bot 不归本进程管');
+            return handle.libraryExecute(op);
           },
           liveStatus: async (botId) =>
             botId === ownAppId

@@ -15,34 +15,31 @@ function cfg(sessionTitles?: NonNullable<AppConfig['preferences']>['sessionTitle
 }
 
 describe('session title config', () => {
-  it('defaults every backend to no model / first-sentence truncation', () => {
-    expect(getSessionTitleConfig(cfg(), 'codex-appserver')).toEqual({ enabled: false });
-    expect(summarizeSessionTitleConfig(cfg(), 'claude-agent')).toContain('截断首句');
-    expect(summarizeSessionTitles(cfg())).toBe('- Codex：截断首句\n- Claude Code：截断首句');
+  it('defaults all sessions to no model', () => {
+    expect(getSessionTitleConfig(cfg())).toEqual({ enabled: false });
+    expect(summarizeSessionTitleConfig(cfg())).toContain('截断首句');
+    expect(summarizeSessionTitles(cfg())).toBe('截断首句');
   });
 
-  it('keeps model + effort settings isolated per backend', () => {
-    const config = cfg({
-      byBackend: {
-        'codex-appserver': { enabled: true, model: 'openrouter/acme-coder', effort: 'xhigh' },
-        'claude-agent': { enabled: true, model: 'vendor/fast-title', effort: 'low' },
-      },
-    });
-    expect(getSessionTitleConfig(config, 'codex-appserver')).toEqual({
-      enabled: true,
-      model: 'openrouter/acme-coder',
-      effort: 'xhigh',
-    });
-    expect(getSessionTitleConfig(config, 'claude-agent')).toEqual({
-      enabled: true,
-      model: 'vendor/fast-title',
-      effort: 'low',
-    });
-    expect(getSessionTitleConfig(config, 'some-new-backend')).toEqual({ enabled: false });
-    expect(summarizeSessionTitles(config)).toBe(
-      '- Codex：AI 精炼 · openrouter/acme-coder · xhigh\n' +
-      '- Claude Code：AI 精炼 · vendor/fast-title · low',
-    );
+  it('resolves legacy choices consistently, preferring the Bot default provider', () => {
+    const config = cfg({ byBackend: {
+      'codex-appserver': { enabled: true, model: 'codex-title', effort: 'xhigh' },
+      'claude-agent': { enabled: true, model: 'claude-title', effort: 'low' },
+    } });
+    expect(getSessionTitleConfig(config, 'claude-agent')).toEqual({ enabled: true, backend: 'codex-appserver', model: 'codex-title', effort: 'xhigh' });
+    config.preferences!.defaults = { backend: 'claude-agent' };
+    expect(getSessionTitleConfig(config, 'codex-appserver')).toEqual({ enabled: true, backend: 'claude-agent', model: 'claude-title', effort: 'low' });
+    config.preferences!.sessionTitles!.byBackend!['claude-agent'] = { enabled: false };
+    expect(getSessionTitleConfig(config).enabled && getSessionTitleConfig(config)).toMatchObject({ backend: 'codex-appserver' });
+  });
+
+  it('uses the global provider for every session and respects global disable over legacy enabled', () => {
+    const config = cfg({ policy: { enabled: true, backend: 'claude-agent', model: 'title-model', effort: 'low' }, byBackend: { 'codex-appserver': { enabled: true, model: 'old', effort: 'high' } } });
+    expect(getSessionTitleConfig(config, 'codex-appserver')).toEqual(config.preferences!.sessionTitles!.policy);
+    config.preferences!.sessionTitles!.policy = { enabled: false };
+    expect(getSessionTitleConfig(config)).toEqual({ enabled: false });
+    config.preferences!.sessionTitles!.policy = { enabled: true, backend: 'claude-agent', model: 'title', effort: 'ultra' };
+    expect(getSessionTitleConfig(config)).toEqual({ enabled: false });
   });
 
   it('treats incomplete or invalid enabled configs as disabled', () => {
@@ -68,6 +65,6 @@ describe('session title config', () => {
       byBackend: {
         'codex-appserver': { enabled: true, model: 'any-vendor/model', effort: 'ultra' },
       },
-    }), 'codex-appserver')).toEqual({ enabled: true, model: 'any-vendor/model', effort: 'ultra' });
+    }), 'codex-appserver')).toEqual({ enabled: true, backend: 'codex-appserver', model: 'any-vendor/model', effort: 'ultra' });
   });
 });
