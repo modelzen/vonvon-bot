@@ -12,7 +12,8 @@ export default defineConfig({
     // Many files launch several real provider/daemon children. Bound file-level
     // parallelism so their readiness checks do not compete with dozens of peers;
     // each test still exercises its own full process/concurrency behavior.
-    maxWorkers: win32 ? (process.env.CI === 'true' ? 1 : undefined) : Math.min(4, availableParallelism()),
+    // Keep Vitest's CPU-minus-one default on smaller runners.
+    maxWorkers: win32 ? (process.env.CI === 'true' ? 1 : undefined) : Math.min(4, Math.max(1, availableParallelism() - 1)),
     // Only our own unit tests. Without this, vitest also scans the vendored
     // reference project under docs/references/** (yepanywhere etc.), which has
     // its own deps/runtime and fails to collect.
