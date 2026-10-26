@@ -32,9 +32,16 @@ it('keeps explicit paths usable after two searches are blocked in filesystem sys
   const first = search.search(root, 'blocked-one');
   const second = search.search(root, 'blocked-two');
   const pids = await Promise.all([ready('blocked-one'), ready('blocked-two')]);
-  const started = Date.now();
-  const result = await search.search(root, '~/work/');
-  expect(Date.now() - started).toBeLessThan(1000);
+  const firstSettled = vi.fn();
+  void first.then(firstSettled);
+  await Promise.resolve();
+  expect(firstSettled).not.toHaveBeenCalled();
+  const current = search.search(root, '~/work/');
+  // Eviction must settle in the next microtask, without waiting for blocked I/O
+  // or either worker timeout. New worker startup can vary under full-suite load.
+  await Promise.resolve();
+  expect(firstSettled).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({truncated: true}));
+  const result = await current;
   expect(result.entries.map(entry => entry.name)).toEqual(['work', 'paseo']);
   expect(result.truncated).toBe(false);
   expect((await first).truncated).toBe(true);
