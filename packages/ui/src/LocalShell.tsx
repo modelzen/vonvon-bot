@@ -10,12 +10,12 @@ export function AppShell(props: {page: Page; view: CollaborationView; title: str
   return <div className="settings-window collaboration-window today-window" data-first-use={props.firstUse || undefined}>
     <div className="desktop-titlebar" aria-hidden="true"/>
     <header className="today-app-header">
-      <button type="button" className="today-brand" onClick={() => props.onNavigate('home')} aria-label="Vonvon Bot 灵感" title="Vonvon Bot">
+      <button type="button" className="today-brand" onClick={() => props.onNavigate('home')} aria-label="Vonvon Bot 此刻" title="Vonvon Bot">
         <img src="./vonvon-logo.png" alt=""/><strong>Vonvon Bot</strong>
       </button>
       {!props.firstUse && <nav className="today-primary-nav gooey-tabs" aria-label="主要导航">
         <NavigationIndicator activeIndex={props.page === 'home' ? 0 : props.page === 'collaboration' ? props.view === 'agents' ? 1 : 2 : null}/>
-        <button type="button" aria-current={props.page === 'home' ? 'page' : undefined} onClick={() => props.onNavigate('home')}>灵感</button>
+        <button type="button" aria-current={props.page === 'home' ? 'page' : undefined} onClick={() => props.onNavigate('home')}>此刻</button>
         <button type="button" aria-current={props.page === 'collaboration' && props.view === 'agents' ? 'page' : undefined} onClick={() => props.onOpenList('agents')}>Bot{props.newCounts?.bots ? <small className="today-nav-count" title={`新记忆 ${props.newCounts.bots} 条`} aria-label={`新记忆 ${props.newCounts.bots} 条`}>{props.newCounts.bots > 99 ? '99+' : props.newCounts.bots}</small> : null}</button>
         <button type="button" aria-current={props.page === 'collaboration' && props.view !== 'agents' ? 'page' : undefined} onClick={() => props.onOpenList('groups')}>群组{props.newCounts?.projects ? <small className="today-nav-count" title={`新记忆 ${props.newCounts.projects} 条`} aria-label={`新记忆 ${props.newCounts.projects} 条`}>{props.newCounts.projects > 99 ? '99+' : props.newCounts.projects}</small> : null}</button>
       </nav>}
