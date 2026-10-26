@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, mkdir, open, readFile, realpath, readdir, writeFile, unlink } from 'node:fs/promises';
+import { access, lstat, mkdir, open, readFile, realpath, readdir, writeFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { assertSecureTransport, readStableManifest } from './verify-public-release.mjs';
 import { cosCredentialEnvNames, readCosConfig, readCosReleaseEvidence } from './release-cos-evidence.mjs';
@@ -115,7 +115,12 @@ export async function releaseMac(options, dependencies = {}) {
   const repo = await realpath(resolve(options.repo)), out = await canonicalPath(options.out), version = options.version;
   const temporaryRoots = dependencies.temporaryRoots ?? await Promise.all([tmpdir(), '/tmp', '/private/tmp'].map(canonicalPath));
   assertOutputLocation(repo, out, temporaryRoots);
-  if (await exists(out) && !(await exists(join(out, 'notarization-state.json'))) && (await readdir(out)).length) throw new Error('Fresh output directory must be empty');
+  if (await exists(out) && !(await exists(join(out, 'notarization-state.json')))) {
+    // A run stopped at a gate writes only logs/, so the same OUT can be rerun with corrected flags.
+    for (const name of await readdir(out)) {
+      if (name !== 'logs' || !(await lstat(join(out, name))).isDirectory()) throw new Error('Fresh output directory must be empty or hold only logs/ from a run stopped at a gate');
+    }
+  }
   if (!/^[a-f0-9]{40}$/.test(options.sha ?? '')) throw new Error('Supply the full, exact main commit SHA');
   const suppliedConfigPath = env.VONVON_DESKTOP_UPDATE_CONFIG;
   if (!suppliedConfigPath || !isAbsolute(suppliedConfigPath)) throw new Error('Set VONVON_DESKTOP_UPDATE_CONFIG to an absolute external file');

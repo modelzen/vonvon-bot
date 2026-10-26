@@ -102,7 +102,9 @@ async function releaseFixture(settings = {}) {
       const output = { stdout: '', stderr: '' };
       if (command === 'git') {
         if (args[0] === 'rev-parse') output.stdout = sourceSHA;
-        if (args[0] === 'status') output.stdout = settings.dirty ? '?? packages/ui/public/injected.txt\n' : '';
+        if (args[0] === 'merge-base' && settings.notOnMain) throw new Error('fixture commit is not on origin/main');
+        const built = calls.some(call => call.command === 'npm');
+        if (args[0] === 'status') output.stdout = settings.dirty || (settings.dirtyAfterBuild && built) ? '?? packages/ui/public/injected.txt\n' : '';
       } else if (command === 'security') {
         output.stdout = `1) ${'B'.repeat(40)} "Developer ID Application: Fixture (${config.teamIdentifier})"`;
       } else if (command === 'npm') {
@@ -134,7 +136,7 @@ async function releaseFixture(settings = {}) {
           if (action === 'wait' && settings.waitFailure) throw new Error('fixture wait timeout');
           output.stdout = JSON.stringify({ status: settings.status ?? 'Accepted' });
         } else if (action === 'log') {
-          output.stdout = JSON.stringify({ jobId: submissionIDs[kind], sha256: settings.logSHA256 ?? (await artifactRecord(archiveFor(kind))).sha256, issues: settings.issues ?? [] });
+          output.stdout = JSON.stringify({ jobId: settings.logJobId ?? submissionIDs[kind], sha256: settings.logSHA256 ?? (await artifactRecord(archiveFor(kind))).sha256, issues: settings.issues ?? [] });
         } else assert.fail(`Unexpected notary action ${action}`);
       } else if (command === 'xcrun' && args[0] === 'stapler' && args[1] === 'staple' && args[2].endsWith('.dmg')) {
         await write(args[2], 'signed dmg with staple');
@@ -459,4 +461,68 @@ test('TLS trust-store overrides in the release environment stop before any comma
     await assert.rejects(fixture.run(), /TLS verification/);
     assert.equal(fixture.calls.length, 0);
   });
+});
+
+test('a gate failure leaves only logs, so the same OUT reruns with corrected flags', async () => {
+  const fixture = await formalFixture();
+  fixture.deps.fetchImpl = async () => new Response('', { status: 404 });
+  await assert.rejects(fixture.run(), /First release requires/);
+  const { readdir } = await import('node:fs/promises');
+  assert.deepEqual(await readdir(fixture.out), ['logs']);
+  assert.equal((await fixture.run({ 'first-release': true })).complete, true);
+  const stray = await formalFixture();
+  await mkdir(join(stray.out, 'logs'), { recursive: true });
+  await stray.write(join(stray.out, 'Vonvon-Bot-0.7.0-universal.zip'), 'unexplained bytes');
+  await assert.rejects(stray.run({ 'first-release': true }), /must be empty/);
+  assert.equal(stray.calls.length, 0);
+});
+
+test('source must stay unchanged through the build before any packaging', async () => {
+  const fixture = await releaseFixture({ dirtyAfterBuild: true });
+  await assert.rejects(fixture.run(), /Source changed while building/);
+  assert.equal(fixture.calls.some(call => call.command === 'npm'), true);
+  assert.equal(fixture.calls.some(call => call.command === process.execPath), false);
+});
+
+test('source commit must be on origin/main before any build', async () => {
+  const fixture = await releaseFixture({ notOnMain: true });
+  await assert.rejects(fixture.run(), /source-on-main failed/);
+  assert.ok(fixture.calls.some(call => call.command === 'git' && call.args.join(' ') === `merge-base --is-ancestor ${sourceSHA} origin/main`));
+  assert.equal(fixture.calls.some(isBuildOrPack), false);
+});
+
+test('build HOME must be temporary and outside both source and evidence', async t => {
+  for (const [name, pick] of [
+    ['outside temporary roots', () => '/release-mac-test-not-temporary/home'],
+    ['inside evidence', fixture => join(fixture.out, 'home')],
+    ['inside source', fixture => join(fixture.repo, 'home')],
+  ]) await t.test(name, async () => {
+    const fixture = await releaseFixture();
+    await assert.rejects(fixture.run({ 'build-home': pick(fixture) }), /Build HOME must be temporary/);
+    assert.equal(fixture.calls.some(isBuildOrPack), false);
+  });
+});
+
+test('releaseMac itself rejects evidence inside the source or a temporary root', async t => {
+  await t.test('inside source', async () => {
+    const fixture = await releaseFixture();
+    await assert.rejects(releaseMac({ ...fixture.options, out: join(fixture.repo, 'evidence') }, fixture.deps), /persistent/);
+    assert.equal(fixture.calls.length, 0);
+    assert.equal(await import('node:fs/promises').then(fs => fs.access(join(fixture.repo, 'evidence')).then(() => true, () => false)), false);
+  });
+  await t.test('inside a temporary root', async () => {
+    const fixture = await releaseFixture();
+    await assert.rejects(releaseMac(fixture.options, { ...fixture.deps, temporaryRoots: [fixture.root] }), /persistent/);
+    assert.equal(fixture.calls.length, 0);
+  });
+});
+
+test('submission recovery requires the Apple job ID as well as the archive hash', async () => {
+  const fixture = await releaseFixture({ submitFailure: 'app' });
+  await assert.rejects(fixture.run(), /failed/i);
+  fixture.settings.submitFailure = undefined;
+  fixture.settings.logJobId = '33333333-3333-4333-8333-333333333333';
+  await assert.rejects(fixture.run({ 'recover-submission': `app=${submissionIDs.app}` }), /job ID/);
+  assert.equal((await fixture.readState()).app.id, undefined);
+  assert.equal(fixture.calls.filter(isSubmit).length, 1, 'no blind re-upload');
 });
