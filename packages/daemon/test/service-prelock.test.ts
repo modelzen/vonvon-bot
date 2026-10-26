@@ -15,7 +15,7 @@ const fixture = vi.hoisted(() => ({
 vi.mock('../src/config/paths', () => ({ paths: { get appDir() { return fixture.root; } } }));
 vi.mock('../src/service/startup', () => ({ readStartupRegistration: fixture.registration }));
 vi.mock('../src/cli/commands/run', () => ({ runRun: fixture.run }));
-vi.mock('../src/core/logger', () => ({ log: { info: fixture.info, warn: vi.fn(), error: vi.fn(), fail: vi.fn() } }));
+vi.mock('../src/core/logger', () => ({ log: { info: fixture.info, warn: vi.fn(), error: vi.fn(), fail: vi.fn() }, startLogGc: () => () => {} }));
 vi.mock('../src/service/codex-bin', () => ({ readServiceCodexBin: vi.fn() }));
 vi.mock('../src/provider/process/process-host', () => ({
   defaultHolderPath: () => '/unused/holder',

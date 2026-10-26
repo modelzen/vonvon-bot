@@ -11,8 +11,8 @@ it("accepts each old main process destination for its own action", () => {
   expect(allowedExternalUrl("https://open.feishu.cn/app/cli_1", "app-console")).toBe("https://open.feishu.cn/app/cli_1");
   expect(allowedExternalUrl("https://open.larksuite.com/app/cli_1/auth?q=im%3Aresource&op_from=openapi", "app-console"))
     .toBe("https://open.larksuite.com/app/cli_1/auth?q=im%3Aresource&op_from=openapi");
-  expect(allowedExternalUrl("https://github.com/modelzen/vonvon-bot/releases", "releases"))
-    .toBe("https://github.com/modelzen/vonvon-bot/releases");
+  expect(allowedExternalUrl("https://bot.vonvon.cc/changelog/", "releases")).toBe("https://bot.vonvon.cc/changelog/");
+  expect(allowedExternalUrl("https://bot.vonvon.cc/get/", "download")).toBe("https://bot.vonvon.cc/get/");
   expect(groupUrl("oc_a/b", "omt_topic"))
     .toBe("https://applink.feishu.cn/client/thread/open?open_chat_id=oc_a%2Fb&open_thread_id=omt_topic&thread_position=0");
   expect(groupUrl("oc_a/b", "invalid"))
@@ -46,7 +46,11 @@ it("rejects non-HTTPS, credentials, ports, host confusion, and unrelated GitHub 
     "https://github.com/unrelated/repository", "https://auth.openai.com\\@evil.test/path",
   ]) expect(allowedExternalUrl(value, "authorization")).toBeNull();
   expect(allowedExternalUrl("https://auth.openai.com/authorize", "registration")).toBeNull();
-  expect(allowedExternalUrl("https://github.com/modelzen/vonvon-bot/issues", "releases")).toBeNull();
+  expect(allowedExternalUrl("https://github.com/modelzen/vonvon-bot/releases", "releases")).toBeNull();
+  expect(allowedExternalUrl("https://bot.vonvon.cc/get/", "releases")).toBeNull();
+  expect(allowedExternalUrl("https://bot.vonvon.cc/changelog/", "download")).toBeNull();
+  expect(allowedExternalUrl("https://bot.vonvon.cc.evil.test/get/", "download")).toBeNull();
+  expect(allowedExternalUrl("http://bot.vonvon.cc/get/", "download")).toBeNull();
   expect(allowedExternalUrl("https://open.feishu.cn/app/cli_1/other", "event-settings")).toBeNull();
   expect(allowedExternalUrl("https://open.feishu.cn/app/cli_1/event", "app-console")).toBeNull();
   expect(allowedExternalUrl("https://open.feishu.cn/app/", "app-console")).toBeNull();

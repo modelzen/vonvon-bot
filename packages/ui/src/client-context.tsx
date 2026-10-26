@@ -14,7 +14,11 @@ export type ShellCapabilities = {
   startHost?: (bot?: string) => Promise<MachineReply>;
   repairCli?: () => Promise<MachineReply>;
   checkDesktopUpdate?: () => Promise<DesktopUpdate>;
+  /** 忘掉上次没生效的安装，再检查一次。 */
+  retryDesktopUpdate?: () => Promise<DesktopUpdate>;
   installDesktopUpdate?: () => Promise<DesktopUpdate>;
+  /** 桌面端自动检查更新的结果；订阅时会收到最近一次。 */
+  onDesktopUpdate?: (listener: (update: DesktopUpdate) => void) => () => void;
 };
 
 const ClientContext = createContext<VonvonClient | null>(null);

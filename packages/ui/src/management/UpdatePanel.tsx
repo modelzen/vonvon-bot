@@ -1,6 +1,7 @@
 import type {ReactNode} from 'react';
 import {ChevronRight,ArrowUpRight} from 'lucide-react';
 import {useState} from 'react';
+import {useDesktopUpdate} from '../desktop-update';
 import {Button} from '../reference/components/ui';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {useDraftGuard} from '../settings/DraftGuard';
@@ -9,12 +10,12 @@ import '../settings/settings.css';
 import './application.css';
 import {settingAnchor} from '../search';
 import {useShellCapabilities} from '../client-context';
-import {openExternalUrl} from '../url-actions';
+import {changelogUrl, downloadPageUrl, openExternalUrl} from '../url-actions';
 
 export function UpdatePanel({request, attached,externalCoreAvailable,version,device,children,advancedSettings}: {request: MachineRequestHandler; attached: boolean; externalCoreAvailable:boolean; version:string;device:string;children:ReactNode;advancedSettings:ReactNode}) {
   const shell = useShellCapabilities();
   const {navigate} = useDraftGuard();
-  const [desktop, setDesktop] = useState<DesktopUpdate>();
+  const [desktop, setDesktop] = useDesktopUpdate();
   const [core, setCore] = useState<Extract<MachineReply, {type: 'coreUpdate'}>>();
   const [desktopMessage, setDesktopMessage] = useState('');
   const [coreMessage, setCoreMessage] = useState('');
@@ -46,7 +47,10 @@ export function UpdatePanel({request, attached,externalCoreAvailable,version,dev
   const desktopState = desktop?.state === 'available' ? '有可用更新'
     : desktop?.state === 'downloaded' ? '已下载，可安装'
       : desktop?.state === 'current' ? '已是最新版本'
-        : desktop?.state === 'unavailable' ? '更新源不可用' : '尚未检查';
+        : desktop?.state === 'install-pending' ? '上次安装未生效'
+          : desktop?.state === 'unavailable' ? '更新源不可用' : '尚未检查';
+  const openPage = (url: string, kind: 'releases' | 'download', failure: string) =>
+    void openExternalUrl(url, kind, shell).catch(error => setDesktopMessage(error instanceof Error ? error.message : failure));
   return <>
     <section className="application-update-card" aria-label="软件更新" id={settingAnchor('软件更新')}>
       <div className="application-update-main">
@@ -56,10 +60,11 @@ export function UpdatePanel({request, attached,externalCoreAvailable,version,dev
       </div>
       <div className="application-update-status">
         <span>{desktopState}{desktop?.latest && desktop.state !== 'current' ? ` · v${desktop.latest}` : ''}</span>
-        <Button size="sm" variant="ghost" disabled={busy} onClick={() => void openExternalUrl('https://github.com/modelzen/vonvon-bot/releases','releases',shell).catch(error=>setDesktopMessage(error instanceof Error ? error.message : '无法打开发布说明。'))}>发布说明<ArrowUpRight size={12}/></Button>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => openPage(changelogUrl,'releases','无法打开发布说明。')}>发布说明<ArrowUpRight size={12}/></Button>
       </div>
       {desktop?.message && <p className="application-update-message">{desktop.message}</p>}
       {(desktop?.state === 'available' || desktop?.state === 'downloaded') && <div className="application-update-install"><span>{desktop.state === 'downloaded' ? '更新已准备好，安装后将重新打开应用。' : '检查更新不会自动安装。'}</span><Button size="sm" disabled={busy || !shell?.installDesktopUpdate} onClick={() => {const install=shell?.installDesktopUpdate;if(!install)return;if(desktop.state==='downloaded')navigate(()=>void runDesktop(install));else void runDesktop(install);}}>{desktop.state==='downloaded'?'安装并重启':'下载更新'}</Button></div>}
+      {desktop?.state === 'install-pending' && <div className="application-update-install"><span>可以重试，或者到官网重新下载安装。</span><div className="application-update-actions"><Button size="sm" disabled={busy || !shell?.retryDesktopUpdate} onClick={() => {if(shell?.retryDesktopUpdate) void runDesktop(shell.retryDesktopUpdate);}}>重试</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => openPage(downloadPageUrl,'download','无法打开下载页。')}>手动下载<ArrowUpRight size={12}/></Button></div></div>}
       {desktopMessage && <p className="application-update-error" role="status">{desktopMessage}</p>}
       {!shell?.checkDesktopUpdate && <p className="application-update-message">桌面更新由桌面版提供。</p>}
     </section>
