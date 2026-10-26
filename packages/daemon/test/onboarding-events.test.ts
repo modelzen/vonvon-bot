@@ -30,7 +30,7 @@ vi.mock('../src/config/bots', async original => {
   return {
     ...await original<typeof import('../src/config/bots')>(),
     ensureRegistry: async () => ({ bots: [bot] }), loadBots: async () => ({ bots: [bot] }),
-    currentBot: () => bot, findBot: () => bot, activeBots: () => [bot],
+    currentBot: () => bot, findBot: () => bot, activeBots: () => [bot], updateBotName: async () => 'unchanged',
   };
 });
 vi.mock('../src/core/logger', () => ({ log: { info: vi.fn(), fail: vi.fn() } }));

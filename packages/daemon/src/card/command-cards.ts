@@ -325,9 +325,11 @@ function talkLine(noMention: boolean, tail: string): string {
  * when the web switches a group to it (s25c). */
 export const SMART_NOTICE = '我会读群消息，合适时接话。';
 
-/** How to talk to a group: 智能 has no 免@, a judgement decides and an @ always gets an answer (s25, s25c). */
+/** How to talk to a group. 智能 has no 免@ and a judgement decides every message, an @ too: an @ is judged at once
+ * and may get no answer; only a judgement that fails or times out answers it anyway (3.4, owner 2026-10-19). So the
+ * card promises a look, not an answer (s25, s25c). */
 function talkLines(kind: SessionMode, noMention: boolean, tail: string, smartTail: string): string[] {
-  return kind === 'smart' ? [`· 直接说话 → ${smartTail}`, '· **@我 + 内容** → 一定回'] : [talkLine(noMention, tail)];
+  return kind === 'smart' ? [`· 直接说话 → ${smartTail}`, '· **@我 + 内容** → 我马上看，该回就回'] : [talkLine(noMention, tail)];
 }
 
 /** 后端能力（只取 /help 关心的三项）。undefined ⇒ 全支持（codex 不声明

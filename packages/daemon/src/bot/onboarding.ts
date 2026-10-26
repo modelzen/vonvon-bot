@@ -16,6 +16,7 @@ import { log } from '../core/logger';
 import { botPaths, useBotDir } from '../config/paths';
 import { ensureRegistry, currentBot, findBot, botIdentity, type BotIdentity, type BotEntry } from '../config/bots';
 import { registerBotFromCredentials } from './register-bot';
+import { syncBotName } from './bot-name';
 
 export interface OnboardResult {
   identity: BotIdentity;
@@ -99,6 +100,7 @@ export async function ensureOnboarded(
   }
   const r = await validateAndReport(cfg);
   if (r === null) return null;
+  await syncBotName('onboard', identity, entry.botName, r.botName);
   return { identity, cfg, secret: r.secret, missingScopes: r.missingScopes, events: r.events };
 }
 
@@ -152,7 +154,7 @@ export async function registerNewBot(desiredName?: string): Promise<OnboardResul
  *  event-subscription diagnosis and report it too (same notice-only policy). */
 async function validateAndReport(
   cfg: AppConfig,
-): Promise<{ secret: string; missingScopes?: string[]; events: EventDiagnosis } | null> {
+): Promise<{ secret: string; botName?: string; missingScopes?: string[]; events: EventDiagnosis } | null> {
   const secret = await resolveAppSecret(cfg);
   const v = await validateAppCredentials(cfg.accounts.app.id, secret, cfg.accounts.app.tenant);
   if (!v.ok) {
@@ -165,7 +167,7 @@ async function validateAndReport(
   noticeMissingScopes(cfg, v.missingScopes);
   const events = await diagnoseEventSubscription(cfg.accounts.app.id, secret, cfg.accounts.app.tenant);
   noticeEventDiagnosis(cfg, events);
-  return { secret, missingScopes: v.missingScopes, events };
+  return { secret, botName: v.botName, missingScopes: v.missingScopes, events };
 }
 
 function noticeMissingScopes(cfg: AppConfig, missingScopes: string[] | undefined): void {
