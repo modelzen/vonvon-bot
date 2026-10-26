@@ -64,12 +64,8 @@ export async function readStableManifest({ fetchImpl = fetch, url = DEFAULT_MANI
   assertSecureTransport(); httpsURL(url);
   const response = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(15000) });
   if (response.redirected) throw new Error('Release endpoint redirected');
+  // COS answers NoSuchKey with 404; every other status, including 400, 403 and 5xx, fails closed.
   if (response.status === 404) return { kind: 'missing', status: 404, code: 'HTTP404' };
-  // COS uses 404 for NoSuchKey; tolerate its explicit XML error on 400, never on 403/5xx/200.
-  if (response.status === 400) {
-    const body = await limitedBody(response);
-    if (/^\s*(?:<\?xml[^>]*>\s*)?<Error>\s*<Code>NoSuchKey<\/Code>[\s\S]*<\/Error>\s*$/.test(body)) return { kind: 'missing', status: 400, code: 'NoSuchKey' };
-  }
   if (response.status !== 200) throw new Error(`Stable manifest HTTP ${response.status}; no empty baseline may be inferred`);
   jsonHeaders(response);
   return { kind: 'present', manifest: validateManifest(parseJSON(await limitedBody(response)), url), responseHeaders: response.headers };
@@ -151,7 +147,10 @@ export async function verifyPublicRelease({ out, version, sha, fetchImpl = fetch
   return { version, sourceCommit: sha, verifiedAt: new Date().toISOString(), files: evidence.files, publiclyVerified: true };
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// macOS mktemp paths live under the /var -> /private/var link; ESM entry URLs are
+// realpaths, so compare realpaths or the CLI is silently skipped with exit 0.
+const invokedPath = process.argv[1] ? await fs.realpath(resolve(process.argv[1])).catch(() => null) : null;
+if (invokedPath && invokedPath === await fs.realpath(fileURLToPath(import.meta.url))) {
   try {
     const { values } = parseArgs({ options: { out: { type: 'string' }, version: { type: 'string' }, sha: { type: 'string' }, 'local-only': { type: 'boolean' } } });
     if (!values.out || !values.version || !values.sha) throw new Error('Use --out /persistent/evidence --version X.Y.Z --sha FULL_SHA [--local-only]');

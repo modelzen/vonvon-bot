@@ -78,14 +78,29 @@ await build({
 export function assertOutputLocation(repo, out, temporaryRoots) {
   if (inside(repo, out) || inside(out, repo) || temporaryRoots.some(root => inside(root, out))) throw new Error('Release evidence must be persistent, outside temporary roots, and neither contain nor be contained by the source worktree');
 }
-export function validateFirstRelease({ firstRelease, live, evidence }) {
+/**
+ * Decide the formal-release baseline. A missing public manifest has three distinct meanings:
+ * COS still holds manifest.json (stop), only history exists (explicit --no-live-manifest,
+ * gate on the highest published version), or nothing was ever published (explicit --first-release).
+ */
+export function validateFirstRelease({ firstRelease = false, noLiveManifest = false, live, evidence }) {
   if (!evidence || !Array.isArray(evidence.keys) || !Array.isArray(evidence.versions)) throw new Error('Complete COS enumeration and publication ledger are required');
-  if (live.kind === 'missing') {
-    if (!firstRelease || evidence.keys.some(key => /(?:^|\/)(?:feed-|Vonvon-Bot-|manifest\.json)/.test(key)) || evidence.versions.length) throw new Error('First release requires explicit --first-release, missing manifest and no historical COS packages or ledger versions');
+  if (firstRelease && noLiveManifest) throw new Error('Use either --first-release or --no-live-manifest, not both');
+  if (live.kind !== 'missing') {
+    if (firstRelease) throw new Error('--first-release cannot replace an existing stable manifest');
+    if (noLiveManifest) throw new Error('--no-live-manifest requires the public stable manifest to be missing');
+    return live.manifest.version;
+  }
+  if (evidence.keys.some(key => /(?:^|\/)manifest\.json$/.test(key))) throw new Error('Public manifest is missing but COS still lists manifest.json; investigate the endpoint before any release');
+  const history = evidence.versions.length > 0 || evidence.keys.some(key => /(?:^|\/)(?:feed-|Vonvon-Bot-)/.test(key));
+  if (!history) {
+    if (!firstRelease) throw new Error('First release requires explicit --first-release, missing manifest and no historical COS packages or ledger versions');
     return 'none';
   }
-  if (firstRelease) throw new Error('--first-release cannot replace an existing stable manifest');
-  return live.manifest.version;
+  if (!noLiveManifest) throw new Error('Public manifest is missing but COS or the ledger has published versions; use --no-live-manifest (not --first-release) to gate above them');
+  if (!evidence.versions.length) throw new Error('Historical COS objects exist but no published version could be derived; investigate before release');
+  const highestPublished = evidence.versions.reduce((high, v) => compareVersions(v, high) > 0 ? v : high);
+  return { live: 'none', highestPublished };
 }
 export function checkNotaryWarnings(issues) {
   // Empty allowlist intentionally: each future exception needs a reviewed, narrow rule.
@@ -136,14 +151,14 @@ export async function releaseMac(options, dependencies = {}) {
     if (options.mode === 'release') {
       live = await readStableManifest({ fetchImpl: dependencies.fetchImpl ?? fetch, url: manifestURL });
       evidence = dependencies.cosEvidence ?? await readCosReleaseEvidence(options['cos-config'], { env });
-      baseline = validateFirstRelease({ firstRelease: options['first-release'], live, evidence });
-      if (live.kind === 'present') await writeFile(join(out, 'previous-manifest.json'), JSON.stringify(live.manifest, null, 2) + '\n', { flag: 'wx' }).catch(e => { if (e.code !== 'EEXIST') throw e; });
-    } else if (options['first-release']) throw new Error('--first-release requires release mode');
+      baseline = validateFirstRelease({ firstRelease: !!options['first-release'], noLiveManifest: !!options['no-live-manifest'], live, evidence });
+    } else if (options['first-release'] || options['no-live-manifest']) throw new Error('--first-release and --no-live-manifest require release mode');
     checkVersionGate({ version, mode: options.mode, nextVersion: options['next-version'], liveVersion: live?.manifest?.version, firstRelease: baseline === 'none', historicalVersions: evidence?.versions });
     const notes = options['notes-file'] ? (await readFile(resolve(options['notes-file']), 'utf8')).trim() : '';
     if (options.mode === 'release' && !notes) throw new Error('Formal releases require nonempty release notes via --notes-file');
+    if (live?.kind === 'present') await writeFile(join(out, 'previous-manifest.json'), JSON.stringify(live.manifest, null, 2) + '\n', { flag: 'wx' }).catch(e => { if (e.code !== 'EEXIST') throw e; });
     const statePath = join(out, 'notarization-state.json');
-    const context = { version, sourceCommit: head, mode: options.mode, nextVersion: options['next-version'] ?? null, configSHA256: digest(configBytes), keychainProfile: options['keychain-profile'], notesSHA256: digest(notes), firstRelease: !!options['first-release'] };
+    const context = { version, sourceCommit: head, mode: options.mode, nextVersion: options['next-version'] ?? null, configSHA256: digest(configBytes), keychainProfile: options['keychain-profile'], notesSHA256: digest(notes), firstRelease: !!options['first-release'], ...(options['no-live-manifest'] ? { noLiveManifest: true } : {}) };
     const state = await exists(statePath) ? await json(statePath) : { context, baseline, startedAt: new Date().toISOString() };
     if (JSON.stringify(state.context) !== JSON.stringify(context)) throw new Error('Output belongs to different release inputs; choose a fresh output directory');
     const save = () => writeFile(statePath, JSON.stringify(state, null, 2) + '\n');
@@ -341,14 +356,15 @@ export async function releaseMac(options, dependencies = {}) {
   } finally { await lock.close(); await unlink(lockPath); }
 }
 
-if (process.argv[1] && await realpath(resolve(process.argv[1])) === fileURLToPath(import.meta.url)) {
+const invokedPath = process.argv[1] ? await realpath(resolve(process.argv[1])).catch(() => null) : null;
+if (invokedPath && invokedPath === await realpath(fileURLToPath(import.meta.url))) {
   const { values } = parseArgs({ options: {
     repo: { type: 'string', default: resolve(dirname(fileURLToPath(import.meta.url)), '..') },
     version: { type: 'string' }, sha: { type: 'string' }, out: { type: 'string' }, mode: { type: 'string', default: 'rehearsal' },
-    'first-release': { type: 'boolean' }, 'cos-config': { type: 'string' }, 'build-home': { type: 'string' }, 'recover-submission': { type: 'string' },
+    'first-release': { type: 'boolean' }, 'no-live-manifest': { type: 'boolean' }, 'cos-config': { type: 'string' }, 'build-home': { type: 'string' }, 'recover-submission': { type: 'string' },
     'next-version': { type: 'string' }, 'notes-file': { type: 'string' }, 'keychain-profile': { type: 'string', default: 'notelet-notary' }, timeout: { type: 'string', default: '10m' }, help: { type: 'boolean' },
   } });
-  if (values.help) console.log('VONVON_DESKTOP_UPDATE_CONFIG=/absolute/external/config.json node scripts/release-mac.mjs --version X.Y.Z --sha FULL_MAIN_SHA --out /absolute/evidence --build-home /temporary/isolated-home --mode rehearsal --next-version CEILING [--repo /absolute/source-worktree] [--keychain-profile notelet-notary]\nFor --mode release, supply --notes-file /absolute/release-notes.txt; the public version, COS prefix and local ledger are verified first with --cos-config /absolute/external/cos-readonly.json. Only an HTTPS missing manifest plus an empty release history allows --first-release. Recover an uncertain submission with --recover-submission app=<UUID> or dmg=<UUID>. This script never uploads to COS, refreshes CDN, publishes, or installs.');
+  if (values.help) console.log('VONVON_DESKTOP_UPDATE_CONFIG=/absolute/external/config.json node scripts/release-mac.mjs --version X.Y.Z --sha FULL_MAIN_SHA --out /absolute/evidence --build-home /temporary/isolated-home --mode rehearsal --next-version CEILING [--repo /absolute/source-worktree] [--keychain-profile notelet-notary]\nFor --mode release, supply --notes-file /absolute/release-notes.txt; the public version, COS prefix and local ledger are verified first with --cos-config /absolute/external/cos-readonly.json. Only an HTTPS 404 manifest plus an empty COS prefix and ledger allows --first-release; a 404 manifest with published versions in COS or the ledger needs --no-live-manifest and gates above the highest of them. Recover an uncertain submission with --recover-submission app=<UUID> or dmg=<UUID>. This script never uploads to COS, refreshes CDN, publishes, or installs.');
   else if (!values.version || !values.sha || !values.out) { console.error('Supply --version, --sha and --out; see --help'); process.exitCode = 1; }
   else try { await releaseMac(values); } catch (e) { console.error(e.message.replace(/\/Users\/[^/\s"']+/g, '/Users/<u>')); process.exitCode = 1; }
 }

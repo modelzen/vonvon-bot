@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
-import { basename } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
 import { Readable } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 import { assertSecureTransport, DEFAULT_MANIFEST_URL, readStableManifest, validateManifest, validateReleaseInventory, verifyPublicRelease } from './verify-public-release.mjs';
 
 const version = '0.7.1', sha = 'a'.repeat(40);
@@ -35,8 +38,7 @@ test('stable baseline requires exact HTTP 200 and product-compatible strict JSON
 
 test('first-release missing classification never treats other failures as an empty baseline', async () => {
   assert.deepEqual(await readStableManifest({ fetchImpl: async () => response('', { status: 404 }) }), { kind: 'missing', status: 404, code: 'HTTP404' });
-  assert.equal((await readStableManifest({ fetchImpl: async () => response('<Error><Code>NoSuchKey</Code><Message>Missing</Message></Error>', { status: 400 }) })).kind, 'missing');
-  for (const status of [201, 301, 302, 403, 500, 503]) {
+  for (const status of [201, 301, 302, 400, 403, 500, 503]) {
     await assert.rejects(readStableManifest({ fetchImpl: async () => response('<Error><Code>NoSuchKey</Code></Error>', { status }) }), /HTTP/);
   }
   await assert.rejects(readStableManifest({ fetchImpl: async () => response('<Error><Code>AccessDenied</Code></Error>', { status: 400 }) }), /HTTP 400/);
@@ -109,4 +111,23 @@ test('public verification rejects stale versioned cache policy and altered downl
   };
   await assert.rejects(verifyPublicRelease({ out: '/evidence', version, sha, fetchImpl: async url => serve(url, false) }), /Versioned objects/);
   await assert.rejects(verifyPublicRelease({ out: '/evidence', version, sha, fetchImpl: async url => serve(url, true) }), /SHA-256 or size/);
+});
+
+test('CLI runs through a symlinked directory instead of silently exiting 0', async t => {
+  // macOS mktemp paths sit under the /var -> /private/var link; simulate that alias.
+  const root = await fs.mkdtemp(join(tmpdir(), 'verify-cli-'));
+  assert.ok(basename(root).startsWith('verify-cli-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const alias = join(root, 'alias');
+  await fs.symlink(dirname(fileURLToPath(import.meta.url)), alias, 'dir');
+  const run = args => spawnSync(process.execPath, [join(alias, 'verify-public-release.mjs'), ...args], { encoding: 'utf8', env: { PATH: process.env.PATH } });
+  const usage = run([]);
+  assert.equal(usage.status, 1);
+  assert.match(usage.stderr, /--out/);
+  for (const mode of [['--local-only'], []]) {
+    const missing = run(['--out', join(root, 'missing'), '--version', '0.7.0', '--sha', 'a'.repeat(40), ...mode]);
+    assert.equal(missing.status, 1, `mode ${mode.join(' ') || 'full'} must fail on missing evidence`);
+    assert.match(missing.stderr, /ENOENT|no such file/i);
+    assert.equal(missing.stdout, '');
+  }
 });
