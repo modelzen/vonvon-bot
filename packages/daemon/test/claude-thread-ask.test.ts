@@ -38,6 +38,14 @@ function makeThread(permissionFs?: PathFs, native?: Readonly<Record<string, unkn
   return { thread, options, canUseTool, setPermissionMode, submitted, access, close, end: () => end?.() };
 }
 function callbackArgs(signal = new AbortController().signal) { return { signal, requestId: 'request', toolUseID: 'tool' }; }
+function distinctPathFs(): PathFs {
+  const inodes = new Map<string, number>();
+  return { realpath: async p => p, lstat: async () => ({}), stat: async p => {
+    // Unrelated paths must not look like hard links to guarded configuration files.
+    if (!inodes.has(p)) inodes.set(p, inodes.size + 1);
+    return { dev: 1, ino: inodes.get(p)! };
+  } };
+}
 
 it('installs the write tier, file hook and callback', () => {
   const { options, setPermissionMode } = makeThread();
@@ -61,7 +69,7 @@ it('uses canonical cwd for the plan directory fallback across filesystem aliases
 });
 
 it('resets plan before submitting every turn and confirms into session-only acceptEdits', async () => {
-  const fsx: PathFs = { realpath: async p => p, stat: async () => ({ dev: 1, ino: 1 }), lstat: async () => ({}) };
+  const fsx = distinctPathFs();
   const { thread, canUseTool, setPermissionMode, submitted, access } = makeThread(fsx, { permissionMode: 'plan' });
   let release!: () => void;
   setPermissionMode.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
@@ -194,7 +202,7 @@ it('cancels an aborted callback and ignores a late answer', async () => {
 });
 
 it('denies an out-of-workspace write while an independent question stays pending', async () => {
-  const fsx: PathFs = { realpath: async (p) => p, stat: async (p) => ({ dev: 1, ino: p === '/workspace' ? 1 : 2 }), lstat: async () => ({}) };
+  const fsx = distinctPathFs();
   const { thread, canUseTool } = makeThread(fsx);
   const run = thread.runStreamed({ text: 'test' });
   const iterator = run.events[Symbol.asyncIterator]();

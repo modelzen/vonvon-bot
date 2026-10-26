@@ -193,7 +193,11 @@ for (const action of ['start', 'resume'] as const) it(`Claude ${action} forwards
     try {
       const supplied = query.mock.calls[0]?.[0]?.options;
       expect({ directories: supplied?.additionalDirectories, skills: supplied?.skills, filesystem: supplied?.sandbox?.filesystem })
-        .toEqual({ directories: [extra], skills: ['enabled'], filesystem: { allowWrite: [extra], denyWrite: [] } });
+        .toEqual({ directories: [extra], skills: ['enabled'], filesystem: {
+          allowWrite: [extra],
+          denyWrite: ['.mcp.json', '.claude/settings.json', '.claude/settings.local.json', '.claude/skills',
+            '.claude/commands', '.claude/agents', '.codex', '.agents/skills'].map(path => join(root, path)),
+        } });
     } finally { await thread.close(); }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

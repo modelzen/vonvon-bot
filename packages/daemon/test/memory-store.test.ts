@@ -52,11 +52,18 @@ describe('a new store', () => {
     expect((await bot.read()).limit).toBe(50);
   });
 
-  it('writes the four files with owner-only permissions', async () => {
+  it('writes the data files with owner-only permissions', async () => {
     const { store, dir } = project();
     must(await addHuman(store, '周四发版', '决定'));
-    expect(readdirSync(dir).sort()).toEqual(['events.jsonl', 'integrity.json', 'memory.json']);
-    for (const name of readdirSync(dir)) expect(statMode(join(dir, name))).toBe(0o600);
+    const files = ['events.jsonl', 'integrity.json', 'memory.json'];
+    expect(readdirSync(dir).sort()).toEqual(process.platform === 'darwin' ? ['.locks', ...files] : files);
+    for (const name of files) expect(statMode(join(dir, name))).toBe(0o600);
+    // macOS keeps its kernel-lock file after release; Linux uses an abstract socket.
+    if (process.platform === 'darwin') {
+      expect(statMode(join(dir, '.locks'))).toBe(0o700);
+      expect(readdirSync(join(dir, '.locks'))).toEqual(['memory.lock']);
+      expect(statMode(join(dir, '.locks', 'memory.lock'))).toBe(0o600);
+    }
   });
 });
 const statMode = (path: string): number => statSync(path).mode & 0o777;
@@ -399,12 +406,15 @@ describe('the limit', () => {
 });
 
 describe('what may be written', () => {
-  it('refuses a key-shaped text without writing anything, and lets a path through', async () => {
+  it('refuses a key-shaped text without writing memory data, and lets a path through', async () => {
     const { store, dir } = project();
     for (const text of ['token 是 sk-proj-AbCd1234EfGh5678IjKl9012MnOp', 'ghp_aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF3hJ6']) {
       expect(await addHuman(store, text)).toMatchObject({ ok: false, reason: 'looks-like-secret' });
     }
-    expect(readdirSync(dir)).toEqual([]);
+    expect(readdirSync(dir)).toEqual(process.platform === 'darwin' ? ['.locks'] : []);
+    if (process.platform === 'darwin') expect(readFileSync(join(dir, '.locks', 'memory.lock'))).toHaveLength(0);
+    expect((await store.read()).items).toEqual([]);
+    expect(await store.events()).toEqual([]);
     must(await addHuman(store, '日志放在 /var/log/pay 下'));
     const added = must(await addHuman(store, '旧的'));
     expect(await store.edit({ itemId: added.item.id, revision: 1, text: 'key: AKIAIOSFODNN7EXAMPLE', actor: DESKTOP })).toMatchObject({ ok: false, reason: 'looks-like-secret' });

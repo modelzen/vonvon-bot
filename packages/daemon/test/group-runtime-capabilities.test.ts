@@ -30,8 +30,12 @@ describe('native group capabilities', () => {
   });
   it('enforces Claude writes across all admitted directories and read-only roots', async () => {
     const access = claudeAccess('write', false, '/main', '/main', [{ path: '/second', access: 'write' }, { path: '/reference', access: 'read' }]);
-    expect(permissionOptions(access)).toMatchObject({ sandbox: { filesystem: { allowWrite: ['/second'], denyWrite: ['/reference'] } } });
-    const fs = { realpath: async (p: string) => p, stat: async (p: string) => ({ dev: 1, ino: p.length }), lstat: async () => ({}) };
+    expect(permissionOptions(access)).toMatchObject({ sandbox: { filesystem: { allowWrite: ['/second'], denyWrite: expect.arrayContaining(['/reference']) } } });
+    const inodes = new Map<string, number>();
+    const fs = { realpath: async (p: string) => p, stat: async (p: string) => {
+      if (!inodes.has(p)) inodes.set(p, inodes.size + 1);
+      return { dev: 1, ino: inodes.get(p)! };
+    }, lstat: async () => ({}) };
     const write = (path: string) => decide(access, { toolName: 'Write', input: { file_path: path }, extra: {} }, 'hook', fs);
     expect(await write('/second/a')).toEqual({ kind: 'continue' });
     expect(await write('/reference/a')).toMatchObject({ kind: 'deny' });

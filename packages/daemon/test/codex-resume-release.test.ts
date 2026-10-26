@@ -13,6 +13,7 @@ import { writeNodeExecutable } from './helpers/node-executable';
 // Fake app-server: thread/resume answers by threadId ('busy' = writer conflict,
 // 'broken' = another error) and logs the answering pid so the test can see it exit.
 const FAKE_SERVER = `#!/usr/bin/env node
+if (process.argv.includes('--version')) { console.log('codex-cli 0.163.0'); process.exit(0); }
 const fs = require('fs');
 const path = require('path');
 let buf = '';

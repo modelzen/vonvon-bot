@@ -10,6 +10,7 @@ import { writeNodeExecutable } from './helpers/node-executable';
 // 已到达），再按 input 文本分流——'fail' 回 JSON-RPC error（测 start-failure
 // race），其余立即吐完整轮事件（测早发 + AsyncQueue 缓冲不丢）。
 const FAKE_SERVER = `#!/usr/bin/env node
+if (process.argv.includes('--version')) { console.log('codex-cli 0.163.0'); process.exit(0); }
 const fs = require('fs');
 let buf = '';
 const send = (obj) => process.stdout.write(JSON.stringify(obj) + '\\n');

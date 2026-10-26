@@ -11,6 +11,7 @@ import { writeNodeExecutable } from './helpers/node-executable';
 // 后只持续发 event-map 映射为 null 的原始通知（命令输出 delta），永不发可映射
 // 事件——模拟「长命令一直在输出、卡片层却看不到任何 yield」的场景（QW-5）。
 const FAKE_SERVER = `#!/usr/bin/env node
+if (process.argv.includes('--version')) { console.log('codex-cli 0.163.0'); process.exit(0); }
 let buf = '';
 const send = (obj) => process.stdout.write(JSON.stringify(obj) + '\\n');
 process.stdin.on('data', (d) => {
