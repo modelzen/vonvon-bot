@@ -11,7 +11,7 @@ description: 按 owner 指定版本和 main SHA 构建、公证、验收 Vonvon 
 
 - 固定版本、main 完整 SHA、彩排／正式模式；先 `git fetch origin main`，确认准确 SHA 在 `origin/main` 历史中。本轮不自动跟随 main。daemon/desktop 版本须与输入相同，版本仅支持三段数字；不同则走版本修复 PR，不在构建目录临时改号。
 - 稳定地址为 `https://dl.vonvon.cc/bot/mac/stable/manifest.json`。正式版本须大于线上、COS 完整前缀历史和本机发布台账三者的最高版本。每次正式运行必传外部 `--cos-config`，见 [workflow.md](references/workflow.md)。超时、403、重定向、无效清单或 TLS 错误一律拒绝；不得用 `-k`、`--insecure`、`NODE_TLS_REJECT_UNAUTHORIZED=0` 或不安全 Node 选项绕过。
-- 首发仅在显式 `--first-release`、正常 TLS 得到 manifest 确实 404／COS `NoSuchKey`、实时完整 COS 枚举确认前缀没有任何旧 `feed-*.json`／`Vonvon-Bot-*`、台账没有历史版本时放行，记录 `baseline: none`。不能手写空列表充当 COS 证据。首发不免除 stable 的 owner 确认。
+- 线上 manifest 正常 TLS 下确实是 HTTP 404 时分三种：COS 前缀里还有 `manifest.json`，一律停下查原因；COS 有旧 `feed-*.json`／`Vonvon-Bot-*` 或台账有版本（首发传了版本化对象但没切 stable、上传半途失败、首发撤回），显式加 `--no-live-manifest`，门槛取 COS 历史和台账的最高版本，记录 `baseline: {live: none, highestPublished: X}`；两边都空，才是首发，显式加 `--first-release`，记录 `baseline: none`。不能手写空列表充当 COS 证据。首发不免除 stable 的 owner 确认。
 - 彩排版本不得超过下一次正式版本。彩排输出 `REHEARSAL-` 元数据和 `DO-NOT-PUBLISH`，不上传、不原样晋级。
 - 更新配置只含 `manifestURL`、`teamIdentifier`，默认位于 `~/.vonvon-release/desktop-update.json`；地址须等于稳定地址，团队须与现有 Developer ID Application 证书相符。配置及真实身份值不提交。
 - 公证默认钥匙串 profile `notelet-notary`。helper 在构建前检查凭据；人工诊断用 `xcrun notarytool history --keychain-profile notelet-notary --output-format json >/dev/null`，只看退出码，不打印其他项目历史。凭据失效就停止，不导出密码或私钥。
@@ -29,7 +29,7 @@ description: 按 owner 指定版本和 main SHA 构建、公证、验收 Vonvon 
      --next-version "$NEXT_VERSION" --keychain-profile notelet-notary
    ```
 
-   正式候选改为 `--mode release --notes-file "$NOTES_FILE" --cos-config "$COS_CONFIG"`；首发另加 `--first-release`。发行说明须非空 UTF-8。helper 不上传 COS、不刷新 CDN、不安装 App。
+   正式候选改为 `--mode release --notes-file "$NOTES_FILE" --cos-config "$COS_CONFIG"`；首发另加 `--first-release`，线上 404 而有发布历史时另加 `--no-live-manifest`。发行说明须非空 UTF-8。helper 不上传 COS、不刷新 CDN、不安装 App。
 4. helper 仅构建签名 universal App，检查实际 Mach-O 双架构、Developer ID、hardened runtime、最小 entitlements、App/Core/build 版本、内置更新配置及不捆绑 Claude runtime 的约束。先公证签名 App，`Accepted` 且公证警告通过允许清单后，才钉票并验证；未知 warning 默认停止，不能自行放宽允许清单。
 5. 从同一已钉票 App 生成最终 ZIP 与 prepackaged DMG；ZIP 使用 `--noqtn` 并保留代码签名扩展属性，不能用 `--norsrc` 粗暴剥除。DMG 单独签名、公证、钉票。对 ZIP 解压 App、DMG 只读挂载 App 再验签、钉票和 Gatekeeper，检查没有 `com.apple.quarantine`；不能只验工作目录原件。
 6. 全部最终字节验证后生成 inventory、`SHA256SUMS` 和模式对应元数据。只按 inventory 选择公开对象；`app-notary-upload.zip`、App、解压目录、日志、`.blockmap`、builder 配置均为私有证据，**不得递归上传输出根目录**。中断恢复与警告诊断见 [workflow.md](references/workflow.md)。
@@ -38,7 +38,7 @@ description: 按 owner 指定版本和 main SHA 构建、公证、验收 Vonvon 
 
 COS/CDN 写入工具尚未实现；不得现场拼命令直接上传。按 [workflow.md](references/workflow.md) 先准备具体命令、服务端不覆盖保护、缓存头、inventory 校验和回执方案，交 owner 确认命令后才执行获准上传阶段。只问 profile／配置路径，不索要密钥明文，不回显凭据文件，不把密钥放命令行；COS 与 CDN 凭据分别确认存在和权限。
 
-版本化 ZIP/feed/DMG 的公网 HTTPS、完整 SHA-256、缓存头都核验成功后，向 owner 展示版本、源码 SHA、公证 submission ID、最终 ZIP/DMG 哈希和公开 URL，再取得当前对话明确确认才可最后切 stable manifest。使用 `scripts/verify-public-release.mjs` 复核固定 URL，不能跟随重定向或加随机 query 绕缓存。只有公网复核通过才报告发布完成，并持久保存发布回执。
+版本化 ZIP/feed/DMG 的公网 HTTPS、完整 SHA-256、缓存头都核验成功后，向 owner 展示版本、源码 SHA、公证 submission ID、最终 ZIP/DMG 哈希和公开 URL，再取得当前对话明确确认才可最后切 stable manifest。使用 `scripts/verify-public-release.mjs` 复核固定 URL，不能跟随重定向或加随机 query 绕缓存；必须看到它的成功输出才算通过，不能只看退出码。只有公网复核通过才报告发布完成，并持久保存发布回执。
 
 manifest 使用 `Cache-Control: no-cache`，CDN 短 TTL／重验证；版本化文件使用 `public, max-age=31536000, immutable`。更新格式保持 Squirrel.Mac 的 manifest `{version, feedURL}`、feed `{url, name, notes, pub_date}`，同源 HTTPS。回滚只恢复事先验证并保存的旧 manifest、刷新 CDN 以停推；已升级客户端不降级，修复版必须高于**曾发布的最高版本**。
 

@@ -148,6 +148,7 @@ async function releaseFixture(settings = {}) {
   return { root, repo, out, settings, calls, options, deps, write, writeJSON, artifactRecord, readState: async () => JSON.parse(await readFile(join(out, 'notarization-state.json'), 'utf8')), run: extra => releaseMac({ ...options, ...extra }, deps) };
 }
 const isSubmit = call => call.command === 'xcrun' && call.args[0] === 'notarytool' && call.args[1] === 'submit';
+const isBuildOrPack = call => call.command === 'npm' || call.command === process.execPath;
 const isStaple = call => call.command === 'xcrun' && call.args[0] === 'stapler' && call.args[1] === 'staple';
 
 test('release orchestration staples the App before creating either final container and separates rehearsal metadata', async () => {
@@ -296,21 +297,94 @@ test('explicit first release accepts only verified absence and records the empty
 
 test('first-release gate rejects implicit absence, old COS objects, and a publication ledger', async t => {
   for (const scenario of [
-    { options: {}, evidence: { versions: [], keys: [] } },
-    { options: { 'first-release': true }, evidence: { versions: [], keys: ['bot/mac/stable/Vonvon-Bot-0.6.0-universal.zip'] } },
-    { options: { 'first-release': true }, evidence: { versions: [], keys: ['bot/mac/stable/feed-0.6.0.json'] } },
-    { options: { 'first-release': true }, evidence: { versions: ['0.6.0'], keys: [] } },
+    { options: {}, evidence: { versions: [], keys: [] }, error: /First release requires/ },
+    { options: { 'no-live-manifest': true }, evidence: { versions: [], keys: [] }, error: /First release requires/ },
+    { options: { 'first-release': true }, evidence: { versions: ['0.6.0'], keys: ['bot/mac/stable/Vonvon-Bot-0.6.0-universal.zip'] }, error: /--no-live-manifest/ },
+    { options: { 'first-release': true }, evidence: { versions: ['0.6.0'], keys: ['bot/mac/stable/feed-0.6.0.json'] }, error: /--no-live-manifest/ },
+    { options: { 'first-release': true }, evidence: { versions: ['0.6.0'], keys: [] }, error: /--no-live-manifest/ },
+    { options: { 'first-release': true, 'no-live-manifest': true }, evidence: { versions: [], keys: [] }, error: /either/ },
   ]) await t.test(JSON.stringify(scenario), async () => {
     const fixture = await formalFixture();
     fixture.deps.fetchImpl = async () => new Response('', { status: 404 });
     fixture.deps.cosEvidence = scenario.evidence;
-    await assert.rejects(fixture.run(scenario.options), /First release/i);
-    assert.equal(fixture.calls.some(call => call.command === 'npm' || call.command === process.execPath), false);
+    await assert.rejects(fixture.run(scenario.options), scenario.error);
+    assert.equal(fixture.calls.some(isBuildOrPack), false);
+  });
+});
+
+const published069 = {
+  keys: ['bot/mac/stable/feed-0.6.9.json', 'bot/mac/stable/Vonvon-Bot-0.6.9-universal.zip', 'bot/mac/stable/Vonvon-Bot-0.6.9-universal.dmg'],
+  versions: ['0.6.9', '0.6.9', '0.6.9'],
+};
+
+test('missing manifest with COS manifest.json still listed always stops', async t => {
+  for (const options of [{}, { 'first-release': true }, { 'no-live-manifest': true }]) await t.test(JSON.stringify(options), async () => {
+    const fixture = await formalFixture();
+    fixture.deps.fetchImpl = async () => new Response('', { status: 404 });
+    fixture.deps.cosEvidence = { keys: [...published069.keys, 'bot/mac/stable/manifest.json'], versions: published069.versions };
+    await assert.rejects(fixture.run(options), /still lists manifest\.json/);
+    assert.equal(fixture.calls.some(isBuildOrPack), false);
+  });
+});
+
+test('missing manifest with published history needs --no-live-manifest and gates above the highest version', async t => {
+  for (const [name, evidence] of [['versioned COS objects', published069], ['ledger only', { keys: [], versions: ['0.6.9'] }]]) await t.test(name, async () => {
+    for (const options of [{}, { 'first-release': true }]) {
+      const refused = await formalFixture();
+      refused.deps.fetchImpl = async () => new Response('', { status: 404 });
+      refused.deps.cosEvidence = evidence;
+      await assert.rejects(refused.run(options), /--no-live-manifest/);
+      assert.equal(refused.calls.some(isBuildOrPack), false);
+    }
+    const fixture = await formalFixture();
+    fixture.deps.fetchImpl = async () => new Response('', { status: 404 });
+    fixture.deps.cosEvidence = evidence;
+    const state = await fixture.run({ 'no-live-manifest': true });
+    assert.equal(state.complete, true);
+    assert.deepEqual(state.baseline, { live: 'none', highestPublished: '0.6.9' });
+    const inventory = JSON.parse(await readFile(join(fixture.out, 'release-inventory.json'), 'utf8'));
+    assert.deepEqual(inventory.baseline, { live: 'none', highestPublished: '0.6.9' });
+    await assert.rejects(readFile(join(fixture.out, 'previous-manifest.json')), { code: 'ENOENT' });
+  });
+  await t.test('a fix must exceed the withdrawn first release', async () => {
+    const fixture = await formalFixture();
+    fixture.deps.fetchImpl = async () => new Response('', { status: 404 });
+    fixture.deps.cosEvidence = { keys: ['bot/mac/stable/feed-0.7.0.json'], versions: ['0.6.9', '0.7.0'] };
+    await assert.rejects(fixture.run({ 'no-live-manifest': true }), /highest previously published/);
+    assert.equal(fixture.calls.some(isBuildOrPack), false);
+  });
+  await t.test('history without a derivable version is investigated, not ignored', async () => {
+    const fixture = await formalFixture();
+    fixture.deps.fetchImpl = async () => new Response('', { status: 404 });
+    fixture.deps.cosEvidence = { keys: ['bot/mac/stable/archive/feed-0.9.0.json'], versions: [] };
+    await assert.rejects(fixture.run({ 'no-live-manifest': true }), /no published version could be derived/);
+  });
+});
+
+const liveManifest = version => new Response(JSON.stringify({ version, feedURL: new URL(`feed-${version}.json`, manifestURL).href }), { status: 200, headers: { 'content-type': 'application/json' } });
+
+test('existing stable manifest is snapshotted, gates the version and refuses missing-manifest flags', async t => {
+  await t.test('orchestration with a live manifest', async () => {
+    const fixture = await formalFixture();
+    fixture.deps.fetchImpl = async () => liveManifest('0.6.9');
+    fixture.deps.cosEvidence = published069;
+    const state = await fixture.run();
+    assert.equal(state.complete, true);
+    assert.equal(state.baseline, '0.6.9');
+    assert.deepEqual(JSON.parse(await readFile(join(fixture.out, 'previous-manifest.json'), 'utf8')), { version: '0.6.9', feedURL: new URL('feed-0.6.9.json', manifestURL).href });
+  });
+  for (const options of [{ 'first-release': true }, { 'no-live-manifest': true }, {}]) await t.test(JSON.stringify(options), async () => {
+    const fixture = await formalFixture();
+    fixture.deps.fetchImpl = async () => liveManifest(Object.keys(options).length ? '0.6.9' : '0.7.0');
+    fixture.deps.cosEvidence = published069;
+    await assert.rejects(fixture.run(options), /cannot replace|requires the public stable manifest to be missing|greater than the highest/);
+    assert.equal(fixture.calls.some(isBuildOrPack), false);
+    await assert.rejects(readFile(join(fixture.out, 'previous-manifest.json')), { code: 'ENOENT' }, 'snapshot is written only after every gate passes');
   });
 });
 
 test('network, TLS, forbidden, server errors and redirects never become a first-release baseline', async t => {
-  for (const scenario of ['network', 'TLS', 'redirect', 403, 500]) await t.test(String(scenario), async () => {
+  for (const scenario of ['network', 'TLS', 'redirect', 400, 403, 500]) await t.test(String(scenario), async () => {
     const fixture = await formalFixture();
     fixture.deps.fetchImpl = async () => {
       if (scenario === 'network' || scenario === 'TLS') throw new Error(`fixture ${scenario} failure`);
@@ -335,4 +409,17 @@ test('output gate rejects temporary roots and either direction of source overlap
   assert.throws(() => assertOutputLocation('/work/source', '/work', ['/tmp']));
   assert.throws(() => assertOutputLocation('/work/source', '/tmp/evidence', ['/tmp']));
   assert.doesNotThrow(() => assertOutputLocation('/work/source', '/evidence/release', ['/tmp']));
+});
+
+test('CLI entry runs through a symlinked directory', async t => {
+  const { spawnSync } = await import('node:child_process');
+  const { mkdtemp, rm, symlink } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const root = await mkdtemp(join(tmpdir(), 'release-cli-'));
+  assert.ok(basename(root).startsWith('release-cli-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await symlink(dirname(fileURLToPath(import.meta.url)), join(root, 'alias'), 'dir');
+  const result = spawnSync(process.execPath, [join(root, 'alias', 'release-mac.mjs')], { encoding: 'utf8', env: { PATH: process.env.PATH } });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Supply --version/);
 });

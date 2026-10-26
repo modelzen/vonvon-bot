@@ -50,7 +50,17 @@ VONVON_DESKTOP_UPDATE_CONFIG="$HOME/.vonvon-release/desktop-update.json" \
   --notes-file "$NOTES_FILE" --cos-config "$COS_CONFIG" --keychain-profile notelet-notary
 ```
 
-首次发布另显式加 `--first-release`，必须全部成立：正常 TLS 的 manifest 请求确实是 404／COS `NoSuchKey`；实时 COS 完整前缀中没有旧 `feed-*.json` 或 `Vonvon-Bot-*`；本机台账没有历史。state 与 inventory 记录 `baseline: none`。403、超时、重定向、TLS 错误和无效 200 都不能当作首发。严禁 `curl -k`、`--insecure`、`NODE_TLS_REJECT_UNAUTHORIZED=0` 和不安全 `NODE_OPTIONS`。已有清单时按正常版本门槛，不伪装首发。
+线上 manifest 在正常 TLS 下确实是 HTTP 404 时，helper 按 COS 和台账分三种处理：
+
+| COS 前缀和台账 | 参数 | 结果 |
+| --- | --- | --- |
+| COS 里有 `manifest.json` 这个 key | 任何参数 | 拒绝。公网和 COS 对不上，先查 CDN、域名和权限 |
+| COS 有旧 `feed-*.json`／`Vonvon-Bot-*`，或台账有版本 | `--no-live-manifest` | 门槛取 COS 历史和台账的最高版本，state 与 inventory 记录 `baseline: {live: none, highestPublished: X}` |
+| 两边都是空的 | `--first-release` | 首发，state 与 inventory 记录 `baseline: none` |
+
+第二种是流程里写好的几条路：首发时版本化对象已经上传，owner 在 stable 关口说"先不发"；首发上传传到一半失败；首发撤回时删了 manifest。参数和情况对不上时 helper 拒绝，不会互相顶替。只有 404 才算"没有清单"：400、403、5xx、超时、重定向、TLS 错误和无效 200 一律拒绝。严禁 `curl -k`、`--insecure`、`NODE_TLS_REJECT_UNAUTHORIZED=0` 和不安全 `NODE_OPTIONS`。已有清单时按正常版本门槛，两个参数都不能用。
+
+门槛没过时 helper 只在 `OUT/logs/` 写日志，`previous-manifest.json` 和 state 都在全部门槛通过后才写。
 
 彩排使用 `--mode rehearsal --next-version "$NEXT_VERSION"`，发行版本不超过下一正式版本；输出 `REHEARSAL-` 元数据和 `DO-NOT-PUBLISH`。不得把已公证彩排包直接晋级正式版。
 
@@ -82,7 +92,7 @@ COS/CDN 写入 helper 尚未实现。本轮工具只能本地构建、公证和�
 node "$VERIFY_PUBLIC_RELEASE" --out "$OUT" --version "$VERSION" --sha "$SOURCE_SHA" --local-only
 ```
 
-`VERIFY_PUBLIC_RELEASE` 指向 `scripts/verify-public-release.mjs` 的绝对路径；本地预检通过后才准备获准上传。
+`VERIFY_PUBLIC_RELEASE` 指向 `scripts/verify-public-release.mjs` 的绝对路径；本地预检通过后才准备获准上传。复核脚本的结果以输出为准：`--local-only` 要看到 `Local formal-release evidence verified.` 那一行，完整复核要看到 JSON 里的 `"publiclyVerified": true`。没有这行输出就算没通过，不能只看退出码。
 
 1. 核对 state `complete`、inventory `mode === "release"`、sourceCommit 等于本轮 SHA，拒绝 `DO-NOT-PUBLISH`；重新计算 inventory 全部公开文件尺寸／哈希并逐项对应 `SHA256SUMS`。缺失、额外对象或不一致即停。
 2. 保存线上已验证 manifest。helper 的 `previous-manifest.json` 是构建时快照；上传前还要取新快照并记录哈希、重新检查最高历史版本，防回滚后发布低于曾发布版本。首发以已验证 `baseline: none` 处理，不能捏造旧清单。
@@ -92,7 +102,11 @@ node "$VERIFY_PUBLIC_RELEASE" --out "$OUT" --version "$VERSION" --sha "$SOURCE_S
 6. 获确认后最后写 manifest，刷新固定 URL 的 CDN 缓存，用相同 `--out`、`--version`、`--sha` 参数运行 `scripts/verify-public-release.mjs`，去掉 `--local-only`。复核须 `redirect: error`、正常 TLS、HTTP 200、15 秒清单超时、最多 16384 字节、严格 `{version, feedURL}`、feed 同源 HTTPS，并检查 Content-Type／缓存头；下载 ZIP 核对完整 SHA-256。不得跟随 301/302、加随机 query 旁路缓存或忽略证书。
 7. 保存 `publish-receipt.json`：版本/sourceCommit、公开对象和字节哈希、上传／刷新时间及结果、切换前清单哈希、owner 确认对应消息、最终公网验证结果。回执不能含凭据和身份值。全部成功才报告公开发布完成，并更新持久本机发布台账；失败保留现场，不把 inventory 的 `publiclyPublished: false` 当真实上传回执。
 
-若切 manifest 后公网复核失败，按已审阅撤回方案恢复保存的旧清单、刷新 CDN 并核验，记录结果；首发没有旧清单时停止扩散并由 owner 决定处置，不能虚构回滚成功。撤回仅停推，已升级客户端不降级；修复版本必须高于曾发布的最高版本。版本化对象保留，不删包回滚。
+若切 manifest 后公网复核失败，按已审阅撤回方案恢复保存的旧清单、刷新 CDN 并核验，记录结果；不能虚构回滚成功。撤回仅停推，已升级客户端不降级；修复版本必须高于曾发布的最高版本。版本化对象保留，不删包回滚。
+
+首发没有旧清单可恢复。首发要撤回时，先把具体命令交 owner 确认，只删除 `bot/mac/stable/manifest.json` 这一个对象，版本化对象和台账都不动；如果启用了 CDN，再刷新 manifest 的固定 URL；最后确认公网 manifest 回到 HTTP 404。撤回后的修复版用 `--no-live-manifest` 运行 helper：线上 404、COS 没有 `manifest.json`，门槛取 COS 历史和台账里的最高版本，修复版必须比首发版本高。
+
+owner 在 stable 关口说"先不发"时，版本化对象已经在 COS 上。以后要发同一批字节，不用重跑 helper：用原来的 `OUT` 重新核对公网上的版本化对象，再按第 5 步重新展示证据、重新确认。要换字节，就是新版本，用 `--no-live-manifest`，版本号必须更高。
 
 ## 中断恢复
 
