@@ -10,9 +10,13 @@ const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const hashPattern = /^[a-f0-9]{64}$/;
 const parseJSON = value => { try { return JSON.parse(value); } catch { throw new Error('Invalid JSON in release evidence or HTTP response'); } };
 
-export function assertSecureTransport(env = process.env) {
-  if (env.NODE_TLS_REJECT_UNAUTHORIZED === '0' || /insecure/i.test(env.NODE_OPTIONS ?? '')) {
-    throw new Error('TLS verification bypasses are forbidden; repair the endpoint certificate');
+// Each of these either disables verification, swaps the trust store, or preloads code that can.
+const trustStoreOverrides = ['NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'SSL_CERT_DIR'];
+const forbiddenNodeFlag = /insecure|^--use-(?:openssl|system)-ca$|^--openssl-config(?:=|$)|^--require(?:=|$)|^-r(?:=|$)|^--import(?:=|$)|^--(?:experimental-)?loader(?:=|$)/i;
+export function assertSecureTransport(env = process.env, execArgv = process.execArgv) {
+  const flags = [...String(env.NODE_OPTIONS ?? '').split(/\s+/), ...execArgv].filter(Boolean);
+  if (env.NODE_TLS_REJECT_UNAUTHORIZED === '0' || trustStoreOverrides.some(name => env[name]) || flags.some(flag => forbiddenNodeFlag.test(flag))) {
+    throw new Error('TLS verification bypasses and trust-store overrides are forbidden; repair the endpoint certificate');
   }
 }
 
@@ -60,8 +64,8 @@ export function validateManifest(manifest, url = DEFAULT_MANIFEST_URL) {
 }
 
 /** Strict TLS and no redirects also apply to the explicit first-release missing result. */
-export async function readStableManifest({ fetchImpl = fetch, url = DEFAULT_MANIFEST_URL } = {}) {
-  assertSecureTransport(); httpsURL(url);
+export async function readStableManifest({ fetchImpl = fetch, url = DEFAULT_MANIFEST_URL, env = process.env } = {}) {
+  assertSecureTransport(env); httpsURL(url);
   const response = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(15000) });
   if (response.redirected) throw new Error('Release endpoint redirected');
   // COS answers NoSuchKey with 404; every other status, including 400, 403 and 5xx, fails closed.
@@ -149,8 +153,8 @@ async function verifyVersionedObjects(evidence, version, manifest, fetchImpl) {
   return evidence.files.filter(record => urls[record.file]).map(record => ({ ...record, url: urls[record.file] }));
 }
 
-export async function verifyPublicRelease({ out, version, sha, fetchImpl = fetch } = {}) {
-  assertSecureTransport();
+export async function verifyPublicRelease({ out, version, sha, fetchImpl = fetch, env = process.env } = {}) {
+  assertSecureTransport(env);
   const evidence = await validateReleaseInventory(out, { version, sha });
   const manifest = validateManifest(await verifyDownload(DEFAULT_MANIFEST_URL, evidence.files.find(record => record.file === 'manifest.json'), fetchImpl, true));
   if (manifest.version !== version) throw new Error('Public manifest differs from the expected release version');
@@ -162,8 +166,8 @@ export async function verifyPublicRelease({ out, version, sha, fetchImpl = fetch
  * Before the stable switch the live manifest is 404 or an older release, so it is not read.
  * URLs come from the local manifest; the result is the evidence shown to the owner.
  */
-export async function verifyVersionedRelease({ out, version, sha, fetchImpl = fetch } = {}) {
-  assertSecureTransport();
+export async function verifyVersionedRelease({ out, version, sha, fetchImpl = fetch, env = process.env } = {}) {
+  assertSecureTransport(env);
   const evidence = await validateReleaseInventory(out, { version, sha });
   const manifest = validateManifest(parseJSON(await fs.readFile(join(out, 'manifest.json'), 'utf8')));
   if (manifest.version !== version) throw new Error('Local manifest differs from the expected release version');
