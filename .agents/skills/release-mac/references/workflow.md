@@ -77,7 +77,9 @@ VONVON_DESKTOP_UPDATE_CONFIG="$HOME/.vonvon-release/desktop-update.json" \
 
 helper 先只用 `dir` 目标构建签名 universal App，再生成 App 公证传输 ZIP。保存 submission ID，`Accepted` 后读取日志并检查 warning，允许清单之外的 warning 一律停止。默认允许清单为空；诊断出原因不等于允许继续发布。不要手改 state 或跳过警告门禁。
 
-此前 0.7.14 演练已只读核实：App 中有 `com.apple.provenance`，部分非 Mach-O 资源有 `com.apple.cs.*` 签名扩展属性，造成 ZIP 的 AppleDouble／`__MACOSX` 元数据条目；原最终更新 ZIP 无 `com.apple.quarantine`。详细文件证据见本 PR 的后续结果评论。不能用 `--norsrc` 去除所有属性，否则非 Mach-O 资源签名会丢失。今后 ZIP 使用 `--noqtn`，保留签名属性，并在最终 ZIP 解压后递归检查 quarantine；`__MACOSX` 的存在本身不代表 quarantine。
+此前 0.7.14 演练已只读核实：App 中有 `com.apple.provenance`，部分非 Mach-O 资源有 `com.apple.cs.*` 签名扩展属性，造成 ZIP 的 AppleDouble／`__MACOSX` 元数据条目；原最终更新 ZIP 无 `com.apple.quarantine`。详细文件证据见 PR #558 的结果评论。不能用 `--norsrc` 去除所有属性，否则非 Mach-O 资源签名会丢失。0.7.14 的 warning 路径是 `app-notary-upload.zip/__MACOSX/Vonvon Bot.app`，来自传输 ZIP 的 `--sequesterRsrc`。现在传输 ZIP 改用 Apple 文档里的写法 `ditto -c -k --keepParent`（App 在打包前已检查没有 quarantine）；最终更新 ZIP 不变，仍是 `--sequesterRsrc --noqtn`，保留签名属性，并在解压后递归检查 quarantine。`__MACOSX` 的存在本身不代表 quarantine。
+
+这一改动在 Linux 上验证不了。**正式 0.7.0 之前，先请 owner 点名一次彩排公证，用合入后的新 head 跑 `--mode rehearsal`，看 App 的公证日志里 warning 是否消失。还在就停下，把日志里 warning 的 path、code、message 报给 owner，不放宽允许清单、不改 state 续跑，也不开始正式候选。**
 
 App 钉票并通过验证后才生成最终 ZIP 和 electron-builder `prepackaged` DMG。DMG 自身再签名、公证、钉票；不先运行旧的 `package:universal`。`ditto`／`hdiutil create` 等手工命令仅用于诊断，不产出发布件。不要给 ZIP 执行 `stapler`，不要在 App 钉票后重签或改其内容；变更后重新开始候选。
 
@@ -97,7 +99,7 @@ App 钉票并通过验证后才生成最终 ZIP 和 electron-builder `prepackage
 
 2026-10-26 查 DNS 时，`dl.vonvon.cc` 直接 CNAME 到 COS 源站域名，看不到 CDN 这一层，所以下文 CDN 的步骤都写成"如果启用了 CDN"。
 
-COS/CDN 写入 helper 尚未实现。本轮工具只能本地构建、公证和只读枚举；**执行 COS 写入前先停下，请 owner 确认已准备好的具体命令**。不能自行挑一条默认覆盖的 `coscli cp` 临场执行。先准备以下可审阅方案和机器检查：
+COS/CDN 写入 helper 尚未实现。现有工具只能本地构建、公证和只读枚举；**执行 COS 写入前先停下，请 owner 确认已准备好的具体命令**。不能自行挑一条默认覆盖的 `coscli cp` 临场执行。先准备以下可审阅方案和机器检查：
 
 ```sh
 node "$VERIFY_PUBLIC_RELEASE" --out "$OUT" --version "$VERSION" --sha "$SOURCE_SHA" --local-only
