@@ -233,7 +233,10 @@ describe('Codex 判断进程：参数和结果', () => {
       [{requiresOpenaiAuth:'bad',account:null}, 'unknown'],
     ] as const) {
       fake.set('account', account);
-      expect((await backend.loginStatus({refresh:true})).state).toBe(state);
+      const login = await backend.loginStatus({refresh:true});
+      expect(login.state).toBe(state);
+      if (state === 'signedIn') expect(login.account).toEqual({kind:'unknown',apiProvider:'chatgpt'});
+      if (state === 'notRequired') expect(login.account).toEqual({kind:'api',apiProvider:'custom'});
     }
     expect(fake.requests('account/read')).toHaveLength(4);
     expect(fake.requests('account/read').every(request=>request.params.refreshToken===true)).toBe(true);

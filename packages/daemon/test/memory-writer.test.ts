@@ -7,12 +7,13 @@ import type { MemoryTurn } from '../src/bot/memory-authority';
 import { botMemoryLocation, MemoryStore, projectMemoryLocation } from '../src/bot/memory-store';
 import { createMemoryWriter, type WriteContext } from '../src/bot/memory-writer';
 import type { FoundBlocks } from '../src/bot/hidden-blocks';
+import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
 
 vi.mock('../src/core/logger', () => ({ log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() } }));
 
 const roots: string[] = [];
 const root = (): string => { const path = realpathSync(mkdtempSync(join(tmpdir(), 'memory-writer-'))); roots.push(path); return path; };
-afterEach(() => { for (const path of roots.splice(0)) rmSync(path, { recursive: true, force: true }); });
+afterEach(() => { setDiagnosticsSink(undefined); for (const path of roots.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
 const PROJECT = 'prj_0a1b2c3d';
 const OTHER_PROJECT = 'prj_deadbeef';
@@ -48,6 +49,24 @@ const must = <T extends { ok: boolean }>(result: T): Extract<T, { ok: true }> =>
 const active = async (store: MemoryStore) => (await store.read()).items.filter(item => item.state === 'active');
 
 describe('memory_add: project memory from a group', () => {
+  it('announces only committed new memories from both entry paths, without memory text', async () => {
+    const events: DiagnosticsEvent[] = [];
+    setDiagnosticsSink(event => events.push(event));
+    const { writer, project, turnContext } = setup();
+    const { ctx } = turnContext();
+    const added = must(await writer.add(ctx, { text: 'PRIVATE_MEMORY_1' }, 'tool'));
+    const found: FoundBlocks = { remember: [{ attrs: { n: 'nonce' }, body: 'PRIVATE_MEMORY_2' }], mem: [], dropped: 0 };
+    expect(await writer.applyBlocks({ found, nonce: 'nonce', ctx: { ...ctx, triggerMessageId: 'om_2' } })).toMatchObject({ written: 1 });
+    expect(await active(project)).toHaveLength(2);
+    expect(events).toHaveLength(2);
+    expect(events.every(event => event.kind === 'latestAction' && event.action.kind === 'memory-saved' && event.action.groupId === 'oc_a')).toBe(true);
+    expect(JSON.stringify(events)).not.toMatch(/PRIVATE_MEMORY|om_1|om_2/);
+    await writer.add(ctx, { text: 'PRIVATE_MEMORY_1' }, 'tool');
+    await writer.add(turnContext({ active: false }).ctx, { text: 'refused' }, 'tool');
+    await writer.update(ctx, { id: added.item.id, text: 'PRIVATE_EDIT' });
+    expect(events).toHaveLength(2);
+  });
+
   it('a member saying "remember" lands in the project as untrusted, from them, on a fitting branch', async () => {
     const { writer, project, turnContext } = setup();
     const { ctx } = turnContext({ triggerText: '记住 发版改到周四' });
