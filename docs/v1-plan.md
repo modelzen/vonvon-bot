@@ -1875,6 +1875,7 @@ D8 的三个待定项（product.md 第 11 节），u01 这样定：
 |---|---|---|
 | Apple 开发者的公证凭据 | 每轮获准公证前核验 | s65 当时不公证；2026-10-26 release-mac 使用本机已有钥匙串 profile，配置路径和身份不进仓库，本轮只改工具不公证 |
 | 公开的下载和更新地址 | 正式候选及公开发布前验证 | s65 当时未定；release-mac 固定 `https://dl.vonvon.cc/bot/mac/stable/manifest.json`，TLS/COS/CDN 必须实证可用，不能绕证书错误；切 stable 的确认规则见 `AGENTS.md`"Mac 发布任务（owner 2026-10-26 定）" |
+| 官网 vonvon.cc 和 bot.vonvon.cc 的 301 | 0.7.0 之后第一个版本发布前，之后每次发布前复查 | 新版本只认 vonvon.cc，0.7.0 只认 bot.vonvon.cc（第 10 节 2026-10-26 记录）。核对：`curl -I https://bot.vonvon.cc/get/`、`/changelog/`、`/` 各返回 301，`Location` 是 vonvon.cc 的同一路径，带 query 时 query 原样带上；`curl -I https://vonvon.cc/get/`、`/changelog/` 返回 200，首页有 `id="community"` 锚点；bot.vonvon.cc 的证书握手成功（不加 `-k`）。2026-10-26 从 JP-VPS 连这两个域名超时（DNS 能解析），这一步在 Mac 上查 |
 | 一位同事或第二个飞书账号 | e10（s18 之前）、e09（s30 之前）、M6 第 4 步、M9 第 2 和第 6 步 | 验收时要有另一个人点卡片、私聊 bot |
 | TypeSafe 的账号和 key | s23f、s23g 和 M5 第 11 步（测试 key 已给，2026-10-18） | 测试 key 存在 JP-VPS 本机，不进仓库，Claude 在 JP-VPS 上测这几处时用。Mac 上要用 Jev 时由 owner 在密钥页自己填，key 不经 GitHub 传给 Mac 上的 Codex。长期用要 owner 自己的账号和付款方式；有没有免费额度，文档没写 |
 | JP-VPS 上再加两个测试 bot | 已做（2026-10-16） | M5 要同一台机器上三个 bot（一个规则模式、两个智能模式）。owner 在 JP-VPS 的终端里扫码建了 Vonvon Bot 7、Bot 8，开发者后台由 Mac 上的 Codex 配好、发布（本文第 10 节"M3 验收期间顺带看到的"） |
@@ -1900,7 +1901,7 @@ D8 的三个待定项（product.md 第 11 节），u01 这样定：
 - 首次公开发布的版本号是 0.7.0（接 bridge 的 0.6.x），只发 macOS，免费，闭源；这次不发 Linux 命令行版，Linux 的验收和 npm 发布推到以后。
 - 官网 https://vonvon.cc，下载页 `/get/`，更新日志 `/changelog/`；0.7.0 安装包里写的是 bot.vonvon.cc，由它 301 到 vonvon.cc（owner 2026-10-26）。安装包和更新放 https://dl.vonvon.cc（COS + CDN）。更新清单地址在构建时写进包里，之后不能改、不能做跳转，所以 0.7.0 之后每个版本都要保持它可用。
 - 公证由 owner 自己做；仓库里与公证有关的打包配置不动，也不放公证凭据。
-- 官网域名改为 https://vonvon.cc（owner 同日：“站点域名就是 vonvon.cc”）。0.7.0 安装包已用 main `5f177b1d` 打好，里面写的是 bot.vonvon.cc，由它 301 到 vonvon.cc，旧链接照常能用。`claude/site-domain` 把产品代码里的官网、下载页 `/get/`、更新日志 `/changelog/` 和反馈 `/#community` 改成 vonvon.cc，从下一个版本起生效；桌面端和网页端打开这两个官网页面时只放行 vonvon.cc，不再认 bot.vonvon.cc 和其他子域名。dl.vonvon.cc 不变。旧 bridge 的 README 和提示同样改（feishu-codex-bridge 的 `claude/bridge-site-domain`）。
+- 官网域名改为 https://vonvon.cc（owner 同日：“站点域名就是 vonvon.cc”）。0.7.0 安装包已用 main `5f177b1d` 打好，里面写的是 bot.vonvon.cc，由它 301 到 vonvon.cc，旧链接照常能用。`claude/site-domain` 把产品代码里的官网、下载页 `/get/`、更新日志 `/changelog/` 和反馈 `/#community` 改成 vonvon.cc，从下一个版本起生效；桌面端和网页端打开这两个官网页面时只放行 vonvon.cc，不再认 bot.vonvon.cc 和其他子域名。dl.vonvon.cc 不变。旧 bridge 的 README 和提示同样改（feishu-codex-bridge 的 `claude/bridge-site-domain`）。只要还有 0.7.0 在用，bot.vonvon.cc 的 DNS、证书和 301 就不能去掉：0.7.0 设置里的“下载更新”“发布说明”、更新失败提示、桌面端错误弹窗、私聊卡的“官网”和“反馈”都写死了它，证书里没有它，HTTPS 握手就失败，跳不到 vonvon.cc；301 要把路径、query 原样带到 vonvon.cc（/get/、/changelog/、/）。发布前的线上核对见第 8 节“官网 vonvon.cc 和 bot.vonvon.cc 的 301”。
 - bridge 不废弃，也不标“停止维护”：只建议 Mac 用户改用 Vonvon Bot，Windows 和 Linux 的 bridge 用户照常用 bridge。s64 因此不再是 0.7.0 的发布条件。
 - 发布前的代码修复（`claude/release-070`）：版本号改成 0.7.0；桌面端自动检查更新（启动约 60 秒后、之后每 24 小时加最多 1 小时随机延迟，只发现新版本，下载和安装仍由用户点）并在设置入口和菜单栏菜单里标出“有新版本”；“上次安装尚未生效”也在这几处标出，给重试和手动下载，自动检查照常联网（清单里有更高版本就按“有新版本”提示）；同一时间只查一次，检查中也能点“下载更新”；更新清单忽略未知字段；发布说明指向 /changelog/；桌面端弹窗、更新失败和启动失败的提示改中文；私聊卡去掉 bridge 旧品牌、不再查失效的 GitHub release、去掉 Windows 入口，“反馈”按钮指向官网 /#community（群邀请链接只放官网）；接回 `gcOldLogs`（启动清一次，之后每天一次）。
 - 发布前的第二批修复（`claude/release-070b`）：飞书开发者后台改了 Bot 的名字，Bot 下次启动或在「状态与诊断」里检查连接时，`bots.json` 里的显示名跟着变（只改 `botName`，句柄、目录和 appId 不变；只读预览不写；名字为空、没变或写失败都不挡启动）；智能模式群的欢迎卡和 /help 不再写“@我 一定回”，改成“我马上看，该回就回”（3.4：真人 @ 也交给判断）。
