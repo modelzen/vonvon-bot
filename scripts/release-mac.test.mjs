@@ -166,6 +166,12 @@ test('release orchestration staples the App before creating either final contain
   const build = fixture.calls.findIndex(call => call.command === 'npm');
   assert.ok(history >= 0 && build > history);
   assert.equal(fixture.calls.filter(isSubmit).length, 2);
+  const app = join(fixture.out, 'mac-universal/Vonvon Bot.app');
+  const zips = fixture.calls.filter(call => call.command === 'ditto' && call.args.includes('-c')).map(call => call.args);
+  assert.deepEqual(zips, [
+    ['-c', '-k', '--keepParent', app, join(fixture.out, 'app-notary-upload.zip')],
+    ['-c', '-k', '--sequesterRsrc', '--noqtn', '--keepParent', app, join(fixture.out, 'Vonvon-Bot-0.7.0-universal.zip')],
+  ], 'Apple transport form for notarization; the final update ZIP keeps its signature-preserving flags');
   const inventory = JSON.parse(await readFile(join(fixture.out, 'release-inventory.json'), 'utf8'));
   assert.equal(inventory.mode, 'rehearsal');
   assert.ok(inventory.files.every(record => record.file !== 'manifest.json' && !record.file.startsWith('feed-')));

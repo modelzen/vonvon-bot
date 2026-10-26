@@ -289,7 +289,9 @@ export async function releaseMac(options, dependencies = {}) {
     const transport = join(out, 'app-notary-upload.zip');
     if (!state.transport) {
       if (await exists(transport)) throw new Error('Unrecorded transport ZIP exists; preserve it rather than submitting potentially incomplete bytes');
-      await run('app-transport', 'ditto', ['-c', '-k', '--sequesterRsrc', '--noqtn', '--keepParent', app, transport]);
+      // Apple's documented notarization upload form. --sequesterRsrc put AppleDouble entries under
+      // __MACOSX and drew a notary warning; quarantine was already rejected on the App above.
+      await run('app-transport', 'ditto', ['-c', '-k', '--keepParent', app, transport]);
       state.transport = await artifactRecord(transport); await save();
     }
     if ((await artifactRecord(transport)).sha256 !== state.transport.sha256) throw new Error('App transport ZIP bytes changed');
