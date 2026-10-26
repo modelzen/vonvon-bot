@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vonvon Bot macOS 发布"
+  short_description: "构建并公证 universal 安装包，验证和发布稳定更新源"
+  default_prompt: "使用 $release-mac 按指定版本和 main 提交构建、公证并完成本次要求的发布阶段。"
