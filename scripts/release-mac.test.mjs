@@ -60,6 +60,7 @@ const { createHash } = await import('node:crypto');
 const { execFileSync } = await import('node:child_process');
 const { mkdir, readFile, writeFile } = await import('node:fs/promises');
 const { basename } = await import('node:path');
+const { tmpdir } = await import('node:os');
 const { releaseMac } = await import('./release-mac.mjs');
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const sourceSHA = 'a'.repeat(40);
@@ -500,6 +501,8 @@ test('source commit must be on origin/main before any build', async () => {
 test('build HOME must be temporary and outside both source and evidence', async t => {
   for (const [name, pick] of [
     ['outside temporary roots', () => '/release-mac-test-not-temporary/home'],
+    ['the temporary root itself', () => tmpdir()],
+    ['/tmp itself', () => '/tmp'],
     ['inside evidence', fixture => join(fixture.out, 'home')],
     ['inside source', fixture => join(fixture.repo, 'home')],
   ]) await t.test(name, async () => {

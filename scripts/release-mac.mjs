@@ -195,12 +195,11 @@ export async function releaseMac(options, dependencies = {}) {
       if (!isAbsolute(options['build-home'] ?? '')) throw new Error('Supply an isolated absolute --build-home');
       const buildHome = await canonicalPath(options['build-home']);
       const homeRoots = await Promise.all([tmpdir(), '/tmp', '/private/tmp'].map(canonicalPath));
-      if (!homeRoots.some(root => inside(root, buildHome)) || inside(repo, buildHome) || inside(out, buildHome)) throw new Error('Build HOME must be temporary and outside source and evidence');
+      if (!homeRoots.some(root => inside(root, buildHome) && root !== buildHome) || inside(repo, buildHome) || inside(out, buildHome)) throw new Error('Build HOME must be temporary (strictly below a temporary root) and outside source and evidence');
       await mkdir(buildHome, { recursive: true });
       await run('source-build', 'npm', ['run', 'build']);
       if ((await run('built-head', 'git', ['rev-parse', 'HEAD'])).stdout.trim() !== head || (await run('built-status', 'git', ['status', '--porcelain', '--untracked-files=normal'])).stdout.trim()) throw new Error('Source changed while building');
       state.build = { sourceCommit: head }; await save();
-      if (state.build?.sourceCommit !== head) throw new Error('App lacks its source-build binding');
       if ((await json(join(desktop, 'stage/package.json'))).version !== version) throw new Error('Built stage version differs');
       if (JSON.stringify(validateConfig(await json(join(desktop, 'stage/dist/update-config.json')))) !== JSON.stringify(config)) throw new Error('Built stage did not use the supplied update configuration');
       console.log('Building and signing universal App');
