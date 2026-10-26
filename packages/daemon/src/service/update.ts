@@ -41,7 +41,7 @@ export function currentVersion(): string {
 }
 
 export function packageName(): string {
-  return pkgJson().name ?? '@modelzen/feishu-codex-bridge';
+  return pkgJson().name ?? 'vonvon-bot';
 }
 
 /**

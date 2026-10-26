@@ -83,7 +83,7 @@ describe('read-only desktop attachment', () => {
 
   it('does not create a missing credential or expose its read error', async () => {
     await rm(join(root, 'local-credential'));
-    await expect(attachExisting(root)).rejects.toMatchObject({ reason: 'credential', message: 'The local daemon credential is unavailable.' });
+    await expect(attachExisting(root)).rejects.toMatchObject({ reason: 'credential', message: '本机 daemon 凭据不可用。' });
     expect(fake.connect).not.toHaveBeenCalled();
   });
 

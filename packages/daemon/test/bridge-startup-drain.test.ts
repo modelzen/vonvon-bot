@@ -82,6 +82,7 @@ vi.mock('../src/server/http', () => ({
 vi.mock('../src/core/logger', () => ({
   log: { info() {}, warn() {}, fail: fixture.logFail },
   flushLogs: async () => {},
+  startLogGc: () => () => {},
   withTrace: (_context: unknown, operation: () => unknown) => operation(),
 }));
 

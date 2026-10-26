@@ -59,7 +59,7 @@ describe('daemon manager', () => {
   it('refuses a different authenticated owner that wins the lock during selected Bot launch', async () => {
     const otherOwner = { ...running, pid: running.pid + 1 };
     const fixture = setup([null, otherOwner]);
-    await expect(fixture.manager.ensureReady(0, 'cli_exact_Bot_ID')).rejects.toThrow(`Another daemon (PID ${otherOwner.pid}) became the owner`);
+    await expect(fixture.manager.ensureReady(0, 'cli_exact_Bot_ID')).rejects.toThrow(`另一个后台服务（PID ${otherOwner.pid}）在启动选定的 Bot`);
     expect(fixture.startSelectedBot).toHaveBeenCalledExactlyOnceWith(0, 'cli_exact_Bot_ID');
     expect(fixture.startBundled).not.toHaveBeenCalled();
     expect(fixture.startManaged).not.toHaveBeenCalled();
@@ -81,7 +81,7 @@ describe('daemon manager', () => {
 
   it('refuses a selected Bot under a registered service without launching another owner', async () => {
     const fixture = setup([null], async () => ({ kind: 'ours' }));
-    await expect(fixture.manager.ensureReady(0, 'cli_exact_Bot_ID')).rejects.toThrow('Uninstall the registered service');
+    await expect(fixture.manager.ensureReady(0, 'cli_exact_Bot_ID')).rejects.toThrow('请先卸载已注册的后台服务');
     expect(fixture.startSelectedBot).not.toHaveBeenCalled();
     expect(fixture.startBundled).not.toHaveBeenCalled();
     expect(fixture.startManaged).not.toHaveBeenCalled();
@@ -89,7 +89,7 @@ describe('daemon manager', () => {
 
   it('does not accept a running default daemon as a selected Bot start', async () => {
     const fixture = setup([running]);
-    await expect(fixture.manager.ensureReady(0, 'cli_exact_Bot_ID')).rejects.toThrow('Stop the running daemon');
+    await expect(fixture.manager.ensureReady(0, 'cli_exact_Bot_ID')).rejects.toThrow('请先停掉正在运行的后台服务');
     expect(fixture.startSelectedBot).not.toHaveBeenCalled();
   });
 
@@ -125,7 +125,7 @@ describe('daemon manager', () => {
 
   it.each(['absent', 'ours'] as const)('rejects an owner on the wrong port after %s launch', async (kind) => {
     const fixture = setup([null, running], async () => ({ kind }));
-    await expect(fixture.manager.ensureReady(42346)).rejects.toThrow('not requested port 42346');
+    await expect(fixture.manager.ensureReady(42346)).rejects.toThrow('不是要求的端口 42346');
     expect(kind === 'ours' ? fixture.startManaged : fixture.startBundled).toHaveBeenCalledExactlyOnceWith(42346);
     expect(kind === 'ours' ? fixture.startBundled : fixture.startManaged).not.toHaveBeenCalled();
     expect(fixture.checkProtocol).not.toHaveBeenCalled();
@@ -144,7 +144,7 @@ describe('daemon manager', () => {
   it('refuses a protocol mismatch without stopping or replacing the running daemon', async () => {
     const fixture = setup([running]);
     fixture.checkProtocol.mockResolvedValue(PROTOCOL_VERSION + 1);
-    await expect(fixture.manager.ensureReady()).rejects.toThrow(`protocol version ${PROTOCOL_VERSION + 1}; desktop expects ${PROTOCOL_VERSION}`);
+    await expect(fixture.manager.ensureReady()).rejects.toThrow(`协议版本是 ${PROTOCOL_VERSION + 1}，桌面端要求 ${PROTOCOL_VERSION}`);
     expect(fixture.startManaged).not.toHaveBeenCalled();
     expect(fixture.startBundled).not.toHaveBeenCalled();
   });
@@ -169,21 +169,21 @@ describe('daemon manager', () => {
   it('leaves an incompatible newly started owner untouched', async () => {
     const fixture = setup([null, running]);
     fixture.checkProtocol.mockResolvedValue(PROTOCOL_VERSION + 1);
-    await expect(fixture.manager.ensureReady()).rejects.toThrow(`protocol version ${PROTOCOL_VERSION + 1}`);
+    await expect(fixture.manager.ensureReady()).rejects.toThrow(`协议版本是 ${PROTOCOL_VERSION + 1}`);
     expect(fixture.startBundled).toHaveBeenCalledOnce();
     expect(fixture.startManaged).not.toHaveBeenCalled();
   });
 
   it('rejects a requested port mismatch without stopping the accepted owner', async () => {
     const fixture = setup([running]);
-    await expect(fixture.manager.ensureReady(42346)).rejects.toThrow('not requested port 42346');
+    await expect(fixture.manager.ensureReady(42346)).rejects.toThrow('不是要求的端口 42346');
     expect(fixture.checkProtocol).not.toHaveBeenCalled();
     expect(fixture.startManaged).not.toHaveBeenCalled();
   });
 
   it('reports missing readiness after a bounded wait', async () => {
     const fixture = setup([null, null, null, null]);
-    await expect(fixture.manager.ensureReady()).rejects.toThrow('did not become ready');
+    await expect(fixture.manager.ensureReady()).rejects.toThrow('后台服务启动超时');
     expect(fixture.startBundled).toHaveBeenCalledOnce();
     expect(fixture.pause).toHaveBeenCalledTimes(2);
   });

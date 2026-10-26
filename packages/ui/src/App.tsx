@@ -51,6 +51,7 @@ import {
   type Job,
   type Membership,
   backendLabel,
+  desktopUpdateNotice,
   formatTime,
 } from "@vonvon/protocol";
 import type { CollaborationView, Page } from "./collaboration-model";
@@ -80,6 +81,7 @@ import {MachinePanel} from './management/MachinePanel';
 import {DiagnosticsPanel} from './management/DiagnosticsPanel';
 import {SecretsPanel} from './management/SecretsPanel';
 import {UpdatePanel} from './management/UpdatePanel';
+import {DesktopUpdateProvider, useDesktopUpdate} from './desktop-update';
 
 type Modal =
   | RegisterModal
@@ -135,12 +137,13 @@ function BotDetailTabs({selected, onSelect}: {selected: AgentPane['kind']; onSel
 function FeaturePage({feature}: {feature: (typeof uiFeatures)[number]}) { const Component = feature.component; return <Component/>; }
 
 export function App() {
-  return <DraftGuardProvider><DesktopApp /></DraftGuardProvider>;
+  return <DraftGuardProvider><DesktopUpdateProvider><DesktopApp /></DesktopUpdateProvider></DraftGuardProvider>;
 }
 function DesktopApp() {
   const {navigate} = useDraftGuard();
   const client = useClient();
   const shell = useShellCapabilities();
+  const updateNotice = desktopUpdateNotice(useDesktopUpdate()[0]);
   useEffect(() => shell?.onQuitRequested?.(() => navigate(() => { void shell.quit?.(); })), [shell, navigate]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchTarget, setSearchTarget] = useState<Destination>();
@@ -555,6 +558,7 @@ function DesktopApp() {
         page={page}
         view={view}
         newCounts={{bots: sumCounts(newCounts.bots), projects: sumCounts(newCounts.projects)}}
+        updateNotice={updateNotice}
         title={feature?.label ?? titles[page]}
         firstUse={!snapshot.agents.length}
         onNavigate={openPage}
@@ -619,7 +623,7 @@ function DesktopApp() {
             </InlineNotice>
           )}
           {page === "home" && snapshot.agents.length > 0 && <TodayHome snapshot={snapshot} onSetup={() => openPage("setup")} onRegister={() => void register()} onOpenUsage={() => openPage("usage")} disabled={!ready || busy}/>}
-          {page === "settings" && <SettingsHome onNavigate={openPage} onFeature={id => navigate(() => setFeatureId(id))}/>}
+          {page === "settings" && <SettingsHome updateNotice={updateNotice} onNavigate={openPage} onFeature={id => navigate(() => setFeatureId(id))}/>}
           {page === "collaboration" && (
             <>
               {route.kind === 'list' && host.kind === "connected" &&
