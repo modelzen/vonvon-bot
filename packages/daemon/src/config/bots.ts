@@ -455,6 +455,22 @@ export function commitBotCredentialRefresh(
   });
 }
 
+/**
+ * The bot was renamed in Feishu: its display name follows what `bot/v3/info` now says. Only `botName` changes; the
+ * handle (`name`, its directory) and the appId stay. A bot removed or registered again meanwhile is left alone.
+ */
+export function updateBotName(expected: BotIdentity, botName: string): Promise<'updated' | 'unchanged' | 'stale'> {
+  const identity = { ...expected };
+  return ownBots(async registry => {
+    const entry = registry.bots.find(bot => bot.appId === identity.appId);
+    if (!entry || !sameIdentity(entry, identity)) return 'stale';
+    if (entry.botName === botName) return 'unchanged';
+    entry.botName = botName;
+    await publish(registry);
+    return 'updated';
+  });
+}
+
 /** A registry-unique short name derived from `desired` (slugified, suffixed on clash). */
 export function uniqueName(reg: BotsRegistry, desired: string): string {
   const base = slugify(desired) || 'bot';
