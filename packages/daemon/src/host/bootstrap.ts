@@ -7,7 +7,7 @@ import { codexVersionAsync, resolveCodexBin } from '../agent/codex-appserver/loc
 import { acquirePidLock, getPidLockInfo, isPidLockOwnerRunning, PidLockError, publishPidLock, readRunningPidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
 import { verifyPidLockOwner } from '../server/owner-verification';
 import { readStartupRegistration } from '../service/startup';
-import { flushLogs, log } from '../core/logger';
+import { flushLogs, log, startLogGc } from '../core/logger';
 import { startLoopLagMonitor } from '../core/loop-lag';
 import { wasLogged } from '../core/error-parts';
 import { bridgeVersion } from '../core/version';
@@ -41,6 +41,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
   let host: ProcessHost | undefined;
   let run: HostRunStart | undefined;
   let stopLoopLag: (() => void) | undefined;
+  let stopLogGc: (() => void) | undefined;
   // The failure that no stop or restart asked for: it is a crash (`fatal`) and counts toward the pause.
   let fatal: { error: unknown } | undefined;
   const errors: unknown[] = [];
@@ -85,6 +86,8 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
     if (control.requested) return;
     // the supervisor and each bot child (s23f2); one-off commands never get here
     stopLoopLag = startLoopLagMonitor({ pid: process.pid, ...(options.bot ? { bot: options.bot } : {}) });
+    // The daily logs are shared by the supervisor and its bot children: only the supervisor trims them, once at start, then daily.
+    if (!process.send) stopLogGc = startLogGc();
     host = new ProcessHost({
       dataDir: paths.appDir, daemonBootId: randomUUID(),
       ...(process.platform === 'win32' ? { platform: 'win32' } : { platform: 'posix', holderPath: defaultHolderPath() }),
@@ -150,6 +153,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
   }
   finally {
     stopLoopLag?.();
+    stopLogGc?.();
     // A cleanup failure no longer turns a requested restart into a stop (v1-plan s17): the replacement starts only
     // after this process has exited, and leftover provider processes are swept at the next boot.
     try { await host?.closeAll(); } catch (error) { log.fail('daemon-shutdown', error, { phase: 'process-host' }); errors.push(error); }

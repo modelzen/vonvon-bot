@@ -211,7 +211,7 @@ describe('switching 登录电脑时启动 from the window', () => {
     const runtime = await packagedRuntime();
     await writeReport(runtime, done(700));
     const h = hooks(null);
-    h.reattach.mockRejectedValueOnce(new Error('Daemon did not become ready within the startup wait.'));
+    h.reattach.mockRejectedValueOnce(new Error('后台服务启动超时，一直没有就绪。'));
     await expect(changeLoginItem(runtime, true, previous, h, children({ code: 0 }))).rejects.toMatchObject({ reason: 'reattach' });
   });
 });

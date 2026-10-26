@@ -81,13 +81,13 @@ describe('desktop daemon dependencies', () => {
     expect((await stat(path)).mode & 0o777).toBe(0o700);
     const alias = join(parent, 'alias');
     await symlink(path, alias, 'dir');
-    await expect(prepareDesktopRoot({ kind: 'canonical', path: alias })).rejects.toThrow('physical directory');
+    await expect(prepareDesktopRoot({ kind: 'canonical', path: alias })).rejects.toThrow('必须是真实目录');
   });
 
   it('never turns failed owner authentication into an absent owner', async () => {
     vi.mocked(readRunningPidLock).mockResolvedValue(owner);
     vi.mocked(verifyPidLockOwner).mockRejectedValue(new Error('protocol mismatch'));
-    await expect(dependencies().readVerifiedDaemon()).rejects.toThrow('Leave it running');
+    await expect(dependencies().readVerifiedDaemon()).rejects.toThrow('先别关它');
   });
 
   it('authenticates a published lock before returning it', async () => {
@@ -135,12 +135,12 @@ describe('desktop daemon dependencies', () => {
     const dispose = vi.fn(async () => {});
     attach.mockResolvedValue({ identity: owner, dispose });
     await expect(dependencies().checkProtocol(owner)).resolves.toBe(PROTOCOL_VERSION);
-    await expect(dependencies().checkProtocol({ ...owner, pid: owner.pid + 1 })).rejects.toThrow('owner changed');
+    await expect(dependencies().checkProtocol({ ...owner, pid: owner.pid + 1 })).rejects.toThrow('后台的所有者变了');
     expect(dispose).toHaveBeenCalledTimes(2);
   });
 
   it('refuses a development runtime instead of spawning a global CLI', async () => {
-    await expect(dependencies().startBundled(0)).rejects.toThrow('packaged Vonvon daemon is unavailable');
+    await expect(dependencies().startBundled(0)).rejects.toThrow('打包的 Vonvon 后台服务不可用');
   });
 
   it('returns the selected child PID and forwards the exact Bot as one argument', async () => {
@@ -179,7 +179,7 @@ describe('desktop daemon dependencies', () => {
       queueMicrotask(() => child.emit('spawn'));
       return child;
     });
-    await expect(dependencies.startSelectedBot(0, 'cli_selected')).rejects.toThrow('did not provide a process ID');
+    await expect(dependencies.startSelectedBot(0, 'cli_selected')).rejects.toThrow('没有返回进程号');
     expect(spawn).toHaveBeenCalledOnce();
   });
 

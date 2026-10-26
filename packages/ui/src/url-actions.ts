@@ -8,7 +8,11 @@ const verificationHosts = new Set([
   ...registrationHosts, "auth.openai.com", "chatgpt.com",
   "claude.ai", "console.anthropic.com", "platform.claude.com",
 ]);
-export type ExternalUrlKind = "registration" | "authorization" | "verification" | "event-settings" | "app-console" | "group" | "bot-chat" | "releases";
+export type ExternalUrlKind = "registration" | "authorization" | "verification" | "event-settings" | "app-console" | "group" | "bot-chat" | "releases" | "download";
+
+/** 官网的更新日志和下载页；安装包在这里下载，应用内更新没生效时也指到这里。 */
+export const changelogUrl = "https://bot.vonvon.cc/changelog/";
+export const downloadPageUrl = "https://bot.vonvon.cc/get/";
 
 export function allowedExternalUrl(value: string, kind: ExternalUrlKind): string | null {
   try {
@@ -37,7 +41,10 @@ export function allowedExternalUrl(value: string, kind: ExternalUrlKind): string
         if (url.hostname !== "applink.feishu.cn" || url.pathname !== "/client/bot/open" || !/^cli_[A-Za-z0-9_-]+$/.test(url.searchParams.get('appId') ?? '') || [...url.searchParams.keys()].some(key => key !== 'appId') || url.hash) return null;
         break;
       case "releases":
-        if (url.hostname !== "github.com" || url.pathname !== "/modelzen/vonvon-bot/releases") return null;
+        if (url.hostname !== "bot.vonvon.cc" || url.pathname !== "/changelog/") return null;
+        break;
+      case "download":
+        if (url.hostname !== "bot.vonvon.cc" || url.pathname !== "/get/") return null;
         break;
     }
     return url.href;

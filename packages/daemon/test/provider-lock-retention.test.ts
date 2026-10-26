@@ -37,7 +37,7 @@ vi.mock('../src/platform/spawn', async original => ({
   ...await original<object>(), spawnProcess: fixture.spawn,
   spawnProcessSync: () => { throw new Error('Synchronous spawn forbidden in provider retention fixture'); },
 }));
-vi.mock('../src/core/logger', () => ({ log: fixture.log, withTrace: (_context: unknown, action: () => unknown) => action(), flushLogs: async () => {} }));
+vi.mock('../src/core/logger', () => ({ log: fixture.log, withTrace: (_context: unknown, action: () => unknown) => action(), flushLogs: async () => {}, startLogGc: () => () => {} }));
 vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: () => fixture.backend }));
 vi.mock('../src/agent/codex-appserver/locate', () => ({ resolveCodexBin: () => '/fixture/no-provider' }));
 vi.mock('../src/service/startup', () => ({ readStartupRegistration: async () => ({ kind: 'absent' }) }));

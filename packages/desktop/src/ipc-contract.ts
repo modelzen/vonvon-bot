@@ -27,6 +27,7 @@ export const desktopChannels = {
   setLoginItem: 'desktop:shell:setLoginItem',
   repairCli: 'desktop:shell:repairCli',
   checkDesktopUpdate: 'desktop:shell:checkDesktopUpdate',
+  retryDesktopUpdate: 'desktop:shell:retryDesktopUpdate',
   installDesktopUpdate: 'desktop:shell:installDesktopUpdate',
   hide: 'desktop:shell:hide',
   quit: 'desktop:shell:quit',
@@ -51,11 +52,13 @@ export type DesktopEvent =
   | { type: 'snapshot'; value: DesktopSnapshot }
   | { type: 'log'; value: LogEventPayload }
   | { type: 'backendInstall'; value: BackendInstallEventPayload }
+  /** 自动检查更新的结果；窗口之后才订阅时由主进程补发最近一次。 */
+  | { type: 'update'; value: DesktopUpdate }
   | { type: 'error'; value: SafeFailure }
   | { type: 'quitRequested' };
 
 export type DesktopShell = Required<Pick<ShellCapabilities,
-  'openExternal' | 'chooseExecutablePath' | 'chooseDirectoryPaths' | 'checkDesktopUpdate' | 'installDesktopUpdate' |
+  'openExternal' | 'chooseExecutablePath' | 'chooseDirectoryPaths' | 'checkDesktopUpdate' | 'retryDesktopUpdate' | 'installDesktopUpdate' | 'onDesktopUpdate' |
   'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem'>>;
 
 export interface DesktopResources {
@@ -72,6 +75,8 @@ export interface AttachedDaemon {
 
 export interface DesktopBridge {
   requestQuit(): void;
+  /** 把自动检查到的更新状态推给窗口；窗口还没订阅或刷新后重新订阅时补发最近一次。 */
+  publishUpdate(update: DesktopUpdate): void;
   /** Takes ownership of `owner`, closing it on failure and when the bridge is disposed mid-replacement. */
   replaceOwner(owner: AttachedDaemon): Promise<void>;
   dispose(): Promise<void>;
@@ -93,6 +98,8 @@ export interface ShellActions {
   repairCli(): Promise<MachineReply>;
   observeCli(): Promise<Extract<MachineReply, { type: 'status' }>['cli']>;
   checkDesktopUpdate(): Promise<DesktopUpdate>;
+  /** 忘掉上次没生效的安装，再检查一次。 */
+  retryDesktopUpdate(): Promise<DesktopUpdate>;
   installDesktopUpdate(): Promise<DesktopUpdate>;
   hide(): void;
   confirmQuit(): Promise<void>;

@@ -51,10 +51,10 @@ function checkPort(daemon: VerifiedDaemon, requestedPort: number): void {
   const match = localListen.exec(daemon.listen);
   const port = Number(match?.[1]);
   if (!match || port < 1 || port > 65535) {
-    throw new Error(`Daemon PID ${daemon.pid} published an invalid local listener: ${daemon.listen}.`);
+    throw new Error(`后台服务（PID ${daemon.pid}）公布的本机监听地址不对：${daemon.listen}。`);
   }
   if (requestedPort !== 0 && port !== requestedPort) {
-    throw new Error(`Daemon PID ${daemon.pid} already runs at ${daemon.listen}, not requested port ${requestedPort}.`);
+    throw new Error(`后台服务（PID ${daemon.pid}）已经在 ${daemon.listen} 运行，不是要求的端口 ${requestedPort}。`);
   }
 }
 
@@ -62,14 +62,14 @@ export function createDaemonManager(dependencies: DaemonManagerDependencies, opt
   const maxAttempts = options.maxAttempts ?? 501;
   const intervalMs = options.intervalMs ?? 50;
   if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || !Number.isInteger(intervalMs) || intervalMs < 0) {
-    throw new Error('Invalid daemon readiness wait settings.');
+    throw new Error('等待后台就绪的设置不合法。');
   }
 
   async function checked(daemon: VerifiedDaemon, requestedPort: number): Promise<VerifiedDaemon> {
     checkPort(daemon, requestedPort);
     const version = await dependencies.checkProtocol(daemon);
     if (version !== PROTOCOL_VERSION) {
-      throw new Error(`Daemon PID ${daemon.pid} speaks protocol version ${version}; desktop expects ${PROTOCOL_VERSION}. Leave it running and update the app or daemon to compatible versions.`);
+      throw new Error(`后台服务（PID ${daemon.pid}）的协议版本是 ${version}，桌面端要求 ${PROTOCOL_VERSION}。先别关它，把应用和后台更新到互相兼容的版本。`);
     }
     return daemon;
   }
@@ -77,11 +77,11 @@ export function createDaemonManager(dependencies: DaemonManagerDependencies, opt
   return {
     async ensureReady(requestedPort = 0, bot?: string): Promise<VerifiedDaemon> {
       if (!Number.isInteger(requestedPort) || requestedPort < 0 || requestedPort > 65535) {
-        throw new Error(`Invalid requested daemon port: ${requestedPort}.`);
+        throw new Error(`要求的端口不合法：${requestedPort}。`);
       }
       const existing = await dependencies.readVerifiedDaemon();
       if (existing) {
-        if (bot !== undefined) throw new StartHostRefusal('Stop the running daemon before starting a selected Bot.');
+        if (bot !== undefined) throw new StartHostRefusal('要单独启动选定的 Bot，请先停掉正在运行的后台服务。');
         return checked(existing, requestedPort);
       }
 
@@ -89,7 +89,7 @@ export function createDaemonManager(dependencies: DaemonManagerDependencies, opt
       let selectedPid: number | undefined;
       switch (registration.kind) {
         case 'ours':
-          if (bot !== undefined) throw new StartHostRefusal('Uninstall the registered service before starting a selected Bot.');
+          if (bot !== undefined) throw new StartHostRefusal('要单独启动选定的 Bot，请先卸载已注册的后台服务。');
           await dependencies.startManaged(requestedPort);
           break;
         case 'absent':
@@ -97,12 +97,12 @@ export function createDaemonManager(dependencies: DaemonManagerDependencies, opt
           else selectedPid = await dependencies.startSelectedBot(requestedPort, bot);
           break;
         case 'other-root':
-          throw new Error(`Vonvon service belongs to another data root: ${registration.root}.`);
+          throw new Error(`Vonvon 后台服务属于另一个数据目录：${registration.root}。`);
         case 'unrecognized':
-          throw new Error(`Vonvon service definition is unrecognized: ${registration.file}.`);
+          throw new Error(`Vonvon 后台服务的定义文件无法识别：${registration.file}。`);
         default: {
           const exhaustive: never = registration;
-          throw new Error(`Unknown daemon registration: ${exhaustive}.`);
+          throw new Error(`未知的后台服务注册状态：${exhaustive}。`);
         }
       }
 
@@ -110,13 +110,13 @@ export function createDaemonManager(dependencies: DaemonManagerDependencies, opt
         const ready = await dependencies.readVerifiedDaemon();
         if (ready) {
           if (selectedPid !== undefined && ready.pid !== selectedPid) {
-            throw new StartHostRefusal(`Another daemon (PID ${ready.pid}) became the owner while starting the selected Bot (PID ${selectedPid}). Leave it running and stop it before trying again.`);
+            throw new StartHostRefusal(`另一个后台服务（PID ${ready.pid}）在启动选定的 Bot（PID ${selectedPid}）期间成了当前的后台。桌面端不会替你关它，请自己停掉后再试。`);
           }
           return checked(ready, requestedPort);
         }
         if (attempt + 1 < maxAttempts) await dependencies.pause(intervalMs);
       }
-      throw new Error('Daemon did not become ready within the startup wait.');
+      throw new Error('后台服务启动超时，一直没有就绪。看看数据目录里的 daemon.log，再重新打开 Vonvon Bot。');
     },
   };
 }
