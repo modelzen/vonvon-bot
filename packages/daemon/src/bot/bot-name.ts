@@ -10,7 +10,8 @@ import { log } from '../core/logger';
 export async function syncBotName(
   scope: string, identity: BotIdentity, saved: string | undefined, reported: string | undefined,
 ): Promise<void> {
-  const name = reported?.trim();
+  // The response is only type-asserted; a non-string name must not reject the caller (getSetupStatus).
+  const name = typeof reported === 'string' ? reported.trim() : undefined;
   if (!name || name === saved) return;
   try {
     if (await updateBotName(identity, name) === 'updated') {
