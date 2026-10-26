@@ -10,6 +10,7 @@ import type {
   EnvironmentRequest, EnvironmentTool, EnvironmentToolState, ToolInstallOperation,
 } from "@vonvon/protocol";
 import "./environment.css";
+import {SettingChoices} from "../settings/SettingChoices";
 import {McpPanel} from "./McpPanel";
 import {settingAnchor, type SearchReveal} from '../search';
 import {useShellCapabilities} from '../client-context';
@@ -266,7 +267,7 @@ export function EnvironmentPanel({ request, reveal }: Props) {
         <div className="environment-profile-choice"><Button size="sm" onClick={() => setProfileMode(profileMode === "add" ? null : "add")}>添加已有应用</Button><Button size="sm" onClick={() => setProfileMode(profileMode === "create" ? null : "create")}>创建新应用</Button></div>
         {profileMode && <form className="environment-form" onSubmit={(event) => { event.preventDefault(); if (profileMode === "add") void saveProfile(); else void act({ type: "profileInit", name: name.trim() }).then((started) => { if (started) { setName(""); setProfileMode(null); setProfilesOpen(false); } }); }}>
           <label data-search-title="账号配置名称">账号配置名称<input value={name} maxLength={128} required onChange={(event) => setName(event.target.value)} /></label>
-          {profileMode === "add" && <><label data-search-title="App ID">App ID<input value={appId} maxLength={256} required onChange={(event) => setAppId(event.target.value)} /></label><label data-search-title="App Secret">App Secret<input type="password" value={appSecret} maxLength={512} required onChange={(event) => setAppSecret(event.target.value)} /></label><label data-search-title="平台">平台<select value={brand} onChange={(event) => setBrand(event.target.value === "lark" ? "lark" : "feishu")}><option value="feishu">飞书</option><option value="lark">Lark</option></select></label><label data-search-title="添加后设为当前" className="environment-checkbox"><input type="checkbox" checked={useProfile} onChange={(event) => setUseProfile(event.target.checked)} />添加后设为当前</label></>}
+          {profileMode === "add" && <><label data-search-title="App ID">App ID<input value={appId} maxLength={256} required onChange={(event) => setAppId(event.target.value)} /></label><label data-search-title="App Secret">App Secret<input type="password" value={appSecret} maxLength={512} required onChange={(event) => setAppSecret(event.target.value)} /></label><div className="environment-form-field" data-search-title="平台"><span>平台</span><SettingChoices segmented label="平台" value={brand} onChange={setBrand} choices={[{value: "feishu", label: "飞书"}, {value: "lark", label: "Lark"}]}/></div><label data-search-title="添加后设为当前" className="environment-checkbox"><input type="checkbox" checked={useProfile} onChange={(event) => setUseProfile(event.target.checked)} />添加后设为当前</label></>}
           <Button type="submit" variant="primary" disabled={busy || !name.trim() || (profileMode === "add" && (!appId.trim() || !appSecret))}>{profileMode === "add" ? "添加账号配置" : "创建并授权"}</Button>
         </form>}
       </div>
