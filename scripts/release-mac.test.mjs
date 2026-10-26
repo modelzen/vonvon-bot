@@ -58,7 +58,7 @@ test('canonicalization resolves existing parents before testing nonexistent outp
 // packaging, Apple services, mounting, or the public update endpoint.
 const { createHash } = await import('node:crypto');
 const { execFileSync } = await import('node:child_process');
-const { mkdir, readFile, writeFile } = await import('node:fs/promises');
+const { mkdir, mkdtemp, readFile, writeFile } = await import('node:fs/promises');
 const { basename } = await import('node:path');
 const { tmpdir } = await import('node:os');
 const { releaseMac } = await import('./release-mac.mjs');
@@ -68,9 +68,12 @@ const submissionIDs = { app: '11111111-1111-4111-8111-111111111111', dmg: '22222
 let fixtureRoot;
 let fixtureNumber = 0;
 async function releaseFixture(settings = {}) {
-  // The surrounding test command can own cleanup by supplying RELEASE_TEST_ROOT.
+  // The surrounding test command can own cleanup by supplying RELEASE_TEST_ROOT; each run
+  // takes a fresh directory below it, so reruns never meet an earlier run's scenarios.
   // Standalone runs preserve their small fixtures for failure diagnosis.
-  fixtureRoot ??= process.env.RELEASE_TEST_ROOT ?? execFileSync('/bin/sh', ['-c', 'T=$(mktemp -d)\nprintf "%s" "$T"'], { encoding: 'utf8' });
+  const supplied = process.env.RELEASE_TEST_ROOT;
+  fixtureRoot ??= supplied ? await mkdir(supplied, { recursive: true }).then(() => mkdtemp(join(supplied, 'release-mac-')))
+    : execFileSync('/bin/sh', ['-c', 'T=$(mktemp -d)\nprintf "%s" "$T"'], { encoding: 'utf8' });
   const root = join(await canonicalPath(fixtureRoot), `scenario-${++fixtureNumber}`);
   const repo = join(root, 'source'), out = join(root, 'evidence'), buildHome = join(root, 'build-home');
   const configPath = join(root, 'desktop-update.json');
@@ -91,11 +94,21 @@ async function releaseFixture(settings = {}) {
     const bytes = await readFile(path);
     return { file: basename(path), size: bytes.length, sha256: sha256(bytes) };
   };
+  // settings.realTools runs the real desktop-release-tools checks, which read these files.
+  const populateApp = async app => {
+    if (!settings.realTools) return;
+    const core = join(app, 'Contents/Resources/daemon');
+    await write(join(core, 'package.json'), JSON.stringify({ version: '0.7.0', license: 'UNLICENSED' }));
+    for (const name of ['LICENSE.bridge', 'LICENSE.paseo', 'NOTICE', 'PROVENANCE.md']) await write(join(core, name), name);
+    for (const path of ['Contents/MacOS/Vonvon Bot', 'Contents/Frameworks/Electron Framework.framework/Electron Framework']) await write(join(app, path), Buffer.from('cafebabe00000000', 'hex'));
+  };
+  const realTools = settings.realTools ? await import('./desktop-release-tools.mjs') : undefined;
   const deps = {
     platform: 'darwin', temporaryRoots: [],
     // Hermetic: the host's own TLS or COS variables never leak into the scenario.
     env: { PATH: process.env.PATH ?? '', VONVON_DESKTOP_UPDATE_CONFIG: configPath, FIXTURE_COS_SECRET_ID: 'SENTINEL-COS-ID', FIXTURE_COS_SECRET_KEY: 'SENTINEL-COS-KEY' },
-    tools: { artifactRecord, verifyUniversalApp: async () => ({ architectures: ['arm64', 'x86_64'] }), verifyDmg: async () => {} },
+    tools: realTools ? { artifactRecord, verifyUniversalApp: realTools.verifyUniversalApp, verifyDmg: realTools.verifyDmg }
+      : { artifactRecord, verifyUniversalApp: async () => ({ architectures: ['arm64', 'x86_64'] }), verifyDmg: async () => {} },
     asar: { extractFile: () => Buffer.from(JSON.stringify(settings.embeddedConfig ?? config)) },
     plist: { parse: () => ({ 'system-entities': [{ 'mount-point': join(root, 'mounted-volume') }] }) },
     execFile: async (command, args, options) => {
@@ -114,16 +127,26 @@ async function releaseFixture(settings = {}) {
         assert.equal(options.env.VONVON_DESKTOP_UPDATE_CONFIG, configPath);
       } else if (command === process.execPath && args.includes('--input-type=module')) {
         const phase = args.at(-1);
-        if (phase === 'app') await mkdir(join(out, 'mac-universal/Vonvon Bot.app/Contents/Resources'), { recursive: true });
+        if (phase === 'app') {
+          await mkdir(join(out, 'mac-universal/Vonvon Bot.app/Contents/Resources'), { recursive: true });
+          await populateApp(join(out, 'mac-universal/Vonvon Bot.app'));
+        }
         else if (phase === 'dmg') await write(archiveFor('dmg'), 'signed dmg');
         else assert.fail('Unexpected packaging phase');
       } else if (command === 'ditto') {
         if (args.includes('-c')) await write(args.at(-1), args.at(-1).includes('notary') ? 'App transport bytes' : 'stapled App ZIP bytes');
-        else await mkdir(join(args.at(-1), 'Vonvon Bot.app'), { recursive: true });
+        else { await mkdir(join(args.at(-1), 'Vonvon Bot.app'), { recursive: true }); await populateApp(join(args.at(-1), 'Vonvon Bot.app')); }
       } else if (command === 'xattr') {
         if (settings.quarantineWhere === 'app' || (settings.quarantineWhere === 'zip' && args.at(-1).includes('zip-verification'))) output.stdout = `${args.at(-1)}: com.apple.quarantine\n`;
-      } else if (command === 'codesign') {
-        if (args.includes('--display')) output.stderr = `CDHash=${'c'.repeat(40)}\n`;
+      } else if (command === 'codesign' || command === '/usr/bin/codesign') {
+        if (args.includes('--entitlements')) output.stdout = '<?xml version="1.0"?><plist version="1.0"><dict><key>com.apple.security.cs.allow-jit</key><true/></dict></plist>';
+        else if (args.includes('--display')) output.stderr = `Authority=Developer ID Application: Fixture\nTeamIdentifier=${config.teamIdentifier}\nflags=0x10000(runtime)\nCDHash=${'c'.repeat(40)}\n`;
+      } else if (command === '/usr/libexec/PlistBuddy') {
+        output.stdout = '0.7.0\n';
+      } else if (command === '/usr/bin/lipo') {
+        output.stdout = 'x86_64 arm64\n';
+      } else if (command === 'hdiutil' && args[0] === 'attach') {
+        await populateApp(join(root, 'mounted-volume', 'Vonvon Bot.app'));
       } else if (command === 'xcrun' && args[0] === 'notarytool') {
         const action = args[1];
         const kind = args[2] === submissionIDs.dmg || args[2]?.endsWith('.dmg') ? 'dmg' : 'app';
@@ -409,6 +432,12 @@ test('network, TLS, forbidden, server errors and redirects never become a first-
   });
 });
 
+test('the recorded baseline is the numerically highest published version, not the first listed', async () => {
+  const { validateFirstRelease } = await import('./release-mac.mjs');
+  const evidence = { keys: ['bot/mac/stable/feed-0.6.9.json'], versions: ['0.6.9', '0.6.10', '0.6.2'] };
+  assert.deepEqual(validateFirstRelease({ noLiveManifest: true, live: { kind: 'missing' }, evidence }), { live: 'none', highestPublished: '0.6.10' });
+});
+
 test('formal release version gate stays above every previously published version after rollback', async () => {
   assert.throws(() => checkVersionGate({ version: '0.7.1', mode: 'release', liveVersion: '0.7.0', historicalVersions: ['0.8.0'] }), /highest previously published/);
   checkVersionGate({ version: '0.8.1', mode: 'release', liveVersion: '0.7.0', historicalVersions: ['0.8.0'] });
@@ -438,11 +467,13 @@ test('CLI entry runs through a symlinked directory', async t => {
 });
 
 test('read-only COS credentials never reach build, signing, notary or archive child processes', async () => {
-  const fixture = await formalFixture();
+  // Real desktop-release-tools, not stubs: their codesign, PlistBuddy and lipo children are checked too.
+  const fixture = await formalFixture({ realTools: true });
   fixture.deps.fetchImpl = async () => liveManifest('0.6.9');
   fixture.deps.cosEvidence = published069;
   assert.equal((await fixture.run()).complete, true);
   assert.ok(fixture.calls.length > 30);
+  for (const tool of ['/usr/bin/codesign', '/usr/libexec/PlistBuddy', '/usr/bin/lipo']) assert.ok(fixture.calls.some(call => call.command === tool), `${tool} ran through the recorder`);
   for (const call of fixture.calls) {
     assert.equal('FIXTURE_COS_SECRET_ID' in call.options.env || 'FIXTURE_COS_SECRET_KEY' in call.options.env, false, `${call.command} received a COS credential variable`);
     assert.equal(Object.values(call.options.env).some(value => String(value).includes('SENTINEL-COS')), false);

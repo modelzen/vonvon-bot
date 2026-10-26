@@ -144,6 +144,8 @@ export async function releaseMac(options, dependencies = {}) {
       throw new Error(`${label} failed; inspect its redacted log`, { cause: e });
     }
   };
+  // desktop-release-tools.mjs spawns codesign, PlistBuddy and lipo; they get the same credential-free env.
+  const toolExecute = (command, args) => execute(command, args, { env: childEnv, timeout: 60_000, maxBuffer: 1024 * 1024 });
   const lockPath = join(out, '.release.lock');
   const lock = await open(lockPath, 'wx').catch(() => { throw new Error('Output is locked; check the recorded process before recovering a stale lock'); });
   try {
@@ -207,7 +209,7 @@ export async function releaseMac(options, dependencies = {}) {
       state.appBuilt = true; await save();
     }
     if (state.build?.sourceCommit !== head) throw new Error('App lacks its source-build binding');
-    let verification = await verifyUniversalApp({ app, version, teamIdentifier: config.teamIdentifier });
+    let verification = await verifyUniversalApp({ app, version, teamIdentifier: config.teamIdentifier, execute: toolExecute });
     const embedded = JSON.parse(asar.extractFile(join(app, 'Contents/Resources/app.asar'), 'dist/update-config.json').toString());
     validateConfig(embedded);
     if (embedded.teamIdentifier !== config.teamIdentifier) throw new Error('Packaged update configuration differs from the certificate');
@@ -298,7 +300,7 @@ export async function releaseMac(options, dependencies = {}) {
     await run('app-staple', 'xcrun', ['stapler', 'staple', app]);
     await run('app-ticket', 'xcrun', ['stapler', 'validate', app]);
     await run('app-gatekeeper', 'spctl', ['-a', '-vv', '-t', 'exec', app]);
-    verification = await verifyUniversalApp({ app, version, teamIdentifier: config.teamIdentifier });
+    verification = await verifyUniversalApp({ app, version, teamIdentifier: config.teamIdentifier, execute: toolExecute });
     if (!state.zip) {
       if (await exists(zip)) throw new Error('Unrecorded final ZIP exists; preserve it and investigate');
       console.log('Creating final update ZIP from the stapled App');
@@ -312,7 +314,7 @@ export async function releaseMac(options, dependencies = {}) {
       await run('final-dmg', process.execPath, ['--input-type=module', '-e', packCode, repo, out, cert, 'dmg']);
       state.dmgBuilt = true; await save();
     }
-    await verifyDmg(dmg, config.teamIdentifier);
+    await verifyDmg(dmg, config.teamIdentifier, toolExecute);
     await bindSeal('dmg', dmg);
     await notarize('dmg', dmg);
     await run('dmg-staple', 'xcrun', ['stapler', 'staple', dmg]);
@@ -320,7 +322,7 @@ export async function releaseMac(options, dependencies = {}) {
     await run('dmg-ticket', 'xcrun', ['stapler', 'validate', dmg]);
     await run('dmg-signature', 'codesign', ['--verify', '--deep', '--strict', dmg]);
     await run('dmg-gatekeeper', 'spctl', ['-a', '-vv', '-t', 'open', '--context', 'context:primary-signature', dmg]);
-    await verifyDmg(dmg, config.teamIdentifier);
+    await verifyDmg(dmg, config.teamIdentifier, toolExecute);
     // Check the ZIP's actual App and the read-only DMG's actual App, not just the source bundle.
     const extracted = join(out, 'zip-verification');
     if (state.zipVerification && state.zipVerification.archiveSHA256 !== state.zip.sha256) throw new Error('ZIP extraction receipt refers to different archive bytes');
@@ -330,7 +332,7 @@ export async function releaseMac(options, dependencies = {}) {
     }
     const extractedApp = join(extracted, 'Vonvon Bot.app');
     await noQuarantine('zip-attributes', extractedApp);
-    await verifyUniversalApp({ app: extractedApp, version, teamIdentifier: config.teamIdentifier });
+    await verifyUniversalApp({ app: extractedApp, version, teamIdentifier: config.teamIdentifier, execute: toolExecute });
     if (JSON.stringify(await signedSeal('zip-app', extractedApp, ['arm64', 'x86_64'])) !== JSON.stringify(state.appSeal)) throw new Error('ZIP contains a different signed App');
     await run('zip-app-ticket', 'xcrun', ['stapler', 'validate', extractedApp]);
     await run('zip-app-gatekeeper', 'spctl', ['-a', '-vv', '-t', 'exec', extractedApp]);
@@ -342,7 +344,7 @@ export async function releaseMac(options, dependencies = {}) {
     try {
       const mountedApp = join(volume, 'Vonvon Bot.app');
       await noQuarantine('dmg-attributes', mountedApp);
-      await verifyUniversalApp({ app: mountedApp, version, teamIdentifier: config.teamIdentifier });
+      await verifyUniversalApp({ app: mountedApp, version, teamIdentifier: config.teamIdentifier, execute: toolExecute });
       if (JSON.stringify(await signedSeal('dmg-app', mountedApp, ['arm64', 'x86_64'])) !== JSON.stringify(state.appSeal)) throw new Error('DMG contains a different signed App');
       await run('dmg-app-ticket', 'xcrun', ['stapler', 'validate', mountedApp]);
       await run('dmg-app-gatekeeper', 'spctl', ['-a', '-vv', '-t', 'exec', mountedApp]);

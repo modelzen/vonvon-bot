@@ -22,7 +22,7 @@ test('TLS bypass and trust-store overrides are rejected before release requests'
   assertSecureTransport({ NODE_TLS_REJECT_UNAUTHORIZED: '1', NODE_OPTIONS: '--max-old-space-size=4096' }, ['--test']);
   for (const env of [
     { NODE_TLS_REJECT_UNAUTHORIZED: '0' }, { NODE_OPTIONS: '--insecure-http-parser' },
-    { NODE_EXTRA_CA_CERTS: '/fixture/ca.pem' }, { SSL_CERT_FILE: '/fixture/ca.pem' }, { SSL_CERT_DIR: '/fixture/certs' },
+    { NODE_EXTRA_CA_CERTS: '/fixture/ca.pem' }, { SSL_CERT_FILE: '/fixture/ca.pem' }, { SSL_CERT_DIR: '/fixture/certs' }, { NODE_USE_SYSTEM_CA: '1' },
     { NODE_OPTIONS: '--use-openssl-ca' }, { NODE_OPTIONS: '--use-system-ca' }, { NODE_OPTIONS: '--openssl-config=/fixture/openssl.cnf' },
     { NODE_OPTIONS: '-r ./hook.cjs' }, { NODE_OPTIONS: '--require=./hook.cjs' }, { NODE_OPTIONS: '--import ./hook.mjs' }, { NODE_OPTIONS: '--experimental-loader=./hook.mjs' },
   ]) assert.throws(() => assertSecureTransport(env, []), /TLS verification/, JSON.stringify(env));
@@ -58,7 +58,7 @@ test('first-release missing classification never treats other failures as an emp
   await assert.rejects(readStableManifest({ env: {}, fetchImpl: async () => { throw new Error('timeout'); } }), /timeout/);
 });
 
-function fixture(t) {
+function evidence() {
   const files = new Map([
     ['manifest.json', Buffer.from(JSON.stringify(manifest))],
     [`feed-${version}.json`, Buffer.from(JSON.stringify(feed))],
@@ -71,11 +71,16 @@ function fixture(t) {
   const state = { context: { version, sourceCommit: sha, mode: 'release' }, complete: true, files: [...files.keys()].map(record) };
   files.set('notarization-state.json', Buffer.from(JSON.stringify(state)));
   files.set('SHA256SUMS', Buffer.from(state.files.map(item => `${item.sha256}  ${item.file}`).join('\n') + '\n'));
+  return { files, inventory, state };
+}
+
+function fixture(t) {
+  const data = evidence(), { files } = data;
   const missing = () => Object.assign(new Error('fixture file missing'), { code: 'ENOENT' });
   t.mock.method(fs, 'readFile', async (path, encoding) => { const value = files.get(basename(path)); if (!value) throw missing(); return encoding ? value.toString(encoding) : value; });
   t.mock.method(fs, 'lstat', async path => { const value = files.get(basename(path)); if (!value) throw missing(); return { size: value.length, isFile: () => true, isSymbolicLink: () => false }; });
   t.mock.method(fs, 'open', async path => { const value = files.get(basename(path)); if (!value) throw missing(); return { createReadStream: () => Readable.from([value]), close: async () => {} }; });
-  return { files, inventory, state };
+  return data;
 }
 
 test('local gate binds complete formal release, version/SHA, inventory, sums and file bytes', async t => {
@@ -162,7 +167,7 @@ test('CLI runs through a symlinked directory instead of silently exiting 0', asy
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const alias = join(root, 'alias');
   await fs.symlink(dirname(fileURLToPath(import.meta.url)), alias, 'dir');
-  const run = args => spawnSync(process.execPath, [join(alias, 'verify-public-release.mjs'), ...args], { encoding: 'utf8', env: { PATH: process.env.PATH } });
+  const run = (args, env = {}) => spawnSync(process.execPath, [join(alias, 'verify-public-release.mjs'), ...args], { encoding: 'utf8', env: { PATH: process.env.PATH, ...env } });
   const usage = run([]);
   assert.equal(usage.status, 1);
   assert.match(usage.stderr, /--out/);
@@ -171,5 +176,24 @@ test('CLI runs through a symlinked directory instead of silently exiting 0', asy
     assert.equal(missing.status, 1, `mode ${mode.join(' ') || 'full'} must fail on missing evidence`);
     assert.match(missing.stderr, /ENOENT|no such file/i);
     assert.equal(missing.stdout, '');
+  }
+  // Success is judged by the printed line (workflow.md), so the CLI's success path is pinned too.
+  const out = join(root, 'evidence');
+  await fs.mkdir(out);
+  for (const [file, bytes] of evidence().files) await fs.writeFile(join(out, file), bytes);
+  const args = ['--out', out, '--version', version, '--sha', sha];
+  const local = run([...args, '--local-only']);
+  assert.equal(local.status, 0, local.stderr);
+  assert.match(local.stdout, /^Local formal-release evidence verified\./m);
+  const both = run([...args, '--local-only', '--versioned-only']);
+  assert.equal(both.status, 1);
+  assert.match(both.stderr, /--local-only \| --versioned-only/);
+  assert.equal(both.stdout, '');
+  // Without network, the public modes must still reach their TLS gate instead of the local-only path.
+  for (const mode of [['--versioned-only'], []]) {
+    const gated = run([...args, ...mode], { SSL_CERT_FILE: '/fixture/ca.pem' });
+    assert.equal(gated.status, 1, `mode ${mode.join(' ') || 'full'}`);
+    assert.match(gated.stderr, /TLS verification/);
+    assert.equal(gated.stdout, '');
   }
 });

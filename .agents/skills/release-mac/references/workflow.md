@@ -38,7 +38,7 @@
 
 分页和不覆盖约束以腾讯云官方 [GET Bucket](https://www.tencentcloud.com/document/product/436/30614) 与 [PUT Object](https://www.tencentcloud.com/document/product/436/7749) 为准；这里的 helper 仅调用前者。
 
-这份配置里的环境变量只放一个子账号的 key，这个子账号只有这个 bucket 的 GetBucket（列出对象）权限，不能写、不能删；写入用的 key 另配，不进这份配置。临时凭据可另指定 `securityTokenEnv`。helper 只在自己的进程里用这把 key 枚举，传给 `npm run build`、electron-builder、`xcrun`、`ditto`、`hdiutil`、`git` 等子进程前，会先删掉 `secretIdEnv`、`secretKeyEnv`、`securityTokenEnv` 指的这几个变量。不要为读凭据打印环境、配置文件或 SDK 错误原文；不要把密钥值放配置、命令行、对话或 GitHub。缺项只问配置路径／profile，COS 的写权限（启用了 CDN 时还有 CDN 刷新权限）与只读枚举分别确认。不要为了枚举临时扩宽权限。
+这份配置里的环境变量只放一个子账号的 key，这个子账号只有这个 bucket 的 GetBucket（列出对象）权限，不能写、不能删；写入用的 key 另配，不进这份配置。临时凭据可另指定 `securityTokenEnv`。helper 只在自己的进程里用这把 key 枚举，传给 `npm run build`、electron-builder、`xcrun`、`ditto`、`hdiutil`、`git`，以及检查签名和架构用的 `codesign`、`PlistBuddy`、`lipo` 等子进程前，会先删掉 `secretIdEnv`、`secretKeyEnv`、`securityTokenEnv` 指的这几个变量。不要为读凭据打印环境、配置文件或 SDK 错误原文；不要把密钥值放配置、命令行、对话或 GitHub。缺项只问配置路径／profile，COS 的写权限（启用了 CDN 时还有 CDN 刷新权限）与只读枚举分别确认。不要为了枚举临时扩宽权限。
 
 官方 SDK 不在仓库依赖里，装进仓库外的固定工具目录，版本写死，不在源码 worktree 里装（`git status` 门槛会拒绝）：
 
@@ -59,13 +59,15 @@ const [file, version] = process.argv.slice(1);
 const ledger = JSON.parse(await readFile(file, "utf8"));
 if (!Array.isArray(ledger.versions) || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) throw new Error("ledger or version is invalid");
 if (!ledger.versions.includes(version)) ledger.versions.push(version);
-await writeFile(`${file}.new`, JSON.stringify(ledger, null, 2) + "\n", { flag: "wx" });
+await writeFile(`${file}.new`, JSON.stringify(ledger, null, 2) + "\n", { flag: "wx", mode: 0o600 }).catch(error => {
+  throw error.code === "EEXIST" ? new Error(`${file}.new already exists: an earlier write was interrupted; investigate before retrying`) : error;
+});
 await rename(`${file}.new`, file);
 console.log(`Ledger records ${version}`);
 ' "$LEDGER_FILE" "$VERSION"
 ```
 
-`LEDGER_FILE` 是 `--cos-config` 里 `ledgerFile` 的绝对路径。看到 `Ledger records <版本>` 才算写好；`.new` 文件已存在说明上次中断，先查清楚，不要删了重来。
+`LEDGER_FILE` 是 `--cos-config` 里 `ledgerFile` 的绝对路径。看到 `Ledger records <版本>` 才算写好；新台账的权限是 600。报 `.new already exists` 说明上次中断，先查清楚，不要删了重来。
 
 正常正式候选：
 
@@ -84,7 +86,7 @@ VONVON_DESKTOP_UPDATE_CONFIG="$HOME/.vonvon-release/desktop-update.json" \
 | COS 有旧 `feed-*.json`／`Vonvon-Bot-*`，或台账有版本 | `--no-live-manifest` | 门槛取 COS 历史和台账的最高版本，state 与 inventory 记录 `baseline: {live: none, highestPublished: X}` |
 | 两边都是空的 | `--first-release` | 首发，state 与 inventory 记录 `baseline: none` |
 
-第二种是流程里写好的几条路：首发时版本化对象已经上传，owner 在 stable 关口说"先不发"；首发上传传到一半失败；首发撤回时删了 manifest。参数和情况对不上时 helper 拒绝，不会互相顶替。只有 404 才算"没有清单"：400、403、5xx、超时、重定向、TLS 错误和无效 200 一律拒绝。严禁 `curl -k`、`--insecure`、`NODE_TLS_REJECT_UNAUTHORIZED=0`，也不能用 `NODE_EXTRA_CA_CERTS`、`SSL_CERT_FILE`、`SSL_CERT_DIR` 或 `NODE_OPTIONS`／Node 参数里的 `--use-openssl-ca`、`--use-system-ca`、`--openssl-config`、`--require`（`-r`）、`--import`、`--loader` 改信任链或预加载代码；helper 和复核脚本看到这些设置就拒绝。证书配错时修证书，不加 CA。已有清单时按正常版本门槛，两个参数都不能用。
+第二种是流程里写好的几条路：首发时版本化对象已经上传，owner 在 stable 关口说"先不发"；首发上传传到一半失败；首发撤回时删了 manifest。参数和情况对不上时 helper 拒绝，不会互相顶替。只有 404 才算"没有清单"：400、403、5xx、超时、重定向、TLS 错误和无效 200 一律拒绝。严禁 `curl -k`、`--insecure`、`NODE_TLS_REJECT_UNAUTHORIZED=0`，也不能用 `NODE_EXTRA_CA_CERTS`、`SSL_CERT_FILE`、`SSL_CERT_DIR`、`NODE_USE_SYSTEM_CA` 或 `NODE_OPTIONS`／Node 参数里的 `--use-openssl-ca`、`--use-system-ca`、`--openssl-config`、`--require`（`-r`）、`--import`、`--loader` 改信任链或预加载代码；helper 和复核脚本看到这些设置就拒绝。证书配错时修证书，不加 CA。环境里本来就带着这几个变量（比如沙箱代理设的）时，只在运行 helper 或复核脚本的那一条命令前用 `env -u NODE_EXTRA_CA_CERTS -u SSL_CERT_FILE -u SSL_CERT_DIR -u NODE_USE_SYSTEM_CA` 去掉；去掉后 TLS 不通，说明网络经过了会换证书的代理，停下报告，不把变量加回来。已有清单时按正常版本门槛，两个参数都不能用。
 
 门槛没过时 helper 只在 `OUT/logs/` 写日志，`previous-manifest.json` 和 state 都在全部门槛通过后才写。
 
