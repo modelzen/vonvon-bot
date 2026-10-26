@@ -173,7 +173,7 @@ export function AddMcpDialog({provider, revision, onSave, onRefresh, onClose}: {
     <div className="mcp-form">
       <p className="mcp-note">添加到 {providerName(provider)} 用户配置。</p>
       <FormField label="名称" htmlFor={`${id}-name`}><input id={`${id}-name`} value={name} disabled={pending} maxLength={64} autoComplete="off" onChange={event => setName(event.target.value)}/></FormField>
-      <SettingChoices label="连接方式" value={transport} choices={[{value: 'http', label: '远程地址'}, {value: 'stdio', label: '本机命令'}]} disabled={pending} onChange={setTransport}/>
+      <SettingChoices segmented label="连接方式" value={transport} choices={[{value: 'http', label: '远程地址'}, {value: 'stdio', label: '本机命令'}]} disabled={pending} onChange={setTransport}/>
       {transport === 'http' ? <>
         <FormField label="服务地址" htmlFor={`${id}-url`}><input id={`${id}-url`} type="url" value={url} disabled={pending} placeholder="https://…/mcp" autoComplete="off" spellCheck={false} onChange={event => setUrl(event.target.value)}/></FormField>
         <details className="mcp-form-advanced"><summary>令牌环境变量</summary><FormField label="变量名" htmlFor={`${id}-token`} description="由 Provider 读取该变量，不在这里填写令牌。"><input id={`${id}-token`} value={tokenEnv} disabled={pending} placeholder="MCP_TOKEN" autoComplete="off" onChange={event => setTokenEnv(event.target.value)}/></FormField></details>
