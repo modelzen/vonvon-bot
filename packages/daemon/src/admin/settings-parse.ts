@@ -86,12 +86,12 @@ const schemas: Record<string, Record<string, Rule>> = {
       backend: text,
       selection
     }, true),
-    titles: shape({
-      byBackend: value => {
-        const map = settingsObject(value);
-        return Object.keys(map).length === 1 && Object.entries(map).every(([key, policy]) => text(key) && !['__proto__', 'constructor', 'prototype'].includes(key) && title(policy));
-      }
-    }),
+    titles: value => shape({ policy: value => shape({ enabled: one(false) })(value) || shape({
+      enabled: one(true), backend: text, model: text, effort: one(...REASONING_EFFORTS)
+    })(value) })(value) || shape({ byBackend: value => {
+      const map = settingsObject(value);
+      return Object.keys(map).length === 1 && Object.entries(map).every(([key, policy]) => text(key) && !['__proto__', 'constructor', 'prototype'].includes(key) && title(policy));
+    } })(value),
     paths: shape({
       projectsRootDir: path
     }, true),

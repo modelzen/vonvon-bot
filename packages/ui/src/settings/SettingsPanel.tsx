@@ -25,7 +25,6 @@ import {
   type SettingsReply,
   type SettingsScope,
   type SettingsView,
-  type TitlePolicy,
 } from "@vonvon/protocol";
 import "./settings.css";
 import {useDraft} from './DraftGuard';
@@ -35,6 +34,7 @@ import {SettingChoices} from './SettingChoices';
 import {NativePermissionFields, nativePermissionPatch} from './NativePermissionFields';
 import {AnnouncedReadonlyMessages, hasReadonlyMessage, type ReadonlyMessage} from './readonly-messages';
 import './permission-summary.css';
+import {BotTitleSettings, BotCommentSettings} from './BotModelSettings';
 
 type AgentScope = { kind: "agent"; botId: AgentId };
 type ProjectScope = { kind: "project"; botId: AgentId; projectName: string };
@@ -59,8 +59,6 @@ export type Section<T> = {
     | { kind: "readonly"; reason: string; message: string };
   apply: { detail: string }[];
 };
-/** The backends a Bot-wide setting can pick, named as the UI names them. */
-const backendChoices = (["codex-appserver", "claude-agent"] as const).map((value) => ({ value, label: backendLabel(value) }));
 const effortOptions = [
   "none",
   "minimal",
@@ -116,9 +114,11 @@ export function Editor<T extends object>({
   prepareSave,
   autoSave = false,
   headerAction,
+  hideEffects = false,
 }: {
   title: string;
   headerAction?: ReactNode;
+  hideEffects?: boolean;
   section: Section<T>;
   render: (
     draft: T,
@@ -302,7 +302,7 @@ export function Editor<T extends object>({
       footer={
         section.access.kind === "readonly"
           ? hasReadonlyMessage(announcedReadonly, section.access) ? undefined : section.access.message
-          : effectText(section) === '下一条消息生效' ? undefined : effectText(section)
+          : hideEffects || effectText(section) === '下一条消息生效' ? undefined : effectText(section)
       }
     >
       {render(value, edit, disabled, commit, `${confirmed.revision}:${discardVersion}`, discard)}
@@ -326,10 +326,10 @@ export function Editor<T extends object>({
       {immediate.kind === 'pending' && (autoSave ? <p className="settings-save-status" role="status">正在切换…</p> : <InlineNotice title="正在保存">这项设置正在保存。</InlineNotice>)}
       {immediate.kind === 'failed' && <InlineNotice title={autoSave ? '切换未完成' : '保存未完成'} tone="danger">
         {immediate.message}
-        <div className="settings-edit-actions">
+        <span className="settings-edit-actions">
           <Button size="sm" disabled={conflict} onClick={() => void retry()}>重试</Button>
           <Button size="sm" onClick={() => setImmediate({kind: 'idle'})}>{autoSave ? '保留原设置' : '放弃这项修改'}</Button>
-        </div>
+        </span>
       </InlineNotice>}
       {conflict && <InlineNotice title="设置已在别处更改" tone="danger">
         {autoSave ? '请重新读取最新设置后再切换。' : '当前草稿已保留。重新读取后可基于最新设置修改。'}
@@ -674,28 +674,6 @@ function AgentPanel({
   const [actionMessage, setActionMessage] = useState<string>();
   const [adminId, setAdminId] = useState("");
   const [chatId, setChatId] = useState("");
-  const [instructions, setInstructions] = useState(
-    view.commentInstructions.content.text,
-  );
-  const [instructionBase, setInstructionBase] = useState(
-    view.commentInstructions.content.text,
-  );
-  useEffect(() => {
-    const saved = view.commentInstructions.content.text;
-    if (saved === instructionBase) return;
-    setInstructions((current) =>
-      current === instructionBase ? saved : current,
-    );
-    setInstructionBase(saved);
-  }, [
-    view.commentInstructions.revision,
-    view.commentInstructions.content.text,
-    instructionBase,
-  ]);
-  const [titleBackend, setTitleBackend] = useState("codex-appserver");
-  const [commentBackend, setCommentBackend] = useState(
-    view.sections.comments.stored.backend,
-  );
   async function save(
     section: keyof AgentSettingsView["sections"],
     patch: object,
@@ -724,25 +702,9 @@ function AgentPanel({
           : "操作已完成。"),
     );
     if (result.kind === "acted" && result.result.kind === "saved") {
-      if (
-        isAgentView(result.result.view) &&
-        result.result.view.commentInstructions.revision !==
-          view.commentInstructions.revision
-      )
-        setInstructions(result.result.view.commentInstructions.content.text);
       await refresh();
     }
     return result.kind === 'acted' && result.result.kind === 'saved';
-  }
-  async function saveInstructions() {
-    if (view.sections.cards.access.kind === 'readonly' || !instructions.trim()) return false;
-    const saved = await act({type: 'act', action: {
-      kind: 'commentInstructions', botId: view.scope.botId,
-      revision: view.commentInstructions.revision,
-      content: {kind: 'custom', text: instructions},
-    }});
-    if (saved) setInstructionBase(instructions);
-    return saved;
   }
   async function addAdministrator() {
     const parsed = openIdSchema.safeParse(adminId.trim());
@@ -753,15 +715,9 @@ function AgentPanel({
   }
   useDraft(Boolean(adminId), {title: '添加管理员', save: addAdministrator, discard: () => setAdminId('')});
   useDraft(Boolean(chatId), {title: '添加群 ID', save: async () => {setActionMessage('请先将群 ID 添加到列表，再保存。'); return false;}, discard: () => setChatId('')});
-  useDraft(instructions !== instructionBase, {
-    title: '评论回复规则', save: saveInstructions,
-    discard: () => setInstructions(view.commentInstructions.content.text),
-  });
   const cards = view.sections.cards,
     run = view.sections.run,
     voice = view.voice,
-    comments = view.sections.comments,
-    titles = view.sections.titles,
     access = view.sections.access;
   return (
     <>
@@ -819,217 +775,8 @@ function AgentPanel({
           }
         />
       </SettingsGroup>
-      <details className="agent-settings-disclosure">
-        <summary><span>会话标题</span></summary>
-      <Catalog botId={view.scope.botId} backend={titleBackend} purpose="titles">
-        {(catalog) => (
-          <Editor
-            title="新会话标题"
-            section={titles}
-            save={(draft, revision) =>
-              save(
-                "titles",
-                {
-                  byBackend: {
-                    [titleBackend]: draft.byBackend?.[titleBackend] ?? {
-                      enabled: false,
-                    },
-                  },
-                },
-                revision,
-              )
-            }
-            render={(draft, set, disabled) => {
-              const policy: TitlePolicy = draft.byBackend[titleBackend] ?? {
-                enabled: false,
-              };
-              const setPolicy = (next: TitlePolicy) =>
-                set({
-                  byBackend: { ...draft.byBackend, [titleBackend]: next },
-                });
-              return (
-                <>
-                  <SettingsRow
-                    title="后端"
-                    trailing={
-                      <Select
-                        label="标题后端"
-                        value={titleBackend}
-                        disabled={disabled}
-                        choices={backendChoices}
-                        onChange={setTitleBackend}
-                      />
-                    }
-                  />
-                  <SettingsRow
-                    title="用模型生成标题"
-                    trailing={
-                      <Switch
-                        label="用模型生成标题"
-                        value={policy.enabled}
-                        disabled={disabled}
-                        onChange={(enabled) =>
-                          setPolicy(
-                            enabled
-                              ? {
-                                  enabled: true,
-                                  model: policy.enabled ? policy.model : "",
-                                  effort: policy.enabled
-                                    ? policy.effort
-                                    : "medium",
-                                }
-                              : { enabled: false },
-                          )
-                        }
-                      />
-                    }
-                  />
-                  {policy.enabled && (
-                    <>
-                      <SettingsRow
-                        title="自定义模型 ID"
-                        description="标题允许输入未列入当前模型目录的 ID。"
-                        trailing={
-                          <Text
-                            label="标题模型 ID"
-                            value={policy.model}
-                            disabled={disabled}
-                            onChange={(model) =>
-                              setPolicy({ ...policy, model })
-                            }
-                          />
-                        }
-                      />
-                      <SettingsRow
-                        title="推理强度"
-                        trailing={
-                          <Select
-                            label="标题推理强度"
-                            value={policy.effort}
-                            disabled={disabled}
-                            choices={(
-                              catalog?.titleEfforts ?? effortOptions
-                            ).map((value) => ({ value, label: value }))}
-                            onChange={(effort) =>
-                              setPolicy({ ...policy, effort })
-                            }
-                          />
-                        }
-                      />
-                    </>
-                  )}
-                </>
-              );
-            }}
-          />
-        )}
-      </Catalog>
-      </details>
-      <details className="agent-settings-disclosure">
-        <summary><span>云文档评论<small>模型与回复规则</small></span></summary>
-      <Catalog
-        botId={view.scope.botId}
-        backend={commentBackend}
-        purpose="comments"
-      >
-        {(catalog) => (
-          <Editor
-            title="云文档评论"
-            section={comments}
-            save={(draft, revision) => save("comments", draft, revision)}
-            render={(draft, set, disabled) => (
-              <>
-                <SettingsRow
-                  title="后端"
-                  trailing={
-                    <Select
-                      label="评论后端"
-                      value={draft.backend}
-                      disabled={disabled}
-                      choices={backendChoices}
-                      onChange={(value) => {
-                        setCommentBackend(value);
-                        set({
-                          ...draft,
-                          backend: value,
-                          selection: { kind: "default" },
-                        });
-                      }}
-                    />
-                  }
-                />
-                <ModelChoice
-                  value={draft.selection}
-                  onChange={(selection) => set({ ...draft, selection })}
-                  catalog={catalog}
-                  disabled={disabled}
-                />
-              </>
-            )}
-          />
-        )}
-      </Catalog>
-      <SettingsGroup
-        label="评论回复规则"
-        id={settingAnchor("评论回复规则")}
-        footer={
-          cards.access.kind === "readonly"
-            ? cards.access.message
-            : "最多编辑 30000 字。保存后同步已有评论目录；下条新评论使用新规则。"
-        }
-      >
-        <textarea
-          aria-label="评论回复规则"
-          className="settings-instructions"
-          value={instructions}
-          maxLength={30000}
-          disabled={cards.access.kind === "readonly"}
-          onChange={(event) => setInstructions(event.target.value)}
-        />
-        <div className="settings-edit-actions">
-          <Button
-            size="sm"
-            disabled={instructions === view.commentInstructions.content.text}
-            onClick={() =>
-              setInstructions(view.commentInstructions.content.text)
-            }
-          >
-            放弃修改
-          </Button>
-          <Button
-            size="sm"
-            disabled={
-              cards.access.kind === "readonly" ||
-              !instructions.trim() ||
-              instructions === view.commentInstructions.content.text
-            }
-            onClick={() => void saveInstructions()}
-          >
-            保存规则
-          </Button>
-          <Button
-            size="sm"
-            disabled={
-              cards.access.kind === "readonly" ||
-              view.commentInstructions.content.kind === "default"
-            }
-            onClick={() =>
-              void act({
-                type: "act",
-                action: {
-                  kind: "commentInstructions",
-                  botId: view.scope.botId,
-                  revision: view.commentInstructions.revision,
-                  content: { kind: "default" },
-                },
-              })
-            }
-          >
-            恢复默认
-          </Button>
-        </div>
-      </SettingsGroup>
-      </details>
+      <BotTitleSettings key={`titles:${view.scope.botId}`} view={view} save={save}/>
+      <BotCommentSettings key={`comments:${view.scope.botId}`} view={view} save={save} refresh={refresh}/>
       <details className="agent-settings-disclosure">
         <summary><span>管理员</span></summary>
       <SettingsGroup

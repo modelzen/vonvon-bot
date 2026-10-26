@@ -54,6 +54,24 @@ function coordinator(store: SessionTitleStore, backend: AgentBackend): SessionTi
 }
 
 describe('SessionTitleCoordinator', () => {
+  it.each([['codex-appserver', 'claude-agent'], ['claude-agent', 'codex-appserver']])('generates %s session titles using %s and retains the provider across recovery', async (hostId, titleId) => {
+    const store = memoryStore();
+    const host = titleBackend({ id: hostId });
+    const generator = titleBackend({ id: titleId });
+    const backendFor = (id: string) => id === hostId ? host : generator;
+    const subject = new SessionTitleCoordinator({ store, backendFor });
+    const key = await subject.register({ backend: hostId, sessionId: 'cross-provider', cwd: '/repo', source: titleSource('请完整分析我们的软件架构并提供包含模块拆分、风险和验收步骤的详细改造计划。'.repeat(8)), policy: { strategy: 'model', backend: titleId, model: 'title-model', effort: 'high' } });
+    expect((await store.get(key))?.policy?.backend).toBe(titleId);
+    await subject.activate(key);
+    const recovered = new SessionTitleCoordinator({ store, backendFor });
+    await recovered.prepare(key);
+    await recovered.apply(key);
+    expect(generator.generateSessionTitle).toHaveBeenCalledWith(expect.objectContaining({ model: 'title-model' }));
+    expect(host.generateSessionTitle).not.toHaveBeenCalled();
+    expect(host.setSessionTitle).toHaveBeenCalled();
+    expect(generator.setSessionTitle).not.toHaveBeenCalled();
+  });
+
   it('strips the sender block before direct-title handling and writes only once', async () => {
     const store = memoryStore();
     const backend = titleBackend();

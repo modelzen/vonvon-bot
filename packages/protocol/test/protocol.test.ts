@@ -172,6 +172,17 @@ describe("pinned contract extraction", () => {
     expect(save("response", {noMention:true})).toBe(true);
     expect(save("compact", {autoCompact:false})).toBe(false);
   });
+  it('accepts global title settings and one-provider legacy input without exposing legacy in views', () => {
+    const save = (patch: unknown) => requestSchema.safeParse({type:'request',id:'1',method:'settings',payload:{type:'save',edit:{scope:{kind:'agent',botId:'cli_fixture'},section:'titles',revision:'r1',patch}}}).success;
+    expect(save({policy:{enabled:true,backend:'claude-agent',model:'title-model',effort:'low'}})).toBe(true);
+    expect(save({policy:{enabled:false}})).toBe(true);
+    expect(save({byBackend:{'codex-appserver':{enabled:false}}})).toBe(true);
+    expect(save({byBackend:{a:{enabled:false},b:{enabled:false}}})).toBe(false);
+    expect(save({policy:{enabled:true,model:'missing-backend',effort:'low'}})).toBe(false);
+    const view = agentViewSchema.parse(fixture('agent-settings.json'));
+    expect(view.sections.titles.stored).toHaveProperty('policy');
+    expect(view.sections.titles.stored).not.toHaveProperty('byBackend');
+  });
   it("s23f: decisionModels is optional in agent and project views", () => {
     const old = fixture("agent-settings.json") as Record<string, unknown>;
     expect(agentViewSchema.parse(old).decisionModels).toBeUndefined();
