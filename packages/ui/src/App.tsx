@@ -23,6 +23,7 @@ import { AgentAvatar } from './AgentAvatar';
 import {OperationActivity} from './management/OperationActivity';
 import { GroupAvatar } from './GroupAvatar';
 import {BotGroupList} from './BotGroupList';
+import {BotListRow} from './BotListRow';
 import './bot-management.css';
 import { GroupDirectory, type GroupDirectoryState } from './GroupDirectory';
 import { ProjectDirectory, projectEntries, type ProjectDirectoryState } from './ProjectDirectory';
@@ -664,14 +665,13 @@ function DesktopApp() {
               )}
               {selection.kind === "overview" && (
                 <>
-                  {view === 'agents' && <header className="today-page-heading today-page-heading--actions"><div><h1>Bot</h1><span>{snapshot.agents.length} 个 Bot</span></div><GlowButton disabled={!ready || busy} onClick={() => void register()}>添加 Bot</GlowButton></header>}
+                  {view === 'agents' && <header className="today-page-heading today-page-heading--actions"><h1>Bot</h1><GlowButton disabled={!ready || busy} onClick={() => void register()}>添加 Bot</GlowButton></header>}
                   {view === "agents"
                     ? snapshot.agents.length > 0 && (
                         <section
                           aria-label="Bot 列表"
-                          className="settings-entity-group"
+                          className="today-list-surface"
                         >
-                          <div className="settings-entity-group__surface">
                             {snapshot.agents.map((agent) => {
                               const status = agentListStatus(agent);
                               const activating = pendingActivation?.agentId === agent.id ? pendingActivation : null;
@@ -681,37 +681,14 @@ function DesktopApp() {
                                   .map((member) => member.groupId),
                               ).size;
                               return (
-                                <button
-                                  className="settings-entity-row collaboration-agent-list-row"
-                                  key={agent.id}
-                                  type="button"
-                                  onClick={() =>
-                                    select({ kind: "agent", id: agent.id })
-                                  }
-                                >
-                                  <span className="collaboration-agent-list-avatar" aria-hidden="true">
-                                    <AgentAvatar agent={agent} />
-                                  </span>
-                                  <span className="settings-entity-row__copy">
-                                    <strong>{agent.name}</strong>
-                                    <small title={agent.readError || undefined}>
-                                      {agent.readError
-                                        ? "群配置读取失败"
-                                        : `飞书 · ${groupCount} 个群聊${newCounts.bots[agent.id] ? ` · ${newTag(newCounts.bots[agent.id])}` : ''}`}
-                                    </small>
-                                  </span>
-                                  {activating ? <span className="settings-entity-row__value"><OperationActivity key={`${agent.id}:${activating.enabled}`} label={activating.enabled ? '启用中' : '停用中'} state={activating.enabled ? 'connecting' : 'working'}/></span>
-                                    : status.tone !== 'success' && <span className={`settings-entity-row__value settings-entity-row__value--${status.tone}`}>{status.label}</span>}
-                                  <ChevronRight
-                                    aria-hidden="true"
-                                    className="settings-entity-row__chevron"
-                                    size={15}
-                                  />
-                                </button>
+                                <BotListRow key={agent.id} agent={agent} groupCount={groupCount}
+                                  onSelect={() => select({kind: 'agent', id: agent.id})}
+                                  newLabel={newCounts.bots[agent.id] ? newTag(newCounts.bots[agent.id]) : undefined}
+                                  status={activating
+                                    ? <OperationActivity key={`${agent.id}:${activating.enabled}`} label={activating.enabled ? '启用中' : '停用中'} state={activating.enabled ? 'connecting' : 'working'}/>
+                                    : status.tone !== 'success' ? <span data-tone={status.tone}>{status.label}</span> : undefined}/>
                               );
                             })}
-
-                          </div>
                         </section>
                       )
                     : view === "groups" ? <><MigrationBanner snapshot={snapshot}/><GroupDirectory snapshot={snapshot} state={groupDirectoryState} onStateChange={setGroupDirectoryState} statusFor={agentListStatus}
