@@ -1,92 +1,58 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createDesktopReleaseLookup, parseDesktopRelease } from '../src/service/desktop-release';
-import { buildDmMenuCard, buildForegroundUpdateCard } from '../src/card/dm-cards';
+import { desktopDownloadForHost, desktopDownloadNoticeForHost, DESKTOP_DOWNLOAD_PAGE } from '../src/service/desktop-release';
+import { buildDmMenuCard, buildForegroundRestartCard, buildForegroundUpdateCard } from '../src/card/dm-cards';
 
-const tag = 'v0.7.0';
-const macName = 'Vonvon-Bridge-0.7.0-mac-arm64.pkg';
-const winName = 'Vonvon-Bridge-0.7.0-win-x64.exe';
-const asset = (name: string) => ({
-  name, state: 'uploaded', size: 1024,
-  browser_download_url: `https://github.com/modelzen/vonvon-bridge/releases/download/${tag}/${name}`,
-});
-const release = (assets: unknown[] = [asset(macName), asset(winName)]) => ({
-  tag_name: tag, draft: false, prerelease: false, published_at: '2026-09-26T00:00:00Z', assets,
-});
-
-describe('published desktop release guidance', () => {
-  it('only accepts uploaded native installers from the same official release', () => {
-    expect(parseDesktopRelease(release())).toMatchObject({ version: '0.7.0', installers: [{ platform: 'macOS' }, { platform: 'Windows' }] });
-    expect(parseDesktopRelease({ ...release(), draft: true })).toBeNull();
-    expect(parseDesktopRelease({ ...release(), prerelease: true })).toBeNull();
-    expect(parseDesktopRelease({ ...release(), published_at: null })).toBeNull();
-    expect(parseDesktopRelease(release([{ ...asset(macName), size: 0 }]))).toBeNull();
-    expect(parseDesktopRelease(release([{ ...asset(macName), browser_download_url: `https://github.com/modelzen/vonvon-bridge/releases/download/v0.8.0/${macName}` }]))).toBeNull();
-    expect(parseDesktopRelease(release([{ ...asset(macName), browser_download_url: `https://github.com/modelzen/vonvon-bridge/releases/download/${tag}/${winName}` }]))).toBeNull();
-    expect(parseDesktopRelease(release([{ ...asset(macName), browser_download_url: `https://example.com/modelzen/vonvon-bridge/releases/download/${tag}/${macName}` }]))).toBeNull();
-    expect(parseDesktopRelease(release([asset('vonvon-bridge-0.7.0-mac-arm64.tar.gz')]))).toBeNull();
-    expect(parseDesktopRelease(release([asset('Vonvon-Bridge-0.7.0-win-arm64.exe')]))).toBeNull();
+describe('desktop download guidance', () => {
+  it('points at the official download page and never goes to the network', () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      expect(DESKTOP_DOWNLOAD_PAGE).toBe('https://bot.vonvon.cc/get/');
+      expect(desktopDownloadForHost('darwin')).toBe('https://bot.vonvon.cc/get/');
+      expect(desktopDownloadNoticeForHost('darwin')).toContain('https://bot.vonvon.cc/get/');
+      expect(fetcher).not.toHaveBeenCalled();
+    } finally { vi.unstubAllGlobals(); }
   });
 
-  it('caches both published and unavailable results and shares concurrent requests', async () => {
-    let time = 0;
-    const fetcher = vi.fn(async () => new Response(JSON.stringify(release()), { status: 200 }));
-    const lookup = createDesktopReleaseLookup(fetcher, () => time);
-    const [first, second] = await Promise.all([lookup(), lookup()]);
-    expect(first).toEqual(second);
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    time = 14 * 60_000;
-    await lookup();
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    time = 16 * 60_000;
-    expect(await lookup()).toEqual(first);
-    expect(fetcher).toHaveBeenCalledTimes(2);
-
-    const failedFetch = vi.fn(async () => { throw new Error('offline'); });
-    const offline = createDesktopReleaseLookup(failedFetch, () => time);
-    expect(await offline()).toBeNull();
-    await offline();
-    expect(failedFetch).toHaveBeenCalledTimes(1);
-    time += 3 * 60_000;
-    await offline();
-    expect(failedFetch).toHaveBeenCalledTimes(2);
-
-    const aborting = vi.fn((_input: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
-      init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
-    }));
-    const timed = createDesktopReleaseLookup(aborting, () => time, 5);
-    expect(await timed()).toBeNull();
-    expect(aborting).toHaveBeenCalledTimes(1);
+  it('only macOS gets a download prompt: there is no Windows or Linux desktop build', () => {
+    for (const platform of ['win32', 'linux'] as const) {
+      expect(desktopDownloadForHost(platform)).toBeNull();
+      expect(desktopDownloadNoticeForHost(platform)).toBeNull();
+    }
   });
 
-  it('puts installer links near the top of the DM menu and update result only when published', () => {
-    const available = parseDesktopRelease(release());
-    expect(available).not.toBeNull();
-    const menu = JSON.stringify(buildDmMenuCard({ desktopRelease: available }));
-    expect(menu).toContain('Vonvon Bridge 桌面版');
-    expect(menu).toContain(macName);
-    expect(menu).toContain(winName);
-    expect(menu.indexOf('桌面版')).toBeLessThan(menu.indexOf('私聊用于'));
-    expect(JSON.stringify(buildDmMenuCard())).not.toContain('安装桌面版');
-    const update = JSON.stringify(buildForegroundUpdateCard({ current: '0.7.0', desktopRelease: available }));
-    expect(update).toContain('安装桌面版');
-    const bundled = JSON.stringify(buildForegroundUpdateCard({ current: '0.7.0', distribution: 'bundled', desktopRelease: available }));
+  it('keeps the DM menu free of installer banners and puts the download page on the update card', () => {
+    const menu = JSON.stringify(buildDmMenuCard());
+    expect(menu).not.toMatch(/桌面版|Windows|bot\.vonvon\.cc|github\.com/);
+    const update = JSON.stringify(buildForegroundUpdateCard({ current: '0.7.0', desktopDownload: DESKTOP_DOWNLOAD_PAGE }));
+    expect(update).toContain('https://bot.vonvon.cc/get/');
+    expect(update).toContain('打开下载页');
+    expect(update).not.toMatch(/Windows|github\.com/);
+    expect(JSON.stringify(buildForegroundUpdateCard({ current: '0.7.0' }))).not.toContain('下载页');
+    const bundled = JSON.stringify(buildForegroundUpdateCard({ current: '0.7.0', distribution: 'bundled', desktopDownload: DESKTOP_DOWNLOAD_PAGE }));
     expect(bundled).toContain('请在桌面应用中更新');
+    expect(bundled).not.toContain('下载页');
     expect(bundled).not.toContain('立即更新');
   });
 });
 
-describe('V2 update guidance regression', () => {
-  it('never appends legacy package installation or sudo advice to foreground guidance', () => {
-    const text = JSON.stringify(buildForegroundUpdateCard({ current: '0.7.0' }));
-    expect(text).not.toContain('npm i -g');
-    expect(text).not.toContain('sudo');
-    expect(text).toContain('V2');
+describe('foreground guidance wording', () => {
+  it('never appends legacy package installation or sudo advice, and does not talk about "V2"', () => {
+    for (const text of [JSON.stringify(buildForegroundUpdateCard({ current: '0.7.0', desktopDownload: DESKTOP_DOWNLOAD_PAGE })), JSON.stringify(buildForegroundRestartCard())]) {
+      expect(text).not.toContain('npm i -g');
+      expect(text).not.toContain('sudo');
+      expect(text).not.toContain('V2');
+    }
+    expect(JSON.stringify(buildForegroundUpdateCard({ current: '0.7.0' }))).toContain('前台运行的 daemon 不支持在此更新');
+    expect(JSON.stringify(buildForegroundRestartCard())).toContain('vonvon daemon run');
   });
 });
 
-it('keeps the seven DM management actions and version badge without the retired console row', () => {
+it('keeps the seven DM management actions and version badge under the Vonvon Bot title, without the retired console row', () => {
   const menu = JSON.stringify(buildDmMenuCard({ version: '0.7.0' }));
   for (const label of ['新建项目', '项目列表', '设置', '用量', '诊断', '重启', '更新']) expect(menu).toContain(label);
+  expect(menu).toContain('🤖 Vonvon Bot 管理台');
+  expect(menu).not.toContain('Codex Bridge');
   expect(menu).toContain('v0.7.0');
   expect(menu).toContain('"enable_forward":false');
   expect(menu).not.toContain('网页控制台');

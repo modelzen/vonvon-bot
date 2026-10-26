@@ -8,20 +8,18 @@ import {
   packageName,
   restartDaemon,
 } from '../../service/update';
-import { getDesktopRelease, desktopReleaseNoticeForHost } from '../../service/desktop-release';
+import { desktopDownloadNoticeForHost } from '../../service/desktop-release';
 import { runtimeDistribution } from '../../service/distribution';
 
-async function printDesktopGuidance(): Promise<void> {
-  const release = await getDesktopRelease();
-  if (!release) return;
-  const notice = desktopReleaseNoticeForHost(release);
+function printDesktopGuidance(): void {
+  const notice = desktopDownloadNoticeForHost();
   if (notice) console.log(`\n${notice}`);
 }
 
 /**
- * `feishu-codex-bridge update` — self-update to the latest npm release and, if a
- * background daemon is running, restart it so the new code takes effect. With
- * `--check`, only report whether a newer version exists (no install).
+ * Self-update to the latest npm release and, if a background daemon is running,
+ * restart it so the new code takes effect. With `--check`, only report whether a
+ * newer version exists (no install).
  */
 export async function runUpdate(opts: { check?: boolean } = {}): Promise<void> {
   const distribution = await runtimeDistribution();
@@ -32,7 +30,7 @@ export async function runUpdate(opts: { check?: boolean } = {}): Promise<void> {
   try {
     await runCliUpdate(opts);
   } finally {
-    await printDesktopGuidance();
+    printDesktopGuidance();
   }
 }
 
@@ -55,7 +53,7 @@ async function runCliUpdate(opts: { check?: boolean }): Promise<void> {
 
   console.log(`发现新版本：v${current} → v${latest}`);
   if (opts.check) {
-    console.log('运行 `feishu-codex-bridge update` 安装更新。');
+    console.log(`运行 \`npm i -g ${pkg}@latest\` 安装更新，再用 \`vonvon daemon restart\` 重启后台服务。`);
     return;
   }
   if (isDevSource()) {
@@ -80,7 +78,7 @@ async function runCliUpdate(opts: { check?: boolean }): Promise<void> {
       console.log('✓ 后台服务已重启，新版本已生效。');
     } catch (err) {
       console.log(`⚠️ 自动重启失败：${err instanceof Error ? err.message : String(err)}`);
-      console.log('请手动执行：feishu-codex-bridge restart');
+      console.log('请手动执行：vonvon daemon restart');
     }
   } else {
     console.log('未检测到运行中的后台 daemon；下次 `start` / `run` 即用新版本。');

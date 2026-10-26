@@ -51,7 +51,7 @@ describe('buildDoctorCard', () => {
     expect(json).toContain('✅ 可用');
     expect(json).toContain('codex-cli 0.45.0');
     expect(json).toContain('✅ 已连接'); // connected → friendly label
-    expect(json).toContain('bridge v0.1.2');
+    expect(json).toContain('Vonvon Bot v0.1.2');
     expect(json).toContain('darwin-arm64');
   });
 
@@ -77,10 +77,11 @@ describe('buildDoctorCard', () => {
     expect(json).toContain('终端窗口'); // foreground run logs live in the terminal
   });
 
-  it('embeds a copy-paste prompt carrying repo link, version, log paths and config', () => {
+  it('embeds a copy-paste prompt carrying the site, version, log paths and config, without the old bridge name or repo', () => {
     const prompt = codeBlock(buildDoctorCard(info()));
-    expect(prompt).toContain('https://github.com/modelzen/feishu-codex-bridge');
-    expect(prompt).toContain('https://github.com/modelzen/feishu-codex-bridge/issues');
+    expect(prompt).toContain('我在用 Vonvon Bot');
+    expect(prompt).toContain('https://bot.vonvon.cc');
+    expect(prompt).not.toMatch(/github\.com|feishu-codex-bridge（|bridge 版本|项目仓库|issues/);
     expect(prompt).toContain('v0.1.2');
     expect(prompt).toContain('codex-cli 0.45.0');
     expect(prompt).toContain('v20.11.0');
@@ -111,7 +112,7 @@ describe('buildDoctorCard', () => {
     expect(json).toContain('飞书长连接：unknown');
   });
 
-  it('links to the repo and issues via buttons', () => {
+  it('links to the site and the feedback group via buttons, not to the open-source bridge repo', () => {
     const urls: string[] = [];
     const walk = (n: unknown): void => {
       if (Array.isArray(n)) n.forEach(walk);
@@ -122,8 +123,13 @@ describe('buildDoctorCard', () => {
       }
     };
     walk(buildDoctorCard(info()));
-    expect(urls).toContain('https://github.com/modelzen/feishu-codex-bridge');
-    expect(urls).toContain('https://github.com/modelzen/feishu-codex-bridge/issues');
+    expect(urls).toContain('https://bot.vonvon.cc');
+    expect(urls).toContain('https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=EXAMPLE_REDACTED_INVITATION');
+    expect(urls.some(url => url.includes('github.com'))).toBe(false);
+    const text = JSON.stringify(buildDoctorCard(info()));
+    expect(text).toContain('官网');
+    expect(text).toContain('反馈');
+    expect(text).not.toMatch(/项目仓库|提 Issue/);
   });
 });
 

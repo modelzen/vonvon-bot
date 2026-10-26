@@ -216,7 +216,7 @@ import {
 } from '../card/usage-cards';
 import { serviceStdoutPath, serviceStderrPath } from '../service/common';
 import { bridgeVersion } from '../core/version';
-import { getDesktopRelease } from '../service/desktop-release';
+import { desktopDownloadForHost } from '../service/desktop-release';
 import { runtimeDistribution } from '../service/distribution';
 import { paths } from '../config/paths';
 import { claudeReadScope } from '../config/read-scope';
@@ -5013,11 +5013,11 @@ export function createOrchestrator(
     settleUpdate(evt.messageId, c, evt.chatId);
 
   async function renderForegroundUpdate(): Promise<ReturnType<typeof buildForegroundUpdateCard>> {
-    const [desktopRelease, distribution] = await Promise.all([getDesktopRelease(), runtimeDistribution()]);
+    const distribution = await runtimeDistribution();
     return buildForegroundUpdateCard({
       current: currentVersion(),
       distribution: distribution.kind === 'bundled' ? 'bundled' : 'other',
-      desktopRelease,
+      desktopDownload: desktopDownloadForHost(),
     });
   }
 
@@ -5285,10 +5285,7 @@ export function createOrchestrator(
   // Back-to-menu: the settings card is button-only (never locks) and the
   // new-project form isn't locked until it's submitted, so 返回 always lands on
   // a card we can update in place — no recall, no fresh entity needed.
-  const renderDmMenuCard = async (): Promise<object> => buildDmMenuCard({
-      version: bridgeVersion(),
-      desktopRelease: await getDesktopRelease(),
-    });
+  const renderDmMenuCard = async (): Promise<object> => buildDmMenuCard({ version: bridgeVersion() });
   const freshMenu = (evt: CardActionEvent): void => {
     patch(evt, renderDmMenuCard);
   };
