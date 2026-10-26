@@ -6,6 +6,7 @@ import { decideAdd, decideEdit, type AddDecision, type MemoryPlace, type MemoryT
 import { normalizeBranchName } from './memory-branches';
 import { findSecretShape } from './memory-secret-shape';
 import type { FoundBlocks } from './hidden-blocks';
+import { reportLatestAction } from './diagnostics';
 import { botMemoryLocation, MemoryStore, projectMemoryLocation, type ItemResult, type MemoryActor, type Refused } from './memory-store';
 
 /**
@@ -177,6 +178,9 @@ export function createMemoryWriter(deps: MemoryWriterDeps): MemoryWriter {
         });
         if (!result.ok) return failedAdd(result as Refused);
         succeeded = true;
+        // Both tool and hidden-block additions reach this committed result.
+        // Duplicates, refusals and failed writes never announce a new memory.
+        if (turn.place === 'group' && turn.chatId) reportLatestAction(turn.chatId, 'memory-saved', (deps.now ?? Date.now)());
         return {
           ok: true, item: viewOf(result.item), scopeApplied: scopeName(chosen.scope), branchApplied: result.branchApplied,
           ...(result.newBranch ? { newBranch: true as const } : {}), ...(chosen.downgraded ? { downgraded: chosen.downgraded } : {}), usage: result.usage,

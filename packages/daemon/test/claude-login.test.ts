@@ -13,7 +13,7 @@ afterEach(() => {
 describe('Claude login mapping', () => {
   it('maps the account the CLI reports', () => {
     expect(loginFromAccount({ subscriptionType: 'max', tokenSource: 'claude.ai', apiProvider: 'firstParty' })).toMatchObject({ state: 'signedIn' });
-    expect(loginFromAccount({ apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'none', apiProvider: 'firstParty' })).toEqual({ state: 'signedIn', message: '已登录，凭据来自 ANTHROPIC_API_KEY。' });
+    expect(loginFromAccount({ apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'none', apiProvider: 'firstParty' })).toEqual({ state: 'signedIn', message: '已登录，凭据来自 ANTHROPIC_API_KEY。', account: {kind: 'api', apiProvider: 'firstParty'} });
     expect(loginFromAccount({ tokenSource: 'CLAUDE_CODE_OAUTH_TOKEN' })).toMatchObject({ state: 'signedIn' });
     expect(loginFromAccount({ tokenSource: 'none', apiProvider: 'firstParty' })).toEqual({ state: 'signedOut', message: CLAUDE_SIGNED_OUT_MESSAGE });
     expect(loginFromAccount({ apiKeySource: 'none' })).toEqual({ state: 'signedOut', message: CLAUDE_SIGNED_OUT_MESSAGE });
@@ -22,8 +22,19 @@ describe('Claude login mapping', () => {
     expect(loginFromAccount(undefined)).toBeNull();
   });
 
+  it('exposes only safe account type and does not guess a subscription from OAuth', () => {
+    expect(loginFromAccount({subscriptionType: 'free'})).toMatchObject({account: {kind: 'free', planType: 'free'}});
+    expect(loginFromAccount({subscriptionType: 'max'})).toMatchObject({account: {kind: 'subscription', planType: 'max'}});
+    expect(loginFromAccount({tokenSource: 'CLAUDE_CODE_OAUTH_TOKEN'})).toMatchObject({account: {kind: 'unknown'}});
+    expect(loginFromEnv({CLAUDE_CODE_OAUTH_TOKEN: 'secret-fixture'}, 'x')).toMatchObject({account: {kind: 'unknown'}});
+    expect(JSON.stringify(loginFromEnv({ANTHROPIC_API_KEY: 'secret-fixture'}, 'x'))).not.toContain('secret-fixture');
+    expect(loginFromAccount({apiProvider: 'bedrock'})).toMatchObject({state: 'unknown', account: {kind: 'api', apiProvider: 'bedrock'}});
+    expect(loginFromAccount({apiProvider: 'vertex'})).toMatchObject({state: 'unknown', account: {kind: 'api', apiProvider: 'vertex'}});
+    expect(loginFromAccount({apiProvider: 'https://private-host/?key=secret'})).not.toHaveProperty('account');
+  });
+
   it('falls back to credential variables but never reports signed out', () => {
-    expect(loginFromEnv({ ANTHROPIC_API_KEY: 'sk-fixture' }, 'x')).toEqual({ state: 'signedIn', message: '设置了 ANTHROPIC_API_KEY，没有验证过。' });
+    expect(loginFromEnv({ ANTHROPIC_API_KEY: 'sk-fixture' }, 'x')).toEqual({ state: 'signedIn', message: '设置了 ANTHROPIC_API_KEY，没有验证过。', account: {kind: 'api'} });
     expect(loginFromEnv({ ANTHROPIC_API_KEY: '  ' }, '起不来')).toEqual({ state: 'unknown', message: '无法确认：起不来' });
   });
 
@@ -102,7 +113,7 @@ describe('ClaudeAgentBackend.loginStatus', () => {
   it('reads the account at initialize with user settings, no hooks and no connectors', async () => {
     const { sdk, query, close } = sdkWith(async () => ({ account: { subscriptionType: 'pro', apiProvider: 'firstParty' } }));
     const login = await new ClaudeAgentBackend(async () => sdk).loginStatus();
-    expect(login).toEqual({ state: 'signedIn', message: '已登录 claude.ai 账号（pro）。' });
+    expect(login).toEqual({ state: 'signedIn', message: '已登录 claude.ai 账号（pro）。', account: {kind: 'subscription', planType: 'pro', apiProvider: 'firstParty'} });
     const options = (query.mock.calls[0] as unknown as [{ options: Record<string, unknown> }])[0].options;
     expect(options).toMatchObject({ settingSources: ['user'], settings: { disableAllHooks: true }, tools: [], mcpServers: {}, strictMcpConfig: true, persistSession: false });
     expect((options.env as Record<string, string>).ENABLE_CLAUDEAI_MCP_SERVERS).toBe('false');

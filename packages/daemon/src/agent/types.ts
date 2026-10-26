@@ -1,3 +1,4 @@
+import type { BackendAccount } from '@vonvon/protocol';
 import type { AgentToolSpec } from './entry/tools';
 import type { SessionProfile, SessionProfileCapabilities } from './session-profile';
 import { z } from 'zod';
@@ -540,7 +541,7 @@ export interface AccountUsageBundle {
  */
 export type BackendDepState = 'installed' | 'not-installed' | 'external-missing';
 
-export type BackendLogin = { state: 'signedIn' | 'signedOut' | 'notRequired' | 'unknown'; message: string };
+export type BackendLogin = { state: 'signedIn' | 'signedOut' | 'notRequired' | 'unknown'; message: string; account?: BackendAccount };
 
 /** A backend's environment probe（doctor / onboarding / DM 体检卡共用）。 */
 export interface BackendProbe {
