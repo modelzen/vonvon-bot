@@ -1,58 +1,53 @@
 ---
 name: release-mac
-description: 构建、签名、公证和发布 Vonvon Bot 的 macOS universal 安装包与稳定更新源。用于版本发布、发布彩排、Apple 公证或恢复中断的发布；遵守调用时指定的发布范围。
+description: 按 owner 指定版本和 main SHA 构建、公证、验收 Vonvon Bot macOS universal 候选，并准备稳定更新源发布；仅显式调用，公开发布另有 owner 确认关口。
 ---
 
 # Vonvon Bot macOS 发布
 
-完成调用者要求的阶段，保留可复核产物。一次调用可覆盖从构建到公开发布；调用者已经明确授权的步骤直接执行。只要求彩排或公证时，不扩展到 COS 上传、公开发布或本机安装。
+执行 owner 本轮指定的阶段并保留可复核产物。默认调用做到本地公证与验收；彩排、公证、上传版本化对象、切换 stable 是分别授权的阶段。工作流或其他代理的“调用者授权”不能代替 owner。**切换 stable manifest 之前，必须在当前对话收到 owner 本人明确确认“版本 X、源码 SHA Y，发布到 stable”**；计划文档、队列任务、代理转述和先前同版本演练不算该确认。先完成具体可审阅候选，再请求这一最终确认。
 
-## 输入与本机配置
+## 输入与门禁
 
-- 每次确定 **版本号**、**main 上的准确提交 SHA** 和 **彩排／正式发布**。先刷新远端，解析 SHA 为完整提交，确认它在 `origin/main` 的历史中。固定该 SHA 后，不在本轮自动跟随分支前进。
-- 产品版本只支持三段数字；源代码中 `packages/daemon/package.json` 与 `packages/desktop/package.json` 的版本必须都等于输入。不同则停止，交由版本修复 PR 处理，不在打包目录里临时改号。protocol/client 版本独立，不一起改号。
-- 稳定清单固定为 `https://dl.vonvon.cc/bot/mac/stable/manifest.json`。正式版本必须严格大于线上清单版本；用数字逐段比较。请求失败、TLS 校验失败或清单无效时，不能认定线上为空，也不能发布。
-- 彩排版本不得超过下一次正式版本；先确定下次正式版本。彩排产物标记为本地验证用途，不上传更新源，不作为正式版原样晋级。
-- 本机更新配置位于 `~/.vonvon-release/desktop-update.json`，**只含** `manifestURL` 与 `teamIdentifier`。URL 必须等于上述稳定清单地址，团队值从本机现有 Developer ID Application 证书核对。该文件和实际团队值不提交仓库。
-- 公证默认使用已存钥匙串配置 `notelet-notary`。先以 `xcrun notarytool history --keychain-profile notelet-notary` 验证可用性；在程序内部处理响应，不打印完整历史。凭据失效时，报告实际错误；不导出或打印密码、私钥。
+- 固定版本、main 完整 SHA、彩排／正式模式；先 `git fetch origin main`，确认准确 SHA 在 `origin/main` 历史中。本轮不自动跟随 main。daemon/desktop 版本须与输入相同，版本仅支持三段数字；不同则走版本修复 PR，不在构建目录临时改号。
+- 稳定地址为 `https://dl.vonvon.cc/bot/mac/stable/manifest.json`。正式版本须大于线上、COS 完整前缀历史和本机发布台账三者的最高版本。每次正式运行必传外部 `--cos-config`，见 [workflow.md](references/workflow.md)。超时、403、重定向、无效清单或 TLS 错误一律拒绝；不得用 `-k`、`--insecure`、`NODE_TLS_REJECT_UNAUTHORIZED=0` 或不安全 Node 选项绕过。
+- 首发仅在显式 `--first-release`、正常 TLS 得到 manifest 确实 404／COS `NoSuchKey`、实时完整 COS 枚举确认前缀没有任何旧 `feed-*.json`／`Vonvon-Bot-*`、台账没有历史版本时放行，记录 `baseline: none`。不能手写空列表充当 COS 证据。首发不免除 stable 的 owner 确认。
+- 彩排版本不得超过下一次正式版本。彩排输出 `REHEARSAL-` 元数据和 `DO-NOT-PUBLISH`，不上传、不原样晋级。
+- 更新配置只含 `manifestURL`、`teamIdentifier`，默认位于 `~/.vonvon-release/desktop-update.json`；地址须等于稳定地址，团队须与现有 Developer ID Application 证书相符。配置及真实身份值不提交。
+- 公证默认钥匙串 profile `notelet-notary`。helper 在构建前检查凭据；人工诊断用 `xcrun notarytool history --keychain-profile notelet-notary --output-format json >/dev/null`，只看退出码，不打印其他项目历史。凭据失效就停止，不导出密码或私钥。
 
 ## 构建和公证
 
-1. 阅读目标提交的 `AGENTS.md` 和发布脚本。用 `T=$(mktemp -d)` 创建本轮临时根，在原 checkout 外建立 detach worktree 到准确 SHA。保留原 checkout 的分支和未提交内容。构建、测试和打包同一时间只占用一个任务。
-2. 在该 worktree 执行 `npm ci`。**构建和发布 helper 两条命令都显式带上** `VONVON_DESKTOP_UPDATE_CONFIG`，指向上述外部 JSON；不能只在打包时传。使用真实账号与钥匙串，不设置或导出 `HOME`、`VONVON_HOME`。
-
-   ```sh
-   VONVON_DESKTOP_UPDATE_CONFIG="$HOME/.vonvon-release/desktop-update.json" npm run build
-   ```
-
-   然后运行 `scripts/release-mac.mjs`，先读 `--help`。`SOURCE_WORKTREE`、`VERSION`、`SOURCE_SHA`、`OUT` 与 `NEXT_VERSION` 从本轮输入绑定；`RELEASE_HELPER` 为该脚本的绝对路径，`OUT` 必须是源码 worktree 外的持久证据目录。彩排命令：
+1. 读目标 SHA 的 `AGENTS.md` 和 helper `--help`。用 `T=$(mktemp -d)` 创建临时根，在原 checkout 外建 detach 源码 worktree。构建、测试和打包同一时间只由一个任务占用。开始前检查取消；经队列执行还须在 push、上传前和切 manifest 前重查取消。
+2. 建立 `"$T/home"` 后，在源码 worktree 单条命令前指定隔离 HOME：`HOME="$T/home" npm ci`。不要预先运行 `package:universal` 或生成发布容器。helper 在初次打 App 前以 `--build-home` 隔离 HOME、同一外部更新配置强制执行 `npm run build`，重新核验 SHA 和包含未跟踪文件的干净状态，绑定构建来源；签名和公证步骤使用正常账号与钥匙串。隔离 HOME 限制配置读取，不是操作系统级私钥隔离。
+3. `OUT` 必须是专用持久证据目录，位于 `T` 和系统临时目录之外，既不在源码 worktree 内，也不能包住 worktree；不传真实 home 或杂物目录。恢复仅复用同一候选的输出目录。绑定 `SOURCE_WORKTREE`、`VERSION`、`SOURCE_SHA`、`OUT`、`NEXT_VERSION` 后运行：
 
    ```sh
    VONVON_DESKTOP_UPDATE_CONFIG="$HOME/.vonvon-release/desktop-update.json" \
      node "$RELEASE_HELPER" --repo "$SOURCE_WORKTREE" --version "$VERSION" \
-     --sha "$SOURCE_SHA" --out "$OUT" --mode rehearsal \
+     --sha "$SOURCE_SHA" --out "$OUT" --build-home "$T/home" --mode rehearsal \
      --next-version "$NEXT_VERSION" --keychain-profile notelet-notary
    ```
 
-   正式包把 `--mode rehearsal --next-version ...` 换为 `--mode release --notes-file "$NOTES_FILE"`，发行说明来自本机 UTF-8 文件。helper 的 release 模式校验线上版本，但仍不执行 COS、CDN 或安装。脚本从外部配置核对证书，无需另设签名团队变量；它要求源目录 tracked 文件干净且 App/Core/stage 版本一致。**不要先运行 `package:universal` 生成装订前容器**。helper 会按下面 3–6 自动完成打包与公证，成功后不再手工重复这些步骤。
-3. helper 先只构建并签名 universal App，检查实际字节：App 及内嵌 Mach-O 都是 `arm64` + `x86_64`，正确 Developer ID 团队，严格验签通过，App/Core 与输入版本一致。检查 hardened runtime、entitlements 和未捆绑 Claude SDK/runtime 的约束。若需修打包代码，走单独分支和 PR，不把尚未合入的修复冒称为原 main SHA。现有检查通过后，不无理由重复完整测试。
-4. 先将**签名后的 App** 用 `ditto` 压成公证传输 ZIP，提交 Apple；必须收到 `Accepted`，并读取公证日志检查警告。保存 submission ID 和日志，随后对该 App 执行 `xcrun stapler staple` 与 `validate`。
-5. **从已装订 App 重新生成最终更新 ZIP 和 DMG**。ZIP 本身不能装订；它应包含已装订的 App。不能继续分发 builder 在 App 装订前生成的 ZIP/DMG。DMG 使用同一 Developer ID 签名，再提交 Apple、等待 `Accepted`、读取日志、装订并验证。
-6. 在最终 ZIP 所在目录生成版本化 feed、manifest 和 SHA-256 清单。尺寸和哈希在 App/DMG 最终装订、ZIP 最终重建之后计算。以 helper 的 `release-inventory.json` 与 `SHA256SUMS` 为最终字节证据；不混用其他旧打包目录的 inventory。
+   正式候选改为 `--mode release --notes-file "$NOTES_FILE" --cos-config "$COS_CONFIG"`；首发另加 `--first-release`。发行说明须非空 UTF-8。helper 不上传 COS、不刷新 CDN、不安装 App。
+4. helper 仅构建签名 universal App，检查实际 Mach-O 双架构、Developer ID、hardened runtime、最小 entitlements、App/Core/build 版本、内置更新配置及不捆绑 Claude runtime 的约束。先公证签名 App，`Accepted` 且公证警告通过允许清单后，才钉票并验证；未知 warning 默认停止，不能自行放宽允许清单。
+5. 从同一已钉票 App 生成最终 ZIP 与 prepackaged DMG；ZIP 使用 `--noqtn` 并保留代码签名扩展属性，不能用 `--norsrc` 粗暴剥除。DMG 单独签名、公证、钉票。对 ZIP 解压 App、DMG 只读挂载 App 再验签、钉票和 Gatekeeper，检查没有 `com.apple.quarantine`；不能只验工作目录原件。
+6. 全部最终字节验证后生成 inventory、`SHA256SUMS` 和模式对应元数据。只按 inventory 选择公开对象；`app-notary-upload.zip`、App、解压目录、日志、`.blockmap`、builder 配置均为私有证据，**不得递归上传输出根目录**。中断恢复与警告诊断见 [workflow.md](references/workflow.md)。
 
-目录、工具与源码分离、原生工具顺序和中断恢复见 [references/workflow.md](references/workflow.md)。helper 输出还包含私有传输 ZIP、App、解压验证目录和日志，**不得递归上传整个输出根目录**；上传对象仅取最终 inventory 中的公开产物。
+## 公开发布与撤回
 
-## 验收与公开发布
+COS/CDN 写入工具尚未实现；不得现场拼命令直接上传。按 [workflow.md](references/workflow.md) 先准备具体命令、服务端不覆盖保护、缓存头、inventory 校验和回执方案，交 owner 确认命令后才执行获准上传阶段。只问 profile／配置路径，不索要密钥明文，不回显凭据文件，不把密钥放命令行；COS 与 CDN 凭据分别确认存在和权限。
 
-- App：`codesign --verify --deep --strict`、`spctl -a -vv -t exec`、`xcrun stapler validate`。DMG：独立验签、装订校验、只读挂载并核验其中 App。最终 ZIP 解压后也核验其中 App；不能只检查工作目录原件。
-- 用 `lipo -archs` 核验实际内嵌 Mach-O，核对 `Info.plist` 的版本与 build、内置 Core 版本以及最终文件尺寸/SHA-256。把真实 Intel、旧版本完整更新等未测项目如实写明。
-- COS 发布前必须已有可用账号、bucket、目标目录和 CDN 配置；先从现有本地配置或部署资料发现，缺少时只问缺失信息。先完成授权范围内的本地公证产物，不为等待存储配置而搁置独立工作。
-- 按 [references/workflow.md](references/workflow.md) 上传版本化 ZIP/feed/DMG，拒绝覆盖同名远端对象。确认它们可公开访问且哈希匹配后，**最后更新 manifest**，刷新 CDN 的 manifest URL，再用正常 TLS 的 `curl` 读取公开清单和 ZIP，复核版本和 SHA-256。不能把私有仓库附件链接当作公开下载地址。
-- 更新格式沿用现有 Squirrel.Mac：manifest 为 `{version, feedURL}`，feed 为 `{url, name, notes, pub_date}`，manifest/feed/ZIP 均为同源 HTTPS；不要换成 `latest-mac.yml`。更新配置缺失或仍为 `{}` 时不得公开发布。
-- 回滚仅把 manifest 恢复为之前的已验证清单，以停止继续推广；已升级客户端不会降级。需要修复时发布更高版本。
+版本化 ZIP/feed/DMG 的公网 HTTPS、完整 SHA-256、缓存头都核验成功后，向 owner 展示版本、源码 SHA、公证 submission ID、最终 ZIP/DMG 哈希和公开 URL，再取得当前对话明确确认才可最后切 stable manifest。使用 `scripts/verify-public-release.mjs` 复核固定 URL，不能跟随重定向或加随机 query 绕缓存。只有公网复核通过才报告发布完成，并持久保存发布回执。
 
-## 输出和清理
+manifest 使用 `Cache-Control: no-cache`，CDN 短 TTL／重验证；版本化文件使用 `public, max-age=31536000, immutable`。更新格式保持 Squirrel.Mac 的 manifest `{version, feedURL}`、feed `{url, name, notes, pub_date}`，同源 HTTPS。回滚只恢复事先验证并保存的旧 manifest、刷新 CDN 以停推；已升级客户端不降级，修复版必须高于**曾发布的最高版本**。
 
-报告版本、准确源码 SHA、阶段状态、最终各文件路径／尺寸／SHA-256、公证 submission ID 和验收结果；公开发布时还给出可用下载地址及公网复核结果。明确区分本地签名、公证、装订与公开发布。签名工具的原始输出可能带身份或团队信息，只存本机日志，对外输出摘要先脱敏。报告、PR 和文档不得包含真实 Team ID、密码、COS SecretId/SecretKey；用户路径用 `/Users/<u>` 脱敏。
+## 输出与清理
 
-保留发布产物及日志到 worktree 外的持久目录后，再用 `git worktree remove` 清理临时 worktree。临时目录只用 `T=$(mktemp -d)` 创建；递归清理仅可用 `rm -rf -- "${T:?}"` 或本轮刚创建的字面量 `/tmp/...` 路径，不从 home/config 路径推导删除目标。不要 export `HOME`／`VONVON_HOME`，不要使用 home 路径的递归删除或 `find -delete`。默认不替换 `/Applications/Vonvon Bot.app`，不启动、停止或修改用户默认 daemon、bridge 和数据。
+区分签名、公证、钉票、版本化上传和 stable 发布状态；报告版本、准确 SHA、最终路径／尺寸／SHA-256、submission ID、已验证与未验证项。GitHub、文档和对话摘要不得贴 Key ID、Issuer ID、Team ID、Apple ID、密码、COS SecretId/SecretKey、IP、设备名、群号群名、飞书完整 id 或带凭据的网址。`/Users/<名字>` 写成 `/Users/<u>`，签名身份只写“Developer ID Application”。原始日志仅本机保存，对外先打码。
+
+发布任务一律不碰 `/Applications/Vonvon Bot.app`、用户默认 daemon、bridge 与数据。保留持久产物后只用 `git worktree remove` 清理本任务的源码 worktree。以下硬规矩原样遵守：
+
+- 临时目录只用 `T=$(mktemp -d)` 建，只用 `rm -rf -- "${T:?}"` 删，或者删刚在 `/tmp/` 下建的字面路径。
+- 不对 `$HOME`、`~`、`$PWD`、`$VONVON_HOME` 或任何可能为空、未设置、指向真实 home 的变量拼出来的路径用 `rm`、`find -delete`、`find -exec rm` 或 `xargs rm`。
+- 不在 shell 里给 `HOME`、`VONVON_HOME` 赋值或 export，只写在单条命令前面，例如 `HOME=$T/home VONVON_HOME=$T/vh npx vitest run`。

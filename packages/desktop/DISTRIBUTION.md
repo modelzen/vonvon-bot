@@ -4,7 +4,9 @@ macOS 的 Finder / Dock 使用 `assets/macos-icon.png`：圆角以外及画布�
 
 先修改 `packages/daemon/package.json` 的产品版本，执行 `npm run version:sync` 同步 desktop/lock，再在仓库根执行 `npm run build`。协议和 client 的独立 API 版本不随产品发行号改。
 
-`npm run package:dir -w packages/desktop` 保持现有单机架构预览。正式本地包使用：
+正式发布使用仓库内 [release-mac 技能](../../.agents/skills/release-mac/SKILL.md)：准确 main SHA、隔离构建 HOME、App 先公证钉票，再生成最终 ZIP 与 DMG，DMG 单独公证钉票。正式候选和公开上传分阶段，切 stable 前必须 owner 在当前对话明确确认版本和 SHA。
+
+`npm run package:dir -w packages/desktop` 保持现有单机架构预览。以下 `package:universal` 只生成本地未公证包，不用于产出公开发布件：
 
 ```sh
 VONVON_DESKTOP_SIGNING_TEAM=<已有Developer-ID的10位TeamIdentifier> npm run package:universal -w packages/desktop
@@ -18,7 +20,7 @@ Electron 语言资源只保留英文（美式、英式）、简体中文和繁�
 
 生成的 manifest 严格为 `{version,feedURL}`，供 `DesktopUpdater`；feed 为 Squirrel.Mac 默认服务端 `{url,name,notes,pub_date}`，供原生 Electron autoUpdater。zip 是同一签名 app 的更新附件，不能把 `latest-mac.yml` 当此 feed。脚本仅写本地文件；发布者仍须配置 HTTPS 站点、按 inventory 放置对应文件并验证旧版完整更新。现有检查器只对更高版本调用原生下载，所以版本 feed 可为静态文件；不能把它直接当所有历史客户端的动态“是否有更新”接口。
 
-本地验签不等于公证或 Gatekeeper 放行。公证以后由 owner 决定；干净 macOS 用户从零安装、真实飞书和公开下载/更新是发布前 s67 等后续验证。
+本地验签不等于公证或 Gatekeeper 放行。公证范围由 owner 当轮指定，按 release-mac 核验现有钥匙串 profile，不在仓库配置凭据；干净 macOS 用户从零安装、真实飞书和公开下载/更新仍是发布前 s67 等后续验证。
 
 依据：[Electron autoUpdater](https://www.electronjs.org/docs/latest/api/auto-updater)、[Squirrel.Mac 服务端协议](https://github.com/Squirrel/Squirrel.Mac#server-support)。构建选项以仓库锁定的 electron-builder 26.15.3 本地 schema 为准。
 

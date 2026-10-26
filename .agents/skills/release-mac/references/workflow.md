@@ -1,116 +1,103 @@
-# 发布步骤与恢复
+# 发布门禁、证据与恢复
 
-本文补充 `SKILL.md` 中发布 helper 的输入、输出和中断恢复；原生命令供定位失败步骤使用。路径、版本与 SHA 都从本轮输入取得，示例中的变量不能沿用前一轮值。正常运行 `scripts/release-mac.mjs` 完成流程，不重复手工打包。
+正常流程用 `scripts/release-mac.mjs`。原生命令只能诊断失败步骤，不能手工生成发布件来绕过 helper。发布任务和清理边界以 `SKILL.md`、`AGENTS.md` 为准。
 
-## 目录和配置
+## 目录与构建来源
 
-源码使用原 checkout 外的临时 detach worktree。用 `T=$(mktemp -d)` 创建临时根，源码 worktree 和额外临时工作目录都放在其中，不改原 checkout 的分支。helper 的 App、传输 ZIP、验证解压目录及日志均作为持久证据保存到 `--out`，例如 `~/.vonvon-release/releases/<版本>-<短 SHA>/`，不放在会清理的 worktree 内。复用非空输出目录前先核实是同一次发布的恢复；不覆盖旧候选。
+用 `T=$(mktemp -d)` 创建临时根，准确 main SHA 的 detach worktree 和隔离构建 HOME 均位于其中；原 checkout 不切分支。`OUT` 为 `T`、系统临时目录和源码树之外的专用持久目录，也不能包住源码树。记录本轮实际临时根，不从 home 或旧日志推导删除路径。非空输出目录只用于恢复同一候选，不能把真实 home 当输出目录。
 
-更新配置由本机提供，不写进仓库，JSON 的准确结构是：
+`HOME="$T/home" npm ci` 只对安装命令指定 HOME。helper 要求 `--build-home "$T/home"`，在初次 App 构建前以隔离 HOME 强制 `npm run build`，同一 `VONVON_DESKTOP_UPDATE_CONFIG` 传入构建和打包。helper 核验未跟踪文件、准确 HEAD 和构建来源；不能以同版本旧 stage 替代本轮构建。签名、公证、git、gh 使用正常 HOME。隔离配置目录不能替代操作系统级供应链或钥匙串隔离。
+
+外部更新配置仅含：
 
 ```json
 {
   "manifestURL": "https://dl.vonvon.cc/bot/mac/stable/manifest.json",
-  "teamIdentifier": "<从现有签名证书读取>"
+  "teamIdentifier": "<从现有签名证书核对>"
 }
 ```
 
-示例占位符不能作为实际团队值。解析该文件后验证键集合、URL 和证书一致性；不用 shell `source` 读取 JSON。确认构建 stage 和最终 App 内的更新配置均与该文件一致。
+真实身份不提交。helper、构建 stage 和最终 App 都须核对相同配置。正常发布使用目标 main SHA 中的 helper；工具 PR 尚未合入而为旧 main 做 owner 明确授权的演练时，可从独立工具 worktree 运行，另记工具 SHA，源码仍保持准确 main SHA，不把工具变更冒称为 main 已有行为。
 
-## helper 调用与输出
+## 首发和历史最高版本
 
-源码 worktree 已完成 `npm ci` 和带外部更新配置的 `npm run build` 后，运行：
+正式模式必传 `--cos-config "$COS_CONFIG"`，配置在仓库外，仅指定非秘密参数和已存在环境变量的名称：
+
+```json
+{
+  "bucket": "<bucket>",
+  "region": "<region>",
+  "prefix": "bot/mac/stable/",
+  "publicManifestURL": "https://dl.vonvon.cc/bot/mac/stable/manifest.json",
+  "secretIdEnv": "<已配置的环境变量名>",
+  "secretKeyEnv": "<已配置的环境变量名>",
+  "ledgerFile": "<本机发布台账绝对路径>"
+}
+```
+
+分页和不覆盖约束以腾讯云官方 [GET Bucket](https://www.tencentcloud.com/document/product/436/30614) 与 [PUT Object](https://www.tencentcloud.com/document/product/436/7749) 为准；这里的 helper 仅调用前者。
+
+临时凭据可另指定 `securityTokenEnv`；官方 `cos-nodejs-sdk-v5` 已安装时可用 `sdkModule` 指向绝对模块路径。不要为读凭据打印环境、配置文件或 SDK 错误原文；不要把密钥值放配置、命令行、对话或 GitHub。缺项只问配置路径／profile，COS/CDN 的写权限与只读枚举分别确认。不要为了枚举临时扩宽权限。
+
+台账必须存在，格式 `{ "versions": ["0.7.0"] }`；确无发布历史的首发可为空数组，不能清空历史来过门槛。helper 用官方 SDK 实时完整分页列出 `bot/mac/stable/`，门槛取线上有效 manifest、所有历史 feed／安装包版本和本机台账的最高值。枚举失败、无法判定历史或台账无效就拒绝，不能接受人工编造的空列表。
+
+正常正式候选：
 
 ```sh
 VONVON_DESKTOP_UPDATE_CONFIG="$HOME/.vonvon-release/desktop-update.json" \
   node "$RELEASE_HELPER" --repo "$SOURCE_WORKTREE" --version "$VERSION" \
-  --sha "$SOURCE_SHA" --out "$OUT" --mode rehearsal \
-  --next-version "$NEXT_VERSION" --keychain-profile notelet-notary
+  --sha "$SOURCE_SHA" --out "$OUT" --build-home "$T/home" --mode release \
+  --notes-file "$NOTES_FILE" --cos-config "$COS_CONFIG" --keychain-profile notelet-notary
 ```
 
-正式包使用 `--mode release --notes-file "$NOTES_FILE"`，不传彩排的 `--next-version`。`NOTES_FILE` 必须是本机非空 UTF-8 发行说明。先确认当前 helper 的 `--help`，它只构建、公证和验证，不上传 COS、不刷新 CDN、不安装 App。
+首次发布另显式加 `--first-release`，必须全部成立：正常 TLS 的 manifest 请求确实是 404／COS `NoSuchKey`；实时 COS 完整前缀中没有旧 `feed-*.json` 或 `Vonvon-Bot-*`；本机台账没有历史。state 与 inventory 记录 `baseline: none`。403、超时、重定向、TLS 错误和无效 200 都不能当作首发。严禁 `curl -k`、`--insecure`、`NODE_TLS_REJECT_UNAUTHORIZED=0` 和不安全 `NODE_OPTIONS`。已有清单时按正常版本门槛，不伪装首发。
 
-helper 使用 `--repo` 指向的源码及其依赖。正常发布时 `RELEASE_HELPER` 指向该准确源码 worktree 的 `scripts/release-mac.mjs`；在发布工具 PR 尚未合入、为旧 main 做明确授权的彩排时，可从独立工具 worktree 运行 helper，`--repo` 仍指向不可变的 main 源码，另记录工具提交／本地改动。不能为了引入 helper 而改动被打包源码或把工具 PR 的行为冒称为 main 已有行为。
+彩排使用 `--mode rehearsal --next-version "$NEXT_VERSION"`，发行版本不超过下一正式版本；输出 `REHEARSAL-` 元数据和 `DO-NOT-PUBLISH`。不得把已公证彩排包直接晋级正式版。
 
-helper 在 `--out` 中输出最终公开候选：
+## App 公证、扩展属性与最终字节
 
-- `Vonvon-Bot-<版本>-universal.zip`：由已装订 App 生成的更新 ZIP。
-- `Vonvon-Bot-<版本>-universal.dmg`：包含已装订 App，自身也签名、公证、装订。
-- `feed-<版本>.json`、`manifest.json`：与最终 ZIP 同目录。
-- `release-inventory.json`、`SHA256SUMS`：最终字节尺寸、哈希和验证证据。
+helper 先只用 `dir` 目标构建签名 universal App，再生成 App 公证传输 ZIP。保存 submission ID，`Accepted` 后读取日志并检查 warning，允许清单之外的 warning 一律停止。默认允许清单为空；诊断出原因不等于允许继续发布。不要手改 state 或跳过警告门禁。
 
-同一输出根还包含 `mac-universal/`、`app-notary-upload.zip`、`zip-verification/`、`logs/`、公证日志与状态记录，它们属于私有持久证据，**不得递归上传整个输出目录**。COS 上传明确选择 inventory 中的 ZIP/feed/DMG；manifest 在最后单独提升，inventory／校验文件如需公开也须明确选择。保留证据目录，不用删除它们来绕过恢复检查。
+此前 0.7.14 演练已只读核实：App 中有 `com.apple.provenance`，部分非 Mach-O 资源有 `com.apple.cs.*` 签名扩展属性，造成 ZIP 的 AppleDouble／`__MACOSX` 元数据条目；原最终更新 ZIP 无 `com.apple.quarantine`。详细文件证据见本 PR 的后续结果评论。不能用 `--norsrc` 去除所有属性，否则非 Mach-O 资源签名会丢失。今后 ZIP 使用 `--noqtn`，保留签名属性，并在最终 ZIP 解压后递归检查 quarantine；`__MACOSX` 的存在本身不代表 quarantine。
 
-helper 先用 electron-builder 的 `dir` 目标生成 universal App；App 装订后再用 `prepackaged` DMG 目标封装同一个 App，跳过重新 doPack。不要先执行旧的 `package:universal` 生成装订前 ZIP/DMG。builder 配置关闭自动公证不代表免公证；helper 负责下面完整的公证顺序。
+App 钉票并通过验证后才生成最终 ZIP 和 electron-builder `prepackaged` DMG。DMG 自身再签名、公证、钉票；不先运行旧的 `package:universal`。`ditto`／`hdiutil create` 等手工命令仅用于诊断，不产出发布件。不要给 ZIP 执行 `stapler`，不要在 App 钉票后重签或改其内容；变更后重新开始候选。
 
-## 先公证 App，再制作最终容器
+最终验证：
 
-变量 `APP` 指向本轮已签名 App 的副本，`TRANSPORT_ZIP` 指向临时传输包，`PROFILE` 默认为 `notelet-notary`。签名和公证命令使用真实 HOME 与本机钥匙串。
-
-```sh
-ditto -c -k --sequesterRsrc --keepParent "$APP" "$TRANSPORT_ZIP"
-xcrun notarytool submit "$TRANSPORT_ZIP" --keychain-profile "$PROFILE" --output-format json
-```
-
-在上传完成并拿到 submission ID 后立即持久保存 ID，随后用 `notarytool info`／`wait` 查询同一个提交；不要因等待超时就重新上传。等待可分段进行，向用户报告有意义的状态变化。
-
-```sh
-xcrun notarytool wait "$APP_SUBMISSION_ID" --keychain-profile "$PROFILE" --timeout 10m --output-format json
-xcrun notarytool log "$APP_SUBMISSION_ID" --keychain-profile "$PROFILE" "$APP_LOG"
-xcrun stapler staple "$APP"
-xcrun stapler validate "$APP"
-```
-
-只在 `Accepted` 后装订。`Invalid` 时停下，读取日志定位具体路径；不要重签后复用旧 submission ID。票据尚未传播时可有限重试装订，持续失败则保留 ID／产物并报告，不能跳过校验。
-
-从此 `APP` 才可用于最终容器：
-
-```sh
-ditto -c -k --sequesterRsrc --keepParent "$APP" "$FINAL_ZIP"
-```
-
-在临时 DMG staging 目录放入这个已装订 App，可加 `/Applications` 链接；再生成压缩 DMG，用已核对的 Developer ID 身份签名。若用 electron-builder 的 DMG 目标，必须核实它以此已装订 App 为输入，且没有重新打包或修改 App。
-
-```sh
-hdiutil create -volname "Vonvon Bot" -srcfolder "$DMG_STAGE" -format UDZO "$FINAL_DMG"
-codesign --force --sign "$SIGNING_IDENTITY" --timestamp "$FINAL_DMG"
-codesign --verify --strict "$FINAL_DMG"
-xcrun notarytool submit "$FINAL_DMG" --keychain-profile "$PROFILE" --output-format json
-```
-
-同样立即保存 DMG submission ID；查询、下载日志、装订与验证 DMG。绝不对 ZIP 执行 `stapler`。如果 App 在装订后又被重新签名或修改签名覆盖的内容，返回 App 公证阶段，重新生成全部最终容器。
-
-## 最终元数据与验收
-
-最终目录中放置版本化 ZIP、DMG、`feed-<版本>.json` 和候选 `manifest.json`。ZIP 的公开 URL 与 feed、manifest 同源；本地文件名和 URL 中版本相符。feed 使用真实发行说明和 ISO 日期，不能保留空白占位发布说明。先生成最终 ZIP／DMG，再生成 inventory 与哈希，任何后续字节变化都要求重新计算。
-
-helper 复用 `scripts/desktop-release-tools.mjs` 的 `verifyUniversalApp`、`verifyDmg` 和 `artifactRecord`，在全部最终校验后另写最终 metadata，记录 source SHA、两个 submission ID、装订/Gatekeeper 结果和文件哈希。其他打包目录里早先生成的 `local-configured` inventory 不能证明本轮公证完成。
-
-验收至少覆盖以下实际对象：
-
-| 对象 | 检查 |
+| 对象 | 要求 |
 | --- | --- |
-| 最终 App | `codesign --verify --deep --strict`、`spctl -a -vv -t exec`、`xcrun stapler validate`；团队、hardened runtime、entitlements、版本和各 Mach-O 双架构 |
-| 最终 ZIP 解压的 App | 同上，确认传输包确实包含已装订 App |
-| 最终 DMG | 独立 `codesign --verify --strict`、`xcrun stapler validate`；只读挂载后的 App 按上面检查，随后正常 detach |
-| 更新配置与文件 | App 内 manifest URL／团队与外部配置一致，Core/App/build 版本一致，最终 ZIP/DMG 的尺寸与 SHA-256 与 inventory 相符 |
+| 最终 App、ZIP 解压 App、DMG 只读挂载 App | `codesign --verify --deep --strict`、`spctl -a -vv -t exec`、`stapler validate`；相同签名、版本、配置，实际 Mach-O 均为 arm64+x86_64，无 quarantine |
+| DMG | 独立验签、公证、钉票；只读挂载检查后正常 detach |
+| 最终文件 | App/DMG 钉票和 ZIP 最终生成后计算尺寸、完整 SHA-256，写 `release-inventory.json`、`SHA256SUMS` |
 
-`spctl` 评估不需要启动 App。不要为验收启动默认 daemon 或改用户数据；用户未要求安装时不替换已安装 App。
+`spctl` 不需启动 App。真实 Intel 硬件、旧版完整在线更新等没测就如实记录。发布任务一律不触碰默认 daemon、bridge、数据和已安装 App。
 
-## COS 发布和撤回
+公开对象仅限 inventory 中最终 ZIP/feed/DMG，manifest 最后单独提升。`app-notary-upload.zip`、`mac-universal/`、`zip-verification/`、原始日志、`*.dmg.blockmap`（钉票前计算）、`builder-effective-config.yaml`、`builder-debug.yml` 和 state 均不公开；不递归上传整个输出目录。
 
-只有正式版本通过版本、源码、公证与验收门槛，而且本轮授权包括公开发布时才执行本节。先确认 COS 账号、bucket、目录、CDN 配置、既有上传工具和权限；未配置就保留本地产物并报告缺项，不臆造存储地址或放宽访问权限。
+## COS 发布、owner 确认与回执
 
-1. 用正常 TLS 保存线上现有 manifest 作为恢复依据；逐段数字确认候选版本更高。读取失败就停止正式发布。
-2. 逐个检查候选版本化 ZIP、feed、DMG 的远端 key。存在即停止，不能 `--force`、`--clobber` 或静默覆盖；无法确定存在性也停止。若在恢复同一次中断发布，先比对既存对象的完整 SHA-256，匹配才可复用，不能覆盖。COS ETag 可能是分段上传值，不能替代完整 SHA-256。
-3. 上传 ZIP／DMG 和对应版本化 feed。公开 HTTPS 下载复核文件字节、尺寸和 SHA-256；确认 feed 的 ZIP URL 可访问。不要先改 manifest。
-4. 最后写入候选 manifest，刷新 CDN 的**固定 manifest URL**。用 `curl` 正常校验证书，重新读取该固定 URL，核实版本、feedURL、feed 内容和 ZIP 的 SHA-256。不能加随机 query 只测旁路缓存，而遗漏用户真正访问的固定地址；不能使用 `-k`／`--insecure`。
-5. 仅在公网复核成功后报告公开发布完成。若 manifest 已切换而公网复核失败，优先按保存的原 manifest 撤回并刷新 CDN，核实原清单恢复；保留失败证据。
+COS/CDN 写入 helper 尚未实现。本轮工具只能本地构建、公证和只读枚举；**执行 COS 写入前先停下，请 owner 确认已准备好的具体命令**。不能自行挑一条默认覆盖的 `coscli cp` 临场执行。先准备以下可审阅方案和机器检查：
 
-撤回 manifest 只停止新客户端继续获得这次更新。客户端版本比较不会降级，已经更新的用户需要更高版本修复。版本化对象保留用于核验和恢复，不用删除安装包处理回滚。
+```sh
+node "$VERIFY_PUBLIC_RELEASE" --out "$OUT" --version "$VERSION" --sha "$SOURCE_SHA" --local-only
+```
 
-## 中断与清理
+`VERIFY_PUBLIC_RELEASE` 指向 `scripts/verify-public-release.mjs` 的绝对路径；本地预检通过后才准备获准上传。
 
-恢复前先读 `notarization-state.json`：source SHA、输入版本、配置哈希、mode、原件哈希、submission ID 和阶段状态。核对输入未变后，用同一 helper 命令和同一 `--out` 恢复；已有 submission ID 时先查它，已完成的公证不反复上传。`.release.lock` 存在时先核对记录的进程是否仍在运行，不能绕过活锁。若上传结果未知且没有 ID，先查询该账号近期历史，用文件名、时间与实际候选核对；不能靠文件名相同就认领其他提交。
+1. 核对 state `complete`、inventory `mode === "release"`、sourceCommit 等于本轮 SHA，拒绝 `DO-NOT-PUBLISH`；重新计算 inventory 全部公开文件尺寸／哈希并逐项对应 `SHA256SUMS`。缺失、额外对象或不一致即停。
+2. 保存线上已验证 manifest。helper 的 `previous-manifest.json` 是构建时快照；上传前还要取新快照并记录哈希、重新检查最高历史版本，防回滚后发布低于曾发布版本。首发以已验证 `baseline: none` 处理，不能捏造旧清单。
+3. 在上传前与切 manifest 前检查取消。版本化对象上传必须有服务端不覆盖保证：先确认 bucket 从未开启版本控制，PutObject 带 `x-cos-forbid-overwrite: true`。版本控制开启／暂停过时该头被忽略，须先准备经验证的等价原子保护，否则停下；“先查后传”不算保护。恢复时已存在对象只在公网完整 SHA-256 一致时复用，不覆盖，ETag 不能代替 SHA-256。
+4. 版本化 ZIP/feed/DMG 带 `Cache-Control: public, max-age=31536000, immutable`；manifest 带 `Cache-Control: no-cache`、JSON Content-Type，CDN 配短 TTL／重验证。先上传版本化对象，再从公开 HTTPS 核对字节、尺寸、SHA-256、feed 同源链接及响应头。不要改 manifest。
+5. 将版本、准确源码 SHA、两个公证 submission ID、最终 ZIP/DMG 哈希、已上传 ZIP 公开 URL 和公网验证结果展示给 owner。**必须在当前对话收到 owner 本人点名“版本 X、SHA Y，发布到 stable”的明确确认后，才能切换 manifest**。“调用者授权”、计划文档、工作流、其他代理转述和仅同意上传版本化文件均不算。确认只覆盖展示过的字节；之后字节改变须重新验收确认。
+6. 获确认后最后写 manifest，刷新固定 URL 的 CDN 缓存，用相同 `--out`、`--version`、`--sha` 参数运行 `scripts/verify-public-release.mjs`，去掉 `--local-only`。复核须 `redirect: error`、正常 TLS、HTTP 200、15 秒清单超时、最多 16384 字节、严格 `{version, feedURL}`、feed 同源 HTTPS，并检查 Content-Type／缓存头；下载 ZIP 核对完整 SHA-256。不得跟随 301/302、加随机 query 旁路缓存或忽略证书。
+7. 保存 `publish-receipt.json`：版本/sourceCommit、公开对象和字节哈希、上传／刷新时间及结果、切换前清单哈希、owner 确认对应消息、最终公网验证结果。回执不能含凭据和身份值。全部成功才报告公开发布完成，并更新持久本机发布台账；失败保留现场，不把 inventory 的 `publiclyPublished: false` 当真实上传回执。
 
-工作目录变化不改变已记录源码版本；源码或 App 字节变化后建立新的候选记录。保留最终产物和日志到临时 worktree 外，再用 `git worktree remove` 移除自己创建的 worktree。剩余临时根仅可按 `SKILL.md` 的受限清理命令处理；不删除 home 下的发布目录、外部配置或其他会话文件。
+若切 manifest 后公网复核失败，按已审阅撤回方案恢复保存的旧清单、刷新 CDN 并核验，记录结果；首发没有旧清单时停止扩散并由 owner 决定处置，不能虚构回滚成功。撤回仅停推，已升级客户端不降级；修复版本必须高于曾发布的最高版本。版本化对象保留，不删包回滚。
+
+## 中断恢复
+
+恢复前核对 state 中源码 SHA、版本、配置哈希、mode、build.sourceCommit、原件哈希、submission ID 和阶段状态。使用相同输入和输出目录；已有 ID 就查询同一个提交，不重复上传。构建前 helper 先验证公证凭据；`.release.lock` 存在时核对进程是否仍运行，不能绕活锁。
+
+上传结果未知时先查询该账号历史，用时间、文件名和日志 SHA-256 核对真实候选；不能凭同名认领。通过 `--recover-submission app=<UUID>` 或 `--recover-submission dmg=<UUID>` 写入恢复 ID；helper 必须用 Apple 日志的 jobId 和 sha256 核对本轮实际传输 ZIP／DMG 后才能认领，禁止手改 JSON。没有 `--no-submission` 自动清除标志：history 缺少记录不能证明上传从未发生。无法证实 ID 时保留现场，停止并报告，由 owner 结合 Apple 确认或决定新候选，不在原记录盲目重传。`Invalid` 保留日志，修复后新建候选；不把旧输出无限重跑或认作成功。
+
+先把最终产物、日志和临时根记录保存在持久目录，再用 `git worktree remove` 移除自己创建的 worktree。剩余临时根严格遵守 `SKILL.md` 中逐字列出的三条删除规则。不要删除发布证据、外部配置、真实 home 或其他会话文件。

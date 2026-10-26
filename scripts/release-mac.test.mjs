@@ -53,3 +53,286 @@ test('canonicalization resolves existing parents before testing nonexistent outp
   assert.equal(await canonicalPath(alias), canonicalRoot);
   assert.equal(await canonicalPath(join(alias, 'not-created-output', 'release')), join(canonicalRoot, 'not-created-output', 'release'));
 });
+
+// Native commands are replaced by a recorder. These tests never invoke signing,
+// packaging, Apple services, mounting, or the public update endpoint.
+const { createHash } = await import('node:crypto');
+const { execFileSync } = await import('node:child_process');
+const { mkdir, readFile, writeFile } = await import('node:fs/promises');
+const { basename } = await import('node:path');
+const { releaseMac } = await import('./release-mac.mjs');
+const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+const sourceSHA = 'a'.repeat(40);
+const submissionIDs = { app: '11111111-1111-4111-8111-111111111111', dmg: '22222222-2222-4222-8222-222222222222' };
+let fixtureRoot;
+let fixtureNumber = 0;
+async function releaseFixture(settings = {}) {
+  // The surrounding test command can own cleanup by supplying RELEASE_TEST_ROOT.
+  // Standalone runs preserve their small fixtures for failure diagnosis.
+  fixtureRoot ??= process.env.RELEASE_TEST_ROOT ?? execFileSync('/bin/sh', ['-c', 'T=$(mktemp -d)\nprintf "%s" "$T"'], { encoding: 'utf8' });
+  const root = join(await canonicalPath(fixtureRoot), `scenario-${++fixtureNumber}`);
+  const repo = join(root, 'source'), out = join(root, 'evidence'), buildHome = join(root, 'build-home');
+  const configPath = join(root, 'desktop-update.json');
+  const config = { manifestURL, teamIdentifier: 'AAAAAAAAAA' };
+  const write = async (path, value) => { await mkdir(dirname(path), { recursive: true }); await writeFile(path, value); };
+  const writeJSON = (path, value) => write(path, JSON.stringify(value));
+  await mkdir(repo, { recursive: true });
+  await mkdir(buildHome, { recursive: true });
+  await writeJSON(configPath, config);
+  await writeJSON(join(repo, 'package.json'), {});
+  for (const path of ['packages/daemon/package.json', 'packages/desktop/package.json', 'packages/desktop/stage/package.json']) {
+    await writeJSON(join(repo, path), { version: '0.7.0' });
+  }
+  await writeJSON(join(repo, 'packages/desktop/stage/dist/update-config.json'), settings.stageConfig ?? config);
+  const calls = [];
+  const archiveFor = kind => join(out, kind === 'app' ? 'app-notary-upload.zip' : 'Vonvon-Bot-0.7.0-universal.dmg');
+  const artifactRecord = async path => {
+    const bytes = await readFile(path);
+    return { file: basename(path), size: bytes.length, sha256: sha256(bytes) };
+  };
+  const deps = {
+    platform: 'darwin', temporaryRoots: [],
+    env: { ...process.env, VONVON_DESKTOP_UPDATE_CONFIG: configPath, NODE_TLS_REJECT_UNAUTHORIZED: '1', NODE_OPTIONS: '' },
+    tools: { artifactRecord, verifyUniversalApp: async () => ({ architectures: ['arm64', 'x86_64'] }), verifyDmg: async () => {} },
+    asar: { extractFile: () => Buffer.from(JSON.stringify(settings.embeddedConfig ?? config)) },
+    plist: { parse: () => ({ 'system-entities': [{ 'mount-point': join(root, 'mounted-volume') }] }) },
+    execFile: async (command, args, options) => {
+      calls.push({ command, args: [...args], options });
+      const output = { stdout: '', stderr: '' };
+      if (command === 'git') {
+        if (args[0] === 'rev-parse') output.stdout = sourceSHA;
+        if (args[0] === 'status') output.stdout = settings.dirty ? '?? packages/ui/public/injected.txt\n' : '';
+      } else if (command === 'security') {
+        output.stdout = `1) ${'B'.repeat(40)} "Developer ID Application: Fixture (${config.teamIdentifier})"`;
+      } else if (command === 'npm') {
+        assert.equal(args.join(' '), 'run build');
+        assert.equal(options.env.HOME, buildHome);
+        assert.equal(options.env.VONVON_DESKTOP_UPDATE_CONFIG, configPath);
+      } else if (command === process.execPath && args.includes('--input-type=module')) {
+        const phase = args.at(-1);
+        if (phase === 'app') await mkdir(join(out, 'mac-universal/Vonvon Bot.app/Contents/Resources'), { recursive: true });
+        else if (phase === 'dmg') await write(archiveFor('dmg'), 'signed dmg');
+        else assert.fail('Unexpected packaging phase');
+      } else if (command === 'ditto') {
+        if (args.includes('-c')) await write(args.at(-1), args.at(-1).includes('notary') ? 'App transport bytes' : 'stapled App ZIP bytes');
+        else await mkdir(join(args.at(-1), 'Vonvon Bot.app'), { recursive: true });
+      } else if (command === 'xattr') {
+        if (settings.quarantineWhere === 'app' || (settings.quarantineWhere === 'zip' && args.at(-1).includes('zip-verification'))) output.stdout = `${args.at(-1)}: com.apple.quarantine\n`;
+      } else if (command === 'codesign') {
+        if (args.includes('--display')) output.stderr = `CDHash=${'c'.repeat(40)}\n`;
+      } else if (command === 'xcrun' && args[0] === 'notarytool') {
+        const action = args[1];
+        const kind = args[2] === submissionIDs.dmg || args[2]?.endsWith('.dmg') ? 'dmg' : 'app';
+        if (action === 'history') {
+          if (settings.historyFailure) throw new Error('fixture credentials rejected');
+          output.stdout = JSON.stringify({ history: [] });
+        } else if (action === 'submit') {
+          if (settings.submitFailure === kind) throw new Error('fixture upload interrupted');
+          output.stdout = JSON.stringify({ id: submissionIDs[kind] });
+        } else if (action === 'wait' || action === 'info') {
+          if (action === 'wait' && settings.waitFailure) throw new Error('fixture wait timeout');
+          output.stdout = JSON.stringify({ status: settings.status ?? 'Accepted' });
+        } else if (action === 'log') {
+          output.stdout = JSON.stringify({ jobId: submissionIDs[kind], sha256: settings.logSHA256 ?? (await artifactRecord(archiveFor(kind))).sha256, issues: settings.issues ?? [] });
+        } else assert.fail(`Unexpected notary action ${action}`);
+      } else if (command === 'xcrun' && args[0] === 'stapler' && args[1] === 'staple' && args[2].endsWith('.dmg')) {
+        await write(args[2], 'signed dmg with staple');
+        if (settings.dmgStapleFailure) throw new Error('fixture crash immediately after staple');
+      } else if (!['xattr', 'spctl', 'hdiutil', 'xcrun'].includes(command)) {
+        assert.fail(`Unexpected native command ${command}`);
+      }
+      return output;
+    },
+  };
+  const options = { repo, out, version: '0.7.0', sha: sourceSHA, mode: 'rehearsal', 'next-version': '0.7.0', 'keychain-profile': 'fixture-profile', 'build-home': buildHome, timeout: '1s' };
+  return { root, repo, out, settings, calls, options, deps, write, writeJSON, artifactRecord, readState: async () => JSON.parse(await readFile(join(out, 'notarization-state.json'), 'utf8')), run: extra => releaseMac({ ...options, ...extra }, deps) };
+}
+const isSubmit = call => call.command === 'xcrun' && call.args[0] === 'notarytool' && call.args[1] === 'submit';
+const isStaple = call => call.command === 'xcrun' && call.args[0] === 'stapler' && call.args[1] === 'staple';
+
+test('release orchestration staples the App before creating either final container and separates rehearsal metadata', async () => {
+  const fixture = await releaseFixture();
+  const state = await fixture.run();
+  assert.equal(state.complete, true);
+  const appStaple = fixture.calls.findIndex(call => isStaple(call) && call.args[2].endsWith('.app'));
+  const finalZIP = fixture.calls.findIndex(call => call.command === 'ditto' && call.args.includes('-c') && call.args.at(-1).endsWith('universal.zip'));
+  const finalDMG = fixture.calls.findIndex(call => call.command === process.execPath && call.args.at(-1) === 'dmg');
+  assert.ok(appStaple >= 0 && finalZIP > appStaple && finalDMG > appStaple);
+  const history = fixture.calls.findIndex(call => call.args[0] === 'notarytool' && call.args[1] === 'history');
+  const build = fixture.calls.findIndex(call => call.command === 'npm');
+  assert.ok(history >= 0 && build > history);
+  assert.equal(fixture.calls.filter(isSubmit).length, 2);
+  const inventory = JSON.parse(await readFile(join(fixture.out, 'release-inventory.json'), 'utf8'));
+  assert.equal(inventory.mode, 'rehearsal');
+  assert.ok(inventory.files.every(record => record.file !== 'manifest.json' && !record.file.startsWith('feed-')));
+  await readFile(join(fixture.out, 'DO-NOT-PUBLISH'));
+});
+
+test('Invalid notarization is saved and never staples the rejected App', async () => {
+  const fixture = await releaseFixture({ status: 'Invalid' });
+  await assert.rejects(fixture.run(), /Invalid/);
+  assert.equal((await fixture.readState()).app.status, 'Invalid');
+  assert.equal(fixture.calls.some(isStaple), false);
+  await readFile(join(fixture.out, 'app-notary-log.json'));
+});
+
+test('unknown notarization warnings stop before stapling even when Apple accepted', async () => {
+  const fixture = await releaseFixture({ issues: [{ severity: 'warning', code: 99999, path: 'Vonvon Bot.app/unknown', message: 'new unexpected warning' }] });
+  await assert.rejects(fixture.run(), /warning/i);
+  assert.equal(fixture.calls.some(isStaple), false);
+});
+
+test('credential preflight failure occurs before build or packaging', async () => {
+  const fixture = await releaseFixture({ historyFailure: true });
+  await assert.rejects(fixture.run(), /failed|credential/i);
+  assert.equal(fixture.calls.some(call => call.command === 'npm' || call.command === process.execPath), false);
+});
+
+test('untracked source and mismatched stage or packaged configuration fail closed', async t => {
+  for (const settings of [
+    { dirty: true },
+    { stageConfig: { manifestURL, teamIdentifier: 'CCCCCCCCCC' } },
+    { embeddedConfig: { manifestURL, teamIdentifier: 'CCCCCCCCCC' } },
+  ]) await t.test(JSON.stringify(settings), async () => {
+    const fixture = await releaseFixture(settings);
+    await assert.rejects(fixture.run(), /modification|untracked|configuration|config|certificate/i);
+    assert.equal(fixture.calls.some(isSubmit), false);
+  });
+});
+
+test('unrecorded preexisting App is preserved and rejected', async () => {
+  const fixture = await releaseFixture();
+  const app = join(fixture.out, 'mac-universal/Vonvon Bot.app');
+  await mkdir(app, { recursive: true });
+  await fixture.write(join(app, 'preserved.txt'), 'existing candidate');
+  await assert.rejects(fixture.run(), /Unrecorded|nonempty|fresh output|must be empty/i);
+  assert.equal(await readFile(join(app, 'preserved.txt'), 'utf8'), 'existing candidate');
+  assert.equal(fixture.calls.some(isSubmit), false);
+});
+
+test('ambiguous upload is not resubmitted and recovered submission must match archive hash', async () => {
+  const fixture = await releaseFixture({ submitFailure: 'app' });
+  await assert.rejects(fixture.run(), /failed/i);
+  const saved = await fixture.readState();
+  assert.equal(saved.app.uploadAttempted, true);
+  assert.equal(saved.app.id, undefined);
+  fixture.settings.submitFailure = undefined;
+  const before = fixture.calls.filter(isSubmit).length;
+  await assert.rejects(fixture.run(), /Recover|recover/);
+  assert.equal(fixture.calls.filter(isSubmit).length, before);
+  fixture.settings.logSHA256 = 'f'.repeat(64);
+  await assert.rejects(fixture.run({ 'recover-submission': `app=${submissionIDs.app}` }), /hash|sha.?256|bytes/i);
+  assert.equal((await fixture.readState()).app.id, undefined);
+  fixture.settings.logSHA256 = undefined;
+  await fixture.run({ 'recover-submission': `app=${submissionIDs.app}` });
+  assert.equal((await fixture.readState()).app.id, submissionIDs.app);
+  assert.equal(fixture.calls.filter(isSubmit).length, before + 1, 'only the subsequent DMG is submitted');
+});
+
+test('DMG staple crash recovers the ticket and signed content without another submission', async () => {
+  const fixture = await releaseFixture({ dmgStapleFailure: true });
+  await assert.rejects(fixture.run(), /failed/i);
+  assert.equal((await fixture.readState()).dmg.status, 'Accepted');
+  const before = fixture.calls.filter(isSubmit).length;
+  fixture.settings.dmgStapleFailure = false;
+  assert.equal((await fixture.run()).complete, true);
+  assert.equal(fixture.calls.filter(isSubmit).length, before);
+});
+
+test('completed output is reusable only while every recorded artifact still matches', async () => {
+  const fixture = await releaseFixture();
+  await fixture.run();
+  const before = fixture.calls.filter(isSubmit).length;
+  await fixture.run();
+  assert.equal(fixture.calls.filter(isSubmit).length, before);
+  await fixture.write(join(fixture.out, 'Vonvon-Bot-0.7.0-universal.zip'), 'tampered update');
+  await assert.rejects(fixture.run(), /bytes changed|hash/i);
+  assert.equal(fixture.calls.filter(isSubmit).length, before);
+});
+
+
+test('In Progress after wait timeout saves the ID and resumes without another App upload', async () => {
+  const fixture = await releaseFixture({ status: 'In Progress', waitFailure: true });
+  await assert.rejects(fixture.run(), /In Progress/);
+  const state = await fixture.readState();
+  assert.equal(state.app.id, submissionIDs.app);
+  assert.equal(state.app.status, 'In Progress');
+  assert.equal(fixture.calls.some(isStaple), false);
+  assert.equal(fixture.calls.some(call => call.args[0] === 'notarytool' && call.args[1] === 'info'), true);
+  fixture.settings.status = undefined;
+  fixture.settings.waitFailure = false;
+  assert.equal((await fixture.run()).complete, true);
+  assert.equal(fixture.calls.filter(call => isSubmit(call) && !call.args[2].endsWith('.dmg')).length, 1);
+});
+
+test('quarantine on the source App or extracted final ZIP fails release verification', async t => {
+  for (const quarantineWhere of ['app', 'zip']) await t.test(quarantineWhere, async () => {
+    const fixture = await releaseFixture({ quarantineWhere });
+    await assert.rejects(fixture.run(), /quarantine/i);
+    if (quarantineWhere === 'app') assert.equal(fixture.calls.some(isSubmit), false);
+    else assert.notEqual((await fixture.readState()).complete, true);
+  });
+});
+
+async function formalFixture(settings = {}) {
+  const fixture = await releaseFixture(settings);
+  const notes = join(fixture.root, 'notes.txt');
+  await fixture.write(notes, 'Test release notes');
+  fixture.deps.cosEvidence = { versions: [], keys: [], checkedAt: new Date().toISOString() };
+  return { ...fixture, run: extra => releaseMac({ ...fixture.options, mode: 'release', 'notes-file': notes, ...extra }, fixture.deps) };
+}
+
+test('explicit first release accepts only verified absence and records the empty baseline', async () => {
+  const fixture = await formalFixture();
+  fixture.deps.fetchImpl = async (_url, options) => {
+    assert.equal(options.redirect, 'error');
+    return new Response('Not Found', { status: 404 });
+  };
+  assert.equal((await fixture.run({ 'first-release': true })).baseline, 'none');
+  const inventory = JSON.parse(await readFile(join(fixture.out, 'release-inventory.json'), 'utf8'));
+  assert.equal(inventory.baseline, 'none');
+  assert.equal(inventory.mode, 'release');
+});
+
+test('first-release gate rejects implicit absence, old COS objects, and a publication ledger', async t => {
+  for (const scenario of [
+    { options: {}, evidence: { versions: [], keys: [] } },
+    { options: { 'first-release': true }, evidence: { versions: [], keys: ['bot/mac/stable/Vonvon-Bot-0.6.0-universal.zip'] } },
+    { options: { 'first-release': true }, evidence: { versions: [], keys: ['bot/mac/stable/feed-0.6.0.json'] } },
+    { options: { 'first-release': true }, evidence: { versions: ['0.6.0'], keys: [] } },
+  ]) await t.test(JSON.stringify(scenario), async () => {
+    const fixture = await formalFixture();
+    fixture.deps.fetchImpl = async () => new Response('', { status: 404 });
+    fixture.deps.cosEvidence = scenario.evidence;
+    await assert.rejects(fixture.run(scenario.options), /First release/i);
+    assert.equal(fixture.calls.some(call => call.command === 'npm' || call.command === process.execPath), false);
+  });
+});
+
+test('network, TLS, forbidden, server errors and redirects never become a first-release baseline', async t => {
+  for (const scenario of ['network', 'TLS', 'redirect', 403, 500]) await t.test(String(scenario), async () => {
+    const fixture = await formalFixture();
+    fixture.deps.fetchImpl = async () => {
+      if (scenario === 'network' || scenario === 'TLS') throw new Error(`fixture ${scenario} failure`);
+      if (scenario === 'redirect') return new Response('', { status: 302, headers: { location: 'https://example.invalid/manifest.json' } });
+      return new Response('<Error><Code>NoSuchKey</Code></Error>', { status: scenario });
+    };
+    await assert.rejects(fixture.run({ 'first-release': true }));
+    assert.equal(fixture.calls.some(call => call.command === 'npm' || call.command === process.execPath), false);
+  });
+});
+
+test('formal release version gate stays above every previously published version after rollback', async () => {
+  assert.throws(() => checkVersionGate({ version: '0.7.1', mode: 'release', liveVersion: '0.7.0', historicalVersions: ['0.8.0'] }), /highest previously published/);
+  checkVersionGate({ version: '0.8.1', mode: 'release', liveVersion: '0.7.0', historicalVersions: ['0.8.0'] });
+  checkVersionGate({ version: '0.7.0', mode: 'release', firstRelease: true });
+  assert.throws(() => checkVersionGate({ version: '0.7.0', mode: 'release', firstRelease: true, historicalVersions: ['0.8.0'] }));
+});
+
+test('output gate rejects temporary roots and either direction of source overlap', async () => {
+  const { assertOutputLocation } = await import('./release-mac.mjs');
+  assert.throws(() => assertOutputLocation('/work/source', '/work/source/output', ['/tmp']));
+  assert.throws(() => assertOutputLocation('/work/source', '/work', ['/tmp']));
+  assert.throws(() => assertOutputLocation('/work/source', '/tmp/evidence', ['/tmp']));
+  assert.doesNotThrow(() => assertOutputLocation('/work/source', '/evidence/release', ['/tmp']));
+});
