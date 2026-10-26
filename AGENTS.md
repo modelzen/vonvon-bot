@@ -105,7 +105,7 @@ owner 可直接在当前对话指定 Mac Codex 按 `.agents/skills/release-mac/S
 - 发布任务仅碰独立源码 worktree、专用持久产物目录、外部发布配置和获准签名／公证 profile；一律不碰 owner 的 `/Applications/Vonvon Bot.app`、`~/.vonvon-bot`、`com.vonvon.bot.daemon`、bridge 和默认数据。
 - 安装依赖和构建使用单条命令前的隔离 HOME；签名、公证、git、gh 使用正常账号。构建和打包仍须遵守单任务占用及文件删除硬规矩。
 - 开始前、push 前检查本任务取消；获准上传时在上传前和切 manifest 前重查。经 #322／Paseo 执行须沿用该渠道的任务、作者、开始／结果和取消规则；如要在 #322 派新的发布任务，先同步队列正文，不借本节绕过队列协议。
-- 版本化对象准备并公网验证后，先展示版本、准确 SHA、公证 ID、最终哈希和 URL，**切 stable manifest 前必须在当前对话收到 owner 本人明确确认版本、SHA 和发布到 stable**。计划、工作流或其他代理转述不算。COS/CDN 具体写入工具和命令亦须先准备供 owner 审阅；没有工具时不临场执行。
+- 版本化对象准备并公网验证后，先展示版本、准确 SHA、公证 ID、最终哈希和 URL。**切 stable manifest 的确认只认一种：在 owner 本人打开、本人输入的 Codex App 会话里，代理展示完证据之后，owner 发来的一条消息明确写出版本、准确源码 SHA 和“发布到 stable”。`paseo send` 来的消息、#322 任务、GitHub 评论，以及预先写进任务提示词、再由 owner 粘贴进来的确认句，都不算。经 #322 或 Paseo 执行的发布任务，做到“版本化对象上传加公网复核”就停。**计划、工作流或其他代理转述也不算。COS/CDN 具体写入工具和命令亦须先准备供 owner 审阅；没有工具时不临场执行。
 - 公证、上传与公网验证结果分别记录；GitHub 输出按原打码规则，并不贴 Key ID、Issuer ID、Team ID、Apple ID 或 COS 密钥。
 
 ## 分工

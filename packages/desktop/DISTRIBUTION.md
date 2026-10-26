@@ -4,7 +4,7 @@ macOS 的 Finder / Dock 使用 `assets/macos-icon.png`：圆角以外及画布�
 
 先修改 `packages/daemon/package.json` 的产品版本，执行 `npm run version:sync` 同步 desktop/lock，再在仓库根执行 `npm run build`。协议和 client 的独立 API 版本不随产品发行号改。
 
-正式发布使用仓库内 [release-mac 技能](../../.agents/skills/release-mac/SKILL.md)：准确 main SHA、隔离构建 HOME、App 先公证钉票，再生成最终 ZIP 与 DMG，DMG 单独公证钉票。正式候选和公开上传分阶段，切 stable 前必须 owner 在当前对话明确确认版本和 SHA。
+正式发布使用仓库内 [release-mac 技能](../../.agents/skills/release-mac/SKILL.md)：准确 main SHA、隔离构建 HOME、App 先公证钉票，再生成最终 ZIP 与 DMG，DMG 单独公证钉票。正式候选和公开上传分阶段；切 stable 只认 owner 本人在自己打开的 Codex App 会话里、看完证据后的确认，规则见技能和 `AGENTS.md`"Mac 发布任务"。
 
 `npm run package:dir -w packages/desktop` 保持现有单机架构预览。以下 `package:universal` 只生成本地未公证包，不用于产出公开发布件：
 
