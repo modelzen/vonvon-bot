@@ -179,6 +179,8 @@ const settle = async (): Promise<void> => { for (let i = 0; i < 30; i++) await n
 let orchestrator: ReturnType<typeof createOrchestrator>;
 let events: DiagnosticsEvent[] = [];
 const records = () => events.flatMap((event) => event.kind === 'notReplied' ? [event.record] : []);
+const homeDecisions = () => events.flatMap(event => event.kind === 'decision' ? [event.decision] : []);
+const latestActions = () => events.flatMap(event => event.kind === 'latestAction' ? [event.action] : []);
 const send = async (m: EventMessage, sender?: ReceiveOpts['sender']) => orchestrator.onMessage(await receive(m, { bot: BOT, ...(sender ? { sender } : {}) }));
 
 beforeEach(() => {
@@ -287,6 +289,51 @@ describe('smart rules from group settings', () => {
 });
 
 describe('smart mode intake (s25)', () => {
+  it('publishes a successful model intent at decision time with no prompt, reason or sender content', async () => {
+    const msg = says('PRIVATE_MESSAGE', { at: true });
+    await send(msg); await judged(msg);
+    const before = Date.now();
+    await decide(msg, result('topic', { reason: 'PRIVATE_REASON' }));
+    await vi.waitFor(() => expect(homeDecisions()).toHaveLength(1));
+    const decision = homeDecisions()[0]!;
+    expect(decision).toMatchObject({ groupId: CHAT, place: 'main', decision: 'topic', trigger: 'mention', messageAt: Number(msg.create_time) });
+    expect(decision.decidedAt).toBeGreaterThanOrEqual(before);
+    expect(decision.decidedAt).toBeLessThanOrEqual(Date.now());
+    expect(decision).not.toHaveProperty('messageCount');
+    expect(JSON.stringify(decision)).not.toMatch(/PRIVATE|om_smart_|ou_owner/);
+  });
+
+  it('never publishes failed, fallback, recalled, budgeted or command paths as model decisions', async () => {
+    const failed = says('failed', { at: true });
+    await send(failed); await decide(failed, result('skip', { error: { kind: 'timeout' } }));
+    await vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
+    const recalled = says('recalled'); await send(recalled); await judged(recalled);
+    await orchestrator.onRecall({ messageId: idOf(recalled), chatId: CHAT });
+    const budget = vi.spyOn(JudgeBudget.prototype, 'take').mockReturnValue(false);
+    try { await send(says('budget')); await settle(); } finally { budget.mockRestore(); }
+    await send(says('/help', { at: true })); await settle();
+    expect(homeDecisions()).toEqual([]);
+  });
+
+  it.each(['done', 'error', 'empty', 'missing-done', 'delivery-failed'] as const)('reports a reply only after confirmed nonempty successful delivery: %s', async outcome => {
+    fake.project = { ...base, smart: false };
+    fake.finalOk = outcome !== 'delivery-failed';
+    fake.events = async function* () {
+      if (outcome !== 'empty') yield { type: 'text', itemId: 'answer', text: 'PRIVATE_ANSWER' };
+      if (outcome === 'error') yield { type: 'error', message: 'failure', willRetry: false };
+      else if (outcome !== 'missing-done') yield { type: 'done', turnId: 'completed' };
+    };
+    await send(says('question', { at: true, thread: 'omt_activity' }));
+    await vi.waitFor(() => expect(fake.finals).toHaveLength(1)); await settle();
+    expect(latestActions()).toHaveLength(outcome === 'done' ? 1 : 0);
+    if (outcome === 'done') expect(latestActions()[0]).toMatchObject({ groupId: CHAT, kind: 'replied' });
+    expect(JSON.stringify(latestActions())).not.toContain('PRIVATE_ANSWER');
+    const ended = new Set(events.flatMap(event => event.kind === 'activityEnded' ? [event.id] : []));
+    const running = events.flatMap(event => event.kind === 'activity' ? [event.activity.id] : []);
+    expect(running.length).toBeGreaterThan(0);
+    expect(running.every(id => ended.has(id))).toBe(true);
+  });
+
   it('a judgement does not hold the chat: a topic @ is answered while the main area is still judged (A1)', async () => {
     const chatter = says('这个报错是不是缓存的问题');
     await send(chatter); // returns while the judgement runs
@@ -1462,6 +1509,7 @@ describe('attention (s25g)', () => {
     await decide(c, result('skip', { reason: '闲聊' })); await settle();
     expect(noted('judge-skip')).toHaveLength(1);
     expect(noted('judge-skip')[0]).toMatchObject({ times: 3, detail: '闲聊', ref: idOf(c).slice(-6) });
+    expect(homeDecisions()).toEqual([expect.objectContaining({ decision: 'skip', trigger: 'glance', messageCount: 3, messageAt: Number(c.create_time), decidedAt: clock })]);
     const d = says('BATCH_D'); await send(d); await advance(s(20)); expect(asked.has(idOf(d))).toBe(false);
     await advance(m(3)); expect((await judged(d)).req.why).toContain('3 分钟没看这里了');
   });
@@ -2389,6 +2437,10 @@ describe('smart reminder runtime (s27b3)', () => {
       expect(await orchestrator.collaboration({ action: 'context', projectName: 'demo', chatId: CHAT, threadId: 'omt_goal_reminder' })).toMatchObject({ run: { reminderRequested: false } });
       expect(JSON.stringify([fake.cards, fake.liveCards])).not.toContain('完成后提醒我');
       gate.resolve(); await settle(); expect(posts()).toHaveLength(0);
+      await vi.waitFor(() => expect(latestActions()).toEqual([expect.objectContaining({ groupId: CHAT, kind: 'replied' })]));
+      const ids = events.flatMap(event => event.kind === 'activity' ? [event.activity.id] : []);
+      expect(ids.length).toBeGreaterThan(0);
+      expect(events.filter(event => event.kind === 'activityEnded').map(event => event.id)).toEqual(expect.arrayContaining([...new Set(ids)]));
     } finally { gate.resolve(); }
   });
 

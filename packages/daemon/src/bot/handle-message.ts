@@ -49,7 +49,8 @@ import { feishuError, scopeDenial } from '../utils/feishu-error';
 import type { NotReplied, NotRepliedReason } from '@vonvon/protocol';
 import type { JudgeErrorKind, JudgeDecision, JudgeResult, JudgeVariant } from '../judge/types';
 import { JUDGE_INPUT_LIMITS, oneLine } from '../judge/prompt';
-import { deniedScopeName, errorDetail, fitDetail, reportAttention, reportNotReplied, reportScopeDenied } from './diagnostics';
+import { deniedScopeName, errorDetail, fitDetail, reportAttention, reportDecision, reportLatestAction, reportNotReplied, reportScopeDenied } from './diagnostics';
+import { createRunActivity } from './activity';
 import { createDroppedReplies, originFor, originOf, type DroppedOrigin } from './restart-dropped';
 import { catalogById, projectCreatableBackends, visibleCatalog } from '../agent/catalog';
 import {
@@ -2027,6 +2028,16 @@ export function createOrchestrator(
       const verdict = item.wake ? await judgeWake(item, signal)
         : await judgeItem(item, signal, { glance, fresh: new Set(look.map((b) => b.id)), why, n: look.length });
       if (verdict.kind === 'judged') {
+        // This records the model's intent, before the landing guards. Never
+        // promote a failed judgement's fallback into an intelligent decision,
+        // or retain its reason (which can repeat the original message).
+        if (!verdict.result.error && !signal.aborted && !shuttingDown) reportDecision({
+          id: randomUUID(), groupId: item.msg.chatId, place: item.msg.threadId ? 'topic' : 'main',
+          decision: verdict.result.decision, decidedAt: time.now(), messageAt: item.msg.createTime,
+          trigger: item.wake ? 'bot-mention' : item.signal === 'at-me' ? 'mention' : item.signal === 'quote-me' ? 'quote'
+            : item.signal === 'name' || item.kind === 'aside' ? 'name' : glance ? 'glance' : 'focus',
+          ...(item.kind === 'chat' && glance ? { messageCount: Math.min(10_000, look.length) } : {}),
+        });
         if (verdict.result.promptHash && attention.notePrompt(ref.chatId, verdict.result.promptHash)) forgetAttention(ref.chatId, 'prompt');
         attention.verdict(ref, kind, outcomeOf(verdict.result), now);
         const why = unjudgedAnswer(item, verdict.result.error?.kind);
@@ -7066,6 +7077,7 @@ export function createOrchestrator(
     let turnScope: TurnScope | undefined;
     let turnMemory: TurnMemory | undefined;
     let askTurn: AskTurn | undefined;
+    let activity: ReturnType<typeof createRunActivity> | undefined;
     let firstCardSent = false;
     let titleStart: Promise<boolean> | undefined;
     let titleApplyRequested = false;
@@ -7259,6 +7271,8 @@ export function createOrchestrator(
         titleTurnAttempted = true;
         const turnStartAt = Date.now(); // turn/start 已在 runStreamed() 内发出（与下面的建卡并行）
         state.run = run;
+        activity?.end();
+        activity = createRunActivity(opts.chatId);
         const render = new RunRender();
         state.subagents = () => render.snapshot().subagents;
         render.seedUsage(meterOf(topicThreadId, rec, opts.thread));
@@ -7479,7 +7493,7 @@ export function createOrchestrator(
         askTurn = asks.openTurn({ run, sessionKey: activeKey,
           placement: { chatId: opts.chatId, replyTo: currentTurn.seen?.id ?? opts.replyTo, replyInThread: !opts.flat },
           initiator: { kind: currentTurn.requesterKind ?? 'unknown', openId: currentTurn.requesterOpenId }, idlePause,
-          waiting: (label, subagentId) => { rc.askWaiting = label; rc.askWaitingSubagentId = subagentId; stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID); },
+          waiting: (label, subagentId) => { activity?.waiting(Boolean(label)); rc.askWaiting = label; rc.askWaitingSubagentId = subagentId; stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID); },
           fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) originalInterrupt(); },
         });
         const guarded = withIdleTimeout(
@@ -7500,7 +7514,10 @@ export function createOrchestrator(
         let lastEvAt = tStart;
         let evCount = 0;
         let textChars = 0;
+        let confirmedDone = false;
         for await (const ev of cardEvents.consume(guarded)) {
+          if (ev.type !== 'steer_accepted') activity?.accept(ev);
+          if (ev.type === 'done') confirmedDone = true;
           if (ev.type === 'turn_started') startedTurnId = ev.turnId;
           if (ev.type === 'awaiting_subagents') awaitingSubagents = true;
           if (ev.type === 'ask') { askTurn.enqueue(ev.request, ev.subagentId ? { subagentId: ev.subagentId, name: render.snapshot().subagents.find(row => row.id === ev.subagentId)?.name } : undefined); continue; }
@@ -7563,6 +7580,7 @@ export function createOrchestrator(
         }
         turnScope?.close();
         askTurn.close('turn-ended');
+        activity?.end();
         clearInterval(cardClock);
         cardClock = undefined;
         state.steerReply = undefined;
@@ -7673,6 +7691,7 @@ export function createOrchestrator(
           const manuallyRequested = Boolean(state.completionReminderRequested);
           completionReminderRefreshers.delete(cardMsgId);
           const terminalCardUpdated = await stream.finalizeCard(channel, buildRunCard(rc));
+          if (confirmedDone && rc.rs.terminal === 'done' && answerText.trim() && terminalCardUpdated) reportLatestAction(opts.chatId, 'replied');
           // One-line per-turn timeline; all ms are relative to the turn's stream start.
           {
             const terminalAt = Date.now();
@@ -7797,6 +7816,7 @@ export function createOrchestrator(
       }
     } catch (err) {
       turnScope?.close();
+      activity?.end();
       askTurn?.close('turn-ended');
       // Detach before any await: new messages must not join a failed consumer.
       if (active.get(activeKey) === state) active.delete(activeKey);
@@ -7818,6 +7838,7 @@ export function createOrchestrator(
         .catch((sendError) => log.fail('intake', sendError, { phase: 'run-failure-feedback', dropped }));
     } finally {
       turnScope?.close();
+      activity?.end();
       askTurn?.close('turn-ended');
       // A replacement run may have reserved the key while failure feedback
       // was in flight. Never delete another run's reservation.
@@ -8021,6 +8042,7 @@ export function createOrchestrator(
       ctx.clock = undefined;
       await ctx.stream.drain();
       const subagents = ctx.render.snapshot().subagents;
+      const confirmedDone = ctx.render.terminal() === 'done';
       ctx.render.finalize();
       ctx.rc.rs = { ...ctx.render.snapshot(), subagents };
       logSubagentChanges(subagents, ctx.rc.rs.subagents);
@@ -8031,7 +8053,8 @@ export function createOrchestrator(
         replyInThread: !opts.flat, cardId: ctx.stream.getCardId(),
       }, (elementId, element) => ctx.stream!.updateElement(channel, elementId, element));
       ctx.rc.images = await ctx.stream.settleImages(answerText);
-      await ctx.stream.updateCard(channel, buildRunCard(ctx.rc));
+      const terminalCardUpdated = await ctx.stream.updateCard(channel, buildRunCard(ctx.rc));
+      if (confirmedDone && ctx.rc.rs.terminal === 'done' && answerText.trim() && terminalCardUpdated) reportLatestAction(opts.chatId, 'replied');
       runsByCard.delete(ctx.cardMsgId);
       promoteCard(ctx.cardMsgId, ctx.rc);
       finalized.last = ctx;
@@ -8091,6 +8114,7 @@ export function createOrchestrator(
 
     let askTurn: AskTurn | undefined;
     let askWaiting: string | undefined;
+    let activity: ReturnType<typeof createRunActivity> | undefined;
     let askWaitingSubagentId: string | undefined;
     const askPlacement = { chatId: opts.chatId, replyTo: opts.replyTo, replyInThread: !opts.flat };
     let lastStatus = 'active';
@@ -8116,6 +8140,7 @@ export function createOrchestrator(
       const goalContext = await preparePersonality(opts.thread, opts.chatId, {}, opts.knownThreadId, opts.backendId);
       const run = opts.thread.runGoal(goalContext.text ? `${goalContext.text}\n\n目标：${objective}` : objective);
       state.run = run;
+      activity = createRunActivity(opts.chatId);
       // ⏹ 终止: clear the goal first (so it won't reactivate on resume), then end
       // the loop immediately — cutting the in-flight turn's output.
       state.interrupt = () => {
@@ -8161,6 +8186,7 @@ export function createOrchestrator(
       const originalInterrupt = state.interrupt;
       let unseen = opts.seen; // marked once the host starts the goal's first turn (see launchRun)
       for await (const ev of guarded) {
+        activity.accept(ev);
         if (ev.type === 'ask_cancelled') { askTurn?.cancel(ev.requestId); continue; }
         if (ev.type === 'ask') {
           if (askTurn) askTurn.enqueue(ev.request, ev.subagentId ? { subagentId: ev.subagentId, name: (cur?.render.snapshot().subagents ?? carried).find(row => row.id === ev.subagentId)?.name } : undefined);
@@ -8206,7 +8232,7 @@ export function createOrchestrator(
           }
           askTurn ??= asks.openTurn({ run, sessionKey: activeKey, placement: askPlacement,
             initiator: { kind: opts.requesterKind ?? 'unknown', openId: opts.requesterOpenId }, idlePause,
-            waiting: (label, subagentId) => { askWaiting = label; askWaitingSubagentId = subagentId; if (cur) { cur.rc.askWaiting = label; cur.rc.askWaitingSubagentId = subagentId; if (cur.stream) cur.stream.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID); } },
+            waiting: (label, subagentId) => { activity?.waiting(Boolean(label)); askWaiting = label; askWaitingSubagentId = subagentId; if (cur) { cur.rc.askWaiting = label; cur.rc.askWaitingSubagentId = subagentId; if (cur.stream) cur.stream.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID); } },
             fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) originalInterrupt(); },
           });
           continue;
@@ -8267,6 +8293,7 @@ export function createOrchestrator(
         cur.rc.rs = cur.render.snapshot();
         cur.stream!.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID);
       }
+      activity.end();
       askTurn?.close('turn-ended');
       state.idlePause = undefined;
       // ⏹ 终止: mark the in-flight turn's card as interrupted before finalizing
@@ -8316,6 +8343,7 @@ export function createOrchestrator(
       if (topicThreadId) await patchSession(topicThreadId, { updatedAt: Date.now(), ...savedMeter(topicThreadId, opts.thread) }).catch(() => undefined);
     } catch (err) {
       askTurn?.close('turn-ended');
+      activity?.end();
       log.fail('intake', err);
       await opts.thread.clearGoal().catch(error => log.fail('agent', error, { phase: 'goal-clear' }));
       if (cur?.stream && cur.cardMsgId) {
@@ -8337,6 +8365,7 @@ export function createOrchestrator(
         .catch(() => undefined);
     } finally {
       askTurn?.close('turn-ended');
+      activity?.end();
       state.idlePause = undefined;
       state.runCard = undefined;
       state.run = undefined;

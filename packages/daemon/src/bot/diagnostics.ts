@@ -1,7 +1,8 @@
 import {
-  DENIED_SCOPE_SHOWN_MS, diagnosticsEventSchema,
-  type GroupAttention, type BotDiagnostics, type DeniedScope, type DiagnosticsEvent, type NotReplied, type NotRepliedReason, type ScopeDenialPlace,
+  BOT_ACTIVITY_STALE_MS, BOT_LATEST_ACTION_SHOWN_MS, DENIED_SCOPE_SHOWN_MS, diagnosticsEventSchema,
+  type BotActivity, type BotDecision, type BotLatestAction, type GroupAttention, type BotDiagnostics, type DeniedScope, type DiagnosticsEvent, type NotReplied, type NotRepliedReason, type ScopeDenialPlace,
 } from '@vonvon/protocol';
+import { randomUUID } from 'node:crypto';
 import { redactTokens } from '../core/token-redact';
 import { CHAT_OPTIONAL_SCOPES, REQUIRED_SCOPES } from '../config/scopes';
 
@@ -23,6 +24,12 @@ function report(event: DiagnosticsEvent): void {
 /** `times` > 1: one record for that many messages (a group's dropped queue, s18c). */
 export function reportNotReplied(record: Omit<NotReplied, 'count'>, times = 1): void { report({ kind: 'notReplied', record, ...(times > 1 ? { times } : {}) }); }
 export function reportAttention(groups: GroupAttention[]): void { report({ kind: 'attention', groups }); }
+export function reportActivity(activity: BotActivity): void { report({ kind: 'activity', activity }); }
+export function reportActivityEnded(id: string): void { report({ kind: 'activityEnded', id }); }
+export function reportDecision(decision: BotDecision): void { report({ kind: 'decision', decision }); }
+export function reportLatestAction(groupId: string, kind: BotLatestAction['kind'], at = Date.now()): void {
+  report({ kind: 'latestAction', action: { id: randomUUID(), groupId, kind, at } });
+}
 export function reportCustomPromptNotice(groupId: string): void { report({ kind: 'customPrompt', groupId }); }
 /** Only scopes the console check reads reach 缺的权限, which may call one 后台显示已开; Feishu's list of scopes that
  * would do can start with an alias (`im:message`), so the name is the first the check reads, else the first. */
@@ -63,6 +70,8 @@ export function errorDetail(error: unknown): string | undefined {
 }
 
 export const NOT_REPLIED_LIMIT = 30;
+export const ACTIVITY_LIMIT = 50;
+export const DECISION_LIMIT = 30;
 const DENIED_SCOPE_LIMIT = 10;
 const MERGE_MS = 10 * 60_000;
 /** Of the 30, the most kept for the smart mode's normal outcomes (s25), another bot's @ past the cap or dropped by
@@ -88,6 +97,9 @@ export interface DiagnosticsStore {
 export function createDiagnosticsStore(opts: { changed: () => void; claudeSignedOut?: (at: number) => void; now?: () => number; throttleMs?: number }): DiagnosticsStore {
   const now = opts.now ?? Date.now;
   const bots = new Map<string, BotDiagnostics>();
+  // Receipt time is separate from updatedAt: a quiet tool's heartbeat renews its
+  // lease without moving it above a genuinely newer action in the home page.
+  const activitySeen = new Map<string, Map<string, number>>();
   let timer: NodeJS.Timeout | undefined;
   let closed = false;
   const changed = (): void => {
@@ -99,7 +111,24 @@ export function createDiagnosticsStore(opts: { changed: () => void; claudeSigned
     accept(appId, event) {
       const bot = bots.get(appId) ?? { notReplied: [], deniedScopes: [] };
       bots.set(appId, bot);
-      if (event.kind === 'attention') {
+      if (event.kind === 'activity') {
+        const seen = activitySeen.get(appId) ?? new Map<string, number>();
+        activitySeen.set(appId, seen);
+        seen.set(event.activity.id, now());
+        bot.activities = [event.activity, ...(bot.activities ?? []).filter(item => item.id !== event.activity.id)]
+          .filter(item => now() - (seen.get(item.id) ?? -Infinity) < BOT_ACTIVITY_STALE_MS)
+          .sort((a, b) => b.updatedAt - a.updatedAt).slice(0, ACTIVITY_LIMIT);
+        const kept = new Set(bot.activities.map(item => item.id));
+        for (const id of seen.keys()) if (!kept.has(id)) seen.delete(id);
+      } else if (event.kind === 'activityEnded') {
+        bot.activities = (bot.activities ?? []).filter(item => item.id !== event.id);
+        activitySeen.get(appId)?.delete(event.id);
+      } else if (event.kind === 'decision') {
+        bot.decisions = [event.decision, ...(bot.decisions ?? []).filter(item => item.id !== event.decision.id)]
+          .sort((a, b) => b.decidedAt - a.decidedAt).slice(0, DECISION_LIMIT);
+      } else if (event.kind === 'latestAction') {
+        if (!bot.latestAction || event.action.at >= bot.latestAction.at) bot.latestAction = event.action;
+      } else if (event.kind === 'attention') {
         bot.attention = event.groups;
       } else if (event.kind === 'customPrompt') {
         bot.customPromptGroups = [...new Set([...(bot.customPromptGroups ?? []), event.groupId])];
@@ -122,13 +151,19 @@ export function createDiagnosticsStore(opts: { changed: () => void; claudeSigned
       const bot = bots.get(appId);
       if (!bot) return undefined;
       const deniedScopes = bot.deniedScopes.filter(item => now() - item.at < DENIED_SCOPE_SHOWN_MS);
-      return bot.notReplied.length || deniedScopes.length || bot.attention || bot.customPromptGroups?.length ? { ...bot, deniedScopes } : undefined;
+      const seen = activitySeen.get(appId);
+      const activities = bot.activities?.filter(item => now() - (seen?.get(item.id) ?? -Infinity) < BOT_ACTIVITY_STALE_MS)
+        .map(item => ({ ...item, observedAt: seen!.get(item.id)! }));
+      const latestAction = bot.latestAction && now() - bot.latestAction.at < BOT_LATEST_ACTION_SHOWN_MS ? bot.latestAction : undefined;
+      return bot.notReplied.length || deniedScopes.length || bot.attention || bot.customPromptGroups?.length || activities !== undefined || bot.decisions?.length || latestAction
+        ? { ...bot, deniedScopes, ...(activities ? { activities } : {}), latestAction } : undefined;
     },
     clearLive(appId) {
       const bot = bots.get(appId);
-      if (bot) { delete bot.attention; delete bot.customPromptGroups; changed(); }
+      activitySeen.delete(appId);
+      if (bot) { delete bot.attention; delete bot.customPromptGroups; if (bot.activities !== undefined) bot.activities = []; changed(); }
     },
-    retain(appIds) { for (const appId of bots.keys()) if (!appIds.has(appId)) bots.delete(appId); },
-    close() { closed = true; if (timer) clearTimeout(timer); timer = undefined; },
+    retain(appIds) { for (const appId of bots.keys()) if (!appIds.has(appId)) { bots.delete(appId); activitySeen.delete(appId); } },
+    close() { closed = true; if (timer) clearTimeout(timer); timer = undefined; activitySeen.clear(); },
   };
 }
