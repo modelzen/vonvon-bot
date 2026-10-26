@@ -1504,8 +1504,9 @@ describe('attention (s25g)', () => {
   it('44. batches three arrivals, emits one diagnostic, and backs off to three minutes', async () => {
     const a = says('BATCH_A'), b = says('BATCH_B'), c = says('BATCH_C');
     for (const msg of [a, b, c]) await send(msg); await advance(s(20));
+    const { req } = await judged(c);
     expect([...asked.keys()]).toEqual([idOf(c)]);
-    expect((await judged(c)).req.context.filter(l => l.fresh).map(l => l.id)).toEqual([idOf(a), idOf(b)]);
+    expect(req.context.filter(l => l.fresh).map(l => l.id)).toEqual([idOf(a), idOf(b)]);
     await decide(c, result('skip', { reason: '闲聊' })); await settle();
     expect(noted('judge-skip')).toHaveLength(1);
     expect(noted('judge-skip')[0]).toMatchObject({ times: 3, detail: '闲聊', ref: idOf(c).slice(-6) });
