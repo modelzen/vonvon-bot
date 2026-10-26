@@ -188,13 +188,13 @@ describe('synchronous desktop facade', () => {
   it('retains errors and quit requests until listeners attach', () => {
     const h = harness();
     const { client, shell } = createDesktopFacades(h.transport);
-    h.event({ type: 'error', value: { kind: 'connection', message: 'Daemon connection lost' } });
+    h.event({ type: 'error', value: { kind: 'connection', message: '和后台的连接断开了。' } });
     h.event({ type: 'quitRequested' });
     const errors: string[] = [];
     client.onError(error => errors.push(error.message));
     let quits = 0;
     const off = shell.onQuitRequested(() => { quits++; });
-    expect(errors).toEqual(['Daemon connection lost']);
+    expect(errors).toEqual(['和后台的连接断开了。']);
     expect(quits).toBe(1);
     off();
     h.event({ type: 'quitRequested' });

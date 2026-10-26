@@ -10,6 +10,7 @@ import {
 import { allowedExternalUrl, type ExternalUrlKind } from '../../ui/src/url-actions.js';
 import { ServiceActionError } from './service-error.js';
 import { StartHostRefusal } from './daemon-manager.js';
+import { DesktopUpdateError } from './updates.js';
 import {
   desktopChannels, safeErrorCode, type AttachedDaemon, type DesktopBridge, type DesktopEvent,
   type DesktopResources, type IpcResult, type SafeFailure, type ShellActions,
@@ -83,7 +84,7 @@ export function sanitizeDaemonMessage(raw: string): string {
     .replace(/\bsk-[\w-]{16,}/g, '…')
     .replace(/\s+/g, ' ').trim();
   const chars = Array.from(text);
-  if (chars.length === 0) return 'Daemon request failed';
+  if (chars.length === 0) return '后台请求失败，请重试。';
   if (!cut && chars.length <= daemonMessageLimit) return text;
   return `${chars.slice(0, daemonMessageLimit - 1).join('')}…`;
 }
@@ -93,10 +94,10 @@ function safeFailure(error: unknown): SafeFailure {
     const code = safeErrorCode(error.code);
     return { kind: 'rpc', message: sanitizeDaemonMessage(error.message), ...(code ? { code } : {}) };
   }
-  if (error instanceof ConnectionError) return { kind: 'connection', message: 'Daemon connection lost' };
+  if (error instanceof ConnectionError) return { kind: 'connection', message: '和后台的连接断开了。' };
   if (error instanceof ServiceActionError) return { kind: 'validation', message: sanitizeDaemonMessage(error.safeMessage) };
-  if (error instanceof StartHostRefusal) return { kind: 'validation', message: error.message };
-  return { kind: 'validation', message: 'Desktop request failed' };
+  if (error instanceof StartHostRefusal || error instanceof DesktopUpdateError) return { kind: 'validation', message: error.message };
+  return { kind: 'validation', message: '桌面端操作没有成功，请重试。' };
 }
 
 function failure(error: unknown): IpcResult<never> {

@@ -124,7 +124,9 @@ describe('buildDoctorCard', () => {
     };
     walk(buildDoctorCard(info()));
     expect(urls).toContain('https://bot.vonvon.cc');
-    expect(urls).toContain('https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=63fo60d9-b31a-4921-a1d1-e01e3020c264');
+    // The group invite link lives on the site only, so a changed group never needs a new release.
+    expect(urls).toContain('https://bot.vonvon.cc/#community');
+    expect(urls.some(url => url.includes('feishu.cn/client/chat/chatter/add_by_link'))).toBe(false);
     expect(urls.some(url => url.includes('github.com'))).toBe(false);
     const text = JSON.stringify(buildDoctorCard(info()));
     expect(text).toContain('官网');

@@ -291,7 +291,7 @@ describe('updater final install lifecycle', () => {
 
   it('keeps the renderer available for check and download errors', async () => {
     vi.mocked(net.fetch).mockRejectedValueOnce(new Error('check failed'));
-    await expect(actions.checkDesktopUpdate()).rejects.toThrow('check failed');
+    await expect(actions.checkDesktopUpdate()).rejects.toThrow('连不上更新服务器');
     await expect(actions.checkDesktopUpdate()).resolves.toMatchObject({ state: 'available' });
     const downloading = actions.installDesktopUpdate();
     autoUpdater.emit('error', new Error('download failed'));
@@ -798,10 +798,10 @@ describe('native window lifecycle', () => {
     await startDesktop();
     expect(dialog.showMessageBox).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({ type: 'warning', message: notice }));
     vi.mocked(repairServiceAtStartup).mockResolvedValueOnce(notice);
-    fake.ready.mockRejectedValueOnce(new Error('Daemon did not become ready within the startup wait.'));
+    fake.ready.mockRejectedValueOnce(new Error('后台服务启动超时，一直没有就绪。'));
     await startDesktop();
     await vi.waitFor(() => expect(dialog.showErrorBox).toHaveBeenCalledWith('Vonvon Bot', notice));
-    expect(dialog.showErrorBox).not.toHaveBeenCalledWith('Vonvon Bot', expect.stringContaining('startup wait'));
+    expect(dialog.showErrorBox).not.toHaveBeenCalledWith('Vonvon Bot', expect.stringContaining('启动超时'));
   });
 
   it('starts a registered service through the manager and blocks a concurrent start', async () => {
@@ -1053,7 +1053,7 @@ describe('automatic update checks and a stalled install', () => {
       await vi.waitFor(() => expect(fake.bridge.publishUpdate).toHaveBeenCalledOnce());
       expect(net.fetch).toHaveBeenCalledExactlyOnceWith('https://updates.example.test/manifest.json', expect.objectContaining({ redirect: 'error' }));
       expect(fake.bridge.publishUpdate).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ state: 'available', latest: '0.2.0' }));
-      expect(fake.tray.setUpdate).toHaveBeenLastCalledWith('0.2.0');
+      expect(fake.tray.setUpdate).toHaveBeenLastCalledWith('有新版本 0.2.0');
       expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(25 * hour);
       await vi.waitFor(() => expect(net.fetch).toHaveBeenCalledTimes(2));
@@ -1086,12 +1086,29 @@ describe('automatic update checks and a stalled install', () => {
       await writeFile(record(), '0.5.0');
       await startUnderFakeTime();
       expect(await readFile(record(), 'utf8')).toBe('0.5.0');
+      // The manifest is read anyway, so a newer release would still show up; here it offers nothing past the expected version.
       await expect(actions.checkDesktopUpdate()).resolves.toMatchObject({ state: 'install-pending', latest: '0.5.0' });
-      expect(net.fetch).not.toHaveBeenCalled();
-      expect(fake.tray.setUpdate).toHaveBeenLastCalledWith(undefined);
+      expect(net.fetch).toHaveBeenCalledOnce();
+      expect(fake.tray.setUpdate).toHaveBeenLastCalledWith('上次更新没装上');
       await expect(actions.retryDesktopUpdate()).resolves.toMatchObject({ state: 'available', latest: '0.2.0' });
-      expect(fake.tray.setUpdate).toHaveBeenLastCalledWith('0.2.0');
+      expect(fake.tray.setUpdate).toHaveBeenLastCalledWith('有新版本 0.2.0');
       await expect(readFile(record(), 'utf8')).rejects.toThrow();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('marks a failed install in the tray from the automatic check, and offers a newer release instead when there is one', async () => {
+    try {
+      await writeFile(record(), '0.5.0');
+      await startUnderFakeTime();
+      await vi.advanceTimersByTimeAsync(minute);
+      await vi.waitFor(() => expect(fake.bridge.publishUpdate).toHaveBeenCalledOnce());
+      expect(fake.bridge.publishUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'install-pending' }));
+      expect(fake.tray.setUpdate).toHaveBeenLastCalledWith('上次更新没装上');
+      vi.mocked(net.fetch).mockResolvedValueOnce(new Response(JSON.stringify({ version: '0.6.0', feedURL: 'https://updates.example.test/feed' })));
+      await vi.advanceTimersByTimeAsync(26 * hour);
+      await vi.waitFor(() => expect(fake.bridge.publishUpdate).toHaveBeenCalledTimes(2));
+      expect(fake.bridge.publishUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'available', latest: '0.6.0' }));
+      expect(fake.tray.setUpdate).toHaveBeenLastCalledWith('有新版本 0.6.0');
     } finally { vi.useRealTimers(); }
   });
 });
