@@ -344,11 +344,11 @@ Codex 先用隔离的 HOME 和 bridge 数据副本走完整个导入，包括故
 
 ### M11 公开发布准备（s65、s66、s67）
 
-**给 owner 什么：**（第 8 节）能在本地出已有 Developer ID 签名的 universal dmg，Intel Mac 也能装；hardened runtime 和 entitlements 明确配置，签名以 `codesign --verify --deep --strict` 验证。公证以后由 owner 定，不是本次 s65 前置。应用里检查更新并装上新版的完整承诺保留，s65 先生成本地清单和 feed，公开地址发布前填。npm 包和桌面包的许可证改成闭源（UNLICENSED）。在一台没有 bridge 的 Mac 上，从零安装、扫码、开权限，第一次对话走通，这是第 8 节第 5 条的 Mac 一半。s66：owner 2026-10-20 定不做；2026-10-26 owner 说明不需要向 Anthropic 要 Claude 登录的书面确认，它不再是发布条件。
+**给 owner 什么：**（第 8 节）能在本地出已有 Developer ID 签名的 universal dmg，Intel Mac 也能装；hardened runtime 和 entitlements 明确配置，签名以 `codesign --verify --deep --strict` 验证。s65 当时不以公证为前置；owner 2026-10-26 已要求建立独立 release-mac 流程，公证／上传范围按每轮明确要求，切 stable 只认 owner 本人在自己打开的 Codex App 会话里、看完证据后的确认（`AGENTS.md`"Mac 发布任务（owner 2026-10-26 定）"）。应用里检查更新并装上新版的完整承诺保留，s65 先生成本地清单和 feed，公开地址发布前填。npm 包和桌面包的许可证改成闭源（UNLICENSED）。在一台没有 bridge 的 Mac 上，从零安装、扫码、开权限，第一次对话走通，这是第 8 节第 5 条的 Mac 一半。s66：owner 2026-10-20 定不做；2026-10-26 owner 说明不需要向 Anthropic 要 Claude 登录的书面确认，它不再是发布条件。
 
 **怎么验收：** owner 要做的：第 1 步里新开一个干净的 macOS 用户装 dmg，第 2 步（从零扫码走清单，到第一次对话）。其余步骤 Codex 在 M11 的预览版任务里先做完，结果写在通知里。
 
-owner 2026-10-20 已定 s65 先做本地包，地址以后填，公证以后定，不再重复问这些决定。发布前其余准备按本文第 8 节检查。然后：
+owner 2026-10-20 的 s65 本地包决定作为当时范围保留。2026-10-26 发布准备已转为 `.agents/skills/release-mac/SKILL.md` 的独立流程：固定稳定地址，外部配置核对身份，先 App 公证钉票再出最终容器；此前 0.7.14 仅单次本地演练，正式 0.7.0 须待发布修复合入 main 后从新 SHA 构建。PR #558 的审查修订只改工具，不打包、不公证、不上传 COS。每次运行 helper 都会提交 Apple 公证，必须 owner 本人点名要求；公开上传按 owner 每次的授权，切 stable 的确认规则见 `AGENTS.md`"Mac 发布任务（owner 2026-10-26 定）"。发布前其余准备按本文第 8 节检查。历史 s65 验收步骤如下：
 1. s65 本地先查：app 用 `codesign --verify --deep --strict` 验签，dmg 独立验签；Apple Silicon 和已有 Rosetta 分别实际启动。此时不跑公证或 stapler，不宣称 Gatekeeper 放行。公开地址和公证以后准备好时，再从公开地址下载并做对应 `spctl`/`stapler` 验证；owner 在干净 macOS 用户中从公开地址安装的发布前验收保留，不能用本地无 quarantine 启动替代。
 2. owner：从零走一遍清单：扫码、开权限、事件订阅、发布、登录时启动，然后第一次对话走通。
 3. Codex 先查：装一个旧一点的版本，在"应用与启动"页检查更新，装上新版。装回新版后，`vonvon service status` 和装旧版之前一样，Codex 在回复里写明。
@@ -1873,8 +1873,8 @@ D8 的三个待定项（product.md 第 11 节），u01 这样定：
 
 | 事 | 什么时候要 | 说明 |
 |---|---|---|
-| Apple 开发者的公证凭据 | owner 以后决定公证时 | owner 2026-10-20：此次 s65 不公证、不配置凭据 |
-| 公开的下载和更新地址 | 公开发布前填写；s64 通知/更新源上线前 | owner 2026-10-20 先不定；s65 做配置和本地产物，不硬编码 |
+| Apple 开发者的公证凭据 | 每轮获准公证前核验 | s65 当时不公证；2026-10-26 release-mac 使用本机已有钥匙串 profile，配置路径和身份不进仓库，本轮只改工具不公证 |
+| 公开的下载和更新地址 | 正式候选及公开发布前验证 | s65 当时未定；release-mac 固定 `https://dl.vonvon.cc/bot/mac/stable/manifest.json`，TLS/COS/CDN 必须实证可用，不能绕证书错误；切 stable 的确认规则见 `AGENTS.md`"Mac 发布任务（owner 2026-10-26 定）" |
 | 一位同事或第二个飞书账号 | e10（s18 之前）、e09（s30 之前）、M6 第 4 步、M9 第 2 和第 6 步 | 验收时要有另一个人点卡片、私聊 bot |
 | TypeSafe 的账号和 key | s23f、s23g 和 M5 第 11 步（测试 key 已给，2026-10-18） | 测试 key 存在 JP-VPS 本机，不进仓库，Claude 在 JP-VPS 上测这几处时用。Mac 上要用 Jev 时由 owner 在密钥页自己填，key 不经 GitHub 传给 Mac 上的 Codex。长期用要 owner 自己的账号和付款方式；有没有免费额度，文档没写 |
 | JP-VPS 上再加两个测试 bot | 已做（2026-10-16） | M5 要同一台机器上三个 bot（一个规则模式、两个智能模式）。owner 在 JP-VPS 的终端里扫码建了 Vonvon Bot 7、Bot 8，开发者后台由 Mac 上的 Codex 配好、发布（本文第 10 节"M3 验收期间顺带看到的"） |

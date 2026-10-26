@@ -98,6 +98,16 @@ owner 2026-10-19 定（Claude 的周额度用到一半）：从 s27a 起，新�
   - 谁打 `frozen`、谁合入，由 owner 指定时点名。
   - 没有合格的审查者就不合入，等 Claude 恢复或 owner 来审。
 
+## Mac 发布任务（owner 2026-10-26 定）
+
+owner 可直接指定 Mac Codex 按 `.agents/skills/release-mac/SKILL.md` 做发布任务，范围按 owner 每次的要求分别限定为工具修改、本地候选、公证验收、版本化上传和 stable 提升；不存在由“调用者授权”自动包办公开发布的规则。每次运行 helper 都会提交 Apple 公证，必须 owner 本人点名要求。
+
+- 发布任务仅碰独立源码 worktree、专用持久产物目录、外部发布配置和获准签名／公证 profile；一律不碰 owner 的 `/Applications/Vonvon Bot.app`、`~/.vonvon-bot`、`com.vonvon.bot.daemon`、bridge 和默认数据。
+- 安装依赖和构建使用单条命令前的隔离 HOME；签名、公证、git、gh 使用正常账号。构建和打包仍须遵守单任务占用及文件删除硬规矩。
+- 开始前、push 前检查本任务取消；获准上传时在上传前和切 manifest 前重查。经 #322／Paseo 执行须沿用该渠道的任务、作者、开始／结果和取消规则；如要在 #322 派新的发布任务，先同步队列正文，不借本节绕过队列协议。
+- 版本化对象准备并公网验证后，先展示版本、准确 SHA、公证 ID、最终哈希和 URL。**切 stable manifest 的确认只认一种：在 owner 本人打开、本人输入的 Codex App 会话里，代理展示完证据之后，owner 发来的一条消息明确写出版本、准确源码 SHA 和“发布到 stable”。`paseo send` 来的消息、#322 任务、GitHub 评论，以及预先写进任务提示词、再由 owner 粘贴进来的确认句，都不算。经 #322 或 Paseo 执行的发布任务，做到“版本化对象上传加公网复核”就停。**计划、工作流或其他代理转述也不算。COS/CDN 具体写入工具和命令亦须先准备供 owner 审阅；没有工具时不临场执行。
+- 公证、上传与公网验证结果分别记录；GitHub 输出按原打码规则，并不贴 Key ID、Issuer ID、Team ID、Apple ID 或 COS 密钥。
+
 ## 分工
 
 - JP-VPS 上的 Claude Code 负责 v1 的设计、实现、独立审查、测试和合入（2026-10-19 起实现交给 Codex，见上一节）。它写 `docs/product.md` 和 `docs/v1-plan.md`，写产品代码和测试，在 JP-VPS 上跑构建、typecheck、lint、定向测试和无头网页界面检查。飞书一侧的行为也在 JP-VPS 上自测：用 lark-cli 以 owner 的用户身份、只在测试群里做，改设置用 `vonvon` 命令行。每个里程碑的验收，不需要 Mac 的步骤由 Claude 先在 JP-VPS 上做完，见 `docs/v1-plan.md` 第 7 节。重命令一律加 `flock /tmp/vonvon-heavy.lock`。全量测试交给 CI 的 Linux 和 macOS 任务。Claude 是唯一的合入入口。
@@ -162,7 +172,7 @@ Codex 写的片按"2026-10-19 起"一节走，下面第 1 步对它不适用。
   9. 不再追问时，Claude 先 `paseo send` 一句"用 `git worktree remove` 删掉这个会话建的临时 worktree"，等它空闲后用 `paseo archive` 归档。
   10. Paseo 恢复以后，#322 里还没有开始评论的任务，Claude 先贴取消，再经 Paseo 用新的任务号重开。
 - 经 #322：#322 的正文是给 Codex 的完整说明：怎么认作者、心跳和开始评论、任务和结果的格式、取消、轮询和结束、每个任务都要守的规矩，包括临时 worktree、push 的写法和预览版任务能碰什么。改队列的规矩时，正文和本文一起改。
-- Mac 上的事分三种任务。任务号只有一套，经 Paseo、经 #322 和 #422（JP-VPS 上的 Codex）的一起往上数，从 14 开始（#322 用到了 13）。经 #322 时，任务贴成 #322 的评论：第一行是 `<!-- claude-mac-task:<任务号> -->`，第二行是标题，下面是内容。长的提示词贴在相关的 PR 里，任务（经 Paseo 时是给会话的那一句话）里给出那条评论的链接（带评论 id），写明哪一步不做、结果贴到哪里。Codex 只照链接指的那一条做；任务只给了标记、找到不止一条时，不猜，结果写"卡住了：提示词有几份"。旧记录里说的检查会话、预览版会话和修复会话，指这三种任务：
+- 现有 Mac 队列协议登记以下三种任务；owner 直接指定的发布任务另见“Mac 发布任务（owner 2026-10-26 定）”，纳入队列前须同步队列正文。任务号只有一套，经 Paseo、经 #322 和 #422（JP-VPS 上的 Codex）的一起往上数，从 14 开始（#322 用到了 13）。经 #322 时，任务贴成 #322 的评论：第一行是 `<!-- claude-mac-task:<任务号> -->`，第二行是标题，下面是内容。长的提示词贴在相关的 PR 里，任务（经 Paseo 时是给会话的那一句话）里给出那条评论的链接（带评论 id），写明哪一步不做、结果贴到哪里。Codex 只照链接指的那一条做；任务只给了标记、找到不止一条时，不猜，结果写"卡住了：提示词有几份"。旧记录里说的检查会话、预览版会话和修复会话，指这三种任务：
   - 检查任务：提示词贴在 PR 里，第一行是 `<!-- claude-mac-check-prompt-<PR号>-<任务号> -->`；提示词里防重复的开始和结果标记也带任务号，例如 `<!-- codex-mac-check-<PR号>-<任务号>-start -->` 和 `<!-- codex-mac-check-<PR号>-<任务号> -->`。同一个 PR 再查一轮，比如 Codex 改了代码之后，就是新任务号的新提示词，标记不和旧的重名。#320 的第一份（任务 1）是这条规矩之前贴的，没带任务号。Codex 在临时 worktree 里取这个分支，在本机构建和检查。只接短检查：一个任务大约 30 分钟以内，结果能用文字说清对错。
   - 预览版任务：没有 PR，提示词和结果都贴在 #322。经 Paseo 时，提示词评论的第一行是 `<!-- claude-mac-preview-prompt-<任务号> -->`，不带 `claude-mac-task`，队列会话不会去领；不再另开 `Mac 预览版 <里程碑名>` issue。Codex 在临时 worktree 里取 Claude 给的 `main` sha，在 Mac 本机构建；先用隔离的数据目录查 Mac 上的网页端连 Mac 上的 daemon，有问题就停下贴结果，不打包，不 push；过了再用真实 `HOME` 下的钥匙串签名，装到本机给 owner 验收。owner 做完一步、要 Codex 接着查时，Claude 贴一个新任务，按步骤号只列这几步，用已经装好的 app，不重新构建、打包和安装，除非任务写明。
   - 修复任务：提示词贴在 `codex/fix-*` PR 里，第一行是 `<!-- claude-mac-fix-prompt-<PR号>-<任务号> -->`。Claude 审查这个 PR 发现问题时贴。Codex 在临时 worktree 里取这个分支，按 PR 评论修，push。
