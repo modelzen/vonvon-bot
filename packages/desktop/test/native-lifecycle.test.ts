@@ -265,7 +265,7 @@ describe('updater final install lifecycle', () => {
       expect(fake.tray.destroy).toHaveBeenCalledOnce();
       expect(fake.bridge.dispose).toHaveBeenCalledOnce();
       expect(fake.owner.dispose).not.toHaveBeenCalled();
-      expect.soft(dialog.showErrorBox).toHaveBeenCalledWith('Vonvon Bot', expect.stringMatching(/update.*failed/i));
+      expect.soft(dialog.showErrorBox).toHaveBeenCalledWith('Vonvon Bot', expect.stringContaining('桌面更新没有完成'));
       expect.soft(app.quit).toHaveBeenCalledOnce();
       const quit = { preventDefault: vi.fn() };
       app.emit('before-quit', quit);
@@ -351,7 +351,7 @@ describe('daemon restart from the window', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
     try {
       fake.verified.mockResolvedValue(null);
-      const settled = expect(actions.restartHost(previous, applied)).rejects.toThrow('did not come back after restart');
+      const settled = expect(actions.restartHost(previous, applied)).rejects.toThrow('没有回来');
       await vi.advanceTimersByTimeAsync(61_000);
       await settled;
     } finally { vi.useRealTimers(); }
@@ -364,7 +364,7 @@ describe('daemon restart from the window', () => {
   it('lets a quit cancel a restart whose reply is still pending, and ignores the late reply', async () => {
     let reply!: (result: { kind: 'applied'; revision: number }) => void;
     const restarting = actions.restartHost(previous, () => new Promise(resolve => { reply = resolve; }));
-    const cancelled = expect(restarting).rejects.toThrow('Desktop restart was cancelled.');
+    const cancelled = expect(restarting).rejects.toThrow('重启已取消。');
     await actions.confirmQuit();
     await cancelled;
     expect(fake.bridge.dispose).toHaveBeenCalledOnce();
@@ -385,7 +385,7 @@ describe('daemon restart from the window', () => {
       await vi.waitFor(() => expect(fake.verified).toHaveBeenCalled());
       const quitting = actions.confirmQuit();
       release();
-      await expect(restarting).rejects.toThrow('Desktop restart was cancelled.');
+      await expect(restarting).rejects.toThrow('重启已取消。');
       await quitting;
       expect(fake.attach).toHaveBeenCalledTimes(1);
       expect(fake.bridge.replaceOwner).not.toHaveBeenCalled();
@@ -401,7 +401,7 @@ describe('daemon restart from the window', () => {
       fake.attach.mockResolvedValue({ identity: successor, dispose: vi.fn(async () => {}) });
       fake.bridge.replaceOwner.mockImplementationOnce(() => new Promise<void>(() => {}));
       const restarting = actions.restartHost(previous, applied);
-      const cancelled = expect(restarting).rejects.toThrow('Desktop restart was cancelled.');
+      const cancelled = expect(restarting).rejects.toThrow('重启已取消。');
       await vi.waitFor(() => expect(fake.bridge.replaceOwner).toHaveBeenCalled());
       await (stop === 'quit' ? actions.confirmQuit() : actions.installDesktopUpdate());
       await cancelled;
@@ -420,7 +420,7 @@ describe('daemon restart from the window', () => {
     fake.verified.mockResolvedValue(successor);
     fake.attach.mockImplementationOnce(() => new Promise(resolve => { deliver = () => resolve(late); }));
     const restarting = actions.restartHost(previous, applied);
-    const cancelled = expect(restarting).rejects.toThrow('Desktop restart was cancelled.');
+    const cancelled = expect(restarting).rejects.toThrow('重启已取消。');
     await vi.waitFor(() => expect(fake.attach).toHaveBeenCalledTimes(2));
     await actions.confirmQuit();
     await cancelled;
@@ -439,7 +439,7 @@ describe('daemon restart from the window', () => {
     await vi.waitFor(() => expect(fake.verified).toHaveBeenCalled());
     const installing = actions.installDesktopUpdate();
     release();
-    await expect(restarting).rejects.toThrow('Desktop restart was cancelled.');
+    await expect(restarting).rejects.toThrow('重启已取消。');
     await installing;
     expect(fake.attach).toHaveBeenCalledTimes(1);
     expect(fake.bridge.replaceOwner).not.toHaveBeenCalled();
@@ -493,7 +493,7 @@ describe('machine page stop', () => {
     const next = { identity, dispose: vi.fn(async () => {}) };
     fake.ready.mockResolvedValueOnce(identity);
     fake.attach.mockResolvedValueOnce(next);
-    await expect(actions.startHost()).resolves.toMatchObject({ message: 'Daemon started.' });
+    await expect(actions.startHost()).resolves.toMatchObject({ message: 'daemon 已启动。' });
     expect(actions.isExpectedDisconnect()).toBe(false);
   });
 
@@ -515,7 +515,7 @@ describe('machine page stop', () => {
       running = false;
       await vi.advanceTimersByTimeAsync(250);
       await expect(stopping).resolves.toMatchObject({ message: 'daemon 已停止。' });
-      await expect(starting).resolves.toMatchObject({ message: 'Daemon started.' });
+      await expect(starting).resolves.toMatchObject({ message: 'daemon 已启动。' });
     } finally { vi.useRealTimers(); }
     expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next);
   });
@@ -545,7 +545,7 @@ describe('machine page stop', () => {
     const identity = { ...previous, pid: 45, startedAt: 'after-timeout' };
     fake.ready.mockResolvedValueOnce(identity);
     fake.attach.mockResolvedValueOnce({ identity, dispose: vi.fn(async () => {}) });
-    await expect(actions.startHost()).resolves.toMatchObject({ message: 'Daemon started.' });
+    await expect(actions.startHost()).resolves.toMatchObject({ message: 'daemon 已启动。' });
   });
 
   it('s18g quit cancels stop while waiting for process exit', async () => {
@@ -594,7 +594,7 @@ describe('passive daemon reconnection', () => {
       const next = { identity, dispose: vi.fn(async () => {}) };
       fake.ready.mockResolvedValueOnce(identity);
       fake.attach.mockResolvedValue(next);
-      await expect(actions.startHost()).resolves.toMatchObject({ message: 'Daemon started.' });
+      await expect(actions.startHost()).resolves.toMatchObject({ message: 'daemon 已启动。' });
       expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next);
       await vi.advanceTimersByTimeAsync(61_000);
       expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
@@ -616,7 +616,7 @@ describe('passive daemon reconnection', () => {
     fake.ready.mockResolvedValueOnce(identity);
     expect(actions.recoverConnection(previous)).toBe(true);
     await vi.waitFor(() => expect(fake.bridge.replaceOwner).toHaveBeenCalledTimes(1));
-    await expect(actions.startHost()).resolves.toMatchObject({ message: 'Daemon started.' });
+    await expect(actions.startHost()).resolves.toMatchObject({ message: 'daemon 已启动。' });
     expect(candidate.dispose).toHaveBeenCalledOnce();
     expect(fake.bridge.replaceOwner).toHaveBeenLastCalledWith(next);
     expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
@@ -630,7 +630,7 @@ describe('passive daemon reconnection', () => {
     const next = { identity, dispose: vi.fn(async () => {}) };
     fake.ready.mockResolvedValueOnce(identity);
     fake.attach.mockResolvedValue(next);
-    await expect(actions.service('start')).resolves.toMatchObject({ message: 'Background service started.' });
+    await expect(actions.service('start')).resolves.toMatchObject({ message: '后台服务已启动。' });
     expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next);
     expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
   });
@@ -645,7 +645,7 @@ describe('passive daemon reconnection', () => {
     expect(outcomes.filter(value => value.status === 'fulfilled')).toHaveLength(1);
     expect(outcomes.filter(value => value.status === 'rejected')).toHaveLength(1);
     const rejected = outcomes.find(value => value.status === 'rejected');
-    expect(rejected).toMatchObject({ reason: expect.objectContaining({ message: expect.stringContaining('startup is unavailable') }) });
+    expect(rejected).toMatchObject({ reason: expect.objectContaining({ message: expect.stringContaining('等它结束再启动') }) });
     expect(fake.ready).toHaveBeenCalledTimes(2);
   });
 
@@ -810,12 +810,12 @@ describe('native window lifecycle', () => {
     fake.ready.mockImplementationOnce(() => new Promise<VerifiedDaemon>(resolve => { release = resolve; }));
     const first = actions.service('start');
     await Promise.resolve();
-    await expect(actions.startHost()).rejects.toThrow('startup is unavailable');
+    await expect(actions.startHost()).rejects.toThrow('等它结束再启动');
     const identity = { pid: 53, startedAt: 'managed', listen: '127.0.0.1:42345' };
     const next = { identity, dispose: vi.fn(async () => {}) };
     fake.attach.mockResolvedValueOnce(next);
     release(identity);
-    await expect(first).resolves.toEqual({ type: 'done', message: 'Background service started.' });
+    await expect(first).resolves.toEqual({ type: 'done', message: '后台服务已启动。' });
     expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next);
   });
 
@@ -824,7 +824,7 @@ describe('native window lifecycle', () => {
     const next = { identity, dispose: vi.fn(async () => {}) };
     fake.ready.mockResolvedValueOnce(identity);
     fake.attach.mockResolvedValueOnce(next);
-    await expect(actions.startHost('cli_exact_Bot_ID')).resolves.toEqual({ type: 'done', message: 'Selected Bot started.' });
+    await expect(actions.startHost('cli_exact_Bot_ID')).resolves.toEqual({ type: 'done', message: '所选 Bot 已启动。' });
     expect(fake.ready).toHaveBeenLastCalledWith(0, 'cli_exact_Bot_ID');
     expect(fake.attach).toHaveBeenCalledTimes(2);
     expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next);
@@ -835,7 +835,7 @@ describe('native window lifecycle', () => {
     const next = { identity: { pid: 43, startedAt: 'changed', listen: '127.0.0.1:42345' }, dispose: vi.fn(async () => {}) };
     fake.ready.mockResolvedValueOnce({ pid: 42, startedAt: 'expected', listen: '127.0.0.1:42345' });
     fake.attach.mockResolvedValueOnce(next);
-    await expect(actions.startHost()).rejects.toThrow('could not start and reconnect');
+    await expect(actions.startHost()).rejects.toThrow('没能启动并重新连上');
     expect(next.dispose).toHaveBeenCalledOnce();
     expect(fake.bridge.replaceOwner).not.toHaveBeenCalled();
   });
@@ -844,7 +844,7 @@ describe('native window lifecycle', () => {
     let release!: (value: VerifiedDaemon) => void;
     fake.ready.mockImplementationOnce(() => new Promise<VerifiedDaemon>(resolve => { release = resolve; }));
     const first = actions.startHost();
-    await expect(actions.startHost('cli_exact_Bot_ID')).rejects.toThrow('startup is unavailable');
+    await expect(actions.startHost('cli_exact_Bot_ID')).rejects.toThrow('等它结束再启动');
     const identity = { pid: 42, startedAt: 'new', listen: '127.0.0.1:42345' };
     fake.attach.mockResolvedValueOnce({ identity, dispose: vi.fn(async () => {}) });
     release(identity);
