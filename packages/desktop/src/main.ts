@@ -2,21 +2,21 @@ import { mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, autoUpdater, BrowserWindow, dialog, Menu, net, type Tray, type WebContents } from 'electron';
+import { app, autoUpdater, BrowserWindow, dialog, Menu, net, type WebContents } from 'electron';
 import { resolveDataRoot } from '../../daemon/src/config/data-root.js';
 import { attachExisting, AttachError } from './attach.js';
 import { installBridge, openAllowedExternal } from './bridge.js';
 import type { AttachedDaemon, DesktopBridge, DesktopResources } from './ipc-contract.js';
 import { desktopFullScreenChannel } from './ipc-contract.js';
-import { createDesktopTray } from './tray.js';
-import { DesktopUpdater } from './updates.js';
+import { createDesktopTray, type DesktopTray } from './tray.js';
+import { DesktopUpdater, scheduleUpdateChecks } from './updates.js';
 import { desktopUpdateConfiguration } from './update-configuration.js';
 import { createDaemonManager, StartHostRefusal } from './daemon-manager.js';
 import { createDaemonDependencies, prepareDesktopRoot } from './daemon-dependencies.js';
 import { desktopCliOptions, observeCli, registerCli } from './cli-registration.js';
 import { liveServiceActionRecord } from '../../daemon/src/service/action-report.js';
 import { changeLoginItem, followServiceHelper, repairServiceAtStartup, type LoginItemHooks, type ServiceRuntime } from './login-item.js';
-import type { CommandResult, MachineReply } from '@vonvon/protocol';
+import type { CommandResult, DesktopUpdate, MachineReply } from '@vonvon/protocol';
 import { ConnectionError, RpcError } from '@vonvon/client/browser';
 
 const restartDeadlineMs = 60_000;
@@ -61,7 +61,8 @@ export async function startDesktop(): Promise<void> {
   }
 
   let window: BrowserWindow | null = null;
-  let tray: Tray | null = null;
+  let tray: DesktopTray | null = null;
+  let stopUpdateChecks: (() => void) | undefined;
   let owner: AttachedDaemon | null = null;
   let bridge: DesktopBridge | null = null;
   let quitting = false;
@@ -130,6 +131,8 @@ export async function startDesktop(): Promise<void> {
   const cleanup = (): Promise<void> => cleanupPromise ??= (async () => {
     hide();
     let closeFailure: unknown;
+    stopUpdateChecks?.();
+    stopUpdateChecks = undefined;
     restartCancel?.abort();
     try {
       if (starting) await starting.catch(() => {});
@@ -205,6 +208,12 @@ export async function startDesktop(): Promise<void> {
         quitting = true;
       },
     });
+    // 菜单栏图标和窗口里的"有新版本"提示，都以最近一次检查的结果为准。
+    const noteUpdate = (update: DesktopUpdate): DesktopUpdate => {
+      tray?.setUpdate(update.state === 'available' || update.state === 'downloaded' ? update.latest : undefined);
+      return update;
+    };
+    await updater.settleInstallState().catch(() => {});
     const serviceRuntime: ServiceRuntime = {
       platform: process.platform, packaged: app.isPackaged, root, home: homedir(),
       executable: process.execPath, resources: process.resourcesPath,
@@ -560,7 +569,8 @@ export async function startDesktop(): Promise<void> {
         });
         return result.canceled ? null : result.filePaths;
       },
-      checkDesktopUpdate: () => updater.check(),
+      checkDesktopUpdate: async () => noteUpdate(await updater.check()),
+      retryDesktopUpdate: async () => noteUpdate(await updater.retry()),
       installDesktopUpdate: async () => {
         try { return await updater.install(); }
         catch (error) {
@@ -585,6 +595,13 @@ export async function startDesktop(): Promise<void> {
       // macOS routes editing shortcuts, including Cmd+V in password fields, through native menu roles.
       { role: 'editMenu', label: '编辑' },
     ]));
+    // 只在打包版配好了签名更新源时自动检查；检查只发现新版本，下载和安装仍由用户点。
+    if (updater.enabled && !terminating && !cleanupPromise) {
+      stopUpdateChecks = scheduleUpdateChecks(updater, update => {
+        if (terminating || cleanupPromise || !bridge) return;
+        bridge.publishUpdate(noteUpdate(update));
+      });
+    }
     await current.loadFile(uiIndex);
     if (repairNotice) void dialog.showMessageBox(current, { type: 'warning', title: 'Vonvon Bot', message: repairNotice, buttons: ['OK'] }).catch(() => {});
     if (focusWhenReady) show();

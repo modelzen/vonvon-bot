@@ -1,8 +1,11 @@
 import {expect, it} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
-import type {MachineRequestHandler} from '@vonvon/protocol';
+import type {DesktopUpdate, MachineRequestHandler} from '@vonvon/protocol';
 import {createClient} from '../../client/src/client';
-import {ClientProvider} from '../src/client-context';
+import {ClientProvider, type ShellCapabilities} from '../src/client-context';
+import {DesktopUpdateContext, newVersionOf} from '../src/desktop-update';
+import {AppShell} from '../src/LocalShell';
+import {SettingsHome} from '../src/TodayHome';
 import {UpdatePanel} from '../src/management/UpdatePanel';
 import {DraftGuardProvider} from '../src/settings/DraftGuard';
 
@@ -15,7 +18,7 @@ const render = (externalCoreAvailable: boolean, attached = false) => renderToSta
   <ClientProvider client={client}>
     <DraftGuardProvider>
       <UpdatePanel request={request} attached={attached} externalCoreAvailable={externalCoreAvailable}
-        version="0.7.14" device="这台 Mac" advancedSettings={<p>测试高级运行选项</p>}>
+        version="0.7.0" device="这台 Mac" advancedSettings={<p>测试高级运行选项</p>}>
         <p>测试启动选项</p>
       </UpdatePanel>
     </DraftGuardProvider>
@@ -24,7 +27,7 @@ const render = (externalCoreAvailable: boolean, attached = false) => renderToSta
 
 it('shows the installed desktop version before checking for updates', () => {
   const html = render(false);
-  expect(html).toContain('0.7.14');
+  expect(html).toContain('0.7.0');
   expect(html).toContain('这台 Mac');
   expect(html).toContain('尚未检查');
   expect(html).toContain('检查更新');
@@ -45,4 +48,66 @@ it('keeps external Core controls available when the installation supports them',
   expect(html).toContain('检查 Core 更新');
   expect(html).toContain('更新外部 Core');
   expect(html).toContain('查看 Core 更新进度');
+});
+
+const renderWith = (update?: DesktopUpdate, shell: ShellCapabilities = {checkDesktopUpdate: async () => ({state: 'current', current: '0.7.0', message: ''}), retryDesktopUpdate: async () => ({state: 'current', current: '0.7.0', message: ''}), installDesktopUpdate: async () => ({state: 'downloaded', current: '0.7.0', message: ''})}) => renderToStaticMarkup(
+  <ClientProvider client={client} shell={shell}>
+    <DraftGuardProvider>
+      <DesktopUpdateContext.Provider value={[update, () => {}]}>
+        <UpdatePanel request={request} attached={false} externalCoreAvailable={false} version="0.7.0" device="这台 Mac" advancedSettings={null}>{null}</UpdatePanel>
+      </DesktopUpdateContext.Provider>
+    </DraftGuardProvider>
+  </ClientProvider>,
+);
+
+it('shows an update the app found on its own, without a manual check', () => {
+  const html = renderWith({state: 'available', current: '0.7.0', latest: '0.7.1', message: '可下载并安装桌面更新'});
+  expect(html).toContain('有可用更新 · v0.7.1');
+  expect(html).toContain('下载更新');
+  expect(html).not.toContain('尚未检查');
+});
+
+it('offers a retry and a manual download when the last install did not take effect', () => {
+  const html = renderWith({state: 'install-pending', current: '0.7.0', latest: '0.7.1', message: '上次安装尚未生效，预期 0.7.1，当前 0.7.0'});
+  expect(html).toContain('上次安装未生效');
+  expect(html).toContain('上次安装尚未生效，预期 0.7.1，当前 0.7.0');
+  expect(html).toContain('重试');
+  expect(html).toContain('手动下载');
+  const none = renderWith({state: 'current', current: '0.7.0', latest: '0.7.0', message: '桌面应用已是最新版本'});
+  expect(none).not.toContain('手动下载');
+});
+
+it('disables the retry when the shell cannot retry', () => {
+  const html = renderWith({state: 'install-pending', current: '0.7.0', latest: '0.7.1', message: 'x'}, {checkDesktopUpdate: async () => ({state: 'current', current: '0.7.0', message: ''})});
+  expect(html.match(/<button[^>]*>(?:(?!<\/button>).)*重试<\/span><\/button>/)?.[0]).toContain('disabled');
+  const withRetry = renderWith({state: 'install-pending', current: '0.7.0', latest: '0.7.1', message: 'x'});
+  expect(withRetry.match(/<button[^>]*>(?:(?!<\/button>).)*重试<\/span><\/button>/)?.[0]).not.toContain('disabled');
+});
+
+it('only a downloadable or downloaded update marks the settings entry', () => {
+  const update = (state: DesktopUpdate['state']): DesktopUpdate => ({state, current: '0.7.0', latest: '0.7.1', message: ''});
+  expect(newVersionOf(update('available'))).toBe('0.7.1');
+  expect(newVersionOf(update('downloaded'))).toBe('0.7.1');
+  for (const state of ['current', 'unavailable', 'install-pending'] as const) expect(newVersionOf(update(state))).toBeUndefined();
+  expect(newVersionOf(undefined)).toBeUndefined();
+});
+
+const shell = (props: {updateVersion?: string}) => renderToStaticMarkup(
+  <AppShell page="home" view="agents" title="此刻" onNavigate={() => {}} onOpenList={() => {}} {...props}><p>内容</p></AppShell>,
+);
+
+it('marks the settings button, and only it, when a new version is waiting', () => {
+  const marked = shell({updateVersion: '0.7.1'});
+  expect(marked).toContain('aria-label="设置，有新版本 0.7.1"');
+  expect(marked).toContain('today-update-dot');
+  const plain = shell({});
+  expect(plain).toContain('aria-label="设置"');
+  expect(plain).not.toContain('today-update-dot');
+});
+
+it('says on the settings home which entry holds the new version', () => {
+  const home = (updateVersion?: string) => renderToStaticMarkup(<SettingsHome onNavigate={() => {}} onFeature={() => {}} updateVersion={updateVersion}/>);
+  expect(home('0.7.1')).toContain('有新版本 0.7.1');
+  expect(home()).not.toContain('有新版本');
+  expect(home()).toContain('后台运行与更新');
 });

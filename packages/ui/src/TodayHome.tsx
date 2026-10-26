@@ -28,10 +28,10 @@ const settingsEntries: {page: Page; title: string; description: string; icon: Lu
   {page: 'application', title: '应用与启动', description: '后台运行与更新', icon: Settings2},
   {page: 'diagnostics', title: '状态与诊断', description: '连接、日志与恢复', icon: Activity},
 ];
-export function SettingsHome({onNavigate, onFeature}: {onNavigate: (page: Page) => void; onFeature: (id: string) => void}) {
+export function SettingsHome({onNavigate, onFeature, updateVersion}: {onNavigate: (page: Page) => void; onFeature: (id: string) => void; updateVersion?: string}) {
   return <section className="today-settings-home"><header className="today-page-heading"><h1>设置</h1></header>
     {[{label: '模型与工具', entries: settingsEntries.slice(0, 4)}, {label: '连接与应用', entries: settingsEntries.slice(4)}].map(section => <section className="today-settings-section" aria-label={section.label} key={section.label}><h2>{section.label}</h2><div className="today-list-surface">{section.entries.map(item => <button type="button" className="today-settings-row" key={item.page} onClick={() => onNavigate(item.page)}>
-      <span className="today-setting-icon" data-page={item.page}><item.icon size={17} strokeWidth={1.7}/></span><span className="today-entity-copy"><strong>{item.title}</strong><small>{item.description}</small></span><ChevronRight size={14}/>
+      <span className="today-setting-icon" data-page={item.page}><item.icon size={17} strokeWidth={1.7}/></span><span className="today-entity-copy"><strong>{item.title}</strong><small>{item.page === 'application' && updateVersion ? `有新版本 ${updateVersion}` : item.description}</small></span>{item.page === 'application' && updateVersion && <span className="today-update-dot" aria-hidden="true"/>}<ChevronRight size={14}/>
     </button>)}</div></section>)}
     {uiFeatures.filter(item => item.slot === 'page').length > 0 && <div className="today-list-surface">{uiFeatures.filter(item => item.slot === 'page').map(item => <button type="button" className="today-settings-row" key={item.id} onClick={() => onFeature(item.id)}><span className="today-entity-copy"><strong>{item.label}</strong></span><ChevronRight size={14}/></button>)}</div>}
   </section>;

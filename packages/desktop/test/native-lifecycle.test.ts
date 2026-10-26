@@ -10,7 +10,7 @@ import type { Registration, VerifiedDaemon } from '../src/daemon-manager.js';
 const fake = vi.hoisted(() => ({
   app: undefined as unknown,
   window: undefined as unknown,
-  bridge: { requestQuit: vi.fn(), replaceOwner: vi.fn(async () => {}), dispose: vi.fn(async () => {}) },
+  bridge: { requestQuit: vi.fn(), publishUpdate: vi.fn(), replaceOwner: vi.fn(async () => {}), dispose: vi.fn(async () => {}) },
   owner: { dispose: vi.fn(async () => {}) },
   attach: vi.fn(),
   ready: vi.fn(async (): Promise<VerifiedDaemon> => ({ pid: 42, startedAt: 'initial', listen: '127.0.0.1:42345' })),
@@ -20,7 +20,7 @@ const fake = vi.hoisted(() => ({
   readRegistration: vi.fn(async (): Promise<Registration> => ({ kind: 'absent' })),
   verified: vi.fn(async (): Promise<VerifiedDaemon | null> => null),
   running: vi.fn(async (_previous: { pid: number; startedAt: string }) => false),
-  tray: { destroy: vi.fn() },
+  tray: { destroy: vi.fn(), setUpdate: vi.fn() },
   dock: {
     visible: true,
     isVisible: vi.fn(() => fake.dock.visible),
@@ -180,6 +180,8 @@ beforeEach(async () => {
   fake.bridge.replaceOwner.mockClear().mockResolvedValue(undefined);
   fake.owner.dispose.mockClear();
   fake.tray.destroy.mockClear();
+  fake.tray.setUpdate.mockClear();
+  fake.bridge.publishUpdate.mockClear();
   fake.attach.mockReset().mockResolvedValue(fake.owner);
   fake.ready.mockClear();
   fake.cliRegister.mockClear();
@@ -1025,5 +1027,71 @@ describe('native window lifecycle', () => {
     await vi.waitFor(() => expect(app.quit).toHaveBeenCalledOnce());
     expect(fake.bridge.dispose).toHaveBeenCalledOnce();
     expect(window.destroyed).toBe(true);
+  });
+});
+
+describe('automatic update checks and a stalled install', () => {
+  const record = () => join(temp, 'desktop-update-expected-version');
+  const minute = 60_000, hour = 60 * minute;
+  /** The outer beforeEach already started one desktop under real timers; this one starts under fake time. */
+  async function startUnderFakeTime(): Promise<void> {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    vi.mocked(net.fetch).mockClear();
+    fake.tray.setUpdate.mockClear();
+    fake.bridge.publishUpdate.mockClear();
+    await startDesktop();
+    actions = fake.install.mock.lastCall?.[3];
+  }
+
+  it('checks a minute after start, tells the window and the tray, and stops checking on quit', async () => {
+    try {
+      await startUnderFakeTime();
+      await vi.advanceTimersByTimeAsync(minute - 1);
+      expect(net.fetch).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      // The check reads the install record from disk first, which fake timers do not wait for.
+      await vi.waitFor(() => expect(fake.bridge.publishUpdate).toHaveBeenCalledOnce());
+      expect(net.fetch).toHaveBeenCalledExactlyOnceWith('https://updates.example.test/manifest.json', expect.objectContaining({ redirect: 'error' }));
+      expect(fake.bridge.publishUpdate).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ state: 'available', latest: '0.2.0' }));
+      expect(fake.tray.setUpdate).toHaveBeenLastCalledWith('0.2.0');
+      expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(25 * hour);
+      await vi.waitFor(() => expect(net.fetch).toHaveBeenCalledTimes(2));
+      await actions.confirmQuit();
+      await vi.advanceTimersByTimeAsync(72 * hour);
+      expect(net.fetch).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('does not check on its own without a signed update source', async () => {
+    try {
+      fake.updateConfiguration.mockResolvedValueOnce({ signed: false } as never);
+      await startUnderFakeTime();
+      await vi.advanceTimersByTimeAsync(72 * hour);
+      expect(net.fetch).not.toHaveBeenCalled();
+      expect(fake.bridge.publishUpdate).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('drops an expected-version record the running version already reached when it starts', async () => {
+    try {
+      await writeFile(record(), '0.1.0');
+      await startUnderFakeTime();
+      await expect(readFile(record(), 'utf8')).rejects.toThrow();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('keeps asking for a retry, not refusing for good, while the expected version is still ahead', async () => {
+    try {
+      await writeFile(record(), '0.5.0');
+      await startUnderFakeTime();
+      expect(await readFile(record(), 'utf8')).toBe('0.5.0');
+      await expect(actions.checkDesktopUpdate()).resolves.toMatchObject({ state: 'install-pending', latest: '0.5.0' });
+      expect(net.fetch).not.toHaveBeenCalled();
+      expect(fake.tray.setUpdate).toHaveBeenLastCalledWith(undefined);
+      await expect(actions.retryDesktopUpdate()).resolves.toMatchObject({ state: 'available', latest: '0.2.0' });
+      expect(fake.tray.setUpdate).toHaveBeenLastCalledWith('0.2.0');
+      await expect(readFile(record(), 'utf8')).rejects.toThrow();
+    } finally { vi.useRealTimers(); }
   });
 });

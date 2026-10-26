@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {readFile,writeFile,mkdir} from 'node:fs/promises';
+import {readFile,writeFile,mkdir,rm} from 'node:fs/promises';
 import {dirname} from 'node:path';
 import type {DesktopUpdate} from '@vonvon/protocol';
 
@@ -19,7 +19,8 @@ export interface DesktopUpdateOptions {
   beforeInstall?:()=>Promise<void>;
   statePath?:string;
 }
-const manifestSchema = z.object({version:z.string().regex(/^\d+\.\d+\.\d+$/),feedURL:z.string().url()}).strict();
+/** 清单里没认识的字段一律忽略，以后加字段（说明、最低系统版本……）不会让已发出的版本解析失败；必需的两项和下面的同源检查照旧。 */
+const manifestSchema = z.object({version:z.string().regex(/^\d+\.\d+\.\d+$/),feedURL:z.string().url()});
 function versionParts(version:string):number[] { return version.split('.').map(Number); }
 function isNewer(latest:string,current:string):boolean {
   const a = versionParts(latest), b = versionParts(current);
@@ -35,14 +36,37 @@ export class DesktopUpdater {
   constructor(private readonly options:DesktopUpdateOptions) {
     options.driver.on('error',()=>{this.nativeError = true;});
   }
-  private result(state:DesktopUpdate['state'],message:string):DesktopUpdate { return {state,current:this.options.current,latest:this.latest,message}; }
+  private result(state:DesktopUpdate['state'],message:string,latest=this.latest):DesktopUpdate { return {state,current:this.options.current,latest,message}; }
+  /** 打包版、配置了更新地址并通过签名校验：只有这时才有东西可查，自动检查也只在这时开。 */
+  get enabled():boolean { return this.options.signed && Boolean(this.options.manifestURL); }
+  /** 正在下载：这时不再发起自动检查。 */
+  get busy():boolean { return this.pending !== undefined; }
+  /**
+   * 上次点了"安装并重启"记下的预期版本。当前版本已经到了（或记录读不懂）就删掉记录，
+   * 否则一次没装成功的更新会让以后每次检查都被拦住。返回仍未生效的预期版本。
+   */
+  private async unsettledInstall():Promise<string|undefined> {
+    const path = this.options.statePath;
+    if (!path) return undefined;
+    const raw = await readFile(path,'utf8').catch(()=>undefined);
+    if (raw === undefined) return undefined;
+    const expected = raw.trim();
+    if (/^\d+\.\d+\.\d+$/.test(expected) && isNewer(expected,this.options.current)) return expected;
+    await rm(path,{force:true}).catch(()=>{});
+    return undefined;
+  }
+  /** 启动时调用一次，把已经过期的预期版本记录清掉。 */
+  async settleInstallState():Promise<void> { await this.unsettledInstall(); }
+  /** 用户选了"重试"：忘掉上次没生效的安装，重新检查。 */
+  async retry():Promise<DesktopUpdate> {
+    if (this.options.statePath) await rm(this.options.statePath,{force:true});
+    return this.check();
+  }
   async check():Promise<DesktopUpdate> {
     if (this.downloadedVersion) return this.result('downloaded','更新已下载，点击安装并重启');
     this.feedURL = undefined;
-    if (this.options.statePath) {
-      const expected = await readFile(this.options.statePath,'utf8').catch(()=>undefined);
-      if (expected && expected.trim() !== this.options.current) return this.result('unavailable',`上次安装尚未生效，预期 ${expected.trim()}，当前 ${this.options.current}`);
-    }
+    const expected = await this.unsettledInstall();
+    if (expected) return this.result('install-pending',`上次安装尚未生效，预期 ${expected}，当前 ${this.options.current}`,expected);
     if (!this.options.signed || !this.options.manifestURL) return this.result('unavailable','此预览版没有配置签名更新源。桌面版本和内置 Core 保持不变。');
     const source = new URL(this.options.manifestURL);
     if (source.protocol !== 'https:') throw new Error('桌面更新源必须使用 HTTPS');
@@ -83,4 +107,41 @@ export class DesktopUpdater {
     }).finally(()=>{this.pending = undefined;});
     return this.pending;
   }
+}
+
+export interface UpdateScheduleOptions {
+  firstDelayMs?:number;
+  intervalMs?:number;
+  /** 每次再多等 0 到这么久，免得所有人在同一时刻查。 */
+  jitterMs?:number;
+  /** 检查失败（比如没联网）后多久再试。 */
+  retryMs?:number;
+  random?:()=>number;
+  setTimer?:(callback:()=>void,ms:number)=>unknown;
+  clearTimer?:(timer:unknown)=>void;
+}
+/**
+ * 启动约 60 秒后查一次，之后每 24 小时（加最多 1 小时随机延迟）查一次，只查不装；失败的检查 1 小时后再试。
+ * 返回的函数取消还没触发的定时器，退出时调用。
+ */
+export function scheduleUpdateChecks(updater:{check():Promise<DesktopUpdate>;readonly busy:boolean},onResult:(update:DesktopUpdate)=>void,options:UpdateScheduleOptions={}):()=>void {
+  const hour = 60*60*1000;
+  const random = options.random ?? Math.random;
+  const set = options.setTimer ?? ((callback,ms)=>{const timer = setTimeout(callback,ms);timer.unref();return timer;});
+  const clear = options.clearTimer ?? (timer=>{clearTimeout(timer as NodeJS.Timeout);});
+  let timer:unknown;
+  let stopped = false;
+  const arm = (ms:number) => {timer = set(()=>{void run();},ms);};
+  const run = async () => {
+    timer = undefined;
+    let next = (options.intervalMs ?? 24*hour) + random()*(options.jitterMs ?? hour);
+    if (!updater.busy) {
+      let update:DesktopUpdate|undefined;
+      try {update = await updater.check();} catch {next = (options.retryMs ?? hour) + random()*(options.jitterMs ?? hour);}
+      if (update && !stopped) try {onResult(update);} catch {/* 提示失败不影响下一次检查 */}
+    }
+    if (!stopped) arm(next);
+  };
+  arm(options.firstDelayMs ?? 60*1000);
+  return () => {stopped = true;if (timer !== undefined) clear(timer);timer = undefined;};
 }
