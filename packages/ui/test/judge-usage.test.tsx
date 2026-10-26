@@ -1,7 +1,7 @@
 import {renderToStaticMarkup} from 'react-dom/server';
 import {expect, test} from 'vitest';
 import type {AdminReply, JudgeUsageDay} from '@vonvon/protocol';
-import {botTotals, dayLabel, JudgeUsageRows, judgeUsageReader, type JudgeUsageRead, type JudgeUsageView} from '../src/management/JudgeUsage';
+import {botTotals, dayLabel, judgeSourceTotals, JudgeUsageRows, judgeUsageReader, type JudgeUsageRead, type JudgeUsageView} from '../src/management/JudgeUsage';
 
 const days: JudgeUsageDay[] = [
   {date: '2026-10-19', total: 5, sources: [{kind: 'llm', id: 'codex-appserver', label: 'Codex', count: 3}, {kind: 'decision', id: 'typesafe', label: 'TypeSafe', count: 2}], bots: [{agentId: 'cli_fixture', agentName: 'Bot 7', count: 3}]},
@@ -18,7 +18,7 @@ test('dates use daemon today and include the year only across years', () => {
 });
 test('daily rows show today and nonzero days, sources and bot totals', () => {
   const html = render({kind: 'ready', view});
-  for (const text of ['10月19日（今天）', '5 次', '语言模型 Codex 3 次 · 决策模型 TypeSafe 2 次', '10月17日', '按 Bot 看', '今天 3 次 · 14 天 4 次']) expect(html).toContain(text);
+  for (const text of ['10月19日（今天）', '5 次', '语言模型 Codex 3 次 · 决策模型 Jev 2 次', '10月17日', '按 Bot 看', '今天 3 次 · 14 天 4 次']) expect(html).toContain(text);
   expect(html).not.toContain('10月18日');
   expect(botTotals(days)).toEqual([{agentId: 'cli_fixture', agentName: 'Bot 7', today: 3, total: 4}]);
 });
@@ -59,4 +59,42 @@ test.each([{unreadBots: 1}, {botsUnreadable: true}])('empty unreadable usage doe
 });
 test('footer describes attempted calls including connection failures', () => {
   expect(render({kind: 'ready', view})).toContain('计入已发起的调用，包括连接失败。');
+});
+
+test('home summaries keep Jev calls separate from language models and distinguish today from history', () => {
+  expect(judgeSourceTotals(days)).toEqual([
+    {key: 'llm:codex-appserver', label: 'Codex', today: 3, total: 4},
+    {key: 'decision:typesafe', label: 'Jev', today: 2, total: 2},
+  ]);
+  const olderOnly = [{...days[0]!, sources: []}, days[0]!];
+  expect(judgeSourceTotals(olderOnly).find(source => source.label === 'Jev')).toMatchObject({today: 0, total: 2});
+  const html = renderToStaticMarkup(<JudgeUsageRows read={{kind: 'ready', view}} onRead={() => {}} compact/>);
+  expect(html).toContain('Jev');
+  expect(html).toContain('每日记录');
+  expect(html).toContain('今天');
+  expect(html).not.toContain('重新读取判断次数');
+});
+
+test('home summaries retain partial-read warnings and do not invent Jev use for empty history', () => {
+  const html = renderToStaticMarkup(<JudgeUsageRows read={{kind: 'ready', view: {...view, unreadBots: 1}}} onRead={() => {}} compact disabled/>);
+  expect(html).toContain('有 1 个 Bot 的判断次数读不了');
+  expect(html).toContain('当前为上次读取的数据');
+  expect(html).toContain('Jev');
+  expect(judgeSourceTotals([{...days[0]!, total: 0, sources: [], bots: []}])).toEqual([]);
+});
+
+test('the Jev tab shows only its daily calls without attributing language-model or Bot totals to Jev', () => {
+  const html = renderToStaticMarkup(<JudgeUsageRows read={{kind: 'ready', view}} onRead={() => {}} dailySource={{kind: 'decision', id: 'typesafe'}}/>);
+  expect(html).toContain('10月19日（今天）');
+  expect(html).toContain('2 次');
+  for (const content of ['5 次', 'Codex', '10月17日', 'Bot 7', '按 Bot 看', '每日记录', '智能模式的判断次数', '最近 14 天', '<details']) expect(html).not.toContain(content);
+});
+
+test('the Jev tab keeps real zero dates and reports incomplete or failed reads', () => {
+  const current = {...view, days: [{...days[0]!, sources: days[0]!.sources.filter(source => source.kind === 'llm')}], unreadBots: 1};
+  const html = renderToStaticMarkup(<JudgeUsageRows read={{kind: 'ready', view: current, problem: '没连上 daemon'}} onRead={() => {}} dailySource={{kind: 'decision', id: 'typesafe'}}/>);
+  expect(html).toContain('0 次');
+  expect(html).not.toContain('3 次');
+  expect(html).toContain('部分记录暂时无法读取');
+  expect(html).toContain('没连上 daemon');
 });

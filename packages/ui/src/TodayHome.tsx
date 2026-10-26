@@ -1,40 +1,20 @@
-import {useState} from 'react';
-import {conversationTime} from './conversation-time';
-import {useShellCapabilities} from './client-context';
-import {botChatUrl,groupUrl,openExternalUrl} from './url-actions';
-import {Activity, ArrowUpRight, ArrowRight, ChartNoAxesColumn, ChevronRight, Settings, Cpu, Download, Link, Settings2, Wrench, type LucideIcon} from 'lucide-react';
-import type {AgentId, DesktopSnapshot, GroupId} from '@vonvon/protocol';
-import {BotListRow} from './BotListRow';
-import {GlowButton} from './GlowButton';
-import {IconButton} from './reference/components/ui';
+import {Activity, ArrowRight, ChartNoAxesColumn, ChevronRight, Cpu, Download, Link, Settings2, Wrench, type LucideIcon} from 'lucide-react';
+import type {DesktopSnapshot} from '@vonvon/protocol';
+import {NowBotList} from './NowBotList';
+import {NowActivity} from './NowActivity';
+import {NowUsage} from './NowUsage';
 import {uiFeatures} from './features';
 import type {Page} from './collaboration-model';
 
-export function TodayHome({snapshot, onAgent, onGroup, onSetup, onRegister, disabled}: {snapshot: DesktopSnapshot; onAgent: (id: AgentId) => void; onGroup: (id: GroupId) => void; onSetup: () => void; onRegister: () => void; disabled: boolean}) {
-  const shell=useShellCapabilities();
-  const [error,setError]=useState('');
+export function TodayHome({snapshot, onSetup, onRegister, onOpenUsage, disabled}: {snapshot: DesktopSnapshot; onSetup: () => void; onRegister: () => void; onOpenUsage: () => void; disabled: boolean}) {
   const attention = snapshot.agents.filter(bot => bot.readError || (bot.enabled && (!bot.running || bot.connection !== 'connected')));
-  const recent=snapshot.recentConversations;
-  const groupCount = (id: AgentId) => new Set(snapshot.memberships.filter(member => member.agentId === id).map(member => member.groupId)).size;
-  async function open(url:string,kind:'bot-chat'|'group') {try {await openExternalUrl(url,kind,shell); setError('');} catch (error) {setError(error instanceof Error ? error.message : '无法打开飞书。');}}
+  const connected = snapshot.host.kind === 'connected' && !snapshot.stale;
   return <div className="today-home">
     <header className="today-intro"><h1>此刻</h1>{snapshot.stale && <span role="status">正在更新…</span>}</header>
     {!snapshot.stale && attention.length > 0 && <button type="button" className="today-connection-note" onClick={onSetup}><span className="today-state-dot"/><span>{attention.length} 个 Bot 需要检查连接</span><ArrowRight size={14}/></button>}
-    {error && <p role="alert" className="gd-note gd-warning">{error}</p>}
-    <section className="today-home-section" aria-label="你的 Bot">
-      <header><h2>你的 Bot</h2><GlowButton disabled={disabled} onClick={onRegister}>添加 Bot</GlowButton></header>
-      <div className="today-list-surface">{snapshot.agents.map(bot => <BotListRow key={bot.id} agent={bot} groupCount={groupCount(bot.id)} onSelect={() => onAgent(bot.id)}
-        status={bot.readError ? '配置读取失败' : !bot.enabled ? '已停用' : bot.connection === 'connected' ? undefined : bot.connection === 'connecting' || bot.connection === 'reconnecting' ? '正在连接' : '未连接'}
-        action={<IconButton type="button" variant="ghost" className="today-icon-button" label={`在飞书打开 ${bot.name}`} title="在飞书打开" onClick={()=>void open(botChatUrl(bot.id),'bot-chat')}><ArrowUpRight size={17}/></IconButton>}/>)}</div>
-    </section>
-    <section className="today-home-section" aria-label="最近对话">
-      <header><h2>最近对话</h2></header>
-      {recent?.items.length ? <div className="today-list-surface">{recent.items.map(item => {const group=snapshot.groups.find(group=>group.id===item.groupId);const bot=snapshot.agents.find(bot=>bot.id===item.agentId);const time=conversationTime(item.updatedAt);return <div className="today-entity-row today-recent-row" key={`${item.agentId}:${item.threadId}`}>
-        <button type="button" className="today-recent-open" aria-label={`在飞书打开 ${group?.name ?? '群聊'} 的对话：${item.summary || '查看对话'}`} onClick={()=>void open(groupUrl(item.groupId,item.threadId),'group')}><span className="today-entity-copy"><strong className="overview-summary" title={item.summary || '查看对话'}>{item.summary || '查看对话'}</strong><small className="overview-context"><span title={group?.name}>{group?.name ?? '群聊'}</span>{bot && <><span aria-hidden="true">·</span><span title={bot.name}>{bot.name}</span></>}</small></span><time className="overview-time" dateTime={time?.dateTime} title={time?.title}>{time?.label}</time><ArrowUpRight className="overview-open-icon" size={15}/></button>
-        <IconButton type="button" variant="ghost" className="today-icon-button" title="群设置" label={`设置 ${group?.name ?? '群聊'}`} onClick={()=>onGroup(item.groupId)}><Settings size={15} strokeWidth={1.7}/></IconButton>
-      </div>;})}</div> : <p className="today-recent-empty">{recent?.unavailableBots ? '暂时无法读取对话记录。' : '在飞书开始对话，最近的内容会显示在这里。'}</p>}
-      {!!recent?.items.length && !!recent.unavailableBots && <p className="gd-note">部分 Bot 的记录暂时无法读取。</p>}
-    </section>
+    <NowBotList snapshot={snapshot} connected={connected} onRegister={onRegister} disabled={disabled}/>
+    <NowActivity snapshot={snapshot}/>
+    <NowUsage disabled={!connected} onOpenUsage={onOpenUsage}/>
   </div>;
 }
 

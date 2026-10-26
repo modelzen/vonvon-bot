@@ -618,7 +618,7 @@ function DesktopApp() {
               保留上次成功读取的群配置。读取恢复前请勿重复绑定。
             </InlineNotice>
           )}
-          {page === "home" && snapshot.agents.length > 0 && <TodayHome snapshot={snapshot} onAgent={id => select({kind: "agent", id})} onGroup={openGroup} onSetup={() => openPage("setup")} onRegister={() => void register()} disabled={!ready || busy}/>}
+          {page === "home" && snapshot.agents.length > 0 && <TodayHome snapshot={snapshot} onSetup={() => openPage("setup")} onRegister={() => void register()} onOpenUsage={() => openPage("usage")} disabled={!ready || busy}/>}
           {page === "settings" && <SettingsHome onNavigate={openPage} onFeature={id => navigate(() => setFeatureId(id))}/>}
           {page === "collaboration" && (
             <>
