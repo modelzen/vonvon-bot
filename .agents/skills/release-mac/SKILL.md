@@ -36,11 +36,11 @@ description: 按 owner 指定版本和 main SHA 构建、公证、验收 Vonvon 
 
 ## 公开发布与撤回
 
-COS/CDN 写入工具尚未实现；不得现场拼命令直接上传。按 [workflow.md](references/workflow.md) 先准备具体命令、服务端不覆盖保护、缓存头、inventory 校验和回执方案，交 owner 确认命令后才执行获准上传阶段。只问 profile／配置路径，不索要密钥明文，不回显凭据文件，不把密钥放命令行；COS 与 CDN 凭据分别确认存在和权限。
+COS/CDN 写入工具尚未实现；不得现场拼命令直接上传。按 [workflow.md](references/workflow.md) 先准备具体命令、服务端不覆盖保护、缓存头、inventory 校验和回执方案，交 owner 确认命令后才执行获准上传阶段。只问 profile／配置路径，不索要密钥明文，不回显凭据文件，不把密钥放命令行；COS 凭据（启用了 CDN 时还有 CDN 凭据）分别确认存在和权限。
 
-版本化 ZIP/feed/DMG 的公网 HTTPS、完整 SHA-256、缓存头都核验成功后，向 owner 展示版本、源码 SHA、公证 submission ID、最终 ZIP/DMG 哈希和公开 URL，再按本文开头那条规则取得确认，才可最后切 stable manifest。使用 `scripts/verify-public-release.mjs` 复核固定 URL，不能跟随重定向或加随机 query 绕缓存；必须看到它的成功输出才算通过，不能只看退出码。只有公网复核通过才报告发布完成，并持久保存发布回执。
+版本化 ZIP/feed/DMG 上传后，用 `scripts/verify-public-release.mjs --versioned-only` 核验公网 HTTPS、完整 SHA-256 和每个对象的响应头（表见 workflow.md），把它输出的 JSON（版本、源码 SHA、公证 submission ID、公开 URL 和哈希）展示给 owner，再按本文开头那条规则取得确认，才可最后切 stable manifest。使用 `scripts/verify-public-release.mjs` 复核固定 URL，不能跟随重定向或加随机 query 绕缓存；必须看到它的成功输出才算通过，不能只看退出码。只有公网复核通过才报告发布完成，并持久保存发布回执。
 
-manifest 使用 `Cache-Control: no-cache`，CDN 短 TTL／重验证；版本化文件使用 `public, max-age=31536000, immutable`。更新格式保持 Squirrel.Mac 的 manifest `{version, feedURL}`、feed `{url, name, notes, pub_date}`，同源 HTTPS。回滚只恢复事先验证并保存的旧 manifest、刷新 CDN 以停推；已升级客户端不降级，修复版必须高于**曾发布的最高版本**。
+manifest 使用 `Cache-Control: no-cache` 和 `application/json`，如果启用了 CDN 就配短 TTL／重验证；版本化文件使用 `public, max-age=31536000, immutable`，feed 也必须是 `application/json`。头传错了按 workflow.md 只改元数据，不覆盖字节、不废版本号。更新格式保持 Squirrel.Mac 的 manifest `{version, feedURL}`、feed `{url, name, notes, pub_date}`，同源 HTTPS。回滚只恢复事先验证并保存的旧 manifest（启用了 CDN 就刷新）以停推；已升级客户端不降级，修复版必须高于**曾发布的最高版本**。
 
 ## 输出与清理
 
