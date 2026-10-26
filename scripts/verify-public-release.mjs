@@ -130,21 +130,46 @@ async function verifyDownload(url, record, fetchImpl, json = false) {
   return json ? parseJSON(Buffer.concat(chunks).toString('utf8')) : undefined;
 }
 
-export async function verifyPublicRelease({ out, version, sha, fetchImpl = fetch } = {}) {
-  assertSecureTransport();
-  const evidence = await validateReleaseInventory(out, { version, sha });
-  const byName = name => evidence.files.find(record => record.file === name);
-  const manifest = validateManifest(await verifyDownload(DEFAULT_MANIFEST_URL, byName('manifest.json'), fetchImpl, true));
-  if (manifest.version !== version) throw new Error('Public manifest differs from the expected release version');
-  const feed = await verifyDownload(manifest.feedURL, byName(`feed-${version}.json`), fetchImpl, true);
+function checkFeed(feed, version) {
   if (!feed || Object.keys(feed).sort().join(',') !== 'name,notes,pub_date,url' || typeof feed.notes !== 'string'
     || feed.name !== `Vonvon Bot ${version}` || !Number.isFinite(Date.parse(feed.pub_date))
     || feed.url !== new URL(`Vonvon-Bot-${version}-universal.zip`, DEFAULT_MANIFEST_URL).href) throw new Error('Public Squirrel feed differs from this release');
+}
+
+/** Feed, ZIP and DMG: HTTP 200, no redirects, headers, exact size and full SHA-256. */
+async function verifyVersionedObjects(evidence, version, manifest, fetchImpl) {
+  const byName = name => evidence.files.find(record => record.file === name);
+  const urls = { [`feed-${version}.json`]: manifest.feedURL };
+  checkFeed(await verifyDownload(manifest.feedURL, byName(`feed-${version}.json`), fetchImpl, true), version);
   for (const extension of ['zip', 'dmg']) {
     const record = byName(`Vonvon-Bot-${version}-universal.${extension}`);
-    await verifyDownload(new URL(record.file, DEFAULT_MANIFEST_URL).href, record, fetchImpl);
+    urls[record.file] = new URL(record.file, DEFAULT_MANIFEST_URL).href;
+    await verifyDownload(urls[record.file], record, fetchImpl);
   }
+  return evidence.files.filter(record => urls[record.file]).map(record => ({ ...record, url: urls[record.file] }));
+}
+
+export async function verifyPublicRelease({ out, version, sha, fetchImpl = fetch } = {}) {
+  assertSecureTransport();
+  const evidence = await validateReleaseInventory(out, { version, sha });
+  const manifest = validateManifest(await verifyDownload(DEFAULT_MANIFEST_URL, evidence.files.find(record => record.file === 'manifest.json'), fetchImpl, true));
+  if (manifest.version !== version) throw new Error('Public manifest differs from the expected release version');
+  await verifyVersionedObjects(evidence, version, manifest, fetchImpl);
   return { version, sourceCommit: sha, verifiedAt: new Date().toISOString(), files: evidence.files, publiclyVerified: true };
+}
+
+/**
+ * Before the stable switch the live manifest is 404 or an older release, so it is not read.
+ * URLs come from the local manifest; the result is the evidence shown to the owner.
+ */
+export async function verifyVersionedRelease({ out, version, sha, fetchImpl = fetch } = {}) {
+  assertSecureTransport();
+  const evidence = await validateReleaseInventory(out, { version, sha });
+  const manifest = validateManifest(parseJSON(await fs.readFile(join(out, 'manifest.json'), 'utf8')));
+  if (manifest.version !== version) throw new Error('Local manifest differs from the expected release version');
+  const files = await verifyVersionedObjects(evidence, version, manifest, fetchImpl);
+  return { version, sourceCommit: sha, verifiedAt: new Date().toISOString(), notarization: evidence.inventory.notarization ?? null, files,
+    stableManifest: 'not read or changed', versionedObjectsVerified: true };
 }
 
 // macOS mktemp paths live under the /var -> /private/var link; ESM entry URLs are
@@ -152,9 +177,10 @@ export async function verifyPublicRelease({ out, version, sha, fetchImpl = fetch
 const invokedPath = process.argv[1] ? await fs.realpath(resolve(process.argv[1])).catch(() => null) : null;
 if (invokedPath && invokedPath === await fs.realpath(fileURLToPath(import.meta.url))) {
   try {
-    const { values } = parseArgs({ options: { out: { type: 'string' }, version: { type: 'string' }, sha: { type: 'string' }, 'local-only': { type: 'boolean' } } });
-    if (!values.out || !values.version || !values.sha) throw new Error('Use --out /persistent/evidence --version X.Y.Z --sha FULL_SHA [--local-only]');
+    const { values } = parseArgs({ options: { out: { type: 'string' }, version: { type: 'string' }, sha: { type: 'string' }, 'local-only': { type: 'boolean' }, 'versioned-only': { type: 'boolean' } } });
+    if (!values.out || !values.version || !values.sha || (values['local-only'] && values['versioned-only'])) throw new Error('Use --out /persistent/evidence --version X.Y.Z --sha FULL_SHA [--local-only | --versioned-only]');
     if (values['local-only']) { await validateReleaseInventory(values.out, values); console.log('Local formal-release evidence verified. No upload or stable switch authorized.'); }
+    else if (values['versioned-only']) console.log(JSON.stringify(await verifyVersionedRelease(values), null, 2));
     else console.log(JSON.stringify(await verifyPublicRelease(values), null, 2));
   } catch (error) { console.error(error.message.replace(/\/Users\/[^/\s"']+/g, '/Users/<u>')); process.exitCode = 1; }
 }

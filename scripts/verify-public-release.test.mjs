@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { assertSecureTransport, DEFAULT_MANIFEST_URL, readStableManifest, validateManifest, validateReleaseInventory, verifyPublicRelease } from './verify-public-release.mjs';
+import { assertSecureTransport, DEFAULT_MANIFEST_URL, readStableManifest, validateManifest, validateReleaseInventory, verifyPublicRelease, verifyVersionedRelease } from './verify-public-release.mjs';
 
 const version = '0.7.1', sha = 'a'.repeat(40);
 const base = new URL('.', DEFAULT_MANIFEST_URL);
@@ -113,6 +113,36 @@ test('public verification rejects stale versioned cache policy and altered downl
   await assert.rejects(verifyPublicRelease({ out: '/evidence', version, sha, fetchImpl: async url => serve(url, true) }), /SHA-256 or size/);
 });
 
+const versionedHeaders = file => ({ cache: file === 'manifest.json' ? 'no-cache' : 'public, max-age=31536000, immutable', type: file.endsWith('.json') ? 'application/json' : 'application/octet-stream' });
+
+test('versioned-only verification checks feed, ZIP and DMG before the stable switch without reading the live manifest', async t => {
+  const data = fixture(t);
+  const serve = (override = {}) => async (url, options) => {
+    assert.equal(options.redirect, 'error');
+    if (url === DEFAULT_MANIFEST_URL) throw new Error('the live manifest must not be read before the stable switch');
+    const file = basename(new URL(url).pathname);
+    return response(override.bytes?.(file) ?? data.files.get(file), { ...versionedHeaders(file), ...override.headers?.(file) });
+  };
+  const result = await verifyVersionedRelease({ out: '/evidence', version, sha, fetchImpl: serve() });
+  assert.equal(result.versionedObjectsVerified, true);
+  assert.equal(result.publiclyVerified, undefined);
+  assert.deepEqual(result.files.map(record => record.file).sort(), [`Vonvon-Bot-${version}-universal.dmg`, `Vonvon-Bot-${version}-universal.zip`, `feed-${version}.json`]);
+  assert.ok(result.files.every(record => record.url === new URL(record.file, DEFAULT_MANIFEST_URL).href && /^[a-f0-9]{64}$/.test(record.sha256)));
+  await assert.rejects(verifyVersionedRelease({ out: '/evidence', version, sha, fetchImpl: serve({ headers: file => file.startsWith('feed-') ? { type: 'application/octet-stream' } : {} }) }), /application\/json/);
+  await assert.rejects(verifyVersionedRelease({ out: '/evidence', version, sha, fetchImpl: serve({ headers: file => file.endsWith('.dmg') ? { cache: '' } : {} }) }), /Versioned objects/);
+  await assert.rejects(verifyVersionedRelease({ out: '/evidence', version, sha, fetchImpl: serve({ bytes: file => file.endsWith('.zip') ? 'wrong bytes' : undefined }) }), /SHA-256 or size/);
+  await assert.rejects(verifyVersionedRelease({ out: '/evidence', version, sha, fetchImpl: async () => response('', { status: 404 }) }), /HTTP 200/);
+});
+
+test('full public verification also requires the feed to be served as JSON', async t => {
+  const data = fixture(t);
+  const fetchImpl = async url => {
+    const file = basename(new URL(url).pathname);
+    return response(data.files.get(file), { ...versionedHeaders(file), ...(file.startsWith('feed-') ? { type: 'application/octet-stream' } : {}) });
+  };
+  await assert.rejects(verifyPublicRelease({ out: '/evidence', version, sha, fetchImpl }), /application\/json/);
+});
+
 test('CLI runs through a symlinked directory instead of silently exiting 0', async t => {
   // macOS mktemp paths sit under the /var -> /private/var link; simulate that alias.
   const root = await fs.mkdtemp(join(tmpdir(), 'verify-cli-'));
@@ -124,7 +154,7 @@ test('CLI runs through a symlinked directory instead of silently exiting 0', asy
   const usage = run([]);
   assert.equal(usage.status, 1);
   assert.match(usage.stderr, /--out/);
-  for (const mode of [['--local-only'], []]) {
+  for (const mode of [['--local-only'], ['--versioned-only'], []]) {
     const missing = run(['--out', join(root, 'missing'), '--version', '0.7.0', '--sha', 'a'.repeat(40), ...mode]);
     assert.equal(missing.status, 1, `mode ${mode.join(' ') || 'full'} must fail on missing evidence`);
     assert.match(missing.stderr, /ENOENT|no such file/i);
