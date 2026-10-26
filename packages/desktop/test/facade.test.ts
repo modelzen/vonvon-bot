@@ -69,6 +69,34 @@ describe('synchronous desktop facade', () => {
     await expect(shell.installDesktopUpdate()).rejects.toThrow();
     expect(h.calls.slice(-2)).toEqual([desktopChannels.checkDesktopUpdate, desktopChannels.installDesktopUpdate]);
   });
+  it('retries a stalled update through its own channel and validates the reply', async () => {
+    const h = harness();
+    const { shell } = createDesktopFacades(h.transport);
+    const update = { state: 'install-pending', current: '1.0.0', latest: '1.1.0', message: 'x' };
+    h.replies.set(desktopChannels.retryDesktopUpdate, async () => ({ ok: true, value: update }));
+    await expect(shell.retryDesktopUpdate()).resolves.toEqual(update);
+    h.replies.set(desktopChannels.retryDesktopUpdate, async () => ({ ok: true, value: { ...update, state: 'invalid' } }));
+    await expect(shell.retryDesktopUpdate()).rejects.toThrow();
+  });
+  it('delivers automatic update results, replays the latest to a late listener, and drops malformed ones', async () => {
+    const h = harness();
+    const { shell, client } = createDesktopFacades(h.transport);
+    const early: unknown[] = [];
+    const off = shell.onDesktopUpdate(update => early.push(update));
+    const found = { state: 'available', current: '1.0.0', latest: '1.1.0', message: 'x' };
+    h.event({ type: 'update', value: found });
+    expect(early).toEqual([found]);
+    const late: unknown[] = [];
+    shell.onDesktopUpdate(update => late.push(update));
+    expect(late).toEqual([found]);
+    off();
+    const errors: string[] = [];
+    client.onError(error => errors.push(error.message));
+    h.event({ type: 'update', value: { ...found, state: 'bogus' } });
+    expect(errors).toEqual(['Invalid desktop event']);
+    expect(early).toEqual([found]);
+    expect(late).toEqual([found]);
+  });
   it('forwards the optional selected Bot unchanged and validates the machine reply', async () => {
     const h = harness();
     const requests: unknown[][] = [];

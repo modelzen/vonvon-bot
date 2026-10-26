@@ -5,7 +5,7 @@ import { ConnectionError, RpcError } from '@vonvon/client/browser';
 import {
   adminRequestSchema, collaborationRequestSchema, commandSchema,
   directoryRequestSchema, environmentRequestSchema, libraryRequestSchema, machineRequestSchema, memoryRequestSchema, contextPreviewRequestSchema,
-  settingsRequestSchema, machineReplySchema, type MachineReply,
+  settingsRequestSchema, machineReplySchema, type DesktopUpdate, type MachineReply,
 } from '@vonvon/protocol';
 import { allowedExternalUrl, type ExternalUrlKind } from '../../ui/src/url-actions.js';
 import { ServiceActionError } from './service-error.js';
@@ -16,7 +16,7 @@ import {
 } from './ipc-contract.js';
 
 const externalKinds: readonly ExternalUrlKind[] = [
-  'registration', 'authorization', 'verification', 'event-settings', 'app-console', 'group', 'bot-chat', 'releases',
+  'registration', 'authorization', 'verification', 'event-settings', 'app-console', 'group', 'bot-chat', 'releases', 'download',
 ];
 
 export async function openAllowedExternal(raw: unknown): Promise<void> {
@@ -119,6 +119,7 @@ export function installBridge(
   let disposal: Promise<void> | undefined;
   let subscribed = false;
   let pendingQuit = false;
+  let retainedUpdate: DesktopUpdate | undefined;
   let connectionLost = false;
   let activeOwner: AttachedDaemon | null = owner;
   let replacing: Promise<void> | undefined;
@@ -299,6 +300,7 @@ export function installBridge(
       return value;
     }, value => actions.chooseDirectoryPaths(value));
     register(desktopChannels.checkDesktopUpdate, 0, noArg, () => actions.checkDesktopUpdate());
+    register(desktopChannels.retryDesktopUpdate, 0, noArg, () => actions.retryDesktopUpdate());
     register(desktopChannels.installDesktopUpdate, 0, noArg, () => actions.installDesktopUpdate());
     register(desktopChannels.hide, 0, noArg, async () => { actions.hide(); });
     register(desktopChannels.quit, 0, noArg, () => actions.confirmQuit());
@@ -307,6 +309,7 @@ export function installBridge(
       if (args.length !== 0) return { ok: false, error: { kind: 'validation', message: 'Invalid desktop request' } };
       subscribed = true;
       for (const value of retainedErrors.splice(0)) send({ type: 'error', value });
+      if (retainedUpdate) send({ type: 'update', value: retainedUpdate });
       if (pendingQuit) { pendingQuit = false; send({ type: 'quitRequested' }); }
       return { ok: true, value: undefined };
     });
@@ -354,6 +357,11 @@ export function installBridge(
         binding.activate(initial);
       })().finally(() => { replacing = undefined; candidate = null; });
       return replacing;
+    },
+    publishUpdate(update) {
+      if (disposed) return;
+      retainedUpdate = update;
+      send({ type: 'update', value: update });
     },
     requestQuit() {
       if (disposed) return;

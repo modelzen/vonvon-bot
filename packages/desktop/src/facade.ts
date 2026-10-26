@@ -4,7 +4,7 @@ import {
   commandResultSchema, desktopSnapshotSchema, directoryReplySchema, memoryReplySchema, contextPreviewReplySchema,
   environmentReplySchema, libraryReplySchema, logEventPayloadSchema, machineReplySchema, desktopUpdateSchema,
   settingsReplySchema,
-  type BackendInstallEventPayload, type DesktopSnapshot, type LogEventPayload,
+  type BackendInstallEventPayload, type DesktopSnapshot, type DesktopUpdate, type LogEventPayload,
 } from '@vonvon/protocol';
 import {
   desktopChannels, safeErrorCode, type DesktopShell,
@@ -49,6 +49,8 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
   const installs = new Set<(value: BackendInstallEventPayload) => void>();
   const errors = new Set<(error: Error) => void>();
   const quitListeners = new Set<() => void>();
+  const updateListeners = new Set<(value: DesktopUpdate) => void>();
+  let latestUpdate: DesktopUpdate | undefined;
   const retainedErrors: Error[] = [];
   const pending = new Set<(error: Error) => void>();
   let pendingQuit = false;
@@ -101,6 +103,11 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
         case 'backendInstall':
           if (!('value' in raw)) throw new Error('Invalid desktop event');
           deliver(installs, backendInstallEventPayloadSchema.parse(raw.value));
+          break;
+        case 'update':
+          if (!('value' in raw)) throw new Error('Invalid desktop event');
+          latestUpdate = desktopUpdateSchema.parse(raw.value);
+          deliver(updateListeners, latestUpdate);
           break;
         case 'error': {
           if (!('value' in raw)) throw new Error('Invalid desktop event');
@@ -231,8 +238,18 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
       .then(value => readResult(value, value => machineReplySchema.parse(value))),
     checkDesktopUpdate: () => transport.invoke(desktopChannels.checkDesktopUpdate)
       .then(value => readResult(value, value => desktopUpdateSchema.parse(value))),
+    retryDesktopUpdate: () => transport.invoke(desktopChannels.retryDesktopUpdate)
+      .then(value => readResult(value, value => desktopUpdateSchema.parse(value))),
     installDesktopUpdate: () => transport.invoke(desktopChannels.installDesktopUpdate)
       .then(value => readResult(value, value => desktopUpdateSchema.parse(value))),
+    onDesktopUpdate(listener) {
+      updateListeners.add(listener);
+      if (latestUpdate && !clientClosed) {
+        try { listener(latestUpdate); }
+        catch (failure) { emitError(failure instanceof Error ? failure : new Error(String(failure))); }
+      }
+      return () => { updateListeners.delete(listener); };
+    },
     hideWindow: () => callShell(desktopChannels.hide),
     quit: () => callShell(desktopChannels.quit),
     onQuitRequested(listener) {

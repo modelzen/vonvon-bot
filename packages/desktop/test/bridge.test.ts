@@ -75,6 +75,7 @@ function harness() {
     chooseExecutablePath: vi.fn(async (): Promise<string | null> => '/usr/local/bin/codex'),
     chooseDirectoryPaths: vi.fn(async (_multiple: boolean): Promise<string[] | null> => ['/tmp/workspace', '/tmp/docs']),
     checkDesktopUpdate: vi.fn(async () => ({ state: 'available' as const, current: '1.0.0', latest: '1.1.0', message: 'ready' })),
+    retryDesktopUpdate: vi.fn(async () => ({ state: 'available' as const, current: '1.0.0', latest: '1.1.0', message: 'retried' })),
     installDesktopUpdate: vi.fn(async () => ({ state: 'downloaded' as const, current: '1.0.0', latest: '1.1.0', message: 'ready' })),
     hide: vi.fn(), confirmQuit: vi.fn(async () => {}), connectionLost: vi.fn(),
   };
@@ -323,9 +324,13 @@ describe('desktop IPC boundary', () => {
     const h = harness();
     const wrong = { ...h.event, senderFrame: { url: h.frame.url } } as IpcMainInvokeEvent;
     expect(await handlers.get(desktopChannels.checkDesktopUpdate)?.(wrong)).toMatchObject({ ok: false });
+    expect(await handlers.get(desktopChannels.retryDesktopUpdate)?.(wrong)).toMatchObject({ ok: false });
     expect(await h.invoke(desktopChannels.installDesktopUpdate, 'extra')).toMatchObject({ ok: false });
+    expect(await h.invoke(desktopChannels.retryDesktopUpdate, 'extra')).toMatchObject({ ok: false });
     expect(h.actions.checkDesktopUpdate).not.toHaveBeenCalled();
+    expect(h.actions.retryDesktopUpdate).not.toHaveBeenCalled();
     expect(h.actions.installDesktopUpdate).not.toHaveBeenCalled();
+    expect(await h.invoke(desktopChannels.retryDesktopUpdate)).toMatchObject({ ok: true, value: { state: 'available', message: 'retried' } });
     expect(await h.invoke(desktopChannels.checkDesktopUpdate)).toMatchObject({ ok: true, value: { state: 'available' } });
     expect(await h.invoke(desktopChannels.installDesktopUpdate)).toMatchObject({ ok: true, value: { state: 'downloaded' } });
     expect(h.machine).not.toHaveBeenCalled();
@@ -383,6 +388,25 @@ describe('desktop IPC boundary', () => {
     await h.bridge.dispose();
   });
 
+  it('pushes the automatic update result to a subscribed window and replays the latest one after a reload', async () => {
+    const h = harness();
+    const found = { state: 'available' as const, current: '1.0.0', latest: '1.1.0', message: '有新版本' };
+    h.bridge.publishUpdate(found);
+    expect(h.webContents.send).not.toHaveBeenCalled();
+    expect(await h.invoke(desktopChannels.subscribe)).toMatchObject({ ok: true });
+    expect(h.webContents.send).toHaveBeenLastCalledWith(desktopChannels.event, { type: 'update', value: found });
+    const downloaded = { ...found, state: 'downloaded' as const };
+    h.bridge.publishUpdate(downloaded);
+    expect(h.webContents.send).toHaveBeenLastCalledWith(desktopChannels.event, { type: 'update', value: downloaded });
+    h.webContents.send.mockClear();
+    expect(await h.invoke(desktopChannels.subscribe)).toMatchObject({ ok: true });
+    expect(h.webContents.send).toHaveBeenCalledExactlyOnceWith(desktopChannels.event, { type: 'update', value: downloaded });
+    await h.bridge.dispose();
+    h.webContents.send.mockClear();
+    h.bridge.publishUpdate(found);
+    expect(h.webContents.send).not.toHaveBeenCalled();
+  });
+
   it('buffers errors and quit intent until subscription, then tears down once', async () => {
     const h = harness();
     h.emitError(new Error('raw credential 0123456789'));
@@ -400,11 +424,13 @@ describe('desktop IPC boundary', () => {
   });
 
   it('accepts only URLs covered by the frozen six-kind allowlist', async () => {
-    await openAllowedExternal('https://github.com/modelzen/vonvon-bot/releases');
-    expect(openExternal).toHaveBeenCalledWith('https://github.com/modelzen/vonvon-bot/releases');
-    await expect(openAllowedExternal('https://github.com.evil.test/modelzen/vonvon-bot/releases'))
-      .rejects.toThrow('Unsupported external link');
-    expect(openExternal).toHaveBeenCalledTimes(1);
+    await openAllowedExternal('https://bot.vonvon.cc/changelog/');
+    await openAllowedExternal('https://bot.vonvon.cc/get/');
+    expect(openExternal).toHaveBeenNthCalledWith(1, 'https://bot.vonvon.cc/changelog/');
+    expect(openExternal).toHaveBeenNthCalledWith(2, 'https://bot.vonvon.cc/get/');
+    for (const url of ['https://github.com/modelzen/vonvon-bot/releases', 'https://bot.vonvon.cc.evil.test/get/', 'https://bot.vonvon.cc/other/'])
+      await expect(openAllowedExternal(url)).rejects.toThrow('Unsupported external link');
+    expect(openExternal).toHaveBeenCalledTimes(2);
   });
 
   it('removes earlier handlers if bridge installation fails', () => {
