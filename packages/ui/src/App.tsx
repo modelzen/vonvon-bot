@@ -665,7 +665,7 @@ function DesktopApp() {
               )}
               {selection.kind === "overview" && (
                 <>
-                  {view === 'agents' && <header className="today-page-heading today-page-heading--actions"><div><h1>Bot</h1><span>{snapshot.agents.length} 个 Bot</span></div><GlowButton disabled={!ready || busy} onClick={() => void register()}>添加 Bot</GlowButton></header>}
+                  {view === 'agents' && <header className="today-page-heading today-page-heading--actions"><h1>Bot</h1><GlowButton disabled={!ready || busy} onClick={() => void register()}>添加 Bot</GlowButton></header>}
                   {view === "agents"
                     ? snapshot.agents.length > 0 && (
                         <section
