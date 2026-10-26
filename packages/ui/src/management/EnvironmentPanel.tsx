@@ -14,6 +14,7 @@ import {McpPanel} from "./McpPanel";
 import {settingAnchor, type SearchReveal} from '../search';
 import {useShellCapabilities} from '../client-context';
 import {openExternalUrl} from '../url-actions';
+import {OperationActivity} from './OperationActivity';
 
 type BackendLogin = Extract<EnvironmentReply, { kind: "backendLogin" }>;
 
@@ -246,7 +247,7 @@ export function EnvironmentPanel({ request, reveal }: Props) {
     <Dialog open={progressOpen} onClose={() => setProgressOpen(false)} title="安装进度" description="关闭后会在后台继续。" size="sm">
       {!toolInstall && <div className="environment-progress" role="status"><strong>正在准备…</strong><Button onClick={() => setProgressOpen(false)}>后台继续</Button></div>}
       {toolInstall && <div className="environment-progress" role="status">
-        <strong>{toolInstall.kind === "running" ? `${toolNames[toolInstall.tool]} 正在${toolInstall.update ? "更新" : "安装"}` : toolInstall.message}</strong>
+        <strong className="environment-progress-title">{toolInstall.kind === "running" ? <OperationActivity key={toolInstall.id} state="working" label={`${toolNames[toolInstall.tool]} 正在${toolInstall.update ? "更新" : "安装"}`}/> : toolInstall.message}</strong>
         {toolInstall.kind === "running" && <><p>已运行 {Math.max(0, Math.floor((now - toolInstall.startedAt) / 1000))} 秒</p><Button disabled={cancelling} onClick={() => void cancelInstall(toolInstall.id)}>{cancelling ? "正在取消" : "取消任务"}</Button></>}
         <Button onClick={() => setProgressOpen(false)}>{toolInstall.kind === "running" ? "后台继续" : "完成"}</Button>
       </div>}

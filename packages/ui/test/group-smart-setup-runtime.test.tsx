@@ -110,6 +110,82 @@ it('commits a keyboard gesture once and cancels a pending gesture if the control
   expect(onChange).not.toHaveBeenCalled(); expect(input.props['aria-valuetext']).toBe('独立话题');
 });
 
+const sliderPointer = (clientX: number, pointerId = 1, isPrimary = true) => ({
+  button: 0, pointerId, isPrimary, clientX,
+  currentTarget: {setPointerCapture: vi.fn(), getBoundingClientRect: () => ({left: 100, width: 300})},
+});
+it('follows the pointer continuously but persists only the nearest released mode', () => {
+  const onChange = vi.fn();
+  const inspect = () => nodes(renderAt('slider', () => ConversationSlider({label: '聊天方式', value: 'threads', onChange}))).find(node => node.type === 'input')!;
+  let input = inspect();
+  input.props.onPointerDown(sliderPointer(114));
+  input.props.onPointerMove(sliderPointer(277.2)); input = inspect();
+  expect(input.props['aria-valuetext']).toBe('连续交谈');
+  expect(onChange).not.toHaveBeenCalled();
+  input.props.onPointerMove(sliderPointer(600)); input = inspect();
+  expect(input.props['aria-valuetext']).toBe('智能');
+  input.props.onPointerUp(sliderPointer(600));
+  expect(onChange).toHaveBeenCalledExactlyOnceWith('smart');
+});
+it('ignores a second pointer while the first pointer is selecting a mode', () => {
+  const onChange = vi.fn();
+  const inspect = () => nodes(renderAt('slider', () => ConversationSlider({label: '聊天方式', value: 'threads', onChange}))).find(node => node.type === 'input')!;
+  let input = inspect(); input.props.onPointerDown(sliderPointer(114));
+  input.props.onPointerMove(sliderPointer(250)); input = inspect();
+  input.props.onPointerDown(sliderPointer(386, 2, false));
+  input.props.onPointerMove(sliderPointer(386, 2, false));
+  input.props.onPointerUp(sliderPointer(386, 2, false)); input = inspect();
+  input.props.onPointerCancel(sliderPointer(386, 2, false));
+  input.props.onLostPointerCapture(sliderPointer(386, 2, false)); input = inspect();
+  expect(input.props['aria-valuetext']).toBe('连续交谈');
+  expect(onChange).not.toHaveBeenCalled();
+  input.props.onPointerUp(sliderPointer(250));
+  expect(onChange).toHaveBeenCalledExactlyOnceWith('shared');
+});
+it('does not save more native range events after Escape cancels a captured drag', () => {
+  const onChange = vi.fn();
+  const inspect = () => nodes(renderAt('slider', () => ConversationSlider({label: '聊天方式', value: 'threads', onChange}))).find(node => node.type === 'input')!;
+  let input = inspect(); input.props.onPointerDown(sliderPointer(114));
+  input.props.onPointerMove(sliderPointer(386)); input = inspect();
+  input.props.onKeyDown({key: 'Escape', preventDefault: vi.fn()});
+  input.props.onChange({currentTarget: {value: '2'}}); input.props.onPointerMove(sliderPointer(386));
+  input.props.onPointerUp(sliderPointer(386)); input = inspect();
+  expect(onChange).not.toHaveBeenCalled();
+  expect(input.props['aria-valuetext']).toBe('独立话题');
+  input.props.onKeyDown({key: 'ArrowRight'}); input.props.onChange({currentTarget: {value: '1'}});
+  input = inspect(); input.props.onKeyUp({key: 'ArrowRight'});
+  expect(onChange).toHaveBeenCalledExactlyOnceWith('shared');
+});
+
+it('keeps loaded controls present while the refreshed settings request is pending', async () => {
+  let refreshVersion = 0;
+  function inspect() {
+    const loader = GroupDesignSettings({scope: view.scope, tab: 'response', refreshVersion}) as Element;
+    return nodes(renderAt('stable-loader', () => (loader.type as (props: any) => ReactNode)(loader.props)));
+  }
+  inspect(); await flush();
+  expect(inspect().some(node => node.type === GroupSettingsContent)).toBe(true);
+  let finish!: (reply: any) => void;
+  harness.client.settings.mockImplementation(() => new Promise(resolve => {finish = resolve;}));
+  refreshVersion++; let ui = inspect();
+  expect(ui.some(node => node.type === GroupSettingsContent)).toBe(true);
+  expect(ui.some(node => node.props.role === 'status' && node.props.children === '正在读取…')).toBe(false);
+  finish({kind: 'view', view: {...view, identity: {...view.identity, kind: 'smart'}}}); await flush(); ui = inspect();
+  expect(ui.find(node => node.type === GroupSettingsContent)!.props.view.identity.kind).toBe('smart');
+});
+
+it('blocks new gestures during saving without disabling the focused range', () => {
+  const onChange = vi.fn();
+  const input = nodes(renderAt('pending-slider', () => ConversationSlider({label: '聊天方式', value: 'shared', disabled: false, pending: true, onChange}))).find(node => node.type === 'input')!;
+  const preventDefault = vi.fn();
+  input.props.onPointerDown({...sliderPointer(391), preventDefault});
+  input.props.onKeyDown({key: 'End', preventDefault});
+  input.props.onChange({currentTarget: {value: '2'}});
+  input.props.onKeyUp({key: 'End'});
+  expect(input.props.disabled).toBe(false); expect(input.props['aria-disabled']).toBe(true);
+  expect(preventDefault).toHaveBeenCalledTimes(2); expect(onChange).not.toHaveBeenCalled();
+});
+
 it('shows attention beside the smart conversation control on 沟通方式 and hides it while either mode source changes', async () => {
   let liveMember: Membership = {...member, conversation: 'smart', enabled: true};
   project = {...project, kind: 'smart'};
@@ -178,17 +254,21 @@ it.each([
   expect(changed).toHaveBeenCalledOnce();
 });
 
-it('keeps the confirmed mode until the direct switch finishes and serializes repeated gestures', async () => {
+it('keeps the selected mode visible during saving, preserves the settings tree and serializes repeated gestures', async () => {
   render(); let ui = await settle();
+  const settingsKey = ui.workspace.find(node => node.type === GroupDesignSettings)!.key;
   let resolve!: (reply: unknown) => void;
   harness.client.collaboration.mockImplementation(async request => request.action === 'project' ? {kind: 'project', project} : new Promise(done => {resolve = done;}));
   const choose = ui.mode.props.onChange;
   choose('smart'); choose('smart'); ui = await settle();
-  expect(ui.mode.props.value).toBe('shared'); expect(ui.mode.props.disabled).toBe(true);
+  expect(ui.mode.props.value).toBe('smart'); expect(ui.mode.props.disabled).toBe(false); expect(ui.mode.props.pending).toBe(true);
+  expect(ui.workspace.find(node => node.type === GroupDesignSettings)!.key).toBe(settingsKey);
   expect(harness.client.collaboration.mock.calls.filter(([request]) => request.action === 'editProject')).toHaveLength(1);
   resolve({kind: 'applied', project: {...project, kind: 'smart', revision: 'project-r2'}});
   ui = await settle();
-  expect(ui.mode.props.value).toBe('smart'); expect(ui.mode.props.disabled).toBe(false);
+  expect(ui.mode.props.value).toBe('smart'); expect(ui.mode.props.disabled).toBe(false); expect(ui.mode.props.pending).toBe(false);
+  const settings = ui.workspace.find(node => node.type === GroupDesignSettings)!;
+  expect(settings.key).toBe(settingsKey); expect(settings.props.refreshVersion).toBe(1);
 });
 
 it('reports a failed direct switch inline and allows retry from the original mode', async () => {

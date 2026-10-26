@@ -37,6 +37,7 @@ type Props = {
   onOpenProviders?: () => void;
   onOpenSecrets?: (provider?: string) => void;
   responseHeader?: ReactNode;
+  refreshVersion?: number;
 };
 const failText = (error: unknown) => error instanceof Error ? error.message : '暂时无法读取，请重试。';
 const pathName = (path: string) => path.split(/[\\/]/).filter(Boolean).at(-1) || path;
@@ -73,7 +74,7 @@ function GroupSettingsLoader(props: Props) {
       setView(reply.view); setError(undefined);
     } catch (failure) {if (request === serial.current) setError(failText(failure));}
   }, [client, botId, projectName]);
-  useEffect(() => {void refresh(); return () => {serial.current++;};}, [refresh]);
+  useEffect(() => {void refresh(); return () => {serial.current++;};}, [refresh, props.refreshVersion]);
   return <div className="group-design-settings">
     {error && <InlineNotice tone="warning" title="读取未完成">{error}<IconButton size="sm" variant="ghost" label="重试" title="重试" onClick={() => void refresh()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton></InlineNotice>}
     {view ? <GroupSettingsContent {...props} view={view} refresh={refresh}/> : !error && <p className="gd-empty" role="status">正在读取…</p>}

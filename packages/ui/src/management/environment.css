@@ -45,6 +45,7 @@
 .environment-verification { display: grid; justify-items: start; gap: 10px; }
 .environment-verification input { width: 100%; }
 .environment-progress p, .environment-profiles p { margin: 0; color: var(--color-text-secondary); font-size: 12px; }
+.environment-progress-title .operation-activity { white-space: normal; vertical-align: middle; }
 .environment-profile { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--color-border); }
 .environment-profile > div:first-child { display: grid; gap: 3px; min-width: 0; }
 .environment-profile > div:last-child, .environment-profile-choice { display: flex; align-items: center; gap: 8px; }

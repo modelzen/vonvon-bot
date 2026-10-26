@@ -11,6 +11,7 @@
 .group-design-context > .ui-toggle { flex: none; }
 .group-enable-control { display: inline-flex; align-items: center; justify-content: flex-end; gap: 10px; flex: none; }
 .group-enable-control .operation-activity { color: var(--color-text-secondary); font-size: 12px; }
+.group-save-status { display: inline-flex; min-width: 48px; justify-content: flex-end; align-items: center; gap: 4px; color: var(--color-text-tertiary); font-size: 11px; white-space: nowrap; }
 .group-bot-picker { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; }
 .group-bot-picker > button { display: flex; align-items: center; gap: 7px; min-width: 0; max-width: 220px; min-height: 32px; padding: 4px 8px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--color-text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
 .group-bot-picker > button[aria-pressed=true] { background: var(--color-surface); border-color: var(--color-border); color: var(--color-text); box-shadow: 0 1px 3px #00000008; font-weight: 550; }
@@ -30,7 +31,7 @@
 .group-context-menu button:disabled { opacity: .4; cursor: default; }
 .group-control-note { margin: 0; color: var(--color-text-secondary); font-size: 12px; line-height: 1.55; }
 .group-conversation-layout { display: flex; align-items: center; flex-wrap: wrap; gap: 20px 28px; min-width: 0; }
-.group-conversation-layout > .group-conversation-choice { flex: 1 1 240px; }
+.group-conversation-layout > .group-conversation-choice { flex: 0 1 352px; min-width: 0; max-width: 100%; }
 .group-conversation-layout > .group-attention { flex: 1.4 1 300px; }
 .group-conversation-choice { display: grid; gap: 10px; }
 .group-conversation-choice h3 { margin: 0; font-size: 13px; font-weight: 600; }
