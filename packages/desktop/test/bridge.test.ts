@@ -393,7 +393,7 @@ describe('desktop IPC boundary', () => {
     const h = harness();
     h.actions.checkDesktopUpdate.mockRejectedValueOnce(new DesktopUpdateError('检查更新失败：连不上更新服务器，请检查网络后重试。'));
     expect(await h.invoke(desktopChannels.checkDesktopUpdate)).toEqual({ ok: false, error: { kind: 'validation', message: '检查更新失败：连不上更新服务器，请检查网络后重试。' } });
-    h.actions.retryDesktopUpdate.mockRejectedValueOnce(new DesktopUpdateError('没能清除上次安装的记录，请到官网重新下载安装：https://bot.vonvon.cc/get/'));
+    h.actions.retryDesktopUpdate.mockRejectedValueOnce(new DesktopUpdateError('没能清除上次安装的记录，请到官网重新下载安装：https://vonvon.cc/get/'));
     expect(await h.invoke(desktopChannels.retryDesktopUpdate)).toMatchObject({ ok: false, error: { message: expect.stringContaining('重新下载安装') } });
     h.actions.installDesktopUpdate.mockRejectedValueOnce(new Error('EACCES: /Users/someone/Library/secret'));
     expect(await h.invoke(desktopChannels.installDesktopUpdate)).toEqual({ ok: false, error: { kind: 'validation', message: '桌面端操作没有成功，请重试。' } });
@@ -436,11 +436,11 @@ describe('desktop IPC boundary', () => {
   });
 
   it('accepts only URLs covered by the frozen six-kind allowlist', async () => {
-    await openAllowedExternal('https://bot.vonvon.cc/changelog/');
-    await openAllowedExternal('https://bot.vonvon.cc/get/');
-    expect(openExternal).toHaveBeenNthCalledWith(1, 'https://bot.vonvon.cc/changelog/');
-    expect(openExternal).toHaveBeenNthCalledWith(2, 'https://bot.vonvon.cc/get/');
-    for (const url of ['https://github.com/modelzen/vonvon-bot/releases', 'https://bot.vonvon.cc.evil.test/get/', 'https://bot.vonvon.cc/other/'])
+    await openAllowedExternal('https://vonvon.cc/changelog/');
+    await openAllowedExternal('https://vonvon.cc/get/');
+    expect(openExternal).toHaveBeenNthCalledWith(1, 'https://vonvon.cc/changelog/');
+    expect(openExternal).toHaveBeenNthCalledWith(2, 'https://vonvon.cc/get/');
+    for (const url of ['https://github.com/modelzen/vonvon-bot/releases', 'https://vonvon.cc.evil.test/get/', 'https://vonvon.cc/other/', 'https://bot.vonvon.cc/get/'])
       await expect(openAllowedExternal(url)).rejects.toThrow('Unsupported external link');
     expect(openExternal).toHaveBeenCalledTimes(2);
   });
