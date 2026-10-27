@@ -751,6 +751,24 @@ test('rollback and reverify need only the keys they use, so a missing read-only 
     assert.ok(w.objects.has(manifestKey), 'nothing was deleted');
     assert.equal((await withdraw(w.deps)).action, 'deleted');
   });
+  await t.test('--dry-run needs neither key in either mode, and a missing or doubled mode is reported before a missing key', async t2 => {
+    const none = deps => withoutKey(deps, 'read-only', 'write');
+    const restored = await world(t2, { objects: published069(), ledger: ['0.6.9'] });
+    const { sha256: restoreHash } = await restored.plan();
+    await restored.upload({ 'plan-sha256': restoreHash });
+    await restored.promote({ 'plan-sha256': restoreHash });
+    const writes = restored.writes().length;
+    assert.deepEqual(await rollbackRelease({ ...restored.options, 'plan-sha256': restoreHash, 'restore-previous': true, 'dry-run': true }, none(restored.deps)), { action: 'dry-run', planned: 'restore' });
+    assert.equal(restored.writes().length, writes);
+    for (const modes of [{}, { 'restore-previous': true, 'delete-first-release-manifest': true }]) {
+      await assert.rejects(rollbackRelease({ ...restored.options, 'plan-sha256': restoreHash, ...modes }, none(restored.deps)), /needs exactly one of --restore-previous or --delete-first-release-manifest/);
+    }
+    const { w, hash } = await publishedFirst(t2);
+    await w.promote({ 'plan-sha256': hash });
+    assert.deepEqual(await rollbackRelease({ ...w.options, 'plan-sha256': hash, 'delete-first-release-manifest': true, 'dry-run': true }, none(w.deps)), { action: 'dry-run', planned: 'delete' });
+    assert.ok(w.objects.has(manifestKey), 'dry-run deletes nothing');
+    await assert.rejects(stat(join(w.out, 'rollback-receipt.json')), { code: 'ENOENT' });
+  });
   await t.test('reverify needs neither key', async t2 => {
     const settings = { verifyOutput: { full: 'network blip\n' } };
     const { w, hash } = await publishedFirst(t2, settings);
@@ -823,7 +841,7 @@ test('fix-headers needs only the write key: it runs without the read-only key an
   assert.deepEqual(w.writes().slice(before).map(call => call.method), ['putObjectCopy', 'putObjectCopy', 'putObjectCopy']);
 });
 
-test('plan and upload need both keys: either one missing stops them before any request or check', async t => {
+test('plan, upload and promote need both keys: either one missing stops them before any request or check', async t => {
   const w = await world(t);
   const { sha256: hash } = await w.plan({ 'first-release': true });
   const seen = () => [w.calls.length, w.fetched.length, w.childCalls.length];
@@ -831,6 +849,7 @@ test('plan and upload need both keys: either one missing stops them before any r
   const commands = [
     ['plan', deps => planPublish({ ...w.options, 'first-release': true }, deps)],
     ['upload', deps => uploadRelease({ ...w.options, 'first-release': true, 'plan-sha256': hash, 'cancel-file': w.cancelFile }, deps)],
+    ['promote', deps => promoteRelease({ ...w.options, 'plan-sha256': hash, 'cancel-file': w.cancelFile, 'owner-confirmation': confirm }, deps)],
   ];
   for (const [command, run] of commands) {
     for (const role of ['read-only', 'write']) {
@@ -841,6 +860,7 @@ test('plan and upload need both keys: either one missing stops them before any r
     await run(w.deps);
   }
   assert.equal((await w.receipt('upload-receipt.json')).planSHA256, hash);
+  assert.equal((await w.receipt('publish-receipt.json')).status, 'published');
 });
 
 test('a stale publishing lock is removed; a live one or release-mac\'s lock stops the run', async t => {
