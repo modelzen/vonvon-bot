@@ -44,6 +44,15 @@ const commandOptions = {
   'fix-headers': [...common, 'plan-sha256', 'cancel-file'],
   reverify: [...common, 'plan-sha256'],
 };
+// The COS keys each command really uses. A command never waits on a key it does not use, so an
+// emergency rollback or a header fix is not blocked by a missing read-only key.
+const keysUsed = (command, options) => ({
+  plan: ['read-only', 'write'], upload: ['read-only', 'write'], promote: ['read-only', 'write'],
+  reverify: [],
+  // Restoring writes the saved manifest; deleting also lists COS afterwards to confirm manifest.json is gone.
+  rollback: options['delete-first-release-manifest'] ? ['read-only', 'write'] : ['write'],
+  'fix-headers': ['write'],
+})[command];
 
 function versionedObjects(version) {
   return [
@@ -95,7 +104,9 @@ async function openContext(command, options, dependencies) {
   if (writeNames.some(name => readNames.includes(name))) throw new Error('The write key must use environment variables separate from the read-only enumeration key');
   if (env[readConfig.secretIdEnv] && env[readConfig.secretIdEnv] === env[writeConfig.secretIdEnv]) throw new Error('The write key must belong to a different sub-account from the read-only enumeration key');
   // Fail before any work when a key this command uses is absent; values are never read into output.
-  for (const [role, config, injected] of command === 'reverify' ? [] : [['read-only', readConfig, dependencies.readClient], ['write', writeConfig, dependencies.writeClient]]) {
+  const roles = { 'read-only': [readConfig, dependencies.readClient], write: [writeConfig, dependencies.writeClient] };
+  for (const role of keysUsed(command, options)) {
+    const [config, injected] = roles[role];
     if (!injected && (!config.secretIdEnv || !config.secretKeyEnv || cosCredentialEnvNames(config).some(name => !env[name]))) throw new Error(`The COS ${role} key is not in this process environment; the owner provides the variables its configuration names, never their values`);
   }
   const configHashes = { readConfigSHA256: sha256(await readFile(options['cos-config'])), writeConfigSHA256: sha256(await readFile(options['cos-write-config'])) };
@@ -635,7 +646,7 @@ reverify     --plan-sha256 HASH. Makes no COS write. When stable already serves 
 rollback     --plan-sha256 HASH and exactly one of --restore-previous (write back the manifest bytes saved in the plan) or --delete-first-release-manifest (delete only manifest.json when the plan found none). Needs this output's publish-receipt.json and judges the live manifest by its raw SHA-256. Prints the action first; --dry-run stops there and records nothing. Versioned objects and the ledger are never touched; a rolled-back candidate cannot be planned, uploaded or promoted again.
 fix-headers  --plan-sha256 HASH --cancel-file /absolute/path. Only for objects this output uploaded and only while their public bytes match the plan. Same-key PUT Object - Copy with x-cos-metadata-directive: Replaced and the planned headers; bytes unchanged, then --versioned-only must pass again with the same full SHA-256.
 
-The write key comes from environment variables named in --cos-write-config (same bucket, region and prefix as --cos-config, separate variables, pinned cos-nodejs-sdk-v5@${COS_SDK_VERSION}). Every command except reverify stops at once when a key it uses is missing from the environment. Neither key reaches child processes or output. TLS trust-store overrides and redirects are refused. CDN refresh is not implemented; a cdn setting is refused. A .publish.lock whose recorded process is no longer running is removed automatically.`;
+The write key comes from environment variables named in --cos-write-config (same bucket, region and prefix as --cos-config, separate variables, pinned cos-nodejs-sdk-v5@${COS_SDK_VERSION}). Keys each command needs in its environment: plan, upload and promote both (plan reads bucket versioning with the write key); rollback --delete-first-release-manifest both (it lists COS after the delete); rollback --restore-previous and fix-headers only the write key; reverify neither. A command stops at once when a key it uses is missing and never requires one it does not use. Neither key reaches child processes or output. TLS trust-store overrides and redirects are refused. CDN refresh is not implemented; a cdn setting is refused. A .publish.lock whose recorded process is no longer running is removed automatically.`;
 
 const invokedPath = process.argv[1] ? await realpath(resolve(process.argv[1])).catch(() => null) : null;
 if (invokedPath && invokedPath === await realpath(scriptPath)) {

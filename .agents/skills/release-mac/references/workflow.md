@@ -126,7 +126,7 @@ App 钉票并通过验证后才生成最终 ZIP 和 electron-builder `prepackage
 
 COS 写入只用 `scripts/release-cos-publish.mjs`（下称发布工具），不能自行挑一条默认覆盖的 `coscli cp` 临场执行，也不手写 SDK 调用。它有六个子命令：`plan` 只读，`upload` 只传版本化对象，`promote` 只写 stable manifest，`reverify` 不写 COS、只补完切换后的公网复核，`rollback` 只动 manifest，`fix-headers` 只改版本化对象的元数据；每个子命令的参数见 `--help`。每个子命令都和 helper 一样拒绝改信任链或预加载代码的环境变量和 Node 参数，公网请求一律正常 TLS、不跟随重定向。SDK 写 COS 时会照 `HTTPS_PROXY` 走代理隧道，证书照常严格校验，会换证书的代理会让写入失败；这时停下报告，不加 CA。发布工具没有 CDN 刷新：写入配置里出现 `cdn` 就拒绝，回执记"未启用 CDN，未刷新"；以后启用 CDN，先补经审查的刷新步骤。
 
-写入用的 key 另配一份仓库外的配置，用 `--cos-write-config` 传入；只读枚举照旧用 `--cos-config`，每个子命令两份都要带：
+写入用的 key 另配一份仓库外的配置，用 `--cos-write-config` 传入；只读枚举照旧用 `--cos-config`，每个子命令两份配置文件都要带（环境里要哪把 key 见下文的表）：
 
 ```json
 {
@@ -142,7 +142,19 @@ COS 写入只用 `scripts/release-cos-publish.mjs`（下称发布工具），不
 
 只能有这几项，临时凭据另加 `securityTokenEnv`。bucket、region、prefix 必须和 `--cos-config` 相同；凭据只写环境变量名，变量名不能和只读 key 的相同，两把 key 也不能是同一个子账号的。SDK 的加载和版本核对与只读枚举相同。写入子账号只给这个 bucket 的 GetBucketVersioning（`plan` 读版本控制状态也用这把 key），和 `bot/mac/stable/` 前缀下的 PutObject、GetObject（PUT Object - Copy 要这两项）；首发撤回要删 manifest 时，再给 `bot/mac/stable/manifest.json` 这一个对象的 DeleteObject，不给别的删除权限。凭据只在发布工具自己的进程里用，调用复核脚本前删掉两份配置写的全部凭据变量；报错只给 HTTP 状态和错误码，不回显 SDK 原文。
 
-两把 key 都由 owner 放进运行发布工具的那个进程的环境，变量名就是两份配置里写的；怎么放进去由 owner 定（例如从钥匙串读出再开会话），不写进仓库、命令行、对话和 GitHub。`plan` 也要写入 key，它用这把 key 读版本控制状态；只有 `reverify` 两把都不用。发布工具一开始就查这个子命令要用的变量在不在，缺了就停下，说是只读 key 还是写入 key 缺；代理只照这句话转告 owner，不读、不打印、不问变量的值。DeleteObject 权限在 `promote` 之前没有任何一步会用到：首发 `promote` 之前，owner 在 CAM 里核对写入子账号对 `bot/mac/stable/manifest.json` 有 DeleteObject，否则首发撤回时删不掉。
+key 由 owner 放进运行发布工具的那个进程的环境，变量名就是两份配置里写的；怎么放进去由 owner 定（例如从钥匙串读出再开会话），不写进仓库、命令行、对话和 GitHub。每个子命令只要它真正用到的 key：
+
+| 子命令 | 只读 key | 写入 key |
+| --- | --- | --- |
+| `plan` | 要，枚举 COS 历史 | 要，读版本控制状态 |
+| `upload` | 要，重做 `plan` 的检查 | 要 |
+| `promote` | 要，重做 `plan` 的检查 | 要 |
+| `reverify` | 不要 | 不要 |
+| `rollback --restore-previous` | 不要 | 要 |
+| `rollback --delete-first-release-manifest` | 要，删完枚举核对没有 `manifest.json` | 要 |
+| `fix-headers` | 不要 | 要 |
+
+发布工具一开始就查这个子命令要用的变量在不在，缺了就停下，说是只读 key 还是写入 key 缺；用不到的那把不在环境里也照常跑，紧急撤回不会被无关的 key 卡住。代理只照报错转告 owner，不读、不打印、不问变量的值。DeleteObject 权限在 `promote` 之前没有任何一步会用到：首发 `promote` 之前，owner 在 CAM 里核对写入子账号对 `bot/mac/stable/manifest.json` 有 DeleteObject，否则首发撤回时删不掉。
 
 下面的命令先绑定：`PUBLISH` 是 `scripts/release-cos-publish.mjs` 的绝对路径，`VERIFY_PUBLIC_RELEASE` 指向 `scripts/verify-public-release.mjs` 的绝对路径，`COS_WRITE_CONFIG` 是写入配置，`PLAN_SHA256` 是 owner 看过的计划哈希，`CANCEL_FILE` 是本任务的取消文件路径，放在 `OUT` 和源码树之外。这个文件一出现，发布工具在下一次 COS 写入前停下；经 #322 或 Paseo 执行时，看到取消评论就建这个文件。`upload` 要传几百 MB，代理在后台运行它，前台照常查取消，看到取消就建文件；owner 也可以自己建这个文件。
 
