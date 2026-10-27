@@ -7,6 +7,7 @@ import { parse as parseToml } from 'smol-toml';
 import { inspectLocalPath, LocalFileSafetyError, readLocalText, withTimeout } from './bounded-local-files';
 import { canDecryptLegacySecret, loadLegacyKeystoreKey } from './legacy-keystore';
 import {classifyHookCommand} from './hooks';
+import {parseBridgeServiceState} from './service-state';
 
 // Schema bounds and the read-only source inspection are adapted from #226.
 const appId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
@@ -170,9 +171,10 @@ type Run = NonNullable<SourceInspectionOptions['command']>;
 async function inspectService(run: Run): Promise<RunningState> {
   try {
     const result = await run('/bin/launchctl', ['print', `gui/${process.getuid?.()}/ai.feishu-codex-bridge.bot`]);
-    if (result.status === 113 || (result.status !== 0 && /Could not find service/i.test(result.stderr))) return 'stopped';
-    if (result.status !== 0) return 'unknown';
-    return /^\s*state = running\s*$/m.test(result.stdout) ? 'running' : /^\s*state = (?:not running|waiting|exited)\s*$/m.test(result.stdout) ? 'stopped' : 'unknown';
+    const state = parseBridgeServiceState(result);
+    if (!state) return 'unknown';
+    // A stopping job can still hold Bot locks. Do not report it as a manually started process.
+    return state.running || state.stopping || state.starting ? 'running' : 'stopped';
   } catch { return 'unknown'; }
 }
 async function inspectBotProcess(root: string, base: string, appId: string, run: Run, signal?: AbortSignal, allowUnscoped = false): Promise<RunningState> {
