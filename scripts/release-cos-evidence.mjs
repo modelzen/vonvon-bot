@@ -5,31 +5,47 @@ import { basename, dirname, isAbsolute, join } from 'node:path';
 // Read-only: no upload, object mutation, CDN action, or credential output.
 // Changing the pinned SDK version is a reviewed code change, never a runtime option.
 export const COS_SDK_VERSION = '3.0.0';
+/** Reviewed lockfile of the SDK tool prefix; it pins every transitive dependency that runs next to a COS key. */
+export const COS_SDK_LOCKFILE = new URL('./cos-sdk/package-lock.json', import.meta.url);
 const defaultReadJSON = async path => JSON.parse(await readFile(path, 'utf8'));
+
+/** The stable bucket identity shared by the read-only enumeration config and the separate write config. */
+export function isStableCosTarget(config) {
+  return /^[a-z0-9-]+-\d+$/.test(config?.bucket ?? '') && /^[a-z]+-[a-z]+(?:-\d+)?$/.test(config?.region ?? '')
+    && config.prefix === 'bot/mac/stable/' && config.publicManifestURL === 'https://dl.vonvon.cc/bot/mac/stable/manifest.json';
+}
+
+export function assertCredentialEnvNames(config) {
+  for (const key of ['secretIdEnv', 'secretKeyEnv', 'securityTokenEnv']) {
+    if (config[key] !== undefined && !/^[A-Z][A-Z0-9_]*$/.test(config[key])) throw new Error('COS credential settings must be environment variable names, never inline credentials');
+  }
+}
 
 export async function readCosConfig(configPath, { readJSON = defaultReadJSON } = {}) {
   if (!isAbsolute(configPath ?? '')) throw new Error('Formal releases require an absolute --cos-config file');
   let config;
   try { config = await readJSON(configPath); } catch { throw new Error('Cannot read COS read-only configuration'); }
-  if (!/^[a-z0-9-]+-\d+$/.test(config.bucket ?? '') || !/^[a-z]+-[a-z]+(?:-\d+)?$/.test(config.region ?? '')
-    || config.prefix !== 'bot/mac/stable/' || config.publicManifestURL !== 'https://dl.vonvon.cc/bot/mac/stable/manifest.json'
-    || !isAbsolute(config.ledgerFile ?? '')) throw new Error('COS configuration must identify the stable bucket, prefix, public URL and absolute ledgerFile');
-  for (const key of ['secretIdEnv', 'secretKeyEnv', 'securityTokenEnv']) {
-    if (config[key] !== undefined && !/^[A-Z][A-Z0-9_]*$/.test(config[key])) throw new Error('COS credential settings must be environment variable names, never inline credentials');
-  }
+  if (!isStableCosTarget(config) || !isAbsolute(config.ledgerFile ?? '')) throw new Error('COS configuration must identify the stable bucket, prefix, public URL and absolute ledgerFile');
+  assertCredentialEnvNames(config);
   return config;
 }
 
 /** Names of the environment variables holding the read-only COS key; callers strip them from child processes. */
 export const cosCredentialEnvNames = config => [config.secretIdEnv, config.secretKeyEnv, config.securityTokenEnv].filter(Boolean);
 
-async function loadPinnedSdk(sdkModule, readJSON) {
+export async function loadPinnedSdk(sdkModule, readJSON = defaultReadJSON) {
   if (!isAbsolute(sdkModule ?? '') || basename(sdkModule) !== 'cos-nodejs-sdk-v5' || basename(dirname(sdkModule)) !== 'node_modules') {
     throw new Error(`Set sdkModule to the absolute node_modules/cos-nodejs-sdk-v5 directory of a tool prefix installed with cos-nodejs-sdk-v5@${COS_SDK_VERSION}`);
   }
   let manifest;
   try { manifest = await readJSON(join(sdkModule, 'package.json')); } catch { throw new Error('Cannot read the COS SDK package.json'); }
   if (manifest?.name !== 'cos-nodejs-sdk-v5' || manifest.version !== COS_SDK_VERSION) throw new Error(`sdkModule must be the pinned cos-nodejs-sdk-v5@${COS_SDK_VERSION}`);
+  // npm ci installs exactly the lockfile it finds and leaves it unchanged, so equal bytes show the prefix was
+  // installed by npm ci from this lockfile. They do not check the files under node_modules themselves.
+  let pinned, installed;
+  try { pinned = await readFile(COS_SDK_LOCKFILE); } catch { throw new Error('Cannot read scripts/cos-sdk/package-lock.json from this checkout'); }
+  try { installed = await readFile(join(dirname(dirname(sdkModule)), 'package-lock.json')); } catch { installed = undefined; }
+  if (!installed?.equals(pinned)) throw new Error('The COS SDK tool prefix must be installed with npm ci from scripts/cos-sdk; its package-lock.json is missing or differs from the repository copy');
   try { return createRequire(import.meta.url)(sdkModule); } catch { throw new Error('Cannot load the pinned COS SDK; reinstall it privately'); }
 }
 

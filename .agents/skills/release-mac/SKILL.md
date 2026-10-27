@@ -10,7 +10,7 @@ description: 按 owner 指定版本和 main SHA 构建、公证、验收 Vonvon 
 ## 输入与门禁
 
 - 固定版本、main 完整 SHA、彩排／正式模式；先 `git fetch origin main`，确认准确 SHA 在 `origin/main` 历史中。本轮不自动跟随 main。daemon/desktop 版本须与输入相同，版本仅支持三段数字；不同则走版本修复 PR，不在构建目录临时改号。
-- 稳定地址为 `https://dl.vonvon.cc/bot/mac/stable/manifest.json`。正式版本须大于线上、COS 完整前缀历史和本机发布台账三者的最高版本。每次正式运行必传外部 `--cos-config`，见 [workflow.md](references/workflow.md)。超时、403、重定向、无效清单或 TLS 错误一律拒绝；不得用 `-k`、`--insecure`、`NODE_TLS_REJECT_UNAUTHORIZED=0` 绕过，也不得用 `NODE_EXTRA_CA_CERTS`、`SSL_CERT_FILE`、`SSL_CERT_DIR`、`NODE_USE_SYSTEM_CA`、`--use-openssl-ca`、`--require`、`--import` 这类改信任链或预加载代码的设置，helper 和复核脚本会拒绝。`--cos-config` 的 key 只用只有 GetBucket 权限的子账号，SDK 按 workflow.md 装固定版本。
+- 稳定地址为 `https://dl.vonvon.cc/bot/mac/stable/manifest.json`。正式版本须大于线上、COS 完整前缀历史和本机发布台账三者的最高版本。每次正式运行必传外部 `--cos-config`，见 [workflow.md](references/workflow.md)。超时、403、重定向、无效清单或 TLS 错误一律拒绝；不得用 `-k`、`--insecure`、`NODE_TLS_REJECT_UNAUTHORIZED=0` 绕过，也不得用 `NODE_EXTRA_CA_CERTS`、`SSL_CERT_FILE`、`SSL_CERT_DIR`、`NODE_USE_SYSTEM_CA`、`--use-openssl-ca`、`--require`、`--import` 这类改信任链或预加载代码的设置，helper 和复核脚本会拒绝。`--cos-config` 的 key 只用只有 GetBucket 权限的子账号，SDK 按 workflow.md 照 `scripts/cos-sdk/` 的 lockfile 用 `npm ci` 装；COS 写入的 key 另配 `--cos-write-config`，见 workflow.md。
 - 线上 manifest 正常 TLS 下确实是 HTTP 404 时分三种：COS 前缀里还有 `manifest.json`，一律停下查原因；COS 有旧 `feed-*.json`／`Vonvon-Bot-*` 或台账有版本（首发传了版本化对象但没切 stable、上传半途失败、首发撤回），显式加 `--no-live-manifest`，门槛取 COS 历史和台账的最高版本，记录 `baseline: {live: none, highestPublished: X}`；两边都空，才是首发，显式加 `--first-release`，记录 `baseline: none`。不能手写空列表充当 COS 证据。首发不免除 stable 的 owner 确认。
 - 彩排版本不得超过下一次正式版本。彩排输出 `REHEARSAL-` 元数据和 `DO-NOT-PUBLISH`，不上传、不原样晋级。
 - 更新配置只含 `manifestURL`、`teamIdentifier`，默认位于 `~/.vonvon-release/desktop-update.json`；地址须等于稳定地址，团队须与现有 Developer ID Application 证书相符。配置及真实身份值不提交。
@@ -36,11 +36,11 @@ description: 按 owner 指定版本和 main SHA 构建、公证、验收 Vonvon 
 
 ## 公开发布与撤回
 
-COS/CDN 写入工具尚未实现；不得现场拼命令直接上传。按 [workflow.md](references/workflow.md) 先准备具体命令、服务端不覆盖保护、缓存头、inventory 校验和回执方案，交 owner 确认命令后才执行获准上传阶段。只问 profile／配置路径，不索要密钥明文，不回显凭据文件，不把密钥放命令行；COS 凭据（启用了 CDN 时还有 CDN 凭据）分别确认存在和权限。
+COS 写入只用 `scripts/release-cos-publish.mjs`，不得现场拼命令直接上传，用法见 [workflow.md](references/workflow.md)。先跑它的 `plan`，COS 零写入：核对本地证据和 `--local-only`，取线上 manifest 新快照，重算最高历史版本，确认 bucket 从未开启版本控制，把每个写操作写进 `OUT/publish-plan.json` 并打印它的 SHA-256。owner 先看 `plan` 的输出和这个哈希，同意上传版本化对象后，才用这个哈希跑 `upload`；`upload` 只传版本化对象，带 `x-cos-forbid-overwrite: true`，不碰 manifest。写入的 key 另配 `--cos-write-config`，和只读枚举的 `--cos-config` 分开，写入、切换前都查 `--cancel-file`。只问 profile／配置路径，不索要密钥明文，不回显凭据文件，不把密钥放命令行；COS 凭据（启用了 CDN 时还有 CDN 凭据）分别确认存在和权限。
 
-版本化 ZIP/feed/DMG 上传后，用 `scripts/verify-public-release.mjs --versioned-only` 核验公网 HTTPS、完整 SHA-256 和每个对象的响应头（表见 workflow.md），把它输出的 JSON（版本、源码 SHA、公证 submission ID、公开 URL 和哈希）展示给 owner，再按本文开头那条规则取得确认，才可最后切 stable manifest。使用 `scripts/verify-public-release.mjs` 复核固定 URL，不能跟随重定向或加随机 query 绕缓存；必须看到它的成功输出才算通过，不能只看退出码。只有公网复核通过才报告发布完成，并持久保存发布回执。
+版本化 ZIP/feed/DMG 上传后，`upload` 用 `scripts/verify-public-release.mjs --versioned-only` 核验公网 HTTPS、完整 SHA-256 和每个对象的响应头（表见 workflow.md），通过后追加台账并打印它输出的 JSON（版本、源码 SHA、公证 submission ID、公开 URL 和哈希）。把这份 JSON 展示给 owner，再按本文开头那条规则取得确认，才可最后切 stable manifest。切 stable 的 `promote`、切换后补复核的 `reverify` 和撤回用的 `rollback` 下一个 PR 加入；加入之前做到版本化对象上传加公网复核就停，不切 stable，也不手写命令去切。使用 `scripts/verify-public-release.mjs` 复核固定 URL，不能跟随重定向或加随机 query 绕缓存；必须看到它的成功输出才算通过，不能只看退出码。只有公网复核通过才报告发布完成，并持久保存发布回执。
 
-manifest 使用 `Cache-Control: no-cache` 和 `application/json`，如果启用了 CDN 就配短 TTL／重验证；版本化文件使用 `public, max-age=31536000, immutable`，feed 也必须是 `application/json`。头传错了按 workflow.md 只改元数据，不覆盖字节、不废版本号。更新格式保持 Squirrel.Mac 的 manifest `{version, feedURL}`、feed `{url, name, notes, pub_date}`，同源 HTTPS。回滚只恢复事先验证并保存的旧 manifest（启用了 CDN 就刷新）以停推；已升级客户端不降级，修复版必须高于**曾发布的最高版本**。
+manifest 使用 `Cache-Control: no-cache` 和 `application/json`，如果启用了 CDN 就配短 TTL／重验证；版本化文件使用 `public, max-age=31536000, immutable`，feed 也必须是 `application/json`。头传错了按 workflow.md 用 `fix-headers` 只改元数据，不覆盖字节、不废版本号。更新格式保持 Squirrel.Mac 的 manifest `{version, feedURL}`、feed `{url, name, notes, pub_date}`，同源 HTTPS。回滚只恢复事先验证并保存在计划里的旧 manifest（首发只删 manifest；启用了 CDN 就刷新）以停推；已升级客户端不降级，修复版必须高于**曾发布的最高版本**。
 
 ## 输出与清理
 
