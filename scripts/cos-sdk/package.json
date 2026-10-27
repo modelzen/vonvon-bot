@@ -1,0 +1,8 @@
+{
+  "name": "vonvon-release-cos-sdk",
+  "private": true,
+  "description": "Pinned COS SDK for scripts/release-cos-evidence.mjs and scripts/release-cos-publish.mjs; installed outside the repository with npm ci, see .agents/skills/release-mac/references/workflow.md",
+  "dependencies": {
+    "cos-nodejs-sdk-v5": "3.0.0"
+  }
+}
