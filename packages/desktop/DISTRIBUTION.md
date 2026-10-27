@@ -1,6 +1,6 @@
 # 本地 macOS 分发
 
-macOS 的 Finder / Dock 使用 `assets/macos-icon.png`：圆角以外及画布四周透明，保留原猫咪图案。打包配置与运行时 Dock 共用此资源，不直接使用网页的白底方形 Logo。原 Logo 更新后，在 Mac 上从仓库根运行 `swift scripts/render-macos-icon.swift`，提交重新生成的 PNG，再构建预览包。
+macOS 的 Finder 使用 `assets/macos-icon.icns`，运行时 Dock 使用 `assets/macos-icon.png`：圆角以外及画布四周透明，保留原猫咪图案。ICNS 的各尺寸由 macOS 工具生成，避免打包时的小尺寸图标损坏。原 Logo 更新后，在 Mac 上从仓库根运行 `swift scripts/render-macos-icon.swift`，提交重新生成的 PNG 和 ICNS，再构建预览包。
 
 先修改 `packages/daemon/package.json` 的产品版本，执行 `npm run version:sync` 同步 desktop/lock，再在仓库根执行 `npm run build`。协议和 client 的独立 API 版本不随产品发行号改。
 
