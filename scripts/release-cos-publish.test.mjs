@@ -823,6 +823,26 @@ test('fix-headers needs only the write key: it runs without the read-only key an
   assert.deepEqual(w.writes().slice(before).map(call => call.method), ['putObjectCopy', 'putObjectCopy', 'putObjectCopy']);
 });
 
+test('plan and upload need both keys: either one missing stops them before any request or check', async t => {
+  const w = await world(t);
+  const { sha256: hash } = await w.plan({ 'first-release': true });
+  const seen = () => [w.calls.length, w.fetched.length, w.childCalls.length];
+  // Each command in order: both missing-key runs stop at once, then a run with both keys goes through.
+  const commands = [
+    ['plan', deps => planPublish({ ...w.options, 'first-release': true }, deps)],
+    ['upload', deps => uploadRelease({ ...w.options, 'first-release': true, 'plan-sha256': hash, 'cancel-file': w.cancelFile }, deps)],
+  ];
+  for (const [command, run] of commands) {
+    for (const role of ['read-only', 'write']) {
+      const before = seen();
+      await assert.rejects(run(withoutKey(w.deps, role)), new RegExp(`COS ${role} key is not in this process environment`), `${command} without the ${role} key`);
+      assert.deepEqual(seen(), before, `${command} without the ${role} key stops before any request or check`);
+    }
+    await run(w.deps);
+  }
+  assert.equal((await w.receipt('upload-receipt.json')).planSHA256, hash);
+});
+
 test('a stale publishing lock is removed; a live one or release-mac\'s lock stops the run', async t => {
   const w = await world(t);
   const lock = join(w.out, '.publish.lock');

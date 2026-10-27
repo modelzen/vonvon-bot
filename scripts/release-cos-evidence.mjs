@@ -40,7 +40,8 @@ export async function loadPinnedSdk(sdkModule, readJSON = defaultReadJSON) {
   let manifest;
   try { manifest = await readJSON(join(sdkModule, 'package.json')); } catch { throw new Error('Cannot read the COS SDK package.json'); }
   if (manifest?.name !== 'cos-nodejs-sdk-v5' || manifest.version !== COS_SDK_VERSION) throw new Error(`sdkModule must be the pinned cos-nodejs-sdk-v5@${COS_SDK_VERSION}`);
-  // npm ci installs exactly the lockfile it finds and leaves it unchanged, so equal bytes pin the whole tree.
+  // npm ci installs exactly the lockfile it finds and leaves it unchanged, so equal bytes show the prefix was
+  // installed by npm ci from this lockfile. They do not check the files under node_modules themselves.
   let pinned, installed;
   try { pinned = await readFile(COS_SDK_LOCKFILE); } catch { throw new Error('Cannot read scripts/cos-sdk/package-lock.json from this checkout'); }
   try { installed = await readFile(join(dirname(dirname(sdkModule)), 'package-lock.json')); } catch { installed = undefined; }
