@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, symlink, unlink, writeFile } from '
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { appendLedger, fixReleaseHeaders, NO_CDN, planPublish, promoteRelease, readCosWriteConfig, reverifyRelease, rollbackRelease, uploadRelease } from './release-cos-publish.mjs';
+import { appendLedger, fixReleaseHeaders, NO_CDN, planPublish, readCosWriteConfig, uploadRelease } from './release-cos-publish.mjs';
 import { COS_SDK_LOCKFILE } from './release-cos-evidence.mjs';
 import { DEFAULT_MANIFEST_URL, validateReleaseInventory, verifyPublicRelease, verifyVersionedRelease } from './verify-public-release.mjs';
 
@@ -19,7 +19,6 @@ const SECRETS = { COS_READ_ID: 'SENTINEL-READ-ID', COS_READ_KEY: 'SENTINEL-READ-
 const immutable = 'public, max-age=31536000, immutable';
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const zipFile = `Vonvon-Bot-${version}-universal.zip`, dmgFile = `Vonvon-Bot-${version}-universal.dmg`, feedFile = `feed-${version}.json`;
-const confirm = `确认 ${version} ${sha} 发布到 stable`;
 const manifestBytes = v => Buffer.from(JSON.stringify({ version: v, feedURL: new URL(`feed-${v}.json`, base).href }, null, 2) + '\n');
 const feedBytes = v => Buffer.from(JSON.stringify({ url: new URL(`Vonvon-Bot-${v}-universal.zip`, base).href, name: `Vonvon Bot ${v}`, notes: 'Release notes.', pub_date: '2026-10-27T00:00:00.000Z' }, null, 2) + '\n');
 
@@ -135,10 +134,7 @@ async function world(t, settings = {}) {
     root, out, objects, bucket, calls, childCalls, fetched, logs, deps, options, cancelFile, ledgerFile, readConfigPath, writeConfigPath, writes,
     plan: extra => planPublish({ ...options, ...extra }, deps),
     upload: extra => uploadRelease({ ...options, 'cancel-file': cancelFile, ...extra }, deps),
-    promote: extra => promoteRelease({ ...options, 'cancel-file': cancelFile, 'owner-confirmation': confirm, ...extra }, deps),
-    rollback: extra => rollbackRelease({ ...options, ...extra }, deps),
     fixHeaders: extra => fixReleaseHeaders({ ...options, 'cancel-file': cancelFile, ...extra }, deps),
-    reverify: extra => reverifyRelease({ ...options, ...extra }, deps),
     ledger: async () => JSON.parse(await readFile(ledgerFile, 'utf8')).versions,
     receipt: async name => JSON.parse(await readFile(join(out, name), 'utf8')),
   };
@@ -163,7 +159,7 @@ function assertNoSecrets(text, label) {
   assert.equal(text.includes(BUCKET), false, `${label} contains the bucket identity`);
 }
 
-test('first release: plan writes nothing, upload writes only versioned objects, promote writes the manifest last', async t => {
+test('first release: plan writes nothing and upload writes only versioned objects, never the manifest', async t => {
   const w = await world(t);
   const planned = await w.plan({ 'first-release': true });
   assert.deepEqual(w.writes(), [], 'plan makes no COS write');
@@ -203,36 +199,15 @@ test('first release: plan writes nothing, upload writes only versioned objects, 
   assert.ok(uploadReceipt.objects.every(object => object.result === 'uploaded'));
   assert.ok(w.logs.some(line => line.includes('"versionedObjectsVerified": true')));
 
-  const before = w.writes().length;
-  await w.promote({ 'plan-sha256': planned.sha256 });
-  const after = w.writes().slice(before);
-  assert.equal(after.length, 1, 'promote writes exactly one object');
-  assert.equal(after[0].params.Key, `${PREFIX}manifest.json`);
-  assert.equal(after[0].params.CacheControl, 'no-cache');
-  assert.equal(after[0].params.ContentType, 'application/json');
-  assert.equal(after[0].params.Headers['x-cos-forbid-overwrite'], 'true', 'a first-release manifest may not replace one that appeared meanwhile');
-  assert.equal(after[0].bodySHA256, digest(await readFile(join(w.out, 'manifest.json'))));
-  assert.equal(w.writes().at(-1), after[0], 'the manifest is the last write');
-  const receipt = await w.receipt('publish-receipt.json');
-  assert.equal(receipt.status, 'published');
-  assert.equal(receipt.ownerConfirmation, confirm);
-  assert.deepEqual(receipt.previousManifest, { status: 404 });
-  assert.equal(receipt.cdn, NO_CDN);
-  assert.equal(receipt.publicVerification.publiclyVerified, true);
-  assert.equal(receipt.manifest.sha256, plan.promote.sha256);
-  assert.deepEqual(receipt.objects.map(object => object.sha256), plan.upload.map(step => step.sha256));
-
   for (const call of w.childCalls) {
     for (const name of Object.keys(SECRETS)) assert.equal(name in call.env, false, `${name} reached a verification child`);
     assert.equal(Object.values(call.env).some(value => Object.values(SECRETS).includes(value)), false);
   }
-  for (const name of ['publish-plan.json', 'upload-receipt.json', 'publish-receipt.json', 'publish-upload-state.json']) assertNoSecrets(await readFile(join(w.out, name), 'utf8'), name);
+  for (const name of ['publish-plan.json', 'upload-receipt.json', 'publish-upload-state.json']) assertNoSecrets(await readFile(join(w.out, name), 'utf8'), name);
   assertNoSecrets(w.logs.join('\n'), 'output');
-  await assert.rejects(w.promote({ 'plan-sha256': planned.sha256 }), /already serves this release/);
-  await assert.rejects(w.plan(), /greater than the highest/, 'a promoted version cannot be planned again');
 });
 
-test('non-first release snapshots the live manifest, replaces it at promote, and restore-previous writes the saved bytes back', async t => {
+test('non-first release snapshots the live manifest bytes in the plan and upload leaves the manifest alone', async t => {
   const w = await world(t, { objects: published069(), ledger: ['0.6.9'] });
   const oldManifest = manifestBytes('0.6.9');
   await assert.rejects(w.plan({ 'first-release': true }), /cannot replace an existing stable manifest/);
@@ -246,45 +221,7 @@ test('non-first release snapshots the live manifest, replaces it at promote, and
   assert.equal(plan.rollback.command, 'rollback --restore-previous');
   await w.upload({ 'plan-sha256': hash });
   assert.deepEqual(await w.ledger(), ['0.6.9', version]);
-  await w.promote({ 'plan-sha256': hash });
-  assert.equal(w.writes().at(-1).params.Key, `${PREFIX}manifest.json`);
-  assert.equal(w.writes().at(-1).params.Headers, undefined);
-  assert.equal(w.objects.get(`${PREFIX}manifest.json`).bytes.equals(manifestBytes(version)), true);
-  assert.equal((await w.receipt('publish-receipt.json')).previousManifest.sha256, digest(oldManifest));
-
-  const before = w.writes().length;
-  await w.rollback({ 'plan-sha256': hash, 'restore-previous': true, 'dry-run': true });
-  assert.equal(w.writes().length, before, 'dry-run prints only');
-  await assert.rejects(w.rollback({ 'plan-sha256': hash, 'delete-first-release-manifest': true }), /applies only when the reviewed plan found no stable manifest/);
-  await w.rollback({ 'plan-sha256': hash, 'restore-previous': true });
-  const restore = w.writes().slice(before);
-  assert.equal(restore.length, 1);
-  assert.deepEqual([restore[0].method, restore[0].params.Key, restore[0].params.CacheControl, restore[0].params.ContentType], ['putObject', `${PREFIX}manifest.json`, 'no-cache', 'application/json']);
-  assert.equal(w.objects.get(`${PREFIX}manifest.json`).bytes.equals(oldManifest), true);
-  for (const file of [zipFile, dmgFile, feedFile]) assert.ok(w.objects.has(PREFIX + file), 'versioned objects stay');
-  assert.deepEqual(await w.ledger(), ['0.6.9', version], 'the ledger stays');
-  const receipt = await w.receipt('rollback-receipt.json');
-  assert.equal(receipt.action, 'restored');
-  assert.deepEqual(receipt.after, { status: 200, sha256: digest(oldManifest) });
-  for (const run of [() => w.promote({ 'plan-sha256': hash }), () => w.plan(), () => w.upload({ 'plan-sha256': hash })]) await assert.rejects(run(), /rolled back; a fix must be a new, higher version/);
-});
-
-test('first-release withdrawal deletes only manifest.json and confirms HTTP 404', async t => {
-  const { w, hash } = await publishedFirst(t);
-  await w.promote({ 'plan-sha256': hash });
-  await assert.rejects(w.rollback({ 'plan-sha256': hash, 'restore-previous': true }), /saved no previous manifest/);
-  await assert.rejects(w.rollback({ 'plan-sha256': hash }), /exactly one/);
-  const before = w.writes().length;
-  await w.rollback({ 'plan-sha256': hash, 'delete-first-release-manifest': true });
-  const removal = w.writes().slice(before);
-  assert.deepEqual(removal.map(call => [call.method, call.params.Key]), [['deleteObject', `${PREFIX}manifest.json`]]);
-  assert.equal(w.objects.has(`${PREFIX}manifest.json`), false);
-  for (const file of [zipFile, dmgFile, feedFile]) assert.ok(w.objects.has(PREFIX + file));
-  assert.deepEqual(await w.ledger(), [version]);
-  assert.equal((await w.receipt('rollback-receipt.json')).action, 'deleted');
-  await w.rollback({ 'plan-sha256': hash, 'delete-first-release-manifest': true });
-  assert.equal(w.writes().length, before + 1, 'a repeated withdrawal writes nothing');
-  for (const run of [() => w.plan({ 'no-live-manifest': true }), () => w.upload({ 'no-live-manifest': true, 'plan-sha256': hash }), () => w.promote({ 'plan-sha256': hash })]) await assert.rejects(run(), /rolled back/);
+  assert.equal(w.objects.get(`${PREFIX}manifest.json`).bytes.equals(oldManifest), true, 'upload leaves the live manifest alone');
 });
 
 test('local evidence gates stop plan before any request or COS call', async t => {
@@ -402,49 +339,6 @@ test('plan hash, plan file and cancel file are checked before every write', asyn
     await assert.rejects(w.upload({ 'first-release': true, 'plan-sha256': sha256 }), /Cancel file exists; stopped before uploading Vonvon-Bot-0\.7\.0-universal\.dmg/);
     assert.deepEqual(w.writes().map(call => call.params.Key), [PREFIX + zipFile]);
   });
-  await t.test('a cancel file stops promote before the manifest', async t2 => {
-    const { w, hash } = await publishedFirst(t2);
-    const before = w.writes().length;
-    await writeFile(w.cancelFile, 'cancel');
-    await assert.rejects(w.promote({ 'plan-sha256': hash }), /Cancel file exists/);
-    assert.equal(w.writes().length, before);
-    assert.equal(w.objects.has(`${PREFIX}manifest.json`), false);
-  });
-});
-
-test('promote stops when the live manifest changed after the plan', async t => {
-  await t.test('a manifest appeared before a first-release promote', async t2 => {
-    const { w, hash } = await publishedFirst(t2);
-    w.objects.set(`${PREFIX}manifest.json`, { bytes: manifestBytes('0.6.9'), cacheControl: 'no-cache', contentType: 'application/json' });
-    const before = w.writes().length;
-    await assert.rejects(w.promote({ 'plan-sha256': hash }), /changed since the reviewed plan/);
-    assert.equal(w.writes().length, before);
-  });
-  await t.test('the previous manifest bytes changed', async t2 => {
-    const w = await world(t2, { objects: published069(), ledger: ['0.6.9'] });
-    const { sha256 } = await w.plan();
-    await w.upload({ 'plan-sha256': sha256 });
-    w.objects.set(`${PREFIX}manifest.json`, { bytes: Buffer.from(JSON.stringify({ version: '0.6.9', feedURL: new URL('feed-0.6.9.json', base).href })), cacheControl: 'no-cache', contentType: 'application/json' });
-    const before = w.writes().length;
-    await assert.rejects(w.promote({ 'plan-sha256': sha256 }), /changed since the reviewed plan/);
-    assert.equal(w.writes().length, before);
-  });
-  await t.test('a manifest racing in after the snapshot is not overwritten', async t2 => {
-    const { w, hash } = await publishedFirst(t2);
-    const put = w.deps.writeClient.putObject;
-    w.deps.writeClient.putObject = (params, callback) => {
-      if (params.Key.endsWith('manifest.json')) w.objects.set(params.Key, { bytes: manifestBytes('0.6.9'), cacheControl: 'no-cache', contentType: 'application/json' });
-      put(params, callback);
-    };
-    await assert.rejects(w.promote({ 'plan-sha256': hash }), /appeared after the snapshot; nothing was overwritten/);
-    assert.equal(w.objects.get(`${PREFIX}manifest.json`).bytes.equals(manifestBytes('0.6.9')), true);
-  });
-  await t.test('promote requires a completed upload for this plan', async t2 => {
-    const w = await world(t2);
-    const { sha256 } = await w.plan({ 'first-release': true });
-    await assert.rejects(w.promote({ 'plan-sha256': sha256 }), /upload-receipt\.json is missing/);
-    assert.deepEqual(w.writes(), []);
-  });
 });
 
 test('verification that exits 0 without its success output is a failure', async t => {
@@ -466,34 +360,6 @@ test('verification that exits 0 without its success output is a failure', async 
     assert.deepEqual(await w.ledger(), []);
     await assert.rejects(readFile(join(w.out, 'upload-receipt.json')), { code: 'ENOENT' });
   });
-  await t.test('full verification failure keeps the manifest, prints the rollback and exits nonzero', async t2 => {
-    const { w, hash } = await publishedFirst(t2, { verifyOutput: { full: 'all good\n' } });
-    await assert.rejects(w.promote({ 'plan-sha256': hash }), /Public verification failed after writing the stable manifest/);
-    const receipt = await w.receipt('publish-receipt.json');
-    assert.equal(receipt.status, 'manifest-written-public-verification-failed');
-    assert.equal(receipt.publicVerification.publiclyVerified, false);
-    assert.equal(w.writes().at(-1).params.Key, `${PREFIX}manifest.json`, 'no automatic rollback after the manifest write');
-    assert.ok(w.objects.has(`${PREFIX}manifest.json`));
-    const command = w.logs.find(line => line.includes(' rollback --delete-first-release-manifest '));
-    assert.ok(command && command.includes(`--plan-sha256 ${hash}`));
-  });
-  await t.test('"publiclyVerified": true without the planned files', async t2 => {
-    const { w, hash } = await publishedFirst(t2, { verifyOutput: { full: JSON.stringify({ version, sourceCommit: sha, publiclyVerified: true, files: [] }, null, 2) } });
-    await assert.rejects(w.promote({ 'plan-sha256': hash }), /did not confirm/);
-    assert.equal((await w.receipt('publish-receipt.json')).status, 'manifest-written-public-verification-failed');
-  });
-});
-
-test('owner confirmation must be given verbatim and name the version, exact SHA and 发布到 stable', async t => {
-  const { w, hash } = await publishedFirst(t);
-  const before = w.writes().length;
-  for (const text of [undefined, '', `${version} 发布到 stable`, `${version} ${sha.slice(0, 12)} 发布到 stable`, `${version} ${sha}`, `0.7.01 ${sha} 发布到 stable`, `10.7.0 ${sha} 发布到 stable`, `1.0.7.0 ${sha} 发布到 stable`]) {
-    await assert.rejects(w.promote({ 'plan-sha256': hash, 'owner-confirmation': text }), /owner/, String(text));
-  }
-  assert.equal(w.writes().length, before);
-  await assert.rejects(w.promote({ 'plan-sha256': hash, 'first-release': true }), /promote does not take --first-release/);
-  await unlink(join(w.out, 'publish-upload-state.json'));
-  await w.promote({ 'plan-sha256': hash, 'owner-confirmation': `版本 ${version}，源码 ${sha}，发布到 stable。` });
 });
 
 test('credential settings are environment variable names in a separate, matching write configuration', async t => {
@@ -545,8 +411,7 @@ test('TLS trust-store overrides stop every subcommand before any request', async
     await t.test(JSON.stringify(extra), async t2 => {
       const w = await world(t2, { env: extra });
       const hash = 'c'.repeat(64);
-      for (const run of [() => w.plan({ 'first-release': true }), () => w.upload({ 'first-release': true, 'plan-sha256': hash }), () => w.promote({ 'plan-sha256': hash }),
-        () => w.rollback({ 'plan-sha256': hash, 'restore-previous': true }), () => w.fixHeaders({ 'plan-sha256': hash }), () => w.reverify({ 'plan-sha256': hash })]) await assert.rejects(run(), /TLS verification/);
+      for (const run of [() => w.plan({ 'first-release': true }), () => w.upload({ 'first-release': true, 'plan-sha256': hash }), () => w.fixHeaders({ 'plan-sha256': hash })]) await assert.rejects(run(), /TLS verification/);
       assert.deepEqual(w.calls, []);
       assert.deepEqual(w.fetched, []);
       assert.deepEqual(w.childCalls, []);
@@ -595,169 +460,9 @@ test('fix-headers replaces metadata in place and re-verifies the full SHA-256', 
   assert.equal(w.objects.get(PREFIX + feedFile).contentType, 'application/json');
   assert.deepEqual(await w.ledger(), [version]);
   assert.equal((await w.receipt('fix-headers-receipt.json')).versionedVerification.versionedObjectsVerified, true);
-  assert.ok(w.logs.includes('Run upload again with the same plan to record upload-receipt.json before promote.'));
+  assert.ok(w.logs.includes('Run upload again with the same plan to record upload-receipt.json.'));
   await w.upload({ 'first-release': true, 'plan-sha256': sha256 });
   assert.ok((await w.receipt('upload-receipt.json')).objects.every(object => object.result === 'reused-existing'));
-  await w.promote({ 'plan-sha256': sha256 });
-  assert.equal((await w.receipt('publish-receipt.json')).status, 'published');
-});
-
-const manifestKey = `${PREFIX}manifest.json`;
-const fromVerify = (w, mode, after) => {
-  const realExec = w.deps.execFile;
-  w.deps.execFile = async (command, args, options) => { const result = await realExec(command, args, options); if (args.includes(mode)) await after(); return result; };
-};
-
-test('promote rereads the live manifest and the cancel file right before the write', async t => {
-  await t.test('a newer manifest switched in during the checks is not overwritten', async t2 => {
-    const w = await world(t2, { objects: published069(), ledger: ['0.6.9'] });
-    const { sha256 } = await w.plan();
-    await w.upload({ 'plan-sha256': sha256 });
-    fromVerify(w, '--versioned-only', () => w.objects.set(manifestKey, { bytes: manifestBytes('0.7.1'), cacheControl: 'no-cache', contentType: 'application/json' }));
-    const before = w.writes().length;
-    await assert.rejects(w.promote({ 'plan-sha256': sha256 }), /changed since the reviewed plan; nothing was written/);
-    assert.equal(w.writes().length, before);
-    assert.equal(w.objects.get(manifestKey).bytes.equals(manifestBytes('0.7.1')), true);
-  });
-  await t.test('a cancel file created during the checks', async t2 => {
-    const { w, hash } = await publishedFirst(t2);
-    fromVerify(w, '--versioned-only', () => writeFile(w.cancelFile, 'cancel'));
-    const before = w.writes().length;
-    await assert.rejects(w.promote({ 'plan-sha256': hash }), /Cancel file exists; stopped before writing the stable manifest/);
-    assert.equal(w.writes().length, before);
-  });
-});
-
-test('a switch that failed verification or lost its response is finished by reverify, never written twice', async t => {
-  await t.test('a transient verification failure', async t2 => {
-    const settings = { verifyOutput: { full: 'network blip\n' } };
-    const { w, hash } = await publishedFirst(t2, settings);
-    await assert.rejects(w.reverify({ 'plan-sha256': hash }), /records no promote of this plan/);
-    await assert.rejects(w.promote({ 'plan-sha256': hash }), /Public verification failed/);
-    assert.ok(w.logs.some(line => line.includes('run reverify with the same plan hash')));
-    const writes = w.writes().length;
-    await assert.rejects(w.promote({ 'plan-sha256': hash }), /already serves this release manifest; do not promote again\. To finish its public verification run reverify/);
-    settings.verifyOutput.full = undefined;
-    assert.equal((await w.reverify({ 'plan-sha256': hash })).status, 'published');
-    assert.equal(w.writes().length, writes, 'reverify writes nothing');
-    const receipt = await w.receipt('publish-receipt.json');
-    assert.deepEqual([receipt.status, receipt.ownerConfirmation, receipt.publicVerification.publiclyVerified, typeof receipt.reverifiedAt], ['published', confirm, true, 'string']);
-    await assert.rejects(w.reverify({ 'plan-sha256': hash }), /already records published/);
-  });
-  const storeThen = answer => (params, { objects }) => {
-    if (!params.Key.endsWith('manifest.json')) return undefined;
-    objects.set(params.Key, { bytes: Buffer.from(params.Body), cacheControl: params.CacheControl, contentType: params.ContentType });
-    return answer;
-  };
-  await t.test('an SDK retry that meets its own first write', async t2 => {
-    const { w, hash } = await publishedFirst(t2, { onPut: storeThen({ statusCode: 409, code: 'FileAlreadyExists' }) });
-    const receipt = await w.promote({ 'plan-sha256': hash });
-    assert.deepEqual([receipt.status, receipt.manifest.write], ['published', 'already-written-with-these-bytes']);
-  });
-  await t.test('a lost response is re-verified from the receipt written before the switch', async t2 => {
-    const { w, hash } = await publishedFirst(t2, { onPut: storeThen({ code: 'ECONNRESET' }) });
-    await assert.rejects(w.promote({ 'plan-sha256': hash }), /\(ECONNRESET\).*If stable now serves this release, run reverify/);
-    assert.equal((await w.receipt('publish-receipt.json')).status, 'manifest-write-started');
-    assert.equal((await w.reverify({ 'plan-sha256': hash })).status, 'published');
-  });
-  await t.test('a refused write leaves stable unchanged and promote may run again', async t2 => {
-    const settings = { onPut: params => params.Key.endsWith('manifest.json') ? { statusCode: 403, code: 'AccessDenied' } : undefined };
-    const { w, hash } = await publishedFirst(t2, settings);
-    await assert.rejects(w.promote({ 'plan-sha256': hash }), /HTTP 403/);
-    await assert.rejects(w.reverify({ 'plan-sha256': hash }), /does not serve this release manifest/);
-    settings.onPut = undefined;
-    assert.equal((await w.promote({ 'plan-sha256': hash })).status, 'published');
-  });
-});
-
-test('promote re-verifies the uploaded objects, the ledger and the upload receipt before the switch', async t => {
-  for (const [name, damage, error] of [
-    ['ZIP deleted from COS', w => w.objects.delete(PREFIX + zipFile), /--versioned-only failed/],
-    ['ZIP bytes changed in COS', w => { w.objects.get(PREFIX + zipFile).bytes = Buffer.from('changed'); }, /--versioned-only failed/],
-    ['ledger without this version', w => writeFile(w.ledgerFile, '{"versions": []}\n'), /ledger does not record/],
-    ['upload receipt of another plan', async w => writeFile(join(w.out, 'upload-receipt.json'), JSON.stringify({ ...await w.receipt('upload-receipt.json'), planSHA256: 'c'.repeat(64) })), /belongs to a different plan/],
-  ]) await t.test(name, async t2 => {
-    const { w, hash } = await publishedFirst(t2);
-    await damage(w);
-    const before = w.writes().length;
-    await assert.rejects(w.promote({ 'plan-sha256': hash }), error);
-    assert.equal(w.writes().length, before);
-    assert.equal(w.objects.has(manifestKey), false);
-  });
-});
-
-test('rollback needs this output\'s promote, judges the live manifest by raw bytes and records nothing on --dry-run', async t => {
-  await t.test('withdrawing a first release', async t2 => {
-    const settings = {};
-    const { w, hash } = await publishedFirst(t2, settings);
-    for (const extra of [{ 'delete-first-release-manifest': true, 'dry-run': true }, { 'delete-first-release-manifest': true }]) await assert.rejects(w.rollback({ 'plan-sha256': hash, ...extra }), /records no promote of this plan/);
-    await w.promote({ 'plan-sha256': hash });
-    const before = w.writes().length;
-    assert.deepEqual(await w.rollback({ 'plan-sha256': hash, 'delete-first-release-manifest': true, 'dry-run': true }), { action: 'dry-run', planned: 'delete' });
-    await assert.rejects(w.rollback({ 'plan-sha256': 'c'.repeat(64), 'delete-first-release-manifest': true }), /differs from --plan-sha256/);
-    assert.equal(w.writes().length, before);
-    await assert.rejects(readFile(join(w.out, 'rollback-receipt.json')), { code: 'ENOENT' });
-    w.objects.get(manifestKey).contentType = 'application/octet-stream';
-    settings.ignoreDelete = true;
-    await assert.rejects(w.rollback({ 'plan-sha256': hash, 'delete-first-release-manifest': true }), /still served/);
-    settings.ignoreDelete = false;
-    assert.equal((await w.rollback({ 'plan-sha256': hash, 'delete-first-release-manifest': true })).action, 'deleted');
-    assert.equal(w.objects.has(manifestKey), false);
-  });
-  await t.test('restoring the previous manifest', async t2 => {
-    const settings = { objects: published069(), ledger: ['0.6.9'] };
-    const w = await world(t2, settings);
-    const { sha256: hash } = await w.plan();
-    await w.upload({ 'plan-sha256': hash });
-    await w.promote({ 'plan-sha256': hash });
-    const ours = w.objects.get(manifestKey), before = w.writes().length;
-    w.objects.set(manifestKey, { ...ours, bytes: manifestBytes('0.7.1') });
-    await assert.rejects(w.rollback({ 'plan-sha256': hash, 'restore-previous': true }), /neither this release nor the saved previous manifest/);
-    w.objects.set(manifestKey, { ...ours, contentType: 'application/octet-stream' });
-    const configs = await Promise.all([w.readConfigPath, w.writeConfigPath].map(path => readFile(path, 'utf8')));
-    for (const [index, path] of [w.readConfigPath, w.writeConfigPath].entries()) await writeFile(path, configs[index].replaceAll(BUCKET, 'other-1250000001'));
-    await assert.rejects(w.rollback({ 'plan-sha256': hash, 'restore-previous': true }), /configuration files changed since the reviewed plan/);
-    for (const [index, path] of [w.readConfigPath, w.writeConfigPath].entries()) await writeFile(path, configs[index] + '\n');
-    assert.equal(w.writes().length, before);
-    settings.onPut = params => params.Key === manifestKey ? 'drop' : undefined;
-    await assert.rejects(w.rollback({ 'plan-sha256': hash, 'restore-previous': true }), /does not equal the saved previous manifest/);
-    settings.onPut = undefined;
-    assert.equal((await w.rollback({ 'plan-sha256': hash, 'restore-previous': true })).action, 'restored');
-    assert.ok(w.logs.some(line => line.includes('recovery continues')));
-    assert.equal(w.objects.get(manifestKey).bytes.equals(manifestBytes('0.6.9')), true);
-  });
-});
-
-test('rollback and reverify need only the keys they use, so a missing read-only key never blocks an emergency restore', async t => {
-  await t.test('restore-previous runs without the read-only key and stops without the write key', async t2 => {
-    const w = await world(t2, { objects: published069(), ledger: ['0.6.9'] });
-    const { sha256: hash } = await w.plan();
-    await w.upload({ 'plan-sha256': hash });
-    await w.promote({ 'plan-sha256': hash });
-    const restore = deps => rollbackRelease({ ...w.options, 'plan-sha256': hash, 'restore-previous': true }, deps);
-    const before = w.writes().length, fetched = w.fetched.length;
-    await assert.rejects(restore(withoutKey(w.deps, 'read-only', 'write')), /COS write key is not in this process environment/);
-    assert.deepEqual([w.writes().length, w.fetched.length], [before, fetched], 'stops before any request');
-    assert.equal(w.objects.get(manifestKey).bytes.equals(manifestBytes(version)), true);
-    assert.equal((await restore(withoutKey(w.deps, 'read-only'))).action, 'restored');
-    assert.equal(w.objects.get(manifestKey).bytes.equals(manifestBytes('0.6.9')), true);
-  });
-  await t.test('withdrawing a first release lists COS afterwards, so it needs both keys', async t2 => {
-    const { w, hash } = await publishedFirst(t2);
-    await w.promote({ 'plan-sha256': hash });
-    const withdraw = deps => rollbackRelease({ ...w.options, 'plan-sha256': hash, 'delete-first-release-manifest': true }, deps);
-    await assert.rejects(withdraw(withoutKey(w.deps, 'read-only')), /COS read-only key is not in this process environment/);
-    await assert.rejects(withdraw(withoutKey(w.deps, 'write')), /COS write key is not in this process environment/);
-    assert.ok(w.objects.has(manifestKey), 'nothing was deleted');
-    assert.equal((await withdraw(w.deps)).action, 'deleted');
-  });
-  await t.test('reverify needs neither key', async t2 => {
-    const settings = { verifyOutput: { full: 'network blip\n' } };
-    const { w, hash } = await publishedFirst(t2, settings);
-    await assert.rejects(w.promote({ 'plan-sha256': hash }), /Public verification failed/);
-    settings.verifyOutput.full = undefined;
-    assert.equal((await reverifyRelease({ ...w.options, 'plan-sha256': hash }, withoutKey(w.deps, 'read-only', 'write'))).status, 'published');
-  });
 });
 
 test('upload stops when the candidate or its bytes changed after review', async t => {
@@ -893,7 +598,7 @@ test('the stable confirmation rule is kept word for word in AGENTS.md, SKILL.md 
     assert.equal(/尚未实现/.test(text), false, `${name} no longer says the writer is missing`);
     assert.ok(text.includes('scripts/release-cos-publish.mjs'), `${name} names the publishing tool`);
   }
-  for (const command of ['plan', 'upload', 'promote', 'rollback --restore-previous', 'rollback --delete-first-release-manifest', 'fix-headers']) assert.ok(workflow.includes(command), `workflow.md documents ${command}`);
+  for (const command of ['plan', 'upload', 'fix-headers']) assert.ok(workflow.includes(command), `workflow.md documents ${command}`);
 });
 
 test('CLI explains every subcommand and fails closed through a symlinked directory', async t => {
@@ -904,7 +609,8 @@ test('CLI explains every subcommand and fails closed through a symlinked directo
   const run = (args, env = {}) => spawnSync(process.execPath, [join(root, 'alias', 'release-cos-publish.mjs'), ...args], { encoding: 'utf8', env: { PATH: process.env.PATH, ...env } });
   const help = run(['--help']);
   assert.equal(help.status, 0);
-  for (const command of ['plan ', 'upload ', 'promote ', 'reverify ', 'rollback ', 'fix-headers ', '--owner-confirmation', '--cancel-file', '--plan-sha256', '--cos-write-config']) assert.ok(help.stdout.includes(command), command);
+  for (const command of ['plan ', 'upload ', 'fix-headers ', '--cancel-file', '--plan-sha256', '--cos-write-config']) assert.ok(help.stdout.includes(command), command);
+  for (const command of ['promote', 'reverify', 'rollback']) assert.equal(new RegExp(`^${command} `, 'm').test(help.stdout), false, `${command} is not offered before its PR`);
   for (const args of [[], ['publish'], ['plan', 'upload']]) {
     const usage = run(args);
     assert.equal(usage.status, 1);
@@ -913,7 +619,7 @@ test('CLI explains every subcommand and fails closed through a symlinked directo
   const gated = run(['plan', '--out', join(root, 'evidence'), '--version', version, '--sha', sha], { SSL_CERT_FILE: '/fixture/ca.pem' });
   assert.equal(gated.status, 1);
   assert.match(gated.stderr, /TLS verification/);
-  const missing = run(['upload', '--out', join(root, 'evidence'), '--version', version, '--sha', sha, '--owner-confirmation', 'x']);
+  const missing = run(['plan', '--out', join(root, 'evidence'), '--version', version, '--sha', sha, '--cancel-file', join(root, 'cancel')]);
   assert.equal(missing.status, 1);
-  assert.match(missing.stderr, /upload does not take --owner-confirmation/);
+  assert.match(missing.stderr, /plan does not take --cancel-file/);
 });
