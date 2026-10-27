@@ -148,6 +148,13 @@ const publishedFirst = async (t, settings) => {
   await w.upload({ 'first-release': true, 'plan-sha256': sha256 });
   return { w, hash: sha256 };
 };
+// Removes a role's injected client and its environment variables, as when the owner did not provide that key.
+const withoutKey = (deps, ...roles) => {
+  const { readClient, writeClient, env, ...rest } = deps;
+  const names = roles.flatMap(role => role === 'read-only' ? ['COS_READ_ID', 'COS_READ_KEY'] : ['COS_WRITE_ID', 'COS_WRITE_KEY']);
+  return { ...rest, env: Object.fromEntries(Object.entries(env).filter(([name]) => !names.includes(name))),
+    ...(roles.includes('read-only') ? {} : { readClient }), ...(roles.includes('write') ? {} : { writeClient }) };
+};
 
 function assertNoSecrets(text, label) {
   for (const secret of Object.values(SECRETS)) assert.equal(text.includes(secret), false, `${label} contains a credential value`);
@@ -720,6 +727,38 @@ test('rollback needs this output\'s promote, judges the live manifest by raw byt
   });
 });
 
+test('rollback and reverify need only the keys they use, so a missing read-only key never blocks an emergency restore', async t => {
+  await t.test('restore-previous runs without the read-only key and stops without the write key', async t2 => {
+    const w = await world(t2, { objects: published069(), ledger: ['0.6.9'] });
+    const { sha256: hash } = await w.plan();
+    await w.upload({ 'plan-sha256': hash });
+    await w.promote({ 'plan-sha256': hash });
+    const restore = deps => rollbackRelease({ ...w.options, 'plan-sha256': hash, 'restore-previous': true }, deps);
+    const before = w.writes().length, fetched = w.fetched.length;
+    await assert.rejects(restore(withoutKey(w.deps, 'read-only', 'write')), /COS write key is not in this process environment/);
+    assert.deepEqual([w.writes().length, w.fetched.length], [before, fetched], 'stops before any request');
+    assert.equal(w.objects.get(manifestKey).bytes.equals(manifestBytes(version)), true);
+    assert.equal((await restore(withoutKey(w.deps, 'read-only'))).action, 'restored');
+    assert.equal(w.objects.get(manifestKey).bytes.equals(manifestBytes('0.6.9')), true);
+  });
+  await t.test('withdrawing a first release lists COS afterwards, so it needs both keys', async t2 => {
+    const { w, hash } = await publishedFirst(t2);
+    await w.promote({ 'plan-sha256': hash });
+    const withdraw = deps => rollbackRelease({ ...w.options, 'plan-sha256': hash, 'delete-first-release-manifest': true }, deps);
+    await assert.rejects(withdraw(withoutKey(w.deps, 'read-only')), /COS read-only key is not in this process environment/);
+    await assert.rejects(withdraw(withoutKey(w.deps, 'write')), /COS write key is not in this process environment/);
+    assert.ok(w.objects.has(manifestKey), 'nothing was deleted');
+    assert.equal((await withdraw(w.deps)).action, 'deleted');
+  });
+  await t.test('reverify needs neither key', async t2 => {
+    const settings = { verifyOutput: { full: 'network blip\n' } };
+    const { w, hash } = await publishedFirst(t2, settings);
+    await assert.rejects(w.promote({ 'plan-sha256': hash }), /Public verification failed/);
+    settings.verifyOutput.full = undefined;
+    assert.equal((await reverifyRelease({ ...w.options, 'plan-sha256': hash }, withoutKey(w.deps, 'read-only', 'write'))).status, 'published');
+  });
+});
+
 test('upload stops when the candidate or its bytes changed after review', async t => {
   await t.test('a self-consistent new ZIP regenerates a different plan', async t2 => {
     const w = await world(t2);
@@ -767,6 +806,20 @@ test('fix-headers touches only this output\'s uploaded, planned bytes and honour
   const before = copies();
   await assert.rejects(w.fixHeaders({ 'plan-sha256': hash }), /does not publicly serve the planned bytes; stopped before changing its headers/);
   assert.equal(copies(), before);
+});
+
+test('fix-headers needs only the write key: it runs without the read-only key and stops without the write key', async t => {
+  const { w, hash } = await publishedFirst(t);
+  const fix = deps => fixReleaseHeaders({ ...w.options, 'cancel-file': w.cancelFile, 'plan-sha256': hash }, deps);
+  const before = w.writes().length, fetched = w.fetched.length, children = w.childCalls.length;
+  for (const present of [{}, { COS_WRITE_ID: 'present' }, { COS_WRITE_KEY: 'present' }]) {
+    const deps = withoutKey(w.deps, 'read-only', 'write');
+    await assert.rejects(fix({ ...deps, env: { ...deps.env, ...present } }), /COS write key is not in this process environment/, JSON.stringify(present));
+  }
+  assert.deepEqual([w.writes().length, w.fetched.length, w.childCalls.length], [before, fetched, children], 'stops before any request or check');
+  const receipt = await fix(withoutKey(w.deps, 'read-only'));
+  assert.equal(receipt.receipt, 'fix-headers');
+  assert.deepEqual(w.writes().slice(before).map(call => call.method), ['putObjectCopy', 'putObjectCopy', 'putObjectCopy']);
 });
 
 test('a stale publishing lock is removed; a live one or release-mac\'s lock stops the run', async t => {
