@@ -25,8 +25,9 @@ function welcomeAgentName(backend?: string): string {
  * product intro). Linked from the welcome card and surfaced as a chat tab.
  * Empty string = skip the tab + the manual button (no broken links). Set this
  * to the doc's share URL once it's published as "互联网获取链接的人可阅读".
+ * Since 0.7.0 this is the Vonvon Bot guide, which replaced the feishu-codex-bridge manual.
  */
-const HELP_DOC_URL: string = 'https://my.feishu.cn/wiki/PZ23wGr7JiKK5RkIG4rcZXzGn5g';
+const HELP_DOC_URL: string = 'https://my.feishu.cn/docx/LEJjdByBaovvgexL92Dc0QgsnKe';
 
 /**
  * PC 端深链：让群菜单的链接在飞书**侧边栏**打开而不是弹独立浏览器（官方
