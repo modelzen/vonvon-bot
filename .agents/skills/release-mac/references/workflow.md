@@ -50,6 +50,12 @@ HOME="$T/home" npm install --prefix "$COS_SDK_PREFIX" --ignore-scripts --no-save
 
 台账必须存在，格式 `{ "versions": ["0.7.0"] }`；确无发布历史的首发可为空数组，不能清空历史来过门槛。helper 用官方 SDK 实时完整分页列出 `bot/mac/stable/`，门槛取线上有效 manifest、所有历史 feed／安装包版本和本机台账的最高值。枚举失败、无法判定历史或台账无效就拒绝，不能接受人工编造的空列表。
 
+首发前还没有台账时，用下面这条建空台账，文件已存在就报错、不覆盖：
+
+```sh
+node -e 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify({ versions: [] }, null, 2) + "\n", { flag: "wx", mode: 0o600 })' "$LEDGER_FILE"
+```
+
 写台账：版本化对象上传完成、`--versioned-only` 通过后，不管 stable 切没切，立刻把这个版本追加进台账（台账记的是"公网上出现过的版本"，门槛据此只升不降）。`upload` 和 `fix-headers` 在 `--versioned-only` 通过后按同一规则自动追加；发布工具用不了时，经 owner 认可才手动用下面这条，已有就不重复，先写临时文件再改名：
 
 ```sh
@@ -86,7 +92,7 @@ VONVON_DESKTOP_UPDATE_CONFIG="$HOME/.vonvon-release/desktop-update.json" \
 | COS 有旧 `feed-*.json`／`Vonvon-Bot-*`，或台账有版本 | `--no-live-manifest` | 门槛取 COS 历史和台账的最高版本，state 与 inventory 记录 `baseline: {live: none, highestPublished: X}` |
 | 两边都是空的 | `--first-release` | 首发，state 与 inventory 记录 `baseline: none` |
 
-第二种是流程里写好的几条路：首发时版本化对象已经上传，owner 在 stable 关口说"先不发"；首发上传传到一半失败；首发撤回时删了 manifest。参数和情况对不上时 helper 拒绝，不会互相顶替。只有 404 才算"没有清单"：400、403、5xx、超时、重定向、TLS 错误和无效 200 一律拒绝。严禁 `curl -k`、`--insecure`、`NODE_TLS_REJECT_UNAUTHORIZED=0`，也不能用 `NODE_EXTRA_CA_CERTS`、`SSL_CERT_FILE`、`SSL_CERT_DIR`、`NODE_USE_SYSTEM_CA` 或 `NODE_OPTIONS`／Node 参数里的 `--use-openssl-ca`、`--use-system-ca`、`--openssl-config`、`--require`（`-r`）、`--import`、`--loader` 改信任链或预加载代码；helper 和复核脚本看到这些设置就拒绝。证书配错时修证书，不加 CA。环境里本来就带着这几个变量（比如沙箱代理设的）时，只在运行 helper 或复核脚本的那一条命令前用 `env -u NODE_EXTRA_CA_CERTS -u SSL_CERT_FILE -u SSL_CERT_DIR -u NODE_USE_SYSTEM_CA` 去掉；去掉后 TLS 不通，说明网络经过了会换证书的代理，停下报告，不把变量加回来。已有清单时按正常版本门槛，两个参数都不能用。
+第二种是流程里写好的几条路：首发时版本化对象已经上传，owner 在 stable 关口说"先不发"；首发上传传到一半失败；首发撤回时删了 manifest。参数和情况对不上时 helper 拒绝，不会互相顶替。只有 404 才算"没有清单"：400、403、5xx、超时、重定向、TLS 错误和无效 200 一律拒绝。严禁 `curl -k`、`--insecure`、`NODE_TLS_REJECT_UNAUTHORIZED=0`，也不能用 `NODE_EXTRA_CA_CERTS`、`SSL_CERT_FILE`、`SSL_CERT_DIR`、`NODE_USE_SYSTEM_CA` 或 `NODE_OPTIONS`／Node 参数里的 `--use-openssl-ca`、`--use-system-ca`、`--openssl-config`、`--require`（`-r`）、`--import`、`--loader` 改信任链或预加载代码；helper、复核脚本和发布工具看到这些设置就拒绝。证书配错时修证书，不加 CA。环境里本来就带着这几个变量（比如沙箱代理设的）时，只在运行 helper、复核脚本或发布工具的那一条命令前用 `env -u NODE_EXTRA_CA_CERTS -u SSL_CERT_FILE -u SSL_CERT_DIR -u NODE_USE_SYSTEM_CA` 去掉；去掉后 TLS 不通，说明网络经过了会换证书的代理，停下报告，不把变量加回来。已有清单时按正常版本门槛，两个参数都不能用。
 
 门槛没过时 helper 只在 `OUT/logs/` 写日志，`previous-manifest.json` 和 state 都在全部门槛通过后才写。
 
@@ -118,7 +124,7 @@ App 钉票并通过验证后才生成最终 ZIP 和 electron-builder `prepackage
 
 2026-10-26 查 DNS 时，`dl.vonvon.cc` 直接 CNAME 到 COS 源站域名，看不到 CDN 这一层，所以下文 CDN 的步骤都写成"如果启用了 CDN"。
 
-COS 写入只用 `scripts/release-cos-publish.mjs`（下称发布工具），不能自行挑一条默认覆盖的 `coscli cp` 临场执行，也不手写 SDK 调用。它有五个子命令：`plan` 只读，`upload` 只传版本化对象，`promote` 只写 stable manifest，`rollback` 只动 manifest，`fix-headers` 只改版本化对象的元数据；每个子命令的参数见 `--help`。每个子命令都和 helper 一样拒绝改信任链或预加载代码的环境变量和 Node 参数，公网请求一律正常 TLS、不跟随重定向。发布工具没有 CDN 刷新：写入配置里出现 `cdn` 就拒绝，回执记"未启用 CDN，未刷新"；以后启用 CDN，先补经审查的刷新步骤。
+COS 写入只用 `scripts/release-cos-publish.mjs`（下称发布工具），不能自行挑一条默认覆盖的 `coscli cp` 临场执行，也不手写 SDK 调用。它有六个子命令：`plan` 只读，`upload` 只传版本化对象，`promote` 只写 stable manifest，`reverify` 不写 COS、只补完切换后的公网复核，`rollback` 只动 manifest，`fix-headers` 只改版本化对象的元数据；每个子命令的参数见 `--help`。每个子命令都和 helper 一样拒绝改信任链或预加载代码的环境变量和 Node 参数，公网请求一律正常 TLS、不跟随重定向。SDK 写 COS 时会照 `HTTPS_PROXY` 走代理隧道，证书照常严格校验，会换证书的代理会让写入失败；这时停下报告，不加 CA。发布工具没有 CDN 刷新：写入配置里出现 `cdn` 就拒绝，回执记"未启用 CDN，未刷新"；以后启用 CDN，先补经审查的刷新步骤。
 
 写入用的 key 另配一份仓库外的配置，用 `--cos-write-config` 传入；只读枚举照旧用 `--cos-config`，每个子命令两份都要带：
 
@@ -136,7 +142,9 @@ COS 写入只用 `scripts/release-cos-publish.mjs`（下称发布工具），不
 
 只能有这几项，临时凭据另加 `securityTokenEnv`。bucket、region、prefix 必须和 `--cos-config` 相同；凭据只写环境变量名，变量名不能和只读 key 的相同，两把 key 也不能是同一个子账号的。SDK 的加载和版本核对与只读枚举相同。写入子账号只给这个 bucket 的 GetBucketVersioning（`plan` 读版本控制状态也用这把 key），和 `bot/mac/stable/` 前缀下的 PutObject、GetObject（PUT Object - Copy 要这两项）；首发撤回要删 manifest 时，再给 `bot/mac/stable/manifest.json` 这一个对象的 DeleteObject，不给别的删除权限。凭据只在发布工具自己的进程里用，调用复核脚本前删掉两份配置写的全部凭据变量；报错只给 HTTP 状态和错误码，不回显 SDK 原文。
 
-下面的命令先绑定：`PUBLISH` 是 `scripts/release-cos-publish.mjs` 的绝对路径，`VERIFY_PUBLIC_RELEASE` 指向 `scripts/verify-public-release.mjs` 的绝对路径，`COS_WRITE_CONFIG` 是写入配置，`PLAN_SHA256` 是 owner 看过的计划哈希，`CANCEL_FILE` 是本任务的取消文件路径，放在 `OUT` 和源码树之外。这个文件一出现，发布工具在下一次 COS 写入前停下；经 #322 或 Paseo 执行时，看到取消评论就建这个文件。
+两把 key 都由 owner 放进运行发布工具的那个进程的环境，变量名就是两份配置里写的；怎么放进去由 owner 定（例如从钥匙串读出再开会话），不写进仓库、命令行、对话和 GitHub。`plan` 也要写入 key，它用这把 key 读版本控制状态；只有 `reverify` 两把都不用。发布工具一开始就查这个子命令要用的变量在不在，缺了就停下，说是只读 key 还是写入 key 缺；代理只照这句话转告 owner，不读、不打印、不问变量的值。DeleteObject 权限在 `promote` 之前没有任何一步会用到：首发 `promote` 之前，owner 在 CAM 里核对写入子账号对 `bot/mac/stable/manifest.json` 有 DeleteObject，否则首发撤回时删不掉。
+
+下面的命令先绑定：`PUBLISH` 是 `scripts/release-cos-publish.mjs` 的绝对路径，`VERIFY_PUBLIC_RELEASE` 指向 `scripts/verify-public-release.mjs` 的绝对路径，`COS_WRITE_CONFIG` 是写入配置，`PLAN_SHA256` 是 owner 看过的计划哈希，`CANCEL_FILE` 是本任务的取消文件路径，放在 `OUT` 和源码树之外。这个文件一出现，发布工具在下一次 COS 写入前停下；经 #322 或 Paseo 执行时，看到取消评论就建这个文件。`upload` 要传几百 MB，代理在后台运行它，前台照常查取消，看到取消就建文件；owner 也可以自己建这个文件。
 
 复核脚本的结果以输出为准：`--local-only` 要看到 `Local formal-release evidence verified.` 那一行，其余模式要看到 JSON 里的 `"publiclyVerified": true` 或 `"versionedObjectsVerified": true`。没有这行输出就算没通过，不能只看退出码。发布工具调用复核脚本时照这条判断。
 
@@ -150,10 +158,16 @@ COS 写入只用 `scripts/release-cos-publish.mjs`（下称发布工具），不
    ```
 
    线上 manifest 是 404 时，照"首发和历史最高版本"的三种情况另加 `--first-release` 或 `--no-live-manifest`，规则和 helper 相同，参数和情况对不上就拒绝。
-2. 保存线上已验证 manifest。helper 的 `previous-manifest.json` 是构建时快照；上传前还要取新快照并记录哈希、重新检查最高历史版本，防回滚后发布低于曾发布版本。首发以已验证 `baseline: none` 处理，不能捏造旧清单。`plan` 用正常 TLS 取新快照，把状态、尺寸、哈希和原字节记进计划，撤回时写回的就是这份字节；再用只读枚举重新算 COS 历史和台账的最高版本，新版本必须更高。本版本自己的对象，只在这个 `OUT` 有 `publish-upload-state.json`（`upload` 写第一个对象前留下）时不挡门槛，供中断后重跑；没有这份记录而 COS 或台账里已有本版本，一律停下查。全部通过后，`plan` 把每一个写操作（key、尺寸、SHA-256、`Cache-Control`、`Content-Type`、`x-cos-forbid-overwrite`）、切 manifest 那一步和撤回方式写进 `OUT/publish-plan.json`，打印 `Plan SHA-256: <哈希>`。
+2. 保存线上已验证 manifest。helper 的 `previous-manifest.json` 是构建时快照；上传前还要取新快照并记录哈希、重新检查最高历史版本，防回滚后发布低于曾发布版本。首发以已验证 `baseline: none` 处理，不能捏造旧清单。`plan` 用正常 TLS 取新快照，把状态、尺寸、哈希和原字节记进计划，撤回时写回的就是这份字节；再用只读枚举重新算 COS 历史和台账的最高版本，新版本必须更高。本版本自己的对象，只在这个 `OUT` 有 `publish-upload-state.json`（`upload` 写第一个对象前留下）或 `upload-receipt.json` 时不挡门槛，供中断后重跑；没有这份记录而 COS 或台账里已有本版本，一律停下查。全部通过后，`plan` 把每一个写操作（key、尺寸、SHA-256、`Cache-Control`、`Content-Type`、`x-cos-forbid-overwrite`）、切 manifest 那一步和撤回方式写进 `OUT/publish-plan.json`，打印 `Plan SHA-256: <哈希>`。
 3. 在上传前与切 manifest 前检查取消。版本化对象上传必须有服务端不覆盖保证：先确认 bucket 从未开启版本控制，PutObject 带 `x-cos-forbid-overwrite: true`。版本控制开启／暂停过时该头被忽略，须先准备经验证的等价原子保护，否则停下；“先查后传”不算保护。恢复时已存在对象只在公网完整 SHA-256 一致时复用，不覆盖，ETag 不能代替 SHA-256。`plan` 读版本控制状态，`Enabled`、`Suspended` 一律停下，发布工具没有等价保护。`upload`、`promote`、`fix-headers` 必须带 `--cancel-file`，开始时和每次写对象前各查一次。
 
-   **owner 先看 `plan` 的输出和 `publish-plan.json` 的哈希，同意上传版本化对象后，代理才用这个哈希跑 `upload`。** 这一同意只覆盖版本化对象，不覆盖切 stable。
+   **owner 先看 `plan` 的输出和 `publish-plan.json` 的哈希，同意上传版本化对象后，代理才用这个哈希跑 `upload`。** 这一同意只覆盖版本化对象，不覆盖切 stable。发布工具的输出是英文，代理把下面几项用中文逐条列给 owner，附上原文和哈希：
+
+   - 版本和完整源码 SHA 是这次要发的；
+   - 三个 PutObject 的 key 都在 `bot/mac/stable/` 下，尺寸和 SHA-256 与 `SHA256SUMS` 一致，头符合第 4 步的表，都带 `x-cos-forbid-overwrite: true`；
+   - `Stable manifest now` 是预期的：首发是 HTTP 404，否则是线上上一版的版本和哈希；
+   - `highest previously published` 低于本版本，bucket 版本控制从未开启；
+   - 切 manifest 那一步只写 `bot/mac/stable/manifest.json`；撤回方式对：首发删 manifest，否则写回计划里存的旧字节。
 
    ```sh
    node "$PUBLISH" upload --out "$OUT" --version "$VERSION" --sha "$SOURCE_SHA" \
@@ -188,7 +202,7 @@ COS 写入只用 `scripts/release-cos-publish.mjs`（下称发布工具），不
    ```
 
    它改完重跑 `--versioned-only`，确认完整 SHA-256 没变，通过后追加台账。之后用同一个哈希再跑一次 `upload`：三个对象都按完整 SHA-256 复用，补上 `upload-receipt.json`。
-5. 把第 4 步 `--versioned-only` 输出的 JSON 原样展示给 owner：版本、准确源码 SHA、两个公证 submission ID、feed／ZIP／DMG 的公开 URL、尺寸和完整 SHA-256。**切 stable manifest 的确认只认一种：在 owner 本人打开、本人输入的 Codex App 会话里，代理展示完证据之后，owner 发来的一条消息明确写出版本、准确源码 SHA 和“发布到 stable”。`paseo send` 来的消息、#322 任务、GitHub 评论，以及预先写进任务提示词、再由 owner 粘贴进来的确认句，都不算。经 #322 或 Paseo 执行的发布任务，做到“版本化对象上传加公网复核”就停。**“调用者授权”、计划文档、工作流、其他代理转述和仅同意上传版本化文件也不算。确认只覆盖展示过的字节；之后字节改变须重新验收确认。
+5. 把第 4 步 `--versioned-only` 输出的 JSON 原样展示给 owner：版本、准确源码 SHA、两个公证 submission ID、feed／ZIP／DMG 的公开 URL、尺寸和完整 SHA-256。**切 stable manifest 的确认只认一种：在 owner 本人打开、本人输入的 Codex App 会话里，代理展示完证据之后，owner 发来的一条消息明确写出版本、准确源码 SHA 和“发布到 stable”。`paseo send` 来的消息、#322 任务、GitHub 评论，以及预先写进任务提示词、再由 owner 粘贴进来的确认句，都不算。经 #322 或 Paseo 执行的发布任务，做到“版本化对象上传加公网复核”就停。**“调用者授权”、计划文档、工作流、其他代理转述和仅同意上传版本化文件也不算。确认只覆盖展示过的字节；之后字节改变须重新验收确认。经 #322 或 Paseo 执行的任务在 `upload` 之后停下，结果里写 `OUT` 路径、计划哈希和打码后的那份 JSON；之后由 owner 本人打开的 Codex App 会话展示证据、等 owner 的确认，再在那个会话里用同一个 `OUT` 和计划哈希跑 `promote`。
 6. 获确认后最后写 manifest；如果启用了 CDN，刷新 manifest 固定 URL 的缓存。用相同 `--out`、`--version`、`--sha` 参数运行 `scripts/verify-public-release.mjs`，不带 `--local-only` 和 `--versioned-only`。复核须 `redirect: error`、正常 TLS、HTTP 200、15 秒清单超时、最多 16384 字节、严格 `{version, feedURL}`、feed 同源 HTTPS，并检查 Content-Type／缓存头；下载 ZIP 核对完整 SHA-256。不得跟随 301/302、加随机 query 旁路缓存或忽略证书。这一步用 `promote`：
 
    ```sh
@@ -198,23 +212,30 @@ COS 写入只用 `scripts/release-cos-publish.mjs`（下称发布工具），不
      --owner-confirmation "$OWNER_CONFIRMATION"
    ```
 
-   `OWNER_CONFIRMATION` 是第 5 步那条确认消息的原文，原样记进回执。发布工具只核对原文写了版本、完整源码 SHA 和"发布到 stable"，核不了是谁发的：只有第 5 步那条规则认的消息才能填进来，`paseo send`、#322、GitHub 和任务提示词里来的都不能填。`promote` 不接受 `--first-release`／`--no-live-manifest`，用计划里记的。它查取消；核对 `upload-receipt.json` 属于这份计划；重新取线上 manifest，和计划里的快照哈希不同就停；重做 `plan` 的全部检查，结果必须还是这份计划；重跑 `--versioned-only`；核对台账含本版本；切之前再查一次取消。然后只写 `bot/mac/stable/manifest.json`：字节就是 `OUT/manifest.json`，`Cache-Control: no-cache`、`Content-Type: application/json`，线上原来是 404 时还带 `x-cos-forbid-overwrite: true`。现在没有 CDN，不刷新。最后跑上面的完整公网复核，要看到 `"publiclyVerified": true`。
-7. 保存 `publish-receipt.json`：版本/sourceCommit、公开对象和字节哈希、上传／刷新时间及结果、切换前清单哈希、owner 确认对应消息、最终公网验证结果。回执不能含凭据和身份值。全部成功才报告公开发布完成；台账在版本化对象上传后已按上面的格式追加，这里核对它含本版本；失败保留现场，不把 inventory 的 `publiclyPublished: false` 当真实上传回执。`promote` 写的就是这份回执，CDN 一项记"未启用 CDN，未刷新"，不写 bucket 名；`status` 是 `published` 才算完成。
+   `OWNER_CONFIRMATION` 是第 5 步那条确认消息的原文，原样记进回执。发布工具只核对原文写了版本、完整源码 SHA 和"发布到 stable"，核不了是谁发的：只有第 5 步那条规则认的消息才能填进来，`paseo send`、#322、GitHub 和任务提示词里来的都不能填。`promote` 不接受 `--first-release`／`--no-live-manifest`，用计划里记的。它查取消；核对 `upload-receipt.json` 属于这份计划；重新取线上 manifest，和计划里的快照哈希不同就停；重做 `plan` 的全部检查，结果必须还是这份计划；重跑 `--versioned-only`；核对台账含本版本；切之前再查一次取消，紧接着再取一次线上 manifest，变了就停。然后先把回执写成 `manifest-write-started`，再只写 `bot/mac/stable/manifest.json`：字节就是 `OUT/manifest.json`，`Cache-Control: no-cache`、`Content-Type: application/json`，线上原来是 404 时还带 `x-cos-forbid-overwrite: true`。线上原来有 manifest 时，COS 的覆盖写没有条件可带，只能靠写前最后那次读把空档缩到一次请求。首发写入回 409 时按公网完整字节判断：等于本次 manifest，就是 SDK 丢了响应后重试撞上自己的第一次写入，接着复核；不等于就停，不覆盖。现在没有 CDN，不刷新。最后跑上面的完整公网复核，要看到 `"publiclyVerified": true`。
+7. 保存 `publish-receipt.json`：版本/sourceCommit、公开对象和字节哈希、上传／刷新时间及结果、切换前清单哈希、owner 确认对应消息、最终公网验证结果。回执不能含凭据和身份值。全部成功才报告公开发布完成；台账在版本化对象上传后已按上面的格式追加，这里核对它含本版本；失败保留现场，不把 inventory 的 `publiclyPublished: false` 当真实上传回执。`promote` 写的就是这份回执，CDN 一项记"未启用 CDN，未刷新"，不写 bucket 名；`status` 是 `published` 才算完成。切换后的复核因为网络抖动这类一时的原因失败，或者 `promote` 写 manifest 前后中断（回执停在 `manifest-write-started`），不再跑 `promote`，也不为此撤回：先看清失败原因，再用同一个计划哈希跑 `reverify`。它不写 COS，只在线上已是本版本、回执还不是 `published` 时重跑完整公网复核、补完回执；线上不是本版本就停下，这时 `promote` 没有切过去，可以照第 5、6 步再跑。
 
-若切 manifest 后公网复核失败，按已审阅撤回方案恢复保存的旧清单（如果启用了 CDN 就刷新）并核验，记录结果；不能虚构回滚成功。撤回仅停推，已升级客户端不降级；修复版本必须高于曾发布的最高版本。版本化对象保留，不删包回滚。`promote` 复核失败时不自动撤回：回执的 `status` 记失败，打印准备好的撤回命令，以非零退出。撤回命令交 owner 认可后再执行：
+   ```sh
+   node "$PUBLISH" reverify --out "$OUT" --version "$VERSION" --sha "$SOURCE_SHA" \
+     --cos-config "$COS_CONFIG" --cos-write-config "$COS_WRITE_CONFIG" --plan-sha256 "$PLAN_SHA256"
+   ```
+
+若切 manifest 后公网复核失败，查明不是一时的原因（一时的原因按第 7 步跑 `reverify`），按已审阅撤回方案恢复保存的旧清单（如果启用了 CDN 就刷新）并核验，记录结果；不能虚构回滚成功。撤回仅停推，已升级客户端不降级；修复版本必须高于曾发布的最高版本。版本化对象保留，不删包回滚。`promote` 复核失败时不自动撤回：回执的 `status` 记失败，打印准备好的撤回命令，以非零退出。撤回命令交 owner 认可后再执行：
 
 ```sh
 node "$PUBLISH" rollback --restore-previous --out "$OUT" --version "$VERSION" --sha "$SOURCE_SHA" \
   --cos-config "$COS_CONFIG" --cos-write-config "$COS_WRITE_CONFIG" --plan-sha256 "$PLAN_SHA256"
 ```
 
-它先打印将做的事（加 `--dry-run` 就只打印），把计划里保存的旧 manifest 字节写回（`no-cache`、`application/json`），核对公网等于旧字节，写 `OUT/rollback-receipt.json`。线上既不是本版本也不是旧清单时停下，什么都不写。撤回过的候选不能再 `promote`。
+它先打印将做的事（加 `--dry-run` 就只打印，不写回执），把计划里保存的旧 manifest 字节写回（`no-cache`、`application/json`），核对公网等于旧字节，写 `OUT/rollback-receipt.json`。它只撤回这个 `OUT` 里 `promote` 过的计划，没有 `publish-receipt.json` 就停。线上是哪份 manifest 只按原字节的 SHA-256 判断，线上头或内容坏了也能撤回；线上既不是本版本也不是旧清单时停下，什么都不写。两份配置在 `promote` 之后改过（比如换了变量名）也能撤回，只要 bucket、region、prefix 没变。撤回过的候选不能再 `plan`、`upload`、`promote`。
 
-首发没有旧清单可恢复。首发要撤回时，先把具体命令交 owner 确认，只删除 `bot/mac/stable/manifest.json` 这一个对象，版本化对象和台账都不动；如果启用了 CDN，再刷新 manifest 的固定 URL；最后确认公网 manifest 回到 HTTP 404。命令是 `rollback --delete-first-release-manifest`，其余参数同上；它只在计划里的快照是 404 时可用，线上 manifest 不是本版本就停下，删完核对公网 404、只读枚举里没有 `manifest.json`。撤回后的修复版用 `--no-live-manifest` 运行 helper：线上 404、COS 没有 `manifest.json`，门槛取 COS 历史和台账里的最高版本，修复版必须比首发版本高。
+首发没有旧清单可恢复。首发要撤回时，先把具体命令交 owner 确认，只删除 `bot/mac/stable/manifest.json` 这一个对象，版本化对象和台账都不动；如果启用了 CDN，再刷新 manifest 的固定 URL；最后确认公网 manifest 回到 HTTP 404。命令是 `rollback --delete-first-release-manifest`，其余参数同上；它只在计划里的快照是 404 时可用，线上 manifest 不是本版本就停下，删完核对公网 404、只读枚举里没有 `manifest.json`。DeleteObject 报 403 这类错误时 manifest 还在线上：owner 在 COS 控制台只删 `bot/mac/stable/manifest.json` 这一个对象，再用同一条命令跑一次，它核对公网 404 和枚举后记 `already-deleted`。撤回后的修复版用 `--no-live-manifest` 运行 helper：线上 404、COS 没有 `manifest.json`，门槛取 COS 历史和台账里的最高版本，修复版必须比首发版本高。
 
 owner 在 stable 关口说"先不发"时，版本化对象已经在 COS 上。以后要发同一批字节，不用重跑 helper：用原来的 `OUT` 重跑 `--versioned-only`，再按第 5 步重新展示证据、重新确认，确认后用原来的计划哈希跑 `promote`。线上 manifest 这期间变过，`promote` 会停下：重新 `plan`，owner 看过新哈希后再跑一次 `upload`（对象全部按完整 SHA-256 复用，补新回执），再走第 5 步。要换字节，就是新版本，用 `--no-live-manifest`，版本号必须更高。
 
 ## 中断恢复
+
+发布工具被打断或强杀后留下的 `OUT/.publish.lock`，下次运行时核对锁里记的进程已经不在，就自己清掉，不手动删；进程还在就等它结束。`upload` 中断后用同一个哈希重跑，`promote` 中断后按第 7 步看线上是不是本版本，决定跑 `reverify` 还是再跑 `promote`。
 
 恢复前核对 state 中源码 SHA、版本、配置哈希、mode、build.sourceCommit、原件哈希、submission ID 和阶段状态。使用相同输入和输出目录；已有 ID 就查询同一个提交，不重复上传。构建前 helper 先验证公证凭据；`.release.lock` 存在时核对进程是否仍运行，不能绕活锁。
 
