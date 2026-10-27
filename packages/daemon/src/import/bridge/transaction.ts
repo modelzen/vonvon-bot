@@ -91,8 +91,14 @@ export function createBridgeImporter(deps: ImporterDeps): BridgeImporter {
   async function waitService(loaded: boolean, running = false): Promise<void> {
     const until = now() + timeout;
     for (;;) {
-      const state = await service();
-      if (state.loaded === loaded && (!running || state.running)) return;
+      try {
+        const state = await service();
+        if (state.loaded === loaded && (!running || state.running)) return;
+      } catch (error) {
+        // A query can time out or observe an intermediate state while launchd is changing the job.
+        // Retry only within this bounded observation loop; unknown never proves stopped or ready.
+        if (!(error instanceof ImportFailure) || error.code !== 'service-unknown') throw error;
+      }
       if (now() >= until) throw new ImportFailure('service-timeout', '等待 Bridge 后台服务超时。');
       await sleep(200);
     }
