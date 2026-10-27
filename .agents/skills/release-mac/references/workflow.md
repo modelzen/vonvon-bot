@@ -154,6 +154,7 @@ key 由 owner 放进运行发布工具的那个进程的环境，变量名就是
 | `reverify` | 不要 | 不要 |
 | `rollback --restore-previous` | 不要 | 要 |
 | `rollback --delete-first-release-manifest` | 要，删完枚举核对没有 `manifest.json` | 要 |
+| `rollback --dry-run`（两种都算） | 不要 | 不要，只读本地文件和公网 manifest |
 | `fix-headers` | 不要 | 要 |
 
 发布工具一开始就查这个子命令要用的变量在不在，缺了就停下，说是只读 key 还是写入 key 缺；用不到的那把不在环境里也照常跑，紧急撤回不会被无关的 key 卡住。代理只照报错转告 owner，不读、不打印、不问变量的值。DeleteObject 权限在 `promote` 之前没有任何一步会用到：首发 `promote` 之前，owner 在 CAM 里核对写入子账号对 `bot/mac/stable/manifest.json` 有 DeleteObject，否则首发撤回时删不掉。
