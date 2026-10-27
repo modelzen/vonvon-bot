@@ -13,6 +13,7 @@ import {moveFileSafely, type MoveFileDeps} from './move-file';
 import {removeBridgeHooks} from './hooks';
 import {readBytes, ensureDirectory, publishFile, removeOwnedFile, sha256, syncDir} from './files';
 import {readBridgeDone} from './markers';
+import {parseBridgeServiceState, type BridgeServiceState} from './service-state';
 
 export type ImportNote = BridgeImportView['notes'][number];
 type ConvertedSnapshot = Extract<BridgeSnapshotRead, {kind: 'read'}> & {conversion: {kind: 'converted'; bots: ConvertedBridgeBot[]}};
@@ -81,26 +82,37 @@ export function createBridgeImporter(deps: ImporterDeps): BridgeImporter {
     await deps.fault?.(`crash-after:${journal!.intents[sequence]!.action.kind}`);
     await save({...journal!, intents: journal!.intents.map(item => item.sequence === sequence ? {...item, completed: true} : item)});
   }
-  async function service(): Promise<{loaded: boolean; running: boolean}> {
+  async function service(): Promise<BridgeServiceState> {
     const result = await deps.run('/bin/launchctl', ['print', `gui/${deps.uid}/ai.feishu-codex-bridge.bot`]);
-    if (result.status === 113 || (result.status !== 0 && /Could not find service/i.test(result.stderr))) return {loaded: false, running: false};
-    if (result.status !== 0 || !/^\s*state = (?:running|not running|waiting|exited)\s*$/m.test(result.stdout)) throw new ImportFailure('service-unknown', '无法确认原 Bridge 后台服务的状态，请稍后重试。');
-    return {loaded: true, running: /^\s*state = running\s*$/m.test(result.stdout)};
+    const state = parseBridgeServiceState(result);
+    if (!state) throw new ImportFailure('service-unknown', '无法确认原 Bridge 后台服务的状态，请稍后重试。');
+    return state;
   }
   async function waitService(loaded: boolean, running = false): Promise<void> {
     const until = now() + timeout;
     for (;;) {
-      const state = await service();
-      if (state.loaded === loaded && (!running || state.running)) return;
+      try {
+        const state = await service();
+        if (state.loaded === loaded && (!running || state.running)) return;
+      } catch (error) {
+        // A query can time out or observe an intermediate state while launchd is changing the job.
+        // Retry only within this bounded observation loop; unknown never proves stopped or ready.
+        if (!(error instanceof ImportFailure) || error.code !== 'service-unknown') throw error;
+      }
       if (now() >= until) throw new ImportFailure('service-timeout', '等待 Bridge 后台服务超时。');
       await sleep(200);
     }
   }
   async function bootout(): Promise<void> {
-    if (!(await service()).loaded) return;
+    const state = await service();
+    if (!state.loaded) return;
+    if (state.stopping) {await waitService(false); return;}
     const seq = await intent({kind: 'service', operation: 'bootout'});
     const result = await deps.run('/bin/launchctl', ['bootout', `gui/${deps.uid}/ai.feishu-codex-bridge.bot`]);
-    if (result.status !== 0 && (await service()).loaded) throw new ImportFailure('stop-failed', '无法停止原 Bridge 后台服务。');
+    if (result.status !== 0) {
+      const current = await service();
+      if (current.loaded && !current.stopping) throw new ImportFailure('stop-failed', '无法停止原 Bridge 后台服务。');
+    }
     await waitService(false); await complete(seq);
   }
   async function detect(): Promise<BridgeImportReply> {
@@ -394,7 +406,11 @@ export function createBridgeImporter(deps: ImporterDeps): BridgeImporter {
         } else if (result.kind === 'missing') throw new Error('Original plist unavailable');
       }
       if (journal.before.serviceLoaded) {
-        if (!(await service()).loaded) {
+        // A previous bootout may still be finishing when recovery begins. Wait for it to unload before
+        // bootstrapping the restored plist; waiting for that dying job to run again can never succeed.
+        let current = await service();
+        if (current.stopping) {await waitService(false); current = await service();}
+        if (!current.loaded) {
           if (!await readBytes(deps.plistFile)) throw new Error('Missing service definition');
           const seq = await intent({kind: 'service', operation: 'bootstrap'});
           const result = await deps.run('/bin/launchctl', ['bootstrap', `gui/${deps.uid}`, deps.plistFile]);

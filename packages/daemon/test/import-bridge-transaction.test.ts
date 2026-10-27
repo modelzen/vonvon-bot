@@ -91,6 +91,28 @@ it('imports every Bot with real legacy conversion, old workspaces/session identi
   expect(f.service()).toBe(false);
   expect((await f.importer.rollback()).view?.step).toBe('done');
 });
+it('disables Bridge autostart before stopping it, then imports all data before starting new Bots', async () => {
+  const f = await fixture(), run = f.deps.run, start = f.deps.runtime.start;
+  let stopped = false;
+  f.deps.run = async (command, args) => {
+    if (args[0] === 'bootout') {
+      await expect(stat(f.deps.plistFile)).rejects.toMatchObject({code: 'ENOENT'});
+      const journal = await readBridgeImportJournal(f.deps);
+      expect(await readFile(join(journal!.stageDir, 'bridge.plist'), 'utf8')).toBe('synthetic plist');
+      expect(f.registry.size).toBe(0); expect(f.running.size).toBe(0);
+      stopped = true;
+    }
+    return run(command, args);
+  };
+  f.deps.runtime.start = async (...args) => {
+    expect(stopped).toBe(true); expect(f.service()).toBe(false); expect(f.registry.size).toBe(2);
+    await expect(stat(f.deps.plistFile)).rejects.toMatchObject({code: 'ENOENT'});
+    expect(JSON.parse(await readFile(join(f.deps.appDir, 'bots/bot_a/config.json'), 'utf8')).accounts.app.id).toBe('bot_a');
+    await start(...args);
+  };
+  await f.importer.start();
+  expect((await f.finish()).view).toMatchObject({step: 'done', cleanupPending: false});
+});
 for (const point of ['after-stop', 'after-lock', 'during-copy', 'after-copy', 'after-hooks', 'after-move', 'during-start', 'before-marker', 'after-bridge-marker']) {
   it(`rolls back actual staged files, hooks, credentials and service after ${point}`, async () => {
     const f = await fixture(seen => {if (seen === point) throw new Error('synthetic failure');});
@@ -130,6 +152,116 @@ it('reports bootstrap failure honestly and can retry recovery without overwritin
   f.failBootstrap(false); await f.importer.rollback();
   for (let i = 0; i < 10000 && (await f.importer.status()).view?.step !== 'rolled-back'; i++) await new Promise(resolve => setTimeout(resolve, 1));
   expect((await f.importer.status()).view).toMatchObject({step: 'rolled-back', cleanupPending: false}); expect(f.service()).toBe(true);
+});
+it.each([
+  {status: 0, stdout: 'state = xpcproxy', stderr: ''},
+  {status: 0, stdout: 'state = spawn scheduled', stderr: ''},
+  {status: -1, stdout: '', stderr: 'synthetic query timeout'},
+])('waits through a transient post-bootstrap query %j before completing rollback', async transient => {
+  const f = await fixture(point => {if (point === 'after-copy') throw new Error('test');});
+  const run = f.deps.run; let starting = 0;
+  f.deps.run = async (command, args) => {
+    if (args[0] === 'print' && starting > 0) {starting--; return transient;}
+    const result = await run(command, args);
+    if (args[0] === 'bootstrap') starting = 3;
+    return result;
+  };
+  await f.importer.start();
+  expect((await f.finish()).view).toMatchObject({step: 'rolled-back', cleanupPending: false});
+  const journal = await readBridgeImportJournal(f.deps);
+  expect(journal?.intents.filter(item => item.action.kind === 'service' && item.action.operation === 'bootstrap'))
+    .toEqual([expect.objectContaining({completed: true})]);
+  expect(f.registry.size).toBe(0); expect(f.running.size).toBe(0); expect(f.service()).toBe(true);
+});
+it('recovers an incomplete bootstrap receipt while xpcproxy is starting without bootstrapping again', async () => {
+  const f = await fixture(point => {if (point === 'after-copy') throw new Error('test');});
+  f.failBootstrap(true); await f.importer.start();
+  expect((await f.finish()).view?.step).toBe('rollback-failed');
+  f.failBootstrap(false);
+  // The service actually started, but the prior host did not confirm its readiness or complete the receipt.
+  await f.deps.run('/bin/launchctl', ['bootstrap', 'gui/501', f.deps.plistFile]);
+  const bootstraps = f.calls.filter(call => call.startsWith('bootstrap')).length;
+  const run = f.deps.run; let starting = 3;
+  const recovered = createBridgeImporter({...f.deps, fault: undefined, run: async (command, args) => {
+    if (args[0] === 'print' && starting > 0) {starting--; return {status: 0, stdout: 'state = xpcproxy', stderr: ''};}
+    return run(command, args);
+  }});
+  await recovered.recover();
+  expect((await recovered.status()).view).toMatchObject({step: 'rolled-back', cleanupPending: false});
+  expect(f.calls.filter(call => call.startsWith('bootstrap'))).toHaveLength(bootstraps);
+});
+it('keeps recovery pending if post-bootstrap queries stay unknown for the entire wait', async () => {
+  const f = await fixture(point => {if (point === 'after-copy') throw new Error('test');});
+  const run = f.deps.run; let starting = false;
+  f.deps.run = async (command, args) => {
+    if (args[0] === 'print' && starting) return {status: -1, stdout: '', stderr: 'synthetic query timeout'};
+    const result = await run(command, args);
+    if (args[0] === 'bootstrap') starting = true;
+    return result;
+  };
+  await f.importer.start();
+  expect((await f.finish()).view).toMatchObject({step: 'rollback-failed', cleanupPending: true});
+  const journal = await readBridgeImportJournal(f.deps);
+  expect(journal?.intents.filter(item => item.action.kind === 'service' && item.action.operation === 'bootstrap'))
+    .toEqual([expect.objectContaining({completed: false})]);
+  expect(f.calls.filter(call => call.startsWith('bootstrap'))).toHaveLength(1);
+});
+it.each([0, -1])('waits for SIGTERMed to unload before importing, even when bootout returns %s', async status => {
+  const f = await fixture(), run = f.deps.run;
+  let stopping = 0;
+  f.deps.run = async (command, args) => {
+    if (args[0] === 'print' && stopping > 0) {
+      stopping--;
+      return {status: 0, stdout: 'service = {\n\tstate = SIGTERMed\n\tpid = 424242\n}', stderr: ''};
+    }
+    const result = await run(command, args);
+    if (args[0] === 'bootout') {stopping = 3; return {...result, status};}
+    return result;
+  };
+  const start = f.deps.runtime.start;
+  f.deps.runtime.start = async (...args) => {expect(stopping).toBe(0); await start(...args);};
+  await f.importer.start();
+  expect((await f.finish()).view).toMatchObject({step: 'done', cleanupPending: false});
+  expect(f.calls.some(call => call.startsWith('bootstrap'))).toBe(false);
+  expect(f.registry.size).toBe(2); expect(f.service()).toBe(false);
+});
+it('recovers an earlier failed rollback while the original service is still SIGTERMed', async () => {
+  const f = await fixture(point => {if (point === 'after-copy') throw new Error('test');});
+  f.failBootstrap(true); await f.importer.start();
+  expect((await f.finish()).view?.step).toBe('rollback-failed');
+  f.failBootstrap(false);
+  let stopping = 3, bootstraps = 0;
+  const run = f.deps.run;
+  const recovered = createBridgeImporter({...f.deps, fault: undefined, run: async (command, args) => {
+    if (args[0] === 'print' && stopping > 0) {
+      stopping--;
+      return {status: 0, stdout: 'state = SIGTERMed', stderr: ''};
+    }
+    if (args[0] === 'bootstrap') {expect(stopping).toBe(0); bootstraps++;}
+    return run(command, args);
+  }});
+  await recovered.recover();
+  expect((await recovered.status()).view).toMatchObject({step: 'rolled-back', cleanupPending: false});
+  expect(bootstraps).toBe(1); expect(f.service()).toBe(true);
+  expect(f.registry.size).toBe(0); expect(f.running.size).toBe(0);
+  expect(await readFile(f.deps.plistFile, 'utf8')).toBe('synthetic plist');
+  expect(await readFile(join(f.deps.bridgeDir, 'bots/bot_a/config.json'), 'utf8')).toBe(f.original);
+});
+it('preserves recovery pending when a SIGTERMed service never unloads', async () => {
+  const f = await fixture(), run = f.deps.run;
+  let stopping = false;
+  f.deps.run = async (command, args) => {
+    if (args[0] === 'print' && stopping) return {status: 0, stdout: 'state = SIGTERMed', stderr: ''};
+    const result = await run(command, args);
+    if (args[0] === 'bootout') stopping = true;
+    return result;
+  };
+  await f.importer.start();
+  expect((await f.finish()).view).toMatchObject({step: 'rollback-failed', cleanupPending: true, error: {code: 'service-timeout'}});
+  expect(f.calls.some(call => call.startsWith('bootstrap'))).toBe(false);
+  expect(f.registry.size).toBe(0); expect(f.running.size).toBe(0);
+  expect(await readFile(f.deps.plistFile, 'utf8')).toBe('synthetic plist');
+  expect(await readFile(join(f.deps.bridgeDir, 'bots/bot_a/config.json'), 'utf8')).toBe(f.original);
 });
 it('refuses target collisions and invalid hooks without stopping or creating an import journal', async () => {
   const f = await fixture(); f.registry.set('bot_a', {registrationId: 'foreign', handle: 'foreign', active: true});
