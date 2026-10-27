@@ -29,3 +29,31 @@ guard let png = bitmap.representation(using: .png, properties: [:]) else {
 }
 try png.write(to: output)
 print(output.path)
+
+// Supply electron-builder with an ICNS rather than letting it resize the PNG.
+// Its generated 16px and 32px representations have appeared corrupted in releases.
+let iconset = FileManager.default.temporaryDirectory
+    .appendingPathComponent("vonvon-\(UUID().uuidString).iconset", isDirectory: true)
+try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
+defer { try? FileManager.default.removeItem(at: iconset) }
+func run(_ executable: String, _ arguments: [String]) throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = arguments
+    try process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        fatalError("\(executable) failed with status \(process.terminationStatus)")
+    }
+}
+for size in [16, 32, 128, 256, 512] {
+    for scale in [1, 2] {
+        let pixels = size * scale
+        let suffix = scale == 2 ? "@2x" : ""
+        let target = iconset.appendingPathComponent("icon_\(size)x\(size)\(suffix).png")
+        try run("/usr/bin/sips", ["-z", "\(pixels)", "\(pixels)", output.path, "--out", target.path])
+    }
+}
+let icns = root.appendingPathComponent("packages/desktop/assets/macos-icon.icns")
+try run("/usr/bin/iconutil", ["-c", "icns", iconset.path, "-o", icns.path])
+print(icns.path)

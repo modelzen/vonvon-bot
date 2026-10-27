@@ -206,9 +206,9 @@ it.each(['running', 'stopped', 'unknown'])('parses launchctl service %s from a r
   const { options } = await fixture(); command.mockResolvedValue({ status: state === 'unknown' ? 1 : 0, stdout: `state = ${state === 'stopped' ? 'not running' : state}\n`, stderr: '' });
   expect((await inspect(options)).service).toBe(state);
 });
-it.each(['active', 'running'])('reads SIGTERMed ahead of nested coalition state %s', async nested => {
+it.each(['SIGTERMed', 'xpcproxy'])('recognizes a live launchd transition %s ahead of nested coalition state', async state => {
   const {options} = await fixture();
-  command.mockResolvedValue({status: 0, stdout: `service = {\n\tstate = SIGTERMed\n\tpid = 424242\n\tcoalition = {\n\t\tstate = ${nested}\n\t}\n}`, stderr: ''});
+  command.mockResolvedValue({status: 0, stdout: `service = {\n\tstate = ${state}\n\tpid = 424242\n\tcoalition = {\n\t\tstate = running\n\t}\n}`, stderr: ''});
   expect((await inspect(options)).service).toBe('running');
   expect(command.mock.calls.every(([, args]) => args[0] === 'print')).toBe(true);
 });
@@ -216,6 +216,8 @@ it.each([
   {status: 1, stdout: '', stderr: 'Operation not permitted'},
   {status: -1, stdout: 'state = SIGTERMed', stderr: ''},
   {status: 0, stdout: 'state = unrecognized\n\tcoalition = {\n\t\tstate = running\n\t}', stderr: ''},
+  {status: 0, stdout: 'service = {\n\tcoalition = {\n\t\tstate = running\n\t}\n}', stderr: ''},
+  {status: 0, stdout: 'service = {\n    coalition = {\n        state = running\n    }\n}', stderr: ''},
 ])('preserves uncertainty for a failed or unrecognized service query: %j', async result => {
   const {options} = await fixture(); command.mockResolvedValue(result);
   expect((await inspect(options)).service).toBe('unknown');
