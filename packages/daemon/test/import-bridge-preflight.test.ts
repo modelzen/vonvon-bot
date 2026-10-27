@@ -206,6 +206,20 @@ it.each(['running', 'stopped', 'unknown'])('parses launchctl service %s from a r
   const { options } = await fixture(); command.mockResolvedValue({ status: state === 'unknown' ? 1 : 0, stdout: `state = ${state === 'stopped' ? 'not running' : state}\n`, stderr: '' });
   expect((await inspect(options)).service).toBe(state);
 });
+it.each(['active', 'running'])('reads SIGTERMed ahead of nested coalition state %s', async nested => {
+  const {options} = await fixture();
+  command.mockResolvedValue({status: 0, stdout: `service = {\n\tstate = SIGTERMed\n\tpid = 424242\n\tcoalition = {\n\t\tstate = ${nested}\n\t}\n}`, stderr: ''});
+  expect((await inspect(options)).service).toBe('running');
+  expect(command.mock.calls.every(([, args]) => args[0] === 'print')).toBe(true);
+});
+it.each([
+  {status: 1, stdout: '', stderr: 'Operation not permitted'},
+  {status: -1, stdout: 'state = SIGTERMed', stderr: ''},
+  {status: 0, stdout: 'state = unrecognized\n\tcoalition = {\n\t\tstate = running\n\t}', stderr: ''},
+])('preserves uncertainty for a failed or unrecognized service query: %j', async result => {
+  const {options} = await fixture(); command.mockResolvedValue(result);
+  expect((await inspect(options)).service).toBe('unknown');
+});
 it.each(['matching', 'single', 'reused', 'foreign', 'wrong-bot', 'dead', 'malformed'])('checks per-bot process %s without signalling it', async kind => {
   const { sourceDir, options } = await fixture();
   await json(join(sourceDir, 'bots/bot_a/processes.json'), kind === 'malformed' ? {} : { pid: 424242, appId: 'bot_a', startedAt: Date.now() - (kind === 'reused' ? 600000 : 1000) });
