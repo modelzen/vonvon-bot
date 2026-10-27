@@ -26,7 +26,7 @@ function httpsURL(value) {
   return url;
 }
 
-export function cachePolicy(headers, kind) {
+function cachePolicy(headers, kind) {
   const cache = headers.get('cache-control')?.toLowerCase() ?? '';
   const directives = cache.split(',').map(part => part.trim());
   const age = directives.find(part => /^max-age=\d+$/.test(part));
