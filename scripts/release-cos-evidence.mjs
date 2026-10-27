@@ -7,23 +7,31 @@ import { basename, dirname, isAbsolute, join } from 'node:path';
 export const COS_SDK_VERSION = '3.0.0';
 const defaultReadJSON = async path => JSON.parse(await readFile(path, 'utf8'));
 
+/** The stable bucket identity shared by the read-only enumeration config and the separate write config. */
+export function isStableCosTarget(config) {
+  return /^[a-z0-9-]+-\d+$/.test(config?.bucket ?? '') && /^[a-z]+-[a-z]+(?:-\d+)?$/.test(config?.region ?? '')
+    && config.prefix === 'bot/mac/stable/' && config.publicManifestURL === 'https://dl.vonvon.cc/bot/mac/stable/manifest.json';
+}
+
+export function assertCredentialEnvNames(config) {
+  for (const key of ['secretIdEnv', 'secretKeyEnv', 'securityTokenEnv']) {
+    if (config[key] !== undefined && !/^[A-Z][A-Z0-9_]*$/.test(config[key])) throw new Error('COS credential settings must be environment variable names, never inline credentials');
+  }
+}
+
 export async function readCosConfig(configPath, { readJSON = defaultReadJSON } = {}) {
   if (!isAbsolute(configPath ?? '')) throw new Error('Formal releases require an absolute --cos-config file');
   let config;
   try { config = await readJSON(configPath); } catch { throw new Error('Cannot read COS read-only configuration'); }
-  if (!/^[a-z0-9-]+-\d+$/.test(config.bucket ?? '') || !/^[a-z]+-[a-z]+(?:-\d+)?$/.test(config.region ?? '')
-    || config.prefix !== 'bot/mac/stable/' || config.publicManifestURL !== 'https://dl.vonvon.cc/bot/mac/stable/manifest.json'
-    || !isAbsolute(config.ledgerFile ?? '')) throw new Error('COS configuration must identify the stable bucket, prefix, public URL and absolute ledgerFile');
-  for (const key of ['secretIdEnv', 'secretKeyEnv', 'securityTokenEnv']) {
-    if (config[key] !== undefined && !/^[A-Z][A-Z0-9_]*$/.test(config[key])) throw new Error('COS credential settings must be environment variable names, never inline credentials');
-  }
+  if (!isStableCosTarget(config) || !isAbsolute(config.ledgerFile ?? '')) throw new Error('COS configuration must identify the stable bucket, prefix, public URL and absolute ledgerFile');
+  assertCredentialEnvNames(config);
   return config;
 }
 
 /** Names of the environment variables holding the read-only COS key; callers strip them from child processes. */
 export const cosCredentialEnvNames = config => [config.secretIdEnv, config.secretKeyEnv, config.securityTokenEnv].filter(Boolean);
 
-async function loadPinnedSdk(sdkModule, readJSON) {
+export async function loadPinnedSdk(sdkModule, readJSON = defaultReadJSON) {
   if (!isAbsolute(sdkModule ?? '') || basename(sdkModule) !== 'cos-nodejs-sdk-v5' || basename(dirname(sdkModule)) !== 'node_modules') {
     throw new Error(`Set sdkModule to the absolute node_modules/cos-nodejs-sdk-v5 directory of a tool prefix installed with cos-nodejs-sdk-v5@${COS_SDK_VERSION}`);
   }

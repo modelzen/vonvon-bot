@@ -26,7 +26,7 @@ function httpsURL(value) {
   return url;
 }
 
-function cachePolicy(headers, kind) {
+export function cachePolicy(headers, kind) {
   const cache = headers.get('cache-control')?.toLowerCase() ?? '';
   const directives = cache.split(',').map(part => part.trim());
   const age = directives.find(part => /^max-age=\d+$/.test(part));
@@ -47,7 +47,7 @@ async function limitedBody(response, maximum = 16384) {
     if (size > maximum) { await response.body.cancel().catch(() => {}); throw new Error('Release JSON exceeds 16384 bytes'); }
     chunks.push(chunk);
   }
-  return Buffer.concat(chunks).toString('utf8');
+  return Buffer.concat(chunks);
 }
 
 function jsonHeaders(response) {
@@ -72,7 +72,9 @@ export async function readStableManifest({ fetchImpl = fetch, url = DEFAULT_MANI
   if (response.status === 404) return { kind: 'missing', status: 404, code: 'HTTP404' };
   if (response.status !== 200) throw new Error(`Stable manifest HTTP ${response.status}; no empty baseline may be inferred`);
   jsonHeaders(response);
-  return { kind: 'present', manifest: validateManifest(parseJSON(await limitedBody(response)), url), responseHeaders: response.headers };
+  // The exact bytes are kept so a publisher can snapshot, hash and later restore the previous manifest.
+  const bytes = await limitedBody(response);
+  return { kind: 'present', manifest: validateManifest(parseJSON(bytes.toString('utf8')), url), bytes, responseHeaders: response.headers };
 }
 
 async function fileRecord(path) {
