@@ -174,7 +174,7 @@ async function inspectService(run: Run): Promise<RunningState> {
     const state = parseBridgeServiceState(result);
     if (!state) return 'unknown';
     // A stopping job can still hold Bot locks. Do not report it as a manually started process.
-    return state.running || state.stopping ? 'running' : 'stopped';
+    return state.running || state.stopping || state.starting ? 'running' : 'stopped';
   } catch { return 'unknown'; }
 }
 async function inspectBotProcess(root: string, base: string, appId: string, run: Run, signal?: AbortSignal, allowUnscoped = false): Promise<RunningState> {
