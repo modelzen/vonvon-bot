@@ -40,13 +40,15 @@
 
 这份配置里的环境变量只放一个子账号的 key，这个子账号只有这个 bucket 的 GetBucket（列出对象）权限，不能写、不能删；写入用的 key 另配，不进这份配置，见"COS 发布、owner 确认与回执"一节的 `--cos-write-config`。临时凭据可另指定 `securityTokenEnv`。helper 只在自己的进程里用这把 key 枚举，传给 `npm run build`、electron-builder、`xcrun`、`ditto`、`hdiutil`、`git`，以及检查签名和架构用的 `codesign`、`PlistBuddy`、`lipo` 等子进程前，会先删掉 `secretIdEnv`、`secretKeyEnv`、`securityTokenEnv` 指的这几个变量。不要为读凭据打印环境、配置文件或 SDK 错误原文；不要把密钥值放配置、命令行、对话或 GitHub。缺项只问配置路径／profile，COS 的写权限（启用了 CDN 时还有 CDN 刷新权限）与只读枚举分别确认。不要为了枚举临时扩宽权限。
 
-官方 SDK 不在仓库依赖里，装进仓库外的固定工具目录，版本写死，不在源码 worktree 里装（`git status` 门槛会拒绝）：
+官方 SDK 不在仓库依赖里，装进仓库外的固定工具目录，不在源码 worktree 里装（`git status` 门槛会拒绝）。版本和全部传递依赖锁在仓库的 `scripts/cos-sdk/`：`package.json` 只依赖 `cos-nodejs-sdk-v5@3.0.0`，`package-lock.json` 记下每个包的版本和 integrity。COS 的 key 和 SDK 在同一个进程里，所以只照这份 lockfile 装：把这两个文件拷进工具目录，用 `npm ci`，不用 `npm install`：
 
 ```sh
-HOME="$T/home" npm install --prefix "$COS_SDK_PREFIX" --ignore-scripts --no-save --no-audit --no-fund cos-nodejs-sdk-v5@3.0.0
+mkdir -p "$COS_SDK_PREFIX"
+cp "$SOURCE_WORKTREE/scripts/cos-sdk/package.json" "$SOURCE_WORKTREE/scripts/cos-sdk/package-lock.json" "$COS_SDK_PREFIX/"
+HOME="$T/home" npm ci --prefix "$COS_SDK_PREFIX" --ignore-scripts --no-audit --no-fund
 ```
 
-`COS_SDK_PREFIX` 是这个工具目录的绝对路径，例如和外部配置放在一起；`sdkModule` 必填，写 `<COS_SDK_PREFIX>/node_modules/cos-nodejs-sdk-v5`。helper 加载前核对它的 `package.json`，name 和 version 必须是 `cos-nodejs-sdk-v5` 和 `scripts/release-cos-evidence.mjs` 里的 `COS_SDK_VERSION`（现在是 3.0.0），路径不是这个形状也拒绝。升级 SDK 要改这个常量并经审查，不在运行时放宽。
+`COS_SDK_PREFIX` 是这个工具目录的绝对路径，例如和外部配置放在一起，里面只放这两个文件和 `npm ci` 装出来的 `node_modules`；`sdkModule` 必填，写 `<COS_SDK_PREFIX>/node_modules/cos-nodejs-sdk-v5`。helper 和发布工具加载前核对两件事：它的 `package.json` 的 name 和 version 必须是 `cos-nodejs-sdk-v5` 和 `scripts/release-cos-evidence.mjs` 里的 `COS_SDK_VERSION`（现在是 3.0.0），路径不是这个形状也拒绝；工具目录的 `package-lock.json` 必须和正在运行的那份源码里的 `scripts/cos-sdk/package-lock.json` 逐字节相同（`npm ci` 不改它），缺了或不同就不加载 SDK。helper 从独立工具 worktree 运行时，从那棵 worktree 拷这两个文件。报 lockfile 不同时照上面三行重装，不改 lockfile 去凑。升级 SDK 或它的依赖要一起改这个常量和 `scripts/cos-sdk/` 的两个文件（lockfile 在临时目录里用 `HOME="$T/home" npm install --package-lock-only --ignore-scripts` 重新生成）并经审查，不在运行时放宽。
 
 台账必须存在，格式 `{ "versions": ["0.7.0"] }`；确无发布历史的首发可为空数组，不能清空历史来过门槛。helper 用官方 SDK 实时完整分页列出 `bot/mac/stable/`，门槛取线上有效 manifest、所有历史 feed／安装包版本和本机台账的最高值。枚举失败、无法判定历史或台账无效就拒绝，不能接受人工编造的空列表。
 

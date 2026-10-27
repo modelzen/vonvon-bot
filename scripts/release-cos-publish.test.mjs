@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appendLedger, fixReleaseHeaders, NO_CDN, planPublish, promoteRelease, readCosWriteConfig, reverifyRelease, rollbackRelease, uploadRelease } from './release-cos-publish.mjs';
+import { COS_SDK_LOCKFILE } from './release-cos-evidence.mjs';
 import { DEFAULT_MANIFEST_URL, validateReleaseInventory, verifyPublicRelease, verifyVersionedRelease } from './verify-public-release.mjs';
 
 // Hermetic: a fake SDK client backed by an in-memory bucket, a fake public endpoint serving that
@@ -846,6 +847,9 @@ test('without an injected client the pinned SDK gets the write key, strict HTTPS
   await writeFile(join(sdk, 'index.js'), 'module.exports = class { constructor(options) { globalThis.fakeCosOptions = options; } getBucketVersioning(params, callback) { callback(null, { VersioningConfiguration: {} }); } };\n');
   t.after(() => { delete globalThis.fakeCosOptions; });
   const { writeClient: _injected, ...deps } = w.deps;
+  await assert.rejects(planPublish({ ...w.options, 'first-release': true }, deps), /installed with npm ci from scripts\/cos-sdk/, 'the write key never meets an SDK installed without the reviewed lockfile');
+  assert.equal(globalThis.fakeCosOptions, undefined);
+  await writeFile(join(w.root, 'sdk', 'package-lock.json'), await readFile(COS_SDK_LOCKFILE));
   await planPublish({ ...w.options, 'first-release': true }, deps);
   assert.deepEqual(globalThis.fakeCosOptions, { SecretId: SECRETS.COS_WRITE_ID, SecretKey: SECRETS.COS_WRITE_KEY, Protocol: 'https:', StrictSsl: true, FollowRedirect: false, KeepAlive: false, Timeout: 30 * 60_000 });
   for (const [name, role] of [['COS_WRITE_ID', 'write'], ['COS_WRITE_KEY', 'write'], ['COS_READ_KEY', 'read-only']]) {
