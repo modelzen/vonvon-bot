@@ -6,16 +6,16 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs, promisify } from 'node:util';
 import { checkVersionGate, compareVersions, validateFirstRelease } from './release-mac.mjs';
 import { assertCredentialEnvNames, COS_SDK_VERSION, cosCredentialEnvNames, isStableCosTarget, loadPinnedSdk, readCosConfig, readCosReleaseEvidence } from './release-cos-evidence.mjs';
-import { assertSecureTransport, DEFAULT_MANIFEST_URL, readStableManifest, validateManifest, validateReleaseInventory } from './verify-public-release.mjs';
+import { assertSecureTransport, cachePolicy, DEFAULT_MANIFEST_URL, readStableManifest, validateManifest, validateReleaseInventory } from './verify-public-release.mjs';
 
-// The only COS writer for releases. plan writes nothing to COS; upload writes the three versioned
-// objects named in an owner-reviewed plan; fix-headers replaces versioned-object metadata. Nothing here
-// writes bot/mac/stable/manifest.json yet: promote, reverify and rollback come in the next PR.
+// The only COS writer for releases. plan and reverify write nothing to COS; upload writes the three
+// versioned objects named in an owner-reviewed plan; promote writes bot/mac/stable/manifest.json and
+// nothing else; rollback touches only that manifest; fix-headers replaces versioned-object metadata.
 const manifestURL = DEFAULT_MANIFEST_URL;
 const immutableCache = 'public, max-age=31536000, immutable';
 const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 export const NO_CDN = '未启用 CDN，未刷新';
-const names = { plan: 'publish-plan.json', uploadState: 'publish-upload-state.json', uploadReceipt: 'upload-receipt.json', fixReceipt: 'fix-headers-receipt.json', lock: '.publish.lock' };
+const names = { plan: 'publish-plan.json', uploadState: 'publish-upload-state.json', uploadReceipt: 'upload-receipt.json', publishReceipt: 'publish-receipt.json', rollbackReceipt: 'rollback-receipt.json', fixReceipt: 'fix-headers-receipt.json', lock: '.publish.lock' };
 const scriptPath = fileURLToPath(import.meta.url);
 const verifyScript = join(dirname(scriptPath), 'verify-public-release.mjs');
 const exec = promisify(execFile);
@@ -39,12 +39,18 @@ const common = ['out', 'version', 'sha', 'cos-config', 'cos-write-config'];
 const commandOptions = {
   plan: [...common, 'first-release', 'no-live-manifest'],
   upload: [...common, 'first-release', 'no-live-manifest', 'plan-sha256', 'cancel-file'],
+  promote: [...common, 'plan-sha256', 'cancel-file', 'owner-confirmation'],
+  rollback: [...common, 'plan-sha256', 'restore-previous', 'delete-first-release-manifest', 'dry-run'],
   'fix-headers': [...common, 'plan-sha256', 'cancel-file'],
+  reverify: [...common, 'plan-sha256'],
 };
-// The COS keys each command really uses. A command never waits on a key it does not use, so a
-// header fix is not blocked by a missing read-only key.
-const keysUsed = command => ({
-  plan: ['read-only', 'write'], upload: ['read-only', 'write'],
+// The COS keys each command really uses. A command never waits on a key it does not use, so an
+// emergency rollback or a header fix is not blocked by a missing read-only key.
+const keysUsed = (command, options) => ({
+  plan: ['read-only', 'write'], upload: ['read-only', 'write'], promote: ['read-only', 'write'],
+  reverify: [],
+  // Restoring writes the saved manifest; deleting also lists COS afterwards to confirm manifest.json is gone.
+  rollback: options['delete-first-release-manifest'] ? ['read-only', 'write'] : ['write'],
   'fix-headers': ['write'],
 })[command];
 
@@ -99,7 +105,7 @@ async function openContext(command, options, dependencies) {
   if (env[readConfig.secretIdEnv] && env[readConfig.secretIdEnv] === env[writeConfig.secretIdEnv]) throw new Error('The write key must belong to a different sub-account from the read-only enumeration key');
   // Fail before any work when a key this command uses is absent; values are never read into output.
   const roles = { 'read-only': [readConfig, dependencies.readClient], write: [writeConfig, dependencies.writeClient] };
-  for (const role of keysUsed(command)) {
+  for (const role of keysUsed(command, options)) {
     const [config, injected] = roles[role];
     if (!injected && (!config.secretIdEnv || !config.secretKeyEnv || cosCredentialEnvNames(config).some(name => !env[name]))) throw new Error(`The COS ${role} key is not in this process environment; the owner provides the variables its configuration names, never their values`);
   }
@@ -129,6 +135,7 @@ const target = (context, key) => ({ Bucket: context.writeConfig.bucket, Region: 
 const verifyModes = {
   local: { flags: ['--local-only'], label: '--local-only' },
   versioned: { flags: ['--versioned-only'], label: '--versioned-only', field: 'versionedObjectsVerified' },
+  full: { flags: [], label: 'full public verification', field: 'publiclyVerified' },
 };
 /** Success is the printed line or JSON field (workflow.md), never the exit code alone. */
 async function runVerify(context, mode) {
@@ -164,6 +171,9 @@ async function liveManifest(context) {
   if (live.kind === 'missing') return { live, snapshot: { url: manifestURL, status: 404 } };
   return { live, snapshot: { url: manifestURL, status: 200, version: live.manifest.version, feedURL: live.manifest.feedURL, size: live.bytes.length, sha256: sha256(live.bytes), bytesBase64: live.bytes.toString('base64') } };
 }
+// Raw bytes only: rollback and the promote rechecks must work even when the live manifest is malformed.
+const liveDigest = context => publicDigest(context, manifestURL, 16384, 15_000);
+const sameSnapshot = (a, b) => a.status === b.status && (a.status === 404 || (a.sha256 === b.sha256 && a.size === b.size));
 
 async function assertVersioningNeverEnabled(context) {
   const data = await cosCall(await writeClient(context), 'getBucketVersioning', target(context), 'GetBucketVersioning');
@@ -185,12 +195,15 @@ async function uploadRecord(context) {
   }
   return false;
 }
-// Hash only: plans and receipts never name the bucket, yet a reworded config can be told from another target.
+async function assertNotRolledBack(context) {
+  if (await exists(join(context.out, names.rollbackReceipt))) throw new Error('This candidate was rolled back; a fix must be a new, higher version from a new output');
+}
+// Hash only: plans and receipts never name the bucket, yet recovery can tell a reworded config from another target.
 const targetIdentity = config => sha256(JSON.stringify([config.bucket, config.region, config.prefix]));
 
 /**
  * COS history plus ledger, excluding this version only when this OUT itself started uploading it;
- * then a resumed upload still gates on every other published version.
+ * then a resumed upload or a later promote still gates on every other published version.
  */
 async function publishedHistory(context) {
   const evidence = await readCosReleaseEvidence(context.options['cos-config'], { env: context.env, config: context.readConfig, client: context.dependencies.readClient });
@@ -211,8 +224,9 @@ async function checkLocalEvidence(context) {
   return { inventory, manifestBytes };
 }
 
-/** Every gate of the plan; the result is deterministic so upload can regenerate and compare it. */
+/** Every gate of the plan; the result is deterministic so upload and promote can regenerate and compare it. */
 async function buildPlan(context, flags) {
+  await assertNotRolledBack(context);
   const { inventory, manifestBytes } = await checkLocalEvidence(context);
   const { live, snapshot } = await liveManifest(context);
   const history = await publishedHistory(context);
@@ -271,23 +285,25 @@ function describePlan(plan) {
     'upload (versioned objects only, after the owner approves this plan):',
     ...plan.upload.flatMap(step => [`  ${step.step}. ${step.operation} ${step.key}  ${step.size} bytes  SHA-256 ${step.sha256}`, `     ${headers(step.headers)}`]),
     `  then ${plan.afterUpload.join('; ')}`,
-    'stable switch (recorded in this plan; the promote command comes in the next PR, so stop after upload):',
+    'promote (only after the owner\'s own stable confirmation in their Codex App session):',
     `  ${promote.step}. ${promote.operation} ${promote.key}  ${promote.size} bytes  SHA-256 ${promote.sha256}`,
     `     ${headers(promote.headers)}`,
     `     CDN: ${promote.cdn}`,
     `  then ${promote.afterPromote}`,
-    `rollback if needed (the rollback command comes in the next PR): ${plan.rollback.command}: ${plan.rollback.operation} ${plan.rollback.key}${plan.rollback.sha256 ? ` (saved bytes, SHA-256 ${plan.rollback.sha256})` : `; ${plan.rollback.expect}`}; ${plan.rollback.untouched} untouched`,
+    `rollback if needed: ${plan.rollback.command}: ${plan.rollback.operation} ${plan.rollback.key}${plan.rollback.sha256 ? ` (saved bytes, SHA-256 ${plan.rollback.sha256})` : `; ${plan.rollback.expect}`}; ${plan.rollback.untouched} untouched`,
   ];
 }
 
-async function readReviewedPlan(context, expected) {
+async function readReviewedPlan(context, expected, { recovery = false } = {}) {
   let bytes;
   try { bytes = await readFile(join(context.out, names.plan)); } catch (error) { throw new Error(error.code === 'ENOENT' ? `${names.plan} is missing; run plan first` : `Cannot read ${names.plan}`); }
   if (sha256(bytes) !== expected) throw new Error(`${names.plan} differs from --plan-sha256; use the plan the owner reviewed`);
   const plan = JSON.parse(bytes.toString('utf8'));
   if (plan.planFormat !== 1 || plan.version !== context.version || plan.sourceCommit !== context.sha) throw new Error('The reviewed plan belongs to a different version or source SHA');
   if (plan.target?.readConfigSHA256 !== context.configHashes.readConfigSHA256 || plan.target?.writeConfigSHA256 !== context.configHashes.writeConfigSHA256) {
-    throw new Error('COS configuration files changed since the reviewed plan; run plan again');
+    // Once stable serves the release plan cannot run again, so recovery accepts edited configs for the same target.
+    if (!recovery || plan.target?.targetSHA256 !== targetIdentity(context.writeConfig)) throw new Error('COS configuration files changed since the reviewed plan; run plan again');
+    context.log('COS configuration files changed since the plan; the bucket, region and prefix are the same, so recovery continues');
   }
   return { plan, bytes };
 }
@@ -335,6 +351,11 @@ export async function appendLedger(file, version) {
   await rename(`${file}.new`, file);
   return 'appended';
 }
+async function ledgerContains(file, version) {
+  const ledger = await readJSONFile(file, 'the publication ledger');
+  return Array.isArray(ledger?.versions) && ledger.versions.includes(version);
+}
+
 async function publicDigest(context, url, expectedSize, timeout = 20 * 60_000) {
   const response = await context.fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(timeout) });
   if (response.redirected) throw new Error('Release endpoint redirected');
@@ -404,7 +425,179 @@ export async function uploadRelease(options, dependencies = {}) {
     const receipt = { receipt: 'upload', version: context.version, sourceCommit: context.sha, planSHA256: expected, objects, versionedVerification: verification, ledger, stableManifest: 'not changed', completedAt: context.now().toISOString() };
     await writeAtomic(join(context.out, names.uploadReceipt), json(receipt));
     context.log(JSON.stringify(verification, null, 2));
-    context.log('Versioned objects uploaded and publicly verified; the stable manifest was not changed. Show the JSON above to the owner and stop here: the promote command comes in the next PR, and only the owner\'s own confirmation in their Codex App session allows the stable switch.');
+    context.log('Versioned objects uploaded and publicly verified; the stable manifest was not changed. Show the JSON above to the owner. Only the owner\'s own confirmation in their Codex App session allows promote.');
+    return receipt;
+  });
+}
+
+function ownerConfirmation(options) {
+  const text = options['owner-confirmation'];
+  if (typeof text !== 'string' || !text.trim()) throw new Error('promote requires --owner-confirmation with the verbatim text of the owner\'s own message in their Codex App session');
+  const version = new RegExp(`(?<![0-9.])${options.version.replaceAll('.', '\\.')}(?!\\.?[0-9])`);
+  const sha = new RegExp(`(?<![0-9a-f])${options.sha}(?![0-9a-f])`, 'i');
+  if (!version.test(text) || !sha.test(text) || !/发布到\s*stable/i.test(text)) throw new Error('The owner confirmation must state this version, the exact full source SHA and 发布到 stable');
+  return text;
+}
+const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
+function rollbackCommand(context, plan, planSHA256) {
+  const mode = plan.previousManifest.status === 200 ? '--restore-previous' : '--delete-first-release-manifest';
+  return ['node', quote(scriptPath), 'rollback', mode, '--out', quote(context.out), '--version', context.version, '--sha', context.sha, '--plan-sha256', planSHA256,
+    '--cos-config', quote(context.options['cos-config']), '--cos-write-config', quote(context.options['cos-write-config'])].join(' ');
+}
+
+async function publishReceipt(context, expected, purpose) {
+  const path = join(context.out, names.publishReceipt);
+  if (!(await exists(path))) throw new Error(`This output records no promote of this plan; nothing to ${purpose}`);
+  const receipt = await readJSONFile(path, names.publishReceipt);
+  if (receipt.receipt !== 'publish' || receipt.planSHA256 !== expected || receipt.version !== context.version || receipt.sourceCommit !== context.sha) throw new Error(`${names.publishReceipt} belongs to a different plan; nothing to ${purpose}`);
+  return receipt;
+}
+
+/** Full public verification after the switch; promote and reverify both end here. */
+async function finishPublication(context, plan, expected, receipt) {
+  let publicVerification;
+  try {
+    publicVerification = await runVerify(context, 'full');
+    assertReportCovers(publicVerification, [...plan.upload, plan.promote]);
+  } catch (error) { publicVerification = { publiclyVerified: false, error: error.message }; }
+  const passed = publicVerification.publiclyVerified === true;
+  Object.assign(receipt, { status: passed ? 'published' : 'manifest-written-public-verification-failed', publicVerification, completedAt: context.now().toISOString() });
+  await writeAtomic(join(context.out, names.publishReceipt), json(receipt));
+  if (!passed) {
+    context.log('Public verification failed after the stable switch. Nothing was rolled back automatically. After a transient failure run reverify with the same plan hash; to withdraw, run this prepared rollback command only after the owner approves it:');
+    context.log(rollbackCommand(context, plan, expected));
+    throw new Error(`Public verification failed after writing the stable manifest: ${publicVerification.error}`);
+  }
+  context.log(JSON.stringify(publicVerification, null, 2));
+  context.log(`Published ${context.version} to stable; receipt saved as ${names.publishReceipt}`);
+  return receipt;
+}
+
+/** promote: writes only bot/mac/stable/manifest.json, last, after the owner's own stable confirmation. */
+export async function promoteRelease(options, dependencies = {}) {
+  const context = await openContext('promote', options, dependencies);
+  const expected = planHash(options), cancel = cancelFile(options), confirmation = ownerConfirmation(options);
+  await assertNotCancelled(cancel, 'before promote; the stable manifest was not changed');
+  return withLock(context, async () => {
+    const { plan } = await readReviewedPlan(context, expected);
+    const upload = await readJSONFile(join(context.out, names.uploadReceipt), names.uploadReceipt);
+    if (upload.planSHA256 !== expected || upload.version !== context.version || upload.sourceCommit !== context.sha) throw new Error(`${names.uploadReceipt} belongs to a different plan; run upload with this plan first`);
+    const step = plan.promote;
+    const assertUnchanged = async () => {
+      const live = await liveDigest(context);
+      if (live.status === 200 && live.sha256 === step.sha256) throw new Error('Stable already serves this release manifest; do not promote again. To finish its public verification run reverify with the same plan hash');
+      if (!sameSnapshot(live, plan.previousManifest)) throw new Error('The live stable manifest changed since the reviewed plan; nothing was written. Run plan again and get a new owner review and confirmation');
+    };
+    await assertUnchanged();
+    const regenerated = await buildPlan(context, plan.gates.releaseFlags);
+    if (regenerated.sha256 !== expected) throw new Error('Release evidence, COS history, bucket versioning or configuration changed since the reviewed plan; nothing was written. Run plan again');
+    const versioned = await runVerify(context, 'versioned');
+    assertReportCovers(versioned, plan.upload);
+    if (!(await ledgerContains(context.readConfig.ledgerFile, context.version))) throw new Error('The ledger does not record this version; run upload with this plan again before promote');
+    const body = regenerated.manifestBytes;
+    if (body.length !== step.size || sha256(body) !== step.sha256) throw new Error('Local manifest.json differs from the reviewed plan');
+    await assertNotCancelled(cancel, 'before writing the stable manifest; nothing was written');
+    // Replacing an existing manifest cannot be conditional on COS, so the last read sits right before the PUT.
+    await assertUnchanged();
+    const receipt = {
+      receipt: 'publish', status: 'manifest-write-started', version: context.version, sourceCommit: context.sha, planSHA256: expected,
+      notarization: plan.notarization, objects: upload.objects, uploadCompletedAt: upload.completedAt,
+      manifest: { key: step.key, url: step.url, size: step.size, sha256: step.sha256, cacheControl: step.headers['Cache-Control'], contentType: step.headers['Content-Type'], writeStartedAt: context.now().toISOString() },
+      previousManifest: { status: plan.previousManifest.status, ...(plan.previousManifest.status === 200 ? { version: plan.previousManifest.version, size: plan.previousManifest.size, sha256: plan.previousManifest.sha256 } : {}) },
+      ownerConfirmation: confirmation,
+      ownerConfirmationRule: 'Recorded verbatim. The tool cannot verify who sent it; only the owner\'s own message in their Codex App session counts.',
+      cdn: NO_CDN, versionedVerification: versioned, ledgerRecordsVersion: true,
+    };
+    // Written before the switch, so an interrupted promote can still be re-verified or rolled back.
+    await writeAtomic(join(context.out, names.publishReceipt), json(receipt));
+    context.log(`PutObject ${step.key} (${step.size} bytes, SHA-256 ${step.sha256})`);
+    let write = 'written';
+    try {
+      await cosCall(await writeClient(context), 'putObject', { ...target(context, step.key), Body: body, ContentLength: body.length, ContentMD5: md5(body),
+        CacheControl: step.headers['Cache-Control'], ContentType: step.headers['Content-Type'], ...(step.headers['x-cos-forbid-overwrite'] ? { Headers: { 'x-cos-forbid-overwrite': 'true' } } : {}) }, 'PutObject manifest.json');
+    } catch (error) {
+      if (!refusedOverwrite(error)) throw new Error(`${error.message}. If stable now serves this release, run reverify; if it is unchanged, promote may run again`);
+      // An SDK retry after a lost response meets its own first write; only the public bytes decide.
+      const live = await liveDigest(context);
+      if (live.status !== 200 || live.sha256 !== step.sha256) throw new Error('A stable manifest appeared after the snapshot; nothing was overwritten. Investigate');
+      write = 'already-written-with-these-bytes';
+    }
+    Object.assign(receipt.manifest, { write, writtenAt: context.now().toISOString() });
+    context.log(`CDN: ${NO_CDN}`);
+    return finishPublication(context, plan, expected, receipt);
+  });
+}
+
+/** reverify: no COS write. Finishes a switch whose public verification failed or never ran. */
+export async function reverifyRelease(options, dependencies = {}) {
+  const context = await openContext('reverify', options, dependencies);
+  const expected = planHash(options);
+  return withLock(context, async () => {
+    const { plan } = await readReviewedPlan(context, expected, { recovery: true });
+    await assertNotRolledBack(context);
+    const receipt = await publishReceipt(context, expected, 're-verify');
+    if (receipt.status === 'published') throw new Error(`${names.publishReceipt} already records published; nothing to re-verify`);
+    const live = await liveDigest(context);
+    if (live.status !== 200 || live.sha256 !== plan.promote.sha256) throw new Error('Stable does not serve this release manifest; nothing to re-verify. If promote stopped before the switch, promote may run again');
+    receipt.reverifiedAt = context.now().toISOString();
+    return finishPublication(context, plan, expected, receipt);
+  });
+}
+
+/** rollback: only the stable manifest; versioned objects and the ledger are never touched. */
+export async function rollbackRelease(options, dependencies = {}) {
+  const context = await openContext('rollback', options, dependencies);
+  const expected = planHash(options);
+  const restore = !!options['restore-previous'], remove = !!options['delete-first-release-manifest'];
+  if (restore === remove) throw new Error('rollback needs exactly one of --restore-previous or --delete-first-release-manifest');
+  return withLock(context, async () => {
+    const { plan } = await readReviewedPlan(context, expected, { recovery: true });
+    await publishReceipt(context, expected, 'roll back');
+    const previous = plan.previousManifest, key = plan.promote.key;
+    const current = await liveDigest(context);
+    const ours = current.status === 200 && current.sha256 === plan.promote.sha256;
+    let action, bytes;
+    if (restore) {
+      if (previous.status !== 200) throw new Error('The reviewed plan saved no previous manifest; withdraw a first release with --delete-first-release-manifest');
+      bytes = Buffer.from(previous.bytesBase64 ?? '', 'base64');
+      if (bytes.length !== previous.size || sha256(bytes) !== previous.sha256) throw new Error('The saved previous manifest bytes do not match their recorded SHA-256');
+      validateManifest(JSON.parse(bytes.toString('utf8')));
+      action = current.status === 200 && current.sha256 === previous.sha256 ? 'already-restored' : ours ? 'restore' : undefined;
+      if (!action) throw new Error('The live stable manifest is neither this release nor the saved previous manifest; investigate before writing');
+      context.log(action === 'restore'
+        ? `Will PutObject ${key} with the saved previous manifest (version ${previous.version}, ${previous.size} bytes, SHA-256 ${previous.sha256}); Cache-Control: no-cache; Content-Type: application/json. Versioned objects and the ledger stay untouched. CDN: ${NO_CDN}`
+        : 'Stable already serves the saved previous manifest; nothing will be written, only verified and recorded');
+    } else {
+      if (previous.status !== 404) throw new Error('--delete-first-release-manifest applies only when the reviewed plan found no stable manifest; use --restore-previous');
+      action = current.status === 404 ? 'already-deleted' : ours ? 'delete' : undefined;
+      if (!action) throw new Error('The live stable manifest is not this release; investigate before deleting anything');
+      context.log(action === 'delete'
+        ? `Will DeleteObject ${key} only; versioned objects and the ledger stay untouched; then the public manifest must return HTTP 404. CDN: ${NO_CDN}`
+        : 'The public stable manifest already returns HTTP 404; nothing will be deleted, only verified and recorded');
+    }
+    if (options['dry-run']) return { action: 'dry-run', planned: action };
+    if (action === 'restore') {
+      await cosCall(await writeClient(context), 'putObject', { ...target(context, key), Body: bytes, ContentLength: bytes.length, ContentMD5: md5(bytes), CacheControl: 'no-cache', ContentType: 'application/json' }, 'PutObject manifest.json');
+      action = 'restored';
+    } else if (action === 'delete') {
+      await cosCall(await writeClient(context), 'deleteObject', target(context, key), 'DeleteObject manifest.json');
+      action = 'deleted';
+    }
+    const after = await liveDigest(context);
+    if (restore) {
+      const strict = after.status === 200 && after.sha256 === previous.sha256 && await readStableManifest({ fetchImpl: context.fetchImpl, url: manifestURL, env: context.env });
+      if (!strict || sha256(strict.bytes) !== previous.sha256) throw new Error('The public stable manifest does not equal the saved previous manifest; investigate');
+      cachePolicy(strict.responseHeaders, 'manifest');
+    } else {
+      if (after.status !== 404) throw new Error('The public stable manifest is still served; investigate');
+      const listing = await readCosReleaseEvidence(context.options['cos-config'], { env: context.env, config: context.readConfig, client: context.dependencies.readClient });
+      if (listing.keys.includes(key)) throw new Error('COS still lists manifest.json; investigate');
+    }
+    const receipt = { receipt: 'rollback', mode: restore ? 'restore-previous' : 'delete-first-release-manifest', action, version: context.version, sourceCommit: context.sha, planSHA256: expected,
+      before: { status: current.status, ...(current.sha256 ? { sha256: current.sha256 } : {}) },
+      after: restore ? { status: 200, sha256: previous.sha256 } : { status: 404 }, untouched: 'versioned objects and the ledger', cdn: NO_CDN, completedAt: context.now().toISOString() };
+    await writeAtomic(join(context.out, names.rollbackReceipt), json(receipt));
+    context.log(`Rollback ${action}; the public stable manifest is ${restore ? 'the saved previous manifest' : 'HTTP 404'}. Receipt saved as ${names.rollbackReceipt}`);
     return receipt;
   });
 }
@@ -437,33 +630,35 @@ export async function fixReleaseHeaders(options, dependencies = {}) {
     const receipt = { receipt: 'fix-headers', version: context.version, sourceCommit: context.sha, planSHA256: expected, objects, bytes: 'unchanged; full SHA-256 re-verified publicly', versionedVerification: verification, ledger, completedAt: context.now().toISOString() };
     await writeAtomic(join(context.out, names.fixReceipt), json(receipt));
     context.log(JSON.stringify(verification, null, 2));
-    if (!(await exists(join(context.out, names.uploadReceipt)))) context.log('Run upload again with the same plan to record upload-receipt.json.');
+    if (!(await exists(join(context.out, names.uploadReceipt)))) context.log('Run upload again with the same plan to record upload-receipt.json before promote.');
     return receipt;
   });
 }
 
-export const publishCommands = { plan: planPublish, upload: uploadRelease, 'fix-headers': fixReleaseHeaders };
+export const publishCommands = { plan: planPublish, upload: uploadRelease, promote: promoteRelease, reverify: reverifyRelease, rollback: rollbackRelease, 'fix-headers': fixReleaseHeaders };
 
-const help = `Usage: node scripts/release-cos-publish.mjs <plan|upload|fix-headers> --out /absolute/evidence --version X.Y.Z --sha FULL_SHA --cos-config /absolute/cos-readonly.json --cos-write-config /absolute/cos-write.json [options]
+const help = `Usage: node scripts/release-cos-publish.mjs <plan|upload|promote|reverify|rollback|fix-headers> --out /absolute/evidence --version X.Y.Z --sha FULL_SHA --cos-config /absolute/cos-readonly.json --cos-write-config /absolute/cos-write.json [options]
 
 plan         Read-only; makes no COS write. Rechecks the formal-release evidence (state, inventory, DO-NOT-PUBLISH, every file against SHA256SUMS, verify-public-release --local-only), snapshots the live stable manifest over strict TLS without redirects, recomputes the highest published version from COS and the ledger, and requires bucket versioning never enabled. A 404 manifest needs --first-release or --no-live-manifest exactly as release-mac does. Writes OUT/publish-plan.json and prints its SHA-256 for the owner to review.
 upload       --plan-sha256 HASH --cancel-file /absolute/path [--first-release | --no-live-manifest]. Regenerates the plan and requires the reviewed hash, then PUTs only the versioned ZIP, DMG and feed with x-cos-forbid-overwrite: true. An existing object is reused only when its public bytes have the planned full SHA-256. Requires verify-public-release --versioned-only to print "versionedObjectsVerified": true, appends the ledger and writes OUT/upload-receipt.json. Never touches manifest.json.
+promote      --plan-sha256 HASH --cancel-file /absolute/path --owner-confirmation "verbatim owner message". Run only after the owner, in their own Codex App session and after seeing the evidence, sent a message naming the version, the exact source SHA and 发布到 stable; the tool records the text but cannot verify who sent it. Rechecks the plan, the live manifest snapshot and the versioned objects, rechecks the live manifest again right before the write, records OUT/publish-receipt.json, writes only bot/mac/stable/manifest.json, requires "publiclyVerified": true and completes the receipt. On failure it prints the prepared rollback command and exits nonzero without rolling back.
+reverify     --plan-sha256 HASH. Makes no COS write. When stable already serves this release but publish-receipt.json does not say published (a transient verification failure or an interrupted promote), reruns the full public verification and completes the receipt.
+rollback     --plan-sha256 HASH and exactly one of --restore-previous (write back the manifest bytes saved in the plan) or --delete-first-release-manifest (delete only manifest.json when the plan found none). Needs this output's publish-receipt.json and judges the live manifest by its raw SHA-256. Prints the action first; --dry-run stops there and records nothing. Versioned objects and the ledger are never touched; a rolled-back candidate cannot be planned, uploaded or promoted again.
 fix-headers  --plan-sha256 HASH --cancel-file /absolute/path. Only for objects this output uploaded and only while their public bytes match the plan. Same-key PUT Object - Copy with x-cos-metadata-directive: Replaced and the planned headers; bytes unchanged, then --versioned-only must pass again with the same full SHA-256.
 
-Switching the stable manifest (promote), finishing its public verification (reverify) and withdrawing it (rollback) come in the next PR; until then stop after upload and never switch stable by hand.
-
-The write key comes from environment variables named in --cos-write-config (same bucket, region and prefix as --cos-config, separate variables, pinned cos-nodejs-sdk-v5@${COS_SDK_VERSION} installed with npm ci from scripts/cos-sdk/package-lock.json). Keys each command needs in its environment: plan and upload both (plan reads bucket versioning with the write key); fix-headers only the write key. A command stops at once when a key it uses is missing and never requires one it does not use. Neither key reaches child processes or output. TLS trust-store overrides and redirects are refused. CDN refresh is not implemented; a cdn setting is refused. A .publish.lock whose recorded process is no longer running is removed automatically.`;
+The write key comes from environment variables named in --cos-write-config (same bucket, region and prefix as --cos-config, separate variables, pinned cos-nodejs-sdk-v5@${COS_SDK_VERSION} installed with npm ci from scripts/cos-sdk/package-lock.json). Keys each command needs in its environment: plan, upload and promote both (plan reads bucket versioning with the write key); rollback --delete-first-release-manifest both (it lists COS after the delete); rollback --restore-previous and fix-headers only the write key; reverify neither. A command stops at once when a key it uses is missing and never requires one it does not use. Neither key reaches child processes or output. TLS trust-store overrides and redirects are refused. CDN refresh is not implemented; a cdn setting is refused. A .publish.lock whose recorded process is no longer running is removed automatically.`;
 
 const invokedPath = process.argv[1] ? await realpath(resolve(process.argv[1])).catch(() => null) : null;
 if (invokedPath && invokedPath === await realpath(scriptPath)) {
   try {
     const { values, positionals } = parseArgs({ allowPositionals: true, options: {
       out: { type: 'string' }, version: { type: 'string' }, sha: { type: 'string' }, 'cos-config': { type: 'string' }, 'cos-write-config': { type: 'string' },
-      'first-release': { type: 'boolean' }, 'no-live-manifest': { type: 'boolean' }, 'plan-sha256': { type: 'string' }, 'cancel-file': { type: 'string' }, help: { type: 'boolean' },
+      'first-release': { type: 'boolean' }, 'no-live-manifest': { type: 'boolean' }, 'plan-sha256': { type: 'string' }, 'cancel-file': { type: 'string' },
+      'owner-confirmation': { type: 'string' }, 'restore-previous': { type: 'boolean' }, 'delete-first-release-manifest': { type: 'boolean' }, 'dry-run': { type: 'boolean' }, help: { type: 'boolean' },
     } });
     const { help: wantsHelp, ...options } = values;
     if (wantsHelp) console.log(help);
-    else if (positionals.length !== 1 || !Object.hasOwn(publishCommands, positionals[0])) throw new Error('Use one subcommand: plan, upload or fix-headers; see --help');
+    else if (positionals.length !== 1 || !Object.hasOwn(publishCommands, positionals[0])) throw new Error('Use one subcommand: plan, upload, promote, reverify, rollback or fix-headers; see --help');
     else await publishCommands[positionals[0]](options);
   } catch (error) { console.error(redact(error.message)); process.exitCode = 1; }
 }
