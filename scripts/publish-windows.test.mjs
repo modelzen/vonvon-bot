@@ -7,13 +7,13 @@ import { test } from 'node:test';
 import { downloadBuild, publishWindowsObjects, validateBuildRun, windowsObjectPlan } from './publish-windows.mjs';
 import { createWindowsInventory } from './package-windows.mjs';
 
-const sourceSha = 'a'.repeat(40), version = '0.7.5';
+const sourceSha = 'a'.repeat(40), version = '0.7.6';
 const bytes = Buffer.from('release fixture');
 const evidence = { bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), sha512: createHash('sha512').update(bytes).digest('base64') };
 const inventory = { sourceSha, version, architecture: 'x64', signed: false, updatesEnabled: false,
   artifacts: [
-    ['installer', `Vonvon-Bot-${version}-windows-x64.exe`], ['zip', `Vonvon-Bot-${version}-windows-x64.zip`],
-    ['blockmap', `Vonvon-Bot-${version}-windows-x64.exe.blockmap`], ['feed', 'latest.yml'],
+    ['installer', `Vonvon-Bot-Setup-${version}-x64.exe`], ['zip', `Vonvon-Bot-${version}-windows-x64.zip`],
+    ['blockmap', `Vonvon-Bot-Setup-${version}-x64.exe.blockmap`], ['feed', 'latest.yml'],
   ].map(([kind, file]) => ({ kind, file, ...evidence })) };
 const fetchImpl = async () => new Response(bytes, { headers: { 'content-length': String(bytes.length), 'content-type': 'application/octet-stream', 'cache-control': 'public, max-age=31536000, immutable' } });
 
@@ -93,13 +93,13 @@ test('interrupted artifact extraction leaves the final directory clean and retry
   await assert.rejects(downloadBuild({ runId: 123, out, api, execute: interrupted }), /connection lost/);
   await assert.rejects(access(out));
   const complete = async (command, args) => {
-    const dir = args.at(-1), base = `Vonvon-Bot-${version}-windows-x64`;
+    const dir = args.at(-1), base = `Vonvon-Bot-${version}-windows-x64`, setup = `Vonvon-Bot-Setup-${version}-x64`;
     const pe = Buffer.alloc(128); pe.write('MZ'); pe.writeUInt32LE(64, 0x3c); pe.write('PE\0\0', 64); pe.writeUInt16LE(0x8664, 68);
     const sha = createHash('sha512').update(pe).digest('base64');
-    await writeFile(join(dir, `${base}.exe`), pe); await writeFile(join(dir, `${base}.zip`), 'zip');
-    await writeFile(join(dir, `${base}.exe.blockmap`), 'blockmap');
-    await writeFile(join(dir, 'latest.yml'), `version: ${version}\nfiles:\n  - url: ${base}.exe\n    sha512: ${sha}\n    size: 128\npath: ${base}.exe\nsha512: ${sha}\n`);
-    await createWindowsInventory({ out: dir, version, sourceSha, unpackedExe: join(dir, `${base}.exe`), zipExe: join(dir, `${base}.exe`) });
+    await writeFile(join(dir, `${setup}.exe`), pe); await writeFile(join(dir, `${base}.zip`), 'zip');
+    await writeFile(join(dir, `${setup}.exe.blockmap`), 'blockmap');
+    await writeFile(join(dir, 'latest.yml'), `version: ${version}\nfiles:\n  - url: ${setup}.exe\n    sha512: ${sha}\n    size: 128\npath: ${setup}.exe\nsha512: ${sha}\n`);
+    await createWindowsInventory({ out: dir, version, sourceSha, unpackedExe: join(dir, `${setup}.exe`), zipExe: join(dir, `${setup}.exe`) });
   };
   const verified = await downloadBuild({ runId: 123, out, api, execute: complete });
   assert.equal(verified.sourceSha, sourceSha);

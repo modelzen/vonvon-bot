@@ -115,7 +115,7 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
       <div>{toolContent}</div>
     </details>}
     {!compact && !botsOnly && <SettingsGroup label={snapshot.agents.length ? '再注册一个 Bot' : '第一步'}>
-      <SettingsRow title="扫码建飞书应用" description="用飞书扫码，自动建好飞书应用并保存凭据。建好后这里会接着检测权限、事件和发布。"
+      <SettingsRow title="扫码连接飞书应用" description="用飞书扫码，创建新应用或选择已有应用并保存凭据。连接后这里会接着检测权限、事件和发布。"
         trailing={<GlowButton disabled={busy || !ready} onClick={() => onRegister()}>添加 Bot</GlowButton>}/>
     </SettingsGroup>}
   </div>;

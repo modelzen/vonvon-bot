@@ -59,9 +59,12 @@ win:
     - zip
   artifactName: Vonvon-Bot-${version}-windows-${arch}.${ext}
 nsis:
-  oneClick: false
+  include: assets/windows-installer.nsh
+  artifactName: Vonvon-Bot-Setup-${version}-${arch}.${ext}
+  oneClick: true
   perMachine: false
-  allowToChangeInstallationDirectory: true
+  allowElevation: false
+  runAfterFinish: true
   createDesktopShortcut: true
   shortcutName: Vonvon Bot
 mac:

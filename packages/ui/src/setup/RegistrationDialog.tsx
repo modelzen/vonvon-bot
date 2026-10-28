@@ -81,7 +81,9 @@ export function RegistrationScan({job, refresh, busy, onRetry}: {job?: Job; refr
   </div>;
   return <div className="registration-scan">
     <h3>用飞书扫码</h3>
-    {refresh && <p className="registration-refresh-note">请用这个 Bot 的管理员身份扫码，群聊、会话和设置会保留。</p>}
+    <p className="registration-refresh-note">{refresh
+      ? '请用这个 Bot 的管理员身份扫码，群聊、会话和设置会保留。'
+      : '扫码后可以创建新应用，也可以选择已有应用。选择已有应用时，请核对飞书的确认页面，确认后可能更改该应用的配置。'}</p>
     <div className="registration-qr"><img src={job.image} alt="飞书注册二维码"/></div>
     <p className="registration-expires">有效期至 {new Date(job.expiresAt).toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'})}</p>
     <div className="registration-link-actions">

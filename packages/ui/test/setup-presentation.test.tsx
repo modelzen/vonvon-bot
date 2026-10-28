@@ -93,7 +93,8 @@ it('starts a new machine with the tools and the scan step', () => {
   expect(html).toContain('后端');
   expect(html).toContain('还没有能用的后端');
   expect(html).toContain('第一步');
-  expect(html).toContain('扫码建飞书应用');
+  expect(html).toContain('扫码连接飞书应用');
+  expect(html).toContain('选择已有应用');
   expect(html).toContain('添加 Bot');
   expect(html).not.toContain('注册 Bot');
 });
@@ -104,7 +105,7 @@ it('starts the welcome with Provider preparation before Bot scanning', () => {
   </ClientProvider>);
   expect(html).toContain('先准备一个 Provider');
   expect(html).toContain('准备 Provider');
-  expect(html).toContain('创建 Bot');
+  expect(html).toContain('添加 Bot');
   expect(html).toContain('连接群');
   expect(html).not.toContain('扫码创建 Bot');
   expect(html).toContain('Codex');

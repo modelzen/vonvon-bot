@@ -42,6 +42,12 @@ async function settle() {for (let i = 0; i < 6; i++) await Promise.resolve();}
 beforeEach(() => {hooks.state = []; hooks.refs = []; hooks.effects = []; vi.clearAllMocks(); hooks.openExternal.mockResolvedValue(); vi.useFakeTimers();});
 afterEach(() => {hooks.effects.forEach(effect => effect.cleanup?.()); vi.useRealTimers(); vi.unstubAllGlobals();});
 
+it('explains the existing-app choice and its confirmation before scanning', () => {
+  const prompt = text(scan(qr()).tree);
+  expect(prompt).toContain('选择已有应用');
+  expect(prompt).toContain('确认后可能更改该应用的配置');
+});
+
 it('switches an expired QR to a same-dialog retry, and removes its open/copy links', async () => {
   const job = qr();
   expect(scan(job).button('打开链接')).toBeDefined();
