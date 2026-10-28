@@ -14,6 +14,7 @@ directories:
 files:
   - desktop/**
   - dist/update-config.json
+  - dist/windows-update-config.json
   - ui/**
   - assets/**
   - package.json
@@ -49,6 +50,9 @@ extraResources:
       - "**/*"
 npmRebuild: false
 win:
+  publish:
+    provider: generic
+    url: https://dl.vonvon.cc/bot/windows/stable/
   icon: assets/windows-icon.ico
   target:
     - nsis
