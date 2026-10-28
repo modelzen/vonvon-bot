@@ -88,7 +88,7 @@ export function useProviderSetup(provider: SetupProvider, snapshot: DesktopSnaps
       if (!currentRequest()) return;
       const currentSignature = providerSignature(current);
       const source = tools.find(item => item.tool === provider);
-      if (current?.installation === 'installed' && (!tool || tool.installation === 'unknown' || !source || source.installation === 'missing')) {
+      if (provider === 'claude' || current?.installation === 'installed' && (!tool || tool.installation === 'unknown' || !source || source.installation === 'missing')) {
         await readReplies([{type: 'scan'}], infoSequence);
         if (!currentRequest()) return;
       }
@@ -145,21 +145,6 @@ export function useProviderSetup(provider: SetupProvider, snapshot: DesktopSnaps
       if (provider === 'codex' && !observedToolInstallId.current) void verify();
     }
   }
-  async function connect() {
-    if (provider === 'codex') {setIssue(''); await run({type: 'startCodexLogin'}).catch(error => setIssue(errorText(error))); return;}
-    let claudeTool = tools.find(item => item.tool === 'claude');
-    if (!claudeTool) {
-      const scan = await request({type: 'scan'});
-      if (scan?.kind !== 'tools') return;
-      claudeTool = scan.tools.find(item => item.tool === 'claude');
-    }
-    if (!claudeTool || claudeTool.installation === 'missing') {
-      const reply = await installTool('claude');
-      if (reply?.kind !== 'applied' || !mounted.current || providerNow.current !== provider) return;
-      void read();
-    }
-    await request({type: 'startLogin', tool: 'claude'});
-  }
   const activeInstall = provider === 'claude' && install?.state === 'running' ? install : undefined;
   const relevantToolInstall = toolInstall?.kind === 'running' && toolInstall.tool === provider ? toolInstall : undefined;
   const activeLogin = login?.kind === 'running' && login.purpose.kind === 'login' && login.purpose.tool === provider ? login : undefined;
@@ -190,7 +175,7 @@ export function useProviderSetup(provider: SetupProvider, snapshot: DesktopSnaps
     : toolInstall?.id === observedToolInstallId.current && toolInstall?.kind === 'failed' ? toolInstall.message
     : login?.id === observedLoginId.current && (login?.kind === 'failed' || login?.kind === 'timedOut') ? login.message : undefined;
   const canContinue = ready && !working && !activeInstall && !relevantToolInstall && !activeLogin && !activeCodexJob && providerInstalled(tool) && providerAuthenticated(tool) && check?.state === 'ready' && check.provider === provider && Boolean(check.models?.length) && check.signature === signature;
-  return {tool, tools, entry, check, issue: issue || operationMessage || (tool?.installation === 'unknown' || providerInstalled(tool) && tool?.authentication === 'unknown' ? tool?.message : undefined), working, activeInstall, relevantToolInstall, activeLogin, activeCodexJob, canContinue, verify, read, installProvider, connect,
+  return {tool, tools, entry, check, issue: issue || operationMessage || (tool?.installation === 'unknown' || providerInstalled(tool) && tool?.authentication === 'unknown' ? tool?.message : undefined), working, activeInstall, relevantToolInstall, activeLogin, activeCodexJob, canContinue, verify, read, installProvider,
     cancelInstall: () => activeInstall ? request({type: 'cancelBackendInstall', operationId: activeInstall.operationId}) : relevantToolInstall ? request({type: 'cancelInstall', operationId: relevantToolInstall.id}) : undefined,
     cancelLogin: () => activeLogin ? request({type: 'cancelLogin', operationId: activeLogin.id}) : undefined,
     installTool, request};

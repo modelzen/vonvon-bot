@@ -45,6 +45,15 @@ it.skipIf(process.platform === 'win32')('finds native Claude Code when the deskt
   } finally { await service.close(); }
 });
 
+it.skipIf(process.platform === 'win32')('reports a detected Claude executable that cannot start', async () => {
+  const { dir, service } = await fixture();
+  const cli = join(dir, 'claude');
+  await writeFile(cli, '#!/bin/sh\necho "native binary not installed" >&2\nexit 1\n', { mode: 0o700 });
+  try {
+    expect(await service['inspect']('claude')).toMatchObject({ installation: 'external', executable: cli, version: null, runtimeStatus: 'failed' });
+  } finally { await service.close(); }
+});
+
 it.skipIf(process.platform === 'win32')('finds nvm Claude Code outside the desktop PATH and keeps explicit PATH precedence', async () => {
   const { dir, service } = await fixture();
   const nvm = join(dir, '.nvm', 'versions', 'node');
@@ -65,6 +74,14 @@ const mutations = [
   { type: 'profileUse', name: 'one' },
   { type: 'profileAdd', name: 'one', appId: 'test-app', appSecret: 'test-secret', brand: 'feishu', use: true },
 ] satisfies EnvironmentRequest[];
+
+it.each(['claude', 'codex'] as const)('guides %s authentication without resolving or starting a process', async tool => {
+  const {service} = await fixture();
+  service['resolveTool'] = async () => {throw new Error('authentication must not resolve a tool');};
+  try {
+    expect(await service.run({type: 'startLogin', tool})).toMatchObject({kind: 'refused', code: 'provider-configuration-required'});
+  } finally {await service.close();}
+});
 
 for (const request of mutations) {
   it(`${request.type} reserves ownership during resolution and execution, then releases it`, async () => {

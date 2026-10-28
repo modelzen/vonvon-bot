@@ -66,7 +66,7 @@ export function UsagePanel({ request, onOpenEnvironment, onOpenShare }: Props) {
       </div>
     </header>
     <UsageAccount data={data}>
-      {!data && <SettingsRow title={loading ? '正在读取用量' : '用量尚未读取'} description={loading ? '请稍候。' : error ? '请先刷新重试，或到本机环境检查账号状态。' : '在本机环境中登录 Codex 后可查看用量。'} trailing={!loading && <Button size="sm" onClick={onOpenEnvironment}>打开本机环境</Button>}/>}
+      {!data && <SettingsRow title={loading ? '正在读取用量' : '用量尚未读取'} description={loading ? '请稍候。' : error ? '请先刷新重试，或到 Provider 设置检测本机配置。' : '在 Codex App 或 Codex CLI 中登录后，回到 Vonvon 检测配置。'} trailing={!loading && <Button size="sm" onClick={onOpenEnvironment}>检测 Provider</Button>}/>}
       {error && <InlineNotice title="用量读取失败" tone="warning">{error}</InlineNotice>}
       {notice && <p className="usage-operation-note" role="status">{notice}</p>}
     </UsageAccount>

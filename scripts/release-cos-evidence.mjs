@@ -78,7 +78,7 @@ export async function readCosReleaseEvidence(configPath, { env = process.env, cl
   const versions = [...ledger.versions];
   for (const key of keys) {
     const name = key.slice(config.prefix.length);
-    const match = /^(?:feed-(.+)\.json|Vonvon-Bot-(.+)-universal\.(?:zip|dmg))$/.exec(name);
+    const match = /^(?:feed-(\d+\.\d+\.\d+)(?:-(?:arm64|x64))?\.json|Vonvon-Bot-(\d+\.\d+\.\d+)-(?:universal|arm64|x64)\.(?:zip|dmg))$/.exec(name);
     if (match) versions.push(match[1] ?? match[2]);
     else if (name.startsWith('feed-') || name.startsWith('Vonvon-Bot-')) throw new Error('Unrecognized historical release object; investigate before release');
   }

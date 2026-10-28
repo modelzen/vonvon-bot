@@ -1,4 +1,5 @@
 import { realpath } from 'node:fs/promises';
+import { statSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -341,6 +342,14 @@ export class ClaudeAgentBackend implements AgentBackend {
    * Failures are deliberately not cached so installation/login recovery can
    * retry on the next call (same policy as the Codex backend). */
   private modelCache: ModelInfo[] | null = null;
+  private modelCacheKey = '';
+
+  private modelSettingsKey(): string {
+    const dir = claudeConfigDir();
+    let file = 'missing';
+    try { const stat = statSync(join(dir, 'settings.json')); file = `${stat.mtimeMs}:${stat.size}`; } catch { /* missing settings */ }
+    return JSON.stringify([dir, file, ...['ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL'].map(key => process.env[key] ?? '')]);
+  }
 
   constructor(
     private readonly sdkLoader: () => Promise<ClaudeSdkFacade> = loadSdk,
@@ -424,7 +433,10 @@ export class ClaudeAgentBackend implements AgentBackend {
     } catch (err) {
       if (err instanceof BackendNotInstalledError) throw err;
       log.fail('agent', err, { backend: 'claude-agent', phase: 'loginStatus' });
-      return loginFromEnv(process.env, 'Claude 起不来，看不到登录状态。');
+      if (err instanceof Error && err.message.includes('Native CLI binary')) {
+        return { state: 'unknown', message: 'Claude Agent SDK 的运行程序缺失，请重新安装 SDK。也请在终端运行 `claude`，确认本机 Claude Code 可以使用。' };
+      }
+      return { state: 'unknown', message: 'Claude Agent SDK 无法启动。请在终端运行 `claude`，确认本机 Claude Code 可以使用，然后重新检测。' };
     } finally {
       abortController.abort();
       query?.close();
@@ -448,7 +460,9 @@ export class ClaudeAgentBackend implements AgentBackend {
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    if (this.modelCache) return this.modelCache;
+    const cacheKey = this.modelSettingsKey();
+    if (this.modelCache && this.modelCacheKey === cacheKey) return this.modelCache;
+    this.modelCache = null;
     let query: Query | undefined;
     const abortController = new AbortController();
     try {
@@ -469,6 +483,7 @@ export class ClaudeAgentBackend implements AgentBackend {
       );
       if (!discovered.length) throw new Error('Claude SDK returned an empty model catalog');
       this.modelCache = withConfiguredDefault(discovered.map(mapClaudeModel), this.configuredModel());
+      this.modelCacheKey = cacheKey;
       return this.modelCache;
     } catch (err) {
       log.fail('agent', err, { backend: 'claude-agent', phase: 'supportedModels' });

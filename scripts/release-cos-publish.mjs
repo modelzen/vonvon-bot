@@ -55,11 +55,16 @@ const keysUsed = (command, options) => ({
   'fix-headers': ['write'],
 })[command];
 
-function versionedObjects(version) {
+function versionedObjects(version, split = false) {
   return [
     { file: `Vonvon-Bot-${version}-universal.zip`, contentType: 'application/zip' },
     { file: `Vonvon-Bot-${version}-universal.dmg`, contentType: 'application/x-apple-diskimage' },
     { file: `feed-${version}.json`, contentType: 'application/json' },
+    ...(split ? ['arm64', 'x64'].flatMap(architecture => [
+      { file: `Vonvon-Bot-${version}-${architecture}.zip`, contentType: 'application/zip' },
+      { file: `Vonvon-Bot-${version}-${architecture}.dmg`, contentType: 'application/x-apple-diskimage' },
+      { file: `feed-${version}-${architecture}.json`, contentType: 'application/json' },
+    ]) : []),
   ];
 }
 
@@ -208,7 +213,7 @@ const targetIdentity = config => sha256(JSON.stringify([config.bucket, config.re
  */
 async function publishedHistory(context) {
   const evidence = await readCosReleaseEvidence(context.options['cos-config'], { env: context.env, config: context.readConfig, client: context.dependencies.readClient });
-  const ownKeys = new Set(versionedObjects(context.version).map(object => context.readConfig.prefix + object.file));
+  const ownKeys = new Set(versionedObjects(context.version, true).map(object => context.readConfig.prefix + object.file));
   if ((evidence.versions.includes(context.version) || evidence.keys.some(key => ownKeys.has(key))) && !(await uploadRecord(context))) {
     throw new Error(`Version ${context.version} already appears in COS or the ledger, but this output has no upload record; investigate instead of publishing`);
   }
@@ -256,13 +261,13 @@ async function buildPlan(context, flags) {
     },
     previousManifest: snapshot,
     uploadIntegrity: 'Each PUT sends Content-MD5 of bytes whose size and SHA-256 equal this plan; an existing object is reused only when its public bytes have the planned SHA-256',
-    upload: versionedObjects(context.version).map((object, index) => ({
+    upload: versionedObjects(context.version, Boolean(JSON.parse(manifestBytes.toString('utf8')).feedURLs)).map((object, index) => ({
       step: index + 1, operation: 'PutObject', key: prefix + object.file, file: object.file, url: new URL(object.file, manifestURL).href, size: record(object.file).size, sha256: record(object.file).sha256,
       headers: { 'Cache-Control': immutableCache, 'Content-Type': object.contentType, 'x-cos-forbid-overwrite': 'true' },
     })),
     afterUpload: ['verify-public-release --versioned-only must print "versionedObjectsVerified": true', `then the ledger records ${context.version}`],
     promote: {
-      step: 4, operation: 'PutObject', key: `${prefix}manifest.json`, file: 'manifest.json', url: manifestURL, size: manifestRecord.size, sha256: manifestRecord.sha256,
+      step: (JSON.parse(manifestBytes.toString('utf8')).feedURLs ? 10 : 4), operation: 'PutObject', key: `${prefix}manifest.json`, file: 'manifest.json', url: manifestURL, size: manifestRecord.size, sha256: manifestRecord.sha256,
       headers: { ...manifestHeaders, ...(snapshot.status === 404 ? { 'x-cos-forbid-overwrite': 'true' } : {}) },
       requires: 'the owner\'s own stable confirmation in their Codex App session, the unchanged live manifest snapshot above and a passing --versioned-only',
       cdn: NO_CDN, afterPromote: 'full verify-public-release must print "publiclyVerified": true',

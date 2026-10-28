@@ -66,7 +66,7 @@ it('ignores an older model reply after a newer failed check and after unmount', 
   expect(h.state.some(value => typeof value === 'object' && value !== null && 'state' in value && (value as {state: string}).state === 'ready')).toBe(false);
 });
 
-it('installs the Claude CLI then starts login when SDK is already installed', async () => {
+it('rechecks Claude without installing the CLI or starting login', async () => {
   const signed = snapshot([tool('claude', 'signedOut')]); h.client.snapshot.mockResolvedValue(signed);
   h.client.environment.mockImplementation(async (request: {type: string; tool?: string}) => request.type === 'scan' ? {kind: 'tools', tools: [{tool: 'claude', installation: 'missing'}]}
     : request.type === 'backendCatalog' ? {kind: 'backends', entries: [{id: 'claude-agent', depState: 'installed'}]}
@@ -74,10 +74,11 @@ it('installs the Claude CLI then starts login when SDK is already installed', as
     : request.type === 'toolInstallStatus' ? {kind: 'toolInstall', operation: null}
     : request.type === 'loginStatus' ? {kind: 'operation', operation: null}
     : {kind: 'applied', message: 'ok'});
-  render('claude', signed); await flush(); await render('claude', signed).connect();
+  render('claude', signed); await flush(); await render('claude', signed).verify();
   const actions = h.client.environment.mock.calls.map(([request]) => request.type);
-  expect(actions.lastIndexOf('install')).toBeGreaterThan(-1);
-  expect(actions.lastIndexOf('startLogin')).toBeGreaterThan(actions.lastIndexOf('install'));
+  expect(actions).toContain('scan');
+  expect(actions).not.toContain('install');
+  expect(actions).not.toContain('startLogin');
 });
 
 it('installs a missing Claude SDK only after the user requests it, even when Claude Code is present', async () => {
