@@ -12,7 +12,7 @@
 
 本文的"主人"指 bot 的主人，也就是用户；"owner"只在说本项目的流程时出现。出处写成 `文件:行`，`D/` 指 `packages/daemon/src/`。"推断"是没实测的判断，"要实测"的项列在第 9 节。
 
-**2026-10-28 Windows 候选扩展（owner）：** owner 要求构建 Windows x64 桌面候选并在本机验收，随后明确要求改动合入 dev、跳过 CI。范围与验证见 [Windows 本地验收候选](plans/windows-preview.md)。本节优先于下文历史版本不支持 Windows 的范围说明；Windows 登录启动服务、终端命令注册与自动更新尚未实现。正式公开发布另行执行。
+**2026-10-28 Windows 候选扩展（owner）：** owner 要求构建 Windows x64 桌面候选并在本机验收，随后明确要求改动合入 dev、跳过 CI，并支持后续应用内更新。范围与验证见 [Windows 本地验收候选](plans/windows-preview.md)。本节优先于下文历史版本不支持 Windows 的范围说明；Windows 登录启动服务与终端命令注册尚未实现。签名安装版支持在应用内检查、下载和安装新版，发布配置见 [Windows 更新](windows-updates.md)，未签名候选不启用更新。正式公开发布另行执行。
 
 ## 1. 一句话
 
