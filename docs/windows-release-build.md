@@ -1,5 +1,30 @@
 # Windows release build
 
+## 0.7.6 起的包名、构建与官网入口
+
+Windows x64 生成两个用户包：
+
+| 用途 | 文件名 | 官网按钮 |
+| --- | --- | --- |
+| 当前用户一键安装，添加开始菜单和桌面快捷方式 | `Vonvon-Bot-Setup-<version>-x64.exe` | 下载安装版（推荐） |
+| 解压后运行 `Vonvon Bot.exe` | `Vonvon-Bot-<version>-windows-x64.zip` | 下载免安装版 ZIP |
+
+另生成 EXE `.blockmap`、`latest.yml`、`windows-release-inventory.json`，共五个 Actions 交接文件，不增加官网按钮。未签名版本的 latest.yml 只留作证据，不切 stable。
+
+全站四个用户下载入口：macOS Apple 芯片 DMG、macOS Intel DMG、Windows Setup EXE、Windows ZIP。Mac 更新用 ZIP 和清单按既有流程生成，供更新器使用；Linux 暂不提供。两平台必须使用同一个新版本，禁止覆盖已发布的 0.7.5。
+
+Mac 顺序：owner 验收候选 → 获准 dev 合入 main → 在准确 main SHA 运行 Windows 工作流 → Mac 下载成功 run 并上传 Windows 文件 → 按既有流程构建、公证和发布同版本两架构 Mac 包 → 消费回执更新官网并部署。
+
+```sh
+gh workflow run windows-release.yml --repo modelzen/vonvon-bot --ref main
+```
+
+本地 Windows：`npm ci`、`npm run build`，从 `packages/desktop` 执行 `npx --no-install electron-builder --config electron-builder.yml --win nsis zip --x64 --publish never`。输出 `packages/desktop/dist/package/`。用 `node scripts/windows-runtime-smoke.mjs /absolute/application-directory` 分别验证 ZIP 解压目录和 EXE 实际安装目录，不能只执行 `--version`。
+
+一键安装减少应用向导步骤；浏览器和 Windows 的未签名提示仍取决于有效签名，不指导用户关闭安全功能。安装占用以 Electron 为主，owner 接受正常体积。
+
+针对 0.7.5：旧卸载器的更新模式会先把文件移动到更长的临时目录，同样可能失败。新安装器只对文件版本 0.7.5.0 的当前用户安装重试旧卸载器的普通卸载模式，并保留快捷方式；其他失败仍中止。0.7.5 没有启用卸载删除应用数据，本次不传删除数据参数；不能单凭兼容参数 `/KEEP_APP_DATA` 声称旧卸载器具有额外数据保护。
+
 ## Mac 发布下载文件
 
 云端构建完成后，Mac 上执行下面一条命令下载该 run 的产物、核验来源和哈希、上传版本化对象，并完整下载验证公网字节：

@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { checkedProductVersion, repositoryRoot } from './product-version.mjs';
 
 const releaseName = version => `Vonvon-Bot-${version}-windows-x64`;
+const installerName = version => `Vonvon-Bot-Setup-${version}-x64.exe`;
 
 export function peMachine(bytes) {
   if (bytes.length < 0x40 || bytes.toString('ascii', 0, 2) !== 'MZ') throw new Error('Missing PE DOS header');
@@ -43,8 +44,8 @@ export function validateWindowsInventory(inventory, { version, sourceSha } = {})
   if (inventory.architecture !== 'x64' || inventory.signed !== false || inventory.updatesEnabled !== false) throw new Error('Inventory must describe an unsigned x64 build with updates disabled');
   const base = releaseName(inventory.version);
   const expected = [
-    ['installer', `${base}.exe`], ['zip', `${base}.zip`],
-    ['blockmap', `${base}.exe.blockmap`], ['feed', 'latest.yml'],
+    ['installer', installerName(inventory.version)], ['zip', `${base}.zip`],
+    ['blockmap', `${installerName(inventory.version)}.blockmap`], ['feed', 'latest.yml'],
   ];
   if (!Array.isArray(inventory.artifacts) || inventory.artifacts.length !== expected.length) throw new Error('Incomplete Windows artifact inventory');
   for (const [index, [kind, file]] of expected.entries()) {
@@ -88,7 +89,7 @@ export async function createWindowsInventory({ out, version, sourceSha, unpacked
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Invalid release version');
   if (!/^[0-9a-f]{40}$/i.test(sourceSha) || /^0+$/.test(sourceSha)) throw new Error('Invalid source SHA');
   const base = releaseName(version);
-  const names = { installer: `${base}.exe`, zip: `${base}.zip`, blockmap: `${base}.exe.blockmap`, feed: 'latest.yml' };
+  const names = { installer: installerName(version), zip: `${base}.zip`, blockmap: `${installerName(version)}.blockmap`, feed: 'latest.yml' };
   const artifacts = [];
   for (const [kind, name] of Object.entries(names)) artifacts.push({ kind, ...await fileEvidence(join(out, name)) });
   const installerEvidence = artifacts.find(artifact => artifact.kind === 'installer');
