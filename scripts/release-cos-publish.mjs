@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs, promisify } from 'node:util';
 import { checkVersionGate, compareVersions, validateFirstRelease } from './release-mac.mjs';
 import { assertCredentialEnvNames, COS_SDK_VERSION, cosCredentialEnvNames, isStableCosTarget, loadPinnedSdk, readCosConfig, readCosReleaseEvidence } from './release-cos-evidence.mjs';
-import { assertSecureTransport, cachePolicy, DEFAULT_MANIFEST_URL, readStableManifest, validateManifest, validateReleaseInventory } from './verify-public-release.mjs';
+import { assertSecureTransport, cachePolicy, DEFAULT_MANIFEST_URL, readStableManifest, releaseArchitectures, validateManifest, validateReleaseInventory } from './verify-public-release.mjs';
 
 // The only COS writer for releases. plan and reverify write nothing to COS; upload writes the three
 // versioned objects named in an owner-reviewed plan; promote writes bot/mac/stable/manifest.json and
@@ -55,17 +55,12 @@ const keysUsed = (command, options) => ({
   'fix-headers': ['write'],
 })[command];
 
-function versionedObjects(version, split = false) {
-  return [
-    { file: `Vonvon-Bot-${version}-universal.zip`, contentType: 'application/zip' },
-    { file: `Vonvon-Bot-${version}-universal.dmg`, contentType: 'application/x-apple-diskimage' },
-    { file: `feed-${version}.json`, contentType: 'application/json' },
-    ...(split ? ['arm64', 'x64'].flatMap(architecture => [
-      { file: `Vonvon-Bot-${version}-${architecture}.zip`, contentType: 'application/zip' },
-      { file: `Vonvon-Bot-${version}-${architecture}.dmg`, contentType: 'application/x-apple-diskimage' },
-      { file: `feed-${version}-${architecture}.json`, contentType: 'application/json' },
-    ]) : []),
-  ];
+function versionedObjects(version, architectures = ['universal']) {
+  return architectures.flatMap(architecture => [
+    { file: `Vonvon-Bot-${version}-${architecture}.zip`, contentType: 'application/zip' },
+    { file: `Vonvon-Bot-${version}-${architecture}.dmg`, contentType: 'application/x-apple-diskimage' },
+    { file: `feed-${version}${architecture === 'universal' ? '' : `-${architecture}`}.json`, contentType: 'application/json' },
+  ]);
 }
 
 const writeConfigFields = ['bucket', 'region', 'prefix', 'publicManifestURL', 'secretIdEnv', 'secretKeyEnv', 'securityTokenEnv', 'sdkModule'];
@@ -213,7 +208,7 @@ const targetIdentity = config => sha256(JSON.stringify([config.bucket, config.re
  */
 async function publishedHistory(context) {
   const evidence = await readCosReleaseEvidence(context.options['cos-config'], { env: context.env, config: context.readConfig, client: context.dependencies.readClient });
-  const ownKeys = new Set(versionedObjects(context.version, true).map(object => context.readConfig.prefix + object.file));
+  const ownKeys = new Set(versionedObjects(context.version, ['universal', 'arm64', 'x64']).map(object => context.readConfig.prefix + object.file));
   if ((evidence.versions.includes(context.version) || evidence.keys.some(key => ownKeys.has(key))) && !(await uploadRecord(context))) {
     throw new Error(`Version ${context.version} already appears in COS or the ledger, but this output has no upload record; investigate instead of publishing`);
   }
@@ -246,6 +241,8 @@ async function buildPlan(context, flags) {
   const manifestRecord = record('manifest.json');
   if (manifestRecord.sha256 !== sha256(manifestBytes)) throw new Error('Local manifest.json differs from the inventory');
   const manifestHeaders = { 'Cache-Control': 'no-cache', 'Content-Type': 'application/json' };
+  const architectures = releaseArchitectures(validateManifest(JSON.parse(manifestBytes.toString('utf8'))));
+  const objects = versionedObjects(context.version, architectures);
   const plan = {
     planFormat: 1,
     tool: 'scripts/release-cos-publish.mjs',
@@ -261,13 +258,13 @@ async function buildPlan(context, flags) {
     },
     previousManifest: snapshot,
     uploadIntegrity: 'Each PUT sends Content-MD5 of bytes whose size and SHA-256 equal this plan; an existing object is reused only when its public bytes have the planned SHA-256',
-    upload: versionedObjects(context.version, Boolean(JSON.parse(manifestBytes.toString('utf8')).feedURLs)).map((object, index) => ({
+    upload: objects.map((object, index) => ({
       step: index + 1, operation: 'PutObject', key: prefix + object.file, file: object.file, url: new URL(object.file, manifestURL).href, size: record(object.file).size, sha256: record(object.file).sha256,
       headers: { 'Cache-Control': immutableCache, 'Content-Type': object.contentType, 'x-cos-forbid-overwrite': 'true' },
     })),
     afterUpload: ['verify-public-release --versioned-only must print "versionedObjectsVerified": true', `then the ledger records ${context.version}`],
     promote: {
-      step: (JSON.parse(manifestBytes.toString('utf8')).feedURLs ? 10 : 4), operation: 'PutObject', key: `${prefix}manifest.json`, file: 'manifest.json', url: manifestURL, size: manifestRecord.size, sha256: manifestRecord.sha256,
+      step: objects.length + 1, operation: 'PutObject', key: `${prefix}manifest.json`, file: 'manifest.json', url: manifestURL, size: manifestRecord.size, sha256: manifestRecord.sha256,
       headers: { ...manifestHeaders, ...(snapshot.status === 404 ? { 'x-cos-forbid-overwrite': 'true' } : {}) },
       requires: 'the owner\'s own stable confirmation in their Codex App session, the unchanged live manifest snapshot above and a passing --versioned-only',
       cdn: NO_CDN, afterPromote: 'full verify-public-release must print "publiclyVerified": true',

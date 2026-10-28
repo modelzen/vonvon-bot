@@ -18,7 +18,7 @@ Electron 语言资源只保留英文（美式、英式）、简体中文和繁�
 
 公开地址尚未决定时保留 `desktop-update.json` 为 `{}`。签名通过仍不会启用更新；inventory 标记 `awaiting-release-urls`。发布前用外部配置文件（不提交真实身份/地址），包含现有构建支持的 `manifestURL` 和 `teamIdentifier` 两项，通过 `VONVON_DESKTOP_UPDATE_CONFIG=<配置文件绝对路径>` 同时执行 build 与 package。manifestURL 用 HTTPS JSON 文件地址、无凭据/查询/fragment；脚本在相同 URL 目录生成版本 feed 与 zip 下载地址。
 
-生成的 manifest 保留 `{version,feedURL}`，同时提供 `feedURLs.arm64` 与 `feedURLs.x64`。旧版忽略附加字段并继续下载 universal，新版按运行架构选择对应 feed；缺少新字段时仍能读取旧版 manifest。feed 为 Squirrel.Mac 默认服务端 `{url,name,notes,pub_date}`，供原生 Electron autoUpdater。zip 是同一签名 app 的更新附件，不能把 `latest-mac.yml` 当此 feed。脚本仅写本地文件；发布者仍须配置 HTTPS 站点、按 inventory 放置对应文件并验证旧版完整更新。现有检查器只对更高版本调用原生下载，所以版本 feed 可为静态文件；不能把它直接当所有历史客户端的动态“是否有更新”接口。
+生成的 manifest 保留 `{version,feedURL}`，同时提供 `feedURLs.arm64` 与 `feedURLs.x64`。不发布 universal 包，必填的 `feedURL` 指向 arm64 feed，新版按运行架构选择对应 feed；缺少新字段时仍能读取旧版 manifest。旧版 Intel 更新器不支持按架构选择，需要从官网下载对应版本手动升级。feed 为 Squirrel.Mac 默认服务端 `{url,name,notes,pub_date}`，供原生 Electron autoUpdater。zip 是同一签名 app 的更新附件，不能把 `latest-mac.yml` 当此 feed。脚本仅写本地文件；发布者仍须配置 HTTPS 站点、按 inventory 放置对应文件并验证按架构更新。现有检查器只对更高版本调用原生下载，所以版本 feed 可为静态文件；不能把它直接当所有历史客户端的动态“是否有更新”接口。
 
 本地验签不等于公证或 Gatekeeper 放行。release-mac 每次运行 helper 都会提交 Apple 公证，必须 owner 本人点名要求，按技能核验现有钥匙串 profile，不在仓库配置凭据；干净 macOS 用户从零安装、真实飞书和公开下载/更新仍是发布前 s67 等后续验证。
 

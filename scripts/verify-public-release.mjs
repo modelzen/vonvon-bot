@@ -59,7 +59,9 @@ export function validateManifest(manifest, url = DEFAULT_MANIFEST_URL) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) || !['feedURL,version', 'feedURL,feedURLs,version'].includes(Object.keys(manifest).sort().join(','))
     || typeof manifest.version !== 'string' || !versionPattern.test(manifest.version) || typeof manifest.feedURL !== 'string') throw new Error('Invalid strict {version, feedURL} manifest');
   const feed = httpsURL(manifest.feedURL);
-  if (feed.origin !== source.origin || feed.href !== new URL(`feed-${manifest.version}.json`, source).href) throw new Error('Manifest feed must use its version in the same HTTPS directory');
+  const legacy = new URL(`feed-${manifest.version}.json`, source).href;
+  const arm64 = new URL(`feed-${manifest.version}-arm64.json`, source).href;
+  if (feed.origin !== source.origin || (feed.href !== legacy && !(manifest.feedURLs && feed.href === arm64))) throw new Error('Manifest feed must use its version in the same HTTPS directory');
   if (manifest.feedURLs !== undefined) {
     if (!manifest.feedURLs || typeof manifest.feedURLs !== 'object' || Array.isArray(manifest.feedURLs) || Object.keys(manifest.feedURLs).sort().join(',') !== 'arm64,x64') throw new Error('Split feeds must include exactly arm64 and x64');
     for (const architecture of ['arm64', 'x64']) {
@@ -67,6 +69,13 @@ export function validateManifest(manifest, url = DEFAULT_MANIFEST_URL) {
     }
   }
   return manifest;
+}
+
+/** The fallback feed determines whether the optional universal candidate is present. */
+export function releaseArchitectures(manifest) {
+  if (!manifest.feedURLs) return ['universal'];
+  const fallback = new URL(manifest.feedURL);
+  return fallback.href === new URL(manifest.feedURLs.arm64).href ? ['arm64', 'x64'] : ['universal', 'arm64', 'x64'];
 }
 
 /** Strict TLS and no redirects also apply to the explicit first-release missing result. */
@@ -107,11 +116,12 @@ export async function validateReleaseInventory(out, { version, sha } = {}) {
     || inventory.version !== version || state.context.version !== version || inventory.sourceCommit !== sha || state.context.sourceCommit !== sha) throw new Error('Only a complete formal release matching this version and source SHA may be published');
   const manifest = validateManifest(parseJSON(await fs.readFile(join(out, 'manifest.json'), 'utf8')));
   if (manifest.version !== version) throw new Error('Local manifest.json names a different version');
-  const required = ['manifest.json', `feed-${version}.json`, `Vonvon-Bot-${version}-universal.zip`, `Vonvon-Bot-${version}-universal.dmg`];
-  if (manifest.feedURLs) for (const architecture of ['arm64', 'x64']) required.push(`feed-${version}-${architecture}.json`, `Vonvon-Bot-${version}-${architecture}.zip`, `Vonvon-Bot-${version}-${architecture}.dmg`);
+  const architectures = releaseArchitectures(manifest);
+  const required = ['manifest.json'];
+  for (const architecture of architectures) required.push(`feed-${version}${architecture === 'universal' ? '' : `-${architecture}`}.json`, `Vonvon-Bot-${version}-${architecture}.zip`, `Vonvon-Bot-${version}-${architecture}.dmg`);
   required.sort();
   if (!Array.isArray(inventory.files) || inventory.files.some(record => !validRecord(record))
-    || inventory.files.map(record => record.file).sort().join(',') !== required.join(',')) throw new Error('Inventory must contain exactly the four public release artifacts');
+    || inventory.files.map(record => record.file).sort().join(',') !== required.join(',')) throw new Error('Inventory must contain exactly the required public release artifacts');
   if (!Array.isArray(state.files) || state.files.some(record => !validRecord(record))
     || state.files.map(record => record.file).sort().join(',') !== [...required, 'release-inventory.json'].sort().join(',')) throw new Error('Completed state must bind all public files and inventory');
   const sums = new Map();
@@ -128,8 +138,8 @@ export async function validateReleaseInventory(out, { version, sha } = {}) {
     if (publicRecord && (publicRecord.sha256 !== actual.sha256 || publicRecord.size !== actual.size)) throw new Error('Inventory hashes differ from release bytes');
   }
   if (manifest.feedURLs) {
-    if (!state.architectureEvidence || Object.keys(state.architectureEvidence).sort().join(',') !== 'arm64,universal,x64') throw new Error('Split release lacks architecture receipts');
-    for (const architecture of ['universal', 'arm64', 'x64']) {
+    if (!state.architectureEvidence || Object.keys(state.architectureEvidence).sort().join(',') !== [...architectures].sort().join(',')) throw new Error('Split release lacks architecture receipts');
+    for (const architecture of architectures) {
       const receipt = state.architectureEvidence[architecture];
       const zip = inventory.files.find(file => file.file === `Vonvon-Bot-${version}-${architecture}.zip`);
       const dmg = inventory.files.find(file => file.file === `Vonvon-Bot-${version}-${architecture}.dmg`);
@@ -164,7 +174,7 @@ function checkFeed(feed, version, architecture = 'universal') {
 async function verifyVersionedObjects(evidence, version, manifest, fetchImpl) {
   const byName = name => evidence.files.find(record => record.file === name);
   const urls = {};
-  for (const architecture of manifest.feedURLs ? ['universal', 'arm64', 'x64'] : ['universal']) {
+  for (const architecture of releaseArchitectures(manifest)) {
     const feedName = architecture === 'universal' ? `feed-${version}.json` : `feed-${version}-${architecture}.json`;
     const feedURL = architecture === 'universal' ? manifest.feedURL : manifest.feedURLs[architecture];
     urls[feedName] = feedURL;
