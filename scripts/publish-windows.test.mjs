@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { publishWindowsObjects, validateBuildRun, windowsObjectPlan } from './publish-windows.mjs';
+import { downloadBuild, publishWindowsObjects, validateBuildRun, windowsObjectPlan } from './publish-windows.mjs';
+import { createWindowsInventory } from './package-windows.mjs';
 
 const sourceSha = 'a'.repeat(40), version = '0.7.5';
 const bytes = Buffer.from('release fixture');
@@ -77,4 +78,30 @@ test('existing different public bytes are never overwritten', async t => {
   h.options.fetchImpl = async () => new Response('wrong', { headers: { 'content-length': '5', 'content-type': 'application/octet-stream', 'cache-control': 'public, max-age=31536000, immutable' } });
   await assert.rejects(publishWindowsObjects(h.options), /size mismatch/);
   assert.equal(h.calls.length, 0);
+});
+
+test('interrupted artifact extraction leaves the final directory clean and retry succeeds', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'vonvon-windows-download-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const out = join(root, 'release');
+  const name = `windows-unsigned-${version}-${sourceSha.slice(0, 12)}`;
+  const api = async args => args[1].includes('/artifacts?') ? { artifacts: [{ id: 123, name, expired: false, digest: 'sha256:abc' }] } : {
+    repository: { full_name: 'modelzen/vonvon-bot' }, head_repository: { full_name: 'modelzen/vonvon-bot' },
+    path: '.github/workflows/windows-release.yml', status: 'completed', conclusion: 'success', event: 'push', head_sha: sourceSha, run_attempt: 1,
+  };
+  const interrupted = async (command, args) => { await writeFile(join(args.at(-1), 'partial'), 'partial'); throw new Error('connection lost'); };
+  await assert.rejects(downloadBuild({ runId: 123, out, api, execute: interrupted }), /connection lost/);
+  await assert.rejects(access(out));
+  const complete = async (command, args) => {
+    const dir = args.at(-1), base = `Vonvon-Bot-${version}-windows-x64`;
+    const pe = Buffer.alloc(128); pe.write('MZ'); pe.writeUInt32LE(64, 0x3c); pe.write('PE\0\0', 64); pe.writeUInt16LE(0x8664, 68);
+    const sha = createHash('sha512').update(pe).digest('base64');
+    await writeFile(join(dir, `${base}.exe`), pe); await writeFile(join(dir, `${base}.zip`), 'zip');
+    await writeFile(join(dir, `${base}.exe.blockmap`), 'blockmap');
+    await writeFile(join(dir, 'latest.yml'), `version: ${version}\nfiles:\n  - url: ${base}.exe\n    sha512: ${sha}\n    size: 128\npath: ${base}.exe\nsha512: ${sha}\n`);
+    await createWindowsInventory({ out: dir, version, sourceSha, unpackedExe: join(dir, `${base}.exe`), zipExe: join(dir, `${base}.exe`) });
+  };
+  const verified = await downloadBuild({ runId: 123, out, api, execute: complete });
+  assert.equal(verified.sourceSha, sourceSha);
+  assert.equal(JSON.parse(await readFile(join(out, 'github-build.json'), 'utf8')).artifactId, 123);
 });

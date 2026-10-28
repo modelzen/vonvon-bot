@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, open, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
-import { isAbsolute, join, resolve } from 'node:path';
+import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs, promisify } from 'node:util';
 import { assertCredentialEnvNames, cosCredentialEnvNames, loadPinnedSdk } from './release-cos-evidence.mjs';
@@ -52,9 +52,9 @@ async function ghJSON(args, env) {
   return JSON.parse(result.stdout);
 }
 
-async function downloadBuild({ runId, out, env, execute = exec, api = ghJSON }) {
+export async function downloadBuild({ runId, out, env, execute = exec, api = ghJSON }) {
   if (!/^[1-9]\d*$/.test(String(runId))) throw new Error('Use a GitHub Actions --run-id');
-  await mkdir(out, { recursive: true });
+  await mkdir(dirname(out), { recursive: true });
   const run = await api(['api', `repos/${repository}/actions/runs/${runId}`], env);
   const sourceSha = validateBuildRun(run);
   // A rerun may produce a different attempt; retain its exact provenance alongside the bytes.
@@ -62,9 +62,16 @@ async function downloadBuild({ runId, out, env, execute = exec, api = ghJSON }) 
   const artifacts = listing.artifacts?.filter(item => !item.expired && new RegExp(`^windows-unsigned-\\d+\\.\\d+\\.\\d+-${sourceSha.slice(0, 12)}$`).test(item.name));
   if (artifacts?.length !== 1) throw new Error('Expected exactly one unexpired Windows build artifact');
   const provenancePath = join(out, 'github-build.json');
-  if ((await readdir(out)).length === 0) {
-    await execute('gh', ['run', 'download', String(runId), '--repo', repository, '--name', artifacts[0].name, '--dir', out], { env });
-    await writeFile(provenancePath, json({ runId: Number(runId), runAttempt: run.run_attempt, sourceSha, artifactId: artifacts[0].id, artifactName: artifacts[0].name, artifactDigest: artifacts[0].digest, url: run.html_url }), { flag: 'wx' });
+  const entries = await readdir(out).catch(error => { if (error.code === 'ENOENT') return undefined; throw error; });
+  if (!entries?.length) {
+    const staging = await mkdtemp(join(dirname(out), '.windows-download-'));
+    try {
+      await execute('gh', ['run', 'download', String(runId), '--repo', repository, '--name', artifacts[0].name, '--dir', staging], { env });
+      await verifyWindowsArtifacts(staging, { sourceSha });
+      await writeFile(join(staging, 'github-build.json'), json({ runId: Number(runId), runAttempt: run.run_attempt, sourceSha, artifactId: artifacts[0].id, artifactName: artifacts[0].name, artifactDigest: artifacts[0].digest, url: run.html_url }), { flag: 'wx' });
+      if (entries) await rmdir(out); // Only an empty dedicated destination can be removed.
+      await rename(staging, out);
+    } finally { await rm(staging, { recursive: true, force: true }); }
   } else {
     const saved = JSON.parse(await readFile(provenancePath, 'utf8'));
     if (saved.runId !== Number(runId) || saved.sourceSha !== sourceSha || saved.artifactId !== artifacts[0].id || saved.artifactDigest !== artifacts[0].digest) throw new Error('Output directory belongs to a different build; use a fresh directory');
