@@ -242,6 +242,7 @@ export async function startDesktop(): Promise<void> {
       minWidth: 760,
       minHeight: 640,
       show: false,
+      ...(process.platform === 'win32' ? { icon: join(dirname(icon), 'windows-icon.ico') } : {}),
       backgroundColor: '#f5f5f7',
       titleBarStyle: 'hidden',
       ...(process.platform === 'darwin'

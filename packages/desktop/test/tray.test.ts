@@ -1,5 +1,6 @@
 import {beforeEach, expect, it, vi} from 'vitest';
 import {createDesktopTray} from '../src/tray.js';
+import {join} from 'node:path';
 
 const fake = vi.hoisted(() => {
   const base = {addRepresentation: vi.fn(), setTemplateImage: vi.fn()};
@@ -25,8 +26,16 @@ it('uses an 18-point template tray icon with a 2x Retina representation on macOS
   expect(fake.image).toBe(fake.base);
 });
 
-it('keeps the source icon on other desktop platforms', () => {
-  createDesktopTray('/app/assets/tray.png', vi.fn(), vi.fn(), 'win32');
+it('uses the full-color multi-resolution logo ICO on Windows', () => {
+  const pngPath = join('app', 'assets', 'tray.png');
+  createDesktopTray(pngPath, vi.fn(), vi.fn(), 'win32');
+  expect(fake.source.resize).not.toHaveBeenCalled();
+  expect(fake.base.setTemplateImage).not.toHaveBeenCalled();
+  expect(fake.image).toBe(join('app', 'assets', 'windows-icon.ico'));
+});
+
+it('keeps the source icon on Linux', () => {
+  createDesktopTray('/app/assets/tray.png', vi.fn(), vi.fn(), 'linux');
   expect(fake.source.resize).not.toHaveBeenCalled();
   expect(fake.image).toBe(fake.source);
 });
