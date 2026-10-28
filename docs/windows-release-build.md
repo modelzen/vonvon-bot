@@ -25,6 +25,8 @@ gh workflow run windows-release.yml --repo modelzen/vonvon-bot --ref main
 
 针对 0.7.5：旧卸载器的更新模式会先把文件移动到更长的临时目录，同样可能失败。新安装器只对文件版本 0.7.5.0 的当前用户安装重试旧卸载器的普通卸载模式，并保留快捷方式；其他失败仍中止。0.7.5 没有启用卸载删除应用数据，本次不传删除数据参数；不能单凭兼容参数 `/KEEP_APP_DATA` 声称旧卸载器具有额外数据保护。
 
+0.7.6 后续修复：若旧注册记录仍在，但注册的卸载器与旧应用 EXE 均已不存在，当前用户安装允许继续。不能把实际卸载器的非零退出码、旧程序仍在或畸形记录当作孤立记录跳过。Windows 工作流在打包后运行 `scripts/windows-installer-smoke.mjs`，使用刚下载的 NSIS 编译器和插件验证这类恢复及拒绝路径；本地可传入 `<makensis.exe> <electron-builder NSIS include 目录> <x86-unicode 插件目录>` 执行同样检查。真实重装仍由 Mac 构建的新版本完成 owner 验收。
+
 ## Mac 发布下载文件
 
 云端构建完成后，Mac 上执行下面一条命令下载该 run 的产物、核验来源和哈希、上传版本化对象，并完整下载验证公网字节：

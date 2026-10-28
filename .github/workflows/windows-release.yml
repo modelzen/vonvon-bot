@@ -66,6 +66,14 @@ jobs:
         run: |
           npx --no-install electron-builder --config electron-builder.yml --win nsis zip --x64 --publish never
           if ($LASTEXITCODE -ne 0) { throw 'electron-builder failed' }
+      - name: Check installer recovery and failure paths
+        run: |
+          $cache = Join-Path $env:LOCALAPPDATA 'electron-builder/Cache'
+          $compiler = Get-ChildItem -LiteralPath $cache -Recurse -File -Filter makensis.exe | Sort-Object FullName | Select-Object -First 1
+          $plugin = Get-ChildItem -LiteralPath $cache -Recurse -File -Filter StdUtils.dll | Where-Object { $_.Directory.Name -eq 'x86-unicode' } | Sort-Object FullName | Select-Object -First 1
+          if (-not $compiler -or -not $plugin) { throw 'Packager NSIS tools are missing' }
+          node scripts/windows-installer-smoke.mjs $compiler.FullName (Join-Path $PWD 'node_modules/app-builder-lib/templates/nsis/include') $plugin.Directory.FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Installer recovery regression failed' }
       - name: Verify package and write inventory
         env:
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
