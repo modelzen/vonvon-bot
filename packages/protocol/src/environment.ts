@@ -5,6 +5,11 @@ export const environmentToolSchema = z.enum(["codex", "claude", "lark-cli"]);
 export type EnvironmentTool = z.infer<typeof environmentToolSchema>;
 const name = z.string().trim().min(1).max(128).regex(/^[^\x00-\x1f]+$/);
 const operationId = z.string().uuid();
+// These messages travel in the existing install output and survive status replay.
+export const backendInstallProgress = {
+  installing: '\n正在下载并安装组件…\n',
+  verifying: '\n正在校验安装结果…\n',
+} as const;
 export const backendInstallItemSchema = z.discriminatedUnion("type", [
   z.object({type:z.literal("log"),chunk:z.string()}),
   z.object({type:z.literal("done")}),
