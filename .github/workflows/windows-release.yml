@@ -1,7 +1,18 @@
 name: Windows release build
+run-name: ${{ inputs.release_id && format('windows-release {0} {1} {2}', inputs.version, inputs.source_sha, inputs.release_id) || format('Windows release {0}', github.sha) }}
 
 on:
   workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full source SHA already on main (empty keeps the dispatched ref)
+        type: string
+      version:
+        description: Expected product version for the pinned source
+        type: string
+      release_id:
+        description: Unique orchestration request UUID, used for safe run discovery
+        type: string
   push:
     branches: [codex/windows-release-automation, codex/fix-windows-install]
 
@@ -22,21 +33,43 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.source_sha || github.sha }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
+      - name: Locate release download caches
+        id: download-cache
+        run: |
+          "electron=$env:LOCALAPPDATA\electron\Cache" >> $env:GITHUB_OUTPUT
+          "builder=$env:LOCALAPPDATA\electron-builder\Cache" >> $env:GITHUB_OUTPUT
+      - name: Cache official Electron and builder tool downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ steps.download-cache.outputs.electron }}
+            ${{ steps.download-cache.outputs.builder }}
+          key: release-downloads-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
       - name: Verify source and version
         id: source
         env:
-          EXPECTED_SHA: ${{ github.sha }}
+          EXPECTED_SHA: ${{ inputs.source_sha || github.sha }}
+          EXPECTED_VERSION: ${{ inputs.version }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          PINNED_SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           $sha = (git rev-parse HEAD).Trim()
           if ($sha -ne $env:EXPECTED_SHA) { throw "Checkout SHA mismatch: $sha" }
+          if ($env:PINNED_SOURCE_SHA -or $env:EXPECTED_VERSION -or $env:RELEASE_ID) {
+            if ($env:PINNED_SOURCE_SHA -cnotmatch '^[a-f0-9]{40}$' -or $env:EXPECTED_VERSION -notmatch '^\d+\.\d+\.\d+$' -or $env:RELEASE_ID -notmatch '^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$') { throw 'Pinned dispatch requires the complete source SHA, version and request UUID' }
+            git merge-base --is-ancestor $sha origin/main
+            if ($LASTEXITCODE -ne 0) { throw 'Pinned release source must be on main' }
+          }
           $version = node --input-type=module -e "import { checkedProductVersion } from './scripts/product-version.mjs'; console.log(await checkedProductVersion())"
           if ($LASTEXITCODE -ne 0) { throw 'Version check failed' }
+          if ($env:EXPECTED_VERSION -and $version -ne $env:EXPECTED_VERSION) { throw 'Pinned product version mismatch' }
           "sha=$sha" >> $env:GITHUB_OUTPUT
           "version=$version" >> $env:GITHUB_OUTPUT
           "artifact=windows-unsigned-$version-$($sha.Substring(0, 12))" >> $env:GITHUB_OUTPUT

@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { downloadBuild, publishWindowsObjects, validateBuildRun, windowsObjectPlan } from './publish-windows.mjs';
 import { createWindowsInventory } from './package-windows.mjs';
@@ -17,10 +19,48 @@ const inventory = { sourceSha, version, architecture: 'x64', signed: false, upda
   ].map(([kind, file]) => ({ kind, file, ...evidence })) };
 const fetchImpl = async () => new Response(bytes, { headers: { 'content-length': String(bytes.length), 'content-type': 'application/octet-stream', 'cache-control': 'public, max-age=31536000, immutable' } });
 
+test('Windows publish CLI executes through a symlinked directory instead of silently exiting', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'windows-publish-cli-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await symlink(dirname(fileURLToPath(import.meta.url)), join(root, 'alias'), process.platform === 'win32' ? 'junction' : 'dir');
+  const script = join(root, 'alias', 'publish-windows.mjs');
+  const help = spawnSync(process.execPath, [script, '--help'], { encoding: 'utf8', env: { PATH: process.env.PATH } });
+  assert.equal(help.status, 0); assert.match(help.stdout, /Downloads a successful trusted Windows Actions artifact/);
+  const invalid = spawnSync(process.execPath, [script, '--download-only'], { encoding: 'utf8', env: { PATH: process.env.PATH } });
+  assert.equal(invalid.status, 1); assert.match(invalid.stderr, /dedicated --out/);
+});
+
 test('trusts only successful owning-repository Windows workflow runs', () => {
   const run = { repository: { full_name: 'modelzen/vonvon-bot' }, head_repository: { full_name: 'modelzen/vonvon-bot' }, path: '.github/workflows/windows-release.yml', status: 'completed', conclusion: 'success', event: 'workflow_dispatch', head_sha: sourceSha };
   assert.equal(validateBuildRun(run), sourceSha);
   for (const change of [{ conclusion: 'failure' }, { event: 'pull_request' }, { path: '.github/workflows/ci.yml' }, { head_repository: { full_name: 'other/repo' } }]) assert.throws(() => validateBuildRun({ ...run, ...change }));
+});
+
+test('pinned dispatch binds source separately from the workflow SHA and accepts only main dispatches', () => {
+  const run = { repository: { full_name: 'modelzen/vonvon-bot' }, head_repository: { full_name: 'modelzen/vonvon-bot' }, path: '.github/workflows/windows-release.yml',
+    status: 'completed', conclusion: 'success', event: 'workflow_dispatch', head_sha: 'b'.repeat(40), head_branch: 'main',
+    display_title: `windows-release ${version} ${sourceSha} 12345678-1234-1234-1234-123456789abc` };
+  assert.equal(validateBuildRun(run), sourceSha);
+  for (const change of [{ head_branch: 'dev' }, { event: 'push' }, { display_title: 'windows-release incomplete' }, { head_sha: 'short' }]) assert.throws(() => validateBuildRun({ ...run, ...change }));
+});
+
+test('pinned source and workflow SHA must both have verified ancestry on main before any artifact download', async () => {
+  const workflowSha = 'b'.repeat(40), calls = [];
+  const run = { repository: { full_name: 'modelzen/vonvon-bot' }, head_repository: { full_name: 'modelzen/vonvon-bot' }, path: '.github/workflows/windows-release.yml',
+    status: 'completed', conclusion: 'success', event: 'workflow_dispatch', head_sha: workflowSha, head_branch: 'main',
+    display_title: `windows-release ${version} ${sourceSha} 12345678-1234-1234-1234-123456789abc` };
+  const api = async args => {
+    calls.push(args[1]);
+    if (args[1].includes('/compare/')) {
+      const sha = args[1].match(/compare\/([a-f0-9]+)\.\.\./)[1];
+      return { status: sha === workflowSha ? 'diverged' : 'ahead', merge_base_commit: { sha } };
+    }
+    return run;
+  };
+  await assert.rejects(downloadBuild({ runId: 123, out: '/unused', api, expectedSha: sourceSha, expectedVersion: version }), /not on main/);
+  assert.ok(calls.some(path => path.includes(`/compare/${sourceSha}...main`)));
+  assert.ok(calls.some(path => path.includes(`/compare/${workflowSha}...main`)));
+  await assert.rejects(downloadBuild({ runId: 123, out: '/unused', api, expectedSha: workflowSha }), /expected release SHA/);
 });
 
 test('unsigned publication never schedules an update feed or Mac object', () => {
