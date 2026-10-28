@@ -91,5 +91,5 @@ await stageDaemon(daemonStage, {
   name: daemonMetadata.name, version, type: 'module', bin: daemonMetadata.bin,
   license: daemonMetadata.license, author: daemonMetadata.author,
   dependencies: daemonMetadata.dependencies,
-}, { compact: process.platform !== 'win32' });
+}, { compact: process.platform !== 'win32', hoist: process.platform === 'win32' });
 await assertNoBundledClaude(daemonStage);

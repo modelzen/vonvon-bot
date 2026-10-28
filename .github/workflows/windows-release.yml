@@ -1,0 +1,113 @@
+name: Windows release build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/windows-release-automation, codex/fix-windows-install]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Verify source and version
+        id: source
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          $sha = (git rev-parse HEAD).Trim()
+          if ($sha -ne $env:EXPECTED_SHA) { throw "Checkout SHA mismatch: $sha" }
+          $version = node --input-type=module -e "import { checkedProductVersion } from './scripts/product-version.mjs'; console.log(await checkedProductVersion())"
+          if ($LASTEXITCODE -ne 0) { throw 'Version check failed' }
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "artifact=windows-unsigned-$version-$($sha.Substring(0, 12))" >> $env:GITHUB_OUTPUT
+      - name: Install dependencies
+        run: npm ci
+      - name: Install pinned Electron runtime
+        run: |
+          node node_modules/electron/install.js
+          if ($LASTEXITCODE -ne 0) { throw 'Electron runtime installation failed' }
+          if (-not (Test-Path 'node_modules/electron/dist/electron.exe')) { throw 'Electron runtime is missing' }
+      - name: Build and check source
+        run: |
+          npm run build
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+          npm run typecheck
+          if ($LASTEXITCODE -ne 0) { throw 'Typecheck failed' }
+          node --test scripts/stage-daemon.test.mjs scripts/windows-runtime-smoke.test.mjs scripts/package-windows.test.mjs scripts/publish-windows.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Package validation tests failed' }
+          npm run test -w @vonvon/daemon -- test/environment-windows-launch.test.ts test/provider/windows-command-line.test.ts test/provider/windows-supervisor.test.ts test/windows-owned-process.test.ts test/data-compatibility.test.ts test/register-bot.test.ts
+          if ($LASTEXITCODE -ne 0) { throw 'Windows daemon tests failed' }
+          npm run test -w @vonvon/desktop -- test/windows-updates.test.ts test/tray.test.ts test/daemon-dependencies.test.ts
+          if ($LASTEXITCODE -ne 0) { throw 'Desktop tests failed' }
+      - name: Package unsigned NSIS installer and ZIP
+        working-directory: packages/desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npx --no-install electron-builder --config electron-builder.yml --win nsis zip --x64 --publish never
+          if ($LASTEXITCODE -ne 0) { throw 'electron-builder failed' }
+      - name: Verify package and write inventory
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          RELEASE_VERSION: ${{ steps.source.outputs.version }}
+        run: |
+          $out = Join-Path $PWD 'packages/desktop/dist/package'
+          $zip = Join-Path $out "Vonvon-Bot-$env:RELEASE_VERSION-windows-x64.zip"
+          $expanded = Join-Path $env:RUNNER_TEMP 'vonvon-windows-zip'
+          Expand-Archive -LiteralPath $zip -DestinationPath $expanded
+          $zipExe = @(Get-ChildItem -LiteralPath $expanded -Recurse -File -Filter 'Vonvon Bot.exe')
+          if (@($zipExe).Count -ne 1) { throw 'ZIP must contain exactly one Vonvon Bot.exe' }
+          $unpackedExe = Join-Path $out 'win-unpacked/Vonvon Bot.exe'
+          $stageVersion = (Get-Content 'packages/desktop/stage/package.json' -Raw | ConvertFrom-Json).version
+          if ($stageVersion -ne $env:RELEASE_VERSION) { throw 'Staged product version mismatch' }
+          $updateConfig = Get-Content 'packages/desktop/stage/dist/windows-update-config.json' -Raw | ConvertFrom-Json
+          if (@($updateConfig.PSObject.Properties).Count -ne 0) { throw 'Unsigned build must have empty Windows update configuration' }
+          $fileVersion = (Get-Item -LiteralPath $unpackedExe).VersionInfo.FileVersion
+          if ($fileVersion -notmatch "^$([regex]::Escape($env:RELEASE_VERSION))(\.0)?$") { throw "Packaged application FileVersion mismatch: $fileVersion" }
+          foreach ($exe in @($unpackedExe, $zipExe[0].FullName, (Join-Path $out "Vonvon-Bot-Setup-$env:RELEASE_VERSION-x64.exe"))) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $exe
+            if ($signature.Status -ne 'NotSigned') { throw "Expected unsigned PE: $exe ($($signature.Status))" }
+          }
+          if ((Get-FileHash -LiteralPath $unpackedExe -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $zipExe[0].FullName -Algorithm SHA256).Hash) { throw 'ZIP application differs from unpacked application' }
+          node scripts/windows-runtime-smoke.mjs "$expanded"
+          if ($LASTEXITCODE -ne 0) { throw 'Extracted ZIP runtime did not start correctly' }
+          $installer = Join-Path $out "Vonvon-Bot-Setup-$env:RELEASE_VERSION-x64.exe"
+          $installed = Join-Path $env:RUNNER_TEMP 'Vonvon-installed-smoke'
+          $process = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$installed") -PassThru -Wait -WindowStyle Hidden
+          if ($process.ExitCode -ne 0) { throw 'NSIS installation failed' }
+          node scripts/windows-runtime-smoke.mjs "$installed"
+          if ($LASTEXITCODE -ne 0) { throw 'Installed NSIS runtime did not start correctly' }
+          node scripts/package-windows.mjs $out $env:SOURCE_SHA $unpackedExe "$($zipExe[0].FullName)"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows release verification failed' }
+          Get-Content (Join-Path $out 'windows-release-inventory.json') >> $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.source.outputs.artifact }}
+          path: |
+            packages/desktop/dist/package/Vonvon-Bot-Setup-${{ steps.source.outputs.version }}-x64.exe
+            packages/desktop/dist/package/Vonvon-Bot-${{ steps.source.outputs.version }}-windows-x64.zip
+            packages/desktop/dist/package/Vonvon-Bot-Setup-${{ steps.source.outputs.version }}-x64.exe.blockmap
+            packages/desktop/dist/package/latest.yml
+            packages/desktop/dist/package/windows-release-inventory.json
+          if-no-files-found: error
+          retention-days: 30

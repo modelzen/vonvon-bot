@@ -1,5 +1,7 @@
 # Vonvon Bot 第一版计划
 
+- 2026-10-28 owner 要求 Windows 官网发布，并让日常发布不再依赖打开虚拟机。云端构建和 Mac 发布的范围、来源校验及未签名限制见 [Windows 发布自动化](plans/windows-release-automation.md)；实际构建与发布完成状态以 run 和公网 receipt 为准。
+
 - 2026-10-28 owner 要求构建 Windows 候选并验收，已确认本地验收完成，要求同步最新 main、合入 dev 并跳过 CI。范围及实际验证见 [Windows 本地验收候选](plans/windows-preview.md)；后续 Job Object 清理修复另有真实 Windows 进程测试，最终提交仍需重新打包，main 合入及正式发布由 owner 后续执行。
 
 - 2026-10-26 owner 选定“此刻”预览，要求基于最新 dev 实现并更新本机 App 后验收：保留添加 Bot，Bot 群关注树采用横段刻度，群动态展示真实判断，Provider 用量沿用第 4 版。实现及验收范围见 [此刻动态首页](plans/now-home.md)。当前产品实现待 owner 本机验收，尚未授权合入。
@@ -1979,3 +1981,5 @@ Linux：`vonvon service uninstall`，`vonvon daemon stop`，`npm rm -g vonvon-bo
 - s38a1 做法（#466）：安全文件模块只接受可信物理 bot 根，逐层拒链接，末端非阻塞/不跟链接，核普通文件、单硬链接、64KiB安全大小与严格UTF-8；源统一同fs daemon-staging，固定basename原子rename，失败只清理受信stage；提交前持有源对象的实际字节形成版本，rename成功即记该时点，合法后写算后读新变化；close失败带收尾警告。execution明确区分daemon-exclusive/full与restricted，后者未建立实际策略消费前置时write返回boundary-not-established；无bool/profile名授权入口。字数策略显式输入，存量超字数全文仍读并提示整理，不增上下文内容上限。组合按可信群/人/评论范围读实际快照，身份和范围参与版本，逐行边界保留全文；开场/更新及s40确认事实均为契约，不提前认作模型已收。调用者是后继s38b，当前未接回复会话。历史131隔离build/typecheck/lint及59条通过不能覆盖139竞态红；144无模型Codex0.162.1拟接线3策略39步证明memory根/祖先及stage操作被拒且正常memory/cwd写可用，13步raw控制可达；不是当前生产已施加。Claude同版实际入口/策略和Linux证据、两家start/resume实际消费事实唯一归s38a2，不凭Codex推定。144隔离缓存npm ci/build/typecheck/lint首过，3文件75条首过；检查启动时CI仍cache-save，未满足job完成双条件的协调偏差已保留。独立gpt-6-astra主审与风险复审通过，daemon typecheck及75项通过，范围与依赖收口已复核；仅a1基础勾选，a总项、父s38/b及原下游门槛不变。无provider或模型防注入结论。
 
 **s38a 拆分依赖（任务150）**：a1 保留原 s36/s37 依赖；a2 唯一负责记忆专用实际策略生成、两家 start/resume 消费与受限 writer，依赖 a1 及已定 s31b/s39a 后端基础，不反向改这些前置为依赖 s38。b 必须等完整 a（a2 完成）；s40 仍等完整 s38，watcher/合并/隔离/撤销和两家真实实验不减。full 不新增同 UID 恶意隔离承诺，受限不得标成 full/daemon-exclusive 绕过。任务150只改文档及PR描述，未重跑75项/build/typecheck或真实sandbox；源码验证数字均沿用144，139红例和144准备/协调偏差保留。
+
+- 2026-10-28 Windows 安装修复：修正 NSIS 安装后深层依赖丢失；当前用户一键 Setup 与 ZIP 分开命名。新增实际打包后台启动、认证状态、UI、关闭和路径预算检查。本机 EXE 安装与欢迎页通过，待 owner 验收；只准备 dev，Mac 后续按同版本双平台规则发布。见 docs/plans/windows-install-experience.md 与 docs/windows-release-build.md。
