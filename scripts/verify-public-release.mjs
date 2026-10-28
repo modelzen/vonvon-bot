@@ -56,10 +56,16 @@ function jsonHeaders(response) {
 
 export function validateManifest(manifest, url = DEFAULT_MANIFEST_URL) {
   const source = httpsURL(url);
-  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) || Object.keys(manifest).sort().join(',') !== 'feedURL,version'
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) || !['feedURL,version', 'feedURL,feedURLs,version'].includes(Object.keys(manifest).sort().join(','))
     || typeof manifest.version !== 'string' || !versionPattern.test(manifest.version) || typeof manifest.feedURL !== 'string') throw new Error('Invalid strict {version, feedURL} manifest');
   const feed = httpsURL(manifest.feedURL);
   if (feed.origin !== source.origin || feed.href !== new URL(`feed-${manifest.version}.json`, source).href) throw new Error('Manifest feed must use its version in the same HTTPS directory');
+  if (manifest.feedURLs !== undefined) {
+    if (!manifest.feedURLs || typeof manifest.feedURLs !== 'object' || Array.isArray(manifest.feedURLs) || Object.keys(manifest.feedURLs).sort().join(',') !== 'arm64,x64') throw new Error('Split feeds must include exactly arm64 and x64');
+    for (const architecture of ['arm64', 'x64']) {
+      if (typeof manifest.feedURLs[architecture] !== 'string' || httpsURL(manifest.feedURLs[architecture]).href !== new URL(`feed-${manifest.version}-${architecture}.json`, source).href) throw new Error('Split feed must use its version and architecture in the same HTTPS directory');
+    }
+  }
   return manifest;
 }
 
@@ -99,7 +105,11 @@ export async function validateReleaseInventory(out, { version, sha } = {}) {
   const state = parseJSON(await fs.readFile(join(out, 'notarization-state.json'), 'utf8'));
   if (inventory.complete !== true || inventory.mode !== 'release' || state.context?.mode !== 'release' || state.complete !== true
     || inventory.version !== version || state.context.version !== version || inventory.sourceCommit !== sha || state.context.sourceCommit !== sha) throw new Error('Only a complete formal release matching this version and source SHA may be published');
-  const required = ['manifest.json', `feed-${version}.json`, `Vonvon-Bot-${version}-universal.zip`, `Vonvon-Bot-${version}-universal.dmg`].sort();
+  const manifest = validateManifest(parseJSON(await fs.readFile(join(out, 'manifest.json'), 'utf8')));
+  if (manifest.version !== version) throw new Error('Local manifest.json names a different version');
+  const required = ['manifest.json', `feed-${version}.json`, `Vonvon-Bot-${version}-universal.zip`, `Vonvon-Bot-${version}-universal.dmg`];
+  if (manifest.feedURLs) for (const architecture of ['arm64', 'x64']) required.push(`feed-${version}-${architecture}.json`, `Vonvon-Bot-${version}-${architecture}.zip`, `Vonvon-Bot-${version}-${architecture}.dmg`);
+  required.sort();
   if (!Array.isArray(inventory.files) || inventory.files.some(record => !validRecord(record))
     || inventory.files.map(record => record.file).sort().join(',') !== required.join(',')) throw new Error('Inventory must contain exactly the four public release artifacts');
   if (!Array.isArray(state.files) || state.files.some(record => !validRecord(record))
@@ -117,7 +127,15 @@ export async function validateReleaseInventory(out, { version, sha } = {}) {
     const publicRecord = inventory.files.find(item => item.file === record.file);
     if (publicRecord && (publicRecord.sha256 !== actual.sha256 || publicRecord.size !== actual.size)) throw new Error('Inventory hashes differ from release bytes');
   }
-  validateManifest(parseJSON(await fs.readFile(join(out, 'manifest.json'), 'utf8')));
+  if (manifest.feedURLs) {
+    if (!state.architectureEvidence || Object.keys(state.architectureEvidence).sort().join(',') !== 'arm64,universal,x64') throw new Error('Split release lacks architecture receipts');
+    for (const architecture of ['universal', 'arm64', 'x64']) {
+      const receipt = state.architectureEvidence[architecture];
+      const zip = inventory.files.find(file => file.file === `Vonvon-Bot-${version}-${architecture}.zip`);
+      const dmg = inventory.files.find(file => file.file === `Vonvon-Bot-${version}-${architecture}.dmg`);
+      if (!receipt || zip.sha256 !== receipt.zipSHA256 || zip.sha256 !== receipt.zipVerifiedSHA256 || dmg.sha256 !== receipt.dmgStapledSHA256 || !receipt.appSeal || !receipt.dmgSeal || !receipt.appSubmission || !receipt.dmgSubmission) throw new Error(`${architecture} artifacts do not match their verification receipts`);
+    }
+  }
   return { inventory, state, files: inventory.files };
 }
 
@@ -136,21 +154,26 @@ async function verifyDownload(url, record, fetchImpl, json = false) {
   return json ? parseJSON(Buffer.concat(chunks).toString('utf8')) : undefined;
 }
 
-function checkFeed(feed, version) {
+function checkFeed(feed, version, architecture = 'universal') {
   if (!feed || Object.keys(feed).sort().join(',') !== 'name,notes,pub_date,url' || typeof feed.notes !== 'string'
     || feed.name !== `Vonvon Bot ${version}` || !Number.isFinite(Date.parse(feed.pub_date))
-    || feed.url !== new URL(`Vonvon-Bot-${version}-universal.zip`, DEFAULT_MANIFEST_URL).href) throw new Error('Public Squirrel feed differs from this release');
+    || feed.url !== new URL(`Vonvon-Bot-${version}-${architecture}.zip`, DEFAULT_MANIFEST_URL).href) throw new Error('Public Squirrel feed differs from this release');
 }
 
 /** Feed, ZIP and DMG: HTTP 200, no redirects, headers, exact size and full SHA-256. */
 async function verifyVersionedObjects(evidence, version, manifest, fetchImpl) {
   const byName = name => evidence.files.find(record => record.file === name);
-  const urls = { [`feed-${version}.json`]: manifest.feedURL };
-  checkFeed(await verifyDownload(manifest.feedURL, byName(`feed-${version}.json`), fetchImpl, true), version);
-  for (const extension of ['zip', 'dmg']) {
-    const record = byName(`Vonvon-Bot-${version}-universal.${extension}`);
-    urls[record.file] = new URL(record.file, DEFAULT_MANIFEST_URL).href;
-    await verifyDownload(urls[record.file], record, fetchImpl);
+  const urls = {};
+  for (const architecture of manifest.feedURLs ? ['universal', 'arm64', 'x64'] : ['universal']) {
+    const feedName = architecture === 'universal' ? `feed-${version}.json` : `feed-${version}-${architecture}.json`;
+    const feedURL = architecture === 'universal' ? manifest.feedURL : manifest.feedURLs[architecture];
+    urls[feedName] = feedURL;
+    checkFeed(await verifyDownload(feedURL, byName(feedName), fetchImpl, true), version, architecture);
+    for (const extension of ['zip', 'dmg']) {
+      const record = byName(`Vonvon-Bot-${version}-${architecture}.${extension}`);
+      urls[record.file] = new URL(record.file, DEFAULT_MANIFEST_URL).href;
+      await verifyDownload(urls[record.file], record, fetchImpl);
+    }
   }
   return evidence.files.filter(record => urls[record.file]).map(record => ({ ...record, url: urls[record.file] }));
 }

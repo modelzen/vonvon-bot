@@ -37,7 +37,9 @@ function evidenceFiles(overrides = {}) {
   const inventory = { version, sourceCommit: sha, mode: 'release', complete: true, baseline: 'none', publiclyPublished: false, files: publicFiles.map(record),
     notarization: { app: '11111111-1111-4111-8111-111111111111', dmg: '22222222-2222-4222-8222-222222222222' } };
   files.set('release-inventory.json', Buffer.from(JSON.stringify(inventory, null, 2) + '\n'));
-  const state = { context: { version, sourceCommit: sha, mode: 'release', firstRelease: true }, complete: true, files: [...publicFiles, 'release-inventory.json'].map(record) };
+  const split = JSON.parse(files.get('manifest.json').toString()).feedURLs;
+  const architectureEvidence = split && Object.fromEntries(['universal', 'arm64', 'x64'].map(arch => [arch, {zipSHA256:record(`Vonvon-Bot-${version}-${arch}.zip`).sha256, zipVerifiedSHA256:record(`Vonvon-Bot-${version}-${arch}.zip`).sha256, dmgStapledSHA256:record(`Vonvon-Bot-${version}-${arch}.dmg`).sha256, appSeal:{}, dmgSeal:{}, appSubmission:'a', dmgSubmission:'b'}]));
+  const state = { context: { version, sourceCommit: sha, mode: 'release', firstRelease: true }, complete: true, files: [...publicFiles, 'release-inventory.json'].map(record), ...(split ? {architectureEvidence} : {}) };
   files.set('notarization-state.json', Buffer.from(JSON.stringify(state, null, 2) + '\n'));
   files.set('SHA256SUMS', Buffer.from(state.files.map(item => `${item.sha256}  ${item.file}`).join('\n') + '\n'));
   return files;
@@ -956,4 +958,27 @@ test('CLI explains every subcommand and fails closed through a symlinked directo
   const missing = run(['upload', '--out', join(root, 'evidence'), '--version', version, '--sha', sha, '--owner-confirmation', 'x']);
   assert.equal(missing.status, 1);
   assert.match(missing.stderr, /upload does not take --owner-confirmation/);
+});
+
+test('split release plans, uploads and verifies all architecture artifacts before switching manifest', async t => {
+  const w = await world(t);
+  const overrides = {};
+  const split = JSON.parse(manifestBytes(version).toString());
+  split.feedURLs = {};
+  for (const arch of ['arm64', 'x64']) {
+    const name = `feed-${version}-${arch}.json`;
+    split.feedURLs[arch] = new URL(name, base).href;
+    overrides[name] = JSON.stringify({ ...JSON.parse(feedBytes(version).toString()), url: new URL(`Vonvon-Bot-${version}-${arch}.zip`, base).href });
+    for (const ext of ['zip', 'dmg']) overrides[`Vonvon-Bot-${version}-${arch}.${ext}`] = `fixture ${arch} ${ext}`;
+  }
+  overrides['manifest.json'] = JSON.stringify(split);
+  await writeEvidence(w.out, overrides);
+  const planned = await w.plan({ 'first-release': true });
+  assert.equal(planned.plan.upload.length, 9);
+  assert.equal(planned.plan.promote.step, 10);
+  await w.upload({ 'first-release': true, 'plan-sha256': planned.sha256 });
+  assert.equal(w.writes().length, 9);
+  await w.promote({ 'plan-sha256': planned.sha256 });
+  assert.equal(w.writes().length, 10);
+  assert.deepEqual(JSON.parse(w.objects.get(`${PREFIX}manifest.json`).bytes.toString()), split);
 });
