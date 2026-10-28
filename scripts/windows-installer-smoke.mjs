@@ -23,7 +23,7 @@ const run = (file, args, timeout = 30_000) => {
   if (result.error) throw result.error;
   return result;
 };
-async function compile(name, body, version) {
+async function compile(name, body, version, strict = false) {
   const exe = join(root, `${name}.exe`);
   const source = join(root, `${name}.nsi`);
   await writeFile(source, `Unicode true
@@ -38,13 +38,18 @@ VIAddVersionKey /LANG=1033 "FileDescription" "Installer test fixture"
 VIAddVersionKey /LANG=1033 "LegalCopyright" "Test fixture"` : ''}
 ${body}
 `);
-  const built = run(compiler, ['/V2', source]);
+  const built = run(compiler, [...(strict ? ['/WX'] : []), '/V2', source]);
   assert.equal(built.status, 0, built.stdout + built.stderr);
   assert.doesNotMatch(built.stdout + built.stderr, /unknown variable|warning 6000/i);
   return exe;
 }
 
 try {
+  await compile('uninstaller-hook-context', `!define BUILD_UNINSTALLER
+!include "${nsisPath(hook)}"
+Section
+SectionEnd`, undefined, true);
+  process.stdout.write('PASS uninstaller-hook-context (warnings as errors)\n');
   const cases = [
     { name: 'fresh-install', registration: false, expected: 0 },
     { name: 'orphan-registration', expected: 0 },
