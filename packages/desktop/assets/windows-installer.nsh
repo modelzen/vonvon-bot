@@ -3,8 +3,10 @@
 ; Release 0.7.5 did not enable DELETE_APP_DATA_ON_UNINSTALL. Never pass
 ; --delete-app-data; /KEEP_APP_DATA is retained for compatibility, not relied on.
 ; Use the same registered uninstaller electron-builder already invoked.
-Var vonvonPreviousUninstaller
-Var vonvonPreviousInstallDir
+!ifndef BUILD_UNINSTALLER
+  Var vonvonPreviousUninstaller
+  Var vonvonPreviousInstallDir
+!endif
 
 !macro recoverLegacyWindowsUninstall
   ${If} ${Errors}
