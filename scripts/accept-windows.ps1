@@ -38,26 +38,43 @@ function Wait-Condition([scriptblock]$Condition, [string]$Failure) {
   while (-not (& $Condition)) { if ([DateTime]::UtcNow -gt $deadline) { throw $Failure }; Start-Sleep -Milliseconds 300 }
 }
 function Run-Installer {
-  $p = Start-Process -FilePath $Installer -ArgumentList @('/S',"/D=$installDir") -PassThru -Wait -WindowStyle Hidden
+  Assert-OwnedRegistration
+  $p = Start-Process -FilePath $Installer -ArgumentList @('/currentuser','/S',"/D=$installDir") -PassThru -Wait -WindowStyle Hidden
   if ($p.ExitCode -ne 0) { throw "Installer failed: $($p.ExitCode)" }
   Wait-Condition { Test-Path -LiteralPath (Join-Path $installDir 'Uninstall Vonvon Bot.exe') } 'Installed files were not ready'
 }
+function Assert-OwnedRegistration {
+  foreach ($view in $views) {
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('CurrentUser', $view)
+    try {
+      $key = $base.OpenSubKey($keys[0]); $location = if ($key) { $key.GetValue('InstallLocation') }; if ($key) { $key.Close() }
+      $key = $base.OpenSubKey($keys[1]); $command = if ($key) { $key.GetValue('UninstallString') }; if ($key) { $key.Close() }
+      if ($location -and -not $location.StartsWith($scratch + '\',[StringComparison]::OrdinalIgnoreCase)) { throw 'Concurrent installation detected; preserve evidence and stop restoration' }
+      if ($command -and ($command -notmatch '^"([^"]+)"' -or -not $Matches[1].StartsWith($scratch + '\',[StringComparison]::OrdinalIgnoreCase))) { throw 'Concurrent uninstall registration detected; preserve evidence and stop restoration' }
+    } finally { $base.Close() }
+  }
+}
 function Uninstall-Candidate {
+  Assert-OwnedRegistration
   $uninstaller = Join-Path $installDir 'Uninstall Vonvon Bot.exe'
   if (Test-Path -LiteralPath $uninstaller) {
-    $p = Start-Process -FilePath $uninstaller -ArgumentList '/currentuser','/S' -PassThru -Wait -WindowStyle Hidden
+    $p = Start-Process -FilePath $uninstaller -ArgumentList @('/currentuser','/S',"/D=$installDir") -PassThru -Wait -WindowStyle Hidden
     if ($p.ExitCode -ne 0) { throw "Uninstaller failed: $($p.ExitCode)" }
     Wait-Condition { -not (Test-Path -LiteralPath (Join-Path $installDir 'Vonvon Bot.exe')) } 'Uninstaller left the application executable'
   }
 }
 function Check-Runtime([string]$Name) {
-  & node (Join-Path $PSScriptRoot 'windows-runtime-smoke.mjs') $installDir | ForEach-Object { Write-Host $_ }
+  & node (Join-Path $PSScriptRoot 'windows-runtime-smoke.mjs') $installDir $data | ForEach-Object { Write-Host $_ }
   if ($LASTEXITCODE -ne 0) { throw "Installed runtime failed: $Name" }
   if ((Get-Content -LiteralPath $sentinel -Raw).Trim() -ne 'preserve isolated data') { throw 'Isolated data was changed' }
   # PowerShell functions have their own scope; return the case to the caller.
   return @{ name = $Name; passed = $true }
 }
 try {
+  foreach ($view in $views) {
+    $machine = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', $view)
+    try { foreach ($keyPath in $keys) { $key = $machine.OpenSubKey($keyPath); if ($key) { $key.Close(); throw 'Machine-wide product registration detected; acceptance refused' } } } finally { $machine.Close() }
+  }
   # Snapshot ONLY this product's two keys in each view. Refuse a real existing
   # installation, so /D never invokes an owner's working application uninstaller.
   foreach ($view in $views) {
@@ -122,33 +139,43 @@ try {
   Run-Installer
   $steps += Check-Runtime 'reinstall-after-0.7.5-orphan'
   Uninstall-Candidate
-  $report = @{ sourceSha = $SourceSha; architecture = $Architecture; hostArchitecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant(); installerSha256 = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLowerInvariant(); startedAt = $started; completedAt = [DateTime]::UtcNow.ToString('o'); steps = $steps; passed = $true }
+  $report = @{ sourceSha = $SourceSha; architecture = $Architecture; hostArchitecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant(); installerSha256 = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLowerInvariant(); startedAt = $started; completedAt = [DateTime]::UtcNow.ToString('o'); steps = $steps; passed = $true; dataScope = 'Isolated VONVON_HOME retained across runtime and reinstall; default profile data not exercised' }
 } finally {
+  $cleanupErrors = @()
+  $restoreAllowed = $restorable
   try {
     if ($restorable) {
-      Uninstall-Candidate
-      foreach ($view in $views) {
-        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('CurrentUser', $view)
-        try {
-          $current = $base.OpenSubKey($keys[0]); $location = if ($current) { $current.GetValue('InstallLocation') }; if ($current) { $current.Close() }
-          if ($location -and -not $location.StartsWith($scratch + '\',[StringComparison]::OrdinalIgnoreCase)) { throw 'Concurrent installation detected; preserve evidence and stop restoration' }
-        } finally { $base.Close() }
-      }
-      foreach ($entry in $saved) {
-        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('CurrentUser', $entry.view)
-        try {
-          $base.DeleteSubKeyTree($entry.path, $false)
-          if ($entry.existed) { $key = $base.CreateSubKey($entry.path); try { foreach ($v in $entry.values) { $key.SetValue($v.name,$v.value,$v.kind) } } finally { $key.Close() } }
-        } finally { $base.Close() }
-      }
-      foreach ($file in $savedFiles) {
-        if ($file.existed) { New-Item -ItemType Directory -Path (Split-Path $file.path) -Force | Out-Null; Copy-Item -LiteralPath $file.backup -Destination $file.path -Force }
-        elseif (Test-Path -LiteralPath $file.path) { [IO.File]::Delete($file.path) }
+      # Check before the uninstaller can delete any registry key or shortcut.
+      try { Assert-OwnedRegistration } catch { $restoreAllowed = $false; $cleanupErrors += $_ }
+      if ($restoreAllowed) {
+        try { Uninstall-Candidate } catch { $cleanupErrors += $_ }
+        # A failed test uninstaller must not skip restoration of unrelated state.
+        try { Assert-OwnedRegistration } catch { $restoreAllowed = $false; $cleanupErrors += $_ }
+        if ($restoreAllowed) {
+          foreach ($entry in $saved) {
+            try {
+              $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('CurrentUser', $entry.view)
+              try {
+                $base.DeleteSubKeyTree($entry.path, $false)
+                if ($entry.existed) { $key = $base.CreateSubKey($entry.path); try { foreach ($v in $entry.values) { $key.SetValue($v.name,$v.value,$v.kind) } } finally { $key.Close() } }
+              } finally { $base.Close() }
+            } catch { $cleanupErrors += $_ }
+          }
+          foreach ($file in $savedFiles) {
+            try {
+              if ($file.existed) { New-Item -ItemType Directory -Path (Split-Path $file.path) -Force | Out-Null; Copy-Item -LiteralPath $file.backup -Destination $file.path -Force }
+              elseif (Test-Path -LiteralPath $file.path) { [IO.File]::Delete($file.path) }
+            } catch { $cleanupErrors += $_ }
+          }
+        }
       }
     }
     # Recursively remove only the verified scratch created above in this run.
     if ([IO.Path]::GetFullPath($scratch) -notmatch '\\vva-[a-f0-9]{8}$') { throw 'Unexpected scratch path' }
-    Remove-Item -LiteralPath $scratch -Recurse -Force
+    if (-not $restorable -or $restoreAllowed) {
+      try { Remove-Item -LiteralPath $scratch -Recurse -Force } catch { $cleanupErrors += $_ }
+    }
   } finally { $lock.Dispose() }
+  if ($cleanupErrors.Count) { throw "Acceptance cleanup failed; backups remain in $Evidence. $($cleanupErrors -join '; ')" }
 }
 $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $Evidence 'acceptance.json') -Encoding utf8NoBOM

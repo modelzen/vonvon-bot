@@ -294,3 +294,18 @@ test('job timing preserves queued, test and package stages and leaves ongoing du
   assert.equal(result[0].seconds, null); assert.equal(result[0].queuedSeconds, null);
   assert.equal(result[0].steps[0].seconds, null);
 });
+
+test('dual Windows handoff requires ARM64 Setup and ZIP as well as x64', async t => {
+  const h = await fixture(t); await buildRelease({ ...h.options, 'authorize-notarization': true }, h.dependencies); await receipts(h, true);
+  const file = join(h.options.out, 'windows', 'windows-publish-receipt.json');
+  const receipt = JSON.parse(await readFile(file, 'utf8')); receipt.architecture = 'x64+arm64';
+  await save(file, receipt);
+  await assert.rejects(collectRelease({ out: h.options.out }, h.dependencies), /Windows receipt lacks/);
+  for (const name of [`Vonvon-Bot-Setup-${version}-arm64.exe`, `Vonvon-Bot-${version}-windows-arm64.zip`]) {
+    receipt.objects.push({ file: name, url: `https://dl.vonvon.cc/bot/windows/${version}/${name}`, bytes: 20, sha256: hash(name) });
+  }
+  await save(file, receipt);
+  const result = await collectRelease({ out: h.options.out }, h.dependencies);
+  assert.equal(result.readyForWebsite, true); assert.equal(result.downloads.length, 6);
+  assert.equal(result.downloads.filter(item => item.platform === 'windows' && item.architecture === 'arm64').length, 2);
+});

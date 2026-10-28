@@ -398,16 +398,17 @@ export async function collectRelease({ out }, dependencies = {}) {
     if (!object || !/^[a-f0-9]{64}$/.test(object.sha256 ?? '') || !Number.isSafeInteger(object.size)) throw new Error('Mac upload receipt lacks a verified DMG record');
     downloads.push({ platform: 'mac', architecture, file, url: object.url, bytes: object.size, sha256: object.sha256 });
   }
-  if (windows) for (const [kind, file] of [['installer', `Vonvon-Bot-Setup-${state.version}-x64.exe`], ['zip', `Vonvon-Bot-${state.version}-windows-x64.zip`]]) {
+  const windowsArchitectures = windows?.architecture === 'x64+arm64' ? ['x64', 'arm64'] : ['x64'];
+  if (windows) for (const architecture of windowsArchitectures) for (const [kind, file] of [['installer', `Vonvon-Bot-Setup-${state.version}-${architecture}.exe`], ['zip', `Vonvon-Bot-${state.version}-windows-${architecture}.zip`]]) {
     const object = windows.objects?.find(item => item.file === file);
     if (windows.signed !== false || windows.updatesEnabled !== false || !object || !/^[a-f0-9]{64}$/.test(object.sha256 ?? '') || !Number.isSafeInteger(object.bytes)) throw new Error('Windows receipt lacks a verified manual download record');
-    downloads.push({ platform: 'windows', architecture: 'x64', kind, ...object });
+    downloads.push({ platform: 'windows', architecture, kind, ...object });
   }
   for (const item of downloads) {
     const expected = item.platform === 'mac' ? `https://dl.vonvon.cc/bot/mac/stable/${item.file}` : `https://dl.vonvon.cc/bot/windows/${state.version}/${item.file}`;
     if (item.url !== expected || item.bytes <= 0) throw new Error('Publication receipt contains an unexpected public download URL or size');
   }
-  const handoff = { format: 1, version: state.version, sourceSha: state.sha, readyForWebsite: macVerified && stableVerified && !!windows && downloads.length === 4,
+  const handoff = { format: 1, version: state.version, sourceSha: state.sha, readyForWebsite: macVerified && stableVerified && !!windows && downloads.length === 2 + windowsArchitectures.length * 2,
     mac: { versionedVerified: macVerified, stableVerified, notarization: mac?.notarization ?? stable?.notarization ?? null },
     windows: { published: !!windows, signed: false, updatesEnabled: false }, downloads,
     evidence: { mac: state.macRelease ? join(state.macRelease, 'upload-receipt.json') : null, stable: state.macRelease ? join(state.macRelease, 'publish-receipt.json') : null,

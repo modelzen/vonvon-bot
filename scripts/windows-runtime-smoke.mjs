@@ -27,10 +27,11 @@ export async function verifyWindowsPayloadPaths(appDirectory) {
 }
 
 /** Start the packaged runtime, verify its authenticated status and served UI, then stop it. */
-export async function verifyWindowsRuntime(appDirectory, { timeoutMs = 90000 } = {}) {
+export async function verifyWindowsRuntime(appDirectory, { timeoutMs = 90000, retainedHome } = {}) {
   if (!isAbsolute(appDirectory)) throw new Error('Use an absolute packaged application directory');
   await verifyWindowsPayloadPaths(appDirectory);
-  const home = await mkdtemp(join(tmpdir(), 'vonvon-packaged-smoke-'));
+  if (retainedHome && !isAbsolute(retainedHome)) throw new Error('Retained runtime home must be absolute');
+  const home = retainedHome ?? await mkdtemp(join(tmpdir(), 'vonvon-packaged-smoke-'));
   const executable = join(appDirectory, 'Vonvon Bot.exe');
   const cli = join(appDirectory, 'resources/daemon/bin/vonvon.mjs');
   const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', VONVON_HOME: home };
@@ -72,11 +73,11 @@ export async function verifyWindowsRuntime(appDirectory, { timeoutMs = 90000 } =
       if (!exit) { child.kill(); await boundedWait(closed, 5000); }
     }
     // Remove only the scratch home created by this invocation, after its process exits.
-    if (exit || spawnError) await rm(home, { recursive: true, force: true });
+    if (exit || spawnError) { if (!retainedHome) await rm(home, { recursive: true, force: true }); }
     else if (success) throw new Error('Packaged runtime exit was not confirmed');
   }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  console.log(JSON.stringify(await verifyWindowsRuntime(process.argv[2])));
+  console.log(JSON.stringify(await verifyWindowsRuntime(process.argv[2], { retainedHome: process.argv[3] })));
 }
