@@ -17,6 +17,8 @@ function Assert-CleanSource {
   # than stat-only porcelain dirtiness from a CRLF checkout; no source edits pass.
   git diff --quiet HEAD --
   if ($LASTEXITCODE -ne 0 -or (git ls-files --others --exclude-standard)) { throw 'Build requires unchanged tracked source and no untracked files' }
+  git diff --cached --quiet HEAD --
+  if ($LASTEXITCODE -ne 0) { throw 'Build refuses staged source changes' }
 }
 Assert-CleanSource
 $outPath = [IO.Path]::GetFullPath($Out)
