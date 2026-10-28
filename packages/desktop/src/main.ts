@@ -10,6 +10,7 @@ import type { AttachedDaemon, DesktopBridge, DesktopResources } from './ipc-cont
 import { desktopFullScreenChannel } from './ipc-contract.js';
 import { createDesktopTray, type DesktopTray } from './tray.js';
 import { DesktopUpdater, scheduleUpdateChecks } from './updates.js';
+import { WindowsDesktopUpdater, windowsUpdateConfiguration, createWindowsUpdateDriver } from './windows-updates.js';
 import { desktopUpdateConfiguration } from './update-configuration.js';
 import { createDaemonManager, StartHostRefusal } from './daemon-manager.js';
 import { createDaemonDependencies, prepareDesktopRoot } from './daemon-dependencies.js';
@@ -199,16 +200,30 @@ export async function startDesktop(): Promise<void> {
     const icon = realpathSync(paths.trayPng);
     const root = await prepareDesktopRoot(resolveDataRoot(homedir()));
     const updateConfiguration = await desktopUpdateConfiguration({ appPath: app.getAppPath(), isPackaged: app.isPackaged });
-    const updater = new DesktopUpdater({
+    const beforeUpdateInstall = async () => {
+      // NSIS replaces this executable and its bundled daemon. Drain and stop the
+      // authenticated owner before releasing the desktop connection or installing.
+      if (process.platform === 'win32' && await managerDependencies.readVerifiedDaemon()) {
+        const attached = await attachExisting(root);
+        try { await stopHost(attached.identity, () => attached.client.machine({type:'stopHost'})); }
+        finally { await attached.dispose(); }
+      }
+      await cleanup();
+      terminating = true;
+      quitting = true;
+    };
+    const updateStatePath = join(app.getPath('userData'), 'desktop-update-expected-version');
+    const updater = process.platform === 'win32' ? new WindowsDesktopUpdater({
+      current: app.getVersion(),
+      ...await windowsUpdateConfiguration({appPath:app.getAppPath(),isPackaged:app.isPackaged}),
+      driver: createWindowsUpdateDriver(),
+      beforeInstall: beforeUpdateInstall, statePath:updateStatePath,
+    }) : new DesktopUpdater({
       current: app.getVersion(), ...updateConfiguration, driver: autoUpdater,
       // Chromium's stack follows the system proxy and the macOS keychain's certificate trust.
       fetch: (url, init) => net.fetch(url, init),
-      statePath: join(app.getPath('userData'), 'desktop-update-expected-version'),
-      beforeInstall: async () => {
-        await cleanup();
-        terminating = true;
-        quitting = true;
-      },
+      statePath: updateStatePath,
+      beforeInstall: beforeUpdateInstall,
     });
     // 菜单栏菜单和窗口里的更新提示（有新版本、上次没装上），都以最近一次检查的结果为准。
     const noteUpdate = (update: DesktopUpdate): DesktopUpdate => {
@@ -242,6 +257,7 @@ export async function startDesktop(): Promise<void> {
       minWidth: 760,
       minHeight: 640,
       show: false,
+      ...(process.platform === 'win32' ? { icon: join(dirname(icon), 'windows-icon.ico') } : {}),
       backgroundColor: '#f5f5f7',
       titleBarStyle: 'hidden',
       ...(process.platform === 'darwin'

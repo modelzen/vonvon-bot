@@ -1,4 +1,5 @@
 import { Menu, nativeImage, Tray } from 'electron';
+import { dirname, join } from 'node:path';
 
 export interface DesktopTray {
   destroy(): void;
@@ -6,7 +7,10 @@ export interface DesktopTray {
   setUpdate(notice: string | undefined): void;
 }
 
-export function createDesktopTray(pngPath: string, show: () => void, quit: () => void, platform: NodeJS.Platform = process.platform): DesktopTray {
+function trayImage(pngPath: string, platform: NodeJS.Platform) {
+  // Let Windows pick the ICO representation matching the taskbar's DPI. The
+  // opaque logo stays legible on both light and dark taskbars.
+  if (platform === 'win32') return join(dirname(pngPath), 'windows-icon.ico');
   const source = nativeImage.createFromPath(pngPath);
   if (source.isEmpty()) throw new Error('找不到菜单栏图标文件。');
   const icon = platform === 'darwin' ? source.resize({width: 18, height: 18, quality: 'best'}) : source;
@@ -14,6 +18,11 @@ export function createDesktopTray(pngPath: string, show: () => void, quit: () =>
     icon.addRepresentation({scaleFactor: 2, dataURL: source.resize({width: 36, height: 36, quality: 'best'}).toDataURL()});
     icon.setTemplateImage(true);
   }
+  return icon;
+}
+
+export function createDesktopTray(pngPath: string, show: () => void, quit: () => void, platform: NodeJS.Platform = process.platform): DesktopTray {
+  const icon = trayImage(pngPath, platform);
   const tray = new Tray(icon);
   tray.setToolTip('Vonvon Bot');
   let announced: string | undefined;

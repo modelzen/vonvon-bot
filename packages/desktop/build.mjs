@@ -15,6 +15,11 @@ const ui = join(root, '../ui/dist');
 const daemonSource = join(root, '../daemon');
 const daemonStage = join(stage, 'daemon');
 const updateConfig = JSON.parse(await readFile(process.env.VONVON_DESKTOP_UPDATE_CONFIG || join(root, 'desktop-update.json'), 'utf8'));
+const windowsUpdateConfig = process.env.VONVON_WINDOWS_UPDATE_CONFIG
+  ? JSON.parse(await readFile(process.env.VONVON_WINDOWS_UPDATE_CONFIG, 'utf8')) : {};
+if (Object.keys(windowsUpdateConfig).length && (Object.keys(windowsUpdateConfig).length !== 1 || typeof windowsUpdateConfig.publisherName !== 'string' || !windowsUpdateConfig.publisherName.trim() || windowsUpdateConfig.publisherName !== windowsUpdateConfig.publisherName.trim() || /[\x00-\x1f]/.test(windowsUpdateConfig.publisherName))) {
+  throw new Error('Windows update configuration must be {} or contain only publisherName');
+}
 const keys = updateConfig !== null && typeof updateConfig === 'object' && !Array.isArray(updateConfig)
   ? Object.keys(updateConfig)
   : null;
@@ -50,6 +55,7 @@ await build({
   define: { 'process.env.NODE_ENV': '"production"' },
 });
 await writeFile(join(dist, 'update-config.json'), JSON.stringify(updateConfig) + '\n');
+await writeFile(join(dist, 'windows-update-config.json'), JSON.stringify(windowsUpdateConfig) + '\n');
 await rm(stage, { recursive: true, force: true });
 await mkdir(join(stage, 'desktop'), { recursive: true });
 await mkdir(join(stage, 'dist'), { recursive: true });
@@ -57,9 +63,11 @@ await mkdir(join(stage, 'assets'), { recursive: true });
 await cp(join(dist, 'main.cjs'), join(stage, 'desktop/main.cjs'));
 await cp(join(dist, 'preload.cjs'), join(stage, 'desktop/preload.cjs'));
 await cp(join(dist, 'update-config.json'), join(stage, 'dist/update-config.json'));
+await cp(join(dist, 'windows-update-config.json'), join(stage, 'dist/windows-update-config.json'));
 await cp(ui, join(stage, 'ui'), { recursive: true });
 await cp(join(root, 'assets/tray.png'), join(stage, 'assets/tray.png'));
 await cp(join(root, 'assets/macos-icon.png'), join(stage, 'assets/macos-icon.png'));
+await cp(join(root, 'assets/windows-icon.ico'), join(stage, 'assets/windows-icon.ico'));
 await writeFile(join(stage, 'package.json'), JSON.stringify({
   name: 'vonvon-bot-desktop',
   version,
@@ -78,9 +86,10 @@ if (npmVersion !== pinnedNpm) throw new Error(`Installed npm ${npmVersion} is no
 await cp(npmSource, join(stage, 'npm'), { recursive: true, dereference: true });
 
 const daemonMetadata = JSON.parse(await readFile(join(daemonSource, 'package.json'), 'utf8'));
+// Windows packages use real copies so building does not require symlink privileges.
 await stageDaemon(daemonStage, {
   name: daemonMetadata.name, version, type: 'module', bin: daemonMetadata.bin,
   license: daemonMetadata.license, author: daemonMetadata.author,
   dependencies: daemonMetadata.dependencies,
-}, { compact: true });
+}, { compact: process.platform !== 'win32' });
 await assertNoBundledClaude(daemonStage);
