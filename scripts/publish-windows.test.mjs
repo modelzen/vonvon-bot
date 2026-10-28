@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { downloadBuild, publishWindowsObjects, validateBuildRun, windowsObjectPlan } from './publish-windows.mjs';
 import { createWindowsInventory } from './package-windows.mjs';
@@ -16,6 +18,17 @@ const inventory = { sourceSha, version, architecture: 'x64', signed: false, upda
     ['blockmap', `Vonvon-Bot-Setup-${version}-x64.exe.blockmap`], ['feed', 'latest.yml'],
   ].map(([kind, file]) => ({ kind, file, ...evidence })) };
 const fetchImpl = async () => new Response(bytes, { headers: { 'content-length': String(bytes.length), 'content-type': 'application/octet-stream', 'cache-control': 'public, max-age=31536000, immutable' } });
+
+test('Windows publish CLI executes through a symlinked directory instead of silently exiting', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'windows-publish-cli-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await symlink(dirname(fileURLToPath(import.meta.url)), join(root, 'alias'), process.platform === 'win32' ? 'junction' : 'dir');
+  const script = join(root, 'alias', 'publish-windows.mjs');
+  const help = spawnSync(process.execPath, [script, '--help'], { encoding: 'utf8', env: { PATH: process.env.PATH } });
+  assert.equal(help.status, 0); assert.match(help.stdout, /Downloads a successful trusted Windows Actions artifact/);
+  const invalid = spawnSync(process.execPath, [script, '--download-only'], { encoding: 'utf8', env: { PATH: process.env.PATH } });
+  assert.equal(invalid.status, 1); assert.match(invalid.stderr, /dedicated --out/);
+});
 
 test('trusts only successful owning-repository Windows workflow runs', () => {
   const run = { repository: { full_name: 'modelzen/vonvon-bot' }, head_repository: { full_name: 'modelzen/vonvon-bot' }, path: '.github/workflows/windows-release.yml', status: 'completed', conclusion: 'success', event: 'workflow_dispatch', head_sha: sourceSha };

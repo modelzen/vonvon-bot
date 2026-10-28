@@ -4,7 +4,7 @@ import { access, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, unli
 import { homedir, tmpdir } from 'node:os';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseArgs, promisify } from 'node:util';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { assertOutputLocation, canonicalPath, checkVersionGate, compareVersions, validateConfig, validateFirstRelease } from './release-mac.mjs';
 import { cosCredentialEnvNames, readCosConfig, readCosReleaseEvidence } from './release-cos-evidence.mjs';
 import { checkedProductVersion } from './product-version.mjs';
@@ -176,11 +176,16 @@ async function lock(path, work) {
 }
 async function sourceWorktree(state, r) {
   if (!state.source || !(await exists(state.source))) {
-    const temporary = await r.createTemporary();
+    const temporary = await realpath(await r.createTemporary());
     state.source = join(temporary, 'source'); state.buildHome = join(temporary, 'home');
     await mkdir(state.buildHome);
     await r.execute('git', ['worktree', 'add', '--detach', state.source, state.sha], { cwd: state.seedRepo, env: r.childEnv });
     state.dependenciesInstalled = false;
+    await saveState(state);
+  }
+  const source = await realpath(state.source), buildHome = await canonicalPath(state.buildHome);
+  if (source !== state.source || buildHome !== state.buildHome) {
+    state.source = source; state.buildHome = buildHome;
     await saveState(state);
   }
   await cleanSource(state.source, state.sha, r);
@@ -422,7 +427,8 @@ collect  Validates matching publication receipts and writes release-handoff.json
 cancel   Creates OUT/CANCEL. Stops before the next stage; does not cancel jobs already submitted to Apple/GitHub. Remove only this marker deliberately before resuming.
 See docs/release-orchestration.md for publication commands, stage boundaries and recovery.`;
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+const invokedPath = process.argv[1] ? await realpath(resolve(process.argv[1])).catch(() => null) : null;
+if (invokedPath && invokedPath === await realpath(fileURLToPath(import.meta.url))) {
   try {
     const { values, positionals } = parseArgs({ allowPositionals: true, options: {
       ...Object.fromEntries(['repo', 'out', 'version', 'sha', 'update-config', 'cos-config', 'notes-file', 'keychain-profile', 'recover-arm64', 'recover-x64'].map(name => [name, { type: 'string' }])),

@@ -47,6 +47,8 @@ Windows 另缓存 `%LOCALAPPDATA%\electron\Cache` 和 `%LOCALAPPDATA%\electron-b
 
 恢复使用原来的版本、SHA、配置哈希、输出目录和公证 ID。上传结果未知时，仍按 skill 核对 Apple 日志，再按架构传 `--recover-arm64 app=UUID` 或 `--recover-x64 dmg=UUID`；不会自动清空未知提交。完整候选重算哈希后复用。聚合被中断时保留部分目录，下一次使用新的空 `mac-combined-N`，不删除证据。
 
+源码和 build HOME 在新建及续跑时都转成真实路径，CLI 入口也按真实路径比对；macOS 的 `/tmp`、`/private/tmp` 或自定义目录别名不会使 helper 静默空跑。
+
 Windows dispatch 发出前先持久保存请求 UUID；丢失响应后只查询同一个请求，不再次触发工作流。GitHub 尚未返回 run 时，稍后 `resume`。如果确认网络请求根本未到达 GitHub，保留旧 OUT，用新 OUT 重新准备，不手改状态。失败 run 不会自动 rerun；先定位问题，涉及换字节时按现有发布规则使用新版本。
 
 ## 版本化上传与 stable 的边界
