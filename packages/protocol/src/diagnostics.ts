@@ -100,7 +100,7 @@ export const NOT_REPLIED_TEXT: Record<NotRepliedReason, Text> = {
     reason: r => `没查到${r.detail ?? "这条消息是对谁说的"}，没 @ 它的这条就没回`,
     next: () => "飞书接口偶尔出错，请对方 @ 它再发一次；反复出现时看下面的日志。",
   },
-  "signed-out": { reason: r => `${tool(r)} 没登录或登录过期了`, next: r => r.backend === "claude" ? CLAUDE_LOGIN_NEXT : "在本机环境里登录 Codex，或在终端运行 codex login。" },
+  "signed-out": { reason: r => `${tool(r)} 没登录或登录过期了`, next: r => r.backend === "claude" ? CLAUDE_LOGIN_NEXT : "在 Codex App 或 Codex CLI 中完成登录或自定义模型配置，再回到 Vonvon 检测。" },
   "codex-too-old": { reason: () => "Codex 版本太旧，服务端不让它用这个模型", next: () => "在本机环境里更新 Codex。" },
   "tool-missing": { reason: r => r.backend === "claude" ? "Claude Agent SDK 还没下载" : "Codex 没装好", next: () => "去本机环境安装。" },
   "tier-unavailable": {

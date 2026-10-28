@@ -112,6 +112,7 @@ export class Jobs {
     this.set(entry.job);
   }
   startCodex(type: 'install' | 'login'): CommandResult {
+    if (type === 'login') return {kind: 'refused', code: 'provider-configuration-required', message: '请先在 Codex App 或 Codex CLI 中完成登录或自定义模型配置，再回到 Vonvon 检测。'};
     if (!this.options.service.startCodexJob) return unsupported();
     try {
       const id = jobIdSchema.parse(this.options.service.startCodexJob(type).id);
