@@ -2,6 +2,7 @@ import { mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
+import { backendInstallProgress } from '@vonvon/protocol';
 import { npmInvocation } from '../platform/npm';
 import { spawnProcess } from '../platform/spawn';
 import { paths } from '../config/paths';
@@ -188,6 +189,7 @@ async function installInTurn(
   const npm = npmInvocation();
   const { command, args, env } = buildInstallCommand(pkg, { npm });
   log.info('agent', 'backend-install-start', { pkg, npm: npm.args[0] ?? 'PATH' });
+  onProgress?.(backendInstallProgress.installing);
 
   const result = await new Promise<InstallResult>((resolve) => {
     let child;
@@ -248,6 +250,7 @@ async function installInTurn(
     return result;
   }
 
+  onProgress?.(backendInstallProgress.verifying);
   const verifyOk = isBackendPackageInUserDir(bareName, opts?.binName);
   if (!verifyOk) {
     await rollback(bareName);
