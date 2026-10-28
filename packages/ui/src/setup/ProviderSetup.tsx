@@ -1,6 +1,7 @@
 import {useEffect, useState} from 'react';
 import {ArrowRight, Check, ChevronRight, RefreshCw, Package, KeyRound} from 'lucide-react';
 import type {CollaborationReply, Command, CommandResult, DesktopSnapshot, ToolState} from '@vonvon/protocol';
+import {backendInstallProgress} from '@vonvon/protocol';
 import {ConfirmDialog} from '../reference/components/ui/Dialog';
 import {Button, IconButton} from '../reference/components/ui';
 import {useClient, useShellCapabilities} from '../client-context';
@@ -104,7 +105,8 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
     : detectionUnknown ? null : state.tool?.version?.replace(/^codex-cli\s+/, '') ?? source?.version ?? null;
   const latestVersion = checkedVersion ? checkedVersion.latest : source?.latestVersion;
   const cliLabel = !source ? '正在检测…' : source.installation === 'missing' ? '未检测到' : '已安装';
-  const installLabel = installing ? '正在安装…' : installed ? `已安装${currentVersion ? ` · ${currentVersion}` : ''}` : needsUpdate ? '需要更新' : state.tool?.installation === 'missing' ? '未安装' : checking || !state.check && !state.issue ? '正在检测…' : '检测异常';
+  const installOutput = state.activeInstall?.replay.flatMap(item => item.type === 'log' ? [item.chunk] : []).join('') ?? '';
+  const installLabel = installing ? state.activeInstall ? installOutput.includes(backendInstallProgress.verifying) ? '正在校验安装结果…' : installOutput ? '正在下载并安装组件，可能需要几分钟…' : '正在准备安装…' : '正在安装，请稍候…' : installed ? `已安装${currentVersion ? ` · ${currentVersion}` : ''}` : needsUpdate ? '需要更新' : state.tool?.installation === 'missing' ? '未安装' : checking || !state.check && !state.issue ? '正在检测…' : '检测异常';
   const authLabel = connecting ? '等待授权' : detectionUnknown ? '等待检测结果' : !installed ? (needsUpdate ? '更新后连接' : '安装后连接') : state.check?.state === 'checking' ? '正在检查…' : state.tool?.authentication === 'notRequired' ? '使用现有配置' : auth ? '已连接' : state.tool?.authentication === 'signedOut' ? '尚未连接' : '暂时无法确认';
   async function open(url: string, target: 'authorization' | 'verification') {
     setLinkError('');
@@ -128,8 +130,8 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
   return <div className="provider-preparation">
     {provider === 'claude' && <p className="provider-check">Vonvon 通过 Agent SDK 运行 Claude，可复用本机 Claude Code 登录。</p>}
     <div className="provider-steps">
-      <div className="provider-step"><span className={`provider-step__number${installed ? ' is-complete' : ''}`}>{compact ? <Package size={16}/> : installed ? <Check size={13}/> : '1'}</span>
-        <div className="provider-step__copy"><strong>{compact ? componentName : `${detectionUnknown ? '检测' : '安装'} ${componentName}`}</strong><span>{installLabel}</span></div>
+      <div className="provider-step"><span className={`provider-step__number${installed && !installing ? ' is-complete' : ''}`}>{compact ? <Package size={16}/> : installed && !installing ? <Check size={13}/> : '1'}</span>
+        <div className="provider-step__copy"><strong>{compact ? componentName : `${detectionUnknown ? '检测' : '安装'} ${componentName}`}</strong>{installing ? <OperationActivity label={installLabel}/> : <span>{installLabel}</span>}</div>
         {installing ? <Button size="sm" disabled={!ready} onClick={() => void state.cancelInstall()}>取消</Button>
           : detectionUnknown ? <IconButton size="sm" variant="ghost" label="重新检测" title="重新检测" disabled={disabled || checking} onClick={() => void state.verify()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>
           : !installed ? <Button size="sm" disabled={disabled} onClick={() => void state.installProvider(needsUpdate)}>{needsUpdate ? (provider === 'claude' ? '更新 SDK' : '更新') : (provider === 'claude' ? '安装 SDK' : '安装')}</Button>
@@ -144,7 +146,7 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
     {!auth && installed && !connecting && <div className="provider-existing"><span>已有账号或 API 配置？</span><button type="button" disabled={disabled || state.check?.state === 'checking'} onClick={() => void state.verify()}>检测现有配置</button></div>}
     {state.check?.state === 'checking' && installed && auth && <p className="provider-check"><OperationActivity label="正在读取可用模型…" state="connecting"/></p>}
     {state.canContinue && !compact && <p className="provider-check provider-check--ready" role="status"><Check size={14}/>{name} 已准备好<span>· {state.check?.models?.length ?? 0} 个模型</span></p>}
-    {(state.issue || state.check?.message || linkError) && <div className="provider-problem" role="status"><p>{state.issue || state.check?.message || linkError}</p>{!detectionUnknown && <IconButton size="sm" variant="ghost" label="重新检测" title="重新检测" disabled={disabled || state.check?.state === 'checking'} onClick={() => {void state.read().catch(() => {}); void state.verify();}}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}</div>}
+    {!installing && (state.issue || state.check?.message || linkError) && <div className="provider-problem" role="status"><p>{state.issue || state.check?.message || linkError}</p>{!detectionUnknown && <IconButton size="sm" variant="ghost" label="重新检测" title="重新检测" disabled={disabled || state.check?.state === 'checking'} onClick={() => {void state.read().catch(() => {}); void state.verify();}}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}</div>}
     {state.activeCodexJob && <div className="provider-authorization" role={state.activeCodexJob.phase === 'authorizing' ? 'status' : undefined}>
       {state.activeCodexJob.phase === 'authorizing' ? <><p>在 ChatGPT 授权页面输入此代码。</p><code>{state.activeCodexJob.userCode}</code><Button size="sm" disabled={disabled || !state.activeCodexJob.verificationUrl} onClick={() => {if (state.activeCodexJob?.phase === 'authorizing' && state.activeCodexJob.verificationUrl) void open(state.activeCodexJob.verificationUrl, 'authorization');}}>打开授权页面</Button></> : <p><OperationActivity key={state.activeCodexJob.id} label={'message' in state.activeCodexJob ? state.activeCodexJob.message : '正在连接…'} state="connecting"/></p>}
       <Button size="sm" variant="ghost" disabled={disabled} onClick={() => {if(state.activeCodexJob) void run({type:'cancelJob', jobId:state.activeCodexJob.id});}}>取消连接</Button>

@@ -10,6 +10,7 @@ const harness = vi.hoisted(() => ({
   state: [] as unknown[], index: 0, effectIndex: 0,
   effects: [] as Array<{deps?: unknown[]}>, pending: [] as Array<() => void>,
   canContinue: false, check: undefined as {state: 'checking' | 'unavailable'; message?: string} | undefined, issue: '', cli: undefined as EnvironmentToolState | undefined, codex: undefined as EnvironmentToolState | undefined,
+  activeInstall: undefined as any,
   installProvider: vi.fn(), installTool: vi.fn(async () => ({kind: 'applied', message: '已更新'})), connect: vi.fn(), verify: vi.fn(), read: vi.fn(), cancelInstall: vi.fn(),
   request: vi.fn(async (request: {type: string; id?: string}): Promise<EnvironmentReply> => request.type === 'backendVersion'
     ? {kind: 'backendVersion', id: request.id!, installed: '1.0', latest: '1.1', hasUpdate: true} : {kind: 'applied', message: '已卸载'}),
@@ -35,7 +36,7 @@ vi.mock('../src/setup/useProviderSetup', () => ({useProviderSetup: (provider: Pr
   tool: snapshot.tools.find(item => item.tool === provider), tools: provider === 'claude' ? [harness.cli ?? {tool: 'claude', installation: 'managed', version: '1.0', latestVersion: '1.1', executable: '/managed/claude', canUninstall: true}] : harness.codex ? [harness.codex] : [],
   entry: {id: provider === 'claude' ? 'claude-agent' : 'codex-appserver', installedVersion: '0.3.296', depState: snapshot.tools.find(item => item.tool === provider)?.installation === 'missing' ? 'missing' : 'installed', canUninstall: snapshot.tools.find(item => item.tool === provider)?.installation !== 'missing'},
   check: harness.canContinue ? {state: 'ready', models: [{id: 'model-1', displayName: 'Model 1'}]} : harness.check,
-  issue: harness.issue, working: false, activeInstall: undefined, relevantToolInstall: undefined,
+  issue: harness.issue, working: false, activeInstall: harness.activeInstall, relevantToolInstall: undefined,
   activeLogin: undefined, activeCodexJob: undefined, canContinue: harness.canContinue,
   installProvider: harness.installProvider, installTool: harness.installTool, connect: harness.connect, verify: harness.verify,
   read: harness.read, cancelInstall: harness.cancelInstall,
@@ -74,8 +75,21 @@ function installationInfo(all: Element[], label: string): ReactNode {
   return row?.props.children[1]?.props.children;
 }
 beforeEach(() => {
-  harness.state = []; harness.effects = []; harness.pending = []; harness.index = harness.effectIndex = 0; harness.canContinue = false; harness.check = undefined; harness.issue = ''; harness.cli = undefined; harness.codex = undefined;
+  harness.state = []; harness.effects = []; harness.pending = []; harness.index = harness.effectIndex = 0; harness.canContinue = false; harness.check = undefined; harness.issue = ''; harness.cli = undefined; harness.codex = undefined; harness.activeInstall = undefined;
   vi.clearAllMocks();
+});
+
+it.each([
+  ['', '正在准备安装…'],
+  ['\n正在下载并安装组件…\n', '正在下载并安装组件，可能需要几分钟…'],
+  ['\n正在下载并安装组件…\n\n正在校验安装结果…\n', '正在校验安装结果…'],
+])('shows the current SDK installation stage', (output, label) => {
+  harness.activeInstall = {operationId: 'install', state: 'running', replay: output ? [{type: 'log', chunk: output}] : []};
+  harness.issue = '旧的检测错误';
+  const view = nodes(ProviderPreparation({provider: 'claude', snapshot: snapshot([tool('claude', 'installed', 'unknown')]), ready: true, busy: false, run, management: true}));
+  expect(view.some(node => node.props.label === label)).toBe(true);
+  expect(view.some(node => node.props.children === '旧的检测错误')).toBe(false);
+  expect(button(view, '取消')).toBeTruthy();
 });
 
 it.each([
