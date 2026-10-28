@@ -22,7 +22,7 @@ Vonvon Bot 是一个 macOS 桌面应用；Linux 上可以只装后台服务，�
 1. 正在用 feishu-codex-bridge 的 Mac 用户。迁过来后，群、话题、卡片、命令和旧会话都保留。
 2. 有 Codex 或 Claude 订阅、想在飞书群里有一个"像同事"的 bot 的个人和小团队。他们不一定用 GitHub，也不一定会装 Node。
 
-不给谁用：Windows 用户（Windows 和 Linux 的 bridge 用户照常用 bridge，不要求迁移）；想在 Linux 上用桌面应用的人，Linux 只有命令行版；没有 Codex 或 Claude 订阅的人；想要云端托管、不开电脑也能用的人。
+不给谁用：Windows 用户（Windows 和 Linux 的 bridge 用户照常用 bridge，不要求迁移）；想在 Linux 上用桌面应用的人，Linux 只有命令行版；本机尚未配置可用 Codex 或 Claude 的人；想要云端托管、不开电脑也能用的人。
 
 ## 2. 叫法
 
@@ -56,6 +56,8 @@ Vonvon Bot 是一个 macOS 桌面应用；Linux 上可以只装后台服务，�
 ## 3. 第一版做什么
 
 ### 3.1 桌面端
+
+2026-10-28 Provider 配置约定（owner）：Vonvon 不发起 Codex 或 Claude 的登录认证。用户先在 Codex App、Codex CLI 或 Claude Code 中完成登录或自定义 API、模型配置，并确认可用，再回到 Vonvon 检测、复用本机配置。两个 Provider 的可用模型都使用带数量、可折叠的两列列表；无法启动的 Claude Code 与不完整的 Agent SDK 安装分别提示处理方法。
 
 2026-10-26 组件细节：Bot 详情和群设置标签复用主导航的 Gooey 浅色滑块，按实际标签宽度定位，保留原路由与草稿保护。任务运行及注册 / Provider 连接的长等待采用 20px Thinking Orbs，等待超过两秒才显示，完成即移除；等待用户扫码或输入授权码时保持静态。全局搜索只在输入区底部加淡色静态内光，匹配和跳转保持即时；不以循环扫光暗示后台搜索。参数与验收见 [详情组件优化](plans/detail-component-polish.md)。
 
