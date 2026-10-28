@@ -49,6 +49,16 @@ $configFile = Join-Path $outPath 'electron-builder.json'
 $packages = Join-Path $outPath 'packages'
 @{ extends = (Join-Path $repo 'packages/desktop/electron-builder.yml'); electronDist = $runtime; directories = @{ output = $packages } } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configFile -Encoding utf8NoBOM
 Invoke-Node @('scripts/windows-build-tools.mjs','package',$envFile,$configFile,$Architecture)
+# This pinned builder emits latest.yml for a standalone Windows ARM64 build.
+# Give it a distinct name before merging the two architecture directories.
+if ($Architecture -eq 'arm64') {
+  $rawFeed = Join-Path $packages 'latest.yml'
+  $armFeed = Join-Path $packages 'latest-arm64.yml'
+  if ((Test-Path -LiteralPath $rawFeed) -and -not (Test-Path -LiteralPath $armFeed)) {
+    if ([IO.Path]::GetFullPath((Split-Path $armFeed)) -cne [IO.Path]::GetFullPath($packages)) { throw 'Unexpected feed destination' }
+    Move-Item -LiteralPath $rawFeed -Destination $armFeed -ErrorAction Stop
+  }
+}
 $cache = Join-Path $env:LOCALAPPDATA 'electron-builder/Cache'
 $compiler = Get-ChildItem -LiteralPath $cache -Recurse -File -Filter makensis.exe | Sort-Object FullName | Select-Object -First 1
 $plugin = Get-ChildItem -LiteralPath $cache -Recurse -File -Filter StdUtils.dll | Where-Object { $_.Directory.Name -eq 'x86-unicode' } | Sort-Object FullName | Select-Object -First 1
