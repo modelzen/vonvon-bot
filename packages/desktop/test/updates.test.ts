@@ -63,6 +63,24 @@ describe('desktop update port', () => {
     expect(h.driver.quitAndInstall).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['arm64', 'x64'] as const)('selects the %s update feed while preserving old manifests', async architecture => {
+    const driver = new Driver();
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ version: '1.1.0', feedURL: 'https://updates.example.test/universal', feedURLs: { arm64: 'https://updates.example.test/arm64', x64: 'https://updates.example.test/x64' } })));
+    const updater = new DesktopUpdater({ current: '1.0.0', signed: true, architecture, manifestURL: 'https://updates.example.test/manifest.json', driver, fetch });
+    await updater.check();
+    const pending = updater.install();
+    expect(driver.setFeedURL).toHaveBeenCalledWith({ url: `https://updates.example.test/${architecture}` });
+    driver.emit('update-downloaded'); await pending;
+  });
+
+  it('rejects a cross-origin architecture feed', async () => {
+    const driver = new Driver();
+    const fetch = vi.fn(async () => new Response(JSON.stringify({version: '1.1.0', feedURL: 'https://updates.example.test/universal', feedURLs: { arm64: 'https://attacker.example.test/feed', x64: 'https://updates.example.test/x64' }})));
+    const updater = new DesktopUpdater({ current: '1.0.0', signed: true, architecture: 'arm64', manifestURL: 'https://updates.example.test/manifest.json', driver, fetch });
+    await expect(updater.check()).rejects.toThrow('更新源地址不可信');
+    expect(driver.checkForUpdates).not.toHaveBeenCalled();
+  });
+
   it('rejects a cross-origin feed and never starts the native driver', async () => {
     const h = fixture();
     h.fetch.mockResolvedValueOnce(new Response(JSON.stringify({

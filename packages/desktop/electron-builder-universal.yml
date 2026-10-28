@@ -6,9 +6,9 @@ artifactName: Vonvon-Bot-${version}-${arch}.${ext}
 mac:
   target:
     - target: dmg
-      arch: universal
+      arch: [universal, arm64, x64]
     - target: zip
-      arch: universal
+      arch: [universal, arm64, x64]
   hardenedRuntime: true
   entitlements: entitlements.plist
   entitlementsInherit: entitlements.plist
