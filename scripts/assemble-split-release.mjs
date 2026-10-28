@@ -49,7 +49,7 @@ async function verifyArtifact({architecture, version, input, state, directory, t
   finally { await run('hdiutil', ['detach', volume]); }
 }
 
-/** Assemble three separately notarized candidates. This never builds, signs, uploads, or publishes. */
+/** Assemble two or three separately notarized candidates. This never builds, signs, uploads, or publishes. */
 export async function assembleSplitRelease({ out, universal, arm64, x64, version, sha, repo }, {temporaryRoots, verify = verifyArtifact, configPath = process.env.VONVON_DESKTOP_UPDATE_CONFIG} = {}) {
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version ?? '') || !/^[a-f0-9]{40}$/.test(sha ?? '')) throw new Error('Supply version and exact source SHA');
   if (!repo) throw new Error('Supply the exact source worktree with --repo');
@@ -57,8 +57,9 @@ export async function assembleSplitRelease({ out, universal, arm64, x64, version
   const output = await canonicalPath(out);
   const roots = temporaryRoots ?? await Promise.all([tmpdir(), '/tmp', '/private/tmp'].map(canonicalPath));
   assertOutputLocation(source, output, roots);
-  const inputs = { universal: await realpath(universal), arm64: await realpath(arm64), x64: await realpath(x64) };
-  if (new Set(Object.values(inputs)).size !== 3 || Object.values(inputs).some(path => output === path || output.startsWith(path + '/') || path.startsWith(output + '/'))) throw new Error('Use distinct, non-overlapping evidence directories');
+  const architectures = universal ? ['universal', 'arm64', 'x64'] : ['arm64', 'x64'];
+  const inputs = { ...(universal ? {universal: await realpath(universal)} : {}), arm64: await realpath(arm64), x64: await realpath(x64) };
+  if (new Set(Object.values(inputs)).size !== architectures.length || Object.values(inputs).some(path => output === path || output.startsWith(path + '/') || path.startsWith(output + '/'))) throw new Error('Use distinct, non-overlapping evidence directories');
   if (await readdir(output).then(files => files.length > 0).catch(error => error.code === 'ENOENT' ? false : Promise.reject(error))) throw new Error('Split release output must be empty');
   const releases = {};
   for (const [architecture, path] of Object.entries(inputs)) {
@@ -92,7 +93,8 @@ export async function assembleSplitRelease({ out, universal, arm64, x64, version
     }
     releases[architecture] = { inventory, state, path };
   }
-  const baseline = releases.universal.state.context;
+  const reference = releases[universal ? 'universal' : 'arm64'];
+  const { architecture: ignoredArchitecture, ...baseline } = reference.state.context;
   let teamIdentifier;
   if (verify === verifyArtifact) {
     if (!configPath) throw new Error('Supply the original external update configuration');
@@ -103,16 +105,16 @@ export async function assembleSplitRelease({ out, universal, arm64, x64, version
   }
   for (const architecture of ['arm64', 'x64']) {
     const { architecture: ignored, ...other } = releases[architecture].state.context;
-    if (JSON.stringify(other) !== JSON.stringify(baseline)) throw new Error(`${architecture} release inputs differ from universal`);
-    if (JSON.stringify(releases[architecture].inventory.baseline) !== JSON.stringify(releases.universal.inventory.baseline)) throw new Error('Release baselines differ');
+    if (JSON.stringify(other) !== JSON.stringify(baseline)) throw new Error(`${architecture} release inputs differ from reference candidate`);
+    if (JSON.stringify(releases[architecture].inventory.baseline) !== JSON.stringify(reference.inventory.baseline)) throw new Error('Release baselines differ');
   }
   await mkdir(output, { recursive: true });
   const lock = join(output, '.assemble.lock');
   await writeFile(lock, String(process.pid), {flag: 'wx'});
   try {
-    for (const architecture of ['universal', 'arm64', 'x64']) await verify({architecture, version, input: inputs[architecture], state: releases[architecture].state, directory: join(output, `verification-${architecture}`), teamIdentifier});
+    for (const architecture of architectures) await verify({architecture, version, input: inputs[architecture], state: releases[architecture].state, directory: join(output, `verification-${architecture}`), teamIdentifier});
     const files = [];
-    for (const architecture of ['universal', 'arm64', 'x64']) {
+    for (const architecture of architectures) {
       for (const ext of ['zip', 'dmg']) {
         const name = `Vonvon-Bot-${version}-${architecture}.${ext}`;
         await copyFile(join(inputs[architecture], name), join(output, name), constants.COPYFILE_EXCL);
@@ -127,11 +129,11 @@ export async function assembleSplitRelease({ out, universal, arm64, x64, version
       await writeFile(join(output, name), JSON.stringify(feed, null, 2) + '\n', {flag: 'wx'});
       files.push(await artifactRecord(join(output, name)));
     }
-    const metadata = releaseMetadata(version, new Date().toISOString());
+    const metadata = releaseMetadata(version, new Date().toISOString(), '', universal ? 'universal' : 'arm64');
     metadata.manifest.feedURLs = Object.fromEntries(['arm64', 'x64'].map(architecture => [architecture, new URL(`feed-${version}-${architecture}.json`, manifestURL).href]));
     await writeFile(join(output, 'manifest.json'), JSON.stringify(metadata.manifest, null, 2) + '\n', {flag: 'wx'});
     files.push(await artifactRecord(join(output, 'manifest.json')));
-    const original = releases.universal.inventory;
+    const original = reference.inventory;
     const inventory = { ...original, files, verification: Object.fromEntries(Object.entries(releases).map(([key, release]) => [key, release.inventory.verification])), notarization: Object.fromEntries(Object.entries(releases).map(([key, release]) => [key, release.inventory.notarization])) };
     await writeFile(join(output, 'release-inventory.json'), JSON.stringify(inventory, null, 2) + '\n', {flag: 'wx'});
     const recorded = [...files, await artifactRecord(join(output, 'release-inventory.json'))];
@@ -150,7 +152,7 @@ const invoked = process.argv[1] ? await realpath(resolve(process.argv[1])).catch
 if (invoked && invoked === await realpath(fileURLToPath(import.meta.url))) {
   try {
     const { values } = parseArgs({ options: Object.fromEntries(['out', 'universal', 'arm64', 'x64', 'version', 'sha', 'repo'].map(name => [name, {type: 'string'}])) });
-    if (['out', 'universal', 'arm64', 'x64', 'version', 'sha', 'repo'].some(name => !values[name])) throw new Error('Supply --repo, --out, --universal, --arm64, --x64, --version and --sha');
+    if (['out', 'arm64', 'x64', 'version', 'sha', 'repo'].some(name => !values[name])) throw new Error('Supply --repo, --out, --arm64, --x64, --version and --sha; --universal is optional');
     console.log(JSON.stringify(await assembleSplitRelease(values), null, 2));
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
