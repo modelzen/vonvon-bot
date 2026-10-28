@@ -52,7 +52,7 @@ export async function verifyWindowsRuntime(appDirectory, { timeoutMs = 90000, re
       let lock;
       try { lock = JSON.parse(await readFile(join(home, 'daemon.pid'), 'utf8')); }
       catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
-      if (lock?.pid === child.pid && /^127\.0\.0\.1:\d+$/.test(lock.listen ?? '')) { ready = lock; break; }
+      if (lock && child.pid && lock.pid === child.pid && /^127\.0\.0\.1:\d+$/.test(lock.listen ?? '')) { ready = lock; break; }
       await pause(100);
     }
     if (!ready) throw new Error(`Packaged daemon readiness timed out: ${stderr}`);

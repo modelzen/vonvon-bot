@@ -72,7 +72,7 @@ Invoke-Node @('scripts/windows-build-tools.mjs','probe',$unpackedExe,$Architectu
 Invoke-Node @('scripts/windows-runtime-smoke.mjs',(Split-Path $zipExe[0].FullName))
 $installer = Join-Path $packages "Vonvon-Bot-Setup-$version-$Architecture.exe"
 if ((Get-AuthenticodeSignature -LiteralPath $installer).Status -ne 'NotSigned') { throw 'Expected unsigned installer' }
-$acceptArgs = @{ Installer = $installer; Evidence = (Join-Path $outPath 'acceptance'); Architecture = $Architecture; SourceSha = $sha }
+$acceptArgs = @{ Installer = $installer; Evidence = (Join-Path $outPath 'acceptance'); Architecture = $Architecture; SourceSha = $sha; ReferenceDirectory = $unpacked }
 if ($PauseForUi) { $acceptArgs.PauseForUi = $true }
 & (Join-Path $PSScriptRoot 'accept-windows.ps1') @acceptArgs
 Invoke-Node @('scripts/package-windows.mjs',$packages,$sha,(Join-Path $unpacked 'Vonvon Bot.exe'),$zipExe[0].FullName,$Architecture)
