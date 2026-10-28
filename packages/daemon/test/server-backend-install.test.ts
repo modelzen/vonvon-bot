@@ -368,13 +368,13 @@ it.each(['end', 'close', 'error'] as const)('decodes interleaved split reads and
     if (finish === 'error') child.emit('error', new Error('fake spawn error'));
     stderr.emit('data', cjk.subarray(1));
     stdout.emit('data', emoji.subarray(2));
-    expect(progress.join('')).toBe('中😀');
+    expect(progress.join('')).toBe('\n正在下载并安装组件…\n中😀');
     stdout.emit('data', Buffer.from([0xf0]));
     stderr.emit('data', Buffer.from([0xe4]));
     if (finish === 'end') { stdout.emit('end'); stderr.emit('end'); }
     child.emit('close', 0);
     child.emit('close', 0);
-    expect(progress.join('')).toBe('中😀\ufffd\ufffd');
+    expect(progress.join('')).toBe('\n正在下载并安装组件…\n中😀\ufffd\ufffd');
     await result;
     expect(child.kill).not.toHaveBeenCalled();
   } finally { await rm(home, { recursive: true, force: true }); }
