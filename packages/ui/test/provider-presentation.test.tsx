@@ -306,6 +306,14 @@ it('describes an undetected Claude Code CLI without conflating it with SDK readi
   expect(harness.installTool).toHaveBeenCalledWith('claude', false);
 });
 
+it('prompts the user to verify Claude Code when the local executable fails', () => {
+  harness.cli = {tool: 'claude', installation: 'external', version: null, executable: '/bin/claude', canUninstall: false, runtimeStatus: 'failed'};
+  resetRender();
+  const detail = nodes(ProviderPreparation({provider: 'claude', snapshot: snapshot([tool('claude', 'installed', 'unknown')]), ready: true, busy: false, run, management: true}));
+  expect(detail.some(node => node.type === 'summary' && [node.props.children].flat().join('') === 'Claude Code · 无法启动')).toBe(true);
+  expect(detail.some(node => node.props.role === 'status' && node.props.className === 'provider-problem')).toBe(true);
+});
+
 it('keeps managed Claude SDK maintenance separate from account connection and CLI management', () => {
   const data = snapshot([tool('claude', 'installed', 'signedOut')]);
   resetRender();

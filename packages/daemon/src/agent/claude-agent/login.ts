@@ -29,7 +29,7 @@ export function loginFromAccount(account: ClaudeAccount | undefined): ClaudeLogi
     return { state: 'signedIn', message: `已登录 claude.ai 账号（${account.subscriptionType}）。`, account: {kind, ...(/^[a-z0-9_-]{1,80}$/.test(plan) ? {planType: plan} : {}), apiProvider: 'firstParty'} };
   }
   const source = [account.apiKeySource, account.tokenSource].find(value => value && value !== 'none');
-  if (source) return { state: 'signedIn', message: `已登录，凭据来自 ${source}。`, account: {kind: account.apiKeySource && account.apiKeySource !== 'none' ? 'api' : 'unknown', apiProvider: 'firstParty'} };
+  if (source) return { state: 'signedIn', message: `已连接，凭据来自 ${source}。`, account: {kind: account.apiKeySource && account.apiKeySource !== 'none' || source === 'ANTHROPIC_AUTH_TOKEN' || source === 'ANTHROPIC_API_KEY' ? 'api' : 'unknown', apiProvider: 'firstParty'} };
   return account.tokenSource === 'none' || account.apiKeySource === 'none' ? { state: 'signedOut', message: CLAUDE_SIGNED_OUT_MESSAGE } : null;
 }
 

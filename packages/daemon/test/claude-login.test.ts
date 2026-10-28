@@ -10,10 +10,24 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+it('does not report an API credential as usable when the SDK native runtime is missing', async () => {
+  vi.stubEnv('ANTHROPIC_API_KEY', 'secret-fixture');
+  const sdk = {query: () => {throw new Error('Native CLI binary for darwin-arm64 not found');}} as unknown as ClaudeSdkFacade;
+  const backend = new ClaudeAgentBackend(async () => sdk);
+  const result = await backend.loginStatus({refresh: true});
+  expect(result.state).toBe('unknown');
+  expect(result.message).toContain('重新安装 SDK');
+  expect(result.message).not.toContain('secret-fixture');
+});
+
+it('recognizes Claude user settings using an API authentication token', () => {
+  expect(loginFromAccount({tokenSource: 'ANTHROPIC_AUTH_TOKEN', apiProvider: 'firstParty'})).toMatchObject({state: 'signedIn', account: {kind: 'api'}});
+});
+
 describe('Claude login mapping', () => {
   it('maps the account the CLI reports', () => {
     expect(loginFromAccount({ subscriptionType: 'max', tokenSource: 'claude.ai', apiProvider: 'firstParty' })).toMatchObject({ state: 'signedIn' });
-    expect(loginFromAccount({ apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'none', apiProvider: 'firstParty' })).toEqual({ state: 'signedIn', message: '已登录，凭据来自 ANTHROPIC_API_KEY。', account: {kind: 'api', apiProvider: 'firstParty'} });
+    expect(loginFromAccount({ apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'none', apiProvider: 'firstParty' })).toEqual({ state: 'signedIn', message: '已连接，凭据来自 ANTHROPIC_API_KEY。', account: {kind: 'api', apiProvider: 'firstParty'} });
     expect(loginFromAccount({ tokenSource: 'CLAUDE_CODE_OAUTH_TOKEN' })).toMatchObject({ state: 'signedIn' });
     expect(loginFromAccount({ tokenSource: 'none', apiProvider: 'firstParty' })).toEqual({ state: 'signedOut', message: CLAUDE_SIGNED_OUT_MESSAGE });
     expect(loginFromAccount({ apiKeySource: 'none' })).toEqual({ state: 'signedOut', message: CLAUDE_SIGNED_OUT_MESSAGE });

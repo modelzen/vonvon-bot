@@ -45,6 +45,15 @@ it.skipIf(process.platform === 'win32')('finds native Claude Code when the deskt
   } finally { await service.close(); }
 });
 
+it.skipIf(process.platform === 'win32')('reports a detected Claude executable that cannot start', async () => {
+  const { dir, service } = await fixture();
+  const cli = join(dir, 'claude');
+  await writeFile(cli, '#!/bin/sh\necho "native binary not installed" >&2\nexit 1\n', { mode: 0o700 });
+  try {
+    expect(await service['inspect']('claude')).toMatchObject({ installation: 'external', executable: cli, version: null, runtimeStatus: 'failed' });
+  } finally { await service.close(); }
+});
+
 it.skipIf(process.platform === 'win32')('finds nvm Claude Code outside the desktop PATH and keeps explicit PATH precedence', async () => {
   const { dir, service } = await fixture();
   const nvm = join(dir, '.nvm', 'versions', 'node');

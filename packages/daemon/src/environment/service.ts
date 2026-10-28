@@ -281,6 +281,7 @@ export class EnvironmentService {
       latestVersion: latest,
       updateAvailable: version && latest ? version !== latest : null,
       canUninstall: Boolean(managedVersion),
+      ...(tool === "claude" && resolved ? { runtimeStatus: result ? (result.exitCode === 0 ? "ready" as const : "failed" as const) : "unknown" as const } : {}),
       ...(compatibility ? { compatibility } : {}),
     };
   }
