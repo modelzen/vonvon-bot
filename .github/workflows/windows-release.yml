@@ -48,11 +48,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
           npm run typecheck
           if ($LASTEXITCODE -ne 0) { throw 'Typecheck failed' }
-          node --test scripts/package-windows.test.mjs
+          node --test scripts/package-windows.test.mjs scripts/publish-windows.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Package validation tests failed' }
-          npx --no-install vitest run packages/daemon/test/environment-windows-launch.test.ts packages/daemon/test/provider/windows-command-line.test.ts packages/daemon/test/provider/windows-supervisor.test.ts
+          npm run test -w @vonvon/daemon -- test/environment-windows-launch.test.ts test/provider/windows-command-line.test.ts test/provider/windows-supervisor.test.ts test/windows-owned-process.test.ts test/data-compatibility.test.ts test/register-bot.test.ts
           if ($LASTEXITCODE -ne 0) { throw 'Windows daemon tests failed' }
-          npm run test -w @vonvon/desktop
+          npm run test -w @vonvon/desktop -- test/windows-updates.test.ts test/tray.test.ts test/daemon-dependencies.test.ts
           if ($LASTEXITCODE -ne 0) { throw 'Desktop tests failed' }
       - name: Package unsigned NSIS installer and ZIP
         working-directory: packages/desktop
