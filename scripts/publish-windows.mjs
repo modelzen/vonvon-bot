@@ -22,6 +22,11 @@ export function validateBuildRun(run) {
       !['push', 'workflow_dispatch'].includes(run.event) || !/^[a-f0-9]{40}$/.test(run.head_sha)) {
     throw new Error('Expected a successful Windows release build from the owning repository');
   }
+  if (run.display_title?.startsWith('windows-release ')) {
+    const pinned = /^windows-release (\d+\.\d+\.\d+) ([a-f0-9]{40}) ([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/.exec(run.display_title);
+    if (!pinned || run.event !== 'workflow_dispatch' || run.head_branch !== 'main') throw new Error('Pinned Windows builds must be dispatched through main with complete source metadata');
+    return pinned[2];
+  }
   return run.head_sha;
 }
 
@@ -52,11 +57,21 @@ async function ghJSON(args, env) {
   return JSON.parse(result.stdout);
 }
 
-export async function downloadBuild({ runId, out, env, execute = exec, api = ghJSON }) {
+export async function downloadBuild({ runId, out, env, execute = exec, api = ghJSON, expectedSha, expectedVersion }) {
   if (!/^[1-9]\d*$/.test(String(runId))) throw new Error('Use a GitHub Actions --run-id');
   await mkdir(dirname(out), { recursive: true });
   const run = await api(['api', `repos/${repository}/actions/runs/${runId}`], env);
   const sourceSha = validateBuildRun(run);
+  if (expectedSha && expectedSha !== sourceSha) throw new Error('Windows run differs from the expected release SHA');
+  if (run.display_title?.startsWith('windows-release ')) {
+    // The Actions head SHA identifies the workflow definition; the input identifies checkout source.
+    // Both must remain on main. Keep both in provenance rather than weakening head_sha to a label.
+    for (const sha of new Set([sourceSha, run.head_sha])) {
+      const comparison = await api(['api', `repos/${repository}/compare/${sha}...main`], env);
+      if (!['ahead', 'identical'].includes(comparison.status) || comparison.merge_base_commit?.sha !== sha) throw new Error('Pinned Windows source or workflow definition is not on main');
+    }
+    if (expectedVersion && run.display_title.split(' ')[1] !== expectedVersion) throw new Error('Pinned Windows run version differs from the expected version');
+  }
   // A rerun may produce a different attempt; retain its exact provenance alongside the bytes.
   const listing = await api(['api', `repos/${repository}/actions/runs/${runId}/artifacts?per_page=100`], env);
   const artifacts = listing.artifacts?.filter(item => !item.expired && new RegExp(`^windows-unsigned-\\d+\\.\\d+\\.\\d+-${sourceSha.slice(0, 12)}$`).test(item.name));
@@ -67,16 +82,17 @@ export async function downloadBuild({ runId, out, env, execute = exec, api = ghJ
     const staging = await mkdtemp(join(dirname(out), '.windows-download-'));
     try {
       await execute('gh', ['run', 'download', String(runId), '--repo', repository, '--name', artifacts[0].name, '--dir', staging], { env });
-      await verifyWindowsArtifacts(staging, { sourceSha });
-      await writeFile(join(staging, 'github-build.json'), json({ runId: Number(runId), runAttempt: run.run_attempt, sourceSha, artifactId: artifacts[0].id, artifactName: artifacts[0].name, artifactDigest: artifacts[0].digest, url: run.html_url }), { flag: 'wx' });
+      await verifyWindowsArtifacts(staging, { sourceSha, version: expectedVersion });
+      await writeFile(join(staging, 'github-build.json'), json({ runId: Number(runId), runAttempt: run.run_attempt, sourceSha, workflowSha: run.head_sha, artifactId: artifacts[0].id, artifactName: artifacts[0].name, artifactDigest: artifacts[0].digest, url: run.html_url }), { flag: 'wx' });
       if (entries) await rmdir(out); // Only an empty dedicated destination can be removed.
       await rename(staging, out);
     } finally { await rm(staging, { recursive: true, force: true }); }
   } else {
     const saved = JSON.parse(await readFile(provenancePath, 'utf8'));
-    if (saved.runId !== Number(runId) || saved.sourceSha !== sourceSha || saved.artifactId !== artifacts[0].id || saved.artifactDigest !== artifacts[0].digest) throw new Error('Output directory belongs to a different build; use a fresh directory');
+    if (saved.runId !== Number(runId) || saved.sourceSha !== sourceSha || (saved.workflowSha && saved.workflowSha !== run.head_sha) || saved.artifactId !== artifacts[0].id || saved.artifactDigest !== artifacts[0].digest) throw new Error('Output directory belongs to a different build; use a fresh directory');
   }
-  const inventory = await verifyWindowsArtifacts(out, { sourceSha });
+  const inventory = await verifyWindowsArtifacts(out, { sourceSha, version: expectedVersion });
+  if (run.display_title?.startsWith('windows-release ') && inventory.version !== run.display_title.split(' ')[1]) throw new Error('Pinned run version does not match artifact inventory');
   if (artifacts[0].name !== `windows-unsigned-${inventory.version}-${sourceSha.slice(0, 12)}`) throw new Error('Artifact version does not match inventory');
   return inventory;
 }
@@ -145,7 +161,7 @@ export async function publishWindowsObjects({ out, inventory, config, client, fe
 
 async function main() {
   const { values } = parseArgs({ options: {
-    'run-id': { type: 'string' }, out: { type: 'string' }, 'cos-config': { type: 'string' },
+    'run-id': { type: 'string' }, out: { type: 'string' }, 'cos-config': { type: 'string' }, sha: { type: 'string' }, version: { type: 'string' },
     'download-only': { type: 'boolean' }, help: { type: 'boolean' },
   } });
   if (values.help) {
@@ -158,7 +174,7 @@ async function main() {
   const config = values['download-only'] ? undefined : await readWindowsCosConfig(values['cos-config']);
   const privateNames = config ? cosCredentialEnvNames(config) : [];
   const childEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !privateNames.includes(name)));
-  const inventory = await downloadBuild({ runId: values['run-id'], out, env: childEnv });
+  const inventory = await downloadBuild({ runId: values['run-id'], out, env: childEnv, expectedSha: values.sha, expectedVersion: values.version });
   if (values['download-only']) { console.log(json(inventory)); return; }
   for (const name of privateNames) if (!process.env[name]) throw new Error(`Missing credential environment variable: ${name}`);
   const COS = await loadPinnedSdk(config.sdkModule);

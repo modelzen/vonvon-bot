@@ -23,6 +23,33 @@ test('trusts only successful owning-repository Windows workflow runs', () => {
   for (const change of [{ conclusion: 'failure' }, { event: 'pull_request' }, { path: '.github/workflows/ci.yml' }, { head_repository: { full_name: 'other/repo' } }]) assert.throws(() => validateBuildRun({ ...run, ...change }));
 });
 
+test('pinned dispatch binds source separately from the workflow SHA and accepts only main dispatches', () => {
+  const run = { repository: { full_name: 'modelzen/vonvon-bot' }, head_repository: { full_name: 'modelzen/vonvon-bot' }, path: '.github/workflows/windows-release.yml',
+    status: 'completed', conclusion: 'success', event: 'workflow_dispatch', head_sha: 'b'.repeat(40), head_branch: 'main',
+    display_title: `windows-release ${version} ${sourceSha} 12345678-1234-1234-1234-123456789abc` };
+  assert.equal(validateBuildRun(run), sourceSha);
+  for (const change of [{ head_branch: 'dev' }, { event: 'push' }, { display_title: 'windows-release incomplete' }, { head_sha: 'short' }]) assert.throws(() => validateBuildRun({ ...run, ...change }));
+});
+
+test('pinned source and workflow SHA must both have verified ancestry on main before any artifact download', async () => {
+  const workflowSha = 'b'.repeat(40), calls = [];
+  const run = { repository: { full_name: 'modelzen/vonvon-bot' }, head_repository: { full_name: 'modelzen/vonvon-bot' }, path: '.github/workflows/windows-release.yml',
+    status: 'completed', conclusion: 'success', event: 'workflow_dispatch', head_sha: workflowSha, head_branch: 'main',
+    display_title: `windows-release ${version} ${sourceSha} 12345678-1234-1234-1234-123456789abc` };
+  const api = async args => {
+    calls.push(args[1]);
+    if (args[1].includes('/compare/')) {
+      const sha = args[1].match(/compare\/([a-f0-9]+)\.\.\./)[1];
+      return { status: sha === workflowSha ? 'diverged' : 'ahead', merge_base_commit: { sha } };
+    }
+    return run;
+  };
+  await assert.rejects(downloadBuild({ runId: 123, out: '/unused', api, expectedSha: sourceSha, expectedVersion: version }), /not on main/);
+  assert.ok(calls.some(path => path.includes(`/compare/${sourceSha}...main`)));
+  assert.ok(calls.some(path => path.includes(`/compare/${workflowSha}...main`)));
+  await assert.rejects(downloadBuild({ runId: 123, out: '/unused', api, expectedSha: workflowSha }), /expected release SHA/);
+});
+
 test('unsigned publication never schedules an update feed or Mac object', () => {
   const objects = windowsObjectPlan(inventory);
   assert.equal(objects.length, 3);
