@@ -19,7 +19,7 @@ export function TodayHome({snapshot, onSetup, onRegister, onOpenUsage, disabled}
 }
 
 const settingsEntries: {page: Page; title: string; description: string; icon: LucideIcon}[] = [
-  {page: 'providers', title: 'Provider', description: 'Codex 与 Claude 的安装、登录和模型', icon: Cpu},
+  {page: 'providers', title: 'Provider', description: 'Codex 与 Claude 的安装、本机配置和模型', icon: Cpu},
   {page: 'environment', title: '工具与连接', description: '飞书 CLI 与 MCP 连接', icon: Wrench},
   {page: 'secrets', title: '决策模型', description: '模型服务与密钥', icon: Cpu},
   {page: 'usage', title: '用量', description: '额度与使用记录', icon: ChartNoAxesColumn},
