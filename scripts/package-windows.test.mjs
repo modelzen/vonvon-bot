@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { createWindowsInventory, peMachine, validateWindowsInventory, verifyLatestYml, verifyWindowsArtifacts } from './package-windows.mjs';
+import { combineWindowsArtifacts, createWindowsInventory, peMachine, validateWindowsAcceptance, validateWindowsInventory, verifyLatestYml, verifyWindowsArtifacts } from './package-windows.mjs';
 
 const version = '0.7.2';
 const sourceSha = '1234567890abcdef1234567890abcdef12345678';
@@ -18,7 +18,10 @@ function pe(machine = 0x8664) {
   bytes.writeUInt16LE(machine, 68);
   return bytes;
 }
-async function fixture(t) {
+async function fixture(t, architecture = 'x64') {
+  const base = `Vonvon-Bot-${version}-windows-${architecture}`;
+  const setup = `Vonvon-Bot-Setup-${version}-${architecture}`;
+  const feed = architecture === 'arm64' ? 'latest-arm64.yml' : 'latest.yml';
   const out = await mkdtemp(join(tmpdir(), 'vonvon-windows-package-'));
   t.after(() => rm(out, { recursive: true, force: true }));
   const installer = pe(0x14c); // An NSIS bootstrapper can be 32-bit.
@@ -28,11 +31,11 @@ async function fixture(t) {
     writeFile(join(out, `${setup}.exe`), installer),
     writeFile(join(out, `${base}.zip`), 'zip fixture'),
     writeFile(join(out, `${setup}.exe.blockmap`), 'blockmap fixture'),
-    writeFile(join(out, 'latest.yml'), yaml),
-    writeFile(join(out, 'unpacked.exe'), pe()),
-    writeFile(join(out, 'zipped.exe'), pe()),
+    writeFile(join(out, feed), yaml),
+    writeFile(join(out, 'unpacked.exe'), pe(architecture === 'arm64' ? 0xaa64 : 0x8664)),
+    writeFile(join(out, 'zipped.exe'), pe(architecture === 'arm64' ? 0xaa64 : 0x8664)),
   ]);
-  const options = { out, version, sourceSha, unpackedExe: join(out, 'unpacked.exe'), zipExe: join(out, 'zipped.exe') };
+  const options = { out, version, sourceSha, architecture, unpackedExe: join(out, 'unpacked.exe'), zipExe: join(out, 'zipped.exe') };
   return { out, options, yaml };
 }
 
@@ -52,6 +55,40 @@ test('inventory ties unsigned x64 payload and all four artifacts to the source S
   }
   assert.deepEqual(JSON.parse(await readFile(join(out, 'windows-release-inventory.json'), 'utf8')), inventory);
   assert.deepEqual(await verifyWindowsArtifacts(out, { version, sourceSha }), inventory);
+});
+
+test('ARM64 inventory requires ARM64 PE payload and its separate feed', async t => {
+  const h = await fixture(t, 'arm64');
+  const inventory = await createWindowsInventory(h.options);
+  assert.equal(inventory.architecture, 'arm64');
+  assert.equal(inventory.artifacts[3].file, 'latest-arm64.yml');
+  await writeFile(h.options.unpackedExe, pe());
+  await assert.rejects(createWindowsInventory(h.options), /not arm64/);
+});
+
+test('combined downloads require both native installer acceptance reports for matching bytes and source', async t => {
+  const archs = ['x64', 'arm64'], inputs = [];
+  for (const architecture of archs) {
+    const h = await fixture(t, architecture);
+    const inventory = await createWindowsInventory(h.options);
+    const report = { architecture, hostArchitecture: architecture, sourceSha, installerSha256: inventory.artifacts[0].sha256, passed: true,
+      steps: ['fresh-install','overwrite-install','uninstall','reinstall-after-uninstall','reinstall-after-0.7.5-orphan'].map(name => ({ name, passed: true })) };
+    const expected = { architecture, sourceSha, installerSha256: report.installerSha256 };
+    validateWindowsAcceptance(report, expected);
+    for (const change of [{ hostArchitecture: 'emulated' }, { sourceSha: 'f'.repeat(40) }, { installerSha256: '0'.repeat(64) }, { steps: [] }, { passed: false }]) {
+      assert.throws(() => validateWindowsAcceptance({ ...report, ...change }, expected));
+    }
+    await writeFile(join(h.out, `windows-acceptance-${architecture}.json`), JSON.stringify(report));
+    inputs.push(h.out);
+  }
+  const out = await mkdtemp(join(tmpdir(), 'vonvon-combined-'));
+  t.after(() => rm(out, { recursive: true, force: true }));
+  const combined = await combineWindowsArtifacts(inputs, out);
+  assert.equal(combined.architecture, 'x64+arm64');
+  assert.equal(combined.artifacts.length, 8);
+  await writeFile(join(out, 'windows-acceptance-arm64.json'), '{}');
+  await assert.rejects(verifyWindowsArtifacts(out), /native acceptance/);
+  await assert.rejects(combineWindowsArtifacts([inputs[0]], out), /Both Windows architectures/);
 });
 
 test('publisher verification refuses edited files or untrusted inventory identity', async t => {

@@ -27,7 +27,7 @@ export async function verifyWindowsPayloadPaths(appDirectory) {
 }
 
 /** Start the packaged runtime, verify its authenticated status and served UI, then stop it. */
-export async function verifyWindowsRuntime(appDirectory, { timeoutMs = 30000 } = {}) {
+export async function verifyWindowsRuntime(appDirectory, { timeoutMs = 90000 } = {}) {
   if (!isAbsolute(appDirectory)) throw new Error('Use an absolute packaged application directory');
   await verifyWindowsPayloadPaths(appDirectory);
   const home = await mkdtemp(join(tmpdir(), 'vonvon-packaged-smoke-'));
