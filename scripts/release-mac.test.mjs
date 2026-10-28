@@ -201,6 +201,10 @@ test('release orchestration staples the App before creating either final contain
   const inventory = JSON.parse(await readFile(join(fixture.out, 'release-inventory.json'), 'utf8'));
   assert.equal(inventory.mode, 'rehearsal');
   assert.ok(inventory.files.every(record => record.file !== 'manifest.json' && !record.file.startsWith('feed-')));
+  const timings = (await readFile(join(fixture.out, 'logs/timings.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.ok(['source-build', 'app-submit', 'app-wait', 'final-dmg', 'dmg-submit', 'dmg-wait'].every(label => timings.some(item => item.label === label)));
+  assert.ok(timings.every(item => item.status === 'complete' && item.seconds >= 0 && Date.parse(item.startedAt) <= Date.parse(item.completedAt)));
+  assert.ok(timings.every(item => !Object.hasOwn(item, 'stdout') && !Object.hasOwn(item, 'args')));
   await readFile(join(fixture.out, 'DO-NOT-PUBLISH'));
 });
 
