@@ -52,16 +52,16 @@ node scripts/publish-windows.mjs --run-id RUN_ID --out /absolute/persistent-evid
 
 成功后 `windows-publish-receipt.json` 包含 Windows 版本、源码 SHA、安装包与 ZIP 的大小、SHA-256 和公开 URL。用它填入官网独立 Windows 发布配置，运行官网测试和部署预演后按现有 deploy 脚本上线，并核对网页入口。当前未签名发行只供手动下载安装；`latest.yml` 留作构建证据，不上传为 stable 更新源。网站须如实说明未签名和应用内更新不可用。
 
-The `Windows release build` GitHub Actions workflow builds the exact dispatched commit on the hosted `windows-2025` runner. It also runs for pushes to `codex/windows-release-automation` so the workflow can be checked before it reaches the default branch. Routine builds need no local Windows VM.
+The `Windows release build` GitHub Actions workflow builds the exact dispatched commit on native `windows-2025` x64 and `windows-11-arm` ARM64 runners. Feature branches can be checked by manual dispatch before reaching the default branch. Routine builds need no local Windows VM.
 
 The two native jobs invoke the shared build-windows.ps1 entry point with x64 or arm64. It checks the payload PE machine and actual runtime architecture, ZIP identity, FileVersion and unsigned state, disabled Windows updates and updater metadata. Each final installer hash is bound to a real install/uninstall/reinstall report. The collect job accepts only matching source/version and both native reports before producing the combined windows-release-inventory.json.
 
-The uploaded GitHub artifact is named `windows-unsigned-<version>-<first 12 SHA characters>`. It contains the installer, ZIP, installer blockmap, `latest.yml`, and inventory. The job has read-only repository permission and no COS credentials or publication step. The unsigned build has Windows automatic updates disabled; `latest.yml` is retained as build evidence and must not be promoted to the stable update feed. A separate publication process may copy the versioned installer, ZIP, and blockmap after verifying the source run and hashes.
+The combined GitHub artifact is named `windows-unsigned-<version>-<first 12 SHA characters>`. It contains both installers, ZIPs and blockmaps, `latest.yml` and `latest-arm64.yml`, both acceptance reports and the combined inventory. The workflow has read-only repository permission and no COS credentials or publication step. The unsigned build has Windows automatic updates disabled; both feeds remain evidence and must not be promoted to the stable update feed. A separate publication process may copy versioned installers, ZIPs and blockmaps after verifying the run, hashes and native acceptance reports.
 
 To reproduce the package verification after a local Windows build, extract the ZIP and run:
 
 ```powershell
-node scripts/package-windows.mjs packages/desktop/dist/package <40-character-source-sha> "packages/desktop/dist/package/win-unpacked/Vonvon Bot.exe" "<extracted-zip>/Vonvon Bot.exe"
+node scripts/package-windows.mjs C:/dedicated/arm64/packages <40-character-source-sha> "C:/dedicated/arm64/packages/win-arm64-unpacked/Vonvon Bot.exe" "<extracted-zip>/Vonvon Bot.exe" arm64
 ```
 
-The script refuses missing artifacts, stale or conflicting updater metadata, a non-x64 application executable, or an existing inventory. Use a clean output directory for each attempt.
+The script refuses missing artifacts, conflicting updater metadata, a PE machine different from the requested x64/arm64 architecture, or an existing inventory. Use a clean output directory for each attempt. Combination also requires both native reports for the exact installer hashes and matching source/version.
