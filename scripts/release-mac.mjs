@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, lstat, mkdir, open, readFile, realpath, readdir, writeFile, unlink } from 'node:fs/promises';
+import { access, appendFile, lstat, mkdir, open, readFile, realpath, readdir, writeFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { assertSecureTransport, readStableManifest } from './verify-public-release.mjs';
 import { cosCredentialEnvNames, readCosConfig, readCosReleaseEvidence } from './release-cos-evidence.mjs';
@@ -140,12 +140,20 @@ export async function releaseMac(options, dependencies = {}) {
   const logs = join(out, 'logs');
   await mkdir(logs, { recursive: true });
   const run = async (label, command, args) => {
+    const startedAt = new Date().toISOString();
+    const timing = async status => {
+      const completedAt = new Date().toISOString();
+      await appendFile(join(logs, 'timings.jsonl'), JSON.stringify({ label, status, startedAt, completedAt,
+        seconds: (Date.parse(completedAt) - Date.parse(startedAt)) / 1000 }) + '\n');
+    };
     try {
       const r = await execute(command, args, { cwd: repo, env: label === 'source-build' ? { ...childEnv, HOME: options['build-home'] } : childEnv, timeout: 20 * 60_000, maxBuffer: 16 * 1024 * 1024 });
       await writeFile(join(logs, `${label}.log`), label === 'notary-credentials' ? 'Credentials verified; history omitted.\n' : redact(r.stdout + r.stderr));
+      await timing('complete');
       return r;
     } catch (e) {
       await writeFile(join(logs, `${label}.log`), redact((e.stdout ?? '') + (e.stderr ?? '') + '\n' + e.message));
+      await timing('failed-or-interrupted');
       throw new Error(`${label} failed; inspect its redacted log`, { cause: e });
     }
   };
