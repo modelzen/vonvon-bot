@@ -281,6 +281,7 @@ export class EnvironmentService {
       latestVersion: latest,
       updateAvailable: version && latest ? version !== latest : null,
       canUninstall: Boolean(managedVersion),
+      ...(tool === "claude" && resolved ? { runtimeStatus: result ? (result.exitCode === 0 ? "ready" as const : "failed" as const) : "unknown" as const } : {}),
       ...(compatibility ? { compatibility } : {}),
     };
   }
@@ -402,10 +403,12 @@ export class EnvironmentService {
   }
 
   private async startLogin(tool: EnvironmentTool): Promise<EnvironmentReply> {
-    if (tool === "codex") return refused("core-login-required", "请通过 Codex 授权入口完成设备码登录。");
+    if (tool === "codex" || tool === "claude") return refused("provider-configuration-required", tool === "codex"
+      ? "请先在 Codex App 或 Codex CLI 中完成登录或自定义模型配置，再回到 Vonvon 检测。"
+      : "请先在 Claude Code 中完成登录或自定义 API、模型配置，再回到 Vonvon 检测。");
     const resolved = await this.resolveTool(tool);
     if (!resolved) return refused("tool-missing", "请先安装工具。");
-    const args = tool === "claude" ? ["auth", "login"] : ["auth", "login", "--recommend", "--json"];
+    const args = ["auth", "login", "--recommend", "--json"];
     return this.startOperation(resolved.executable, args, { kind: "login", tool }, 5 * 60_000);
   }
 

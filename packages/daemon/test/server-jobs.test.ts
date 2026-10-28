@@ -42,13 +42,20 @@ describe('job lifetimes', () => {
 
   it('keeps Codex jobs after disconnect and supports cancellation', async () => {
     let state: 'running' | 'cancelled' = 'running';
-    const jobs = manager(fakeService({ startCodexJob: () => ({ id: 'codex-job' }), codexJob: () => ({ id: 'codex-job', type: 'login', state }), cancelCodexJob: async () => { state = 'cancelled'; return { id: 'codex-job', type: 'login', state }; } }));
-    expect(jobs.startCodex('login')).toMatchObject({ kind: 'started' });
+    const jobs = manager(fakeService({ startCodexJob: () => ({ id: 'codex-job' }), codexJob: () => ({ id: 'codex-job', type: 'install', state }), cancelCodexJob: async () => { state = 'cancelled'; return { id: 'codex-job', type: 'install', state }; } }));
+    expect(jobs.startCodex('install')).toMatchObject({ kind: 'started' });
     jobs.detach(peer('gone').value);
     expect(jobs.snapshot()[0]?.phase).toBe('running');
     await jobs.cancel(jobIdSchema.parse('codex-job'));
     expect(jobs.snapshot()[0]?.phase).toBe('cancelled');
   });
+});
+
+it('guides legacy Codex login requests without starting authentication', () => {
+  const startCodexJob = vi.fn();
+  const jobs = manager(fakeService({startCodexJob}));
+  expect(jobs.startCodex('login')).toMatchObject({kind: 'refused', code: 'provider-configuration-required'});
+  expect(startCodexJob).not.toHaveBeenCalled();
 });
 
 describe('backend admission commit boundary', () => {

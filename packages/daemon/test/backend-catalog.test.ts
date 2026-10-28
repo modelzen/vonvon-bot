@@ -19,7 +19,7 @@ import {
   installedBackendVersion,
   loadBackendDep,
 } from '../src/agent/backend-loader';
-import { buildInstallCommand, stripVersion } from '../src/agent/installer';
+import { buildInstallCommand, claudeNativeInstalled, stripVersion } from '../src/agent/installer';
 import { paths } from '../src/config/paths';
 
 /**
@@ -193,6 +193,21 @@ describe('backend-loader：按需依赖加载（三路径）', () => {
 });
 
 describe('installer：命令构建（不真跑 npm）', () => {
+  it('rejects a missing or mismatched Mac Claude SDK executable', () => {
+    const root = mkdtempSync(join(tmpdir(), 'claude-native-'));
+    try {
+      const sdk = join(root, 'node_modules', '@anthropic-ai', 'claude-agent-sdk');
+      const native = join(root, 'node_modules', '@anthropic-ai', 'claude-agent-sdk-darwin-arm64');
+      mkdirSync(sdk, {recursive: true}); mkdirSync(native, {recursive: true});
+      writeFileSync(join(sdk, 'package.json'), JSON.stringify({version: '0.3.296'}));
+      expect(claudeNativeInstalled(root, 'darwin', 'arm64')).toBe(false);
+      writeFileSync(join(native, 'package.json'), JSON.stringify({version: '0.3.295'}));
+      writeFileSync(join(native, 'claude'), '#!/bin/sh\n', {mode: 0o755});
+      expect(claudeNativeInstalled(root, 'darwin', 'arm64')).toBe(false);
+      writeFileSync(join(native, 'package.json'), JSON.stringify({version: '0.3.296'}));
+      expect(claudeNativeInstalled(root, 'darwin', 'arm64')).toBe(true);
+    } finally { rmSync(root, {recursive: true, force: true}); }
+  });
   it('buildInstallCommand：npm install <pkg> --prefix backendsDir --include=optional + 关进度', () => {
     const { command, args } = buildInstallCommand('@scope/some-ondemand-pkg@0.3.175', {
       prefix: '/u/backends',

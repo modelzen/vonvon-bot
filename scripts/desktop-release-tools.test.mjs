@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { updateConfiguration, verifyDmg, verifyUniversalApp, writeDesktopRelease } from './desktop-release-tools.mjs';
+import { updateConfiguration, verifyDmg, verifyUniversalApp, writeDesktopRelease, writeSplitFeeds } from './desktop-release-tools.mjs';
 import { checkedProductVersion, syncProductVersion } from './product-version.mjs';
 
 const version = '0.7.0';
@@ -158,4 +158,34 @@ test('reserved inventory filename cannot overwrite the updater manifest', async 
     ...release, config: { ...config, manifestURL: 'https://updates.example.test/releases/release-inventory.json' },
   }), /filenames must differ/);
   assert.deepEqual(await readdir(release.out), []);
+});
+
+for (const [architecture, mach] of [['arm64', 'arm64'], ['x64', 'x86_64']]) {
+  test(`accepts only ${architecture} Mach-O files for a ${architecture} release`, async t => {
+    const h = await appFixture(t);
+    const execute = async (command, args) => command.endsWith('lipo') ? {stdout: mach, stderr: ''} : h.execute(command, args);
+    const result = await verifyUniversalApp({ ...h.options, architecture, execute });
+    assert.ok(result.architectures.every(file => file.archs.join() === mach));
+    await assert.rejects(verifyUniversalApp({ ...h.options, architecture }), /architecture/);
+  });
+}
+
+test('split feeds preserve the universal fallback for older clients', async t => {
+  const h = await fixture(t);
+  await writeDesktopRelease(h.release);
+  const releases = {};
+  for (const architecture of ['arm64', 'x64']) {
+    const dmg = `Vonvon-Bot-${version}-${architecture}.dmg`;
+    const zip = `Vonvon-Bot-${version}-${architecture}.zip`;
+    await h.put(dmg, 'dmg'); await h.put(zip, 'zip');
+    releases[architecture] = await writeDesktopRelease({ ...h.release, architecture, out: join(h.release.out, architecture), dmg: join(h.root, dmg), zip: join(h.root, zip) });
+  }
+  await writeSplitFeeds({ out: h.release.out, version, config, releases, publishedAt });
+  const manifest = await json(join(h.release.out, 'latest.json'));
+  assert.equal(manifest.feedURL, `https://updates.example.test/releases/feed-${version}.json`);
+  for (const architecture of ['arm64', 'x64']) {
+    assert.equal(manifest.feedURLs[architecture], `https://updates.example.test/releases/feed-${version}-${architecture}.json`);
+    const feed = await json(join(h.release.out, `feed-${version}-${architecture}.json`));
+    assert.equal(feed.url, `https://updates.example.test/releases/Vonvon-Bot-${version}-${architecture}.zip`);
+  }
 });

@@ -89,7 +89,9 @@ async function releaseFixture(settings = {}) {
   }
   await writeJSON(join(repo, 'packages/desktop/stage/dist/update-config.json'), settings.stageConfig ?? config);
   const calls = [];
-  const archiveFor = kind => join(out, kind === 'app' ? 'app-notary-upload.zip' : 'Vonvon-Bot-0.7.0-universal.dmg');
+  const arch = settings.architecture ?? 'universal';
+  const appDir = arch === 'universal' ? 'mac-universal' : arch === 'arm64' ? 'mac-arm64' : 'mac';
+  const archiveFor = kind => join(out, kind === 'app' ? 'app-notary-upload.zip' : `Vonvon-Bot-0.7.0-${arch}.dmg`);
   const artifactRecord = async path => {
     const bytes = await readFile(path);
     return { file: basename(path), size: bytes.length, sha256: sha256(bytes) };
@@ -128,8 +130,8 @@ async function releaseFixture(settings = {}) {
       } else if (command === process.execPath && args.includes('--input-type=module')) {
         const phase = args.at(-1);
         if (phase === 'app') {
-          await mkdir(join(out, 'mac-universal/Vonvon Bot.app/Contents/Resources'), { recursive: true });
-          await populateApp(join(out, 'mac-universal/Vonvon Bot.app'));
+          await mkdir(join(out, appDir, 'Vonvon Bot.app/Contents/Resources'), { recursive: true });
+          await populateApp(join(out, appDir, 'Vonvon Bot.app'));
         }
         else if (phase === 'dmg') await write(archiveFor('dmg'), 'signed dmg');
         else assert.fail('Unexpected packaging phase');
@@ -144,7 +146,7 @@ async function releaseFixture(settings = {}) {
       } else if (command === '/usr/libexec/PlistBuddy') {
         output.stdout = '0.7.0\n';
       } else if (command === '/usr/bin/lipo') {
-        output.stdout = 'x86_64 arm64\n';
+        output.stdout = arch === 'universal' ? 'x86_64 arm64\n' : arch === 'x64' ? 'x86_64\n' : 'arm64\n';
       } else if (command === 'hdiutil' && args[0] === 'attach') {
         await populateApp(join(root, 'mounted-volume', 'Vonvon Bot.app'));
       } else if (command === 'xcrun' && args[0] === 'notarytool') {
@@ -565,4 +567,28 @@ test('submission recovery requires the Apple job ID as well as the archive hash'
   await assert.rejects(fixture.run({ 'recover-submission': `app=${submissionIDs.app}` }), /job ID/);
   assert.equal((await fixture.readState()).app.id, undefined);
   assert.equal(fixture.calls.filter(isSubmit).length, 1, 'no blind re-upload');
+});
+
+for (const architecture of ['arm64', 'x64']) {
+  test(`${architecture} candidate signs, notarizes and verifies only its own architecture`, async () => {
+    const fixture = await releaseFixture({architecture, realTools: true});
+    const result = await fixture.run({architecture});
+    assert.equal(result.complete, true);
+    assert.equal(result.context.architecture, architecture);
+    const calls = fixture.calls.filter(call => call.command === process.execPath && call.args.includes('--input-type=module'));
+    assert.ok(calls.every(call => call.args.at(-2) === architecture));
+    assert.ok(result.files.some(file => file.file === `Vonvon-Bot-0.7.0-${architecture}.zip`));
+    assert.ok(result.files.some(file => file.file === `Vonvon-Bot-0.7.0-${architecture}.dmg`));
+    assert.ok(fixture.calls.some(call => call.command === 'codesign' && call.args.includes('--architecture') && call.args.includes(architecture === 'x64' ? 'x86_64' : 'arm64')));
+  });
+}
+
+test('single architecture resumes an accepted notarization without submitting the App twice', async () => {
+  const fixture = await releaseFixture({ architecture: 'arm64', dmgStapleFailure: true });
+  await assert.rejects(fixture.run({architecture:'arm64'}), /failed/);
+  const before = fixture.calls.filter(isSubmit).length;
+  fixture.settings.dmgStapleFailure = false;
+  assert.equal((await fixture.run({architecture:'arm64'})).complete, true);
+  assert.equal(fixture.calls.filter(isSubmit).length, before);
+  await assert.rejects(fixture.run({architecture:'x64'}), /different release inputs/);
 });

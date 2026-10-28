@@ -74,7 +74,7 @@ it('needs Codex or Claude installed, signed in and new enough', () => {
   expect(old.steps[1]?.actions).toEqual([{kind: 'claudeLogin', label: '检查登录'}]);
   const missing = toolSteps([tool({tool: 'codex', installation: 'missing', authentication: 'unknown', version: null})]);
   expect(missing.steps[0]?.detail).toContain('Homebrew');
-  expect(toolSteps([tool({tool: 'codex', authentication: 'signedOut'})]).steps[0]?.actions).toEqual([{kind: 'codexLogin', label: '登录 Codex'}]);
+  expect(toolSteps([tool({tool: 'codex', authentication: 'signedOut'})]).steps[0]?.actions).toEqual([{kind: 'environment', label: '查看本机环境'}]);
   expect(toolSteps([tool({tool: 'claude', authentication: 'signedIn', message: '已登录，凭据来自 ANTHROPIC_AUTH_TOKEN。'})]).ready).toBe(true);
 });
 

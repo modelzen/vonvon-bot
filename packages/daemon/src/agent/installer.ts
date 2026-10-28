@@ -1,7 +1,8 @@
 import { mkdir, rm, readFile, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { accessSync, constants, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
+import { backendInstallProgress } from '@vonvon/protocol';
 import { npmInvocation } from '../platform/npm';
 import { spawnProcess } from '../platform/spawn';
 import { paths } from '../config/paths';
@@ -144,6 +145,24 @@ export function buildInstallCommand(
   };
 }
 
+/** npm may exit successfully after silently discarding a failed optional native download. */
+export function claudeNativeInstalled(prefix: string, platform = process.platform, arch = process.arch): boolean {
+  if (platform !== 'darwin' || (arch !== 'arm64' && arch !== 'x64')) return true;
+  const modules = join(prefix, 'node_modules');
+  const sdk = join(modules, '@anthropic-ai', 'claude-agent-sdk');
+  const nativeName = `claude-agent-sdk-darwin-${arch}`;
+  try {
+    const version = JSON.parse(readFileSync(join(sdk, 'package.json'), 'utf8')).version;
+    return [join(modules, '@anthropic-ai', nativeName), join(sdk, 'node_modules', '@anthropic-ai', nativeName)].some(dir => {
+      try {
+        const native = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+        accessSync(join(dir, 'claude'), constants.X_OK);
+        return typeof version === 'string' && native.version === version;
+      } catch { return false; }
+    });
+  } catch { return false; }
+}
+
 /**
  * 按需安装一个后端依赖到用户私装目录。绝不抛错——失败落 {@link InstallResult}.ok=false
  * （HTTP/卡片层据 tail 给诊断）。装完用用户目录的存在性校验；校验不过即视为失败
@@ -188,6 +207,7 @@ async function installInTurn(
   const npm = npmInvocation();
   const { command, args, env } = buildInstallCommand(pkg, { npm });
   log.info('agent', 'backend-install-start', { pkg, npm: npm.args[0] ?? 'PATH' });
+  onProgress?.(backendInstallProgress.installing);
 
   const result = await new Promise<InstallResult>((resolve) => {
     let child;
@@ -248,7 +268,9 @@ async function installInTurn(
     return result;
   }
 
-  const verifyOk = isBackendPackageInUserDir(bareName, opts?.binName);
+  onProgress?.(backendInstallProgress.verifying);
+  const nativeOk = bareName !== '@anthropic-ai/claude-agent-sdk' || claudeNativeInstalled(paths.backendsDir);
+  const verifyOk = isBackendPackageInUserDir(bareName, opts?.binName) && nativeOk;
   if (!verifyOk) {
     await rollback(bareName);
     log.warn('agent', 'backend-install-unverified', { pkg });
@@ -256,7 +278,7 @@ async function installInTurn(
       ok: false,
       code: result.code,
       aborted: false,
-      tail: `${result.tail}\n\n安装后校验失败：「${bareName}」${opts?.binName ? '.bin 里找不到可执行' : '用户目录里找不到 package.json'}（可能半装/平台二进制缺失），已尝试回滚。`,
+      tail: `${result.tail}\n\n安装后校验失败：${!nativeOk ? 'Claude SDK 的 Mac 运行程序下载不完整，请检查网络后重新安装。' : `「${bareName}」${opts?.binName ? '.bin 里找不到可执行' : '用户目录里找不到 package.json'}。`}已尝试回滚。`,
     };
   }
 

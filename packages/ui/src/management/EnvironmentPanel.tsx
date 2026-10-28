@@ -19,7 +19,7 @@ import {OperationActivity} from './OperationActivity';
 
 type BackendLogin = Extract<EnvironmentReply, { kind: "backendLogin" }>;
 
-type Props = { request: (request: EnvironmentRequest) => Promise<EnvironmentReply>; onCodexLogin: () => Promise<void>; codexJobs: ReactNode; codexBusy: boolean; reveal?: SearchReveal };
+type Props = { request: (request: EnvironmentRequest) => Promise<EnvironmentReply>; codexJobs: ReactNode; codexBusy: boolean; reveal?: SearchReveal };
 type Intent = { kind: "install" | "update" | "disable"; tool: EnvironmentTool };
 function visibleInstall(operation: ToolInstallOperation | null, current: ToolInstallOperation | null): ToolInstallOperation | null {
   if (!operation) return null;
