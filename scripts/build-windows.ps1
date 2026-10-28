@@ -11,7 +11,14 @@ Set-Location -LiteralPath $repo
 if ((& node -p 'process.versions.node').Trim() -ne '24.22.1') { throw 'Use pinned Node.js 24.22.1 for reproducible Windows builds' }
 $sha = (git rev-parse HEAD).Trim()
 if ($SourceSha -and $sha -cne $SourceSha) { throw 'Source SHA mismatch' }
-if (git status --porcelain --untracked-files=normal) { throw 'Build requires a clean source checkout' }
+function Assert-CleanSource {
+  if ((git rev-parse HEAD).Trim() -cne $sha) { throw 'Source HEAD changed during build' }
+  # npm relinks bin scripts with LF on Windows. Compare normalized blobs rather
+  # than stat-only porcelain dirtiness from a CRLF checkout; no source edits pass.
+  git diff --quiet HEAD --
+  if ($LASTEXITCODE -ne 0 -or (git ls-files --others --exclude-standard)) { throw 'Build requires unchanged tracked source and no untracked files' }
+}
+Assert-CleanSource
 $outPath = [IO.Path]::GetFullPath($Out)
 if (-not [IO.Path]::IsPathRooted($Out) -or $outPath.StartsWith($repo + '\', [StringComparison]::OrdinalIgnoreCase) -or $outPath -eq $repo) { throw 'Use an absolute dedicated output directory outside the source checkout' }
 if ((Test-Path -LiteralPath $outPath) -and (Get-ChildItem -LiteralPath $outPath -Force)) { throw 'Output directory must be new or empty' }
@@ -31,7 +38,7 @@ Invoke-Node @('scripts/windows-build-tools.mjs','npm',$envFile,'run','typecheck'
 Invoke-Node @('--test','scripts/stage-daemon.test.mjs','scripts/package-windows.test.mjs','scripts/windows-runtime-smoke.test.mjs','scripts/publish-windows.test.mjs')
 Invoke-Node @('scripts/windows-build-tools.mjs','npm',$envFile,'run','test','-w','@vonvon/daemon','--','test/environment-windows-launch.test.ts','test/provider/windows-command-line.test.ts','test/provider/windows-supervisor.test.ts','test/windows-owned-process.test.ts','test/data-compatibility.test.ts','test/register-bot.test.ts')
 Invoke-Node @('scripts/windows-build-tools.mjs','npm',$envFile,'run','test','-w','@vonvon/desktop','--','test/windows-updates.test.ts','test/tray.test.ts','test/daemon-dependencies.test.ts')
-if ((git rev-parse HEAD).Trim() -cne $sha -or (git status --porcelain --untracked-files=normal)) { throw 'Source changed during checks' }
+Assert-CleanSource
 $runtime = Join-Path $outPath 'electron-runtime'
 Invoke-Node @('scripts/windows-build-tools.mjs','electron',$Architecture,$runtime)
 $version = (& node --input-type=module -e "import {checkedProductVersion} from './scripts/product-version.mjs'; console.log(await checkedProductVersion())").Trim()
@@ -68,5 +75,5 @@ if ($PauseForUi) { $acceptArgs.PauseForUi = $true }
 & (Join-Path $PSScriptRoot 'accept-windows.ps1') @acceptArgs
 Invoke-Node @('scripts/package-windows.mjs',$packages,$sha,(Join-Path $unpacked 'Vonvon Bot.exe'),$zipExe[0].FullName,$Architecture)
 Copy-Item -LiteralPath (Join-Path $outPath 'acceptance/acceptance.json') -Destination (Join-Path $packages "windows-acceptance-$Architecture.json")
-if ((git rev-parse HEAD).Trim() -cne $sha -or (git status --porcelain --untracked-files=normal)) { throw 'Source changed during build' }
+Assert-CleanSource
 Write-Output "BUILD AND ACCEPTANCE PASSED: $version $Architecture $sha"
