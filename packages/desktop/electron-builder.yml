@@ -14,6 +14,7 @@ directories:
 files:
   - desktop/**
   - dist/update-config.json
+  - dist/windows-update-config.json
   - ui/**
   - assets/**
   - package.json
@@ -48,6 +49,21 @@ extraResources:
     filter:
       - "**/*"
 npmRebuild: false
+win:
+  publish:
+    provider: generic
+    url: https://dl.vonvon.cc/bot/windows/stable/
+  icon: assets/windows-icon.ico
+  target:
+    - nsis
+    - zip
+  artifactName: Vonvon-Bot-${version}-windows-${arch}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: Vonvon Bot
 mac:
   # macOS uses .lproj names; electron-builder does not normalize '-' and '_'.
   electronLanguages:

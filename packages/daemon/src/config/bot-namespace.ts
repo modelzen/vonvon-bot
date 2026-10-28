@@ -40,6 +40,8 @@ export function parseAllocations(raw: unknown): Record<string, Allocation> | und
 }
 
 export async function syncDirectory(path: string): Promise<void> {
+  // Node cannot fsync directories on Windows. Individual files are still synced before rename.
+  if (process.platform === 'win32') return;
   const file = await open(path, 'r');
   let failed = false;
   try { await file.sync(); }
