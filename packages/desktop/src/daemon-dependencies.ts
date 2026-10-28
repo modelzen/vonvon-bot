@@ -52,7 +52,7 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
         const args = [distribution.cliPath, 'daemon', command, '--port', String(port)];
         if (bot !== undefined) args.push('--bot', bot);
         const child = spawn(runtime.executable, args, {
-          env, detached, stdio: ['ignore', log.fd, log.fd],
+          env, detached, windowsHide: true, stdio: ['ignore', log.fd, log.fd],
         });
         child.once('error', reject);
         if (detached) child.once('spawn', () => { child.unref(); resolve(child.pid); });
@@ -85,7 +85,8 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
     },
     async readRegistration() {
       const platform = process.platform;
-      // The app ships for macOS only; Linux stays so the Linux CI job reads a real definition through this mapping.
+      // Windows runs the bundled daemon directly, without a registered service.
+      if (platform === 'win32') return { kind: 'absent' };
       if (platform !== 'darwin' && platform !== 'linux') throw new Error(`桌面端不支持这个系统：${platform}。`);
       const target = platform === 'darwin' ? serviceTarget({ platform, home: runtime.home, root: runtime.root })
         : serviceTarget({ platform, home: runtime.home, root: runtime.root, xdgConfigHome: process.env.XDG_CONFIG_HOME });

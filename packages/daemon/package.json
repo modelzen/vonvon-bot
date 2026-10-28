@@ -1,6 +1,6 @@
 {
   "name": "@vonvon/daemon",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "description": "Vonvon Bot daemon",
   "type": "module",
   "bin": {

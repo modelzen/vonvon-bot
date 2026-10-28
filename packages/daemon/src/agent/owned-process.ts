@@ -1,5 +1,6 @@
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { spawnProcess } from '../platform/spawn';
+import { WindowsOwnedProcess } from './windows-owned-process';
 
 export class ProviderProcessCleanupError extends Error {}
 /** Process group is gone; the only reported failure is its nonzero exit status. */
@@ -34,7 +35,8 @@ const hasCode = (error: unknown, code: string): boolean => error instanceof Erro
 
 export class OwnedProviderProcess {
   readonly child: ChildProcess;
-  private readonly pid: number | undefined;
+  private get pid(): number | undefined { return this.child.pid; }
+  private readonly windows?: WindowsOwnedProcess;
   readonly exited: Promise<Exit>;
   private directExit: Exit | undefined;
   private groupGone = false;
@@ -47,23 +49,24 @@ export class OwnedProviderProcess {
 
   constructor(command: string, args: string[], options: SpawnOptions, private readonly provider = 'Codex') {
     if (!accepting) throw new Error(`${this.provider} process registry is closed`);
-    this.child = spawnProcess(command, args, { ...options, detached: true });
-    this.pid = this.child.pid;
+    this.windows = process.platform === 'win32' ? new WindowsOwnedProcess(command, args, options) : undefined;
+    this.child = this.windows?.child ?? spawnProcess(command, args, { ...options, detached: true });
     this.closed = new Promise(resolve => this.child.once('close', () => resolve()));
     this.exited = new Promise((resolve, reject) => {
       this.child.once('exit', (code, signal) => {
         this.directExit = { kind: 'exit', code, signal };
         const askedToStop = this.terminating || this.child.killed;
-        if (code !== null && code !== 0 && !(askedToStop && code === 143)) this.record('exit', new Error(`${this.provider} child exited with code ${code}`));
+        const expectedTermination = askedToStop && (code === 143 || (process.platform === 'win32' && code === 1));
+        if (code !== null && code !== 0 && !expectedTermination) this.record('exit', new Error(`${this.provider} child exited with code ${code}`));
         resolve(this.directExit);
       });
       this.child.on('error', error => {
-        if (this.pid === undefined) reject(error);
+        if (this.pid === undefined || (this.windows && this.directExit === undefined)) reject(error);
         else this.record('process', error);
       });
     });
     void this.exited.catch(() => undefined);
-    if (this.pid !== undefined) ownedProcesses.add(this);
+    if (this.windows || this.pid !== undefined) ownedProcesses.add(this);
   }
 
   get unconfirmedPid(): number | undefined {
@@ -73,7 +76,7 @@ export class OwnedProviderProcess {
   close(graceMs = 4000): Promise<void> {
     if (this.closing) return this.closing;
     this.closing = this.stop(graceMs);
-    void this.closing.then(() => ownedProcesses.delete(this), () => ownedProcesses.delete(this));
+    void this.closing.then(() => ownedProcesses.delete(this), () => { if (!this.windows || !this.unconfirmed) ownedProcesses.delete(this); });
     return this.closing;
   }
 
@@ -113,6 +116,19 @@ export class OwnedProviderProcess {
   }
 
   private async stop(graceMs: number): Promise<void> {
+    if (this.windows) {
+      this.terminating = true;
+      try { await this.windows.stop(); }
+      catch (cause) {
+        this.unconfirmed = this.windows.cleanupUnconfirmed;
+        throw new ProviderProcessCleanupError(`${this.provider} Windows 子进程清理失败`, { cause });
+      }
+      if (this.errors.size) {
+        const Failure = this.errors.size === 1 && this.errors.has('exit') ? ProviderProcessExitError : ProviderProcessCleanupError;
+        throw new Failure(`${this.provider} 子进程退出失败`, { cause: new AggregateError(this.errors.values()) });
+      }
+      return;
+    }
     if (this.pid === undefined) return;
     this.terminating = true;
     this.signalGroup('SIGTERM');
