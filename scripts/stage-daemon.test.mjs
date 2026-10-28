@@ -7,6 +7,71 @@ import { test } from 'node:test';
 import { stageDependencies } from './stage-daemon.mjs';
 
 const sdk = '@anthropic-ai/claude-agent-sdk';
+
+test('Windows hoisting keeps deep transitive dependencies installable without links', async t => {
+  const {source, destination, pkg} = await fixture(t);
+  for (let i = 0; i < 12; i++) {
+    const next = i === 11 ? 'dunder-proto' : `level-${i + 1}`;
+    const current = await pkg(`level-${i}`, {dependencies: {[next]: '1'}});
+    await writeFile(join(current, 'index.cjs'), `module.exports = require(${JSON.stringify(next)});`);
+  }
+  const leaf = await pkg('dunder-proto', {exports: {'.': './get.js'}});
+  await writeFile(join(leaf, 'get.js'), "module.exports = 'all runtime files installed';");
+  await stageDependencies(source, destination, {hoist: true, metadata: {dependencies: {'level-0': '1'}}});
+  const moved = `${destination}-installed`;
+  await rename(destination, moved);
+  await rm(source, {recursive: true, force: true});
+  assert.equal(createRequire(join(moved, 'package.json'))('level-0'), 'all runtime files installed');
+  assert.equal(await assertInternalLinks(moved), 0);
+  assert.equal(await readFile(join(moved, 'node_modules/dunder-proto/get.js'), 'utf8'), "module.exports = 'all runtime files installed';");
+  assert.equal((await readdir(join(moved, 'node_modules'))).length, 13);
+});
+
+test('Windows hoisting preserves nested version conflicts and package cycles', async t => {
+  const {source, destination, pkg} = await fixture(t);
+  const left = await pkg('left', {dependencies: {shared: '1', right: '1'}});
+  const right = await pkg('right', {dependencies: {shared: '2', left: '1'}});
+  const shared = await pkg('shared');
+  await writeFile(join(shared, 'index.cjs'), "module.exports = 'one';");
+  const nested = await pkg('shared', {version: '2.0.0'}, right);
+  await writeFile(join(nested, 'index.cjs'), "module.exports = 'two';");
+  await writeFile(join(left, 'index.cjs'), "exports.value = require('shared'); exports.right = () => require('right').value;");
+  await writeFile(join(right, 'index.cjs'), "exports.value = require('shared'); exports.left = () => require('left').value;");
+  await stageDependencies(source, destination, {hoist: true, metadata: {dependencies: {left: '1', right: '1'}}});
+  await rm(source, {recursive: true, force: true});
+  const appRequire = createRequire(join(destination, 'package.json'));
+  assert.equal(appRequire('left').value, 'one');
+  assert.equal(appRequire('left').right(), 'two');
+  assert.equal(appRequire('right').left(), 'one');
+  assert.equal(await assertInternalLinks(destination), 0);
+});
+
+test('Windows hoisting cannot shadow an earlier sibling dependency from a higher scope', async t => {
+  const {source, destination, pkg} = await fixture(t);
+  const x1 = await pkg('x'); await writeFile(join(x1, 'index.cjs'), "module.exports = 'x1';");
+  await pkg('b'); await pkg('c');
+  const a = await pkg('a', {dependencies: {b: '1'}});
+  const b = await pkg('b', {dependencies: {x: '1', c: '1'}}, a);
+  const c = await pkg('c', {dependencies: {x: '2'}}, b);
+  const x2 = await pkg('x', {}, c); await writeFile(join(x2, 'index.cjs'), "module.exports = 'x2';");
+  await writeFile(join(a, 'index.cjs'), "module.exports = require('b');");
+  await writeFile(join(b, 'index.cjs'), "module.exports = {x: require('x'), c: require('c')};");
+  await writeFile(join(c, 'index.cjs'), "module.exports = require('x');");
+  await stageDependencies(source, destination, {hoist: true, metadata: {dependencies: {x: '1', b: '0', c: '0', a: '1'}}});
+  await rm(source, {recursive: true, force: true});
+  assert.deepEqual(createRequire(join(destination, 'package.json'))('a'), {x: 'x1', c: 'x2'});
+});
+
+test('Windows hoisting refuses a conflicting nested peer instead of changing its identity', async t => {
+  const {source, destination, pkg} = await fixture(t);
+  const peer1 = await pkg('peer'); await writeFile(join(peer1, 'index.cjs'), "module.exports = 'peer1';");
+  const a = await pkg('a', {dependencies: {plugin: '1', peer: '2'}});
+  const peer2 = await pkg('peer', {}, a); await writeFile(join(peer2, 'index.cjs'), "module.exports = 'peer2';");
+  const plugin = await pkg('plugin', {peerDependencies: {peer: '2', 'optional-peer': '1'}, peerDependenciesMeta: {'optional-peer': {optional: true}}}, a);
+  await writeFile(join(plugin, 'index.cjs'), "module.exports = require('peer');");
+  await writeFile(join(a, 'index.cjs'), "module.exports = require('plugin');");
+  await assert.rejects(stageDependencies(source, destination, {hoist: true, metadata: {dependencies: {peer: '1', a: '1'}}}), /Cannot preserve peer instance/);
+});
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'vonvon-stage-deps-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -80,7 +145,7 @@ async function addFile(root, file, contents = 'fixture') {
   await writeFile(join(root, file), contents);
 }
 
-test('compact staging deduplicates a diamond and remains self-contained after relocation', async t => {
+test('compact staging deduplicates a diamond and remains self-contained after relocation', {skip: process.platform === 'win32' && 'POSIX compact layout uses symlinks; Windows uses hoisting'}, async t => {
   const {source, destination, pkg} = await fixture(t);
   const left = await pkg('left', {dependencies: {shared: '1'}});
   const right = await pkg('right', {dependencies: {shared: '1'}});
@@ -125,7 +190,7 @@ for (const rightVersion of ['1.0.0', '2.0.0']) {
   });
 }
 
-test('compact staging upgrades an existing dependency when the SDK later requires its peers', async t => {
+test('compact staging upgrades an existing dependency when the SDK later requires its peers', {skip: process.platform === 'win32' && 'POSIX compact layout uses symlinks; Windows uses hoisting'}, async t => {
   const {source, destination, pkg} = await fixture(t);
   const plain = await pkg('plain-user', {dependencies: {'shared-peer': '1'}});
   const shared = await pkg('shared-peer', {peerDependencies: {'required-peer-child': '1'}});

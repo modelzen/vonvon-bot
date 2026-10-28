@@ -9,6 +9,7 @@ import { createWindowsInventory, peMachine, validateWindowsInventory, verifyLate
 const version = '0.7.2';
 const sourceSha = '1234567890abcdef1234567890abcdef12345678';
 const base = `Vonvon-Bot-${version}-windows-x64`;
+const setup = `Vonvon-Bot-Setup-${version}-x64`;
 function pe(machine = 0x8664) {
   const bytes = Buffer.alloc(128);
   bytes.write('MZ');
@@ -22,11 +23,11 @@ async function fixture(t) {
   t.after(() => rm(out, { recursive: true, force: true }));
   const installer = pe(0x14c); // An NSIS bootstrapper can be 32-bit.
   const sha512 = createHash('sha512').update(installer).digest('base64');
-  const yaml = `version: ${version}\nfiles:\n  - url: ${base}.exe\n    sha512: ${sha512}\n    size: ${installer.length}\npath: ${base}.exe\nsha512: ${sha512}\nreleaseDate: 2026-10-28T00:00:00.000Z\n`;
+  const yaml = `version: ${version}\nfiles:\n  - url: ${setup}.exe\n    sha512: ${sha512}\n    size: ${installer.length}\npath: ${setup}.exe\nsha512: ${sha512}\nreleaseDate: 2026-10-28T00:00:00.000Z\n`;
   await Promise.all([
-    writeFile(join(out, `${base}.exe`), installer),
+    writeFile(join(out, `${setup}.exe`), installer),
     writeFile(join(out, `${base}.zip`), 'zip fixture'),
-    writeFile(join(out, `${base}.exe.blockmap`), 'blockmap fixture'),
+    writeFile(join(out, `${setup}.exe.blockmap`), 'blockmap fixture'),
     writeFile(join(out, 'latest.yml'), yaml),
     writeFile(join(out, 'unpacked.exe'), pe()),
     writeFile(join(out, 'zipped.exe'), pe()),
@@ -72,13 +73,13 @@ test('refuses mismatched metadata and non-x64 application payload', async t => {
 
 test('latest.yml rejects a changed installer path, digest, or size', async t => {
   const h = await fixture(t);
-  const installer = await readFile(join(h.out, `${base}.exe`));
+  const installer = await readFile(join(h.out, `${setup}.exe`));
   const expected = {
-    version, installerName: `${base}.exe`, installerSize: installer.length,
+    version, installerName: `${setup}.exe`, installerSize: installer.length,
     installerSha512: createHash('sha512').update(installer).digest('base64'),
   };
   for (const changed of [
-    h.yaml.replace(`path: ${base}.exe`, 'path: other.exe'),
+    h.yaml.replace(`path: ${setup}.exe`, 'path: other.exe'),
     h.yaml.replace(`size: ${installer.length}`, 'size: 999'),
     h.yaml.replace(`sha512: ${expected.installerSha512}`, 'sha512: wrong'),
   ]) assert.throws(() => verifyLatestYml(changed, expected));
@@ -86,9 +87,9 @@ test('latest.yml rejects a changed installer path, digest, or size', async t => 
 
 test('refuses missing blockmap and malformed PE', async t => {
   const h = await fixture(t);
-  await rm(join(h.out, `${base}.exe.blockmap`));
+  await rm(join(h.out, `${setup}.exe.blockmap`));
   await assert.rejects(createWindowsInventory(h.options));
-  await writeFile(join(h.out, `${base}.exe.blockmap`), 'blockmap fixture');
+  await writeFile(join(h.out, `${setup}.exe.blockmap`), 'blockmap fixture');
   await writeFile(h.options.unpackedExe, 'not a PE');
   await assert.rejects(createWindowsInventory(h.options), /PE DOS header/);
   assert.throws(() => peMachine(Buffer.alloc(128)), /PE DOS header/);
