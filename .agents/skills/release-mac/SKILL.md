@@ -26,21 +26,21 @@ description: 按 owner 指定版本和 main SHA 构建、公证、验收 Vonvon 
    VONVON_DESKTOP_UPDATE_CONFIG="$HOME/.vonvon-release/desktop-update.json" \
      node "$RELEASE_HELPER" --repo "$SOURCE_WORKTREE" --version "$VERSION" \
      --sha "$SOURCE_SHA" --out "$OUT" --build-home "$T/home" --mode rehearsal \
-     --next-version "$NEXT_VERSION" --keychain-profile notelet-notary
+     --next-version "$NEXT_VERSION" --architecture arm64 --keychain-profile notelet-notary
    ```
 
    正式候选改为 `--mode release --notes-file "$NOTES_FILE" --cos-config "$COS_CONFIG"`；首发另加 `--first-release`，线上 404 而有发布历史时另加 `--no-live-manifest`。发行说明须非空 UTF-8。helper 不上传 COS、不刷新 CDN、不安装 App。
-4. helper 分别构建签名 universal、arm64、x64 App，检查各自实际 Mach-O 架构、Developer ID、hardened runtime、最小 entitlements、App/Core/build 版本、内置更新配置及不捆绑 Claude runtime 的约束。先公证签名 App，`Accepted` 且公证警告通过允许清单后，才钉票并验证；未知 warning 默认停止，不能自行放宽允许清单。
-   分架构发布时，使用同一个源码 SHA、版本、配置、说明和基线，分别指定 `--architecture universal`、`--architecture arm64`、`--architecture x64` 运行三次，每次使用独立持久 OUT；三次都须单独通过 App 与 DMG 的公证、钉票和验证。helper 不带 `--architecture` 时仍是 universal。每个 OUT 的中断恢复单独进行。三者完成后执行：
+4. helper 分别构建签名 arm64、x64 App，检查各自实际 Mach-O 架构、Developer ID、hardened runtime、最小 entitlements、App/Core/build 版本、内置更新配置及不捆绑 Claude runtime 的约束。先公证签名 App，`Accepted` 且公证警告通过允许清单后，才钉票并验证；未知 warning 默认停止，不能自行放宽允许清单。
+   分架构发布时，使用同一个源码 SHA、版本、配置、说明和基线，分别指定 `--architecture arm64`、`--architecture x64` 运行两次，每次使用独立持久 OUT；两次都须单独通过 App 与 DMG 的公证、钉票和验证。helper 不带 `--architecture` 时仍是历史兼容 universal，不用于正式发布。每个 OUT 的中断恢复单独进行。两者完成后执行：
 
    ```sh
    VONVON_DESKTOP_UPDATE_CONFIG="$HOME/.vonvon-release/desktop-update.json" \
      node "$SOURCE_WORKTREE/scripts/assemble-split-release.mjs" \
-       --repo "$SOURCE_WORKTREE" --out "$SPLIT_OUT" --universal "$UNIVERSAL_OUT" \
+       --repo "$SOURCE_WORKTREE" --out "$SPLIT_OUT" \
        --arm64 "$ARM64_OUT" --x64 "$X64_OUT" --version "$VERSION" --sha "$SOURCE_SHA"
    ```
 
-   `SPLIT_OUT` 是额外的空持久目录；后续发布工具的 `--out` 选它。聚合器重算三份证据与产物的哈希，重新解压 ZIP、只读挂载 DMG，逐个检查签名、架构、seal、票据和 Gatekeeper 后生成清单。它信任本机 helper 保存的状态及公证提交记录；这些可编辑的本地文件不是 Apple 公证日志的独立在线证明。真实公证的提交 ID、Apple 日志、签名和票据仍须按原流程复核，不得用模拟测试代替。
+   `SPLIT_OUT` 是额外的空持久目录；后续发布工具的 `--out` 选它。聚合器重算两份证据与产物的哈希，重新解压 ZIP、只读挂载 DMG，逐个检查签名、架构、seal、票据和 Gatekeeper 后生成清单。它信任本机 helper 保存的状态及公证提交记录；这些可编辑的本地文件不是 Apple 公证日志的独立在线证明。真实公证的提交 ID、Apple 日志、签名和票据仍须按原流程复核，不得用模拟测试代替。
 5. App 公证的传输 ZIP 用 Apple 文档的 `ditto -c -k --keepParent`；正式 0.7.0 之前要先跑一次彩排公证确认 `__MACOSX` warning 消失，见 workflow.md。从同一已钉票 App 生成最终 ZIP 与 prepackaged DMG；最终 ZIP 使用 `--sequesterRsrc --noqtn` 并保留代码签名扩展属性，不能用 `--norsrc` 粗暴剥除。DMG 单独签名、公证、钉票。对 ZIP 解压 App、DMG 只读挂载 App 再验签、钉票和 Gatekeeper，检查没有 `com.apple.quarantine`；不能只验工作目录原件。
 6. 全部最终字节验证后生成 inventory、`SHA256SUMS` 和模式对应元数据。只按 inventory 选择公开对象；`app-notary-upload.zip`、App、解压目录、日志、`.blockmap`、builder 配置均为私有证据，**不得递归上传输出根目录**。中断恢复与警告诊断见 [workflow.md](references/workflow.md)。
 

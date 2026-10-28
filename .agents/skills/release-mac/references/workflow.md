@@ -114,7 +114,7 @@ App 钉票并通过验证后才生成最终 ZIP 和 electron-builder `prepackage
 
 | 对象 | 要求 |
 | --- | --- |
-| 最终 App、ZIP 解压 App、DMG 只读挂载 App | `codesign --verify --deep --strict`、`spctl -a -vv -t exec`、`stapler validate`；相同签名、版本、配置，实际 Mach-O 均为 arm64+x86_64，无 quarantine |
+| 最终 App、ZIP 解压 App、DMG 只读挂载 App | `codesign --verify --deep --strict`、`spctl -a -vv -t exec`、`stapler validate`；相同签名、版本、配置，实际 Mach-O 与候选架构一致（arm64 或 x86_64），无 quarantine |
 | DMG | 独立验签、公证、钉票；只读挂载检查后正常 detach |
 | 最终文件 | App/DMG 钉票和 ZIP 最终生成后计算尺寸、完整 SHA-256，写 `release-inventory.json`、`SHA256SUMS` |
 
@@ -179,7 +179,7 @@ key 由 owner 放进运行发布工具的那个进程的环境，变量名就是
    **owner 先看 `plan` 的输出和 `publish-plan.json` 的哈希，同意上传版本化对象后，代理才用这个哈希跑 `upload`。** 这一同意只覆盖版本化对象，不覆盖切 stable。发布工具的输出是英文，代理把下面几项用中文逐条列给 owner，附上原文和哈希：
 
    - 版本和完整源码 SHA 是这次要发的；
-   - 分架构时九个、旧通用版本时三个 PutObject 的 key 都在 `bot/mac/stable/` 下，尺寸和 SHA-256 与 `SHA256SUMS` 一致，头符合第 4 步的表，都带 `x-cos-forbid-overwrite: true`；
+   - 双架构时六个、旧通用版本时三个 PutObject 的 key 都在 `bot/mac/stable/` 下，尺寸和 SHA-256 与 `SHA256SUMS` 一致，头符合第 4 步的表，都带 `x-cos-forbid-overwrite: true`；
    - `Stable manifest now` 是预期的：首发是 HTTP 404，否则是线上上一版的版本和哈希；
    - `highest previously published` 低于本版本，bucket 版本控制从未开启；
    - 切 manifest 那一步只写 `bot/mac/stable/manifest.json`；撤回方式对：首发删 manifest，否则写回计划里存的旧字节。
@@ -197,8 +197,8 @@ key 由 owner 放进运行发布工具的那个进程的环境，变量名就是
    | --- | --- | --- |
    | `manifest.json` | `no-cache`（或 `max-age` 不超过 60；`s-maxage` 也不超过 60） | `application/json` |
    | `feed-<版本>.json` | `public, max-age=31536000, immutable` | `application/json` |
-   | `Vonvon-Bot-<版本>-universal.zip` | `public, max-age=31536000, immutable` | 不检查，建议 `application/zip` |
-   | `Vonvon-Bot-<版本>-universal.dmg` | `public, max-age=31536000, immutable` | 不检查，建议 `application/x-apple-diskimage` |
+   | `Vonvon-Bot-<版本>-<架构>.zip` | `public, max-age=31536000, immutable` | 不检查，建议 `application/zip` |
+   | `Vonvon-Bot-<版本>-<架构>.dmg` | `public, max-age=31536000, immutable` | 不检查，建议 `application/x-apple-diskimage` |
 
    发布工具按这张表写头，ZIP 和 DMG 用建议的类型。如果启用了 CDN，manifest 配短 TTL 或回源重验证。`upload` 只传版本化对象，传完自己运行：
 
@@ -260,6 +260,6 @@ owner 在 stable 关口说"先不发"时，版本化对象已经在 COS 上。�
 
 ## 分架构产物的证据与聚合
 
-遵循 SKILL.md 的三次 helper 和聚合步骤：universal 保留给旧版更新器，arm64 与 x64 分别提供给新版和官网下载。每个候选都由 helper 独立提交 App 与 DMG 公证、钉票、验签和检查 ZIP/DMG 中的 App；不得以改名或手工裁剪代替。聚合器采用本机已保存的状态和公证提交记录作为受信输入，实际复查 ZIP、DMG 内的签名、seal、票据与 Gatekeeper，但不会重新向 Apple 查询公证日志；这些本地可编辑文件并非不可伪造的独立证明。发布前仍须按原流程核对 Apple 日志和所有真实签名、公证结果，测试模拟不等于实际通过。
+遵循 SKILL.md 的两次 helper 和聚合步骤：arm64 与 x64 分别提供给新版和官网下载，不发布 universal。每个候选都由 helper 独立提交 App 与 DMG 公证、钉票、验签和检查 ZIP/DMG 内 App；不得以改名或手工裁剪代替。聚合器采用本机已保存的状态和公证提交记录作为受信输入，实际复查 ZIP、DMG 内的签名、seal、票据与 Gatekeeper，但不会重新向 Apple 查询公证日志；这些本地可编辑文件并非不可伪造的独立证明。发布前仍须按原流程核对 Apple 日志和所有真实签名、公证结果，测试模拟不等于实际通过。
 
-聚合后 manifest 的 `feedURL` 指 universal，`feedURLs.arm64` 和 `feedURLs.x64` 分别指两个版本化 feed；旧客户端忽略新增字段。上传计划须列出三个 feed、三个 ZIP 和三个 DMG，且每份完整哈希和响应头均须验证。manifest 最后按原确认规则提升。三个候选的 OUT、聚合 OUT 和验证留存目录均是私有证据，不可递归上传。
+聚合后 manifest 的必填 `feedURL` 指 arm64 feed，`feedURLs.arm64` 和 `feedURLs.x64` 分别指两份版本化 feed；新版按运行架构选择，旧版 Intel 用户从官网手动升级。上传计划列两个 feed、两个 ZIP 和两个 DMG，逐项验证完整哈希和响应头。manifest 最后按原确认规则提升。两个候选的 OUT、聚合 OUT 和验证留存目录均是私有证据，不可递归上传。

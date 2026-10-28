@@ -24,7 +24,7 @@ const manifestBytes = v => Buffer.from(JSON.stringify({ version: v, feedURL: new
 const feedBytes = v => Buffer.from(JSON.stringify({ url: new URL(`Vonvon-Bot-${v}-universal.zip`, base).href, name: `Vonvon Bot ${v}`, notes: 'Release notes.', pub_date: '2026-10-27T00:00:00.000Z' }, null, 2) + '\n');
 
 // Overrides rewrite a public file together with inventory, state and SHA256SUMS, as a self-consistent new candidate.
-function evidenceFiles(overrides = {}) {
+function evidenceFiles(overrides = {}, {twoArchitectures = false} = {}) {
   const files = new Map([
     ['manifest.json', manifestBytes(version)],
     [feedFile, feedBytes(version)],
@@ -32,19 +32,20 @@ function evidenceFiles(overrides = {}) {
     [dmgFile, Buffer.from('fixture DMG bytes; not a real image. '.repeat(40))],
     ...Object.entries(overrides).map(([file, bytes]) => [file, Buffer.from(bytes)]),
   ]);
+  if (twoArchitectures) for (const file of [feedFile, zipFile, dmgFile]) files.delete(file);
   const record = file => ({ file, size: files.get(file).length, sha256: digest(files.get(file)) });
   const publicFiles = [...files.keys()];
   const inventory = { version, sourceCommit: sha, mode: 'release', complete: true, baseline: 'none', publiclyPublished: false, files: publicFiles.map(record),
     notarization: { app: '11111111-1111-4111-8111-111111111111', dmg: '22222222-2222-4222-8222-222222222222' } };
   files.set('release-inventory.json', Buffer.from(JSON.stringify(inventory, null, 2) + '\n'));
   const split = JSON.parse(files.get('manifest.json').toString()).feedURLs;
-  const architectureEvidence = split && Object.fromEntries(['universal', 'arm64', 'x64'].map(arch => [arch, {zipSHA256:record(`Vonvon-Bot-${version}-${arch}.zip`).sha256, zipVerifiedSHA256:record(`Vonvon-Bot-${version}-${arch}.zip`).sha256, dmgStapledSHA256:record(`Vonvon-Bot-${version}-${arch}.dmg`).sha256, appSeal:{}, dmgSeal:{}, appSubmission:'a', dmgSubmission:'b'}]));
+  const architectureEvidence = split && Object.fromEntries((twoArchitectures ? ['arm64', 'x64'] : ['universal', 'arm64', 'x64']).map(arch => [arch, {zipSHA256:record(`Vonvon-Bot-${version}-${arch}.zip`).sha256, zipVerifiedSHA256:record(`Vonvon-Bot-${version}-${arch}.zip`).sha256, dmgStapledSHA256:record(`Vonvon-Bot-${version}-${arch}.dmg`).sha256, appSeal:{}, dmgSeal:{}, appSubmission:'a', dmgSubmission:'b'}]));
   const state = { context: { version, sourceCommit: sha, mode: 'release', firstRelease: true }, complete: true, files: [...publicFiles, 'release-inventory.json'].map(record), ...(split ? {architectureEvidence} : {}) };
   files.set('notarization-state.json', Buffer.from(JSON.stringify(state, null, 2) + '\n'));
   files.set('SHA256SUMS', Buffer.from(state.files.map(item => `${item.sha256}  ${item.file}`).join('\n') + '\n'));
   return files;
 }
-const writeEvidence = async (out, overrides) => { for (const [file, bytes] of evidenceFiles(overrides)) await writeFile(join(out, file), bytes); };
+const writeEvidence = async (out, overrides, options) => { for (const [file, bytes] of evidenceFiles(overrides, options)) await writeFile(join(out, file), bytes); };
 const publicRecords = () => [...evidenceFiles()].filter(([file]) => [zipFile, dmgFile, feedFile].includes(file)).map(([file, bytes]) => ({ file, size: bytes.length, sha256: digest(bytes) }));
 
 const published069 = () => [
@@ -299,7 +300,7 @@ test('local evidence gates stop plan before any request or COS call', async t =>
       const inventory = JSON.parse(await readFile(join(w.out, 'release-inventory.json'), 'utf8'));
       inventory.files.push({ file: 'extra.zip', size: 1, sha256: 'b'.repeat(64) });
       await writeFile(join(w.out, 'release-inventory.json'), JSON.stringify(inventory));
-    }, /exactly the four/],
+    }, /exactly the required public release artifacts/],
     ['another source SHA', async w => {
       const state = JSON.parse(await readFile(join(w.out, 'notarization-state.json'), 'utf8'));
       state.context.sourceCommit = 'b'.repeat(40);
@@ -981,4 +982,53 @@ test('split release plans, uploads and verifies all architecture artifacts befor
   await w.promote({ 'plan-sha256': planned.sha256 });
   assert.equal(w.writes().length, 10);
   assert.deepEqual(JSON.parse(w.objects.get(`${PREFIX}manifest.json`).bytes.toString()), split);
+});
+
+function twoArchitectureOverrides() {
+  const overrides = {}, feeds = {};
+  for (const arch of ['arm64', 'x64']) {
+    const name = `feed-${version}-${arch}.json`;
+    feeds[arch] = new URL(name, base).href;
+    overrides[name] = JSON.stringify({...JSON.parse(feedBytes(version).toString()), url:new URL(`Vonvon-Bot-${version}-${arch}.zip`, base).href});
+    for (const ext of ['zip', 'dmg']) overrides[`Vonvon-Bot-${version}-${arch}.${ext}`] = `fixture ${arch} ${ext}`;
+  }
+  const manifest = {version, feedURL:feeds.arm64, feedURLs:feeds};
+  overrides['manifest.json'] = JSON.stringify(manifest);
+  return {overrides, manifest};
+}
+
+test('two-architecture release plans, uploads, and verifies only six versioned objects before promoting', async t => {
+  const w = await world(t), {overrides, manifest} = twoArchitectureOverrides();
+  await writeEvidence(w.out, overrides, {twoArchitectures:true});
+  const {plan, sha256} = await w.plan({'first-release':true});
+  assert.equal(plan.upload.length, 6);
+  assert.equal(plan.promote.step, 7);
+  assert.ok(plan.upload.every(item => !item.file.includes('universal') && item.file !== `feed-${version}.json`));
+  assert.deepEqual(plan.upload.map(item => item.file).sort(), ['arm64', 'x64'].flatMap(arch => [`Vonvon-Bot-${version}-${arch}.zip`, `Vonvon-Bot-${version}-${arch}.dmg`, `feed-${version}-${arch}.json`]).sort());
+  assert.equal(w.writes().length, 0);
+  await w.upload({'first-release':true, 'plan-sha256':sha256});
+  assert.equal(w.writes().length, 6);
+  assert.equal((await w.receipt('upload-receipt.json')).versionedVerification.files.length, 6);
+  assert.equal(w.objects.has(`${PREFIX}manifest.json`), false);
+  await w.promote({'plan-sha256':sha256});
+  assert.equal(w.writes().length, 7);
+  assert.deepEqual(JSON.parse(w.objects.get(`${PREFIX}manifest.json`).bytes.toString()), manifest);
+});
+
+test('two-architecture plan or upload fails closed when evidence is missing or changed', async t => {
+  await t.test('missing one architecture', async t2 => {
+    const w = await world(t2), {overrides} = twoArchitectureOverrides();
+    await writeEvidence(w.out, overrides, {twoArchitectures:true});
+    await unlink(join(w.out, `Vonvon-Bot-${version}-x64.dmg`));
+    await assert.rejects(w.plan({'first-release':true}));
+    assert.equal(w.writes().length, 0);
+  });
+  await t.test('bytes changed after plan', async t2 => {
+    const w = await world(t2), {overrides} = twoArchitectureOverrides();
+    await writeEvidence(w.out, overrides, {twoArchitectures:true});
+    const {sha256} = await w.plan({'first-release':true});
+    await writeFile(join(w.out, `Vonvon-Bot-${version}-x64.zip`), 'tampered');
+    await assert.rejects(w.upload({'first-release':true, 'plan-sha256':sha256}));
+    assert.equal(w.writes().length, 0);
+  });
 });
