@@ -1,5 +1,9 @@
 # Vonvon Bot 第一版计划
 
+- 2026-10-28 owner 要求 Windows 本机完成候选构建和安装验收，并让 Mac 可通过 GitHub runner 使用同一流程复现；扩展 x64、ARM64 原生构建和验收报告，见 [Windows 双架构构建验收](plans/windows-build-acceptance.md)。仅提交 dev，正式发布仍交 Mac。
+
+- 2026-10-28 owner 官网重装 0.7.6 报旧文件卸载失败：已确认 0.7.5 残留注册指向缺失的卸载器。仅处理旧卸载器和应用 EXE 都不存在的当前用户记录，真实卸载失败仍中止；补齐 13 项真实 NSIS 隔离验证。见 [故障证据与下载参考](research/2026-10-28-windows-reinstall/report.md)。owner 指定仅提交 dev，发布交给 Mac；双架构下一片做。
+
 - 2026-10-28 owner 要求 Windows 官网发布，并让日常发布不再依赖打开虚拟机。云端构建和 Mac 发布的范围、来源校验及未签名限制见 [Windows 发布自动化](plans/windows-release-automation.md)；实际构建与发布完成状态以 run 和公网 receipt 为准。
 
 - 2026-10-28 owner 要求构建 Windows 候选并验收，已确认本地验收完成，要求同步最新 main、合入 dev 并跳过 CI。范围及实际验证见 [Windows 本地验收候选](plans/windows-preview.md)；后续 Job Object 清理修复另有真实 Windows 进程测试，最终提交仍需重新打包，main 合入及正式发布由 owner 后续执行。
