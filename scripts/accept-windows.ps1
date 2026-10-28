@@ -3,10 +3,11 @@ param(
   [Parameter(Mandatory)][string]$Evidence,
   [Parameter(Mandatory)][ValidateSet('x64','arm64')][string]$Architecture,
   [Parameter(Mandatory)][string]$SourceSha,
+  [Parameter(Mandatory)][string]$ReferenceDirectory,
   [switch]$PauseForUi
 )
 $ErrorActionPreference = 'Stop'
-if (-not [IO.Path]::IsPathRooted($Installer) -or -not [IO.Path]::IsPathRooted($Evidence)) { throw 'Installer and evidence paths must be absolute' }
+if (-not [IO.Path]::IsPathRooted($Installer) -or -not [IO.Path]::IsPathRooted($Evidence) -or -not [IO.Path]::IsPathRooted($ReferenceDirectory)) { throw 'Installer, reference and evidence paths must be absolute' }
 if ($SourceSha -cnotmatch '^[a-f0-9]{40}$') { throw 'Use a complete source SHA' }
 if (Test-Path -LiteralPath (Join-Path $Evidence 'acceptance.json')) { throw 'Acceptance report already exists' }
 New-Item -ItemType Directory -Path $Evidence -Force | Out-Null
@@ -26,6 +27,8 @@ $views = @([Microsoft.Win32.RegistryView]::Registry32, [Microsoft.Win32.Registry
 $saved = @()
 $savedFiles = @()
 $steps = @()
+$referencePe = @(Get-ChildItem -LiteralPath $ReferenceDirectory -File -Recurse | Where-Object { $_.Extension -in @('.exe','.dll','.node') } | ForEach-Object { @{ path = [IO.Path]::GetRelativePath($ReferenceDirectory,$_.FullName); hash = (Get-FileHash -LiteralPath $_.FullName).Hash } })
+if (-not ($referencePe | Where-Object { $_.path -eq 'Vonvon Bot.exe' })) { throw 'Reference payload does not contain the application' }
 $started = [DateTime]::UtcNow.ToString('o')
 $restorable = $false
 $paths = @(
@@ -42,6 +45,13 @@ function Run-Installer {
   $p = Start-Process -FilePath $Installer -ArgumentList @('/currentuser','/S',"/D=$installDir") -PassThru -Wait -WindowStyle Hidden
   if ($p.ExitCode -ne 0) { throw "Installer failed: $($p.ExitCode)" }
   Wait-Condition { Test-Path -LiteralPath (Join-Path $installDir 'Uninstall Vonvon Bot.exe') } 'Installed files were not ready'
+  $installedFiles = @(Get-ChildItem -LiteralPath $installDir -Force | Select-Object -ExpandProperty Name)
+  $installedFiles | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Evidence 'installed-files.json') -Encoding utf8NoBOM
+  if (-not (Test-Path -LiteralPath (Join-Path $installDir 'Vonvon Bot.exe'))) { throw 'Installer did not extract the application executable' }
+  foreach ($pe in $referencePe) {
+    $file = Join-Path $installDir $pe.path
+    if (-not (Test-Path -LiteralPath $file) -or (Get-FileHash -LiteralPath $file).Hash -cne $pe.hash) { throw "Installed PE missing or changed: $($pe.path)" }
+  }
 }
 function Assert-OwnedRegistration {
   foreach ($view in $views) {
@@ -139,7 +149,7 @@ try {
   Run-Installer
   $steps += Check-Runtime 'reinstall-after-0.7.5-orphan'
   Uninstall-Candidate
-  $report = @{ sourceSha = $SourceSha; architecture = $Architecture; hostArchitecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant(); installerSha256 = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLowerInvariant(); startedAt = $started; completedAt = [DateTime]::UtcNow.ToString('o'); steps = $steps; passed = $true; dataScope = 'Isolated VONVON_HOME retained across runtime and reinstall; default profile data not exercised' }
+  $report = @{ sourceSha = $SourceSha; architecture = $Architecture; hostArchitecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant(); installerSha256 = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLowerInvariant(); startedAt = $started; completedAt = [DateTime]::UtcNow.ToString('o'); steps = $steps; passed = $true; verifiedPeFiles = $referencePe.Count; dataScope = 'Isolated VONVON_HOME retained across runtime and reinstall; default profile data not exercised' }
 } finally {
   $cleanupErrors = @()
   $restoreAllowed = $restorable

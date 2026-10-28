@@ -10,6 +10,7 @@ owner 要求当前 Windows Codex 自己构建、验收，再把同样的流程�
 
 - 原 windows-release.yml 仅 x64，构建、安装校验散在 workflow 中。提取到 build-windows.ps1、windows-build-tools.mjs 和 accept-windows.ps1；本机和 runner 调用相同脚本。
 - 每次构建固定 clean HEAD、lockfile、Electron 版本与指定 win32 架构；按架构下载官方 Electron，不能沿用宿主机 electronDist。
+- NSIS 的 7z 压缩强制兼容解码器的 BCJ，避免锁定版本自动 ARM64 filter 静默漏掉所有 PE；安装后逐个比较 EXE/DLL/node 与未打包目录的哈希。
 - 每个架构生成 Setup、ZIP、blockmap、feed、inventory 和实际安装验收报告。保留源码 SHA 与最终 installer SHA-256。
 - 实际安装验收使用独立 /D 目录，拒绝碰已有真实安装。临时修改前备份本产品的两条 HKCU 安装记录、快捷方式和安装器缓存；结束时卸载测试 App，恢复原状态。默认数据不用于测试。
 - 两个 native runner 分别为 windows-2025、windows-11-arm。汇总任务要求两种架构及同源同版本、各自原生验收成功；Mac 消费同名汇总 artifact 和扩展后的发布清单。
