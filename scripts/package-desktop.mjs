@@ -2,7 +2,7 @@ import { Arch, build, Platform } from 'electron-builder';
 import { lstat, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { checkedProductVersion, repositoryRoot } from './product-version.mjs';
-import { updateConfiguration, verifyDmg, verifyUniversalApp, writeDesktopRelease } from './desktop-release-tools.mjs';
+import { updateConfiguration, verifyDmg, verifyUniversalApp, writeDesktopRelease, writeSplitFeeds } from './desktop-release-tools.mjs';
 import { assertNoBundledClaude } from './desktop-backend-policy.mjs';
 
 const desktop = join(repositoryRoot, 'packages/desktop');
@@ -25,14 +25,20 @@ try {
 await assertNoBundledClaude(join(desktop, 'stage/daemon'));
 await build({
   projectDir: desktop,
-  targets: Platform.MAC.createTarget(['dmg', 'zip'], Arch.universal),
+  targets: Platform.MAC.createTarget(['dmg', 'zip'], Arch.universal, Arch.arm64, Arch.x64),
   config: { extends: join(desktop, 'electron-builder-universal.yml'), buildVersion: version },
   publish: 'never',
 });
-const app = join(out, 'mac-universal/Vonvon Bot.app');
-const dmg = join(out, `Vonvon-Bot-${version}-universal.dmg`);
-const zip = join(out, `Vonvon-Bot-${version}-universal.zip`);
-const verifiedApp = await verifyUniversalApp({ app, version, teamIdentifier });
-await verifyDmg(dmg, teamIdentifier);
-const inventory = await writeDesktopRelease({ out: metadataOut, version, config, dmg, zip, verifiedApp });
-process.stdout.write(`Local universal artifacts verified (${inventory.state}); not notarized or published.\n`);
+const releases = {};
+for (const architecture of ['universal', 'arm64', 'x64']) {
+  const directory = architecture === 'universal' ? 'mac-universal' : architecture === 'arm64' ? 'mac-arm64' : 'mac';
+  const app = join(out, directory, 'Vonvon Bot.app');
+  const dmg = join(out, `Vonvon-Bot-${version}-${architecture}.dmg`);
+  const zip = join(out, `Vonvon-Bot-${version}-${architecture}.zip`);
+  const verifiedApp = await verifyUniversalApp({ app, version, teamIdentifier, architecture });
+  await verifyDmg(dmg, teamIdentifier);
+  const target = architecture === 'universal' ? metadataOut : join(metadataOut, architecture);
+  releases[architecture] = await writeDesktopRelease({ out: target, version, config, dmg, zip, verifiedApp, architecture });
+}
+await writeSplitFeeds({ out: metadataOut, version, config, releases });
+process.stdout.write('Universal compatibility and separate arm64/x64 artifacts verified; not notarized or published.\n');

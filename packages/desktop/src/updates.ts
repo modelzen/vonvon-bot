@@ -12,6 +12,7 @@ export interface NativeUpdateDriver {
 }
 export interface DesktopUpdateOptions {
   current:string;
+  architecture?:NodeJS.Architecture;
   manifestURL?:string;
   signed:boolean;
   driver:NativeUpdateDriver;
@@ -27,7 +28,7 @@ export class DesktopUpdateError extends Error {
   constructor(message:string,options?:ErrorOptions) { super(message,options);this.name = 'DesktopUpdateError'; }
 }
 /** 清单里没认识的字段一律忽略，以后加字段（说明、最低系统版本……）不会让已发出的版本解析失败；必需的两项和下面的同源检查照旧。 */
-const manifestSchema = z.object({version:z.string().regex(/^\d+\.\d+\.\d+$/),feedURL:z.string().url()});
+const manifestSchema = z.object({version:z.string().regex(/^\d+\.\d+\.\d+$/),feedURL:z.string().url(),feedURLs:z.object({arm64:z.string().url(),x64:z.string().url()}).optional()});
 function versionParts(version:string):number[] { return version.split('.').map(Number); }
 function isNewer(latest:string,current:string):boolean {
   const a = versionParts(latest), b = versionParts(current);
@@ -107,7 +108,9 @@ export class DesktopUpdater {
     let manifest:z.infer<typeof manifestSchema>;
     try { manifest = manifestSchema.parse(JSON.parse(body)); }
     catch (error) { throw new DesktopUpdateError('更新清单格式不对，请稍后重试。',{cause:error}); }
-    const feed = new URL(manifest.feedURL);
+    const architecture = this.options.architecture ?? process.arch;
+    const selected = architecture === 'arm64' || architecture === 'x64' ? manifest.feedURLs?.[architecture] : undefined;
+    const feed = new URL(selected ?? manifest.feedURL);
     if (feed.protocol !== 'https:' || feed.origin !== source.origin || feed.username || feed.password) throw new DesktopUpdateError('更新源地址不可信');
     return {version:manifest.version,feedURL:feed.href};
   }

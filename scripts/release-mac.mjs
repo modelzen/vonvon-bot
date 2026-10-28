@@ -38,11 +38,11 @@ export function checkVersionGate({ version, mode, nextVersion, liveVersion, firs
     for (const baseline of baselines) if (compareVersions(version, baseline) <= 0) throw new Error('Release version must be greater than the highest previously published version');
   } else throw new Error('Mode must be rehearsal or release');
 }
-export function releaseMetadata(version, publishedAt, notes = '') {
+export function releaseMetadata(version, publishedAt, notes = '', architecture = 'universal') {
   const base = new URL('.', manifestURL);
   return {
-    manifest: { version, feedURL: new URL(`feed-${version}.json`, base).href },
-    feed: { url: new URL(`Vonvon-Bot-${version}-universal.zip`, base).href, name: `Vonvon Bot ${version}`, notes, pub_date: publishedAt },
+    manifest: { version, feedURL: new URL(`feed-${version}${architecture === 'universal' ? '' : `-${architecture}`}.json`, base).href },
+    feed: { url: new URL(`Vonvon-Bot-${version}-${architecture}.zip`, base).href, name: `Vonvon Bot ${version}`, notes, pub_date: publishedAt },
   };
 }
 export async function canonicalPath(path) {
@@ -63,13 +63,14 @@ const packCode = `
 import { Arch, build, Platform } from 'electron-builder';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-const [repo, out, identity, phase] = process.argv.slice(1);
+const [repo, out, identity, architecture, phase] = process.argv.slice(1);
+const directory = architecture === 'universal' ? 'mac-universal' : architecture === 'arm64' ? 'mac-arm64' : 'mac';
 const version = JSON.parse(await readFile(join(repo, 'packages/desktop/stage/package.json'), 'utf8')).version;
 process.chdir(join(repo, 'packages/desktop'));
 await build({
   projectDir: join(repo, 'packages/desktop'),
-  targets: Platform.MAC.createTarget([phase === 'app' ? 'dir' : 'dmg'], Arch.universal),
-  ...(phase === 'dmg' ? { prepackaged: join(out, 'mac-universal/Vonvon Bot.app') } : {}),
+  targets: Platform.MAC.createTarget([phase === 'app' ? 'dir' : 'dmg'], Arch[architecture]),
+  ...(phase === 'dmg' ? { prepackaged: join(out, directory, 'Vonvon Bot.app') } : {}),
   config: { extends: join(repo, 'packages/desktop/electron-builder-universal.yml'), buildVersion: version,
     directories: { output: out }, mac: { identity } },
   publish: 'never',
@@ -108,6 +109,10 @@ export function checkNotaryWarnings(issues) {
 }
 export async function releaseMac(options, dependencies = {}) {
   const env = dependencies.env ?? process.env;
+  const architecture = options.architecture ?? 'universal';
+  if (!['universal', 'arm64', 'x64'].includes(architecture)) throw new Error('Unsupported release architecture');
+  const directory = architecture === 'universal' ? 'mac-universal' : architecture === 'arm64' ? 'mac-arm64' : 'mac';
+  const slices = architecture === 'universal' ? ['arm64', 'x86_64'] : [architecture === 'x64' ? 'x86_64' : 'arm64'];
   assertSecureTransport(env);
   const execute = dependencies.execFile ?? exec;
   if ((dependencies.platform ?? process.platform) !== 'darwin') throw new Error('Run release-mac on macOS with the user signing keychain');
@@ -169,7 +174,7 @@ export async function releaseMac(options, dependencies = {}) {
     if (options.mode === 'release' && !notes) throw new Error('Formal releases require nonempty release notes via --notes-file');
     if (live?.kind === 'present') await writeFile(join(out, 'previous-manifest.json'), JSON.stringify(live.manifest, null, 2) + '\n', { flag: 'wx' }).catch(e => { if (e.code !== 'EEXIST') throw e; });
     const statePath = join(out, 'notarization-state.json');
-    const context = { version, sourceCommit: head, mode: options.mode, nextVersion: options['next-version'] ?? null, configSHA256: digest(configBytes), keychainProfile: options['keychain-profile'], notesSHA256: digest(notes), firstRelease: !!options['first-release'], ...(options['no-live-manifest'] ? { noLiveManifest: true } : {}) };
+    const context = { ...(architecture === 'universal' ? {} : { architecture }), version, sourceCommit: head, mode: options.mode, nextVersion: options['next-version'] ?? null, configSHA256: digest(configBytes), keychainProfile: options['keychain-profile'], notesSHA256: digest(notes), firstRelease: !!options['first-release'], ...(options['no-live-manifest'] ? { noLiveManifest: true } : {}) };
     const state = await exists(statePath) ? await json(statePath) : { context, baseline, startedAt: new Date().toISOString() };
     if (JSON.stringify(state.context) !== JSON.stringify(context)) throw new Error('Output belongs to different release inputs; choose a fresh output directory');
     const save = () => writeFile(statePath, JSON.stringify(state, null, 2) + '\n');
@@ -177,9 +182,9 @@ export async function releaseMac(options, dependencies = {}) {
     const { artifactRecord, verifyUniversalApp, verifyDmg } = dependencies.tools ?? await import(pathToFileURL(join(repo, 'scripts/desktop-release-tools.mjs')));
     const require = createRequire(join(repo, 'package.json'));
     const asar = dependencies.asar ?? require('@electron/asar');
-    const app = join(out, 'mac-universal/Vonvon Bot.app');
-    const zip = join(out, `Vonvon-Bot-${version}-universal.zip`);
-    const dmg = join(out, `Vonvon-Bot-${version}-universal.dmg`);
+    const app = join(out, directory, 'Vonvon Bot.app');
+    const zip = join(out, `Vonvon-Bot-${version}-${architecture}.zip`);
+    const dmg = join(out, `Vonvon-Bot-${version}-${architecture}.dmg`);
     if (state.complete) {
       for (const record of state.files) {
         if ((await artifactRecord(join(out, record.file))).sha256 !== record.sha256) throw new Error('Completed release bytes changed; refusing to reuse this output');
@@ -204,12 +209,12 @@ export async function releaseMac(options, dependencies = {}) {
       state.build = { sourceCommit: head }; await save();
       if ((await json(join(desktop, 'stage/package.json'))).version !== version) throw new Error('Built stage version differs');
       if (JSON.stringify(validateConfig(await json(join(desktop, 'stage/dist/update-config.json')))) !== JSON.stringify(config)) throw new Error('Built stage did not use the supplied update configuration');
-      console.log('Building and signing universal App');
-      await run('universal-app', process.execPath, ['--input-type=module', '-e', packCode, repo, out, cert, 'app']);
+      console.log(`Building and signing ${architecture} App`);
+      await run('universal-app', process.execPath, ['--input-type=module', '-e', packCode, repo, out, cert, architecture, 'app']);
       state.appBuilt = true; await save();
     }
     if (state.build?.sourceCommit !== head) throw new Error('App lacks its source-build binding');
-    let verification = await verifyUniversalApp({ app, version, teamIdentifier: config.teamIdentifier, execute: toolExecute });
+    let verification = await verifyUniversalApp({ app, version, teamIdentifier: config.teamIdentifier, architecture, execute: toolExecute });
     const embedded = JSON.parse(asar.extractFile(join(app, 'Contents/Resources/app.asar'), 'dist/update-config.json').toString());
     validateConfig(embedded);
     if (embedded.teamIdentifier !== config.teamIdentifier) throw new Error('Packaged update configuration differs from the certificate');
@@ -231,7 +236,7 @@ export async function releaseMac(options, dependencies = {}) {
         state[key] = seal; await save();
       } else if (JSON.stringify(state[key]) !== JSON.stringify(seal)) throw new Error(`${kind} signed content differs from the recorded candidate`);
     }
-    await bindSeal('app', app, ['arm64', 'x86_64']);
+    await bindSeal('app', app, slices);
     async function notarize(kind, archive) {
       const record = await artifactRecord(archive);
       let submission = state[kind];
@@ -300,7 +305,7 @@ export async function releaseMac(options, dependencies = {}) {
     await run('app-staple', 'xcrun', ['stapler', 'staple', app]);
     await run('app-ticket', 'xcrun', ['stapler', 'validate', app]);
     await run('app-gatekeeper', 'spctl', ['-a', '-vv', '-t', 'exec', app]);
-    verification = await verifyUniversalApp({ app, version, teamIdentifier: config.teamIdentifier, execute: toolExecute });
+    verification = await verifyUniversalApp({ app, version, teamIdentifier: config.teamIdentifier, architecture, execute: toolExecute });
     if (!state.zip) {
       if (await exists(zip)) throw new Error('Unrecorded final ZIP exists; preserve it and investigate');
       console.log('Creating final update ZIP from the stapled App');
@@ -311,7 +316,7 @@ export async function releaseMac(options, dependencies = {}) {
     if (!state.dmgBuilt) {
       if (await exists(dmg)) throw new Error('Unrecorded final DMG exists; preserve it and investigate');
       console.log('Creating and signing DMG from the stapled App');
-      await run('final-dmg', process.execPath, ['--input-type=module', '-e', packCode, repo, out, cert, 'dmg']);
+      await run('final-dmg', process.execPath, ['--input-type=module', '-e', packCode, repo, out, cert, architecture, 'dmg']);
       state.dmgBuilt = true; await save();
     }
     await verifyDmg(dmg, config.teamIdentifier, toolExecute);
@@ -332,8 +337,8 @@ export async function releaseMac(options, dependencies = {}) {
     }
     const extractedApp = join(extracted, 'Vonvon Bot.app');
     await noQuarantine('zip-attributes', extractedApp);
-    await verifyUniversalApp({ app: extractedApp, version, teamIdentifier: config.teamIdentifier, execute: toolExecute });
-    if (JSON.stringify(await signedSeal('zip-app', extractedApp, ['arm64', 'x86_64'])) !== JSON.stringify(state.appSeal)) throw new Error('ZIP contains a different signed App');
+    await verifyUniversalApp({ app: extractedApp, version, teamIdentifier: config.teamIdentifier, architecture, execute: toolExecute });
+    if (JSON.stringify(await signedSeal('zip-app', extractedApp, slices)) !== JSON.stringify(state.appSeal)) throw new Error('ZIP contains a different signed App');
     await run('zip-app-ticket', 'xcrun', ['stapler', 'validate', extractedApp]);
     await run('zip-app-gatekeeper', 'spctl', ['-a', '-vv', '-t', 'exec', extractedApp]);
     state.zipVerification = { archiveSHA256: state.zip.sha256 }; await save();
@@ -344,14 +349,14 @@ export async function releaseMac(options, dependencies = {}) {
     try {
       const mountedApp = join(volume, 'Vonvon Bot.app');
       await noQuarantine('dmg-attributes', mountedApp);
-      await verifyUniversalApp({ app: mountedApp, version, teamIdentifier: config.teamIdentifier, execute: toolExecute });
-      if (JSON.stringify(await signedSeal('dmg-app', mountedApp, ['arm64', 'x86_64'])) !== JSON.stringify(state.appSeal)) throw new Error('DMG contains a different signed App');
+      await verifyUniversalApp({ app: mountedApp, version, teamIdentifier: config.teamIdentifier, architecture, execute: toolExecute });
+      if (JSON.stringify(await signedSeal('dmg-app', mountedApp, slices)) !== JSON.stringify(state.appSeal)) throw new Error('DMG contains a different signed App');
       await run('dmg-app-ticket', 'xcrun', ['stapler', 'validate', mountedApp]);
       await run('dmg-app-gatekeeper', 'spctl', ['-a', '-vv', '-t', 'exec', mountedApp]);
     } finally { await run('dmg-detach', 'hdiutil', ['detach', volume]); }
-    const metadata = releaseMetadata(version, new Date().toISOString(), notes);
+    const metadata = releaseMetadata(version, new Date().toISOString(), notes, architecture);
     const manifestFile = options.mode === 'rehearsal' ? 'REHEARSAL-manifest.json' : 'manifest.json';
-    const feedFile = options.mode === 'rehearsal' ? `REHEARSAL-feed-${version}.json` : `feed-${version}.json`;
+    const feedFile = options.mode === 'rehearsal' ? `REHEARSAL-feed-${version}${architecture === 'universal' ? '' : `-${architecture}`}.json` : `feed-${version}${architecture === 'universal' ? '' : `-${architecture}`}.json`;
     if (options.mode === 'rehearsal') await writeFile(join(out, 'DO-NOT-PUBLISH'), 'Local rehearsal only. Never upload this directory.\n');
     for (const [file, value] of [[manifestFile, metadata.manifest], [feedFile, metadata.feed]]) {
       await writeFile(join(out, file), JSON.stringify(value, null, 2) + '\n');
@@ -374,7 +379,7 @@ if (invokedPath && invokedPath === await realpath(fileURLToPath(import.meta.url)
     repo: { type: 'string', default: resolve(dirname(fileURLToPath(import.meta.url)), '..') },
     version: { type: 'string' }, sha: { type: 'string' }, out: { type: 'string' }, mode: { type: 'string', default: 'rehearsal' },
     'first-release': { type: 'boolean' }, 'no-live-manifest': { type: 'boolean' }, 'cos-config': { type: 'string' }, 'build-home': { type: 'string' }, 'recover-submission': { type: 'string' },
-    'next-version': { type: 'string' }, 'notes-file': { type: 'string' }, 'keychain-profile': { type: 'string', default: 'notelet-notary' }, timeout: { type: 'string', default: '10m' }, help: { type: 'boolean' },
+    architecture: { type: 'string' }, 'next-version': { type: 'string' }, 'notes-file': { type: 'string' }, 'keychain-profile': { type: 'string', default: 'notelet-notary' }, timeout: { type: 'string', default: '10m' }, help: { type: 'boolean' },
   } });
   if (values.help) console.log('VONVON_DESKTOP_UPDATE_CONFIG=/absolute/external/config.json node scripts/release-mac.mjs --version X.Y.Z --sha FULL_MAIN_SHA --out /absolute/evidence --build-home /temporary/isolated-home --mode rehearsal --next-version CEILING [--repo /absolute/source-worktree] [--keychain-profile notelet-notary]\nFor --mode release, supply --notes-file /absolute/release-notes.txt; the public version, COS prefix and local ledger are verified first with --cos-config /absolute/external/cos-readonly.json. Only an HTTPS 404 manifest plus an empty COS prefix and ledger allows --first-release; a 404 manifest with published versions in COS or the ledger needs --no-live-manifest and gates above the highest of them. Recover an uncertain submission with --recover-submission app=<UUID> or dmg=<UUID>. This script never uploads to COS, refreshes CDN, publishes, or installs.');
   else if (!values.version || !values.sha || !values.out) { console.error('Supply --version, --sha and --out; see --help'); process.exitCode = 1; }
