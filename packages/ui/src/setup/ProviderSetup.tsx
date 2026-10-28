@@ -86,6 +86,7 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
   const [uninstallOpen, setUninstallOpen] = useState(false);
   const [cliUninstall, setCliUninstall] = useState(false);
   const [managementNotice, setManagementNotice] = useState('');
+  const [showGuide, setShowGuide] = useState(false);
   const [versionCheck, setVersionCheck] = useState<{signature: string; installed: string | null; latest: string | null}>();
   const name = providerNames[provider];
   const componentName = provider === 'claude' ? 'Claude Agent SDK' : name;
@@ -98,6 +99,7 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
   const connecting = Boolean(state.activeLogin || state.activeCodexJob);
   const disabled = !ready || busy || state.working;
   const source = state.tools.find(item => item.tool === provider);
+  useEffect(() => setShowGuide(false), [provider]);
   const versionSignature = JSON.stringify([providerSignature(state.tool), source?.executable, source?.version]);
   useEffect(() => setVersionCheck(undefined), [versionSignature]);
   const checkedVersion = versionCheck?.signature === versionSignature ? versionCheck : undefined;
@@ -141,10 +143,11 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
       <div className="provider-step"><span className={`provider-step__number${auth && installed ? ' is-complete' : ''}`}>{compact ? <KeyRound size={16}/> : auth && installed ? <Check size={13}/> : '2'}</span>
         <div className="provider-step__copy"><strong>{state.tool?.authentication === 'notRequired' ? '模型连接' : compact ? '账号连接' : '连接账号'}</strong><span>{authLabel}</span></div>
         {detectionUnknown ? null : auth ? (compact ? <IconButton label="重新检测连接" title="重新检测连接" variant="ghost" disabled={disabled || connecting || state.check?.state === 'checking'} onClick={() => void state.verify()}><RefreshCw size={15}/></IconButton> : <IconButton size="sm" variant="ghost" label="重新检测" title="重新检测" disabled={disabled || connecting || state.check?.state === 'checking'} onClick={() => void state.verify()}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>)
-          : <Button size="sm" disabled={disabled || !installed || connecting || installing || state.check?.state === 'checking'} onClick={() => void state.connect()}>连接</Button>}
+          : <Button size="sm" disabled={disabled || !installed || connecting || installing || state.check?.state === 'checking'} onClick={() => setShowGuide(true)}>配置方法</Button>}
       </div>
     </div>
     {!auth && installed && !connecting && <div className="provider-existing"><span>已有账号或 API 配置？</span><button type="button" disabled={disabled || state.check?.state === 'checking'} onClick={() => void state.verify()}>检测现有配置</button></div>}
+    {showGuide && <div className="provider-problem" role="status"><p>请在终端运行 <code>{provider === 'claude' ? 'claude' : 'codex'}</code>，在 {name} 中完成登录{provider === 'claude' ? '或配置并验证 API' : ''}。完成后回到这里重新检测。</p></div>}
     {cliFailed && <div className="provider-problem" role="status">本机 Claude Code 无法启动。请先在终端运行 <code>claude</code>，修复问题并确认可以使用，再回来重新检测。Vonvon 会复用本机 Claude 的认证或 API 配置。</div>}
     {state.check?.state === 'checking' && installed && auth && <p className="provider-check"><OperationActivity label="正在读取可用模型…" state="connecting"/></p>}
     {state.canContinue && !compact && <p className="provider-check provider-check--ready" role="status"><Check size={14}/>{name} 已准备好<span>· {state.check?.models?.length ?? 0} 个模型</span></p>}
@@ -163,7 +166,7 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
         <div><dt>最新版本</dt><dd>{latestVersion ?? (!source && !checkedVersion ? '正在检测…' : '暂时无法查询')}</dd></div>
       </>}<div><dt>模型来源</dt><dd>{state.tool?.authentication === 'notRequired' ? '现有 API 配置' : 'Provider 原生配置'}</dd></div></dl>{source?.executable && provider === 'codex' && <details className="provider-install-path"><summary>安装位置</summary><code>{source.executable}</code></details>}
         <div className="provider-management-actions"><Button size="sm" disabled={disabled || installing} onClick={() => void checkVersion()}>检查版本</Button>
-          {installed && auth && <Button size="sm" disabled={disabled || connecting || installing} onClick={() => void state.connect()}>重新连接账号</Button>}
+          {installed && auth && <Button size="sm" disabled={disabled || connecting || installing} onClick={() => setShowGuide(true)}>更换账号或配置</Button>}
           {installed && <Button size="sm" disabled={disabled || installing || connecting} onClick={() => void state.installProvider(true)}>{provider === 'claude' ? '更新 SDK' : `更新 ${name}`}</Button>}
           {(provider === 'codex' ? source?.canUninstall : state.entry?.canUninstall) && <Button size="sm" disabled={disabled || installing || connecting} onClick={() => setUninstallOpen(true)}>{provider === 'claude' ? '卸载 SDK' : '卸载托管副本'}</Button>}
         </div>{managementNotice && <p className="provider-check" role="status">{managementNotice}</p>}
