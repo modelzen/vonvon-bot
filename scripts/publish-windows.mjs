@@ -59,7 +59,6 @@ async function ghJSON(args, env) {
 
 export async function downloadBuild({ runId, out, env, execute = exec, api = ghJSON, expectedSha, expectedVersion }) {
   if (!/^[1-9]\d*$/.test(String(runId))) throw new Error('Use a GitHub Actions --run-id');
-  await mkdir(dirname(out), { recursive: true });
   const run = await api(['api', `repos/${repository}/actions/runs/${runId}`], env);
   const sourceSha = validateBuildRun(run);
   if (expectedSha && expectedSha !== sourceSha) throw new Error('Windows run differs from the expected release SHA');
@@ -76,6 +75,7 @@ export async function downloadBuild({ runId, out, env, execute = exec, api = ghJ
   const listing = await api(['api', `repos/${repository}/actions/runs/${runId}/artifacts?per_page=100`], env);
   const artifacts = listing.artifacts?.filter(item => !item.expired && new RegExp(`^windows-unsigned-\\d+\\.\\d+\\.\\d+-${sourceSha.slice(0, 12)}$`).test(item.name));
   if (artifacts?.length !== 1) throw new Error('Expected exactly one unexpired Windows build artifact');
+  await mkdir(dirname(out), { recursive: true });
   const provenancePath = join(out, 'github-build.json');
   const entries = await readdir(out).catch(error => { if (error.code === 'ENOENT') return undefined; throw error; });
   if (!entries?.length) {
@@ -152,7 +152,7 @@ export async function publishWindowsObjects({ out, inventory, config, client, fe
         Headers: { 'x-cos-forbid-overwrite': 'true' } });
     }
     const verified = await verifyWindowsPublic(objects, { fetchImpl });
-    const receipt = { version: inventory.version, sourceSha: inventory.sourceSha, architecture: 'x64', signed: false,
+    const receipt = { version: inventory.version, sourceSha: inventory.sourceSha, architecture: inventory.architecture, signed: false,
       updatesEnabled: false, verifiedAt: new Date().toISOString(), objects: verified };
     await writeFile(join(out, 'windows-publish-receipt.json'), json(receipt));
     return receipt;

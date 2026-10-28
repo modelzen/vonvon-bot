@@ -1,11 +1,24 @@
 import { createHash } from 'node:crypto';
-import { lstat, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { checkedProductVersion, repositoryRoot } from './product-version.mjs';
 
-const releaseName = version => `Vonvon-Bot-${version}-windows-x64`;
-const installerName = version => `Vonvon-Bot-Setup-${version}-x64.exe`;
+const architectures = ['x64', 'arm64'];
+const releaseName = (version, arch = 'x64') => `Vonvon-Bot-${version}-windows-${arch}`;
+const installerName = (version, arch = 'x64') => `Vonvon-Bot-Setup-${version}-${arch}.exe`;
+const feedName = arch => arch === 'arm64' ? 'latest-arm64.yml' : 'latest.yml';
+const expectedArtifacts = (version, arch) => [
+  ['installer', installerName(version, arch)], ['zip', `${releaseName(version, arch)}.zip`],
+  ['blockmap', `${installerName(version, arch)}.blockmap`], ['feed', feedName(arch)],
+];
+export function validateWindowsAcceptance(report, { architecture, sourceSha, installerSha256 }) {
+  const required = ['fresh-install', 'overwrite-install', 'uninstall', 'reinstall-after-uninstall', 'reinstall-after-0.7.5-orphan'];
+  if (report?.passed !== true || report.architecture !== architecture || report.hostArchitecture !== architecture || report.sourceSha !== sourceSha || report.installerSha256 !== installerSha256 ||
+      !Array.isArray(report.steps) || required.some(name => !report.steps.some(step => step.name === name && step.passed === true))) {
+    throw new Error(`${architecture} native acceptance evidence does not match installer`);
+  }
+}
 
 export function peMachine(bytes) {
   if (bytes.length < 0x40 || bytes.toString('ascii', 0, 2) !== 'MZ') throw new Error('Missing PE DOS header');
@@ -41,12 +54,9 @@ export function validateWindowsInventory(inventory, { version, sourceSha } = {})
   if (!/^\d+\.\d+\.\d+$/.test(inventory.version) || (version && inventory.version !== version)) throw new Error('Inventory version mismatch');
   if (!/^[0-9a-f]{40}$/i.test(inventory.sourceSha) || /^0+$/.test(inventory.sourceSha) ||
       (sourceSha && inventory.sourceSha.toLowerCase() !== sourceSha.toLowerCase())) throw new Error('Inventory source SHA mismatch');
-  if (inventory.architecture !== 'x64' || inventory.signed !== false || inventory.updatesEnabled !== false) throw new Error('Inventory must describe an unsigned x64 build with updates disabled');
-  const base = releaseName(inventory.version);
-  const expected = [
-    ['installer', installerName(inventory.version)], ['zip', `${base}.zip`],
-    ['blockmap', `${installerName(inventory.version)}.blockmap`], ['feed', 'latest.yml'],
-  ];
+  if (![...architectures, 'x64+arm64'].includes(inventory.architecture) || inventory.signed !== false || inventory.updatesEnabled !== false) throw new Error('Inventory must describe unsigned Windows builds with updates disabled');
+  const archs = inventory.architecture === 'x64+arm64' ? architectures : [inventory.architecture];
+  const expected = archs.flatMap(arch => expectedArtifacts(inventory.version, arch));
   if (!Array.isArray(inventory.artifacts) || inventory.artifacts.length !== expected.length) throw new Error('Incomplete Windows artifact inventory');
   for (const [index, [kind, file]] of expected.entries()) {
     const artifact = inventory.artifacts[index];
@@ -66,11 +76,15 @@ export async function verifyWindowsArtifacts(out, { version, sourceSha } = {}) {
       throw new Error(`Artifact content mismatch: ${artifact.file}`);
     }
   }
-  const installer = inventory.artifacts[0];
-  verifyLatestYml(await readFile(join(out, 'latest.yml'), 'utf8'), {
-    version: inventory.version, installerName: installer.file, installerSize: installer.bytes, installerSha512: installer.sha512,
-  });
-  peMachine(await readFile(join(out, installer.file)));
+  const archs = inventory.architecture === 'x64+arm64' ? architectures : [inventory.architecture];
+  for (const [index, arch] of archs.entries()) {
+    const installer = inventory.artifacts[index * 4];
+    verifyLatestYml(await readFile(join(out, feedName(arch)), 'utf8'), {
+      version: inventory.version, installerName: installer.file, installerSize: installer.bytes, installerSha512: installer.sha512,
+    });
+    peMachine(await readFile(join(out, installer.file)));
+    if (inventory.architecture === 'x64+arm64') validateWindowsAcceptance(JSON.parse(await readFile(join(out, `windows-acceptance-${arch}.json`), 'utf8')), { architecture: arch, sourceSha: inventory.sourceSha, installerSha256: installer.sha256 });
+  }
   return inventory;
 }
 
@@ -85,35 +99,62 @@ async function fileEvidence(path) {
   };
 }
 
-export async function createWindowsInventory({ out, version, sourceSha, unpackedExe, zipExe }) {
+export async function createWindowsInventory({ out, version, sourceSha, unpackedExe, zipExe, architecture = 'x64' }) {
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Invalid release version');
   if (!/^[0-9a-f]{40}$/i.test(sourceSha) || /^0+$/.test(sourceSha)) throw new Error('Invalid source SHA');
-  const base = releaseName(version);
-  const names = { installer: installerName(version), zip: `${base}.zip`, blockmap: `${installerName(version)}.blockmap`, feed: 'latest.yml' };
+  if (!architectures.includes(architecture)) throw new Error('Unsupported Windows architecture');
+  const names = Object.fromEntries(expectedArtifacts(version, architecture));
   const artifacts = [];
   for (const [kind, name] of Object.entries(names)) artifacts.push({ kind, ...await fileEvidence(join(out, name)) });
   const installerEvidence = artifacts.find(artifact => artifact.kind === 'installer');
   const [unpacked, zipped, installer, yaml] = await Promise.all([
     readFile(unpackedExe), readFile(zipExe), readFile(join(out, names.installer)), readFile(join(out, names.feed), 'utf8'),
   ]);
-  if (peMachine(unpacked) !== 0x8664 || peMachine(zipped) !== 0x8664) {
-    throw new Error('Packaged application PE architecture is not x64');
+  const machine = architecture === 'arm64' ? 0xaa64 : 0x8664;
+  if (peMachine(unpacked) !== machine || peMachine(zipped) !== machine) {
+    throw new Error(`Packaged application PE architecture is not ${architecture}`);
   }
   peMachine(installer); // NSIS bootstrapper may be x86; the application payload must be x64.
   verifyLatestYml(yaml, {
     version, installerName: names.installer, installerSize: installerEvidence.bytes,
     installerSha512: installerEvidence.sha512,
   });
-  const inventory = { sourceSha: sourceSha.toLowerCase(), version, architecture: 'x64', signed: false, updatesEnabled: false, artifacts };
+  const inventory = { sourceSha: sourceSha.toLowerCase(), version, architecture, signed: false, updatesEnabled: false, artifacts };
   validateWindowsInventory(inventory, { version, sourceSha });
   await writeFile(join(out, 'windows-release-inventory.json'), JSON.stringify(inventory, null, 2) + '\n', { flag: 'wx' });
   return inventory;
 }
 
+export async function combineWindowsArtifacts(inputs, out) {
+  if (inputs.length !== 2) throw new Error('Both Windows architectures are required');
+  const verified = await Promise.all(inputs.map(path => verifyWindowsArtifacts(path)));
+  const byArch = new Map(verified.map((inventory, i) => [inventory.architecture, { inventory, path: inputs[i] }]));
+  if (architectures.some(arch => !byArch.has(arch))) throw new Error('Expected x64 and arm64 Windows artifacts');
+  const first = verified[0];
+  if (verified.some(i => i.version !== first.version || i.sourceSha !== first.sourceSha)) throw new Error('Windows architectures have different source/version');
+  await mkdir(out, { recursive: true });
+  const artifacts = [];
+  for (const arch of architectures) {
+    const { inventory, path } = byArch.get(arch);
+    const acceptance = JSON.parse(await readFile(join(path, `windows-acceptance-${arch}.json`), 'utf8'));
+    validateWindowsAcceptance(acceptance, { architecture: arch, sourceSha: first.sourceSha, installerSha256: inventory.artifacts[0].sha256 });
+    for (const item of inventory.artifacts) { await copyFile(join(path, item.file), join(out, item.file), 1); artifacts.push(item); }
+    await copyFile(join(path, `windows-acceptance-${arch}.json`), join(out, `windows-acceptance-${arch}.json`), 1);
+  }
+  const inventory = { sourceSha: first.sourceSha, version: first.version, architecture: 'x64+arm64', signed: false, updatesEnabled: false, artifacts };
+  validateWindowsInventory(inventory);
+  await writeFile(join(out, 'windows-release-inventory.json'), JSON.stringify(inventory, null, 2) + '\n', { flag: 'wx' });
+  return verifyWindowsArtifacts(out);
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const [out, sourceSha, unpackedExe, zipExe] = process.argv.slice(2);
+  if (process.argv[2] === '--combine') {
+    const [, , , out, ...inputs] = process.argv;
+    console.log(JSON.stringify(await combineWindowsArtifacts(inputs, out))); process.exit(0);
+  }
+  const [out, sourceSha, unpackedExe, zipExe, architecture] = process.argv.slice(2);
   if ([out, sourceSha, unpackedExe, zipExe].some(value => !value)) throw new Error('Usage: node scripts/package-windows.mjs <output-dir> <source-sha> <unpacked-exe> <zip-exe>');
   const version = await checkedProductVersion(repositoryRoot);
-  const inventory = await createWindowsInventory({ out, version, sourceSha, unpackedExe, zipExe });
+  const inventory = await createWindowsInventory({ out, version, sourceSha, unpackedExe, zipExe, architecture });
   process.stdout.write(`Verified ${inventory.artifacts.length} Windows release files for ${version} at ${inventory.sourceSha}\n`);
 }
