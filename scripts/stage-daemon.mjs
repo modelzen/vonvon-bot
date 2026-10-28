@@ -30,6 +30,7 @@ function runtimeFile(source, path, name) {
 }
 
 export async function stageDependencies(from, destination, options = {}) {
+  if (options.hoist) return stageHoistedDependencies(from, destination, options);
   const { ancestors = new Map(), includePeers = false, compact = false, copies = new Map() } = options;
   const metadata = options.metadata ?? JSON.parse(await readFile(join(from, 'package.json'), 'utf8'));
   const dependencies = { ...(includePeers ? metadata.peerDependencies : {}), ...metadata.dependencies, ...metadata.optionalDependencies };
@@ -67,6 +68,79 @@ export async function stageDependencies(from, destination, options = {}) {
       filter: path => !['node_modules', '.git'].includes(basename(path)) && (!compact || runtimeFile(dependency, path, name)),
     });
     await stageDependencies(dependency, target, next);
+  }
+}
+
+// NSIS extraction uses Windows path limits. Repeating the complete dependency
+// graph below every package can silently lose runtime files during installation.
+// Hoist compatible physical packages without links; retain local copies where
+// different dependency versions would otherwise shadow one another.
+async function stageHoistedDependencies(from, destination, options) {
+  const root = { from, target: destination, parent: undefined, metadata: options.metadata };
+  const slots = new Map();
+  const edges = [];
+  const instances = new Map();
+  const peerSources = new Set();
+  function resolution(owner, name, proposedTarget, proposedSource) {
+    for (let scope = owner; scope; scope = scope.parent) {
+      const key = join(scope.target, 'node_modules', name);
+      const found = key === proposedTarget ? proposedSource : slots.get(key)?.from;
+      if (found) return found;
+    }
+  }
+  const queue = [root];
+  for (let i = 0; i < queue.length; i++) {
+    const owner = queue[i];
+    const metadata = owner.metadata ?? JSON.parse(await readFile(join(owner.from, 'package.json'), 'utf8'));
+    // Relocation changes peer lookup too, even for packages outside the SDK graph.
+    const dependencies = { ...metadata.peerDependencies, ...metadata.dependencies, ...metadata.optionalDependencies };
+    for (const name of Object.keys(dependencies)) {
+      let dependency;
+      try { dependency = await packageRoot(name, owner.from); }
+      catch (error) {
+        if (name in (metadata.optionalDependencies ?? {}) || metadata.peerDependenciesMeta?.[name]?.optional) continue;
+        throw error;
+      }
+      if (name in (metadata.peerDependencies ?? {})) peerSources.add(dependency);
+      const priorInstances = instances.get(dependency);
+      if (peerSources.has(dependency) && priorInstances?.size &&
+          (priorInstances.size > 1 || resolution(owner, name) !== dependency)) {
+        throw new Error(`Cannot preserve peer instance for ${name}; refusing an incompatible Windows dependency layout`);
+      }
+      const scopes = [];
+      for (let scope = owner; scope; scope = scope.parent) scopes.push(scope);
+      const placements = [];
+      let existing;
+      for (const scope of scopes) {
+        const key = join(scope.target, 'node_modules', name);
+        const slot = slots.get(key);
+        if (slot) { existing = slot; break; }
+        placements.push(scope);
+      }
+      if (existing?.from === dependency) {
+        edges.push({ owner, name, from: dependency });
+        continue;
+      }
+      // A later sibling may need a different version. Do not hoist it into an
+      // intermediate scope that would shadow a dependency already using root.
+      const placement = placements.reverse().find(scope => {
+        const target = join(scope.target, 'node_modules', name);
+        return edges.every(edge => edge.name !== name || resolution(edge.owner, name, target, dependency) === edge.from);
+      });
+      if (!placement) throw new Error(`Conflicting staged dependency ${name} in ${owner.target}`);
+      const target = join(placement.target, 'node_modules', name);
+      const node = { from: dependency, target, parent: placement };
+      slots.set(target, node);
+      if (!instances.has(dependency)) instances.set(dependency, new Set());
+      instances.get(dependency).add(target);
+      edges.push({ owner, name, from: dependency });
+      await mkdir(dirname(target), { recursive: true });
+      await cp(dependency, target, {
+        recursive: true, dereference: true,
+        filter: path => !['node_modules', '.git'].includes(basename(path)),
+      });
+      queue.push(node);
+    }
   }
 }
 
