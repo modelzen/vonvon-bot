@@ -223,3 +223,58 @@ test('split manifest verifies both architectures and rejects missing or cross-or
   data.files.set(`Vonvon-Bot-${version}-x64.zip`, Buffer.from('tampered'));
   await assert.rejects(verifyPublicRelease({env: {}, out: '/evidence', version, sha, fetchImpl}), /bytes/);
 });
+
+function twoArchitectureEvidence(t) {
+  const data = fixture(t);
+  const feeds = Object.fromEntries(['arm64', 'x64'].map(arch => [arch, new URL(`feed-${version}-${arch}.json`, base).href]));
+  const split = {version, feedURL: feeds.arm64, feedURLs: feeds};
+  data.files.set('manifest.json', Buffer.from(JSON.stringify(split)));
+  for (const arch of ['arm64', 'x64']) {
+    data.files.set(`feed-${version}-${arch}.json`, Buffer.from(JSON.stringify({...feed, url: new URL(`Vonvon-Bot-${version}-${arch}.zip`, base).href})));
+    for (const ext of ['dmg', 'zip']) data.files.set(`Vonvon-Bot-${version}-${arch}.${ext}`, Buffer.from(`${arch}-${ext}`));
+  }
+  const names = ['manifest.json', ...['arm64', 'x64'].flatMap(arch => [`feed-${version}-${arch}.json`, `Vonvon-Bot-${version}-${arch}.dmg`, `Vonvon-Bot-${version}-${arch}.zip`])];
+  const record = file => ({file, size: data.files.get(file).length, sha256: createHash('sha256').update(data.files.get(file)).digest('hex')});
+  data.inventory.files = names.map(record); data.files.set('release-inventory.json', Buffer.from(JSON.stringify(data.inventory)));
+  data.state.files = [...names, 'release-inventory.json'].map(record);
+  data.state.architectureEvidence = Object.fromEntries(['arm64', 'x64'].map(arch => [arch, {zipSHA256:record(`Vonvon-Bot-${version}-${arch}.zip`).sha256, zipVerifiedSHA256:record(`Vonvon-Bot-${version}-${arch}.zip`).sha256, dmgStapledSHA256:record(`Vonvon-Bot-${version}-${arch}.dmg`).sha256, appSeal:{}, dmgSeal:{}, appSubmission:'a', dmgSubmission:'b'}]));
+  data.files.set('notarization-state.json', Buffer.from(JSON.stringify(data.state)));
+  data.files.set('SHA256SUMS', Buffer.from(data.state.files.map(item => `${item.sha256}  ${item.file}`).join('\n') + '\n'));
+  return {...data, split, feeds, names};
+}
+
+test('a two-architecture manifest verifies exactly the two complete releases', async t => {
+  const data = twoArchitectureEvidence(t), seen = [];
+  const fetchImpl = async url => { seen.push(url); const file = basename(new URL(url).pathname); return response(data.files.get(file), versionedHeaders(file)); };
+  assert.deepEqual(validateManifest(data.split), data.split);
+  const versioned = await verifyVersionedRelease({env: {}, out: '/evidence', version, sha, fetchImpl});
+  assert.equal(versioned.versionedObjectsVerified, true);
+  assert.equal(versioned.files.length, 6);
+  assert.ok(versioned.files.every(file => !file.file.includes('universal') && file.file !== `feed-${version}.json`));
+  assert.equal(seen.length, 6);
+  seen.length = 0;
+  assert.equal((await verifyPublicRelease({env: {}, out: '/evidence', version, sha, fetchImpl})).publiclyVerified, true);
+  assert.equal(seen.length, 7);
+  assert.throws(() => validateManifest({...data.split, feedURL: data.feeds.x64}), /Manifest feed/);
+  assert.throws(() => validateManifest({...data.split, feedURLs: {arm64:data.feeds.arm64}}), /exactly arm64 and x64/);
+  assert.throws(() => validateManifest({...data.split, feedURLs: {...data.feeds, x64:'https://bad.example/feed.json'}}));
+  assert.throws(() => validateManifest({version, feedURL:data.feeds.arm64}), /Manifest feed/);
+});
+
+test('two-architecture evidence fails closed for missing, tampered and cross-bound artifacts', async t => {
+  const data = twoArchitectureEvidence(t);
+  const x64Zip = `Vonvon-Bot-${version}-x64.zip`;
+  const original = data.files.get(x64Zip);
+  data.files.delete(x64Zip);
+  await assert.rejects(validateReleaseInventory('/evidence', {version, sha}), /missing/);
+  data.files.set(x64Zip, Buffer.from('wrong bytes'));
+  await assert.rejects(validateReleaseInventory('/evidence', {version, sha}), /bytes/);
+  data.files.set(x64Zip, original);
+  data.state.architectureEvidence.x64.zipVerifiedSHA256 = 'b'.repeat(64);
+  data.files.set('notarization-state.json', Buffer.from(JSON.stringify(data.state)));
+  await assert.rejects(validateReleaseInventory('/evidence', {version, sha}), /verification receipts/);
+  data.state.architectureEvidence.x64.zipVerifiedSHA256 = data.state.architectureEvidence.x64.zipSHA256;
+  delete data.state.architectureEvidence.x64;
+  data.files.set('notarization-state.json', Buffer.from(JSON.stringify(data.state)));
+  await assert.rejects(validateReleaseInventory('/evidence', {version, sha}), /architecture receipts/);
+});
