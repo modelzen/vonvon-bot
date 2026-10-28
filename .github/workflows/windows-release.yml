@@ -3,7 +3,7 @@ name: Windows release build
 on:
   workflow_dispatch:
   push:
-    branches: [codex/windows-release-automation]
+    branches: [codex/windows-release-automation, codex/fix-windows-install]
 
 permissions:
   contents: read
@@ -53,7 +53,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
           npm run typecheck
           if ($LASTEXITCODE -ne 0) { throw 'Typecheck failed' }
-          node --test scripts/package-windows.test.mjs scripts/publish-windows.test.mjs
+          node --test scripts/stage-daemon.test.mjs scripts/windows-runtime-smoke.test.mjs scripts/package-windows.test.mjs scripts/publish-windows.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Package validation tests failed' }
           npm run test -w @vonvon/daemon -- test/environment-windows-launch.test.ts test/provider/windows-command-line.test.ts test/provider/windows-supervisor.test.ts test/windows-owned-process.test.ts test/data-compatibility.test.ts test/register-bot.test.ts
           if ($LASTEXITCODE -ne 0) { throw 'Windows daemon tests failed' }
@@ -84,11 +84,19 @@ jobs:
           if (@($updateConfig.PSObject.Properties).Count -ne 0) { throw 'Unsigned build must have empty Windows update configuration' }
           $fileVersion = (Get-Item -LiteralPath $unpackedExe).VersionInfo.FileVersion
           if ($fileVersion -notmatch "^$([regex]::Escape($env:RELEASE_VERSION))(\.0)?$") { throw "Packaged application FileVersion mismatch: $fileVersion" }
-          foreach ($exe in @($unpackedExe, $zipExe[0].FullName, (Join-Path $out "Vonvon-Bot-$env:RELEASE_VERSION-windows-x64.exe"))) {
+          foreach ($exe in @($unpackedExe, $zipExe[0].FullName, (Join-Path $out "Vonvon-Bot-Setup-$env:RELEASE_VERSION-x64.exe"))) {
             $signature = Get-AuthenticodeSignature -LiteralPath $exe
             if ($signature.Status -ne 'NotSigned') { throw "Expected unsigned PE: $exe ($($signature.Status))" }
           }
           if ((Get-FileHash -LiteralPath $unpackedExe -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $zipExe[0].FullName -Algorithm SHA256).Hash) { throw 'ZIP application differs from unpacked application' }
+          node scripts/windows-runtime-smoke.mjs "$expanded"
+          if ($LASTEXITCODE -ne 0) { throw 'Extracted ZIP runtime did not start correctly' }
+          $installer = Join-Path $out "Vonvon-Bot-Setup-$env:RELEASE_VERSION-x64.exe"
+          $installed = Join-Path $env:RUNNER_TEMP 'Vonvon-installed-smoke'
+          $process = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$installed") -PassThru -Wait -WindowStyle Hidden
+          if ($process.ExitCode -ne 0) { throw 'NSIS installation failed' }
+          node scripts/windows-runtime-smoke.mjs "$installed"
+          if ($LASTEXITCODE -ne 0) { throw 'Installed NSIS runtime did not start correctly' }
           node scripts/package-windows.mjs $out $env:SOURCE_SHA $unpackedExe "$($zipExe[0].FullName)"
           if ($LASTEXITCODE -ne 0) { throw 'Windows release verification failed' }
           Get-Content (Join-Path $out 'windows-release-inventory.json') >> $env:GITHUB_STEP_SUMMARY
@@ -96,9 +104,9 @@ jobs:
         with:
           name: ${{ steps.source.outputs.artifact }}
           path: |
-            packages/desktop/dist/package/Vonvon-Bot-${{ steps.source.outputs.version }}-windows-x64.exe
+            packages/desktop/dist/package/Vonvon-Bot-Setup-${{ steps.source.outputs.version }}-x64.exe
             packages/desktop/dist/package/Vonvon-Bot-${{ steps.source.outputs.version }}-windows-x64.zip
-            packages/desktop/dist/package/Vonvon-Bot-${{ steps.source.outputs.version }}-windows-x64.exe.blockmap
+            packages/desktop/dist/package/Vonvon-Bot-Setup-${{ steps.source.outputs.version }}-x64.exe.blockmap
             packages/desktop/dist/package/latest.yml
             packages/desktop/dist/package/windows-release-inventory.json
           if-no-files-found: error

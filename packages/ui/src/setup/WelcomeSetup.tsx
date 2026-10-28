@@ -33,10 +33,10 @@ export function WelcomeSetup(props: Props) {
     {!connected && <SetupProgress step={needsProvider ? 1 : hasBots ? 3 : 2}/>}
     {needsProvider ? <ProviderSetup snapshot={props.snapshot} ready={props.ready} busy={props.busy} run={props.run} initialProvider={props.initialProvider} onContinue={next}/>
       : !hasBots && selected ? <>
-        <header className="welcome-setup__intro"><h1>创建你的第一个 Bot</h1></header>
+        <header className="welcome-setup__intro"><h1>添加你的第一个 Bot</h1></header>
         <div className="welcome-provider-summary"><img src={providerIcons[selected]} alt=""/><span>{providerNames[selected]} 已准备好</span><button type="button" onClick={() => setPrepared(undefined)}>更换</button></div>
-        <section className="welcome-setup__connect" aria-label="创建 Bot">
-          <span className="welcome-setup__scan-icon"><QrCode size={20} aria-hidden="true"/></span><div className="welcome-setup__connect-copy"><h2>创建飞书 Bot</h2><p>用飞书扫码，再完成权限与发布。</p></div>
+        <section className="welcome-setup__connect" aria-label="添加 Bot">
+          <span className="welcome-setup__scan-icon"><QrCode size={20} aria-hidden="true"/></span><div className="welcome-setup__connect-copy"><h2>连接飞书 Bot</h2><p>扫码创建新应用或选择已有应用，再完成权限与发布。</p></div>
           <GlowButton disabled={props.busy || !props.ready} onClick={() => props.onCreateBot ? props.onCreateBot(selected) : props.onRegister()}>添加 Bot</GlowButton>
         </section>
       </> : <>
