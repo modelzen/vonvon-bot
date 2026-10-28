@@ -104,7 +104,8 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
   const currentVersion = provider === 'codex' && checkedVersion ? checkedVersion.installed
     : detectionUnknown ? null : state.tool?.version?.replace(/^codex-cli\s+/, '') ?? source?.version ?? null;
   const latestVersion = checkedVersion ? checkedVersion.latest : source?.latestVersion;
-  const cliLabel = !source ? '正在检测…' : source.installation === 'missing' ? '未检测到' : '已安装';
+  const cliFailed = provider === 'claude' && source?.runtimeStatus === 'failed';
+  const cliLabel = !source ? '正在检测…' : source.installation === 'missing' ? '未检测到' : cliFailed ? '无法启动' : source.runtimeStatus === 'unknown' ? '暂时无法确认' : '已安装';
   const installOutput = state.activeInstall?.replay.flatMap(item => item.type === 'log' ? [item.chunk] : []).join('') ?? '';
   const installLabel = installing ? state.activeInstall ? installOutput.includes(backendInstallProgress.verifying) ? '正在校验安装结果…' : installOutput ? '正在下载并安装组件，可能需要几分钟…' : '正在准备安装…' : '正在安装，请稍候…' : installed ? `已安装${currentVersion ? ` · ${currentVersion}` : ''}` : needsUpdate ? '需要更新' : state.tool?.installation === 'missing' ? '未安装' : checking || !state.check && !state.issue ? '正在检测…' : '检测异常';
   const authLabel = connecting ? '等待授权' : detectionUnknown ? '等待检测结果' : !installed ? (needsUpdate ? '更新后连接' : '安装后连接') : state.check?.state === 'checking' ? '正在检查…' : state.tool?.authentication === 'notRequired' ? '使用现有配置' : auth ? '已连接' : state.tool?.authentication === 'signedOut' ? '尚未连接' : '暂时无法确认';
@@ -144,6 +145,7 @@ export function ProviderPreparation({provider, snapshot, ready, busy, run, onCon
       </div>
     </div>
     {!auth && installed && !connecting && <div className="provider-existing"><span>已有账号或 API 配置？</span><button type="button" disabled={disabled || state.check?.state === 'checking'} onClick={() => void state.verify()}>检测现有配置</button></div>}
+    {cliFailed && <div className="provider-problem" role="status">本机 Claude Code 无法启动。请先在终端运行 <code>claude</code>，修复问题并确认可以使用，再回来重新检测。Vonvon 会复用本机 Claude 的认证或 API 配置。</div>}
     {state.check?.state === 'checking' && installed && auth && <p className="provider-check"><OperationActivity label="正在读取可用模型…" state="connecting"/></p>}
     {state.canContinue && !compact && <p className="provider-check provider-check--ready" role="status"><Check size={14}/>{name} 已准备好<span>· {state.check?.models?.length ?? 0} 个模型</span></p>}
     {!installing && (state.issue || state.check?.message || linkError) && <div className="provider-problem" role="status"><p>{state.issue || state.check?.message || linkError}</p>{!detectionUnknown && <IconButton size="sm" variant="ghost" label="重新检测" title="重新检测" disabled={disabled || state.check?.state === 'checking'} onClick={() => {void state.read().catch(() => {}); void state.verify();}}><RefreshCw size={15} strokeWidth={1.7} aria-hidden="true"/></IconButton>}</div>}

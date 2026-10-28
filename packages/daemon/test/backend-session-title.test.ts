@@ -402,6 +402,20 @@ describe('Claude backend native session titles', () => {
 });
 
 describe('Claude model configured in the user settings (DeepSeek, Kimi)', () => {
+  it('refreshes native model discovery when the Claude user settings change', async () => {
+    const dir = claudeConfig([]);
+    const settings = join(dir, 'settings.json');
+    writeFileSync(settings, JSON.stringify({model: 'first'}));
+    const first = asyncQuery([], [{value: 'first', displayName: 'First', description: ''}]);
+    const second = asyncQuery([], [{value: 'second', displayName: 'Second', description: ''}]);
+    const query = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const backend = new ClaudeAgentBackend(async () => ({query}) as unknown as ClaudeSdkFacade, () => undefined);
+    expect((await backend.listModels())[0]?.id).toBe('first');
+    writeFileSync(settings, JSON.stringify({model: 'second-model'}));
+    expect((await backend.listModels())[0]?.id).toBe('second');
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
   const row = (id: string, isDefault = false): ModelInfo => ({
     id,
     displayName: id,
