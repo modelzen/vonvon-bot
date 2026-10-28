@@ -398,7 +398,8 @@ export async function collectRelease({ out }, dependencies = {}) {
     if (!object || !/^[a-f0-9]{64}$/.test(object.sha256 ?? '') || !Number.isSafeInteger(object.size)) throw new Error('Mac upload receipt lacks a verified DMG record');
     downloads.push({ platform: 'mac', architecture, file, url: object.url, bytes: object.size, sha256: object.sha256 });
   }
-  const windowsArchitectures = windows?.architecture === 'x64+arm64' ? ['x64', 'arm64'] : ['x64'];
+  if (windows && windows.architecture !== 'x64+arm64') throw new Error('Windows receipt must cover both x64 and ARM64');
+  const windowsArchitectures = ['x64', 'arm64'];
   if (windows) for (const architecture of windowsArchitectures) for (const [kind, file] of [['installer', `Vonvon-Bot-Setup-${state.version}-${architecture}.exe`], ['zip', `Vonvon-Bot-${state.version}-windows-${architecture}.zip`]]) {
     const object = windows.objects?.find(item => item.file === file);
     if (windows.signed !== false || windows.updatesEnabled !== false || !object || !/^[a-f0-9]{64}$/.test(object.sha256 ?? '') || !Number.isSafeInteger(object.bytes)) throw new Error('Windows receipt lacks a verified manual download record');

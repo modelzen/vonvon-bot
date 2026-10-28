@@ -269,8 +269,8 @@ async function receipts(h, stable = false) {
   const mac = { version, sourceCommit: sha, planSHA256: 'c'.repeat(64), versionedVerification: { versionedObjectsVerified: true }, objects };
   await save(join(state.macRelease, 'upload-receipt.json'), mac);
   if (stable) await save(join(state.macRelease, 'publish-receipt.json'), { ...mac, status: 'published', publicVerification: { publiclyVerified: true } });
-  await save(join(h.options.out, 'windows', 'windows-publish-receipt.json'), { version, sourceSha: sha, signed: false, updatesEnabled: false,
-    objects: [`Vonvon-Bot-Setup-${version}-x64.exe`, `Vonvon-Bot-${version}-windows-x64.zip`].map(file => ({ file, url: `https://dl.vonvon.cc/bot/windows/${version}/${file}`, bytes: 20, sha256: hash(file) })) });
+  await save(join(h.options.out, 'windows', 'windows-publish-receipt.json'), { version, sourceSha: sha, architecture: 'x64+arm64', signed: false, updatesEnabled: false,
+    objects: ['x64', 'arm64'].flatMap(arch => [`Vonvon-Bot-Setup-${version}-${arch}.exe`, `Vonvon-Bot-${version}-windows-${arch}.zip`]).map(file => ({ file, url: `https://dl.vonvon.cc/bot/windows/${version}/${file}`, bytes: 20, sha256: hash(file) })) });
 }
 
 test('website handoff requires matching public receipts for both platforms and verified stable', async t => {
@@ -278,7 +278,7 @@ test('website handoff requires matching public receipts for both platforms and v
   assert.equal((await collectRelease({ out: h.options.out }, h.dependencies)).readyForWebsite, false);
   await receipts(h);
   const held = await collectRelease({ out: h.options.out }, h.dependencies);
-  assert.equal(held.readyForWebsite, false); assert.equal(held.downloads.length, 4);
+  assert.equal(held.readyForWebsite, false); assert.equal(held.downloads.length, 6);
   await receipts(h, true);
   const ready = await collectRelease({ out: h.options.out }, h.dependencies);
   assert.equal(ready.readyForWebsite, true);
@@ -298,12 +298,15 @@ test('job timing preserves queued, test and package stages and leaves ongoing du
 test('dual Windows handoff requires ARM64 Setup and ZIP as well as x64', async t => {
   const h = await fixture(t); await buildRelease({ ...h.options, 'authorize-notarization': true }, h.dependencies); await receipts(h, true);
   const file = join(h.options.out, 'windows', 'windows-publish-receipt.json');
-  const receipt = JSON.parse(await readFile(file, 'utf8')); receipt.architecture = 'x64+arm64';
+  const receipt = JSON.parse(await readFile(file, 'utf8')); receipt.architecture = 'x64';
+  await save(file, receipt);
+  await assert.rejects(collectRelease({ out: h.options.out }, h.dependencies), /must cover both/);
+  receipt.architecture = 'x64+arm64';
+  receipt.objects = receipt.objects.filter(object => !object.file.includes('arm64'));
   await save(file, receipt);
   await assert.rejects(collectRelease({ out: h.options.out }, h.dependencies), /Windows receipt lacks/);
-  for (const name of [`Vonvon-Bot-Setup-${version}-arm64.exe`, `Vonvon-Bot-${version}-windows-arm64.zip`]) {
+  for (const name of [`Vonvon-Bot-Setup-${version}-arm64.exe`, `Vonvon-Bot-${version}-windows-arm64.zip`])
     receipt.objects.push({ file: name, url: `https://dl.vonvon.cc/bot/windows/${version}/${name}`, bytes: 20, sha256: hash(name) });
-  }
   await save(file, receipt);
   const result = await collectRelease({ out: h.options.out }, h.dependencies);
   assert.equal(result.readyForWebsite, true); assert.equal(result.downloads.length, 6);
