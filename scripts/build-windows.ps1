@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot
 Set-Location -LiteralPath $repo
+if ((& node -p 'process.versions.node').Trim() -ne '24.22.1') { throw 'Use pinned Node.js 24.22.1 for reproducible Windows builds' }
 $sha = (git rev-parse HEAD).Trim()
 if ($SourceSha -and $sha -cne $SourceSha) { throw 'Source SHA mismatch' }
 if (git status --porcelain --untracked-files=normal) { throw 'Build requires a clean source checkout' }
@@ -30,6 +31,7 @@ Invoke-Node @('scripts/windows-build-tools.mjs','npm',$envFile,'run','typecheck'
 Invoke-Node @('--test','scripts/stage-daemon.test.mjs','scripts/package-windows.test.mjs','scripts/windows-runtime-smoke.test.mjs','scripts/publish-windows.test.mjs')
 Invoke-Node @('scripts/windows-build-tools.mjs','npm',$envFile,'run','test','-w','@vonvon/daemon','--','test/environment-windows-launch.test.ts','test/provider/windows-command-line.test.ts','test/provider/windows-supervisor.test.ts','test/windows-owned-process.test.ts','test/data-compatibility.test.ts','test/register-bot.test.ts')
 Invoke-Node @('scripts/windows-build-tools.mjs','npm',$envFile,'run','test','-w','@vonvon/desktop','--','test/windows-updates.test.ts','test/tray.test.ts','test/daemon-dependencies.test.ts')
+if ((git rev-parse HEAD).Trim() -cne $sha -or (git status --porcelain --untracked-files=normal)) { throw 'Source changed during checks' }
 $runtime = Join-Path $outPath 'electron-runtime'
 Invoke-Node @('scripts/windows-build-tools.mjs','electron',$Architecture,$runtime)
 $version = (& node --input-type=module -e "import {checkedProductVersion} from './scripts/product-version.mjs'; console.log(await checkedProductVersion())").Trim()

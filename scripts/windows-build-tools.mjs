@@ -16,10 +16,15 @@ async function child(file, argv, options = {}) {
 if (mode === 'electron') {
   const [arch, destination] = args;
   if (!['x64', 'arm64'].includes(arch)) throw new Error('Unsupported Windows architecture');
-  const { downloadArtifact } = require('@electron/get');
-  const extract = require('extract-zip');
+  const electronRequire = createRequire(require.resolve('electron/package.json'));
+  const { downloadArtifact } = electronRequire('@electron/get');
+  const { extract } = electronRequire('@electron-internal/extract-zip');
   const { devDependencies } = JSON.parse(await readFile(join(repo, 'package.json'), 'utf8'));
-  const archive = await downloadArtifact({ version: devDependencies.electron, artifactName: 'electron', platform: 'win32', arch });
+  let archive;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try { archive = await downloadArtifact({ version: devDependencies.electron, artifactName: 'electron', platform: 'win32', arch, checksums: electronRequire('./checksums.json') }); break; }
+    catch { if (attempt === 3) throw new Error('Official Electron download failed after three attempts'); console.log(`Electron download interrupted; retry ${attempt}/2`); await new Promise(resolve => setTimeout(resolve, 2000)); }
+  }
   await mkdir(destination, { recursive: true });
   await extract(archive, { dir: destination });
 } else if (mode === 'probe') {
