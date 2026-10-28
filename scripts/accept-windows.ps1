@@ -9,6 +9,8 @@ param(
 $ErrorActionPreference = 'Stop'
 if (-not [IO.Path]::IsPathRooted($Installer) -or -not [IO.Path]::IsPathRooted($Evidence) -or -not [IO.Path]::IsPathRooted($ReferenceDirectory)) { throw 'Installer, reference and evidence paths must be absolute' }
 if ($SourceSha -cnotmatch '^[a-f0-9]{40}$') { throw 'Use a complete source SHA' }
+$referencePe = @(Get-ChildItem -LiteralPath $ReferenceDirectory -File -Recurse | Where-Object { $_.Extension -in @('.exe','.dll','.node') } | ForEach-Object { @{ path = [IO.Path]::GetRelativePath($ReferenceDirectory,$_.FullName); hash = (Get-FileHash -LiteralPath $_.FullName).Hash } })
+if (-not ($referencePe | Where-Object { $_.path -eq 'Vonvon Bot.exe' })) { throw 'Reference payload does not contain the application' }
 if (Test-Path -LiteralPath (Join-Path $Evidence 'acceptance.json')) { throw 'Acceptance report already exists' }
 New-Item -ItemType Directory -Path $Evidence -Force | Out-Null
 $lockPath = Join-Path ([IO.Path]::GetTempPath()) 'vonvon-installer-acceptance.lock'
@@ -27,8 +29,6 @@ $views = @([Microsoft.Win32.RegistryView]::Registry32, [Microsoft.Win32.Registry
 $saved = @()
 $savedFiles = @()
 $steps = @()
-$referencePe = @(Get-ChildItem -LiteralPath $ReferenceDirectory -File -Recurse | Where-Object { $_.Extension -in @('.exe','.dll','.node') } | ForEach-Object { @{ path = [IO.Path]::GetRelativePath($ReferenceDirectory,$_.FullName); hash = (Get-FileHash -LiteralPath $_.FullName).Hash } })
-if (-not ($referencePe | Where-Object { $_.path -eq 'Vonvon Bot.exe' })) { throw 'Reference payload does not contain the application' }
 $started = [DateTime]::UtcNow.ToString('o')
 $restorable = $false
 $paths = @(
