@@ -54,7 +54,9 @@ async function machoFiles(directory) {
 }
 
 /** Inspect actual signed bytes, rather than trusting builder metadata or the filename. */
-export async function verifyUniversalApp({ app, version, teamIdentifier, execute = run }) {
+export async function verifyUniversalApp({ app, version, teamIdentifier, architecture = 'universal', execute = run }) {
+  const expected = { universal: 'arm64,x86_64', arm64: 'arm64', x64: 'x86_64' }[architecture];
+  if (!expected) throw new Error('Unsupported desktop architecture');
   if (!/^[A-Z0-9]{10}$/.test(teamIdentifier ?? '')) throw new Error('An expected signing TeamIdentifier is required');
   await execute('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]);
   const { stderr } = await execute('/usr/bin/codesign', ['--display', '--verbose=4', app]);
@@ -81,7 +83,7 @@ export async function verifyUniversalApp({ app, version, teamIdentifier, execute
     const { stdout } = await execute('/usr/bin/lipo', ['-archs', path]);
     const archs = stdout.trim().split(/\s+/).sort();
     const relative = path.slice(app.length + 1);
-    if (archs.join(',') !== 'arm64,x86_64') throw new Error(`Unexpected bundled runtime architecture: ${relative}`);
+    if (archs.join(',') !== expected) throw new Error(`Unexpected bundled runtime architecture: ${relative}`);
     await execute('/usr/bin/codesign', ['--verify', '--strict', path]);
     architectures.push({ path: path.slice(app.length + 1), archs });
   }
@@ -100,16 +102,17 @@ export async function verifyUniversalApp({ app, version, teamIdentifier, execute
 }
 
 /** The existing NativeUpdateDriver uses Squirrel.Mac's default JSON endpoint, not latest-mac.yml. */
-export async function writeDesktopRelease({ out, version, config: raw, dmg, zip, verifiedApp, publishedAt = new Date().toISOString() }) {
+export async function writeDesktopRelease({ out, version, config: raw, dmg, zip, verifiedApp, architecture = 'universal', publishedAt = new Date().toISOString() }) {
+  if (!['universal', 'arm64', 'x64'].includes(architecture)) throw new Error('Unsupported desktop architecture');
   const config = updateConfiguration(raw);
   if (!/^\d+\.\d+\.\d+$/.test(version) || !Number.isFinite(Date.parse(publishedAt))) throw new Error('Invalid release version/date');
-  const names = { dmg: `Vonvon-Bot-${version}-universal.dmg`, zip: `Vonvon-Bot-${version}-universal.zip` };
+  const names = { dmg: `Vonvon-Bot-${version}-${architecture}.dmg`, zip: `Vonvon-Bot-${version}-${architecture}.zip` };
   if (basename(dmg) !== names.dmg || basename(zip) !== names.zip) throw new Error('Release artifact/version mismatch');
   const files = { dmg: await artifactRecord(dmg), zip: await artifactRecord(zip) };
   const inventory = { version, state: config.manifestURL ? 'local-configured' : 'awaiting-release-urls', files, verification: verifiedApp };
   await mkdir(out, { recursive: true });
   if ((await readdir(out)).length) throw new Error('Release metadata output must be empty; refusing stale update sources');
-  if (config.manifestURL) {
+  if (config.manifestURL && architecture === 'universal') {
     const manifest = new URL(config.manifestURL);
     const feed = new URL(`feed-${version}.json`, manifest);
     const download = new URL(files.zip.file, manifest);
@@ -129,4 +132,25 @@ export async function verifyDmg(path, teamIdentifier, execute = run) {
   await execute('/usr/bin/codesign', ['--verify', '--strict', path]);
   const { stderr } = await execute('/usr/bin/codesign', ['--display', '--verbose=4', path]);
   if (!/^Authority=Developer ID Application:/m.test(stderr) || !stderr.split('\n').includes(`TeamIdentifier=${teamIdentifier}`)) throw new Error('DMG does not have the expected Developer ID signature');
+}
+
+/** Add architecture feeds to the legacy manifest after every signed artifact is verified.
+ * Old clients ignore the extra field and keep using the universal feed. */
+export async function writeSplitFeeds({ out, version, config: raw, releases, publishedAt = new Date().toISOString() }) {
+  const config = updateConfiguration(raw);
+  if (!config.manifestURL) return;
+  const manifestURL = new URL(config.manifestURL);
+  const manifestPath = join(out, basename(manifestURL.pathname));
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  if (manifest.version !== version || !manifest.feedURL) throw new Error('Legacy manifest is missing or stale');
+  const feedURLs = {};
+  for (const architecture of ['arm64', 'x64']) {
+    const release = releases[architecture];
+    const expected = `Vonvon-Bot-${version}-${architecture}.zip`;
+    if (!release || release.files.zip.file !== expected || !release.verification) throw new Error(`Missing verified ${architecture} release`);
+    const name = `feed-${version}-${architecture}.json`;
+    feedURLs[architecture] = new URL(name, manifestURL).href;
+    await writeFile(join(out, name), JSON.stringify({ url: new URL(expected, manifestURL).href, name: `Vonvon Bot ${version}`, notes: '', pub_date: publishedAt }, null, 2) + '\n', { flag: 'wx' });
+  }
+  await writeFile(manifestPath, JSON.stringify({ ...manifest, feedURLs }, null, 2) + '\n');
 }
