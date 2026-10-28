@@ -1,14 +1,27 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { buildRelease, collectRelease, inspectRunners, jobTimings, prepareRelease, releaseStatus, windowsRunTitle, workflowLabels } from './release-all.mjs';
 
 const sha = 'a'.repeat(40), version = '1.2.3', hash = value => createHash('sha256').update(value).digest('hex');
 const save = (path, value) => writeFile(path, JSON.stringify(value));
 const runner = { id: 17, status: 'online', busy: false, labels: ['self-hosted', 'macOS', 'ARM64', 'modelzen-macos', 'modelzen-macos-isolated'].map(name => ({ name })) };
+
+test('release orchestrator CLI executes through a symlinked directory instead of silently exiting', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'release-all-cli-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await symlink(dirname(fileURLToPath(import.meta.url)), join(root, 'alias'), process.platform === 'win32' ? 'junction' : 'dir');
+  const script = join(root, 'alias', 'release-all.mjs');
+  const help = spawnSync(process.execPath, [script, '--help'], { encoding: 'utf8', env: { PATH: process.env.PATH } });
+  assert.equal(help.status, 0); assert.match(help.stdout, /Usage: node scripts\/release-all.mjs/);
+  const invalid = spawnSync(process.execPath, [script], { encoding: 'utf8', env: { PATH: process.env.PATH } });
+  assert.equal(invalid.status, 1); assert.match(invalid.stderr, /Choose prepare/);
+});
 
 test('matches inherited organization runners only through a group authorized for this repository', async () => {
   const calls = [];
@@ -187,6 +200,25 @@ test('build dispatches once, serializes Mac architectures, and resume reuses com
   assert.equal(result.ci[0].status, 'in_progress');
   assert.equal(result.windows.jobs[0].queuedSeconds, 60);
   assert.equal(result.windows.jobs[0].steps[0].seconds, 300);
+});
+
+test('new and resumed helper invocations use canonical source paths when the temporary root is an alias', async t => {
+  const h = await fixture(t), temporary = await mkdtemp(join(h.root, 'actual-source-')), alias = join(h.root, 'source-alias');
+  await symlink(temporary, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const dependencies = { ...h.dependencies, createTemporary: async () => alias };
+  await buildRelease({ ...h.options, 'authorize-notarization': true }, dependencies);
+  const saved = await h.state();
+  assert.equal(saved.source, await realpath(saved.source));
+  assert.equal(saved.buildHome, await realpath(saved.buildHome));
+  for (const call of h.helpers.filter(call => call[0] !== 'npm')) assert.ok(call[1][0].startsWith(join(saved.source, 'scripts')));
+  // Simulate an older saved state that retained the alias spelling before the fix.
+  saved.source = join(alias, 'source'); saved.buildHome = join(alias, 'home');
+  await save(join(h.options.out, 'release-orchestration.json'), saved);
+  await buildRelease({ out: h.options.out, 'authorize-notarization': true }, dependencies);
+  const resumed = await h.state();
+  assert.equal(resumed.source, await realpath(resumed.source));
+  assert.equal(resumed.buildHome, await realpath(resumed.buildHome));
+  assert.ok(h.helpers.at(-1)[1][0].startsWith(join(resumed.source, 'scripts')));
 });
 
 test('a lost dispatch response is recovered by request identity, never by dispatching twice', async t => {
