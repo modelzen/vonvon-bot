@@ -61,8 +61,11 @@ import { rmSync } from 'node:fs';
 import { createAdminService } from '../src/admin/service';
 import { runRegistrationWizard, startRegistration } from '../src/bot/wizard';
 import { loadBots, type BotEntry } from '../src/config/bots';
+import { getSecret } from '../src/config/keystore';
+import { secretKeyForApp } from '../src/config/schema';
+import { loadConfig } from '../src/config/store';
 import { seedBots } from './helpers/bot-fixture';
-import { paths } from '../src/config/paths';
+import { botPaths, paths } from '../src/config/paths';
 
 afterEach(() => {
   registerAppMock.mockReset();
@@ -84,7 +87,7 @@ interface RegisterAppOpts {
 describe('registerBotByQr · 扫码编排', () => {
   it('成功：透传 onQr/onStatus，拿明文密钥后委托 registerBotFromCredentials（含 ownerOpenId），done 不含 secret', async () => {
     registerAppMock.mockImplementation((opts: RegisterAppOpts) => {
-      expect(opts.createOnly).toBe(true);
+      expect(opts.createOnly).toBe(false);
       expect(opts.appId).toBeUndefined();
       opts.onQRCodeReady({ url: 'https://accounts.feishu.cn/scan?c=1', expireIn: 600 });
       opts.onStatusChange?.({ status: 'polling' });
@@ -222,6 +225,21 @@ describe('registerBotByQr · 注册完默认启用（s02e）', () => {
       (await vi.importActual<typeof import('../src/bot/register-bot')>('../src/bot/register-bot')).registerBotFromCredentials(input as never));
   });
 
+  it('扫码选择飞书已有应用后，注册其凭据并设置扫码人为管理员', async () => {
+    await seedBots({ version: 1, bots: [] });
+    const appId = 'cli_existingbot1';
+    scanned(appId);
+    const result = await createAdminService().registerBotByQr(scan);
+
+    expect(registerAppMock).toHaveBeenCalledWith(expect.objectContaining({ createOnly: false }));
+    expect(result).toMatchObject({ ok: true, appId, adminOpenId: 'ou_owner' });
+    expect((await loadBots()).bots).toContainEqual(expect.objectContaining({ appId, active: true }));
+    expect(await getSecret(secretKeyForApp(appId))).toBe('scan-secret');
+    const config = await loadConfig(botPaths(appId).configFile);
+    expect(config.preferences?.access).toMatchObject({ ownerOpenId: 'ou_owner', admins: ['ou_owner'] });
+    expect(JSON.stringify(config)).not.toContain('scan-secret');
+  });
+
   it('新 Bot 写成启用并马上启动；主人停用的 Bot 仍是停用', async () => {
     await seedBots({ version: 1, current: ON, bots: [bot(ON, true), bot(OFF, false)] });
     const apply = vi.fn(async () => {});
@@ -268,9 +286,11 @@ describe('registerBotByQr · 注册完默认启用（s02e）', () => {
     expect(await service.refreshBotByQr('cli_newbot00004', scan)).toMatchObject({ ok: true, appId: 'cli_newbot00004' });
     expect(await activeFlags()).toEqual({ cli_newbot00004: false });
 
-    scanned('cli_newbot00004');
+    registerAppMock.mockResolvedValue({ client_id: 'cli_newbot00004', client_secret: 'replacement-secret', user_info: { open_id: 'ou_other', tenant_brand: 'feishu' } });
     expect(await service.registerBotByQr(scan)).toMatchObject({ ok: false, code: 'already_registered' });
     expect(await activeFlags()).toEqual({ cli_newbot00004: false });
+    expect(await getSecret(secretKeyForApp('cli_newbot00004'))).toBe('scan-secret');
+    expect((await loadConfig(botPaths('cli_newbot00004').configFile)).preferences?.access?.ownerOpenId).toBe('ou_owner');
     expect(apply).not.toHaveBeenCalled();
   });
 });

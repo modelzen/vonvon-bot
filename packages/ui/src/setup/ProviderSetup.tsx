@@ -14,7 +14,7 @@ import './provider-setup.css';
 type Props = {snapshot: DesktopSnapshot; ready: boolean; busy: boolean; run: (command: Command) => Promise<CommandResult>; onContinue?: (provider: SetupProvider) => void; initialProvider?: SetupProvider};
 export function SetupProgress({step}: {step: 1 | 2 | 3}) {
   return <ol className="provider-progress" aria-label="开始使用">
-    {['准备 Provider', '创建 Bot', '连接群'].map((label, index) => <li key={label} aria-current={step === index + 1 ? 'step' : undefined} data-complete={step > index + 1 || undefined}>
+    {['准备 Provider', '添加 Bot', '连接群'].map((label, index) => <li key={label} aria-current={step === index + 1 ? 'step' : undefined} data-complete={step > index + 1 || undefined}>
       <span>{step > index + 1 ? <Check size={11} aria-hidden="true"/> : index + 1}</span>{label}
     </li>)}
   </ol>;
