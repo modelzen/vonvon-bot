@@ -43,6 +43,48 @@ test('assembles all signed candidates and emits separate update feeds with legac
   assert.match(manifest.feedURLs.arm64, /feed-0\.7\.3-arm64\.json$/);
   assert.match(manifest.feedURLs.x64, /feed-0\.7\.3-x64\.json$/);
 });
+
+test('assembles only independently notarized arm64 and x64 candidates', async t => {
+  const options = await fixture(t);
+  delete options.universal;
+  const seen = [];
+  const result = await assembleSplitRelease(options, {temporaryRoots: [], verify: async item => { seen.push(item.architecture); }});
+  assert.deepEqual(seen, ['arm64', 'x64']);
+  assert.equal(result.files.length, 7);
+  assert.deepEqual(result.files.map(file => file.file).sort(), [
+    'manifest.json', `feed-${version}-arm64.json`, `feed-${version}-x64.json`,
+    ...['arm64', 'x64'].flatMap(arch => [`Vonvon-Bot-${version}-${arch}.zip`, `Vonvon-Bot-${version}-${arch}.dmg`]),
+  ].sort());
+  const manifest = JSON.parse(await readFile(join(options.out, 'manifest.json'), 'utf8'));
+  assert.equal(manifest.feedURL, manifest.feedURLs.arm64);
+  assert.match(manifest.feedURLs.arm64, /feed-0\.7\.3-arm64\.json$/);
+  assert.match(manifest.feedURLs.x64, /feed-0\.7\.3-x64\.json$/);
+  const state = JSON.parse(await readFile(join(options.out, 'notarization-state.json'), 'utf8'));
+  assert.deepEqual(Object.keys(state.architectureEvidence).sort(), ['arm64', 'x64']);
+});
+
+test('two-architecture assembly rejects changed or missing candidate bytes', async t => {
+  await t.test('tampered x64 DMG', async t2 => {
+    const options = await fixture(t2); delete options.universal;
+    await writeFile(join(options.x64, `Vonvon-Bot-${version}-x64.dmg`), 'tampered');
+    await assert.rejects(assembleSplitRelease(options, {temporaryRoots: [], verify: async () => {}}), /differs/);
+  });
+  await t.test('missing x64 candidate', async t2 => {
+    const options = await fixture(t2); delete options.universal;
+    options.x64 = join(options.repo, 'missing');
+    await assert.rejects(assembleSplitRelease(options, {temporaryRoots: [], verify: async () => {}}), {code: 'ENOENT'});
+  });
+  await t.test('unverified x64 ticket', async t2 => {
+    const options = await fixture(t2); delete options.universal;
+    const seen = [];
+    await assert.rejects(assembleSplitRelease(options, {temporaryRoots: [], verify: async item => {
+      seen.push(item.architecture);
+      if (item.architecture === 'x64') throw new Error('ticket invalid');
+    }}), /ticket invalid/);
+    assert.deepEqual(seen, ['arm64', 'x64']);
+    await assert.rejects(readFile(join(options.out, 'manifest.json')), {code:'ENOENT'});
+  });
+});
 test('refuses artifacts changed after notarization evidence', async t => {
   const options = await fixture(t);
   await writeFile(join(options.arm64, `Vonvon-Bot-${version}-arm64.zip`), 'tampered');
