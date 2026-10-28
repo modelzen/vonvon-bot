@@ -227,7 +227,7 @@ export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpe
   }
   function act(action: StepAction) {
     if (action.kind === 'claudeLogin') void claudeLogin.check(true);
-    else if (action.kind === 'codexLogin') void run({type: 'startCodexLogin'}).catch(() => undefined);
+    else if (action.kind === 'codexLogin') onOpenEnvironment();
     else onOpenEnvironment();
   }
   function toolAction(step: SetupStep) {

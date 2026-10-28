@@ -57,7 +57,7 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
           if (agentId) { await client.admin({type: 'confirmCardCallback', agentId, confirmed: action.confirmed}); await recheck(agentId); }
           break;
         case 'environment': onOpenEnvironment(); break;
-        case 'codexLogin': await run({type: 'startCodexLogin'}); break;
+        case 'codexLogin': onOpenEnvironment(); break;
         case 'claudeLogin': await claudeLogin.check(true); break;
         // Installing from the web page drops the connection for a few seconds; the snapshot shows the result.
         case 'serviceInstall': onNotice(await toggleService(true, client, shell), false); break;

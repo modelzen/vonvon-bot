@@ -314,6 +314,16 @@ it('prompts the user to verify Claude Code when the local executable fails', () 
   expect(detail.some(node => node.props.role === 'status' && node.props.className === 'provider-problem')).toBe(true);
 });
 
+it('guides Codex login in its own command instead of starting authorization', () => {
+  const props = {provider: 'codex' as const, snapshot: snapshot([tool('codex', 'installed', 'signedOut')]), ready: true, busy: false, run, management: true};
+  resetRender();
+  button(nodes(ProviderPreparation(props)), '配置方法').props.onClick();
+  resetRender();
+  const guide = nodes(ProviderPreparation(props));
+  expect(guide.some(node => node.type === 'code' && node.props.children === 'codex')).toBe(true);
+  expect(harness.connect).not.toHaveBeenCalled();
+});
+
 it('keeps managed Claude SDK maintenance separate from account connection and CLI management', () => {
   const data = snapshot([tool('claude', 'installed', 'signedOut')]);
   resetRender();
@@ -324,8 +334,11 @@ it('keeps managed Claude SDK maintenance separate from account connection and CL
   expect(button(detail, '更新 SDK').props.disabled).toBe(false);
   expect(button(detail, '卸载 SDK').props.disabled).toBe(false);
   expect(button(detail, '检查版本').props.disabled).toBe(false);
-  button(detail, '连接').props.onClick();
-  expect(harness.connect).toHaveBeenCalledOnce();
+  button(detail, '配置方法').props.onClick();
+  resetRender();
+  const guide = nodes(ProviderPreparation({provider: 'claude', snapshot: data, ready: true, busy: false, run, management: true}));
+  expect(guide.some(node => node.type === 'code' && node.props.children === 'claude')).toBe(true);
+  expect(harness.connect).not.toHaveBeenCalled();
   button(detail, '更新 Claude Code').props.onClick();
   expect(harness.installTool).toHaveBeenCalledWith('claude', true);
   expect(button(detail, '继续').props.disabled).toBe(true);
