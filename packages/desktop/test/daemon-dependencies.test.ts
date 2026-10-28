@@ -53,6 +53,16 @@ afterEach(async () => {
 });
 
 describe('desktop daemon dependencies', () => {
+  it('runs the bundled daemon without a service registration on Windows', async () => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { ...original, value: 'win32' });
+    try {
+      await expect(dependencies().readRegistration()).resolves.toEqual({ kind: 'absent' });
+    } finally {
+      Object.defineProperty(process, 'platform', original);
+    }
+  });
+
   it('s18g ownerRunning asks only whether the old process is alive', async () => {
     vi.mocked(isPidLockOwnerRunning).mockReturnValue(true);
     const previous = { pid: 12345, startedAt: owner.startedAt };
@@ -78,9 +88,9 @@ describe('desktop daemon dependencies', () => {
     roots.push(parent);
     const path = join(parent, 'data');
     expect(await prepareDesktopRoot({ kind: 'fresh', path })).toBe(path);
-    expect((await stat(path)).mode & 0o777).toBe(0o700);
+    if (process.platform !== 'win32') expect((await stat(path)).mode & 0o777).toBe(0o700);
     const alias = join(parent, 'alias');
-    await symlink(path, alias, 'dir');
+    await symlink(path, alias, process.platform === 'win32' ? 'junction' : 'dir');
     await expect(prepareDesktopRoot({ kind: 'canonical', path: alias })).rejects.toThrow('必须是真实目录');
   });
 
@@ -101,7 +111,7 @@ describe('desktop daemon dependencies', () => {
     await expect(dependencies().readVerifiedDaemon()).resolves.toEqual({ ...owner, version: '0.2.0' });
   });
 
-  it('returns what an installed definition starts, and why one is unrecognized', async () => {
+  it.skipIf(process.platform === 'win32')('returns what an installed definition starts, and why one is unrecognized', async () => {
     vi.stubEnv('XDG_CONFIG_HOME', '');
     const root = await realpath(await mkdtemp(join(tmpdir(), 'desktop-registration-')));
     roots.push(root);
@@ -154,7 +164,7 @@ describe('desktop daemon dependencies', () => {
     await expect(dependencies.startSelectedBot(0, 'exact Bot; ID')).resolves.toBe(9876);
     expect(spawn).toHaveBeenCalledExactlyOnceWith('/owned/Electron', [
       join(resources, 'daemon', 'bin', 'vonvon.mjs'), 'daemon', 'run', '--port', '0', '--bot', 'exact Bot; ID',
-    ], expect.objectContaining({ detached: true }));
+    ], expect.objectContaining({ detached: true, windowsHide: true }));
   });
 
   it('gives the daemon the tool directories a Finder launch lacks, in Node mode', async () => {

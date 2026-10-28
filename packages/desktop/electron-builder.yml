@@ -48,6 +48,18 @@ extraResources:
     filter:
       - "**/*"
 npmRebuild: false
+win:
+  icon: assets/windows-icon.ico
+  target:
+    - nsis
+    - zip
+  artifactName: Vonvon-Bot-${version}-windows-${arch}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: Vonvon Bot
 mac:
   # macOS uses .lproj names; electron-builder does not normalize '-' and '_'.
   electronLanguages:

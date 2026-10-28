@@ -67,6 +67,8 @@ import { rm } from 'node:fs/promises';
 import { seedBots } from './helpers/bot-fixture';
 import { botPaths, paths } from '../src/config/paths';
 import { secretKeyForApp } from '../src/config/schema';
+import { resolveAppSecret } from '../src/config/secret-resolver';
+import { loadConfig } from '../src/config/store';
 
 const okValidate = vi.fn(async () => ({
   ok: true as const,
@@ -155,6 +157,7 @@ describe('registerBotFromCredentials · 注册落盘', () => {
     const cfgRaw = readFileSync(botPaths('cli_alpha12345').configFile, 'utf8');
     expect(cfgRaw).not.toContain('super-secret-value');
     expect(cfgRaw).toContain('exec');
+    expect(await resolveAppSecret(await loadConfig(botPaths('cli_alpha12345').configFile) as Parameters<typeof resolveAppSecret>[0])).toBe('super-secret-value');
 
     // 注册表 + 唯一短名
     const reg = await loadBots();

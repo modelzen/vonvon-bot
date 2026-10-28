@@ -60,6 +60,7 @@ await cp(join(dist, 'update-config.json'), join(stage, 'dist/update-config.json'
 await cp(ui, join(stage, 'ui'), { recursive: true });
 await cp(join(root, 'assets/tray.png'), join(stage, 'assets/tray.png'));
 await cp(join(root, 'assets/macos-icon.png'), join(stage, 'assets/macos-icon.png'));
+await cp(join(root, 'assets/windows-icon.ico'), join(stage, 'assets/windows-icon.ico'));
 await writeFile(join(stage, 'package.json'), JSON.stringify({
   name: 'vonvon-bot-desktop',
   version,
@@ -78,9 +79,10 @@ if (npmVersion !== pinnedNpm) throw new Error(`Installed npm ${npmVersion} is no
 await cp(npmSource, join(stage, 'npm'), { recursive: true, dereference: true });
 
 const daemonMetadata = JSON.parse(await readFile(join(daemonSource, 'package.json'), 'utf8'));
+// Windows packages use real copies so building does not require symlink privileges.
 await stageDaemon(daemonStage, {
   name: daemonMetadata.name, version, type: 'module', bin: daemonMetadata.bin,
   license: daemonMetadata.license, author: daemonMetadata.author,
   dependencies: daemonMetadata.dependencies,
-}, { compact: true });
+}, { compact: process.platform !== 'win32' });
 await assertNoBundledClaude(daemonStage);

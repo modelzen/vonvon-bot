@@ -25,4 +25,8 @@ it('recognizes only a Node provider proven by the exact generated wrapper', () =
   writeFileSync(wrapper, getterContents(old));
   expect(isBridgeGetter(old.nodePath, args, home, wrapper)).toBe(true);
   expect(isBridgeGetter(old.nodePath, ['C:\\custom\\cli.mjs', 'secrets', 'get'], home, wrapper)).toBe(false);
+  writeFileSync(wrapper, getterContents(old, root));
+  expect(isBridgeGetter(old.nodePath, args, home, wrapper)).toBe(true);
+  writeFileSync(wrapper, getterContents(old, join(home, 'other')));
+  expect(isBridgeGetter(old.nodePath, args, home, wrapper)).toBe(false);
 });
