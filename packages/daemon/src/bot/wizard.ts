@@ -69,7 +69,9 @@ const APP_PRESET = {
 export async function startRegistration(opts: StartRegistrationOptions): Promise<RegistrationCredentials> {
   const result = await registerApp({
     appPreset: { ...APP_PRESET },
-    ...(opts.appId ? { appId: opts.appId, createOnly: false } : { createOnly: true }),
+    // 新增时让飞书同时提供创建和选择已有应用；刷新时仍指定目标应用。
+    createOnly: false,
+    ...(opts.appId ? { appId: opts.appId } : {}),
     signal: opts.signal,
     onQRCodeReady: (info) => opts.onQr({ url: info.url, expireIn: info.expireIn }),
     onStatusChange: (info) => opts.onStatus?.({ status: info.status, interval: info.interval }),
@@ -102,16 +104,17 @@ export function registrationErrorMessage(err: unknown): string {
 }
 
 /**
- * 命令行扫码向导：在 TTY 前用 ASCII 二维码引导扫码创建 PersonalAgent 应用，返回含
+ * 命令行扫码向导：在 TTY 前用 ASCII 二维码引导扫码创建或选择已有应用，返回含
  * 明文 client_secret 的 AppConfig（调用方移进 keystore）。扫码人 open_id 必须落成
  * owner+admin；缺失时拒绝返回配置，避免产生无人可管理的机器人。
  */
 export async function runRegistrationWizard(): Promise<AppConfig> {
-  console.log('\n未检测到飞书应用配置，进入扫码创建向导。\n');
+  console.log('\n未检测到飞书应用配置，进入扫码添加向导。\n');
 
   const creds = await startRegistration({
     onQr: (info) => {
-      console.log('请用飞书 App 扫描以下二维码完成应用创建：\n');
+      console.log('请用飞书 App 扫描以下二维码，创建应用或选择已有应用：\n');
+      console.log('选择已有应用时，请先核对飞书确认页；确认后可能更改该应用的配置。\n');
       qrcode.generate(info.url, { small: true });
       const mins = Math.max(1, Math.round(info.expireIn / 60));
       console.log(`\n二维码有效期：约 ${mins} 分钟`);
@@ -126,7 +129,7 @@ export async function runRegistrationWizard(): Promise<AppConfig> {
     },
   });
 
-  console.log('\n✓ 应用创建成功');
+  console.log('\n✓ 应用授权成功');
   console.log(`  App ID:  ${creds.clientId}`);
   console.log(`  Tenant:  ${creds.tenant}`);
 
