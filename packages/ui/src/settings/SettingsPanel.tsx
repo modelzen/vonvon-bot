@@ -1370,7 +1370,7 @@ export function ProjectPanel({
     </AnnouncedReadonlyMessages.Provider>
   );
 }
-function SessionPicker({ view }: { view: ProjectSettingsView }) {
+export function SessionPicker({ view }: { view: ProjectSettingsView }) {
   const client = useClient();
   const [sessions, setSessions] = useState<
     Extract<SettingsReply, { kind: "sessions" }>["sessions"]
