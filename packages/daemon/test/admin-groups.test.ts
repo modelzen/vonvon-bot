@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
-import type { ModelInfo } from '../src/agent/types';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createGroupExecutor as createOwnedGroupExecutor, describeGroupFailure, parseBindGroupInput, parseJoinedGroups, parseGroupMembers, UNNAMED_GROUP, type BindGroupInput } from '../src/admin/groups';
 import { log } from '../src/core/logger';
