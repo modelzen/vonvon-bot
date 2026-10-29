@@ -77,6 +77,7 @@
 .gd-skill-facts dd { margin: 0; overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; }
 .gd-skill-content { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 12px; line-height: 1.65; max-height: 340px; overflow: auto; }
 .gd-disclosure { border: 1px solid var(--color-border); border-radius: 9px; overflow: hidden; background: var(--color-surface); }
+.gd-disclosure.membership-settings-details { overflow: visible; }
 .gd-disclosure > summary { padding: 14px 16px; font-size: 12px; cursor: pointer; color: var(--color-text-secondary); }
 .gd-disclosure[open] > summary { border-bottom: 1px solid var(--color-border); }
 .gd-disclosure > .ss-section, .gd-disclosure > .gd-nested { padding: 12px; }
