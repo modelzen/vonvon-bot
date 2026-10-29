@@ -4,12 +4,14 @@ import {useClient} from './client-context';
 import {MindMap, type MapEditStart, type MapMenuItem, type MapNode} from './MindMap';
 import {MapInlineEditor, type MapInlineEditorSession} from './MapInlineEditor';
 import {
-  archiveBranchItems, branchCanChange, branchNameProblem, branchNewCount, branchRoom, branchViews, exportFileName, joinMarks, leafActions, marksOf, moveRequest, noMarks, runMemory, sameJson, searchPlan, sourceProject,
+  archiveBranchItems, branchCanChange, branchNameProblem, branchNewCount, branchRoom, branchViews, exportFileName, joinMarks, leafActions, marksOf, moveRequest, noMarks, runMemory, sameJson, searchPlan, sourceLines, sourceProject,
   type BranchView, type LeafAction, type Marks, type MemoryList,
 } from './memory-model';
 import {memoryNodes} from './memory-nodes';
 import {useMemoryDetailNodes, type MemoryMapAction} from './memory-detail-nodes';
 import {useInlineDraft} from './settings/DraftGuard';
+import {MemoryLeafTools, undoEventFor} from './MemoryLeafTools';
+import {Button} from './reference/components/ui';
 import './mind-map.css';
 
 type Scope = Extract<MemoryScopeRef, {kind: 'project' | 'bot'}>;
@@ -35,6 +37,8 @@ type Props = {
   onLeafSelected?: () => void;
   beforeInteraction?: (action: () => void) => void;
   beforeLeafSelect?: (select: () => void) => void;
+  /** A navigation request selects and reveals the first actual new memory. */
+  focusNew?: number;
 };
 /** Fired on `window` when a page has marked itself seen, so the counts on the navigation and the lists are read again (§5.8). */
 export const MEMORY_SEEN_EVENT = 'vonvon:memory-seen';
@@ -48,7 +52,7 @@ function download(name: string, text: string) {
 }
 
 /** One memory (a Bot's or a project's) as a mind map with all editing, feedback and detail actions inside its nodes (§5.7). */
-export function MemoryMap({scope, rootLabel, mode, memoryLabel, targets, before = [], after = [], onLeafSelected, beforeLeafSelect, beforeInteraction}: Props) {
+export function MemoryMap({scope, rootLabel, mode, memoryLabel, targets, before = [], after = [], onLeafSelected, beforeLeafSelect, beforeInteraction, focusNew}: Props) {
   const client = useClient();
   const scopeKey = scope.kind === 'bot' ? `bot:${scope.botId}` : `project:${scope.projectId}`;
   const [list, setList] = useState<MemoryList>();
@@ -72,6 +76,12 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, targets, before 
   const editorSession = useRef<MapInlineEditorSession | null>(null);
   const switching = useRef(false);
   const savedSession = useRef<MapInlineEditorSession | null>(null);
+  const [sourceItem, setSourceItem] = useState<string>();
+  const [recentChange, setRecentChange] = useState<{kind: 'confirm' | 'archive'; item: MemoryItem; eventId?: string}>();
+  const [focusRequest, setFocusRequest] = useState<{id: string; token: number}>();
+  const focused = useRef('');
+  const currentScope = useRef(scopeKey);
+  currentScope.current = scopeKey;
   useInlineDraft(Boolean(editing || adding), async () => {
     const current = editorSession.current;
     if (!current) return !editing && !adding;
@@ -107,7 +117,7 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, targets, before 
     // `scope` is rebuilt by the parent every render; its key is what says the memory changed
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, scopeKey]);
-  useEffect(() => {listCache.current = {scopeKey}; setList(undefined); setMarks(noMarks); setSelected(undefined); setEditing(undefined); setAdding(undefined); setDetailsOpen(false); setAction(undefined); setSearching(false); setQuery(''); void reload(true); return () => {serial.current++;};}, [reload, scopeKey]);
+  useEffect(() => {listCache.current = {scopeKey}; setList(undefined); setMarks(noMarks); setSelected(undefined); setEditing(undefined); setAdding(undefined); setDetailsOpen(false); setAction(undefined); setSearching(false); setQuery(''); setSourceItem(undefined); setRecentChange(undefined); setFocusRequest(undefined); setBusy(false); focused.current = ''; void reload(true); return () => {serial.current++;};}, [reload, scopeKey]);
   // What the bot writes does not change the snapshot: look again while the page is open, so a new leaf shows up marked 新.
   useEffect(() => {
     const timer = window.setInterval(() => {if (document.visibilityState === 'visible') void reload();}, 8_000);
@@ -117,6 +127,23 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, targets, before 
   const views = useMemo(() => list ? branchViews(list) : {branches: [], archived: []}, [list]);
   const plan = useMemo(() => searchPlan([...views.branches, ...views.archived], query), [views, query]);
   const items = useMemo(() => new Map((list?.items ?? []).map(item => [item.id, item])), [list]);
+  useEffect(() => {
+    if (focusNew === undefined || !list || listCache.current.scopeKey !== scopeKey || listCache.current.value !== list) return;
+    const requestKey = `${scopeKey}:${focusNew}`;
+    if (focused.current === requestKey) return;
+    const target = list.items.filter(item => marks.ids.has(item.id)).sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))[0];
+    focused.current = requestKey;
+    if (!target) {setNotice('这里的新记忆已经查看过了。'); return;}
+    setSelected(target.id); setSourceItem(undefined); setSearching(false); setQuery('');
+    setFlipped(current => {
+      const next = new Set(current);
+      next.delete('memory');
+      if (target.state === 'archived') {next.add('archive'); next.add(`a:${target.branch}`);}
+      else next.delete(`b:${target.branch}`);
+      return next;
+    });
+    setFocusRequest({id: `i:${target.id}`, token: focusNew});
+  }, [focusNew, list, marks, scopeKey]);
   const withSavedDraft = (action: () => void) => {
     const session = editorSession.current;
     if (!session) {savedSession.current = null; action(); return;}
@@ -135,11 +162,12 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, targets, before 
   const flip = (id: string) => withSavedDraft(() => rawFlip(id));
   const isOpen = (id: string, initially: boolean) => flipped.has(id) ? !initially : initially;
 
-  async function act(request: Parameters<typeof runMemory>[1], done = '', onItem?: (item: MemoryItem) => void): Promise<boolean> {
+  async function act(request: Parameters<typeof runMemory>[1], done = '', onItem?: (item: MemoryItem) => void | Promise<void>): Promise<boolean> {
     setBusy(true); setNotice('');
     const outcome = await runMemory(client, request);
+    if (currentScope.current !== scopeKey) return outcome.ok;
     if (!outcome.ok) {setNotice(outcome.message); if (outcome.conflict) await reload(true);}
-    else {await reload(true); if (done) setNotice(done); if (outcome.reply.kind === 'item') onItem?.(outcome.reply.item);}
+    else {await reload(true); if (done) setNotice(done); if (outcome.reply.kind === 'item') await onItem?.(outcome.reply.item);}
     setBusy(false);
     return outcome.ok;
   }
@@ -155,9 +183,22 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, targets, before 
   }
 
   const projectFor = (item: MemoryItem) => scope.kind === 'bot' ? sourceProject(item, scope.botId, targets.projects ?? []) : undefined;
+  async function rememberChange(kind: 'confirm' | 'archive', item: MemoryItem) {
+    const result = await runMemory(client, {type: 'events', scope, itemId: item.id});
+    if (currentScope.current !== scopeKey) return;
+    const eventId = result.ok && result.reply.kind === 'events' ? undoEventFor(result.reply.events, item, kind) : undefined;
+    setRecentChange({kind, item, eventId});
+    if (!eventId) setNotice('已保存；撤销记录暂时读不到，可在「详情与历史」里查看。');
+  }
+  function undoRecent() {
+    if (busy || !recentChange?.eventId) return;
+    void act({type: 'undo', scope, eventId: recentChange.eventId}, '已撤销。', item => {
+      setRecentChange(undefined); setSelected(item.id); setDetailsOpen(false);
+    });
+  }
   async function archiveLeaf(item: MemoryItem) {
     if (busy) return;
-    if (!await act({type: 'archive', scope, itemId: item.id, revision: item.revision}, '已删除，在「已归档」里能恢复。')) return;
+    if (!await act({type: 'archive', scope, itemId: item.id, revision: item.revision}, '', after => rememberChange('archive', after))) return;
     if (selectedRef.current === item.id) {setSelected(undefined); setDetailsOpen(false); setAction(undefined);}
     setEditing(current => current?.kind === 'leaf' && current.id === item.id ? undefined : current);
   }
@@ -167,7 +208,7 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, targets, before 
     return [{id: 'details', label: '详情与历史', onSelect: () => withSavedDraft(() => {setSelected(item.id); setAction(undefined); setDetailsOpen(true);})}, ...leafActions(item, scope.kind, back && targets.projects?.find(project => project.id === back)?.name).map(({action, label}) => {
       const run: Record<LeafAction, () => void> = {
         'move-branch': () => openAction('move-branch'), 'to-bot': () => openAction('to-bot'), 'to-project': () => openAction('to-project'),
-        trust: () => openAction('trust'), purge: () => openAction('purge'),
+        trust: () => {void act({type: 'confirm', scope, itemId: item.id, revision: item.revision}, '', after => rememberChange('confirm', after));}, purge: () => openAction('purge'),
         delete: () => {void archiveLeaf(item);},
         restore: () => void act({type: 'restore', scope, itemId: item.id, revision: item.revision}, '已恢复。'),
       };
@@ -239,7 +280,19 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, targets, before 
     onBranchAdd: view => startAdding(view.name),
     onBranchEdit: beginBranchEdit,
     onBranchDelete: view => {void archiveBranch(view);},
-    leafContent: item => editing?.kind === 'leaf' && editing.id === item.id ? <MapInlineEditor key={`${scopeKey}:${item.id}:${editing.revision}`} session={editorSession} value={editing.text} label="记忆内容" busy={busy} point={editing.point} onCancel={() => setEditing(current => current === editing ? undefined : current)} onCommit={async (text: string) => {
+    leafFooter: item => selected !== item.id ? undefined : <>
+      <MemoryLeafTools busy={busy} reference={scope.kind === 'project' && item.trust === 'untrusted'}
+        editing={editing?.kind === 'leaf' && editing.id === item.id}
+        undo={recentChange?.kind === 'confirm' && recentChange.item.id === item.id && recentChange.item.revision === item.revision ? {label: '已设为可信', run: recentChange.eventId ? undoRecent : undefined} : undefined}
+        source={sourceLines(item, {bot: targets.botName, group: targets.groupName})} sourceOpen={sourceItem === item.id}
+        onConfirm={() => guardMemory(() => {if (!busy) void act({type: 'confirm', scope, itemId: item.id, revision: item.revision}, '', after => rememberChange('confirm', after));})}
+        onEdit={() => beginLeafEdit(item)} onDelete={() => guardMemory(() => {void archiveLeaf(item);})}
+        onSource={() => setSourceItem(current => current === item.id ? undefined : item.id)}
+        onCollapse={() => guardMemory(() => {setSelected(undefined); setDetailsOpen(false); setAction(undefined);})}
+        onSave={() => {void editorSession.current?.commit();}} onCancel={() => setEditing(undefined)}/>
+      {notice && <p className="mm-leaf-note" role="status">{notice}</p>}
+    </>,
+    leafContent: item => editing?.kind === 'leaf' && editing.id === item.id ? <MapInlineEditor key={`${scopeKey}:${item.id}:${editing.revision}`} session={editorSession} value={editing.text} label="记忆内容" busy={busy} point={editing.point} cancelOnEscape onCancel={() => setEditing(current => current === editing ? undefined : current)} onCommit={async (text: string) => {
       if (!text.trim()) {setNotice('记忆内容不能为空。'); return false;}
       if (text === item.text) {setNotice(''); setEditing(current => current === editing ? undefined : current); return true;}
       const ok = await act({type: 'edit', scope, itemId: item.id, revision: editing.revision, text}, '已保存。');
@@ -265,7 +318,11 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, targets, before 
     const details = detailItem && node.id === `i:${detailItem.id}` ? detailNodes : [];
     const target = action && ('item' in action ? `i:${action.item.id}` : `b:${action.branch}`);
     const actions = target === node.id ? actionNodes : [];
-    const extra = [...details, ...actions];
+    const undone = recentChange?.kind === 'archive' && node.id === `b:${recentChange.item.branch}` ? [{
+      id: 'memory-deleted', kind: 'action' as const, label: '这条记忆已删除',
+      footer: <Button type="button" size="sm" variant="ghost" disabled={busy || !recentChange.eventId} onClick={undoRecent}>撤销删除</Button>,
+    }] : [];
+    const extra = [...details, ...actions, ...undone];
     return {...node, ...(node.children || extra.length ? {children: [...(node.children ?? []).map(decorateMemory), ...extra]} : {}),
       ...(extra.length ? {open: true} : {})};
   };
@@ -279,12 +336,16 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, targets, before 
     ...(node.onToggle ? {onToggle: () => guardInteraction(node.onToggle!)} : {}),
     ...(node.menu ? {menu: node.menu.map(entry => ({...entry, onSelect: () => guardInteraction(entry.onSelect)}))} : {}),
   });
+  const selectedItem = selected ? items.get(selected) : undefined;
+  const inlineNoticeVisible = selectedItem?.state === 'active'
+    && (mode !== 'wrapped' || isOpen('memory', true))
+    && isOpen(`b:${selectedItem.branch}`, plan.active ? plan.branches.has(selectedItem.branch) : true);
   const statusNodes: MapNode[] = [
     ...(!list && !error ? [{id: 'loading', kind: 'action' as const, label: '正在读取记忆…'}] : []),
     ...(error ? [{id: 'error', kind: 'action' as const, label: `读取未完成：${error}`, children: [{id: 'retry', kind: 'action' as const, label: '重试', onClick: () => void reload()}]}] : []),
     ...(list && !list.verified ? [{id: 'unverified', kind: 'action' as const, label: '记忆文件在 vonvon 之外被改过，可信条目暂时不会交给模型。', children: [{id: 'reseal', kind: 'action' as const, label: '检查过了，照现在的用', onClick: () => {if (!busy) void act({type: 'reseal', scope}, '已确认，下一轮起可信条目照常交给模型。');}}]}] : []),
     ...(list?.problems ?? []).map((problem, at) => ({id: `problem:${at}`, kind: 'action' as const, label: problem})),
-    ...(notice ? [{id: 'notice', kind: 'action' as const, label: notice, onClick: () => setNotice('')}] : []),
+    ...(notice && !inlineNoticeVisible ? [{id: 'notice', kind: 'action' as const, label: notice, onClick: () => setNotice('')}] : []),
     ...(searching ? [{id: 'search', kind: 'action' as const, label: '搜索记忆', content: <input className="mm-search-input" type="search" aria-label="搜索记忆" placeholder="搜索记忆" value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => {if (event.key === 'Escape') {event.preventDefault(); setQuery(''); setSearching(false);}}}/>, children: [{id: 'search-close', kind: 'action' as const, label: '结束搜索', onClick: () => {setQuery(''); setSearching(false);}}]}] : []),
   ];
   const memoryFresh = [...views.branches, ...views.archived].reduce((sum, view) => sum + branchNewCount(view, marks), 0);
@@ -313,6 +374,6 @@ export function MemoryMap({scope, rootLabel, mode, memoryLabel, targets, before 
     menu: list ? [{id: 'add', label: '添加记忆', onSelect: () => startAdding()}, {id: 'search', label: '搜索记忆', onSelect: () => guardMemory(() => setSearching(true))}, {id: 'export', label: '导出记忆', onSelect: () => void exportAll()}] : undefined};
 
   return <section className="memory-map" aria-label={memoryLabel}>
-    <div className="memory-canvas"><MindMap key={scopeKey} root={root} label={`${rootLabel}的记忆导图`} beforeLocalToggle={guardInteraction} beforeSelect={guardInteraction} inlineMenus/></div>
+    <div className="memory-canvas"><MindMap key={scopeKey} root={root} label={`${rootLabel}的记忆导图`} beforeLocalToggle={guardInteraction} beforeSelect={guardInteraction} focusRequest={focusRequest} inlineMenus/></div>
   </section>;
 }

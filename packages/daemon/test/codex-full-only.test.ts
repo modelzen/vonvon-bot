@@ -30,7 +30,9 @@ describe('Codex Linux permission capability', () => {
     });
   it('reads only cached versions on the per-message fullAccessOnly path', () => {
     locate.version = undefined;
-    expect(new CodexAppServerBackend().fullAccessOnly()).toBeUndefined();
+    const reason = new CodexAppServerBackend().fullAccessOnly();
+    if (process.platform === 'win32') expect(reason).toContain('测不出 Windows');
+    else expect(reason).toBeUndefined();
     expect(locate.probe).not.toHaveBeenCalled();
   });
   it.skipIf(process.platform !== 'linux')('keeps failed cached probes unavailable without another process on the message path', () => {

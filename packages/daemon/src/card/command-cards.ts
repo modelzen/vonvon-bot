@@ -1,5 +1,5 @@
 import { MODEL_ID_MAX_LENGTH } from '../agent/model-id';
-import type { ModelInfo, ReasoningEffort, ThreadSummary } from '../agent/types';
+import type { ModelInfo, ReasoningEffort, ServiceTier, ThreadSummary } from '../agent/types';
 import { getSessionTitleEfforts } from '../config/schema';
 import { stripBridgeMessageEnvelope } from '../bot/session-title';
 import type { SessionMode } from '../project/registry';
@@ -23,6 +23,8 @@ import {
 export const MC = {
   model: 'model.set',
   effort: 'model.effort',
+  speed: 'model.speed',
+  speedOpen: 'model.speed.open',
   custom: 'model.custom',
 } as const;
 
@@ -59,7 +61,9 @@ export interface ModelCardState {
   requesterOpenId: string;
   models: ModelInfo[];
   model: string;
+  modelCustom?: boolean;
   effort: ReasoningEffort;
+  serviceTier?: ServiceTier;
   /** the backend whose models this card lists（写回会话前复核，防跨后端把一个后端的
    * model id 持久化进另一后端的会话——resume 时会喂坏 CLI）。旧卡缺省。 */
   backend?: string;
@@ -76,6 +80,10 @@ export interface ModelCardState {
  * older stored values only lose backticks so they cannot break out. */
 export function modelIdCode(id: string): string {
   return `\`${id.replace(/`/g, '')}\``;
+}
+
+export function serviceTierLabel(tier?: ServiceTier): string {
+  return tier === 'ultrafast' ? 'Ultrafast · 极速' : tier === 'fast' ? 'Fast · 快速' : tier === 'standard' ? 'Standard · 普通' : 'Codex 默认';
 }
 
 /**
@@ -95,6 +103,32 @@ export function buildModelCard(state: ModelCardState): CardObject {
   const canPickModel = visible.length > 1;
   const canPickEffort = efforts.length > 0;
   const curLabel = cur ? `**${cur.displayName}**` : `${modelIdCode(state.model)}（手填）`;
+  const supported = cur?.serviceTiers ?? [];
+  const showSpeed = state.backend === 'codex-appserver' && !state.modelCustom
+    && supported.some(item => item.id === 'fast' || item.id === 'ultrafast');
+  const currentSpeed = state.serviceTier && supported.some(item => item.id === state.serviceTier)
+    ? state.serviceTier : 'standard';
+  const speedButton = showSpeed
+    ? {
+      tag: 'button', size: 'medium', type: 'text', width: 'fill',
+      icon: { tag: 'standard_icon', token: 'speed_filled', color: currentSpeed === 'standard' ? 'grey-400' : currentSpeed === 'fast' ? 'yellow' : 'orange' },
+      hover_tips: { tag: 'plain_text', content: `响应速度：${serviceTierLabel(currentSpeed)}；点击切换。Fast / Ultrafast 消耗更多额度。` },
+      behaviors: [{ type: 'callback', value: { a: MC.speedOpen } }],
+    }
+    : undefined;
+
+  // Reserve an icon-sized column so long model/effort labels cannot squeeze it.
+  // Native icon-only buttons have no label to truncate into an adjacent ellipsis.
+  const controlsRow = (controls: CardElement[]): CardElement => speedButton ? {
+    tag: 'column_set', flex_mode: 'none', horizontal_spacing: 'small',
+    columns: [
+      ...controls.map(control => ({
+        tag: 'column', width: 'weighted', weight: 1, vertical_align: 'center',
+        elements: [{ ...control, ...(control.tag === 'select_static' ? { width: 'fill' } : {}) }],
+      })),
+      { tag: 'column', width: '32px', vertical_align: 'center', elements: [speedButton] },
+    ],
+  } : actions(controls);
 
   const elements: CardElement[] = [md('🧠 **模型 / 推理强度**')];
 
@@ -124,13 +158,13 @@ export function buildModelCard(state: ModelCardState): CardObject {
         }),
       );
     }
-    elements.push(actions(controls));
+    elements.push(controlsRow(controls));
     // 只有一个维度可调时，给另一维度一句说明（避免「为什么只有一个下拉」的困惑）。
     if (canPickModel && !canPickEffort) {
       elements.push(note('该后端不调节推理强度（思考由模型自动调度，无 Codex 那样的 effort 档）'));
     }
   } else {
-    elements.push(hr(), md(`当前模型：${curLabel}`));
+    elements.push(hr(), speedButton ? controlsRow([md(`当前模型：${curLabel}`)]) : md(`当前模型：${curLabel}`));
   }
 
   if (state.allowCustom !== false) elements.push(

@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CODEX_PROTECTED_PATHS, codexFilesystem, codexInstallRoot } from '../src/agent/codex-appserver/workspace-policy';
@@ -16,13 +16,20 @@ function binary(path: string) { writeFileSync(path, 'fixture'); return path; }
 afterEach(() => { vi.unstubAllEnvs(); host.home = '/unused-home'; for (const path of temporary.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
 describe('Codex runtime read boundary', () => {
-  it('follows npm launch symlinks to the package containing platform runtime files', () => {
+  it('follows npm launch symlinks to the package containing platform runtime files', context => {
     const root = fixture();
     const pkg = join(root, 'lib/node_modules/@openai/codex');
     mkdirSync(join(pkg, 'bin'), { recursive: true });
     writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name: '@openai/codex' }));
     const target = binary(join(pkg, 'bin/codex.js'));
-    const launch = join(root, 'codex'); symlinkSync(target, launch);
+    const launch = join(root, 'codex');
+    try { symlinkSync(target, launch); }
+    catch (error) {
+      if (process.platform === 'win32' && error instanceof Error && 'code' in error && error.code === 'EPERM') {
+        context.skip('Windows file symlink privilege is unavailable; this case was not exercised');
+      }
+      throw error;
+    }
     expect(codexInstallRoot(launch)).toEqual({ path: pkg, kind: 'dir' });
   });
   it.each(['usr/local/lib/node_modules/@openai/codex', 'home/.nvm/versions/node/v22.0.0/lib/node_modules/@openai/codex'])(
@@ -49,11 +56,12 @@ describe('Codex runtime read boundary', () => {
     host.home = fixture();
     const bin = binary(join(host.home, 'codex'));
     expect(codexInstallRoot(bin)).toEqual({ path: bin, kind: 'file' });
-    expect(codexInstallRoot('/usr/local/bin/missing-codex-fixture')).toEqual({ path: '/usr/local/bin/missing-codex-fixture', kind: 'file' });
+    const missing = resolve('/usr/local/bin/missing-codex-fixture');
+    expect(codexInstallRoot(missing)).toEqual({ path: missing, kind: 'file' });
   });
   it.each(['/etc', '/var', '/srv', '/mnt', '/usr/lib', '/usr/sbin', '/usr/local/sbin', '/snap/bin'])(
     'does not grant a shared system directory: %s', directory => {
-      const bin = join(directory, 'missing-codex-fixture');
+      const bin = resolve(directory, 'missing-codex-fixture');
       expect(codexInstallRoot(bin)).toEqual({ path: bin, kind: 'file' });
     });
   it('protects default and custom Codex credentials and their ancestors', () => {
@@ -68,7 +76,7 @@ describe('Codex runtime read boundary', () => {
   });
   it('protects a credential home reached through a symlink', () => {
     const root = fixture(), secrets = join(root, 'private'), alias = join(root, 'alias');
-    mkdirSync(secrets); symlinkSync(secrets, alias, 'dir');
+    mkdirSync(secrets); symlinkSync(secrets, alias, process.platform === 'win32' ? 'junction' : 'dir');
     vi.stubEnv('CODEX_HOME', alias);
     const bin = binary(join(secrets, 'codex'));
     expect(codexInstallRoot(bin)).toEqual({ path: bin, kind: 'file' });
@@ -99,7 +107,7 @@ describe('Codex runtime read boundary', () => {
         .toHaveProperty(root, { '.': mode === 'qa' ? 'read' : 'write', '.codex': 'read', '.agents/skills': 'read' });
     }
   });
-  it('adds the real resolver target only when Linux network is enabled', () => {
+  it.skipIf(process.platform === 'win32')('adds the real resolver target only when Linux network is enabled', () => {
     const resolver = realpathSync('/etc/resolv.conf');
     expect(codexFilesystem([], 'qa', undefined, 'linux', true)).toHaveProperty([resolver], { '.': 'read' });
     expect(codexFilesystem([], 'qa', undefined, 'linux', false)).not.toHaveProperty([resolver]);

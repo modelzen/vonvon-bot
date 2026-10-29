@@ -56,8 +56,8 @@ it('draws nothing as new when there is nothing new, and keeps the first reading\
 
 it('shows the counts on the navigation, in the project list and in the Bot list, and nothing for zero', () => {
   const shell = (counts?: {bots: number; projects: number}) => renderToStaticMarkup(<AppShell page="collaboration" view="projects" title="项目" newCounts={counts} onNavigate={vi.fn()} onOpenList={vi.fn()}>x</AppShell>);
-  expect(shell({bots: 1, projects: 3})).toContain('aria-label="新记忆 3 条">3</small>');
-  expect(shell({bots: 1, projects: 3})).toContain('aria-label="新记忆 1 条">1</small>');
+  expect(shell({bots: 1, projects: 3})).toContain('title="新记忆 3 条">新记忆 3</small>');
+  expect(shell({bots: 1, projects: 3})).toContain('title="新记忆 1 条">新记忆 1</small>');
   expect(shell({bots: 0, projects: 0})).not.toContain('today-nav-count');
   expect(shell()).not.toContain('today-nav-count');
   const snapshot = desktopSnapshotSchema.parse({

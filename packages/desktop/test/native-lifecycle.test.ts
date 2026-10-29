@@ -20,6 +20,7 @@ const fake = vi.hoisted(() => ({
   readRegistration: vi.fn(async (): Promise<Registration> => ({ kind: 'absent' })),
   verified: vi.fn(async (): Promise<VerifiedDaemon | null> => null),
   running: vi.fn(async (_previous: { pid: number; startedAt: string }) => false),
+  stopDaemonForQuit: vi.fn(async () => {}),
   tray: { destroy: vi.fn(), setUpdate: vi.fn() },
   dock: {
     visible: true,
@@ -95,6 +96,7 @@ vi.mock('../src/attach.js', async importOriginal => ({
 vi.mock('../src/bridge.js', () => ({ installBridge: fake.install, openAllowedExternal: fake.openExternal }));
 vi.mock('../src/tray.js', () => ({ createDesktopTray: vi.fn(() => fake.tray) }));
 vi.mock('../src/update-configuration.js', () => ({ desktopUpdateConfiguration: fake.updateConfiguration }));
+vi.mock('../src/quit-daemon.js', () => ({ stopDaemonForQuit: fake.stopDaemonForQuit }));
 vi.mock('../src/daemon-dependencies.js', () => ({
   prepareDesktopRoot: vi.fn(async () => fake.root),
   createDaemonDependencies: vi.fn(() => ({ readRegistration: fake.readRegistration, readVerifiedDaemon: fake.verified, ownerRunning: fake.running })),
@@ -189,6 +191,7 @@ beforeEach(async () => {
   fake.readRegistration.mockClear().mockResolvedValue({ kind: 'absent' });
   fake.verified.mockReset().mockResolvedValue(null);
   fake.running.mockReset().mockResolvedValue(false);
+  fake.stopDaemonForQuit.mockReset().mockResolvedValue(undefined);
   fake.install.mockReset().mockReturnValue(fake.bridge);
   fake.openExternal.mockClear();
   await startDesktop();
@@ -211,6 +214,145 @@ async function downloadUpdate(): Promise<void> {
   expect(window.destroyed).toBe(false);
   expect(app.quit).not.toHaveBeenCalled();
 }
+
+describe('explicit desktop quit', () => {
+  it('keeps the desktop and tray alive until the daemon and its Bots have stopped', async () => {
+    let stopped!: () => void;
+    fake.stopDaemonForQuit.mockImplementationOnce(() => new Promise<void>(resolve => { stopped = resolve; }));
+    const quitting = actions.confirmQuit();
+    await vi.waitFor(() => expect(fake.stopDaemonForQuit).toHaveBeenCalledOnce());
+    expect(actions.isExpectedDisconnect()).toBe(true);
+    expect(fake.bridge.dispose).not.toHaveBeenCalled();
+    expect(window.destroyed).toBe(false);
+    expect(fake.tray.destroy).not.toHaveBeenCalled();
+    expect(app.quit).not.toHaveBeenCalled();
+    stopped();
+    await quitting;
+    expect(fake.bridge.dispose).toHaveBeenCalledOnce();
+    expect(window.destroyed).toBe(true);
+    expect(fake.tray.destroy).toHaveBeenCalledOnce();
+    expect(app.quit).toHaveBeenCalledOnce();
+  });
+
+  it('coalesces repeated quit requests while the daemon is draining', async () => {
+    let stopped!: () => void;
+    fake.stopDaemonForQuit.mockImplementationOnce(() => new Promise<void>(resolve => { stopped = resolve; }));
+    const first = actions.confirmQuit();
+    const second = actions.confirmQuit();
+    await vi.waitFor(() => expect(fake.stopDaemonForQuit).toHaveBeenCalledOnce());
+    stopped();
+    await Promise.all([first, second]);
+    expect(fake.bridge.dispose).toHaveBeenCalledOnce();
+    expect(app.quit).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the app available and permits retry when background shutdown is not confirmed', async () => {
+    const failure = new Error('后台尚未确认停止');
+    actions.hide();
+    expect(window.visible).toBe(false);
+    fake.stopDaemonForQuit.mockRejectedValueOnce(failure);
+    await expect(actions.confirmQuit()).rejects.toBe(failure);
+    expect(dialog.showErrorBox).toHaveBeenCalledOnce();
+    expect(window.visible).toBe(true);
+    expect(window.destroyed).toBe(false);
+    expect(fake.bridge.dispose).not.toHaveBeenCalled();
+    expect(fake.tray.destroy).not.toHaveBeenCalled();
+    expect(app.quit).not.toHaveBeenCalled();
+    const quit = { preventDefault: vi.fn() };
+    app.emit('before-quit', quit);
+    expect(quit.preventDefault).toHaveBeenCalledOnce();
+    expect(fake.bridge.requestQuit).toHaveBeenCalledOnce();
+    await actions.confirmQuit();
+    expect(fake.stopDaemonForQuit).toHaveBeenCalledTimes(2);
+    expect(app.quit).toHaveBeenCalledOnce();
+  });
+
+  it('preserves a window closed during background drain so failed quit can restore and retry it', async () => {
+    let failStop!: (error: Error) => void;
+    fake.stopDaemonForQuit.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { failStop = reject; }));
+    const quitting = actions.confirmQuit();
+    await vi.waitFor(() => expect(fake.stopDaemonForQuit).toHaveBeenCalledOnce());
+    const close = { preventDefault: vi.fn() };
+    window.emit('close', close);
+    expect(close.preventDefault).toHaveBeenCalledOnce();
+    expect(window.visible).toBe(false);
+    expect(fake.dock.visible).toBe(false);
+    expect(window.destroyed).toBe(false);
+    expect(fake.bridge.dispose).not.toHaveBeenCalled();
+    const failure = new Error('后台尚未确认停止');
+    const rejected = expect(quitting).rejects.toBe(failure);
+    failStop(failure);
+    await rejected;
+    await vi.waitFor(() => {
+      expect(window.visible).toBe(true);
+      expect(fake.dock.visible).toBe(true);
+    });
+    expect(window.destroyed).toBe(false);
+    expect(fake.tray.destroy).not.toHaveBeenCalled();
+    expect(app.quit).not.toHaveBeenCalled();
+    await actions.confirmQuit();
+    expect(fake.stopDaemonForQuit).toHaveBeenCalledTimes(2);
+    expect(window.destroyed).toBe(true);
+    expect(app.quit).toHaveBeenCalledOnce();
+  });
+
+  it.each(['startHost', 'service start'] as const)('waits for %s before stopping its authenticated successor', async operation => {
+    fake.readRegistration.mockResolvedValue({ kind: 'ours' });
+    let started!: (value: VerifiedDaemon) => void;
+    fake.ready.mockImplementationOnce(() => new Promise<VerifiedDaemon>(resolve => { started = resolve; }));
+    const starting = operation === 'startHost' ? actions.startHost() : actions.service('start');
+    await vi.waitFor(() => expect(fake.ready).toHaveBeenCalledTimes(2));
+    const quitting = actions.confirmQuit();
+    expect(fake.stopDaemonForQuit).not.toHaveBeenCalled();
+    expect(app.quit).not.toHaveBeenCalled();
+    const identity = { pid: 63, startedAt: 'start-before-quit', listen: '127.0.0.1:42345' };
+    const next = { identity, dispose: vi.fn(async () => {}) };
+    fake.attach.mockResolvedValueOnce(next);
+    started(identity);
+    await starting;
+    await quitting;
+    expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next);
+    expect(fake.stopDaemonForQuit).toHaveBeenCalledOnce();
+    expect(app.quit).toHaveBeenCalledOnce();
+  });
+
+  it('routes the tray Quit and native Dock Quit through the same confirmed exit', async () => {
+    const trayQuit = vi.mocked(createDesktopTray).mock.lastCall?.[2];
+    expect(trayQuit).toBeTypeOf('function');
+    trayQuit?.();
+    expect(fake.bridge.requestQuit).toHaveBeenCalledOnce();
+    app.emit('before-quit', { preventDefault: vi.fn() });
+    expect(fake.bridge.requestQuit).toHaveBeenCalledTimes(2);
+    expect(fake.stopDaemonForQuit).not.toHaveBeenCalled();
+    await actions.confirmQuit();
+    expect(fake.stopDaemonForQuit).toHaveBeenCalledOnce();
+    expect(app.quit).toHaveBeenCalledOnce();
+  });
+
+  it('preserves the background daemon when only the window is closed', () => {
+    const close = { preventDefault: vi.fn() };
+    window.emit('close', close);
+    expect(close.preventDefault).toHaveBeenCalledOnce();
+    expect(window.visible).toBe(false);
+    expect(fake.stopDaemonForQuit).not.toHaveBeenCalled();
+    expect(fake.bridge.dispose).not.toHaveBeenCalled();
+    expect(app.quit).not.toHaveBeenCalled();
+  });
+
+  it('does not turn desktop update installation into an explicit full quit', async () => {
+    await downloadUpdate();
+    await actions.installDesktopUpdate();
+    expect(fake.stopDaemonForQuit).not.toHaveBeenCalled();
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledOnce();
+  });
+
+  it('does not stop the independent daemon when the desktop renderer crashes', async () => {
+    window.webContents.emit('render-process-gone');
+    await vi.waitFor(() => expect(app.quit).toHaveBeenCalledOnce());
+    expect(fake.stopDaemonForQuit).not.toHaveBeenCalled();
+    expect(fake.bridge.dispose).toHaveBeenCalledOnce();
+  });
+});
 
 describe('updater final install lifecycle', () => {
   it('keeps the reserved titlebar in sync with native fullscreen and document reloads', () => {
@@ -361,72 +503,120 @@ describe('daemon restart from the window', () => {
     expect(app.quit).not.toHaveBeenCalled();
   });
 
-  it('lets a quit cancel a restart whose reply is still pending, and ignores the late reply', async () => {
+  it('waits for an in-flight restart before stopping its fresh owner and quitting', async () => {
+    const successor = { pid: 44, startedAt: 'after-quit-request', listen: '127.0.0.1:42345' };
+    const next = { identity: successor, dispose: vi.fn(async () => {}) };
+    fake.verified.mockResolvedValue(successor);
+    fake.attach.mockResolvedValueOnce(next);
     let reply!: (result: { kind: 'applied'; revision: number }) => void;
     const restarting = actions.restartHost(previous, () => new Promise(resolve => { reply = resolve; }));
-    const cancelled = expect(restarting).rejects.toThrow('重启已取消。');
-    await actions.confirmQuit();
-    await cancelled;
+    const quitting = actions.confirmQuit();
+    expect(fake.stopDaemonForQuit).not.toHaveBeenCalled();
+    expect(app.quit).not.toHaveBeenCalled();
+    reply({ kind: 'applied', revision: 7 });
+    await expect(restarting).resolves.toEqual({ kind: 'applied', revision: 7 });
+    await quitting;
+    expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next);
+    expect(fake.stopDaemonForQuit).toHaveBeenCalledOnce();
     expect(fake.bridge.dispose).toHaveBeenCalledOnce();
     expect(app.quit).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the app alive when an in-flight operation prevents confirmed quit', async () => {
+    const successor = { pid: 44, startedAt: 'late-reply', listen: '127.0.0.1:42345' };
+    fake.verified.mockResolvedValue(successor);
+    fake.attach.mockResolvedValueOnce({ identity: successor, dispose: vi.fn(async () => {}) });
+    let reply!: (result: { kind: 'applied'; revision: number }) => void;
+    const restarting = actions.restartHost(previous, () => new Promise(resolve => { reply = resolve; }));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    try {
+      const quitting = expect(actions.confirmQuit()).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(61_000);
+      await quitting;
+    } finally { vi.useRealTimers(); }
+    expect(fake.stopDaemonForQuit).not.toHaveBeenCalled();
+    expect(fake.bridge.dispose).not.toHaveBeenCalled();
+    expect(window.destroyed).toBe(false);
+    expect(app.quit).not.toHaveBeenCalled();
+    expect(dialog.showErrorBox).toHaveBeenCalledOnce();
     reply({ kind: 'applied', revision: 7 });
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(fake.verified).not.toHaveBeenCalled();
-    expect(fake.attach).toHaveBeenCalledTimes(1);
+    await restarting;
+    await actions.confirmQuit();
+    expect(fake.stopDaemonForQuit).toHaveBeenCalledOnce();
+    expect(app.quit).toHaveBeenCalledOnce();
   });
 
   for (const answer of ['old owner', 'successor'] as const) {
-    it(`lets a quit win while the owner read is pending and then returns the ${answer}`, async () => {
+    it(`waits through a pending owner read returning the ${answer} before full quit`, async () => {
       const successor = { pid: 45, startedAt: 'after-quit', listen: '127.0.0.1:42345' };
       let release!: () => void;
-      fake.verified.mockImplementation(() => new Promise<VerifiedDaemon>(resolve => { release = () => resolve(answer === 'successor' ? successor : previous); }));
-      fake.attach.mockResolvedValue({ identity: successor, dispose: vi.fn(async () => {}) });
+      fake.verified.mockImplementationOnce(() => new Promise<VerifiedDaemon>(resolve => { release = () => resolve(answer === 'successor' ? successor : previous); }))
+        .mockResolvedValue(successor);
+      const next = { identity: successor, dispose: vi.fn(async () => {}) };
+      fake.attach.mockResolvedValue(next);
       const restarting = actions.restartHost(previous, applied);
       await vi.waitFor(() => expect(fake.verified).toHaveBeenCalled());
       const quitting = actions.confirmQuit();
+      expect(fake.stopDaemonForQuit).not.toHaveBeenCalled();
       release();
-      await expect(restarting).rejects.toThrow('重启已取消。');
+      await expect(restarting).resolves.toEqual({ kind: 'applied', revision: 7 });
       await quitting;
-      expect(fake.attach).toHaveBeenCalledTimes(1);
-      expect(fake.bridge.replaceOwner).not.toHaveBeenCalled();
+      expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next);
+      expect(fake.stopDaemonForQuit).toHaveBeenCalledOnce();
       expect(app.quit).toHaveBeenCalledOnce();
     });
   }
 
-  for (const stop of ['quit', 'update cleanup'] as const) {
-    it(`lets ${stop} cancel a restart while the successor replacement is pending`, async () => {
-      const successor = { pid: 47, startedAt: 'replacing', listen: '127.0.0.1:42345' };
-      if (stop === 'update cleanup') await downloadUpdate();
-      fake.verified.mockResolvedValue(successor);
-      fake.attach.mockResolvedValue({ identity: successor, dispose: vi.fn(async () => {}) });
-      fake.bridge.replaceOwner.mockImplementationOnce(() => new Promise<void>(() => {}));
-      const restarting = actions.restartHost(previous, applied);
-      const cancelled = expect(restarting).rejects.toThrow('重启已取消。');
-      await vi.waitFor(() => expect(fake.bridge.replaceOwner).toHaveBeenCalled());
-      await (stop === 'quit' ? actions.confirmQuit() : actions.installDesktopUpdate());
-      await cancelled;
-      expect(fake.bridge.dispose).toHaveBeenCalledOnce();
-      if (stop === 'quit') expect(app.quit).toHaveBeenCalledOnce();
-      else expect(autoUpdater.quitAndInstall).toHaveBeenCalledOnce();
-    });
-  }
-
-  it.each([false, true])('handles a successor arriving after quit when close rejects=%s', async closeRejects => {
-    const successor = { pid: 48, startedAt: 'late', listen: '127.0.0.1:42345' };
-    const late = { identity: successor, dispose: vi.fn(async () => {
-      if (closeRejects) throw new Error('Daemon WebSocket close timed out; physical closure was not observed');
-    }) };
-    let deliver!: () => void;
+  it('waits for an in-flight successor replacement before confirmed full quit', async () => {
+    const successor = { pid: 47, startedAt: 'replacing', listen: '127.0.0.1:42345' };
     fake.verified.mockResolvedValue(successor);
-    fake.attach.mockImplementationOnce(() => new Promise(resolve => { deliver = () => resolve(late); }));
+    fake.attach.mockResolvedValue({ identity: successor, dispose: vi.fn(async () => {}) });
+    let replaced!: () => void;
+    fake.bridge.replaceOwner.mockImplementationOnce(() => new Promise<void>(resolve => { replaced = resolve; }));
+    const restarting = actions.restartHost(previous, applied);
+    await vi.waitFor(() => expect(fake.bridge.replaceOwner).toHaveBeenCalled());
+    const quitting = actions.confirmQuit();
+    expect(fake.stopDaemonForQuit).not.toHaveBeenCalled();
+    expect(fake.bridge.dispose).not.toHaveBeenCalled();
+    replaced();
+    await restarting;
+    await quitting;
+    expect(fake.stopDaemonForQuit).toHaveBeenCalledOnce();
+    expect(app.quit).toHaveBeenCalledOnce();
+  });
+
+  it('lets update cleanup cancel a restart while successor replacement is pending', async () => {
+    const successor = { pid: 47, startedAt: 'replacing-update', listen: '127.0.0.1:42345' };
+    await downloadUpdate();
+    fake.verified.mockResolvedValue(successor);
+    fake.attach.mockResolvedValue({ identity: successor, dispose: vi.fn(async () => {}) });
+    fake.bridge.replaceOwner.mockImplementationOnce(() => new Promise<void>(() => {}));
     const restarting = actions.restartHost(previous, applied);
     const cancelled = expect(restarting).rejects.toThrow('重启已取消。');
-    await vi.waitFor(() => expect(fake.attach).toHaveBeenCalledTimes(2));
-    await actions.confirmQuit();
+    await vi.waitFor(() => expect(fake.bridge.replaceOwner).toHaveBeenCalled());
+    await actions.installDesktopUpdate();
     await cancelled;
+    expect(fake.bridge.dispose).toHaveBeenCalledOnce();
+    expect(fake.stopDaemonForQuit).not.toHaveBeenCalled();
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledOnce();
+  });
+
+  it('waits for a late successor attachment before full quit', async () => {
+    const successor = { pid: 48, startedAt: 'late', listen: '127.0.0.1:42345' };
+    const next = { identity: successor, dispose: vi.fn(async () => {}) };
+    let deliver!: () => void;
+    fake.verified.mockResolvedValue(successor);
+    fake.attach.mockImplementationOnce(() => new Promise(resolve => { deliver = () => resolve(next); }));
+    const restarting = actions.restartHost(previous, applied);
+    await vi.waitFor(() => expect(fake.attach).toHaveBeenCalledTimes(2));
+    const quitting = actions.confirmQuit();
+    expect(fake.stopDaemonForQuit).not.toHaveBeenCalled();
     deliver();
-    await vi.waitFor(() => expect(late.dispose).toHaveBeenCalledOnce());
-    expect(fake.bridge.replaceOwner).not.toHaveBeenCalled();
+    await restarting;
+    await quitting;
+    expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next);
+    expect(fake.stopDaemonForQuit).toHaveBeenCalledOnce();
+    expect(app.quit).toHaveBeenCalledOnce();
   });
 
   it('lets the desktop update cleanup cancel a restart before it attaches the successor', async () => {
@@ -548,13 +738,18 @@ describe('machine page stop', () => {
     await expect(actions.startHost()).resolves.toMatchObject({ message: 'daemon 已启动。' });
   });
 
-  it('s18g quit cancels stop while waiting for process exit', async () => {
-    fake.running.mockResolvedValue(true);
+  it('waits for a requested machine-page stop to finish before full quit', async () => {
+    let running = true;
+    fake.running.mockImplementation(async () => running);
     const stopping = actions.stopHost(previous, done);
-    const cancelled = expect(stopping).rejects.toThrow('停止已取消。');
     await vi.waitFor(() => expect(fake.running).toHaveBeenCalled());
-    await actions.confirmQuit();
-    await cancelled;
+    const quitting = actions.confirmQuit();
+    expect(fake.stopDaemonForQuit).not.toHaveBeenCalled();
+    expect(fake.bridge.dispose).not.toHaveBeenCalled();
+    running = false;
+    await expect(stopping).resolves.toMatchObject({ type: 'done' });
+    await quitting;
+    expect(fake.stopDaemonForQuit).toHaveBeenCalledOnce();
     expect(fake.bridge.dispose).toHaveBeenCalledOnce();
     expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
   });
@@ -568,14 +763,18 @@ describe('machine page stop', () => {
     await actions.confirmQuit();
   });
 
-  it('s18g quit cancels stop even when daemon reply never arrives', async () => {
-    const send = vi.fn(() => new Promise<Awaited<ReturnType<typeof done>>>(() => {}));
+  it('waits for a pending stop reply before full quit', async () => {
+    let reply!: (value: Awaited<ReturnType<typeof done>>) => void;
+    const send = vi.fn(() => new Promise<Awaited<ReturnType<typeof done>>>(resolve => { reply = resolve; }));
     const stopping = actions.stopHost(previous, send);
-    const cancelled = expect(stopping).rejects.toThrow('停止已取消。');
-    await actions.confirmQuit();
-    await cancelled;
-    expect(send).toHaveBeenCalledOnce();
+    const quitting = actions.confirmQuit();
+    expect(fake.stopDaemonForQuit).not.toHaveBeenCalled();
     expect(fake.running).not.toHaveBeenCalled();
+    reply(await done());
+    await stopping;
+    await quitting;
+    expect(send).toHaveBeenCalledOnce();
+    expect(fake.stopDaemonForQuit).toHaveBeenCalledOnce();
     expect(fake.bridge.dispose).toHaveBeenCalledOnce();
     expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
   });

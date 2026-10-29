@@ -24,6 +24,8 @@ const selection = z.discriminatedUnion("kind", [
     })
     .strict(),
 ]);
+const speed = z.object({ tier: z.enum(["inherit", "standard", "fast", "ultrafast"]) });
+const sessionSpeed = z.object({ tier: z.enum(["standard", "fast", "ultrafast"]) });
 const title = z.discriminatedUnion("enabled", [
   z.object({ enabled: z.literal(false) }).strict(),
   z
@@ -154,6 +156,7 @@ export const projectEditableSchemas = {
   permission: z.object({ mode: tier, custom: z.record(z.string(), z.unknown()).nullable() }),
   response: z.object({ noMention: z.boolean() }),
   model: z.object({ selection }),
+  speed,
   /** 运行中来了消息 for this group; stored "default" inherits the bot's `run.pendingPolicy` */
   run: z.object({ pendingPolicy: z.enum(["default", "steer", "queue"]) }),
   judge: judgeSectionSchema,
@@ -168,7 +171,7 @@ export const projectSectionSchemas = {
     options: permissionOptionsSchema,
   }),
 };
-export const sessionSectionSchemas = { model: z.object({ selection }) };
+export const sessionSectionSchemas = { model: z.object({ selection }), speed: sessionSpeed };
 export const hostSectionSchemas = {
   execution: z.object({ codexBin: z.string().nullable() }),
   judge: z.object({ defaultProvider: z.enum(['codex-appserver', 'claude-agent', 'typesafe']).optional(), byProvider: z.record(z.string(), z.object({ model: z.string().trim().min(1).max(1000), effort: effort.optional(), custom: z.boolean().optional() })) }),
@@ -335,6 +338,7 @@ export const projectViewSchema = z.object({
   sections: sections(projectSectionSchemas).extend({
     profile: section(groupProfile).optional(), role: section(projectRole).optional(), modelAccess: section(modelAccess).optional(), workspace: section(workspace).optional(), smartRules: section(smartRules).optional(), skills: section(skills).optional(), presentation: section(presentation).optional(),
     run: section(projectSectionSchemas.run).optional(),
+    speed: section(speed).optional(),
     judge: section(judgeViewSection).optional(),
   }),
   smartPrompt: smartPrompt.optional(),
@@ -355,7 +359,7 @@ export const sessionViewSchema = z.object({
     botId: agentIdSchema,
     threadId: z.string(),
   }),
-  sections: sections(sessionSectionSchemas),
+  sections: sections(sessionSectionSchemas).extend({ speed: section(speed).optional() }),
   identity: z.object({
     backend: z.string(),
     sessionId: z.string(),
@@ -418,7 +422,7 @@ const editablePatches: Record<
       value.partial().strict(),
     ]),
   ),
-  session: { model: sessionSectionSchemas.model.partial().strict() },
+  session: { model: sessionSectionSchemas.model.partial().strict(), speed: sessionSpeed.partial().strict() },
   host: { execution: hostSectionSchemas.execution.partial().strict(), judge: hostSectionSchemas.judge.partial().strict() },
 };
 // Old clients may submit one backend's title settings; the owner promotes it to
@@ -461,11 +465,13 @@ export type SettingsEdit =
       };
     }[keyof typeof projectEditableSchemas]
   | {
-      scope: Extract<SettingsScope, { kind: "session" }>;
-      section: "model";
-      revision: string;
-      patch: Partial<z.infer<typeof sessionSectionSchemas.model>>;
-    }
+      [K in keyof typeof sessionSectionSchemas]: {
+        scope: Extract<SettingsScope, { kind: "session" }>;
+        section: K;
+        revision: string;
+        patch: Partial<z.infer<(typeof sessionSectionSchemas)[K]>>;
+      };
+    }[keyof typeof sessionSectionSchemas]
   | {
       scope: Extract<SettingsScope, { kind: "host" }>;
       section: "execution";
@@ -541,6 +547,7 @@ export const modelQuerySchema = z
     botId: agentIdSchema,
     backend: z.string().trim().min(1).max(1000),
     purpose: z.enum(["project", "session", "comments", "titles", "judge"]),
+    threadId: z.string().trim().min(1).max(1000).optional(),
   })
   .strict();
 export type ModelQuery = z.infer<typeof modelQuerySchema>;
@@ -560,6 +567,7 @@ export const modelCatalogSchema = z.object({
       defaultEffort: effort,
       isDefault: z.boolean(),
       hidden: z.boolean(),
+      serviceTiers: z.array(z.object({ id: z.string(), name: z.string(), description: z.string() })).optional(),
     }),
   ),
 });

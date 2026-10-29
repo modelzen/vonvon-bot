@@ -231,6 +231,8 @@ export interface AppServerClientOptions {
   clientName?: string;
   quietOutput?: boolean;
   initializeTimeoutMs?: number;
+  /** Ephemeral native config, never written to the user's config.toml. */
+  configOverrides?: readonly string[];
 }
 
 export class AppServerClient {
@@ -262,7 +264,10 @@ export class AppServerClient {
     // Launch via cross-spawn (platform/spawn) so a Windows `.cmd` codex shim
     // runs instead of throwing EINVAL (CVE-2024-27980). With stdio all-piped the
     // streams are non-null, so the cast to *WithoutNullStreams is sound.
-    const owned = new OwnedProviderProcess(this.opts.bin, ['app-server', '--listen', 'stdio://'], {
+    const owned = new OwnedProviderProcess(this.opts.bin, [
+      ...(this.opts.configOverrides ?? []).flatMap(value => ['-c', value]),
+      'app-server', '--listen', 'stdio://',
+    ], {
       cwd: this.opts.cwd,
       env: binChildEnv(this.opts.bin, mergeProcessEnv(this.opts.replaceEnv ? {} : process.env, { ...this.opts.env, FEISHU_CODEX_BRIDGE: '1' })),
       stdio: ['pipe', 'pipe', 'pipe'],
