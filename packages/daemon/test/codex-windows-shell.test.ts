@@ -1,11 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { codexShellReadRoot } from '../src/agent/codex-appserver/workspace-policy';
 const roots: string[] = [];
 function runtime(name = 'powershell') {
-  const root = mkdtempSync(join(tmpdir(), 'vonvon-shell-')); roots.push(root);
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'vonvon-shell-'))); roots.push(root);
   const dir = join(root, name); mkdirSync(dir);
   for (const name of ['pwsh.exe', 'pwsh.dll', 'System.Management.Automation.dll']) writeFileSync(join(dir, name), 'fixture');
   return { root, dir, shell: join(dir, 'pwsh.exe') };
