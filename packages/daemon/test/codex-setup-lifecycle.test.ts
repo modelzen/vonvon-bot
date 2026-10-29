@@ -124,9 +124,29 @@ describe.skipIf(process.platform === 'win32')('POSIX setup child lifecycle', () 
     const result = outcome();
     expect(result.kind).toBe('rejected');
     if (result.kind === 'rejected') {
-      expect(result.error).toBeInstanceOf(ownerModule.ProviderProcessCleanupError);
+      expect(result.error).toBeInstanceOf(ownerModule.ProviderProcessStoppedError);
       expect(causes(result.error)).toContain(failure);
     }
+  });
+
+  it('repeated detection cannot spawn a replacement while the old process group is still alive', async () => {
+    const locate = await import('../src/agent/codex-appserver/locate');
+    vi.spyOn(locate, 'resolveCodexBin').mockReturnValue('/fixture/no-provider');
+    const { CodexSetupService } = await import('../src/agent/codex-appserver/setup');
+    const value = new CodexSetupService();
+    const pending = value.setup();
+    const outcome = observe(pending.then(() => 'unexpected success'));
+    child.emit('error', new Error('fixture transport failed'));
+    child.emit('exit', 0, null);
+    child.emit('close', 0, null);
+    await vi.advanceTimersByTimeAsync(120000);
+    expect(outcome().kind).toBe('pending');
+    expect(value.setup()).toBe(pending);
+    expect(transport.spawn).toHaveBeenCalledTimes(1);
+    die();
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(pending).rejects.toBeInstanceOf(ownerModule.ProviderProcessStoppedError);
+    await expect(value.close()).resolves.toBeUndefined();
   });
 
   it('control: successful setup returns trimmed stdout after confirmed death', async () => {

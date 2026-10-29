@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { ProviderProcessCleanupError, OwnedProviderProcess } from '../src/agent/owned-process';
+import { ProviderProcessCleanupError, ProviderProcessStoppedError, OwnedProviderProcess } from '../src/agent/owned-process';
 import { CodexSetupService } from '../src/agent/codex-appserver/setup';
 import { resolveCodexBin } from '../src/agent/codex-appserver/locate';
 import { writeNodeExecutable } from './helpers/node-executable';
@@ -16,6 +16,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 if (process.argv.includes('--version')) { console.log('codex-cli 0.156.1'); process.exit(0); }
 const mode = process.env.FIXTURE_MODE;
+if(mode==='exit-error') process.on('SIGTERM', () => process.exit(23));
+if(mode==='force-kill') process.on('SIGTERM', () => {});
 const auth = path.join(process.env.CODEX_HOME, 'fixture-account');
 const record = value => fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({...value, bin: process.argv[1], home: process.env.CODEX_HOME, pid: process.pid}) + '\\n');
 record({event:'start'});
@@ -72,6 +74,25 @@ describe('Codex account setup uses the task executable and home', { timeout: 40_
     expect(calls().every(call => call.home === auth && call.bin === fixture.script)).toBe(true);
     expect(calls().filter(call => call.method === 'account/read')).toHaveLength(4);
     expect(calls().every(call => !alive(call.pid))).toBe(true);
+  });
+
+  it.skipIf(process.platform === 'win32').each(['exit-error', 'force-kill'])('retries detection and login after confirmed process death with %s cleanup failure', async mode => {
+    vi.stubEnv('FIXTURE_MODE', mode);
+    const value = new CodexSetupService();
+    try {
+      await expect(value.setup()).rejects.toBeInstanceOf(ProviderProcessStoppedError);
+      expect(calls().some(call => call.method === 'account/read')).toBe(true);
+      expect(calls().every(call => !alive(call.pid))).toBe(true);
+      vi.stubEnv('FIXTURE_MODE', 'success');
+      expect(await value.setup()).toMatchObject({ installation: 'installed', authentication: 'signedOut' });
+      const { id } = value.start('login');
+      expect((await terminal(value, id))?.state).toBe('succeeded');
+      expect(await value.setup()).toMatchObject({ authentication: 'signedIn' });
+      expect(calls().every(call => !alive(call.pid))).toBe(true);
+      await expect(value.close()).resolves.toBeUndefined();
+    } finally {
+      await value.close().catch(() => undefined);
+    }
   });
 
   it('does not fall back when an explicit override is missing and refuses managed install', async () => {
@@ -159,6 +180,7 @@ it('cleanup uncertainty remains failed after cancellation and prevents successfu
   await expect(value.cancel(id)).rejects.toThrow('fixture cleanup unknown');
   expect(value.get(id)?.state).toBe('failed');
   expect(() => value.start('install')).toThrow('清理未确认');
+  expect(() => value.setup()).toThrow('清理未确认');
   await expect(value.close()).rejects.toThrow('清理未确认');
 });
 
@@ -172,6 +194,22 @@ it('probe cleanup failure remains visible to later Host close', async () => {
   try {
     await expect(value.setup()).rejects.toThrow('fixture probe cleanup unknown');
     expect(() => value.setup()).toThrow('清理未确认');
+    expect(() => value.start('login')).toThrow('清理未确认');
     await expect(value.close()).rejects.toThrow('清理未确认');
   } finally { failure.mockRestore(); }
+});
+
+it('confirmed-dead job cleanup retains a failed snapshot but allows cancel, retry and shutdown', async () => {
+  vi.stubEnv('CODEX_BIN', '');
+  let fail = true;
+  const value = service({ install: async () => {
+    if (fail) throw new ProviderProcessStoppedError('fixture process tree is gone; cleanup failed');
+  } });
+  const { id } = value.start('install');
+  expect(await terminal(value, id)).toMatchObject({ state: 'failed', message: 'fixture process tree is gone; cleanup failed' });
+  expect(await value.cancel(id)).toMatchObject({ state: 'failed' });
+  fail = false;
+  expect((await terminal(value, value.start('install').id))?.state).toBe('succeeded');
+  expect(value.get(id)).toMatchObject({ state: 'failed', message: 'fixture process tree is gone; cleanup failed' });
+  await expect(value.close()).resolves.toBeUndefined();
 });
