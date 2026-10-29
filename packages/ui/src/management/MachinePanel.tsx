@@ -74,7 +74,7 @@ export function MachinePanel({request, agents, reveal, macos = false}: {request:
       {status?.temporaryAgent && <SettingsRow title="临时运行 Bot" description="默认 Bot 选择未改变。" value={status.temporaryAgent} />}
     </SettingsGroup>
 
-    <SettingsGroup id={settingAnchor('后台服务')} label="后台服务" footer={macos ? '开启「登录电脑时启动」后，退出 App 仍可运行 Bot。' : '后台服务可在应用退出后继续运行 Bot。'}>
+    <SettingsGroup id={settingAnchor('后台服务')} label="后台服务" footer={macos ? '开启「登录电脑时启动」后，Bot 可在登录后自动运行。手动退出桌面应用会停止后台和所有 Bot。' : '关闭桌面窗口时 Bot 继续运行；手动退出桌面应用会停止后台和所有 Bot。'}>
       <SettingsRow title="系统服务" description={service ? service.platformName : '正在读取服务状态…'}
         value={service && (service.state ? SERVICE_STATE_TEXT[service.state] : `${service.installed ? '已安装' : '未安装'} · ${service.running ? '运行中' : '已停止'}`)} />
       <SettingsRow title="服务运行" description={!shell?.service ? '请在桌面版中启动服务。' : '启动已安装的后台服务。'}
@@ -101,7 +101,7 @@ export function MachinePanel({request, agents, reveal, macos = false}: {request:
     <Dialog open={!!confirm} title="确认更改 daemon 运行方式" onClose={() => setConfirm(undefined)} footer={<>
       <Button onClick={() => setConfirm(undefined)}>取消</Button>
       <Button variant="danger" onClick={() => { const operation = confirm; const service = shell?.service; setConfirm(undefined); if (operation?.type === 'service' && service) void runShell(() => service(operation.action)); else if (operation && operation.type !== 'service') void run(operation); }}>确认操作</Button>
-    </>}><p>此操作可能停止正在进行的所有 Bot 任务。启动后台服务后，daemon 会在桌面退出后继续运行。</p></Dialog>
+    </>}><p>此操作可能停止正在进行的所有 Bot 任务。关闭窗口不会停止后台；退出应用会停止后台和所有 Bot。</p></Dialog>
     {message && <p className="settings-operation-message" role="status">{message}</p>}
   </>;
 }

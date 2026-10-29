@@ -675,8 +675,8 @@ owner 的话："后台服务不要依赖 Electron，因为 Linux 上没有桌面
 - Linux：systemd 用户服务 `vonvon-bot.service`。安装时检查 linger：没开就问一句，同意后执行 `loginctl enable-linger`。这样开机就启动，退出 SSH 以后 bot 也还在跑。
 - 从 dmg 装的，服务用 app 里的 Electron 程序以 Node 模式运行（`ELECTRON_RUN_AS_NODE=1`），不用另带一份 Node；从 npm 装的，用用户自己的 `node`。这只是借 Electron 的 Node 来用，服务的生死由 launchd 管，桌面窗口开不开都一样。代价是 app 被删或挪走以后，服务就起不来了，所以桌面端提供"关闭登录时启动"，文档写清卸载步骤。
 - 注册以后，系统的服务管理器是唯一拉起 daemon 的。`vonvon daemon start` 和桌面端都请它去启动，不自己再起一个。停止走 `vonvon daemon stop`：先排空，再正常退出，管理器就不会再拉起它。
-- 退出桌面端不停 bot。首次运行清单里加一步"登录电脑时自动运行 bot（推荐）"。跳过的话，就像今天一样起一个分离的 daemon，并提示"这样崩溃后不会自动重启"。
-- macOS 桌面端常驻状态栏（owner 2026-10-25）：关闭窗口同时隐藏 Dock 图标，应用和状态栏继续运行；从状态栏打开时恢复窗口和 Dock 图标。用户主动退出只保留状态栏的「退出 Vonvon Bot」，仍经过未保存草稿确认；应用菜单不再提供退出项或 Cmd+Q 快捷键。「应用与启动」不单列「窗口与退出」组，只在启动选项下说明这一行为。系统退出和应用更新继续走原有清理流程。
+- 首次运行清单里加一步"登录电脑时自动运行 bot（推荐）"。跳过的话，就像今天一样起一个分离的 daemon，并提示"这样崩溃后不会自动重启"。手动退出桌面应用不修改登录时启动设置，也不卸载后台服务注册。
+- 桌面端的关闭与退出（owner 2026-10-29）：关闭窗口只隐藏窗口，后台和 Bot 继续运行。macOS 同时隐藏 Dock 图标，应用仍在状态栏运行；从状态栏打开时恢复窗口和 Dock 图标。Windows 关闭窗口后保留系统托盘。从 macOS 状态栏、Windows 托盘或 macOS Dock 菜单选择「退出 Vonvon Bot」或系统的退出项时，仍经过未保存草稿确认，然后停止当前数据目录的 daemon 和全部 Bot，确认后台及其子进程已退出后再退出桌面应用；不能只关闭桌面连接。「应用与启动」不单列「窗口与退出」组，只在启动选项下说明这一行为。应用更新和异常断线保留各自的清理流程，不当作用户主动退出。
 - 这些代码大部分已经在 main 上，只是没接线：launchd 和 systemd 的安装事务（#271、#274）、服务定义（#246）、退出码（#276）。今天 `vonvon service install` 直接报错（`D/cli/commands/service.ts:5`）。
 
 **崩溃了自动重启。** 服务管理器在 daemon 异常退出后重启它（plist 的 `KeepAlive`、unit 的 `Restart=on-failure`，`D/service/definitions.ts:81`、`:85`）。两边都不会在连环崩溃时自己停下来，所以上限由 daemon 自己判断：

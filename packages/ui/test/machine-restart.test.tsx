@@ -80,7 +80,7 @@ it('offers start only when a desktop shell supplies the capability', () => {
 
 it('leaves service installation to the login switch and removes the unsupported service stop action', () => {
   const html = renderToStaticMarkup(<ClientProvider client={client}><MachinePanel request={async () => running} agents={[]} macos /></ClientProvider>);
-  expect(html).toContain('开启「登录电脑时启动」后，退出 App 仍可运行 Bot。');
+  expect(html).toContain('开启「登录电脑时启动」后，Bot 可在登录后自动运行。手动退出桌面应用会停止后台和所有 Bot。');
   for (const gone of ['安装并启动', '卸载后台服务']) expect(html).not.toContain(gone);
   expect(html).not.toContain('<span>停止服务</span>');
   expect(html).toContain('<span>停止 daemon</span>');
@@ -89,6 +89,6 @@ it('leaves service installation to the login switch and removes the unsupported 
 
 it('explains background service behavior without terminal instructions', () => {
   const html = renderToStaticMarkup(<ClientProvider client={client}><MachinePanel request={async () => running} agents={[]} /></ClientProvider>);
-  expect(html).toContain('后台服务可在应用退出后继续运行 Bot。');
+  expect(html).toContain('关闭桌面窗口时 Bot 继续运行；手动退出桌面应用会停止后台和所有 Bot。');
   expect(html).not.toContain('登录电脑时启动');
 });
