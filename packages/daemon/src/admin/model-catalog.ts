@@ -25,7 +25,7 @@ export async function discoverProviderModels(backendId: 'codex-appserver' | 'cla
     return { models: [], message: '暂时无法读取 Provider 实时模型列表。' };
   }
 }
-const model = z.object({ id: z.string().min(1).max(1000), displayName: z.string(), description: z.string(), hidden: z.boolean(), isDefault: z.boolean(), supportedEfforts: z.array(z.enum(REASONING_EFFORTS)), defaultEffort: z.enum(REASONING_EFFORTS) });
+const model = z.object({ id: z.string().min(1).max(1000), displayName: z.string(), description: z.string(), hidden: z.boolean(), isDefault: z.boolean(), supportedEfforts: z.array(z.enum(REASONING_EFFORTS)), defaultEffort: z.enum(REASONING_EFFORTS), serviceTiers: z.array(z.object({ id: z.string(), name: z.string(), description: z.string() })).optional() });
 const snapshot = z.object({ backend: z.string(), observedAt: z.string(), models: z.array(model).max(1000) });
 const pathFor = (backend: string) => join(paths.appDir, 'model-catalog', `${createHash('sha256').update(backend).digest('hex').slice(0, 24)}.json`);
 async function readJson(file: string): Promise<unknown> {

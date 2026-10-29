@@ -29,6 +29,7 @@ export type ModelSelection = {
   /** a hand-typed id, not checked against the model list (product.md 3.11) */
   custom?: boolean;
 };
+export type SpeedSetting = { tier: 'inherit' | 'standard' | 'fast' | 'ultrafast' };
 /** The judge model of a layer; group `default` follows the host while Bot `default` removes its override. */
 export type JudgeSelection = {
   kind: 'default';
@@ -141,6 +142,7 @@ export interface ProjectSections {
   model: {
     selection: ModelSelection;
   };
+  speed: SpeedSetting;
   /** 运行中来了消息: 'default' (stored only) inherits the bot's; effective is what runs. */
   run: {
     pendingPolicy: 'default' | PendingPolicy;
@@ -153,6 +155,7 @@ export interface SessionSections {
   model: {
     selection: ModelSelection;
   };
+  speed: SpeedSetting;
 }
 export interface HostSections {
   execution: {
@@ -222,7 +225,7 @@ export interface ProjectSettingsView {
   scope: Extract<SettingsScope, {
     kind: 'project';
   }>;
-  sections: Sections<Omit<ProjectSections, 'profile' | 'role' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation'>> & Partial<Sections<Pick<ProjectSections, 'profile' | 'role' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation'>>>;
+  sections: Sections<Omit<ProjectSections, 'profile' | 'role' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation' | 'speed'>> & Partial<Sections<Pick<ProjectSections, 'profile' | 'role' | 'modelAccess' | 'workspace' | 'smartRules' | 'skills' | 'presentation' | 'speed'>>>;
   botProfile?: BotProfile;
   skillsError?: string;
   skills?: Array<{ path: string; name: string; description: string; source: 'workspace' | 'user' | 'provider'; enabled: boolean }>;
@@ -246,7 +249,7 @@ export interface SessionSettingsView {
   scope: Extract<SettingsScope, {
     kind: 'session';
   }>;
-  sections: Sections<SessionSections>;
+  sections: Sections<Omit<SessionSections, 'speed'>> & Partial<Sections<Pick<SessionSections, 'speed'>>>;
   identity: {
     backend: string;
     sessionId: string;

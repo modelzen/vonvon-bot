@@ -20,6 +20,8 @@ export interface ProjectPresentation { voiceEnabled: boolean; showToolCalls: boo
 
 /** A project = a Feishu group bound to a fixed working directory. */
 export interface Project {
+  /** Default for new sessions; omitted uses the provider's native default. */
+  serviceTier?: import('../agent/types').ServiceTier;
   profile?: GroupProfile;
   modelAccess?: ProjectModelAccess;
   smartRules?: ProjectSmartRules;

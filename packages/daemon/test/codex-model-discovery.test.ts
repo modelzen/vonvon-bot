@@ -12,6 +12,8 @@ type RawModel = {
   hidden?: boolean;
   supportedReasoningEfforts?: { reasoningEffort: string }[];
   defaultReasoningEffort?: string;
+  serviceTiers?: { id: string; name: string; description: string }[];
+  additionalSpeedTiers?: string[];
 };
 type FixtureState = {
   config: Record<string, unknown>;
@@ -58,15 +60,16 @@ require('node:readline').createInterface({input: process.stdin}).on('line', line
     if (state.failModels) return process.stdout.write(JSON.stringify({id:message.id, error:{code:-32000, message:'fixture model discovery unavailable'}}) + '\n');
     return send(message.id, state.pages[message.params?.cursor || 'first'] || {data:[], nextCursor:null});
   }
-  if (message.method === 'thread/start') {
+  if (message.method === 'thread/start' || message.method === 'thread/resume') {
     const p = message.params;
     return send(message.id, {
-      thread: {id: 'thread-' + process.pid}, cwd:p.cwd, runtimeWorkspaceRoots:p.runtimeWorkspaceRoots,
+      thread: {id: p.threadId || 'thread-' + process.pid}, cwd:p.cwd, runtimeWorkspaceRoots:p.runtimeWorkspaceRoots,
       approvalPolicy:p.approvalPolicy,
       sandbox: {type:p.sandbox === 'read-only' ? 'readOnly' : 'dangerFullAccess', networkAccess:false},
     });
   }
   if (message.method === 'turn/start') {
+    if (JSON.stringify(message.params.input).includes('reject tier')) return process.stdout.write(JSON.stringify({id:message.id, error:{code:-32000, message:'fixture turn rejected'}}) + '\n');
     const turn = {id:'turn-' + process.pid, status:'completed', items:[], error:null};
     send(message.id, {turn});
     return process.stdout.write(JSON.stringify({method:'turn/completed', params:{threadId:message.params.threadId, turn}}) + '\n');
@@ -109,6 +112,61 @@ afterEach(async () => {
 });
 
 describe('Codex model discovery preserves the native picker directory', () => {
+  it('returns native service tier metadata, including legacy speed tier IDs', async () => {
+    state.pages.first.data = [
+      { ...native('native-a', true), serviceTiers: [{ id: 'fast', name: 'Fast', description: 'Fast response' }, { id: 'ultrafast', name: 'Ultra Fast', description: 'Highest speed' }] },
+      { ...native('native-b'), additionalSpeedTiers: ['fast'] },
+    ];
+    save();
+    const models = await new CodexAppServerBackend().listModels();
+    expect(models[0]?.serviceTiers).toEqual(state.pages.first.data[0]?.serviceTiers);
+    expect(models[1]?.serviceTiers).toEqual([{ id: 'fast', name: 'fast', description: '' }]);
+  });
+
+  it('sends explicit tiers and restores the native default when a session returns to inheritance', async () => {
+    state.config = { service_tier: 'ultrafast' };
+    save();
+    const backend = new CodexAppServerBackend();
+    const thread = await backend.startThread({ cwd: directory, mode: 'full', serviceTier: 'standard' });
+    try {
+      for await (const _ of thread.runStreamed({ text: 'standard' }, { serviceTier: 'standard' }).events) { /* drain */ }
+      for await (const _ of thread.runStreamed({ text: 'fast' }, { serviceTier: 'fast' }).events) { /* drain */ }
+      for await (const _ of thread.runStreamed({ text: 'inherit' }, { serviceTier: undefined }).events) { /* drain */ }
+      for await (const _ of thread.runStreamed({ text: 'native' }, { serviceTier: undefined }).events) { /* drain */ }
+      expect(calls().find(call => call.method === 'thread/start')?.params.serviceTier).toBeNull();
+      expect(calls().filter(call => call.method === 'turn/start').map(call => call.params.serviceTier)).toEqual([null, 'fast', 'ultrafast', undefined]);
+    } finally { await thread.close(); }
+  });
+
+  it('keeps native restoration pending after a rejected turn and restores it on retry', async () => {
+    state.config = {};
+    save();
+    const backend = new CodexAppServerBackend();
+    const thread = await backend.startThread({ cwd: directory, mode: 'full', serviceTier: 'fast' });
+    try {
+      const rejected = [];
+      for await (const event of thread.runStreamed({ text: 'reject tier' }, { serviceTier: undefined }).events) rejected.push(event);
+      expect(rejected.some(event => event.type === 'error')).toBe(true);
+      for await (const _ of thread.runStreamed({ text: 'retry' }, { serviceTier: undefined }).events) { /* drain */ }
+      expect(calls().filter(call => call.method === 'turn/start').map(call => call.params.serviceTier)).toEqual([null, null]);
+    } finally { await thread.close(); }
+  });
+
+  it('resets a persisted fast tier to native config when an inherited session resumes', async () => {
+    state.config = { service_tier: 'ultrafast' };
+    save();
+    const backend = new CodexAppServerBackend();
+    const started = await backend.startThread({ cwd: directory, mode: 'full', serviceTier: 'fast' });
+    const sessionId = started.sessionId;
+    await started.close();
+    const resumed = await backend.resumeThread({ cwd: directory, mode: 'full', sessionId });
+    try {
+      expect(calls().filter(call => call.method === 'thread/resume').at(-1)?.params.serviceTier).toBe('ultrafast');
+      for await (const _ of resumed.runStreamed({ text: 'inherited' }, { serviceTier: undefined }).events) { /* drain */ }
+      expect(calls().filter(call => call.method === 'turn/start').at(-1)?.params).not.toHaveProperty('serviceTier');
+    } finally { await resumed.close(); }
+  });
+
   it('does not append a configured model that the native picker directory does not contain', async () => {
     state.config = {model: 'local-custom-model', model_provider: 'local-proxy', model_reasoning_effort: 'high'};
     save();

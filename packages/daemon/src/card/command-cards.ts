@@ -1,5 +1,5 @@
 import { MODEL_ID_MAX_LENGTH } from '../agent/model-id';
-import type { ModelInfo, ReasoningEffort, ThreadSummary } from '../agent/types';
+import type { ModelInfo, ReasoningEffort, ServiceTier, ThreadSummary } from '../agent/types';
 import { getSessionTitleEfforts } from '../config/schema';
 import { stripBridgeMessageEnvelope } from '../bot/session-title';
 import type { SessionMode } from '../project/registry';
@@ -23,6 +23,7 @@ import {
 export const MC = {
   model: 'model.set',
   effort: 'model.effort',
+  speed: 'model.speed',
   custom: 'model.custom',
 } as const;
 
@@ -60,6 +61,8 @@ export interface ModelCardState {
   models: ModelInfo[];
   model: string;
   effort: ReasoningEffort;
+  serviceTier?: ServiceTier;
+  inheritedServiceTier?: ServiceTier;
   /** the backend whose models this card lists（写回会话前复核，防跨后端把一个后端的
    * model id 持久化进另一后端的会话——resume 时会喂坏 CLI）。旧卡缺省。 */
   backend?: string;
@@ -76,6 +79,10 @@ export interface ModelCardState {
  * older stored values only lose backticks so they cannot break out. */
 export function modelIdCode(id: string): string {
   return `\`${id.replace(/`/g, '')}\``;
+}
+
+export function serviceTierLabel(tier?: ServiceTier): string {
+  return tier === 'ultrafast' ? 'Ultrafast · 极速' : tier === 'fast' ? 'Fast · 快速' : tier === 'standard' ? 'Standard · 普通' : 'Codex 默认';
 }
 
 /**
@@ -131,6 +138,22 @@ export function buildModelCard(state: ModelCardState): CardObject {
     }
   } else {
     elements.push(hr(), md(`当前模型：${curLabel}`));
+  }
+
+  if (state.backend === 'codex-appserver') {
+    const supported = cur?.serviceTiers ?? [];
+    const speeds: { label: string; value: string }[] = [
+      { label: `跟随群设置（${serviceTierLabel(state.inheritedServiceTier)}）`, value: 'inherit' },
+      { label: serviceTierLabel('standard'), value: 'standard' },
+      ...(['fast', 'ultrafast'] as const).filter(tier => supported.some(item => item.id === tier)).map(tier => ({ label: serviceTierLabel(tier), value: tier })),
+    ];
+    if (state.serviceTier && !speeds.some(item => item.value === state.serviceTier)) {
+      speeds.push({ label: `${serviceTierLabel(state.serviceTier)}（已保存，当前不可用）`, value: state.serviceTier });
+    }
+    elements.push(hr(), md('⚡ **响应速度**'), actions([selectStatic({
+      actionId: MC.speed, placeholder: '选择响应速度', initial: state.serviceTier ?? 'inherit', options: speeds,
+    })]), note('只影响本会话，下一次发起任务生效，当前任务不变。Fast / Ultrafast 消耗更多额度。'));
+    if (!supported.some(item => item.id === 'ultrafast')) elements.push(note('当前模型目录未提供 Ultrafast；可用档位以模型和账号支持情况为准。'));
   }
 
   if (state.allowCustom !== false) elements.push(
