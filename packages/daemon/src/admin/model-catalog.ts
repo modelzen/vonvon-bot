@@ -44,7 +44,7 @@ export async function rememberModelCatalog(backend: string, models: ModelInfo[],
 export async function offlineModelCatalog(backend: string): Promise<{ models: ModelInfo[]; observedAt: string; message: string }> {
   try {
     const cached = snapshot.parse(await readJson(pathFor(backend)));
-    if (cached.backend === backend && cached.models.length) return { models: cached.models, observedAt: cached.observedAt, message: '使用本机保存的模型目录，启动后可刷新' };
+    if (cached.backend === backend && cached.models.length) return { models: cached.models.map(({serviceTiers: _tiers, ...model}) => model), observedAt: cached.observedAt, message: '使用本机保存的模型目录，启动后可刷新' };
   } catch { /* a missing or malformed cache never causes a provider launch */ }
   if (backend === 'codex-appserver') {
     try {

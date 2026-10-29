@@ -1,5 +1,7 @@
 # 调研记录
 
+- [2026-10-29 Codex 加速权限](2026-10-29-speed-permissions/report.md)：真实登录 / 未登录元数据对照、Fast 原生档位映射和权限证据过滤；没有真实 Ultrafast 正例，功能暂停合入 dev。
+
 - [2026-10-28 Windows 重装失败与下载选项](2026-10-28-windows-reinstall/report.md)：0.7.5 孤立卸载记录触发 0.7.6 hook 的错误码 2；真实 NSIS 验证与社区 x64 / ARM64 / ZIP 参考。本次只修安装错误，双架构下一片做。
 
 - [2026-10-28 Windows 安装与下载约定](2026-10-28-windows-install/report.md)：参考 VS Code / VSCodium 的 Setup 与 ZIP 命名；核对 Windows 路径限制、0.7.5 安装漏文件和体积构成。owner 要求先修启动并交本地验收，保留 Electron 正常体积。

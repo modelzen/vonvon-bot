@@ -51,27 +51,61 @@ const singleNoEffort = [model({ id: 'only', displayName: '唯一模型', isDefau
 const json = (s: ModelCardState): string => JSON.stringify(buildModelCard(s));
 
 describe('buildModelCard · 按当前模型能力自适应', () => {
-  it('Codex 单会话速度可继承群设置，且只提供目录支持的加速档位', () => {
+  it('Codex 速度默认收起为小闪电，点击后只提供目录支持的档位', () => {
     const models = [model({ id: 'sol', displayName: 'Sol', serviceTiers: [
       { id: 'fast', name: 'Fast', description: '' }, { id: 'ultrafast', name: 'Ultrafast', description: '' },
     ] })];
-    const card = buildModelCard({ ...state(models, 'sol'), backend: 'codex-appserver', inheritedServiceTier: 'fast' });
-    const speed = JSON.stringify(card).match(/"initial_option":"inherit".*?"behaviors"/s)?.[0];
-    expect(speed).toContain('跟随群设置（Fast · 快速）');
-    expect(speed).toContain('"value":"standard"');
-    expect(speed).toContain('"value":"ultrafast"');
-    expect(JSON.stringify(card)).toContain('model.speed');
-    expect(JSON.stringify(card)).toContain('消耗更多额度');
+    const base = { ...state(models, 'sol'), backend: 'codex-appserver' };
+    const collapsed = json(base);
+    expect(collapsed).toContain('model.speed.open');
+    expect(collapsed).toContain('"size":"tiny"');
+    expect(collapsed).not.toContain('跟随群设置');
+    expect(collapsed).not.toContain('"tier":"fast"');
+    const expanded = json({ ...base, speedExpanded: true });
+    expect(expanded).toContain('"tier":"standard"');
+    expect(expanded).toContain('"tier":"fast"');
+    expect(expanded).toContain('"tier":"ultrafast"');
+    expect(expanded).toContain('消耗更多额度');
   });
 
-  it('目录未提供的加速档不变成可选项，已保存的选择仍可见', () => {
+  it('闪电与模型和 effort 控件共用一行，展开时才增加选择行', () => {
+    const models = [
+      model({ id: 'sol', displayName: 'Sol', supportedEfforts: ['low', 'high'], serviceTiers: [{ id: 'fast', name: 'Fast', description: '' }] }),
+      model({ id: 'other', displayName: 'Other', supportedEfforts: ['low', 'high'] }),
+    ];
+    const base = { ...state(models, 'sol'), backend: 'codex-appserver' };
+    const rows = (card: ReturnType<typeof buildModelCard>) =>
+      ((card.body as { elements: Record<string, unknown>[] }).elements).filter(element => element.tag === 'column_set');
+    const collapsed = rows(buildModelCard(base));
+    expect(collapsed).toHaveLength(1);
+    expect(JSON.stringify(collapsed[0])).toContain('model.set');
+    expect(JSON.stringify(collapsed[0])).toContain('model.effort');
+    expect(JSON.stringify(collapsed[0])).toContain('model.speed.open');
+    const expanded = rows(buildModelCard({ ...base, speedExpanded: true }));
+    expect(expanded).toHaveLength(2);
+    expect(JSON.stringify(expanded[0])).toContain('model.speed.open');
+    expect(JSON.stringify(expanded[1])).toContain('"tier":"fast"');
+  });
+
+  it('目录未提供加速档时不显示速度控件', () => {
     const base = { ...state(singleNoEffort, 'only'), backend: 'codex-appserver' };
     const plain = json(base);
-    expect(plain).not.toContain('"value":"fast"');
-    expect(plain).not.toContain('"value":"ultrafast"');
-    expect(plain).toContain('当前模型目录未提供 Ultrafast');
-    expect(json({ ...base, serviceTier: 'ultrafast' })).toContain('Ultrafast · 极速（已保存，当前不可用）');
+    expect(plain).not.toContain('model.speed');
+    expect(json({ ...base, serviceTier: 'ultrafast' })).not.toContain('model.speed');
     expect(json({ ...base, backend: 'claude-agent' })).not.toContain('model.speed');
+  });
+
+  it('已保存的极速失去支持后不作为当前速度显示', () => {
+    const models = [model({ id: 'sol', displayName: 'Sol', serviceTiers: [{ id: 'fast', name: 'Fast', description: '' }] })];
+    const card = json({ ...state(models, 'sol'), backend: 'codex-appserver', serviceTier: 'ultrafast' });
+    expect(card).toContain('model.speed.open');
+    expect(card).not.toContain('⚡ Ultrafast');
+  });
+
+  it('手填 ID 即使与目录模型同名也不显示速度入口', () => {
+    const models = [model({ id: 'sol', displayName: 'Sol', serviceTiers: [{ id: 'fast', name: 'Fast', description: '' }] })];
+    expect(json({ ...state(models, 'sol'), backend: 'codex-appserver', modelCustom: true })).not.toContain('model.speed');
+    expect(json({ ...state(models, 'sol'), backend: 'codex-appserver', modelCustom: false })).toContain('model.speed.open');
   });
 
   it('多模型 + 真 effort（codex）→ 模型下拉 + effort 下拉都在', () => {

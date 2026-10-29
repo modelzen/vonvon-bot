@@ -6,7 +6,7 @@ import { paths } from '../src/config/paths';
 import { saveConfig, loadConfig } from '../src/config/store';
 import { createAppPreferencesWriter, createAdminWriteExecutor } from '../src/admin/ops';
 import { createSettingsOwner, type SettingsOwnerDeps } from '../src/admin/settings';
-import { parseSettingsEdit, parseSettingsAction } from '../src/admin/settings-parse';
+import { parseSettingsEdit, parseSettingsAction, parseModelQuery } from '../src/admin/settings-parse';
 import type { AgentSettingsView, ProjectSettingsView, SessionSettingsView } from '../src/admin/settings-types';
 import { addProject, getProjectByName, updateProject } from '../src/project/registry';
 import { getSession, RETIRED_KEY_TEXT, upsertSession } from '../src/bot/session-store';
@@ -158,29 +158,29 @@ it('stale resume identity conflicts and cannot change the replacement session', 
   expect((await owner.save({ scope: session, section: 'model', revision: old.sections.model.revision, patch: { selection: { kind: 'default' } } })).kind).toBe('conflict');
   expect((await getSession(session.threadId))?.model).toBe('fixture-model');
 });
-it('speed settings inherit by group, isolate sessions, survive reads and reject stale writes', async () => {
+it('speed settings stay on each session, default standard, and reject stale writes', async () => {
   const { owner } = await fixture();
   const group = await owner.read(project) as ProjectSettingsView;
   expect(group.sections.speed?.stored.tier).toBe('inherit');
   expect((await owner.save({ scope: project, section: 'speed', revision: group.sections.speed!.revision, patch: { tier: 'fast' } })).kind).toBe('saved');
   const first = await owner.read(session) as SessionSettingsView;
-  expect(first.sections.speed?.effective.tier).toBe('fast');
+  expect(first.sections.speed?.effective.tier).toBe('standard');
   expect((await owner.save({ scope: session, section: 'speed', revision: first.sections.speed!.revision, patch: { tier: 'ultrafast' } })).kind).toBe('saved');
   expect((await (await fixture()).owner.read(session) as SessionSettingsView).sections.speed?.stored.tier).toBe('ultrafast');
   expect((await owner.save({ scope: session, section: 'speed', revision: first.sections.speed!.revision, patch: { tier: 'standard' } })).kind).toBe('conflict');
   await upsertSession({ ...(await getSession(session.threadId))!, threadId: 'omt_second', sessionId: 'native-two', serviceTier: undefined });
   const secondScope = { kind: 'session' as const, botId, threadId: 'omt_second' };
   const second = await owner.read(secondScope) as SessionSettingsView;
-  expect(second.sections.speed?.effective.tier).toBe('fast');
+  expect(second.sections.speed?.effective.tier).toBe('standard');
   const now = await owner.read(session) as SessionSettingsView;
   expect(now.sections.speed?.effective.tier).toBe('ultrafast');
-  expect((await owner.save({ scope: session, section: 'speed', revision: now.sections.speed!.revision, patch: { tier: 'inherit' } })).kind).toBe('saved');
+  expect((await owner.save({ scope: session, section: 'speed', revision: now.sections.speed!.revision, patch: { tier: 'standard' } })).kind).toBe('saved');
   expect(await getSession(session.threadId)).not.toHaveProperty('serviceTier');
-  expect((await owner.read(session) as SessionSettingsView).sections.speed?.effective.tier).toBe('fast');
+  expect((await owner.read(session) as SessionSettingsView).sections.speed?.effective.tier).toBe('standard');
   const currentGroup = await owner.read(project) as ProjectSettingsView;
   expect((await owner.save({ scope: project, section: 'speed', revision: currentGroup.sections.speed!.revision, patch: { tier: 'inherit' } })).kind).toBe('saved');
   expect(await getProjectByName('demo')).not.toHaveProperty('serviceTier');
-  expect((await owner.read(session) as SessionSettingsView).sections.speed?.effective.tier).toBe('inherit');
+  expect((await owner.read(session) as SessionSettingsView).sections.speed?.effective.tier).toBe('standard');
 });
 it('speed refuses unsupported metadata, custom models and non-Codex sessions', async () => {
   const { owner } = await fixture();
@@ -194,30 +194,55 @@ it('speed refuses unsupported metadata, custom models and non-Codex sessions', a
   expect((await owner.save({ scope: claude, section: 'speed', revision: claudeView.sections.speed!.revision, patch: { tier: 'standard' } })).kind).toBe('rejected');
   expect(() => parseSettingsEdit({ scope: session, section: 'speed', revision: 'r', patch: { tier: 'turbo' } })).toThrow();
 });
-it('speed selection protects later model changes that lack the tier', async () => {
+it('model changes automatically reset an unsupported speed to standard', async () => {
   const { owner } = await fixture();
   const before = await owner.read(session) as SessionSettingsView;
   expect((await owner.save({ scope: session, section: 'speed', revision: before.sections.speed!.revision, patch: { tier: 'fast' } })).kind).toBe('saved');
   const current = await owner.read(session) as SessionSettingsView;
-  expect((await owner.save({ scope: session, section: 'model', revision: current.sections.model.revision, patch: { selection: { kind: 'explicit', model: 'custom-model', effort: 'high', custom: true } } })).kind).toBe('rejected');
-  expect((await getSession(session.threadId))?.model).toBe('fixture-model');
+  expect((await owner.save({ scope: session, section: 'model', revision: current.sections.model.revision, patch: { selection: { kind: 'explicit', model: 'custom-model', effort: 'high', custom: true } } })).kind).toBe('saved');
+  expect((await getSession(session.threadId))?.model).toBe('custom-model');
+  expect((await owner.read(session) as SessionSettingsView).sections.speed?.effective.tier).toBe('standard');
 });
-it('group speed checks every inheriting session model; session inherit checks the group tier', async () => {
+it('group speed does not cascade to sessions and session inherit is invalid', async () => {
   const otherModel = { ...fixtureModels[0]!, id: 'second-model', isDefault: false, serviceTiers: [] };
   const offered = [...fixtureModels, otherModel];
   const { owner } = await fixture({ backendFor: () => ({ ...backend, listModels: async () => offered, peekModels: () => offered }) });
   await upsertSession({ ...(await getSession(session.threadId))!, threadId: 'omt_speed_other', sessionId: 'native-other', model: 'second-model' });
   const other = { kind: 'session' as const, botId, threadId: 'omt_speed_other' };
   let group = await owner.read(project) as ProjectSettingsView;
-  expect((await owner.save({ scope: project, section: 'speed', revision: group.sections.speed!.revision, patch: { tier: 'fast' } })).kind).toBe('rejected');
-  expect(await getProjectByName('demo')).not.toHaveProperty('serviceTier');
+  expect((await owner.save({ scope: project, section: 'speed', revision: group.sections.speed!.revision, patch: { tier: 'fast' } })).kind).toBe('saved');
   let topic = await owner.read(other) as SessionSettingsView;
   expect((await owner.save({ scope: other, section: 'speed', revision: topic.sections.speed!.revision, patch: { tier: 'standard' } })).kind).toBe('saved');
-  group = await owner.read(project) as ProjectSettingsView;
-  expect((await owner.save({ scope: project, section: 'speed', revision: group.sections.speed!.revision, patch: { tier: 'fast' } })).kind).toBe('saved');
   topic = await owner.read(other) as SessionSettingsView;
-  expect((await owner.save({ scope: other, section: 'speed', revision: topic.sections.speed!.revision, patch: { tier: 'inherit' } })).kind).toBe('rejected');
-  expect((await getSession(other.threadId))?.serviceTier).toBe('standard');
+  expect(topic.sections.speed?.effective.tier).toBe('standard');
+  expect(() => parseSettingsEdit({ scope: other, section: 'speed', revision: topic.sections.speed!.revision, patch: { tier: 'inherit' } })).toThrow();
+  expect(await getSession(other.threadId)).not.toHaveProperty('serviceTier');
+});
+it('settings read reports standard effective speed without erasing an unsupported saved preference', async () => {
+  await upsertSession({ ...(await getSession(session.threadId))!, serviceTier: 'fast' });
+  const unsupported = [{ ...fixtureModels[0]!, serviceTiers: [] }];
+  const { owner } = await fixture({ backendFor: () => ({ ...backend, listModels: async () => unsupported, peekModels: () => unsupported }) });
+  const view = await owner.read(session) as SessionSettingsView;
+  expect(view.sections.speed?.stored.tier).toBe('fast');
+  expect(view.sections.speed?.effective.tier).toBe('standard');
+  expect((await getSession(session.threadId))?.serviceTier).toBe('fast');
+});
+it('an unconfirmed catalog uses standard effectively and preserves the stored preference', async () => {
+  await upsertSession({ ...(await getSession(session.threadId))!, serviceTier: 'ultrafast' });
+  const { owner } = await fixture({ backendFor: () => ({ ...backend, peekModels: () => undefined }) });
+  expect((await owner.read(session) as SessionSettingsView).sections.speed?.effective.tier).toBe('standard');
+  expect((await getSession(session.threadId))?.serviceTier).toBe('ultrafast');
+});
+it('session catalog and speed saves use the session cwd capability', async () => {
+  const local = [{ ...fixtureModels[0]!, serviceTiers: [] }];
+  const listModelsForCwd = vi.fn(async (_cwd: string) => local);
+  const { owner } = await fixture({ backendFor: () => ({ ...backend, listModelsForCwd }) });
+  const catalog = await owner.models({ botId, backend: 'codex-appserver', purpose: 'session', threadId: session.threadId });
+  expect(listModelsForCwd).toHaveBeenCalledWith('/tmp/demo');
+  expect(catalog).toMatchObject({ state: 'ready', models: local });
+  expect(() => parseModelQuery({ botId, backend: 'codex-appserver', purpose: 'project', threadId: session.threadId })).toThrow();
+  const view = await owner.read(session) as SessionSettingsView;
+  expect((await owner.save({ scope: session, section: 'speed', revision: view.sections.speed!.revision, patch: { tier: 'fast' } })).kind).toBe('rejected');
 });
 it('membership operations retain owner and preserve concurrent project edits', async () => {
   const { owner } = await fixture(); const a = await owner.read(agent) as AgentSettingsView;
@@ -566,7 +591,9 @@ describe('model catalog availability', () => {
     }) });
     const catalog = await owner.models(query);
     expect(catalog).toMatchObject({ state: 'ready', models: native });
-    expect(await offlineModelCatalog(query.backend)).toMatchObject({ models: native, observedAt: catalog.observedAt });
+    const offline = await offlineModelCatalog(query.backend);
+    expect(offline).toMatchObject({ models: native.map(({ serviceTiers: _tiers, ...model }) => model), observedAt: catalog.observedAt });
+    expect(offline.models.every(model => !model.serviceTiers?.length)).toBe(true);
     // Cached backend instances retain confirmed native metadata between reads.
     expect((await owner.models(query)).state).toBe('ready');
   });
@@ -577,7 +604,7 @@ describe('model catalog availability', () => {
     const fallback = [{ ...native[0]!, id: 'offline-fallback' }];
     const { owner } = await fixture({ backendFor: () => ({ ...backend, listModels: async () => fallback, peekModels }) });
     expect(await owner.models(query)).toMatchObject({ state: 'fallback', models: fallback });
-    expect(await offlineModelCatalog(query.backend)).toMatchObject({ models: native, observedAt: '2026-10-01T00:00:00.000Z' });
+    expect(await offlineModelCatalog(query.backend)).toMatchObject({ models: native.map(({ serviceTiers: _tiers, ...model }) => model), observedAt: '2026-10-01T00:00:00.000Z' });
   });
 
   it('keeps explicit offline reads fallback even with a populated native cache and never probes', async () => {

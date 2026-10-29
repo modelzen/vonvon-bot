@@ -132,7 +132,7 @@ const schemas: Record<string, Record<string, Rule>> = {
     model: shape({
       selection
     }),
-    speed: shape({ tier: one('inherit', 'standard', 'fast', 'ultrafast') })
+    speed: shape({ tier: one('standard', 'fast', 'ultrafast') })
   },
   host: {
     execution: shape({
@@ -196,9 +196,12 @@ export function parseModelQuery(input: unknown): ModelQuery {
   if (!shape({
     botId: identifier('cli'),
     backend: text,
-    purpose: one('project', 'session', 'comments', 'titles', 'judge')
-  })(input))
+    purpose: one('project', 'session', 'comments', 'titles', 'judge'),
+    threadId: value => value === undefined || text(value)
+  }, true)(input) || !['botId', 'backend', 'purpose'].every(key => Object.hasOwn(input as object, key)))
     throw new SettingsInputError('模型查询无效');
+  if ((input as ModelQuery).threadId && (input as ModelQuery).purpose !== 'session')
+    throw new SettingsInputError('只有会话模型查询可指定会话');
   return input as ModelQuery;
 }
 export function parseSettingsAction(input: unknown): SettingsAction {

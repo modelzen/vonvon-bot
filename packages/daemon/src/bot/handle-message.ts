@@ -1797,6 +1797,28 @@ export function createOrchestrator(
    * 兜底一旦缓存在这层，会被钉死整个 daemon 生命周期（backend 故意不缓存失败
    * 结果，让下次调用重试；见 codex-appserver/backend.listModels）。 */
   const listModels = (be: AgentBackend = backend): Promise<ModelInfo[]> => be.listModels();
+  const listModelsAt = (be: AgentBackend, cwd?: string): Promise<ModelInfo[]> =>
+    cwd && be.listModelsForCwd ? be.listModelsForCwd(cwd) : listModels(be);
+  /** A saved acceleration is usable only while the live catalog confirms it.
+   * Discovery failures use ordinary speed for this request, but only a confirmed
+   * catalog change clears the saved preference. */
+  const reconcileStoredSpeed = async (be: AgentBackend, threadId: string | undefined, cwd: string, model: string | undefined, tier: ServiceTier | undefined): Promise<ServiceTier> => {
+    if (!tier || tier === 'standard') return 'standard';
+    if (be.id !== 'codex-appserver') return 'standard';
+    const contextual = be.listModelsForCwd
+      ? await be.listModelsForCwd(cwd).catch(() => undefined)
+      : await listModels(be).catch(() => undefined);
+    if (!contextual) return 'standard';
+    const confirmed = be.peekModels?.();
+    if (!confirmed?.length) return 'standard';
+    const selected = contextual.find(item => item.id === model && !item.hidden);
+    if (selected?.serviceTiers?.some(item => item.id === tier)) return tier;
+    if (threadId && selected?.serviceTiers !== undefined) {
+      await patchSession(threadId, current => current.serviceTier === tier ? { serviceTier: undefined } : {});
+      log.info('agent', 'speed-reset', { threadId, model, tier });
+    }
+    return 'standard';
+  };
 
   // Feishu gives bots no way to mark a message "已读" (read receipts are a
   // human-client signal), so a reaction stands in for one. Best-effort — a
@@ -3549,7 +3571,9 @@ export function createOrchestrator(
           // Rebuilt after the cwd changed: the record's backend, as its model is (s36d2).
           const cwd = workCwd(project);
           const be = sessionBackendOf(prior, project);
-          thread = await startWith(be, { cwd, model, effort, serviceTier: prior?.serviceTier ?? project?.serviceTier, mode: perm.mode, network: perm.network, native: perm.native, readScope: perm.readScope, profile: await profileOf(project, cwd, be, perm.mode) }, { kind: 'group', chatId: msg.chatId });
+          const freshSpeed = await reconcileStoredSpeed(be, sessionKey, cwd, model, prior?.serviceTier);
+          const savedSpeed = prior ? (await getSession(sessionKey))?.serviceTier : undefined;
+          thread = await startWith(be, { cwd, model, effort, serviceTier: freshSpeed, mode: perm.mode, network: perm.network, native: perm.native, readScope: perm.readScope, profile: await profileOf(project, cwd, be, perm.mode) }, { kind: 'group', chatId: msg.chatId });
           trackSession(sessionKey, thread);
           // 自愈观测：来源=全新会话（无持久化记录），与 resume-ok/resume-recreate
           // 互斥——三者其一 + agent 层的 spawn/prewarm-hit 即可还原完整恢复路径。
@@ -3564,7 +3588,7 @@ export function createOrchestrator(
             titleJobKey,
             model,
             effort,
-            serviceTier: prior?.serviceTier,
+            serviceTier: savedSpeed,
             modelCustom,
             // `text` is already file-woven when preIngested; use the raw
             // `summaryText` (handleTurn's original) so the session label isn't
@@ -3802,6 +3826,7 @@ export function createOrchestrator(
     }
     const be = backendFor(rec.backend);
     await waitReleased(threadId);
+    const resumedSpeed = await reconcileStoredSpeed(be, threadId, rec.cwd, rec.model, rec.serviceTier);
     try {
       const resumeProfile = await profileOf(project, rec.cwd, be, perm.mode);
       const resumed = await resumeWith(be, {
@@ -3810,7 +3835,7 @@ export function createOrchestrator(
         profile: resumeProfile,
         model: rec.model,
         effort: rec.effort,
-        serviceTier: rec.serviceTier ?? project?.serviceTier,
+        serviceTier: resumedSpeed,
         mode: perm.mode,
         network: perm.network, native: perm.native, readScope: perm.readScope,
       }, { kind: 'group', chatId });
@@ -3844,7 +3869,7 @@ export function createOrchestrator(
         profile: await profileOf(project, cwd, be, perm.mode),
         model: rec.model,
         effort: rec.effort,
-        serviceTier: rec.serviceTier ?? project?.serviceTier,
+        serviceTier: resumedSpeed,
         mode: perm.mode,
         network: perm.network, native: perm.native, readScope: perm.readScope,
       }, { kind: 'group', chatId });
@@ -3920,7 +3945,7 @@ export function createOrchestrator(
       let tResolveDone = tIntake;
       const threadP = (async () => {
         const { model, effort } = await pickGroupDefault(project, be, prefer);
-        const thread = await startWith(be, { cwd, model, effort, serviceTier: project?.serviceTier, mode: perm.mode, network: perm.network, native: perm.native, readScope: perm.readScope, profile: await profileOf(project, cwd, be, perm.mode) }, { kind: 'group', chatId: msg.chatId });
+        const thread = await startWith(be, { cwd, model, effort, serviceTier: 'standard', mode: perm.mode, network: perm.network, native: perm.native, readScope: perm.readScope, profile: await profileOf(project, cwd, be, perm.mode) }, { kind: 'group', chatId: msg.chatId });
         tResolveDone = Date.now();
         return { thread, model, effort };
       })();
@@ -3999,7 +4024,7 @@ export function createOrchestrator(
         images,
         model,
         effort,
-        serviceTier: undefined,
+        serviceTier: 'standard',
         modelCustom: isCustomDefault(prefer, model),
         cwd,
         mode: perm.mode,
@@ -4140,7 +4165,7 @@ export function createOrchestrator(
         // 持久化，重启 resume 会把 codex model id 喂给 claude CLI，会话坏死。
         const [rec, project] = await Promise.all([getSession(sessionKey), getProjectByChatId(msg.chatId)]);
         const be = sessionBackendOf(rec, project);
-        const models = projectModelCatalog(project, be.id, await listModels(be));
+        const models = projectModelCatalog(project, be.id, await listModelsAt(be, rec?.cwd ?? project?.cwd));
         if (!models.length) throw new Error('本群没有可用的模型与 Effort 组合，请先在群设置中选择');
         // Seed the /model card's "current" from the default (when this topic has
         // no session record yet) so a fresh topic shows what it WILL start on;
@@ -4159,9 +4184,9 @@ export function createOrchestrator(
           requesterOpenId: msg.senderId,
           models,
           model: recModel ?? def.model,
+          modelCustom: rec?.modelCustom ?? (!recModel && def.model === prefer?.model && prefer?.custom === true),
           effort: rec?.effort ?? def.effort,
           serviceTier: rec?.serviceTier,
-          inheritedServiceTier: project?.serviceTier,
           backend: be.id,
           inThread,
           replyTo: msg.messageId,
@@ -4394,11 +4419,13 @@ export function createOrchestrator(
           effort ??= picked.effort;
           modelCustom = isCustomDefault(prefer, model);
         }
+        const clearedSpeed = await reconcileStoredSpeed(be, sessionKey, cwd, model, rec?.serviceTier);
+        const savedSpeed = rec ? (await getSession(sessionKey))?.serviceTier : undefined;
         const fresh = await startWith(be, {
           cwd,
           model,
           effort,
-          serviceTier: rec?.serviceTier ?? project?.serviceTier,
+          serviceTier: clearedSpeed,
           mode: perm.mode,
           network: perm.network, native: perm.native, readScope: perm.readScope,
           profile: await profileOf(project, cwd, be, perm.mode),
@@ -4426,7 +4453,7 @@ export function createOrchestrator(
           titleJobKey,
           model,
           effort,
-          serviceTier: rec?.serviceTier,
+          serviceTier: savedSpeed,
           modelCustom,
           summary: '(新会话)',
           // The new session starts at this command (product.md 3.5 "命令"), also
@@ -4601,23 +4628,23 @@ export function createOrchestrator(
           return buildModelCard(state);
         }
         const project = await getProjectByChatId(state.chatId);
-        const currentModels = projectModelCatalog(project, state.backend ?? rec?.backend ?? DEFAULT_BACKEND_ID, await listModels(backendFor(state.backend ?? rec?.backend)));
+        const currentBe = backendFor(state.backend ?? rec?.backend);
+        const currentModels = projectModelCatalog(project, state.backend ?? rec?.backend ?? DEFAULT_BACKEND_ID, await listModelsAt(currentBe, rec?.cwd ?? project?.cwd));
         const chosen = currentModels.find(model => model.id === option);
         if (!chosen) { state.note = '这个模型已不在本群可用范围，请重新打开 /model。'; return buildModelCard(state); }
-        const speed = rec?.serviceTier ?? project?.serviceTier;
-        if (state.backend === 'codex-appserver' && speed && speed !== 'standard' && !chosen.serviceTiers?.some(tier => tier.id === speed)) {
-          state.note = `这个模型未提供 ${serviceTierLabel(speed)}，请先将本会话响应速度改为普通。`;
-          return buildModelCard(state);
-        }
+        const resetSpeed = state.backend === 'codex-appserver' && rec?.serviceTier && rec.serviceTier !== 'standard' && !chosen.serviceTiers?.some(tier => tier.id === rec.serviceTier);
         state.models = currentModels;
         state.model = option;
+        state.modelCustom = false;
         // re-pick a valid effort if the new model doesn't support the current one
         const m = state.models.find((x) => x.id === option);
         if (m && m.supportedEfforts.length && !m.supportedEfforts.includes(state.effort)) {
           state.effort = m.defaultEffort;
         }
-        await patchSession(state.threadId, { model: state.model, effort: state.effort, modelCustom: false });
-        state.note = `✅ 已切换模型「${m?.displayName ?? option}」，下一轮生效`;
+        await patchSession(state.threadId, { model: state.model, effort: state.effort, modelCustom: false, ...(resetSpeed ? { serviceTier: undefined } : {}) });
+        if (resetSpeed) state.serviceTier = undefined;
+        state.speedExpanded = false;
+        state.note = `✅ 已切换模型「${m?.displayName ?? option}」，下一轮生效${resetSpeed ? '；响应速度已恢复普通' : ''}`;
         return buildModelCard(state);
       });
     })
@@ -4631,7 +4658,7 @@ export function createOrchestrator(
           return buildModelCard(state);
         }
         const project = await getProjectByChatId(state.chatId);
-        const catalog = await listModels(backendFor(state.backend));
+        const catalog = await listModelsAt(backendFor(state.backend), (await getSession(state.threadId))?.cwd);
         if (!projectModelAllowed(project, state.backend ?? DEFAULT_BACKEND_ID, state.model, option as ReasoningEffort, catalog)) {
           state.note = '这个 Effort 已不在本群可用范围，请重新打开 /model。'; return buildModelCard(state);
         }
@@ -4641,9 +4668,19 @@ export function createOrchestrator(
         return buildModelCard(state);
       });
     })
-    .on(MC.speed, ({ evt, option }) => {
+    .on(MC.speedOpen, ({ evt }) => {
       const state = authPending(modelPending, evt);
-      if (!state || !option || !['inherit', 'standard', 'fast', 'ultrafast'].includes(option)) return;
+      if (!state) return;
+      settleUpdate(evt.messageId, async () => {
+        state.speedExpanded = !state.speedExpanded;
+        state.note = undefined;
+        return buildModelCard(state);
+      });
+    })
+    .on(MC.speed, ({ evt, value }) => {
+      const state = authPending(modelPending, evt);
+      const tier = value?.tier;
+      if (!state || typeof tier !== 'string' || !['standard', 'fast', 'ultrafast'].includes(tier)) return;
       settleUpdate(evt.messageId, async () => {
         const rec = await getSession(state.threadId);
         const stale = modelCardStale(state, rec);
@@ -4652,16 +4689,17 @@ export function createOrchestrator(
           const scope = { kind: 'session' as const, botId: cfg.accounts.app.id, threadId: state.threadId };
           const view = await settings.read(scope);
           if (view.scope.kind !== 'session' || !('speed' in view.sections) || !view.sections.speed) throw new Error('该会话暂不支持切换响应速度');
-          const result = await settings.save({ scope, section: 'speed', revision: view.sections.speed.revision, patch: { tier: option as 'inherit' | ServiceTier } });
+          const result = await settings.save({ scope, section: 'speed', revision: view.sections.speed.revision, patch: { tier: tier as ServiceTier } });
           if (result.kind !== 'saved') {
             state.note = result.kind === 'rejected' ? result.fields.map(field => field.message).join('；') : result.kind === 'unavailable' ? '该会话当前不可编辑，请启动 Bot 后重试。' : '设置已变化，请重新打开 /model。';
             return buildModelCard(state);
           }
           const [current, project] = await Promise.all([getSession(state.threadId), getProjectByChatId(state.chatId)]);
           state.serviceTier = current?.serviceTier;
-          state.inheritedServiceTier = project?.serviceTier;
-          state.models = projectModelCatalog(project, rec!.backend, await listModels(backendFor(rec!.backend)));
-          state.note = `✅ 已设置响应速度：${option === 'inherit' ? `跟随群设置（${serviceTierLabel(state.inheritedServiceTier)}）` : serviceTierLabel(option as ServiceTier)}，下一次发起任务生效`;
+          state.modelCustom = current?.modelCustom;
+          state.models = projectModelCatalog(project, rec!.backend, await listModelsAt(backendFor(rec!.backend), rec!.cwd));
+          state.speedExpanded = false;
+          state.note = `✅ 已设置响应速度：${serviceTierLabel(tier as ServiceTier)}，下一次发起任务生效`;
         } catch (error) {
           state.note = error instanceof Error ? error.message : '响应速度保存失败，请重试。';
         }
@@ -4683,13 +4721,15 @@ export function createOrchestrator(
           state.note = `⚠️ ${parsed.message}`;
         } else if ((await getProjectByChatId(state.chatId))?.modelAccess) {
           state.note = '本群只能使用群设置中已选择的模型。';
-        } else if (rec?.backend === 'codex-appserver' && ((rec.serviceTier ?? (await getProjectByChatId(state.chatId))?.serviceTier) ?? 'standard') !== 'standard') {
-          state.note = '手填模型无法验证加速档位，请先将本会话响应速度改为普通。';
         } else {
+          const resetSpeed = rec?.backend === 'codex-appserver' && rec.serviceTier && rec.serviceTier !== 'standard';
           state.model = parsed.id;
+          state.modelCustom = true;
           if (!getSessionTitleEfforts(state.backend ?? rec?.backend ?? '').includes(state.effort)) state.effort = 'medium';
-          await patchSession(state.threadId, { model: state.model, effort: state.effort, modelCustom: true });
-          state.note = `✅ 已切换到手填的模型 ${modelIdCode(parsed.id)}，下一轮生效`;
+          await patchSession(state.threadId, { model: state.model, effort: state.effort, modelCustom: true, ...(resetSpeed ? { serviceTier: undefined } : {}) });
+          if (resetSpeed) state.serviceTier = undefined;
+          state.speedExpanded = false;
+          state.note = `✅ 已切换到手填的模型 ${modelIdCode(parsed.id)}，下一轮生效${resetSpeed ? '；响应速度已恢复普通' : ''}`;
           log.info('card', 'model-custom', { threadId: state.threadId, model: parsed.id });
         }
         state.createdAt = Date.now();
@@ -6726,12 +6766,14 @@ export function createOrchestrator(
     try {
       if (request.action === 'clear') {
         if (ruleKind(project) !== 'single' || key !== perm.sessionKey) throw new AdminWriteError('只有单会话群可以清空当前上下文');
-        const fresh = await startWith(sessionBackend, { cwd: project.cwd, model: record.model, effort: record.effort, serviceTier: record.serviceTier ?? project.serviceTier, mode: perm.mode, network: perm.network, native: perm.native, readScope: perm.readScope, profile: await profileOf(project, project.cwd, sessionBackend, perm.mode) }, { kind: 'group', chatId: project.chatId });
+        const clearedSpeed = await reconcileStoredSpeed(sessionBackend, key, record.cwd, record.model, record.serviceTier);
+        const savedSpeed = (await getSession(key))?.serviceTier;
+        const fresh = await startWith(sessionBackend, { cwd: project.cwd, model: record.model, effort: record.effort, serviceTier: clearedSpeed, mode: perm.mode, network: perm.network, native: perm.native, readScope: perm.readScope, profile: await profileOf(project, project.cwd, sessionBackend, perm.mode) }, { kind: 'group', chatId: project.chatId });
         // The local clock, not a Feishu createTime like the other watermarks: this
         // is the main-area session, which no back-fill reads until s14 (it must
         // then allow for clock skew, or use the newest createTime it has).
         const now = Date.now();
-        try { await upsertSession({ ...record, ...contextField(fresh), sessionId: fresh.sessionId, summary: '(新会话)', lastSeenAt: now, seen: undefined, from: now, recalls: undefined, createdAt: now, updatedAt: now }); }
+        try { await upsertSession({ ...record, serviceTier: savedSpeed, ...contextField(fresh), sessionId: fresh.sessionId, summary: '(新会话)', lastSeenAt: now, seen: undefined, from: now, recalls: undefined, createdAt: now, updatedAt: now }); }
         catch (error) { await fresh.close(); throw error; }
         const old = sessions.get(key); if (old) await old.close().catch(error => log.fail('desktop', error, { phase: 'clear-thread-close' }));
         trackSession(key, fresh); lastUsage.delete(key); dropRetries(key);
@@ -7189,6 +7231,7 @@ export function createOrchestrator(
     };
 
     const persist = async (threadId: string): Promise<void> => {
+      const existing = await getSession(threadId);
       await upsertSession({
         threadId,
         chatId: opts.chatId,
@@ -7198,7 +7241,7 @@ export function createOrchestrator(
         titleJobKey: opts.titleJobKey,
         model: opts.model,
         effort: opts.effort,
-        serviceTier: opts.serviceTier,
+        serviceTier: existing ? existing.serviceTier : opts.serviceTier,
         modelCustom: opts.modelCustom,
         summary: opts.summary ?? opts.firstText.slice(0, 80),
         ...contextField(opts.thread),
@@ -7321,8 +7364,7 @@ export function createOrchestrator(
         if (!projectModelAllowed(currentProject, turnBackend.id, turnModel, turnEffort, currentProject?.modelAccess ? await listModels(turnBackend) : undefined)) {
           throw new Error('当前模型或 Effort 已不在本群可用范围，请用 /model 重新选择。若已更换 Provider，请创建新会话。');
         }
-        const turnServiceTier = rec?.serviceTier ?? currentProject?.serviceTier;
-        if (turnBackend.id === 'codex-appserver' && turnServiceTier && turnServiceTier !== 'standard') assertSupportedServiceTier(await listModels(turnBackend), turnModel, turnServiceTier);
+        const turnServiceTier = await reconcileStoredSpeed(turnBackend, rec?.threadId ?? topicThreadId, rec?.cwd ?? runCwd, turnModel, rec?.serviceTier);
         turnInput = await preparePersonality(opts.thread, opts.chatId, turnInput, topicThreadId, opts.backendId);
         const run = opts.thread.runStreamed(turnInput, { model: turnModel, effort: turnEffort, serviceTier: turnServiceTier });
         let unseen = currentTurn.seen;
@@ -8023,6 +8065,7 @@ export function createOrchestrator(
     };
 
     const persist = async (threadId: string): Promise<void> => {
+      const existing = await getSession(threadId);
       await upsertSession({
         threadId,
         chatId: opts.chatId,
@@ -8032,7 +8075,7 @@ export function createOrchestrator(
         titleJobKey: opts.titleJobKey,
         model: opts.model,
         effort: opts.effort,
-        serviceTier: opts.serviceTier,
+        serviceTier: existing ? existing.serviceTier : opts.serviceTier,
         modelCustom: opts.modelCustom,
         summary: opts.summary ?? objective.slice(0, 80),
         ...contextField(opts.thread),
@@ -8193,6 +8236,7 @@ export function createOrchestrator(
     });
 
     try {
+      if (opts.knownThreadId) opts.serviceTier = await reconcileStoredSpeed(backendFor(opts.backendId), opts.knownThreadId, runCwd, opts.model, opts.serviceTier);
       // Native goals have no turn/start tier override. A loaded same-client
       // resume also retains its old tier, so reopen an idle persisted thread
       // in a fresh app-server process before a new goal. Brand-new threads
@@ -8205,7 +8249,7 @@ export function createOrchestrator(
         await old.close();
         opts.thread = await resumeWith(be, {
           cwd: runCwd, sessionId: old.sessionId, model: opts.model, effort: opts.effort,
-          serviceTier: opts.serviceTier ?? project?.serviceTier,
+          serviceTier: opts.serviceTier,
           mode: opts.mode, network: opts.network, native: opts.native, readScope: opts.readScope,
           profile: await profileOf(project, runCwd, be, opts.mode),
         }, { kind: 'group', chatId: opts.chatId });
@@ -8215,8 +8259,7 @@ export function createOrchestrator(
       const currentProject = await getProjectByChatId(opts.chatId);
       const goalBackend = backendFor(opts.backendId);
       if (!projectModelAllowed(currentProject, goalBackend.id, opts.model, opts.effort, currentProject?.modelAccess ? await listModels(goalBackend) : undefined)) throw new Error('当前模型或 Effort 已不在本群可用范围，请用 /model 重新选择。');
-      const goalServiceTier = opts.serviceTier ?? currentProject?.serviceTier;
-      if (goalBackend.id === 'codex-appserver' && goalServiceTier && goalServiceTier !== 'standard') assertSupportedServiceTier(await listModels(goalBackend), opts.model, goalServiceTier);
+      const goalServiceTier = opts.serviceTier;
       const goalContext = await preparePersonality(opts.thread, opts.chatId, {}, opts.knownThreadId, opts.backendId);
       const run = opts.thread.runGoal(goalContext.text ? `${goalContext.text}\n\n目标：${objective}` : objective,
         { serviceTier: goalServiceTier });

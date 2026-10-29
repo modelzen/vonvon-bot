@@ -91,15 +91,14 @@ it('orders four group tabs, keeps compact model and permission settings together
     expect(render(tab)).not.toContain('<h3>代码仓库</h3>');
   }
 });
-it('shows group speed only for a Codex group with the speed section', () => {
+it('does not show a group speed setting for either Provider', () => {
   const oldView = fixture();
-  expect(render('model', oldView)).not.toContain('群默认响应速度');
+  expect(render('model', oldView)).not.toContain('响应速度');
   const current = fixture();
   current.sections.speed = section({tier: 'inherit' as const});
-  expect(render('model', current)).toContain('响应速度');
-  expect(render('model', current)).toContain('群默认响应速度');
+  expect(render('model', current)).not.toContain('响应速度');
   current.identity.backend = 'claude-agent';
-  expect(render('model', current)).not.toContain('群默认响应速度');
+  expect(render('model', current)).not.toContain('响应速度');
 });
 it('keeps one primary among peer directories and no primary repository', () => {
   const html = renderToStaticMarkup(<ClientProvider client={client}><DirectoryPickerProvider>
