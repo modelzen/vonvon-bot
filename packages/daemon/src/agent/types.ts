@@ -39,6 +39,7 @@ export type PermissionMode = 'qa' | 'write' | 'full';
  * Consumers that receive an OPTIONAL mode (a caller may not have a project yet)
  * read this ONE constant instead of each carrying its own `?? 'write'`. */
 export const DEFAULT_PERMISSION_MODE: PermissionMode = 'write';
+export type ServiceTier = 'standard' | 'fast' | 'ultrafast';
 
 export interface AgentInput {
   text?: string;
@@ -55,6 +56,7 @@ export interface ModelInfo {
   defaultEffort: ReasoningEffort;
   isDefault: boolean;
   hidden: boolean;
+  serviceTiers?: { id: string; name: string; description: string }[];
 }
 
 /** A past agent session, for the "恢复历史会话" picker (codex: thread/list). */
@@ -297,6 +299,7 @@ export interface CompactResult {
 export interface TurnOptions {
   model?: string;
   effort?: ReasoningEffort;
+  serviceTier?: ServiceTier;
 }
 
 export interface AgentThread {
@@ -315,7 +318,7 @@ export interface AgentThread {
    * on each state change; the stream ends on a terminal goal status or a fatal
    * error. (Verified on codex 0.139: set alone kicks off turn 1.)
    */
-  runGoal(objective: string): AgentRun;
+  runGoal(objective: string, turn?: TurnOptions): AgentRun;
   /** Clear this thread's goal (thread/goal/clear) so a non-complete goal won't
    * reactivate when the thread is later resumed. Best-effort. */
   clearGoal(): Promise<void>;
@@ -382,6 +385,7 @@ export interface StartThreadOptions {
   cwd: string;
   model?: string;
   effort?: ReasoningEffort;
+  serviceTier?: ServiceTier;
   /** permission tier; undefined → 'full' (preserves legacy danger-full-access) */
   mode?: PermissionMode;
   /** let the sandboxed agent's shell reach the network (qa/write only; full is
@@ -620,6 +624,8 @@ export interface AgentBackend {
    * {@link doctor}, so it is kept out of it (callers race doctor() against 3 s). */
   loginStatus?(opts?: { refresh?: boolean }): Promise<BackendLogin>;
   listModels(): Promise<ModelInfo[]>;
+  /** Account-confirmed model tiers constrained by the effective session configuration. */
+  listModelsForCwd?(cwd: string): Promise<ModelInfo[]>;
   /** recent codex threads under `cwd`, newest first (for resume picker) */
   listThreads(cwd: string, limit?: number): Promise<ThreadSummary[]>;
   /**

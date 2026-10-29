@@ -19,7 +19,8 @@ const provider = vi.hoisted(() => ({ models: [{ id: 'fixture-model', displayName
 // Binding exercises the real model admission using a test Provider, independent of a host Codex install.
 vi.mock('../src/agent', async original => ({
   ...await original<object>(),
-  createBackend: (id: string) => ({ id, listModels: async () => provider.models, peekModels: () => provider.models }),
+  createBackend: (id: string) => ({ id, listModels: async () => provider.models, peekModels: () => provider.models,
+    doctor: async () => ({ ok: true, version: 'fixture' }), loginStatus: async () => ({ state: 'signedIn' }) }),
   effectiveDefaultBackend: async () => 'codex-appserver',
 }));
 

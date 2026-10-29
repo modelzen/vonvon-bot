@@ -29,7 +29,7 @@ const threads: { close(): Promise<void> }[] = [];
 
 beforeEach(() => {
   vi.clearAllMocks();
-  rpc.request.mockImplementation(async (_method, params) => ({
+  rpc.request.mockImplementation(async (method, params) => method === 'config/read' ? { config: {} } : ({
     thread: { id: params.threadId ?? 'test-session', turns: [] }, cwd: params.cwd, runtimeWorkspaceRoots: params.runtimeWorkspaceRoots,
     approvalPolicy: 'never', activePermissionProfile: params.config?.default_permissions ? { id: 'feishu', extends: null } : null,
     sandbox: params.sandbox === 'danger-full-access' ? { type: 'dangerFullAccess' } : {
@@ -69,7 +69,7 @@ describe('Codex session profile reaches the provider', () => {
       });
     }
     it(`${action}: closes the acquired process after a provider refusal`, async () => {
-      rpc.request.mockRejectedValueOnce(new Error('provider refusal'));
+      rpc.request.mockResolvedValueOnce({ config: {} }).mockRejectedValueOnce(new Error('provider refusal'));
       const backend = new CodexAppServerBackend();
       const options = { cwd: '/profile-workspace', mode: 'full' as const };
       await expect(action === 'start' ? backend.startThread(options)
