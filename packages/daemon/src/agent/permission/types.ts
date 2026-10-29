@@ -1,4 +1,5 @@
 import type { PermissionMode } from '../types';
+import type { WindowsSandboxCapability } from '../codex-appserver/full-only';
 
 export type Tier = PermissionMode;
 export const TIER_NAMES: Record<Tier, string> = { qa: '只读', write: '工作区可写', full: '完全访问' };
@@ -24,6 +25,7 @@ export interface PermissionEffect { mode: Tier; network: boolean }
 export interface TableEnv {
   platform: NodeJS.Platform;
   codexVersion?: string | null;
+  codexWindowsSandbox?: WindowsSandboxCapability;
   fullOnly?: string;
   supportedModes?: readonly Tier[];
 }
