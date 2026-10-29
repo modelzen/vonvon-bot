@@ -64,7 +64,6 @@ export interface ModelCardState {
   modelCustom?: boolean;
   effort: ReasoningEffort;
   serviceTier?: ServiceTier;
-  speedExpanded?: boolean;
   /** the backend whose models this card lists（写回会话前复核，防跨后端把一个后端的
    * model id 持久化进另一后端的会话——resume 时会喂坏 CLI）。旧卡缺省。 */
   backend?: string;
@@ -113,7 +112,7 @@ export function buildModelCard(state: ModelCardState): CardObject {
     ? {
       tag: 'button', size: 'medium', type: 'text', width: 'fill',
       icon: { tag: 'standard_icon', token: 'speed_filled', color: currentSpeed === 'standard' ? 'grey-400' : currentSpeed === 'fast' ? 'yellow' : 'orange' },
-      hover_tips: { tag: 'plain_text', content: `响应速度：${serviceTierLabel(currentSpeed)}；点击切换` },
+      hover_tips: { tag: 'plain_text', content: `响应速度：${serviceTierLabel(currentSpeed)}；点击切换。Fast / Ultrafast 消耗更多额度。` },
       behaviors: [{ type: 'callback', value: { a: MC.speedOpen } }],
     }
     : undefined;
@@ -166,12 +165,6 @@ export function buildModelCard(state: ModelCardState): CardObject {
     }
   } else {
     elements.push(hr(), speedButton ? controlsRow([md(`当前模型：${curLabel}`)]) : md(`当前模型：${curLabel}`));
-  }
-
-  if (showSpeed && state.speedExpanded) {
-      const tiers = (['standard', 'fast', 'ultrafast'] as const).filter(tier => tier === 'standard' || supported.some(item => item.id === tier));
-      elements.push(actions(tiers.map(tier => ({ ...button(tier === 'standard' ? '普通' : tier === 'fast' ? 'Fast' : 'Ultrafast', { a: MC.speed, tier }), size: 'tiny', type: tier === currentSpeed ? 'primary_text' : 'text' }))));
-      elements.push(note('下一次发起任务生效；Fast / Ultrafast 消耗更多额度。'));
   }
 
   if (state.allowCustom !== false) elements.push(
