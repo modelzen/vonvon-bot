@@ -120,6 +120,7 @@ const schemas: Record<string, Record<string, Rule>> = {
     model: shape({
       selection
     }),
+    speed: shape({ tier: one('inherit', 'standard', 'fast', 'ultrafast') }),
     run: shape({
       pendingPolicy: one('default', 'steer', 'queue')
     }),
@@ -130,7 +131,8 @@ const schemas: Record<string, Record<string, Rule>> = {
   session: {
     model: shape({
       selection
-    })
+    }),
+    speed: shape({ tier: one('inherit', 'standard', 'fast', 'ultrafast') })
   },
   host: {
     execution: shape({

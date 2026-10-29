@@ -40,7 +40,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
       cwd: msg.params.cwd, runtimeWorkspaceRoots: msg.params.runtimeWorkspaceRoots,
       approvalPolicy: msg.params.approvalPolicy, sandbox: { type: msg.params.sandbox === 'danger-full-access' ? 'dangerFullAccess' : undefined },
     } :
-    msg.method === 'thread/resume' ? {thread:{id:'resumed'},
+    msg.method === 'thread/resume' ? {thread:{id:msg.params.threadId === 'host' ? 'host' : 'resumed'},
       cwd: msg.params.cwd, runtimeWorkspaceRoots: msg.params.runtimeWorkspaceRoots,
       approvalPolicy: msg.params.approvalPolicy, sandbox: { type: msg.params.sandbox === 'danger-full-access' ? 'dangerFullAccess' : undefined },
     } : msg.method === 'turn/start' ? {turn:{id:'turn'}} : {}});
@@ -109,12 +109,36 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
     goal:{objective:msg.params.objective,status,tokensUsed:0,timeUsedSeconds:0,tokenBudget:null}});
 });
 `);
-const requests = (): Array<{ method: string; params: { threadId?: string; turnId?: string } }> =>
+const requests = (): Array<{ method: string; params: { threadId?: string; turnId?: string; serviceTier?: string | null } }> =>
   readFileSync(requestsFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
 
 afterAll(async () => {
   await shutdownResidentClients();
   rmSync(dir, { recursive: true, force: true });
+});
+
+it('applies the latest speed through a fresh-process resume before a native goal starts', async () => {
+  const previous = process.env.CODEX_BIN;
+  process.env.CODEX_BIN = bin;
+  const backend = new CodexAppServerBackend();
+  const old = await backend.startThread({ cwd: dir, serviceTier: 'fast' });
+  for await (const _ of old.runStreamed({ text: 'clean' }, { serviceTier: 'fast' }).events) { /* drain */ }
+  await old.close();
+  const offset = requests().length;
+  const thread = await backend.resumeThread({ cwd: dir, sessionId: old.sessionId, serviceTier: 'standard' });
+  try {
+    for await (const _ of thread.runGoal('count', { serviceTier: 'standard' }).events) { /* drain */ }
+    const changed = requests().slice(offset);
+    const resume = changed.findIndex(r => r.method === 'thread/resume');
+    const goal = changed.findIndex(r => r.method === 'thread/goal/set');
+    expect(resume).toBeGreaterThanOrEqual(0);
+    expect(goal).toBeGreaterThan(resume);
+    expect(changed[resume]?.params.serviceTier).toBeNull();
+  } finally {
+    await thread.close();
+    if (previous === undefined) delete process.env.CODEX_BIN;
+    else process.env.CODEX_BIN = previous;
+  }
 });
 
 it('retains running children across parent turns and interrupts them even when the parent interrupt fails', async () => {

@@ -13,6 +13,9 @@ interface RawModel {
   isDefault?: boolean;
   supportedReasoningEfforts?: { reasoningEffort: ReasoningEffort }[];
   defaultReasoningEffort?: ReasoningEffort;
+  serviceTiers?: { id: string; name: string; description: string }[];
+  /** Older Codex catalogs predate serviceTiers. */
+  additionalSpeedTiers?: string[];
 }
 
 interface ModelConfig {
@@ -49,6 +52,8 @@ function mapModel(model: RawModel): ModelInfo {
     isDefault: model.isDefault ?? false,
     supportedEfforts: (model.supportedReasoningEfforts ?? []).map(effort => effort.reasoningEffort),
     defaultEffort: model.defaultReasoningEffort ?? 'medium',
+    ...(model.serviceTiers ? { serviceTiers: model.serviceTiers } :
+      model.additionalSpeedTiers?.length ? { serviceTiers: model.additionalSpeedTiers.map(id => ({ id, name: id, description: '' })) } : {}),
   };
 }
 

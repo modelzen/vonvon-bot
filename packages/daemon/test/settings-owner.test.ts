@@ -25,7 +25,7 @@ const botId = 'cli_fixture';
 const agent = { kind: 'agent' as const, botId };
 const project = { kind: 'project' as const, botId, projectName: 'demo' };
 const session = { kind: 'session' as const, botId, threadId: 'omt_fixture' };
-const fixtureModels = [{ id: 'fixture-model', displayName: 'Fixture', description: '', defaultEffort: 'high', supportedEfforts: ['low', 'high'], isDefault: true, hidden: false }] as Awaited<ReturnType<AgentBackend['listModels']>>;
+const fixtureModels = [{ id: 'fixture-model', displayName: 'Fixture', description: '', defaultEffort: 'high', supportedEfforts: ['low', 'high'], isDefault: true, hidden: false, serviceTiers: [{ id: 'fast', name: 'Fast', description: 'Fast' }, { id: 'ultrafast', name: 'Ultra fast', description: 'Ultra fast' }] }] as Awaited<ReturnType<AgentBackend['listModels']>>;
 const backend = { id: 'codex-appserver', doctor: async () => ({ ok: true }), supportedModes: ['qa', 'write', 'full'], listModels: async () => fixtureModels, peekModels: () => fixtureModels } as unknown as AgentBackend;
 let cfg: AppConfig;
 async function fixture(overrides: Partial<SettingsOwnerDeps> = {}) {
@@ -157,6 +157,67 @@ it('stale resume identity conflicts and cannot change the replacement session', 
   const rec = (await getSession(session.threadId))!; await upsertSession({ ...rec, sessionId: 'native-two' });
   expect((await owner.save({ scope: session, section: 'model', revision: old.sections.model.revision, patch: { selection: { kind: 'default' } } })).kind).toBe('conflict');
   expect((await getSession(session.threadId))?.model).toBe('fixture-model');
+});
+it('speed settings inherit by group, isolate sessions, survive reads and reject stale writes', async () => {
+  const { owner } = await fixture();
+  const group = await owner.read(project) as ProjectSettingsView;
+  expect(group.sections.speed?.stored.tier).toBe('inherit');
+  expect((await owner.save({ scope: project, section: 'speed', revision: group.sections.speed!.revision, patch: { tier: 'fast' } })).kind).toBe('saved');
+  const first = await owner.read(session) as SessionSettingsView;
+  expect(first.sections.speed?.effective.tier).toBe('fast');
+  expect((await owner.save({ scope: session, section: 'speed', revision: first.sections.speed!.revision, patch: { tier: 'ultrafast' } })).kind).toBe('saved');
+  expect((await (await fixture()).owner.read(session) as SessionSettingsView).sections.speed?.stored.tier).toBe('ultrafast');
+  expect((await owner.save({ scope: session, section: 'speed', revision: first.sections.speed!.revision, patch: { tier: 'standard' } })).kind).toBe('conflict');
+  await upsertSession({ ...(await getSession(session.threadId))!, threadId: 'omt_second', sessionId: 'native-two', serviceTier: undefined });
+  const secondScope = { kind: 'session' as const, botId, threadId: 'omt_second' };
+  const second = await owner.read(secondScope) as SessionSettingsView;
+  expect(second.sections.speed?.effective.tier).toBe('fast');
+  const now = await owner.read(session) as SessionSettingsView;
+  expect(now.sections.speed?.effective.tier).toBe('ultrafast');
+  expect((await owner.save({ scope: session, section: 'speed', revision: now.sections.speed!.revision, patch: { tier: 'inherit' } })).kind).toBe('saved');
+  expect(await getSession(session.threadId)).not.toHaveProperty('serviceTier');
+  expect((await owner.read(session) as SessionSettingsView).sections.speed?.effective.tier).toBe('fast');
+  const currentGroup = await owner.read(project) as ProjectSettingsView;
+  expect((await owner.save({ scope: project, section: 'speed', revision: currentGroup.sections.speed!.revision, patch: { tier: 'inherit' } })).kind).toBe('saved');
+  expect(await getProjectByName('demo')).not.toHaveProperty('serviceTier');
+  expect((await owner.read(session) as SessionSettingsView).sections.speed?.effective.tier).toBe('inherit');
+});
+it('speed refuses unsupported metadata, custom models and non-Codex sessions', async () => {
+  const { owner } = await fixture();
+  const view = await owner.read(session) as SessionSettingsView;
+  const bad = await fixture({ backendFor: () => ({ ...backend, peekModels: () => [{ ...fixtureModels[0]!, serviceTiers: [] }] }) });
+  expect((await bad.owner.save({ scope: session, section: 'speed', revision: view.sections.speed!.revision, patch: { tier: 'fast' } })).kind).toBe('rejected');
+  expect((await bad.owner.save({ scope: session, section: 'speed', revision: view.sections.speed!.revision, patch: { tier: 'standard' } })).kind).toBe('saved');
+  await upsertSession({ ...(await getSession(session.threadId))!, threadId: 'omt_claude_speed', backend: 'claude-agent', sessionId: 'claude-one' });
+  const claude = { kind: 'session' as const, botId, threadId: 'omt_claude_speed' };
+  const claudeView = await owner.read(claude) as SessionSettingsView;
+  expect((await owner.save({ scope: claude, section: 'speed', revision: claudeView.sections.speed!.revision, patch: { tier: 'standard' } })).kind).toBe('rejected');
+  expect(() => parseSettingsEdit({ scope: session, section: 'speed', revision: 'r', patch: { tier: 'turbo' } })).toThrow();
+});
+it('speed selection protects later model changes that lack the tier', async () => {
+  const { owner } = await fixture();
+  const before = await owner.read(session) as SessionSettingsView;
+  expect((await owner.save({ scope: session, section: 'speed', revision: before.sections.speed!.revision, patch: { tier: 'fast' } })).kind).toBe('saved');
+  const current = await owner.read(session) as SessionSettingsView;
+  expect((await owner.save({ scope: session, section: 'model', revision: current.sections.model.revision, patch: { selection: { kind: 'explicit', model: 'custom-model', effort: 'high', custom: true } } })).kind).toBe('rejected');
+  expect((await getSession(session.threadId))?.model).toBe('fixture-model');
+});
+it('group speed checks every inheriting session model; session inherit checks the group tier', async () => {
+  const otherModel = { ...fixtureModels[0]!, id: 'second-model', isDefault: false, serviceTiers: [] };
+  const offered = [...fixtureModels, otherModel];
+  const { owner } = await fixture({ backendFor: () => ({ ...backend, listModels: async () => offered, peekModels: () => offered }) });
+  await upsertSession({ ...(await getSession(session.threadId))!, threadId: 'omt_speed_other', sessionId: 'native-other', model: 'second-model' });
+  const other = { kind: 'session' as const, botId, threadId: 'omt_speed_other' };
+  let group = await owner.read(project) as ProjectSettingsView;
+  expect((await owner.save({ scope: project, section: 'speed', revision: group.sections.speed!.revision, patch: { tier: 'fast' } })).kind).toBe('rejected');
+  expect(await getProjectByName('demo')).not.toHaveProperty('serviceTier');
+  let topic = await owner.read(other) as SessionSettingsView;
+  expect((await owner.save({ scope: other, section: 'speed', revision: topic.sections.speed!.revision, patch: { tier: 'standard' } })).kind).toBe('saved');
+  group = await owner.read(project) as ProjectSettingsView;
+  expect((await owner.save({ scope: project, section: 'speed', revision: group.sections.speed!.revision, patch: { tier: 'fast' } })).kind).toBe('saved');
+  topic = await owner.read(other) as SessionSettingsView;
+  expect((await owner.save({ scope: other, section: 'speed', revision: topic.sections.speed!.revision, patch: { tier: 'inherit' } })).kind).toBe('rejected');
+  expect((await getSession(other.threadId))?.serviceTier).toBe('standard');
 });
 it('membership operations retain owner and preserve concurrent project edits', async () => {
   const { owner } = await fixture(); const a = await owner.read(agent) as AgentSettingsView;
@@ -376,7 +437,7 @@ it('s12: a stored autoCompact:false is ignored on read and the switch cannot be 
   await updateProject('demo', JSON.parse('{"autoCompact":false}') as Parameters<typeof updateProject>[1]);
   const { owner } = await fixture();
   const view = await owner.read(project) as ProjectSettingsView;
-  expect(Object.keys(view.sections).sort()).toEqual(['judge', 'model', 'modelAccess', 'permission', 'presentation', 'profile', 'response', 'role', 'run', 'skills', 'smartRules', 'workspace']);
+  expect(Object.keys(view.sections).sort()).toEqual(['judge', 'model', 'modelAccess', 'permission', 'presentation', 'profile', 'response', 'role', 'run', 'skills', 'smartRules', 'speed', 'workspace']);
   expect(JSON.stringify(view)).not.toContain('autoCompact');
   expect(() => parseSettingsEdit({ scope: project, section: 'compact', revision: 'x', patch: { autoCompact: true } })).toThrow('设置字段、类型或范围无效');
   expect(JSON.parse(await readFile(paths.projectsFile, 'utf8')).projects[0]).toMatchObject({ autoCompact: false });

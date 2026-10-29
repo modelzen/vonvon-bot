@@ -172,6 +172,12 @@ describe("pinned contract extraction", () => {
     expect(save("response", {noMention:true})).toBe(true);
     expect(save("compact", {autoCompact:false})).toBe(false);
   });
+  it('accepts speed tier edits for groups and sessions, and rejects unknown tiers', () => {
+    const save = (scope: object, tier: string) => requestSchema.safeParse({ type: 'request', id: 'speed', method: 'settings', payload: { type: 'save', edit: { scope, section: 'speed', revision: 'r1', patch: { tier } } } }).success;
+    expect(save({ kind: 'project', botId: 'cli_fixture', projectName: 'fixture' }, 'ultrafast')).toBe(true);
+    expect(save({ kind: 'session', botId: 'cli_fixture', threadId: 'omt_fixture' }, 'inherit')).toBe(true);
+    expect(save({ kind: 'session', botId: 'cli_fixture', threadId: 'omt_fixture' }, 'turbo')).toBe(false);
+  });
   it('accepts global title settings and one-provider legacy input without exposing legacy in views', () => {
     const save = (patch: unknown) => requestSchema.safeParse({type:'request',id:'1',method:'settings',payload:{type:'save',edit:{scope:{kind:'agent',botId:'cli_fixture'},section:'titles',revision:'r1',patch}}}).success;
     expect(save({policy:{enabled:true,backend:'claude-agent',model:'title-model',effort:'low'}})).toBe(true);

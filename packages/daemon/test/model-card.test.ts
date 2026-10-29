@@ -51,6 +51,29 @@ const singleNoEffort = [model({ id: 'only', displayName: '唯一模型', isDefau
 const json = (s: ModelCardState): string => JSON.stringify(buildModelCard(s));
 
 describe('buildModelCard · 按当前模型能力自适应', () => {
+  it('Codex 单会话速度可继承群设置，且只提供目录支持的加速档位', () => {
+    const models = [model({ id: 'sol', displayName: 'Sol', serviceTiers: [
+      { id: 'fast', name: 'Fast', description: '' }, { id: 'ultrafast', name: 'Ultrafast', description: '' },
+    ] })];
+    const card = buildModelCard({ ...state(models, 'sol'), backend: 'codex-appserver', inheritedServiceTier: 'fast' });
+    const speed = JSON.stringify(card).match(/"initial_option":"inherit".*?"behaviors"/s)?.[0];
+    expect(speed).toContain('跟随群设置（Fast · 快速）');
+    expect(speed).toContain('"value":"standard"');
+    expect(speed).toContain('"value":"ultrafast"');
+    expect(JSON.stringify(card)).toContain('model.speed');
+    expect(JSON.stringify(card)).toContain('消耗更多额度');
+  });
+
+  it('目录未提供的加速档不变成可选项，已保存的选择仍可见', () => {
+    const base = { ...state(singleNoEffort, 'only'), backend: 'codex-appserver' };
+    const plain = json(base);
+    expect(plain).not.toContain('"value":"fast"');
+    expect(plain).not.toContain('"value":"ultrafast"');
+    expect(plain).toContain('当前模型目录未提供 Ultrafast');
+    expect(json({ ...base, serviceTier: 'ultrafast' })).toContain('Ultrafast · 极速（已保存，当前不可用）');
+    expect(json({ ...base, backend: 'claude-agent' })).not.toContain('model.speed');
+  });
+
   it('多模型 + 真 effort（codex）→ 模型下拉 + effort 下拉都在', () => {
     const j = json(state(codex, 'gpt-5.6-sol'));
     expect(j).toContain('model.set'); // 模型下拉

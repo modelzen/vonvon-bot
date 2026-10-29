@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pickDefault } from '../src/bot/handle-message';
+import { assertSupportedServiceTier, pickDefault } from '../src/bot/handle-message';
 import { buildModelDefaultCard, modelDefaultSummary, parseModelDefaultFormValue } from '../src/card/dm-cards';
 import { CUSTOM_MODEL_OPTION } from '../src/agent/model-id';
 import type { ModelInfo } from '../src/agent/types';
@@ -34,6 +34,20 @@ const claude = [
   model({ id: 'opus', displayName: 'Opus', defaultEffort: 'high', isDefault: true }),
   model({ id: 'sonnet', displayName: 'Sonnet', defaultEffort: 'medium' }),
 ];
+
+describe('explicit Codex speed validation at dispatch', () => {
+  const live = [model({ id: 'tiered', displayName: 'Tiered', serviceTiers: [{ id: 'fast', name: 'Fast', description: '' }] })];
+  it('accepts native advertised tiers and standard', () => {
+    expect(() => assertSupportedServiceTier(live, 'tiered', 'fast')).not.toThrow();
+    expect(() => assertSupportedServiceTier([{ ...live[0]!, isDefault: true }], undefined, 'fast')).not.toThrow();
+    expect(() => assertSupportedServiceTier([], 'missing', 'standard')).not.toThrow();
+  });
+  it('stops unsupported or unverifiable acceleration before inference', () => {
+    expect(() => assertSupportedServiceTier(live, 'tiered', 'ultrafast')).toThrow(/不支持/);
+    expect(() => assertSupportedServiceTier(live, 'custom-model', 'fast')).toThrow(/不支持/);
+    expect(() => assertSupportedServiceTier([], 'tiered', 'fast')).toThrow(/无法读取/);
+  });
+});
 
 describe('pickDefault · 项目默认对实时列表自愈校验', () => {
   it('无 prefer → 后端 isDefault 模型 + 其 defaultEffort', () => {

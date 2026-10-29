@@ -658,6 +658,53 @@ export function ModelChoice({
     </>
   );
 }
+type SpeedTier = "inherit" | "standard" | "fast" | "ultrafast";
+type SpeedSection = NonNullable<ProjectSettingsView["sections"]["speed"]>;
+const speedNames: Record<SpeedTier, string> = {
+  inherit: "Codex 默认", standard: "Standard 普通", fast: "Fast 快速", ultrafast: "Ultrafast 极速",
+};
+
+/** The live catalog is the authority for optional speed tiers of the selected model. */
+export function SpeedChoice({section, catalog, selection, scope, disabled, onChange}: {
+  section: SpeedSection;
+  catalog: ModelCatalog | undefined;
+  selection: ModelSelection;
+  scope: "project" | "session";
+  disabled: boolean;
+  onChange: (tier: SpeedTier) => void;
+}) {
+  const model = catalog?.models.find(item => selection.kind === "explicit" ? item.id === selection.model : item.isDefault);
+  const available = catalog?.state === "ready" && model ? new Set(model.serviceTiers?.map(tier => tier.id) ?? []) : undefined;
+  const current = section.stored.tier;
+  const inherited = scope === "session"
+    ? current === "inherit" ? `跟随群设置（${speedNames[section.effective.tier]}）` : "跟随群设置"
+    : "使用 Codex 默认速度";
+  const options: SpeedTier[] = ["inherit", "standard", "fast", "ultrafast"];
+  const unsupported = current !== "inherit" && current !== "standard" && !available?.has(current);
+  return <>
+    <SettingsRow title="响应速度" description="加速档位消耗更多额度；下一次发起任务生效，当前任务不变。" trailing={<select
+      aria-label={scope === "session" ? "话题响应速度" : "群默认响应速度"}
+      value={current} disabled={disabled}
+      onChange={event => {const tier = options.find(value => value === event.target.value); if (tier) onChange(tier);}}>
+      {options.map(tier => <option key={tier} value={tier} disabled={tier !== "inherit" && tier !== "standard" && !available?.has(tier)}>
+        {tier === "inherit" ? inherited : speedNames[tier]}{tier === current && unsupported ? "（当前模型不支持，已保存）" : ""}
+      </option>)}
+    </select>}/>
+    {!available && <p className="gd-model-compact-note" role="status">{catalog?.state === "ready" ? "当前模型未列在目录中，可切换普通或继承；读取目录后可选加速。" : "可切换普通或继承；读取目录后可选加速。"}</p>}
+  </>;
+}
+
+export function SpeedEditor({section, catalog, selection, scope, save}: {
+  section: SpeedSection;
+  catalog: ModelCatalog | undefined;
+  selection: ModelSelection;
+  scope: "project" | "session";
+  save: (patch: {tier?: SpeedTier}, revision: string) => Promise<SettingsReply>;
+}) {
+  return <Editor title="响应速度" section={section} autoSave save={save}
+    render={(draft, _set, disabled, commit) => <SpeedChoice section={{...section, stored: draft}} catalog={catalog} selection={selection} scope={scope}
+      disabled={disabled} onChange={tier => void commit({tier})}/>}/>;
+}
 function ActionNotice({ message }: { message: string | undefined }) {
   return message ? (
     <InlineNotice title="操作结果">{message}</InlineNotice>
@@ -1436,7 +1483,7 @@ function SessionPanel({
         backend={view.identity.backend}
         purpose="session"
       >
-        {(catalog) => (
+        {(catalog) => (<>
           <Editor
             title="本话题模型"
             section={model}
@@ -1464,7 +1511,14 @@ function SessionPanel({
               />
             )}
           />
-        )}
+          {view.identity.backend === "codex-appserver" && view.sections.speed &&
+            <SpeedEditor section={view.sections.speed} catalog={catalog} selection={model.effective.selection} scope="session"
+              save={async (patch, revision) => {
+                const reply = await client.settings({type: "save", edit: {scope, section: "speed", revision, patch}});
+                if (reply.kind === "saved" && reply.result.kind === "saved") await refresh();
+                return reply;
+              }}/>}
+        </>)}
       </Catalog>
     </>
   );
