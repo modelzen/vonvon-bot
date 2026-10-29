@@ -18,6 +18,14 @@ html, body { min-width: 320px; min-height: 0; }
 .today-brand strong { font-weight: 600; }
 .today-brand img { width: 23px; height: 23px; object-fit: contain; }
 .today-header-actions { display: flex; justify-self: end; align-items: center; gap: 4px; grid-column: 3; }
+.today-update-action { position: relative; display: flex; align-items: center; justify-content: flex-end; flex: none; width: 78px; margin-left: 8px; }
+.today-window .today-update-button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 24px; min-height: 24px; padding: 0 9px; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--color-accent) 7%, transparent); color: var(--color-accent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 10%, transparent); font: 500 11px/1 var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif); white-space: nowrap; cursor: pointer; -webkit-app-region: no-drag; }
+.today-window .today-update-button > svg { flex: none; }
+.today-window .today-update-button:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 3px; }
+.today-window .today-update-button:disabled { cursor: default; }
+.today-window .today-update-button[aria-busy] { color: var(--color-text-secondary); background: var(--color-surface-muted); box-shadow: none; }
+@media (hover: hover) { .today-window .today-update-button:hover:not(:disabled) { background: color-mix(in srgb, var(--color-accent) 13%, transparent); } }
+.today-update-error { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .today-icon-button { position: relative; width: var(--control-height, 32px); height: var(--control-height, 32px); padding: 0; display: grid; place-items: center; border: 0; border-radius: var(--control-radius, 8px); background: transparent; color: var(--color-text-secondary); }
 .today-icon-button[aria-current] { background: color-mix(in srgb, var(--color-text) 8%, transparent); color: var(--color-text); }
 .today-primary-nav { position: relative; display: flex; padding: 4px; gap: 0; border-radius: 10px; background: #eaeaed; box-shadow: inset 0 0 0 1px #00000005; }
@@ -102,6 +110,10 @@ html, body { min-width: 320px; min-height: 0; }
   .today-app-header { min-height: 48px; gap: 8px; padding: 7px 12px; }
   .today-window:not([data-first-use]) .today-brand strong { display: none; }
   .today-primary-nav button { min-width: 50px; padding-inline: 9px; }
+  .today-app-header:has(.today-update-action) { grid-template-columns: minmax(0, 1fr) auto; }
+  .today-app-header:has(.today-update-action) .today-brand { display: none; }
+  .today-app-header:has(.today-update-action) .today-primary-nav { justify-self: start; }
+  .today-app-header:has(.today-update-action) .today-header-actions { grid-column: 2; }
   .today-window .settings-content-page > .page-stack { padding-top: 20px; }
   .today-window[data-first-use] .settings-content-page:has(.welcome-setup) > .page-stack { padding-top: 28px; }
   .today-window .ss-row__value { max-width: 100%; white-space: normal; }
@@ -126,10 +138,13 @@ html, body { min-width: 320px; min-height: 0; }
   .today-window:not([data-first-use]) .today-brand { display: none; }
   .today-window:not([data-first-use]) .today-primary-nav { justify-self: start; }
   .today-window:not([data-first-use]) .today-header-actions { grid-column: 2; }
+  .today-app-header:has(.today-update-action) { padding-inline: 8px; gap: 4px; }
+  .today-app-header:has(.today-update-action) .today-primary-nav button { min-width: 44px; padding-inline: 6px; }
 }
 @media (pointer: coarse) {
   .today-window { --settings-control-height: 44px; }
   .today-icon-button { width: 44px; height: 44px; }
+  .today-window .today-update-button { min-height: 44px; }
   .today-primary-nav button, .today-window .ui-button, .today-window .ui-icon-button, .today-back button, .today-window .collaboration-detail-tabs button { min-height: 44px; }
   .today-app-header { gap: 6px; padding-inline: 8px; }
   .today-primary-nav button { min-width: 44px; padding-inline: 6px; }

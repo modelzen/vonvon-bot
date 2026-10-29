@@ -146,6 +146,20 @@ export function installBridge(
     window.webContents.send(desktopChannels.event, event);
   }
 
+  function publishUpdate(update: DesktopUpdate): void {
+    if (disposed) return;
+    retainedUpdate = update;
+    send({ type: 'update', value: update });
+  }
+
+  async function updateResult(action: () => Promise<DesktopUpdate>): Promise<DesktopUpdate> {
+    const update = await action();
+    // Manual downloads must replace the automatic check's retained `available`.
+    // Otherwise a reloaded window may offer "download" for an already downloaded update.
+    publishUpdate(update);
+    return update;
+  }
+
   function retain(error: SafeFailure): void {
     retainedErrors.push(error);
     if (retainedErrors.length > 32) retainedErrors.shift();
@@ -300,9 +314,9 @@ export function installBridge(
       if (typeof value !== 'boolean') throw new Error('Invalid directory request');
       return value;
     }, value => actions.chooseDirectoryPaths(value));
-    register(desktopChannels.checkDesktopUpdate, 0, noArg, () => actions.checkDesktopUpdate());
-    register(desktopChannels.retryDesktopUpdate, 0, noArg, () => actions.retryDesktopUpdate());
-    register(desktopChannels.installDesktopUpdate, 0, noArg, () => actions.installDesktopUpdate());
+    register(desktopChannels.checkDesktopUpdate, 0, noArg, () => updateResult(() => actions.checkDesktopUpdate()));
+    register(desktopChannels.retryDesktopUpdate, 0, noArg, () => updateResult(() => actions.retryDesktopUpdate()));
+    register(desktopChannels.installDesktopUpdate, 0, noArg, () => updateResult(() => actions.installDesktopUpdate()));
     register(desktopChannels.hide, 0, noArg, async () => { actions.hide(); });
     register(desktopChannels.quit, 0, noArg, () => actions.confirmQuit());
     ipcMain.handle(desktopChannels.subscribe, async (event, ...args): Promise<IpcResult<void>> => {
@@ -359,11 +373,7 @@ export function installBridge(
       })().finally(() => { replacing = undefined; candidate = null; });
       return replacing;
     },
-    publishUpdate(update) {
-      if (disposed) return;
-      retainedUpdate = update;
-      send({ type: 'update', value: update });
-    },
+    publishUpdate,
     requestQuit() {
       if (disposed) return;
       if (!subscribed || !currentDocument()) pendingQuit = true;
