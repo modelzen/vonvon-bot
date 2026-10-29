@@ -370,10 +370,10 @@ describe('Codex 判断进程：参数和结果', () => {
     expect(models.map(m => m.id)).toEqual(['gpt-6-luna']);
   });
 
-  it('peekModels：listModels 失败回落兜底列表时仍是 undefined', async () => {
+  it('peekModels stays undefined when native discovery fails without a fabricated catalog', async () => {
     fake.set('model-list-error', true);
     const backend = new CodexAppServerBackend();
-    expect((await backend.listModels()).length).toBeGreaterThan(0);
+    expect(await backend.listModels()).toEqual([]);
     expect(backend.peekModels()).toBeUndefined();
   });
 });
