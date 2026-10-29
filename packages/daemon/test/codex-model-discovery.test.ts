@@ -108,35 +108,37 @@ afterEach(async () => {
   finally { vi.unstubAllEnvs(); rmSync(directory, { recursive: true, force: true }); }
 });
 
-describe('Codex native model discovery follows the current local configuration', () => {
-  it('includes an otherwise missing configured model and makes it the only default', async () => {
+describe('Codex model discovery preserves the native picker directory', () => {
+  it('does not append a configured model that the native picker directory does not contain', async () => {
     state.config = {model: 'local-custom-model', model_provider: 'local-proxy', model_reasoning_effort: 'high'};
     save();
     const backend = new CodexAppServerBackend();
     const models = await backend.listModels();
 
-    expect(models.find(model => model.id === 'local-custom-model')).toMatchObject({id: 'local-custom-model', isDefault: true, hidden: false});
-    expect(models.filter(model => model.isDefault).map(model => model.id)).toEqual(['local-custom-model']);
-    expect(models.map(model => model.id)).toEqual(expect.arrayContaining(['native-a', 'native-b']));
+    expect(models.map(model => model.id)).toEqual(['native-a', 'native-b']);
+    expect(models.some(model => model.id === 'local-custom-model')).toBe(false);
+    expect(models.filter(model => model.isDefault).map(model => model.id)).toEqual(['native-a']);
     expect(backend.peekModels()).toEqual(models);
     expect(calls().some(call => call.method === 'config/read')).toBe(true);
   });
 
-  it('selects an already-listed configured model without duplicating or discarding its native metadata', async () => {
-    state.config = {model: 'native-b', model_provider: 'openai'};
+  it('does not reorder or alter native model metadata when the configured model is already listed', async () => {
+    state.config = {model: 'native-b', model_provider: 'openai', model_reasoning_effort: 'low'};
     save();
     const models = await new CodexAppServerBackend().listModels();
 
     expect(models.filter(model => model.id === 'native-b')).toHaveLength(1);
+    expect(models.map(model => model.id)).toEqual(['native-a', 'native-b']);
     expect(models.find(model => model.id === 'native-b')).toMatchObject({
-      displayName: 'Native native-b', isDefault: true,
+      displayName: 'Native native-b', isDefault: false,
       supportedEfforts: ['low', 'high'], defaultEffort: 'high',
     });
-    expect(models.filter(model => model.isDefault).map(model => model.id)).toEqual(['native-b']);
+    expect(models.filter(model => model.isDefault).map(model => model.id)).toEqual(['native-a']);
   });
 
-  it('leaves an unknown configured model’s effort to Codex instead of sending a guessed value', async () => {
+  it('leaves effort to Codex when a native directory row exposes no effort capability', async () => {
     state.config = {model: 'local-no-effort-metadata', model_provider: 'local-proxy', model_reasoning_effort: 'high'};
+    state.pages.first.data = [{...native('local-no-effort-metadata', true), supportedReasoningEfforts: []}];
     save();
     const backend = new CodexAppServerBackend();
     const models = await backend.listModels();
@@ -154,14 +156,16 @@ describe('Codex native model discovery follows the current local configuration',
     } finally { await thread.close(); }
   });
 
-  it('keeps an existing custom-model thread’s effort behavior after the discovered default changes', async () => {
+  it('keeps an existing native model’s effort behavior after the discovered directory changes', async () => {
     state.config = {model: 'custom-before-refresh', model_provider: 'local-proxy'};
+    state.pages.first.data = [{...native('custom-before-refresh', true), supportedReasoningEfforts: []}];
     save();
     const backend = new CodexAppServerBackend();
     expect((await backend.listModels()).find(model => model.id === 'custom-before-refresh')?.supportedEfforts).toEqual([]);
     const thread = await backend.startThread({cwd: directory, mode: 'full', model: 'custom-before-refresh', effort: 'medium'});
     try {
       state.config = {model: 'custom-after-refresh', model_provider: 'local-proxy'};
+      state.pages.first.data = [{...native('custom-after-refresh', true), supportedReasoningEfforts: []}];
       save();
       const refreshed = await backend.listModels();
       expect(refreshed.find(model => model.isDefault)?.id).toBe('custom-after-refresh');
@@ -183,6 +187,30 @@ describe('Codex native model discovery follows the current local configuration',
     expect(models.map(model => model.id)).toEqual(['native-a', 'native-b']);
     expect(models.filter(model => model.isDefault).map(model => model.id)).toEqual(['native-a']);
     expect(models.every(model => model.displayName.startsWith('Native '))).toBe(true);
+  });
+
+  it('requests the native full directory and excludes hidden rows even when config.model selects one', async () => {
+    state.config = {model: 'native-hidden', model_provider: 'local-proxy'};
+    state.pages.first.data = [native('native-a', true), {...native('native-hidden'), hidden: true}, native('native-b')];
+    save();
+    const models = await new CodexAppServerBackend().listModels();
+
+    expect(models.map(model => model.id)).toEqual(['native-a', 'native-b']);
+    expect(models.some(model => model.id === 'native-hidden')).toBe(false);
+    expect(models.filter(model => model.isDefault).map(model => model.id)).toEqual(['native-a']);
+    const modelCalls = calls().filter(call => call.method === 'model/list');
+    expect(modelCalls.length).toBeGreaterThan(0);
+    expect(modelCalls.every(call => call.params.includeHidden === true)).toBe(true);
+  });
+
+  it('keeps an empty native picker directory empty instead of adding config or fixed fallback rows', async () => {
+    state.config = {model: 'configured-but-not-listed', model_provider: 'local-proxy'};
+    state.pages.first.data = [];
+    save();
+    const backend = new CodexAppServerBackend();
+
+    expect(await backend.listModels()).toEqual([]);
+    expect(backend.peekModels()).toEqual([]);
   });
 
   it('uses the native wire model name rather than a distinct picker row ID', async () => {
@@ -209,13 +237,15 @@ describe('Codex native model discovery follows the current local configuration',
     expect(calls().filter(call => call.method === 'model/list').map(call => call.params.cursor ?? null)).toEqual([null, 'next-page']);
   });
 
-  it('refreshes the configured default on the same backend without accumulating stale custom rows', async () => {
+  it('refreshes the native directory after local configuration changes without retaining removed rows', async () => {
     state.config = {model: 'local-before', model_provider: 'local-proxy'};
+    state.pages.first.data = [native('local-before', true), native('native-b')];
     save();
     const backend = new CodexAppServerBackend();
     expect((await backend.listModels()).find(model => model.isDefault)?.id).toBe('local-before');
 
     state.config = {model: 'local-after', model_provider: 'local-proxy'};
+    state.pages.first.data = [native('local-after', true), native('native-b')];
     save();
     const refreshed = await backend.listModels();
     expect(refreshed.find(model => model.isDefault)?.id).toBe('local-after');
@@ -223,6 +253,7 @@ describe('Codex native model discovery follows the current local configuration',
     expect(backend.peekModels()).toEqual(refreshed);
 
     state.config = {};
+    state.pages.first.data = [native('native-a', true), native('native-b')];
     save();
     const restored = await backend.listModels();
     expect(restored.map(model => model.id)).toEqual(['native-a', 'native-b']);
@@ -271,7 +302,7 @@ describe('Codex native model discovery follows the current local configuration',
     state.failConfig = true;
     save();
     const backend = new CodexAppServerBackend();
-    await backend.listModels();
+    expect(await backend.listModels()).toEqual([]);
     expect(backend.peekModels()).toBeUndefined();
 
     state.failConfig = false;
@@ -286,17 +317,17 @@ describe('Codex native model discovery follows the current local configuration',
     state.pages.loop = {data: [native('native-c')], nextCursor: 'loop'};
     save();
     const backend = new CodexAppServerBackend();
-    await backend.listModels();
+    expect(await backend.listModels()).toEqual([]);
 
     expect(backend.peekModels()).toBeUndefined();
     expect(calls().filter(call => call.method === 'model/list').length).toBeLessThanOrEqual(3);
   });
 
-  it('does not cache a fixed fallback as successful discovery after a native catalog failure', async () => {
+  it('returns an empty directory without caching fixed fallback rows after a native catalog failure', async () => {
     state.failModels = true;
     save();
     const backend = new CodexAppServerBackend();
-    await backend.listModels();
+    expect(await backend.listModels()).toEqual([]);
     expect(backend.peekModels()).toBeUndefined();
 
     state.failModels = false;
