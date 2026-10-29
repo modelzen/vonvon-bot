@@ -7,8 +7,8 @@ import { shutdownResidentClients } from '../src/agent/codex-appserver/client-poo
 import { writeNodeExecutable } from './helpers/node-executable';
 
 // 启动预热（createOrchestrator 末尾的 void backend.listModels()）的安全前提：
-// listModels 失败时返回 STATIC_MODELS 兜底但**不写缓存**——否则预热一旦撞上
-// codex 暂不可用，fallback 会被钉死整个 daemon 生命周期。这里验证同一 backend
+// listModels 失败时返回空目录且**不写缓存**——否则预热一旦撞上
+// codex 暂不可用，空目录会被钉死整个 daemon 生命周期。这里验证同一 backend
 // 实例「失败 → 恢复 → 拿到真实列表 → 此后走缓存」的完整链路。
 
 /** 起不来的假 codex：spawn 即退出，connect 的 initialize 必然被拒。 */
@@ -54,14 +54,14 @@ afterAll(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe('listModels 预热不钉死 fallback（QW-2）', () => {
+describe('listModels retries a failed prewarm without inventing picker models', () => {
   // Windows starts two PowerShell Job Object hosts and compiles each host before initialize.
-  it('失败返回 STATIC_MODELS 但不写缓存；恢复后重试拿真实列表，此后走缓存', async () => {
+  it('returns no models on failure, retries after recovery and caches only native discovery', async () => {
     const backend = new CodexAppServerBackend();
 
-    // codex 起不来 → 静态兜底
+    // A failed CLI must not turn built-in guesses into model choices.
     const fallback = await backend.listModels();
-    expect(fallback.map((m) => m.id)).toEqual(['gpt-5.5']);
+    expect(fallback).toEqual([]);
 
     // 同一实例、同一路径换成正常 server：若失败时误写了缓存，这里仍会是兜底
     writeNodeExecutable(dir, 'codex', WORKING_SERVER);

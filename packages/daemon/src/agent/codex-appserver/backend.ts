@@ -779,7 +779,7 @@ export class CodexAppServerBackend implements AgentBackend {
 
   async listModels(): Promise<ModelInfo[]> {
     const bin = resolveCodexBin();
-    if (!bin) { this.modelCache = null; return OFFLINE_CODEX_MODELS; }
+    if (!bin) { this.modelCache = null; return []; }
     const priorCatalogPath = this.modelCatalogPath;
     const key = codexModelCacheKey(bin, priorCatalogPath);
     if (this.modelCache && this.modelCacheKey === key) return this.modelCache;
@@ -787,8 +787,6 @@ export class CodexAppServerBackend implements AgentBackend {
     try {
       const { models, catalogPath } = await discoverCodexModels(bin);
       if (codexModelCacheKey(bin, priorCatalogPath) !== key) throw new Error('Codex configuration changed during discovery');
-      // 空列表和失败一样：回落兜底但不缓存，下次再问（handle-message 的 listModels 注释）。
-      if (!models.length) return OFFLINE_CODEX_MODELS;
       this.modelCache = models;
       this.modelCatalogPath = catalogPath;
       this.modelCacheKey = codexModelCacheKey(bin, catalogPath);
@@ -796,7 +794,7 @@ export class CodexAppServerBackend implements AgentBackend {
     } catch {
       // Native config errors can quote lines containing private API settings.
       log.warn('agent', 'Codex model discovery failed', { phase: 'model/list' });
-      return OFFLINE_CODEX_MODELS;
+      return [];
     }
   }
 
