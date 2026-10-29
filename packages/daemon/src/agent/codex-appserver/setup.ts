@@ -4,7 +4,7 @@ import { AppServerClient } from './app-server-client';
 import { resolveCodexBin } from './locate';
 import { binChildEnv } from '../../platform/tool-path';
 import { installManagedCodex, runSetupChild } from './managed-install';
-import { ProviderProcessCleanupError } from '../owned-process';
+import { ProviderProcessCleanupError, ProviderProcessStoppedError } from '../owned-process';
 
 export interface CodexSetup {
   installation: 'missing' | 'installed' | 'unknown';
@@ -52,7 +52,8 @@ export class CodexSetupService {
     if (this.probe) return this.probe.done;
     const abort = new AbortController();
     const done = this.readSetup(abort.signal).catch(error => {
-      if (error instanceof ProviderProcessCleanupError) this.cleanupFailures.set('probe', error);
+      // The failed probe still reports its error, but confirmed death permits a new attempt.
+      if (error instanceof ProviderProcessCleanupError && !(error instanceof ProviderProcessStoppedError)) this.cleanupFailures.set('probe', error);
       throw error;
     }).finally(() => { this.probe = undefined; });
     this.probe = { abort, done };
@@ -105,7 +106,8 @@ export class CodexSetupService {
         abort.signal.throwIfAborted();
         entry.snapshot = { id, type, state: 'succeeded', message: type === 'install' ? 'Codex 已安装并通过版本校验' : 'Codex 账户已确认登录' };
       } catch (error) {
-        if (error instanceof ProviderProcessCleanupError) this.cleanupFailures.set(id, error);
+        // Terminal job snapshots retain the error without poisoning future jobs or shutdown.
+        if (error instanceof ProviderProcessCleanupError && !(error instanceof ProviderProcessStoppedError)) this.cleanupFailures.set(id, error);
         const cancelled = abort.signal.aborted && !(error instanceof ProviderProcessCleanupError);
         entry.snapshot = { id, type, state: cancelled ? 'cancelled' : 'failed', message: cancelled ? '操作已取消' : error instanceof Error ? error.message : 'Codex 设置失败' };
       } finally {
