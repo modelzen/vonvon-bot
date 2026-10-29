@@ -135,7 +135,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
           onCheckProviders={discovery.retry} checkingProviders={discovery.checking}
           onOpenProviders={onOpenProviders} permissionName={sections.permission.stored.options.tiers.find(tier => tier.tier === sections.permission.stored.mode)?.name} savedBackend={view.identity.backend}/>}
         validate={value => providers.some(provider => provider.id === value.backend) ? modelAccessProblem(value, modelCatalog.current) : '此 Provider 当前不可用，请先安装并登录。'}/> : <MissingSection/>)}
-      {tab === 'model' && <details className="membership-settings-details"><summary>话题模型</summary><SessionPicker view={view}/></details>}
+      {tab === 'model' && <details className="gd-disclosure membership-settings-details"><summary>话题模型</summary><SessionPicker view={view}/></details>}
       {(tab === 'model' || tab === 'permission') && <ProjectPanel view={view} refresh={refresh} partition="permission" independent/>}
       {tab === 'response' && <>
         {responseHeader}
