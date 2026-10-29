@@ -1,6 +1,6 @@
 import { managedCodexBin } from './managed-install';
 import { managedToolSelection } from './managed-tools';
-import { existsSync, readdirSync, realpathSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { extname, isAbsolute, join, relative, sep } from 'node:path';
 import { paths } from '../../config/paths';
@@ -17,6 +17,10 @@ const IS_WIN = process.platform === 'win32';
 let binCache: string | null = null;
 const versionCache = new Map<string, string>();
 const failedVersionProbes = new Set<string>();
+const versionFingerprints = new Map<string, string | null>();
+function fingerprint(bin: string): string | null {
+  try { const info = statSync(bin); return `${info.mtimeMs}:${info.ctimeMs}:${info.size}`; } catch { return null; }
+}
 
 export type CodexResolutionOptions = {
   force?: boolean;
@@ -94,7 +98,8 @@ function execCandidates(dir: string, base: string, env: NodeJS.ProcessEnv): stri
 
 function which(cmd: string, env: NodeJS.ProcessEnv, blockedDataRoot?: string): string | null {
   try {
-    const res = spawnProcessSync(IS_WIN ? 'where' : '/usr/bin/which', IS_WIN ? [cmd] : ['-a', cmd], {
+    const locator = IS_WIN ? join(env.SystemRoot ?? env.SYSTEMROOT ?? process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'where.exe') : '/usr/bin/which';
+    const res = spawnProcessSync(locator, IS_WIN ? [cmd] : ['-a', cmd], {
       env,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
@@ -109,6 +114,7 @@ function which(cmd: string, env: NodeJS.ProcessEnv, blockedDataRoot?: string): s
 
 /** Read the existing probe result without starting a child process. */
 export function cachedCodexVersion(bin: string): string | null | undefined {
+  if (versionFingerprints.has(bin) && versionFingerprints.get(bin) !== fingerprint(bin)) return undefined;
   return versionCache.get(bin) ?? (failedVersionProbes.has(bin) ? null : undefined);
 }
 
@@ -116,9 +122,10 @@ export function cachedCodexVersion(bin: string): string | null | undefined {
  * 卡片回调等事件循环上下文请用 {@link codexVersionAsync}）。 */
 export function codexVersion(bin: string, opts?: { force?: boolean }): string | null {
   if (!opts?.force) {
-    const hit = versionCache.get(bin);
-    if (hit !== undefined) return hit;
+    const hit = cachedCodexVersion(bin);
+    if (typeof hit === 'string') return hit;
   }
+  const before = fingerprint(bin);
   let out: string | null;
   try {
     // cross-spawn so a Windows `.cmd` shim runs (avoids execFile EINVAL).
@@ -127,6 +134,8 @@ export function codexVersion(bin: string, opts?: { force?: boolean }): string | 
   } catch {
     out = null;
   }
+  if (before !== fingerprint(bin)) return null;
+  versionFingerprints.set(bin, before);
   if (out !== null) {
     versionCache.set(bin, out);
     failedVersionProbes.delete(bin);
@@ -142,9 +151,10 @@ export function codexVersion(bin: string, opts?: { force?: boolean }): string | 
  * loop，所有话题的流式 pump、WS 心跳、⏹ 回调一起停摆。 */
 export async function codexVersionAsync(bin: string, opts?: { force?: boolean }): Promise<string | null> {
   if (!opts?.force) {
-    const hit = versionCache.get(bin);
-    if (hit !== undefined) return hit;
+    const hit = cachedCodexVersion(bin);
+    if (typeof hit === 'string') return hit;
   }
+  const before = fingerprint(bin);
   const out = await new Promise<string | null>((resolve) => {
     let child;
     try {
@@ -162,6 +172,8 @@ export async function codexVersionAsync(bin: string, opts?: { force?: boolean })
     child.on('error', () => resolve(null));
     child.on('close', (code) => resolve(code === 0 ? stdout.trim() : null));
   });
+  if (before !== fingerprint(bin)) return null;
+  versionFingerprints.set(bin, before);
   if (out !== null) {
     versionCache.set(bin, out);
     failedVersionProbes.delete(bin);

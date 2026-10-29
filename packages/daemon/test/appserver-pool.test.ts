@@ -249,7 +249,9 @@ describe('容量 1 预热池（M-2）', () => {
     writeFileSync(`${script}.hold-warm`, 'hold');
     const warming = refillWarmPool();
     try {
-      await vi.waitFor(() => expect(existsSync(`${script}.warm-started`)).toBe(true));
+      // This starts a real provider process; Windows ARM64 can spend more than
+      // vi.waitFor's 1 s default in the launcher before initialize completes.
+      await vi.waitFor(() => expect(existsSync(`${script}.warm-started`)).toBe(true), { timeout: CONNECT_TIMEOUT_MS });
       const oldWarmPid = Number(readFileSync(`${script}.warm-started`, 'utf8'));
 
       expect((await new CodexAppServerBackend().listModels()).map(model => model.id)).toEqual(['pool-model']);

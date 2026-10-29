@@ -13,6 +13,15 @@ import type { RegistryLocation } from '../src/project/registry';
 import { paths } from '../src/config/paths';
 import { fakeLark } from './helpers/fake-lark-http';
 import { effectiveDefaultBackend } from '../src/agent';
+import type { ModelInfo } from '../src/agent/types';
+
+const provider = vi.hoisted(() => ({ models: [{ id: 'fixture-model', displayName: 'Fixture', description: '', isDefault: true, hidden: false, supportedEfforts: ['medium'], defaultEffort: 'medium' }] as ModelInfo[] }));
+// Binding exercises the real model admission using a test Provider, independent of a host Codex install.
+vi.mock('../src/agent', async original => ({
+  ...await original<object>(),
+  createBackend: (id: string) => ({ id, listModels: async () => provider.models, peekModels: () => provider.models }),
+  effectiveDefaultBackend: async () => 'codex-appserver',
+}));
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync, realpathSync } = await import('node:fs');
@@ -236,7 +245,7 @@ describe('desktop group commands in the owning bot', () => {
   it('commits one canonical binding and welcome across eight mixed DM and web callers', async () => {
     const dir = await workspace();
     const alias = `${dir}-alias`;
-    await symlink(dir, alias);
+    await symlink(dir, alias, process.platform === 'win32' ? 'junction' : 'dir');
     const fixture = channelFixture();
     const value = { ...input(alias), projectName: 'Mixed bind', chatId: 'oc_mixed' };
     const replies = await Promise.all(Array.from({ length: 8 }, (_, index) => index % 2
@@ -466,6 +475,24 @@ describe('desktop group commands in the owning bot', () => {
   it('parses the exact supported binding shape', () => {
     expect(parseBindGroupInput({ ...input(paths.appDir), projectName: ' Trim ' }).projectName).toBe('Trim');
     for (const patch of [{ backend: 'unknown' }, { directory: 'relative' }, { kind: 'new' }, { chatId: '../escape' }, { extra: true }]) expect(() => parseBindGroupInput({ ...input(paths.appDir), ...patch })).toThrow();
+  });
+
+  it('refuses a Provider with no models before creating or persisting a binding', async () => {
+    const fixture = channelFixture();
+    const models = provider.models;
+    const projects = await readFile(paths.projectsFile, 'utf8');
+    const bots = await readFile(paths.botsFile, 'utf8');
+    const directory = await workspace();
+    provider.models = [];
+    try {
+      await expect(createGroupExecutor(fixture.channel)({ kind: 'bindGroup', input: { ...input(directory), chatId: 'oc_no_models', projectName: 'No models' } })).rejects.toThrow('未读取到可用模型');
+      await expect(createProject(fixture.channel, { name: 'No models', existingPath: directory, kind: 'multi', ownerOpenId: 'ou_owner', requestId: 'no-models', bot })).rejects.toThrow('未读取到可用模型');
+      expect(await readFile(paths.projectsFile, 'utf8')).toBe(projects);
+      expect(await readFile(paths.botsFile, 'utf8')).toBe(bots);
+      expect(fixture.create).not.toHaveBeenCalled();
+      expect(fixture.managers).not.toHaveBeenCalled();
+      expect(fixture.message).not.toHaveBeenCalled();
+    } finally { provider.models = models; }
   });
 });
 
