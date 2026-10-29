@@ -110,8 +110,26 @@ export function buildModelCard(state: ModelCardState): CardObject {
   const currentSpeed = state.serviceTier && supported.some(item => item.id === state.serviceTier)
     ? state.serviceTier : 'standard';
   const speedButton = showSpeed
-    ? { ...button(currentSpeed === 'standard' ? '⚡' : currentSpeed === 'fast' ? '⚡ Fast' : '⚡ Ultrafast', { a: MC.speedOpen }), size: 'tiny', type: 'text' }
+    ? {
+      tag: 'button', size: 'medium', type: 'text', width: 'fill',
+      icon: { tag: 'standard_icon', token: 'speed_filled', color: currentSpeed === 'standard' ? 'grey-400' : 'orange' },
+      hover_tips: { tag: 'plain_text', content: `响应速度：${serviceTierLabel(currentSpeed)}；点击切换` },
+      behaviors: [{ type: 'callback', value: { a: MC.speedOpen } }],
+    }
     : undefined;
+
+  // Reserve an icon-sized column so long model/effort labels cannot squeeze it.
+  // Native icon-only buttons have no label to truncate into an adjacent ellipsis.
+  const controlsRow = (controls: CardElement[]): CardElement => speedButton ? {
+    tag: 'column_set', flex_mode: 'none', horizontal_spacing: 'small',
+    columns: [
+      ...controls.map(control => ({
+        tag: 'column', width: 'weighted', weight: 1, vertical_align: 'center',
+        elements: [{ ...control, ...(control.tag === 'select_static' ? { width: 'fill' } : {}) }],
+      })),
+      { tag: 'column', width: '32px', vertical_align: 'center', elements: [speedButton] },
+    ],
+  } : actions(controls);
 
   const elements: CardElement[] = [md('🧠 **模型 / 推理强度**')];
 
@@ -141,14 +159,13 @@ export function buildModelCard(state: ModelCardState): CardObject {
         }),
       );
     }
-    if (speedButton) controls.push(speedButton);
-    elements.push(actions(controls));
+    elements.push(controlsRow(controls));
     // 只有一个维度可调时，给另一维度一句说明（避免「为什么只有一个下拉」的困惑）。
     if (canPickModel && !canPickEffort) {
       elements.push(note('该后端不调节推理强度（思考由模型自动调度，无 Codex 那样的 effort 档）'));
     }
   } else {
-    elements.push(hr(), speedButton ? actions([md(`当前模型：${curLabel}`), speedButton]) : md(`当前模型：${curLabel}`));
+    elements.push(hr(), speedButton ? controlsRow([md(`当前模型：${curLabel}`)]) : md(`当前模型：${curLabel}`));
   }
 
   if (showSpeed && state.speedExpanded) {
