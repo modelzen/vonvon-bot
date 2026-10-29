@@ -36,6 +36,19 @@ it('groups by Feishu group even when one group has different projects and two gr
   expect(h.onMembership).toHaveBeenCalledWith(JSON.stringify(['cli_two', 'oc_one']));
 });
 
+it('shows one new-memory action per group and opens its matching Bot binding', () => {
+  const onNewMemory = vi.fn();
+  const tree = nodes(GroupDirectory({snapshot, state: {query: '', expanded: {}}, onStateChange: vi.fn(), statusFor: () => ({label: '', tone: 'success'}), onMembership: vi.fn(), onNewMemory, onJoin: vi.fn(), newCounts: {prj_00000001: 1, prj_00000002: 2}}));
+  const groups = tree.filter(node => node.props.className === 'group-directory-item');
+  const action = (group: Element) => nodes(group).filter(node => node.props.className === 'group-directory-new-memory');
+  expect(action(groups[0]!)).toHaveLength(1);
+  expect(action(groups[0]!)[0]!.props.children.slice(0, 2).join('')).toBe('3 条新记忆');
+  expect(action(groups[1]!)).toHaveLength(1);
+  action(groups[1]!)[0]!.props.onClick();
+  expect(onNewMemory).toHaveBeenCalledWith(JSON.stringify(['cli_one', 'oc_two']));
+  expect(nodes(groups[0]!).filter(node => node.props.className === 'group-directory-count')[0]!.props.children.join('')).toBe('2 个 Bot');
+});
+
 it('retains the tree search and expansion when opening a binding and rendering it again', () => {
   const h = harness();
   h.render().find(node => node.type === 'input')!.props.onChange({target: {value: '研发'}});
@@ -107,5 +120,5 @@ it('uses 群组 as the primary destination while retaining project memory counts
   expect(buttons.map(button => [button.props.children].flat()[0])).toEqual(['此刻', 'Bot', '群组']);
   buttons[2]!.props.onClick();
   expect(onOpenList).toHaveBeenCalledWith('groups');
-  expect(nodes(buttons[2]!.props.children).find(node => node.type === 'small')!.props['aria-label']).toBe('新记忆 3 条');
+  expect(nodes(buttons[2]!.props.children).find(node => node.type === 'small')!.props.children.join('')).toBe('新记忆 3');
 });
