@@ -19,7 +19,8 @@ const provider = vi.hoisted(() => ({ models: [{ id: 'fixture-model', displayName
 // Binding exercises the real model admission using a test Provider, independent of a host Codex install.
 vi.mock('../src/agent', async original => ({
   ...await original<object>(),
-  createBackend: (id: string) => ({ id, listModels: async () => provider.models, peekModels: () => provider.models }),
+  createBackend: (id: string) => ({ id, listModels: async () => provider.models, peekModels: () => provider.models,
+    doctor: async () => ({ ok: true, version: 'fixture' }), loginStatus: async () => ({ state: 'signedIn' }) }),
   effectiveDefaultBackend: async () => 'codex-appserver',
 }));
 
@@ -30,19 +31,6 @@ vi.mock('../src/config/paths', async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'groups-fixture-')));
   return { paths: { appDir: root, botsFile: join(root, 'bots.json'), projectsFile: join(root, 'projects.json'), projectsRootDir: join(root, 'projects'), backendsDir: join(root, 'backends') },
     botPaths: () => ({ projectsFile: join(root, 'projects.json'), configFile: join(root, 'config.json') }) };
-});
-// Group creation snapshots the live provider catalog. Keep that real path exercised
-// without depending on the developer machine having Codex or Claude installed.
-vi.mock('../src/agent', async importOriginal => {
-  const actual = await importOriginal<typeof import('../src/agent')>();
-  const models: ModelInfo[] = [{ id: 'gpt-6-luna', displayName: 'Fixture Luna', description: '', supportedEfforts: ['low'], defaultEffort: 'low', isDefault: true, hidden: false }];
-  return { ...actual, createBackend: (id: string) => ({
-    id,
-    listModels: async () => models,
-    peekModels: () => models,
-    doctor: async () => ({ ok: true, version: 'fixture' }),
-    loginStatus: async () => ({ state: 'signedIn' }),
-  }) };
 });
 const bot = { appId: 'cli_fixture', tenant: 'feishu' as const, name: 'fixture', createdAt: 1, registrationId: 'original' };
 beforeAll(() => writeFile(paths.botsFile, JSON.stringify({ version: 1, bots: [bot] })));
