@@ -85,7 +85,7 @@ export function leafActions(item: Pick<MemoryItem, 'state' | 'trust'>, kind: Mem
   if (item.state === 'archived') return [{action: 'restore', label: '恢复'}, {action: 'purge', label: '彻底删除'}];
   return [
     {action: 'move-branch', label: '移到分支…'},
-    ...(kind === 'project' && item.trust === 'untrusted' ? [{action: 'trust' as const, label: '点成可信'}] : []),
+    ...(kind === 'project' && item.trust === 'untrusted' ? [{action: 'trust' as const, label: '设为可信'}] : []),
     ...(kind === 'project' ? [{action: 'to-bot' as const, label: '移到 Bot 记忆'}] : [{action: 'to-project' as const, label: backTo ? `移回项目「${backTo}」` : '移到项目…'}]),
     {action: 'delete', label: '删除'},
   ];
@@ -131,7 +131,7 @@ export function sourceLines(item: MemoryItem, names: {bot: (id: string) => strin
     ...(item.lastEditedBy ? [`${roleLabel[item.lastEditedBy.actorRole]} ${when(item.lastEditedBy.at)} 改过`] : []),
     ...(source.downgraded ? [downgradeText[source.downgraded]] : []),
     ...(source.via === 'promoted' || source.via === 'moved' ? [source.via === 'promoted' ? '从项目记忆移来' : '从 Bot 记忆移来'] : []),
-    ...(item.trust === 'untrusted' ? ['待确认：点成可信之前不会发给决策模型'] : []),
+    ...(item.trust === 'untrusted' ? ['已保存，仅作参考；设为可信之前不会发给决策模型，也不能据此执行动作。'] : []),
   ];
 }
 
