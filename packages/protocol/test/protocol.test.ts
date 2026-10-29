@@ -172,10 +172,11 @@ describe("pinned contract extraction", () => {
     expect(save("response", {noMention:true})).toBe(true);
     expect(save("compact", {autoCompact:false})).toBe(false);
   });
-  it('accepts speed tier edits for groups and sessions, and rejects unknown tiers', () => {
+  it('accepts three session speed tiers without group inheritance', () => {
     const save = (scope: object, tier: string) => requestSchema.safeParse({ type: 'request', id: 'speed', method: 'settings', payload: { type: 'save', edit: { scope, section: 'speed', revision: 'r1', patch: { tier } } } }).success;
     expect(save({ kind: 'project', botId: 'cli_fixture', projectName: 'fixture' }, 'ultrafast')).toBe(true);
-    expect(save({ kind: 'session', botId: 'cli_fixture', threadId: 'omt_fixture' }, 'inherit')).toBe(true);
+    for (const tier of ['standard', 'fast', 'ultrafast']) expect(save({ kind: 'session', botId: 'cli_fixture', threadId: 'omt_fixture' }, tier)).toBe(true);
+    expect(save({ kind: 'session', botId: 'cli_fixture', threadId: 'omt_fixture' }, 'inherit')).toBe(false);
     expect(save({ kind: 'session', botId: 'cli_fixture', threadId: 'omt_fixture' }, 'turbo')).toBe(false);
   });
   it('accepts global title settings and one-provider legacy input without exposing legacy in views', () => {

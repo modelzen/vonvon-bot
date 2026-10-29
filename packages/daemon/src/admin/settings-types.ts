@@ -30,6 +30,7 @@ export type ModelSelection = {
   custom?: boolean;
 };
 export type SpeedSetting = { tier: 'inherit' | 'standard' | 'fast' | 'ultrafast' };
+export type SessionSpeedSetting = { tier: 'standard' | 'fast' | 'ultrafast' };
 /** The judge model of a layer; group `default` follows the host while Bot `default` removes its override. */
 export type JudgeSelection = {
   kind: 'default';
@@ -155,7 +156,7 @@ export interface SessionSections {
   model: {
     selection: ModelSelection;
   };
-  speed: SpeedSetting;
+  speed: SessionSpeedSetting;
 }
 export interface HostSections {
   execution: {
@@ -361,6 +362,7 @@ export interface ModelQuery {
   botId: string;
   backend: string;
   purpose: 'project' | 'session' | 'comments' | 'titles' | 'judge';
+  threadId?: string;
 }
 export interface ModelCatalog {
   backend: string;

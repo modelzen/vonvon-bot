@@ -1,4 +1,4 @@
-import {RefreshCw} from 'lucide-react';
+import {RefreshCw, Zap} from 'lucide-react';
 import {useClient, useShellCapabilities} from '../client-context';
 import type {VonvonClient} from '@vonvon/client/browser';
 import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
@@ -457,11 +457,13 @@ export function Catalog({
   botId,
   backend,
   purpose,
+  threadId,
   children,
 }: {
   botId: AgentId;
   backend: string;
   purpose: "project" | "session" | "comments" | "titles" | "judge";
+  threadId?: string;
   children: (catalog: ModelCatalog | undefined) => ReactNode;
 }) {
   const client = useClient();
@@ -469,31 +471,60 @@ export function Catalog({
   const [error, setError] = useState<string>();
   const [attempt, setAttempt] = useState(0);
   const [loading, setLoading] = useState(true);
+  const queryKey = JSON.stringify([botId, backend, purpose, threadId]);
+  const previousQuery = useRef<string | undefined>(undefined);
+  const lastRefresh = useRef(0);
+  const inFlight = useRef(false);
   useEffect(() => {
     let active = true;
-    setCatalog(undefined);
+    if (previousQuery.current !== queryKey) setCatalog(undefined);
+    previousQuery.current = queryKey;
     setError(undefined);
     setLoading(true);
+    inFlight.current = true;
+    lastRefresh.current = Date.now();
     void client
-      .settings({ type: "models", query: { botId, backend, purpose } })
+      .settings({ type: "models", query: { botId, backend, purpose, ...(threadId ? {threadId} : {}) } })
       .then((reply) => {
         if (!active) return;
         if (reply.kind === "models") setCatalog(reply.catalog);
-        else
+        else {
+          setCatalog(undefined);
           setError(
             reply.kind === "refused" ? reply.message : "模型目录暂不可用。",
           );
+        }
       })
       .catch((failure: unknown) => {
-        if (active)
+        if (active) {
+          setCatalog(undefined);
           setError(
             failure instanceof Error ? failure.message : "模型目录暂不可用。",
           );
-      }).finally(() => { if (active) setLoading(false); });
+        }
+      }).finally(() => { if (active) {setLoading(false); inFlight.current = false;} });
     return () => {
       active = false;
     };
-  }, [client, botId, backend, purpose, attempt]);
+  }, [client, botId, backend, purpose, threadId, queryKey, attempt]);
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    const refresh = () => {
+      if (document.visibilityState !== 'visible' || inFlight.current || Date.now() - lastRefresh.current < 1000) return;
+      setAttempt(value => value + 1);
+    };
+    const onVisible = () => {if (document.visibilityState === 'visible') refresh();};
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', onVisible);
+    const timer = window.setInterval(() => {
+      if (Date.now() - lastRefresh.current >= 5 * 60_000) refresh();
+    }, 60_000);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.clearInterval(timer);
+    };
+  }, [queryKey]);
   const unavailable = catalog && catalog.state !== "ready";
   return (
     <>
@@ -517,6 +548,7 @@ export function ModelChoice({
   catalog,
   disabled,
   allowCustom,
+  speedControl,
 }: {
   value: ModelSelection;
   onChange: (value: ModelSelection) => void;
@@ -524,6 +556,7 @@ export function ModelChoice({
   disabled: boolean;
   /** offer「自定义模型 ID…」: a hand-typed id the catalog does not list (3.11) */
   allowCustom?: boolean;
+  speedControl?: ReactNode;
 }) {
   const model = value.kind === "explicit" ? value.model : "";
   const listed = catalog?.models.filter((item) => !item.hidden) ?? [];
@@ -551,7 +584,7 @@ export function ModelChoice({
               ? "当前为后端提供的回退目录，请确认选中的模型可用。"
               : undefined
         }
-        trailing={
+        trailing={<div className="settings-model-controls">
           <select
             aria-label="模型"
             value={customMode ? CUSTOM_MODEL : model}
@@ -598,7 +631,8 @@ export function ModelChoice({
               <option value={CUSTOM_MODEL}>自定义模型 ID…</option>
             )}
           </select>
-        }
+          {speedControl}
+        </div>}
       />
       {customMode && (
         <SettingsRow
@@ -658,52 +692,69 @@ export function ModelChoice({
     </>
   );
 }
-type SpeedTier = "inherit" | "standard" | "fast" | "ultrafast";
+type SpeedTier = "standard" | "fast" | "ultrafast";
 type SpeedSection = NonNullable<ProjectSettingsView["sections"]["speed"]>;
 const speedNames: Record<SpeedTier, string> = {
-  inherit: "Codex 默认", standard: "Standard 普通", fast: "Fast 快速", ultrafast: "Ultrafast 极速",
+  standard: "普通", fast: "Fast", ultrafast: "Ultrafast",
 };
 
-/** The live catalog is the authority for optional speed tiers of the selected model. */
-export function SpeedChoice({section, catalog, selection, scope, disabled, onChange}: {
-  section: SpeedSection;
+/** Only confirmed tiers for the selected model appear in this compact control. */
+export function SpeedChoice({tier, catalog, selection, disabled, onChange}: {
+  tier: string;
   catalog: ModelCatalog | undefined;
   selection: ModelSelection;
-  scope: "project" | "session";
   disabled: boolean;
   onChange: (tier: SpeedTier) => void;
 }) {
-  const model = catalog?.models.find(item => selection.kind === "explicit" ? item.id === selection.model : item.isDefault);
-  const available = catalog?.state === "ready" && model ? new Set(model.serviceTiers?.map(tier => tier.id) ?? []) : undefined;
-  const current = section.stored.tier;
-  const inherited = scope === "session"
-    ? current === "inherit" ? `跟随群设置（${speedNames[section.effective.tier]}）` : "跟随群设置"
-    : "使用 Codex 默认速度";
-  const options: SpeedTier[] = ["inherit", "standard", "fast", "ultrafast"];
-  const unsupported = current !== "inherit" && current !== "standard" && !available?.has(current);
-  return <>
-    <SettingsRow title="响应速度" description="加速档位消耗更多额度；下一次发起任务生效，当前任务不变。" trailing={<select
-      aria-label={scope === "session" ? "话题响应速度" : "群默认响应速度"}
-      value={current} disabled={disabled}
-      onChange={event => {const tier = options.find(value => value === event.target.value); if (tier) onChange(tier);}}>
-      {options.map(tier => <option key={tier} value={tier} disabled={tier !== "inherit" && tier !== "standard" && !available?.has(tier)}>
-        {tier === "inherit" ? inherited : speedNames[tier]}{tier === current && unsupported ? "（当前模型不支持，已保存）" : ""}
-      </option>)}
-    </select>}/>
-    {!available && <p className="gd-model-compact-note" role="status">{catalog?.state === "ready" ? "当前模型未列在目录中，可切换普通或继承；读取目录后可选加速。" : "可切换普通或继承；读取目录后可选加速。"}</p>}
-  </>;
+  const menu = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const dismissOutside = (event: PointerEvent) => {
+      if (menu.current?.open && !menu.current.contains(event.target as Node)) menu.current.open = false;
+    };
+    const dismissEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || !menu.current?.open) return;
+      event.preventDefault();
+      menu.current.open = false;
+      menu.current.querySelector('summary')?.focus();
+    };
+    document.addEventListener('pointerdown', dismissOutside);
+    document.addEventListener('keydown', dismissEscape);
+    return () => {document.removeEventListener('pointerdown', dismissOutside); document.removeEventListener('keydown', dismissEscape);};
+  }, []);
+  const model = catalog?.state === 'ready' && catalog.models.find(item => selection.kind === 'explicit' ? !selection.custom && item.id === selection.model : item.isDefault);
+  const options = (['fast', 'ultrafast'] as const).filter(item => model && model.serviceTiers?.some(allowed => allowed.id === item));
+  if (!options.length) return null;
+  const active = options.find(item => item === tier);
+  return <details ref={menu} className="settings-speed-menu">
+    <summary aria-label={`响应速度：${active ? speedNames[active] : '普通'}`} title="响应速度" aria-disabled={disabled} onClick={event => {if (disabled) event.preventDefault();}}>
+      <Zap size={15} aria-hidden="true" fill={active ? 'currentColor' : 'none'}/>
+      {active && <span className="settings-speed-active">{speedNames[active]}</span>}
+    </summary>
+    <div className="settings-speed-options" role="group" aria-label="响应速度">
+      {(['standard', ...options] as SpeedTier[]).map(option => <button type="button" key={option} disabled={disabled} aria-pressed={(active ?? 'standard') === option}
+        onClick={event => {onChange(option); event.currentTarget.closest('details')?.removeAttribute('open');}}>
+        <span>{speedNames[option]}</span>{option === (active ?? 'standard') && <span aria-hidden="true">✓</span>}
+      </button>)}
+      <p>加速会消耗更多额度；下次任务生效。</p>
+    </div>
+  </details>;
 }
 
-export function SpeedEditor({section, catalog, selection, scope, save}: {
+export function SpeedEditor({section, catalog, selection, disabled, save}: {
   section: SpeedSection;
   catalog: ModelCatalog | undefined;
   selection: ModelSelection;
-  scope: "project" | "session";
+  disabled?: boolean;
   save: (patch: {tier?: SpeedTier}, revision: string) => Promise<SettingsReply>;
 }) {
-  return <Editor title="响应速度" section={section} autoSave save={save}
-    render={(draft, _set, disabled, commit) => <SpeedChoice section={{...section, stored: draft}} catalog={catalog} selection={selection} scope={scope}
-      disabled={disabled} onChange={tier => void commit({tier})}/>}/>;
+  const [pending, setPending] = useState(false);
+  const [failure, setFailure] = useState<string>();
+  return <span className="settings-speed-control">
+    <SpeedChoice tier={section.effective.tier} catalog={catalog} selection={selection} disabled={disabled || pending || section.access.kind === 'readonly'}
+      onChange={tier => {if (tier === section.stored.tier) return; setPending(true); setFailure(undefined); void save({tier}, section.revision)
+        .then(reply => {setFailure(errorText(reply));}).catch(error => setFailure(error instanceof Error ? error.message : '切换失败。')).finally(() => setPending(false));}}/>
+    {failure && <span className="settings-speed-error" role="alert">{failure}</span>}
+  </span>;
 }
 function ActionNotice({ message }: { message: string | undefined }) {
   return message ? (
@@ -1482,6 +1533,7 @@ function SessionPanel({
         botId={scope.botId}
         backend={view.identity.backend}
         purpose="session"
+        threadId={scope.threadId}
       >
         {(catalog) => (<>
           <Editor
@@ -1508,16 +1560,18 @@ function SessionPanel({
                 catalog={catalog}
                 disabled={disabled}
                 allowCustom
+                speedControl={view.identity.backend === 'codex-appserver' && view.sections.speed &&
+                  <SpeedEditor section={view.sections.speed} catalog={catalog} selection={draft.selection}
+                    disabled={disabled || JSON.stringify(draft.selection) !== JSON.stringify(model.stored.selection)}
+                    save={async (patch, revision) => {
+                      const reply = await client.settings({type: 'save', edit: {scope, section: 'speed', revision, patch}});
+                      if (reply.kind === 'saved' && reply.result.kind === 'saved') await refresh();
+                      return reply;
+                    }}/>
+                }
               />
             )}
           />
-          {view.identity.backend === "codex-appserver" && view.sections.speed &&
-            <SpeedEditor section={view.sections.speed} catalog={catalog} selection={model.effective.selection} scope="session"
-              save={async (patch, revision) => {
-                const reply = await client.settings({type: "save", edit: {scope, section: "speed", revision, patch}});
-                if (reply.kind === "saved" && reply.result.kind === "saved") await refresh();
-                return reply;
-              }}/>}
         </>)}
       </Catalog>
     </>

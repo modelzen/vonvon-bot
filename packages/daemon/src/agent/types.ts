@@ -622,6 +622,8 @@ export interface AgentBackend {
    * {@link doctor}, so it is kept out of it (callers race doctor() against 3 s). */
   loginStatus?(opts?: { refresh?: boolean }): Promise<BackendLogin>;
   listModels(): Promise<ModelInfo[]>;
+  /** Account-confirmed model tiers constrained by the effective session configuration. */
+  listModelsForCwd?(cwd: string): Promise<ModelInfo[]>;
   /** recent codex threads under `cwd`, newest first (for resume picker) */
   listThreads(cwd: string, limit?: number): Promise<ThreadSummary[]>;
   /**

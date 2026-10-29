@@ -392,7 +392,7 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
     run.turns[0]!.resolve();
     await until(() => expect(fake.log.info).toHaveBeenCalledWith('card', 'final', expect.anything()));
     await o.onMessage(message('/goal finish the work', { threadId }));
-    await until(() => expect(runGoal).toHaveBeenCalledWith(expect.stringContaining('finish the work'), { serviceTier: undefined }));
+    await until(() => expect(runGoal).toHaveBeenCalledWith(expect.stringContaining('finish the work'), { serviceTier: 'standard' }));
     run.turns[1]!.resolve();
   });
 

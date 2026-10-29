@@ -1,52 +1,42 @@
-import {expect, it, vi} from 'vitest';
+import {expect, it} from 'vitest';
 import {createElement} from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import type {ModelCatalog} from '@vonvon/protocol';
-import {SpeedChoice, SpeedEditor} from '../src/settings/SettingsPanel';
+import {SpeedChoice} from '../src/settings/SettingsPanel';
 
-const section = (stored: 'inherit' | 'standard' | 'fast' | 'ultrafast', effective = stored) => ({
-  stored: {tier: stored}, effective: {tier: effective}, revision: 'r1', access: {kind: 'writable' as const}, apply: [],
-});
 const catalog: ModelCatalog = {backend: 'codex-appserver', state: 'ready', source: 'backend-provided', observedAt: '2026-10-29T00:00:00Z', titleEfforts: [], models: [
-  {id: 'standard-model', displayName: 'Standard model', description: '', supportedEfforts: [], defaultEffort: 'none', isDefault: true, hidden: false, serviceTiers: [{id: 'standard', name: 'Standard', description: ''}, {id: 'fast', name: 'Fast', description: ''}]},
-  {id: 'full-model', displayName: 'Full model', description: '', supportedEfforts: [], defaultEffort: 'none', isDefault: false, hidden: false, serviceTiers: [{id: 'standard', name: 'Standard', description: ''}, {id: 'fast', name: 'Fast', description: ''}, {id: 'ultrafast', name: 'Ultrafast', description: ''}]},
+  {id: 'plain', displayName: 'Plain', description: '', supportedEfforts: [], defaultEffort: 'none', isDefault: true, hidden: false, serviceTiers: [{id: 'standard', name: 'Standard', description: ''}]},
+  {id: 'fast', displayName: 'Fast', description: '', supportedEfforts: [], defaultEffort: 'none', isDefault: false, hidden: false, serviceTiers: [{id: 'standard', name: 'Standard', description: ''}, {id: 'fast', name: 'Fast', description: ''}]},
+  {id: 'full', displayName: 'Full', description: '', supportedEfforts: [], defaultEffort: 'none', isDefault: false, hidden: false, serviceTiers: [{id: 'standard', name: 'Standard', description: ''}, {id: 'fast', name: 'Fast', description: ''}, {id: 'ultrafast', name: 'Ultrafast', description: ''}]},
 ]};
-const show = (value = section('inherit'), source: ModelCatalog | undefined = catalog, model = 'standard-model', scope: 'project' | 'session' = 'project') =>
-  renderToStaticMarkup(createElement(SpeedChoice, {section: value, catalog: source, selection: {kind: 'explicit', model, effort: 'none'}, scope, disabled: false, onChange: () => {}}));
+const show = (model: string, tier = 'standard', source: ModelCatalog | undefined = catalog) => renderToStaticMarkup(createElement(SpeedChoice, {
+  tier, catalog: source, selection: {kind: 'explicit', model, effort: 'none'}, disabled: false, onChange: () => {},
+}));
 
-it('uses the live model catalog and keeps unsupported saved tiers visible', () => {
-  const normal = show();
-  expect(normal).toContain('aria-label="群默认响应速度"');
-  expect(normal).toContain('<option value="fast">Fast 快速</option>');
-  expect(normal).toContain('<option value="ultrafast" disabled="">Ultrafast 极速</option>');
-  expect(show(section('ultrafast'))).toContain('Ultrafast 极速（当前模型不支持，已保存）');
-  expect(show(section('inherit'), catalog, 'full-model')).toContain('<option value="ultrafast">Ultrafast 极速</option>');
-  const missing = show(section('fast'), {...catalog, state: 'unavailable', models: []});
-  expect(missing).toContain('<select aria-label="群默认响应速度">');
-  expect(missing).toContain('<option value="standard">Standard 普通</option>');
-  expect(missing).toContain('<option value="inherit">使用 Codex 默认速度</option>');
-  expect(missing).toContain('可切换普通或继承；读取目录后可选加速');
-  expect(missing).toContain('Fast 快速（当前模型不支持，已保存）');
+it('hides the lightning control without confirmed acceleration for the selected model', () => {
+  expect(show('plain')).toBe('');
+  expect(show('missing')).toBe('');
+  expect(show('fast', 'fast', {...catalog, state: 'fallback'})).toBe('');
+  expect(show('fast', 'fast', {...catalog, state: 'unavailable'})).toBe('');
+  const customMatchingNative = renderToStaticMarkup(createElement(SpeedChoice, {
+    tier: 'fast', catalog, selection: {kind: 'explicit', model: 'fast', effort: 'none', custom: true}, disabled: false, onChange: () => {},
+  }));
+  expect(customMatchingNative).toBe('');
 });
 
-it('shows inherited effective speed and keeps the choice independent of model and effort', () => {
-  const html = show(section('inherit', 'fast'), catalog, 'standard-model', 'session');
-  expect(html).toContain('aria-label="话题响应速度"');
-  expect(html).toContain('跟随群设置（Fast 快速）');
-  expect(html).toContain('加速档位消耗更多额度；下一次发起任务生效，当前任务不变');
-  expect(html).not.toContain('推理强度');
-  const override = show(section('ultrafast', 'ultrafast'), catalog, 'full-model', 'session');
-  expect(override).toContain('<option value="inherit">跟随群设置</option>');
-  expect(override).not.toContain('跟随群设置（Ultrafast 极速）');
+it('offers ordinary and only confirmed acceleration tiers in a compact menu', () => {
+  const fast = show('fast');
+  expect(fast).toContain('aria-label="响应速度：普通"');
+  expect(fast).toContain('>普通</span>');
+  expect(fast).toContain('>Fast</span>');
+  expect(fast).not.toContain('Ultrafast');
+  expect(fast).not.toContain('settings-speed-active');
+  expect(show('full')).toContain('>Ultrafast</span>');
 });
 
-it.each(['project', 'session'] as const)('submits a sparse speed patch for %s', scope => {
-  const save = vi.fn(async () => ({kind: 'refused' as const, message: 'test'}));
-  const editor = SpeedEditor({section: section('inherit'), catalog, selection: {kind: 'default'}, scope, save});
-  const commit = vi.fn();
-  const choice = editor.props.render({tier: 'inherit'}, vi.fn(), false, commit);
-  choice.props.onChange('fast');
-  expect(commit).toHaveBeenCalledWith({tier: 'fast'});
-  editor.props.save({tier: 'fast'}, 'r1');
-  expect(save).toHaveBeenCalledWith({tier: 'fast'}, 'r1');
+it('labels active acceleration and presents unsupported saved speed as ordinary', () => {
+  expect(show('full', 'ultrafast')).toContain('settings-speed-active">Ultrafast</span>');
+  const unsupported = show('fast', 'ultrafast');
+  expect(unsupported).toContain('aria-label="响应速度：普通"');
+  expect(unsupported).not.toContain('Ultrafast');
 });

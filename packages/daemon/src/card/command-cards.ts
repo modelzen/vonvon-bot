@@ -24,6 +24,7 @@ export const MC = {
   model: 'model.set',
   effort: 'model.effort',
   speed: 'model.speed',
+  speedOpen: 'model.speed.open',
   custom: 'model.custom',
 } as const;
 
@@ -60,9 +61,10 @@ export interface ModelCardState {
   requesterOpenId: string;
   models: ModelInfo[];
   model: string;
+  modelCustom?: boolean;
   effort: ReasoningEffort;
   serviceTier?: ServiceTier;
-  inheritedServiceTier?: ServiceTier;
+  speedExpanded?: boolean;
   /** the backend whose models this card lists（写回会话前复核，防跨后端把一个后端的
    * model id 持久化进另一后端的会话——resume 时会喂坏 CLI）。旧卡缺省。 */
   backend?: string;
@@ -102,6 +104,14 @@ export function buildModelCard(state: ModelCardState): CardObject {
   const canPickModel = visible.length > 1;
   const canPickEffort = efforts.length > 0;
   const curLabel = cur ? `**${cur.displayName}**` : `${modelIdCode(state.model)}（手填）`;
+  const supported = cur?.serviceTiers ?? [];
+  const showSpeed = state.backend === 'codex-appserver' && !state.modelCustom
+    && supported.some(item => item.id === 'fast' || item.id === 'ultrafast');
+  const currentSpeed = state.serviceTier && supported.some(item => item.id === state.serviceTier)
+    ? state.serviceTier : 'standard';
+  const speedButton = showSpeed
+    ? { ...button(currentSpeed === 'standard' ? '⚡' : currentSpeed === 'fast' ? '⚡ Fast' : '⚡ Ultrafast', { a: MC.speedOpen }), size: 'tiny', type: 'text' }
+    : undefined;
 
   const elements: CardElement[] = [md('🧠 **模型 / 推理强度**')];
 
@@ -131,29 +141,20 @@ export function buildModelCard(state: ModelCardState): CardObject {
         }),
       );
     }
+    if (speedButton) controls.push(speedButton);
     elements.push(actions(controls));
     // 只有一个维度可调时，给另一维度一句说明（避免「为什么只有一个下拉」的困惑）。
     if (canPickModel && !canPickEffort) {
       elements.push(note('该后端不调节推理强度（思考由模型自动调度，无 Codex 那样的 effort 档）'));
     }
   } else {
-    elements.push(hr(), md(`当前模型：${curLabel}`));
+    elements.push(hr(), speedButton ? actions([md(`当前模型：${curLabel}`), speedButton]) : md(`当前模型：${curLabel}`));
   }
 
-  if (state.backend === 'codex-appserver') {
-    const supported = cur?.serviceTiers ?? [];
-    const speeds: { label: string; value: string }[] = [
-      { label: `跟随群设置（${serviceTierLabel(state.inheritedServiceTier)}）`, value: 'inherit' },
-      { label: serviceTierLabel('standard'), value: 'standard' },
-      ...(['fast', 'ultrafast'] as const).filter(tier => supported.some(item => item.id === tier)).map(tier => ({ label: serviceTierLabel(tier), value: tier })),
-    ];
-    if (state.serviceTier && !speeds.some(item => item.value === state.serviceTier)) {
-      speeds.push({ label: `${serviceTierLabel(state.serviceTier)}（已保存，当前不可用）`, value: state.serviceTier });
-    }
-    elements.push(hr(), md('⚡ **响应速度**'), actions([selectStatic({
-      actionId: MC.speed, placeholder: '选择响应速度', initial: state.serviceTier ?? 'inherit', options: speeds,
-    })]), note('只影响本会话，下一次发起任务生效，当前任务不变。Fast / Ultrafast 消耗更多额度。'));
-    if (!supported.some(item => item.id === 'ultrafast')) elements.push(note('当前模型目录未提供 Ultrafast；可用档位以模型和账号支持情况为准。'));
+  if (showSpeed && state.speedExpanded) {
+      const tiers = (['standard', 'fast', 'ultrafast'] as const).filter(tier => tier === 'standard' || supported.some(item => item.id === tier));
+      elements.push(actions(tiers.map(tier => ({ ...button(tier === 'standard' ? '普通' : tier === 'fast' ? 'Fast' : 'Ultrafast', { a: MC.speed, tier }), size: 'tiny', type: tier === currentSpeed ? 'primary_text' : 'text' }))));
+      elements.push(note('下一次发起任务生效；Fast / Ultrafast 消耗更多额度。'));
   }
 
   if (state.allowCustom !== false) elements.push(

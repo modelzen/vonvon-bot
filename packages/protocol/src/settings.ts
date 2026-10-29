@@ -25,6 +25,7 @@ const selection = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 const speed = z.object({ tier: z.enum(["inherit", "standard", "fast", "ultrafast"]) });
+const sessionSpeed = z.object({ tier: z.enum(["standard", "fast", "ultrafast"]) });
 const title = z.discriminatedUnion("enabled", [
   z.object({ enabled: z.literal(false) }).strict(),
   z
@@ -170,7 +171,7 @@ export const projectSectionSchemas = {
     options: permissionOptionsSchema,
   }),
 };
-export const sessionSectionSchemas = { model: z.object({ selection }), speed };
+export const sessionSectionSchemas = { model: z.object({ selection }), speed: sessionSpeed };
 export const hostSectionSchemas = {
   execution: z.object({ codexBin: z.string().nullable() }),
   judge: z.object({ defaultProvider: z.enum(['codex-appserver', 'claude-agent', 'typesafe']).optional(), byProvider: z.record(z.string(), z.object({ model: z.string().trim().min(1).max(1000), effort: effort.optional(), custom: z.boolean().optional() })) }),
@@ -421,7 +422,7 @@ const editablePatches: Record<
       value.partial().strict(),
     ]),
   ),
-  session: { model: sessionSectionSchemas.model.partial().strict(), speed: speed.partial().strict() },
+  session: { model: sessionSectionSchemas.model.partial().strict(), speed: sessionSpeed.partial().strict() },
   host: { execution: hostSectionSchemas.execution.partial().strict(), judge: hostSectionSchemas.judge.partial().strict() },
 };
 // Old clients may submit one backend's title settings; the owner promotes it to
@@ -546,6 +547,7 @@ export const modelQuerySchema = z
     botId: agentIdSchema,
     backend: z.string().trim().min(1).max(1000),
     purpose: z.enum(["project", "session", "comments", "titles", "judge"]),
+    threadId: z.string().trim().min(1).max(1000).optional(),
   })
   .strict();
 export type ModelQuery = z.infer<typeof modelQuerySchema>;

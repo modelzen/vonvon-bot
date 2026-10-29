@@ -36,7 +36,7 @@ import { runCodexJudge } from './judge-process';
 import { CodexFullOnlyError, codexConfinesReads, codexFullOnlyReason, codexTierUnavailable } from './full-only';
 import { cachedCodexVersion, codexVersionAsync, resolveCodexBin } from './locate';
 import type { ServerNotification, Thread, ThreadItem, Turn, TurnStartResponse } from './protocol';
-import { codexModelCacheKey, discoverCodexModels } from './models';
+import { codexModelCacheKey, codexRemoteCacheKey, constrainCodexModelTiers, discoverCodexModels } from './models';
 
 const APPROVAL_POLICY = 'never';
 
@@ -84,7 +84,7 @@ export function codexSessionParams(opts: StartThreadOptions, version: string | n
     approvalPolicy: APPROVAL_POLICY,
     developerInstructions: profile.instructions,
     ...(opts.model ? { model: opts.model } : {}),
-    ...(opts.serviceTier !== undefined ? { serviceTier: opts.serviceTier === 'standard' ? null : opts.serviceTier } : {}),
+    ...(opts.serviceTier !== undefined ? { serviceTier: opts.serviceTier === 'standard' ? null : opts.serviceTier === 'fast' ? 'priority' : opts.serviceTier } : {}),
     config: {
       ...(typeof sandbox.config === 'object' ? sandbox.config : {}),
       projects: { [opts.cwd]: { trust_level: 'trusted' } },
@@ -328,7 +328,7 @@ class CodexThread implements AgentThread {
       input: toUserInput(input),
     };
     if (self.model) params.model = self.model;
-    if (turn?.serviceTier !== undefined) params.serviceTier = turn.serviceTier === 'standard' ? null : turn.serviceTier;
+    if (turn?.serviceTier !== undefined) params.serviceTier = turn.serviceTier === 'standard' ? null : turn.serviceTier === 'fast' ? 'priority' : turn.serviceTier;
     else if (restoreNativeTier) params.serviceTier = self.nativeServiceTier;
     // A configured custom model may have no native effort metadata. Leave its
     // reasoning settings to Codex instead of sending our generic medium fallback.
@@ -756,6 +756,8 @@ export class CodexAppServerBackend implements AgentBackend {
   readonly displayName = 'Codex (app-server)';
   private modelCache: ModelInfo[] | null = null;
   private modelCacheKey = '';
+  private modelCacheExpiresAt = 0;
+  private modelCacheEvidenceKey = '';
   private modelCatalogPath: string | undefined;
 
   async listSkills({ cwd }: { cwd: string; directories?: string[] }): Promise<AgentSkill[]> {
@@ -813,14 +815,17 @@ export class CodexAppServerBackend implements AgentBackend {
     if (!bin) { this.modelCache = null; return []; }
     const priorCatalogPath = this.modelCatalogPath;
     const key = codexModelCacheKey(bin, priorCatalogPath);
-    if (this.modelCache && this.modelCacheKey === key) return this.modelCache;
+    if (this.modelCache && this.modelCacheKey === key && Date.now() < this.modelCacheExpiresAt
+      && this.modelCacheEvidenceKey === codexRemoteCacheKey()) return this.modelCache;
     this.modelCache = null;
     try {
-      const { models, catalogPath } = await discoverCodexModels(bin);
+      const { models, catalogPath, expiresAt } = await discoverCodexModels(bin);
       if (codexModelCacheKey(bin, priorCatalogPath) !== key) throw new Error('Codex configuration changed during discovery');
       this.modelCache = models;
       this.modelCatalogPath = catalogPath;
       this.modelCacheKey = codexModelCacheKey(bin, catalogPath);
+      this.modelCacheExpiresAt = expiresAt;
+      this.modelCacheEvidenceKey = codexRemoteCacheKey();
       return models;
     } catch {
       // Native config errors can quote lines containing private API settings.
@@ -829,9 +834,19 @@ export class CodexAppServerBackend implements AgentBackend {
     }
   }
 
-  /** The cached `model/list`, or undefined; never fetches (the judge path must not wait for it). */
+  /** Apply the actual session configuration without expanding account access. */
+  async listModelsForCwd(cwd: string): Promise<ModelInfo[]> {
+    const models = await this.listModels();
+    const bin = resolveCodexBin();
+    return bin && this.peekModels() ? constrainCodexModelTiers(bin, models, cwd)
+      : models.map(({serviceTiers: _tiers, ...model}) => model);
+  }
+
+  /** The cached `model/list`, or undefined; never fetches. */
   peekModels(): ModelInfo[] | undefined {
-    return this.modelCache ?? undefined;
+    const bin = resolveCodexBin();
+    return bin && Date.now() < this.modelCacheExpiresAt && this.modelCacheKey === codexModelCacheKey(bin, this.modelCatalogPath)
+      && this.modelCacheEvidenceKey === codexRemoteCacheKey() ? this.modelCache ?? undefined : undefined;
   }
 
   private threadEffortSupport(): (model: string) => boolean {

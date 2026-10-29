@@ -354,6 +354,9 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       };
     try {
       const backend = deps.backendFor(query.backend);
+      const target = query.threadId ? await readSession(query.threadId) : undefined;
+      if (query.threadId && (!target || target.backend !== query.backend))
+        return { ...base, models: [], state: 'unavailable', error: '会话不存在或后端已变化' };
       if (deps.offline) { const cached = await offlineModelCatalog(query.backend); const peeked = backend.peekModels?.(); return { ...base, models: peeked?.length ? peeked : cached.models, state: 'fallback', observedAt: cached.observedAt, error: cached.message }; }
       const [status] = await probeBackends([backend]);
       if (!status?.probe?.ok)
@@ -363,14 +366,16 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           state: 'unavailable',
           error: '后端当前不可用，请检查安装或登录状态'
         };
-      const listed = await backend.listModels();
+      const listed = target?.cwd && backend.listModelsForCwd
+        ? await backend.listModelsForCwd(target.cwd)
+        : await backend.listModels();
       // Native backends also return a static list on discovery failure. Only their
       // successful discovery populates peekModels; fallback must not become a
       // confirmed catalog or overwrite a previously confirmed disk snapshot.
       const native = backend.peekModels?.();
       if (native?.length) {
         await rememberModelCatalog(query.backend, native, base.observedAt).catch(() => undefined);
-        return { ...base, models: native, state: 'ready' };
+        return { ...base, models: target ? listed : native, state: 'ready' };
       }
       return { ...base, models: listed, state: 'fallback' };
     }
@@ -412,11 +417,16 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       throw new SettingsInputError('模型或推理强度不在当前后端支持列表中，请刷新模型列表');
     return value;
   }
-  async function validateSpeed(tier: T.SpeedSetting['tier'], backend: string, modelId?: string, custom = false): Promise<void> {
+  async function validateSpeed(tier: T.SpeedSetting['tier'], backend: string, modelId?: string, custom = false, cwd?: string): Promise<void> {
     if (backend !== 'codex-appserver') throw new SettingsInputError('速度档位仅支持 Codex');
     if (tier === 'inherit' || tier === 'standard') return;
     if (custom) throw new SettingsInputError('自定义模型没有可验证的速度档位');
-    const catalog = await models({ botId, backend, purpose: 'session' });
+    const provider = deps.backendFor(backend);
+    const contextual = cwd && provider.listModelsForCwd ? await provider.listModelsForCwd(cwd).catch(() => undefined) : undefined;
+    if (cwd && provider.listModelsForCwd && !contextual) throw new SettingsInputError('实时模型目录不可用，请稍后重试');
+    const catalog = contextual
+      ? { state: provider.peekModels?.()?.length ? 'ready' as const : 'fallback' as const, models: contextual }
+      : await models({ botId, backend, purpose: 'session' });
     if (catalog.state !== 'ready') throw new SettingsInputError('实时模型目录不可用，请稍后重试');
     const model = modelId ? catalog.models.find(item => item.id === modelId) : catalog.models.find(item => item.isDefault);
     if (!model || model.hidden || !model.serviceTiers?.some(item => item.id === tier))
@@ -661,7 +671,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         selection: await effectiveSelection(backendId, prefer?.model, prefer?.effort, prefer?.custom)
       };
       sections.speed!.effective = { tier: p.serviceTier ?? 'inherit' };
-      sections.speed!.apply = effect(['tier'], 'next-turn', '仍继承本群速度的会话在下一次发起任务时使用新设置，当前任务不变');
+      sections.speed!.apply = effect(['tier'], 'next-turn', '旧版群速度设置已停用；请在群主会话中选择速度');
       sections.judge.effective = judgeEffective(backendId, { group: storedJudge(p.judge), bot: storedJudge(cfg.preferences?.judge) });
       // a decision model gets none of a backend's extras
       const judgeSelection = sections.judge.effective.selection;
@@ -705,6 +715,15 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       const s = await readSession(scope.threadId);
       if (!s)
         throw new SettingsInputError('会话不存在或已被删除');
+      let effectiveSpeed: T.SessionSpeedSetting['tier'] = s.serviceTier ?? 'standard';
+      if (s.serviceTier && s.serviceTier !== 'standard') {
+        const { model: storedModel, serviceTier: storedTier } = s;
+        const catalog = s.backend === 'codex-appserver'
+          ? await models({ botId, backend: s.backend, purpose: 'session', threadId: s.threadId })
+          : undefined;
+        const selected = catalog?.state === 'ready' ? catalog.models.find(item => item.id === storedModel && !item.hidden) : undefined;
+        if (!selected?.serviceTiers?.some(item => item.id === storedTier)) effectiveSpeed = 'standard';
+      }
       const project = (await (deps.listProjects ?? listProjects)()).find(p => p.chatId === s.chatId);
       return {
         scope,
@@ -712,7 +731,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           model: makeSection({
             selection: selection(s.model, s.effort, s.modelCustom)
           }, [botId, sessionRaw(s)], access, effect(['selection'], 'next-turn', '下一轮对话使用新模型')),
-          speed: makeSection({ tier: s.serviceTier ?? 'inherit' }, [botId, sessionSpeedRaw(s)], access, effect(['tier'], 'next-turn', '下一次发起任务时使用新速度，当前任务不变'), { tier: s.serviceTier ?? project?.serviceTier ?? 'inherit' })
+          speed: makeSection({ tier: s.serviceTier ?? 'standard' }, [botId, sessionSpeedRaw(s)], access, effect(['tier'], 'next-turn', '下一次发起任务时使用新速度，当前任务不变'), { tier: effectiveSpeed })
         },
         identity: {
           backend: s.backend,
@@ -880,8 +899,6 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               p.directories = { ...p.directories, workspaces: { primary: p.cwd, additional: admittedWorkspace!.directories.filter(path => path !== p.cwd) }, repositories: admittedWorkspace!.repositories };
               break;
             case 'modelAccess': {
-              if (p.serviceTier && e.patch.backend && e.patch.backend !== 'codex-appserver')
-                throw new SettingsInputError('先把速度设为「跟随默认」，再切换到非 Codex 后端');
               const previousBackend = groupBackendId(p);
               const currentTier = groupPermission(p).tier;
               p.modelAccess = { ...original.modelAccess, ...e.patch };
@@ -895,7 +912,6 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               const supported = allowedCatalog?.find(m => m.id === p.defaultModel)?.supportedEfforts;
               const allowed = supported ? p.modelAccess.efforts.filter(effort => supported.includes(effort)) : p.modelAccess.efforts;
               if (!p.defaultEffort || !allowed.includes(p.defaultEffort)) p.defaultEffort = allowed[0];
-              if (p.serviceTier) await validateSpeed(p.serviceTier, groupBackendId(p), p.defaultModel, p.defaultModelCustom);
               break;
             }
             case 'permission': {
@@ -963,10 +979,6 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
                 p.defaultEffort = chosen.effort;
                 p.defaultModelCustom = chosen.custom === true;
               }
-              if (p.serviceTier) {
-                const prefer = resolveModelPreference({ bot: cfg.preferences, group: p }, groupBackendId(p));
-                await validateSpeed(p.serviceTier, groupBackendId(p), prefer?.model, prefer?.custom);
-              }
               break;
             }
             case 'speed': {
@@ -974,13 +986,6 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               if (!tier) throw new SettingsInputError('缺少速度档位');
               const prefer = resolveModelPreference({ bot: cfg.preferences, group: p }, groupBackendId(p));
               await validateSpeed(tier, groupBackendId(p), prefer?.model, prefer?.custom);
-              if (tier === 'fast' || tier === 'ultrafast') {
-                const inheriting = (await (deps.readSessions ?? listSessions)()).filter(s => s.chatId === p.chatId && s.backend === 'codex-appserver' && !s.serviceTier);
-                for (const s of inheriting) {
-                  const sessionPrefer = resolveModelPreference({ bot: cfg.preferences, group: p }, s.backend);
-                  await validateSpeed(tier, s.backend, s.model ?? sessionPrefer?.model, s.modelCustom === true || (!s.model && sessionPrefer?.custom === true));
-                }
-              }
               if (tier === 'inherit') delete p.serviceTier;
               else p.serviceTier = tier;
               break;
@@ -1014,9 +1019,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             if (!e.patch.tier) throw new SettingsInputError('缺少速度档位');
             const group = (await (deps.listProjects ?? listProjects)()).find(p => p.chatId === s.chatId);
             const prefer = group ? resolveModelPreference({ bot: cfg.preferences, group }, s.backend) : undefined;
-            const effectiveTier = e.patch.tier === 'inherit' ? group?.serviceTier ?? 'inherit' : e.patch.tier;
-            await validateSpeed(effectiveTier, s.backend, s.model ?? prefer?.model, s.modelCustom === true || (!s.model && prefer?.custom === true));
-            if (e.patch.tier === 'inherit') delete s.serviceTier;
+            await validateSpeed(e.patch.tier, s.backend, s.model ?? prefer?.model, s.modelCustom === true || (!s.model && prefer?.custom === true), s.cwd);
+            if (e.patch.tier === 'standard') delete s.serviceTier;
             else s.serviceTier = e.patch.tier;
             return;
           }
@@ -1030,10 +1034,14 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             delete s.modelCustom;
           else
             s.modelCustom = chosen.custom === true;
-          const inheritedTier = s.serviceTier ?? group?.serviceTier;
-          if (inheritedTier) {
-            const prefer = group ? resolveModelPreference({ bot: cfg.preferences, group }, s.backend) : undefined;
-            await validateSpeed(inheritedTier, s.backend, s.model ?? prefer?.model, s.modelCustom === true || (!s.model && prefer?.custom === true));
+          if (s.serviceTier && s.serviceTier !== 'standard') {
+            try {
+              const prefer = group ? resolveModelPreference({ bot: cfg.preferences, group }, s.backend) : undefined;
+              await validateSpeed(s.serviceTier, s.backend, s.model ?? prefer?.model, s.modelCustom === true || (!s.model && prefer?.custom === true), s.cwd);
+            } catch (error) {
+              if (!(error instanceof SettingsInputError)) throw error;
+              delete s.serviceTier;
+            }
           }
         }, commitOptions);
       }
