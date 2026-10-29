@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { paths } from '../config/paths';
-import { DEFAULT_BACKEND_ID, type ReasoningEffort } from '../agent/types';
+import { DEFAULT_BACKEND_ID, type ReasoningEffort, type ServiceTier } from '../agent/types';
 
 /**
  * A persisted session = one Feishu topic (thread) bound to a codex thread.
@@ -28,6 +28,8 @@ export interface SessionRecord {
   titleJobKey?: string;
   model?: string;
   effort?: ReasoningEffort;
+  /** Session override; omitted inherits the project's current default. */
+  serviceTier?: ServiceTier;
   /** true 表示 {@link model} 是 /model 卡或网页上手填的 id（3.11），不在模型列表里也
    * 照显示；选回列表里的模型时写 false。 */
   modelCustom?: boolean;
@@ -453,6 +455,7 @@ export async function patchSession(
     const target = rec as unknown as Record<string, unknown>;
     for (const [k, v] of Object.entries(actual)) {
       if (v !== undefined) target[k] = v;
+      else if (k === 'serviceTier') delete target[k];
     }
     rec.updatedAt = Date.now();
     await write(store);

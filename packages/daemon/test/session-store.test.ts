@@ -72,6 +72,12 @@ function titleJob(sessionId = 'cx-title'): SessionTitleJob {
 }
 
 describe('session-store', () => {
+  it('persists a session speed override and allows returning to project inheritance', async () => {
+    await upsertSession({ ...rec('speed', 'cx-speed'), serviceTier: 'ultrafast' });
+    expect((await getSession('speed'))?.serviceTier).toBe('ultrafast');
+    await patchSession('speed', { serviceTier: undefined });
+    expect((await getSession('speed'))?.serviceTier).toBeUndefined();
+  });
   it('upsert + getSession roundtrip; upsert replaces by threadId', async () => {
     await upsertSession(rec('t1', 'cx1'));
     await upsertSession(rec('t1', 'cx1b'));
