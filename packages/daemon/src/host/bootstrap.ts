@@ -4,6 +4,8 @@ import { acquireMutex, closeMutex, DataAccessError } from '../config/data-access
 import { listenerCloseUnconfirmed, observeShutdown, type ShutdownControl } from './lifecycle';
 import { readServiceCodexBin } from '../service/codex-bin';
 import { codexVersionAsync, resolveCodexBin } from '../agent/codex-appserver/locate';
+import { codexTierUnavailable } from '../agent/codex-appserver/full-only';
+import { refreshWindowsSandbox } from '../agent/codex-appserver/windows-sandbox';
 import { acquirePidLock, getPidLockInfo, isPidLockOwnerRunning, PidLockError, publishPidLock, readRunningPidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
 import { verifyPidLockOwner } from '../server/owner-verification';
 import { readStartupRegistration } from '../service/startup';
@@ -115,7 +117,11 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
     // applying the managed binary selection, without holding startup on the probe.
     try {
       const bin = resolveCodexBin();
-      if (bin) void codexVersionAsync(bin).catch(error => log.fail('daemon-startup', error, { phase: 'codex-version' }));
+      if (bin) void codexVersionAsync(bin).then(async version => {
+        if (process.platform === 'win32' && !codexTierUnavailable('qa', 'win32', version, { status: 'ready', implementation: 'mxc' })) {
+          await refreshWindowsSandbox(bin);
+        }
+      }).catch(error => log.fail('daemon-startup', error, { phase: 'codex-permissions' }));
     } catch (error) {
       log.fail('daemon-startup', error, { phase: 'codex-version' });
     }

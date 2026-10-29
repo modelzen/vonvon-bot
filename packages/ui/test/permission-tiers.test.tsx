@@ -130,3 +130,44 @@ it('selecting a tier submits only mode, including when replacing custom settings
   choices.props.onChange('write');
   expect(onChange).toHaveBeenCalledExactlyOnceWith({mode: 'write'});
 });
+
+it.each([
+  'Windows 沙箱尚未配置，请完成官方沙箱设置后重新检测。',
+  'Windows 沙箱需要更新，请更新后重新检测。',
+  'Windows MXC 沙箱探测失败，原权限保持不变。',
+  '当前 Windows 沙箱不能提供所需的读取隔离。',
+])('keeps a stored Windows restricted tier selected and gives its actual reason: %s', reason => {
+  const permission = permissionValue('qa');
+  for (const tier of permission.options.tiers) if (tier.tier !== 'full') tier.unavailable = reason;
+  permission.options.strength = reason;
+  const html = render(permission);
+  expect(radio(html, 'qa')).toContain('checked=""');
+  expect(radio(html, 'qa')).toContain('disabled=""');
+  expect(radio(html, 'write')).toContain('disabled=""');
+  expect(radio(html, 'full')).not.toContain('disabled=""');
+  expect(radio(html, 'full')).not.toContain('checked=""');
+  expect(html).toContain(reason);
+  expect(html).not.toContain('升级后就能选');
+});
+
+it.each(['qa', 'write', 'full'] as const)('renders every tier the server offers and keeps %s selected', mode => {
+  const permission = permissionValue(mode);
+  for (const tier of permission.options.tiers) delete tier.unavailable;
+  const html = render(permission);
+  for (const tier of ['qa', 'write', 'full']) {
+    expect(radio(html, tier)).not.toContain('disabled=""');
+    expect(radio(html, tier).includes('checked=""')).toBe(tier === mode);
+  }
+  expect(html).not.toContain('升级后就能选');
+});
+
+it.each(['qa', 'write', 'full'] as const)('Windows ready view offers all three tiers and keeps %s selected', mode => {
+  const permission = permissionValue(mode);
+  for (const tier of permission.options.tiers) delete tier.unavailable;
+  const html = render(permission);
+  expect(radio(html, mode)).toContain('checked=""');
+  expect(radio(html, 'qa')).not.toContain('disabled=""');
+  expect(radio(html, 'write')).not.toContain('disabled=""');
+  expect(radio(html, 'full')).not.toContain('disabled=""');
+  expect(html).not.toContain('升级后就能选');
+});
