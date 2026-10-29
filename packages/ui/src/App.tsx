@@ -82,6 +82,7 @@ import {DiagnosticsPanel} from './management/DiagnosticsPanel';
 import {SecretsPanel} from './management/SecretsPanel';
 import {UpdatePanel} from './management/UpdatePanel';
 import {DesktopUpdateProvider, useDesktopUpdate} from './desktop-update';
+import {DesktopUpdateButton} from './DesktopUpdateButton';
 
 type Modal =
   | RegisterModal
@@ -143,7 +144,9 @@ function DesktopApp() {
   const {navigate} = useDraftGuard();
   const client = useClient();
   const shell = useShellCapabilities();
-  const updateNotice = desktopUpdateNotice(useDesktopUpdate()[0]);
+  const [desktopUpdate] = useDesktopUpdate();
+  const updateNotice = desktopUpdateNotice(desktopUpdate);
+  const hasUpdateAction = Boolean(shell?.installDesktopUpdate && (desktopUpdate?.state === 'available' || desktopUpdate?.state === 'downloaded'));
   useEffect(() => shell?.onQuitRequested?.(() => navigate(() => { void shell.quit?.(); })), [shell, navigate]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchTarget, setSearchTarget] = useState<Destination>();
@@ -558,7 +561,8 @@ function DesktopApp() {
         page={page}
         view={view}
         newCounts={{bots: sumCounts(newCounts.bots), projects: sumCounts(newCounts.projects)}}
-        updateNotice={updateNotice}
+        updateNotice={hasUpdateAction ? undefined : updateNotice}
+        updateAction={<DesktopUpdateButton/>}
         title={feature?.label ?? titles[page]}
         firstUse={!snapshot.agents.length}
         onNavigate={openPage}

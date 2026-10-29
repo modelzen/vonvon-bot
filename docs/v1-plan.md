@@ -1,5 +1,7 @@
 # Vonvon Bot 第一版计划
 
+- [x] 2026-10-29 全局更新入口：owner 认可 24px 淡蓝小胶囊及工具栏最右侧的位置；自动发现后可直接下载，完成后再次点击安装并重启，保留草稿保护。工具栏与设置共用操作状态，手动更新结果进入桌面 bridge 缓存，窗口重载不再重放旧下载入口。见 [全局轻量更新入口](plans/home-update-entry.md)。本次仅提交 dev 供 owner 验收，main 由 owner 统一合入，随下一版本发布；实际签名包下载与重启仍留待候选验收。
+
 - 2026-10-28 owner 要求 Windows 本机完成候选构建和安装验收，并让 Mac 可通过 GitHub runner 使用同一流程复现；扩展 x64、ARM64 原生构建和验收报告，见 [Windows 双架构构建验收](plans/windows-build-acceptance.md)。仅提交 dev，正式发布仍交 Mac。
 
 - 2026-10-28 owner 官网重装 0.7.6 报旧文件卸载失败：已确认 0.7.5 残留注册指向缺失的卸载器。仅处理旧卸载器和应用 EXE 都不存在的当前用户记录，真实卸载失败仍中止；补齐 13 项真实 NSIS 隔离验证。见 [故障证据与下载参考](research/2026-10-28-windows-reinstall/report.md)。owner 指定仅提交 dev，发布交给 Mac；双架构下一片做。

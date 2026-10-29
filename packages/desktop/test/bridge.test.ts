@@ -419,6 +419,35 @@ describe('desktop IPC boundary', () => {
     expect(h.webContents.send).not.toHaveBeenCalled();
   });
 
+  it('replays a manual download after reload instead of the earlier automatic available result', async () => {
+    const h = harness();
+    const found = { state: 'available' as const, current: '1.0.0', latest: '1.1.0', message: '有新版本' };
+    h.bridge.publishUpdate(found);
+    await h.invoke(desktopChannels.subscribe);
+    await h.invoke(desktopChannels.installDesktopUpdate);
+    expect(h.webContents.send).toHaveBeenLastCalledWith(desktopChannels.event, {
+      type: 'update', value: expect.objectContaining({ state: 'downloaded' }),
+    });
+    h.webContents.send.mockClear();
+    await h.invoke(desktopChannels.subscribe);
+    expect(h.webContents.send).toHaveBeenCalledExactlyOnceWith(desktopChannels.event, {
+      type: 'update', value: expect.objectContaining({ state: 'downloaded' }),
+    });
+    await h.bridge.dispose();
+  });
+
+  it.each(['checkDesktopUpdate', 'retryDesktopUpdate'] as const)('retains a manual %s result and leaves it intact on failure', async action => {
+    const h = harness();
+    const found = { state: 'available' as const, current: '1.0.0', latest: '1.1.0', message: '有新版本' };
+    h.actions[action].mockResolvedValueOnce(found);
+    await h.invoke(desktopChannels[action]);
+    h.actions[action].mockRejectedValueOnce(new Error('network failed'));
+    await h.invoke(desktopChannels[action]);
+    await h.invoke(desktopChannels.subscribe);
+    expect(h.webContents.send).toHaveBeenLastCalledWith(desktopChannels.event, { type: 'update', value: found });
+    await h.bridge.dispose();
+  });
+
   it('buffers errors and quit intent until subscription, then tears down once', async () => {
     const h = harness();
     h.emitError(new Error('raw credential 0123456789'));
