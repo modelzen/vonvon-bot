@@ -112,7 +112,7 @@ export function buildModelCard(state: ModelCardState): CardObject {
   const speedButton = showSpeed
     ? {
       tag: 'button', size: 'medium', type: 'text', width: 'fill',
-      icon: { tag: 'standard_icon', token: 'speed_filled', color: currentSpeed === 'standard' ? 'grey-400' : 'orange' },
+      icon: { tag: 'standard_icon', token: 'speed_filled', color: currentSpeed === 'standard' ? 'grey-400' : currentSpeed === 'fast' ? 'yellow' : 'orange' },
       hover_tips: { tag: 'plain_text', content: `响应速度：${serviceTierLabel(currentSpeed)}；点击切换` },
       behaviors: [{ type: 'callback', value: { a: MC.speedOpen } }],
     }

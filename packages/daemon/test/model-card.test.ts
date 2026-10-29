@@ -87,7 +87,7 @@ describe('buildModelCard · 按当前模型能力自适应', () => {
     expect(JSON.stringify(expanded[1])).toContain('"tier":"fast"');
   });
 
-  it.each(['standard', 'fast', 'ultrafast'] as const)('速度 %s 使用居中的纯图标，普通变暗、加速点亮且不截断文字', serviceTier => {
+  it.each([['standard', 'grey-400'], ['fast', 'yellow'], ['ultrafast', 'orange']] as const)('速度 %s 使用居中的纯图标，普通变暗、加速点亮且不截断文字', (serviceTier, color) => {
     const models = [
       model({ id: 'sol', displayName: 'A very long model label', supportedEfforts: ['high'], serviceTiers: [
         { id: 'fast', name: 'Fast', description: '' }, { id: 'ultrafast', name: 'Ultrafast', description: '' },
@@ -106,7 +106,7 @@ describe('buildModelCard · 按当前模型能力自适应', () => {
     expect(control).not.toHaveProperty('text');
     expect(control).toMatchObject({
       tag: 'button', size: 'medium', width: 'fill',
-      icon: { tag: 'standard_icon', token: 'speed_filled', color: serviceTier === 'standard' ? 'grey-400' : 'orange' },
+      icon: { tag: 'standard_icon', token: 'speed_filled', color },
       behaviors: [{ type: 'callback', value: { a: 'model.speed.open' } }],
     });
     expect(control.hover_tips).toMatchObject({ tag: 'plain_text', content: expect.stringContaining(serviceTier === 'standard' ? 'Standard' : serviceTier === 'fast' ? 'Fast' : 'Ultrafast') });
