@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { cachedWindowsSandbox, createWindowsSandboxCache, refreshWindowsSandbox, windowsShellPath } from '../src/agent/codex-appserver/windows-sandbox';
 import { codexTierUnavailable } from '../src/agent/codex-appserver/full-only';
+import { connectGated } from '../src/agent/codex-appserver/client-pool';
 
 const fixture = vi.hoisted(() => ({
   execRaw: undefined as unknown, readiness: undefined as unknown,
@@ -11,7 +12,10 @@ const fixture = vi.hoisted(() => ({
   ownedClose: vi.fn(), clientClose: vi.fn(), connect: vi.fn(), peerClose: vi.fn(),
   peerRequest: vi.fn(), clientRequest: vi.fn(), launch: vi.fn(), clientOptions: vi.fn(),
 }));
-vi.mock('../src/agent/codex-appserver/client-pool', () => ({ binFingerprint: () => 'fixture-binary' }));
+vi.mock('../src/agent/codex-appserver/client-pool', async importOriginal => ({
+  ...await importOriginal<typeof import('../src/agent/codex-appserver/client-pool')>(),
+  binFingerprint: () => 'fixture-binary',
+}));
 vi.mock('../src/agent/owned-process', async () => {
   const { ChildProcess } = await import('node:child_process');
   const { PassThrough } = await import('node:stream');
@@ -33,10 +37,11 @@ vi.mock('../src/provider/transport/jsonrpc', () => ({
     close() { fixture.peerClose(); }
   },
   AppServerClient: class {
+    private closed = false;
     constructor(opts: unknown) { fixture.clientOptions(opts); }
-    async connect() { fixture.connect(); if (fixture.connectError) throw fixture.connectError; }
+    async connect() { if (this.closed) throw new Error('app-server client closed'); fixture.connect(); if (fixture.connectError) throw fixture.connectError; }
     async request(...args: unknown[]) { fixture.clientRequest(...args); return fixture.readiness; }
-    async close() { fixture.clientClose(); if (fixture.cleanupError) throw fixture.cleanupError; }
+    async close() { this.closed = true; fixture.clientClose(); if (fixture.cleanupError) throw fixture.cleanupError; }
   },
 }));
 
@@ -47,12 +52,44 @@ let serial = 0;
 const bin = () => `C:\\fixture\\codex-probe-${serial++}.exe`;
 beforeEach(() => {
   vi.clearAllMocks();
+  // The real first-start gate is keyed by CODEX_HOME/build, not the mock path.
+  vi.stubEnv('CODEX_HOME', join(tmpdir(), `vonvon-sandbox-probe-test-${serial++}`));
   Object.assign(fixture, { execRaw: { environmentInfo: { capabilities: { windowsMxc: true }, shell: { path: shellPath } } },
     readiness: { status: 'ready' }, execError: undefined, connectError: undefined, cleanupError: undefined, ownedCleanupError: undefined, timeout: false });
 });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
 describe('selected Windows Codex native capability probe', () => {
+  it('waits for another first initialize before opening the readiness app-server', async () => {
+    const selected = bin();
+    let finish!: () => void;
+    const first = connectGated({ connect: () => new Promise<void>(resolve => { finish = resolve; }) }, selected);
+    const probe = refreshWindowsSandbox(selected);
+    try {
+      await vi.waitFor(() => expect(fixture.clientOptions).toHaveBeenCalledOnce());
+      expect(fixture.connect).not.toHaveBeenCalled();
+      finish(); await first;
+      expect(await probe).toEqual(ready);
+      expect(fixture.connect).toHaveBeenCalledOnce();
+    } finally { finish(); await first; await probe; }
+  });
+  it('bounds gate waiting and never starts a client after the probe timed out', async () => {
+    vi.useFakeTimers();
+    const selected = bin();
+    let finish!: () => void;
+    const first = connectGated({ connect: () => new Promise<void>(resolve => { finish = resolve; }) }, selected, 60_000);
+    const probe = refreshWindowsSandbox(selected);
+    try {
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(await probe).toEqual({ status: 'probeFailed' });
+      expect(fixture.clientClose).toHaveBeenCalledOnce();
+      expect(fixture.connect).not.toHaveBeenCalled();
+      finish(); await first;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fixture.connect).not.toHaveBeenCalled();
+      expect(fixture.clientRequest).not.toHaveBeenCalled();
+    } finally { finish(); await first; await probe; }
+  });
   it('checks actual executor MXC support, selected configuration, and retains an absolute shell', async () => {
     const selected = bin();
     expect(await refreshWindowsSandbox(selected)).toEqual(ready);

@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { OwnedProviderProcess } from '../owned-process';
 import { AppServerClient, JsonRpcPeer } from '../../provider/transport/jsonrpc';
 import { binChildEnv } from '../../platform/tool-path';
-import { binFingerprint } from './client-pool';
+import { binFingerprint, connectGated, withDeadline } from './client-pool';
 import type { WindowsSandboxCapability } from './full-only';
 
 const TTL_MS = 30_000;
@@ -101,7 +101,11 @@ async function probeWindowsSandbox(bin: string): Promise<ProbeResult> {
         initializeTimeoutMs: remaining(), clientName: 'vonvon-sandbox-probe',
         configOverrides: ['windows.sandbox="mxc"', 'features.prefer_mxc=false'],
       });
-      await client.connect();
+      // Readiness is metadata, but its process initializes the same SQLite state
+      // as utility/model/session clients. Share their first-start gate. Include
+      // gate waiting in this probe's deadline; close() also prevents a timed-out
+      // waiter from starting its client after the gate eventually opens.
+      await withDeadline(connectGated(client, bin), remaining(), 'Windows sandbox connect');
       const readiness = ReadinessSchema.safeParse(await client.request('windowsSandbox/readiness', undefined, remaining()));
       if (!readiness.success) return failed();
       const capability: WindowsSandboxCapability = readiness.data.status === 'ready'

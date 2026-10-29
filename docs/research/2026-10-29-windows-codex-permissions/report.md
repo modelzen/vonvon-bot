@@ -1,6 +1,6 @@
 # Windows Codex 权限修复与实测（2026-10-29）
 
-基线：重新 fetch 后 main/dev 均为 `422f99eb6662739ff7d5bee2c69140c3a009c2ba`，产品 0.7.7。分支 `codex/fix-windows-codex-permissions`。不提升版本，不合入、不发布、不替换正式安装。自动验证和 owner 验收分别记录。
+基线：重新 fetch 后 main/dev 均为 `422f99eb6662739ff7d5bee2c69140c3a009c2ba`，产品 0.7.7。分支 `codex/fix-windows-codex-permissions`。初始交付不合入、不发布、不替换正式安装；owner 后续授权合入见文末。自动验证和 owner 验收分别记录。
 
 ## 需求与 owner 后续决定
 
@@ -61,7 +61,14 @@ Windows 11 Pro 25H2 ARM64，build 26200.9457；Node 24.22.1 x64（模拟），�
 
 未验：原生 x64、真实 macOS/Linux 内核沙箱、真实飞书 Bot/群链路、需要人工 UAC 的 legacy 初始化。legacy elevated 在生产 minimal-read profile 下实际拒绝并要求 `:root` 读取；没有为此扩大读取范围。unelevated 不满足读取隔离，不放行。缺失配置路径保护不是完成项。
 
-owner 的本次整体验收仍待明确认可。PR 只整理到 dev 的待审改动，正式发布由 owner 后续在 Mac 发起。
+owner 已在本 Windows 电脑验收候选提交 `855dad8fed076c8358f8c5699e3a296866aa6a1f`，并明确要求同步最新 dev、检查通过后合入 dev，再通知 owner 去 Mac 发布更新。正式发布仍由 owner 后续在 Mac 发起，不将 Windows 验收写成 Mac mini 验收。
+
+## owner 验收后的合入复核
+
+- 正常 merge 最新 dev `8f8ccc3d0e8d7989b57ff4f155e8271cd67e7e2a`，无冲突。同步前后本修复的 `packages/` diff 逐行一致。
+- 独立复核又发现首启并发问题：readiness app-server 绕过既有 `connectGated`，与 utility 同时初始化空 CODEX_HOME 会竞争 SQLite。用真实 0.163.0 和生产 backend/utility 的三轮并发中一轮复现 utility exit 1，stderr 为 `failed to initialize sqlite state runtime`；该问题不是 dev 同步引入。
+- readiness 探测改为复用既有首启闸，外层保留探测剩余 deadline。超时后关闭客户端，闸门稍后开放也不能再启动该客户端；不改变权限 profile 或降级策略。
+- 先补首启等待和含闸门等待的超时回归，原代码失败，修复后探测/缓存测试 22 项通过。最终准确提交的独立复核、真实并发复验、自动化和 Linux/macOS CI 结果记录于 PR #580。
 
 ## 官方依据
 
