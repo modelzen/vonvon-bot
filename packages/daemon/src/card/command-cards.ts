@@ -1,5 +1,5 @@
 import { MODEL_ID_MAX_LENGTH } from '../agent/model-id';
-import type { ModelInfo, ReasoningEffort, ThreadSummary } from '../agent/types';
+import type { ModelInfo, ReasoningEffort, ServiceTier, ThreadSummary } from '../agent/types';
 import { getSessionTitleEfforts } from '../config/schema';
 import { stripBridgeMessageEnvelope } from '../bot/session-title';
 import type { SessionMode } from '../project/registry';
@@ -23,6 +23,8 @@ import {
 export const MC = {
   model: 'model.set',
   effort: 'model.effort',
+  speed: 'model.speed',
+  speedOpen: 'model.speed.open',
   custom: 'model.custom',
 } as const;
 
@@ -59,7 +61,10 @@ export interface ModelCardState {
   requesterOpenId: string;
   models: ModelInfo[];
   model: string;
+  modelCustom?: boolean;
   effort: ReasoningEffort;
+  serviceTier?: ServiceTier;
+  speedExpanded?: boolean;
   /** the backend whose models this card lists（写回会话前复核，防跨后端把一个后端的
    * model id 持久化进另一后端的会话——resume 时会喂坏 CLI）。旧卡缺省。 */
   backend?: string;
@@ -76,6 +81,10 @@ export interface ModelCardState {
  * older stored values only lose backticks so they cannot break out. */
 export function modelIdCode(id: string): string {
   return `\`${id.replace(/`/g, '')}\``;
+}
+
+export function serviceTierLabel(tier?: ServiceTier): string {
+  return tier === 'ultrafast' ? 'Ultrafast · 极速' : tier === 'fast' ? 'Fast · 快速' : tier === 'standard' ? 'Standard · 普通' : 'Codex 默认';
 }
 
 /**
@@ -95,6 +104,14 @@ export function buildModelCard(state: ModelCardState): CardObject {
   const canPickModel = visible.length > 1;
   const canPickEffort = efforts.length > 0;
   const curLabel = cur ? `**${cur.displayName}**` : `${modelIdCode(state.model)}（手填）`;
+  const supported = cur?.serviceTiers ?? [];
+  const showSpeed = state.backend === 'codex-appserver' && !state.modelCustom
+    && supported.some(item => item.id === 'fast' || item.id === 'ultrafast');
+  const currentSpeed = state.serviceTier && supported.some(item => item.id === state.serviceTier)
+    ? state.serviceTier : 'standard';
+  const speedButton = showSpeed
+    ? { ...button(currentSpeed === 'standard' ? '⚡' : currentSpeed === 'fast' ? '⚡ Fast' : '⚡ Ultrafast', { a: MC.speedOpen }), size: 'tiny', type: 'text' }
+    : undefined;
 
   const elements: CardElement[] = [md('🧠 **模型 / 推理强度**')];
 
@@ -124,13 +141,20 @@ export function buildModelCard(state: ModelCardState): CardObject {
         }),
       );
     }
+    if (speedButton) controls.push(speedButton);
     elements.push(actions(controls));
     // 只有一个维度可调时，给另一维度一句说明（避免「为什么只有一个下拉」的困惑）。
     if (canPickModel && !canPickEffort) {
       elements.push(note('该后端不调节推理强度（思考由模型自动调度，无 Codex 那样的 effort 档）'));
     }
   } else {
-    elements.push(hr(), md(`当前模型：${curLabel}`));
+    elements.push(hr(), speedButton ? actions([md(`当前模型：${curLabel}`), speedButton]) : md(`当前模型：${curLabel}`));
+  }
+
+  if (showSpeed && state.speedExpanded) {
+      const tiers = (['standard', 'fast', 'ultrafast'] as const).filter(tier => tier === 'standard' || supported.some(item => item.id === tier));
+      elements.push(actions(tiers.map(tier => ({ ...button(tier === 'standard' ? '普通' : tier === 'fast' ? 'Fast' : 'Ultrafast', { a: MC.speed, tier }), size: 'tiny', type: tier === currentSpeed ? 'primary_text' : 'text' }))));
+      elements.push(note('下一次发起任务生效；Fast / Ultrafast 消耗更多额度。'));
   }
 
   if (state.allowCustom !== false) elements.push(

@@ -123,8 +123,8 @@ describe('single-session model display', () => {
     await o.onMessage(message('first'));
     await until(() => expect(fake.createCard).toHaveBeenCalledTimes(1));
     const selected = { model: 'chosen-model', effort: 'xhigh' };
-    expect(fake.backend.startThread).toHaveBeenCalledWith(expect.objectContaining(selected));
-    expect(run.options[0]).toEqual(selected);
+    expect(fake.backend.startThread).toHaveBeenCalledWith(expect.objectContaining({...selected,serviceTier:'standard'}));
+    expect(run.options[0]).toEqual({...selected,serviceTier:'standard'});
     expect(fake.record).toMatchObject(selected);
     const running = JSON.stringify(fake.createCard.mock.calls[0]);
     expect(running.includes('chosen-model')).toBe(display !== 'off');
@@ -135,7 +135,7 @@ describe('single-session model display', () => {
     expect(terminal.includes('chosen-model')).toBe(display === 'always');
     await o.onMessage(message('second'));
     await until(() => expect(run.options).toHaveLength(2));
-    expect(run.options[1]).toEqual(selected);
+    expect(run.options[1]).toEqual({...selected,serviceTier:'standard'});
     expect(fake.backend.startThread).toHaveBeenCalledTimes(1);
     run.turns[1]!.resolve();
   });
@@ -149,7 +149,7 @@ describe('single-session model display', () => {
     await o.onMessage(message('continue'));
     await until(() => expect(fake.createCard).toHaveBeenCalledTimes(1));
     const expected = hasSelection ? selected : { model: 'chosen-model', effort: 'xhigh' };
-    expect(run.options[0]).toEqual(expected);
+    expect(run.options[0]).toEqual({...expected,serviceTier:'standard'});
     expect(fake.record).toMatchObject(expected);
     expect(JSON.stringify(fake.createCard.mock.calls[0])).toContain(expected.model);
     run.turns[0]!.resolve();

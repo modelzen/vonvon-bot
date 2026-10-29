@@ -37,9 +37,14 @@ import { CodexFullOnlyError, codexTierUnavailable, type WindowsSandboxCapability
 import { cachedCodexVersion, codexVersionAsync, resolveCodexBin } from './locate';
 import { cachedWindowsSandbox, refreshWindowsSandbox, windowsShellPath } from './windows-sandbox';
 import type { ServerNotification, Thread, ThreadItem, Turn, TurnStartResponse } from './protocol';
-import { codexModelCacheKey, discoverCodexModels } from './models';
+import { codexModelCacheKey, codexRemoteCacheKey, constrainCodexModelTiers, discoverCodexModels } from './models';
 
 const APPROVAL_POLICY = 'never';
+
+/** Keep the existing session when Codex cannot safely apply an inherited tier. */
+export class CodexServiceTierError extends Error {
+  constructor(message: string) { super(message); this.name = 'CodexServiceTierError'; }
+}
 
 /** Build the native profile only for tiers verified on this host and version. */
 export function sandboxParams(
@@ -86,6 +91,7 @@ export function codexSessionParams(opts: StartThreadOptions, version: string | n
     approvalPolicy: APPROVAL_POLICY,
     developerInstructions: profile.instructions,
     ...(opts.model ? { model: opts.model } : {}),
+    ...(opts.serviceTier !== undefined ? { serviceTier: opts.serviceTier === 'standard' ? null : opts.serviceTier === 'fast' ? 'priority' : opts.serviceTier } : {}),
     config: {
       ...(typeof sandbox.config === 'object' ? sandbox.config : {}),
       projects: { [opts.cwd]: { trust_level: 'trusted' } },
@@ -96,6 +102,18 @@ export function codexSessionParams(opts: StartThreadOptions, version: string | n
       shell_environment_policy: { set: profile.env },
     },
   };
+}
+
+/** Snapshot the provider's own default so an in-memory fast override can later
+ * return to inheritance without accidentally retaining acceleration. */
+async function readNativeServiceTier(client: AppServerClient, cwd: string): Promise<string | null | undefined> {
+  try {
+    const reply = await client.request<{ config?: { service_tier?: unknown } }>('config/read', { includeLayers: false, cwd });
+    const tier = reply.config?.service_tier;
+    return typeof tier === 'string' ? tier : tier == null ? null : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Hard ceiling on a history read so a wedged codex can't hang the resume card. */
@@ -288,6 +306,8 @@ class CodexThread implements AgentThread {
     readonly sessionId: string,
     private model: string | undefined,
     private effort: ReasoningEffort | undefined,
+    private serviceTier: StartThreadOptions['serviceTier'],
+    private readonly nativeServiceTier: string | null | undefined,
     /** Resumed, or a turn was started: codex has it on disk. A thread that only had
      * thread/start resumes as `thread not loaded`, so it is kept until its first turn. */
     private onDisk: boolean,
@@ -306,6 +326,8 @@ class CodexThread implements AgentThread {
     // Per-turn overrides persist for subsequent turns (matches turn/start semantics).
     if (turn?.model) this.model = turn.model;
     if (turn?.effort) this.effort = turn.effort;
+    const restoreNativeTier = turn && 'serviceTier' in turn && turn.serviceTier === undefined && this.serviceTier !== undefined;
+    if (restoreNativeTier && this.nativeServiceTier === undefined) throw new CodexServiceTierError('无法读取 Codex 原生响应速度，当前会话未切换档位，请稍后重试。');
     // Liveness clock for the idle watchdog: refreshed on EVERY raw notification
     // below (even ones mapNotification drops, like command output deltas), so a
     // long-running shell command doesn't read as "wedged".
@@ -315,6 +337,8 @@ class CodexThread implements AgentThread {
       input: toUserInput(input),
     };
     if (self.model) params.model = self.model;
+    if (turn?.serviceTier !== undefined) params.serviceTier = turn.serviceTier === 'standard' ? null : turn.serviceTier === 'fast' ? 'priority' : turn.serviceTier;
+    else if (restoreNativeTier) params.serviceTier = self.nativeServiceTier;
     // A configured custom model may have no native effort metadata. Leave its
     // reasoning settings to Codex instead of sending our generic medium fallback.
     if (self.effort && (!self.model || self.supportsEffort?.(self.model) !== false)) params.effort = self.effort;
@@ -340,6 +364,7 @@ class CodexThread implements AgentThread {
       .then((result) => {
         if (!result.turn?.id) throw new Error('turn/start response missing turn id');
         activeTurnId = result.turn.id;
+        if (turn && 'serviceTier' in turn) self.serviceTier = turn.serviceTier;
         self.onDisk = true; // accepted: codex writes the turn, so the thread resumes
         return { turnId: result.turn.id };
       })
@@ -411,7 +436,13 @@ class CodexThread implements AgentThread {
     return { events: gen(), askPending: id => requests.isPending(id), stopSubagent: (id) => self.stopSubagent(id), respondToAsk: (id, resolution) => requests.respond(id, resolution), turnId: () => activeTurnId, lastActivity: () => lastActivityAt };
   }
 
-  runGoal(objective: string): AgentRun {
+  runGoal(objective: string, turn?: TurnOptions): AgentRun {
+    // Native goals have no turn/start tier override. A loaded same-client
+    // resume does not apply serviceTier; the orchestrator reopens it in a fresh
+    // app-server process before beginning a goal with a changed tier.
+    if (turn && 'serviceTier' in turn && turn.serviceTier !== this.serviceTier) {
+      throw new CodexServiceTierError('新目标的响应速度已变化，需要重新打开原会话后再开始目标。');
+    }
     const self = this;
     const requests = self.client.openRequestScope(self.sessionId, id => {
       const child = self.children.get(id);
@@ -734,6 +765,8 @@ export class CodexAppServerBackend implements AgentBackend {
   readonly displayName = 'Codex (app-server)';
   private modelCache: ModelInfo[] | null = null;
   private modelCacheKey = '';
+  private modelCacheExpiresAt = 0;
+  private modelCacheEvidenceKey = '';
   private modelCatalogPath: string | undefined;
 
   async listSkills({ cwd }: { cwd: string; directories?: string[] }): Promise<AgentSkill[]> {
@@ -813,14 +846,17 @@ export class CodexAppServerBackend implements AgentBackend {
     if (!bin) { this.modelCache = null; return []; }
     const priorCatalogPath = this.modelCatalogPath;
     const key = codexModelCacheKey(bin, priorCatalogPath);
-    if (this.modelCache && this.modelCacheKey === key) return this.modelCache;
+    if (this.modelCache && this.modelCacheKey === key && Date.now() < this.modelCacheExpiresAt
+      && this.modelCacheEvidenceKey === codexRemoteCacheKey()) return this.modelCache;
     this.modelCache = null;
     try {
-      const { models, catalogPath } = await discoverCodexModels(bin);
+      const { models, catalogPath, expiresAt } = await discoverCodexModels(bin);
       if (codexModelCacheKey(bin, priorCatalogPath) !== key) throw new Error('Codex configuration changed during discovery');
       this.modelCache = models;
       this.modelCatalogPath = catalogPath;
       this.modelCacheKey = codexModelCacheKey(bin, catalogPath);
+      this.modelCacheExpiresAt = expiresAt;
+      this.modelCacheEvidenceKey = codexRemoteCacheKey();
       return models;
     } catch {
       // Native config errors can quote lines containing private API settings.
@@ -829,9 +865,19 @@ export class CodexAppServerBackend implements AgentBackend {
     }
   }
 
-  /** The cached `model/list`, or undefined; never fetches (the judge path must not wait for it). */
+  /** Apply the actual session configuration without expanding account access. */
+  async listModelsForCwd(cwd: string): Promise<ModelInfo[]> {
+    const models = await this.listModels();
+    const bin = resolveCodexBin();
+    return bin && this.peekModels() ? constrainCodexModelTiers(bin, models, cwd)
+      : models.map(({serviceTiers: _tiers, ...model}) => model);
+  }
+
+  /** The cached `model/list`, or undefined; never fetches. */
   peekModels(): ModelInfo[] | undefined {
-    return this.modelCache ?? undefined;
+    const bin = resolveCodexBin();
+    return bin && Date.now() < this.modelCacheExpiresAt && this.modelCacheKey === codexModelCacheKey(bin, this.modelCatalogPath)
+      && this.modelCacheEvidenceKey === codexRemoteCacheKey() ? this.modelCache ?? undefined : undefined;
   }
 
   private threadEffortSupport(): (model: string) => boolean {
@@ -960,15 +1006,17 @@ export class CodexAppServerBackend implements AgentBackend {
     const params = codexSessionParams(opts, version);
     await admitCodexWorkspaceLayout(opts);
     const client = await this.spawn(opts.cwd);
+    let nativeServiceTier: string | null | undefined;
     let res: { thread: { id: string } };
     try {
+      nativeServiceTier = await readNativeServiceTier(client, opts.cwd);
       res = await client.request<{ thread: { id: string } }>('thread/start', params);
       verifyCodexWorkspaceEcho(res, opts);
     } catch (err) {
       await client.close().catch((closeErr: unknown) => log.fail('agent', closeErr, { phase: 'start-close' }));
       throw err;
     }
-    return new CodexThread(client, res.thread.id, opts.model, opts.effort, false, undefined, opts.entry,
+    return new CodexThread(client, res.thread.id, opts.model, opts.effort, opts.serviceTier, nativeServiceTier, false, undefined, opts.entry,
       this.threadEffortSupport());
   }
 
@@ -979,8 +1027,16 @@ export class CodexAppServerBackend implements AgentBackend {
     const params = codexSessionParams(opts, version);
     await admitCodexWorkspaceLayout(opts);
     const client = await this.spawn(opts.cwd);
+    let nativeServiceTier: string | null | undefined;
     let res: { thread: { id: string; turns?: Turn[] } };
     try {
+      nativeServiceTier = await readNativeServiceTier(client, opts.cwd);
+      // A saved Codex thread may carry an earlier explicit fast tier. A Vonvon
+      // session now inheriting must resume at Codex's current configured default.
+      if (opts.serviceTier === undefined) {
+        if (nativeServiceTier === undefined) throw new CodexServiceTierError('无法读取 Codex 原生响应速度，原会话已保留，请稍后重试。');
+        params.serviceTier = nativeServiceTier;
+      }
       res = await client.request<{ thread: { id: string; turns?: Turn[] } }>('thread/resume', {
         threadId: opts.sessionId,
         ...params,
@@ -992,7 +1048,7 @@ export class CodexAppServerBackend implements AgentBackend {
       if (isWriterConflict(err)) throw new SessionInUseError(opts.sessionId, err);
       throw err;
     }
-    return new CodexThread(client, res.thread.id, opts.model, opts.effort, true, lastCompactionOf(res.thread.turns), opts.entry,
+    return new CodexThread(client, res.thread.id, opts.model, opts.effort, opts.serviceTier, nativeServiceTier, true, lastCompactionOf(res.thread.turns), opts.entry,
       this.threadEffortSupport());
   }
 
