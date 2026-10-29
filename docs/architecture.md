@@ -50,7 +50,7 @@ daemon 负责这台机器上的一切。它运行 Bot、管理 agent 会话、�
 
 现在的桌面端、bridge CLI 和 bridge 网页控制台都能改同一份数据，所以 bridge 需要宿主所有权锁和互斥检测。新结构里只有 daemon 写数据，客户端都通过 daemon 改设置，这类冲突不再存在。
 
-Bot 不依赖桌面窗口。关掉窗口或退出桌面端，飞书里的 Bot 照常回复。开启**开机自动运行**后，daemon 注册为系统服务。代码从 bridge 已有的 launchd、systemd 和 Windows 启动项代码改来，但用 Vonvon 自己的服务标识（`com.vonvon.bot.daemon`、`vonvon-bot.service`），绝不读写 bridge 的服务注册。系统服务从 V5 开始提供，具体设计和原生验收见 [plan.md](plan.md) V5 一节的 *Service gate*。V3 的 `vonvon service install` 和 `uninstall` 一律报错退出，因为复制来的服务代码还在用 bridge 的标识。停止 daemon 不删除系统服务注册，关掉开机自动运行才删除。
+Bot 不依赖桌面窗口，关闭窗口只隐藏窗口，飞书里的 Bot 照常回复；macOS 同时隐藏 Dock 图标，从状态栏打开时恢复窗口和 Dock 图标。用户从状态栏、Windows 托盘或 macOS Dock 菜单主动退出桌面应用时，桌面端通过认证的停止请求关闭当前数据目录的 daemon，等待后台及其 Bot 子进程退出后再退出自身。daemon 仍可独立于桌面端从命令行或系统服务运行。开启**开机自动运行**后，daemon 注册为系统服务。代码从 bridge 已有的 launchd、systemd 和 Windows 启动项代码改来，但用 Vonvon 自己的服务标识（`com.vonvon.bot.daemon`、`vonvon-bot.service`），绝不读写 bridge 的服务注册。系统服务从 V5 开始提供，具体设计和原生验收见 [plan.md](plan.md) V5 一节的 *Service gate*。V3 的 `vonvon service install` 和 `uninstall` 一律报错退出，因为复制来的服务代码还在用 bridge 的标识。停止 daemon 不删除系统服务注册，关掉开机自动运行才删除。
 
 V5 的系统服务设计要点如下。
 
