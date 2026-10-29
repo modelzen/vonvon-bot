@@ -28,16 +28,23 @@ import { isGoalTerminal, SessionInUseError } from '../types';
 import { resolveSessionProfile, type SessionProfileCapabilities } from '../session-profile';
 import { AppServerClient } from './app-server-client';
 import { admitCodexWorkspaceLayout } from './workspace-admission';
-import { codexFilesystem, codexInstallRoot, type CodexInstallRoot, codexWorkspaceRoots, verifyCodexWorkspaceEcho } from './workspace-policy';
+import { codexFilesystem, codexInstallRoot, codexShellReadRoot, type CodexInstallRoot, codexWorkspaceRoots, verifyCodexWorkspaceEcho } from './workspace-policy';
 import { NATIVE_MEMORY_OFF } from './memory-config';
 import { connectGated, refillWarmPool, takeWarmClient, utilityRequest } from './client-pool';
 import { mapChildNotification, mapNotification, readSubAgentActivity, readSubagentSpawn, type Child } from './event-map';
 import { runCodexJudge } from './judge-process';
-import { CodexFullOnlyError, codexConfinesReads, codexFullOnlyReason, codexTierUnavailable } from './full-only';
+import { CodexFullOnlyError, codexTierUnavailable, type WindowsSandboxCapability } from './full-only';
 import { cachedCodexVersion, codexVersionAsync, resolveCodexBin } from './locate';
+import { cachedWindowsSandbox, refreshWindowsSandbox, windowsShellPath } from './windows-sandbox';
 import type { ServerNotification, Thread, ThreadItem, Turn, TurnStartResponse } from './protocol';
+import { codexModelCacheKey, codexRemoteCacheKey, constrainCodexModelTiers, discoverCodexModels } from './models';
 
 const APPROVAL_POLICY = 'never';
+
+/** Keep the existing session when Codex cannot safely apply an inherited tier. */
+export class CodexServiceTierError extends Error {
+  constructor(message: string) { super(message); this.name = 'CodexServiceTierError'; }
+}
 
 /** Build the native profile only for tiers verified on this host and version. */
 export function sandboxParams(
@@ -47,16 +54,19 @@ export function sandboxParams(
   roots?: ReturnType<typeof codexWorkspaceRoots>,
   version: string | null = null,
   installRoot?: CodexInstallRoot,
+  windows?: WindowsSandboxCapability,
+  shellRoot?: CodexInstallRoot,
 ): Record<string, unknown> {
   if ((mode ?? 'full') === 'full') return { sandbox: 'danger-full-access' };
-  const unavailable = codexTierUnavailable(mode ?? 'full', platform, version);
+  const unavailable = codexTierUnavailable(mode ?? 'full', platform, version, windows);
   if (unavailable) throw new CodexFullOnlyError(unavailable);
   return {
     config: {
+      ...(platform === 'win32' ? { windows: { sandbox: 'mxc' }, features: { prefer_mxc: false } } : {}),
       default_permissions: 'feishu',
       permissions: {
         feishu: {
-          filesystem: codexFilesystem(roots ?? [], mode === 'write' ? 'write' : 'qa', installRoot, platform, network),
+          filesystem: codexFilesystem(roots ?? [], mode === 'write' ? 'write' : 'qa', installRoot, platform, network, shellRoot),
           network: { enabled: Boolean(network) },
         },
       },
@@ -70,7 +80,10 @@ export function codexSessionParams(opts: StartThreadOptions, version: string | n
   const roots = codexWorkspaceRoots(opts);
   const bin = resolveCodexBin();
   const installRoot = bin && opts.mode !== 'full' ? codexInstallRoot(bin, roots) : undefined;
-  const sandbox = sandboxParams(opts.mode, opts.network, process.platform, roots, version, installRoot);
+  const shell = bin && process.platform === 'win32' && (opts.mode ?? 'full') !== 'full' ? windowsShellPath(bin) : undefined;
+  const shellRoot = shell ? codexShellReadRoot(shell, roots) : undefined;
+  const sandbox = sandboxParams(opts.mode, opts.network, process.platform, roots, version, installRoot,
+    bin && process.platform === 'win32' ? cachedWindowsSandbox(bin) : undefined, shellRoot);
   return {
     ...sandbox,
     cwd: opts.cwd,
@@ -78,14 +91,29 @@ export function codexSessionParams(opts: StartThreadOptions, version: string | n
     approvalPolicy: APPROVAL_POLICY,
     developerInstructions: profile.instructions,
     ...(opts.model ? { model: opts.model } : {}),
+    ...(opts.serviceTier !== undefined ? { serviceTier: opts.serviceTier === 'standard' ? null : opts.serviceTier === 'fast' ? 'priority' : opts.serviceTier } : {}),
     config: {
       ...(typeof sandbox.config === 'object' ? sandbox.config : {}),
       projects: { [opts.cwd]: { trust_level: 'trusted' } },
       ...NATIVE_MEMORY_OFF,
+      ...(process.platform === 'win32' && (opts.mode ?? 'full') !== 'full'
+        ? { features: { ...NATIVE_MEMORY_OFF.features, prefer_mxc: false } } : {}),
       ...(profile.skills?.disabledPaths.length ? { skills: { config: profile.skills.disabledPaths.map(path => ({ path, enabled: false })) } } : {}),
       shell_environment_policy: { set: profile.env },
     },
   };
+}
+
+/** Snapshot the provider's own default so an in-memory fast override can later
+ * return to inheritance without accidentally retaining acceleration. */
+async function readNativeServiceTier(client: AppServerClient, cwd: string): Promise<string | null | undefined> {
+  try {
+    const reply = await client.request<{ config?: { service_tier?: unknown } }>('config/read', { includeLayers: false, cwd });
+    const tier = reply.config?.service_tier;
+    return typeof tier === 'string' ? tier : tier == null ? null : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Hard ceiling on a history read so a wedged codex can't hang the resume card. */
@@ -278,11 +306,14 @@ class CodexThread implements AgentThread {
     readonly sessionId: string,
     private model: string | undefined,
     private effort: ReasoningEffort | undefined,
+    private serviceTier: StartThreadOptions['serviceTier'],
+    private readonly nativeServiceTier: string | null | undefined,
     /** Resumed, or a turn was started: codex has it on disk. A thread that only had
      * thread/start resumes as `thread not loaded`, so it is kept until its first turn. */
     private onDisk: boolean,
     readonly lastCompaction?: string,
     private readonly entry?: AgentEntry,
+    private readonly supportsEffort?: (model: string) => boolean,
   ) {}
 
   get releaseAfterRun(): boolean {
@@ -295,6 +326,8 @@ class CodexThread implements AgentThread {
     // Per-turn overrides persist for subsequent turns (matches turn/start semantics).
     if (turn?.model) this.model = turn.model;
     if (turn?.effort) this.effort = turn.effort;
+    const restoreNativeTier = turn && 'serviceTier' in turn && turn.serviceTier === undefined && this.serviceTier !== undefined;
+    if (restoreNativeTier && this.nativeServiceTier === undefined) throw new CodexServiceTierError('无法读取 Codex 原生响应速度，当前会话未切换档位，请稍后重试。');
     // Liveness clock for the idle watchdog: refreshed on EVERY raw notification
     // below (even ones mapNotification drops, like command output deltas), so a
     // long-running shell command doesn't read as "wedged".
@@ -304,7 +337,11 @@ class CodexThread implements AgentThread {
       input: toUserInput(input),
     };
     if (self.model) params.model = self.model;
-    if (self.effort) params.effort = self.effort;
+    if (turn?.serviceTier !== undefined) params.serviceTier = turn.serviceTier === 'standard' ? null : turn.serviceTier === 'fast' ? 'priority' : turn.serviceTier;
+    else if (restoreNativeTier) params.serviceTier = self.nativeServiceTier;
+    // A configured custom model may have no native effort metadata. Leave its
+    // reasoning settings to Codex instead of sending our generic medium fallback.
+    if (self.effort && (!self.model || self.supportsEffort?.(self.model) !== false)) params.effort = self.effort;
 
     // Fire turn/start NOW — at runStreamed() call time, NOT lazily on the first
     // next() — so model inference runs in parallel with the caller's card setup
@@ -327,6 +364,7 @@ class CodexThread implements AgentThread {
       .then((result) => {
         if (!result.turn?.id) throw new Error('turn/start response missing turn id');
         activeTurnId = result.turn.id;
+        if (turn && 'serviceTier' in turn) self.serviceTier = turn.serviceTier;
         self.onDisk = true; // accepted: codex writes the turn, so the thread resumes
         return { turnId: result.turn.id };
       })
@@ -398,7 +436,13 @@ class CodexThread implements AgentThread {
     return { events: gen(), askPending: id => requests.isPending(id), stopSubagent: (id) => self.stopSubagent(id), respondToAsk: (id, resolution) => requests.respond(id, resolution), turnId: () => activeTurnId, lastActivity: () => lastActivityAt };
   }
 
-  runGoal(objective: string): AgentRun {
+  runGoal(objective: string, turn?: TurnOptions): AgentRun {
+    // Native goals have no turn/start tier override. A loaded same-client
+    // resume does not apply serviceTier; the orchestrator reopens it in a fresh
+    // app-server process before beginning a goal with a changed tier.
+    if (turn && 'serviceTier' in turn && turn.serviceTier !== this.serviceTier) {
+      throw new CodexServiceTierError('新目标的响应速度已变化，需要重新打开原会话后再开始目标。');
+    }
     const self = this;
     const requests = self.client.openRequestScope(self.sessionId, id => {
       const child = self.children.get(id);
@@ -720,6 +764,10 @@ export class CodexAppServerBackend implements AgentBackend {
   readonly id = 'codex-appserver';
   readonly displayName = 'Codex (app-server)';
   private modelCache: ModelInfo[] | null = null;
+  private modelCacheKey = '';
+  private modelCacheExpiresAt = 0;
+  private modelCacheEvidenceKey = '';
+  private modelCatalogPath: string | undefined;
 
   async listSkills({ cwd }: { cwd: string; directories?: string[] }): Promise<AgentSkill[]> {
     const result = await utilityRequest<{ data: Array<{ cwd: string; skills: Array<{ path: string; name: string; description: string; scope: string; enabled: boolean }>; errors?: Array<{ message: string }> }> }>('skills/list', { cwds: [cwd], forceReload: true });
@@ -735,7 +783,27 @@ export class CodexAppServerBackend implements AgentBackend {
   fullAccessOnly(): string | undefined {
     const bin = resolveCodexBin();
     const version = bin ? cachedCodexVersion(bin) : undefined;
-    return version === undefined || codexConfinesReads(process.platform, version) ? undefined : codexFullOnlyReason(version);
+    if (version === undefined && process.platform !== 'win32') return undefined;
+    const reason = codexTierUnavailable('qa', process.platform, version ?? null,
+      bin && process.platform === 'win32' ? cachedWindowsSandbox(bin) : undefined);
+    if (!reason && bin && process.platform === 'win32') {
+      const shell = windowsShellPath(bin);
+      if (shell) {
+        try { codexShellReadRoot(shell); } catch (error) { return error instanceof Error ? error.message : '无法确认 PowerShell 运行时读取范围，请重新检测。'; }
+      }
+    }
+    return reason;
+  }
+
+  async refreshPermissions(opts?: { force?: boolean }): Promise<void> {
+    if (process.platform !== 'win32') return;
+    const bin = resolveCodexBin(opts);
+    if (!bin) return;
+    const version = await codexVersionAsync(bin, opts);
+    // A version-only check is cheap and cannot accidentally start sandbox setup.
+    if (!codexTierUnavailable('qa', 'win32', version, { status: 'ready', implementation: 'mxc' })) {
+      await refreshWindowsSandbox(bin, opts);
+    }
   }
 
   async isAvailable(): Promise<boolean> {
@@ -758,7 +826,9 @@ export class CodexAppServerBackend implements AgentBackend {
     if (!version) {
       return { ok: false, version: null, location: bin, hint: `codex --version 执行失败（${bin}）` };
     }
-    return { ok: true, version, location: bin };
+    await this.refreshPermissions(opts);
+    return { ok: true, version, location: bin,
+      ...(process.platform === 'win32' ? { hint: this.fullAccessOnly() } : {}) };
   }
 
   async loginStatus(opts?: { refresh?: boolean }): Promise<import('../types').BackendLogin> {
@@ -772,25 +842,55 @@ export class CodexAppServerBackend implements AgentBackend {
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    if (this.modelCache) return this.modelCache;
-    if (!resolveCodexBin()) return OFFLINE_CODEX_MODELS;
+    const bin = resolveCodexBin();
+    if (!bin) { this.modelCache = null; return []; }
+    const priorCatalogPath = this.modelCatalogPath;
+    const key = codexModelCacheKey(bin, priorCatalogPath);
+    if (this.modelCache && this.modelCacheKey === key && Date.now() < this.modelCacheExpiresAt
+      && this.modelCacheEvidenceKey === codexRemoteCacheKey()) return this.modelCache;
+    this.modelCache = null;
     try {
-      // 常驻 utility client（M-2）：原本每次付一套 spawn+initialize，现在共享复用。
-      const res = await utilityRequest<{ data?: RawModel[] }>('model/list', { limit: 50 });
-      const models = (res.data ?? []).map(mapModel);
-      // 空列表和失败一样：回落兜底但不缓存，下次再问（handle-message 的 listModels 注释）。
-      if (!models.length) return OFFLINE_CODEX_MODELS;
+      const { models, catalogPath, expiresAt } = await discoverCodexModels(bin);
+      if (codexModelCacheKey(bin, priorCatalogPath) !== key) throw new Error('Codex configuration changed during discovery');
       this.modelCache = models;
+      this.modelCatalogPath = catalogPath;
+      this.modelCacheKey = codexModelCacheKey(bin, catalogPath);
+      this.modelCacheExpiresAt = expiresAt;
+      this.modelCacheEvidenceKey = codexRemoteCacheKey();
       return models;
-    } catch (err) {
-      log.fail('agent', err, { phase: 'model/list' });
-      return OFFLINE_CODEX_MODELS;
+    } catch {
+      // Native config errors can quote lines containing private API settings.
+      log.warn('agent', 'Codex model discovery failed', { phase: 'model/list' });
+      return [];
     }
   }
 
-  /** The cached `model/list`, or undefined; never fetches (the judge path must not wait for it). */
+  /** Apply the actual session configuration without expanding account access. */
+  async listModelsForCwd(cwd: string): Promise<ModelInfo[]> {
+    const models = await this.listModels();
+    const bin = resolveCodexBin();
+    return bin && this.peekModels() ? constrainCodexModelTiers(bin, models, cwd)
+      : models.map(({serviceTiers: _tiers, ...model}) => model);
+  }
+
+  /** The cached `model/list`, or undefined; never fetches. */
   peekModels(): ModelInfo[] | undefined {
-    return this.modelCache ?? undefined;
+    const bin = resolveCodexBin();
+    return bin && Date.now() < this.modelCacheExpiresAt && this.modelCacheKey === codexModelCacheKey(bin, this.modelCatalogPath)
+      && this.modelCacheEvidenceKey === codexRemoteCacheKey() ? this.modelCache ?? undefined : undefined;
+  }
+
+  private threadEffortSupport(): (model: string) => boolean {
+    // A re-detection can replace/clear the picker directory while older threads
+    // still run. Keep each thread's known capabilities for those models.
+    const support = new Map(this.modelCache?.map(model => [model.id, model.supportedEfforts.length > 0]));
+    return model => {
+      if (!support.has(model)) {
+        const info = this.modelCache?.find(value => value.id === model);
+        if (info) support.set(model, info.supportedEfforts.length > 0);
+      }
+      return support.get(model) !== false;
+    };
   }
 
   /** One smart-mode judgement on the resident judge process (s23b, judge-process.ts). */
@@ -902,28 +1002,41 @@ export class CodexAppServerBackend implements AgentBackend {
     // 90% of the window anyway.
     const bin = resolveCodexBin();
     const version = bin ? await codexVersionAsync(bin) : null;
+    if (bin && process.platform === 'win32' && (opts.mode ?? 'full') !== 'full') await this.refreshPermissions();
     const params = codexSessionParams(opts, version);
     await admitCodexWorkspaceLayout(opts);
     const client = await this.spawn(opts.cwd);
+    let nativeServiceTier: string | null | undefined;
     let res: { thread: { id: string } };
     try {
+      nativeServiceTier = await readNativeServiceTier(client, opts.cwd);
       res = await client.request<{ thread: { id: string } }>('thread/start', params);
       verifyCodexWorkspaceEcho(res, opts);
     } catch (err) {
       await client.close().catch((closeErr: unknown) => log.fail('agent', closeErr, { phase: 'start-close' }));
       throw err;
     }
-    return new CodexThread(client, res.thread.id, opts.model, opts.effort, false, undefined, opts.entry);
+    return new CodexThread(client, res.thread.id, opts.model, opts.effort, opts.serviceTier, nativeServiceTier, false, undefined, opts.entry,
+      this.threadEffortSupport());
   }
 
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {
     const bin = resolveCodexBin();
     const version = bin ? await codexVersionAsync(bin) : null;
+    if (bin && process.platform === 'win32' && (opts.mode ?? 'full') !== 'full') await this.refreshPermissions();
     const params = codexSessionParams(opts, version);
     await admitCodexWorkspaceLayout(opts);
     const client = await this.spawn(opts.cwd);
+    let nativeServiceTier: string | null | undefined;
     let res: { thread: { id: string; turns?: Turn[] } };
     try {
+      nativeServiceTier = await readNativeServiceTier(client, opts.cwd);
+      // A saved Codex thread may carry an earlier explicit fast tier. A Vonvon
+      // session now inheriting must resume at Codex's current configured default.
+      if (opts.serviceTier === undefined) {
+        if (nativeServiceTier === undefined) throw new CodexServiceTierError('无法读取 Codex 原生响应速度，原会话已保留，请稍后重试。');
+        params.serviceTier = nativeServiceTier;
+      }
       res = await client.request<{ thread: { id: string; turns?: Turn[] } }>('thread/resume', {
         threadId: opts.sessionId,
         ...params,
@@ -935,7 +1048,8 @@ export class CodexAppServerBackend implements AgentBackend {
       if (isWriterConflict(err)) throw new SessionInUseError(opts.sessionId, err);
       throw err;
     }
-    return new CodexThread(client, res.thread.id, opts.model, opts.effort, true, lastCompactionOf(res.thread.turns), opts.entry);
+    return new CodexThread(client, res.thread.id, opts.model, opts.effort, opts.serviceTier, nativeServiceTier, true, lastCompactionOf(res.thread.turns), opts.entry,
+      this.threadEffortSupport());
   }
 
   private async spawn(cwd: string): Promise<AppServerClient> {
@@ -1044,28 +1158,6 @@ interface RawThread {
   updatedAt?: number;
   name?: string | null;
   ephemeral?: boolean;
-}
-
-interface RawModel {
-  id: string;
-  displayName?: string;
-  description?: string;
-  hidden?: boolean;
-  isDefault?: boolean;
-  supportedReasoningEfforts?: { reasoningEffort: ReasoningEffort }[];
-  defaultReasoningEffort?: ReasoningEffort;
-}
-
-function mapModel(m: RawModel): ModelInfo {
-  return {
-    id: m.id,
-    displayName: m.displayName ?? m.id,
-    description: m.description ?? '',
-    hidden: m.hidden ?? false,
-    isDefault: m.isDefault ?? false,
-    supportedEfforts: (m.supportedReasoningEfforts ?? []).map((e) => e.reasoningEffort),
-    defaultEffort: m.defaultReasoningEffort ?? 'medium',
-  };
 }
 
 export const OFFLINE_CODEX_MODELS: ModelInfo[] = [

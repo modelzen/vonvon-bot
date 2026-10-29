@@ -119,7 +119,7 @@ function positionOf(element: Element | null) {
 }
 
 /** MindElixir owns links and camera gestures; React owns every visible node's content and actions. */
-export function useMindMapCanvas(tree: CanvasNode, anchorId?: string, editingId?: string) {
+export function useMindMapCanvas(tree: CanvasNode, anchorId?: string, editingId?: string, focusRequest?: {id: string; token: number}) {
   const host = useRef<HTMLDivElement>(null);
   const engine = useRef<Engine | null>(null);
   const wrappers = useRef(new Map<string, HTMLElement>());
@@ -135,6 +135,7 @@ export function useMindMapCanvas(tree: CanvasNode, anchorId?: string, editingId?
   const observedTopics = useRef(new Set<Element>());
   const visibleEditors = useRef(new WeakSet<Element>());
   const initialized = useRef(false);
+  const pendingFocus = useRef<{id: string; token: number} | undefined>(undefined);
   const schedule = () => {
     if (frame.current !== undefined) return;
     frame.current = window.requestAnimationFrame(() => {
@@ -161,6 +162,15 @@ export function useMindMapCanvas(tree: CanvasNode, anchorId?: string, editingId?
       // A new inline editor can be created outside the viewport. Bring only
       // that new DOM instance into view; typing and polling leave the camera alone.
       const viewport = instance.container.getBoundingClientRect();
+      if (pendingFocus.current) {
+        const slot = host.current.querySelector<HTMLElement>(`[data-mm-slot="${encodeURIComponent(pendingFocus.current.id)}"]`);
+        const target = slot?.closest('me-tpc')?.getBoundingClientRect();
+        if (target?.width && target.height) {
+          instance.move(viewport.left + viewport.width / 2 - (target.left + target.width / 2),
+            viewport.top + viewport.height / 2 - (target.top + target.height / 2));
+          pendingFocus.current = undefined;
+        }
+      }
       for (const editor of instance.nodes.querySelectorAll<HTMLElement>('.mm-inline-editor')) {
         if (visibleEditors.current.has(editor)) continue;
         const topic = editor.closest('me-tpc') ?? editor;
@@ -256,6 +266,11 @@ export function useMindMapCanvas(tree: CanvasNode, anchorId?: string, editingId?
   }, [structure, slots]);
 
   useLayoutEffect(() => {if (editingId && engine.current) schedule();}, [editingId]);
+  useLayoutEffect(() => {
+    if (!focusRequest) return;
+    pendingFocus.current = focusRequest;
+    schedule();
+  }, [focusRequest?.id, focusRequest?.token]);
 
   const reset = () => {
     const instance = engine.current;

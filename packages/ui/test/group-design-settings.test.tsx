@@ -82,6 +82,8 @@ it('orders four group tabs, keeps compact model and permission settings together
   for (const section of ['记忆', '项目记忆']) expect(groupTabForSection(section)).toBe('memory');
   const html = render('model');
   expect(html).toContain('可用模型'); expect(html).toContain('执行权限');
+  expect(html).toContain('<summary>话题模型</summary>');
+  expect(html).toContain('aria-label="选择话题"');
   expect(html).toContain('修改权限');
   expect(html).not.toContain('role="radiogroup" aria-label="权限"');
   expect(html).not.toContain('<h3>代码仓库</h3>');
@@ -90,6 +92,15 @@ it('orders four group tabs, keeps compact model and permission settings together
     expect(render(tab)).not.toContain('能挡到什么');
     expect(render(tab)).not.toContain('<h3>代码仓库</h3>');
   }
+});
+it('does not show a group speed setting for either Provider', () => {
+  const oldView = fixture();
+  expect(render('model', oldView)).not.toContain('响应速度');
+  const current = fixture();
+  current.sections.speed = section({tier: 'inherit' as const});
+  expect(render('model', current)).not.toContain('响应速度');
+  current.identity.backend = 'claude-agent';
+  expect(render('model', current)).not.toContain('响应速度');
 });
 it('keeps one primary among peer directories and no primary repository', () => {
   const html = renderToStaticMarkup(<ClientProvider client={client}><DirectoryPickerProvider>

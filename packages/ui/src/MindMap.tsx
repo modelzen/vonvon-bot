@@ -11,6 +11,8 @@ export type MapNode = {
   /** What the node says; `content` replaces it (an editor in place). */
   label: ReactNode;
   content?: ReactNode;
+  /** Inline actions below this node's own text; unlike content, these are not an editor. */
+  footer?: ReactNode;
   /** The count and the 新 tag, small, after the label. */
   meta?: ReactNode;
   kind: 'root' | 'section' | 'branch' | 'leaf' | 'more' | 'archive' | 'action';
@@ -37,7 +39,7 @@ export type MapNode = {
 };
 
 /** MindElixir lays out branches and owns the camera; React owns every node and action. */
-export function MindMap({root, label, beforeLocalToggle, beforeSelect, inlineMenus = false}: {root: MapNode; label: string; beforeLocalToggle?: (toggle: () => void) => void; beforeSelect?: (select: () => void) => void; inlineMenus?: boolean}) {
+export function MindMap({root, label, beforeLocalToggle, beforeSelect, inlineMenus = false, focusRequest}: {root: MapNode; label: string; beforeLocalToggle?: (toggle: () => void) => void; beforeSelect?: (select: () => void) => void; inlineMenus?: boolean; focusRequest?: {id: string; token: number}}) {
   const [menuId, setMenuId] = useState<string>();
   const [dragging, setDragging] = useState<string>();
   const [activeId, setActiveId] = useState<string>();
@@ -70,11 +72,16 @@ export function MindMap({root, label, beforeLocalToggle, beforeSelect, inlineMen
   visit(displayRoot, true);
   const active = visible.find(node => node.id === activeId) ?? (activeId === undefined ? visible.find(node => node.selected) : undefined);
   const externalSelected = visible.find(node => node.selected)?.id;
-  useLayoutEffect(() => {if (externalSelected) setActiveId(externalSelected);}, [externalSelected]);
+  const previousExternal = useRef<string | undefined>(undefined);
+  useLayoutEffect(() => {
+    if (externalSelected) setActiveId(externalSelected);
+    else if (previousExternal.current) setActiveId(undefined);
+    previousExternal.current = externalSelected;
+  }, [externalSelected]);
   const selected = active?.id;
   const editing = active?.content !== undefined;
   const canvasTree = (node: MapNode): CanvasNode => ({id: node.id, expanded: !folded(node), children: (node.children ?? []).map(canvasTree)});
-  const {host, slots, reset} = useMindMapCanvas(canvasTree(displayRoot), lastInteraction.current ?? selected, editing ? selected : undefined);
+  const {host, slots, reset} = useMindMapCanvas(canvasTree(displayRoot), lastInteraction.current ?? selected, editing ? selected : undefined, focusRequest);
   useLayoutEffect(() => {
     if (active?.onEdit && !editing && capture.current && (document.activeElement === document.body || container.current?.contains(document.activeElement))) {
       const box = document.getElementById(`${prefix}-${active.id}`)?.getBoundingClientRect();
@@ -108,6 +115,7 @@ export function MindMap({root, label, beforeLocalToggle, beforeSelect, inlineMen
     onClick={event => {if (!(event.target as HTMLElement).closest('.mm-box')) {setMenuId(undefined); setActiveId(''); container.current?.focus({preventScroll: true});}}}
     onKeyDown={event => {
       const target = event.target as HTMLElement;
+      if (target.closest('.mm-node-footer')) return;
       if (target !== capture.current && (target.closest('input, textarea, select, [contenteditable]') || target.closest('summary, [role=menu]'))) return;
       if (target.closest('.mm-label') && !target.closest('.mm-box[data-selected]')) return;
       if (!active || event.nativeEvent.isComposing || composing.current) return;
@@ -147,7 +155,7 @@ function MapBox({node, dragging, setDragging, selected, prefix, select, folded, 
       },
     } : {}),
   };
-  return <div className="mm-box" data-kind={node.kind} data-tone={node.tone} data-selected={isSelected || undefined} data-fixed={fixed || undefined} data-actions={Boolean(node.onAdd || foldable) || undefined} data-fresh={node.fresh || undefined} onPointerDown={event => event.stopPropagation()} onContextMenu={event => {event.stopPropagation(); markInteraction(node.id); if (inlineMenus && node.menu?.length) {event.preventDefault(); openMenu?.(node);} else if (menu.current) {event.preventDefault(); menu.current.open = true;}}} data-drop={canDrop ? (over ? 'over' : 'ready') : undefined} {...events}>
+  return <div className="mm-box" data-kind={node.kind} data-tone={node.tone} data-selected={isSelected || undefined} data-inline-tools={node.footer ? true : undefined} data-fixed={fixed || undefined} data-actions={Boolean(node.onAdd || foldable) || undefined} data-fresh={node.fresh || undefined} onPointerDown={event => event.stopPropagation()} onContextMenu={event => {event.stopPropagation(); markInteraction(node.id); if (inlineMenus && node.menu?.length) {event.preventDefault(); openMenu?.(node);} else if (menu.current) {event.preventDefault(); menu.current.open = true;}}} data-drop={canDrop ? (over ? 'over' : 'ready') : undefined} {...events}>
     <div className="mm-main" id={`${prefix}-${node.id}`} role="treeitem" aria-selected={isSelected} aria-expanded={foldable ? !folded : undefined}>
       {node.fresh && <span className="mm-new" role="img" aria-label="新"/>}
       {node.content ?? <button type="button" className="mm-label" onClick={event => {
@@ -157,6 +165,7 @@ function MapBox({node, dragging, setDragging, selected, prefix, select, folded, 
         {node.label}{node.meta && <small>{node.meta}</small>}
       </button>}
     </div>
+    {node.footer && <div className="mm-node-footer" onClick={event => event.stopPropagation()}>{node.footer}</div>}
     {isSelected && !folded && node.onAdd && <button type="button" className="mm-add" aria-label="添加记忆" title="添加记忆" onClick={() => {markInteraction(node.id); node.onAdd?.();}}><Plus size={18} strokeWidth={2} aria-hidden="true"/></button>}
     {foldable && (folded || !isSelected) && <button type="button" className="mm-fold" data-collapsed={folded || undefined}
       aria-label={folded ? '展开' : '收起'} aria-expanded={!folded} onClick={toggle}>{folded ? node.childCount ?? node.children?.length : <ChevronLeft size={16} strokeWidth={2} aria-hidden="true"/>}</button>}

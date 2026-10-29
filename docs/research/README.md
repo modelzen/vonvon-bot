@@ -1,5 +1,7 @@
 # 调研记录
 
+- [2026-10-29 Codex 加速权限](2026-10-29-speed-permissions/report.md)：真实登录 / 未登录元数据对照、Fast 原生档位映射和权限证据过滤；没有真实 Ultrafast 正例，功能暂停合入 dev。
+
 - [2026-10-28 Windows 重装失败与下载选项](2026-10-28-windows-reinstall/report.md)：0.7.5 孤立卸载记录触发 0.7.6 hook 的错误码 2；真实 NSIS 验证与社区 x64 / ARM64 / ZIP 参考。本次只修安装错误，双架构下一片做。
 
 - [2026-10-28 Windows 安装与下载约定](2026-10-28-windows-install/report.md)：参考 VS Code / VSCodium 的 Setup 与 ZIP 命名；核对 Windows 路径限制、0.7.5 安装漏文件和体积构成。owner 要求先修启动并交本地验收，保留 Electron 正常体积。
@@ -303,3 +305,9 @@ codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次�
 | 报告 | 内容 | 说明 |
 | --- | --- | --- |
 | [report](2026-10-25-app-size/report.md) | 0.7.13 arm64 App 623.76 MB 构成；恢复 Claude 按需托管安装后 0.7.14 实测 365.22 MB、ZIP 156.54 MB | 基线 6f5589b7；签名包与隔离安装、更新、重启、卸载通过，owner 验收待做 |
+
+## 2026-10-29 Windows Codex 权限
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [report](2026-10-29-windows-codex-permissions/report.md) | Windows 版本误报、MXC 能力探测、原生三档与 start/resume、portable PowerShell、多根路径 | 0.163.0 ARM64 原生与真实模型验证；缺失配置保护边界已实测，owner 要求仍开放可写；整体验收待 owner |

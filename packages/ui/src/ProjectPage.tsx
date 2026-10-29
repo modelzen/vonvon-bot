@@ -83,7 +83,7 @@ export function ProjectPage({project, snapshot, pane, onPane, onMembership, onCh
   </div>;
 }
 
-export function ProjectMemoryMap({project, snapshot, library, onMembership, onAddGroup, groupsInitiallyOpen = true, selectedAgentId, selectedGroupId, onBotProfile, initialRoleMembershipId}: {groupsInitiallyOpen?: boolean; project: SnapshotProject; snapshot: DesktopSnapshot; library?: LibraryProject; onMembership: (id: MembershipId) => void; onAddGroup?: (agentId: AgentId, projectId: ProjectId) => void; selectedAgentId?: AgentId; selectedGroupId?: GroupId; onBotProfile?: (id: AgentId) => void; initialRoleMembershipId?: MembershipId}) {
+export function ProjectMemoryMap({project, snapshot, library, onMembership, onAddGroup, groupsInitiallyOpen = true, selectedAgentId, selectedGroupId, onBotProfile, initialRoleMembershipId, focusNew}: {groupsInitiallyOpen?: boolean; project: SnapshotProject; snapshot: DesktopSnapshot; library?: LibraryProject; onMembership: (id: MembershipId) => void; onAddGroup?: (agentId: AgentId, projectId: ProjectId) => void; selectedAgentId?: AgentId; selectedGroupId?: GroupId; onBotProfile?: (id: AgentId) => void; initialRoleMembershipId?: MembershipId; focusNew?: number}) {
   const [roleId, setRoleId] = useState<MembershipId | undefined>(initialRoleMembershipId);
   useEffect(() => {if (initialRoleMembershipId) setRoleId(initialRoleMembershipId);}, [initialRoleMembershipId]);
   const rows = bindingRows(snapshot, project, library);
@@ -133,7 +133,7 @@ export function ProjectMemoryMap({project, snapshot, library, onMembership, onAd
     ...(!rows.length ? [{id: 'no-groups', kind: 'leaf' as const, label: '没有群在用这个项目', tone: 'muted' as const}] : []),
     ...groupNotices, ...(onAddGroup ? [addNode] : [])]};
   return <section id={settingAnchor('群和 Bot')} className="project-map" aria-label="记忆导图">
-    <MemoryMap scope={{kind: 'project', projectId: project.id}} rootLabel={project.name} mode="direct" memoryLabel="项目记忆" targets={targets} before={[...(roleRows.length ? [roles] : []), ...inherited.nodes]} after={[groups]}
+    <MemoryMap scope={{kind: 'project', projectId: project.id}} focusNew={focusNew} rootLabel={project.name} mode="direct" memoryLabel="项目记忆" targets={targets} before={[...(roleRows.length ? [roles] : []), ...inherited.nodes]} after={[groups]}
       beforeInteraction={role.withSavedDraft} beforeLeafSelect={select => {setRoleId(undefined); inherited.close(); select();}}/>
   </section>;
 }

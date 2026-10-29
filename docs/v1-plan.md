@@ -1,5 +1,9 @@
 # Vonvon Bot 第一版计划
 
+- [x] 2026-10-29 群组新记忆引导与导图内操作：owner 已确认预览，要求一起实现、合入 dev 并提供 Mac 本地验收。每群一个入口直达记忆 Tab 和实际新条目；节点内完成设为可信、编辑、删除、来源与撤销，保留既有信任规则和冲突保护。见 [实现与验收计划](plans/2026-10-29-group-memory-guidance.md)。仅提交 dev；真实应用验收结果待 owner 确认，不发布正式版本。
+
+- [x] 2026-10-29 全局更新入口：owner 认可 24px 淡蓝小胶囊及工具栏最右侧的位置；自动发现后可直接下载，完成后再次点击安装并重启，保留草稿保护。工具栏与设置共用操作状态，手动更新结果进入桌面 bridge 缓存，窗口重载不再重放旧下载入口。见 [全局轻量更新入口](plans/home-update-entry.md)。本次仅提交 dev 供 owner 验收，main 由 owner 统一合入，随下一版本发布；实际签名包下载与重启仍留待候选验收。
+
 - 2026-10-28 owner 要求 Windows 本机完成候选构建和安装验收，并让 Mac 可通过 GitHub runner 使用同一流程复现；扩展 x64、ARM64 原生构建和验收报告，见 [Windows 双架构构建验收](plans/windows-build-acceptance.md)。仅提交 dev，正式发布仍交 Mac。
 
 - 2026-10-28 owner 官网重装 0.7.6 报旧文件卸载失败：已确认 0.7.5 残留注册指向缺失的卸载器。仅处理旧卸载器和应用 EXE 都不存在的当前用户记录，真实卸载失败仍中止；补齐 13 项真实 NSIS 隔离验证。见 [故障证据与下载参考](research/2026-10-28-windows-reinstall/report.md)。owner 指定仅提交 dev，发布交给 Mac；双架构下一片做。
@@ -1987,3 +1991,5 @@ Linux：`vonvon service uninstall`，`vonvon daemon stop`，`npm rm -g vonvon-bo
 **s38a 拆分依赖（任务150）**：a1 保留原 s36/s37 依赖；a2 唯一负责记忆专用实际策略生成、两家 start/resume 消费与受限 writer，依赖 a1 及已定 s31b/s39a 后端基础，不反向改这些前置为依赖 s38。b 必须等完整 a（a2 完成）；s40 仍等完整 s38，watcher/合并/隔离/撤销和两家真实实验不减。full 不新增同 UID 恶意隔离承诺，受限不得标成 full/daemon-exclusive 绕过。任务150只改文档及PR描述，未重跑75项/build/typecheck或真实sandbox；源码验证数字均沿用144，139红例和144准备/协调偏差保留。
 
 - 2026-10-28 Windows 安装修复：修正 NSIS 安装后深层依赖丢失；当前用户一键 Setup 与 ZIP 分开命名。新增实际打包后台启动、认证状态、UI、关闭和路径预算检查。本机 EXE 安装与欢迎页通过，待 owner 验收；只准备 dev，Mac 后续按同版本双平台规则发布。见 docs/plans/windows-install-experience.md 与 docs/windows-release-build.md。
+
+- 2026-10-29 会话响应速度：群默认和会话覆盖独立支持 Standard / Fast / Ultrafast，网页和飞书 `/model` 共用设置校验。下一次用户发起消息或新目标时生效，保留上下文；恢复继承、普通档和进程重启均清除过期覆盖。详见 `docs/plans/session-speed.md`。按 owner 要求只合入 dev，main 与版本发布另行统一处理；真实账号的 Ultrafast 加速效果未作为本次自动化测试结论。

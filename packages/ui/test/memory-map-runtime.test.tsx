@@ -4,6 +4,7 @@ import type {MemoryItem, MemoryReply} from '@vonvon/protocol';
 import {MemoryMap} from '../src/MemoryMap';
 import {MindMap, type MapNode} from '../src/MindMap';
 import {MapInlineEditor} from '../src/MapInlineEditor';
+import {MemoryLeafTools} from '../src/MemoryLeafTools';
 import {useInheritedContent} from '../src/inherited-content';
 
 type Effect = {deps?: unknown[]; cleanup?: () => void};
@@ -291,6 +292,72 @@ it('resets the list comparison cache when the memory scope changes', async () =>
   render({scope: scope2}); await flush(); render({scope: scope2});
   expect(h.client.memory.mock.calls.some(([request]) => request.type === 'list' && request.scope.projectId === 'prj_2')).toBe(true);
   expect(h.state[0]).not.toBe(first);
+});
+
+it('opens and selects a fresh memory beyond the first eight leaves and requests camera focus once', async () => {
+  const entries = Array.from({length: 12}, (_, at) => ({...item(`item-${at}`), updatedAt: 100 - at}));
+  const current = {...list(entries), newIds: ['item-11']} as MemoryReply;
+  h.client.memory.mockImplementation(async (request: {type: string}) => request.type === 'list' ? current : {kind: 'seen'});
+  render({focusNew: 1}); await flush(); render({focusNew: 1});
+  const page = renderPage({focusNew: 1});
+  expect(find(page.root, 'i:item-11').selected).toBe(true);
+  expect(find(page.root, 'i:item-11').footer).toBeDefined();
+  expect(page.all.find(node => node.type === MindMap)!.props.focusRequest).toEqual({id: 'i:item-11', token: 1});
+  find(page.root, 'i:item-0').onClick?.();
+  expect(find(render({focusNew: 1}), 'i:item-0').selected).toBe(true);
+});
+
+it('sets trust from the inline action and undoes only the event that produced that revision', async () => {
+  let entry = {...item('a'), trust: 'untrusted' as const};
+  let current = list([entry]);
+  h.client.memory.mockImplementation(async (request: {type: string}) => {
+    if (request.type === 'list') return current;
+    if (request.type === 'confirm') {
+      const after = {...entry, trust: 'trusted' as const, revision: 4}; current = list([after]);
+      return {kind: 'item', item: after};
+    }
+    if (request.type === 'events') return {kind: 'events', events: [
+      {eventId: 'trust-a', kind: 'confirm', itemId: 'a', after: {...entry, trust: 'trusted', revision: 4}},
+      {eventId: 'other-change', kind: 'confirm', itemId: 'b', after: item('b', '发版', 4)},
+    ]};
+    if (request.type === 'undo') {current = list([{...entry, revision: 5}]); return {kind: 'item', item: {...entry, revision: 5}};}
+    return {kind: 'seen'};
+  });
+  const tools = () => nodes(find(render(), 'i:a').footer).find(node => node.type === MemoryLeafTools)!.props;
+  render(); await flush(); find(render(), 'i:a').onClick?.();
+  expect(tools().reference).toBe(true);
+  tools().onConfirm(); await flush();
+  expect(find(render(), 'i:a').meta).toBeUndefined();
+  expect(tools().undo.label).toBe('已设为可信');
+  tools().undo.run(); await flush();
+  expect(h.client.memory.mock.calls.map(([request]) => request).find(request => request.type === 'undo')).toMatchObject({eventId: 'trust-a'});
+  expect(tools().reference).toBe(true);
+});
+
+it('soft-deletes from the inline toolbar and leaves an undo action in its original category', async () => {
+  const before = item('a'); const after = {...before, state: 'archived' as const, revision: 4};
+  let current = list([before]);
+  h.client.memory.mockImplementation(async (request: {type: string}) => {
+    if (request.type === 'list') return current;
+    if (request.type === 'archive') {current = list([after]); return {kind: 'item', item: after};}
+    if (request.type === 'events') return {kind: 'events', events: [{eventId: 'archive-a', kind: 'archive', itemId: 'a', after}]};
+    return {kind: 'seen'};
+  });
+  render(); await flush(); find(render(), 'i:a').onClick?.();
+  nodes(find(render(), 'i:a').footer).find(node => node.type === MemoryLeafTools)!.props.onDelete(); await flush();
+  const marker = find(render(), 'memory-deleted');
+  expect(marker.label).toBe('这条记忆已删除');
+  expect((marker.footer as Element).props.disabled).toBe(false);
+  expect(h.client.memory.mock.calls.some(([request]) => request.type === 'purge')).toBe(false);
+});
+
+it('keeps restore errors visible when the selected archived leaf has no inline toolbar', async () => {
+  const archived = {...item('a'), state: 'archived' as const};
+  h.client.memory.mockImplementation(async (request: {type: string}) => request.type === 'list' ? list([archived])
+    : request.type === 'restore' ? {kind: 'refused', reason: 'not-allowed', message: '恢复失败，请重试'} : {kind: 'seen'});
+  render(); await flush(); find(render(), 'i:a').onClick?.();
+  find(render(), 'i:a').menu!.find(action => action.id === 'restore')!.onSelect(); await flush();
+  expect(find(render(), 'notice').label).toBe('恢复失败，请重试');
 });
 
 it('polls inherited role and memory, retaining an equal result but showing an external role edit', async () => {

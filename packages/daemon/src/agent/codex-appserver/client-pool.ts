@@ -9,10 +9,11 @@ import { NATIVE_MEMORY_OFF } from './memory-config';
 /**
  * 常驻 app-server 进程（M-2，依据 research/08 实测）：
  *
- *  - **utility client**：thread/list、thread/read、model/list、account/read 强刷
+ *  - **utility client**：thread/list、thread/read、account/read 强刷
  *    这类元数据 RPC 原本每次各付一整套 spawn+initialize（~500ms）。现在共享一个
  *    懒创建、**出错即重建**的常驻进程；这些 RPC 的 cwd 都是请求参数（thread/list
  *    的 cwd 是过滤条件），与进程 cwd 无关，所以进程 cwd 给中性目录即可。
+ *    模型发现使用独立短命 client，保证重新加载启动时读取的原生自定义模型目录。
  *
  *  - **预热池（容量 1）**：冷路径 spawn→initialize≈495ms + 首个 thread/start≈1640ms
  *    （MCP server 启动），同进程第二个 thread/start 仅 ≈64ms。池里预先放一个
@@ -232,6 +233,23 @@ export async function utilityRequest<T = unknown>(
 
 // ── 预热池（容量 1） ──────────────────────────────────────────────────
 
+/** Catalog files are captured at process startup. Re-detection uses a fresh,
+ * bounded client without closing the shared utility under its other callers. */
+export async function withModelDiscoveryClient<T>(bin: string, read: (client: AppServerClient) => Promise<T>): Promise<T> {
+  requireOpen();
+  invalidateWarmPool();
+  const client = new AppServerClient({ bin, cwd: homedir(), clientName: 'vonvon-model-discovery', quietOutput: true });
+  trackResident(client);
+  try {
+    await connectGatedWithin(client, bin, CONNECT_TIMEOUT_MS, 'model discovery');
+    requireOpen();
+    return await withDeadline(read(client), DEFAULT_UTILITY_TIMEOUT_MS, 'model discovery');
+  } finally {
+    try { await client.close(); }
+    finally { untrack(client); }
+  }
+}
+
 interface WarmEntry {
   client: AppServerClient;
   bin: string;
@@ -241,6 +259,16 @@ interface WarmEntry {
 
 let warm: WarmEntry | null = null;
 let warming: Promise<void> | null = null;
+let warmGeneration = 0;
+
+/** A refreshed catalog must also apply to the next session. Only idle/in-flight
+ * prewarms are invalidated; active threads and the utility keep their owners. */
+function invalidateWarmPool(): void {
+  warmGeneration++;
+  const old = warm;
+  warm = null;
+  if (old) closeDiscarded(old.client);
+}
 
 /** bin 文件指纹 = 「codex 版本」的取用时探活代理。statSync 是微秒级且跟随符号
  * 链接，能在取用热进程的瞬间发现「codex 已原地升级/被替换」；版本字符串探测
@@ -289,6 +317,7 @@ export function takeWarmClient(bin: string): AppServerClient | null {
 export function refillWarmPool(): Promise<void> {
   if (!accepting) return Promise.resolve();
   if (warm || warming) return warming ?? Promise.resolve();
+  const generation = warmGeneration;
   warming = (async () => {
     const bin = resolveCodexBin();
     if (!bin) return;
@@ -316,6 +345,10 @@ export function refillWarmPool(): Promise<void> {
         'prewarm thread/start',
       );
       requireOpen();
+      if (generation !== warmGeneration) {
+        closeDiscarded(client);
+        return;
+      }
       warm = { client, bin, fingerprint };
       log.info('agent', 'prewarm-ready', { pid: client.pid ?? null });
     } catch (err) {

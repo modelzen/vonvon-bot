@@ -3,8 +3,10 @@ import { spawnProcess } from '../platform/spawn';
 import { WindowsOwnedProcess } from './windows-owned-process';
 
 export class ProviderProcessCleanupError extends Error {}
+/** The entire owned process tree is confirmed gone, but cleanup reported an error. */
+export class ProviderProcessStoppedError extends ProviderProcessCleanupError {}
 /** Process group is gone; the only reported failure is its nonzero exit status. */
-export class ProviderProcessExitError extends ProviderProcessCleanupError {}
+export class ProviderProcessExitError extends ProviderProcessStoppedError {}
 
 const ownedProcesses = new Set<OwnedProviderProcess>();
 let accepting = true;
@@ -121,10 +123,11 @@ export class OwnedProviderProcess {
       try { await this.windows.stop(); }
       catch (cause) {
         this.unconfirmed = this.windows.cleanupUnconfirmed;
-        throw new ProviderProcessCleanupError(`${this.provider} Windows 子进程清理失败`, { cause });
+        const Failure = this.unconfirmed ? ProviderProcessCleanupError : ProviderProcessStoppedError;
+        throw new Failure(`${this.provider} Windows 子进程清理失败`, { cause });
       }
       if (this.errors.size) {
-        const Failure = this.errors.size === 1 && this.errors.has('exit') ? ProviderProcessExitError : ProviderProcessCleanupError;
+        const Failure = this.errors.size === 1 && this.errors.has('exit') ? ProviderProcessExitError : ProviderProcessStoppedError;
         throw new Failure(`${this.provider} 子进程退出失败`, { cause: new AggregateError(this.errors.values()) });
       }
       return;
@@ -152,7 +155,7 @@ export class OwnedProviderProcess {
       })]);
     } finally { clearTimeout(timer); }
     if (this.errors.size) {
-      const Failure = this.errors.size === 1 && this.errors.has('exit') ? ProviderProcessExitError : ProviderProcessCleanupError;
+      const Failure = this.errors.size === 1 && this.errors.has('exit') ? ProviderProcessExitError : ProviderProcessStoppedError;
       throw new Failure(`${this.provider} 子进程树已退出，但清理失败`, {
         cause: new AggregateError(this.errors.values(), 'Provider cleanup errors'),
       });

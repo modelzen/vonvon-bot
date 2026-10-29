@@ -52,12 +52,12 @@ export function groupTabForSection(section?: string): GroupDesignTab {
   }
 }
 
-type Props = {member: Membership; agent: Agent; group: Group; snapshot: DesktopSnapshot; initialTab?: GroupDesignTab; revealHistory?: boolean; onTabChange?: (tab:GroupDesignTab) => void;
+type Props = {member: Membership; agent: Agent; group: Group; snapshot: DesktopSnapshot; initialTab?: GroupDesignTab; focusNew?: number; newMemoryCount?: number; revealHistory?: boolean; onTabChange?: (tab:GroupDesignTab) => void;
   onBot: (member: Membership) => void; onBotProfile: () => void; onProject?: (id: ProjectId) => void; onOpenTools: () => void; onOpenProviders?: () => void; onOpenSecrets: (provider?: string) => void; onChanged: () => Promise<void>};
 // Intent: configure one Bot within one group, without exposing session management as navigation.
 // Hierarchy: target first, Bot/project scope next, then compact settings pages. System type
 // share Today's 4px spacing rhythm; history/help stay visible, and the group name opens Feishu.
-export function GroupWorkspace({member, agent, group, snapshot, initialTab, revealHistory, onTabChange, onBot, onBotProfile, onOpenTools, onOpenProviders, onOpenSecrets, onChanged}: Props) {
+export function GroupWorkspace({member, agent, group, snapshot, initialTab, focusNew, newMemoryCount, revealHistory, onTabChange, onBot, onBotProfile, onOpenTools, onOpenProviders, onOpenSecrets, onChanged}: Props) {
   const client = useClient();
   const shell = useShellCapabilities();
   const guard = useDraftGuard();
@@ -163,7 +163,7 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
       <div className="config-header-navigation">
         <nav className="group-design-tabs config-tabs gooey-tabs" aria-label="群设置">
           <NavigationIndicator activeIndex={groupDesignTabs.findIndex(([value]) => tab === value)}/>
-          {groupDesignTabs.map(([value,label]) => <button type="button" key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => guard.navigate(() => {setTab(value); onTabChange?.(value);})}>{label}</button>)}
+          {groupDesignTabs.map(([value,label]) => <button type="button" key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => guard.navigate(() => {setTab(value); onTabChange?.(value);})}>{value === 'memory' && newMemoryCount ? <>{label}<span className="group-memory-tab-new" aria-label={`${newMemoryCount} 条新记忆`}>新 {newMemoryCount}</span></> : label}</button>)}
         </nav>
         {project ? <span className="config-enable group-enable-control"><span role="status" className="group-save-status">{notice === '已保存。' && <><Check size={12} aria-hidden="true"/>已保存</>}</span>{pendingEnabled !== null && <OperationActivity key={`${member.id}:${pendingEnabled}`} label={pendingEnabled ? '本群启用中' : '本群停用中'} state={pendingEnabled ? 'connecting' : 'working'}/>}<Toggle aria-label={`在本群使用 ${agent.name}`} label="在本群使用" checked={project.enabled} disabled={!available || busy} onChange={event => {const enabled=event.target.checked; guard.navigate(() => {void update({enabled});});}}/></span> : <span className="group-control-note">{!agent.enabled ? 'Bot 已停用' : !agent.running ? 'Bot 未运行' : '读取中…'}</span>}
       </div>
@@ -171,7 +171,7 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, reve
     {error && <InlineNotice title="操作未完成" tone="warning">{error}</InlineNotice>}
     {notice && notice !== '已保存。' && <p role="status" className="group-control-note">{notice}</p>}
     {tab === 'memory' ? <section id={settingAnchor('记忆')} aria-label="记忆">
-      {memberProject ? <ProjectMemoryMap key={memberProject.id} groupsInitiallyOpen={false} initialRoleMembershipId={initialTab === 'role' ? member.id : undefined} selectedAgentId={member.agentId} selectedGroupId={member.groupId} onBotProfile={() => guard.navigate(onBotProfile)} project={memberProject} snapshot={snapshot} onMembership={id => {const target = snapshot.memberships.find(item => item.id === id); if (target) guard.navigate(() => onBot(target));}}/> : <p className="group-control-note">这个群的项目记忆暂不可用。</p>}
+      {memberProject ? <ProjectMemoryMap key={memberProject.id} focusNew={focusNew} groupsInitiallyOpen={false} initialRoleMembershipId={initialTab === 'role' ? member.id : undefined} selectedAgentId={member.agentId} selectedGroupId={member.groupId} onBotProfile={() => guard.navigate(onBotProfile)} project={memberProject} snapshot={snapshot} onMembership={id => {const target = snapshot.memberships.find(item => item.id === id); if (target) guard.navigate(() => onBot(target));}}/> : <p className="group-control-note">这个群的项目记忆暂不可用。</p>}
     </section> : <GroupDesignSettings key={member.id} refreshVersion={version} scope={{kind:'project',botId:member.agentId,projectName:member.name}} tab={tab} tools={snapshot.tools} botName={agent.name} groupName={group.name} onOpenTools={onOpenTools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets} responseHeader={conversationControl}/>}
     <Dialog open={dialog === 'history'} title={<span className="conversation-dialog-title">对话记录</span>} description={`${group.name} · ${agent.name}`} onClose={() => setDialog(null)}><div id={settingAnchor("会话管理")}>{agent.running ? <ConversationPanel agentId={agent.id} groupId={group.id} projectName={member.name} conversation={conversation} request={client.collaboration}/> : <p>Bot 运行后可查看对话记录。</p>}</div></Dialog>
     <Dialog open={dialog === 'help'} title="在群里使用" onClose={() => setDialog(null)}><GroupUsage conversation={conversation} botName={agent.name}/></Dialog>
