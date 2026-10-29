@@ -7,7 +7,7 @@ import {useDirectoriesPicker} from '../directory-picker';
 import {Button, IconButton, InlineNotice, SelectControl, Toggle} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
-import {Catalog, Editor, ProjectPanel, type Section} from './SettingsPanel';
+import {Catalog, Editor, ProjectPanel, SessionPicker, type Section} from './SettingsPanel';
 import {PersonaEditor} from './PersonaEditor';
 import {SmartRulesEditor, SMART_RULES_MAX_LENGTH} from './SmartRulesEditor';
 import {SettingChoices} from './SettingChoices';
@@ -135,6 +135,7 @@ export function GroupSettingsContent({view, refresh, tab, tools, onOpenTools, on
           onCheckProviders={discovery.retry} checkingProviders={discovery.checking}
           onOpenProviders={onOpenProviders} permissionName={sections.permission.stored.options.tiers.find(tier => tier.tier === sections.permission.stored.mode)?.name} savedBackend={view.identity.backend}/>}
         validate={value => providers.some(provider => provider.id === value.backend) ? modelAccessProblem(value, modelCatalog.current) : '此 Provider 当前不可用，请先安装并登录。'}/> : <MissingSection/>)}
+      {tab === 'model' && <details className="membership-settings-details"><summary>话题模型</summary><SessionPicker view={view}/></details>}
       {(tab === 'model' || tab === 'permission') && <ProjectPanel view={view} refresh={refresh} partition="permission" independent/>}
       {tab === 'response' && <>
         {responseHeader}
