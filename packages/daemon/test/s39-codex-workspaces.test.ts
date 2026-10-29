@@ -47,7 +47,7 @@ for (const mode of ['qa', 'write', 'full'] as const) {
       const thread = action === 'start' ? await backend.startThread(options(mode))
         : await backend.resumeThread({ ...options(mode), sessionId: 'test-thread' });
       const params = codexSessionParams(options(mode), 'codex-cli 0.163.0');
-      expect(rpc.request).toHaveBeenCalledWith(`thread/${action}`, { ...params, ...(action === 'resume' ? { threadId: 'test-thread' } : {}) });
+      expect(rpc.request).toHaveBeenCalledWith(`thread/${action}`, { ...params, ...(action === 'resume' ? { threadId: 'test-thread', serviceTier: null } : {}) });
       expect(params).toMatchObject({ runtimeWorkspaceRoots: ['/workspace', '/repo2', '/reference'], developerInstructions: expect.stringContaining(profile.instructions) });
       expect(params).toMatchObject({ config: { shell_environment_policy: { set: { SESSION_TEST: 'yes' } } } });
       if (mode === 'full') {
@@ -86,7 +86,7 @@ describe('native echo admission releases refused clients', () => {
     });
   }
   for (const action of ['start', 'resume'] as const) it(`${action}: provider rejection closes`, async () => {
-    rpc.request.mockRejectedValue(new Error('unsupported permission profile'));
+    rpc.request.mockResolvedValueOnce({ config: {} }).mockRejectedValue(new Error('unsupported permission profile'));
     const backend = new CodexAppServerBackend();
     await expect(action === 'start' ? backend.startThread(options()) : backend.resumeThread({ ...options(), sessionId: 'test-thread' })).rejects.toThrow('unsupported');
     expect(rpc.close).toHaveBeenCalledOnce();
