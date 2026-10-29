@@ -51,7 +51,7 @@ const singleNoEffort = [model({ id: 'only', displayName: '唯一模型', isDefau
 const json = (s: ModelCardState): string => JSON.stringify(buildModelCard(s));
 
 describe('buildModelCard · 按当前模型能力自适应', () => {
-  it('Codex 速度默认收起为小闪电，点击后只提供目录支持的档位', () => {
+  it('Codex 速度以闪电切换，不显示档位菜单', () => {
     const models = [model({ id: 'sol', displayName: 'Sol', serviceTiers: [
       { id: 'fast', name: 'Fast', description: '' }, { id: 'ultrafast', name: 'Ultrafast', description: '' },
     ] })];
@@ -61,14 +61,13 @@ describe('buildModelCard · 按当前模型能力自适应', () => {
     expect(collapsed).toContain('"token":"speed_filled"');
     expect(collapsed).not.toContain('跟随群设置');
     expect(collapsed).not.toContain('"tier":"fast"');
-    const expanded = json({ ...base, speedExpanded: true });
-    expect(expanded).toContain('"tier":"standard"');
-    expect(expanded).toContain('"tier":"fast"');
-    expect(expanded).toContain('"tier":"ultrafast"');
-    expect(expanded).toContain('消耗更多额度');
+    expect(collapsed).not.toContain('"tier":"standard"');
+    expect(collapsed).not.toContain('"tier":"ultrafast"');
+    expect(collapsed).toContain('"hover_tips"');
+    expect(collapsed).toContain('消耗更多额度');
   });
 
-  it('闪电与模型和 effort 控件共用一行，展开时才增加选择行', () => {
+  it('闪电与模型和 effort 控件共用一行，没有选择行', () => {
     const models = [
       model({ id: 'sol', displayName: 'Sol', supportedEfforts: ['low', 'high'], serviceTiers: [{ id: 'fast', name: 'Fast', description: '' }] }),
       model({ id: 'other', displayName: 'Other', supportedEfforts: ['low', 'high'] }),
@@ -81,13 +80,10 @@ describe('buildModelCard · 按当前模型能力自适应', () => {
     expect(JSON.stringify(collapsed[0])).toContain('model.set');
     expect(JSON.stringify(collapsed[0])).toContain('model.effort');
     expect(JSON.stringify(collapsed[0])).toContain('model.speed.open');
-    const expanded = rows(buildModelCard({ ...base, speedExpanded: true }));
-    expect(expanded).toHaveLength(2);
-    expect(JSON.stringify(expanded[0])).toContain('model.speed.open');
-    expect(JSON.stringify(expanded[1])).toContain('"tier":"fast"');
+    expect(JSON.stringify(collapsed[0])).not.toContain('"tier":"fast"');
   });
 
-  it.each(['standard', 'fast', 'ultrafast'] as const)('速度 %s 使用居中的纯图标，普通变暗、加速点亮且不截断文字', serviceTier => {
+  it.each([['standard', 'grey-400'], ['fast', 'yellow'], ['ultrafast', 'orange']] as const)('速度 %s 使用居中的纯图标，普通变暗、加速点亮且不截断文字', (serviceTier, color) => {
     const models = [
       model({ id: 'sol', displayName: 'A very long model label', supportedEfforts: ['high'], serviceTiers: [
         { id: 'fast', name: 'Fast', description: '' }, { id: 'ultrafast', name: 'Ultrafast', description: '' },
@@ -106,7 +102,7 @@ describe('buildModelCard · 按当前模型能力自适应', () => {
     expect(control).not.toHaveProperty('text');
     expect(control).toMatchObject({
       tag: 'button', size: 'medium', width: 'fill',
-      icon: { tag: 'standard_icon', token: 'speed_filled', color: serviceTier === 'standard' ? 'grey-400' : 'orange' },
+      icon: { tag: 'standard_icon', token: 'speed_filled', color },
       behaviors: [{ type: 'callback', value: { a: 'model.speed.open' } }],
     });
     expect(control.hover_tips).toMatchObject({ tag: 'plain_text', content: expect.stringContaining(serviceTier === 'standard' ? 'Standard' : serviceTier === 'fast' ? 'Fast' : 'Ultrafast') });
