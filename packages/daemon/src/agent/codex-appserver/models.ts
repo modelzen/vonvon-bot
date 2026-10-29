@@ -1,7 +1,7 @@
 import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { REASONING_EFFORTS, type ModelInfo, type ReasoningEffort } from '../types';
+import type { ModelInfo, ReasoningEffort } from '../types';
 import { binFingerprint, withModelDiscoveryClient } from './client-pool';
 
 interface RawModel {
@@ -16,8 +16,6 @@ interface RawModel {
 }
 
 interface ModelConfig {
-  model?: string | null;
-  model_reasoning_effort?: ReasoningEffort | null;
   model_catalog_json?: string | null;
 }
 
@@ -54,20 +52,9 @@ function mapModel(model: RawModel): ModelInfo {
   };
 }
 
-/** The CLI displays its configured current model separately from its catalog.
- * model/list alone can omit it and mark a different catalog default. */
-function withConfiguredModel(models: ModelInfo[], config: ModelConfig): ModelInfo[] {
-  const configured = config.model?.trim();
-  if (!configured) return models;
-  const hit = models.find(model => model.id === configured);
-  const effort = REASONING_EFFORTS.find(value => value === config.model_reasoning_effort);
-  const row: ModelInfo = hit ? { ...hit, isDefault: true, hidden: false,
-    ...(effort && hit.supportedEfforts.includes(effort) ? { defaultEffort: effort } : {}) }
-    : { id: configured, displayName: configured, description: '来自本机 Codex 配置',
-        isDefault: true, hidden: false, supportedEfforts: [], defaultEffort: effort ?? 'medium' };
-  return [row, ...models.filter(model => model !== hit).map(model => ({ ...model, isDefault: false }))];
-}
-
+/** Mirror the CLI /model catalog: fetch native presets, hide non-picker rows,
+ * and preserve native order, names, capabilities and default flags. A current
+ * config.model that is absent from the picker must not become an extra choice. */
 export async function discoverCodexModels(bin: string): Promise<{ models: ModelInfo[]; catalogPath?: string }> {
   return withModelDiscoveryClient(bin, async client => {
     const reply = await client.request<{ config?: ModelConfig }>('config/read', { includeLayers: false, cwd: homedir() });
@@ -75,21 +62,20 @@ export async function discoverCodexModels(bin: string): Promise<{ models: ModelI
     const path = config.model_catalog_json;
     const catalogPath = path ? path.startsWith('~/') ? join(homedir(), path.slice(2)) : resolve(codexHome(), path) : undefined;
     const catalogVersion = catalogPath ? fileVersion(catalogPath) : undefined;
-    const models = new Map<string, ModelInfo>();
+    const models: ModelInfo[] = [];
     const cursors = new Set<string>();
     let cursor: string | undefined;
     do {
-      const page = await client.request<{ data?: RawModel[]; nextCursor?: string | null }>('model/list', { limit: 50, ...(cursor ? { cursor } : {}) });
+      // The TUI also fetches hidden rows and applies !hidden before rendering.
+      const page = await client.request<{ data?: RawModel[]; nextCursor?: string | null }>('model/list', { limit: 50, includeHidden: true, ...(cursor ? { cursor } : {}) });
       for (const raw of page.data ?? []) {
-        const model = mapModel(raw);
-        models.set(model.id, model);
+        if (!raw.hidden) models.push(mapModel(raw));
       }
       cursor = page.nextCursor || undefined;
-      if ((cursor && cursors.has(cursor)) || models.size > 1000 || cursors.size >= 100) throw new Error('Invalid Codex model catalog pagination');
+      if ((cursor && cursors.has(cursor)) || models.length > 1000 || cursors.size >= 100) throw new Error('Invalid Codex model catalog pagination');
       if (cursor) cursors.add(cursor);
     } while (cursor);
-    const discovered = withConfiguredModel([...models.values()], config);
-    if (discovered.length > 1000 || (catalogPath && fileVersion(catalogPath) !== catalogVersion)) throw new Error('Codex model catalog changed during discovery');
-    return { models: discovered, ...(catalogPath ? { catalogPath } : {}) };
+    if (catalogPath && fileVersion(catalogPath) !== catalogVersion) throw new Error('Codex model catalog changed during discovery');
+    return { models, ...(catalogPath ? { catalogPath } : {}) };
   });
 }
