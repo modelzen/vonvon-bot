@@ -305,3 +305,9 @@ codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次�
 | 报告 | 内容 | 说明 |
 | --- | --- | --- |
 | [report](2026-10-25-app-size/report.md) | 0.7.13 arm64 App 623.76 MB 构成；恢复 Claude 按需托管安装后 0.7.14 实测 365.22 MB、ZIP 156.54 MB | 基线 6f5589b7；签名包与隔离安装、更新、重启、卸载通过，owner 验收待做 |
+
+## 2026-10-29 Windows Codex 权限
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [report](2026-10-29-windows-codex-permissions/report.md) | Windows 版本误报、MXC 能力探测、原生三档与 start/resume、portable PowerShell、多根路径 | 0.163.0 ARM64 原生与真实模型验证；缺失配置保护边界已实测，owner 要求仍开放可写；整体验收待 owner |

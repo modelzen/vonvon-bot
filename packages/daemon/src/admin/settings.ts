@@ -555,6 +555,9 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     };
   }
   async function projectSettings(p: Project): Promise<T.ProjectSections> {
+    // Identity changes invalidate immediately; ordinary reads share the bounded cache.
+    // Environment diagnostics use doctor({ force: true }) for an explicit recheck.
+    await deps.backendFor(groupBackendId(p)).refreshPermissions?.();
     const result = projectData(p, deps.backendFor(groupBackendId(p)));
     // `profile` is only a record of what the row held before the memory migration; the runtime reads `role` and the entries.
     result.role = { supplement: supplementOf(p) };
@@ -779,6 +782,10 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     if (parsed.scope.kind === 'host')
       throw new SettingsInputError('安装设置由 daemon 管理');
     const edit = parsed as T.BotSettingsEdit;
+    if (edit.scope.kind === 'project' && edit.section === 'permission') {
+      const project = await readProject(edit.scope.projectName);
+      if (project) await deps.backendFor(groupBackendId(project)).refreshPermissions?.();
+    }
     let additionalEffects: T.ApplyEffect[] = [];
     try {
       if (edit.scope.kind === 'agent') {

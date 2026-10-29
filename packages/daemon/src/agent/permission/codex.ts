@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { codexTierUnavailable } from '../codex-appserver/full-only';
 import { cachedCodexVersion, resolveCodexBin } from '../codex-appserver/locate';
+import { cachedWindowsSandbox } from '../codex-appserver/windows-sandbox';
 import type { TableEnv } from './types';
 import { PermissionInputError, permissionTiers, type PermissionTable, type Tier } from './types';
 
@@ -25,6 +26,12 @@ function versionFor(env: TableEnv): string | null | undefined {
   return bin ? cachedCodexVersion(bin) : undefined;
 }
 
+function windowsFor(env: TableEnv) {
+  if (env.codexWindowsSandbox !== undefined) return env.codexWindowsSandbox;
+  const bin = env.platform === 'win32' ? resolveCodexBin() : null;
+  return bin ? cachedWindowsSandbox(bin) : undefined;
+}
+
 export const codexTable: PermissionTable = {
   backend: 'codex-appserver',
   tiers: env => {
@@ -35,17 +42,19 @@ export const codexTable: PermissionTable = {
       full: 'Codex：Full Access（danger-full-access）',
     });
     for (const row of rows) {
-      const reason = codexTierUnavailable(row.tier, env.platform, version ?? null);
-      if (reason && version !== undefined) row.unavailable = reason;
+      const reason = codexTierUnavailable(row.tier, env.platform, version ?? null, windowsFor(env));
+      if (reason && (version !== undefined || env.platform === 'win32')) row.unavailable ??= reason;
     }
     return rows;
   },
   strength: env => {
     const version = versionFor(env);
-    const reason = env.fullOnly ?? (version === undefined ? undefined : codexTierUnavailable('qa', env.platform, version));
+    const reason = env.fullOnly ?? (version === undefined && env.platform !== 'win32' ? undefined
+      : codexTierUnavailable('qa', env.platform, version ?? null, windowsFor(env)));
     if (reason) return reason;
     return '系统沙箱管住命令的读、写和联网：工作区以外的文件读不到，也改不了。'
-      + (env.platform === 'linux' ? '工作区里原来没有的 .mcp.json、.claude/ 这类配置，能被新建。' : '');
+      + (env.platform === 'linux' ? '工作区里原来没有的 .mcp.json、.claude/ 这类配置，能被新建。'
+        : env.platform === 'win32' ? 'Windows 工作区可写档下，原本不存在的 .codex、.agents/skills、.claude 配置仍能被新建。' : '');
   },
   fields: env => [
     { key: 'sandbox', label: '沙箱模式', native: 'sandbox', kind: 'choice', choices: codexTable.tiers(env).map(info => ({
