@@ -10,9 +10,9 @@ const fake = vi.hoisted(() => ({
   project: undefined as any,
   sendFails: false,
   channelSend: vi.fn(async () => ({})),
-  backend: { capabilities: { steer: true }, id: 'claude-agent', listModels: vi.fn(async () => []), resumeThread: vi.fn(), startThread: vi.fn() },
+  backend: { capabilities: { steer: true }, id: 'claude-agent', listModels: vi.fn(async () => []), listModelsForCwd: vi.fn(async () => []), peekModels: vi.fn(() => []), resumeThread: vi.fn(), startThread: vi.fn() },
   sent: [] as { card: unknown; replyTo?: string; inThread?: boolean }[],
-  update: vi.fn(async () => true),
+  update: vi.fn(async (..._args: unknown[]) => true),
   setDefault: vi.fn(async (opts: object) => ({ ok: true, project: opts })),
   log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() },
 }));
@@ -21,6 +21,7 @@ vi.mock('../src/agent', async (original) => ({ ...await original<object>(), crea
 vi.mock('../src/project/registry', async (original) => ({
   ...await original<object>(),
   getProjectByChatId: async () => fake.project,
+  listProjects: async () => fake.project ? [fake.project] : [],
 }));
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),
@@ -28,6 +29,11 @@ vi.mock('../src/bot/session-store', async (original) => ({
   patchSession: async (_key: string, patch: Record<string, unknown>) => {
     if (!fake.record) return;
     for (const [k, v] of Object.entries(patch)) if (v !== undefined) fake.record[k] = v;
+  },
+  mutateSession: async (_key: string, mutate: (record: any) => void | Promise<void>) => {
+    if (!fake.record) throw new Error('missing test session');
+    await mutate(fake.record);
+    return fake.record;
   },
   upsertSession: async (record: object) => { fake.record = record; },
 }));
@@ -74,7 +80,7 @@ function message(text: string): NormalizedMessage {
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false };
 }
 function setup() {
-  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'cli_test', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' } } };
   const channel = { send: fake.channelSend, rawClient: { im: { v1: { messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
@@ -97,11 +103,14 @@ beforeEach(() => {
   fake.sent.length = 0;
   fake.record = undefined;
   fake.sendFails = false;
+  fake.backend.id = 'claude-agent';
   fake.project = { name: 'test', chatId: 'chat', cwd: '/test', kind: 'single', backend: 'claude-agent' };
   fake.backend.listModels.mockResolvedValue([
     { id: 'default', displayName: 'Default', description: '', supportedEfforts: ['low', 'high', 'max'], defaultEffort: 'high', isDefault: true, hidden: false },
     { id: 'opus', displayName: 'Opus', description: '', supportedEfforts: ['low', 'high', 'max'], defaultEffort: 'high', isDefault: false, hidden: false },
   ] as never);
+  fake.backend.listModelsForCwd.mockImplementation(fake.backend.listModels);
+  fake.backend.peekModels.mockImplementation(() => []);
 });
 afterEach(async () => {
   await orchestrator?.shutdown();
@@ -211,6 +220,82 @@ describe('/model 卡手填模型 id', () => {
     await until(() => expect(fake.log.info).toHaveBeenCalledWith('card', 'action-denied', expect.anything()));
     expect(fake.sent).toHaveLength(1);
     expect(fake.record.model).toBe('opus');
+  });
+});
+
+describe('/model 闪电单击切换速度', () => {
+  const tiers = (ultrafast: boolean) => [
+    { id: 'fast', name: 'Fast', description: '' },
+    ...(ultrafast ? [{ id: 'ultrafast', name: 'Ultrafast', description: '' }] : []),
+  ];
+  async function open(ultrafast = true) {
+    fake.backend.id = 'codex-appserver';
+    fake.project = { ...fake.project, backend: 'codex-appserver' };
+    fake.record = { ...record(), backend: 'codex-appserver', model: 'sol' };
+    const models = [{ id: 'sol', displayName: 'Sol', description: '', supportedEfforts: ['medium'], defaultEffort: 'medium', isDefault: true, hidden: false, serviceTiers: tiers(ultrafast) }];
+    fake.backend.listModels.mockResolvedValue(models as never);
+    fake.backend.listModelsForCwd.mockResolvedValue(models as never);
+    fake.backend.peekModels.mockReturnValue(models as never);
+    const o = setup();
+    await o.onMessage(message('/model'));
+    await until(() => expect(fake.sent).toHaveLength(1));
+    return o;
+  }
+  const click = (user = 'owner', value: object = { a: MC.speedOpen }) =>
+    orchestrator.dispatcher.handle({ messageId: 'card-1', chatId: 'chat', operator: { openId: user }, action: { value } } as never);
+  async function expectClick(count: number, tier: string, color: string) {
+    await click();
+    await until(() => expect(fake.update).toHaveBeenCalledTimes(count));
+    const card = JSON.stringify(fake.update.mock.calls.at(-1)?.[2]);
+    expect(fake.record.serviceTier ?? 'standard', card).toBe(tier);
+    expect(card).toContain(`"color":"${color}"`);
+    expect(card).not.toContain('"tier":"fast"');
+  }
+
+  it('cycles Standard → Fast → Ultrafast → Standard using the saved session', async () => {
+    await open();
+    await expectClick(1, 'fast', 'yellow');
+    await expectClick(2, 'ultrafast', 'orange');
+    await expectClick(3, 'standard', 'grey-400');
+  });
+
+  it('skips Ultrafast when only Fast is currently supported', async () => {
+    await open(false);
+    await expectClick(1, 'fast', 'yellow');
+    await expectClick(2, 'standard', 'grey-400');
+  });
+
+  it('serializes two rapid clicks and advances twice from the saved tier', async () => {
+    await open();
+    await Promise.all([click(), click()]);
+    await vi.waitFor(() => expect(fake.update).toHaveBeenCalledTimes(2), { timeout: 3000 });
+    expect(fake.record.serviceTier).toBe('ultrafast');
+    expect(JSON.stringify(fake.update.mock.calls.at(-1)?.[2])).toContain('"color":"orange"');
+  });
+
+  it('cycles a resumed session whose model is inherited from the current default', async () => {
+    await open();
+    delete fake.record.model;
+    // The open card and the live catalog still agree on the inherited default.
+    await expectClick(1, 'fast', 'yellow');
+  });
+
+  it('rejects another user, stale backend and unavailable model evidence without saving', async () => {
+    await open();
+    await click('someone-else');
+    expect(fake.update).not.toHaveBeenCalled();
+    expect(fake.record.serviceTier).toBeUndefined();
+    fake.record.backend = 'claude-agent';
+    await click();
+    await until(() => expect(fake.update).toHaveBeenCalledTimes(1));
+    expect(fake.record.serviceTier).toBeUndefined();
+    expect(JSON.stringify(fake.update.mock.calls.at(-1)?.[2])).toContain('会话后端已切换');
+    fake.record.backend = 'codex-appserver';
+    fake.backend.peekModels.mockReturnValue([]);
+    await click();
+    await until(() => expect(fake.update).toHaveBeenCalledTimes(2));
+    expect(fake.record.serviceTier).toBeUndefined();
+    expect(JSON.stringify(fake.update.mock.calls.at(-1)?.[2])).toContain('实时模型目录不可用');
   });
 });
 

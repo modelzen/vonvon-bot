@@ -4552,9 +4552,9 @@ export function createOrchestrator(
     msgId: string,
     c: object | (() => object | Promise<object>),
     fallbackChatId?: string,
-  ): void => {
+  ): Promise<void> => {
     const armedAt = Date.now();
-    void trackTask((async () => {
+    const settled = (async () => {
       // Wrap the WHOLE flow: a throwing builder (`c()`), a rejected card update,
       // or a rejected fallback must never die silently — that surfaces to the user
       // as a dead button ("点击没反应") with nothing in the log to diagnose it.
@@ -4569,7 +4569,9 @@ export function createOrchestrator(
       } catch (err) {
         log.fail('console', err, { phase: 'settle-update', msgId });
       }
-    })());
+    })();
+    void trackTask(settled);
+    return settled;
   };
   function pruneResumePending(): void {
     const now = Date.now();
@@ -4613,6 +4615,64 @@ export function createOrchestrator(
     return undefined;
   }
 
+  const speedClicks = new Map<string, Promise<void>>();
+  /** Resolve each click against the saved session and current model catalog, not the
+   * card's old icon. The explicit tier path serves buttons sent before this update. */
+  function saveModelCardSpeed(evt: CardActionEvent, state: ModelCardState, requested?: ServiceTier): void {
+    const prior = speedClicks.get(evt.messageId) ?? Promise.resolve();
+    const queued = prior.then(() => settleUpdate(evt.messageId, async () => {
+      const rec = await getSession(state.threadId);
+      const stale = modelCardStale(state, rec);
+      if (stale) { state.note = stale; return buildModelCard(state); }
+      try {
+        if (rec!.backend !== 'codex-appserver' || rec!.modelCustom || state.modelCustom) {
+          state.note = '会话模型已变化，请重新打开 /model。';
+          return buildModelCard(state);
+        }
+        const scope = { kind: 'session' as const, botId: cfg.accounts.app.id, threadId: state.threadId };
+        const view = await settings.read(scope);
+        if (view.scope.kind !== 'session' || !('speed' in view.sections) || !view.sections.speed) throw new Error('该会话暂不支持切换响应速度');
+        const project = await getProjectByChatId(state.chatId);
+        const be = backendFor(rec!.backend);
+        const catalog = projectModelCatalog(project, rec!.backend, await listModelsAt(be, rec!.cwd));
+        // A fallback catalog has no trustworthy speed evidence. Keep the saved
+        // choice until native model discovery succeeds again.
+        if (!be.peekModels?.()?.length) throw new Error('实时模型目录不可用，请稍后重试');
+        const prefer = modelPrefOf(project, rec!.backend);
+        const currentModel = rec!.model ?? pickDefault(catalog, project?.modelAccess ? { ...prefer, custom: false } : prefer).model;
+        if (currentModel !== state.model) {
+          state.note = '会话模型已变化，请重新打开 /model。';
+          return buildModelCard(state);
+        }
+        const selected = catalog.find(model => model.id === currentModel && !model.hidden);
+        const available: ServiceTier[] = ['standard'];
+        if (selected?.serviceTiers?.some(tier => tier.id === 'fast')) available.push('fast');
+        if (selected?.serviceTiers?.some(tier => tier.id === 'ultrafast')) available.push('ultrafast');
+        if (available.length === 1) throw new Error('当前模型不支持切换响应速度，请重新打开 /model');
+        const stored = view.sections.speed.stored.tier;
+        const current = stored !== 'inherit' && available.includes(stored) ? stored : 'standard';
+        const tier = requested ?? available[(available.indexOf(current) + 1) % available.length]!;
+        if (!available.includes(tier)) throw new Error('当前模型不支持这个速度档位');
+        const result = await settings.save({ scope, section: 'speed', revision: view.sections.speed.revision, patch: { tier } });
+        if (result.kind !== 'saved') {
+          state.note = result.kind === 'rejected' ? result.fields.map(field => field.message).join('；') : result.kind === 'unavailable' ? '该会话当前不可编辑，请启动 Bot 后重试。' : '设置已变化，请重新打开 /model。';
+          return buildModelCard(state);
+        }
+        const saved = await getSession(state.threadId);
+        state.serviceTier = saved?.serviceTier;
+        state.modelCustom = saved?.modelCustom;
+        state.models = catalog;
+        state.note = `✅ 已设置响应速度：${serviceTierLabel(tier)}，下一次发起任务生效`;
+      } catch (error) {
+        state.note = error instanceof Error ? error.message : '响应速度保存失败，请重试。';
+      }
+      return buildModelCard(state);
+    }));
+    speedClicks.set(evt.messageId, queued);
+    void trackTask(queued);
+    void queued.finally(() => { if (speedClicks.get(evt.messageId) === queued) speedClicks.delete(evt.messageId); });
+  }
+
   dispatcher
     .on(MC.model, ({ evt, option }) => {
       const state = authPending(modelPending, evt);
@@ -4643,7 +4703,6 @@ export function createOrchestrator(
         }
         await patchSession(state.threadId, { model: state.model, effort: state.effort, modelCustom: false, ...(resetSpeed ? { serviceTier: undefined } : {}) });
         if (resetSpeed) state.serviceTier = undefined;
-        state.speedExpanded = false;
         state.note = `✅ 已切换模型「${m?.displayName ?? option}」，下一轮生效${resetSpeed ? '；响应速度已恢复普通' : ''}`;
         return buildModelCard(state);
       });
@@ -4670,41 +4729,13 @@ export function createOrchestrator(
     })
     .on(MC.speedOpen, ({ evt }) => {
       const state = authPending(modelPending, evt);
-      if (!state) return;
-      settleUpdate(evt.messageId, async () => {
-        state.speedExpanded = !state.speedExpanded;
-        state.note = undefined;
-        return buildModelCard(state);
-      });
+      if (state) saveModelCardSpeed(evt, state);
     })
+    // Accept buttons on cards already sent before the single-click change.
     .on(MC.speed, ({ evt, value }) => {
       const state = authPending(modelPending, evt);
       const tier = value?.tier;
-      if (!state || typeof tier !== 'string' || !['standard', 'fast', 'ultrafast'].includes(tier)) return;
-      settleUpdate(evt.messageId, async () => {
-        const rec = await getSession(state.threadId);
-        const stale = modelCardStale(state, rec);
-        if (stale) { state.note = stale; return buildModelCard(state); }
-        try {
-          const scope = { kind: 'session' as const, botId: cfg.accounts.app.id, threadId: state.threadId };
-          const view = await settings.read(scope);
-          if (view.scope.kind !== 'session' || !('speed' in view.sections) || !view.sections.speed) throw new Error('该会话暂不支持切换响应速度');
-          const result = await settings.save({ scope, section: 'speed', revision: view.sections.speed.revision, patch: { tier: tier as ServiceTier } });
-          if (result.kind !== 'saved') {
-            state.note = result.kind === 'rejected' ? result.fields.map(field => field.message).join('；') : result.kind === 'unavailable' ? '该会话当前不可编辑，请启动 Bot 后重试。' : '设置已变化，请重新打开 /model。';
-            return buildModelCard(state);
-          }
-          const [current, project] = await Promise.all([getSession(state.threadId), getProjectByChatId(state.chatId)]);
-          state.serviceTier = current?.serviceTier;
-          state.modelCustom = current?.modelCustom;
-          state.models = projectModelCatalog(project, rec!.backend, await listModelsAt(backendFor(rec!.backend), rec!.cwd));
-          state.speedExpanded = false;
-          state.note = `✅ 已设置响应速度：${serviceTierLabel(tier as ServiceTier)}，下一次发起任务生效`;
-        } catch (error) {
-          state.note = error instanceof Error ? error.message : '响应速度保存失败，请重试。';
-        }
-        return buildModelCard(state);
-      });
+      if (state && (tier === 'standard' || tier === 'fast' || tier === 'ultrafast')) saveModelCardSpeed(evt, state, tier);
     })
     // 手填模型 ID（3.11）：表单提交会锁住这张卡，结果发一张新卡（同一位置），由新卡接管
     // 这张卡的状态。id 只过 parseModelId，不对模型列表校验；填错了在回合里报错。
@@ -4728,7 +4759,6 @@ export function createOrchestrator(
           if (!getSessionTitleEfforts(state.backend ?? rec?.backend ?? '').includes(state.effort)) state.effort = 'medium';
           await patchSession(state.threadId, { model: state.model, effort: state.effort, modelCustom: true, ...(resetSpeed ? { serviceTier: undefined } : {}) });
           if (resetSpeed) state.serviceTier = undefined;
-          state.speedExpanded = false;
           state.note = `✅ 已切换到手填的模型 ${modelIdCode(parsed.id)}，下一轮生效${resetSpeed ? '；响应速度已恢复普通' : ''}`;
           log.info('card', 'model-custom', { threadId: state.threadId, model: parsed.id });
         }
@@ -5106,8 +5136,9 @@ export function createOrchestrator(
   // settle-then-cardkit path so the click's callback acks first. Passing the
   // whole evt lets settleUpdate self-heal an orphaned (post-restart) card by
   // re-posting to evt.chatId.
-  const patch = (evt: CardActionEvent, c: object | (() => object | Promise<object>)): void =>
-    settleUpdate(evt.messageId, c, evt.chatId);
+  const patch = (evt: CardActionEvent, c: object | (() => object | Promise<object>)): void => {
+    void settleUpdate(evt.messageId, c, evt.chatId);
+  };
 
   async function renderForegroundUpdate(): Promise<ReturnType<typeof buildForegroundUpdateCard>> {
     const distribution = await runtimeDistribution();
