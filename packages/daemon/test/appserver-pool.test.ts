@@ -1,6 +1,6 @@
 let UnsentRequestError: typeof import('../src/agent/types').UnsentRequestError;
 let AppServerClient: typeof import('../src/agent/codex-appserver/app-server-client').AppServerClient;
-import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import v8 from 'node:v8';
@@ -53,8 +53,19 @@ process.stdin.on('data', (d) => {
     if (m === 'thread/start' && p.ephemeral) {
       prewarm = p;
       // 预热路径：先吐一条「噪音」通知再回包——验证取用时被清空
-      send({ jsonrpc: '2.0', method: 'prewarm/noise', params: {} });
-      send({ jsonrpc: '2.0', id: msg.id, result: { thread: { id: 'warm_eph' } } });
+      const replyWarm = () => {
+        send({ jsonrpc: '2.0', method: 'prewarm/noise', params: {} });
+        send({ jsonrpc: '2.0', id: msg.id, result: { thread: { id: 'warm_eph' } } });
+      };
+      const fs = require('fs');
+      fs.writeFileSync(__filename + '.warm-started', String(process.pid));
+      if (fs.existsSync(__filename + '.hold-warm')) {
+        const gate = setInterval(() => {
+          if (fs.existsSync(__filename + '.hold-warm')) return;
+          clearInterval(gate);
+          replyWarm();
+        }, 10);
+      } else replyWarm();
       continue;
     }
     if (m === 'emit') send({ jsonrpc: '2.0', method: 'real/event', params: {} });
@@ -75,7 +86,7 @@ const dirs: string[] = [];
 let prevEnv: string | undefined;
 
 /** 建一个假 codex，并把 CODEX_BIN 指过去；afterEach 统一关进程、删目录、还原 env。 */
-function makeFakeCodex(): { bin: string; runs: () => number; pids: () => number[] } {
+function makeFakeCodex(): { bin: string; script: string; runs: () => number; pids: () => number[] } {
   const dir = mkdtempSync(join(tmpdir(), 'appserver-pool-'));
   dirs.push(dir);
   const { bin, script } = writeNodeExecutable(dir, 'codex', FAKE_SERVER);
@@ -88,7 +99,12 @@ function makeFakeCodex(): { bin: string; runs: () => number; pids: () => number[
       return [];
     }
   };
-  return { bin, runs: () => pids().length, pids };
+  return { bin, script, runs: () => pids().length, pids };
+}
+
+function alive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch { return false; }
 }
 
 afterEach(async () => {
@@ -99,7 +115,7 @@ afterEach(async () => {
 });
 
 describe('utility client 复用与出错即重建（M-2）', () => {
-  it('listModels/listThreads/readHistory 共享一个常驻进程，只 spawn 一次', async () => {
+  it('model discovery uses a fresh client while listThreads/readHistory share the utility', async () => {
     const { runs } = makeFakeCodex();
     const backend = new CodexAppServerBackend();
 
@@ -117,7 +133,7 @@ describe('utility client 复用与出错即重建（M-2）', () => {
       updatedAt: undefined,
     });
 
-    expect(runs()).toBe(1); // 三个 RPC 一个进程，不再各付一次 spawn+initialize
+    expect(runs()).toBe(2); // Model settings need a fresh snapshot; the other metadata RPCs still share one utility.
   });
 
   it('应用层 JSON-RPC error → 上抛但进程保留（健康进程不被 SIGKILL）', async () => {
@@ -203,6 +219,49 @@ describe('容量 1 预热池（M-2）', () => {
     appendFileSync(bin, process.platform === 'win32' ? '\r\nrem upgraded\r\n' : '\n# upgraded\n'); // mtime+size 都变 —— 模拟原地升级
     expect(takeWarmClient(bin)).toBeNull();
     expect(runs()).toBe(1); // 没有偷偷用旧进程
+  });
+
+  it('fresh model discovery discards a ready warm slot while preserving utility and active clients', async () => {
+    const { bin, pids } = makeFakeCodex();
+    await utilityRequest('model/list');
+    const utilityPid = pids()[0]!;
+    await refillWarmPool();
+    const oldWarmPid = pids()[1]!;
+    const active = new AppServerClient({bin, cwd: tmpdir()});
+    try {
+      await active.connect();
+      const activePid = active.pid!;
+      await active.request('thread/start', {cwd: '/active-project'});
+
+      expect((await new CodexAppServerBackend().listModels()).map(model => model.id)).toEqual(['pool-model']);
+
+      expect(takeWarmClient(bin)).toBeNull();
+      await vi.waitFor(() => expect(alive(oldWarmPid)).toBe(false));
+      await expect(utilityRequest('model/list')).resolves.toHaveProperty('data');
+      await expect(active.request('model/list')).resolves.toHaveProperty('data');
+      expect(alive(utilityPid)).toBe(true);
+      expect(alive(activePid)).toBe(true);
+    } finally { await active.close(); }
+  });
+
+  it('fresh model discovery prevents an in-flight older warm process from entering the slot', async () => {
+    const { bin, script } = makeFakeCodex();
+    writeFileSync(`${script}.hold-warm`, 'hold');
+    const warming = refillWarmPool();
+    try {
+      await vi.waitFor(() => expect(existsSync(`${script}.warm-started`)).toBe(true));
+      const oldWarmPid = Number(readFileSync(`${script}.warm-started`, 'utf8'));
+
+      expect((await new CodexAppServerBackend().listModels()).map(model => model.id)).toEqual(['pool-model']);
+      rmSync(`${script}.hold-warm`);
+      await warming;
+
+      expect(takeWarmClient(bin)).toBeNull();
+      await vi.waitFor(() => expect(alive(oldWarmPid)).toBe(false));
+    } finally {
+      rmSync(`${script}.hold-warm`, {force: true});
+      await warming;
+    }
   });
 
   it('backend.startThread：冷路径触发补位，下一个会话复用热进程', async () => {
