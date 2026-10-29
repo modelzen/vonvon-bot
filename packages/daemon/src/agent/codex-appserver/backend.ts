@@ -28,13 +28,14 @@ import { isGoalTerminal, SessionInUseError } from '../types';
 import { resolveSessionProfile, type SessionProfileCapabilities } from '../session-profile';
 import { AppServerClient } from './app-server-client';
 import { admitCodexWorkspaceLayout } from './workspace-admission';
-import { codexFilesystem, codexInstallRoot, type CodexInstallRoot, codexWorkspaceRoots, verifyCodexWorkspaceEcho } from './workspace-policy';
+import { codexFilesystem, codexInstallRoot, codexShellReadRoot, type CodexInstallRoot, codexWorkspaceRoots, verifyCodexWorkspaceEcho } from './workspace-policy';
 import { NATIVE_MEMORY_OFF } from './memory-config';
 import { connectGated, refillWarmPool, takeWarmClient, utilityRequest } from './client-pool';
 import { mapChildNotification, mapNotification, readSubAgentActivity, readSubagentSpawn, type Child } from './event-map';
 import { runCodexJudge } from './judge-process';
-import { CodexFullOnlyError, codexConfinesReads, codexFullOnlyReason, codexTierUnavailable } from './full-only';
+import { CodexFullOnlyError, codexTierUnavailable, type WindowsSandboxCapability } from './full-only';
 import { cachedCodexVersion, codexVersionAsync, resolveCodexBin } from './locate';
+import { cachedWindowsSandbox, refreshWindowsSandbox, windowsShellPath } from './windows-sandbox';
 import type { ServerNotification, Thread, ThreadItem, Turn, TurnStartResponse } from './protocol';
 import { codexModelCacheKey, codexRemoteCacheKey, constrainCodexModelTiers, discoverCodexModels } from './models';
 
@@ -53,16 +54,19 @@ export function sandboxParams(
   roots?: ReturnType<typeof codexWorkspaceRoots>,
   version: string | null = null,
   installRoot?: CodexInstallRoot,
+  windows?: WindowsSandboxCapability,
+  shellRoot?: CodexInstallRoot,
 ): Record<string, unknown> {
   if ((mode ?? 'full') === 'full') return { sandbox: 'danger-full-access' };
-  const unavailable = codexTierUnavailable(mode ?? 'full', platform, version);
+  const unavailable = codexTierUnavailable(mode ?? 'full', platform, version, windows);
   if (unavailable) throw new CodexFullOnlyError(unavailable);
   return {
     config: {
+      ...(platform === 'win32' ? { windows: { sandbox: 'mxc' }, features: { prefer_mxc: false } } : {}),
       default_permissions: 'feishu',
       permissions: {
         feishu: {
-          filesystem: codexFilesystem(roots ?? [], mode === 'write' ? 'write' : 'qa', installRoot, platform, network),
+          filesystem: codexFilesystem(roots ?? [], mode === 'write' ? 'write' : 'qa', installRoot, platform, network, shellRoot),
           network: { enabled: Boolean(network) },
         },
       },
@@ -76,7 +80,10 @@ export function codexSessionParams(opts: StartThreadOptions, version: string | n
   const roots = codexWorkspaceRoots(opts);
   const bin = resolveCodexBin();
   const installRoot = bin && opts.mode !== 'full' ? codexInstallRoot(bin, roots) : undefined;
-  const sandbox = sandboxParams(opts.mode, opts.network, process.platform, roots, version, installRoot);
+  const shell = bin && process.platform === 'win32' && (opts.mode ?? 'full') !== 'full' ? windowsShellPath(bin) : undefined;
+  const shellRoot = shell ? codexShellReadRoot(shell, roots) : undefined;
+  const sandbox = sandboxParams(opts.mode, opts.network, process.platform, roots, version, installRoot,
+    bin && process.platform === 'win32' ? cachedWindowsSandbox(bin) : undefined, shellRoot);
   return {
     ...sandbox,
     cwd: opts.cwd,
@@ -89,6 +96,8 @@ export function codexSessionParams(opts: StartThreadOptions, version: string | n
       ...(typeof sandbox.config === 'object' ? sandbox.config : {}),
       projects: { [opts.cwd]: { trust_level: 'trusted' } },
       ...NATIVE_MEMORY_OFF,
+      ...(process.platform === 'win32' && (opts.mode ?? 'full') !== 'full'
+        ? { features: { ...NATIVE_MEMORY_OFF.features, prefer_mxc: false } } : {}),
       ...(profile.skills?.disabledPaths.length ? { skills: { config: profile.skills.disabledPaths.map(path => ({ path, enabled: false })) } } : {}),
       shell_environment_policy: { set: profile.env },
     },
@@ -774,7 +783,27 @@ export class CodexAppServerBackend implements AgentBackend {
   fullAccessOnly(): string | undefined {
     const bin = resolveCodexBin();
     const version = bin ? cachedCodexVersion(bin) : undefined;
-    return version === undefined || codexConfinesReads(process.platform, version) ? undefined : codexFullOnlyReason(version);
+    if (version === undefined && process.platform !== 'win32') return undefined;
+    const reason = codexTierUnavailable('qa', process.platform, version ?? null,
+      bin && process.platform === 'win32' ? cachedWindowsSandbox(bin) : undefined);
+    if (!reason && bin && process.platform === 'win32') {
+      const shell = windowsShellPath(bin);
+      if (shell) {
+        try { codexShellReadRoot(shell); } catch (error) { return error instanceof Error ? error.message : '无法确认 PowerShell 运行时读取范围，请重新检测。'; }
+      }
+    }
+    return reason;
+  }
+
+  async refreshPermissions(opts?: { force?: boolean }): Promise<void> {
+    if (process.platform !== 'win32') return;
+    const bin = resolveCodexBin(opts);
+    if (!bin) return;
+    const version = await codexVersionAsync(bin, opts);
+    // A version-only check is cheap and cannot accidentally start sandbox setup.
+    if (!codexTierUnavailable('qa', 'win32', version, { status: 'ready', implementation: 'mxc' })) {
+      await refreshWindowsSandbox(bin, opts);
+    }
   }
 
   async isAvailable(): Promise<boolean> {
@@ -797,7 +826,9 @@ export class CodexAppServerBackend implements AgentBackend {
     if (!version) {
       return { ok: false, version: null, location: bin, hint: `codex --version 执行失败（${bin}）` };
     }
-    return { ok: true, version, location: bin };
+    await this.refreshPermissions(opts);
+    return { ok: true, version, location: bin,
+      ...(process.platform === 'win32' ? { hint: this.fullAccessOnly() } : {}) };
   }
 
   async loginStatus(opts?: { refresh?: boolean }): Promise<import('../types').BackendLogin> {
@@ -971,6 +1002,7 @@ export class CodexAppServerBackend implements AgentBackend {
     // 90% of the window anyway.
     const bin = resolveCodexBin();
     const version = bin ? await codexVersionAsync(bin) : null;
+    if (bin && process.platform === 'win32' && (opts.mode ?? 'full') !== 'full') await this.refreshPermissions();
     const params = codexSessionParams(opts, version);
     await admitCodexWorkspaceLayout(opts);
     const client = await this.spawn(opts.cwd);
@@ -991,6 +1023,7 @@ export class CodexAppServerBackend implements AgentBackend {
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {
     const bin = resolveCodexBin();
     const version = bin ? await codexVersionAsync(bin) : null;
+    if (bin && process.platform === 'win32' && (opts.mode ?? 'full') !== 'full') await this.refreshPermissions();
     const params = codexSessionParams(opts, version);
     await admitCodexWorkspaceLayout(opts);
     const client = await this.spawn(opts.cwd);

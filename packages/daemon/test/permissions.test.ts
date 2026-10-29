@@ -69,14 +69,16 @@ describe('sandboxParams', () => {
         expect(() => sandboxParams('write', true)).toThrow(CodexFullOnlyError);
         expect(sandboxParams('full', false)).toEqual({ sandbox: 'danger-full-access' });
       });
-      expect(() => sandboxParams('qa', false, plat)).toThrow('测不出 Codex 的版本');
+      expect(() => sandboxParams('qa', false, plat)).toThrow(plat === 'win32'
+        ? '测不出 Windows 上 Codex 的版本' : '测不出 Codex 的版本');
     }
   });
 
-  it('the Codex backend defers the final check when the version cache is empty', () => {
+  it('defers the empty Linux version cache but requires Windows version/capability detection', () => {
     const backend = new CodexAppServerBackend();
     expect(withPlatform('darwin', () => backend.fullAccessOnly())).toBeUndefined();
-    for (const plat of ['linux', 'win32'] as const) expect(withPlatform(plat, () => backend.fullAccessOnly())).toBeUndefined();
+    expect(withPlatform('linux', () => backend.fullAccessOnly())).toBeUndefined();
+    expect(withPlatform('win32', () => backend.fullAccessOnly())).toContain('测不出 Windows 上 Codex 的版本');
   });
 });
 

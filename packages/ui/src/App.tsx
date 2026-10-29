@@ -147,7 +147,9 @@ function DesktopApp() {
   const [desktopUpdate] = useDesktopUpdate();
   const updateNotice = desktopUpdateNotice(desktopUpdate);
   const hasUpdateAction = Boolean(shell?.installDesktopUpdate && (desktopUpdate?.state === 'available' || desktopUpdate?.state === 'downloaded'));
-  useEffect(() => shell?.onQuitRequested?.(() => navigate(() => { void shell.quit?.(); })), [shell, navigate]);
+  useEffect(() => shell?.onQuitRequested?.(() => navigate(() => {
+    void shell.quit?.().catch(error => setNotice({message: error instanceof Error ? error.message : '后台服务尚未确认停止，请稍后再试。', error: true}));
+  })), [shell, navigate]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchTarget, setSearchTarget] = useState<Destination>();
   const [snapshot, setSnapshot] = useState<DesktopSnapshot>();
@@ -877,7 +879,7 @@ function DesktopApp() {
                   <MachinePanel reveal={searchTarget?.reveal} request={client.machine} agents={snapshot.agents} macos={snapshot.application.platform === 'macos'}/>
                   <SettingsPanel scope="host" target={{kind: 'host'}}/>
                 </>}>
-                <SettingsGroup label="启动选项" id={settingAnchor('启动选项')} footer="关闭窗口会隐藏 Dock 图标，应用仍在状态栏运行。可从状态栏重新打开或退出。">
+                <SettingsGroup label="启动选项" id={settingAnchor('启动选项')} footer={snapshot.application.platform === 'macos' ? '关闭窗口会隐藏 Dock 图标，Bot 继续运行；可从状态栏恢复窗口。选择退出会停止后台和所有 Bot。' : '关闭桌面窗口后应用留在系统托盘，Bot 继续运行。选择退出会停止后台和所有 Bot。'}>
                   <SettingsRow title="后台运行"
                     description={host.kind === 'connected'
                       ? `${host.ownership === 'owned' ? '由本机启动' : '已接续现有服务'} · 重新加载已保存的 Bot 设置`

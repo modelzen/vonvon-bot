@@ -14,6 +14,8 @@ import { WindowsDesktopUpdater, windowsUpdateConfiguration, createWindowsUpdateD
 import { desktopUpdateConfiguration } from './update-configuration.js';
 import { createDaemonManager, StartHostRefusal } from './daemon-manager.js';
 import { createDaemonDependencies, prepareDesktopRoot } from './daemon-dependencies.js';
+import { stopDaemonForQuit } from './quit-daemon.js';
+import { stopVerifiedOwner } from '../../daemon/src/server/owner-verification.js';
 import { desktopCliOptions, observeCli, registerCli } from './cli-registration.js';
 import { liveServiceActionRecord } from '../../daemon/src/service/action-report.js';
 import { changeLoginItem, followServiceHelper, repairServiceAtStartup, type LoginItemHooks, type ServiceRuntime } from './login-item.js';
@@ -74,6 +76,8 @@ export async function startDesktop(): Promise<void> {
   let quitWhenReady = false;
   let cleanupPromise: Promise<void> | undefined;
   let confirmation: Promise<void> | undefined;
+  let quitRequested = false;
+  let stopBeforeQuit: (() => Promise<void>) | undefined;
   let connectionFailureShown = false;
   let controlledDisconnect = false;
   let starting: Promise<unknown> | undefined;
@@ -122,7 +126,7 @@ export async function startDesktop(): Promise<void> {
   };
 
   const requestQuit = (): void => {
-    if (quitting || terminating) return;
+    if (quitRequested || quitting || terminating) return;
     if (!bridge) {
       quitWhenReady = true;
       return;
@@ -168,7 +172,30 @@ export async function startDesktop(): Promise<void> {
 
   const confirmQuit = (): Promise<void> => confirmation ??= (async () => {
     if (terminating) return;
-    terminating = true;
+    quitRequested = true;
+    // A real restart/start may be between owners. Let it finish so explicit Quit
+    // can stop its successor; abort only passive reconnection, which starts nothing.
+    if (passive && starting === passive.done) passive.cancel.abort();
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      if (starting) await Promise.race([
+        starting.catch(() => {}),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new StartHostRefusal('后台切换还没有完成，Vonvon Bot 尚未退出。请稍后重试。')), stopDeadlineMs);
+        }),
+      ]);
+      terminating = true;
+      controlledDisconnect = true;
+      await stopBeforeQuit?.();
+    } catch (error) {
+      terminating = false;
+      quitRequested = false;
+      controlledDisconnect = false;
+      confirmation = undefined;
+      show();
+      dialog.showErrorBox('Vonvon Bot 尚未退出', error instanceof Error ? error.message : '后台服务尚未确认停止，请稍后再试。');
+      throw error;
+    } finally { clearTimeout(timer); }
     try { await cleanup(); }
     catch (error) {
       dialog.showErrorBox('Vonvon Bot', '桌面连接没有正常关闭。');
@@ -237,6 +264,13 @@ export async function startDesktop(): Promise<void> {
     };
     const managerDependencies = createDaemonDependencies(serviceRuntime);
     const manager = createDaemonManager(managerDependencies);
+    stopBeforeQuit = () => stopDaemonForQuit({
+      readVerifiedDaemon: () => managerDependencies.readVerifiedDaemon(),
+      requestStop: daemon => stopVerifiedOwner(root, daemon),
+      ownerRunning: daemon => managerDependencies.ownerRunning(daemon),
+      handoffPending: () => liveServiceActionRecord(root)?.phase === 'running',
+      pause: ms => managerDependencies.pause(ms),
+    });
     const cliOptions = desktopCliOptions({ platform: process.platform, executable: process.execPath,
       resources: process.resourcesPath, packaged: app.isPackaged });
     if (app.isPackaged && !process.env.VONVON_DESKTOP_TEST_HOME) await registerCli(cliOptions);
@@ -305,7 +339,9 @@ export async function startDesktop(): Promise<void> {
     current.webContents.session.setPermissionCheckHandler((contents, permission, _origin, details) =>
       ownClipboardWrite(contents, permission, details.isMainFrame));
     current.on('close', event => {
-      if (!quitting && !terminating) {
+      // Quit can still fail while the daemon drains. Keep this window reusable
+      // until desktop cleanup actually commits, so a failed stop can be retried.
+      if (!quitting && !cleanupPromise) {
         event.preventDefault();
         hide();
       }
@@ -330,7 +366,7 @@ export async function startDesktop(): Promise<void> {
     }
 
     async function restartHost(previous: AttachedDaemon['identity'], send: () => Promise<CommandResult>): Promise<CommandResult> {
-      if (starting || terminating || cleanupPromise) throw new StartHostRefusal('正在启动、重启或重新连接 daemon，等它结束再重启。');
+      if (quitRequested || starting || terminating || cleanupPromise) throw new StartHostRefusal('正在启动、重启或重新连接 daemon，等它结束再重启。');
       const cancel = new AbortController();
       const cancelled = (): boolean => cancel.signal.aborted || terminating || cleanupPromise !== undefined || !bridge;
       const refusal = (): StartHostRefusal => new StartHostRefusal('重启已取消。');
@@ -383,7 +419,7 @@ export async function startDesktop(): Promise<void> {
     }
 
     async function stopHost(previous: AttachedDaemon['identity'], send: () => Promise<MachineReply>): Promise<MachineReply> {
-      if (starting || terminating || cleanupPromise) throw new StartHostRefusal('正在启动、重启或重新连接 daemon，等它结束再停止。');
+      if (quitRequested || starting || terminating || cleanupPromise) throw new StartHostRefusal('正在启动、重启或重新连接 daemon，等它结束再停止。');
       const cancel = new AbortController();
       const cancelled = (): boolean => cancel.signal.aborted || terminating || cleanupPromise !== undefined || !bridge;
       const refusal = (): StartHostRefusal => new StartHostRefusal('停止已取消。');
@@ -425,7 +461,7 @@ export async function startDesktop(): Promise<void> {
 
     /** Manual starts wait for passive reconnection to yield or an in-progress stop to finish. */
     function startBlocker(refusal: string): Promise<unknown> | undefined {
-      if (terminating || cleanupPromise) throw new StartHostRefusal(refusal);
+      if (quitRequested || terminating || cleanupPromise) throw new StartHostRefusal(refusal);
       if (!starting) return undefined;
       if (passive && starting === passive.done) { passive.cancel.abort(startTakesOver); return passive.done; }
       if (stopping && starting === stopping) return stopping.catch(() => {});
@@ -433,7 +469,7 @@ export async function startDesktop(): Promise<void> {
     }
 
     async function guardedService<T>(operation: () => Promise<T>): Promise<T> {
-      if (starting || terminating || cleanupPromise) throw new StartHostRefusal('正在启动、重启或重新连接 daemon，等它结束再操作后台服务。');
+      if (quitRequested || starting || terminating || cleanupPromise) throw new StartHostRefusal('正在启动、重启或重新连接 daemon，等它结束再操作后台服务。');
       const run = operation().finally(() => { starting = undefined; });
       starting = run;
       return run;
@@ -495,7 +531,7 @@ export async function startDesktop(): Promise<void> {
 
     /** Follow a helper's handover, or passively authenticate whatever daemon comes back after a connection loss. */
     function recoverConnection(lost: AttachedDaemon['identity']): boolean {
-      if (starting || terminating || cleanupPromise || !bridge) return false;
+      if (quitRequested || starting || terminating || cleanupPromise || !bridge) return false;
       controlledDisconnect = true;
       if (liveServiceActionRecord(root)?.phase === 'running') {
         void guardedService(() => followServiceHelper(serviceRuntime, lost, loginItemHooks)).catch(() => {
@@ -522,7 +558,7 @@ export async function startDesktop(): Promise<void> {
     }
 
     function showConnectionLost(): void {
-      if (connectionFailureShown || terminating) return;
+      if (connectionFailureShown || quitRequested || terminating) return;
       connectionFailureShown = true;
       dialog.showMessageBoxSync(current, {
         type: 'error',
@@ -590,6 +626,7 @@ export async function startDesktop(): Promise<void> {
       checkDesktopUpdate: async () => noteUpdate(await updater.check()),
       retryDesktopUpdate: async () => noteUpdate(await updater.retry()),
       installDesktopUpdate: async () => {
+        if (quitRequested) throw new StartHostRefusal('Vonvon Bot 正在退出，请稍后再更新。');
         try { return await updater.install(); }
         catch (error) {
           if (cleanupPromise) {
