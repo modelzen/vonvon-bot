@@ -58,7 +58,7 @@ describe('buildModelCard · 按当前模型能力自适应', () => {
     const base = { ...state(models, 'sol'), backend: 'codex-appserver' };
     const collapsed = json(base);
     expect(collapsed).toContain('model.speed.open');
-    expect(collapsed).toContain('"size":"tiny"');
+    expect(collapsed).toContain('"token":"speed_filled"');
     expect(collapsed).not.toContain('跟随群设置');
     expect(collapsed).not.toContain('"tier":"fast"');
     const expanded = json({ ...base, speedExpanded: true });
@@ -87,6 +87,31 @@ describe('buildModelCard · 按当前模型能力自适应', () => {
     expect(JSON.stringify(expanded[1])).toContain('"tier":"fast"');
   });
 
+  it.each(['standard', 'fast', 'ultrafast'] as const)('速度 %s 使用居中的纯图标，普通变暗、加速点亮且不截断文字', serviceTier => {
+    const models = [
+      model({ id: 'sol', displayName: 'A very long model label', supportedEfforts: ['high'], serviceTiers: [
+        { id: 'fast', name: 'Fast', description: '' }, { id: 'ultrafast', name: 'Ultrafast', description: '' },
+      ] }),
+      model({ id: 'other', displayName: 'Other' }),
+    ];
+    const result = buildModelCard({ ...state(models, 'sol'), backend: 'codex-appserver', serviceTier });
+    const row = (result.body as { elements: Record<string, unknown>[] }).elements.find(e => e.tag === 'column_set')!;
+    expect(row.flex_mode).toBe('none');
+    const cols = row.columns as { width: string; vertical_align: string; elements: Record<string, unknown>[] }[];
+    expect(cols).toHaveLength(3);
+    expect(cols.every(c => c.vertical_align === 'center')).toBe(true);
+    expect(cols.slice(0, 2).every(c => c.width === 'weighted' && c.elements[0]!.width === 'fill')).toBe(true);
+    expect(cols[2]!.width).toBe('32px');
+    const control = cols[2]!.elements[0]!;
+    expect(control).not.toHaveProperty('text');
+    expect(control).toMatchObject({
+      tag: 'button', size: 'medium', width: 'fill',
+      icon: { tag: 'standard_icon', token: 'speed_filled', color: serviceTier === 'standard' ? 'grey-400' : 'orange' },
+      behaviors: [{ type: 'callback', value: { a: 'model.speed.open' } }],
+    });
+    expect(control.hover_tips).toMatchObject({ tag: 'plain_text', content: expect.stringContaining(serviceTier === 'standard' ? 'Standard' : serviceTier === 'fast' ? 'Fast' : 'Ultrafast') });
+  });
+
   it('目录未提供加速档时不显示速度控件', () => {
     const base = { ...state(singleNoEffort, 'only'), backend: 'codex-appserver' };
     const plain = json(base);
@@ -99,7 +124,8 @@ describe('buildModelCard · 按当前模型能力自适应', () => {
     const models = [model({ id: 'sol', displayName: 'Sol', serviceTiers: [{ id: 'fast', name: 'Fast', description: '' }] })];
     const card = json({ ...state(models, 'sol'), backend: 'codex-appserver', serviceTier: 'ultrafast' });
     expect(card).toContain('model.speed.open');
-    expect(card).not.toContain('⚡ Ultrafast');
+    expect(card).toContain('"color":"grey-400"');
+    expect(card).not.toContain('响应速度：Ultrafast');
   });
 
   it('手填 ID 即使与目录模型同名也不显示速度入口', () => {
