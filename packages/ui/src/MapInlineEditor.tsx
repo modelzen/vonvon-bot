@@ -4,9 +4,10 @@ import type {MapEditStart} from './MindMap';
 export type MapInlineEditorSession = {commit: () => Promise<boolean>; focus: () => void};
 
 /** Own the DOM draft for this edit session: polling must never replace what the user is typing. */
-export function MapInlineEditor({value, label = '编辑节点', busy = false, point, onCommit, onCancel, cancelWhenEmpty = false, session}: {
+export function MapInlineEditor({value, label = '编辑节点', busy = false, point, onCommit, onCancel, cancelWhenEmpty = false, cancelOnEscape = false, session}: {
   value: string; label?: string; busy?: boolean; point?: MapEditStart['point'];
   onCommit: (text: string) => Promise<boolean> | boolean; onCancel?: () => void; cancelWhenEmpty?: boolean;
+  cancelOnEscape?: boolean;
   session?: RefObject<MapInlineEditorSession | null>;
 }) {
   const initial = useRef(value);
@@ -62,6 +63,15 @@ export function MapInlineEditor({value, label = '编辑节点', busy = false, po
     onKeyDown={event => {
       event.stopPropagation();
       if (composing.current || event.nativeEvent.isComposing) return;
+      if (event.key === 'Escape' && cancelOnEscape && onCancel) {
+        event.preventDefault();
+        if (!submitting.current && !saving && !busy) onCancel();
+        return;
+      }
       if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Escape') {event.preventDefault(); void commit(true);}
-    }} onBlur={() => {if (composing.current) pendingBlur.current = true; else void commit();}}>{initial.current}</span>;
+    }} onBlur={event => {
+      const target = event.relatedTarget;
+      if (target && target instanceof Element && target.closest('.mm-node-footer') && event.currentTarget.closest('.mm-box')?.contains(target)) return;
+      if (composing.current) pendingBlur.current = true; else void commit();
+    }}>{initial.current}</span>;
 }

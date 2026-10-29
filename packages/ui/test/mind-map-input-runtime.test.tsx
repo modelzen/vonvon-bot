@@ -6,7 +6,7 @@ vi.mock('react', async original => ({...await original<typeof import('react')>()
 vi.mock('../src/MindMapCanvas', () => ({useMindMapCanvas: () => ({host: {current: null}, slots: new Map()})}));
 const preventDefault = vi.fn();
 const stopPropagation = vi.fn();
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {vi.unstubAllGlobals(); vi.clearAllMocks();});
 const event = (key: string, field = false) => ({key, target: {closest: () => field ? {} : null}, nativeEvent: {}, preventDefault, stopPropagation});
 const node = (extra: Partial<MapNode> = {}): MapNode => ({id: 'item', kind: 'leaf', label: '记忆', selected: true, ...extra});
 
@@ -42,7 +42,7 @@ it('Enter and Escape commit current text once, and never commit an unfinished IM
   expect(onCommit).not.toHaveBeenCalled();
   editor.props.onCompositionEnd();
   editor.props.onKeyDown(event('Escape'));
-  editor.props.onBlur();
+  editor.props.onBlur({relatedTarget: null});
   await Promise.resolve();
   expect(onCommit).toHaveBeenCalledExactlyOnceWith('中文草稿');
   resolve(true); await Promise.resolve();
@@ -55,7 +55,7 @@ it('an empty existing item validates through commit; an empty new draft cancels'
   await Promise.resolve();
   expect(onCommit).toHaveBeenCalledWith(''); expect(onCancel).not.toHaveBeenCalled();
   const adding = MapInlineEditor({value: '', onCommit, onCancel, cancelWhenEmpty: true});
-  adding.props.ref.current = {innerText: ''}; adding.props.onBlur();
+  adding.props.ref.current = {innerText: ''}; adding.props.onBlur({relatedTarget: null});
   expect(onCancel).toHaveBeenCalledOnce();
 });
 
@@ -64,8 +64,36 @@ it('defers blur during composition and commits the completed Chinese text afterw
   const onCommit = vi.fn(() => true);
   const editor = MapInlineEditor({value: '', onCommit});
   editor.props.ref.current = {innerText: '中文组合完成'};
-  editor.props.onCompositionStart(); editor.props.onBlur();
+  editor.props.onCompositionStart(); editor.props.onBlur({relatedTarget: null});
   await Promise.resolve(); expect(onCommit).not.toHaveBeenCalled();
   editor.props.onCompositionEnd(); await Promise.resolve();
   expect(onCommit).toHaveBeenCalledExactlyOnceWith('中文组合完成');
+});
+
+it('preserves a draft when tabbing into its own toolbar and lets Escape cancel it', async () => {
+  class ToolbarButton {closest() {return {};}}
+  vi.stubGlobal('Element', ToolbarButton);
+  const onCommit = vi.fn(() => true); const onCancel = vi.fn();
+  const editor = MapInlineEditor({value: '原文', onCommit, onCancel, cancelOnEscape: true});
+  editor.props.ref.current = {innerText: '尚未保存'};
+  editor.props.onBlur({relatedTarget: new ToolbarButton(), currentTarget: {closest: () => ({contains: () => true})}});
+  await Promise.resolve();
+  expect(onCommit).not.toHaveBeenCalled();
+  editor.props.onKeyDown(event('Escape'));
+  expect(onCancel).toHaveBeenCalledOnce();
+  expect(onCommit).not.toHaveBeenCalled();
+});
+
+it('keeps the draft mounted when Escape follows a pending save that can still fail', async () => {
+  let finish!: (ok: boolean) => void;
+  const onCommit = vi.fn(() => new Promise<boolean>(resolve => {finish = resolve;}));
+  const onCancel = vi.fn();
+  const editor = MapInlineEditor({value: '原文', onCommit, onCancel, cancelOnEscape: true});
+  editor.props.ref.current = {innerText: '待保存的草稿'};
+  editor.props.onKeyDown(event('Enter')); await Promise.resolve();
+  editor.props.onKeyDown(event('Escape'));
+  expect(onCancel).not.toHaveBeenCalled();
+  expect(onCommit).toHaveBeenCalledExactlyOnceWith('待保存的草稿');
+  finish(false); await Promise.resolve(); await Promise.resolve();
+  expect(editor.props.ref.current.innerText).toBe('待保存的草稿');
 });

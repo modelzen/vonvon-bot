@@ -7,7 +7,7 @@ import {SelectJoinBotDialog} from './SelectJoinBotDialog';
 import {GlowButton} from './GlowButton';
 import {NavigationIndicator} from './NavigationIndicator';
 import {usePendingGroups} from './pending-groups';
-import type {PendingGroup, ProjectId} from '@vonvon/protocol';
+import type {MembershipId, PendingGroup, ProjectId} from '@vonvon/protocol';
 import { useEffect, useRef, useState } from "react";
 import {
   Bot,
@@ -175,6 +175,7 @@ function DesktopApp() {
   const [groupDirectoryState, setGroupDirectoryState] = useState<GroupDirectoryState>({query: '', expanded: {}});
   const [projectDirectoryState, setProjectDirectoryState] = useState<ProjectDirectoryState>({query: '', expanded: {}});
   const [groupTabs, setGroupTabs] = useState<Record<string, GroupDesignTab>>({});
+  const [newMemoryFocus, setNewMemoryFocus] = useState<{memberId: string; token: number}>();
   const [featureId, setFeatureId] = useState<string>();
   const feature = uiFeatures.find(item => item.id === featureId && item.slot === "page");
   const view = routeView(route);
@@ -344,6 +345,7 @@ function DesktopApp() {
     if (!snapshot) return;
     navigate(() => {
       setJoinedTarget(undefined);
+      setNewMemoryFocus(undefined);
       setRoute(current => next.kind === 'overview'
         ? {kind: 'list', view: routeView(current)}
         : next.kind === 'agent'
@@ -355,6 +357,19 @@ function DesktopApp() {
             : openMembership(current, next.id, snapshot));
       setPage("collaboration");
       setSettingsReturn(undefined);
+      setNotice(undefined);
+    });
+  }
+  function openGroupNewMemory(memberId: MembershipId) {
+    if (!snapshot?.memberships.some(item => item.id === memberId)) return;
+    navigate(() => {
+      setGroupTabs(current => ({...current, [memberId]: 'memory'}));
+      setNewMemoryFocus(current => ({memberId, token: (current?.token ?? 0) + 1}));
+      setRoute(current => openMembership(current, memberId, snapshot));
+      setPage('collaboration');
+      setSettingsReturn(undefined);
+      setFeatureId(undefined);
+      setSearchTarget(undefined);
       setNotice(undefined);
     });
   }
@@ -579,14 +594,15 @@ function DesktopApp() {
       >
         <div className="page-stack">
           {feature ? <FeaturePage feature={feature} /> : <>
-          {page === 'collaboration' && route.kind !== 'list' && <nav className="collaboration-breadcrumb" aria-label="当前位置">
+          {page === 'collaboration' && route.kind !== 'list' && <nav className={`collaboration-breadcrumb${route.kind === 'membership' && view === 'groups' ? ' collaboration-breadcrumb--group-memory' : ''}`} aria-label="当前位置">
             <button type="button" onClick={() => openList(view)}>{view === 'agents' ? 'Bot' : view === 'groups' ? '群组' : '项目管理'}</button>
             <ChevronRight size={12} aria-hidden="true" />
             {route.kind === 'membership' && <>
               <button type="button" onClick={() => changeRoute(routeBack)}>{route.parent.kind === 'group' ? group?.name ?? '飞书群' : parentLabel}</button>
               <ChevronRight size={12} aria-hidden="true" />
             </>}
-            <span aria-current="page">{route.kind === 'membership' ? route.parent.kind === 'agent' ? group?.name ?? '飞书群' : agent?.name ?? 'Bot' : agent?.name ?? group?.name ?? project?.name ?? '内容已变化'}</span>
+            <span aria-current={route.kind === 'membership' && groupTabs[route.id] === 'memory' ? undefined : 'page'}>{route.kind === 'membership' ? route.parent.kind === 'agent' ? group?.name ?? '飞书群' : agent?.name ?? 'Bot' : agent?.name ?? group?.name ?? project?.name ?? '内容已变化'}</span>
+            {route.kind === 'membership' && groupTabs[route.id] === 'memory' && <><ChevronRight size={12} aria-hidden="true"/><span aria-current="page">记忆</span></>}
           </nav>}
           {pendingGroups.map(page => {
             const owner = snapshot.agents.find(item => item.id === page.agentId);
@@ -700,7 +716,7 @@ function DesktopApp() {
                         </section>
                       )
                     : view === "groups" ? <><MigrationBanner snapshot={snapshot}/><GroupDirectory snapshot={snapshot} state={groupDirectoryState} onStateChange={setGroupDirectoryState} statusFor={agentListStatus}
-                        onMembership={id => select({kind: 'membership', id})} newCounts={newCounts.projects}
+                        onMembership={id => select({kind: 'membership', id})} onNewMemory={openGroupNewMemory} newCounts={newCounts.projects}
                         onJoin={() => navigate(() => setModal({kind: 'selectJoinBot'}))} joinDisabled={!ready || busy || !snapshot.agents.some(agent => agent.enabled && !agent.readError)}/></>
                     : <><MigrationBanner snapshot={snapshot}/><ProjectDirectory newCounts={newCounts.projects} snapshot={snapshot} state={projectDirectoryState} onStateChange={setProjectDirectoryState} statusFor={agentListStatus}
                         onProject={id => select({kind: 'project', id})} onMembership={id => select({kind: 'membership', id})}
@@ -833,7 +849,7 @@ function DesktopApp() {
                 onAddGroup={(agentId, projectId) => navigate(() => setModal({kind: 'join', agentId, project: projectId}))}
                 onOpenTools={() => openContextSettings('environment')} onOpenProviders={() => openContextSettings('providers')} onOpenSecrets={provider => openContextSettings('secrets', decisionProviderSection(provider))}/>}
               {member && agent && group && <GroupWorkspace key={member.id} member={member} agent={agent} group={group} snapshot={snapshot}
-                revealHistory={searchTarget?.reveal === "group-history"} initialTab={searchTarget ? groupTabForSection(searchTarget.section) : groupTabs[member.id]} onTabChange={tab => setGroupTabs(current => ({...current,[member.id]:tab}))}
+                revealHistory={searchTarget?.reveal === "group-history"} initialTab={searchTarget ? groupTabForSection(searchTarget.section) : groupTabs[member.id]} focusNew={newMemoryFocus?.memberId === member.id ? newMemoryFocus.token : undefined} newMemoryCount={member.projectId ? newCounts.projects[member.projectId] : undefined} onTabChange={tab => {setGroupTabs(current => ({...current,[member.id]:tab})); setNewMemoryFocus(undefined);}}
                 onBot={next => select({kind:'membership',id:next.id})}
                 onBotProfile={() => changeRoute(() => ({kind:'agent',id:agent.id,pane:{kind:'profile'}}))}
                 onProject={id => select({kind: 'project', id})}
