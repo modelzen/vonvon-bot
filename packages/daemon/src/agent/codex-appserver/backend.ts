@@ -37,6 +37,7 @@ import { CodexFullOnlyError, codexTierUnavailable, type WindowsSandboxCapability
 import { cachedCodexVersion, codexVersionAsync, resolveCodexBin } from './locate';
 import { cachedWindowsSandbox, refreshWindowsSandbox, windowsShellPath } from './windows-sandbox';
 import type { ServerNotification, Thread, ThreadItem, Turn, TurnStartResponse } from './protocol';
+import { codexModelCacheKey, discoverCodexModels } from './models';
 
 const APPROVAL_POLICY = 'never';
 
@@ -292,6 +293,7 @@ class CodexThread implements AgentThread {
     private onDisk: boolean,
     readonly lastCompaction?: string,
     private readonly entry?: AgentEntry,
+    private readonly supportsEffort?: (model: string) => boolean,
   ) {}
 
   get releaseAfterRun(): boolean {
@@ -313,7 +315,9 @@ class CodexThread implements AgentThread {
       input: toUserInput(input),
     };
     if (self.model) params.model = self.model;
-    if (self.effort) params.effort = self.effort;
+    // A configured custom model may have no native effort metadata. Leave its
+    // reasoning settings to Codex instead of sending our generic medium fallback.
+    if (self.effort && (!self.model || self.supportsEffort?.(self.model) !== false)) params.effort = self.effort;
 
     // Fire turn/start NOW — at runStreamed() call time, NOT lazily on the first
     // next() — so model inference runs in parallel with the caller's card setup
@@ -729,6 +733,8 @@ export class CodexAppServerBackend implements AgentBackend {
   readonly id = 'codex-appserver';
   readonly displayName = 'Codex (app-server)';
   private modelCache: ModelInfo[] | null = null;
+  private modelCacheKey = '';
+  private modelCatalogPath: string | undefined;
 
   async listSkills({ cwd }: { cwd: string; directories?: string[] }): Promise<AgentSkill[]> {
     const result = await utilityRequest<{ data: Array<{ cwd: string; skills: Array<{ path: string; name: string; description: string; scope: string; enabled: boolean }>; errors?: Array<{ message: string }> }> }>('skills/list', { cwds: [cwd], forceReload: true });
@@ -803,25 +809,42 @@ export class CodexAppServerBackend implements AgentBackend {
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    if (this.modelCache) return this.modelCache;
-    if (!resolveCodexBin()) return OFFLINE_CODEX_MODELS;
+    const bin = resolveCodexBin();
+    if (!bin) { this.modelCache = null; return []; }
+    const priorCatalogPath = this.modelCatalogPath;
+    const key = codexModelCacheKey(bin, priorCatalogPath);
+    if (this.modelCache && this.modelCacheKey === key) return this.modelCache;
+    this.modelCache = null;
     try {
-      // 常驻 utility client（M-2）：原本每次付一套 spawn+initialize，现在共享复用。
-      const res = await utilityRequest<{ data?: RawModel[] }>('model/list', { limit: 50 });
-      const models = (res.data ?? []).map(mapModel);
-      // 空列表和失败一样：回落兜底但不缓存，下次再问（handle-message 的 listModels 注释）。
-      if (!models.length) return OFFLINE_CODEX_MODELS;
+      const { models, catalogPath } = await discoverCodexModels(bin);
+      if (codexModelCacheKey(bin, priorCatalogPath) !== key) throw new Error('Codex configuration changed during discovery');
       this.modelCache = models;
+      this.modelCatalogPath = catalogPath;
+      this.modelCacheKey = codexModelCacheKey(bin, catalogPath);
       return models;
-    } catch (err) {
-      log.fail('agent', err, { phase: 'model/list' });
-      return OFFLINE_CODEX_MODELS;
+    } catch {
+      // Native config errors can quote lines containing private API settings.
+      log.warn('agent', 'Codex model discovery failed', { phase: 'model/list' });
+      return [];
     }
   }
 
   /** The cached `model/list`, or undefined; never fetches (the judge path must not wait for it). */
   peekModels(): ModelInfo[] | undefined {
     return this.modelCache ?? undefined;
+  }
+
+  private threadEffortSupport(): (model: string) => boolean {
+    // A re-detection can replace/clear the picker directory while older threads
+    // still run. Keep each thread's known capabilities for those models.
+    const support = new Map(this.modelCache?.map(model => [model.id, model.supportedEfforts.length > 0]));
+    return model => {
+      if (!support.has(model)) {
+        const info = this.modelCache?.find(value => value.id === model);
+        if (info) support.set(model, info.supportedEfforts.length > 0);
+      }
+      return support.get(model) !== false;
+    };
   }
 
   /** One smart-mode judgement on the resident judge process (s23b, judge-process.ts). */
@@ -945,7 +968,8 @@ export class CodexAppServerBackend implements AgentBackend {
       await client.close().catch((closeErr: unknown) => log.fail('agent', closeErr, { phase: 'start-close' }));
       throw err;
     }
-    return new CodexThread(client, res.thread.id, opts.model, opts.effort, false, undefined, opts.entry);
+    return new CodexThread(client, res.thread.id, opts.model, opts.effort, false, undefined, opts.entry,
+      this.threadEffortSupport());
   }
 
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {
@@ -968,7 +992,8 @@ export class CodexAppServerBackend implements AgentBackend {
       if (isWriterConflict(err)) throw new SessionInUseError(opts.sessionId, err);
       throw err;
     }
-    return new CodexThread(client, res.thread.id, opts.model, opts.effort, true, lastCompactionOf(res.thread.turns), opts.entry);
+    return new CodexThread(client, res.thread.id, opts.model, opts.effort, true, lastCompactionOf(res.thread.turns), opts.entry,
+      this.threadEffortSupport());
   }
 
   private async spawn(cwd: string): Promise<AppServerClient> {
@@ -1077,28 +1102,6 @@ interface RawThread {
   updatedAt?: number;
   name?: string | null;
   ephemeral?: boolean;
-}
-
-interface RawModel {
-  id: string;
-  displayName?: string;
-  description?: string;
-  hidden?: boolean;
-  isDefault?: boolean;
-  supportedReasoningEfforts?: { reasoningEffort: ReasoningEffort }[];
-  defaultReasoningEffort?: ReasoningEffort;
-}
-
-function mapModel(m: RawModel): ModelInfo {
-  return {
-    id: m.id,
-    displayName: m.displayName ?? m.id,
-    description: m.description ?? '',
-    hidden: m.hidden ?? false,
-    isDefault: m.isDefault ?? false,
-    supportedEfforts: (m.supportedReasoningEfforts ?? []).map((e) => e.reasoningEffort),
-    defaultEffort: m.defaultReasoningEffort ?? 'medium',
-  };
 }
 
 export const OFFLINE_CODEX_MODELS: ModelInfo[] = [
