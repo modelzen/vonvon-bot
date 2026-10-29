@@ -57,6 +57,14 @@ function render() {
   return {workspace, mode: workspace.find(node => node.props.label === '聊天方式' && node.props.onChange)!};
 }
 
+it('marks new memories on the memory tab even when general group settings opens first', () => {
+  const workspace = nodes(renderAt('memory-marker', () => GroupWorkspace({member, agent, group, snapshot, initialTab: 'model', newMemoryCount: 2,
+    onBot: () => {}, onBotProfile: () => {}, onOpenTools: () => {}, onOpenSecrets: () => {}, onChanged: changed})));
+  const memoryTab = workspace.find(node => node.type === 'button' && nodes(node).some(child => child.props.className === 'group-memory-tab-new'))!;
+  expect(memoryTab.props['aria-current']).toBeUndefined();
+  expect(nodes(memoryTab).find(node => node.props.className === 'group-memory-tab-new')!.props.children.join('')).toBe('新 2');
+});
+
 async function flush() {for (let i = 0; i < 16; i++) await Promise.resolve();}
 async function settle() {await flush(); render(); await flush(); return render();}
 async function openSmart() {render(); let ui = await settle(); ui.mode.props.onChange('smart'); render(); return settle();}

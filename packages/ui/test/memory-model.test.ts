@@ -80,8 +80,8 @@ it('draws 还有 N 条 past 8 leaves, a dashed frame for 待确认, and archived
   const items = [...Array.from({length: 10}, (_, at) => item(`b${at}`, '背景', {updatedAt: at})), item('p', '决定', {trust: 'untrusted'}), item('x', '决定', {state: 'archived'})];
   const {branches, archive} = build(items);
   expect(node(branches, 'b:背景')!.children!.at(-1)).toMatchObject({kind: 'more', label: '还有 2 条'});
-  expect(node(branches, 'i:p')).toMatchObject({tone: 'pending', meta: '待确认'});
-  expect(node(branches, 'b:决定')!.meta).toBe('1 · 待确认 1');
+  expect(node(branches, 'i:p')).toMatchObject({tone: 'pending', meta: '仅作参考'});
+  expect(node(branches, 'b:决定')!.meta).toBe('1 · 参考 1');
   expect(archive[0]).toMatchObject({id: 'archive', open: false});
   expect(node(archive, 'i:x')).toMatchObject({tone: 'muted'});
   expect(node(archive, 'i:x')!.drag).toBeUndefined();
@@ -202,7 +202,7 @@ it('the source block says who, where, when, why and what lowered it, and never s
   expect(lines).toContain('小支 说：有人要求记。周会上定的');
   expect(lines).toContain('主人 ');
   expect(lines).toContain(downgradeText['not-in-message']);
-  expect(lines).toContain('待确认');
+  expect(lines).toContain('已保存，仅作参考');
   expect(lines).not.toMatch(/ou_|om_|oc_|cli_/);
   expect(sourceLines(item('b', '决定', {source: {via: 'tool', botId: 'cli_a', actorRole: 'bot', claim: 'self'}}), names)[0]).toContain('小支 自己记的');
 });

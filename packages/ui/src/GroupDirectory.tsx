@@ -1,4 +1,4 @@
-import {Bot, ChevronRight, Search, X} from 'lucide-react';
+import {ArrowUpRight, Bot, ChevronRight, Search, X} from 'lucide-react';
 import {backendLabel, type Agent, type DesktopSnapshot, type GroupId, type Membership, type MembershipId} from '@vonvon/protocol';
 import {AgentAvatar} from './AgentAvatar';
 import {GroupAvatar} from './GroupAvatar';
@@ -13,6 +13,7 @@ type Props = {
   onStateChange: (state: GroupDirectoryState) => void;
   statusFor: (agent: Agent) => Status;
   onMembership: (id: MembershipId) => void;
+  onNewMemory?: (id: MembershipId) => void;
   onJoin: () => void;
   joinDisabled?: boolean;
   newCounts?: Readonly<Record<string, number>>;
@@ -22,7 +23,7 @@ type Props = {
 // and the join entry reachable; each group retains its own expansion control.
 // Existing canvas/surface tokens, 13px names and 11px metadata preserve the compact Mac layout.
 // Only groups with no available Bot are muted; partially available groups retain their name contrast.
-export function GroupDirectory({snapshot, state, onStateChange, statusFor, onMembership, onJoin, joinDisabled, newCounts}: Props) {
+export function GroupDirectory({snapshot, state, onStateChange, statusFor, onMembership, onNewMemory, onJoin, joinDisabled, newCounts}: Props) {
   const agents = new Map(snapshot.agents.map(agent => [agent.id, agent]));
   const directory = snapshot.groups.map(group => ({group, members: snapshot.memberships.filter(member => member.groupId === group.id)}));
   const query = state.query.trim().toLocaleLowerCase();
@@ -59,6 +60,7 @@ export function GroupDirectory({snapshot, state, onStateChange, statusFor, onMem
           const summary = !exceptions.length ? undefined : labels.length === 1 && unavailable ? labels[0] : `${exceptions.length} 个 Bot 不可用`;
           const summaryTone = exceptions.some(status => status.tone === 'warning') ? 'warning' : 'neutral';
           const newCount = [...new Set(members.flatMap(member => member.projectId ?? []))].reduce((sum, id) => sum + (newCounts?.[id] ?? 0), 0);
+          const freshMember = members.find(member => member.projectId && (newCounts?.[member.projectId] ?? 0) > 0 && agents.has(member.agentId));
           const listId = `group-directory-bots-${encodeURIComponent(group.id)}`;
           return <li className="group-directory-item" data-unavailable={unavailable || undefined} key={group.id}>
             <div className="group-directory-group-row">
@@ -66,13 +68,14 @@ export function GroupDirectory({snapshot, state, onStateChange, statusFor, onMem
                 onKeyDown={event => {if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {event.preventDefault(); toggle(group.id, event.key === 'ArrowRight');}}}>
                 <ChevronRight className="group-directory-disclosure" size={13} aria-hidden="true"/>
                 <GroupAvatar group={group}/><span className="group-directory-name" title={group.name}>{group.name}</span>
-                <span className="group-directory-count">{members.length} 个 Bot{newCount ? ` · 新 ${newCount}` : ''}</span>
+                <span className="group-directory-count">{members.length} 个 Bot</span>
                 {summary && <span className="group-directory-summary" data-tone={summaryTone}>{summary}</span>}
                 {!expanded && <span className="group-directory-avatar-stack" aria-hidden="true">
                   {members.slice(0, 4).map(member => {const agent = agents.get(member.agentId); return agent ? <AgentAvatar key={member.id} agent={agent}/> : <span key={member.id} className="collaboration-avatar agent"><Bot size={12}/></span>;})}
                   {members.length > 4 && <span className="group-directory-overflow">+{members.length - 4}</span>}
                 </span>}
               </button>
+              {freshMember && newCount > 0 && onNewMemory && <button type="button" className="group-directory-new-memory" onClick={() => onNewMemory(freshMember.id)} aria-label={`查看 ${group.name} 中的 ${newCount} 条新记忆`}>{newCount} 条新记忆<ArrowUpRight size={13} aria-hidden="true"/></button>}
             </div>
             <ul className="group-directory-bots" id={listId} aria-label={`${group.name}的 Bot`} hidden={!expanded}>
               {members.map(member => {
