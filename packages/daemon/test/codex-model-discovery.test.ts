@@ -12,6 +12,8 @@ type RawModel = {
   hidden?: boolean;
   supportedReasoningEfforts?: { reasoningEffort: string }[];
   defaultReasoningEffort?: string;
+  serviceTiers?: { id: string; name: string; description: string }[];
+  additionalSpeedTiers?: string[];
 };
 type FixtureState = {
   config: Record<string, unknown>;
@@ -20,6 +22,10 @@ type FixtureState = {
   };
   failModels?: boolean;
   failConfig?: boolean;
+  account?: { type: string; planType?: string } | null;
+  requirements?: { requirements: { featureRequirements?: Record<string, boolean> } | null; supportsIndependentSpeedModes?: boolean };
+  remoteCache?: { fetchedAt?: string; identity?: string; clientVersion?: string; skipWrite?: boolean };
+  cwdConfig?: Record<string, unknown>;
 };
 type Call = { pid: number; method: string; params: Record<string, unknown> };
 
@@ -51,22 +57,25 @@ require('node:readline').createInterface({input: process.stdin}).on('line', line
   if (message.method === 'initialize') return send(message.id, {});
   if (message.method === 'config/read') {
     if (state.failConfig) return process.stdout.write(JSON.stringify({id:message.id, error:{code:-32000, message:'fixture configuration unavailable'}}) + '\n');
-    return send(message.id, {config:state.config, origins:{}, layers:null});
+    return send(message.id, {config:message.params?.cwd?.endsWith('restricted-session') && state.cwdConfig ? {...state.config,...state.cwdConfig} : state.config, origins:{}, layers:null});
   }
-  if (message.method === 'account/read') return send(message.id, {requiresOpenaiAuth:false, account:null});
+  if (message.method === 'account/read') return send(message.id, {requiresOpenaiAuth:!!state.account, account:state.account || null});
+  if (message.method === 'configRequirements/read') return send(message.id, state.requirements || {requirements:null, supportsIndependentSpeedModes:true});
   if (message.method === 'model/list') {
     if (state.failModels) return process.stdout.write(JSON.stringify({id:message.id, error:{code:-32000, message:'fixture model discovery unavailable'}}) + '\n');
+    if (state.remoteCache && !state.remoteCache.skipWrite) fs.writeFileSync(path.join(home,'models_cache.json'),JSON.stringify({fetched_at:state.remoteCache.fetchedAt || new Date().toISOString(),identity:state.remoteCache.identity ?? 'fixture-account-bound-identity',client_version:state.remoteCache.clientVersion || '0.156.1',models:Object.values(state.pages).flatMap(page=>page.data).map(model=>({slug:model.model || model.id,service_tiers:model.serviceTiers,additional_speed_tiers:model.additionalSpeedTiers}))}));
     return send(message.id, state.pages[message.params?.cursor || 'first'] || {data:[], nextCursor:null});
   }
-  if (message.method === 'thread/start') {
+  if (message.method === 'thread/start' || message.method === 'thread/resume') {
     const p = message.params;
     return send(message.id, {
-      thread: {id: 'thread-' + process.pid}, cwd:p.cwd, runtimeWorkspaceRoots:p.runtimeWorkspaceRoots,
+      thread: {id: p.threadId || 'thread-' + process.pid}, cwd:p.cwd, runtimeWorkspaceRoots:p.runtimeWorkspaceRoots,
       approvalPolicy:p.approvalPolicy,
       sandbox: {type:p.sandbox === 'read-only' ? 'readOnly' : 'dangerFullAccess', networkAccess:false},
     });
   }
   if (message.method === 'turn/start') {
+    if (JSON.stringify(message.params.input).includes('reject tier')) return process.stdout.write(JSON.stringify({id:message.id, error:{code:-32000, message:'fixture turn rejected'}}) + '\n');
     const turn = {id:'turn-' + process.pid, status:'completed', items:[], error:null};
     send(message.id, {turn});
     return process.stdout.write(JSON.stringify({method:'turn/completed', params:{threadId:message.params.threadId, turn}}) + '\n');
@@ -109,6 +118,138 @@ afterEach(async () => {
 });
 
 describe('Codex model discovery preserves the native picker directory', () => {
+  function enableRemoteAccess(): void {
+    state.account = {type:'chatgpt', planType:'pro'};
+    state.remoteCache = {};
+    writeFileSync(join(directory,'auth.json'),'{}');
+  }
+
+  it('normalizes confirmed native priority and legacy fast tiers without guessing Pro dollar amounts', async () => {
+    enableRemoteAccess();
+    state.pages.first.data = [
+      { ...native('native-a', true), serviceTiers: [{ id: 'priority', name: 'Fast', description: 'Fast response' }, { id: 'ultrafast', name: 'Ultrafast', description: 'Highest speed' }] },
+      { ...native('native-b'), additionalSpeedTiers: ['fast'] },
+    ];
+    save();
+    const models = await new CodexAppServerBackend().listModels();
+    expect(models[0]?.serviceTiers).toEqual([{id:'fast',name:'Fast',description:'Fast response'},{id:'ultrafast',name:'Ultrafast',description:'Highest speed'}]);
+    expect(models[1]?.serviceTiers).toEqual([{ id: 'fast', name: 'Fast', description: '' }]);
+  });
+
+  it('never exposes bundled acceleration metadata while signed out', async () => {
+    state.pages.first.data = [{...native('native-a'), serviceTiers:[{id:'priority',name:'Fast',description:''},{id:'ultrafast',name:'Ultrafast',description:''}]}];
+    save();
+    expect((await new CodexAppServerBackend().listModels())[0]?.serviceTiers).toBeUndefined();
+  });
+
+  it('does not treat a Pro plan name or local model catalog as Ultrafast permission', async () => {
+    enableRemoteAccess();
+    state.config = {model_catalog_json:join(directory,'custom-models.json')};
+    state.pages.first.data = [{...native('native-a'),serviceTiers:[{id:'ultrafast',name:'Ultrafast',description:''}]}];
+    writeFileSync(join(directory,'custom-models.json'),'{}');save();
+    expect((await new CodexAppServerBackend().listModels())[0]?.serviceTiers).toBeUndefined();
+  });
+
+  it.each(['missing','stale','wrong-version','before-login','keychain','custom-route'])(
+    'hides acceleration with %s account evidence', async scenario => {
+      enableRemoteAccess();
+      state.pages.first.data = [{...native('native-a'),serviceTiers:[{id:'priority',name:'Fast',description:''}]}];
+      if(scenario==='missing')state.remoteCache=undefined;
+      if(scenario==='stale')state.remoteCache={fetchedAt:new Date(Date.now()-301_000).toISOString()};
+      if(scenario==='wrong-version')state.remoteCache={clientVersion:'0.100.0'};
+      if(scenario==='before-login')state.remoteCache={fetchedAt:new Date(Date.now()-10_000).toISOString()};
+      if(scenario==='keychain')state.config={cli_auth_credentials_store:'keyring'};
+      if(scenario==='custom-route')state.config={model_providers:{openai:{base_url:'https://fixture.invalid'}}};
+      save();expect((await new CodexAppServerBackend().listModels())[0]?.serviceTiers).toBeUndefined();
+    });
+
+  it('applies workspace restrictions including the older shared fast gate', async () => {
+    enableRemoteAccess();state.pages.first.data=[{...native('native-a'),serviceTiers:[{id:'priority',name:'Fast',description:''},{id:'ultrafast',name:'Ultrafast',description:''}]}];
+    state.requirements={requirements:{featureRequirements:{fast_mode:false}},supportsIndependentSpeedModes:false};save();
+    expect((await new CodexAppServerBackend().listModels())[0]?.serviceTiers).toEqual([]);
+    state.requirements.supportsIndependentSpeedModes=true;save();
+    expect((await new CodexAppServerBackend().listModels())[0]?.serviceTiers?.map(tier=>tier.id)).toEqual(['ultrafast']);
+    state.requirements.requirements!.featureRequirements!.ultrafast_mode=false;save();
+    expect((await new CodexAppServerBackend().listModels())[0]?.serviceTiers).toEqual([]);
+  });
+
+  it('invalidates cached eligibility after account change and native metadata expiry', async () => {
+    enableRemoteAccess();state.pages.first.data=[{...native('native-a'),serviceTiers:[{id:'priority',name:'Fast',description:''}]}];save();
+    const backend=new CodexAppServerBackend();expect((await backend.listModels())[0]?.serviceTiers?.[0]?.id).toBe('fast');
+    writeFileSync(join(directory,'auth.json'),'{"changed":true}');expect(backend.peekModels()).toBeUndefined();
+    await backend.listModels();
+    const now=Date.now();const clock=vi.spyOn(Date,'now').mockReturnValue(now+301_000);
+    try{expect(backend.peekModels()).toBeUndefined();}finally{clock.mockRestore();}
+  });
+
+  it('constrains account tiers by the actual session cwd configuration', async () => {
+    enableRemoteAccess();state.pages.first.data=[{...native('native-a'),serviceTiers:[{id:'priority',name:'Fast',description:''}]}];
+    state.cwdConfig={features:{fast_mode:false}};save();
+    const backend=new CodexAppServerBackend();expect((await backend.listModels())[0]?.serviceTiers?.[0]?.id).toBe('fast');
+    expect((await backend.listModelsForCwd(join(directory,'restricted-session')))[0]?.serviceTiers).toEqual([]);
+    state.cwdConfig={model_provider:'custom-route'};save();
+    expect((await backend.listModelsForCwd(join(directory,'restricted-session')))[0]?.serviceTiers).toBeUndefined();
+  });
+
+  it('preserves confirmed empty tiers so a revoked acceleration cannot reactivate later', async () => {
+    enableRemoteAccess();state.pages.first.data=[{...native('native-a'),serviceTiers:[]}];save();
+    expect((await new CodexAppServerBackend().listModelsForCwd(directory))[0]?.serviceTiers).toEqual([]);
+  });
+
+  it('keeps ordinary dispatch explicit even when the user native default is Ultrafast', async () => {
+    state.config={service_tier:'ultrafast'};save();
+    const backend=new CodexAppServerBackend();const thread=await backend.startThread({cwd:directory,mode:'full',serviceTier:'standard'});
+    try {
+      for await(const _ of thread.runStreamed({text:'ordinary fallback'},{serviceTier:'standard'}).events) { /* drain */ }
+      expect(calls().find(call=>call.method==='thread/start')?.params.serviceTier).toBeNull();
+      expect(calls().filter(call=>call.method==='turn/start').at(-1)?.params.serviceTier).toBeNull();
+    } finally {await thread.close();}
+  });
+
+  it('sends explicit tiers and restores the native default when a session returns to inheritance', async () => {
+    state.config = { service_tier: 'ultrafast' };
+    save();
+    const backend = new CodexAppServerBackend();
+    const thread = await backend.startThread({ cwd: directory, mode: 'full', serviceTier: 'standard' });
+    try {
+      for await (const _ of thread.runStreamed({ text: 'standard' }, { serviceTier: 'standard' }).events) { /* drain */ }
+      for await (const _ of thread.runStreamed({ text: 'fast' }, { serviceTier: 'fast' }).events) { /* drain */ }
+      for await (const _ of thread.runStreamed({ text: 'inherit' }, { serviceTier: undefined }).events) { /* drain */ }
+      for await (const _ of thread.runStreamed({ text: 'native' }, { serviceTier: undefined }).events) { /* drain */ }
+      expect(calls().find(call => call.method === 'thread/start')?.params.serviceTier).toBeNull();
+      expect(calls().filter(call => call.method === 'turn/start').map(call => call.params.serviceTier)).toEqual([null, 'priority', 'ultrafast', undefined]);
+    } finally { await thread.close(); }
+  });
+
+  it('keeps native restoration pending after a rejected turn and restores it on retry', async () => {
+    state.config = {};
+    save();
+    const backend = new CodexAppServerBackend();
+    const thread = await backend.startThread({ cwd: directory, mode: 'full', serviceTier: 'fast' });
+    try {
+      const rejected = [];
+      for await (const event of thread.runStreamed({ text: 'reject tier' }, { serviceTier: undefined }).events) rejected.push(event);
+      expect(rejected.some(event => event.type === 'error')).toBe(true);
+      for await (const _ of thread.runStreamed({ text: 'retry' }, { serviceTier: undefined }).events) { /* drain */ }
+      expect(calls().filter(call => call.method === 'turn/start').map(call => call.params.serviceTier)).toEqual([null, null]);
+    } finally { await thread.close(); }
+  });
+
+  it('resets a persisted fast tier to native config when an inherited session resumes', async () => {
+    state.config = { service_tier: 'ultrafast' };
+    save();
+    const backend = new CodexAppServerBackend();
+    const started = await backend.startThread({ cwd: directory, mode: 'full', serviceTier: 'fast' });
+    const sessionId = started.sessionId;
+    await started.close();
+    const resumed = await backend.resumeThread({ cwd: directory, mode: 'full', sessionId });
+    try {
+      expect(calls().filter(call => call.method === 'thread/resume').at(-1)?.params.serviceTier).toBe('ultrafast');
+      for await (const _ of resumed.runStreamed({ text: 'inherited' }, { serviceTier: undefined }).events) { /* drain */ }
+      expect(calls().filter(call => call.method === 'turn/start').at(-1)?.params).not.toHaveProperty('serviceTier');
+    } finally { await resumed.close(); }
+  });
+
   it('does not append a configured model that the native picker directory does not contain', async () => {
     state.config = {model: 'local-custom-model', model_provider: 'local-proxy', model_reasoning_effort: 'high'};
     save();

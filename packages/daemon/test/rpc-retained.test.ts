@@ -82,7 +82,7 @@ describe('retained settings behavior over real WebSocket', () => {
 
       const readProject = await client.call({ type: 'request', id: 'read-project', method: 'settings', payload: { type: 'read', scope: project } });
       if (readProject.type !== 'response' || readProject.method !== 'settings' || readProject.payload.kind !== 'view' || !('response' in readProject.payload.view.sections)) throw new Error('project view missing');
-      expect(Object.keys(readProject.payload.view.sections).sort()).toEqual(['judge', 'model', 'modelAccess', 'permission', 'presentation', 'profile', 'response', 'role', 'run', 'skills', 'smartRules', 'workspace']);
+      expect(Object.keys(readProject.payload.view.sections).sort()).toEqual(['judge', 'model', 'modelAccess', 'permission', 'presentation', 'profile', 'response', 'role', 'run', 'skills', 'smartRules', 'speed', 'workspace']);
       const responseRevision = readProject.payload.view.sections.response.revision;
       const response = await client.call({ type: 'request', id: 'save-project', method: 'settings', payload: { type: 'save', edit: { scope: project, section: 'response', revision: responseRevision, patch: { noMention: false } } } });
       expect(response).toMatchObject({ type: 'response', method: 'settings', payload: { kind: 'saved', result: { kind: 'saved', section: { scope: project, section: 'response', value: { stored: { noMention: false } } } } } });
@@ -90,9 +90,14 @@ describe('retained settings behavior over real WebSocket', () => {
       expect(response.payload.result.section.value.revision).not.toBe(responseRevision);
       const rereadProject = await client.call({ type: 'request', id: 'reread-project', method: 'settings', payload: { type: 'read', scope: project } });
       expect(rereadProject).toMatchObject({ payload: { kind: 'view', view: { sections: { response: { revision: response.payload.result.section.value.revision, stored: { noMention: false } } } } } });
+      if (rereadProject.type !== 'response' || rereadProject.method !== 'settings' || rereadProject.payload.kind !== 'view' || !('speed' in rereadProject.payload.view.sections) || !rereadProject.payload.view.sections.speed) throw new Error('speed section missing');
+      const speedRevision = rereadProject.payload.view.sections.speed.revision;
+      const speed = await client.call({ type: 'request', id: 'save-speed', method: 'settings', payload: { type: 'save', edit: { scope: project, section: 'speed', revision: speedRevision, patch: { tier: 'standard' } } } });
+      expect(speed).toMatchObject({ payload: { kind: 'saved', result: { kind: 'saved', section: { section: 'speed', value: { stored: { tier: 'standard' } } } } } });
+      expect(JSON.parse(await readFile(fixture.projectFile, 'utf8')).serviceTier).toBe('standard');
       // The old key stays in the file untouched (no migration) and can no longer be written.
       const afterSave = await readFile(fixture.projectFile, 'utf8');
-      expect(JSON.parse(afterSave)).toMatchObject({ noMention: false, autoCompact: false });
+      expect(JSON.parse(afterSave)).toMatchObject({ noMention: false, autoCompact: false, serviceTier: 'standard' });
       client.socket.send(JSON.stringify({ type: 'request', id: 'compact', method: 'settings', payload: { type: 'save', edit: { scope: project, section: 'compact', revision: responseRevision, patch: { autoCompact: true } } } }));
       expect(await client.wait(frame => frame.type === 'error' && frame.id === 'compact')).toMatchObject({ code: 'invalid_request' });
       expect(await readFile(fixture.projectFile, 'utf8')).toBe(afterSave);

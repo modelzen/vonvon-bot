@@ -754,7 +754,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line =
 `);
   vi.stubEnv('CODEX_BIN', bin);
   const { CodexAppServerBackend } = await import('../src/agent/codex-appserver/backend');
-  const actual = await new CodexAppServerBackend().resumeThread({ cwd: workspace, sessionId: 'host' });
+  const actual = await new CodexAppServerBackend().resumeThread({ cwd: workspace, sessionId: 'host', serviceTier: 'standard' });
   fake.backend.resumeThread.mockResolvedValue(actual);
   const o = setup({ droppedFile: false });
   try {

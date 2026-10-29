@@ -49,7 +49,7 @@ beforeEach(async () => {
   primary = join(root, 'primary'); additional = join(root, 'additional');
   await mkdir(primary); await mkdir(additional);
   rpc.take.mockReturnValue({ request: rpc.request, close: rpc.close });
-  rpc.request.mockImplementation(async (_method, params) => ({
+  rpc.request.mockImplementation(async (method, params) => method === 'config/read' ? { config: {} } : ({
     cwd: params.cwd, runtimeWorkspaceRoots: params.runtimeWorkspaceRoots,
     thread: { id: params.threadId ?? 'synthetic-native' }, approvalPolicy: 'never',
     activePermissionProfile: { id: 'feishu', extends: null },

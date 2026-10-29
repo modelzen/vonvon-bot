@@ -25,7 +25,7 @@ export async function discoverProviderModels(backendId: 'codex-appserver' | 'cla
     return { models: [], message: '暂时无法读取 Provider 实时模型列表。' };
   }
 }
-const model = z.object({ id: z.string().min(1).max(1000), displayName: z.string(), description: z.string(), hidden: z.boolean(), isDefault: z.boolean(), supportedEfforts: z.array(z.enum(REASONING_EFFORTS)), defaultEffort: z.enum(REASONING_EFFORTS) });
+const model = z.object({ id: z.string().min(1).max(1000), displayName: z.string(), description: z.string(), hidden: z.boolean(), isDefault: z.boolean(), supportedEfforts: z.array(z.enum(REASONING_EFFORTS)), defaultEffort: z.enum(REASONING_EFFORTS), serviceTiers: z.array(z.object({ id: z.string(), name: z.string(), description: z.string() })).optional() });
 const snapshot = z.object({ backend: z.string(), observedAt: z.string(), models: z.array(model).max(1000) });
 const pathFor = (backend: string) => join(paths.appDir, 'model-catalog', `${createHash('sha256').update(backend).digest('hex').slice(0, 24)}.json`);
 async function readJson(file: string): Promise<unknown> {
@@ -44,7 +44,7 @@ export async function rememberModelCatalog(backend: string, models: ModelInfo[],
 export async function offlineModelCatalog(backend: string): Promise<{ models: ModelInfo[]; observedAt: string; message: string }> {
   try {
     const cached = snapshot.parse(await readJson(pathFor(backend)));
-    if (cached.backend === backend && cached.models.length) return { models: cached.models, observedAt: cached.observedAt, message: '使用本机保存的模型目录，启动后可刷新' };
+    if (cached.backend === backend && cached.models.length) return { models: cached.models.map(({serviceTiers: _tiers, ...model}) => model), observedAt: cached.observedAt, message: '使用本机保存的模型目录，启动后可刷新' };
   } catch { /* a missing or malformed cache never causes a provider launch */ }
   if (backend === 'codex-appserver') {
     try {
