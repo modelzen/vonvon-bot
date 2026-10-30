@@ -111,7 +111,7 @@ describe('decision model request (s23f 做法（问法）)', () => {
     expect(decisionBody(req('main'), 'S', 'm').state).not.toHaveProperty('bot_role');
   });
 
-  it('knows TypeSafe only; an inherited name such as constructor is no provider', () => {
+  it('keeps TypeSafe registered; an inherited name such as constructor is no provider', () => {
     expect(decisionProvider('typesafe')).toMatchObject({ displayName: 'TypeSafe', keyId: 'typesafe-api-key', limit: { running: 8, queued: 32 } });
     for (const id of ['constructor', 'toString', '__proto__', 'openai']) expect(decisionProvider(id)).toBeUndefined();
   });

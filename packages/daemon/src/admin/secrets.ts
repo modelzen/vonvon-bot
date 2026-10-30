@@ -1,4 +1,4 @@
-import { API_KEY_SHAPE, keyProblem, type AdminReply, type AdminRequest, type SecretService, type SecretUse } from '@vonvon/protocol';
+import { API_KEY_SHAPE, decisionEndpointProblem, keyProblem, type AdminReply, type AdminRequest, type SecretService, type SecretUse } from '@vonvon/protocol';
 import { catalogBackendIds } from '../agent/catalog';
 import { loadBots } from '../config/bots';
 import { MUTEX_TIMEOUT } from '../config/data-access';
@@ -7,7 +7,8 @@ import { getSecret, removeSecret, setSecret } from '../config/keystore';
 import { botPaths } from '../config/paths';
 import { loadConfig } from '../config/store';
 import { log } from '../core/logger';
-import { decisionProviders, type DecisionProvider } from '../judge/decision';
+import { decisionProvider, decisionProviders, type DecisionProvider } from '../judge/decision';
+import { readJudgeModels } from '../judge/global-models';
 import { parseStoredJudge, resolveJudgeModel } from '../judge/model';
 import { listProjectsIn, sessionModeOf } from '../project/registry';
 
@@ -20,6 +21,7 @@ export interface SecretsDeps {
   setSecret?: typeof setSecret;
   removeSecret?: typeof removeSecret;
   fetch?: typeof fetch;
+  readJudgeModels?: typeof readJudgeModels;
 }
 
 /** Shorter than this, four characters are too much of it to show (Claude 定, v1-plan s23g 做法). */
@@ -107,7 +109,7 @@ async function keyUses(): Promise<{ uses: Map<string, SecretUse[]>; unreadBots: 
     const owner = { agentId: bot.appId, agentName: bot.botName || bot.name };
     const botJudge = stored(cfg.preferences?.judge);
     if (botJudge?.kind === 'decision') add(botJudge.provider, owner);
-    else if (botJudge?.kind === 'provider' && botJudge.provider === 'typesafe') add('typesafe', owner);
+    else if (botJudge?.kind === 'provider' && decisionProvider(botJudge.provider)) add(botJudge.provider, owner);
     let defaultUnread = false;
     for (const p of projects) {
       const groupJudge = stored(p.judge);
@@ -120,10 +122,10 @@ async function keyUses(): Promise<{ uses: Map<string, SecretUse[]>; unreadBots: 
         continue;
       }
       if (selected?.kind === 'provider') {
-        if (!p.chatId || selected.provider !== 'typesafe') continue;
+        if (!p.chatId || !decisionProvider(selected.provider)) continue;
         const smart = sessionModeOf(p) === 'smart';
         if (!smart && !groupJudge) continue;
-        add('typesafe', { ...owner, groupId: p.chatId, groupName: p.name,
+        add(selected.provider, { ...owner, groupId: p.chatId, groupName: p.name,
           ...(!groupJudge ? { inherited: true } : {}), ...(smart ? {} : { notSmart: true }) });
         continue;
       }
@@ -142,9 +144,15 @@ async function keyUses(): Promise<{ uses: Map<string, SecretUse[]>; unreadBots: 
 export async function secretsView(deps: SecretsDeps = {}): Promise<SecretsView> {
   const { uses, unreadBots, botsUnreadable } = await keyUses();
   const services: SecretService[] = [];
+  // Keys must remain manageable even when the model settings need repair.
+  const profiles = await (deps.readJudgeModels ?? readJudgeModels)().catch(() => undefined);
   for (const p of decisionProviders()) {
     const status = await keyStatus(p, deps.getSecret);
-    services.push({ provider: p.id, displayName: p.displayName, keyId: p.keyId, models: p.models.map(m => ({ ...m })), ...status, inUse: uses.get(p.id) ?? [] });
+    const models = p.models.map(m => ({ ...m }));
+    const profile = profiles?.byProvider[p.id];
+    if (profile && !models.some(m => m.id === profile.model)) models.push({id: profile.model, displayName: profile.model});
+    services.push({ provider: p.id, displayName: p.displayName, keyId: p.keyId, models,
+      ...(p.id === 'custom' ? {endpointConfigured: !decisionEndpointProblem(profile?.endpoint)} : {}), ...status, inUse: uses.get(p.id) ?? [] });
   }
   return { kind: 'secrets', services, unreadBots, ...(botsUnreadable ? { botsUnreadable } : {}) };
 }
@@ -185,7 +193,14 @@ export async function secretsAction(request: SecretsRequest, deps: SecretsDeps =
       catch (error) { return keystoreRefused('test', keyId, error); }
       if (!key) return refused('missing_key', `还没填 ${provider.displayName} 的 key`);
       if (!API_KEY_SHAPE.test(key)) return refused('invalid_key', `存着的 ${provider.displayName} 的 key 不是一串可见字符，重新填一次`);
-      const result = await provider.probe(key, new AbortController().signal, deps.fetch);
+      let profile;
+      try { profile = (await (deps.readJudgeModels ?? readJudgeModels)()).byProvider[provider.id]; }
+      catch { return refused('configuration', '无法读取决策模型配置，请重新读取设置。'); }
+      if (provider.id === 'custom') {
+        const problem = decisionEndpointProblem(profile?.endpoint);
+        if (problem) return refused('configuration', problem);
+      }
+      const result = await provider.probe(key, new AbortController().signal, deps.fetch, profile);
       log.info('secrets', 'test', { keyId, outcome: result.outcome, ...(result.status ? { status: result.status } : {}) });
       return { kind: 'secretTested', keyId, ...result };
     }

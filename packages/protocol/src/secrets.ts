@@ -23,6 +23,8 @@ export type SecretUse = z.infer<typeof secretUseSchema>;
 export const secretServiceSchema = z.object({
   provider: z.string(), displayName: z.string(), keyId: z.string(),
   models: z.array(z.object({ id: z.string(), displayName: z.string() })),
+  /** Only custom: the shared System One endpoint is configured and valid. */
+  endpointConfigured: z.boolean().optional(),
   status: z.enum(["set", "missing", "invalid", "unreadable"]),
   /** its last four characters: only when set and 12 characters or longer */
   last4: z.string().optional(),

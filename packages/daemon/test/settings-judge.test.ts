@@ -12,7 +12,7 @@ import { addProject, getProjectByName, updateProject } from '../src/project/regi
 import {writeJudgeModels} from '../src/judge/global-models';
 import { readSmartPrompt } from '../src/judge/smart-file';
 import { DEFAULT_SMART_PROMPT, JUDGE_CLAUDE_NOTE, JUDGE_CODEX_NOTE, JUDGE_FORMAT_LINES, JUDGE_INPUT_EXAMPLE } from '../src/judge/prompt';
-import { DECISION_FORMAT_LINES, DECISION_INPUT_EXAMPLE, keyMissingText } from '../src/judge/decision';
+import { DECISION_FORMAT_LINES, DECISION_INPUT_EXAMPLE, decisionProviders, keyMissingText } from '../src/judge/decision';
 import type { AppConfig } from '../src/config/schema';
 import type { AgentBackend, ModelInfo, ReasoningEffort } from '../src/agent/types';
 
@@ -157,8 +157,8 @@ describe('judge settings: checks (design 2.4)', () => {
     [{ kind: 'llm', backend: 'gemini', model: 'x', custom: true }, '未知后端'],
     [{ kind: 'decision', provider: 'Type Safe', model: 'jev-latest' }, '决策模型的 provider 只能是小写字母、数字和 -，40 个字以内'],
     [{ kind: 'decision', provider: 'typesafe', model: 'jev <latest>' }, '模型 ID 不能包含空格、换行、反引号或尖括号。'],
-    [{ kind: 'decision', provider: 'openai', model: 'x' }, '没有 openai 这家决策模型，现在有：TypeSafe（typesafe）'],
-    [{ kind: 'decision', provider: 'constructor', model: 'x' }, '没有 constructor 这家决策模型，现在有：TypeSafe（typesafe）'],
+    [{ kind: 'decision', provider: 'openai', model: 'x' }, `没有 openai 这家决策模型，现在有：${decisionProviders().map(p=>`${p.displayName}（${p.id}）`).join('、')}`],
+    [{ kind: 'decision', provider: 'constructor', model: 'x' }, `没有 constructor 这家决策模型，现在有：${decisionProviders().map(p=>`${p.displayName}（${p.id}）`).join('、')}`],
   ])('bot layer refuses %j', async (selection, message) => {
     expect(messageOf(await save(agent, selection))).toBe(message);
   });
@@ -303,7 +303,12 @@ describe('judge settings: the view', () => {
   it('lists key status and rejects Jev selection until its key can be read', async () => {
     secrets={};
     const o = owner();
-    const listed = [{ provider: 'typesafe', displayName: 'TypeSafe', models: [{ id: 'jev-latest', displayName: 'Jev' }], keyId: 'typesafe-api-key', keySet: false }];
+    const listed = [
+      { provider: 'typesafe', displayName: 'TypeSafe', models: [{ id: 'jev-latest', displayName: 'Jev' }], keyId: 'typesafe-api-key', keySet: false },
+      { provider: 'openrouter', displayName: 'OpenRouter', models: [{ id: 'typesafe/jev-1.14', displayName: 'Jev' }], keyId: 'openrouter-api-key', keySet: false },
+      { provider: 'vercel', displayName: 'Vercel', models: [{ id: 'typesafe-ai/jev', displayName: 'Jev' }], keyId: 'vercel-api-key', keySet: false },
+      { provider: 'custom', displayName: '自定义 Jev', models: [{ id: 'jev-latest', displayName: 'Jev' }], keyId: 'custom-decision-api-key', keySet: false, endpointConfigured: false },
+    ];
     expect((await o.read(agent) as AgentSettingsView).decisionModels).toEqual(listed);
     const missing = keyMissingText(listed[0]!);
     expect(missing).toContain('在网页的密钥页填，或者在终端运行 vonvon secrets set typesafe-api-key，按提示粘贴');
@@ -314,7 +319,7 @@ describe('judge settings: the view', () => {
     secrets = { 'app-secret': 'x', 'typesafe-api-key': 'ts_TESTKEY0000' };
     expect(await save(agent, JEV)).toMatchObject({ effects: [{ detail: '智能模式的下一次判断就用新模型' }] });
     const p = await o.read(project) as ProjectSettingsView;
-    expect(p.decisionModels).toEqual([{ ...listed[0], keySet: true }]);
+    expect(p.decisionModels).toEqual(listed.map(item=>item.provider==='typesafe'?{...item,keySet:true}:item));
     expect(projectViewSchema.safeParse(p).error?.issues).toBeUndefined();
     // s23g: by the judge's rule, a stored key no header carries is a missing one, not an unreadable keystore
     secrets = { 'typesafe-api-key': 'ts_TEST KEY0000' };
@@ -322,7 +327,7 @@ describe('judge settings: the view', () => {
     // a keystore it cannot read is said so, not taken for a missing key: filling one in would hit the same error
     const unreadable = owner({ getSecret: async () => { throw new Error('bad'); } });
     const u = await unreadable.read(project) as ProjectSettingsView;
-    expect(u.decisionModels).toEqual([{ ...listed[0], keySet: false, keyUnreadable: true }]);
+    expect(u.decisionModels).toEqual(listed.map(item=>({...item,keyUnreadable:true})));
     expect(projectViewSchema.safeParse(u).error?.issues).toBeUndefined();
     const unread = keyMissingText(u.decisionModels![0]!);
     expect(unread).toBe('读不了密钥库，看不出填没填 TypeSafe 的 key，读得了之前要判断的消息按出错处理（没 @ Bot 的不回，@ 的回在主区）。原因在网页状态与诊断页底部的 daemon 日志（secrets.unreadable），或者在终端运行 vonvon secrets list 看');
@@ -382,6 +387,53 @@ describe('judge settings: the view', () => {
 });
 
 describe('provider-only group settings admission', () => {
+  it.each([
+    ['openrouter','typesafe/jev-1.14','openrouter-api-key'],
+    ['vercel','typesafe-ai/jev','vercel-api-key'],
+  ] as const)('uses %s decision profiles for both layers while preserving native task backends',async(provider,model,keyId)=>{
+    secrets={};
+    const choice={kind:'provider' as const,provider};
+    expect(messageOf(await save(project,choice))).toContain('密钥');
+    secrets[keyId]='fixture-key';
+    expect((await save(project,choice)).kind).toBe('saved');
+    expect((await getProjectByName('demo'))?.judge).toEqual({kind:'decision',provider,model});
+    expect((await save(agent,choice)).kind).toBe('saved');
+    const backendFor=vi.fn((id:string)=>{
+      if (!backends[id]) throw new Error('decision providers cannot execute tasks');
+      return backends[id]!;
+    });
+    const o=owner({backendFor});
+    const a=await o.read(agent) as AgentSettingsView;
+    expect(a.sections.judge.stored.selection).toEqual(choice);
+    expect(a.judgeByBackend).toEqual({
+      'codex-appserver':{model,provider,source:'bot'},'claude-agent':{model,provider,source:'bot'},
+    });
+    expect(a.smartPrompt).toMatchObject({formatLines:{...DECISION_FORMAT_LINES,mentioned:DECISION_FORMAT_LINES.main}});
+    expect(a.smartPrompt).not.toHaveProperty('backendNote');
+    const p=await o.read(project) as ProjectSettingsView;
+    expect(p.identity.backend).toBe('codex-appserver');
+    expect(p.smartPrompt).not.toHaveProperty('backendNote');
+    expect(backendFor.mock.calls.every(([id])=>id==='codex-appserver'||id==='claude-agent')).toBe(true);
+  });
+  it('requires the shared custom endpoint and snapshots only its model and provider',async()=>{
+    secrets={'custom-decision-api-key':'fixture-key'};
+    const explicit={kind:'decision' as const,provider:'custom',model:'private-jev'};
+    const provider={kind:'provider' as const,provider:'custom' as const};
+    expect(messageOf(await save(project,explicit))).toContain('接口地址');
+    expect(messageOf(await save(project,provider))).toContain('接口地址');
+    await writeJudgeModels({byProvider:{custom:{model:'private-jev',endpoint:'https://decisions.example/v1/decide'}}});
+    const o=owner();
+    const before=await o.read(project) as ProjectSettingsView;
+    const custom=before.decisionModels?.find(item=>item.provider==='custom');
+    expect(custom).toMatchObject({keySet:true,endpointConfigured:true,models:expect.arrayContaining([{id:'private-jev',displayName:'private-jev'}])});
+    expect(custom).not.toHaveProperty('endpoint');
+    expect((await save(project,provider)).kind).toBe('saved');
+    expect((await getProjectByName('demo'))?.judge).toEqual(explicit);
+    await writeJudgeModels({byProvider:{custom:{model:'different-jev',endpoint:'https://decisions.example/v2/decide'}}});
+    expect((await o.read(project) as ProjectSettingsView).sections.judge.effective.selection).toEqual(explicit);
+    const unavailable=owner({readJudgeModels:async()=>{throw new Error('configuration unavailable');}});
+    expect((await unavailable.read(project) as ProjectSettingsView).decisionModels?.find(item=>item.provider==='custom')).toMatchObject({keySet:true,endpointConfigured:false});
+  });
   it('rejects a provider change after login expires and accepts it after login returns', async () => {
     backends['claude-agent'] = { ...fake('claude-agent', LISTS['claude-agent']!), loginStatus: async () => ({ state: 'signedOut', message: '' }) } as AgentBackend;
     const choice = { kind: 'provider' as const, provider: 'claude-agent' as const };
