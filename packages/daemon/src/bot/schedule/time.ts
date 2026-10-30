@@ -77,6 +77,15 @@ export function parseCron(expr: string) {
   // Like Vixie cron and cronie, a day field that starts with '*' (also '*/2') counts as not given.
   return { minutes, hours, days, months, weekdays, anyDay: fields[2]?.startsWith('*') ?? false, anyWeekday: fields[4]?.startsWith('*') ?? false };
 }
+type Cron = ReturnType<typeof parseCron>;
+function cronDays(cron: Cron): (m: number, d: number, weekday: number) => boolean {
+  // Flag arrays rather than Set lookups: validateCron asks about every date of a 400-year cycle.
+  const flags = (values: Set<number>, size: number) => Array.from({ length: size }, (_, n) => values.has(n));
+  const months = flags(cron.months, 13), days = flags(cron.days, 32), weekdays = flags(cron.weekdays, 7);
+  // Standard cron: when either day field is not given both must match; only two restricted fields are a union.
+  const both = cron.anyDay || cron.anyWeekday;
+  return (m, d, weekday) => months[m] === true && (both ? days[d] === true && weekdays[weekday] === true : days[d] === true || weekdays[weekday] === true);
+}
 type CalendarSpec = Exclude<ScheduleSpec, { kind: 'once' | 'every' }>;
 interface CalendarRule {
   // Minutes of the local day (hh × 60 + mm) the spec fires at, ascending.
@@ -89,21 +98,13 @@ function calendar(spec: CalendarSpec): CalendarRule {
     const weekdays = spec.kind === 'weekly' ? spec.days : undefined;
     return { times: [hh * 60 + mm], matches: (y, m, d) => !weekdays || weekdays.includes(weekdayOf(y, m, d)) };
   }
-  const cron = parseCron(spec.expr);
+  const cron = parseCron(spec.expr), matchDay = cronDays(cron);
   const ascending = (values: Set<number>) => [...values].sort((a, b) => a - b);
   const times: number[] = [];
   for (const hh of ascending(cron.hours)) {
     for (const mm of ascending(cron.minutes)) times.push(hh * 60 + mm);
   }
-  return {
-    times,
-    matches(y, m, d) {
-      if (!cron.months.has(m)) return false;
-      const dom = cron.days.has(d), dow = cron.weekdays.has(weekdayOf(y, m, d));
-      // Standard cron: when either day field is not given both must match; only two restricted fields are a union.
-      return cron.anyDay || cron.anyWeekday ? dom && dow : dom || dow;
-    },
-  };
+  return { times, matches: (y, m, d) => matchDay(m, d, weekdayOf(y, m, d)) };
 }
 interface LocalDay {
   // Instant of a minute of this local day, the same as instantOf returns for it.
@@ -147,12 +148,14 @@ function transitionInstant(zone: string, lo: number, hi: number, before: number)
   return hi;
 }
 // Nearest slot after `edge` (forward) or at or before it (backward), not past `limit`, looking at most `days` local days away.
+// A forward scan starts one date earlier: a gap that crosses midnight (America/Nuuk skips 23:00-23:59) shifts the
+// slots of the date before onto edge's date. Gaps only shift forward, so a backward scan needs no such date.
 function calendarSlot(spec: CalendarSpec, zone: string, edge: number, forward: boolean, days: number, limit: number): number | undefined {
   const rule = calendar(spec);
   const order = forward ? rule.times : [...rule.times].reverse();
   const p = localParts(zone, edge);
   const date = Date.UTC(p.y, p.m - 1, p.d);
-  for (let i = 0; i <= days; i++) {
+  for (let i = forward ? -1 : 0; i <= days; i++) {
     const day = new Date(date + (forward ? i : -i) * DAY);
     const y = day.getUTCFullYear(), m = day.getUTCMonth() + 1, d = day.getUTCDate();
     if (!rule.matches(y, m, d)) continue;
@@ -179,7 +182,8 @@ export function nextSlotAfter(spec: ScheduleSpec, zone: string, after: number): 
     const { anchor, step } = interval(spec);
     return anchor + Math.max(1, Math.floor((after - anchor) / step) + 1) * step;
   }
-  return calendarSlot(spec, zone, after, true, 400, after + 400 * DAY);
+  // Bounded by dates only: a next date 400 days on is found even when a DST change makes it 400 days and an hour.
+  return calendarSlot(spec, zone, after, true, 400, Infinity);
 }
 export function latestSlotWithin(spec: ScheduleSpec, zone: string, now: number, window: number): number | undefined {
   if (spec.kind === 'once') return spec.at <= now && spec.at > now - window ? spec.at : undefined;
@@ -187,7 +191,9 @@ export function latestSlotWithin(spec: ScheduleSpec, zone: string, now: number, 
     const { anchor, step } = interval(spec), k = Math.floor((now - anchor) / step), slot = anchor + k * step;
     return k >= 1 && slot > now - window ? slot : undefined;
   }
-  return calendarSlot(spec, zone, now, false, spec.kind === 'cron' ? Math.ceil(window / DAY) : Math.min(8, Math.ceil(window / DAY)), now - window);
+  // One date more than the window spans: after a spring-forward, now − window reads as a wall time on the date before.
+  const dates = Math.ceil(window / DAY) + 1;
+  return calendarSlot(spec, zone, now, false, spec.kind === 'cron' ? dates : Math.min(8, dates), now - window);
 }
 // `every` is exact arithmetic; daily, weekly and cron stop counting at `cap` and return `cap`.
 export function countSlotsBetween(spec: ScheduleSpec, zone: string, from: number, to: number, cap = 10000): number {
@@ -200,20 +206,19 @@ export function countSlotsBetween(spec: ScheduleSpec, zone: string, from: number
   if (cap <= 0) return 0;
   const rule = calendar(spec), first = localParts(zone, from), last = localParts(zone, to);
   const end = Date.UTC(last.y, last.m - 1, last.d);
-  let count = 0;
-  for (let date = Date.UTC(first.y, first.m - 1, first.d); date <= end && count < cap; date += DAY) {
+  // A gap minute lands on the same instant as the minute one gap later, on this date or (a gap across midnight) the
+  // next one, so start one date early, like calendarSlot, and count distinct instants over the whole range.
+  const slots = new Set<number>();
+  for (let date = Date.UTC(first.y, first.m - 1, first.d) - DAY; date <= end && slots.size < cap; date += DAY) {
     const day = new Date(date), y = day.getUTCFullYear(), m = day.getUTCMonth() + 1, d = day.getUTCDate();
     if (!rule.matches(y, m, d)) continue;
     const local = localDay(zone, y, m, d);
-    // A gap minute lands on the same instant as the minute one gap later, so count distinct instants.
-    const slots = new Set<number>();
     for (const minute of rule.times) {
       const slot = local.slot(minute);
       if (slot > from && slot <= to) slots.add(slot);
     }
-    count += slots.size;
   }
-  return Math.min(count, cap);
+  return Math.min(slots.size, cap);
 }
 const pad = (n: number) => String(n).padStart(2, '0');
 function sameZone(a: string, b: string): boolean {
@@ -247,13 +252,30 @@ export function describeSpec(spec: ScheduleSpec, zone: string, host: string, now
   }
   return text + suffix(zone, host);
 }
-// A cron has to fire twice within the 400-day search: once from now and once more after that. A Feb 29 cron runs
-// once and then has no next slot within 400 days, so it is refused here.
+const MAX_GAP_DAYS = 400; // nextSlotAfter looks this many dates ahead
+const CYCLE_DAYS = 146_097; // 400 Gregorian years, after which dates and weekdays repeat
+const MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+const daysInMonth = (y: number, m: number) => m === 2 && y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0) ? 29 : MONTH_DAYS[m - 1] ?? 31;
+// Whether every two matching dates in a row are at most 400 days apart. Walks civil dates from `start` across one
+// cycle plus one gap, so the gap that wraps around the cycle is measured too. Dates are enough: a matching date always
+// has a slot, and times of day and DST move it by hours. A start that does not match counts as one: the gap it opens
+// is shorter than the real one around it, so it cannot refuse a cron that fits.
+function gapsFit(matchDay: (m: number, d: number, weekday: number) => boolean, start: { y: number; m: number; d: number }): boolean {
+  let { y, m, d } = start, weekday = weekdayOf(y, m, d), last = 0;
+  for (let i = 0; i <= CYCLE_DAYS + MAX_GAP_DAYS; i++) {
+    if (matchDay(m, d, weekday)) last = i;
+    else if (i - last > MAX_GAP_DAYS) return false;
+    weekday = (weekday + 1) % 7;
+    if (++d > daysInMonth(y, m)) { d = 1; if (++m > 12) { m = 1; y++; } }
+  }
+  return true;
+}
+// A cron is refused unless its first slot is within the 400-day search and no two slots in a row are further apart:
+// a Feb 29 cron, or '0 9 31 10 */6' (Oct 31 on a weekend: 2026, 2027, then 2032), would stop running for good.
 function validateCron(spec: Extract<ScheduleSpec, { kind: 'cron' }>, now: number, zone: string): string | undefined {
   try {
-    const first = nextSlotAfter(spec, zone, now);
-    const second = first === undefined ? undefined : nextSlotAfter(spec, zone, first);
-    return second === undefined ? '这个 cron 在 400 天内没有一次会到' : undefined;
+    const fits = nextSlotAfter(spec, zone, now) !== undefined && gapsFit(cronDays(parseCron(spec.expr)), localParts(zone, now));
+    return fits ? undefined : '这个 cron 在 400 天内没有一次会到';
   } catch (error) {
     return error instanceof Error ? error.message : 'cron 不合法：格式错误';
   }

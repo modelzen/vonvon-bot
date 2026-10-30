@@ -9,6 +9,7 @@ const day = 86_400_000;
 const daily = { kind: 'daily', time: '09:00' } satisfies ScheduleSpec;
 const everyMinute = { kind: 'cron', expr: '* * * * *' } satisfies ScheduleSpec;
 const ny = 'America/New_York';
+const nuuk = 'America/Nuuk'; // skips 23:00-23:59 of 2026-03-28, so those slots land on 03-29
 
 // Reference for the cross-check: walk every local minute of each day and resolve the ones the cron lists with instantOf.
 function bruteSlots(expr: string, timeZone: string, days: [number, number, number][]): number[] {
@@ -68,25 +69,26 @@ describe('schedule time', () => {
       for (const slot of slots) expect(nextSlotAfter({ kind: 'cron', expr: '*/5 * * * *' }, timeZone, slot - 1)).toBe(slot);
     }
   });
-  it('[8][10] matches a brute-force minute walk across both New York DST days', () => {
-    const crons = ['* * * * *', '*/7 * * * *', '0,15,30,45 1-3 * * *', '59 1,2 * * *', '0 0-23/5 * * *'];
-    const transitions: [[number, number, number][], number][] = [
-      [[[2026, 3, 7], [2026, 3, 8], [2026, 3, 9]], Date.parse('2026-03-08T07:00:00Z')],
-      [[[2026, 10, 31], [2026, 11, 1], [2026, 11, 2]], Date.parse('2026-11-01T06:00:00Z')],
+  it('[8][10][r2-1] matches a brute-force minute walk across both New York DST days and the Nuuk gap across midnight', () => {
+    const crons = ['* * * * *', '*/7 * * * *', '0,15,30,45 1-3 * * *', '59 1,2 * * *', '0 0-23/5 * * *', '30 23 * * *', '0,30 0,23 * * *'];
+    const transitions: [string, [number, number, number][], number][] = [
+      [ny, [[2026, 3, 6], [2026, 3, 7], [2026, 3, 8], [2026, 3, 9]], Date.parse('2026-03-08T07:00:00Z')],
+      [ny, [[2026, 10, 30], [2026, 10, 31], [2026, 11, 1], [2026, 11, 2]], Date.parse('2026-11-01T06:00:00Z')],
+      [nuuk, [[2026, 3, 27], [2026, 3, 28], [2026, 3, 29], [2026, 3, 30]], Date.parse('2026-03-29T01:00:00Z')],
     ];
-    for (const [days, transition] of transitions) {
+    for (const [timeZone, days, transition] of transitions) {
       const edges: number[] = [];
       for (let edge = transition - 8 * hour; edge <= transition + 20 * hour; edge += 37 * minute) edges.push(edge);
       for (let edge = transition - 70 * minute; edge <= transition + 70 * minute; edge += 5 * minute) edges.push(edge);
       for (const expr of crons) {
         const spec = { kind: 'cron', expr } satisfies ScheduleSpec;
-        const slots = bruteSlots(expr, ny, days);
+        const slots = bruteSlots(expr, timeZone, days);
         for (const edge of edges) {
-          const label = `${expr} @ ${new Date(edge).toISOString()}`;
-          expect(nextSlotAfter(spec, ny, edge), label).toBe(slots.find(slot => slot > edge));
-          expect(latestSlotWithin(spec, ny, edge, day), label).toBe(slots.filter(slot => slot <= edge && slot > edge - day).at(-1));
+          const label = `${timeZone} ${expr} @ ${new Date(edge).toISOString()}`;
+          expect(nextSlotAfter(spec, timeZone, edge), label).toBe(slots.find(slot => slot > edge));
+          expect(latestSlotWithin(spec, timeZone, edge, day), label).toBe(slots.filter(slot => slot <= edge && slot > edge - day).at(-1));
           const count = slots.filter(slot => slot > edge - 6 * hour && slot <= edge).length;
-          expect(countSlotsBetween(spec, ny, edge - 6 * hour, edge, Infinity), label).toBe(count);
+          expect(countSlotsBetween(spec, timeZone, edge - 6 * hour, edge, Infinity), label).toBe(count);
         }
       }
     }
@@ -97,6 +99,29 @@ describe('schedule time', () => {
     expect(bruteSlots('* * * * *', ny, springDay)).toHaveLength(23 * 60);
     expect(countSlotsBetween(everyMinute, ny, fall - 1, fall + 25 * hour - minute, Infinity)).toBe(24 * 60);
     expect(bruteSlots('* * * * *', ny, fallDay)).toHaveLength(24 * 60);
+  });
+  it('[r2-1] finds and counts a slot a gap across midnight moves onto the next date once (America/Nuuk)', () => {
+    const shifted = Date.parse('2026-03-29T01:30:00Z'); // 03-28 23:30 does not exist; it runs at 03-29 00:30
+    expect(instantOf(nuuk, 2026, 3, 28, 23, 30)).toBe(shifted);
+    for (const after of [Date.UTC(2026, 2, 29, 1, 0), Date.UTC(2026, 2, 29, 1, 10), Date.UTC(2026, 2, 29, 1, 29)]) {
+      expect(nextSlotAfter({ kind: 'daily', time: '23:30' }, nuuk, after)).toBe(shifted);
+      expect(nextSlotAfter({ kind: 'weekly', days: [6], time: '23:30' }, nuuk, after)).toBe(shifted);
+    }
+    expect(countSlotsBetween({ kind: 'cron', expr: '0 * * * *' }, nuuk, Date.UTC(2026, 2, 29, 0), Date.UTC(2026, 2, 29, 3))).toBe(3);
+    expect(countSlotsBetween(everyMinute, nuuk, Date.UTC(2026, 2, 28, 12), Date.UTC(2026, 2, 29, 6))).toBe(1080);
+    expect(countSlotsBetween({ kind: 'cron', expr: '30 0,23 * * *' }, nuuk, Date.UTC(2026, 2, 28, 12), Date.UTC(2026, 2, 29, 6))).toBe(1);
+    expect(countSlotsBetween({ kind: 'daily', time: '23:30' }, nuuk, Date.UTC(2026, 2, 29, 1), Date.UTC(2026, 2, 29, 2))).toBe(1);
+  });
+  it('[r2-2][r2-12] looks back one more date, so the oldest hour of a 7-day window after a spring-forward is seen', () => {
+    const cases: [string, string, number, string][] = [
+      [ny, '45 23 7 * *', instantOf(ny, 2026, 3, 15, 0, 30), '2026-03-08T04:45:00Z'],
+      [ny, '50 23 7 3 *', Date.parse('2027-03-15T04:10:00Z'), '2027-03-08T04:50:00Z'],
+      ['Australia/Sydney', '50 23 * 9 *', Date.parse('2027-10-07T13:38:00Z'), '2027-09-30T13:50:00Z'],
+      ['Europe/London', '*/4 23 21-27/2 * */3', Date.parse('2027-04-03T23:24:00Z'), '2027-03-27T23:56:00Z'],
+    ];
+    for (const [timeZone, expr, now, want] of cases) {
+      expect(latestSlotWithin({ kind: 'cron', expr }, timeZone, now, 7 * day), `${timeZone} ${expr}`).toBe(Date.parse(want));
+    }
   });
   it('[8][10] resolves dense crons without an Intl call per minute of the day', () => {
     const formatToParts = vi.spyOn(Intl.DateTimeFormat.prototype, 'formatToParts');
@@ -111,7 +136,8 @@ describe('schedule time', () => {
       expect(countSlotsBetween(everyMinute, zone, now - 30 * day, now, Infinity)).toBe(30 * 24 * 60);
       expect(intlCalls(() => countSlotsBetween(everyMinute, zone, now - 30 * day, now, Infinity))).toBeLessThan(31 * 3);
       // Two Intl calls per day; a transition day adds a binary search for the switch, not one instantOf per minute.
-      expect(intlCalls(() => nextSlotAfter(everyMinute, ny, Date.parse('2026-03-08T06:59:00Z')))).toBeLessThan(30);
+      // The forward scan also reads the date before (a gap across midnight), whose window holds the same switch.
+      expect(intlCalls(() => nextSlotAfter(everyMinute, ny, Date.parse('2026-03-08T06:59:00Z')))).toBeLessThan(45);
       expect(intlCalls(() => countSlotsBetween(everyMinute, ny, Date.parse('2026-11-01T04:00:00Z'), Date.parse('2026-11-02T05:00:00Z'), Infinity))).toBeLessThan(40);
     } finally {
       formatToParts.mockRestore();
@@ -227,6 +253,19 @@ describe('schedule time', () => {
     expect(validateSpec(leapDay, now, zone)).toBe('这个 cron 在 400 天内没有一次会到');
     expect(validateSpec({ kind: 'cron', expr: '0 9 31 12 *' }, now, zone)).toBeUndefined();
     expect(validateSpec({ kind: 'cron', expr: '0 9 29 2,3 *' }, now, zone)).toBeUndefined();
+  });
+  it('[r2-13] refuses a cron whose slots are ever more than 400 days apart, not only one without a second slot', () => {
+    const now = at('2026-10-30 12:00'), refusal = '这个 cron 在 400 天内没有一次会到';
+    // Oct 31 on a weekend: 2026 and 2027, then 2032. Both of the first two slots fit, so the old two-slot check accepted it.
+    const weekendOct31 = { kind: 'cron', expr: '0 9 31 10 */6' } satisfies ScheduleSpec;
+    const second = nextSlotAfter(weekendOct31, zone, nextSlotAfter(weekendOct31, zone, now) ?? 0);
+    expect(second).toBe(at('2027-10-31 09:00'));
+    expect(nextSlotAfter(weekendOct31, zone, second ?? 0)).toBeUndefined();
+    expect(validateSpec(weekendOct31, now, zone)).toBe(refusal);
+    for (const expr of ['0 9 */21 3 1', '0 9 1 4 */2', '0 9 13 2 */6', '0 9 */13 1 5']) expect(validateSpec({ kind: 'cron', expr }, now, zone), expr).toBe(refusal);
+    for (const expr of ['* * * * *', '0 9 * * 1-5', '0 9 1 1 *', '0 9 31 12 *', '0 9 29 2,3 *', '0 9 13 * 5', '0 9 31 * *', '0 9 1-7 * */1']) {
+      expect(validateSpec({ kind: 'cron', expr }, now, zone), expr).toBeUndefined();
+    }
   });
   it('allows a once task one calendar year ahead across Feb 29 (366 days)', () => {
     const now = at('2027-03-01 10:00');
