@@ -2,12 +2,12 @@
 
 ## 1. 做什么
 
-让 agent 在聊天里建、改、停、删任务：schedule 类工具和角色表、grant 现取话题、Claude 的进程内 MCP 加工具、Codex 用 app-server dynamicTools 收工具并把调用绑到这一轮、关掉两家自带的定时。做完这一片，群里对 bot 说"每天 9 点发日报"就能建任务，bot 也能给自己排"20 分钟后回来看"。总设计第 3、9、10、16 节；产品行为 3.13、3.7。基线 T2 合入后的 `dev`，分支 `codex/scheduled-tasks-3-tools`。
+让 agent 在聊天里建、改、停、删任务：schedule 类工具和角色表、grant 现取话题、Claude 的进程内 MCP 加工具、Codex 用 app-server dynamicTools 收工具并把调用绑到这一轮、关掉两家自带的定时。做完这一片，群里对 bot 说"每天 9 点发日报"就能建任务，bot 也能给自己排"20 分钟后回来看"。总设计第 3、9、10、16 节；产品行为 3.13、3.7。基线 T1b 合入后的 `dev`（和 T2 并行；自测第 4 步要 T2，见第 2 节），分支 `codex/scheduled-tasks-3-tools`。
 
 ## 2. 范围
 
 - 新文件：`D/agent/entry/schedule-tools.ts`、`D/agent/codex-appserver/dynamic-tools.ts`。
-- 改：`D/agent/entry/{registry,tools,command-tools,ipc-codec}.ts`、`D/agent/types.ts`（拒绝原因枚举）、`D/agent/claude-agent/{backend,thread}.ts`、`D/agent/group-skills.ts`、`D/agent/codex-appserver/{backend,server-requests,memory-config}.ts`、`D/provider/transport/jsonrpc.ts`（`peer.onRequest` 加 `item/tool/call`）、`D/agent/session-profile.ts`、`D/bot/bridge.ts`（`createCommandTools` 的依赖加命令核）、`D/bot/handle-message.ts`（`launchRun` 把 `where()` 和在场事实交给 `openTurn`/grant）。
+- 改：`D/agent/entry/{registry,tools,command-tools,ipc-codec}.ts`、`D/agent/types.ts`（拒绝原因枚举）、`D/agent/claude-agent/{backend,thread}.ts`、`D/agent/group-skills.ts`、`D/agent/codex-appserver/{backend,server-requests,memory-config}.ts`、`D/provider/transport/jsonrpc.ts`（`peer.onRequest` 加 `item/tool/call`）、`D/agent/session-profile.ts`（`tools.schedule`，由 `profileOf` 算，见 4.5）、`D/config/execution.ts`（`executionSessionProfile` 带上 `tools`）、`D/bot/bridge.ts`（`createCommandTools` 的依赖加命令核）、`D/bot/handle-message.ts`（`launchRun` 把 `where()`、在场事实和 `requesterName` 交给 `openTurn`/grant；`QueuedTurn`、`LaunchOpts` 加 `requesterName`）。
 - 可以假设：T1b 的命令核、`ScheduleActor`、`TurnFacts.scheduled` 和 `TurnAuth.presence`。不依赖 T2，和 T2 同时开工；只有自测第 4 步（定时回合里改自己）要 T2 的 `runScheduled`，T2 没合入就先做别的步骤，T2 合入后 merge `dev` 再补这一步。
 - 不做：skill（T4a/T4b，本片的工具没有说明书，agent 只看工具描述）；桌面端（T5）；设置和飞书工具改走 dynamicTools（s46b 另定）；Codex 的 memory 工具。
 - 不改 3.7 的设置规则：只有私聊、只有主人和管理员、开关。
@@ -29,23 +29,23 @@
 
 ### 4.1 工具定义：`schedule-tools.ts`
 
-一份 zod 4 定义导出两样东西：给 Claude SDK MCP 的 tool 列表（`AgentTool[]`，`class: 'schedule'`），给 Codex 的 `DynamicToolNamespace`（JSON schema 用 `z.toJSONSchema(input)`）。名字、入参（含 `when`、`where: 'here' | 'thisTopic' | 'newTopic'`、`timeZone?`）、回复和描述按总设计第 10、16 节。`when` → `spec` 的换算：`once.at` 字符串经 `parseLocal(tz, at)`，`inMinutes` 经 `now + m × 60_000`；换算失败回 `bad-schedule` 带 `validateSpec` 的文案。`where` → `placement`：`here` 且 `grant.where().topicId` 在且 `when.kind === 'once'` → `{ kind: 'topic', topicId }`；`here` 其余 → `follow`；`thisTopic` 且 topicId 在 → `topic`，不在 → `topic-pending`（主区里说"就在这里"等于 `here`）；`newTopic` → `newTopic`。
+一份 zod 4 定义导出两样东西：给 Claude SDK MCP 的 tool 列表（`AgentTool[]`，`class: 'schedule'`），给 Codex 的 `DynamicToolNamespace`（JSON schema 用 `z.toJSONSchema(input)`）。名字、入参（含 `when`、`where: 'here' | 'thisTopic' | 'newTopic'`、`timeZone?`）、回复和描述按总设计第 10、16 节。`when` → `spec` 的换算：`once.at` 字符串经 `parseLocal(tz, at)`，`inMinutes` 经 `now + m × 60_000`；换算失败回 `bad-schedule` 带 `validateSpec` 的文案。`where` → `placement`：`here` 且 `grant.where().topicId` 在且 `when.kind === 'once'` → `{ kind: 'topic', topicId }`；`here` 其余 → `follow`；`thisTopic` 且 `where().inTopic`、`topicId` 在 → `topic`；`inTopic` 但 `topicId` 还没有（bot 刚开的话题还没认领）→ `topic-pending`；不在话题里（主区）→ 按 `here` 算，不拒；`newTopic` → `newTopic`。
 
 回复文本给 agent 看的是人话加 JSON：第一行一句（第 16 节），下面 JSON 原样。拒绝回 `refused` 和一句中文原因，不抛错。
 
 ### 4.2 登记表和钥匙
 
 - `ToolClass` 加 `'schedule'`。`authorizeSchedule(auth, action)`：按 3.13 的表和总设计第 8 节"在场"，在登记表这一层先查一遍，拒绝不进队列（命令核再查第二遍，两层都不信调用方）：`presence === 'human'` 且 `auth.human`（没被别人插话）→ 全部；`presence === 'scheduled'` → `list`、改自己、删自己；`presence === 'none'` 或 `auth.steered` → 只 `list`，写回 `not-human-turn`。
-- grant 的 place 不加 `topicId`；grant 加 `where: () => { topicId?: string }`，`launchRun` 在 `openTurn` 时把闭包交进去：`() => ({ topicId: topicThreadId && !isMainKey(topicThreadId, chatId) ? topicThreadId : undefined })`，读的是认领后的局部变量，所以卡片发出去、`adoptThreadId` 之后才有值。
-- actor 的组装在登记表里，不在工具里：`{ kind: 'chat', openId, name, role, chatId, topicId: where().topicId, messageId: triggerMessageId, text: typed ? triggerText : undefined }` 或 `{ kind: 'scheduled', taskId, runId, chatId }`。`name` 从 `openTurn` 的 facts 带（T2 把 `msg.senderName` 放进 `TurnFacts.requesterName`）。
-- 私聊和评论会话不签发 schedule 类（`tools()` 的过滤加 `grant.place.kind === 'group'`），调用也回 `not-group`。
+- grant 的 place 不加 `topicId`；grant 加 `where: () => { inTopic: boolean; topicId?: string }`（`registry.ts` 的 `Grant` 今天没有话题字段，新加），`launchRun` 在 `openTurn` 时把闭包交进去：`() => ({ inTopic: !isMainKey(activeKey, chatId), topicId: topicThreadId && !isMainKey(topicThreadId, chatId) ? topicThreadId : undefined })`，读的是认领后的局部变量：`activeKey`（`handle-message.ts:7176`）在主区是 `chatId`（`isMainKey`，1750），在 bot 新开的话题里先是 `pending:<replyTo>`、`adoptThreadId` 后是 thread id，所以 `inTopic` 一开始就对；`topicId` 要卡片发出去、`adoptThreadId` 之后才有值。
+- actor 的组装在登记表里，不在工具里：`{ kind: 'chat', openId, name, role, chatId, topicId: where().topicId, messageId: triggerMessageId, text: typed ? triggerText : undefined }` 或 `{ kind: 'scheduled', taskId, runId, chatId }`。`name` 从 `openTurn` 的 facts 带，本片自己接：`TurnFacts` 加 `requesterName?: string`；`QueuedTurn`、`LaunchOpts` 跟着 `requesterOpenId` 加 `requesterName`，入队处取 `names.peek(msg.senderId) ?? msg.senderName`（同 `senderWho`，`handle-message.ts:1746`）；`launchRun` 的 `openTurn`（7356）传 `currentTurn.requesterName`。没有名字就不填，总设计 7.2 的 `{creator}` 按 `via` 兜底。
+- 带不带 schedule 类只看 `profile.tools.schedule`（4.5）；登记表这层是第二道：`tools()` 的过滤加 `grant.place.kind === 'group'`，私聊和评论会话的调用回 `not-group`。
 - 过 s46 的接纳、排队、提交点三道检查；`schedule_create` 在提交点用 `ctx.commit(guard => …)`。
 - 枚举：`types.ts:367`、`ipc-codec.ts:9` 加 `'not-group' | 'not-human-turn'`（schedule 的其余拒绝在命令核的 reply 里，不在这层枚举）。
 - `bridge.ts:80` 给 `createCommandTools` 传 `schedule: commands`（T1b 的命令核）。
 
 ### 4.3 Claude
 
-- `vonvon_bot` MCP server 加 schedule 类工具，按 grant 过滤。
+- `vonvon_bot` MCP server 加 schedule 类工具：`profile.tools.schedule` 为真才带（4.5），再经 `entry.tools()` 按 grant 过滤。
 - `thread.ts` 加 `NATIVE_SCHEDULING_TOOLS = ['CronCreate', 'CronList', 'CronDelete', 'ScheduleWakeup', 'RemoteTrigger']`，组 query 选项时在 `...cfg.permission` 之后合并 `disallowedTools: [...(cfg.permission.disallowedTools ?? []), ...NATIVE_SCHEDULING_TOOLS]`。放 thread.ts 不放 `permission.ts`：`permission.ts:90` 完全访问档提前返回，放那里会被跳过。
 - `AUTO_COMPACT_SETTINGS` 和它的 plan 变体加 `skillOverrides: { loop: 'off', schedule: 'off' }`。`group-skills.ts` 的 `enabledNames` 也把这两个过滤掉（白名单里点名它们能不能压过 `off` 没测，两边都做）。
 - `sessionClaudeEnv` 加 `CLAUDE_CODE_DISABLE_CRON: '1'` 做第二道。
@@ -54,7 +54,7 @@
 ### 4.4 Codex：dynamicTools 和调用绑轮
 
 - `dynamic-tools.ts`：手写类型 `DynamicToolNamespace = { type: 'namespace'; name: 'vonvon_bot'; tools: { name; description; inputSchema; deferLoading?: boolean }[] }` 和 `ThreadStartParams & { dynamicTools?: DynamicToolNamespace[] }` 的扩展；不改生成文件；在文件头注明生成脚本缺失、这是手写的补丁。
-- `backend.ts` 的 thread/start 带 `dynamicTools`（grant 里有 schedule 类才带；没有就不带这个字段）。resume 不带（盘上恢复）。
+- `backend.ts` 的 thread/start 带 `dynamicTools`（`profile.tools.schedule` 为真才带，4.5；为假就不带这个字段）。resume 不带（盘上恢复）。
 - **调用绑轮**：`turn/start` 的应答（`backend.ts:363`）拿到 `result.turn.id` 就 `this.entry?.noteToolUse(turnId)`，并 resolve 一个按 turnId 存的 `turnAcked` promise。`server-requests.ts` 加 `dynamicToolCall(params, id, scope, lookup)`，`jsonrpc.ts:301` 的 `peer.onRequest` 加 `method === 'item/tool/call'` 分支：按 `threadId` 找会话（找不到回 `success: false`"不是本 bot 的线程"）、`await thread.turnAcked(params.turnId, 2000)`（没到就当 `unknown-origin`）、按 `tool` 找入口、`arguments` 过 zod、`entry.call(tool, args, { toolUseId: params.turnId })`（和 Claude 共用 `callTool`），回 `{ contentItems: [{ type: 'inputText', text }], success }`；未知工具回 `success: false` 加一句。`callId` 记日志。线程关闭时 `CodexRequestScope.close()` 照样把挂着的调用答掉。
 - `registry.ts:169-170` 删掉 `releaseAfterRun` 分支，两家都 `origins.get(origin.toolUseId)`；`firstTurn` 字段不再用于授权（留着也行，但没有读者就删）。goal 运行（`launchGoalRun`）和子线程不调 `openTurn`，查不到 origin → `unknown-origin` → 拒，正好。
 - 上线前已开着的 Codex 会话没有工具，下一条新会话才有：`session_info` 的回复加第 16 节那一行；3.13 已写明；本片不做"换会话"。
@@ -62,18 +62,19 @@
 
 ### 4.5 `session-profile.ts`
 
-profile 加 `tools: { schedule: boolean }`，两家 backend 从这里决定带不带工具（T4b 读同一个字段决定带不带 skill）。
+`SessionProfile` 加 `tools: { schedule: boolean }`，`resolveSessionProfile` 缺省 `false`。由 `handle-message.ts:1114` 的 `profileOf` 算：`schedule: Boolean(project) && place !== 'comment'`——绑定的群会话为真，主区和话题都是，只读档也是（3.13：建任务不看档）；评论会话（`place === 'comment'`，没有 `project`）为假；私聊今天不起 agent 会话（`handleDmConsole`），以后的私聊会话也为假。这是唯一的开关：两家 backend 按它带不带 schedule 类工具，T4b 按它装不装 skill。`executionSessionProfile`（`config/execution.ts:245`）和 `resolveSessionProfile` 都逐字段重组 profile，两处都把 `tools` 带过去。
 
 ## 5. 测试
 
 main 必败：schedule 类、`dynamic-tools.ts`、`item/tool/call` 处理、`where()`、`turnAcked` 在基线不存在；基线的 query 选项里没有 `disallowedTools` 的五个名字、settings 里没有 `skillOverrides.schedule`（这两条基线能跑出来，记"main 必败：会话能看到 CronCreate"）；`registry.ts:169` 的 `releaseAfterRun` 分支在基线会把 Codex 第二轮的调用授权成第一轮（"main 必败：Codex 第二轮按第一轮的人判"）。
 
 - `schedule-tools.test.ts`：七个工具的入参校验（`when.once.at: '2026-11-01 14:00'` → `spec.once.at` 等于 `parseLocal` 的值；`inMinutes: 20` → `now + 20 分钟`；`at: '2026-13-01 00:00'` → `bad-schedule`）；回复第一行逐字；`z.toJSONSchema` 出的 schema 有七个工具、`type: 'object'`；拒绝不抛错。
-- `schedule-where.test.ts`：`where: 'here'` 在主区（`where()` 回空）→ `follow`；在话题、`once` → `topic`；在话题、`every` → `follow`；`thisTopic` 在话题 → `topic`，在主区 → `topic-pending`；`newTopic` → `newTopic`；`where()` 在认领前回空、认领后回 thread id（用 `launchRun` 的夹具）。
+- `schedule-where.test.ts`：`where: 'here'` 在主区（`where()` 回 `{ inTopic: false }`）→ `follow`；在话题、`once` → `topic`；在话题、`every` → `follow`；`thisTopic` 在话题 → `topic`，在 bot 刚开、还没认领的话题（`{ inTopic: true }`）→ `topic-pending`，在主区 → `follow`（和 `here` 一样，不拒）；`newTopic` → `newTopic`；`where()` 在主区回 `{ inTopic: false }`，bot 开的话题认领前回 `{ inTopic: true }`、认领后带 thread id（用 `launchRun` 的夹具）。
 - `schedule-authorize.test.ts`：角色表每一格（owner/admin 全部；member 自己的能、别人的 `not-task-owner`；scheduled 建 `no-human-create`、改别的 `scheduled-run-scope`、list 只有自己；`presence: 'none'` 写 → `not-human-turn`、list 可以；被别人插话（`noteSteer`）后写 → `not-human-turn`；私聊 `not-group`；评论会话 `not-group`）；提交点回合已结束不写；两层各一遍（登记表拒了命令核的 spy 没被调；绕过登记表直接调命令核也拒）。
-- `claude-schedule-entry.test.ts`（锁定 SDK 的假传输）：工具在 `vonvon_bot` 里、按 grant 过滤（私聊没有）；三档的 query 选项都带五个 `disallowedTools`，已有的 `cfg.permission.disallowedTools` 不丢；settings 带 `skillOverrides.loop/schedule = 'off'`；`enabledNames` 过滤掉 `loop`、`schedule`；env 有 `CLAUDE_CODE_DISABLE_CRON`。
-- `codex-dynamic-tools.test.ts`（假 app-server）：thread/start 带 namespace 形状；没有 grant 不带字段；resume 不带；`item/tool/call` 来回、未知工具、zod 不过、按 threadId 找错会话拒、线程关闭时挂着的调用被答掉；`config.features` 同时有 `memories: false`、`in_app_local_automation: false`，Windows 非完全访问还有 `prefer_mxc: false`。
+- `claude-schedule-entry.test.ts`（锁定 SDK 的假传输）：工具在 `vonvon_bot` 里，`profile.tools.schedule` 为假时没有，grant 是私聊时也没有；三档的 query 选项都带五个 `disallowedTools`，已有的 `cfg.permission.disallowedTools` 不丢；settings 带 `skillOverrides.loop/schedule = 'off'`；`enabledNames` 过滤掉 `loop`、`schedule`；env 有 `CLAUDE_CODE_DISABLE_CRON`。
+- `codex-dynamic-tools.test.ts`（假 app-server）：thread/start 带 namespace 形状；`profile.tools.schedule` 为假不带字段；resume 不带；`item/tool/call` 来回、未知工具、zod 不过、按 threadId 找错会话拒、线程关闭时挂着的调用被答掉；`config.features` 同时有 `memories: false`、`in_app_local_automation: false`，Windows 非完全访问还有 `prefer_mxc: false`。
 - `codex-turn-origin.test.ts`：两轮各一个 `turn/start` 应答 → 第二轮的 `item/tool/call`（`turnId` 是第二轮的）按第二轮的 `TurnAuth` 授权（main 必败）；`turn/start` 应答还没到时调用等到它；2 秒没到 → `unknown-origin`；goal 线程的调用 → `unknown-origin`。
+- `schedule-profile.test.ts`：`profileOf` 对绑定的群（只读档也算）给 `tools.schedule: true`，评论会话给 `false`；`executionSessionProfile` 加了附加根后 `tools` 还在。
 - 回归定向：agent-entry-registry、agent-entry-commit、claude-agent-entry、codex-backend、codex-jsonrpc、s47-tools、memory 工具授权。
 
 ## 6. Codex 的自测
@@ -105,7 +106,7 @@ JP-VPS，用验收 daemon（Bot 6），真 Claude 和真 Codex 各一遍。锁�
 
 - 工具不收群参数；群从 grant 取，话题从 `where()` 现取；跨群没有任何入口（登记表和命令核两层都测了 `not-found`）。
 - 角色表两层都查，测试各覆盖一遍；被插话的回合和无发起人的回合不能写。
-- 定时回合不能建任务、不能碰别的任务；话题里的周期任务默认跟群走，`thisTopic` 才留在话题。
+- 定时回合不能建任务、不能碰别的任务；话题里的周期任务默认跟群走，`thisTopic` 才留在话题；主区里的 `thisTopic` 按 `here` 算，还没认领的话题回 `topic-pending`。
 - Claude 三档的 query 选项都带五个 `disallowedTools`，`loop`、`schedule` skill 关着，真实会话里看不到；Codex 的 `config.features` 深合并后三个开关都在。
 - Codex 的 dynamicTools 只在 thread/start 带，resume 不带；`item/tool/call` 按 threadId 找会话、按 `turnId` 绑轮，找错拒；`registry.ts` 没有 `releaseAfterRun` 分支了。
 - 真实 ChatGPT 登录下的工具表看过，结果贴在 PR。

@@ -6,9 +6,9 @@
 
 ## 2. 范围
 
-- 改：`D/bot/handle-message.ts`（`runScheduled`、`startScheduledTopic`、`scheduleGate`、`holdFiring`、`TurnExtra/QueuedTurn/LaunchOpts.scheduled`、`ActiveState.chatId/scheduled`、约 25 处按 `scheduled` 分支的点，见 4.2）、`D/card/run-card.ts` 和 `D/card/run-card-stream.ts`（标签行）、`D/bot/context-weave.ts`（头部）、`D/agent/entry/registry.ts`（只加 `presence` 的推导和 `TurnFacts.scheduled`；工具在 T3）、`D/bot/memory-authority.ts`（映射）、`D/bot/bridge.ts`（关闭顺序）、`D/cli/commands/run.ts`（启动时 `scheduler.start()`）。
+- 改：`D/bot/handle-message.ts`（`runScheduled`、`startScheduledTopic`、`scheduleGate`、`holdFiring`、`markUnavailable`、`notifyAutoPause`/`notifyGateFailure` 的实现、`TurnExtra/QueuedTurn/LaunchOpts.scheduled`、`ActiveState.chatId/scheduled`、约 25 处按 `scheduled` 分支的点，见 4.2）、`D/card/run-card.ts` 和 `D/card/run-card-stream.ts`（标签行）、`D/bot/context-weave.ts`（头部）、`D/bot/bridge.ts`（连上飞书后 `orchestrator.scheduler.start()`、关闭顺序）、`D/bot/diagnostics.ts`（`schedule-interrupted`）。`registry.ts`（`presence` 推导、`TurnFacts.scheduled`、记忆回合 `kind` 的 `initiative` 映射）在 T1b，`memory-authority.ts`、`run.ts` 不改。
 - 可以假设：T1a 的 `createScheduler`、`ScheduleStore`、`ScheduledJob`、`ScheduledOutcome`、`ScheduledHook`；T1b 的命令核和终端。
-- 不做：agent 工具（T3）、skill（T4a/T4b）、桌面端（T5）。`TurnFacts.scheduled` 和 `TurnAuth.presence` 两个字段在 T1b 已加，本片只在 `runScheduled` 里填 `facts.scheduled`；schedule 工具的角色表在 T3。
+- 不做：agent 工具（T3）、skill（T4a/T4b）、桌面端（T5）。`TurnFacts.scheduled` 和 `TurnAuth.presence` 两个字段、`presence` 的推导和记忆回合 `kind` 的 `initiative` 映射在 T1b 已加，本片只在定时回合 `openTurn` 时填 `facts.scheduled`；schedule 工具的角色表在 T3。
 - 不改群的会话方式、不加新的设置项。
 
 ## 3. 现在的代码
@@ -26,19 +26,19 @@
 - 编辑锁：`editProject`/`removeProject` 的 `active.size > 0`（6589）；`libraryWorkspaceCheck` 同（9225）。`ActiveState`（699）没有 `chatId`。
 - 记忆：`memoryTriggerOf`（1656）；`memory-authority.ts:10` 的 `MemoryTurn.kind`（human/wake/initiative/retry/bot）；`registry.ts:313-323` 的 `openTurn` 推 `kind`、`human`。
 - 关闭：`shutdown()`（9138）：`closeAll`、`saveDroppedSync(collectLost())`、清队列、`state.interrupt()`、关线程，然后 `while (acceptedTasks.size || runTasks.size)` 等（**没有 60 秒上限**）；顺序在 `D/bot/bridge.ts:113-141`；子进程宽限 `CHILD_SHUTDOWN_GRACE_MS = 8000`（`D/host/lifecycle.ts:300`）。`collectLost`（9124）、`saveDroppedSync`、`restart-dropped.ts`。
-- bot 被移出群：`onBotRemovedFromChat`（8897）调 `removeProject`，就是解绑；桌面端解绑在 `editProject/removeProject`（6586 起）。
+- bot 被移出群：`onBotRemovedFromChat`（8897）调 `removeProject`，就是解绑；桌面端解绑在 `editProject/removeProject`（6586 起）；私聊控制台删项目 `DM.rmDo`（5730 起，5738 调 `removeProject`）也是解绑。三处后面都跟着 `forgetAttention(chatId, 'unbind')`。
 - 提问卡：`ask-coordinator.ts:151-155` 的 15 分钟超时；`askAgain`（1905）是"排队的被丢了、请重发"的计数，不是提问卡重问。
 - 释放：`releaseIdle`（1442）只在 `thread.releaseAfterRun` 时关进程（只有 Codex 声明），Claude 的线程等 45 分钟 reaper（`SESSION_REAP_IDLE_MS`，1019）。
 - 并发：`new Semaphore(getMaxConcurrentRuns(cfg))`（1469，默认 10，`D/config/schema.ts:235-239`）；`queueOnly` 只管同一会话内。
 - 飞书链接：`D/bot/outbound-files.ts:82` 的 `messageLink`（`message.get` 回的 `message_position` 拼 applink）；这是今天唯一能指到一条消息的链接做法。
-- 子进程启动：`D/cli/commands/run.ts` 建 orchestrator、连飞书；关闭经 `bridge.ts` 的 `shutdown`。
+- 子进程启动：`D/cli/commands/run.ts` 调 `startBridge`，拿回的是 `BridgeHandle`（不是 orchestrator）；orchestrator 在 `bridge.ts` 里建（95），`await channel.connect()`（205）之后才 `orchestrator.replyDropped()`（209）；关闭经 `bridge.ts` 的 `shutdown`。
 - `NormalizedMessage`（`@larksuiteoapi/node-sdk`）的字段是 `messageId`、`chatId`、`senderId`、`senderName?`、`threadId?`、`createTime`；没有 `topicId`。
 
 ## 4. 怎么改
 
 ### 4.1 `runScheduled(job): Promise<ScheduledOutcome>`
 
-在 orchestrator 里新增，T1b 构造调度器处换成注入它、`gate: scheduleGate`、`maxInflight: () => Math.max(1, Math.floor(getMaxConcurrentRuns(cfg) / 2))`、`notifyAutoPause`；`run.ts` 在子进程连上飞书后 `await scheduler.start()`（它自己 `load()`）。
+在 orchestrator 里新增，T1b 构造调度器处换成注入它、`gate: scheduleGate`、`maxInflight: () => Math.max(1, Math.floor(getMaxConcurrentRuns(cfg) / 2))`、`notifyAutoPause`、`notifyGateFailure`（4.2）；`bridge.ts` 在 `channel.connect()` 之后、`orchestrator.replyDropped()` 旁调 `await orchestrator.scheduler.start()`（T1b 暴露的句柄，内部是 `scheduler.start(await loadStore())`；store 已在 `initialize()` 里 load 过，T1b 4.2；`start` 不读盘，处理 `loaded.interrupted` 后起 tick）。
 
 1. 造钩子：`const hook: ScheduledHook = { job, target, started, settle }`，`settle` 幂等、第一次 resolve 返回的 promise；`scheduledHooks.add(hook)`，settle 后删。**这个 promise 不进 `admit`/`trackTask`/`trackRun`**，否则 `shutdown()` 的排空循环等它、它等排空，直到 8 秒 SIGKILL。
 2. 决定放置（总设计 7.1）：读群的会话方式和消息形式（`chat.get` 的话题群缓存，s14b）。`follow` 在单会话、智能 → 主区会话，`target: { kind: 'main' }`；多会话、话题群 → 新隐藏会话开新话题；`newTopic` → 同上；`topic` → `resolveThread` 按 topicId，`anchor = await desktopTopicReply(chatId, topicId)`，`target: { kind: 'topic', anchor }`；`desktopTopicReply` 抛错或会话没了 → 退回 `follow` 并 `fallback = true`。
@@ -51,13 +51,13 @@
 ### 4.2 handle-message 里要分支的点（按 `extra.scheduled` / `currentTurn.scheduled` / `state.scheduled` 判）
 
 逐个过，不漏：
-- **落点**（都按 `hook.target`，不看 `msg.messageId`）：`launchRun` 建卡的 `replyTo/replyInThread`（7350、7489：main → 都不设；topic → anchor 加 `true`）；排队续轮的 `replyTo = finalMsgId`（7894：定时轮不引用，重新按 target）；占位卡（7066）；`state.waiting`（7061：定时回合不设）；`runFailureMessage` 的两处（3712、7972）；`intakeCancelled` 的两条（3117、3152：定时回合不发，直接 settle interrupted by shutdown）；`replyGoalBusy`（3139、3166、3329：定时回合不发，settle `skipped reason updating`）；`early()`（3307：settle `skipped updating`）；`endCard`/`askAgain`（7090、7924、7959：队列里的定时轮 settle `interrupted by shutdown` 或 `failed '前一轮出错'`，不计入 `people`，不发"请重发"）；`refuseUnavailableTier` 定时回合不走（门已查）。
+- **落点**（都按 `hook.target`，不看 `msg.messageId`）：`launchRun` 建卡的 `replyTo/replyInThread`（7350、7489：main → 都不设；topic → anchor 加 `true`）；排队续轮的 `replyTo = finalMsgId`（7894：定时轮不引用，重新按 target）；占位卡（7066）；`state.waiting`（7061：定时回合不设）；`runFailureMessage` 的两处（3712、7972）；`intakeCancelled` 的两条（3117、3152：定时回合不发，直接 settle interrupted by shutdown）；`replyGoalBusy`（3139、3166、3329：定时回合不发，settle `skipped reason updating`）；`early()`（3307：settle `skipped updating`）；`endCard`/`askAgain`（7090、7924、7959：队列里的定时轮 settle `interrupted by shutdown` 或 `{ status: 'failed', error: '前一轮出错', durationMs: 0, counts: true }`（7959 那条；没开跑，用时 0；和后端失败一样计入连续失败），不计入 `people`，不发"请重发"）；`refuseUnavailableTier` 定时回合不走（门已查）。
 - **丢弃就 settle**：`refusedTurn`（3113：门已查，走到这里是竞争，settle `skipped updating`）；`shutdown()` 清队列（9167）里的定时轮 settle `interrupted by shutdown`；排空循环之后 `for (hook of scheduledHooks) hook.settle({ status: 'interrupted', by: 'shutdown' })`。
-- `wovenSkip`、`recalledSkip` 跳过；judge 跳过（智能群不经 judge，直接跑）；响应成员名单跳过；表情不挂；完成提醒不发（已有 bot 发起不提醒的分支扩到 scheduled）；`dropSilentCard` 返回 false；`retryTurns` 不记；`memoryTriggerOf` 的 `kind` 映射 `initiative`（Claude 定）；`collectLost`/`saveDroppedSync` 不把 `vsched_*` 当丢失消息存；`restart-dropped` 不重发；`getThreadId` 对 `vsched_*` 不查飞书；`retrySessionTitleAfterTurn` 照常；`openTurn` 的 `TurnFacts.scheduled = { taskId, runId }`。
+- `wovenSkip`、`recalledSkip` 跳过；judge 跳过（智能群不经 judge，直接跑）；响应成员名单跳过；表情不挂；完成提醒不发（已有 bot 发起不提醒的分支扩到 scheduled）；`dropSilentCard` 返回 false；`retryTurns` 不记；记忆回合的 `kind` 不在这里改（T1b 的 `openTurn` 已按 `facts.scheduled` 推成 `initiative`）；`collectLost`/`saveDroppedSync` 不把 `vsched_*` 当丢失消息存；`restart-dropped` 不重发；`getThreadId` 对 `vsched_*` 不查飞书；`retrySessionTitleAfterTurn` 照常；`openTurn` 的 `TurnFacts.scheduled = { taskId, runId }`。
 - **真人不插进定时轮**：`ActiveState.scheduled = true` 在定时轮跑着时置上，`deliverPreparedTurn` 看到就走 `queue`，不 steer；轮结束清掉。
 - **编辑锁只看本群**：`ActiveState.chatId` 在 `launchRun`/`launchGoalRun` 设上；6589 和 9225 的 `active.size > 0` 改成 `[...active.values()].some(s => s.chatId === project.chatId)`（library 那处按 `mine` 的 chatId 集合）；碰上本群有运行时先 `holdFiring(project.chatId, 60_000)` 再抛"Agent 正在执行任务…"。
 - **门** `scheduleGate(chatId)`：`turnRefusal` 的四种映射成 `unbound/disabled/updating/updating`；`tierInfo(...).unavailable` → `tier-unavailable`；`holds.get(chatId) > now` → `held`；都没有 → `'ok'`。
-- **`tier-unavailable` 的一行文字**：调度器记 failed 后由 `notifyGateFailure(task, reason)` 发第 16 节那一行到主区（`channel.send`，不是卡）；每个任务每小时最多一条（免得每分钟刷）。
+- **`tier-unavailable` 的一行文字**：调度器记 failed 后调注入的 `notifyGateFailure(task)`（总设计第 6 节的依赖；不并进 `gate`：`gate` 只收 `chatId`，文字要任务名、限频按任务），本片的实现发第 16 节那一行到主区（`channel.send`，不是卡，发不出去记日志）；每个任务每小时最多一条（免得每分钟刷）。
 
 ### 4.3 头部和标签
 
@@ -76,9 +76,9 @@
 
 ### 4.6 停机、崩溃、移出群和解绑
 
-- 关闭顺序（`bridge.ts:113-141` 的 `shutdown`）：`scheduler.stop()` 同步；`orchestratorClosing = orchestrator.shutdown()`（它 interrupt 所有运行、排空、settle 剩下的钩子）；`closing` 里 `await orchestratorClosing` 之后 `await scheduler.drain(5000)`。没有 60 秒排空；8 秒宽限是硬上限。
-- 崩溃：T1a 的 `start()` 在 `load()` 看到 `inflight` 记 `interrupted by crash`、计一次失败，本片加诊断 `schedule-interrupted`。
-- `onBotRemovedFromChat`（8897）和 `removeProject` 的桌面端路径（6586 起）都调命令核的内部入口 `markUnavailable(chatId)`：这个群的 `active` 任务改 `paused`、`pausedReason: 'unavailable'`（配置变化，换 revision）。不删。
+- 关闭顺序（`bridge.ts:113-141` 的 `shutdown`，调度器经 `orchestrator.scheduler` 拿）：`scheduler.stop()` 同步；`orchestratorClosing = orchestrator.shutdown()`（它 interrupt 所有运行、排空、settle 剩下的钩子）；`closing` 里 `await orchestratorClosing` 之后 `await scheduler.drain(5000)`。没有 60 秒排空；8 秒宽限是硬上限。
+- 崩溃：T1a 的 `start(loaded)` 对 `loaded.interrupted`（`load()` 时带 `inflight` 的任务）记 `interrupted by crash`、计一次失败，本片在 `D/bot/diagnostics.ts` 加第六个事件名 `schedule-interrupted`（T1a 只加了另外五个），在这条崩溃路径上发。
+- 三处解绑：`onBotRemovedFromChat`（8897）、`removeProject` 的桌面端路径（6586 起）、私聊控制台 `DM.rmDo`（5738），在 `forgetAttention(chatId, 'unbind')` 旁都调本片在 orchestrator 里加的 `markUnavailable(chatId)`：用 T1b 构造的 `store` 的 `mutateConfig`，这个群的 `active` 任务改 `paused`、`pausedReason: 'unavailable'`、`touch`（配置变化，换 revision）。不删；不经命令核（它只有 `execute`），也不加调度器方法；写失败记日志，不挡解绑。
 
 ## 5. 测试
 
@@ -106,7 +106,7 @@ main 必败：`runScheduled`、钩子、头部、标签、`presence`、`schedule
 - `scheduled-run-lock.test.ts`：群 A 有运行时 `editProject(B)` 成功、`editProject(A)` 抛"Agent 正在执行任务"且 `holdFiring(A)` 被调；`libraryWorkspaceCheck` 只看本项目的群。
 - `scheduled-run-presence.test.ts`：经 `runScheduled` 起的那一轮，`openTurn` 收到 `facts.scheduled`、`presence` 是 `'scheduled'`；memory 工具照常。（推导本身的单测在 T1b。）
 - `scheduled-run-release.test.ts`：Claude 后端的新话题运行 settle 后 `thread.close()` 被调、`sessions` 里没了；期间有人在话题里发了消息 → 不关。
-- `scheduled-run-shutdown.test.ts`：`bridge.shutdown` 的顺序 `scheduler.stop` → `orchestrator.shutdown` → `scheduler.drain`（spy 调用顺序）；关闭后文件里 `inflight` 清掉、记录是 `interrupted by shutdown`；重启看到 `inflight` 记 `interrupted by crash` 不重跑；移出群和解绑 → 这个群的任务 `paused unavailable`，别的群不动，revision 变。
+- `scheduled-run-shutdown.test.ts`：`bridge.shutdown` 的顺序 `scheduler.stop` → `orchestrator.shutdown` → `scheduler.drain`（spy 调用顺序）；关闭后文件里 `inflight` 清掉、记录是 `interrupted by shutdown`；重启看到 `inflight` 记 `interrupted by crash` 不重跑；移出群、桌面端解绑、私聊控制台删项目 → 这个群的任务 `paused unavailable`，别的群不动，revision 变。
 - `scheduled-auto-pause.test.ts`：10 次失败发一条文字、带 at 节点、文案逐字；创建人无 `openId` 不带；发送失败 → `noticePending`，下个 tick 重试成功后清掉。
 - 回归定向：handle-message 相关（topic、queue、judge、reminder、dropped、goal）、run-card、context-weave、memory-authority、ask-coordinator、bridge 关闭。按实际文件名执行。
 
@@ -158,4 +158,4 @@ JP-VPS，用验收 daemon（`accept-home2`，Bot 6，已绑的测试群；环境
 
 ## 9. 风险和行数
 
-风险：子进程、并发（排队、钩子、停机）、关闭清理顺序、错误路径。每条都有测试，并按 `AGENTS.md` 加一轮多角度审查。预计生产约 720 行（handle-message 480、context-weave 80、run-card 50、bridge/run.ts/registry/memory-authority 110）、测试约 680 行、文档约 50 行，总计约 1,450。超限先把自动暂停消息、编辑锁和移出群/解绑拆成 T2b。自审不代替独立审查；不冻结、不合入。
+风险：子进程、并发（排队、钩子、停机）、关闭清理顺序、错误路径。每条都有测试，并按 `AGENTS.md` 加一轮多角度审查。预计生产约 720 行（handle-message 480、context-weave 80、run-card 50、bridge、`markUnavailable`、`notifyGateFailure` 110）、测试约 680 行、文档约 50 行，总计约 1,450。超限先把自动暂停消息、编辑锁和移出群/解绑拆成 T2b。自审不代替独立审查；不冻结、不合入。

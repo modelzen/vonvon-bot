@@ -7,10 +7,10 @@
 ## 2. 范围
 
 - 新文件：`D/admin/schedule-commands.ts`、`D/server/rpc/schedule.ts`、`D/cli/commands/schedule.ts`。
-- 改：`packages/protocol/src/rpc.ts`、`packages/client/src/client.ts`、`D/admin/{ipc,service}.ts`、`D/bot/supervisor.ts`、`D/cli/commands/run.ts`、`D/server/http.ts`、`D/cli/index.ts`、`D/cli/daemon-client.ts`、`D/bot/handle-message.ts`（只加 store 和调度器的构造、`schedule` 执行入口；注入的 `run` 抛 `runner-not-wired`，不 `start()`）、`D/agent/entry/registry.ts`（`TurnFacts.scheduled`、`TurnAuth.presence`，见 4.4；原在 T2，挪到这里让 T2 和 T3 能同时开工）。
-- 可以假设：T1a 的 schema、`ScheduleStore`、`createScheduler`、`time.ts`。
+- 改：`packages/protocol/src/rpc.ts`、`packages/client/src/client.ts`、`D/admin/{ipc,service}.ts`、`D/bot/supervisor.ts`、`D/cli/commands/run.ts`、`D/bot/bridge.ts`（`BridgeHandle` 加 `schedule`）、`D/server/http.ts`、`D/cli/index.ts`、`D/cli/daemon-client.ts`、`D/bot/handle-message.ts`（只加 store 和调度器的构造、`initialize()` 里 load store、`schedule` 执行入口；注入的 `run` 抛 `runner-not-wired`，不 `start()`）、`D/agent/entry/registry.ts`（`TurnFacts.scheduled`、`TurnAuth.presence` 和推导、定时回合记忆 `kind` 映射 `initiative`，见 4.4；原在 T2，挪到这里让 T2 和 T3 能同时开工）。
+- 可以假设：T1a 的 schema、`ScheduleStore`、`createScheduler` 和 `Scheduler`、`time.ts`（含 `ceilToMinute`）。
 - 不做：运行（T2）、agent 工具和角色表里"无人回合""不在场"两行的实际调用方（T3，命令核这里先把规则写全）、skill（T4a/T4b）、桌面端（T5，桌面端的 ipc-contract/bridge/facade 三层也留给 T5）。
-- 本片不启动 tick：`runNow` 回 `bot-not-running`（调度器回 `'not-started'`）。
+- 本片不启动 tick：`runNow` 回 `bot-not-running`（调度器回 `'not-started'`）。但 store 要 load（4.2）：daemon 重启后 `list` 照样列出旧任务，`create` 写回的文件里旧任务都在。
 - 后面的片可以假设：命令核签名、`ScheduleActor`、IPC op、RPC 方法、client 方法按总设计第 13 节存在，不再改名。
 
 ## 3. 现在的代码
@@ -53,10 +53,10 @@ export function createScheduleCommands(deps: {
 ### 4.2 IPC、service、RPC
 
 - `AdminIpcOp` 加 `{ kind: 'schedule'; via: 'desktop' | 'cli'; request: ScheduleRequest }`，回 `ScheduleReply`；子进程 `onMessage` 分发到 orchestrator 的 `schedule(via, request)`。
-- `AdminService` 加 `executeSchedule(botId, via, request): Promise<ScheduleReply>`；supervisor 照 `executeGroups` 接（bot 没在运行回 `{ kind: 'refused', reason: 'bot-not-running', message }`，不抛）；`run.ts:130-137` 内联服务加 `if (op.kind === 'schedule') return handle.schedule(op.via, op.request)`。
+- `AdminService` 加 `executeSchedule(botId, via, request): Promise<ScheduleReply>`；supervisor 照 `executeGroups` 接（bot 没在运行回 `{ kind: 'refused', reason: 'bot-not-running', message }`，不抛）；`run.ts:130-137` 内联服务加 `if (op.kind === 'schedule') return handle.schedule(op.via, op.request)`；不受管时 `run.ts` 自己的 `createAdminService`（148 起）同样加 `executeSchedule`，转 `handle.schedule`（`botId` 不是本进程的照别的项抛）。`handle` 是 `startBridge` 回的 `BridgeHandle`，不是 orchestrator，所以 `bridge.ts` 的 `BridgeHandle` 加 `schedule`，转 `orchestrator.schedule`。
 - `server/rpc/schedule.ts` 一个文件：从 RPC 的 `clientKind` 推 `via`（desktop/browser → `desktop`，cli → `cli`），调 `service.executeSchedule(botId, via, request)`；`http.ts` 的 switch 加 `case 'schedule'`；`client.ts` 加 `schedule(botId, request)`。
 - host 侧 actor 固定 `{ kind: 'local', via }`：RPC 带本机凭据的都是主人（和 settings 一样）。
-- orchestrator 返回对象加 `schedule: admit((via, request) => commands.execute({ kind: 'local', via }, request))`；构造 `createScheduleStore(paths.bots(appId).schedules)`、`createScheduler({ run: () => { throw new Error('runner-not-wired'); }, gate: () => 'ok', notifyAutoPause: async () => {}, maxInflight: () => 1, ... })`，不 `start()`。
+- orchestrator 里 `let storeLoaded`、`const loadStore = () => (storeLoaded ??= store.load())`：`initialize()` 里 `await loadStore()`（bridge 在接事件、开 IPC 和 RPC 之前 await `initialize`；读不了文件就起不来，和 `materializeGroupSettings` 一样；坏文件由 T1a 挪开、从空开始，不算读不了）；返回对象和 `Orchestrator` 接口（866）加 `schedule: admit(async (via, request) => { await loadStore(); return commands.execute({ kind: 'local', via }, request); })`，没调 `initialize` 的测试夹具第一次调用时补 load；再加 `scheduler: { start: async () => scheduler.start(await loadStore()), stop: () => scheduler.stop(), drain: (ms) => scheduler.drain(ms) }`（不经 `admit`；本片只给测试看，T2 的 `bridge.ts` 用它）。构造 `createScheduleStore(botPaths(appId).schedulesFile)`、`createScheduler({ run: () => { throw new Error('runner-not-wired'); }, gate: () => 'ok', notifyAutoPause: async () => {}, notifyGateFailure: () => {}, maxInflight: () => 1, ... })`，不 `start()`；T2 由 `bridge.ts` 调 `orchestrator.scheduler.start()` 起 tick。
 
 ### 4.3 终端：`vonvon schedule`
 
@@ -65,15 +65,16 @@ vonvon schedule list   --bot <bot> --group <群>              [--json]
 vonvon schedule list   --bot <bot> --all                      # listBot
 vonvon schedule add    --bot <bot> --group <群> --name <名> --every 30m | --daily 09:00 | --weekly mon,wed@10:00 | --at "2026-11-01 14:00" | --cron "0 9 * * 1-5" [--new-topic] [--tz Asia/Tokyo] <要做什么>
 vonvon schedule edit   --bot <bot> --group <群> <taskId> --revision <r> [同上的时间选项] [--name] [--tz] [<要做什么>]
-vonvon schedule pause|resume|run|delete <taskId> --bot <bot> --group <群> [--revision <r>]
-vonvon schedule runs   <taskId> --bot <bot> --group <群>     # 总次数加最近 20 条
+vonvon schedule pause|resume|run <taskId> --bot <bot> --group <群>
+vonvon schedule delete <taskId> --bot <bot> --group <群> [--revision <r>]   # 不给 --revision 先 list 取当前的
+vonvon schedule runs   <taskId> --bot <bot> --group <群>     # 发 list，取这个任务的总次数加最近 20 条
 ```
 
-时间选项互斥，只能给一个；`--every` 接受 `30m`、`2h`；`--weekly` 的星期用 `mon..sun`；`--at` 按 `--tz`（省略时按 daemon 回的时区——先 `list` 一次拿 `timeZone`，不按终端所在机器的时区）解析成 epoch。人类输出一行一个任务，逐字按总设计第 16 节"终端一行"；`runs` 一行一条记录：`11-01 09:00 · 完成 · 12 秒 · <链接或"—">`。`--json` 原样输出 reply。退出码沿用 s47 的表，`refused` 退 4，`conflict` 退 5。bot 会话里（`VONVON_SESSION` 环境在，`inBotSession`）直接拒绝，和 `vonvon memory` 一样。`index.ts:15` 的 `structured` 加 `'schedule'`，`:28` 的跳过名单加 `parent === 'schedule'`，帮助文字加一组例子。
+时间选项互斥，只能给一个；`--every` 接受 `30m`、`2h`；`--weekly` 的星期用 `mon..sun`；`--at` 按 `--tz`（省略时按 daemon 回的时区——先 `list` 一次拿 `timeZone`，不按终端所在机器的时区）解析成 epoch。人类输出一行一个任务，逐字按总设计第 16 节"终端一行"；`runs` 一行一条记录：`11-01 09:00 · 完成 · 12 秒 · <链接或"—">`。`--json` 原样输出 reply。`delete` 不带 `--revision` 时先发一次 `list`，用这个任务当前的 `revision` 再发 `delete`（`edit` 的 `--revision` 必填）。`runs` 没有单独的请求：发 `list`，取这个任务的 `counts.runs` 和 `recent`；列表里没有它按 `not-found` 处理（退 4）。退出码沿用 s47 的表，`refused` 退 4，`conflict` 退 5。bot 会话里（`VONVON_SESSION` 环境在，`inBotSession`）直接拒绝，和 `vonvon memory` 一样。`index.ts:15` 的 `structured` 加 `'schedule'`，`:28` 的跳过名单加 `parent === 'schedule'`，帮助文字加一组例子。
 
 ### 4.4 在场的两个字段（给 T2、T3 用）
 
-- `registry.ts` 的 `TurnFacts` 加 `scheduled?: { taskId: string; runId: string }`；`TurnAuth` 加 `presence: 'human' | 'scheduled' | 'none'`，`openTurn` 里推导：`kind === 'human'` → `'human'`；`facts.scheduled` 在 → `'scheduled'`；其余（`bot`、`wake`、`initiative`、`retry`）→ `'none'`。`noteSteer` 不改（它已经把 `human` 置 false）。`memoryTurn` 的 `kind` 对 `scheduled` 回 `initiative`（总设计第 8 节）。
+- `registry.ts` 的 `TurnFacts` 加 `scheduled?: { taskId: string; runId: string }`；`TurnAuth` 加 `presence: 'human' | 'scheduled' | 'none'`，`openTurn` 里推导：先看 `facts.scheduled`，在 → `'scheduled'`（合成的定时轮怎么都不会算成 `'human'`）；再看 `kind === 'human'` → `'human'`；其余（`bot`、`wake`、`initiative`、`retry`）→ `'none'`。`noteSteer` 不改（它已经把 `human` 置 false）。`openTurn` 推 `kind` 时 `facts.scheduled` 在 → `initiative`，`memoryTurn` 回的就是它（`memory-authority.ts` 的枚举已有，不改；总设计第 8 节）。这条映射只在本片做，T2 不再改。
 - 本片没有调用方填 `facts.scheduled`：T2 的 `runScheduled` 填，T3 的工具读。
 
 ## 5. 测试
@@ -87,10 +88,10 @@ main 必败：命令核、IPC op、RPC 方法、终端命令在基线不存在�
   - 坏 spec → `bad-schedule` 带 `validateSpec` 的文案；旧 revision → `conflict` 带 current；`edit` 改 spec 后 `cursor = now`、`anchor` 重填、`finished` 回 `active`；`resume` 的 `cursor` 推到 now，过期的 `once` 直接 `finished`。
   - `runNow` 在调度器 `'not-started'` 时 → `bot-not-running`。
   - 请求不过 schema → `bad-schedule`，不抛。
-- `schedule-cli.test.ts`：参数解析（时间选项给两个 → 退 2；`--every 2h` → `minutes: 120`；`--weekly mon,wed@10:00` → `days: [1,3], time: '10:00'`；`--at` 用 daemon 的时区）；人类输出逐字一行；`--json` 原样；各退出码；daemon 不在只报 connection、不建数据目录；`VONVON_SESSION` 下拒绝。
+- `schedule-cli.test.ts`：参数解析（时间选项给两个 → 退 2；`--every 2h` → `minutes: 120`；`--weekly mon,wed@10:00` → `days: [1,3], time: '10:00'`；`--at` 用 daemon 的时区；`delete` 不带 `--revision` → 先 `list` 再带当前 revision 发 `delete`；`runs` 只发 `list`）；人类输出逐字一行；`--json` 原样；各退出码；daemon 不在只报 connection、不建数据目录；`VONVON_SESSION` 下拒绝。
 - `schedule-rpc.test.ts`：真实 http 服务到假 service 的 `schedule` 一来一回，`clientKind: 'cli'` → `via: 'cli'`；supervisor 在 bot 没运行时回 `refused bot-not-running`；`run.ts` 内联分发 `schedule` 到 `handle.schedule`。
-- `orchestrator-schedule-wiring.test.ts`：orchestrator 构造了 store 和调度器、`start()` 没被调（spy）、`schedule` 入口能 `list`。
-- `turn-presence.test.ts`：`openTurn` 带 `facts.scheduled` → `presence: 'scheduled'`、`scheduled.taskId` 在；真人轮 → `'human'`；bot、wake、initiative、retry 轮 → `'none'`；定时轮的 `memoryTurn` kind 是 `initiative`。main 必败。
+- `orchestrator-schedule-wiring.test.ts`：orchestrator 构造了 store 和调度器、`start()` 没被调（spy）、`schedule` 入口能 `list`。重启还列出旧任务：临时目录的 `schedules.json` 先写两个任务，构造 orchestrator、`initialize()`，`schedule list` 回这两个；再 `create` 一个，读文件是三个。坏 JSON → `initialize()` 后 `list` 回空、旁边有 `.corrupt-<时间>`、诊断 `schedule-store-corrupt` 一条。不调 `initialize` 直接 `list` 也回文件里的任务；`store.load()` 只调一次（spy）。
+- `turn-presence.test.ts`：`openTurn` 带 `facts.scheduled` → `presence: 'scheduled'`、`scheduled.taskId` 在，同时带齐真人轮的 `requesterKind: 'user'`、`requesterOpenId`、`triggerMessageId` 也还是 `'scheduled'`；真人轮 → `'human'`；bot、wake、initiative、retry 轮 → `'none'`；定时轮的 `memoryTurn` kind 是 `initiative`。main 必败。
 - 回归定向：cli-admin、cli-admin-rpc、admin-ipc、run-supervisor-dispatch、host-settings、client 的 rpc 表测试。按实际文件名执行，记录写 PR。
 
 ## 6. Codex 的自测
@@ -101,7 +102,7 @@ JP-VPS，离线隔离，不发飞书消息，不调真实 provider，不用 Bot 
 - 不对 `$HOME`、`~`、`$PWD`、`$VONVON_HOME` 或任何可能为空、未设置、指向真实 home 的变量拼出来的路径用 `rm`、`find -delete`、`find -exec rm` 或 `xargs rm`。
 - 不在 shell 里给 `HOME`、`VONVON_HOME` 赋值或 export，只写在单条命令前面，例如 `HOME=$T/home VONVON_HOME=$T/vh npx vitest run`。
 - 重命令加 `flock /tmp/vonvon-heavy.lock`：build、typecheck、lint、定向测试。全量交 CI。
-- 终端走一遍：在 `$T/vh` 下 `vonvon daemon start` 加一个假 bot（照 `cli-admin.test.ts` 的做法起假子进程），`schedule add --every 1m`、`list`、`edit --revision`、`pause`、`resume`、`delete`，看文件 `bots/<appId>/schedules.json` 的内容（`every.anchor` 在、没有顶层 `revision`）和 `.corrupt` 旁置。`run` 要回 `bot-not-running`（本片没 runner）。
+- 终端走一遍：在 `$T/vh` 下 `vonvon daemon start` 加一个假 bot（照 `cli-admin.test.ts` 的做法起假子进程），`schedule add --every 1m`、`list`、`edit --revision`、`pause`、`resume`、`delete`，看文件 `bots/<appId>/schedules.json` 的内容（`every.anchor` 在、没有顶层 `revision`）；`vonvon daemon stop` 再 start，`list` 还列出停前的任务，再 `add` 一个，文件里旧任务都在；daemon 停着时把 `schedules.json` 写坏，start 后 `list` 回空、旁边有 `.corrupt-<时间>`。`run` 要回 `bot-not-running`（本片没 runner）。
 
 ## 7. 文档
 
@@ -115,7 +116,7 @@ JP-VPS，离线隔离，不发飞书消息，不调真实 provider，不用 Bot 
 - 角色表和 3.13 一致：member 只管自己的，scheduled 不能建、不能碰别的任务，chat 跨群一律 `not-group`，别的群的任务 id 一律 `not-found`。
 - 拒绝是回复不是异常；文案逐字等于总设计第 16 节。
 - 终端的 `--json` 错误、退出码和 s47 的表一致；daemon 不在不建目录、不自启；`--at` 用 daemon 的时区。
-- tick 没启动：有测试证明 `start()` 没被调。
+- tick 没启动：有测试证明 `start()` 没被调。store 在 `initialize()` 里 load 了：重启后 `list` 列出旧任务、`create` 不冲掉旧任务，有测试和终端自测证据。
 - diff 里没有真实 id、密钥、本机路径。
 
 ## 9. 风险和行数

@@ -30,7 +30,7 @@
 ### 4.2 群详情页"任务"tab
 
 - tab 表加 `['schedule', '任务']`，排在"记忆"之后；更新 `group-design-settings.test.tsx` 的顺序断言。
-- `ScheduleTab`：`schedule list` 的结果一行一个：名字、`describe`、下一次（`formatTime` 按任务时区，和回复里 daemon 的 `timeZone` 不同时加时区名）、状态（运行中 / 已暂停：手动 / 已暂停：连续失败 / 已暂停：群已解绑 / 已结束）、最近一次（状态中文加时间）。行上按钮：编辑、暂停或恢复、立即运行、删除（确认对话框）。
+- `ScheduleTab`：`schedule list` 的结果一行一个：名字、`describe`、下一次（`formatTime` 按任务时区，和回复里 daemon 的 `timeZone` 不同时加时区名）、状态（已启用 / 已暂停：手动 / 已暂停：连续失败 / 已暂停：群已解绑 / 已结束；`active` 写"已启用"不写"运行中"，"运行中任务"是正在跑的一轮，product.md 第 2 节）、最近一次（状态中文加时间）。行上按钮：编辑、暂停或恢复、立即运行、删除（确认对话框）。
 - 展开一行：总次数、错过和跳过次数、最近 20 条表（时间、状态、用时 `formatUptime`、"在飞书打开"用记录里 daemon 解析好的 `link`，没有 `link` 但有 `topicId` 就 `groupUrl(chatId, topicId)`，都没有不显示）、最近一次结果的 500 字。
 - 页脚固定一句（总设计第 16 节，`deviceTitle` 用现有的本机名称变量）。
 - 轮询：tab 打开时每 10 秒 `list` 一次；切走、卸载清定时器；写操作后立即重拉。
@@ -39,7 +39,7 @@
 
 ### 4.3 表单：`ScheduleForm`
 
-字段：名字（≤40）、要做什么（多行，≤4000）、什么时候（单选：一次 / 每 N 分钟 / 每天 / 每周 / cron；一次用 `<input type="datetime-local">`，每天每周用 `<input type="time">`，每周加七个 checkbox 加"工作日"快捷，cron 一个文本框加一行说明）、发到哪（单选：跟群走 / 每次开新话题）、时区（文本框，默认浏览器的 `Intl.DateTimeFormat().resolvedOptions().timeZone`，旁边一行小字"Vonvon 所在电脑的时区是 {daemon 的 timeZone}"）。`datetime-local` 按表单里填的时区转 epoch（不按浏览器默认），`timeZone` 明确发给 daemon。提交前本地校验（空、超长、一次性时间已过、时区名 `Intl` 认不认识），服务端 `bad-schedule` 的 message 直接显示。编辑带 `revision`；`conflict` 时显示第 16 节"桌面端冲突"那句：表单填入 `current`，用户刚才填的内容放在下面一个只读框里，不丢。
+字段：名字（≤40）、要做什么（多行，≤4000）、什么时候（单选：一次 / 每 N 分钟 / 每天 / 每周 / cron；一次用 `<input type="datetime-local">`，每天每周用 `<input type="time">`，每周加七个 checkbox 加"工作日"快捷，cron 一个文本框加一行说明）、发到哪（单选：跟群走 / 每次开新话题；编辑 `placement.kind === 'topic'` 的任务（聊天里 `where: 'thisTopic'` 或话题里的一次性任务）时多一个只读项"固定在原话题"并选中，不改选就保留原 `placement`（patch 不带它），改选另两项才换；新建没有这一项）、时区（文本框，默认浏览器的 `Intl.DateTimeFormat().resolvedOptions().timeZone`，旁边一行小字"Vonvon 所在电脑的时区是 {daemon 的 timeZone}"）。`datetime-local` 按表单里填的时区转 epoch（不按浏览器默认），`timeZone` 明确发给 daemon。提交前本地校验（空、超长、一次性时间已过、时区名 `Intl` 认不认识），服务端 `bad-schedule` 的 message 直接显示。编辑带 `revision`；`conflict` 时显示第 16 节"桌面端冲突"那句：表单填入 `current`，用户刚才填的内容放在下面一个只读框里，不丢。
 
 ### 4.4 Bot 页"任务"pane
 
@@ -55,8 +55,8 @@ main 必败：tab、组件、三层方法在基线不存在；`group-design-sett
 
 ui 包只有 vitest，没有 jsdom，照现有 `renderToString` 和纯函数的测法。每条写输入和期望：
 
-- `schedule-tab.test.tsx`：五种状态各一行的文字（`paused manual` → "已暂停：手动"，`paused unavailable` → "已暂停：群已解绑"…）；任务 `Asia/Tokyo`、daemon `Asia/Shanghai` → 下一次带"（Asia/Tokyo）"，相同不带；展开表 20 行；"在飞书打开"的三种来源（`link` → 原样，无 `link` 有 `topicId` → `groupUrl`，都无 → 没有链接），href 经 `allowedExternalUrl`；空状态那句；`refused bot-not-running` → 那句、没有"新建"；页脚那句逐字。
-- `schedule-form.test.tsx`：五种 spec 的表单到 request：一次 `2026-11-01T14:00` 加时区 `Asia/Shanghai` → `spec.once.at` 等于那个 epoch 且 `timeZone: 'Asia/Shanghai'`；每 30 分钟 → `{ kind: 'every', minutes: 30 }`（不填 anchor）；每天 `09:00`；每周勾"工作日" → `days: [1,2,3,4,5]`；cron 原样。本地校验：名字空、41 字、内容 4001 字、一次性时间已过、时区 `Mars/Olympus` 各一条错误文字。`conflict` → 表单是 `current` 的值、只读框是用户刚才的值、提示那句。
+- `schedule-tab.test.tsx`：五种状态各一行的文字（`active` → "已启用"，`paused manual` → "已暂停：手动"，`paused unavailable` → "已暂停：群已解绑"…）；任务 `Asia/Tokyo`、daemon `Asia/Shanghai` → 下一次带"（Asia/Tokyo）"，相同不带；展开表 20 行；"在飞书打开"的三种来源（`link` → 原样，无 `link` 有 `topicId` → `groupUrl`，都无 → 没有链接），href 经 `allowedExternalUrl`；空状态那句；`refused bot-not-running` → 那句、没有"新建"；页脚那句逐字。
+- `schedule-form.test.tsx`：五种 spec 的表单到 request：一次 `2026-11-01T14:00` 加时区 `Asia/Shanghai` → `spec.once.at` 等于那个 epoch 且 `timeZone: 'Asia/Shanghai'`；每 30 分钟 → `{ kind: 'every', minutes: 30 }`（不填 anchor）；每天 `09:00`；每周勾"工作日" → `days: [1,2,3,4,5]`；cron 原样。发到哪：`placement: { kind: 'topic', topicId: 't1' }` 的任务打开编辑 → 三项、选中"固定在原话题"，不改选提交 → patch 里没有 `placement`，改选"跟群走" → `placement: { kind: 'follow' }`；新建表单只有两项。本地校验：名字空、41 字、内容 4001 字、一次性时间已过、时区 `Mars/Olympus` 各一条错误文字。`conflict` → 表单是 `current` 的值、只读框是用户刚才的值、提示那句。
 - `bot-schedules.test.tsx`：两个群四个任务 → 两组；点击路径 `group/<id>/schedule`；已解绑的群组名"已解绑的群"、行上有"删除"没有跳转。
 - `schedule-polling.test.ts`：定时器建和清（假时钟）；写操作后立即 `list`。
 - `desktop-ipc-schedule.test.ts`：三层透传。
@@ -72,9 +72,9 @@ Mac（#322），用 Mac 自己的测试环境（隔离数据目录、Mac 的测�
 - 不在 shell 里给 `HOME`、`VONVON_HOME` 赋值或 export，只写在单条命令前面，例如 `HOME=$T/home VONVON_HOME=$T/vh npx vitest run`。
 - 界面用 Codex 自带的网页控制在网页端做，不写 Playwright，不用 Computer Use（没有外壳行为）。lark-cli 用 Mac 上的，`--as user`，只在 #322 登记的测试群里；读消息用 `lark-cli im +messages-list --as user --chat-id <测试群的 chatId> --page-size 20`（参数名以 `lark-cli im --help` 为准，不会的记"没验到"）。
   1. 群详情页 → 任务 tab：空状态；新建"每 1 分钟"的任务，时区框默认是浏览器的时区、小字显示 daemon 的时区；列表出现，下一次时间对（建的时刻向上取整到整分再加 1 分钟）。
-  2. （T2 后）两分钟后展开：两条记录、"在飞书打开"能打开那条卡；`+messages-list` 看群里两张卡。Bot 停掉（隔离目录的 `vonvon daemon stop`）再开 tab：显示"Bot 没在运行…"那句。
+  2. （T2 后，先照第 1 步再建一个）两分钟后展开：两条记录、"在飞书打开"能打开那条卡；`+messages-list` 看群里两张卡。点一次立即运行（上一次还在跑会回"这个任务正在运行…"，等它结束再点）：展开多一条记录，群里多一张带"手动运行"的卡。Bot 停掉（隔离目录的 `vonvon daemon stop`）再开 tab：显示"Bot 没在运行…"那句。
   3. 编辑改成每天 09:00：成功；在终端 `VONVON_HOME=<隔离目录> vonvon schedule edit --bot … --group … <id> --revision <r> --name 改过` 改一次后再在网页上保存旧表单：冲突提示、表单回填 current、只读框里是刚才填的。
-  4. 暂停、恢复、立即运行、删除各一次；删除后隔离目录的 `bots/<appId>/schedules.json` 里没了。
+  4. 暂停、恢复、立即运行、删除各一次；删除后隔离目录的 `bots/<appId>/schedules.json` 里没了。T2 合入前立即运行回 `refused bot-not-running`（T1b 不启动 tick），显示"Bot 没在运行…"那句是预期，随后重拉的列表照常；T2 合入后的立即运行在第 2 步看。
   5. Bot 页：两个群各建一个，"任务"pane 里两组，点击跳到对应群的任务 tab。
   6. 搜索"任务"能到 tab。
 - 打码：不贴群 id、消息 id、`/Users/<u>`。

@@ -7,10 +7,10 @@
 ## 2. 范围
 
 - 新文件：`packages/protocol/src/schedule.ts`、`D/bot/schedule/{types,time,store,scheduler}.ts`。
-- 改：`packages/protocol/src/index.ts`（导出）、`D/server/atomic-file.ts`（`durable` 选项）、`D/config/paths.ts`（`schedulesFile`）、`D/bot/diagnostics.ts`（五个事件名）。
+- 改：`packages/protocol/src/index.ts`（导出）、`D/server/atomic-file.ts`（`durable` 选项）、`D/config/paths.ts`（`botPaths(appId).schedulesFile`）、`D/bot/diagnostics.ts`（五个事件名：`schedule-missed`、`schedule-skipped`、`schedule-auto-paused`、`schedule-store-corrupt`、`schedule-notice-pending`；第六个 `schedule-interrupted` 由 T2 加）。
 - 不做：`rpc.ts` 的方法（T1b）、命令核、IPC/RPC/client、终端（T1b）、运行（T2）、agent 工具（T3）、skill（T4a/T4b）、桌面端（T5）。
-- 本片不接进 orchestrator：`createScheduler` 只在测试里构造。T1b 在 `handle-message.ts` 里构造并注入抛 `runner-not-wired` 的 `run`；T2 换成 `runScheduled` 并 `start()`。
-- 后面的片可以假设：总设计 4.1 的 schema、4.2 的 `StoredTask`、4.3 的 `ScheduledJob`/`ScheduledOutcome`/`ScheduledHook`、第 5 节的函数名、第 6 节 `createScheduler` 的签名，不再改名。
+- 本片不接进 orchestrator：`createScheduler` 只在测试里构造。T1b 在 `handle-message.ts` 里构造、在 orchestrator 的 `initialize()` 里 `store.load()`（tick 没起时命令核也看得到盘上的任务），并注入抛 `runner-not-wired` 的 `run`；T2 换成 `runScheduled`，由 `bridge.ts` 经 orchestrator 的 `scheduler` 句柄调 `start(loaded)`。
+- 后面的片可以假设：总设计 4.1 的 schema、4.2 的 `StoredTask`、4.3 的 `ScheduledJob`/`ScheduledOutcome`/`ScheduledHook`、第 5 节的函数名、第 6 节 `createScheduler` 的签名和它导出的返回类型 `Scheduler`、本计划 4.3 的 `ScheduleStore`，不再改名。
 
 ## 3. 现在的代码
 
@@ -29,14 +29,14 @@
 
 ### 4.2 时间：`time.ts`
 
-按总设计第 5 节导出 `nextSlotAfter`、`latestSlotWithin`、`countSlotsBetween`、`instantOf`、`localParts`、`parseLocal`、`parseCron`、`describeSpec`、`validateSpec`、`formatAt`、`formatHHMM`、`hostTimeZone()`。`every` 没有 `anchor` 时 `nextSlotAfter` 抛错（命令核保证存储里有）。`validateSpec` 的文案逐字用总设计第 16 节那一行。
+按总设计第 5 节导出 `nextSlotAfter`、`latestSlotWithin`、`countSlotsBetween`、`instantOf`、`localParts`、`parseLocal`、`parseCron`、`describeSpec`、`validateSpec`、`formatAt`、`formatHHMM`、`ceilToMinute`、`hostTimeZone()`。`every` 没有 `anchor` 时 `nextSlotAfter` 抛错（命令核保证存储里有）。`validateSpec` 的文案逐字用总设计第 16 节那一行。
 
 ### 4.3 存储：`store.ts`
 
 ```ts
 export function createScheduleStore(file: string, deps: { now: () => number; log: Logger; diagnostics: (event) => void; newRevision?: () => string }): ScheduleStore;
-interface ScheduleStore {
-  load(): Promise<{ interrupted: StoredTask[] }>;   // 启动时一次；坏文件挪开、记 schedule-store-corrupt；返回带 inflight 的任务，由调度器记 interrupted
+export interface ScheduleStore {
+  load(): Promise<{ interrupted: StoredTask[] }>;   // 启动时一次，由 orchestrator 调（T1b 4.2），调度器不调；坏文件挪开、记 schedule-store-corrupt；返回带 inflight 的任务，交给 scheduler.start(loaded) 记 interrupted
   all(): StoredTask[]; byChat(chatId): StoredTask[]; get(taskId): StoredTask | undefined;
   /** 配置变化：create/edit/pause/resume/state 改变。回调里改到的任务换新 revision、updatedAt = now。串行、原子写。 */
   mutateConfig<T>(fn: (tasks: StoredTask[], touch: (task: StoredTask) => void) => T): Promise<T>;
@@ -50,11 +50,11 @@ interface ScheduleStore {
 - `touch(task)` 才换 revision（16 位随机十六进制）；`mutateConfig` 里没 `touch` 的任务不换。
 - 每个任务 `recent` 超过 20 条砍最旧的；`lastResult.excerpt` 截 500 字（按字符，不按字节）。
 - `atomic-file.ts`：`writeFileAtomic(path, data, opts?: { durable?: boolean })`，`durable` 时 `open` 临时文件、`writeFile`、`sync()`、`close`、`rename`、再 `open` 父目录 `sync()`（目录 fsync 在 macOS 上可能 `EINVAL`，吞掉只记日志）。默认不变，别的调用方不受影响。
-- `paths.ts`：`botPaths(appId)` 加 `schedules: join(dir, 'schedules.json')`。
+- `paths.ts`：`botPaths(appId)` 加 `schedulesFile: join(dir, 'schedules.json')`（照 `droppedFile`、`judgeUsageFile` 的叫法）。
 
 ### 4.4 调度循环：`scheduler.ts`
 
-按总设计第 6 节实现全部判定、认领、并发上限、结算、崩溃、`runNow`、`stop()`/`drain()`。本片测试里注入假的 `run`、`gate`（恒 `'ok'`）、`notifyAutoPause`、`maxInflight`。tick 的时间推进全部经 `deps.now` 和 `deps.timers`，测试用假时钟。`start()` 先 `await store.load()`，把返回的 `interrupted` 任务按第 6 节"崩溃"记录，再起第一次 tick。
+按总设计第 6 节实现全部判定、认领、并发上限、结算、崩溃、`runNow`、`stop()`/`drain()`。本片测试里注入假的 `run`、`gate`（恒 `'ok'`）、`notifyAutoPause`、`notifyGateFailure`、`maxInflight`。tick 的时间推进全部经 `deps.now` 和 `deps.timers`，测试用假时钟。`start(loaded): Promise<void>` 不读盘：收 orchestrator 先调的 `store.load()` 的返回值，把 `loaded.interrupted` 按第 6 节"崩溃"记录（按 id 重读，任务已删就跳过），记完才起第一次 tick、resolve。
 
 ## 5. 测试
 
@@ -73,6 +73,7 @@ main 必败：本片的文件和入口在基线不存在，测试文件在基线
   - `describeSpec`：七个例子逐字等于总设计第 5 节；`timeZone` 和 host 不同加"（Asia/Tokyo）"。
   - `validateSpec`：一次性已过、超过一年、`every 0`、`every 10081`、`time '9:00'`、`days []`、`cron '0 0 30 2 *'`、时区 `'Mars/Olympus'` 各一条，文案逐字等于第 16 节。
   - `parseLocal(Asia/Shanghai, '2026-11-01 14:00')` → epoch；`'2026-13-01 14:00'` → undefined。
+  - `ceilToMinute(10:00:23.500)` → 10:01:00；`ceilToMinute(10:01:00.000)` → 10:01:00（整分不动）。
 - `schedule-store.test.ts`（真实临时目录）
   - `load` 空目录 → 0 个任务，文件不建；写一次后文件存在、`version: 1`、没有顶层 `revision`。
   - `mutateConfig` 里 `touch` 的任务 revision 变、没 `touch` 的不变；`mutateRuntime` 改 cursor 后 revision 不变。
@@ -83,11 +84,13 @@ main 必败：本片的文件和入口在基线不存在，测试文件在基线
   - `writeFileAtomic(..., { durable: true })` 调了 `sync`（用 `fs` 的 spy 断言 `fsync` 至少两次）；不带选项不调。
 - `schedule-scheduler.test.ts`（假时钟、内存 store）
   - `every 1` 到点 → `run` 调一次，`job.slot` 等于那个整分，`trigger: 'schedule'`，`nth: 1`。
-  - 睡 3 小时醒来（时钟跳 3 小时再 tick）→ `run` 一次、`trigger: 'catchUp'`、slot 是最近的；`recent` 里一条 `missed count: 179`，`counts.missed` 179。
-  - 睡 8 天 → 不跑；`missed count` 等于 8 天的 slot 数；`cursor = now`；`once` 变 `finished`。
+  - `every 1`，`cursor` 10:00:00，睡 3 小时醒来（时钟跳到 13:00:00 再 tick）→ `run` 一次、slot 13:00、`trigger: 'schedule'`（最近的 slot 不到 60 秒，不算补跑）；`recent` 里一条 `missed count: 179`，`counts.missed` 179。
+  - `every 60`，anchor 和 `cursor` 都是 10:00，时钟跳到 13:30 再 tick → `run` 一次、slot 13:00、`trigger: 'catchUp'`、`late: true`；`recent` 里一条 `missed count: 2`（11:00、12:00），`counts.missed` 2。
+  - 7 天外不跑（时区 Asia/Shanghai）：`cron '0 9 1 1 *'`（每年 1 月 1 日 09:00），`cursor` 2026-12-31 10:00，时钟跳到 2027-01-08 10:00 再 tick → 不跑；`recent` 一条 `{ status: 'missed', slot: 2027-01-01 09:00, count: 1 }`，`counts.missed` 1，`cursor = now`，仍 `active`，下一个 slot 是 2028-01-01 09:00。`once at X`，`cursor` X − 1 小时，时钟跳到 X + 8 天 → 不跑；`missed count: 1`，`cursor = now`，变 `finished`。
+  - 周期任务睡 8 天还补最近一次：`every 60`，anchor 和 `cursor` 都是 A，时钟跳到 A + 8 天 30 分钟 → `run` 一次，`slot` 是 A + 192 小时，`trigger: 'catchUp'`；`recent` 一条 `missed count: 191`（A 之后到 A + 192 小时共 192 个 slot，减去补跑的那一个），`counts.missed` 191，`cursor` 是 A + 192 小时。
   - `run` 挂着不返回，下一个 slot 到 → `recent` 加 `skipped reason running`，`counts.skipped` 1，`cursor` 推进。
   - 跑前 `inflight` 和 `cursor` 落盘：`run` 回调里读文件能看到 `inflight.runId`、`inflight.revision`。
-  - `load` 看到 `inflight` → `interrupted by crash`，`counts.runs` +1，`consecutiveFailures` +1，不重跑。
+  - 文件里有 `inflight`，`start(await store.load())` → `interrupted by crash`，`counts.runs` +1，`consecutiveFailures` +1，不重跑；`start` 没再调 `store.load()`（spy）；load 之后、`start` 之前删掉那个任务 → `start` 跳过它、不抛。
   - 10 次 `failed counts: true` → `paused`、`pausedReason: 'failures'`、revision 变、`notifyAutoPause` 调一次；第 11 个 slot 不跑；`done` 把计数清零；`failed counts: false` 不加计数；`interrupted by shutdown/user` 不加不减。
   - `notifyAutoPause` 抛错 → `noticePending: true`，下个 tick 再调；成功后清掉；24 小时后不再调。
   - `once` 的结算：`run` 期间把 `spec.at` 改到 20 分钟后 → 结算后仍 `active`、`nextRunAt` 是新时间；没改 → `finished`；`interrupted` 的 `once` → `finished`。
@@ -95,7 +98,8 @@ main 必败：本片的文件和入口在基线不存在，测试文件在基线
   - tick 单飞：tick 里 `run` 还没被认领时连调 3 次 `wake()` → 同一个 slot 只 `run` 一次、`inflight` 只写一次。
   - 认领：`mutateRuntime` 回调里 `cursor` 已被别人推进 → 不 `run`。
   - 并发上限 2：同一 tick 三个任务到点 → 前两个起跑、第三个等第一个 settle 后起；起跑间隔 2 秒（假时钟）。
-  - `gate` 返回 `disabled` → `skipped reason disabled`、不出声、不计失败；`tier-unavailable` → `failed`、计失败；`unbound` → `failed`、计失败。
+  - 排队中又到新 slot：并发上限 1，任务 A 的 `run` 挂着占住槽；任务 B（`every 1`）在 S1 到点排队，A 没 settle 时 B 又到 S2 → B 的 `recent` 只多一条 `{ status: 'missed', slot: S1, count: 1 }`，`counts.missed` 1，`counts.skipped` 0；A settle 后 B 以 `slot: S2` 起跑，`run` 对 B 只调一次，起跑后 `counts.missed` 仍是 1。
+  - `gate` 返回 `disabled` → `skipped reason disabled`、不出声、不计失败；`tier-unavailable` → `failed`、计失败、`notifyGateFailure` 调一次；`unbound` → `failed`、计失败、不调 `notifyGateFailure`。
   - `stop()` 后 `wake()` 不再认领；`drain(5000)` 等 settle 写完返回；超过 5 秒也返回。
 - 回归定向：`atomic-file` 的现有测试（按实际文件名）、`topic-registry`、`paths`。
 
@@ -127,4 +131,4 @@ JP-VPS，离线隔离，不发飞书消息，不调真实 provider，不用 Bot 
 
 ## 9. 风险和行数
 
-风险：时区数学（gap/fold、倒推、跨年）、存储写入的串行和崩溃一致性、认领和单飞的竞争。都用假时钟和真实文件测试压住。预计生产约 620 行（protocol 120、time 260、store 120、scheduler 240、atomic-file 和 paths 20）、测试约 580 行，总计约 1,200，低于 1,500。超限先把 `cron` 的解析和倒推拆成 T1a2，不删测试。自审不代替独立审查；不冻结、不合入。
+风险：时区数学（gap/fold、倒推、跨年）、存储写入的串行和崩溃一致性、认领和单飞的竞争。都用假时钟和真实文件测试压住。预计生产约 760 行（protocol 120、time 260、store 120、scheduler 240、atomic-file 和 paths 20）、测试约 580 行，总计约 1,340，低于 1,500。超限先把 `cron` 的解析和倒推拆成 T1a2，不删测试。自审不代替独立审查；不冻结、不合入。
