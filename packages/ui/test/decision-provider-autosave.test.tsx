@@ -158,3 +158,12 @@ it('rejects an invalid custom connection without sending a settings write or exp
   expect(content(ui.all)).not.toContain('user:secret');
   expect(ui.picker!.props.value.provider).toBe('codex-appserver');
 });
+it('keeps custom key management available when host configuration cannot be read', async () => {
+  harness.client.settings.mockRejectedValue(new Error('配置读取失败'));
+  const page = () => nodes(renderAt('page', () => DecisionProviderSettings({customKeyContent: <span>自定义密钥管理</span>})));
+  page();
+  for (let tick = 0; tick < 6; tick++) await Promise.resolve();
+  const all = page();
+  expect(content(all)).toContain('配置读取失败');
+  expect(content(all)).toContain('自定义密钥管理');
+});

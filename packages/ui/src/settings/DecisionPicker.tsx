@@ -89,7 +89,7 @@ export function DecisionPicker({value, catalogs, jevModels, decisionServices, ke
   const keyProblem = (provider: string) => isDecisionApiProvider(provider) && serviceKeyState(provider) !== 'ready';
   const connectionProblem = (provider: string) => provider === 'custom' && decisionServices?.find(service => service.provider === provider)?.endpointConfigured === false;
   const setupProblem = (provider: string) => keyProblem(provider) || connectionProblem(provider);
-  const setupText = (provider: string) => keyProblem(provider) ? keyText(provider) : '接口地址未配置';
+  const setupText = (provider: string) => connectionProblem(provider) ? '接口地址未配置' : keyText(provider);
   const keyText = (provider: string) => {const state = serviceKeyState(provider); return state === 'missing' ? '未配置 API 密钥' : state === 'invalid' ? 'API 密钥不可用' : state === 'loading' ? '正在读取密钥…' : '密钥读取失败';};
   const native = value && decisionNativeProviders.some(provider => provider.id === value.provider);
   const efforts = value?.custom ? customEfforts[value.provider] ?? [] : current?.efforts ?? [];
@@ -130,7 +130,7 @@ export function DecisionPicker({value, catalogs, jevModels, decisionServices, ke
                       return <Combobox.Item key={model.id} value={model.id} className={`decision-picker-option${needsKey ? ' decision-picker-option--needs-key' : ''}`} disabled={disabled || !needsKey && unavailable(model)}
                         onClick={event => {if (needsKey) {event.preventBaseUIHandler(); if (!disabled) manageKey(model.provider);}}}>
                         <ProviderIcon provider={model.provider}/><span className={`decision-picker-option-copy${needsKey || model.detail ? ' decision-picker-option-copy--stacked' : ''}`}><strong>{model.name}</strong>{needsKey ? <small>{setupText(model.provider)}</small> : model.detail && <small>{model.detail}</small>}{!needsKey && model.unavailable && <small>已保存</small>}</span>
-                        {model.recommended && <span className="decision-picker-recommendation">推荐</span>}{needsKey ? <span className="decision-picker-key-action">{context === 'group' ? '前往设置' : !keyProblem(model.provider) && connectionProblem(model.provider) ? '配置接口' : serviceKeyState(model.provider) === 'missing' ? '添加密钥' : '检查密钥'}<ArrowUpRight size={12} aria-hidden="true"/></span> : <Combobox.ItemIndicator className="decision-picker-check"><Check size={15} aria-hidden="true"/></Combobox.ItemIndicator>}
+                        {model.recommended && <span className="decision-picker-recommendation">推荐</span>}{needsKey ? <span className="decision-picker-key-action">{context === 'group' ? '前往设置' : model.provider === 'custom' ? '配置接口' : serviceKeyState(model.provider) === 'missing' ? '添加密钥' : '检查密钥'}<ArrowUpRight size={12} aria-hidden="true"/></span> : <Combobox.ItemIndicator className="decision-picker-check"><Check size={15} aria-hidden="true"/></Combobox.ItemIndicator>}
                       </Combobox.Item>;
                     })}
                     {!items.length && <div className="decision-picker-catalog-note">{catalog ? catalog.message || '模型目录暂不可用。' : '正在读取模型…'}</div>}

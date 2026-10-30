@@ -398,7 +398,7 @@ test('decision service searches keep their own key and connection destinations',
     assert.equal(match?.destination.section, decisionKeySection(provider));
     assert.equal(match?.destination.field, 'API 密钥');
   }
-  assert.equal(findEntries(entries, '自定义决策请求地址')[0]?.destination.field, '请求地址');
+  assert.equal(findEntries(entries, '自定义决策请求地址')[0]?.destination.field, '接口地址');
   assert.equal(findEntries(entries, '自定义接口模型 ID')[0]?.destination.field, '模型 ID');
   assert.equal(decisionProviderSection('unknown'), 'Provider 配置');
 });
