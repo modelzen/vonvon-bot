@@ -16,4 +16,4 @@ Windows NSIS 安装版复用检查、下载、安装并重启及托盘界面。�
 
 ## 验证范围
 
-自动化覆盖验签、篡改与架构拒绝、下载和安装分步、地址约束及安装未生效。原生云端安装报告覆盖安装/重装；`windows-upgrade-acceptance.mjs` 以独立应用身份验证真实完整 EXE 的 A→B→C。fixture 不代表完整产品 UI、daemon、差分或 SmartScreen 已验收。Windows Codex 另验路径、当前用户范围、语言与进度、稍后/取消、真实 Bot 停止恢复及数据保留，并记录准确源码 SHA。
+自动化覆盖验签、篡改与架构拒绝、下载和安装分步、地址约束及安装未生效。原生云端安装报告覆盖安装/重装；独立 `codex/windows-upgrade-acceptance` 分支的工具以不同应用身份验证真实完整 EXE 的 A→B→C。fixture 不代表完整产品 UI、daemon、差分或 SmartScreen 已验收。Windows Codex 通过 PR 直接回传路径、当前用户范围、语言与进度、稍后/取消、真实 Bot 停止恢复及数据保留结果，记录准确源码 SHA。

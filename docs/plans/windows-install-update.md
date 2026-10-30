@@ -27,7 +27,7 @@ owner 2026-10-30 已认可 `docs/research/2026-10-30-windows-install-update/repo
 
 ## 6. Codex 自测
 
-Mac 负责隔离构建、类型检查和自动化测试。按 owner 本轮新指示，Windows 虚拟机内的安装/升级/界面验收交给虚拟机上的 Codex，owner 转发固定 SHA、命令与验收清单；本会话不继续操作虚拟机界面。使用独立 AppId、测试签名密钥、数据目录和缓存验证 A→B→C，避免覆盖默认安装。此片不发送飞书消息。
+Mac 负责隔离构建、类型检查和自动化测试；Windows Codex 负责虚拟机内安装/升级/界面验收。按 owner 新指示，通过 PR 直接交接准确 SHA、任务和结果，owner 只需转发一次启动指令。本会话不操作虚拟机界面。独立验收工具在 `codex/windows-upgrade-acceptance` 分支单独审查，使用不同 AppId、测试密钥、数据目录和缓存验证 A→B→C；以包含本片产品提交的工具分支固定 SHA 验收。此片不发送飞书消息。
 
 ## 7. 文档
 
