@@ -16,7 +16,8 @@ async function start(kind: 'single' | 'multi' | 'smart', preferences?: NonNullab
 }
 
 describe('a scheduled run in the main session', () => {
-  it.each(['single', 'smart'] as const)('a %s group: a new main-area card, the chat key, no judge, no reaction, no reminder', async kind => {
+  // A smart group never reminds after a card that landed, and a single one has no judge: each row checks one of them.
+  it.each([['single', 'no reminder'], ['smart', 'no judge']] as const)('a %s group: a new main-area card, the chat key, no reaction, %s', async (kind, _checks) => {
     // Reminded after every run, a person's turn included: a scheduled turn has nobody to remind.
     const { orchestrator, channel, runScheduled } = await start(kind, { completionReminder: { mode: 'always' } });
     const run = thread();
@@ -158,6 +159,27 @@ describe('a group that changes while the run is placed', () => {
     expect(fake.backend.startThread).not.toHaveBeenCalled();
     expect(fake.createCard).not.toHaveBeenCalled();
     expect(fake.send).not.toHaveBeenCalled();
+  });
+
+  it('only its git branch moved meanwhile (a person\'s turn refreshes it): the run goes ahead', async () => {
+    const { result, answer } = await placing();
+    const run = thread();
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    fake.project = { ...fake.project, branch: 'feature' };
+    answer();
+    await until(() => expect(run.consumed).toHaveLength(1));
+    run.turns[0]!.resolve();
+    await expect(result).resolves.toMatchObject({ status: 'done' });
+  });
+
+  it('a new topic whose git branch moved while its session started: the run goes ahead', async () => {
+    const { runScheduled } = await start('multi');
+    const run = thread();
+    fake.backend.startThread.mockImplementation(async () => { fake.project = { ...fake.project, branch: 'feature' }; return run.t; });
+    const result = runScheduled(job());
+    await until(() => expect(run.consumed).toHaveLength(1));
+    run.turns[0]!.resolve();
+    await expect(result).resolves.toMatchObject({ status: 'done' });
   });
 
   it('a desktop edit of the group meanwhile is refused, as during a message\'s intake', async () => {
