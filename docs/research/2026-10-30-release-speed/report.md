@@ -19,8 +19,12 @@
 
 公网 ZIP/DMG 测试记录最大同时流数为 2，完整 SHA-256 与响应头校验保留；一个失败也等另一流结束才返回。统一发布器测试验证 Mac/Windows 上传确实重叠、失败保留独立回执、篡改计划/配置/来源拒绝、已发布候选不重复写 manifest。
 
-## 下一次发布
+## Linux CI 并发
 
 另取 4 个真实子进程测试文件（owned-process-term、codex-process-tree、provider/holder-process、provider/process-host），每轮独立临时 HOME/VONVON_HOME，CI=true；两轮均 61 例，56 通过、5 平台跳过、0 失败。1 worker 用时 24.713 秒，2 workers 12.088 秒，约 2.04 倍。Mac 小样本只证明这组测试可以重叠，双核 Linux 的稳定性由完整 CI 继续验证；保留最多 4 个的上限，Windows CI 仍单 worker。
+
+真实验证：[完整 CI 运行](https://github.com/modelzen/vonvon-bot/actions/runs/40986572595)，源码 `b6bbad03bf3642386aec3bea31fbe5239d7472d0`，Linux 和自托管 macOS 都成功。Linux 完整 job 8 分 53 秒，测试步骤 7 分 06 秒；daemon 400 个文件通过、10 个文件跳过，耗时 376.92 秒。历史 0.7.8 的相同 daemon 文件数与跳过数耗时约 811 秒，完整 Linux job 17 分 28 秒；两轮并非同一台机器上的严格 A/B，负载可能影响耗时。没有削减测试或放宽超时。此手动性能验证不代替 PR 自己的 CI gate。
+
+## 下一次发布
 
 仍需在下一次获准发版观察完整 Windows 下载、四次 Apple 上传和端到端耗时。目标是减少关键路径中的独立传输与人工交接；本次不声称完成正式签名、公证、上传或真实客户端升级验收。
