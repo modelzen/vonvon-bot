@@ -52,8 +52,9 @@ function harness() {
   const machine = vi.fn(async (_request: Parameters<VonvonClient['machine']>[0]): ReturnType<VonvonClient['machine']> => ({ type: 'done', message: 'ok' }));
   const dispose = vi.fn(async () => {});
   const run = vi.fn(async (): ReturnType<VonvonClient['run']> => ({ kind: 'applied', revision: 2 }));
+  const schedule = vi.fn(async (_botId: string, _request: unknown): ReturnType<VonvonClient['schedule']> => ({ kind: 'tasks', tasks: [], now: 1, timeZone: 'UTC' }));
   const client = {
-    snapshot, machine, run,
+    snapshot, machine, run, schedule,
     watchSnapshots: (listener: (value: unknown) => void) => { onSnapshot = listener; return () => { onSnapshot = () => {}; }; },
     onLog: () => () => {},
     onBackendInstall: () => () => {},
@@ -86,7 +87,7 @@ function harness() {
     if (!handler) throw new Error(`Missing handler ${channel}`);
     return handler(event, ...args);
   };
-  return { bridge, event, frame, webContents, window, paths, invoke, snapshot, machine, run, dispose, actions, owner,
+  return { bridge, event, frame, webContents, window, paths, invoke, snapshot, machine, run, schedule, dispose, actions, owner,
     emitSnapshot: (value: unknown) => onSnapshot(value),
     emitError: (error: Error) => onError(error) };
 }
@@ -94,6 +95,16 @@ function harness() {
 beforeEach(() => { handlers.clear(); openExternal.mockClear(); failRegistration.channel = ''; });
 
 describe('desktop IPC boundary', () => {
+  it('forwards a schedule request with its bot and checks both arguments', async () => {
+    const h = harness();
+    const request = { action: 'list', chatId: 'oc_pay' };
+    expect(await h.invoke(desktopChannels.schedule, 'cli_a', request)).toEqual({ ok: true, value: { kind: 'tasks', tasks: [], now: 1, timeZone: 'UTC' } });
+    expect(h.schedule).toHaveBeenCalledExactlyOnceWith('cli_a', request);
+    expect(await h.invoke(desktopChannels.schedule, request)).toMatchObject({ ok: false });
+    expect(await h.invoke(desktopChannels.schedule, 'not-a-bot', request)).toMatchObject({ ok: false });
+    expect(await h.invoke(desktopChannels.schedule, 'cli_a', { action: 'nope' })).toMatchObject({ ok: false });
+    expect(h.schedule).toHaveBeenCalledOnce();
+  });
   it('hands a daemon restart to the shell with the attached owner and forwards other commands', async () => {
     const h = harness();
     expect(await h.invoke(desktopChannels.run, { type: 'restartHost' })).toEqual({ ok: true, value: { kind: 'applied', revision: 2 } });

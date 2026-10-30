@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { shell, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import { ConnectionError, RpcError } from '@vonvon/client/browser';
 import {
-  adminRequestSchema, collaborationRequestSchema, commandSchema,
+  adminRequestSchema, agentIdSchema, collaborationRequestSchema, commandSchema, scheduleRequestSchema,
   directoryRequestSchema, environmentRequestSchema, libraryRequestSchema, machineRequestSchema, memoryRequestSchema, contextPreviewRequestSchema,
   settingsRequestSchema, machineReplySchema, agentIdSchema, scheduleRequestSchema, type DesktopUpdate, type MachineReply,
 } from '@vonvon/protocol';
@@ -230,12 +230,12 @@ export function installBridge(
   let binding = bind(owner);
   const registeredChannels: string[] = [];
 
-  function register<T>(channel: string, arity: number, parse: (value: unknown) => T,
+  function register<T>(channel: string, arity: number, parse: (...values: unknown[]) => T,
     invoke: (value: T) => Promise<unknown>): void {
     ipcMain.handle(channel, async (event, ...args): Promise<IpcResult<unknown>> => {
       if (!authorized(event)) return { ok: false, error: { kind: 'validation', message: 'Unauthorized desktop request' } };
       if (args.length !== arity) return { ok: false, error: { kind: 'validation', message: 'Invalid desktop request' } };
-      try { return { ok: true, value: await invoke(parse(args[0])) }; }
+      try { return { ok: true, value: await invoke(parse(...args)) }; }
       catch (error) { return failure(error); }
     });
     registeredChannels.push(channel);
@@ -280,6 +280,8 @@ export function installBridge(
     register(desktopChannels.schedule, 1, value => schedulePayloadSchema.parse(value), value => client().schedule(value.botId, value.request));
     register(desktopChannels.directory, 1, value => directoryRequestSchema.parse(value), value => client().directory(value));
     register(desktopChannels.library, 1, value => libraryRequestSchema.parse(value), value => client().library(value));
+    register(desktopChannels.schedule, 2, (botId, request) => ({ botId: agentIdSchema.parse(botId), request: scheduleRequestSchema.parse(request) }),
+      value => client().schedule(value.botId, value.request));
     register(desktopChannels.close, 0, noArg, () => activeOwner?.dispose() ?? Promise.resolve());
     register(desktopChannels.external, 1, value => value, openAllowedExternal);
     register(desktopChannels.startHost, 1, value => {
