@@ -1,7 +1,8 @@
 import { fake, human, job, setup, thread, topics, until } from './helpers/scheduled-run';
 import { afterEach, expect, it } from 'vitest';
 
-// T2 4.1 第 6 条: a scheduled run's hidden topic lets its process go once settled, unless someone joined it.
+// T2 4.1 第 6 条: a scheduled run's hidden topic lets its process go once settled, unless someone joined it. A run in a
+// session that was there before (the main one, a topic it went back to) leaves the process as a person's turn does.
 let current: Awaited<ReturnType<typeof setup>> | undefined;
 afterEach(async () => { await current?.orchestrator.shutdown(); current = undefined; });
 
@@ -40,4 +41,23 @@ it('keeps it when someone wrote in the topic meanwhile', async () => {
   expect(run.t.close).not.toHaveBeenCalled();
   expect(fake.backend.resumeThread).not.toHaveBeenCalled();
   run.turns[2]!.resolve();
+});
+
+it.each([
+  ['the main session', 'single', {}, undefined],
+  ['a topic it was put back in', 'multi', { placement: { kind: 'topic', topicId: 'topic-old' } }, 'topic-old'],
+] as const)('keeps the process of %s: someone talks there again', async (_name, kind, task, topicId) => {
+  current = await setup(kind);
+  const run = thread();
+  fake.backend.resumeThread.mockResolvedValue(run.t);
+  const result = current.runScheduled(job(task));
+  await until(() => expect(run.consumed).toHaveLength(1));
+  run.turns[0]!.resolve();
+  await expect(result).resolves.toMatchObject({ status: 'done' });
+  await until(() => expect(fake.log.info).toHaveBeenCalledWith('card', 'final', expect.anything()));
+  expect(run.t.close).not.toHaveBeenCalled();
+  await current.orchestrator.onMessage(human('接着说', topicId));
+  await until(() => expect(run.consumed).toHaveLength(2));
+  expect(fake.backend.resumeThread).toHaveBeenCalledOnce();
+  run.turns[1]!.resolve();
 });
