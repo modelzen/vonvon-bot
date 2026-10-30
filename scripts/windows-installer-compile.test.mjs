@@ -8,7 +8,7 @@ import {compileWindowsInstaller} from './windows-installer-compile.mjs';
 
 test('actual builder headers and assisted directory/upgrade pages compile for both architectures', {timeout:120000}, async t => {
   const out = await mkdtemp(join(tmpdir(), 'vonvon-installer-compile-'));
-  t.after(() => rm(out, {recursive:true, force:true}));
+  t.after(() => rm(out, {recursive:true, force:true, maxRetries:12, retryDelay:250}));
   for (const architecture of ['x64', 'arm64']) {
     const result = await compileWindowsInstaller({out:join(out, architecture), architecture});
     assert.ok(result.bytes > 10000);
