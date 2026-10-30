@@ -1,27 +1,19 @@
 # Windows 应用内更新
 
-Windows NSIS 安装版使用 `electron-updater` 的 generic provider，与 macOS 的 Squirrel 更新清单分开。窗口里的检查、下载、安装并重启及托盘提示继续复用同一套界面。检查不自动下载，退出应用不自动安装；安装前先停止经过验证的 daemon，等待其退出。
+Windows NSIS 安装版复用检查、下载、安装并重启及托盘界面。检查不自动下载，退出不自动安装；安装前停止经过验证的 daemon，并等待退出。
 
-## 签名与构建
+## 信任与构建
 
-构建时通过外部路径 `VONVON_WINDOWS_UPDATE_CONFIG` 指定 UTF-8 JSON，仅包含 `publisherName`，值为正式 Windows Authenticode 代码签名证书的名称。配置不含私钥或密码。缺少配置时生成空配置，应用内更新保持不可用。
+未购买 Windows Authenticode 证书。客户端内置 `packages/desktop/windows-update.json` 的 Ed25519 公钥，构建可通过外部 `VONVON_WINDOWS_UPDATE_CONFIG` 覆盖同格式 `{publicKey}`；私钥只在仓库外供本地发布工具签署清单，用户无需配置密钥或导入证书。没有有效公钥时不启用更新。
 
-运行中的 App 必须具有有效 Authenticode 签名，签名名称与打包配置一致，才启用 Windows 更新。下载后及启动安装前，再校验安装包的有效签名和发布者名称；校验命令失败、解析失败、证书不匹配均拒绝安装。不会将未签名候选转换为可自动更新发行包。Apple 的签名身份和公证 profile 不能替代 Windows 证书。
+客户端先验证签名清单中的产品、版本、架构、安装包 URL、大小和 SHA-512，再从这份已验签数据生成 updater 元数据；下载后和安装前再次核验最终 EXE。更新清单签名不提供 Windows 系统信誉，首次允许运行不保证后续免提示。0.7.8 老用户需要手动覆盖安装一次支持新机制的版本。
 
-构建机需使用获准的 Windows 签名配置签署 App 与 NSIS 安装包，并从同一最终源码提交生成安装包、ZIP、`.blockmap` 和 `latest.yml`。目前的实现及测试不代表已经完成正式证书签名，也不代表两版本真实升级已经验收。
+## 公开对象与发布
 
-## 公开对象
-
-固定更新源：`https://dl.vonvon.cc/bot/windows/stable/`。
-
-- 版本化目录 `/bot/windows/<version>/`：最终 `.exe`、它的 `.blockmap`、ZIP，禁止覆盖现有版本。
-- 稳定目录 `/bot/windows/stable/latest.yml`：来自同批 electron-builder 产物的更新元数据；`files[].url` 及兼容字段 `path` 指向 `../<version>/<installer>.exe`，保留 builder 计算出的尺寸、SHA-512 和发布时间。
-- 版本化对象使用长期 immutable 缓存；`latest.yml` 使用 YAML 内容类型与 no-cache，先完整上传并公网核对版本化对象，再切换该文件。
-
-客户端拒绝跨域文件或 `/bot/windows/` 外部的安装包地址。NSIS updater 校验更新元数据中的文件摘要；本应用另外严格核对 Authenticode。官网下载使用相同版本化 `.exe`、ZIP，并保存最终 SHA-256。
-
-上传可以在有获准 COS 配置的 Windows 或 Mac 执行；构建与真实安装升级验收在 Windows 执行。现有 macOS 发布 helper 和 `bot/mac/stable/manifest.json` 不用于 Windows，发布工具需要单独准备 Windows 对象计划与公网复核。
+- 版本化目录 `/bot/windows/<version>/` 保存不可覆盖的架构独立 EXE 和 blockmap；新产物不再提供 Windows ZIP。
+- 架构独立的签名入口为 `https://dl.vonvon.cc/bot/windows/stable/<x64|arm64>/update.json`；原始 builder YAML 仅作为构建核验材料。
+- 现有 `release-all.mjs`、`release-publish.mjs` 与 `publish-windows.mjs` 编排签名计划、版本化上传、公网摘要复核及 stable 提升；官网交接核对准确计划与签名 feed 回执。具体授权及最终确认遵守发布规则。
 
 ## 验证范围
 
-定向测试覆盖未签名候选不联网、只检查不下载、两次操作才安装、签名不符拒绝、更新地址约束和上次安装未生效。正式发布前需用两个有效签名的版本测试：旧版检查更新、下载安装、daemon 正常停止、新版重启、Bot 配置及对话数据保留；失败恢复、取消和重复点击也需在实际安装版复核。
+自动化覆盖验签、篡改与架构拒绝、下载和安装分步、地址约束及安装未生效。原生云端安装报告覆盖安装/重装；`windows-upgrade-acceptance.mjs` 以独立应用身份验证真实完整 EXE 的 A→B→C。fixture 不代表完整产品 UI、daemon、差分或 SmartScreen 已验收。Windows Codex 另验路径、当前用户范围、语言与进度、稍后/取消、真实 Bot 停止恢复及数据保留，并记录准确源码 SHA。

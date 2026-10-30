@@ -20,6 +20,10 @@ async function run(file,args,options={}) {
   const child=spawn(file,args,{stdio:'inherit',windowsHide:true,...options});
   await new Promise((resolve,reject)=>{child.once('error',reject);child.once('exit',(code,signal)=>code===0?resolve():reject(Error(`Acceptance subprocess failed (${code??signal}): ${file}`)));});
 }
+/** The generated app is the builder project; the evidence root has no package.json. */
+export function windowsUpgradeBuilderArguments(stage,configPath,architecture) {
+  return [require.resolve('electron-builder/cli.js'),'--projectDir',stage,'--config',configPath,'--win','nsis','--'+architecture,'--publish','never'];
+}
 /** Test-only entry. It bundles the real provider, downloader, verification and quitAndInstall. */
 export function windowsUpgradeAcceptanceEntry(source) {
   return `import assert from 'node:assert/strict';
@@ -96,8 +100,11 @@ export async function acceptWindowsUpgrade({architecture,out,sourceSha:expectedS
   const git=spawnSync('git',['rev-parse','HEAD'],{cwd:repo,encoding:'utf8'}),sourceSha=git.stdout?.trim();
   if(git.error||git.status!==0||!/^[a-f0-9]{40}$/.test(sourceSha??''))throw Error('Cannot identify the acceptance source SHA');
   if(expectedSourceSha&&expectedSourceSha!==sourceSha)throw Error('Acceptance source differs from --source-sha');
-  const clean=spawnSync('git',['status','--porcelain','--untracked-files=normal'],{cwd:repo,encoding:'utf8'});
-  if(clean.error||clean.status!==0||clean.stdout.trim())throw Error('Native acceptance requires a clean source checkout matching the recorded SHA');
+  // npm can relink tracked bins on Windows without changing their normalized blobs.
+  for(const args of [['diff','--quiet','HEAD','--'],['diff','--cached','--quiet','HEAD','--'],['ls-files','--others','--exclude-standard']]){
+    const clean=spawnSync('git',args,{cwd:repo,encoding:'utf8'});
+    if(clean.error||clean.status!==0||clean.stdout.trim())throw Error('Native acceptance requires a clean source checkout matching the recorded SHA');
+  }
   await mkdir(out); // Refuse reuse: every run has a unique identity and an empty profile.
   const id=randomUUID(),productName='Vonvon Upgrade Acceptance '+id.slice(0,8)+' '+architecture,executableName=productName,nsisGuid=randomUUID();
   const appId='com.vonvon.bot.upgrade-acceptance.'+id+'.'+architecture,packageName='vonvon-upgrade-acceptance-'+id+'-'+architecture;
@@ -122,7 +129,7 @@ export async function acceptWindowsUpgrade({architecture,out,sourceSha:expectedS
   await build({stdin:{contents:windowsUpgradeAcceptanceEntry(production),sourcefile:'upgrade-acceptance-entry.js',resolveDir:repo},outfile:join(stage,'main.cjs'),bundle:true,platform:'node',target:'node22',format:'cjs',external:['electron']});
   await writeFile(join(stage,'acceptance.json'),json(c));await writeFile(join(stage,'dist/windows-update-config.json'),json({publicKey}));
   const metadata=JSON.parse(await readFile(join(repo,'package.json'),'utf8'));
-  const config={appId,productName,electronVersion:metadata.devDependencies.electron,electronDist:runtime,directories:{app:stage,output:packages},asar:true,npmRebuild:false,
+  const config={appId,productName,electronVersion:metadata.devDependencies.electron,electronDist:runtime,directories:{output:packages},asar:true,npmRebuild:false,
     files:['main.cjs','package.json','acceptance.json','dist/windows-update-config.json'],
     win:{target:'nsis',executableName,publish:{provider:'generic',url:'https://dl.vonvon.cc/bot/windows/stable/'},verifyUpdateCodeSignature:false},
     nsis:{...original.nsis,include,guid:nsisGuid,artifactName:'Vonvon-Bot-Setup-\u0024{version}-\u0024{arch}.exe',createDesktopShortcut:false,createStartMenuShortcut:false,shortcutName:productName}};
@@ -130,7 +137,7 @@ export async function acceptWindowsUpgrade({architecture,out,sourceSha:expectedS
   const fixtures={manifests:{},artifacts:{}};
   for(const version of versions){
     await writeFile(join(stage,'package.json'),json({name:packageName,productName,version,main:'main.cjs',description:'Disposable native Windows updater acceptance',author:'modelzen',license:'UNLICENSED'}));
-    await run(process.execPath,[require.resolve('electron-builder/cli.js'),'--config',configPath,'--win','nsis','--'+architecture,'--publish','never'],{cwd:out,env});
+    await run(process.execPath,windowsUpgradeBuilderArguments(stage,configPath,architecture),{cwd:stage,env});
     const file=join(packages,'Vonvon-Bot-Setup-'+version+'-'+architecture+'.exe'),size=(await stat(file)).size,sha512=await digest(file);
     const url='https://dl.vonvon.cc/bot/windows/'+version+'/Vonvon-Bot-Setup-'+version+'-'+architecture+'.exe';
     fixtures.manifests[version]=signWindowsUpdate({schemaVersion:1,product:'vonvon-bot',version,architecture,url,size,sha512,notes:'Disposable native acceptance '+version},privateKey);
