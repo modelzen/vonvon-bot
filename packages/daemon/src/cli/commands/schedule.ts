@@ -1,7 +1,7 @@
-import { scheduleRequestSchema, type ScheduleReply, type ScheduleRequest, type ScheduleRunRecord, type ScheduleSpec, type ScheduledTaskView } from '@vonvon/protocol';
+import { scheduleRequestSchema, type Agent, type Membership, type ScheduleReply, type ScheduleRequest, type ScheduleRunRecord, type ScheduleSpec, type ScheduledTaskView } from '@vonvon/protocol';
 import { CommandError } from '../command-error';
 import { inBotSession } from '../../config/session-env';
-import { formatAt, normalizeTimeZone, parseLocal } from '../../bot/schedule/time';
+import { formatAt, normalizeTimeZone, parseCron, parseLocal } from '../../bot/schedule/time';
 import { pickBot, pickGroup, print, want, withDaemon, type Daemon, type Io } from '../daemon-client';
 
 export type ScheduleAction = 'list' | 'add' | 'edit' | 'pause' | 'resume' | 'delete' | 'run' | 'runs';
@@ -27,7 +27,7 @@ const ACTIONS = {
 } as const satisfies Record<ScheduleAction, { what: string; kind: string; unknown?: string }>;
 
 type When = 'every' | 'daily' | 'weekly' | 'at' | 'cron';
-/** `--at` waits for a zone: --tz, or else the daemon's (a first list), never this terminal's. */
+/** `--at` waits for a zone: --tz, or else from a first list the task's own on edit and the daemon's on add, never this terminal's. */
 type Parsed = ScheduleSpec | ((zone: string) => ScheduleSpec);
 const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -55,7 +55,8 @@ const WHEN: Record<When, (text: string) => Parsed> = {
     if (parseLocal('UTC', text) === undefined) throw new Error('--at 写成 "YYYY-MM-DD HH:mm"，例如 "2026-11-01 14:00"。');
     return zone => ({ kind: 'once', at: parseLocal(zone, text)! });
   },
-  cron: text => ({ kind: 'cron', expr: text }),
+  // The format only; whether it comes within 400 days is the daemon's validateSpec.
+  cron: text => { parseCron(text); return { kind: 'cron', expr: text }; },
 };
 
 function timeOption(target: ScheduleTarget, required: boolean): Parsed | undefined {
@@ -140,6 +141,14 @@ function groupLines(tasks: readonly ScheduledTaskView[], names: ReadonlyMap<stri
   ]);
 }
 
+/** These also take the raw id of a group no longer bound, whose tasks list --all still shows; the rest would act in it. */
+const UNBOUND = new Set<ScheduleAction>(['list', 'runs', 'delete', 'pause']);
+function chatOf(memberships: readonly Membership[], bot: Agent, group: string, action: ScheduleAction): string {
+  const bound = memberships.some(m => m.agentId === bot.id && (m.groupId === group || m.name === group));
+  // The bot process still checks the scope: an id it has no such task under is not-found.
+  return !bound && UNBOUND.has(action) && /^oc_/.test(group) ? group : pickGroup(memberships, bot, group).groupId;
+}
+
 export async function runSchedule(action: ScheduleAction, target: ScheduleTarget, io: Io, daemon: Daemon = withDaemon, env: NodeJS.ProcessEnv = process.env): Promise<void> {
   // Before connecting: a sandbox cannot reach the daemon, and the terminal's credentials are the owner's.
   if (inBotSession(env)) throw new CommandError('refused', SESSION_REFUSED);
@@ -165,7 +174,7 @@ export async function runSchedule(action: ScheduleAction, target: ScheduleTarget
       return call(as.what, c => c.schedule(bot.id, valid), as.unknown ? { unknown: as.unknown } : {});
     };
     if (all) return { reply: await send({ action: 'listBot' }), names: new Map(snapshot.memberships.filter(m => m.agentId === bot.id).map(m => [m.groupId, m.name])) };
-    const chatId = pickGroup(snapshot.memberships, bot, target.group!).groupId;
+    const chatId = chatOf(snapshot.memberships, bot, target.group!, action);
     // A list before the change itself is only a read: a lost reply to it changed nothing.
     const list = async () => want(ACTIONS.list.what, await send({ action: 'list', chatId }, ACTIONS.list), 'tasks');
     const find = async () => {
@@ -173,7 +182,8 @@ export async function runSchedule(action: ScheduleAction, target: ScheduleTarget
       if (!task) throw new CommandError('refused', `${what}没有完成：${NOT_FOUND}`);
       return task;
     };
-    const resolved = async () => typeof spec === 'function' ? spec(tz ?? (await list()).timeZone) : spec;
+    // edit keeps the task's zone, as the daemon reads --daily, --weekly and --cron in it.
+    const resolved = async () => typeof spec === 'function' ? spec(tz ?? (action === 'edit' ? await find() : await list()).timeZone) : spec;
     switch (action) {
       case 'list': return { reply: await send({ action: 'list', chatId }) };
       case 'add': return { reply: await send({
@@ -195,7 +205,8 @@ export async function runSchedule(action: ScheduleAction, target: ScheduleTarget
   });
 
   if (reply.kind === 'conflict') {
-    throw new CommandError('conflict', `这个任务刚在别处改过，没有保存。现在的 revision 是 ${reply.current.revision}，先看过现在的内容再改。`, reply.current);
+    const [undone, then] = action === 'delete' ? ['没有删除', '再删'] : ['没有保存', '再改'];
+    throw new CommandError('conflict', `这个任务刚在别处改过，${undone}。现在的 revision 是 ${reply.current.revision}，先看过现在的内容${then}。`, reply.current);
   }
   const done = want(what, reply, kind);
   let human: string[];
