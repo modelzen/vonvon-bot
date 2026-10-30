@@ -169,6 +169,8 @@ export interface RunCardState {
   retry?: 'available' | 'sent';
   /** The run's backend id, so a login hint names the right command. */
   backend?: string;
+  /** A scheduled run's small top line (`⏰ 定时任务「…」`), on the progress card and the final one. */
+  label?: string;
 }
 
 /**
@@ -224,7 +226,7 @@ export function buildRunCard(rc: RunCardState): CardObject {
   const state = rc.rs;
   const running = state.terminal === 'running';
   const elements = rc.emptyNote ? [noteMd('_（没有要补的）_')] : running ? renderRunning(state, rc) : renderTerminal(state, rc);
-  const result = card([...voiceReplyElements(rc.voiceMessages), ...elements].map(runTypography), { streaming: running, summary: rc.continued ? '已接收补充，继续处理' : summaryText(state) });
+  const result = card([...rc.label ? [noteMd(rc.label)] : [], ...voiceReplyElements(rc.voiceMessages), ...elements].map(runTypography), { streaming: running, summary: rc.continued ? '已接收补充，继续处理' : summaryText(state) });
   result.body = { ...(result.body as Record<string, unknown>), vertical_spacing: '16px' };
   return result;
 }
@@ -369,9 +371,9 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
   } else if (state.terminal === 'interrupted') {
     elements.push(noteMd(`${statusSymbol('stopped')} 已被中断`));
   } else if (state.terminal === 'idle_timeout') {
-    elements.push(noteMd(`${statusSymbol('unknown')} ${idleLabel(state.idleTimeoutSeconds ?? 0)}没有输出，已自动停止`));
+    elements.push(noteMd(`${statusSymbol('unknown')} ${failureText(state)}`));
   } else if (state.terminal === 'error' && state.errorMsg) {
-    elements.push(noteMd(`${statusSymbol('failed')} ${state.errorKind === 'network' ? '网络失败' : 'agent 失败'}：${state.errorMsg}`));
+    elements.push(noteMd(`${statusSymbol('failed')} ${failureText(state)}`));
     const advice = errorAdvice(state.errorKind, rc.retry === 'available' && Boolean(rc.cardKey), rc.backend);
     if (advice) elements.push(noteMd(advice));
   } else if (state.terminal === 'done' && !answer) {
@@ -393,6 +395,13 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
   }
 
   return elements;
+}
+
+/** A terminal card's failure line without its symbol, also a scheduled run's recorded error; undefined unless it failed. */
+export function failureText(state: RunState): string | undefined {
+  if (state.terminal === 'idle_timeout') return `${idleLabel(state.idleTimeoutSeconds ?? 0)}没有输出，已自动停止`;
+  if (state.terminal === 'error') return `${state.errorKind === 'network' ? '网络失败' : 'agent 失败'}：${state.errorMsg ?? ''}`;
+  return undefined;
 }
 
 /** `600` → "10 分钟", `90` → "90 秒". */
