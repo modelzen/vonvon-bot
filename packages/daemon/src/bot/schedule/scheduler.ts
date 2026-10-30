@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { scheduleRunRecordSchema } from '@vonvon/protocol';
 import type { log } from '../../core/logger';
 import type { ScheduleDiagnosticEvent } from '../diagnostics';
 import { clampUnits, type ScheduleStore } from './store';
@@ -8,6 +9,8 @@ import { countSlotsBetween, latestSlotWithin, nextSlotAfter } from './time';
 type Gate = 'ok' | 'disabled' | 'updating' | 'held' | 'unbound' | 'tier-unavailable';
 type SkipGate = 'disabled' | 'updating' | 'held';
 type FailGate = 'unbound' | 'tier-unavailable';
+/** Why a launch is refused: what the gate said, or 'gate-error' when the gate itself threw. */
+type Refusal = Exclude<Gate, 'ok'> | 'gate-error';
 type Timers = { setTimeout: typeof setTimeout; clearTimeout: typeof clearTimeout };
 type RunRecord = StoredTask['recent'][number];
 type Trigger = RunRecord['trigger'];
@@ -39,7 +42,14 @@ const PAUSE_AFTER_FAILURES = 10;
 const MISSED_CAP = 10_000;            // a stored missed count of 10000 reads "10000+"
 const MAX_ERROR_UNITS = 200;          // scheduleRunRecordSchema.error
 const MAX_EXCERPT_UNITS = 500;        // lastResult.excerpt
-const GATE_ERRORS: Record<FailGate, string> = { unbound: '群已解绑', 'tier-unavailable': '本群的权限档现在用不了' };
+const GATE_ERRORS: Record<FailGate | 'gate-error', string> = {
+  unbound: '群已解绑', 'tier-unavailable': '本群的权限档现在用不了', 'gate-error': '运行前检查出错',
+};
+const INVALID_OUTCOME = '运行结果无效';
+const SKIP_REASONS: readonly string[] = ['disabled', 'updating', 'held'] satisfies SkipGate[];
+const INTERRUPTED_BY: readonly string[] = ['shutdown', 'user'];       // what a runner may say; 'crash' is the scheduler's own
+/** The prefix of the error the store throws when it refuses a draft that load() would quarantine (store.ts mutate). */
+const STORE_REFUSED = 'schedule store refused an invalid write';
 
 /** Thrown inside a runtime write whose task turns out to need a state change; the write is redone as a config write. */
 class NeedsConfigWrite extends Error {}
@@ -47,9 +57,39 @@ class NeedsConfigWrite extends Error {}
 /** One attempt at a store write: the draft tasks, `touch` only on a config write, and diagnostics to emit after the commit. */
 type Draft = { tasks: StoredTask[]; touch: Touch | undefined; events: ScheduleDiagnosticEvent[] };
 
-const isSkipGate = (gate: Gate): gate is SkipGate => gate === 'disabled' || gate === 'updating' || gate === 'held';
+const isSkipGate = (gate: Gate | 'gate-error'): gate is SkipGate => gate === 'disabled' || gate === 'updating' || gate === 'held';
 const pausedForFailures = (task: StoredTask): boolean => task.state === 'paused' && task.pausedReason === 'failures';
 const nonEmpty = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
+/** The schema's own url check: a link it refuses would make the store refuse the whole settle. */
+const isLink = (value: unknown): value is string => nonEmpty(value) && scheduleRunRecordSchema.shape.link.safeParse(value).success;
+const refusedByStore = (error: unknown): boolean => error instanceof Error && error.message.startsWith(STORE_REFUSED);
+
+/**
+ * What run() handed back, made total: a value outside ScheduledOutcome would otherwise make every settle attempt
+ * throw or be refused, and keep the task's `inflight` (so the task itself) stuck until a restart.
+ */
+function checkedOutcome(value: unknown, durationMs: number): ScheduledOutcome {
+  const invalid: ScheduledOutcome = { status: 'failed', error: INVALID_OUTCOME, durationMs, counts: true };
+  if (!value || typeof value !== 'object') return invalid;
+  const outcome = value as ScheduledOutcome;
+  switch (outcome.status) {
+    case 'done': return { ...outcome, excerpt: String(outcome.excerpt ?? '') };
+    case 'failed': return { ...outcome, error: String(outcome.error) }; // throws for an unprintable error: outcomeOf records it as failed
+    case 'skipped': return SKIP_REASONS.includes(outcome.reason) ? outcome : { ...outcome, reason: 'updating' };
+    case 'interrupted': return INTERRUPTED_BY.includes(outcome.by) ? outcome : { ...outcome, by: 'shutdown' };
+    default: return invalid;
+  }
+}
+
+/** The run as a counted failure, for an outcome the store refused to record. */
+function invalidOutcome(outcome: Outcome): ScheduledOutcome {
+  const durationMs = 'durationMs' in outcome && Number.isFinite(outcome.durationMs) ? outcome.durationMs : 0;
+  return { status: 'failed', error: INVALID_OUTCOME, durationMs, counts: true };
+}
+
+function printable(error: unknown): string {
+  try { return String(error); } catch { return INVALID_OUTCOME; }
+}
 
 function clearNotice(task: StoredTask): void {
   delete task.noticePending;
@@ -76,6 +116,12 @@ export function createScheduler(deps: {
   /** Task ids with an auto-pause notice in flight, and the sends themselves for drain(). */
   const noticing = new Set<string>();
   const notices = new Set<Promise<void>>();
+  /** By task id: the auto-pause (noticeSince) and time of the last notifyAutoPause call, for one send per 30 seconds. */
+  const noticeTried = new Map<string, { since: number; at: number }>();
+  /** By task id: the noticeSince whose notice was delivered and only waits for its clearing write. */
+  const noticeSent = new Map<string, number>();
+  /** The 15-second timers of notices in flight; stop() clears them, so nothing is reported after shutdown. */
+  const noticeTimeouts = new Set<ReturnType<typeof setTimeout>>();
   /** Launched runs, through their settle. */
   const working = new Set<Promise<void>>();
   const nextCache = new Map<string, { revision: string; cursor: number; next: number | undefined }>();
@@ -92,6 +138,20 @@ export function createScheduler(deps: {
     { kind, taskId: task.id, ...(count === undefined ? {} : { count }) }
   );
   const triggerFor = (slot: number): Trigger => (now() - slot >= LATE_MS ? 'catchUp' : 'schedule');
+
+  /** A throwing diagnostics sink is logged, never passed on: a committed write must still reach its caller. */
+  function emit(item: ScheduleDiagnosticEvent): void {
+    try {
+      deps.diagnostics(item);
+    } catch (error) {
+      deps.log.fail('schedule', error, { phase: 'diagnostics', taskId: item.taskId });
+    }
+  }
+
+  function forgetNotice(taskId: string): void {
+    noticeTried.delete(taskId);
+    noticeSent.delete(taskId);
+  }
 
   function capacity(): number {
     const limit = deps.maxInflight();
@@ -134,7 +194,7 @@ export function createScheduler(deps: {
         return fn({ tasks, touch, events });
       });
     }
-    for (const item of events) deps.diagnostics(item);
+    for (const item of events) emit(item);
     return result;
   }
 
@@ -175,7 +235,10 @@ export function createScheduler(deps: {
     changeState(draft, task, () => { task.state = 'finished'; });
   }
 
-  /** Picks the scheduleRunRecordSchema fields one by one, so whatever a runner returns can be read back by load(). */
+  /**
+   * Picks the scheduleRunRecordSchema fields one by one, so whatever a runner returns (made total by checkedOutcome)
+   * can be read back by load().
+   */
   function runRecord(run: RunStart, endedAt: number, outcome: Outcome): RunRecord {
     const record: RunRecord = {
       runId: run.runId, slot: run.slot, trigger: run.trigger, status: outcome.status, startedAt: run.startedAt, endedAt,
@@ -183,6 +246,7 @@ export function createScheduler(deps: {
     if ('durationMs' in outcome && Number.isFinite(outcome.durationMs)) record.durationMs = Math.max(0, Math.round(outcome.durationMs));
     if ('messageId' in outcome && nonEmpty(outcome.messageId)) record.messageId = outcome.messageId;
     if ('topicId' in outcome && nonEmpty(outcome.topicId)) record.topicId = outcome.topicId;
+    if ('link' in outcome && isLink(outcome.link)) record.link = outcome.link;
     if (outcome.status === 'failed') record.error = clampUnits(String(outcome.error), MAX_ERROR_UNITS);
     if (outcome.status === 'skipped') record.reason = outcome.reason;
     if (outcome.status === 'interrupted') record.by = outcome.by;
@@ -198,6 +262,7 @@ export function createScheduler(deps: {
       status: outcome.status,
       excerpt: clampUnits(excerpt, MAX_EXCERPT_UNITS),
       ...(record.messageId ? { messageId: record.messageId } : {}),
+      ...(record.link ? { link: record.link } : {}),
     };
   }
 
@@ -228,7 +293,7 @@ export function createScheduler(deps: {
     finishIfDone(draft, task);
   }
 
-  const gateFailure = (gate: FailGate): ScheduledOutcome => ({ status: 'failed', error: GATE_ERRORS[gate], durationMs: 0, counts: true });
+  const gateFailure = (gate: FailGate | 'gate-error'): ScheduledOutcome => ({ status: 'failed', error: GATE_ERRORS[gate], durationMs: 0, counts: true });
 
   function notifyGateFailure(task: StoredTask): void {
     try {
@@ -250,24 +315,28 @@ export function createScheduler(deps: {
     });
   }
 
-  async function settleOrKeep(taskId: string, runId: string, outcome: Outcome): Promise<void> {
+  /** Settles the run; a write that fails is kept in `unsettled` and tried again by the next tick and drain(). */
+  async function settleOrKeep(taskId: string, runId: string, outcome: Outcome, phase = 'settle'): Promise<void> {
+    let attempt = outcome;
     try {
-      await settle(taskId, runId, outcome);
+      try {
+        await settle(taskId, runId, attempt);
+      } catch (error) {
+        // The store refusing the draft is not a disk error: it would refuse every retry, and inflight would stay.
+        if (!refusedByStore(error)) throw error;
+        deps.log.fail('schedule', error, { phase: 'settle-invalid', taskId });
+        attempt = invalidOutcome(attempt);
+        await settle(taskId, runId, attempt);
+      }
+      unsettled.delete(runId);
     } catch (error) {
-      unsettled.set(runId, { taskId, outcome });
-      deps.log.fail('schedule', error, { phase: 'settle', taskId });
+      unsettled.set(runId, { taskId, outcome: attempt });
+      deps.log.fail('schedule', error, { phase, taskId });
     }
   }
 
   async function retryUnsettled(): Promise<void> {
-    for (const [runId, { taskId, outcome }] of [...unsettled]) {
-      try {
-        await settle(taskId, runId, outcome);
-        unsettled.delete(runId);
-      } catch (error) {
-        deps.log.fail('schedule', error, { phase: 'settle-retry', taskId });
-      }
-    }
+    for (const [runId, { taskId, outcome }] of [...unsettled]) await settleOrKeep(taskId, runId, outcome, 'settle-retry');
   }
 
   // ---- auto-pause notices ----
@@ -275,46 +344,81 @@ export function createScheduler(deps: {
   /** Resolves true when `work` resolves within `ms`, false when it takes longer; a rejection passes through. */
   async function within(ms: number, work: Promise<unknown>): Promise<boolean> {
     let timeout: ReturnType<typeof setTimeout> | undefined;
-    const expired = new Promise<boolean>(resolve => { timeout = timers.setTimeout(() => resolve(false), ms); });
+    const expired = new Promise<boolean>(resolve => {
+      timeout = timers.setTimeout(() => resolve(false), ms);
+      noticeTimeouts.add(timeout);
+    });
     try {
       return await Promise.race([work.then(() => true), expired]);
     } finally {
       timers.clearTimeout(timeout);
+      if (timeout !== undefined) noticeTimeouts.delete(timeout);
     }
+  }
+
+  function clearNoticeTimeouts(): void {
+    for (const timeout of noticeTimeouts) timers.clearTimeout(timeout);
+    noticeTimeouts.clear();
+  }
+
+  /** Clears the notice of the auto-pause at `since`; a newer auto-pause has its own noticeSince and keeps its notice. */
+  async function clearNoticeSince(taskId: string, since: number | undefined): Promise<void> {
+    await store.mutateRuntime(tasks => {
+      const current = tasks.find(t => t.id === taskId);
+      if (current?.noticePending && current.noticeSince === since) clearNotice(current);
+    });
+    forgetNotice(taskId);
   }
 
   async function sendNotice(taskId: string): Promise<void> {
     const task = store.get(taskId);
-    if (!task?.noticePending) return;
+    if (!task?.noticePending) {
+      forgetNotice(taskId);
+      return;
+    }
     if (!pausedForFailures(task)) {
       // Resumed, edited or paused for another reason since the auto-pause: the notice no longer applies.
       await store.mutateRuntime(tasks => {
         const current = tasks.find(t => t.id === taskId);
         if (current && !pausedForFailures(current)) clearNotice(current);
       });
+      forgetNotice(taskId);
       return;
     }
     const since = task.noticeSince;
-    if (since === undefined || now() - since >= DAY) return; // retried for 24 hours, then given up
-    const sent = await within(NOTICE_TIMEOUT_MS, Promise.resolve().then(() => deps.notifyAutoPause(task)));
-    if (!sent) {
-      deps.diagnostics(event('schedule-notice-pending', task));
+    if (since === undefined || now() - since >= DAY) {
+      // Retried for 24 hours, then given up; one with no auto-pause time to count from is given up at once.
+      await clearNoticeSince(taskId, since);
       return;
     }
-    await store.mutateRuntime(tasks => {
-      const current = tasks.find(t => t.id === taskId);
-      // A newer auto-pause during the send has its own noticeSince and still needs its notice.
-      if (current?.noticeSince === since) clearNotice(current);
-    });
+    if (noticeSent.get(taskId) !== since) {
+      // At most one send per 30 seconds, however many passes the store's writes wake; a newer auto-pause does not wait.
+      const tried = noticeTried.get(taskId);
+      const elapsed = tried ? now() - tried.at : -1;
+      if (tried?.since === since && elapsed >= 0 && elapsed < TICK_MS) return;
+      noticeTried.set(taskId, { since, at: now() });
+      const sent = await within(NOTICE_TIMEOUT_MS, Promise.resolve().then(() => deps.notifyAutoPause(task)));
+      if (!sent) {
+        if (!stopping) emit(event('schedule-notice-pending', task));
+        return;
+      }
+      // Delivered: if the clearing write fails, later passes retry only the write, never the message.
+      noticeSent.set(taskId, since);
+    }
+    await clearNoticeSince(taskId, since);
   }
 
   /** Starts the task's pending notice without waiting for it; one send per task at a time. */
   function startNotice(task: StoredTask): void {
-    if (!task.noticePending || noticing.has(task.id)) return;
+    if (!task.noticePending) {
+      forgetNotice(task.id);
+      return;
+    }
+    if (noticing.has(task.id)) return;
     noticing.add(task.id);
     const sending: Promise<void> = sendNotice(task.id)
       .catch(error => {
-        deps.diagnostics(event('schedule-notice-pending', task));
+        if (!stopping) emit(event('schedule-notice-pending', task));
         deps.log.fail('schedule', error, { phase: 'notice', taskId: task.id });
       })
       .finally(() => {
@@ -428,9 +532,10 @@ export function createScheduler(deps: {
     if (stopping) return { status: 'interrupted', by: 'shutdown' };
     const startedAt = now();
     try {
-      return await deps.run(job);
+      const outcome: unknown = await deps.run(job);
+      return checkedOutcome(outcome, now() - startedAt);
     } catch (error) {
-      return { status: 'failed', error: String(error), durationMs: now() - startedAt, counts: true };
+      return { status: 'failed', error: printable(error), durationMs: now() - startedAt, counts: true };
     }
   }
 
@@ -476,7 +581,7 @@ export function createScheduler(deps: {
   }
 
   /** A manual run the gate refuses: recorded like a run that ended at once (skipped, or a counted failure). */
-  async function refuseManual(task: StoredTask, run: ManualRun, gate: Exclude<Gate, 'ok'>): Promise<void> {
+  async function refuseManual(task: StoredTask, run: ManualRun, gate: Refusal): Promise<void> {
     const outcome: ScheduledOutcome = isSkipGate(gate) ? { status: 'skipped', reason: gate } : gateFailure(gate);
     const recorded = await write(draft => {
       const current = draft.tasks.find(t => t.id === task.id);
@@ -487,6 +592,19 @@ export function createScheduler(deps: {
     if (recorded && gate === 'tier-unavailable') notifyGateFailure(recorded);
   }
 
+  /**
+   * The chat's gate, or 'gate-error' when it throws. Logged here, apart from the store writes: a gate that throws for
+   * one chat is that task's error, and must not set the 30-second backoff that slows every other task's launches.
+   */
+  function gateOf(task: StoredTask): Refusal | 'ok' {
+    try {
+      return deps.gate(task.chatId);
+    } catch (error) {
+      deps.log.fail('schedule', error, { phase: 'gate', taskId: task.id });
+      return 'gate-error';
+    }
+  }
+
   async function launch(taskId: string, manualRun: ManualRun | undefined): Promise<void> {
     const task = store.get(taskId);
     if (manualRun) {
@@ -495,12 +613,13 @@ export function createScheduler(deps: {
         return;
       }
       if (task.inflight) return; // stays queued and starts once the current run is done
-      const gate = deps.gate(task.chatId);
+      const gate = gateOf(task);
       if (gate === 'ok') {
         await claim(task, manualRun.slot, manualRun.runId, 'manual');
       } else {
-        manual.delete(taskId);
+        // Dequeued once the refusal is on record; a failed write leaves it queued, with its runId, for the next tick.
         await refuseManual(task, manualRun, gate);
+        if (manual.get(taskId)?.runId === manualRun.runId) manual.delete(taskId);
       }
       return;
     }
@@ -511,7 +630,8 @@ export function createScheduler(deps: {
       again = true;
       return;
     }
-    const gate = deps.gate(task.chatId);
+    const gate = gateOf(task);
+    if (gate === 'gate-error') return; // like a decision that throws: logged, decided afresh by the next tick
     if (gate === 'ok') await claim(task, entry.slot, newId(), triggerFor(entry.slot));
     else await closeSlot(task, entry.slot, gate);
   }
@@ -552,6 +672,7 @@ export function createScheduler(deps: {
     await launchWaiting();
     const live = new Set(ids);
     for (const taskId of nextCache.keys()) if (!live.has(taskId)) nextCache.delete(taskId);
+    for (const taskId of [...noticeTried.keys(), ...noticeSent.keys()]) if (!live.has(taskId)) forgetNotice(taskId);
   }
 
   /** 30 seconds, unless the launch spacing is the only thing holding a waiting run back. */
@@ -597,6 +718,7 @@ export function createScheduler(deps: {
       timer = undefined;
       unsubscribe?.();
       unsubscribe = undefined;
+      clearNoticeTimeouts(); // drain() still waits for a notice in flight, up to its own deadline
       pending.clear();
       manual.clear();
     },
@@ -610,27 +732,30 @@ export function createScheduler(deps: {
       })();
       await Promise.race([finished, expired]);
       timers.clearTimeout(deadline);
+      clearNoticeTimeouts();
     },
     wake() {
       if (!started || stopping) return;
-      if (ticking) {
-        again = true;
-        return;
-      }
+      again = true;
+      if (ticking) return;
       ticking = (async () => {
-        do {
-          again = false;
-          await tick();
-        } while (again && !stopping);
-      })()
-        .catch(error => {
-          backoff = true;
-          deps.log.fail('schedule', error, { phase: 'tick' });
-        })
-        .finally(() => {
+        try {
+          while (again && !stopping) {
+            again = false;
+            try {
+              await tick();
+            } catch (error) {
+              backoff = true; // no pass right after a failed one: the next waits the full 30 seconds
+              try { deps.log.fail('schedule', error, { phase: 'tick' }); } catch { /* a failing logger must not stop the loop */ }
+              break;
+            }
+          }
+        } finally {
+          // In the same synchronous step as the last read of `again`: from here on a wake() starts a new pass.
           ticking = undefined;
           scheduleTick();
-        });
+        }
+      })();
     },
     runNow(taskId) {
       if (!started || stopping) return { kind: 'not-started' };

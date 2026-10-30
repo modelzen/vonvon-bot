@@ -10,6 +10,7 @@ import { log } from '../../core/logger';
 import { AdminWriteError } from '../../admin/ops';
 import { createAdminIpcResponder } from '../../admin/ipc';
 import { createAdminService } from '../../admin/service';
+import { botNotRunning } from '../../admin/schedule-commands';
 import { installBackendDep, uninstallBackendDep } from '../../agent';
 import { performCoreUpdate } from '../../service/update';
 import { startApi } from '../../server/http';
@@ -171,10 +172,8 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
             if (botId !== ownAppId) throw new AdminWriteError('这个 Bot 不归本进程管');
             return handle.libraryExecute(op);
           },
-          executeSchedule: async (botId, via, request) => {
-            if (botId !== ownAppId) throw new AdminWriteError('这个 Bot 不归本进程管');
-            return handle.schedule(via, request);
-          },
+          // Another registered bot is not running here: the same refusal the supervisor gives.
+          executeSchedule: async (botId, via, request) => (botId === ownAppId ? handle.schedule(via, request) : botNotRunning()),
           liveStatus: async (botId) =>
             botId === ownAppId
               ? {
