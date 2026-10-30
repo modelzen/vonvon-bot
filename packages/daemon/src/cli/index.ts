@@ -10,22 +10,23 @@ import { enterDataAccess, type DataLease } from '../config/data-access';
 import { inBotSession } from '../config/session-env';
 import { observeShutdown, type ShutdownControl } from '../host/lifecycle';
 import type { LingerChoice } from './commands/service';
+import type { ScheduleAction, ScheduleTarget } from './commands/schedule';
 
 const program = new Command().name('vonvon').description('Vonvon Bot daemon').version(bridgeVersion());
-const structured = ['settings', 'feishu'].includes(process.argv[2] ?? '');
+const structured = ['settings', 'feishu', 'schedule'].includes(process.argv[2] ?? '');
 const jsonFailure = structured && process.argv.includes('--json');
 if (structured) program.exitOverride();
 if (jsonFailure) program.configureOutput({ writeErr: () => undefined });
 let lease: DataLease | undefined;
 let control: ShutdownControl | undefined;
 program.hook('preAction', async (_command, action) => {
-  // bot, group and settings only talk RPC to a running daemon, so they never create the data root or take a lease;
+  // bot, group, settings and schedule only talk RPC to a running daemon, so they never create the data root or take a lease;
   // bot repair-dir writes bots.json itself, under the daemon's own lock, and takes one.
   const parent = action.parent?.name();
   // The exec provider runs in sandboxes that refuse admission sockets and data-root writes.
   // Like daemon getSecret, it only reads the atomically published keystore and takes no lease.
   if (parent === 'secrets' && action.name() === 'get') return;
-  if (parent === 'service' || (parent === 'bot' && action.name() !== 'repair-dir') || parent === 'group' || parent === 'settings' || parent === 'feishu' || action.name() === '__daemon-control') return;
+  if (parent === 'service' || (parent === 'bot' && action.name() !== 'repair-dir') || parent === 'group' || parent === 'settings' || parent === 'feishu' || parent === 'schedule' || action.name() === '__daemon-control') return;
   // project list only reads files published with tmp + rename (the library, bots.json, each projects.json), like secrets get
   if (parent === 'project') return;
   // memory reads and writes the entry files under their own kernel mutex, so it takes no lease either; in a Bot's session its writes refuse in the handler (commands/memory.ts)
@@ -199,6 +200,37 @@ Examples:
   .action(async (assignments: string[], options: Target) => {
     await (await import('./commands/settings')).runSettingsSet(assignments, options, io(options));
   });
+const schedule = program.command('schedule').description('List and change the scheduled tasks of a group (定时任务)')
+  .addHelpText('after', `
+Examples:
+  vonvon schedule list --group 研发群
+  vonvon schedule list --all                              # 这个 Bot 所有群的任务
+  vonvon schedule add --group 研发群 --name 日报 --weekly mon,tue,wed,thu,fri@09:00 "汇总昨天合入的 PR"
+  vonvon schedule add --group 研发群 --name 巡检 --every 30m --new-topic "看一眼 CI 有没有红"
+  vonvon schedule add --group 研发群 --name 发版提醒 --at "2026-11-01 14:00" --tz Asia/Tokyo "提醒大家 15:00 发版"
+  vonvon schedule edit st_xxx --group 研发群 --revision <r> --daily 10:00   # revision 见 list --json
+  vonvon schedule pause st_xxx --group 研发群
+  vonvon schedule runs st_xxx --group 研发群                # 总次数和最近 20 次`);
+type ScheduleOptions = Json & Omit<ScheduleTarget, 'taskId' | 'instruction'>;
+const inGroup = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--json', 'Print JSON');
+const timing = (command: Command) => command
+  .option('--every <interval>', 'Every 30m or 2h').option('--daily <HH:mm>', 'Every day at this time').option('--weekly <days@HH:mm>', 'mon,wed@10:00; days mon to sun')
+  .option('--at <time>', 'Once, "YYYY-MM-DD HH:mm" in --tz or the daemon\'s time zone').option('--cron <expr>', 'Standard 5 fields, like "0 9 * * 1-5"')
+  .option('--tz <zone>', 'IANA time zone, like Asia/Tokyo; defaults to the daemon\'s').option('--name <name>', 'Task name, up to 40 characters');
+const runSchedule = async (action: ScheduleAction, target: Json & ScheduleTarget) => {
+  await (await import('./commands/schedule')).runSchedule(action, target, io(target));
+};
+inGroup(schedule.command('list').description("List a group's tasks, or with --all every group's")).option('--all', "Every group's tasks of the bot")
+  .action(async (options: ScheduleOptions) => { await runSchedule('list', options); });
+timing(inGroup(schedule.command('add <instruction>').description('Add a task: --name, one time option and what to do'))).option('--new-topic', 'Post each run in a new topic')
+  .action(async (instruction: string, options: ScheduleOptions) => { await runSchedule('add', { ...options, instruction }); });
+timing(inGroup(schedule.command('edit <taskId> [instruction]').description('Change a task; give only what changes'))).requiredOption('--revision <revision>', 'The revision schedule list --json shows')
+  .action(async (taskId: string, instruction: string | undefined, options: ScheduleOptions) => { await runSchedule('edit', { ...options, taskId, ...(instruction === undefined ? {} : { instruction }) }); });
+inGroup(schedule.command('delete <taskId>').description('Delete a task and its run records')).option('--revision <revision>', 'Defaults to the current one')
+  .action(async (taskId: string, options: ScheduleOptions) => { await runSchedule('delete', { ...options, taskId }); });
+for (const [action, description] of [['pause', 'Pause a task'], ['resume', 'Resume a task; runs missed while paused are not made up'], ['run', 'Run a task now; the next scheduled run stays'], ['runs', 'Show the run count and the last 20 runs']] as const) {
+  inGroup(schedule.command(`${action} <taskId>`).description(description)).action(async (taskId: string, options: ScheduleOptions) => { await runSchedule(action, { ...options, taskId }); });
+}
 const feishu = program.command('feishu').description('Read Feishu groups and members');
 feishu.command('groups').description('List joined groups, one page').option(...BOT).option('--cursor <cursor>', 'Next page cursor').option('--json', 'Print JSON')
   .action(async (options: Json & { bot?: string; cursor?: string }) => {
