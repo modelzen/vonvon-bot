@@ -4,8 +4,16 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
-import { runInNewContext } from 'node:vm';
-import { determineScope, isFullRunEligible, parseChangedPaths } from './ci-scope.mjs';
+import { determineScope, isDocsPath, parseChangedPaths, planScope } from './ci-scope.mjs';
+
+const allPackages = ['protocol', 'client', 'daemon', 'ui', 'desktop'];
+const allPlatforms = ['linux', 'macos', 'windows'];
+const sha = letter => letter.repeat(40);
+const pr = (base = sha('a'), head = sha('b'), { target = 'dev', labels = [], draft = false } = {}) => ({
+  pull_request: { base: { sha: base, ref: target }, head: { sha: head }, labels: labels.map(name => ({ name })), draft },
+});
+const plan = (paths, options = {}) => planScope({ eventName: 'pull_request', event: pr(undefined, undefined, options),
+  paths, base: sha('a'), head: sha('b'), sourceSha: sha('b') });
 
 function fixture(run) {
   const dir = mkdtempSync(join(tmpdir(), 'ci-scope-'));
@@ -24,136 +32,94 @@ function fixture(run) {
     put('README.md', 'base\n');
     const base = commit();
     run({ dir, git, put, commit, base });
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
-const pr = (base, head) => ({ pull_request: { base: { sha: base }, head: { sha: head } } });
-
-test('only frozen PR events and explicit dispatch permit the full suite', () => {
-  const plain = pr('a'.repeat(40), 'b'.repeat(40));
-  const frozen = { pull_request: { ...plain.pull_request, labels: [{ name: 'other' }, { name: 'frozen' }] } };
-  for (const eventName of ['opened', 'synchronize', 'reopened', 'labeled']) {
-    assert.equal(isFullRunEligible('pull_request', { ...plain, action: eventName }), false, eventName);
-    assert.equal(isFullRunEligible('pull_request', { ...frozen, action: eventName, label: { name: 'frozen' } }), true, eventName);
+test('only ordinary documentation gets the light plan, including draft PRs', () => {
+  assert.equal(isDocsPath('README.md'), true);
+  assert.equal(isDocsPath('docs/nested/guide.md'), true);
+  for (const path of ['AGENTS.md', 'CLAUDE.md', '.claude/skills/a/SKILL.md', 'docs/logo.svg']) {
+    assert.equal(isDocsPath(path), false, path);
+    assert.equal(plan([path]).scope, 'full', path);
   }
-  assert.equal(isFullRunEligible('pull_request', { ...frozen, action: 'labeled', label: { name: 'other' } }), true);
-  assert.equal(isFullRunEligible('pull_request', { ...plain, action: 'labeled', label: { name: 'other' } }), false);
-  assert.equal(isFullRunEligible('pull_request', { pull_request: { labels: [{ name: 'frozen-old' }] } }), false);
-  assert.equal(isFullRunEligible('pull_request', { pull_request: { labels: 'frozen' } }), false);
-  assert.equal(isFullRunEligible('pull_request', null), false);
-  assert.equal(isFullRunEligible('workflow_dispatch', {}), true);
-  assert.equal(isFullRunEligible('push', frozen), false);
-  assert.equal(isFullRunEligible('issues', frozen), false);
+  const docs = plan(['README.md', 'docs/nested/guide.md'], { draft: true });
+  assert.deepEqual([docs.scope, docs.packages, docs.platforms, docs.ready], ['docs', [], [], true]);
+  assert.equal(plan(['docs/x.md', 'packages/ui/src/index.ts']).scope, 'affected');
+  assert.equal(plan(['packages/ui/README.md']).scope, 'affected');
+  assert.deepEqual(plan(['docs/a.md'], { labels: ['ci:macos'] }).platforms, ['linux', 'macos']);
+  assert.deepEqual(plan(['docs/a.md'], { labels: ['ci:windows'] }).packages, allPackages);
+  assert.equal(plan(['docs/a.md'], { labels: ['ci:all'] }).scope, 'full');
 });
 
-test('event JSON drives full, deferred, docs, and unknown-path decisions', () => fixture(({ dir, put, commit, base }) => {
-  const invoke = (eventName, event) => {
-    const eventPath = join(dir, '.git', 'event.json');
-    const outputPath = join(dir, '.git', 'output.txt');
-    writeFileSync(eventPath, JSON.stringify(event));
-    writeFileSync(outputPath, '');
-    const stdout = execFileSync(process.execPath, [new URL('./ci-scope.mjs', import.meta.url).pathname], {
-      cwd: dir,
-      encoding: 'utf8',
-      env: { ...process.env, GITHUB_EVENT_NAME: eventName, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputPath },
-    });
-    return { result: JSON.parse(stdout), output: readFileSync(outputPath, 'utf8') };
-  };
-  put('unknown-extension.asset');
-  const head = commit();
-  const event = pr(base, head);
-  const deferred = invoke('pull_request', event);
-  assert.equal(deferred.result.scope, 'full');
-  assert.equal(deferred.result.full, false);
-  assert.match(deferred.output, /full=false\n/);
-  const frozen = invoke('pull_request', { pull_request: { ...event.pull_request, labels: [{ name: 'frozen' }] } });
-  assert.equal(frozen.result.full, true);
-  assert.match(frozen.output, /full=true\n/);
-  const relabeled = invoke('pull_request', {
-    action: 'labeled', label: { name: 'other' },
-    pull_request: { ...event.pull_request, labels: [{ name: 'frozen' }, { name: 'other' }] },
-  });
-  assert.equal(relabeled.result.scope, 'full');
-  assert.equal(relabeled.result.full, true);
-  assert.match(relabeled.output, /full=true\n/);
-  const manual = invoke('workflow_dispatch', {});
-  assert.equal(manual.result.full, true);
-  put('docs/guide.md');
-  const docsHead = commit();
-  const docs = invoke('pull_request', { pull_request: { ...pr(head, docsHead).pull_request, labels: [{ name: 'frozen' }] } });
-  assert.equal(docs.result.scope, 'docs');
-  assert.equal(docs.result.full, false);
-  assert.throws(() => invoke('pull_request', { pull_request: { ...pr('bad', docsHead).pull_request, labels: [{ name: 'frozen' }] } }),
-    /CI scope collection failed/);
-  const eventPath = join(dir, '.git', 'event.json');
-  writeFileSync(eventPath, '{');
-  assert.throws(() => execFileSync(process.execPath, [new URL('./ci-scope.mjs', import.meta.url).pathname], {
-    cwd: dir,
-    encoding: 'utf8',
-    env: { ...process.env, GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_EVENT_PATH: eventPath },
-  }), /CI scope collection failed/);
-}));
-
-test('workflow gates every expensive step and platform on the frozen full decision', () => {
-  const workflow = readFileSync(new URL('../workflows/ci.yml', import.meta.url), 'utf8');
-  const linux = workflow.split(/^  linux:\n/m)[1]?.split(/^  macos:\n/m)[0];
-  const macos = workflow.split(/^  macos:\n/m)[1];
-  assert.ok(linux && macos);
-  assert.doesNotMatch(workflow, /^  windows:\n/m);
-  assert.match(workflow, /types: \[opened, synchronize, reopened, labeled\]/);
-  assert.doesNotMatch(workflow, /^  (?:push|schedule):/m);
-  for (const name of ['Install dependencies', 'Build', 'Typecheck', 'Test', 'Lint']) {
-    assert.match(linux, new RegExp(`      - name: ${name}\\n        if: steps\\.scope\\.outputs\\.full == 'true'\\n`), name);
-  }
-  assert.match(linux, /- uses: actions\/setup-node@v4\n        if: steps\.scope\.outputs\.full == 'true'/);
-  assert.match(linux, /- name: Require frozen head for full scope\n        if: steps\.scope\.outputs\.scope == 'full' && steps\.scope\.outputs\.full != 'true'\n/);
-  assert.doesNotMatch(linux, /^    if:/m, 'a skipped linux job would satisfy the required check');
-  assert.match(linux, /^    name: linux\n/m);
-  assert.match(macos, /^    name: macOS checks\n/m);
-  assert.match(macos, /needs\.linux\.outputs\.full == 'true' &&/);
-  for (const [platform, job] of Object.entries({ linux, macos })) {
-    assert.match(job, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}/, platform);
-    assert.match(job, /- name: Verify tested source/, platform);
-    assert.match(job, /SOURCE_SHA: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}/, platform);
-    assert.match(job, /run: test "\$\(git rev-parse HEAD\)" = "\$SOURCE_SHA"/, platform);
-  }
+test('UI, daemon and desktop map to consumers and safe platform sets', () => {
+  assert.deepEqual(plan(['packages/ui/src/App.tsx']).packages, ['ui', 'desktop']);
+  assert.deepEqual(plan(['packages/ui/src/App.tsx']).platforms, ['linux']);
+  assert.deepEqual(plan(['packages/daemon/src/main.ts']).packages, ['daemon', 'desktop']);
+  assert.deepEqual(plan(['packages/daemon/src/main.ts']).platforms, allPlatforms);
+  assert.deepEqual(plan(['packages/desktop/src/main.ts']).packages, ['desktop']);
+  assert.deepEqual(plan(['packages/desktop/src/main.ts']).platforms, allPlatforms);
+  assert.deepEqual(plan(['packages/ui/src/a.ts', 'packages/daemon/src/a.ts']).packages, ['daemon', 'ui', 'desktop']);
 });
 
-test('root and nested Markdown documentation is lightweight', () => fixture(({ dir, put, commit, base }) => {
-  put('README.md', 'changed\n');
-  put('AGENTS.md');
-  put('CLAUDE.md');
-  put('docs/plan.md');
-  put('docs/nested/deep.md');
-  put('.claude/skills/LICENSE-x.md');
-  put('.claude/skills/animate/SKILL.md');
-  put('.claude/skills/animate/refs/RECIPES.md');
-  const head = commit();
-  const result = determineScope('pull_request', pr(base, head), dir);
-  assert.equal(result.scope, 'docs');
-  assert.deepEqual(result.paths, ['.claude/skills/LICENSE-x.md', '.claude/skills/animate/SKILL.md',
-    '.claude/skills/animate/refs/RECIPES.md', 'AGENTS.md', 'CLAUDE.md', 'README.md', 'docs/nested/deep.md', 'docs/plan.md']);
-  assert.equal(result.base, base);
-  assert.equal(result.head, head);
-}));
+test('platform tokens and labels add checks without shrinking automatic checks', () => {
+  assert.deepEqual(plan(['packages/ui/src/shell.darwin.ts']).platforms, ['linux', 'macos']);
+  assert.deepEqual(plan(['packages/ui/src/shell.windows.ts']).platforms, ['linux', 'windows']);
+  assert.deepEqual(plan(['packages/ui/src/Native.swift']).platforms, ['linux', 'macos']);
+  assert.deepEqual(plan(['packages/ui/scripts/install.ps1']).platforms, ['linux', 'windows']);
+  assert.deepEqual(plan(['packages/ui/src/macos/shell.ts']).platforms, ['linux', 'macos']);
+  assert.deepEqual(plan(['packages/ui/src/darwin/shell.ts']).platforms, ['linux', 'macos']);
+  assert.deepEqual(plan(['packages/ui/src/windows/shell.ts']).platforms, ['linux', 'windows']);
+  assert.deepEqual(plan(['packages/ui/src/win32/shell.ts']).platforms, ['linux', 'windows']);
+  assert.deepEqual(plan(['packages/ui/src/macOSish/shell.ts']).platforms, ['linux']);
+  assert.deepEqual(plan(['packages/ui/src/Windowsill.ts']).platforms, ['linux']);
+  assert.deepEqual(plan(['packages/ui/src/shell.macos.ts', 'packages/ui/src/shell.win32.ts']).platforms, allPlatforms);
+  assert.deepEqual(plan(['packages/ui/src/App.tsx'], { labels: ['ci:windows'] }).platforms, ['linux', 'windows']);
+  assert.deepEqual(plan(['packages/daemon/src/main.ts'], { labels: ['ci:macos'] }).platforms, allPlatforms);
+  assert.deepEqual(plan(['packages/ui/src/App.tsx'], { labels: ['ci:macos', 'ci:windows'] }).platforms, allPlatforms);
+  assert.deepEqual(plan(['packages/ui/src/App.tsx'], { labels: ['ci:all'] }).packages, allPackages);
+});
 
-test('code, config, Markdown outside docs, and mixed changes require full', () => fixture(({ dir, put, commit, base }) => {
-  let before = base;
-  for (const path of ['packages/protocol/src/index.ts', 'packages/protocol/test/index.test.ts',
-    'packages/ui/README.md', 'package.json', 'package-lock.json', '.github/workflows/ci.yml',
-    'scripts/check.js', 'docs/notes.txt', 'unknown', '.claude/settings.json', '.claude/agents/review.md',
-    '.claude/skills.md', '.claude/skills/animate/scripts/run.mjs', '.claude/skills/animate/SKILL.MD',
-    'x/.claude/skills/a.md', '.claude/skills/animate/SKILL.md.bak', 'docs/x.md.ts', 'Xclaude/skills/a.md']) {
-    put(path);
-    const head = commit();
-    assert.equal(determineScope('pull_request', pr(before, head), dir).scope, 'full', path);
-    before = head;
+test('shared consumers, governance, root config and unknown paths force full', () => {
+  for (const path of ['packages/protocol/src/index.ts', 'packages/client/src/index.ts', 'package.json',
+    'package-lock.json', '.github/workflows/ci.yml', 'scripts/build.mjs',
+    'unknown.asset', 'packages/other/x.ts',
+    'packages/ui/package.json', 'packages/ui/tsconfig.json', 'packages/ui/vite.config.ts']) {
+    const result = plan([path]);
+    assert.equal(result.scope, 'full', path);
+    assert.deepEqual(result.packages, allPackages, path);
+    assert.deepEqual(result.platforms, allPlatforms, path);
   }
-}));
+  for (const path of ['AGENTS.md', 'CLAUDE.md', '.claude/skills/verify/SKILL.md']) {
+    assert.equal(plan([path]).scope, 'full');
+    assert.deepEqual(plan([path]).platforms, ['linux', 'macos']);
+  }
+  assert.deepEqual(plan(['AGENTS.md', '.github/scripts/ci-scope.mjs']).platforms, allPlatforms);
+});
 
-test('PR uses the cumulative merge-base diff, not the latest commit or merge checkout', () => fixture(({ dir, git, put, commit, base }) => {
+test('main integration is full for non-docs; readiness requires non-draft frozen head', () => {
+  assert.equal(plan(['packages/ui/src/App.tsx'], { target: 'main' }).scope, 'full');
+  assert.deepEqual(plan(['packages/ui/src/App.tsx'], { target: 'main' }).platforms, ['linux', 'macos']);
+  assert.deepEqual(plan(['packages/daemon/src/macos/bridge.swift'], { target: 'main' }).platforms, ['linux', 'macos']);
+  assert.deepEqual(plan(['packages/daemon/src/windows/bridge.ts'], { target: 'main' }).platforms, allPlatforms);
+  assert.deepEqual(plan(['packages/daemon/src/main.ts'], { target: 'main' }).platforms, allPlatforms);
+  assert.deepEqual(plan(['packages/ui/src/App.tsx'], { target: 'main', labels: ['ci:windows'] }).platforms, allPlatforms);
+  assert.deepEqual(plan(['packages/ui/src/App.tsx'], { target: 'main', labels: ['ci:all'] }).platforms, allPlatforms);
+  assert.equal(plan(['docs/a.md'], { target: 'main' }).scope, 'docs');
+  assert.equal(plan(['packages/ui/src/App.tsx']).ready, false);
+  assert.equal(plan(['packages/ui/src/App.tsx'], { labels: ['frozen'], draft: true }).ready, false);
+  assert.equal(plan(['packages/ui/src/App.tsx'], { labels: ['frozen'] }).ready, true);
+  assert.equal(plan(['packages/ui/src/App.tsx'], { labels: ['ci:all'] }).ready, false);
+  assert.equal(plan(['packages/ui/src/App.tsx'], { labels: ['ci:all', 'frozen'] }).ready, true);
+});
+
+test('platform-specific desktop and daemon files avoid unrelated Windows checks', () => {
+  assert.deepEqual(plan(['packages/desktop/src/macos/menu.swift']).platforms, ['linux', 'macos']);
+  assert.deepEqual(plan(['packages/daemon/src/darwin/keychain.ts']).platforms, ['linux', 'macos']);
+  assert.deepEqual(plan(['packages/desktop/src/win32/tray.ts']).platforms, ['linux', 'windows']);
+  assert.deepEqual(plan(['packages/daemon/src/main.ts', 'packages/daemon/src/macos/keychain.ts']).platforms, allPlatforms);
+});
+
+test('PR uses cumulative merge-base diff rather than latest commit', () => fixture(({ dir, git, put, commit, base }) => {
   git('checkout', '-qb', 'feature');
   put('packages/protocol/src/index.ts');
   commit();
@@ -164,203 +130,103 @@ test('PR uses the cumulative merge-base diff, not the latest commit or merge che
   const currentBase = commit();
   const result = determineScope('pull_request', pr(currentBase, head), dir);
   assert.equal(result.base, base);
+  assert.equal(result.source_sha, head);
   assert.equal(result.scope, 'full');
   assert.ok(result.paths.includes('packages/protocol/src/index.ts'));
 }));
 
-test('push includes every commit from before through after', () => fixture(({ dir, put, commit, base }) => {
-  put('packages/protocol/index.ts');
-  commit();
-  put('docs/latest.md');
-  const after = commit();
-  const result = determineScope('push', { before: base, after }, dir);
-  assert.equal(result.scope, 'full');
-  assert.ok(result.paths.includes('packages/protocol/index.ts'));
-}));
-
-test('deletions and cross-class renames retain their changed paths', () => fixture(({ dir, git, put, commit }) => {
-  put('docs/deleted.md');
+test('push includes all commits; deletions and renames keep source and destination', () => fixture(({ dir, git, put, commit, base }) => {
+  put('packages/ui/src/removed.ts');
   put('outside.md');
-  const base = commit();
-  git('rm', 'docs/deleted.md');
+  const middle = commit();
+  git('rm', 'packages/ui/src/removed.ts');
   mkdirSync(join(dir, 'docs'), { recursive: true });
   git('mv', 'outside.md', 'docs/moved.md');
   const head = commit();
-  const result = determineScope('push', { before: base, after: head }, dir);
+  const result = determineScope('push', { before: middle, after: head }, dir);
   assert.equal(result.scope, 'full');
-  assert.deepEqual(result.paths, ['docs/deleted.md', 'docs/moved.md', 'outside.md']);
+  assert.deepEqual(result.paths, ['docs/moved.md', 'outside.md', 'packages/ui/src/removed.ts']);
+  assert.equal(determineScope('push', { before: base, after: head }, dir).scope, 'docs',
+    'an add then delete has no cumulative change');
 }));
 
-test('NUL output preserves spaces, newlines, and non-ASCII filenames', () => fixture(({ dir, put, commit, base }) => {
+test('push covers an earlier code commit followed by a documentation commit', () => fixture(({ dir, put, commit, base }) => {
+  put('packages/ui/src/App.tsx');
+  commit();
+  put('docs/latest.md');
+  const head = commit();
+  const result = determineScope('push', { before: base, after: head }, dir);
+  assert.equal(result.scope, 'affected');
+  assert.deepEqual(result.packages, ['ui', 'desktop']);
+}));
+
+test('NUL paths preserve spaces and non-ASCII; malformed and excessive diffs fail closed', () => fixture(({ dir, put, commit, base }) => {
   put('docs/空 格\nline.md');
   const head = commit();
-  const result = determineScope('push', { before: base, after: head }, dir);
-  assert.equal(result.scope, 'docs');
-  assert.deepEqual(result.paths, ['docs/空 格\nline.md']);
-}));
-
-test('more than 3000 documentation paths followed by code never grant docs', () => fixture(({ dir, put, commit, base }) => {
-  for (let i = 0; i < 3001; i++) put(`docs/${String(i).padStart(4, '0')}.md`);
-  put('packages/protocol/src/zz.ts');
-  const head = commit();
-  const result = determineScope('push', { before: base, after: head }, dir);
-  assert.equal(result.scope, 'full');
-  assert.ok(result.paths.includes('packages/protocol/src/zz.ts'));
-}));
-
-test('empty, unavailable, invalid, manual, and unknown events require full', () => fixture(({ dir, git, base }) => {
-  assert.equal(determineScope('push', { before: base, after: base }, dir).scope, 'full');
-  assert.equal(determineScope('push', { before: '0'.repeat(40), after: base }, dir).scope, 'full');
-  assert.equal(determineScope('push', { before: 'bad', after: base }, dir).scope, 'full');
-  assert.equal(determineScope('push', { before: 'f'.repeat(40), after: base }, dir).scope, 'full');
-  assert.equal(determineScope('pull_request', {}, dir).scope, 'full');
-  assert.equal(determineScope('workflow_dispatch', {}, dir).scope, 'full');
-  assert.equal(determineScope('issues', {}, dir).scope, 'full');
-  assert.equal(determineScope('push', { before: base, after: git('rev-parse', 'HEAD') }, '/missing/git/dir').scope, 'full');
+  assert.deepEqual(determineScope('pull_request', pr(base, head), dir).paths, ['docs/空 格\nline.md']);
   assert.equal(parseChangedPaths(Buffer.from('docs/a.md\0')).length, 1);
   assert.equal(parseChangedPaths(Buffer.from('docs/a.md')), null);
   assert.equal(parseChangedPaths(Buffer.from(Array.from({ length: 4097 }, (_, i) => `docs/${i}.md\0`).join(''))), null);
   assert.throws(() => parseChangedPaths(Buffer.from([0xff, 0])), TypeError);
 }));
 
-test('Git whitespace check rejects actual documentation violations', () => fixture(({ dir, git, put, commit, base }) => {
-  put('docs/space.md', 'bad trailing space \n');
-  const head = commit();
-  assert.equal(determineScope('push', { before: base, after: head }, dir).scope, 'docs');
-  assert.throws(() => git('diff', '--check', base, head));
+test('missing SHAs, empty diffs, unavailable commits and ambiguous merge bases block evidence', () => fixture(({ dir, git, base }) => {
+  for (const event of [pr('bad', base), pr(sha('0'), base), pr(sha('f'), base), pr(base, base)]) {
+    const result = determineScope('pull_request', event, dir);
+    assert.equal(result.scope, 'full');
+    assert.equal(result.ready, false);
+    assert.ok(result.reason);
+  }
+  const tree = git('rev-parse', `${base}^{tree}`);
+  const make = (message, ...parents) => git('-c', 'user.name=CI', '-c', 'user.email=ci@example.test',
+    'commit-tree', tree, '-m', message, ...parents.flatMap(parent => ['-p', parent]));
+  const a = make('a', base), b = make('b', base);
+  const left = make('left', a, b), right = make('right', b, a);
+  assert.equal(determineScope('pull_request', pr(left, right, { labels: ['frozen'] }), dir).reason, 'ambiguous merge base');
 }));
 
-
-const workflow = readFileSync(new URL('../workflows/ci.yml', import.meta.url), 'utf8');
-const jobs = Object.fromEntries(['linux', 'macos'].map(name =>
-  [name, workflow.split(new RegExp(`^  ${name}:\n`, 'm'))[1]?.split(/^  \w+:\n/m)[0]]));
-
-function expression(source, context) {
-  return runInNewContext(source, {
-    ...context,
-    format: (pattern, ...values) => pattern.replace(/\{(\d+)\}/g, (_, i) => values[Number(i)]),
-  }, { timeout: 100 });
-}
-
-function rendered(source, context) {
-  return source.replace(/\$\{\{(.*?)\}\}/g, (_, value) => String(expression(value, context)));
-}
-
-function workflowDecision(eventName, event, scope = 'full') {
-  const full = scope === 'full' && isFullRunEligible(eventName, event);
-  const context = {
-    github: { workflow: 'CI', event_name: eventName, event, run_id: 123, sha: 'd'.repeat(40), repository: 'owner/repo' },
-    steps: { scope: { outputs: { scope, full: String(full) } } },
-    needs: { linux: { outputs: { full: String(full) } } },
-    vars: { ENABLE_SELF_HOSTED_MACOS_CI: 'true' },
-  };
-  const names = Object.fromEntries(Object.entries(jobs).map(([id, job]) =>
-    [id, rendered(job.match(/^    name: (.+)$/m)?.[1] ?? id, context)]));
-  const guard = jobs.linux.match(/- name: Require frozen head for full scope\n        if: (.+)/)[1];
-  const expensive = [...jobs.linux.matchAll(/        if: (steps\.scope\.outputs\.full == 'true')/g)]
-    .map(match => expression(match[1], context));
-  return {
-    names,
-    group: rendered(workflow.match(/^  group: (.+)$/m)[1], context),
-    cancel: rendered(workflow.match(/^  cancel-in-progress: (.+)$/m)[1], context) === 'true',
-    full,
-    rejects: expression(guard, context),
-    expensive,
-    macos: expression(jobs.macos.match(/    if: >-\n([\s\S]*?)\n    runs-on:/)[1].trim(), context),
-    sources: Object.values(jobs).map(job => rendered(job.match(/          ref: (.+)/)[1], context)),
-  };
-}
-
-const routingEvent = (action, { frozen = true, label = 'frozen', head = 'b'.repeat(40), fork = false } = {}) => ({
-  action, label: { name: label }, pull_request: {
-    ...pr('a'.repeat(40), head).pull_request,
-    number: 217,
-    head: { sha: head, repo: { full_name: fork ? 'fork/repo' : 'owner/repo' } },
-    labels: [
-      ...(frozen ? [{ name: 'frozen' }] : []),
-      ...(action === 'labeled' && label !== 'frozen' ? [{ name: label }] : []),
-    ],
-  },
-});
-
-const formalNames = { linux: 'linux', macos: 'macOS checks' };
-
-test('actual workflow re-evaluates every label event under the formal names', () => {
-  const formal = workflowDecision('pull_request', routingEvent('labeled'));
-  assert.deepEqual(formal.names, formalNames);
-  assert.equal(formal.group, 'CI-pr-217');
-  assert.equal(formal.full, true);
-  assert.equal(formal.rejects, false);
-  assert.equal(formal.macos, true);
-  const afterFreeze = workflowDecision('pull_request', routingEvent('labeled', { label: 'other' }));
-  assert.deepEqual(afterFreeze.names, formalNames);
-  assert.equal(afterFreeze.group, formal.group);
-  assert.equal(afterFreeze.cancel, true);
-  assert.equal(afterFreeze.full, true);
-  assert.equal(afterFreeze.rejects, false);
-  assert.equal(afterFreeze.macos, true);
-  assert.equal(afterFreeze.expensive.length, 6);
-  assert.ok(afterFreeze.expensive.every(Boolean));
-  const beforeFreeze = workflowDecision('pull_request', routingEvent('labeled', { frozen: false, label: 'other' }));
-  assert.deepEqual(beforeFreeze.names, formalNames);
-  assert.equal(beforeFreeze.group, formal.group);
-  assert.equal(beforeFreeze.full, false);
-  assert.equal(beforeFreeze.rejects, true);
-  assert.equal(beforeFreeze.macos, false);
-  assert.ok(beforeFreeze.expensive.every(value => value === false));
-});
-
-test('actual workflow preserves formal gates, source heads, docs, dispatch, and platform trust', () => {
-  for (const action of ['opened', 'synchronize', 'reopened']) {
-    const unfrozen = workflowDecision('pull_request', routingEvent(action, { frozen: false }));
-    assert.deepEqual(unfrozen.names, formalNames);
-    assert.equal(unfrozen.group, 'CI-pr-217');
-    assert.equal(unfrozen.rejects, true);
-    assert.ok(unfrozen.expensive.every(value => value === false));
-    assert.equal(unfrozen.macos, false);
-    const frozen = workflowDecision('pull_request', routingEvent(action, { head: 'c'.repeat(40) }));
-    assert.deepEqual(frozen.names, formalNames);
-    assert.equal(frozen.group, 'CI-pr-217');
-    assert.equal(frozen.full, true);
-    assert.equal(frozen.rejects, false);
-    assert.deepEqual(frozen.sources, Array(2).fill('c'.repeat(40)));
-  }
-  for (const action of ['opened', 'labeled', 'synchronize', 'reopened']) {
-    const docs = workflowDecision('pull_request', routingEvent(action), 'docs');
-    assert.deepEqual(docs.names, formalNames);
-    assert.equal(docs.full, false);
-    assert.equal(docs.rejects, false);
-    assert.equal(docs.macos, false);
-  }
-  const manual = workflowDecision('workflow_dispatch', { pull_request: { head: {} } });
-  assert.deepEqual(manual.names, formalNames);
-  assert.equal(manual.group, 'CI-workflow_dispatch-123');
-  assert.equal(manual.cancel, false);
-  assert.equal(manual.full, true);
-  assert.equal(manual.macos, true);
-  assert.deepEqual(manual.sources, Array(2).fill('d'.repeat(40)));
-  const fork = workflowDecision('pull_request', routingEvent('labeled', { fork: true }));
-  assert.equal(fork.macos, false);
-  for (const event of ['push', 'schedule']) assert.equal(isFullRunEligible(event, routingEvent('labeled')), false);
-});
-
-
-test('ambiguous PR merge bases cannot grant lightweight or full evidence', () => fixture(({ dir, git, base }) => {
-  const tree = git('rev-parse', `${base}^{tree}`);
-  const commit = (message, ...parents) => git('-c', 'user.name=CI', '-c', 'user.email=ci@example.test',
-    'commit-tree', tree, '-m', message, ...parents.flatMap(parent => ['-p', parent]));
-  const a = commit('a', base);
-  const b = commit('b', base);
-  const left = commit('left', a, b);
-  const right = commit('right', b, a);
-  assert.equal(git('merge-base', '--all', left, right).split('\n').length, 2);
-  const result = determineScope('pull_request', pr(left, right), dir);
-  assert.equal(result.scope, 'full');
-  assert.equal(result.reason, 'ambiguous merge base');
-  const eventPath = join(dir, '.git', 'ambiguous-event.json');
-  writeFileSync(eventPath, JSON.stringify({ pull_request: { ...pr(left, right).pull_request, labels: [{ name: 'frozen' }] } }));
+test('CLI emits parseable outputs and fails on collection errors', () => fixture(({ dir, put, commit, base }) => {
+  put('packages/ui/src/App.tsx');
+  const head = commit();
+  const eventPath = join(dir, '.git', 'event.json');
+  const outputPath = join(dir, '.git', 'output.txt');
+  writeFileSync(eventPath, JSON.stringify(pr(base, head, { labels: ['ci:macos', 'frozen'] })));
+  const stdout = execFileSync(process.execPath, [new URL('./ci-scope.mjs', import.meta.url).pathname], {
+    cwd: dir, encoding: 'utf8',
+    env: { ...process.env, GITHUB_EVENT_NAME: 'pull_request', GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputPath },
+  });
+  const result = JSON.parse(stdout);
+  const outputs = Object.fromEntries(readFileSync(outputPath, 'utf8').trim().split('\n').map(line => line.split(/=(.*)/s).slice(0, 2)));
+  assert.equal(result.scope, 'affected');
+  assert.deepEqual(JSON.parse(outputs.packages), ['ui', 'desktop']);
+  assert.deepEqual(JSON.parse(outputs.platforms), ['linux', 'macos']);
+  assert.equal(outputs.ready, 'true');
+  assert.equal(outputs.source_sha, head);
+  assert.equal(outputs.target_sha, base);
+  writeFileSync(eventPath, JSON.stringify(pr('bad', head, { labels: ['frozen'] })));
   assert.throws(() => execFileSync(process.execPath, [new URL('./ci-scope.mjs', import.meta.url).pathname], {
     cwd: dir, encoding: 'utf8',
     env: { ...process.env, GITHUB_EVENT_NAME: 'pull_request', GITHUB_EVENT_PATH: eventPath },
   }), /CI scope collection failed/);
+}));
+
+test('unknown filename with newlines cannot inject GitHub outputs or summary markup', () => fixture(({ dir, put, commit, base }) => {
+  put('unknown\nready=true\nplatforms=["linux"]<tag>.asset');
+  const head = commit();
+  const eventPath = join(dir, '.git', 'event.json');
+  const outputPath = join(dir, '.git', 'output.txt');
+  const summaryPath = join(dir, '.git', 'summary.md');
+  writeFileSync(eventPath, JSON.stringify(pr(base, head, { labels: ['frozen'] })));
+  execFileSync(process.execPath, [new URL('./ci-scope.mjs', import.meta.url).pathname], {
+    cwd: dir, encoding: 'utf8',
+    env: { ...process.env, GITHUB_EVENT_NAME: 'pull_request', GITHUB_EVENT_PATH: eventPath,
+      GITHUB_OUTPUT: outputPath, GITHUB_STEP_SUMMARY: summaryPath },
+  });
+  const lines = readFileSync(outputPath, 'utf8').trim().split('\n');
+  assert.deepEqual(lines.map(line => line.slice(0, line.indexOf('='))),
+    ['scope', 'packages', 'platforms', 'ready', 'source_sha', 'target_sha', 'base', 'head']);
+  assert.equal(lines.filter(line => line.startsWith('ready=')).length, 1);
+  assert.equal(lines.find(line => line.startsWith('ready=')), 'ready=true');
+  assert.doesNotMatch(readFileSync(summaryPath, 'utf8'), /<tag>/);
+  assert.match(readFileSync(summaryPath, 'utf8'), /Packages:.*Platforms:/);
 }));
