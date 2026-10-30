@@ -8,6 +8,7 @@ import { loadBots, type BotEntry } from '../config/bots';
 import { createAdminIpcCaller, type AdminIpcCaller } from '../admin/ipc';
 import { AdminWriteError } from '../admin/ops';
 import { createAdminService } from '../admin/service';
+import { botNotRunning } from '../admin/schedule-commands';
 import { installBackendDep, uninstallBackendDep } from '../agent';
 import { performCoreUpdate } from '../service/update';
 import { startApi } from '../server/http';
@@ -42,8 +43,6 @@ const PAUSES_RETRY_MS = 30_000;
 const LOCK_RETRY_MS = 5_000;
 const LOCK_WARN_MS = 120_000;
 const LOCK_SLOW_MS = 30_000;
-/** A scheduled-task request to a bot that is not running: a reply the desktop and the terminal show, not an error. */
-const SCHEDULE_BOT_NOT_RUNNING = 'Bot 没在运行，任务暂时看不到；启动后再来。';
 
 interface Child {
   bot: BotEntry;
@@ -535,8 +534,8 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
         },
         executeSchedule: async (botId, via, request) => {
           const child = byAppId(botId);
-          // A crash-paused bot is not running either; its pause is shown on the bot itself.
-          if (!child?.enabled || child.pause || !child.proc || !child.ipc) return { kind: 'refused', reason: 'bot-not-running', message: SCHEDULE_BOT_NOT_RUNNING };
+          // A crash-paused bot is not running either; its pause is shown on the bot itself. A stopping one drains and says no.
+          if (!child?.enabled || child.pause || child.stopping || !child.proc || !child.ipc) return botNotRunning();
           return child.ipc.call({ kind: 'schedule', via, request }) as Promise<ScheduleReply>;
         },
         executeSettingsRead: async (botId, op) => {

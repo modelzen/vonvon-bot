@@ -30,6 +30,7 @@ const MAX_TASKS_PER_BOT = 200;
 const MAX_RECENT = 20;
 const MAX_ERROR_UNITS = 200;   // scheduleRunRecordSchema.error
 const MAX_EXCERPT_UNITS = 500; // lastResult.excerpt
+const MAX_CREATOR_TEXT_UNITS = 500; // scheduleCreatorSchema.text
 const fileSchema = z.object({ version: z.literal(1), tasks: z.array(z.unknown()).max(MAX_TASKS_PER_BOT) }).strict();
 
 function pickKeys(value: object, keep: (key: string) => boolean): Record<string, unknown> {
@@ -45,8 +46,10 @@ function parseTask(value: unknown): StoredTask {
 }
 
 function describeInvalid(error: unknown): string {
-  if (error instanceof z.ZodError) {
-    return error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ');
+  // Matched by shape: the protocol schemas throw zod 3 errors and the runtime schema zod 4 ones, two ZodError classes.
+  if (error instanceof Error && 'issues' in error && Array.isArray(error.issues)) {
+    return (error.issues as { path?: unknown[]; message?: string }[])
+      .map(issue => `${issue.path?.map(String).join('.') || '(root)'}: ${issue.message}`).join('; ');
   }
   return error instanceof Error ? error.message : String(error);
 }
@@ -73,8 +76,9 @@ export function clampUnits(text: string, max: number): string {
   return kept;
 }
 
-/** Bounds what runners fill in (a long backend error, a fractional duration) so it fits the strict schema. */
+/** Bounds what runners and creators fill in (a long backend error, a fractional duration, a long trigger message) so it fits the strict schema. */
 function bound(task: StoredTask): void {
+  if (typeof task.createdBy?.text === 'string') task.createdBy.text = clampUnits(task.createdBy.text, MAX_CREATOR_TEXT_UNITS);
   if (Array.isArray(task.recent)) {
     task.recent = task.recent.slice(-MAX_RECENT);
     for (const record of task.recent) {
@@ -104,17 +108,17 @@ export function createScheduleStore(file: string, deps: {
     const draft = structuredClone(tasks);
     const result = fn(draft);
     for (const task of draft) bound(task);
-    const text = JSON.stringify({ version: 1, tasks: draft });
-    // Read the text back the way load() will. Writing something load() quarantines would lose every task of the bot
+    // Read the draft back the way load() will. Writing something load() quarantines would lose every task of the bot
     // at the next start, so refuse it here and keep memory and the file as they were.
     let committed: StoredTask[];
     try {
-      committed = parseFile(JSON.parse(text));
+      committed = parseFile(JSON.parse(JSON.stringify({ version: 1, tasks: draft })));
     } catch (error) {
       deps.log.warn('schedule', 'store-write-invalid', { error });
       throw new Error(`schedule store refused an invalid write: ${describeInvalid(error)}`, { cause: error });
     }
-    await writeFileAtomic(file, text, { durable: true });
+    // Write the parsed copy (names trimmed), so memory, the file and the next load() are the same.
+    await writeFileAtomic(file, JSON.stringify({ version: 1, tasks: committed }), { durable: true });
     tasks = committed;
     for (const listener of listeners) {
       try { listener(); } catch (error) { deps.log.warn('schedule', 'listener-failed', { error }); }
