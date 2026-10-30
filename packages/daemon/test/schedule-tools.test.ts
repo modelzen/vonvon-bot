@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createScheduleTools, scheduleToolNames, scheduleToolSpecs } from '../src/agent/entry/schedule-tools';
+import { messageLink } from '../src/bot/outbound-files';
 import { parseLocal } from '../src/bot/schedule/time';
+import type { StoredTask } from '../src/bot/schedule/types';
 import { G, HOST, MEMBER, MIN, NOW, OTHER, OWNER, human, removeScheduleFixtures, scheduleFixture, stored } from './helpers/schedule-entry';
 
 // T3 4.1: one zod definition for both providers; `when` read by the daemon; one line of words above the reply's JSON.
@@ -125,38 +127,82 @@ describe('replies: a line, then the JSON as it is', () => {
 
 describe('what the agent reads of a task', () => {
   const long = (units: number) => '长'.repeat(units);
-  const link = 'https://applink.feishu.cn/client/message/link/open?token=AmFkZQ';
+  /** A run's link the way the daemon makes it: the group's own Feishu link to a position in it. */
+  const link = (position: number) => messageLink({ message_position: String(position) }, G)!;
+  const run = (i: number, error = long(200)) => ({ runId: `run-${i}`, slot: NOW - (20 - i) * MIN, trigger: 'schedule' as const, status: 'failed' as const,
+    startedAt: NOW - (20 - i) * MIN, endedAt: NOW - (20 - i) * MIN + 1000, durationMs: 1000, messageId: `om_run${i}`, topicId: `omt_run${i}`, link: link(i), error });
   /** Every field at its limit, and every Feishu id a task can carry. */
-  const full = (id: string) => stored(id, {
+  const full = (id: string, patch: Partial<StoredTask> = {}) => stored(id, {
     name: long(40), instruction: long(4000), placement: { kind: 'topic', topicId: 'omt_topic' },
     createdBy: { via: 'chat', openId: 'ou_creator', name: long(40), role: 'member', messageId: 'om_created', text: long(500) },
-    lastResult: { at: NOW - MIN, status: 'failed', excerpt: long(500), messageId: 'om_result', link },
-    recent: Array.from({ length: 20 }, (_, i) => ({ runId: `run-${i}`, slot: NOW - (20 - i) * MIN, trigger: 'schedule' as const, status: 'failed' as const,
-      startedAt: NOW - (20 - i) * MIN, endedAt: NOW - (20 - i) * MIN + 1000, durationMs: 1000, messageId: `om_run${i}`, topicId: `omt_run${i}`, link, error: long(200) })),
+    lastResult: { at: NOW - MIN, status: 'failed', excerpt: long(500), messageId: 'om_result', link: link(100) },
+    recent: Array.from({ length: 20 }, (_, i) => run(i)), ...patch,
   });
-
-  const clipped = '现在 2026-11-01 10:00（Asia/Shanghai）· 本群 20 个任务 · 太长的内容截短了，用 schedule_list 带 taskId 看一个任务的全文';
-
-  it('cuts a list of 20 tasks at every limit to fit the registry\'s cap, marks what it cut, and says so', async () => {
-    const f = await scheduleFixture({ tasks: Array.from({ length: 20 }, (_, i) => full(`st_${i}`)) });
-    f.open();
+  /** The longest list reply: under the 50,000 characters Claude Code passes on without counting tokens (25,000 ÷ 2 × 4). */
+  const LIST_CHARS = 40_000;
+  const listText = async (f: Awaited<ReturnType<typeof scheduleFixture>>) => {
     const reply = await f.call('schedule_list');
     expect(reply).toMatchObject({ ok: true });
     const text = String(reply.ok && reply.result);
-    expect(Buffer.byteLength(JSON.stringify(text))).toBeLessThan(256 * 1024);
-    const { first, json } = lines(text);
+    expect(text.length).toBeLessThanOrEqual(LIST_CHARS);
+    return text;
+  };
+
+  const clipped = '现在 2026-11-01 10:00（Asia/Shanghai）· 本群 20 个任务 · 太长的内容截短了，用 schedule_list 带 taskId 看一个任务的全文';
+
+  it('cuts a list that is too long for the agent at the first level: the free text to 1000 and 200, run errors kept', async () => {
+    // 12 tasks of 4000 characters: about 150 KB, under the registry's byte cap, but past what Claude Code passes on uncounted.
+    const f = await scheduleFixture({ tasks: Array.from({ length: 12 }, (_, i) => full(`st_${i}`, { name: `任务 ${i}`, createdBy: { via: 'chat', text: long(150) },
+      lastResult: undefined, recent: [run(19, long(50))] })) });
+    f.open();
+    const { first, json } = lines(await listText(f));
+    expect(first).toBe('现在 2026-11-01 10:00（Asia/Shanghai）· 本群 12 个任务 · 太长的内容截短了，用 schedule_list 带 taskId 看一个任务的全文');
+    const [task] = json.tasks;
+    expect(task).toMatchObject({ instruction: `${long(999)}…`, instructionClipped: true, instructionLength: 4000, createdBy: { text: long(150) } });
+    expect(task.recent).toEqual([{ runId: 'run-19', slot: NOW - MIN, trigger: 'schedule', status: 'failed', startedAt: NOW - MIN, endedAt: NOW - MIN + 1000,
+      durationMs: 1000, link: link(19), error: long(50) }]);
+  });
+  it('cuts a list of 20 tasks at every limit shorter, to 300 and 80 without run errors, marks what it cut, and says so', async () => {
+    const f = await scheduleFixture({ tasks: Array.from({ length: 20 }, (_, i) => full(`st_${i}`)) });
+    f.open();
+    const { first, json } = lines(await listText(f));
     expect(first).toBe(clipped);
     expect(json.tasks).toHaveLength(20);
     const [task] = json.tasks;
-    expect(task.instruction).toBe(`${long(999)}…`);
+    expect(task.instruction).toBe(`${long(299)}…`);
     expect(task).toMatchObject({ instructionClipped: true, instructionLength: 4000 });
-    expect(task.createdBy).toEqual({ via: 'chat', role: 'member', name: long(40), mine: false, text: `${long(199)}…` });
-    expect(task.lastResult).toEqual({ status: 'failed', at: NOW - MIN, excerpt: `${long(199)}…`, link });
+    expect(task.createdBy).toEqual({ via: 'chat', role: 'member', name: long(40), mine: false, text: `${long(79)}…` });
+    expect(task.lastResult).toEqual({ status: 'failed', at: NOW - MIN, excerpt: `${long(79)}…`, link: link(100) });
     expect(task.recent.map((run: { runId: string }) => run.runId)).toEqual(['run-17', 'run-18', 'run-19']);
     expect(task.recent[2]).toEqual({ runId: 'run-19', slot: NOW - MIN, trigger: 'schedule', status: 'failed', startedAt: NOW - MIN, endedAt: NOW - MIN + 1000,
-      durationMs: 1000, link, error: long(200) });
+      durationMs: 1000, link: link(19) });
     expect(Object.keys(task).sort()).toEqual(['createdBy', 'describe', 'id', 'instruction', 'instructionClipped', 'instructionLength', 'lastResult', 'name',
       'nextRunAt', 'placement', 'recent', 'revision', 'running', 'state', 'timeZone'].sort());
+  });
+  it('lists only names, times, state and ids when even that is too long, and 20 tasks at every limit fit there with room to spare', async () => {
+    // Links have no limit; long ones push the shorter cut over. The longest describe: a 94-character cron in a zone of 30.
+    const longLink = `https://applink.feishu.cn/client/message/link/open?token=${'A'.repeat(600)}`;
+    const minutes = Array.from({ length: 30 }, (_, i) => i * 2).join(',');
+    const f = await scheduleFixture({ tasks: Array.from({ length: 20 }, (_, i) => full(`st_${'0'.repeat(14)}${String(i).padStart(2, '0')}`, {
+      revision: 'f'.repeat(16), spec: { kind: 'cron', expr: `${minutes} 9 * * 1-5` }, timeZone: 'America/Argentina/Buenos_Aires', state: 'paused', pausedReason: 'failures',
+      lastResult: { at: NOW - MIN, status: 'failed', excerpt: long(500), link: longLink }, recent: Array.from({ length: 20 }, (_, r) => ({ ...run(r), link: longLink })),
+    })) });
+    f.open();
+    const text = await listText(f);
+    expect(text.length).toBeLessThan(LIST_CHARS / 4);
+    const { first, json } = lines(text);
+    expect(first).toBe(clipped);
+    const [task] = json.tasks;
+    expect(task).toEqual({ id: `st_${'0'.repeat(16)}`, name: long(40), revision: 'f'.repeat(16), state: 'paused', pausedReason: 'failures',
+      describe: `cron「${minutes} 9 * * 1-5」（America/Argentina/Buenos_Aires）`, running: false, instructionClipped: true, instructionLength: 4000 });
+    expect(json.tasks.every((one: object) => !('instruction' in one) && !('createdBy' in one) && !('recent' in one))).toBe(true);
+  });
+  it('shows a single task whole, far under what a list may take, however long its fields', async () => {
+    const f = await scheduleFixture({ tasks: [full('st_full')] });
+    f.open();
+    const text = await f.text('schedule_list', { taskId: 'st_full' });
+    expect(lines(text).json.task).toMatchObject({ instruction: long(4000), createdBy: { text: long(500) }, lastResult: { excerpt: long(500) } });
+    expect(text.length).toBeLessThan(LIST_CHARS / 4);
   });
   it('lists a long instruction whole when the list fits, so an edit from the list keeps all of it', async () => {
     const f = await scheduleFixture({ tasks: [stored('st_long', { instruction: long(2500) })] });
@@ -184,12 +230,15 @@ describe('what the agent reads of a task', () => {
     expect(lines(await f.text('schedule_list', { taskId: 'st_elsewhere' })).json).toEqual({ kind: 'refused', reason: 'not-found', message: '本群没有这个任务。' });
     expect(f.store.get('st_elsewhere')?.state).toBe('active');
   });
-  it('shows no group id and no raw Feishu ids in a list or a single task, and a single task keeps its instruction whole and its last 3 runs', async () => {
+  it('shows no creator open_id, message id or topic id in a list or a single task, only the group\'s own links, and a single task keeps its instruction whole and its last 3 runs', async () => {
     const f = await scheduleFixture({ tasks: [full('st_full')] });
     f.open();
     const replies = [await f.text('schedule_list'), await f.text('schedule_create', daily), await f.text('schedule_pause', { taskId: 'st_full' }),
       await f.text('schedule_edit', { taskId: 'st_full', revision: 'stale', patch: { name: '早报' } })];
-    for (const text of replies) expect(text).not.toMatch(/oc_|ou_|om_|omt_|on_/);
+    // The links carry the group's id on purpose: the agent may hand a person the link to a past run.
+    const links = [100, 17, 18, 19].map(link);
+    for (const text of [replies[0]!, replies[2]!, replies[3]!]) for (const one of links) expect(text).toContain(JSON.stringify(one));
+    for (const text of replies) expect(links.reduce((rest, one) => rest.replaceAll(JSON.stringify(one), '""'), text)).not.toMatch(/oc_|ou_|om_|omt_|on_/);
     const runs = (task: { recent: { runId: string }[] }) => task.recent.map(run => run.runId);
     const paused = lines(replies[2]!).json, conflict = lines(replies[3]!).json;
     expect(paused).toMatchObject({ kind: 'task', task: { state: 'paused', pausedReason: 'manual', instruction: long(4000), placement: { kind: 'topic', here: false } } });
@@ -218,6 +267,28 @@ describe('what the agent reads of a task', () => {
     // A task's own run has no person to compare with.
     f.open({ retry: false, initiative: false, wake: false, scheduled: { taskId: 'st_mine', runId: 'run-self' } });
     expect(lines(await f.text('schedule_list')).json.tasks[0].createdBy).toEqual({ via: 'chat', role: 'member' });
+  });
+  it('leaves mine out once someone else has steered into the turn, and keeps it when the requester adds to their own', async () => {
+    const f = await scheduleFixture({ tasks: [stored('st_mine'), stored('st_theirs', { createdBy: { via: 'chat', openId: 'ou_member_b', role: 'member' } })] });
+    const creators = async () => lines(await f.text('schedule_list')).json.tasks.map((task: { createdBy: object }) => task.createdBy);
+    f.open(human(MEMBER));
+    f.entries.noteSteer(f.thread, { openId: 'ou_member_b', kind: 'user' });
+    expect(await creators()).toEqual([{ via: 'chat', role: 'member' }, { via: 'chat', role: 'member' }]);
+    f.open(human(MEMBER, { triggerMessageId: 'om_2' }));
+    f.entries.noteSteer(f.thread, { openId: MEMBER, kind: 'user' });
+    expect(await creators()).toEqual([{ via: 'chat', role: 'member', mine: true }, { via: 'chat', role: 'member', mine: false }]);
+  });
+  it.each(['settled', 'started'])('shows the 3 runs that settled last in the order they started, kept by %s', async order => {
+    // A run over 4 intervals, and the 3 skips it caused: it settles after them, but started before them.
+    const every = 30 * MIN, t0 = NOW - 4 * every;
+    const early = { runId: 'early', slot: t0 - every, trigger: 'schedule' as const, status: 'done' as const, startedAt: t0 - every, endedAt: t0 - every + MIN };
+    const longRun = { runId: 'long', slot: t0, trigger: 'schedule' as const, status: 'done' as const, startedAt: t0, endedAt: t0 + 3 * every + 10 * MIN };
+    const skips = [1, 2, 3].map(k => ({ runId: `skip-${k}`, slot: t0 + k * every, trigger: 'schedule' as const, status: 'skipped' as const, reason: 'running' as const }));
+    const f = await scheduleFixture({ tasks: [stored('st_long', { recent: order === 'settled' ? [early, ...skips, longRun] : [early, longRun, ...skips] })] });
+    f.open();
+    const runs = (task: { recent: { runId: string }[] }) => task.recent.map(run => run.runId);
+    expect(runs(lines(await f.text('schedule_list')).json.tasks[0])).toEqual(['long', 'skip-2', 'skip-3']);
+    expect(runs(lines(await f.text('schedule_list', { taskId: 'st_long' })).json.task)).toEqual(['long', 'skip-2', 'skip-3']);
   });
   it('says whether a topic task posts to the topic this turn is in, without the topic id', async () => {
     const f = await scheduleFixture({ tasks: [stored('st_topic', { placement: { kind: 'topic', topicId: 'omt_topic' } })] });
