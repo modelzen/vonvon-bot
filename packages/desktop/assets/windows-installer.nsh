@@ -4,6 +4,72 @@
 ; --delete-app-data; /KEEP_APP_DATA is retained for compatibility, not relied on.
 ; Use the same registered uninstaller electron-builder already invoked.
 !ifndef BUILD_UNINSTALLER
+  ; Assisted installs show the directory page once. Updates use electron-builder's
+  ; --updated page skipping and retain the registered current-user directory.
+  !macro customInit
+    ${If} ${isForAllUsers}
+      MessageBox MB_OK|MB_ICONEXCLAMATION "Vonvon Bot only supports installation for the current user." /SD IDOK
+      SetErrorLevel 2
+      Quit
+    ${EndIf}
+    StrCpy $hasPerMachineInstallation "0"
+    StrCpy $hasPerUserInstallation "1"
+    !insertmacro setInstallModePerUser
+  !macroend
+
+  !macro customInstallMode
+    StrCpy $isForceMachineInstall "0"
+    StrCpy $isForceCurrentInstall "1"
+  !macroend
+
+  ; The assisted template otherwise appends APP_FILENAME even during --updated.
+  ; Preserve an existing custom /D path from the old one-click installer exactly.
+  !macro customPageAfterChangeDir
+    !undef MUI_PAGE_CUSTOMFUNCTION_PRE
+    !define MUI_PAGE_CUSTOMFUNCTION_PRE vonvonInstFilesPre
+    Function vonvonInstFilesPre
+      ${IfNot} ${isUpdated}
+        Call instFilesPre
+      ${EndIf}
+    FunctionEnd
+  !macroend
+
+  !macro customFinishPage
+    Function vonvonStartApp
+      !insertmacro StartApp
+    FunctionEnd
+    Function vonvonFinishPre
+      ${If} ${isUpdated}
+        ${If} ${isForceRun}
+          Call vonvonStartApp
+        ${EndIf}
+        Abort
+      ${EndIf}
+    FunctionEnd
+    !define MUI_PAGE_CUSTOMFUNCTION_PRE vonvonFinishPre
+    !define MUI_FINISHPAGE_RUN
+    !define MUI_FINISHPAGE_RUN_FUNCTION vonvonStartApp
+    !insertmacro MUI_PAGE_FINISH
+  !macroend
+
+  !macro customHeader
+    DirVerify leave
+    Function .onVerifyInstDir
+      ; A user-selected path must be writable without an elevation handoff.
+      ; Probe only when leaving the directory page, never while typing a path.
+      ClearErrors
+      CreateDirectory "$INSTDIR"
+      GetTempFileName $R0 "$INSTDIR"
+      ${If} ${Errors}
+        MessageBox MB_OK|MB_ICONEXCLAMATION "Please choose a folder writable by your current Windows user. / 请选择当前用户可写的安装目录。"
+        Abort
+      ${EndIf}
+      Delete "$R0"
+    FunctionEnd
+  !macroend
+!endif
+
+!ifndef BUILD_UNINSTALLER
   Var vonvonPreviousUninstaller
   Var vonvonPreviousInstallDir
 !endif

@@ -6,7 +6,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { planPublish, uploadRelease, promoteRelease, reverifyRelease, readCosWriteConfig } from './release-cos-publish.mjs';
-import { downloadBuild, readWindowsCosConfig, windowsObjectPlan } from './publish-windows.mjs';
+import { downloadBuild, readWindowsCosConfig, windowsObjectPlan, planWindowsUpdates, promoteWindowsUpdates } from './publish-windows.mjs';
 import { collectRelease, runReleaseChild } from './release-all.mjs';
 import { assertSecureTransport, readStableManifest, validateReleaseInventory, verifyPublicRelease } from './verify-public-release.mjs';
 import { cosCredentialEnvNames, readCosConfig } from './release-cos-evidence.mjs';
@@ -45,7 +45,7 @@ async function locked(out, work) {
   }
 }
 function runtime(dependencies) {
-  return { env: process.env, download: downloadBuild, verifyMac: validateReleaseInventory, planMac: planPublish,
+  return { env: process.env, download: downloadBuild, planWindowsUpdates, promoteWindowsUpdates, verifyMac: validateReleaseInventory, planMac: planPublish,
     uploadMac: uploadRelease, promoteMac: promoteRelease, reverifyMac: reverifyRelease,
     verifyPublicMac: verifyPublicRelease, readLiveManifest: readStableManifest, collect: collectRelease, execute: runReleaseChild, log: console.log, ...dependencies };
 }
@@ -74,15 +74,17 @@ async function context(options, r, saved) {
   if (windowsInventory.architecture !== 'x64+arm64') throw new Error('Both Windows architectures are required');
   const provenance = await readJSON(join(windowsOut, 'github-build.json'));
   if (provenance.runId !== state.windows.runId || provenance.sourceSha !== state.sha) throw new Error('Windows provenance differs from this release');
+  const windowsNotes = windowsInventory.updatesEnabled && state.paths.notesFile ? (await readFile(state.paths.notesFile, 'utf8')).trim().slice(0, 4096) : undefined;
+  const updates = windowsInventory.updatesEnabled ? await r.planWindowsUpdates({ out: windowsOut, inventory: windowsInventory, env: r.env, privateKeyFile: windowsConfig.updatePrivateKeyFile, notes: windowsNotes, previous: saved?.candidate.windows.updates }) : [];
   const candidate = { version: state.version, sourceSha: state.sha, macOut, macFiles: macEvidence.files,
-    windows: { runId: state.windows.runId, provenance, objects: windowsObjectPlan(windowsInventory) } };
+    windows: { runId: state.windows.runId, provenance, updatesEnabled: windowsInventory.updatesEnabled, updates, objects: windowsObjectPlan(windowsInventory) } };
   const macOptions = { out: macOut, version: state.version, sha: state.sha, 'cos-config': configs.readonly.path, 'cos-write-config': configs.macWrite.path };
   const releaseFlags = Object.fromEntries(['first-release', 'no-live-manifest'].filter(key => state.flags?.[key === 'first-release' ? 'firstRelease' : 'noLiveManifest']).map(key => [key, true]));
   const windowsNames = new Set(cosCredentialEnvNames(windowsConfig));
   const macNames = new Set([...cosCredentialEnvNames(readConfig), ...cosCredentialEnvNames(macWrite)]);
   const privateNames = [...macNames].filter(name => !windowsNames.has(name));
   const without = (env, names) => Object.fromEntries(Object.entries(env).filter(([name]) => !names.has(name)));
-  return { out, state, configs, candidate, macOptions, releaseFlags, windowsOut,
+  return { out, state, configs, candidate, windowsInventory, windowsConfig, windowsNotes, macOptions, releaseFlags, windowsOut,
     publicEnv: downloadEnv,
     macDependencies: { ...r.macDependencies, env: without(r.macDependencies?.env ?? r.env, new Set([...windowsNames].filter(name => !macNames.has(name)))) },
     collectDependencies: { ...r.collectDependencies, env: without(r.collectDependencies?.env ?? r.env, allPrivateNames) },
@@ -102,7 +104,7 @@ async function receipts(c) {
   const mac = await optional(join(c.macOptions.out, 'upload-receipt.json')), windows = await optional(join(c.windowsOut, 'windows-publish-receipt.json'));
   const macPlan = await readJSON(join(c.macOptions.out, 'publish-plan.json'));
   if (mac && (mac.version !== c.state.version || mac.sourceCommit !== c.state.sha || mac.planSHA256 !== c.plan.macPlanSHA256 || mac.versionedVerification?.versionedObjectsVerified !== true || !matchesFiles(mac.objects, macPlan.upload))) throw new Error('Mac upload receipt does not match the reviewed candidate');
-  if (windows && (windows.version !== c.state.version || windows.sourceSha !== c.state.sha || windows.architecture !== 'x64+arm64' || windows.signed !== false || windows.updatesEnabled !== false || !matchesFiles(windows.objects, c.candidate.windows.objects, 'bytes'))) throw new Error('Windows upload receipt does not match the reviewed candidate');
+  if (windows && (windows.version !== c.state.version || windows.sourceSha !== c.state.sha || windows.architecture !== 'x64+arm64' || windows.signed !== false || windows.updatesEnabled !== c.candidate.windows.updatesEnabled || !matchesFiles(windows.objects, c.candidate.windows.objects, 'bytes'))) throw new Error('Windows upload receipt does not match the reviewed candidate');
   return { mac, windows };
 }
 
@@ -116,7 +118,7 @@ export async function planPublication(options, dependencies = {}) {
     await atomic(join(out, planName), plan);
     const report = { version: c.state.version, sourceSha: c.state.sha, planSHA256: digest(json(plan)),
       macPlanSHA256: mac.sha256, windowsRunId: c.state.windows.runId,
-      objects: [...mac.plan.upload, ...c.candidate.windows.objects].map(({ file, url, size, bytes, sha256 }) => ({ file, url, bytes: bytes ?? size, sha256 })) };
+      objects: [...mac.plan.upload, ...c.candidate.windows.objects, ...c.candidate.windows.updates].map(({ file, url, size, bytes, sha256 }) => ({ file, url, bytes: bytes ?? size, sha256 })) };
     r.log(json(report)); return report;
   });
 }
@@ -174,6 +176,8 @@ export async function promotePublication(options, dependencies = {}) {
       if (written) await r.reverifyMac(macOptions, c.macDependencies);
       else await r.promoteMac({ ...macOptions, 'cancel-file': join(out, 'CANCEL'), 'owner-confirmation': options['owner-confirmation'], 'reviewed-plan': true }, c.macDependencies);
     }
+    if (c.candidate.windows.updatesEnabled) await r.promoteWindowsUpdates({ out: c.windowsOut, inventory: c.windowsInventory, feeds: c.candidate.windows.updates, config: c.windowsConfig,
+      env: c.windowsEnv, notes: c.windowsNotes, ownerConfirmation: options['owner-confirmation'], planSHA256: options['plan-sha256'], cancelFile: join(out, 'CANCEL') });
     const handoff = await r.collect({ out }, c.collectDependencies);
     if (handoff.readyForWebsite !== true) throw new Error('Publication receipts did not produce a complete website handoff');
     r.log('Stable publicly verified. release-handoff.json is ready for the existing website workflow.');

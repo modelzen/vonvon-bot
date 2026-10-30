@@ -41,10 +41,11 @@ export function UpdatePanel({request, attached,externalCoreAvailable,version,dev
       setBusy(false);
     }
   };
-  const desktopState = desktopOperation.phase === 'downloading' ? '正在下载更新…'
+  const percent = desktop?.downloadProgress ? Math.floor(desktop.downloadProgress.percent) : undefined;
+  const desktopState = desktopOperation.phase === 'downloading' ? percent === undefined ? '正在下载更新…' : `正在下载更新 · ${percent}%`
     : desktopOperation.phase === 'installing' ? '正在安装并重启…'
     : desktop?.state === 'available' ? '有可用更新'
-    : desktop?.state === 'downloaded' ? '已下载，可安装'
+    : desktop?.state === 'downloaded' ? '已验证，可安装'
       : desktop?.state === 'current' ? '已是最新版本'
         : desktop?.state === 'install-pending' ? '上次安装未生效'
           : desktop?.state === 'unavailable' ? '更新源不可用' : '尚未检查';
@@ -61,8 +62,10 @@ export function UpdatePanel({request, attached,externalCoreAvailable,version,dev
         <span>{desktopState}{desktop?.latest && desktop.state !== 'current' ? ` · v${desktop.latest}` : ''}</span>
         <Button size="sm" variant="ghost" disabled={busy} onClick={() => openPage(changelogUrl,'releases','无法打开发布说明。')}>发布说明<ArrowUpRight size={12}/></Button>
       </div>
+      {desktopOperation.phase === 'downloading' && <progress className="application-update-progress" max={100} value={percent} aria-label="更新下载进度"/>}
       {desktop?.message && <p className="application-update-message">{desktop.message}</p>}
-      {(desktop?.state === 'available' || desktop?.state === 'downloaded') && <div className="application-update-install"><span>{desktop.state === 'downloaded' ? '更新已准备好，安装后将重新打开应用。' : '检查更新不会自动安装。'}</span><Button size="sm" disabled={busy || !shell?.installDesktopUpdate} onClick={() => {const install=shell?.installDesktopUpdate;if(!install)return;if(desktop.state==='downloaded')navigate(()=>void desktopOperation.run(install, 'installing'));else void desktopOperation.run(install, 'downloading');}}>{desktop.state==='downloaded'?'安装并重启':'下载更新'}</Button></div>}
+      {desktop?.releaseNotes && <p className="application-update-message application-update-notes">{desktop.releaseNotes}</p>}
+      {(desktop?.state === 'available' || desktop?.state === 'downloaded') && <div className="application-update-install"><span>{desktop.state === 'downloaded' ? '更新已验证。安装会短暂中断 Bot 连接，完成后自动重新打开应用；也可以稍后安装。' : '下载期间可以继续使用，下载后由你决定何时安装。'}</span><Button size="sm" disabled={busy || !shell?.installDesktopUpdate} onClick={() => {const install=shell?.installDesktopUpdate;if(!install)return;if(desktop.state==='downloaded')navigate(()=>void desktopOperation.run(install, 'installing'));else void desktopOperation.run(install, 'downloading');}}>{desktopOperation.error ? desktop.state==='downloaded'?'重试安装':'重试下载' : desktop.state==='downloaded'?'安装并重启':'下载更新'}</Button></div>}
       {desktop?.state === 'install-pending' && <div className="application-update-install"><span>可以重试，或者到官网重新下载安装。</span><div className="application-update-actions"><Button size="sm" disabled={busy || !shell?.retryDesktopUpdate} onClick={() => {if(shell?.retryDesktopUpdate) void desktopOperation.run(shell.retryDesktopUpdate, 'checking');}}>重试</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => openPage(downloadPageUrl,'download','无法打开下载页。')}>手动下载<ArrowUpRight size={12}/></Button></div></div>}
       {desktopOperation.error && <p className="application-update-error" role="status">{desktopOperation.error}</p>}
       {desktopMessage && <p className="application-update-error" role="status">{desktopMessage}</p>}
