@@ -5,9 +5,8 @@ import { ConnectionError, RpcError } from '@vonvon/client/browser';
 import {
   adminRequestSchema, agentIdSchema, collaborationRequestSchema, commandSchema, scheduleRequestSchema,
   directoryRequestSchema, environmentRequestSchema, libraryRequestSchema, machineRequestSchema, memoryRequestSchema, contextPreviewRequestSchema,
-  settingsRequestSchema, machineReplySchema, agentIdSchema, scheduleRequestSchema, type DesktopUpdate, type MachineReply,
+  settingsRequestSchema, machineReplySchema, type DesktopUpdate, type MachineReply,
 } from '@vonvon/protocol';
-import { z } from 'zod';
 import { allowedExternalUrl, type ExternalUrlKind } from '../../ui/src/url-actions.js';
 import { ServiceActionError } from './service-error.js';
 import { StartHostRefusal } from './daemon-manager.js';
@@ -16,9 +15,6 @@ import {
   desktopChannels, safeErrorCode, type AttachedDaemon, type DesktopBridge, type DesktopEvent,
   type DesktopResources, type IpcResult, type SafeFailure, type ShellActions,
 } from './ipc-contract.js';
-
-/** The schedule RPC's payload (protocol rpc.ts): one call, one bot. */
-const schedulePayloadSchema = z.object({ botId: agentIdSchema, request: scheduleRequestSchema }).strict();
 
 const externalKinds: readonly ExternalUrlKind[] = [
   'registration', 'authorization', 'verification', 'event-settings', 'app-console', 'group', 'bot-chat', 'releases', 'download',
@@ -277,7 +273,6 @@ export function installBridge(
     register(desktopChannels.admin, 1, value => adminRequestSchema.parse(value), value => client().admin(value));
     register(desktopChannels.memory, 1, value => memoryRequestSchema.parse(value), value => client().memory(value));
     register(desktopChannels.contextPreview, 1, value => contextPreviewRequestSchema.parse(value), value => client().contextPreview(value));
-    register(desktopChannels.schedule, 1, value => schedulePayloadSchema.parse(value), value => client().schedule(value.botId, value.request));
     register(desktopChannels.directory, 1, value => directoryRequestSchema.parse(value), value => client().directory(value));
     register(desktopChannels.library, 1, value => libraryRequestSchema.parse(value), value => client().library(value));
     register(desktopChannels.schedule, 2, (botId, request) => ({ botId: agentIdSchema.parse(botId), request: scheduleRequestSchema.parse(request) }),
