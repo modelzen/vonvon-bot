@@ -79,7 +79,7 @@ export function fileClaimMode(
 /** Raw IM responses return message_position; message_app_link is sometimes
  * added by a higher-level client (including lark-cli), not by the IM API.
  * This matches the CLI's verified link for the same chat/message position. */
-function messageLink(message: { message_app_link?: string; message_position?: string; chat_id?: string }, chatId: string): string | undefined {
+export function messageLink(message: { message_app_link?: string; message_position?: string; chat_id?: string }, chatId: string): string | undefined {
   if (message.message_app_link) return message.message_app_link;
   const position = message.message_position;
   if (position == null || !/^\d+$/.test(String(position))) return undefined;
