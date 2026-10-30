@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
 import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -12,6 +13,13 @@ test('actual builder headers and assisted directory/upgrade pages compile for bo
     const result = await compileWindowsInstaller({out:join(out, architecture), architecture});
     assert.ok(result.bytes > 10000);
     assert.doesNotMatch(result.diagnostics, /unknown variable|warning 6000/i);
+    await compileWindowsInstaller({out:join(out, architecture + '-uninstaller'), architecture, uninstaller:true});
+    if (process.platform === 'win32') {
+      // This unique test identity has no registration: an unpinned update must
+      // stop before entering its install section or choosing a default folder.
+      const refused = spawnSync(result.output, ['/S', '--updated'], {windowsHide:true, timeout:15000});
+      assert.equal(refused.status, 2, String(refused.error ?? 'unlocated update was not refused'));
+    }
   }
   // Reproduce the cloud failure through the actual compiler, including the late
   // placement of customHeader after assistedInstaller has emitted its PageEx.
