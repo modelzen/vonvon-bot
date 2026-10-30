@@ -19,8 +19,8 @@ export interface ToolContext {
   releaseBotWrite?(): void;
   /** Call guard synchronously immediately before the write becomes effective, with no await between. */
   commit?<T>(write: (guard: CommitGuard) => Promise<T>): Promise<T>;
-  /** schedule 类工具：这一轮的 actor 和位置，调用时现取（bot 开的话题认领后才有 id，总设计第 10 节） */
-  schedule?(): { actor: Exclude<ScheduleActor, { kind: 'local' }>; where: TurnWhere };
+  /** schedule 类工具：这一轮的 actor、位置和有没有被别人插过话，调用时现取（bot 开的话题认领后才有 id，总设计第 10 节） */
+  schedule?(): { actor: Exclude<ScheduleActor, { kind: 'local' }>; where: TurnWhere; steered: boolean };
 }
 export type CommitGuard = () => void;
 /** The most a tool's result may take as JSON; the registry answers a bigger one with 结果太大. */

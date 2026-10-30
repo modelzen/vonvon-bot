@@ -96,7 +96,10 @@ interface Grant {
   previous?: TurnAuth;
   firstTurn?: TurnAuth;
   origins: Map<string, TurnAuth | undefined>;
-  /** Ids `pruneOrigins` dropped, oldest first, at most {@link PRUNED_IDS}: never noted again, refused as turn-ended. */
+  /**
+   * Ids no longer noted, oldest first, the last {@link PRUNED_IDS}: those `pruneOrigins` dropped and those refused while
+   * the map was full. A late copy is not noted under a later turn, and its call reads turn-ended.
+   */
   pruned: Set<string>;
   controller: AbortController;
   active: number;
@@ -129,16 +132,22 @@ export function createAgentEntries(opts: {
    * At capacity, origins of ended turns go: they cannot authorize anything, and a long-lived session (a recurring task
    * keeps a single-session group's main session open) would otherwise refuse every later turn's calls as unknown-origin. The turn
    * before this one keeps its own; if that turn alone filled the map, the turn after this one gets room. A dropped id
-   * goes to `pruned`, so a late copy of it (streamed, then in the full message), however many turns later, is not noted
-   * again under the turn of the moment and its call reads turn-ended.
+   * goes to `pruned` (see {@link forget}).
    */
   function pruneOrigins(grant: Grant) {
     for (const [id, auth] of grant.origins) {
       if (auth && (auth === grant.turn || auth === grant.previous)) continue;
       grant.origins.delete(id);
-      grant.pruned.add(id);
-      if (grant.pruned.size > PRUNED_IDS) grant.pruned.delete(grant.pruned.values().next().value!);
+      forget(grant, id);
     }
+  }
+  /**
+   * An id that will not be noted again: a late copy of it (streamed, then in the full message) is not noted under the
+   * turn of the moment, and its call reads turn-ended, while it is among the last {@link PRUNED_IDS} forgotten.
+   */
+  function forget(grant: Grant, id: string) {
+    grant.pruned.add(id);
+    if (grant.pruned.size > PRUNED_IDS) grant.pruned.delete(grant.pruned.values().next().value!);
   }
   function revoke(grant: Grant) {
     grant.phase = 'revoked';
@@ -310,7 +319,7 @@ export function createAgentEntries(opts: {
             ctx.reserveBotWrite = () => { if (auth.botWrites >= 1) return false; auth.botWrites++; return true; };
             ctx.releaseBotWrite = () => { auth.botWrites = Math.max(0, auth.botWrites - 1); };
           }
-          if (schedule && auth) ctx.schedule = () => ({ actor: scheduleActor(grant, auth), where: auth.facts.where?.() ?? { inTopic: false } });
+          if (schedule && auth) ctx.schedule = () => ({ actor: scheduleActor(grant, auth), where: auth.facts.where?.() ?? { inTopic: false }, steered: auth.steered });
           if (gated && auth) {
             if (settings) ctx.turn = { id: auth.id, requesterOpenId: auth.facts.requesterOpenId ?? '', triggerMessageId: auth.facts.triggerMessageId ?? '', role: opts.isOwner(auth.facts.requesterOpenId ?? '') ? 'owner' : 'admin' };
             ctx.commit = async write => {
@@ -381,7 +390,8 @@ export function createAgentEntries(opts: {
       noteToolUse(id) {
         if (grant.phase !== 'attached' || grant.origins.has(id) || grant.pruned.has(id)) return;
         if (grant.origins.size >= 256) pruneOrigins(grant);
-        if (grant.origins.size >= 256) return;
+        // Still full (this turn and the one before hold it all): a copy noted turns later would get the wrong turn.
+        if (grant.origins.size >= 256) { forget(grant, id); return; }
         grant.origins.set(id, grant.turn);
       },
       attach(thread) {

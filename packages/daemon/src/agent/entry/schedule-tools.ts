@@ -4,7 +4,7 @@ import { scheduleRefusalMessages, type ScheduleActor, type ScheduleCommands } fr
 import { clampUnits } from '../../bot/schedule/store';
 import { ceilToMinute, formatAt, hostTimeZone, parseLocal } from '../../bot/schedule/time';
 import type { TurnWhere } from './registry';
-import { TOOL_RESULT_BYTES, ToolRefusal, type AgentTool, type ToolContext } from './tools';
+import { ToolRefusal, type AgentTool, type ToolContext } from './tools';
 
 /**
  * 定时任务的 agent 工具（总设计第 10 节）：命令核（admin/schedule-commands.ts）的壳，Claude 的 MCP 和 Codex 的
@@ -90,32 +90,50 @@ function placementOf(where: Where | undefined, once: boolean, here: TurnWhere): 
   return here.inTopic ? 'topic-pending' : { kind: 'follow' };
 }
 
-/** What a list shows of the free text when the whole list would not fit; a single task always keeps it whole. */
-const LIST_INSTRUCTION_UNITS = 1000, LIST_TEXT_UNITS = 200;
-/** A list bigger than this as the registry measures it goes out cut: the registry's cap, less room to spare. */
-const LIST_BYTES = TOOL_RESULT_BYTES - 16 * 1024;
-const clip = (text: string, max: number) => text.length <= max ? text : `${clampUnits(text, max - 1)}…`;
-const whole = (text: string) => text;
 /**
- * A task as the agent reads it, also in a card that shows tool calls: no group id and no raw Feishu ids it cannot act
- * on (the creator's open_id, message and topic ids), the last 3 runs with their links. In a person's turn the creator
- * says whether it is `mine`; a topic task says whether its topic is the one this turn is `here` in.
+ * The longest list reply, in characters. Claude Code passes a tool result on as it is while its estimate (4 characters a
+ * token) is at most half of MAX_MCP_OUTPUT_TOKENS (25,000); past that it counts real tokens, about one a Chinese
+ * character, and cuts what is over. As JSON at most 3 bytes a character, so also under the registry's byte cap.
  */
-function taskView(task: ScheduledTaskView, { actor, where }: Turn, cut: (text: string, max: number) => string = whole) {
+const LIST_CHARS = 40_000;
+/**
+ * What a list shows of each task when the whole list is longer, one level after another until it fits: the free text
+ * cut; cut shorter and no run errors; then only names, times, state and ids. A single task always shows whole.
+ */
+const LIST_LEVELS = [{ instruction: 1000, text: 200, errors: true }, { instruction: 300, text: 80, errors: false }, 'bare'] as const;
+type ListLevel = (typeof LIST_LEVELS)[number];
+const clip = (text: string, max: number) => text.length <= max ? text : `${clampUnits(text, max - 1)}…`;
+type RunRecord = ScheduledTaskView['recent'][number];
+const settledAt = (run: RunRecord) => run.endedAt ?? run.startedAt ?? run.slot;
+const startedAt = (run: RunRecord) => run.startedAt ?? run.slot;
+/** The 3 runs that settled last, in the order they started: a run over several intervals settles after the skips it caused. */
+const lastRuns = (recent: readonly RunRecord[]) =>
+  [...recent].sort((a, b) => settledAt(a) - settledAt(b)).slice(-3).sort((a, b) => startedAt(a) - startedAt(b));
+/**
+ * A task as the agent reads it, also in a card that shows tool calls: no raw Feishu ids it cannot act on (the creator's
+ * open_id, message and topic ids); the links of the last 3 runs are the group's own Feishu links, kept so a person can
+ * be handed one. In a person's turn nobody else steered, the creator says whether it is `mine`; a topic task says whether
+ * its topic is the one this turn is `here` in.
+ */
+function taskView(task: ScheduledTaskView, { actor, where, steered }: Turn, level?: ListLevel) {
   const { via, openId, role, name: creator, text } = task.createdBy;
   const { placement } = task, last = task.lastResult;
-  const instruction = cut(task.instruction, LIST_INSTRUCTION_UNITS);
-  return {
-    id: task.id, name: task.name, revision: task.revision, state: task.state,
+  const instruction = level === 'bare' ? '' : level ? clip(task.instruction, level.instruction) : task.instruction;
+  const named = { id: task.id, name: task.name, revision: task.revision, state: task.state,
     ...(task.pausedReason ? { pausedReason: task.pausedReason } : {}),
-    describe: task.describe, ...(task.nextRunAt === undefined ? {} : { nextRunAt: task.nextRunAt }), timeZone: task.timeZone,
+    describe: task.describe, ...(task.nextRunAt === undefined ? {} : { nextRunAt: task.nextRunAt }) };
+  const clipped = instruction === task.instruction ? {} : { instructionClipped: true, instructionLength: task.instruction.length };
+  if (level === 'bare') return { ...named, running: task.running, ...clipped };
+  const cut = (value: string) => level ? clip(value, level.text) : value;
+  return {
+    ...named, timeZone: task.timeZone,
     placement: placement.kind === 'topic' ? { kind: 'topic', here: !!where.topicId && placement.topicId === where.topicId } : placement,
-    running: task.running, instruction,
-    ...(instruction === task.instruction ? {} : { instructionClipped: true, instructionLength: task.instruction.length }),
+    running: task.running, instruction, ...clipped,
     createdBy: { via, ...(role ? { role } : {}), ...(creator ? { name: creator } : {}),
-      ...(actor.kind === 'chat' ? { mine: !!actor.openId && openId === actor.openId } : {}), ...(text ? { text: cut(text, LIST_TEXT_UNITS) } : {}) },
-    ...(last ? { lastResult: { status: last.status, at: last.at, excerpt: cut(last.excerpt, LIST_TEXT_UNITS), ...(last.link ? { link: last.link } : {}) } } : {}),
-    recent: task.recent.slice(-3).map(({ messageId: _message, topicId: _topic, ...run }) => run),
+      ...(actor.kind === 'chat' && !steered ? { mine: !!actor.openId && openId === actor.openId } : {}), ...(text ? { text: cut(text) } : {}) },
+    ...(last ? { lastResult: { status: last.status, at: last.at, excerpt: cut(last.excerpt), ...(last.link ? { link: last.link } : {}) } } : {}),
+    recent: lastRuns(task.recent).map(({ messageId: _message, topicId: _topic, error, ...run }) =>
+      error === undefined || (level && !level.errors) ? run : { ...run, error }),
   };
 }
 
@@ -134,18 +152,18 @@ function headline(reply: ScheduleReply, done: string): string {
     default: { const exhaustive: never = reply; return exhaustive; }
   }
 }
-/** One line, then the reply as JSON, each task in {@link taskView}; a list too big for the registry goes out cut and says so. */
+/** One line, then the reply as JSON, each task in {@link taskView}; a list over {@link LIST_CHARS} goes out cut and says so. */
 function answer(reply: ScheduleReply, turn: Turn, done = ''): string {
   const line = headline(reply, done);
   const say = (shown: unknown, first = line) => `${first}\n${JSON.stringify(shown)}`;
   switch (reply.kind) {
     case 'tasks': {
-      const full = say({ ...reply, tasks: reply.tasks.map(task => taskView(task, turn)) });
-      if (Buffer.byteLength(JSON.stringify(full)) <= LIST_BYTES) return full;
-      let clipped = false;
-      const cut = (text: string, max: number) => { const short = clip(text, max); clipped ||= short !== text; return short; };
-      const tasks = reply.tasks.map(task => taskView(task, turn, cut));
-      return say({ ...reply, tasks }, clipped ? `${line} · 太长的内容截短了，用 schedule_list 带 taskId 看一个任务的全文` : line);
+      const list = (level?: ListLevel) => say({ ...reply, tasks: reply.tasks.map(task => taskView(task, turn, level)) },
+        level ? `${line} · 太长的内容截短了，用 schedule_list 带 taskId 看一个任务的全文` : line);
+      // A level is tried only when the one before was too long, so the one a list goes out at has cut something.
+      let text = list();
+      for (const level of LIST_LEVELS) if (text.length > LIST_CHARS) text = list(level);
+      return text;
     }
     case 'task': return say({ ...reply, task: taskView(reply.task, turn) });
     case 'conflict': return say({ ...reply, current: taskView(reply.current, turn) });
