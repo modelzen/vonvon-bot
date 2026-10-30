@@ -5,7 +5,7 @@ import { vi } from 'vitest';
 import { createScheduleCommands } from '../../src/admin/schedule-commands';
 import { createAgentEntries, type AgentPlace, type TurnFacts } from '../../src/agent/entry/registry';
 import { createScheduleTools } from '../../src/agent/entry/schedule-tools';
-import { toolReplyText } from '../../src/agent/entry/tools';
+import { toolReplyText, type AgentTool } from '../../src/agent/entry/tools';
 import type { AgentThread } from '../../src/agent/types';
 import type { RunNowResult, Scheduler } from '../../src/bot/schedule/scheduler';
 import { createScheduleStore } from '../../src/bot/schedule/store';
@@ -38,18 +38,20 @@ const dirs: string[] = [];
 export async function removeScheduleFixtures(): Promise<void> {
   await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
 }
-export async function scheduleFixture(opts: { tasks?: StoredTask[]; place?: AgentPlace; runNow?: RunNowResult } = {}) {
+/** `now` is the clock of the tools and the command core; `tools` sit beside the schedule tools in the same registry. */
+export async function scheduleFixture(opts: { tasks?: StoredTask[]; place?: AgentPlace; runNow?: RunNowResult; now?: number; tools?: AgentTool[] } = {}) {
+  const now = opts.now ?? NOW;
   const dir = await mkdtemp(join(tmpdir(), 'schedule-entry-')); dirs.push(dir);
   const file = join(dir, 'schedules.json');
   if (opts.tasks?.length) await writeFile(file, JSON.stringify({ version: 1, tasks: opts.tasks }));
   const store = createScheduleStore(file, { now: () => NOW, log: { info() {}, warn() {}, fail() {} }, diagnostics: () => {} });
   await store.load();
   const scheduler = { start: async () => {}, stop() {}, drain: async () => {}, wake() {}, runNow: () => opts.runNow ?? { kind: 'started', runId: 'run-1' } } satisfies Scheduler;
-  const commands = createScheduleCommands({ store, scheduler, botId: 'bot-test', now: () => NOW, hostTimeZone: () => HOST });
+  const commands = createScheduleCommands({ store, scheduler, botId: 'bot-test', now: () => now, hostTimeZone: () => HOST });
   const core = commands.execute;
   const execute = vi.spyOn(commands, 'execute');
   const entries = createAgentEntries({ appId: 'bot-test', isAdmin: id => id === OWNER || id === ADMIN, isOwner: id => id === OWNER,
-    tools: createScheduleTools({ commands, now: () => NOW, hostTimeZone: () => HOST }) });
+    tools: [...createScheduleTools({ commands, now: () => now, hostTimeZone: () => HOST }), ...opts.tools ?? []] });
   const entry = entries.issue(opts.place ?? { kind: 'group', chatId: G });
   const thread = agentThread();
   entry.attach(thread);
