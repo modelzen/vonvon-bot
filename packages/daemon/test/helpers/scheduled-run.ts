@@ -22,7 +22,7 @@ type Fn = Mock<(...args: any[]) => any>;
 export const fake: {
   project: Record<string, unknown>; topicGroup: boolean;
   backend: { capabilities: { steer: boolean }; id: string; listModels: Fn; resumeThread: Fn; startThread: Fn };
-  createCard: Fn; final: Fn; send: Fn; topicList: Fn; getSession: Fn; log: { info: Fn; warn: Fn; fail: Fn };
+  createCard: Fn; final: Fn; send: Fn; topicList: Fn; messageGet: Fn; getSession: Fn; log: { info: Fn; warn: Fn; fail: Fn };
   run?: (job: ScheduledJob) => Promise<ScheduledOutcome>;
 } = {
   project: {},
@@ -31,6 +31,7 @@ export const fake: {
   createCard: vi.fn(async (..._args: unknown[]) => 'card'),
   final: vi.fn(async (..._args: unknown[]) => true),
   send: vi.fn(async (..._args: unknown[]) => ({ messageId: 'root' })),
+  messageGet: vi.fn(),
   topicList: vi.fn(async (..._args: unknown[]) => ({ code: 0, data: { items: [{ message_id: 'anchor', chat_id: 'chat', thread_id: 'topic-old' }] } })),
   getSession: vi.fn(async (key: string): Promise<Record<string, unknown> | undefined> => ({ threadId: key, chatId: 'chat', sessionId: 'host', backend: 'codex', cwd: '/test', summary: '' })),
   log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() },
@@ -147,7 +148,7 @@ export function human(text: string, threadId?: string): NormalizedMessage {
 export const topics = { note: vi.fn(async () => undefined), list: async () => [], get: async () => undefined };
 
 /** A fresh orchestrator on a group in `kind` mode; `runScheduled` is its scheduler's runner. */
-export async function setup(kind: 'single' | 'multi' | 'smart', opts: { entries?: AgentEntries; droppedFile?: string } = {}) {
+export async function setup(kind: 'single' | 'multi' | 'smart', opts: { entries?: AgentEntries; droppedFile?: string; preferences?: NonNullable<AppConfig['preferences']> } = {}) {
   vi.clearAllMocks();
   fake.project = { name: 'test', chatId: 'chat', cwd: '/test', kind: kind === 'multi' ? 'multi' : 'single', ...(kind === 'smart' ? { smart: true } : {}) };
   fake.topicGroup = false;
@@ -156,10 +157,11 @@ export async function setup(kind: 'single' | 'multi' | 'smart', opts: { entries?
   fake.createCard.mockResolvedValue('card');
   fake.final.mockResolvedValue(true);
   fake.send.mockResolvedValue({ messageId: 'root' });
+  fake.messageGet.mockReset().mockResolvedValue({ data: { items: [{ thread_id: 'topic-new' }] } });
   const { createOrchestrator } = await import('../../src/bot/handle-message');
-  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: 'steer', access: { ownerOpenId: 'owner' } } };
+  const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: 'steer', access: { ownerOpenId: 'owner' }, ...opts.preferences } };
   const channel = { send: fake.send, rawClient: { im: { v1: {
-    message: { get: async () => ({ data: { items: [{ thread_id: 'topic-new' }] } }), list: fake.topicList },
+    message: { get: fake.messageGet, list: fake.topicList },
     chat: { get: async () => ({ code: 0, data: { chat_mode: fake.topicGroup ? 'topic' : 'group' } }) },
     messageReaction: { create: vi.fn(async () => ({ data: {} })), delete: async () => ({}) },
   } } } };
