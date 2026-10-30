@@ -70,7 +70,7 @@ main 必败：本片的文件和入口在基线不存在，测试文件在基线
   - cron：`*/15 * * * *` 从 10:07 → 10:15；`0 9 * * 1-5` 从周五 09:00 之后 → 下周一 09:00；`0 9 1 * 1`（日和星期并集）从 11-01（周日）09:00 之后 → 11-02 周一 09:00；`0 0 30 2 *` → undefined；`parseCron('a b c')` 抛"cron 不合法"。
   - `latestSlotWithin(every 1, anchor A, now = A + 7 天 1 小时, 7 天)` → now 所在的那个整分 slot（不是 A + 10000 分钟）；`latestSlotWithin(daily 09:00, now = 周三 08:00, 7 天)` → 周二 09:00；`latestSlotWithin(cron '0 9 1 1 *', now = 6 月, 7 天)` → undefined。
   - `countSlotsBetween(every 1, A, A + 3 小时)` → 180；`countSlotsBetween(cron '* * * * *', A, A + 30 天)` → 10000（封顶）。
-  - `describeSpec`：七个例子逐字等于总设计第 5 节；`timeZone` 和 host 不同加"（Asia/Tokyo）"。
+  - `describeSpec`：七个例子逐字等于总设计第 5 节（`now` 显式传）；`timeZone` 和 host 规范化后不同才加"（Asia/Tokyo）"，`asia/shanghai` 对 `Asia/Shanghai` 不加。
   - `validateSpec`：一次性已过、超过一年、`every 0`、`every 10081`、`time '9:00'`、`days []`、`cron '0 0 30 2 *'`、时区 `'Mars/Olympus'` 各一条，文案逐字等于第 16 节。
   - `parseLocal(Asia/Shanghai, '2026-11-01 14:00')` → epoch；`'2026-13-01 14:00'` → undefined。
   - `ceilToMinute(10:00:23.500)` → 10:01:00；`ceilToMinute(10:01:00.000)` → 10:01:00（整分不动）。
@@ -94,7 +94,7 @@ main 必败：本片的文件和入口在基线不存在，测试文件在基线
   - 10 次 `failed counts: true` → `paused`、`pausedReason: 'failures'`、revision 变、`notifyAutoPause` 调一次；第 11 个 slot 不跑；`done` 把计数清零；`failed counts: false` 不加计数；`interrupted by shutdown/user` 不加不减。
   - `notifyAutoPause` 抛错 → `noticePending: true`，下个 tick 再调；成功后清掉；24 小时后不再调。
   - `once` 的结算：`run` 期间把 `spec.at` 改到 20 分钟后 → 结算后仍 `active`、`nextRunAt` 是新时间；没改 → `finished`；`interrupted` 的 `once` → `finished`；`run` 期间被 `mutateConfig` 改成 `paused`（`pausedReason: 'unavailable'`）→ 结算后仍 `paused`，不变 `finished`。
-  - `runNow`：`slot = now`、`trigger: 'manual'`、`cursor` 不动、下一次定时不变；`inflight` 在 → `'running'`；没 `start()` → `'not-started'`；`paused` 的任务能跑。
+  - `runNow`：回 `{ kind: 'started', runId }`，随后 `run` 收到的 `job.runId` 就是它；`slot = now`、`trigger: 'manual'`、`cursor` 不动、下一次定时不变；`inflight` 在或已排队 → `{ kind: 'running' }`；没 `start()` → `{ kind: 'not-started' }`；`paused` 的任务能跑。
   - tick 单飞：tick 里 `run` 还没被认领时连调 3 次 `wake()` → 同一个 slot 只 `run` 一次、`inflight` 只写一次。
   - 认领：`mutateRuntime` 回调里 `cursor` 已被别人推进 → 不 `run`。
   - 并发上限 2：同一 tick 三个任务到点 → 前两个起跑、第三个等第一个 settle 后起；起跑间隔 2 秒（假时钟）。
@@ -131,4 +131,4 @@ JP-VPS，离线隔离，不发飞书消息，不调真实 provider，不用 Bot 
 
 ## 9. 风险和行数
 
-风险：时区数学（gap/fold、倒推、跨年）、存储写入的串行和崩溃一致性、认领和单飞的竞争。都用假时钟和真实文件测试压住。预计生产约 760 行（protocol 120、time 260、store 120、scheduler 240、atomic-file 和 paths 20）、测试约 580 行，总计约 1,340，低于 1,500。超限先把 `cron` 的解析和倒推拆成 T1a2，不删测试。自审不代替独立审查；不冻结、不合入。
+风险：时区数学（gap/fold、倒推、跨年）、存储写入的串行和崩溃一致性、认领和单飞的竞争。都用假时钟和真实文件测试压住。原估生产约 760 行、测试约 580 行，总计约 1,340。审查后改完约 2,250 行，按文件拆成两个 PR：T1a（protocol、time、store、atomic-file、paths、diagnostics、types，约 1,070）和 T1a2（`scheduler.ts` 和 `schedule-scheduler.test.ts`，约 1,180，分支 `claude/scheduled-tasks-1a2-scheduler`，叠在 T1a 上）。第 4.4 节、第 5 节 scheduler 测试和第 8 节调度相关的验收要点归 T1a2。自审不代替独立审查；不冻结、不合入。
