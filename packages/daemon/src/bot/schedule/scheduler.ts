@@ -74,7 +74,7 @@ function checkedOutcome(value: unknown, durationMs: number): ScheduledOutcome {
   const outcome = value as ScheduledOutcome;
   switch (outcome.status) {
     case 'done': return { ...outcome, excerpt: String(outcome.excerpt ?? '') };
-    case 'failed': return outcome;
+    case 'failed': return { ...outcome, error: String(outcome.error) }; // throws for an unprintable error: outcomeOf records it as failed
     case 'skipped': return SKIP_REASONS.includes(outcome.reason) ? outcome : { ...outcome, reason: 'updating' };
     case 'interrupted': return INTERRUPTED_BY.includes(outcome.by) ? outcome : { ...outcome, by: 'shutdown' };
     default: return invalid;
@@ -85,6 +85,10 @@ function checkedOutcome(value: unknown, durationMs: number): ScheduledOutcome {
 function invalidOutcome(outcome: Outcome): ScheduledOutcome {
   const durationMs = 'durationMs' in outcome && Number.isFinite(outcome.durationMs) ? outcome.durationMs : 0;
   return { status: 'failed', error: INVALID_OUTCOME, durationMs, counts: true };
+}
+
+function printable(error: unknown): string {
+  try { return String(error); } catch { return INVALID_OUTCOME; }
 }
 
 function clearNotice(task: StoredTask): void {
@@ -531,7 +535,7 @@ export function createScheduler(deps: {
       const outcome: unknown = await deps.run(job);
       return checkedOutcome(outcome, now() - startedAt);
     } catch (error) {
-      return { status: 'failed', error: String(error), durationMs: now() - startedAt, counts: true };
+      return { status: 'failed', error: printable(error), durationMs: now() - startedAt, counts: true };
     }
   }
 
@@ -735,19 +739,22 @@ export function createScheduler(deps: {
       again = true;
       if (ticking) return;
       ticking = (async () => {
-        while (again && !stopping) {
-          again = false;
-          try {
-            await tick();
-          } catch (error) {
-            backoff = true; // no pass right after a failed one: the next waits the full 30 seconds
-            deps.log.fail('schedule', error, { phase: 'tick' });
-            break;
+        try {
+          while (again && !stopping) {
+            again = false;
+            try {
+              await tick();
+            } catch (error) {
+              backoff = true; // no pass right after a failed one: the next waits the full 30 seconds
+              try { deps.log.fail('schedule', error, { phase: 'tick' }); } catch { /* a failing logger must not stop the loop */ }
+              break;
+            }
           }
+        } finally {
+          // In the same synchronous step as the last read of `again`: from here on a wake() starts a new pass.
+          ticking = undefined;
+          scheduleTick();
         }
-        // In the same synchronous step as the last read of `again`: from here on a wake() starts a new pass.
-        ticking = undefined;
-        scheduleTick();
       })();
     },
     runNow(taskId) {

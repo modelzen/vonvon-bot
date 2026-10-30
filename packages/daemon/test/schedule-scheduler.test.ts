@@ -570,6 +570,28 @@ it('[4][15] a settle the store refuses as invalid is recorded once as a failed r
   expect(run).toHaveBeenCalledTimes(2);
   expect(log.fail.mock.calls.filter(([, , info]) => info?.phase === 'settle-retry')).toEqual([]);
 });
+it.each<[string, () => Promise<ScheduledOutcome>]>([
+  ['returns a failed outcome whose error cannot be printed', async () => ({ status: 'failed', error: Object.create(null) as string, durationMs: 1, counts: true })],
+  ['throws something that cannot be printed', async () => { throw Object.create(null); }],
+])('[r3] a run that %s settles as failed, and the task runs again', async (_name, first) => {
+  const run = vi.fn<(job: ScheduledJob) => Promise<ScheduledOutcome>>().mockImplementationOnce(first).mockResolvedValue(done);
+  const { scheduler, store } = setup(undefined, { run });
+  await begin(scheduler); await tick(scheduler, A + MIN);
+  expect(store.get('st_test')?.inflight).toBeUndefined();
+  expect(store.get('st_test')?.recent).toEqual([expect.objectContaining({ status: 'failed', slot: A + MIN, error: expect.any(String) })]);
+  await tick(scheduler, A + 2 * MIN);
+  expect(run).toHaveBeenCalledTimes(2);
+});
+it('[r3] a failing tick whose logger also throws does not stop later passes', async () => {
+  const store = memory([task()]), all = store.all;
+  let broken = true;
+  store.all = () => { if (broken) { broken = false; throw new Error('disk'); } return all(); };
+  log.fail.mockImplementationOnce(() => { throw new Error('logger broke'); });
+  const { scheduler, run } = setup([], { store });
+  await begin(scheduler); // the first pass throws, and so does its log line
+  await tick(scheduler, A + MIN);
+  expect(run).toHaveBeenCalledTimes(1);
+});
 it('[5] a runNow right as a tick pass ends starts its run at once, not after the 30-second timer', async () => {
   for (let hops = 0; hops <= 40; hops++) {
     const { scheduler, run } = setup([task({ state: 'paused' })]);
