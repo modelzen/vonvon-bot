@@ -13,13 +13,14 @@ let takeWarmClient: typeof import('../src/agent/codex-appserver/client-pool').ta
 let utilityRequest: typeof import('../src/agent/codex-appserver/client-pool').utilityRequest;
 let connectGated: typeof import('../src/agent/codex-appserver/client-pool').connectGated;
 let CONNECT_TIMEOUT_MS: number;
+let residentCount: typeof import('../src/agent/codex-appserver/client-pool').residentCount;
 
 beforeEach(async () => {
   vi.resetModules();
   ({ UnsentRequestError } = await import('../src/agent/types'));
   ({ AppServerClient } = await import('../src/agent/codex-appserver/app-server-client'));
   ({ CodexAppServerBackend } = await import('../src/agent/codex-appserver/backend'));
-  ({ CONNECT_TIMEOUT_MS, connectGated, refillWarmPool, shutdownResidentClients, takeWarmClient, utilityRequest } = await import('../src/agent/codex-appserver/client-pool'));
+  ({ CONNECT_TIMEOUT_MS, residentCount, connectGated, refillWarmPool, shutdownResidentClients, takeWarmClient, utilityRequest } = await import('../src/agent/codex-appserver/client-pool'));
 });
 
 // M-2（research/08 probe 思路的单测化）：utility client 复用/出错即重建 + 容量 1
@@ -129,7 +130,7 @@ describe('utility client 复用与出错即重建（M-2）', () => {
     const {bin, script, runs, pids} = makeFakeCodex();
     const active = new AppServerClient({bin, cwd: tmpdir()});
     await active.connect();
-    const activePid = active.pid!;
+    const activePid = pids()[0]!; // Windows client.pid is the launcher; fixture replies use the Node PID.
     const pending = utilityRequest<{pid: number}>('slow');
     try {
       await vi.waitFor(() => expect(existsSync(script + '.slow-started')).toBe(true), { timeout: CONNECT_TIMEOUT_MS });
@@ -141,7 +142,7 @@ describe('utility client 复用与出错即重建（M-2）', () => {
       expect(alive(activePid)).toBe(true);
       writeFileSync(script + '.slow-release', 'go');
       expect(await pending).toEqual({pid: oldUtilityPid});
-      await vi.waitFor(() => expect(alive(oldUtilityPid)).toBe(false));
+      await vi.waitFor(() => expect(alive(oldUtilityPid)).toBe(false), { timeout: CONNECT_TIMEOUT_MS });
       expect(await active.request('thread/start', {cwd: '/still-running'})).toMatchObject({thread: {id: `th_${activePid}`}});
     } finally {
       writeFileSync(script + '.slow-release', 'go');
@@ -194,11 +195,14 @@ describe('utility client 复用与出错即重建（M-2）', () => {
   });
 
   it('进程死亡 → 后续调用自动重建', async () => {
-    const { runs } = makeFakeCodex();
+    const { runs, pids } = makeFakeCodex();
     await expect(utilityRequest('die')).rejects.toThrow(/app-server exited/);
     const res = await utilityRequest<{ data: { id: string }[] }>('model/list');
     expect(res.data[0]!.id).toBe('pool-model');
     expect(runs()).toBe(2);
+    // Retirement logs the expected nonzero exit; await its confirmed cleanup before shutdown.
+    await vi.waitFor(() => expect(residentCount()).toBe(1), { timeout: CONNECT_TIMEOUT_MS });
+    expect(alive(pids()[0]!)).toBe(false);
   });
 
   it('超时（wedged codex）→ 报错并重建，不留挂死进程', async () => {
