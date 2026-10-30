@@ -136,8 +136,8 @@ export function ScheduleForm({chatId, task: opened, hostTimeZone, send, onClose,
     finally {setPending(false);}
   }
   const placements = (['follow', 'newTopic', ...(task?.placement.kind === 'topic' ? ['topic' as const] : [])] as const).map(value => ({value, label: placementText[value]}));
-  // A once time opened from a zone this browser does not know was read in another; say which while that zone is still in the form.
-  const unknown = draft.when === 'once' && draft.timeZone === initial.timeZone && !knownZone(draft.timeZone);
+  // A once time opened from a zone this browser does not know was read in another; say which while that time and zone are still in the form.
+  const unknown = initial.when === 'once' && draft.when === 'once' && draft.timeZone === initial.timeZone && !knownZone(draft.timeZone);
   const field = (key: string) => `${id}-${key}`;
   return <Dialog open title={opened ? '编辑任务' : '新建任务'} onClose={pending ? undefined : onClose}
     footer={<><Button disabled={pending} onClick={onClose}>取消</Button><Button variant="primary" loading={pending} onClick={() => void save()}>保存</Button></>}><div className="schedule-form">
