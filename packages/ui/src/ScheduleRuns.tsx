@@ -12,7 +12,7 @@ function runText(record: ScheduleRunRecord): string {
   return `${runStatusText[record.status]}${count}${trigger}${record.error ? `：${record.error}` : ''}`;
 }
 
-/** An opened task: its counts, its last 20 runs newest first, and the start of its last result. Times are in the same zone as its row. */
+/** An opened task: its counts, its last 20 runs newest first, and the start of its last result. Times are in the same zone as its row, named when it is not the task's. */
 export function ScheduleRuns({task, hostZone, now}: {task: ScheduledTaskView; hostZone: string; now?: number}) {
   const shell = useShellCapabilities();
   const [error, setError] = useState('');
@@ -21,7 +21,7 @@ export function ScheduleRuns({task, hostZone, now}: {task: ScheduledTaskView; ho
   return <div className="schedule-runs">
     <p className="group-control-note">共运行 {task.counts.runs} 次 · 错过 {task.counts.missed} 次 · 跳过 {task.counts.skipped} 次</p>
     {runs.length ? <table>
-      <thead><tr><th scope="col">时间</th><th scope="col">状态</th><th scope="col">用时</th><th scope="col"><span className="visually-hidden">链接</span></th></tr></thead>
+      <thead><tr><th scope="col">时间{timeZone === task.timeZone ? '' : `（${timeZone}）`}</th><th scope="col">状态</th><th scope="col">用时</th><th scope="col"><span className="visually-hidden">链接</span></th></tr></thead>
       <tbody>{runs.map(record => {
         const link = scheduleRunLink(record, task.chatId);
         return <tr key={record.runId}>

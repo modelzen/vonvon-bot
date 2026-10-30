@@ -3,7 +3,7 @@ import {isValidElement, type ReactElement, type ReactNode} from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {agentIdSchema, groupIdSchema, membershipIdSchema, type DesktopSnapshot} from '@vonvon/protocol';
 import {BotScheduleGroups, scheduleGroups} from '../src/BotSchedules';
-import {openMembership, routeBack, type CollaborationRoute} from '../src/collaboration-navigation';
+import {openMembership, openScheduleTab, routeBack, type CollaborationRoute} from '../src/collaboration-navigation';
 import {listOf} from '../src/schedule-model';
 import {scheduleTask, tasksReply} from './schedule-fixture';
 
@@ -31,7 +31,7 @@ it('groups the Bot\'s four tasks of two groups under their group names', () => {
   expect(html).not.toContain('新建');
 });
 
-it('hands a row\'s group membership to onOpen, and the group page that opens goes Back to the Bot\'s 任务 pane', () => {
+it('hands a row\'s group membership to onOpen, whose group page opens on 任务 and goes Back to the Bot\'s 任务 pane', () => {
   const onOpen = vi.fn();
   const rows = nodes(BotScheduleGroups({list: listOf(tasksReply(tasks)), agentId, snapshot, onOpen, onDelete: () => {}})).filter(node => node.props.onClick);
   rows.find(node => node.props.title === '周报')!.props.onClick();
@@ -40,6 +40,7 @@ it('hands a row\'s group membership to onOpen, and the group page that opens goe
   const opened = openMembership(pane, secondMember, snapshot);
   expect(opened).toEqual({kind: 'membership', id: secondMember, pane: {kind: 'settings'}, parent: pane});
   expect(routeBack(opened)).toEqual(pane);
+  expect(openScheduleTab({[firstMember]: 'memory', [secondMember]: 'model'}, secondMember)).toEqual({[firstMember]: 'memory', [secondMember]: 'schedule'});
 });
 
 it('lists an unbound group as 已解绑的群, whose rows delete instead of opening', () => {

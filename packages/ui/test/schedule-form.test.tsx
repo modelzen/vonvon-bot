@@ -1,8 +1,9 @@
 import {beforeEach, expect, it, vi} from 'vitest';
 import {isValidElement, type ReactElement, type ReactNode} from 'react';
+import {renderToStaticMarkup} from 'react-dom/server';
 import type {ScheduledTaskView, ScheduleReply, ScheduleRequest} from '@vonvon/protocol';
 import {ScheduleForm, localInput, scheduleDraft, scheduleRequest, zonedInstant, type ScheduleDraft} from '../src/ScheduleForm';
-import {scheduleConflict} from '../src/schedule-model';
+import {browserZone, scheduleConflict} from '../src/schedule-model';
 import {scheduleNow, scheduleTask} from './schedule-fixture';
 
 const harness = vi.hoisted(() => ({state: [] as unknown[], index: 0}));
@@ -30,6 +31,7 @@ function render(task: ScheduledTaskView | undefined, hostTimeZone = 'UTC') {
     choices: (label: string) => all.find(node => node.props.label === label && node.props.choices)!,
     button: (text: string) => all.find(node => node.props.children === text && node.props.onClick)!,
     notice: () => all.find(node => node.props.title === '没有保存')?.props.children,
+    zoneNote: () => renderToStaticMarkup(<>{all.find(node => node.props.label === '时区' && node.props.htmlFor)!.props.description}</>),
   };
 }
 async function save(task: ScheduledTaskView, hostTimeZone?: string) {await render(task, hostTimeZone).button('保存').props.onClick(); for (let i = 0; i < 4; i++) await Promise.resolve();}
@@ -94,19 +96,30 @@ it('sends only what changed: a new name alone, a daily task\'s zone alone, and a
   expect(await change(once, 'zone', 'Asia/Tokyo')).toEqual({spec: {kind: 'once', at: Date.UTC(2026, 10, 2, 5, 0)}, timeZone: 'Asia/Tokyo'});
 });
 
-it('opens a task in a zone this browser does not know at its time in the daemon\'s zone, after a conflict too, and does not save that zone', async () => {
-  const mars = scheduleTask({spec: {kind: 'once', at: Date.UTC(2026, 10, 2, 1, 0)}, timeZone: 'Mars/Olympus', revision: 'r2'});
-  const opened = render(mars, 'Asia/Shanghai');
-  expect([opened.input('at').props.value, opened.input('zone').props.value]).toEqual(['2026-11-02T09:00', 'Mars/Olympus']);
-  await save(mars, 'Asia/Shanghai');
+it('opens a task in a zone this browser does not know at its time in the daemon\'s zone, says so, after a conflict too, and does not save that zone', async () => {
+  const at = Date.UTC(2026, 10, 2, 1, 0);
+  // A daemon zone whose clock is not this machine's, so the browser's zone would show another time.
+  const [host, shown] = ([['Asia/Tokyo', '2026-11-02T10:00'], ['America/New_York', '2026-11-01T20:00']] as const).find(([zone]) => localInput(at, zone) !== localInput(at, browserZone()))!;
+  const note = `这个时区这里不认识，上面的时间按 ${host} 显示；换成认识的时区后保存`;
+  const mars = scheduleTask({spec: {kind: 'once', at}, timeZone: 'Mars/Olympus', revision: 'r2'});
+  const opened = render(mars, host);
+  expect([opened.input('at').props.value, opened.input('zone').props.value]).toEqual([shown, 'Mars/Olympus']);
+  expect(opened.zoneNote()).toContain(note);
+  await save(mars, host);
   expect(send).not.toHaveBeenCalled();
-  expect(render(mars, 'Asia/Shanghai').notice()).toBe('不认识这个时区：Mars/Olympus');
+  expect(render(mars, host).notice()).toBe('不认识这个时区：Mars/Olympus');
+  render(mars, host).input('zone').props.onChange({target: {value: 'Mars/Olymp'}});
+  expect(render(mars, host).zoneNote()).not.toContain('不认识');
+  harness.state = [];
+  expect(render({...mars, spec: {kind: 'daily', time: '09:00'}}, host).zoneNote()).not.toContain('不认识');
   harness.state = [];
   const task = scheduleTask();
+  expect(render(task, host).zoneNote()).toBe(`Vonvon 所在电脑的时区是 ${host}`);
   send.mockResolvedValueOnce({kind: 'conflict', current: mars});
-  render(task, 'Asia/Shanghai').input('name').props.onChange({target: {value: '我改的'}});
-  await save(task, 'Asia/Shanghai');
-  expect(render(task, 'Asia/Shanghai').input('at').props.value).toBe('2026-11-02T09:00');
+  render(task, host).input('name').props.onChange({target: {value: '我改的'}});
+  await save(task, host);
+  expect(render(task, host).input('at').props.value).toBe(shown);
+  expect(render(task, host).zoneNote()).toContain(note);
 });
 
 it('sends 工作日 as Monday to Friday', async () => {

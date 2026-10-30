@@ -136,6 +136,8 @@ export function ScheduleForm({chatId, task: opened, hostTimeZone, send, onClose,
     finally {setPending(false);}
   }
   const placements = (['follow', 'newTopic', ...(task?.placement.kind === 'topic' ? ['topic' as const] : [])] as const).map(value => ({value, label: placementText[value]}));
+  // A once time opened from a zone this browser does not know was read in another; say which while that zone is still in the form.
+  const unknown = draft.when === 'once' && draft.timeZone === initial.timeZone && !knownZone(draft.timeZone);
   const field = (key: string) => `${id}-${key}`;
   return <Dialog open title={opened ? '编辑任务' : '新建任务'} onClose={pending ? undefined : onClose}
     footer={<><Button disabled={pending} onClick={onClose}>取消</Button><Button variant="primary" loading={pending} onClick={() => void save()}>保存</Button></>}><div className="schedule-form">
@@ -151,7 +153,7 @@ export function ScheduleForm({chatId, task: opened, hostTimeZone, send, onClose,
     {(draft.when === 'daily' || draft.when === 'weekly') && <FormField label="几点" htmlFor={field('time')}><input id={field('time')} type="time" value={draft.time} disabled={pending} onChange={event => set({time: event.target.value})}/></FormField>}
     {draft.when === 'cron' && <FormField label="cron" htmlFor={field('cron')} description="5 段，用空格隔开：分 时 日 月 星期。例如 0 9 * * 1-5 是每个工作日 09:00。"><input id={field('cron')} value={draft.expr} disabled={pending} autoComplete="off" spellCheck={false} onChange={event => set({expr: event.target.value})}/></FormField>}
     <FormField label="发到哪"><SettingChoices label="发到哪" value={draft.placement} choices={placements} disabled={pending} onChange={placement => set({placement})}/></FormField>
-    <FormField label="时区" htmlFor={field('zone')} description={`Vonvon 所在电脑的时区是 ${hostTimeZone}`}><input id={field('zone')} value={draft.timeZone} disabled={pending} autoComplete="off" spellCheck={false} onChange={event => set({timeZone: event.target.value})}/></FormField>
+    <FormField label="时区" htmlFor={field('zone')} description={<>Vonvon 所在电脑的时区是 {hostTimeZone}{unknown && <><br/>这个时区这里不认识，上面的时间按 {shownZone(draft.timeZone, hostTimeZone)} 显示；换成认识的时区后保存</>}</>}><input id={field('zone')} value={draft.timeZone} disabled={pending} autoComplete="off" spellCheck={false} onChange={event => set({timeZone: event.target.value})}/></FormField>
     {error && <InlineNotice title="没有保存" tone="warning">{error}</InlineNotice>}
     {stale && <FormField label="你刚才填的" htmlFor={field('stale')}><textarea id={field('stale')} rows={6} readOnly value={stale}/></FormField>}
   </div></Dialog>;
