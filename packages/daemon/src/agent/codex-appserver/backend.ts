@@ -195,8 +195,10 @@ export async function generateCodexSessionTitleWithClient(
     ephemeral: true,
     // Match Codex App's isolated background job: no web search, hooks, fanout,
     // or subagents. Read-only still lets the core runtime initialize safely.
+    // The turn runs on the user's first message, so connector scheduling stays closed too.
     config: {
       ...NATIVE_MEMORY_OFF,
+      ...CONNECTOR_SCHEDULING_OFF,
       projects: { [opts.cwd]: { trust_level: 'trusted' } },
       web_search: 'disabled',
       'features.enable_fanout': false,
