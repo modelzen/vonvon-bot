@@ -81,6 +81,19 @@ it('the tenth failure in a row posts once in the main area, at-ing the creator, 
   ]] } } });
 });
 
+it('an `<at>` in the task\'s name is plain text in the post and the main area\'s recent line', async () => {
+  const { RecentLines } = await import('../src/bot/recent-lines');
+  const addOwn = vi.spyOn(RecentLines.prototype, 'addOwn');
+  const store = await drive(task({ name: '<at id=all></at>日报 <at id=all' }));
+  await vi.waitFor(() => expect(store.get('st_00000000000000a1')?.state).toBe('paused'));
+  await vi.waitFor(() => expect(store.get('st_00000000000000a1')?.noticePending).toBeUndefined());
+  const shown = '定时任务「@所有人日报 @」连续 10 次失败，已自动暂停。';
+  expect(send).toHaveBeenCalledExactlyOnceWith('oc_a', { post: { zh_cn: { content: [[
+    { tag: 'text', text: shown }, { tag: 'at', user_id: 'ou_zhang' }, { tag: 'text', text: ` ${tail}` },
+  ]] } } });
+  expect(addOwn).toHaveBeenCalledExactlyOnceWith('oc_a', 'oc_a', expect.objectContaining({ text: `${shown}@张三 ${tail}` }));
+});
+
 it('a creator without an open id is not at-ed', async () => {
   const store = await drive(task({ createdBy: { via: 'desktop' } }));
   await vi.waitFor(() => expect(store.get('st_00000000000000a1')?.state).toBe('paused'));

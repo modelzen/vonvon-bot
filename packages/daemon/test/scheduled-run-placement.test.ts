@@ -92,14 +92,22 @@ describe('a scheduled run in a new topic', () => {
     expect(topics.note).toHaveBeenCalledWith('chat', expect.objectContaining({ topicId: 'topic-new', from: { kind: 'self' }, first: expect.objectContaining({ id: 'root' }) }));
   });
 
-  it('a task named with an <at> tag: its root message @-s nobody', async () => {
+  // Only the name is made plain: an unclosed tag would run to the end of the text, the rest of it gone.
+  it.each([
+    ['<at user_id="all"></at>', '@所有人'],
+    ['<at user_id=all', '@'],
+    ['日报 <at user_id=all', '日报 @'],
+  ])('a task named %s: its root message and card label @ nobody, the rest of them kept', async (name, shown) => {
     const { runScheduled } = await start('multi');
     const run = thread();
     fake.backend.startThread.mockResolvedValue(run.t);
-    const result = runScheduled(job({ name: '<at user_id="all"></at>' }));
+    const result = runScheduled(job({ name }, { trigger: 'manual' }));
     await until(() => expect(run.consumed).toHaveLength(1));
-    expect(fake.send).toHaveBeenCalledWith('chat', { text: '⏰ 定时任务「@所有人」· 第 1 次' });
+    expect(fake.send).toHaveBeenCalledWith('chat', { text: `⏰ 定时任务「${shown}」· 第 1 次 · 手动运行` });
     expect(JSON.stringify(fake.send.mock.calls)).not.toContain('<at');
+    const card = JSON.stringify(fake.createCard.mock.calls[0]![2]);
+    expect(card).toContain(`⏰ 定时任务「${shown}」 · 手动运行`);
+    expect(card).not.toContain('<at');
     run.turns[0]!.resolve();
     await expect(result).resolves.toMatchObject({ status: 'done' });
   });

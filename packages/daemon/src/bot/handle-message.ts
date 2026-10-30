@@ -17,7 +17,7 @@ import { assemble, judgeContext, loadContextSources, openingInstructions, planTu
 import { groupSkillProfile } from '../agent/group-skills';
 import { parseStoredJudge } from '../judge/model';
 import { presentationConfig } from './group-presentation';
-import { projectRevision, projectView, settingsRevision, type CollaborationRequest } from '../admin/collaboration';
+import { projectRevision, projectView, projectSettingsRevision, type CollaborationRequest } from '../admin/collaboration';
 import { AdminWriteError } from '../admin/ops';
 import { applyMirror, mirrorProjectIntoBot, siblingProjectOfChat, type AdminLibraryOp } from '../admin/library';
 import { isProjectId, readLibrary, type LibraryProject } from '../project/library';
@@ -53,7 +53,7 @@ import { JUDGE_INPUT_LIMITS, oneLine } from '../judge/prompt';
 import { deniedScopeName, errorDetail, fitDetail, reportAttention, reportDecision, reportLatestAction, reportNotReplied, reportScopeDenied, type ScheduleDiagnosticEvent } from './diagnostics';
 import { clampUnits, createScheduleStore } from './schedule/store';
 import type { ScheduledHook, ScheduledJob, ScheduledOutcome } from './schedule/types';
-import { createScheduler } from './schedule/scheduler';
+import { createScheduler, nextRunAfterFailure } from './schedule/scheduler';
 import { hostTimeZone } from './schedule/time';
 import { botNotRunning, createScheduleCommands } from '../admin/schedule-commands';
 import type { StoredTask } from './schedule/types';
@@ -3095,7 +3095,8 @@ export function createOrchestrator(
     if (!reason || shuttingDown || now - (gateFailureNoted.get(task.id) ?? -Infinity) < 60 * 60_000) return;
     gateFailureNoted.set(task.id, now);
     // A text message's `<at>` is a real mention, and the task's name is anybody's words (as the scheduled topic's root).
-    const text = neutraliseAts(`⏰ 定时任务「${task.name}」这次没跑：本群的权限档现在用不了（${reason.replace(/。$/, '')}）。连续 10 次会自动暂停。`, undefined);
+    // Only the name: an unclosed tag would run to the end of the sentence.
+    const text = `⏰ 定时任务「${neutraliseAts(task.name, undefined)}」这次没跑：本群的权限档现在用不了（${reason.replace(/。$/, '')}）。连续 10 次会自动暂停。`;
     void trackTask(sayInMain(task.chatId, { text }, text).catch(error => {
       if (gateFailureNoted.get(task.id) === now) gateFailureNoted.delete(task.id); // the next failure tries again
       log.fail('schedule', error, { phase: 'gate-notice', taskId: task.id });
@@ -3110,7 +3111,9 @@ export function createOrchestrator(
     const failure = [...task.recent].reverse().find(run => run.status === 'failed' || run.by === 'crash');
     const why = (failure?.error ?? '运行中 Bot 进程退出了').replace(/。$/, '');
     const { openId, name } = task.createdBy;
-    const head = `定时任务「${task.name}」连续 10 次失败，已自动暂停。`;
+    // Feishu's post format reads a text element as plain text (not tried here); the name is anybody's words, so no `<at>`
+    // stays in it either way.
+    const head = `定时任务「${neutraliseAts(task.name, undefined)}」连续 10 次失败，已自动暂停。`;
     const tail = `看一下：${why}。到群设置的"任务"里能恢复。`;
     const row = openId ? [{ tag: 'text', text: head }, { tag: 'at', user_id: openId }, { tag: 'text', text: ` ${tail}` }] : [{ tag: 'text', text: head + tail }];
     await sayInMain(task.chatId, { post: { zh_cn: { content: [row] } } }, openId ? `${head}@${name ?? '创建人'} ${tail}` : head + tail);
@@ -3745,6 +3748,10 @@ export function createOrchestrator(
           }
         }
         reserved.thread = thread;
+        // A settings change closed the session while this turn was being prepared (evictLiveSessionsForChat cannot see a
+        // reservation's thread yet): a scheduled turn queued behind it is skipped, as after the run's own eviction. This
+        // turn still runs on it (T2 做法).
+        if (sessions.get(sessionKey) !== thread) reserved.evicted = true;
         launchOpts = {
           smart: project && sessionModeOf(project) === 'smart' ? true : undefined,
           chatId: msg.chatId,
@@ -7581,7 +7588,7 @@ export function createOrchestrator(
             : {}),
           ...(opts.sessionNotice ? { sessionNotice: opts.sessionNotice } : {}),
           ...(currentTurn.initiative ? { initiativeCard: currentTurn.initiative } : {}),
-          ...(scheduled ? { label: scheduledLabel(scheduled.job) } : {}),
+          ...(scheduled ? { label: scheduledLabel(scheduled.job), nextRun: nextRunAfterFailure(scheduled.job) } : {}),
         };
 
         const adoptThreadId = async (messageId: string): Promise<void> => {
@@ -8047,7 +8054,7 @@ export function createOrchestrator(
             .catch((err) => log.fail('card', err, { phase: 'empty-card-session' }));
         }
         // Settled as it ends, before any turn queued behind it runs (T2 4.1 第 5 条).
-        scheduled?.settle(ranScheduled(scheduled, rc.rs, delivered));
+        scheduled?.settle(ranScheduled(scheduled, rc.rs, delivered, askFaulted));
         retrySessionTitleAfterTurn();
         // Queued turns reply to the last card still there; a deleted one keeps the previous target.
         if (!gone) replyTo = finalMsgId;
@@ -8118,7 +8125,8 @@ export function createOrchestrator(
       askTurn?.close('turn-ended');
       // Detach before any await: new messages must not join a failed consumer.
       if (active.get(activeKey) === state) active.delete(activeKey);
-      const dropped = askAgain(state.queue.splice(0), opts.chatId, opts.flat ? 'main' : 'topic', 'run-failed', '前一轮出错，排队的没跑');
+      const dropped = askAgain(state.queue.splice(0), opts.chatId, opts.flat ? 'main' : 'topic', 'run-failed', '前一轮出错，排队的没跑',
+        state.evicted ? 'occupied' : 'run-failed');
       dropCompact(state);
       disposeInterrupt?.();
       state.subagents = undefined;
@@ -9450,8 +9458,10 @@ export function createOrchestrator(
     extra?.scheduled?.settle(outcome);
     return Boolean(extra?.scheduled);
   }
-  /** How a scheduled turn that ran ended: its card's terminal, and whether the final card update landed. */
-  function ranScheduled(hook: ScheduledHook, rs: RunState, delivered: boolean): ScheduledOutcome {
+  /** How a scheduled turn that ran ended: its card's terminal, and whether the final card update landed. A stop by its own
+   * ask coordinator's fault is neither the user's nor the shutdown's: a counted failure. */
+  function ranScheduled(hook: ScheduledHook, rs: RunState, delivered: boolean, askFaulted: boolean): ScheduledOutcome {
+    if (rs.terminal === 'interrupted' && askFaulted) return { status: 'failed', error: '提问出错', durationMs: ranFor(hook), counts: true };
     if (rs.terminal === 'interrupted') return scheduleStopped();
     const error = failureText(rs) ?? (delivered ? undefined : '结果卡片没有更新成功');
     if (error) return { status: 'failed', error, durationMs: ranFor(hook), counts: true };
@@ -9510,7 +9520,7 @@ export function createOrchestrator(
     const newTopic = !topicId && (task.placement.kind === 'newTopic' || ruleKind(placed) === 'multi' || await orStop(topicCtx.noMainArea(chatId), false));
     // Unbound, disabled or edited while Feishu and the disk answered: the run uses none of what it read (T2 4.2).
     const project = await getProjectByChatId(chatId);
-    if (refusedTurn(project, chatId, { scheduled: hook }) || !project || settingsRevision(project) !== settingsRevision(placed)) return void hook.settle(SCHEDULE_UPDATING);
+    if (refusedTurn(project, chatId, { scheduled: hook }) || !project || projectSettingsRevision(project) !== projectSettingsRevision(placed)) return void hook.settle(SCHEDULE_UPDATING);
     if (shuttingDown) return void hook.settle({ status: 'interrupted', by: 'shutdown' });
     if (newTopic) return startScheduledTopic(hook, project, fallback);
     const text = scheduledHeader(hook.job, hostTimeZone(), fallback);
@@ -9538,8 +9548,8 @@ export function createOrchestrator(
         const prefer = modelPrefOf(project, be.id);
         const cwd = workCwd(project);
         const perm = turnPerm(project);
-        // A text message's `<at>` is a real mention, and the task's name is anybody's words: no tag in it stays one.
-        const rootText = neutraliseAts(scheduledRootText(job), undefined);
+        // A text message's `<at>` is a real mention: scheduledRootText leaves none in the task's name.
+        const rootText = scheduledRootText(job);
         const root = await channel.send(chatId, { text: rootText });
         const rootAt = Date.now();
         recent.addOwn(chatId, chatId, { id: root.messageId, at: rootAt, text: rootText });
@@ -9552,7 +9562,7 @@ export function createOrchestrator(
         const titleSource: SessionTitleSource = { text: `定时任务「${job.task.name}」`, rawContentType: 'text' };
         const titleJobKey = await registerSessionTitle(be, thread.sessionId, cwd, titleSource);
         const current = await getProjectByChatId(chatId);
-        if (refusedTurn(current, chatId, { scheduled: hook }) || settingsRevision(current!) !== settingsRevision(project)) {
+        if (refusedTurn(current, chatId, { scheduled: hook }) || projectSettingsRevision(current!) !== projectSettingsRevision(project)) {
           hook.settle(SCHEDULE_UPDATING);
           return;
         }

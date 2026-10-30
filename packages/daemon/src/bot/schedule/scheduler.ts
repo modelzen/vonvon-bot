@@ -96,6 +96,14 @@ function clearNotice(task: StoredTask): void {
   delete task.noticeSince;
 }
 
+/** Whether a counted failure of `job` leaves a scheduled run to come, from the task as it was claimed: a scheduled run
+ * (not a manual one) of an active task with a next slot, short of the auto-pause. A network failure's card says so. */
+export function nextRunAfterFailure(job: ScheduledJob): boolean {
+  const { task } = job;
+  if (job.trigger === 'manual' || task.state !== 'active' || task.counts.consecutiveFailures + 1 >= PAUSE_AFTER_FAILURES) return false;
+  try { return nextSlotAfter(task.spec, task.timeZone, task.cursor) !== undefined; } catch { return false; }
+}
+
 export function createScheduler(deps: {
   store: ScheduleStore; now: () => number; timers: Timers;
   run: (job: ScheduledJob) => Promise<ScheduledOutcome>;
