@@ -47,13 +47,17 @@ describe('a scheduled run\'s card', () => {
     current = await setup('single', { preferences: { completionReminder: { mode: 'manual' } } });
     const run = thread();
     fake.backend.resumeThread.mockResolvedValue(run.t);
+    // The ⏹/🔔 row comes with the first streamed frame, once the card has its message id.
+    const belled = () => fake.stream.mock.calls.filter(call => text(call[1]).includes('完成后提醒我')).length;
     await current.orchestrator.onMessage(human('有人在'));
-    await until(() => expect(run.consumed).toHaveLength(1));
-    expect(text(fake.createCard.mock.calls[0]![2])).toContain('完成后提醒我');
+    await until(() => expect(belled()).toBeGreaterThan(0));
     run.turns[0]!.resolve();
+    await until(() => expect(fake.final).toHaveBeenCalled());
+    fake.stream.mockClear();
     const result = current.runScheduled(job());
     await until(() => expect(run.consumed).toHaveLength(2));
-    expect(text(fake.createCard.mock.calls[1]![2])).not.toContain('完成后提醒我');
+    await until(() => expect(fake.stream).toHaveBeenCalled());
+    expect(belled()).toBe(0);
     run.turns[1]!.resolve();
     await expect(result).resolves.toMatchObject({ status: 'done' });
   });
