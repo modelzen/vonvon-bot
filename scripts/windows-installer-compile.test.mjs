@@ -19,4 +19,7 @@ test('actual builder headers and assisted directory/upgrade pages compile for bo
   const hook = await readFile(new URL('../packages/desktop/assets/windows-installer.nsh', import.meta.url), 'utf8');
   await writeFile(hookFile, hook + '\n!macro customHeader\n  DirVerify leave\n!macroend\n');
   await assert.rejects(compileWindowsInstaller({out:join(out, 'invalid'), hookFile}), error => /DirVerify not valid outside PageEx/.test(error.stderr));
+  const duplicateHook = join(out, 'duplicate-start-app.nsh');
+  await writeFile(duplicateHook, hook.replace(/Function vonvonStartApp[\s\S]*?FunctionEnd/, 'Function vonvonStartApp\n  !insertmacro StartApp\nFunctionEnd'));
+  await assert.rejects(compileWindowsInstaller({out:join(out, 'duplicate'), hookFile:duplicateHook}), error => /startAppArgs.*already declared/.test(error.stderr));
 });

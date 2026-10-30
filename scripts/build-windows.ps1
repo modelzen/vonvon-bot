@@ -36,6 +36,8 @@ New-Item -ItemType Directory -Path $buildHome | Out-Null
 $envFile = Join-Path $outPath 'build-env.json'
 @{ home = $buildHome; repo = $repo } | ConvertTo-Json | Set-Content -LiteralPath $envFile -Encoding utf8NoBOM
 if ($InstallDependencies) { Invoke-Node @('scripts/windows-build-tools.mjs','npm',$envFile,'ci') }
+# Compile the actual installer pages and launch tail before expensive product builds.
+Invoke-Node @('scripts/windows-installer-compile.mjs',(Join-Path $outPath 'installer-compile'),$Architecture)
 Invoke-Node @('scripts/windows-build-tools.mjs','npm',$envFile,'run','build')
 Invoke-Node @('scripts/windows-build-tools.mjs','npm',$envFile,'run','typecheck')
 Invoke-Node @('--test','scripts/stage-daemon.test.mjs','scripts/package-windows.test.mjs','scripts/windows-runtime-smoke.test.mjs','scripts/publish-windows.test.mjs')

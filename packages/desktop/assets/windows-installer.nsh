@@ -64,7 +64,18 @@
 
   !macro customFinishPage
     Function vonvonStartApp
-      !insertmacro StartApp
+      ; common.nsh's StartApp declares a global variable on every expansion;
+      ; installSection.nsh already expands it for silent assisted upgrades.
+      Push $0
+      Push $1
+      ${If} ${isUpdated}
+        StrCpy $1 "--updated"
+      ${Else}
+        StrCpy $1 ""
+      ${EndIf}
+      ${StdUtils.ExecShellAsUser} $0 "$launchLink" "open" "$1"
+      Pop $1
+      Pop $0
     FunctionEnd
     Function vonvonFinishPre
       ${If} ${isUpdated}
