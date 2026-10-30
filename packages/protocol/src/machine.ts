@@ -25,7 +25,7 @@ export type MachineRequest = z.infer<typeof machineRequestSchema>;
 export const serviceStatusSchema = z.object({platformName:z.string(),installed:z.boolean(),running:z.boolean(),servicePath:z.string(),stdoutPath:z.string(),stderrPath:z.string(),pid:z.string().optional(),lastExit:z.string().optional(),state:serviceStateSchema.optional(),detail:z.string().optional(),name:z.string().optional(),linger:z.object({state:lingerStateSchema,detail:z.string().optional()}).optional(),hint:z.string().optional()});
 export const coreUpdateStatusSchema = z.object({phase:z.enum(['installing','restarting','done','error']),ok:z.boolean().optional(),message:z.string().optional(),from:z.string().optional(),to:z.string().optional(),at:z.number()}).nullable();
 export type ServiceStatus = z.infer<typeof serviceStatusSchema>;
-export const desktopUpdateSchema = z.object({state:z.enum(['current','available','unavailable','downloaded','install-pending']),current:z.string(),latest:z.string().optional(),message:z.string()});
+export const desktopUpdateSchema = z.object({state:z.enum(['current','available','unavailable','downloaded','install-pending']),current:z.string(),latest:z.string().optional(),message:z.string(),releaseNotes:z.string().max(4096).optional(),downloadProgress:z.object({percent:z.number().finite().min(0).max(100),transferred:z.number().finite().nonnegative(),total:z.number().finite().nonnegative()}).optional()});
 export type DesktopUpdate = z.infer<typeof desktopUpdateSchema>;
 /**
  * 设置入口、设置首页和菜单栏用的"有更新"提示。有新版本可装（可下载或已下载）写版本号；

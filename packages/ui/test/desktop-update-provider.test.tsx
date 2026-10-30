@@ -78,6 +78,23 @@ it('retains a failed download for retry and shares its error with settings', asy
   expect(render()[0]?.state).toBe('downloaded');
 });
 
+it('shares streaming progress without unlocking an in-flight download or installing it', async () => {
+  let listener: (update: DesktopUpdate) => void = () => {};
+  h.shell = {onDesktopUpdate: next => {listener = next; return () => {};}};
+  render(); listener(found);
+  let finish!: (update: DesktopUpdate) => void;
+  const download = vi.fn(() => new Promise<DesktopUpdate>(resolve => {finish = resolve;}));
+  const pending = render()[2]!.run(download, 'downloading');
+  listener({...found, downloadProgress: {percent: 37, transferred: 37, total: 100}});
+  expect(render()[0]?.downloadProgress?.percent).toBe(37);
+  expect(render()[2]!.phase).toBe('downloading');
+  await render()[2]!.run(download, 'downloading');
+  expect(download).toHaveBeenCalledOnce();
+  finish({...found, state: 'downloaded'}); await pending;
+  expect(render()[0]?.state).toBe('downloaded');
+  expect(render()[0]?.downloadProgress).toBeUndefined();
+});
+
 it('serializes installation and permits retry if the shell replies without exiting', async () => {
   const downloaded: DesktopUpdate = {...found, state: 'downloaded'};
   render()[1](downloaded);

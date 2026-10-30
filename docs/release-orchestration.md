@@ -76,7 +76,7 @@ node scripts/release-publish.mjs status --out "$OUT"
 node scripts/release-all.mjs collect --out /absolute/persistent/release-X.Y.Z
 ```
 
-`release-handoff.json` 从已有公开验证回执收集六个下载入口及尺寸/哈希，不拼接猜测已发布 URL。只有两平台同版本、同源码、Windows run 成功且下载来源匹配、Mac 版本化验证通过且 stable 回执为 `published` 时，`readyForWebsite` 才为 `true`。缺少阶段只输出未完成状态；版本、来源或 URL 矛盾直接失败。
+`release-handoff.json` 从已有公开验证回执收集下载入口及尺寸/哈希，不拼接猜测已发布 URL。新 Windows 候选不再生成 ZIP：两个 Mac DMG 加两个 Windows Setup，共四个用户入口；旧版六入口回执仍可读取。只有两平台同版本、同源码、Windows run 成功且下载来源匹配、Mac 版本化验证通过且 stable 回执为 `published` 时，`readyForWebsite` 才为 `true`。新 Windows 候选另外生成架构独立的签名更新清单，统一计划绑定其字节与旧 stable 快照；owner 确认后，在安装包公网验证完成的基础上提升 `stable/x64/update.json` 与 `stable/arm64/update.json`。两份 feed 均验证后写独立 `windows-update-publish-receipt.json`，官网只有匹配此回执才宣告应用内更新可用。缺少阶段只输出未完成状态；版本、来源或 URL 矛盾直接失败。
 
 官网消费 `downloads` 更新发布配置，再走网站既有测试、部署预演和部署；owner 的完整发布请求已包括官网更新，不重复请求同一部署授权。`evidence` 保存本机证据路径，不能原样复制到公开网站。编排脚本不会自动修改网站或报告部署成功。发布完成后保留 OUT，只用 `git worktree remove` 清理本次状态记录的源码 worktree；临时根按 skill 删除规则处理。
 
