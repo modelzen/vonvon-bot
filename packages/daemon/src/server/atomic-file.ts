@@ -18,17 +18,29 @@ export async function writeFileAtomic(filePath: string, data: string | NodeJS.Ar
       } finally { await file.close(); }
     } else await writeFile(temporary, data, { mode: 0o600 });
     await rename(temporary, filePath);
-    if (opts?.durable) {
-      const directory = await open(parent, 'r');
-      try {
-        await directory.sync();
-      } catch (error) {
-        if (!(error instanceof Error && 'code' in error && error.code === 'EINVAL')) throw error;
-        log.warn('atomic-file', 'directory-sync-unsupported', { path: parent });
-      } finally { await directory.close(); }
-    }
   } catch (error) {
     await rm(temporary, { force: true });
     throw error;
+  }
+  // The rename is the commit point: the new content is in place, so nothing after it may reject.
+  if (opts?.durable) await syncDirectoryBestEffort(parent);
+}
+
+/** Makes the rename itself durable where the platform allows it; a failure only costs durability, never the write. */
+async function syncDirectoryBestEffort(path: string): Promise<void> {
+  // Node cannot fsync a directory on Windows (FlushFileBuffers on a directory handle fails with EPERM);
+  // on NTFS the rename is the commit point. Same guard as config/bot-namespace.ts syncDirectory.
+  if (process.platform === 'win32') return;
+  try {
+    const directory = await open(path, 'r');
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
+  } catch (error) {
+    // EINVAL on some macOS filesystems, EIO, ENOTSUP: log and resolve.
+    const code = error instanceof Error && 'code' in error ? error.code : undefined;
+    log.warn('atomic-file', 'directory-sync-failed', { path, code });
   }
 }

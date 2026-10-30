@@ -3,7 +3,8 @@ import type { ScheduledTaskView } from '@vonvon/protocol';
 export type StoredTask = Omit<ScheduledTaskView, 'nextRunAt' | 'running' | 'describe' | 'botId'> & {
   cursor: number;
   inflight?: { runId: string; slot: number; trigger: 'schedule' | 'catchUp' | 'manual'; startedAt: number; revision: string };
-  noticePending?: true;
+  noticePending?: true;           // 自动暂停的那条群消息还没发出去，下次 tick 再试
+  noticeSince?: number;           // 这次自动暂停的时刻；24 小时窗口和清 noticePending 都认它，不认 updatedAt
 };
 
 export type ScheduledJob = { task: StoredTask; runId: string; slot: number; trigger: 'schedule' | 'catchUp' | 'manual'; nth: number; late: boolean };
