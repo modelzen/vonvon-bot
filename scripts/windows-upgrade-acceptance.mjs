@@ -44,10 +44,50 @@ export async function waitForWindowsUpgradeRemoval(executable,readRegistration,{
     await pause(intervalMs);
   }
 }
-/** Query only the unique fixture identity, retaining error status for context diagnostics. */
+/** GUID-only input; the fixed script reads both views without changing registry namespaces. */
+export function windowsUpgradeRegistryScript(nsisGuid) {
+  assert.match(nsisGuid,/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i,'Invalid fixture registry GUID');
+  return `$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue'
+$guid='${nsisGuid}';$rows=@()
+foreach($view in @('32','64')) {
+  $registryView=if($view -eq '32'){[Microsoft.Win32.RegistryView]::Registry32}else{[Microsoft.Win32.RegistryView]::Registry64}
+  foreach($hive in @('HKCU','HKLM')) {
+    $registryHive=if($hive -eq 'HKCU'){[Microsoft.Win32.RegistryHive]::CurrentUser}else{[Microsoft.Win32.RegistryHive]::LocalMachine}
+    $base=[Microsoft.Win32.RegistryKey]::OpenBaseKey($registryHive,$registryView)
+    try { foreach($path in @("Software\\$guid","Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\$guid")) {
+      $key=$null
+      try {
+        $key=$base.OpenSubKey($path,$false);$values=@{}
+        if($null -ne $key){foreach($name in $key.GetValueNames()){$values[$name]=$key.GetValue($name,$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)}}
+        $rows+=@{hive=$hive;view=$view;key=$hive+'\\'+$path;exists=($null -ne $key);values=$values}
+      } finally {if($null -ne $key){$key.Dispose()}}
+    }} finally {$base.Dispose()}
+  }
+}
+[Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((ConvertTo-Json -InputObject @($rows) -Depth 8 -Compress))))`;
+}
+/** Reject process/transport/schema errors instead of reporting a failed query as absence. */
+export function parseWindowsUpgradeRegistryResult(nsisGuid,result) {
+  if(result.error)throw result.error;
+  if(result.status!==0||Buffer.from(result.stderr??'').length)throw Error('Registry query failed: exit='+result.status+' signal='+result.signal+' stderrBase64='+Buffer.from(result.stderr??'').toString('base64'));
+  const output=Buffer.from(result.stdout??'');assert(output.every(byte=>byte<128),'Registry result is not ASCII base64');
+  const encoded=output.toString('ascii').trim(),bytes=Buffer.from(encoded,'base64');
+  assert(encoded&&bytes.toString('base64')===encoded,'Malformed registry result encoding');
+  const rows=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));
+  const expected=['32','64'].flatMap(view=>['HKCU','HKLM'].flatMap(hive=>['Software\\'+nsisGuid,'Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\'+nsisGuid].map(path=>({hive,view,key:hive+'\\'+path}))));
+  assert(Array.isArray(rows)&&rows.length===expected.length,'Incomplete registry result');
+  return rows.map((row,index)=>{
+    assert.deepEqual({hive:row.hive,view:row.view,key:row.key},expected[index],'Mismatched registry result identity');
+    assert(!Object.hasOwn(row,'error')&&!Object.hasOwn(row,'exitCode'),'Registry result contains query errors');
+    assert(typeof row.exists==='boolean'&&row.values&&typeof row.values==='object'&&!Array.isArray(row.values),'Invalid registry result');
+    assert(row.exists||Object.keys(row.values).length===0,'Missing registry key contains values');
+    return {...row,value:Object.entries(row.values).map(([name,value])=>name+'\t'+String(value)).join('\n'),exitCode:0,error:''};
+  });
+}
 export function readWindowsUpgradeRegistration(nsisGuid) {
-  const reg=join(process.env.SystemRoot??'C:\\Windows','System32','reg.exe');
-  return ['32','64'].flatMap(view=>['HKCU','HKLM'].flatMap(hive=>['Software\\'+nsisGuid,'Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\'+nsisGuid].map(path=>{const key=hive+'\\'+path,result=spawnSync(reg,['query',key,'/reg:'+view],{encoding:'utf8',windowsHide:true});if(result.error)throw result.error;return {hive,view,key,exists:result.status===0,exitCode:result.status,value:result.stdout,error:result.stderr?.trim()};})));
+  const script=windowsUpgradeRegistryScript(nsisGuid),powershell=join(process.env.SystemRoot??'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe');
+  const result=spawnSync(powershell,['-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{windowsHide:true,timeout:30000,maxBuffer:1024*1024});
+  return parseWindowsUpgradeRegistryResult(nsisGuid,result);
 }
 /** Retain the first failure and every later failure, including after a manual relaunch. */
 export function preserveWindowsUpgradeFailure(out,details) {
@@ -67,6 +107,8 @@ import {Readable} from 'node:stream';
 import {WindowsDesktopUpdater,createWindowsUpdateDriver,windowsUpdateConfiguration} from ${JSON.stringify(source)};
 const c=JSON.parse(readFileSync(join(app.getAppPath(),'acceptance.json'),'utf8'));
 const originalLocalAppData=process.env.LOCALAPPDATA,originalTemp=process.env.TEMP,originalTmp=process.env.TMP;
+${windowsUpgradeRegistryScript.toString()}
+${parseWindowsUpgradeRegistryResult.toString()}
 ${readWindowsUpgradeRegistration.toString()}
 ${preserveWindowsUpgradeFailure.toString()}
 // Set isolation on every relaunch: NSIS ExecShellAsUser need not inherit our environment.

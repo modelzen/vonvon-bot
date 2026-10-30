@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
+import {randomUUID} from 'node:crypto';
 import {mkdtemp,mkdir,readFile,rm,stat,writeFile,readdir} from 'node:fs/promises';
 import {createRequire} from 'node:module';
 import {tmpdir} from 'node:os';
@@ -7,8 +8,9 @@ import {isAbsolute,join,relative} from 'node:path';
 import {test} from 'node:test';
 import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
+import {runInNewContext} from 'node:vm';
 import {build} from 'esbuild';
-import {acceptWindowsUpgrade,windowsUpgradeAcceptanceEntry,windowsUpgradeBuilderArguments,waitForWindowsUpgradeRemoval,preserveWindowsUpgradeFailure,windowsUpgradeChildEnvironment} from './windows-upgrade-acceptance.mjs';
+import {acceptWindowsUpgrade,windowsUpgradeAcceptanceEntry,windowsUpgradeBuilderArguments,waitForWindowsUpgradeRemoval,preserveWindowsUpgradeFailure,windowsUpgradeChildEnvironment,windowsUpgradeRegistryScript,parseWindowsUpgradeRegistryResult,readWindowsUpgradeRegistration} from './windows-upgrade-acceptance.mjs';
 
 const repo=fileURLToPath(new URL('../',import.meta.url));
 test('native acceptance entry bundles real production update code and has valid Node syntax',async t=>{
@@ -26,6 +28,39 @@ test('native acceptance entry bundles real production update code and has valid 
   assert(entry.includes("process.env.TEMP=c.tempDir;process.env.TMP=c.tempDir"));
   assert(entry.includes("app.setPath('temp',c.tempDir)"));
   assert(entry.includes("assert.equal(expected,index?current:undefined"));
+});
+
+const registryFixture=guid=>['32','64'].flatMap(view=>['HKCU','HKLM'].flatMap(hive=>['Software\\'+guid,'Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\'+guid].map(path=>({hive,view,key:hive+'\\'+path,exists:false,values:{}}))));
+const registryResult=rows=>({status:0,stdout:Buffer.from(Buffer.from(JSON.stringify(rows),'utf8').toString('base64'),'ascii'),stderr:Buffer.alloc(0)});
+test('serialized entry registry helpers execute with Unicode transport and reject missing dependencies',()=>{
+  const guid=randomUUID(),rows=registryFixture(guid);rows[0].exists=true;rows[0].values.InstallLocation='E:\\验收 空格\\installed';
+  const entry=windowsUpgradeAcceptanceEntry('unused-source'),helpers=entry.slice(entry.indexOf('function windowsUpgradeRegistryScript('),entry.indexOf('// Set isolation on every relaunch'));
+  let calls=0;const result=runInNewContext(helpers+'\nreadWindowsUpgradeRegistration('+JSON.stringify(guid)+')',{assert,Buffer,TextDecoder,join,process:{env:{SystemRoot:'C:\\Windows'}},spawnSync:(file,args)=>{calls++;assert(file.endsWith('powershell.exe'));assert(args.includes('-NoProfile'));assert.equal(Buffer.from(args.at(-1),'base64').toString('utf16le'),windowsUpgradeRegistryScript(guid));return registryResult(rows);}});
+  assert.equal(calls,1);assert.equal(result.length,8);assert.equal(result[0].values.InstallLocation,rows[0].values.InstallLocation);assert(result[0].value.includes(rows[0].values.InstallLocation));
+});
+
+test('registry reader rejects process errors, invalid identities and corrupt or incomplete transport',()=>{
+  const guid=randomUUID(),rows=registryFixture(guid),encode=registryResult;
+  assert(parseWindowsUpgradeRegistryResult(guid,encode(rows)).every(row=>!row.exists));
+  assert.throws(()=>readWindowsUpgradeRegistration("not-a-guid';throw 'injected"),/Invalid fixture registry GUID/);
+  const wrongIdentity=structuredClone(rows);wrongIdentity[0].key+='wrong';
+  const queryError=structuredClone(rows);queryError[0].error='Access denied';
+  for(const result of [{...encode(rows),status:1},{...encode(rows),stderr:Buffer.from('query failure')},{...encode(rows),stdout:Buffer.from('invalid!')},{...encode(rows),stdout:Buffer.from(Buffer.from([255]).toString('base64'))},encode(rows.slice(1)),encode(wrongIdentity),encode(queryError)])assert.throws(()=>parseWindowsUpgradeRegistryResult(guid,result));
+  const error=Error('PowerShell launch failed');assert.throws(()=>parseWindowsUpgradeRegistryResult(guid,{error}),caught=>caught===error);
+});
+
+test('native registry reader preserves a Unicode path and distinguishes its own removed key',{skip:process.platform!=='win32'},async t=>{
+  const guid=randomUUID(),location='E:\\升级验收 空格\\installed',path='Software\\'+guid;
+  assert(readWindowsUpgradeRegistration(guid).every(row=>!row.exists),'Fresh test identity already exists');
+  const powershell=join(process.env.SystemRoot??'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe');
+  const invoke=script=>promisify(execFile)(powershell,['-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from("$ErrorActionPreference='Stop';"+script,'utf16le').toString('base64')],{windowsHide:true,timeout:30000});
+  const eachView=body=>"foreach($view in @([Microsoft.Win32.RegistryView]::Registry32,[Microsoft.Win32.RegistryView]::Registry64)){$base=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser,$view);try{"+body+"}finally{$base.Dispose()}}";
+  const cleanup=()=>invoke(eachView("$key=$base.OpenSubKey('"+path+"');if($null -ne $key){try{if($key.GetValue('AcceptanceTestOwner') -ne '"+guid+"'){throw 'Refuse non-owned test key'}}finally{$key.Dispose()};$base.DeleteSubKeyTree('"+path+"',$false)}"));
+  t.after(cleanup); // Delete only this fresh UUID key, and only with its ownership value.
+  await invoke(eachView("$key=$base.CreateSubKey('"+path+"');try{$key.SetValue('AcceptanceTestOwner','"+guid+"');$key.SetValue('InstallLocation',[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('"+Buffer.from(location,'utf8').toString('base64')+"')))}finally{$key.Dispose()}"));
+  const observed=readWindowsUpgradeRegistration(guid).filter(row=>row.hive==='HKCU'&&!row.key.includes('CurrentVersion'));
+  assert.equal(observed.length,2);for(const row of observed){assert(row.exists);assert.equal(row.values.InstallLocation,location);assert(row.value.includes(location));}
+  await cleanup();assert(readWindowsUpgradeRegistration(guid).every(row=>!row.exists));
 });
 
 test('child environment confines temporary files and caches without changing inherited settings',async t=>{

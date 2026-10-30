@@ -130,6 +130,8 @@ jobs:
           @{ home = $homePath } | ConvertTo-Json | Set-Content -LiteralPath $envFile -Encoding utf8NoBOM
           node scripts/windows-build-tools.mjs npm $envFile ci
           if ($LASTEXITCODE -ne 0) { throw 'Upgrade acceptance dependencies failed' }
+          node --test scripts/windows-upgrade-acceptance.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Upgrade acceptance regression tests failed' }
           node scripts/windows-upgrade-acceptance.mjs --architecture '${{ matrix.architecture }}' --out "$env:RUNNER_TEMP/upgrade-${{ matrix.architecture }}" --source-sha '${{ steps.source.outputs.sha }}'
           if ($LASTEXITCODE -ne 0) { throw 'Native consecutive upgrades failed' }
       - uses: actions/upload-artifact@v4
