@@ -1,3 +1,4 @@
+import { accessSync, constants } from 'node:fs';
 import { codexAccountMetadata } from './login';
 import { log } from '../../core/logger';
 import type {
@@ -25,7 +26,7 @@ import type {
   TurnOptions,
 } from '../types';
 import { isGoalTerminal, SessionInUseError } from '../types';
-import { resolveSessionProfile, type SessionProfileCapabilities } from '../session-profile';
+import { resolveSessionProfile, type SessionProfile, type SessionProfileCapabilities } from '../session-profile';
 import { AppServerClient } from './app-server-client';
 import { admitCodexWorkspaceLayout } from './workspace-admission';
 import { codexFilesystem, codexInstallRoot, codexShellReadRoot, type CodexInstallRoot, codexWorkspaceRoots, verifyCodexWorkspaceEcho } from './workspace-policy';
@@ -56,6 +57,7 @@ export function sandboxParams(
   installRoot?: CodexInstallRoot,
   windows?: WindowsSandboxCapability,
   shellRoot?: CodexInstallRoot,
+  capabilityRoots?: readonly string[],
 ): Record<string, unknown> {
   if ((mode ?? 'full') === 'full') return { sandbox: 'danger-full-access' };
   const unavailable = codexTierUnavailable(mode ?? 'full', platform, version, windows);
@@ -66,7 +68,7 @@ export function sandboxParams(
       default_permissions: 'feishu',
       permissions: {
         feishu: {
-          filesystem: codexFilesystem(roots ?? [], mode === 'write' ? 'write' : 'qa', installRoot, platform, network, shellRoot),
+          filesystem: codexFilesystem(roots ?? [], mode === 'write' ? 'write' : 'qa', installRoot, platform, network, shellRoot, capabilityRoots),
           network: { enabled: Boolean(network) },
         },
       },
@@ -74,20 +76,34 @@ export function sandboxParams(
   };
 }
 
+/**
+ * `skills/list` does not list a capability root's skills, so whether Codex found the package is only seen in a real
+ * turn (T4b 4.4). What the code can check is that the directory is there and readable; one that is not is left out.
+ */
+function readablePackages(packages: SessionProfile['capabilityPackages']): SessionProfile['capabilityPackages'] {
+  return packages.filter(({ path }) => {
+    try { accessSync(path, constants.R_OK | constants.X_OK); return true; }
+    catch (error) { log.fail('agent', error, { backend: 'codex-appserver', phase: 'capability-root' }); return false; }
+  });
+}
+
 /** Rebuilt for every start/resume; never persists workspace trust to user config. */
 export function codexSessionParams(opts: StartThreadOptions, version: string | null = null, selectedBin?: string | null): Record<string, unknown> {
-  const profile = resolveSessionProfile(opts.profile, { additionalRoots: true });
+  const profile = resolveSessionProfile(opts.profile, { additionalRoots: true, capabilityPackages: true });
   const roots = codexWorkspaceRoots(opts);
+  const packages = readablePackages(profile.capabilityPackages);
   const bin = selectedBin === undefined ? resolveCodexBin() : selectedBin;
   const installRoot = bin && opts.mode !== 'full' ? codexInstallRoot(bin, roots) : undefined;
   const shell = bin && process.platform === 'win32' && (opts.mode ?? 'full') !== 'full' ? windowsShellPath(bin) : undefined;
   const shellRoot = shell ? codexShellReadRoot(shell, roots) : undefined;
   const sandbox = sandboxParams(opts.mode, opts.network, process.platform, roots, version, installRoot,
-    bin && process.platform === 'win32' ? cachedWindowsSandbox(bin) : undefined, shellRoot);
+    bin && process.platform === 'win32' ? cachedWindowsSandbox(bin) : undefined, shellRoot, packages.map(pkg => pkg.path));
   return {
     ...sandbox,
     cwd: opts.cwd,
     runtimeWorkspaceRoots: roots.map(root => root.path),
+    // Resume has no such field and keeps the thread's roots from its rollout; sending it there does no harm.
+    ...(packages.length ? { selectedCapabilityRoots: packages.map(({ path, kind }) => ({ id: `vonvon-${kind}`, location: { type: 'environment', environmentId: 'local', path } })) } : {}),
     approvalPolicy: APPROVAL_POLICY,
     developerInstructions: profile.instructions,
     ...(opts.model ? { model: opts.model } : {}),
@@ -757,7 +773,7 @@ class CodexThread implements AgentThread {
 export class CodexAppServerBackend implements AgentBackend {
   readonly profileCapabilities = {
     instructions: { channel: 'developer', replaceOnResume: false },
-    additionalRoots: true, directoryAccess: true, capabilityPackages: false, mcpServers: false,
+    additionalRoots: true, directoryAccess: true, capabilityPackages: true, mcpServers: false,
     env: true, disableNativeMemory: true,
     reapplyOnResume: ['env', 'nativeSettings', 'workspaceTrust', 'additionalRoots', 'directoryAccess'],
   } satisfies SessionProfileCapabilities;

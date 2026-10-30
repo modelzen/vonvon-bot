@@ -332,7 +332,7 @@ async function* idleClaudeInput(signal: AbortSignal): AsyncGenerator<never, void
 export class ClaudeAgentBackend implements AgentBackend {
   readonly profileCapabilities = {
     instructions: { channel: 'system-append', replaceOnResume: false },
-    additionalRoots: true, directoryAccess: true, capabilityPackages: false, mcpServers: false,
+    additionalRoots: true, directoryAccess: true, capabilityPackages: true, mcpServers: false,
     env: true, disableNativeMemory: true,
     reapplyOnResume: ['env', 'nativeSettings', 'additionalRoots', 'directoryAccess'],
   } satisfies SessionProfileCapabilities;
@@ -646,7 +646,7 @@ export class ClaudeAgentBackend implements AgentBackend {
   }
 
   async startThread(opts: StartThreadOptions): Promise<AgentThread> {
-    const profile = resolveSessionProfile(opts.profile, { additionalRoots: true });
+    const profile = resolveSessionProfile(opts.profile, { additionalRoots: true, capabilityPackages: true });
     const sdk = await this.sdkLoader();
     const realCwd = await realpath(opts.cwd).catch(() => opts.cwd);
     const access = claudeAccess(opts.mode, opts.network, opts.cwd, realCwd, await Promise.all(profile.additionalRoots.map(async root => ({ ...root, path: await realpath(root.path) }))), opts.native);
@@ -666,6 +666,7 @@ export class ClaudeAgentBackend implements AgentBackend {
       settingSources: BRIDGE_SETTING_SOURCES,
       additionalDirectories: profile.additionalRoots.map(root => root.path),
       ...(profile.skills?.enabledNames ? { skills: [...profile.skills.enabledNames] } : {}),
+      plugins: profile.capabilityPackages.map(pkg => pkg.path),
       env: sessionClaudeEnv(profile.env),
       query: sdk.query,
       entry: opts.entry,
@@ -676,7 +677,7 @@ export class ClaudeAgentBackend implements AgentBackend {
   }
 
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {
-    const profile = resolveSessionProfile(opts.profile, { additionalRoots: true });
+    const profile = resolveSessionProfile(opts.profile, { additionalRoots: true, capabilityPackages: true });
     const sdk = await this.sdkLoader();
     const transcript = await transcriptMark(await assertSessionSaved(opts.sessionId), opts.sessionId);
     const realCwd = await realpath(opts.cwd).catch(() => opts.cwd);
@@ -698,6 +699,7 @@ export class ClaudeAgentBackend implements AgentBackend {
       settingSources: BRIDGE_SETTING_SOURCES,
       additionalDirectories: profile.additionalRoots.map(root => root.path),
       ...(profile.skills?.enabledNames ? { skills: [...profile.skills.enabledNames] } : {}),
+      plugins: profile.capabilityPackages.map(pkg => pkg.path),
       env: sessionClaudeEnv(profile.env),
       query: sdk.query,
       entry: opts.entry,

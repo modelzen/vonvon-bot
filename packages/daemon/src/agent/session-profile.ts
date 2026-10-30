@@ -9,7 +9,8 @@ export interface SessionProfile {
   env: Readonly<Record<string, string>>;
   nativeSettings: { automaticMemory: false };
   additionalRoots: readonly { path: string; access: 'read' | 'write' }[];
-  capabilityPackages: readonly { path: string }[];
+  /** Plugin-shaped directories handed over natively; today only vonvon's builtin package (T4b), s39d adds `'user'`. */
+  capabilityPackages: readonly { path: string; kind: 'builtin' }[];
   /** Explicit MCP delivery is added with capability packages in s39. */
   mcpServers: readonly { name: string }[];
   /** vonvon's own tools beyond the always-on ones: the schedule tools only in a bound group's sessions (定时任务 T3). */
@@ -21,7 +22,7 @@ export interface SessionProfileCapabilities {
   additionalRoots: boolean;
   /** Per-path overrides beyond cwd's existing permission tier. */
   directoryAccess: boolean;
-  capabilityPackages: false;
+  capabilityPackages: boolean;
   /** Explicit profile delivery, distinct from native inherited MCP settings. */
   mcpServers: false;
   env: true;
@@ -29,8 +30,9 @@ export interface SessionProfileCapabilities {
   reapplyOnResume: readonly ('env' | 'nativeSettings' | 'workspaceTrust' | 'additionalRoots' | 'directoryAccess')[];
 }
 
-export function resolveSessionProfile(input?: SessionProfile, capabilities?: { additionalRoots: boolean }): SessionProfile {
-  if ((!capabilities?.additionalRoots && input?.additionalRoots.length) || input?.capabilityPackages.length || input?.mcpServers.length) {
+export function resolveSessionProfile(input?: SessionProfile, capabilities?: { additionalRoots: boolean; capabilityPackages?: boolean }): SessionProfile {
+  if ((!capabilities?.additionalRoots && input?.additionalRoots.length) || (!capabilities?.capabilityPackages && input?.capabilityPackages.length)
+    || input?.mcpServers.length) {
     throw new Error('额外根、能力包和 MCP profile 交付尚未支持（s39）');
   }
   return {
@@ -40,7 +42,7 @@ export function resolveSessionProfile(input?: SessionProfile, capabilities?: { a
     env: { [SESSION_ENV]: '1', ...input?.env },
     nativeSettings: { automaticMemory: false },
     additionalRoots: input?.additionalRoots ?? [],
-    capabilityPackages: [],
+    capabilityPackages: input?.capabilityPackages ?? [],
     mcpServers: [],
     tools: { schedule: input?.tools?.schedule ?? false },
     ...(input?.skills ? { skills: input.skills } : {}),

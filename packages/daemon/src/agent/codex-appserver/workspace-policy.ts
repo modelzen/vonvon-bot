@@ -116,8 +116,9 @@ export function codexShellReadRoot(shell: string, roots: readonly Root[] = []): 
   return candidate;
 }
 
+/** `capabilityRoots`: the session's capability packages, readable here and never writable (T4b). */
 export function codexFilesystem(roots: readonly Root[], mode: 'qa' | 'write', installRoot?: CodexInstallRoot,
-  platform: NodeJS.Platform = process.platform, network = false, shellRoot?: CodexInstallRoot) {
+  platform: NodeJS.Platform = process.platform, network = false, shellRoot?: CodexInstallRoot, capabilityRoots: readonly string[] = []) {
   const entries = roots.map(root => [root.path, {
     '.': mode === 'qa' ? 'read' : root.access,
     ...Object.fromEntries(CODEX_PROTECTED_PATHS.filter(path => {
@@ -128,6 +129,7 @@ export function codexFilesystem(roots: readonly Root[], mode: 'qa' | 'write', in
   const runtime: Record<string, { '.': string }> = {};
   if (installRoot) runtime[installRoot.path] = { '.': 'read' };
   if (shellRoot) runtime[shellRoot.path] = { '.': 'read' };
+  for (const path of capabilityRoots) runtime[path] = { '.': 'read' };
   if (platform === 'linux' && network) {
     try { runtime[realpathSync('/etc/resolv.conf')] = { '.': 'read' }; } catch {}
   }

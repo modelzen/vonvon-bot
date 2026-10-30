@@ -15,6 +15,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { settleTurn, recordUsage, type TurnStores } from './turn-usage';
 import { assemble, judgeContext, loadContextSources, openingInstructions, planTurnUpdate, contextOf, newNonce, type ContextPlace } from './context-assembly';
 import { groupSkillProfile } from '../agent/group-skills';
+import { ensureBuiltinPackage } from '../agent/builtin-skills/package';
+import { builtinSkillsOfSet } from '../agent/builtin-skills/registry';
+import type { SessionProfile } from '../agent/session-profile';
 import { parseStoredJudge } from '../judge/model';
 import { presentationConfig } from './group-presentation';
 import { projectRevision, projectView, type CollaborationRequest } from '../admin/collaboration';
@@ -1129,12 +1132,24 @@ export function createOrchestrator(
     const assembled = sources ? assemble(sources, project ? 'work' : 'comment') : undefined;
     const nonce = newNonce();
     const skills = project ? await groupSkillProfile({ backend, cwd, directories: execution.workspaces.additional, disabledPaths: project.skills?.disabledPaths }) : undefined;
-    const profile = assembled || skills ? { instructions: assembled ? openingInstructions(assembled, nonce, { hiddenBlocks: Boolean(project) && hiddenBlocksFor(backend.id) }) : '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: [], capabilityPackages: [], mcpServers: [],
-      // A bound group's sessions get the schedule tools, read-only tier too (3.13); a comment's never do.
-      tools: { schedule: Boolean(project) && place !== 'comment' }, ...(skills ? { skills } : {}) } : undefined;
+    // A bound group's sessions get the schedule tools, read-only tier too (3.13); a comment's never do.
+    const schedule = Boolean(project) && place !== 'comment';
+    // The task skill goes with the tools (T4b); a package that cannot be written leaves the session without it.
+    const capabilityPackages = schedule && backend.profileCapabilities?.capabilityPackages ? await builtinPackage(project?.chatId) : [];
+    const profile = assembled || skills ? { instructions: assembled ? openingInstructions(assembled, nonce, { hiddenBlocks: Boolean(project) && hiddenBlocksFor(backend.id) }) : '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: [], capabilityPackages, mcpServers: [],
+      tools: { schedule }, ...(skills ? { skills } : {}) } : undefined;
     const built = await executionSessionProfile({ execution: { ...execution, permission: permission ?? execution.permission }, cwd, backend: backend.id, scope: project ? 'group' : 'ungrouped', profile });
     if (assembled && built) openings.set(built, contextOf(assembled, nonce));
     return built;
+  }
+  async function builtinPackage(chatId: string | undefined): Promise<SessionProfile['capabilityPackages']> {
+    try {
+      const { path } = await ensureBuiltinPackage(cfg.accounts.app.id, 'group', builtinSkillsOfSet('group'));
+      return [{ path, kind: 'builtin' }];
+    } catch (error) {
+      log.fail('agent', error, { phase: 'builtin-package-failed', chatId });
+      return [];
+    }
   }
   /** A compaction ended on this thread: the next turn hands over everything again, under a new mark (4.4). */
   function markContextDue(thread: AgentThread, key: string | undefined): void {
