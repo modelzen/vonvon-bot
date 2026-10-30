@@ -1,14 +1,16 @@
 import {expect, it} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
-import type {ScheduleRunRecord} from '@vonvon/protocol';
+import {agentIdSchema, type DesktopSnapshot, type ScheduleRunRecord} from '@vonvon/protocol';
+import {BotScheduleGroups} from '../src/BotSchedules';
+import {scheduleDraft, scheduleRequest} from '../src/ScheduleForm';
 import {ScheduleTaskList} from '../src/ScheduleTab';
 import {ScheduleRuns} from '../src/ScheduleRuns';
-import {listOf, scheduleFooter, scheduleNotRunning, scheduleRunLink, scheduleState, type ScheduleList} from '../src/schedule-model';
+import {listOf, scheduleFooter, scheduleNotRunning, scheduleRunLink, scheduleState, shownZone, type ScheduleList} from '../src/schedule-model';
 import {groupUrl} from '../src/url-actions';
 import {scheduleNow, scheduleTask, tasksReply} from './schedule-fixture';
 
-const render = (list: ScheduleList, notices: Record<string, string> = {}) => renderToStaticMarkup(
-  <ScheduleTaskList list={list} deviceTitle="这台 Mac" notices={notices} onCreate={() => {}} onAction={() => {}}/>).replaceAll('&quot;', '"');
+const render = (list: ScheduleList, notices: Record<string, string> = {}, expanded?: string) => renderToStaticMarkup(
+  <ScheduleTaskList list={list} deviceTitle="这台 Mac" expanded={expanded} notices={notices} onCreate={() => {}} onAction={() => {}}/>).replaceAll('&quot;', '"');
 const run = (index: number, patch: Partial<ScheduleRunRecord> = {}): ScheduleRunRecord =>
   ({runId: `run_${index}`, slot: scheduleNow - index * 60_000, trigger: 'schedule', status: 'done', durationMs: 65_000, ...patch});
 
@@ -22,7 +24,35 @@ it('names the five states, and an active task 已启用 rather than 运行中', 
   for (const state of tasks.map(scheduleState)) expect(html).toContain(state);
   expect(html).not.toContain('运行中');
   expect(html).toContain('每天 09:00 · 下次 11月2日 09:00 · 已启用');
-  expect(html.match(/>恢复</g)).toHaveLength(4);
+  expect(html.match(/>恢复</g)).toHaveLength(3);
+  expect(html.match(/>暂停</g)).toHaveLength(1);
+});
+
+it('gives an 已结束 task 编辑, 立即运行 and 删除 but no 恢复, which would do nothing', () => {
+  const html = render(listOf(tasksReply([scheduleTask({state: 'finished', spec: {kind: 'once', at: scheduleNow - 60_000}, nextRunAt: undefined})])));
+  expect(html).toContain('已结束');
+  for (const button of ['编辑', '立即运行', '删除']) expect(html).toContain(`>${button}<`);
+  expect(html).not.toContain('>恢复<');
+  expect(html).not.toContain('>暂停<');
+});
+
+it('shows a task whose zone this browser does not know in the daemon\'s zone, names it, and keeps the form from saving the unknown one', () => {
+  const at = Date.UTC(2026, 10, 2, 1, 0);
+  const mars = scheduleTask({spec: {kind: 'once', at}, timeZone: 'Mars/Olympus', describe: '11月2日 09:00 一次', nextRunAt: at,
+    recent: [run(0)], lastResult: {at: scheduleNow, status: 'done', excerpt: '好了'}});
+  const html = render(listOf(tasksReply([mars])), {}, mars.id);
+  expect(html).toContain('下次 11月2日 09:00（Asia/Shanghai） · 已启用 · 上次 完成 12:00');
+  expect(html).toContain('<td>12:00</td>');
+  const snapshot = {groups: [], memberships: []} as unknown as DesktopSnapshot;
+  expect(renderToStaticMarkup(<BotScheduleGroups list={listOf(tasksReply([mars]))} agentId={agentIdSchema.parse(mars.botId)} snapshot={snapshot} onOpen={() => {}} onDelete={() => {}}/>))
+    .toContain('下次 11月2日 09:00（Asia/Shanghai）');
+  expect(renderToStaticMarkup(<ScheduleRuns task={mars} hostZone="Asia/Tokyo" now={scheduleNow}/>)).toContain('<td>13:00</td>');
+  expect(shownZone('Mars/Olympus', 'Venus/Maat')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const draft = scheduleDraft(mars, 'Asia/Shanghai');
+  expect(draft).toMatchObject({when: 'once', at: '2026-11-02T09:00', timeZone: 'Mars/Olympus'});
+  const context = {chatId: mars.chatId, now: scheduleNow, task: mars, initial: draft};
+  expect(scheduleRequest(draft, context)).toEqual({error: '不认识这个时区：Mars/Olympus'});
+  expect(scheduleRequest({...draft, timeZone: 'Asia/Shanghai'}, context)).toMatchObject({patch: {spec: {kind: 'once', at}, timeZone: 'Asia/Shanghai'}});
 });
 
 it('names the task\'s zone after the next time only when the daemon\'s computer is elsewhere', () => {
@@ -63,7 +93,7 @@ it('opens a run in Feishu by the daemon\'s link, else its topic, and only throug
 it('lists the last 20 runs newest first with time, status, duration and the Feishu links there are', () => {
   const recent = Array.from({length: 20}, (_, index) => run(19 - index, index % 2 ? {} : {topicId: `omt_${index}`}));
   recent[19] = run(0, {status: 'missed', count: 3, durationMs: undefined});
-  const html = renderToStaticMarkup(<ScheduleRuns task={scheduleTask({recent, counts: {runs: 12, missed: 5, skipped: 2, consecutiveFailures: 0}, lastResult: {at: scheduleNow, status: 'done', excerpt: '今天合入 3 个 PR'}})} now={scheduleNow}/>);
+  const html = renderToStaticMarkup(<ScheduleRuns task={scheduleTask({recent, counts: {runs: 12, missed: 5, skipped: 2, consecutiveFailures: 0}, lastResult: {at: scheduleNow, status: 'done', excerpt: '今天合入 3 个 PR'}})} hostZone="Asia/Shanghai" now={scheduleNow}/>);
   expect(html.match(/<tr>/g)).toHaveLength(21);
   expect(html.match(/在飞书打开/g)).toHaveLength(10);
   expect(html).toContain('共运行 12 次 · 错过 5 次 · 跳过 2 次');

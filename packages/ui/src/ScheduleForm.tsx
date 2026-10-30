@@ -3,7 +3,7 @@ import type {ScheduledTaskView, ScheduleRequest, ScheduleSpec} from '@vonvon/pro
 import {Button, FormField, InlineNotice} from './reference/components/ui';
 import {Dialog} from './reference/components/ui/Dialog';
 import {SettingChoices} from './settings/SettingChoices';
-import {refusalText, scheduleConflict, type ScheduleSend} from './schedule-model';
+import {browserZone, knownZone, refusalText, scheduleConflict, shownZone, type ScheduleSend} from './schedule-model';
 
 type Placement = 'follow' | 'newTopic' | 'topic';
 export type ScheduleDraft = {
@@ -17,7 +17,6 @@ const DAY_NAMES = ['日', '一', '二', '三', '四', '五', '六'];
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const whenChoices = [{value: 'once', label: '一次'}, {value: 'every', label: '每 N 分钟'}, {value: 'daily', label: '每天'}, {value: 'weekly', label: '每周'}, {value: 'cron', label: 'cron'}] as const;
 const placementText: Record<Placement, string> = {follow: '跟群走', newTopic: '每次开新话题', topic: '固定在原话题'};
-const browserZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 function wall(ms: number, timeZone: string): number {
   const format = new Intl.DateTimeFormat('en-US', {timeZone, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23'});
@@ -37,18 +36,17 @@ export function zonedInstant(value: string, timeZone: string): number | undefine
   const second = local - offset(first);
   return offset(second) === offset(first) ? second : Math.max(first, second);
 }
-function knownZone(timeZone: string): boolean {
-  try {new Intl.DateTimeFormat(undefined, {timeZone}); return true;} catch {return false;}
-}
-
-/** A new form starts in the browser's zone; an edit starts from the task. */
+/**
+ * A new form starts in `zone`, the browser's by default. An edit starts from the task; a zone this browser does not know
+ * stays in the form, so saving asks for one it knows, and a once time is read in `zone` meanwhile.
+ */
 export function scheduleDraft(task?: ScheduledTaskView, zone = browserZone()): ScheduleDraft {
   const draft: ScheduleDraft = {name: '', instruction: '', when: 'daily', at: '', minutes: '60', time: '09:00', days: [], expr: '', placement: 'follow', timeZone: zone};
   if (!task) return draft;
   const {spec} = task;
   return {
     ...draft, name: task.name, instruction: task.instruction, when: spec.kind, placement: task.placement.kind, timeZone: task.timeZone,
-    ...(spec.kind === 'once' ? {at: localInput(spec.at, task.timeZone)} : spec.kind === 'every' ? {minutes: String(spec.minutes)}
+    ...(spec.kind === 'once' ? {at: localInput(spec.at, shownZone(task.timeZone, zone))} : spec.kind === 'every' ? {minutes: String(spec.minutes)}
       : spec.kind === 'cron' ? {expr: spec.expr} : {time: spec.time, days: spec.kind === 'weekly' ? [...spec.days].sort((a, b) => a - b) : []}),
   };
 }
@@ -117,7 +115,7 @@ export function ScheduleForm({chatId, task: opened, hostTimeZone, send, onClose,
 }) {
   const id = useId();
   const [task, setTask] = useState(opened);
-  const [initial, setInitial] = useState(() => scheduleDraft(opened));
+  const [initial, setInitial] = useState(() => opened ? scheduleDraft(opened, hostTimeZone) : scheduleDraft());
   const [draft, setDraft] = useState(initial);
   const [stale, setStale] = useState('');
   const [error, setError] = useState('');
@@ -131,7 +129,7 @@ export function ScheduleForm({chatId, task: opened, hostTimeZone, send, onClose,
       const reply = await send(request);
       if (reply.kind === 'task') return onClose();
       if (reply.kind === 'conflict') {
-        const fresh = scheduleDraft(reply.current);
+        const fresh = scheduleDraft(reply.current, hostTimeZone);
         setStale(draftSummary(draft)); setTask(reply.current); setInitial(fresh); setDraft(fresh); setError(scheduleConflict);
       } else setError(reply.kind === 'refused' ? refusalText(reply) : '没有保存，请重试。');
     } catch (failure) {setError(failure instanceof Error ? failure.message : '没有保存，请重试。');}

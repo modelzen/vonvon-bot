@@ -37,6 +37,22 @@ it('reads again as soon as a write is answered, refused or not, and a task delet
   session.stop();
 });
 
+it('reads again as soon as a write saves or fails, and the failure still reaches the caller', async () => {
+  const task = scheduleTask();
+  const send = vi.fn(async (request: ScheduleRequest): Promise<ScheduleReply> => request.action === 'list' ? tasksReply([task]) : {kind: 'task', task});
+  const session = startScheduleSession(send, 'oc_schedule', show);
+  await vi.advanceTimersByTimeAsync(0);
+  await expect(session.write({action: 'pause', chatId: 'oc_schedule', taskId: task.id})).resolves.toEqual({kind: 'task', task});
+  await vi.advanceTimersByTimeAsync(0);
+  expect(lists(send)).toBe(2);
+  send.mockRejectedValueOnce(new Error('Daemon connection closed'));
+  await expect(session.write({action: 'resume', chatId: 'oc_schedule', taskId: task.id})).rejects.toThrow('Daemon connection closed');
+  await vi.advanceTimersByTimeAsync(0);
+  expect(lists(send)).toBe(3);
+  expect(send).toHaveBeenCalledTimes(5);
+  session.stop();
+});
+
 it('drops a reply that arrives after a newer read or after stopping', async () => {
   const replies: ((reply: ScheduleReply) => void)[] = [];
   const send = vi.fn((_request: ScheduleRequest) => new Promise<ScheduleReply>(resolve => replies.push(resolve)));

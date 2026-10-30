@@ -25,10 +25,23 @@ export function scheduleState(task: ScheduledTaskView): string {
   return task.state === 'active' ? '已启用' : task.state === 'finished' ? '已结束' : pausedText[task.pausedReason ?? 'manual'];
 }
 
-/** One row: 每个工作日 09:00 · 下次 09:00 · 已启用 · 上次 完成 09:00. Times are in the task's zone, named when the daemon's computer is in another. */
+export const browserZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
+export function knownZone(timeZone: string): boolean {
+  try {new Intl.DateTimeFormat(undefined, {timeZone}); return true;} catch {return false;}
+}
+/**
+ * The zone a task's times are shown in: its own when this browser knows it, else `fallback` (the daemon's), else the browser's.
+ * The daemon keeps a stored zone it cannot read (a hand edit, another ICU), so the page must not throw on one either.
+ */
+export function shownZone(timeZone: string, fallback?: string): string {
+  return [timeZone, fallback].find(zone => zone && knownZone(zone)) ?? browserZone();
+}
+
+/** One row: 每个工作日 09:00 · 下次 09:00 · 已启用 · 上次 完成 09:00. Times are in the task's zone, named when the daemon's computer is in another or the page had to use another. */
 export function scheduleSummary(task: ScheduledTaskView, hostZone: string, now?: number): string {
-  const at = (ms: number) => formatTime(ms, {timeZone: task.timeZone, now});
-  const zone = task.timeZone === hostZone ? '' : `（${task.timeZone}）`;
+  const shown = shownZone(task.timeZone, hostZone);
+  const at = (ms: number) => formatTime(ms, {timeZone: shown, now});
+  const zone = shown === hostZone && shown === task.timeZone ? '' : `（${shown}）`;
   return [
     task.describe,
     task.nextRunAt !== undefined && `下次 ${at(task.nextRunAt)}${zone}`,

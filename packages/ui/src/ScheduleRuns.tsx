@@ -4,7 +4,7 @@ import {formatTime, formatUptime, type ScheduledTaskView, type ScheduleRunRecord
 import {useShellCapabilities} from './client-context';
 import {Button, InlineNotice} from './reference/components/ui';
 import {openExternalUrl} from './url-actions';
-import {runStatusText, scheduleRunLink} from './schedule-model';
+import {runStatusText, scheduleRunLink, shownZone} from './schedule-model';
 
 function runText(record: ScheduleRunRecord): string {
   const count = record.count && record.count > 1 ? ` ${record.count} 次` : '';
@@ -12,11 +12,12 @@ function runText(record: ScheduleRunRecord): string {
   return `${runStatusText[record.status]}${count}${trigger}${record.error ? `：${record.error}` : ''}`;
 }
 
-/** An opened task: its counts, its last 20 runs newest first, and the start of its last result. */
-export function ScheduleRuns({task, now}: {task: ScheduledTaskView; now?: number}) {
+/** An opened task: its counts, its last 20 runs newest first, and the start of its last result. Times are in the same zone as its row. */
+export function ScheduleRuns({task, hostZone, now}: {task: ScheduledTaskView; hostZone: string; now?: number}) {
   const shell = useShellCapabilities();
   const [error, setError] = useState('');
   const runs = [...task.recent].reverse();
+  const timeZone = shownZone(task.timeZone, hostZone);
   return <div className="schedule-runs">
     <p className="group-control-note">共运行 {task.counts.runs} 次 · 错过 {task.counts.missed} 次 · 跳过 {task.counts.skipped} 次</p>
     {runs.length ? <table>
@@ -24,7 +25,7 @@ export function ScheduleRuns({task, now}: {task: ScheduledTaskView; now?: number
       <tbody>{runs.map(record => {
         const link = scheduleRunLink(record, task.chatId);
         return <tr key={record.runId}>
-          <td>{formatTime(record.startedAt ?? record.slot, {timeZone: task.timeZone, now})}</td>
+          <td>{formatTime(record.startedAt ?? record.slot, {timeZone, now})}</td>
           <td>{runText(record)}</td>
           <td>{record.durationMs === undefined ? '—' : formatUptime(record.durationMs)}</td>
           <td>{link && <Button size="sm" variant="ghost" onClick={() => void openExternalUrl(link, 'group', shell).catch(failure => setError(failure instanceof Error ? failure.message : '无法打开飞书。'))}>在飞书打开<ArrowUpRight size={12} aria-hidden="true"/></Button>}</td>

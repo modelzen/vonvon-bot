@@ -37,7 +37,10 @@ export function startScheduleSession(send: ScheduleSend, chatId: string, show: {
 }
 
 type RowAction = 'edit' | 'pause' | 'resume' | 'runNow' | 'delete' | 'expand';
-/** The list as it reads: one row a task, its buttons, and the opened task's runs. A refused list replaces the page, so there is no 新建. */
+/**
+ * The list as it reads: one row a task, its buttons, and the opened task's runs. A refused list replaces the page, so there is no 新建.
+ * 已结束 has no 恢复: the daemon leaves a finished task as it is, and a new time in 编辑 starts it again.
+ */
 export function ScheduleTaskList({list, deviceTitle, expanded, busy, notices, onCreate, onAction}: {
   list: ScheduleList; deviceTitle: string; expanded?: string; busy?: string; notices: Readonly<Record<string, string>>;
   onCreate: () => void; onAction: (action: RowAction, task: ScheduledTaskView) => void;
@@ -50,12 +53,12 @@ export function ScheduleTaskList({list, deviceTitle, expanded, busy, notices, on
       <SettingsRow title={task.name} description={scheduleSummary(task, timeZone, now)} trailing={<>
         <Button size="sm" variant="ghost" aria-expanded={expanded === task.id} onClick={() => onAction('expand', task)}>记录</Button>
         <Button size="sm" disabled={busy === task.id} onClick={() => onAction('edit', task)}>编辑</Button>
-        <Button size="sm" disabled={busy === task.id} onClick={() => onAction(task.state === 'active' ? 'pause' : 'resume', task)}>{task.state === 'active' ? '暂停' : '恢复'}</Button>
+        {task.state !== 'finished' && <Button size="sm" disabled={busy === task.id} onClick={() => onAction(task.state === 'active' ? 'pause' : 'resume', task)}>{task.state === 'active' ? '暂停' : '恢复'}</Button>}
         <Button size="sm" disabled={busy === task.id} onClick={() => onAction('runNow', task)}>立即运行</Button>
         <Button size="sm" variant="ghost" disabled={busy === task.id} onClick={() => onAction('delete', task)}>删除</Button>
       </>}/>
       {notices[task.id] && <p className="group-control-note schedule-note" role="status">{notices[task.id]}</p>}
-      {expanded === task.id && <ScheduleRuns task={task} now={now}/>}
+      {expanded === task.id && <ScheduleRuns task={task} hostZone={timeZone} now={now}/>}
     </Fragment>) : <SettingsRow title="这个群还没有任务"/>}
   </SettingsGroup>;
 }

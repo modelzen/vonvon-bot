@@ -37,6 +37,7 @@ export function BotScheduleGroups({list, agentId, snapshot, onOpen, onDelete}: {
   </SettingsGroup>)}</>;
 }
 
+/** Reads when opened and after a delete, with no polling. A failed read offers 重试; when nothing was read yet, that is all it shows. */
 export function BotSchedules({agentId, snapshot, onOpen}: {agentId: AgentId; snapshot: DesktopSnapshot; onOpen: (memberId: MembershipId) => void}) {
   const client = useClient();
   const [list, setList] = useState<ScheduleList>({kind: 'loading'});
@@ -49,9 +50,10 @@ export function BotSchedules({agentId, snapshot, onOpen}: {agentId: AgentId; sna
       failure => {if (active) setError(failure instanceof Error && failure.message ? failure.message : '任务读取失败。');});
     return () => {active = false;};
   }, [client, agentId, version]);
+  const retry = <Button size="sm" onClick={() => {setError(''); setVersion(value => value + 1);}}>重试</Button>;
   return <section id={settingAnchor('任务')} aria-label="任务">
-    {error && <InlineNotice title="任务读取未完成" tone="warning">{error}</InlineNotice>}
-    <BotScheduleGroups list={list} agentId={agentId} snapshot={snapshot} onOpen={onOpen} onDelete={setDeleting}/>
+    {error && <InlineNotice title="任务读取未完成" tone="warning" actions={retry}>{error}</InlineNotice>}
+    {!(error && list.kind === 'loading') && <BotScheduleGroups list={list} agentId={agentId} snapshot={snapshot} onOpen={onOpen} onDelete={setDeleting}/>}
     {deleting && <ScheduleDeleteDialog key={deleting.id} task={deleting} send={request => client.schedule(agentId, request)} onClose={() => {setDeleting(undefined); setVersion(value => value + 1);}}/>}
   </section>;
 }
