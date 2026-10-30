@@ -52,7 +52,7 @@ main 必败：`capabilityPackages` 在基线是 `false` 且 `resolveSessionProfi
 
 ## 6. Codex 的自测
 
-JP-VPS，真 Claude 和真 Codex 各一遍，用验收 daemon（Bot 6；环境见 #422 正文第 4 节，群从 `test-chats.json` 的登记取，chat id 不打印）。锁、删除规矩和 lark-cli 用法照 T2 第 6 节抄：
+JP-VPS，真 Claude 和真 Codex 各一遍，用验收 daemon（Bot 6；环境见 #422 正文第 4 节）。用哪家是群绑定时定的（`vonvon group bind --tool claude|codex`），不是 bot 的设置：从 `test-chats.json` 的登记和 `projects.json` 的当前绑定里挑 Bot 6 绑在 Claude 上的测试群和绑在 Codex 上的测试群，单会话和多会话各要一个（chat id 不打印）；缺哪种就按 #422 正文第 4 节新建测试群、用 `--tool` 绑好并补登记。锁、删除规矩和 lark-cli 用法照 T2 第 6 节抄：
 
 - 先拿目录锁：`mkdir /tmp/accept-user.d`，失败就等；拿到后 `echo "<任务号> $(date -u +%FT%TZ)" > /tmp/accept-user.d/owner`；用完 `rm -f /tmp/accept-user.d/owner && rmdir /tmp/accept-user.d`。
 - 临时目录只用 `T=$(mktemp -d)` 建，只用 `rm -rf -- "${T:?}"` 删，或者删刚在 `/tmp/` 下建的字面路径。

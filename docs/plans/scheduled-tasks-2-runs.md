@@ -131,7 +131,7 @@ JP-VPS，用验收 daemon（`accept-home2`，Bot 6，已绑的测试群；环境
   8. 自动暂停：第 7 步的后端继续坏着等满 10 次（或在测试夹具里把阈值调低、真飞书只看消息格式）：主区一条文字 @ 创建人、任务变暂停；`schedule resume`，再跑一次正常。
   9. 停机：任务跑到一半 `vonvon daemon stop`，看 `schedule runs` 记 `interrupted`，重启不重跑；日志里 `scheduler.stop` 在 `orchestrator.shutdown` 之前、`drain` 在之后。
   10. 编辑锁：`--every 1m` 跑着时在网页端改这个群的设置：可能提示"Agent 正在执行任务"，一分钟内重试成功；改另一个群的设置一次就成。
-  11. 真 Claude 和真 Codex 各一遍第 2、3 步；Claude 多会话群跑完后 `ps` 看没有多出常驻的 claude 进程。
+  11. 真 Claude 和真 Codex 各一遍第 2、3 步（用哪家是群绑定时定的（`vonvon group bind --tool claude|codex`），不是 bot 的设置：从 `test-chats.json` 的登记和 `projects.json` 的当前绑定里挑 Bot 6 绑在 Claude 上的测试群和绑在 Codex 上的测试群，单会话和多会话各要一个（chat id 不打印）；缺哪种就按 #422 正文第 4 节新建测试群、用 `--tool` 绑好并补登记）；Claude 多会话群跑完后 `ps` 看没有多出常驻的 claude 进程。
   12. 自测完把验收 worktree 换回 `dev`，放锁。
 - Mac 上的睡眠和唤醒（电脑合盖或 `pmset sleepnow`，醒来只补一次、卡片带"原定"）JP-VPS 测不了，PR 里记"待 owner 验收"，步骤是第 5 步换成睡眠。
 - 贴到 GitHub 前打码：不贴群 id、消息 id、open_id。

@@ -87,12 +87,12 @@ main 必败：
 - 【T3】`claude-schedule-entry.test.ts`（锁定 SDK 的假传输）：工具在 `vonvon_bot` 里，`profile.tools.schedule` 为假时没有，grant 是私聊时也没有；三档的 query 选项都带五个 `disallowedTools`，已有的 `cfg.permission.disallowedTools` 不丢；settings 带 `skillOverrides.loop/schedule = 'off'`；`enabledNames` 过滤掉 `loop`、`schedule`；env 有 `CLAUDE_CODE_DISABLE_CRON`。
 - 【T3b】`codex-dynamic-tools.test.ts`（假 app-server）：thread/start 带 namespace 形状；`profile.tools.schedule` 为假不带字段；resume 不带；`item/tool/call` 来回、未知工具、zod 不过、按 threadId 找错会话拒、线程关闭时挂着的调用被答掉；`config.features` 同时有 `memories: false`、`in_app_local_automation: false`，Windows 非完全访问还有 `prefer_mxc: false`。
 - 【T3b】`codex-turn-origin.test.ts`：两轮各一个 `turn/start` 应答 → 第二轮的 `item/tool/call`（`turnId` 是第二轮的）按第二轮的 `TurnAuth` 授权（main 必败）；`turn/start` 应答还没到时调用等到它；2 秒没到 → `unknown-origin`；goal 线程的调用 → `unknown-origin`。
-- 【T3】`schedule-profile.test.ts`：`profileOf` 对绑定的群（只读档也算）给 `tools.schedule: true`，评论会话给 `false`；`executionSessionProfile` 加了附加根后 `tools` 还在。
+- 【T3】`schedule-profile.test.ts`：`profileOf` 对绑定的群（只读档也算）给 `tools.schedule: true`，评论会话给 `false`；`executionSessionProfile` 加了附加根后 `tools` 还在；`tools.schedule` 为真时 Codex 的 `thread/start` 参数里也没有 `dynamicTools`（T3 里 Codex backend 不读它，T3b 再改这条断言）。
 - 回归定向：【T3】agent-entry-registry、agent-entry-commit、claude-agent-entry、s47-tools、memory 工具授权；【T3b】codex-backend、codex-jsonrpc、agent-entry-registry、memory 工具授权。
 
 ## 6. Codex 的自测
 
-JP-VPS，用验收 daemon（Bot 6）。【T3】把 Bot 6 设成 Claude，做第 1 到 6 步和第 8 步；【T3b】把 Bot 6 设成 Codex，重做第 1 到 5 步，再做第 7、8 步。锁、临时目录、删除规矩和 lark-cli 的用法同 T2 第 6 节，原文照抄：
+JP-VPS，用验收 daemon（Bot 6）。用哪家是群绑定时定的（`vonvon group bind --tool claude|codex`），不是 bot 的设置：从 `test-chats.json` 的登记和 `projects.json` 的当前绑定里挑 Bot 6 绑在 Claude 上的测试群和绑在 Codex 上的测试群，单会话和多会话各要一个（chat id 不打印）；缺哪种就按 #422 正文第 4 节新建测试群、用 `--tool` 绑好并补登记。【T3】在绑 Claude 的群里做第 1 到 6 步和第 8 步；【T3b】在绑 Codex 的群里重做第 1 到 5 步，再做第 7、8 步。锁、临时目录、删除规矩和 lark-cli 的用法同 T2 第 6 节，原文照抄：
 
 - 先拿目录锁：`mkdir /tmp/accept-user.d`，失败就等；拿到后 `echo "<任务号> $(date -u +%FT%TZ)" > /tmp/accept-user.d/owner`；用完 `rm -f /tmp/accept-user.d/owner && rmdir /tmp/accept-user.d`。
 - 临时目录只用 `T=$(mktemp -d)` 建，只用 `rm -rf -- "${T:?}"` 删，或者删刚在 `/tmp/` 下建的字面路径。
@@ -106,7 +106,7 @@ JP-VPS，用验收 daemon（Bot 6）。【T3】把 Bot 6 设成 Claude，做第 
   4. 定时回合里让 bot 给自己再排一次（任务内容写"做完后把自己这个任务改到 2 分钟后"）：`schedule_edit` 自己这一个成功，`runs` 里看到第二次运行；任务内容写"建一个新任务"：拒 `no-human-create`，回复里有那句。
   5. 跨群：在群 A 把群 B 一个任务的 id 贴给 bot 让它删：拒 `not-found`。
   6. 【T3】Claude：问"你有 CronCreate 吗，有 schedule 或 loop 这两个 skill 吗"，期望都没有；让它用 Cron 排一次，期望说没有工具。
-  7. 【T3b】Codex（JP-VPS 的 Codex 是真实 ChatGPT 登录）：新会话里第 1 步；一条上线前就开着的旧会话里第 1 步，期望 bot 说没有工具且 `session_info` 带那一行；问"把你能用的工具全列出来，只列名字"，结果里有没有 automation、schedule、cron、reminder 这类名字，有就记下来贴 PR，由审查者决定加进关闭名单。
+  7. 【T3b】Codex（JP-VPS 的 Codex 是真实 ChatGPT 登录）：一条 T3b 部署前就开着的旧会话里做第 1 步，期望 bot 说没有工具且 `session_info` 带那一行；问"把你能用的工具全列出来，只列名字"，结果里有没有 automation、schedule、cron、reminder 这类名字，有就记下来贴 PR，由审查者决定加进关闭名单。
   8. 自测完换回 `dev`，放锁。
 - 打码同 T2。
 

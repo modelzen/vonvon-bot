@@ -362,9 +362,9 @@ export function createScheduler(deps: {
 | 调度 | `D/bot/schedule/scheduler.ts` |
 | 钩子 | `D/bot/schedule/types.ts` 的 `ScheduledHook`；`TurnExtra.scheduled`、`QueuedTurn.scheduled`、`LaunchOpts.scheduled` |
 | 运行 | `handle-message.ts` 的 `runScheduled(job): Promise<ScheduledOutcome>`、`startScheduledTopic`、`scheduleGate(chatId)`、`holdFiring(chatId, ms)` |
-| 工具 | `D/agent/entry/schedule-tools.ts`；类 `'schedule'`；名字见第 10 节；拒绝原因加进 `D/agent/types.ts:367` 和 `D/agent/entry/ipc-codec.ts:9` 的枚举 |
-| Codex | `D/agent/codex-appserver/dynamic-tools.ts`；`server-requests.ts` 的 `dynamicToolCall`；分发在 `provider/transport/jsonrpc.ts` 的 `peer.onRequest` |
-| Claude | `D/agent/claude-agent/thread.ts` 的 `NATIVE_SCHEDULING_TOOLS`、`skillOverrides` |
+| 工具（T3） | `D/agent/entry/schedule-tools.ts`（含 `scheduleToolSpecs()`）；类 `'schedule'`；名字见第 10 节；拒绝原因加进 `D/agent/types.ts:367` 和 `D/agent/entry/ipc-codec.ts:9` 的枚举 |
+| Codex（T3b） | `D/agent/codex-appserver/dynamic-tools.ts`（`scheduleNamespace()`）；`server-requests.ts` 的 `dynamicToolCall`；分发在 `provider/transport/jsonrpc.ts` 的 `peer.onRequest` |
+| Claude（T3） | `D/agent/claude-agent/thread.ts` 的 `NATIVE_SCHEDULING_TOOLS`、`skillOverrides` |
 | skill | `D/agent/builtin-skills/{package,registry,scheduled-tasks}.ts`；目录 `bots/<appId>/capabilities/builtin/<set>/` |
 | 终端 | `vonvon schedule list|add|edit|pause|resume|delete|run|runs`，`--bot`、`--group`、`--json` |
 | 诊断事件 | `schedule-missed`、`schedule-skipped`、`schedule-auto-paused`、`schedule-interrupted`、`schedule-store-corrupt`、`schedule-notice-pending`（`schedule-interrupted` 在 T2 加，其余五个在 T1a） |
