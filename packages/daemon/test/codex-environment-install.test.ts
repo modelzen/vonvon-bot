@@ -45,11 +45,11 @@ function fixture(externalVersion?: string) {
   vi.stubEnv('CODEX_BIN', '');
   vi.stubEnv('VONVON_NPM_CLI', '');
   const context = { home, dataRoot, env: { PATH: externalDir } };
-  const resolve = () => refreshCodexResolution({ ...context, force: true });
+  const resolve = vi.fn(() => refreshCodexResolution({ ...context, force: true }));
   const service = new EnvironmentService({ home, getDataRoot: () => dataRoot, nodePath: process.execPath, npmPath: npm, path: externalDir, resolveCodex: resolve });
   services.push(service);
   const pointer = join(dataRoot, 'managed-tools', 'codex', 'current.json');
-  return { service, dataRoot, control, trace, resolve, pointer, external };
+  return { service, home, npm, externalDir, dataRoot, control, trace, resolve, pointer, external };
 }
 
 it('installs latest through the real environment engine, publishes its pointer and selects the new executable', async () => {
@@ -85,4 +85,36 @@ it('keeps a verified managed fallback when a newer external Codex remains select
   expect(await f.resolve()).toBe(f.external);
   rmSync(f.external!);
   expect(await f.resolve()).toBe(fallback.kind === 'active' ? fallback.executable : null);
+});
+
+
+it('serializes publication and uninstall across service instances sharing a data root', async () => {
+  const f = fixture();
+  let published!: () => void;
+  const atPublication = new Promise<void>(resolve => { published = resolve; });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const resolveNormally = f.resolve.getMockImplementation()!;
+  f.resolve.mockImplementationOnce(async () => {
+    published();
+    await gate;
+    return resolveNormally();
+  });
+  const other = new EnvironmentService({ home: f.home, getDataRoot: () => f.dataRoot,
+    nodePath: process.execPath, npmPath: f.npm, path: f.externalDir, resolveCodex: f.resolve });
+  services.push(other);
+  const installing = f.service.run({ type: 'install', tool: 'codex' });
+  try {
+    await atPublication;
+    const pointer = readFileSync(f.pointer, 'utf8');
+    for (const type of ['install', 'update', 'uninstall'] as const) {
+      expect(await other.run({ type, tool: 'codex' }), type).toMatchObject({ kind: 'refused', code: 'busy' });
+      expect(readFileSync(f.pointer, 'utf8')).toBe(pointer);
+    }
+  } finally {
+    release();
+  }
+  expect(await installing).toMatchObject({ kind: 'applied' });
+  expect(await other.run({ type: 'uninstall', tool: 'codex' })).toMatchObject({ kind: 'applied' });
+  expect(managedToolSelection(f.dataRoot, 'codex')).toEqual({ kind: 'disabled' });
 });
