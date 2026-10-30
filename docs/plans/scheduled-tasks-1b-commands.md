@@ -121,4 +121,4 @@ JP-VPS，离线隔离，不发飞书消息，不调真实 provider，不用 Bot 
 
 ## 9. 风险和行数
 
-风险：IPC 超时下的 `outcome-unknown`（和 settings 一样处理）、`via` 一路传对。预计生产约 560 行（commands 220、IPC/service/RPC/client 120、CLI 220）、测试约 520 行，总计约 1,100，低于 1,500。超限先把终端 `schedule` 拆成 T1c，不删测试。自审不代替独立审查；不冻结、不合入。
+风险：IPC 超时下的 `outcome-unknown`（和 settings 一样处理）、`via` 一路传对。预计生产约 590 行（commands 220、IPC/service/RPC/client 和 `BridgeHandle`、不受管的 `createAdminService` 140、CLI 220、orchestrator 的 `loadStore` 和句柄 10）、测试约 560 行，总计约 1,150，低于 1,500。超限先把终端 `schedule` 拆成 T1c，不删测试。自审不代替独立审查；不冻结、不合入。

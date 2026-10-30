@@ -93,7 +93,7 @@ main 必败：本片的文件和入口在基线不存在，测试文件在基线
   - 文件里有 `inflight`，`start(await store.load())` → `interrupted by crash`，`counts.runs` +1，`consecutiveFailures` +1，不重跑；`start` 没再调 `store.load()`（spy）；load 之后、`start` 之前删掉那个任务 → `start` 跳过它、不抛。
   - 10 次 `failed counts: true` → `paused`、`pausedReason: 'failures'`、revision 变、`notifyAutoPause` 调一次；第 11 个 slot 不跑；`done` 把计数清零；`failed counts: false` 不加计数；`interrupted by shutdown/user` 不加不减。
   - `notifyAutoPause` 抛错 → `noticePending: true`，下个 tick 再调；成功后清掉；24 小时后不再调。
-  - `once` 的结算：`run` 期间把 `spec.at` 改到 20 分钟后 → 结算后仍 `active`、`nextRunAt` 是新时间；没改 → `finished`；`interrupted` 的 `once` → `finished`。
+  - `once` 的结算：`run` 期间把 `spec.at` 改到 20 分钟后 → 结算后仍 `active`、`nextRunAt` 是新时间；没改 → `finished`；`interrupted` 的 `once` → `finished`；`run` 期间被 `mutateConfig` 改成 `paused`（`pausedReason: 'unavailable'`）→ 结算后仍 `paused`，不变 `finished`。
   - `runNow`：`slot = now`、`trigger: 'manual'`、`cursor` 不动、下一次定时不变；`inflight` 在 → `'running'`；没 `start()` → `'not-started'`；`paused` 的任务能跑。
   - tick 单飞：tick 里 `run` 还没被认领时连调 3 次 `wake()` → 同一个 slot 只 `run` 一次、`inflight` 只写一次。
   - 认领：`mutateRuntime` 回调里 `cursor` 已被别人推进 → 不 `run`。

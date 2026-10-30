@@ -2,7 +2,7 @@
 
 ## 1. 做什么
 
-把 T4a 生成的内置能力包原生交给 Codex 和 Claude：最小的能力包交付（今天两家都是 `capabilityPackages: false`）、只读和读写档的读入口、版本矩阵、仓库能不能关掉插件的实测、核验。做完这一片，有任务工具的群会话里两家都有"任务"skill，常驻一行、用时加载。总设计第 11 节；产品行为 3.6、3.13、第 9 节第 21、22 项。基线 T3 和 T4a 合入后的 `dev`，分支 `codex/scheduled-tasks-4b-delivery`。
+把 T4a 生成的内置能力包原生交给 Codex 和 Claude：最小的能力包交付（今天两家都是 `capabilityPackages: false`）、只读和读写档的读入口、版本矩阵、仓库能不能关掉插件的实测、核验。做完这一片，有任务工具的群会话里两家都有"任务"skill，常驻一行、用时加载。总设计第 11 节；产品行为 3.6、3.13、第 9 节第 21、22 项。基线 T3、T3b 和 T4a 合入后的 `dev`，分支 `codex/scheduled-tasks-4b-delivery`。
 
 ## 2. 范围
 
@@ -23,7 +23,7 @@
 ### 4.1 profile
 
 - `SessionProfile.capabilityPackages: readonly { path: string; kind: 'builtin' }[]`；`SessionProfileCapabilities.capabilityPackages: boolean`；两家置 `true`；`resolveSessionProfile` 在 `capabilities.capabilityPackages` 为真时放行，否则照旧抛；`mcpServers` 照旧抛。
-- `handle-message.ts:1120` 的 `profileOf`：`profile.tools.schedule`（T3 在同一个函数里算好，和带不带任务工具是同一个开关）为真时 `await ensureBuiltinPackage(appId, 'group', builtinSkillsFor(profile))`，成功就 `capabilityPackages: [{ path, kind: 'builtin' }]`；抛错记诊断 `builtin-package-failed`，`capabilityPackages: []`，会话照常起。
+- `handle-message.ts:1114` 的 `profileOf`：`profile.tools.schedule`（T3 在同一个函数里算好，和带不带任务工具是同一个开关）为真时 `await ensureBuiltinPackage(appId, 'group', builtinSkillsFor(profile))`，成功就 `capabilityPackages: [{ path, kind: 'builtin' }]`；抛错记诊断 `builtin-package-failed`，`capabilityPackages: []`，会话照常起。
 
 ### 4.2 Claude
 
@@ -63,7 +63,7 @@ JP-VPS，真 Claude 和真 Codex 各一遍，用验收 daemon（Bot 6；环境�
   1. 群里问"@Bot 6 你有哪些 skill"：两家都说有"任务"。
   2. 说"@Bot 6 每周一 10 点提醒我交周报"：bot 不先问时区、不问要不要开话题，直接建；回复里有"每周一 10:00"和下一次时间。Codex 这一步在 0.156.1 和现装版本各跑一次。
   3. 只读档的群重复第 2 步（Codex）：能读到 skill 正文（让它复述正文里"像给同事留便签"这句）。
-  4. 私聊里问"你有哪些 skill"：没有"任务"（私聊不发任务工具，skill 也不装）。
+  4. 私聊和评论会话不装：私聊今天不起 agent 会话（T3 4.5），没有真飞书步骤可做；由 T3 的 `schedule-profile.test.ts` 和本片的交付单测证明 `profile.tools.schedule` 为假时 `capabilityPackages` 是 `[]`。私聊起 agent 会话以后的真机复查留给 s54a。
   5. 第 9 节第 22 项：按 4.2 放 `.claude/settings.json` 再问第 1 步，结果写 PR。
   6. Mac 的 Seatbelt 下 Codex 能力根的读入口：JP-VPS 测不了，PR 里记"待 owner 验收"，给 owner 的步骤是第 3 步。
   7. 换回 `dev`，放锁。

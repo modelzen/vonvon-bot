@@ -115,4 +115,4 @@ JP-VPS，用验收 daemon（Bot 6），真 Claude 和真 Codex 各一遍。锁�
 
 ## 9. 风险和行数
 
-风险：子进程（Codex 服务端请求的分发）、并发（提交点、`turnAcked` 的等待）、错误路径（拒绝不能变成异常让回合挂掉）、权限（`where()` 不能扩大到别的话题）。按 `AGENTS.md` 加一轮多角度审查。预计生产约 700 行（schedule-tools 220、registry 150、claude 60、codex 220、profile/bridge/枚举 50）、测试约 700 行、文档约 50 行，总计约 1,450。超限先把 Codex 一侧拆成 T3b（Claude 先上）。自审不代替独立审查；不冻结、不合入。
+风险：子进程（Codex 服务端请求的分发）、并发（提交点、`turnAcked` 的等待）、错误路径（拒绝不能变成异常让回合挂掉）、权限（`where()` 不能扩大到别的话题）。按 `AGENTS.md` 加一轮多角度审查。预计生产约 735 行（schedule-tools 220、registry 150、claude 60、codex 220、profile/bridge/枚举 50、`requesterName` 透传和 `execution.ts` 透传 35）、测试约 760 行（含 `schedule-profile.test.ts`）、文档约 50 行，总计约 1,545，过了 1,500。所以直接开两个 PR，不停下来问：T3（分支 `codex/scheduled-tasks-3-tools`：工具类、登记表、`where()`、`profileOf`、Claude 一侧和关 Claude 自带定时）先开；T3b（分支 `codex/scheduled-tasks-3b-codex`：Codex `dynamicTools`、`item/tool/call`、调用按 turnId 绑轮、删 `releaseAfterRun` 授权分支、features 深合并）在 T3 的分支上接着写，T3 合入后 merge `dev` 再开。两个都按本计划的测试和验收要点各取自己的那一半；T4b 等 T3b。自审不代替独立审查；不冻结、不合入。

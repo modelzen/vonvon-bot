@@ -1,6 +1,6 @@
 # 定时任务：总设计（T1 到 T5）
 
-owner 2026-10-30 定，一次做到位，没有"第一版"（这里的"v1"指产品的第一个版本，不是功能的第一版）。产品行为写在 `docs/product.md` 3.13，本文只写做法、共享契约和切片。七个 PR（T1a、T1b、T2、T3、T4a、T4b、T5）都从最新 `origin/dev` 开 `codex/<片>` 分支，目标 `dev`（`AGENTS.md`"2026-10-30 起"）。行号按基线 ecd80328；`origin/dev` 已再前进 13 个只改 Windows 安装和更新的提交，不碰本文引用的文件，行号漂了按函数名找。
+owner 2026-10-30 定，一次做到位，没有"第一版"（这里的"v1"指产品的第一个版本，不是功能的第一版）。产品行为写在 `docs/product.md` 3.13，本文只写做法、共享契约和切片。八个 PR（T1a、T1b、T2、T3、T3b、T4a、T4b、T5）都从最新 `origin/dev` 开 `codex/<片>` 分支，目标 `dev`（`AGENTS.md`"2026-10-30 起"）。行号按基线 ecd80328；`origin/dev` 已再前进 13 个只改 Windows 安装和更新的提交，不碰本文引用的文件，行号漂了按函数名找。
 
 2026-10-30 两轮审查（对照代码的 28 条、对照决定和格式的 23 条）后改了一版，改了什么见第 17 节。
 
@@ -42,7 +42,7 @@ owner 2026-10-30 定，一次做到位，没有"第一版"（这里的"v1"指产
                                            └──────────────────────────────────────────┘
 ```
 
-- **一份命令核**：`D/admin/schedule-commands.ts`，照 s47 的 `structured-commands.ts`。终端、桌面端 RPC 和 agent 工具都调它，它是唯一改 `schedules.json` 的地方，范围和角色在这里查，不在调用方查。
+- **一份命令核**：`D/admin/schedule-commands.ts`，照 s47 的 `structured-commands.ts`。终端、桌面端 RPC 和 agent 工具都调它，它是用户请求改 `schedules.json` 的唯一入口，范围和角色在这里查，不在调用方查。调度器的运行时写入和解绑时的 `markUnavailable` 不经命令核，直接走 store 的两个 `mutate` 入口。
 - **命令是手，skill 是说明书**：工具只是命令的壳；内置的任务 skill 教 agent 什么时候用、怎么写 spec、怎么算时间，常驻一行，用时再加载（3.6）。
 - **agent 不在 shell 里跑命令行**：沙箱连不上 daemon（e04、e04b），命令行拿的是本机主人凭据。Claude 走进程内 MCP `vonvon_bot`（`D/agent/claude-agent/thread.ts:327-343` 组装）；Codex 走 app-server 的 dynamicTools（第 9 节）。
 - **四把钥匙**（3.13"谁能做什么"的实现）：
@@ -224,8 +224,8 @@ export function createScheduler(deps: {
   5. 这个任务 `inflight` 还在（上一次没跑完）：记 `{ status: 'skipped', reason: 'running', slot: latest }`，`counts.skipped++`，`cursor = latest`，不跑。
   6. **在同一个 `mutate` 里认领**：回调里重读 `state`、`cursor`、`inflight`，和 tick 开头看的一样才写 `inflight = { runId, slot: latest, trigger, startedAt: now, revision }`、`cursor = latest`；回调返回 `'claimed'` 才调 `run`，否则放弃（别的 tick 或 `runNow` 抢先了）。原子写成功后才调 `run`，这是"至多一次"。
 - **并发上限**（Claude 定）：同一时刻在跑的定时运行不超过 `maxInflight()`；到点但没槽的任务在调度器里排队，有槽就按到点先后起跑，每次起跑间隔 2 秒；排队期间同一任务又到了新 slot，只换成新的：被换掉的旧 slot 在一个 runtime `mutate` 里记 `{ status: 'missed', slot: 旧 slot, count: 1 }`、`counts.missed++`、`cursor = 旧 slot`，不记 skipped；新 slot 起跑时第 3 条的合并 missed 只数旧 slot 之后的，不重复记。不同任务可以同时跑；同一任务同一时刻一个。进会话的排队由 orchestrator 的 `queueOnly` 管。
-- **结算**：`run` 返回后在一个 runtime `mutate` 里写 `recent`、`counts.runs++`（done、failed、interrupted 才加）、`lastResult`（done 时 excerpt；failed 时 error 前加"失败："）、清 `inflight`。`done` 把 `consecutiveFailures` 清零；`failed` 且 `counts: true` 加一，到 10 改 `paused`、`pausedReason: 'failures'`（这是配置变化，换 revision）、`noticePending = true`、调 `notifyAutoPause`，成功才清 `noticePending`，失败留着每次 tick 再试，最多 24 小时；`interrupted`（停机、用户停止）不加不减（Claude 定）；`skipped` 不进 `counts.runs`。**`once` 的结束**：结算时 `nextSlotAfter(spec, tz, cursor) === undefined` 才改 `finished`——运行里 agent 用 `schedule_edit` 把自己的 `at` 往后挪了，就还是 `active`（"20 分钟后再看一次"靠这一条）；暂停后 `resume` 时 `at` 已过去也改 `finished`。结算发现任务已被删，丢掉。
-- **崩溃**：`start(loaded)` 不读盘，处理 `loaded.interrupted`（`load()` 时带 `inflight` 的任务；store 由 orchestrator 在 `initialize()` 里先 load，tick 没起时命令核也看得到盘上的任务，T1b 4.2）：在一个 runtime `mutate` 里按 id 重读，任务已删或 `inflight` 已清就跳过，否则记 `{ status: 'interrupted', by: 'crash' }`、清掉、`counts.runs++`、**`consecutiveFailures` 加一**（Claude 定：每分钟把 bot 进程弄崩的任务也要能自动暂停；干净停机走结算，不会留下 `inflight`，所以这里看到的就是崩溃或超过停机宽限被 SIGKILL）；不重跑（cursor 已过）；`once` 按上一条的规则判 `finished`。记完才起第一次 tick，`start` 的 promise 这时 resolve。
+- **结算**：`run` 返回后在一个 runtime `mutate` 里写 `recent`、`counts.runs++`（done、failed、interrupted 才加）、`lastResult`（done 时 excerpt；failed 时 error 前加"失败："）、清 `inflight`。`done` 把 `consecutiveFailures` 清零；`failed` 且 `counts: true` 加一，到 10 改 `paused`、`pausedReason: 'failures'`（这是配置变化，换 revision）、`noticePending = true`、调 `notifyAutoPause`，成功才清 `noticePending`，失败留着每次 tick 再试，最多 24 小时；`interrupted`（停机、用户停止）不加不减（Claude 定）；`skipped` 不进 `counts.runs`。**`once` 的结束**：结算时任务仍是 `state === 'active'` 且 `nextSlotAfter(spec, tz, cursor) === undefined` 才改 `finished`（运行中被 `markUnavailable` 或手动暂停的，保持 `paused`）——运行里 agent 用 `schedule_edit` 把自己的 `at` 往后挪了，就还是 `active`（"20 分钟后再看一次"靠这一条）；暂停后 `resume` 时 `at` 已过去也改 `finished`。结算发现任务已被删，丢掉。
+- **崩溃**：`start(loaded)` 不读盘，处理 `loaded.interrupted`（`load()` 时带 `inflight` 的任务；store 由 orchestrator 在 `initialize()` 里先 load，tick 没起时命令核也看得到盘上的任务，T1b 4.2）：在一个 runtime `mutate` 里按 id 重读，任务已删或 `inflight` 已清就跳过，否则记 `{ status: 'interrupted', by: 'crash' }`、清掉、`counts.runs++`、**`consecutiveFailures` 加一**（Claude 定：每分钟把 bot 进程弄崩的任务也要能自动暂停；干净停机走结算，不会留下 `inflight`，所以这里看到的就是崩溃或超过停机宽限被 SIGKILL）；不重跑（cursor 已过）；`once` 按上一条的规则判 `finished`。记完才起第一次 tick，`start` 的 promise 这时 resolve。`initialize()` load 完到 `start(loaded)` 处理完之间，这些任务在 `list` 里仍显示 `running: true`（`inflight` 还没清）；这段只有几秒，处理完就对了，不另做标记。
 - **手动运行**：`runNow` 用 `trigger: 'manual'`，`slot = now`，不动 `cursor`，不影响下一次定时；同样在 `mutate` 里认领，`inflight` 在时返回 `'running'`；`paused`、`finished` 的任务也能手动跑；没 `start()` 返回 `'not-started'`。
 - **停机**（顺序在 `D/bot/bridge.ts:113-141` 的 `shutdown`）：`scheduler.stop()` 同步停 timer、置 stopping（不再认领）；然后 `orchestrator.shutdown()`——它马上 `interrupt` 所有运行（`handle-message.ts:9161-9175`），排空后把没 settle 的钩子 settle 成 interrupted；然后 `await scheduler.drain(5000)` 等结算写完，`closing` 里排在 `orchestratorClosing` 之后。子进程只有 `CHILD_SHUTDOWN_GRACE_MS = 8000`（`D/host/lifecycle.ts:300`）就被 SIGKILL，所以 5 秒是上限，没有 60 秒排空。5 秒内没写完的留给下次启动的 `inflight` → interrupted（by: crash，会计一次失败；接受）。
 
@@ -374,14 +374,15 @@ export function createScheduler(deps: {
 | 片 | 名字 | 做什么 | 依赖 | 机器 | 约行数 | 工期 |
 |---|---|---|---|---|---|---|
 | T1a | `scheduled-tasks-1-core` | protocol、时间计算、存储（含 durable 原子写）、调度循环（不启动 tick） | — | JP-VPS（#422） | ~1,340 | 10-30 开工，10-31 上午合入 |
-| T1b | `scheduled-tasks-1b-commands` | 命令核、IPC/RPC、client、终端 `vonvon schedule`、`cli/index.ts` 接线；`TurnFacts.scheduled` 和 `TurnAuth.presence` 两个字段 | T1a | JP-VPS | ~1,100 | T1a 审查期间在它的分支上接着写，T1a 合入后开 PR；10-31 下午合入 |
+| T1b | `scheduled-tasks-1b-commands` | 命令核、IPC/RPC、client、终端 `vonvon schedule`、`cli/index.ts` 接线；`TurnFacts.scheduled` 和 `TurnAuth.presence` 两个字段 | T1a | JP-VPS | ~1,150 | T1a 审查期间在它的分支上接着写，T1a 合入后开 PR；10-31 下午合入 |
 | T2 | `scheduled-tasks-2-runs` | `runScheduled` 和钩子、放置、开话题、头部和标签、门、结算、自动暂停、停机和崩溃、编辑锁；启动 tick | T1b | JP-VPS（Bot 6，真 Claude 和 Codex） | ~1,450 | 10-31 下午开工，11-01 合入 |
-| T3 | `scheduled-tasks-3-tools` | schedule 工具类和角色表、grant 的 `where()`、Claude MCP、Codex dynamicTools、Codex 调用绑轮、关两家自带定时 | T1b（自测第 4 步要 T2 合入） | JP-VPS（真 Claude 和 Codex） | ~1,450 | 和 T2 同时开工，11-01 合入 |
+| T3 | `scheduled-tasks-3-tools` | schedule 工具类和角色表、grant 的 `where()`、`profileOf` 算 `tools.schedule`、Claude MCP、关 Claude 自带定时 | T1b（自测第 4 步要 T2 合入） | JP-VPS（真 Claude） | 和 T3b 合计 ~1,545（T3 第 9 节） | 和 T2 同时开工，11-01 合入 |
+| T3b | `scheduled-tasks-3b-codex` | Codex dynamicTools 和 `item/tool/call`、调用按 turnId 绑轮、删 `releaseAfterRun` 授权分支、features 深合并加 `in_app_local_automation: false` | T3 | JP-VPS（真 Codex） | 见 T3 | 在 T3 的分支上接着写，T3 合入后开 PR，11-01 合入 |
 | T4a | `scheduled-tasks-4-skill` | 生成器（稳定目录）、skill 文本、只依赖 T1a 的类型 | T1a | JP-VPS | ~600 | 和 T1b 同时，10-31 合入 |
-| T4b | `scheduled-tasks-4b-delivery` | 两家最小能力包交付、读入口、版本矩阵、`enabledPlugins` 实测、核验 | T3、T4a | JP-VPS；Mac Seatbelt 一项待 owner 验收 | ~900 | 11-01 开工，11-02 合入 |
+| T4b | `scheduled-tasks-4b-delivery` | 两家最小能力包交付、读入口、版本矩阵、`enabledPlugins` 实测、核验 | T3b、T4a | JP-VPS；Mac Seatbelt 一项待 owner 验收 | ~900 | 11-01 开工，11-02 合入 |
 | T5 | `scheduled-tasks-5-ui` | 桌面端三层接线、群详情页"任务"tab、Bot 页汇总 | T1b（T2 合入后才有运行记录可看） | Mac（#322，网页控制） | ~1,400 | 10-31 下午开工，11-01 合入 |
 
-并行道（工期按小时排，owner 2026-10-30 要快）：T1a 先做；T1a 在审查时，同一个 Codex 在 T1a 的分支上接着写 T1b，T1a 合入后 merge `dev` 再开 T1b 的 PR；T4a 在 T1a 合入后和 T1b 同时做。T1b 合入后 T2、T3（JP-VPS，各一个 Codex 会话）和 T5（Mac）同时开工；T2 和 T3 的真飞书自测共用验收 daemon，按目录锁排队。T3 只依赖 T1b：`TurnFacts.scheduled`、`TurnAuth.presence` 两个字段放在 T1b；T3 自测第 4 步（定时回合里改自己）要等 T2 合入。T4b 在 T3、T4a 合入后。目标：11-01 能在聊天里建任务、到点运行，11-02 内置 skill 交付完。在飞 PR 按 `AGENTS.md` 的在飞上限（本功能同时在飞的是 T2、T3、T5 和 T4a 或 T4b）。每片一个 PR，目标 `dev`，≤1,500 行（不含 lockfile）。Codex 开 PR 到 `dev`，Claude 审查、打 `frozen`、合入 `dev`；不合入 `main`。各片能从前面假设什么，写在各自计划的"范围"里。T2 超限先拆自动暂停、编辑锁和移出群为 T2b；T3 超限先拆 Codex 一侧为 T3b（Claude 先上）。
+并行道（工期按小时排，owner 2026-10-30 要快）：T1a 先做；T1a 在审查时，同一个 Codex 在 T1a 的分支上接着写 T1b，T1a 合入后 merge `dev` 再开 T1b 的 PR；T4a 在 T1a 合入后和 T1b 同时做。T1b 合入后 T2、T3（JP-VPS，各一个 Codex 会话）和 T5（Mac）同时开工；T2 和 T3 的真飞书自测共用验收 daemon，按目录锁排队。T3 只依赖 T1b：`TurnFacts.scheduled`、`TurnAuth.presence` 两个字段放在 T1b；T3 自测第 4 步（定时回合里改自己）要等 T2 合入。T3 预计超过 1,500 行，直接拆：Claude 一侧的 T3 先开，同一个 Codex 会话在它的分支上接着写 Codex 一侧的 T3b，T3 合入后开 T3b 的 PR。T4b 在 T3b、T4a 合入后。目标：11-01 能在聊天里建任务、到点运行，11-02 内置 skill 交付完。在飞 PR 按 `AGENTS.md` 的在飞上限（本功能同时在飞的是 T2、T3 或 T3b、T5 和 T4a 或 T4b）。每片一个 PR，目标 `dev`，≤1,500 行（不含 lockfile）。Codex 开 PR 到 `dev`，Claude 审查、打 `frozen`、合入 `dev`；不合入 `main`。各片能从前面假设什么，写在各自计划的"范围"里。T2 超限先拆自动暂停、编辑锁和移出群为 T2b；T3 已按第 9 节拆成 T3 和 T3b。
 
 ## 15. 待 owner 确认
 
