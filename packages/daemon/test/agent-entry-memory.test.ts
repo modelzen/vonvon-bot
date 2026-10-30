@@ -61,7 +61,7 @@ describe('memory tools are authorized by class, not by role', () => {
     const g = setup();
     expect(await g.entry.call('t_mem', {}, { toolUseId: 'never-seen' })).toMatchObject({ ok: false, reason: 'unknown-origin' });
   });
-  it('a Codex call from an earlier turn is refused once a newer turn started (it uses the first turn)', async () => {
+  it('a Codex call from an earlier turn is refused once a newer turn started (it is bound by its turn id)', async () => {
     const f = setup({ codex: true });
     f.entries.openTurn(f.t, { ...member, triggerMessageId: 'om_2' });
     expect(await f.call()).toMatchObject({ ok: false, reason: 'turn-ended' });
