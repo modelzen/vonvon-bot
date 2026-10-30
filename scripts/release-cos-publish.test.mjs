@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -499,6 +500,46 @@ test('owner confirmation must be given verbatim and name the version, exact SHA 
   await w.promote({ 'plan-sha256': hash, 'owner-confirmation': `版本 ${version}，源码 ${sha}，发布到 stable。` });
 });
 
+test('a contextual owner reply binds the reviewed plan, with no source SHA transcription', async t => {
+  const { w, hash } = await publishedFirst(t);
+  const before = w.writes().length;
+  for (const text of ['暂不发布', '不同意', `不要将 ${version} ${sha} 发布到 stable`, '确认另一个版本', '']) {
+    await assert.rejects(w.promote({ 'plan-sha256': hash, 'reviewed-plan': true, 'owner-confirmation': text }), /owner/);
+  }
+  await assert.rejects(w.promote({ 'plan-sha256': 'b'.repeat(64), 'reviewed-plan': true, 'owner-confirmation': '确认' }), /plan|hash/i);
+  assert.equal(w.writes().length, before);
+  await w.promote({ 'plan-sha256': hash, 'reviewed-plan': true, 'owner-confirmation': '确认' });
+  const receipt = await w.receipt('publish-receipt.json');
+  assert.equal(receipt.ownerConfirmation, '确认');
+  assert.equal(receipt.ownerConfirmationMode, 'reviewed-plan');
+  assert.equal(receipt.planSHA256, hash);
+  assert.equal(receipt.sourceCommit, sha);
+  assert.equal(receipt.publicVerification.publiclyVerified, true);
+});
+
+test('cancellation during the final stable snapshot prevents the actual manifest PUT', async t => {
+  const { w, hash } = await publishedFirst(t);
+  const fetch = w.deps.fetchImpl, before = w.writes().length;
+  let manifestReads = 0;
+  w.deps.fetchImpl = async (...args) => {
+    const response = await fetch(...args);
+    if (args[0] === DEFAULT_MANIFEST_URL && ++manifestReads === 3) await writeFile(w.cancelFile, 'stop during final snapshot');
+    return response;
+  };
+  await assert.rejects(w.promote({ 'plan-sha256': hash }), /Cancel file exists/);
+  assert.equal(manifestReads, 3);
+  assert.equal(w.writes().length, before);
+  assert.notEqual((await w.receipt('publish-receipt.json')).status, 'published');
+});
+
+test('versioned upload checks cancellation again after reading the bytes and before PUT', async t => {
+  const w = await world(t);
+  const planned = await w.plan({ 'first-release': true });
+  w.deps.log = line => { if (line.startsWith('PutObject ')) writeFileSync(w.cancelFile, 'stop after reading upload bytes'); };
+  await assert.rejects(w.upload({ 'first-release': true, 'plan-sha256': planned.sha256 }), /Cancel file exists/);
+  assert.equal(w.writes().length, 0);
+});
+
 test('credential settings are environment variable names in a separate, matching write configuration', async t => {
   const read = value => async () => value;
   const valid = { bucket: BUCKET, region: REGION, prefix: PREFIX, publicManifestURL: DEFAULT_MANIFEST_URL, secretIdEnv: 'COS_WRITE_ID', secretKeyEnv: 'COS_WRITE_KEY', sdkModule: '/tools/node_modules/cos-nodejs-sdk-v5' };
@@ -927,7 +968,7 @@ test('plan runs the real verify-public-release --local-only child without creden
 test('the stable confirmation rule is kept word for word in AGENTS.md, SKILL.md and workflow.md', async () => {
   const read = path => readFile(new URL(path, import.meta.url), 'utf8');
   const agents = await read('../AGENTS.md');
-  const rule = agents.match(/\*\*切 stable manifest 的确认只认一种：[^*]+\*\*/)?.[0];
+  const rule = agents.match(/\*\*stable 确认绑定已展示候选：[^*]+\*\*/)?.[0];
   assert.ok(rule, 'AGENTS.md states the stable confirmation rule');
   const skill = await read('../.agents/skills/release-mac/SKILL.md');
   const workflow = await read('../.agents/skills/release-mac/references/workflow.md');

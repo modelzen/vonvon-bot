@@ -120,17 +120,56 @@ test('existing different public bytes are never overwritten', async t => {
   assert.equal(h.calls.length, 0);
 });
 
+test('CANCEL appearing during one upload prevents the next object and success receipt', async t => {
+  const h = await fixture(t), cancelFile = join(h.out, 'CANCEL');
+  const put = h.options.client.putObject;
+  h.options.client.putObject = (params, callback) => {
+    put(params, async error => {
+      await writeFile(cancelFile, 'stop');
+      callback(error, {});
+    });
+  };
+  await assert.rejects(publishWindowsObjects({ ...h.options, cancelFile }), /stopped by CANCEL/);
+  assert.equal(h.calls.length, 1);
+  await assert.rejects(access(join(h.out, 'windows-publish-receipt.json')));
+});
+
+test('a present or relative cancellation path prevents all publication requests', async t => {
+  const h = await fixture(t), cancelFile = join(h.out, 'CANCEL');
+  h.options.client.getBucketVersioning = () => assert.fail('no COS operation after cancellation');
+  await writeFile(cancelFile, 'stop');
+  await assert.rejects(publishWindowsObjects({ ...h.options, cancelFile }), /stopped by CANCEL/);
+  await assert.rejects(publishWindowsObjects({ ...h.options, cancelFile: 'CANCEL' }), /absolute --cancel-file/);
+  assert.equal(h.calls.length, 0);
+});
+
 test('interrupted artifact extraction leaves the final directory clean and retry succeeds', async t => {
   const root = await mkdtemp(join(tmpdir(), 'vonvon-windows-download-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const out = join(root, 'release');
   const name = `windows-unsigned-${version}-${sourceSha.slice(0, 12)}`;
-  const api = async args => args[1].includes('/artifacts?') ? { artifacts: [{ id: 123, name, expired: false, digest: 'sha256:abc' }] } : {
+  const env = { PATH: '/bin', NO_PROXY: '.local' };
+  const api = async (args, apiEnv) => {
+    assert.deepEqual(apiEnv, env);
+    return args[1].includes('/artifacts?') ? { artifacts: [{ id: 123, name, expired: false, digest: 'sha256:abc' }] } : {
     repository: { full_name: 'modelzen/vonvon-bot' }, head_repository: { full_name: 'modelzen/vonvon-bot' },
     path: '.github/workflows/windows-release.yml', status: 'completed', conclusion: 'success', event: 'push', head_sha: sourceSha, run_attempt: 1,
+  }; };
+  const downloadEnvironment = async original => {
+    assert.deepEqual(original, env);
+    return { ...original, HTTPS_PROXY: 'http://proxy.example:8080' };
   };
-  const interrupted = async (command, args) => { await writeFile(join(args.at(-1), 'partial'), 'partial'); throw new Error('connection lost'); };
-  await assert.rejects(downloadBuild({ runId: 123, out, api, execute: interrupted }), /connection lost/);
+  const interrupted = async (command, args, options) => {
+    assert.equal(options.env.HTTPS_PROXY, 'http://proxy.example:8080');
+    assert.equal(options.env.NO_PROXY, '.local'); assert.equal(options.timeout, 15 * 60_000);
+    await writeFile(join(args.at(-1), 'partial'), 'partial');
+    throw new Error('connection lost https://secret.example/?token=fixture-secret');
+  };
+  await assert.rejects(downloadBuild({ runId: 123, out, env, api, execute: interrupted, downloadEnvironment }), error => {
+    assert.match(error.message, /network route.*same release and run/);
+    assert.doesNotMatch(error.message, /fixture-secret|secret.example/);
+    return true;
+  });
   await assert.rejects(access(out));
   const complete = async (command, args) => {
     const dir = args.at(-1), base = `Vonvon-Bot-${version}-windows-x64`, setup = `Vonvon-Bot-Setup-${version}-x64`;
@@ -141,7 +180,31 @@ test('interrupted artifact extraction leaves the final directory clean and retry
     await writeFile(join(dir, 'latest.yml'), `version: ${version}\nfiles:\n  - url: ${setup}.exe\n    sha512: ${sha}\n    size: 128\npath: ${setup}.exe\nsha512: ${sha}\n`);
     await createWindowsInventory({ out: dir, version, sourceSha, unpackedExe: join(dir, `${setup}.exe`), zipExe: join(dir, `${setup}.exe`) });
   };
-  const verified = await downloadBuild({ runId: 123, out, api, execute: complete });
+  const verified = await downloadBuild({ runId: 123, out, env, api, execute: complete, downloadEnvironment });
   assert.equal(verified.sourceSha, sourceSha);
   assert.equal(JSON.parse(await readFile(join(out, 'github-build.json'), 'utf8')).artifactId, 123);
+  const reused = await downloadBuild({ runId: 123, out, env, api,
+    downloadEnvironment: async () => assert.fail('verified downloads do not resolve or use the network route again'),
+    execute: async () => assert.fail('verified artifact must be reused') });
+  assert.deepEqual(reused, verified);
+});
+
+test('an overlong GitHub artifact download fails with a bounded, redacted recovery instruction', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'vonvon-windows-timeout-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const name = `windows-unsigned-${version}-${sourceSha.slice(0, 12)}`, out = join(root, 'release');
+  const api = async args => args[1].includes('/artifacts?') ? { artifacts: [{ id: 123, name, expired: false }] } : {
+    repository: { full_name: 'modelzen/vonvon-bot' }, head_repository: { full_name: 'modelzen/vonvon-bot' },
+    path: '.github/workflows/windows-release.yml', status: 'completed', conclusion: 'success', event: 'push', head_sha: sourceSha,
+  };
+  await assert.rejects(downloadBuild({ runId: 123, out, api, downloadEnvironment: async env => env,
+    execute: async (command, args, options) => {
+      assert.equal(options.timeout, 900000);
+      throw Object.assign(new Error('secret proxy diagnostic'), { killed: true });
+    } }), error => {
+    assert.match(error.message, /exceeded 15 minutes.*resume the same release and run/);
+    assert.doesNotMatch(error.message, /secret proxy/);
+    return true;
+  });
+  await assert.rejects(access(out));
 });
