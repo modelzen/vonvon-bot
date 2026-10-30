@@ -3,6 +3,7 @@ import type { BotSettingsScope, ModelQuery } from './settings-types';
 import { GroupUpstreamError, InvalidGroupInput, type AdminGroupOp } from './groups';
 import { AdminWriteError, type AdminWriteOp } from './ops';
 import type { AdminLibraryOp } from './library';
+import type { ScheduleRequest } from '@vonvon/protocol';
 
 /**
  * supervisor ↔ bot 子进程的管理面 IPC（node 'ipc' stdio / process.send）。
@@ -24,7 +25,9 @@ export const ADMIN_IPC_REQ = 'fcb.admin.req' as const;
 export const ADMIN_IPC_RES = 'fcb.admin.res' as const;
 
 export type AdminSettingsReadOp = { kind: 'settingsRead'; scope: BotSettingsScope } | { kind: 'settingsModels'; query: ModelQuery };
-export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | { kind: 'status' };
+/** Scheduled-task requests from the desktop and the terminal; the bot process runs them through schedule-commands as the local owner. */
+export type AdminScheduleOp = { kind: 'schedule'; via: 'desktop' | 'cli'; request: ScheduleRequest };
+export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | { kind: 'status' };
 
 export interface AdminIpcRequest {
   fcb: typeof ADMIN_IPC_REQ;
