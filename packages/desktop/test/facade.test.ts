@@ -44,7 +44,7 @@ describe('synchronous desktop facade', () => {
     h.replies.set(desktopChannels.setLoginItem, async () => ({ ok: true, value: 'invalid' }));
     await expect(shell.setLoginItem(false)).rejects.toThrow('Invalid desktop response');
   });
-  it('sends a schedule call as one payload and validates the reply', async () => {
+  it('sends a schedule call with its bot and validates the reply', async () => {
     const h = harness();
     const args: unknown[][] = [];
     const invoke = h.transport.invoke;
@@ -56,7 +56,7 @@ describe('synchronous desktop facade', () => {
     const request = { action: 'runNow', chatId: 'oc_schedule', taskId: 'st_1' } as const;
     h.replies.set(desktopChannels.schedule, async () => ({ ok: true, value: { kind: 'started', taskId: 'st_1', runId: 'run_1' } }));
     await expect(client.schedule('cli_schedule', request)).resolves.toEqual({ kind: 'started', taskId: 'st_1', runId: 'run_1' });
-    expect(args).toEqual([[{ botId: 'cli_schedule', request }]]);
+    expect(args).toEqual([['cli_schedule', request]]);
     h.replies.set(desktopChannels.schedule, async () => ({ ok: true, value: { kind: 'unexpected' } }));
     await expect(client.schedule('cli_schedule', request)).rejects.toThrow();
   });

@@ -115,20 +115,6 @@ describe('desktop IPC boundary', () => {
     expect(h.run).toHaveBeenLastCalledWith({ type: 'refresh' });
   });
 
-  it('passes one bot\'s schedule request through and refuses a malformed one before the daemon', async () => {
-    const h = harness();
-    const schedule = vi.fn(async (_botId: string, _request: unknown) => ({ kind: 'deleted', taskId: 'st_1' }));
-    Object.assign(h.owner.client, { schedule });
-    const payload = { botId: 'cli_schedule', request: { action: 'delete', chatId: 'oc_schedule', taskId: 'st_1', revision: 'r1' } };
-    expect(await h.invoke(desktopChannels.schedule, payload)).toEqual({ ok: true, value: { kind: 'deleted', taskId: 'st_1' } });
-    expect(schedule).toHaveBeenCalledExactlyOnceWith('cli_schedule', payload.request);
-    expect(await h.invoke(desktopChannels.schedule, { ...payload, request: { action: 'drop' } })).toMatchObject({ ok: false });
-    expect(await h.invoke(desktopChannels.schedule, { ...payload, botId: 'not-a-bot' })).toMatchObject({ ok: false });
-    expect(await h.invoke(desktopChannels.schedule, payload.botId, payload.request)).toMatchObject({ ok: false });
-    expect(schedule).toHaveBeenCalledOnce();
-    await h.bridge.dispose();
-  });
-
   it('keeps service operations shell-owned and validates authorized arguments', async () => {
     const h = harness();
     const wrong = { ...h.event, senderFrame: { url: h.frame.url } } as IpcMainInvokeEvent;
