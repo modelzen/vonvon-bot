@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createScheduleTools, scheduleToolNames, scheduleToolSpecs } from '../src/agent/entry/schedule-tools';
 import { parseLocal } from '../src/bot/schedule/time';
-import { G, HOST, MIN, NOW, OWNER, removeScheduleFixtures, scheduleFixture, stored } from './helpers/schedule-entry';
+import { G, HOST, MEMBER, MIN, NOW, OTHER, OWNER, human, removeScheduleFixtures, scheduleFixture, stored } from './helpers/schedule-entry';
 
 // T3 4.1: one zod definition for both providers; `when` read by the daemon; one line of words above the reply's JSON.
 afterEach(removeScheduleFixtures);
@@ -20,11 +20,15 @@ describe('the seven tools', () => {
     expect(tools.find(tool => tool.name === 'schedule_create')?.description).toBe('给本群建一个定时任务，或给自己排一个稍后回来的一次性任务；时间用 when 写，不用算毫秒。');
   });
 
-  it('tells an edit that a missing zone is the task\'s own, and a create that it is the daemon\'s', () => {
+  it('tells an edit that a missing zone is the task\'s own, a create that it is the daemon\'s, and a list that a taskId reads one task whole', () => {
     const schema = (name: string) => scheduleToolSpecs().find(spec => spec.name === name)?.inputSchema as
       { properties: { timeZone: { description: string }; patch: { properties: { timeZone: { description: string } } } } };
     expect(schema('schedule_create').properties.timeZone.description).toBe('IANA 时区名，比如 Asia/Shanghai；不写就用 daemon 所在电脑的时区');
     expect(schema('schedule_edit').properties.patch.properties.timeZone.description).toBe('IANA 时区名；不写就按这个任务自己的时区（schedule_list 里的 timeZone）');
+    const list = scheduleToolSpecs().find(spec => spec.name === 'schedule_list')?.inputSchema;
+    expect(list).toMatchObject({ properties: { taskId: { type: 'string', description: '只看这一个任务，内容不截短；不写就列出本群全部' } } });
+    expect(list).not.toHaveProperty('required');
+    expect(schema('schedule_pause')).toMatchObject({ properties: { taskId: { description: '任务 id，来自 schedule_list' } }, required: ['taskId'] });
   });
 
   it.each([
@@ -131,34 +135,102 @@ describe('what the agent reads of a task', () => {
       startedAt: NOW - (20 - i) * MIN, endedAt: NOW - (20 - i) * MIN + 1000, durationMs: 1000, messageId: `om_run${i}`, topicId: `omt_run${i}`, link, error: long(200) })),
   });
 
-  it('keeps a list of 20 tasks at every limit under the registry\'s cap, the free text cut with a mark', async () => {
+  const clipped = '现在 2026-11-01 10:00（Asia/Shanghai）· 本群 20 个任务 · 太长的内容截短了，用 schedule_list 带 taskId 看一个任务的全文';
+
+  it('cuts a list of 20 tasks at every limit to fit the registry\'s cap, marks what it cut, and says so', async () => {
     const f = await scheduleFixture({ tasks: Array.from({ length: 20 }, (_, i) => full(`st_${i}`)) });
     f.open();
     const reply = await f.call('schedule_list');
     expect(reply).toMatchObject({ ok: true });
     const text = String(reply.ok && reply.result);
     expect(Buffer.byteLength(JSON.stringify(text))).toBeLessThan(256 * 1024);
-    const { json } = lines(text);
+    const { first, json } = lines(text);
+    expect(first).toBe(clipped);
     expect(json.tasks).toHaveLength(20);
     const [task] = json.tasks;
     expect(task.instruction).toBe(`${long(999)}…`);
-    expect(task.createdBy).toEqual({ via: 'chat', name: long(40), text: `${long(199)}…` });
+    expect(task).toMatchObject({ instructionClipped: true, instructionLength: 4000 });
+    expect(task.createdBy).toEqual({ via: 'chat', role: 'member', name: long(40), mine: false, text: `${long(199)}…` });
     expect(task.lastResult).toEqual({ status: 'failed', at: NOW - MIN, excerpt: `${long(199)}…`, link });
     expect(task.recent.map((run: { runId: string }) => run.runId)).toEqual(['run-17', 'run-18', 'run-19']);
     expect(task.recent[2]).toEqual({ runId: 'run-19', slot: NOW - MIN, trigger: 'schedule', status: 'failed', startedAt: NOW - MIN, endedAt: NOW - MIN + 1000,
       durationMs: 1000, link, error: long(200) });
-    expect(Object.keys(task).sort()).toEqual(['createdBy', 'describe', 'id', 'instruction', 'lastResult', 'name', 'nextRunAt', 'placement', 'recent', 'revision', 'running', 'state', 'timeZone'].sort());
+    expect(Object.keys(task).sort()).toEqual(['createdBy', 'describe', 'id', 'instruction', 'instructionClipped', 'instructionLength', 'lastResult', 'name',
+      'nextRunAt', 'placement', 'recent', 'revision', 'running', 'state', 'timeZone'].sort());
   });
-  it('shows no group id and no raw Feishu ids in a list or a single task, and a single task keeps its instruction whole', async () => {
+  it('lists a long instruction whole when the list fits, so an edit from the list keeps all of it', async () => {
+    const f = await scheduleFixture({ tasks: [stored('st_long', { instruction: long(2500) })] });
+    f.open();
+    const { first, json } = lines(await f.text('schedule_list'));
+    expect(first).toBe('现在 2026-11-01 10:00（Asia/Shanghai）· 本群 1 个任务');
+    const [task] = json.tasks;
+    expect(task.instruction).toBe(long(2500));
+    expect(task).not.toHaveProperty('instructionClipped');
+    await f.call('schedule_edit', { taskId: 'st_long', revision: task.revision, patch: { instruction: `${task.instruction} 另外加一句` } });
+    expect(f.store.get('st_long')?.instruction).toBe(`${long(2500)} 另外加一句`);
+  });
+  it('reads one task whole by its taskId, and only a task the list would show', async () => {
+    const f = await scheduleFixture({ tasks: [...Array.from({ length: 20 }, (_, i) => full(`st_${i}`)), stored('st_elsewhere', { chatId: OTHER })] });
+    f.open();
+    expect(lines(await f.text('schedule_list')).first).toBe(clipped);
+    const one = lines(await f.text('schedule_list', { taskId: 'st_3' }));
+    expect(one.first).toBe(`任务：${long(40)} · 每天 09:00 · 下次 11-02 09:00（Asia/Shanghai）`);
+    expect(one.json).toMatchObject({ kind: 'task', task: { id: 'st_3', instruction: long(4000), createdBy: { text: long(500) }, lastResult: { excerpt: long(500) } } });
+    expect(one.json.task).not.toHaveProperty('instructionClipped');
+    // Not found the way every other tool says it.
+    for (const id of ['st_elsewhere', 'st_missing']) {
+      expect(await f.text('schedule_list', { taskId: id })).toBe(await f.text('schedule_pause', { taskId: id }));
+    }
+    expect(lines(await f.text('schedule_list', { taskId: 'st_elsewhere' })).json).toEqual({ kind: 'refused', reason: 'not-found', message: '本群没有这个任务。' });
+    expect(f.store.get('st_elsewhere')?.state).toBe('active');
+  });
+  it('shows no group id and no raw Feishu ids in a list or a single task, and a single task keeps its instruction whole and its last 3 runs', async () => {
     const f = await scheduleFixture({ tasks: [full('st_full')] });
     f.open();
     const replies = [await f.text('schedule_list'), await f.text('schedule_create', daily), await f.text('schedule_pause', { taskId: 'st_full' }),
       await f.text('schedule_edit', { taskId: 'st_full', revision: 'stale', patch: { name: '早报' } })];
-    for (const text of replies) expect(text).not.toMatch(/oc_|ou_|om_/);
-    expect(lines(replies[2]!).json).toMatchObject({ kind: 'task', task: { state: 'paused', pausedReason: 'manual', instruction: long(4000) } });
-    expect(lines(replies[3]!).json).toMatchObject({ kind: 'conflict', current: { instruction: long(4000), createdBy: { text: long(500) } } });
+    for (const text of replies) expect(text).not.toMatch(/oc_|ou_|om_|omt_|on_/);
+    const runs = (task: { recent: { runId: string }[] }) => task.recent.map(run => run.runId);
+    const paused = lines(replies[2]!).json, conflict = lines(replies[3]!).json;
+    expect(paused).toMatchObject({ kind: 'task', task: { state: 'paused', pausedReason: 'manual', instruction: long(4000), placement: { kind: 'topic', here: false } } });
+    expect(runs(paused.task)).toEqual(['run-17', 'run-18', 'run-19']);
+    expect(conflict).toMatchObject({ kind: 'conflict', current: { instruction: long(4000), createdBy: { text: long(500) } } });
+    expect(runs(conflict.current)).toEqual(['run-17', 'run-18', 'run-19']);
     // The store keeps them all; only the agent's view leaves them out.
-    expect(f.store.get('st_full')).toMatchObject({ chatId: G, createdBy: { openId: 'ou_creator', messageId: 'om_created' }, lastResult: { messageId: 'om_result' } });
+    expect(f.store.get('st_full')).toMatchObject({ chatId: G, placement: { topicId: 'omt_topic' }, createdBy: { openId: 'ou_creator', messageId: 'om_created' }, lastResult: { messageId: 'om_result' } });
     expect(f.store.all().find(task => task.name === '日报')).toMatchObject({ chatId: G, createdBy: { openId: OWNER, messageId: 'om_trigger' } });
+  });
+  it('tells a member which tasks are theirs without any open_id, in a list, a single task and a conflict', async () => {
+    const f = await scheduleFixture({ tasks: [stored('st_mine'), stored('st_theirs', { createdBy: { via: 'chat', openId: 'ou_member_b', name: '张三', role: 'member' } }),
+      stored('st_desk', { createdBy: { via: 'desktop' } })] });
+    f.open(human(MEMBER));
+    const listed = await f.text('schedule_list');
+    expect(listed).not.toMatch(/ou_/);
+    expect(lines(listed).json.tasks.map((task: { id: string; createdBy: object }) => [task.id, task.createdBy])).toEqual([
+      ['st_mine', { via: 'chat', role: 'member', mine: true }],
+      ['st_theirs', { via: 'chat', role: 'member', name: '张三', mine: false }],
+      ['st_desk', { via: 'desktop', mine: false }],
+    ]);
+    const paused = await f.text('schedule_pause', { taskId: 'st_mine' }), conflict = await f.text('schedule_edit', { taskId: 'st_mine', revision: 'stale', patch: { name: '早报' } });
+    expect(`${paused}${conflict}`).not.toMatch(/ou_/);
+    expect(lines(paused).json.task.createdBy).toEqual({ via: 'chat', role: 'member', mine: true });
+    expect(lines(conflict).json.current.createdBy).toEqual({ via: 'chat', role: 'member', mine: true });
+    // A task's own run has no person to compare with.
+    f.open({ retry: false, initiative: false, wake: false, scheduled: { taskId: 'st_mine', runId: 'run-self' } });
+    expect(lines(await f.text('schedule_list')).json.tasks[0].createdBy).toEqual({ via: 'chat', role: 'member' });
+  });
+  it('says whether a topic task posts to the topic this turn is in, without the topic id', async () => {
+    const f = await scheduleFixture({ tasks: [stored('st_topic', { placement: { kind: 'topic', topicId: 'omt_topic' } })] });
+    const placement = async () => lines(await f.text('schedule_list')).json.tasks[0].placement;
+    f.open(human(OWNER, { where: () => ({ inTopic: true, topicId: 'omt_topic' }) }));
+    expect(await placement()).toEqual({ kind: 'topic', here: true });
+    f.open(human(OWNER, { triggerMessageId: 'om_2', where: () => ({ inTopic: true, topicId: 'omt_other' }) }));
+    expect(await placement()).toEqual({ kind: 'topic', here: false });
+    f.open(human(OWNER, { triggerMessageId: 'om_3', where: () => ({ inTopic: true }) }));
+    expect(await placement()).toEqual({ kind: 'topic', here: false });
+    f.open(human(OWNER, { triggerMessageId: 'om_4' }));
+    expect(await placement()).toEqual({ kind: 'topic', here: false });
+    f.open({ retry: false, initiative: false, wake: false, scheduled: { taskId: 'st_topic', runId: 'run-self' }, where: () => ({ inTopic: true, topicId: 'omt_topic' }) });
+    expect(await placement()).toEqual({ kind: 'topic', here: true });
   });
 });

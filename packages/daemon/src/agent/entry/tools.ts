@@ -23,6 +23,8 @@ export interface ToolContext {
   schedule?(): { actor: Exclude<ScheduleActor, { kind: 'local' }>; where: TurnWhere };
 }
 export type CommitGuard = () => void;
+/** The most a tool's result may take as JSON; the registry answers a bigger one with 结果太大. */
+export const TOOL_RESULT_BYTES = 256 * 1024;
 export interface AgentTool {
   name: string;
   class: 'read' | 'settings' | 'memory' | 'schedule';
