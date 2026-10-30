@@ -69,7 +69,8 @@ it.each([['qa', undefined], ['write', undefined], ['full', undefined], ['qa', { 
     expect(f.options()?.disallowedTools).toEqual([...tier, ...NATIVE]);
     // The tier's own denials are kept; full access has none and returns early in permission.ts, the five still come.
     if (mode !== 'full') expect(tier.length).toBeGreaterThan(0);
-    expect(f.options()?.settings).toMatchObject({ skillOverrides: { loop: 'off', schedule: 'off' }, autoMemoryEnabled: false });
+    // CLAUDE_CODE_DISABLE_CRON in the flag-layer settings too: a settings file's `env` overrides the child env.
+    expect(f.options()?.settings).toMatchObject({ skillOverrides: { loop: 'off', schedule: 'off' }, autoMemoryEnabled: false, env: { CLAUDE_CODE_DISABLE_CRON: '1' } });
     expect(f.options()?.env).toMatchObject({ CLAUDE_CODE_DISABLE_CRON: '1', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' });
   });
 

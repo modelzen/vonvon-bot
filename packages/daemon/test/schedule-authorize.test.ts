@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import type { ScheduleReply } from '@vonvon/protocol';
 import { scheduleRefusalMessages } from '../src/admin/schedule-commands';
+import type { AgentTool } from '../src/agent/entry/tools';
 import { ADMIN, G, MEMBER, OTHER, OWNER, human, removeScheduleFixtures, scheduleFixture, stored } from './helpers/schedule-entry';
 
 // T3 4.2 and 3.13"谁能做什么": the registry checks the role table first and a refusal never reaches the command core;
@@ -25,18 +27,24 @@ async function reply(f: Fixture, name: string, args: unknown = {}): Promise<Sche
   return JSON.parse(String(result.result).split('\n').slice(1).join('\n'));
 }
 const registryRefusal = (reason: string, message: string) => ({ ok: false, code: 'refused', reason, message });
+/** Who the command core recorded as the creator: the agent's view leaves the open_id out. */
+const creatorOf = (f: Fixture, made: ScheduleReply) => made.kind === 'task' ? f.store.get(made.task.id)?.createdBy : undefined;
 
 describe('who may do what', () => {
   it.each([['owner', OWNER], ['admin', ADMIN]])('lets the %s do everything to anyone\'s task', async (_role, openId) => {
     const f = await scheduleFixture({ tasks: tasks() });
     f.open(human(openId));
-    expect(await reply(f, 'schedule_create', create)).toMatchObject({ kind: 'task', task: { createdBy: { openId, role: _role } } });
+    const made = await reply(f, 'schedule_create', create);
+    expect(made).toMatchObject({ kind: 'task', task: { name: '日报' } });
+    expect(creatorOf(f, made)).toMatchObject({ openId, role: _role });
     for (const [name, args, kind] of writes(f, 'st_theirs')) expect((await reply(f, name, args())).kind).toBe(kind);
   });
   it('lets a member do everything to their own task and nothing to another\'s', async () => {
     const f = await scheduleFixture({ tasks: tasks() });
     f.open(human(MEMBER));
-    expect(await reply(f, 'schedule_create', create)).toMatchObject({ kind: 'task', task: { createdBy: { openId: MEMBER, role: 'member' } } });
+    const made = await reply(f, 'schedule_create', create);
+    expect(made).toMatchObject({ kind: 'task', task: { name: '日报' } });
+    expect(creatorOf(f, made)).toMatchObject({ openId: MEMBER, role: 'member' });
     for (const [name, args] of writes(f, 'st_theirs')) {
       expect(await reply(f, name, args())).toEqual({ kind: 'refused', reason: 'not-task-owner', message: scheduleRefusalMessages['not-task-owner'] });
     }
@@ -138,5 +146,25 @@ describe('the commit point and the second layer', () => {
     expect(await f.commands.execute(owner, { action: 'list', chatId: OTHER })).toMatchObject({ reason: 'not-group' });
     expect(await f.commands.execute(owner, { action: 'pause', chatId: G, taskId: 'st_elsewhere' })).toMatchObject({ reason: 'not-found' });
     expect(f.store.get('st_theirs')?.state).toBe('active');
+  });
+});
+
+describe('a session that lives for many turns', () => {
+  const memoryProbe: AgentTool = { name: 'memory_probe', class: 'memory', description: 'fixture', input: z.object({}).strict(), run: async () => 'noted' };
+  // A recurring task keeps a single-session group's main session alive; the registry notes at most 256 origins.
+  it('still takes a new turn\'s calls after 300 calls over earlier turns, and the last ended turn\'s ids still read turn-ended', async () => {
+    const f = await scheduleFixture({ tasks: tasks(), tools: [memoryProbe] });
+    const results = [];
+    for (let turn = 0; turn < 6; turn++) {
+      f.open(human(OWNER, { triggerMessageId: `om_${turn}` }));
+      for (let i = 0; i < 50; i++) results.push(await f.call('schedule_list'));
+    }
+    expect(results.filter(result => !result.ok)).toEqual([]);
+    f.open(human(OWNER, { triggerMessageId: 'om_next' }));
+    expect(await f.call('schedule_list')).toMatchObject({ ok: true });
+    expect(await f.call('memory_probe')).toEqual({ ok: true, result: 'noted' });
+    // use-251 to use-300 were the sixth turn's: ended, and still known as that turn's.
+    expect(await f.entry.call('schedule_list', {}, { toolUseId: 'use-300' })).toMatchObject({ ok: false, reason: 'turn-ended', message: expect.stringContaining('任务没有动') });
+    expect(await f.entry.call('memory_probe', {}, { toolUseId: 'use-251' })).toMatchObject({ ok: false, reason: 'turn-ended' });
   });
 });
