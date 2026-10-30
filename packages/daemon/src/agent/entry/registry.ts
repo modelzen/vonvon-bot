@@ -15,10 +15,15 @@ export interface TurnFacts {
   typed?: boolean;
   /** 触发消息正文，没经过引用、转发、记录块的编织（记忆的出处核对用，§3.2 第 4 条） */
   triggerText?: string;
+  /** 定时任务的无人回合（T2 的 `runScheduled` 填）：在场算 `scheduled`，记忆回合按 `initiative` 算 */
+  scheduled?: { taskId: string; runId: string };
 }
+/** 这一轮有没有人在场：真人发起的 `human`；定时任务自己的运行 `scheduled`；bot、唤醒、主动、重试 `none`（总设计第 8 节） */
+export type TurnPresence = 'human' | 'scheduled' | 'none';
 /** 隐藏块在 `done` 前要用的这一轮的事实：现取，不是开轮时的快照 */
 export interface TurnMemory { turn(): MemoryTurn | undefined; place: AgentPlace; triggerMessageId?: string }
-export interface TurnScope { readonly id: number; close(): void }
+/** 开轮时定下的这一轮：`presence`、`scheduled` 不随插话变（插话看 `steered`） */
+export interface TurnScope { readonly id: number; readonly presence: TurnPresence; readonly scheduled?: { taskId: string; runId: string }; close(): void }
 export interface AgentEntries {
   issue(place: AgentPlace): AgentEntry;
   openTurn(thread: AgentThread, facts: TurnFacts): TurnScope;
@@ -55,6 +60,8 @@ interface TurnAuth {
   human: boolean;
   /** 开轮时的事实：这一轮是谁触发的（记忆的 `turn.kind`），不随插话变 */
   kind: MemoryTurn['kind'];
+  /** 开轮时推导，不随插话变：先看 `facts.scheduled`，再看 `kind === 'human'` */
+  presence: TurnPresence;
   /** 被不是触发人的人插过话（`noteSteer`），记忆写入据此降级 */
   steered: boolean;
   /** 这一轮写进 Bot 记忆的条数，含正在写的（一轮一条） */
@@ -312,17 +319,20 @@ export function createAgentEntries(opts: {
     issue,
     openTurn(thread, facts) {
       const grant = threads.get(thread);
-      const auth: TurnAuth = { id: ++nextTurn, facts: { ...facts }, active: true, controller: new AbortController(), human: facts.requesterKind === 'user' && !!facts.requesterOpenId && !!facts.triggerMessageId && !facts.retry && !facts.initiative && !facts.wake,
-        steered: false, botWrites: 0,
-        kind: facts.wake ? 'wake' : facts.initiative ? 'initiative' : facts.retry ? 'retry'
-          : facts.requesterKind === 'user' && !!facts.requesterOpenId && !!facts.triggerMessageId ? 'human' : 'bot' };
+      const scheduled = facts.scheduled ? { ...facts.scheduled } : undefined;
+      // 合成的定时轮带齐了真人轮的字段也不算真人：它没有在场的发起人，记忆回合记成已有的 initiative
+      const kind: MemoryTurn['kind'] = scheduled ? 'initiative' : facts.wake ? 'wake' : facts.initiative ? 'initiative' : facts.retry ? 'retry'
+        : facts.requesterKind === 'user' && !!facts.requesterOpenId && !!facts.triggerMessageId ? 'human' : 'bot';
+      const presence: TurnPresence = scheduled ? 'scheduled' : kind === 'human' ? 'human' : 'none';
+      const auth: TurnAuth = { id: ++nextTurn, facts: { ...facts, ...(scheduled ? { scheduled } : {}) }, active: true, controller: new AbortController(), human: kind === 'human',
+        steered: false, botWrites: 0, kind, presence };
       if (grant && grant.phase === 'attached') {
         if (grant.turn?.active) log.warn('agent', 'turn-overlap', {});
         end(grant.turn);
         grant.turn = auth;
         grant.firstTurn ??= auth;
       } else end(auth);
-      return { id: auth.id, close() { end(auth); } };
+      return { id: auth.id, presence, ...(scheduled ? { scheduled: { ...scheduled } } : {}), close() { end(auth); } };
     },
     memoryTurn(thread) {
       const grant = threads.get(thread);
