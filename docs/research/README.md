@@ -2,6 +2,10 @@
 
 - [2026-10-30 Windows 安装与应用内升级方案](2026-10-30-windows-install-update/report.md)：核对 0.7.8、Clash Verge Rev 2.5.8、CC Switch 4.0.21；建议免费更新签名、首次简短安装向导、后续应用内更新及取消新增 Windows ZIP；仅方案，未实施或发布。
 
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [2026-10-30 Codex 程序复用与模型刷新](2026-10-30-codex-runtime-refresh/report.md) | App / CLI 发现、统一托管更新、空闲切换及模型刷新；Claude 后续参考 | 只实现 Codex，验证边界见报告与 PR |
+
 - [2026-10-29 Codex 加速权限](2026-10-29-speed-permissions/report.md)：真实登录 / 未登录元数据对照、Fast 原生档位映射和权限证据过滤；没有真实 Ultrafast 正例，功能暂停合入 dev。
 
 - [2026-10-28 Windows 重装失败与下载选项](2026-10-28-windows-reinstall/report.md)：0.7.5 孤立卸载记录触发 0.7.6 hook 的错误码 2；真实 NSIS 验证与社区 x64 / ARM64 / ZIP 参考。本次只修安装错误，双架构下一片做。

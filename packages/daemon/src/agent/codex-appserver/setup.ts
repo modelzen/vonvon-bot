@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { AppServerClient } from './app-server-client';
-import { resolveCodexBin } from './locate';
+import { refreshCodexResolution } from './locate';
 import { binChildEnv } from '../../platform/tool-path';
 import { installManagedCodex, runSetupChild } from './managed-install';
 import { ProviderProcessCleanupError, ProviderProcessStoppedError } from '../owned-process';
@@ -65,7 +65,8 @@ export class CodexSetupService {
   }
 
   private async readSetup(signal: AbortSignal): Promise<CodexSetup> {
-    const bin = resolveCodexBin({ force: true });
+    const bin = await refreshCodexResolution({ force: true });
+    signal.throwIfAborted();
     if (!bin) return { installation: process.env.CODEX_BIN ? 'unknown' : 'missing', authentication: 'unknown', version: null, executable: null, message: process.env.CODEX_BIN ? `CODEX_BIN 指向不可用的文件：${process.env.CODEX_BIN}` : '尚未安装 Codex' };
     let version: string | null = null;
     const client = this.client(bin);
@@ -121,7 +122,8 @@ export class CodexSetupService {
 
   private async login(entry: JobEntry): Promise<void> {
     const signal = entry.abort.signal;
-    const bin = resolveCodexBin({ force: true });
+    const bin = await refreshCodexResolution({ force: true });
+    signal.throwIfAborted();
     if (!bin) throw new SetupDisplayError('当前 Codex 不可用，请先安装或检查 CODEX_BIN');
     const client = this.client(bin);
     let loginId: string | undefined;

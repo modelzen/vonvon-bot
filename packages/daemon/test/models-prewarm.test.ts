@@ -17,6 +17,7 @@ const BROKEN_SERVER = 'process.exit(7);';
 /** 正常应答 initialize / model/list 的假 codex app-server；每次启动在
  * `__filename + .count` 追加一行，用于断言缓存命中后不再 spawn。 */
 const WORKING_SERVER = `#!/usr/bin/env node
+if (process.argv.includes('--version')) { console.log('codex-cli 0.163.0'); process.exit(0); }
 require('fs').appendFileSync(__filename + '.count', 'run\\n');
 let buf = '';
 process.stdin.on('data', (d) => {

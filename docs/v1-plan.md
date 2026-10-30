@@ -2000,3 +2000,7 @@ Linux：`vonvon service uninstall`，`vonvon daemon stop`，`npm rm -g vonvon-bo
 ## 2026-10-30 Jev 接口扩展
 
 - [x] 按 owner 确认新增 OpenRouter、Vercel、自定义 Jev/System One；保留 TypeSafe 和现有普通模型路径。配置、密钥、判断传输与群快照共用当前入口，见 `docs/plans/2026-10-30-decision-provider-extensions.md`。自动检查与隔离本地验收记录随本次实现交付；owner 人工验收、真实网关推理和合入另行确认。
+
+## 2026-10-30 Codex 程序与模型刷新
+
+- [x] 统一 Codex 托管安装入口，复用 App / CLI 并按兼容版本选择，Provider 增加来源 / 版本 / 更新说明与模型刷新。当前任务完成后下轮恢复使用新程序，不重启 Vonvon；Claude 本轮不改。实现见 `docs/plans/codex-runtime-refresh.md`，研究与后续 Claude 参考见 `docs/research/2026-10-30-codex-runtime-refresh/report.md`。自动检查与隔离页面验收随 PR 记录，真实 Windows 与 owner 验收单独确认。

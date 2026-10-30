@@ -1,5 +1,3 @@
-import { CODEX_INSTALL_VERSION } from './managed-install';
-
 /**
  * Oldest Codex vonvon supports. e05: with a ChatGPT login the server refused every model tried on
  * 0.139.0 and gpt-6-luna on 0.148.0; 0.156.1 passed everything, including the smart-mode judge
@@ -8,8 +6,8 @@ import { CODEX_INSTALL_VERSION } from './managed-install';
  * a ChatGPT account" is `version` below this line and `model` above it (judge-process.ts).
  */
 export const CODEX_MIN_VERSION = '0.156.1';
-/** The version vonvon was tested on; the managed install pins the same one. */
-export const CODEX_VERIFIED_VERSION = CODEX_INSTALL_VERSION;
+/** Historical verified baseline, independent of the latest stable installer. */
+export const CODEX_VERIFIED_VERSION = '0.156.1';
 
 export type CodexCompatibility = 'ok' | 'tooOld' | 'newer' | 'unknown';
 

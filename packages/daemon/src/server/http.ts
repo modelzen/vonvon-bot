@@ -29,7 +29,7 @@ import { getRpcErrorCode } from './errors';
 import { serveWebUi } from './web-ui';
 import { getPidLockInfo, type PidLockInfo } from './pid-lock';
 import { EnvironmentService, type EnvironmentServiceOptions } from '../environment/service';
-import { resolveCodexBin } from '../agent/codex-appserver/locate';
+import { refreshCodexResolution } from '../agent/codex-appserver/locate';
 
 export interface ApiLifetime {
   beginDrain(): Promise<void>;
@@ -128,7 +128,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
     await mkdir(paths.appDir, { recursive: true });
     const environment = acquiredEnvironment = new EnvironmentService(options.environmentOptions ?? {
       home: homedir(), getDataRoot: () => paths.appDir,
-      resolveCodex: () => resolveCodexBin({ force: true }), nodePath: process.execPath,
+      resolveCodex: () => refreshCodexResolution({ force: true }), nodePath: process.execPath,
     });
     const { credential, machineId } = await readLocalIdentity(paths.appDir);
     const directory = acquiredDirectory = await createDirectoryBrowser();

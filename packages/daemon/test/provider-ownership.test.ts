@@ -18,7 +18,7 @@ afterAll(async () => {
 const transport = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock('../src/platform/spawn', async original => ({ ...await original<object>(), spawnProcess: transport.spawn }));
 vi.mock('../src/agent/codex-appserver/locate', () => ({
-  resolveCodexBin: () => '/fixture/no-provider',
+  refreshCodexResolution: () => '/fixture/no-provider', resolveCodexBin: () => '/fixture/no-provider',
   codexVersionAsync: async () => 'codex-cli 0.163.0',
 }));
 const fake = vi.hoisted(() => ({

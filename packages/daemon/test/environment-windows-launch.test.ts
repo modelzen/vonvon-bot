@@ -32,6 +32,8 @@ it.each([
     });
     expect(() => service['launch'](join(home, 'fixture.cmd'), [])).toThrow('captured Windows launch');
     expect(environment).toMatchObject({ HOME: home, USERPROFILE: home, ComSpec: expected });
+    expect(environment.SystemRoot).toBe(systemRoot ?? 'C:\\Windows');
+    expect(environment.PATH).toContain(`${systemRoot ?? 'C:\\Windows'}\\System32`);
     expect(environment.VONVON_FIXTURE_SECRET).toBeUndefined();
   } finally {
     Object.defineProperty(process, 'platform', descriptor);

@@ -71,7 +71,7 @@ vi.mock('../src/agent/owned-process', () => ({
 vi.mock('../src/agent', () => ({ installBackendDep() {}, uninstallBackendDep() {} }));
 // Provider discovery has its own tests. Startup's version warmup must not use this
 // suite's restart-child fixture or depend on a Codex installation on the host.
-vi.mock('../src/agent/codex-appserver/locate', () => ({ resolveCodexBin: () => null }));
+vi.mock('../src/agent/codex-appserver/locate', () => ({ refreshCodexResolution: () => null , resolveCodexBin: () => null }));
 vi.mock('../src/bot/bridge', () => ({ startBridge: fixture.startBridge }));
 // These cases exercise host/provider ownership without a migration. Vitest's worker has an IPC
 // channel, while the real importer is deliberately host-only and owns real Bridge locks.
