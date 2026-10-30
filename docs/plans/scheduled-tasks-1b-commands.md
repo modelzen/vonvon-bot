@@ -9,7 +9,7 @@
 - 新文件：`D/admin/schedule-commands.ts`、`D/server/rpc/schedule.ts`、`D/cli/commands/schedule.ts`。
 - 改：`packages/protocol/src/rpc.ts`、`packages/client/src/client.ts`、`D/admin/{ipc,service}.ts`、`D/bot/supervisor.ts`、`D/cli/commands/run.ts`、`D/bot/bridge.ts`（`BridgeHandle` 加 `schedule`）、`D/server/http.ts`、`D/cli/index.ts`、`D/cli/daemon-client.ts`、`D/bot/handle-message.ts`（只加 store 和调度器的构造、`initialize()` 里 load store、`schedule` 执行入口；注入的 `run` 抛 `runner-not-wired`，不 `start()`）、`D/agent/entry/registry.ts`（`TurnFacts.scheduled`、`TurnAuth.presence` 和推导、定时回合记忆 `kind` 映射 `initiative`，见 4.4；原在 T2，挪到这里让 T2 和 T3 能同时开工）。
 - 可以假设：T1a 的 schema、`ScheduleStore`、`createScheduler` 和 `Scheduler`、`time.ts`（含 `ceilToMinute`）。
-- 不做：运行（T2）、agent 工具和角色表里"无人回合""不在场"两行的实际调用方（T3，命令核这里先把规则写全）、skill（T4a/T4b）、桌面端（T5，桌面端的 ipc-contract/bridge/facade 三层也留给 T5）。
+- 不做：运行（T2）、agent 工具和角色表里"无人回合""不在场"两行的实际调用方（T3，命令核这里先把规则写全）、skill（T4a/T4b）、桌面端界面（T5）。桌面端 ipc-contract/bridge/facade 三层的 `schedule` 透传在本片做：client 接口加了必填的 `schedule`，桌面端不跟着加，typecheck 就红。
 - 本片不启动 tick：`runNow` 回 `bot-not-running`（调度器回 `{ kind: 'not-started' }`）。但 store 要 load（4.2）：daemon 重启后 `list` 照样列出旧任务，`create` 写回的文件里旧任务都在。
 - 后面的片可以假设：命令核签名、`ScheduleActor`、IPC op、RPC 方法、client 方法按总设计第 13 节存在，不再改名。
 

@@ -111,11 +111,36 @@ describe('schedule over RPC', () => {
       const client = await connect(api.port, clientKind);
       expect(await client.call('list-1', 'cli_a', list)).toEqual({ type: 'response', id: 'list-1', method: 'schedule', payload: tasks });
       expect(executeSchedule).toHaveBeenLastCalledWith('cli_a', via, list);
-      // A refusal is a reply, and a write goes through the snapshot rebuild like any other mutation.
+      // A refusal is a reply; a write is answered as it comes, without a snapshot rebuild (the snapshot has no tasks).
       executeSchedule.mockResolvedValueOnce(refused);
       const run: ScheduleRequest = { action: 'runNow', chatId: 'oc_pay', taskId: 'st_0123456789abcdef' };
       expect(await client.call('run-1', 'cli_a', run)).toEqual({ type: 'response', id: 'run-1', method: 'schedule', payload: refused });
       expect(executeSchedule).toHaveBeenLastCalledWith('cli_a', via, run);
+      await client.close();
+    } finally { await api.close(); }
+  });
+});
+
+describe('schedule replies over RPC', () => {
+  it('answers a write without a snapshot rebuild, and a malformed reply with one short line', async () => {
+    let broken = false;
+    const deleted: ScheduleReply = { kind: 'deleted', taskId: 'st_0123456789abcdef' };
+    const executeSchedule = vi.fn(async (): Promise<ScheduleReply> => deleted);
+    const listBots = async () => { if (broken) throw new Error('bots.json unreadable'); return []; };
+    const service = { listBots, listProjects: async () => [], codexSetup: async () => ({ installation: 'missing', authentication: 'unknown', version: null, executable: null }), executeSchedule } as unknown as AdminService;
+    const api = await m.startApi({ service, port: 0, control: control(), serviceActions: { platform: 'linux', readService: async () => ({ supported: false, installed: false, running: false }) } });
+    try {
+      const client = await connect(api.port, 'cli');
+      // The snapshot carries no tasks: a rebuild that fails now must not turn a write that landed into an error.
+      broken = true;
+      const remove: ScheduleRequest = { action: 'delete', chatId: 'oc_pay', taskId: 'st_0123456789abcdef', revision: 'r1' };
+      expect(await client.call('delete-1', 'cli_a', remove)).toEqual({ type: 'response', id: 'delete-1', method: 'schedule', payload: deleted });
+      // Any error rebuilds the snapshot first (http.ts), so this one runs with bots.json readable again.
+      broken = false;
+      executeSchedule.mockResolvedValueOnce({ kind: 'tasks', tasks: [{ id: 'x' }], now: 1, timeZone: 'UTC' } as unknown as ScheduleReply);
+      expect(await client.call('list-1', 'cli_a', list)).toEqual({
+        type: 'error', id: 'list-1', code: 'operation_failed', message: 'Bot 回的任务数据格式不对（daemon 和 Bot 进程版本可能不一致）。',
+      });
       await client.close();
     } finally { await api.close(); }
   });
@@ -129,6 +154,17 @@ const echoChild = `
   process.on('message', message => {
     if (message.type === 'bridge:shutdown') stop();
     else if (message.fcb === 'fcb.admin.req') process.send({ fcb: 'fcb.admin.res', id: message.id, ok: true, result: message.op.kind === 'status' ? { connection: 'connected' } : { echoed: message.op } });
+  });
+`;
+
+/** Answers like echoChild, but drains for 1.5 s after bridge:shutdown and says in each answer whether it was stopping. */
+const drainingChild = `
+  const keepAlive = setInterval(() => {}, 1000);
+  let stopping = false;
+  process.on('SIGTERM', () => {});
+  process.on('message', message => {
+    if (message.type === 'bridge:shutdown') { stopping = true; setTimeout(() => { clearInterval(keepAlive); process.disconnect(); }, 1500); }
+    else if (message.fcb === 'fcb.admin.req') process.send({ fcb: 'fcb.admin.res', id: message.id, ok: true, result: message.op.kind === 'status' ? { connection: 'connected' } : { echoed: message.op, stopping } });
   });
 `;
 
@@ -161,7 +197,60 @@ describe('the supervisor', () => {
   });
 });
 
+describe('the supervisor while a bot stops', () => {
+  const processes: ChildProcess[] = [];
+  afterEach(() => { for (const child of processes.splice(0)) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+
+  it('answers refused bot-not-running without asking the draining process', async () => {
+    f.fakeApi = true;
+    vi.mocked(m.spawnProcess).mockImplementation((_bin, _args, options) => {
+      const child = spawn(process.execPath, ['-e', drainingChild], options ?? {});
+      processes.push(child);
+      return child;
+    });
+    const host = control();
+    const supervisor = m.runSupervisor([bot('cli_a')], { control: host });
+    try {
+      await vi.waitFor(() => expect(f.deps?.executeSchedule).toBeDefined());
+      const deps = f.deps!;
+      await vi.waitFor(async () => expect(await deps.liveStatus!('cli_a')).toMatchObject({ running: true }), { timeout: 10_000 });
+      expect(await deps.executeSchedule!('cli_a', 'cli', list)).toEqual({ echoed: { kind: 'schedule', via: 'cli', request: list }, stopping: false });
+      // The host stops: the bot stays enabled while its process drains.
+      host.stop();
+      const answers: unknown[] = [];
+      await vi.waitFor(async () => {
+        answers.push(await deps.executeSchedule!('cli_a', 'cli', list));
+        expect(answers.at(-1)).toEqual(refused);
+      }, { timeout: 10_000, interval: 20 });
+      expect(answers.filter(answer => (answer as { stopping?: boolean }).stopping)).toEqual([]);
+    } finally {
+      host.stop();
+      await supervisor;
+    }
+  });
+});
+
 describe('the bot process', () => {
+  it('without a supervisor answers refused bot-not-running for a bot it does not run', async () => {
+    f.fakeApi = true;
+    f.bridgeSchedule = vi.fn(async (): Promise<ScheduleReply> => tasks);
+    // No parent: `vonvon run` serves its own API. The vitest fork keeps its own bound send.
+    const original = process.send;
+    process.send = undefined;
+    const host = control();
+    const running = m.runRun('cli_a', { control: host });
+    try {
+      await vi.waitFor(() => expect(f.deps?.executeSchedule).toBeDefined(), { timeout: 10_000 });
+      expect(await f.deps!.executeSchedule!('cli_b', 'cli', list)).toEqual(refused);
+      expect(await f.deps!.executeSchedule!('cli_a', 'cli', list)).toEqual(tasks);
+      expect(f.bridgeSchedule).toHaveBeenCalledExactlyOnceWith('cli', list);
+    } finally {
+      host.stop();
+      await running;
+      process.send = original;
+    }
+  });
+
   it('hands a schedule op from the supervisor to the bridge and answers with its reply', async () => {
     f.fakeApi = true;
     f.bridgeSchedule = vi.fn(async (): Promise<ScheduleReply> => tasks);

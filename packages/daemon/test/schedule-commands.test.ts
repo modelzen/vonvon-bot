@@ -110,6 +110,22 @@ describe('who may do what', () => {
     expect(f.scheduler.runNow).not.toHaveBeenCalled();
     expect((await f.onDisk()).find(task => task.id === 'st_there')).toMatchObject({ state: 'active', revision: 'rev-st_there' });
   });
+  it('gives a chat role outside the table, no role or an actor outside the union no rights', async () => {
+    const f = await setup([stored('st_theirs')], { kind: 'started', runId: 'r1' });
+    for (const actor of [
+      { kind: 'chat', openId: 'ou_x', role: 'bot', chatId: G },
+      { kind: 'chat', openId: 'ou_x', chatId: G },
+      { kind: 'Chat', openId: 'ou_x', role: 'owner', chatId: G },
+    ] as unknown as ScheduleActor[]) {
+      const notOwner = refusal('not-task-owner', '这个任务是别人建的，只有建它的人、主人和管理员能改。');
+      expect(await f.run(actor, { action: 'edit', chatId: G, taskId: 'st_theirs', revision: 'rev-st_theirs', patch: { name: '改过' } })).toEqual(notOwner);
+      expect(await f.run(actor, { action: 'runNow', chatId: G, taskId: 'st_theirs' })).toEqual(notOwner);
+      expect(await f.run(actor, { action: 'delete', chatId: G, taskId: 'st_theirs', revision: 'rev-st_theirs' })).toEqual(notOwner);
+      expect(await f.run(actor, create())).toEqual(refusal('not-human-turn', '这一轮不是由在场的人发起的，不能改任务。'));
+    }
+    expect(f.scheduler.runNow).not.toHaveBeenCalled();
+    expect(await f.onDisk()).toEqual([stored('st_theirs')]);
+  });
   it('gives listBot to the local owner only', async () => {
     const f = await setup([stored('st_here'), stored('st_there', { chatId: OTHER })]);
     expect(await f.run(local, { action: 'listBot' })).toMatchObject({ kind: 'tasks', tasks: [{ id: 'st_here', chatId: G }, { id: 'st_there', chatId: OTHER }], timeZone: HOST });
@@ -150,6 +166,37 @@ describe('create and views', () => {
     expect(saved!.createdBy).toEqual({ via: 'cli' });
     expect(f.scheduler.wake).toHaveBeenCalledTimes(1);
     expect(await f.run(local, { action: 'list', chatId: G })).toMatchObject({ kind: 'tasks', now: NOW, timeZone: HOST, tasks: [{ describe: '每 30 分钟' }] });
+  });
+  it('anchors on now whatever anchor the request carries', async () => {
+    const f = await setup();
+    for (const anchor of [1e300, -1e300]) {
+      expect(await f.run(local, create({ spec: { kind: 'every', minutes: 30, anchor } }))).toMatchObject({ kind: 'task', task: { spec: { anchor: ceilToMinute(NOW) }, nextRunAt: ceilToMinute(NOW) + 30 * MIN } });
+    }
+    expect((await f.onDisk()).map(task => task.spec)).toEqual([{ kind: 'every', minutes: 30, anchor: ceilToMinute(NOW) }, { kind: 'every', minutes: 30, anchor: ceilToMinute(NOW) }]);
+  });
+  it('refuses a bare UTC offset as a time zone, on create and on edit', async () => {
+    const f = await setup([stored('st_a')]);
+    for (const timeZone of ['+09:00', '+0900', '-23:59']) {
+      expect(await f.run(owner, create({ timeZone }))).toEqual(refusal('bad-schedule', `不认识这个时区：${timeZone}`));
+      expect(await f.run(owner, { action: 'edit', chatId: G, taskId: 'st_a', revision: 'rev-st_a', patch: { timeZone } })).toEqual(refusal('bad-schedule', `不认识这个时区：${timeZone}`));
+    }
+    expect(await f.onDisk()).toEqual([stored('st_a')]);
+  });
+  it('replies for a task whose stored time zone this Intl does not know', async () => {
+    const f = await setup([
+      stored('st_daily', { spec: { kind: 'daily', time: '09:00' }, timeZone: 'Mars/Olympus' }),
+      stored('st_once', { spec: { kind: 'once', at: NOW + HOUR }, timeZone: 'Mars/Olympus' }),
+    ]);
+    const listed = await f.run(local, { action: 'list', chatId: G });
+    // A once task's instant needs no zone; it is described in the host's.
+    expect(listed).toMatchObject({ kind: 'tasks', tasks: [{ id: 'st_daily', describe: '每天 09:00（Mars/Olympus）' }, { id: 'st_once', describe: '11 月 2 日 11:00 一次', nextRunAt: NOW + HOUR }] });
+    expect((listed as Extract<ScheduleReply, { kind: 'tasks' }>).tasks[0]).not.toHaveProperty('nextRunAt');
+    expect(await f.run(local, { action: 'listBot' })).toMatchObject({ kind: 'tasks', tasks: [{ id: 'st_daily' }, { id: 'st_once' }] });
+    expect(await f.run(owner, { action: 'pause', chatId: G, taskId: 'st_daily' })).toMatchObject({ kind: 'task', task: { state: 'paused' } });
+    expect(await f.run(owner, { action: 'edit', chatId: G, taskId: 'st_once', revision: 'rev-st_once', patch: { name: '改名' } })).toMatchObject({ kind: 'task', task: { name: '改名', timeZone: 'Mars/Olympus' } });
+    const revision = (await f.onDisk()).find(task => task.id === 'st_daily')!.revision;
+    expect(await f.run(owner, { action: 'delete', chatId: G, taskId: 'st_daily', revision })).toEqual({ kind: 'deleted', taskId: 'st_daily' });
+    expect((await f.onDisk()).map(task => [task.id, task.timeZone])).toEqual([['st_once', 'Mars/Olympus']]);
   });
   it('stores a given time zone normalized, and an explicit placement as given', async () => {
     const f = await setup();
@@ -205,6 +252,12 @@ describe('edit, delete, pause and resume', () => {
     expect(saved!.revision).not.toBe('rev-st_a');
     expect(f.scheduler.wake).toHaveBeenCalledTimes(1);
   });
+  it('re-anchors on now when the minutes change, even if the edit carries the old anchor', async () => {
+    const f = await setup([stored('st_a')]);
+    const reply = await f.run(owner, { action: 'edit', chatId: G, taskId: 'st_a', revision: 'rev-st_a', patch: { spec: { kind: 'every', minutes: 45, anchor: T0 } } });
+    expect(reply).toMatchObject({ kind: 'task', task: { spec: { kind: 'every', minutes: 45, anchor: ceilToMinute(NOW) }, nextRunAt: ceilToMinute(NOW) + 45 * MIN } });
+    expect((await f.onDisk())[0]).toMatchObject({ cursor: NOW });
+  });
   it('brings a finished task back to active with a new time', async () => {
     const f = await setup([stored('st_once', { spec: { kind: 'once', at: T0 + HOUR }, state: 'finished', cursor: T0 + HOUR })]);
     const at = NOW + 2 * HOUR;
@@ -213,15 +266,28 @@ describe('edit, delete, pause and resume', () => {
     expect((await f.onDisk())[0]).toMatchObject({ cursor: NOW });
   });
   it('leaves the slots alone when the edit re-sends the same schedule', async () => {
-    const f = await setup([stored('st_a')]);
+    const f = await setup([stored('st_a'), stored('st_b')]);
     await f.run(owner, { action: 'edit', chatId: G, taskId: 'st_a', revision: 'rev-st_a', patch: { name: '改名', spec: { kind: 'every', minutes: 30 } } });
-    expect((await f.onDisk())[0]).toMatchObject({ name: '改名', spec: { anchor: T0 }, cursor: T0 });
+    // The view's spec sent back as it was, anchor and all.
+    await f.run(owner, { action: 'edit', chatId: G, taskId: 'st_b', revision: 'rev-st_b', patch: { name: '改名', spec: { kind: 'every', minutes: 30, anchor: T0 } } });
+    expect(await f.onDisk()).toMatchObject([{ name: '改名', spec: { anchor: T0 }, cursor: T0 }, { name: '改名', spec: { anchor: T0 }, cursor: T0 }]);
   });
   it('validates an edited time zone and restarts from now when it changes', async () => {
     const f = await setup([stored('st_d', { spec: { kind: 'daily', time: '09:00' } })]);
     expect(await f.run(owner, { action: 'edit', chatId: G, taskId: 'st_d', revision: 'rev-st_d', patch: { timeZone: 'Nowhere/City' } })).toEqual(refusal('bad-schedule', '不认识这个时区：Nowhere/City'));
     expect(await f.run(owner, { action: 'edit', chatId: G, taskId: 'st_d', revision: 'rev-st_d', patch: { timeZone: 'europe/london' } })).toMatchObject({ kind: 'task', task: { timeZone: 'Europe/London' } });
     expect((await f.onDisk())[0]).toMatchObject({ timeZone: 'Europe/London', cursor: NOW });
+  });
+  it('lets a past once task be renamed with its zone sent again, and change only its zone', async () => {
+    const past = { spec: { kind: 'once', at: NOW - HOUR }, state: 'finished', cursor: NOW - HOUR } as const;
+    const f = await setup([stored('st_same', past), stored('st_zone', past), stored('st_bad', past)]);
+    expect(await f.run(local, { action: 'edit', chatId: G, taskId: 'st_same', revision: 'rev-st_same', patch: { name: '改名', timeZone: 'asia/shanghai' } }))
+      .toMatchObject({ kind: 'task', task: { name: '改名', timeZone: HOST, state: 'finished' } });
+    expect(await f.run(local, { action: 'edit', chatId: G, taskId: 'st_zone', revision: 'rev-st_zone', patch: { timeZone: 'Asia/Tokyo' } }))
+      .toMatchObject({ kind: 'task', task: { timeZone: 'Asia/Tokyo', state: 'finished' } });
+    expect(await f.run(local, { action: 'edit', chatId: G, taskId: 'st_bad', revision: 'rev-st_bad', patch: { timeZone: 'Nowhere/City' } }))
+      .toEqual(refusal('bad-schedule', '不认识这个时区：Nowhere/City'));
+    expect(await f.onDisk()).toMatchObject([{ name: '改名', cursor: NOW - HOUR }, { timeZone: 'Asia/Tokyo', cursor: NOW }, { revision: 'rev-st_bad' }]);
   });
   it('resumes from now: slots of the pause are not caught up and the failure count is cleared', async () => {
     const f = await setup([stored('st_a', { state: 'paused', pausedReason: 'failures', counts: { runs: 10, missed: 0, skipped: 0, consecutiveFailures: 10 } })]);
