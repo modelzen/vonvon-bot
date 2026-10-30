@@ -1568,7 +1568,7 @@ owner 2026-10-30 定做进 v1，一次做到位（owner："没有'第一版'"）
 
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
-| [ ] | T1a | 定时任务核心 | `protocol/schedule.ts`；`D/bot/schedule/{types,time,store,scheduler}.ts`（Intl 时间计算、gap/fold、cron 5 段、直接算最近一个 slot；`bots/<appId>/schedules.json` 带 fsync 的原子写、坏文件旁置、revision 只跟配置；30 秒 tick 单飞、在 mutate 里认领、只补最近一次、7 天、跳过、inflight 至多一次、并发上限、10 次自动暂停、崩溃计失败；不接 orchestrator） | ~1,340 | — | 并发、错误路径 | 纯 JP-VPS |
+| [x] | T1a | 定时任务核心 | `protocol/schedule.ts`；`D/bot/schedule/{types,time,store,scheduler}.ts`（Intl 时间计算、gap/fold、cron 5 段、直接算最近一个 slot；`bots/<appId>/schedules.json` 带 fsync 的原子写、坏文件旁置、revision 只跟配置；30 秒 tick 单飞、在 mutate 里认领、只补最近一次、7 天、跳过、inflight 至多一次、并发上限、10 次自动暂停、崩溃计失败；不接 orchestrator） | ~1,340 | — | 并发、错误路径 | 纯 JP-VPS |
 | [ ] | T1b | 命令核、IPC/RPC、终端 | `admin/schedule-commands.ts` 是用户请求的唯一写入口，管角色表（跨群按 id 也查不到）；IPC `schedule`（带 via）、`AdminService.executeSchedule`、RPC、client；`vonvon schedule`；`cli/index.ts` 的 structured 和 lease 名单；orchestrator 构造 store（`initialize()` 里 load，重启后照样列出旧任务）和调度器但不启动 | ~1,150 | T1a | 错误路径 | 纯 JP-VPS |
 | [ ] | T2 | 定时任务的运行 | `runScheduled` 和 `ScheduledHook`（每条丢弃路径都结算）；按会话方式放置（主区 `message.create` 不引用 / 文字根消息加卡片开新话题 / 回话题 / 每次新话题）、`queueOnly` 不插话、真人不插进定时轮、固定头部、卡片标签、空输出留卡、运行前的门（停用和修改中记跳过、档位用不了发一行文字记失败）、结算成 done/failed/interrupted、补跑"原定"、自动暂停的群消息 @ 创建人并重试、停机顺序 stop → shutdown → drain(5 s)、崩溃记中断、解绑和移出群暂停、群编辑锁只看本群、Claude 隐藏会话跑完关进程；启动 tick | ~1,450 | T1b | 子进程、并发、关闭清理、错误路径 | JP-VPS Bot 6，真 Claude 加 Codex；Mac 睡眠唤醒待 owner 验收 |
 | [ ] | T3 | agent 工具、钥匙和 Claude 通路 | schedule 工具类（`schedule_list/create/edit/pause/resume/delete/run_now`，不收群参数，`when` 给时间、`where: here/thisTopic/newTopic`、可选 `timeZone`）和 `scheduleToolSpecs()`；grant 现取 `where()`；`requesterName`；`profileOf` 算 `tools.schedule`；角色表两层查、在场推导、插话拒写；Claude 进程内 MCP 加工具、`disallowedTools` 五个加 `skillOverrides` 加 `CLAUDE_CODE_DISABLE_CRON` | ~1,055 | T1b（自测第 4 步要 T2） | 并发、错误路径 | JP-VPS 真 Claude |
@@ -1576,6 +1576,9 @@ owner 2026-10-30 定做进 v1，一次做到位（owner："没有'第一版'"）
 | [ ] | T4a | 内置能力包生成器和任务 skill 文本 | `agent/builtin-skills/{package,registry,scheduled-tasks}.ts`：稳定目录 `bots/<appId>/capabilities/builtin/<set>/`（插件形状、原地更新、永不删）；skill `scheduled-tasks`（标题"任务"），常驻一行、正文八段含时间换算；s48、s54a 复用 | ~600 | T1a | 错误路径 | 纯 JP-VPS |
 | [ ] | T4b | 内置能力包交给两家 | `capabilityPackages` 能力位改 boolean、两家置 true；Claude `plugins` 加 `enabledPlugins` 加白名单，Codex `selectedCapabilityRoots` 加只读档读入口；有任务工具才装；0.156.1 和现装版本矩阵；仓库 `.claude/settings.json` 能不能关插件（第 9 节第 22 项）；包生成失败会话照起 | ~900 | T3b、T4a | 错误路径、版本、macOS 原生（Seatbelt 读入口没在 JP-VPS 测） | JP-VPS；Mac Seatbelt 一项待 owner 验收 |
 | [ ] | T5 | 桌面端和网页的"任务" | 桌面端三层 `schedule`；群详情页"任务"tab（列表、表单带时区、暂停恢复删除立即运行、最近 20 条和"在飞书打开"、页脚"关机不运行"、Bot 没运行的提示、冲突不丢输入、10 秒轮询）；Bot 页第四个 pane"任务"汇总含已解绑的群；搜索和 URL | ~1,400 | T1b（自测后一半等 T2） | — | Mac 网页控制 |
+
+
+**T1a 做法（2026-10-30）。** 按总设计导出 protocol schema、StoredTask 和调度器契约，时间计算只用 Intl，覆盖 DST gap/fold、cron、直接求最近一次和错过计数封顶。store 串行持久化，durable 原子写同步临时文件和父目录，配置只有 touch 才换 revision。调度器先落盘认领再运行，处理补跑、排队替换、并发和 2 秒间隔、失败暂停、崩溃恢复、手动运行与 stop/drain；未接 orchestrator。JP-VPS 假时钟及真实临时文件测试通过，含重复暂停通知、关闭期间持久化和排队时游标或配置变化的竞争回归。protocol、client、daemon 构建和 protocol、daemon 类型检查、现有 lint 通过。三组 schedule 测试和 topic-registry 共 67 项通过，atomic-file 与 paths 断言包含在 store 测试中。实际变更 1031 行（不含 lockfile），无真实 provider、飞书或 Mac 验收。作者子代理按验收要点自审通过，独立审查待 Claude。
 
 开工要点：
 - 顺序：T1a → T1b；T4a 和 T1b 同时；T1b 合入后 T2、T3、T5 同时开工；T3b 在 T3 的分支上接着写、T3 合入后开 PR；T4b 在 T3b、T4a 之后。目标 11-01 能在聊天里建任务、到点运行，11-02 交付完（总设计第 14 节）。T1a 到 T4b 发 JP-VPS（#422），T5 发 Mac（#322）。
