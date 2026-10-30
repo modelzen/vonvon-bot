@@ -1,6 +1,6 @@
 import {RefreshCw} from 'lucide-react';
 import {useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode} from 'react';
-import {decisionApiProviderLabel, formatTime, keyProblem, type SecretService} from '@vonvon/protocol';
+import {formatTime, keyProblem, type SecretService} from '@vonvon/protocol';
 import {useClient} from '../client-context';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {Button, IconButton, FormField, InlineNotice, StatusBadge, type StatusTone} from '../reference/components/ui';
@@ -9,7 +9,7 @@ import {
   MEANWHILE, OLD_DAEMON, errorText, keyDiagnosis, keyFlows, keyStatus, removalCopy, rereads, resultCopy, secretsReader, testTone, testedText,
   unreadNotes, useCount, useName, useNote, type FillFlow, type KeyFlows, type RowState, type SecretsRead, type SecretsView,
 } from './secretsModel';
-import {DecisionProviderSettings} from './DecisionProviderSettings';
+import {DecisionProviderSettings, DecisionServiceDisclosure, revealDecisionConnection} from './DecisionProviderSettings';
 import {decisionKeySection, decisionProviderSection, settingAnchor} from '../search';
 import './secrets.css';
 
@@ -243,6 +243,7 @@ export function SecretsPanel({onOpenLogs, onOpenApplication, onOpenProviders}: {
       if (active && active !== document.body && page.current?.contains(active)) { flows.refocused(keyId); return; }
       if (active && active !== document.body && !active.closest('.ui-dialog')) { flows.refocused(keyId); return; }
       const target = page.current?.querySelector<HTMLElement>(`.${keyRowClass(keyId)} button:not([disabled])`);
+      revealDecisionConnection(target ?? null);
       if (target) { flows.refocused(keyId); target.focus({preventScroll: true}); }
     }, 0);
     return () => window.clearTimeout(timer);
@@ -293,18 +294,19 @@ export function SecretsPanel({onOpenLogs, onOpenApplication, onOpenProviders}: {
       <div className="decision-key-content">
         {!view ? <SettingsRow title="正在读取…"/>
           : !view.services.length ? <SettingsRow title="暂无需要密钥的服务"/>
-            : view.services.filter(service => service.provider !== 'custom').map(service => <div key={service.keyId} className="decision-service-key" id={settingAnchor(decisionKeySection(service.provider))}>
-              <h3 className="decision-service-key-title">{decisionApiProviderLabel(service.provider)}</h3>
+            : view.services.filter(service => service.provider !== 'custom').map(service => <DecisionServiceDisclosure key={service.keyId} provider={service.provider} service={service}>
               {serviceRows(service)}
-            </div>)}
+            </DecisionServiceDisclosure>)}
       </div>
     </>;
   }
   return <div className="page-stack secrets-page" ref={page}>
     {header}
     <DecisionProviderSettings services={view?.services} onOpenProviders={onOpenProviders} onManageKey={(provider = 'typesafe') => {
+      const connection = document.getElementById(settingAnchor(decisionProviderSection(provider)));
+      revealDecisionConnection(connection);
       if (provider === 'custom') {
-        const target = document.getElementById(settingAnchor(decisionProviderSection('custom')));
+        const target = connection;
         target?.scrollIntoView({block: 'center', behavior: 'smooth'});
         target?.querySelector<HTMLElement>('input:not([disabled])')?.focus({preventScroll: true});
         return;
