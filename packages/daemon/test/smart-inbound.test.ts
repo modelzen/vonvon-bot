@@ -1473,6 +1473,83 @@ describe('attention (s25g)', () => {
     orchestrator = createOrchestrator(channel as never, cfg, workspace, undefined, { time });
   });
 
+  it('expires main focus and publishes watch without another message or model call', async () => {
+    const latest = () => events.flatMap(event => event.kind === 'attention' ? event.groups : []).filter(group => group.groupId === CHAT).at(-1);
+    await focus();
+    expect(latest()?.main?.mode).toBe('focus');
+    const calls = fake.judge.mock.calls.length;
+    await advance(m(10));
+    expect(latest()?.main?.mode).toBe('focus');
+    await advance(1);
+    expect(latest()?.main).toEqual({ mode: 'watch', intervalMs: m(3) });
+    expect(fake.judge).toHaveBeenCalledTimes(calls);
+    expect(fake.inputs).toHaveLength(1);
+    expect(timers.size).toBe(0);
+
+    // Returning to a quiet group still resets its watch interval and batches the message.
+    const next = says('AFTER_IDLE_FOCUS'); await send(next); await settle();
+    expect(latest()?.main).toEqual({ mode: 'watch', intervalMs: m(1) });
+    expect(asked.has(idOf(next))).toBe(false);
+    await advance(s(20));
+    expect((await judged(next)).req.message.fresh).toBe(true);
+  });
+
+  it('renews the main expiry timer when the bot replies again', async () => {
+    const latest = () => events.flatMap(event => event.kind === 'attention' ? event.groups : []).at(-1);
+    await focus(); await advance(m(9));
+    const again = says('RENEW_FOCUS', { at: true }); await send(again); await decide(again, result('main'));
+    await vi.waitFor(() => expect(fake.inputs).toHaveLength(2)); await settle();
+    expect(timers.size).toBe(1);
+    await advance(m(1));
+    expect(latest()?.main?.mode).toBe('focus');
+    await advance(m(9) + 1);
+    expect(latest()?.main?.mode).toBe('watch');
+    expect(timers.size).toBe(0);
+  });
+
+  it('retains topic focus when the main area expires', async () => {
+    const latest = () => events.flatMap(event => event.kind === 'attention' ? event.groups : []).at(-1);
+    await focus();
+    const topic = says('TOPIC_STAYS_FOCUSED', { at: true, thread: 'omt_keep_focus' });
+    await send(topic); await decide(topic, result('reply')); await vi.waitFor(() => expect(fake.inputs).toHaveLength(2)); await settle();
+    const calls = fake.judge.mock.calls.length;
+    await advance(m(10) + 1);
+    expect(latest()).toMatchObject({ main: { mode: 'watch' }, focusedTopics: 1, watchedTopics: 0 });
+    expect(fake.judge).toHaveBeenCalledTimes(calls);
+    expect(timers.size).toBe(0);
+  });
+
+  it('keeps the later budget deadline when main focus expires first', async () => {
+    const latest = () => events.flatMap(event => event.kind === 'attention' ? event.groups : []).at(-1);
+    await focus();
+    let count = 45;
+    const until = clock + m(15);
+    const used = vi.spyOn(JudgeBudget.prototype, 'used').mockImplementation(() => count);
+    const free = vi.spyOn(JudgeBudget.prototype, 'freeAt').mockReturnValue(until);
+    try {
+      const signal = says('KEEP_BUDGET_DEADLINE', { at: true }); await send(signal); await decide(signal, result('skip')); await settle();
+      expect(timers.size).toBe(1);
+      await advance(m(10) + 1);
+      expect(latest()).toMatchObject({ main: { mode: 'watch' }, budget: { kind: 'no-glance', until } });
+      expect(timers.size).toBe(1);
+      count = 0; await advance(until - clock);
+      expect(latest()?.budget).toBeUndefined();
+      expect(timers.size).toBe(0);
+    } finally { used.mockRestore(); free.mockRestore(); }
+  });
+
+  it('clears the focus expiry timer and ignores a late callback after shutdown', async () => {
+    await focus();
+    expect(timers.size).toBe(1);
+    const late = [...timers.values()][0]!.fn;
+    await orchestrator.shutdown();
+    expect(timers.size).toBe(0);
+    const count = events.length;
+    await advance(m(11)); late(); await settle();
+    expect(events).toHaveLength(count);
+    expect(timers.size).toBe(0);
+  });
+
   it('publishes actual budget thresholds through diagnostics, expires them and removes its timer on shutdown', async () => {
     let count = 45;
     const used = vi.spyOn(JudgeBudget.prototype, 'used').mockImplementation(() => count);
