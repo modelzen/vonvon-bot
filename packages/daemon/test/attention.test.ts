@@ -257,6 +257,62 @@ describe('freeze (s25g)', () => {
   });
 });
 
+describe('idle main focus expiry', () => {
+  it('expires after ten minutes without arrivals and reports the transition once', () => {
+    const a = new Attention();
+    const reports: ReturnType<Attention['snapshot']>[] = [];
+    a.observe(groups => { reports.push(groups); });
+    a.arrive(A, T0); a.replied(A, T0); a.verdict(A, 'focus', 'skip', T0 + 1);
+    const count = reports.length;
+    expect(a.nextExpiryAt()).toBe(T0 + m(10) + 1);
+    expect(a.expire(T0 + m(10))).toBe(false);
+    expect(reports).toHaveLength(count);
+    expect(a.expire(T0 + m(10) + 1)).toBe(true);
+    expect(a.state(A.place)).toMatchObject({ mode: 'watch', intervalMs: m(3), misses: 0, arrivedAt: T0, repliedAt: T0 });
+    expect(reports.at(-1)?.[0]?.main).toEqual({ mode: 'watch', intervalMs: m(3) });
+    expect(reports).toHaveLength(count + 1);
+    expect(a.expire(T0 + m(20))).toBe(false);
+    expect(a.nextExpiryAt()).toBeUndefined();
+    expect(reports).toHaveLength(count + 1);
+  });
+
+  it('renews reply deadlines and expires every overdue main area after a delayed timer', () => {
+    const a = new Attention();
+    a.replied(A, T0); a.replied(B, T0 + m(2)); a.replied(A1, T0);
+    a.replied(A, T0 + m(9));
+    expect(a.nextExpiryAt()).toBe(T0 + m(12) + 1);
+    expect(a.expire(T0 + m(10) + 1)).toBe(false);
+    expect(a.expire(T0 + m(30))).toBe(true);
+    expect(a.state(A.place)?.mode).toBe('watch');
+    expect(a.state(B.place)?.mode).toBe('watch');
+    expect(a.state(A1.place)?.mode).toBe('focus');
+    expect(a.nextExpiryAt()).toBeUndefined();
+  });
+
+  it('cancels expiry when focus ends, is forgotten, or is evicted', () => {
+    const a = new Attention({ places: 2 });
+    a.replied(A, T0); a.replied(B, T0 + m(2));
+    a.freeze(A, T0);
+    expect(a.nextExpiryAt()).toBe(T0 + m(12) + 1);
+    a.forget(B.chatId);
+    expect(a.nextExpiryAt()).toBeUndefined();
+    a.replied(B, T0); a.arrive(A1, T0); a.arrive(A2, T0);
+    expect(a.state(B.place)).toBeUndefined();
+    expect(a.nextExpiryAt()).toBeUndefined();
+  });
+
+  it('honors configured expiry and keeps expiry scans from promoting LRU entries', () => {
+    const a = new Attention({ places: 2, mainFocusMs: s(30), exitIntervalMs: m(5) });
+    a.replied(A, T0); a.arrive(A1, T0 + 1, { mine: true });
+    expect(a.nextExpiryAt()).toBe(T0 + s(30) + 1);
+    a.expire(T0 + s(30) + 1);
+    expect(a.state(A.place)?.intervalMs).toBe(m(5));
+    a.arrive(B, T0 + m(1));
+    expect(a.state(A.place)).toBeUndefined();
+    expect(a.state(A1.place)?.mode).toBe('focus');
+  });
+});
+
 it('reports real per-group main and topic state, eviction and forgetting without topic ids', () => {
   const a = new Attention({ places: 2 });
   let latest = a.snapshot();
