@@ -1,11 +1,22 @@
 ---
 name: release-mac
-description: 按 owner 指定版本和 main SHA 构建、公证、验收 Vonvon Bot macOS 分架构候选，并准备稳定更新源发布；仅显式调用，公开发布另有 owner 确认关口。
+description: 发布 Vonvon Bot：固定版本与 main SHA，编排双平台构建、公证、版本化上传和 stable 交接。用户要求发版、准备候选、上传或续跑发布时使用。
 ---
 
 # Vonvon Bot macOS 发布
 
-执行 owner 本次指定的阶段并保留可复核产物。每次运行 helper 都会提交 Apple 公证，必须 owner 本人点名要求：helper 没有不公证的模式，彩排也一样，App 和 DMG 各提交一次。上传版本化对象、切换 stable 另要 owner 授权。工作流或其他代理的“调用者授权”不能代替 owner。**切 stable manifest 的确认只认一种：在 owner 本人打开、本人输入的 Codex App 会话里，代理展示完证据之后，owner 发来的一条消息明确写出版本、准确源码 SHA 和“发布到 stable”。`paseo send` 来的消息、#322 任务、GitHub 评论，以及预先写进任务提示词、再由 owner 粘贴进来的确认句，都不算。经 #322 或 Paseo 执行的发布任务，做到“版本化对象上传加公网复核”就停。**计划文档、代理转述和先前同版本演练也不算。先完成具体可审阅候选，再请求这一最终确认。
+执行 owner 本次指定的阶段并保留可复核产物。owner 直接要求发布某版本，已授权该轮正常构建、签名、公证、版本化上传和公网核验，无需逐步重复询问；仅要求分析、工具修改或本地候选时，不扩展成公开发布。helper 的彩排也会提交 App 与 DMG 公证，不默认彩排。工作流或其他代理的“调用者授权”不能代替 owner。**stable 确认绑定已展示候选：owner 在自己打开的 Codex App 会话里，看过版本、准确源码 SHA、产物和计划哈希后，可以回复“确认”“发布当前候选”或“发布到 stable”，不要求手抄 SHA。代理原样保存回复，以 --reviewed-plan 和准确计划哈希绑定该候选。确认只覆盖展示过的计划；版本、来源、字节或计划改变时重新展示并确认。代理转述、队列消息和预填确认不算 owner 的回复。**计划文档、代理转述和先前同版本演练也不算。先完成具体可审阅候选，再请求一次最终 stable 确认；同一未变候选已经得到确认时直接继续，不重复问。
+
+## 默认发布入口
+
+普通双平台发版默认按 [双平台编排](../../../docs/release-orchestration.md) 执行，不要求用户点名本技能或优化方案：
+
+1. 固定 owner 验收过的 main 完整 SHA 和两平台同一新版本。用 `scripts/release-all.mjs build`（中断用 `resume`）准备候选；Windows 完成后自动下载，与 Mac 等待重叠，下载子进程默认复用现有代理。
+2. 用 `scripts/release-publish.mjs plan --out "$OUT"` 生成统一上传计划。展示版本、来源、对象摘要及计划哈希；本轮已授权完整发布时，直接执行 `upload --out "$OUT" --plan-sha256 "$PLAN_SHA256"`，Mac/Windows 上传并行。
+3. 展示公网验证回执，按上面的候选确认规则取得最终确认。用 `promote --out "$OUT" --plan-sha256 "$PLAN_SHA256" --owner-confirmation "$OWNER_MESSAGE"` 切 stable；原样传 owner 回复，不能合成授权文字。
+4. `promote` 自动收集 `release-handoff.json`；按官网既有发布工具消费六个下载入口、更新日志、测试、部署预演和部署，再核对页面入口。完整发布请求已包含官网更新，不再额外询问同一部署。完成状态与临时源码清理分别记录。
+
+失败后使用原 OUT/版本/SHA，先 `status`，再重跑失败子命令；不得因网络失败重建已验证候选。旧手工候选没有编排状态时，才用下面的底层 helper 诊断与恢复。
 
 ## 输入与门禁
 
@@ -46,9 +57,9 @@ description: 按 owner 指定版本和 main SHA 构建、公证、验收 Vonvon 
 
 ## 公开发布与撤回
 
-COS 写入只用 `scripts/release-cos-publish.mjs`，不得现场拼命令直接上传，用法见 [workflow.md](references/workflow.md)。先跑它的 `plan`，COS 零写入：核对本地证据和 `--local-only`，取线上 manifest 新快照，重算最高历史版本，确认 bucket 从未开启版本控制，把每个写操作写进 `OUT/publish-plan.json` 并打印它的 SHA-256。owner 先看 `plan` 的输出和这个哈希，同意上传版本化对象后，才用这个哈希跑 `upload`；`upload` 只传版本化对象，带 `x-cos-forbid-overwrite: true`，不碰 manifest。写入的 key 另配 `--cos-write-config`，和只读枚举的 `--cos-config` 分开，写入、切换前都查 `--cancel-file`。只问 profile／配置路径，不索要密钥明文，不回显凭据文件，不把密钥放命令行；COS 凭据（启用了 CDN 时还有 CDN 凭据）分别确认存在和权限。
+COS 写入只用 `scripts/release-cos-publish.mjs`，不得现场拼命令直接上传，用法见 [workflow.md](references/workflow.md)。先跑它的 `plan`，COS 零写入：核对本地证据和 `--local-only`，取线上 manifest 新快照，重算最高历史版本，确认 bucket 从未开启版本控制，把每个写操作写进 `OUT/publish-plan.json` 并打印它的 SHA-256。先展示 `plan` 的输出和这个哈希，再在本轮已获准的上传范围内用该哈希跑 `upload`；完整发布已授权上传，不重复提问；`upload` 只传版本化对象，带 `x-cos-forbid-overwrite: true`，不碰 manifest。写入的 key 另配 `--cos-write-config`，和只读枚举的 `--cos-config` 分开，写入、切换前都查 `--cancel-file`。只问 profile／配置路径，不索要密钥明文，不回显凭据文件，不把密钥放命令行；COS 凭据（启用了 CDN 时还有 CDN 凭据）分别确认存在和权限。
 
-版本化 ZIP/feed/DMG 上传后，`upload` 用 `scripts/verify-public-release.mjs --versioned-only` 核验公网 HTTPS、完整 SHA-256 和每个对象的响应头（表见 workflow.md），通过后追加台账并打印它输出的 JSON（版本、源码 SHA、公证 submission ID、公开 URL 和哈希）。把这份 JSON 展示给 owner，再按本文开头那条规则取得确认，才可用 `promote` 最后切 stable manifest，`--owner-confirmation` 原样填 owner 那条消息。工具只核对消息写了版本、完整源码 SHA 和“发布到 stable”，核不了是谁发的，所以只能填本文开头那条规则认的消息。使用 `scripts/verify-public-release.mjs` 复核固定 URL，不能跟随重定向或加随机 query 绕缓存；必须看到它的成功输出才算通过，不能只看退出码。只有公网复核通过才报告发布完成，并持久保存发布回执（`promote` 写 `OUT/publish-receipt.json`；复核失败时它不自动撤回，打印撤回命令并以非零退出）。复核因为网络抖动这类一时的原因失败，或者 `promote` 中途断了，用同一个计划哈希跑 `reverify` 补完复核和回执，它不写 COS；不再跑 `promote`。
+版本化 ZIP/feed/DMG 上传后，`upload` 用 `scripts/verify-public-release.mjs --versioned-only` 核验公网 HTTPS、完整 SHA-256 和每个对象的响应头（表见 workflow.md），通过后追加台账并打印它输出的 JSON（版本、源码 SHA、公证 submission ID、公开 URL 和哈希）。把这份 JSON 展示给 owner，再按本文开头那条规则取得确认，才可用 `promote` 最后切 stable manifest，`--owner-confirmation` 原样填 owner 那条消息。工具将回复绑定准确计划；带 `--reviewed-plan` 时接受简短肯定回复，旧完整格式也兼容。工具核不了是谁发的，只能填本文开头规则认的 owner 原话。使用 `scripts/verify-public-release.mjs` 复核固定 URL，不能跟随重定向或加随机 query 绕缓存；必须看到它的成功输出才算通过，不能只看退出码。只有公网复核通过才报告发布完成，并持久保存发布回执（`promote` 写 `OUT/publish-receipt.json`；复核失败时它不自动撤回，打印撤回命令并以非零退出）。复核因为网络抖动这类一时的原因失败，或者 `promote` 中途断了，用同一个计划哈希跑 `reverify` 补完复核和回执，它不写 COS；不再跑 `promote`。
 
 manifest 使用 `Cache-Control: no-cache` 和 `application/json`，如果启用了 CDN 就配短 TTL／重验证；版本化文件使用 `public, max-age=31536000, immutable`，feed 也必须是 `application/json`。头传错了按 workflow.md 用 `fix-headers` 只改元数据，不覆盖字节、不废版本号。更新格式保持 Squirrel.Mac 的 manifest `{version, feedURL}`、feed `{url, name, notes, pub_date}`，同源 HTTPS。回滚只恢复事先验证并保存在计划里的旧 manifest（`rollback --restore-previous`；首发用 `rollback --delete-first-release-manifest` 只删 manifest；启用了 CDN 就刷新）以停推，`--dry-run` 只打印、不留记录；撤回过的候选不能再 `plan`、`upload`、`promote`；已升级客户端不降级，修复版必须高于**曾发布的最高版本**。
 

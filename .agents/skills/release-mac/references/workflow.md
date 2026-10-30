@@ -176,7 +176,7 @@ key 由 owner 放进运行发布工具的那个进程的环境，变量名就是
 2. 保存线上已验证 manifest。helper 的 `previous-manifest.json` 是构建时快照；上传前还要取新快照并记录哈希、重新检查最高历史版本，防回滚后发布低于曾发布版本。首发以已验证 `baseline: none` 处理，不能捏造旧清单。`plan` 用正常 TLS 取新快照，把状态、尺寸、哈希和原字节记进计划，撤回时写回的就是这份字节；再用只读枚举重新算 COS 历史和台账的最高版本，新版本必须更高。本版本自己的对象，只在这个 `OUT` 有 `publish-upload-state.json`（`upload` 写第一个对象前留下）或 `upload-receipt.json` 时不挡门槛，供中断后重跑；没有这份记录而 COS 或台账里已有本版本，一律停下查。全部通过后，`plan` 把每一个写操作（key、尺寸、SHA-256、`Cache-Control`、`Content-Type`、`x-cos-forbid-overwrite`）、切 manifest 那一步和撤回方式写进 `OUT/publish-plan.json`，打印 `Plan SHA-256: <哈希>`。
 3. 在上传前与切 manifest 前检查取消。版本化对象上传必须有服务端不覆盖保证：先确认 bucket 从未开启版本控制，PutObject 带 `x-cos-forbid-overwrite: true`。版本控制开启／暂停过时该头被忽略，须先准备经验证的等价原子保护，否则停下；“先查后传”不算保护。恢复时已存在对象只在公网完整 SHA-256 一致时复用，不覆盖，ETag 不能代替 SHA-256。`plan` 读版本控制状态，`Enabled`、`Suspended` 一律停下，发布工具没有等价保护。`upload`、`promote`、`fix-headers` 必须带 `--cancel-file`，开始时和每次写对象前各查一次。
 
-   **owner 先看 `plan` 的输出和 `publish-plan.json` 的哈希，同意上传版本化对象后，代理才用这个哈希跑 `upload`。** 这一同意只覆盖版本化对象，不覆盖切 stable。发布工具的输出是英文，代理把下面几项用中文逐条列给 owner，附上原文和哈希：
+   **先展示 `plan` 输出和 `publish-plan.json` 哈希；owner 已直接要求本轮完整发布时，上传已在授权范围内，不再重复询问。只获准准备候选时，先取得上传授权。** 这一同意只覆盖版本化对象，不覆盖切 stable。发布工具的输出是英文，代理把下面几项用中文逐条列给 owner，附上原文和哈希：
 
    - 版本和完整源码 SHA 是这次要发的；
    - 双架构时六个、旧通用版本时三个 PutObject 的 key 都在 `bot/mac/stable/` 下，尺寸和 SHA-256 与 `SHA256SUMS` 一致，头符合第 4 步的表，都带 `x-cos-forbid-overwrite: true`；
@@ -217,17 +217,17 @@ key 由 owner 放进运行发布工具的那个进程的环境，变量名就是
    ```
 
    它改完重跑 `--versioned-only`，确认完整 SHA-256 没变，通过后追加台账。之后用同一个哈希再跑一次 `upload`：三个对象都按完整 SHA-256 复用，补上 `upload-receipt.json`。
-5. 把第 4 步 `--versioned-only` 输出的 JSON 原样展示给 owner：版本、准确源码 SHA、两个公证 submission ID、feed／ZIP／DMG 的公开 URL、尺寸和完整 SHA-256。**切 stable manifest 的确认只认一种：在 owner 本人打开、本人输入的 Codex App 会话里，代理展示完证据之后，owner 发来的一条消息明确写出版本、准确源码 SHA 和“发布到 stable”。`paseo send` 来的消息、#322 任务、GitHub 评论，以及预先写进任务提示词、再由 owner 粘贴进来的确认句，都不算。经 #322 或 Paseo 执行的发布任务，做到“版本化对象上传加公网复核”就停。**“调用者授权”、计划文档、工作流、其他代理转述和仅同意上传版本化文件也不算。确认只覆盖展示过的字节；之后字节改变须重新验收确认。经 #322 或 Paseo 执行的任务在 `upload` 之后停下，结果里写 `OUT` 路径、计划哈希和打码后的那份 JSON；之后由 owner 本人打开的 Codex App 会话展示证据、等 owner 的确认，再在那个会话里用同一个 `OUT` 和计划哈希跑 `promote`。
+5. 把第 4 步 `--versioned-only` 输出的 JSON 原样展示给 owner：版本、准确源码 SHA、两个公证 submission ID、feed／ZIP／DMG 的公开 URL、尺寸和完整 SHA-256。**stable 确认绑定已展示候选：owner 在自己打开的 Codex App 会话里，看过版本、准确源码 SHA、产物和计划哈希后，可以回复“确认”“发布当前候选”或“发布到 stable”，不要求手抄 SHA。代理原样保存回复，以 --reviewed-plan 和准确计划哈希绑定该候选。确认只覆盖展示过的计划；版本、来源、字节或计划改变时重新展示并确认。代理转述、队列消息和预填确认不算 owner 的回复。**“调用者授权”、计划文档、工作流、其他代理转述和仅同意上传版本化文件也不算。确认只覆盖展示过的字节；之后字节改变须重新验收确认。经 #322 或 Paseo 执行的任务在 `upload` 之后停下，结果里写 `OUT` 路径、计划哈希和打码后的那份 JSON；之后由 owner 本人打开的 Codex App 会话展示证据、等 owner 的确认，再在那个会话里用同一个 `OUT` 和计划哈希跑 `promote`。
 6. 获确认后最后写 manifest；如果启用了 CDN，刷新 manifest 固定 URL 的缓存。用相同 `--out`、`--version`、`--sha` 参数运行 `scripts/verify-public-release.mjs`，不带 `--local-only` 和 `--versioned-only`。复核须 `redirect: error`、正常 TLS、HTTP 200、15 秒清单超时、最多 16384 字节、校验 `{version, feedURL}` 和可选双架构 `feedURLs`，所有 feed 同源 HTTPS，并检查 Content-Type／缓存头；下载 ZIP 核对完整 SHA-256。不得跟随 301/302、加随机 query 旁路缓存或忽略证书。这一步用 `promote`：
 
    ```sh
    node "$PUBLISH" promote --out "$OUT" --version "$VERSION" --sha "$SOURCE_SHA" \
      --cos-config "$COS_CONFIG" --cos-write-config "$COS_WRITE_CONFIG" \
      --plan-sha256 "$PLAN_SHA256" --cancel-file "$CANCEL_FILE" \
-     --owner-confirmation "$OWNER_CONFIRMATION"
+     --owner-confirmation "$OWNER_CONFIRMATION" --reviewed-plan
    ```
 
-   `OWNER_CONFIRMATION` 是第 5 步那条确认消息的原文，原样记进回执。发布工具只核对原文写了版本、完整源码 SHA 和"发布到 stable"，核不了是谁发的：只有第 5 步那条规则认的消息才能填进来，`paseo send`、#322、GitHub 和任务提示词里来的都不能填。`promote` 不接受 `--first-release`／`--no-live-manifest`，用计划里记的。它查取消；核对 `upload-receipt.json` 属于这份计划；重新取线上 manifest，和计划里的快照哈希不同就停；重做 `plan` 的全部检查，结果必须还是这份计划；重跑 `--versioned-only`；核对台账含本版本；切之前再查一次取消，紧接着再取一次线上 manifest，变了就停。然后先把回执写成 `manifest-write-started`，再只写 `bot/mac/stable/manifest.json`：字节就是 `OUT/manifest.json`，`Cache-Control: no-cache`、`Content-Type: application/json`，线上原来是 404 时还带 `x-cos-forbid-overwrite: true`。线上原来有 manifest 时，COS 的覆盖写没有条件可带，只能靠写前最后那次读把空档缩到一次请求。首发写入回 409 时按公网完整字节判断：等于本次 manifest，就是 SDK 丢了响应后重试撞上自己的第一次写入，接着复核；不等于就停，不覆盖。现在没有 CDN，不刷新。最后跑上面的完整公网复核，要看到 `"publiclyVerified": true`。
+   `OWNER_CONFIRMATION` 是第 5 步那条确认消息的原文，原样记进回执。发布工具带 `--reviewed-plan` 时接受对准确计划的简短肯定回复，旧完整格式也兼容；它核不了是谁发的：只有第 5 步那条规则认的消息才能填进来，`paseo send`、#322、GitHub 和任务提示词里来的都不能填。`promote` 不接受 `--first-release`／`--no-live-manifest`，用计划里记的。它查取消；核对 `upload-receipt.json` 属于这份计划；重新取线上 manifest，和计划里的快照哈希不同就停；重做 `plan` 的全部检查，结果必须还是这份计划；重跑 `--versioned-only`；核对台账含本版本；切之前再查一次取消，紧接着再取一次线上 manifest，变了就停。然后先把回执写成 `manifest-write-started`，再只写 `bot/mac/stable/manifest.json`：字节就是 `OUT/manifest.json`，`Cache-Control: no-cache`、`Content-Type: application/json`，线上原来是 404 时还带 `x-cos-forbid-overwrite: true`。线上原来有 manifest 时，COS 的覆盖写没有条件可带，只能靠写前最后那次读把空档缩到一次请求。首发写入回 409 时按公网完整字节判断：等于本次 manifest，就是 SDK 丢了响应后重试撞上自己的第一次写入，接着复核；不等于就停，不覆盖。现在没有 CDN，不刷新。最后跑上面的完整公网复核，要看到 `"publiclyVerified": true`。
 7. 保存 `publish-receipt.json`：版本/sourceCommit、公开对象和字节哈希、上传／刷新时间及结果、切换前清单哈希、owner 确认对应消息、最终公网验证结果。回执不能含凭据和身份值。全部成功才报告公开发布完成；台账在版本化对象上传后已按上面的格式追加，这里核对它含本版本；失败保留现场，不把 inventory 的 `publiclyPublished: false` 当真实上传回执。`promote` 写的就是这份回执，CDN 一项记"未启用 CDN，未刷新"，不写 bucket 名；`status` 是 `published` 才算完成。切换后的复核因为网络抖动这类一时的原因失败，或者 `promote` 写 manifest 前后中断（回执停在 `manifest-write-started`），不再跑 `promote`，也不为此撤回：先看清失败原因，再用同一个计划哈希跑 `reverify`。它不写 COS，只在线上已是本版本、回执还不是 `published` 时重跑完整公网复核、补完回执；线上不是本版本就停下，这时 `promote` 没有切过去，可以照第 5、6 步再跑。
 
    ```sh
