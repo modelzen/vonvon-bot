@@ -53,15 +53,17 @@ win:
   publish:
     provider: generic
     url: https://dl.vonvon.cc/bot/windows/stable/
+  # Update authenticity is checked with the application's pinned Ed25519 key.
+  verifyUpdateCodeSignature: false
   icon: assets/windows-icon.ico
   target:
     - nsis
-    - zip
   artifactName: Vonvon-Bot-${version}-windows-${arch}.${ext}
 nsis:
   include: assets/windows-installer.nsh
   artifactName: Vonvon-Bot-Setup-${version}-${arch}.${ext}
-  oneClick: true
+  oneClick: false
+  allowToChangeInstallationDirectory: true
   perMachine: false
   allowElevation: false
   runAfterFinish: true

@@ -44,6 +44,6 @@ if (mode === 'electron') {
     // install-time Nsis7z cannot decode, silently dropping every ARM PE.
     // BCJ is supported by that decoder for both target architectures (#9983).
     env.ELECTRON_BUILDER_7Z_FILTER = 'BCJ';
-    await child(process.execPath, [require.resolve('electron-builder/cli.js'), '--config', builderConfig, '--win', 'nsis', 'zip', `--${arch}`, '--publish', 'never'], { cwd: join(repo, 'packages/desktop'), env });
+    await child(process.execPath, [require.resolve('electron-builder/cli.js'), '--config', builderConfig, '--win', 'nsis', `--${arch}`, '--publish', 'never'], { cwd: join(repo, 'packages/desktop'), env });
   }
 } else throw new Error('Expected npm, electron or package mode');
