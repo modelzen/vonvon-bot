@@ -82,6 +82,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   // hooks run an empty `vonvon hook`, and the tools ask in the terminal.
   const entries = createAgentEntries({ appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), isOwner: id => resolveOwner(opts.cfg) === id, tools: createCommandTools({
     appId: app.id, memory,
+    schedule: { execute: (actor, request) => orchestrator.scheduleAs(actor, request) },
     settings: { read: scope => orchestrator.settings.read(scope), save: (edit, options) => orchestrator.settings.save(edit, options), models: query => orchestrator.settings.models(query), act: action => orchestrator.settings.act(action) },
     projects: listProjects,
     groups: async cursor => {

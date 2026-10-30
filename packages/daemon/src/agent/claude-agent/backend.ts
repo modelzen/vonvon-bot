@@ -95,7 +95,8 @@ function bridgeClaudeEnv(): Record<string, string> {
 }
 
 function sessionClaudeEnv(profileEnv: Readonly<Record<string, string>>): Record<string, string> {
-  return { ...bridgeClaudeEnv(), ...profileEnv, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' };
+  // CLAUDE_CODE_DISABLE_CRON backs up thread.ts's NATIVE_SCHEDULING_TOOLS (3.13).
+  return { ...bridgeClaudeEnv(), ...profileEnv, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', CLAUDE_CODE_DISABLE_CRON: '1' };
 }
 
 /**
@@ -668,6 +669,7 @@ export class ClaudeAgentBackend implements AgentBackend {
       env: sessionClaudeEnv(profile.env),
       query: sdk.query,
       entry: opts.entry,
+      scheduleTools: profile.tools?.schedule === true,
       createSdkMcpServer: sdk.createSdkMcpServer,
       tool: sdk.tool,
     });
@@ -699,6 +701,7 @@ export class ClaudeAgentBackend implements AgentBackend {
       env: sessionClaudeEnv(profile.env),
       query: sdk.query,
       entry: opts.entry,
+      scheduleTools: profile.tools?.schedule === true,
       createSdkMcpServer: sdk.createSdkMcpServer,
       tool: sdk.tool,
     });
