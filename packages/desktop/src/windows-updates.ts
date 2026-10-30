@@ -37,6 +37,9 @@ export function createWindowsUpdateDriver(publicKey?:string,architecture=process
     }
   }
   const driver=new NsisUpdater({provider:'custom',updateProvider:SignedProvider});
+  // Bind every update to this running installation, including later relaunches
+  // whose registry or shell context differs. NsisUpdater passes this as /D last.
+  driver.installDirectory=dirname(process.execPath);
   // Includes redirects and range requests made by the updater, on its own partition.
   driver.netSession.webRequest.onBeforeRequest({urls:['<all_urls>']},(details,callback)=>callback({cancel:!allowedWindowsUpdateRequest(details.url)}));
   return driver;

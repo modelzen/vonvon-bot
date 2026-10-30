@@ -20,7 +20,7 @@ x64 只改架构与新的独立输出目录。脚本完成构建、类型检查�
 
 `accept-windows.ps1` 使用隔离数据，但会暂存与恢复正式产品的当前用户注册、快捷方式和安装器缓存；只适合无真实产品安装的专用验收用户/CI。不要在 owner 日常 Windows 用户下直接运行它。仅交付开发安装包、完全不碰已安装应用/注册时，增加 `-PackageOnly`；输出带 `DO-NOT-PUBLISH`，不生成发布 inventory 或原生安装通过报告，发布工具无法消费它。
 
-本轮 Windows 虚拟机交互验收按 owner 指示由虚拟机上的 Codex 执行，由 owner 转发固定 SHA 和命令。检查简短路径向导、当前用户范围、真实下载进度、安装/稍后、连续 A→B→C、取消与篡改拒绝、数据保留和新版本重开。专用升级 fixture 使用不同于正式产品的 AppId、名称、缓存和测试密钥；不得把 fixture 的结果当作真实 Bot/daemon/UI 整体验收。
+本轮 Windows 虚拟机验收由 Windows Codex 执行，任务、准确 SHA 和结果直接写回 PR。独立工具与其 CI 入口在 `codex/windows-upgrade-acceptance` 分支单独维护。检查简短路径向导、当前用户范围、真实下载进度、安装/稍后、连续 A→B→C、取消与篡改拒绝、数据保留和新版本重开。fixture 使用独立 AppId、名称、缓存和测试密钥；结果不能代替完整产品 Bot/daemon/UI 验收。
 
 新 format2 `windows-release-inventory.json` 绑定内置 publicKey、源码与版本，每架构只有 installer/blockmap/feed 三种文件，以及对应原生安装报告。YAML feed 留作构建证据；应用实际消费签名 JSON。
 

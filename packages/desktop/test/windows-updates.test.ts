@@ -2,15 +2,16 @@ import {createHash,generateKeyPairSync} from 'node:crypto';
 import {EventEmitter} from 'node:events';
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {dirname,join} from 'node:path';
+import {createRequire} from 'node:module';
 import {afterEach,expect,it,vi} from 'vitest';
-import {WindowsDesktopUpdater,windowsUpdateConfiguration,verifyWindowsInstaller,allowedWindowsUpdateRequest,type WindowsUpdateDriver} from '../src/windows-updates.js';
+import {WindowsDesktopUpdater,createWindowsUpdateDriver,windowsUpdateConfiguration,verifyWindowsInstaller,allowedWindowsUpdateRequest,type WindowsUpdateDriver} from '../src/windows-updates.js';
 import {signWindowsUpdate,type WindowsUpdateManifest} from '../src/windows-update-manifest.mjs';
 
 const keys=generateKeyPairSync('ed25519');
 const publicKey=keys.publicKey.export({type:'spki',format:'pem'}).toString(),privateKey=keys.privateKey.export({type:'pkcs8',format:'pem'}).toString();
 const bytes=Buffer.from('fixture installer'),roots:string[]=[];
-afterEach(()=>{for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});});
+afterEach(()=>{vi.restoreAllMocks();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});});
 function manifest(version='1.1.0',architecture:'x64'|'arm64'='x64'):WindowsUpdateManifest{return {schemaVersion:1,product:'vonvon-bot',version,architecture,url:`https://dl.vonvon.cc/bot/windows/${version}/Vonvon-Bot-Setup-${version}-${architecture}.exe`,size:bytes.length,sha512:createHash('sha512').update(bytes).digest('base64'),notes:'改进 Windows 升级'};}
 function info(payload:WindowsUpdateManifest){return {version:payload.version,files:[{url:payload.url,sha512:payload.sha512,size:payload.size}],signedUpdate:signWindowsUpdate(payload,privateKey)};}
 class Driver extends EventEmitter {
@@ -27,6 +28,21 @@ function fixture(trusted=true){
   const updater=new WindowsDesktopUpdater({current:'1.0.0',publicKey:trusted?publicKey:undefined,architecture:'x64',driver,verify,beforeInstall,statePath,onUpdate});
   return {driver,verify,beforeInstall,onUpdate,updater,statePath,root,file,payload};
 }
+it('passes the running installation directory last to the real NSIS driver, including spaces and Unicode',()=>{
+  const require=createRequire(import.meta.url),adapter=require('electron-updater/out/ElectronAppAdapter.js'),{AppUpdater}=require('electron-updater/out/AppUpdater.js');
+  vi.spyOn(adapter,'ElectronAppAdapter').mockImplementation(function(){return {version:'0.7.8'};});
+  vi.spyOn(AppUpdater.prototype,'netSession','get').mockReturnValue({webRequest:{onBeforeRequest:vi.fn()}});
+  const h=fixture(),executable=join(h.root,'自选 安装路径','Vonvon Bot.exe'),original=Object.getOwnPropertyDescriptor(process,'execPath')!;
+  Object.defineProperty(process,'execPath',{...original,value:executable});
+  try {
+    const driver=createWindowsUpdateDriver(publicKey,'arm64');
+    const native=driver as unknown as {spawnLog:(command:string,args:string[])=>Promise<boolean>;doInstall:(options:{isSilent:boolean;isForceRunAfter:boolean;isAdminRightsRequired:boolean})=>boolean};
+    Object.defineProperty(driver,'installerPath',{value:h.file});const spawn=vi.spyOn(native,'spawnLog').mockResolvedValue(true);
+    expect(driver.installDirectory).toBe(dirname(executable));
+    expect(native.doInstall({isSilent:false,isForceRunAfter:true,isAdminRightsRequired:false})).toBe(true);
+    expect(spawn).toHaveBeenCalledWith(h.file,['--updated','--force-run',`/D=${dirname(executable)}`]);
+  }finally{Object.defineProperty(process,'execPath',original);}
+});
 it('requires an embedded update key before contacting the server, without requiring Authenticode',async()=>{
   const h=fixture(false);expect(h.updater.enabled).toBe(false);expect(await h.updater.check()).toMatchObject({state:'unavailable'});expect(h.driver.checkForUpdates).not.toHaveBeenCalled();
   expect(fixture().updater.enabled).toBe(true);
