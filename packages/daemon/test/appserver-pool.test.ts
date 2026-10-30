@@ -46,6 +46,16 @@ process.stdin.on('data', (d) => {
     const p = msg.params || {};
     if (m === 'die') process.exit(1); // 不回包直接死
     if (m === 'hang') continue; // 永不回包（wedged codex）
+    if (m === 'slow') {
+      const fs = require('fs');
+      fs.writeFileSync(__filename + '.slow-started', 'yes');
+      const timer = setInterval(() => {
+        if (!fs.existsSync(__filename + '.slow-release')) return;
+        clearInterval(timer);
+        send({jsonrpc: '2.0', id: msg.id, result: {pid: process.pid}});
+      }, 10);
+      continue;
+    }
     if (m === 'rpc/error') {
       send({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: 'boom' } });
       continue;
@@ -115,6 +125,31 @@ afterEach(async () => {
 });
 
 describe('utility client 复用与出错即重建（M-2）', () => {
+  it('an in-place upgrade drains the old utility without interrupting its request or an active thread', async () => {
+    const {bin, script, runs, pids} = makeFakeCodex();
+    const active = new AppServerClient({bin, cwd: tmpdir()});
+    await active.connect();
+    const activePid = active.pid!;
+    const pending = utilityRequest<{pid: number}>('slow');
+    try {
+      await vi.waitFor(() => expect(existsSync(script + '.slow-started')).toBe(true));
+      const oldUtilityPid = pids().find(pid => pid !== activePid)!;
+      appendFileSync(bin, process.platform === 'win32' ? '\r\nrem upgraded\r\n' : '\n# upgraded\n');
+      expect(await utilityRequest('model/list')).toMatchObject({data: [{id: 'pool-model'}]});
+      expect(runs()).toBe(3);
+      expect(alive(oldUtilityPid)).toBe(true);
+      expect(alive(activePid)).toBe(true);
+      writeFileSync(script + '.slow-release', 'go');
+      expect(await pending).toEqual({pid: oldUtilityPid});
+      await vi.waitFor(() => expect(alive(oldUtilityPid)).toBe(false));
+      expect(await active.request('thread/start', {cwd: '/still-running'})).toMatchObject({thread: {id: `th_${activePid}`}});
+    } finally {
+      writeFileSync(script + '.slow-release', 'go');
+      await pending.catch(() => undefined);
+      await active.close();
+    }
+  });
+
   it('model discovery uses a fresh client while listThreads/readHistory share the utility', async () => {
     const { runs } = makeFakeCodex();
     const backend = new CodexAppServerBackend();

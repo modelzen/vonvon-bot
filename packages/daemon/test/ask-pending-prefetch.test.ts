@@ -11,7 +11,7 @@ import { createIdlePause } from '../src/bot/watchdog';
 
 const transport = vi.hoisted(() => ({ client: {} as object }));
 vi.mock('../src/agent/codex-appserver/locate', () => ({
-  resolveCodexBin: () => 'fixture', codexVersionAsync: async () => 'codex-cli 0.163.0',
+  refreshCodexResolution: () => 'fixture', resolveCodexBin: () => 'fixture', codexVersionAsync: async () => 'codex-cli 0.163.0',
 }));
 vi.mock('../src/agent/codex-appserver/client-pool', async importOriginal => ({
   ...await importOriginal<object>(), takeWarmClient: () => transport.client, refillWarmPool: async () => {},
