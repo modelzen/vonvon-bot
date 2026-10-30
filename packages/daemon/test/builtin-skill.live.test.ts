@@ -13,11 +13,12 @@ import { ClaudeAgentBackend, type ClaudeSdkFacade } from '../src/agent/claude-ag
 //   T=$(mktemp -d); HOME=$T/home VONVON_HOME=$T/vh BUILTIN_SKILL_LIVE=1 npx vitest run test/builtin-skill.live.test.ts
 // adding CLAUDE_CONFIG_DIR=<the logged-in config dir> if the CLI will not initialize without a login. "flag" is vonvon's
 // own `enabledPlugins` in the flag settings; the last case shows a workspace turns the plugin off without it (SDK 0.3.296,
-// CLI 2.1.296), which is why the flag stays.
+// CLI 2.1.296), which is why the flag stays. The second case shows the plugin loads without the flag when nothing turns it off.
 const live = process.env.BUILTIN_SKILL_LIVE === '1';
 describe.runIf(live)('the builtin package on the real Claude CLI', () => {
   it.each([
     ['no workspace setting, flag', false, true, true],
+    ['no workspace setting, no flag', false, false, true],
     ['workspace off, flag', true, true, true],
     ['workspace off, no flag', true, false, false],
   ] as const)('%s', { timeout: 120_000 }, async (name, workspaceOff, flag, expected) => {
