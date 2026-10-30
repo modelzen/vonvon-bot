@@ -30,7 +30,7 @@ import { resolveSessionProfile, type SessionProfile, type SessionProfileCapabili
 import { AppServerClient } from './app-server-client';
 import { admitCodexWorkspaceLayout } from './workspace-admission';
 import { codexFilesystem, codexInstallRoot, codexShellReadRoot, type CodexInstallRoot, codexWorkspaceRoots, verifyCodexWorkspaceEcho } from './workspace-policy';
-import { NATIVE_MEMORY_OFF, NATIVE_SCHEDULING_OFF } from './memory-config';
+import { CONNECTOR_SCHEDULING_OFF, NATIVE_MEMORY_OFF, NATIVE_SCHEDULING_OFF } from './memory-config';
 import { startDynamicTools } from './dynamic-tools';
 import { connectGated, refillWarmPool, takeWarmClient, utilityRequest } from './client-pool';
 import { mapChildNotification, mapNotification, readSubAgentActivity, readSubagentSpawn, type Child } from './event-map';
@@ -116,6 +116,7 @@ export function codexSessionParams(opts: StartThreadOptions, version: string | n
       ...NATIVE_MEMORY_OFF,
       // One merge: the sandbox's (Windows `prefer_mxc: false` below full access), memory and scheduling switches.
       features: { ...sandboxConfig.features, ...NATIVE_MEMORY_OFF.features, ...NATIVE_SCHEDULING_OFF.features },
+      ...CONNECTOR_SCHEDULING_OFF,
       ...(profile.skills?.disabledPaths.length ? { skills: { config: profile.skills.disabledPaths.map(path => ({ path, enabled: false })) } } : {}),
       shell_environment_policy: { set: profile.env },
     },
@@ -210,8 +211,10 @@ export async function generateCodexSessionTitleWithClient(
     ephemeral: true,
     // Match Codex App's isolated background job: no web search, hooks, fanout,
     // or subagents. Read-only still lets the core runtime initialize safely.
+    // The turn runs on the user's first message, so connector scheduling stays closed too.
     config: {
       ...NATIVE_MEMORY_OFF,
+      ...CONNECTOR_SCHEDULING_OFF,
       projects: { [opts.cwd]: { trust_level: 'trusted' } },
       web_search: 'disabled',
       'features.enable_fanout': false,

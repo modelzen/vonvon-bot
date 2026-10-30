@@ -113,6 +113,13 @@ describe('scheduleGate (T2 4.2)', () => {
     fake.deps!.notifyGateFailure(daily);
     await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(3));
   });
+
+  it('shows an `<at>` in the task\'s name as plain text, not a mention', async () => {
+    await bind('oc_qa', { mode: 'qa' });
+    fake.deps!.notifyGateFailure(task('st_00000000000000a1', 'oc_qa', { name: '<at user_id="all"></at>' }));
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(send).toHaveBeenCalledWith('oc_qa', { text: '⏰ 定时任务「@所有人」这次没跑：本群的权限档现在用不了（这个 provider 没有这一档）。连续 10 次会自动暂停。' });
+  });
 });
 
 describe('unbinding pauses the group\'s tasks as unavailable (T2 4.6)', () => {
