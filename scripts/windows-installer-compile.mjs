@@ -16,7 +16,7 @@ const execute = promisify(execFile);
 
 /** Compile the real generated builder header and assisted pages without building
  * Electron or running a Windows executable. Only the application payload is omitted. */
-export async function compileWindowsInstaller({out, architecture = 'x64', uninstaller = false, hookFile = join(root, 'packages/desktop/assets/windows-installer.nsh')}) {
+export async function compileWindowsInstaller({out, architecture = 'x64', uninstaller = false, hookFile = join(root, 'packages/desktop/assets/windows-installer.nsh'), env = process.env}) {
   if (!isAbsolute(out) || !['x64', 'arm64'].includes(architecture)) throw Error('Use an absolute dedicated output folder and a supported architecture');
   await mkdir(out, {recursive:true});
   let sequence = 0;
@@ -71,7 +71,10 @@ SectionEnd
 ${uninstaller ? 'Section "un.Uninstall"\nSectionEnd' : ''}
 `);
   const compiler = await getMakeNsisPath();
-  const result = await execute(compiler.path, ['-V2', source], {cwd:templates, env:{...process.env, ...compiler.env}, timeout:60000, maxBuffer:2*1024*1024});
+  // Match NsisTarget.executeMakensis and builder-util's macOS child locale.
+  // macOS iconv still needs UTF-8 locale even with explicit INPUTCHARSET.
+  const locale = process.platform === 'darwin' ? {LANG:'en_US.UTF-8', LC_CTYPE:'en_US.UTF-8', LC_ALL:'en_US.UTF-8'} : {};
+  const result = await execute(compiler.path, ['-INPUTCHARSET', 'UTF8', '-V2', source], {cwd:templates, env:{...env, ...compiler.env, ...locale}, timeout:60000, maxBuffer:2*1024*1024});
   const bytes = await readFile(output);
   if (bytes.toString('ascii', 0, 2) !== 'MZ') throw Error('NSIS did not produce a Windows executable');
   return {architecture, output, bytes:bytes.length, diagnostics:result.stdout + result.stderr};
