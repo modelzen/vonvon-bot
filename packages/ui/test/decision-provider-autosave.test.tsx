@@ -1,6 +1,6 @@
 import {beforeEach, expect, it, vi} from 'vitest';
 import {isValidElement, type ReactElement, type ReactNode} from 'react';
-import {type SettingsReply, type SettingsRequest} from '@vonvon/protocol';
+import {type HostSettingsView, type SettingsReply, type SettingsRequest} from '@vonvon/protocol';
 import {DecisionProviderFields, DecisionProviderSettings} from '../src/management/DecisionProviderSettings';
 import {DecisionPicker} from '../src/settings/DecisionPicker';
 import {Editor} from '../src/settings/SettingsPanel';
@@ -31,14 +31,15 @@ vi.mock('../src/client-context', () => ({useClient: () => harness.client}));
 vi.mock('../src/settings/useDecisionCatalogs', () => ({useDecisionCatalogs: () => ({catalogs: {}, refresh: vi.fn()})}));
 vi.mock('../src/settings/DraftGuard', () => ({useDraft: () => {}}));
 type Element = ReactElement<Record<string, any>>;
-function nodes(node: ReactNode): Element[] {if (Array.isArray(node)) return node.flatMap(nodes); return isValidElement<Record<string, any>>(node) ? [node, ...nodes(node.props.children), ...nodes(node.props.actions)] : [];}
+function nodes(node: ReactNode): Element[] {if (Array.isArray(node)) return node.flatMap(nodes); return isValidElement<Record<string, any>>(node) ? [node, ...nodes(node.props.children), ...nodes(node.props.actions), ...nodes(node.props.action), ...nodes(node.props.trailing)] : [];}
 function content(node: ReactNode): string {if (typeof node === 'string' || typeof node === 'number') return String(node); if (Array.isArray(node)) return node.map(content).join(''); return isValidElement<Record<string, any>>(node) ? content(node.props.children) : '';}
 function renderAt(name: string, make: () => ReactNode) {
   const slot = harness.slots[name] ??= {states: [], refs: [], effects: [], memos: [], state: 0, ref: 0, effect: 0, memo: 0};
   slot.state = slot.ref = slot.effect = slot.memo = 0; harness.active = name;
   const result = make(); for (const effect of harness.pending.splice(0)) effect(); return result;
 }
-const initial = {defaultProvider: 'codex-appserver' as const, byProvider: {'codex-appserver': {model: 'gpt-6-luna', effort: 'low' as const}, 'claude-agent': {model: 'haiku'}, typesafe: {model: 'jev-latest'}}};
+type Configuration = NonNullable<HostSettingsView['sections']['judge']>['stored'];
+const initial: Configuration = {defaultProvider: 'codex-appserver' as const, byProvider: {'codex-appserver': {model: 'gpt-6-luna', effort: 'low' as const}, 'claude-agent': {model: 'haiku'}, typesafe: {model: 'jev-latest'}}};
 const section = (stored: typeof initial, revision: string) => ({stored, effective: stored, revision, access: {kind: 'writable' as const}, apply: []});
 let confirmed = section(structuredClone(initial), 'r1');
 let revision = 1;
@@ -123,4 +124,37 @@ it.each(['rejected', 'transport'] as const)('restores the confirmed model after 
   expect(ui.picker!.props.value).toEqual({provider: 'claude-agent', model: 'haiku'});
   expect(ui.all.some(node => node.props.title === '切换未完成')).toBe(false);
   expectNoManualActions(ui.all);
+});
+it('automatically saves a shared custom connection on blur and reloads its confirmed values', async () => {
+  let ui = await settle();
+  const endpoint = () => ui.all.find(node => node.props['aria-label'] === '自定义决策请求地址')!;
+  const model = () => ui.all.find(node => node.props['aria-label'] === '自定义接口模型 ID')!;
+  expect(endpoint().props.defaultValue).toBe('');
+  endpoint().props.onBlur({currentTarget: {value: ' https://example.com/api/judge '}});
+  expect(saveCalls()).toHaveLength(1);
+  expect(saveCalls()[0]!.edit.patch).toMatchObject({byProvider: {custom: {model: 'jev-latest', endpoint: 'https://example.com/api/judge'}}});
+  ui = await settle();
+  expect(endpoint().props.defaultValue).toBe('https://example.com/api/judge');
+  expect(ui.picker!.props.value.provider).toBe('codex-appserver');
+  model().props.onBlur({currentTarget: {value: 'private-system-one'}});
+  ui = await settle();
+  expect(saveCalls()).toHaveLength(2);
+  expect(saveCalls()[1]!.edit.revision).toBe('r2');
+  expect(saveCalls()[1]!.edit.patch).toMatchObject({byProvider: {custom: {model: 'private-system-one', endpoint: 'https://example.com/api/judge'}}});
+  expectNoManualActions(ui.all);
+
+  confirmed = section({...confirmed.stored, byProvider: {...confirmed.stored.byProvider, custom: {model: 'externally-changed', endpoint: 'https://other.example.com/system-one'}}}, 'r4');
+  ui.all.find(node => node.props.label === '重新读取配置与模型')!.props.onClick();
+  ui = await settle();
+  expect(endpoint().props.defaultValue).toBe('https://other.example.com/system-one');
+  expect(model().props.defaultValue).toBe('externally-changed');
+});
+it('rejects an invalid custom connection without sending a settings write or exposing its URL', async () => {
+  let ui = await settle();
+  ui.all.find(node => node.props['aria-label'] === '自定义决策请求地址')!.props.onBlur({currentTarget: {value: 'https://user:secret@example.com/judge'}});
+  ui = await settle();
+  expect(saveCalls()).toHaveLength(0);
+  expect(content(ui.all)).toContain('接口地址');
+  expect(content(ui.all)).not.toContain('user:secret');
+  expect(ui.picker!.props.value.provider).toBe('codex-appserver');
 });

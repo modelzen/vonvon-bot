@@ -1993,3 +1993,8 @@ Linux：`vonvon service uninstall`，`vonvon daemon stop`，`npm rm -g vonvon-bo
 - 2026-10-28 Windows 安装修复：修正 NSIS 安装后深层依赖丢失；当前用户一键 Setup 与 ZIP 分开命名。新增实际打包后台启动、认证状态、UI、关闭和路径预算检查。本机 EXE 安装与欢迎页通过，待 owner 验收；只准备 dev，Mac 后续按同版本双平台规则发布。见 docs/plans/windows-install-experience.md 与 docs/windows-release-build.md。
 
 - 2026-10-29 会话响应速度：群默认和会话覆盖独立支持 Standard / Fast / Ultrafast，网页和飞书 `/model` 共用设置校验。下一次用户发起消息或新目标时生效，保留上下文；恢复继承、普通档和进程重启均清除过期覆盖。详见 `docs/plans/session-speed.md`。按 owner 要求只合入 dev，main 与版本发布另行统一处理；真实账号的 Ultrafast 加速效果未作为本次自动化测试结论。
+
+
+## 2026-10-30 Jev 接口扩展
+
+- [x] 按 owner 确认新增 OpenRouter、Vercel、自定义 Jev/System One；保留 TypeSafe 和现有普通模型路径。配置、密钥、判断传输与群快照共用当前入口，见 `docs/plans/2026-10-30-decision-provider-extensions.md`。自动检查与隔离本地验收记录随本次实现交付；owner 人工验收、真实网关推理和合入另行确认。

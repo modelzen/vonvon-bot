@@ -10,7 +10,7 @@ import './judge-usage.css';
 
 export type JudgeUsageView = Extract<AdminReply, {kind: 'judgeUsage'}>;
 export type JudgeUsageRead = {kind: 'loading'} | {kind: 'ready'; view: JudgeUsageView; problem?: string} | {kind: 'failed'; problem: string};
-type DailySource = Pick<JudgeUsageDay['sources'][number], 'kind' | 'id'>;
+type DailySource = Pick<JudgeUsageDay['sources'][number], 'kind'> & {id?: string};
 export function dayLabel(date: string, today: string): string {
   const [year, month, day] = date.split('-');
   return `${year === today.slice(0, 4) ? '' : `${year}年`}${Number(month)}月${Number(day)}日${date === today ? '（今天）' : ''}`;
@@ -43,7 +43,7 @@ export function botTotals(days: readonly JudgeUsageDay[]) {
 export function JudgeUsageRows({read, onRead, compact = false, disabled = false, dailySource}: {read: JudgeUsageRead; onRead: () => void; compact?: boolean; disabled?: boolean; dailySource?: DailySource}) {
   const view = read.kind === 'ready' ? read.view : undefined;
   if (dailySource) {
-    const days = view?.days.map(day => ({date: day.date, count: day.sources.reduce((sum, source) => sum + (source.kind === dailySource.kind && source.id === dailySource.id ? source.count : 0), 0)}));
+    const days = view?.days.map(day => ({date: day.date, count: day.sources.reduce((sum, source) => sum + (source.kind === dailySource.kind && (dailySource.id === undefined || source.id === dailySource.id) ? source.count : 0), 0)}));
     return <div className="judge-daily-scroll" role="region" aria-label="每日使用次数" tabIndex={0}><SettingsGroup>
       {disabled && <SettingsRow title="连接恢复后更新"/>}
       {!disabled && read.kind === 'loading' && <SettingsRow title="正在读取…"/>}

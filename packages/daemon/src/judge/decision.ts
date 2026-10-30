@@ -1,6 +1,8 @@
 import { judgeFactFields, JUDGE_ALLOWED, JUDGE_FORMAT_HEADER, JUDGE_INPUT_BOUNDS, JUDGE_INPUT_EXAMPLE_REQUEST, JUDGE_INPUT_LIMITS, lineFields, oneLine, plainText, shownContext } from './prompt';
-import { callTypeSafe, probeTypeSafe, type DecisionReply, type ProbeResult } from './typesafe';
+import { callSystemOne, callTypeSafe, OPENROUTER_MODEL, probeSystemOne, probeTypeSafe, VERCEL_MODEL, type DecisionReply, type DecisionRequestOptions, type ProbeResult, type SystemOneProviderId } from './typesafe';
 import type { JudgeDecision, JudgeLine, JudgeRequest, JudgeVariant } from './types';
+
+export type { DecisionRequestOptions } from './typesafe';
 
 /**
  * A decision model's service (product.md 3.4): a stored `{kind:'decision', provider, model}` names one by `id`.
@@ -17,10 +19,20 @@ export interface DecisionProvider {
   limit: { running: number; queued: number };
   /** the model's name in a reason */
   label(model: string): string;
-  call(body: DecisionBody, key: string, signal: AbortSignal, fetchImpl?: typeof fetch): Promise<DecisionReply>;
+  call(body: DecisionBody, key: string, signal: AbortSignal, fetchImpl?: typeof fetch, options?: DecisionRequestOptions): Promise<DecisionReply>;
   /** the key page's 试一次 (s23g): one request that sends no group message */
-  probe(key: string, signal: AbortSignal, fetchImpl?: typeof fetch): Promise<ProbeResult>;
+  probe(key: string, signal: AbortSignal, fetchImpl?: typeof fetch, options?: DecisionRequestOptions): Promise<ProbeResult>;
 }
+
+/** Each gateway remains its own backend for credentials, concurrency and cooling. */
+const systemOneProvider = (id: SystemOneProviderId, displayName: string, keyId: string, model: string): DecisionProvider => ({
+  id, displayName, keyId,
+  models: [{ id: model, displayName: 'Jev' }],
+  limit: { running: 8, queued: 32 },
+  label: (chosen) => (/^(?:typesafe\/|typesafe-ai\/)?jev(?:[.-]|$)/.test(chosen) ? 'Jev' : chosen),
+  call: (body, key, signal, fetchImpl, options) => callSystemOne(id, body, key, signal, fetchImpl, options),
+  probe: (key, signal, fetchImpl, options) => probeSystemOne(id, key, signal, fetchImpl, options),
+});
 
 /** A Map, so an id such as `constructor` names nothing. */
 const PROVIDERS = new Map<string, DecisionProvider>([
@@ -36,6 +48,9 @@ const PROVIDERS = new Map<string, DecisionProvider>([
     // GET /v1/models; whether it needs the key is checked with a real one at s23g's acceptance (v1-plan s23g 做法)
     probe: (key, signal, fetchImpl) => probeTypeSafe(key, signal, fetchImpl),
   }],
+  ['openrouter', systemOneProvider('openrouter', 'OpenRouter', 'openrouter-api-key', OPENROUTER_MODEL)],
+  ['vercel', systemOneProvider('vercel', 'Vercel', 'vercel-api-key', VERCEL_MODEL)],
+  ['custom', systemOneProvider('custom', '自定义 Jev', 'custom-decision-api-key', 'jev-latest')],
 ]);
 
 export const decisionProvider = (id: string): DecisionProvider | undefined => PROVIDERS.get(id);

@@ -154,7 +154,7 @@ describe('global judge model settings', () => {
     const f = await fixture();
     const other = createHostSettings({ appDir: f.appDir });
     const first = await f.read();
-    expect(Object.keys(first.sections.judge.effective.byProvider).sort()).toEqual(['claude-agent', 'codex-appserver', 'typesafe']);
+    expect(Object.keys(first.sections.judge.effective.byProvider).sort()).toEqual(['claude-agent', 'codex-appserver', 'custom', 'openrouter', 'typesafe', 'vercel']);
     expect(first.sections.judge.stored.byProvider).toEqual({});
     const edit = { scope: { kind: 'host' as const }, section: 'judge' as const, revision: first.sections.judge.revision,
       patch: { byProvider: { 'codex-appserver': { model: 'gateway/model', effort: 'high' as const, custom: true } } } };

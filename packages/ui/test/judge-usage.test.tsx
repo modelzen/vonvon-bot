@@ -11,6 +11,20 @@ const days: JudgeUsageDay[] = [
 const view: JudgeUsageView = {kind: 'judgeUsage', days, unreadBots: 0};
 const render = (read: JudgeUsageRead) => renderToStaticMarkup(<JudgeUsageRows read={read} onRead={() => {}}/>);
 
+test('Jev daily totals include every decision service and exclude native language-model calls', () => {
+  const mixed: JudgeUsageDay = {date: '2026-10-30', total: 30, bots: [], sources: [
+    {kind: 'llm', id: 'codex-appserver', label: 'Codex', count: 20},
+    {kind: 'decision', id: 'typesafe', label: 'TypeSafe', count: 1},
+    {kind: 'decision', id: 'openrouter', label: 'OpenRouter', count: 2},
+    {kind: 'decision', id: 'vercel', label: 'Vercel', count: 3},
+    {kind: 'decision', id: 'custom', label: '自定义 Jev', count: 4},
+  ]};
+  const html = renderToStaticMarkup(<JudgeUsageRows read={{kind: 'ready', view: {...view, days: [mixed]}}} onRead={() => {}} dailySource={{kind: 'decision'}}/>);
+  expect(html).toContain('10 次');
+  expect(html).not.toContain('30 次');
+  expect(html).not.toContain('Codex');
+});
+
 test('dates use daemon today and include the year only across years', () => {
   expect(dayLabel('2026-10-19', '2026-10-19')).toBe('10月19日（今天）');
   expect(dayLabel('2026-10-05', '2026-10-19')).toBe('10月5日');

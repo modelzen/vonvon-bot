@@ -69,3 +69,42 @@ it('preserves a saved effort without replacing it with the recommendation', () =
   expect(picker(input).props.value.effort).toBe('high');
   expect(input.onChange).not.toHaveBeenCalled();
 });
+it('retains the custom endpoint when selecting its model and strips API effort fields', () => {
+  const input = {...props(), value: {defaultProvider: 'codex-appserver' as const, byProvider: {custom: {model: 'private-jev', endpoint: 'https://example.com/judge', effort: 'high' as const}}}};
+  picker(input).props.onChange({provider: 'custom', model: 'private-jev', effort: 'high', custom: true});
+  expect(input.onChange).toHaveBeenCalledExactlyOnceWith({defaultProvider: 'custom', byProvider: {custom: {model: 'private-jev', endpoint: 'https://example.com/judge'}}});
+});
+it('edits the shared custom endpoint and model independently without changing the host default', () => {
+  const input = {...props(), value: {defaultProvider: 'claude-agent' as const, byProvider: {custom: {model: 'private-jev', endpoint: 'https://example.com/judge'}}}};
+  const fields = nodes(DecisionProviderFields(input));
+  const endpoint = fields.find(node => node.props['aria-label'] === '自定义决策请求地址')!;
+  const model = fields.find(node => node.props['aria-label'] === '自定义接口模型 ID')!;
+  expect(endpoint.props.defaultValue).toBe('https://example.com/judge');
+  expect(model.props.defaultValue).toBe('private-jev');
+  endpoint.props.onBlur({currentTarget: {value: ' https://new.example.com/system-one '}});
+  expect(input.onChange).toHaveBeenLastCalledWith({defaultProvider: 'claude-agent', byProvider: {custom: {model: 'private-jev', endpoint: 'https://new.example.com/system-one'}}});
+  model.props.onBlur({currentTarget: {value: ' private-system-one '}});
+  expect(input.onChange).toHaveBeenLastCalledWith({defaultProvider: 'claude-agent', byProvider: {custom: {model: 'private-system-one', endpoint: 'https://example.com/judge'}}});
+});
+it('shows all four service states and the configured custom model in the global picker', () => {
+  const input = {...props(), value: {byProvider: {custom: {model: 'private-jev', endpoint: 'https://example.com/judge'}}}, services: [service('set'),
+    {...service('missing'), provider: 'openrouter', displayName: 'OpenRouter', keyId: 'openrouter-api-key', models: [{id: 'typesafe/jev-1.14', displayName: 'Jev'}]},
+    {...service('invalid'), provider: 'vercel', displayName: 'Vercel', keyId: 'vercel-api-key', models: [{id: 'typesafe-ai/jev', displayName: 'Jev'}]},
+    {...service('set'), provider: 'custom', displayName: '自定义 Jev', keyId: 'custom-decision-api-key'},
+  ]};
+  const control = picker(input);
+  expect(control.props.decisionServices.map((service: {provider: string; keyState: string}) => [service.provider, service.keyState])).toEqual([
+    ['typesafe', 'ready'], ['openrouter', 'missing'], ['vercel', 'invalid'], ['custom', 'ready'],
+  ]);
+  expect(control.props.decisionServices.find((service: {provider: string}) => service.provider === 'custom')).toMatchObject({models: [{id: 'private-jev', displayName: 'Jev / System One'}], endpointConfigured: true});
+  control.props.onManageKey('vercel');
+  expect(input.onManageKey).toHaveBeenCalledExactlyOnceWith('vercel');
+});
+it('blocks readonly custom connection callbacks', () => {
+  const input = {...props(), disabled: true};
+  for (const field of nodes(DecisionProviderFields(input)).filter(node => node.type === 'input')) {
+    expect(field.props.disabled).toBe(true);
+    field.props.onBlur({currentTarget: {value: 'changed'}});
+  }
+  expect(input.onChange).not.toHaveBeenCalled();
+});
