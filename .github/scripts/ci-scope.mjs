@@ -74,7 +74,8 @@ export function planScope({ eventName, event, paths, base = '', head = '', sourc
     const match = /^packages\/([^/]+)\//.exec(path);
     if (!match || !allPackages.includes(match[1])) {
       fullReason ||= `shared or unknown path: ${path}`;
-      const governance = path === 'AGENTS.md' || path === 'CLAUDE.md' || path.startsWith('.claude/skills/');
+      const governance = path === 'AGENTS.md' || path === 'CLAUDE.md' ||
+        /^(?:\.claude|\.agents)\/skills\/(?:[^/]+\/)*[^/]+\.md$/.test(path);
       for (const platform of governance ? ['linux', 'macos'] : allPlatforms) platforms.add(platform);
       continue;
     }
