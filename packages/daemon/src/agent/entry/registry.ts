@@ -58,11 +58,19 @@ const messages = {
   timeout: 'vonvon 这一步超时了。',
   failed: 'vonvon 这一步出错了。',
 };
+/** The schedule tools' own sentences for the two above that talk about settings. */
+const scheduleTurnMessages = {
+  'unknown-origin': 'vonvon 认不出这次操作是哪一轮发起的，任务没有动。请对方重新说一遍。',
+  'turn-ended': '发起这次操作的那一轮已经结束了，任务没有动。请对方重新说一遍。',
+};
 function failure(code: Exclude<Failure['code'], 'refused' | 'bad-args'>): Failure {
   return { ok: false, code, message: messages[code] };
 }
 function refused(reason: Reason): Failure {
   return { ok: false, code: 'refused', reason, message: messages[reason] };
+}
+function scheduleRefused(reason: keyof typeof scheduleTurnMessages): Failure {
+  return { ok: false, code: 'refused', reason, message: scheduleTurnMessages[reason] };
 }
 interface TurnAuth {
   id: number;
@@ -144,8 +152,8 @@ export function createAgentEntries(opts: {
     if (grant.thread && !grant.thread.isAlive()) revoke(grant);
     if (grant.phase === 'revoked') return failure('revoked');
     if (grant.place.kind !== 'group') return refused('not-group');
-    if (!auth) return refused('unknown-origin');
-    if (!auth.active || grant.turn !== auth) return refused('turn-ended');
+    if (!auth) return scheduleRefused('unknown-origin');
+    if (!auth.active || grant.turn !== auth) return scheduleRefused('turn-ended');
     if (action === 'list') return undefined;
     if (auth.steered || auth.presence === 'none') return { ...refused('not-human-turn'), message: scheduleRefusalMessages['not-human-turn'] };
     if (auth.presence !== 'scheduled') return undefined;
@@ -219,7 +227,7 @@ export function createAgentEntries(opts: {
         : schedule ? authorizeSchedule(grant, auth, tool.action, taskId) : authorizeNow(grant, auth);
       if (gated) {
         const refusal = authNow();
-        if (refusal?.reason === 'unknown-origin' && origin?.toolUseId && grant.origins.has(origin.toolUseId)) return finishLog(refused('turn-ended'));
+        if (refusal?.reason === 'unknown-origin' && origin?.toolUseId && grant.origins.has(origin.toolUseId)) return finishLog(schedule ? scheduleRefused('turn-ended') : refused('turn-ended'));
         if (refusal) return finishLog(refusal);
         if (settings && grant.settingRunning && grant.queue.length >= 8) return finishLog(failure('busy'));
       }

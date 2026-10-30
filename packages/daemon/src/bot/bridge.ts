@@ -127,12 +127,16 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     // Drain evidence received before disconnect completed; it runs independently of the business handlers.
     const callbacksClosing = transportClosing.then(() => cardCallbacks.close());
     const groupsClosing = Promise.allSettled([...groupTasks]);
+    // No scheduled run is claimed from here on. The orchestrator interrupts the runs on and settles them; the drain then
+    // waits at most 5 seconds for their records, as the host kills this process 8 seconds into a stop (host/lifecycle.ts).
+    orchestrator.scheduler.stop();
     const orchestratorClosing = orchestrator.shutdown();
     closing = (async () => {
       const errors: unknown[] = [];
       await rolesClosing;
       try { await orchestratorClosing; }
       catch (error) { errors.push(error); }
+      await orchestrator.scheduler.drain(5_000);
       const groups = await groupsClosing;
       for (const result of groups) if (result.status === 'rejected') errors.push(result.reason);
       for (const result of await transportClosing) {
@@ -211,6 +215,8 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     log.info('ws', 'connected', { appId: app.id, fallbackCwd: opts.fallbackCwd });
     // Only once connected: when this start fails, the file stays as it is for the next one.
     orchestrator.replyDropped();
+    // Scheduled runs post to Feishu: the tick starts once connected, after the crashed runs are recorded.
+    await orchestrator.scheduler.start();
 
     const executeGroup = createGroupExecutor(channel, identity, opts.cfg.preferences?.projectsRootDir);
     const adminGroups: BridgeHandle['adminGroups'] = op => {
