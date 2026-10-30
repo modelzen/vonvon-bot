@@ -179,11 +179,15 @@ async function verifyVersionedObjects(evidence, version, manifest, fetchImpl) {
     const feedURL = architecture === 'universal' ? manifest.feedURL : manifest.feedURLs[architecture];
     urls[feedName] = feedURL;
     checkFeed(await verifyDownload(feedURL, byName(feedName), fetchImpl, true), version, architecture);
-    for (const extension of ['zip', 'dmg']) {
+    // Two streams at a time: preserve complete SHA-256 verification while
+    // overlapping independent downloads. Join both before reporting a failure.
+    const downloads = await Promise.allSettled(['zip', 'dmg'].map(async extension => {
       const record = byName(`Vonvon-Bot-${version}-${architecture}.${extension}`);
       urls[record.file] = new URL(record.file, DEFAULT_MANIFEST_URL).href;
       await verifyDownload(urls[record.file], record, fetchImpl);
-    }
+    }));
+    const failed = downloads.find(result => result.status === 'rejected');
+    if (failed) throw failed.reason;
   }
   return evidence.files.filter(record => urls[record.file]).map(record => ({ ...record, url: urls[record.file] }));
 }

@@ -130,6 +130,23 @@ test('public verification rejects stale versioned cache policy and altered downl
   await assert.rejects(verifyPublicRelease({ env: {}, out: '/evidence', version, sha, fetchImpl: async url => serve(url, true) }), /SHA-256 or size/);
 });
 
+test('ZIP and DMG verification overlap with two streams and join before failure', async t => {
+  const data = fixture(t);
+  let active = 0, peak = 0, completed = 0;
+  const fetchImpl = async url => {
+    const file = basename(new URL(url).pathname);
+    if (file.endsWith('.json')) return response(data.files.get(file), versionedHeaders(file));
+    active++; peak = Math.max(peak, active);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    active--; completed++;
+    return response(file.endsWith('.zip') ? 'changed bytes' : data.files.get(file), versionedHeaders(file));
+  };
+  await assert.rejects(verifyVersionedRelease({ env: {}, out: '/evidence', version, sha, fetchImpl }), /SHA-256 or size/);
+  assert.equal(peak, 2);
+  assert.equal(completed, 2);
+  assert.equal(active, 0, 'no verification stream remains pending after rejection');
+});
+
 const versionedHeaders = file => ({ cache: file === 'manifest.json' ? 'no-cache' : 'public, max-age=31536000, immutable', type: file.endsWith('.json') ? 'application/json' : 'application/octet-stream' });
 
 test('versioned-only verification checks feed, ZIP and DMG before the stable switch without reading the live manifest', async t => {

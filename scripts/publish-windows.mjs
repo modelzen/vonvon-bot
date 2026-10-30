@@ -1,12 +1,13 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, promisify } from 'node:util';
 import { assertCredentialEnvNames, cosCredentialEnvNames, loadPinnedSdk } from './release-cos-evidence.mjs';
 import { assertSecureTransport, cachePolicy } from './verify-public-release.mjs';
 import { validateWindowsInventory, verifyWindowsArtifacts } from './package-windows.mjs';
+import { resolveDownloadEnvironment } from './release-network.mjs';
 
 const exec = promisify(execFile);
 const repository = 'modelzen/vonvon-bot';
@@ -57,7 +58,7 @@ async function ghJSON(args, env) {
   return JSON.parse(result.stdout);
 }
 
-export async function downloadBuild({ runId, out, env, execute = exec, api = ghJSON, expectedSha, expectedVersion }) {
+export async function downloadBuild({ runId, out, env, execute = exec, api = ghJSON, expectedSha, expectedVersion, downloadEnvironment = resolveDownloadEnvironment }) {
   if (!/^[1-9]\d*$/.test(String(runId))) throw new Error('Use a GitHub Actions --run-id');
   const run = await api(['api', `repos/${repository}/actions/runs/${runId}`], env);
   const sourceSha = validateBuildRun(run);
@@ -81,7 +82,14 @@ export async function downloadBuild({ runId, out, env, execute = exec, api = ghJ
   if (!entries?.length) {
     const staging = await mkdtemp(join(dirname(out), '.windows-download-'));
     try {
-      await execute('gh', ['run', 'download', String(runId), '--repo', repository, '--name', artifacts[0].name, '--dir', staging], { env });
+      const downloadEnv = await downloadEnvironment(env);
+      try {
+        await execute('gh', ['run', 'download', String(runId), '--repo', repository, '--name', artifacts[0].name, '--dir', staging],
+          { env: downloadEnv, timeout: 15 * 60_000, maxBuffer: 1024 * 1024 });
+      } catch (error) {
+        if (error.killed) throw new Error('Windows artifact download exceeded 15 minutes; check the configured network route, then resume the same release and run. No rebuild or publication was started.');
+        throw new Error('Windows artifact download failed; check the configured network route, then resume the same release and run. Partial download was discarded; no rebuild or publication was started.');
+      }
       await verifyWindowsArtifacts(staging, { sourceSha, version: expectedVersion });
       await writeFile(join(staging, 'github-build.json'), json({ runId: Number(runId), runAttempt: run.run_attempt, sourceSha, workflowSha: run.head_sha, artifactId: artifacts[0].id, artifactName: artifacts[0].name, artifactDigest: artifacts[0].digest, url: run.html_url }), { flag: 'wx' });
       if (entries) await rmdir(out); // Only an empty dedicated destination can be removed.
@@ -125,7 +133,16 @@ export async function verifyWindowsPublic(objects, { fetchImpl = fetch } = {}) {
   return results;
 }
 
-export async function publishWindowsObjects({ out, inventory, config, client, fetchImpl = fetch, log = console.log }) {
+async function assertNotCancelled(cancelFile) {
+  if (cancelFile === undefined) return;
+  if (!isAbsolute(cancelFile)) throw new Error('Use an absolute --cancel-file path');
+  try { await access(cancelFile); }
+  catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  throw new Error('Windows publication stopped by CANCEL before writing the next object.');
+}
+
+export async function publishWindowsObjects({ out, inventory, config, client, fetchImpl = fetch, log = console.log, cancelFile }) {
+  await assertNotCancelled(cancelFile);
   const lockPath = join(out, '.windows-publish.lock');
   const lock = await open(lockPath, 'wx');
   try {
@@ -135,6 +152,7 @@ export async function publishWindowsObjects({ out, inventory, config, client, fe
     if (!configuration || typeof configuration !== 'object' || Array.isArray(configuration) || !['', undefined].includes(configuration.Status)) throw new Error('Bucket versioning must never have been enabled for atomic overwrite protection');
     const objects = windowsObjectPlan(inventory);
     for (const object of objects) {
+      await assertNotCancelled(cancelFile);
       // Rehash immediately before writing; mutable local files cannot bypass the verified inventory.
       const body = await readFile(join(out, object.file));
       if (body.length !== object.bytes || hash(body) !== object.sha256) throw new Error(`Local file changed: ${object.file}`);
@@ -147,13 +165,16 @@ export async function publishWindowsObjects({ out, inventory, config, client, fe
         continue;
       }
       log(`Uploading ${object.file} (${object.bytes} bytes)`);
+      await assertNotCancelled(cancelFile);
       await call(client, 'putObject', { ...target, Key: object.key, Body: body, ContentLength: body.length,
         ContentMD5: hash(body, 'md5', 'base64'), ContentType: object.contentType, CacheControl: immutable,
         Headers: { 'x-cos-forbid-overwrite': 'true' } });
     }
+    await assertNotCancelled(cancelFile);
     const verified = await verifyWindowsPublic(objects, { fetchImpl });
     const receipt = { version: inventory.version, sourceSha: inventory.sourceSha, architecture: inventory.architecture, signed: false,
       updatesEnabled: false, verifiedAt: new Date().toISOString(), objects: verified };
+    await assertNotCancelled(cancelFile);
     await writeFile(join(out, 'windows-publish-receipt.json'), json(receipt));
     return receipt;
   } finally { await lock.close(); await unlink(lockPath); }
@@ -162,14 +183,15 @@ export async function publishWindowsObjects({ out, inventory, config, client, fe
 async function main() {
   const { values } = parseArgs({ options: {
     'run-id': { type: 'string' }, out: { type: 'string' }, 'cos-config': { type: 'string' }, sha: { type: 'string' }, version: { type: 'string' },
-    'download-only': { type: 'boolean' }, help: { type: 'boolean' },
+    'download-only': { type: 'boolean' }, 'cancel-file': { type: 'string' }, help: { type: 'boolean' },
   } });
   if (values.help) {
-    console.log('node scripts/publish-windows.mjs --run-id ID --out /absolute/evidence --cos-config /absolute/windows-cos.json [--download-only]\nDownloads a successful trusted Windows Actions artifact, verifies it, uploads versioned unsigned downloads and fully verifies public bytes. Never writes stable/latest.yml or changes the website.');
+    console.log('node scripts/publish-windows.mjs --run-id ID --out /absolute/evidence --cos-config /absolute/windows-cos.json [--download-only] [--cancel-file /absolute/CANCEL]\nDownloads a successful trusted Windows Actions artifact, verifies it, uploads versioned unsigned downloads and fully verifies public bytes. Never writes stable/latest.yml or changes the website.');
     return;
   }
   assertSecureTransport();
   if (!isAbsolute(values.out ?? '')) throw new Error('Supply an absolute dedicated --out directory');
+  await assertNotCancelled(values['cancel-file']);
   const out = resolve(values.out);
   const config = values['download-only'] ? undefined : await readWindowsCosConfig(values['cos-config']);
   const privateNames = config ? cosCredentialEnvNames(config) : [];
@@ -180,7 +202,7 @@ async function main() {
   const COS = await loadPinnedSdk(config.sdkModule);
   const client = new COS({ SecretId: process.env[config.secretIdEnv], SecretKey: process.env[config.secretKeyEnv],
     ...(config.securityTokenEnv ? { SecurityToken: process.env[config.securityTokenEnv] } : {}), Protocol: 'https:', Timeout: 300000 });
-  console.log(json(await publishWindowsObjects({ out, inventory, config, client })));
+  console.log(json(await publishWindowsObjects({ out, inventory, config, client, cancelFile: values['cancel-file'] })));
 }
 
 const invokedPath = process.argv[1] ? await realpath(resolve(process.argv[1])).catch(() => null) : null;

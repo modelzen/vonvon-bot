@@ -1,6 +1,6 @@
 interface:
-  display_name: "Vonvon Bot macOS 发布"
-  short_description: "构建并公证 universal 候选，验收后准备稳定更新源发布"
-  default_prompt: "使用 $release-mac 按 owner 指定的版本和 main SHA 准备 macOS 候选。每次运行 helper 都会提交 Apple 公证，必须 owner 本人点名要求，没有点名就停在运行 helper 之前。上传版本化对象另需授权；切 stable 只认 owner 本人在自己打开的 Codex App 会话里、看完证据后的确认。"
+  display_name: "Vonvon Bot 双平台发布"
+  short_description: "固定来源，编排双平台构建、公证、并行上传、续跑与官网交接"
+  default_prompt: "使用 $release-mac 按本轮授权发布指定版本，默认走双平台编排并复用已有候选，展示回执后将 owner 的最终确认绑定到准确计划。"
 policy:
-  allow_implicit_invocation: false
+  allow_implicit_invocation: true
