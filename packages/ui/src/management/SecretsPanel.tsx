@@ -1,6 +1,6 @@
 import {RefreshCw} from 'lucide-react';
-import {Fragment, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode} from 'react';
-import {formatTime, keyProblem, type SecretService} from '@vonvon/protocol';
+import {useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode} from 'react';
+import {decisionApiProviderLabel, formatTime, keyProblem, type SecretService} from '@vonvon/protocol';
 import {useClient} from '../client-context';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {Button, IconButton, FormField, InlineNotice, StatusBadge, type StatusTone} from '../reference/components/ui';
@@ -10,6 +10,7 @@ import {
   unreadNotes, useCount, useName, useNote, type FillFlow, type KeyFlows, type RowState, type SecretsRead, type SecretsView,
 } from './secretsModel';
 import {DecisionProviderSettings} from './DecisionProviderSettings';
+import {decisionKeySection, decisionProviderSection, settingAnchor} from '../search';
 import './secrets.css';
 
 /** Reads the list on entering a page and on coming back to the window: nothing in the snapshot changes when a key does
@@ -96,7 +97,7 @@ export function UsesRow({service, view}: {service: SecretService; view: SecretsV
     </>
     : notesOf(notes);
   // the count stays by the title however long the list (多角度审查 B4)
-  return <details className="decision-uses-disclosure" open={notes.length ? true : undefined}>
+  return <details className="decision-uses-disclosure" data-search-title="使用范围" open={notes.length ? true : undefined}>
     <summary><span>使用范围</span><span className="decision-uses-count">{view.botsUnreadable ? 'Bot 清单读不了' : useCount(service.inUse)}<span aria-hidden="true" className="decision-uses-chevron">›</span></span></summary>
     <div className="decision-uses-content">{description}</div>
   </details>;
@@ -285,23 +286,26 @@ export function SecretsPanel({onOpenLogs, onOpenApplication, onOpenProviders}: {
       <div className="decision-key-content">
         {!view ? <SettingsRow title="正在读取…"/>
           : !view.services.length ? <SettingsRow title="暂无需要密钥的服务"/>
-            : view.services.map(service => <Fragment key={service.keyId}>
+            : view.services.map(service => <div key={service.keyId} className="decision-service-key" id={settingAnchor(decisionKeySection(service.provider))}>
+              <h3 className="decision-service-key-title">{decisionApiProviderLabel(service.provider)}</h3>
               <KeyRow service={service} view={view} row={rows[service.keyId] ?? {}}
                 onFill={() => flows.open(service.keyId, false)} onReplace={() => flows.open(service.keyId, true, service.last4)}
                 onRemove={() => setRemoval({keyId: service.keyId, pending: false})} onTest={() => void flows.test(service.keyId)} onOpenLogs={onOpenLogs}/>
-            </Fragment>)}
+              <UsesRow service={service} view={view}/>
+            </div>)}
       </div>
     </>;
   }
   return <div className="page-stack secrets-page" ref={page}>
     {header}
-    <DecisionProviderSettings services={view?.services} onOpenProviders={onOpenProviders} onManageKey={() => {
-      const service = view?.services.find(item => item.provider === 'typesafe');
+    <DecisionProviderSettings services={view?.services} onOpenProviders={onOpenProviders} onManageKey={(provider = 'typesafe') => {
+      const service = view?.services.find(item => item.provider === provider);
       if (service && (service.status === 'missing' || service.status === 'invalid')) {flows.open(service.keyId, false); return;}
-      const target = page.current?.querySelector<HTMLElement>(service ? `.${keyRowClass(service.keyId)}` : '.decision-key-content');
+      const target = provider === 'custom' ? document.getElementById(settingAnchor(decisionProviderSection('custom')))
+        : page.current?.querySelector<HTMLElement>(service ? `.${keyRowClass(service.keyId)}` : '.decision-key-content');
       target?.scrollIntoView({block: 'center', behavior: 'smooth'});
-      target?.querySelector<HTMLElement>('button:not([disabled])')?.focus({preventScroll: true});
-    }} keyContent={body} keyUses={view?.services.map(service => <UsesRow key={service.keyId} service={service} view={view}/>)} keyAction={keyRefresh}/>
+      target?.querySelector<HTMLElement>('input:not([disabled]), button:not([disabled])')?.focus({preventScroll: true});
+    }} keyContent={body} keyAction={keyRefresh}/>
     <FillKeyDialog flow={fillService ? fill : undefined} service={fillService} onClose={flows.close}
       onSubmit={value => void flows.save(value)} onAgain={flows.again} onRetest={() => void flows.retest()}/>
     <RemoveKeyDialog removal={removeService ? removal : undefined} service={removeService} view={view}

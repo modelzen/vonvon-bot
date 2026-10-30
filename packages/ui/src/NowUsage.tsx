@@ -115,7 +115,7 @@ export function NowUsage({disabled = false, onOpenUsage}: {disabled?: boolean; o
       {item.id === active && <NowUsageBody provider={item} stale={disabled || catalogUnavailable}/>}
     </Tabs.Panel>)}
     <Tabs.Panel className="now-usage-panel now-jev-panel" value="jev">
-      {active === 'jev' && <JudgeUsageGroup dailySource={{kind: 'decision', id: 'typesafe'}} disabled={disabled} refreshInterval={60_000}/>}
+      {active === 'jev' && <JudgeUsageGroup dailySource={{kind: 'decision'}} disabled={disabled} refreshInterval={60_000}/>}
     </Tabs.Panel>
     {active !== 'jev' && problem && !provider?.problem && <p className="now-usage-notice" role="status">{problem}</p>}
   </Tabs.Root>;

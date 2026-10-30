@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { JUDGE_PROVIDER_IDS } from './decision-providers.js';
 import { agentIdSchema, folderTokenSchema, groupIdSchema } from "./domain.js";
 
 const effort = z.enum([
@@ -63,7 +64,7 @@ const judgeKinds = {
     provider: z.string().trim().min(1).max(100),
     model: z.string().trim().min(1).max(1000),
   }),
-  provider: z.object({ kind: z.literal("provider"), provider: z.enum(["codex-appserver", "claude-agent", "typesafe"]) }),
+  provider: z.object({ kind: z.literal("provider"), provider: z.enum(JUDGE_PROVIDER_IDS) }),
 };
 const judgeSelection = z.discriminatedUnion("kind", [
   judgeKinds.default.strict(),
@@ -174,7 +175,7 @@ export const projectSectionSchemas = {
 export const sessionSectionSchemas = { model: z.object({ selection }), speed: sessionSpeed };
 export const hostSectionSchemas = {
   execution: z.object({ codexBin: z.string().nullable() }),
-  judge: z.object({ defaultProvider: z.enum(['codex-appserver', 'claude-agent', 'typesafe']).optional(), byProvider: z.record(z.string(), z.object({ model: z.string().trim().min(1).max(1000), effort: effort.optional(), custom: z.boolean().optional() })) }),
+  judge: z.object({ defaultProvider: z.enum(JUDGE_PROVIDER_IDS).optional(), byProvider: z.record(z.string(), z.object({ model: z.string().trim().min(1).max(1000), effort: effort.optional(), custom: z.boolean().optional(), endpoint: z.string().trim().max(2048).optional() })) }),
 };
 
 /** A session's Feishu thread id; the CLI checks `--session` with it before connecting. */
@@ -262,6 +263,7 @@ const decisionModels = z
       keySet: z.boolean(),
       /** the keystore could not be read: keySet is false and says nothing */
       keyUnreadable: z.boolean().optional(),
+      endpointConfigured: z.boolean().optional(),
     }),
   )
   .optional();

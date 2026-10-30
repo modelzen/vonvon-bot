@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'vitest';
 import {agentIdSchema, groupIdSchema, membershipIdSchema, projectIdSchema, type DesktopSnapshot} from '@vonvon/protocol';
-import {diagnosticsSection, findEntries, searchEntries, settingAnchor} from '../src/search';
+import {decisionKeySection, decisionProviderSection, diagnosticsSection, findEntries, searchEntries, settingAnchor} from '../src/search';
 import {groupTabForSection} from '../src/GroupWorkspace';
 import {routeFromSearch} from '../src/collaboration-navigation';
 
@@ -389,4 +389,16 @@ test('Bot title and comment model search targets the unified model pickers', () 
     assert.equal(entry?.destination.field, field);
   }
   assert.ok(findEntries(entries, '评论后端').some(entry => entry.title === '评论模型'));
+});
+
+test('decision service searches keep their own key and connection destinations', () => {
+  for (const [provider, query] of [['openrouter', 'OpenRouter 密钥'], ['vercel', 'Vercel 密钥'], ['custom', '自定义 Jev 密钥']] as const) {
+    const match = findEntries(entries, query)[0];
+    assert.equal(match?.destination.page, 'secrets');
+    assert.equal(match?.destination.section, decisionKeySection(provider));
+    assert.equal(match?.destination.field, 'API 密钥');
+  }
+  assert.equal(findEntries(entries, '自定义决策请求地址')[0]?.destination.field, '请求地址');
+  assert.equal(findEntries(entries, '自定义接口模型 ID')[0]?.destination.field, '模型 ID');
+  assert.equal(decisionProviderSection('unknown'), 'Provider 配置');
 });

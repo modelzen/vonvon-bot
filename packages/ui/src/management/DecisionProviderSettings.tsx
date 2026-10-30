@@ -1,13 +1,13 @@
 import {RefreshCw} from 'lucide-react';
 import {useCallback, useEffect, useRef, useState, type ReactNode} from 'react';
-import {type HostSettingsView, type SecretService, type SettingsReply} from '@vonvon/protocol';
+import {DECISION_API_PROVIDERS, JUDGE_PROVIDER_IDS, decisionApiProviderLabel, decisionEndpointProblem, type HostSettingsView, type SecretService, type SettingsReply} from '@vonvon/protocol';
 import {useClient} from '../client-context';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {IconButton, InlineNotice} from '../reference/components/ui';
 import {Editor} from '../settings/SettingsPanel';
 import {decisionProviderSection, settingAnchor} from '../search';
 
-import {DecisionPicker, type DecisionCatalogs, type DecisionKeyState} from '../settings/DecisionPicker';
+import {DecisionPicker, decisionApiModels, isDecisionApiProvider, type DecisionCatalogs, type DecisionKeyState, type DecisionPickerService} from '../settings/DecisionPicker';
 import {useDecisionCatalogs} from '../settings/useDecisionCatalogs';
 import './decision-provider-settings.css';
 
@@ -16,30 +16,46 @@ type Configuration = NonNullable<HostSettingsView['sections']['judge']>['stored'
 /** A single default selection for newly created groups; existing groups keep their own choice. */
 export function DecisionProviderFields({value, defaults, catalogs, services, disabled, onChange, onOpenProviders, onManageKey, keyContent, keyUses, keyAction, modelAction}: {
   value: Configuration; defaults: Configuration; catalogs: DecisionCatalogs; services?: SecretService[]; disabled: boolean;
-  onChange: (value: Configuration) => void; onOpenProviders?: () => void; onManageKey?: () => void;
+  onChange: (value: Configuration) => void; onOpenProviders?: () => void; onManageKey?: (provider?: string) => void;
   keyContent?: ReactNode; keyUses?: ReactNode; keyAction?: ReactNode; modelAction?: ReactNode;
 }) {
   const provider = value.defaultProvider ?? defaults.defaultProvider;
   const profile = provider ? value.byProvider[provider] ?? defaults.byProvider[provider] : undefined;
   const service = services?.find(item => item.provider === 'typesafe');
+  const customProfile = value.byProvider.custom ?? defaults.byProvider.custom ?? {model: 'jev-latest'};
+  const decisionServices: DecisionPickerService[] = DECISION_API_PROVIDERS.map(provider => {
+    const service = services?.find(item => item.provider === provider);
+    return {provider, displayName: service?.displayName, endpointConfigured: provider === 'custom' ? !decisionEndpointProblem(customProfile.endpoint) : undefined,
+      models: provider === 'custom' ? [{id: customProfile.model, displayName: 'Jev / System One'}] : service?.models ?? decisionApiModels[provider],
+      keyState: service?.status === 'set' ? 'ready' : service?.status ?? (services ? 'unreadable' : 'loading')};
+  });
+  function changeCustom(patch: {endpoint?: string; model?: string}) {
+    if (!disabled) onChange({...value, byProvider: {...value.byProvider, custom: {...customProfile, ...patch}}});
+  }
   const keyState: DecisionKeyState = service?.status === 'set' ? 'ready' : service?.status ?? (services ? 'unreadable' : 'loading');
   return <>
     <SettingsGroup label="默认决策模型" action={modelAction}>
-      <div id={settingAnchor(decisionProviderSection())}><span id={settingAnchor(decisionProviderSection('codex-appserver'))}/><span id={settingAnchor(decisionProviderSection('claude-agent'))}/><DecisionPicker value={provider && profile ? {provider, ...profile} : undefined} catalogs={catalogs} jevModels={service?.models}
+      <div id={settingAnchor(decisionProviderSection())}><span id={settingAnchor(decisionProviderSection('codex-appserver'))}/><span id={settingAnchor(decisionProviderSection('claude-agent'))}/><DecisionPicker value={provider && profile ? {provider, ...profile} : undefined} catalogs={catalogs} jevModels={service?.models} decisionServices={decisionServices}
         keyState={keyState} context="global" disabled={disabled} onOpenProviders={onOpenProviders} onManageKey={onManageKey}
         onChange={selection => {
-          if (disabled || !['codex-appserver', 'claude-agent', 'typesafe'].includes(selection.provider)) return;
+          if (disabled || !JUDGE_PROVIDER_IDS.some(provider => provider === selection.provider)) return;
           const {provider: selected, ...profile} = selection;
-          onChange({...value, defaultProvider: selected as Configuration['defaultProvider'], byProvider: {...value.byProvider, [selected]: selected === 'typesafe' ? {model: profile.model} : profile}});
+          onChange({...value, defaultProvider: selected as Configuration['defaultProvider'], byProvider: {...value.byProvider, [selected]: isDecisionApiProvider(selected) ? {...(selected === 'custom' && customProfile.endpoint !== undefined ? {endpoint: customProfile.endpoint} : {}), model: profile.model} : profile}});
         }}/></div>
     </SettingsGroup>
-    <SettingsGroup label="Jev 密钥" id={settingAnchor('决策模型')} action={keyAction}>
-      <div id={settingAnchor(decisionProviderSection('typesafe'))}>{keyContent}</div>{keyUses}
+    <SettingsGroup label="自定义 Jev / System One" id={settingAnchor(decisionProviderSection('custom'))}>
+      <SettingsRow title="请求地址" description="完整请求地址，使用 Jev / System One 协议；本机所有使用自定义接口的 Bot 和群共用此地址。"
+        trailing={<input key={`endpoint:${customProfile.endpoint ?? ''}`} className="settings-field decision-connection-input" aria-label="自定义决策请求地址" placeholder="https://example.com/api/judge" type="url" defaultValue={customProfile.endpoint ?? ''} disabled={disabled}
+          onBlur={event => {const endpoint = event.currentTarget.value.trim(); if (endpoint !== (customProfile.endpoint ?? '')) changeCustom({endpoint});}}/>}/>
+      <SettingsRow title="模型 ID" description="新选择使用此模型；已有群保留各自保存的模型 ID。"
+        trailing={<input key={`model:${customProfile.model}`} className="settings-field decision-connection-input" aria-label="自定义接口模型 ID" placeholder="jev-latest" defaultValue={customProfile.model} disabled={disabled}
+          onBlur={event => {const model = event.currentTarget.value.trim(); if (model !== customProfile.model) changeCustom({model});}}/>}/>
     </SettingsGroup>
+    <SettingsGroup label="决策服务密钥" id={settingAnchor('决策模型')} action={keyAction}>{keyContent}{keyUses}</SettingsGroup>
   </>;
 }
 
-export function DecisionProviderSettings({services, onOpenProviders, onManageKey, keyContent, keyUses, keyAction}: {services?: SecretService[]; onOpenProviders?: () => void; onManageKey?: () => void; keyContent?: ReactNode; keyUses?: ReactNode; keyAction?: ReactNode}) {
+export function DecisionProviderSettings({services, onOpenProviders, onManageKey, keyContent, keyUses, keyAction}: {services?: SecretService[]; onOpenProviders?: () => void; onManageKey?: (provider?: string) => void; keyContent?: ReactNode; keyUses?: ReactNode; keyAction?: ReactNode}) {
   const client = useClient();
   const [view, setView] = useState<HostSettingsView>();
   const {catalogs, refresh: refreshCatalogs} = useDecisionCatalogs();
@@ -72,11 +88,14 @@ export function DecisionProviderSettings({services, onOpenProviders, onManageKey
         const provider = value.defaultProvider ?? section.effective.defaultProvider;
         if (!provider) return '请选择默认决策模型。';
         if (!(value.byProvider[provider] ?? section.effective.byProvider[provider])?.model.trim()) return '请填写模型 ID。';
-        if (provider === 'typesafe' && services?.find(service => service.provider === provider)?.status !== 'set') return '请先配置可用的 Jev 密钥。';
+        const custom = value.byProvider.custom ?? section.effective.byProvider.custom;
+        if (custom && !custom.model.trim()) return '请填写自定义接口的模型 ID。';
+        if (provider === 'custom' || custom?.endpoint) {const problem = decisionEndpointProblem(custom?.endpoint); if (problem) return problem;}
+        if (isDecisionApiProvider(provider) && services?.find(service => service.provider === provider)?.status !== 'set') return `请先配置可用的 ${decisionApiProviderLabel(provider)} 密钥。`;
         return undefined;
       }}
       renderLayout={editor => <div className="decision-model-editor" data-writable={section.access.kind === 'writable'}>{editor.content}</div>}
       render={(value, change, disabled) => <DecisionProviderFields value={value} defaults={section.effective} catalogs={catalogs} services={services} disabled={disabled} onChange={change} onOpenProviders={onOpenProviders} onManageKey={onManageKey} keyContent={keyContent} keyUses={keyUses} keyAction={keyAction} modelAction={modelAction}/>}/>
-      : <><SettingsGroup label="Provider 配置"><SettingsRow title={loading ? '正在读取配置…' : '当前服务暂不支持统一配置'} description={loading ? undefined : '请更新并重新连接本机服务。'}/></SettingsGroup><SettingsGroup label="Jev 密钥" id={settingAnchor('决策模型')} action={keyAction}>{keyContent}{keyUses}</SettingsGroup></>}
+      : <><SettingsGroup label="Provider 配置"><SettingsRow title={loading ? '正在读取配置…' : '当前服务暂不支持统一配置'} description={loading ? undefined : '请更新并重新连接本机服务。'}/></SettingsGroup><SettingsGroup label="决策服务密钥" id={settingAnchor('决策模型')} action={keyAction}>{keyContent}{keyUses}</SettingsGroup></>}
   </>;
 }

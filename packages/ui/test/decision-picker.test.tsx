@@ -183,3 +183,36 @@ it('disambiguates unknown models with identical display names using their concre
   root().props.onValueChange(key('claude-agent', 'gateway-b'));
   expect(changed).toHaveBeenCalledExactlyOnceWith({provider: 'claude-agent', model: 'gateway-b'});
 });
+it('lists hosted Jev services independently and checks each service key for pointer and keyboard selection', () => {
+  props.decisionServices = [
+    {provider: 'typesafe', models: jevModels, keyState: 'ready'},
+    {provider: 'openrouter', models: [{id: 'typesafe/jev-1.14', displayName: 'Jev'}], keyState: 'missing'},
+    {provider: 'vercel', models: [{id: 'typesafe-ai/jev', displayName: 'Jev'}], keyState: 'ready'},
+    {provider: 'custom', models: [{id: 'private-jev', displayName: 'Jev / System One'}], keyState: 'ready', endpointConfigured: true},
+  ];
+  props.availableProviders = [];
+  expect(item('openrouter', 'typesafe/jev-1.14').props.disabled).toBe(false);
+  item('openrouter', 'typesafe/jev-1.14').props.onClick({preventBaseUIHandler: vi.fn()});
+  expect(manage).toHaveBeenLastCalledWith('openrouter');
+  root().props.onValueChange(key('openrouter', 'typesafe/jev-1.14'));
+  expect(manage).toHaveBeenCalledTimes(2);
+  expect(changed).not.toHaveBeenCalled();
+  root().props.onValueChange(key('vercel', 'typesafe-ai/jev'));
+  expect(changed).toHaveBeenLastCalledWith({provider: 'vercel', model: 'typesafe-ai/jev'});
+  root().props.onValueChange(key('custom', 'private-jev'));
+  expect(changed).toHaveBeenLastCalledWith({provider: 'custom', model: 'private-jev'});
+  expect(effort()).toBeUndefined();
+  expect(chosenDecisionModel({id: 'x', provider: 'openrouter', model: 'typesafe/jev-1.14', name: 'Jev', efforts: ['high']})).toEqual({provider: 'openrouter', model: 'typesafe/jev-1.14'});
+});
+it('describes a missing custom endpoint separately from a missing key and opens its shared configuration', () => {
+  props.context = 'group';
+  props.decisionServices = [{provider: 'custom', models: [{id: 'jev-latest', displayName: 'Jev / System One'}], keyState: 'ready', endpointConfigured: false}];
+  expect(content(item('custom', 'jev-latest'))).toContain('接口地址未配置');
+  expect(content(item('custom', 'jev-latest'))).not.toContain('未配置 API 密钥');
+  root().props.onValueChange(key('custom', 'jev-latest'));
+  expect(manage).toHaveBeenCalledExactlyOnceWith('custom');
+  expect(changed).not.toHaveBeenCalled();
+  props.decisionServices = props.decisionServices.map(service => ({...service, endpointConfigured: true}));
+  root().props.onValueChange(key('custom', 'jev-latest'));
+  expect(changed).toHaveBeenCalledExactlyOnceWith({provider: 'custom', model: 'jev-latest'});
+});
