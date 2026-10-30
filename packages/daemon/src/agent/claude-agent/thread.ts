@@ -111,8 +111,9 @@ export const AUTO_COMPACT_SETTINGS = {
 
 /**
  * vonvon's builtin capability package is the plugin `vonvon` (builtin-skills/package.ts). Loaded from a directory its
- * id is `vonvon@inline`; enabling it in the flag settings, which outrank project and local settings, is meant to beat
- * a workspace's `.claude/settings.json` turning it off (product.md 9.22). A group's skill whitelist gets its skills too.
+ * id is `vonvon@inline`. A workspace's `.claude/settings.json` can turn it off; enabling it in the flag settings, which
+ * outrank project and local settings, beats that (both measured, product.md 9.22). A group's skill whitelist gets its
+ * skills too.
  */
 const BUILTIN_PLUGIN = 'vonvon';
 export const BUILTIN_PLUGIN_ID = `${BUILTIN_PLUGIN}@inline`;

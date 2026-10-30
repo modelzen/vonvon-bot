@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, stat, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -13,9 +13,9 @@ afterEach(async () => {
 async function setup() {
   isolated.root = await mkdtemp(join(tmpdir(), 'builtin-package-'));
   directories.push(isolated.root);
-  const { ensureBuiltinPackage } = await import('../src/agent/builtin-skills/package');
+  const { completeBuiltinPackage, ensureBuiltinPackage } = await import('../src/agent/builtin-skills/package');
   const { scheduledTasksSkill } = await import('../src/agent/builtin-skills/scheduled-tasks');
-  return { ensureBuiltinPackage, skill: scheduledTasksSkill };
+  return { completeBuiltinPackage, ensureBuiltinPackage, skill: scheduledTasksSkill };
 }
 
 describe('builtin capability package', () => {
@@ -87,6 +87,29 @@ describe('builtin capability package', () => {
     await chmod(directory, 0o555);
     try { await expect(ensureBuiltinPackage('example', 'group', [{ ...skill, body: 'changed' }])).rejects.toMatchObject({ code: 'EACCES' }); }
     finally { await chmod(directory, 0o700); }
+  });
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('finds the whole package a failed rewrite left in place', async () => {
+    const { completeBuiltinPackage, ensureBuiltinPackage, skill } = await setup();
+    const first = await ensureBuiltinPackage('example', 'group', [skill]);
+    const directory = join(first.path, 'skills', skill.name);
+    await chmod(directory, 0o555);
+    try {
+      await expect(ensureBuiltinPackage('example', 'group', [{ ...skill, body: 'changed' }])).rejects.toMatchObject({ code: 'EACCES' });
+      expect(await completeBuiltinPackage('example', 'group')).toBe(first.path);
+    } finally { await chmod(directory, 0o700); }
+  });
+  it('finds no package unless the manifest and a SKILL.md are there', async () => {
+    const { completeBuiltinPackage, ensureBuiltinPackage, skill } = await setup();
+    expect(await completeBuiltinPackage('example', 'group')).toBeUndefined();
+    const first = await ensureBuiltinPackage('example', 'group', [skill]);
+    expect(await completeBuiltinPackage('example', 'group')).toBe(first.path);
+    expect(await completeBuiltinPackage('example', 'dm')).toBeUndefined();
+    // A first write that stopped before the manifest.
+    await unlink(join(first.path, '.claude-plugin', 'plugin.json'));
+    expect(await completeBuiltinPackage('example', 'group')).toBeUndefined();
+    // Every SKILL.md removed, the directories kept.
+    await ensureBuiltinPackage('example', 'group', []);
+    expect(await completeBuiltinPackage('example', 'group')).toBeUndefined();
   });
   it('rejects duplicate and escaping names before writing', async () => {
     const { ensureBuiltinPackage, skill } = await setup();
