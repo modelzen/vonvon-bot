@@ -126,6 +126,20 @@ test('platform-specific desktop and daemon files avoid unrelated Windows checks'
   assert.deepEqual(plan(['packages/daemon/src/main.ts', 'packages/daemon/src/macos/keychain.ts']).platforms, allPlatforms);
 });
 
+test('root platform scripts stay full scope but select only relevant platforms', () => {
+  const macScript = 'scripts/render-macos-icon.swift';
+  const windowsScript = 'scripts/build-windows.ps1';
+  assert.equal(plan([macScript]).scope, 'full');
+  assert.deepEqual(plan([macScript]).packages, allPackages);
+  assert.deepEqual(plan([macScript]).platforms, ['linux', 'macos']);
+  assert.deepEqual(plan([macScript], { target: 'main' }).platforms, ['linux', 'macos']);
+  assert.deepEqual(plan([windowsScript]).platforms, ['linux', 'windows']);
+  assert.deepEqual(plan([windowsScript], { target: 'main' }).platforms, allPlatforms);
+  assert.deepEqual(plan(['scripts/build.mjs']).platforms, allPlatforms);
+  assert.deepEqual(plan(['scripts/macAddress.ts']).platforms, allPlatforms);
+  assert.deepEqual(plan([macScript, 'packages/daemon/src/main.ts']).platforms, allPlatforms);
+});
+
 test('PR uses cumulative merge-base diff rather than latest commit', () => fixture(({ dir, git, put, commit, base }) => {
   git('checkout', '-qb', 'feature');
   put('packages/protocol/src/index.ts');
