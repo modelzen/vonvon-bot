@@ -3091,7 +3091,8 @@ export function createOrchestrator(
     const now = Date.now();
     if (!reason || shuttingDown || now - (gateFailureNoted.get(task.id) ?? -Infinity) < 60 * 60_000) return;
     gateFailureNoted.set(task.id, now);
-    const text = `⏰ 定时任务「${task.name}」这次没跑：本群的权限档现在用不了（${reason.replace(/。$/, '')}）。连续 10 次会自动暂停。`;
+    // A text message's `<at>` is a real mention, and the task's name is anybody's words (as the scheduled topic's root).
+    const text = neutraliseAts(`⏰ 定时任务「${task.name}」这次没跑：本群的权限档现在用不了（${reason.replace(/。$/, '')}）。连续 10 次会自动暂停。`, undefined);
     void trackTask(sayInMain(task.chatId, { text }, text).catch(error => {
       if (gateFailureNoted.get(task.id) === now) gateFailureNoted.delete(task.id); // the next failure tries again
       log.fail('schedule', error, { phase: 'gate-notice', taskId: task.id });

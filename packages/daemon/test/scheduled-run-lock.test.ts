@@ -133,6 +133,25 @@ it('a scheduled run of group B, while its session starts, locks group B only', a
   await expect(edit('oc_b')).rejects.toThrow('Agent 正在执行任务');
 });
 
+it('a scheduled run of group B in a new topic, once running, locks group B only', async () => {
+  const run = job('oc_b');
+  void fake.deps!.run({ ...run, task: { ...run.task, placement: { kind: 'newTopic' } } });
+  await vi.waitFor(() => expect(fake.card).toHaveBeenCalled());
+  await expect(edit('oc_a')).resolves.toMatchObject({ ok: true });
+  expect(fake.deps!.gate('oc_a')).toBe('ok');
+  await expect(edit('oc_b')).rejects.toThrow('Agent 正在执行任务');
+});
+
+it('a /goal in a new topic of group C, once running, locks group C only', async () => {
+  await registry.addProject({ name: 'oc_c', chatId: 'oc_c', cwd: join(root, 'workspace'), blank: false, createdAt: 1, kind: 'multi', mode: 'full' });
+  const goal = session as { runStreamed: () => unknown };
+  Object.assign(goal, { runGoal: goal.runStreamed, clearGoal: async () => {} });
+  await o.onMessage({ ...message('oc_c'), content: '/goal 写日报' });
+  await vi.waitFor(() => expect(fake.card).toHaveBeenCalled());
+  await expect(edit('oc_a')).resolves.toMatchObject({ ok: true });
+  await expect(edit('oc_c')).rejects.toThrow('Agent 正在执行任务');
+});
+
 it('a person\'s turn in group A, while its session starts, locks group A only', async () => {
   holdStart();
   await o.onMessage(message('oc_a'));
