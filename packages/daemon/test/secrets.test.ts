@@ -137,7 +137,7 @@ describe('who chose a key: the judge\'s own resolution (s23g)', () => {
     await bot('cli_d', 'd', { kind: 'decision', provider: 'other', model: 'x' }, [group('oc_d1', 'd', smart)]);
     const view = await secretsView();
     expect(view.unreadBots).toBe(1);
-    expect(view.services.map(s => s.provider)).toEqual(['typesafe']);
+    expect(view.services.map(s => s.provider)).toEqual(['typesafe', 'openrouter', 'vercel', 'custom']);
     expect(view.services[0]!.inUse).toEqual([
       { agentId: 'cli_a', agentName: '值班助手' },
       { agentId: 'cli_a', agentName: '值班助手', groupId: 'oc_1', groupName: '发布群', inherited: true },
@@ -154,9 +154,9 @@ describe('who chose a key: the judge\'s own resolution (s23g)', () => {
     await writeFile(paths.botsFile, '{not json');
     const warn = vi.spyOn(log, 'warn');
     const view = await secretsView();
-    expect(view).toMatchObject({ kind: 'secrets', unreadBots: 0, botsUnreadable: true, services: [{ status: 'missing', inUse: [] }] });
+    expect(view).toMatchObject({ kind: 'secrets', unreadBots: 0, botsUnreadable: true, services: expect.arrayContaining([{provider:'typesafe',displayName:'TypeSafe',keyId:'typesafe-api-key',models:[{id:'jev-latest',displayName:'Jev'}],status:'missing',inUse:[]}]) });
     expect(adminReplySchema.safeParse(view).success).toBe(true);
-    expect(await secretsAction({ type: 'setSecret', keyId: 'typesafe-api-key', value: KEY })).toMatchObject({ kind: 'secrets', botsUnreadable: true, services: [{ status: 'set', last4: '0000' }] });
+    expect(await secretsAction({ type: 'setSecret', keyId: 'typesafe-api-key', value: KEY })).toMatchObject({ kind: 'secrets', botsUnreadable: true, services: expect.arrayContaining([expect.objectContaining({provider:'typesafe',status:'set',last4:'0000'})]) });
     expect(await getSecret('typesafe-api-key')).toBe(KEY);
     expect(await secretsAction({ type: 'removeSecret', keyId: 'typesafe-api-key' })).toMatchObject({ kind: 'secrets', removed: true, botsUnreadable: true });
     expect(warn).toHaveBeenCalledWith('secrets', 'bots-unreadable', { reason: expect.any(String) });
@@ -216,7 +216,7 @@ describe('secretsAction (s23g)', () => {
     await bot('cli_a', 'a', JEV, []);
     await setSecret('typesafe-api-key', KEY);
     const removed = kind(await secretsAction({ type: 'removeSecret', keyId: 'typesafe-api-key' }), 'secrets');
-    expect(removed).toMatchObject({ removed: true, services: [{ status: 'missing', inUse: [{ agentId: 'cli_a' }] }] });
+    expect(removed).toMatchObject({ removed: true, services: expect.arrayContaining([expect.objectContaining({provider:'typesafe',status:'missing',inUse:[expect.objectContaining({agentId:'cli_a'})]})]) });
     expect(kind(await secretsAction({ type: 'removeSecret', keyId: 'typesafe-api-key' }), 'secrets').removed).toBe(false);
   });
 

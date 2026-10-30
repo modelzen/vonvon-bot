@@ -1,11 +1,11 @@
-import {DEFAULT_SMART_RULES, groupDecisionSchema, type GroupDecision} from '@vonvon/protocol';
+import {DEFAULT_SMART_RULES, decisionEndpointProblem, groupDecisionSchema, type GroupDecision} from '@vonvon/protocol';
 import {createBackend} from '../agent';
 import type {AgentBackend, ModelInfo} from '../agent/types';
 import {resolveProjectModelAccess} from '../config/execution';
 import {getSecret} from '../config/keystore';
 import {decisionProvider} from '../judge/decision';
 import {parseModelId} from '../agent/model-id';
-import {defaultJudgeProvider, defaultProviderChoice, readJudgeModels} from '../judge/global-models';
+import {defaultJudgeProvider, defaultProviderChoice, readJudgeModels, type JudgeProvider} from '../judge/global-models';
 import {defaultJudgeModel} from '../judge/model';
 import type {JudgeSelectionStored} from '../judge/types';
 import {API_KEY_SHAPE} from '@vonvon/protocol';
@@ -16,10 +16,14 @@ type Dependencies = {backendFor?: (id:string)=>Pick<AgentBackend,'listModels'|'p
 
 type ConcreteJudge = Extract<JudgeSelectionStored, {kind:'decision'}> | (Extract<JudgeSelectionStored, {kind:'llm'}> & {backend:'codex-appserver'|'claude-agent'});
 
-/** A configured key must be readable and safe to send as an HTTP header. Never echo a key/error. */
-export async function requireDecisionKey(providerId:string, read:typeof getSecret=getSecret):Promise<void> {
+/** New decision choices require a readable, header-safe key and, for custom services, a shared endpoint. */
+export async function requireDecisionKey(providerId:string, read:typeof getSecret=getSecret, readModels:typeof readJudgeModels=readJudgeModels):Promise<void> {
   const provider=decisionProvider(providerId);
   if (!provider) throw new Error('不支持这个决策模型 Provider。');
+  if (providerId==='custom') {
+    const problem=decisionEndpointProblem((await readModels()).byProvider.custom?.endpoint);
+    if (problem) throw new Error(problem);
+  }
   let key:string|undefined;
   try { key=await read(provider.keyId); }
   catch { throw new Error(`无法读取 ${provider.displayName} 的密钥，请先在设置中检查密钥。`); }
@@ -27,15 +31,17 @@ export async function requireDecisionKey(providerId:string, read:typeof getSecre
 }
 
 /** Resolve once: a group's stored choice never points back to mutable host profiles. */
-export async function snapshotProviderJudge(providerId:'codex-appserver'|'claude-agent'|'typesafe',deps:Dependencies={},validate=true):Promise<ConcreteJudge> {
-  const override=(await (deps.readJudgeModels??readJudgeModels)()).byProvider[providerId];
-  if (providerId==='typesafe') {
-    const choice=override??defaultProviderChoice('typesafe');
+export async function snapshotProviderJudge(providerId:JudgeProvider,deps:Dependencies={},validate=true):Promise<ConcreteJudge> {
+  const stored=await (deps.readJudgeModels??readJudgeModels)();
+  const override=stored.byProvider[providerId];
+  if (decisionProvider(providerId)) {
+    const choice=override??defaultProviderChoice(providerId);
     const model=parseModelId(choice.model);
     if (!model.ok) throw new Error(model.message);
-    if (validate) await requireDecisionKey(providerId,deps.readKey);
+    if (validate) await requireDecisionKey(providerId,deps.readKey,async()=>stored);
     return {kind:'decision',provider:providerId,model:model.id};
   }
+  if (providerId!=='codex-appserver'&&providerId!=='claude-agent') throw new Error('不支持这个决策模型 Provider。');
   const backend=(deps.backendFor??createBackend)(providerId);
   if (validate) {
     if (backend.doctor && !(await backend.doctor({force:true})).ok) throw new Error('决策 Provider 尚未安装或未登录。');
@@ -80,7 +86,7 @@ export async function prepareNewGroupSettings(input:{backend:string; kind:Sessio
     if (!model.ok) throw new Error(model.message);
     judge={...judge,model:model.id};
     if (judge.kind==='decision') {
-      await requireDecisionKey(judge.provider,deps.readKey);
+      await requireDecisionKey(judge.provider,deps.readKey,deps.readJudgeModels);
     } else {
       const selectedModel = judge.model;
       const info=(await catalog(judge.backend)).find(item=>item.id===selectedModel && !item.hidden);

@@ -1,4 +1,4 @@
-/* A shared default picker and a separate Jev credential card. */
+/* A shared default picker, custom connection, and per-service credential rows. */
 .today-window .settings-content-page > .page-stack.secrets-page {gap:12px;}
 .today-window .secrets-page > .today-page-heading {position:sticky;top:0;z-index:5;display:flex;flex-direction:column;align-items:flex-start;background:var(--color-canvas);padding:8px 0 12px;}
 .secrets-page .ss-section__header {min-height:28px;align-items:center;margin-bottom:6px;}
@@ -20,3 +20,7 @@
 
 .secrets-page .decision-key-content .ss-row {min-height:70px;}
 .secrets-page .decision-key-content .setup-step-trailing {flex-wrap:wrap;}
+
+.secrets-page .decision-connection-input {width:min(340px, 100%);min-width:180px;}
+.secrets-page .decision-service-key + .decision-service-key {border-top:1px solid var(--color-separator);}
+.secrets-page .decision-service-key-title {margin:0;padding:14px 16px 0;color:var(--color-text-secondary);font-size:12px;font-weight:600;}

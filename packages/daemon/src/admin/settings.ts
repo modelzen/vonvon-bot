@@ -2,7 +2,7 @@ import { getAppRoleSnapshot } from '../config/app-roles';
 import { ToolRefusal } from '../agent/entry/tools';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { JUDGE_SELECTION_KINDS } from '@vonvon/protocol';
+import { JUDGE_SELECTION_KINDS, decisionEndpointProblem } from '@vonvon/protocol';
 import type { AgentBackend, ModelInfo, ReasoningEffort } from '../agent/types';
 import { backendIds } from '../agent';
 import { parseModelId } from '../agent/model-id';
@@ -32,6 +32,7 @@ import { botFiles, readRole, readSoulText, readText, roleDraft, roleProblem, upd
 import { loadBots } from '../config/bots';
 import { discoverGroupSkills, discoverLocalGroupSkills } from '../agent/group-skills';
 import { snapshotDefaultJudge, snapshotProviderJudge, requireDecisionKey } from '../project/initial-settings';
+import { readJudgeModels } from '../judge/global-models';
 export type * from './settings-types';
 export { parseSettingsAction, parseSettingsEdit, parseSettingsScope, parseModelQuery, SettingsInputError } from './settings-parse';
 export function settingsRevision(value: unknown): string {
@@ -79,6 +80,8 @@ export interface SettingsOwnerDeps {
   readSmartPrompt?: (appId: string, chatId?: string) => ReturnType<typeof readSmartPrompt>;
   /** the keystore, for whether a decision model's key is filled in */
   getSecret?: (id: string) => Promise<string | undefined>;
+  /** The shared decision profiles, including a custom service's machine-wide endpoint. */
+  readJudgeModels?: typeof readJudgeModels;
   instructions?: {
     read(): Promise<string>;
     save(text: string): Promise<void>;
@@ -111,6 +114,10 @@ const JUDGE_NOTES: Record<string, string> = { 'codex-appserver': JUDGE_CODEX_NOT
 /** A stored judge setting, or nothing when unset or unusable (the judge ignores those too). */
 function storedJudge(value: unknown): JudgeSelectionStored | undefined {
   return parseStoredJudge(value, backendIds()).value;
+}
+function isDecisionSelection(value: T.JudgeSelectionView | undefined): boolean {
+  if (!value || (value.kind !== 'decision' && value.kind !== 'provider')) return false;
+  return typeof value.provider === 'string' && (value.kind === 'decision' || !!decisionProvider(value.provider));
 }
 /** The judge setting a view shows: what the judge reads; a kind this version does not know as stored,
  * so it shows and is never rewritten (v1-plan 第 5 节"旧客户端读到决策模型"); anything else unusable
@@ -449,12 +456,12 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
   async function validateJudgeSelection(value: T.JudgeSelection, layerBackend: string, group: boolean): Promise<JudgeSelectionStored | undefined> {
     if (value.kind === 'default') {
       if (!group) return undefined;
-      return snapshotDefaultJudge({ backendFor: deps.backendFor, readKey: deps.getSecret }).catch((error: unknown) => {
+      return snapshotDefaultJudge({ backendFor: deps.backendFor, readKey: deps.getSecret, readJudgeModels: deps.readJudgeModels }).catch((error: unknown) => {
         throw new SettingsInputError(error instanceof Error ? error.message : '无法验证默认决策模型');
       });
     }
     if (value.kind === 'provider') {
-      const choice=await snapshotProviderJudge(value.provider, { backendFor: deps.backendFor, readKey: deps.getSecret }).catch((error: unknown) => {
+      const choice=await snapshotProviderJudge(value.provider, { backendFor: deps.backendFor, readKey: deps.getSecret, readJudgeModels: deps.readJudgeModels }).catch((error: unknown) => {
         throw new SettingsInputError(error instanceof Error ? error.message : '无法验证决策 Provider');
       });
       return group ? choice : { kind: 'provider', provider: value.provider };
@@ -468,7 +475,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       // any model id, as a hand-typed one: a wrong one fails its judgements as `model` and cools (s23f)
       if (!decisionProvider(value.provider))
         throw new SettingsInputError(`没有 ${value.provider} 这家决策模型，现在有：${decisionProviders().map(p => `${p.displayName}（${p.id}）`).join('、')}`);
-      await requireDecisionKey(value.provider,deps.getSecret).catch((error:unknown)=>{ throw new SettingsInputError(error instanceof Error?error.message:'无法验证决策模型密钥'); });
+      await requireDecisionKey(value.provider,deps.getSecret,deps.readJudgeModels).catch((error:unknown)=>{ throw new SettingsInputError(error instanceof Error?error.message:'无法验证决策模型密钥'); });
       return { kind: 'decision', provider: value.provider, model: id.id };
     }
     const backend = value.backend ?? layerBackend;
@@ -516,9 +523,13 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
   async function decisionModels(): Promise<T.DecisionModelsView> {
     return Promise.all(decisionProviders().map(async p => {
       const { status } = await keyStatus(p, deps.getSecret);
+      const profile = p.id === 'custom' ? await (deps.readJudgeModels ?? readJudgeModels)().then(stored => stored.byProvider.custom).catch(() => undefined) : undefined;
+      const models = profile && !p.models.some(model => model.id === profile.model)
+        ? [...p.models, { id: profile.model, displayName: profile.model }] : p.models;
       return {
-        provider: p.id, displayName: p.displayName, models: p.models.map(m => ({ ...m })), keyId: p.keyId,
+        provider: p.id, displayName: p.displayName, models: models.map(m => ({ ...m })), keyId: p.keyId,
         keySet: status === 'set', ...(status === 'unreadable' ? { keyUnreadable: true } : {}),
+        ...(p.id === 'custom' ? { endpointConfigured: !decisionEndpointProblem(profile?.endpoint) } : {}),
       };
     }));
   }
@@ -615,10 +626,10 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       };
       const botJudge = storedJudge(cfg.preferences?.judge);
       sections.judge.effective = judgeEffective(botJudge?.kind === 'llm' ? botJudge.backend : botBackendId(cfg.preferences), { bot: botJudge });
-      const botDecides = sections.judge.effective.selection.kind === 'decision' || (sections.judge.effective.selection.kind === 'provider' && sections.judge.effective.selection.provider === 'typesafe');
+      const botDecides = isDecisionSelection(sections.judge.effective.selection);
       const judgeByBackend: NonNullable<T.AgentSettingsView['judgeByBackend']> = {};
       for (const id of backendIds()) {
-        const judgeBackend = botJudge?.kind === 'provider' && botJudge.provider !== 'typesafe' ? botJudge.provider : id;
+        const judgeBackend = judgeBackendId(id, botJudge?.kind === 'llm' ? undefined : botJudge);
         const { model, effort, provider, modelSource } = resolveJudgeModel(judgeBackend, { bot: botJudge }, peekModels(judgeBackend));
         judgeByBackend[id] = { model, ...(effort ? { effort } : {}), ...(provider ? { provider } : {}), source: modelSource === 'bot' ? 'bot' : 'default' };
       }
@@ -679,7 +690,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       // a decision model gets none of a backend's extras
       const judgeSelection = sections.judge.effective.selection;
       const judgeNote = judgeSelection.kind === 'llm' ? JUDGE_NOTES[String(judgeSelection.backend ?? backendId)]
-        : judgeSelection.kind === 'provider' && judgeSelection.provider !== 'typesafe' ? JUDGE_NOTES[String(judgeSelection.provider)] : undefined;
+        : judgeSelection.kind === 'provider' && !isDecisionSelection(judgeSelection) ? JUDGE_NOTES[String(judgeSelection.provider)] : undefined;
+      const groupDecides = isDecisionSelection(judgeSelection);
       const fullOnly = deps.backendFor(backendId).fullAccessOnly?.();
       let skillView: Pick<T.ProjectSettingsView, 'skills' | 'skillsError'>;
       if (deps.offline) {
@@ -708,7 +720,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           openIds: [...(p.allowedUsers ?? [])],
           revision: settingsRevision([botId, p.name, p.chatId, p.allowedUsers ?? []])
         },
-        smartPrompt: p.smartRules ? { ...await smartPromptView(p.chatId, judgeNote ? [judgeNote] : [], sections.judge.effective.selection.kind === 'decision' || (sections.judge.effective.selection.kind === 'provider' && sections.judge.effective.selection.provider === 'typesafe')), source: 'group', text: composeSmartRules(p.smartRules) } : await smartPromptView(p.chatId, judgeNote ? [judgeNote] : [], sections.judge.effective.selection.kind === 'decision' || (sections.judge.effective.selection.kind === 'provider' && sections.judge.effective.selection.provider === 'typesafe')),
+        smartPrompt: p.smartRules ? { ...await smartPromptView(p.chatId, judgeNote ? [judgeNote] : [], groupDecides), source: 'group', text: composeSmartRules(p.smartRules) } : await smartPromptView(p.chatId, judgeNote ? [judgeNote] : [], groupDecides),
         decisionModels: await decisionModels()
       };
     }
@@ -749,7 +761,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
   /** After a decision model is chosen without its key (owner: choose first, fill in later): what happens meanwhile
    * and how to fill it in, as one more effect line, which the command line and the web page show as they are. */
   async function keyMissing(selection: T.JudgeSelectionView | undefined): Promise<string | undefined> {
-    if (selection?.kind !== 'decision' && !(selection?.kind === 'provider' && selection.provider === 'typesafe'))
+    if (!selection || (selection.kind !== 'decision' && selection.kind !== 'provider') || !isDecisionSelection(selection))
       return undefined;
     const chosen = (await decisionModels()).find(m => m.provider === selection.provider);
     return chosen && !chosen.keySet ? keyMissingText(chosen) : undefined;
