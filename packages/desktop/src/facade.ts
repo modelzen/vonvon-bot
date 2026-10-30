@@ -187,6 +187,7 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
     schedule: (botId, request) => callClient(desktopChannels.schedule, value => scheduleReplySchema.parse(value), { botId, request }),
     directory: request => callClient(desktopChannels.directory, value => directoryReplySchema.parse(value), request),
     library: request => callClient(desktopChannels.library, value => libraryReplySchema.parse(value), request),
+    schedule: (botId, request) => callClient(desktopChannels.schedule, value => scheduleReplySchema.parse(value), botId, request),
     onLog(listener) {
       if (!clientClosed) logs.add(listener);
       return () => { logs.delete(listener); };

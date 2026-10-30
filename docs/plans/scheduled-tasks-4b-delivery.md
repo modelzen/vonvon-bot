@@ -23,7 +23,7 @@
 ### 4.1 profile
 
 - `SessionProfile.capabilityPackages: readonly { path: string; kind: 'builtin' }[]`；`SessionProfileCapabilities.capabilityPackages: boolean`；两家置 `true`；`resolveSessionProfile` 在 `capabilities.capabilityPackages` 为真时放行，否则照旧抛；`mcpServers` 照旧抛。
-- `handle-message.ts:1114` 的 `profileOf`：`profile.tools.schedule`（T3 在同一个函数里算好，和带不带任务工具是同一个开关）为真时 `await ensureBuiltinPackage(appId, 'group', builtinSkillsFor(profile))`，成功就 `capabilityPackages: [{ path, kind: 'builtin' }]`；抛错记诊断 `builtin-package-failed`，`capabilityPackages: []`，会话照常起。
+- `handle-message.ts:1114` 的 `profileOf`：`profile.tools.schedule`（T3 在同一个函数里算好，和带不带任务工具是同一个开关）为真时 `await ensureBuiltinPackage(appId, 'group', builtinSkillsOfSet('group'))`，成功就 `capabilityPackages: [{ path, kind: 'builtin' }]`；抛错记诊断 `builtin-package-failed`，`capabilityPackages: []`，会话照常起。
 
 ### 4.2 Claude
 

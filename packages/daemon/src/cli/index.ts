@@ -215,8 +215,8 @@ type ScheduleOptions = Json & Omit<ScheduleTarget, 'taskId' | 'instruction'>;
 const inGroup = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--json', 'Print JSON');
 const timing = (command: Command) => command
   .option('--every <interval>', 'Every 30m or 2h').option('--daily <HH:mm>', 'Every day at this time').option('--weekly <days@HH:mm>', 'mon,wed@10:00; days mon to sun')
-  .option('--at <time>', 'Once, "YYYY-MM-DD HH:mm" in --tz or the daemon\'s time zone').option('--cron <expr>', 'Standard 5 fields, like "0 9 * * 1-5"')
-  .option('--tz <zone>', 'IANA time zone, like Asia/Tokyo; defaults to the daemon\'s').option('--name <name>', 'Task name, up to 40 characters');
+  .option('--at <time>', 'Once, "YYYY-MM-DD HH:mm" in --tz, else in the task\'s time zone on edit and the daemon\'s on add').option('--cron <expr>', 'Standard 5 fields, like "0 9 * * 1-5"')
+  .option('--tz <zone>', 'IANA time zone, like Asia/Tokyo; add defaults to the daemon\'s, edit keeps the task\'s').option('--name <name>', 'Task name, up to 40 characters');
 const runSchedule = async (action: ScheduleAction, target: Json & ScheduleTarget) => {
   await (await import('./commands/schedule')).runSchedule(action, target, io(target));
 };
