@@ -76,7 +76,10 @@ export function planScope({ eventName, event, paths, base = '', head = '', sourc
       fullReason ||= `shared or unknown path: ${path}`;
       const governance = path === 'AGENTS.md' || path === 'CLAUDE.md' ||
         /^(?:\.claude|\.agents)\/skills\/(?:[^/]+\/)*[^/]+\.md$/.test(path);
-      for (const platform of governance ? ['linux', 'macos'] : allPlatforms) platforms.add(platform);
+      const scriptPlatforms = path.startsWith('scripts/') ? pathPlatforms(path, 'script') : ['linux'];
+      const selected = governance ? ['linux', 'macos'] :
+        path.startsWith('scripts/') && scriptPlatforms.length > 1 ? scriptPlatforms : allPlatforms;
+      for (const platform of selected) platforms.add(platform);
       continue;
     }
     const name = match[1];
