@@ -20,6 +20,7 @@ owner 2026-10-30 定。本节是开发、合入和 CI 的现行规则；与下�
 - 普通说明文档（根 `README.md`、`docs/` 下的小写 `.md`）默认只跑轻量检查，不安装产品依赖。`AGENTS.md`、`CLAUDE.md`、skills、CI、脚本和构建规则会影响执行行为，不按普通文档免检。
 - `dev` PR 按影响范围选择包：UI 改动检查 UI 和桌面集成，daemon 改动检查 daemon 和桌面集成，桌面改动检查桌面；公共 protocol/client、依赖、包配置、公共构建脚本、规则文件及未知路径执行全量。当前为保证包间构建依赖，代码任务先构建所有包，再对选中的包执行类型检查、测试和 lint，同时运行仓库脚本测试。
 - Linux 是所有代码改动的基础平台。普通 UI 只需要 Linux；明确的 macOS 专属文件或目录增加 macOS，Windows 专属文件或目录增加 Windows；公共 daemon/桌面运行逻辑、protocol/client、依赖和公共构建/CI 配置会影响 Windows，检查三个平台。混合改动取平台并集。单独修改开发规则不因此运行 Windows；`main` 集成批次检查全部包和 Linux、自托管 macOS，只有累积差异确实影响 Windows 时才增加 Windows，不因“发布前全量”无条件消费 Windows runner。Windows CI 使用 x64 runner；ARM64 安装包与真实系统行为仍在发布验收中检查。
+- 各平台执行适合该平台的检查：Linux/macOS 对选中的包运行完整自动化测试；Windows 保留全部包的构建、相应类型检查和 lint，protocol/client/UI 按选择运行包测试，daemon、桌面及仓库脚本复用 `scripts/build-windows.ps1` 已验证的 Windows 专项回归清单，覆盖 Windows 启动/进程/数据兼容/注册、桌面更新/托盘/依赖以及打包运行时工具。CI 不运行该发布脚本本身，不执行安装或发布；专项清单与发布脚本的一致性由回归测试检查。
 - 平台由 `.github/scripts/ci-scope.mjs` 自动选择。PR 标签可扩大范围，不能缩小自动判定的必要检查：`ci:macos` 追加 macOS，`ci:windows` 追加 Windows，`ci:all` 强制全部包和三个平台。Linux 始终是代码检查的基础平台；多个标签取并集。没有平台标签时按自动结果执行。
 - `frozen` 是 PR 的 Label，不是 Git Tag，只表示“本次已准备合入，允许运行较重检查”。开发中更新 PR 先跑轻量分析；非文档 PR 在加 `frozen` 前，最终合入检查保持失败，不能靠跳过产品测试合入。加 `frozen` 后运行选中的平台。若还要改代码，先去掉 `frozen`，push、完成必要审查/验收后再加回来；新提交必须取得自己的检查结果。普通文档不要求 `frozen`。不添加与工作无关的标签。
 - CI 监听平台标签及 `frozen` 的添加和移除、代码更新、目标分支和 draft 状态变化。同一 PR 的旧运行自动取消。手动 `workflow_dispatch` 总是全量三平台，供排查和补充验证；手动运行不能替代 PR 自己的合入证据。
