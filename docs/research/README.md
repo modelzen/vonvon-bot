@@ -1,5 +1,7 @@
 # 调研记录
 
+- [2026-10-30 Windows 安装与应用内升级方案](2026-10-30-windows-install-update/report.md)：核对 0.7.8、Clash Verge Rev 2.5.8、CC Switch 4.0.21；建议免费更新签名、首次简短安装向导、后续应用内更新及取消新增 Windows ZIP；仅方案，未实施或发布。
+
 | 报告 | 内容 | 说明 |
 | --- | --- | --- |
 | [2026-10-30 Codex 程序复用与模型刷新](2026-10-30-codex-runtime-refresh/report.md) | App / CLI 发现、统一托管更新、空闲切换及模型刷新；Claude 后续参考 | 只实现 Codex，验证边界见报告与 PR |

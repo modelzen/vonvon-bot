@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { access, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { downloadBuild, publishWindowsObjects, validateBuildRun, windowsObjectPlan } from './publish-windows.mjs';
+import { downloadBuild, publishWindowsObjects, validateBuildRun, windowsObjectPlan, planWindowsUpdates, promoteWindowsUpdates } from './publish-windows.mjs';
 import { createWindowsInventory } from './package-windows.mjs';
 
 const sourceSha = 'a'.repeat(40), version = '0.7.6';
@@ -207,4 +207,46 @@ test('an overlong GitHub artifact download fails with a bounded, redacted recove
     return true;
   });
   await assert.rejects(access(out));
+});
+
+
+async function updateFixture(t) {
+  const out = await mkdtemp(join(tmpdir(), 'windows-feed-test-'));
+  t.after(() => rm(out, { recursive: true, force: true }));
+  const keys = generateKeyPairSync('ed25519'), keyFile = join(out, 'private.pem');
+  await writeFile(keyFile, keys.privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
+  const modern = { ...inventory, format: 2, architecture: 'x64+arm64', updatesEnabled: true,
+    publicKey: keys.publicKey.export({ type: 'spki', format: 'pem' }).toString(), artifacts: ['x64', 'arm64'].flatMap(arch =>
+      inventory.artifacts.filter(item => item.kind !== 'zip').map(item => ({ ...item, file: item.file.replace('x64', arch).replace('latest.yml', arch === 'arm64' ? 'latest-arm64.yml' : 'latest.yml') }))) };
+  const store = new Map(), writes = [];
+  for (const artifact of modern.artifacts) { await writeFile(join(out, artifact.file), bytes); if (artifact.kind !== 'feed') store.set(`https://dl.vonvon.cc/bot/windows/${version}/${artifact.file}`, bytes); }
+  const fetchPublic = async url => store.has(url) ? new Response(store.get(url), { headers: { 'content-length': String(store.get(url).length),
+    'content-type': url.endsWith('.json') ? 'application/json' : 'application/octet-stream', 'cache-control': url.endsWith('.json') ? 'no-cache' : 'public,max-age=31536000,immutable' } }) : new Response(null, { status: 404 });
+  const options = { out, inventory: modern, privateKeyFile: keyFile, fetchImpl: fetchPublic };
+  const feeds = await planWindowsUpdates(options);
+  const client = { putObject: (params, callback) => { writes.push(params); store.set(`https://dl.vonvon.cc/${params.Key}`, params.Body); callback(null, {}); } };
+  return { ...options, feeds, config: { bucket: 'fixture-123', region: 'ap-shanghai', updatePrivateKeyFile: keyFile }, client, store, writes, planSHA256: 'a'.repeat(64) };
+}
+
+test('signed Windows feeds are separate per architecture, reviewed last, and idempotent on resume', async t => {
+  const h = await updateFixture(t);
+  assert.equal(windowsObjectPlan(h.inventory).length, 4, 'only two installers and blockmaps are immutable downloads');
+  assert.deepEqual(h.feeds.map(item => item.architecture), ['x64', 'arm64']);
+  assert.ok(h.feeds.every(item => item.previous.status === 404 && item.url.endsWith(`/${item.architecture}/update.json`)));
+  await assert.rejects(promoteWindowsUpdates(h), /owner confirmation/); assert.equal(h.writes.length, 0);
+  const receipt = await promoteWindowsUpdates({ ...h, ownerConfirmation: '发布当前候选' });
+  assert.equal(receipt.feeds.length, 2); assert.equal(receipt.updatesEnabled, true); assert.equal(h.writes.length, 2);
+  assert.ok(h.writes.every(item => item.CacheControl === 'no-cache' && item.Headers['x-cos-forbid-overwrite'] === 'true'));
+  assert.equal(JSON.parse(await readFile(join(h.out, 'windows-update-publish-receipt.json'), 'utf8')).status, 'published');
+  await promoteWindowsUpdates(h); assert.equal(h.writes.length, 2, 'resume verifies rather than rewrites the same signed bytes');
+});
+
+test('Windows stable refuses changed signed bytes, changed live snapshot, or unpublished installer', async t => {
+  const h = await updateFixture(t);
+  h.store.set(h.feeds[0].url, Buffer.from('unexpected live feed'));
+  await assert.rejects(promoteWindowsUpdates({ ...h, ownerConfirmation: '确认' }), /changed since review/); assert.equal(h.writes.length, 0);
+  const g = await updateFixture(t); await writeFile(join(g.out, g.feeds[0].file), '{}');
+  await assert.rejects(promoteWindowsUpdates({ ...g, ownerConfirmation: '确认' }), /signature/); assert.equal(g.writes.length, 0);
+  const j = await updateFixture(t); j.store.delete(windowsObjectPlan(j.inventory)[0].url);
+  await assert.rejects(promoteWindowsUpdates({ ...j, ownerConfirmation: '确认' }), /Public download failed/); assert.equal(j.writes.length, 0);
 });

@@ -475,18 +475,34 @@ export async function collectRelease({ out }, dependencies = {}) {
   }
   if (windows && windows.architecture !== 'x64+arm64') throw new Error('Windows receipt must cover both x64 and ARM64');
   const windowsArchitectures = ['x64', 'arm64'];
-  if (windows) for (const architecture of windowsArchitectures) for (const [kind, file] of [['installer', `Vonvon-Bot-Setup-${state.version}-${architecture}.exe`], ['zip', `Vonvon-Bot-${state.version}-windows-${architecture}.zip`]]) {
+  const updates = await readOptional(join(out, 'windows', 'windows-update-publish-receipt.json'));
+  let updatesVerified = false;
+  if (windows?.updatesEnabled === true && updates?.status === 'published') {
+    const planBytes = await readFile(join(out, 'publication-plan.json')), plan = JSON.parse(planBytes);
+    const expected = plan.candidate?.windows?.updates;
+    if (plan.format !== 1 || plan.candidate.version !== state.version || plan.candidate.sourceSha !== state.sha ||
+        updates.planSHA256 !== digest(planBytes) || updates.version !== state.version || updates.sourceSha !== state.sha || updates.updatesEnabled !== true ||
+        !Array.isArray(expected) || expected.length !== 2 || !Array.isArray(updates.feeds) || updates.feeds.length !== 2 ||
+        !windowsArchitectures.every(architecture => {
+          const feed = updates.feeds.find(item => item.architecture === architecture), candidate = expected.find(item => item.architecture === architecture);
+          return feed && candidate && feed.url === `https://dl.vonvon.cc/bot/windows/stable/${architecture}/update.json` &&
+            feed.url === candidate.url && feed.bytes === candidate.bytes && feed.bytes > 0 && Number.isSafeInteger(feed.bytes) &&
+            /^[a-f0-9]{64}$/.test(feed.sha256) && feed.sha256 === candidate.sha256;
+        })) throw new Error('Windows update receipt differs from the reviewed publication plan');
+    updatesVerified = true;
+  }
+  if (windows) for (const architecture of windowsArchitectures) for (const [kind, file] of [['installer', `Vonvon-Bot-Setup-${state.version}-${architecture}.exe`]]) {
     const object = windows.objects?.find(item => item.file === file);
-    if (windows.signed !== false || windows.updatesEnabled !== false || !object || !/^[a-f0-9]{64}$/.test(object.sha256 ?? '') || !Number.isSafeInteger(object.bytes)) throw new Error('Windows receipt lacks a verified manual download record');
+    if (windows.signed !== false || typeof windows.updatesEnabled !== 'boolean' || !object || !/^[a-f0-9]{64}$/.test(object.sha256 ?? '') || !Number.isSafeInteger(object.bytes)) throw new Error('Windows receipt lacks a verified manual download record');
     downloads.push({ platform: 'windows', architecture, kind, ...object });
   }
   for (const item of downloads) {
     const expected = item.platform === 'mac' ? `https://dl.vonvon.cc/bot/mac/stable/${item.file}` : `https://dl.vonvon.cc/bot/windows/${state.version}/${item.file}`;
     if (item.url !== expected || item.bytes <= 0) throw new Error('Publication receipt contains an unexpected public download URL or size');
   }
-  const handoff = { format: 1, version: state.version, sourceSha: state.sha, readyForWebsite: macVerified && stableVerified && !!windows && downloads.length === 2 + windowsArchitectures.length * 2,
+  const handoff = { format: 1, version: state.version, sourceSha: state.sha, readyForWebsite: macVerified && stableVerified && !!windows && downloads.length === 2 + windowsArchitectures.length && (!windows.updatesEnabled || updatesVerified),
     mac: { versionedVerified: macVerified, stableVerified, notarization: mac?.notarization ?? stable?.notarization ?? null },
-    windows: { published: !!windows, signed: false, updatesEnabled: false }, downloads,
+    windows: { published: !!windows, signed: false, updatesEnabled: updatesVerified, ...(updatesVerified ? { updateFeeds: updates.feeds } : {}) }, downloads,
     evidence: { mac: state.macRelease ? join(state.macRelease, 'upload-receipt.json') : null, stable: state.macRelease ? join(state.macRelease, 'publish-receipt.json') : null,
       windows: join(out, 'windows', 'windows-publish-receipt.json') } };
   await atomicJSON(join(out, 'release-handoff.json'), handoff);
