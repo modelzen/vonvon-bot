@@ -21,4 +21,6 @@
 
 ## 下一次发布
 
+另取 4 个真实子进程测试文件（owned-process-term、codex-process-tree、provider/holder-process、provider/process-host），每轮独立临时 HOME/VONVON_HOME，CI=true；两轮均 61 例，56 通过、5 平台跳过、0 失败。1 worker 用时 24.713 秒，2 workers 12.088 秒，约 2.04 倍。Mac 小样本只证明这组测试可以重叠，双核 Linux 的稳定性由完整 CI 继续验证；保留最多 4 个的上限，Windows CI 仍单 worker。
+
 仍需在下一次获准发版观察完整 Windows 下载、四次 Apple 上传和端到端耗时。目标是减少关键路径中的独立传输与人工交接；本次不声称完成正式签名、公证、上传或真实客户端升级验收。

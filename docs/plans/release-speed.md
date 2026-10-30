@@ -11,6 +11,7 @@ owner 2026-10-30 要求先小测试验证，再将有效方案固化为默认发
 - `release-publish.mjs`：生成绑定两平台来源/哈希/配置的统一计划，复用原发布器并行上传；分别保存成功回执；提升或续验 stable 后自动收集官网 handoff。
 - `release-cos-publish.mjs`：允许 owner 对已展示计划作简短肯定回复，保持原始回复和计划哈希；拒绝否定、候选更改及错误计划。
 - `verify-public-release.mjs`：每架构 ZIP/DMG 两条流完整校验，失败时 join 两条流。
+- daemon Vitest 配置：Linux CI 使用报告的 CPU 数（最多 4 worker），让双核 runner 使用 2 个；Windows 单 worker 与本机原有上限保留。先小样本，再以完整 Linux CI 决定保留。
 - skill、AGENTS 与操作说明：默认发现、授权范围、一次最终候选确认、原 OUT 续跑；不要求用户再次点名提速方案。
 
 ## 验证与验收
