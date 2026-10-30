@@ -1568,8 +1568,8 @@ owner 2026-10-30 定做进 v1，一次做到位（owner："没有'第一版'"）
 
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
-| [ ] | T1a | 定时任务核心 | `protocol/schedule.ts`；`D/bot/schedule/{types,time,store,scheduler}.ts`（Intl 时间计算、gap/fold、cron 5 段、直接算最近一个 slot；`bots/<appId>/schedules.json` 带 fsync 的原子写、坏文件旁置、revision 只跟配置；30 秒 tick 单飞、在 mutate 里认领、只补最近一次、7 天、跳过、inflight 至多一次、并发上限、10 次自动暂停、崩溃计失败；不接 orchestrator） | ~1,200 | — | 并发、错误路径 | 纯 JP-VPS |
-| [ ] | T1b | 命令核、IPC/RPC、终端 | `admin/schedule-commands.ts` 唯一写入口和角色表（跨群按 id 也查不到）；IPC `schedule`（带 via）、`AdminService.executeSchedule`、RPC、client；`vonvon schedule`；`cli/index.ts` 的 structured 和 lease 名单；orchestrator 构造 store 和调度器但不启动 | ~1,100 | T1a | 错误路径 | 纯 JP-VPS |
+| [ ] | T1a | 定时任务核心 | `protocol/schedule.ts`；`D/bot/schedule/{types,time,store,scheduler}.ts`（Intl 时间计算、gap/fold、cron 5 段、直接算最近一个 slot；`bots/<appId>/schedules.json` 带 fsync 的原子写、坏文件旁置、revision 只跟配置；30 秒 tick 单飞、在 mutate 里认领、只补最近一次、7 天、跳过、inflight 至多一次、并发上限、10 次自动暂停、崩溃计失败；不接 orchestrator） | ~1,340 | — | 并发、错误路径 | 纯 JP-VPS |
+| [ ] | T1b | 命令核、IPC/RPC、终端 | `admin/schedule-commands.ts` 唯一写入口和角色表（跨群按 id 也查不到）；IPC `schedule`（带 via）、`AdminService.executeSchedule`、RPC、client；`vonvon schedule`；`cli/index.ts` 的 structured 和 lease 名单；orchestrator 构造 store（`initialize()` 里 load，重启后照样列出旧任务）和调度器但不启动 | ~1,100 | T1a | 错误路径 | 纯 JP-VPS |
 | [ ] | T2 | 定时任务的运行 | `runScheduled` 和 `ScheduledHook`（每条丢弃路径都结算）；按会话方式放置（主区 `message.create` 不引用 / 文字根消息加卡片开新话题 / 回话题 / 每次新话题）、`queueOnly` 不插话、真人不插进定时轮、固定头部、卡片标签、空输出留卡、运行前的门（停用和修改中记跳过、档位用不了发一行文字记失败）、结算成 done/failed/interrupted、补跑"原定"、自动暂停的群消息 @ 创建人并重试、停机顺序 stop → shutdown → drain(5 s)、崩溃记中断、解绑和移出群暂停、群编辑锁只看本群、Claude 隐藏会话跑完关进程；启动 tick | ~1,450 | T1b | 子进程、并发、关闭清理、错误路径 | JP-VPS Bot 6，真 Claude 加 Codex；Mac 睡眠唤醒待 owner 验收 |
 | [ ] | T3 | agent 工具、钥匙和两家通路 | schedule 工具类（`schedule_list/create/edit/pause/resume/delete/run_now`，不收群参数，`when` 给时间、`where: here/thisTopic/newTopic`、可选 `timeZone`）；grant 现取 `where()`；角色表两层查、在场推导、插话拒写；Claude 进程内 MCP 加工具、`disallowedTools` 五个加 `skillOverrides` 加 `CLAUDE_CODE_DISABLE_CRON`；Codex `thread/start.dynamicTools` namespace 形状加 `item/tool/call`、调用按 turnId 绑轮、删 `releaseAfterRun` 授权分支、features 深合并加 `in_app_local_automation: false`；真实登录下列一次工具表 | ~1,450 | T1b（自测第 4 步要 T2） | 子进程、并发、错误路径 | JP-VPS 真 Claude 加 Codex |
 | [ ] | T4a | 内置能力包生成器和任务 skill 文本 | `agent/builtin-skills/{package,registry,scheduled-tasks}.ts`：稳定目录 `bots/<appId>/capabilities/builtin/<set>/`（插件形状、原地更新、永不删）；skill `scheduled-tasks`（标题"任务"），常驻一行、正文八段含时间换算；s48、s54a 复用 | ~600 | T1a | 错误路径 | 纯 JP-VPS |
@@ -1811,7 +1811,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | 定时任务：桌面端刷新 | tab 打开时 10 秒轮询，不推送 | 和 MemoryMap 一样；推送以后统一做 | T5 |
 | 定时任务：内置能力包 | 和用户装的能力包（s39d）是两个根；内置包目录名固定、永不删 | 内置的不随用户名单变；Codex resume 用的是起线程时记下的路径 | T4a、T4b |
 | 定时任务：自动暂停通知 | 主区一条文字，@ 创建人；无 openId 不 @；发不出去每次 tick 重试，最多一天 | 不是运行，不该出卡；断网时也不能把通知丢了 | T2 |
-| 定时任务：记忆回合的 kind | 映射到已有的 `initiative` | 不加枚举值、不迁移 | T2 |
+| 定时任务：记忆回合的 kind | 映射到已有的 `initiative` | 不加枚举值、不迁移 | T1b |
 
 ### 叫法表
 

@@ -23,7 +23,7 @@
 ### 4.1 profile
 
 - `SessionProfile.capabilityPackages: readonly { path: string; kind: 'builtin' }[]`；`SessionProfileCapabilities.capabilityPackages: boolean`；两家置 `true`；`resolveSessionProfile` 在 `capabilities.capabilityPackages` 为真时放行，否则照旧抛；`mcpServers` 照旧抛。
-- `handle-message.ts:1120` 的 `profileOf`：`profile.tools.schedule` 为真时 `await ensureBuiltinPackage(appId, 'group', builtinSkillsFor(profile))`，成功就 `capabilityPackages: [{ path, kind: 'builtin' }]`；抛错记诊断 `builtin-package-failed`，`capabilityPackages: []`，会话照常起。
+- `handle-message.ts:1120` 的 `profileOf`：`profile.tools.schedule`（T3 在同一个函数里算好，和带不带任务工具是同一个开关）为真时 `await ensureBuiltinPackage(appId, 'group', builtinSkillsFor(profile))`，成功就 `capabilityPackages: [{ path, kind: 'builtin' }]`；抛错记诊断 `builtin-package-failed`，`capabilityPackages: []`，会话照常起。
 
 ### 4.2 Claude
 
@@ -75,7 +75,7 @@ JP-VPS，真 Claude 和真 Codex 各一遍，用验收 daemon（Bot 6；环境�
 
 ## 8. 验收要点
 
-- skill 只在 grant 有任务工具的会话里装：群有，私聊和评论会话没有。
+- skill 只在 `profile.tools.schedule` 为真的会话里装：绑定的群有，私聊和评论会话没有。
 - 两家都是原生交付；Codex 不靠 `skills/list` 核验，代码里不假装核验通过。
 - 包目录会话写不到；只读、读写档给读入口，完全访问档不加。
 - 0.156.1 和现装版本都过，或者 `CODEX_MIN_VERSION` 抬了并写明。
