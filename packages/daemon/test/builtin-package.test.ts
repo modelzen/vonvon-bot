@@ -37,14 +37,20 @@ describe('builtin capability package', () => {
     expect(JSON.parse(await readFile(plugin, 'utf8'))).toMatchObject({ name: 'vonvon', version: expect.stringMatching(/^[a-f0-9]{12}$/) });
     const text = await readFile(file, 'utf8');
     expect(text).toContain(`name: "${skill.name}"`);
-    expect(text).toContain(`description: "${skill.description}"`);
+    const frontmatter = text.split('---\n')[1];
+    expect(frontmatter).toBeDefined();
+    const descriptionLine = frontmatter!.split('\n').find(line => line.startsWith('description: '));
+    const description: unknown = JSON.parse(descriptionLine!.slice('description: '.length));
+    expect(description).toBe(skill.description);
+    expect(description).not.toMatch(/[\r\n]/);
+    expect(String(description).length).toBeLessThanOrEqual(200);
     const before = await Promise.all([stat(plugin), stat(file)]);
     expect(await ensureBuiltinPackage('example', 'group', [skill])).toEqual({ ...first, changed: false });
     expect((await stat(plugin)).mtimeMs).toBe(before[0]!.mtimeMs);
     expect((await stat(file)).mtimeMs).toBe(before[1]!.mtimeMs);
     if (process.platform !== 'win32') {
-      for (const directory of [first.path, join(first.path, 'skills'), join(first.path, 'skills', skill.name), join(first.path, '.claude-plugin')]) {
-        expect((await stat(directory)).mode & 0o777).toBe(0o755);
+      for (const directory of [isolated.root, join(isolated.root, 'bots'), join(isolated.root, 'bots', 'example'), join(isolated.root, 'bots', 'example', 'capabilities'), join(isolated.root, 'bots', 'example', 'capabilities', 'builtin'), first.path, join(first.path, 'skills'), join(first.path, 'skills', skill.name), join(first.path, '.claude-plugin')]) {
+        expect((await stat(directory)).mode & 0o777).toBe(0o700);
       }
       for (const path of [plugin, file]) expect((await stat(path)).mode & 0o777).toBe(0o644);
     }
@@ -65,17 +71,55 @@ describe('builtin capability package', () => {
     expect(await ensureBuiltinPackage('example', 'group', [])).toEqual({ path: first.path, changed: true });
     expect((await stat(first.path)).isDirectory()).toBe(true);
   });
+  it('serializes concurrent cleanup and keeps the old directory', async () => {
+    const { ensureBuiltinPackage, skill } = await setup();
+    const first = await ensureBuiltinPackage('example', 'group', [skill, { ...skill, name: 'old' }]);
+    const results = await Promise.all(Array.from({ length: 6 }, () => ensureBuiltinPackage('example', 'group', [skill])));
+    expect(results.every(result => result.path === first.path)).toBe(true);
+    expect(results.filter(result => result.changed)).toHaveLength(1);
+    await expect(stat(join(first.path, 'skills', 'old', 'SKILL.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await stat(join(first.path, 'skills', 'old'))).isDirectory()).toBe(true);
+  });
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('propagates writes rejected by a read-only directory', async () => {
     const { ensureBuiltinPackage, skill } = await setup();
     const first = await ensureBuiltinPackage('example', 'group', [skill]);
     const directory = join(first.path, 'skills', skill.name);
     await chmod(directory, 0o555);
     try { await expect(ensureBuiltinPackage('example', 'group', [{ ...skill, body: 'changed' }])).rejects.toMatchObject({ code: 'EACCES' }); }
-    finally { await chmod(directory, 0o755); }
+    finally { await chmod(directory, 0o700); }
   });
   it('rejects duplicate and escaping names before writing', async () => {
     const { ensureBuiltinPackage, skill } = await setup();
+    const { botPaths } = await import('../src/config/paths');
     await expect(ensureBuiltinPackage('example', 'group', [skill, skill])).rejects.toThrow('duplicate');
+    await expect(stat(botPaths('example').builtinPackage('group'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(ensureBuiltinPackage('example', 'group', [{ ...skill, name: '../escape' }])).rejects.toThrow('Invalid');
+    await expect(stat(botPaths('example').builtinPackage('group'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
+  it('validates name and description limits without creating a package', async () => {
+    const { ensureBuiltinPackage, skill } = await setup();
+    const { botPaths } = await import('../src/config/paths');
+    for (const invalid of [
+      { ...skill, name: 'a'.repeat(65) },
+      { ...skill, description: 'line\nbreak' },
+      { ...skill, description: 'line\rbreak' },
+      { ...skill, description: 'x'.repeat(1025) },
+    ]) {
+      await expect(ensureBuiltinPackage('example', 'group', [invalid])).rejects.toThrow();
+      await expect(stat(botPaths('example').builtinPackage('group'))).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+    await expect(ensureBuiltinPackage('example', 'group', [{ ...skill, description: '' }])).rejects.toThrow('描述不能为空');
+    await expect(ensureBuiltinPackage('example', 'group', [{ ...skill, description: '  ' }])).rejects.toThrow('描述不能为空');
+    await expect(stat(botPaths('example').builtinPackage('group'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await ensureBuiltinPackage('example', 'group', [{ ...skill, name: 'a'.repeat(64), description: 'x'.repeat(1024) }])).changed).toBe(true);
+  });
+  it('lets a queued valid call proceed after a rejection', async () => {
+    const { ensureBuiltinPackage, skill } = await setup();
+    const results = await Promise.allSettled([
+      ensureBuiltinPackage('example', 'group', [{ ...skill, description: '' }]),
+      ensureBuiltinPackage('example', 'group', [skill]),
+    ]);
+    expect(results.map(result => result.status)).toEqual(['rejected', 'fulfilled']);
+  });
+
 });

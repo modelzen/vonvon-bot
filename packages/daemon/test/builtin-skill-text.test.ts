@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { scheduledTasksSkill } from '../src/agent/builtin-skills/scheduled-tasks';
-import { builtinSkillsFor } from '../src/agent/builtin-skills/registry';
+import { builtinSkillsOfSet } from '../src/agent/builtin-skills/registry';
 
 const requiredSentences = [
   "用户说定时、每天、每周、提醒、稍后、过一会，就用这里的工具。",
@@ -30,17 +30,18 @@ describe('scheduled tasks builtin skill', () => {
     for (const sentence of requiredSentences) expect(scheduledTasksSkill.body).toContain(sentence);
     expect(scheduledTasksSkill.body.split('\n').length).toBeLessThanOrEqual(140);
     expect(scheduledTasksSkill.body.match(/^## /gm)).toHaveLength(8);
+    const whenSection = scheduledTasksSkill.body.split('## 怎么写 when\n')[1]!.split('\n## 怎么调')[0]!;
     for (const kind of ['once', 'every', 'daily', 'weekly', 'cron']) {
-      expect(scheduledTasksSkill.body).toContain(`kind: '${kind}'`);
+      expect(whenSection).toContain(`kind: '${kind}'`);
     }
+    expect(scheduledTasksSkill.body).toContain('省略 where 就是 `here`：在话题里建一次性任务默认回到这个话题，周期任务默认跟群走；要固定在这个话题用 `thisTopic`。');
     expect(scheduledTasksSkill.body).toContain('cron 只在用户自己给了表达式时用。');
   });
   it('contains no credentials, real chat identifiers or machine paths', () => {
     const text = JSON.stringify(scheduledTasksSkill);
     expect(text).not.toMatch(/(?:cli_|oc_|ou_)[a-zA-Z0-9]{8,}|sk-[a-zA-Z0-9]{12,}|-----BEGIN|群名|测试群|\/(?:home|Users)\//);
   });
-  it('selects the skill only when scheduling tools are available', () => {
-    expect(builtinSkillsFor({ tools: { schedule: true } })).toEqual([scheduledTasksSkill]);
-    expect(builtinSkillsFor({ tools: { schedule: false } })).toEqual([]);
+  it('selects the complete group set', () => {
+    expect(builtinSkillsOfSet('group')).toEqual([scheduledTasksSkill]);
   });
 });
