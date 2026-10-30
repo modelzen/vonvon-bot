@@ -54,6 +54,8 @@ describe('who may do what', () => {
     const f = await scheduleFixture({ tasks: tasks() });
     f.open({ retry: false, initiative: false, wake: false, scheduled: { taskId: 'st_mine', runId: 'run-self' } });
     expect(await reply(f, 'schedule_list')).toMatchObject({ kind: 'tasks', tasks: [{ id: 'st_mine' }] });
+    expect(await reply(f, 'schedule_list', { taskId: 'st_mine' })).toMatchObject({ kind: 'task', task: { id: 'st_mine' } });
+    expect(await reply(f, 'schedule_list', { taskId: 'st_theirs' })).toEqual({ kind: 'refused', reason: 'not-found', message: scheduleRefusalMessages['not-found'] });
     f.execute.mockClear();
     expect(await f.call('schedule_create', create)).toEqual(registryRefusal('no-human-create', scheduleRefusalMessages['no-human-create']));
     const others = [...writes(f, 'st_theirs'), ...writes(f, 'st_mine').filter(([name]) => name !== 'schedule_edit' && name !== 'schedule_delete')];

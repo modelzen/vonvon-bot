@@ -4,7 +4,7 @@ import { scheduleRefusalMessages, type ScheduleActor, type ScheduleCommands } fr
 import { clampUnits } from '../../bot/schedule/store';
 import { ceilToMinute, formatAt, hostTimeZone, parseLocal } from '../../bot/schedule/time';
 import type { TurnWhere } from './registry';
-import { ToolRefusal, type AgentTool, type ToolContext } from './tools';
+import { TOOL_RESULT_BYTES, ToolRefusal, type AgentTool, type ToolContext } from './tools';
 
 /**
  * 定时任务的 agent 工具（总设计第 10 节）：命令核（admin/schedule-commands.ts）的壳，Claude 的 MCP 和 Codex 的
@@ -38,12 +38,13 @@ const instruction = z.string().min(1).max(4000).describe('到点时要做什么�
 const createInput = z.object({ name, instruction, when: whenSchema, where: whereSchema.optional(), timeZone: zoneSchema.optional() }).strict();
 const editInput = z.object({ taskId, revision, patch: z.object({ name: name.optional(), instruction: instruction.optional(),
   when: whenSchema.optional(), where: whereSchema.optional(), timeZone: editZoneSchema.optional() }).strict() }).strict();
+const listInput = z.object({ taskId: taskId.describe('只看这一个任务，内容不截短；不写就列出本群全部').optional() }).strict();
 const targetInput = z.object({ taskId }).strict();
 const deleteInput = z.object({ taskId, revision }).strict();
 
 /** Section 16's descriptions, verbatim. */
 const definitions = [
-  { name: 'schedule_list', action: 'list', input: z.object({}).strict(), description: '列出本群这个 Bot 的定时任务，含现在的时间和时区。' },
+  { name: 'schedule_list', action: 'list', input: listInput, description: '列出本群这个 Bot 的定时任务，含现在的时间和时区。' },
   { name: 'schedule_create', action: 'create', input: createInput, description: '给本群建一个定时任务，或给自己排一个稍后回来的一次性任务；时间用 when 写，不用算毫秒。' },
   { name: 'schedule_edit', action: 'edit', input: editInput, description: '改任务的名字、内容、时间或发到哪；要带 list 里的 revision。' },
   { name: 'schedule_pause', action: 'pause', input: targetInput, description: '暂停。' },
@@ -62,6 +63,8 @@ export function scheduleToolSpecs(): { name: string; description: string; inputS
 
 type When = z.infer<typeof whenSchema>;
 type Where = z.infer<typeof whereSchema>;
+/** The turn a tool runs in: who asks, and where they are. */
+type Turn = ReturnType<NonNullable<ToolContext['schedule']>>;
 const refuse = (reason: ScheduleRefusal, message: string): ScheduleReply => ({ kind: 'refused', reason, message });
 
 /** `when` to a spec: the model never counts milliseconds. A string is what bad-schedule says. */
@@ -87,24 +90,30 @@ function placementOf(where: Where | undefined, once: boolean, here: TurnWhere): 
   return here.inTopic ? 'topic-pending' : { kind: 'follow' };
 }
 
-/** What a list shows of the free text; a single task keeps its instruction whole, so the agent can edit it. */
+/** What a list shows of the free text when the whole list would not fit; a single task always keeps it whole. */
 const LIST_INSTRUCTION_UNITS = 1000, LIST_TEXT_UNITS = 200;
+/** A list bigger than this as the registry measures it goes out cut: the registry's cap, less room to spare. */
+const LIST_BYTES = TOOL_RESULT_BYTES - 16 * 1024;
 const clip = (text: string, max: number) => text.length <= max ? text : `${clampUnits(text, max - 1)}…`;
+const whole = (text: string) => text;
 /**
  * A task as the agent reads it, also in a card that shows tool calls: no group id and no raw Feishu ids it cannot act
- * on (the creator's open_id, message ids), the last 3 runs with their links. A list of 20 full tasks stays well under
- * the registry's 256 KiB.
+ * on (the creator's open_id, message and topic ids), the last 3 runs with their links. In a person's turn the creator
+ * says whether it is `mine`; a topic task says whether its topic is the one this turn is `here` in.
  */
-function taskView(task: ScheduledTaskView, list: boolean) {
-  const cut = (text: string, max: number) => list ? clip(text, max) : text;
-  const { via, name: creator, text } = task.createdBy;
-  const last = task.lastResult;
+function taskView(task: ScheduledTaskView, { actor, where }: Turn, cut: (text: string, max: number) => string = whole) {
+  const { via, openId, role, name: creator, text } = task.createdBy;
+  const { placement } = task, last = task.lastResult;
+  const instruction = cut(task.instruction, LIST_INSTRUCTION_UNITS);
   return {
     id: task.id, name: task.name, revision: task.revision, state: task.state,
     ...(task.pausedReason ? { pausedReason: task.pausedReason } : {}),
     describe: task.describe, ...(task.nextRunAt === undefined ? {} : { nextRunAt: task.nextRunAt }), timeZone: task.timeZone,
-    placement: task.placement, running: task.running, instruction: cut(task.instruction, LIST_INSTRUCTION_UNITS),
-    createdBy: { via, ...(creator ? { name: creator } : {}), ...(text ? { text: cut(text, LIST_TEXT_UNITS) } : {}) },
+    placement: placement.kind === 'topic' ? { kind: 'topic', here: !!where.topicId && placement.topicId === where.topicId } : placement,
+    running: task.running, instruction,
+    ...(instruction === task.instruction ? {} : { instructionClipped: true, instructionLength: task.instruction.length }),
+    createdBy: { via, ...(role ? { role } : {}), ...(creator ? { name: creator } : {}),
+      ...(actor.kind === 'chat' ? { mine: !!actor.openId && openId === actor.openId } : {}), ...(text ? { text: cut(text, LIST_TEXT_UNITS) } : {}) },
     ...(last ? { lastResult: { status: last.status, at: last.at, excerpt: cut(last.excerpt, LIST_TEXT_UNITS), ...(last.link ? { link: last.link } : {}) } } : {}),
     recent: task.recent.slice(-3).map(({ messageId: _message, topicId: _topic, ...run }) => run),
   };
@@ -125,12 +134,23 @@ function headline(reply: ScheduleReply, done: string): string {
     default: { const exhaustive: never = reply; return exhaustive; }
   }
 }
-/** One line, then the reply as JSON, each task in {@link taskView}. */
-function answer(reply: ScheduleReply, done = ''): string {
-  const shown = reply.kind === 'tasks' ? { ...reply, tasks: reply.tasks.map(task => taskView(task, true)) }
-    : reply.kind === 'task' ? { ...reply, task: taskView(reply.task, false) }
-      : reply.kind === 'conflict' ? { ...reply, current: taskView(reply.current, false) } : reply;
-  return `${headline(reply, done)}\n${JSON.stringify(shown)}`;
+/** One line, then the reply as JSON, each task in {@link taskView}; a list too big for the registry goes out cut and says so. */
+function answer(reply: ScheduleReply, turn: Turn, done = ''): string {
+  const line = headline(reply, done);
+  const say = (shown: unknown, first = line) => `${first}\n${JSON.stringify(shown)}`;
+  switch (reply.kind) {
+    case 'tasks': {
+      const full = say({ ...reply, tasks: reply.tasks.map(task => taskView(task, turn)) });
+      if (Buffer.byteLength(JSON.stringify(full)) <= LIST_BYTES) return full;
+      let clipped = false;
+      const cut = (text: string, max: number) => { const short = clip(text, max); clipped ||= short !== text; return short; };
+      const tasks = reply.tasks.map(task => taskView(task, turn, cut));
+      return say({ ...reply, tasks }, clipped ? `${line} · 太长的内容截短了，用 schedule_list 带 taskId 看一个任务的全文` : line);
+    }
+    case 'task': return say({ ...reply, task: taskView(reply.task, turn) });
+    case 'conflict': return say({ ...reply, current: taskView(reply.current, turn) });
+    default: return say(reply);
+  }
 }
 
 export function createScheduleTools(deps: { commands: ScheduleCommands; now?: () => number; hostTimeZone?: () => string }): AgentTool[] {
@@ -143,33 +163,41 @@ export function createScheduleTools(deps: { commands: ScheduleCommands; now?: ()
   };
   /** Writes pass the registry's commit point: the guard, then the command core with nothing awaited in between. */
   async function write(ctx: ToolContext, request: ScheduleRequest, done = ''): Promise<string> {
-    const { actor } = turnOf(ctx);
+    const turn = turnOf(ctx);
     if (!ctx.commit) throw new ToolRefusal({ ok: false, code: 'refused', message: '目标不存在或没有权限。' });
-    return answer(await ctx.commit(async guard => { guard(); return deps.commands.execute(actor, request); }), done);
+    return answer(await ctx.commit(async guard => { guard(); return deps.commands.execute(turn.actor, request); }), turn, done);
   }
   const listFor = (actor: Exclude<ScheduleActor, { kind: 'local' }>) => deps.commands.execute(actor, { action: 'list', chatId: actor.chatId });
   const runs: Record<(typeof definitions)[number]['action'], AgentTool['run']> = {
-    list: async (_args, ctx) => answer(await listFor(turnOf(ctx).actor)),
+    async list(args, ctx) {
+      const { taskId: id } = listInput.parse(args);
+      const turn = turnOf(ctx);
+      const listed = await listFor(turn.actor);
+      if (id === undefined || listed.kind !== 'tasks') return answer(listed, turn);
+      // Only what the list shows: another group's task, or another task in a task's own run, reads as missing.
+      const task = listed.tasks.find(candidate => candidate.id === id);
+      return answer(task ? { kind: 'task', task } : refuse('not-found', scheduleRefusalMessages['not-found']), turn, '任务');
+    },
     async create(args, ctx) {
       const input = createInput.parse(args);
-      const { actor, where } = turnOf(ctx);
+      const turn = turnOf(ctx), { actor, where } = turn;
       const spec = specOf(input.when, input.timeZone ?? daemonZone(), now());
-      if (typeof spec === 'string') return answer(refuse('bad-schedule', spec));
+      if (typeof spec === 'string') return answer(refuse('bad-schedule', spec), turn);
       const placement = placementOf(input.where, spec.kind === 'once', where);
-      if (placement === 'topic-pending') return answer(refuse('topic-pending', scheduleRefusalMessages['topic-pending']));
+      if (placement === 'topic-pending') return answer(refuse('topic-pending', scheduleRefusalMessages['topic-pending']), turn);
       return write(ctx, { action: 'create', chatId: actor.chatId, name: input.name, instruction: input.instruction, spec, placement,
         ...(input.timeZone ? { timeZone: input.timeZone } : {}) }, '已创建');
     },
     async edit(args, ctx) {
       const { taskId: id, revision: rev, patch } = editInput.parse(args);
-      const { actor, where } = turnOf(ctx);
+      const turn = turnOf(ctx), { actor, where } = turn;
       // `when` reads in the task's zone and `where` by its kind, so look at the task as list shows it first
       const listed = patch.when || patch.where ? await listFor(actor) : undefined;
       const task = listed?.kind === 'tasks' ? listed.tasks.find(candidate => candidate.id === id) : undefined;
       const spec = patch.when ? specOf(patch.when, patch.timeZone ?? task?.timeZone ?? daemonZone(), now()) : undefined;
-      if (typeof spec === 'string') return answer(refuse('bad-schedule', spec));
+      if (typeof spec === 'string') return answer(refuse('bad-schedule', spec), turn);
       const placement = patch.where ? placementOf(patch.where, (spec ?? task?.spec)?.kind === 'once', where) : undefined;
-      if (placement === 'topic-pending') return answer(refuse('topic-pending', scheduleRefusalMessages['topic-pending']));
+      if (placement === 'topic-pending') return answer(refuse('topic-pending', scheduleRefusalMessages['topic-pending']), turn);
       return write(ctx, { action: 'edit', chatId: actor.chatId, taskId: id, revision: rev, patch: {
         ...(patch.name !== undefined ? { name: patch.name } : {}),
         ...(patch.instruction !== undefined ? { instruction: patch.instruction } : {}),

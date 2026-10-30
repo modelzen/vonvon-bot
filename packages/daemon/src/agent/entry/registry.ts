@@ -2,7 +2,7 @@ import type { AgentEntry, AgentThread, AgentToolReply } from '../types';
 import { log } from '../../core/logger';
 import type { MemoryTurn } from '../../bot/memory-authority';
 import { scheduleRefusalMessages, type ScheduleActor } from '../../admin/schedule-commands';
-import { sessionInfoTool, ToolRefusal, type AgentTool, type ToolContext } from './tools';
+import { sessionInfoTool, TOOL_RESULT_BYTES, ToolRefusal, type AgentTool, type ToolContext } from './tools';
 
 export interface AgentPlace { kind: 'group' | 'p2p' | 'doc'; chatId?: string; docId?: string }
 export interface TurnFacts {
@@ -96,11 +96,14 @@ interface Grant {
   previous?: TurnAuth;
   firstTurn?: TurnAuth;
   origins: Map<string, TurnAuth | undefined>;
+  /** Ids `pruneOrigins` dropped, oldest first, at most {@link PRUNED_IDS}: never noted again, refused as turn-ended. */
+  pruned: Set<string>;
   controller: AbortController;
   active: number;
   settingRunning: boolean;
   queue: Array<() => void>;
 }
+const PRUNED_IDS = 1024;
 export function createAgentEntries(opts: {
   appId: string;
   isAdmin(openId: string): boolean;
@@ -125,17 +128,24 @@ export function createAgentEntries(opts: {
   /**
    * At capacity, origins of ended turns go: they cannot authorize anything, and a long-lived session (a recurring task
    * keeps a single-session group's main session open) would otherwise refuse every later turn's calls as unknown-origin. The turn
-   * before this one keeps its own, so a late copy of one of its ids (streamed, then in the full message) is not noted
-   * again under this turn; if that turn alone filled the map, the turn after this one gets room.
+   * before this one keeps its own; if that turn alone filled the map, the turn after this one gets room. A dropped id
+   * goes to `pruned`, so a late copy of it (streamed, then in the full message), however many turns later, is not noted
+   * again under the turn of the moment and its call reads turn-ended.
    */
   function pruneOrigins(grant: Grant) {
-    for (const [id, auth] of grant.origins) if (!auth || (auth !== grant.turn && auth !== grant.previous)) grant.origins.delete(id);
+    for (const [id, auth] of grant.origins) {
+      if (auth && (auth === grant.turn || auth === grant.previous)) continue;
+      grant.origins.delete(id);
+      grant.pruned.add(id);
+      if (grant.pruned.size > PRUNED_IDS) grant.pruned.delete(grant.pruned.values().next().value!);
+    }
   }
   function revoke(grant: Grant) {
     grant.phase = 'revoked';
     end(grant.turn);
     grant.controller.abort();
     grant.origins.clear();
+    grant.pruned.clear();
     grants.delete(grant);
   }
   function authorizeNow(grant: Grant, auth: TurnAuth | undefined): Failure | undefined {
@@ -210,7 +220,7 @@ export function createAgentEntries(opts: {
     const capped = grants.size >= 1024;
     const grant: Grant = {
       phase: shuttingDown ? 'revoked' : capped ? 'capacity' : 'pending',
-      place: { ...place }, origins: new Map(), controller: new AbortController(),
+      place: { ...place }, origins: new Map(), pruned: new Set(), controller: new AbortController(),
       active: 0, settingRunning: false, queue: [],
     };
     if (!capped && !shuttingDown) grants.add(grant);
@@ -240,7 +250,8 @@ export function createAgentEntries(opts: {
         : schedule ? authorizeSchedule(grant, auth, tool.action, taskId) : authorizeNow(grant, auth);
       if (gated) {
         const refusal = authNow();
-        if (refusal?.reason === 'unknown-origin' && origin?.toolUseId && grant.origins.has(origin.toolUseId)) return finishLog(schedule ? scheduleRefused('turn-ended') : refused('turn-ended'));
+        const known = origin?.toolUseId && (grant.origins.has(origin.toolUseId) || grant.pruned.has(origin.toolUseId));
+        if (refusal?.reason === 'unknown-origin' && known) return finishLog(schedule ? scheduleRefused('turn-ended') : refused('turn-ended'));
         if (refusal) return finishLog(refusal);
         if (settings && grant.settingRunning && grant.queue.length >= 8) return finishLog(failure('busy'));
       }
@@ -329,7 +340,7 @@ export function createAgentEntries(opts: {
             } else result = await runTool(parsed.data, ctx);
             if (committed && Date.now() > deadline) log.warn('agent', 'late-commit', { tool: name });
             const json = JSON.stringify(result);
-            settle(json !== undefined && Buffer.byteLength(json) <= 256 * 1024 ? { ok: true, result } : { ok: false, code: 'failed', message: '结果太大' });
+            settle(json !== undefined && Buffer.byteLength(json) <= TOOL_RESULT_BYTES ? { ok: true, result } : { ok: false, code: 'failed', message: '结果太大' });
           } catch (error) {
             if (error instanceof ToolRefusal) settle(error.reply);
             else {
@@ -368,7 +379,7 @@ export function createAgentEntries(opts: {
       },
       call,
       noteToolUse(id) {
-        if (grant.phase !== 'attached' || grant.origins.has(id)) return;
+        if (grant.phase !== 'attached' || grant.origins.has(id) || grant.pruned.has(id)) return;
         if (grant.origins.size >= 256) pruneOrigins(grant);
         if (grant.origins.size >= 256) return;
         grant.origins.set(id, grant.turn);
