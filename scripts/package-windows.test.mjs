@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -130,4 +130,17 @@ test('refuses missing blockmap and malformed PE', async t => {
   await writeFile(h.options.unpackedExe, 'not a PE');
   await assert.rejects(createWindowsInventory(h.options), /PE DOS header/);
   assert.throws(() => peMachine(Buffer.alloc(128)), /PE DOS header/);
+});
+
+
+test('new Windows inventories ship EXE only with a pinned Ed25519 update key', async t => {
+  const h = await fixture(t), { publicKey } = generateKeyPairSync('ed25519');
+  delete h.options.zipExe;
+  h.options.publicKey = publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  const inventory = await createWindowsInventory(h.options);
+  assert.equal(inventory.format, 2); assert.equal(inventory.updatesEnabled, true);
+  assert.deepEqual(inventory.artifacts.map(item => item.kind), ['installer', 'blockmap', 'feed']);
+  assert.deepEqual(await verifyWindowsArtifacts(h.out), inventory);
+  for (const changed of [{ publicKey: '' }, { updatesEnabled: false }, { format: 3 }])
+    assert.throws(() => validateWindowsInventory({ ...inventory, ...changed }));
 });

@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkedProductVersion } from '../../scripts/product-version.mjs';
 import { stageDaemon } from '../../scripts/stage-daemon.mjs';
+import { normalizeWindowsPublicKey } from './src/windows-update-manifest.mjs';
 import { assertNoBundledClaude } from '../../scripts/desktop-backend-policy.mjs';
 
 const version = await checkedProductVersion();
@@ -15,11 +16,9 @@ const ui = join(root, '../ui/dist');
 const daemonSource = join(root, '../daemon');
 const daemonStage = join(stage, 'daemon');
 const updateConfig = JSON.parse(await readFile(process.env.VONVON_DESKTOP_UPDATE_CONFIG || join(root, 'desktop-update.json'), 'utf8'));
-const windowsUpdateConfig = process.env.VONVON_WINDOWS_UPDATE_CONFIG
-  ? JSON.parse(await readFile(process.env.VONVON_WINDOWS_UPDATE_CONFIG, 'utf8')) : {};
-if (Object.keys(windowsUpdateConfig).length && (Object.keys(windowsUpdateConfig).length !== 1 || typeof windowsUpdateConfig.publisherName !== 'string' || !windowsUpdateConfig.publisherName.trim() || windowsUpdateConfig.publisherName !== windowsUpdateConfig.publisherName.trim() || /[\x00-\x1f]/.test(windowsUpdateConfig.publisherName))) {
-  throw new Error('Windows update configuration must be {} or contain only publisherName');
-}
+const windowsUpdateConfig = JSON.parse(await readFile(process.env.VONVON_WINDOWS_UPDATE_CONFIG || join(root,'windows-update.json'),'utf8'));
+if (!windowsUpdateConfig || Object.keys(windowsUpdateConfig).length !== 1 || !windowsUpdateConfig.publicKey) throw new Error('Windows update configuration must contain only publicKey');
+windowsUpdateConfig.publicKey = normalizeWindowsPublicKey(windowsUpdateConfig.publicKey);
 const keys = updateConfig !== null && typeof updateConfig === 'object' && !Array.isArray(updateConfig)
   ? Object.keys(updateConfig)
   : null;

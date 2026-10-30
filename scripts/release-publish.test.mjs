@@ -1,27 +1,30 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { planPublication, uploadPublication, promotePublication, publicationStatus } from './release-publish.mjs';
 import { verifyWindowsArtifacts } from './package-windows.mjs';
+import { planWindowsUpdates } from './publish-windows.mjs';
 
 const sha = 'a'.repeat(40), version = '1.2.3';
 const json = value => JSON.stringify(value, null, 2) + '\n';
 const hash = (bytes, algorithm = 'sha256', encoding = 'hex') => createHash(algorithm).update(bytes).digest(encoding);
 const save = (path, value) => writeFile(path, json(value));
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
-async function fixture(t) {
+async function fixture(t, modern = false) {
   const out = await realpath(await mkdtemp(join(tmpdir(), 'release-publication-test-')));
   t.after(() => rm(out, { recursive: true, force: true }));
   const macOut = join(out, 'mac'), windowsOut = join(out, 'windows');
   await mkdir(macOut); await mkdir(windowsOut);
   const readonly = join(out, 'readonly.json'), write = join(out, 'write.json'), windowsConfig = join(out, 'windows.json');
+  const keys = generateKeyPairSync('ed25519'), keyPath = join(out, 'private.pem');
+  if (modern) await writeFile(keyPath, keys.privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
   const common = { bucket: 'fixture-123', region: 'ap-shanghai', prefix: 'bot/mac/stable/', publicManifestURL: 'https://dl.vonvon.cc/bot/mac/stable/manifest.json' };
   await save(readonly, { ...common, ledgerFile: join(out, 'ledger.json'), secretIdEnv: 'READ_ID', secretKeyEnv: 'READ_KEY' });
   await save(write, { ...common, secretIdEnv: 'WRITE_ID', secretKeyEnv: 'WRITE_KEY' });
-  await save(windowsConfig, { bucket: common.bucket, region: common.region, prefix: 'bot/windows/', publicBaseURL: 'https://dl.vonvon.cc/bot/windows/', secretIdEnv: 'WIN_ID', secretKeyEnv: 'WIN_KEY' });
+  await save(windowsConfig, { bucket: common.bucket, region: common.region, prefix: 'bot/windows/', publicBaseURL: 'https://dl.vonvon.cc/bot/windows/', secretIdEnv: 'WIN_ID', secretKeyEnv: 'WIN_KEY', ...(modern ? { updatePrivateKeyFile: keyPath } : {}) });
   await save(join(out, 'release-orchestration.json'), { format: 1, out, sha, version, paths: { cosConfig: readonly }, macRelease: macOut,
     mac: { phase: 'candidate-complete' }, windows: { runId: 123, status: 'completed', conclusion: 'success' }, flags: {} });
   const artifacts = [];
@@ -30,13 +33,14 @@ async function fixture(t) {
     const installer = `Vonvon-Bot-Setup-${version}-${architecture}.exe`, sha512 = hash(pe, 'sha512', 'base64');
     for (const [kind, file, bytes] of [['installer', installer, pe], ['zip', `Vonvon-Bot-${version}-windows-${architecture}.zip`, Buffer.from('archive')],
       ['blockmap', `${installer}.blockmap`, Buffer.from('blockmap')], ['feed', architecture === 'x64' ? 'latest.yml' : 'latest-arm64.yml', Buffer.from(`version: ${version}\npath: ${installer}\nsha512: ${sha512}\nfiles:\n  - url: ${installer}\n    sha512: ${sha512}\n    size: ${pe.length}\n`)]]) {
+      if (modern && kind === 'zip') continue;
       await writeFile(join(windowsOut, file), bytes);
       artifacts.push({ kind, file, bytes: bytes.length, sha256: hash(bytes), sha512: hash(bytes, 'sha512', 'base64') });
     }
     await save(join(windowsOut, `windows-acceptance-${architecture}.json`), { passed: true, architecture, hostArchitecture: architecture, sourceSha: sha,
       installerSha256: hash(pe), steps: ['fresh-install', 'overwrite-install', 'uninstall', 'reinstall-after-uninstall', 'reinstall-after-0.7.5-orphan'].map(name => ({ name, passed: true })) });
   }
-  await save(join(windowsOut, 'windows-release-inventory.json'), { version, sourceSha: sha, architecture: 'x64+arm64', signed: false, updatesEnabled: false, artifacts });
+  await save(join(windowsOut, 'windows-release-inventory.json'), { version, sourceSha: sha, architecture: 'x64+arm64', signed: false, updatesEnabled: modern, ...(modern ? { format: 2, publicKey: keys.publicKey.export({ type: 'spki', format: 'pem' }).toString() } : {}), artifacts });
   await save(join(windowsOut, 'github-build.json'), { sourceSha: sha, runId: 123, artifactId: 456, artifactDigest: `sha256:${'b'.repeat(64)}` });
   const macFiles = [];
   for (const architecture of ['arm64', 'x64']) for (const extension of ['zip', 'dmg']) {
@@ -56,6 +60,8 @@ async function fixture(t) {
       assert.deepEqual(env, {}); assert.equal(expectedSha, sha); assert.equal(expectedVersion, version);
       return verifyWindowsArtifacts(windowsOut, { sourceSha: sha, version });
     },
+    planWindowsUpdates: input => planWindowsUpdates({ ...input, fetchImpl: async () => new Response(null, { status: 404 }) }),
+    promoteWindowsUpdates: async input => { assert.equal(input.feeds.length, 2); assert.equal(input.ownerConfirmation, '确认发布'); calls.push('windows-promote'); },
     verifyMac: async () => {
       for (const file of macFiles) if (hash(await readFile(join(macOut, file.file))) !== file.sha256) throw new Error('Mac bytes changed');
       return { files: macFiles };
@@ -75,7 +81,7 @@ async function fixture(t) {
       assert.equal(args[args.indexOf('--cancel-file') + 1], join(out, 'CANCEL'));
       await flags.windows?.();
       const inventory = JSON.parse(await readFile(join(out, 'publication-plan.json'), 'utf8')).candidate.windows;
-      await save(join(windowsOut, 'windows-publish-receipt.json'), { version, sourceSha: sha, architecture: 'x64+arm64', signed: false, updatesEnabled: false, objects: inventory.objects });
+      await save(join(windowsOut, 'windows-publish-receipt.json'), { version, sourceSha: sha, architecture: 'x64+arm64', signed: false, updatesEnabled: modern, objects: inventory.objects });
     },
     promoteMac: async (input, deps) => {
       assertMacEnv(deps);
@@ -201,4 +207,19 @@ test('SIGTERM persists CANCEL, aborts the Windows child and joins both upload br
   assert.match((await completion).message, /publication incomplete/);
   assert.equal(process.listenerCount('SIGTERM'), before, 'signal handler is released after joining both branches');
   await assert.rejects(readFile(join(f.out, '.publication.lock')), /ENOENT/);
+});
+
+
+test('new EXE-only releases bind two signed feeds in the unified plan and promote them after immutable uploads', async t => {
+  const f = await fixture(t, true);
+  const plan = JSON.parse(await readFile(join(f.out, 'publication-plan.json'), 'utf8'));
+  assert.equal(plan.candidate.windows.updates.length, 2);
+  assert.equal(plan.candidate.windows.objects.length, 4);
+  assert.ok(plan.candidate.windows.objects.every(item => !item.file.endsWith('.zip')));
+  assert.ok(f.plan.objects.some(item => item.url.endsWith('/stable/arm64/update.json')));
+  await uploadPublication(f.options, f.dependencies);
+  await promotePublication(f.options, f.dependencies);
+  assert.deepEqual(f.calls, ['mac-upload', 'windows-upload', 'promote', 'windows-promote', 'collect']);
+  await writeFile(join(f.windowsOut, 'update-x64.json'), '{}');
+  await assert.rejects(promotePublication(f.options, f.dependencies), /signature/);
 });

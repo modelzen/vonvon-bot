@@ -2034,6 +2034,7 @@ Linux：`vonvon service uninstall`，`vonvon daemon stop`，`npm rm -g vonvon-bo
 
 - 2026-10-29 会话响应速度：群默认和会话覆盖独立支持 Standard / Fast / Ultrafast，网页和飞书 `/model` 共用设置校验。下一次用户发起消息或新目标时生效，保留上下文；恢复继承、普通档和进程重启均清除过期覆盖。详见 `docs/plans/session-speed.md`。按 owner 要求只合入 dev，main 与版本发布另行统一处理；真实账号的 Ultrafast 加速效果未作为本次自动化测试结论。
 
+- 2026-10-30 Windows 安装与应用内更新：owner 已认可免费发布签名、简短安装向导和停止新增 ZIP 的方案。实现 Ed25519 公钥校验、架构独立更新源、最终 EXE 摘要复核、真实下载进度、安装/稍后确认及原发布链路的 feed 提升；历史产物仍可续跑。方案见 `docs/plans/windows-install-update.md`；自动化检查与 Windows Codex 的安装/连续升级实测分别记录，尚未实测不得标为发布完成。官网独立 PR 只收敛下载入口，0.7.8 不宣传未上线的应用内更新。
 
 ## 2026-10-30 Jev 接口扩展
 
