@@ -1,4 +1,4 @@
-/* A shared default picker, custom connection, and per-service credential rows. */
+/* Keep occasional connection setup behind one disclosure, separate from model choice. */
 .today-window .settings-content-page > .page-stack.secrets-page {gap:12px;}
 .today-window .secrets-page > .today-page-heading {position:sticky;top:0;z-index:5;display:flex;flex-direction:column;align-items:flex-start;background:var(--color-canvas);padding:8px 0 12px;}
 .secrets-page .ss-section__header {min-height:28px;align-items:center;margin-bottom:6px;}
@@ -18,9 +18,34 @@
 .secrets-page .decision-uses-content {padding:0 0 14px;line-height:1.65;color:var(--color-text-secondary);overflow-wrap:anywhere;}
 .secrets-page .decision-uses-content .secrets-uses {margin-top:0;gap:6px;}
 
-.secrets-page .decision-key-content .ss-row {min-height:70px;}
+.secrets-page .decision-key-content .ss-row {min-height:64px;}
 .secrets-page .decision-key-content .setup-step-trailing {flex-wrap:wrap;}
 
 .secrets-page .decision-connection-input {width:min(340px, 100%);min-width:180px;}
-.secrets-page .decision-service-key + .decision-service-key {border-top:1px solid var(--color-separator);}
-.secrets-page .decision-service-key-title {margin:0;padding:14px 16px 0;color:var(--color-text-secondary);font-size:12px;font-weight:600;}
+.secrets-page .decision-connections {border:1px solid var(--color-separator);border-radius:12px;background:var(--color-surface);min-width:0;}
+.secrets-page .decision-connections > summary,
+.secrets-page .decision-service-disclosure > summary {display:flex;align-items:center;justify-content:space-between;gap:16px;list-style:none;cursor:pointer;padding:16px;}
+.secrets-page :is(.decision-connections, .decision-service-disclosure) > summary::-webkit-details-marker {display:none;}
+.secrets-page :is(.decision-connections, .decision-service-disclosure) > summary:focus-visible {outline:2px solid var(--color-accent);outline-offset:2px;border-radius:8px;}
+.secrets-page .decision-connections-copy {display:grid;gap:5px;min-width:0;font-size:13px;font-weight:500;}
+.secrets-page .decision-connections-copy small {font-size:12px;line-height:1.5;color:var(--color-text-secondary);font-weight:400;overflow-wrap:anywhere;}
+.secrets-page .decision-service-summary {display:flex;align-items:center;gap:12px;flex-shrink:0;color:var(--color-text-secondary);font-size:12px;font-weight:400;}
+.secrets-page .decision-service-summary svg {transform:rotate(-90deg);}
+.secrets-page .decision-connections[open] > summary .decision-service-summary svg,
+.secrets-page .decision-service-disclosure[open] > summary .decision-service-summary svg {transform:none;}
+.secrets-page .decision-connections-body {border-top:1px solid var(--color-separator);padding:0 16px 12px;}
+.secrets-page .decision-connections-toolbar {display:flex;align-items:center;justify-content:space-between;min-height:44px;color:var(--color-text-secondary);font-size:12px;}
+.secrets-page .decision-connections-toolbar .ui-icon-button {width:28px;height:28px;min-height:28px;}
+.secrets-page .decision-service-disclosure {min-width:0;border-top:1px solid var(--color-separator);}
+.secrets-page .decision-service-disclosure > summary {min-height:48px;padding:12px 0;font-size:13px;}
+.secrets-page .decision-service-name {font-weight:500;}
+.secrets-page .decision-service-summary [data-status=set] {color:var(--color-text);}
+.secrets-page .decision-service-summary :is([data-status=invalid], [data-status=unreadable]) {color:var(--color-text);font-weight:500;}
+.secrets-page .decision-service-fields {border:1px solid var(--color-separator);border-radius:8px;margin:0 0 12px;overflow:hidden;}
+.secrets-page .decision-service-fields .ss-row {min-height:64px;}
+.secrets-page .decision-connection-note {margin:0;padding:0 16px 14px;font-size:12px;line-height:1.5;color:var(--color-text-secondary);}
+@media (max-width:600px) {
+  .secrets-page .decision-service-fields .ss-row {align-items:flex-start;flex-wrap:wrap;}
+  .secrets-page .decision-service-fields .ss-row__trailing {width:100%;}
+  .secrets-page .decision-connection-input {width:100%;min-width:0;}
+}
