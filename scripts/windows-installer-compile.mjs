@@ -24,6 +24,12 @@ export async function compileWindowsInstaller({out, architecture = 'x64', hookFi
       getResource:async () => hookFile, getTempFile:async () => join(out, `messages-${++sequence}.nsh`)}};
   const header = await NsisTarget.prototype.computeCommonInstallerScriptHeader.call(target);
   const templates = join(root, 'node_modules/app-builder-lib/templates/nsis');
+  const installSection = await readFile(join(templates, 'installSection.nsh'), 'utf8');
+  const launchStart = installSection.indexOf('!macro doStartApp');
+  if (launchStart < 0) throw Error('NSIS install launch template changed; update the compile fixture');
+  // Keep the real launch tail: its StartApp expansion declares a global which
+  // must not also be declared by the custom finish-page function.
+  const launchSection = installSection.slice(launchStart);
   const output = join(out, 'installer.exe'), source = join(out, 'installer.nsi');
   await writeFile(source, `Unicode true
 !define PRODUCT_NAME "Vonvon installer compile fixture"
@@ -55,6 +61,7 @@ Function .onInit
 FunctionEnd
 Section
   StrCpy $launchLink "$INSTDIR\\fixture.exe"
+${launchSection}
 SectionEnd
 `);
   const compiler = await getMakeNsisPath();
