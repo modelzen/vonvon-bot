@@ -204,11 +204,12 @@ describe('original turn ownership', () => {
     const f = setup({ facts: { ...person, requesterKind: 'bot' } }); f.scope?.close(); f.entries.openTurn(f.t, person);
     expect(await f.call()).toMatchObject(refused('turn-ended'));
   });
-  it('keeps a Codex grant bound to its first turn', async () => {
-    const f = setup({ codex: true }); expect(await f.entry.call('t_set', {})).toMatchObject({ ok: true });
-    f.scope?.close(); f.entries.openTurn(f.t, { ...person, triggerMessageId: 'm2' });
-    expect(await f.entry.call('t_set', {})).toMatchObject(refused('turn-ended'));
-    expect(await f.entry.call('t_read', {})).toMatchObject({ ok: true });
+  it('binds a Codex call by the turn id its turn/start answered with, not by the thread\'s first turn', async () => {
+    const f = setup({ codex: true }); expect(await f.entry.call('t_set', {})).toMatchObject(refused('unknown-origin'));
+    expect(await f.call()).toMatchObject({ ok: true });
+    f.scope?.close(); f.entries.openTurn(f.t, { ...person, triggerMessageId: 'm2' }); f.entry.noteToolUse('turn-2');
+    expect(await f.call()).toMatchObject(refused('turn-ended'));
+    expect(await f.entry.call('t_set', {}, { toolUseId: 'turn-2' })).toMatchObject({ ok: true });
   });
   it('does not undo a completed commit when the turn closes', async () => {
     let commits = 0; const f = setup({ run: async (_args, ctx) => {

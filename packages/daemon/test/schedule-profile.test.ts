@@ -93,7 +93,7 @@ describe('the profile on its way to a backend', () => {
     expect(resolveSessionProfile(base).tools).toEqual({ schedule: false });
     expect(resolveSessionProfile().tools).toEqual({ schedule: false });
   });
-  it('gives Codex no dynamicTools yet (T3b does), schedule on or not', () => {
+  it('keeps dynamicTools out of the params Codex start and resume share (T3b adds them on thread/start only)', () => {
     for (const schedule of [true, false]) {
       expect(JSON.stringify(codexSessionParams({ cwd: '/work', mode: 'full', profile: { ...base, tools: { schedule } } }))).not.toMatch(/dynamicTools|schedule_/);
     }

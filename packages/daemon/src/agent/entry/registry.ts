@@ -84,7 +84,6 @@ interface Grant {
   place: AgentPlace;
   thread?: AgentThread;
   turn?: TurnAuth;
-  firstTurn?: TurnAuth;
   origins: Map<string, TurnAuth | undefined>;
   controller: AbortController;
   active: number;
@@ -214,9 +213,8 @@ export function createAgentEntries(opts: {
       const schedule = tool.class === 'schedule';
       const gated = settings || memory || schedule;
       const taskId = schedule && args && typeof args === 'object' && 'taskId' in args ? args.taskId : undefined;
-      // Only Codex declares releaseAfterRun (false before its first accepted turn).
-      const auth = grant.thread?.releaseAfterRun !== undefined ? grant.firstTurn
-        : origin?.toolUseId ? grant.origins.get(origin.toolUseId) : undefined;
+      // Claude's tool-use id, or the Codex turn id its turn/start answered with (定时任务 T3b): both noted by noteToolUse.
+      const auth = origin?.toolUseId ? grant.origins.get(origin.toolUseId) : undefined;
       const authNow = (): Failure | undefined => memory ? authorizeMemory(grant, auth)
         : schedule ? authorizeSchedule(grant, auth, tool.action, taskId) : authorizeNow(grant, auth);
       if (gated) {
@@ -376,7 +374,6 @@ export function createAgentEntries(opts: {
         if (grant.turn?.active) log.warn('agent', 'turn-overlap', {});
         end(grant.turn);
         grant.turn = auth;
-        grant.firstTurn ??= auth;
       } else end(auth);
       return { id: auth.id, presence, ...(scheduled ? { scheduled: { ...scheduled } } : {}), close() { end(auth); } };
     },
