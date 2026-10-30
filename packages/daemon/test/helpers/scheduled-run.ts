@@ -22,7 +22,7 @@ type Fn = Mock<(...args: any[]) => any>;
 export const fake: {
   project: Record<string, unknown>; topicGroup: boolean;
   backend: { capabilities: { steer: boolean }; id: string; listModels: Fn; resumeThread: Fn; startThread: Fn };
-  createCard: Fn; final: Fn; send: Fn; topicList: Fn; messageGet: Fn; getSession: Fn; log: { info: Fn; warn: Fn; fail: Fn };
+  createCard: Fn; stream: Fn; final: Fn; send: Fn; topicList: Fn; messageGet: Fn; getSession: Fn; log: { info: Fn; warn: Fn; fail: Fn };
   run?: (job: ScheduledJob) => Promise<ScheduledOutcome>;
 } = {
   project: {},
@@ -30,6 +30,7 @@ export const fake: {
   backend: { capabilities: { steer: true }, id: 'codex', listModels: vi.fn(async () => []), resumeThread: vi.fn(), startThread: vi.fn() },
   createCard: vi.fn(async (..._args: unknown[]) => 'card'),
   final: vi.fn(async (..._args: unknown[]) => true),
+  stream: vi.fn(),
   send: vi.fn(async (..._args: unknown[]) => ({ messageId: 'root' })),
   messageGet: vi.fn(),
   topicList: vi.fn(async (..._args: unknown[]) => ({ code: 0, data: { items: [{ message_id: 'anchor', chat_id: 'chat', thread_id: 'topic-old' }] } })),
@@ -59,7 +60,7 @@ vi.mock('../../src/card/run-card-stream', () => ({
     create = fake.createCard;
     getCardId() { return 'card_entity'; }
     async updateElement() { return true; }
-    streamCoalesced() {}
+    streamCoalesced = fake.stream;
     async drain() {}
     setImageWorker() {}
     async settleImages() { return new Map(); }
