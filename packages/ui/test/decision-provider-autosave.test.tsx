@@ -158,6 +158,28 @@ it('rejects an invalid custom connection without sending a settings write or exp
   expect(content(ui.all)).not.toContain('user:secret');
   expect(ui.picker!.props.value.provider).toBe('codex-appserver');
 });
+it('clears an inactive custom endpoint by removing the optional field rather than saving an invalid empty URL', async () => {
+  let ui = await settle();
+  const endpoint = () => ui.all.find(node => node.props['aria-label'] === '自定义决策请求地址')!;
+  endpoint().props.onBlur({currentTarget: {value: 'https://example.com/judge'}});
+  ui = await settle();
+  expect(endpoint().props.defaultValue).toBe('https://example.com/judge');
+  endpoint().props.onBlur({currentTarget: {value: ''}});
+  ui = await settle();
+  expect(saveCalls()).toHaveLength(2);
+  expect(saveCalls()[1]!.edit.patch.byProvider?.custom).toEqual({model: 'jev-latest'});
+  expect(endpoint().props.defaultValue).toBe('');
+  expect(ui.picker!.props.value.provider).toBe('codex-appserver');
+});
+it('keeps the endpoint required while the custom service is the current default', async () => {
+  confirmed = section({...initial, defaultProvider: 'custom', byProvider: {...initial.byProvider, custom: {model: 'jev-latest', endpoint: 'https://example.com/judge'}}}, 'r1');
+  let ui = await settle();
+  ui.all.find(node => node.props['aria-label'] === '自定义决策请求地址')!.props.onBlur({currentTarget: {value: ''}});
+  ui = await settle();
+  expect(saveCalls()).toHaveLength(0);
+  expect(content(ui.all)).toContain('请填写自定义决策接口地址');
+  expect(ui.all.find(node => node.props['aria-label'] === '自定义决策请求地址')!.props.defaultValue).toBe('https://example.com/judge');
+});
 it('keeps custom key management available when host configuration cannot be read', async () => {
   harness.client.settings.mockRejectedValue(new Error('配置读取失败'));
   const page = () => nodes(renderAt('page', () => DecisionProviderSettings({customKeyContent: <span>自定义密钥管理</span>})));
