@@ -7,7 +7,7 @@
 ## 2. 范围
 
 - 改：`D/agent/session-profile.ts`（`capabilityPackages` 的能力位和元素形状）、`D/agent/claude-agent/{backend,thread}.ts`（`plugins`、`enabledPlugins`、skills 白名单）、`D/agent/group-skills.ts`、`D/agent/codex-appserver/{backend,workspace-policy}.ts`（`selectedCapabilityRoots`、读入口）、`D/bot/handle-message.ts:1120`（`profileOf` 组 profile 时调 `ensureBuiltinPackage` 并填 `capabilityPackages`）。
-- 可以假设：T3 的 `profile.tools.schedule` 和工具名；T4a 的生成器和 skill。
+- 可以假设：T3 的 `profile.tools.schedule` 和工具名、T3b 的 Codex dynamicTools（Codex 会话有任务工具）；T4a 的生成器和 skill。
 - 不做：s39d 的用户能力包（skill 和 MCP）；`mcpServers` 的交付（`resolveSessionProfile` 对它照旧抛）；s48、s54a 的内容。
 - 和 s39d 的关系：两个根（Claude 定，总设计 15 第 12 条）。s39d 到时加 `kind: 'user'` 的第二项，Codex 的 `selectedCapabilityRoots` 和 Claude 的 `plugins` 都是数组，放得下。
 

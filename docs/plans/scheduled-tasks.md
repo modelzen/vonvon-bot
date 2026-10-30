@@ -293,11 +293,11 @@ export function createScheduler(deps: {
 
 ## 9. 两家的工具通路和自带定时
 
-### 9.1 Claude
+### 9.1 Claude（T3）
 
 进程内 SDK MCP `vonvon_bot` 加 schedule 类工具（第 10 节）。关掉自带定时（2026-10-30 在锁定的 SDK 0.3.296 上实测；`sdk.d.ts` 里 `disallowedTools`、`settings.skillOverrides`、`plugins`、`skipMcpDiscovery`、`enabledPlugins` 都在）：`D/agent/claude-agent/thread.ts:345-371` 组 query 选项时，在 `...cfg.permission` 之后合并 `disallowedTools: [...已有, 'CronCreate', 'CronList', 'CronDelete', 'ScheduleWakeup', 'RemoteTrigger']`，放在 thread.ts 而不是 `permission.ts`，因为 `permission.ts:90` 完全访问档提前返回，放那里会被跳过；`AUTO_COMPACT_SETTINGS` 和它的 plan 变体加 `skillOverrides: { loop: 'off', schedule: 'off' }`（自带的 `loop`、`schedule` skill 在 disallowedTools 之后还会列出来）；群的 skill 白名单（`group-skills.ts:92-99` 的 `enabledNames`）也过滤掉 `loop`、`schedule`；`sessionClaudeEnv`（`backend.ts:97`）加 `CLAUDE_CODE_DISABLE_CRON: '1'` 做第二道。验证：起一条会话让它列工具，这五个不在，skill 里没有 loop 和 schedule。
 
-### 9.2 Codex：app-server dynamicTools
+### 9.2 Codex：app-server dynamicTools（T3b）
 
 0.156.1（`CODEX_MIN_VERSION`）和 0.163.0 都实测过（笔记随 PR 进 `docs/research/2026-10-30-scheduled-tasks/`，第 18 节）：`thread/start` 带 `dynamicTools: [{ type: 'namespace', name: 'vonvon_bot', tools: [...] }]`，只读沙箱、`approvalPolicy: never` 下都能调；工具在 thread/start 时固定，resume 从盘上恢复，不能往已有线程加。`deferLoading` 要 namespace 形状。调用来的是服务端请求 `item/tool/call { threadId, turnId, callId, namespace, tool, arguments }`，回 `{ contentItems: [{ type: 'inputText', text }], success }`。
 
@@ -305,9 +305,9 @@ export function createScheduler(deps: {
 - 生成的协议类型（`D/agent/codex-appserver/protocol/generated/`）没有 `dynamicTools` 字段，`protocol/index.ts:5` 指的 `codex:protocol:update` 脚本不存在。做法：手写 `D/agent/codex-appserver/dynamic-tools.ts` 的类型和 schema，不改生成文件。服务端请求的分发在 `D/provider/transport/jsonrpc.ts:301-308` 的 `peer.onRequest`（`app-server-client.ts` 只是 re-export），今天只认 `item/tool/requestUserInput`；`item/tool/call` 的处理函数放 `server-requests.ts`，在 `approvalAnswer`、`userInputRequest` 旁边。
 - **调用绑到这一轮**：今天 `registry.ts:169-170` 对 Codex（`releaseAfterRun !== undefined`）的每一次调用都按 `grant.firstTurn` 授权，不是"恢复线程的第一轮绑错"，是整条线程永远按第一轮的人算；真人开的线程上后来跑定时回合，`schedule_create` 会按真人的第一轮放行。改法：`turn/start` 的应答到了（`backend.ts:363` 拿到 `result.turn.id`）就 `entry.noteToolUse(turnId)`，把这一轮登记成 origin；`item/tool/call` 用 `params.turnId` 当 `toolUseId` 调 `entry.call`，应答还没到就等它最多 2 秒；删掉 `registry.ts:169` 的 `releaseAfterRun` 分支，两家都走 `origins`。goal 运行（`launchGoalRun` 8017）和子线程不调 `openTurn`，查不到 origin 就是 `unknown-origin`，拒掉，正好。
 - 本功能上线前已经开着的 Codex 会话，没有任务工具，要等下一条新会话。3.13 写明；`session_info` 的回复里也说（第 16 节）。Codex 不拿 memory 工具（`hiddenBlocksFor` 的分支不动）。
-- 关掉自带自动化：实测用的是假 provider（`requires_openai_auth=false`），没挂主人 ChatGPT 账号的 `codex_apps` 连接器，所以"工具表里没有自动化工具"只在没登录时成立。T3 自测里在 JP-VPS 真实 ChatGPT 登录下列一次工具表（一条真实回合让模型列出它的工具，或读 `thread/start` 后的工具事件），有自动化、定时类的就加进关闭名单再合入。会话层 config 仍加 `features.in_app_local_automation = false`：`codexSessionParams`（`backend.ts:95-101`）的 `features` 今天是三处 spread（sandbox 的 `features`、`...NATIVE_MEMORY_OFF`、Windows 的覆盖），直接再 spread 一个会把 `memories: false` 盖掉或在 Windows 上丢掉——改成一处深合并 `features: { ...sandbox.features, ...NATIVE_MEMORY_OFF.features, ...NATIVE_SCHEDULING_OFF.features, ...(win32 非完全访问 ? { prefer_mxc: false } : {}) }`，`memory-config.ts` 旁加 `NATIVE_SCHEDULING_OFF`。只核 config 里带了它，不做真实回合的探测。
+- 关掉自带自动化：实测用的是假 provider（`requires_openai_auth=false`），没挂主人 ChatGPT 账号的 `codex_apps` 连接器，所以"工具表里没有自动化工具"只在没登录时成立。T3b 自测里在 JP-VPS 真实 ChatGPT 登录下列一次工具表（一条真实回合让模型列出它的工具，或读 `thread/start` 后的工具事件），有自动化、定时类的就加进关闭名单再合入。会话层 config 仍加 `features.in_app_local_automation = false`：`codexSessionParams`（`backend.ts:95-101`）的 `features` 今天是三处 spread（sandbox 的 `features`、`...NATIVE_MEMORY_OFF`、Windows 的覆盖），直接再 spread 一个会把 `memories: false` 盖掉或在 Windows 上丢掉——改成一处深合并 `features: { ...sandbox.features, ...NATIVE_MEMORY_OFF.features, ...NATIVE_SCHEDULING_OFF.features, ...(win32 非完全访问 ? { prefer_mxc: false } : {}) }`，`memory-config.ts` 旁加 `NATIVE_SCHEDULING_OFF`。只核 config 里带了它，不做真实回合的探测。
 
-## 10. agent 工具（T3）
+## 10. agent 工具（T3；Codex 的接法在 T3b）
 
 类 `'schedule'`，`D/agent/entry/tools.ts:24` 的 `class` 加这一项。入参用 daemon 的 zod 4 写在 `D/agent/entry/schedule-tools.ts`，JSON schema 用 `z.toJSONSchema`，两家共用同一份定义。哪些会话带这类工具只看 `profile.tools.schedule`：T3 在 `profileOf`（`handle-message.ts:1114`）里算，绑定的群会话为真（主区和话题都是，只读档也是），评论会话和私聊为假；T4b 装不装 skill 看同一个字段；登记表再按 `grant.place.kind === 'group'` 挡一道（`not-group`）。
 
@@ -376,8 +376,8 @@ export function createScheduler(deps: {
 | T1a | `scheduled-tasks-1-core` | protocol、时间计算、存储（含 durable 原子写）、调度循环（不启动 tick） | — | JP-VPS（#422） | ~1,340 | 10-30 开工，10-31 上午合入 |
 | T1b | `scheduled-tasks-1b-commands` | 命令核、IPC/RPC、client、终端 `vonvon schedule`、`cli/index.ts` 接线；`TurnFacts.scheduled` 和 `TurnAuth.presence` 两个字段 | T1a | JP-VPS | ~1,150 | T1a 审查期间在它的分支上接着写，T1a 合入后开 PR；10-31 下午合入 |
 | T2 | `scheduled-tasks-2-runs` | `runScheduled` 和钩子、放置、开话题、头部和标签、门、结算、自动暂停、停机和崩溃、编辑锁；启动 tick | T1b | JP-VPS（Bot 6，真 Claude 和 Codex） | ~1,450 | 10-31 下午开工，11-01 合入 |
-| T3 | `scheduled-tasks-3-tools` | schedule 工具类和角色表、grant 的 `where()`、`profileOf` 算 `tools.schedule`、Claude MCP、关 Claude 自带定时 | T1b（自测第 4 步要 T2 合入） | JP-VPS（真 Claude） | 和 T3b 合计 ~1,545（T3 第 9 节） | 和 T2 同时开工，11-01 合入 |
-| T3b | `scheduled-tasks-3b-codex` | Codex dynamicTools 和 `item/tool/call`、调用按 turnId 绑轮、删 `releaseAfterRun` 授权分支、features 深合并加 `in_app_local_automation: false` | T3 | JP-VPS（真 Codex） | 见 T3 | 在 T3 的分支上接着写，T3 合入后开 PR，11-01 合入 |
+| T3 | `scheduled-tasks-3-tools` | schedule 工具类和角色表、grant 的 `where()`、`profileOf` 算 `tools.schedule`、Claude MCP、关 Claude 自带定时 | T1b（自测第 4 步要 T2 合入） | JP-VPS（真 Claude） | ~1,055（和 T3b 合计 ~1,545，T3 计划第 9 节） | 和 T2 同时开工，11-01 合入 |
+| T3b | `scheduled-tasks-3b-codex` | Codex dynamicTools 和 `item/tool/call`、调用按 turnId 绑轮、删 `releaseAfterRun` 授权分支、features 深合并加 `in_app_local_automation: false` | T3 | JP-VPS（真 Codex） | ~490 | 在 T3 的分支上接着写，T3 合入后开 PR，11-01 合入 |
 | T4a | `scheduled-tasks-4-skill` | 生成器（稳定目录）、skill 文本、只依赖 T1a 的类型 | T1a | JP-VPS | ~600 | 和 T1b 同时，10-31 合入 |
 | T4b | `scheduled-tasks-4b-delivery` | 两家最小能力包交付、读入口、版本矩阵、`enabledPlugins` 实测、核验 | T3b、T4a | JP-VPS；Mac Seatbelt 一项待 owner 验收 | ~900 | 11-01 开工，11-02 合入 |
 | T5 | `scheduled-tasks-5-ui` | 桌面端三层接线、群详情页"任务"tab、Bot 页汇总 | T1b（T2 合入后才有运行记录可看） | Mac（#322，网页控制） | ~1,400 | 10-31 下午开工，11-01 合入 |
