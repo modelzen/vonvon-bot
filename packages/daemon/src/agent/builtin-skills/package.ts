@@ -19,8 +19,8 @@ async function readIfPresent(path: string): Promise<string | undefined> {
 }
 
 async function ensureDirectory(path: string): Promise<void> {
-  const created = await mkdir(path, { recursive: true, mode: 0o755 });
-  if (created !== undefined) await chmod(path, 0o755);
+  const created = await mkdir(path, { recursive: true, mode: 0o700 });
+  if (created !== undefined) await chmod(path, 0o700);
 }
 
 async function updateFile(path: string, content: string): Promise<boolean> {
@@ -40,15 +40,32 @@ async function updateFile(path: string, content: string): Promise<boolean> {
   return true;
 }
 
+const pendingPackages = new Map<string, Promise<unknown>>();
+
 export async function ensureBuiltinPackage(
+  appId: string, set: 'group' | 'dm', skills: BuiltinSkill[],
+): Promise<{ path: string; changed: boolean }> {
+  const key = botPaths(appId).builtinPackage(set);
+  const previous = pendingPackages.get(key) ?? Promise.resolve();
+  const pending = previous.catch(() => undefined).then(() => writeBuiltinPackage(appId, set, skills));
+  pendingPackages.set(key, pending);
+  try { return await pending; }
+  finally {
+    if (pendingPackages.get(key) === pending) pendingPackages.delete(key);
+  }
+}
+
+async function writeBuiltinPackage(
   appId: string, set: 'group' | 'dm', skills: BuiltinSkill[],
 ): Promise<{ path: string; changed: boolean }> {
   const names = new Set<string>();
   for (const skill of skills) {
-    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(skill.name) || names.has(skill.name)) {
+    if (skill.name.length > 64 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(skill.name) || names.has(skill.name)) {
       throw new Error(`Invalid or duplicate builtin skill name: ${skill.name}`);
     }
-    if (!skill.description || /[\r\n]/.test(skill.description)) {
+    if (!skill.description.trim()) throw new Error('描述不能为空');
+    if (skill.description.length > 1024) throw new Error('描述不能超过 1024 字');
+    if (/[\r\n]/.test(skill.description)) {
       throw new Error(`Builtin skill description must be one line: ${skill.name}`);
     }
     names.add(skill.name);
@@ -73,8 +90,12 @@ export async function ensureBuiltinPackage(
     if (!entry.isDirectory() || names.has(entry.name)) continue;
     const oldFile = join(skillsPath, entry.name, 'SKILL.md');
     if (await readIfPresent(oldFile) !== undefined) {
-      await unlink(oldFile);
-      changed = true;
+      try {
+        await unlink(oldFile);
+        changed = true;
+      } catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+      }
     }
   }
   if (await updateFile(join(pluginPath, 'plugin.json'), `${JSON.stringify({ name: 'vonvon', version }, null, 2)}\n`)) changed = true;

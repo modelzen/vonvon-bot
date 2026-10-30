@@ -1,6 +1,8 @@
 import type { BuiltinSkill } from './package';
 import { scheduledTasksSkill } from './scheduled-tasks';
 
-export function builtinSkillsFor(profile: { tools: { schedule: boolean } }): BuiltinSkill[] {
-  return profile.tools.schedule ? [scheduledTasksSkill] : [];
+export function builtinSkillsOfSet(set: 'group'): BuiltinSkill[] {
+  switch (set) {
+    case 'group': return [scheduledTasksSkill];
+  }
 }
