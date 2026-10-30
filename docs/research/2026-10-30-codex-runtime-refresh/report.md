@@ -36,3 +36,5 @@
 - [Claude Agent SDK TypeScript](https://code.claude.com/docs/en/agent-sdk/typescript)：列出 `supportedModels()` 和外部 executable 选项，仅作后续线索。
 
 本机 App / CLI 只读验证版本；隔离 fixture 不证明所有账号能用新模型。Windows 路径和专项清单纳入实现，原生运行以 CI / 真机记录为准。两位 gpt-6-sol 代理分别核对 Codex 与 Claude / UI，独立审查指出的候选缓存、迟到取消、utility 指纹采样时机已补修复。
+
+末轮复核补充：旧设置入口和 HTTP 环境入口原先各持实例锁；同时安装或停用时，一方回滚可能覆盖另一成功发布。现按物理 dataRoot / tool 共用互斥，首次创建前从最近存在的父目录规范化路径，处理 macOS `/var` 别名。真实并发回归卡住发布后的校验窗口，确认另一实例的安装、更新、停用均被拒绝；31 项相关检查和独立复核通过。

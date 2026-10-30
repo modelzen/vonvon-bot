@@ -4,9 +4,9 @@ import { McpService } from "./mcp";
 import type { McpRequest, McpReply } from "@vonvon/protocol";
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, realpathSync } from "node:fs";
 import { access, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { basename, delimiter, dirname, isAbsolute, join, relative, win32 } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { spawnProcess } from "../platform/spawn";
 import { CODEX_MIN_VERSION, CODEX_VERIFIED_VERSION, classifyCodexVersion, compareCodexVersions } from "../agent/codex-appserver/version";
 import { managedCodexBin } from "../agent/codex-appserver/managed-install";
@@ -31,6 +31,9 @@ const kinds: EnvironmentTool[] = ["codex", "claude", "lark-cli"];
 const allowedHosts = new Set(["accounts.feishu.cn", "accounts.larksuite.com", "open.feishu.cn", "open.larksuite.com", "auth.openai.com", "chatgpt.com", "claude.ai", "console.anthropic.com", "platform.claude.com"]);
 const outputLimit = 64 * 1024;
 const generationPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// The legacy setup API and HTTP environment API own separate service instances.
+// Serialize the complete publish/verify/rollback transaction across both.
+const managedMutations = new Set<string>();
 
 type ManagedSelection =
   | { kind: "absent" | "disabled" | "invalid" }
@@ -315,8 +318,26 @@ export class EnvironmentService {
     } catch { return null; }
   }
 
+  private managedMutationKey(tool: EnvironmentTool): string {
+    let root = resolve(this.getDataRoot());
+    const missing: string[] = [];
+    // Canonicalize the nearest existing parent too: on macOS /var aliases
+    // /private/var, and a first install has not created its data root yet.
+    for (;;) {
+      try { root = join(realpathSync.native(root), ...missing); break; }
+      catch {
+        const parent = dirname(root);
+        if (parent === root) { root = join(root, ...missing); break; }
+        missing.unshift(basename(root)); root = parent;
+      }
+    }
+    return `${process.platform === 'win32' ? root.toLowerCase() : root}:${tool}`;
+  }
+
   private install(tool: EnvironmentTool, update: boolean): Promise<EnvironmentReply> {
-    if (this.mutation || this.active) return Promise.resolve(refused("busy", "另一个本机环境操作正在进行。"));
+    const key = this.managedMutationKey(tool);
+    if (this.mutation || this.active || managedMutations.has(key)) return Promise.resolve(refused("busy", "另一个本机环境操作正在进行。"));
+    managedMutations.add(key);
     this.mutation = true;
     const id = randomUUID();
     const abort = new AbortController();
@@ -333,6 +354,7 @@ export class EnvironmentService {
       this.toolInstall = { kind: abort.signal.aborted ? "cancelled" : "failed", id, message };
       return refused(abort.signal.aborted ? "install-cancelled" : "install-failed", message);
     }).finally(() => {
+      managedMutations.delete(key);
       this.installSignal?.removeEventListener('abort', cancel);
       this.mutation = false;
       this.installAbort = undefined;
@@ -409,13 +431,15 @@ export class EnvironmentService {
   }
 
   private async uninstall(tool: EnvironmentTool): Promise<EnvironmentReply> {
-    if (this.mutation || this.active) return refused("busy", "另一个本机环境操作正在进行。");
+    const key = this.managedMutationKey(tool);
+    if (this.mutation || this.active || managedMutations.has(key)) return refused("busy", "另一个本机环境操作正在进行。");
+    managedMutations.add(key);
     this.mutation = true;
     try {
       if (!await this.managedVersion(tool)) return refused("external-install", "此工具不是 Vonvon Bot 托管的副本，不能卸载。");
       await this.publishManaged(tool, { schemaVersion: 1, tool, state: "disabled" });
       return { kind: "applied", message: "已停用 Vonvon Bot 托管的工具，其他安装不受影响。" };
-    } finally { this.mutation = false; }
+    } finally { this.mutation = false; managedMutations.delete(key); }
   }
 
   private async authStatus(tool: EnvironmentTool): Promise<EnvironmentReply> {
