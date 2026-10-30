@@ -24,6 +24,17 @@ async function run(file,args,options={}) {
 export function windowsUpgradeBuilderArguments(stage,configPath,architecture) {
   return [require.resolve('electron-builder/cli.js'),'--projectDir',stage,'--config',configPath,'--win','nsis','--'+architecture,'--publish','never'];
 }
+/** NSIS removes files before registry entries; its launcher can exit before that child finishes. */
+export async function waitForWindowsUpgradeRemoval(executable,readRegistration,{timeoutMs=30000,intervalMs=250}={}) {
+  const deadline=Date.now()+timeoutMs;
+  for(;;){
+    let executablePresent=true;try{await stat(executable);}catch(error){if(error.code!=='ENOENT')throw error;executablePresent=false;}
+    const cleanup={executablePresent,registration:await readRegistration()};
+    if(!executablePresent&&cleanup.registration.every(row=>!row.exists))return cleanup;
+    if(Date.now()>=deadline)throw Object.assign(Error('Unique test app uninstall did not complete; inspect uninstall-leftovers.json'),{cleanup});
+    await pause(intervalMs);
+  }
+}
 /** Test-only entry. It bundles the real provider, downloader, verification and quitAndInstall. */
 export function windowsUpgradeAcceptanceEntry(source) {
   return `import assert from 'node:assert/strict';
@@ -171,8 +182,9 @@ export async function acceptWindowsUpgrade({architecture,out,sourceSha:expectedS
   await writeFile(join(out,'upgraded-registration.json'),json(upgradedRegistration));
   const uninstaller=join(installDir,'Uninstall '+productName+'.exe');
   await run(uninstaller,['/currentuser','/S'],{windowsVerbatimArguments:true});
-  for(let i=0;i<40;i++){try{await stat(executable);}catch(error){if(error.code==='ENOENT')break;throw error;}if(i===39)throw Error('Unique test app remained after uninstall');await pause(250);}
-  assert(registration().every(row=>!row.exists));assert.equal(await readFile(join(dataHome,'sentinel'),'utf8'),sentinel);
+  try{await writeFile(join(out,'uninstalled-registration.json'),json(await waitForWindowsUpgradeRemoval(executable,registration)));}
+  catch(error){await writeFile(join(out,'uninstall-leftovers.json'),json(error.cleanup??{error:error.stack??String(error)}));throw error;}
+  assert.equal(await readFile(join(dataHome,'sentinel'),'utf8'),sentinel);
   await writeFile(join(out,'acceptance.json'),json({passed:true,sourceSha,architecture,versions,appId,completedAt:new Date().toISOString(),sourceHashes,scope:'Native signed full-EXE update and NSIS replacement; production UI/daemon and differential download not covered',sentinelRetained:true,uniqueTestAppUninstalled:true,manualWizardAndProductionUi:'Not exercised by this automated lane; see acceptance-plan.json'}));
   return {passed:true,architecture,evidence:out};
 }
