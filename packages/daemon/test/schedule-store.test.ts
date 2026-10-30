@@ -169,7 +169,7 @@ describe('schedule persistence', () => {
     const before = store.all(); const text = await readFile(file, 'utf8'); const listener = vi.fn(); store.onChange(listener);
     await expect(store.mutateRuntime(tasks => {
       tasks[1]!.recent.push({ runId: 'r', slot: 1, trigger: 'schedule', status: 'done', link: 'not a url' });
-    })).rejects.toThrow(/schedule store refused an invalid write/);
+    })).rejects.toThrow(/^schedule store refused an invalid write: /);
     expect(store.all()).toEqual(before);
     expect(await readFile(file, 'utf8')).toBe(text);
     expect(listener).not.toHaveBeenCalled();
@@ -189,6 +189,31 @@ describe('schedule persistence', () => {
     const text = await readFile(file, 'utf8');
     await expect(store.mutateConfig(tasks => { tasks.push(task('one-too-many')); })).rejects.toThrow(/invalid write/);
     expect(store.all()).toHaveLength(200);
+    expect(await readFile(file, 'utf8')).toBe(text);
+  });
+  it('[r2-14] clamps createdBy.text to 500 units without splitting a pair, and the file reloads clean', async () => {
+    const { store, file, dir } = await setup();
+    const chat = (id: string, text: string): StoredTask => ({ ...task(id), createdBy: { via: 'chat', openId: 'ou_1', name: '张三', role: 'member', messageId: 'om_1', text } });
+    await store.mutateConfig(tasks => { tasks.push(chat('long', '字'.repeat(601)), chat('emoji', '字' + '😀'.repeat(300))); });
+    expect(store.get('long')!.createdBy.text).toBe('字'.repeat(500));
+    expect(store.get('emoji')!.createdBy.text).toBe('字' + '😀'.repeat(249)); // 499 units: the next pair would cross 500
+    const diagnostics = vi.fn(); const reloaded = createScheduleStore(file, { now: () => 456, log, diagnostics });
+    await reloaded.load();
+    expect(reloaded.all()).toEqual(store.all());
+    expect(diagnostics).not.toHaveBeenCalled();
+    expect((await readdir(dir)).filter(name => name.includes('.corrupt-'))).toEqual([]);
+  });
+  it('[r2-3] keeps memory, the file and a reload the same parsed copy, and words protocol refusals as path: message', async () => {
+    const { store, file } = await setup();
+    await store.mutateConfig(tasks => { tasks.push({ ...task('a'), name: '  padded  ', instruction: 'do it\n', spec: { kind: 'cron', expr: ' 0 9 * * * ' } }); });
+    expect(store.get('a')).toMatchObject({ name: 'padded', instruction: 'do it', spec: { kind: 'cron', expr: '0 9 * * *' } });
+    expect(JSON.parse(await readFile(file, 'utf8')).tasks).toEqual(store.all());
+    const reloaded = createScheduleStore(file, { now: () => 456, log, diagnostics: vi.fn() });
+    await reloaded.load();
+    expect(reloaded.all()).toEqual(store.all());
+    const text = await readFile(file, 'utf8');
+    await expect(store.mutateConfig(tasks => { tasks[0]!.name = ' '; })).rejects.toThrow(/invalid write: task 0: name: \S/);
+    expect(store.get('a')!.name).toBe('padded');
     expect(await readFile(file, 'utf8')).toBe(text);
   });
   it('loads and keeps the optional noticeSince runtime field', async () => {
