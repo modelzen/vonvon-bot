@@ -13,7 +13,7 @@ const rpc = vi.hoisted(() => ({ request: vi.fn(), close: vi.fn(async () => {}), 
 vi.mock('../src/agent/codex-appserver/client-pool', async original => ({ ...await original<typeof import('../src/agent/codex-appserver/client-pool')>(),
   takeWarmClient: rpc.take, refillWarmPool: rpc.refill, connectGated: vi.fn(),
 }));
-vi.mock('../src/agent/codex-appserver/locate', () => ({ resolveCodexBin: () => '/fake/codex', codexVersionAsync: vi.fn(async () => 'codex-cli 0.163.0'), cachedCodexVersion: () => undefined }));
+vi.mock('../src/agent/codex-appserver/locate', () => ({ refreshCodexResolution: () => '/fake/codex', resolveCodexBin: () => '/fake/codex', codexVersionAsync: vi.fn(async () => 'codex-cli 0.163.0'), cachedCodexVersion: () => undefined }));
 let root: string;
 let a: string;
 let b: string;

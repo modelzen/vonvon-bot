@@ -9,7 +9,7 @@ type Element = ReactElement<Record<string, any>>;
 const harness = vi.hoisted(() => ({
   state: [] as unknown[], index: 0, effectIndex: 0,
   effects: [] as Array<{deps?: unknown[]}>, pending: [] as Array<() => void>,
-  canContinue: false, check: undefined as {state: 'checking' | 'unavailable'; message?: string} | undefined, issue: '', cli: undefined as EnvironmentToolState | undefined, codex: undefined as EnvironmentToolState | undefined,
+  canContinue: false, check: undefined as {state: 'checking' | 'unavailable'; message?: string; stale?: boolean; models?: Array<{id: string; displayName: string}>} | undefined, issue: '', cli: undefined as EnvironmentToolState | undefined, codex: undefined as EnvironmentToolState | undefined,
   activeInstall: undefined as any,
   installProvider: vi.fn(), installTool: vi.fn(async () => ({kind: 'applied', message: '已更新'})), connect: vi.fn(), verify: vi.fn(), read: vi.fn(), cancelInstall: vi.fn(),
   request: vi.fn(async (request: {type: string; id?: string}): Promise<EnvironmentReply> => request.type === 'backendVersion'
@@ -177,27 +177,62 @@ it('shows the current selected Codex and latest official version separately', ()
   expect(installationInfo(detail, '最新版本')).toBe('0.165.0');
 });
 
-it('refreshes both Codex versions and its installed label from the check response', async () => {
+it('shows managed Codex source and path, with an update action and an independent model refresh', () => {
+  harness.codex = {tool: 'codex', installation: 'managed', version: '0.164.0', latestVersion: '0.165.0', updateAvailable: true, executable: '/managed/codex', canUninstall: true};
+  const detail = nodes(ProviderPreparation({provider: 'codex', snapshot: snapshot([tool('codex', 'installed', 'signedIn')]), ready: true, busy: false, run, management: true}));
+  expect(installationInfo(detail, '安装来源')).toBe('Vonvon 管理');
+  expect(nodes(installationInfo(detail, '安装位置')).some(node => node.type === 'code' && node.props.children === '/managed/codex')).toBe(true);
+  expect(installationInfo(detail, '最新版本')).toBe('0.165.0');
+  button(detail, '更新 Codex').props.onClick();
+  expect(harness.installProvider).toHaveBeenCalledWith(true);
+  button(detail, '刷新模型').props.onClick();
+  expect(harness.verify).toHaveBeenCalledOnce();
+});
+
+it('shows external Codex update instructions without offering a managed install', () => {
+  harness.codex = {tool: 'codex', installation: 'external', source: 'homebrew', updateInstructions: '运行 brew upgrade codex', version: '0.164.0', latestVersion: '0.165.0', executable: '/opt/homebrew/bin/codex', canUninstall: false} as EnvironmentToolState;
+  const detail = nodes(ProviderPreparation({provider: 'codex', snapshot: snapshot([tool('codex', 'installed', 'signedIn')]), ready: true, busy: false, run, management: true}));
+  expect(installationInfo(detail, '安装来源')).toBe('Homebrew');
+  expect(detail.some(node => node.props.children === '运行 brew upgrade codex')).toBe(true);
+  expect(() => button(detail, '更新 Codex')).toThrow();
+  button(detail, '刷新模型').props.onClick();
+  expect(harness.verify).toHaveBeenCalledOnce();
+});
+
+it('retains the last Codex model list and marks it stale after refresh fails', () => {
+  harness.check = {state: 'unavailable', stale: true, message: '读取失败', models: [{id: 'old', displayName: 'Old model'}]};
+  const detail = nodes(ProviderPreparation({provider: 'codex', snapshot: snapshot([tool('codex', 'installed', 'signedIn')]), ready: true, busy: false, run, management: true}));
+  expect(detail.some(node => node.props.children === 'Old model')).toBe(true);
+  expect(detail.some(node => node.props.children === '模型列表是上次读取的结果；本次刷新失败，请稍后重试。')).toBe(true);
+  button(detail, '刷新模型').props.onClick();
+  expect(harness.verify).toHaveBeenCalledOnce();
+});
+
+it('refreshes Codex path and versions from the same scan despite a stale snapshot', async () => {
   harness.codex = {tool: 'codex', installation: 'managed', version: '0.162.1', latestVersion: '0.163.0', executable: '/managed/codex', canUninstall: true};
   const props = {provider: 'codex' as const, snapshot: snapshot([{...tool('codex', 'installed', 'signedIn'), version: 'codex-cli 0.162.1'}]), ready: true, busy: false, run, management: true};
-  harness.request.mockResolvedValueOnce({kind: 'backendVersion', id: 'codex-appserver', installed: '0.164.0', latest: '0.165.0', hasUpdate: true});
+  const upgraded = {...harness.codex, version: '0.164.0', latestVersion: '0.165.0', executable: '/managed/new/codex'};
+  harness.request.mockImplementationOnce(async () => {harness.codex = upgraded; return {kind: 'tools', tools: [upgraded]};});
   let detail = nodes(ProviderPreparation(props));
   await button(detail, '检查版本').props.onClick();
-  expect(harness.request).toHaveBeenCalledWith({type: 'backendVersion', id: 'codex-appserver'});
+  expect(harness.request).toHaveBeenCalledWith({type: 'scan'});
   resetRender(); detail = nodes(ProviderPreparation(props));
   expect(installationInfo(detail, '当前版本')).toBe('0.164.0');
   expect(installationInfo(detail, '最新版本')).toBe('0.165.0');
+  expect(nodes(installationInfo(detail, '安装位置')).some(node => node.type === 'code' && node.props.children === '/managed/new/codex')).toBe(true);
   expect(detail.some(node => node.props.children === '已安装 · 0.164.0')).toBe(true);
   expect(detail.some(node => node.props.children === '已安装 · 0.162.1')).toBe(false);
 });
 
-it('replaces prior Codex versions with explicit unknown values when a new check cannot confirm them', async () => {
+it('shows unknown Codex versions when a refreshed source cannot report them', async () => {
   harness.codex = {tool: 'codex', installation: 'managed', version: '0.162.1', latestVersion: '0.163.0', executable: '/managed/codex', canUninstall: true};
   const props = {provider: 'codex' as const, snapshot: snapshot([tool('codex', 'installed', 'signedIn')]), ready: true, busy: false, run, management: true};
-  harness.request.mockResolvedValueOnce({kind: 'backendVersion', id: 'codex-appserver', installed: '0.164.0', latest: '0.164.0', hasUpdate: false});
+  const upgraded = {...harness.codex, version: '0.164.0', latestVersion: '0.164.0'};
+  harness.request.mockImplementationOnce(async () => {harness.codex = upgraded; return {kind: 'tools', tools: [upgraded]};});
   await button(nodes(ProviderPreparation(props)), '检查版本').props.onClick();
   resetRender();
-  harness.request.mockResolvedValueOnce({kind: 'backendVersion', id: 'codex-appserver', installed: null, latest: null, hasUpdate: false});
+  const unknown = {...upgraded, version: null, latestVersion: null};
+  harness.request.mockImplementationOnce(async () => {harness.codex = unknown; return {kind: 'tools', tools: [unknown]};});
   await button(nodes(ProviderPreparation(props)), '检查版本').props.onClick();
   resetRender(); const detail = nodes(ProviderPreparation(props));
   expect(installationInfo(detail, '当前版本')).toBe('暂时无法确认');
@@ -205,9 +240,10 @@ it('replaces prior Codex versions with explicit unknown values when a new check 
   expect(detail.some(node => node.props.children === '已安装 · 0.164.0')).toBe(false);
 });
 
-it('discards a checked Codex version when the selected installation changes', async () => {
+it('shows the selected Codex source when the installation changes', async () => {
   const props = {provider: 'codex' as const, snapshot: snapshot([{...tool('codex', 'installed', 'signedIn'), version: 'codex-cli 0.164.0'}]), ready: true, busy: false, run, management: true};
-  harness.request.mockResolvedValueOnce({kind: 'backendVersion', id: 'codex-appserver', installed: '0.164.0', latest: '0.165.0', hasUpdate: true});
+  harness.codex = {tool: 'codex', installation: 'managed', version: '0.164.0', latestVersion: '0.165.0', executable: '/managed/codex', canUninstall: true};
+  harness.request.mockResolvedValueOnce({kind: 'tools', tools: [harness.codex]});
   await button(nodes(ProviderPreparation(props)), '检查版本').props.onClick();
   harness.codex = {tool: 'codex', installation: 'external', version: '0.166.0', latestVersion: '0.166.0', executable: '/external/codex', canUninstall: false};
   resetRender();
@@ -224,7 +260,7 @@ it('keeps Claude SDK version checks labelled as the verified version', async () 
   expect(installationInfo(nodes(detail.find(node => node.props.className === 'provider-meta')?.props.children), '最新版本')).toBeUndefined();
 });
 
-it('does not revive an old version check after switching from installation A to B and back to A', async () => {
+it('uses current source metadata after switching installations A to B and back to A', async () => {
   const props = {provider: 'codex' as const, snapshot: snapshot([tool('codex', 'installed', 'signedIn')]), ready: true, busy: false, run, management: true};
   function render() {
     resetRender();
@@ -234,6 +270,8 @@ it('does not revive an old version check after switching from installation A to 
   }
   const original = {tool: 'codex' as const, installation: 'external' as const, version: '1.0', latestVersion: '1.2', executable: '/a/codex', canUninstall: false};
   harness.codex = original;
+  const checked = {...original, version: '1.1', latestVersion: '1.1'};
+  harness.request.mockImplementationOnce(async () => {harness.codex = checked; return {kind: 'tools', tools: [checked]};});
   await button(render(), '检查版本').props.onClick();
   expect(installationInfo(render(), '最新版本')).toBe('1.1');
   harness.codex = {...original, executable: '/b/codex'};
@@ -393,10 +431,30 @@ it.each(['codex', 'claude'] as const)('keeps the install action for confirmed mi
 });
 
 it('keeps the update action for an installed but unsupported Codex version', () => {
+  harness.codex = {tool: 'codex', installation: 'managed', version: '0.1', latestVersion: '0.2', executable: '/managed/codex', canUninstall: true};
   const outdated = {...tool('codex', 'installed', 'unknown'), compatibility: {status: 'tooOld'}} as ToolState;
   const detail = nodes(ProviderPreparation({provider: 'codex', snapshot: snapshot([outdated]), ready: true, busy: false, run, management: true}));
   expect(detail.some(node => node.props.children === '需要更新')).toBe(true);
   expect(detail.some(node => node.props.children === '安装后检测')).toBe(true);
   button(detail, '更新').props.onClick();
   expect(harness.installProvider).toHaveBeenCalledWith(true);
+});
+
+it.each(['homebrew', 'explicit'] as const)('does not install a managed Codex over outdated external %s', source => {
+  harness.codex = {tool: 'codex', installation: source === 'explicit' ? 'managed' : 'external', source, version: '0.1', latestVersion: '0.2', executable: source === 'explicit' ? '/chosen/codex' : '/opt/homebrew/bin/codex', canUninstall: source === 'explicit', updateInstructions: '请按原安装方式更新'};
+  const outdated = {...tool('codex', 'installed', 'unknown'), compatibility: {status: 'tooOld'}} as ToolState;
+  const props = {provider: 'codex' as const, snapshot: snapshot([outdated]), ready: true, busy: false, run};
+  const setup = nodes(ProviderPreparation(props));
+  expect(() => button(setup, '更新')).toThrow();
+  expect(setup.some(node => node.props.children === '请按原安装方式更新')).toBe(true);
+  button(setup, '重新检测').props.onClick();
+  expect(harness.verify).toHaveBeenCalledOnce();
+  resetRender();
+  const manager = nodes(ProviderPreparation({...props, management: true}));
+  if (source === 'explicit') expect(installationInfo(manager, '安装来源')).toBe('显式指定');
+  expect(() => button(manager, '更新 Codex')).toThrow();
+  expect(() => button(manager, '更新')).toThrow();
+  if (source === 'explicit') expect(() => button(manager, '卸载托管副本')).toThrow();
+  expect(manager.some(node => node.props.children === '请按原安装方式更新')).toBe(true);
+  expect(harness.installProvider).not.toHaveBeenCalled();
 });

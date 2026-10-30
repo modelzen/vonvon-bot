@@ -14,7 +14,7 @@ vi.mock('../src/agent/codex-appserver/client-pool', async importOriginal => ({
 }));
 vi.mock('../src/agent/codex-appserver/locate', async () => {
   const { resolve } = await import('node:path');
-  return { resolveCodexBin: () => resolve('/fake/codex'), codexVersionAsync: vi.fn(async () => 'codex-cli 0.163.0'), cachedCodexVersion: () => undefined };
+  return { refreshCodexResolution: () => resolve('/fake/codex'), resolveCodexBin: () => resolve('/fake/codex'), codexVersionAsync: vi.fn(async () => 'codex-cli 0.163.0'), cachedCodexVersion: () => undefined };
 });
 vi.mock('../src/agent/codex-appserver/windows-sandbox', () => ({
   cachedWindowsSandbox: () => ({ status: 'ready', implementation: 'mxc' }),

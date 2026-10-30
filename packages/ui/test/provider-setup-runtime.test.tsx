@@ -53,6 +53,27 @@ it('requires installed, authenticated and native nonempty models', async () => {
   await render('codex', signed).verify(); expect(render('codex', signed).canContinue).toBe(true);
 });
 
+it('refreshes Codex models and source metadata together, retaining the last list on failure', async () => {
+  const signed = snapshot([tool('codex')]); h.client.snapshot.mockResolvedValue(signed);
+  let path = '/old/codex';
+  const original = h.client.environment.getMockImplementation()!;
+  h.client.environment.mockImplementation(async (request: {type: string}) => request.type === 'scan'
+    ? {kind: 'tools', tools: [{tool: 'codex', installation: 'external', version: '1', executable: path}]}
+    : original(request));
+  render('codex', signed); await flush();
+  expect(render('codex', signed).check?.models).toEqual([model]);
+  path = '/new/codex';
+  h.client.collaboration.mockResolvedValueOnce({kind: 'providerModels', backend: 'codex-appserver', state: 'unavailable', models: [], message: '读取失败'});
+  await render('codex', signed).verify();
+  const failed = render('codex', signed);
+  expect(failed.tools.find(item => item.tool === 'codex')?.executable).toBe('/new/codex');
+  expect(failed.check).toMatchObject({state: 'unavailable', stale: true, message: '读取失败', models: [model]});
+  expect(failed.canContinue).toBe(false);
+  h.client.collaboration.mockResolvedValueOnce({kind: 'providerModels', backend: 'codex-appserver', state: 'ready', models: [{...model, id: 'new'}]});
+  await failed.verify();
+  expect(render('codex', signed).check).toMatchObject({state: 'ready', models: [{...model, id: 'new'}]});
+});
+
 it('ignores an older model reply after a newer failed check and after unmount', async () => {
   const signed = snapshot([tool('codex')]); h.client.snapshot.mockResolvedValue(signed);
   const first = deferred<unknown>(); h.client.collaboration.mockReturnValueOnce(first.promise).mockResolvedValue({kind: 'providerModels', backend: 'codex-appserver', state: 'unavailable', models: []});
@@ -103,6 +124,22 @@ it('installs a missing Claude SDK only after the user requests it, even when Cla
   expect(h.client.environment).toHaveBeenCalledWith({type: 'backendInstall', id: 'claude-agent', update: false});
   expect(h.client.environment.mock.calls.filter(([request]) => request.type === 'backendInstall')).toHaveLength(1);
   expect(h.client.environment.mock.calls.some(([request]) => ['install', 'update', 'startLogin'].includes(request.type))).toBe(false);
+});
+
+it.each([
+  {installation: 'external', source: 'homebrew'},
+  {installation: 'managed', source: 'explicit'},
+] as const)('rechecks an outdated $source Codex instead of installing a managed copy', async selected => {
+  const outdated = snapshot([{...tool('codex'), compatibility: {status: 'tooOld'}} as ToolState]);
+  h.client.snapshot.mockResolvedValue(outdated);
+  const original = h.client.environment.getMockImplementation()!;
+  h.client.environment.mockImplementation(async (request: {type: string}) => request.type === 'scan'
+    ? {kind: 'tools', tools: [{tool: 'codex', ...selected, version: '0.1', executable: '/chosen/codex', canUninstall: selected.installation === 'managed'}]}
+    : original(request));
+  render('codex', outdated); await flush();
+  await render('codex', outdated).installProvider(true);
+  expect(h.client.environment.mock.calls.some(([request]) => request.type === 'install' || request.type === 'update')).toBe(false);
+  expect(run).toHaveBeenLastCalledWith({type: 'refresh', tools: true});
 });
 
 it('polls a pending tool install so it can be cancelled before the install request settles', async () => {

@@ -1,155 +1,94 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { rename } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { tmpdir } from 'node:os';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { installManagedCodex, managedCodexBin, runSetupChild } from '../src/agent/codex-appserver/managed-install';
-import { resolveCodexBin } from '../src/agent/codex-appserver/locate';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir, homedir } from 'node:os';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { EnvironmentServiceOptions } from '../src/environment/service';
+
+const adapter = vi.hoisted(() => ({
+  options: undefined as EnvironmentServiceOptions | undefined,
+  run: vi.fn(), close: vi.fn(), refresh: vi.fn(),
+}));
+vi.mock('../src/environment/service', () => ({
+  EnvironmentService: class {
+    constructor(options: EnvironmentServiceOptions) { adapter.options = options; }
+    run = adapter.run;
+    close = adapter.close;
+  },
+}));
+vi.mock('../src/agent/codex-appserver/locate', () => ({ refreshCodexResolution: adapter.refresh }));
+import { installManagedCodex, managedCodexBin, privateCodexBin } from '../src/agent/codex-appserver/managed-install';
 import { paths } from '../src/config/paths';
-import { ProviderProcessCleanupError, OwnedProviderProcess } from '../src/agent/owned-process';
 
-vi.mock('../src/config/paths', async () => {
-  const { mkdtempSync, mkdirSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
-  const home = mkdtempSync(join(tmpdir(), 'managed-install-home-')); const appDir = join(home, '.vonvon-bridge'); mkdirSync(appDir);
-  return { paths: { appDir, codexCliDir: join(appDir, 'codex-cli'), codexCliBinDir: join(appDir, 'codex-cli/node_modules/.bin') } };
+const home = mkdtempSync(join(tmpdir(), 'managed-install-adapter-'));
+beforeEach(() => {
+  vi.stubEnv('CODEX_BIN', '');
+  adapter.run.mockReset().mockResolvedValue({ kind: 'applied', message: 'installed' });
+  adapter.close.mockReset().mockResolvedValue(undefined);
+  adapter.refresh.mockReset().mockResolvedValue('/newer/external/codex');
+  adapter.options = undefined;
 });
-vi.mock('node:fs/promises', async importOriginal => {
-  const actual = await importOriginal<typeof import('node:fs/promises')>();
-  return { ...actual, rename: vi.fn(actual.rename) };
-});
-const home = dirname(paths.appDir);
-const npm = join(home, 'npm-cli.cjs');
-const trace = join(home, 'npm-trace.json');
-const codexSource = `console.log('codex-cli 0.156.1');`;
-const npmSource = `
-const fs=require('node:fs'),path=require('node:path');
-const prefix=process.argv[process.argv.indexOf('--prefix')+1];
-const cache=process.argv[process.argv.indexOf('--cache')+1];
-const record={pid:process.pid,prefix,cache,args:process.argv.slice(2),cwd:process.cwd(),nodeMode:process.env.ELECTRON_RUN_AS_NODE,lock:JSON.parse(fs.readFileSync(path.join(prefix,'package-lock.json'),'utf8'))};
-fs.writeFileSync(${JSON.stringify(trace)},JSON.stringify(record));
-const bins=path.join(prefix,'node_modules/.bin'); fs.mkdirSync(bins,{recursive:true});
-const script=path.join(bins,'codex.cjs'); fs.writeFileSync(script,process.env.FIXTURE_NPM_MODE==='wrong-version' ? "console.log('codex-cli 9.9.9')" : ${JSON.stringify(codexSource)});
-if(process.platform==='win32') fs.writeFileSync(path.join(bins,'codex.cmd'),'@echo off\\r\\n"'+process.execPath+'" "%~dp0codex.cjs" %*\\r\\n');
-else fs.writeFileSync(path.join(bins,'codex'),'#!/bin/sh\\nexec "'+process.execPath+'" "$(dirname \"$0\")/codex.cjs" "$@"\\n',{mode:0o755});
-if(process.env.FIXTURE_NPM_MODE==='fail') process.exit(3);
-if(process.env.FIXTURE_NPM_MODE==='hold') setInterval(()=>fs.writeFileSync(path.join(prefix,'still-writing'),'yes'),20);
-`;
-beforeAll(() => {
-  writeFileSync(npm, npmSource);
-  vi.stubEnv('HOME', home); vi.stubEnv('USERPROFILE', home); vi.stubEnv('XDG_CONFIG_HOME', join(home, '.config')); vi.stubEnv('CODEX_HOME', join(home, '.codex'));
-  vi.stubEnv('CODEX_BIN', ''); vi.stubEnv('VONVON_NPM_CLI', npm);
-});
-afterEach(() => { vi.stubEnv('FIXTURE_NPM_MODE', ''); vi.mocked(rename).mockClear(); });
-afterAll(() => { vi.unstubAllEnvs(); rmSync(home, { recursive: true, force: true }); });
-const traceValue = (): { prefix: string; cache: string; args: string[]; pid: number; nodeMode?: string; lock: { packages: Record<string, { integrity?: string }> } } => JSON.parse(readFileSync(trace, 'utf8'));
-const install = () => installManagedCodex(new AbortController().signal);
-const stages = () => readdirSync(home).filter(name => name.startsWith('.vonvon-codex-stage-'));
+afterEach(() => vi.unstubAllEnvs());
+afterAll(() => rmSync(home, { recursive: true, force: true }));
 
-describe('managed Codex installation', () => {
-  it('stages locked npm work outside live data and commits a verified private executable', async () => {
-    await install();
-    const record = traceValue();
-    expect(record.prefix.startsWith(paths.appDir)).toBe(false);
-    expect(record.cache.startsWith(paths.appDir)).toBe(false);
-    expect(record.args).toContain('--ignore-scripts');
-    expect(record.args).toContain('ci');
-    expect(record.nodeMode).toBe('1');
-    expect(record.lock.packages['node_modules/@openai/codex']?.integrity).toMatch(/^sha512-/);
-    expect(stages()).toEqual([]);
-    expect(managedCodexBin()).toMatch(/releases/);
-    expect(resolveCodexBin()).toBe(managedCodexBin());
-    expect(await runSetupChild(managedCodexBin()!, ['--version'], { cwd: home, signal: new AbortController().signal })).toBe('codex-cli 0.156.1');
-  });
-
-  it.each(['fail', 'wrong-version'])('preserves prior install on %s and cleans only reaped staging', async mode => {
-    const previous = managedCodexBin();
-    vi.stubEnv('FIXTURE_NPM_MODE', mode);
-    await expect(install()).rejects.toThrow();
-    expect(managedCodexBin()).toBe(previous);
-    expect(previous && existsSync(previous)).toBe(true);
-    expect(stages()).toEqual([]);
-  });
-
-  it('preserves the current pointer on cross-device commit failure', async () => {
-    const previous = managedCodexBin();
-    vi.mocked(rename).mockRejectedValueOnce(Object.assign(new Error('cross-device'), { code: 'EXDEV' }));
-    await expect(install()).rejects.toThrow('cross-device');
-    expect(managedCodexBin()).toBe(previous);
-    expect(stages()).toEqual([]);
-  });
-
-  it('cancels npm, awaits its exit, then removes staging without changing the selected install', async () => {
-    const previous = managedCodexBin();
-    vi.stubEnv('FIXTURE_NPM_MODE', 'hold');
-    rmSync(trace, { force: true });
+describe('legacy setup installation uses the unified environment installer', () => {
+  it('forwards the real signal and data root, accepts success when a newer external CLI is selected, and closes', async () => {
     const abort = new AbortController();
-    const running = installManagedCodex(abort.signal);
-    const outcome = running.catch(error => error);
-    try {
-      await vi.waitFor(() => expect(existsSync(trace)).toBe(true), { timeout: process.platform === 'win32' ? 5_000 : 1_000 });
-    } finally {
-      abort.abort();
-      await outcome;
-    }
-    const record = traceValue();
-    expect(() => process.kill(record.pid, 0)).toThrow();
-    expect(existsSync(record.prefix)).toBe(false);
-    expect(managedCodexBin()).toBe(previous);
-    expect(stages()).toEqual([]);
+    await installManagedCodex(abort.signal);
+    expect(adapter.run).toHaveBeenCalledWith({ type: 'install', tool: 'codex' });
+    expect(adapter.options).toMatchObject({ home: homedir(), nodePath: process.execPath, installSignal: abort.signal, requireTrustedNpm: true });
+    expect(adapter.options!.getDataRoot()).toBe(paths.appDir);
+    expect(await adapter.options!.resolveCodex()).toBe('/newer/external/codex');
+    expect(adapter.refresh).toHaveBeenCalledWith({ force: true });
+    expect(adapter.close).toHaveBeenCalledTimes(1);
   });
 
-  it('removes staging after confirmed process-tree cleanup failure', async () => {
-    const close = OwnedProviderProcess.prototype.close;
-    const failure = vi.spyOn(OwnedProviderProcess.prototype, 'close').mockImplementationOnce(async function (this: OwnedProviderProcess, graceMs) {
-      await close.call(this, graceMs);
-      throw new ProviderProcessCleanupError('fixture cleanup failed after death');
+  it('does not report a late cancellation after the installer has published success', async () => {
+    const abort = new AbortController();
+    adapter.run.mockImplementation(async () => {
+      abort.abort(new Error('late cancellation'));
+      return { kind: 'applied', message: 'published successfully' };
     });
-    try {
-      await expect(install()).rejects.toThrow('fixture cleanup failed after death');
-      expect(stages()).toEqual([]);
-    } finally {
-      failure.mockRestore();
-      for (const stage of stages()) rmSync(join(home, stage), { recursive: true, force: true });
-    }
+    await expect(installManagedCodex(abort.signal)).resolves.toBeUndefined();
+    expect(adapter.close).toHaveBeenCalledTimes(1);
   });
 
-  it('retains staging and the prior install while a close is still pending', async () => {
-    const previous = managedCodexBin();
-    const close = OwnedProviderProcess.prototype.close;
-    let entered!: () => void;
-    const closing = new Promise<void>(resolve => { entered = resolve; });
-    let release!: () => void;
-    const permitted = new Promise<void>(resolve => { release = resolve; });
-    const held = vi.spyOn(OwnedProviderProcess.prototype, 'close').mockImplementationOnce(async function (this: OwnedProviderProcess, graceMs) {
-      entered();
-      await permitted;
-      await close.call(this, graceMs);
-      throw new ProviderProcessCleanupError('fixture cleanup failed after death');
-    });
-    const result = install().then(() => 'fulfilled', error => error);
-    try {
-      await closing;
-      expect(stages()).toHaveLength(1);
-      expect(existsSync(join(home, stages()[0]!, 'install'))).toBe(true);
-      expect(managedCodexBin()).toBe(previous);
-      release();
-      expect(await result).toBeInstanceOf(ProviderProcessCleanupError);
-      expect(managedCodexBin()).toBe(previous);
-      expect(stages()).toEqual([]);
-    } finally {
-      release();
-      await result;
-      held.mockRestore();
-      for (const stage of stages()) rmSync(join(home, stage), { recursive: true, force: true });
-    }
+  it('reports the environment installer failure and still drains its processes', async () => {
+    adapter.run.mockResolvedValue({ kind: 'refused', code: 'install-failed', message: 'fixture install failure' });
+    await expect(installManagedCodex(new AbortController().signal)).rejects.toThrow('fixture install failure');
+    expect(adapter.close).toHaveBeenCalledTimes(1);
   });
 
-  it('preserves CODEX_BIN and refuses missing packaged npm instead of using PATH npm', async () => {
+  it('does not start installation for explicit overrides or an already cancelled request', async () => {
     vi.stubEnv('CODEX_BIN', process.execPath);
-    await expect(install()).rejects.toThrow('CODEX_BIN');
-    expect(resolveCodexBin()).toBe(process.execPath);
-    vi.stubEnv('CODEX_BIN', ''); vi.stubEnv('VONVON_NPM_CLI', '');
-    await expect(install()).rejects.toThrow('可信的 npm');
-    vi.stubEnv('VONVON_NPM_CLI', npm);
+    await expect(installManagedCodex(new AbortController().signal)).rejects.toThrow('CODEX_BIN');
+    vi.stubEnv('CODEX_BIN', '');
+    const abort = new AbortController();
+    abort.abort(new Error('cancelled before install'));
+    await expect(installManagedCodex(abort.signal)).rejects.toThrow('cancelled before install');
+    expect(adapter.run).not.toHaveBeenCalled();
   });
+
+  it('passes cancellation through the shared installer and waits for cleanup', async () => {
+    const abort = new AbortController();
+    adapter.run.mockImplementation(() => new Promise(resolve => {
+      adapter.options!.installSignal!.addEventListener('abort', () => resolve({ kind: 'refused', code: 'install-cancelled', message: 'cancelled' }), { once: true });
+    }));
+    const install = installManagedCodex(abort.signal);
+    const outcome = install.catch(error => error);
+    await vi.waitFor(() => expect(adapter.run).toHaveBeenCalled());
+    abort.abort(new Error('cancelled during install'));
+    expect(await outcome).toMatchObject({ message: 'cancelled during install' });
+    expect(adapter.close).toHaveBeenCalledTimes(1);
+  });
+});
+
+it('still reads existing legacy generations without writing a new legacy pointer', () => {
+  const generation = '12345678-1234-1234-1234-123456789012';
+  const root = join(home, 'codex-cli');
+  const release = join(root, 'releases', generation);
+  mkdirSync(join(release, 'node_modules', '.bin'), { recursive: true });
+  const bin = privateCodexBin(release);
+  writeFileSync(bin, '');
+  writeFileSync(join(root, 'current.json'), JSON.stringify({ generation, version: '0.156.1' }));
+  expect(managedCodexBin(root)).toBe(bin);
 });
