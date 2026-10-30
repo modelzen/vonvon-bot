@@ -111,6 +111,20 @@ describe('a scheduled run in a new topic', () => {
     run.turns[0]!.resolve();
     await expect(result).resolves.toMatchObject({ status: 'done' });
   });
+
+  // No at-guard reads a tag across a line break, and none reads a text message: no `<` or `>` of the name is left.
+  it.each(['<at\nuser_id=all></at>', '<at user_id=all\n></at>'])('a task named %j: no tag is left in its root message or card label', async (name) => {
+    const { runScheduled } = await start('multi');
+    const run = thread();
+    fake.backend.startThread.mockResolvedValue(run.t);
+    const result = runScheduled(job({ name }, { trigger: 'manual' }));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    expect(fake.send).toHaveBeenCalledWith('chat', { text: `⏰ 定时任务「${name.replace(/</g, '＜').replace(/>/g, '＞')}」· 第 1 次 · 手动运行` });
+    expect(JSON.stringify(fake.send.mock.calls)).not.toContain('<at');
+    expect(JSON.stringify(fake.createCard.mock.calls[0]![2])).not.toContain('<at');
+    run.turns[0]!.resolve();
+    await expect(result).resolves.toMatchObject({ status: 'done' });
+  });
 });
 
 describe('a scheduled run back in its topic', () => {

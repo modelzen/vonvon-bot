@@ -1,6 +1,9 @@
 import { deferred, fake, human, job, setup, SLOT, thread, until } from './helpers/scheduled-run';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from '../src/agent/types';
+import type { ScheduledJob } from '../src/bot/schedule/types';
 import type { AppConfig } from '../src/config/schema';
 import { addProject, listProjects } from '../src/project/registry';
 
@@ -25,6 +28,15 @@ const finalCard = () => JSON.stringify(fake.final.mock.calls.at(-1)![1]);
 type Orchestrator = Awaited<ReturnType<typeof setup>>['orchestrator'];
 /** setPermissionMode finds the group in the registry, which lasts as long as the file's HOME: bound once. */
 const bound = async () => { if (!(await listProjects()).some(p => p.name === 'test')) await addProject(fake.project as never); };
+/** The run's task in the bot's schedules.json, as the scheduler claimed it; the orchestrator's store reads it at its first request. */
+async function stored(o: Orchestrator, scheduled: ScheduledJob): Promise<ScheduledJob> {
+  const file = (await import('../src/config/paths')).botPaths('app').schedulesFile;
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ version: 1, tasks: [scheduled.task] }));
+  await o.schedule('cli', { action: 'listBot' });
+  return scheduled;
+}
+const ASK: AgentEvent = { type: 'ask', request: { id: 'q1', kind: 'confirmation', title: '继续吗', detail: '要改文件', acceptedConsequence: '改', declinedConsequence: '不改' } };
 
 describe('a scheduled turn that fails', () => {
   const NEXT = '连不上模型服务，可能是网络断了，或者服务暂时不可用。下一次定时运行会再试；也可以在任务里手动运行。';
@@ -40,7 +52,7 @@ describe('a scheduled turn that fails', () => {
     current = await setup('single');
     const run = thread();
     fake.backend.resumeThread.mockResolvedValue(run.t);
-    const result = current.runScheduled(scheduled());
+    const result = current.runScheduled(await stored(current.orchestrator, scheduled()));
     await until(() => expect(run.consumed).toHaveLength(1));
     run.end(NETWORK);
     await expect(result).resolves.toMatchObject({ status: 'failed', error: '网络失败：stream disconnected', counts: true, messageId: 'card' });
@@ -49,6 +61,23 @@ describe('a scheduled turn that fails', () => {
     expect(finalCard()).toContain(advice);
     if (advice === NO_NEXT) expect(finalCard()).not.toContain('下一次定时运行');
     expect(finalCard()).not.toContain('重发本条消息');
+  });
+
+  // The promise is read from the task as it is when the run ends, not as it was claimed.
+  it.each([
+    ['paused', (o: Orchestrator) => o.schedule('cli', { action: 'pause', chatId: 'chat', taskId: 'st_00000000000000a1' })],
+    ['deleted', (o: Orchestrator) => o.schedule('cli', { action: 'delete', chatId: 'chat', taskId: 'st_00000000000000a1', revision: 'r1' })],
+  ] as const)('on the network, a daily task %s during the run: no next run is promised', async (_name, change) => {
+    current = await setup('single');
+    const run = thread();
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const result = current.runScheduled(await stored(current.orchestrator, job()));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    await expect(change(current.orchestrator)).resolves.not.toMatchObject({ kind: 'refused' });
+    run.end(NETWORK);
+    await expect(result).resolves.toMatchObject({ status: 'failed', counts: true });
+    expect(finalCard()).toContain(NO_NEXT);
+    expect(finalCard()).not.toContain('下一次定时运行');
   });
 
   it('idle until the watchdog stops it: its final card has no 重试', async () => {
@@ -70,8 +99,29 @@ describe('a scheduled turn that fails', () => {
     const result = current.runScheduled(job());
     await until(() => expect(run.consumed).toHaveLength(1));
     // The fake turn has no respondToAsk: the ask coordinator faults and stops it.
-    run.emit({ type: 'ask', request: { id: 'q1', kind: 'confirmation', title: '继续吗', detail: '要改文件', acceptedConsequence: '改', declinedConsequence: '不改' } });
+    run.emit(ASK);
     await expect(result).resolves.toMatchObject({ status: 'failed', error: '提问出错', counts: true, messageId: 'card' });
+  });
+
+  // A turn a ⏹ or the shutdown stopped answers a late ask "unavailable": that answer failing too did not stop it.
+  it.each([
+    ['the shutdown', { status: 'interrupted', by: 'shutdown' }, (o: Orchestrator) => o.shutdown()],
+    ['a ⏹', { status: 'interrupted', by: 'user' }, (o: Orchestrator) => o.dispatcher.handle(
+      { messageId: 'card', chatId: 'chat', operator: { openId: 'owner' }, action: { value: { a: 'run.stop', m: 'card' } } } as never)],
+  ] as const)('stopped by %s, then a late ask whose answer fails: interrupted, not failed', async (_name, outcome, stop) => {
+    current = await setup('single');
+    const run = thread();
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const respondToAsk = vi.fn(async (..._args: unknown[]) => { throw new Error('turn already over'); });
+    const runStreamed = run.t.runStreamed.bind(run.t);
+    run.t.runStreamed = (input) => Object.assign(runStreamed(input), { respondToAsk });
+    // The stop's turn/interrupt: the agent asks once more as the turn ends.
+    run.t.abort.mockImplementation(async () => { run.emit(ASK); run.turns[0]!.resolve(); return undefined; });
+    const result = current.runScheduled(job());
+    await until(() => expect(run.consumed).toHaveLength(1));
+    await stop(current.orchestrator);
+    await expect(result).resolves.toMatchObject(outcome);
+    expect(respondToAsk).toHaveBeenCalledWith('q1', { kind: 'unanswered', reason: 'unavailable' });
   });
 });
 
@@ -89,7 +139,7 @@ describe('a scheduled turn queued behind a person\'s', () => {
     ['stopped by an ask fault, not a ⏹', undefined, (run: ReturnType<typeof thread>) => {
       run.t.abort.mockImplementation(async () => { run.turns[0]!.resolve(); return undefined; });
       // The fake turn has no respondToAsk: the ask coordinator faults and stops it.
-      run.emit({ type: 'ask', request: { id: 'q1', kind: 'confirmation', title: '继续吗', detail: '要改文件', acceptedConsequence: '改', declinedConsequence: '不改' } });
+      run.emit(ASK);
     }],
   ] as const)('%s: failed, not stopped by the user', async (_name, idleMs, end) => {
     idle.ms = idleMs;
@@ -132,6 +182,35 @@ describe('a scheduled turn queued behind a person\'s', () => {
     const result = current.runScheduled(job());
     await until(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued', { depth: 1 }));
     await expect(current.orchestrator.adminExecute({ kind: 'setPermissionMode', project: 'test', mode: 'full' })).resolves.toEqual({ kind: 'done' });
+    await expect(result).resolves.toEqual({ status: 'skipped', reason: 'updating' });
+    expect(run.consumed).toHaveLength(1);
+  });
+
+  // procDead is read before the person's final card goes out: a settings change while it goes out closes the thread all
+  // the same, and the turn queued behind does not run on it.
+  it('whose session a settings change closed while its final card went out: skipped, not run on the closed thread', async () => {
+    current = await setup('single');
+    const run = thread();
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    run.t.close.mockImplementation(async () => { run.t.isAlive = () => false; });
+    const runStreamed = run.t.runStreamed.bind(run.t);
+    run.t.runStreamed = (input) => {
+      if (!run.t.isAlive()) throw new Error('thread closed');
+      return runStreamed(input);
+    };
+    fake.listSessions.mockResolvedValue([{ threadId: 'chat', chatId: 'chat' }]);
+    await bound();
+    const hold = deferred<boolean>();
+    fake.final.mockImplementationOnce(() => hold.promise);
+    await current.orchestrator.onMessage(human('先跑这个'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    run.turns[0]!.resolve();
+    await until(() => expect(fake.final).toHaveBeenCalledOnce());
+    const result = current.runScheduled(job());
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued', { depth: 1 }));
+    await expect(current.orchestrator.adminExecute({ kind: 'setPermissionMode', project: 'test', mode: 'full' })).resolves.toEqual({ kind: 'done' });
+    expect(run.t.close).toHaveBeenCalledOnce();
+    hold.resolve(true);
     await expect(result).resolves.toEqual({ status: 'skipped', reason: 'updating' });
     expect(run.consumed).toHaveLength(1);
   });

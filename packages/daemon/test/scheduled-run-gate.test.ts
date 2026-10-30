@@ -131,6 +131,16 @@ describe('scheduleGate (T2 4.2)', () => {
     expect(text).toContain('连续 10 次会自动暂停');
     expect(text).not.toContain('<at');
   });
+
+  // The at-guard leaves a tag across a line break alone, and a text message has none: no `<` or `>` of the name is left.
+  it.each(['<at\nuser_id=all></at>', '<at user_id=all\n></at>'])('a tag across a line break in the name %j is left no `<` or `>`', async name => {
+    await bind('oc_qa', { mode: 'qa' });
+    fake.deps!.notifyGateFailure(task('st_00000000000000a1', 'oc_qa', { name }));
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    const { text } = send.mock.calls[0]![1] as { text: string };
+    expect(text).toContain(`「${name.replace(/</g, '＜').replace(/>/g, '＞')}」这次没跑`);
+    expect(text).not.toContain('<at');
+  });
 });
 
 describe('unbinding pauses the group\'s tasks as unavailable (T2 4.6)', () => {
