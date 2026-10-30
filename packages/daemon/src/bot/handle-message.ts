@@ -17,7 +17,7 @@ import { assemble, judgeContext, loadContextSources, openingInstructions, planTu
 import { groupSkillProfile } from '../agent/group-skills';
 import { parseStoredJudge } from '../judge/model';
 import { presentationConfig } from './group-presentation';
-import { projectRevision, projectView, type CollaborationRequest } from '../admin/collaboration';
+import { projectRevision, projectView, settingsRevision, type CollaborationRequest } from '../admin/collaboration';
 import { AdminWriteError } from '../admin/ops';
 import { applyMirror, mirrorProjectIntoBot, siblingProjectOfChat, type AdminLibraryOp } from '../admin/library';
 import { isProjectId, readLibrary, type LibraryProject } from '../project/library';
@@ -51,7 +51,8 @@ import type { NotReplied, NotRepliedReason, ScheduleReply, ScheduleRequest } fro
 import type { JudgeErrorKind, JudgeDecision, JudgeResult, JudgeVariant } from '../judge/types';
 import { JUDGE_INPUT_LIMITS, oneLine } from '../judge/prompt';
 import { deniedScopeName, errorDetail, fitDetail, reportAttention, reportDecision, reportLatestAction, reportNotReplied, reportScopeDenied, type ScheduleDiagnosticEvent } from './diagnostics';
-import { createScheduleStore } from './schedule/store';
+import { clampUnits, createScheduleStore } from './schedule/store';
+import type { ScheduledHook, ScheduledJob, ScheduledOutcome } from './schedule/types';
 import { createScheduler } from './schedule/scheduler';
 import { hostTimeZone } from './schedule/time';
 import { botNotRunning, createScheduleCommands } from '../admin/schedule-commands';
@@ -120,7 +121,7 @@ import { closeOwnedProviderProcesses } from '../agent/owned-process';
 import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
 import { JUDGE_NAMED_TIMEOUT_MS, createJudge } from '../judge/judge';
 import { createJudgeUsage } from '../judge/usage';
-import { installAtGuard } from '../card/at-guard';
+import { installAtGuard, neutraliseAts } from '../card/at-guard';
 import { isManaged, sendManagedCard, updateManagedCard } from '../card/managed';
 import { RunRender } from '../card/run-render';
 import { finalMessageText, initialState, markInterrupted, reduce, type RunState, type SubagentRow } from '../card/run-state';
@@ -151,6 +152,7 @@ import {
   CONTROLS_EID,
   RC,
   attachRunImages,
+  failureText,
   idleLabel,
   type RunCardState,
 } from '../card/run-card';
@@ -232,7 +234,7 @@ import { loadBots } from '../config/bots';
 import { admitDirectorySettings } from '../config/directories';
 import { DirectoryError, directoryFailure } from '../config/directory-errors';
 import { botBackendId, groupBackendId, resolveCommentsExecution, resolveExecution, resolveModelPreference, executionSessionProfile, projectModelAllowed, projectModelCatalog, type ModelPreference } from '../config/execution';
-import { fileClaimMode, OutboundFiles } from './outbound-files';
+import { fileClaimMode, messageLink, OutboundFiles } from './outbound-files';
 import { getSecret } from '../config/keystore';
 import { buildScopeGrantUrl, JOIN_GROUP_SCOPES } from '../config/scopes';
 import { validateAppCredentials } from '../utils/feishu-auth';
@@ -322,6 +324,10 @@ import {
   weaveQuote,
   weaveRecordBlock,
   weaveSender,
+  scheduledHeader,
+  scheduledLabel,
+  scheduledOpening,
+  scheduledRootText,
   type ContextMessage,
   type PullOpts,
   type RecordBlock,
@@ -547,6 +553,8 @@ export interface QueuedTurn {
   wake?: TurnExtra['wake'];
   /** The trigger message as typed, for the memory provenance check (记忆设计 §3.2); absent for a bot's message and a retry. */
   memoryTrigger?: MemoryTrigger;
+  /** A scheduled task's run (T2): settled when this turn ends or is dropped; its cards go to the hook's target. */
+  scheduled?: ScheduledHook;
 }
 /** What the memory write rules look at in the trigger message: that a person typed it, and its own words (no quote, forward or record block). */
 export interface MemoryTrigger { typed: boolean; text: string }
@@ -766,6 +774,11 @@ interface ActiveState {
   /** A main-area run's trigger time: until {@link woven} is known, its record block will carry the unread
    * messages before it (a smart verdict to open a topic checks this, s25). */
   triggerAt?: number;
+  /** A scheduled turn is running: a message arriving now queues, never steers into it (总设计 7.1). */
+  scheduled?: true;
+  /** A settings change closed this run's thread (evictLiveSessionsForChat): a scheduled turn queued behind is skipped, the
+   * group having changed. */
+  evicted?: true;
 }
 
 /** Inputs a synthetic turn (🔁 重试) carries that a real message would not. */
@@ -783,6 +796,8 @@ interface TurnExtra {
   /** The smart mode joined in on its own (s25): the agent gets {@link INITIATIVE_NOTE} before the message. */
   initiative?: true;
   wake?: { name: string };
+  /** A scheduled task's run (T2): never steers, nothing is ingested, every drop settles it. */
+  scheduled?: ScheduledHook;
 }
 
 /** A smart group's message on its lane (s25). */
@@ -894,7 +909,7 @@ export interface Orchestrator {
   settings: HostSettings;
   /** Scheduled tasks from the desktop and the terminal, run as the local owner (admin/schedule-commands.ts). */
   schedule: (via: 'desktop' | 'cli', request: ScheduleRequest) => Promise<ScheduleReply>;
-  /** The scheduled-task tick (bot/schedule/scheduler.ts), outside admit. Nothing starts it yet: there is no runner. */
+  /** The scheduled-task tick (bot/schedule/scheduler.ts), outside admit; bridge.ts starts it once Feishu is connected. */
   scheduler: { start(): Promise<void>; stop(): void; drain(ms: number): Promise<void> };
   /** Close every live codex session (SIGKILLs the app-server children) so a
    *  graceful exit leaves no orphan processes. */
@@ -1445,9 +1460,10 @@ export function createOrchestrator(
    * the app-server lets go of the thread, so a terminal or the Codex app can open it between
    * turns. The next turn resumes it from disk, which costs 0.24 to 0.37 s on JP-VPS with a
    * warm process (measured 2026-10-16). A run, a /compact or a /new holding the key keeps it.
+   * `always`: any backend's, for a scheduled run's hidden topic nobody joined (T2 4.1 第 6 条).
    */
-  function releaseIdle(key: string | undefined, thread: AgentThread | undefined): void {
-    if (!key || !thread?.releaseAfterRun || active.has(key) || sessions.get(key) !== thread) return;
+  function releaseIdle(key: string | undefined, thread: AgentThread | undefined, always = false): void {
+    if (!key || !thread || !(always || thread.releaseAfterRun) || active.has(key) || sessions.get(key) !== thread) return;
     sessions.delete(key);
     sessionTouchedAt.delete(key);
     const closed = thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' }));
@@ -1661,8 +1677,8 @@ export function createOrchestrator(
       && !msg.mentionAll && !msg.mentions.some((m) => !m.isBot);
   }
   /** A turn's trigger for the memory write rules; none for a bot's message or a retry (neither is a person typing). */
-  function memoryTriggerOf(msg: NormalizedMessage, extra: Partial<Pick<TurnExtra, 'replayText' | 'wake' | 'initiative'>> | undefined): { memoryTrigger?: MemoryTrigger } {
-    if (fromBot(msg) || extra?.replayText !== undefined) return {};
+  function memoryTriggerOf(msg: NormalizedMessage, extra: Partial<Pick<TurnExtra, 'replayText' | 'wake' | 'initiative' | 'scheduled'>> | undefined): { memoryTrigger?: MemoryTrigger } {
+    if (fromBot(msg) || extra?.replayText !== undefined || extra?.scheduled) return {};
     return { memoryTrigger: { typed: typedCandidate(msg), text: msg.content.trim() } };
   }
   /** Who sent a message, as the topic registry records it. */
@@ -1797,9 +1813,10 @@ export function createOrchestrator(
   }
 
   /** Render the one-shot affordance only while the current global mode is
-   * manual. Non-manual modes return undefined, so their cards have no button. */
+   * manual. Non-manual modes return undefined, so their cards have no button;
+   * neither has a scheduled turn's, which has nobody to remind. */
   const completionReminderView = (state: ActiveState): 'available' | 'requested' | undefined =>
-    reminderButtonOffered(state.presentation ?? cfg, state)
+    reminderButtonOffered(state.presentation ?? cfg, state) && !state.scheduled
       ? state.completionReminderRequested
         ? 'requested'
         : 'available'
@@ -1909,10 +1926,13 @@ export function createOrchestrator(
     return true;
   }
 
-  /** Only people are asked to resend; bot messages leave diagnostics instead. */
-  function askAgain(queue: readonly QueuedTurn[], chatId: string, place: NotReplied['place'], why: string, detail: string): number {
+  /** Only people are asked to resend; bot messages leave diagnostics instead, and a scheduled turn is settled by
+   * `scheduledWhy` (droppedScheduled). */
+  function askAgain(queue: readonly QueuedTurn[], chatId: string, place: NotReplied['place'], why: string, detail: string,
+    scheduledWhy = why): number {
     let people = 0;
     for (const turn of queue) {
+      if (turn.scheduled) { turn.scheduled.settle(droppedScheduled(scheduledWhy)); continue; }
       if (turn.requesterKind !== 'bot') { people++; continue; }
       const id = turn.seen?.id ?? '';
       log.info('intake', 'bot-wake-dropped', { ref: id.slice(-6), why });
@@ -2486,13 +2506,15 @@ export function createOrchestrator(
   const intakeChats = new Map<string, number>();
   const pendingTopics = new Map<string, number>();
   const resumePublications = new Set<string>();
-  const onMessage = async (msg: NormalizedMessage): Promise<void> => {
-    intakeChats.set(msg.chatId, (intakeChats.get(msg.chatId) ?? 0) + 1);
-    try { await handleMessage(msg); } finally {
-      const remaining = (intakeChats.get(msg.chatId) ?? 1) - 1;
-      if (remaining) intakeChats.set(msg.chatId, remaining); else intakeChats.delete(msg.chatId);
+  /** `chatId` is taking a message in while `work` runs: the group's settings are not edited meanwhile. */
+  async function duringIntake<T>(chatId: string, work: () => Promise<T>): Promise<T> {
+    intakeChats.set(chatId, (intakeChats.get(chatId) ?? 0) + 1);
+    try { return await work(); } finally {
+      const remaining = (intakeChats.get(chatId) ?? 1) - 1;
+      if (remaining) intakeChats.set(chatId, remaining); else intakeChats.delete(chatId);
     }
-  };
+  }
+  const onMessage = (msg: NormalizedMessage): Promise<void> => duringIntake(msg.chatId, () => handleMessage(msg));
   const handleMessage = async (msg: NormalizedMessage): Promise<void> => {
     if (seenInbound.seen(msg.messageId)) {
       log.info('intake', 'reject', { reason: 'duplicate', msgId: msg.messageId });
@@ -3057,7 +3079,9 @@ export function createOrchestrator(
    * session-scoped, not per-message). Voice display metadata stays separate
    * from the woven agent input.
    */
-  function ingestContext(msg: NormalizedMessage, text: string, extra?: Pick<TurnExtra, 'initiative' | 'wake'>, project?: Project): Promise<IngestedContext> {
+  function ingestContext(msg: NormalizedMessage, text: string, extra?: Pick<TurnExtra, 'initiative' | 'wake' | 'scheduled'>, project?: Project): Promise<IngestedContext> {
+    // A scheduled turn has no sender, attachment or quote: its text is the daemon's own (总设计 7.2).
+    if (extra?.scheduled) return Promise.resolve({ text });
     return orderContext(msg.threadId ?? msg.chatId, () => ingestContextImpl(msg, text, extra, project));
   }
   async function ingestContextImpl(msg: NormalizedMessage, text: string, extra?: Pick<TurnExtra, 'initiative' | 'wake'>, project?: Project): Promise<IngestedContext> {
@@ -3123,7 +3147,7 @@ export function createOrchestrator(
     return orderTurns(sessionKey, async () => {
       if (staleRetry(extra)) return;
       if (owner?.intakeCancelled) {
-        if (dropBotMessage(msg, 'intake-cancelled', '会话被停下了')) return;
+        if (dropScheduled(extra, scheduleStopped()) || dropBotMessage(msg, 'intake-cancelled', '会话被停下了')) return;
         await channel.send(msg.chatId, { markdown: '排队期间会话已停止，请重发本条消息。' }, { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined);
         return;
       }
@@ -3146,7 +3170,7 @@ export function createOrchestrator(
       // 🎯 goal 会话不接外部输入（turns 由 codex 自续，queue 永远不被消费），
       // 入队只会在收尾被静默丢弃 —— 直接告知而不是黑洞。
       if (existing.isGoal) {
-        await replyGoalBusy(msg, flat);
+        await replyGoalBusy(msg, flat, extra);
         return;
       }
       // Download any images first (best-effort) so the steered/queued turn can
@@ -3158,7 +3182,7 @@ export function createOrchestrator(
       if (!extra?.images && messageHasImages(msg)) pendingImages = collectInboundImages(channel, msg);
       const [images, woven] = await Promise.all([pendingImages, ingestContext(msg, text, extra, project)]);
       if (existing.intakeCancelled) {
-        if (dropBotMessage(msg, 'intake-cancelled', '会话被停下了')) return;
+        if (dropScheduled(extra, scheduleStopped()) || dropBotMessage(msg, 'intake-cancelled', '会话被停下了')) return;
         await channel.send(msg.chatId, { markdown: '本条消息处理期间会话已停止，请重发。' }, { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined);
         return;
       }
@@ -3171,11 +3195,11 @@ export function createOrchestrator(
       }
       // A goal may have started while media downloaded — same prompt as above.
       if (cur.isGoal) {
-        await replyGoalBusy(msg, flat);
+        await replyGoalBusy(msg, flat, extra);
         return;
       }
       void trackTask(deliverPreparedTurn(msg, woven, images, extra?.summary ?? text, sessionKey, flat, project, perm, cur, extra)
-        .catch((err) => log.fail('intake', err)));
+        .catch((err) => { log.fail('intake', err); extra?.scheduled?.settle(scheduleFailed(extra.scheduled, err)); }));
       return;
     }
 
@@ -3193,6 +3217,8 @@ export function createOrchestrator(
   function refusedTurn(project: Project | undefined, chatId: string, extra?: TurnExtra): boolean {
     const refused = turnRefusal(project, chatId);
     if (refused) extra?.retry?.refused(refused);
+    // The gate let a scheduled run through, so the group changed since: a race (T2 4.2).
+    if (refused) dropScheduled(extra, SCHEDULE_UPDATING);
     return refused !== undefined;
   }
 
@@ -3205,7 +3231,7 @@ export function createOrchestrator(
   ): Promise<void> {
     // Already a line of the running turn's record block (see ActiveState.woven): not steered in again.
     if (wovenSkip(cur, msg) || recalledSkip(msg)) return;
-    if (!extra?.queueOnly && execOf(project).pendingPolicy === 'steer' && cur.run && cur.thread && cur.thread.supportsSteer !== false) {
+    if (!extra?.queueOnly && !cur.scheduled && execOf(project).pendingPolicy === 'steer' && cur.run && cur.thread && cur.thread.supportsSteer !== false) {
       const tid = cur.run.turnId();
       if (tid) {
         const voiceReply = cur.voiceReply?.run === cur.run ? cur.voiceReply : undefined;
@@ -3236,7 +3262,10 @@ export function createOrchestrator(
         }
       }
     }
-    if (cur.intakeCancelled) return;
+    if (cur.intakeCancelled) {
+      dropScheduled(extra, scheduleStopped());
+      return;
+    }
     // steer() awaited an RPC: the previous run may have ended, or a new
     // run/goal may now own this key. Re-enter the synchronous reservation
     // path so the input is queued on the current owner or starts a new run.
@@ -3263,8 +3292,8 @@ export function createOrchestrator(
   }
 
   /** 🎯 goal 运行中收到消息的统一提示（goal 会话不入队，见 ActiveState.isGoal）。 */
-  async function replyGoalBusy(msg: NormalizedMessage, flat: boolean): Promise<void> {
-    if (dropBotMessage(msg, 'goal-busy', '会话在跑 /goal')) return;
+  async function replyGoalBusy(msg: NormalizedMessage, flat: boolean, extra?: TurnExtra): Promise<void> {
+    if (dropScheduled(extra, SCHEDULE_UPDATING) || dropBotMessage(msg, 'goal-busy', '会话在跑 /goal')) return;
     await channel
       .send(
         msg.chatId,
@@ -3309,13 +3338,15 @@ export function createOrchestrator(
     // message may have reserved the session while it waited.
     if (staleRetry(extra)) return;
     if (recalledSkip(msg)) return;
+    // A scheduled turn's synthetic message is nobody's to answer after a restart (T2 4.2).
+    const origin = extra?.scheduled ? undefined : originFor(msg, flat);
     const existing = active.get(sessionKey);
     if (existing) {
       // A /compact or /new holds the session: wait, then go through here again (s15).
       if (existing.deferred && !extra?.retry) {
-        existing.deferred.push({ id: msg.messageId, at: msg.createTime, origin: originFor(msg, flat), go: () =>
+        existing.deferred.push({ id: msg.messageId, at: msg.createTime, origin, go: () =>
           startReservedRun(msg, text, sessionKey, flat, project, perm, preloadedImages, preIngested, summaryText, goal, extra), early: () => {
-          if (dropBotMessage(msg, 'before-new', '会话换成了新的（/new）')) return;
+          if (dropScheduled(extra, SCHEDULE_UPDATING) || dropBotMessage(msg, 'before-new', '会话换成了新的（/new）')) return;
           log.info('intake', 'reject', { reason: 'before-new', msgId: msg.messageId });
           void trackTask(channel.send(msg.chatId, { markdown: '⚠️ 这条在 `/new` 之前发的，新会话不带它，要问就再发一次。' },
             { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined));
@@ -3334,7 +3365,7 @@ export function createOrchestrator(
       // A goal appeared in that window — its queue is never consumed, so prompt
       // instead of queueing (same as handleTurn's isGoal gate).
       if (existing.isGoal) {
-        void trackTask(replyGoalBusy(msg, flat));
+        void trackTask(replyGoalBusy(msg, flat, extra));
         return;
       }
       // A current retry only starts as a fresh run: whatever holds the session
@@ -3355,10 +3386,11 @@ export function createOrchestrator(
         requestedAt: msg.createTime || Date.now(),
         summary: stripFileTokens(summaryText ?? text).slice(0, 80) || undefined,
         seen: { id: msg.messageId, at: msg.createTime },
-        origin: originFor(msg, flat),
+        origin,
         ...(extra?.initiative ? { initiative: true as const } : {}),
         wake: extra?.wake,
         ...memoryTriggerOf(msg, extra),
+        ...(extra?.scheduled ? { scheduled: extra.scheduled } : {}),
       });
       dropRetries(sessionKey);
       log.info('intake', 'queued', { depth: existing.queue.length });
@@ -3372,7 +3404,9 @@ export function createOrchestrator(
     void trackTask(withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
       // Goal runs use the OKR reaction (added at dispatch) as their only receipt,
       // not the ⏳/🫳 run-reaction lifecycle.
-      const reaction = goal ? undefined : runReaction(msg.messageId, !sema.hasFree());
+      const reaction = goal || extra?.scheduled ? undefined : runReaction(msg.messageId, !sema.hasFree());
+      // Where a scheduled turn's card goes instead of its synthetic message (T2 4.2).
+      const replyTo = extra?.scheduled ? landingOf(extra.scheduled) : msg.messageId;
       let launchOpts: LaunchOpts | undefined;
       try {
         const tIntake = Date.now();
@@ -3656,8 +3690,8 @@ export function createOrchestrator(
         launchOpts = {
           smart: project && sessionModeOf(project) === 'smart' ? true : undefined,
           chatId: msg.chatId,
-          replyTo: msg.messageId,
-          origin: originFor(msg, flat),
+          replyTo,
+          origin,
           replyInThread: !flat,
           flat,
           thread,
@@ -3701,6 +3735,7 @@ export function createOrchestrator(
           ...(extra?.initiative ? { initiative: true as const } : {}),
           wake: extra?.wake,
           ...memoryTriggerOf(msg, extra),
+          ...(extra?.scheduled ? { scheduled: extra.scheduled } : {}),
         };
         if (recreateReason) log.info('agent', 'session-changed', { sessionKey, reason: recreateReason, ...(unused ? { unused } : {}) });
         if (goal) await trackRun(launchGoalRun(launchOpts));
@@ -3713,8 +3748,9 @@ export function createOrchestrator(
         reaction?.done();
         log.fail('intake', err);
         if (!goal) noteFailure(msg, flat ? 'main' : 'topic', launchOpts?.backendId ?? groupBackend(project).id, { error: err });
+        if (extra?.scheduled) extra.scheduled.settle(scheduleFailed(extra.scheduled, err));
         await channel
-          .send(msg.chatId, { markdown: runFailureMessage(err, dropped, launchOpts?.sessionNotice) }, { replyTo: msg.messageId, replyInThread: !flat })
+          .send(msg.chatId, { markdown: runFailureMessage(err, dropped, launchOpts?.sessionNotice) }, { replyTo, replyInThread: !flat })
           .catch(() => undefined);
       }
     }));
@@ -3912,6 +3948,8 @@ export function createOrchestrator(
       if (rec.chatId !== chatId) continue;
       const live = sessions.get(rec.threadId);
       if (!live) continue;
+      const running = active.get(rec.threadId);
+      if (running?.thread === live) running.evicted = true;
       sessions.delete(rec.threadId); // synchronous: next turn can't reuse it
       void trackTask(live.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
       closed++;
@@ -7026,6 +7064,8 @@ export function createOrchestrator(
      * run clears it once a card carrying it exists; if none ever does, the
      * intake's failure reply carries it instead. */
     sessionNotice?: string;
+    /** The first turn is a scheduled task's run (QueuedTurn.scheduled). */
+    scheduled?: ScheduledHook;
   }
 
   /** The queue placeholder card's CardKit entity, handed to the run for in-place
@@ -7059,14 +7099,15 @@ export function createOrchestrator(
       buildQueuedCard({
         ...input,
         voiceMessages: opts.voice ? [opts.voice] : undefined,
-        ...(!state.isGoal ? { completionReminder: completionReminderView(state) } : {}),
+        // state.scheduled is set once the turn starts; a scheduled run waiting here has no 🔔 either.
+        ...(!state.isGoal && !opts.scheduled ? { completionReminder: completionReminderView(state) } : {}),
       });
     const q = sema.enqueue((pos) => {
       // 前面有人拿到槽/取消 → 原地刷新位置。走合并泵（非阻塞、合并、限频）。
       if (msgId) stream.streamCoalesced(channel, queueCard({ position: pos, cardKey: msgId }), null);
     });
     // Replied to where the queue card is (s18c), until a slot or a cancel ends the wait.
-    if (opts.requesterKind !== 'bot') state.waiting = {
+    if (opts.requesterKind !== 'bot' && !opts.scheduled) state.waiting = {
       chatId: opts.chatId, messageId: opts.replyTo, at: opts.requestedAt ?? Date.now(),
       replyInThread: opts.flat ? false : (opts.replyInThread ?? Boolean(opts.knownThreadId)), place: opts.flat ? 'main' : 'topic',
     };
@@ -7202,6 +7243,7 @@ export function createOrchestrator(
     const slot = await acquireRunSlot(opts, state, activeKey, reaction);
     if (!slot) {
       dropCompact(state);
+      opts.scheduled?.settle(scheduleStopped());
       return;
     }
     if (shuttingDown) {
@@ -7350,6 +7392,7 @@ export function createOrchestrator(
         ...(opts.initiative ? { initiative: opts.initiative } : {}),
         wake: opts.wake,
         ...(opts.memoryTrigger ? { memoryTrigger: opts.memoryTrigger } : {}),
+        ...(opts.scheduled ? { scheduled: opts.scheduled } : {}),
       };
       noted = currentTurn;
       // Recall notes a turn of this run said; only a queued turn says the newer ones (s15).
@@ -7361,11 +7404,14 @@ export function createOrchestrator(
         let turnInput = currentTurn.input;
         state.requesterOpenId = currentTurn.requesterOpenId;
         state.requesterKind = currentTurn.requesterKind;
+        const scheduled = currentTurn.scheduled;
+        state.scheduled = scheduled ? true : undefined;
         turnScope = entries?.openTurn(opts.thread, {
           requesterOpenId: currentTurn.requesterOpenId, requesterKind: currentTurn.requesterKind,
           triggerMessageId: currentTurn.seen?.id ?? currentTurn.triggerMessageId, retry: currentTurn.replayText !== undefined,
           initiative: Boolean(currentTurn.initiative), wake: Boolean(currentTurn.wake),
           ...(currentTurn.memoryTrigger ? { typed: currentTurn.memoryTrigger.typed, triggerText: currentTurn.memoryTrigger.text } : {}),
+          ...(scheduled ? { scheduled: { taskId: scheduled.job.task.id, runId: scheduled.job.runId } } : {}),
         });
         turnMemory = turnScope ? entries?.memoryTurn(opts.thread) : undefined;
         dropRetries(topicThreadId); // an older card's [重试] would replay out of order
@@ -7440,6 +7486,7 @@ export function createOrchestrator(
             : {}),
           ...(opts.sessionNotice ? { sessionNotice: opts.sessionNotice } : {}),
           ...(currentTurn.initiative ? { initiativeCard: currentTurn.initiative } : {}),
+          ...(scheduled ? { label: scheduledLabel(scheduled.job) } : {}),
         };
 
         const adoptThreadId = async (messageId: string): Promise<void> => {
@@ -7494,7 +7541,8 @@ export function createOrchestrator(
             queuedCard = undefined; // 只复用一次；排队续轮照常新建卡
             await stream.updateCard(channel, buildRunCard(rc));
           } else {
-            cardMsgId = await stream.create(channel, opts.chatId, buildRunCard(rc), { replyTo, replyInThread });
+            // A scheduled turn quotes no earlier card: it goes where its hook says (T2 4.2).
+            cardMsgId = await stream.create(channel, opts.chatId, buildRunCard(rc), { replyTo: scheduled ? landingOf(scheduled) : replyTo, replyInThread });
           }
         } catch (err) {
           // turn/start 已提前发出：建卡失败时模型已在跑，必须中断并回收进程——
@@ -7527,6 +7575,7 @@ export function createOrchestrator(
         // event (a long silent tool startup still needs both controls).
         stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID);
         await adoptThreadId(cardMsgId);
+        scheduled?.started({ messageId: cardMsgId, ...(topicThreadId && !isMainKey(topicThreadId, opts.chatId) ? { topicId: topicThreadId } : {}) });
         // first card is live = topic created. The 群@bot 建话题 path flips its
         // reaction to DONE here (creating the topic is the acked action), unlike
         // an in-topic turn which holds Typing until the reply itself ends.
@@ -7617,6 +7666,7 @@ export function createOrchestrator(
         // （版本旧 / 挂死）才经 stopSignal 强停本地循环，按原样走杀进程恢复锤。
         // watchdog 超时（timedOut）不变，恒走杀进程。
         let timedOut = false;
+        let askFaulted = false; // the ask coordinator stopped the turn, not a ⏹
         let resolveStop!: () => void;
         const stopSignal = new Promise<void>((res) => {
           resolveStop = res;
@@ -7635,10 +7685,10 @@ export function createOrchestrator(
         state.idlePause = idlePause;
         const originalInterrupt = state.interrupt;
         askTurn = asks.openTurn({ run, sessionKey: activeKey,
-          placement: { chatId: opts.chatId, replyTo: currentTurn.seen?.id ?? opts.replyTo, replyInThread: !opts.flat },
+          placement: { chatId: opts.chatId, replyTo: scheduled ? landingOf(scheduled) : currentTurn.seen?.id ?? opts.replyTo, replyInThread: !opts.flat },
           initiator: { kind: currentTurn.requesterKind ?? 'unknown', openId: currentTurn.requesterOpenId }, idlePause,
           waiting: (label, subagentId) => { activity?.waiting(Boolean(label)); rc.askWaiting = label; rc.askWaitingSubagentId = subagentId; stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID); },
-          fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) originalInterrupt(); },
+          fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) { askFaulted = true; originalInterrupt(); } },
         });
         const guarded = withIdleTimeout(
           redactAgentEvents(run.events, hiddenBlockFilter(opts.thread, opts.backendId, turnMemory, () => topicThreadId)),
@@ -7732,6 +7782,7 @@ export function createOrchestrator(
         state.subagents = undefined;
         state.runCard = undefined;
         state.run = undefined; // completion-card I/O must queue, never steer into a finished turn
+        state.scheduled = undefined;
         const doneAt = Date.now(); // codex stopped emitting / loop ended
         stopper.dispose(); // 事件流已收尾：撤掉 ⏹ 的 5s 强停兜底定时器
         disposeInterrupt = undefined;
@@ -7785,6 +7836,7 @@ export function createOrchestrator(
         const finalMsgId = cardMsgId;
         // Joined in on its own with nothing to say: the card goes, and nothing below is sent (s25b).
         const gone = await dropSilentCard(rc, finalMsgId, notedOf(currentTurn), opts, Boolean(state.completionReminderRequested));
+        let delivered = false;
         if (!gone) try {
           await adoptThreadId(finalMsgId);
           rc.cardKey = finalMsgId;
@@ -7792,11 +7844,12 @@ export function createOrchestrator(
           // [重试] for a turn that went quiet or lost the model (product.md 3.12),
           // read from the settled render: a ⏹ wins over a timer that fired
           // while it waited. Not when follow-ups are queued: they run next and
-          // would make a replay land out of order.
+          // would make a replay land out of order. Nor for a scheduled turn:
+          // its next run is the retry (T2 4.1 第 7 条).
           let retryReason: RetryTurn['reason'] | undefined;
           if (rc.rs.terminal === 'idle_timeout') retryReason = 'idle';
           else if (rc.rs.terminal === 'error' && rc.rs.errorKind === 'network') retryReason = 'network';
-          if (retryReason && topicThreadId && state.queue.length === 0) {
+          if (retryReason && topicThreadId && state.queue.length === 0 && !scheduled) {
             retryTurns.set(finalMsgId, {
               sessionKey: topicThreadId, chatId: opts.chatId, flat: Boolean(opts.flat), turn: currentTurn,
               replayText: currentTurn.replayText ?? currentTurn.input.text ?? '',
@@ -7835,6 +7888,7 @@ export function createOrchestrator(
           const manuallyRequested = Boolean(state.completionReminderRequested);
           completionReminderRefreshers.delete(cardMsgId);
           const terminalCardUpdated = await stream.finalizeCard(channel, buildRunCard(rc));
+          delivered = terminalCardUpdated;
           if (confirmedDone && rc.rs.terminal === 'done' && answerText.trim() && terminalCardUpdated) reportLatestAction(opts.chatId, 'replied');
           // One-line per-turn timeline; all ms are relative to the turn's stream start.
           {
@@ -7897,6 +7951,8 @@ export function createOrchestrator(
           await patchSession(topicThreadId, { updatedAt: Date.now(), ...savedMeter(topicThreadId, opts.thread) })
             .catch((err) => log.fail('card', err, { phase: 'empty-card-session' }));
         }
+        // Settled as it ends, before any turn queued behind it runs (T2 4.1 第 5 条).
+        scheduled?.settle(ranScheduled(scheduled, rc.rs, delivered));
         retrySessionTitleAfterTurn();
         // Queued turns reply to the last card still there; a deleted one keeps the previous target.
         if (!gone) replyTo = finalMsgId;
@@ -7929,7 +7985,10 @@ export function createOrchestrator(
         if (killed || procDead || interrupted || compactDied) {
           state.intakeCancelled = true;
           dropCompact(state);
-          const dropped = askAgain(state.queue, opts.chatId, opts.flat ? 'main' : 'topic', 'queue-dropped', '会话被停下了');
+          // Only a ⏹ is the user's, and a settings change's eviction the group's: a scheduled turn queued behind a watchdog
+          // kill, a dead process or an ask fault failed (T2 4.2).
+          const dropped = askAgain(state.queue, opts.chatId, opts.flat ? 'main' : 'topic', 'queue-dropped', '会话被停下了',
+            interrupted && !askFaulted ? 'queue-dropped' : state.evicted ? 'occupied' : 'run-failed');
           if (dropped > 0) {
             void trackTask(channel
               .send(
@@ -7977,6 +8036,7 @@ export function createOrchestrator(
       await opts.thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' }));
       log.fail('intake', err);
       noteTurnFailure(noted, { error: err });
+      if (noted?.scheduled) noted.scheduled.settle(scheduleFailed(noted.scheduled, err));
       await channel
         .send(opts.chatId, { markdown: runFailureMessage(err, dropped, opts.sessionNotice) }, { replyTo: opts.replyTo, replyInThread: !opts.flat })
         .catch((sendError) => log.fail('intake', sendError, { phase: 'run-failure-feedback', dropped }));
@@ -7987,7 +8047,8 @@ export function createOrchestrator(
       // A replacement run may have reserved the key while failure feedback
       // was in flight. Never delete another run's reservation.
       if (active.get(activeKey) === state) active.delete(activeKey);
-      releaseIdle(topicThreadId, opts.thread);
+      // A scheduled run's hidden topic that nobody joined lets its process go now, not after the reaper's 45 minutes.
+      releaseIdle(topicThreadId, opts.thread, Boolean(opts.openTopic && opts.scheduled && noted?.scheduled === opts.scheduled));
       settleTurn?.();
       clearInterval(cardClock);
       state.steerReply = undefined;
@@ -9172,6 +9233,7 @@ export function createOrchestrator(
       dropped.queued += state.queue.length;
       dropped.held += state.deferred?.length ?? 0;
       if (state.compactAfter) dropped.compacts++;
+      for (const turn of state.queue) turn.scheduled?.settle({ status: 'interrupted', by: 'shutdown' });
       state.queue.length = 0;
       // A waiting /compact and input held by /compact or /new go without a word now; collectLost kept them, and their
       // senders hear once the bot is back (s18c). The input also comes back in the next back-fill as context only.
@@ -9198,6 +9260,8 @@ export function createOrchestrator(
         for (const result of results) if (result.status === 'rejected') shutdownErrors.add(result.reason);
       }
       for (const result of await cleanupResults) if (result.status === 'rejected') shutdownErrors.add(result.reason);
+      // Whatever the drain left unsettled (a run never launched, input /new held): the scheduler waits on none of it.
+      for (const hook of scheduledHooks) hook.settle({ status: 'interrupted', by: 'shutdown' });
       log.info('bridge', 'shutdown', { closed: live.length });
       if (shutdownErrors.size) throw new AggregateError(shutdownErrors, 'Bridge orchestrator cleanup failed');
     })();
@@ -9244,17 +9308,195 @@ export function createOrchestrator(
     } finally { for (const chatId of held) projectMutations.delete(chatId); }
   };
 
+  // ── scheduled runs (T2, 总设计第 7 节) ─────────────────────────────
+  /** Runs not settled yet. A shutdown settles what its drain left; nothing in the drain waits on their promises. */
+  const scheduledHooks = new Set<ScheduledHook>();
+  const SCHEDULE_UPDATING: ScheduledOutcome = { status: 'skipped', reason: 'updating' };
+  const scheduleStopped = (): ScheduledOutcome => ({ status: 'interrupted', by: shuttingDown ? 'shutdown' : 'user' });
+  /** Where a scheduled turn's cards and messages go instead of its synthetic message; '' is a new main-area message. */
+  const landingOf = (hook: ScheduledHook): string => (hook.target.kind === 'topic' ? hook.target.anchor : '');
+  const ranFor = (hook: ScheduledHook): number => Math.max(0, Date.now() - (hook.job.task.inflight?.startedAt ?? Date.now()));
+  /** The run card's Feishu link, made as outbound-files makes one; 3 seconds at most, and none when that fails or a
+   * shutdown starts meanwhile (the scheduler's drain is 5 seconds). */
+  async function scheduledLink(chatId: string, messageId: string): Promise<string | undefined> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await orStop(Promise.race([
+        channel.rawClient.im.v1.message.get({ path: { message_id: messageId } }),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('message.get timed out')), 3_000); }),
+      ]).then(result => {
+        const item = result.data?.items?.find(m => m.message_id === messageId);
+        return item && !item.deleted ? messageLink(item, chatId) : undefined;
+      }), undefined);
+    } catch (err) {
+      log.fail('schedule', err, { phase: 'result-link' });
+      return undefined;
+    } finally { clearTimeout(timer); }
+  }
+  /** A request that never got through: failing so before any card is sent does not count toward auto-pause (总设计第 8 节). */
+  const UNREACHABLE = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'ECONNRESET', 'ECONNABORTED']);
+  function scheduleFailed(hook: ScheduledHook, err: unknown): ScheduledOutcome {
+    const e = err as { code?: unknown; cause?: { code?: unknown } } | null;
+    const error = err instanceof Error ? err.message : String(err);
+    return { status: 'failed', error, durationMs: ranFor(hook), counts: !UNREACHABLE.has(String(e?.code ?? e?.cause?.code)) };
+  }
+  /** A queued scheduled turn dropped with its queue, by askAgain's `why`: a turn ahead that failed or died is a failure,
+   * a stop the user's or the shutdown's. */
+  function droppedScheduled(why: string): ScheduledOutcome {
+    if (why === 'run-failed') return { status: 'failed', error: '前一轮出错', durationMs: 0, counts: true };
+    return why === 'occupied' ? SCHEDULE_UPDATING : scheduleStopped();
+  }
+  /** Settles the scheduled run `extra` carries: true when there is one, and then the caller says nothing in the group. */
+  function dropScheduled(extra: Pick<TurnExtra, 'scheduled'> | undefined, outcome: ScheduledOutcome): boolean {
+    extra?.scheduled?.settle(outcome);
+    return Boolean(extra?.scheduled);
+  }
+  /** How a scheduled turn that ran ended: its card's terminal, and whether the final card update landed. */
+  function ranScheduled(hook: ScheduledHook, rs: RunState, delivered: boolean): ScheduledOutcome {
+    if (rs.terminal === 'interrupted') return scheduleStopped();
+    const error = failureText(rs) ?? (delivered ? undefined : '结果卡片没有更新成功');
+    if (error) return { status: 'failed', error, durationMs: ranFor(hook), counts: true };
+    return { status: 'done', excerpt: clampUnits(finalMessageText(rs), 500), durationMs: ranFor(hook) };
+  }
+
+  /**
+   * The scheduler's runner: places one run as the group's session mode says (总设计 7.1), starts it, and resolves once
+   * it is settled. The placement work is tracked, so a shutdown's drain sees the run it starts; the result is not.
+   */
+  async function runScheduled(job: ScheduledJob): Promise<ScheduledOutcome> {
+    if (shuttingDown) return { status: 'interrupted', by: 'shutdown' };
+    let resolve!: (outcome: ScheduledOutcome) => void;
+    const result = new Promise<ScheduledOutcome>(r => { resolve = r; });
+    let card: { messageId?: string; topicId?: string } = {};
+    const hook: ScheduledHook = {
+      job, target: { kind: 'main' },
+      started: (info) => { card = { ...card, ...info }; },
+      // Every drop path settles, a few of them after another already did: the first call counts.
+      settle: (outcome) => {
+        if (!scheduledHooks.delete(hook)) return;
+        if (outcome.status === 'skipped') return resolve(outcome);
+        // Once a card is out, Feishu was there: a failure counts.
+        const settled: ScheduledOutcome = { ...card, ...outcome, ...(outcome.status === 'failed' && card.messageId ? { counts: true } : {}) };
+        // The record links the card (T2 4.1 第 5 条); a stopping bot does not wait on Feishu for it.
+        if (!card.messageId || shuttingDown) return resolve(settled);
+        void scheduledLink(job.task.chatId, card.messageId).then(link => resolve(link ? { ...settled, link } : settled));
+      },
+    };
+    scheduledHooks.add(hook);
+    // Counted as a message's intake until the run holds its session (handleTurn) or topic (pendingTopics).
+    await trackTask(duringIntake(job.task.chatId, () => placeScheduled(hook))).catch((err) => {
+      log.fail('schedule', err, { phase: 'run', taskId: job.task.id });
+      hook.settle(scheduleFailed(hook, err));
+    });
+    return result;
+  }
+
+  async function placeScheduled(hook: ScheduledHook): Promise<void> {
+    const { task } = hook.job;
+    const chatId = task.chatId;
+    const placed = await getProjectByChatId(chatId);
+    if (refusedTurn(placed, chatId, { scheduled: hook }) || !placed) return;
+    let topicId: string | undefined;
+    let fallback = false;
+    if (task.placement.kind === 'topic') {
+      const key = task.placement.topicId;
+      // The topic's latest message is the anchor; a topic or session gone sends this run where the group would.
+      const anchor = await getSession(key).then(rec => (rec && !rec.detached ? desktopTopicReply(chatId, key) : undefined))
+        .catch((err) => { log.warn('schedule', 'topic-gone', { taskId: task.id, err: String(err) }); return undefined; });
+      if (anchor) {
+        hook.target = { kind: 'topic', anchor };
+        topicId = key;
+      } else fallback = true;
+    }
+    const newTopic = !topicId && (task.placement.kind === 'newTopic' || ruleKind(placed) === 'multi' || await orStop(topicCtx.noMainArea(chatId), false));
+    // Unbound, disabled or edited while Feishu and the disk answered: the run uses none of what it read (T2 4.2).
+    const project = await getProjectByChatId(chatId);
+    if (refusedTurn(project, chatId, { scheduled: hook }) || !project || settingsRevision(project) !== settingsRevision(placed)) return void hook.settle(SCHEDULE_UPDATING);
+    if (shuttingDown) return void hook.settle({ status: 'interrupted', by: 'shutdown' });
+    if (newTopic) return startScheduledTopic(hook, project, fallback);
+    const text = scheduledHeader(hook.job, hostTimeZone(), fallback);
+    const msg: NormalizedMessage = {
+      messageId: `vsched_${task.id}_${hook.job.slot}`, chatId, chatType: 'group', senderId: '', content: text, rawContentType: 'text',
+      resources: [], mentions: [], mentionAll: false, mentionedBot: false, createTime: Date.now(), ...(topicId ? { threadId: topicId } : {}),
+    };
+    await handleTurn(msg, text, topicId ?? chatId, !topicId, project, turnPerm(project), { scheduled: hook, queueOnly: true, summary: `定时任务「${task.name}」` });
+  }
+
+  /**
+   * A scheduled run in a new hidden session (总设计 7.1"开新话题"): a topic opens only on a real message, so a text root
+   * goes to the main area first and the card replies in thread under it. Not startTopicDirectly: that one reacts to,
+   * ingests and pulls before a message a person sent.
+   */
+  function startScheduledTopic(hook: ScheduledHook, project: Project, fallback: boolean): void {
+    const { job } = hook;
+    const chatId = project.chatId;
+    pendingTopics.set(chatId, (pendingTopics.get(chatId) ?? 0) + 1);
+    void trackTask((async () => {
+      let starting: Promise<AgentThread> | undefined;
+      let launched = false;
+      try {
+        const be = groupBackend(project);
+        const prefer = modelPrefOf(project, be.id);
+        const cwd = workCwd(project);
+        const perm = turnPerm(project);
+        // A text message's `<at>` is a real mention, and the task's name is anybody's words: no tag in it stays one.
+        const rootText = neutraliseAts(scheduledRootText(job), undefined);
+        const root = await channel.send(chatId, { text: rootText });
+        const rootAt = Date.now();
+        recent.addOwn(chatId, chatId, { id: root.messageId, at: rootAt, text: rootText });
+        hook.target = { kind: 'topic', anchor: root.messageId };
+        const { model, effort } = await pickGroupDefault(project, be, prefer);
+        starting = profileOf(project, cwd, be, perm.mode).then(profile => startWith(be, { cwd, model, effort, serviceTier: 'standard', ...perm, profile }, { kind: 'group', chatId }));
+        const listP = topics ? topics.list(chatId) : Promise.resolve([]);
+        const [thread, section] = await Promise.all([starting,
+          Promise.all([pullMainBefore(chatId, rootAt, root.messageId), listP]).then(([pull, list]) => mainSection(chatId, pull, list, rootAt, undefined))]);
+        const titleSource: SessionTitleSource = { text: `定时任务「${job.task.name}」`, rawContentType: 'text' };
+        const titleJobKey = await registerSessionTitle(be, thread.sessionId, cwd, titleSource);
+        const current = await getProjectByChatId(chatId);
+        if (refusedTurn(current, chatId, { scheduled: hook }) || settingsRevision(current!) !== settingsRevision(project)) {
+          hook.settle(SCHEDULE_UPDATING);
+          return;
+        }
+        // The topic's usual opening (the main area before it), then the task (总设计 7.2).
+        const firstText = weaveTurnRecordBlock(scheduledOpening(job, hostTimeZone(), fallback), undefined, {
+          place: { group: project.name, me: channel.botIdentity?.name, topic: { title: job.task.name } }, entries: [], now: rootAt,
+          opening: { pointer: { botOpened: true, root: { at: rootAt, who: { kind: 'self' } } }, main: section.main },
+          quotes: section.quotes, moreTopics: section.moreTopics,
+        });
+        launched = true;
+        await trackRun(launchRun({
+          chatId, replyTo: root.messageId, replyInThread: true, thread, firstText, model, effort, serviceTier: 'standard',
+          modelCustom: isCustomDefault(prefer, model), cwd, ...perm, summary: titleSource.text, requesterKind: 'unknown',
+          requestedAt: rootAt, seenAt: rootAt, from: section.main[0]?.createTime || rootAt,
+          openTopic: { id: root.messageId, from: { kind: 'self' }, at: rootAt, text: rootText },
+          smart: sessionModeOf(project) === 'smart' ? true : undefined, backendId: be.id, titleJobKey, titleSource, scheduled: hook,
+        }));
+      } catch (err) {
+        log.fail('schedule', err, { phase: 'start-topic', taskId: job.task.id });
+        hook.settle(scheduleFailed(hook, err));
+        if (hook.target.kind === 'topic') await channel.send(chatId, { markdown: `❌ 启动失败：${err instanceof Error ? err.message : String(err)}` },
+          { replyTo: hook.target.anchor, replyInThread: true }).catch(() => undefined);
+      } finally {
+        if (!launched) await starting?.then(thread => thread.close()).catch(error => log.fail('agent', error, { phase: 'unadopted-thread-close' }));
+        const remaining = (pendingTopics.get(chatId) ?? 1) - 1;
+        if (remaining) pendingTopics.set(chatId, remaining); else pendingTopics.delete(chatId);
+      }
+    })());
+  }
+
   /**
    * Scheduled tasks (bot/schedule): this process is the only writer of schedules.json, and schedule-commands the only
    * entry that changes it for a user. The file is read once: in initialize(), before the bridge takes events, or at the
-   * first request of a harness that never calls it. The tick is not started here: runs have no runner yet.
+   * first request of a harness that never calls it. The tick is not started here: bridge.ts does, once connected.
    */
   const scheduleDiagnostic = ({ kind, ...fields }: ScheduleDiagnosticEvent): void => log.info('schedule', kind, fields);
   const scheduleStore = createScheduleStore(botPaths(cfg.accounts.app.id).schedulesFile, { now: () => Date.now(), log, diagnostics: scheduleDiagnostic });
   const scheduler = createScheduler({
     store: scheduleStore, now: () => Date.now(), timers: { setTimeout, clearTimeout },
-    run: () => { throw new Error('runner-not-wired'); },
-    gate: () => 'ok', notifyAutoPause: async () => {}, notifyGateFailure: () => {}, maxInflight: () => 1,
+    run: runScheduled,
+    gate: () => 'ok', notifyAutoPause: async () => {}, notifyGateFailure: () => {},
+    // Half the run slots at most, so people always find one (总设计第 15 节第 8 条).
+    maxInflight: () => Math.max(1, Math.floor(getMaxConcurrentRuns(cfg) / 2)),
     log, diagnostics: scheduleDiagnostic,
   });
   const scheduleCommands = createScheduleCommands({ store: scheduleStore, scheduler, botId: cfg.accounts.app.id, now: () => Date.now(), hostTimeZone });
