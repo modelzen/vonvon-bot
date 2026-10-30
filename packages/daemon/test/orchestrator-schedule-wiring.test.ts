@@ -117,6 +117,16 @@ describe('the orchestrator owns the bot\'s schedule store (T1b 4.2)', () => {
     expect(corruptions()).toHaveLength(1);
   });
 
+  it('answers a request after shutdown began with refused bot-not-running, not a rejection, and writes nothing', async () => {
+    const o = setup();
+    await o.initialize?.();
+    await o.shutdown();
+    const notRunning = { kind: 'refused', reason: 'bot-not-running', message: 'Bot 没在运行，任务暂时看不到；启动后再来。' };
+    expect(await o.schedule('cli', list)).toEqual(notRunning);
+    expect(await o.schedule('desktop', { action: 'create', chatId: CHAT, name: '早报', instruction: '整理早上的新闻', spec: { kind: 'every', minutes: 60 } })).toEqual(notRunning);
+    expect(readdirSync(dirname(file))).not.toContain('schedules.json');
+  });
+
   it('a harness that never calls initialize reads the file at its first request, and only once', async () => {
     seed();
     const o = setup();
