@@ -47,10 +47,14 @@ import { CodexServiceTierError } from '../agent/codex-appserver/backend';
 import { permissionTable, tableEnv, tierInfo, unavailableTierReply } from '../agent/permission';
 import { errorKindFromText, type AgentErrorKind } from '../agent/error-kind';
 import { feishuError, scopeDenial } from '../utils/feishu-error';
-import type { NotReplied, NotRepliedReason } from '@vonvon/protocol';
+import type { NotReplied, NotRepliedReason, ScheduleReply, ScheduleRequest } from '@vonvon/protocol';
 import type { JudgeErrorKind, JudgeDecision, JudgeResult, JudgeVariant } from '../judge/types';
 import { JUDGE_INPUT_LIMITS, oneLine } from '../judge/prompt';
-import { deniedScopeName, errorDetail, fitDetail, reportAttention, reportDecision, reportLatestAction, reportNotReplied, reportScopeDenied } from './diagnostics';
+import { deniedScopeName, errorDetail, fitDetail, reportAttention, reportDecision, reportLatestAction, reportNotReplied, reportScopeDenied, type ScheduleDiagnosticEvent } from './diagnostics';
+import { createScheduleStore } from './schedule/store';
+import { createScheduler } from './schedule/scheduler';
+import { hostTimeZone } from './schedule/time';
+import { createScheduleCommands } from '../admin/schedule-commands';
 import { createRunActivity } from './activity';
 import { createDroppedReplies, originFor, originOf, type DroppedOrigin } from './restart-dropped';
 import { catalogById, projectCreatableBackends, visibleCatalog } from '../agent/catalog';
@@ -221,7 +225,7 @@ import { serviceStdoutPath, serviceStderrPath } from '../service/common';
 import { bridgeVersion } from '../core/version';
 import { desktopDownloadForHost } from '../service/desktop-release';
 import { runtimeDistribution } from '../service/distribution';
-import { paths } from '../config/paths';
+import { botPaths, paths } from '../config/paths';
 import { claudeReadScope } from '../config/read-scope';
 import { resolveProjectsRootDir } from '../config/directories';
 import { loadBots } from '../config/bots';
@@ -888,6 +892,10 @@ export interface Orchestrator {
   /** The host changed a library project's workspace: this bot's rows of it follow, their groups' sessions archived (admin/library.ts). */
   libraryExecute: (op: AdminLibraryOp) => Promise<unknown>;
   settings: HostSettings;
+  /** Scheduled tasks from the desktop and the terminal, run as the local owner (admin/schedule-commands.ts). */
+  schedule: (via: 'desktop' | 'cli', request: ScheduleRequest) => Promise<ScheduleReply>;
+  /** The scheduled-task tick (bot/schedule/scheduler.ts), outside admit. Nothing starts it yet: there is no runner. */
+  scheduler: { start(): Promise<void>; stop(): void; drain(ms: number): Promise<void> };
   /** Close every live codex session (SIGKILLs the app-server children) so a
    *  graceful exit leaves no orphan processes. */
   shutdown: () => Promise<void>;
@@ -9236,6 +9244,27 @@ export function createOrchestrator(
     } finally { for (const chatId of held) projectMutations.delete(chatId); }
   };
 
+  /**
+   * Scheduled tasks (bot/schedule): this process is the only writer of schedules.json, and schedule-commands the only
+   * entry that changes it for a user. The file is read once: in initialize(), before the bridge takes events, or at the
+   * first request of a harness that never calls it. The tick is not started here: runs have no runner yet.
+   */
+  const scheduleDiagnostic = ({ kind, ...fields }: ScheduleDiagnosticEvent): void => log.info('schedule', kind, fields);
+  const scheduleStore = createScheduleStore(botPaths(cfg.accounts.app.id).schedulesFile, { now: () => Date.now(), log, diagnostics: scheduleDiagnostic });
+  const scheduler = createScheduler({
+    store: scheduleStore, now: () => Date.now(), timers: { setTimeout, clearTimeout },
+    run: () => { throw new Error('runner-not-wired'); },
+    gate: () => 'ok', notifyAutoPause: async () => {}, notifyGateFailure: () => {}, maxInflight: () => 1,
+    log, diagnostics: scheduleDiagnostic,
+  });
+  const scheduleCommands = createScheduleCommands({ store: scheduleStore, scheduler, botId: cfg.accounts.app.id, now: () => Date.now(), hostTimeZone });
+  let storeLoaded: ReturnType<typeof scheduleStore.load> | undefined;
+  const loadStore = (): ReturnType<typeof scheduleStore.load> => (storeLoaded ??= scheduleStore.load());
+  const schedule = async (via: 'desktop' | 'cli', request: ScheduleRequest): Promise<ScheduleReply> => {
+    await loadStore();
+    return scheduleCommands.execute({ kind: 'local', via }, request);
+  };
+
   const admittedCollaboration = admit(collaboration);
   /** s36d1: creations skip admit, whose shutdown refusal would read as a result not known; serialCreate refuses
    * them instead, saying nothing was created. The drain waits for one in flight, but how it ended is its caller's
@@ -9250,6 +9279,8 @@ export function createOrchestrator(
     initialize: async () => {
       const result = await materializeGroupSettings({ cfg, backendFor });
       if (result.updated.length || result.deferred.length) log.info('settings', 'group-settings-materialized', { updated: result.updated.length, deferred: result.deferred.length });
+      // An unreadable file keeps the bot from starting; a corrupt one is moved aside and the store starts empty.
+      await loadStore();
     },
     collaboration: collaborate,
     onMessage: admitEvent(onMessage),
@@ -9263,6 +9294,8 @@ export function createOrchestrator(
     adminExecute: admit(adminExecute),
     libraryExecute: admit(libraryExecute),
     settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },
+    schedule: admit(schedule),
+    scheduler: { start: async () => scheduler.start(await loadStore()), stop: () => scheduler.stop(), drain: ms => scheduler.drain(ms) },
     shutdown,
     saveDroppedSync: (why: 'shutdown' | 'crash') => droppedReplies?.saveSync(collectLost(), why),
     replyDropped: () => { if (!shuttingDown) droppedReplies?.start(); },

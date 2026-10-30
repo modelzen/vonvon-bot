@@ -24,7 +24,7 @@ async function fixture(mode: Mode) {
     info: { type: 'serverInfo', machineId: machineIdSchema.parse(randomUUID()), version: 'test', protocolVersion: 1 },
     detached: () => {},
     request: async (peer, request) => {
-      requests.push({ peer: peer.id, type: 'type' in request.payload ? request.payload.type : request.payload.action });
+      requests.push({ peer: peer.id, type: 'type' in request.payload ? request.payload.type : 'action' in request.payload ? request.payload.action : request.method });
       if (request.method === 'admin' && request.payload.type === 'daemonStatus') {
         if (mode === 'changed-lock') await writeFile(join(home, 'daemon.pid'), JSON.stringify({ ...lock, startedAt: new Date(Date.parse(lock.startedAt) + 1000).toISOString() }));
         peer.send({ type: 'response', id: request.id, method: 'admin', payload: { kind: 'daemonStatus', status: { installed: false, supported: false, running: true, selfHosted: true, version: 'test', pid: mode === 'wrong-pid' ? process.pid + 1 : process.pid } } });
