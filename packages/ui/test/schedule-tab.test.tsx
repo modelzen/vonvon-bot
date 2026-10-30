@@ -41,7 +41,7 @@ it('shows a task whose zone this browser does not know in the daemon\'s zone, na
   const mars = scheduleTask({spec: {kind: 'once', at}, timeZone: 'Mars/Olympus', describe: '11月2日 09:00 一次', nextRunAt: at,
     recent: [run(0)], lastResult: {at: scheduleNow, status: 'done', excerpt: '好了'}});
   const html = render(listOf(tasksReply([mars])), {}, mars.id);
-  expect(html).toContain('下次 11月2日 09:00（Asia/Shanghai） · 已启用 · 上次 完成 12:00');
+  expect(html).toContain('下次 11月2日 09:00（Asia/Shanghai） · 已启用 · 上次 完成 12:00<');
   expect(html).toContain('<td>12:00</td>');
   const snapshot = {groups: [], memberships: []} as unknown as DesktopSnapshot;
   expect(renderToStaticMarkup(<BotScheduleGroups list={listOf(tasksReply([mars]))} agentId={agentIdSchema.parse(mars.botId)} snapshot={snapshot} onOpen={() => {}} onDelete={() => {}}/>))
@@ -53,6 +53,19 @@ it('shows a task whose zone this browser does not know in the daemon\'s zone, na
   const context = {chatId: mars.chatId, now: scheduleNow, task: mars, initial: draft};
   expect(scheduleRequest(draft, context)).toEqual({error: '不认识这个时区：Mars/Olympus'});
   expect(scheduleRequest({...draft, timeZone: 'Asia/Shanghai'}, context)).toMatchObject({patch: {spec: {kind: 'once', at}, timeZone: 'Asia/Shanghai'}});
+});
+
+it('names the zone it had to use after 上次 when a task has no next run, active or paused, and once over its runs', () => {
+  const mars = scheduleTask({timeZone: 'Mars/Olympus', nextRunAt: undefined, recent: [run(0)], lastResult: {at: scheduleNow, status: 'done', excerpt: '好了'}});
+  for (const task of [mars, scheduleTask({...mars, state: 'paused', pausedReason: 'manual'})]) {
+    expect(render(listOf(tasksReply([task])))).toContain(`每天 09:00 · ${scheduleState(task)} · 上次 完成 12:00（Asia/Shanghai）`);
+  }
+  const runs = renderToStaticMarkup(<ScheduleRuns task={mars} hostZone="Asia/Shanghai" now={scheduleNow}/>);
+  expect(runs).toContain('<th scope="col">时间（Asia/Shanghai）</th>');
+  expect(runs.match(/Asia\/Shanghai/g)).toHaveLength(1);
+  const tokyo = {...mars, timeZone: 'Asia/Tokyo'};
+  expect(render(listOf(tasksReply([tokyo])))).toContain('已启用 · 上次 完成 13:00<');
+  expect(renderToStaticMarkup(<ScheduleRuns task={tokyo} hostZone="Asia/Shanghai" now={scheduleNow}/>)).toContain('<th scope="col">时间</th>');
 });
 
 it('names the task\'s zone after the next time only when the daemon\'s computer is elsewhere', () => {

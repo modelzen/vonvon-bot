@@ -37,16 +37,20 @@ export function shownZone(timeZone: string, fallback?: string): string {
   return [timeZone, fallback].find(zone => zone && knownZone(zone)) ?? browserZone();
 }
 
-/** One row: 每个工作日 09:00 · 下次 09:00 · 已启用 · 上次 完成 09:00. Times are in the task's zone, named when the daemon's computer is in another or the page had to use another. */
+/**
+ * One row: 每个工作日 09:00 · 下次 09:00 · 已启用 · 上次 完成 09:00. Times are in the task's zone, named after 下次 when the
+ * daemon's computer is in another. A zone the page had to use instead is named after the first time, 上次 when there is no 下次.
+ */
 export function scheduleSummary(task: ScheduledTaskView, hostZone: string, now?: number): string {
   const shown = shownZone(task.timeZone, hostZone);
   const at = (ms: number) => formatTime(ms, {timeZone: shown, now});
   const zone = shown === hostZone && shown === task.timeZone ? '' : `（${shown}）`;
+  const next = task.nextRunAt !== undefined && `下次 ${at(task.nextRunAt)}${zone}`;
   return [
     task.describe,
-    task.nextRunAt !== undefined && `下次 ${at(task.nextRunAt)}${zone}`,
+    next,
     scheduleState(task),
-    task.lastResult && `上次 ${runStatusText[task.lastResult.status]} ${at(task.lastResult.at)}`,
+    task.lastResult && `上次 ${runStatusText[task.lastResult.status]} ${at(task.lastResult.at)}${!next && shown !== task.timeZone ? zone : ''}`,
   ].filter(Boolean).join(' · ');
 }
 

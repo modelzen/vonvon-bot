@@ -59,7 +59,7 @@ import type { CollaborationView, Page } from "./collaboration-model";
 import {SettingsPanel} from "./settings/SettingsPanel";
 import {DraftGuardProvider, useDraftGuard} from './settings/DraftGuard';
 import {decisionProviderSection, diagnosticsSection, searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
-import {agentPanes, initialRoute, openMembership, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type AgentPane, type CollaborationRoute, joinedGroupRoute} from './collaboration-navigation';
+import {agentPanes, initialRoute, openMembership, openScheduleTab, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type AgentPane, type CollaborationRoute, joinedGroupRoute} from './collaboration-navigation';
 import {SearchDialog} from './SearchDialog';
 import {flushSync} from 'react-dom';
 import {GroupWorkspace, groupTabForSection, type GroupDesignTab} from './GroupWorkspace';
@@ -391,7 +391,7 @@ function DesktopApp() {
   function openGroupSchedule(memberId: MembershipId) {
     if (!snapshot?.memberships.some(item => item.id === memberId)) return;
     navigate(() => {
-      setGroupTabs(current => ({...current, [memberId]: 'schedule'}));
+      setGroupTabs(current => openScheduleTab(current, memberId));
       setNewMemoryFocus(undefined);
       setRoute(current => openMembership(current, memberId, snapshot));
       setPage('collaboration');

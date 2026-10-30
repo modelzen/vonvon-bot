@@ -1,5 +1,6 @@
 import type {AgentId, DesktopSnapshot, GroupId, MembershipId, ProjectId} from '@vonvon/protocol';
 import type {CollaborationView} from './collaboration-model';
+import type {GroupDesignTab} from './GroupWorkspace';
 import type {GroupSettingsTab} from './settings/GroupDesignSettings';
 import type {Destination, DetailPane, Selection} from './search';
 
@@ -65,6 +66,11 @@ export function openMembership(route: CollaborationRoute, id: MembershipId, snap
           ? projectId ? {kind: 'project', id: projectId, pane: {kind: 'map'}} : {kind: 'list', view: 'projects'}
           : {kind: 'group', id: member.groupId};
   return {kind: 'membership', id, pane: {kind: 'settings'}, parent};
+}
+
+/** A row of the Bot page's 任务 pane opens its group page on the 任务 tab; other group pages keep theirs. */
+export function openScheduleTab(tabs: Readonly<Record<string, GroupDesignTab>>, id: MembershipId): Record<string, GroupDesignTab> {
+  return {...tabs, [id]: 'schedule'};
 }
 
 export function routeBack(route: CollaborationRoute): CollaborationRoute {
