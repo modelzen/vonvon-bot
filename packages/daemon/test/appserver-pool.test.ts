@@ -13,13 +13,14 @@ let takeWarmClient: typeof import('../src/agent/codex-appserver/client-pool').ta
 let utilityRequest: typeof import('../src/agent/codex-appserver/client-pool').utilityRequest;
 let connectGated: typeof import('../src/agent/codex-appserver/client-pool').connectGated;
 let CONNECT_TIMEOUT_MS: number;
+let residentCount: typeof import('../src/agent/codex-appserver/client-pool').residentCount;
 
 beforeEach(async () => {
   vi.resetModules();
   ({ UnsentRequestError } = await import('../src/agent/types'));
   ({ AppServerClient } = await import('../src/agent/codex-appserver/app-server-client'));
   ({ CodexAppServerBackend } = await import('../src/agent/codex-appserver/backend'));
-  ({ CONNECT_TIMEOUT_MS, connectGated, refillWarmPool, shutdownResidentClients, takeWarmClient, utilityRequest } = await import('../src/agent/codex-appserver/client-pool'));
+  ({ CONNECT_TIMEOUT_MS, residentCount, connectGated, refillWarmPool, shutdownResidentClients, takeWarmClient, utilityRequest } = await import('../src/agent/codex-appserver/client-pool'));
 });
 
 // M-2（research/08 probe 思路的单测化）：utility client 复用/出错即重建 + 容量 1
@@ -46,6 +47,16 @@ process.stdin.on('data', (d) => {
     const p = msg.params || {};
     if (m === 'die') process.exit(1); // 不回包直接死
     if (m === 'hang') continue; // 永不回包（wedged codex）
+    if (m === 'slow') {
+      const fs = require('fs');
+      fs.writeFileSync(__filename + '.slow-started', 'yes');
+      const timer = setInterval(() => {
+        if (!fs.existsSync(__filename + '.slow-release')) return;
+        clearInterval(timer);
+        send({jsonrpc: '2.0', id: msg.id, result: {pid: process.pid}});
+      }, 10);
+      continue;
+    }
     if (m === 'rpc/error') {
       send({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: 'boom' } });
       continue;
@@ -115,6 +126,31 @@ afterEach(async () => {
 });
 
 describe('utility client 复用与出错即重建（M-2）', () => {
+  it('an in-place upgrade drains the old utility without interrupting its request or an active thread', async () => {
+    const {bin, script, runs, pids} = makeFakeCodex();
+    const active = new AppServerClient({bin, cwd: tmpdir()});
+    await active.connect();
+    const activePid = pids()[0]!; // Windows client.pid is the launcher; fixture replies use the Node PID.
+    const pending = utilityRequest<{pid: number}>('slow');
+    try {
+      await vi.waitFor(() => expect(existsSync(script + '.slow-started')).toBe(true), { timeout: CONNECT_TIMEOUT_MS });
+      const oldUtilityPid = pids().find(pid => pid !== activePid)!;
+      appendFileSync(bin, process.platform === 'win32' ? '\r\nrem upgraded\r\n' : '\n# upgraded\n');
+      expect(await utilityRequest('model/list')).toMatchObject({data: [{id: 'pool-model'}]});
+      expect(runs()).toBe(3);
+      expect(alive(oldUtilityPid)).toBe(true);
+      expect(alive(activePid)).toBe(true);
+      writeFileSync(script + '.slow-release', 'go');
+      expect(await pending).toEqual({pid: oldUtilityPid});
+      await vi.waitFor(() => expect(alive(oldUtilityPid)).toBe(false), { timeout: CONNECT_TIMEOUT_MS });
+      expect(await active.request('thread/start', {cwd: '/still-running'})).toMatchObject({thread: {id: `th_${activePid}`}});
+    } finally {
+      writeFileSync(script + '.slow-release', 'go');
+      await pending.catch(() => undefined);
+      await active.close();
+    }
+  });
+
   it('model discovery uses a fresh client while listThreads/readHistory share the utility', async () => {
     const { runs } = makeFakeCodex();
     const backend = new CodexAppServerBackend();
@@ -159,11 +195,14 @@ describe('utility client 复用与出错即重建（M-2）', () => {
   });
 
   it('进程死亡 → 后续调用自动重建', async () => {
-    const { runs } = makeFakeCodex();
+    const { runs, pids } = makeFakeCodex();
     await expect(utilityRequest('die')).rejects.toThrow(/app-server exited/);
     const res = await utilityRequest<{ data: { id: string }[] }>('model/list');
     expect(res.data[0]!.id).toBe('pool-model');
     expect(runs()).toBe(2);
+    // Retirement logs the expected nonzero exit; await its confirmed cleanup before shutdown.
+    await vi.waitFor(() => expect(residentCount()).toBe(1), { timeout: CONNECT_TIMEOUT_MS });
+    expect(alive(pids()[0]!)).toBe(false);
   });
 
   it('超时（wedged codex）→ 报错并重建，不留挂死进程', async () => {
@@ -406,6 +445,8 @@ describe('首启闸（R3-1）：同一个 CODEX_HOME 第一个进程回 initiali
 
   it('等闸的时间不算进 utility 和预热自己的连接时限：首启快到时限才连上，等着的照样连上（审查 F1）', async () => {
     const { bin } = makeFakeCodex();
+    // The gate test owns only fake clients: a real version probe cannot use this fake clock.
+    vi.spyOn(await import('../src/agent/codex-appserver/locate'), 'codexVersionAsync').mockResolvedValue('codex-cli 0.163.0');
     // No real process: connect takes 500 ms of fake time, requests answer at once.
     const connect = vi.spyOn(AppServerClient.prototype, 'connect')
       .mockImplementation(() => new Promise(resolve => setTimeout(resolve, 500)));

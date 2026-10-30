@@ -22,7 +22,7 @@ vi.mock('../src/config/paths', async () => {
 afterAll(() => rmSync(dirname(paths.projectsFile), { recursive: true, force: true }));
 const logged = vi.hoisted(() => ({ info: [] as unknown[][], fail: [] as unknown[][], adoptFails: false }));
 vi.mock('../src/agent/codex-appserver/locate', () => ({
-  resolveCodexBin: () => null, codexVersionAsync: async () => null, cachedCodexVersion: () => undefined,
+  refreshCodexResolution: () => null, resolveCodexBin: () => null, codexVersionAsync: async () => null, cachedCodexVersion: () => undefined,
 }));
 vi.mock('../src/core/logger', () => ({
   log: { info: (...args: unknown[]) => void logged.info.push(args), warn: () => undefined, fail: (...args: unknown[]) => void logged.fail.push(args) },

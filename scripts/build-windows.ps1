@@ -41,7 +41,7 @@ Invoke-Node @('scripts/windows-installer-compile.mjs',(Join-Path $outPath 'insta
 Invoke-Node @('scripts/windows-build-tools.mjs','npm',$envFile,'run','build')
 Invoke-Node @('scripts/windows-build-tools.mjs','npm',$envFile,'run','typecheck')
 Invoke-Node @('--test','scripts/stage-daemon.test.mjs','scripts/package-windows.test.mjs','scripts/windows-runtime-smoke.test.mjs','scripts/publish-windows.test.mjs')
-Invoke-Node @('scripts/windows-build-tools.mjs','npm',$envFile,'run','test','-w','@vonvon/daemon','--','test/environment-windows-launch.test.ts','test/provider/windows-command-line.test.ts','test/provider/windows-supervisor.test.ts','test/windows-owned-process.test.ts','test/data-compatibility.test.ts','test/register-bot.test.ts')
+Invoke-Node @('scripts/windows-build-tools.mjs','npm',$envFile,'run','test','-w','@vonvon/daemon','--','test/environment-windows-launch.test.ts','test/provider/windows-command-line.test.ts','test/provider/windows-supervisor.test.ts','test/windows-owned-process.test.ts','test/data-compatibility.test.ts','test/register-bot.test.ts','test/locate.test.ts','test/codex-version.test.ts','test/codex-managed-install.test.ts','test/codex-source.test.ts','test/appserver-pool.test.ts','test/environment-rpc.test.ts','test/codex-environment-install.test.ts','test/codex-windows-backend.test.ts')
 Invoke-Node @('scripts/windows-build-tools.mjs','npm',$envFile,'run','test','-w','@vonvon/desktop','--','test/windows-updates.test.ts','test/tray.test.ts','test/daemon-dependencies.test.ts')
 Assert-CleanSource
 $runtime = Join-Path $outPath 'electron-runtime'
