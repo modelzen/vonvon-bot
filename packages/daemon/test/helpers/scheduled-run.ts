@@ -22,7 +22,7 @@ type Fn = Mock<(...args: any[]) => any>;
 export const fake: {
   project: Record<string, unknown> | undefined; topicGroup: boolean;
   backend: { capabilities: { steer: boolean }; id: string; listModels: Fn; resumeThread: Fn; startThread: Fn };
-  createCard: Fn; stream: Fn; final: Fn; send: Fn; reply: Fn; topicList: Fn; messageGet: Fn; chatGet: Fn; getSession: Fn;
+  createCard: Fn; stream: Fn; final: Fn; send: Fn; reply: Fn; topicList: Fn; messageGet: Fn; chatGet: Fn; getSession: Fn; listSessions: Fn;
   log: { info: Fn; warn: Fn; fail: Fn };
   run?: (job: ScheduledJob) => Promise<ScheduledOutcome>;
 } = {
@@ -38,6 +38,7 @@ export const fake: {
   chatGet: vi.fn(),
   topicList: vi.fn(async (..._args: unknown[]) => ({ code: 0, data: { items: [{ message_id: 'anchor', chat_id: 'chat', thread_id: 'topic-old' }] } })),
   getSession: vi.fn(async (key: string): Promise<Record<string, unknown> | undefined> => ({ threadId: key, chatId: 'chat', sessionId: 'host', backend: 'codex', cwd: '/test', summary: '' })),
+  listSessions: vi.fn(),
   log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() },
 };
 vi.mock('../../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown, fn: () => unknown) => fn() }));
@@ -51,7 +52,7 @@ vi.mock('../../src/project/registry', async (original) => ({
   ...await original<object>(), getProjectByChatId: async () => fake.project, getProjectByName: async () => fake.project,
 }));
 vi.mock('../../src/bot/session-store', async (original) => ({
-  ...await original<object>(), getSession: fake.getSession, patchSession: async () => undefined, upsertSession: async () => undefined,
+  ...await original<object>(), getSession: fake.getSession, listSessions: fake.listSessions, patchSession: async () => undefined, upsertSession: async () => undefined,
 }));
 vi.mock('../../src/bot/context-weave', async (original) => {
   const empty = async () => ({ messages: [], ok: true, complete: true });
@@ -125,9 +126,11 @@ export function thread(releaseAfterRun?: boolean) {
       };
     },
   };
+  /** Feeds `event` to the n-th turn. */
+  const emit = (event: AgentEvent, index = 0) => { live[index]!.queue.push(event); live[index]!.wake?.(); };
   return {
-    t, turns, consumed,
-    say(text: string, index = 0) { live[index]!.queue.push({ type: 'text_delta', itemId: 'answer', delta: text }); live[index]!.wake?.(); },
+    t, turns, consumed, emit,
+    say(text: string, index = 0) { emit({ type: 'text_delta', itemId: 'answer', delta: text }, index); },
     /** Ends the turn with `event` (an error) instead of done. */
     end(event: AgentEvent, index = 0) { live[index]!.last = event; turns[index]!.resolve(); },
   };
@@ -169,6 +172,7 @@ export async function setup(kind: 'single' | 'multi' | 'smart', opts: { entries?
   fake.final.mockResolvedValue(true);
   fake.send.mockResolvedValue({ messageId: 'root' });
   fake.messageGet.mockReset().mockResolvedValue({ data: { items: [{ thread_id: 'topic-new' }] } });
+  fake.listSessions.mockReset().mockResolvedValue([]);
   fake.chatGet.mockReset().mockImplementation(async () => ({ code: 0, data: { chat_mode: fake.topicGroup ? 'topic' : 'group' } }));
   const { createOrchestrator } = await import('../../src/bot/handle-message');
   const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { pendingPolicy: 'steer', access: { ownerOpenId: 'owner' }, ...opts.preferences } };
