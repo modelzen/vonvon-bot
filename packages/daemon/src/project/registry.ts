@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { mkdir, open, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
@@ -440,6 +441,16 @@ export async function listProjects(): Promise<Project[]> {
 
 export async function getProjectByChatId(chatId: string): Promise<Project | undefined> {
   return (await read()).find((p) => p.chatId === chatId);
+}
+
+/** {@link getProjectByChatId} read synchronously, for the scheduled-task gate (bot/schedule/scheduler.ts), which decides in place. */
+export function getProjectByChatIdSync(chatId: string): Project | undefined {
+  let text: string;
+  try { text = readFileSync(paths.projectsFile, 'utf8'); } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw err;
+  }
+  return storedRows(JSON.parse(text)).map(foldGuestTier).find((p) => p.chatId === chatId);
 }
 
 export async function getProjectByName(name: string): Promise<Project | undefined> {

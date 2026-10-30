@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createScheduler, type Scheduler } from '../src/bot/schedule/scheduler';
 import { createScheduleStore, type ScheduleStore } from '../src/bot/schedule/store';
 import { nextSlotAfter } from '../src/bot/schedule/time';
+import type { ScheduleDiagnosticEvent } from '../src/bot/diagnostics';
 import type { ScheduledJob, ScheduledOutcome, StoredTask } from '../src/bot/schedule/types';
 
 type Gate = ReturnType<Parameters<typeof createScheduler>[0]['gate']>;
@@ -222,14 +223,18 @@ it('[17] a runner error longer than the schema allows survives a restart of the 
     expect(diagnostics).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'schedule-store-corrupt' }));
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
-it.each([false, true])('retries pending pause notices until success or 24h expiry: %s', async expired => {
+it.each(['sent', 'expired', 'without noticeSince'])('[8] retries pending pause notices until success or 24h expiry, then clears them: %s', async mode => {
   const t = noticeTask(); t.counts.consecutiveFailures = 10;
+  if (mode === 'without noticeSince') delete t.noticeSince;
   const notifyAutoPause = vi.fn(async (): Promise<void> => { throw new Error('offline'); });
   const { scheduler, store } = setup([t], { notifyAutoPause }); await begin(scheduler);
-  expect(store.get(t.id)?.noticePending).toBe(true); const calls = notifyAutoPause.mock.calls.length;
-  notifyAutoPause.mockResolvedValueOnce(undefined); await tick(scheduler, A + (expired ? 25 * HOUR : MIN));
-  expect(notifyAutoPause).toHaveBeenCalledTimes(calls + (expired ? 0 : 1));
-  if (!expired) expect(store.get(t.id)).not.toHaveProperty('noticePending');
+  const calls = notifyAutoPause.mock.calls.length;
+  expect(calls).toBe(mode === 'without noticeSince' ? 0 : 1);
+  if (mode !== 'without noticeSince') expect(store.get(t.id)?.noticePending).toBe(true);
+  notifyAutoPause.mockResolvedValueOnce(undefined); await tick(scheduler, A + (mode === 'expired' ? 25 * HOUR : MIN));
+  expect(notifyAutoPause).toHaveBeenCalledTimes(calls + (mode === 'sent' ? 1 : 0));
+  expect(store.get(t.id)).not.toHaveProperty('noticePending');
+  expect(store.get(t.id)).not.toHaveProperty('noticeSince');
 });
 it('[20] a hung auto-pause notice holds up neither start(), nor ticks, nor runNow', async () => {
   const notifyAutoPause = vi.fn(() => new Promise<void>(() => {}));
@@ -254,6 +259,8 @@ it('[3] an auto-pause notice with no answer in 15 seconds counts as not sent and
   expect(diagnostics).toHaveBeenCalledWith(expect.objectContaining({ kind: 'schedule-notice-pending' }));
   expect(store.get('st_test')?.noticePending).toBe(true);
   scheduler.wake(); await flush();
+  expect(notifyAutoPause).toHaveBeenCalledTimes(1); // [7] the next send waits until 30 seconds after the first
+  await vi.advanceTimersByTimeAsync(15_000); scheduler.wake(); await flush();
   expect(notifyAutoPause).toHaveBeenCalledTimes(2);
 });
 it('[20] start() resolves after the crash records without waiting for the first tick', async () => {
@@ -528,4 +535,155 @@ it('does not launch a claimed run when stop occurs before claim persistence comp
   scheduler.stop(); pending.resolve(done); await flush(); await scheduler.drain(5000);
   expect(run).not.toHaveBeenCalled(); expect(store.get('st_test')?.inflight).toBeUndefined();
   expect(store.get('st_test')?.recent).toContainEqual(expect.objectContaining({ status: 'interrupted', by: 'shutdown' }));
+});
+it.each<[string, unknown, Record<string, unknown>]>([
+  ['a done run with no excerpt', { status: 'done', durationMs: 1 }, { status: 'done' }],
+  ['no outcome at all', undefined, { status: 'failed', error: '运行结果无效' }],
+  ['an unknown status', { status: 'cancelled', durationMs: 1 }, { status: 'failed', error: '运行结果无效' }],
+  ['a skip reason outside the enum', { status: 'skipped', reason: 'busy' }, { status: 'skipped', reason: 'updating' }],
+  ['an interruption by someone outside the enum', { status: 'interrupted', by: 'timeout' }, { status: 'interrupted', by: 'shutdown' }],
+])('[4][15] %s settles as a valid record, and the task runs again', async (_name, outcome, saved) => {
+  const run = vi.fn<(job: ScheduledJob) => Promise<ScheduledOutcome>>().mockResolvedValueOnce(outcome as ScheduledOutcome).mockResolvedValue(done);
+  const { scheduler, store } = setup(undefined, { run });
+  await begin(scheduler); await tick(scheduler, A + MIN);
+  expect(store.get('st_test')?.inflight).toBeUndefined();
+  const record = store.get('st_test')?.recent.at(-1);
+  expect(record).toMatchObject({ slot: A + MIN, ...saved });
+  expect(() => scheduleRunRecordSchema.parse(record)).not.toThrow();
+  expect(store.get('st_test')?.lastResult?.excerpt).toEqual(expect.any(String));
+  await tick(scheduler, A + 2 * MIN);
+  expect(run).toHaveBeenCalledTimes(2);
+});
+it('[4][15] a settle the store refuses as invalid is recorded once as a failed run, not retried until a restart', async () => {
+  const store = memory([task()]), original = store.mutateRuntime;
+  store.mutateRuntime = fn => original(tasks => {
+    const value = fn(tasks);
+    if (tasks.some(t => t.recent.some(r => r.status === 'done'))) throw new Error('schedule store refused an invalid write: task 0: recent.0: invalid');
+    return value;
+  });
+  const { scheduler, run } = setup([], { store });
+  await begin(scheduler); await tick(scheduler, A + MIN);
+  expect(store.get('st_test')?.inflight).toBeUndefined();
+  expect(store.get('st_test')?.recent).toEqual([expect.objectContaining({ status: 'failed', error: '运行结果无效', slot: A + MIN })]);
+  expect(store.get('st_test')?.counts).toMatchObject({ runs: 1, consecutiveFailures: 1 });
+  await tick(scheduler, A + 2 * MIN);
+  expect(run).toHaveBeenCalledTimes(2);
+  expect(log.fail.mock.calls.filter(([, , info]) => info?.phase === 'settle-retry')).toEqual([]);
+});
+it.each<[string, () => Promise<ScheduledOutcome>]>([
+  ['returns a failed outcome whose error cannot be printed', async () => ({ status: 'failed', error: Object.create(null) as string, durationMs: 1, counts: true })],
+  ['throws something that cannot be printed', async () => { throw Object.create(null); }],
+])('[r3] a run that %s settles as failed, and the task runs again', async (_name, first) => {
+  const run = vi.fn<(job: ScheduledJob) => Promise<ScheduledOutcome>>().mockImplementationOnce(first).mockResolvedValue(done);
+  const { scheduler, store } = setup(undefined, { run });
+  await begin(scheduler); await tick(scheduler, A + MIN);
+  expect(store.get('st_test')?.inflight).toBeUndefined();
+  expect(store.get('st_test')?.recent).toEqual([expect.objectContaining({ status: 'failed', slot: A + MIN, error: expect.any(String) })]);
+  await tick(scheduler, A + 2 * MIN);
+  expect(run).toHaveBeenCalledTimes(2);
+});
+it('[r3] a failing tick whose logger also throws does not stop later passes', async () => {
+  const store = memory([task()]), all = store.all;
+  let broken = true;
+  store.all = () => { if (broken) { broken = false; throw new Error('disk'); } return all(); };
+  log.fail.mockImplementationOnce(() => { throw new Error('logger broke'); });
+  const { scheduler, run } = setup([], { store });
+  await begin(scheduler); // the first pass throws, and so does its log line
+  await tick(scheduler, A + MIN);
+  expect(run).toHaveBeenCalledTimes(1);
+});
+it('[5] a runNow right as a tick pass ends starts its run at once, not after the 30-second timer', async () => {
+  for (let hops = 0; hops <= 40; hops++) {
+    const { scheduler, run } = setup([task({ state: 'paused' })]);
+    await scheduler.start({ interrupted: [] }); // its first pass is already on
+    for (let i = 0; i < hops; i++) await Promise.resolve();
+    expect(scheduler.runNow('st_test')).toMatchObject({ kind: 'started' });
+    await flush();
+    expect(run, `runNow ${hops} microtasks after start()`).toHaveBeenCalledTimes(1);
+    scheduler.stop();
+  }
+});
+it('[6] a diagnostics sink that throws after a committed claim still lets the run start and settle', async () => {
+  const diagnostics = vi.fn((event: ScheduleDiagnosticEvent) => { if (event.kind === 'schedule-missed') throw new Error('sink broke'); });
+  const { scheduler, run, store } = setup(undefined, { diagnostics });
+  await begin(scheduler); await tick(scheduler, A + 3 * MIN); // the claim records two missed slots
+  expect(run).toHaveBeenCalledTimes(1);
+  expect(store.get('st_test')?.inflight).toBeUndefined();
+  expect(store.get('st_test')?.recent).toContainEqual(expect.objectContaining({ status: 'done', slot: A + 3 * MIN }));
+  expect(log.fail).toHaveBeenCalledWith('schedule', expect.any(Error), expect.objectContaining({ phase: 'diagnostics' }));
+});
+it('[6] a diagnostics sink that throws on a failed notice leaves no unhandled rejection', async () => {
+  const diagnostics = vi.fn(() => { throw new Error('sink broke'); });
+  const notifyAutoPause = vi.fn(async (): Promise<void> => { throw new Error('offline'); });
+  const { scheduler } = setup([noticeTask()], { diagnostics, notifyAutoPause });
+  await begin(scheduler);
+  expect(notifyAutoPause).toHaveBeenCalledTimes(1);
+  expect(log.fail).toHaveBeenCalledWith('schedule', expect.any(Error), expect.objectContaining({ phase: 'diagnostics' }));
+});
+it('[7][17] a delivered notice whose clearing write keeps failing is not sent again', async () => {
+  const store = memory([noticeTask()]);
+  store.mutateRuntime = () => Promise.reject(new Error('disk full'));
+  store.mutateConfig = () => Promise.reject(new Error('disk full'));
+  const { scheduler, notifyAutoPause } = setup([], { store });
+  await begin(scheduler);
+  for (let i = 0; i < 40; i++) { await vi.advanceTimersByTimeAsync(15_000); scheduler.wake(); await flush(); } // 10 minutes
+  expect(notifyAutoPause).toHaveBeenCalledTimes(1);
+  expect(store.get('st_test')?.noticePending).toBe(true);
+});
+it('[7] a hung notice is sent again at most once per 30 seconds, however often the scheduler wakes', async () => {
+  const notifyAutoPause = vi.fn(() => new Promise<void>(() => {}));
+  const { scheduler } = setup([noticeTask()], { notifyAutoPause });
+  await begin(scheduler);
+  for (let i = 0; i < 24; i++) { await vi.advanceTimersByTimeAsync(5000); scheduler.wake(); await flush(); } // 2 minutes
+  expect(notifyAutoPause).toHaveBeenCalledTimes(5); // at 0, 30, 60, 90 and 120 seconds
+});
+it.each(['https://applink.feishu.cn/client/message/link/open?token=x', 'om_x'])('[9] a done run keeps its link %s on the record and lastResult only when it is a url', async link => {
+  const { scheduler, store } = setup(undefined, { run: async () => ({ ...done, link }) });
+  await begin(scheduler); await tick(scheduler, A + MIN);
+  const saved = store.get('st_test'), record = saved?.recent.at(-1);
+  expect(saved?.inflight).toBeUndefined();
+  expect(() => scheduleRunRecordSchema.parse(record)).not.toThrow();
+  if (link.startsWith('https:')) {
+    expect(record?.link).toBe(link);
+    expect(saved?.lastResult?.link).toBe(link);
+  } else {
+    expect(record).not.toHaveProperty('link');
+    expect(saved?.lastResult).not.toHaveProperty('link');
+  }
+});
+it.each<Gate>(['disabled', 'tier-unavailable'])('[10] a manual run refused as %s stays queued with its runId when the refusal write fails', async gate => {
+  const store = memory([task({ state: 'paused' })]), original = store.mutateRuntime; let fail = false;
+  store.mutateRuntime = fn => { if (fail) { fail = false; return Promise.reject(new Error('disk full')); } return original(fn); };
+  const { scheduler, run, notifyGateFailure } = setup([], { store, gate: () => gate });
+  await begin(scheduler); fail = true;
+  const reply = scheduler.runNow('st_test'); await flush();
+  expect(store.get('st_test')?.recent).toEqual([]);
+  expect(scheduler.runNow('st_test')).toEqual({ kind: 'running' });
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(store.get('st_test')?.recent).toEqual([expect.objectContaining({ runId: runIdOf(reply), trigger: 'manual', status: gate === 'disabled' ? 'skipped' : 'failed' })]);
+  expect(notifyGateFailure).toHaveBeenCalledTimes(gate === 'tier-unavailable' ? 1 : 0);
+  expect(run).not.toHaveBeenCalled();
+});
+it('[16] a gate that throws for a manual run records it as failed, slows no other launch, and runNow accepts it again', async () => {
+  const gate = vi.fn((chatId: string): Gate => { if (chatId === 'chat-bad') throw new Error('gate broke'); return 'ok'; });
+  const pending = deferred();
+  const tasks = [task({ id: 'b', chatId: 'chat-ok' }), task({ id: 'c', chatId: 'chat-ok' }), task({ id: 'm', chatId: 'chat-bad', state: 'paused' })];
+  const { scheduler, run, store } = setup(tasks, { gate, run: vi.fn(() => pending.promise), maxInflight: () => 5 });
+  await begin(scheduler);
+  vi.setSystemTime(A + 55_000); const reply = scheduler.runNow('m'); await flush();
+  expect(store.get('m')?.recent).toEqual([expect.objectContaining({ runId: runIdOf(reply), trigger: 'manual', status: 'failed', error: '运行前检查出错' })]);
+  await tick(scheduler, A + MIN);
+  expect(run.mock.calls.map(([job]) => job.task.id)).toEqual(['b']);
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(run.mock.calls.map(([job]) => job.task.id)).toEqual(['b', 'c']); // 2 seconds apart, not 30
+  expect(scheduler.runNow('m')).toMatchObject({ kind: 'started' });
+  pending.resolve(done); await flush();
+});
+it('a notice in flight at shutdown reports nothing when its 15 seconds run out, and leaves no timer behind', async () => {
+  const notifyAutoPause = vi.fn(() => new Promise<void>(() => {}));
+  const { scheduler, diagnostics } = setup([noticeTask()], { notifyAutoPause });
+  await begin(scheduler); scheduler.stop();
+  const draining = scheduler.drain(5000); await vi.advanceTimersByTimeAsync(20_000); await draining;
+  expect(diagnostics).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'schedule-notice-pending' }));
+  expect(vi.getTimerCount()).toBe(0);
 });

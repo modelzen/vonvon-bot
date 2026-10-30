@@ -6,13 +6,12 @@
 
 ## 2. 范围
 
-- 改：`packages/desktop/src/{ipc-contract,bridge,facade}.ts`（`schedule` 一层各一处）、`packages/ui/src/`（新 `ScheduleTab.tsx`、`ScheduleForm.tsx`、`ScheduleRuns.tsx`、`BotSchedules.tsx`；`GroupWorkspace.tsx` 加 tab；`App.tsx` 的 Bot 页加第四个 pane；`collaboration-navigation.ts`、`search.ts`、`url-actions.ts` 加路由和搜索项）。
-- 可以假设：T1b 的 protocol、`client.schedule(botId, request)`、host RPC、`tasks` 回复里的 `now` 和 `timeZone`。
+- 改：`packages/ui/src/`（新 `ScheduleTab.tsx`、`ScheduleForm.tsx`、`ScheduleRuns.tsx`、`BotSchedules.tsx`；`GroupWorkspace.tsx` 加 tab；`App.tsx` 的 Bot 页加第四个 pane；`collaboration-navigation.ts`、`search.ts`、`url-actions.ts` 加路由和搜索项）。
+- 可以假设：T1b 的 protocol、`client.schedule(botId, request)`、桌面端 ipc-contract/bridge/facade 三层的 `schedule` 透传（T1b 已做）、host RPC、`tasks` 回复里的 `now` 和 `timeZone`。
 - 不做：推送（轮询）；样式；bot 页的建任务（只看和跳转）；私聊的任务。
 
 ## 3. 现在的代码
 
-- 桌面端三层：`packages/desktop/src/ipc-contract.ts:18-19`、`bridge.ts:185-186`、`facade.ts:274-275` 的现有方法样板。
 - 群详情页：`packages/ui/src/GroupWorkspace.tsx:24-26`（tab 表）、64、128-176（tab 内容和路由）；`ui/test/group-design-settings.test.tsx:77` 断言 tab 顺序 `['模型与权限', '能力', '沟通方式', '记忆']`。
 - Bot 页的 pane：`App.tsx:133` 的 `[{kind: 'groups', label: '群聊'}, {kind: 'profile', label: '记忆'}, {kind: 'settings', label: '设置'}]`；`App.tsx:124、130、179-180、365、766-768、853-854` 的分区和 snapshot。
 - 列表、对话框、冲突的样板：`McpPanel`（列表、对话框、revision 冲突提示）；历史行加"在飞书打开"：`ConversationPanel`；轮询：`MemoryMap`（定时器在卸载时清）。
@@ -25,7 +24,7 @@
 
 ### 4.1 三层接线
 
-`schedule(botId, request): Promise<ScheduleReply>` 在 ipc-contract、bridge、facade 各一处，照现有方法。
+T1b 已做（`desktopChannels.schedule`、bridge 两个参数各自校验、facade 用 `scheduleReplySchema` 解析），本片不改。
 
 ### 4.2 群详情页"任务"tab
 
@@ -51,7 +50,7 @@
 
 ## 5. 测试
 
-main 必败：tab、组件、三层方法在基线不存在；`group-design-settings.test.tsx` 的顺序断言在基线是四项；`App.tsx` 的 pane 在基线是三项。
+main 必败：tab、组件在基线不存在；`group-design-settings.test.tsx` 的顺序断言在基线是四项；`App.tsx` 的 pane 在基线是三项。
 
 ui 包只有 vitest，没有 jsdom，照现有 `renderToString` 和纯函数的测法。每条写输入和期望：
 
@@ -59,7 +58,6 @@ ui 包只有 vitest，没有 jsdom，照现有 `renderToString` 和纯函数的�
 - `schedule-form.test.tsx`：五种 spec 的表单到 request：一次 `2026-11-01T14:00` 加时区 `Asia/Shanghai` → `spec.once.at` 等于那个 epoch 且 `timeZone: 'Asia/Shanghai'`；每 30 分钟 → `{ kind: 'every', minutes: 30 }`（不填 anchor）；每天 `09:00`；每周勾"工作日" → `days: [1,2,3,4,5]`；cron 原样。发到哪：`placement: { kind: 'topic', topicId: 't1' }` 的任务打开编辑 → 三项、选中"固定在原话题"，不改选提交 → patch 里没有 `placement`，改选"跟群走" → `placement: { kind: 'follow' }`；新建表单只有两项。本地校验：名字空、41 字、内容 4001 字、一次性时间已过、时区 `Mars/Olympus` 各一条错误文字。`conflict` → 表单是 `current` 的值、只读框是用户刚才的值、提示那句。
 - `bot-schedules.test.tsx`：两个群四个任务 → 两组；点击路径 `group/<id>/schedule`；已解绑的群组名"已解绑的群"、行上有"删除"没有跳转。
 - `schedule-polling.test.ts`：定时器建和清（假时钟）；写操作后立即 `list`。
-- `desktop-ipc-schedule.test.ts`：三层透传。
 - `group-design-settings.test.tsx`：顺序改成五项；App 的 pane 测试改成四项。
 - 回归定向：collaboration-navigation、search、url-actions、App 的 snapshot 测试。
 

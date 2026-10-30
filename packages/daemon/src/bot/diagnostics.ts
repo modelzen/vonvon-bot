@@ -169,6 +169,6 @@ export function createDiagnosticsStore(opts: { changed: () => void; claudeSigned
 }
 
 export type ScheduleDiagnosticEvent = {
-  kind: 'schedule-missed' | 'schedule-skipped' | 'schedule-auto-paused' | 'schedule-store-corrupt' | 'schedule-notice-pending';
+  kind: 'schedule-missed' | 'schedule-skipped' | 'schedule-auto-paused' | 'schedule-interrupted' | 'schedule-store-corrupt' | 'schedule-notice-pending';
   taskId?: string; chatId?: string; count?: number;
 };
