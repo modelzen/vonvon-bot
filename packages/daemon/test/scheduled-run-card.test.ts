@@ -63,6 +63,25 @@ describe('a scheduled run\'s card', () => {
     await expect(result).resolves.toMatchObject({ status: 'done' });
   });
 
+  it('has no 🔔 on its queue card either, waiting for a run slot', async () => {
+    current = await setup('multi', { preferences: { maxConcurrentRuns: 1, completionReminder: { mode: 'manual' } } });
+    const busy = thread(), waiting = thread();
+    fake.backend.resumeThread.mockResolvedValueOnce(busy.t).mockResolvedValue(waiting.t);
+    fake.createCard.mockResolvedValueOnce('card-busy').mockResolvedValueOnce('card-waiting');
+    await current.orchestrator.onMessage(human('占着唯一的槽', 'topic-busy'));
+    await until(() => expect(busy.consumed).toHaveLength(1));
+    const result = current.runScheduled(job({ placement: { kind: 'topic', topicId: 'topic-old' } }));
+    // Logged once the queue card has its message id and, with it, its buttons.
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'run-queued', expect.anything()));
+    const queueCards = fake.final.mock.calls.map(call => text(call[1])).filter(card => card.includes('card-waiting'));
+    expect(queueCards).not.toHaveLength(0);
+    expect(queueCards.filter(card => card.includes('完成后提醒我'))).toHaveLength(0);
+    busy.turns[0]!.resolve();
+    await until(() => expect(waiting.consumed).toHaveLength(1));
+    waiting.turns[0]!.resolve();
+    await expect(result).resolves.toMatchObject({ status: 'done' });
+  });
+
   it.each([
     ['links its card in the record as outbound-files does', { data: { items: [{ message_id: 'card', chat_id: 'chat', message_position: '42' }] } },
       'https://applink.feishu.cn/client/chat/open?openChatId=chat&position=42'],

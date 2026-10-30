@@ -17,7 +17,7 @@ import { assemble, judgeContext, loadContextSources, openingInstructions, planTu
 import { groupSkillProfile } from '../agent/group-skills';
 import { parseStoredJudge } from '../judge/model';
 import { presentationConfig } from './group-presentation';
-import { projectRevision, projectView, type CollaborationRequest } from '../admin/collaboration';
+import { projectRevision, projectView, settingsRevision, type CollaborationRequest } from '../admin/collaboration';
 import { AdminWriteError } from '../admin/ops';
 import { applyMirror, mirrorProjectIntoBot, siblingProjectOfChat, type AdminLibraryOp } from '../admin/library';
 import { isProjectId, readLibrary, type LibraryProject } from '../project/library';
@@ -780,6 +780,9 @@ interface ActiveState {
   triggerAt?: number;
   /** A scheduled turn is running: a message arriving now queues, never steers into it (总设计 7.1). */
   scheduled?: true;
+  /** A settings change closed this run's thread (evictLiveSessionsForChat): a scheduled turn queued behind is skipped, the
+   * group having changed. */
+  evicted?: true;
 }
 
 /** Inputs a synthetic turn (🔁 重试) carries that a real message would not. */
@@ -4003,6 +4006,8 @@ export function createOrchestrator(
       if (rec.chatId !== chatId) continue;
       const live = sessions.get(rec.threadId);
       if (!live) continue;
+      const running = active.get(rec.threadId);
+      if (running?.thread === live) running.evicted = true;
       sessions.delete(rec.threadId); // synchronous: next turn can't reuse it
       void trackTask(live.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
       closed++;
@@ -7188,7 +7193,8 @@ export function createOrchestrator(
       buildQueuedCard({
         ...input,
         voiceMessages: opts.voice ? [opts.voice] : undefined,
-        ...(!state.isGoal ? { completionReminder: completionReminderView(state) } : {}),
+        // state.scheduled is set once the turn starts; a scheduled run waiting here has no 🔔 either.
+        ...(!state.isGoal && !opts.scheduled ? { completionReminder: completionReminderView(state) } : {}),
       });
     const q = sema.enqueue((pos) => {
       // 前面有人拿到槽/取消 → 原地刷新位置。走合并泵（非阻塞、合并、限频）。
@@ -7755,6 +7761,7 @@ export function createOrchestrator(
         // （版本旧 / 挂死）才经 stopSignal 强停本地循环，按原样走杀进程恢复锤。
         // watchdog 超时（timedOut）不变，恒走杀进程。
         let timedOut = false;
+        let askFaulted = false; // the ask coordinator stopped the turn, not a ⏹
         let resolveStop!: () => void;
         const stopSignal = new Promise<void>((res) => {
           resolveStop = res;
@@ -7776,7 +7783,7 @@ export function createOrchestrator(
           placement: { chatId: opts.chatId, replyTo: scheduled ? landingOf(scheduled) : currentTurn.seen?.id ?? opts.replyTo, replyInThread: !opts.flat },
           initiator: { kind: currentTurn.requesterKind ?? 'unknown', openId: currentTurn.requesterOpenId }, idlePause,
           waiting: (label, subagentId) => { activity?.waiting(Boolean(label)); rc.askWaiting = label; rc.askWaitingSubagentId = subagentId; stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID); },
-          fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) originalInterrupt(); },
+          fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) { askFaulted = true; originalInterrupt(); } },
         });
         const guarded = withIdleTimeout(
           redactAgentEvents(run.events, hiddenBlockFilter(opts.thread, opts.backendId, turnMemory, () => topicThreadId)),
@@ -8073,9 +8080,10 @@ export function createOrchestrator(
         if (killed || procDead || interrupted || compactDied) {
           state.intakeCancelled = true;
           dropCompact(state);
-          // Only a ⏹ is the user's: a scheduled turn queued behind a watchdog kill or a dead process failed (T2 4.2).
+          // Only a ⏹ is the user's, and a settings change's eviction the group's: a scheduled turn queued behind a watchdog
+          // kill, a dead process or an ask fault failed (T2 4.2).
           const dropped = askAgain(state.queue, opts.chatId, opts.flat ? 'main' : 'topic', 'queue-dropped', '会话被停下了',
-            interrupted ? 'queue-dropped' : 'run-failed');
+            interrupted && !askFaulted ? 'queue-dropped' : state.evicted ? 'occupied' : 'run-failed');
           if (dropped > 0) {
             void trackTask(channel
               .send(
@@ -9502,7 +9510,7 @@ export function createOrchestrator(
     const newTopic = !topicId && (task.placement.kind === 'newTopic' || ruleKind(placed) === 'multi' || await orStop(topicCtx.noMainArea(chatId), false));
     // Unbound, disabled or edited while Feishu and the disk answered: the run uses none of what it read (T2 4.2).
     const project = await getProjectByChatId(chatId);
-    if (refusedTurn(project, chatId, { scheduled: hook }) || !project || projectRevision(project) !== projectRevision(placed)) return void hook.settle(SCHEDULE_UPDATING);
+    if (refusedTurn(project, chatId, { scheduled: hook }) || !project || settingsRevision(project) !== settingsRevision(placed)) return void hook.settle(SCHEDULE_UPDATING);
     if (shuttingDown) return void hook.settle({ status: 'interrupted', by: 'shutdown' });
     if (newTopic) return startScheduledTopic(hook, project, fallback);
     const text = scheduledHeader(hook.job, hostTimeZone(), fallback);
@@ -9544,7 +9552,7 @@ export function createOrchestrator(
         const titleSource: SessionTitleSource = { text: `定时任务「${job.task.name}」`, rawContentType: 'text' };
         const titleJobKey = await registerSessionTitle(be, thread.sessionId, cwd, titleSource);
         const current = await getProjectByChatId(chatId);
-        if (refusedTurn(current, chatId, { scheduled: hook }) || projectRevision(current!) !== projectRevision(project)) {
+        if (refusedTurn(current, chatId, { scheduled: hook }) || settingsRevision(current!) !== settingsRevision(project)) {
           hook.settle(SCHEDULE_UPDATING);
           return;
         }
