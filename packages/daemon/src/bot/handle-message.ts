@@ -713,7 +713,7 @@ export function sessionChangeNotice(reason: RecreateReason, topic: boolean): str
 interface ActiveState {
   steerReply?: { run: AgentRun; accept: (messageId: string, voice?: VoiceReply) => boolean };
   presentation?: AppConfig;
-  /** The run's group, from launchRun or launchGoalRun on; the edit lock looks at this group's runs only (see runningIn). */
+  /** The run's group, set by startReservedRun, launchRun and launchGoalRun; the edit lock looks at this group's runs only (see runningIn). */
   chatId?: string;
   /** Captured with the steer target so a late ACK cannot decorate another turn. */
   voiceReply?: { run: AgentRun; add: (voice: VoiceReply) => void };
@@ -3446,7 +3446,7 @@ export function createOrchestrator(
       log.info('intake', 'queued', { depth: existing.queue.length });
       return;
     }
-    const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg), smart: project && sessionModeOf(project) === 'smart', isGoal: goal, runLoop: true,
+    const reserved: ActiveState = { queue: [], chatId: msg.chatId, requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg), smart: project && sessionModeOf(project) === 'smart', isGoal: goal, runLoop: true,
       ...(flat && !msg.threadId && !goal ? { triggerAt: msg.createTime } : {}) };
     active.set(sessionKey, reserved);
     dropRetries(sessionKey);
@@ -5155,8 +5155,8 @@ export function createOrchestrator(
     firingHolds.set(chatId, Math.max(firingHolds.get(chatId) ?? 0, Date.now() + ms));
   }
 
-  /** Whether a run of `chatId` is on, for the desktop's edit lock. A state learns its group in launchRun: a reservation
-   * before that counts for every group, as every state did before scheduled tasks. */
+  /** Whether a run of `chatId` is on, for the desktop's edit lock. A run's reservation carries its group; one without
+   * (/compact, /new, a resume, the desktop's session actions) counts for every group, as every state did before scheduled tasks. */
   function runningIn(chatId: string): boolean {
     for (const state of active.values()) if (state.chatId === undefined || state.chatId === chatId) return true;
     return false;
