@@ -51,8 +51,15 @@ describe('parsing the time options', () => {
     expect(await h.failure('edit', { taskId: 'st_1', revision: 'r1' })).toMatchObject({ exitCode: 2 });
     expect(h.connect).not.toHaveBeenCalled();
     // what only the protocol's schema catches is still a bad argument, and nothing is sent
-    expect(await h.failure('add', { name: '日报', instruction: 'x', cron: '* * *' })).toMatchObject({ exitCode: 2, error: { kind: 'bad-args' } });
+    expect(await h.failure('add', { name: '日报', instruction: 'x', cron: `${Array.from({ length: 60 }, (_, minute) => minute).join(',')} * * * *` })).toMatchObject({ exitCode: 2, error: { kind: 'bad-args' } });
     expect(h.requests).toEqual([]);
+  });
+
+  it('checks the --cron format before connecting', async () => {
+    const h = harness(created);
+    expect(await h.failure('add', { name: '日报', instruction: 'x', cron: '61 * * * *' })).toMatchObject({ exitCode: 2, error: { kind: 'bad-args', message: 'cron 不合法：范围或步长超出限制' } });
+    expect(await h.failure('edit', { taskId: 'st_1', revision: 'r1', cron: '* * *' })).toMatchObject({ exitCode: 2, error: { message: 'cron 不合法：需要 5 段' } });
+    expect(h.connect).not.toHaveBeenCalled();
   });
 
   it('turns --every 2h, --weekly and --new-topic into the spec and placement', async () => {
@@ -80,6 +87,17 @@ describe('parsing the time options', () => {
     expect(h.requests).toEqual([{ action: 'create', chatId: 'oc_group', name: '提醒', instruction: '发版', spec: { kind: 'once', at: Date.UTC(2026, 10, 1, 19, 0) }, timeZone: 'America/New_York' }]);
   });
 
+  it("edit reads --at in the task's own time zone, not the daemon's", async () => {
+    const h = harness(request => request.action === 'list' ? tasks([task({ timeZone: 'Asia/Tokyo' })], 'Asia/Shanghai') : { kind: 'task', task: task() });
+    await h.run('edit', { taskId: 'st_0123456789abcdef', revision: 'r1', at: '2026-11-05 14:00' });
+    expect(h.requests).toEqual([
+      { action: 'list', chatId: 'oc_group' },
+      // 14:00 in Tokyo (UTC+9); the daemon's Shanghai would be 06:00 UTC
+      { action: 'edit', chatId: 'oc_group', taskId: 'st_0123456789abcdef', revision: 'r1', patch: { spec: { kind: 'once', at: Date.UTC(2026, 10, 5, 5, 0) } } },
+    ]);
+    expect(await h.failure('edit', { taskId: 'st_gone', revision: 'r1', at: '2026-11-05 14:00' })).toMatchObject({ exitCode: 4, error: { message: '改任务没有完成：本群没有这个任务。' } });
+  });
+
   it('edits only the given fields with the given revision', async () => {
     const h = harness(created);
     await h.run('edit', { taskId: 'st_0123456789abcdef', revision: 'r7', daily: '10:00', name: ' 早报 ' });
@@ -98,6 +116,26 @@ describe('requests that read first', () => {
       { action: 'delete', chatId: 'oc_group', taskId: 'st_0123456789abcdef', revision: 'r1' },
     ]);
     expect(await h.failure('delete', { taskId: 'st_gone' })).toMatchObject({ exitCode: 4, error: { kind: 'refused', message: '删任务没有完成：本群没有这个任务。' } });
+  });
+
+  it("an unbound group's raw id works for list, runs, delete and pause, and nothing else", async () => {
+    const gone = task({ chatId: 'oc_gone', revision: 'r9', state: 'paused', pausedReason: 'unavailable', nextRunAt: undefined });
+    const h = harness(request => request.action === 'list' ? tasks([gone]) : request.action === 'delete' ? { kind: 'deleted', taskId: gone.id } : { kind: 'task', task: gone });
+    await h.run('list', { group: 'oc_gone' });
+    await h.run('runs', { group: 'oc_gone', taskId: gone.id });
+    await h.run('delete', { group: 'oc_gone', taskId: gone.id });
+    await h.run('pause', { group: 'oc_gone', taskId: gone.id });
+    expect(h.requests).toEqual([
+      { action: 'list', chatId: 'oc_gone' }, { action: 'list', chatId: 'oc_gone' }, { action: 'list', chatId: 'oc_gone' },
+      { action: 'delete', chatId: 'oc_gone', taskId: gone.id, revision: 'r9' }, { action: 'pause', chatId: 'oc_gone', taskId: gone.id },
+    ]);
+    h.requests.length = 0;
+    for (const [action, target] of [['add', { name: '日报', instruction: 'x', every: '30m' }], ['edit', { revision: 'r9', name: '早报' }], ['resume', {}], ['run', {}]] as const) {
+      expect(await h.failure(action, { group: 'oc_gone', taskId: gone.id, ...target })).toMatchObject({ exitCode: 2, error: { message: 'Bot「Test」没有绑定「oc_gone」。用 vonvon group list 查看。' } });
+    }
+    // a name, not an id, is still only a bound group's
+    expect(await h.failure('list', { group: '旧群' })).toMatchObject({ exitCode: 2 });
+    expect(h.requests).toEqual([]);
   });
 
   it('runs sends only a list and prints the count and one line per record', async () => {
@@ -166,6 +204,12 @@ describe('exit codes (s47)', () => {
     expect(await conflict.failure('edit', { taskId: 'st_0123456789abcdef', revision: 'r1', daily: '10:00' })).toMatchObject({ exitCode: 5, error: { kind: 'conflict', current: { revision: 'r2' } } });
   });
 
+  it('a conflicting delete says it did not delete', async () => {
+    const conflict = harness(() => ({ kind: 'conflict', current: task({ revision: 'r2' }) }));
+    expect(await conflict.failure('delete', { taskId: 'st_0123456789abcdef', revision: 'r1' })).toMatchObject({ exitCode: 5, error: { kind: 'conflict', message: '这个任务刚在别处改过，没有删除。现在的 revision 是 r2，先看过现在的内容再删。' } });
+    expect(await conflict.failure('edit', { taskId: 'st_0123456789abcdef', revision: 'r1', daily: '10:00' })).toMatchObject({ error: { message: '这个任务刚在别处改过，没有保存。现在的 revision 是 r2，先看过现在的内容再改。' } });
+  });
+
   it('a change without a reply is outcome-unknown 6, a read without one is connection 3, a failed call 1', async () => {
     const never = harness(() => new Promise<never>(() => {}), { local: 20, feishu: 20 });
     expect(await never.failure('pause', { taskId: 'st_1' })).toMatchObject({ exitCode: 6, error: { kind: 'outcome-unknown' } });
@@ -174,6 +218,12 @@ describe('exit codes (s47)', () => {
     expect(await never.failure('delete', { taskId: 'st_1' })).toMatchObject({ exitCode: 3 });
     const failed = harness(() => { throw new RpcError('internal', 'boom'); });
     expect(await failed.failure('list', {})).toMatchObject({ exitCode: 1, error: { kind: 'failed' } });
+  });
+
+  it("the bot process's lost IPC reply to a change is not confirmed, with the hint; to a read it failed", async () => {
+    const lost = harness(() => { throw new RpcError('operation_failed', 'Bot 进程 15000ms 未响应（可能正忙或已假死）'); });
+    expect(await lost.failure('add', { name: '日报', instruction: 'x', every: '30m' })).toEqual({ ok: false, exitCode: 6, error: { kind: 'outcome-unknown', message: '建任务没有确认：Bot 进程 15000ms 未响应（可能正忙或已假死）\n可能已经建好了，运行 vonvon schedule list 查看。' } });
+    expect(await lost.failure('list', {})).toMatchObject({ exitCode: 1, error: { kind: 'failed', message: '读取任务失败：Bot 进程 15000ms 未响应（可能正忙或已假死）' } });
   });
 
   it('refuses in a Bot session before connecting', async () => {

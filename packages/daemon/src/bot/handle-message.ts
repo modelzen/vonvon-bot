@@ -54,7 +54,7 @@ import { deniedScopeName, errorDetail, fitDetail, reportAttention, reportDecisio
 import { createScheduleStore } from './schedule/store';
 import { createScheduler } from './schedule/scheduler';
 import { hostTimeZone } from './schedule/time';
-import { createScheduleCommands, type ScheduleActor } from '../admin/schedule-commands';
+import { botNotRunning, createScheduleCommands, type ScheduleActor } from '../admin/schedule-commands';
 import { createRunActivity } from './activity';
 import { createDroppedReplies, originFor, originOf, type DroppedOrigin } from './restart-dropped';
 import { catalogById, projectCreatableBackends, visibleCatalog } from '../agent/catalog';
@@ -9283,6 +9283,13 @@ export function createOrchestrator(
     await loadStore();
     return scheduleCommands.execute(actor, request);
   };
+  /** Not admit: a stopping bot did nothing, so it says so as a refusal, not as a rejection the terminal reads as a result not known. */
+  const admittedSchedule = (via: 'desktop' | 'cli', request: ScheduleRequest): Promise<ScheduleReply> => (
+    shuttingDown ? Promise.resolve(botNotRunning()) : trackTask(schedule(via, request))
+  );
+  const admittedScheduleAs = (actor: ScheduleActor, request: ScheduleRequest): Promise<ScheduleReply> => (
+    shuttingDown ? Promise.resolve(botNotRunning()) : trackTask(scheduleAs(actor, request))
+  );
 
   const admittedCollaboration = admit(collaboration);
   /** s36d1: creations skip admit, whose shutdown refusal would read as a result not known; serialCreate refuses
@@ -9313,8 +9320,8 @@ export function createOrchestrator(
     adminExecute: admit(adminExecute),
     libraryExecute: admit(libraryExecute),
     settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },
-    schedule: admit(schedule),
-    scheduleAs: admit(scheduleAs),
+    schedule: admittedSchedule,
+    scheduleAs: admittedScheduleAs,
     scheduler: { start: async () => scheduler.start(await loadStore()), stop: () => scheduler.stop(), drain: ms => scheduler.drain(ms) },
     shutdown,
     saveDroppedSync: (why: 'shutdown' | 'crash') => droppedReplies?.saveSync(collectLost(), why),
