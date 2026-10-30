@@ -10,7 +10,7 @@
 - 改：`packages/protocol/src/rpc.ts`、`packages/client/src/client.ts`、`D/admin/{ipc,service}.ts`、`D/bot/supervisor.ts`、`D/cli/commands/run.ts`、`D/bot/bridge.ts`（`BridgeHandle` 加 `schedule`）、`D/server/http.ts`、`D/cli/index.ts`、`D/cli/daemon-client.ts`、`D/bot/handle-message.ts`（只加 store 和调度器的构造、`initialize()` 里 load store、`schedule` 执行入口；注入的 `run` 抛 `runner-not-wired`，不 `start()`）、`D/agent/entry/registry.ts`（`TurnFacts.scheduled`、`TurnAuth.presence` 和推导、定时回合记忆 `kind` 映射 `initiative`，见 4.4；原在 T2，挪到这里让 T2 和 T3 能同时开工）。
 - 可以假设：T1a 的 schema、`ScheduleStore`、`createScheduler` 和 `Scheduler`、`time.ts`（含 `ceilToMinute`）。
 - 不做：运行（T2）、agent 工具和角色表里"无人回合""不在场"两行的实际调用方（T3，命令核这里先把规则写全）、skill（T4a/T4b）、桌面端（T5，桌面端的 ipc-contract/bridge/facade 三层也留给 T5）。
-- 本片不启动 tick：`runNow` 回 `bot-not-running`（调度器回 `'not-started'`）。但 store 要 load（4.2）：daemon 重启后 `list` 照样列出旧任务，`create` 写回的文件里旧任务都在。
+- 本片不启动 tick：`runNow` 回 `bot-not-running`（调度器回 `{ kind: 'not-started' }`）。但 store 要 load（4.2）：daemon 重启后 `list` 照样列出旧任务，`create` 写回的文件里旧任务都在。
 - 后面的片可以假设：命令核签名、`ScheduleActor`、IPC op、RPC 方法、client 方法按总设计第 13 节存在，不再改名。
 
 ## 3. 现在的代码
@@ -43,12 +43,12 @@ export function createScheduleCommands(deps: {
 - `local`：全部动作，`listBot` 只给它。
 - `chat`：owner/admin 全部；member 的 `edit/pause/resume/delete/runNow` 要 `task.createdBy.openId === actor.openId`，否则 `not-task-owner`。
 - `scheduled`：`list` 只回自己这一个；`edit`、`delete` 只对自己这一个，其余 `scheduled-run-scope`；`create` 回 `no-human-create`；`pause/resume/runNow` 回 `scheduled-run-scope`。
-- `create`：`timeZone` 省略取 `hostTimeZone()`；`every` 没 `anchor` 填 `ceilToMinute(now)`；`validateSpec` 不过回 `bad-schedule`；超限回 `task-limit`（文案按超的是群还是 bot）；`placement` 省略时 `follow`（T3 的工具层决定 `topic`/`newTopic`，命令核不猜）；`createdBy` 按 actor 填（`chat` 填 `openId`、`name`、`role`、`messageId`、`text`；`local` 填 `via`）；`cursor = createdAt`；`id = 'st_' + 16 位随机十六进制`；写完 `scheduler.wake()`。
+- `create`：`timeZone` 省略取 `hostTimeZone()`，给了就存 `normalizeTimeZone(timeZone)`（`edit` 改时区同样）；`every` 没 `anchor` 填 `ceilToMinute(now)`；`validateSpec` 不过回 `bad-schedule`；超限回 `task-limit`（文案按超的是群还是 bot）；`placement` 省略时 `follow`（T3 的工具层决定 `topic`/`newTopic`，命令核不猜）；`createdBy` 按 actor 填（`chat` 填 `openId`、`name`、`role`、`messageId`、`text`；`local` 填 `via`）；`cursor = createdAt`；`id = 'st_' + 16 位随机十六进制`；写完 `scheduler.wake()`。
 - `edit`：`revision` 不等回 `conflict` 带 current；改了 `spec`：`every` 重新填 `anchor = ceilToMinute(now)`、`cursor = now`、`consecutiveFailures = 0`、`finished` 的任务改回 `active`（Claude 定）；改 `timeZone` 要 `validateSpec` 认识。
 - `pause`/`resume`：`resume` 把 `cursor = now`（暂停期间的不补）、清 `consecutiveFailures`、`pausedReason`；`once` 的 `at` 已过去 → 直接 `finished`，回复里的 `describe` 带"（已过期）"。
 - `delete`：`revision` 不等回 `conflict`；正在跑也能删，调度器结算时发现任务没了就丢掉。
-- `runNow`：转 `scheduler.runNow`，`running` → `running`，`not-started` → `bot-not-running`，`not-found` → `not-found`。
-- 视图：`toView(task, now)` 填 `nextRunAt`（`nextSlotAfter(spec, tz, cursor)`，paused/finished 不填）、`running = !!inflight`、`describe = describeSpec(spec, tz, hostTimeZone())`；`tasks` 回复带 `now` 和 `timeZone: hostTimeZone()`。
+- `runNow`：转 `scheduler.runNow`，`{ kind: 'started', runId }` → `{ kind: 'started', taskId, runId }`，`running` → `running`，`not-started` → `bot-not-running`，`not-found` → `not-found`。
+- 视图：`toView(task, now)` 填 `nextRunAt`（`nextSlotAfter(spec, tz, cursor)`，paused/finished 不填）、`running = !!inflight`、`describe = describeSpec(spec, tz, hostTimeZone(), now)`；`tasks` 回复带 `now` 和 `timeZone: hostTimeZone()`。
 
 ### 4.2 IPC、service、RPC
 
@@ -86,7 +86,7 @@ main 必败：命令核、IPC op、RPC 方法、终端命令在基线不存在�
   - 第 21 个（同群）→ `task-limit` 文案"本群已有 20 个任务…"；第 201 个（跨群）→ "这个 Bot 已有 200 个任务…"。
   - `every` 请求没 `anchor` → 存储里有、等于 `ceilToMinute(now)`；`describe` 等于 "每 30 分钟"；`tasks` 回复带 `now`、`timeZone`。
   - 坏 spec → `bad-schedule` 带 `validateSpec` 的文案；旧 revision → `conflict` 带 current；`edit` 改 spec 后 `cursor = now`、`anchor` 重填、`finished` 回 `active`；`resume` 的 `cursor` 推到 now，过期的 `once` 直接 `finished`。
-  - `runNow` 在调度器 `'not-started'` 时 → `bot-not-running`。
+  - `runNow` 在调度器 `{ kind: 'not-started' }` 时 → `bot-not-running`；调度器回 `{ kind: 'started', runId: 'r1' }` → 回复 `{ kind: 'started', taskId, runId: 'r1' }`。
   - 请求不过 schema → `bad-schedule`，不抛。
 - `schedule-cli.test.ts`：参数解析（时间选项给两个 → 退 2；`--every 2h` → `minutes: 120`；`--weekly mon,wed@10:00` → `days: [1,3], time: '10:00'`；`--at` 用 daemon 的时区；`delete` 不带 `--revision` → 先 `list` 再带当前 revision 发 `delete`；`runs` 只发 `list`）；人类输出逐字一行；`--json` 原样；各退出码；daemon 不在只报 connection、不建数据目录；`VONVON_SESSION` 下拒绝。
 - `schedule-rpc.test.ts`：真实 http 服务到假 service 的 `schedule` 一来一回，`clientKind: 'cli'` → `via: 'cli'`；supervisor 在 bot 没运行时回 `refused bot-not-running`；`run.ts` 内联分发 `schedule` 到 `handle.schedule`。
