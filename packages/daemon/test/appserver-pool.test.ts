@@ -132,7 +132,7 @@ describe('utility client 复用与出错即重建（M-2）', () => {
     const activePid = active.pid!;
     const pending = utilityRequest<{pid: number}>('slow');
     try {
-      await vi.waitFor(() => expect(existsSync(script + '.slow-started')).toBe(true));
+      await vi.waitFor(() => expect(existsSync(script + '.slow-started')).toBe(true), { timeout: CONNECT_TIMEOUT_MS });
       const oldUtilityPid = pids().find(pid => pid !== activePid)!;
       appendFileSync(bin, process.platform === 'win32' ? '\r\nrem upgraded\r\n' : '\n# upgraded\n');
       expect(await utilityRequest('model/list')).toMatchObject({data: [{id: 'pool-model'}]});
@@ -441,6 +441,8 @@ describe('首启闸（R3-1）：同一个 CODEX_HOME 第一个进程回 initiali
 
   it('等闸的时间不算进 utility 和预热自己的连接时限：首启快到时限才连上，等着的照样连上（审查 F1）', async () => {
     const { bin } = makeFakeCodex();
+    // The gate test owns only fake clients: a real version probe cannot use this fake clock.
+    vi.spyOn(await import('../src/agent/codex-appserver/locate'), 'codexVersionAsync').mockResolvedValue('codex-cli 0.163.0');
     // No real process: connect takes 500 ms of fake time, requests answer at once.
     const connect = vi.spyOn(AppServerClient.prototype, 'connect')
       .mockImplementation(() => new Promise(resolve => setTimeout(resolve, 500)));

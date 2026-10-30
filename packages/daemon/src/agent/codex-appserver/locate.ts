@@ -225,7 +225,8 @@ async function probeCodexVersion(bin: string, before: string | null): Promise<st
   let out: string | null;
   try {
     out = await runSetupChild(bin, ['--version'], {
-      cwd: homedir(), env: binChildEnv(bin), signal: new AbortController().signal, timeoutMs: 3_000,
+      // Windows starts the Job Object supervisor (PowerShell + C#) before the CLI.
+      cwd: homedir(), env: binChildEnv(bin), signal: new AbortController().signal, timeoutMs: IS_WIN ? 20_000 : 3_000,
     });
   } catch (error) {
     // Unknown process death must not permit a replacement probe to start.

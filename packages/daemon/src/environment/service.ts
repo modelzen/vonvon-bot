@@ -12,6 +12,7 @@ import { CODEX_MIN_VERSION, CODEX_VERIFIED_VERSION, classifyCodexVersion, compar
 import { managedCodexBin } from "../agent/codex-appserver/managed-install";
 import { codexSource } from './codex-source';
 import { bundledNpmCli } from '../platform/npm';
+import { OwnedProviderProcess, ProviderProcessExitError } from '../agent/owned-process';
 import {
   environmentProfileSchema,
   type EnvironmentOperation,
@@ -80,6 +81,7 @@ export class EnvironmentService {
   private closePromise?: Promise<void>;
   /** Each launched tool process, with a promise that settles when its pipes close. */
   private readonly children = new Map<ChildProcess, Promise<void>>();
+  private readonly windowsChildren = new Map<ChildProcess, OwnedProviderProcess>();
   private readonly requests = new Set<Promise<unknown>>();
   private mcpService?: McpService;
 
@@ -130,15 +132,31 @@ export class EnvironmentService {
 
   private async drain(): Promise<void> {
     await Promise.allSettled([...this.requests]);
-    await Promise.all([...this.children.values()]);
+    const results = await Promise.allSettled([...this.children.values()]);
     for (const child of this.children.keys()) {
+      if (this.windowsChildren.has(child)) continue; // rejected unconfirmed cleanup is reported below
       while (this.groupAlive(child)) await new Promise(resolve => setTimeout(resolve, 50));
       this.children.delete(child);
     }
+    const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+    if (errors.length) throw new AggregateError(errors, '本机工具清理未完成。');
   }
 
   private launch(executablePath: string, args: string[], secret?: string, env?: NodeJS.ProcessEnv): ChildProcess {
     if (this.closing) throw new Error("本机环境正在退出。");
+    if (process.platform === 'win32' && this.spawnProcess === spawnProcess) {
+      const owner = new OwnedProviderProcess(executablePath, args, {
+        env: env ?? this.environment(executablePath), stdio: [secret === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      }, 'Environment tool');
+      const child = owner.child;
+      const closed = owner.exited.then(async () => {
+        try { await owner.close(); } catch (error) { if (!(error instanceof ProviderProcessExitError)) throw error; }
+      }, async error => { try { await owner.close(); } catch (cleanup) { if (owner.unconfirmedPid !== undefined) throw cleanup; } throw error; });
+      this.windowsChildren.set(child, owner); this.children.set(child, closed);
+      const forget = () => { if (owner.unconfirmedPid === undefined) { this.children.delete(child); this.windowsChildren.delete(child); } };
+      void closed.then(forget, forget);
+      return child;
+    }
     const child = this.spawnProcess(executablePath, args, {
       env: env ?? this.environment(executablePath), stdio: [secret === undefined ? "ignore" : "pipe", "pipe", "pipe"], detached: true,
     });
@@ -152,6 +170,7 @@ export class EnvironmentService {
   }
 
   private groupAlive(child: ChildProcess): boolean {
+    if (this.windowsChildren.has(child)) return true; // removed only after confirmed Job cleanup
     if (!child.pid) return false;
     try { process.kill(-child.pid, 0); return true; }
     catch (error) {
@@ -163,6 +182,8 @@ export class EnvironmentService {
   private async terminate(child: ChildProcess): Promise<void> {
     const closed = this.children.get(child);
     if (!closed) return;
+    const windows = this.windowsChildren.get(child);
+    if (windows) { await windows.close(); await closed; return; }
     for (const signal of ["SIGTERM", "SIGKILL"] as const) {
       if (this.groupAlive(child)) {
         const pid = child.pid;
@@ -281,7 +302,7 @@ export class EnvironmentService {
   private async inspect(tool: EnvironmentTool): Promise<EnvironmentToolState> {
     const resolved = await this.resolveTool(tool);
     const managedVersion = await this.managedVersion(tool);
-    const result = resolved ? await this.command(resolved.executable, ["--version"], 5_000).catch(() => null) : null;
+    const result = resolved ? await this.command(resolved.executable, ["--version"], process.platform === 'win32' ? 20_000 : 5_000).catch(() => null) : null;
     const version = result?.exitCode === 0 ? result.stdout.match(/\b\d+\.\d+\.\d+(?:[-+][\w.-]+)?\b/)?.[0] ?? null : null;
     const compatibility = tool === "codex" && resolved ? { status: classifyCodexVersion(version), minimum: CODEX_MIN_VERSION, verified: CODEX_VERIFIED_VERSION } : undefined;
     const latest = await this.fetchLatest(tools[tool].package).catch(() => null);
@@ -528,7 +549,9 @@ export class EnvironmentService {
     child.stdout?.on("data", consume);
     child.stderr?.on("data", consume);
     child.once("error", () => this.finishOperation(id, "failed", "无法启动授权或创建流程。"));
-    child.once("close", (exitCode) => this.finishOperation(id, exitCode === 0 ? "succeeded" : "failed", exitCode === 0 ? "操作已完成。" : "操作未完成，请重试。"));
+    child.once("close", (exitCode) => { void (this.children.get(child) ?? Promise.resolve()).then(
+      () => this.finishOperation(id, exitCode === 0 ? "succeeded" : "failed", exitCode === 0 ? "操作已完成。" : "操作未完成，请重试。"),
+      () => this.finishOperation(id, 'failed', '无法确认本机工具清理完成。')); });
     return { kind: "operation", operation: snapshot };
   }
 
@@ -571,10 +594,12 @@ export class EnvironmentService {
   /** `executablePath`'s own directory goes last on PATH: an nvm-installed tool's
    * `#!/usr/bin/env node` launcher needs the `node` next to it. */
   private environment(executablePath?: string): NodeJS.ProcessEnv {
+    const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows';
     return {
-      ...(process.platform === "win32" ? { ComSpec: process.env.ComSpec ?? win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe") } : {}),
+      ...(process.platform === "win32" ? { ComSpec: process.env.ComSpec ?? win32.join(systemRoot, "System32", "cmd.exe"), SystemRoot: systemRoot, WINDIR: systemRoot,
+        PATHEXT: process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD', TEMP: process.env.TEMP, TMP: process.env.TMP } : {}),
       HOME: this.home, USERPROFILE: this.home,
-      PATH: [dirname(this.nodePath), this.searchPath, "/usr/bin", "/bin", ...(executablePath && isAbsolute(executablePath) ? [dirname(executablePath)] : [])].join(delimiter),
+      PATH: [dirname(this.nodePath), this.searchPath, ...(process.platform === 'win32' ? [win32.join(systemRoot, 'System32'), systemRoot] : ["/usr/bin", "/bin"]), ...(executablePath && isAbsolute(executablePath) ? [dirname(executablePath)] : [])].join(delimiter),
       LANG: "en_US.UTF-8", LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1", LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1",
     };
   }
@@ -615,7 +640,7 @@ export class EnvironmentService {
       child.stdout?.on("data", (chunk: Buffer | string) => collect(chunk, true));
       child.stderr?.on("data", (chunk: Buffer | string) => collect(chunk, false));
       child.once("error", () => finish(new Error("无法启动本机工具。")));
-      child.once("close", (code) => {if (!stoppingError) finish(undefined, code);});
+      child.once("close", (code) => {if (!stoppingError) void (this.children.get(child) ?? Promise.resolve()).then(() => finish(undefined, code), () => finish(new Error('无法确认本机工具清理完成。')));});
       signal?.addEventListener("abort", onAbort, { once: true });
       if (signal?.aborted) onAbort();
       if (secret !== undefined) child.stdin?.end(`${secret}\n`);
