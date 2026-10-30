@@ -40,13 +40,24 @@ function fixture() {
   const thread: AgentThread = { sessionId: 'synthetic', isAlive: () => true, close: async () => {},
     runStreamed: () => { throw Error('unused'); }, runGoal: () => { throw Error('unused'); },
     clearGoal: async () => {}, abort: async () => {}, steer: async () => {}, compact: async () => ({ compacted: false, usage: null }) };
+  const pendingTools: Promise<void>[] = [];
+  const tools = createCommandTools({ appId: botId, settings, projects: listProjects,
+    groups: async () => ({ groups: [] }), members: async () => ({ members: [] }) }).map(tool => ({
+    ...tool,
+    run: (...args: Parameters<typeof tool.run>) => {
+      const pending = Promise.resolve(tool.run(...args));
+      pendingTools.push(pending.then(() => {}, () => {}));
+      return pending;
+    },
+  }));
   const entries = createAgentEntries({ appId: botId, isAdmin: () => flags.admin, isOwner: () => true,
-    chatSettingsOn: () => flags.enabled, tools: createCommandTools({ appId: botId, settings, projects: listProjects,
-      groups: async () => ({ groups: [] }), members: async () => ({ members: [] }) }) });
+    chatSettingsOn: () => flags.enabled, tools });
   const entry = entries.issue({ kind: 'p2p' }); entry.attach(thread);
   const scope = entries.openTurn(thread, { requesterOpenId: 'synthetic-owner', requesterKind: 'user', triggerMessageId: 'synthetic-message', retry: false, wake: false, initiative: false });
   entry.noteToolUse('synthetic-use');
-  return { writer, settings, flags, entry, scope, call: (edit: unknown) => entry.call('settings_set', { edit, reason: 'requested change' }, { toolUseId: 'synthetic-use' }) };
+  // Cancellation can settle entry.call before the guarded writer finishes unwinding.
+  // Wait for that work before checking bytes and removing its temporary data root.
+  return { writer, settings, flags, entry, scope, settled: () => Promise.all(pendingTools), call: (edit: unknown) => entry.call('settings_set', { edit, reason: 'requested change' }, { toolUseId: 'synthetic-use' }) };
 }
 const interruptions = ['revoke administrator', 'close turn', 'switch off', 'revoke entry', 'deadline'] as const;
 async function interrupt(f: ReturnType<typeof fixture>, kind: typeof interruptions[number]) {
@@ -69,6 +80,7 @@ describe('s47 real settings writers behind agent authorization', () => {
     await new Promise<void>(resolve => setImmediate(resolve));
     await interrupt(f, kind); release.resolve(); await holding;
     expect(await pending).toMatchObject({ ok: false });
+    await f.settled();
     await updateProject('fixture', {});
     expect(await listProjects()).toMatchObject([{ noMention: false, network: true }]);
     expect((await readdir(state.root)).filter(name => name.includes('.tmp-'))).toEqual([]);
@@ -86,6 +98,7 @@ describe('s47 real settings writers behind agent authorization', () => {
     await new Promise<void>(resolve => setImmediate(resolve));
     await interrupt(f, kind); release.resolve(); await holding;
     expect(await pending).toMatchObject({ ok: false });
+    await f.settled();
     await f.writer(() => {});
     expect(await readFile(join(state.root, 'config.json'))).toEqual(before);
     expect(cfg.preferences?.showToolCalls).toBeUndefined();
@@ -117,6 +130,7 @@ describe('s47 real settings writers behind agent authorization', () => {
     await new Promise<void>(resolve => setImmediate(resolve));
     await interrupt(f, kind); release.resolve(); await holding;
     expect(await pending).toMatchObject({ ok: false });
+    await f.settled();
     await mutateSession('session-fixture', () => {});
     const after = await getSession('session-fixture');
     expect(after).toEqual({ ...before, updatedAt: after?.updatedAt });

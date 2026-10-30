@@ -111,12 +111,7 @@ export class Attention {
       this.changed();
       return place.mode;
     }
-    if (!place.topic && place.mode === 'focus' && place.repliedAt !== undefined
-      && now - place.repliedAt > this.params.mainFocusMs) {
-      place.mode = 'watch';
-      place.intervalMs = this.params.exitIntervalMs;
-      place.misses = 0;
-    }
+    this.expireMainFocus(place, now);
     if (place.mode === 'watch' && place.arrivedAt !== undefined
       && now - place.arrivedAt >= this.params.lullMs) {
       place.intervalMs = this.params.intervalsMs[0]!;
@@ -124,6 +119,37 @@ export class Attention {
     place.arrivedAt = Math.max(place.arrivedAt ?? now, now);
     this.changed();
     return place.mode;
+  }
+
+  private expireMainFocus(place: PlaceView, now: number): boolean {
+    if (place.topic || place.mode !== 'focus' || place.repliedAt === undefined
+      || now - place.repliedAt <= this.params.mainFocusMs) return false;
+    place.mode = 'watch';
+    place.intervalMs = this.params.exitIntervalMs;
+    place.misses = 0;
+    return true;
+  }
+
+  /** Expire idle main areas without inventing an arrival or touching their LRU order. */
+  expire(now: number): boolean {
+    let changed = false;
+    for (const place of this.places.values()) {
+      if (this.expireMainFocus(place, now)) changed = true;
+    }
+    if (changed) this.changed();
+    return changed;
+  }
+
+  /** The caller schedules one timer for the earliest main-area expiry; topics never time out. */
+  nextExpiryAt(): number | undefined {
+    let next = Infinity;
+    for (const place of this.places.values()) {
+      if (!place.topic && place.mode === 'focus' && place.repliedAt !== undefined) {
+        // Preserve the existing rule: focus lasts through exactly mainFocusMs.
+        next = Math.min(next, place.repliedAt + this.params.mainFocusMs + 1);
+      }
+    }
+    return Number.isFinite(next) ? next : undefined;
   }
 
   /** Earliest time to glance, never earlier than now. Pending is oldest first. */
