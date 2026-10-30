@@ -20,6 +20,21 @@ async function run(file,args,options={}) {
   const child=spawn(file,args,{stdio:'inherit',windowsHide:true,...options});
   await new Promise((resolve,reject)=>{child.once('error',reject);child.once('exit',(code,signal)=>code===0?resolve():reject(Error(`Acceptance subprocess failed (${code??signal}): ${file}`)));});
 }
+async function externalInput(path,directory=false) {
+  assert(isAbsolute(path),'Cache input must be absolute');const nested=relative(repo,resolve(path));
+  assert(nested==='..'||nested.startsWith('..'+sep)||isAbsolute(nested),'Cache input must be outside the source checkout');
+  assert(directory?(await stat(path)).isDirectory():(await stat(path)).isFile(),'Cache input has the wrong file type');
+}
+/** Only the installed Electron package's official checksum table may authorize an archive. */
+export async function extractWindowsUpgradeElectronArchive(architecture,archive,destination) {
+  assert(['x64','arm64'].includes(architecture),'Unsupported Windows architecture');await externalInput(archive);
+  const {devDependencies}=JSON.parse(await readFile(join(repo,'package.json'),'utf8')),version=devDependencies.electron;
+  const electronRequire=createRequire(require.resolve('electron/package.json')),name='electron-v'+version+'-win32-'+architecture+'.zip';
+  const expected=electronRequire('./checksums.json')[name];assert.match(expected??'',/^[a-f0-9]{64}$/i,'Missing trusted Electron checksum');
+  const sha256=await digest(archive,'sha256','hex');assert.equal(sha256,expected,'Electron archive checksum does not match '+name);
+  await mkdir(destination,{recursive:true});await electronRequire('@electron-internal/extract-zip').extract(archive,{dir:destination});
+  return {path:resolve(archive),version,arch:architecture,sha256};
+}
 /** The generated app is the builder project; the evidence root has no package.json. */
 export function windowsUpgradeBuilderArguments(stage,configPath,architecture) {
   return [require.resolve('electron-builder/cli.js'),'--projectDir',stage,'--config',configPath,'--win','nsis','--'+architecture,'--publish','never'];
@@ -189,7 +204,7 @@ accept().catch(fail);
 `;
 }
 /** New external output directory only. Keeps artifacts and failed installations for inspection. */
-export async function acceptWindowsUpgrade({architecture,out,sourceSha:expectedSourceSha}) {
+export async function acceptWindowsUpgrade({architecture,out,sourceSha:expectedSourceSha,electronArchive,builderCache}) {
   if(process.platform!=='win32')throw Error('Run native upgrade acceptance on Windows; this script never controls a VM.');
   if(!['x64','arm64'].includes(architecture)||!isAbsolute(out??''))throw Error('Use --architecture x64|arm64 and a new absolute --out outside the repository');
   out=resolve(out);const nested=relative(repo,out);
@@ -202,6 +217,7 @@ export async function acceptWindowsUpgrade({architecture,out,sourceSha:expectedS
     const clean=spawnSync('git',args,{cwd:repo,encoding:'utf8'});
     if(clean.error||clean.status!==0||clean.stdout.trim())throw Error('Native acceptance requires a clean source checkout matching the recorded SHA');
   }
+  if(electronArchive)await externalInput(electronArchive);if(builderCache)await externalInput(builderCache,true);
   await mkdir(out); // Refuse reuse: every run has a unique identity and an empty profile.
   await writeFile(join(out,'disk-space-before.json'),json(await diskSpace(out)));
   try{
@@ -213,7 +229,7 @@ export async function acceptWindowsUpgrade({architecture,out,sourceSha:expectedS
   const c={out,id,sourceSha,appId,productName,executableName,nsisGuid,architecture,installDir,desktopHome,dataHome,localAppData,tempDir,sentinel,publicKey,versions};
   await mkdir(dataHome);await writeFile(join(dataHome,'sentinel'),sentinel);
   const manualWizard={installer:join(out,'packages','Vonvon-Bot-Setup-'+versions[0]+'-'+architecture+'.exe'),instructions:['After automatic acceptance has uninstalled its unique app, open this fixture installer interactively.','Observe the editable directory page, fixed current-user scope, Chinese/system language and installation progress; save screenshots here.','For an alternate writable path, uncheck Run on the finish page: the automatic entry expects installDir and must not run from another location.','Uninstall only this unique product from the manually chosen path. Never use the real Vonvon Bot installer or registration.'],uninstallerName:'Uninstall '+productName+'.exe'};
-  await writeFile(join(out,'acceptance-plan.json'),json({...c,manualWizard,installerStoreCaveat:'NSIS keeps one unique fixture installer cache under the Windows LOCALAPPDATA known folder, which may remain on C:. All large extraction/build/download work uses the output volume. See disk-space-before/after.json.',scope:'Real updater + NSIS full-download A→B→C; no full product UI, daemon, differential-download or SmartScreen-prompt claim'}));
+  await writeFile(join(out,'acceptance-plan.json'),json({...c,electronArchive:electronArchive??null,builderCache:builderCache??null,manualWizard,installerStoreCaveat:'NSIS keeps one unique fixture installer cache under the Windows LOCALAPPDATA known folder, which may remain on C:. All large extraction/build/download work uses the output volume. See disk-space-before/after.json.',scope:'Real updater + NSIS full-download A→B→C; no full product UI, daemon, differential-download or SmartScreen-prompt claim'}));
   const production=join(repo,'packages/desktop/src/windows-updates.ts'),include=join(repo,'packages/desktop/assets/windows-installer.nsh');
   const sourceFiles=[production,include,join(repo,'packages/desktop/src/windows-update-manifest.mjs'),join(repo,'packages/desktop/electron-builder.yml'),join(repo,'package.json'),join(repo,'package-lock.json'),fileURLToPath(import.meta.url)];
   const sourceHashes={};for(const file of sourceFiles)sourceHashes[relative(repo,file)]=await digest(file,'sha256','hex');
@@ -223,8 +239,10 @@ export async function acceptWindowsUpgrade({architecture,out,sourceSha:expectedS
   const runtime=join(out,'electron-runtime'),buildHome=join(out,'build-home'),stage=join(out,'stage'),packages=join(out,'packages');
   await mkdir(buildHome);await mkdir(stage);await mkdir(join(stage,'dist'));
   const fixtureEnv=windowsUpgradeChildEnvironment(out),env={...fixtureEnv,HOME:buildHome,LOCALAPPDATA:join(buildHome,'local-app-data'),ELECTRON_SKIP_BINARY_DOWNLOAD:'1',CSC_IDENTITY_AUTO_DISCOVERY:'false',ELECTRON_BUILDER_7Z_FILTER:'BCJ'};
+  if(builderCache)env.ELECTRON_BUILDER_CACHE=builderCache;
   for(const path of new Set([fixtureEnv.TEMP,fixtureEnv.LOCALAPPDATA,env.LOCALAPPDATA,env.ELECTRON_BUILDER_CACHE,env.npm_config_cache]))await mkdir(path,{recursive:true});
-  await run(process.execPath,[join(repo,'scripts/windows-build-tools.mjs'),'electron',architecture,runtime],{cwd:repo,env});
+  if(electronArchive)await writeFile(join(out,'runtime-archive.json'),json(await extractWindowsUpgradeElectronArchive(architecture,electronArchive,runtime)));
+  else await run(process.execPath,[join(repo,'scripts/windows-build-tools.mjs'),'electron',architecture,runtime],{cwd:repo,env});
   await build({stdin:{contents:windowsUpgradeAcceptanceEntry(production),sourcefile:'upgrade-acceptance-entry.js',resolveDir:repo},outfile:join(stage,'main.cjs'),bundle:true,platform:'node',target:'node22',format:'cjs',external:['electron']});
   await writeFile(join(stage,'acceptance.json'),json(c));await writeFile(join(stage,'dist/windows-update-config.json'),json({publicKey}));
   const metadata=JSON.parse(await readFile(join(repo,'package.json'),'utf8'));
@@ -278,7 +296,7 @@ export async function acceptWindowsUpgrade({architecture,out,sourceSha:expectedS
   }finally{await writeFile(join(out,'disk-space-after.json'),json(await diskSpace(out)));}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
-  const {values}=parseArgs({options:{architecture:{type:'string'},out:{type:'string'},'source-sha':{type:'string'},help:{type:'boolean'}}});
-  if(values.help)console.log('On Windows after npm ci: node scripts/windows-upgrade-acceptance.mjs --architecture arm64 --out E:\\absolute\\new-evidence-dir --source-sha FULL_SHA\nUse a different new directory for x64. Never controls the VM, publishes, signs with the production key, or uses the owner installation. Artifacts/evidence remain; a successful run uninstalls only its unique test app. A failed run preserves its test installation for inspection. See acceptance-plan.json/manualWizard for separate interactive directory/language/progress checks; disable Run after finishing a manual alternate-path install. This lane does not prove production UI/daemon, differential download, or SmartScreen prompt behavior.');
-  else try{console.log(json(await acceptWindowsUpgrade({...values,sourceSha:values['source-sha']})));}catch(error){console.error(error.stack??error);process.exitCode=1;}
+  const {values}=parseArgs({options:{architecture:{type:'string'},out:{type:'string'},'source-sha':{type:'string'},'electron-archive':{type:'string'},'builder-cache':{type:'string'},help:{type:'boolean'}}});
+  if(values.help)console.log('On Windows after npm ci: node scripts/windows-upgrade-acceptance.mjs --architecture arm64 --out E:\\absolute\\new-evidence-dir --source-sha FULL_SHA\nOptional --electron-archive ABS_ZIP verifies the fixed version/architecture official checksum before extraction; --builder-cache ABS_DIR reuses a seeded copy of build tools only. Both paths must be outside source. Use a different new directory for x64. Never controls the VM, publishes, signs with the production key, or uses the owner installation. Artifacts/evidence remain; a successful run uninstalls only its unique test app. A failed run preserves its test installation for inspection. See acceptance-plan.json/manualWizard for separate interactive directory/language/progress checks; disable Run after finishing a manual alternate-path install. This lane does not prove production UI/daemon, differential download, or SmartScreen prompt behavior.');
+  else try{console.log(json(await acceptWindowsUpgrade({...values,sourceSha:values['source-sha'],electronArchive:values['electron-archive'],builderCache:values['builder-cache']})));}catch(error){console.error(error.stack??error);process.exitCode=1;}
 }

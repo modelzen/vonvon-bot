@@ -10,7 +10,7 @@ import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 import {runInNewContext} from 'node:vm';
 import {build} from 'esbuild';
-import {acceptWindowsUpgrade,windowsUpgradeAcceptanceEntry,windowsUpgradeBuilderArguments,waitForWindowsUpgradeRemoval,preserveWindowsUpgradeFailure,windowsUpgradeChildEnvironment,windowsUpgradeRegistryScript,parseWindowsUpgradeRegistryResult,readWindowsUpgradeRegistration} from './windows-upgrade-acceptance.mjs';
+import {acceptWindowsUpgrade,windowsUpgradeAcceptanceEntry,windowsUpgradeBuilderArguments,waitForWindowsUpgradeRemoval,preserveWindowsUpgradeFailure,windowsUpgradeChildEnvironment,windowsUpgradeRegistryScript,parseWindowsUpgradeRegistryResult,readWindowsUpgradeRegistration,extractWindowsUpgradeElectronArchive} from './windows-upgrade-acceptance.mjs';
 
 const repo=fileURLToPath(new URL('../',import.meta.url));
 test('native acceptance entry bundles real production update code and has valid Node syntax',async t=>{
@@ -61,6 +61,14 @@ test('native registry reader preserves a Unicode path and distinguishes its own 
   const observed=readWindowsUpgradeRegistration(guid).filter(row=>row.hive==='HKCU'&&!row.key.includes('CurrentVersion'));
   assert.equal(observed.length,2);for(const row of observed){assert(row.exists);assert.equal(row.values.InstallLocation,location);assert(row.value.includes(location));}
   await cleanup();assert(readWindowsUpgradeRegistration(guid).every(row=>!row.exists));
+});
+
+test('untrusted Electron bytes fail the official version/architecture checksum before creating runtime output',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'vonvon-upgrade-archive-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const archive=join(root,'electron-other-version.zip'),destination=join(root,'never-created');await writeFile(archive,'Untrusted or wrong-architecture archive');
+  for(const architecture of ['x64','arm64'])await assert.rejects(extractWindowsUpgradeElectronArchive(architecture,archive,destination),/Electron archive checksum does not match electron-v.*-win32-/);
+  await assert.rejects(stat(destination),{code:'ENOENT'});assert.equal(await readFile(archive,'utf8'),'Untrusted or wrong-architecture archive');
+  await assert.rejects(extractWindowsUpgradeElectronArchive('arm64','relative.zip',destination),/must be absolute/);
 });
 
 test('child environment confines temporary files and caches without changing inherited settings',async t=>{
