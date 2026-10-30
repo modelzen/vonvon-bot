@@ -1,6 +1,7 @@
 import type { JudgeErrorKind } from '../agent/error-kind';
 import type { ReasoningEffort } from '../agent/types';
 import type { Project } from '../project/registry';
+import type { JudgeProvider } from './global-models';
 
 export type { JudgeErrorKind } from '../agent/error-kind';
 
@@ -24,7 +25,7 @@ export type JudgeSelectionStored =
   | { kind: 'default' }
   | { kind: 'llm'; backend: string; model: string; effort?: ReasoningEffort; custom?: true }
   | { kind: 'decision'; provider: string; model: string }
-  | { kind: 'provider'; provider: 'codex-appserver' | 'claude-agent' | 'typesafe' };
+  | { kind: 'provider'; provider: JudgeProvider };
 
 export interface JudgeLine {
   /** message id: what an anchor names (s25b); never rendered */

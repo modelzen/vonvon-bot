@@ -1233,13 +1233,13 @@ export function createOrchestrator(
     clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
   };
   const attention = options?.attention ?? new Attention();
-  let attentionBudgetTimer: unknown;
+  let attentionTimer: unknown;
   function publishAttention(): void {
-    if (attentionBudgetTimer !== undefined) time.clearTimer(attentionBudgetTimer);
-    attentionBudgetTimer = undefined;
+    if (attentionTimer !== undefined) time.clearTimer(attentionTimer);
+    attentionTimer = undefined;
     if (shuttingDown) return;
     const now = time.now();
-    let next = Infinity;
+    let next = attention.nextExpiryAt() ?? Infinity;
     const groups = attention.snapshot().map(group => {
       const used = budget.used(group.groupId, now);
       if (used < JUDGE_GLANCE_CAP) return group;
@@ -1249,7 +1249,12 @@ export function createOrchestrator(
       return { ...group, budget: { kind: used >= JUDGE_BUDGET ? 'named-only' as const : 'no-glance' as const, until } };
     });
     reportAttention(groups);
-    if (Number.isFinite(next)) attentionBudgetTimer = time.setTimer(publishAttention, Math.max(1, next - now));
+    if (Number.isFinite(next)) attentionTimer = time.setTimer(() => {
+      if (shuttingDown) return;
+      // Expiry notifies the observer synchronously, which publishes and rearms once.
+      // Budget-only deadlines still need a fresh publication when no place expired.
+      if (!attention.expire(time.now())) publishAttention();
+    }, Math.max(1, next - now));
   }
   const placeOf = (msg: NormalizedMessage): PlaceRef => ({ chatId: msg.chatId, place: msg.threadId ?? msg.chatId });
   const takenTo = new Map<string, { chatId: string; at: number }>();
@@ -9134,8 +9139,8 @@ export function createOrchestrator(
     if (shutdownPromise) return shutdownPromise;
     shuttingDown = true;
     entries?.closeAll('shutdown');
-    if (attentionBudgetTimer !== undefined) time.clearTimer(attentionBudgetTimer);
-    attentionBudgetTimer = undefined;
+    if (attentionTimer !== undefined) time.clearTimer(attentionTimer);
+    attentionTimer = undefined;
     attention.observe(() => undefined);
     asks.shutdown();
     // Written at once, before anything is cleared below and long before the Codex processes end or the lock goes.
