@@ -55,6 +55,7 @@ import { createScheduleStore } from './schedule/store';
 import { createScheduler } from './schedule/scheduler';
 import { hostTimeZone } from './schedule/time';
 import { createScheduleCommands } from '../admin/schedule-commands';
+import type { StoredTask } from './schedule/types';
 import { createRunActivity } from './activity';
 import { createDroppedReplies, originFor, originOf, type DroppedOrigin } from './restart-dropped';
 import { catalogById, projectCreatableBackends, visibleCatalog } from '../agent/catalog';
@@ -238,6 +239,7 @@ import { buildScopeGrantUrl, JOIN_GROUP_SCOPES } from '../config/scopes';
 import { validateAppCredentials } from '../utils/feishu-auth';
 import {
   getProjectByChatId,
+  getProjectByChatIdSync,
   getProjectByName,
   listProjects,
   noMentionOf,
@@ -703,6 +705,8 @@ export function sessionChangeNotice(reason: RecreateReason, topic: boolean): str
 interface ActiveState {
   steerReply?: { run: AgentRun; accept: (messageId: string, voice?: VoiceReply) => boolean };
   presentation?: AppConfig;
+  /** The run's group, from launchRun or launchGoalRun on; the edit lock looks at this group's runs only (see runningIn). */
+  chatId?: string;
   /** Captured with the steer target so a late ACK cannot decorate another turn. */
   voiceReply?: { run: AgentRun; add: (voice: VoiceReply) => void };
   /** Prevent a late ASR result from restarting a stopped conversation. */
@@ -2019,6 +2023,23 @@ export function createOrchestrator(
     log.info('intake', 'attention-forget', { chat: chatId.slice(-6), why });
   }
 
+  /** An unbound group's active scheduled tasks pause as unavailable: kept, not deleted (3.13). Not waited for: a failed
+   * write is logged and the unbind goes on. */
+  function markUnavailable(chatId: string): void {
+    void trackTask((async () => {
+      await loadStore();
+      if (!scheduleStore.byChat(chatId).some(task => task.state === 'active')) return;
+      await scheduleStore.mutateConfig((tasks, touch) => {
+        for (const task of tasks) {
+          if (task.chatId !== chatId || task.state !== 'active') continue;
+          task.state = 'paused';
+          task.pausedReason = 'unavailable';
+          touch(task);
+        }
+      });
+    })().catch(error => log.fail('schedule', error, { phase: 'mark-unavailable', chat: chatId.slice(-6) })));
+  }
+
   function takeUpTo(ref: PlaceRef, at: number): void {
     const to = Math.max(takenTo.get(ref.place)?.at ?? 0, at);
     takenTo.delete(ref.place);
@@ -3034,6 +3055,42 @@ export function createOrchestrator(
       else unavailableTierNoted.set(msg.chatId, last);
     }
     return true;
+  }
+
+  /** A line of the bot's own in the group's main area, kept for the main session's context like {@link SMART_NOTICE}. */
+  async function sayInMain(chatId: string, input: { text: string } | { post: object }, text: string): Promise<void> {
+    const sent = await channel.send(chatId, input);
+    recent.addOwn(chatId, chatId, { id: sent.messageId, at: Date.now(), text });
+  }
+
+  /** When each scheduled task last said in its group that its tier is unavailable: once an hour at most. */
+  const gateFailureNoted = new Map<string, number>();
+  /** The scheduler recorded a run its group's tier could not start (scheduleGate): one line in the main area, not a card. */
+  function notifyGateFailure(task: StoredTask): void {
+    const project = getProjectByChatIdSync(task.chatId);
+    const reason = project && tierUnavailable(project);
+    const now = Date.now();
+    if (!reason || shuttingDown || now - (gateFailureNoted.get(task.id) ?? -Infinity) < 60 * 60_000) return;
+    gateFailureNoted.set(task.id, now);
+    const text = `⏰ 定时任务「${task.name}」这次没跑：本群的权限档现在用不了（${reason.replace(/。$/, '')}）。连续 10 次会自动暂停。`;
+    void trackTask(sayInMain(task.chatId, { text }, text).catch(error => {
+      if (gateFailureNoted.get(task.id) === now) gateFailureNoted.delete(task.id); // the next failure tries again
+      log.fail('schedule', error, { phase: 'gate-notice', taskId: task.id });
+    }));
+  }
+
+  /** The scheduler paused a task after 10 failures in a row: one post in the main area, the creator at-ed when known.
+   * Throws when it is not sent, so the scheduler keeps the notice pending and tries again. */
+  async function notifyAutoPause(task: StoredTask): Promise<void> {
+    const project = await getProjectByChatId(task.chatId);
+    if (!project || project.enabled === false) return; // the bot says nothing in a group it no longer serves
+    const failure = [...task.recent].reverse().find(run => run.status === 'failed' || run.by === 'crash');
+    const why = (failure?.error ?? '运行中 Bot 进程退出了').replace(/。$/, '');
+    const { openId, name } = task.createdBy;
+    const head = `定时任务「${task.name}」连续 10 次失败，已自动暂停。`;
+    const tail = `看一下：${why}。到群设置的"任务"里能恢复。`;
+    const row = openId ? [{ tag: 'text', text: head }, { tag: 'at', user_id: openId }, { tag: 'text', text: ` ${tail}` }] : [{ tag: 'text', text: head + tail }];
+    await sayInMain(task.chatId, { post: { zh_cn: { content: [row] } } }, openId ? `${head}@${name ?? '创建人'} ${tail}` : head + tail);
   }
 
   /** Keep the bot's trust-boundary note before any subsequently woven history. */
@@ -5062,6 +5119,38 @@ export function createOrchestrator(
     return undefined;
   }
 
+  /** How long a group the desktop could not change because of a run starts no scheduled run, so a retry gets through. */
+  const FIRING_HOLD_MS = 60_000;
+  const firingHolds = new Map<string, number>();
+  function holdFiring(chatId: string, ms: number): void {
+    firingHolds.set(chatId, Math.max(firingHolds.get(chatId) ?? 0, Date.now() + ms));
+  }
+
+  /** Whether a run of `chatId` is on, for the desktop's edit lock. A state learns its group in launchRun: a reservation
+   * before that counts for every group, as every state did before scheduled tasks. */
+  function runningIn(chatId: string): boolean {
+    for (const state of active.values()) if (state.chatId === undefined || state.chatId === chatId) return true;
+    return false;
+  }
+
+  /** Whether a scheduled task of the group may start now (bot/schedule/scheduler.ts): turnRefusal's states, a desktop
+   * hold, then the tier. Synchronous, as the scheduler decides in place. */
+  function scheduleGate(chatId: string): 'ok' | 'disabled' | 'updating' | 'held' | 'unbound' | 'tier-unavailable' {
+    const project = getProjectByChatIdSync(chatId);
+    if (!project) return 'unbound';
+    if (project.enabled === false) return 'disabled';
+    if (projectMutations.has(chatId) || resumePublications.has(chatId)) return 'updating';
+    if ((firingHolds.get(chatId) ?? 0) > Date.now()) return 'held';
+    firingHolds.delete(chatId);
+    return tierUnavailable(project) ? 'tier-unavailable' : 'ok';
+  }
+
+  /** Why the group's tier cannot run on its backend now (the check of refuseUnavailableTier); undefined when it can. */
+  function tierUnavailable(project: Project): string | undefined {
+    const be = groupBackend(project);
+    return tierInfo(permissionTable(be.id), tableEnv(be), execOf(project).permission).unavailable;
+  }
+
   async function retryTurn(evt: CardActionEvent, key: string, retry: RetryTurn): Promise<void> {
     const op = evt.operator?.openId ?? '';
     // Refused where a message in that group would be, before anything is used
@@ -5744,7 +5833,7 @@ export function createOrchestrator(
       // with the group once the owner dissolves it, so nothing to clean up here.
       patch(evt, async () => {
         const removed = await removeProject(name);
-        if (removed?.chatId) forgetAttention(removed.chatId, 'unbind');
+        if (removed?.chatId) { forgetAttention(removed.chatId, 'unbind'); markUnavailable(removed.chatId); }
         let tail: string;
         if (removed && (removed.origin ?? 'created') === 'joined') {
           // joined group: the bot is a plain member, not the owner — it just
@@ -6594,7 +6683,10 @@ export function createOrchestrator(
     if (request.action === 'editProject' || request.action === 'removeProject') {
       if (projectRevision(project) !== request.expectedRevision) throw new AdminWriteError('项目设置已改变，请刷新后重试');
       if (smartNotices.has(project.chatId)) throw new AdminWriteError('正在群里说一句，请稍后再改');
-      if (projectMutations.has(project.chatId) || active.size > 0 || intakeChats.has(project.chatId) || pendingTopics.has(project.chatId)) throw new AdminWriteError('Agent 正在执行任务，请结束后修改项目');
+      if (projectMutations.has(project.chatId) || runningIn(project.chatId) || intakeChats.has(project.chatId) || pendingTopics.has(project.chatId)) {
+        holdFiring(project.chatId, FIRING_HOLD_MS); // no scheduled run starts before the retry
+        throw new AdminWriteError('Agent 正在执行任务，请结束后修改项目');
+      }
       let edited: { ok: true; project: ReturnType<typeof projectView> } | undefined;
       let announce = false;
       projectMutations.add(project.chatId);
@@ -6607,6 +6699,7 @@ export function createOrchestrator(
           });
           if (!removed) throw new AdminWriteError('项目已移除，请刷新');
           forgetAttention(project.chatId, 'unbind');
+          markUnavailable(project.chatId);
           for (const rec of records) { const thread = sessions.get(rec.threadId); sessions.delete(rec.threadId); if (thread) await thread.close().catch(error => log.fail('desktop', error, { phase: 'project-session-close' })); }
           let groupEffect: 'left' | 'transferred' | 'failed';
           let warning: string | undefined;
@@ -7189,6 +7282,7 @@ export function createOrchestrator(
     // Reuse the reservation handleTurn made for this session (so messages
     // queued during startup aren't lost); fall back to a fresh state otherwise.
     const state: ActiveState = active.get(activeKey) ?? { queue: [], requesterOpenId: opts.requesterOpenId, runLoop: true };
+    state.chatId = opts.chatId;
     state.thread = opts.thread;
     state.presentation = presentationConfig(cfg, await getProjectByChatId(opts.chatId));
     state.runLoop = true;
@@ -8030,6 +8124,7 @@ export function createOrchestrator(
     // The goal's workspace — see LaunchOpts.cwd / launchRun's runCwd.
     const runCwd = opts.cwd ?? fallbackCwd;
     const state: ActiveState = active.get(activeKey) ?? { queue: [], requesterOpenId: opts.requesterOpenId };
+    state.chatId = opts.chatId;
     state.presentation = presentationConfig(cfg, await getProjectByChatId(opts.chatId));
     state.thread = opts.thread;
     state.isGoal = true; // messages during the goal get a prompt, never queue (handleTurn)
@@ -8913,6 +9008,7 @@ export function createOrchestrator(
     const removed = await removeProject(project.name);
     if (!removed) return;
     forgetAttention(project.chatId, 'unbind');
+    markUnavailable(project.chatId);
     log.info('intake', 'bot-removed-unbind', { name: removed.name, chatId: chatId.slice(-6) });
     if (removed.addedBy) {
       await channel.rawClient.im.v1.message
@@ -9230,7 +9326,9 @@ export function createOrchestrator(
   const libraryExecute = async (op: AdminLibraryOp): Promise<unknown> => {
     const mine = (await listProjects()).filter(row => row.projectId === op.projectId);
     if (op.kind === 'libraryWorkspaceCheck') {
-      return { busy: mine.length > 0 && (active.size > 0 || mine.some(row => projectMutations.has(row.chatId) || intakeChats.has(row.chatId) || pendingTopics.has(row.chatId))) };
+      const busy = mine.some(row => runningIn(row.chatId) || projectMutations.has(row.chatId) || intakeChats.has(row.chatId) || pendingTopics.has(row.chatId));
+      if (busy) for (const row of mine) holdFiring(row.chatId, FIRING_HOLD_MS);
+      return { busy };
     }
     const held = mine.map(row => row.chatId).filter(chatId => !projectMutations.has(chatId));
     for (const chatId of held) projectMutations.add(chatId);
@@ -9254,7 +9352,8 @@ export function createOrchestrator(
   const scheduler = createScheduler({
     store: scheduleStore, now: () => Date.now(), timers: { setTimeout, clearTimeout },
     run: () => { throw new Error('runner-not-wired'); },
-    gate: () => 'ok', notifyAutoPause: async () => {}, notifyGateFailure: () => {}, maxInflight: () => 1,
+    gate: scheduleGate, notifyAutoPause, notifyGateFailure,
+    maxInflight: () => 1,
     log, diagnostics: scheduleDiagnostic,
   });
   const scheduleCommands = createScheduleCommands({ store: scheduleStore, scheduler, botId: cfg.accounts.app.id, now: () => Date.now(), hostTimeZone });

@@ -214,6 +214,7 @@ export function createScheduler(deps: {
     if (outcome.status === 'done') task.counts.consecutiveFailures = 0;
     const countsAsFailure = (outcome.status === 'failed' && outcome.counts) || (outcome.status === 'interrupted' && outcome.by === 'crash');
     if (countsAsFailure) task.counts.consecutiveFailures++;
+    if (outcome.status === 'interrupted' && outcome.by === 'crash') draft.events.push(event('schedule-interrupted', task));
     task.lastResult = lastResultOf(record, outcome);
     // A paused or finished task keeps counting but keeps its state, and nobody is told.
     if (task.state === 'active' && task.counts.consecutiveFailures >= PAUSE_AFTER_FAILURES) {
