@@ -163,7 +163,7 @@ export function FillKeyDialog({flow, service, onClose, onSubmit, onAgain, onRete
   let footer: ReactNode;
   if (flow.step === 'input') {
     content = <FormField htmlFor={id} label="API 密钥" error={problem}
-      description={`从 ${service.displayName} 控制台复制完整密钥。`}>
+      description={service.provider === 'custom' ? '填写与自定义接口地址对应的服务商 API 密钥。' : `从 ${service.displayName} 控制台复制完整密钥。`}>
       <div className="secrets-key-field">
         <input id={id} ref={input} type={shown ? 'text' : 'password'} placeholder="粘贴密钥"
           autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false} data-1p-ignore="" data-lpignore="true"
@@ -273,6 +273,13 @@ export function SecretsPanel({onOpenLogs, onOpenApplication, onOpenProviders}: {
   const header = <div className="environment-lead today-page-heading"><h1>决策模型</h1></div>;
   const fillService = fill && view?.services.find(service => service.keyId === fill.keyId);
   const removeService = removal && view?.services.find(service => service.keyId === removal.keyId);
+  const serviceRows = (service: SecretService) => <>
+    <KeyRow service={service} view={view!} row={rows[service.keyId] ?? {}}
+      onFill={() => flows.open(service.keyId, false)} onReplace={() => flows.open(service.keyId, true, service.last4)}
+      onRemove={() => setRemoval({keyId: service.keyId, pending: false})} onTest={() => void flows.test(service.keyId)} onOpenLogs={onOpenLogs}/>
+    <UsesRow service={service} view={view!}/>
+  </>;
+  const customService = view?.services.find(service => service.provider === 'custom');
   let body: ReactNode;
   if (read.kind === 'old') {
     body = <InlineNotice tone="warning" title="需要更新后台服务" actions={<Button size="sm" variant="ghost" onClick={onOpenApplication}>去应用与启动</Button>}>
@@ -286,12 +293,9 @@ export function SecretsPanel({onOpenLogs, onOpenApplication, onOpenProviders}: {
       <div className="decision-key-content">
         {!view ? <SettingsRow title="正在读取…"/>
           : !view.services.length ? <SettingsRow title="暂无需要密钥的服务"/>
-            : view.services.map(service => <div key={service.keyId} className="decision-service-key" id={settingAnchor(decisionKeySection(service.provider))}>
+            : view.services.filter(service => service.provider !== 'custom').map(service => <div key={service.keyId} className="decision-service-key" id={settingAnchor(decisionKeySection(service.provider))}>
               <h3 className="decision-service-key-title">{decisionApiProviderLabel(service.provider)}</h3>
-              <KeyRow service={service} view={view} row={rows[service.keyId] ?? {}}
-                onFill={() => flows.open(service.keyId, false)} onReplace={() => flows.open(service.keyId, true, service.last4)}
-                onRemove={() => setRemoval({keyId: service.keyId, pending: false})} onTest={() => void flows.test(service.keyId)} onOpenLogs={onOpenLogs}/>
-              <UsesRow service={service} view={view}/>
+              {serviceRows(service)}
             </div>)}
       </div>
     </>;
@@ -299,13 +303,18 @@ export function SecretsPanel({onOpenLogs, onOpenApplication, onOpenProviders}: {
   return <div className="page-stack secrets-page" ref={page}>
     {header}
     <DecisionProviderSettings services={view?.services} onOpenProviders={onOpenProviders} onManageKey={(provider = 'typesafe') => {
+      if (provider === 'custom') {
+        const target = document.getElementById(settingAnchor(decisionProviderSection('custom')));
+        target?.scrollIntoView({block: 'center', behavior: 'smooth'});
+        target?.querySelector<HTMLElement>('input:not([disabled])')?.focus({preventScroll: true});
+        return;
+      }
       const service = view?.services.find(item => item.provider === provider);
       if (service && (service.status === 'missing' || service.status === 'invalid')) {flows.open(service.keyId, false); return;}
-      const target = provider === 'custom' ? document.getElementById(settingAnchor(decisionProviderSection('custom')))
-        : page.current?.querySelector<HTMLElement>(service ? `.${keyRowClass(service.keyId)}` : '.decision-key-content');
+      const target = page.current?.querySelector<HTMLElement>(service ? `.${keyRowClass(service.keyId)}` : '.decision-key-content');
       target?.scrollIntoView({block: 'center', behavior: 'smooth'});
       target?.querySelector<HTMLElement>('input:not([disabled]), button:not([disabled])')?.focus({preventScroll: true});
-    }} keyContent={body} keyAction={keyRefresh}/>
+    }} customKeyContent={customService && <div id={settingAnchor(decisionKeySection('custom'))}>{serviceRows(customService)}</div>} keyContent={body} keyAction={keyRefresh}/>
     <FillKeyDialog flow={fillService ? fill : undefined} service={fillService} onClose={flows.close}
       onSubmit={value => void flows.save(value)} onAgain={flows.again} onRetest={() => void flows.retest()}/>
     <RemoveKeyDialog removal={removeService ? removal : undefined} service={removeService} view={view}
