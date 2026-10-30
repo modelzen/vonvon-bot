@@ -1,6 +1,6 @@
 # 定时任务：总设计（T1 到 T5）
 
-owner 2026-10-30 定，一次做到位，没有"第一版"（这里的"v1"指产品的第一个版本，不是功能的第一版）。产品行为写在 `docs/product.md` 3.13，本文只写做法、共享契约和切片。九个 PR（T1a、T1a2、T1b、T2、T3、T3b、T4a、T4b、T5）都从最新 `origin/dev` 开 `codex/<片>` 分支，目标 `dev`（`AGENTS.md`"2026-10-30 起"）。行号按基线 ecd80328；`origin/dev` 已再前进 13 个只改 Windows 安装和更新的提交，不碰本文引用的文件，行号漂了按函数名找。
+owner 2026-10-30 定，一次做到位，没有"第一版"（这里的"v1"指产品的第一个版本，不是功能的第一版）。产品行为写在 `docs/product.md` 3.13，本文只写做法、共享契约和切片。十个 PR（T1a、T1a2、T1b、T1c、T2、T3、T3b、T4a、T4b、T5）都从最新 `origin/dev` 开 `codex/<片>` 分支，目标 `dev`（`AGENTS.md`"2026-10-30 起"）。行号按基线 ecd80328；`origin/dev` 已再前进 13 个只改 Windows 安装和更新的提交，不碰本文引用的文件，行号漂了按函数名找。
 
 2026-10-30 两轮审查（对照代码的 28 条、对照决定和格式的 23 条）后改了一版，改了什么见第 17 节。
 
@@ -378,6 +378,7 @@ export function createScheduler(deps: {
 | T1a | `scheduled-tasks-1-core` | protocol、时间计算、存储（含 durable 原子写、写前校验） | — | JP-VPS | ~1,070 | 10-30 开工，10-31 上午合入 |
 | T1a2 | `scheduled-tasks-1a2-scheduler` | 调度循环（不启动 tick）：判定、认领、并发、结算、通知、崩溃、`runNow` | T1a | JP-VPS | ~1,180 | 叠在 T1a 上，10-31 上午合入 |
 | T1b | `scheduled-tasks-1b-commands` | 命令核、IPC/RPC、client、终端 `vonvon schedule`、`cli/index.ts` 接线；`TurnFacts.scheduled` 和 `TurnAuth.presence` 两个字段 | T1a2 | JP-VPS | ~1,150 | T1a 审查期间在它的分支上接着写，T1a 合入后开 PR；10-31 下午合入 |
+| T1c | `scheduled-tasks-1c-cli` | 终端 `vonvon schedule`（T1b 合计 1,505 行，按 T1b 计划第 9 节拆出） | T1b | JP-VPS | ~460 | 叠在 T1b 上，和 T1b 同时审 |
 | T2 | `scheduled-tasks-2-runs` | `runScheduled` 和钩子、放置、开话题、头部和标签、门、结算、自动暂停、停机和崩溃、编辑锁；启动 tick | T1b | JP-VPS（Bot 6，真 Claude 和 Codex） | ~1,450 | 10-31 下午开工，11-01 合入 |
 | T3 | `scheduled-tasks-3-tools` | schedule 工具类和角色表、grant 的 `where()`、`profileOf` 算 `tools.schedule`、Claude MCP、关 Claude 自带定时 | T1b（自测第 4 步要 T2 合入） | JP-VPS（真 Claude） | ~1,055（和 T3b 合计 ~1,545，T3 计划第 9 节） | 和 T2 同时开工，11-01 合入 |
 | T3b | `scheduled-tasks-3b-codex` | Codex dynamicTools 和 `item/tool/call`、调用按 turnId 绑轮、删 `releaseAfterRun` 授权分支、features 深合并加 `in_app_local_automation: false` | T3 | JP-VPS（真 Codex） | ~490 | 在 T3 的分支上接着写，T3 合入后开 PR，11-01 合入 |
