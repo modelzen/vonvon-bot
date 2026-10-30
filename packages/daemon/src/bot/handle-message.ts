@@ -15,7 +15,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { settleTurn, recordUsage, type TurnStores } from './turn-usage';
 import { assemble, judgeContext, loadContextSources, openingInstructions, planTurnUpdate, contextOf, newNonce, type ContextPlace } from './context-assembly';
 import { groupSkillProfile } from '../agent/group-skills';
-import { ensureBuiltinPackage } from '../agent/builtin-skills/package';
+import { completeBuiltinPackage, ensureBuiltinPackage } from '../agent/builtin-skills/package';
 import { builtinSkillsOfSet } from '../agent/builtin-skills/registry';
 import type { SessionProfile } from '../agent/session-profile';
 import { parseStoredJudge } from '../judge/model';
@@ -1150,7 +1150,7 @@ export function createOrchestrator(
     const skills = project ? await groupSkillProfile({ backend, cwd, directories: execution.workspaces.additional, disabledPaths: project.skills?.disabledPaths }) : undefined;
     // A bound group's sessions get the schedule tools, read-only tier too (3.13); a comment's never do.
     const schedule = Boolean(project) && place !== 'comment';
-    // The task skill goes with the tools (T4b); a package that cannot be written leaves the session without it.
+    // The task skill goes with the tools (T4b); a package that cannot be written leaves the last whole one, or none.
     const capabilityPackages = schedule && backend.profileCapabilities?.capabilityPackages ? await builtinPackage(project?.chatId) : [];
     const profile = assembled || skills ? { instructions: assembled ? openingInstructions(assembled, nonce, { hiddenBlocks: Boolean(project) && hiddenBlocksFor(backend.id) }) : '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: [], capabilityPackages, mcpServers: [],
       tools: { schedule }, ...(skills ? { skills } : {}) } : undefined;
@@ -1163,8 +1163,11 @@ export function createOrchestrator(
       const { path } = await ensureBuiltinPackage(cfg.accounts.app.id, 'group', builtinSkillsOfSet('group'));
       return [{ path, kind: 'builtin' }];
     } catch (error) {
-      log.fail('agent', error, { phase: 'builtin-package-failed', chatId });
-      return [];
+      // A resumed Codex thread still lists the skills from its rollout, so the package already there must stay
+      // handed over (and readable); only without a whole one does the session start without the skill.
+      const kept = await completeBuiltinPackage(cfg.accounts.app.id, 'group');
+      log.fail('agent', error, { phase: 'builtin-package-failed', chatId, kept: Boolean(kept) });
+      return kept ? [{ path: kept, kind: 'builtin' }] : [];
     }
   }
   /** A compaction ended on this thread: the next turn hands over everything again, under a new mark (4.4). */

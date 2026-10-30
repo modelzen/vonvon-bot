@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Query } from '@anthropic-ai/claude-agent-sdk';
@@ -12,13 +12,14 @@ import { ClaudeAgentBackend, type ClaudeSdkFacade } from '../src/agent/claude-ag
 // whether the builtin plugin loaded. Not run in CI. Run with a fresh temporary HOME and VONVON_HOME, e.g.
 //   T=$(mktemp -d); HOME=$T/home VONVON_HOME=$T/vh BUILTIN_SKILL_LIVE=1 npx vitest run test/builtin-skill.live.test.ts
 // adding CLAUDE_CONFIG_DIR=<the logged-in config dir> if the CLI will not initialize without a login. "flag" is vonvon's
-// own `enabledPlugins` in the flag settings; without it the case shows whether a workspace can turn the plugin off at all.
+// own `enabledPlugins` in the flag settings; the last case shows a workspace turns the plugin off without it (SDK 0.3.296,
+// CLI 2.1.296), which is why the flag stays.
 const live = process.env.BUILTIN_SKILL_LIVE === '1';
 describe.runIf(live)('the builtin package on the real Claude CLI', () => {
   it.each([
     ['no workspace setting, flag', false, true, true],
     ['workspace off, flag', true, true, true],
-    ['workspace off, no flag (record either way)', true, false, undefined],
+    ['workspace off, no flag', true, false, false],
   ] as const)('%s', { timeout: 120_000 }, async (name, workspaceOff, flag, expected) => {
     if (![process.env.HOME, process.env.VONVON_HOME].every(dir => dir?.startsWith(tmpdir()))) throw new Error('Run with a temporary HOME and VONVON_HOME');
     const cwd = await mkdtemp(join(tmpdir(), 't4b-live-'));
@@ -39,7 +40,10 @@ describe.runIf(live)('the builtin package on the real Claude CLI', () => {
     try {
       const names = (await query!.supportedCommands()).map(command => command.name);
       console.log(`[t4b-live] ${name}: vonvon:scheduled-tasks ${names.includes('vonvon:scheduled-tasks') ? 'listed' : 'missing'}`);
-      if (expected !== undefined) expect(names.includes('vonvon:scheduled-tasks')).toBe(expected);
-    } finally { await thread.close(); }
+      expect(names.includes('vonvon:scheduled-tasks')).toBe(expected);
+    } finally {
+      await thread.close();
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 });

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { chmod, mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { botPaths } from '../../config/paths';
 
@@ -38,6 +38,23 @@ async function updateFile(path: string, content: string): Promise<boolean> {
     throw error;
   }
   return true;
+}
+
+const isFile = (path: string): Promise<boolean> => stat(path).then(info => info.isFile(), () => false);
+
+/**
+ * The package already at the stable path when it holds its plugin manifest and at least one SKILL.md, else undefined.
+ * Each file is renamed into place whole, so such a package may be older than this daemon's skills but never half
+ * written; a session whose rewrite failed can still be handed it (T4b).
+ */
+export async function completeBuiltinPackage(appId: string, set: 'group' | 'dm'): Promise<string | undefined> {
+  const path = botPaths(appId).builtinPackage(set);
+  if (!await isFile(join(path, '.claude-plugin', 'plugin.json'))) return undefined;
+  const skills = await readdir(join(path, 'skills'), { withFileTypes: true }).catch(() => []);
+  for (const entry of skills) {
+    if (entry.isDirectory() && await isFile(join(path, 'skills', entry.name, 'SKILL.md'))) return path;
+  }
+  return undefined;
 }
 
 const pendingPackages = new Map<string, Promise<unknown>>();
