@@ -2,130 +2,190 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened, labeled]
+    branches: [dev, main]
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, converted_to_draft, edited]
   workflow_dispatch:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.event_name, github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  linux:
-    name: linux
+  scope:
+    name: CI scope
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     outputs:
-      scope: ${{ steps.scope.outputs.scope }}
-      full: ${{ steps.scope.outputs.full }}
+      scope: ${{ steps.select.outputs.scope }}
+      packages: ${{ steps.select.outputs.packages }}
+      platforms: ${{ steps.select.outputs.platforms }}
+      ready: ${{ steps.select.outputs.ready }}
+      source_sha: ${{ steps.select.outputs.source_sha }}
+      target_sha: ${{ steps.select.outputs.target_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - name: Verify tested source
         env:
           SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-      - name: Test CI scope rules
-        run: node --test .github/scripts/ci-scope.test.mjs
+      - name: Test CI scripts
+        run: node --test .github/scripts/*.test.mjs
       - name: Classify changed paths
-        id: scope
+        id: select
         run: node .github/scripts/ci-scope.mjs
       - name: Check changed-file whitespace
-        if: steps.scope.outputs.base != '' && steps.scope.outputs.head != ''
-        run: git diff --check "${{ steps.scope.outputs.base }}" "${{ steps.scope.outputs.head }}"
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ steps.select.outputs.base }}
+          HEAD: ${{ steps.select.outputs.head }}
+        run: git diff --check "$BASE" "$HEAD"
       - name: Check dispatched commit whitespace
         if: github.event_name == 'workflow_dispatch'
-        run: git diff --check HEAD^ HEAD
-      - uses: actions/setup-node@v4
-        if: steps.scope.outputs.full == 'true'
+        run: git show --check --format= HEAD
+
+  linux:
+    name: linux
+    needs: scope
+    if: needs.scope.outputs.ready == 'true' && contains(fromJSON(needs.scope.outputs.platforms), 'linux')
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
         with:
-          node-version: '22'
+          ref: ${{ needs.scope.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
           cache: npm
-      - name: Install dependencies
-        if: steps.scope.outputs.full == 'true'
-        run: npm ci
-      - name: Build
-        if: steps.scope.outputs.full == 'true'
-        run: npm run build
-      - name: Typecheck
-        if: steps.scope.outputs.full == 'true'
-        run: npm run typecheck
-      - name: Test
-        if: steps.scope.outputs.full == 'true'
-        run: npm test
-      - name: Lint
-        if: steps.scope.outputs.full == 'true'
-        run: npm run lint
-      - name: Record result
-        if: success()
+      - name: Verify tested source
         env:
-          SCOPE: ${{ steps.scope.outputs.scope }}
-          FULL: ${{ steps.scope.outputs.full }}
-        run: |
-          if [ "$SCOPE" = docs ]; then
-            echo 'docs: lightweight checks passed; full suite not run.' >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$FULL" != true ]; then
-            echo 'full: lightweight checks passed; full suite deferred until frozen or manual dispatch.' >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo 'full: Linux suite passed; the macOS result is a separate job.' >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Require frozen head for full scope
-        if: steps.scope.outputs.scope == 'full' && steps.scope.outputs.full != 'true'
-        run: |
-          echo '::error::Full-scope PR checks are deferred. Add the frozen label at the final head or dispatch a full run.'
-          exit 1
+          SOURCE_SHA: ${{ needs.scope.outputs.source_sha }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - run: npm ci
+      - name: Run scoped Linux checks
+        env:
+          CI_SCOPE: ${{ needs.scope.outputs.scope }}
+          CI_PACKAGES: ${{ needs.scope.outputs.packages }}
+        run: node .github/scripts/ci-run.mjs
 
   macos:
     name: macOS checks
-    needs: linux
+    needs: scope
     if: >-
-      needs.linux.outputs.full == 'true' &&
-      vars.ENABLE_SELF_HOSTED_MACOS_CI == 'true' &&
+      needs.scope.outputs.ready == 'true' && contains(fromJSON(needs.scope.outputs.platforms), 'macos') &&
       (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, macOS, ARM64, modelzen-macos, modelzen-macos-isolated]
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
-      - name: Require dedicated CI account
+      - name: Require dedicated isolated CI account
         run: |
           if [ "$(id -un)" != github-ci ]; then
-            echo '::error::Use the dedicated github-ci account before enabling macOS CI.'
+            echo '::error::The macOS runner must use the dedicated github-ci account.'
             exit 1
           fi
           case " $(id -Gn) " in
             *' admin '*)
-              echo '::error::The CI account must be a standard user without administrator access.'
+              echo '::error::The CI account must not be an administrator.'
               exit 1
               ;;
           esac
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ needs.scope.outputs.source_sha }}
           persist-credentials: false
-      - name: Verify tested source
-        env:
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
+      - name: Verify tested source
+        env:
+          SOURCE_SHA: ${{ needs.scope.outputs.source_sha }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
       - run: npm ci
-      - run: npm run build
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run lint
-      - name: Record tested platform
-        if: always()
-        run: |
-          {
-            echo "Source: $(git rev-parse HEAD)"
-            echo "Runner: $RUNNER_NAME"
-            echo "macOS: $(sw_vers -productVersion), $(uname -m)"
-            echo "Node: $(node --version)"
-          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Run scoped macOS checks
+        env:
+          CI_SCOPE: ${{ needs.scope.outputs.scope }}
+          CI_PACKAGES: ${{ needs.scope.outputs.packages }}
+        run: node .github/scripts/ci-run.mjs
+
+  windows:
+    name: Windows checks
+    needs: scope
+    if: needs.scope.outputs.ready == 'true' && contains(fromJSON(needs.scope.outputs.platforms), 'windows')
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: bash
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.scope.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Verify tested source
+        env:
+          SOURCE_SHA: ${{ needs.scope.outputs.source_sha }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - run: npm ci
+      - name: Run scoped Windows checks
+        env:
+          CI_SCOPE: ${{ needs.scope.outputs.scope }}
+          CI_PACKAGES: ${{ needs.scope.outputs.packages }}
+        run: node .github/scripts/ci-run.mjs
+
+  gate:
+    name: ${{ github.event_name == 'pull_request' && 'CI gate' || 'Manual CI result' }}
+    needs: [scope, linux, macos, windows]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Verify selected checks
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: node .github/scripts/ci-gate.mjs
+      - name: Reject stale PR event
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const initial = context.payload.pull_request;
+            const { data: current } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: initial.number,
+            });
+            const selection = pull => pull.labels
+              .map(label => label.name)
+              .filter(name => ['frozen', 'ci:macos', 'ci:windows', 'ci:all'].includes(name))
+              .sort().join(',');
+            if (current.head.sha !== initial.head.sha ||
+                current.base.sha !== initial.base.sha ||
+                current.base.ref !== initial.base.ref ||
+                current.draft !== initial.draft ||
+                selection(current) !== selection(initial)) {
+              throw new Error('PR head, base, draft state, or CI labels changed during this run. Rerun on the current event.');
+            }

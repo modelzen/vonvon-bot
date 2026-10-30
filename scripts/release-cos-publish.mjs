@@ -39,7 +39,7 @@ const common = ['out', 'version', 'sha', 'cos-config', 'cos-write-config'];
 const commandOptions = {
   plan: [...common, 'first-release', 'no-live-manifest'],
   upload: [...common, 'first-release', 'no-live-manifest', 'plan-sha256', 'cancel-file'],
-  promote: [...common, 'plan-sha256', 'cancel-file', 'owner-confirmation'],
+  promote: [...common, 'plan-sha256', 'cancel-file', 'owner-confirmation', 'reviewed-plan'],
   rollback: [...common, 'plan-sha256', 'restore-previous', 'delete-first-release-manifest', 'dry-run'],
   'fix-headers': [...common, 'plan-sha256', 'cancel-file'],
   reverify: [...common, 'plan-sha256'],
@@ -408,6 +408,7 @@ export async function uploadRelease(options, dependencies = {}) {
       context.log(`PutObject ${step.key} (${step.size} bytes, SHA-256 ${step.sha256})`);
       let result = 'uploaded';
       try {
+        await assertNotCancelled(cancel, `immediately before uploading ${step.file}`);
         await cosCall(client, 'putObject', { ...target(context, step.key), Body: body, ContentLength: body.length, ContentMD5: md5(body),
           CacheControl: step.headers['Cache-Control'], ContentType: step.headers['Content-Type'], Headers: { 'x-cos-forbid-overwrite': 'true' } }, `PutObject ${step.file}`);
       } catch (error) {
@@ -436,9 +437,14 @@ export async function uploadRelease(options, dependencies = {}) {
 function ownerConfirmation(options) {
   const text = options['owner-confirmation'];
   if (typeof text !== 'string' || !text.trim()) throw new Error('promote requires --owner-confirmation with the verbatim text of the owner\'s own message in their Codex App session');
+  // The reviewed plan already binds the full source SHA and final bytes. A contextual
+  // affirmative reply need not repeat them; never treat a refusal or an arbitrary
+  // message containing the word "confirm" as authorization.
+  const reply = text.trim().replace(/[，,。！!.\s]/g, '');
+  if (options['reviewed-plan'] && /^(?:ok|okay|yes|确认|同意|可以了?|好|好的|没问题|发吧|(?:好的)?(?:确认|可以)?发布(?:当前候选|到stable)?(?:吧|了)?)$/i.test(reply)) return text;
   const version = new RegExp(`(?<![0-9.])${options.version.replaceAll('.', '\\.')}(?!\\.?[0-9])`);
   const sha = new RegExp(`(?<![0-9a-f])${options.sha}(?![0-9a-f])`, 'i');
-  if (!version.test(text) || !sha.test(text) || !/发布到\s*stable/i.test(text)) throw new Error('The owner confirmation must state this version, the exact full source SHA and 发布到 stable');
+  if (/(?:不要|不同意|不确认|暂不|先不|取消)/.test(text) || !version.test(text) || !sha.test(text) || !/发布到\s*stable/i.test(text)) throw new Error('The owner confirmation must approve this reviewed plan, or state this version, the exact full source SHA and 发布到 stable');
   return text;
 }
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
@@ -508,6 +514,7 @@ export async function promoteRelease(options, dependencies = {}) {
       manifest: { key: step.key, url: step.url, size: step.size, sha256: step.sha256, cacheControl: step.headers['Cache-Control'], contentType: step.headers['Content-Type'], writeStartedAt: context.now().toISOString() },
       previousManifest: { status: plan.previousManifest.status, ...(plan.previousManifest.status === 200 ? { version: plan.previousManifest.version, size: plan.previousManifest.size, sha256: plan.previousManifest.sha256 } : {}) },
       ownerConfirmation: confirmation,
+      ownerConfirmationMode: options['reviewed-plan'] ? 'reviewed-plan' : 'explicit-source',
       ownerConfirmationRule: 'Recorded verbatim. The tool cannot verify who sent it; only the owner\'s own message in their Codex App session counts.',
       cdn: NO_CDN, versionedVerification: versioned, ledgerRecordsVersion: true,
     };
@@ -516,7 +523,9 @@ export async function promoteRelease(options, dependencies = {}) {
     context.log(`PutObject ${step.key} (${step.size} bytes, SHA-256 ${step.sha256})`);
     let write = 'written';
     try {
-      await cosCall(await writeClient(context), 'putObject', { ...target(context, step.key), Body: body, ContentLength: body.length, ContentMD5: md5(body),
+      const client = await writeClient(context);
+      await assertNotCancelled(cancel, 'immediately before writing the stable manifest; nothing was written');
+      await cosCall(client, 'putObject', { ...target(context, step.key), Body: body, ContentLength: body.length, ContentMD5: md5(body),
         CacheControl: step.headers['Cache-Control'], ContentType: step.headers['Content-Type'], ...(step.headers['x-cos-forbid-overwrite'] ? { Headers: { 'x-cos-forbid-overwrite': 'true' } } : {}) }, 'PutObject manifest.json');
     } catch (error) {
       if (!refusedOverwrite(error)) throw new Error(`${error.message}. If stable now serves this release, run reverify; if it is unchanged, promote may run again`);
@@ -645,7 +654,7 @@ const help = `Usage: node scripts/release-cos-publish.mjs <plan|upload|promote|r
 
 plan         Read-only; makes no COS write. Rechecks the formal-release evidence (state, inventory, DO-NOT-PUBLISH, every file against SHA256SUMS, verify-public-release --local-only), snapshots the live stable manifest over strict TLS without redirects, recomputes the highest published version from COS and the ledger, and requires bucket versioning never enabled. A 404 manifest needs --first-release or --no-live-manifest exactly as release-mac does. Writes OUT/publish-plan.json and prints its SHA-256 for the owner to review.
 upload       --plan-sha256 HASH --cancel-file /absolute/path [--first-release | --no-live-manifest]. Regenerates the plan and requires the reviewed hash, then PUTs only the versioned ZIP, DMG and feed with x-cos-forbid-overwrite: true. An existing object is reused only when its public bytes have the planned full SHA-256. Requires verify-public-release --versioned-only to print "versionedObjectsVerified": true, appends the ledger and writes OUT/upload-receipt.json. Never touches manifest.json.
-promote      --plan-sha256 HASH --cancel-file /absolute/path --owner-confirmation "verbatim owner message". Run only after the owner, in their own Codex App session and after seeing the evidence, sent a message naming the version, the exact source SHA and 发布到 stable; the tool records the text but cannot verify who sent it. Rechecks the plan, the live manifest snapshot and the versioned objects, rechecks the live manifest again right before the write, records OUT/publish-receipt.json, writes only bot/mac/stable/manifest.json, requires "publiclyVerified": true and completes the receipt. On failure it prints the prepared rollback command and exits nonzero without rolling back.
+promote      --plan-sha256 HASH --cancel-file /absolute/path --owner-confirmation "verbatim owner message" [--reviewed-plan]. After showing the exact candidate and plan to the owner in their Codex App session, --reviewed-plan accepts a contextual reply such as 确认 or 发布当前候选; the unchanged plan binds version, full SHA and final bytes. Without it, the message must name version, full SHA and 发布到 stable. The tool records the text but cannot verify who sent it. Rechecks the plan, the live manifest snapshot and versioned objects, records OUT/publish-receipt.json, writes only manifest.json and requires "publiclyVerified": true. Failure exits nonzero without automatic rollback.
 reverify     --plan-sha256 HASH. Makes no COS write. When stable already serves this release but publish-receipt.json does not say published (a transient verification failure or an interrupted promote), reruns the full public verification and completes the receipt.
 rollback     --plan-sha256 HASH and exactly one of --restore-previous (write back the manifest bytes saved in the plan) or --delete-first-release-manifest (delete only manifest.json when the plan found none). Needs this output's publish-receipt.json and judges the live manifest by its raw SHA-256. Prints the action first; --dry-run stops there and records nothing. Versioned objects and the ledger are never touched; a rolled-back candidate cannot be planned, uploaded or promoted again.
 fix-headers  --plan-sha256 HASH --cancel-file /absolute/path. Only for objects this output uploaded and only while their public bytes match the plan. Same-key PUT Object - Copy with x-cos-metadata-directive: Replaced and the planned headers; bytes unchanged, then --versioned-only must pass again with the same full SHA-256.
@@ -658,7 +667,7 @@ if (invokedPath && invokedPath === await realpath(scriptPath)) {
     const { values, positionals } = parseArgs({ allowPositionals: true, options: {
       out: { type: 'string' }, version: { type: 'string' }, sha: { type: 'string' }, 'cos-config': { type: 'string' }, 'cos-write-config': { type: 'string' },
       'first-release': { type: 'boolean' }, 'no-live-manifest': { type: 'boolean' }, 'plan-sha256': { type: 'string' }, 'cancel-file': { type: 'string' },
-      'owner-confirmation': { type: 'string' }, 'restore-previous': { type: 'boolean' }, 'delete-first-release-manifest': { type: 'boolean' }, 'dry-run': { type: 'boolean' }, help: { type: 'boolean' },
+      'owner-confirmation': { type: 'string' }, 'reviewed-plan': { type: 'boolean' }, 'restore-previous': { type: 'boolean' }, 'delete-first-release-manifest': { type: 'boolean' }, 'dry-run': { type: 'boolean' }, help: { type: 'boolean' },
     } });
     const { help: wantsHelp, ...options } = values;
     if (wantsHelp) console.log(help);

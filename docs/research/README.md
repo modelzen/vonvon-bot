@@ -313,3 +313,9 @@ codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次�
 | 报告 | 内容 | 说明 |
 | --- | --- | --- |
 | [report](2026-10-29-windows-codex-permissions/report.md) | Windows 版本误报、MXC 能力探测、原生三档与 start/resume、portable PowerShell、多根路径 | 0.163.0 ARM64 原生与真实模型验证；缺失配置保护边界已实测，owner 要求仍开放可写；整体验收待 owner |
+
+## 2026-10-30 发布提速
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [report](2026-10-30-release-speed/report.md) | 提前下载、命令级系统代理、并行上传与候选绑定确认 | 小网络/异步实验与隔离回归；完整正式发布耗时待下一轮验证 |
