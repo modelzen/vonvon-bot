@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { PROTOCOL_VERSION, type Hello, type Request, type Response } from '@vonvon/protocol';
+import { PROTOCOL_VERSION, type Request, type Response } from '@vonvon/protocol';
 import type { AdminService } from '../admin/service';
 import type { ShutdownControl } from '../host/lifecycle';
 import { createServiceActionLauncher } from '../host/service-action';
@@ -171,7 +171,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
         case 'memory': return finish(peer, await memoryRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'memory', payload }));
         case 'contextPreview': return finish(peer, await contextPreviewRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'contextPreview', payload }));
         // The client's hello says who asks: the task records it as made from the desktop or the terminal.
-        case 'schedule': return finish(peer, await scheduleRpc(options.service, (peer as Peer & { readonly clientKind?: Hello['clientKind'] }).clientKind, request.payload), payload => ({ type: 'response', id, method: 'schedule', payload }));
+        case 'schedule': return finish(peer, await scheduleRpc(options.service, peer.clientKind, request.payload), payload => ({ type: 'response', id, method: 'schedule', payload }));
         case 'directory': {
           if (request.payload.type === 'list') { peer.send({ type: 'response', id, method: 'directory', payload: await directory.list(request.payload.path) }); return; }
           if (request.payload.type === 'suggest') { peer.send({ type: 'response', id, method: 'directory', payload: await directory.suggest(request.payload.query) }); return; }
