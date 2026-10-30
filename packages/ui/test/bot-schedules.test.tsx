@@ -31,7 +31,7 @@ it('groups the Bot\'s four tasks of two groups under their group names', () => {
   expect(html).not.toContain('新建');
 });
 
-it('hands a row\'s group membership to onOpen, whose group page opens on 任务 and goes Back to the Bot\'s 任务 pane', () => {
+it('hands a row\'s group membership to onOpen; the route helpers keep the Bot\'s 任务 pane as its parent and set only its tab to 任务', () => {
   const onOpen = vi.fn();
   const rows = nodes(BotScheduleGroups({list: listOf(tasksReply(tasks)), agentId, snapshot, onOpen, onDelete: () => {}})).filter(node => node.props.onClick);
   rows.find(node => node.props.title === '周报')!.props.onClick();

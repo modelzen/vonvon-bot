@@ -96,7 +96,7 @@ it('sends only what changed: a new name alone, a daily task\'s zone alone, and a
   expect(await change(once, 'zone', 'Asia/Tokyo')).toEqual({spec: {kind: 'once', at: Date.UTC(2026, 10, 2, 5, 0)}, timeZone: 'Asia/Tokyo'});
 });
 
-it('opens a task in a zone this browser does not know at its time in the daemon\'s zone, says so, after a conflict too, and does not save that zone', async () => {
+it('opens a once task in a zone this browser does not know at its time in the daemon\'s zone, says so only for that time, after a conflict too, and does not save that zone', async () => {
   const at = Date.UTC(2026, 10, 2, 1, 0);
   // A daemon zone whose clock is not this machine's, so the browser's zone would show another time.
   const [host, shown] = ([['Asia/Tokyo', '2026-11-02T10:00'], ['America/New_York', '2026-11-01T20:00']] as const).find(([zone]) => localInput(at, zone) !== localInput(at, browserZone()))!;
@@ -111,7 +111,13 @@ it('opens a task in a zone this browser does not know at its time in the daemon\
   render(mars, host).input('zone').props.onChange({target: {value: 'Mars/Olymp'}});
   expect(render(mars, host).zoneNote()).not.toContain('不认识');
   harness.state = [];
-  expect(render({...mars, spec: {kind: 'daily', time: '09:00'}}, host).zoneNote()).not.toContain('不认识');
+  const daily: ScheduledTaskView = {...mars, spec: {kind: 'daily', time: '09:00'}};
+  expect(render(daily, host).zoneNote()).toBe(`Vonvon 所在电脑的时区是 ${host}`);
+  // Picking 一次 on it shows an empty time, so there is no time the note could describe.
+  render(daily, host).choices('什么时候').props.onChange('once');
+  expect([render(daily, host).input('at').props.value, render(daily, host).zoneNote()]).toEqual(['', `Vonvon 所在电脑的时区是 ${host}`]);
+  harness.state = [];
+  expect(render(scheduleTask({spec: {kind: 'once', at}, timeZone: 'Asia/Tokyo'}), host).zoneNote()).toBe(`Vonvon 所在电脑的时区是 ${host}`);
   harness.state = [];
   const task = scheduleTask();
   expect(render(task, host).zoneNote()).toBe(`Vonvon 所在电脑的时区是 ${host}`);
