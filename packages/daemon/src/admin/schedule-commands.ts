@@ -88,7 +88,8 @@ const outsideUnion = (_actor: never): undefined => undefined;
 function mayCreate(actor: ScheduleActor): actor is Creator {
   switch (actor.kind) {
     case 'local': return true;
-    case 'chat': return actor.role === 'owner' || actor.role === 'admin' || actor.role === 'member';
+    // A member without an openId could never manage the task it made: no openId, no task.
+    case 'chat': return actor.role === 'owner' || actor.role === 'admin' || (actor.role === 'member' && !!actor.openId);
     case 'scheduled': return false;
     default: return outsideUnion(actor) ?? false;
   }
