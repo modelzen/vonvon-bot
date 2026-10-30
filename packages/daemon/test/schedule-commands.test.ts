@@ -213,6 +213,17 @@ describe('create and views', () => {
     expect(running!.nextRunAt).toBeGreaterThan(T0);
     expect(paused).not.toHaveProperty('nextRunAt');
   });
+  it('shows the runs by time, not in the order they were stored', async () => {
+    const recent = [
+      { runId: 'r2', slot: T0 + MIN, trigger: 'schedule', status: 'skipped', reason: 'running' },
+      { runId: 'r1', slot: T0, trigger: 'schedule', status: 'interrupted', startedAt: T0 + 1_000, by: 'shutdown' },
+      { runId: 'r3', slot: T0 + 2 * MIN, trigger: 'schedule', status: 'missed', count: 2 },
+    ] as const;
+    const f = await setup([stored('st_a', { recent: [...recent] })]);
+    const reply = await f.run(local, { action: 'list', chatId: G });
+    expect(reply.kind === 'tasks' && reply.tasks[0]!.recent.map(record => record.runId)).toEqual(['r1', 'r2', 'r3']);
+    expect((await f.onDisk())[0]!.recent.map(record => record.runId)).toEqual(['r2', 'r1', 'r3']);
+  });
   it('keeps at most 500 units of the creating message', async () => {
     const f = await setup();
     const reply = await f.run({ ...member, text: '长'.repeat(600) } as ScheduleActor, create());
