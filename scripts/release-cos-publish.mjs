@@ -440,7 +440,8 @@ function ownerConfirmation(options) {
   // The reviewed plan already binds the full source SHA and final bytes. A contextual
   // affirmative reply need not repeat them; never treat a refusal or an arbitrary
   // message containing the word "confirm" as authorization.
-  if (options['reviewed-plan'] && /^(?:确认|同意|可以|发布|可以发布|确认发布(?:当前候选)?|发布当前候选|发布到\s*stable)[。！!\s]*$/i.test(text.trim())) return text;
+  const reply = text.trim().replace(/[，,。！!.\s]/g, '');
+  if (options['reviewed-plan'] && /^(?:ok|okay|yes|确认|同意|可以了?|好|好的|没问题|发吧|(?:好的)?(?:确认|可以)?发布(?:当前候选|到stable)?(?:吧|了)?)$/i.test(reply)) return text;
   const version = new RegExp(`(?<![0-9.])${options.version.replaceAll('.', '\\.')}(?!\\.?[0-9])`);
   const sha = new RegExp(`(?<![0-9a-f])${options.sha}(?![0-9a-f])`, 'i');
   if (/(?:不要|不同意|不确认|暂不|先不|取消)/.test(text) || !version.test(text) || !sha.test(text) || !/发布到\s*stable/i.test(text)) throw new Error('The owner confirmation must approve this reviewed plan, or state this version, the exact full source SHA and 发布到 stable');

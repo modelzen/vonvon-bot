@@ -532,6 +532,14 @@ test('cancellation during the final stable snapshot prevents the actual manifest
   assert.notEqual((await w.receipt('publish-receipt.json')).status, 'published');
 });
 
+test('common affirmative replies preserve the owner original words without a fixed phrase', async t => {
+  for (const text of ['OK', '好的，发布吧。', '可以了', '没问题']) await t.test(text, async t2 => {
+    const { w, hash } = await publishedFirst(t2);
+    await w.promote({ 'plan-sha256': hash, 'reviewed-plan': true, 'owner-confirmation': text });
+    assert.equal((await w.receipt('publish-receipt.json')).ownerConfirmation, text);
+  });
+});
+
 test('versioned upload checks cancellation again after reading the bytes and before PUT', async t => {
   const w = await world(t);
   const planned = await w.plan({ 'first-release': true });
