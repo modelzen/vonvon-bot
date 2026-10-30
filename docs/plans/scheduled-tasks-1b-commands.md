@@ -70,7 +70,7 @@ vonvon schedule delete <taskId> --bot <bot> --group <群> [--revision <r>]   # �
 vonvon schedule runs   <taskId> --bot <bot> --group <群>     # 发 list，取这个任务的总次数加最近 20 条
 ```
 
-时间选项互斥，只能给一个；`--every` 接受 `30m`、`2h`；`--weekly` 的星期用 `mon..sun`；`--at` 按 `--tz`（省略时按 daemon 回的时区——先 `list` 一次拿 `timeZone`，不按终端所在机器的时区）解析成 epoch。人类输出一行一个任务，逐字按总设计第 16 节"终端一行"；`runs` 一行一条记录：`11-01 09:00 · 完成 · 12 秒 · <链接或"—">`。`--json` 原样输出 reply。`delete` 不带 `--revision` 时先发一次 `list`，用这个任务当前的 `revision` 再发 `delete`（`edit` 的 `--revision` 必填）。`runs` 没有单独的请求：发 `list`，取这个任务的 `counts.runs` 和 `recent`；列表里没有它按 `not-found` 处理（退 4）。退出码沿用 s47 的表，`refused` 退 4，`conflict` 退 5。bot 会话里（`VONVON_SESSION` 环境在，`inBotSession`）直接拒绝，和 `vonvon memory` 一样。`index.ts:15` 的 `structured` 加 `'schedule'`，`:28` 的跳过名单加 `parent === 'schedule'`，帮助文字加一组例子。
+时间选项互斥，只能给一个；`--every` 接受 `30m`、`2h`；`--weekly` 的星期用 `mon..sun`；`--at` 按 `--tz`（省略时 `add` 按 daemon 回的时区、`edit` 按这个任务自己的时区——都先 `list` 一次拿，不按终端所在机器的时区）解析成 epoch。人类输出一行一个任务，逐字按总设计第 16 节"终端一行"；`runs` 一行一条记录：`11-01 09:00 · 完成 · 12 秒 · <链接或"—">`。`--json` 原样输出 reply。`delete` 不带 `--revision` 时先发一次 `list`，用这个任务当前的 `revision` 再发 `delete`（`edit` 的 `--revision` 必填）。`runs` 没有单独的请求：发 `list`，取这个任务的 `counts.runs` 和 `recent`；列表里没有它按 `not-found` 处理（退 4）。退出码沿用 s47 的表，`refused` 退 4，`conflict` 退 5。bot 会话里（`VONVON_SESSION` 环境在，`inBotSession`）直接拒绝，和 `vonvon memory` 一样。`index.ts:15` 的 `structured` 加 `'schedule'`，`:28` 的跳过名单加 `parent === 'schedule'`，帮助文字加一组例子。
 
 ### 4.4 在场的两个字段（给 T2、T3 用）
 
