@@ -234,7 +234,7 @@ import { loadBots } from '../config/bots';
 import { admitDirectorySettings } from '../config/directories';
 import { DirectoryError, directoryFailure } from '../config/directory-errors';
 import { botBackendId, groupBackendId, resolveCommentsExecution, resolveExecution, resolveModelPreference, executionSessionProfile, projectModelAllowed, projectModelCatalog, type ModelPreference } from '../config/execution';
-import { fileClaimMode, OutboundFiles } from './outbound-files';
+import { fileClaimMode, messageLink, OutboundFiles } from './outbound-files';
 import { getSecret } from '../config/keystore';
 import { buildScopeGrantUrl, JOIN_GROUP_SCOPES } from '../config/scopes';
 import { validateAppCredentials } from '../utils/feishu-auth';
@@ -1810,9 +1810,10 @@ export function createOrchestrator(
   }
 
   /** Render the one-shot affordance only while the current global mode is
-   * manual. Non-manual modes return undefined, so their cards have no button. */
+   * manual. Non-manual modes return undefined, so their cards have no button;
+   * neither has a scheduled turn's, which has nobody to remind. */
   const completionReminderView = (state: ActiveState): 'available' | 'requested' | undefined =>
-    reminderButtonOffered(state.presentation ?? cfg, state)
+    reminderButtonOffered(state.presentation ?? cfg, state) && !state.scheduled
       ? state.completionReminderRequested
         ? 'requested'
         : 'available'
@@ -9300,6 +9301,21 @@ export function createOrchestrator(
   /** Where a scheduled turn's cards and messages go instead of its synthetic message; '' is a new main-area message. */
   const landingOf = (hook: ScheduledHook): string => (hook.target.kind === 'topic' ? hook.target.anchor : '');
   const ranFor = (hook: ScheduledHook): number => Math.max(0, Date.now() - (hook.job.task.inflight?.startedAt ?? Date.now()));
+  /** The run card's Feishu link, made as outbound-files makes one; 3 seconds at most, and none when that fails. */
+  async function scheduledLink(chatId: string, messageId: string): Promise<string | undefined> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        channel.rawClient.im.v1.message.get({ path: { message_id: messageId } }),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('message.get timed out')), 3_000); }),
+      ]);
+      const item = result.data?.items?.find(m => m.message_id === messageId);
+      return item && !item.deleted ? messageLink(item, chatId) : undefined;
+    } catch (err) {
+      log.fail('schedule', err, { phase: 'result-link' });
+      return undefined;
+    } finally { clearTimeout(timer); }
+  }
   /** A request that never got through: failing so before any card is sent does not count toward auto-pause (总设计第 8 节). */
   const UNREACHABLE = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'ECONNRESET', 'ECONNABORTED']);
   function scheduleFailed(hook: ScheduledHook, err: unknown): ScheduledOutcome {
@@ -9342,7 +9358,10 @@ export function createOrchestrator(
         if (!scheduledHooks.delete(hook)) return;
         if (outcome.status === 'skipped') return resolve(outcome);
         // Once a card is out, Feishu was there: a failure counts.
-        resolve({ ...card, ...outcome, ...(outcome.status === 'failed' && card.messageId ? { counts: true } : {}) });
+        const settled: ScheduledOutcome = { ...card, ...outcome, ...(outcome.status === 'failed' && card.messageId ? { counts: true } : {}) };
+        // The record links the card (T2 4.1 第 5 条); a stopping bot does not wait on Feishu for it.
+        if (!card.messageId || shuttingDown) return resolve(settled);
+        void scheduledLink(job.task.chatId, card.messageId).then(link => resolve(link ? { ...settled, link } : settled));
       },
     };
     scheduledHooks.add(hook);
