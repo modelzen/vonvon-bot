@@ -169,6 +169,8 @@ export interface RunCardState {
   retry?: 'available' | 'sent';
   /** The run's backend id, so a login hint names the right command. */
   backend?: string;
+  /** A scheduled run's small top line (`⏰ 定时任务「…」`), on the progress card and the final one. */
+  label?: string;
 }
 
 /**
@@ -224,7 +226,7 @@ export function buildRunCard(rc: RunCardState): CardObject {
   const state = rc.rs;
   const running = state.terminal === 'running';
   const elements = rc.emptyNote ? [noteMd('_（没有要补的）_')] : running ? renderRunning(state, rc) : renderTerminal(state, rc);
-  const result = card([...voiceReplyElements(rc.voiceMessages), ...elements].map(runTypography), { streaming: running, summary: rc.continued ? '已接收补充，继续处理' : summaryText(state) });
+  const result = card([...rc.label ? [noteMd(rc.label)] : [], ...voiceReplyElements(rc.voiceMessages), ...elements].map(runTypography), { streaming: running, summary: rc.continued ? '已接收补充，继续处理' : summaryText(state) });
   result.body = { ...(result.body as Record<string, unknown>), vertical_spacing: '16px' };
   return result;
 }
@@ -369,10 +371,11 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
   } else if (state.terminal === 'interrupted') {
     elements.push(noteMd(`${statusSymbol('stopped')} 已被中断`));
   } else if (state.terminal === 'idle_timeout') {
-    elements.push(noteMd(`${statusSymbol('unknown')} ${idleLabel(state.idleTimeoutSeconds ?? 0)}没有输出，已自动停止`));
+    elements.push(noteMd(`${statusSymbol('unknown')} ${failureText(state)}`));
   } else if (state.terminal === 'error' && state.errorMsg) {
-    elements.push(noteMd(`${statusSymbol('failed')} ${state.errorKind === 'network' ? '网络失败' : 'agent 失败'}：${state.errorMsg}`));
-    const advice = errorAdvice(state.errorKind, rc.retry === 'available' && Boolean(rc.cardKey), rc.backend);
+    elements.push(noteMd(`${statusSymbol('failed')} ${failureText(state)}`));
+    // Only a scheduled run's card has a label; its next run is the retry.
+    const advice = errorAdvice(state.errorKind, rc.retry === 'available' && Boolean(rc.cardKey), rc.backend, rc.label !== undefined);
     if (advice) elements.push(noteMd(advice));
   } else if (state.terminal === 'done' && !answer) {
     elements.push(noteMd('_（未返回内容）_'));
@@ -395,6 +398,13 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
   return elements;
 }
 
+/** A terminal card's failure line without its symbol, also a scheduled run's recorded error; undefined unless it failed. */
+export function failureText(state: RunState): string | undefined {
+  if (state.terminal === 'idle_timeout') return `${idleLabel(state.idleTimeoutSeconds ?? 0)}没有输出，已自动停止`;
+  if (state.terminal === 'error') return `${state.errorKind === 'network' ? '网络失败' : 'agent 失败'}：${state.errorMsg ?? ''}`;
+  return undefined;
+}
+
 /** `600` → "10 分钟", `90` → "90 秒". */
 export function idleLabel(seconds: number): string {
   return seconds > 0 && seconds % 60 === 0 ? `${seconds / 60} 分钟` : `${seconds} 秒`;
@@ -405,7 +415,7 @@ export function idleLabel(seconds: number): string {
  * NEVER fires a request (the codex 401 chain stays codex's own business);
  * unclassified errors get no advice line.
  */
-function errorAdvice(kind: AgentErrorKind | undefined, canRetry: boolean, backend?: string): string | null {
+function errorAdvice(kind: AgentErrorKind | undefined, canRetry: boolean, backend?: string, scheduled = false): string | null {
   if (kind === 'auth') {
     if (backend === 'codex-appserver') return '🔑 Codex 的登录可能失效了：在运行 bot 的电脑上运行 `codex login` 重新登录，再重试。';
     if (backend === 'claude-agent') return '🔑 Claude 的登录可能失效了：在运行 bot 的电脑上运行 `claude`，用 `/login` 重新登录，再重试。';
@@ -414,6 +424,7 @@ function errorAdvice(kind: AgentErrorKind | undefined, canRetry: boolean, backen
   if (kind === 'version') return '⬆️ Codex 版本太旧，服务端不让它用这个模型：在 Vonvon 的本机环境里更新 Codex，再重试。';
   if (kind === 'quota') return '📊 可能触达用量上限：发送 /usage 查看用量，稍后再试';
   if (kind === 'network') {
+    if (scheduled) return '连不上模型服务，可能是网络断了，或者服务暂时不可用。下一次定时运行会再试；也可以在任务里手动运行。';
     return canRetry
       ? '连不上模型服务，可能是网络断了，或者服务暂时不可用。点「重试」再跑一次。'
       : '连不上模型服务，可能是网络断了，或者服务暂时不可用。稍后重发本条消息即可重试。';
