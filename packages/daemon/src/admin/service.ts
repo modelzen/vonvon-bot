@@ -19,7 +19,7 @@ import { readFile, realpath, rm, stat } from 'node:fs/promises';
 import { botIdentity, loadBots, setBotActivation, removeBot } from '../config/bots';
 import { botPaths, botDir } from '../config/paths';
 import { configuredProjectsRoots, directoryContext, legacyDirectoryProblems } from '../project/directory-audit';
-import type { DirectoryProblem } from '@vonvon/protocol';
+import type { DirectoryProblem, ScheduleReply, ScheduleRequest } from '@vonvon/protocol';
 import { removeSecret } from '../config/keystore';
 import {
   getCompletionReminderConfig,
@@ -119,6 +119,8 @@ export interface AdminService {
   /** true only in the read-only preview process: it refuses every write, memory writes included */
   readonlyPreview?: boolean;
   collaboration?(botId: string, request: CollaborationRequest): Promise<unknown>;
+  /** Scheduled tasks of one bot; the bot process checks scope and roles (admin/schedule-commands.ts). Refusals are replies, not errors. */
+  executeSchedule?(botId: string, via: 'desktop' | 'cli', request: ScheduleRequest): Promise<ScheduleReply>;
   /** The project library (admin/library.ts): its workspace is changed only through here. */
   library?: HostLibrary;
   accountUsage(force: boolean): Promise<AccountUsageBundle>;
@@ -458,6 +460,8 @@ export interface AdminServiceDeps {
   executeWrite?: (botId: string, op: AdminWriteOp) => Promise<unknown>;
   /** Asks a running bot process to follow a project's new workspace (admin/library.ts `AdminLibraryOp`). */
   executeLibrary?: (botId: string, op: AdminLibraryOp) => Promise<unknown>;
+  /** Forwards a scheduled-task request to the bot process; a bot that is not running replies `refused bot-not-running`. */
+  executeSchedule?: (botId: string, via: 'desktop' | 'cli', request: ScheduleRequest) => Promise<ScheduleReply>;
   /** 实时运行状态（daemon 进程内：本进程 channel / 子进程 IPC）。返回 undefined
    * 或缺省 → 回退锁文件探测（该 bot 不归本 daemon 管，如未激活的 bot）。 */
   liveStatus?: (botId: string) => Promise<BotLiveStatus | undefined>;
@@ -668,6 +672,10 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         if (handled !== undefined) return handled;
       }
       return deps.executeCollaboration(botId, request);
+    },
+    async executeSchedule(botId, via, request) {
+      if (!deps.executeSchedule) throw new NotWiredYetError('定时任务');
+      return deps.executeSchedule(botId, via, request);
     },
     async pendingGroups(botId) {
       const registry = await loadBots();
