@@ -45,7 +45,7 @@ describe('where a task goes', () => {
     ['here in the main area', main, undefined, once, { kind: 'follow' }],
     ['here in a topic, once', topic, undefined, once, { kind: 'topic', topicId: 'omt_topic' }],
     ['here in a topic, recurring', topic, 'here', every, { kind: 'follow' }],
-    ['here in a topic not claimed yet, once', unclaimed, undefined, once, { kind: 'follow' }],
+    ['here in a topic not claimed yet, recurring', unclaimed, undefined, every, { kind: 'follow' }],
     ['thisTopic in a topic, recurring', topic, 'thisTopic', every, { kind: 'topic', topicId: 'omt_topic' }],
     ['thisTopic in the main area', main, 'thisTopic', every, { kind: 'follow' }],
     ['newTopic in a topic', topic, 'newTopic', once, { kind: 'newTopic' }],
@@ -57,16 +57,33 @@ describe('where a task goes', () => {
     expect(f.request()).toMatchObject({ action: 'create', chatId: G, placement });
     expect(f.store.all()[0]).toMatchObject({ placement });
   });
-  it('answers thisTopic in a topic the bot just opened with topic-pending, and reads where() again on the retry', async () => {
+  // A once made here goes back to this topic (3.13), so it waits for the id like thisTopic does instead of following
+  // the group: a multi-session group would open a new topic and session on every run.
+  it.each([
+    ['thisTopic, recurring', 'thisTopic', every],
+    ['here, once', 'here', once],
+    ['no where, once', undefined, once],
+  ] as const)('answers %s in a topic the bot just opened with topic-pending, and reads where() again on the retry', async (_case, place, when) => {
     const f = await scheduleFixture();
-    let where: TurnWhere = { inTopic: true };
+    let where: TurnWhere = unclaimed;
     f.open(human(undefined, { where: () => where }));
-    const args = { name: '日报', instruction: '发日报', when: { kind: 'daily', time: '09:00' }, where: 'thisTopic' };
+    const args = { name: '日报', instruction: '发日报', when, ...(place ? { where: place } : {}) };
     expect(await f.text('schedule_create', args)).toMatch(/^话题还没建好，稍等几秒再试。\n.*"reason":"topic-pending"/);
     expect(f.execute).not.toHaveBeenCalled();
     where = { inTopic: true, topicId: 'omt_new' };
     await f.call('schedule_create', args);
     expect(f.request()).toMatchObject({ placement: { kind: 'topic', topicId: 'omt_new' } });
+  });
+  it('answers an edit that moves a once task here, in a topic not claimed yet, with topic-pending', async () => {
+    const f = await scheduleFixture();
+    f.open(human(undefined, { where: () => main }));
+    await f.call('schedule_create', { name: '回来看', instruction: '看一下', when: once });
+    const { id, revision } = f.store.all()[0]!;
+    f.open(human(undefined, { triggerMessageId: 'om_2', where: () => unclaimed }));
+    f.execute.mockClear();
+    expect(await f.text('schedule_edit', { taskId: id, revision, patch: { where: 'here' } })).toMatch(/^话题还没建好，稍等几秒再试。\n.*"reason":"topic-pending"/);
+    expect(f.execute.mock.calls.map(call => call[1].action)).toEqual(['list']);
+    expect(f.store.get(id)?.placement).toEqual({ kind: 'follow' });
   });
   it('moves a once task into this topic on edit, judging once by the task itself', async () => {
     const f = await scheduleFixture();

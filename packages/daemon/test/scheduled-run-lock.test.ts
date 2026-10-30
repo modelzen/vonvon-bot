@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { AgentEvent } from '../src/agent/types';
 import type { AppConfig } from '../src/config/schema';
 import type { createScheduler } from '../src/bot/schedule/scheduler';
+import type { ScheduledJob } from '../src/bot/schedule/types';
 
 type Deps = Parameters<typeof createScheduler>[0];
 const fake = vi.hoisted(() => ({
@@ -46,6 +47,8 @@ let root: string;
 let registry: typeof import('../src/project/registry');
 let o: ReturnType<typeof import('../src/bot/handle-message')['createOrchestrator']>;
 let finish: () => void;
+let session: unknown;
+const holds: (() => void)[] = [];
 
 beforeEach(async () => {
   vi.clearAllMocks();
@@ -60,14 +63,15 @@ beforeEach(async () => {
   }
   // The run in group A lasts until the test ends it.
   const ended = new Promise<void>(resolve => { finish = resolve; });
-  fake.backend.startThread.mockResolvedValue({
+  session = {
     sessionId: 'session-a', isAlive: () => true, close: async () => { finish(); }, abort: async () => {}, steer: async () => {},
     runStreamed: () => ({ turnId: () => 'turn-a', events: (async function* (): AsyncGenerator<AgentEvent> {
       yield { type: 'turn_started', turnId: 'turn-a' };
       await ended;
       yield { type: 'done', turnId: 'turn-a' };
     })() }),
-  });
+  };
+  fake.backend.startThread.mockResolvedValue(session);
   const cfg: AppConfig = { accounts: { app: { id: 'cli_schedule_lock', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, completionReminder: { mode: 'manual' } } };
   const channel = { send: vi.fn(async () => ({ messageId: 'om_sent' })), rawClient: { im: { v1: {
     message: { get: async () => ({ data: { items: [] } }) }, messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) },
@@ -76,6 +80,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   vi.restoreAllMocks();
+  for (const go of holds.splice(0)) go();
   finish();
   await o.shutdown();
   vi.unstubAllEnvs();
@@ -86,6 +91,17 @@ const message = (chatId: string): NormalizedMessage => ({ messageId: `om_${chatI
   mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false });
 const edit = async (chatId: string) => o.collaboration({ action: 'editProject', projectName: chatId, chatId, enabled: true,
   expectedRevision: (await import('../src/admin/collaboration')).projectRevision((await registry.getProjectByChatId(chatId))!) });
+/** A claimed run of a daily task in `chatId`, as the scheduler hands it over. */
+const job = (chatId: string): ScheduledJob => ({
+  task: { id: 'st_00000000000000b1', chatId, revision: 'r1', name: '日报', instruction: '写今天的日报', spec: { kind: 'daily', time: '09:00' },
+    timeZone: 'UTC', placement: { kind: 'follow' }, state: 'active', createdBy: { via: 'cli' }, createdAt: 1, updatedAt: 1,
+    cursor: 1, counts: { runs: 0, missed: 0, skipped: 0, consecutiveFailures: 0 }, recent: [] },
+  runId: 'run-1', slot: 1, trigger: 'schedule', nth: 1, late: false,
+});
+/** The next session start waits until the test ends. */
+function holdStart(): void {
+  fake.backend.startThread.mockReturnValueOnce(new Promise(resolve => { holds.push(() => resolve(session)); }));
+}
 
 it('a run in group A locks only group A, and holds its scheduled tasks for a minute', async () => {
   await o.onMessage(message('oc_a'));
@@ -105,5 +121,30 @@ it('the library workspace check looks at the groups of that project only, and ho
   expect(await o.libraryExecute({ kind: 'libraryWorkspaceCheck', projectId: 'prj_0000000b' })).toEqual({ busy: false });
   expect(fake.deps!.gate('oc_b')).toBe('ok');
   expect(await o.libraryExecute({ kind: 'libraryWorkspaceCheck', projectId: 'prj_0000000a' })).toEqual({ busy: true });
+  expect(fake.deps!.gate('oc_a')).toBe('held');
+});
+
+it('a scheduled run of group B, while its session starts, locks group B only', async () => {
+  holdStart();
+  void fake.deps!.run(job('oc_b'));
+  await vi.waitFor(() => expect(fake.backend.startThread).toHaveBeenCalled());
+  await expect(edit('oc_a')).resolves.toMatchObject({ ok: true });
+  expect(fake.deps!.gate('oc_a')).toBe('ok');
+  await expect(edit('oc_b')).rejects.toThrow('Agent 正在执行任务');
+});
+
+it('a person\'s turn in group A, while its session starts, locks group A only', async () => {
+  holdStart();
+  await o.onMessage(message('oc_a'));
+  await vi.waitFor(() => expect(fake.backend.startThread).toHaveBeenCalled());
+  await expect(edit('oc_b')).resolves.toMatchObject({ ok: true });
+  await expect(edit('oc_a')).rejects.toThrow('Agent 正在执行任务');
+});
+
+it('a /new in group B, while its session starts, still locks every group', async () => {
+  holdStart();
+  await o.onMessage({ ...message('oc_b'), content: '/new' });
+  await vi.waitFor(() => expect(fake.backend.startThread).toHaveBeenCalled());
+  await expect(edit('oc_a')).rejects.toThrow('Agent 正在执行任务');
   expect(fake.deps!.gate('oc_a')).toBe('held');
 });

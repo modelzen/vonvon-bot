@@ -1,7 +1,8 @@
 import { z } from 'zod';
-import type { SchedulePlacement, ScheduleRefusal, ScheduleReply, ScheduleRequest, ScheduleSpec } from '@vonvon/protocol';
+import type { ScheduledTaskView, SchedulePlacement, ScheduleRefusal, ScheduleReply, ScheduleRequest, ScheduleSpec } from '@vonvon/protocol';
 import { scheduleRefusalMessages, type ScheduleActor, type ScheduleCommands } from '../../admin/schedule-commands';
-import { formatAt, hostTimeZone, parseLocal } from '../../bot/schedule/time';
+import { clampUnits } from '../../bot/schedule/store';
+import { ceilToMinute, formatAt, hostTimeZone, parseLocal } from '../../bot/schedule/time';
 import type { TurnWhere } from './registry';
 import { ToolRefusal, type AgentTool, type ToolContext } from './tools';
 
@@ -25,7 +26,10 @@ const whenSchema = z.union([
   + 'cron：{kind:"cron",expr:"0 9 * * 1-5"}（5 段）');
 const whereSchema = z.enum(['here', 'thisTopic', 'newTopic']).describe('发到哪。here（默认）：话题里建的一次性任务回这个话题，其余跟群的会话方式；'
   + 'thisTopic：用户说了"就在这个话题里发"；newTopic：用户说了"开个话题发"，每次开新话题');
-const zoneSchema = z.string().min(1).max(64).describe('IANA 时区名，比如 Asia/Shanghai；不写就用 daemon 所在电脑的时区');
+const zone = z.string().min(1).max(64);
+const zoneSchema = zone.describe('IANA 时区名，比如 Asia/Shanghai；不写就用 daemon 所在电脑的时区');
+/** An edit reads its `when` in the task's own zone when the patch names none. */
+const editZoneSchema = zone.describe('IANA 时区名；不写就按这个任务自己的时区（schedule_list 里的 timeZone）');
 const taskId = z.string().min(1).max(64).describe('任务 id，来自 schedule_list');
 const revision = z.string().min(1).max(200).describe('schedule_list 里这个任务的 revision');
 const name = z.string().min(1).max(40);
@@ -33,7 +37,7 @@ const instruction = z.string().min(1).max(4000).describe('到点时要做什么�
 
 const createInput = z.object({ name, instruction, when: whenSchema, where: whereSchema.optional(), timeZone: zoneSchema.optional() }).strict();
 const editInput = z.object({ taskId, revision, patch: z.object({ name: name.optional(), instruction: instruction.optional(),
-  when: whenSchema.optional(), where: whereSchema.optional(), timeZone: zoneSchema.optional() }).strict() }).strict();
+  when: whenSchema.optional(), where: whereSchema.optional(), timeZone: editZoneSchema.optional() }).strict() }).strict();
 const targetInput = z.object({ taskId }).strict();
 const deleteInput = z.object({ taskId, revision }).strict();
 
@@ -63,7 +67,8 @@ const refuse = (reason: ScheduleRefusal, message: string): ScheduleReply => ({ k
 /** `when` to a spec: the model never counts milliseconds. A string is what bad-schedule says. */
 function specOf(when: When, zone: string, now: number): ScheduleSpec | string {
   if (when.kind !== 'once') return when;
-  if ('inMinutes' in when) return { kind: 'once', at: now + when.inMinutes * MINUTE };
+  // On a whole minute, like `at` and every other kind: "in 20 minutes" at 10:00:15 runs at 10:21:00.
+  if ('inMinutes' in when) return { kind: 'once', at: ceilToMinute(now + when.inMinutes * MINUTE) };
   try {
     const at = parseLocal(zone, when.at);
     return at === undefined ? '一次性任务的时间要写成 YYYY-MM-DD HH:mm，比如 2026-11-01 14:00' : { kind: 'once', at };
@@ -75,9 +80,34 @@ function specOf(when: When, zone: string, now: number): ScheduleSpec | string {
 /** 3.13"结果发在哪": a once made in a topic goes back to it; a recurring one follows the group unless told to stay. */
 function placementOf(where: Where | undefined, once: boolean, here: TurnWhere): SchedulePlacement | 'topic-pending' {
   if (where === 'newTopic') return { kind: 'newTopic' };
-  // In the main area `thisTopic` reads as `here`; a topic the bot just opened has no id until Feishu answers.
-  if (where === 'thisTopic' && here.inTopic) return here.topicId ? { kind: 'topic', topicId: here.topicId } : 'topic-pending';
-  return once && here.topicId ? { kind: 'topic', topicId: here.topicId } : { kind: 'follow' };
+  if (where !== 'thisTopic' && !once) return { kind: 'follow' };
+  if (here.topicId) return { kind: 'topic', topicId: here.topicId };
+  // A topic the bot just opened has no id until Feishu answers: what goes back to it waits, `here` too, or a
+  // multi-session group would open a new topic on every run. In the main area `thisTopic` reads as `here`.
+  return here.inTopic ? 'topic-pending' : { kind: 'follow' };
+}
+
+/** What a list shows of the free text; a single task keeps its instruction whole, so the agent can edit it. */
+const LIST_INSTRUCTION_UNITS = 1000, LIST_TEXT_UNITS = 200;
+const clip = (text: string, max: number) => text.length <= max ? text : `${clampUnits(text, max - 1)}…`;
+/**
+ * A task as the agent reads it, also in a card that shows tool calls: no group id and no raw Feishu ids it cannot act
+ * on (the creator's open_id, message ids), the last 3 runs with their links. A list of 20 full tasks stays well under
+ * the registry's 256 KiB.
+ */
+function taskView(task: ScheduledTaskView, list: boolean) {
+  const cut = (text: string, max: number) => list ? clip(text, max) : text;
+  const { via, name: creator, text } = task.createdBy;
+  const last = task.lastResult;
+  return {
+    id: task.id, name: task.name, revision: task.revision, state: task.state,
+    ...(task.pausedReason ? { pausedReason: task.pausedReason } : {}),
+    describe: task.describe, ...(task.nextRunAt === undefined ? {} : { nextRunAt: task.nextRunAt }), timeZone: task.timeZone,
+    placement: task.placement, running: task.running, instruction: cut(task.instruction, LIST_INSTRUCTION_UNITS),
+    createdBy: { via, ...(creator ? { name: creator } : {}), ...(text ? { text: cut(text, LIST_TEXT_UNITS) } : {}) },
+    ...(last ? { lastResult: { status: last.status, at: last.at, excerpt: cut(last.excerpt, LIST_TEXT_UNITS), ...(last.link ? { link: last.link } : {}) } } : {}),
+    recent: task.recent.slice(-3).map(({ messageId: _message, topicId: _topic, ...run }) => run),
+  };
 }
 
 const nextAt = (ms: number, zone: string) => `${formatAt(ms, zone, zone).slice(5)}（${zone}）`;
@@ -95,9 +125,11 @@ function headline(reply: ScheduleReply, done: string): string {
     default: { const exhaustive: never = reply; return exhaustive; }
   }
 }
-/** One line, then the reply as JSON; a list keeps each task's last 3 runs. */
+/** One line, then the reply as JSON, each task in {@link taskView}. */
 function answer(reply: ScheduleReply, done = ''): string {
-  const shown = reply.kind === 'tasks' ? { ...reply, tasks: reply.tasks.map(task => ({ ...task, recent: task.recent.slice(-3) })) } : reply;
+  const shown = reply.kind === 'tasks' ? { ...reply, tasks: reply.tasks.map(task => taskView(task, true)) }
+    : reply.kind === 'task' ? { ...reply, task: taskView(reply.task, false) }
+      : reply.kind === 'conflict' ? { ...reply, current: taskView(reply.current, false) } : reply;
   return `${headline(reply, done)}\n${JSON.stringify(shown)}`;
 }
 

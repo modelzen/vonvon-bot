@@ -40,7 +40,7 @@ import { realScope, linuxReadScope } from './read-scope';
 export { ReadScopeError } from './read-scope';
 import { findTranscript, readCustomTitle, scanTranscript } from './transcript';
 import { foldSessionMessages, mapSessionSummary } from './history';
-import { ClaudeAgentThread, NATIVE_MEMORY_OFF, type TranscriptMark } from './thread';
+import { ClaudeAgentThread, NATIVE_MEMORY_OFF, NATIVE_SCHEDULING_ENV, type TranscriptMark } from './thread';
 import { claudeConfigDir, readConfiguredClaudeModel } from './configured-model';
 import { loginFromAccount, loginFromEnv, loginUnderService, readClaudeLogin } from './login';
 
@@ -95,8 +95,8 @@ function bridgeClaudeEnv(): Record<string, string> {
 }
 
 function sessionClaudeEnv(profileEnv: Readonly<Record<string, string>>): Record<string, string> {
-  // CLAUDE_CODE_DISABLE_CRON backs up thread.ts's NATIVE_SCHEDULING_TOOLS (3.13).
-  return { ...bridgeClaudeEnv(), ...profileEnv, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', CLAUDE_CODE_DISABLE_CRON: '1' };
+  // CLAUDE_CODE_DISABLE_CRON backs up thread.ts's NATIVE_SCHEDULING_TOOLS (3.13); the settings layer carries it too.
+  return { ...bridgeClaudeEnv(), ...profileEnv, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', ...NATIVE_SCHEDULING_ENV };
 }
 
 /**
