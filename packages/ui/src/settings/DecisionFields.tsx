@@ -1,7 +1,7 @@
-import {isKnownJudgeSelection, type AgentId, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ToolState} from '@vonvon/protocol';
+import {DECISION_API_PROVIDERS, decisionApiProviderLabel, isKnownJudgeSelection, type AgentId, type DecisionModelsView, type JudgeSelectionView, type ModelCatalog, type ToolState} from '@vonvon/protocol';
 import {SelectControl} from '../reference/components/ui';
 import type {DecisionConfigurationState} from './useDecisionConfiguration';
-import {DecisionPicker, type DecisionPickerValue, type DecisionCatalogs} from './DecisionPicker';
+import {DecisionPicker, decisionApiModels, isDecisionApiProvider, type DecisionPickerValue, type DecisionCatalogs, type DecisionPickerService} from './DecisionPicker';
 import {useDecisionCatalogs} from './useDecisionCatalogs';
 
 type Provider = {id: string; displayName: string};
@@ -31,10 +31,12 @@ export function providerDecisionProblem(value: JudgeSelectionView, providers: Pr
   const provider = value.kind === 'llm' ? value.backend : value.kind === 'provider' || value.kind === 'decision' ? value.provider : undefined;
   if (!provider) return '请选择决策模型。';
   if ((value.kind === 'llm' || value.kind === 'decision') && !value.model.trim()) return '请填写模型 ID。';
-  if (provider === 'typesafe') {
-    const service = services?.find(item => item.provider === 'typesafe');
-    if (!service || service.keyUnreadable) return '无法读取 Jev 密钥，请检查决策模型设置。';
-    return service.keySet ? undefined : '请先添加 Jev 密钥。';
+  if (isDecisionApiProvider(provider)) {
+    const service = services?.find(item => item.provider === provider);
+    const name = decisionApiProviderLabel(provider);
+    if (!service || service.keyUnreadable) return `无法读取 ${name} 密钥，请检查决策模型设置。`;
+    if (!service.keySet) return `请先添加 ${name} 密钥。`;
+    return provider === 'custom' && service.endpointConfigured === false ? '请先在决策模型设置中配置自定义接口地址。' : undefined;
   }
   return providers.some(item => item.id === provider) ? undefined : '此决策 Provider 当前不可用，请先安装并登录。';
 }
@@ -57,17 +59,22 @@ export function DecisionFields({groupBackend, value, effective, onChange, disabl
   const {catalogs: loadedCatalogs} = useDecisionCatalogs(suppliedCatalogs === undefined);
   const catalogs = suppliedCatalogs ?? loadedCatalogs;
   const service = services?.find(item => item.provider === 'typesafe');
+  const decisionServices: DecisionPickerService[] = DECISION_API_PROVIDERS.map(provider => {
+    const service = services?.find(item => item.provider === provider);
+    return {provider, displayName: service?.displayName, endpointConfigured: service?.endpointConfigured, models: service?.models ?? decisionApiModels[provider],
+      keyState: !services ? 'loading' : !service || service.keyUnreadable ? 'unreadable' : service.keySet ? 'ready' : 'missing'};
+  });
   const selection = groupDecisionPickerValue(value, effective, groupBackend);
   const editable = isKnownJudgeSelection(value);
   return <div className="gd-decision-fields">
     {!editable && <p className="gd-note" role="alert">当前客户端无法编辑已保存的决策设置。</p>}
-    <DecisionPicker value={selection} catalogs={catalogs} jevModels={service?.models} context="group" disabled={disabled || !editable}
+    <DecisionPicker value={selection} catalogs={catalogs} jevModels={service?.models} decisionServices={decisionServices} context="group" disabled={disabled || !editable}
       availableProviders={providers.map(provider => provider.id)} keyState={!services ? 'loading' : !service || service.keyUnreadable ? 'unreadable' : service.keySet ? 'ready' : 'missing'}
-      onOpenProviders={onOpenProviders} onManageKey={onOpenSecrets ? () => onOpenSecrets('typesafe') : undefined}
+      onOpenProviders={onOpenProviders} onManageKey={onOpenSecrets ? (provider = 'typesafe') => onOpenSecrets(provider) : undefined}
       onChange={next => {
         if (disabled || !editable) return;
         onProviderChange?.(next.provider);
-        if (next.provider === 'typesafe') onChange({kind: 'decision', provider: next.provider, model: next.model});
+        if (isDecisionApiProvider(next.provider)) onChange({kind: 'decision', provider: next.provider, model: next.model});
         else {const {provider, ...profile} = next; onChange({kind: 'llm', backend: provider, ...profile});}
       }}/>
   </div>;

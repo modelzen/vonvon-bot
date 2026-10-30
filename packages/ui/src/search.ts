@@ -1,4 +1,5 @@
 import {toolNames} from './management/environmentPresentation';
+import {DECISION_API_PROVIDERS, decisionApiProviderLabel} from '@vonvon/protocol';
 import type {AgentId, DesktopSnapshot, GroupId, MembershipId, ProjectId} from '@vonvon/protocol';
 import type {CollaborationView, Page} from './collaboration-model';
 
@@ -12,7 +13,9 @@ export const settingAnchor = (title: string) => `setting-${encodeURIComponent(ti
 export const diagnosticsSection = (agentId: string) => `Bot 状态 ${agentId}`;
 /** Shared model configuration opened from a group's decision Provider. */
 export const decisionProviderSection = (provider?: string) =>
-  provider && ['codex-appserver', 'claude-agent', 'typesafe'].includes(provider) ? `决策配置 ${provider}` : 'Provider 配置';
+  provider && ['codex-appserver', 'claude-agent', ...DECISION_API_PROVIDERS].includes(provider) ? `决策配置 ${provider}` : 'Provider 配置';
+/** Custom connection fields and its key have distinct search anchors. */
+export const decisionKeySection = (provider: string) => provider === 'custom' ? '决策密钥 custom' : decisionProviderSection(provider);
 
 type Target = {title: string; aliases?: readonly string[]; reveal?: SearchReveal; guide?: string; field?: string};
 type Group = {title: string; aliases?: readonly string[]; fields: readonly Target[]; smartOnly?: boolean; ordinaryOnly?: boolean};
@@ -44,7 +47,7 @@ const membershipGroups: readonly Group[] = [
   {title: '可用模型', aliases: ['执行模型', '模型', '模型与权限', '执行工具'], fields: [item('模型 Provider', ['执行后端'], {field: ''}), item('允许使用的模型', ['模型多选'], {field: '', guide: '点击「选择模型」查看并多选；完成后在页面保存。'}), item('可用 Effort', ['思考强度', '推理强度', 'Effort 多选'], {field: '', guide: '点击「选择强度」调整 Effort；与模型独立多选。'})]},
   {title: '权限', aliases: ['工作目录权限', '执行权限'], fields: [item('权限', [], {field: '修改权限'}), item('能挡到什么', [], {field: '修改权限', guide: '点击「修改权限」，可比较各档范围与实际约束。'}), item('自定义权限', ['高级设置', '自定义设置'], {field: '修改权限', guide: '点击「修改权限」，选择「自定义」后调整 Provider 原生字段并保存。'})]},
   {title: '聊天方式', aliases: ['沟通方式', '回复规则'], fields: [item('聊天方式', ['会话方式', '智能模式', '智能开话题'], {field: ''})]},
-  {title: '决策模型', smartOnly: true, aliases: ['判断模型'], fields: [item('决策 Provider', ['判断模型', 'Jev', 'TypeSafe'], {field: ''}), item('决策 Effort', ['判断的推理强度'], {field: '', guide: '先选择语言模型，再设置 Effort。'}), item('自定义决策模型 ID', ['判断的手填模型 id'], {field: '', guide: '选择语言模型 Provider，再点「自定义模型 ID」。'})]},
+  {title: '决策模型', smartOnly: true, aliases: ['判断模型'], fields: [item('决策 Provider', ['判断模型', 'Jev', 'System One', 'TypeSafe', 'OpenRouter', 'Vercel', '自定义接口'], {field: ''}), item('决策 Effort', ['判断的推理强度'], {field: '', guide: '先选择语言模型，再设置 Effort。'}), item('自定义决策模型 ID', ['判断的手填模型 id'], {field: '', guide: '选择语言模型 Provider，再点「自定义模型 ID」。'})]},
   {title: '判断规则', smartOnly: true, fields: [item('判断规则', ['什么时候回应', '什么时候不回应', '消息在群主区时', '消息已经在话题里时', '什么时候回复', '什么时候创建新话题', '响应提示词', '新话题提示词'])]},
   {title: '群内响应', ordinaryOnly: true, fields: [item('不 @ 也能发起任务', ['免 @'])]},
   {title: '运行中来了消息', fields: [item('运行中来了消息', ['运行中收到新消息', '待处理消息策略', '插话', '排队', 'steer', 'queue'])]},
@@ -66,7 +69,8 @@ const globalGroups: readonly {page: Page; section: string; fields: readonly Targ
   {page: 'environment', section: toolNames['lark-cli'], fields: ['安装', '更新', '登录', '检查授权', '重新登录', '安装托管副本', '重新安装最新版', '停用托管副本', '安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', '当前账号配置'].map(title => item(`${title} 飞书 CLI`, [title, ...(formerly[title] ? [formerly[title]] : [])], {field: title, reveal: 'lark-tool', guide: ['安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', '当前账号配置'].includes(title) ? undefined : '此操作是否可用取决于飞书 CLI 的安装与授权状态。'}))},
   {page: 'environment', section: 'MCP', fields: [item('MCP', ['MCP 连接', '连接器'], {field: ''}), item('添加 MCP', [], {field: '添加'}), item('MCP 授权', [], {field: '', guide: '选择连接的「授权」，在终端完成。'}), item('移除 MCP', [], {field: '', guide: '选择连接的「移除」。'})]},
   {page: 'environment', section: '飞书 CLI 账号配置', fields: [item('管理飞书 CLI', ['管理账号配置', '切换账号配置', 'Profile'], {reveal: 'profile-manager'}), item('添加已有应用', ['添加账号配置', '添加 Profile'], {reveal: 'profile-add'}), item('创建新应用', ['创建账号配置', '创建 Profile'], {reveal: 'profile-create'}), ...['账号配置名称', 'App ID', 'App Secret', '平台', '添加后设为当前'].map(title => item(title, ['飞书应用'], {reveal: 'profile-add'})), item('设为当前', ['切换账号配置', '切换飞书 Profile'], {reveal: 'profile-manager'})]},
-  {page: 'secrets', section: '决策模型', fields: [item('TypeSafe 密钥', ['TypeSafe 的 key', '添加密钥', '更换密钥', '验证', '填 key', '换 key', '删除 key', '试一次', 'Jev', 'typesafe-api-key']), item('使用范围', ['谁在用'])]},
+  ...DECISION_API_PROVIDERS.map(provider => ({page: 'secrets' as const, section: decisionKeySection(provider), fields: [item(`${decisionApiProviderLabel(provider)} 密钥`, [provider, `${provider}-api-key`, '添加密钥', '更换密钥', '验证', '填 key', '换 key', '删除 key', '试一次', 'Jev', ...(provider === 'custom' ? ['System One', 'custom-decision-api-key', '自定义接口'] : [])], {field: 'API 密钥'}), item(`${decisionApiProviderLabel(provider)} 使用范围`, ['谁在用'], {field: '使用范围'})]})),
+  {page: 'secrets', section: decisionProviderSection('custom'), fields: [item('自定义决策请求地址', ['自定义接口', 'System One', 'endpoint', 'URL'], {field: '接口地址'}), item('自定义接口模型 ID', ['自定义 Jev', 'System One', '模型名称'], {field: '模型 ID'})]},
   {page: 'diagnostics', section: '诊断概况', fields: [item('daemon 版本', ['后台版本']), item('重新检查'), item('最近读取')]},
   {page: 'diagnostics', section: '这台电脑', fields: [item('决策模型密钥', ['决策模型的 key', '没填 key']), item('数据目录')]},
   {page: 'diagnostics', section: 'daemon 日志', fields: [item('刷新日志'), item('持续跟随', ['自动刷新']), item('后台日志', ['daemon 日志'])]},
@@ -92,7 +96,7 @@ export function searchEntries(snapshot: DesktopSnapshot, capabilities: {external
     {id: 'providers', title: 'Provider', aliases: ['Codex', 'Claude', '模型来源', '安装', '登录', '授权'], page: 'providers'},
     {id: 'environment', title: '工具与连接', aliases: ['本机环境', '飞书 CLI', 'MCP'], page: 'environment'},
     {id: 'application', title: '应用与启动', aliases: ['版本', '更新', '后台服务'], page: 'application'},
-    {id: 'secrets', title: '决策模型', aliases: ['key', 'API key', 'TypeSafe', 'Jev', '密钥'], page: 'secrets'},
+    {id: 'secrets', title: '决策模型', aliases: ['key', 'API key', 'TypeSafe', 'OpenRouter', 'Vercel', '自定义接口', 'Jev', 'System One', '密钥'], page: 'secrets'},
     {id: 'diagnostics', title: '状态与诊断', aliases: ['日志', '数据目录', '连接', '没回的消息', '缺的权限'], page: 'diagnostics'},
   ];
   const entries: SearchEntry[] = pages.map(page => ({id: page.id, title: page.title, context: '页面', aliases: page.aliases, destination: {page: page.page, view: page.view, selection: page.view ? {kind: 'overview'} : undefined}, kind: 'page'}));

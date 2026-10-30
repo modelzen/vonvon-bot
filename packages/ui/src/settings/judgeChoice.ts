@@ -1,4 +1,4 @@
-import {isKnownJudgeSelection, type DecisionModelsView, type JudgeSelection, type JudgeSelectionView, type ModelCatalog} from '@vonvon/protocol';
+import {decisionApiProviderLabel, isKnownJudgeSelection, type DecisionModelsView, type JudgeSelection, type JudgeSelectionView, type ModelCatalog} from '@vonvon/protocol';
 import {MEANWHILE} from '../management/secretsModel';
 
 export type JudgeChoiceOption = {value: string; label: string; selection?: JudgeSelection; disabled?: boolean};
@@ -60,7 +60,7 @@ export function judgeLabel(selection: JudgeSelectionView, decisionModels?: Decis
   if (!isKnownJudgeSelection(selection)) return '这个版本的网页不认识的设置';
   switch (selection.kind) {
     case 'default': return '各后端的默认小模型';
-    case 'provider': return `${selection.provider === 'codex-appserver' ? 'Codex' : selection.provider === 'claude-agent' ? 'Claude' : 'Jev'}（跟随决策模型页配置）`;
+    case 'provider': return `${selection.provider === 'codex-appserver' ? 'Codex' : selection.provider === 'claude-agent' ? 'Claude' : decisionApiProviderLabel(selection.provider)}（跟随决策模型页配置）`;
     case 'llm': return `${selection.model}${selection.effort ? `（推理强度 ${selection.effort}）` : ''}`;
     case 'decision': {
       const service = decisionModels?.find(service => service.provider === selection.provider);

@@ -20,6 +20,21 @@ async function fixture(){
   return {root,file,read:async()=>JSON.parse(await readFile(file,'utf8'))};
 }
 describe('legacy group decision snapshots',()=>{
+  it('freezes every decision provider without catalog lookups or copying the shared endpoint',async()=>{
+    const f=await fixture();const before=await f.read();
+    const choices=[{kind:'default'},...(['openrouter','vercel','custom'] as const).map(provider=>({kind:'provider',provider}))];
+    before.projects=choices.map((judge,i)=>({...before.projects[0],name:`decision-${i}`,chatId:`oc_decision_${i}`,judge}));
+    await writeFile(f.file,JSON.stringify(before));
+    await freezeGroupJudgeReferences(f.root,{defaultProvider:'custom',byProvider:{
+      custom:{model:'custom-jev',endpoint:'https://decisions.example/v1/decide'},vercel:{model:'typesafe-ai/jev'},
+    }},async()=>{throw new Error('decision providers have no execution catalog');});
+    expect((await f.read()).projects.map((row:{judge:unknown})=>row.judge)).toEqual([
+      {kind:'decision',provider:'custom',model:'custom-jev'},
+      {kind:'decision',provider:'openrouter',model:'typesafe/jev-1.14'},
+      {kind:'decision',provider:'vercel',model:'typesafe-ai/jev'},
+      {kind:'decision',provider:'custom',model:'custom-jev'},
+    ]);
+  });
   it('pins the old catalog-derived model and fitted effort, preserving explicit/unknown/unset choices',async()=>{
     const f=await fixture();const before=await f.read();
     const previous={byProvider:{'claude-agent':{model:'haiku',effort:'high' as const}}};

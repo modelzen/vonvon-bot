@@ -104,3 +104,22 @@ it.each([
   const result = providerDecisionProblem(value as JudgeSelectionView, [...providers], services.map(service => ({...service, keySet})));
   if (message) expect(result).toContain(message); else expect(result).toBeUndefined();
 });
+it.each(['openrouter', 'vercel', 'custom'] as const)('writes %s as a concrete decision selection and opens its own key settings', provider => {
+  picker().props.onChange({provider, model: 'jev-provider-model', effort: 'high'});
+  expect(changed).toHaveBeenCalledExactlyOnceWith({kind: 'decision', provider, model: 'jev-provider-model'});
+  picker().props.onManageKey(provider);
+  expect(props.onOpenSecrets).toHaveBeenCalledExactlyOnceWith(provider);
+});
+it('uses each hosted provider key state instead of the TypeSafe key state', () => {
+  props.services = [...services,
+    {provider: 'openrouter', displayName: 'OpenRouter', keyId: 'openrouter-api-key', keySet: false, models: [{id: 'typesafe/jev-1.14', displayName: 'Jev'}]},
+    {provider: 'vercel', displayName: 'Vercel', keyId: 'vercel-api-key', keySet: true, models: [{id: 'typesafe-ai/jev', displayName: 'Jev'}]},
+    {provider: 'custom', displayName: '自定义 Jev', keyId: 'custom-decision-api-key', keySet: true, endpointConfigured: false, models: [{id: 'jev-latest', displayName: 'Jev'}]},
+  ];
+  expect(picker().props.decisionServices.map((service: {provider: string; keyState: string}) => [service.provider, service.keyState])).toEqual([
+    ['typesafe', 'ready'], ['openrouter', 'missing'], ['vercel', 'ready'], ['custom', 'ready'],
+  ]);
+  expect(providerDecisionProblem({kind: 'decision', provider: 'openrouter', model: 'typesafe/jev-1.14'}, [codex], props.services)).toContain('OpenRouter 密钥');
+  expect(providerDecisionProblem({kind: 'decision', provider: 'vercel', model: 'typesafe-ai/jev'}, [codex], props.services)).toBeUndefined();
+  expect(providerDecisionProblem({kind: 'decision', provider: 'custom', model: 'jev-latest'}, [codex], props.services)).toContain('接口地址');
+});
