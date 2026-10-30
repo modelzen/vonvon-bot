@@ -43,6 +43,8 @@ export function botPaths(appId: string): {
   /** 判断次数，按天（s28b） */
   judgeUsageFile: string;
   schedulesFile: string;
+  capabilities: string;
+  builtinPackage(set: 'group' | 'dm'): string;
 } {
   const dir = botDir(appId);
   return {
@@ -56,6 +58,8 @@ export function botPaths(appId: string): {
     droppedFile: join(dir, 'dropped.json'),
     judgeUsageFile: join(dir, 'judge-usage.json'),
     schedulesFile: join(dir, 'schedules.json'),
+    capabilities: join(dir, 'capabilities'),
+    builtinPackage: (set) => join(dir, 'capabilities', 'builtin', set),
   };
 }
 
