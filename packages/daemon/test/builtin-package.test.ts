@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, rm, stat, unlink } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, rmdir, stat, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -104,11 +104,17 @@ describe('builtin capability package', () => {
     const first = await ensureBuiltinPackage('example', 'group', [skill]);
     expect(await completeBuiltinPackage('example', 'group')).toBe(first.path);
     expect(await completeBuiltinPackage('example', 'dm')).toBeUndefined();
-    // A first write that stopped before the manifest.
-    await unlink(join(first.path, '.claude-plugin', 'plugin.json'));
+    // A first write that stopped before the manifest; a directory in its place is no manifest either.
+    const manifest = join(first.path, '.claude-plugin', 'plugin.json');
+    await unlink(manifest);
     expect(await completeBuiltinPackage('example', 'group')).toBeUndefined();
-    // Every SKILL.md removed, the directories kept.
+    await mkdir(manifest);
+    expect(await completeBuiltinPackage('example', 'group')).toBeUndefined();
+    await rmdir(manifest);
+    // Every SKILL.md removed, the directories kept; a directory named SKILL.md is no skill.
     await ensureBuiltinPackage('example', 'group', []);
+    expect(await completeBuiltinPackage('example', 'group')).toBeUndefined();
+    await mkdir(join(first.path, 'skills', skill.name, 'SKILL.md'));
     expect(await completeBuiltinPackage('example', 'group')).toBeUndefined();
   });
   it('rejects duplicate and escaping names before writing', async () => {
