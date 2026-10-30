@@ -8,7 +8,7 @@ import {test} from 'node:test';
 import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 import {build} from 'esbuild';
-import {acceptWindowsUpgrade,windowsUpgradeAcceptanceEntry,windowsUpgradeBuilderArguments} from './windows-upgrade-acceptance.mjs';
+import {acceptWindowsUpgrade,windowsUpgradeAcceptanceEntry,windowsUpgradeBuilderArguments,waitForWindowsUpgradeRemoval} from './windows-upgrade-acceptance.mjs';
 
 const repo=fileURLToPath(new URL('../',import.meta.url));
 test('native acceptance entry bundles real production update code and has valid Node syntax',async t=>{
@@ -48,4 +48,21 @@ test('builder reads the generated stage package, not the metadata-free evidence 
   assert.equal(packager.projectDir,stage);assert.equal(packager.appDir,stage);
   assert.equal(packager.devMetadata.name,'vonvon-upgrade-acceptance-fixture');assert.equal(packager.metadata.version,'9.90.2');
   assert.equal(packager.config.directories.output,join(root,'packages'));assert.equal(await packager.getPackageManager(),'npm');
+});
+
+test('uninstall waits for delayed registry removal even when the executable is already gone',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'vonvon-upgrade-removal-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const file=join(root,'app.exe');await writeFile(file,'fixture');await rm(file);
+  let exists=true,reads=0,timer;t.after(()=>clearTimeout(timer));
+  const cleanup=await waitForWindowsUpgradeRemoval(file,()=>{if(++reads===1)timer=setTimeout(()=>{exists=false;},30);return [{key:'private-test-key',exists}];},{timeoutMs:1000,intervalMs:2});
+  assert(reads>1);assert.deepEqual(cleanup,{executablePresent:false,registration:[{key:'private-test-key',exists:false}]});
+});
+
+test('uninstall timeout preserves genuine file or registry leftovers instead of accepting partial removal',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'vonvon-upgrade-leftovers-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const file=join(root,'app.exe');await writeFile(file,'fixture');
+  for(const executablePresent of [true,false]){
+    if(!executablePresent)await rm(file);const registration=[{key:'private-test-key',exists:!executablePresent,value:'retained fixture'}];
+    await assert.rejects(waitForWindowsUpgradeRemoval(file,()=>registration,{timeoutMs:0}),error=>{assert.deepEqual(error.cleanup,{executablePresent,registration});return /uninstall did not complete/.test(error.message);});
+  }
 });
