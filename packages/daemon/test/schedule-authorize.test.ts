@@ -107,7 +107,7 @@ describe('the commit point and the second layer', () => {
     release();
     expect(await editing).toMatchObject({ ok: false, code: 'refused', reason: 'turn-ended' });
     expect(f.execute.mock.calls.map(call => call[1].action)).toEqual(['list']);
-    expect(await f.call('schedule_create', create)).toMatchObject({ ok: false, reason: 'turn-ended' });
+    expect(await f.call('schedule_create', create)).toMatchObject({ ok: false, reason: 'turn-ended', message: expect.stringContaining('任务没有动') });
     expect(f.store.get('st_mine')?.spec).toEqual({ kind: 'daily', time: '09:00' });
   });
   it('lets a list in flight finish when someone else speaks in, and stops a write in flight at its commit point', async () => {
