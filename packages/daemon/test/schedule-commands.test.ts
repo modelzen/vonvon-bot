@@ -116,6 +116,7 @@ describe('who may do what', () => {
       { kind: 'chat', openId: 'ou_x', role: 'bot', chatId: G },
       { kind: 'chat', openId: 'ou_x', chatId: G },
       { kind: 'Chat', openId: 'ou_x', role: 'owner', chatId: G },
+      { kind: 'chat', openId: '', role: 'member', chatId: G }, // could never manage what it made
     ] as unknown as ScheduleActor[]) {
       const notOwner = refusal('not-task-owner', '这个任务是别人建的，只有建它的人、主人和管理员能改。');
       expect(await f.run(actor, { action: 'edit', chatId: G, taskId: 'st_theirs', revision: 'rev-st_theirs', patch: { name: '改过' } })).toEqual(notOwner);
