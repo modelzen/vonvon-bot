@@ -17,6 +17,7 @@ export const desktopChannels = {
   library: 'desktop:client:library',
   memory: 'desktop:client:memory',
   contextPreview: 'desktop:client:contextPreview',
+  schedule: 'desktop:client:schedule',
   close: 'desktop:client:close',
   subscribe: 'desktop:subscribe',
   external: 'desktop:shell:external',
