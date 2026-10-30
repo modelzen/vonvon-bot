@@ -92,6 +92,8 @@ interface Grant {
   place: AgentPlace;
   thread?: AgentThread;
   turn?: TurnAuth;
+  /** The turn before `turn`; its origins outlive `pruneOrigins`. */
+  previous?: TurnAuth;
   origins: Map<string, TurnAuth | undefined>;
   controller: AbortController;
   active: number;
@@ -118,6 +120,15 @@ export function createAgentEntries(opts: {
     if (!auth) return;
     auth.active = false;
     auth.controller.abort();
+  }
+  /**
+   * At capacity, origins of ended turns go: they cannot authorize anything, and a long-lived session (a recurring task
+   * keeps a single-session group's main session open) would otherwise refuse every later turn's calls as unknown-origin. The turn
+   * before this one keeps its own, so a late copy of one of its ids (streamed, then in the full message) is not noted
+   * again under this turn; if that turn alone filled the map, the turn after this one gets room.
+   */
+  function pruneOrigins(grant: Grant) {
+    for (const [id, auth] of grant.origins) if (!auth || (auth !== grant.turn && auth !== grant.previous)) grant.origins.delete(id);
   }
   function revoke(grant: Grant) {
     grant.phase = 'revoked';
@@ -355,7 +366,9 @@ export function createAgentEntries(opts: {
       },
       call,
       noteToolUse(id) {
-        if (grant.phase !== 'attached' || grant.origins.has(id) || grant.origins.size >= 256) return;
+        if (grant.phase !== 'attached' || grant.origins.has(id)) return;
+        if (grant.origins.size >= 256) pruneOrigins(grant);
+        if (grant.origins.size >= 256) return;
         grant.origins.set(id, grant.turn);
       },
       attach(thread) {
@@ -381,6 +394,7 @@ export function createAgentEntries(opts: {
       if (grant && grant.phase === 'attached') {
         if (grant.turn?.active) log.warn('agent', 'turn-overlap', {});
         end(grant.turn);
+        grant.previous = grant.turn;
         grant.turn = auth;
       } else end(auth);
       return { id: auth.id, presence, ...(scheduled ? { scheduled: { ...scheduled } } : {}), close() { end(auth); } };

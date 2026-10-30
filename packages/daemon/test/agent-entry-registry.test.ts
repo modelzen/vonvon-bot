@@ -306,7 +306,7 @@ it.each([255, 256])('does not reassign an old origin after %i other IDs', async 
   expect(reply).toMatchObject(refused('turn-ended'));
 });
 
-it('keeps the last provable new origin at capacity, rejects overflow across turns, and recovers only with a new grant', async () => {
+it('keeps the last provable new origin at capacity and the last ended turn\'s origins, and frees older ones for the next turn', async () => {
   let commits = 0;
   const f = setup({ run: async (_args, ctx) => {
     if (!ctx.commit) throw Error('missing commit');
@@ -316,16 +316,27 @@ it('keeps the last provable new origin at capacity, rejects overflow across turn
   f.scope?.close(); const second = f.entries.openTurn(f.t, { ...person, triggerMessageId: 'm2' });
   f.entry.noteToolUse('last-proof');
   expect(await f.entry.call('t_set', {}, { toolUseId: 'last-proof' })).toEqual({ ok: true, result: 'm2' });
-  f.entry.noteToolUse('overflow');
+  // Full, and the only ended turn is the one just before: its ids stay, so neither a new id nor a late copy of an old one is noted.
+  f.entry.noteToolUse('overflow'); f.entry.noteToolUse('u1');
   expect(await f.entry.call('t_set', {}, { toolUseId: 'overflow' })).toMatchObject(refused('unknown-origin'));
+  expect(await f.entry.call('t_set', {}, { toolUseId: 'u1' })).toMatchObject(refused('turn-ended'));
   second.close(); f.entries.openTurn(f.t, { ...person, triggerMessageId: 'm3' });
+  // The first turn's 255 ids go now; the second turn's stay.
   f.entry.noteToolUse('overflow'); f.entry.noteToolUse('last-proof');
-  expect(await f.entry.call('t_set', {}, { toolUseId: 'overflow' })).toMatchObject(refused('unknown-origin'));
+  expect(await f.entry.call('t_set', {}, { toolUseId: 'overflow' })).toEqual({ ok: true, result: 'm3' });
   expect(await f.entry.call('t_set', {}, { toolUseId: 'last-proof' })).toMatchObject(refused('turn-ended'));
+  expect(await f.entry.call('t_set', {}, { toolUseId: 'other-0' })).toMatchObject(refused('unknown-origin'));
   expect(await f.entry.call('t_read', {})).toEqual({ ok: true, result: 'read' });
-  expect(commits).toBe(1);
-  const fresh = f.entries.issue({ kind: 'p2p' }), next = thread(); fresh.attach(next);
-  f.entries.openTurn(next, { ...person, triggerMessageId: 'm3' }); fresh.noteToolUse('overflow');
-  expect(await fresh.call('t_set', {}, { toolUseId: 'overflow' })).toEqual({ ok: true, result: 'm3' });
   expect(commits).toBe(2);
+});
+
+it('gives room again one turn later when a single turn filled the map', async () => {
+  const f = setup();
+  for (let i = 0; i < 255; i++) f.entry.noteToolUse(`other-${i}`);
+  f.scope?.close(); const second = f.entries.openTurn(f.t, { ...person, triggerMessageId: 'm2' });
+  f.entry.noteToolUse('u2');
+  expect(await f.entry.call('t_set', {}, { toolUseId: 'u2' })).toMatchObject(refused('unknown-origin'));
+  second.close(); f.entries.openTurn(f.t, { ...person, triggerMessageId: 'm3' });
+  f.entry.noteToolUse('u3');
+  expect(await f.entry.call('t_set', {}, { toolUseId: 'u3' })).toMatchObject({ ok: true, result: { triggerMessageId: 'm3' } });
 });
