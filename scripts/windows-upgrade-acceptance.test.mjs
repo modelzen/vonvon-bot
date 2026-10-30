@@ -10,7 +10,7 @@ import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 import {runInNewContext} from 'node:vm';
 import {build} from 'esbuild';
-import {acceptWindowsUpgrade,windowsUpgradeAcceptanceEntry,windowsUpgradeBuilderArguments,waitForWindowsUpgradeRemoval,preserveWindowsUpgradeFailure,windowsUpgradeChildEnvironment,windowsUpgradeRegistryScript,parseWindowsUpgradeRegistryResult,readWindowsUpgradeRegistration,extractWindowsUpgradeElectronArchive} from './windows-upgrade-acceptance.mjs';
+import {acceptWindowsUpgrade,windowsUpgradeAcceptanceEntry,windowsUpgradeBuilderArguments,waitForWindowsUpgradeRemoval,preserveWindowsUpgradeFailure,windowsUpgradeChildEnvironment,windowsUpgradeRegistryScript,parseWindowsUpgradeRegistryResult,readWindowsUpgradeRegistration,extractWindowsUpgradeElectronArchive,filterWindowsUpgradeProcesses,recordWindowsUpgradeDiagnostics,withWindowsUpgradeDiagnostics} from './windows-upgrade-acceptance.mjs';
 
 const repo=fileURLToPath(new URL('../',import.meta.url));
 test('native acceptance entry bundles real production update code and has valid Node syntax',async t=>{
@@ -129,4 +129,56 @@ test('failure diagnostics retain the original fault when another version is rela
   preserveWindowsUpgradeFailure(root,original);preserveWindowsUpgradeFailure(root,{version:'9.90.2',error:'Later manual launch'});
   assert.deepEqual(JSON.parse(await readFile(join(root,'failure.json'),'utf8')),original);
   assert.equal((await readdir(root)).filter(name=>/^failure-/.test(name)).length,2);
+});
+
+const diagnosticFixture={out:'E:\\升级 验收\\run-123',installDir:'E:\\升级 验收\\run-123\\installed',productName:'Vonvon Upgrade Acceptance 1234abcd arm64',executableName:'Vonvon Upgrade Acceptance 1234abcd arm64',nsisGuid:'c2733c8e-6d12-4cfe-9403-edeb2caf5f25'};
+test('failure process evidence is confined to this fixture and excludes unrelated process fields',()=>{
+  const c=diagnosticFixture,rows=[
+    {pid:1,executable:c.out.toUpperCase()+'\\pending\\Setup.exe',environment:'never retain'},
+    {pid:2,executable:'C:\\Windows\\old-uninstaller.exe',commandLine:'old-uninstaller.exe _?='+c.installDir},
+    {pid:3,executable:'C:\\Other\\Uninstall '+c.productName+'.exe',mainWindowTitle:'Installer error'},
+    {pid:4,executable:c.out+'-other\\Setup.exe'},
+    {pid:5,executable:'C:\\Windows\\explorer.exe',commandLine:'unrelated'},
+    {pid:6,executable:null,commandLine:null},
+  ];
+  const filtered=filterWindowsUpgradeProcesses(c,rows);assert.deepEqual(filtered.map(row=>row.pid),[1,2,3]);
+  assert.equal(filtered[2].mainWindowTitle,'Installer error');assert(filtered.every(row=>!Object.hasOwn(row,'environment')));
+  assert.throws(()=>filterWindowsUpgradeProcesses({...c,productName:'Vonvon Bot'},rows),/Invalid diagnostic fixture/);
+});
+
+test('failure evidence uses one bounded encoded query and records query errors without broad process output',async()=>{
+  const c={...diagnosticFixture,out:diagnosticFixture.out+"';throw 'injected"},original=Error('A→B→C timeout');
+  let calls=0,registryCalls=0,saved;
+  await recordWindowsUpgradeDiagnostics(c,original,{
+    registration:guid=>{registryCalls++;assert.equal(guid,c.nsisGuid);throw Error('Registry unavailable');},
+    query:(file,args,options)=>{
+      calls++;assert(file.endsWith('powershell.exe'));assert(args.includes('-NoProfile')&&args.includes('-NonInteractive'));
+      assert.equal(options.timeout,15000);assert.equal(options.maxBuffer,1024*1024);assert.equal(options.windowsHide,true);
+      const script=Buffer.from(args.at(-1),'base64').toString('utf16le');assert(!script.includes(c.out));
+      const input=JSON.parse(Buffer.from(script.match(/FromBase64String\('([^']+)'\)/)[1],'base64').toString('utf8'));assert.equal(input.out,c.out);
+      return registryResult({files:[{kind:'executable',exists:false}],processes:[{pid:10,executable:c.out+'\\pending\\Setup.exe'},{pid:20,executable:'C:\\unrelated.exe'}],errors:[{query:'processes',error:'Partial access denied'}]});
+    },
+    save:async(file,body,options)=>{assert.equal(file,join(c.out,'failure-diagnostics.json'));assert.equal(options.flag,'wx');saved=JSON.parse(body);},
+  });
+  assert.equal(calls,1);assert.equal(registryCalls,1);assert.equal(saved.error,original.stack);assert.match(saved.registrationError,/Registry unavailable/);
+  assert.deepEqual(saved.snapshot.processes.map(row=>row.pid),[10]);assert.equal(saved.snapshot.errors[0].error,'Partial access denied');
+  await recordWindowsUpgradeDiagnostics(diagnosticFixture,original,{registration:()=>[],query:()=>({error:Object.assign(Error('timed out'),{code:'ETIMEDOUT'})}),save:async(_file,body)=>{saved=JSON.parse(body);}});
+  assert.match(saved.snapshotError,/timed out/);assert.equal(saved.error,original.stack);
+});
+
+test('automatic-phase diagnostics run once on failure and retain the exact original error if capture fails',async()=>{
+  const original=Error('Original installation timeout');let calls=0;
+  await assert.rejects(withWindowsUpgradeDiagnostics(diagnosticFixture,async()=>{throw original;},async(c,error)=>{calls++;assert.equal(c,diagnosticFixture);assert.equal(error,original);throw Error('Diagnostic output unwritable');}),error=>error===original);
+  assert.equal(calls,1);assert.equal(await withWindowsUpgradeDiagnostics(diagnosticFixture,async()=>42,()=>{throw Error('No capture on success');}),42);
+});
+
+test('native failure diagnostics query only absent disposable files and a fresh registry GUID',{skip:process.platform!=='win32'},async t=>{
+  const out=await mkdtemp(join(tmpdir(),'vonvon-upgrade-diagnostic-'));t.after(()=>rm(out,{recursive:true,force:true}));
+  const c={...diagnosticFixture,out,installDir:join(out,'installed'),nsisGuid:randomUUID()};
+  await recordWindowsUpgradeDiagnostics(c,Error('Synthetic acceptance failure'));
+  const report=JSON.parse(await readFile(join(out,'failure-diagnostics.json'),'utf8'));
+  assert.equal(report.registrationError,undefined);assert.equal(report.snapshotError,undefined);
+  assert.equal(report.registration.length,8);assert(report.registration.every(row=>!row.exists));
+  assert.equal(report.snapshot.files.length,3);assert(report.snapshot.files.every(row=>row.exists===false&&!row.error));
+  assert.deepEqual(report.snapshot.errors,[]);
 });

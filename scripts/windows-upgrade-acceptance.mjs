@@ -4,7 +4,7 @@ import {createHash,generateKeyPairSync,randomUUID} from 'node:crypto';
 import {createReadStream,writeFileSync} from 'node:fs';
 import {mkdir,readFile,stat,statfs,writeFile} from 'node:fs/promises';
 import {createRequire} from 'node:module';
-import {isAbsolute,join,relative,resolve,sep} from 'node:path';
+import {isAbsolute,join,relative,resolve,sep,win32} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
 import {signWindowsUpdate} from '../packages/desktop/src/windows-update-manifest.mjs';
@@ -109,6 +109,59 @@ export function preserveWindowsUpgradeFailure(out,details) {
   const body=JSON.stringify(details,null,2)+'\n';
   writeFileSync(join(out,'failure-'+process.pid+'-'+randomUUID()+'.json'),body,{flag:'wx'});
   try{writeFileSync(join(out,'failure.json'),body,{flag:'wx'});}catch(error){if(error.code!=='EEXIST')throw error;}
+}
+/** Only the unique fixture's paths/name can authorize process details in diagnostics. */
+export function filterWindowsUpgradeProcesses(c,rows) {
+  const root=win32.resolve(c.out).replace(/[\\/]+$/,'').toLowerCase()+'\\',name=c.productName.toLowerCase();
+  assert(/^vonvon upgrade acceptance [a-f0-9]{8} (x64|arm64)$/.test(name),'Invalid diagnostic fixture name');
+  return rows.filter(row=>String(row.executable??'').toLowerCase().startsWith(root)||String(row.commandLine??'').toLowerCase().includes(root)||String(row.executable??'').toLowerCase().includes(name)||String(row.commandLine??'').toLowerCase().includes(name))
+    .map(({pid,parentPid,executable,commandLine,mainWindowTitle,windowError})=>({pid,parentPid,executable,commandLine,mainWindowTitle,...(windowError?{windowError}:{})}));
+}
+export function windowsUpgradeDiagnosticScript(c) {
+  const input=Buffer.from(JSON.stringify({out:c.out,installDir:c.installDir,productName:c.productName,executableName:c.executableName}),'utf8').toString('base64');
+  return `$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue'
+$c=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${input}'))|ConvertFrom-Json
+$result=@{files=@();processes=@();errors=@()};$comparison=[StringComparison]::OrdinalIgnoreCase
+$root=[IO.Path]::GetFullPath($c.out).TrimEnd('\\')+'\\'
+foreach($entry in @(@{kind='executable';name=$c.executableName+'.exe'},@{kind='uninstaller';name='Uninstall '+$c.productName+'.exe'},@{kind='retiredPayloadMarker';name='retired-payload-marker'})) {
+  $path=Join-Path $c.installDir $entry.name;$row=@{kind=$entry.kind;path=$path}
+  try {$row.exists=Test-Path -LiteralPath $path -PathType Leaf
+    if($row.exists -and $entry.kind -ne 'retiredPayloadMarker'){$version=[Diagnostics.FileVersionInfo]::GetVersionInfo($path);$row.fileVersion=$version.FileVersion;$row.productVersion=$version.ProductVersion}
+  } catch {$row.error=$_.Exception.Message}
+  $result.files+=@($row)
+}
+try {
+  foreach($p in @(Get-CimInstance -ClassName Win32_Process)) {
+    $exe=[string]$p.ExecutablePath;$command=[string]$p.CommandLine
+    if($exe.StartsWith($root,$comparison) -or $command.IndexOf($root,$comparison) -ge 0 -or $exe.IndexOf($c.productName,$comparison) -ge 0 -or $command.IndexOf($c.productName,$comparison) -ge 0) {
+      $row=@{pid=$p.ProcessId;parentPid=$p.ParentProcessId;executable=$exe;commandLine=$command}
+      try {$row.mainWindowTitle=(Get-Process -Id $p.ProcessId -ErrorAction Stop).MainWindowTitle} catch {$row.windowError=$_.Exception.Message}
+      $result.processes+=@($row)
+    }
+  }
+} catch {$result.errors+=@{query='processes';error=$_.Exception.Message}}
+[Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((ConvertTo-Json -InputObject $result -Depth 8 -Compress))))`;
+}
+/** Bounded, read-only evidence; diagnostic errors never replace the acceptance failure. */
+export async function recordWindowsUpgradeDiagnostics(c,error,{query=spawnSync,registration=readWindowsUpgradeRegistration,save=writeFile}={}) {
+  const report={at:new Date().toISOString(),error:error.stack??String(error),fixture:{out:c.out,productName:c.productName,nsisGuid:c.nsisGuid}};
+  try {report.registration=registration(c.nsisGuid);} catch(error){report.registrationError=error.stack??String(error);}
+  try {
+    const script=windowsUpgradeDiagnosticScript(c),powershell=join(process.env.SystemRoot??'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe');
+    const result=query(powershell,['-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{windowsHide:true,timeout:15000,maxBuffer:1024*1024});
+    if(result.error)throw result.error;
+    if(result.status!==0||Buffer.from(result.stderr??'').length)throw Error('Diagnostic query failed: exit='+result.status+' signal='+result.signal+' stderrBase64='+Buffer.from(result.stderr??'').toString('base64'));
+    const encoded=Buffer.from(result.stdout??'').toString('ascii').trim(),bytes=Buffer.from(encoded,'base64');
+    assert(encoded&&bytes.toString('base64')===encoded,'Invalid diagnostic transport');
+    const snapshot=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));
+    assert(Array.isArray(snapshot.files)&&Array.isArray(snapshot.processes)&&Array.isArray(snapshot.errors),'Invalid diagnostic snapshot');
+    report.snapshot={...snapshot,processes:filterWindowsUpgradeProcesses(c,snapshot.processes)};
+  } catch(error){report.snapshotError=error.stack??String(error);}
+  await save(join(c.out,'failure-diagnostics.json'),json(report),{flag:'wx'});
+}
+export async function withWindowsUpgradeDiagnostics(c,operation,diagnose=recordWindowsUpgradeDiagnostics) {
+  try {return await operation();}
+  catch(error){try {await diagnose(c,error);} catch {/* Preserve the original failure even if evidence cannot be saved. */}throw error;}
 }
 /** Test-only entry. It bundles the real provider, downloader, verification and quitAndInstall. */
 export function windowsUpgradeAcceptanceEntry(source) {
@@ -220,6 +273,7 @@ export async function acceptWindowsUpgrade({architecture,out,sourceSha:expectedS
   if(electronArchive)await externalInput(electronArchive);if(builderCache)await externalInput(builderCache,true);
   await mkdir(out); // Refuse reuse: every run has a unique identity and an empty profile.
   await writeFile(join(out,'disk-space-before.json'),json(await diskSpace(out)));
+  let failed=false;
   try{
   const id=randomUUID(),productName='Vonvon Upgrade Acceptance '+id.slice(0,8)+' '+architecture,executableName=productName,nsisGuid=randomUUID();
   const appId='com.vonvon.bot.upgrade-acceptance.'+id+'.'+architecture,packageName='vonvon-upgrade-acceptance-'+id+'-'+architecture;
@@ -263,11 +317,12 @@ export async function acceptWindowsUpgrade({architecture,out,sourceSha:expectedS
   await writeFile(join(out,'fixtures.json'),json(fixtures));
   const registration=()=>readWindowsUpgradeRegistration(nsisGuid);
   assert(registration().every(row=>!row.exists),'Refuse an existing test identity');
-  const first=join(packages,'Vonvon-Bot-Setup-'+versions[0]+'-'+architecture+'.exe');
+  const first=join(packages,'Vonvon-Bot-Setup-'+versions[0]+'-'+architecture+'.exe'),executable=join(installDir,executableName+'.exe');
+  await withWindowsUpgradeDiagnostics(c,async()=>{
   await run(first,['/currentuser','/S','/D='+installDir],{windowsVerbatimArguments:true,env:fixtureEnv});
   const installedRegistration=registration();assert(installedRegistration.some(row=>row.hive==='HKCU'&&row.exists&&row.value.toLowerCase().includes(installDir.toLowerCase())));assert(!installedRegistration.some(row=>row.hive==='HKLM'&&row.exists));
   await writeFile(join(out,'installed-registration.json'),json(installedRegistration));
-  const executable=join(installDir,executableName+'.exe');await stat(executable);
+  await stat(executable);
   const app=spawn(executable,[],{stdio:'ignore',windowsHide:false,env:fixtureEnv});
   let launchError;app.on('error',error=>{launchError=error;});app.unref();
   const deadline=Date.now()+12*60*1000;
@@ -286,6 +341,7 @@ export async function acceptWindowsUpgrade({architecture,out,sourceSha:expectedS
   assert(upgradedRegistration.some(row=>row.hive==='HKCU'&&row.exists&&row.key.includes('Uninstall')&&row.value.includes(versions.at(-1))));
   assert(upgradedRegistration.filter(row=>row.exists).every(row=>row.value.toLowerCase().includes(installDir.toLowerCase())));
   await writeFile(join(out,'upgraded-registration.json'),json(upgradedRegistration));
+  });
   const uninstaller=join(installDir,'Uninstall '+productName+'.exe');
   await run(uninstaller,['/currentuser','/S'],{windowsVerbatimArguments:true,env:fixtureEnv});
   try{await writeFile(join(out,'uninstalled-registration.json'),json(await waitForWindowsUpgradeRemoval(executable,registration)));}
@@ -293,7 +349,8 @@ export async function acceptWindowsUpgrade({architecture,out,sourceSha:expectedS
   assert.equal(await readFile(join(dataHome,'sentinel'),'utf8'),sentinel);
   await writeFile(join(out,'acceptance.json'),json({passed:true,sourceSha,architecture,versions,appId,completedAt:new Date().toISOString(),sourceHashes,scope:'Native signed full-EXE update and NSIS replacement; production UI/daemon and differential download not covered',sentinelRetained:true,missingRegistryLocationUpgradePassed:true,retiredPayloadRemoved:true,uniqueTestAppUninstalled:true,manualWizardAndProductionUi:'Not exercised by this automated lane; see acceptance-plan.json'}));
   return {passed:true,architecture,evidence:out};
-  }finally{await writeFile(join(out,'disk-space-after.json'),json(await diskSpace(out)));}
+  }catch(error){failed=true;throw error;}
+  finally{try{await writeFile(join(out,'disk-space-after.json'),json(await diskSpace(out)));}catch(error){if(!failed)throw error;}}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
   const {values}=parseArgs({options:{architecture:{type:'string'},out:{type:'string'},'source-sha':{type:'string'},'electron-archive':{type:'string'},'builder-cache':{type:'string'},help:{type:'boolean'}}});
