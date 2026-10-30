@@ -1,4 +1,4 @@
-import {RefreshCw} from 'lucide-react';
+import {ChevronDown, RefreshCw} from 'lucide-react';
 import {useCallback, useEffect, useRef, useState, type ReactNode} from 'react';
 import {DECISION_API_PROVIDERS, JUDGE_PROVIDER_IDS, decisionApiProviderLabel, decisionEndpointProblem, type HostSettingsView, type SecretService, type SettingsReply} from '@vonvon/protocol';
 import {useClient} from '../client-context';
@@ -12,6 +12,41 @@ import {useDecisionCatalogs} from '../settings/useDecisionCatalogs';
 import './decision-provider-settings.css';
 
 type Configuration = NonNullable<HostSettingsView['sections']['judge']>['stored'];
+
+/** Keep the fields mounted so search can reveal their native disclosure ancestors. */
+export function revealDecisionConnection(target: HTMLElement | null): void {
+  let ancestor = target;
+  while (ancestor) {
+    if (ancestor instanceof HTMLDetailsElement) ancestor.open = true;
+    ancestor = ancestor.parentElement;
+  }
+}
+
+export function DecisionServiceDisclosure({provider, service, children}: {provider: string; service?: SecretService; children: ReactNode}) {
+  const status = !service ? '正在读取…' : service.status === 'set' ? '已配置' : service.status === 'missing' ? '未配置' : service.status === 'invalid' ? '需重新添加' : '读取失败';
+  return <details className="decision-service-disclosure" name="decision-service-connection" id={settingAnchor(decisionProviderSection(provider))}>
+    <summary>
+      <span className="decision-service-name">{provider === 'custom' ? '自定义接口' : decisionApiProviderLabel(provider)}</span>
+      <span className="decision-service-summary"><span data-status={service?.status}>{status}</span><ChevronDown size={15} aria-hidden="true"/></span>
+    </summary>
+    <div className="decision-service-fields">{children}</div>
+  </details>;
+}
+
+function DecisionConnections({services, children, action}: {services?: SecretService[]; children: ReactNode; action?: ReactNode}) {
+  const configured = services?.filter(service => service.status === 'set') ?? [];
+  const problem = services?.some(service => service.status === 'invalid' || service.status === 'unreadable');
+  return <details className="decision-connections" id={settingAnchor('决策模型')}>
+    <summary>
+      <span className="decision-connections-copy"><span>决策服务</span><small>{configured.length ? `已配置 ${configured.map(service => decisionApiProviderLabel(service.provider)).join('、')}` : '使用 Jev 时，按需连接一个服务。'}</small></span>
+      <span className="decision-service-summary"><span>{problem ? '需检查' : configured.length ? `${configured.length} 个已配置` : '可选'}</span><ChevronDown size={16} aria-hidden="true"/></span>
+    </summary>
+    <div className="decision-connections-body">
+      <div className="decision-connections-toolbar"><span>选择要配置的服务</span>{action}</div>
+      {children}
+    </div>
+  </details>;
+}
 
 /** A single default selection for newly created groups; existing groups keep their own choice. */
 export function DecisionProviderFields({value, defaults, catalogs, services, disabled, onChange, onOpenProviders, onManageKey, customKeyContent, keyContent, keyUses, keyAction, modelAction}: {
@@ -30,7 +65,9 @@ export function DecisionProviderFields({value, defaults, catalogs, services, dis
       keyState: service?.status === 'set' ? 'ready' : service?.status ?? (services ? 'unreadable' : 'loading')};
   });
   function changeCustom(patch: {endpoint?: string; model?: string}) {
-    if (!disabled) onChange({...value, byProvider: {...value.byProvider, custom: {...customProfile, ...patch}}});
+    const custom = {...customProfile, ...patch};
+    if (patch.endpoint === '') delete custom.endpoint;
+    if (!disabled) onChange({...value, byProvider: {...value.byProvider, custom}});
   }
   const keyState: DecisionKeyState = service?.status === 'set' ? 'ready' : service?.status ?? (services ? 'unreadable' : 'loading');
   return <>
@@ -43,16 +80,20 @@ export function DecisionProviderFields({value, defaults, catalogs, services, dis
           onChange({...value, defaultProvider: selected as Configuration['defaultProvider'], byProvider: {...value.byProvider, [selected]: isDecisionApiProvider(selected) ? {...(selected === 'custom' && customProfile.endpoint !== undefined ? {endpoint: customProfile.endpoint} : {}), model: profile.model} : profile}});
         }}/></div>
     </SettingsGroup>
-    <SettingsGroup label="自定义 Jev / System One" id={settingAnchor(decisionProviderSection('custom'))}>
-      <SettingsRow title="接口地址" description="填写完整的 Jev / System One 请求地址，包含路径；程序不会自动追加路径。本机使用此接口的 Bot 和群共用此地址。"
+    <DecisionConnections services={services} action={keyAction}>
+      {keyContent}
+      <DecisionServiceDisclosure provider="custom" service={services?.find(service => service.provider === 'custom')}>
+      <SettingsRow title="接口地址" description="填写服务商提供的完整 Jev 请求地址，包含路径。"
         trailing={<input key={`endpoint:${customProfile.endpoint ?? ''}`} className="settings-field decision-connection-input" aria-label="自定义决策请求地址" placeholder="https://example.com/v1/systemone" type="url" defaultValue={customProfile.endpoint ?? ''} disabled={disabled}
           onBlur={event => {const endpoint = event.currentTarget.value.trim(); if (endpoint !== (customProfile.endpoint ?? '')) changeCustom({endpoint});}}/>}/>
-      <SettingsRow title="模型 ID" description="新选择使用此模型；已有群保留各自保存的模型 ID。"
+      <SettingsRow title="模型 ID" description="填写服务商提供的模型 ID，已有群保持原来的选择。"
         trailing={<input key={`model:${customProfile.model}`} className="settings-field decision-connection-input" aria-label="自定义接口模型 ID" placeholder="jev-latest" defaultValue={customProfile.model} disabled={disabled}
           onBlur={event => {const model = event.currentTarget.value.trim(); if (model !== customProfile.model) changeCustom({model});}}/>}/>
       {customKeyContent}
-    </SettingsGroup>
-    <SettingsGroup label="决策服务密钥" id={settingAnchor('决策模型')} action={keyAction}>{keyContent}{keyUses}</SettingsGroup>
+      <p className="decision-connection-note">此接口与密钥供本机使用该服务的 Bot 和群共用。</p>
+      </DecisionServiceDisclosure>
+      {keyUses}
+    </DecisionConnections>
   </>;
 }
 
@@ -97,6 +138,6 @@ export function DecisionProviderSettings({services, onOpenProviders, onManageKey
       }}
       renderLayout={editor => <div className="decision-model-editor" data-writable={section.access.kind === 'writable'}>{editor.content}</div>}
       render={(value, change, disabled) => <DecisionProviderFields value={value} defaults={section.effective} catalogs={catalogs} services={services} disabled={disabled} onChange={change} onOpenProviders={onOpenProviders} onManageKey={onManageKey} customKeyContent={customKeyContent} keyContent={keyContent} keyUses={keyUses} keyAction={keyAction} modelAction={modelAction}/>}/>
-      : <><SettingsGroup label="Provider 配置"><SettingsRow title={loading ? '正在读取配置…' : '当前服务暂不支持统一配置'} description={loading ? undefined : '请更新并重新连接本机服务。'}/></SettingsGroup>{customKeyContent && <SettingsGroup label="自定义 Jev / System One" id={settingAnchor(decisionProviderSection('custom'))}>{customKeyContent}</SettingsGroup>}<SettingsGroup label="决策服务密钥" id={settingAnchor('决策模型')} action={keyAction}>{keyContent}{keyUses}</SettingsGroup></>}
+      : <><SettingsGroup label="Provider 配置"><SettingsRow title={loading ? '正在读取配置…' : '当前服务暂不支持统一配置'} description={loading ? undefined : '请更新并重新连接本机服务。'}/></SettingsGroup><DecisionConnections services={services} action={keyAction}>{keyContent}{customKeyContent && <DecisionServiceDisclosure provider="custom" service={services?.find(service => service.provider === 'custom')}>{customKeyContent}</DecisionServiceDisclosure>}{keyUses}</DecisionConnections></>}
   </>;
 }
