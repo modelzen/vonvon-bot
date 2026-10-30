@@ -1,4 +1,5 @@
 import { isAbsolute } from 'node:path';
+import { JUDGE_PROVIDER_IDS } from '@vonvon/protocol';
 import { REASONING_EFFORTS } from '../agent/types';
 import type { SettingsAction, SettingsEdit, SettingsScope, ModelQuery } from './settings-types';
 export class SettingsInputError extends Error {
@@ -46,7 +47,7 @@ const judgeSelection: Rule = value => shape({
   kind: one('default')
 })(value) || shape({
   kind: one('provider'),
-  provider: one('codex-appserver', 'claude-agent', 'typesafe')
+  provider: one(...JUDGE_PROVIDER_IDS)
 })(value) || shape({
   kind: one('llm'),
   backend: text,
@@ -138,10 +139,10 @@ const schemas: Record<string, Record<string, Rule>> = {
     execution: shape({
       codexBin: path
     }),
-    judge: shape({ defaultProvider: one('codex-appserver', 'claude-agent', 'typesafe'), byProvider: value => {
+    judge: shape({ defaultProvider: one(...JUDGE_PROVIDER_IDS), byProvider: value => {
       if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
       return Object.entries(value).every(([provider, choice]) =>
-        text(provider) && !['__proto__','constructor','prototype'].includes(provider) && shape({ model: text, effort: one(...REASONING_EFFORTS), custom: bool }, true)(choice)
+        text(provider) && !['__proto__','constructor','prototype'].includes(provider) && shape({ model: text, effort: one(...REASONING_EFFORTS), custom: bool, endpoint: value => typeof value === 'string' && value.length <= 2048 }, true)(choice)
         && Object.hasOwn(choice as object, 'model'));
     } }, true)
   },

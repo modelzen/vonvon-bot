@@ -12,6 +12,7 @@ import { JUDGE_PROVIDERS, effectiveJudgeModels, readJudgeModels, writeJudgeModel
 import { getSecret } from '../config/keystore';
 import { requireDecisionKey } from '../project/initial-settings';
 import { freezeGroupJudgeReferences } from '../project/judge-snapshots';
+import { decisionEndpointProblem } from '@vonvon/protocol';
 import { readServiceCodexBin, saveServiceCodexBin } from '../service/codex-bin';
 import type { ApplyEffect, HostSettings, HostSettingsView, SettingsSave, SettingsSectionView } from './settings-types';
 
@@ -61,8 +62,9 @@ export function createHostSettings(options: {
     name === 'execution' ? { scope: { kind: 'host' }, section: name, value: current.sections.execution }
       : { scope: { kind: 'host' }, section: name, value: current.sections.judge };
   async function validateJudge(value: JudgeModels, prior: JudgeModels): Promise<string | undefined> {
-    if ((value.defaultProvider ?? 'codex-appserver') === 'typesafe' || (value.byProvider.typesafe && JSON.stringify(value.byProvider.typesafe)!==JSON.stringify(prior.byProvider.typesafe))) {
-      try { await requireDecisionKey('typesafe',options.getSecret); }
+    const selected = value.defaultProvider ?? 'codex-appserver';
+    if (decisionProvider(selected) || (value.byProvider.typesafe && JSON.stringify(value.byProvider.typesafe)!==JSON.stringify(prior.byProvider.typesafe))) {
+      try { await requireDecisionKey(decisionProvider(selected) ? selected : 'typesafe', options.getSecret, async () => value); }
       catch (error) { return error instanceof Error ? error.message : '无法验证决策模型密钥'; }
     }
     for (const [provider, choice] of Object.entries(value.byProvider)) {
@@ -74,9 +76,15 @@ export function createHostSettings(options: {
       if (JSON.stringify(choice) === JSON.stringify(prior.byProvider[provider])) continue;
       const parsed = parseModelId(choice.model);
       if (!parsed.ok) return parsed.message;
-      if (provider === 'typesafe') {
-        if (choice.effort) return 'TypeSafe 不支持 Effort';
-        if (!choice.custom && !decisionProvider('typesafe')!.models.some(model => model.id === choice.model)) return 'TypeSafe 没有这个模型；手填模型请启用 custom';
+      if (choice.endpoint !== undefined) {
+        if (provider !== 'custom') return '只有自定义决策接口可以修改地址。';
+        const problem = decisionEndpointProblem(choice.endpoint);
+        if (problem) return problem;
+      }
+      const api = decisionProvider(provider);
+      if (api) {
+        if (choice.effort) return `${api.displayName} 不支持 Effort`;
+        if (provider === 'typesafe' && !choice.custom && !api.models.some(model => model.id === choice.model)) return 'TypeSafe 没有这个模型；手填模型请启用 custom';
         continue;
       }
       if (choice.effort && !getSessionTitleEfforts(provider).includes(choice.effort)) return `${provider} 不支持这个 Effort`;

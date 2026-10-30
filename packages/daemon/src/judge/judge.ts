@@ -2,7 +2,7 @@ import { reportCustomPromptNotice } from '../bot/diagnostics';
 import { createHash } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { API_KEY_SHAPE, KEY_FAILURE } from '@vonvon/protocol';
+import { API_KEY_SHAPE, KEY_FAILURE, decisionEndpointProblem } from '@vonvon/protocol';
 import { catalogBackendIds } from '../agent/catalog';
 import { BackendNotInstalledError } from '../agent/backend-loader';
 import { ProviderProcessCleanupError } from '../agent/owned-process';
@@ -362,10 +362,16 @@ export function createJudge(deps: JudgeDeps): Judge {
           if (!ctl.signal.aborted) notePrompt(req, prompt);
           base = { ...base, promptSource: prompt.source, promptHash: promptHashOf(prompt.text) };
           const key = await readKey(provider);
+          const endpoint = provider.id === 'custom'
+            ? (globalModels ?? readJudgeModelsSync(deps.judgeModelsRoot)).byProvider.custom?.endpoint : undefined;
+          if (provider.id === 'custom') {
+            const problem = decisionEndpointProblem(endpoint);
+            if (problem) throw new JudgeFail('unavailable', problem);
+          }
           const body = sent = decisionBody(req, prompt.text, base.model);
           // a cooldown holds for the key it was noted with only (cooldown.ts); the tag never leaves this process
-          const tag = createHash('sha256').update(key).digest('hex').slice(0, 16);
-          return inSlot(provider.id, provider.limit, tag, () => provider.call(body, key, ctl.signal, deps.fetch));
+          const tag = createHash('sha256').update(`${key}\n${endpoint ?? ''}`).digest('hex').slice(0, 16);
+          return inSlot(provider.id, provider.limit, tag, () => provider.call(body, key, ctl.signal, deps.fetch, {endpoint}));
         })();
         work.catch(() => undefined);
         const reply = await Promise.race([work, aborted]);

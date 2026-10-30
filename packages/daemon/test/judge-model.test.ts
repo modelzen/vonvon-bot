@@ -7,7 +7,7 @@ import { readClaudeUserSettings, readConfiguredClaudeModel } from '../src/agent/
 import type { AgentBackend, JudgeCall, ModelInfo, ReasoningEffort } from '../src/agent/types';
 import { createJudge } from '../src/judge/judge';
 import { judgeModelsFile, writeJudgeModels } from '../src/judge/global-models';
-import { claudeJudgeDefault, codexJudgeDefault, defaultJudgeModel, fitJudgeEffort, judgeEffort, parseStoredJudge, resolveJudgeModel } from '../src/judge/model';
+import { claudeJudgeDefault, codexJudgeDefault, defaultJudgeModel, fitJudgeEffort, judgeEffort, judgeBackendId, parseStoredJudge, resolveJudgeModel } from '../src/judge/model';
 import type { JudgeSelectionStored } from '../src/judge/types';
 
 const fake = vi.hoisted(() => ({ log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() } }));
@@ -229,6 +229,20 @@ describe('a chosen effort fitted to the model (Rakazo 第二轮 A6)', () => {
 });
 
 describe('decision models (s23d stores them, s23f calls them)', () => {
+  it.each([
+    ['openrouter','typesafe/jev-1.14'], ['vercel','typesafe-ai/jev'], ['custom','jev-latest'],
+  ] as const)('resolves %s default/provider choices as decisions on the task backend', (provider,modelId) => {
+    const group={kind:'provider' as const,provider};
+    expect(parseStoredJudge(group,IDS)).toEqual({value:group});
+    for (const backend of IDS) {
+      const stored={defaultProvider:provider,byProvider:{}};
+      expect(judgeBackendId(backend,group,undefined,stored)).toBe(backend);
+      expect(judgeBackendId(backend,{kind:'default'},undefined,stored)).toBe(backend);
+      expect(resolveJudgeModel(backend,{group},[LUNA],undefined,undefined,stored)).toEqual({model:modelId,provider,modelSource:'group'});
+      expect(resolveJudgeModel(backend,{group:{kind:'default'}},[LUNA],undefined,undefined,{...stored,byProvider:{[provider]:{model:'another-jev'}}}))
+        .toEqual({model:'another-jev',provider,modelSource:'default'});
+    }
+  });
   it('parseStoredJudge keeps the shape: a provider id and a model id', () => {
     expect(parseStoredJudge({ kind: 'decision', provider: 'typesafe', model: ' jev-latest ' }, IDS)).toEqual({ value: jev });
     // which providers exist is s23f's registry
