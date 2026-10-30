@@ -1,4 +1,5 @@
 import { mkdtemp, readFile, readdir, rm, writeFile, mkdir, open } from 'node:fs/promises';
+import { fstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -94,6 +95,134 @@ describe('schedule persistence', () => {
     await expect(writeFileAtomic(file, 'lost', { durable: true })).rejects.toThrow('file sync failed');
     expect(await readFile(file, 'utf8')).toBe('committed');
     expect((await readdir(dir)).filter(name => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  // [4]/[15]: once rename has replaced the file, a directory fsync error must not reject the write.
+  it('[4][15] directory fsync EPERM after rename resolves, keeps the new file and logs directory-sync-failed', async () => {
+    const { file, dir } = await setup(); const handle = await open(join(dir, 'probe'), 'w');
+    const sync = vi.spyOn(Object.getPrototypeOf(handle), 'sync'); await handle.close();
+    const warn = vi.spyOn(log, 'warn');
+    sync.mockResolvedValueOnce(undefined).mockRejectedValueOnce(Object.assign(new Error('not permitted'), { code: 'EPERM' }));
+    await writeFileAtomic(file, 'new', { durable: true });
+    expect(await readFile(file, 'utf8')).toBe('new');
+    expect(warn).toHaveBeenCalledWith('atomic-file', 'directory-sync-failed', { path: dir, code: 'EPERM' });
+    expect((await readdir(dir)).filter(name => name.endsWith('.tmp'))).toEqual([]);
+  });
+  it('[4][15] any other directory fsync errno (EIO) after rename resolves too', async () => {
+    const { file, dir } = await setup(); const warn = vi.spyOn(log, 'warn');
+    const handle = await open(join(dir, 'probe'), 'w');
+    const sync = vi.spyOn(Object.getPrototypeOf(handle), 'sync'); await handle.close();
+    sync.mockResolvedValueOnce(undefined).mockRejectedValueOnce(Object.assign(new Error('io'), { code: 'EIO' }));
+    await expect(writeFileAtomic(file, 'again', { durable: true })).resolves.toBeUndefined();
+    expect(await readFile(file, 'utf8')).toBe('again');
+    expect(warn).toHaveBeenCalledWith('atomic-file', 'directory-sync-failed', { path: dir, code: 'EIO' });
+  });
+  it('[4][15] skips the directory fsync on win32 and still syncs the temporary file', async () => {
+    const { file, dir } = await setup(); const handle = await open(join(dir, 'probe'), 'w');
+    const sync = vi.spyOn(Object.getPrototypeOf(handle), 'sync'); await handle.close();
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+    try {
+      // Directory handles on Windows reject sync with EPERM; fail every sync after the first to prove none is made.
+      sync.mockResolvedValueOnce(undefined).mockRejectedValue(Object.assign(new Error('not permitted'), { code: 'EPERM' }));
+      await writeFileAtomic(file, 'windows', { durable: true });
+    } finally { Object.defineProperty(process, 'platform', platform); }
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(await readFile(file, 'utf8')).toBe('windows');
+  });
+  it('[4][15] store mutate resolves on directory fsync EPERM and memory equals disk', async () => {
+    const { store, file, dir } = await setup(); const handle = await open(join(dir, 'probe'), 'w');
+    const sync = vi.spyOn(Object.getPrototypeOf(handle), 'sync'); await handle.close();
+    sync.mockImplementation(async function (this: { fd: number }) {
+      // Fail only directory handles, like FlushFileBuffers on a Windows directory.
+      if (fstatSync(this.fd).isDirectory()) throw Object.assign(new Error('not permitted'), { code: 'EPERM' });
+    });
+    await expect(store.mutateConfig(tasks => { tasks.push(task('a')); })).resolves.toBeUndefined();
+    await expect(store.mutateRuntime(tasks => { tasks[0]!.cursor = 99; })).resolves.toBeUndefined();
+    expect(store.get('a')!.cursor).toBe(99);
+    expect(JSON.parse(await readFile(file, 'utf8')).tasks).toEqual(store.all());
+  });
+
+  // [16]/[2]/[17]: the store must never write what its own load() would quarantine.
+  it('[16][2][17] clamps an over-long recent error to 200 units, rounds durationMs, and the file reloads with every task', async () => {
+    const { store, file, dir } = await setup();
+    await store.mutateConfig(tasks => { tasks.push(task('a'), task('b')); });
+    await store.mutateRuntime(tasks => {
+      tasks[0]!.recent.push(
+        { runId: 'r1', slot: 1, trigger: 'schedule', status: 'failed', error: 'x'.repeat(201), durationMs: 12.6 },
+        { runId: 'r2', slot: 2, trigger: 'schedule', status: 'failed', error: '字' + '😀'.repeat(100), durationMs: -5 },
+      );
+    });
+    const [first, second] = store.get('a')!.recent;
+    expect(first!.error).toBe('x'.repeat(200));
+    expect(first!.durationMs).toBe(13);
+    expect(second!.error).toBe('字' + '😀'.repeat(99)); // 199 units: the next pair would cross 200, so it is not split
+    expect(second!.durationMs).toBe(0);
+    const reloaded = createScheduleStore(file, { now: () => 456, log, diagnostics: vi.fn() });
+    await reloaded.load();
+    expect(reloaded.all()).toEqual(store.all());
+    expect(reloaded.all().map(t => t.id)).toEqual(['a', 'b']);
+    expect((await readdir(dir)).filter(name => name.includes('.corrupt-'))).toEqual([]);
+  });
+  it('[16][2][17] refuses a draft its load() would reject (bad link); memory, file and listeners unchanged', async () => {
+    const { store, file } = await setup(); await store.mutateConfig(tasks => { tasks.push(task('a'), task('b')); });
+    const before = store.all(); const text = await readFile(file, 'utf8'); const listener = vi.fn(); store.onChange(listener);
+    await expect(store.mutateRuntime(tasks => {
+      tasks[1]!.recent.push({ runId: 'r', slot: 1, trigger: 'schedule', status: 'done', link: 'not a url' });
+    })).rejects.toThrow(/^schedule store refused an invalid write: /);
+    expect(store.all()).toEqual(before);
+    expect(await readFile(file, 'utf8')).toBe(text);
+    expect(listener).not.toHaveBeenCalled();
+    await store.mutateRuntime(tasks => { tasks[0]!.cursor = 7; }); // the chain recovers
+    expect(store.get('a')!.cursor).toBe(7);
+  });
+  it('[16][2][17] refuses a draft with an unknown key or a non-integer runtime field', async () => {
+    const { store, file } = await setup(); await store.mutateConfig(tasks => { tasks.push(task('a')); });
+    const text = await readFile(file, 'utf8');
+    await expect(store.mutateRuntime(tasks => { Object.assign(tasks[0]!, { extra: 1 }); })).rejects.toThrow(/invalid write/);
+    await expect(store.mutateRuntime(tasks => { tasks[0]!.cursor = 1.5; })).rejects.toThrow(/invalid write/);
+    expect(await readFile(file, 'utf8')).toBe(text);
+  });
+  it('[16][2][17] refuses more than 200 tasks for one bot', async () => {
+    const { store, file } = await setup();
+    await store.mutateConfig(tasks => { for (let i = 0; i < 200; i += 1) tasks.push(task(`t${i}`)); });
+    const text = await readFile(file, 'utf8');
+    await expect(store.mutateConfig(tasks => { tasks.push(task('one-too-many')); })).rejects.toThrow(/invalid write/);
+    expect(store.all()).toHaveLength(200);
+    expect(await readFile(file, 'utf8')).toBe(text);
+  });
+  it('[r2-14] clamps createdBy.text to 500 units without splitting a pair, and the file reloads clean', async () => {
+    const { store, file, dir } = await setup();
+    const chat = (id: string, text: string): StoredTask => ({ ...task(id), createdBy: { via: 'chat', openId: 'ou_1', name: '张三', role: 'member', messageId: 'om_1', text } });
+    await store.mutateConfig(tasks => { tasks.push(chat('long', '字'.repeat(601)), chat('emoji', '字' + '😀'.repeat(300))); });
+    expect(store.get('long')!.createdBy.text).toBe('字'.repeat(500));
+    expect(store.get('emoji')!.createdBy.text).toBe('字' + '😀'.repeat(249)); // 499 units: the next pair would cross 500
+    const diagnostics = vi.fn(); const reloaded = createScheduleStore(file, { now: () => 456, log, diagnostics });
+    await reloaded.load();
+    expect(reloaded.all()).toEqual(store.all());
+    expect(diagnostics).not.toHaveBeenCalled();
+    expect((await readdir(dir)).filter(name => name.includes('.corrupt-'))).toEqual([]);
+  });
+  it('[r2-3] keeps memory, the file and a reload the same parsed copy, and words protocol refusals as path: message', async () => {
+    const { store, file } = await setup();
+    await store.mutateConfig(tasks => { tasks.push({ ...task('a'), name: '  padded  ', instruction: 'do it\n', spec: { kind: 'cron', expr: ' 0 9 * * * ' } }); });
+    expect(store.get('a')).toMatchObject({ name: 'padded', instruction: 'do it', spec: { kind: 'cron', expr: '0 9 * * *' } });
+    expect(JSON.parse(await readFile(file, 'utf8')).tasks).toEqual(store.all());
+    const reloaded = createScheduleStore(file, { now: () => 456, log, diagnostics: vi.fn() });
+    await reloaded.load();
+    expect(reloaded.all()).toEqual(store.all());
+    const text = await readFile(file, 'utf8');
+    await expect(store.mutateConfig(tasks => { tasks[0]!.name = ' '; })).rejects.toThrow(/invalid write: task 0: name: \S/);
+    expect(store.get('a')!.name).toBe('padded');
+    expect(await readFile(file, 'utf8')).toBe(text);
+  });
+  it('loads and keeps the optional noticeSince runtime field', async () => {
+    const { store, file } = await setup();
+    await writeFile(file, JSON.stringify({ version: 1, tasks: [{ ...task('a'), noticePending: true, noticeSince: 1_000 }] }));
+    await store.load();
+    expect(store.get('a')).toMatchObject({ noticePending: true, noticeSince: 1_000 });
+    await store.mutateRuntime(tasks => { tasks[0]!.cursor = 1; });
+    expect(JSON.parse(await readFile(file, 'utf8')).tasks[0]).toMatchObject({ noticeSince: 1_000, cursor: 1 });
   });
 
 });
