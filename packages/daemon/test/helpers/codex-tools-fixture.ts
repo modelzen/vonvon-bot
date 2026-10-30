@@ -83,7 +83,9 @@ export async function closeCodexToolFixtures(): Promise<void> {
   const errors: unknown[] = [];
   for (const close of threads.splice(0).reverse()) await close().catch((error: unknown) => { errors.push(error); });
   await shutdownResidentClients().catch((error: unknown) => { errors.push(error); });
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) {
+    try { rmSync(dir, { recursive: true, force: true }); } catch (error) { errors.push(error); }
+  }
   vi.unstubAllEnvs();
   if (errors.length) throw new AggregateError(errors, 'Codex tool fixture cleanup failed');
 }
