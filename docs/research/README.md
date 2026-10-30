@@ -1,5 +1,11 @@
 # 调研记录
 
+- [2026-10-30 Windows 安装与应用内升级方案](2026-10-30-windows-install-update/report.md)：核对 0.7.8、Clash Verge Rev 2.5.8、CC Switch 4.0.21；建议免费更新签名、首次简短安装向导、后续应用内更新及取消新增 Windows ZIP；仅方案，未实施或发布。
+
+| 报告 | 内容 | 说明 |
+| --- | --- | --- |
+| [2026-10-30 Codex 程序复用与模型刷新](2026-10-30-codex-runtime-refresh/report.md) | App / CLI 发现、统一托管更新、空闲切换及模型刷新；Claude 后续参考 | 只实现 Codex，验证边界见报告与 PR |
+
 - [2026-10-29 Codex 加速权限](2026-10-29-speed-permissions/report.md)：真实登录 / 未登录元数据对照、Fast 原生档位映射和权限证据过滤；没有真实 Ultrafast 正例，功能暂停合入 dev。
 
 - [2026-10-28 Windows 重装失败与下载选项](2026-10-28-windows-reinstall/report.md)：0.7.5 孤立卸载记录触发 0.7.6 hook 的错误码 2；真实 NSIS 验证与社区 x64 / ARM64 / ZIP 参考。本次只修安装错误，双架构下一片做。
@@ -7,6 +13,14 @@
 - [2026-10-28 Windows 安装与下载约定](2026-10-28-windows-install/report.md)：参考 VS Code / VSCodium 的 Setup 与 ZIP 命名；核对 Windows 路径限制、0.7.5 安装漏文件和体积构成。owner 要求先修启动并交本地验收，保留 Electron 正常体积。
 
 这里存放 vonvon-bot 做过的调研，以后遇到同一个问题时先来这里查，不用再调研一遍。仓库目前闭源，主人决定以后再考虑要不要开源，所以这些记录可以引用内部数据。将来如果开源，要先清理这个目录。
+
+## 2026-10-30 判断模型开放与本地推理
+
+基于本地 `main` 的 `cf5ec97`。归纳近期用户反馈，核对 OpenRouter/Vercel 的 Jev 兼容接口、Laya/Ollaya 的本地能力，提出连接、可分享决策包与代码插件的分阶段方案。
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [decision-extensions](2026-10-30-decision-extensions/report.md) | 接入与模型选择、固定 JSON 协议、插件分享安装流程、CPU 质量与上下文限制、中文群聊评测 | 方案材料；CPU 数字为项目方公开测量，本轮未运行模型；不改变既定产品行为 |
 
 ## 2026-10-26 Libraries.dev 后续适用位置
 
@@ -311,3 +325,9 @@ codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次�
 | 报告 | 内容 | 说明 |
 | --- | --- | --- |
 | [report](2026-10-29-windows-codex-permissions/report.md) | Windows 版本误报、MXC 能力探测、原生三档与 start/resume、portable PowerShell、多根路径 | 0.163.0 ARM64 原生与真实模型验证；缺失配置保护边界已实测，owner 要求仍开放可写；整体验收待 owner |
+
+## 2026-10-30 发布提速
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [report](2026-10-30-release-speed/report.md) | 提前下载、命令级系统代理、并行上传与候选绑定确认 | 小网络/异步实验与隔离回归；完整正式发布耗时待下一轮验证 |

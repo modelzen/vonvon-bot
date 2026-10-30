@@ -4,6 +4,7 @@ import {desktopUpdateNotice, type DesktopUpdate, type MachineRequestHandler} fro
 import {createClient} from '../../client/src/client';
 import {ClientProvider, type ShellCapabilities} from '../src/client-context';
 import {DesktopUpdateContext} from '../src/desktop-update';
+import type {UpdatePhase} from '../src/desktop-update';
 import {AppShell} from '../src/LocalShell';
 import {SettingsHome} from '../src/TodayHome';
 import {UpdatePanel} from '../src/management/UpdatePanel';
@@ -50,10 +51,10 @@ it('keeps external Core controls available when the installation supports them',
   expect(html).toContain('查看 Core 更新进度');
 });
 
-const renderWith = (update?: DesktopUpdate, shell: ShellCapabilities = {checkDesktopUpdate: async () => ({state: 'current', current: '0.7.0', message: ''}), retryDesktopUpdate: async () => ({state: 'current', current: '0.7.0', message: ''}), installDesktopUpdate: async () => ({state: 'downloaded', current: '0.7.0', message: ''})}) => renderToStaticMarkup(
+const renderWith = (update?: DesktopUpdate, shell: ShellCapabilities = {checkDesktopUpdate: async () => ({state: 'current', current: '0.7.0', message: ''}), retryDesktopUpdate: async () => ({state: 'current', current: '0.7.0', message: ''}), installDesktopUpdate: async () => ({state: 'downloaded', current: '0.7.0', message: ''})}, phase?: UpdatePhase) => renderToStaticMarkup(
   <ClientProvider client={client} shell={shell}>
     <DraftGuardProvider>
-      <DesktopUpdateContext.Provider value={[update, () => {}]}>
+      <DesktopUpdateContext.Provider value={[update, () => {}, {phase, run: async () => {}}]}>
         <UpdatePanel request={request} attached={false} externalCoreAvailable={false} version="0.7.0" device="这台 Mac" advancedSettings={null}>{null}</UpdatePanel>
       </DesktopUpdateContext.Provider>
     </DraftGuardProvider>
@@ -65,6 +66,27 @@ it('shows an update the app found on its own, without a manual check', () => {
   expect(html).toContain('有可用更新 · v0.7.1');
   expect(html).toContain('下载更新');
   expect(html).not.toContain('尚未检查');
+});
+
+it('shows measured download progress and signed notes, then warns before an explicit install', () => {
+  const update: DesktopUpdate = {state: 'available', current: '0.7.0', latest: '0.7.1', message: '', releaseNotes: '修复连接\n改进升级', downloadProgress: {percent: 42.9, transferred: 429, total: 1000}};
+  const html = renderWith(update, undefined, 'downloading');
+  expect(html).toContain('正在下载更新 · 42%');
+  expect(html).toContain('<progress');
+  expect(html).toContain('value="42"');
+  expect(html).toContain('aria-label="更新下载进度"');
+  expect(html).toContain('修复连接\n改进升级');
+  const ready = renderWith({...update, state: 'downloaded', downloadProgress: undefined});
+  expect(ready).toContain('已验证，可安装');
+  expect(ready).toContain('安装会短暂中断 Bot 连接');
+  expect(ready).toContain('也可以稍后安装');
+  expect(ready).not.toContain('<progress');
+});
+
+it('does not invent a percentage before the updater reports download progress', () => {
+  const html = renderWith({state: 'available', current: '0.7.0', latest: '0.7.1', message: ''}, undefined, 'downloading');
+  expect(html).toContain('正在下载更新…');
+  expect(html.match(/<progress[^>]+>/)?.[0]).not.toContain('value=');
 });
 
 it('offers a retry and a manual download when the last install did not take effect', () => {

@@ -120,7 +120,6 @@ jobs:
           name: windows-payload-${{ matrix.architecture }}
           path: |
             ${{ runner.temp }}/vonvon-${{ matrix.architecture }}/packages/*.exe
-            ${{ runner.temp }}/vonvon-${{ matrix.architecture }}/packages/*.zip
             ${{ runner.temp }}/vonvon-${{ matrix.architecture }}/packages/*.blockmap
             ${{ runner.temp }}/vonvon-${{ matrix.architecture }}/packages/latest*.yml
             ${{ runner.temp }}/vonvon-${{ matrix.architecture }}/packages/windows-*.json

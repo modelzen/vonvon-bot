@@ -52,6 +52,19 @@ it('displays a disabled activity state, and offers an accessible retry after fai
   expect(action().props).toMatchObject({disabled: true, 'aria-busy': true, 'aria-label': '正在安装并重启'});
 });
 
+it('shows progress reported by the updater and keeps installation separate from download completion', () => {
+  h.phase = 'downloading';
+  h.update!.downloadProgress = {percent: 42.9, transferred: 429, total: 1000};
+  expect(action().props).toMatchObject({disabled: true, 'aria-label': '正在下载更新，42%'});
+  expect(renderToStaticMarkup(DesktopUpdateButton())).toContain('下载 42%');
+  h.update!.downloadProgress.percent = 100;
+  expect(action().props['aria-label']).toBe('正在下载更新，100%');
+  h.phase = undefined; h.update!.state = 'downloaded';
+  expect(action().props['aria-label']).toBe('安装并重启');
+  expect(action().props.title).toContain('Bot 连接会短暂中断');
+  expect(h.run).not.toHaveBeenCalled();
+});
+
 it.each(['current', 'unavailable', 'install-pending'] as const)('stays quiet for %s and web-only clients', state => {
   h.update!.state = state;
   expect(DesktopUpdateButton()).toBeNull();

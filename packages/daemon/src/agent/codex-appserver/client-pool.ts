@@ -3,7 +3,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { log } from '../../core/logger';
 import { AppServerClient, JsonRpcError } from './app-server-client';
-import { resolveCodexBin } from './locate';
+import { cachedCodexVersion, codexVersionAsync, refreshCodexResolution } from './locate';
 import { NATIVE_MEMORY_OFF } from './memory-config';
 
 /**
@@ -153,22 +153,28 @@ function requireOpen(): void {
 
 // ── utility client（懒创建、出错即重建） ──────────────────────────────
 
-let utility: { client: AppServerClient; bin: string } | null = null;
+type UtilityEntry = { client: AppServerClient; bin: string; fingerprint: string | null; users: number; retired: boolean };
+let utility: UtilityEntry | null = null;
 let utilityCreating: Promise<unknown> | null = null;
 
-async function acquireUtility(bin: string): Promise<AppServerClient> {
+async function acquireUtility(bin: string): Promise<UtilityEntry> {
   requireOpen();
   // 单飞：先等在途的创建落定，再看槽位（绝不并发 spawn 两个 utility）。
   while (utilityCreating) await utilityCreating.catch(() => undefined);
   requireOpen();
   const cur = utility;
-  if (cur && !cur.client.exited && cur.bin === bin) return cur.client;
+  if (cur && !cur.client.exited && cur.bin === bin && cur.fingerprint === binFingerprint(bin)) {
+    cur.users++;
+    return cur;
+  }
   if (cur) {
     // 进程死了 / codex 二进制换了位置——重建
     utility = null;
-    closeDiscarded(cur.client);
+    cur.retired = true;
+    if (cur.users === 0) closeDiscarded(cur.client);
   }
   const create = (async () => {
+    const fingerprint = binFingerprint(bin);
     const client = new AppServerClient({ bin, cwd: NEUTRAL_CWD, clientName: 'feishu-codex-bridge-utility' });
     trackResident(client);
     try {
@@ -183,9 +189,9 @@ async function acquireUtility(bin: string): Promise<AppServerClient> {
     void (async () => {
       for await (const n of client.stream()) void n;
     })();
-    utility = { client, bin };
+    utility = { client, bin, fingerprint, users: 1, retired: false };
     log.info('agent', 'utility-up', { pid: client.pid ?? null });
-    return client;
+    return utility;
   })();
   utilityCreating = create.catch(() => undefined);
   try {
@@ -195,9 +201,10 @@ async function acquireUtility(bin: string): Promise<AppServerClient> {
   }
 }
 
-function discardUtility(client: AppServerClient): void {
-  if (utility?.client === client) utility = null;
-  closeDiscarded(client);
+function discardUtility(entry: UtilityEntry): void {
+  if (utility === entry) utility = null;
+  entry.retired = false; // transport failures already close the client below
+  closeDiscarded(entry.client);
 }
 
 /**
@@ -216,18 +223,22 @@ export async function utilityRequest<T = unknown>(
   params?: unknown,
   opts?: { timeoutMs?: number },
 ): Promise<T> {
-  const bin = resolveCodexBin();
+  const bin = await refreshCodexResolution();
   if (!bin) throw new Error('codex CLI not found (set CODEX_BIN or install @openai/codex)');
-  const client = await acquireUtility(bin);
+  await codexVersionAsync(bin);
+  const entry = await acquireUtility(bin);
   try {
     return await withDeadline(
-      client.request<T>(method, params),
+      entry.client.request<T>(method, params),
       opts?.timeoutMs ?? DEFAULT_UTILITY_TIMEOUT_MS,
       `utility ${method}`,
     );
   } catch (err) {
-    if (!(err instanceof JsonRpcError)) discardUtility(client);
+    if (!(err instanceof JsonRpcError)) discardUtility(entry);
     throw err;
+  } finally {
+    entry.users--;
+    if (entry.retired && entry.users === 0) closeDiscarded(entry.client);
   }
 }
 
@@ -277,7 +288,7 @@ function invalidateWarmPool(): void {
 export function binFingerprint(bin: string): string | null {
   try {
     const s = statSync(bin);
-    return `${s.mtimeMs}:${s.size}`;
+    return `${s.dev}:${s.ino}:${s.mtimeMs}:${s.ctimeMs}:${s.size}:${cachedCodexVersion(bin) ?? ''}`;
   } catch {
     return null;
   }
@@ -319,8 +330,9 @@ export function refillWarmPool(): Promise<void> {
   if (warm || warming) return warming ?? Promise.resolve();
   const generation = warmGeneration;
   warming = (async () => {
-    const bin = resolveCodexBin();
+    const bin = await refreshCodexResolution();
     if (!bin) return;
+    await codexVersionAsync(bin);
     // 指纹在 spawn 之前取——若 spawn 与升级赛跑，取用时的复验自会兜住。
     const fingerprint = binFingerprint(bin);
     // clientName 用默认值：这个进程取走后就是真实会话的进程（compliance log 同名）。

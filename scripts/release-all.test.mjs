@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { buildRelease, collectRelease, inspectRunners, jobTimings, prepareRelease, releaseStatus, windowsRunTitle, workflowLabels } from './release-all.mjs';
+import { buildRelease, collectRelease, inspectRunners, jobTimings, prepareRelease, releaseStatus, runReleaseChild, windowsRunTitle, workflowLabels } from './release-all.mjs';
 
 const sha = 'a'.repeat(40), version = '1.2.3', hash = value => createHash('sha256').update(value).digest('hex');
 const save = (path, value) => writeFile(path, JSON.stringify(value));
@@ -159,6 +159,10 @@ test('prepare and a second build are excluded while a build owns the same output
   const dependencies = { ...h.dependencies, run: async (...args) => {
     if (args[0] === 'npm') { entered.resolve(); await release.promise; }
     return h.dependencies.run(...args);
+  }, execute: async (...args) => {
+    const result = await h.dependencies.execute(...args);
+    if (args[0] === 'gh') h.remote.run.status = 'in_progress';
+    return result;
   } };
   const first = buildRelease({ out: h.options.out, 'authorize-notarization': true }, dependencies);
   await entered.promise;
@@ -248,10 +252,10 @@ test('Windows failure and cancellation stop before a second Mac architecture or 
   await assert.rejects(collectRelease({ out: h.options.out }, h.dependencies), /Windows run 123 failed/);
 });
 
-test('Windows failure during Mac assembly returns failure and does not download or report candidate success', async t => {
+test('Windows failure during Mac assembly is not hidden by an earlier successful download', async t => {
   const h = await fixture(t); h.remote.failWindowsAfterAssembly = true;
   await assert.rejects(buildRelease({ ...h.options, 'authorize-notarization': true }, h.dependencies), /Windows run 123 failed/);
-  assert.equal(h.helpers.filter(call => call[1][0]?.endsWith('publish-windows.mjs')).length, 0);
+  assert.equal(h.helpers.filter(call => call[1][0]?.endsWith('publish-windows.mjs')).length, 1);
 });
 
 test('the local cancel marker stops at a helper boundary and does not claim remote cancellation', async t => {
@@ -278,7 +282,7 @@ test('website handoff requires matching public receipts for both platforms and v
   assert.equal((await collectRelease({ out: h.options.out }, h.dependencies)).readyForWebsite, false);
   await receipts(h);
   const held = await collectRelease({ out: h.options.out }, h.dependencies);
-  assert.equal(held.readyForWebsite, false); assert.equal(held.downloads.length, 6);
+  assert.equal(held.readyForWebsite, false); assert.equal(held.downloads.length, 4);
   await receipts(h, true);
   const ready = await collectRelease({ out: h.options.out }, h.dependencies);
   assert.equal(ready.readyForWebsite, true);
@@ -295,7 +299,7 @@ test('job timing preserves queued, test and package stages and leaves ongoing du
   assert.equal(result[0].steps[0].seconds, null);
 });
 
-test('dual Windows handoff requires ARM64 Setup and ZIP as well as x64', async t => {
+test('dual Windows handoff requires both native Setup packages and omits ZIP choices', async t => {
   const h = await fixture(t); await buildRelease({ ...h.options, 'authorize-notarization': true }, h.dependencies); await receipts(h, true);
   const file = join(h.options.out, 'windows', 'windows-publish-receipt.json');
   const receipt = JSON.parse(await readFile(file, 'utf8')); receipt.architecture = 'x64';
@@ -309,6 +313,161 @@ test('dual Windows handoff requires ARM64 Setup and ZIP as well as x64', async t
     receipt.objects.push({ file: name, url: `https://dl.vonvon.cc/bot/windows/${version}/${name}`, bytes: 20, sha256: hash(name) });
   await save(file, receipt);
   const result = await collectRelease({ out: h.options.out }, h.dependencies);
-  assert.equal(result.readyForWebsite, true); assert.equal(result.downloads.length, 6);
-  assert.equal(result.downloads.filter(item => item.platform === 'windows' && item.architecture === 'arm64').length, 2);
+  assert.equal(result.readyForWebsite, true); assert.equal(result.downloads.length, 4);
+  assert.equal(result.downloads.filter(item => item.platform === 'windows' && item.architecture === 'arm64').length, 1);
+});
+
+test('Windows artifact download overlaps a running Mac helper and persists both concurrent completions', { timeout: 3000 }, async t => {
+  const h = await fixture(t), downloadStarted = deferred();
+  const reference = performance.now();
+  for (const milliseconds of [50, 50, 80]) await new Promise(done => setTimeout(done, milliseconds));
+  const sequentialMs = performance.now() - reference;
+  const started = performance.now();
+  const dependencies = { ...h.dependencies, windowsPollMs: 2, execute: async (...args) => {
+    const result = await h.dependencies.execute(...args);
+    if (args[0] === 'gh') h.remote.run.status = 'in_progress';
+    return result;
+  }, run: async (...args) => {
+    const script = args[1][0];
+    if (script?.endsWith('release-mac.mjs')) {
+      if (args[1].includes('arm64')) {
+        h.remote.run.status = 'completed';
+        // The old scheduler cannot reach downloadStarted while this helper runs.
+        await downloadStarted.promise;
+      }
+      await new Promise(done => setTimeout(done, 50));
+      return h.dependencies.run(...args);
+    }
+    if (script?.endsWith('publish-windows.mjs')) {
+      downloadStarted.resolve();
+      await new Promise(done => setTimeout(done, 80));
+    }
+    return h.dependencies.run(...args);
+  } };
+  await buildRelease({ ...h.options, 'authorize-notarization': true }, dependencies);
+  const saved = await h.state(), download = saved.timings.find(item => item.phase.startsWith('windows artifact'));
+  const arm64 = saved.timings.find(item => item.phase.startsWith('mac-arm64'));
+  assert.ok(Date.parse(download.startedAt) < Date.parse(arm64.completedAt));
+  assert.equal(saved.windows.download, 'verified');
+  assert.deepEqual(saved.timings.map(item => item.status), Array(saved.timings.length).fill('complete'));
+  assert.equal(saved.mac.arm64, 'complete'); assert.equal(saved.mac.x64, 'complete');
+  t.diagnostic(`Synthetic two 50 ms Mac waits + 80 ms download: sequential ${Math.round(sequentialMs)} ms; orchestrated overlap ${Math.round(performance.now() - started)} ms. Ordering, not timing ratios, is asserted.`);
+});
+
+test('a failed background download stops at the Mac boundary and resume reuses Apple work', { timeout: 3000 }, async t => {
+  const h = await fixture(t), macStarted = deferred(), failed = deferred();
+  const dependencies = { ...h.dependencies, run: async (...args) => {
+    if (args[1][0]?.endsWith('publish-windows.mjs')) { await macStarted.promise; failed.resolve(); throw new Error('artifact verification failed'); }
+    if (args[1][0]?.endsWith('release-mac.mjs')) { macStarted.resolve(); await failed.promise; }
+    return h.dependencies.run(...args);
+  } };
+  await assert.rejects(buildRelease({ ...h.options, 'authorize-notarization': true }, dependencies), /artifact verification failed/);
+  assert.equal((await h.state()).windows.download, 'failed-or-interrupted');
+  assert.deepEqual(h.helpers.filter(call => call[1][0]?.endsWith('release-mac.mjs')).map(call => call[1][call[1].indexOf('--architecture') + 1]), ['arm64']);
+  await buildRelease({ out: h.options.out, 'authorize-notarization': true }, h.dependencies);
+  assert.equal(h.remote.dispatches, 1);
+  assert.deepEqual(h.helpers.filter(call => call[1][0]?.endsWith('release-mac.mjs')).map(call => call[1][call[1].indexOf('--architecture') + 1]), ['arm64', 'x64']);
+  assert.equal((await h.state()).windows.download, 'verified');
+});
+
+test('CANCEL aborts the active background download and joins it before returning', { timeout: 3000 }, async t => {
+  const h = await fixture(t), downloadStarted = deferred(), stopped = deferred();
+  let active = false;
+  const dependencies = { ...h.dependencies, cancelPollMs: 2, run: async (...args) => {
+    if (args[1][0]?.endsWith('publish-windows.mjs')) {
+      active = true; downloadStarted.resolve();
+      try { await new Promise((_, reject) => args[2].signal.addEventListener('abort', () => reject(args[2].signal.reason), { once: true })); }
+      finally { active = false; stopped.resolve(); }
+    }
+    if (args[1][0]?.endsWith('release-mac.mjs')) {
+      await downloadStarted.promise;
+      await writeFile(join(h.options.out, 'CANCEL'), 'stop');
+      await stopped.promise;
+    }
+    return h.dependencies.run(...args);
+  } };
+  await assert.rejects(buildRelease({ ...h.options, 'authorize-notarization': true }, dependencies), /CANCEL/);
+  assert.equal(active, false);
+  assert.equal((await h.state()).windows.download, 'failed-or-interrupted');
+  assert.equal(h.helpers.filter(call => call[1][0]?.endsWith('release-mac.mjs')).length, 1);
+});
+
+test('a Mac helper failure aborts and joins a download already in progress', { timeout: 3000 }, async t => {
+  const h = await fixture(t), downloadStarted = deferred();
+  let joined = false;
+  const dependencies = { ...h.dependencies, run: async (...args) => {
+    if (args[1][0]?.endsWith('publish-windows.mjs')) {
+      downloadStarted.resolve();
+      try { await new Promise((_, reject) => args[2].signal.addEventListener('abort', () => reject(new Error('download aborted')), { once: true })); }
+      finally { joined = true; }
+    }
+    if (args[1][0]?.endsWith('release-mac.mjs')) { await downloadStarted.promise; throw new Error('Mac helper failed'); }
+    return h.dependencies.run(...args);
+  } };
+  await assert.rejects(buildRelease({ ...h.options, 'authorize-notarization': true }, dependencies), /Mac helper failed/);
+  assert.equal(joined, true);
+});
+
+test('a queued Windows run returns pending after Mac completion without leaving a polling task', { timeout: 3000 }, async t => {
+  const h = await fixture(t);
+  const dependencies = { ...h.dependencies, windowsPollMs: 100000, execute: async (...args) => {
+    const result = await h.dependencies.execute(...args);
+    if (args[0] === 'gh') h.remote.run.status = 'queued';
+    return result;
+  } };
+  const result = await buildRelease({ ...h.options, 'authorize-notarization': true }, dependencies);
+  assert.equal(result.windows.status, 'queued');
+  assert.equal(h.helpers.filter(call => call[1][0]?.endsWith('publish-windows.mjs')).length, 0);
+  const saved = await h.state(); assert.equal(saved.mac.phase, 'candidate-complete');
+});
+
+test('aborting a release child terminates its process group, including a TERM-resistant grandchild', { timeout: 5000, skip: process.platform === 'win32' }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'release-child-cancel-')), pidFile = join(root, 'pids.json');
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const grandchild = `process.on('SIGTERM',()=>{});require('fs').writeFileSync(${JSON.stringify(pidFile)},JSON.stringify({parent:process.ppid,child:process.pid}));setInterval(()=>{},1000);`;
+  const script = `require('child_process').spawn(process.execPath,['-e',${JSON.stringify(grandchild)}],{stdio:'ignore'});setInterval(()=>{},1000);`;
+  const controller = new AbortController();
+  const work = runReleaseChild(process.execPath, ['-e', script], { cwd: root, env: process.env, signal: controller.signal });
+  let pids;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try { pids = JSON.parse(await readFile(pidFile, 'utf8')); break; }
+    catch (error) { if (error.code !== 'ENOENT') throw error; await new Promise(done => setTimeout(done, 5)); }
+  }
+  assert.ok(pids, 'child process must reach its ready marker');
+  controller.abort();
+  await assert.rejects(work, /stopped/);
+  for (const pid of Object.values(pids)) {
+    let alive = true;
+    for (let attempt = 0; attempt < 100 && alive; attempt += 1) {
+      try { process.kill(pid, 0); await new Promise(done => setTimeout(done, 5)); }
+      catch (error) { if (error.code !== 'ESRCH') throw error; alive = false; }
+    }
+    assert.equal(alive, false, `spawned process ${pid} survived cancellation`);
+  }
+});
+
+
+test('update-capable installers do not advertise application updates until both stable feeds are verified', async t => {
+  const h = await fixture(t); await buildRelease({ ...h.options, 'authorize-notarization': true }, h.dependencies); await receipts(h, true);
+  const file = join(h.options.out, 'windows', 'windows-publish-receipt.json');
+  const receipt = JSON.parse(await readFile(file, 'utf8')); receipt.updatesEnabled = true; receipt.objects = receipt.objects.filter(item => item.file.endsWith('.exe'));
+  await save(file, receipt);
+  const held = await collectRelease({ out: h.options.out }, h.dependencies);
+  assert.equal(held.readyForWebsite, false); assert.equal(held.windows.updatesEnabled, false);
+  const updateReceipt = { status: 'published', version, sourceSha: sha, updatesEnabled: true, feeds: ['x64', 'arm64'].map(architecture => ({ architecture,
+    url: `https://dl.vonvon.cc/bot/windows/stable/${architecture}/update.json`, bytes: 100, sha256: hash(architecture) })) };
+  const planFile = join(h.options.out, 'publication-plan.json');
+  await save(planFile, {format:1,candidate:{version,sourceSha:sha,windows:{updates:updateReceipt.feeds}}});
+  updateReceipt.planSHA256 = hash(await readFile(planFile));
+  await save(join(h.options.out, 'windows', 'windows-update-publish-receipt.json'), updateReceipt);
+  const ready = await collectRelease({ out: h.options.out }, h.dependencies);
+  assert.equal(ready.readyForWebsite, true); assert.equal(ready.windows.updatesEnabled, true);
+  for (const change of [
+    {...updateReceipt,planSHA256:'a'.repeat(64)},
+    {...updateReceipt,feeds:updateReceipt.feeds.map((feed,index)=>index ? feed : {...feed,sha256:'b'.repeat(64)})},
+    {...updateReceipt,feeds:updateReceipt.feeds.map((feed,index)=>index ? feed : {...feed,bytes:101})},
+  ]) {
+    await save(join(h.options.out,'windows','windows-update-publish-receipt.json'),change);
+    await assert.rejects(collectRelease({out:h.options.out},h.dependencies),/reviewed publication plan/);
+  }
 });

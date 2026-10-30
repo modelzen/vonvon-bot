@@ -1,0 +1,225 @@
+import assert from 'node:assert/strict';
+import { createHash, generateKeyPairSync } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test from 'node:test';
+import { planPublication, uploadPublication, promotePublication, publicationStatus } from './release-publish.mjs';
+import { verifyWindowsArtifacts } from './package-windows.mjs';
+import { planWindowsUpdates } from './publish-windows.mjs';
+
+const sha = 'a'.repeat(40), version = '1.2.3';
+const json = value => JSON.stringify(value, null, 2) + '\n';
+const hash = (bytes, algorithm = 'sha256', encoding = 'hex') => createHash(algorithm).update(bytes).digest(encoding);
+const save = (path, value) => writeFile(path, json(value));
+const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
+async function fixture(t, modern = false) {
+  const out = await realpath(await mkdtemp(join(tmpdir(), 'release-publication-test-')));
+  t.after(() => rm(out, { recursive: true, force: true }));
+  const macOut = join(out, 'mac'), windowsOut = join(out, 'windows');
+  await mkdir(macOut); await mkdir(windowsOut);
+  const readonly = join(out, 'readonly.json'), write = join(out, 'write.json'), windowsConfig = join(out, 'windows.json');
+  const keys = generateKeyPairSync('ed25519'), keyPath = join(out, 'private.pem');
+  if (modern) await writeFile(keyPath, keys.privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
+  const common = { bucket: 'fixture-123', region: 'ap-shanghai', prefix: 'bot/mac/stable/', publicManifestURL: 'https://dl.vonvon.cc/bot/mac/stable/manifest.json' };
+  await save(readonly, { ...common, ledgerFile: join(out, 'ledger.json'), secretIdEnv: 'READ_ID', secretKeyEnv: 'READ_KEY' });
+  await save(write, { ...common, secretIdEnv: 'WRITE_ID', secretKeyEnv: 'WRITE_KEY' });
+  await save(windowsConfig, { bucket: common.bucket, region: common.region, prefix: 'bot/windows/', publicBaseURL: 'https://dl.vonvon.cc/bot/windows/', secretIdEnv: 'WIN_ID', secretKeyEnv: 'WIN_KEY', ...(modern ? { updatePrivateKeyFile: keyPath } : {}) });
+  await save(join(out, 'release-orchestration.json'), { format: 1, out, sha, version, paths: { cosConfig: readonly }, macRelease: macOut,
+    mac: { phase: 'candidate-complete' }, windows: { runId: 123, status: 'completed', conclusion: 'success' }, flags: {} });
+  const artifacts = [];
+  for (const architecture of ['x64', 'arm64']) {
+    const pe = Buffer.alloc(100); pe.write('MZ'); pe.writeUInt32LE(64, 60); pe.write('PE\0\0', 64);
+    const installer = `Vonvon-Bot-Setup-${version}-${architecture}.exe`, sha512 = hash(pe, 'sha512', 'base64');
+    for (const [kind, file, bytes] of [['installer', installer, pe], ['zip', `Vonvon-Bot-${version}-windows-${architecture}.zip`, Buffer.from('archive')],
+      ['blockmap', `${installer}.blockmap`, Buffer.from('blockmap')], ['feed', architecture === 'x64' ? 'latest.yml' : 'latest-arm64.yml', Buffer.from(`version: ${version}\npath: ${installer}\nsha512: ${sha512}\nfiles:\n  - url: ${installer}\n    sha512: ${sha512}\n    size: ${pe.length}\n`)]]) {
+      if (modern && kind === 'zip') continue;
+      await writeFile(join(windowsOut, file), bytes);
+      artifacts.push({ kind, file, bytes: bytes.length, sha256: hash(bytes), sha512: hash(bytes, 'sha512', 'base64') });
+    }
+    await save(join(windowsOut, `windows-acceptance-${architecture}.json`), { passed: true, architecture, hostArchitecture: architecture, sourceSha: sha,
+      installerSha256: hash(pe), steps: ['fresh-install', 'overwrite-install', 'uninstall', 'reinstall-after-uninstall', 'reinstall-after-0.7.5-orphan'].map(name => ({ name, passed: true })) });
+  }
+  await save(join(windowsOut, 'windows-release-inventory.json'), { version, sourceSha: sha, architecture: 'x64+arm64', signed: false, updatesEnabled: modern, ...(modern ? { format: 2, publicKey: keys.publicKey.export({ type: 'spki', format: 'pem' }).toString() } : {}), artifacts });
+  await save(join(windowsOut, 'github-build.json'), { sourceSha: sha, runId: 123, artifactId: 456, artifactDigest: `sha256:${'b'.repeat(64)}` });
+  const macFiles = [];
+  for (const architecture of ['arm64', 'x64']) for (const extension of ['zip', 'dmg']) {
+    const file = `Vonvon-Bot-${version}-${architecture}.${extension}`, body = Buffer.from(file);
+    await writeFile(join(macOut, file), body);
+    macFiles.push({ file, size: body.length, sha256: hash(body), url: `https://dl.vonvon.cc/bot/mac/stable/${file}` });
+  }
+  const options = { out, 'cos-write-config': write, 'windows-cos-config': windowsConfig };
+  const calls = [], flags = {};
+  const candidateManifest = Buffer.from(json({ version, feedURL: `https://dl.vonvon.cc/bot/mac/stable/feed-${version}-arm64.json` }));
+  const oldManifest = Buffer.from(json({ version: '1.2.2', feedURL: 'https://dl.vonvon.cc/bot/mac/stable/feed-1.2.2.json' }));
+  const assertMacEnv = ({ env }) => { assert.equal(env.WIN_ID, undefined); assert.equal(env.WIN_KEY, undefined); assert.equal(env.READ_ID, 'private'); assert.equal(env.WRITE_KEY, 'private'); };
+  const dependencies = {
+    env: { READ_ID: 'private', READ_KEY: 'private', WRITE_ID: 'private', WRITE_KEY: 'private', WIN_ID: 'private', WIN_KEY: 'private' }, log: () => {},
+    macDependencies: { env: { READ_ID: 'private', READ_KEY: 'private', WRITE_ID: 'private', WRITE_KEY: 'private', WIN_ID: 'private', WIN_KEY: 'private' } },
+    download: async ({ env, expectedSha, expectedVersion }) => {
+      assert.deepEqual(env, {}); assert.equal(expectedSha, sha); assert.equal(expectedVersion, version);
+      return verifyWindowsArtifacts(windowsOut, { sourceSha: sha, version });
+    },
+    planWindowsUpdates: input => planWindowsUpdates({ ...input, fetchImpl: async () => new Response(null, { status: 404 }) }),
+    promoteWindowsUpdates: async input => { assert.equal(input.feeds.length, 2); assert.equal(input.ownerConfirmation, '确认发布'); calls.push('windows-promote'); },
+    verifyMac: async () => {
+      for (const file of macFiles) if (hash(await readFile(join(macOut, file.file))) !== file.sha256) throw new Error('Mac bytes changed');
+      return { files: macFiles };
+    },
+    planMac: async (_input, deps) => {
+      assertMacEnv(deps);
+      const plan = { upload: macFiles, promote: { size: candidateManifest.length, sha256: hash(candidateManifest) }, previousManifest: { status: 200, size: oldManifest.length, sha256: hash(oldManifest) } };
+      await save(join(macOut, 'publish-plan.json'), plan); return { plan, sha256: hash(json(plan)) };
+    },
+    uploadMac: async (input, deps) => {
+      assertMacEnv(deps);
+      calls.push('mac-upload'); await flags.mac?.();
+      await save(join(macOut, 'upload-receipt.json'), { version, sourceCommit: sha, planSHA256: input['plan-sha256'], objects: macFiles, versionedVerification: { versionedObjectsVerified: true } });
+    },
+    execute: async (_command, args, { env }) => {
+      calls.push('windows-upload'); assert.equal(env.READ_ID, undefined); assert.equal(env.WRITE_ID, undefined); assert.equal(env.WIN_ID, 'private');
+      assert.equal(args[args.indexOf('--cancel-file') + 1], join(out, 'CANCEL'));
+      await flags.windows?.();
+      const inventory = JSON.parse(await readFile(join(out, 'publication-plan.json'), 'utf8')).candidate.windows;
+      await save(join(windowsOut, 'windows-publish-receipt.json'), { version, sourceSha: sha, architecture: 'x64+arm64', signed: false, updatesEnabled: modern, objects: inventory.objects });
+    },
+    promoteMac: async (input, deps) => {
+      assertMacEnv(deps);
+      calls.push('promote'); assert.equal(input['owner-confirmation'], '确认发布'); assert.equal(input['reviewed-plan'], true);
+      await save(join(macOut, 'publish-receipt.json'), { version, sourceCommit: sha, planSHA256: input['plan-sha256'], status: 'published' });
+    },
+    reverifyMac: async (_input, deps) => { assertMacEnv(deps); calls.push('reverify'); },
+    readLiveManifest: async ({ env }) => { assert.deepEqual(env, {}); return { kind: 'present', bytes: flags.live ?? candidateManifest }; },
+    verifyPublicMac: async ({ env }) => { assert.deepEqual(env, {}); calls.push('verify-stable'); return { publiclyVerified: true }; },
+    collect: async (_input, { env }) => { assert.deepEqual(env, {}); calls.push('collect'); return { readyForWebsite: true }; },
+  };
+  const plan = await planPublication(options, dependencies);
+  return { out, options: { ...options, 'plan-sha256': plan.planSHA256, 'owner-confirmation': '确认发布' }, dependencies, calls, flags, macOut, windowsOut, plan, oldManifest };
+}
+test('both native verified candidates produce one reviewed plan; uploads overlap and stable waits for both', async t => {
+  const f = await fixture(t), macEntered = deferred(), windowsEntered = deferred(), release = deferred();
+  assert.deepEqual(f.calls, []);
+  f.flags.mac = async () => { macEntered.resolve(); await release.promise; };
+  f.flags.windows = async () => { windowsEntered.resolve(); await release.promise; };
+  const upload = uploadPublication(f.options, f.dependencies);
+  await Promise.all([macEntered.promise, windowsEntered.promise]);
+  await assert.rejects(promotePublication(f.options, f.dependencies), /lock exists/);
+  release.resolve(); assert.equal((await upload).versionedObjectsVerified, true);
+  assert.equal((await promotePublication(f.options, f.dependencies)).readyForWebsite, true);
+  assert.deepEqual(f.calls.slice(0, 2).sort(), ['mac-upload', 'windows-upload']);
+  assert.deepEqual(f.calls.slice(2), ['promote', 'collect']);
+  await promotePublication(f.options, f.dependencies);
+  assert.deepEqual(f.calls.slice(-2), ['verify-stable', 'collect'], 'published stable is verified without another manifest write');
+  assert.equal((await publicationStatus(f.options)).website, 'not-ready', 'status does not invent a deployed website');
+});
+test('one failed platform retains the other receipt; retry skips its upload and download bytes', async t => {
+  const f = await fixture(t);
+  f.flags.windows = async () => { throw Object.assign(new Error('SECRET-EXEC-OUTPUT'), { stdout: 'SECRET-STDOUT', stderr: 'SECRET-STDERR' }); };
+  await assert.rejects(uploadPublication(f.options, f.dependencies), error => {
+    assert.match(error.message, /incomplete.*Windows publication helper failed/);
+    assert.doesNotMatch(JSON.stringify(error, Object.getOwnPropertyNames(error)), /SECRET/); return true;
+  });
+  assert.equal((await publicationStatus(f.options)).macReceiptPresent, true);
+  await assert.rejects(promotePublication(f.options, f.dependencies), /Both versioned/);
+  const completedCalls = [...f.calls];
+  f.flags.windows = undefined;
+  await uploadPublication(f.options, f.dependencies);
+  assert.equal(f.calls.filter(name => name === 'mac-upload').length, 1);
+  assert.equal(f.calls.filter(name => name === 'windows-upload').length, 2);
+  assert.deepEqual(f.calls.slice(completedCalls.length), ['windows-upload'], 'only the failed platform is retried');
+});
+test('approval hash, source artifacts, configuration, provenance and receipts cannot silently change', async t => {
+  const f = await fixture(t);
+  await assert.rejects(uploadPublication({ ...f.options, 'plan-sha256': '0'.repeat(64) }, f.dependencies), /plan hash differs/);
+  await writeFile(join(f.macOut, f.plan.objects[0].file), 'changed');
+  await assert.rejects(uploadPublication(f.options, f.dependencies), /Mac bytes changed/);
+  assert.deepEqual(f.calls, []);
+  const g = await fixture(t);
+  await writeFile(g.options['cos-write-config'], json({ altered: true }));
+  await assert.rejects(uploadPublication(g.options, g.dependencies), /COS write configuration/);
+  const h = await fixture(t);
+  await save(join(h.windowsOut, 'github-build.json'), { sourceSha: sha, runId: 999 });
+  await assert.rejects(uploadPublication(h.options, h.dependencies), /provenance differs/);
+  const i = await fixture(t);
+  await uploadPublication(i.options, i.dependencies);
+  const path = join(i.windowsOut, 'windows-publish-receipt.json'), receipt = JSON.parse(await readFile(path, 'utf8'));
+  receipt.objects[0].sha256 = '0'.repeat(64); await save(path, receipt);
+  await assert.rejects(promotePublication(i.options, i.dependencies), /Windows upload receipt/);
+});
+test('CANCEL prevents publication; interrupted stable uses reverify rather than another promote', async t => {
+  const f = await fixture(t);
+  await writeFile(join(f.out, 'CANCEL'), 'stop');
+  await assert.rejects(uploadPublication(f.options, f.dependencies), /CANCEL/);
+  assert.deepEqual(f.calls, []);
+  const g = await fixture(t);
+  await uploadPublication(g.options, g.dependencies);
+  await save(join(g.macOut, 'publish-receipt.json'), { version, sourceCommit: sha, planSHA256: g.plan.macPlanSHA256, status: 'manifest-write-started' });
+  await promotePublication(g.options, g.dependencies);
+  assert.deepEqual(g.calls.slice(-2), ['reverify', 'collect']);
+});
+test('a crash before the stable PUT retries only the unchanged snapshot with current owner confirmation', async t => {
+  const f = await fixture(t);
+  await uploadPublication(f.options, f.dependencies);
+  await save(join(f.macOut, 'publish-receipt.json'), { version, sourceCommit: sha, planSHA256: f.plan.macPlanSHA256, status: 'manifest-write-started' });
+  f.flags.live = f.oldManifest;
+  await assert.rejects(promotePublication({ ...f.options, 'owner-confirmation': undefined }, f.dependencies), /owner confirmation/);
+  assert.equal(f.calls.includes('promote'), false);
+  await promotePublication(f.options, f.dependencies);
+  assert.deepEqual(f.calls.slice(-2), ['promote', 'collect']);
+});
+test('an interrupted publication stops if stable is neither the candidate nor its previous snapshot', async t => {
+  const f = await fixture(t);
+  await uploadPublication(f.options, f.dependencies);
+  await save(join(f.macOut, 'publish-receipt.json'), { version, sourceCommit: sha, planSHA256: f.plan.macPlanSHA256, status: 'manifest-write-started' });
+  f.flags.live = Buffer.from('unrelated manifest');
+  const before = [...f.calls];
+  await assert.rejects(promotePublication(f.options, f.dependencies), /neither this candidate nor the reviewed previous/);
+  assert.deepEqual(f.calls, before);
+});
+test('credential names shared by Mac and Windows remain available to the Mac publisher', async t => {
+  const f = await fixture(t), path = f.options['windows-cos-config'];
+  const config = JSON.parse(await readFile(path, 'utf8'));
+  config.secretIdEnv = 'WRITE_ID'; config.secretKeyEnv = 'WRITE_KEY';
+  await save(path, config);
+  for (const env of [f.dependencies.env, f.dependencies.macDependencies.env]) { delete env.WIN_ID; delete env.WIN_KEY; }
+  const planned = await planPublication(f.options, f.dependencies);
+  assert.equal(planned.version, version, 'planMac assertions verify the shared write credential is retained');
+});
+test('SIGTERM persists CANCEL, aborts the Windows child and joins both upload branches before unlocking', async t => {
+  const f = await fixture(t), macEntered = deferred(), windowsEntered = deferred(), releaseMac = deferred(), windowsStopped = deferred();
+  const before = process.listenerCount('SIGTERM');
+  f.flags.mac = async () => { macEntered.resolve(); await releaseMac.promise; await readFile(join(f.out, 'CANCEL')); throw new Error('cancelled'); };
+  f.dependencies.execute = async (_command, _args, { signal }) => {
+    windowsEntered.resolve();
+    await new Promise(done => signal.addEventListener('abort', done, { once: true }));
+    assert.match(await readFile(join(f.out, 'CANCEL'), 'utf8'), /SIGTERM/);
+    windowsStopped.resolve(); throw new Error('child stopped');
+  };
+  let settled = false;
+  const upload = uploadPublication(f.options, f.dependencies);
+  const completion = upload.then(() => { settled = true; }, error => { settled = true; return error; });
+  await Promise.all([macEntered.promise, windowsEntered.promise]);
+  process.emit('SIGTERM');
+  await windowsStopped.promise;
+  assert.equal(settled, false, 'Mac in-flight work must be joined after Windows stops');
+  await assert.rejects(uploadPublication(f.options, f.dependencies), /lock exists/);
+  releaseMac.resolve();
+  assert.match((await completion).message, /publication incomplete/);
+  assert.equal(process.listenerCount('SIGTERM'), before, 'signal handler is released after joining both branches');
+  await assert.rejects(readFile(join(f.out, '.publication.lock')), /ENOENT/);
+});
+
+
+test('new EXE-only releases bind two signed feeds in the unified plan and promote them after immutable uploads', async t => {
+  const f = await fixture(t, true);
+  const plan = JSON.parse(await readFile(join(f.out, 'publication-plan.json'), 'utf8'));
+  assert.equal(plan.candidate.windows.updates.length, 2);
+  assert.equal(plan.candidate.windows.objects.length, 4);
+  assert.ok(plan.candidate.windows.objects.every(item => !item.file.endsWith('.zip')));
+  assert.ok(f.plan.objects.some(item => item.url.endsWith('/stable/arm64/update.json')));
+  await uploadPublication(f.options, f.dependencies);
+  await promotePublication(f.options, f.dependencies);
+  assert.deepEqual(f.calls, ['mac-upload', 'windows-upload', 'promote', 'windows-promote', 'collect']);
+  await writeFile(join(f.windowsOut, 'update-x64.json'), '{}');
+  await assert.rejects(promotePublication(f.options, f.dependencies), /signature/);
+});

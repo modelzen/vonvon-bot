@@ -4,11 +4,15 @@ import { McpService } from "./mcp";
 import type { McpRequest, McpReply } from "@vonvon/protocol";
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, realpathSync } from "node:fs";
 import { access, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { basename, delimiter, dirname, isAbsolute, join, relative, win32 } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { spawnProcess } from "../platform/spawn";
-import { CODEX_MIN_VERSION, CODEX_VERIFIED_VERSION, classifyCodexVersion } from "../agent/codex-appserver/version";
+import { CODEX_MIN_VERSION, CODEX_VERIFIED_VERSION, classifyCodexVersion, compareCodexVersions } from "../agent/codex-appserver/version";
+import { managedCodexBin } from "../agent/codex-appserver/managed-install";
+import { codexSource } from './codex-source';
+import { bundledNpmCli } from '../platform/npm';
+import { OwnedProviderProcess, ProviderProcessExitError } from '../agent/owned-process';
 import {
   environmentProfileSchema,
   type EnvironmentOperation,
@@ -28,6 +32,9 @@ const kinds: EnvironmentTool[] = ["codex", "claude", "lark-cli"];
 const allowedHosts = new Set(["accounts.feishu.cn", "accounts.larksuite.com", "open.feishu.cn", "open.larksuite.com", "auth.openai.com", "chatgpt.com", "claude.ai", "console.anthropic.com", "platform.claude.com"]);
 const outputLimit = 64 * 1024;
 const generationPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// The legacy setup API and HTTP environment API own separate service instances.
+// Serialize the complete publish/verify/rollback transaction across both.
+const managedMutations = new Set<string>();
 
 type ManagedSelection =
   | { kind: "absent" | "disabled" | "invalid" }
@@ -42,6 +49,8 @@ export type EnvironmentServiceOptions = {
   path?: string;
   spawnProcess?: typeof spawnProcess;
   fetchLatest?: (name: string) => Promise<string | null>;
+  installSignal?: AbortSignal;
+  requireTrustedNpm?: boolean;
 };
 
 type ActiveOperation = {
@@ -60,6 +69,8 @@ export class EnvironmentService {
   private readonly searchPath: string;
   private readonly spawnProcess: typeof spawnProcess;
   private readonly fetchLatest: (name: string) => Promise<string | null>;
+  private readonly installSignal?: AbortSignal;
+  private readonly requireTrustedNpm: boolean;
   private active?: ActiveOperation;
   private lastOperation: EnvironmentOperation | null = null;
   private mutation = false;
@@ -70,6 +81,7 @@ export class EnvironmentService {
   private closePromise?: Promise<void>;
   /** Each launched tool process, with a promise that settles when its pipes close. */
   private readonly children = new Map<ChildProcess, Promise<void>>();
+  private readonly windowsChildren = new Map<ChildProcess, OwnedProviderProcess>();
   private readonly requests = new Set<Promise<unknown>>();
   private mcpService?: McpService;
 
@@ -83,6 +95,8 @@ export class EnvironmentService {
     this.searchPath = options.path ?? process.env.PATH ?? "";
     this.spawnProcess = options.spawnProcess ?? spawnProcess;
     this.fetchLatest = options.fetchLatest ?? latestVersion;
+    this.installSignal = options.installSignal;
+    this.requireTrustedNpm = options.requireTrustedNpm ?? false;
   }
 
   run(request: EnvironmentRequest): Promise<EnvironmentReply> {
@@ -118,15 +132,31 @@ export class EnvironmentService {
 
   private async drain(): Promise<void> {
     await Promise.allSettled([...this.requests]);
-    await Promise.all([...this.children.values()]);
+    const results = await Promise.allSettled([...this.children.values()]);
     for (const child of this.children.keys()) {
+      if (this.windowsChildren.has(child)) continue; // rejected unconfirmed cleanup is reported below
       while (this.groupAlive(child)) await new Promise(resolve => setTimeout(resolve, 50));
       this.children.delete(child);
     }
+    const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+    if (errors.length) throw new AggregateError(errors, '本机工具清理未完成。');
   }
 
   private launch(executablePath: string, args: string[], secret?: string, env?: NodeJS.ProcessEnv): ChildProcess {
     if (this.closing) throw new Error("本机环境正在退出。");
+    if (process.platform === 'win32' && this.spawnProcess === spawnProcess) {
+      const owner = new OwnedProviderProcess(executablePath, args, {
+        env: env ?? this.environment(executablePath), stdio: [secret === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      }, 'Environment tool');
+      const child = owner.child;
+      const closed = owner.exited.then(async () => {
+        try { await owner.close(); } catch (error) { if (!(error instanceof ProviderProcessExitError)) throw error; }
+      }, async error => { try { await owner.close(); } catch (cleanup) { if (owner.unconfirmedPid !== undefined) throw cleanup; } throw error; });
+      this.windowsChildren.set(child, owner); this.children.set(child, closed);
+      const forget = () => { if (owner.unconfirmedPid === undefined) { this.children.delete(child); this.windowsChildren.delete(child); } };
+      void closed.then(forget, forget);
+      return child;
+    }
     const child = this.spawnProcess(executablePath, args, {
       env: env ?? this.environment(executablePath), stdio: [secret === undefined ? "ignore" : "pipe", "pipe", "pipe"], detached: true,
     });
@@ -140,6 +170,7 @@ export class EnvironmentService {
   }
 
   private groupAlive(child: ChildProcess): boolean {
+    if (this.windowsChildren.has(child)) return true; // removed only after confirmed Job cleanup
     if (!child.pid) return false;
     try { process.kill(-child.pid, 0); return true; }
     catch (error) {
@@ -151,6 +182,8 @@ export class EnvironmentService {
   private async terminate(child: ChildProcess): Promise<void> {
     const closed = this.children.get(child);
     if (!closed) return;
+    const windows = this.windowsChildren.get(child);
+    if (windows) { await windows.close(); await closed; return; }
     for (const signal of ["SIGTERM", "SIGKILL"] as const) {
       if (this.groupAlive(child)) {
         const pid = child.pid;
@@ -239,7 +272,8 @@ export class EnvironmentService {
     const managed = selection.kind === "active" ? selection.executable : this.legacyManagedExecutable(tool);
     if (tool === "codex") {
       const selected = await this.resolveCodex();
-      return selected ? { executable: selected, ownership: selected === managed && selection.kind !== "disabled" && selection.kind !== "invalid" ? "managed" : "external" } : null;
+      const legacy = selection.kind === 'absent' ? managedCodexBin(join(this.getDataRoot(), 'codex-cli')) : null;
+      return selected ? { executable: selected, ownership: !process.env.CODEX_BIN && (selected === managed || selected === legacy) && selection.kind !== "disabled" && selection.kind !== "invalid" ? "managed" : "external" } : null;
     }
     if (selection.kind === "active") return { executable: managed, ownership: "managed" };
     if (selection.kind === "absent" && await executable(managed)) return { executable: managed, ownership: "managed" };
@@ -268,7 +302,7 @@ export class EnvironmentService {
   private async inspect(tool: EnvironmentTool): Promise<EnvironmentToolState> {
     const resolved = await this.resolveTool(tool);
     const managedVersion = await this.managedVersion(tool);
-    const result = resolved ? await this.command(resolved.executable, ["--version"], 5_000).catch(() => null) : null;
+    const result = resolved ? await this.command(resolved.executable, ["--version"], process.platform === 'win32' ? 20_000 : 5_000).catch(() => null) : null;
     const version = result?.exitCode === 0 ? result.stdout.match(/\b\d+\.\d+\.\d+(?:[-+][\w.-]+)?\b/)?.[0] ?? null : null;
     const compatibility = tool === "codex" && resolved ? { status: classifyCodexVersion(version), minimum: CODEX_MIN_VERSION, verified: CODEX_VERIFIED_VERSION } : undefined;
     const latest = await this.fetchLatest(tools[tool].package).catch(() => null);
@@ -279,10 +313,11 @@ export class EnvironmentService {
       version,
       managedVersion,
       latestVersion: latest,
-      updateAvailable: version && latest ? version !== latest : null,
+      updateAvailable: version && latest ? (tool === 'codex' ? compareCodexVersions(latest, version) > 0 : version !== latest) : null,
       canUninstall: Boolean(managedVersion),
       ...(tool === "claude" && resolved ? { runtimeStatus: result ? (result.exitCode === 0 ? "ready" as const : "failed" as const) : "unknown" as const } : {}),
       ...(compatibility ? { compatibility } : {}),
+      ...(tool === 'codex' && resolved ? codexSource(resolved.executable, resolved.ownership === 'managed') : {}),
     };
   }
 
@@ -290,6 +325,12 @@ export class EnvironmentService {
     const selection = await this.managedSelection(tool);
     if (selection.kind === "active") return selection.version;
     if (selection.kind !== "absent") return null;
+    if (tool === 'codex' && managedCodexBin(join(this.getDataRoot(), 'codex-cli'))) {
+      try {
+        const pointer = JSON.parse(await readFile(join(this.getDataRoot(), 'codex-cli', 'current.json'), 'utf8')) as {version?: unknown};
+        if (typeof pointer.version === 'string' && /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(pointer.version)) return pointer.version;
+      } catch { /* inspect the other legacy layout */ }
+    }
     const file = join(this.managedRoot(), "lib", "node_modules", tools[tool].package, "package.json");
     try {
       const body: unknown = JSON.parse(await readFile(file, "utf8"));
@@ -298,11 +339,32 @@ export class EnvironmentService {
     } catch { return null; }
   }
 
+  private managedMutationKey(tool: EnvironmentTool): string {
+    let root = resolve(this.getDataRoot());
+    const missing: string[] = [];
+    // Canonicalize the nearest existing parent too: on macOS /var aliases
+    // /private/var, and a first install has not created its data root yet.
+    for (;;) {
+      try { root = join(realpathSync.native(root), ...missing); break; }
+      catch {
+        const parent = dirname(root);
+        if (parent === root) { root = join(root, ...missing); break; }
+        missing.unshift(basename(root)); root = parent;
+      }
+    }
+    return `${process.platform === 'win32' ? root.toLowerCase() : root}:${tool}`;
+  }
+
   private install(tool: EnvironmentTool, update: boolean): Promise<EnvironmentReply> {
-    if (this.mutation || this.active) return Promise.resolve(refused("busy", "另一个本机环境操作正在进行。"));
+    const key = this.managedMutationKey(tool);
+    if (this.mutation || this.active || managedMutations.has(key)) return Promise.resolve(refused("busy", "另一个本机环境操作正在进行。"));
+    managedMutations.add(key);
     this.mutation = true;
     const id = randomUUID();
     const abort = new AbortController();
+    const cancel = () => abort.abort(this.installSignal?.reason);
+    this.installSignal?.addEventListener('abort', cancel, {once: true});
+    if (this.installSignal?.aborted) cancel();
     this.toolInstall = { kind: "running", id, tool, update, startedAt: Date.now() };
     this.installAbort = abort;
     const pending = this.performInstall(tool, update, abort.signal).then((reply) => {
@@ -313,6 +375,8 @@ export class EnvironmentService {
       this.toolInstall = { kind: abort.signal.aborted ? "cancelled" : "failed", id, message };
       return refused(abort.signal.aborted ? "install-cancelled" : "install-failed", message);
     }).finally(() => {
+      managedMutations.delete(key);
+      this.installSignal?.removeEventListener('abort', cancel);
       this.mutation = false;
       this.installAbort = undefined;
       this.installCompletion = undefined;
@@ -367,6 +431,13 @@ export class EnvironmentService {
       try {
         const after = await this.resolveTool(tool);
         selected = !signal.aborted && after?.ownership === "managed" && after.executable === bin;
+        // Automatic discovery may prefer a newer external install. Keep the verified
+        // managed release as a fallback without claiming that it replaced that CLI.
+        if (!signal.aborted && !selected && tool === 'codex' && after?.ownership === 'external' && !process.env.CODEX_BIN) {
+          const probe = await this.command(after.executable, ['--version'], 5_000, undefined, signal);
+          const activeVersion = probe.exitCode === 0 ? probe.stdout.match(/^codex-cli (\d+\.\d+\.\d+(?:-[\w.-]+)?)/)?.[1] : undefined;
+          selected = Boolean(activeVersion && compareCodexVersions(activeVersion, manifest.version) >= 0);
+        }
       } finally {
         if (!selected) {
           if (previousPointer === null) await rm(this.managedPointer(tool), { force: true });
@@ -374,20 +445,22 @@ export class EnvironmentService {
         }
       }
       if (!selected) return refused("install-not-selected", "当前 Vonvon Bot 未选用新版本，已保留原有工具；请检查 CODEX_BIN 等显式配置。");
-      return { kind: "applied", message: `${tools[tool].executable} ${manifest.version} 已${update ? "更新" : "安装"}。` };
+      return { kind: "applied", message: `${tools[tool].executable} ${manifest.version} 已${update ? "更新" : "安装"}。${tool === 'codex' ? '新会话会使用检测到的版本，正在执行的任务继续运行。' : ''}` };
     } finally {
       if (!exposed && this.children.size === 0) await rm(release, { recursive: true, force: true });
     }
   }
 
   private async uninstall(tool: EnvironmentTool): Promise<EnvironmentReply> {
-    if (this.mutation || this.active) return refused("busy", "另一个本机环境操作正在进行。");
+    const key = this.managedMutationKey(tool);
+    if (this.mutation || this.active || managedMutations.has(key)) return refused("busy", "另一个本机环境操作正在进行。");
+    managedMutations.add(key);
     this.mutation = true;
     try {
       if (!await this.managedVersion(tool)) return refused("external-install", "此工具不是 Vonvon Bot 托管的副本，不能卸载。");
       await this.publishManaged(tool, { schemaVersion: 1, tool, state: "disabled" });
       return { kind: "applied", message: "已停用 Vonvon Bot 托管的工具，其他安装不受影响。" };
-    } finally { this.mutation = false; }
+    } finally { this.mutation = false; managedMutations.delete(key); }
   }
 
   private async authStatus(tool: EnvironmentTool): Promise<EnvironmentReply> {
@@ -476,7 +549,9 @@ export class EnvironmentService {
     child.stdout?.on("data", consume);
     child.stderr?.on("data", consume);
     child.once("error", () => this.finishOperation(id, "failed", "无法启动授权或创建流程。"));
-    child.once("close", (exitCode) => this.finishOperation(id, exitCode === 0 ? "succeeded" : "failed", exitCode === 0 ? "操作已完成。" : "操作未完成，请重试。"));
+    child.once("close", (exitCode) => { void (this.children.get(child) ?? Promise.resolve()).then(
+      () => this.finishOperation(id, exitCode === 0 ? "succeeded" : "failed", exitCode === 0 ? "操作已完成。" : "操作未完成，请重试。"),
+      () => this.finishOperation(id, 'failed', '无法确认本机工具清理完成。')); });
     return { kind: "operation", operation: snapshot };
   }
 
@@ -508,6 +583,9 @@ export class EnvironmentService {
   }
 
   private async resolveNpm(): Promise<string | null> {
+    const trusted = !this.npmPath ? bundledNpmCli() : undefined;
+    if (trusted) return trusted;
+    if (this.requireTrustedNpm) return null;
     const candidates = [this.npmPath, join(dirname(this.nodePath), process.platform === "win32" ? "npm.cmd" : "npm"), ...this.searchPath.split(delimiter).filter(isAbsolute).map((directory) => join(directory, process.platform === "win32" ? "npm.cmd" : "npm"))];
     for (const candidate of candidates) if (candidate && await executable(candidate)) return candidate;
     return null;
@@ -516,10 +594,12 @@ export class EnvironmentService {
   /** `executablePath`'s own directory goes last on PATH: an nvm-installed tool's
    * `#!/usr/bin/env node` launcher needs the `node` next to it. */
   private environment(executablePath?: string): NodeJS.ProcessEnv {
+    const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows';
     return {
-      ...(process.platform === "win32" ? { ComSpec: process.env.ComSpec ?? win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe") } : {}),
+      ...(process.platform === "win32" ? { ComSpec: process.env.ComSpec ?? win32.join(systemRoot, "System32", "cmd.exe"), SystemRoot: systemRoot, WINDIR: systemRoot,
+        PATHEXT: process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD', TEMP: process.env.TEMP, TMP: process.env.TMP } : {}),
       HOME: this.home, USERPROFILE: this.home,
-      PATH: [dirname(this.nodePath), this.searchPath, "/usr/bin", "/bin", ...(executablePath && isAbsolute(executablePath) ? [dirname(executablePath)] : [])].join(delimiter),
+      PATH: [dirname(this.nodePath), this.searchPath, ...(process.platform === 'win32' ? [win32.join(systemRoot, 'System32'), systemRoot] : ["/usr/bin", "/bin"]), ...(executablePath && isAbsolute(executablePath) ? [dirname(executablePath)] : [])].join(delimiter),
       LANG: "en_US.UTF-8", LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1", LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1",
     };
   }
@@ -527,7 +607,10 @@ export class EnvironmentService {
   private command(executablePath: string, args: string[], timeoutMs: number, secret?: string, signal?: AbortSignal, env?: NodeJS.ProcessEnv): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
       signal?.throwIfAborted();
-      const child = this.launch(executablePath, args, secret, env);
+      const trustedNpm = executablePath === bundledNpmCli();
+      const child = trustedNpm
+        ? this.launch(this.nodePath, [executablePath, ...args], secret, {...(env ?? this.environment()), ELECTRON_RUN_AS_NODE: '1', npm_config_update_notifier: 'false'})
+        : this.launch(executablePath, args, secret, env);
       let stdout = "";
       let stderr = "";
       let bytes = 0;
@@ -557,7 +640,7 @@ export class EnvironmentService {
       child.stdout?.on("data", (chunk: Buffer | string) => collect(chunk, true));
       child.stderr?.on("data", (chunk: Buffer | string) => collect(chunk, false));
       child.once("error", () => finish(new Error("无法启动本机工具。")));
-      child.once("close", (code) => {if (!stoppingError) finish(undefined, code);});
+      child.once("close", (code) => {if (!stoppingError) void (this.children.get(child) ?? Promise.resolve()).then(() => finish(undefined, code), () => finish(new Error('无法确认本机工具清理完成。')));});
       signal?.addEventListener("abort", onAbort, { once: true });
       if (signal?.aborted) onAbort();
       if (secret !== undefined) child.stdin?.end(`${secret}\n`);

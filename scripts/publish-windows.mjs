@@ -1,12 +1,14 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, promisify } from 'node:util';
 import { assertCredentialEnvNames, cosCredentialEnvNames, loadPinnedSdk } from './release-cos-evidence.mjs';
 import { assertSecureTransport, cachePolicy } from './verify-public-release.mjs';
 import { validateWindowsInventory, verifyWindowsArtifacts } from './package-windows.mjs';
+import { resolveDownloadEnvironment } from './release-network.mjs';
+import { signWindowsUpdate, verifyWindowsUpdate, publicKeyFromPrivate, normalizeWindowsPublicKey } from './windows-update-signing.mjs';
 
 const exec = promisify(execFile);
 const repository = 'modelzen/vonvon-bot';
@@ -33,19 +35,19 @@ export function validateBuildRun(run) {
 export async function readWindowsCosConfig(path) {
   if (!isAbsolute(path ?? '')) throw new Error('Use an absolute external --cos-config path');
   const config = JSON.parse(await readFile(path, 'utf8'));
-  const fields = ['bucket', 'region', 'prefix', 'publicBaseURL', 'secretIdEnv', 'secretKeyEnv', 'securityTokenEnv', 'sdkModule'];
+  const fields = ['bucket', 'region', 'prefix', 'publicBaseURL', 'secretIdEnv', 'secretKeyEnv', 'securityTokenEnv', 'sdkModule', 'updatePrivateKeyFile'];
   if (!config || Object.keys(config).some(key => !fields.includes(key)) ||
       !/^[a-z0-9-]+-\d+$/.test(config.bucket ?? '') || !/^[a-z]+-[a-z]+(?:-\d+)?$/.test(config.region ?? '') ||
       config.prefix !== 'bot/windows/' || config.publicBaseURL !== baseURL || !config.secretIdEnv || !config.secretKeyEnv) {
     throw new Error('Windows COS config must specify bot/windows/ and its fixed public base URL, with credential variable names only');
   }
   assertCredentialEnvNames(config);
+  if (config.updatePrivateKeyFile !== undefined && !isAbsolute(config.updatePrivateKeyFile)) throw new Error('Windows update signing key must use an absolute external file path');
   return config;
 }
 
 export function windowsObjectPlan(inventory) {
   validateWindowsInventory(inventory);
-  if (inventory.signed !== false || inventory.updatesEnabled !== false) throw new Error('This publisher handles unsigned manual downloads only');
   return inventory.artifacts.filter(item => item.kind !== 'feed').map(item => ({
     ...item, key: `bot/windows/${inventory.version}/${item.file}`,
     url: `${baseURL}${inventory.version}/${item.file}`, contentType: mime[item.kind],
@@ -57,7 +59,7 @@ async function ghJSON(args, env) {
   return JSON.parse(result.stdout);
 }
 
-export async function downloadBuild({ runId, out, env, execute = exec, api = ghJSON, expectedSha, expectedVersion }) {
+export async function downloadBuild({ runId, out, env, execute = exec, api = ghJSON, expectedSha, expectedVersion, downloadEnvironment = resolveDownloadEnvironment }) {
   if (!/^[1-9]\d*$/.test(String(runId))) throw new Error('Use a GitHub Actions --run-id');
   const run = await api(['api', `repos/${repository}/actions/runs/${runId}`], env);
   const sourceSha = validateBuildRun(run);
@@ -81,7 +83,14 @@ export async function downloadBuild({ runId, out, env, execute = exec, api = ghJ
   if (!entries?.length) {
     const staging = await mkdtemp(join(dirname(out), '.windows-download-'));
     try {
-      await execute('gh', ['run', 'download', String(runId), '--repo', repository, '--name', artifacts[0].name, '--dir', staging], { env });
+      const downloadEnv = await downloadEnvironment(env);
+      try {
+        await execute('gh', ['run', 'download', String(runId), '--repo', repository, '--name', artifacts[0].name, '--dir', staging],
+          { env: downloadEnv, timeout: 15 * 60_000, maxBuffer: 1024 * 1024 });
+      } catch (error) {
+        if (error.killed) throw new Error('Windows artifact download exceeded 15 minutes; check the configured network route, then resume the same release and run. No rebuild or publication was started.');
+        throw new Error('Windows artifact download failed; check the configured network route, then resume the same release and run. Partial download was discarded; no rebuild or publication was started.');
+      }
       await verifyWindowsArtifacts(staging, { sourceSha, version: expectedVersion });
       await writeFile(join(staging, 'github-build.json'), json({ runId: Number(runId), runAttempt: run.run_attempt, sourceSha, workflowSha: run.head_sha, artifactId: artifacts[0].id, artifactName: artifacts[0].name, artifactDigest: artifacts[0].digest, url: run.html_url }), { flag: 'wx' });
       if (entries) await rmdir(out); // Only an empty dedicated destination can be removed.
@@ -125,7 +134,16 @@ export async function verifyWindowsPublic(objects, { fetchImpl = fetch } = {}) {
   return results;
 }
 
-export async function publishWindowsObjects({ out, inventory, config, client, fetchImpl = fetch, log = console.log }) {
+async function assertNotCancelled(cancelFile) {
+  if (cancelFile === undefined) return;
+  if (!isAbsolute(cancelFile)) throw new Error('Use an absolute --cancel-file path');
+  try { await access(cancelFile); }
+  catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  throw new Error('Windows publication stopped by CANCEL before writing the next object.');
+}
+
+export async function publishWindowsObjects({ out, inventory, config, client, fetchImpl = fetch, log = console.log, cancelFile }) {
+  await assertNotCancelled(cancelFile);
   const lockPath = join(out, '.windows-publish.lock');
   const lock = await open(lockPath, 'wx');
   try {
@@ -135,6 +153,7 @@ export async function publishWindowsObjects({ out, inventory, config, client, fe
     if (!configuration || typeof configuration !== 'object' || Array.isArray(configuration) || !['', undefined].includes(configuration.Status)) throw new Error('Bucket versioning must never have been enabled for atomic overwrite protection');
     const objects = windowsObjectPlan(inventory);
     for (const object of objects) {
+      await assertNotCancelled(cancelFile);
       // Rehash immediately before writing; mutable local files cannot bypass the verified inventory.
       const body = await readFile(join(out, object.file));
       if (body.length !== object.bytes || hash(body) !== object.sha256) throw new Error(`Local file changed: ${object.file}`);
@@ -147,29 +166,118 @@ export async function publishWindowsObjects({ out, inventory, config, client, fe
         continue;
       }
       log(`Uploading ${object.file} (${object.bytes} bytes)`);
+      await assertNotCancelled(cancelFile);
       await call(client, 'putObject', { ...target, Key: object.key, Body: body, ContentLength: body.length,
         ContentMD5: hash(body, 'md5', 'base64'), ContentType: object.contentType, CacheControl: immutable,
         Headers: { 'x-cos-forbid-overwrite': 'true' } });
     }
+    await assertNotCancelled(cancelFile);
     const verified = await verifyWindowsPublic(objects, { fetchImpl });
     const receipt = { version: inventory.version, sourceSha: inventory.sourceSha, architecture: inventory.architecture, signed: false,
-      updatesEnabled: false, verifiedAt: new Date().toISOString(), objects: verified };
+      updatesEnabled: inventory.updatesEnabled, verifiedAt: new Date().toISOString(), objects: verified };
+    await assertNotCancelled(cancelFile);
     await writeFile(join(out, 'windows-publish-receipt.json'), json(receipt));
     return receipt;
   } finally { await lock.close(); await unlink(lockPath); }
 }
 
+/** Prepare exact signed bytes locally; stable URLs are part of the owner-reviewed plan. */
+export async function planWindowsUpdates({ out, inventory, env = process.env, privateKeyFile, notes, previous, fetchImpl = fetch }) {
+  validateWindowsInventory(inventory);
+  if (!inventory.updatesEnabled) return [];
+  const feeds = [];
+  for (const architecture of ['x64', 'arm64']) {
+    const installer = windowsObjectPlan(inventory).find(item => item.file === `Vonvon-Bot-Setup-${inventory.version}-${architecture}.exe`);
+    if (!installer) throw new Error('Both native Windows installers are required for update publication');
+    const file = `update-${architecture}.json`, path = join(out, file);
+    let body;
+    try { body = await readFile(path); }
+    catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      const privatePath = env.VONVON_WINDOWS_UPDATE_PRIVATE_KEY_FILE ?? privateKeyFile;
+      if (!isAbsolute(privatePath ?? '')) throw new Error('Configure an external VONVON_WINDOWS_UPDATE_PRIVATE_KEY_FILE before planning Windows updates');
+      const privateKey = await readFile(privatePath, 'utf8');
+      if (publicKeyFromPrivate(privateKey) !== normalizeWindowsPublicKey(inventory.publicKey)) throw new Error('Windows signing key does not match the key embedded in this candidate');
+      body = Buffer.from(json(signWindowsUpdate({ schemaVersion: 1, product: 'vonvon-bot', version: inventory.version, architecture,
+        url: installer.url, size: installer.bytes, sha512: installer.sha512, ...(notes ? { notes } : {}) }, privateKey)));
+      await writeFile(path, body, { flag: 'wx' });
+    }
+    const payload = verifyWindowsUpdate(JSON.parse(body), inventory.publicKey, architecture);
+    if (payload.version !== inventory.version || payload.url !== installer.url || payload.size !== installer.bytes || payload.sha512 !== installer.sha512 || payload.notes !== (notes || undefined)) throw new Error('Signed Windows update differs from this candidate');
+    const url = `${baseURL}stable/${architecture}/update.json`;
+    const saved = previous?.find(item => item.architecture === architecture);
+    const snapshot = saved?.previous ?? await windowsFeedSnapshot(url, fetchImpl);
+    if (snapshot.status === 200) verifyWindowsUpdate(JSON.parse(Buffer.from(snapshot.body, 'base64')), inventory.publicKey, architecture);
+    if (snapshot.status === 200 && snapshot.version && compareVersion(snapshot.version, inventory.version) >= 0 && snapshot.sha256 !== hash(body)) throw new Error('Windows stable would not advance; review its existing version');
+    feeds.push({ architecture, file, key: `bot/windows/stable/${architecture}/update.json`, url, bytes: body.length, sha256: hash(body), previous: snapshot });
+  }
+  return feeds;
+}
+const compareVersion = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
+async function windowsFeedSnapshot(url, fetchImpl) {
+  const response = await fetchImpl(url, { redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(15000) });
+  if (response.status === 404) return { status: 404 };
+  if (response.status !== 200 || response.redirected) throw new Error('Cannot read the existing Windows update feed');
+  if (!response.body) throw new Error('Windows update feed has no body');
+  const chunks = []; let size = 0;
+  for await (const chunk of response.body) { size += chunk.length; if (size > 32768) throw new Error('Windows update feed is too large'); chunks.push(Buffer.from(chunk)); }
+  const body = Buffer.concat(chunks);
+  let version;
+  try { version = JSON.parse(Buffer.from(JSON.parse(body).payload, 'base64')).version; } catch { /* Preserve unknown old bytes as the snapshot. */ }
+  return { status: 200, bytes: body.length, sha256: hash(body), body: body.toString('base64'), ...typeof version === 'string' && /^\d+\.\d+\.\d+$/.test(version) ? { version } : {} };
+}
+/** Called only by the unified reviewed promote stage, after public installer verification. */
+export async function promoteWindowsUpdates({ out, inventory, feeds, config, env = process.env, ownerConfirmation, planSHA256, notes, client, fetchImpl = fetch, cancelFile }) {
+  if (!inventory.updatesEnabled) return;
+  const expected = await planWindowsUpdates({ out, inventory, env, privateKeyFile: config.updatePrivateKeyFile, notes, previous: feeds, fetchImpl });
+  if (json(expected) !== json(feeds) || !/^[a-f0-9]{64}$/.test(planSHA256 ?? '')) throw new Error('Windows update plan changed since owner review');
+  await verifyWindowsPublic(windowsObjectPlan(inventory), { fetchImpl });
+  const receipt = { version: inventory.version, sourceSha: inventory.sourceSha, updatesEnabled: true, planSHA256, feeds: [], ownerConfirmation };
+  for (const feed of feeds) {
+    await assertNotCancelled(cancelFile);
+    const body = await readFile(join(out, feed.file));
+    if (body.length !== feed.bytes || hash(body) !== feed.sha256) throw new Error('Local Windows update feed changed after review');
+    const live = await windowsFeedSnapshot(feed.url, fetchImpl);
+    if (live.status !== 200 || live.sha256 !== feed.sha256 || live.bytes !== feed.bytes) {
+      if (!ownerConfirmation?.trim()) throw new Error('Windows stable requires the owner confirmation for this reviewed candidate');
+      if (json(live) !== json(feed.previous)) throw new Error('Windows stable changed since review; nothing was overwritten');
+      if (!client) {
+        for (const name of cosCredentialEnvNames(config)) if (!env[name]) throw new Error('Windows publication credentials are unavailable');
+        const COS = await loadPinnedSdk(config.sdkModule);
+        client = new COS({ SecretId: env[config.secretIdEnv], SecretKey: env[config.secretKeyEnv], ...(config.securityTokenEnv ? { SecurityToken: env[config.securityTokenEnv] } : {}), Protocol: 'https:', Timeout: 300000 });
+      }
+      // The public byte snapshot is read immediately before each replacement, as for Mac stable.
+      await assertNotCancelled(cancelFile);
+      if (json(await windowsFeedSnapshot(feed.url, fetchImpl)) !== json(feed.previous)) throw new Error('Windows stable changed immediately before publication');
+      await writeFile(join(out, 'windows-update-publish-receipt.json'), json({ ...receipt, status: 'feed-write-started' }));
+      await call(client, 'putObject', { Bucket: config.bucket, Region: config.region, Key: feed.key, Body: body, ContentLength: body.length,
+        ContentMD5: hash(body, 'md5', 'base64'), ContentType: 'application/json', CacheControl: 'no-cache',
+        ...(feed.previous.status === 404 ? { Headers: { 'x-cos-forbid-overwrite': 'true' } } : {}) });
+    }
+    const verified = await windowsFeedSnapshot(feed.url, async (...args) => { const response = await fetchImpl(...args); if (response.status === 200) {
+      if (response.headers.get('content-type')?.split(';')[0] !== 'application/json') throw new Error('Windows update feed Content-Type mismatch');
+      cachePolicy(response.headers, 'manifest');
+    } return response; });
+    if (verified.status !== 200 || verified.sha256 !== feed.sha256 || verified.bytes !== feed.bytes) throw new Error('Windows feed public verification failed; resume the same reviewed plan');
+    receipt.feeds.push({ architecture: feed.architecture, url: feed.url, bytes: feed.bytes, sha256: feed.sha256 });
+  }
+  await assertNotCancelled(cancelFile);
+  await writeFile(join(out, 'windows-update-publish-receipt.json'), json({ ...receipt, status: 'published' }));
+  return receipt;
+}
+
 async function main() {
   const { values } = parseArgs({ options: {
     'run-id': { type: 'string' }, out: { type: 'string' }, 'cos-config': { type: 'string' }, sha: { type: 'string' }, version: { type: 'string' },
-    'download-only': { type: 'boolean' }, help: { type: 'boolean' },
+    'download-only': { type: 'boolean' }, 'cancel-file': { type: 'string' }, help: { type: 'boolean' },
   } });
   if (values.help) {
-    console.log('node scripts/publish-windows.mjs --run-id ID --out /absolute/evidence --cos-config /absolute/windows-cos.json [--download-only]\nDownloads a successful trusted Windows Actions artifact, verifies it, uploads versioned unsigned downloads and fully verifies public bytes. Never writes stable/latest.yml or changes the website.');
+    console.log('node scripts/publish-windows.mjs --run-id ID --out /absolute/evidence --cos-config /absolute/windows-cos.json [--download-only] [--cancel-file /absolute/CANCEL]\nDownloads a successful trusted Windows Actions artifact, verifies it, uploads versioned unsigned downloads and fully verifies public bytes. Never writes stable/latest.yml or changes the website.');
     return;
   }
   assertSecureTransport();
   if (!isAbsolute(values.out ?? '')) throw new Error('Supply an absolute dedicated --out directory');
+  await assertNotCancelled(values['cancel-file']);
   const out = resolve(values.out);
   const config = values['download-only'] ? undefined : await readWindowsCosConfig(values['cos-config']);
   const privateNames = config ? cosCredentialEnvNames(config) : [];
@@ -180,7 +288,7 @@ async function main() {
   const COS = await loadPinnedSdk(config.sdkModule);
   const client = new COS({ SecretId: process.env[config.secretIdEnv], SecretKey: process.env[config.secretKeyEnv],
     ...(config.securityTokenEnv ? { SecurityToken: process.env[config.securityTokenEnv] } : {}), Protocol: 'https:', Timeout: 300000 });
-  console.log(json(await publishWindowsObjects({ out, inventory, config, client })));
+  console.log(json(await publishWindowsObjects({ out, inventory, config, client, cancelFile: values['cancel-file'] })));
 }
 
 const invokedPath = process.argv[1] ? await realpath(resolve(process.argv[1])).catch(() => null) : null;

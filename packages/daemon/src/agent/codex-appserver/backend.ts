@@ -34,7 +34,7 @@ import { connectGated, refillWarmPool, takeWarmClient, utilityRequest } from './
 import { mapChildNotification, mapNotification, readSubAgentActivity, readSubagentSpawn, type Child } from './event-map';
 import { runCodexJudge } from './judge-process';
 import { CodexFullOnlyError, codexTierUnavailable, type WindowsSandboxCapability } from './full-only';
-import { cachedCodexVersion, codexVersionAsync, resolveCodexBin } from './locate';
+import { cachedCodexVersion, codexVersionAsync, refreshCodexResolution, resolveCodexBin } from './locate';
 import { cachedWindowsSandbox, refreshWindowsSandbox, windowsShellPath } from './windows-sandbox';
 import type { ServerNotification, Thread, ThreadItem, Turn, TurnStartResponse } from './protocol';
 import { codexModelCacheKey, codexRemoteCacheKey, constrainCodexModelTiers, discoverCodexModels } from './models';
@@ -75,10 +75,10 @@ export function sandboxParams(
 }
 
 /** Rebuilt for every start/resume; never persists workspace trust to user config. */
-export function codexSessionParams(opts: StartThreadOptions, version: string | null = null): Record<string, unknown> {
+export function codexSessionParams(opts: StartThreadOptions, version: string | null = null, selectedBin?: string | null): Record<string, unknown> {
   const profile = resolveSessionProfile(opts.profile, { additionalRoots: true });
   const roots = codexWorkspaceRoots(opts);
-  const bin = resolveCodexBin();
+  const bin = selectedBin === undefined ? resolveCodexBin() : selectedBin;
   const installRoot = bin && opts.mode !== 'full' ? codexInstallRoot(bin, roots) : undefined;
   const shell = bin && process.platform === 'win32' && (opts.mode ?? 'full') !== 'full' ? windowsShellPath(bin) : undefined;
   const shellRoot = shell ? codexShellReadRoot(shell, roots) : undefined;
@@ -795,9 +795,9 @@ export class CodexAppServerBackend implements AgentBackend {
     return reason;
   }
 
-  async refreshPermissions(opts?: { force?: boolean }): Promise<void> {
+  async refreshPermissions(opts?: { force?: boolean; selectedBin?: string | null }): Promise<void> {
     if (process.platform !== 'win32') return;
-    const bin = resolveCodexBin(opts);
+    const bin = opts?.selectedBin === undefined ? await refreshCodexResolution(opts) : opts.selectedBin;
     if (!bin) return;
     const version = await codexVersionAsync(bin, opts);
     // A version-only check is cheap and cannot accidentally start sandbox setup.
@@ -814,7 +814,7 @@ export class CodexAppServerBackend implements AgentBackend {
     // async 版本探测：DM 体检等卡片回调会 await 这里，同步 spawn 会冻结事件循环。
     // force 绕过 locate 模块缓存重新探测（体检要看「现在」的状态）。
     const probe = opts?.force ? { force: true as const } : undefined;
-    const bin = resolveCodexBin(probe);
+    const bin = await refreshCodexResolution(probe);
     if (!bin) {
       return {
         ok: false,
@@ -822,11 +822,11 @@ export class CodexAppServerBackend implements AgentBackend {
         hint: '未找到。设置 CODEX_BIN，或安装 @openai/codex，或装 Codex.app',
       };
     }
-    const version = await codexVersionAsync(bin, probe);
+    const version = await codexVersionAsync(bin, process.env.CODEX_BIN ? probe : undefined);
     if (!version) {
       return { ok: false, version: null, location: bin, hint: `codex --version 执行失败（${bin}）` };
     }
-    await this.refreshPermissions(opts);
+    await this.refreshPermissions({ ...opts, selectedBin: bin });
     return { ok: true, version, location: bin,
       ...(process.platform === 'win32' ? { hint: this.fullAccessOnly() } : {}) };
   }
@@ -842,8 +842,11 @@ export class CodexAppServerBackend implements AgentBackend {
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    const bin = resolveCodexBin();
+    const bin = await refreshCodexResolution();
     if (!bin) { this.modelCache = null; return []; }
+    // Explicit paths skip candidate ranking. Establish their version evidence
+    // before taking the catalog key, since discovery can read it for tier access.
+    await codexVersionAsync(bin);
     const priorCatalogPath = this.modelCatalogPath;
     const key = codexModelCacheKey(bin, priorCatalogPath);
     if (this.modelCache && this.modelCacheKey === key && Date.now() < this.modelCacheExpiresAt
@@ -1000,12 +1003,12 @@ export class CodexAppServerBackend implements AgentBackend {
     // Auto-compaction is codex's own default and stays on (s12): no
     // model_auto_compact_token_limit override, and newer codex caps any limit at
     // 90% of the window anyway.
-    const bin = resolveCodexBin();
+    const bin = await refreshCodexResolution();
     const version = bin ? await codexVersionAsync(bin) : null;
-    if (bin && process.platform === 'win32' && (opts.mode ?? 'full') !== 'full') await this.refreshPermissions();
-    const params = codexSessionParams(opts, version);
+    if (bin && process.platform === 'win32' && (opts.mode ?? 'full') !== 'full') await this.refreshPermissions({ selectedBin: bin });
+    const params = codexSessionParams(opts, version, bin);
     await admitCodexWorkspaceLayout(opts);
-    const client = await this.spawn(opts.cwd);
+    const client = await this.spawn(opts.cwd, bin);
     let nativeServiceTier: string | null | undefined;
     let res: { thread: { id: string } };
     try {
@@ -1021,12 +1024,12 @@ export class CodexAppServerBackend implements AgentBackend {
   }
 
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {
-    const bin = resolveCodexBin();
+    const bin = await refreshCodexResolution();
     const version = bin ? await codexVersionAsync(bin) : null;
-    if (bin && process.platform === 'win32' && (opts.mode ?? 'full') !== 'full') await this.refreshPermissions();
-    const params = codexSessionParams(opts, version);
+    if (bin && process.platform === 'win32' && (opts.mode ?? 'full') !== 'full') await this.refreshPermissions({ selectedBin: bin });
+    const params = codexSessionParams(opts, version, bin);
     await admitCodexWorkspaceLayout(opts);
-    const client = await this.spawn(opts.cwd);
+    const client = await this.spawn(opts.cwd, bin);
     let nativeServiceTier: string | null | undefined;
     let res: { thread: { id: string; turns?: Turn[] } };
     try {
@@ -1052,8 +1055,8 @@ export class CodexAppServerBackend implements AgentBackend {
       this.threadEffortSupport());
   }
 
-  private async spawn(cwd: string): Promise<AppServerClient> {
-    const bin = resolveCodexBin();
+  private async spawn(cwd: string, selectedBin?: string | null): Promise<AppServerClient> {
+    const bin = selectedBin === undefined ? await refreshCodexResolution() : selectedBin;
     if (!bin) throw new Error('codex CLI not found (set CODEX_BIN or install @openai/codex)');
     // 预热池（M-2）：取走（或扑空）都异步补位——下一个会话拿到的就是热进程
     // （MCP 已启动，thread/start 从 ~2.1s 冷路径降到 ~64ms）。热进程的 spawn

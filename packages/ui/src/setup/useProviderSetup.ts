@@ -5,7 +5,7 @@ import {providerAuthenticated, providerBackends, providerInstalled, providerSign
 
 type Models = Extract<CollaborationReply, {kind: 'providerModels'}>;
 type Install = Extract<EnvironmentReply, {kind: 'backendInstallStatus'}>['operation'];
-type Check = {state: 'checking' | 'ready' | 'unavailable'; provider: SetupProvider; signature: string; models?: Models['models']; message?: string};
+type Check = {state: 'checking' | 'ready' | 'unavailable'; provider: SetupProvider; signature: string; models?: Models['models']; message?: string; stale?: boolean};
 const errorText = (error: unknown) => error instanceof Error ? error.message : '操作未完成，请重试。';
 
 /** Owns only this Provider's UI. Native configuration is read, never replaced. */
@@ -15,6 +15,7 @@ export function useProviderSetup(provider: SetupProvider, snapshot: DesktopSnaps
   const [tools, setTools] = useState<EnvironmentToolState[]>([]);
   const [entry, setEntry] = useState<BackendEntry>();
   const [check, setCheck] = useState<Check>();
+  const lastModels = useRef<Models['models'] | undefined>(undefined);
   const [install, setInstall] = useState<Install>(null);
   const [toolInstall, setToolInstall] = useState<ToolInstallOperation | null>(null);
   const [login, setLogin] = useState<EnvironmentOperation | null>(null);
@@ -68,7 +69,8 @@ export function useProviderSetup(provider: SetupProvider, snapshot: DesktopSnaps
   const verify = useCallback(async () => {
     const mine = ++sequence.current;
     const currentRequest = () => mounted.current && providerNow.current === provider && mine === sequence.current;
-    setCheck({state: 'checking', provider, signature: ''});
+    const previous = provider === 'codex' ? lastModels.current : undefined;
+    setCheck({state: 'checking', provider, signature: '', models: previous, stale: Boolean(previous?.length)});
     setIssue('');
     try {
       // Claude's snapshot authentication is cached; ask the SDK explicitly first.
@@ -87,27 +89,31 @@ export function useProviderSetup(provider: SetupProvider, snapshot: DesktopSnaps
       const current = (await client.snapshot()).tools.find(item => item.tool === provider);
       if (!currentRequest()) return;
       const currentSignature = providerSignature(current);
-      const source = tools.find(item => item.tool === provider);
-      if (provider === 'claude' || current?.installation === 'installed' && (!tool || tool.installation === 'unknown' || !source || source.installation === 'missing')) {
+      // A manual model refresh also refreshes the selected executable's source,
+      // path and version. Do not decide from a stale tools closure.
+      if (provider === 'claude' || current?.installation === 'installed') {
         await readReplies([{type: 'scan'}], infoSequence);
         if (!currentRequest()) return;
       }
       if (!providerInstalled(current) || !providerAuthenticated(current)) {
-        if (currentRequest()) setCheck({state: 'unavailable', provider, signature: currentSignature, message: !current || current.installation === 'unknown' ? current?.message || '暂时无法确认安装状态，请重新检测。' : providerInstalled(current) && current.authentication === 'unknown' ? current.message : undefined});
+        if (currentRequest()) setCheck({state: 'unavailable', provider, signature: currentSignature, models: previous, stale: Boolean(previous?.length), message: !current || current.installation === 'unknown' ? current?.message || '暂时无法确认安装状态，请重新检测。' : providerInstalled(current) && current.authentication === 'unknown' ? current.message : undefined});
         return;
       }
       const models = await client.collaboration({action: 'providerModels', backend});
       if (!currentRequest()) return;
       if (models.kind !== 'providerModels') throw new Error('模型读取未完成，请重试。');
-      setCheck({state: models.state === 'ready' && models.models.length > 0 ? 'ready' : 'unavailable', provider, signature: currentSignature, models: models.models, message: models.message});
+      if (models.state === 'ready' && models.models.length > 0) {
+        if (provider === 'codex') lastModels.current = models.models;
+        setCheck({state: 'ready', provider, signature: currentSignature, models: models.models});
+      } else setCheck({state: 'unavailable', provider, signature: currentSignature, models: previous, stale: Boolean(previous?.length), message: models.message || (provider === 'codex' ? '模型读取失败，请重新刷新。' : undefined)});
     } catch (error) {
-      if (currentRequest()) setCheck({state: 'unavailable', provider, signature: '', message: errorText(error)});
+      if (currentRequest()) setCheck({state: 'unavailable', provider, signature: '', models: previous, stale: Boolean(previous?.length), message: errorText(error)});
     }
-  }, [client, provider, backend, accept, run, readReplies, tool, tools]);
+  }, [client, provider, backend, accept, run, readReplies]);
   // run is supplied by App and can change on every snapshot; keep effects tied to native state.
   const latest = useRef({read, pollStatus, verify}); latest.current = {read, pollStatus, verify};
   useEffect(() => {mounted.current = true; return () => {mounted.current = false; sequence.current++; infoSequence.current++; statusSequence.current++;};}, []);
-  useEffect(() => {sequence.current++; infoSequence.current++; statusSequence.current++; observedLoginId.current = undefined; observedToolInstallId.current = undefined; setCheck(undefined); setInstall(null); setToolInstall(null); setLogin(null); setEntry(undefined); setTools([]); setIssue(''); setPendingToolInstall(false); if (ready) {void latest.current.read(); void latest.current.verify();}}, [ready, provider]);
+  useEffect(() => {sequence.current++; infoSequence.current++; statusSequence.current++; observedLoginId.current = undefined; observedToolInstallId.current = undefined; lastModels.current = undefined; setCheck(undefined); setInstall(null); setToolInstall(null); setLogin(null); setEntry(undefined); setTools([]); setIssue(''); setPendingToolInstall(false); if (ready) {void latest.current.read(); void latest.current.verify();}}, [ready, provider]);
   const lastSignature = useRef(signature);
   useEffect(() => {
     if (lastSignature.current === signature) return;
@@ -135,6 +141,10 @@ export function useProviderSetup(provider: SetupProvider, snapshot: DesktopSnaps
   }
   async function installProvider(update = false) {
     if (!tool || tool.installation === 'unknown') {await verify(); return;}
+    if (provider === 'codex') {
+      const source = tools.find(item => item.tool === 'codex');
+      if (source?.installation === 'external' || source?.source === 'explicit') {await verify(); return;}
+    }
     sequence.current++; setCheck(undefined);
     const reply = await (provider === 'codex' ? installTool('codex', update) : request({type: 'backendInstall', id: backend, update}));
     if (!mounted.current || providerNow.current !== provider) return;

@@ -10,7 +10,7 @@ vi.mock('../src/core/logger', () => ({ log: logger }));
 // This file owns npm child lifetime checks; CLI selection/probing is exercised
 // with real executable fixtures in backend-codex-version.test.ts.
 vi.mock('../src/agent/codex-appserver/locate', () => ({
-  resolveCodexBin: () => null,
+  refreshCodexResolution: () => null, resolveCodexBin: () => null,
   cachedCodexVersion: () => undefined,
 }));
 

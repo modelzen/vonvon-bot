@@ -240,10 +240,12 @@ export async function startDesktop(): Promise<void> {
       quitting = true;
     };
     const updateStatePath = join(app.getPath('userData'), 'desktop-update-expected-version');
+    const windowsConfiguration = await windowsUpdateConfiguration({appPath:app.getAppPath(),isPackaged:app.isPackaged});
     const updater = process.platform === 'win32' ? new WindowsDesktopUpdater({
       current: app.getVersion(),
-      ...await windowsUpdateConfiguration({appPath:app.getAppPath(),isPackaged:app.isPackaged}),
-      driver: createWindowsUpdateDriver(),
+      ...windowsConfiguration,
+      driver: createWindowsUpdateDriver(windowsConfiguration.publicKey),
+      onUpdate: update => { if (!terminating && !cleanupPromise) bridge?.publishUpdate(noteUpdate(update)); },
       beforeInstall: beforeUpdateInstall, statePath:updateStatePath,
     }) : new DesktopUpdater({
       current: app.getVersion(), ...updateConfiguration, driver: autoUpdater,
@@ -627,7 +629,15 @@ export async function startDesktop(): Promise<void> {
       retryDesktopUpdate: async () => noteUpdate(await updater.retry()),
       installDesktopUpdate: async () => {
         if (quitRequested) throw new StartHostRefusal('Vonvon Bot 正在退出，请稍后再更新。');
-        try { return await updater.install(); }
+        try {
+          if (process.platform === 'win32' && (await updater.check()).state === 'downloaded') {
+            const choice = await dialog.showMessageBox(current, {type:'question',title:'安装更新',
+              message:'安装并重启 Vonvon Bot？', detail:'更新会短暂中断 Bot 的后台连接，正在运行的任务可能会中断。你可以选择稍后，等任务结束再安装。',
+              buttons:['安装并重启','稍后'],defaultId:1,cancelId:1,noLink:true});
+            if (choice.response !== 0) return updater.check();
+          }
+          return await updater.install();
+        }
         catch (error) {
           if (cleanupPromise) {
             terminating = true;
