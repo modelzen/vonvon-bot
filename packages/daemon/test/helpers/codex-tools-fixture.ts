@@ -60,7 +60,7 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
       send({ method: 'turn/completed', params: { threadId: p.threadId, turn: { id: 'goal-turn' } } });
     }).send();
   } else send({ id: m.id, result: {} });
-});
+}).on('close', () => process.exit(0));
 setInterval(() => {}, 1 << 30);
 `;
 
@@ -77,12 +77,15 @@ const dirs: string[] = [];
 /**
  * Every fake is stopped before its directory goes, the warm-pool one too: a fake whose script or note files are gone
  * exits with code 1, and the pool's shutdown that reports it is memoized, so every later test of the file fails too.
+ * A failed step does not skip the others: the error is thrown once everything is stopped and removed.
  */
 export async function closeCodexToolFixtures(): Promise<void> {
-  for (const close of threads.splice(0).reverse()) await close();
-  await shutdownResidentClients();
+  const errors: unknown[] = [];
+  for (const close of threads.splice(0).reverse()) await close().catch((error: unknown) => { errors.push(error); });
+  await shutdownResidentClients().catch((error: unknown) => { errors.push(error); });
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   vi.unstubAllEnvs();
+  if (errors.length) throw new AggregateError(errors, 'Codex tool fixture cleanup failed');
 }
 
 /** A real Codex backend and transport on the fake; the real registry with T3's schedule tools over a spied command core, and session_info, which Codex is not offered. */

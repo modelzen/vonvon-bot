@@ -138,7 +138,7 @@ describe('Codex backend native session titles', () => {
       config: expect.objectContaining({
         web_search: 'disabled',
         projects: { '/repo': { trust_level: 'trusted' } },
-        features: { memories: false },
+        features: { memories: false, in_app_local_automation: false },
         memories: { use_memories: false, generate_memories: false },
         apps: CONNECTOR_SCHEDULING_OFF.apps,
       }),
