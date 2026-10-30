@@ -802,7 +802,7 @@ owner 2026-10-30 定，一次做到位（第 11 节）。做法和切片在 `doc
 
 **限制。** 最短间隔 1 分钟；"每 N 分钟"从建（或改时间）的那一刻向上取整到整分起算，第一次是 N 分钟后，不对齐整点（Claude 定）。时区默认取 daemon 所在电脑的；桌面端按浏览器的时区建，聊天里说了别的时区就按说的填；每个任务记一个 IANA 时区名，以后电脑换时区也按原来的跑；描述里和电脑当前时区不同时标出来。任务名最多 40 字，任务内容最多 4000 字，一次性任务最远排到一年后，"每 N 分钟"最长 7 天（10080 分钟），cron 相邻两次之间不超过 400 天（每 4 年才有一次的 2 月 29 日这种建不了）；每个群每个 bot 最多 20 个任务，每个 bot 最多 200 个——防失控，不是额度（Claude 定）。同一时刻在跑的定时任务不超过并发上限的一半，多的排队（Claude 定）。
 
-**关掉两家自带的定时。** bot 的会话里关掉 Claude Code 的 `CronCreate`、`CronList`、`CronDelete`、`ScheduleWakeup`、`RemoteTrigger` 和自带的 `schedule`、`loop` 两个 skill；Codex 的 app-server 在没登录的探测里没有自动化工具，真实 ChatGPT 登录下的工具表在实现时再看一次，会话层仍把 `in_app_local_automation` 关掉，防以后的版本。定时只走 vonvon 的。这是对第 9 节第 19 项 owner 2026-10-15"两家都留着"的改动，只改这几个工具，连接器那一半不变。
+**关掉两家自带的定时。** bot 的会话里关掉 Claude Code 的 `CronCreate`、`CronList`、`CronDelete`、`ScheduleWakeup`、`RemoteTrigger` 和自带的 `schedule`、`loop` 两个 skill；Codex 的 app-server 在没登录的探测里没有自动化工具，真实 ChatGPT 登录下的工具表在实现时再看一次，会话层仍把 `in_app_local_automation` 关掉，防以后的版本。定时只走 vonvon 的。主人 ChatGPT 账号的连接器里在 ChatGPT 那边排定时的工具（ChatGPT Space 的页面自动化和自动更新、Sites 的定时），vonvon 看不到也停不了，也按工具关掉，连接器和其他工具照旧。这是对第 9 节第 19 项 owner 2026-10-15"两家都留着"的改动，只改这几个工具，连接器那一半不变。
 
 **两家的通路。** Claude 的任务工具在进程内 MCP 里；Codex 的用 app-server 的 dynamic tools，在线程创建时固定（3.7 第 2 条）。所以这个功能上线前已经开着的 Codex 会话没有任务工具，要等下一条新会话。
 
