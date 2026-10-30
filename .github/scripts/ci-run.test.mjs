@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { createPlan, packages, parseInputs, runPlan } from './ci-run.mjs';
+const sourceRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 const temporaryRoots = [];
 afterEach(() => {
@@ -59,6 +61,41 @@ test('full plan executes the root suite after the ordered workspace build', () =
   assert.deepEqual(plan.map(command => command.args), [
     ['run', 'build'], ['run', 'typecheck'], ['run', 'test'], ['run', 'lint'],
   ]);
+});
+
+test('Windows full builds and typechecks all packages, then runs supported acceptance tests', () => {
+  const plan = createPlan('full', packages, sourceRoot, 'win32');
+  assert.deepEqual(plan.slice(0, 3).map(command => command.args),
+    [['run', 'build'], ['run', 'typecheck'], ['run', 'lint']]);
+  assert.equal(plan.some(command => command.executable === 'npm' &&
+    command.args.join(' ') === 'run test'), false);
+  assert.equal(plan.filter(command => command.args.includes('run') && command.args.includes('test')).length, 5);
+});
+
+test('Windows affected scope runs only selected package tests, with targeted daemon and desktop cases', () => {
+  const plan = createPlan('affected', ['daemon', 'desktop'], sourceRoot, 'win32');
+  assert.deepEqual(plan[0].args, ['run', 'build']);
+  const packageTests = plan.filter(command => command.args.includes('test') && command.args.includes('--workspace'));
+  assert.deepEqual(packageTests.map(command => command.args[1]), ['packages/daemon', 'packages/desktop']);
+  assert.equal(packageTests[0].args.includes('test/windows-owned-process.test.ts'), true);
+  assert.equal(packageTests[1].args.includes('test/windows-updates.test.ts'), true);
+  const ordinary = createPlan('affected', ['protocol', 'client', 'ui'], sourceRoot, 'win32');
+  assert.deepEqual(ordinary.filter(command => command.args.includes('--workspace') && command.args.includes('test'))
+    .map(command => command.args), ['protocol', 'client', 'ui']
+    .map(name => ['--workspace', `packages/${name}`, 'run', 'test']));
+});
+
+test('Windows CI test lists match the existing release acceptance script exactly', () => {
+  const script = readFileSync(join(sourceRoot, 'scripts/build-windows.ps1'), 'utf8');
+  const invocations = [...script.matchAll(/Invoke-Node @\(([^)\n]+)\)/g)]
+    .map(([, body]) => [...body.matchAll(/'([^']+)'/g)].map(([, arg]) => arg));
+  const root = invocations.find(args => args[0] === '--test');
+  const daemon = invocations.find(args => args.includes('@vonvon/daemon'));
+  const desktop = invocations.find(args => args.includes('@vonvon/desktop'));
+  const plan = createPlan('full', packages, sourceRoot, 'win32');
+  assert.deepEqual(plan.find(command => command.executable === 'node').args, root);
+  assert.deepEqual(plan.find(command => command.args.includes('packages/daemon') && command.args.includes('test')).args.slice(5), daemon.slice(daemon.indexOf('--') + 1));
+  assert.deepEqual(plan.find(command => command.args.includes('packages/desktop') && command.args.includes('test')).args.slice(5), desktop.slice(desktop.indexOf('--') + 1));
 });
 
 test('missing workspace test script fails before any command runs', () => {

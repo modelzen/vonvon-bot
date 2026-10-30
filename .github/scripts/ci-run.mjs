@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -7,6 +7,13 @@ export const packages = Object.freeze(['protocol', 'client', 'daemon', 'ui', 'de
 const packageSet = new Set(packages);
 const scripts = ['typecheck', 'test', 'lint'];
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const windowsRootTests = ['stage-daemon', 'package-windows', 'windows-runtime-smoke', 'publish-windows']
+  .map(name => `scripts/${name}.test.mjs`);
+const windowsPackageTests = {
+  daemon: ['environment-windows-launch', 'provider/windows-command-line', 'provider/windows-supervisor',
+    'windows-owned-process', 'data-compatibility', 'register-bot'].map(name => `test/${name}.test.ts`),
+  desktop: ['windows-updates', 'tray', 'daemon-dependencies'].map(name => `test/${name}.test.ts`),
+};
 
 export function parseInputs(scope, rawPackages) {
   if (scope !== 'affected' && scope !== 'full') {
@@ -30,7 +37,7 @@ export function parseInputs(scope, rawPackages) {
   return { scope, selected };
 }
 
-export function createPlan(scope, selected, root = projectRoot) {
+export function createPlan(scope, selected, root = projectRoot, platform = process.platform) {
   const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
   const expectedWorkspaces = packages.map(name => `packages/${name}`);
   if (JSON.stringify(manifest.workspaces) !== JSON.stringify(expectedWorkspaces) ||
@@ -38,6 +45,23 @@ export function createPlan(scope, selected, root = projectRoot) {
     throw new Error('Root workspace build order differs from CI dependency order');
   }
   const plan = [{ executable: 'npm', args: ['run', 'build'] }];
+  if (platform === 'win32') {
+    for (const script of ['typecheck', 'lint']) {
+      if (scope === 'full') plan.push({ executable: 'npm', args: ['run', script] });
+      else for (const name of selected) plan.push({ executable: 'npm', args: ['--workspace', `packages/${name}`, 'run', script, '--if-present'] });
+    }
+    for (const path of windowsRootTests) if (!existsSync(join(root, path))) throw new Error(`Missing Windows test: ${path}`);
+    plan.push({ executable: 'node', args: ['--test', ...windowsRootTests] });
+    for (const name of selected) {
+      const workspace = `packages/${name}`;
+      const manifest = JSON.parse(readFileSync(join(root, workspace, 'package.json'), 'utf8'));
+      if (typeof manifest.scripts?.test !== 'string') throw new Error(`${workspace} has no test script`);
+      const paths = windowsPackageTests[name];
+      if (paths) for (const path of paths) if (!existsSync(join(root, workspace, path))) throw new Error(`Missing Windows test: ${workspace}/${path}`);
+      plan.push({ executable: 'npm', args: ['--workspace', workspace, 'run', 'test', ...(paths ? ['--', ...paths] : [])] });
+    }
+    return plan;
+  }
   if (scope === 'full') {
     for (const script of scripts) {
       if (typeof manifest.scripts?.[script] !== 'string') {
