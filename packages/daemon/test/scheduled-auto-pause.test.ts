@@ -27,6 +27,7 @@ const tail = '看一下：后端失败。到群设置的"任务"里能恢复。'
 let root: string;
 let o: ReturnType<typeof import('../src/bot/handle-message')['createOrchestrator']>;
 let scheduler: Scheduler | undefined;
+let clock = 0;
 const send = vi.fn(async (..._args: unknown[]) => ({ messageId: 'om_notice' }));
 
 beforeEach(async () => {
@@ -61,7 +62,8 @@ async function drive(seeded: StoredTask): Promise<ScheduleStore> {
   writeFileSync(file, JSON.stringify({ version: 1, tasks: [seeded] }));
   const { createScheduleStore } = await import('../src/bot/schedule/store');
   const { createScheduler: real } = await vi.importActual<typeof import('../src/bot/schedule/scheduler')>('../src/bot/schedule/scheduler');
-  const now = () => A + MIN + 1_000;
+  clock = A + MIN + 1_000;
+  const now = () => clock;
   const store = createScheduleStore(file, { now, log: fake.log, diagnostics: () => {} });
   scheduler = real({ ...fake.deps!, store, now, run: async () => ({ status: 'failed', error: '后端失败。', durationMs: 5, counts: true }) });
   await scheduler.start(await store.load());
@@ -93,6 +95,10 @@ it('a notice that was not sent stays pending and goes out at the next tick', asy
   await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
   await scheduler!.drain(1_000);
   expect(store.get('st_00000000000000a1')?.noticePending).toBe(true);
+  scheduler!.wake(); // tried 0 seconds ago: at most one try per 30 seconds
+  await scheduler!.drain(1_000);
+  expect(send).toHaveBeenCalledOnce();
+  clock += 30_000;
   scheduler!.wake();
   await vi.waitFor(() => expect(store.get('st_00000000000000a1')?.noticePending).toBeUndefined());
   expect(send).toHaveBeenCalledTimes(2);
