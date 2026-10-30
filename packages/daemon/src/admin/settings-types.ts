@@ -3,6 +3,7 @@ import type { ModelInfo, PermissionMode, ReasoningEffort } from '../agent/types'
 import type { NativeField, TierInfo } from '../agent/permission';
 import type { ModelDisplayMode, PendingPolicy, ResolvedCompletionReminderConfig } from '../config/schema';
 import type { VoiceAction, VoiceView } from '../voice/types';
+import type { JudgeModels, JudgeProvider } from '../judge/global-models';
 export type SettingsScope = {
   kind: 'host';
 } | {
@@ -46,7 +47,7 @@ export type JudgeSelection = {
   model: string;
 } | {
   kind: 'provider';
-  provider: 'codex-appserver' | 'claude-agent' | 'typesafe';
+  provider: JudgeProvider;
 };
 /** What a view shows: a known kind, or a stored kind this version does not know, as stored (never saved). */
 export type JudgeSelectionView = JudgeSelection | {
@@ -62,6 +63,8 @@ export type DecisionModelsView = Array<{
   keySet: boolean;
   /** the keystore could not be read, so whether the key is in is not known (keySet false) */
   keyUnreadable?: boolean;
+  /** Only custom services need a machine-wide request endpoint in addition to a key. */
+  endpointConfigured?: boolean;
 }>;
 export interface SmartPromptView {
   source: 'default' | 'bot' | 'group';
@@ -162,7 +165,7 @@ export interface HostSections {
   execution: {
     codexBin: string | null;
   };
-  judge: { defaultProvider?: 'codex-appserver' | 'claude-agent' | 'typesafe'; byProvider: Record<string, { model: string; effort?: ReasoningEffort; custom?: boolean }> };
+  judge: JudgeModels;
 }
 export type SettingsAccess = {
   kind: 'writable';

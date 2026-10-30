@@ -3,6 +3,7 @@ param(
   [Parameter(Mandatory)][string]$Out,
   [string]$SourceSha,
   [switch]$InstallDependencies,
+  [switch]$PackageOnly,
   [switch]$PauseForUi
 )
 $ErrorActionPreference = 'Stop'
@@ -35,10 +36,12 @@ New-Item -ItemType Directory -Path $buildHome | Out-Null
 $envFile = Join-Path $outPath 'build-env.json'
 @{ home = $buildHome; repo = $repo } | ConvertTo-Json | Set-Content -LiteralPath $envFile -Encoding utf8NoBOM
 if ($InstallDependencies) { Invoke-Node @('scripts/windows-build-tools.mjs','npm',$envFile,'ci') }
+# Compile the actual installer pages and launch tail before expensive product builds.
+Invoke-Node @('scripts/windows-installer-compile.mjs',(Join-Path $outPath 'installer-compile'),$Architecture)
 Invoke-Node @('scripts/windows-build-tools.mjs','npm',$envFile,'run','build')
 Invoke-Node @('scripts/windows-build-tools.mjs','npm',$envFile,'run','typecheck')
 Invoke-Node @('--test','scripts/stage-daemon.test.mjs','scripts/package-windows.test.mjs','scripts/windows-runtime-smoke.test.mjs','scripts/publish-windows.test.mjs')
-Invoke-Node @('scripts/windows-build-tools.mjs','npm',$envFile,'run','test','-w','@vonvon/daemon','--','test/environment-windows-launch.test.ts','test/provider/windows-command-line.test.ts','test/provider/windows-supervisor.test.ts','test/windows-owned-process.test.ts','test/data-compatibility.test.ts','test/register-bot.test.ts')
+Invoke-Node @('scripts/windows-build-tools.mjs','npm',$envFile,'run','test','-w','@vonvon/daemon','--','test/environment-windows-launch.test.ts','test/provider/windows-command-line.test.ts','test/provider/windows-supervisor.test.ts','test/windows-owned-process.test.ts','test/data-compatibility.test.ts','test/register-bot.test.ts','test/locate.test.ts','test/codex-version.test.ts','test/codex-managed-install.test.ts','test/codex-source.test.ts','test/appserver-pool.test.ts','test/environment-rpc.test.ts','test/codex-environment-install.test.ts','test/codex-windows-backend.test.ts')
 Invoke-Node @('scripts/windows-build-tools.mjs','npm',$envFile,'run','test','-w','@vonvon/desktop','--','test/windows-updates.test.ts','test/tray.test.ts','test/daemon-dependencies.test.ts')
 Assert-CleanSource
 $runtime = Join-Path $outPath 'electron-runtime'
@@ -64,28 +67,31 @@ $compiler = Get-ChildItem -LiteralPath $cache -Recurse -File -Filter makensis.ex
 $plugin = Get-ChildItem -LiteralPath $cache -Recurse -File -Filter StdUtils.dll | Where-Object { $_.Directory.Name -eq 'x86-unicode' } | Sort-Object FullName | Select-Object -First 1
 if (-not $compiler -or -not $plugin) { throw 'NSIS tools missing' }
 Invoke-Node @('scripts/windows-installer-smoke.mjs',$compiler.FullName,(Join-Path $repo 'node_modules/app-builder-lib/templates/nsis/include'),$plugin.Directory.FullName)
-$zip = Join-Path $packages "Vonvon-Bot-$version-windows-$Architecture.zip"
-$expanded = Join-Path $outPath 'zip'
-Expand-Archive -LiteralPath $zip -DestinationPath $expanded
-$zipExe = @(Get-ChildItem -LiteralPath $expanded -Recurse -File -Filter 'Vonvon Bot.exe')
-if ($zipExe.Count -ne 1) { throw 'ZIP application is ambiguous' }
 $unpacked = Join-Path $packages $(if ($Architecture -eq 'x64') {'win-unpacked'} else {'win-arm64-unpacked'})
 $unpackedExe = Join-Path $unpacked 'Vonvon Bot.exe'
 $update = Get-Content -LiteralPath 'packages/desktop/stage/dist/windows-update-config.json' -Raw | ConvertFrom-Json
-if (@($update.PSObject.Properties).Count -ne 0) { throw 'Unsigned candidate must have updates disabled' }
-foreach ($exe in @($unpackedExe, $zipExe[0].FullName)) {
+if (@($update.PSObject.Properties).Count -ne 1 -or -not $update.publicKey) { throw 'Windows candidate must embed its update verification public key' }
+foreach ($exe in @($unpackedExe)) {
   if ((Get-Item -LiteralPath $exe).VersionInfo.FileVersion -notmatch "^$([regex]::Escape($version))(\.0)?$") { throw 'Packaged application version mismatch' }
   if ((Get-AuthenticodeSignature -LiteralPath $exe).Status -ne 'NotSigned') { throw 'Expected unsigned application' }
 }
-if ((Get-FileHash -LiteralPath $unpackedExe).Hash -ne (Get-FileHash -LiteralPath $zipExe[0].FullName).Hash) { throw 'ZIP application differs from unpacked application' }
 Invoke-Node @('scripts/windows-build-tools.mjs','probe',$unpackedExe,$Architecture)
-Invoke-Node @('scripts/windows-runtime-smoke.mjs',(Split-Path $zipExe[0].FullName))
+Invoke-Node @('scripts/windows-runtime-smoke.mjs',$unpacked)
 $installer = Join-Path $packages "Vonvon-Bot-Setup-$version-$Architecture.exe"
 if ((Get-AuthenticodeSignature -LiteralPath $installer).Status -ne 'NotSigned') { throw 'Expected unsigned installer' }
+if ($PackageOnly) {
+  # Development handoff only: no product registry, shortcuts or installed app is touched.
+  # No release inventory/native acceptance report is produced, so publication cannot consume this output.
+  @{ version = $version; sourceSha = $sha; architecture = $Architecture; installer = $installer; acceptancePending = $true } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $outPath 'development-package.json') -Encoding utf8NoBOM
+  Set-Content -LiteralPath (Join-Path $outPath 'DO-NOT-PUBLISH') -Value 'Development package: native installation acceptance is pending.'
+  Assert-CleanSource
+  Write-Output "DEVELOPMENT PACKAGE ONLY: $version $Architecture $sha"
+  return
+}
 $acceptArgs = @{ Installer = $installer; Evidence = (Join-Path $outPath 'acceptance'); Architecture = $Architecture; SourceSha = $sha; ReferenceDirectory = $unpacked }
 if ($PauseForUi) { $acceptArgs.PauseForUi = $true }
 & (Join-Path $PSScriptRoot 'accept-windows.ps1') @acceptArgs
-Invoke-Node @('scripts/package-windows.mjs',$packages,$sha,(Join-Path $unpacked 'Vonvon Bot.exe'),$zipExe[0].FullName,$Architecture)
+Invoke-Node @('scripts/package-windows.mjs',$packages,$sha,(Join-Path $unpacked 'Vonvon Bot.exe'),$Architecture,(Join-Path $repo 'packages/desktop/stage/dist/windows-update-config.json'))
 Copy-Item -LiteralPath (Join-Path $outPath 'acceptance/acceptance.json') -Destination (Join-Path $packages "windows-acceptance-$Architecture.json")
 Assert-CleanSource
 Write-Output "BUILD AND ACCEPTANCE PASSED: $version $Architecture $sha"

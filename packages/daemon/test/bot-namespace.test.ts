@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -540,13 +540,17 @@ describe('s36c2d: deleted, moved and misplaced directories', () => {
     const root = await home();
     await successful(root, `${register('cli_groups123')}await ${bind()};await m.removeProject('Group');`);
     const group = join(root, 'projects/shared/groups/Group');
-    await removeOwned(group);
+    const original = await lstat(group, { bigint: true });
+    // Keep the original inode allocated so Linux cannot reuse it for the replacement.
+    await rename(group, `${group}-previous`);
     const full = `const fs=require('node:fs/promises');const oldRename=fs.rename;fs.rename=async(a,b)=>{
       if(String(b).endsWith('/bots.json')&&require('node:fs').existsSync(${JSON.stringify(group)}))throw Object.assign(Error('no space'),{code:'ENOSPC'});return oldRename(a,b)};`;
     const failed = await run(root, `try{await ${bind()}}catch(e){console.log(e.message);process.exitCode=1}`, full).done;
     expect(failed.code).toBe(1);
     expect(failed.stdout).toContain('ENOSPC');
     expect(await readdir(group)).toEqual([]);
+    const replacement = await lstat(group, { bigint: true });
+    expect([replacement.dev, replacement.ino]).not.toEqual([original.dev, original.ino]);
     const refused = await run(root, `try{await ${bind()}}catch(e){console.log(e.message);process.exitCode=1}`).done;
     expect(refused.code).toBe(1);
     expect(refused.stdout).toContain('或者上次重建目录后没登记完');

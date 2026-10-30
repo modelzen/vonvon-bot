@@ -4,6 +4,7 @@ import { availableParallelism } from 'node:os';
 // Real-process cases needed up to 60 s on the Windows CI runner and more than the vitest 5 s default on macOS and
 // Linux. Hooks get less than tests on Windows: a hook still waiting at 30 s holds a leaked process, not a slow one.
 const win32 = process.platform === 'win32';
+const linuxCI = process.platform === 'linux' && process.env.CI === 'true';
 
 export default defineConfig({
   test: {
@@ -12,8 +13,9 @@ export default defineConfig({
     // Many files launch several real provider/daemon children. Bound file-level
     // parallelism so their readiness checks do not compete with dozens of peers;
     // each test still exercises its own full process/concurrency behavior.
-    // Keep Vitest's CPU-minus-one default on smaller runners.
-    maxWorkers: win32 ? (process.env.CI === 'true' ? 1 : undefined) : Math.min(4, Math.max(1, availableParallelism() - 1)),
+    // A two-CPU Linux CI runner should use two workers rather than serializing
+    // every file. Keep the four-worker cap and local CPU-minus-one behavior.
+    maxWorkers: win32 ? (process.env.CI === 'true' ? 1 : undefined) : Math.min(4, Math.max(1, availableParallelism() - (linuxCI ? 0 : 1))),
     // Only our own unit tests. Without this, vitest also scans the vendored
     // reference project under docs/references/** (yepanywhere etc.), which has
     // its own deps/runtime and fails to collect.

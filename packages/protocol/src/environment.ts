@@ -74,6 +74,8 @@ export const environmentToolStateSchema = z.object({
   executable: z.string().nullable(), version: z.string().nullable(), managedVersion: z.string().nullable(),
   latestVersion: z.string().nullable(), updateAvailable: z.boolean().nullable(), canUninstall: z.boolean(),
   runtimeStatus: z.enum(["ready", "failed", "unknown"]).optional(),
+  source: z.enum(["app", "npm", "homebrew", "standalone", "explicit", "managed", "unknown"]).optional(),
+  updateInstructions: z.string().max(2000).optional(),
   compatibility: codexCompatibilitySchema.optional(),
 });
 export type EnvironmentToolState = z.infer<typeof environmentToolStateSchema>;

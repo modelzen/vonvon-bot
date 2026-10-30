@@ -8,4 +8,4 @@ Run `npm ci`, `npm run typecheck`, `npm test`, `npm run lint`, and `npm run buil
 
 The port is based on `modelzen/vonvon-bot` commit `fab5237`. `packages/protocol/test/fixtures/agent-settings.json` comes from that commit. The generated project-store fixture follows `scripts/native-fixtures.mjs` there and the reader in `modelzen/feishu-codex-bridge` commit `446b2a4`.
 
-双平台发布可使用[发布编排说明](docs/release-orchestration.md)：固定版本与 main SHA，同步调度 Windows 和串行 Mac 候选，查询状态、恢复中断并收集官网交接回执。上传、stable 与官网部署仍分阶段授权。
+双平台发布可使用[发布编排说明](docs/release-orchestration.md)：固定版本与 main SHA，同步调度 Windows 和串行 Mac 候选，查询状态、恢复中断并收集官网交接回执。正常发版默认使用该流程，Mac/Windows 上传由发布编排器并行处理；最终 stable 确认绑定展示过的候选，无需手抄 SHA。

@@ -84,7 +84,7 @@ describe('vonvon secrets (s23g)', () => {
     expect(h.code()).toBe(2);
     const named = context(() => view(service()));
     await runSecretsSet(KEY, [], {}, named.ctx);
-    expect(named.err()).toBe('不认识这个名字。能用的名字：typesafe-api-key（TypeSafe）\n');
+    expect(named.err()).toBe('不认识这个名字。能用的名字：typesafe-api-key（TypeSafe）、openrouter-api-key（OpenRouter）、vercel-api-key（Vercel）、custom-decision-api-key（自定义 Jev）\n');
     expect(named.code()).toBe(2);
     await runSecretsSet('typesafe-api-key', [], {}, h.ctx);
     expect(h.err()).toContain('没有存：key 只能是一串可见的英文字符');
