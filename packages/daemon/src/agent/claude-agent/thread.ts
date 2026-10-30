@@ -91,15 +91,18 @@ export const NATIVE_MEMORY_OFF = {
 /**
  * Claude Code's own scheduling, off in bot sessions: tasks go through vonvon's schedule tools only (3.13). The
  * tools are disallowed in thread.ts, not in permission.ts, whose full-access tier returns early; the bundled
- * `loop` and `schedule` skills still list after that, so they are turned off too.
+ * `loop` and `schedule` skills still list after that, so they are turned off too. CLAUDE_CODE_DISABLE_CRON is the
+ * second layer, here as well as in the child env: a user's or project's settings file `env` overrides the child
+ * env, and this layer wins over both (as for DISABLE_AUTO_COMPACT above).
  */
 export const NATIVE_SCHEDULING_TOOLS = ['CronCreate', 'CronList', 'CronDelete', 'ScheduleWakeup', 'RemoteTrigger'];
 export const NATIVE_SCHEDULING_SKILLS = ['loop', 'schedule'];
+export const NATIVE_SCHEDULING_ENV = { CLAUDE_CODE_DISABLE_CRON: '1' };
 
 export const AUTO_COMPACT_SETTINGS = {
   autoCompactEnabled: true,
   ...NATIVE_MEMORY_OFF,
-  env: { ...NATIVE_MEMORY_OFF.env, DISABLE_AUTO_COMPACT: '', DISABLE_COMPACT: '' },
+  env: { ...NATIVE_MEMORY_OFF.env, ...NATIVE_SCHEDULING_ENV, DISABLE_AUTO_COMPACT: '', DISABLE_COMPACT: '' },
   skillOverrides: Object.fromEntries(NATIVE_SCHEDULING_SKILLS.map(name => [name, 'off' as const])),
 } satisfies Options['settings'];
 

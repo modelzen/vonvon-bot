@@ -1,8 +1,9 @@
 import { fake, human, job, setup, thread, until } from './helpers/scheduled-run';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildRunCard, type RunCardState } from '../src/card/run-card';
 import { initialState, type RunState } from '../src/card/run-state';
 import { scheduledLabel } from '../src/bot/context-weave';
+import type { ScheduledOutcome } from '../src/bot/schedule/types';
 
 // 总设计 7.3: the small top line on a scheduled run's progress and final card; an empty one is kept as it is.
 const text = (card: unknown): string => JSON.stringify(card);
@@ -79,5 +80,43 @@ describe('a scheduled run\'s card', () => {
     expect(outcome).toMatchObject({ status: 'done', messageId: 'card' });
     expect((outcome as { link?: string }).link).toBe(link);
     expect(fake.messageGet).toHaveBeenCalledWith({ path: { message_id: 'card' } });
+  });
+
+  describe('when the link lookup does not answer', () => {
+    async function settling() {
+      current = await setup('single');
+      fake.messageGet.mockImplementation(() => new Promise(() => undefined));
+      const run = thread();
+      fake.backend.resumeThread.mockResolvedValue(run.t);
+      const result = current.runScheduled(job());
+      let outcome: ScheduledOutcome | undefined;
+      void result.then(settled => { outcome = settled; });
+      await until(() => expect(run.consumed).toHaveLength(1));
+      return { run, outcome: () => outcome };
+    }
+
+    it('gives up after 3 seconds and records the run without a link', async () => {
+      const { run, outcome } = await settling();
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldClearNativeTimers: true });
+      try {
+        run.turns[0]!.resolve();
+        await until(() => expect(fake.messageGet).toHaveBeenCalled());
+        await vi.advanceTimersByTimeAsync(2_900);
+        expect(outcome()).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(100);
+        expect(outcome()).toMatchObject({ status: 'done', messageId: 'card' });
+        expect(outcome()).not.toHaveProperty('link');
+      } finally { vi.useRealTimers(); }
+    });
+
+    it('a shutdown meanwhile records it at once without a link', async () => {
+      const { run, outcome } = await settling();
+      run.turns[0]!.resolve();
+      await until(() => expect(fake.messageGet).toHaveBeenCalled());
+      await current!.orchestrator.shutdown();
+      // Well before the lookup's own 3 seconds.
+      await until(() => expect(outcome()).toMatchObject({ status: 'done', messageId: 'card' }));
+      expect(outcome()).not.toHaveProperty('link');
+    });
   });
 });

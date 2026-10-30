@@ -99,6 +99,34 @@ describe('a scheduled turn dropped before it runs', () => {
     await until(() => expect(fake.send).toHaveBeenCalledWith('chat', { markdown: '❌ backend crashed' }, expect.anything()));
   });
 
+  it('arriving while a stopped turn winds down: interrupted by the user, and nobody is asked to resend', async () => {
+    const { orchestrator, runScheduled, run } = await start();
+    await orchestrator.onMessage(human('会被停下的一轮'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    await stop(); // the turn has not ended yet: abort does not end it
+    await expect(runScheduled(job())).resolves.toEqual({ status: 'interrupted', by: 'user' });
+    expect(JSON.stringify(fake.send.mock.calls)).not.toContain('重发');
+    run.turns[0]!.resolve();
+  });
+
+  it('queued behind a run waiting for a slot, whose queue card is stopped: interrupted by the user', async () => {
+    current = await setup('multi', { preferences: { maxConcurrentRuns: 1 } });
+    const busy = thread(), waiting = thread();
+    fake.backend.resumeThread.mockResolvedValueOnce(busy.t).mockResolvedValue(waiting.t);
+    fake.createCard.mockResolvedValueOnce('card-busy').mockResolvedValueOnce('card-waiting');
+    await current.orchestrator.onMessage(human('占着唯一的槽', 'topic-busy'));
+    await until(() => expect(busy.consumed).toHaveLength(1));
+    await current.orchestrator.onMessage(human('等槽', 'topic-old'));
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'run-queued', expect.anything()));
+    const result = current.runScheduled(job({ placement: { kind: 'topic', topicId: 'topic-old' } }));
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued', { depth: 1 }));
+    await stop('card-waiting');
+    await expect(result).resolves.toEqual({ status: 'interrupted', by: 'user' });
+    expect(waiting.consumed).toHaveLength(0);
+    expect(JSON.stringify(fake.send.mock.calls)).not.toContain('重发');
+    busy.turns[0]!.resolve();
+  });
+
   it('a group that changed since the gate: skipped, without a word', async () => {
     const { runScheduled } = await start();
     fake.project = { ...fake.project, enabled: false };
@@ -128,5 +156,19 @@ describe('a scheduled turn dropped before it runs', () => {
     swap(thread().t);
     await expect(result).resolves.toEqual({ status: 'skipped', reason: 'updating' });
     expect(JSON.stringify(fake.send.mock.calls)).not.toContain('之前发的');
+  });
+
+  it('held by a /new when the bot stops: the shutdown does not wait on it, and settles it after the drain', async () => {
+    const { orchestrator, runScheduled } = await start();
+    let swap!: (t: unknown) => void;
+    fake.backend.startThread.mockImplementationOnce(() => new Promise(resolve => { swap = resolve; }));
+    await orchestrator.onMessage({ ...human('/new'), createTime: Date.now() + 60_000 });
+    await until(() => expect(fake.backend.startThread).toHaveBeenCalled());
+    const result = runScheduled(job());
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'deferred', expect.anything()));
+    const stopping = orchestrator.shutdown();
+    swap(thread().t);
+    await stopping;
+    await expect(result).resolves.toEqual({ status: 'interrupted', by: 'shutdown' });
   });
 });
