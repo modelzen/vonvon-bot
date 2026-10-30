@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const detectState = { codexBin: null as string | null, codexVersion: null as string | null };
 
 vi.mock('../src/agent/codex-appserver/locate', () => ({
-  resolveCodexBin: vi.fn(() => detectState.codexBin),
+  refreshCodexResolution: vi.fn(() => detectState.codexBin), resolveCodexBin: vi.fn(() => detectState.codexBin),
   codexVersionAsync: vi.fn(async () => detectState.codexVersion),
   cachedCodexVersion: () => detectState.codexVersion ?? undefined,
 }));

@@ -5,7 +5,7 @@ import { codexFullOnlyReason, CodexFullOnlyError } from '../src/agent/codex-apps
 import { AUTO_COMPACT_RETIRED, buildGroupSettingsCard, buildPermissionCard, buildProjectSettingsCard, PERMISSION_CARD_VERSION } from '../src/card/dm-cards';
 import { permissionTable, type TableEnv } from '../src/agent/permission';
 
-vi.mock('../src/agent/codex-appserver/locate', () => ({ resolveCodexBin: () => '/fixture/codex', cachedCodexVersion: () => undefined }));
+vi.mock('../src/agent/codex-appserver/locate', () => ({ refreshCodexResolution: () => '/fixture/codex', resolveCodexBin: () => '/fixture/codex', cachedCodexVersion: () => undefined }));
 const CODEX_FULL_ONLY = codexFullOnlyReason('codex-cli 0.162.0');
 
 describe('effectiveMode', () => {

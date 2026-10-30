@@ -131,11 +131,12 @@ describe.skipIf(process.platform === 'win32')('POSIX setup child lifecycle', () 
 
   it('repeated detection cannot spawn a replacement while the old process group is still alive', async () => {
     const locate = await import('../src/agent/codex-appserver/locate');
-    vi.spyOn(locate, 'resolveCodexBin').mockReturnValue('/fixture/no-provider');
+    vi.spyOn(locate, 'refreshCodexResolution').mockResolvedValue('/fixture/no-provider');
     const { CodexSetupService } = await import('../src/agent/codex-appserver/setup');
     const value = new CodexSetupService();
     const pending = value.setup();
     const outcome = observe(pending.then(() => 'unexpected success'));
+    await vi.advanceTimersByTimeAsync(0);
     child.emit('error', new Error('fixture transport failed'));
     child.emit('exit', 0, null);
     child.emit('close', 0, null);

@@ -1,14 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, mkdtemp, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
-import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { paths } from '../../config/paths';
-import { bundledNpmCli } from '../../platform/npm';
-import { mergeProcessEnv } from '../../platform/spawn';
-import lock from './codex-install-lock.json';
 import { OwnedProviderProcess } from '../owned-process';
 
-export const CODEX_INSTALL_VERSION = '0.156.1';
 export const privateCodexBin = (prefix: string): string => join(prefix, 'node_modules', '.bin', process.platform === 'win32' ? 'codex.cmd' : 'codex');
 
 export function managedCodexBin(codexCliDir = paths.codexCliDir): string | null {
@@ -45,51 +40,25 @@ export async function runSetupChild(command: string, args: string[], options: { 
   }
 }
 
+/** Compatibility entry point for the original setup API; all installs share one engine. */
 export async function installManagedCodex(signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
   if (process.env.CODEX_BIN) throw new Error('当前使用显式 CODEX_BIN，请先移除此覆盖再安装托管 Codex');
-  const npmCli = bundledNpmCli();
-  if (!npmCli) throw new Error('找不到可信的 npm：桌面应用自带的 npm 不在，VONVON_NPM_CLI 也没有指向一个文件（要写绝对路径）');
-  const npm = await realpath(npmCli);
-  if (!(await stat(npm)).isFile()) throw new Error('可信 npm 路径不是文件');
-  const parent = await realpath(dirname(paths.appDir));
-  const live = await realpath(paths.appDir);
-  const stage = await mkdtemp(join(parent, '.vonvon-codex-stage-'));
-  const stagePath = await realpath(stage);
-  if (stagePath === live || stagePath.startsWith(live + sep)) throw new Error('安装暂存目录不能位于运行数据目录内');
-  const prefix = join(stagePath, 'install');
-  const generation = randomUUID();
-  let committed = false;
-  let release: string | undefined;
+  const [{ EnvironmentService }, { refreshCodexResolution }] = await Promise.all([
+    import('../../environment/service'), import('./locate'),
+  ]);
+  signal.throwIfAborted();
+  const service = new EnvironmentService({
+    home: homedir(), getDataRoot: () => paths.appDir, nodePath: process.execPath,
+    resolveCodex: () => refreshCodexResolution({ force: true }), installSignal: signal, requireTrustedNpm: true,
+  });
   try {
-    await mkdir(prefix, { mode: 0o700 });
-    await writeFile(join(prefix, 'package.json'), JSON.stringify({ private: true, dependencies: { '@openai/codex': CODEX_INSTALL_VERSION } }));
-    await writeFile(join(prefix, 'package-lock.json'), JSON.stringify(lock));
-    await writeFile(join(stagePath, 'npmrc'), '');
-    const env = mergeProcessEnv(process.env, { npm_config_userconfig: join(stagePath, 'npmrc'), npm_config_cache: join(stagePath, 'cache'), npm_config_update_notifier: 'false', ELECTRON_RUN_AS_NODE: '1' });
-    await runSetupChild(process.execPath, [npm, 'ci', '--prefix', prefix, '--ignore-scripts', '--no-audit', '--no-fund', '--registry=https://registry.npmjs.org', '--cache', join(stagePath, 'cache')], { cwd: prefix, signal, env });
-    const bin = privateCodexBin(prefix);
-    const executable = await realpath(bin);
-    const rel = relative(prefix, executable);
-    if (rel.startsWith('..') || isAbsolute(rel)) throw new Error('安装的 Codex 可执行文件越出私有目录');
-    const version = await runSetupChild(bin, ['--version'], { cwd: prefix, signal, timeoutMs: 20_000 });
-    if (version !== `codex-cli ${CODEX_INSTALL_VERSION}`) throw new Error('安装的 Codex 版本校验失败');
-    signal.throwIfAborted();
-    const releases = join(paths.codexCliDir, 'releases');
-    await mkdir(releases, { recursive: true, mode: 0o700 });
-    const releasesPath = await realpath(releases);
-    if (!releasesPath.startsWith(live + sep)) throw new Error('私有安装目录越出运行数据目录');
-    release = join(releasesPath, generation);
-    await rename(prefix, release);
-    signal.throwIfAborted();
-    const pointer = join(paths.codexCliDir, `current-${generation}.json`);
-    await writeFile(pointer, JSON.stringify({ generation, version: CODEX_INSTALL_VERSION }), { mode: 0o600 });
-    try {
+    const reply = await service.run({ type: 'install', tool: 'codex' });
+    if (reply.kind !== 'applied') {
       signal.throwIfAborted();
-      await rename(pointer, join(paths.codexCliDir, 'current.json'));
-      committed = true;
-    } finally { await rm(pointer, { force: true }); }
+      throw new Error(reply.kind === 'refused' ? reply.message : 'Codex 安装未完成');
+    }
   } finally {
-    if (!committed && release) await rm(release, { recursive: true, force: true });
-    await rm(stagePath, { recursive: true, force: true });
+    await service.close();
   }
 }
