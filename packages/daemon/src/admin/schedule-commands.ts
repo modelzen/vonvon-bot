@@ -54,21 +54,45 @@ const MAX_CREATOR_TEXT = 500; // scheduleCreatorSchema.text
 
 const refused = (reason: ScheduleRefusal, message: string): Refused => ({ kind: 'refused', reason, message });
 const refuse = (reason: FixedRefusal): Refused => refused(reason, scheduleRefusalMessages[reason]);
+/** The reply for a bot that is not running or is stopping: the supervisor, `vonvon run` and the orchestrator answer it themselves. */
+export const botNotRunning = (): Refused => refuse('bot-not-running');
 
 /** Thrown inside a store write to leave memory and the file as they were and answer with `reply` instead. */
 class Answer extends Error {
   constructor(readonly reply: ScheduleReply) { super(reply.kind); }
 }
 
-/** An `every` request without an anchor starts counting from the next whole minute (overview 4.1). */
+/** `every` counts from the next whole minute after it is made or its time changes (overview 4.1); a caller's anchor is never used. */
 function anchored(spec: ScheduleSpec, now: number): ScheduleSpec {
-  return spec.kind === 'every' && spec.anchor === undefined ? { ...spec, anchor: ceilToMinute(now) } : spec;
+  return spec.kind === 'every' ? { ...spec, anchor: ceilToMinute(now) } : spec;
 }
 
-/** Whether an edit changes when the task runs. Re-sending the same `every` without its anchor (a form saved as it was) does not. */
+/** Whether an edit changes when the task runs. Re-sending the same `every`, with or without the view's anchor, does not. */
 function sameSpec(next: ScheduleSpec, current: ScheduleSpec): boolean {
-  if (next.kind === 'every' && current.kind === 'every' && next.anchor === undefined) return next.minutes === current.minutes;
+  if (next.kind === 'every' && current.kind === 'every') return next.minutes === current.minutes;
   return isDeepStrictEqual(next, current);
+}
+
+/** A zone a request gives, as stored: one this Intl knows, and a place, not a bare UTC offset (3.13 records an IANA name). */
+function givenZone(zone: string): string | undefined {
+  let name: string;
+  try { name = normalizeTimeZone(zone); } catch { return undefined; }
+  return /^[+-]/.test(name) ? undefined : name;
+}
+const unknownZone = (zone: string): Refused => refused('bad-schedule', `不认识这个时区：${zone}`);
+
+/** The core does not trust its caller (T3): an actor outside the union, a caller's mapping bug, gets no rights. */
+const outsideUnion = (_actor: never): undefined => undefined;
+
+/** Who may create (3.13): the local owner, or a person with a role of the table. A chat role outside it (a bot's turn) may not. */
+function mayCreate(actor: ScheduleActor): actor is Creator {
+  switch (actor.kind) {
+    case 'local': return true;
+    // A member without an openId could never manage the task it made: no openId, no task.
+    case 'chat': return actor.role === 'owner' || actor.role === 'admin' || (actor.role === 'member' && !!actor.openId);
+    case 'scheduled': return false;
+    default: return outsideUnion(actor) ?? false;
+  }
 }
 
 function creator(actor: Creator): StoredTask['createdBy'] {
@@ -83,10 +107,14 @@ function creator(actor: Creator): StoredTask['createdBy'] {
 
 /** Section 3.13 "谁能做什么" for a task this group already has: who may touch it with `action`. */
 function denial(actor: ScheduleActor, action: TaskAction, task: StoredTask): FixedRefusal | undefined {
-  if (actor.kind === 'local') return undefined;
-  if (actor.kind === 'scheduled') return (action === 'edit' || action === 'delete') && task.id === actor.taskId ? undefined : 'scheduled-run-scope';
-  if (actor.role !== 'member') return undefined;
-  return actor.openId && task.createdBy.openId === actor.openId ? undefined : 'not-task-owner';
+  switch (actor.kind) {
+    case 'local': return undefined;
+    case 'scheduled': return (action === 'edit' || action === 'delete') && task.id === actor.taskId ? undefined : 'scheduled-run-scope';
+    case 'chat':
+      if (actor.role === 'owner' || actor.role === 'admin') return undefined;
+      return actor.role === 'member' && actor.openId && task.createdBy.openId === actor.openId ? undefined : 'not-task-owner';
+    default: return outsideUnion(actor) ?? 'not-task-owner';
+  }
 }
 
 /** The only entry that changes schedules.json on a user's behalf (terminal, desktop and agent tools). */
@@ -94,13 +122,15 @@ export function createScheduleCommands(deps: ScheduleCommandsDeps): ScheduleComm
   const { store, scheduler } = deps;
   const limits = deps.limits ?? { perChat: 20, perBot: 200 };
 
+  /** Never throws: a stored zone this Intl does not know (a hand edit, another ICU) leaves the next run unknown and is described in the host's zone. */
   function toView(task: StoredTask, now: number): ScheduledTaskView {
     const { cursor, inflight, noticePending: _pending, noticeSince: _since, ...stored } = task;
-    const nextRunAt = task.state === 'active' ? nextSlotAfter(task.spec, task.timeZone, cursor) : undefined;
-    return {
-      ...stored, botId: deps.botId, ...(nextRunAt === undefined ? {} : { nextRunAt }), running: !!inflight,
-      describe: describeSpec(task.spec, task.timeZone, deps.hostTimeZone(), now),
-    };
+    const host = deps.hostTimeZone();
+    let nextRunAt: number | undefined;
+    try { nextRunAt = task.state === 'active' ? nextSlotAfter(task.spec, task.timeZone, cursor) : undefined; } catch { nextRunAt = undefined; }
+    let describe: string;
+    try { describe = describeSpec(task.spec, task.timeZone, host, now); } catch { describe = describeSpec(task.spec, host, host, now); }
+    return { ...stored, botId: deps.botId, ...(nextRunAt === undefined ? {} : { nextRunAt }), running: !!inflight, describe };
   }
   const tasksReply = (tasks: StoredTask[], now: number): ScheduleReply => (
     { kind: 'tasks', tasks: tasks.map(task => toView(task, now)), now, timeZone: deps.hostTimeZone() }
@@ -128,12 +158,14 @@ export function createScheduleCommands(deps: ScheduleCommandsDeps): ScheduleComm
 
   function create(actor: Creator, request: Extract<ScheduleRequest, { action: 'create' }>, now: number): Promise<ScheduleReply> {
     const zone = request.timeZone ?? deps.hostTimeZone();
+    const timeZone = givenZone(zone);
+    if (timeZone === undefined) return Promise.resolve(unknownZone(zone));
     const spec = anchored(request.spec, now);
-    const invalid = validateSpec(spec, now, zone);
+    const invalid = validateSpec(spec, now, timeZone);
     if (invalid) return Promise.resolve(refused('bad-schedule', invalid));
     const task: StoredTask = {
       id: `st_${randomBytes(8).toString('hex')}`, chatId: request.chatId, revision: '', name: request.name, instruction: request.instruction,
-      spec, timeZone: normalizeTimeZone(zone), placement: request.placement ?? { kind: 'follow' }, state: 'active',
+      spec, timeZone, placement: request.placement ?? { kind: 'follow' }, state: 'active',
       createdBy: creator(actor), createdAt: now, updatedAt: now, cursor: now,
       counts: { runs: 0, missed: 0, skipped: 0, consecutiveFailures: 0 }, recent: [],
     };
@@ -155,17 +187,25 @@ export function createScheduleCommands(deps: ScheduleCommandsDeps): ScheduleComm
       const { patch } = request;
       const specChanged = patch.spec !== undefined && !sameSpec(patch.spec, task.spec);
       const spec = patch.spec && specChanged ? anchored(patch.spec, now) : task.spec;
-      const zone = patch.timeZone ?? task.timeZone;
-      if (specChanged || patch.timeZone !== undefined) {
-        const invalid = validateSpec(spec, now, zone);
+      // Only a zone the edit gives is normalized: a stored one this Intl does not know still lets the task be renamed.
+      let timeZone = task.timeZone;
+      if (patch.timeZone !== undefined) {
+        const given = givenZone(patch.timeZone);
+        if (given === undefined) throw new Answer(unknownZone(patch.timeZone));
+        timeZone = given;
+      }
+      const zoneChanged = timeZone !== task.timeZone;
+      // A zone alone does not move a once task's instant, so an edit that keeps the time is not refused for a past one.
+      if (specChanged) {
+        const invalid = validateSpec(spec, now, timeZone);
         if (invalid) throw new Answer(refused('bad-schedule', invalid));
       }
-      const timeZone = normalizeTimeZone(zone);
       // A new time starts from now: no catch-up of slots the old time had, a clean failure count, a finished task runs again.
-      if (specChanged || timeZone !== task.timeZone) {
+      if (specChanged || zoneChanged) {
         task.cursor = now;
         task.counts.consecutiveFailures = 0;
-        if (task.state === 'finished') task.state = 'active';
+        // Only once tasks finish, and a zone alone leaves a once task's instant in the past.
+        if (specChanged && task.state === 'finished') task.state = 'active';
       }
       task.spec = spec;
       task.timeZone = timeZone;
@@ -210,7 +250,11 @@ export function createScheduleCommands(deps: ScheduleCommandsDeps): ScheduleComm
       if (request.action === 'list') {
         return tasksReply(store.byChat(request.chatId).filter(task => actor.kind !== 'scheduled' || task.id === actor.taskId), now);
       }
-      if (request.action === 'create') return actor.kind === 'scheduled' ? refuse('no-human-create') : create(actor, request, now);
+      if (request.action === 'create') {
+        if (actor.kind === 'scheduled') return refuse('no-human-create');
+        // The nearest text of section 16: a chat role outside the table is a turn no present person started.
+        return mayCreate(actor) ? create(actor, request, now) : refuse('not-human-turn');
+      }
       // By id only among this group's tasks: another group's id reads as missing, not as forbidden.
       const task = store.get(request.taskId);
       if (!task || task.chatId !== request.chatId) return refuse('not-found');

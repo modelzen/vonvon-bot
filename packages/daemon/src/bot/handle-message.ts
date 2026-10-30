@@ -54,7 +54,7 @@ import { deniedScopeName, errorDetail, fitDetail, reportAttention, reportDecisio
 import { createScheduleStore } from './schedule/store';
 import { createScheduler } from './schedule/scheduler';
 import { hostTimeZone } from './schedule/time';
-import { createScheduleCommands } from '../admin/schedule-commands';
+import { botNotRunning, createScheduleCommands } from '../admin/schedule-commands';
 import type { StoredTask } from './schedule/types';
 import { createRunActivity } from './activity';
 import { createDroppedReplies, originFor, originOf, type DroppedOrigin } from './restart-dropped';
@@ -9363,6 +9363,10 @@ export function createOrchestrator(
     await loadStore();
     return scheduleCommands.execute({ kind: 'local', via }, request);
   };
+  /** Not admit: a stopping bot did nothing, so it says so as a refusal, not as a rejection the terminal reads as a result not known. */
+  const admittedSchedule = (via: 'desktop' | 'cli', request: ScheduleRequest): Promise<ScheduleReply> => (
+    shuttingDown ? Promise.resolve(botNotRunning()) : trackTask(schedule(via, request))
+  );
 
   const admittedCollaboration = admit(collaboration);
   /** s36d1: creations skip admit, whose shutdown refusal would read as a result not known; serialCreate refuses
@@ -9393,7 +9397,7 @@ export function createOrchestrator(
     adminExecute: admit(adminExecute),
     libraryExecute: admit(libraryExecute),
     settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },
-    schedule: admit(schedule),
+    schedule: admittedSchedule,
     scheduler: { start: async () => scheduler.start(await loadStore()), stop: () => scheduler.stop(), drain: ms => scheduler.drain(ms) },
     shutdown,
     saveDroppedSync: (why: 'shutdown' | 'crash') => droppedReplies?.saveSync(collectLost(), why),
