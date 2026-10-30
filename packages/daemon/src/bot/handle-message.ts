@@ -122,7 +122,7 @@ import { closeOwnedProviderProcesses } from '../agent/owned-process';
 import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
 import { JUDGE_NAMED_TIMEOUT_MS, createJudge } from '../judge/judge';
 import { createJudgeUsage } from '../judge/usage';
-import { installAtGuard, neutraliseAts } from '../card/at-guard';
+import { installAtGuard } from '../card/at-guard';
 import { isManaged, sendManagedCard, updateManagedCard } from '../card/managed';
 import { RunRender } from '../card/run-render';
 import { finalMessageText, initialState, markInterrupted, reduce, type RunState, type SubagentRow } from '../card/run-state';
@@ -330,6 +330,7 @@ import {
   scheduledLabel,
   scheduledOpening,
   scheduledRootText,
+  plainTaskName,
   type ContextMessage,
   type PullOpts,
   type RecordBlock,
@@ -780,8 +781,8 @@ interface ActiveState {
   triggerAt?: number;
   /** A scheduled turn is running: a message arriving now queues, never steers into it (总设计 7.1). */
   scheduled?: true;
-  /** A settings change closed this run's thread (evictLiveSessionsForChat): a scheduled turn queued behind is skipped, the
-   * group having changed. */
+  /** A settings change closed this run's thread (evictLiveSessionsForChat, or startReservedRun when it was closed before
+   * the run began): the turns queued behind are dropped, a scheduled one skipped, the group having changed. */
   evicted?: true;
 }
 
@@ -3094,9 +3095,9 @@ export function createOrchestrator(
     const now = Date.now();
     if (!reason || shuttingDown || now - (gateFailureNoted.get(task.id) ?? -Infinity) < 60 * 60_000) return;
     gateFailureNoted.set(task.id, now);
-    // A text message's `<at>` is a real mention, and the task's name is anybody's words (as the scheduled topic's root).
-    // Only the name: an unclosed tag would run to the end of the sentence.
-    const text = `⏰ 定时任务「${neutraliseAts(task.name, undefined)}」这次没跑：本群的权限档现在用不了（${reason.replace(/。$/, '')}）。连续 10 次会自动暂停。`;
+    // A text message's `<at>` is a real mention and no at-guard reads it; the task's name is anybody's words, so no tag
+    // in it survives (as in the scheduled topic's root). Only the name: an unclosed tag would run to the end of the sentence.
+    const text = `⏰ 定时任务「${plainTaskName(task.name)}」这次没跑：本群的权限档现在用不了（${reason.replace(/。$/, '')}）。连续 10 次会自动暂停。`;
     void trackTask(sayInMain(task.chatId, { text }, text).catch(error => {
       if (gateFailureNoted.get(task.id) === now) gateFailureNoted.delete(task.id); // the next failure tries again
       log.fail('schedule', error, { phase: 'gate-notice', taskId: task.id });
@@ -3111,9 +3112,9 @@ export function createOrchestrator(
     const failure = [...task.recent].reverse().find(run => run.status === 'failed' || run.by === 'crash');
     const why = (failure?.error ?? '运行中 Bot 进程退出了').replace(/。$/, '');
     const { openId, name } = task.createdBy;
-    // Feishu's post format reads a text element as plain text (not tried here); the name is anybody's words, so no `<at>`
+    // Feishu's post format reads a text element as plain text (not tried here); the name is anybody's words, so no tag
     // stays in it either way.
-    const head = `定时任务「${neutraliseAts(task.name, undefined)}」连续 10 次失败，已自动暂停。`;
+    const head = `定时任务「${plainTaskName(task.name)}」连续 10 次失败，已自动暂停。`;
     const tail = `看一下：${why}。到群设置的"任务"里能恢复。`;
     const row = openId ? [{ tag: 'text', text: head }, { tag: 'at', user_id: openId }, { tag: 'text', text: ` ${tail}` }] : [{ tag: 'text', text: head + tail }];
     await sayInMain(task.chatId, { post: { zh_cn: { content: [row] } } }, openId ? `${head}@${name ?? '创建人'} ${tail}` : head + tail);
@@ -7588,7 +7589,7 @@ export function createOrchestrator(
             : {}),
           ...(opts.sessionNotice ? { sessionNotice: opts.sessionNotice } : {}),
           ...(currentTurn.initiative ? { initiativeCard: currentTurn.initiative } : {}),
-          ...(scheduled ? { label: scheduledLabel(scheduled.job), nextRun: nextRunAfterFailure(scheduled.job) } : {}),
+          ...(scheduled ? { label: scheduledLabel(scheduled.job), nextRun: scheduledNextRun(scheduled.job) } : {}),
         };
 
         const adoptThreadId = async (messageId: string): Promise<void> => {
@@ -7768,7 +7769,7 @@ export function createOrchestrator(
         // （版本旧 / 挂死）才经 stopSignal 强停本地循环，按原样走杀进程恢复锤。
         // watchdog 超时（timedOut）不变，恒走杀进程。
         let timedOut = false;
-        let askFaulted = false; // the ask coordinator stopped the turn, not a ⏹
+        let askFaulted = false; // the ask coordinator stopped the turn, not a ⏹ or the shutdown
         let resolveStop!: () => void;
         const stopSignal = new Promise<void>((res) => {
           resolveStop = res;
@@ -7790,7 +7791,8 @@ export function createOrchestrator(
           placement: { chatId: opts.chatId, replyTo: scheduled ? landingOf(scheduled) : currentTurn.seen?.id ?? opts.replyTo, replyInThread: !opts.flat },
           initiator: { kind: currentTurn.requesterKind ?? 'unknown', openId: currentTurn.requesterOpenId }, idlePause,
           waiting: (label, subagentId) => { activity?.waiting(Boolean(label)); rc.askWaiting = label; rc.askWaitingSubagentId = subagentId; stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID); },
-          fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) { askFaulted = true; originalInterrupt(); } },
+          // A late ask faults too once a ⏹ or the shutdown stopped the turn (both set intakeCancelled): the stop stays theirs.
+          fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) { askFaulted ||= !state.intakeCancelled && !shuttingDown; originalInterrupt(); } },
         });
         const guarded = withIdleTimeout(
           redactAgentEvents(run.events, hiddenBlockFilter(opts.thread, opts.backendId, turnMemory, () => topicThreadId)),
@@ -7906,6 +7908,8 @@ export function createOrchestrator(
           procDead,
         });
         rc.rs = segmentSnapshot();
+        // The final card promises a next run from the task as it is now: paused or deleted during the run, it has none.
+        if (scheduled) rc.nextRun = scheduledNextRun(scheduled.job);
         if (interrupted) log.info('agent', 'interrupt', { graceful: !stopper.forced(), threadId: topicThreadId ?? null });
         // A ⏹ is not a failure; an error or the watchdog is.
         else if (rc.rs.terminal === 'error' || rc.rs.terminal === 'idle_timeout') noteTurnFailure(currentTurn, { rs: rc.rs, procDead });
@@ -8083,8 +8087,10 @@ export function createOrchestrator(
         // A stop (⏹ graceful or forced / watchdog) or a dead process ends the
         // whole run — drop any queued follow-ups, but tell the user instead of
         // swallowing them. 优雅 ⏹ 虽然线程留用，但用户按了停就是要停：排队消息
-        // 同样丢弃（语义与杀进程路径一致，只是进程不回收）。
-        if (killed || procDead || interrupted || compactDied) {
+        // 同样丢弃（语义与杀进程路径一致，只是进程不回收）。A settings change that
+        // closed the thread (state.evicted), even after procDead was read above, ends
+        // it too: the next turn would run on the closed thread.
+        if (killed || procDead || interrupted || compactDied || state.evicted) {
           state.intakeCancelled = true;
           dropCompact(state);
           // Only a ⏹ is the user's, and a settings change's eviction the group's: a scheduled turn queued behind a watchdog
@@ -8099,7 +8105,7 @@ export function createOrchestrator(
                 { replyTo: finalMsgId, replyInThread: !opts.flat },
               )
               .catch(() => undefined));
-            log.info('intake', 'queue-dropped', { depth: state.queue.length, killed, procDead, interrupted });
+            log.info('intake', 'queue-dropped', { depth: state.queue.length, killed, procDead, interrupted, evicted: Boolean(state.evicted) });
           }
           break;
         }
@@ -9458,6 +9464,11 @@ export function createOrchestrator(
     extra?.scheduled?.settle(outcome);
     return Boolean(extra?.scheduled);
   }
+  /** nextRunAfterFailure on the task in the store now, not as it was claimed; a deleted task has no next run. */
+  function scheduledNextRun(job: ScheduledJob): boolean {
+    const task = scheduleStore.get(job.task.id);
+    return task !== undefined && nextRunAfterFailure({ ...job, task });
+  }
   /** How a scheduled turn that ran ended: its card's terminal, and whether the final card update landed. A stop by its own
    * ask coordinator's fault is neither the user's nor the shutdown's: a counted failure. */
   function ranScheduled(hook: ScheduledHook, rs: RunState, delivered: boolean, askFaulted: boolean): ScheduledOutcome {
@@ -9548,7 +9559,7 @@ export function createOrchestrator(
         const prefer = modelPrefOf(project, be.id);
         const cwd = workCwd(project);
         const perm = turnPerm(project);
-        // A text message's `<at>` is a real mention: scheduledRootText leaves none in the task's name.
+        // A text message's `<at>` is a real mention: scheduledRootText leaves no tag in the task's name.
         const rootText = scheduledRootText(job);
         const root = await channel.send(chatId, { text: rootText });
         const rootAt = Date.now();
