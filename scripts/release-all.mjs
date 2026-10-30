@@ -20,23 +20,26 @@ const exists = async path => access(path).then(() => true, error => { if (error.
 const inside = (parent, child) => { const path = relative(parent, child); return !path || (!isAbsolute(path) && path !== '..' && !path.startsWith(`..${sep}`)); };
 const redact = value => String(value).replace(/\/Users\/[^/\s"']+/g, '/Users/<u>');
 async function atomicJSON(path, value) {
-  const temporary = `${path}.${process.pid}.tmp`;
-  await writeFile(temporary, json(value), { mode: 0o600 });
-  await rename(temporary, path);
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, json(value), { mode: 0o600 });
+    await rename(temporary, path);
+  } finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
 }
 
 async function ghAPI(path, env, paginate = false) {
   const args = ['api', path, ...(paginate ? ['--paginate', '--slurp'] : [])];
-  return JSON.parse((await exec('gh', args, { env, maxBuffer: 4 * 1024 * 1024 })).stdout);
+  return JSON.parse((await exec('gh', args, { env, timeout: 30000, maxBuffer: 4 * 1024 * 1024 })).stdout);
 }
 const pages = (value, key) => (Array.isArray(value) ? value : [value]).flatMap(page => page[key] ?? []);
 function runtime(dependencies = {}) {
   const env = dependencies.env ?? process.env;
   return { env, execute: dependencies.execute ?? exec, api: dependencies.api ?? ((path, paginate) => ghAPI(path, env, paginate)),
-    run: dependencies.run ?? runChild, platform: dependencies.platform ?? process.platform,
+    run: dependencies.run ?? runReleaseChild, platform: dependencies.platform ?? process.platform,
     log: dependencies.log ?? console.log, temporaryRoots: dependencies.temporaryRoots,
     validateCombined: validateReleaseInventory, buildLockPath: join(tmpdir(), 'vonvon-release-build.lock'),
-    createTemporary: () => mkdtemp(join(tmpdir(), 'vonvon-release-')), progressMs: dependencies.progressMs ?? 45000, ...dependencies };
+    createTemporary: () => mkdtemp(join(tmpdir(), 'vonvon-release-')), progressMs: dependencies.progressMs ?? 45000,
+    windowsPollMs: 15000, cancelPollMs: 1000, ...dependencies };
 }
 
 /** Inherited organization runners are checked with their group access, not counted as offline. */
@@ -162,7 +165,14 @@ async function loadState(out) {
   if (state.format !== 1 || state.out !== await realpath(out) || !/^[a-f0-9]{40}$/.test(state.sha ?? '')) throw new Error('Invalid release orchestration state');
   return state;
 }
-const saveState = state => atomicJSON(join(state.out, stateName), state);
+// Mac work and the Windows downloader share this object. Serialize snapshots so
+// a slower write cannot replace a newer completion with an older partial state.
+const stateWrites = new WeakMap();
+const saveState = state => {
+  const next = (stateWrites.get(state) ?? Promise.resolve()).catch(() => {}).then(() => atomicJSON(join(state.out, stateName), state));
+  stateWrites.set(state, next);
+  return next;
+};
 async function checkInputs(state) {
   for (const [key, path] of Object.entries(state.paths)) if (digest(await readFile(path)) !== state.hashes[key]) throw new Error(`Release ${key} changed; restore the original input before resuming`);
 }
@@ -226,16 +236,36 @@ async function assertWindowsHealthy(state, r, knownRun, persist = true) {
   return run;
 }
 
-async function runChild(command, args, { cwd, env }) {
+export async function runReleaseChild(command, args, { cwd, env, signal }) {
+  signal?.throwIfAborted();
   await new Promise((resolvePromise, reject) => {
-    const child = spawn(command, args, { cwd, env, stdio: 'inherit' });
-    const signals = new Map(['SIGINT', 'SIGTERM'].map(signal => [signal, () => child.kill(signal)]));
-    const cleanup = () => { for (const [signal, forward] of signals) process.off(signal, forward); };
+    // The helper can spawn gh/notarytool. Kill its process group as well on
+    // interruption, rather than leaving a credentialed download behind.
+    const detached = process.platform !== 'win32';
+    const child = spawn(command, args, { cwd, env, stdio: 'inherit', detached });
+    let killTimer, stopped, spawnFailed = false;
+    const send = name => {
+      try { if (detached && child.pid) process.kill(-child.pid, name); else child.kill(name); }
+      catch (error) { if (error.code !== 'ESRCH') throw error; }
+    };
+    const kill = name => {
+      send(name);
+      // A helper may exit before a grandchild that ignored SIGTERM. Keep the
+      // escalation alive through close, and join it before releasing the lock.
+      stopped ??= new Promise(done => { killTimer = setTimeout(() => { send('SIGKILL'); done(); }, 1000); });
+    };
+    const abort = () => kill('SIGTERM');
+    const signals = new Map(['SIGINT', 'SIGTERM'].map(name => [name, () => kill(name)]));
+    const cleanup = () => { clearTimeout(killTimer); signal?.removeEventListener('abort', abort); for (const [name, forward] of signals) process.off(name, forward); };
     for (const [signal, forward] of signals) process.on(signal, forward);
-    child.once('error', error => { cleanup(); reject(error); });
-    child.once('close', (code, signal) => {
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+    child.once('error', error => { spawnFailed = true; cleanup(); reject(error); });
+    child.once('close', async (code, signal) => {
+      if (spawnFailed) return;
+      await stopped;
       cleanup();
-      if (code === 0) resolvePromise(); else reject(new Error(`${basename(args[0] ?? command)} stopped (${signal ?? code}); evidence was retained`));
+      if (code === 0 && !stopped) resolvePromise(); else reject(new Error(`${basename(args[0] ?? command)} stopped (${signal ?? code}); evidence was retained`));
     });
   });
 }
@@ -267,6 +297,40 @@ async function appleProgress(state, architecture) {
     dmg: saved.dmg?.status ?? (saved.dmg?.id ? 'submitted; waiting for Apple' : 'not submitted'), timings };
 }
 
+function pause(milliseconds, signal) {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise(resolvePromise => {
+    const finish = () => { clearTimeout(timer); signal.removeEventListener('abort', finish); resolvePromise(); };
+    const timer = setTimeout(finish, milliseconds);
+    signal.addEventListener('abort', finish, { once: true });
+  });
+}
+
+/** Download as soon as GitHub succeeds, while Mac work is waiting for Apple. */
+async function windowsArtifacts(state, r, env, polling, downloads) {
+  while (!downloads.signal.aborted) {
+    await checkCancelled(state);
+    const run = await assertWindowsHealthy(state, r);
+    if (run?.status === 'completed') {
+      await checkCancelled(state);
+      state.windows.download = 'running'; await saveState(state);
+      try {
+        await timed(state, 'windows artifact network download / verification', () => r.run(process.execPath,
+          [join(state.source, 'scripts/publish-windows.mjs'), '--run-id', String(run.id), '--out', join(state.out, 'windows'),
+            '--sha', state.sha, '--version', state.version, '--download-only'], { cwd: state.source, env, signal: downloads.signal }));
+        await checkCancelled(state);
+        downloads.signal.throwIfAborted();
+        state.windows.download = 'verified'; await saveState(state);
+      } catch (error) { state.windows.download = 'failed-or-interrupted'; await saveState(state); throw error; }
+      return;
+    }
+    // One final query after Mac finishes keeps the previous pending-run behavior:
+    // a queued remote build does not make this command wait indefinitely.
+    if (polling.signal.aborted) return;
+    await pause(r.windowsPollMs, polling.signal);
+  }
+}
+
 /** Explicit build authorization submits four Apple jobs; publication is a separate helper invocation. */
 export async function buildRelease(options, dependencies = {}) {
   const r = runtime(dependencies);
@@ -290,58 +354,69 @@ export async function buildRelease(options, dependencies = {}) {
     if (!dependencies.api) r.api = (path, paginate) => ghAPI(path, buildEnv, paginate);
     await sourceWorktree(state, r);
     await dispatchWindows(state, r, buildEnv);
-    if (!state.dependenciesInstalled || !(await exists(join(state.source, 'node_modules')))) {
-      await checkCancelled(state);
-      state.mac.phase = 'installing-dependencies'; await saveState(state);
-      await timed(state, 'dependencies / network download', () => r.run('npm', ['ci'], { cwd: state.source, env: { ...buildEnv, HOME: state.buildHome } }));
-      state.dependenciesInstalled = true; await saveState(state);
-    }
-    // Both helpers mutate packages/desktop/stage; never run these in parallel.
-    for (const architecture of ['arm64', 'x64']) {
-      await checkCancelled(state); await checkInputs(state);
-      await assertWindowsHealthy(state, r);
-      if (await completedMac(state, architecture)) { state.mac[architecture] = 'complete'; continue; }
-      state.mac.phase = architecture; state.mac[architecture] = 'running'; await saveState(state);
-      r.log(`macOS ${architecture}: building, signing and waiting for App / DMG notarization; Windows runs concurrently.`);
-      const timer = r.progressMs ? setInterval(() => {
-        Promise.all([appleProgress(state, architecture), findWindowsRun(state, r)]).then(([apple, windows]) =>
-          r.log(`macOS ${architecture}: App ${apple.app}; DMG ${apple.dmg}. Windows: ${windows?.status ?? 'discovering run'}${windows?.conclusion ? ` / ${windows.conclusion}` : ''}`)).catch(() => {});
-      }, r.progressMs) : undefined;
-      try {
-        await timed(state, `mac-${architecture} build / package / notarize`, () => r.run(process.execPath, [join(state.source, 'scripts/release-mac.mjs'), '--repo', state.source, '--version', state.version,
-          '--sha', state.sha, '--out', join(state.out, `mac-${architecture}`), '--build-home', state.buildHome, '--mode', 'release',
-          '--architecture', architecture, '--keychain-profile', state.keychainProfile, '--notes-file', state.paths.notesFile,
-          '--cos-config', state.paths.cosConfig, ...releaseFlags(state),
-          ...(options[`recover-${architecture}`] ? ['--recover-submission', options[`recover-${architecture}`]] : [])],
-        { cwd: state.source, env: { ...r.env, VONVON_DESKTOP_UPDATE_CONFIG: state.paths.updateConfig } }));
-      } finally { clearInterval(timer); }
-      if (!(await completedMac(state, architecture))) throw new Error('macOS helper exited without complete evidence');
-      state.mac[architecture] = 'complete'; await saveState(state);
-    }
-    await checkCancelled(state);
-    await assertWindowsHealthy(state, r);
-    if (state.macRelease && await exists(join(state.macRelease, 'SHA256SUMS'))) {
-      await r.validateCombined(state.macRelease, { version: state.version, sha: state.sha });
-    } else {
-      // An interrupted assembler keeps its private partial output. Retry into a new empty directory.
-      state.assemblyAttempts += 1; state.macRelease = join(state.out, `mac-combined-${state.assemblyAttempts}`);
-      state.mac.phase = 'assembling'; await saveState(state);
-      await timed(state, 'mac assembly / verification', () => r.run(process.execPath, [join(state.source, 'scripts/assemble-split-release.mjs'), '--repo', state.source, '--out', state.macRelease,
-        '--arm64', join(state.out, 'mac-arm64'), '--x64', join(state.out, 'mac-x64'), '--version', state.version, '--sha', state.sha],
-      { cwd: state.source, env: { ...buildEnv, VONVON_DESKTOP_UPDATE_CONFIG: state.paths.updateConfig } }));
-      await r.validateCombined(state.macRelease, { version: state.version, sha: state.sha });
-    }
-    state.mac.phase = 'candidate-complete'; await saveState(state);
-    const run = await assertWindowsHealthy(state, r);
-    if (run) {
-      state.windows.runId = run.id; state.windows.status = run.status; state.windows.conclusion = run.conclusion; await saveState(state);
-      if (run.status === 'completed' && run.conclusion === 'success') {
+    const polling = new AbortController(), downloads = new AbortController();
+    let windowsError;
+    const windowsTask = windowsArtifacts(state, r, buildEnv, polling, downloads).catch(error => { windowsError = error; });
+    const cancellationTimer = setInterval(() => {
+      checkCancelled(state).catch(error => { windowsError ??= error; polling.abort(); downloads.abort(error); });
+    }, r.cancelPollMs);
+    try {
+      if (!state.dependenciesInstalled || !(await exists(join(state.source, 'node_modules')))) {
         await checkCancelled(state);
-        await timed(state, 'windows artifact network download / verification', () => r.run(process.execPath, [join(state.source, 'scripts/publish-windows.mjs'), '--run-id', String(run.id), '--out', join(state.out, 'windows'),
-          '--sha', state.sha, '--version', state.version, '--download-only'], { cwd: state.source, env: buildEnv }));
+        state.mac.phase = 'installing-dependencies'; await saveState(state);
+        await timed(state, 'dependencies / network download', () => r.run('npm', ['ci'], { cwd: state.source, env: { ...buildEnv, HOME: state.buildHome } }));
+        state.dependenciesInstalled = true; await saveState(state);
       }
+      // Both helpers mutate packages/desktop/stage; never run these in parallel.
+      for (const architecture of ['arm64', 'x64']) {
+        await checkCancelled(state); await checkInputs(state);
+        if (windowsError) throw windowsError;
+        await assertWindowsHealthy(state, r);
+        if (await completedMac(state, architecture)) { state.mac[architecture] = 'complete'; continue; }
+        state.mac.phase = architecture; state.mac[architecture] = 'running'; await saveState(state);
+        r.log(`macOS ${architecture}: building, signing and waiting for App / DMG notarization; Windows runs concurrently.`);
+        const timer = r.progressMs ? setInterval(() => {
+          Promise.all([appleProgress(state, architecture), findWindowsRun(state, r)]).then(([apple, windows]) =>
+            r.log(`macOS ${architecture}: App ${apple.app}; DMG ${apple.dmg}. Windows: ${windows?.status ?? 'discovering run'}${windows?.conclusion ? ` / ${windows.conclusion}` : ''}`)).catch(() => {});
+        }, r.progressMs) : undefined;
+        try {
+          await timed(state, `mac-${architecture} build / package / notarize`, () => r.run(process.execPath, [join(state.source, 'scripts/release-mac.mjs'), '--repo', state.source, '--version', state.version,
+            '--sha', state.sha, '--out', join(state.out, `mac-${architecture}`), '--build-home', state.buildHome, '--mode', 'release',
+            '--architecture', architecture, '--keychain-profile', state.keychainProfile, '--notes-file', state.paths.notesFile,
+            '--cos-config', state.paths.cosConfig, ...releaseFlags(state),
+            ...(options[`recover-${architecture}`] ? ['--recover-submission', options[`recover-${architecture}`]] : [])],
+          { cwd: state.source, env: { ...r.env, VONVON_DESKTOP_UPDATE_CONFIG: state.paths.updateConfig } }));
+        } finally { clearInterval(timer); }
+        if (!(await completedMac(state, architecture))) throw new Error('macOS helper exited without complete evidence');
+        state.mac[architecture] = 'complete'; await saveState(state);
+      }
+      await checkCancelled(state);
+      if (windowsError) throw windowsError;
+      await assertWindowsHealthy(state, r);
+      if (state.macRelease && await exists(join(state.macRelease, 'SHA256SUMS'))) {
+        await r.validateCombined(state.macRelease, { version: state.version, sha: state.sha });
+      } else {
+        // An interrupted assembler keeps its private partial output. Retry into a new empty directory.
+        state.assemblyAttempts += 1; state.macRelease = join(state.out, `mac-combined-${state.assemblyAttempts}`);
+        state.mac.phase = 'assembling'; await saveState(state);
+        await timed(state, 'mac assembly / verification', () => r.run(process.execPath, [join(state.source, 'scripts/assemble-split-release.mjs'), '--repo', state.source, '--out', state.macRelease,
+          '--arm64', join(state.out, 'mac-arm64'), '--x64', join(state.out, 'mac-x64'), '--version', state.version, '--sha', state.sha],
+        { cwd: state.source, env: { ...buildEnv, VONVON_DESKTOP_UPDATE_CONFIG: state.paths.updateConfig } }));
+        await r.validateCombined(state.macRelease, { version: state.version, sha: state.sha });
+      }
+      state.mac.phase = 'candidate-complete'; await saveState(state);
+      polling.abort();
+      await windowsTask;
+      if (windowsError) throw windowsError;
+      await checkCancelled(state);
+      await assertWindowsHealthy(state, r);
+      return releaseStatus({ out: state.out }, dependencies);
+    } finally {
+      clearInterval(cancellationTimer);
+      polling.abort(); downloads.abort();
+      // No background downloader survives a Mac failure, cancellation or signal.
+      await windowsTask;
     }
-    return releaseStatus({ out: state.out }, dependencies);
   }));
 }
 const releaseFlags = state => [...(state.flags.firstRelease ? ['--first-release'] : []), ...(state.flags.noLiveManifest ? ['--no-live-manifest'] : [])];
@@ -358,7 +433,7 @@ export async function releaseStatus({ out }, dependencies = {}) {
   const jobs = run ? await r.api(`repos/${repository}/actions/runs/${run.id}/jobs?filter=latest&per_page=100`, true).catch(() => undefined) : undefined;
   return { version: state.version, sourceSha: state.sha, cancelled: await exists(join(out, 'CANCEL')),
     ci: checks.status === 'fulfilled' ? pages(checks.value, 'check_runs').map(check => ({ name: check.name, status: check.status, conclusion: check.conclusion })) : 'unavailable; inspect GitHub',
-    windows: run ? { runId: run.id, status: run.status, conclusion: run.conclusion, url: run.html_url, jobs: jobTimings(pages(jobs ?? {}, 'jobs'), run.created_at) } : { dispatch: state.windows.dispatch, status: state.windows.dispatch === 'not-requested' ? 'not-started' : windows.status === 'rejected' ? 'query failed; no new dispatch' : 'waiting for run discovery' },
+    windows: run ? { runId: run.id, status: run.status, conclusion: run.conclusion, download: state.windows.download ?? 'not-started', url: run.html_url, jobs: jobTimings(pages(jobs ?? {}, 'jobs'), run.created_at) } : { dispatch: state.windows.dispatch, download: state.windows.download ?? 'not-started', status: state.windows.dispatch === 'not-requested' ? 'not-started' : windows.status === 'rejected' ? 'query failed; no new dispatch' : 'waiting for run discovery' },
     mac: { phase: state.mac.phase ?? 'not-started', architectures: await Promise.all(['arm64', 'x64'].map(architecture => appleProgress(state, architecture))), combined: state.macRelease ?? null },
     timings: state.timings, runners: { windows: state.runners, ci: state.ciRunners },
     publication: 'Use existing publication helpers after reviewing the candidates; this orchestrator never uploads or promotes stable.' };
@@ -422,7 +497,7 @@ export async function collectRelease({ out }, dependencies = {}) {
 const help = `Usage: node scripts/release-all.mjs <prepare|build|resume|status|collect|cancel> --out /absolute/persistent/release [options]
 prepare  --repo /absolute/checkout --version X.Y.Z --sha FULL_MAIN_SHA --update-config /external/desktop-update.json --cos-config /external/readonly.json --notes-file /absolute/notes.md [--keychain-profile notelet-notary] [--first-release | --no-live-manifest]
          Checks source versions/main ancestry, repo AND inherited organization runners, config paths and signing/notary credentials. No Apple submissions or publication.
-build    Same options for a new release, or only --out for a prepared release, plus --authorize-notarization. Dispatches pinned Windows build, runs arm64 then x64 Mac helpers, assembles evidence and downloads successful Windows artifacts. Never uploads or promotes stable.
+build    Same options for a new release, or only --out for a prepared release, plus --authorize-notarization. Dispatches pinned Windows build, downloads and verifies it as soon as it succeeds while arm64 then x64 Mac helpers run, and assembles evidence. Never uploads or promotes stable.
 resume   --out ... --authorize-notarization [--recover-arm64 app=UUID|dmg=UUID] [--recover-x64 app=UUID|dmg=UUID]. Reuses original inputs, Apple IDs and Windows request. Unknown dispatch outcomes are queried, never automatically repeated.
 status   Queries CI/Windows and reads Apple stage evidence. Can run while build is active.
 collect  Validates matching publication receipts and writes release-handoff.json; readyForWebsite requires both public platforms and verified Mac stable.
