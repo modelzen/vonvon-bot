@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'vitest';
 import {agentIdSchema, groupIdSchema, membershipIdSchema, projectIdSchema, type DesktopSnapshot} from '@vonvon/protocol';
-import {joinedGroupRoute, openMembership, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type CollaborationRoute} from '../src/collaboration-navigation';
+import {agentPanes, joinedGroupRoute, openMembership, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type CollaborationRoute} from '../src/collaboration-navigation';
 
 const agentId = agentIdSchema.parse('cli_navigationA');
 const anotherAgentId = agentIdSchema.parse('cli_navigationB');
@@ -111,4 +111,9 @@ test('old daemons without projects still support the group tree and group search
   const opened = openMembership({kind: 'list', view: 'groups'}, memberId, data);
   assert.deepEqual(routeBack(opened), {kind: 'group', id: groupId});
   assert.deepEqual(routeFromSearch({page: 'collaboration', selection: {kind: 'group', id: groupId}}, data)?.route, {kind: 'group', id: groupId});
+});
+
+test('the Bot page has four panes, 任务 after 记忆', () => {
+  assert.deepEqual(agentPanes.map(pane => pane.label), ['群聊', '记忆', '任务', '设置']);
+  assert.deepEqual(routeDetail({kind: 'agent', id: agentId, pane: {kind: 'schedule'}}), {kind: 'overview'});
 });
