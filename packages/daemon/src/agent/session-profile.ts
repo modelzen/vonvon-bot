@@ -12,6 +12,8 @@ export interface SessionProfile {
   capabilityPackages: readonly { path: string }[];
   /** Explicit MCP delivery is added with capability packages in s39. */
   mcpServers: readonly { name: string }[];
+  /** vonvon's own tools beyond the always-on ones: the schedule tools only in a bound group's sessions (定时任务 T3). */
+  tools?: { schedule: boolean };
 }
 
 export interface SessionProfileCapabilities {
@@ -40,6 +42,7 @@ export function resolveSessionProfile(input?: SessionProfile, capabilities?: { a
     additionalRoots: input?.additionalRoots ?? [],
     capabilityPackages: [],
     mcpServers: [],
+    tools: { schedule: input?.tools?.schedule ?? false },
     ...(input?.skills ? { skills: input.skills } : {}),
   };
 }

@@ -1,6 +1,7 @@
 import type { AgentEntry, AgentThread, AgentToolReply } from '../types';
 import { log } from '../../core/logger';
 import type { MemoryTurn } from '../../bot/memory-authority';
+import { scheduleRefusalMessages, type ScheduleActor } from '../../admin/schedule-commands';
 import { sessionInfoTool, ToolRefusal, type AgentTool, type ToolContext } from './tools';
 
 export interface AgentPlace { kind: 'group' | 'p2p' | 'doc'; chatId?: string; docId?: string }
@@ -17,7 +18,13 @@ export interface TurnFacts {
   triggerText?: string;
   /** 定时任务的无人回合（T2 的 `runScheduled` 填）：在场算 `scheduled`，记忆回合按 `initiative` 算 */
   scheduled?: { taskId: string; runId: string };
+  /** 发起人的名字，建任务时记成创建人（总设计 7.2 的 `{creator}`） */
+  requesterName?: string;
+  /** 这一轮在群里的位置，任务工具调用时才读（`launchRun` 的闭包；bot 开的话题认领后才有 id） */
+  where?(): TurnWhere;
 }
+/** 主区 `{ inTopic: false }`；话题里 `inTopic`，话题 id 认领前没有（总设计第 3 节钥匙 2） */
+export interface TurnWhere { inTopic: boolean; topicId?: string }
 /** 这一轮有没有人在场：真人发起的 `human`；定时任务自己的运行 `scheduled`；bot、唤醒、主动、重试 `none`（总设计第 8 节） */
 export type TurnPresence = 'human' | 'scheduled' | 'none';
 /** 隐藏块在 `done` 前要用的这一轮的事实：现取，不是开轮时的快照 */
@@ -44,6 +51,9 @@ const messages = {
   'unknown-origin': 'vonvon 认不出这次改动是哪一轮发起的，不能改设置。请对方重新说一遍。',
   'not-admin': '只有主人和管理员发消息触发的那一轮能改设置。',
   'switch-off': '主人关了私聊里的“聊天改设置”，要改请去桌面端或网页。',
+  'not-group': scheduleRefusalMessages['not-group'],
+  'no-human-create': scheduleRefusalMessages['no-human-create'],
+  'scheduled-run-scope': scheduleRefusalMessages['scheduled-run-scope'],
   busy: 'vonvon 手上的事太多，稍后再试。',
   timeout: 'vonvon 这一步超时了。',
   failed: 'vonvon 这一步出错了。',
@@ -127,11 +137,41 @@ export function createAgentEntries(opts: {
     if (!auth) return refused('unknown-origin');
     if (!auth.active || grant.turn !== auth) return refused('turn-ended');
   }
+  /**
+   * schedule 类的授权（3.13 的表、总设计第 8 节"在场"）：这一层先查，拒绝不进命令核；命令核按 actor 再查一遍，
+   * 成员能不能碰别人的任务、跨群的 id 只有命令核看得到。
+   */
+  function authorizeSchedule(grant: Grant, auth: TurnAuth | undefined, action: AgentTool['action'], taskId: unknown): Failure | undefined {
+    if (grant.thread && !grant.thread.isAlive()) revoke(grant);
+    if (grant.phase === 'revoked') return failure('revoked');
+    if (grant.place.kind !== 'group') return refused('not-group');
+    if (!auth) return refused('unknown-origin');
+    if (!auth.active || grant.turn !== auth) return refused('turn-ended');
+    if (action === 'list') return undefined;
+    if (auth.steered || auth.presence === 'none') return { ...refused('not-human-turn'), message: scheduleRefusalMessages['not-human-turn'] };
+    if (auth.presence !== 'scheduled') return undefined;
+    if (action === 'create') return refused('no-human-create');
+    if ((action !== 'edit' && action !== 'delete') || taskId !== auth.facts.scheduled?.taskId) return refused('scheduled-run-scope');
+  }
   const roleOf = (auth: TurnAuth): MemoryTurn['role'] => {
     const openId = auth.facts.requesterOpenId ?? '';
     if (auth.facts.requesterKind !== 'user' || !openId) return 'bot';
     return opts.isOwner(openId) ? 'owner' : opts.isAdmin(openId) ? 'admin' : 'member';
   };
+  /** Who the command core sees: the task's own run, or the person of this turn with where they are now. */
+  function scheduleActor(grant: Grant, auth: TurnAuth): Exclude<ScheduleActor, { kind: 'local' }> {
+    const chatId = grant.place.chatId ?? '';
+    if (auth.facts.scheduled) return { kind: 'scheduled', ...auth.facts.scheduled, chatId };
+    const { facts } = auth, role = roleOf(auth), topicId = facts.where?.().topicId;
+    return {
+      // A bot's or a wake's turn only gets to list (authorizeSchedule), where the role is not looked at.
+      kind: 'chat', openId: facts.requesterOpenId ?? '', role: role === 'bot' ? 'member' : role, chatId,
+      ...(facts.requesterName ? { name: facts.requesterName } : {}),
+      ...(topicId ? { topicId } : {}),
+      ...(facts.triggerMessageId ? { messageId: facts.triggerMessageId } : {}),
+      ...(facts.typed && facts.triggerText ? { text: facts.triggerText } : {}),
+    };
+  }
   function memoryTurnOf(grant: Grant, auth: TurnAuth): MemoryTurn | undefined {
     if (grant.phase !== 'attached' || (grant.thread && !grant.thread.isAlive())) return undefined;
     const kind = grant.place.kind;
@@ -171,12 +211,16 @@ export function createAgentEntries(opts: {
       const runTool = tool.run.bind(tool);
       const settings = tool.class === 'settings';
       const memory = tool.class === 'memory';
-      const gated = settings || memory;
+      const schedule = tool.class === 'schedule';
+      const gated = settings || memory || schedule;
+      const taskId = schedule && args && typeof args === 'object' && 'taskId' in args ? args.taskId : undefined;
       // Only Codex declares releaseAfterRun (false before its first accepted turn).
       const auth = grant.thread?.releaseAfterRun !== undefined ? grant.firstTurn
         : origin?.toolUseId ? grant.origins.get(origin.toolUseId) : undefined;
+      const authNow = (): Failure | undefined => memory ? authorizeMemory(grant, auth)
+        : schedule ? authorizeSchedule(grant, auth, tool.action, taskId) : authorizeNow(grant, auth);
       if (gated) {
-        const refusal = memory ? authorizeMemory(grant, auth) : authorizeNow(grant, auth);
+        const refusal = authNow();
         if (refusal?.reason === 'unknown-origin' && origin?.toolUseId && grant.origins.has(origin.toolUseId)) return finishLog(refused('turn-ended'));
         if (refusal) return finishLog(refusal);
         if (settings && grant.settingRunning && grant.queue.length >= 8) return finishLog(failure('busy'));
@@ -212,11 +256,10 @@ export function createAgentEntries(opts: {
           settle(reply);
         };
         const onGrantAbort = () => stop(failure('revoked'));
-        const authNow = (): Failure | undefined => memory ? authorizeMemory(grant, auth) : authorizeNow(grant, auth);
         const onTurnAbort = () => {
           if (committed) return;
-          // 记忆类：插话也会触发这个信号，但那一轮没结束，只影响落点，不打断调用
-          if (memory) { const refusal = authNow(); if (refusal) stop(refusal); }
+          // 记忆类：插话也会触发这个信号，但那一轮没结束，只影响落点，不打断调用；任务类插话后只剩 list
+          if (memory || schedule) { const refusal = authNow(); if (refusal) stop(refusal); }
           else stop(authNow() ?? refused('turn-ended'));
         };
         const timer = setTimeout(() => stop(failure('timeout')), Math.max(0, deadline - Date.now()));
@@ -237,6 +280,7 @@ export function createAgentEntries(opts: {
             ctx.reserveBotWrite = () => { if (auth.botWrites >= 1) return false; auth.botWrites++; return true; };
             ctx.releaseBotWrite = () => { auth.botWrites = Math.max(0, auth.botWrites - 1); };
           }
+          if (schedule && auth) ctx.schedule = () => ({ actor: scheduleActor(grant, auth), where: auth.facts.where?.() ?? { inTopic: false } });
           if (gated && auth) {
             if (settings) ctx.turn = { id: auth.id, requesterOpenId: auth.facts.requesterOpenId ?? '', triggerMessageId: auth.facts.triggerMessageId ?? '', role: opts.isOwner(auth.facts.requesterOpenId ?? '') ? 'owner' : 'admin' };
             ctx.commit = async write => {
@@ -271,7 +315,8 @@ export function createAgentEntries(opts: {
             if (error instanceof ToolRefusal) settle(error.reply);
             else {
               log.fail('agent.tool-failed', error, { tool: name });
-              settle(committed ? { ok: false, code: 'failed', message: '提交时出错，设置可能已经改了。先查一下现在的设置，再决定要不要重试。' } : failure('failed'));
+              settle(!committed ? failure('failed') : { ok: false, code: 'failed', message: schedule
+                ? '提交时出错，任务可能已经改了。先用 schedule_list 查一下，再决定要不要重试。' : '提交时出错，设置可能已经改了。先查一下现在的设置，再决定要不要重试。' });
             }
           }
         }
@@ -297,8 +342,9 @@ export function createAgentEntries(opts: {
         if (grant.thread && !grant.thread.isAlive()) revoke(grant);
         if (grant.phase === 'revoked') throw new ToolRefusal(failure('revoked'));
         if (grant.phase === 'capacity') return [];
-        // 评论会话（doc）只给读类工具；写记忆的在群和私聊里给
-        return tools.filter(tool => tool.class === 'read' || (tool.class === 'memory' ? grant.place.kind !== 'doc' : grant.place.kind === 'p2p'))
+        // 评论会话（doc）只给读类工具；写记忆的在群和私聊里给，任务的只在群里给
+        return tools.filter(tool => tool.class === 'read' || (tool.class === 'memory' ? grant.place.kind !== 'doc'
+          : grant.place.kind === (tool.class === 'schedule' ? 'group' : 'p2p')))
           .map(({ name, description, input }) => ({ name, description, input }));
       },
       call,

@@ -20,10 +20,14 @@ import { createTurnMapper, resultErrorText } from './event-map';
 import { decide, type ClaudeAccess, type ClaudePermissionOptions, type PathFs, type ToolCall } from './permission';
 import { bridgeAsk, type BridgedAsk } from './ask-bridge';
 import { findTranscript, scanTranscript } from './transcript';
+import { scheduleToolNames } from '../entry/schedule-tools';
+import { toolReplyText } from '../entry/tools';
 
 /** Config the backend hands the thread to stand up its persistent query(). */
 export interface ClaudeThreadConfig {
   entry?: AgentEntry;
+  /** The session's profile has `tools.schedule`: vonvon_bot lists the schedule tools too. */
+  scheduleTools?: boolean;
   createSdkMcpServer?: ClaudeSdkFacade['createSdkMcpServer'];
   tool?: ClaudeSdkFacade['tool'];
   /** self-assigned UUID (start: options.sessionId) or the id to resume. */
@@ -84,10 +88,19 @@ export const NATIVE_MEMORY_OFF = {
   env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },
 } satisfies Options['settings'];
 
+/**
+ * Claude Code's own scheduling, off in bot sessions: tasks go through vonvon's schedule tools only (3.13). The
+ * tools are disallowed in thread.ts, not in permission.ts, whose full-access tier returns early; the bundled
+ * `loop` and `schedule` skills still list after that, so they are turned off too.
+ */
+export const NATIVE_SCHEDULING_TOOLS = ['CronCreate', 'CronList', 'CronDelete', 'ScheduleWakeup', 'RemoteTrigger'];
+export const NATIVE_SCHEDULING_SKILLS = ['loop', 'schedule'];
+
 export const AUTO_COMPACT_SETTINGS = {
   autoCompactEnabled: true,
   ...NATIVE_MEMORY_OFF,
   env: { ...NATIVE_MEMORY_OFF.env, DISABLE_AUTO_COMPACT: '', DISABLE_COMPACT: '' },
+  skillOverrides: Object.fromEntries(NATIVE_SCHEDULING_SKILLS.map(name => [name, 'off' as const])),
 } satisfies Options['settings'];
 
 /** Hard ceiling on a manual /compact (a summarization turn) so a wedged process
@@ -330,11 +343,10 @@ export class ClaudeAgentThread implements AgentThread {
       if (cfg.createSdkMcpServer && cfg.tool) {
         const tool = cfg.tool;
         mcpServers.vonvon_bot = cfg.createSdkMcpServer({ name: 'vonvon_bot', version: '1',
-          tools: entry.tools().map(spec => tool(spec.name, spec.description, spec.input.shape, async (args, extra) => {
+          tools: entry.tools().filter(spec => cfg.scheduleTools || !scheduleToolNames.has(spec.name)).map(spec => tool(spec.name, spec.description, spec.input.shape, async (args, extra) => {
             const origin = toolOriginSchema.safeParse(extra);
             const reply = await entry.call(spec.name, args, { toolUseId: origin.success ? origin.data._meta['claudecode/toolUseId'] : undefined });
-            return { content: [{ type: 'text', text: reply.ok ? JSON.stringify(reply.result) : reply.message }],
-              ...(!reply.ok ? { isError: true } : {}) };
+            return { content: [{ type: 'text', text: toolReplyText(reply) }], ...(!reply.ok ? { isError: true } : {}) };
           })),
         });
       } else if (!entryMissingWarned) {
@@ -362,6 +374,7 @@ export class ClaudeAgentThread implements AgentThread {
       ...(mcpServers.vonvon_bot ? { mcpServers } : {}),
       // permission tier (permissionMode / sandbox / canUseTool / disallowedTools)
       ...cfg.permission,
+      disallowedTools: [...cfg.permission.disallowedTools ?? [], ...NATIVE_SCHEDULING_TOOLS],
       canUseTool: (name, input, opts) => this.canUseTool(name, input, opts),
       stderr: (d: string) => {
         const s = String(d).trim();
