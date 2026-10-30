@@ -263,6 +263,8 @@ describe('schedule time', () => {
     expect(nextSlotAfter(weekendOct31, zone, second ?? 0)).toBeUndefined();
     expect(validateSpec(weekendOct31, now, zone)).toBe(refusal);
     for (const expr of ['0 9 */21 3 1', '0 9 1 4 */2', '0 9 13 2 */6', '0 9 */13 1 5']) expect(validateSpec({ kind: 'cron', expr }, now, zone), expr).toBe(refusal);
+    // Exactly 401 days apart (2028-07-21 → 2029-08-26): the gap is too far even though the next date matches.
+    expect(validateSpec({ kind: 'cron', expr: '0 9 21-31/5 4-9 */5' }, now, zone)).toBe(refusal);
     for (const expr of ['* * * * *', '0 9 * * 1-5', '0 9 1 1 *', '0 9 31 12 *', '0 9 29 2,3 *', '0 9 13 * 5', '0 9 31 * *', '0 9 1-7 * */1']) {
       expect(validateSpec({ kind: 'cron', expr }, now, zone), expr).toBeUndefined();
     }

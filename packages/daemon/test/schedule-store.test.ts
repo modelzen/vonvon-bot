@@ -169,7 +169,7 @@ describe('schedule persistence', () => {
     const before = store.all(); const text = await readFile(file, 'utf8'); const listener = vi.fn(); store.onChange(listener);
     await expect(store.mutateRuntime(tasks => {
       tasks[1]!.recent.push({ runId: 'r', slot: 1, trigger: 'schedule', status: 'done', link: 'not a url' });
-    })).rejects.toThrow(/schedule store refused an invalid write/);
+    })).rejects.toThrow(/^schedule store refused an invalid write: /);
     expect(store.all()).toEqual(before);
     expect(await readFile(file, 'utf8')).toBe(text);
     expect(listener).not.toHaveBeenCalled();

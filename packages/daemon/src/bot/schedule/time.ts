@@ -263,8 +263,9 @@ const daysInMonth = (y: number, m: number) => m === 2 && y % 4 === 0 && (y % 100
 function gapsFit(matchDay: (m: number, d: number, weekday: number) => boolean, start: { y: number; m: number; d: number }): boolean {
   let { y, m, d } = start, weekday = weekdayOf(y, m, d), last = 0;
   for (let i = 0; i <= CYCLE_DAYS + MAX_GAP_DAYS; i++) {
+    // Checked on every date, matching ones too: a match 401 days after the last one is already too far.
+    if (i - last > MAX_GAP_DAYS) return false;
     if (matchDay(m, d, weekday)) last = i;
-    else if (i - last > MAX_GAP_DAYS) return false;
     weekday = (weekday + 1) % 7;
     if (++d > daysInMonth(y, m)) { d = 1; if (++m > 12) { m = 1; y++; } }
   }
