@@ -89,11 +89,18 @@ test('shared consumers, governance, root config and unknown paths force full', (
     assert.deepEqual(result.packages, allPackages, path);
     assert.deepEqual(result.platforms, allPlatforms, path);
   }
-  for (const path of ['AGENTS.md', 'CLAUDE.md', '.claude/skills/verify/SKILL.md']) {
+  for (const path of ['AGENTS.md', 'CLAUDE.md', '.claude/skills/verify/SKILL.md',
+    '.agents/skills/verify/SKILL.md']) {
     assert.equal(plan([path]).scope, 'full');
     assert.deepEqual(plan([path]).platforms, ['linux', 'macos']);
   }
+  for (const path of ['.claude/skills/verify/helper.mjs', '.claude/skills/verify/install.ps1',
+    '.agents/skills/verify/helper.py', '.agents/skills/verify/SKILL.MD']) {
+    assert.equal(plan([path]).scope, 'full');
+    assert.deepEqual(plan([path]).platforms, allPlatforms, path);
+  }
   assert.deepEqual(plan(['AGENTS.md', '.github/scripts/ci-scope.mjs']).platforms, allPlatforms);
+  assert.deepEqual(plan(['.agents/skills/verify/SKILL.md', '.github/scripts/ci-scope.mjs']).platforms, allPlatforms);
 });
 
 test('main integration is full for non-docs; readiness requires non-draft frozen head', () => {
