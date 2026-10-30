@@ -98,6 +98,36 @@ describe('new group configuration admission',()=>{
     const judge={kind:'provider' as const,provider:'codex-appserver' as const};
     expect((await prepareNewGroupSettings({backend:'codex-appserver',kind:'smart',judge},deps)).judge).toEqual({kind:'llm',backend:'codex-appserver',model:'work-model',effort:'low'});
   });
+  it.each([
+    ['openrouter','typesafe/jev-1.14','openrouter-api-key'],
+    ['vercel','typesafe-ai/jev','vercel-api-key'],
+    ['custom','jev-latest','custom-decision-api-key'],
+  ] as const)('snapshots %s through its shared credential without opening it as an execution backend',async(provider,model,keyId)=>{
+    const deps=helper();
+    deps.readJudgeModels.mockResolvedValue({byProvider:provider==='custom'?{custom:{model,endpoint:'https://decisions.example/v1/decide'}}:{}});
+    const input={backend:'codex-appserver',kind:'smart' as const,judge:{kind:'provider' as const,provider}};
+    await expect(prepareNewGroupSettings(input,deps)).rejects.toThrow('密钥');
+    deps.readKey.mockResolvedValue('fixture-key');
+    const settings=await prepareNewGroupSettings(input,deps);
+    expect(settings.judge).toEqual({kind:'decision',provider,model});
+    expect(deps.readKey).toHaveBeenLastCalledWith(keyId);
+    expect(deps.backendFor.mock.calls.every(([id])=>id==='codex-appserver')).toBe(true);
+    expect(parseBindGroupInput({chatId:'oc_a',projectName:'a',...input})).toMatchObject({judge:input.judge});
+    expect(parseCollaborationRequest({action:'createProject',requestId:'a'.repeat(20),name:'a',...input})).toMatchObject({judge:input.judge});
+  });
+  it('requires a configured custom endpoint for new decisions and preserves non-smart default admission',async()=>{
+    const deps=helper();
+    deps.readKey.mockResolvedValue('fixture-key');
+    deps.readJudgeModels.mockResolvedValue({defaultProvider:'custom',byProvider:{}});
+    const input={backend:'codex-appserver',kind:'smart' as const};
+    await expect(prepareNewGroupSettings(input,deps)).rejects.toThrow('接口地址');
+    await expect(prepareNewGroupSettings({...input,judge:{kind:'decision',provider:'custom',model:'custom-jev'}},deps)).rejects.toThrow('接口地址');
+    deps.readKey.mockClear();
+    expect((await prepareNewGroupSettings({...input,kind:'multi'},deps)).judge).toEqual({kind:'decision',provider:'custom',model:'jev-latest'});
+    expect(deps.readKey).not.toHaveBeenCalled();
+    deps.readJudgeModels.mockResolvedValue({defaultProvider:'custom',byProvider:{custom:{model:'custom-jev',endpoint:'https://decisions.example/v2/decide'}}});
+    expect((await prepareNewGroupSettings(input,deps)).judge).toEqual({kind:'decision',provider:'custom',model:'custom-jev'});
+  });
   it('rejects a selected Provider after its login expires', async()=>{
     const deps=helper();
     deps.backendFor.mockImplementation(()=>({peekModels:()=>models,listModels:vi.fn(async()=>models),loginStatus:vi.fn(async()=>({state:'signedOut' as 'signedIn'|'signedOut',message:''}))}));

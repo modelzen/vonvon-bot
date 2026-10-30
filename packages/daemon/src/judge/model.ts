@@ -6,6 +6,7 @@ import { claudeConfigDir, readClaudeUserSettings } from '../agent/claude-agent/c
 import { parseModelId } from '../agent/model-id';
 import { getSessionTitleEfforts } from '../config/schema';
 import { REASONING_EFFORTS, type ModelInfo, type ReasoningEffort } from '../agent/types';
+import { decisionProvider } from './decision';
 import type { JudgeResult, JudgeSelectionStored } from './types';
 import { defaultJudgeProvider, JUDGE_PROVIDERS, readJudgeModelsSync, type JudgeProvider, type JudgeModels } from './global-models';
 
@@ -171,7 +172,8 @@ export function resolveJudgeModel(
       const provider = chosen.kind === 'default' ? defaultJudgeProvider(stored) : chosen.provider;
       const selected = stored.byProvider[provider];
       const modelSource = chosen.kind === 'default' ? 'default' : source;
-      if (provider === 'typesafe') return { model: selected?.model ?? 'jev-latest', provider: 'typesafe', modelSource };
+      const decision = decisionProvider(provider);
+      if (decision) return { model: selected?.model ?? decision.models[0]!.id, provider, modelSource };
       if (!selected) return { ...defaultJudgeModel(provider, models, readClaude), modelSource };
       const effort = selected.effort ? fitJudgeEffort(selected.model, selected.effort, models, selected.custom)
         : provider === CLAUDE_BACKEND_ID ? undefined : judgeEffort(selected.model, models, selected.custom);
@@ -190,7 +192,7 @@ export function resolveJudgeModel(
 export function judgeBackendId(taskBackend: string, group: JudgeSelectionStored | undefined, globalRoot?: string, globalModels?: JudgeModels): string {
   if (group?.kind === 'default') {
     const provider = defaultJudgeProvider(globalModels ?? readJudgeModelsSync(globalRoot));
-    return provider === 'typesafe' ? taskBackend : provider;
+    return decisionProvider(provider) ? taskBackend : provider;
   }
-  return group?.kind === 'llm' ? group.backend : group?.kind === 'provider' && group.provider !== 'typesafe' ? group.provider : taskBackend;
+  return group?.kind === 'llm' ? group.backend : group?.kind === 'provider' && !decisionProvider(group.provider) ? group.provider : taskBackend;
 }

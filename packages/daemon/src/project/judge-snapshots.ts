@@ -5,6 +5,7 @@ import type { ModelInfo } from '../agent/types';
 import { discoverProviderModels } from '../admin/model-catalog';
 import { SafeAppIdSchema } from '../config/bot-namespace';
 import { defaultJudgeProvider, type JudgeModels, type JudgeProvider } from '../judge/global-models';
+import { decisionProvider } from '../judge/decision';
 import { parseStoredJudge, resolveJudgeModel } from '../judge/model';
 import type { JudgeSelectionStored } from '../judge/types';
 import { listProjectsIn, withStoredRows } from './registry';
@@ -41,14 +42,15 @@ export async function freezeGroupJudgeReferences(root:string, previous:JudgeMode
   const snapshots=new Map<JudgeProvider,ConcreteJudge>();
   for (const provider of new Set(targets.flatMap(target=>[...target.providers]))) {
     const profile=previous.byProvider[provider];
-    // Copy an explicit profile verbatim: group and profile routes apply the same effort fitting at runtime.
+    // Copy the explicit model choice: group and profile routes apply the same effort fitting at runtime.
+    // A custom decision endpoint remains shared on the host, outside the group snapshot.
     // This also lets the user change defaults while an old provider is currently unavailable.
     if (profile) {
-      snapshots.set(provider,provider==='typesafe'?{kind:'decision',provider,model:profile.model}
+      snapshots.set(provider,decisionProvider(provider)?{kind:'decision',provider,model:profile.model}
         :{kind:'llm',backend:provider,model:profile.model,...(profile.effort?{effort:profile.effort}:{}),...(profile.custom?{custom:true}:{})});
       continue;
     }
-    const models=provider==='typesafe'?undefined:await readModels(provider);
+    const models=provider==='codex-appserver'||provider==='claude-agent'?await readModels(provider):undefined;
     const resolved=resolveJudgeModel(provider,{group:{kind:'provider',provider}},models,undefined,root,previous);
     snapshots.set(provider,resolved.provider?{kind:'decision',provider:resolved.provider,model:resolved.model}
       :{kind:'llm',backend:provider,model:resolved.model,...(resolved.effort?{effort:resolved.effort}:{})});
