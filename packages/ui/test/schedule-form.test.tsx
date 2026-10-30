@@ -111,6 +111,10 @@ it('opens a once task in a zone this browser does not know at its time in the da
   render(mars, host).input('zone').props.onChange({target: {value: 'Mars/Olymp'}});
   expect(render(mars, host).zoneNote()).not.toContain('不认识');
   harness.state = [];
+  // Switched to 每天 there is no 时间 field left for the note to describe.
+  render(mars, host).choices('什么时候').props.onChange('daily');
+  expect(render(mars, host).zoneNote()).toBe(`Vonvon 所在电脑的时区是 ${host}`);
+  harness.state = [];
   const daily: ScheduledTaskView = {...mars, spec: {kind: 'daily', time: '09:00'}};
   expect(render(daily, host).zoneNote()).toBe(`Vonvon 所在电脑的时区是 ${host}`);
   // Picking 一次 on it shows an empty time, so there is no time the note could describe.
