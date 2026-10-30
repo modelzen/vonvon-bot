@@ -282,7 +282,7 @@ test('website handoff requires matching public receipts for both platforms and v
   assert.equal((await collectRelease({ out: h.options.out }, h.dependencies)).readyForWebsite, false);
   await receipts(h);
   const held = await collectRelease({ out: h.options.out }, h.dependencies);
-  assert.equal(held.readyForWebsite, false); assert.equal(held.downloads.length, 6);
+  assert.equal(held.readyForWebsite, false); assert.equal(held.downloads.length, 4);
   await receipts(h, true);
   const ready = await collectRelease({ out: h.options.out }, h.dependencies);
   assert.equal(ready.readyForWebsite, true);
@@ -299,7 +299,7 @@ test('job timing preserves queued, test and package stages and leaves ongoing du
   assert.equal(result[0].steps[0].seconds, null);
 });
 
-test('dual Windows handoff requires ARM64 Setup and ZIP as well as x64', async t => {
+test('dual Windows handoff requires both native Setup packages and omits ZIP choices', async t => {
   const h = await fixture(t); await buildRelease({ ...h.options, 'authorize-notarization': true }, h.dependencies); await receipts(h, true);
   const file = join(h.options.out, 'windows', 'windows-publish-receipt.json');
   const receipt = JSON.parse(await readFile(file, 'utf8')); receipt.architecture = 'x64';
@@ -313,8 +313,8 @@ test('dual Windows handoff requires ARM64 Setup and ZIP as well as x64', async t
     receipt.objects.push({ file: name, url: `https://dl.vonvon.cc/bot/windows/${version}/${name}`, bytes: 20, sha256: hash(name) });
   await save(file, receipt);
   const result = await collectRelease({ out: h.options.out }, h.dependencies);
-  assert.equal(result.readyForWebsite, true); assert.equal(result.downloads.length, 6);
-  assert.equal(result.downloads.filter(item => item.platform === 'windows' && item.architecture === 'arm64').length, 2);
+  assert.equal(result.readyForWebsite, true); assert.equal(result.downloads.length, 4);
+  assert.equal(result.downloads.filter(item => item.platform === 'windows' && item.architecture === 'arm64').length, 1);
 });
 
 test('Windows artifact download overlaps a running Mac helper and persists both concurrent completions', { timeout: 3000 }, async t => {
@@ -443,5 +443,31 @@ test('aborting a release child terminates its process group, including a TERM-re
       catch (error) { if (error.code !== 'ESRCH') throw error; alive = false; }
     }
     assert.equal(alive, false, `spawned process ${pid} survived cancellation`);
+  }
+});
+
+
+test('update-capable installers do not advertise application updates until both stable feeds are verified', async t => {
+  const h = await fixture(t); await buildRelease({ ...h.options, 'authorize-notarization': true }, h.dependencies); await receipts(h, true);
+  const file = join(h.options.out, 'windows', 'windows-publish-receipt.json');
+  const receipt = JSON.parse(await readFile(file, 'utf8')); receipt.updatesEnabled = true; receipt.objects = receipt.objects.filter(item => item.file.endsWith('.exe'));
+  await save(file, receipt);
+  const held = await collectRelease({ out: h.options.out }, h.dependencies);
+  assert.equal(held.readyForWebsite, false); assert.equal(held.windows.updatesEnabled, false);
+  const updateReceipt = { status: 'published', version, sourceSha: sha, updatesEnabled: true, feeds: ['x64', 'arm64'].map(architecture => ({ architecture,
+    url: `https://dl.vonvon.cc/bot/windows/stable/${architecture}/update.json`, bytes: 100, sha256: hash(architecture) })) };
+  const planFile = join(h.options.out, 'publication-plan.json');
+  await save(planFile, {format:1,candidate:{version,sourceSha:sha,windows:{updates:updateReceipt.feeds}}});
+  updateReceipt.planSHA256 = hash(await readFile(planFile));
+  await save(join(h.options.out, 'windows', 'windows-update-publish-receipt.json'), updateReceipt);
+  const ready = await collectRelease({ out: h.options.out }, h.dependencies);
+  assert.equal(ready.readyForWebsite, true); assert.equal(ready.windows.updatesEnabled, true);
+  for (const change of [
+    {...updateReceipt,planSHA256:'a'.repeat(64)},
+    {...updateReceipt,feeds:updateReceipt.feeds.map((feed,index)=>index ? feed : {...feed,sha256:'b'.repeat(64)})},
+    {...updateReceipt,feeds:updateReceipt.feeds.map((feed,index)=>index ? feed : {...feed,bytes:101})},
+  ]) {
+    await save(join(h.options.out,'windows','windows-update-publish-receipt.json'),change);
+    await assert.rejects(collectRelease({out:h.options.out},h.dependencies),/reviewed publication plan/);
   }
 });
