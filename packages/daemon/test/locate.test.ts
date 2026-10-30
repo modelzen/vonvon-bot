@@ -239,6 +239,10 @@ describe('asynchronous Codex candidate refresh', () => {
 });
 
 describe('bounded version probes', () => {
+  it.skipIf(process.platform !== 'win32')('allows the owned Windows supervisor to start before a slow valid version reply', async () => {
+    const { bin } = fakeBin('windows-delayed-version', "setTimeout(() => console.log('codex-cli 9.2.0'), 3_200)");
+    expect(await codexVersionAsync(bin, { force: true })).toBe('codex-cli 9.2.0');
+  });
   it('terminates an unresponsive version process', async () => {
     const { bin } = fakeBin('hanging-version', 'setInterval(() => {}, 1000)');
     expect(await codexVersionAsync(bin, { force: true })).toBeNull();

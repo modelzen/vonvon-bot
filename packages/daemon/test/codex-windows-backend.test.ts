@@ -55,6 +55,15 @@ function echo(mode: PermissionMode) {
         excludeTmpdirEnvVar: true, excludeSlashTmp: true },
   };
 }
+function replyWith(result: ReturnType<typeof echo> | Error) {
+  state.request.mockImplementation(async (method: string) => {
+    if (method === 'config/read') return { config: { service_tier: null } };
+    if (method !== 'thread/start' && method !== 'thread/resume') throw new Error(`Unexpected request: ${method}`);
+    if (result instanceof Error) throw result;
+    return result;
+  });
+}
+const threadCalls = () => state.request.mock.calls.filter(([method]) => method === 'thread/start' || method === 'thread/resume');
 function invoke(action: 'start' | 'resume', backend: CodexAppServerBackend, opts: StartThreadOptions) {
   return action === 'start' ? backend.startThread(opts)
     : backend.resumeThread({ ...opts, sessionId: 'windows-thread' });
@@ -76,7 +85,7 @@ describe.skipIf(process.platform !== 'win32')('Windows native permission guards 
   for (const action of ['start', 'resume'] as const) {
     it(`${action} probes the same executable that was selected for the session`, async () => {
       state.resolvedBin = 'C:\\other\\codex.exe';
-      state.request.mockResolvedValue(echo('qa'));
+      replyWith(echo('qa'));
       const backend = new CodexAppServerBackend();
       const thread = await invoke(action, backend, options('qa'));
       expect(state.refresh).toHaveBeenCalledWith(state.selectedBin, expect.objectContaining({ selectedBin: state.selectedBin }));
@@ -86,11 +95,11 @@ describe.skipIf(process.platform !== 'win32')('Windows native permission guards 
     });
 
     it.each(['qa', 'write'] as const)(`${action} %s pins MXC, keeps the feishu profile and checks the echo`, async mode => {
-      state.request.mockResolvedValue(echo(mode));
+      replyWith(echo(mode));
       const backend = new CodexAppServerBackend();
       const thread = await invoke(action, backend, options(mode));
       expect(state.refresh).toHaveBeenCalledOnce();
-      expect(state.request).toHaveBeenCalledExactlyOnceWith(`thread/${action}`, expect.objectContaining({
+      expect(threadCalls()).toEqual([[`thread/${action}`, expect.objectContaining({
         cwd, runtimeWorkspaceRoots: [cwd, readRoot, writeRoot], approvalPolicy: 'never',
         ...(action === 'resume' ? { threadId: 'windows-thread' } : {}),
         config: expect.objectContaining({
@@ -102,8 +111,8 @@ describe.skipIf(process.platform !== 'win32')('Windows native permission guards 
             [writeRoot]: expect.objectContaining({ '.': mode === 'qa' ? 'read' : 'write' }),
           }), network: { enabled: mode === 'write' } } },
         }),
-      }));
-      const params = state.request.mock.calls[0]![1];
+      })]]);
+      const params = threadCalls()[0]![1];
       expect(params).not.toHaveProperty('sandbox');
       expect(params.config.permissions.feishu.filesystem).not.toHaveProperty('/private/tmp');
       await thread.close();
@@ -145,10 +154,10 @@ describe.skipIf(process.platform !== 'win32')('Windows native permission guards 
     it(`${action} full access remains available without a capability probe`, async () => {
       state.version = null;
       state.capability = { status: 'probeFailed' };
-      state.request.mockResolvedValue(echo('full'));
+      replyWith(echo('full'));
       const thread = await invoke(action, new CodexAppServerBackend(), options('full'));
       expect(state.refresh).not.toHaveBeenCalled();
-      const params = state.request.mock.calls[0]![1];
+      const params = threadCalls()[0]![1];
       expect(params.sandbox).toBe('danger-full-access');
       expect(params.config).not.toHaveProperty('windows');
       expect(params.config).not.toHaveProperty('permissions');
@@ -156,19 +165,21 @@ describe.skipIf(process.platform !== 'win32')('Windows native permission guards 
     });
 
     it.each(['network', 'profile'] as const)(`${action} closes a client whose %s echo widens permission`, async defect => {
-      state.request.mockResolvedValue({ ...echo('qa'), ...(defect === 'network'
+      replyWith({ ...echo('qa'), ...(defect === 'network'
         ? { sandbox: { type: 'readOnly', networkAccess: true } }
         : { activePermissionProfile: { id: 'workspace', extends: null } }) });
       await expect(invoke(action, new CodexAppServerBackend(), options('qa'))).rejects.toThrow('s39a');
       expect(state.close).toHaveBeenCalledOnce();
-      expect(state.request).toHaveBeenCalledOnce();
-      expect(state.request.mock.calls[0]![1]).not.toHaveProperty('sandbox', 'danger-full-access');
+      expect(threadCalls()).toHaveLength(1);
+      expect(threadCalls()[0]![0]).toBe(`thread/${action}`);
+      expect(threadCalls()[0]![1]).not.toHaveProperty('sandbox', 'danger-full-access');
     });
 
     it(`${action} provider refusal is not retried as full access or a fresh conversation`, async () => {
-      state.request.mockRejectedValue(new Error('native MXC policy refused'));
+      replyWith(new Error('native MXC policy refused'));
       await expect(invoke(action, new CodexAppServerBackend(), options('qa'))).rejects.toThrow('native MXC policy refused');
-      expect(state.request).toHaveBeenCalledOnce();
+      expect(threadCalls()).toHaveLength(1);
+      expect(threadCalls()[0]![0]).toBe(`thread/${action}`);
       expect(state.close).toHaveBeenCalledOnce();
     });
   }

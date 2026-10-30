@@ -54,7 +54,8 @@ function fixture(externalVersion?: string) {
 
 it('installs latest through the real environment engine, publishes its pointer and selects the new executable', async () => {
   const f = fixture();
-  expect(await f.service.run({ type: 'install', tool: 'codex' })).toMatchObject({ kind: 'applied' });
+  const reply = await f.service.run({ type: 'install', tool: 'codex' });
+  expect(reply, JSON.stringify(reply)).toMatchObject({ kind: 'applied' });
   expect(JSON.parse(readFileSync(f.trace, 'utf8'))).toContain('@openai/codex@latest');
   const selected = managedToolSelection(f.dataRoot, 'codex');
   expect(selected).toMatchObject({ kind: 'active', version: '9.2.0' });
@@ -105,7 +106,7 @@ it('serializes publication and uninstall across service instances sharing a data
   services.push(other);
   const installing = f.service.run({ type: 'install', tool: 'codex' });
   try {
-    await atPublication;
+    await Promise.race([atPublication, installing.then(reply => { throw new Error(JSON.stringify(reply)); })]);
     const pointer = readFileSync(f.pointer, 'utf8');
     for (const type of ['install', 'update', 'uninstall'] as const) {
       expect(await other.run({ type, tool: 'codex' }), type).toMatchObject({ kind: 'refused', code: 'busy' });
