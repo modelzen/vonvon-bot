@@ -70,6 +70,20 @@ it("rejects a mismatched method and exposes remote errors", async () => {
   await client.close();
 });
 
+it("sends schedule as { botId, request } and parses the tasks reply", async () => {
+  const frames: unknown[] = [];
+  const reply = {kind:"tasks",tasks:[],now:1,timeZone:"Asia/Tokyo"};
+  const options = await fixture((socket, frame) => {
+    frames.push(frame);
+    socket.send(JSON.stringify({type:"response",id:frame.id,method:"schedule",payload:reply}));
+  });
+  const client = await connectLocal(options);
+  const request = {action:"list",chatId:"oc_pay"} as const;
+  expect(await client.schedule("cli_a", request)).toEqual(reply);
+  expect(frames).toEqual([{type:"request",id:expect.any(String),method:"schedule",payload:{botId:"cli_a",request}}]);
+  await client.close();
+});
+
 it("seeds snapshot watching without regressing after an earlier event", async () => {
   const options = await fixture((socket, frame) => {
     if (frame.method !== "snapshot") throw new Error("Unexpected method");
