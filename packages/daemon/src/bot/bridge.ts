@@ -214,6 +214,8 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     log.info('ws', 'connected', { appId: app.id, fallbackCwd: opts.fallbackCwd });
     // Only once connected: when this start fails, the file stays as it is for the next one.
     orchestrator.replyDropped();
+    // Scheduled runs post to Feishu: the tick starts once connected, after the crashed runs are recorded.
+    await orchestrator.scheduler.start();
 
     const executeGroup = createGroupExecutor(channel, identity, opts.cfg.preferences?.projectsRootDir);
     const adminGroups: BridgeHandle['adminGroups'] = op => {
