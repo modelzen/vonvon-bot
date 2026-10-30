@@ -25,6 +25,34 @@
   ; The assisted template otherwise appends APP_FILENAME even during --updated.
   ; Preserve an existing custom /D path from the old one-click installer exactly.
   !macro customPageAfterChangeDir
+    Page custom vonvonCheckDirectory
+    Function vonvonCheckDirectory
+      ${If} ${isUpdated}
+        Abort
+      ${EndIf}
+      Call instFilesPre
+      ; This page is reached only after Next on the directory page. The global
+      ; .onVerifyInstDir callback also runs while typing/browsing, so never probe there.
+      ClearErrors
+      CreateDirectory "$INSTDIR"
+      GetTempFileName $R0 "$INSTDIR"
+      ${IfNot} ${Errors}
+        Delete "$R0"
+        Abort
+      ${EndIf}
+      !insertmacro MUI_HEADER_TEXT "Installation folder / 安装目录" "Choose a writable folder / 请选择可写目录"
+      nsDialogs::Create 1018
+      Pop $R0
+      ${If} $R0 == error
+        SetErrorLevel 2
+        Quit
+      ${EndIf}
+      ${NSD_CreateLabel} 0 0 100% 70u "This folder is not writable by your Windows user. Click Back to choose another folder.$\r$\n$\r$\n当前用户无法写入此目录。请点击上一步，选择其他安装目录。"
+      Pop $R0
+      GetDlgItem $R0 $HWNDPARENT 1
+      EnableWindow $R0 0
+      nsDialogs::Show
+    FunctionEnd
     !undef MUI_PAGE_CUSTOMFUNCTION_PRE
     !define MUI_PAGE_CUSTOMFUNCTION_PRE vonvonInstFilesPre
     Function vonvonInstFilesPre
@@ -52,21 +80,6 @@
     !insertmacro MUI_PAGE_FINISH
   !macroend
 
-  !macro customHeader
-    DirVerify leave
-    Function .onVerifyInstDir
-      ; A user-selected path must be writable without an elevation handoff.
-      ; Probe only when leaving the directory page, never while typing a path.
-      ClearErrors
-      CreateDirectory "$INSTDIR"
-      GetTempFileName $R0 "$INSTDIR"
-      ${If} ${Errors}
-        MessageBox MB_OK|MB_ICONEXCLAMATION "Please choose a folder writable by your current Windows user. / 请选择当前用户可写的安装目录。"
-        Abort
-      ${EndIf}
-      Delete "$R0"
-    FunctionEnd
-  !macroend
 !endif
 
 !ifndef BUILD_UNINSTALLER
