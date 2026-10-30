@@ -4,7 +4,7 @@ import { CodexAppServerBackend } from '../src/agent/codex-appserver/backend';
 
 const locate = vi.hoisted(() => ({ version: undefined as string | null | undefined, probe: vi.fn() }));
 vi.mock('../src/agent/codex-appserver/locate', () => ({
-  resolveCodexBin: () => '/fixture/codex', cachedCodexVersion: () => locate.version, codexVersionAsync: locate.probe,
+  refreshCodexResolution: () => '/fixture/codex', resolveCodexBin: () => '/fixture/codex', cachedCodexVersion: () => locate.version, codexVersionAsync: locate.probe,
 }));
 
 describe('Codex Linux permission capability', () => {

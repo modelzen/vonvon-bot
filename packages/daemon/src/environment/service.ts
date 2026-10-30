@@ -8,7 +8,10 @@ import { constants } from "node:fs";
 import { access, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { basename, delimiter, dirname, isAbsolute, join, relative, win32 } from "node:path";
 import { spawnProcess } from "../platform/spawn";
-import { CODEX_MIN_VERSION, CODEX_VERIFIED_VERSION, classifyCodexVersion } from "../agent/codex-appserver/version";
+import { CODEX_MIN_VERSION, CODEX_VERIFIED_VERSION, classifyCodexVersion, compareCodexVersions } from "../agent/codex-appserver/version";
+import { managedCodexBin } from "../agent/codex-appserver/managed-install";
+import { codexSource } from './codex-source';
+import { bundledNpmCli } from '../platform/npm';
 import {
   environmentProfileSchema,
   type EnvironmentOperation,
@@ -42,6 +45,8 @@ export type EnvironmentServiceOptions = {
   path?: string;
   spawnProcess?: typeof spawnProcess;
   fetchLatest?: (name: string) => Promise<string | null>;
+  installSignal?: AbortSignal;
+  requireTrustedNpm?: boolean;
 };
 
 type ActiveOperation = {
@@ -60,6 +65,8 @@ export class EnvironmentService {
   private readonly searchPath: string;
   private readonly spawnProcess: typeof spawnProcess;
   private readonly fetchLatest: (name: string) => Promise<string | null>;
+  private readonly installSignal?: AbortSignal;
+  private readonly requireTrustedNpm: boolean;
   private active?: ActiveOperation;
   private lastOperation: EnvironmentOperation | null = null;
   private mutation = false;
@@ -83,6 +90,8 @@ export class EnvironmentService {
     this.searchPath = options.path ?? process.env.PATH ?? "";
     this.spawnProcess = options.spawnProcess ?? spawnProcess;
     this.fetchLatest = options.fetchLatest ?? latestVersion;
+    this.installSignal = options.installSignal;
+    this.requireTrustedNpm = options.requireTrustedNpm ?? false;
   }
 
   run(request: EnvironmentRequest): Promise<EnvironmentReply> {
@@ -239,7 +248,8 @@ export class EnvironmentService {
     const managed = selection.kind === "active" ? selection.executable : this.legacyManagedExecutable(tool);
     if (tool === "codex") {
       const selected = await this.resolveCodex();
-      return selected ? { executable: selected, ownership: selected === managed && selection.kind !== "disabled" && selection.kind !== "invalid" ? "managed" : "external" } : null;
+      const legacy = selection.kind === 'absent' ? managedCodexBin(join(this.getDataRoot(), 'codex-cli')) : null;
+      return selected ? { executable: selected, ownership: !process.env.CODEX_BIN && (selected === managed || selected === legacy) && selection.kind !== "disabled" && selection.kind !== "invalid" ? "managed" : "external" } : null;
     }
     if (selection.kind === "active") return { executable: managed, ownership: "managed" };
     if (selection.kind === "absent" && await executable(managed)) return { executable: managed, ownership: "managed" };
@@ -279,10 +289,11 @@ export class EnvironmentService {
       version,
       managedVersion,
       latestVersion: latest,
-      updateAvailable: version && latest ? version !== latest : null,
+      updateAvailable: version && latest ? (tool === 'codex' ? compareCodexVersions(latest, version) > 0 : version !== latest) : null,
       canUninstall: Boolean(managedVersion),
       ...(tool === "claude" && resolved ? { runtimeStatus: result ? (result.exitCode === 0 ? "ready" as const : "failed" as const) : "unknown" as const } : {}),
       ...(compatibility ? { compatibility } : {}),
+      ...(tool === 'codex' && resolved ? codexSource(resolved.executable, resolved.ownership === 'managed') : {}),
     };
   }
 
@@ -290,6 +301,12 @@ export class EnvironmentService {
     const selection = await this.managedSelection(tool);
     if (selection.kind === "active") return selection.version;
     if (selection.kind !== "absent") return null;
+    if (tool === 'codex' && managedCodexBin(join(this.getDataRoot(), 'codex-cli'))) {
+      try {
+        const pointer = JSON.parse(await readFile(join(this.getDataRoot(), 'codex-cli', 'current.json'), 'utf8')) as {version?: unknown};
+        if (typeof pointer.version === 'string' && /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(pointer.version)) return pointer.version;
+      } catch { /* inspect the other legacy layout */ }
+    }
     const file = join(this.managedRoot(), "lib", "node_modules", tools[tool].package, "package.json");
     try {
       const body: unknown = JSON.parse(await readFile(file, "utf8"));
@@ -303,6 +320,9 @@ export class EnvironmentService {
     this.mutation = true;
     const id = randomUUID();
     const abort = new AbortController();
+    const cancel = () => abort.abort(this.installSignal?.reason);
+    this.installSignal?.addEventListener('abort', cancel, {once: true});
+    if (this.installSignal?.aborted) cancel();
     this.toolInstall = { kind: "running", id, tool, update, startedAt: Date.now() };
     this.installAbort = abort;
     const pending = this.performInstall(tool, update, abort.signal).then((reply) => {
@@ -313,6 +333,7 @@ export class EnvironmentService {
       this.toolInstall = { kind: abort.signal.aborted ? "cancelled" : "failed", id, message };
       return refused(abort.signal.aborted ? "install-cancelled" : "install-failed", message);
     }).finally(() => {
+      this.installSignal?.removeEventListener('abort', cancel);
       this.mutation = false;
       this.installAbort = undefined;
       this.installCompletion = undefined;
@@ -367,6 +388,13 @@ export class EnvironmentService {
       try {
         const after = await this.resolveTool(tool);
         selected = !signal.aborted && after?.ownership === "managed" && after.executable === bin;
+        // Automatic discovery may prefer a newer external install. Keep the verified
+        // managed release as a fallback without claiming that it replaced that CLI.
+        if (!signal.aborted && !selected && tool === 'codex' && after?.ownership === 'external' && !process.env.CODEX_BIN) {
+          const probe = await this.command(after.executable, ['--version'], 5_000, undefined, signal);
+          const activeVersion = probe.exitCode === 0 ? probe.stdout.match(/^codex-cli (\d+\.\d+\.\d+(?:-[\w.-]+)?)/)?.[1] : undefined;
+          selected = Boolean(activeVersion && compareCodexVersions(activeVersion, manifest.version) >= 0);
+        }
       } finally {
         if (!selected) {
           if (previousPointer === null) await rm(this.managedPointer(tool), { force: true });
@@ -374,7 +402,7 @@ export class EnvironmentService {
         }
       }
       if (!selected) return refused("install-not-selected", "当前 Vonvon Bot 未选用新版本，已保留原有工具；请检查 CODEX_BIN 等显式配置。");
-      return { kind: "applied", message: `${tools[tool].executable} ${manifest.version} 已${update ? "更新" : "安装"}。` };
+      return { kind: "applied", message: `${tools[tool].executable} ${manifest.version} 已${update ? "更新" : "安装"}。${tool === 'codex' ? '新会话会使用检测到的版本，正在执行的任务继续运行。' : ''}` };
     } finally {
       if (!exposed && this.children.size === 0) await rm(release, { recursive: true, force: true });
     }
@@ -508,6 +536,9 @@ export class EnvironmentService {
   }
 
   private async resolveNpm(): Promise<string | null> {
+    const trusted = !this.npmPath ? bundledNpmCli() : undefined;
+    if (trusted) return trusted;
+    if (this.requireTrustedNpm) return null;
     const candidates = [this.npmPath, join(dirname(this.nodePath), process.platform === "win32" ? "npm.cmd" : "npm"), ...this.searchPath.split(delimiter).filter(isAbsolute).map((directory) => join(directory, process.platform === "win32" ? "npm.cmd" : "npm"))];
     for (const candidate of candidates) if (candidate && await executable(candidate)) return candidate;
     return null;
@@ -527,7 +558,10 @@ export class EnvironmentService {
   private command(executablePath: string, args: string[], timeoutMs: number, secret?: string, signal?: AbortSignal, env?: NodeJS.ProcessEnv): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
       signal?.throwIfAborted();
-      const child = this.launch(executablePath, args, secret, env);
+      const trustedNpm = executablePath === bundledNpmCli();
+      const child = trustedNpm
+        ? this.launch(this.nodePath, [executablePath, ...args], secret, {...(env ?? this.environment()), ELECTRON_RUN_AS_NODE: '1', npm_config_update_notifier: 'false'})
+        : this.launch(executablePath, args, secret, env);
       let stdout = "";
       let stderr = "";
       let bytes = 0;

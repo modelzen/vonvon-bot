@@ -8,12 +8,13 @@ import type { PermissionMode, StartThreadOptions } from '../src/agent/types';
 
 const state = vi.hoisted(() => ({
   version: 'codex-cli 0.163.0' as string | null,
+  selectedBin: 'C:\\fixture\\codex.exe', resolvedBin: 'C:\\fixture\\codex.exe',
   capability: { status: 'ready', implementation: 'mxc' } as WindowsSandboxCapability | undefined,
   versionProbe: vi.fn(), refresh: vi.fn(), request: vi.fn(),
   close: vi.fn(async () => {}), take: vi.fn(), refill: vi.fn(async () => {}),
 }));
 vi.mock('../src/agent/codex-appserver/locate', () => ({
-  resolveCodexBin: () => 'C:\\fixture\\codex.exe',
+  refreshCodexResolution: () => state.selectedBin, resolveCodexBin: () => state.resolvedBin,
   cachedCodexVersion: () => state.version,
   codexVersionAsync: state.versionProbe,
 }));
@@ -63,6 +64,8 @@ describe.skipIf(process.platform !== 'win32')('Windows native permission guards 
   beforeEach(() => {
     vi.clearAllMocks();
     state.version = 'codex-cli 0.163.0';
+    state.selectedBin = 'C:\\fixture\\codex.exe';
+    state.resolvedBin = state.selectedBin;
     state.capability = { status: 'ready', implementation: 'mxc' };
     state.versionProbe.mockImplementation(async () => state.version);
     state.refresh.mockImplementation(async () => state.capability);
@@ -71,6 +74,17 @@ describe.skipIf(process.platform !== 'win32')('Windows native permission guards 
   afterEach(() => vi.restoreAllMocks());
 
   for (const action of ['start', 'resume'] as const) {
+    it(`${action} probes the same executable that was selected for the session`, async () => {
+      state.resolvedBin = 'C:\\other\\codex.exe';
+      state.request.mockResolvedValue(echo('qa'));
+      const backend = new CodexAppServerBackend();
+      const thread = await invoke(action, backend, options('qa'));
+      expect(state.refresh).toHaveBeenCalledWith(state.selectedBin, expect.objectContaining({ selectedBin: state.selectedBin }));
+      expect(state.versionProbe.mock.calls.every(call => call[0] === state.selectedBin)).toBe(true);
+      expect(state.take).toHaveBeenCalledWith(state.selectedBin);
+      await thread.close();
+    });
+
     it.each(['qa', 'write'] as const)(`${action} %s pins MXC, keeps the feishu profile and checks the echo`, async mode => {
       state.request.mockResolvedValue(echo(mode));
       const backend = new CodexAppServerBackend();

@@ -11,7 +11,9 @@ const windowsRootTests = ['stage-daemon', 'package-windows', 'windows-runtime-sm
   .map(name => `scripts/${name}.test.mjs`);
 const windowsPackageTests = {
   daemon: ['environment-windows-launch', 'provider/windows-command-line', 'provider/windows-supervisor',
-    'windows-owned-process', 'data-compatibility', 'register-bot'].map(name => `test/${name}.test.ts`),
+    'windows-owned-process', 'data-compatibility', 'register-bot', 'locate', 'codex-version',
+    'codex-managed-install', 'codex-source', 'appserver-pool', 'environment-rpc',
+    'codex-environment-install', 'codex-windows-backend'].map(name => `test/${name}.test.ts`),
   desktop: ['windows-updates', 'tray', 'daemon-dependencies'].map(name => `test/${name}.test.ts`),
 };
 

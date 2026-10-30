@@ -153,3 +153,108 @@ describe('desktop and Agent executable selection', () => {
     expect(resolveCodexBin({ ...context, force: true })).toBe(viaNvm);
   });
 });
+
+describe('asynchronous Codex candidate refresh', () => {
+  async function fixture(name: string) {
+    const { mkdirSync } = await import('node:fs');
+    const { delimiter } = await import('node:path');
+    const home = join(dir, name);
+    const root = join(home, 'data');
+    const managedDir = join(root, 'managed-tools', 'bin');
+    const externalDir = join(home, 'external');
+    mkdirSync(managedDir, { recursive: true });
+    mkdirSync(externalDir, { recursive: true });
+    const managed = writeNodeExecutable(managedDir, 'codex', 'console.log("codex-cli 9.1.0")').bin;
+    const external = writeNodeExecutable(externalDir, 'codex', 'console.log("codex-cli 9.2.0")').bin;
+    return { managed, external, externalDir, root, context: { home, dataRoot: root, env: { PATH: [externalDir, process.env.PATH ?? ''].join(delimiter) } } };
+  }
+
+  it('upgrades from legacy managed to newer external, caches without another spawn, and respects explicit override', async () => {
+    const { refreshCodexResolution } = await import('../src/agent/codex-appserver/locate');
+    const f = await fixture('refresh-legacy');
+    expect(await refreshCodexResolution(f.context)).toBe(f.external);
+    expect(resolveCodexBin(f.context)).toBe(f.external);
+    expect(await refreshCodexResolution({ ...f.context, env: { ...f.context.env, CODEX_BIN: f.managed } })).toBe(f.managed);
+    expect(await refreshCodexResolution({ ...f.context, env: { CODEX_BIN: join(dir, 'missing-explicit') } })).toBeNull();
+    rmSync(f.external);
+    expect(resolveCodexBin(f.context)).toBe(f.managed);
+  });
+
+  it('compares active managed generations and prefers stable only within the same version', async () => {
+    const { refreshCodexResolution } = await import('../src/agent/codex-appserver/locate');
+    const { mkdirSync } = await import('node:fs');
+    const f = await fixture('refresh-active');
+    const generation = '12345678-1234-1234-1234-123456789012';
+    const release = join(f.root, 'managed-tools', 'codex', 'releases', generation);
+    const binDir = process.platform === 'win32' ? release : join(release, 'bin');
+    mkdirSync(binDir, { recursive: true });
+    writeNodeExecutable(binDir, 'codex', 'console.log("codex-cli 9.1.0")');
+    writeFileSync(join(f.root, 'managed-tools', 'codex', 'current.json'), JSON.stringify({ schemaVersion: 1, tool: 'codex', state: 'active', generation, version: '9.1.0' }));
+    expect(await refreshCodexResolution(f.context)).toBe(f.external);
+    writeNodeExecutable(f.externalDir, 'codex', 'console.log("codex-cli 9.1.0-alpha.1.2")');
+    const active = resolveCodexBin(f.context);
+    expect(await refreshCodexResolution({ ...f.context, force: true })).toBe(active);
+    expect(active).not.toBe(f.external);
+    writeNodeExecutable(f.externalDir, 'codex', 'console.log("codex-cli 10.0.0-alpha.1.2")');
+    expect(await refreshCodexResolution({ ...f.context, force: true })).toBe(f.external);
+  });
+
+  it('coalesces concurrent forced scans and reuses a valid resolution without spawning', async () => {
+    const { refreshCodexResolution } = await import('../src/agent/codex-appserver/locate');
+    const f = await fixture('refresh-concurrent');
+    const counter = join(f.externalDir, 'probe-count');
+    writeNodeExecutable(f.externalDir, 'codex', `require('node:fs').appendFileSync(${JSON.stringify(counter)}, 'run\\n'); setTimeout(() => console.log('codex-cli 9.2.0'), 40);`);
+    const selected = await Promise.all(Array.from({ length: 3 }, () => refreshCodexResolution({ ...f.context, force: true })));
+    expect(selected).toEqual([f.external, f.external, f.external]);
+    expect(readFileSync(counter, 'utf8').trim().split('\n')).toHaveLength(1);
+    expect(await refreshCodexResolution(f.context)).toBe(f.external);
+    expect(readFileSync(counter, 'utf8').trim().split('\n')).toHaveLength(1);
+  });
+
+  it.skipIf(process.platform === 'win32')('finds user local tools with an empty Finder-style PATH', async () => {
+    const { refreshCodexResolution } = await import('../src/agent/codex-appserver/locate');
+    const { mkdirSync } = await import('node:fs');
+    const home = join(dir, 'finder-tools');
+    const local = join(home, '.local', 'bin');
+    mkdirSync(local, { recursive: true });
+    const bin = writeNodeExecutable(local, 'codex', 'console.log("codex-cli 9.9.0")').bin;
+    expect(await refreshCodexResolution({ home, dataRoot: join(home, 'data'), env: { PATH: '' } })).toBe(bin);
+  });
+
+  it('does not accept an unrelated program that happens to print a higher semver', async () => {
+    const { refreshCodexResolution } = await import('../src/agent/codex-appserver/locate');
+    const f = await fixture('refresh-unrelated');
+    writeNodeExecutable(f.externalDir, 'codex', 'console.log("unrelated-tool 99.0.0")');
+    expect(await refreshCodexResolution(f.context)).toBe(f.managed);
+  });
+
+  it('ignores failed newer candidate and invalidates the selected fingerprint on in-place updates', async () => {
+    const { refreshCodexResolution } = await import('../src/agent/codex-appserver/locate');
+    const f = await fixture('refresh-failure');
+    expect(await refreshCodexResolution(f.context)).toBe(f.external);
+    writeNodeExecutable(f.externalDir, 'codex', 'process.exit(1)');
+    expect(resolveCodexBin(f.context)).toBe(f.managed);
+    expect(await refreshCodexResolution({ ...f.context, force: true })).toBe(f.managed);
+  });
+});
+
+describe('bounded version probes', () => {
+  it('terminates an unresponsive version process', async () => {
+    const { bin } = fakeBin('hanging-version', 'setInterval(() => {}, 1000)');
+    expect(await codexVersionAsync(bin, { force: true })).toBeNull();
+  });
+});
+
+describe('Windows user-install discovery', () => {
+  it.skipIf(process.platform !== 'win32')('finds user npm shims without npm on PATH and honors PATHEXT', async () => {
+    const { mkdirSync } = await import('node:fs');
+    const home = join(dir, 'windows-user');
+    const appData = join(home, 'roaming');
+    const npm = join(appData, 'npm');
+    mkdirSync(npm, { recursive: true });
+    const bin = writeNodeExecutable(npm, 'codex', 'console.log("codex-cli 9.0.0")').bin;
+    const context = { home, dataRoot: join(home, 'data'), env: { PATH: '', APPDATA: appData, PATHEXT: '.EXE;.CMD' } };
+    expect(resolveCodexBin(context)).toBe(bin);
+    expect(resolveCodexBin({ ...context, env: { ...context.env, PATHEXT: '.EXE' } })).toBeNull();
+  });
+});
