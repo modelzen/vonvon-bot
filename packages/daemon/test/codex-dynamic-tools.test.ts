@@ -1,14 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { codexSessionParams } from '../src/agent/codex-appserver/backend';
+import { startDynamicTools } from '../src/agent/codex-appserver/dynamic-tools';
 import { CodexRequestScope, dynamicToolCall } from '../src/agent/codex-appserver/server-requests';
 import { scheduleToolNames } from '../src/agent/entry/schedule-tools';
-import type { AgentEntry } from '../src/agent/types';
+import type { AgentEntry, AgentThread } from '../src/agent/types';
 import { closeCodexToolFixtures, codexToolsFixture, OWNER, person, profile } from './helpers/codex-tools-fixture';
 
 // 定时任务 T3b: the schedule tools reach Codex as app-server dynamicTools on thread/start and come back as item/tool/call.
 vi.mock('../src/agent/codex-appserver/windows-sandbox', async original => ({ ...await original<object>(),
   cachedWindowsSandbox: () => ({ status: 'ready', implementation: 'mxc' }), windowsShellPath: () => undefined }));
 afterEach(closeCodexToolFixtures);
+afterEach(() => { vi.restoreAllMocks(); });
 
 describe('dynamicTools on thread/start', () => {
   it('starts a schedule session with the vonvon_bot namespace of T3\'s seven tools', async () => {
@@ -18,6 +20,10 @@ describe('dynamicTools on thread/start', () => {
     expect(tools).toEqual([{ type: 'namespace', name: 'vonvon_bot', description: expect.any(String), tools: expect.any(Array) }]);
     expect(tools![0]!.tools.map(tool => tool.name)).toEqual([...scheduleToolNames]);
     for (const tool of tools![0]!.tools) expect(tool).toMatchObject({ type: 'function', description: expect.any(String), inputSchema: { type: 'object' } });
+  });
+  it('leaves the field out without an entry to answer the calls', () => {
+    expect(startDynamicTools({ entry: {} as AgentEntry, profile: profile(true) })).toHaveProperty('dynamicTools');
+    expect(startDynamicTools({ profile: profile(true) })).toEqual({});
   });
   it('leaves the field out without tools.schedule, and on resume (Codex restores them from the rollout)', async () => {
     const f = codexToolsFixture();
@@ -38,6 +44,28 @@ describe('dynamicTools on thread/start', () => {
     try {
       expect(features({ cwd: '/work', mode: 'qa' }, process.execPath)).toEqual({ prefer_mxc: false, memories: false, in_app_local_automation: false });
     } finally { Object.defineProperty(process, 'platform', platform); }
+  });
+});
+
+describe('connector tools that schedule on ChatGPT\'s side', () => {
+  const off = (...names: string[]) => ({ tools: Object.fromEntries(names.map(name => [name, { enabled: false }])) });
+  const apps = {
+    connector_openai_pages: off('list_page_automations', 'create_controller_automation', 'attach_automation_to_page',
+      'get_page_auto_update', 'set_page_auto_update', 'run_page_auto_update'),
+    connector_20205bf7d4e99a89d7154bb849718324: off('create_schedule', 'validate_suggested_schedule'),
+  };
+  it('closes exactly these tools on every tier, and no app wholesale', () => {
+    for (const mode of ['qa', 'write', 'full'] as const) {
+      const config = codexSessionParams({ cwd: '/work', mode, profile: profile(true) }, 'codex-cli 0.163.0', null).config as { apps: unknown; features: object };
+      expect(config.apps).toEqual(apps);
+      expect(config.features).not.toHaveProperty('apps');
+    }
+  });
+  it('sends them on thread/start and thread/resume alike', async () => {
+    const f = codexToolsFixture();
+    await f.open('start');
+    await f.open('resume');
+    expect([...f.starts(), ...f.resumes()].map(params => (params.config as { apps?: unknown }).apps)).toEqual([apps, apps]);
   });
 });
 
@@ -68,4 +96,33 @@ describe('item/tool/call', () => {
     expect(await dynamicToolCall(params, undefined, () => host)).toEqual(over);
     expect(call).toHaveBeenCalledOnce();
   });
+  // The answer is not delivered, the peer is gone; what matters is that nothing stays held.
+  it.each([
+    ['the thread closes', (thread: AgentThread) => thread.close()],
+    ['the app-server process dies (SIGKILL, so EOF)', (_thread: AgentThread, pid: number) => { process.kill(pid, 'SIGKILL'); }],
+  ])('releases a held call when %s, and the run settles', async (_when, end) => {
+    const held = holds();
+    const f = codexToolsFixture();
+    f.execute.mockImplementation(() => new Promise(() => {}));
+    const session = await f.open();
+    const call = vi.spyOn(session.entry, 'call');
+    const turn = session.turn(person(OWNER), [{ tool: 'schedule_list' }]);
+    await vi.waitFor(() => expect(f.execute).toHaveBeenCalledOnce());
+    await end(session.thread, f.pid()!);
+    await expect(turn).resolves.toBeUndefined();
+    expect(held).toEqual([{ released: true }]);
+    await expect(call.mock.results[0]!.value).resolves.toMatchObject({ ok: false, code: 'revoked' });
+  });
 });
+
+/** Every call a run's scope holds, and whether the scope's close answered it. */
+function holds(): { released: boolean }[] {
+  const held: { released: boolean }[] = [];
+  const hold = CodexRequestScope.prototype.hold;
+  vi.spyOn(CodexRequestScope.prototype, 'hold').mockImplementation(function (this: CodexRequestScope, answer: () => void) {
+    const call = { released: false };
+    held.push(call);
+    return hold.call(this, () => { call.released = true; answer(); });
+  });
+  return held;
+}
