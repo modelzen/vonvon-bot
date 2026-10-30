@@ -122,7 +122,7 @@ import { closeOwnedProviderProcesses } from '../agent/owned-process';
 import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
 import { JUDGE_NAMED_TIMEOUT_MS, createJudge } from '../judge/judge';
 import { createJudgeUsage } from '../judge/usage';
-import { installAtGuard } from '../card/at-guard';
+import { installAtGuard, neutraliseAts } from '../card/at-guard';
 import { isManaged, sendManagedCard, updateManagedCard } from '../card/managed';
 import { RunRender } from '../card/run-render';
 import { finalMessageText, initialState, markInterrupted, reduce, type RunState, type SubagentRow } from '../card/run-state';
@@ -715,7 +715,7 @@ export function sessionChangeNotice(reason: RecreateReason, topic: boolean): str
 interface ActiveState {
   steerReply?: { run: AgentRun; accept: (messageId: string, voice?: VoiceReply) => boolean };
   presentation?: AppConfig;
-  /** The run's group, from launchRun or launchGoalRun on; the edit lock looks at this group's runs only (see runningIn). */
+  /** The run's group, set by startReservedRun, launchRun and launchGoalRun; the edit lock looks at this group's runs only (see runningIn). */
   chatId?: string;
   /** Captured with the steer target so a late ACK cannot decorate another turn. */
   voiceReply?: { run: AgentRun; add: (voice: VoiceReply) => void };
@@ -1933,11 +1933,13 @@ export function createOrchestrator(
     return true;
   }
 
-  /** Only people are asked to resend; bot messages leave diagnostics instead, and a scheduled turn is settled. */
-  function askAgain(queue: readonly QueuedTurn[], chatId: string, place: NotReplied['place'], why: string, detail: string): number {
+  /** Only people are asked to resend; bot messages leave diagnostics instead, and a scheduled turn is settled by
+   * `scheduledWhy` (droppedScheduled). */
+  function askAgain(queue: readonly QueuedTurn[], chatId: string, place: NotReplied['place'], why: string, detail: string,
+    scheduledWhy = why): number {
     let people = 0;
     for (const turn of queue) {
-      if (turn.scheduled) { turn.scheduled.settle(droppedScheduled(why)); continue; }
+      if (turn.scheduled) { turn.scheduled.settle(droppedScheduled(scheduledWhy)); continue; }
       if (turn.requesterKind !== 'bot') { people++; continue; }
       const id = turn.seen?.id ?? '';
       log.info('intake', 'bot-wake-dropped', { ref: id.slice(-6), why });
@@ -2528,13 +2530,15 @@ export function createOrchestrator(
   const intakeChats = new Map<string, number>();
   const pendingTopics = new Map<string, number>();
   const resumePublications = new Set<string>();
-  const onMessage = async (msg: NormalizedMessage): Promise<void> => {
-    intakeChats.set(msg.chatId, (intakeChats.get(msg.chatId) ?? 0) + 1);
-    try { await handleMessage(msg); } finally {
-      const remaining = (intakeChats.get(msg.chatId) ?? 1) - 1;
-      if (remaining) intakeChats.set(msg.chatId, remaining); else intakeChats.delete(msg.chatId);
+  /** `chatId` is taking a message in while `work` runs: the group's settings are not edited meanwhile. */
+  async function duringIntake<T>(chatId: string, work: () => Promise<T>): Promise<T> {
+    intakeChats.set(chatId, (intakeChats.get(chatId) ?? 0) + 1);
+    try { return await work(); } finally {
+      const remaining = (intakeChats.get(chatId) ?? 1) - 1;
+      if (remaining) intakeChats.set(chatId, remaining); else intakeChats.delete(chatId);
     }
-  };
+  }
+  const onMessage = (msg: NormalizedMessage): Promise<void> => duringIntake(msg.chatId, () => handleMessage(msg));
   const handleMessage = async (msg: NormalizedMessage): Promise<void> => {
     if (seenInbound.seen(msg.messageId)) {
       log.info('intake', 'reject', { reason: 'duplicate', msgId: msg.messageId });
@@ -3453,7 +3457,7 @@ export function createOrchestrator(
       log.info('intake', 'queued', { depth: existing.queue.length });
       return;
     }
-    const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg), smart: project && sessionModeOf(project) === 'smart', isGoal: goal, runLoop: true,
+    const reserved: ActiveState = { queue: [], chatId: msg.chatId, requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg), smart: project && sessionModeOf(project) === 'smart', isGoal: goal, runLoop: true,
       ...(flat && !msg.threadId && !goal ? { triggerAt: msg.createTime } : {}) };
     active.set(sessionKey, reserved);
     dropRetries(sessionKey);
@@ -5164,8 +5168,8 @@ export function createOrchestrator(
     firingHolds.set(chatId, Math.max(firingHolds.get(chatId) ?? 0, Date.now() + ms));
   }
 
-  /** Whether a run of `chatId` is on, for the desktop's edit lock. A state learns its group in launchRun: a reservation
-   * before that counts for every group, as every state did before scheduled tasks. */
+  /** Whether a run of `chatId` is on, for the desktop's edit lock. A run's reservation carries its group; one without
+   * (/compact, /new, a resume, the desktop's session actions) counts for every group, as every state did before scheduled tasks. */
   function runningIn(chatId: string): boolean {
     for (const state of active.values()) if (state.chatId === undefined || state.chatId === chatId) return true;
     return false;
@@ -7942,11 +7946,12 @@ export function createOrchestrator(
           // [重试] for a turn that went quiet or lost the model (product.md 3.12),
           // read from the settled render: a ⏹ wins over a timer that fired
           // while it waited. Not when follow-ups are queued: they run next and
-          // would make a replay land out of order.
+          // would make a replay land out of order. Nor for a scheduled turn:
+          // its next run is the retry (T2 4.1 第 7 条).
           let retryReason: RetryTurn['reason'] | undefined;
           if (rc.rs.terminal === 'idle_timeout') retryReason = 'idle';
           else if (rc.rs.terminal === 'error' && rc.rs.errorKind === 'network') retryReason = 'network';
-          if (retryReason && topicThreadId && state.queue.length === 0) {
+          if (retryReason && topicThreadId && state.queue.length === 0 && !scheduled) {
             retryTurns.set(finalMsgId, {
               sessionKey: topicThreadId, chatId: opts.chatId, flat: Boolean(opts.flat), turn: currentTurn,
               replayText: currentTurn.replayText ?? currentTurn.input.text ?? '',
@@ -8082,7 +8087,9 @@ export function createOrchestrator(
         if (killed || procDead || interrupted || compactDied) {
           state.intakeCancelled = true;
           dropCompact(state);
-          const dropped = askAgain(state.queue, opts.chatId, opts.flat ? 'main' : 'topic', 'queue-dropped', '会话被停下了');
+          // Only a ⏹ is the user's: a scheduled turn queued behind a watchdog kill or a dead process failed (T2 4.2).
+          const dropped = askAgain(state.queue, opts.chatId, opts.flat ? 'main' : 'topic', 'queue-dropped', '会话被停下了',
+            interrupted ? 'queue-dropped' : 'run-failed');
           if (dropped > 0) {
             void trackTask(channel
               .send(
@@ -9414,16 +9421,18 @@ export function createOrchestrator(
   /** Where a scheduled turn's cards and messages go instead of its synthetic message; '' is a new main-area message. */
   const landingOf = (hook: ScheduledHook): string => (hook.target.kind === 'topic' ? hook.target.anchor : '');
   const ranFor = (hook: ScheduledHook): number => Math.max(0, Date.now() - (hook.job.task.inflight?.startedAt ?? Date.now()));
-  /** The run card's Feishu link, made as outbound-files makes one; 3 seconds at most, and none when that fails. */
+  /** The run card's Feishu link, made as outbound-files makes one; 3 seconds at most, and none when that fails or a
+   * shutdown starts meanwhile (the scheduler's drain is 5 seconds). */
   async function scheduledLink(chatId: string, messageId: string): Promise<string | undefined> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const result = await Promise.race([
+      return await orStop(Promise.race([
         channel.rawClient.im.v1.message.get({ path: { message_id: messageId } }),
         new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('message.get timed out')), 3_000); }),
-      ]);
-      const item = result.data?.items?.find(m => m.message_id === messageId);
-      return item && !item.deleted ? messageLink(item, chatId) : undefined;
+      ]).then(result => {
+        const item = result.data?.items?.find(m => m.message_id === messageId);
+        return item && !item.deleted ? messageLink(item, chatId) : undefined;
+      }), undefined);
     } catch (err) {
       log.fail('schedule', err, { phase: 'result-link' });
       return undefined;
@@ -9436,7 +9445,8 @@ export function createOrchestrator(
     const error = err instanceof Error ? err.message : String(err);
     return { status: 'failed', error, durationMs: ranFor(hook), counts: !UNREACHABLE.has(String(e?.code ?? e?.cause?.code)) };
   }
-  /** A queued scheduled turn dropped with its queue, by askAgain's `why`. */
+  /** A queued scheduled turn dropped with its queue, by askAgain's `why`: a turn ahead that failed or died is a failure,
+   * a stop the user's or the shutdown's. */
   function droppedScheduled(why: string): ScheduledOutcome {
     if (why === 'run-failed') return { status: 'failed', error: '前一轮出错', durationMs: 0, counts: true };
     return why === 'occupied' ? SCHEDULE_UPDATING : scheduleStopped();
@@ -9478,7 +9488,8 @@ export function createOrchestrator(
       },
     };
     scheduledHooks.add(hook);
-    await trackTask(placeScheduled(hook)).catch((err) => {
+    // Counted as a message's intake until the run holds its session (handleTurn) or topic (pendingTopics).
+    await trackTask(duringIntake(job.task.chatId, () => placeScheduled(hook))).catch((err) => {
       log.fail('schedule', err, { phase: 'run', taskId: job.task.id });
       hook.settle(scheduleFailed(hook, err));
     });
@@ -9488,8 +9499,8 @@ export function createOrchestrator(
   async function placeScheduled(hook: ScheduledHook): Promise<void> {
     const { task } = hook.job;
     const chatId = task.chatId;
-    const project = await getProjectByChatId(chatId);
-    if (refusedTurn(project, chatId, { scheduled: hook }) || !project) return;
+    const placed = await getProjectByChatId(chatId);
+    if (refusedTurn(placed, chatId, { scheduled: hook }) || !placed) return;
     let topicId: string | undefined;
     let fallback = false;
     if (task.placement.kind === 'topic') {
@@ -9502,7 +9513,10 @@ export function createOrchestrator(
         topicId = key;
       } else fallback = true;
     }
-    const newTopic = !topicId && (task.placement.kind === 'newTopic' || ruleKind(project) === 'multi' || await orStop(topicCtx.noMainArea(chatId), false));
+    const newTopic = !topicId && (task.placement.kind === 'newTopic' || ruleKind(placed) === 'multi' || await orStop(topicCtx.noMainArea(chatId), false));
+    // Unbound, disabled or edited while Feishu and the disk answered: the run uses none of what it read (T2 4.2).
+    const project = await getProjectByChatId(chatId);
+    if (refusedTurn(project, chatId, { scheduled: hook }) || !project || projectRevision(project) !== projectRevision(placed)) return void hook.settle(SCHEDULE_UPDATING);
     if (shuttingDown) return void hook.settle({ status: 'interrupted', by: 'shutdown' });
     if (newTopic) return startScheduledTopic(hook, project, fallback);
     const text = scheduledHeader(hook.job, hostTimeZone(), fallback);
@@ -9530,7 +9544,8 @@ export function createOrchestrator(
         const prefer = modelPrefOf(project, be.id);
         const cwd = workCwd(project);
         const perm = turnPerm(project);
-        const rootText = scheduledRootText(job);
+        // A text message's `<at>` is a real mention, and the task's name is anybody's words: no tag in it stays one.
+        const rootText = neutraliseAts(scheduledRootText(job), undefined);
         const root = await channel.send(chatId, { text: rootText });
         const rootAt = Date.now();
         recent.addOwn(chatId, chatId, { id: root.messageId, at: rootAt, text: rootText });
