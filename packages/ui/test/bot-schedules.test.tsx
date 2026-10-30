@@ -31,7 +31,7 @@ it('groups the Bot\'s four tasks of two groups under their group names', () => {
   expect(html).not.toContain('新建');
 });
 
-it('opens the group\'s 任务 tab from a row, and Back returns to the Bot\'s 任务 pane', () => {
+it('hands a row\'s group membership to onOpen, and the group page that opens goes Back to the Bot\'s 任务 pane', () => {
   const onOpen = vi.fn();
   const rows = nodes(BotScheduleGroups({list: listOf(tasksReply(tasks)), agentId, snapshot, onOpen, onDelete: () => {}})).filter(node => node.props.onClick);
   rows.find(node => node.props.title === '周报')!.props.onClick();

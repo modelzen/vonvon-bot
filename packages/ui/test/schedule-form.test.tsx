@@ -1,6 +1,6 @@
 import {beforeEach, expect, it, vi} from 'vitest';
 import {isValidElement, type ReactElement, type ReactNode} from 'react';
-import type {ScheduledTaskView, ScheduleReply} from '@vonvon/protocol';
+import type {ScheduledTaskView, ScheduleReply, ScheduleRequest} from '@vonvon/protocol';
 import {ScheduleForm, localInput, scheduleDraft, scheduleRequest, zonedInstant, type ScheduleDraft} from '../src/ScheduleForm';
 import {scheduleConflict} from '../src/schedule-model';
 import {scheduleNow, scheduleTask} from './schedule-fixture';
@@ -22,9 +22,9 @@ function nodes(node: ReactNode): Element[] {
 }
 const send = vi.fn(async (_request: unknown): Promise<ScheduleReply> => ({kind: 'task', task: scheduleTask()}));
 const onClose = vi.fn();
-function render(task: ScheduledTaskView | undefined) {
+function render(task: ScheduledTaskView | undefined, hostTimeZone = 'UTC') {
   harness.index = 0;
-  const all = nodes(ScheduleForm({chatId: 'oc_schedule', task, hostTimeZone: 'UTC', send, onClose, now: () => scheduleNow}));
+  const all = nodes(ScheduleForm({chatId: 'oc_schedule', task, hostTimeZone, send, onClose, now: () => scheduleNow}));
   return {
     input: (key: string) => all.find(node => node.props.id === `form-${key}`)!,
     choices: (label: string) => all.find(node => node.props.label === label && node.props.choices)!,
@@ -32,7 +32,7 @@ function render(task: ScheduledTaskView | undefined) {
     notice: () => all.find(node => node.props.title === '没有保存')?.props.children,
   };
 }
-async function save(task: ScheduledTaskView) {await render(task).button('保存').props.onClick(); for (let i = 0; i < 4; i++) await Promise.resolve();}
+async function save(task: ScheduledTaskView, hostTimeZone?: string) {await render(task, hostTimeZone).button('保存').props.onClick(); for (let i = 0; i < 4; i++) await Promise.resolve();}
 beforeEach(() => {harness.state = []; send.mockClear(); onClose.mockClear();});
 
 const draft = (patch: Partial<ScheduleDraft>): ScheduleDraft => ({...scheduleDraft(undefined, 'Asia/Shanghai'), name: '日报', instruction: '汇总', ...patch});
@@ -77,6 +77,36 @@ it('keeps a task on its topic unless another placement is chosen, and a new form
   expect(send).toHaveBeenLastCalledWith(expect.objectContaining({patch: {placement: {kind: 'follow'}}}));
   harness.state = [];
   expect(render(undefined).choices('发到哪').props.choices.map((choice: {value: string}) => choice.value)).toEqual(['follow', 'newTopic']);
+});
+
+it('sends only what changed: a new name alone, a daily task\'s zone alone, and a once task\'s zone with the instant it now names', async () => {
+  async function change(task: ScheduledTaskView, key: string, value: string) {
+    harness.state = [];
+    render(task).input(key).props.onChange({target: {value}});
+    await save(task);
+    return (send.mock.lastCall![0] as Extract<ScheduleRequest, {action: 'edit'}>).patch;
+  }
+  const daily = scheduleTask();
+  expect(await change(daily, 'name', '晨报')).toEqual({name: '晨报'});
+  expect(await change(daily, 'zone', 'Asia/Tokyo')).toEqual({timeZone: 'Asia/Tokyo'});
+  // 14:00 on 2 November in Shanghai, then 14:00 in Tokyo.
+  const once = scheduleTask({spec: {kind: 'once', at: Date.UTC(2026, 10, 2, 6, 0)}});
+  expect(await change(once, 'zone', 'Asia/Tokyo')).toEqual({spec: {kind: 'once', at: Date.UTC(2026, 10, 2, 5, 0)}, timeZone: 'Asia/Tokyo'});
+});
+
+it('opens a task in a zone this browser does not know at its time in the daemon\'s zone, after a conflict too, and does not save that zone', async () => {
+  const mars = scheduleTask({spec: {kind: 'once', at: Date.UTC(2026, 10, 2, 1, 0)}, timeZone: 'Mars/Olympus', revision: 'r2'});
+  const opened = render(mars, 'Asia/Shanghai');
+  expect([opened.input('at').props.value, opened.input('zone').props.value]).toEqual(['2026-11-02T09:00', 'Mars/Olympus']);
+  await save(mars, 'Asia/Shanghai');
+  expect(send).not.toHaveBeenCalled();
+  expect(render(mars, 'Asia/Shanghai').notice()).toBe('不认识这个时区：Mars/Olympus');
+  harness.state = [];
+  const task = scheduleTask();
+  send.mockResolvedValueOnce({kind: 'conflict', current: mars});
+  render(task, 'Asia/Shanghai').input('name').props.onChange({target: {value: '我改的'}});
+  await save(task, 'Asia/Shanghai');
+  expect(render(task, 'Asia/Shanghai').input('at').props.value).toBe('2026-11-02T09:00');
 });
 
 it('sends 工作日 as Monday to Friday', async () => {
