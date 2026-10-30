@@ -23,6 +23,9 @@ describe('the label line', () => {
     expect(scheduledLabel(job({ timeZone: 'Asia/Shanghai' }, { trigger: 'catchUp' }))).toBe('⏰ 定时任务「日报」 · 原定 17:00');
     expect(scheduledLabel(job({}, { trigger: 'manual' }))).toBe('⏰ 定时任务「日报」 · 手动运行');
   });
+  it('makes an `<at>` in the task\'s name plain, and keeps the rest of the line', () => {
+    expect(scheduledLabel(job({ name: '日报 <at user_id=all' }, { trigger: 'manual' }))).toBe('⏰ 定时任务「日报 @」 · 手动运行');
+  });
 });
 
 describe('a scheduled run\'s card', () => {

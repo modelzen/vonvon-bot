@@ -171,6 +171,8 @@ export interface RunCardState {
   backend?: string;
   /** A scheduled run's small top line (`⏰ 定时任务「…」`), on the progress card and the final one. */
   label?: string;
+  /** A scheduled run whose task runs again on schedule after a failure (nextRunAfterFailure): a network failure says so. */
+  nextRun?: boolean;
 }
 
 /**
@@ -374,8 +376,9 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
     elements.push(noteMd(`${statusSymbol('unknown')} ${failureText(state)}`));
   } else if (state.terminal === 'error' && state.errorMsg) {
     elements.push(noteMd(`${statusSymbol('failed')} ${failureText(state)}`));
-    // Only a scheduled run's card has a label; its next run is the retry.
-    const advice = errorAdvice(state.errorKind, rc.retry === 'available' && Boolean(rc.cardKey), rc.backend, rc.label !== undefined);
+    // Only a scheduled run's card has a label; its next run, if there is one, is the retry.
+    const advice = errorAdvice(state.errorKind, rc.retry === 'available' && Boolean(rc.cardKey), rc.backend,
+      rc.label === undefined ? undefined : { nextRun: rc.nextRun === true });
     if (advice) elements.push(noteMd(advice));
   } else if (state.terminal === 'done' && !answer) {
     elements.push(noteMd('_（未返回内容）_'));
@@ -415,7 +418,7 @@ export function idleLabel(seconds: number): string {
  * NEVER fires a request (the codex 401 chain stays codex's own business);
  * unclassified errors get no advice line.
  */
-function errorAdvice(kind: AgentErrorKind | undefined, canRetry: boolean, backend?: string, scheduled = false): string | null {
+function errorAdvice(kind: AgentErrorKind | undefined, canRetry: boolean, backend?: string, scheduled?: { nextRun: boolean }): string | null {
   if (kind === 'auth') {
     if (backend === 'codex-appserver') return '🔑 Codex 的登录可能失效了：在运行 bot 的电脑上运行 `codex login` 重新登录，再重试。';
     if (backend === 'claude-agent') return '🔑 Claude 的登录可能失效了：在运行 bot 的电脑上运行 `claude`，用 `/login` 重新登录，再重试。';
@@ -424,7 +427,11 @@ function errorAdvice(kind: AgentErrorKind | undefined, canRetry: boolean, backen
   if (kind === 'version') return '⬆️ Codex 版本太旧，服务端不让它用这个模型：在 Vonvon 的本机环境里更新 Codex，再重试。';
   if (kind === 'quota') return '📊 可能触达用量上限：发送 /usage 查看用量，稍后再试';
   if (kind === 'network') {
-    if (scheduled) return '连不上模型服务，可能是网络断了，或者服务暂时不可用。下一次定时运行会再试；也可以在任务里手动运行。';
+    if (scheduled) {
+      return scheduled.nextRun
+        ? '连不上模型服务，可能是网络断了，或者服务暂时不可用。下一次定时运行会再试；也可以在任务里手动运行。'
+        : '连不上模型服务，可能是网络断了，或者服务暂时不可用。可以在任务里手动运行。';
+    }
     return canRetry
       ? '连不上模型服务，可能是网络断了，或者服务暂时不可用。点「重试」再跑一次。'
       : '连不上模型服务，可能是网络断了，或者服务暂时不可用。稍后重发本条消息即可重试。';

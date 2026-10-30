@@ -9,6 +9,7 @@ import { withDeadline, type NameBook } from './names';
 import type { MessageMeta } from './recall';
 import type { ScheduledJob } from './schedule/types';
 import { describeSpec, formatAt, formatHHMM } from './schedule/time';
+import { neutraliseAts } from '../card/at-guard';
 
 /**
  * Inbound CONTEXT weaving — give codex the上下文 a Feishu @ alone doesn't carry.
@@ -1247,13 +1248,16 @@ function runNote(job: ScheduledJob, withStart: boolean): string {
   const late = job.trigger !== 'catchUp' ? '' : ` · 原定 ${formatHHMM(job.slot, zone)}${withStart ? `，${formatHHMM(startedAt(job), zone)} 开始` : ''}`;
   return `${late}${job.trigger === 'manual' ? ' · 手动运行' : ''}`;
 }
+/** The task's name as the group sees it: anybody's words, so no `<at>` in it stays a mention. Only the name: an unclosed
+ * tag runs to the end of what it is in. */
+const shownName = (job: ScheduledJob): string => neutraliseAts(job.task.name, undefined);
 /** The run card's small top line, on the progress card and the final one. */
 export function scheduledLabel(job: ScheduledJob): string {
-  return `⏰ 定时任务「${job.task.name}」${runNote(job, false)}`;
+  return `⏰ 定时任务「${shownName(job)}」${runNote(job, false)}`;
 }
 /** The text message a new topic of a scheduled run hangs under. */
 export function scheduledRootText(job: ScheduledJob): string {
-  return `⏰ 定时任务「${job.task.name}」· 第 ${job.nth} 次${runNote(job, true)}`;
+  return `⏰ 定时任务「${shownName(job)}」· 第 ${job.nth} 次${runNote(job, true)}`;
 }
 function scheduledLine(job: ScheduledJob, hostTimeZone: string, fallback: boolean): string {
   const { name, spec, timeZone } = job.task;

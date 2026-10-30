@@ -120,6 +120,17 @@ describe('scheduleGate (T2 4.2)', () => {
     await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
     expect(send).toHaveBeenCalledWith('oc_qa', { text: '⏰ 定时任务「@所有人」这次没跑：本群的权限档现在用不了（这个 provider 没有这一档）。连续 10 次会自动暂停。' });
   });
+
+  it.each([['<at user_id=all', '@'], ['日报 <at user_id=all', '日报 @']])('an unclosed `<at>` in the name %s takes only the name, not the rest of the line', async (name, shown) => {
+    await bind('oc_qa', { mode: 'qa' });
+    fake.deps!.notifyGateFailure(task('st_00000000000000a1', 'oc_qa', { name }));
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    const { text } = send.mock.calls[0]![1] as { text: string };
+    expect(text).toBe(`⏰ 定时任务「${shown}」这次没跑：本群的权限档现在用不了（这个 provider 没有这一档）。连续 10 次会自动暂停。`);
+    expect(text).toContain('这次没跑');
+    expect(text).toContain('连续 10 次会自动暂停');
+    expect(text).not.toContain('<at');
+  });
 });
 
 describe('unbinding pauses the group\'s tasks as unavailable (T2 4.6)', () => {
