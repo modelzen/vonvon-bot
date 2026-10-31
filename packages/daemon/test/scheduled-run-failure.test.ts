@@ -215,6 +215,98 @@ describe('a scheduled turn queued behind a person\'s', () => {
     expect(run.consumed).toHaveLength(1);
   });
 
+  // The person's turn ended with the session open: a settings change while the queued turn is prepared (its awaits before
+  // it starts) closes the thread all the same, and the turn does not start on it.
+  it('whose session a settings change closed as the queued turn was prepared: skipped, not run on the closed thread', async () => {
+    current = await setup('single');
+    const run = thread();
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    run.t.close.mockImplementation(async () => { run.t.isAlive = () => false; });
+    const runStreamed = run.t.runStreamed.bind(run.t);
+    run.t.runStreamed = (input) => {
+      if (!run.t.isAlive()) throw new Error('thread closed');
+      return runStreamed(input);
+    };
+    fake.listSessions.mockResolvedValue([{ threadId: 'chat', chatId: 'chat' }]);
+    await bound();
+    // Holds the run's first read of the session record after the person's final card: the queued turn's, at the loop's top.
+    const hold = deferred<void>();
+    let armed = false;
+    let held = false;
+    fake.final.mockImplementationOnce(async () => { armed = true; return true; });
+    fake.getSession.mockImplementation(async (key: string) => {
+      if (armed && !held && (new Error().stack ?? '').includes('launchRun')) { held = true; await hold.promise; }
+      return getSession(key);
+    });
+    await current.orchestrator.onMessage(human('先跑这个'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const result = current.runScheduled(job());
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued', { depth: 1 }));
+    run.turns[0]!.resolve();
+    await until(() => expect(held).toBe(true));
+    await expect(current.orchestrator.adminExecute({ kind: 'setPermissionMode', project: 'test', mode: 'full' })).resolves.toEqual({ kind: 'done' });
+    expect(run.t.close).toHaveBeenCalledOnce();
+    hold.resolve();
+    await expect(result).resolves.toEqual({ status: 'skipped', reason: 'updating' });
+    expect(run.consumed).toHaveLength(1);
+  });
+
+  // Still in intake, behind a person's reply whose quote is being read, when that drop cancels the session's intake: the
+  // group changed, and nobody pressed ⏹.
+  it('waiting in intake when a settings change closed the session: skipped, not stopped by the user', async () => {
+    current = await setup('single');
+    const run = thread();
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    run.t.close.mockImplementation(async () => { run.t.isAlive = () => false; });
+    fake.listSessions.mockResolvedValue([{ threadId: 'chat', chatId: 'chat' }]);
+    await bound();
+    const card = deferred<boolean>();
+    fake.final.mockImplementationOnce(() => card.promise);
+    await current.orchestrator.onMessage(human('先跑这个'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    run.turns[0]!.resolve();
+    await until(() => expect(fake.final).toHaveBeenCalledOnce());
+    const quote = deferred<unknown>();
+    fake.messageGet.mockImplementationOnce(() => quote.promise);
+    const reply = current.orchestrator.onMessage({ ...human('再看看这条'), replyToMessageId: 'msg-quoted' });
+    await until(() => expect(fake.messageGet).toHaveBeenCalledOnce());
+    const result = current.runScheduled(job());
+    // The placement's awaits are all answered before the settings write's.
+    await expect(current.orchestrator.adminExecute({ kind: 'setPermissionMode', project: 'test', mode: 'full' })).resolves.toEqual({ kind: 'done' });
+    card.resolve(true);
+    quote.resolve({ data: { items: [] } });
+    await expect(result).resolves.toEqual({ status: 'skipped', reason: 'updating' });
+    await reply;
+    expect(run.consumed).toHaveLength(1);
+  });
+
+  // A ⏹ drops the queue as the user's even when a settings change closed the session too: the turn in intake goes with it.
+  it('waiting in intake when the user stopped a turn a settings change also closed: interrupted by the user, as the queued', async () => {
+    current = await setup('single', { preferences: { pendingPolicy: 'queue' } });
+    const run = thread();
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    run.t.close.mockImplementation(async () => { run.t.isAlive = () => false; });
+    run.t.abort.mockImplementation(async () => { run.turns[0]!.resolve(); return undefined; });
+    fake.listSessions.mockResolvedValue([{ threadId: 'chat', chatId: 'chat' }]);
+    await bound();
+    await current.orchestrator.onMessage(human('先跑这个'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    await current.orchestrator.onMessage(human('排一条'));
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued', { depth: 1 }));
+    const quote = deferred<unknown>();
+    fake.messageGet.mockImplementationOnce(() => quote.promise);
+    const reply = current.orchestrator.onMessage({ ...human('再看看这条'), replyToMessageId: 'msg-quoted' });
+    await until(() => expect(fake.messageGet).toHaveBeenCalledOnce());
+    const result = current.runScheduled(job());
+    await expect(current.orchestrator.adminExecute({ kind: 'setPermissionMode', project: 'test', mode: 'full' })).resolves.toEqual({ kind: 'done' });
+    await current.orchestrator.dispatcher.handle(
+      { messageId: 'card', chatId: 'chat', operator: { openId: 'owner' }, action: { value: { a: 'run.stop', m: 'card' } } } as never);
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queue-dropped', expect.objectContaining({ interrupted: true, evicted: true })));
+    quote.resolve({ data: { items: [] } });
+    await expect(result).resolves.toEqual({ status: 'interrupted', by: 'user' });
+    await reply;
+  });
+
   // The person's turn holds the session but has no thread yet: a settings change in that window closes the thread all
   // the same. On a real backend the closed thread may also throw when the turn starts.
   it.each([
