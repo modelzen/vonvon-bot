@@ -183,6 +183,8 @@ describe('what the agent reads of a task', () => {
       'nextRunAt', 'placement', 'recent', 'revision', 'running', 'state', 'timeZone'].sort());
   });
   // There 12 tasks at every limit are 16,978 bytes and 20 are 28,162; 20 with the longest describe below still fit, at 31,502.
+  // These counts use the fixture's short group id: a real one is 35 characters and sits in every run link, so in production
+  // 300 and 80 holds about one task fewer and 20 tasks with the longest describe fall to names only.
   it.each([12, 20])('cuts a list of %i tasks at every limit shorter still, to 80 and 30 and only the last run, before names only', async count => {
     const f = await scheduleFixture({ tasks: Array.from({ length: count }, (_, i) => full(`st_${i}`)) });
     f.open();
