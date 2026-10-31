@@ -20,10 +20,15 @@ import { createTurnMapper, resultErrorText } from './event-map';
 import { decide, type ClaudeAccess, type ClaudePermissionOptions, type PathFs, type ToolCall } from './permission';
 import { bridgeAsk, type BridgedAsk } from './ask-bridge';
 import { findTranscript, scanTranscript } from './transcript';
+import { scheduleToolNames } from '../entry/schedule-tools';
+import { toolReplyText } from '../entry/tools';
+import { builtinSkillsOfSet } from '../builtin-skills/registry';
 
 /** Config the backend hands the thread to stand up its persistent query(). */
 export interface ClaudeThreadConfig {
   entry?: AgentEntry;
+  /** The session's profile has `tools.schedule`: vonvon_bot lists the schedule tools too. */
+  scheduleTools?: boolean;
   createSdkMcpServer?: ClaudeSdkFacade['createSdkMcpServer'];
   tool?: ClaudeSdkFacade['tool'];
   /** self-assigned UUID (start: options.sessionId) or the id to resume. */
@@ -41,6 +46,8 @@ export interface ClaudeThreadConfig {
   systemPromptAppend?: string;
   additionalDirectories?: string[];
   skills?: string[];
+  /** The profile's capability package directories, loaded as local plugins (T4b). */
+  plugins?: string[];
   /** Which filesystem settings the SDK loads. The SDK default is none — so
    * project/user CLAUDE.md, skills and `.claude/settings.json` are NOT read
    * unless set. The backend passes ['user','project'] to make a claude session
@@ -84,11 +91,33 @@ export const NATIVE_MEMORY_OFF = {
   env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },
 } satisfies Options['settings'];
 
+/**
+ * Claude Code's own scheduling, off in bot sessions: tasks go through vonvon's schedule tools only (3.13). The
+ * tools are disallowed in thread.ts, not in permission.ts, whose full-access tier returns early; the bundled
+ * `loop` and `schedule` skills still list after that, so they are turned off too. CLAUDE_CODE_DISABLE_CRON is the
+ * second layer, here as well as in the child env: a user's or project's settings file `env` overrides the child
+ * env, and this layer wins over both (as for DISABLE_AUTO_COMPACT above).
+ */
+export const NATIVE_SCHEDULING_TOOLS = ['CronCreate', 'CronList', 'CronDelete', 'ScheduleWakeup', 'RemoteTrigger'];
+export const NATIVE_SCHEDULING_SKILLS = ['loop', 'schedule'];
+export const NATIVE_SCHEDULING_ENV = { CLAUDE_CODE_DISABLE_CRON: '1' };
+
 export const AUTO_COMPACT_SETTINGS = {
   autoCompactEnabled: true,
   ...NATIVE_MEMORY_OFF,
-  env: { ...NATIVE_MEMORY_OFF.env, DISABLE_AUTO_COMPACT: '', DISABLE_COMPACT: '' },
+  env: { ...NATIVE_MEMORY_OFF.env, ...NATIVE_SCHEDULING_ENV, DISABLE_AUTO_COMPACT: '', DISABLE_COMPACT: '' },
+  skillOverrides: Object.fromEntries(NATIVE_SCHEDULING_SKILLS.map(name => [name, 'off' as const])),
 } satisfies Options['settings'];
+
+/**
+ * vonvon's builtin capability package is the plugin `vonvon` (builtin-skills/package.ts). Loaded from a directory its
+ * id is `vonvon@inline`. A workspace's `.claude/settings.json` can turn it off; enabling it in the flag settings, which
+ * outrank project and local settings, beats that (both measured, product.md 9.22). A group's skill whitelist gets its
+ * skills too.
+ */
+const BUILTIN_PLUGIN = 'vonvon';
+export const BUILTIN_PLUGIN_ID = `${BUILTIN_PLUGIN}@inline`;
+export const BUILTIN_SKILL_NAMES = builtinSkillsOfSet('group').map(skill => `${BUILTIN_PLUGIN}:${skill.name}`);
 
 /** Hard ceiling on a manual /compact (a summarization turn) so a wedged process
  * can't hang the「压缩中」card forever. Mirrors codex's COMPACT_TIMEOUT_MS. */
@@ -330,11 +359,10 @@ export class ClaudeAgentThread implements AgentThread {
       if (cfg.createSdkMcpServer && cfg.tool) {
         const tool = cfg.tool;
         mcpServers.vonvon_bot = cfg.createSdkMcpServer({ name: 'vonvon_bot', version: '1',
-          tools: entry.tools().map(spec => tool(spec.name, spec.description, spec.input.shape, async (args, extra) => {
+          tools: entry.tools().filter(spec => cfg.scheduleTools || !scheduleToolNames.has(spec.name)).map(spec => tool(spec.name, spec.description, spec.input.shape, async (args, extra) => {
             const origin = toolOriginSchema.safeParse(extra);
             const reply = await entry.call(spec.name, args, { toolUseId: origin.success ? origin.data._meta['claudecode/toolUseId'] : undefined });
-            return { content: [{ type: 'text', text: reply.ok ? JSON.stringify(reply.result) : reply.message }],
-              ...(!reply.ok ? { isError: true } : {}) };
+            return { content: [{ type: 'text', text: toolReplyText(reply) }], ...(!reply.ok ? { isError: true } : {}) };
           })),
         });
       } else if (!entryMissingWarned) {
@@ -342,6 +370,7 @@ export class ClaudeAgentThread implements AgentThread {
         log.warn('agent', 'entry-missing', { reason: 'sdk' });
       }
     }
+    const plugins = cfg.plugins ?? [];
     const options: Options = {
       cwd: cfg.cwd,
       abortController: this.abortController,
@@ -354,14 +383,20 @@ export class ClaudeAgentThread implements AgentThread {
         : {}),
       ...(cfg.settingSources ? { settingSources: cfg.settingSources } : {}),
       ...(cfg.additionalDirectories?.length ? { additionalDirectories: cfg.additionalDirectories } : {}),
-      ...(cfg.skills ? { skills: cfg.skills } : {}),
+      ...(plugins.length ? { plugins: plugins.map(path => ({ type: 'local' as const, path, skipMcpDiscovery: true })) } : {}),
+      ...(cfg.skills ? { skills: plugins.length ? [...cfg.skills, ...BUILTIN_SKILL_NAMES] : cfg.skills } : {}),
       ...(cfg.env ? { env: cfg.env } : {}),
-      // SDK consumes an absolute path; plan files stay inside the existing write boundary.
-      settings: cfg.access.native?.permissionMode === 'plan'
-        ? { ...AUTO_COMPACT_SETTINGS, plansDirectory: cfg.access.planState?.directory ?? resolve(cfg.access.realCwd, '.claude/plans') } : AUTO_COMPACT_SETTINGS,
+      settings: {
+        ...AUTO_COMPACT_SETTINGS,
+        ...(plugins.length ? { enabledPlugins: { [BUILTIN_PLUGIN_ID]: true } } : {}),
+        // SDK consumes an absolute path; plan files stay inside the existing write boundary.
+        ...(cfg.access.native?.permissionMode === 'plan'
+          ? { plansDirectory: cfg.access.planState?.directory ?? resolve(cfg.access.realCwd, '.claude/plans') } : {}),
+      },
       ...(mcpServers.vonvon_bot ? { mcpServers } : {}),
       // permission tier (permissionMode / sandbox / canUseTool / disallowedTools)
       ...cfg.permission,
+      disallowedTools: [...cfg.permission.disallowedTools ?? [], ...NATIVE_SCHEDULING_TOOLS],
       canUseTool: (name, input, opts) => this.canUseTool(name, input, opts),
       stderr: (d: string) => {
         const s = String(d).trim();
@@ -469,6 +504,13 @@ export class ClaudeAgentThread implements AgentThread {
         if (msg.type === 'stream_event' && msg.event.type === 'content_block_start') {
           const block = msg.event.content_block;
           if (block.type === 'tool_use' && block.name.startsWith('mcp__vonvon_bot__')) this.cfg.entry?.noteToolUse(block.id);
+        }
+        if (msg.type === 'system' && msg.subtype === 'init' && this.cfg.plugins?.length) {
+          // The one check the code can make (T4b 4.4): the CLI's own report of the plugins it loaded.
+          const loaded = msg.plugins ?? [];
+          if (!loaded.some(plugin => plugin.name === BUILTIN_PLUGIN)) {
+            log.warn('agent', 'builtin-plugin-missing', { backend: 'claude-agent', sessionId: this.sessionId, loaded: loaded.map(plugin => plugin.name).join(',') });
+          }
         }
         this.lastActivityAt = Date.now();
         this.sink?.({ kind: 'msg', msg });

@@ -1,7 +1,10 @@
 import { z } from 'zod';
 import { log } from '../../core/logger';
-import { parseAskRequest, type AskAnswer, type AskRequest, type AskResolution } from '../types';
+import { parseAskRequest, type AgentEntry, type AskAnswer, type AskRequest, type AskResolution } from '../types';
+import { toolReplyText } from '../entry/tools';
 import type { JsonRpcAnswer, JsonRpcId } from '../../provider/transport/jsonrpc';
+import { offeredTool } from './dynamic-tools';
+import type { DynamicToolCallResponse } from './protocol/generated/v2/DynamicToolCallResponse';
 import type { PermissionsRequestApprovalResponse } from './protocol/generated/v2/PermissionsRequestApprovalResponse';
 import type { ToolRequestUserInputParams } from './protocol/generated/v2/ToolRequestUserInputParams';
 import type { ToolRequestUserInputResponse } from './protocol/generated/v2/ToolRequestUserInputResponse';
@@ -69,6 +72,7 @@ export interface InboundCancellation {
 /** A single run owns these continuations, including requests buffered before its start ACK. */
 export class CodexRequestScope {
   private readonly pending = new Map<string, InboundQuestion>();
+  private readonly calls = new Set<() => void>();
   private closed = false;
 
   constructor(readonly threadId: string, private readonly childTurn: (id: string) => string | undefined = () => undefined) {}
@@ -122,9 +126,17 @@ export class CodexRequestScope {
     }
   }
 
+  /** A dynamic tool call of this run: `close()` answers it, so Codex never waits on a run that is over. */
+  hold(answer: () => void): (() => void) | undefined {
+    if (this.closed) return undefined;
+    this.calls.add(answer);
+    return () => this.calls.delete(answer);
+  }
+
   close(): void {
     this.closed = true;
     for (const id of this.pending.keys()) void this.respond(id);
+    for (const answer of this.calls) answer();
   }
 }
 
@@ -187,5 +199,47 @@ export function userInputRequest(
     };
     scope.add(question);
     enqueue(question);
+  });
+}
+
+const toolCallSchema = z.object({
+  threadId: z.string().min(1), turnId: z.string().min(1), callId: z.string(), namespace: z.string().nullish(), tool: z.string().min(1), arguments: z.unknown(),
+});
+const toolAnswer = (text: string, success: boolean): JsonRpcAnswer => ({ result: { contentItems: [{ type: 'inputText', text }], success } satisfies DynamicToolCallResponse });
+
+/** The thread an `item/tool/call` names: its vonvon entry, and when its turn's turn/start answered. */
+export interface DynamicToolHost {
+  entry: AgentEntry;
+  /** true once `turnId`'s turn/start answered (the entry then knows that turn), false if it did not within `ms`. */
+  turnAcked(turnId: string, ms: number): Promise<boolean>;
+}
+
+/**
+ * `item/tool/call` (定时任务 T3b): run the call through the thread's entry, bound to the turn Codex names, the way
+ * Claude's calls are bound by tool-use id. Every refusal is an answer with `success: false`, never a JSON-RPC error.
+ */
+export function dynamicToolCall(params: unknown, scope: CodexRequestScope | undefined,
+  lookup: (threadId: string) => DynamicToolHost | undefined): Promise<JsonRpcAnswer> | JsonRpcAnswer {
+  const parsed = toolCallSchema.safeParse(params);
+  if (!parsed.success) return toolAnswer('vonvon 看不懂这次工具调用。', false);
+  const call = parsed.data, host = lookup(call.threadId);
+  log.info('agent', 'dynamic-tool-call', { callId: call.callId, tool: call.tool, known: Boolean(host) });
+  const over = () => toolAnswer('这一轮已经结束了。', false);
+  if (!host) return toolAnswer('这不是本 bot 的线程，vonvon 的工具在这里不能用。', false);
+  if (!offeredTool(call.namespace, call.tool)) return toolAnswer('没有这个工具。', false);
+  return new Promise(resolve => {
+    let answered = false;
+    const answer = (reply: JsonRpcAnswer) => { if (!answered) { answered = true; drop?.(); resolve(reply); } };
+    const drop = scope?.hold(() => answer(over()));
+    if (!drop) { answer(over()); return; }
+    // A call can come in before its turn's turn/start answer; one whose turn never answered (a goal's) is unknown-origin.
+    void host.turnAcked(call.turnId, 2_000).then(async acked => {
+      if (answered) return;
+      const reply = await host.entry.call(call.tool, call.arguments, acked ? { toolUseId: call.turnId } : undefined);
+      answer(toolAnswer(toolReplyText(reply), reply.ok));
+    }).catch(error => {
+      log.fail('agent', error, { phase: 'dynamic-tool-call' });
+      answer(toolAnswer('vonvon 这一步出错了。', false));
+    });
   });
 }

@@ -167,3 +167,8 @@ export function createDiagnosticsStore(opts: { changed: () => void; claudeSigned
     close() { closed = true; if (timer) clearTimeout(timer); timer = undefined; activitySeen.clear(); },
   };
 }
+
+export type ScheduleDiagnosticEvent = {
+  kind: 'schedule-missed' | 'schedule-skipped' | 'schedule-auto-paused' | 'schedule-interrupted' | 'schedule-store-corrupt' | 'schedule-notice-pending';
+  taskId?: string; chatId?: string; count?: number;
+};

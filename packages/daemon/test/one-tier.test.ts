@@ -17,6 +17,7 @@ vi.mock('../src/config/paths', async () => {
   return {
     paths: { appDir: dir, projectsFile: join(dir, 'projects.json'), sessionsFile: join(dir, 'sessions.json') },
     botDir: (appId: string) => join(dir, 'bots', appId),
+    botPaths: (appId: string) => ({ schedulesFile: join(dir, 'bots', appId, 'schedules.json') }),
   };
 });
 afterAll(() => rmSync(dirname(paths.projectsFile), { recursive: true, force: true }));

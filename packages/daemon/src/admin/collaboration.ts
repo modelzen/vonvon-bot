@@ -25,6 +25,11 @@ export type AdminCollaborationOp = { kind: 'collaboration'; request: Collaborati
 export function projectRevision(project: Project): string {
   return createHash('sha256').update(JSON.stringify(project)).digest('hex');
 }
+/** {@link projectRevision} without `branch`, which a turn refreshes from git (refreshBranch): a checkout edits no setting. */
+export function projectSettingsRevision(project: Project): string {
+  const { branch: _branch, ...rest } = project;
+  return projectRevision(rest);
+}
 export function projectView(project: Project) {
   return { name: project.name, chatId: project.chatId, cwd: project.cwd, kind: sessionModeOf(project), backend: groupBackendId(project), enabled: project.enabled !== false, revision: projectRevision(project) };
 }
