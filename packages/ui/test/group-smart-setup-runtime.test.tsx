@@ -10,6 +10,7 @@ import {OperationActivity} from '../src/management/OperationActivity';
 import {ConversationSlider} from '../src/settings/ConversationSlider';
 import {DecisionFields} from '../src/settings/DecisionFields';
 import {DecisionPicker} from '../src/settings/DecisionPicker';
+import {ScheduleTab} from '../src/ScheduleTab';
 
 type Slot = {states: unknown[]; refs: Array<{current: unknown}>; effects: Array<{deps?: unknown[]; cleanup?: () => void}>; memos: Array<{deps?: unknown[]; value: unknown}>; state: number; ref: number; effect: number; memo: number};
 const harness = vi.hoisted(() => ({slots: {} as Record<string, Slot>, active: '', pending: [] as Array<() => void>, client: {collaboration: vi.fn(), settings: vi.fn(), environment: vi.fn(), snapshot: vi.fn()}}));
@@ -63,6 +64,14 @@ it('marks new memories on the memory tab even when general group settings opens 
   const memoryTab = workspace.find(node => node.type === 'button' && nodes(node).some(child => child.props.className === 'group-memory-tab-new'))!;
   expect(memoryTab.props['aria-current']).toBeUndefined();
   expect(nodes(memoryTab).find(node => node.props.className === 'group-memory-tab-new')!.props.children.join('')).toBe('新 2');
+});
+
+it('opens on the 任务 tab when asked, with this Bot\'s tasks of this group and no settings below', () => {
+  const workspace = nodes(renderAt('schedule-tab', () => GroupWorkspace({member, agent, group, snapshot, initialTab: 'schedule',
+    onBot: () => {}, onBotProfile: () => {}, onOpenTools: () => {}, onOpenSecrets: () => {}, onChanged: changed})));
+  expect(workspace.filter(node => node.type === 'button' && node.props['aria-current'] === 'page').map(node => node.props.children)).toEqual(['任务']);
+  expect(workspace.find(node => node.type === ScheduleTab)?.props).toMatchObject({botId, chatId: groupId, deviceTitle: '这台 Mac'});
+  expect(workspace.some(node => node.type === GroupDesignSettings)).toBe(false);
 });
 
 async function flush() {for (let i = 0; i < 16; i++) await Promise.resolve();}

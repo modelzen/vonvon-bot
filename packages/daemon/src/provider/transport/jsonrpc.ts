@@ -1,4 +1,4 @@
-import { approvalAnswer, CodexRequestScope, userInputRequest, type InboundQuestion, type InboundCancellation } from '../../agent/codex-appserver/server-requests';
+import { approvalAnswer, CodexRequestScope, dynamicToolCall, userInputRequest, type DynamicToolHost, type InboundQuestion, type InboundCancellation } from '../../agent/codex-appserver/server-requests';
 import { UnsentRequestError } from '../../agent/types';
 import { StringDecoder } from 'node:string_decoder';
 import type { Readable, Writable } from 'node:stream';
@@ -242,6 +242,7 @@ export class AppServerClient {
   private readonly notifications = new AsyncQueue<ServerNotification | InboundQuestion | InboundCancellation>();
   private requestScope: CodexRequestScope | undefined;
   private requestSerial = 0;
+  private toolHost: { threadId: string; host: DynamicToolHost } | undefined;
   private closed = false;
   private hasExited = false;
 
@@ -301,6 +302,9 @@ export class AppServerClient {
     peer.onRequest = (method, params, frame) => {
       const denial = approvalAnswer(method);
       if (denial) return denial;
+      if (method === 'item/tool/call') {
+        return dynamicToolCall(params, this.requestScope, threadId => this.toolHost?.threadId === threadId ? this.toolHost.host : undefined);
+      }
       if (method !== 'item/tool/requestUserInput') return undefined;
       const id = frame.id;
       if (typeof id !== 'string' && typeof id !== 'number') return undefined;
@@ -411,6 +415,11 @@ export class AppServerClient {
   openRequestScope(threadId: string, childTurn?: (id: string) => string | undefined): CodexRequestScope {
     this.requestScope?.close();
     return this.requestScope = new CodexRequestScope(threadId, childTurn);
+  }
+
+  /** The thread whose vonvon tool calls this process answers (定时任务 T3b); a client carries one thread. */
+  hostTools(threadId: string, host: DynamicToolHost): void {
+    this.toolHost = { threadId, host };
   }
 
   cancelRequests(threadId: string, turnId: string): void {

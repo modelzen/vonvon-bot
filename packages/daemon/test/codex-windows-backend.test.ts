@@ -103,7 +103,7 @@ describe.skipIf(process.platform !== 'win32')('Windows native permission guards 
         cwd, runtimeWorkspaceRoots: [cwd, readRoot, writeRoot], approvalPolicy: 'never',
         ...(action === 'resume' ? { threadId: 'windows-thread' } : {}),
         config: expect.objectContaining({
-          windows: { sandbox: 'mxc' }, features: expect.objectContaining({ prefer_mxc: false, memories: false }),
+          windows: { sandbox: 'mxc' }, features: expect.objectContaining({ prefer_mxc: false, memories: false, in_app_local_automation: false }),
           default_permissions: 'feishu',
           permissions: { feishu: { filesystem: expect.objectContaining({
             ':minimal': 'read', [cwd]: expect.objectContaining({ '.': mode === 'qa' ? 'read' : 'write', '.codex': 'read' }),

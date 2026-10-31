@@ -331,3 +331,15 @@ codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次�
 | 报告 | 内容 | 说明 |
 |---|---|---|
 | [report](2026-10-30-release-speed/report.md) | 提前下载、命令级系统代理、并行上传与候选绑定确认 | 小网络/异步实验与隔离回归；完整正式发布耗时待下一轮验证 |
+
+## 2026-10-30 定时任务
+
+`2026-10-30-scheduled-tasks/`。为定时任务（product.md 3.13，`docs/plans/scheduled-tasks.md`）做的调研：业界做法两个方向各一个调研代理、另一个代理逐条核对来源；代码笔记基于 dev `e87a49c4`，四个只读代理；Codex 和 Claude 的通路用隔离 HOME、假模型服务离线实测，没登录、没花钱。笔记是英文原文，和计划冲突时以计划为准。
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [industry](2026-10-30-scheduled-tasks/industry.md) | ChatGPT、Gemini、Claude（桌面、Cowork、云端、/loop）、Codex、OpenClaw、Cursor、Manus、飞书 aily 的定时任务：创建、每次新会话还是同一会话、错过、管理和上限、无人时的权限、自己排；事件触发谁有、要不要云端、巡检成本；飞书长连接和别的 bot 消息能不能收到 | 本地和桌面版基本只做定时，事件触发都在云端；help.openai.com 403、Manus 文档 404，相关条目来自二手来源 |
+| [notes-runner](2026-10-30-scheduled-tasks/notes-runner.md) | 调度器放在哪、睡眠后的计时、补跑算法、三种落点怎么接现有运行路径、停机和崩溃 | 计划审查后改过几处（钩子、落点、开话题），以计划为准 |
+| [notes-tools](2026-10-30-scheduled-tasks/notes-tools.md) | 命令核和终端、工具登记表和钥匙、Codex app-server dynamicTools 在 0.156.1 和 0.163.0 上可用、关掉 Claude 自带定时 | 推翻 `docs/plans/s46.md` 4.1 的 E 项；真实 ChatGPT 登录下的工具表留给 T3 自测 |
+| [notes-skill](2026-10-30-scheduled-tasks/notes-skill.md) | Codex `selectedCapabilityRoots` 和 Claude `plugins` 交付内置 skill 的 12 条实测：命名、按需加载、只读档要读入口、按会话关不掉、resume 行为、`enabledPlugins` | 回答 product.md 第 9 节第 22 项；macOS Seatbelt 没测 |
+| [notes-ui](2026-10-30-scheduled-tasks/notes-ui.md) | 群详情页和 Bot 页的 tab、协议和 RPC、表单输入、文案和测试的现状 | 只读 |

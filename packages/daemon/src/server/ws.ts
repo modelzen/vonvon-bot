@@ -1,11 +1,13 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Server } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
-import { helloSchema, requestSchema, type ErrorEnvelope, type Event, type Request, type Response, type ServerInfo } from '@vonvon/protocol';
+import { helloSchema, requestSchema, type ErrorEnvelope, type Event, type Hello, type Request, type Response, type ServerInfo } from '@vonvon/protocol';
 import { getRpcErrorCode } from './errors';
 import type { JobPeer } from './jobs';
 
 export interface Peer extends JobPeer {
+  /** What the client said it is in its hello; every request comes after it. */
+  readonly clientKind?: Hello['clientKind'];
   send(value: Response | ErrorEnvelope): void;
 }
 function loopbackHost(host: string | undefined): boolean {
@@ -36,12 +38,13 @@ export function createSocketServer(options: { server: Server; credential: string
     if (state === 'released') { socket.close(1001, 'server_shutdown'); return; }
     let authenticated = false;
     let detached = false;
+    let clientKind: Hello['clientKind'] | undefined;
     const send = (value: Response | ErrorEnvelope | Event | ServerInfo): void => {
       if (socket.readyState !== WebSocket.OPEN) return;
       if (socket.bufferedAmount > 8_000_000) { socket.close(1013, 'slow_consumer'); detach(); return; }
       socket.send(JSON.stringify(value), error => { if (error) { socket.terminate(); detach(); } });
     };
-    const peer: Peer = { id: randomUUID(), get open() { return authenticated && !detached && socket.readyState === WebSocket.OPEN; }, send, event: send };
+    const peer: Peer = { id: randomUUID(), get open() { return authenticated && !detached && socket.readyState === WebSocket.OPEN; }, get clientKind() { return clientKind; }, send, event: send };
     const detach = (): void => {
       if (detached) return;
       detached = true;
@@ -72,6 +75,7 @@ export function createSocketServer(options: { server: Server; credential: string
         const expected = Buffer.from(options.credential);
         if (!hello.success || supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) { socket.close(4401, 'unauthorized'); return; }
         authenticated = true;
+        clientKind = hello.data.clientKind;
         clearTimeout(deadline);
         peers.add(peer);
         send(options.info);

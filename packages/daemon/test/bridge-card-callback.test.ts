@@ -33,7 +33,7 @@ vi.mock('../src/host/crash-guard', () => ({ onCrashSync: () => () => {} }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, fail: fixture.logFail } }));
 vi.mock('../src/bot/handle-message', () => ({ createOrchestrator: () => ({
   initialize: async () => {}, dispatcher: { handle: fixture.dispatch }, shutdown: fixture.shutdown,
-  replyDropped() {}, saveDroppedSync() {}, settings: {},
+  replyDropped() {}, saveDroppedSync() {}, settings: {}, scheduler: { start: async () => {}, stop() {}, drain: async () => {} },
 }) }));
 
 import { startBridge } from '../src/bot/bridge';

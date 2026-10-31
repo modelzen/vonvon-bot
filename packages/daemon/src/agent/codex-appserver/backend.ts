@@ -1,3 +1,4 @@
+import { accessSync, constants } from 'node:fs';
 import { codexAccountMetadata } from './login';
 import { log } from '../../core/logger';
 import type {
@@ -25,11 +26,12 @@ import type {
   TurnOptions,
 } from '../types';
 import { isGoalTerminal, SessionInUseError } from '../types';
-import { resolveSessionProfile, type SessionProfileCapabilities } from '../session-profile';
+import { resolveSessionProfile, type SessionProfile, type SessionProfileCapabilities } from '../session-profile';
 import { AppServerClient } from './app-server-client';
 import { admitCodexWorkspaceLayout } from './workspace-admission';
 import { codexFilesystem, codexInstallRoot, codexShellReadRoot, type CodexInstallRoot, codexWorkspaceRoots, verifyCodexWorkspaceEcho } from './workspace-policy';
-import { NATIVE_MEMORY_OFF } from './memory-config';
+import { CONNECTOR_SCHEDULING_OFF, NATIVE_MEMORY_OFF, NATIVE_SCHEDULING_OFF } from './memory-config';
+import { startDynamicTools } from './dynamic-tools';
 import { connectGated, refillWarmPool, takeWarmClient, utilityRequest } from './client-pool';
 import { mapChildNotification, mapNotification, readSubAgentActivity, readSubagentSpawn, type Child } from './event-map';
 import { runCodexJudge } from './judge-process';
@@ -56,6 +58,7 @@ export function sandboxParams(
   installRoot?: CodexInstallRoot,
   windows?: WindowsSandboxCapability,
   shellRoot?: CodexInstallRoot,
+  capabilityRoots?: readonly string[],
 ): Record<string, unknown> {
   if ((mode ?? 'full') === 'full') return { sandbox: 'danger-full-access' };
   const unavailable = codexTierUnavailable(mode ?? 'full', platform, version, windows);
@@ -66,7 +69,7 @@ export function sandboxParams(
       default_permissions: 'feishu',
       permissions: {
         feishu: {
-          filesystem: codexFilesystem(roots ?? [], mode === 'write' ? 'write' : 'qa', installRoot, platform, network, shellRoot),
+          filesystem: codexFilesystem(roots ?? [], mode === 'write' ? 'write' : 'qa', installRoot, platform, network, shellRoot, capabilityRoots),
           network: { enabled: Boolean(network) },
         },
       },
@@ -74,30 +77,46 @@ export function sandboxParams(
   };
 }
 
+/**
+ * `skills/list` does not list a capability root's skills, so whether Codex found the package is only seen in a real
+ * turn (T4b 4.4). What the code can check is that the directory is there and readable; one that is not is left out.
+ */
+function readablePackages(packages: SessionProfile['capabilityPackages']): SessionProfile['capabilityPackages'] {
+  return packages.filter(({ path }) => {
+    try { accessSync(path, constants.R_OK | constants.X_OK); return true; }
+    catch (error) { log.fail('agent', error, { backend: 'codex-appserver', phase: 'capability-root' }); return false; }
+  });
+}
+
 /** Rebuilt for every start/resume; never persists workspace trust to user config. */
 export function codexSessionParams(opts: StartThreadOptions, version: string | null = null, selectedBin?: string | null): Record<string, unknown> {
-  const profile = resolveSessionProfile(opts.profile, { additionalRoots: true });
+  const profile = resolveSessionProfile(opts.profile, { additionalRoots: true, capabilityPackages: true });
   const roots = codexWorkspaceRoots(opts);
+  const packages = readablePackages(profile.capabilityPackages);
   const bin = selectedBin === undefined ? resolveCodexBin() : selectedBin;
   const installRoot = bin && opts.mode !== 'full' ? codexInstallRoot(bin, roots) : undefined;
   const shell = bin && process.platform === 'win32' && (opts.mode ?? 'full') !== 'full' ? windowsShellPath(bin) : undefined;
   const shellRoot = shell ? codexShellReadRoot(shell, roots) : undefined;
   const sandbox = sandboxParams(opts.mode, opts.network, process.platform, roots, version, installRoot,
-    bin && process.platform === 'win32' ? cachedWindowsSandbox(bin) : undefined, shellRoot);
+    bin && process.platform === 'win32' ? cachedWindowsSandbox(bin) : undefined, shellRoot, packages.map(pkg => pkg.path));
+  const sandboxConfig = typeof sandbox.config === 'object' ? sandbox.config as { features?: object } : {};
   return {
     ...sandbox,
     cwd: opts.cwd,
     runtimeWorkspaceRoots: roots.map(root => root.path),
+    // Resume has no such field and keeps the thread's roots from its rollout; sending it there does no harm.
+    ...(packages.length ? { selectedCapabilityRoots: packages.map(({ path, kind }) => ({ id: `vonvon-${kind}`, location: { type: 'environment', environmentId: 'local', path } })) } : {}),
     approvalPolicy: APPROVAL_POLICY,
     developerInstructions: profile.instructions,
     ...(opts.model ? { model: opts.model } : {}),
     ...(opts.serviceTier !== undefined ? { serviceTier: opts.serviceTier === 'standard' ? null : opts.serviceTier === 'fast' ? 'priority' : opts.serviceTier } : {}),
     config: {
-      ...(typeof sandbox.config === 'object' ? sandbox.config : {}),
+      ...sandboxConfig,
       projects: { [opts.cwd]: { trust_level: 'trusted' } },
       ...NATIVE_MEMORY_OFF,
-      ...(process.platform === 'win32' && (opts.mode ?? 'full') !== 'full'
-        ? { features: { ...NATIVE_MEMORY_OFF.features, prefer_mxc: false } } : {}),
+      // One merge: the sandbox's (Windows `prefer_mxc: false` below full access), memory and scheduling switches.
+      features: { ...sandboxConfig.features, ...NATIVE_MEMORY_OFF.features, ...NATIVE_SCHEDULING_OFF.features },
+      ...CONNECTOR_SCHEDULING_OFF,
       ...(profile.skills?.disabledPaths.length ? { skills: { config: profile.skills.disabledPaths.map(path => ({ path, enabled: false })) } } : {}),
       shell_environment_policy: { set: profile.env },
     },
@@ -192,8 +211,11 @@ export async function generateCodexSessionTitleWithClient(
     ephemeral: true,
     // Match Codex App's isolated background job: no web search, hooks, fanout,
     // or subagents. Read-only still lets the core runtime initialize safely.
+    // The turn runs on the user's first message, so both scheduling switches stay closed too.
     config: {
       ...NATIVE_MEMORY_OFF,
+      features: { ...NATIVE_MEMORY_OFF.features, ...NATIVE_SCHEDULING_OFF.features },
+      ...CONNECTOR_SCHEDULING_OFF,
       projects: { [opts.cwd]: { trust_level: 'trusted' } },
       web_search: 'disabled',
       'features.enable_fanout': false,
@@ -295,6 +317,9 @@ function withTitleDeadline<T>(work: Promise<T>, timeoutMs = TITLE_GENERATION_TIM
 class CodexThread implements AgentThread {
   private currentTurnId: string | undefined;
   private parentDoneTurnId: string | undefined;
+  /** Turns whose turn/start answered; a tool call can come in before its turn's answer and waits (定时任务 T3b). */
+  private readonly ackedTurns = new Set<string>();
+  private readonly ackWaiters = new Set<{ turnId: string; wake(): void }>();
 
   private runningChildren(): number {
     return [...this.children.values()].filter(child => child.running).length;
@@ -314,10 +339,29 @@ class CodexThread implements AgentThread {
     readonly lastCompaction?: string,
     private readonly entry?: AgentEntry,
     private readonly supportsEffort?: (model: string) => boolean,
-  ) {}
+  ) {
+    if (entry) client.hostTools(sessionId, { entry, turnAcked: (turnId, ms) => this.turnAcked(turnId, ms) });
+  }
 
   get releaseAfterRun(): boolean {
     return this.onDisk;
+  }
+
+  private turnAcked(turnId: string, ms: number): Promise<boolean> {
+    if (this.ackedTurns.has(turnId)) return Promise.resolve(true);
+    return new Promise(resolve => {
+      const done = (acked: boolean) => { clearTimeout(timer); this.ackWaiters.delete(waiter); resolve(acked); };
+      const waiter = { turnId, wake: () => done(true) };
+      const timer = setTimeout(done, ms, false);
+      this.ackWaiters.add(waiter);
+    });
+  }
+
+  /** The entry learns the turn by its id, so `item/tool/call` is authorized as this turn, not the thread's first. */
+  private ackTurn(turnId: string): void {
+    this.ackedTurns.add(turnId);
+    this.entry?.noteToolUse(turnId);
+    for (const waiter of this.ackWaiters) if (waiter.turnId === turnId) waiter.wake();
   }
 
   runStreamed(input: AgentInput, turn?: TurnOptions): AgentRun {
@@ -364,6 +408,7 @@ class CodexThread implements AgentThread {
       .then((result) => {
         if (!result.turn?.id) throw new Error('turn/start response missing turn id');
         activeTurnId = result.turn.id;
+        self.ackTurn(result.turn.id);
         if (turn && 'serviceTier' in turn) self.serviceTier = turn.serviceTier;
         self.onDisk = true; // accepted: codex writes the turn, so the thread resumes
         return { turnId: result.turn.id };
@@ -757,7 +802,7 @@ class CodexThread implements AgentThread {
 export class CodexAppServerBackend implements AgentBackend {
   readonly profileCapabilities = {
     instructions: { channel: 'developer', replaceOnResume: false },
-    additionalRoots: true, directoryAccess: true, capabilityPackages: false, mcpServers: false,
+    additionalRoots: true, directoryAccess: true, capabilityPackages: true, mcpServers: false,
     env: true, disableNativeMemory: true,
     reapplyOnResume: ['env', 'nativeSettings', 'workspaceTrust', 'additionalRoots', 'directoryAccess'],
   } satisfies SessionProfileCapabilities;
@@ -1013,7 +1058,7 @@ export class CodexAppServerBackend implements AgentBackend {
     let res: { thread: { id: string } };
     try {
       nativeServiceTier = await readNativeServiceTier(client, opts.cwd);
-      res = await client.request<{ thread: { id: string } }>('thread/start', params);
+      res = await client.request<{ thread: { id: string } }>('thread/start', { ...params, ...startDynamicTools(opts) });
       verifyCodexWorkspaceEcho(res, opts);
     } catch (err) {
       await client.close().catch((closeErr: unknown) => log.fail('agent', closeErr, { phase: 'start-close' }));

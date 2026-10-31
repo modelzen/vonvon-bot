@@ -52,7 +52,9 @@ export async function connectLocalDaemon(home = paths.appDir, cliEntry = process
 function translate(what: string, error: unknown, ms: number, unknown?: string): Error {
   if (error instanceof BadRequest) return new CommandError('bad-args', `${what}没有发出：命令行给的参数不对（${error.message}）。`);
   if (error instanceof CallTimeout) return new CommandError(unknown ? 'outcome-unknown' : 'connection', lines(`daemon 在 ${ms / 1000} 秒内没有回应（${what}）。`, unknown, '运行 vonvon daemon logs 查看。'));
-  if (error instanceof RpcError) return new CommandError(error.code === 'unauthorized' || error.code === 'forbidden' ? 'refused' : error.code === 'invalid_request' ? 'bad-args' : unknown && error.code === 'operation_failed' ? 'outcome-unknown' : 'failed', lines(`${what}失败：${error.message}`, error.code === 'unsupported' ? 'daemon 可能比命令行旧。' : undefined));
+  // The bot process timed out or exited after the request reached it: the change may still land, so not "failed".
+  if (error instanceof RpcError && unknown && error.code === 'operation_failed') return new CommandError('outcome-unknown', lines(`${what}没有确认：${error.message}`, unknown));
+  if (error instanceof RpcError) return new CommandError(error.code === 'unauthorized' || error.code === 'forbidden' ? 'refused' : error.code === 'invalid_request' ? 'bad-args' : 'failed', lines(`${what}失败：${error.message}`, error.code === 'unsupported' ? 'daemon 可能比命令行旧。' : undefined));
   if (error instanceof ConnectionError || firstLine(error) === 'Daemon connection closed') return new CommandError(unknown ? 'outcome-unknown' : 'connection', lines('和 daemon 的连接断了，daemon 可能正在停止。', unknown));
   // checkRequests already parsed the request, so the client's own ZodError is a reply this CLI cannot read.
   if (isZodError(error)) return new CommandError(unknown ? 'outcome-unknown' : 'connection', lines(VERSION_MISMATCH, unknown));
