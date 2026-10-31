@@ -7346,8 +7346,9 @@ export function createOrchestrator(
     state.chatId = opts.chatId;
     state.thread = opts.thread;
     state.presentation = presentationConfig(cfg, await getProjectByChatId(opts.chatId));
-    // Checked after this await, so no other parts it from a free slot below: a shutdown that began meanwhile found this
-    // turn neither queued nor waiting for a slot (collectLost), so a person's is kept for redelivery here.
+    // Checked right after this await: no macrotask can start a shutdown between here and the free-slot acquire below.
+    // A shutdown that began meanwhile found this turn neither queued nor waiting for a slot (collectLost), so a
+    // person's turn is kept for redelivery here.
     if (shuttingDown) { if (opts.origin) droppedReplies?.appendSync(opts.origin); reaction?.done(); await opts.thread.close(); return; }
     state.runLoop = true;
     state.smart = opts.smart === true;
