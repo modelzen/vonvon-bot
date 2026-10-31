@@ -60,7 +60,7 @@ describe('Codex session profile reaches the provider', () => {
             ? `${BRIDGE_DEVELOPER_INSTRUCTIONS}\n\n${profile.instructions}` : BRIDGE_DEVELOPER_INSTRUCTIONS,
           config: expect.objectContaining({
             projects: { [options.cwd]: { trust_level: 'trusted' } },
-            features: { memories: false },
+            features: { memories: false, in_app_local_automation: false },
             memories: { use_memories: false, generate_memories: false },
             shell_environment_policy: { set: { [SESSION_ENV]: '1', ...profile?.env } },
           }),
@@ -123,12 +123,9 @@ describe('Claude session profile reaches SDK query options', () => {
   }
 });
 
-for (const field of ['capabilityPackages', 'mcpServers'] as const) {
-  const unsupported: SessionProfile = {
-    ...explicit,
-    ...(field === 'capabilityPackages' ? { capabilityPackages: [{ path: '/package' }] }
-        : { mcpServers: [{ name: 'test' }] }),
-  };
+// Capability packages are delivered since T4b (session-profile-packages.test.ts); MCP is still refused.
+for (const field of ['mcpServers'] as const) {
+  const unsupported: SessionProfile = { ...explicit, mcpServers: [{ name: 'test' }] };
   for (const action of ['start', 'resume'] as const) {
     it(`${action}: refuses unsupported ${field} before acquiring either provider`, async () => {
       const options = { cwd: '/repo', mode: 'full' as const, profile: unsupported };
@@ -162,7 +159,7 @@ for (const field of ['capabilityPackages', 'mcpServers'] as const) {
         }),
         network: { enabled: false },
       } },
-      features: { memories: false },
+      features: { memories: false, in_app_local_automation: false },
       memories: { use_memories: false, generate_memories: false },
     }),
   }));

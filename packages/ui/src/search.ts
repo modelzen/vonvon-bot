@@ -1,6 +1,6 @@
 import {toolNames} from './management/environmentPresentation';
 import {DECISION_API_PROVIDERS, decisionApiProviderLabel} from '@vonvon/protocol';
-import type {AgentId, DesktopSnapshot, GroupId, MembershipId, ProjectId} from '@vonvon/protocol';
+import type {AgentId, DesktopSnapshot, GroupId, MembershipId, ProjectId, ScheduledTaskView} from '@vonvon/protocol';
 import type {CollaborationView, Page} from './collaboration-model';
 
 export type Selection = {kind: 'overview'} | {kind: 'agent'; id: AgentId} | {kind: 'group'; id: GroupId} | {kind: 'project'; id: ProjectId} | {kind: 'membership'; id: MembershipId};
@@ -44,6 +44,7 @@ const membershipGroups: readonly Group[] = [
   {title: '语音', fields: [item('语音转文字', ['启用语音', '语音识别'])]},
   {title: '本群角色', aliases: ['本群职责', '角色补充', '补充职责', '本群个性'], fields: [item('本群角色', ['本群个性', '补充职责'], {field: ''})]},
   {title: '记忆', aliases: ['思维导图'], fields: [item('项目记忆', ['群记忆', '记忆导图'], {field: ''})]},
+  {title: '任务', aliases: ['定时任务', '周期任务', '新建任务'], fields: []},
   {title: '可用模型', aliases: ['执行模型', '模型', '模型与权限', '执行工具'], fields: [item('模型 Provider', ['执行后端'], {field: ''}), item('允许使用的模型', ['模型多选'], {field: '', guide: '点击「选择模型」查看并多选；完成后在页面保存。'}), item('可用 Effort', ['思考强度', '推理强度', 'Effort 多选'], {field: '', guide: '点击「选择强度」调整 Effort；与模型独立多选。'})]},
   {title: '权限', aliases: ['工作目录权限', '执行权限'], fields: [item('权限', [], {field: '修改权限'}), item('能挡到什么', [], {field: '修改权限', guide: '点击「修改权限」，可比较各档范围与实际约束。'}), item('自定义权限', ['高级设置', '自定义设置'], {field: '修改权限', guide: '点击「修改权限」，选择「自定义」后调整 Provider 原生字段并保存。'})]},
   {title: '聊天方式', aliases: ['沟通方式', '回复规则'], fields: [item('聊天方式', ['会话方式', '智能模式', '智能开话题'], {field: ''})]},
@@ -84,7 +85,8 @@ function expand(id: string, context: string, base: Destination, groups: readonly
     ];
   });
 }
-export function searchEntries(snapshot: DesktopSnapshot, capabilities: {externalCoreAvailable?: boolean} = {}): SearchEntry[] {
+/** `schedules`: the tasks the running Bots answered with when search opened; each is found by name on its group's 任务 tab. */
+export function searchEntries(snapshot: DesktopSnapshot, capabilities: {externalCoreAvailable?: boolean; schedules?: readonly ScheduledTaskView[]} = {}): SearchEntry[] {
   const pages: readonly {id: string; title: string; aliases: readonly string[]; page: Page; view?: CollaborationView}[] = [
     {id: 'home', title: '此刻', aliases: ['首页', '概览'], page: 'home'},
     {id: 'agents', title: 'Bot', aliases: ['机器人', '注册 Bot', '添加 Bot', '加入飞书群并设置工作目录'], page: 'collaboration', view: 'agents'},
@@ -135,6 +137,9 @@ export function searchEntries(snapshot: DesktopSnapshot, capabilities: {external
     entries.push({id: `${member.id}-history-link`, title: '对话记录', context, aliases: ['历史会话', '会话与状态', '会话管理'], destination: {...base, detail: {kind: 'overview'}, section: '会话管理', reveal: 'group-history'}, kind: 'setting'});
     entries.push(...expand(member.id, context, base, membershipGroups.filter(group => (!group.smartOnly || member.conversation === 'smart') && (!group.ordinaryOnly || member.conversation !== 'smart')), {kind: 'membership-settings'}));
     ['搜索历史会话', '筛选历史会话', '恢复会话', '当前会话上下文', '刷新上下文', '清空会话', '压缩上下文', '停止当前任务', '结束目标', '完成时提醒'].forEach((title, index) => entries.push({id: `${member.id}-session-${index}`, title, context: `${context} · 当前会话`, aliases: ({'搜索历史会话': ['搜索'], '筛选历史会话': ['筛选'], '当前会话上下文': ['会话', '上下文'], '清空会话': ['会话操作'], '完成时提醒': ['正在运行']} as Record<string, string[]>)[title] ?? [], destination: {...base, section: '会话管理', reveal: 'group-history', field: ({'搜索历史会话': '搜索', '筛选历史会话': '筛选', '恢复会话': '', '刷新上下文': '上下文', '当前会话上下文': '上下文', '清空会话': '会话操作', '压缩上下文': '会话操作', '停止当前任务': '正在运行', '结束目标': '正在运行'} as Record<string, string>)[title] ?? title, guide: '对话记录中可查看历史与当前任务；部分操作需要有会话或运行中的任务。'}, kind: 'action'}));
+    for (const task of capabilities.schedules ?? []) if (task.botId === member.agentId && task.chatId === member.groupId) {
+      entries.push({id: `${member.id}-schedule-${task.id}`, title: task.name, context: `${context} · 任务`, aliases: [task.describe], destination: {...base, detail: {kind: 'membership-settings'}, section: '任务', field: task.name}, kind: 'item'});
+    }
     entries.push({id: `${member.id}-remove`, title: '解除群绑定', context, aliases: ['解除绑定', '解除项目绑定'], destination: {...base, detail: {kind: 'membership-settings'}, section: '群设置', field: '', guide: '打开右上角群操作，选择「解除群绑定」。'}, kind: 'action'});
   }
   entries.push({id: 'usage-share', title: '分享 Codex 用量', context: '用量', aliases: ['用量卡片'], destination: {page: 'usage', section: '分享 Codex 用量'}, kind: 'action'});

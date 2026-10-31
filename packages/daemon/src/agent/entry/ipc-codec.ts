@@ -6,7 +6,7 @@ const toolReply = z.discriminatedUnion('ok', [
   z.object({
     ok: z.literal(false),
     code: z.enum(['not-ready', 'revoked', 'unknown-tool', 'refused', 'bad-args', 'busy', 'timeout', 'failed']),
-    reason: z.enum(['not-dm', 'not-human-turn', 'not-admin', 'switch-off', 'turn-ended', 'unknown-origin']).optional(),
+    reason: z.enum(['not-dm', 'not-human-turn', 'not-admin', 'switch-off', 'turn-ended', 'unknown-origin', 'not-group', 'no-human-create', 'scheduled-run-scope']).optional(),
     message: z.string(),
   }).strict(),
 ]);

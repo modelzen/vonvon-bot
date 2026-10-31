@@ -21,6 +21,7 @@ import {
   type CodexTitleClient,
 } from '../src/agent/codex-appserver/backend';
 import type { ServerNotification } from '../src/agent/codex-appserver/protocol';
+import { CONNECTOR_SCHEDULING_OFF } from '../src/agent/codex-appserver/memory-config';
 
 function asyncQuery(
   messages: SDKMessage[],
@@ -137,8 +138,9 @@ describe('Codex backend native session titles', () => {
       config: expect.objectContaining({
         web_search: 'disabled',
         projects: { '/repo': { trust_level: 'trusted' } },
-        features: { memories: false },
+        features: { memories: false, in_app_local_automation: false },
         memories: { use_memories: false, generate_memories: false },
+        apps: CONNECTOR_SCHEDULING_OFF.apps,
       }),
     }));
     expect(request).toHaveBeenCalledWith('turn/start', expect.objectContaining({
