@@ -1,7 +1,7 @@
 import { mkdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { paths } from '../config/paths';
-import { runtimeDistribution, type Distribution } from './distribution';
+import { installsService, runtimeDistribution, type Distribution } from './distribution';
 import { serviceTarget } from './identity';
 import { readLinger, userManagerHint } from './linux-session';
 import { isIrreplaceableDefinition, readDefinitionBytes, type Registration } from './registration';
@@ -88,7 +88,7 @@ export function getServiceAdapter(): ServiceAdapter {
     async install(options) {
       // Refuse a development checkout before creating the data directory the services resolve.
       const distribution = await runtimeDistribution();
-      if (distribution.kind !== 'bundled' && distribution.kind !== 'global-npm') return result('install_refused', 'Distribution cannot install a service');
+      if (!installsService(distribution)) return result('install_refused', 'Distribution cannot install a service');
       await mkdir(paths.appDir, { recursive: true, mode: 0o700 });
       return (platform === 'darwin' ? await launchd(distribution) : await systemd(distribution)).install(options);
     },
