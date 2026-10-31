@@ -2062,7 +2062,7 @@ Linux：`vonvon service uninstall`，`vonvon daemon stop`，`npm rm -g vonvon-bo
 
 ## 2026-10-30 Jev 接口扩展
 
-- [x] 本地验收反馈：决策服务及各家配置按需展开，模型菜单和搜索保留直达入口；修复非当前自定义地址清空提交。见 `docs/plans/decision-service-disclosure.md`，待 owner 验收和合入 dev。
+- [x] 本地验收反馈：决策服务及各家配置按需展开，模型菜单和搜索保留直达入口；修复非当前自定义地址清空提交。见 `docs/plans/decision-service-disclosure.md`；owner 已在 Mac mini 本地验收提交 `e249824d` 并认可，PR #596 已合入 dev。
 
 - [x] 按 owner 确认新增 OpenRouter、Vercel、自定义 Jev/System One；保留 TypeSafe 和现有普通模型路径。配置、密钥、判断传输与群快照共用当前入口，见 `docs/plans/2026-10-30-decision-provider-extensions.md`。自动检查与隔离本地验收记录随本次实现交付；owner 人工验收、真实网关推理和合入另行确认。
 
