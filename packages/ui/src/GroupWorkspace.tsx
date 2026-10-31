@@ -19,14 +19,18 @@ import {OperationActivity} from './management/OperationActivity';
 import {appliedNotice, removalNotice} from './management/ProjectPanel';
 import {groupUrl, openExternalUrl} from './url-actions';
 import {ProjectMemoryMap} from './ProjectPage';
+import {ScheduleTab} from './ScheduleTab';
+import {deviceTitle} from './setup/service-toggle';
 import './group-workspace.css';
 
-export type GroupDesignTab = GroupSettingsTab | 'memory';
-export const groupDesignTabs: readonly [GroupDesignTab, string][] = [['model','模型与权限'],['capabilities','能力'],['response','沟通方式'],['memory','记忆']];
+export type GroupDesignTab = GroupSettingsTab | 'memory' | 'schedule';
+export const groupDesignTabs: readonly [GroupDesignTab, string][] = [['model','模型与权限'],['capabilities','能力'],['response','沟通方式'],['memory','记忆'],['schedule','任务']];
 export function groupTabForSection(section?: string): GroupDesignTab {
   switch (section) {
     case '记忆':
     case '项目记忆': return 'memory';
+    case '任务':
+    case '定时任务': return 'schedule';
     case '本群角色':
     case '补充职责': return 'role';
     case undefined:
@@ -172,7 +176,8 @@ export function GroupWorkspace({member, agent, group, snapshot, initialTab, focu
     {notice && notice !== '已保存。' && <p role="status" className="group-control-note">{notice}</p>}
     {tab === 'memory' ? <section id={settingAnchor('记忆')} aria-label="记忆">
       {memberProject ? <ProjectMemoryMap key={memberProject.id} focusNew={focusNew} groupsInitiallyOpen={false} initialRoleMembershipId={initialTab === 'role' ? member.id : undefined} selectedAgentId={member.agentId} selectedGroupId={member.groupId} onBotProfile={() => guard.navigate(onBotProfile)} project={memberProject} snapshot={snapshot} onMembership={id => {const target = snapshot.memberships.find(item => item.id === id); if (target) guard.navigate(() => onBot(target));}}/> : <p className="group-control-note">这个群的项目记忆暂不可用。</p>}
-    </section> : <GroupDesignSettings key={member.id} refreshVersion={version} scope={{kind:'project',botId:member.agentId,projectName:member.name}} tab={tab} tools={snapshot.tools} botName={agent.name} groupName={group.name} onOpenTools={onOpenTools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets} responseHeader={conversationControl}/>}
+    </section> : tab === 'schedule' ? <ScheduleTab key={member.id} botId={member.agentId} chatId={member.groupId} deviceTitle={deviceTitle(snapshot.application.platform)}/>
+    : <GroupDesignSettings key={member.id} refreshVersion={version} scope={{kind:'project',botId:member.agentId,projectName:member.name}} tab={tab} tools={snapshot.tools} botName={agent.name} groupName={group.name} onOpenTools={onOpenTools} onOpenProviders={onOpenProviders} onOpenSecrets={onOpenSecrets} responseHeader={conversationControl}/>}
     <Dialog open={dialog === 'history'} title={<span className="conversation-dialog-title">对话记录</span>} description={`${group.name} · ${agent.name}`} onClose={() => setDialog(null)}><div id={settingAnchor("会话管理")}>{agent.running ? <ConversationPanel agentId={agent.id} groupId={group.id} projectName={member.name} conversation={conversation} request={client.collaboration}/> : <p>Bot 运行后可查看对话记录。</p>}</div></Dialog>
     <Dialog open={dialog === 'help'} title="在群里使用" onClose={() => setDialog(null)}><GroupUsage conversation={conversation} botName={agent.name}/></Dialog>
     <ConfirmDialog open={dialog === 'remove'} title="解除这个群的绑定？" confirmLabel="解除绑定" tone="danger" pending={busy} onCancel={() => setDialog(null)} onConfirm={() => {setDialog(null); void update({},true);}} description={`解除 ${agent.name} 与「${group.name}」的关联。Bot 加入的群会退出；Bot 创建的群会尝试转交群主。本地目录和文件保留。`}/>

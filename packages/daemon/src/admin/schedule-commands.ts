@@ -130,7 +130,9 @@ export function createScheduleCommands(deps: ScheduleCommandsDeps): ScheduleComm
     try { nextRunAt = task.state === 'active' ? nextSlotAfter(task.spec, task.timeZone, cursor) : undefined; } catch { nextRunAt = undefined; }
     let describe: string;
     try { describe = describeSpec(task.spec, task.timeZone, host, now); } catch { describe = describeSpec(task.spec, host, host, now); }
-    return { ...stored, botId: deps.botId, ...(nextRunAt === undefined ? {} : { nextRunAt }), running: !!inflight, describe };
+    // Records are stored as they settle: an interrupted run lands after the skip it caused. Views show them by time.
+    const recent = [...stored.recent].sort((a, b) => (a.startedAt ?? a.slot) - (b.startedAt ?? b.slot));
+    return { ...stored, recent, botId: deps.botId, ...(nextRunAt === undefined ? {} : { nextRunAt }), running: !!inflight, describe };
   }
   const tasksReply = (tasks: StoredTask[], now: number): ScheduleReply => (
     { kind: 'tasks', tasks: tasks.map(task => toView(task, now)), now, timeZone: deps.hostTimeZone() }

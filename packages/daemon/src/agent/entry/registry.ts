@@ -2,7 +2,7 @@ import type { AgentEntry, AgentThread, AgentToolReply } from '../types';
 import { log } from '../../core/logger';
 import type { MemoryTurn } from '../../bot/memory-authority';
 import { scheduleRefusalMessages, type ScheduleActor } from '../../admin/schedule-commands';
-import { sessionInfoTool, ToolRefusal, type AgentTool, type ToolContext } from './tools';
+import { sessionInfoTool, TOOL_RESULT_BYTES, ToolRefusal, type AgentTool, type ToolContext } from './tools';
 
 export interface AgentPlace { kind: 'group' | 'p2p' | 'doc'; chatId?: string; docId?: string }
 export interface TurnFacts {
@@ -95,11 +95,17 @@ interface Grant {
   /** The turn before `turn`; its origins outlive `pruneOrigins`. */
   previous?: TurnAuth;
   origins: Map<string, TurnAuth | undefined>;
+  /**
+   * Ids no longer noted, oldest first, the last {@link PRUNED_IDS}: those `pruneOrigins` dropped and those refused while
+   * the map was full. A late copy is not noted under a later turn, and its call reads turn-ended.
+   */
+  pruned: Set<string>;
   controller: AbortController;
   active: number;
   settingRunning: boolean;
   queue: Array<() => void>;
 }
+const PRUNED_IDS = 1024;
 export function createAgentEntries(opts: {
   appId: string;
   isAdmin(openId: string): boolean;
@@ -124,17 +130,30 @@ export function createAgentEntries(opts: {
   /**
    * At capacity, origins of ended turns go: they cannot authorize anything, and a long-lived session (a recurring task
    * keeps a single-session group's main session open) would otherwise refuse every later turn's calls as unknown-origin. The turn
-   * before this one keeps its own, so a late copy of one of its ids (streamed, then in the full message) is not noted
-   * again under this turn; if that turn alone filled the map, the turn after this one gets room.
+   * before this one keeps its own; if that turn alone filled the map, the turn after this one gets room. A dropped id
+   * goes to `pruned` (see {@link forget}).
    */
   function pruneOrigins(grant: Grant) {
-    for (const [id, auth] of grant.origins) if (!auth || (auth !== grant.turn && auth !== grant.previous)) grant.origins.delete(id);
+    for (const [id, auth] of grant.origins) {
+      if (auth && (auth === grant.turn || auth === grant.previous)) continue;
+      grant.origins.delete(id);
+      forget(grant, id);
+    }
+  }
+  /**
+   * An id that will not be noted again: a late copy of it (streamed, then in the full message) is not noted under the
+   * turn of the moment, and its call reads turn-ended, while it is among the last {@link PRUNED_IDS} forgotten.
+   */
+  function forget(grant: Grant, id: string) {
+    grant.pruned.add(id);
+    if (grant.pruned.size > PRUNED_IDS) grant.pruned.delete(grant.pruned.values().next().value!);
   }
   function revoke(grant: Grant) {
     grant.phase = 'revoked';
     end(grant.turn);
     grant.controller.abort();
     grant.origins.clear();
+    grant.pruned.clear();
     grants.delete(grant);
   }
   function authorizeNow(grant: Grant, auth: TurnAuth | undefined): Failure | undefined {
@@ -209,7 +228,7 @@ export function createAgentEntries(opts: {
     const capped = grants.size >= 1024;
     const grant: Grant = {
       phase: shuttingDown ? 'revoked' : capped ? 'capacity' : 'pending',
-      place: { ...place }, origins: new Map(), controller: new AbortController(),
+      place: { ...place }, origins: new Map(), pruned: new Set(), controller: new AbortController(),
       active: 0, settingRunning: false, queue: [],
     };
     if (!capped && !shuttingDown) grants.add(grant);
@@ -238,7 +257,8 @@ export function createAgentEntries(opts: {
         : schedule ? authorizeSchedule(grant, auth, tool.action, taskId) : authorizeNow(grant, auth);
       if (gated) {
         const refusal = authNow();
-        if (refusal?.reason === 'unknown-origin' && origin?.toolUseId && grant.origins.has(origin.toolUseId)) return finishLog(schedule ? scheduleRefused('turn-ended') : refused('turn-ended'));
+        const known = origin?.toolUseId && (grant.origins.has(origin.toolUseId) || grant.pruned.has(origin.toolUseId));
+        if (refusal?.reason === 'unknown-origin' && known) return finishLog(schedule ? scheduleRefused('turn-ended') : refused('turn-ended'));
         if (refusal) return finishLog(refusal);
         if (settings && grant.settingRunning && grant.queue.length >= 8) return finishLog(failure('busy'));
       }
@@ -297,7 +317,7 @@ export function createAgentEntries(opts: {
             ctx.reserveBotWrite = () => { if (auth.botWrites >= 1) return false; auth.botWrites++; return true; };
             ctx.releaseBotWrite = () => { auth.botWrites = Math.max(0, auth.botWrites - 1); };
           }
-          if (schedule && auth) ctx.schedule = () => ({ actor: scheduleActor(grant, auth), where: auth.facts.where?.() ?? { inTopic: false } });
+          if (schedule && auth) ctx.schedule = () => ({ actor: scheduleActor(grant, auth), where: auth.facts.where?.() ?? { inTopic: false }, steered: auth.steered });
           if (gated && auth) {
             if (settings) ctx.turn = { id: auth.id, requesterOpenId: auth.facts.requesterOpenId ?? '', triggerMessageId: auth.facts.triggerMessageId ?? '', role: opts.isOwner(auth.facts.requesterOpenId ?? '') ? 'owner' : 'admin' };
             ctx.commit = async write => {
@@ -327,7 +347,7 @@ export function createAgentEntries(opts: {
             } else result = await runTool(parsed.data, ctx);
             if (committed && Date.now() > deadline) log.warn('agent', 'late-commit', { tool: name });
             const json = JSON.stringify(result);
-            settle(json !== undefined && Buffer.byteLength(json) <= 256 * 1024 ? { ok: true, result } : { ok: false, code: 'failed', message: '结果太大' });
+            settle(json !== undefined && Buffer.byteLength(json) <= TOOL_RESULT_BYTES ? { ok: true, result } : { ok: false, code: 'failed', message: '结果太大' });
           } catch (error) {
             if (error instanceof ToolRefusal) settle(error.reply);
             else {
@@ -366,9 +386,10 @@ export function createAgentEntries(opts: {
       },
       call,
       noteToolUse(id) {
-        if (grant.phase !== 'attached' || grant.origins.has(id)) return;
+        if (grant.phase !== 'attached' || grant.origins.has(id) || grant.pruned.has(id)) return;
         if (grant.origins.size >= 256) pruneOrigins(grant);
-        if (grant.origins.size >= 256) return;
+        // Still full (this turn and the one before hold it all): a copy noted turns later would get the wrong turn.
+        if (grant.origins.size >= 256) { forget(grant, id); return; }
         grant.origins.set(id, grant.turn);
       },
       attach(thread) {
