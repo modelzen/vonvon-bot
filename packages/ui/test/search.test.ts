@@ -5,6 +5,7 @@ import {agentIdSchema, groupIdSchema, membershipIdSchema, projectIdSchema, type 
 import {decisionKeySection, decisionProviderSection, diagnosticsSection, findEntries, searchEntries, settingAnchor} from '../src/search';
 import {groupTabForSection} from '../src/GroupWorkspace';
 import {routeFromSearch} from '../src/collaboration-navigation';
+import {scheduleTask} from './schedule-fixture';
 
 const agentId = agentIdSchema.parse('cli_searchagent');
 const groupId = groupIdSchema.parse('oc_searchgroup');
@@ -401,4 +402,16 @@ test('decision service searches keep their own key and connection destinations',
   assert.equal(findEntries(entries, '自定义决策请求地址')[0]?.destination.field, '接口地址');
   assert.equal(findEntries(entries, '自定义接口模型 ID')[0]?.destination.field, '模型 ID');
   assert.equal(decisionProviderSection('unknown'), 'Provider 配置');
+});
+
+test('任务 opens the group 任务 tab, and a task the Bot answered with is found by name on its row', () => {
+  const tab = findEntries(entries, '定时任务').find(entry => entry.destination.selection?.kind === 'membership');
+  assert.equal(tab?.destination.section, '任务');
+  assert.equal(groupTabForSection(tab?.destination.section), 'schedule');
+  const withTasks = searchEntries(snapshot, {schedules: [
+    scheduleTask({botId: agentId, chatId: groupId, name: '每日站会提醒'}), scheduleTask({id: 'st_elsewhere', botId: agentId, chatId: 'oc_elsewhere', name: '别处的提醒'}),
+  ]});
+  assert.deepEqual(findEntries(withTasks, '站会').map(entry => [entry.title, entry.destination.selection, entry.destination.detail, entry.destination.section, entry.destination.field]),
+    [['每日站会提醒', {kind: 'membership', id: membershipId}, {kind: 'membership-settings'}, '任务', '每日站会提醒']]);
+  assert.deepEqual(findEntries(withTasks, '别处的提醒'), []);
 });

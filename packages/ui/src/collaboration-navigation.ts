@@ -1,9 +1,12 @@
 import type {AgentId, DesktopSnapshot, GroupId, MembershipId, ProjectId} from '@vonvon/protocol';
 import type {CollaborationView} from './collaboration-model';
+import type {GroupDesignTab} from './GroupWorkspace';
 import type {GroupSettingsTab} from './settings/GroupDesignSettings';
 import type {Destination, DetailPane, Selection} from './search';
 
-export type AgentPane = {kind: 'groups'} | {kind: 'profile'} | {kind: 'settings'};
+export type AgentPane = {kind: 'groups'} | {kind: 'profile'} | {kind: 'schedule'} | {kind: 'settings'};
+/** The Bot page's tabs in order; 任务 lists every group's tasks of the Bot and a row opens that group's 任务 tab. */
+export const agentPanes: readonly {kind: AgentPane['kind']; label: string}[] = [{kind: 'groups', label: '群聊'}, {kind: 'profile', label: '记忆'}, {kind: 'schedule', label: '任务'}, {kind: 'settings', label: '设置'}];
 /** Project memory and workspace remain reachable as secondary destinations. */
 export type ProjectPane = {kind: 'map'} | {kind: 'workspace'} | {kind: 'context'} | {kind: 'group'; tab: GroupSettingsTab};
 export type MembershipPane = {kind: 'activity'} | {kind: 'settings'};
@@ -63,6 +66,11 @@ export function openMembership(route: CollaborationRoute, id: MembershipId, snap
           ? projectId ? {kind: 'project', id: projectId, pane: {kind: 'map'}} : {kind: 'list', view: 'projects'}
           : {kind: 'group', id: member.groupId};
   return {kind: 'membership', id, pane: {kind: 'settings'}, parent};
+}
+
+/** A row of the Bot page's 任务 pane opens its group page on the 任务 tab; other group pages keep theirs. */
+export function openScheduleTab(tabs: Readonly<Record<string, GroupDesignTab>>, id: MembershipId): Record<string, GroupDesignTab> {
+  return {...tabs, [id]: 'schedule'};
 }
 
 export function routeBack(route: CollaborationRoute): CollaborationRoute {
