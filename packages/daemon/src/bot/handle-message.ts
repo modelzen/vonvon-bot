@@ -7186,6 +7186,9 @@ export function createOrchestrator(
     msgId: string;
     /** The slot came while a shutdown began: the card says the bot stopped, as a cancel at shutdown does (s18c). */
     stopped: () => void;
+    /** The run ended before its first turn took the card over (launchRun): the same last word, its queue already dropped
+     * or taken by the shutdown. */
+    ended: () => void;
   }
 
   /**
@@ -7245,9 +7248,9 @@ export function createOrchestrator(
       log.fail('card', err, { phase: 'queued-card' });
     }
     log.info('intake', 'run-queued', { position: q.position(), key: activeKey });
-    /** The card's last word for a run that never starts. */
-    const endCard = (): void => {
-      const dropped = askAgain(state.queue, opts.chatId, opts.flat ? 'main' : 'topic', 'queue-dropped', '会话被停下了');
+    /** The card's last word for a run that never starts; the turns queued behind are asked again unless `asked`. */
+    const endCard = (asked = false): void => {
+      const dropped = asked ? 0 : askAgain(state.queue, opts.chatId, opts.flat ? 'main' : 'topic', 'queue-dropped', '会话被停下了');
       if (!msgId) return;
       runsByCard.delete(msgId);
       runStreams.delete(msgId);
@@ -7274,7 +7277,7 @@ export function createOrchestrator(
     state.interrupt = undefined;
     state.waiting = undefined;
     if (!release) return null; // 已取消：占位卡已翻终态，预订已释放
-    return { release, queuedCard: msgId ? { stream, msgId, stopped: endCard } : undefined };
+    return { release, queuedCard: msgId ? { stream, msgId, stopped: () => endCard(), ended: () => endCard(true) } : undefined };
   }
 
   /** Deletes a card this bot sent: undefined once it is gone (230110: it was already), else why not, for the page. A
@@ -7332,7 +7335,6 @@ export function createOrchestrator(
     reaction?: RunReaction,
     onTopicCreated?: () => void,
   ): Promise<void> {
-    if (shuttingDown) { if (opts.origin) droppedReplies?.appendSync(opts.origin); reaction?.done(); await opts.thread.close(); return; }
     let activeKey = opts.knownThreadId ?? `pending:${opts.replyTo}`;
     let topicThreadId = opts.knownThreadId;
     // The turn's workspace: resolves relative image refs in the reply and is what
@@ -7344,6 +7346,9 @@ export function createOrchestrator(
     state.chatId = opts.chatId;
     state.thread = opts.thread;
     state.presentation = presentationConfig(cfg, await getProjectByChatId(opts.chatId));
+    // Checked after this await, so no other parts it from a free slot below: a shutdown that began meanwhile found this
+    // turn neither queued nor waiting for a slot (collectLost), so a person's is kept for redelivery here.
+    if (shuttingDown) { if (opts.origin) droppedReplies?.appendSync(opts.origin); reaction?.done(); await opts.thread.close(); return; }
     state.runLoop = true;
     state.smart = opts.smart === true;
     if (opts.requesterOpenId) state.requesterOpenId = opts.requesterOpenId;
@@ -7922,6 +7927,9 @@ export function createOrchestrator(
           // typewriter (cardElement.content), structure → whole-card update.
           if (ev.type !== 'subagent_step') stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID);
         }
+        // Whether its session had gone as the turn's events ended, before any terminal I/O: a turn that failed on its own
+        // stays its own failure, whatever stops the bot or changes the group while it is delivered (ranScheduled).
+        const goneAt = shuttingDown ? 'shutdown' : state.evicted ? 'evicted' : undefined;
         turnScope?.close();
         askTurn.close('turn-ended');
         activity?.end();
@@ -8104,7 +8112,7 @@ export function createOrchestrator(
             .catch((err) => log.fail('card', err, { phase: 'empty-card-session' }));
         }
         // Settled as it ends, before any turn queued behind it runs (T2 4.1 第 5 条).
-        scheduled?.settle(ranScheduled(scheduled, rc.rs, delivered, askFaulted, state.evicted));
+        scheduled?.settle(ranScheduled(scheduled, rc.rs, delivered, askFaulted, goneAt));
         retrySessionTitleAfterTurn();
         // Queued turns reply to the last card still there; a deleted one keeps the previous target.
         if (!gone) replyTo = finalMsgId;
@@ -8201,6 +8209,9 @@ export function createOrchestrator(
         runsByCard.delete(curCardKey);
         completionReminderRefreshers.delete(curCardKey);
       }
+      // The first turn ended before it took the slot's queue card over (settleGone, or it failed): the card says so, with
+      // no ⏹ left. Its queue went already: dropped above, or taken by the shutdown.
+      queuedCard?.ended();
       // F8: adopt 始终没成功的线程对任何后续消息都不可达（pending: 键随本
       // finally 即灭，会话从未 persist，M-3 reaper 只扫 sessions 也看不见它）
       // ——保活只会把常驻 agent 进程（~172MB/个）泄漏到停机。与 goal 路径
@@ -9508,13 +9519,14 @@ export function createOrchestrator(
     return task !== undefined && nextRunAfterFailure({ ...job, task });
   }
   /** How a scheduled turn that ran ended: its card's terminal, and whether the final card update landed. A stop by its own
-   * ask coordinator's fault is neither the user's nor the shutdown's: a counted failure. A failure after its session went
-   * is not one (launchRun's settleGone): the shutdown's, or skipped for the settings change that closed it. */
-  function ranScheduled(hook: ScheduledHook, rs: RunState, delivered: boolean, askFaulted: boolean, evicted: boolean | undefined): ScheduledOutcome {
+   * ask coordinator's fault is neither the user's nor the shutdown's: a counted failure. A failure of a turn whose session
+   * had gone as its events ended (`gone`) is not one (launchRun's settleGone): the shutdown's, or skipped for the settings
+   * change that closed it. */
+  function ranScheduled(hook: ScheduledHook, rs: RunState, delivered: boolean, askFaulted: boolean, gone: 'shutdown' | 'evicted' | undefined): ScheduledOutcome {
     if (rs.terminal === 'interrupted' && !askFaulted) return scheduleStopped();
     const error = rs.terminal === 'interrupted' ? '提问出错' : failureText(rs) ?? (delivered ? undefined : '结果卡片没有更新成功');
-    if (error && shuttingDown) return scheduleStopped();
-    if (error) return evicted ? SCHEDULE_UPDATING : { status: 'failed', error, durationMs: ranFor(hook), counts: true };
+    if (error && gone === 'shutdown') return scheduleStopped();
+    if (error) return gone === 'evicted' ? SCHEDULE_UPDATING : { status: 'failed', error, durationMs: ranFor(hook), counts: true };
     return { status: 'done', excerpt: clampUnits(finalMessageText(rs), 500), durationMs: ranFor(hook) };
   }
 
@@ -9632,6 +9644,11 @@ export function createOrchestrator(
         }));
       } catch (err) {
         log.fail('schedule', err, { phase: 'start-topic', taskId: job.task.id });
+        // Stopping (its client pool closed as the thread started): the shutdown's, not the run's failure, as in launchRun.
+        if (shuttingDown) {
+          hook.settle(scheduleStopped());
+          return;
+        }
         hook.settle(scheduleFailed(hook, err));
         if (hook.target.kind === 'topic') await channel.send(chatId, { markdown: `❌ 启动失败：${err instanceof Error ? err.message : String(err)}` },
           { replyTo: hook.target.anchor, replyInThread: true }).catch(() => undefined);
