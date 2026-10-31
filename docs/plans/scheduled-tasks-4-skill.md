@@ -28,7 +28,7 @@ export async function ensureBuiltinPackage(appId: string, set: 'group' | 'dm', s
 ```
 
 - 目录 `bots/<appId>/capabilities/builtin/<set>/`，`set` 是稳定名（今天只有 `group`；s54a 加 `dm`）。**不用内容哈希、不删旧目录**：Codex resume 用的是起线程时记下的路径。
-- 写 `.claude-plugin/plugin.json`（`name: 'vonvon'`，`version` 取内容哈希前 12 位，只是信息）和 `skills/<name>/SKILL.md`（frontmatter `name`、`description`，正文 `body`）。内容没变不重写（先读再比）；变了原地整文件 rename 覆盖。多出来的旧 skill 文件（名单里没有的）删掉，目录留着。目录 `0o755`、文件 `0o644`，不给会话可写（会话的沙箱策略不含这个目录的写）。
+- 写 `.claude-plugin/plugin.json`（`name: 'vonvon'`，`version` 取内容哈希前 12 位，只是信息）和 `skills/<name>/SKILL.md`（frontmatter `name`、`description`，正文 `body`）。内容没变不重写（先读再比）；变了原地整文件 rename 覆盖。多出来的旧 skill 文件（名单里没有的）删掉，目录留着。目录 `0o700`、文件 `0o644`，不给会话可写（会话的沙箱策略不含这个目录的写）。
 - 写失败抛错，调用方（T4b）记诊断、不带 skill 起会话，不让会话起不来。
 - `registry.ts`：`builtinSkillsOfSet(set: 'group'): BuiltinSkill[]`，今天 `group` 只有 `[scheduledTasksSkill]`，包内名单只由 set 决定；T4b 按 `profile.tools.schedule` 决定挂不挂包。
 
@@ -53,7 +53,7 @@ export async function ensureBuiltinPackage(appId: string, set: 'group' | 'dm', s
 
 main 必败：生成器和 skill 在基线不存在。
 
-- `builtin-package.test.ts`（真实临时目录）：生成 → `plugin.json` 的 `name: 'vonvon'`，`skills/scheduled-tasks/SKILL.md` 的 frontmatter 有 `name`、`description`（一行、≤200 字）；再生成同内容 → `changed: false`、mtime 不变；改 body → `changed: true`、同一路径、文件内容更新、目录还在；名单去掉一个 skill → 那个 `SKILL.md` 被删、目录在；权限位 `0o755`/`0o644`；目录只读时抛错。
+- `builtin-package.test.ts`（真实临时目录）：生成 → `plugin.json` 的 `name: 'vonvon'`，`skills/scheduled-tasks/SKILL.md` 的 frontmatter 有 `name`、`description`（一行、≤200 字）；再生成同内容 → `changed: false`、mtime 不变；改 body → `changed: true`、同一路径、文件内容更新、目录还在；名单去掉一个 skill → 那个 `SKILL.md` 被删、目录在；权限位 `0o700`/`0o644`；目录只读时抛错。
 - `builtin-skill-text.test.ts`：正文含 4.2 八段里的每个引号句子；不含真实 id、群名、密钥；行数 ≤140；description 逐字等于总设计第 11 节。
 - 回归定向：paths。
 
