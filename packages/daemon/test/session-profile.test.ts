@@ -123,12 +123,9 @@ describe('Claude session profile reaches SDK query options', () => {
   }
 });
 
-for (const field of ['capabilityPackages', 'mcpServers'] as const) {
-  const unsupported: SessionProfile = {
-    ...explicit,
-    ...(field === 'capabilityPackages' ? { capabilityPackages: [{ path: '/package' }] }
-        : { mcpServers: [{ name: 'test' }] }),
-  };
+// Capability packages are delivered since T4b (session-profile-packages.test.ts); MCP is still refused.
+for (const field of ['mcpServers'] as const) {
+  const unsupported: SessionProfile = { ...explicit, mcpServers: [{ name: 'test' }] };
   for (const action of ['start', 'resume'] as const) {
     it(`${action}: refuses unsupported ${field} before acquiring either provider`, async () => {
       const options = { cwd: '/repo', mode: 'full' as const, profile: unsupported };
