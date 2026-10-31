@@ -155,7 +155,7 @@ describe('Claude compaction line and meter, through the real thread and mapper',
     threads.push(thread);
     expect(options?.settings).toEqual(AUTO_COMPACT_SETTINGS);
     expect(AUTO_COMPACT_SETTINGS).toEqual({ autoCompactEnabled: true, autoMemoryEnabled: false,
-      env: { DISABLE_AUTO_COMPACT: '', DISABLE_COMPACT: '', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' } });
+      env: { DISABLE_AUTO_COMPACT: '', DISABLE_COMPACT: '', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', CLAUDE_CODE_DISABLE_CRON: '1' }, skillOverrides: { loop: 'off', schedule: 'off' } });
 
     const render = new RunRender();
     const meters: string[] = [];
