@@ -8,6 +8,7 @@ import type { Project } from '../project/registry';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import type { AdminWriteOp } from '../admin/ops';
 import type { AdminLibraryOp } from '../admin/library';
+import type { ScheduleReply, ScheduleRequest } from '@vonvon/protocol';
 import { isAdmin, resolveOwner, type AppConfig } from '../config/schema';
 import { createCommandTools } from '../agent/entry/command-tools';
 import { createMemoryWriter } from './memory-writer';
@@ -47,6 +48,8 @@ export interface BridgeHandle {
   /** The host's workspace fan-out for this bot (admin/library.ts `AdminLibraryOp`). */
   libraryExecute: (op: AdminLibraryOp) => Promise<unknown>;
   settings: HostSettings;
+  /** Scheduled tasks from the desktop and the terminal (admin/ipc.ts `AdminScheduleOp`), run as the local owner. */
+  schedule: (via: 'desktop' | 'cli', request: ScheduleRequest) => Promise<ScheduleReply>;
   /** Graceful teardown: drop the long connection first, then close every codex
    *  session (no orphan app-servers). Idempotent enough for a signal handler. */
   shutdown: () => Promise<void>;
@@ -79,6 +82,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   // hooks run an empty `vonvon hook`, and the tools ask in the terminal.
   const entries = createAgentEntries({ appId: app.id, isAdmin: id => isAdmin(opts.cfg, id), isOwner: id => resolveOwner(opts.cfg) === id, tools: createCommandTools({
     appId: app.id, memory,
+    schedule: { execute: (actor, request) => orchestrator.scheduleAs(actor, request) },
     settings: { read: scope => orchestrator.settings.read(scope), save: (edit, options) => orchestrator.settings.save(edit, options), models: query => orchestrator.settings.models(query), act: action => orchestrator.settings.act(action) },
     projects: listProjects,
     groups: async cursor => {
@@ -123,12 +127,16 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     // Drain evidence received before disconnect completed; it runs independently of the business handlers.
     const callbacksClosing = transportClosing.then(() => cardCallbacks.close());
     const groupsClosing = Promise.allSettled([...groupTasks]);
+    // No scheduled run is claimed from here on. The orchestrator interrupts the runs on and settles them; the drain then
+    // waits at most 5 seconds for their records, as the host kills this process 8 seconds into a stop (host/lifecycle.ts).
+    orchestrator.scheduler.stop();
     const orchestratorClosing = orchestrator.shutdown();
     closing = (async () => {
       const errors: unknown[] = [];
       await rolesClosing;
       try { await orchestratorClosing; }
       catch (error) { errors.push(error); }
+      await orchestrator.scheduler.drain(5_000);
       const groups = await groupsClosing;
       for (const result of groups) if (result.status === 'rejected') errors.push(result.reason);
       for (const result of await transportClosing) {
@@ -207,6 +215,8 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     log.info('ws', 'connected', { appId: app.id, fallbackCwd: opts.fallbackCwd });
     // Only once connected: when this start fails, the file stays as it is for the next one.
     orchestrator.replyDropped();
+    // Scheduled runs post to Feishu: the tick starts once connected, after the crashed runs are recorded.
+    await orchestrator.scheduler.start();
 
     const executeGroup = createGroupExecutor(channel, identity, opts.cfg.preferences?.projectsRootDir);
     const adminGroups: BridgeHandle['adminGroups'] = op => {
@@ -216,7 +226,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
       void task.then(() => groupTasks.delete(task), () => groupTasks.delete(task));
       return task;
     };
-    return { channel, entries, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, shutdown };
+    return { channel, entries, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, libraryExecute: orchestrator.libraryExecute, settings: orchestrator.settings, schedule: orchestrator.schedule, shutdown };
   } catch (error) {
     try { await shutdown(); }
     catch (cleanupError) {

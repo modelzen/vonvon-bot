@@ -1,6 +1,6 @@
 # 定时任务：总设计（T1 到 T5）
 
-owner 2026-10-30 定，一次做到位，没有"第一版"（这里的"v1"指产品的第一个版本，不是功能的第一版）。产品行为写在 `docs/product.md` 3.13，本文只写做法、共享契约和切片。八个 PR（T1a、T1b、T2、T3、T3b、T4a、T4b、T5）都从最新 `origin/dev` 开 `codex/<片>` 分支，目标 `dev`（`AGENTS.md`"2026-10-30 起"）。行号按基线 ecd80328；`origin/dev` 已再前进 13 个只改 Windows 安装和更新的提交，不碰本文引用的文件，行号漂了按函数名找。
+owner 2026-10-30 定，一次做到位，没有"第一版"（这里的"v1"指产品的第一个版本，不是功能的第一版）。产品行为写在 `docs/product.md` 3.13，本文只写做法、共享契约和切片。十个 PR（T1a、T1a2、T1b、T1c、T2、T3、T3b、T4a、T4b、T5）都从最新 `origin/dev` 开 `codex/<片>` 分支，目标 `dev`（`AGENTS.md`"2026-10-30 起"）。行号按基线 ecd80328；`origin/dev` 已再前进 13 个只改 Windows 安装和更新的提交，不碰本文引用的文件，行号漂了按函数名找。
 
 2026-10-30 两轮审查（对照代码的 28 条、对照决定和格式的 23 条）后改了一版，改了什么见第 17 节。
 
@@ -142,7 +142,7 @@ RPC：`rpc.ts` 加 `schedule`，参数 `{ botId: agentIdSchema, request: schedul
 
 ### 4.2 存储：`bots/<appId>/schedules.json`（Claude 定）
 
-一个文件，bot 子进程独占写。`D/server/atomic-file.ts` 的 `writeFileAtomic` 只有临时文件加 rename、没有 fsync（仓库里 fsync 的只有 `service/systemd.ts` 和 `import/bridge/*`）：T1a 给它加一个 `{ durable: true }` 选项（写完 `fsync` 临时文件、rename、再 `fsync` 目录），`schedules.json` 用它，别的调用方不变。否则断电、内核崩溃能让 `cursor` 退回去、同一个 slot 再跑一次；"至多一次"只对进程崩溃成立。host 不读不写；桌面端和终端的改动经 RPC → IPC → 子进程 → 命令核。
+一个文件，bot 子进程独占写。`D/server/atomic-file.ts` 的 `writeFileAtomic` 只有临时文件加 rename、没有 fsync（仓库里 fsync 的只有 `service/systemd.ts` 和 `import/bridge/*`）：T1a 给它加一个 `{ durable: true }` 选项（写完 `fsync` 临时文件、rename、再 `fsync` 目录；rename 之后不再报错：目录 fsync 失败只记日志，Windows 跳过目录 fsync，NTFS 上 rename 就是提交点），写盘前按 `load()` 同一套 schema 校验，过不了就抛错、内存和文件都不变，`schedules.json` 用它，别的调用方不变。否则断电、内核崩溃能让 `cursor` 退回去、同一个 slot 再跑一次；"至多一次"只对进程崩溃成立。host 不读不写；桌面端和终端的改动经 RPC → IPC → 子进程 → 命令核。
 
 ```ts
 type ScheduleStoreFile = { version: 1; tasks: StoredTask[] };   // 没有文件级 revision
@@ -150,6 +150,7 @@ type StoredTask = Omit<ScheduledTaskView, 'nextRunAt' | 'running' | 'describe' |
   cursor: number;                 // 已处理的最后一个 slot（epoch ms）；下一个 = nextSlotAfter(spec, tz, cursor)
   inflight?: { runId: string; slot: number; trigger: 'schedule' | 'catchUp' | 'manual'; startedAt: number; revision: string }; // revision 是起跑时的配置版本
   noticePending?: true;           // 自动暂停的那条群消息还没发出去，下次 tick 再试
+  noticeSince?: number;           // 这次自动暂停的时刻；24 小时窗口和清 noticePending 都认它，不认 updatedAt
 };
 ```
 
@@ -163,10 +164,10 @@ type StoredTask = Omit<ScheduledTaskView, 'nextRunAt' | 'running' | 'describe' |
 ```ts
 export type ScheduledJob = { task: StoredTask; runId: string; slot: number; trigger: 'schedule' | 'catchUp' | 'manual'; nth: number; late: boolean };
 export type ScheduledOutcome =
-  | { status: 'done'; excerpt: string; messageId?: string; topicId?: string; durationMs: number }
-  | { status: 'failed'; error: string; messageId?: string; topicId?: string; durationMs: number; counts: boolean } // counts=false：飞书连不上、一张卡都没发出去，不计入连续失败
+  | { status: 'done'; excerpt: string; messageId?: string; topicId?: string; link?: string; durationMs: number }           // link：结算时解析的飞书链接，不是网址的不记
+  | { status: 'failed'; error: string; messageId?: string; topicId?: string; link?: string; durationMs: number; counts: boolean } // counts=false：飞书连不上、一张卡都没发出去，不计入连续失败
   | { status: 'skipped'; reason: 'disabled' | 'updating' | 'held' }                                                 // 运行前的门没过，不出声
-  | { status: 'interrupted'; by: 'shutdown' | 'user'; messageId?: string; topicId?: string };                        // 崩溃的 interrupted 由调度器在启动时写，by: 'crash'
+  | { status: 'interrupted'; by: 'shutdown' | 'user'; messageId?: string; topicId?: string; link?: string };         // 崩溃的 interrupted 由调度器在启动时写，by: 'crash'
 /** 一次定时运行在 orchestrator 里的回执。orchestrator 的每条丢弃路径都要调 settle，所以它幂等：第一次算数。 */
 export interface ScheduledHook {
   job: ScheduledJob;
@@ -187,14 +188,16 @@ export interface ScheduledHook {
 
 只用 `Intl.DateTimeFormat`，不加 cron 库。所有函数纯函数，`now` 由调用方传。
 
-- `nextSlotAfter(spec, timeZone, afterMs): number | undefined`：严格大于 `afterMs` 的下一个 slot。`once` 在 `at > after` 时返回 `at`，否则 undefined。`every`：`anchor + k × minutes`，k ≥ 1 的最小值使结果 > after（纯算术）；创建于 10:00:23 的"每 30 分钟"，anchor 是 10:01:00，第一次 10:31:00，再 11:01:00。`daily`/`weekly`/`cron`：用 `localParts(timeZone, ms)` 取本地年月日时分和星期，按本地时间逐分钟前推，日不匹配就跳到下一天零点，最多推 400 天，推不到返回 undefined（cron 写了 2 月 30 日这种）。
-- `latestSlotWithin(spec, timeZone, nowMs, windowMs): number | undefined`：`(now − window, now]` 里最后一个 slot，直接算，不从 cursor 枚举。`every` 算术；`daily`/`weekly` 从 now 的本地日期往前最多 8 天逐日试；`cron` 从 now 所在分钟逐分钟倒推，最多 `window` 那么多分钟（7 天是 10080 步，200 个任务也只在醒来那一次 tick 跑）。
-- `countSlotsBetween(spec, timeZone, fromExclusive, toInclusive, cap = 10000): number`：错过了多少个。`every` 算术；`daily`/`weekly` 按天算；`cron` 枚举到 cap 为止，到 cap 就返回 cap（记录里写"10000+"）。
-- `instantOf(timeZone, y, m, d, hh, mm)`：本地时间到 epoch ms。夏令时跳过的时间（gap）取跳过后的第一个合法时刻；重复的时间（fold）取第一次。用"猜一个 UTC、用 Intl 反算本地、修正差值、再反算一次"的办法，不依赖 `Date` 的本机时区。
+- `nextSlotAfter(spec, timeZone, afterMs): number | undefined`：严格大于 `afterMs` 的下一个 slot。`once` 在 `at > after` 时返回 `at`，否则 undefined。`every`：`anchor + k × minutes`，k ≥ 1 的最小值使结果 > after（纯算术）；创建于 10:00:23 的"每 30 分钟"，anchor 是 10:01:00，第一次 10:31:00，再 11:01:00。`daily`/`weekly`/`cron`：用 `localParts(timeZone, ms)` 取本地年月日时分和星期，按本地日期逐日前推，日不匹配就跳到下一天；从 `after` 所在本地日期的前一天开始试、只认大于 `after` 的（跨零点的 gap 会把前一天的 slot 挪到这一天，见 `instantOf`）；匹配的日子里按时分升序找第一个合法的，没有夏令时切换的日子直接用当天的偏移算（`Date.UTC(...) − offset`），只有切换日逐个走 `instantOf`；最多推 400 个日期（只按日期封顶，相隔正好 400 天的下一次碰上拨回一小时也找得到），推不到返回 undefined（cron 写了 2 月 30 日这种）。`* * * * *` 一次调用要在几毫秒内。
+- `latestSlotWithin(spec, timeZone, nowMs, windowMs): number | undefined`：`(now − window, now]` 里最后一个 slot，直接算，不从 cursor 枚举。`every` 算术；`daily`/`weekly`/`cron` 和 `nextSlotAfter` 一样按本地日期逐日倒推，不逐分钟：从 now 的本地日期往前试 window 跨的天数再多一天（7 天的窗口往前 8 天：春季拨快以后，`now − window` 读成本地时间落在再前一天的晚上），只认 `(now − window, now]` 里的；`daily`/`weekly` 最多 8 天。
+- `countSlotsBetween(spec, timeZone, fromExclusive, toInclusive, cap = 10000): number`：错过了多少个。`every` 算术，精确，不封顶；`daily`/`weekly` 按天算；`cron` 数到 cap 为止，到 cap 就返回 cap。也从 `from` 的前一天开始，整个区间按不同的时刻去重后计数，挪过的 slot 不会数两次。调度器要减去正要跑的那一个时传 `cap = 10001` 再减 1，所以记录里 `count` 是 10000 就表示"10000 次以上"。
+- `instantOf(timeZone, y, m, d, hh, mm)`：本地时间到 epoch ms。夏令时跳过的时间（gap）按 gap 的长度往后挪（纽约 3 月 8 日的 02:30 → 03:30）；gap 跨零点时会挪到下一天（America/Nuuk 跳过 3 月 28 日 23:00–23:59，28 日 23:30 → 29 日 00:30）。重复的时间（fold）取第一次。用"猜一个 UTC、用 Intl 反算本地、修正差值、再反算一次"的办法，不依赖 `Date` 的本机时区。
 - `parseLocal(timeZone, 'YYYY-MM-DD HH:mm'): number | undefined`：给工具和终端的 `--at` 用，经 `instantOf`。
-- `parseCron(expr)`：5 段，支持 `*`、数字、`a-b`、`a,b`、`*/n`、`a-b/n`；星期 0 到 7（7 当 0）；日和星期都给了取并集（标准 cron）。不支持名字（MON、JAN）和 `L`、`W`、`#`。
-- `describeSpec(spec, timeZone, hostTimeZone)`：人话。`every 30` → "每 30 分钟"；`every 120` → "每 2 小时"（60 的倍数）；`daily 09:00` → "每天 09:00"；`weekly [1,2,3,4,5] 09:00` → "每个工作日 09:00"；`weekly [1,3] 10:00` → "每周一、三 10:00"；`once` → "10 月 31 日 14:00 一次"（跨年写"2027 年 1 月 2 日 09:00 一次"）；`cron` → "cron「0 9 * * 1-5」"。`timeZone !== hostTimeZone` 时后面加"（Asia/Tokyo）"。
-- `validateSpec(spec, now, timeZone): string | undefined`：人话错误，全文见第 16 节。`timeZone` 用 `Intl.DateTimeFormat(undefined, { timeZone })` 试一次认不认识。daemon 的时区用 `Intl.DateTimeFormat().resolvedOptions().timeZone`。
+- `parseCron(expr)`：5 段，支持 `*`、数字、`a-b`、`a,b`、`*/n`、`a-b/n`；星期 0 到 7（7 当 0）；日和星期都给了取并集（标准 cron）；以 `*` 开头的字段（包括 `*/n`）算没给，这时两个字段取交集（和 Vixie cron、cronie 一样）。不支持名字（MON、JAN）和 `L`、`W`、`#`。
+- `describeSpec(spec, timeZone, hostTimeZone, now)`：人话（`now` 只用来判断要不要写年份）。`every 30` → "每 30 分钟"；`every 120` → "每 2 小时"（60 的倍数）；`daily 09:00` → "每天 09:00"；`weekly [1,2,3,4,5] 09:00` → "每个工作日 09:00"；`weekly [1,3] 10:00` → "每周一、三 10:00"；`once` → "10 月 31 日 14:00 一次"（跨年写"2027 年 1 月 2 日 09:00 一次"）；`cron` → "cron「0 9 * * 1-5」"。两个时区规范化后（`normalizeTimeZone`）不同才在后面加"（Asia/Tokyo）"。
+- `validateSpec(spec, now, timeZone): string | undefined`：人话错误，全文见第 16 节。`timeZone` 用 `Intl.DateTimeFormat(undefined, { timeZone })` 试一次认不认识。一次性任务最远 366 天；cron 要求下一次在 400 天的搜索内，而且任意相邻两次之间不超过 400 天。
+  - cron 的检查：从 now 的本地日期起按公历逐日走一个 400 年周期（146097 天，日期和星期之后重复）再加 401 天，只看日期匹不匹配（和 `parseCron` 的日、月、星期规则共用，包括以 `*` 开头取交集），不调 Intl，一次几毫秒；相邻两个匹配的日期隔了 400 天以上就拒。每年 2 月 29 日、`0 9 31 10 */6`（10 月 31 日落在周末：2026、2027，然后 2032）这种都会被拒；只查下一次和再下一次放得过后者。
+- `normalizeTimeZone(zone)`：`Intl` 的 `resolvedOptions().timeZone`（大小写、别名都归一），带缓存；命令核存任务时存规范化后的名字。daemon 的时区用 `Intl.DateTimeFormat().resolvedOptions().timeZone`。
 - `formatAt(ms, timeZone, hostTimeZone)`：`YYYY-MM-DD HH:mm`，时区不同加"（Asia/Tokyo）"；`formatHHMM(ms, timeZone)`。头部、卡片标签、终端一行都用这两个。
 - `ceilToMinute(ms)`：向上取整到整分，正好整分的不动；命令核在创建和改 spec 时用它填 `every.anchor`（10:00:23 → 10:01:00）。
 
@@ -209,24 +212,25 @@ export function createScheduler(deps: {
   notifyGateFailure: (task: StoredTask) => void;                  // 门回 tier-unavailable、记完 failed 之后调；T2 注入：发一行文字、按任务限频，调度器不等、不重试
   maxInflight: () => number;                                        // T2 注入 max(1, floor(getMaxConcurrentRuns(cfg) / 2))
   log: Logger; diagnostics: (event) => void;
-}): { start(loaded: { interrupted: StoredTask[] }): Promise<void>; stop(): void; drain(ms): Promise<void>; wake(): void; runNow(taskId): 'started' | 'running' | 'not-found' | 'not-started' };
+}): { start(loaded: { interrupted: StoredTask[] }): Promise<void>; stop(): void; drain(ms): Promise<void>; wake(): void; runNow(taskId): { kind: 'started'; runId: string } | { kind: 'running' | 'not-found' | 'not-started' } };
 ```
 
 返回值的类型从 `scheduler.ts` 导出为 `Scheduler`（`store.ts` 同样导出 `ScheduleStore`），T1b 命令核的 `deps` 用这两个名字。
 
-- **tick**：每 30 秒一次，`setTimeout` 链，每次到点用 `now()` 算，不信任 timer 本身。电脑睡眠时 timer 停，醒来后第一次 tick 就按真实时间补。`wake()` 在命令核每次写完后调，马上 tick 一次。**tick 单飞**：一个在跑时 `wake()` 只置"再来一次"标志，跑完立刻再跑一遍；不会两个 tick 看到同一份快照各发一次。
+- **tick**：每 30 秒一次，`setTimeout` 链，只有"有任务在等 2 秒起跑间隔"时才提前；tick 或认领出错照样等 30 秒，不会毫秒级空转。每个任务的判定和认领各自 try/catch，一个任务出错只记日志、跳过它，不影响别的任务。每次到点用 `now()` 算，不信任 timer 本身。电脑睡眠时 timer 停，醒来后第一次 tick 就按真实时间补。`wake()` 在命令核每次写完后调，马上 tick 一次。**tick 单飞**：一个在跑时 `wake()` 只置"再来一次"标志，跑完立刻再跑一遍；不会两个 tick 看到同一份快照各发一次。
 - **先看缓存**：每个任务缓存 `nextRunAt`（配置变了、跑完了就重算）；`now < nextRunAt` 的任务 tick 里不碰，Intl 只在到点的任务上算。
 - **每个任务的判定**（按 3.13"错过、跳过、失败"）：
   1. `state !== 'active'` 跳过。`now < nextRunAt` 跳过。
   2. `latest = latestSlotWithin(spec, tz, now, 7 天)`。没有（最近 7 天里一个 slot 都没有，但 `nextRunAt <= now`，说明错过的都在 7 天之前）：`n = countSlotsBetween(spec, tz, cursor, now)`，`counts.missed += n`，`recent` 加一条 `{ status: 'missed', slot: nextRunAt, count: n }`，`cursor = now`；`once` 改 `finished`。不跑。
-  3. 否则 `n = countSlotsBetween(spec, tz, cursor, latest) − 1`，n > 0 就记一条合并的 missed（同上，`count: n`）。然后处理 `latest`：`trigger = now − latest >= 60_000 ? 'catchUp' : 'schedule'`（Claude 定：晚 60 秒以上算补跑，卡片写"原定 HH:MM"）。
-  4. **门**（T2 注入的 `gate(chatId)`）：`disabled`、`updating`、`held` → 记 `{ status: 'skipped', reason, slot: latest }`，`counts.skipped++`，`cursor = latest`，不出声；`unbound`、`tier-unavailable` → 记 `failed`（`error` 见第 16 节），走第 7 条的失败计数，`tier-unavailable` 记完再调 `notifyGateFailure(task)` 发一行文字（第 8 节）。
-  5. 这个任务 `inflight` 还在（上一次没跑完）：记 `{ status: 'skipped', reason: 'running', slot: latest }`，`counts.skipped++`，`cursor = latest`，不跑。
+  3. 否则 `n = countSlotsBetween(spec, tz, cursor, latest, 10001) − 1`，n > 0 就记一条合并的 missed（同上，`count: n`）。然后处理 `latest`：`trigger = now − latest >= 60_000 ? 'catchUp' : 'schedule'`（Claude 定：晚 60 秒以上算补跑，卡片写"原定 HH:MM"）。
+  4. **门**（T2 注入的 `gate(chatId)`，先于第 5 条）：`disabled`、`updating`、`held` → 记 `{ status: 'skipped', reason, slot: latest }`，`counts.skipped++`，`cursor = latest`，不出声；`unbound`、`tier-unavailable` → 记 `failed`（`error` 见第 16 节），走第 7 条的失败计数，`tier-unavailable` 记完再调 `notifyGateFailure(task)` 发一行文字（第 8 节）。
+  5. 这个任务 `inflight` 还在（上一次没跑完；在 `mutate` 里重读，已经结算了就转去认领）：记 `{ status: 'skipped', reason: 'running', slot: latest }`，`counts.skipped++`，`cursor = latest`，不跑。
   6. **在同一个 `mutate` 里认领**：回调里重读 `state`、`cursor`、`inflight`，和 tick 开头看的一样才写 `inflight = { runId, slot: latest, trigger, startedAt: now, revision }`、`cursor = latest`；回调返回 `'claimed'` 才调 `run`，否则放弃（别的 tick 或 `runNow` 抢先了）。原子写成功后才调 `run`，这是"至多一次"。
-- **并发上限**（Claude 定）：同一时刻在跑的定时运行不超过 `maxInflight()`；到点但没槽的任务在调度器里排队，有槽就按到点先后起跑，每次起跑间隔 2 秒；排队期间同一任务又到了新 slot，只换成新的：被换掉的旧 slot 在一个 runtime `mutate` 里记 `{ status: 'missed', slot: 旧 slot, count: 1 }`、`counts.missed++`、`cursor = 旧 slot`，不记 skipped；新 slot 起跑时第 3 条的合并 missed 只数旧 slot 之后的，不重复记。不同任务可以同时跑；同一任务同一时刻一个。进会话的排队由 orchestrator 的 `queueOnly` 管。
-- **结算**：`run` 返回后在一个 runtime `mutate` 里写 `recent`、`counts.runs++`（done、failed、interrupted 才加）、`lastResult`（done 时 excerpt；failed 时 error 前加"失败："）、清 `inflight`。`done` 把 `consecutiveFailures` 清零；`failed` 且 `counts: true` 加一，到 10 改 `paused`、`pausedReason: 'failures'`（这是配置变化，换 revision）、`noticePending = true`、调 `notifyAutoPause`，成功才清 `noticePending`，失败留着每次 tick 再试，最多 24 小时；`interrupted`（停机、用户停止）不加不减（Claude 定）；`skipped` 不进 `counts.runs`。**`once` 的结束**：结算时任务仍是 `state === 'active'` 且 `nextSlotAfter(spec, tz, cursor) === undefined` 才改 `finished`（运行中被 `markUnavailable` 或手动暂停的，保持 `paused`）——运行里 agent 用 `schedule_edit` 把自己的 `at` 往后挪了，就还是 `active`（"20 分钟后再看一次"靠这一条）；暂停后 `resume` 时 `at` 已过去也改 `finished`。结算发现任务已被删，丢掉。
-- **崩溃**：`start(loaded)` 不读盘，处理 `loaded.interrupted`（`load()` 时带 `inflight` 的任务；store 由 orchestrator 在 `initialize()` 里先 load，tick 没起时命令核也看得到盘上的任务，T1b 4.2）：在一个 runtime `mutate` 里按 id 重读，任务已删或 `inflight` 已清就跳过，否则记 `{ status: 'interrupted', by: 'crash' }`、清掉、`counts.runs++`、**`consecutiveFailures` 加一**（Claude 定：每分钟把 bot 进程弄崩的任务也要能自动暂停；干净停机走结算，不会留下 `inflight`，所以这里看到的就是崩溃或超过停机宽限被 SIGKILL）；不重跑（cursor 已过）；`once` 按上一条的规则判 `finished`。记完才起第一次 tick，`start` 的 promise 这时 resolve。`initialize()` load 完到 `start(loaded)` 处理完之间，这些任务在 `list` 里仍显示 `running: true`（`inflight` 还没清）；这段只有几秒，处理完就对了，不另做标记。
-- **手动运行**：`runNow` 用 `trigger: 'manual'`，`slot = now`，不动 `cursor`，不影响下一次定时；同样在 `mutate` 里认领，`inflight` 在时返回 `'running'`；`paused`、`finished` 的任务也能手动跑；没 `start()` 返回 `'not-started'`。
+- **并发上限**（Claude 定）：同一时刻在跑的定时运行不超过 `maxInflight()`，按调度器内存里真正在跑的运行数算（认领时加、`run` 返回时减），不按盘上的 `inflight` 算；到点但没槽的任务在调度器里排队，有槽就按到点先后起跑，每次起跑间隔 2 秒；排队期间同一任务又到了新 slot，只换成新的：cursor 到旧 slot 之间还有错过的，先记一条合并的 missed，再把被换掉的旧 slot 在一个 runtime `mutate` 里记 `{ status: 'missed', slot: 旧 slot, count: 1 }`、`counts.missed++`、`cursor = 旧 slot`，不记 skipped；新 slot 起跑时第 3 条的合并 missed 只数旧 slot 之后的，不重复记。不同任务可以同时跑；同一任务同一时刻一个。进会话的排队由 orchestrator 的 `queueOnly` 管。
+- **结算**：`run` 返回后在一个 runtime `mutate` 里写 `recent`（按 `scheduleRunRecordSchema` 的字段逐个挑：`error` 截到 200 个 UTF-16 单位且不切断代理对，`durationMs` 取非负整数，空的 `messageId`/`topicId` 不写）、`counts.runs++`（done、failed、interrupted 才加）、`lastResult`（done 时 excerpt；failed 时 error 前加"失败："）、清 `inflight`。`done` 把 `consecutiveFailures` 清零；`failed` 且 `counts: true` 加一，到 10 且任务仍是 `active` 才改 `paused`、`pausedReason: 'failures'`（这是配置变化，换 revision；已暂停、已结束的任务只计数不改状态、不发通知）、`noticePending = true`、`noticeSince = now`。通知不在 tick 里等：tick 发起 `notifyAutoPause`、不 await，每个任务同时只发一条，15 秒没回算没发出去；发前重读任务，已不是"连续失败暂停"就清掉 `noticePending` 不发；成功且 `noticeSince` 没变才清；失败留着每次 tick 再试，从 `noticeSince` 起最多 24 小时；`interrupted`（停机、用户停止）不加不减（Claude 定）；`skipped` 不进 `counts.runs`。**`once` 的结束**：结算时任务仍是 `state === 'active'` 且 `nextSlotAfter(spec, tz, cursor) === undefined` 才改 `finished`（运行中被 `markUnavailable` 或手动暂停的，保持 `paused`）——运行里 agent 用 `schedule_edit` 把自己的 `at` 往后挪了，就还是 `active`（"20 分钟后再看一次"靠这一条）；暂停后 `resume` 时 `at` 已过去也改 `finished`。结算发现任务已被删，丢掉。结算写盘失败：结果留在内存，每次 tick 开头和 `drain()` 里重试，并用 timer 在 30 秒内再试，不靠别的事件；写成功前 `inflight` 留着，这个任务不会再起跑。
+- **出错时**（第二轮审查后补）：`run` 回的结果先整理成合法的：缺了、不是对象、状态不认识，都记 failed「运行结果无效」；skipped、interrupted 的原因不认识，换成 `updating`、`shutdown`；error 打印不出来，也按 failed 记。store 认定是坏写入的结算，改记一次 failed，不无限重试；只有读写盘这类错才留着重试。自动暂停的通知每个任务 30 秒最多发一次；已经发出去、但清标记的写入失败时，只重试写入，不再发；满 24 小时清掉 `noticePending`。门检查抛错时，手动运行记 failed「运行前检查出错」，定时的这一次丢掉，都不拖慢别的任务。诊断和日志抛错不影响认领和 tick。记录和 `lastResult` 带 `link`，是合法 URL 才留。
+- **崩溃**：`start(loaded)` 不读盘，处理 `loaded.interrupted`（`load()` 时带 `inflight` 的任务；store 由 orchestrator 在 `initialize()` 里先 load，tick 没起时命令核也看得到盘上的任务，T1b 4.2）：在一个 runtime `mutate` 里按 id 重读，任务已删或 `inflight` 已清就跳过，否则记 `{ status: 'interrupted', by: 'crash' }`、清掉、`counts.runs++`、**`consecutiveFailures` 加一**（Claude 定：每分钟把 bot 进程弄崩的任务也要能自动暂停；干净停机走结算，不会留下 `inflight`，所以这里看到的就是崩溃或超过停机宽限被 SIGKILL）；不重跑（cursor 已过）；`once` 按上一条的规则判 `finished`。记完就发起第一次 tick，`start` 的 promise 这时 resolve，不等 tick 跑完。`initialize()` load 完到 `start(loaded)` 处理完之间，这些任务在 `list` 里仍显示 `running: true`（`inflight` 还没清）；这段只有几秒，处理完就对了，不另做标记。
+- **手动运行**：`runNow` 用 `trigger: 'manual'`，`slot = now`，不动 `cursor`，不影响下一次定时。接单时就生成 `runId`，返回 `{ kind: 'started', runId }`，排队的手动运行带着它，认领时用同一个 id，所以回复里的 `runId` 就是那次运行的 id；`inflight` 在或已在排队时返回 `{ kind: 'running' }`；`paused`、`finished` 的任务也能手动跑；没 `start()` 返回 `{ kind: 'not-started' }`，找不到返回 `{ kind: 'not-found' }`。同样在 `mutate` 里认领。
 - **停机**（顺序在 `D/bot/bridge.ts:113-141` 的 `shutdown`）：`scheduler.stop()` 同步停 timer、置 stopping（不再认领）；然后 `orchestrator.shutdown()`——它马上 `interrupt` 所有运行（`handle-message.ts:9161-9175`），排空后把没 settle 的钩子 settle 成 interrupted；然后 `await scheduler.drain(5000)` 等结算写完，`closing` 里排在 `orchestratorClosing` 之后。子进程只有 `CHILD_SHUTDOWN_GRACE_MS = 8000`（`D/host/lifecycle.ts:300`）就被 SIGKILL，所以 5 秒是上限，没有 60 秒排空。5 秒内没写完的留给下次启动的 `inflight` → interrupted（by: crash，会计一次失败；接受）。
 
 ## 7. 运行放在哪、带什么（T2）
@@ -304,7 +308,7 @@ export function createScheduler(deps: {
 - 本设计只把 schedule 类工具放上这条通路。设置和飞书工具的 Codex 一侧仍按 s46b 另定；dynamicTools 已证明可用，s46b 开工时优先考虑它，沙箱外 MCP 退为备选（Claude 定；`docs/plans/s46.md` 4.1 的 E 项由本实测推翻，那份计划不改）。
 - 生成的协议类型（`D/agent/codex-appserver/protocol/generated/`）没有 `dynamicTools` 字段，`protocol/index.ts:5` 指的 `codex:protocol:update` 脚本不存在。做法：手写 `D/agent/codex-appserver/dynamic-tools.ts` 的类型和 schema，不改生成文件。服务端请求的分发在 `D/provider/transport/jsonrpc.ts:301-308` 的 `peer.onRequest`（`app-server-client.ts` 只是 re-export），今天只认 `item/tool/requestUserInput`；`item/tool/call` 的处理函数放 `server-requests.ts`，在 `approvalAnswer`、`userInputRequest` 旁边。
 - **调用绑到这一轮**：今天 `registry.ts:169-170` 对 Codex（`releaseAfterRun !== undefined`）的每一次调用都按 `grant.firstTurn` 授权，不是"恢复线程的第一轮绑错"，是整条线程永远按第一轮的人算；真人开的线程上后来跑定时回合，`schedule_create` 会按真人的第一轮放行。改法：`turn/start` 的应答到了（`backend.ts:363` 拿到 `result.turn.id`）就 `entry.noteToolUse(turnId)`，把这一轮登记成 origin；`item/tool/call` 用 `params.turnId` 当 `toolUseId` 调 `entry.call`，应答还没到就等它最多 2 秒；删掉 `registry.ts:169` 的 `releaseAfterRun` 分支，两家都走 `origins`。goal 运行（`launchGoalRun` 8017）和子线程不调 `openTurn`，查不到 origin 就是 `unknown-origin`，拒掉，正好。
-- 本功能上线前已经开着的 Codex 会话，没有任务工具，要等下一条新会话。3.13 写明；`session_info` 的回复里也说（第 16 节）。Codex 不拿 memory 工具（`hiddenBlocksFor` 的分支不动）。
+- 本功能上线前已经开着的 Codex 会话，没有任务工具，要等下一条新会话。3.13 写明。Codex 不拿 `session_info`，老会话就是没有任务工具，不另加说明（T3b 做法）。Codex 不拿 memory 工具（`hiddenBlocksFor` 的分支不动）。
 - 关掉自带自动化：实测用的是假 provider（`requires_openai_auth=false`），没挂主人 ChatGPT 账号的 `codex_apps` 连接器，所以"工具表里没有自动化工具"只在没登录时成立。T3b 自测里在 JP-VPS 真实 ChatGPT 登录下列一次工具表（一条真实回合让模型列出它的工具，或读 `thread/start` 后的工具事件），有自动化、定时类的就加进关闭名单再合入。会话层 config 仍加 `features.in_app_local_automation = false`：`codexSessionParams`（`backend.ts:95-101`）的 `features` 今天是三处 spread（sandbox 的 `features`、`...NATIVE_MEMORY_OFF`、Windows 的覆盖），直接再 spread 一个会把 `memories: false` 盖掉或在 Windows 上丢掉——改成一处深合并 `features: { ...sandbox.features, ...NATIVE_MEMORY_OFF.features, ...NATIVE_SCHEDULING_OFF.features, ...(win32 非完全访问 ? { prefer_mxc: false } : {}) }`，`memory-config.ts` 旁加 `NATIVE_SCHEDULING_OFF`。只核 config 里带了它，不做真实回合的探测。
 
 ## 10. agent 工具（T3；Codex 的接法在 T3b）
@@ -353,7 +357,7 @@ export function createScheduler(deps: {
 | client | `client.ts` 的 `schedule(botId, request)` |
 | 桌面端 | `ipc-contract.ts`、`bridge.ts`、`facade.ts` 各加 `schedule` |
 | host | `server/rpc/schedule.ts`；`AdminService.executeSchedule(botId, via, request)`；`AdminIpcOp` 加 `{ kind: 'schedule'; via: 'desktop' \| 'cli'; request }`（15 秒超时）；`via` 由 RPC 的 `clientKind` 推（desktop/browser → `desktop`，cli → `cli`），`server/rpc/schedule.ts` 传给 service |
-| 子进程 | orchestrator 的 `initialize()` 里 `await loadStore()`（`store.load()` 只调一次，T1b 4.2）；返回对象和 `Orchestrator` 接口加 `schedule: admit(async (via, request) => { await loadStore(); return commands.execute({ kind: 'local', via }, request); })` 和 `scheduler: { start: async () => scheduler.start(await loadStore()), stop: () => scheduler.stop(), drain: (ms) => scheduler.drain(ms) }`（不经 `admit`；T2 的 `bridge.ts` 连上飞书后调 `orchestrator.scheduler.start()` 起 tick，关闭时调 `stop()`、`drain()`），`BridgeHandle` 加 `schedule`（T1b）；`cli/commands/run.ts:130-137` 的内联分发加 `op.kind === 'schedule'` |
+| 子进程 | orchestrator 的 `initialize()` 里 `await loadStore()`（`store.load()` 只调一次，T1b 4.2）；返回对象和 `Orchestrator` 接口加 `schedule`（不经 `admit`：停机中回 `refused bot-not-running`，否则经 `trackTask` 跑 `await loadStore(); return commands.execute({ kind: 'local', via }, request)`，排空时等它） 和 `scheduler: { start: async () => scheduler.start(await loadStore()), stop: () => scheduler.stop(), drain: (ms) => scheduler.drain(ms) }`（不经 `admit`；T2 的 `bridge.ts` 连上飞书后调 `orchestrator.scheduler.start()` 起 tick，关闭时调 `stop()`、`drain()`），`BridgeHandle` 加 `schedule`（T1b）；`cli/commands/run.ts:130-137` 的内联分发加 `op.kind === 'schedule'` |
 | 终端入口 | `D/cli/index.ts:15` 的 `structured` 加 `'schedule'`（`--json` 的错误输出）；`:28` 的 preAction 跳过名单加 `parent === 'schedule'`（不建数据目录、不拿 lease） |
 | 命令核 | `D/admin/schedule-commands.ts`：`createScheduleCommands(deps).execute(actor, request): Promise<ScheduleReply>` |
 | actor | `type ScheduleActor = { kind: 'chat'; openId; name?; role; chatId; topicId?; messageId?; text? } \| { kind: 'scheduled'; taskId; runId; chatId } \| { kind: 'local'; via: 'desktop' \| 'cli' }` |
@@ -373,8 +377,10 @@ export function createScheduler(deps: {
 
 | 片 | 名字 | 做什么 | 依赖 | 机器 | 约行数 | 工期 |
 |---|---|---|---|---|---|---|
-| T1a | `scheduled-tasks-1-core` | protocol、时间计算、存储（含 durable 原子写）、调度循环（不启动 tick） | — | JP-VPS（#422） | ~1,340 | 10-30 开工，10-31 上午合入 |
-| T1b | `scheduled-tasks-1b-commands` | 命令核、IPC/RPC、client、终端 `vonvon schedule`、`cli/index.ts` 接线；`TurnFacts.scheduled` 和 `TurnAuth.presence` 两个字段 | T1a | JP-VPS | ~1,150 | T1a 审查期间在它的分支上接着写，T1a 合入后开 PR；10-31 下午合入 |
+| T1a | `scheduled-tasks-1-core` | protocol、时间计算、存储（含 durable 原子写、写前校验） | — | JP-VPS | ~1,070 | 10-30 开工，10-31 上午合入 |
+| T1a2 | `scheduled-tasks-1a2-scheduler` | 调度循环（不启动 tick）：判定、认领、并发、结算、通知、崩溃、`runNow` | T1a | JP-VPS | ~1,180 | 叠在 T1a 上，10-31 上午合入 |
+| T1b | `scheduled-tasks-1b-commands` | 命令核、IPC/RPC、client、终端 `vonvon schedule`、`cli/index.ts` 接线；`TurnFacts.scheduled` 和 `TurnAuth.presence` 两个字段 | T1a2 | JP-VPS | ~1,150 | T1a 审查期间在它的分支上接着写，T1a 合入后开 PR；10-31 下午合入 |
+| T1c | `scheduled-tasks-1c-cli` | 终端 `vonvon schedule`（T1b 合计 1,505 行，按 T1b 计划第 9 节拆出） | T1b | JP-VPS | ~460 | 叠在 T1b 上，和 T1b 同时审 |
 | T2 | `scheduled-tasks-2-runs` | `runScheduled` 和钩子、放置、开话题、头部和标签、门、结算、自动暂停、停机和崩溃、编辑锁；启动 tick | T1b | JP-VPS（Bot 6，真 Claude 和 Codex） | ~1,450 | 10-31 下午开工，11-01 合入 |
 | T3 | `scheduled-tasks-3-tools` | schedule 工具类和角色表、grant 的 `where()`、`profileOf` 算 `tools.schedule`、Claude MCP、关 Claude 自带定时 | T1b（自测第 4 步要 T2 合入） | JP-VPS（真 Claude） | ~1,055（和 T3b 合计 ~1,545，T3 计划第 9 节） | 和 T2 同时开工，11-01 合入 |
 | T3b | `scheduled-tasks-3b-codex` | Codex dynamicTools 和 `item/tool/call`、调用按 turnId 绑轮、删 `releaseAfterRun` 授权分支、features 深合并加 `in_app_local_automation: false` | T3 | JP-VPS（真 Codex） | ~490 | 在 T3 的分支上接着写，T3 合入后开 PR，11-01 合入 |
@@ -382,7 +388,7 @@ export function createScheduler(deps: {
 | T4b | `scheduled-tasks-4b-delivery` | 两家最小能力包交付、读入口、版本矩阵、`enabledPlugins` 实测、核验 | T3b、T4a | JP-VPS；Mac Seatbelt 一项待 owner 验收 | ~900 | 11-01 开工，11-02 合入 |
 | T5 | `scheduled-tasks-5-ui` | 桌面端三层接线、群详情页"任务"tab、Bot 页汇总 | T1b（T2 合入后才有运行记录可看） | Mac（#322，网页控制） | ~1,400 | 10-31 下午开工，11-01 合入 |
 
-并行道（工期按小时排，owner 2026-10-30 要快）：T1a 先做；T1a 在审查时，同一个 Codex 在 T1a 的分支上接着写 T1b，T1a 合入后 merge `dev` 再开 T1b 的 PR；T4a 在 T1a 合入后和 T1b 同时做。T1b 合入后 T2、T3（JP-VPS，各一个 Codex 会话）和 T5（Mac）同时开工；T2 和 T3 的真飞书自测共用验收 daemon，按目录锁排队。T3 只依赖 T1b：`TurnFacts.scheduled`、`TurnAuth.presence` 两个字段放在 T1b；T3 自测第 4 步（定时回合里改自己）要等 T2 合入。T3 预计超过 1,500 行，直接拆：Claude 一侧的 T3 先开，同一个 Codex 会话在它的分支上接着写 Codex 一侧的 T3b，T3 合入后开 T3b 的 PR。T4b 在 T3b、T4a 合入后。目标：11-01 能在聊天里建任务、到点运行，11-02 内置 skill 交付完。在飞 PR 按 `AGENTS.md` 的在飞上限（本功能同时在飞的是 T2、T3 或 T3b、T5 和 T4a 或 T4b）。每片一个 PR，目标 `dev`，≤1,500 行（不含 lockfile）。Codex 开 PR 到 `dev`，Claude 审查、打 `frozen`、合入 `dev`；不合入 `main`。各片能从前面假设什么，写在各自计划的"范围"里。T2 超限先拆自动暂停、编辑锁和移出群为 T2b；T3 已按第 9 节拆成 T3 和 T3b。
+并行道（工期按小时排，owner 2026-10-30 要快）：T1a 先做；T1a 审查后修改超过 1,500 行，调度循环拆成 T1a2，叠在 T1a 上；T1a 在审查时，同一个 Codex 在 T1a 的分支上接着写 T1b，T1a 合入后 merge `dev` 再开 T1b 的 PR；T4a 在 T1a 合入后和 T1b 同时做。T1b 合入后 T2、T3（JP-VPS，各一个 Codex 会话）和 T5（Mac）同时开工；T2 和 T3 的真飞书自测共用验收 daemon，按目录锁排队。T3 只依赖 T1b：`TurnFacts.scheduled`、`TurnAuth.presence` 两个字段放在 T1b；T3 自测第 4 步（定时回合里改自己）要等 T2 合入。T3 预计超过 1,500 行，直接拆：Claude 一侧的 T3 先开，同一个 Codex 会话在它的分支上接着写 Codex 一侧的 T3b，T3 合入后开 T3b 的 PR。T4b 在 T3b、T4a 合入后。目标：11-01 能在聊天里建任务、到点运行，11-02 内置 skill 交付完。在飞 PR 按 `AGENTS.md` 的在飞上限（本功能同时在飞的是 T2、T3 或 T3b、T5 和 T4a 或 T4b）。每片一个 PR，目标 `dev`，≤1,500 行（不含 lockfile）。Codex 开 PR 到 `dev`，Claude 审查、打 `frozen`、合入 `dev`；不合入 `main`。各片能从前面假设什么，写在各自计划的"范围"里。T2 超限先拆自动暂停、编辑锁和移出群为 T2b；T3 已按第 9 节拆成 T3 和 T3b。
 
 ## 15. 待 owner 确认
 
@@ -394,7 +400,7 @@ Claude 替 owner 定的，owner 可以在 PR 里改：
 4. 晚 60 秒以上算补跑，卡片写"原定"。
 5. 停机和用户手动停止的中断不算失败也不算成功；bot 进程崩溃时正在跑的那一次算一次失败（连续 10 次照样暂停）。
 6. 手动运行不推进下一次定时；暂停和已结束的任务也能手动运行。
-7. 任务名 ≤40 字，任务内容 ≤4000 字，一次性任务最远一年，"每 N 分钟"最长 7 天（10080 分钟），cron 要在 400 天内至少到一次。
+7. 任务名 ≤40 字，任务内容 ≤4000 字，一次性任务最远一年（366 天），"每 N 分钟"最长 7 天（10080 分钟），cron 相邻两次之间不超过 400 天。
 8. 同一时刻在跑的定时运行不超过并发上限的一半（默认 10 → 5），多的排队、每 2 秒起一个，给真人留槽。
 9. 群的档位用不了（后端装不上等）时，这一次不出卡，发一行文字说明并计一次失败；群停用、正在修改时记"跳过"，不出声。
 10. Codex 只有任务工具走 dynamicTools；设置、飞书工具的 Codex 一侧另定（s46b）。
@@ -426,7 +432,7 @@ Claude 替 owner 定的，owner 可以在 PR 里改：
 | 桌面端 bot 没运行 | Bot 没在运行，任务暂时看不到；启动后再来。 |
 | 桌面端冲突 | 别人改过了，已刷新成现在的内容；你刚才填的在下面，要的话再改一次。（旧表单内容显示在只读框里，不丢） |
 | 终端一行 | `st_… 日报 · 每个工作日 09:00 · 下次 11-02 09:00 · 已启用/已暂停（手动）/已暂停（连续失败）/已暂停（群已解绑）/已结束 · 上次 完成 11-01 09:00` |
-| `session_info`（Codex 旧会话） | 回复里加一行 `tools: { schedule: false, note: '这条会话在任务功能上线前开的，没有任务工具；下一条新会话才有' }` |
+| Codex 旧会话 | 不加文字：Codex 不拿 `session_info`，老会话就是没有任务工具（T3b） |
 | 工具描述（agent 看到的） | `schedule_list`：列出本群这个 Bot 的定时任务，含现在的时间和时区。`schedule_create`：给本群建一个定时任务，或给自己排一个稍后回来的一次性任务；时间用 when 写，不用算毫秒。`schedule_edit`：改任务的名字、内容、时间或发到哪；要带 list 里的 revision。`schedule_pause`/`schedule_resume`：暂停、恢复。`schedule_delete`：删除，连记录一起；要带 revision。`schedule_run_now`：马上跑一次，不影响下一次定时。 |
 
 ## 17. 2026-10-30 审查后改了什么

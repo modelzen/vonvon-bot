@@ -40,7 +40,7 @@ import { realScope, linuxReadScope } from './read-scope';
 export { ReadScopeError } from './read-scope';
 import { findTranscript, readCustomTitle, scanTranscript } from './transcript';
 import { foldSessionMessages, mapSessionSummary } from './history';
-import { ClaudeAgentThread, NATIVE_MEMORY_OFF, type TranscriptMark } from './thread';
+import { ClaudeAgentThread, NATIVE_MEMORY_OFF, NATIVE_SCHEDULING_ENV, type TranscriptMark } from './thread';
 import { claudeConfigDir, readConfiguredClaudeModel } from './configured-model';
 import { loginFromAccount, loginFromEnv, loginUnderService, readClaudeLogin } from './login';
 
@@ -95,7 +95,8 @@ function bridgeClaudeEnv(): Record<string, string> {
 }
 
 function sessionClaudeEnv(profileEnv: Readonly<Record<string, string>>): Record<string, string> {
-  return { ...bridgeClaudeEnv(), ...profileEnv, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' };
+  // CLAUDE_CODE_DISABLE_CRON backs up thread.ts's NATIVE_SCHEDULING_TOOLS (3.13); the settings layer carries it too.
+  return { ...bridgeClaudeEnv(), ...profileEnv, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', ...NATIVE_SCHEDULING_ENV };
 }
 
 /**
@@ -331,7 +332,7 @@ async function* idleClaudeInput(signal: AbortSignal): AsyncGenerator<never, void
 export class ClaudeAgentBackend implements AgentBackend {
   readonly profileCapabilities = {
     instructions: { channel: 'system-append', replaceOnResume: false },
-    additionalRoots: true, directoryAccess: true, capabilityPackages: false, mcpServers: false,
+    additionalRoots: true, directoryAccess: true, capabilityPackages: true, mcpServers: false,
     env: true, disableNativeMemory: true,
     reapplyOnResume: ['env', 'nativeSettings', 'additionalRoots', 'directoryAccess'],
   } satisfies SessionProfileCapabilities;
@@ -645,7 +646,7 @@ export class ClaudeAgentBackend implements AgentBackend {
   }
 
   async startThread(opts: StartThreadOptions): Promise<AgentThread> {
-    const profile = resolveSessionProfile(opts.profile, { additionalRoots: true });
+    const profile = resolveSessionProfile(opts.profile, { additionalRoots: true, capabilityPackages: true });
     const sdk = await this.sdkLoader();
     const realCwd = await realpath(opts.cwd).catch(() => opts.cwd);
     const access = claudeAccess(opts.mode, opts.network, opts.cwd, realCwd, await Promise.all(profile.additionalRoots.map(async root => ({ ...root, path: await realpath(root.path) }))), opts.native);
@@ -665,16 +666,18 @@ export class ClaudeAgentBackend implements AgentBackend {
       settingSources: BRIDGE_SETTING_SOURCES,
       additionalDirectories: profile.additionalRoots.map(root => root.path),
       ...(profile.skills?.enabledNames ? { skills: [...profile.skills.enabledNames] } : {}),
+      plugins: profile.capabilityPackages.map(pkg => pkg.path),
       env: sessionClaudeEnv(profile.env),
       query: sdk.query,
       entry: opts.entry,
+      scheduleTools: profile.tools?.schedule === true,
       createSdkMcpServer: sdk.createSdkMcpServer,
       tool: sdk.tool,
     });
   }
 
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {
-    const profile = resolveSessionProfile(opts.profile, { additionalRoots: true });
+    const profile = resolveSessionProfile(opts.profile, { additionalRoots: true, capabilityPackages: true });
     const sdk = await this.sdkLoader();
     const transcript = await transcriptMark(await assertSessionSaved(opts.sessionId), opts.sessionId);
     const realCwd = await realpath(opts.cwd).catch(() => opts.cwd);
@@ -696,9 +699,11 @@ export class ClaudeAgentBackend implements AgentBackend {
       settingSources: BRIDGE_SETTING_SOURCES,
       additionalDirectories: profile.additionalRoots.map(root => root.path),
       ...(profile.skills?.enabledNames ? { skills: [...profile.skills.enabledNames] } : {}),
+      plugins: profile.capabilityPackages.map(pkg => pkg.path),
       env: sessionClaudeEnv(profile.env),
       query: sdk.query,
       entry: opts.entry,
+      scheduleTools: profile.tools?.schedule === true,
       createSdkMcpServer: sdk.createSdkMcpServer,
       tool: sdk.tool,
     });

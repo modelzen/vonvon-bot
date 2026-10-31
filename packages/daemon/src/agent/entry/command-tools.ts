@@ -5,7 +5,9 @@ import type { JoinedGroups } from '../../admin/groups';
 import { settingsGet, settingsSet, settingsAccess, feishuGroups, feishuMembers, type FeishuMembers } from '../../admin/structured-commands';
 import type { Project } from '../../project/registry';
 import type { MemoryWriter } from '../../bot/memory-writer';
+import type { ScheduleCommands } from '../../admin/schedule-commands';
 import { createMemoryTools } from './memory-tools';
+import { createScheduleTools } from './schedule-tools';
 import { sessionInfoTool, ToolRefusal, type AgentTool, type ToolContext } from './tools';
 
 class NoWriteResult extends Error { constructor(readonly result: SettingsSave) { super('No write'); } }
@@ -18,6 +20,8 @@ export function createCommandTools(deps: {
   members(chatId: string, cursor?: string): Promise<FeishuMembers>;
   /** 给了就多注册 memory_add / memory_update / memory_forget / memory_list（§3.3） */
   memory?: MemoryWriter;
+  /** 给了就多注册 schedule_* 七个工具（定时任务总设计第 10 节） */
+  schedule?: ScheduleCommands;
 }): AgentTool[] {
   const denied = () => new ToolRefusal({ ok: false, code: 'refused', message: '目标不存在或没有权限。' });
   async function visible(scope: SettingsScope, ctx: ToolContext) {
@@ -106,5 +110,5 @@ export function createCommandTools(deps: {
       if (!(ctx.admin && ctx.place.kind === 'p2p') && (ctx.place.kind !== 'group' || chatId !== ctx.place.chatId)) throw denied();
       return result;
     },
-  }, ...(deps.memory ? createMemoryTools(deps.memory) : [])];
+  }, ...(deps.memory ? createMemoryTools(deps.memory) : []), ...(deps.schedule ? createScheduleTools({ commands: deps.schedule }) : [])];
 }

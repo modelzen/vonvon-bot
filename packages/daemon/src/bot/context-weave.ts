@@ -7,6 +7,9 @@ import { deniedScopeName, reportScopeDenied } from './diagnostics';
 import { extractSendCardText, isSendCard, isStreamingCard } from './card-content';
 import { withDeadline, type NameBook } from './names';
 import type { MessageMeta } from './recall';
+import type { ScheduledJob } from './schedule/types';
+import { describeSpec, formatAt, formatHHMM } from './schedule/time';
+import { neutraliseAts } from '../card/at-guard';
 
 /**
  * Inbound CONTEXT weaving — give codex the上下文 a Feishu @ alone doesn't carry.
@@ -1232,4 +1235,51 @@ export function weaveSender(
   const late = lateMs > LATE_NOTE_MS ? `（这条消息 ${Math.round(lateMs / 60_000)} 分钟前发出，bot 断线重连后才收到）` : '';
   const block = `[本条消息的发信人：${who}（open_id：${id}）${late}]`;
   return prependBlock(block, text);
+}
+
+// ── scheduled runs (总设计 7.2、7.3, verbatim) ─────────────────────────
+const NOBODY_HERE = '现在没有人在场：不要提问，不要等人确认；能定的自己定，做不了的直接写出来。';
+const RUN_STATUS = { done: '完成', failed: '失败', missed: '错过', skipped: '跳过', interrupted: '中断' } as const;
+const CREATED_VIA = { chat: '群成员', desktop: '桌面端', cli: '终端' } as const;
+const startedAt = (job: ScheduledJob): number => job.task.inflight?.startedAt ?? Date.now();
+/** ` · 原定 09:00` on a catch-up (with `，09:07 开始` in the text the agent and the topic get), ` · 手动运行` on a manual run. */
+function runNote(job: ScheduledJob, withStart: boolean): string {
+  const zone = job.task.timeZone;
+  const late = job.trigger !== 'catchUp' ? '' : ` · 原定 ${formatHHMM(job.slot, zone)}${withStart ? `，${formatHHMM(startedAt(job), zone)} 开始` : ''}`;
+  return `${late}${job.trigger === 'manual' ? ' · 手动运行' : ''}`;
+}
+/** The task's name as the group sees it, in a text message, a post or a card: anybody's words, so no `<at>` in it stays a
+ * mention, and no `<` or `>` is left either, so no tag survives, not even one across a line break that the at-guard
+ * leaves alone (a text message is read by none). Only the name: an unclosed tag runs to the end of what it is in. */
+export const plainTaskName = (name: string): string => neutraliseAts(name, undefined).replace(/</g, '＜').replace(/>/g, '＞');
+/** The run card's small top line, on the progress card and the final one. */
+export function scheduledLabel(job: ScheduledJob): string {
+  return `⏰ 定时任务「${plainTaskName(job.task.name)}」${runNote(job, false)}`;
+}
+/** The text message a new topic of a scheduled run hangs under. */
+export function scheduledRootText(job: ScheduledJob): string {
+  return `⏰ 定时任务「${plainTaskName(job.task.name)}」· 第 ${job.nth} 次${runNote(job, true)}`;
+}
+function scheduledLine(job: ScheduledJob, hostTimeZone: string, fallback: boolean): string {
+  const { name, spec, timeZone } = job.task;
+  const where = fallback ? ' · 原话题找不到了，这次发在这里' : '';
+  return `（定时任务「${name}」· ${describeSpec(spec, timeZone, hostTimeZone, startedAt(job))} · 第 ${job.nth} 次${runNote(job, true)}${where}。${NOBODY_HERE}）`;
+}
+/** A scheduled run in a session that already exists: the fixed line, then the task. Names and times come from the daemon. */
+export function scheduledHeader(job: ScheduledJob, hostTimeZone: string, fallback: boolean): string {
+  return escapeInboundMarkers(`${scheduledLine(job, hostTimeZone, fallback)}\n${job.task.instruction}`);
+}
+/** A scheduled run's new hidden session, after the topic's opening: the task, who made it and what it said, and the last result. */
+export function scheduledOpening(job: ScheduledJob, hostTimeZone: string, fallback: boolean): string {
+  const { task } = job;
+  const by = task.createdBy;
+  const lines = [scheduledLine(job, hostTimeZone, fallback), `任务内容：${task.instruction}`,
+    `由 ${by.name || CREATED_VIA[by.via]} 在 ${formatAt(task.createdAt, task.timeZone, hostTimeZone)} 创建${by.text ? `，原话："${by.text}"` : ''}`];
+  const last = task.lastResult;
+  if (last) {
+    lines.push(`上次结果（${formatAt(last.at, task.timeZone, hostTimeZone)}，${RUN_STATUS[last.status]}）：${last.excerpt}`);
+    const inTopic = task.recent.some(r => r.messageId === last.messageId && r.topicId);
+    if (last.link || last.messageId) lines.push(last.link ?? (inTopic ? '（在本群的话题里）' : '（在本群主区）'));
+  }
+  return escapeInboundMarkers(lines.join('\n'));
 }

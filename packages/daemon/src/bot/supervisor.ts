@@ -8,6 +8,7 @@ import { loadBots, type BotEntry } from '../config/bots';
 import { createAdminIpcCaller, type AdminIpcCaller } from '../admin/ipc';
 import { AdminWriteError } from '../admin/ops';
 import { createAdminService } from '../admin/service';
+import { botNotRunning } from '../admin/schedule-commands';
 import { installBackendDep, uninstallBackendDep } from '../agent';
 import { performCoreUpdate } from '../service/update';
 import { startApi } from '../server/http';
@@ -19,7 +20,7 @@ import {
   listCrashRecords, pruneCrashRecords, readBotPauses, sanitizeReason, stderrReason, systemClock, writeBotPausesSync, writeCrashRecordSync, type BotPauseState, type CrashRecord,
 } from '../host/crash-store';
 import { botLabel, createCrashNotifier, type CrashNotifier, type HostNotice } from '../host/crash-notify';
-import { crashText, type CrashKind, type CrashPause, type LockHeld } from '@vonvon/protocol';
+import { crashText, type CrashKind, type CrashPause, type LockHeld, type ScheduleReply } from '@vonvon/protocol';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {bridgeImportRuntime} from '../import/bridge/runtime';
@@ -530,6 +531,12 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
           if (child?.enabled && child.pause) throw new AdminWriteError(pausedWrite(child));
           if (!child?.enabled || !child.proc || !child.ipc) throw new AdminWriteError('这个 Bot 没在运行');
           return child.ipc.call(op, 60_000);
+        },
+        executeSchedule: async (botId, via, request) => {
+          const child = byAppId(botId);
+          // A crash-paused bot is not running either; its pause is shown on the bot itself. A stopping one drains and says no.
+          if (!child?.enabled || child.pause || child.stopping || !child.proc || !child.ipc) return botNotRunning();
+          return child.ipc.call({ kind: 'schedule', via, request }) as Promise<ScheduleReply>;
         },
         executeSettingsRead: async (botId, op) => {
           const child = byAppId(botId);
