@@ -17,7 +17,7 @@ import { assemble, judgeContext, loadContextSources, openingInstructions, planTu
 import { groupSkillProfile } from '../agent/group-skills';
 import { parseStoredJudge } from '../judge/model';
 import { presentationConfig } from './group-presentation';
-import { projectRevision, projectView, settingsRevision, type CollaborationRequest } from '../admin/collaboration';
+import { projectRevision, projectView, projectSettingsRevision, type CollaborationRequest } from '../admin/collaboration';
 import { AdminWriteError } from '../admin/ops';
 import { applyMirror, mirrorProjectIntoBot, siblingProjectOfChat, type AdminLibraryOp } from '../admin/library';
 import { isProjectId, readLibrary, type LibraryProject } from '../project/library';
@@ -53,9 +53,10 @@ import { JUDGE_INPUT_LIMITS, oneLine } from '../judge/prompt';
 import { deniedScopeName, errorDetail, fitDetail, reportAttention, reportDecision, reportLatestAction, reportNotReplied, reportScopeDenied, type ScheduleDiagnosticEvent } from './diagnostics';
 import { clampUnits, createScheduleStore } from './schedule/store';
 import type { ScheduledHook, ScheduledJob, ScheduledOutcome } from './schedule/types';
-import { createScheduler } from './schedule/scheduler';
+import { createScheduler, nextRunAfterFailure } from './schedule/scheduler';
 import { hostTimeZone } from './schedule/time';
 import { botNotRunning, createScheduleCommands } from '../admin/schedule-commands';
+import type { StoredTask } from './schedule/types';
 import { createRunActivity } from './activity';
 import { createDroppedReplies, originFor, originOf, type DroppedOrigin } from './restart-dropped';
 import { catalogById, projectCreatableBackends, visibleCatalog } from '../agent/catalog';
@@ -121,7 +122,7 @@ import { closeOwnedProviderProcesses } from '../agent/owned-process';
 import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
 import { JUDGE_NAMED_TIMEOUT_MS, createJudge } from '../judge/judge';
 import { createJudgeUsage } from '../judge/usage';
-import { installAtGuard, neutraliseAts } from '../card/at-guard';
+import { installAtGuard } from '../card/at-guard';
 import { isManaged, sendManagedCard, updateManagedCard } from '../card/managed';
 import { RunRender } from '../card/run-render';
 import { finalMessageText, initialState, markInterrupted, reduce, type RunState, type SubagentRow } from '../card/run-state';
@@ -240,6 +241,7 @@ import { buildScopeGrantUrl, JOIN_GROUP_SCOPES } from '../config/scopes';
 import { validateAppCredentials } from '../utils/feishu-auth';
 import {
   getProjectByChatId,
+  getProjectByChatIdSync,
   getProjectByName,
   listProjects,
   noMentionOf,
@@ -328,6 +330,7 @@ import {
   scheduledLabel,
   scheduledOpening,
   scheduledRootText,
+  plainTaskName,
   type ContextMessage,
   type PullOpts,
   type RecordBlock,
@@ -711,6 +714,8 @@ export function sessionChangeNotice(reason: RecreateReason, topic: boolean): str
 interface ActiveState {
   steerReply?: { run: AgentRun; accept: (messageId: string, voice?: VoiceReply) => boolean };
   presentation?: AppConfig;
+  /** The run's group, set by startReservedRun, launchRun and launchGoalRun; the edit lock looks at this group's runs only (see runningIn). */
+  chatId?: string;
   /** Captured with the steer target so a late ACK cannot decorate another turn. */
   voiceReply?: { run: AgentRun; add: (voice: VoiceReply) => void };
   /** Prevent a late ASR result from restarting a stopped conversation. */
@@ -776,9 +781,12 @@ interface ActiveState {
   triggerAt?: number;
   /** A scheduled turn is running: a message arriving now queues, never steers into it (总设计 7.1). */
   scheduled?: true;
-  /** A settings change closed this run's thread (evictLiveSessionsForChat): a scheduled turn queued behind is skipped, the
-   * group having changed. */
+  /** A settings change closed this run's thread (evictLiveSessionsForChat, or startReservedRun when it was closed before
+   * the run began): a turn of it that fails or is yet to start is dropped with the turns queued behind, a scheduled one
+   * skipped, the group having changed (launchRun's settleGone). */
   evicted?: true;
+  /** launchRun dropped the queue for that change, not for a ⏹: a scheduled turn still in intake is skipped too (intakeStopped). */
+  evictedDrop?: true;
 }
 
 /** Inputs a synthetic turn (🔁 重试) carries that a real message would not. */
@@ -2039,6 +2047,23 @@ export function createOrchestrator(
     log.info('intake', 'attention-forget', { chat: chatId.slice(-6), why });
   }
 
+  /** An unbound group's active scheduled tasks pause as unavailable: kept, not deleted (3.13). Not waited for: a failed
+   * write is logged and the unbind goes on. */
+  function markUnavailable(chatId: string): void {
+    void trackTask((async () => {
+      await loadStore();
+      if (!scheduleStore.byChat(chatId).some(task => task.state === 'active')) return;
+      await scheduleStore.mutateConfig((tasks, touch) => {
+        for (const task of tasks) {
+          if (task.chatId !== chatId || task.state !== 'active') continue;
+          task.state = 'paused';
+          task.pausedReason = 'unavailable';
+          touch(task);
+        }
+      });
+    })().catch(error => log.fail('schedule', error, { phase: 'mark-unavailable', chat: chatId.slice(-6) })));
+  }
+
   function takeUpTo(ref: PlaceRef, at: number): void {
     const to = Math.max(takenTo.get(ref.place)?.at ?? 0, at);
     takenTo.delete(ref.place);
@@ -3058,6 +3083,46 @@ export function createOrchestrator(
     return true;
   }
 
+  /** A line of the bot's own in the group's main area, kept for the main session's context like {@link SMART_NOTICE}. */
+  async function sayInMain(chatId: string, input: { text: string } | { post: object }, text: string): Promise<void> {
+    const sent = await channel.send(chatId, input);
+    recent.addOwn(chatId, chatId, { id: sent.messageId, at: Date.now(), text });
+  }
+
+  /** When each scheduled task last said in its group that its tier is unavailable: once an hour at most. */
+  const gateFailureNoted = new Map<string, number>();
+  /** The scheduler recorded a run its group's tier could not start (scheduleGate): one line in the main area, not a card. */
+  function notifyGateFailure(task: StoredTask): void {
+    const project = getProjectByChatIdSync(task.chatId);
+    const reason = project && tierUnavailable(project);
+    const now = Date.now();
+    if (!reason || shuttingDown || now - (gateFailureNoted.get(task.id) ?? -Infinity) < 60 * 60_000) return;
+    gateFailureNoted.set(task.id, now);
+    // A text message's `<at>` is a real mention and no at-guard reads it; the task's name is anybody's words, so no tag
+    // in it survives (as in the scheduled topic's root). Only the name: an unclosed tag would run to the end of the sentence.
+    const text = `⏰ 定时任务「${plainTaskName(task.name)}」这次没跑：本群的权限档现在用不了（${reason.replace(/。$/, '')}）。连续 10 次会自动暂停。`;
+    void trackTask(sayInMain(task.chatId, { text }, text).catch(error => {
+      if (gateFailureNoted.get(task.id) === now) gateFailureNoted.delete(task.id); // the next failure tries again
+      log.fail('schedule', error, { phase: 'gate-notice', taskId: task.id });
+    }));
+  }
+
+  /** The scheduler paused a task after 10 failures in a row: one post in the main area, the creator at-ed when known.
+   * Throws when it is not sent, so the scheduler keeps the notice pending and tries again. */
+  async function notifyAutoPause(task: StoredTask): Promise<void> {
+    const project = await getProjectByChatId(task.chatId);
+    if (!project || project.enabled === false) return; // the bot says nothing in a group it no longer serves
+    const failure = [...task.recent].reverse().find(run => run.status === 'failed' || run.by === 'crash');
+    const why = (failure?.error ?? '运行中 Bot 进程退出了').replace(/。$/, '');
+    const { openId, name } = task.createdBy;
+    // Feishu's post format reads a text element as plain text (not tried here); the name is anybody's words, so no tag
+    // stays in it either way.
+    const head = `定时任务「${plainTaskName(task.name)}」连续 10 次失败，已自动暂停。`;
+    const tail = `看一下：${why}。到群设置的"任务"里能恢复。`;
+    const row = openId ? [{ tag: 'text', text: head }, { tag: 'at', user_id: openId }, { tag: 'text', text: ` ${tail}` }] : [{ tag: 'text', text: head + tail }];
+    await sayInMain(task.chatId, { post: { zh_cn: { content: [row] } } }, openId ? `${head}@${name ?? '创建人'} ${tail}` : head + tail);
+  }
+
   /** Keep the bot's trust-boundary note before any subsequently woven history. */
   function weaveTurnRecordBlock(text: string, extra: Pick<TurnExtra, 'initiative' | 'wake'> | undefined, block: Parameters<typeof weaveRecordBlock>[1]): string {
     const note = extra?.wake ? BOT_WAKE_NOTE(extra.wake.name) : undefined;
@@ -3147,7 +3212,7 @@ export function createOrchestrator(
     return orderTurns(sessionKey, async () => {
       if (staleRetry(extra)) return;
       if (owner?.intakeCancelled) {
-        if (dropScheduled(extra, scheduleStopped()) || dropBotMessage(msg, 'intake-cancelled', '会话被停下了')) return;
+        if (dropScheduled(extra, intakeStopped(owner)) || dropBotMessage(msg, 'intake-cancelled', '会话被停下了')) return;
         await channel.send(msg.chatId, { markdown: '排队期间会话已停止，请重发本条消息。' }, { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined);
         return;
       }
@@ -3182,7 +3247,7 @@ export function createOrchestrator(
       if (!extra?.images && messageHasImages(msg)) pendingImages = collectInboundImages(channel, msg);
       const [images, woven] = await Promise.all([pendingImages, ingestContext(msg, text, extra, project)]);
       if (existing.intakeCancelled) {
-        if (dropScheduled(extra, scheduleStopped()) || dropBotMessage(msg, 'intake-cancelled', '会话被停下了')) return;
+        if (dropScheduled(extra, intakeStopped(existing)) || dropBotMessage(msg, 'intake-cancelled', '会话被停下了')) return;
         await channel.send(msg.chatId, { markdown: '本条消息处理期间会话已停止，请重发。' }, { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined);
         return;
       }
@@ -3396,7 +3461,7 @@ export function createOrchestrator(
       log.info('intake', 'queued', { depth: existing.queue.length });
       return;
     }
-    const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg), smart: project && sessionModeOf(project) === 'smart', isGoal: goal, runLoop: true,
+    const reserved: ActiveState = { queue: [], chatId: msg.chatId, requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg), smart: project && sessionModeOf(project) === 'smart', isGoal: goal, runLoop: true,
       ...(flat && !msg.threadId && !goal ? { triggerAt: msg.createTime } : {}) };
     active.set(sessionKey, reserved);
     dropRetries(sessionKey);
@@ -3687,6 +3752,10 @@ export function createOrchestrator(
           }
         }
         reserved.thread = thread;
+        // A settings change closed the session while this turn was being prepared (evictLiveSessionsForChat cannot see a
+        // reservation's thread yet): a scheduled turn queued behind it is skipped, as after the run's own eviction. This
+        // turn still runs on it (T2 做法).
+        if (sessions.get(sessionKey) !== thread) reserved.evicted = true;
         launchOpts = {
           smart: project && sessionModeOf(project) === 'smart' ? true : undefined,
           chatId: msg.chatId,
@@ -3747,6 +3816,12 @@ export function createOrchestrator(
         dropCompact(reserved);
         reaction?.done();
         log.fail('intake', err);
+        // Stopping: the shutdown's, not this turn's failure, as in launchRun (settleGone); the shutdown took the queue.
+        if (shuttingDown) {
+          if (extra?.scheduled) extra.scheduled.settle(scheduleStopped());
+          else if (origin) droppedReplies?.appendSync(origin);
+          return;
+        }
         if (!goal) noteFailure(msg, flat ? 'main' : 'topic', launchOpts?.backendId ?? groupBackend(project).id, { error: err });
         if (extra?.scheduled) extra.scheduled.settle(scheduleFailed(extra.scheduled, err));
         await channel
@@ -5100,6 +5175,38 @@ export function createOrchestrator(
     return undefined;
   }
 
+  /** How long a group the desktop could not change because of a run starts no scheduled run, so a retry gets through. */
+  const FIRING_HOLD_MS = 60_000;
+  const firingHolds = new Map<string, number>();
+  function holdFiring(chatId: string, ms: number): void {
+    firingHolds.set(chatId, Math.max(firingHolds.get(chatId) ?? 0, Date.now() + ms));
+  }
+
+  /** Whether a run of `chatId` is on, for the desktop's edit lock. A run's reservation carries its group; one without
+   * (/compact, /new, a resume, the desktop's session actions) counts for every group, as every state did before scheduled tasks. */
+  function runningIn(chatId: string): boolean {
+    for (const state of active.values()) if (state.chatId === undefined || state.chatId === chatId) return true;
+    return false;
+  }
+
+  /** Whether a scheduled task of the group may start now (bot/schedule/scheduler.ts): turnRefusal's states, a desktop
+   * hold, then the tier. Synchronous, as the scheduler decides in place. */
+  function scheduleGate(chatId: string): 'ok' | 'disabled' | 'updating' | 'held' | 'unbound' | 'tier-unavailable' {
+    const project = getProjectByChatIdSync(chatId);
+    if (!project) return 'unbound';
+    if (project.enabled === false) return 'disabled';
+    if (projectMutations.has(chatId) || resumePublications.has(chatId)) return 'updating';
+    if ((firingHolds.get(chatId) ?? 0) > Date.now()) return 'held';
+    firingHolds.delete(chatId);
+    return tierUnavailable(project) ? 'tier-unavailable' : 'ok';
+  }
+
+  /** Why the group's tier cannot run on its backend now (the check of refuseUnavailableTier); undefined when it can. */
+  function tierUnavailable(project: Project): string | undefined {
+    const be = groupBackend(project);
+    return tierInfo(permissionTable(be.id), tableEnv(be), execOf(project).permission).unavailable;
+  }
+
   async function retryTurn(evt: CardActionEvent, key: string, retry: RetryTurn): Promise<void> {
     const op = evt.operator?.openId ?? '';
     // Refused where a message in that group would be, before anything is used
@@ -5782,7 +5889,7 @@ export function createOrchestrator(
       // with the group once the owner dissolves it, so nothing to clean up here.
       patch(evt, async () => {
         const removed = await removeProject(name);
-        if (removed?.chatId) forgetAttention(removed.chatId, 'unbind');
+        if (removed?.chatId) { forgetAttention(removed.chatId, 'unbind'); markUnavailable(removed.chatId); }
         let tail: string;
         if (removed && (removed.origin ?? 'created') === 'joined') {
           // joined group: the bot is a plain member, not the owner — it just
@@ -6632,7 +6739,10 @@ export function createOrchestrator(
     if (request.action === 'editProject' || request.action === 'removeProject') {
       if (projectRevision(project) !== request.expectedRevision) throw new AdminWriteError('项目设置已改变，请刷新后重试');
       if (smartNotices.has(project.chatId)) throw new AdminWriteError('正在群里说一句，请稍后再改');
-      if (projectMutations.has(project.chatId) || active.size > 0 || intakeChats.has(project.chatId) || pendingTopics.has(project.chatId)) throw new AdminWriteError('Agent 正在执行任务，请结束后修改项目');
+      if (projectMutations.has(project.chatId) || runningIn(project.chatId) || intakeChats.has(project.chatId) || pendingTopics.has(project.chatId)) {
+        holdFiring(project.chatId, FIRING_HOLD_MS); // no scheduled run starts before the retry
+        throw new AdminWriteError('Agent 正在执行任务，请结束后修改项目');
+      }
       let edited: { ok: true; project: ReturnType<typeof projectView> } | undefined;
       let announce = false;
       projectMutations.add(project.chatId);
@@ -6645,6 +6755,7 @@ export function createOrchestrator(
           });
           if (!removed) throw new AdminWriteError('项目已移除，请刷新');
           forgetAttention(project.chatId, 'unbind');
+          markUnavailable(project.chatId);
           for (const rec of records) { const thread = sessions.get(rec.threadId); sessions.delete(rec.threadId); if (thread) await thread.close().catch(error => log.fail('desktop', error, { phase: 'project-session-close' })); }
           let groupEffect: 'left' | 'transferred' | 'failed';
           let warning: string | undefined;
@@ -7230,6 +7341,7 @@ export function createOrchestrator(
     // Reuse the reservation handleTurn made for this session (so messages
     // queued during startup aren't lost); fall back to a fresh state otherwise.
     const state: ActiveState = active.get(activeKey) ?? { queue: [], requesterOpenId: opts.requesterOpenId, runLoop: true };
+    state.chatId = opts.chatId;
     state.thread = opts.thread;
     state.presentation = presentationConfig(cfg, await getProjectByChatId(opts.chatId));
     state.runLoop = true;
@@ -7371,8 +7483,43 @@ export function createOrchestrator(
       senderId: turn?.requesterOpenId ?? opts.requesterOpenId ?? '', createTime: turn?.requestedAt ?? 0 });
     const noteTurnFailure = (turn: QueuedTurn | undefined, failure: TurnFailure): void =>
       noteFailure(notedOf(turn), opts.flat ? 'main' : 'topic', opts.backendId, failure);
+    /** Ends the run with the turns queued behind it (the loop's stops below): people are asked to resend under `target`,
+     * a scheduled turn settled by `scheduledWhy` (askAgain). */
+    const dropQueue = (scheduledWhy: string, target: string | undefined, facts: Record<string, boolean>): void => {
+      state.intakeCancelled = true;
+      if (scheduledWhy === 'occupied') state.evictedDrop = true;
+      dropCompact(state);
+      const dropped = askAgain(state.queue, opts.chatId, opts.flat ? 'main' : 'topic', 'queue-dropped', '会话被停下了', scheduledWhy);
+      if (dropped === 0) return;
+      void trackTask(channel
+        .send(
+          opts.chatId,
+          { markdown: `⚠️ ${dropped} 条排队消息已丢弃，请重发。` },
+          { replyTo: target, replyInThread: !opts.flat },
+        )
+        .catch(() => undefined));
+      log.info('intake', 'queue-dropped', { depth: state.queue.length, ...facts, evicted: Boolean(state.evicted) });
+    };
+    /** A turn of this run that failed, or is about to start, after its session went is not a failure (T2 做法): the
+     * shutdown's interrupts a scheduled one and keeps a person's for redelivery, as this run's start does (the shutdown
+     * took the queue); a settings change's eviction drops it with the turns queued behind (dropQueue). False when the
+     * session is there. */
+    const settleGone = (turn: QueuedTurn, target: string | undefined): boolean => {
+      if (shuttingDown) {
+        if (turn.scheduled) turn.scheduled.settle(scheduleStopped());
+        else if (turn.origin) droppedReplies?.appendSync(turn.origin);
+        return true;
+      }
+      if (!state.evicted) return false;
+      state.queue.unshift(turn);
+      dropQueue('occupied', target, {});
+      return true;
+    };
+    // What queued turns, and a drop of them, reply to: the last card still there (set as each turn ends).
+    let replyTo = opts.replyTo;
     try {
       let currentTurn: QueuedTurn = {
+        origin: opts.origin,
         input: { text: opts.firstText, images: opts.images },
         voice: opts.voice,
         titleSource: opts.titleSource,
@@ -7398,7 +7545,6 @@ export function createOrchestrator(
       // Recall notes a turn of this run said; only a queued turn says the newer ones (s15).
       const said = new Set(opts.recallsShown);
       let fromQueue = false;
-      let replyTo = opts.replyTo;
       let replyInThread = opts.flat ? false : (opts.replyInThread ?? Boolean(opts.knownThreadId));
       for (;;) {
         let turnInput = currentTurn.input;
@@ -7456,6 +7602,9 @@ export function createOrchestrator(
         }
         const turnServiceTier = await reconcileStoredSpeed(turnBackend, rec?.threadId ?? topicThreadId, rec?.cwd ?? runCwd, turnModel, rec?.serviceTier);
         turnInput = await preparePersonality(opts.thread, opts.chatId, turnInput, topicThreadId, opts.backendId);
+        // The session went during the awaits above, after the last turn's end found it there: the turn does not start on
+        // the closed thread. A person's first turn, evicted while it was prepared, still runs (T2 做法).
+        if ((fromQueue || scheduled || shuttingDown) && settleGone(currentTurn, replyTo)) break;
         const run = opts.thread.runStreamed(turnInput, { model: turnModel, effort: turnEffort, serviceTier: turnServiceTier });
         let unseen = currentTurn.seen;
         titleTurnAttempted = true;
@@ -7486,7 +7635,7 @@ export function createOrchestrator(
             : {}),
           ...(opts.sessionNotice ? { sessionNotice: opts.sessionNotice } : {}),
           ...(currentTurn.initiative ? { initiativeCard: currentTurn.initiative } : {}),
-          ...(scheduled ? { label: scheduledLabel(scheduled.job) } : {}),
+          ...(scheduled ? { label: scheduledLabel(scheduled.job), nextRun: scheduledNextRun(scheduled.job) } : {}),
         };
 
         const adoptThreadId = async (messageId: string): Promise<void> => {
@@ -7666,7 +7815,7 @@ export function createOrchestrator(
         // （版本旧 / 挂死）才经 stopSignal 强停本地循环，按原样走杀进程恢复锤。
         // watchdog 超时（timedOut）不变，恒走杀进程。
         let timedOut = false;
-        let askFaulted = false; // the ask coordinator stopped the turn, not a ⏹
+        let askFaulted = false; // the ask coordinator stopped the turn, not a ⏹ or the shutdown
         let resolveStop!: () => void;
         const stopSignal = new Promise<void>((res) => {
           resolveStop = res;
@@ -7688,7 +7837,8 @@ export function createOrchestrator(
           placement: { chatId: opts.chatId, replyTo: scheduled ? landingOf(scheduled) : currentTurn.seen?.id ?? opts.replyTo, replyInThread: !opts.flat },
           initiator: { kind: currentTurn.requesterKind ?? 'unknown', openId: currentTurn.requesterOpenId }, idlePause,
           waiting: (label, subagentId) => { activity?.waiting(Boolean(label)); rc.askWaiting = label; rc.askWaitingSubagentId = subagentId; stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID); },
-          fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) { askFaulted = true; originalInterrupt(); } },
+          // A late ask faults too once a ⏹ or the shutdown stopped the turn (both set intakeCancelled): the stop stays theirs.
+          fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) { askFaulted ||= !state.intakeCancelled && !shuttingDown; originalInterrupt(); } },
         });
         const guarded = withIdleTimeout(
           redactAgentEvents(run.events, hiddenBlockFilter(opts.thread, opts.backendId, turnMemory, () => topicThreadId)),
@@ -7804,6 +7954,8 @@ export function createOrchestrator(
           procDead,
         });
         rc.rs = segmentSnapshot();
+        // The final card promises a next run from the task as it is now: paused or deleted during the run, it has none.
+        if (scheduled) rc.nextRun = scheduledNextRun(scheduled.job);
         if (interrupted) log.info('agent', 'interrupt', { graceful: !stopper.forced(), threadId: topicThreadId ?? null });
         // A ⏹ is not a failure; an error or the watchdog is.
         else if (rc.rs.terminal === 'error' || rc.rs.terminal === 'idle_timeout') noteTurnFailure(currentTurn, { rs: rc.rs, procDead });
@@ -7952,7 +8104,7 @@ export function createOrchestrator(
             .catch((err) => log.fail('card', err, { phase: 'empty-card-session' }));
         }
         // Settled as it ends, before any turn queued behind it runs (T2 4.1 第 5 条).
-        scheduled?.settle(ranScheduled(scheduled, rc.rs, delivered));
+        scheduled?.settle(ranScheduled(scheduled, rc.rs, delivered, askFaulted, state.evicted));
         retrySessionTitleAfterTurn();
         // Queued turns reply to the last card still there; a deleted one keeps the previous target.
         if (!gone) replyTo = finalMsgId;
@@ -7981,24 +8133,13 @@ export function createOrchestrator(
         // A stop (⏹ graceful or forced / watchdog) or a dead process ends the
         // whole run — drop any queued follow-ups, but tell the user instead of
         // swallowing them. 优雅 ⏹ 虽然线程留用，但用户按了停就是要停：排队消息
-        // 同样丢弃（语义与杀进程路径一致，只是进程不回收）。
-        if (killed || procDead || interrupted || compactDied) {
-          state.intakeCancelled = true;
-          dropCompact(state);
+        // 同样丢弃（语义与杀进程路径一致，只是进程不回收）。A settings change that
+        // closed the thread (state.evicted), even after procDead was read above, ends
+        // it too, with the turns still in intake (intakeStopped).
+        if (killed || procDead || interrupted || compactDied || state.evicted) {
           // Only a ⏹ is the user's, and a settings change's eviction the group's: a scheduled turn queued behind a watchdog
           // kill, a dead process or an ask fault failed (T2 4.2).
-          const dropped = askAgain(state.queue, opts.chatId, opts.flat ? 'main' : 'topic', 'queue-dropped', '会话被停下了',
-            interrupted && !askFaulted ? 'queue-dropped' : state.evicted ? 'occupied' : 'run-failed');
-          if (dropped > 0) {
-            void trackTask(channel
-              .send(
-                opts.chatId,
-                { markdown: `⚠️ ${dropped} 条排队消息已丢弃，请重发。` },
-                { replyTo: finalMsgId, replyInThread: !opts.flat },
-              )
-              .catch(() => undefined));
-            log.info('intake', 'queue-dropped', { depth: state.queue.length, killed, procDead, interrupted });
-          }
+          dropQueue(interrupted && !askFaulted ? 'queue-dropped' : state.evicted ? 'occupied' : 'run-failed', finalMsgId, { killed, procDead, interrupted });
           break;
         }
         // A message queued while this run's back-fill was pulled may be a line of
@@ -8023,7 +8164,9 @@ export function createOrchestrator(
       askTurn?.close('turn-ended');
       // Detach before any await: new messages must not join a failed consumer.
       if (active.get(activeKey) === state) active.delete(activeKey);
-      const dropped = askAgain(state.queue.splice(0), opts.chatId, opts.flat ? 'main' : 'topic', 'run-failed', '前一轮出错，排队的没跑');
+      // The session went (the shutdown, a settings change): not this turn's failure, nor the queue's.
+      const went = noted !== undefined && settleGone(noted, replyTo);
+      const dropped = went ? 0 : askAgain(state.queue.splice(0), opts.chatId, opts.flat ? 'main' : 'topic', 'run-failed', '前一轮出错，排队的没跑');
       dropCompact(state);
       disposeInterrupt?.();
       state.subagents = undefined;
@@ -8035,6 +8178,7 @@ export function createOrchestrator(
       if (topicThreadId && sessions.get(topicThreadId) === opts.thread) sessions.delete(topicThreadId);
       await opts.thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' }));
       log.fail('intake', err);
+      if (went) return;
       noteTurnFailure(noted, { error: err });
       if (noted?.scheduled) noted.scheduled.settle(scheduleFailed(noted.scheduled, err));
       await channel
@@ -8091,6 +8235,7 @@ export function createOrchestrator(
     // The goal's workspace — see LaunchOpts.cwd / launchRun's runCwd.
     const runCwd = opts.cwd ?? fallbackCwd;
     const state: ActiveState = active.get(activeKey) ?? { queue: [], requesterOpenId: opts.requesterOpenId };
+    state.chatId = opts.chatId;
     state.presentation = presentationConfig(cfg, await getProjectByChatId(opts.chatId));
     state.thread = opts.thread;
     state.isGoal = true; // messages during the goal get a prompt, never queue (handleTurn)
@@ -8974,6 +9119,7 @@ export function createOrchestrator(
     const removed = await removeProject(project.name);
     if (!removed) return;
     forgetAttention(project.chatId, 'unbind');
+    markUnavailable(project.chatId);
     log.info('intake', 'bot-removed-unbind', { name: removed.name, chatId: chatId.slice(-6) });
     if (removed.addedBy) {
       await channel.rawClient.im.v1.message
@@ -9294,7 +9440,9 @@ export function createOrchestrator(
   const libraryExecute = async (op: AdminLibraryOp): Promise<unknown> => {
     const mine = (await listProjects()).filter(row => row.projectId === op.projectId);
     if (op.kind === 'libraryWorkspaceCheck') {
-      return { busy: mine.length > 0 && (active.size > 0 || mine.some(row => projectMutations.has(row.chatId) || intakeChats.has(row.chatId) || pendingTopics.has(row.chatId))) };
+      const busy = mine.some(row => runningIn(row.chatId) || projectMutations.has(row.chatId) || intakeChats.has(row.chatId) || pendingTopics.has(row.chatId));
+      if (busy) for (const row of mine) holdFiring(row.chatId, FIRING_HOLD_MS);
+      return { busy };
     }
     const held = mine.map(row => row.chatId).filter(chatId => !projectMutations.has(chatId));
     for (const chatId of held) projectMutations.add(chatId);
@@ -9313,6 +9461,9 @@ export function createOrchestrator(
   const scheduledHooks = new Set<ScheduledHook>();
   const SCHEDULE_UPDATING: ScheduledOutcome = { status: 'skipped', reason: 'updating' };
   const scheduleStopped = (): ScheduledOutcome => ({ status: 'interrupted', by: shuttingDown ? 'shutdown' : 'user' });
+  /** A scheduled turn still in intake when its session's intake was cancelled: settled as the turns queued were when a
+   * settings change's eviction dropped them (launchRun), else as a ⏹'s or the shutdown's. */
+  const intakeStopped = (state: ActiveState): ScheduledOutcome => (state.evictedDrop ? SCHEDULE_UPDATING : scheduleStopped());
   /** Where a scheduled turn's cards and messages go instead of its synthetic message; '' is a new main-area message. */
   const landingOf = (hook: ScheduledHook): string => (hook.target.kind === 'topic' ? hook.target.anchor : '');
   const ranFor = (hook: ScheduledHook): number => Math.max(0, Date.now() - (hook.job.task.inflight?.startedAt ?? Date.now()));
@@ -9351,11 +9502,19 @@ export function createOrchestrator(
     extra?.scheduled?.settle(outcome);
     return Boolean(extra?.scheduled);
   }
-  /** How a scheduled turn that ran ended: its card's terminal, and whether the final card update landed. */
-  function ranScheduled(hook: ScheduledHook, rs: RunState, delivered: boolean): ScheduledOutcome {
-    if (rs.terminal === 'interrupted') return scheduleStopped();
-    const error = failureText(rs) ?? (delivered ? undefined : '结果卡片没有更新成功');
-    if (error) return { status: 'failed', error, durationMs: ranFor(hook), counts: true };
+  /** nextRunAfterFailure on the task in the store now, not as it was claimed; a deleted task has no next run. */
+  function scheduledNextRun(job: ScheduledJob): boolean {
+    const task = scheduleStore.get(job.task.id);
+    return task !== undefined && nextRunAfterFailure({ ...job, task });
+  }
+  /** How a scheduled turn that ran ended: its card's terminal, and whether the final card update landed. A stop by its own
+   * ask coordinator's fault is neither the user's nor the shutdown's: a counted failure. A failure after its session went
+   * is not one (launchRun's settleGone): the shutdown's, or skipped for the settings change that closed it. */
+  function ranScheduled(hook: ScheduledHook, rs: RunState, delivered: boolean, askFaulted: boolean, evicted: boolean | undefined): ScheduledOutcome {
+    if (rs.terminal === 'interrupted' && !askFaulted) return scheduleStopped();
+    const error = rs.terminal === 'interrupted' ? '提问出错' : failureText(rs) ?? (delivered ? undefined : '结果卡片没有更新成功');
+    if (error && shuttingDown) return scheduleStopped();
+    if (error) return evicted ? SCHEDULE_UPDATING : { status: 'failed', error, durationMs: ranFor(hook), counts: true };
     return { status: 'done', excerpt: clampUnits(finalMessageText(rs), 500), durationMs: ranFor(hook) };
   }
 
@@ -9411,7 +9570,7 @@ export function createOrchestrator(
     const newTopic = !topicId && (task.placement.kind === 'newTopic' || ruleKind(placed) === 'multi' || await orStop(topicCtx.noMainArea(chatId), false));
     // Unbound, disabled or edited while Feishu and the disk answered: the run uses none of what it read (T2 4.2).
     const project = await getProjectByChatId(chatId);
-    if (refusedTurn(project, chatId, { scheduled: hook }) || !project || settingsRevision(project) !== settingsRevision(placed)) return void hook.settle(SCHEDULE_UPDATING);
+    if (refusedTurn(project, chatId, { scheduled: hook }) || !project || projectSettingsRevision(project) !== projectSettingsRevision(placed)) return void hook.settle(SCHEDULE_UPDATING);
     if (shuttingDown) return void hook.settle({ status: 'interrupted', by: 'shutdown' });
     if (newTopic) return startScheduledTopic(hook, project, fallback);
     const text = scheduledHeader(hook.job, hostTimeZone(), fallback);
@@ -9419,7 +9578,7 @@ export function createOrchestrator(
       messageId: `vsched_${task.id}_${hook.job.slot}`, chatId, chatType: 'group', senderId: '', content: text, rawContentType: 'text',
       resources: [], mentions: [], mentionAll: false, mentionedBot: false, createTime: Date.now(), ...(topicId ? { threadId: topicId } : {}),
     };
-    await handleTurn(msg, text, topicId ?? chatId, !topicId, project, turnPerm(project), { scheduled: hook, queueOnly: true, summary: `定时任务「${task.name}」` });
+    await handleTurn(msg, text, topicId ?? chatId, !topicId, project, turnPerm(project), { scheduled: hook, queueOnly: true, summary: `定时任务「${plainTaskName(task.name)}」` });
   }
 
   /**
@@ -9439,8 +9598,8 @@ export function createOrchestrator(
         const prefer = modelPrefOf(project, be.id);
         const cwd = workCwd(project);
         const perm = turnPerm(project);
-        // A text message's `<at>` is a real mention, and the task's name is anybody's words: no tag in it stays one.
-        const rootText = neutraliseAts(scheduledRootText(job), undefined);
+        // A text message's `<at>` is a real mention: scheduledRootText leaves no tag in the task's name.
+        const rootText = scheduledRootText(job);
         const root = await channel.send(chatId, { text: rootText });
         const rootAt = Date.now();
         recent.addOwn(chatId, chatId, { id: root.messageId, at: rootAt, text: rootText });
@@ -9453,7 +9612,7 @@ export function createOrchestrator(
         const titleSource: SessionTitleSource = { text: `定时任务「${job.task.name}」`, rawContentType: 'text' };
         const titleJobKey = await registerSessionTitle(be, thread.sessionId, cwd, titleSource);
         const current = await getProjectByChatId(chatId);
-        if (refusedTurn(current, chatId, { scheduled: hook }) || settingsRevision(current!) !== settingsRevision(project)) {
+        if (refusedTurn(current, chatId, { scheduled: hook }) || projectSettingsRevision(current!) !== projectSettingsRevision(project)) {
           hook.settle(SCHEDULE_UPDATING);
           return;
         }
@@ -9466,7 +9625,7 @@ export function createOrchestrator(
         launched = true;
         await trackRun(launchRun({
           chatId, replyTo: root.messageId, replyInThread: true, thread, firstText, model, effort, serviceTier: 'standard',
-          modelCustom: isCustomDefault(prefer, model), cwd, ...perm, summary: titleSource.text, requesterKind: 'unknown',
+          modelCustom: isCustomDefault(prefer, model), cwd, ...perm, summary: `定时任务「${plainTaskName(job.task.name)}」`, requesterKind: 'unknown',
           requestedAt: rootAt, seenAt: rootAt, from: section.main[0]?.createTime || rootAt,
           openTopic: { id: root.messageId, from: { kind: 'self' }, at: rootAt, text: rootText },
           smart: sessionModeOf(project) === 'smart' ? true : undefined, backendId: be.id, titleJobKey, titleSource, scheduled: hook,
@@ -9494,7 +9653,7 @@ export function createOrchestrator(
   const scheduler = createScheduler({
     store: scheduleStore, now: () => Date.now(), timers: { setTimeout, clearTimeout },
     run: runScheduled,
-    gate: () => 'ok', notifyAutoPause: async () => {}, notifyGateFailure: () => {},
+    gate: scheduleGate, notifyAutoPause, notifyGateFailure,
     // Half the run slots at most, so people always find one (总设计第 15 节第 8 条).
     maxInflight: () => Math.max(1, Math.floor(getMaxConcurrentRuns(cfg) / 2)),
     log, diagnostics: scheduleDiagnostic,
