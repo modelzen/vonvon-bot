@@ -4,6 +4,8 @@ import type { CanonicalRoot, Target } from './identity';
 export type DistributionInput =
   | { kind: 'npm'; executable: string; entry: string }
   | { kind: 'desktop'; executable: string; entry: string }
+  /** Rendered like `npm`; told apart by its `current` link paths (devices 7.2). */
+  | { kind: 'standalone'; executable: string; entry: string }
   | { kind: 'development' }
   | { kind: 'unknown' };
 export type Definition = Readonly<{
@@ -78,6 +80,12 @@ function render(target: Target, definition: DecodedDefinition): SerializedDefini
   }
 }
 
+/** `<installRoot>/current/node/bin/node <installRoot>/current/app/bin/vonvon.mjs`, as distribution.ts serviceProgram writes it. */
+function isStandaloneProgram(executable: string, entry: string): boolean {
+  const suffix = '/current/app/bin/vonvon.mjs';
+  return entry.endsWith(suffix) && executable === `${entry.slice(0, -suffix.length)}/current/node/bin/node`;
+}
+
 function capture(text: string, pattern: RegExp): string[] {
   const matches = [...text.matchAll(pattern)];
   if (matches.length !== 1) throw new Error('Missing or duplicate definition field');
@@ -120,7 +128,8 @@ export function decodeGeneratedDefinition(target: Target, bytes: SerializedDefin
       break;
     }
   }
-  const definition: DecodedDefinition = { root, capturedPath, port, distribution: { kind: desktop ? 'desktop' : 'npm', executable, entry } };
+  const standalone = !desktop && isStandaloneProgram(executable, entry);
+  const definition: DecodedDefinition = { root, capturedPath, port, distribution: { kind: desktop ? 'desktop' : standalone ? 'standalone' : 'npm', executable, entry } };
   const expected = render(target, definition);
   if (bytes.platform === 'darwin' && expected.platform === 'darwin' && Buffer.from(bytes.plist).equals(expected.plist)) return definition;
   if (bytes.platform === 'linux' && expected.platform === 'linux' && Buffer.from(bytes.unit).equals(expected.unit)) return definition;
