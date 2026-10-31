@@ -1,6 +1,7 @@
 import { fake, cardOpts, deferred, human, job, setup, thread, topics, until } from './helpers/scheduled-run';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { projectRevision } from '../src/admin/collaboration';
+import { hostTimeZone } from '../src/bot/schedule/time';
 
 // T2 4.1 第 2 到 4 条、总设计 7.1: where a scheduled run goes, and that it never steers nor is steered into.
 const spy = vi.hoisted(() => ({ judge: vi.fn() }));
@@ -25,7 +26,9 @@ describe('a scheduled run in the main session', () => {
     const result = runScheduled(job());
     await until(() => expect(run.consumed).toHaveLength(1));
     expect(fake.getSession).toHaveBeenCalledWith('chat');
-    expect(run.consumed[0]!.text).toContain('（定时任务「日报」· 每天 09:00 · 第 1 次。现在没有人在场');
+    // The job's zone is UTC; the description names it only when this machine is in another zone (3.13 限制).
+    const zone = hostTimeZone() === 'UTC' ? '' : '（UTC）';
+    expect(run.consumed[0]!.text).toContain(`（定时任务「日报」· 每天 09:00${zone} · 第 1 次。现在没有人在场`);
     run.turns[0]!.resolve();
     await expect(result).resolves.toMatchObject({ status: 'done', messageId: 'card' });
     expect(cardOpts()).toEqual({ replyTo: '', replyInThread: false });
