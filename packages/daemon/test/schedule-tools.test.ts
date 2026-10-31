@@ -163,12 +163,14 @@ describe('what the agent reads of a task', () => {
     expect(task.recent).toEqual([{ runId: 'run-19', slot: NOW - MIN, trigger: 'schedule', status: 'failed', startedAt: NOW - MIN, endedAt: NOW - MIN + 1000,
       durationMs: 1000, link: link(19), error: long(50) }]);
   });
-  it('cuts a list of 10 tasks at every limit shorter, to 300 and 80 without run errors, marks what it cut, and says so', async () => {
-    const f = await scheduleFixture({ tasks: Array.from({ length: 10 }, (_, i) => full(`st_${i}`)) });
+  // At 300 and 80, 11 tasks at every limit are 31,222 bytes and 12 are 34,042: a cap of 40,000, or one counted in
+  // characters (12 are 20,976 there), would keep 12 at 300 and 80.
+  it('cuts a list of 11 tasks at every limit shorter, to 300 and 80 without run errors, marks what it cut, and says so', async () => {
+    const f = await scheduleFixture({ tasks: Array.from({ length: 11 }, (_, i) => full(`st_${i}`)) });
     f.open();
     const { first, json } = lines(await listText(f));
-    expect(first).toBe(clipped(10));
-    expect(json.tasks).toHaveLength(10);
+    expect(first).toBe(clipped(11));
+    expect(json.tasks).toHaveLength(11);
     const [task] = json.tasks;
     expect(task.instruction).toBe(`${long(299)}…`);
     expect(task).toMatchObject({ instructionClipped: true, instructionLength: 4000 });
@@ -180,8 +182,23 @@ describe('what the agent reads of a task', () => {
     expect(Object.keys(task).sort()).toEqual(['createdBy', 'describe', 'id', 'instruction', 'instructionClipped', 'instructionLength', 'lastResult', 'name',
       'nextRunAt', 'placement', 'recent', 'revision', 'running', 'state', 'timeZone'].sort());
   });
+  // There 12 tasks at every limit are 16,978 bytes and 20 are 28,162; 20 with the longest describe below still fit, at 31,502.
+  it.each([12, 20])('cuts a list of %i tasks at every limit shorter still, to 80 and 30 and only the last run, before names only', async count => {
+    const f = await scheduleFixture({ tasks: Array.from({ length: count }, (_, i) => full(`st_${i}`)) });
+    f.open();
+    const { first, json } = lines(await listText(f));
+    expect(first).toBe(clipped(count));
+    expect(json.tasks).toHaveLength(count);
+    expect(json.tasks.every((one: object) => 'instructionClipped' in one)).toBe(true);
+    const [task] = json.tasks;
+    expect(task).toMatchObject({ instruction: `${long(79)}…`, instructionClipped: true, instructionLength: 4000 });
+    expect(task.createdBy).toEqual({ via: 'chat', role: 'member', name: long(40), mine: false, text: `${long(29)}…` });
+    expect(task.lastResult).toEqual({ status: 'failed', at: NOW - MIN, excerpt: `${long(29)}…`, link: link(100) });
+    expect(task.recent).toEqual([{ runId: 'run-19', slot: NOW - MIN, trigger: 'schedule', status: 'failed', startedAt: NOW - MIN, endedAt: NOW - MIN + 1000,
+      durationMs: 1000, link: link(19) }]);
+  });
   it('lists only names, times, state and ids when even that is too long, and 20 tasks at every limit fit there with room to spare', async () => {
-    // Links have no limit; long ones push the shorter cut over. The longest describe: a 94-character cron in a zone of 30.
+    // Links have no limit; long ones push even the shortest cut over. The longest describe: a 94-character cron in a zone of 30.
     const longLink = `https://applink.feishu.cn/client/message/link/open?token=${'A'.repeat(600)}`;
     const minutes = Array.from({ length: 30 }, (_, i) => i * 2).join(',');
     const f = await scheduleFixture({ tasks: Array.from({ length: 20 }, (_, i) => full(`st_${'0'.repeat(14)}${String(i).padStart(2, '0')}`, {
