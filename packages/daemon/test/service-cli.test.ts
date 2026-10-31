@@ -162,6 +162,19 @@ describe('Linux: linger and the user manager (s20a)', () => {
     expect(refused.linux.afterInstall).not.toHaveBeenCalled();
     await expect(runServiceCommand('install', { install: vi.fn(async () => outcome('installed')), uninstall: vi.fn() }, {}, linux({ afterInstall: async () => false }))).rejects.toThrow('服务已经装好，只是 linger 没开成。');
   });
+  // main 必败: service install and uninstall had no --json
+  it('--json prints one line with the Linux notes, asks nothing, and a failure keeps the outcome in error.partial', async () => {
+    let out = '';
+    const io = { json: true, write: (text: string) => { out += text; } };
+    const notes = linux({ afterInstall: vi.fn(async (_choice: LingerChoice, into?: string[]) => { into?.push('没开 linger。', '网页地址：'); return true; }) });
+    await runServiceCommand('install', { install: vi.fn(async () => outcome('installed', { retained: { pid: 9, startedAt: 'then' } })), uninstall: vi.fn() }, {}, notes, io);
+    expect(notes.linux.afterInstall).toHaveBeenCalledWith('ask', ['没开 linger。', '网页地址：']);
+    expect(JSON.parse(out)).toEqual({ ok: true, action: 'install', result: 'installed', detail: 'installed', retained: { pid: 9, startedAt: 'then' }, notes: ['没开 linger。', '网页地址：'] });
+    out = '';
+    const failed = runServiceCommand('uninstall', { install: vi.fn(), uninstall: vi.fn(async () => outcome('uninstall_incomplete', { leftovers: ['unit /u'] })) }, {}, linux(), io);
+    await expect(failed).rejects.toMatchObject({ kind: 'failed', reason: 'uninstall_incomplete', partial: { action: 'uninstall', result: 'uninstall_incomplete', leftovers: ['unit /u'] } });
+    expect(out).toBe('');
+  });
   it('explains an unavailable user manager and a linger left on by uninstall', async () => {
     const hint = '当前终端没有 XDG_RUNTIME_DIR（用 sudo -u 或 su 切到这个账号时常见）。';
     const failed = { install: vi.fn(async () => outcome('install_refused', { detail: 'User manager unavailable: Failed to connect to bus: No medium found' })), uninstall: vi.fn() };
@@ -177,7 +190,7 @@ describe('Linux: linger and the user manager (s20a)', () => {
     await runServiceStatus(false, { status: async () => ({ ...status, hint: '当前终端没有 XDG_RUNTIME_DIR。', linger: { state: 'on' } }) });
     expect(String(write.mock.calls[0]?.[0])).toMatch(/: unknown\nCannot ask systemd \(Linux\): Failed to connect to bus: No medium found\n当前终端没有 XDG_RUNTIME_DIR。\nlinger 已开：开机就启动，退出 SSH 以后 Bot 也还在跑。\nDefinition: /);
     await runServiceStatus(true, { status: async () => ({ ...status, linger: { state: 'off' } }) });
-    expect(JSON.parse(String(write.mock.calls[1]?.[0]))).toMatchObject({ state: 'unknown', linger: { state: 'off' } });
+    expect(JSON.parse(String(write.mock.calls[1]?.[0]))).toMatchObject({ ok: true, state: 'unknown', linger: { state: 'off' } });
   });
 });
 

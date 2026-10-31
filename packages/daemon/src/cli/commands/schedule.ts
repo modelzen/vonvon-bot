@@ -1,5 +1,5 @@
 import { scheduleRequestSchema, type Agent, type Membership, type ScheduleReply, type ScheduleRequest, type ScheduleRunRecord, type ScheduleSpec, type ScheduledTaskView } from '@vonvon/protocol';
-import { CommandError } from '../command-error';
+import { badArgs, CommandError } from '../command-error';
 import { inBotSession } from '../../config/session-env';
 import { formatAt, normalizeTimeZone, parseCron, parseLocal } from '../../bot/schedule/time';
 import { pickBot, pickGroup, print, want, withDaemon, type Daemon, type Io } from '../daemon-client';
@@ -35,36 +35,39 @@ const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const WHEN: Record<When, (text: string) => Parsed> = {
   every: text => {
     const match = /^(\d+)(m|h)$/.exec(text.trim());
-    if (!match) throw new Error('--every 写成 30m 或 2h。');
+    if (!match) throw badArgs('--every 写成 30m 或 2h。');
     const minutes = Number(match[1]) * (match[2] === 'h' ? 60 : 1);
-    if (minutes < 1 || minutes > 10080) throw new Error('间隔最短 1 分钟，最长 7 天');
+    if (minutes < 1 || minutes > 10080) throw badArgs('间隔最短 1 分钟，最长 7 天');
     return { kind: 'every', minutes };
   },
   daily: text => {
-    if (!HHMM.test(text)) throw new Error('--daily 写成 HH:mm，例如 09:00。');
+    if (!HHMM.test(text)) throw badArgs('--daily 写成 HH:mm，例如 09:00。');
     return { kind: 'daily', time: text };
   },
   weekly: text => {
     const [names = '', time = '', ...rest] = text.split('@');
     const days = names.split(',').map(name => DAYS.indexOf(name.trim().toLowerCase()));
-    if (rest.length || !HHMM.test(time) || days.some(day => day < 0)) throw new Error('--weekly 写成 mon,wed@10:00：星期用 mon 到 sun，时间写成 HH:mm。');
+    if (rest.length || !HHMM.test(time) || days.some(day => day < 0)) throw badArgs('--weekly 写成 mon,wed@10:00：星期用 mon 到 sun，时间写成 HH:mm。');
     return { kind: 'weekly', days: [...new Set(days)].sort((a, b) => a - b), time };
   },
   // A date that does not exist is refused by any zone, so UTC checks the text before the zone is known.
   at: text => {
-    if (parseLocal('UTC', text) === undefined) throw new Error('--at 写成 "YYYY-MM-DD HH:mm"，例如 "2026-11-01 14:00"。');
+    if (parseLocal('UTC', text) === undefined) throw badArgs('--at 写成 "YYYY-MM-DD HH:mm"，例如 "2026-11-01 14:00"。');
     return zone => ({ kind: 'once', at: parseLocal(zone, text)! });
   },
   // The format only; whether it comes within 400 days is the daemon's validateSpec.
-  cron: text => { parseCron(text); return { kind: 'cron', expr: text }; },
+  cron: text => {
+    try { parseCron(text); } catch (error) { throw badArgs(error instanceof Error ? error.message : String(error)); }
+    return { kind: 'cron', expr: text };
+  },
 };
 
 function timeOption(target: ScheduleTarget, required: boolean): Parsed | undefined {
   const given = (Object.keys(WHEN) as When[]).filter(key => target[key] !== undefined);
-  if (given.length > 1) throw new Error(`时间只能给一个，这次给了 ${given.map(key => `--${key}`).join('、')}。`);
+  if (given.length > 1) throw badArgs(`时间只能给一个，这次给了 ${given.map(key => `--${key}`).join('、')}。`);
   const [key] = given;
   if (key) return WHEN[key](target[key]!);
-  if (required) throw new Error(`要给时间：${WHEN_FORMS}，选一个。`);
+  if (required) throw badArgs(`要给时间：${WHEN_FORMS}，选一个。`);
   return undefined;
 }
 
@@ -72,13 +75,13 @@ function timeOption(target: ScheduleTarget, required: boolean): Parsed | undefin
 function words(label: string, value: string | undefined, max: number): string | undefined {
   if (value === undefined) return undefined;
   const trimmed = value.trim();
-  if (!trimmed || trimmed.length > max) throw new Error(`${label}要 1 到 ${max} 个字。`);
+  if (!trimmed || trimmed.length > max) throw badArgs(`${label}要 1 到 ${max} 个字。`);
   return trimmed;
 }
 
 function zoneOf(tz: string | undefined): string | undefined {
   if (tz === undefined) return undefined;
-  try { return normalizeTimeZone(tz); } catch { throw new Error(`不认识这个时区：${tz}`); }
+  try { return normalizeTimeZone(tz); } catch { throw badArgs(`不认识这个时区：${tz}`); }
 }
 
 /** The client parses the request with this schema too, and its ZodError would read as a version mismatch. */
@@ -151,17 +154,17 @@ function chatOf(memberships: readonly Membership[], bot: Agent, group: string, a
 
 export async function runSchedule(action: ScheduleAction, target: ScheduleTarget, io: Io, daemon: Daemon = withDaemon, env: NodeJS.ProcessEnv = process.env): Promise<void> {
   // Before connecting: a sandbox cannot reach the daemon, and the terminal's credentials are the owner's.
-  if (inBotSession(env)) throw new CommandError('refused', SESSION_REFUSED);
+  if (inBotSession(env)) throw new CommandError('refused', SESSION_REFUSED, { reason: 'not_in_session' });
   const all = action === 'list' && Boolean(target.all);
-  if (all && target.group !== undefined) throw new Error('--group 和 --all 只能选一个。');
-  if (!all && target.group === undefined) throw new Error(`要给 --group <群>（群 id oc_… 或项目名）${action === 'list' ? '，或者用 --all 看这个 Bot 的全部任务' : ''}。`);
+  if (all && target.group !== undefined) throw badArgs('--group 和 --all 只能选一个。');
+  if (!all && target.group === undefined) throw badArgs(`要给 --group <群>（群 id oc_… 或项目名）${action === 'list' ? '，或者用 --all 看这个 Bot 的全部任务' : ''}。`);
   const tz = zoneOf(target.tz);
   const spec = action === 'add' || action === 'edit' ? timeOption(target, action === 'add') : undefined;
   const name = words('--name ', target.name, 40);
   const instruction = words('任务内容', target.instruction, 4000);
-  if (action === 'add' && (name === undefined || instruction === undefined)) throw new Error('要给 --name <名字> 和任务内容。');
-  if (action === 'edit' && target.revision === undefined) throw new Error('要给 --revision：vonvon schedule list --json 里这个任务的 revision。');
-  if (action === 'edit' && spec === undefined && name === undefined && instruction === undefined && tz === undefined) throw new Error(`没有要改的：给 --name、时间（${WHEN_FORMS}）、--tz 或新的任务内容。`);
+  if (action === 'add' && (name === undefined || instruction === undefined)) throw badArgs('要给 --name <名字> 和任务内容。');
+  if (action === 'edit' && target.revision === undefined) throw badArgs('要给 --revision：vonvon schedule list --json 里这个任务的 revision。');
+  if (action === 'edit' && spec === undefined && name === undefined && instruction === undefined && tz === undefined) throw badArgs(`没有要改的：给 --name、时间（${WHEN_FORMS}）、--tz 或新的任务内容。`);
   const taskId = target.taskId ?? '';
   const { what, kind } = ACTIONS[action];
 
@@ -206,7 +209,7 @@ export async function runSchedule(action: ScheduleAction, target: ScheduleTarget
 
   if (reply.kind === 'conflict') {
     const [undone, then] = action === 'delete' ? ['没有删除', '再删'] : ['没有保存', '再改'];
-    throw new CommandError('conflict', `这个任务刚在别处改过，${undone}。现在的 revision 是 ${reply.current.revision}，先看过现在的内容${then}。`, reply.current);
+    throw new CommandError('conflict', `这个任务刚在别处改过，${undone}。现在的 revision 是 ${reply.current.revision}，先看过现在的内容${then}。`, { reason: 'conflict', current: reply.current });
   }
   const done = want(what, reply, kind);
   let human: string[];

@@ -18,5 +18,6 @@ export async function runProjectList(io: Io, read: () => Promise<LibraryOverview
     human.push(`还有 ${overview.unlinked.length} 个群没有项目，daemon 下次启动时会建好：${overview.unlinked.map(binding => `${binding.botName} 在 ${binding.name}`).join('、')}`);
   }
   for (const bot of overview.unreadable) human.push(`读不了 ${bot.botName}（${bot.botId}）的群：${bot.error}`);
-  print(io, human, overview);
+  // devices 8.3: read from the files, not the daemon
+  print(io, human, { source: 'files', ...overview });
 }
