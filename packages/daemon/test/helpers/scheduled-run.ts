@@ -25,6 +25,8 @@ export const fake: {
   createCard: Fn; stream: Fn; final: Fn; send: Fn; reply: Fn; topicList: Fn; messageGet: Fn; chatGet: Fn; getSession: Fn; listSessions: Fn; upsertSession: Fn;
   log: { info: Fn; warn: Fn; fail: Fn };
   run?: (job: ScheduledJob) => Promise<ScheduledOutcome>;
+  /** The context update every turn carries (planTurnUpdate's text); none by default. */
+  contextUpdate?: string;
 } = {
   project: {},
   topicGroup: false,
@@ -47,7 +49,7 @@ vi.mock('../../src/agent', async (original) => ({ ...await original<object>(), c
 vi.mock('../../src/bot/context-assembly', async original => ({
   ...await original<object>(),
   loadContextSources: async () => ({ place: { kind: 'comment' }, botName: 'fixture', soul: '', role: { identity: '', notes: '', headed: false }, supplement: '', failed: {} }),
-  planTurnUpdate: async () => ({ context: { versions: {}, nonce: 'fixture' } }),
+  planTurnUpdate: async () => ({ ...(fake.contextUpdate ? { text: fake.contextUpdate } : {}), context: { versions: {}, nonce: 'fixture' } }),
 }));
 vi.mock('../../src/project/registry', async (original) => ({
   ...await original<object>(), getProjectByChatId: async () => fake.project, getProjectByName: async () => fake.project,
@@ -167,6 +169,7 @@ export async function setup(kind: 'single' | 'multi' | 'smart', opts: { entries?
   vi.clearAllMocks();
   fake.project = { name: 'test', chatId: 'chat', cwd: '/test', kind: kind === 'multi' ? 'multi' : 'single', ...(kind === 'smart' ? { smart: true } : {}) };
   fake.topicGroup = false;
+  fake.contextUpdate = undefined;
   fake.backend.resumeThread.mockReset();
   fake.backend.startThread.mockReset();
   fake.createCard.mockResolvedValue('card');
