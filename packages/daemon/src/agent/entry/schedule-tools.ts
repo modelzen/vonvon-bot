@@ -91,11 +91,12 @@ function placementOf(where: Where | undefined, once: boolean, here: TurnWhere): 
 }
 
 /**
- * The longest list reply, in characters. Claude Code passes a tool result on as it is while its estimate (4 characters a
- * token) is at most half of MAX_MCP_OUTPUT_TOKENS (25,000); past that it counts real tokens, about one a Chinese
- * character, and cuts what is over. As JSON at most 3 bytes a character, so also under the registry's byte cap.
+ * The longest list reply, in UTF-8 bytes. Codex 0.163.0 counts a tool result by bytes (4 a token): its default model calls
+ * tools from a script whose printed output past 40,000 bytes loses its middle, which breaks the JSON (a direct tool call
+ * keeps 48,000). Claude Code passes a result on as it is up to about 50,000 characters. 32,000 leaves room for both, and
+ * for whatever else the script prints.
  */
-const LIST_CHARS = 40_000;
+const LIST_BYTES = 32_000;
 /**
  * What a list shows of each task when the whole list is longer, one level after another until it fits: the free text
  * cut; cut shorter and no run errors; then only names, times, state and ids. A single task always shows whole.
@@ -152,7 +153,7 @@ function headline(reply: ScheduleReply, done: string): string {
     default: { const exhaustive: never = reply; return exhaustive; }
   }
 }
-/** One line, then the reply as JSON, each task in {@link taskView}; a list over {@link LIST_CHARS} goes out cut and says so. */
+/** One line, then the reply as JSON, each task in {@link taskView}; a list over {@link LIST_BYTES} goes out cut and says so. */
 function answer(reply: ScheduleReply, turn: Turn, done = ''): string {
   const line = headline(reply, done);
   const say = (shown: unknown, first = line) => `${first}\n${JSON.stringify(shown)}`;
@@ -162,7 +163,7 @@ function answer(reply: ScheduleReply, turn: Turn, done = ''): string {
         level ? `${line} · 太长的内容截短了，用 schedule_list 带 taskId 看一个任务的全文` : line);
       // A level is tried only when the one before was too long, so the one a list goes out at has cut something.
       let text = list();
-      for (const level of LIST_LEVELS) if (text.length > LIST_CHARS) text = list(level);
+      for (const level of LIST_LEVELS) if (Buffer.byteLength(text) > LIST_BYTES) text = list(level);
       return text;
     }
     case 'task': return say({ ...reply, task: taskView(reply.task, turn) });
