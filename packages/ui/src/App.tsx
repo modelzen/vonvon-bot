@@ -50,6 +50,7 @@ import {
   type DesktopSnapshot,
   type Job,
   type Membership,
+  type ScheduledTaskView,
   backendLabel,
   desktopUpdateNotice,
   formatTime,
@@ -58,11 +59,12 @@ import type { CollaborationView, Page } from "./collaboration-model";
 import {SettingsPanel} from "./settings/SettingsPanel";
 import {DraftGuardProvider, useDraftGuard} from './settings/DraftGuard';
 import {decisionProviderSection, diagnosticsSection, searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
-import {initialRoute, openMembership, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type AgentPane, type CollaborationRoute, joinedGroupRoute} from './collaboration-navigation';
+import {agentPanes, initialRoute, openMembership, openScheduleTab, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type AgentPane, type CollaborationRoute, joinedGroupRoute} from './collaboration-navigation';
 import {SearchDialog} from './SearchDialog';
 import {flushSync} from 'react-dom';
 import {GroupWorkspace, groupTabForSection, type GroupDesignTab} from './GroupWorkspace';
 import {BotMap} from './BotMap';
+import {BotSchedules} from './BotSchedules';
 import {MEMORY_SEEN_EVENT} from './MemoryMap';
 import {MigrationBanner} from './MigrationBanner';
 import {newTag, sumCounts, useNewCounts} from './new-counts';
@@ -129,8 +131,8 @@ function DetailTabs({selected, onSelect, first, second}: {selected: 'overview' |
 }
 function BotDetailTabs({selected, onSelect}: {selected: AgentPane['kind']; onSelect: (pane: AgentPane) => void}) {
   return <nav className="collaboration-detail-tabs gooey-tabs" aria-label="Bot 详情">
-    <NavigationIndicator activeIndex={selected === 'groups' ? 0 : selected === 'profile' ? 1 : 2}/>
-    {([{kind: 'groups', label: '群聊'}, {kind: 'profile', label: '记忆'}, {kind: 'settings', label: '设置'}] as const).map(pane =>
+    <NavigationIndicator activeIndex={agentPanes.findIndex(pane => pane.kind === selected)}/>
+    {agentPanes.map(pane =>
       <button key={pane.kind} type="button" aria-current={selected === pane.kind ? 'page' : undefined} className={selected === pane.kind ? 'is-selected' : ''} onClick={() => onSelect({kind: pane.kind})}>{pane.label}</button>)}
   </nav>;
 }
@@ -172,6 +174,16 @@ function DesktopApp() {
     })();
     return () => {active = false;};
   }, [client, page, searchOpen, snapshot?.host.kind, connectedVersion]);
+  // Task names are not in the snapshot: search asks the running Bots once each time it opens.
+  const [searchSchedules, setSearchSchedules] = useState<ScheduledTaskView[]>([]);
+  useEffect(() => {
+    if (!searchOpen) return;
+    let active = true;
+    const running = latestSnapshot.current?.agents.filter(agent => agent.running) ?? [];
+    void Promise.all(running.map(agent => client.schedule(agent.id, {action: 'listBot'}).then(reply => reply.kind === 'tasks' ? reply.tasks : [], () => [])))
+      .then(lists => {if (active) setSearchSchedules(lists.flat());});
+    return () => {active = false;};
+  }, [client, searchOpen]);
   const [settingsReturn, setSettingsReturn] = useState<{page: Page; route: CollaborationRoute; label: string}>();
   const newCounts = useNewCounts(snapshot?.revision, MEMORY_SEEN_EVENT);
   const [groupDirectoryState, setGroupDirectoryState] = useState<GroupDirectoryState>({query: '', expanded: {}});
@@ -367,6 +379,20 @@ function DesktopApp() {
     navigate(() => {
       setGroupTabs(current => ({...current, [memberId]: 'memory'}));
       setNewMemoryFocus(current => ({memberId, token: (current?.token ?? 0) + 1}));
+      setRoute(current => openMembership(current, memberId, snapshot));
+      setPage('collaboration');
+      setSettingsReturn(undefined);
+      setFeatureId(undefined);
+      setSearchTarget(undefined);
+      setNotice(undefined);
+    });
+  }
+  /** The group page of one Bot opened on its 任务 tab, from the Bot page's 任务 pane (which stays the parent). */
+  function openGroupSchedule(memberId: MembershipId) {
+    if (!snapshot?.memberships.some(item => item.id === memberId)) return;
+    navigate(() => {
+      setGroupTabs(current => openScheduleTab(current, memberId));
+      setNewMemoryFocus(undefined);
       setRoute(current => openMembership(current, memberId, snapshot));
       setPage('collaboration');
       setSettingsReturn(undefined);
@@ -765,7 +791,8 @@ function DesktopApp() {
                   </header>
                   <div className="bot-detail-navigation"><BotDetailTabs selected={route.kind === 'agent' ? route.pane.kind : 'groups'} onSelect={agentPane}/></div>
                   </div>
-                  {route.kind === 'agent' && route.pane.kind === 'profile' ? <BotMap agentId={agent.id} snapshot={snapshot} onProject={id => select({kind: 'project', id})}/> : detail.kind !== 'agent-settings' ? <>
+                  {route.kind === 'agent' && route.pane.kind === 'profile' ? <BotMap agentId={agent.id} snapshot={snapshot} onProject={id => select({kind: 'project', id})}/>
+                  : route.kind === 'agent' && route.pane.kind === 'schedule' ? <BotSchedules key={agent.id} agentId={agent.id} snapshot={snapshot} onOpen={openGroupSchedule}/> : detail.kind !== 'agent-settings' ? <>
                   <BotGroupList
                     snapshot={snapshot}
                     agent={agent}
@@ -898,7 +925,7 @@ function DesktopApp() {
           </>}
         </div>
       </AppShell>
-      {searchOpen && <SearchDialog open entries={searchEntries(snapshot, {externalCoreAvailable})} onClose={() => setSearchOpen(false)} onSelect={openSearchResult}/>}
+      {searchOpen && <SearchDialog open entries={searchEntries(snapshot, {externalCoreAvailable, schedules: searchSchedules})} onClose={() => setSearchOpen(false)} onSelect={openSearchResult}/>}
       <PendingGroupToasts pages={pendingGroups} agents={snapshot.agents} hidden={modal !== null} onContinue={(owner, group) => openJoin(owner.id, group)} />
       {modal?.kind === 'selectJoinBot' && <SelectJoinBotDialog snapshot={snapshot} onSelect={id => openJoin(id)} onClose={() => setModal(null)}/>}
       {modal?.kind === 'join' && (() => {

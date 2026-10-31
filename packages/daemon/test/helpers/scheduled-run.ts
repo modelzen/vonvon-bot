@@ -22,9 +22,11 @@ type Fn = Mock<(...args: any[]) => any>;
 export const fake: {
   project: Record<string, unknown> | undefined; topicGroup: boolean;
   backend: { capabilities: { steer: boolean }; id: string; listModels: Fn; resumeThread: Fn; startThread: Fn };
-  createCard: Fn; stream: Fn; final: Fn; send: Fn; reply: Fn; topicList: Fn; messageGet: Fn; chatGet: Fn; getSession: Fn; listSessions: Fn;
+  createCard: Fn; stream: Fn; final: Fn; send: Fn; reply: Fn; topicList: Fn; messageGet: Fn; chatGet: Fn; getSession: Fn; listSessions: Fn; upsertSession: Fn;
   log: { info: Fn; warn: Fn; fail: Fn };
   run?: (job: ScheduledJob) => Promise<ScheduledOutcome>;
+  /** The context update every turn carries (planTurnUpdate's text); none by default. */
+  contextUpdate?: string;
 } = {
   project: {},
   topicGroup: false,
@@ -39,6 +41,7 @@ export const fake: {
   topicList: vi.fn(async (..._args: unknown[]) => ({ code: 0, data: { items: [{ message_id: 'anchor', chat_id: 'chat', thread_id: 'topic-old' }] } })),
   getSession: vi.fn(async (key: string): Promise<Record<string, unknown> | undefined> => ({ threadId: key, chatId: 'chat', sessionId: 'host', backend: 'codex', cwd: '/test', summary: '' })),
   listSessions: vi.fn(),
+  upsertSession: vi.fn(async (..._args: unknown[]) => undefined),
   log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() },
 };
 vi.mock('../../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown, fn: () => unknown) => fn() }));
@@ -46,13 +49,13 @@ vi.mock('../../src/agent', async (original) => ({ ...await original<object>(), c
 vi.mock('../../src/bot/context-assembly', async original => ({
   ...await original<object>(),
   loadContextSources: async () => ({ place: { kind: 'comment' }, botName: 'fixture', soul: '', role: { identity: '', notes: '', headed: false }, supplement: '', failed: {} }),
-  planTurnUpdate: async () => ({ context: { versions: {}, nonce: 'fixture' } }),
+  planTurnUpdate: async () => ({ ...(fake.contextUpdate ? { text: fake.contextUpdate } : {}), context: { versions: {}, nonce: 'fixture' } }),
 }));
 vi.mock('../../src/project/registry', async (original) => ({
   ...await original<object>(), getProjectByChatId: async () => fake.project, getProjectByName: async () => fake.project,
 }));
 vi.mock('../../src/bot/session-store', async (original) => ({
-  ...await original<object>(), getSession: fake.getSession, listSessions: fake.listSessions, patchSession: async () => undefined, upsertSession: async () => undefined,
+  ...await original<object>(), getSession: fake.getSession, listSessions: fake.listSessions, patchSession: async () => undefined, upsertSession: fake.upsertSession,
 }));
 vi.mock('../../src/bot/context-weave', async (original) => {
   const empty = async () => ({ messages: [], ok: true, complete: true });
@@ -166,6 +169,7 @@ export async function setup(kind: 'single' | 'multi' | 'smart', opts: { entries?
   vi.clearAllMocks();
   fake.project = { name: 'test', chatId: 'chat', cwd: '/test', kind: kind === 'multi' ? 'multi' : 'single', ...(kind === 'smart' ? { smart: true } : {}) };
   fake.topicGroup = false;
+  fake.contextUpdate = undefined;
   fake.backend.resumeThread.mockReset();
   fake.backend.startThread.mockReset();
   fake.createCard.mockResolvedValue('card');
