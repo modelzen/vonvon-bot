@@ -8,6 +8,8 @@ import { classifyServiceFailure, serviceActionPath, writeServiceActionRecord, ty
 import type { ServiceAdapter, ServiceTransactionOutcome } from '../../service/adapter';
 import { describeServiceExits } from '../../service/exits';
 import { enableFailed, enableLinger, lingerLine, readLinger, userManagerHint, type Linger } from '../../service/linux-session';
+import { CommandError } from '../command-error';
+import type { Io } from '../daemon-client';
 
 const STATE_TEXT = {
   'not-installed': 'not installed', running: 'running', stopped: 'installed, stopped', disabled: 'turned off',
@@ -25,13 +27,14 @@ export type ServiceCommandDependencies = {
 };
 export type LingerChoice = 'ask' | 'on' | 'off';
 type LinuxServiceSteps = {
-  /** False when `--linger` was given and linger is still off. */
-  afterInstall: (linger: LingerChoice) => Promise<boolean>;
+  /** False when `--linger` was given and linger is still off. With `notes` (--json) nothing is asked and the lines go there. */
+  afterInstall: (linger: LingerChoice, notes?: string[]) => Promise<boolean>;
   afterUninstall: () => Promise<string | undefined>;
   hint: () => Promise<string | undefined>;
 };
 
 const detailOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
+const TEXT: Io = { json: false, write: text => { process.stdout.write(text); } };
 const succeeded = (kind: ServiceTransactionOutcome['kind']): boolean => kind === 'installed' || kind === 'already-installed' || kind === 'uninstalled' || kind === 'not-installed';
 
 async function exists(path: string): Promise<boolean> {
@@ -43,8 +46,9 @@ async function exists(path: string): Promise<boolean> {
  * Prints the outcome; anything but a completed install or uninstall exits 1 with the detail and leftovers.
  * With a data root, the `service` mutex serializes every caller and `service-action.json` records the run.
  * `keepRunning` starts the daemon that was running before again, on its port, when the transaction left none.
+ * --json prints one line, a failure's `error.partial` holding the same fields, and asks nothing.
  */
-export async function runServiceCommand(action: 'install' | 'uninstall', adapter?: Pick<ServiceAdapter, 'install' | 'uninstall'>, options: { port?: number; keepRunning?: boolean; linger?: LingerChoice } = {}, overrides: Partial<ServiceCommandDependencies> = {}): Promise<void> {
+export async function runServiceCommand(action: 'install' | 'uninstall', adapter?: Pick<ServiceAdapter, 'install' | 'uninstall'>, options: { port?: number; keepRunning?: boolean; linger?: LingerChoice } = {}, overrides: Partial<ServiceCommandDependencies> = {}, io: Io = TEXT): Promise<void> {
   const service = adapter ?? (await import('../../service/adapter')).getServiceAdapter();
   const d: ServiceCommandDependencies = {
     root: paths.appDir, readOwner: readRunningPidLock, now: Date.now, linux: process.platform === 'linux' ? linuxServiceSteps() : undefined,
@@ -99,12 +103,21 @@ export async function runServiceCommand(action: 'install' | 'uninstall', adapter
   const lines = [`${result.kind}: ${result.detail}`];
   if (restart.restarted) lines.push(`Daemon PID ${restart.restarted.pid} was started again, detached, on port ${port}.`);
   if (restart.restartError) lines.push(`The daemon was not started again: ${restart.restartError}. Run vonvon daemon start.`);
-  // A successful install reports the service's own daemon in `retained` and its plist or unit in `leftovers`; neither is left behind.
+  // A successful install reports the service's own daemon in `retained` and its plist or unit in `leftovers`; neither is
+  // left behind, so only the other outcomes name the leftovers.
+  const outcome = {
+    action, result: result.kind, detail: result.detail, retained: result.retained,
+    ...restart.restarted ? { restarted: { ...restart.restarted, port } } : {}, ...restart.restartError ? { restartError: restart.restartError } : {},
+  };
   if (result.kind === 'installed' || result.kind === 'already-installed') {
     if (result.retained !== null) lines.push(`Daemon PID ${result.retained.pid} is running under the service.`);
-    process.stdout.write(`${lines.join('\n')}\n`);
+    if (!io.json) io.write(`${lines.join('\n')}\n`);
     // After the mutex: asking about linger can wait on the user.
-    if (d.linux && !(await d.linux.afterInstall(options.linger ?? 'ask'))) throw new Error('服务已经装好，只是 linger 没开成。');
+    const notes: string[] = [];
+    if (d.linux && !(await (io.json ? d.linux.afterInstall(options.linger ?? 'ask', notes) : d.linux.afterInstall(options.linger ?? 'ask')))) {
+      throw new CommandError('failed', '服务已经装好，只是 linger 没开成。', { reason: 'linger_failed', partial: { ...outcome, notes } });
+    }
+    if (io.json) io.write(`${JSON.stringify({ ok: true, ...outcome, notes })}\n`);
     return;
   }
   if (result.retained !== null) lines.push(`Daemon PID ${result.retained.pid} is still running.`);
@@ -114,7 +127,7 @@ export async function runServiceCommand(action: 'install' | 'uninstall', adapter
     case 'not-installed': {
       const linger = result.kind === 'uninstalled' ? await d.linux?.afterUninstall() : undefined;
       if (linger) lines.push(linger);
-      process.stdout.write(`${lines.join('\n')}\n`);
+      io.write(io.json ? `${JSON.stringify({ ok: true, ...outcome, leftovers: result.leftovers, notes: linger ? [linger] : [] })}\n` : `${lines.join('\n')}\n`);
       return;
     }
     case 'install_refused':
@@ -128,7 +141,7 @@ export async function runServiceCommand(action: 'install' | 'uninstall', adapter
         const hint = await d.linux?.hint();
         if (hint) lines.push(hint);
       }
-      throw new Error(lines.join('\n'));
+      throw new CommandError('failed', lines.join('\n'), { reason: result.kind, partial: { ...outcome, leftovers: result.leftovers } });
     default: {
       const exhaustive: never = result.kind;
       throw new Error(`Unknown service result: ${String(exhaustive)}`);
@@ -182,12 +195,13 @@ function ask(question: string): Promise<boolean> {
 function linuxServiceSteps(): LinuxServiceSteps {
   const user = userInfo().username;
   return {
-    afterInstall: async choice => {
+    afterInstall: async (choice, notes) => {
       const { serviceOpenGuide } = await import('./open');
-      const tty = Boolean(process.stdout.isTTY);
+      // --json is not a terminal either: no question, and no link with the credential
+      const tty = !notes && Boolean(process.stdout.isTTY);
       return afterLinuxInstall(choice, {
         readLinger, enableLinger, ask, interactive: tty && Boolean(process.stdin.isTTY), user,
-        guide: () => serviceOpenGuide(tty), write: text => { process.stdout.write(text); },
+        guide: () => serviceOpenGuide(tty), write: text => { if (notes) notes.push(...text.replace(/\n$/, '').split('\n')); else process.stdout.write(text); },
       });
     },
     // linger belongs to the account and other user services may need it, so uninstall leaves it on.
@@ -199,7 +213,7 @@ function linuxServiceSteps(): LinuxServiceSteps {
 export async function runServiceStatus(json: boolean, adapter?: Pick<ServiceAdapter, 'status'>): Promise<void> {
   const status = await (adapter ?? (await import('../../service/adapter')).getServiceAdapter()).status();
   if (json) {
-    process.stdout.write(`${JSON.stringify(status)}\n`);
+    process.stdout.write(`${JSON.stringify({ ok: true, ...status })}\n`);
     return;
   }
   process.stdout.write([

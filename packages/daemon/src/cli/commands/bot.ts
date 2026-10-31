@@ -2,6 +2,7 @@ import QRCode from 'qrcode';
 import { ConnectionError, type VonvonClient } from '@vonvon/client';
 import { botSteps, linuxSteps, serviceStep, toolSteps, type AdminSetupStatus, type Agent, type AgentId, type DesktopSnapshot, type Job, type JobId, type SetupStep, type StepTone } from '@vonvon/protocol';
 import type { DirectoryRepair } from '../../config/bots';
+import { badArgs, CommandError } from '../command-error';
 import { localTime, pickBot, print, printable, want, withDaemon, withoutAvatar, NO_BOT, type Daemon, type Io } from '../daemon-client';
 
 const MARK: Record<StepTone, string> = { success: '✓', warning: '!', danger: '✗', neutral: '·' };
@@ -48,7 +49,7 @@ function stepLines(step: SetupStep): string[] {
 
 /**
  * Exits 0 whatever the steps show; scripts read `ready` from --json. When the checklist read fails it prints what the
- * web page shows then (检测失败, the connection, the tools and the service) and exits 1.
+ * web page shows then (检测失败, the connection, the tools and the service) and exits 1; --json has them in `error.partial`.
  */
 export async function runBotStatus(wanted: string | undefined, io: Io, daemon: Daemon = withDaemon): Promise<void> {
   const { agent, setup, problem, tools, linux, service } = await daemon(async call => {
@@ -65,13 +66,18 @@ export async function runBotStatus(wanted: string | undefined, io: Io, daemon: D
   const steps = [...bot, ...tools.steps, ...linux, service];
   const left = bot.filter(step => !step.done).length + (tools.ready ? 0 : 1);
   const human = [`${agent.name}（${agent.id}）`, ...agent.paused ? [PAUSED_BOT.replace('{n}', String(agent.paused.crashes))] : [], ...steps.flatMap(stepLines)];
-  if (problem === undefined) human.push(left ? `还有 ${left} 步没完成。` : '全部就绪。');
-  print(io, human, { bot: withoutAvatar(agent), ...(setup ? { setup } : { problem }), steps, ready: problem === undefined && left === 0 });
-  if (problem !== undefined) throw new Error('清单没有读全，稍后重新运行 vonvon bot status。');
+  const json = { bot: withoutAvatar(agent), ...(setup ? { setup } : { problem }), steps, ready: problem === undefined && left === 0 };
+  if (problem === undefined) {
+    human.push(left ? `还有 ${left} 步没完成。` : '全部就绪。');
+    print(io, human, json);
+    return;
+  }
+  if (!io.json) print(io, human, json);
+  throw new CommandError('failed', '清单没有读全，稍后重新运行 vonvon bot status。', { partial: json });
 }
 
 type Registration = { kind: 'succeeded'; agentId: AgentId } | { kind: 'failed'; message: string; code?: string | undefined }
-  | { kind: 'cancelled' } | { kind: 'refused'; message: string } | { kind: 'interrupted' } | { kind: 'lost'; shown: boolean };
+  | { kind: 'cancelled' } | { kind: 'refused'; message: string; code: string } | { kind: 'interrupted' } | { kind: 'lost'; shown: boolean };
 export type AddDependencies = {
   /** stdout is a terminal: a QR in a log could be scanned by someone else. */
   tty: boolean;
@@ -79,15 +85,15 @@ export type AddDependencies = {
   qr: (url: string) => Promise<string>;
   /** Installs a Ctrl-C handler and returns its removal. */
   onInterrupt: (handler: () => void) => () => void;
-  exitCode: (code: number) => void;
 };
 const addDefaults = (): AddDependencies => ({
   tty: Boolean(process.stdout.isTTY),
   // The same package and code as the web page's image (D/server/jobs.ts); half blocks with explicit black and white.
   qr: url => QRCode.toString(url, { type: 'terminal', small: true }),
   onInterrupt: handler => { process.on('SIGINT', handler); return () => { process.off('SIGINT', handler); }; },
-  exitCode: code => { process.exitCode = code; },
 });
+/** --json: one JSON object per line, `event` naming it; the last line is the result, `ok: true`, or the failure. */
+const emit = (io: Io, event: object): void => io.write(`${JSON.stringify(event)}\n`);
 /** The QR expires after 10 minutes and the SDK then fails the job; this only bounds a daemon that never answers. */
 const REGISTRATION_WAIT = 15 * 60_000;
 const SCAN_UNKNOWN = '不知道扫码有没有完成：运行 vonvon bot list 看看。';
@@ -114,14 +120,17 @@ function follow(c: VonvonClient, io: Io, d: AddDependencies, onStop: (stop: () =
     const fail = (error: unknown): void => settle(() => reject(error));
     async function show(job: Job): Promise<void> {
       if (settled) return;
-      if (job.phase === 'running' && !said) { said = true; io.write(`${printable(job.message)}\n`); }
+      if (job.phase === 'running' && !said) { said = true; if (io.json) emit(io, { event: 'phase', phase: job.phase, message: job.message }); else io.write(`${printable(job.message)}\n`); }
       if (job.phase === 'qr') {
-        if (job.status !== status) {
+        const switched = job.status !== status;
+        if (switched) {
           status = job.status;
-          if (status === 'domain_switched') io.write('识别到国际版租户，改用 larksuite.com。\n');
+          if (status === 'domain_switched' && !io.json) io.write('识别到国际版租户，改用 larksuite.com。\n');
         }
+        if (io.json && (switched || job.url !== url)) emit(io, { event: 'qr', url: job.url, expiresAt: job.expiresAt, ...(job.status ? { status: job.status } : {}) });
         if (job.url === url) return;
         url = job.url;
+        if (io.json) return;
         const art = await d.qr(job.url);
         // The QR keeps its escape sequences; the link from Feishu does not.
         io.write(`用飞书 App 扫下面的二维码，建一个新的飞书应用（${localTime(job.expiresAt).slice(11)} 前有效）：\n${art.replace(/\n?$/, '\n')}`
@@ -146,7 +155,7 @@ function follow(c: VonvonClient, io: Io, d: AddDependencies, onStop: (stop: () =
       void Promise.race([c.run({ type: 'cancelJob', jobId }).catch(() => undefined), wait]).then(() => { clearTimeout(timer); finish({ kind: 'interrupted' }); });
     }));
     c.run({ type: 'registerAgent' }).then(result => {
-      if (result.kind === 'refused') finish({ kind: 'refused', message: result.message });
+      if (result.kind === 'refused') finish({ kind: 'refused', message: result.message, code: result.code });
       else if (result.kind !== 'started') fail(new Error(`daemon 回了意外的结果（${result.kind}）。`));
       else { jobId = result.jobId; if (latest) observe(latest); }
     }, error => {
@@ -158,21 +167,23 @@ function follow(c: VonvonClient, io: Io, d: AddDependencies, onStop: (stop: () =
 
 /**
  * `vonvon bot add`: the web page's QR registration in a terminal (3.10 step 5). Exits 0 once the bot is saved, even
- * when its checklist cannot be read; 1 when the scan fails, is cancelled elsewhere or the connection drops; 130 on Ctrl-C.
+ * when its checklist cannot be read; 1 when the scan fails or is cancelled elsewhere, 3 when the connection drops before
+ * the QR and 6 after it, 130 on Ctrl-C. --json (devices 8.1) prints JSON Lines: the steps, each QR link, then the result.
  */
 export async function runBotAdd(io: Io, daemon: Daemon = withDaemon, overrides: Partial<AddDependencies> = {}): Promise<void> {
   const d: AddDependencies = { ...addDefaults(), ...overrides };
-  if (!d.tty) throw new Error('vonvon bot add 要在终端里运行：二维码打进日志会被别人扫走。没有终端的话，用网页注册（vonvon open --print）。');
+  // --json is asked for by name, like `pair --json`: the link is the output, kept out of logs by whoever runs it
+  if (!d.tty && !io.json) throw badArgs('vonvon bot add 要在终端里运行：二维码打进日志会被别人扫走。脚本里用 vonvon bot add --json（输出别进日志），或者用网页注册（vonvon open --print）。');
   let stop = (): void => {};
   try {
     await daemon(async call => {
       const outcome = await call('扫码注册', c => follow(c, io, d, each => { stop = each; }), { ms: REGISTRATION_WAIT, unknown: SCAN_UNKNOWN });
       switch (outcome.kind) {
-        case 'interrupted': io.write('已取消扫码。\n'); d.exitCode(130); return;
-        case 'failed': throw new Error(`${outcome.message}${outcome.code === 'expired_token' ? '重新运行 vonvon bot add。' : ''}`);
-        case 'cancelled': throw new Error('扫码被取消了：可能在网页里又开了一次注册（同一时间只能有一个）。');
-        case 'refused': throw new Error(outcome.message);
-        case 'lost': throw new Error(outcome.shown ? SCAN_UNKNOWN : '和 daemon 的连接断了，扫码已经取消。重新运行 vonvon bot add。');
+        case 'interrupted': throw new CommandError('interrupted', '已取消扫码。');
+        case 'failed': throw new CommandError('failed', `${outcome.message}${outcome.code === 'expired_token' ? '重新运行 vonvon bot add。' : ''}`, outcome.code ? { reason: outcome.code } : {});
+        case 'cancelled': throw new CommandError('failed', '扫码被取消了：可能在网页里又开了一次注册（同一时间只能有一个）。', { reason: 'cancelled' });
+        case 'refused': throw new CommandError('failed', outcome.message, { reason: outcome.code });
+        case 'lost': throw outcome.shown ? new CommandError('outcome-unknown', SCAN_UNKNOWN) : new CommandError('connection', '和 daemon 的连接断了，扫码已经取消。重新运行 vonvon bot add。');
         case 'succeeded': break;
       }
       let agent: Agent | undefined;
@@ -186,7 +197,7 @@ export async function runBotAdd(io: Io, daemon: Daemon = withDaemon, overrides: 
       if (problem !== undefined) human.push(`清单没读到：${problem}。稍后运行 vonvon bot status。`);
       else if (agent && setup) human.push('接下来在飞书开发者后台做完这几步，做完一步运行 vonvon bot status 看进度：', ...botSteps(agent, setup).flatMap(stepLines));
       else human.push('运行 vonvon bot status 看接下来的几步。');
-      print(io, human, null);
+      print(io, human, { event: 'result', agentId: outcome.agentId, ...(agent ? { bot: withoutAvatar(agent) } : {}), ...(setup ? { setup } : {}), ...(problem === undefined ? {} : { problem }) });
     });
   } finally { stop(); }
 }
