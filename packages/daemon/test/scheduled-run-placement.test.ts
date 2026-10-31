@@ -68,6 +68,21 @@ describe('a scheduled run in the main session', () => {
     expect(run.consumed[1]!.text).toContain('插一句');
     run.turns[1]!.resolve();
   });
+
+  it('a task named with an <at> in a main session it starts: the session\'s summary @ nobody', async () => {
+    const { runScheduled } = await start('single');
+    const run = thread();
+    fake.backend.startThread.mockResolvedValue(run.t);
+    const getSession = fake.getSession.getMockImplementation()!;
+    fake.getSession.mockImplementation(async () => undefined); // no session yet: the run starts one
+    try {
+      const result = runScheduled(job({ name: '日报 <at user_id="all"></at>' }));
+      await until(() => expect(run.consumed).toHaveLength(1));
+      expect(fake.upsertSession).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'chat', summary: '定时任务「日报 @所有人」' }));
+      run.turns[0]!.resolve();
+      await expect(result).resolves.toMatchObject({ status: 'done' });
+    } finally { fake.getSession.mockImplementation(getSession); }
+  });
 });
 
 describe('a scheduled run in a new topic', () => {
@@ -108,6 +123,8 @@ describe('a scheduled run in a new topic', () => {
     const card = JSON.stringify(fake.createCard.mock.calls[0]![2]);
     expect(card).toContain(`⏰ 定时任务「${shown}」 · 手动运行`);
     expect(card).not.toContain('<at');
+    // The session's summary is what a /resume says the session is in use under, in a markdown message.
+    expect(fake.upsertSession).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'topic-new', summary: `定时任务「${shown}」` }));
     run.turns[0]!.resolve();
     await expect(result).resolves.toMatchObject({ status: 'done' });
   });

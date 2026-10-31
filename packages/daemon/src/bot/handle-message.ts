@@ -784,6 +784,8 @@ interface ActiveState {
   /** A settings change closed this run's thread (evictLiveSessionsForChat, or startReservedRun when it was closed before
    * the run began): the turns queued behind are dropped, a scheduled one skipped, the group having changed. */
   evicted?: true;
+  /** launchRun dropped the queue for that change, not for a ⏹: a scheduled turn still in intake is skipped too (intakeStopped). */
+  evictedDrop?: true;
 }
 
 /** Inputs a synthetic turn (🔁 重试) carries that a real message would not. */
@@ -3209,7 +3211,7 @@ export function createOrchestrator(
     return orderTurns(sessionKey, async () => {
       if (staleRetry(extra)) return;
       if (owner?.intakeCancelled) {
-        if (dropScheduled(extra, scheduleStopped()) || dropBotMessage(msg, 'intake-cancelled', '会话被停下了')) return;
+        if (dropScheduled(extra, intakeStopped(owner)) || dropBotMessage(msg, 'intake-cancelled', '会话被停下了')) return;
         await channel.send(msg.chatId, { markdown: '排队期间会话已停止，请重发本条消息。' }, { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined);
         return;
       }
@@ -3244,7 +3246,7 @@ export function createOrchestrator(
       if (!extra?.images && messageHasImages(msg)) pendingImages = collectInboundImages(channel, msg);
       const [images, woven] = await Promise.all([pendingImages, ingestContext(msg, text, extra, project)]);
       if (existing.intakeCancelled) {
-        if (dropScheduled(extra, scheduleStopped()) || dropBotMessage(msg, 'intake-cancelled', '会话被停下了')) return;
+        if (dropScheduled(extra, intakeStopped(existing)) || dropBotMessage(msg, 'intake-cancelled', '会话被停下了')) return;
         await channel.send(msg.chatId, { markdown: '本条消息处理期间会话已停止，请重发。' }, { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined);
         return;
       }
@@ -7474,6 +7476,23 @@ export function createOrchestrator(
       senderId: turn?.requesterOpenId ?? opts.requesterOpenId ?? '', createTime: turn?.requestedAt ?? 0 });
     const noteTurnFailure = (turn: QueuedTurn | undefined, failure: TurnFailure): void =>
       noteFailure(notedOf(turn), opts.flat ? 'main' : 'topic', opts.backendId, failure);
+    /** Ends the run with the turns queued behind it (the loop's stops below): people are asked to resend under `target`,
+     * a scheduled turn settled by `scheduledWhy` (askAgain). */
+    const dropQueue = (scheduledWhy: string, target: string | undefined, facts: Record<string, boolean>): void => {
+      state.intakeCancelled = true;
+      if (scheduledWhy === 'occupied') state.evictedDrop = true;
+      dropCompact(state);
+      const dropped = askAgain(state.queue, opts.chatId, opts.flat ? 'main' : 'topic', 'queue-dropped', '会话被停下了', scheduledWhy);
+      if (dropped === 0) return;
+      void trackTask(channel
+        .send(
+          opts.chatId,
+          { markdown: `⚠️ ${dropped} 条排队消息已丢弃，请重发。` },
+          { replyTo: target, replyInThread: !opts.flat },
+        )
+        .catch(() => undefined));
+      log.info('intake', 'queue-dropped', { depth: state.queue.length, ...facts, evicted: Boolean(state.evicted) });
+    };
     try {
       let currentTurn: QueuedTurn = {
         input: { text: opts.firstText, images: opts.images },
@@ -7559,6 +7578,14 @@ export function createOrchestrator(
         }
         const turnServiceTier = await reconcileStoredSpeed(turnBackend, rec?.threadId ?? topicThreadId, rec?.cwd ?? runCwd, turnModel, rec?.serviceTier);
         turnInput = await preparePersonality(opts.thread, opts.chatId, turnInput, topicThreadId, opts.backendId);
+        // A settings change closed the thread during the awaits above, after the last turn's end found it open: this queued
+        // turn goes back to the head of the queue, dropped as there. Only a queued one: the first turn, evicted while it
+        // was prepared, still runs (T2 做法).
+        if (fromQueue && state.evicted) {
+          state.queue.unshift(currentTurn);
+          dropQueue('occupied', replyTo, {});
+          break;
+        }
         const run = opts.thread.runStreamed(turnInput, { model: turnModel, effort: turnEffort, serviceTier: turnServiceTier });
         let unseen = currentTurn.seen;
         titleTurnAttempted = true;
@@ -8091,22 +8118,9 @@ export function createOrchestrator(
         // closed the thread (state.evicted), even after procDead was read above, ends
         // it too: the next turn would run on the closed thread.
         if (killed || procDead || interrupted || compactDied || state.evicted) {
-          state.intakeCancelled = true;
-          dropCompact(state);
           // Only a ⏹ is the user's, and a settings change's eviction the group's: a scheduled turn queued behind a watchdog
           // kill, a dead process or an ask fault failed (T2 4.2).
-          const dropped = askAgain(state.queue, opts.chatId, opts.flat ? 'main' : 'topic', 'queue-dropped', '会话被停下了',
-            interrupted && !askFaulted ? 'queue-dropped' : state.evicted ? 'occupied' : 'run-failed');
-          if (dropped > 0) {
-            void trackTask(channel
-              .send(
-                opts.chatId,
-                { markdown: `⚠️ ${dropped} 条排队消息已丢弃，请重发。` },
-                { replyTo: finalMsgId, replyInThread: !opts.flat },
-              )
-              .catch(() => undefined));
-            log.info('intake', 'queue-dropped', { depth: state.queue.length, killed, procDead, interrupted, evicted: Boolean(state.evicted) });
-          }
+          dropQueue(interrupted && !askFaulted ? 'queue-dropped' : state.evicted ? 'occupied' : 'run-failed', finalMsgId, { killed, procDead, interrupted });
           break;
         }
         // A message queued while this run's back-fill was pulled may be a line of
@@ -9426,6 +9440,9 @@ export function createOrchestrator(
   const scheduledHooks = new Set<ScheduledHook>();
   const SCHEDULE_UPDATING: ScheduledOutcome = { status: 'skipped', reason: 'updating' };
   const scheduleStopped = (): ScheduledOutcome => ({ status: 'interrupted', by: shuttingDown ? 'shutdown' : 'user' });
+  /** A scheduled turn still in intake when its session's intake was cancelled: settled as the turns queued were when a
+   * settings change's eviction dropped them (launchRun), else as a ⏹'s or the shutdown's. */
+  const intakeStopped = (state: ActiveState): ScheduledOutcome => (state.evictedDrop ? SCHEDULE_UPDATING : scheduleStopped());
   /** Where a scheduled turn's cards and messages go instead of its synthetic message; '' is a new main-area message. */
   const landingOf = (hook: ScheduledHook): string => (hook.target.kind === 'topic' ? hook.target.anchor : '');
   const ranFor = (hook: ScheduledHook): number => Math.max(0, Date.now() - (hook.job.task.inflight?.startedAt ?? Date.now()));
@@ -9539,7 +9556,7 @@ export function createOrchestrator(
       messageId: `vsched_${task.id}_${hook.job.slot}`, chatId, chatType: 'group', senderId: '', content: text, rawContentType: 'text',
       resources: [], mentions: [], mentionAll: false, mentionedBot: false, createTime: Date.now(), ...(topicId ? { threadId: topicId } : {}),
     };
-    await handleTurn(msg, text, topicId ?? chatId, !topicId, project, turnPerm(project), { scheduled: hook, queueOnly: true, summary: `定时任务「${task.name}」` });
+    await handleTurn(msg, text, topicId ?? chatId, !topicId, project, turnPerm(project), { scheduled: hook, queueOnly: true, summary: `定时任务「${plainTaskName(task.name)}」` });
   }
 
   /**
@@ -9586,7 +9603,7 @@ export function createOrchestrator(
         launched = true;
         await trackRun(launchRun({
           chatId, replyTo: root.messageId, replyInThread: true, thread, firstText, model, effort, serviceTier: 'standard',
-          modelCustom: isCustomDefault(prefer, model), cwd, ...perm, summary: titleSource.text, requesterKind: 'unknown',
+          modelCustom: isCustomDefault(prefer, model), cwd, ...perm, summary: `定时任务「${plainTaskName(job.task.name)}」`, requesterKind: 'unknown',
           requestedAt: rootAt, seenAt: rootAt, from: section.main[0]?.createTime || rootAt,
           openTopic: { id: root.messageId, from: { kind: 'self' }, at: rootAt, text: rootText },
           smart: sessionModeOf(project) === 'smart' ? true : undefined, backendId: be.id, titleJobKey, titleSource, scheduled: hook,
