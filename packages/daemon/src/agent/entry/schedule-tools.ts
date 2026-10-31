@@ -99,17 +99,19 @@ function placementOf(where: Where | undefined, once: boolean, here: TurnWhere): 
 const LIST_BYTES = 32_000;
 /**
  * What a list shows of each task when the whole list is longer, one level after another until it fits: the free text
- * cut; cut shorter and no run errors; then only names, times, state and ids. A single task always shows whole.
+ * cut; cut shorter and no run errors; shorter still and only the last run, where 20 tasks at every limit fit; then only
+ * names, times, state and ids. A single task always shows whole.
  */
-const LIST_LEVELS = [{ instruction: 1000, text: 200, errors: true }, { instruction: 300, text: 80, errors: false }, 'bare'] as const;
+const LIST_LEVELS = [{ instruction: 1000, text: 200, errors: true, runs: 3 }, { instruction: 300, text: 80, errors: false, runs: 3 },
+  { instruction: 80, text: 30, errors: false, runs: 1 }, 'bare'] as const;
 type ListLevel = (typeof LIST_LEVELS)[number];
 const clip = (text: string, max: number) => text.length <= max ? text : `${clampUnits(text, max - 1)}…`;
 type RunRecord = ScheduledTaskView['recent'][number];
 const settledAt = (run: RunRecord) => run.endedAt ?? run.startedAt ?? run.slot;
 const startedAt = (run: RunRecord) => run.startedAt ?? run.slot;
-/** The 3 runs that settled last, in the order they started: a run over several intervals settles after the skips it caused. */
-const lastRuns = (recent: readonly RunRecord[]) =>
-  [...recent].sort((a, b) => settledAt(a) - settledAt(b)).slice(-3).sort((a, b) => startedAt(a) - startedAt(b));
+/** The runs that settled last, in the order they started: a run over several intervals settles after the skips it caused. */
+const lastRuns = (recent: readonly RunRecord[], count = 3) =>
+  [...recent].sort((a, b) => settledAt(a) - settledAt(b)).slice(-count).sort((a, b) => startedAt(a) - startedAt(b));
 /**
  * A task as the agent reads it, also in a card that shows tool calls: no raw Feishu ids it cannot act on (the creator's
  * open_id, message and topic ids); the links of the last 3 runs are the group's own Feishu links, kept so a person can
@@ -133,7 +135,7 @@ function taskView(task: ScheduledTaskView, { actor, where, steered }: Turn, leve
     createdBy: { via, ...(role ? { role } : {}), ...(creator ? { name: creator } : {}),
       ...(actor.kind === 'chat' && !steered ? { mine: !!actor.openId && openId === actor.openId } : {}), ...(text ? { text: cut(text) } : {}) },
     ...(last ? { lastResult: { status: last.status, at: last.at, excerpt: cut(last.excerpt), ...(last.link ? { link: last.link } : {}) } } : {}),
-    recent: lastRuns(task.recent).map(({ messageId: _message, topicId: _topic, error, ...run }) =>
+    recent: lastRuns(task.recent, level?.runs).map(({ messageId: _message, topicId: _topic, error, ...run }) =>
       error === undefined || (level && !level.errors) ? run : { ...run, error }),
   };
 }
