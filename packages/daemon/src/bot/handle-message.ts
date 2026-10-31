@@ -782,7 +782,8 @@ interface ActiveState {
   /** A scheduled turn is running: a message arriving now queues, never steers into it (总设计 7.1). */
   scheduled?: true;
   /** A settings change closed this run's thread (evictLiveSessionsForChat, or startReservedRun when it was closed before
-   * the run began): the turns queued behind are dropped, a scheduled one skipped, the group having changed. */
+   * the run began): a turn of it that fails or is yet to start is dropped with the turns queued behind, a scheduled one
+   * skipped, the group having changed (launchRun's settleGone). */
   evicted?: true;
   /** launchRun dropped the queue for that change, not for a ⏹: a scheduled turn still in intake is skipped too (intakeStopped). */
   evictedDrop?: true;
@@ -3815,6 +3816,12 @@ export function createOrchestrator(
         dropCompact(reserved);
         reaction?.done();
         log.fail('intake', err);
+        // Stopping: the shutdown's, not this turn's failure, as in launchRun (settleGone); the shutdown took the queue.
+        if (shuttingDown) {
+          if (extra?.scheduled) extra.scheduled.settle(scheduleStopped());
+          else if (origin) droppedReplies?.appendSync(origin);
+          return;
+        }
         if (!goal) noteFailure(msg, flat ? 'main' : 'topic', launchOpts?.backendId ?? groupBackend(project).id, { error: err });
         if (extra?.scheduled) extra.scheduled.settle(scheduleFailed(extra.scheduled, err));
         await channel
@@ -7493,8 +7500,26 @@ export function createOrchestrator(
         .catch(() => undefined));
       log.info('intake', 'queue-dropped', { depth: state.queue.length, ...facts, evicted: Boolean(state.evicted) });
     };
+    /** A turn of this run that failed, or is about to start, after its session went is not a failure (T2 做法): the
+     * shutdown's interrupts a scheduled one and keeps a person's for redelivery, as this run's start does (the shutdown
+     * took the queue); a settings change's eviction drops it with the turns queued behind (dropQueue). False when the
+     * session is there. */
+    const settleGone = (turn: QueuedTurn, target: string | undefined): boolean => {
+      if (shuttingDown) {
+        if (turn.scheduled) turn.scheduled.settle(scheduleStopped());
+        else if (turn.origin) droppedReplies?.appendSync(turn.origin);
+        return true;
+      }
+      if (!state.evicted) return false;
+      state.queue.unshift(turn);
+      dropQueue('occupied', target, {});
+      return true;
+    };
+    // What queued turns, and a drop of them, reply to: the last card still there (set as each turn ends).
+    let replyTo = opts.replyTo;
     try {
       let currentTurn: QueuedTurn = {
+        origin: opts.origin,
         input: { text: opts.firstText, images: opts.images },
         voice: opts.voice,
         titleSource: opts.titleSource,
@@ -7520,7 +7545,6 @@ export function createOrchestrator(
       // Recall notes a turn of this run said; only a queued turn says the newer ones (s15).
       const said = new Set(opts.recallsShown);
       let fromQueue = false;
-      let replyTo = opts.replyTo;
       let replyInThread = opts.flat ? false : (opts.replyInThread ?? Boolean(opts.knownThreadId));
       for (;;) {
         let turnInput = currentTurn.input;
@@ -7578,14 +7602,9 @@ export function createOrchestrator(
         }
         const turnServiceTier = await reconcileStoredSpeed(turnBackend, rec?.threadId ?? topicThreadId, rec?.cwd ?? runCwd, turnModel, rec?.serviceTier);
         turnInput = await preparePersonality(opts.thread, opts.chatId, turnInput, topicThreadId, opts.backendId);
-        // A settings change closed the thread during the awaits above, after the last turn's end found it open: this queued
-        // turn goes back to the head of the queue, dropped as there. Only a queued one: the first turn, evicted while it
-        // was prepared, still runs (T2 做法).
-        if (fromQueue && state.evicted) {
-          state.queue.unshift(currentTurn);
-          dropQueue('occupied', replyTo, {});
-          break;
-        }
+        // The session went during the awaits above, after the last turn's end found it there: the turn does not start on
+        // the closed thread. A person's first turn, evicted while it was prepared, still runs (T2 做法).
+        if ((fromQueue || scheduled || shuttingDown) && settleGone(currentTurn, replyTo)) break;
         const run = opts.thread.runStreamed(turnInput, { model: turnModel, effort: turnEffort, serviceTier: turnServiceTier });
         let unseen = currentTurn.seen;
         titleTurnAttempted = true;
@@ -8085,7 +8104,7 @@ export function createOrchestrator(
             .catch((err) => log.fail('card', err, { phase: 'empty-card-session' }));
         }
         // Settled as it ends, before any turn queued behind it runs (T2 4.1 第 5 条).
-        scheduled?.settle(ranScheduled(scheduled, rc.rs, delivered, askFaulted));
+        scheduled?.settle(ranScheduled(scheduled, rc.rs, delivered, askFaulted, state.evicted));
         retrySessionTitleAfterTurn();
         // Queued turns reply to the last card still there; a deleted one keeps the previous target.
         if (!gone) replyTo = finalMsgId;
@@ -8116,7 +8135,7 @@ export function createOrchestrator(
         // swallowing them. 优雅 ⏹ 虽然线程留用，但用户按了停就是要停：排队消息
         // 同样丢弃（语义与杀进程路径一致，只是进程不回收）。A settings change that
         // closed the thread (state.evicted), even after procDead was read above, ends
-        // it too: the next turn would run on the closed thread.
+        // it too, with the turns still in intake (intakeStopped).
         if (killed || procDead || interrupted || compactDied || state.evicted) {
           // Only a ⏹ is the user's, and a settings change's eviction the group's: a scheduled turn queued behind a watchdog
           // kill, a dead process or an ask fault failed (T2 4.2).
@@ -8145,8 +8164,9 @@ export function createOrchestrator(
       askTurn?.close('turn-ended');
       // Detach before any await: new messages must not join a failed consumer.
       if (active.get(activeKey) === state) active.delete(activeKey);
-      const dropped = askAgain(state.queue.splice(0), opts.chatId, opts.flat ? 'main' : 'topic', 'run-failed', '前一轮出错，排队的没跑',
-        state.evicted ? 'occupied' : 'run-failed');
+      // The session went (the shutdown, a settings change): not this turn's failure, nor the queue's.
+      const went = noted !== undefined && settleGone(noted, replyTo);
+      const dropped = went ? 0 : askAgain(state.queue.splice(0), opts.chatId, opts.flat ? 'main' : 'topic', 'run-failed', '前一轮出错，排队的没跑');
       dropCompact(state);
       disposeInterrupt?.();
       state.subagents = undefined;
@@ -8158,6 +8178,7 @@ export function createOrchestrator(
       if (topicThreadId && sessions.get(topicThreadId) === opts.thread) sessions.delete(topicThreadId);
       await opts.thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' }));
       log.fail('intake', err);
+      if (went) return;
       noteTurnFailure(noted, { error: err });
       if (noted?.scheduled) noted.scheduled.settle(scheduleFailed(noted.scheduled, err));
       await channel
@@ -9487,12 +9508,13 @@ export function createOrchestrator(
     return task !== undefined && nextRunAfterFailure({ ...job, task });
   }
   /** How a scheduled turn that ran ended: its card's terminal, and whether the final card update landed. A stop by its own
-   * ask coordinator's fault is neither the user's nor the shutdown's: a counted failure. */
-  function ranScheduled(hook: ScheduledHook, rs: RunState, delivered: boolean, askFaulted: boolean): ScheduledOutcome {
-    if (rs.terminal === 'interrupted' && askFaulted) return { status: 'failed', error: '提问出错', durationMs: ranFor(hook), counts: true };
-    if (rs.terminal === 'interrupted') return scheduleStopped();
-    const error = failureText(rs) ?? (delivered ? undefined : '结果卡片没有更新成功');
-    if (error) return { status: 'failed', error, durationMs: ranFor(hook), counts: true };
+   * ask coordinator's fault is neither the user's nor the shutdown's: a counted failure. A failure after its session went
+   * is not one (launchRun's settleGone): the shutdown's, or skipped for the settings change that closed it. */
+  function ranScheduled(hook: ScheduledHook, rs: RunState, delivered: boolean, askFaulted: boolean, evicted: boolean | undefined): ScheduledOutcome {
+    if (rs.terminal === 'interrupted' && !askFaulted) return scheduleStopped();
+    const error = rs.terminal === 'interrupted' ? '提问出错' : failureText(rs) ?? (delivered ? undefined : '结果卡片没有更新成功');
+    if (error && shuttingDown) return scheduleStopped();
+    if (error) return evicted ? SCHEDULE_UPDATING : { status: 'failed', error, durationMs: ranFor(hook), counts: true };
     return { status: 'done', excerpt: clampUnits(finalMessageText(rs), 500), durationMs: ranFor(hook) };
   }
 
