@@ -26,7 +26,7 @@ export function projectRevision(project: Project): string {
   return createHash('sha256').update(JSON.stringify(project)).digest('hex');
 }
 /** {@link projectRevision} without `branch`, which a turn refreshes from git (refreshBranch): a checkout edits no setting. */
-export function settingsRevision(project: Project): string {
+export function projectSettingsRevision(project: Project): string {
   const { branch: _branch, ...rest } = project;
   return projectRevision(rest);
 }
