@@ -55,7 +55,7 @@ import { clampUnits, createScheduleStore } from './schedule/store';
 import type { ScheduledHook, ScheduledJob, ScheduledOutcome } from './schedule/types';
 import { createScheduler, nextRunAfterFailure } from './schedule/scheduler';
 import { hostTimeZone } from './schedule/time';
-import { botNotRunning, createScheduleCommands } from '../admin/schedule-commands';
+import { botNotRunning, createScheduleCommands, type ScheduleActor } from '../admin/schedule-commands';
 import type { StoredTask } from './schedule/types';
 import { createRunActivity } from './activity';
 import { createDroppedReplies, originFor, originOf, type DroppedOrigin } from './restart-dropped';
@@ -523,6 +523,8 @@ export interface QueuedTurn {
   titleSource: SessionTitleSource;
   requesterOpenId?: string;
   requesterKind?: 'user' | 'bot' | 'unknown';
+  /** The requester's name, recorded as a scheduled task's creator (agent/entry/registry.ts TurnFacts.requesterName). */
+  requesterName?: string;
   requestedAt: number;
   /** Clean user-authored label; never derive reminder copy from woven input. */
   summary?: string;
@@ -917,6 +919,8 @@ export interface Orchestrator {
   settings: HostSettings;
   /** Scheduled tasks from the desktop and the terminal, run as the local owner (admin/schedule-commands.ts). */
   schedule: (via: 'desktop' | 'cli', request: ScheduleRequest) => Promise<ScheduleReply>;
+  /** The same command core for the agent tools (agent/entry/schedule-tools.ts): the actor comes from the turn's grant. */
+  scheduleAs: (actor: ScheduleActor, request: ScheduleRequest) => Promise<ScheduleReply>;
   /** The scheduled-task tick (bot/schedule/scheduler.ts), outside admit; bridge.ts starts it once Feishu is connected. */
   scheduler: { start(): Promise<void>; stop(): void; drain(ms: number): Promise<void> };
   /** Close every live codex session (SIGKILLs the app-server children) so a
@@ -1148,7 +1152,9 @@ export function createOrchestrator(
     const assembled = sources ? assemble(sources, project ? 'work' : 'comment') : undefined;
     const nonce = newNonce();
     const skills = project ? await groupSkillProfile({ backend, cwd, directories: execution.workspaces.additional, disabledPaths: project.skills?.disabledPaths }) : undefined;
-    const profile = assembled || skills ? { instructions: assembled ? openingInstructions(assembled, nonce, { hiddenBlocks: Boolean(project) && hiddenBlocksFor(backend.id) }) : '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: [], capabilityPackages: [], mcpServers: [], ...(skills ? { skills } : {}) } : undefined;
+    const profile = assembled || skills ? { instructions: assembled ? openingInstructions(assembled, nonce, { hiddenBlocks: Boolean(project) && hiddenBlocksFor(backend.id) }) : '', env: {}, nativeSettings: { automaticMemory: false as const }, additionalRoots: [], capabilityPackages: [], mcpServers: [],
+      // A bound group's sessions get the schedule tools, read-only tier too (3.13); a comment's never do.
+      tools: { schedule: Boolean(project) && place !== 'comment' }, ...(skills ? { skills } : {}) } : undefined;
     const built = await executionSessionProfile({ execution: { ...execution, permission: permission ?? execution.permission }, cwd, backend: backend.id, scope: project ? 'group' : 'ungrouped', profile });
     if (assembled && built) openings.set(built, contextOf(assembled, nonce));
     return built;
@@ -3448,6 +3454,7 @@ export function createOrchestrator(
         voice: preIngested?.voice,
         titleSource,
         requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg),
+        requesterName: senderWho(msg).name,
         requestedAt: msg.createTime || Date.now(),
         summary: stripFileTokens(summaryText ?? text).slice(0, 80) || undefined,
         seen: { id: msg.messageId, at: msg.createTime },
@@ -3784,6 +3791,7 @@ export function createOrchestrator(
           serviceTier: prior?.serviceTier,
           summary: stripFileTokens(summaryText ?? text).slice(0, 80) || '(本轮任务)',
           requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg),
+          requesterName: senderWho(msg).name,
           requestedAt: msg.createTime || tIntake,
           replayText: extra?.replayText,
           seen: seenMark,
@@ -4157,6 +4165,7 @@ export function createOrchestrator(
         network: perm.network, native: perm.native, readScope: perm.readScope,
         summary: stripFileTokens(text).slice(0, 80) || '(空)',
         requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg),
+        requesterName: senderWho(msg).name,
         requestedAt: msg.createTime || tIntake,
         seenAt: msg.createTime,
         triggerMessageId: msg.messageId,
@@ -7128,6 +7137,7 @@ export function createOrchestrator(
     /** who triggered this run (for ⏹/⚙️ ownership gating) */
     requesterOpenId?: string;
     requesterKind?: 'user' | 'bot' | 'unknown';
+    requesterName?: string;
     /** wall-clock origin for completion reminders; normally the inbound
      * message's createTime, so global/session queueing is included. */
     requestedAt?: number;
@@ -7530,6 +7540,7 @@ export function createOrchestrator(
         voice: opts.voice,
         titleSource: opts.titleSource,
         requesterOpenId: opts.requesterOpenId, requesterKind: opts.requesterKind,
+        requesterName: opts.requesterName,
         requestedAt: opts.requestedAt ?? Date.now(),
         summary: opts.summary,
         replayText: opts.replayText,
@@ -7563,7 +7574,11 @@ export function createOrchestrator(
           triggerMessageId: currentTurn.seen?.id ?? currentTurn.triggerMessageId, retry: currentTurn.replayText !== undefined,
           initiative: Boolean(currentTurn.initiative), wake: Boolean(currentTurn.wake),
           ...(currentTurn.memoryTrigger ? { typed: currentTurn.memoryTrigger.typed, triggerText: currentTurn.memoryTrigger.text } : {}),
+          ...(currentTurn.requesterName ? { requesterName: currentTurn.requesterName } : {}),
           ...(scheduled ? { scheduled: { taskId: scheduled.job.task.id, runId: scheduled.job.runId } } : {}),
+          // Read when a task tool runs: a topic the bot opens is a topic at once, but has its id only after adoptThreadId.
+          where: () => ({ inTopic: !isMainKey(activeKey, opts.chatId),
+            ...(topicThreadId && !isMainKey(topicThreadId, opts.chatId) ? { topicId: topicThreadId } : {}) }),
         });
         turnMemory = turnScope ? entries?.memoryTurn(opts.thread) : undefined;
         dropRetries(topicThreadId); // an older card's [重试] would replay out of order
@@ -9683,9 +9698,16 @@ export function createOrchestrator(
     await loadStore();
     return scheduleCommands.execute({ kind: 'local', via }, request);
   };
+  const scheduleAs = async (actor: ScheduleActor, request: ScheduleRequest): Promise<ScheduleReply> => {
+    await loadStore();
+    return scheduleCommands.execute(actor, request);
+  };
   /** Not admit: a stopping bot did nothing, so it says so as a refusal, not as a rejection the terminal reads as a result not known. */
   const admittedSchedule = (via: 'desktop' | 'cli', request: ScheduleRequest): Promise<ScheduleReply> => (
     shuttingDown ? Promise.resolve(botNotRunning()) : trackTask(schedule(via, request))
+  );
+  const admittedScheduleAs = (actor: ScheduleActor, request: ScheduleRequest): Promise<ScheduleReply> => (
+    shuttingDown ? Promise.resolve(botNotRunning()) : trackTask(scheduleAs(actor, request))
   );
 
   const admittedCollaboration = admit(collaboration);
@@ -9718,6 +9740,7 @@ export function createOrchestrator(
     libraryExecute: admit(libraryExecute),
     settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },
     schedule: admittedSchedule,
+    scheduleAs: admittedScheduleAs,
     scheduler: { start: async () => scheduler.start(await loadStore()), stop: () => scheduler.stop(), drain: ms => scheduler.drain(ms) },
     shutdown,
     saveDroppedSync: (why: 'shutdown' | 'crash') => droppedReplies?.saveSync(collectLost(), why),

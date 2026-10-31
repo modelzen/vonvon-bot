@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import type { AgentToolReply } from '../types';
 import type { MemoryTurn } from '../../bot/memory-authority';
-import type { AgentPlace } from './registry';
+import type { ScheduleRequest } from '@vonvon/protocol';
+import type { ScheduleActor } from '../../admin/schedule-commands';
+import type { AgentPlace, TurnWhere } from './registry';
 
 export interface ToolContext {
   signal: AbortSignal;
@@ -17,11 +19,17 @@ export interface ToolContext {
   releaseBotWrite?(): void;
   /** Call guard synchronously immediately before the write becomes effective, with no await between. */
   commit?<T>(write: (guard: CommitGuard) => Promise<T>): Promise<T>;
+  /** schedule 类工具：这一轮的 actor、位置和有没有被别人插过话，调用时现取（bot 开的话题认领后才有 id，总设计第 10 节） */
+  schedule?(): { actor: Exclude<ScheduleActor, { kind: 'local' }>; where: TurnWhere; steered: boolean };
 }
 export type CommitGuard = () => void;
+/** The most a tool's result may take as JSON; the registry answers a bigger one with 结果太大. */
+export const TOOL_RESULT_BYTES = 256 * 1024;
 export interface AgentTool {
   name: string;
-  class: 'read' | 'settings' | 'memory';
+  class: 'read' | 'settings' | 'memory' | 'schedule';
+  /** schedule 类：对应命令核的哪个动作，登记表按它查 3.13 的角色表 */
+  action?: ScheduleRequest['action'];
   description: string;
   input: z.ZodObject;
   run(args: unknown, ctx: ToolContext): Promise<unknown>;
@@ -31,6 +39,10 @@ export class ToolRefusal extends Error {
   constructor(readonly reply: Extract<AgentToolReply, { ok: false }>) {
     super(reply.message);
   }
+}
+/** What the model reads back: a text result as it is (a schedule tool's line and JSON), any other result as JSON. */
+export function toolReplyText(reply: AgentToolReply): string {
+  return !reply.ok ? reply.message : typeof reply.result === 'string' ? reply.result : JSON.stringify(reply.result);
 }
 export const sessionInfoTool: AgentTool = {
   name: 'session_info',

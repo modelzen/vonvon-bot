@@ -1,7 +1,8 @@
 import type { AgentEntry, AgentThread, AgentToolReply } from '../types';
 import { log } from '../../core/logger';
 import type { MemoryTurn } from '../../bot/memory-authority';
-import { sessionInfoTool, ToolRefusal, type AgentTool, type ToolContext } from './tools';
+import { scheduleRefusalMessages, type ScheduleActor } from '../../admin/schedule-commands';
+import { sessionInfoTool, TOOL_RESULT_BYTES, ToolRefusal, type AgentTool, type ToolContext } from './tools';
 
 export interface AgentPlace { kind: 'group' | 'p2p' | 'doc'; chatId?: string; docId?: string }
 export interface TurnFacts {
@@ -17,7 +18,13 @@ export interface TurnFacts {
   triggerText?: string;
   /** 定时任务的无人回合（T2 的 `runScheduled` 填）：在场算 `scheduled`，记忆回合按 `initiative` 算 */
   scheduled?: { taskId: string; runId: string };
+  /** 发起人的名字，建任务时记成创建人（总设计 7.2 的 `{creator}`） */
+  requesterName?: string;
+  /** 这一轮在群里的位置，任务工具调用时才读（`launchRun` 的闭包；bot 开的话题认领后才有 id） */
+  where?(): TurnWhere;
 }
+/** 主区 `{ inTopic: false }`；话题里 `inTopic`，话题 id 认领前没有（总设计第 3 节钥匙 2） */
+export interface TurnWhere { inTopic: boolean; topicId?: string }
 /** 这一轮有没有人在场：真人发起的 `human`；定时任务自己的运行 `scheduled`；bot、唤醒、主动、重试 `none`（总设计第 8 节） */
 export type TurnPresence = 'human' | 'scheduled' | 'none';
 /** 隐藏块在 `done` 前要用的这一轮的事实：现取，不是开轮时的快照 */
@@ -44,15 +51,26 @@ const messages = {
   'unknown-origin': 'vonvon 认不出这次改动是哪一轮发起的，不能改设置。请对方重新说一遍。',
   'not-admin': '只有主人和管理员发消息触发的那一轮能改设置。',
   'switch-off': '主人关了私聊里的“聊天改设置”，要改请去桌面端或网页。',
+  'not-group': scheduleRefusalMessages['not-group'],
+  'no-human-create': scheduleRefusalMessages['no-human-create'],
+  'scheduled-run-scope': scheduleRefusalMessages['scheduled-run-scope'],
   busy: 'vonvon 手上的事太多，稍后再试。',
   timeout: 'vonvon 这一步超时了。',
   failed: 'vonvon 这一步出错了。',
+};
+/** The schedule tools' own sentences for the two above that talk about settings. */
+const scheduleTurnMessages = {
+  'unknown-origin': 'vonvon 认不出这次操作是哪一轮发起的，任务没有动。请对方重新说一遍。',
+  'turn-ended': '发起这次操作的那一轮已经结束了，任务没有动。请对方重新说一遍。',
 };
 function failure(code: Exclude<Failure['code'], 'refused' | 'bad-args'>): Failure {
   return { ok: false, code, message: messages[code] };
 }
 function refused(reason: Reason): Failure {
   return { ok: false, code: 'refused', reason, message: messages[reason] };
+}
+function scheduleRefused(reason: keyof typeof scheduleTurnMessages): Failure {
+  return { ok: false, code: 'refused', reason, message: scheduleTurnMessages[reason] };
 }
 interface TurnAuth {
   id: number;
@@ -74,13 +92,21 @@ interface Grant {
   place: AgentPlace;
   thread?: AgentThread;
   turn?: TurnAuth;
+  /** The turn before `turn`; its origins outlive `pruneOrigins`. */
+  previous?: TurnAuth;
   firstTurn?: TurnAuth;
   origins: Map<string, TurnAuth | undefined>;
+  /**
+   * Ids no longer noted, oldest first, the last {@link PRUNED_IDS}: those `pruneOrigins` dropped and those refused while
+   * the map was full. A late copy is not noted under a later turn, and its call reads turn-ended.
+   */
+  pruned: Set<string>;
   controller: AbortController;
   active: number;
   settingRunning: boolean;
   queue: Array<() => void>;
 }
+const PRUNED_IDS = 1024;
 export function createAgentEntries(opts: {
   appId: string;
   isAdmin(openId: string): boolean;
@@ -102,11 +128,33 @@ export function createAgentEntries(opts: {
     auth.active = false;
     auth.controller.abort();
   }
+  /**
+   * At capacity, origins of ended turns go: they cannot authorize anything, and a long-lived session (a recurring task
+   * keeps a single-session group's main session open) would otherwise refuse every later turn's calls as unknown-origin. The turn
+   * before this one keeps its own; if that turn alone filled the map, the turn after this one gets room. A dropped id
+   * goes to `pruned` (see {@link forget}).
+   */
+  function pruneOrigins(grant: Grant) {
+    for (const [id, auth] of grant.origins) {
+      if (auth && (auth === grant.turn || auth === grant.previous)) continue;
+      grant.origins.delete(id);
+      forget(grant, id);
+    }
+  }
+  /**
+   * An id that will not be noted again: a late copy of it (streamed, then in the full message) is not noted under the
+   * turn of the moment, and its call reads turn-ended, while it is among the last {@link PRUNED_IDS} forgotten.
+   */
+  function forget(grant: Grant, id: string) {
+    grant.pruned.add(id);
+    if (grant.pruned.size > PRUNED_IDS) grant.pruned.delete(grant.pruned.values().next().value!);
+  }
   function revoke(grant: Grant) {
     grant.phase = 'revoked';
     end(grant.turn);
     grant.controller.abort();
     grant.origins.clear();
+    grant.pruned.clear();
     grants.delete(grant);
   }
   function authorizeNow(grant: Grant, auth: TurnAuth | undefined): Failure | undefined {
@@ -127,11 +175,41 @@ export function createAgentEntries(opts: {
     if (!auth) return refused('unknown-origin');
     if (!auth.active || grant.turn !== auth) return refused('turn-ended');
   }
+  /**
+   * schedule 类的授权（3.13 的表、总设计第 8 节"在场"）：这一层先查，拒绝不进命令核；命令核按 actor 再查一遍，
+   * 成员能不能碰别人的任务、跨群的 id 只有命令核看得到。
+   */
+  function authorizeSchedule(grant: Grant, auth: TurnAuth | undefined, action: AgentTool['action'], taskId: unknown): Failure | undefined {
+    if (grant.thread && !grant.thread.isAlive()) revoke(grant);
+    if (grant.phase === 'revoked') return failure('revoked');
+    if (grant.place.kind !== 'group') return refused('not-group');
+    if (!auth) return scheduleRefused('unknown-origin');
+    if (!auth.active || grant.turn !== auth) return scheduleRefused('turn-ended');
+    if (action === 'list') return undefined;
+    if (auth.steered || auth.presence === 'none') return { ...refused('not-human-turn'), message: scheduleRefusalMessages['not-human-turn'] };
+    if (auth.presence !== 'scheduled') return undefined;
+    if (action === 'create') return refused('no-human-create');
+    if ((action !== 'edit' && action !== 'delete') || taskId !== auth.facts.scheduled?.taskId) return refused('scheduled-run-scope');
+  }
   const roleOf = (auth: TurnAuth): MemoryTurn['role'] => {
     const openId = auth.facts.requesterOpenId ?? '';
     if (auth.facts.requesterKind !== 'user' || !openId) return 'bot';
     return opts.isOwner(openId) ? 'owner' : opts.isAdmin(openId) ? 'admin' : 'member';
   };
+  /** Who the command core sees: the task's own run, or the person of this turn with where they are now. */
+  function scheduleActor(grant: Grant, auth: TurnAuth): Exclude<ScheduleActor, { kind: 'local' }> {
+    const chatId = grant.place.chatId ?? '';
+    if (auth.facts.scheduled) return { kind: 'scheduled', ...auth.facts.scheduled, chatId };
+    const { facts } = auth, role = roleOf(auth), topicId = facts.where?.().topicId;
+    return {
+      // A bot's or a wake's turn only gets to list (authorizeSchedule), where the role is not looked at.
+      kind: 'chat', openId: facts.requesterOpenId ?? '', role: role === 'bot' ? 'member' : role, chatId,
+      ...(facts.requesterName ? { name: facts.requesterName } : {}),
+      ...(topicId ? { topicId } : {}),
+      ...(facts.triggerMessageId ? { messageId: facts.triggerMessageId } : {}),
+      ...(facts.typed && facts.triggerText ? { text: facts.triggerText } : {}),
+    };
+  }
   function memoryTurnOf(grant: Grant, auth: TurnAuth): MemoryTurn | undefined {
     if (grant.phase !== 'attached' || (grant.thread && !grant.thread.isAlive())) return undefined;
     const kind = grant.place.kind;
@@ -151,7 +229,7 @@ export function createAgentEntries(opts: {
     const capped = grants.size >= 1024;
     const grant: Grant = {
       phase: shuttingDown ? 'revoked' : capped ? 'capacity' : 'pending',
-      place: { ...place }, origins: new Map(), controller: new AbortController(),
+      place: { ...place }, origins: new Map(), pruned: new Set(), controller: new AbortController(),
       active: 0, settingRunning: false, queue: [],
     };
     if (!capped && !shuttingDown) grants.add(grant);
@@ -171,13 +249,18 @@ export function createAgentEntries(opts: {
       const runTool = tool.run.bind(tool);
       const settings = tool.class === 'settings';
       const memory = tool.class === 'memory';
-      const gated = settings || memory;
+      const schedule = tool.class === 'schedule';
+      const gated = settings || memory || schedule;
+      const taskId = schedule && args && typeof args === 'object' && 'taskId' in args ? args.taskId : undefined;
       // Only Codex declares releaseAfterRun (false before its first accepted turn).
       const auth = grant.thread?.releaseAfterRun !== undefined ? grant.firstTurn
         : origin?.toolUseId ? grant.origins.get(origin.toolUseId) : undefined;
+      const authNow = (): Failure | undefined => memory ? authorizeMemory(grant, auth)
+        : schedule ? authorizeSchedule(grant, auth, tool.action, taskId) : authorizeNow(grant, auth);
       if (gated) {
-        const refusal = memory ? authorizeMemory(grant, auth) : authorizeNow(grant, auth);
-        if (refusal?.reason === 'unknown-origin' && origin?.toolUseId && grant.origins.has(origin.toolUseId)) return finishLog(refused('turn-ended'));
+        const refusal = authNow();
+        const known = origin?.toolUseId && (grant.origins.has(origin.toolUseId) || grant.pruned.has(origin.toolUseId));
+        if (refusal?.reason === 'unknown-origin' && known) return finishLog(schedule ? scheduleRefused('turn-ended') : refused('turn-ended'));
         if (refusal) return finishLog(refusal);
         if (settings && grant.settingRunning && grant.queue.length >= 8) return finishLog(failure('busy'));
       }
@@ -212,11 +295,10 @@ export function createAgentEntries(opts: {
           settle(reply);
         };
         const onGrantAbort = () => stop(failure('revoked'));
-        const authNow = (): Failure | undefined => memory ? authorizeMemory(grant, auth) : authorizeNow(grant, auth);
         const onTurnAbort = () => {
           if (committed) return;
-          // 记忆类：插话也会触发这个信号，但那一轮没结束，只影响落点，不打断调用
-          if (memory) { const refusal = authNow(); if (refusal) stop(refusal); }
+          // 记忆类：插话也会触发这个信号，但那一轮没结束，只影响落点，不打断调用；任务类插话后只剩 list
+          if (memory || schedule) { const refusal = authNow(); if (refusal) stop(refusal); }
           else stop(authNow() ?? refused('turn-ended'));
         };
         const timer = setTimeout(() => stop(failure('timeout')), Math.max(0, deadline - Date.now()));
@@ -237,6 +319,7 @@ export function createAgentEntries(opts: {
             ctx.reserveBotWrite = () => { if (auth.botWrites >= 1) return false; auth.botWrites++; return true; };
             ctx.releaseBotWrite = () => { auth.botWrites = Math.max(0, auth.botWrites - 1); };
           }
+          if (schedule && auth) ctx.schedule = () => ({ actor: scheduleActor(grant, auth), where: auth.facts.where?.() ?? { inTopic: false }, steered: auth.steered });
           if (gated && auth) {
             if (settings) ctx.turn = { id: auth.id, requesterOpenId: auth.facts.requesterOpenId ?? '', triggerMessageId: auth.facts.triggerMessageId ?? '', role: opts.isOwner(auth.facts.requesterOpenId ?? '') ? 'owner' : 'admin' };
             ctx.commit = async write => {
@@ -266,12 +349,13 @@ export function createAgentEntries(opts: {
             } else result = await runTool(parsed.data, ctx);
             if (committed && Date.now() > deadline) log.warn('agent', 'late-commit', { tool: name });
             const json = JSON.stringify(result);
-            settle(json !== undefined && Buffer.byteLength(json) <= 256 * 1024 ? { ok: true, result } : { ok: false, code: 'failed', message: '结果太大' });
+            settle(json !== undefined && Buffer.byteLength(json) <= TOOL_RESULT_BYTES ? { ok: true, result } : { ok: false, code: 'failed', message: '结果太大' });
           } catch (error) {
             if (error instanceof ToolRefusal) settle(error.reply);
             else {
               log.fail('agent.tool-failed', error, { tool: name });
-              settle(committed ? { ok: false, code: 'failed', message: '提交时出错，设置可能已经改了。先查一下现在的设置，再决定要不要重试。' } : failure('failed'));
+              settle(!committed ? failure('failed') : { ok: false, code: 'failed', message: schedule
+                ? '提交时出错，任务可能已经改了。先用 schedule_list 查一下，再决定要不要重试。' : '提交时出错，设置可能已经改了。先查一下现在的设置，再决定要不要重试。' });
             }
           }
         }
@@ -297,13 +381,17 @@ export function createAgentEntries(opts: {
         if (grant.thread && !grant.thread.isAlive()) revoke(grant);
         if (grant.phase === 'revoked') throw new ToolRefusal(failure('revoked'));
         if (grant.phase === 'capacity') return [];
-        // 评论会话（doc）只给读类工具；写记忆的在群和私聊里给
-        return tools.filter(tool => tool.class === 'read' || (tool.class === 'memory' ? grant.place.kind !== 'doc' : grant.place.kind === 'p2p'))
+        // 评论会话（doc）只给读类工具；写记忆的在群和私聊里给，任务的只在群里给
+        return tools.filter(tool => tool.class === 'read' || (tool.class === 'memory' ? grant.place.kind !== 'doc'
+          : grant.place.kind === (tool.class === 'schedule' ? 'group' : 'p2p')))
           .map(({ name, description, input }) => ({ name, description, input }));
       },
       call,
       noteToolUse(id) {
-        if (grant.phase !== 'attached' || grant.origins.has(id) || grant.origins.size >= 256) return;
+        if (grant.phase !== 'attached' || grant.origins.has(id) || grant.pruned.has(id)) return;
+        if (grant.origins.size >= 256) pruneOrigins(grant);
+        // Still full (this turn and the one before hold it all): a copy noted turns later would get the wrong turn.
+        if (grant.origins.size >= 256) { forget(grant, id); return; }
         grant.origins.set(id, grant.turn);
       },
       attach(thread) {
@@ -329,6 +417,7 @@ export function createAgentEntries(opts: {
       if (grant && grant.phase === 'attached') {
         if (grant.turn?.active) log.warn('agent', 'turn-overlap', {});
         end(grant.turn);
+        grant.previous = grant.turn;
         grant.turn = auth;
         grant.firstTurn ??= auth;
       } else end(auth);

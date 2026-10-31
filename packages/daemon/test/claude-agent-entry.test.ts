@@ -94,7 +94,7 @@ it.each([0, 255, 256])('keeps streamed/full duplicate origins in their original 
   const first = registry.openTurn(thread, facts);
   advance?.();
   await vi.waitFor(() => expect(noted).toHaveBeenCalledWith('origin-1'));
-  await expect(f.invoke({}, { _meta: { 'claudecode/toolUseId': 'origin-1' } })).resolves.toMatchObject({ content: [{ text: '"changed"' }] });
+  await expect(f.invoke({}, { _meta: { 'claudecode/toolUseId': 'origin-1' } })).resolves.toMatchObject({ content: [{ text: 'changed' }] }); // a text result reads as text (toolReplyText)
   expect(noted.mock.invocationCallOrder[0]).toBeLessThan(called.mock.invocationCallOrder[0]!);
   advance?.(); await vi.waitFor(() => expect(pause).toBe(3));
   first.close(); registry.openTurn(thread, { ...facts, triggerMessageId: 'next-message' });

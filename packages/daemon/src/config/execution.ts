@@ -251,6 +251,7 @@ export async function executionSessionProfile({ execution, cwd, backend, scope, 
     additionalRoots: [...profile?.additionalRoots ?? [], ...[...roots].map(path => ({ path, access }))],
     capabilityPackages: profile?.capabilityPackages ?? [],
     mcpServers: profile?.mcpServers ?? [],
+    ...(profile?.tools ? { tools: profile.tools } : {}),
     ...(profile?.skills ? { skills: profile.skills } : {}),
   };
 }

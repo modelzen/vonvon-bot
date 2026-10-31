@@ -4,6 +4,7 @@ import { basename, dirname, join, relative } from 'node:path';
 import { homedir } from 'node:os';
 import { parse as parseToml } from 'smol-toml';
 import { claudeConfigDir } from './claude-agent/configured-model';
+import { NATIVE_SCHEDULING_SKILLS } from './claude-agent/thread';
 
 /** A partial, read-only inventory for stopped Bots. Native plugins need a running provider. */
 export async function discoverLocalGroupSkills(input: {
@@ -94,6 +95,7 @@ export async function groupSkillProfile(input: Parameters<typeof discoverGroupSk
   if (!disabledPaths.length) return undefined;
   if (input.backend.id === 'codex-appserver') return { disabledPaths };
   const skills = await discoverGroupSkills(input);
-  // Claude's native whitelist hides the skill and rejects Skill tool invocation.
-  return { disabledPaths, enabledNames: skills.filter(skill => skill.enabled).map(skill => skill.name) };
+  // Claude's native whitelist hides the skill and rejects Skill tool invocation. Its own scheduling skills stay out
+  // of it as well as off in skillOverrides: whether a name on the whitelist beats 'off' is untested (3.13).
+  return { disabledPaths, enabledNames: skills.filter(skill => skill.enabled && !NATIVE_SCHEDULING_SKILLS.includes(skill.name)).map(skill => skill.name) };
 }
