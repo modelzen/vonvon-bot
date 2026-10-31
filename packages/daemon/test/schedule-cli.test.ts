@@ -184,14 +184,14 @@ describe('output', () => {
     expect(await h.failure('list', { all: true })).toMatchObject({ exitCode: 2 }); // --group 研发群 and --all
   });
 
-  it('--json prints the reply as it is', async () => {
+  it('--json prints the reply as it is, after ok: true', async () => {
     const reply = tasks([task()]);
     const h = harness(() => reply);
     await h.run('list', {}, true);
-    expect(h.json()).toEqual(reply);
+    expect(h.json()).toEqual({ ok: true, ...reply });
     const started = harness(() => ({ kind: 'started', taskId: 'st_0123456789abcdef', runId: 'r1' }));
     await started.run('run', { taskId: 'st_0123456789abcdef' }, true);
-    expect(started.json()).toEqual({ kind: 'started', taskId: 'st_0123456789abcdef', runId: 'r1' });
+    expect(started.json()).toEqual({ ok: true, kind: 'started', taskId: 'st_0123456789abcdef', runId: 'r1' });
     expect(started.requests).toEqual([{ action: 'runNow', chatId: 'oc_group', taskId: 'st_0123456789abcdef' }]);
   });
 });

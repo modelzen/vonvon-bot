@@ -1,0 +1,71 @@
+import { beforeAll, describe, expect, it } from 'vitest';
+import { rpcKinds } from '@vonvon/protocol';
+import type { CommandInfo } from '../src/cli/index';
+import { CLI_PARITY_ALLOWLIST, type ParityEntry } from '../src/cli/parity-allowlist';
+import { loadCommands } from './helpers/cli-commands';
+
+/**
+ * devices 8.5: each RPC kind is covered by a command or listed in the allowlist with why, never both; a command covers
+ * only kinds the protocol has; an allowlist line names a kind the protocol has, unless it says which slice adds it.
+ */
+function parityProblems(kinds: readonly string[], commands: readonly CommandInfo[], allowlist: Readonly<Record<string, ParityEntry>>): string[] {
+  const known = new Set(kinds);
+  const covered = new Map<string, string[]>();
+  for (const command of commands) for (const kind of command.covers) covered.set(kind, [...covered.get(kind) ?? [], command.path]);
+  const problems: string[] = [];
+  for (const kind of kinds) {
+    if (!covered.has(kind) && !Object.hasOwn(allowlist, kind)) problems.push(`${kind}: no command covers it and the allowlist does not name it`);
+    if (covered.has(kind) && Object.hasOwn(allowlist, kind)) problems.push(`${kind}: covered by ${covered.get(kind)!.join(', ')} and still in the allowlist`);
+  }
+  for (const [kind, paths] of covered) if (!known.has(kind)) problems.push(`${kind}: ${paths.join(', ')} covers a kind the protocol does not have`);
+  for (const [kind, entry] of Object.entries(allowlist)) {
+    if (entry.arrives && known.has(kind)) problems.push(`${kind}: in the protocol now, so the allowlist line drops arrives: ${entry.arrives}`);
+    if (!entry.arrives && !known.has(kind)) problems.push(`${kind}: in the allowlist, but the protocol has no such kind`);
+    const needsSlice = entry.reason === 'pending' || entry.reason === 'dead';
+    if (needsSlice !== Boolean(entry.slice)) problems.push(`${kind}: ${entry.reason} ${needsSlice ? 'needs the slice that ends it' : 'takes no slice'}`);
+    if (!entry.note.trim()) problems.push(`${kind}: the allowlist line says nothing`);
+  }
+  return problems;
+}
+
+const kinds = rpcKinds().map(entry => entry.kind);
+let commands: CommandInfo[] = [];
+beforeAll(async () => { commands = await loadCommands(); });
+
+describe('CLI parity with the RPC kinds (devices 8.5)', () => {
+  // main 必败: there was no covers metadata and no allowlist
+  it('covers every kind or names it in the allowlist, and nothing else', () => {
+    expect(parityProblems(kinds, commands, CLI_PARITY_ALLOWLIST)).toEqual([]);
+  });
+
+  it('goes red when a command stops covering its kind, covers an unknown one, or the allowlist goes stale', () => {
+    const stop = commands.find(command => command.path === 'daemon stop');
+    expect(stop?.covers).toEqual(['machine.stopHost']);
+    const without = commands.map(command => command === stop ? { ...command, covers: [] } : command);
+    expect(parityProblems(kinds, without, CLI_PARITY_ALLOWLIST)).toEqual(['machine.stopHost: no command covers it and the allowlist does not name it']);
+    const unknown = [...commands, { path: 'x', hidden: false, covers: ['command.nope'], options: [] }];
+    expect(parityProblems(kinds, unknown, CLI_PARITY_ALLOWLIST)).toEqual(['command.nope: x covers a kind the protocol does not have']);
+    const both = { ...CLI_PARITY_ALLOWLIST, 'machine.stopHost': { reason: 'unused', note: 'x' } } as const;
+    expect(parityProblems(kinds, commands, both)).toEqual(['machine.stopHost: covered by daemon stop and still in the allowlist']);
+    // D1 adds the device kinds: their lines then drop `arrives`
+    expect(parityProblems([...kinds, 'device.pair'], commands, CLI_PARITY_ALLOWLIST)).toEqual(['device.pair: in the protocol now, so the allowlist line drops arrives: D1']);
+    const loose = { ...CLI_PARITY_ALLOWLIST, 'command.deleteAgent': { reason: 'pending', note: 'bot remove' } } as const;
+    expect(parityProblems(kinds, commands, loose)).toEqual(['command.deleteAgent: pending needs the slice that ends it']);
+  });
+
+  it('registers the kinds D1, D3 and I3 bring before they exist (devices 8.1 SLICE-1)', () => {
+    for (const kind of ['device.status', 'device.enable', 'device.disable', 'device.pair', 'device.clients', 'device.renameClient', 'device.revokeClient', 'device.rename', 'admin.negotiate']) {
+      expect(CLI_PARITY_ALLOWLIST[kind]?.arrives, kind).toBe('D1');
+    }
+    for (const kind of ['machine.checkCoreUpdate', 'machine.applyCoreUpdate', 'machine.coreUpdateStatus']) expect(CLI_PARITY_ALLOWLIST[kind]).toMatchObject({ reason: 'pending', slice: 'I3' });
+  });
+
+  // main 必败: only settings, feishu and schedule took --json
+  it('gives every command --json but `daemon run` and the hidden ones', () => {
+    const missing = commands.filter(command => !command.hidden && command.path !== 'daemon run' && !command.options.includes('--json')).map(command => command.path);
+    expect(missing).toEqual([]);
+    // the reads that rebuild first, and memory list's archived entries (devices 8.1)
+    for (const path of ['bot list', 'bot status', 'group list']) expect(commands.find(command => command.path === path)?.options, path).toContain('--fresh');
+    expect(commands.find(command => command.path === 'memory list')?.options).toContain('--all');
+  });
+});

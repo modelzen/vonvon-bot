@@ -9,7 +9,8 @@ import { stopVerifiedOwner, verifyPidLockOwner } from '../../server/owner-verifi
 import { getPidLockInfo, isPidLockOwnerRunning, PidLockError, readRunningPidLock, type PidLockInfo } from '../../server/pid-lock';
 import { readStartupRegistration, startRegisteredDaemon } from '../../service/startup';
 import { readCrashSummary, removeResumeRequest, writeResumeRequest, type CrashRecord } from '../../host/crash-store';
-import { localTime, want, withDaemon, type Daemon } from '../daemon-client';
+import { CommandError } from '../command-error';
+import { localTime, want, withDaemon, type Daemon, type Io } from '../daemon-client';
 
 export type DaemonStatus = { running: false } | {
   running: true;
@@ -169,7 +170,8 @@ export async function runStatus(json = false, home = paths.appDir, now: () => nu
   const summary = readCrashSummary(home, { running: status.running, ...(status.running ? { ownerPid: status.pid } : {}), now: now() });
   if (json) {
     const crashes = summary.crashes.map(({ at, kind, scope, appId, version, uptimeMs, paused, reason }) => ({ at, kind, scope, ...(appId ? { appId } : {}), version, ...(uptimeMs !== undefined ? { uptimeMs } : {}), ...(paused ? { paused } : {}), reason }));
-    process.stdout.write(`${JSON.stringify({ ...status, ...(summary.paused ? { paused: summary.paused } : {}), pausedBots: summary.pausedBots, crashes })}\n`);
+    // devices 8.3: read from the files here; an answer over RPC (C8) will say `source: 'daemon'`.
+    process.stdout.write(`${JSON.stringify({ ok: true, ...status, source: 'files', ...(summary.paused ? { paused: summary.paused } : {}), pausedBots: summary.pausedBots, crashes })}\n`);
     return;
   }
   const names = botNames(home);
@@ -213,7 +215,7 @@ async function waitForReplacement(home: string, before: Pick<PidLockInfo, 'pid' 
       try { await d.verify(home, lock); return runningStatus({ ...lock, listen: lock.listen }); }
       catch (error) { if (!(error instanceof PidLockError)) throw error; }
     }
-    if (d.now() >= deadline) throw new Error(`daemon ${Math.round(d.timeoutMs / 1000)} 秒内没有重启好。运行 vonvon daemon status 和 vonvon daemon logs 查看。`);
+    if (d.now() >= deadline) throw new CommandError('outcome-unknown', `daemon ${Math.round(d.timeoutMs / 1000)} 秒内没有重启好。运行 vonvon daemon status 和 vonvon daemon logs 查看。`);
     if (d.now() >= progressAt) { d.progress(`等待 daemon 重启…（旧 PID ${before.pid}）\n`); progressAt = d.now() + 5000; }
     await d.pause(100);
   }
@@ -226,7 +228,7 @@ async function waitForReplacement(home: string, before: Pick<PidLockInfo, 'pid' 
  */
 export async function runRestart(home = paths.appDir, d: RestartDeps = restartDeps): Promise<{ status: RunningStatus; outcome: 'restarted' | 'resumed' | 'started' }> {
   const current = await d.readLock(home);
-  if (current && !current.listen) throw new Error('daemon 正在启动，稍后再试。');
+  if (current && !current.listen) throw new CommandError('connection', 'daemon 正在启动，稍后再试。');
   let before: Pick<PidLockInfo, 'pid' | 'startedAt'> | null = current;
   if (!before) {
     const wasPaused = readCrashSummary(home, { running: false, now: d.now() }).paused !== undefined;
@@ -246,13 +248,13 @@ export async function runRestart(home = paths.appDir, d: RestartDeps = restartDe
     await d.daemon(call => call('重启 daemon', async c => want('重启 daemon', await c.run({ type: 'restartHost' }), 'applied')));
   } catch (error) {
     // A draining daemon answers only stopHost and daemonStatus and closes the connection on anything else.
-    if (error instanceof Error && error.message.startsWith('和 daemon 的连接断了')) throw new Error(DRAINING);
+    if (error instanceof Error && error.message.startsWith('和 daemon 的连接断了')) throw new CommandError('connection', DRAINING);
     throw error;
   }
   return { status: await waitForReplacement(home, before, d), outcome: wasPaused ? 'resumed' : 'restarted' };
 }
 
-export async function runLogs(tail = 200): Promise<void> {
+export async function runLogs(tail: number, io: Io): Promise<void> {
   const recent = await readRecentLogs({ maxBytes: Math.min(Math.max(tail * 200, 1024), 256 * 1024) });
-  process.stdout.write(recent);
+  io.write(io.json ? `${JSON.stringify({ ok: true, source: 'files', text: recent })}\n` : recent);
 }
