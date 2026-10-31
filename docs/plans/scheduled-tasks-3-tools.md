@@ -65,7 +65,7 @@
 - `backend.ts` 的 thread/start 带 `dynamicTools`（`profile.tools.schedule` 为真才带，4.5；为假就不带这个字段）。resume 不带（盘上恢复）。
 - **调用绑轮**：`turn/start` 的应答（`backend.ts:363`）拿到 `result.turn.id` 就 `this.entry?.noteToolUse(turnId)`，并 resolve 一个按 turnId 存的 `turnAcked` promise。`server-requests.ts` 加 `dynamicToolCall(params, id, scope, lookup)`，`jsonrpc.ts:301` 的 `peer.onRequest` 加 `method === 'item/tool/call'` 分支：按 `threadId` 找会话（找不到回 `success: false`"不是本 bot 的线程"）、`await thread.turnAcked(params.turnId, 2000)`（没到就当 `unknown-origin`）、按 `tool` 找入口、`arguments` 过 zod、`entry.call(tool, args, { toolUseId: params.turnId })`（和 Claude 共用 `callTool`），回 `{ contentItems: [{ type: 'inputText', text }], success }`；未知工具回 `success: false` 加一句。`callId` 记日志。线程关闭时 `CodexRequestScope.close()` 照样把挂着的调用答掉。
 - `registry.ts:169-170` 删掉 `releaseAfterRun` 分支，两家都 `origins.get(origin.toolUseId)`；`firstTurn` 字段不再用于授权（留着也行，但没有读者就删）。goal 运行（`launchGoalRun`）和子线程不调 `openTurn`，查不到 origin → `unknown-origin` → 拒，正好。
-- 上线前已开着的 Codex 会话没有工具，下一条新会话才有：`session_info` 的回复加第 16 节那一行；3.13 已写明；本片不做"换会话"。
+- 上线前已开着的 Codex 会话没有工具，下一条新会话才有；3.13 已写明。Codex 不拿 `session_info`，第 16 节那一行不做；本片不做"换会话"。
 - 关掉自带自动化：`codexSessionParams` 的 `config.features` 改成一处深合并（总设计 9.2），`memory-config.ts` 旁加 `NATIVE_SCHEDULING_OFF = { features: { in_app_local_automation: false } }`。真实 ChatGPT 登录下的工具表在自测第 7 步看。
 
 ### 4.5 【T3】`session-profile.ts`
@@ -106,7 +106,7 @@ JP-VPS，用验收 daemon（Bot 6）。用哪家是群绑定时定的（`vonvon 
   4. 定时回合里让 bot 给自己再排一次（任务内容写"做完后把自己这个任务改到 2 分钟后"）：`schedule_edit` 自己这一个成功，`runs` 里看到第二次运行；任务内容写"建一个新任务"：拒 `no-human-create`，回复里有那句。
   5. 跨群：在群 A 把群 B 一个任务的 id 贴给 bot 让它删：拒 `not-found`。
   6. 【T3】Claude：问"你有 CronCreate 吗，有 schedule 或 loop 这两个 skill 吗"，期望都没有；让它用 Cron 排一次，期望说没有工具。
-  7. 【T3b】Codex（JP-VPS 的 Codex 是真实 ChatGPT 登录）：一条 T3b 部署前就开着的旧会话里做第 1 步，期望 bot 说没有工具且 `session_info` 带那一行；问"把你能用的工具全列出来，只列名字"，结果里有没有 automation、schedule、cron、reminder 这类名字，有就记下来贴 PR，由审查者决定加进关闭名单。
+  7. 【T3b】Codex（JP-VPS 的 Codex 是真实 ChatGPT 登录）：一条 T3b 部署前就开着的旧会话里做第 1 步，期望 bot 说没有这个工具；问"把你能用的工具全列出来，只列名字"，结果里有没有 automation、schedule、cron、reminder 这类名字，有就记下来贴 PR，由审查者决定加进关闭名单。
   8. 自测完换回 `dev`，放锁。
 - 打码同 T2。
 

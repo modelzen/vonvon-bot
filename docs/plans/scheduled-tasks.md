@@ -308,7 +308,7 @@ export function createScheduler(deps: {
 - 本设计只把 schedule 类工具放上这条通路。设置和飞书工具的 Codex 一侧仍按 s46b 另定；dynamicTools 已证明可用，s46b 开工时优先考虑它，沙箱外 MCP 退为备选（Claude 定；`docs/plans/s46.md` 4.1 的 E 项由本实测推翻，那份计划不改）。
 - 生成的协议类型（`D/agent/codex-appserver/protocol/generated/`）没有 `dynamicTools` 字段，`protocol/index.ts:5` 指的 `codex:protocol:update` 脚本不存在。做法：手写 `D/agent/codex-appserver/dynamic-tools.ts` 的类型和 schema，不改生成文件。服务端请求的分发在 `D/provider/transport/jsonrpc.ts:301-308` 的 `peer.onRequest`（`app-server-client.ts` 只是 re-export），今天只认 `item/tool/requestUserInput`；`item/tool/call` 的处理函数放 `server-requests.ts`，在 `approvalAnswer`、`userInputRequest` 旁边。
 - **调用绑到这一轮**：今天 `registry.ts:169-170` 对 Codex（`releaseAfterRun !== undefined`）的每一次调用都按 `grant.firstTurn` 授权，不是"恢复线程的第一轮绑错"，是整条线程永远按第一轮的人算；真人开的线程上后来跑定时回合，`schedule_create` 会按真人的第一轮放行。改法：`turn/start` 的应答到了（`backend.ts:363` 拿到 `result.turn.id`）就 `entry.noteToolUse(turnId)`，把这一轮登记成 origin；`item/tool/call` 用 `params.turnId` 当 `toolUseId` 调 `entry.call`，应答还没到就等它最多 2 秒；删掉 `registry.ts:169` 的 `releaseAfterRun` 分支，两家都走 `origins`。goal 运行（`launchGoalRun` 8017）和子线程不调 `openTurn`，查不到 origin 就是 `unknown-origin`，拒掉，正好。
-- 本功能上线前已经开着的 Codex 会话，没有任务工具，要等下一条新会话。3.13 写明；`session_info` 的回复里也说（第 16 节）。Codex 不拿 memory 工具（`hiddenBlocksFor` 的分支不动）。
+- 本功能上线前已经开着的 Codex 会话，没有任务工具，要等下一条新会话。3.13 写明。Codex 不拿 `session_info`，老会话就是没有任务工具，不另加说明（T3b 做法）。Codex 不拿 memory 工具（`hiddenBlocksFor` 的分支不动）。
 - 关掉自带自动化：实测用的是假 provider（`requires_openai_auth=false`），没挂主人 ChatGPT 账号的 `codex_apps` 连接器，所以"工具表里没有自动化工具"只在没登录时成立。T3b 自测里在 JP-VPS 真实 ChatGPT 登录下列一次工具表（一条真实回合让模型列出它的工具，或读 `thread/start` 后的工具事件），有自动化、定时类的就加进关闭名单再合入。会话层 config 仍加 `features.in_app_local_automation = false`：`codexSessionParams`（`backend.ts:95-101`）的 `features` 今天是三处 spread（sandbox 的 `features`、`...NATIVE_MEMORY_OFF`、Windows 的覆盖），直接再 spread 一个会把 `memories: false` 盖掉或在 Windows 上丢掉——改成一处深合并 `features: { ...sandbox.features, ...NATIVE_MEMORY_OFF.features, ...NATIVE_SCHEDULING_OFF.features, ...(win32 非完全访问 ? { prefer_mxc: false } : {}) }`，`memory-config.ts` 旁加 `NATIVE_SCHEDULING_OFF`。只核 config 里带了它，不做真实回合的探测。
 
 ## 10. agent 工具（T3；Codex 的接法在 T3b）
@@ -432,7 +432,7 @@ Claude 替 owner 定的，owner 可以在 PR 里改：
 | 桌面端 bot 没运行 | Bot 没在运行，任务暂时看不到；启动后再来。 |
 | 桌面端冲突 | 别人改过了，已刷新成现在的内容；你刚才填的在下面，要的话再改一次。（旧表单内容显示在只读框里，不丢） |
 | 终端一行 | `st_… 日报 · 每个工作日 09:00 · 下次 11-02 09:00 · 已启用/已暂停（手动）/已暂停（连续失败）/已暂停（群已解绑）/已结束 · 上次 完成 11-01 09:00` |
-| `session_info`（Codex 旧会话） | 回复里加一行 `tools: { schedule: false, note: '这条会话在任务功能上线前开的，没有任务工具；下一条新会话才有' }` |
+| Codex 旧会话 | 不加文字：Codex 不拿 `session_info`，老会话就是没有任务工具（T3b） |
 | 工具描述（agent 看到的） | `schedule_list`：列出本群这个 Bot 的定时任务，含现在的时间和时区。`schedule_create`：给本群建一个定时任务，或给自己排一个稍后回来的一次性任务；时间用 when 写，不用算毫秒。`schedule_edit`：改任务的名字、内容、时间或发到哪；要带 list 里的 revision。`schedule_pause`/`schedule_resume`：暂停、恢复。`schedule_delete`：删除，连记录一起；要带 revision。`schedule_run_now`：马上跑一次，不影响下一次定时。 |
 
 ## 17. 2026-10-30 审查后改了什么

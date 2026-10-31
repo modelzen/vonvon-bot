@@ -6,9 +6,9 @@ import type { AgentTool } from '../src/agent/entry/tools';
 
 const logs = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), fail: vi.fn() }));
 vi.mock('../src/core/logger', () => ({ log: logs }));
-function thread(releaseAfterRun?: boolean): AgentThread {
+function thread(): AgentThread {
   return {
-    sessionId: 'fixture', ...(releaseAfterRun === undefined ? {} : { releaseAfterRun }), isAlive: vi.fn(() => true), close: vi.fn(async () => {}),
+    sessionId: 'fixture', isAlive: vi.fn(() => true), close: vi.fn(async () => {}),
     runStreamed: () => { throw Error('unused'); }, runGoal: () => { throw Error('unused'); },
     clearGoal: async () => {}, steer: async () => {}, abort: async () => {},
     compact: async () => ({ compacted: false, usage: null }),
@@ -19,10 +19,10 @@ const read: AgentTool = { name: 't_read', class: 'read', description: 'fixture r
 function memoryTool(run: AgentTool['run'] = async (_args, ctx) => ({ turn: ctx.turn, facts: ctx.memoryTurn?.() })): AgentTool {
   return { name: 't_mem', class: 'memory', description: 'fixture memory', input: z.object({}), run };
 }
-function setup(options: { place?: AgentPlace; facts?: TurnFacts; run?: AgentTool['run']; codex?: boolean; owner?: string; admin?: string[] } = {}) {
+function setup(options: { place?: AgentPlace; facts?: TurnFacts; run?: AgentTool['run']; owner?: string; admin?: string[] } = {}) {
   const entries = createAgentEntries({ appId: 'fixture', isAdmin: id => (options.admin ?? ['ou_o']).includes(id), isOwner: id => id === (options.owner ?? 'ou_o'), tools: [read, memoryTool(options.run)] });
   const entry = entries.issue(options.place ?? { kind: 'group', chatId: 'oc_a' });
-  const t = thread(options.codex ? false : undefined);
+  const t = thread();
   entry.attach(t);
   const scope = entries.openTurn(t, options.facts ?? member);
   entry.noteToolUse('u1');
@@ -61,8 +61,8 @@ describe('memory tools are authorized by class, not by role', () => {
     const g = setup();
     expect(await g.entry.call('t_mem', {}, { toolUseId: 'never-seen' })).toMatchObject({ ok: false, reason: 'unknown-origin' });
   });
-  it('a Codex call from an earlier turn is refused once a newer turn started (it uses the first turn)', async () => {
-    const f = setup({ codex: true });
+  it('a call from an earlier turn is refused once a newer turn started (its origin stays bound to that turn)', async () => {
+    const f = setup();
     f.entries.openTurn(f.t, { ...member, triggerMessageId: 'om_2' });
     expect(await f.call()).toMatchObject({ ok: false, reason: 'turn-ended' });
   });
