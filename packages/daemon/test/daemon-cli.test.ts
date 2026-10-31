@@ -53,24 +53,27 @@ it('exposes daemon lifecycle commands while status and logs leave a missing home
   for (const args of [['--help'], ['daemon', '--help']]) {
     const p = launch(f.home, f.root, args); expect(await p.exited).toBe(0);
     expect(p.output()).not.toMatch(/__daemon-control|__desktop-service|migrate|__restart/);
-    if (args[0] === 'daemon') expect(p.output()).toMatch(/^ +restart +Restart the daemon/m);
+    if (args[0] === 'daemon') expect(p.output()).toMatch(/^ +restart \[options\] +Restart the daemon/m);
     if (args[0] === '--help') for (const name of ['bot', 'group', 'settings']) expect(p.output()).toMatch(new RegExp(`^ +${name} +\\S`, 'm'));
   }
   const service = launch(f.home, f.root, ['service', '--help']);
   expect(await service.exited).toBe(0);
   expect(service.output()).toContain('install');
   expect(service.output()).toContain('uninstall');
-  for (const args of [['start'], ['run'], ['__daemon-control', 'stop'], ['data', 'migrate']]) {
-    const p = launch(f.home, f.root, args); expect(await p.exited).toBe(1);
+  // main 必败: an unknown command exited 1 like any failure; it is an argument error, 2 (devices 8.1)
+  for (const args of [['start'], ['run'], ['data', 'migrate']]) {
+    const p = launch(f.home, f.root, args); expect(await p.exited).toBe(2);
   }
+  const control = launch(f.home, f.root, ['__daemon-control', 'stop']); expect(await control.exited).toBe(1);
   for (const args of [['daemon', 'status', '--json'], ['daemon', 'logs']]) {
     const p = launch(f.home, f.root, args); expect(await p.exited).toBe(0);
   }
   // The RPC commands take no data lease, so the empty root below also proves they skip it.
+  // main 必败: bot and group exited 1; every command now says 3 when it cannot reach the daemon
   const rpcRoot = join(f.root, 'missing');
   for (const [args, code] of [
-    [['bot', 'list'], 1], [['bot', 'status', '--bot', 'cli_a'], 1],
-    [['group', 'list', '--json'], 1], [['settings', 'get'], 3],
+    [['bot', 'list'], 3], [['bot', 'status', '--bot', 'cli_a'], 3],
+    [['group', 'list', '--json'], 3], [['settings', 'get'], 3],
     [['feishu', 'groups', '--json'], 3], [['feishu', 'members', 'oc_fixture', '--json'], 3],
   ] as const) {
     const p = launch(f.home, rpcRoot, [...args]); expect(await p.exited, p.output()).toBe(code);
@@ -87,7 +90,7 @@ it('starts without bots, refuses duplicate ownership and releases PID lease on s
   expect(record.pid).toBe(p.child.pid); expect(record.listen).toMatch(/^127\.0\.0\.1:\d+$/);
   // The real connectLocal path: both must exit on their own once the socket is closed.
   const bots = launch(f.home, f.root, ['bot', 'list', '--json']);
-  expect(await bots.exited, bots.output()).toBe(0); expect(bots.output()).toContain('{"bots":[]}');
+  expect(await bots.exited, bots.output()).toBe(0); expect(bots.output()).toContain('{"ok":true,"bots":[]}');
   const groups = launch(f.home, f.root, ['group', 'list']);
   expect(await groups.exited, groups.output()).toBe(0); expect(groups.output()).toContain('还没有绑定的群');
   const second = launch(f.home, f.root, ['daemon', 'run']);
@@ -207,7 +210,8 @@ it('secrets refuses in a bot session before it takes the data lease or makes the
   for (const session of [{ FEISHU_CODEX_BRIDGE: '1', VONVON_SESSION: '' }, { FEISHU_CODEX_BRIDGE: '', VONVON_SESSION: '1' }]) {
     for (const args of [['list'], ['set', 'typesafe-api-key'], ['remove', 'typesafe-api-key']]) {
       const p = launch(f.home, root, ['secrets', ...args], session); p.child.stdin.end('ts_TESTKEY0000');
-      expect(await p.exited, p.output()).toBe(2);
+      // main 必败: 2, as if the arguments were wrong; a session refusal is 4 (devices 8.1)
+      expect(await p.exited, p.output()).toBe(4);
       expect(p.output()).toContain('这组命令不能在 Bot 的会话里用');
     }
   }

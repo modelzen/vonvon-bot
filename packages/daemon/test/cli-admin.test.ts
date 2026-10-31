@@ -34,6 +34,8 @@ function harness(client: Partial<Record<'snapshot' | 'run' | 'admin' | 'settings
   return { close, connect, daemon, io: (json = false) => ({ json, write: (text: string) => { out += text; } }), out: () => out, clear: () => { out = ''; } };
 }
 const one = (agents = [agent('cli_a')], memberships: Membership[] = [], tools: ToolState[] = []) => async () => snapshot(agents, memberships, tools);
+/** devices 8.1: the entry point prints the message and exits with the kind's code (`commandFailure`). */
+const failure = (kind: string, message?: unknown, extra: object = {}) => expect.objectContaining({ kind, ...(message === undefined ? {} : { message }), ...extra });
 
 it('picks a bot by id or a unique name and lists the choices otherwise', () => {
   const [a, b, c] = [agent('cli_a'), agent('cli_b'), agent('cli_c', '支付')];
@@ -54,7 +56,7 @@ it('bot repair-dir says how many directories it recorded and which will be made 
   expect(h.out()).toBe('✓ 已按现在的位置重新记录「研发助手」的 2 个目录。\n另有 1 个目录不在了，下次用到时会重建一个空的。\n'
     + '同一个项目根目录下的 bot 也要各运行一次：vonvon bot repair-dir 测试；vonvon bot repair-dir 运维。\n');
   h.clear(); await runBotRepairDir('研发助手', h.io(true), repair);
-  expect(JSON.parse(h.out())).toEqual({ handle: '研发助手', recorded: 2, missing: 1, others: ['测试', '运维'] });
+  expect(JSON.parse(h.out())).toEqual({ ok: true, handle: '研发助手', recorded: 2, missing: 1, others: ['测试', '运维'] });
   expect(h.connect).not.toHaveBeenCalled();
 });
 
@@ -114,10 +116,13 @@ it('bot status still prints the connection and tool steps when the checklist rea
   await expect(runBotStatus(undefined, h.io(), h.daemon)).rejects.toThrow('清单没有读全，稍后重新运行 vonvon bot status。');
   expect(h.out()).toBe(['Vonvon Bot（cli_a）', '! 飞书应用：检测失败', '    读取清单状态失败：飞书接口超时', '✓ 长连接：已连接', '✓ Codex：可用 · 0.156.1',
     '· Claude：无法确认', '    在网页里点「去本机环境」（vonvon open）', '· 后台服务：不支持', '    这台电脑不支持后台服务。', ''].join('\n'));
-  h.clear(); await expect(runBotStatus(undefined, h.io(true), h.daemon)).rejects.toThrow('清单没有读全');
-  const json = JSON.parse(h.out());
+  // main 必败: --json printed a success line before exiting 1; what was read now rides on the failure
+  h.clear(); const thrown = await runBotStatus(undefined, h.io(true), h.daemon).catch((error: unknown) => error);
+  expect(thrown).toEqual(failure('failed', '清单没有读全，稍后重新运行 vonvon bot status。'));
+  expect(h.out()).toBe('');
+  const json = (thrown as { partial: { steps: { id: string }[] } }).partial;
   expect(json).toMatchObject({ problem: '读取清单状态失败：飞书接口超时', ready: false });
-  expect(json.steps.map((step: { id: string }) => step.id)).toEqual(['credentials', 'connection', 'codex', 'claude', 'service']);
+  expect(json.steps.map(step => step.id)).toEqual(['credentials', 'connection', 'codex', 'claude', 'service']);
 });
 
 it('bot status prints the service step after the tools without counting it', async () => {
@@ -178,13 +183,12 @@ function scanner(jobs: Job[], o: { reply?: unknown; dropAt?: number; onQr?: () =
     watchSnapshots: (next: (value: DesktopSnapshot) => void) => { listener = next; return () => { listener = undefined; }; },
     onError: (next: (error: Error) => void) => { lost = next; return () => { lost = undefined; }; },
   } as never);
-  const exitCode = vi.fn();
   const deps: Partial<AddDependencies> = {
-    tty: o.tty ?? true, exitCode,
+    tty: o.tty ?? true,
     qr: async url => { setTimeout(() => o.onQr?.(), 0); return `[QR ${url}]\n`; },
     onInterrupt: handler => { interrupt = handler; return () => { interrupt = undefined; }; },
   };
-  return { ...h, run, exitCode, add: () => runBotAdd(h.io(), h.daemon, deps), interrupt: () => interrupt?.(), interrupted: () => interrupt === undefined };
+  return { ...h, run, add: (json = false) => runBotAdd(h.io(json), h.daemon, deps), interrupt: () => interrupt?.(), interrupted: () => interrupt === undefined };
 }
 
 it('bot add draws the QR, draws it again for a new link, and prints the saved bot', async () => {
@@ -195,7 +199,6 @@ it('bot add draws the QR, draws it again for a new link, and prints the saved bo
     '识别到国际版租户，改用 larksuite.com。', '用飞书 App 扫下面的二维码，建一个新的飞书应用（14:32 前有效）：', '[QR https://open.larksuite.com/q?a=\u0007]', '扫不了的话，在手机飞书里打开：https://open.larksuite.com/q?a=', '等你在飞书里确认…（Ctrl-C 取消）',
     '✓ 已保存 Bot：新[2Jbot（cli_new），已启用。', '清单没读到：读取清单状态失败：飞书接口超时。稍后运行 vonvon bot status。', ''].join('\n'));
   expect(s.run).toHaveBeenCalledWith({ type: 'registerAgent' });
-  expect(s.exitCode).not.toHaveBeenCalled();
   expect(s.interrupted()).toBe(true);
   expect(s.close).toHaveBeenCalledTimes(1);
   const setup: AdminSetupStatus = {
@@ -208,24 +211,37 @@ it('bot add draws the QR, draws it again for a new link, and prints the saved bo
 });
 
 it('bot add exits 1 for a failed, expired or busy scan and one cancelled elsewhere', async () => {
-  await expect(scanner([{ id: jobId, type: 'registerAgent', phase: 'failed', code: 'expired_token', message: '二维码已过期，请重新生成。' }]).add()).rejects.toThrow(/^二维码已过期，请重新生成。重新运行 vonvon bot add。$/);
-  await expect(scanner([{ id: jobId, type: 'registerAgent', phase: 'failed', code: 'access_denied', message: '用户拒绝了授权。' }]).add()).rejects.toThrow(/^用户拒绝了授权。$/);
-  await expect(scanner([qr('https://x'), { id: jobId, type: 'registerAgent', phase: 'cancelled', message: '已取消扫码。' }]).add()).rejects.toThrow('扫码被取消了：可能在网页里又开了一次注册（同一时间只能有一个）。');
-  await expect(scanner([], { reply: { kind: 'refused', code: 'registration_busy', message: '已有注册正在保存，请稍后重试。' } }).add()).rejects.toThrow(/^已有注册正在保存，请稍后重试。$/);
+  await expect(scanner([{ id: jobId, type: 'registerAgent', phase: 'failed', code: 'expired_token', message: '二维码已过期，请重新生成。' }]).add()).rejects.toEqual(failure('failed', '二维码已过期，请重新生成。重新运行 vonvon bot add。', { reason: 'expired_token' }));
+  await expect(scanner([{ id: jobId, type: 'registerAgent', phase: 'failed', code: 'access_denied', message: '用户拒绝了授权。' }]).add()).rejects.toEqual(failure('failed', '用户拒绝了授权。'));
+  await expect(scanner([qr('https://x'), { id: jobId, type: 'registerAgent', phase: 'cancelled', message: '已取消扫码。' }]).add()).rejects.toEqual(failure('failed', '扫码被取消了：可能在网页里又开了一次注册（同一时间只能有一个）。'));
+  await expect(scanner([], { reply: { kind: 'refused', code: 'registration_busy', message: '已有注册正在保存，请稍后重试。' } }).add()).rejects.toEqual(failure('failed', '已有注册正在保存，请稍后重试。', { reason: 'registration_busy' }));
 });
 
 it('bot add cancels its scan on Ctrl-C, refuses a pipe, and tells a dropped connection before and after the QR', async () => {
   const s = scanner([qr('https://x')], { onQr: () => s.interrupt() });
-  await s.add();
+  await expect(s.add()).rejects.toEqual(failure('interrupted', '已取消扫码。'));
   expect(s.run.mock.calls.map(([command]) => command)).toEqual([{ type: 'registerAgent' }, { type: 'cancelJob', jobId }]);
-  expect(s.out()).toMatch(/等你在飞书里确认…（Ctrl-C 取消）\n已取消扫码。\n$/);
-  expect(s.exitCode).toHaveBeenCalledWith(130);
+  expect(s.out()).toMatch(/等你在飞书里确认…（Ctrl-C 取消）\n$/);
   expect(s.close).toHaveBeenCalledTimes(1);
   const piped = scanner([], { tty: false });
-  await expect(piped.add()).rejects.toThrow('vonvon bot add 要在终端里运行：二维码打进日志会被别人扫走。没有终端的话，用网页注册（vonvon open --print）。');
+  await expect(piped.add()).rejects.toEqual(failure('bad-args', 'vonvon bot add 要在终端里运行：二维码打进日志会被别人扫走。脚本里用 vonvon bot add --json（输出别进日志），或者用网页注册（vonvon open --print）。'));
   expect(piped.connect).not.toHaveBeenCalled();
-  await expect(scanner([qr('https://x')], { dropAt: 0 }).add()).rejects.toThrow('和 daemon 的连接断了，扫码已经取消。重新运行 vonvon bot add。');
-  await expect(scanner([qr('https://x'), qr('https://x')], { dropAt: 1 }).add()).rejects.toThrow('不知道扫码有没有完成：运行 vonvon bot list 看看。');
+  // main 必败: both exited 1; a drop before the QR is a lost connection (3), after it the scan may have finished (6)
+  await expect(scanner([qr('https://x')], { dropAt: 0 }).add()).rejects.toEqual(failure('connection', '和 daemon 的连接断了，扫码已经取消。重新运行 vonvon bot add。'));
+  await expect(scanner([qr('https://x'), qr('https://x')], { dropAt: 1 }).add()).rejects.toEqual(failure('outcome-unknown', '不知道扫码有没有完成：运行 vonvon bot list 看看。'));
+});
+
+// main 必败: bot add refused anything but a terminal, --json included
+it('bot add --json runs without a terminal: one JSON line per step and QR link, then the result', async () => {
+  const s = scanner([{ id: jobId, type: 'registerAgent', phase: 'running', message: '正在创建扫码会话。' }, qr('https://open.feishu.cn/q?a=1'), qr('https://open.feishu.cn/q?a=1'),
+    qr('https://open.feishu.cn/q?a=1', 'domain_switched'), { id: jobId, type: 'registerAgent', phase: 'succeeded', message: 'Bot 已保存。', agentId: agentIdSchema.parse('cli_new') }], { tty: false });
+  await s.add(true);
+  const lines = s.out().trimEnd().split('\n').map(line => JSON.parse(line) as Record<string, unknown>);
+  expect(lines.map(line => line.event)).toEqual(['phase', 'qr', 'qr', 'result']);
+  expect(lines[1]).toEqual({ event: 'qr', url: 'https://open.feishu.cn/q?a=1', expiresAt: new Date(2026, 9, 15, 14, 32).getTime() });
+  expect(lines[2]).toMatchObject({ event: 'qr', status: 'domain_switched' });
+  expect(lines[3]).toMatchObject({ ok: true, event: 'result', agentId: 'cli_new', bot: { id: 'cli_new' }, problem: '读取清单状态失败：飞书接口超时' });
+  expect(s.out()).not.toContain('[QR');
 });
 
 it('group joined follows pages, stops on a repeated cursor or at 20 pages', async () => {
@@ -235,7 +251,7 @@ it('group joined follows pages, stops on a repeated cursor or at 20 pages', asyn
   const h = harness({ snapshot: one(), run });
   await runGroupJoined({}, h.io(true), h.daemon);
   expect(run).toHaveBeenCalledTimes(2);
-  expect(JSON.parse(h.out())).toEqual({ groups: [{ id: 'oc_1', name: '一', bound: true }, { id: 'oc_2', name: '二', bound: false }], complete: true });
+  expect(JSON.parse(h.out())).toEqual({ ok: true, groups: [{ id: 'oc_1', name: '一', bound: true }, { id: 'oc_2', name: '二', bound: false }], complete: true });
   let page = 0;
   const endless = harness({ snapshot: one(), run: async () => ({ kind: 'groups', groups: [], nextCursor: `c${++page}` }) });
   await runGroupJoined({}, endless.io(), endless.daemon);

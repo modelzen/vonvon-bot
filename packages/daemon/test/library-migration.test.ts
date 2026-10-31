@@ -418,7 +418,8 @@ describe('vonvon project list', () => {
     ]);
     const json: string[] = [];
     await runProjectList({ json: true, write: text => { json.push(text); } });
-    expect(JSON.parse(json.join(''))).toEqual(JSON.parse(JSON.stringify(await libraryOverview())));
+    // main 必败: --json had no ok and no source (devices 8.1)
+    expect(JSON.parse(json.join(''))).toEqual({ ok: true, source: 'files', ...JSON.parse(JSON.stringify(await libraryOverview())) });
   });
 
   it('says there are no projects yet', async () => {

@@ -8,6 +8,7 @@ export * from "./watch.js";
 export * from "./store.js";
 export * from "./handshake.js";
 export * from "./rpc.js";
+export * from "./rpc-kinds.js";
 export * from "./events.js";
 export * from "./admin.js";
 export * from "./secrets.js";

@@ -64,6 +64,8 @@ export type OpenDependencies = {
   platform: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
   tty: boolean;
+  /** --json: one line with the address. Never the credential: unlike a pairing link, it does not expire. */
+  json: boolean;
   write: (text: string) => void;
 };
 
@@ -79,7 +81,7 @@ const defaults = (): OpenDependencies => ({
   },
   credential: readCredential,
   launch: (file, args) => run(file, args),
-  platform: process.platform, env: process.env, tty: Boolean(process.stdout.isTTY),
+  platform: process.platform, env: process.env, tty: Boolean(process.stdout.isTTY), json: false,
   write: text => { process.stdout.write(text); },
 });
 
@@ -97,12 +99,14 @@ export async function runOpen(print = false, overrides: Partial<OpenDependencies
   const d: OpenDependencies = { ...defaults(), ...overrides };
   const listen = await d.listen();
   const credential = await d.credential();
+  const result = (opened: boolean): string => `${JSON.stringify({ ok: true, listen, url: `http://${listen}/`, opened })}\n`;
   if (print || (d.platform === 'linux' && !d.env.DISPLAY && !d.env.WAYLAND_DISPLAY)) {
-    d.write(`${guideFor(listen, credential, d.tty, d.env).join('\n')}\n`);
+    d.write(d.json ? result(false) : `${guideFor(listen, credential, d.tty, d.env).join('\n')}\n`);
     return;
   }
   const url = buildOpenUrl(listen, credential);
   const file = d.platform === 'darwin' ? 'open' : 'xdg-open';
   try { await d.launch(file, [url]); }
   catch (error) { throw new Error(`没能打开浏览器：${launchFailure(file, error)}。运行 vonvon open --print 手动打开。`); }
+  if (d.json) d.write(result(true));
 }

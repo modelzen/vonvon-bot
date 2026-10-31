@@ -1,4 +1,4 @@
-import { CommandError } from '../command-error';
+import { badArgs, CommandError } from '../command-error';
 import { settingsGet, settingsSet, settingsAccess } from '../../admin/structured-commands';
 import {
   agentSectionSchemas, isKnownJudgeSelection, projectEditableSchemas, sessionSectionSchemas, sessionThreadIdSchema,
@@ -31,9 +31,9 @@ const show = (value: unknown): string => typeof value === 'string' ? value : Str
 
 /** Checked before connecting: the protocol would refuse a blank --session, and that refusal is not the daemon's fault. */
 function scopeKind(target: Target): Kind {
-  if (target.group !== undefined && target.session !== undefined) throw new Error('--group 和 --session 只能选一个。');
+  if (target.group !== undefined && target.session !== undefined) throw badArgs('--group 和 --session 只能选一个。');
   if (target.session !== undefined && !sessionThreadIdSchema.safeParse(target.session).success) {
-    throw new Error('--session 要填会话的话题 id（1 到 1000 个字）。用 vonvon settings get --group <群> 看群里的会话。');
+    throw badArgs('--session 要填会话的话题 id（1 到 1000 个字）。用 vonvon settings get --group <群> 看群里的会话。');
   }
   return target.group !== undefined ? 'project' : target.session !== undefined ? 'session' : 'agent';
 }
@@ -82,22 +82,22 @@ export function parseAssignments(kind: Kind, assignments: readonly string[]): { 
     const equals = assignment.indexOf('=');
     const key = equals < 0 ? '' : assignment.slice(0, equals);
     const dot = key.indexOf('.');
-    if (dot <= 0 || dot === key.length - 1) throw new Error(FORMAT);
+    if (dot <= 0 || dot === key.length - 1) throw badArgs(FORMAT);
     const name = key.slice(0, dot);
-    if (section !== undefined && name !== section) throw new Error(`一次只能改一节；${section} 和 ${name} 分两次改。`);
+    if (section !== undefined && name !== section) throw badArgs(`一次只能改一节；${section} 和 ${name} 分两次改。`);
     section = name;
     const field = key.slice(dot + 1);
     const text = assignment.slice(equals + 1);
     fields.set(field, parseValue(text));
     texts.set(field, text);
   }
-  if (section === undefined) throw new Error(FORMAT);
-  if (section === 'cliBridge') throw new Error('咖啡一下第一版已拿掉，不能改。');
-  if (section === 'compact' && kind === 'project') throw new Error('自动压缩现在一直开着，不能关了。');
-  if (section === 'permission' && kind === 'project' && fields.has('network')) throw new Error('联网已经并进权限的档位：只读不联网，工作区可写联网，完全访问不限制。只读又要联网这类组合，用高级设置 permission.custom。');
-  if (section === 'permission' && kind === 'project' && fields.has('guestMode')) throw new Error('「普通成员权限」去掉了：一个群只有一个权限，群里谁说话都用它。改 permission.mode。');
+  if (section === undefined) throw badArgs(FORMAT);
+  if (section === 'cliBridge') throw badArgs('咖啡一下第一版已拿掉，不能改。');
+  if (section === 'compact' && kind === 'project') throw badArgs('自动压缩现在一直开着，不能关了。');
+  if (section === 'permission' && kind === 'project' && fields.has('network')) throw badArgs('联网已经并进权限的档位：只读不联网，工作区可写联网，完全访问不限制。只读又要联网这类组合，用高级设置 permission.custom。');
+  if (section === 'permission' && kind === 'project' && fields.has('guestMode')) throw badArgs('「普通成员权限」去掉了：一个群只有一个权限，群里谁说话都用它。改 permission.mode。');
   const schema = Object.hasOwn(TABLES[kind], section) ? TABLES[kind][section] : undefined;
-  if (!schema) throw new Error(`没有 ${section} 这一节。可以改的有：${sectionNames(kind).join('、')}`);
+  if (!schema) throw badArgs(`没有 ${section} 这一节。可以改的有：${sectionNames(kind).join('、')}`);
   // fromEntries keeps a key like __proto__ as data, so strict() reports it.
   const patch: Record<string, unknown> = Object.fromEntries(fields);
   const check = schema.partial().strict();
@@ -110,7 +110,7 @@ export function parseAssignments(kind: Kind, assignments: readonly string[]): { 
     if (asText.success || !asText.error.issues.some(issue => issue.code === 'invalid_type' && issue.path.length === 1)) patch[field] = texts.get(field);
   }
   const checked = check.safeParse(patch);
-  if (!checked.success) throw new Error(checked.error.issues.map(issue => explain(section, schema, issue)).join('\n'));
+  if (!checked.success) throw badArgs(checked.error.issues.map(issue => explain(section, schema, issue)).join('\n'));
   return { section, patch };
 }
 
@@ -192,7 +192,7 @@ function unknownJudge(selection: JudgeSelectionView | undefined): string[] {
 export async function runSettingsGet(section: string | undefined, target: Target, io: Io, daemon: Daemon = withDaemon): Promise<void> {
   const kind = scopeKind(target);
   const names = sectionNames(kind);
-  if (section !== undefined && !names.includes(section)) throw new Error(`没有 ${section} 这一节。可以看的有：${names.join('、')}`);
+  if (section !== undefined && !names.includes(section)) throw badArgs(`没有 ${section} 这一节。可以看的有：${names.join('、')}`);
   const { agent, membership, view, sessions } = await daemon(async call => {
     const { agent, membership, scope } = await resolveScope(call, target);
     const view = await readView(call, scope);
@@ -277,7 +277,7 @@ export async function runSettingsSet(assignments: readonly string[], target: Tar
     return settingsSet({ save: async edit => want('保存设置', await call('保存设置', c => c.settings({ type: 'save', edit }), { unknown }), 'saved', unknown).result }, { scope, section, revision, patch });
   });
   // Same wording as the web page's errorText; a conflict is not retried, the user reruns with fresh eyes.
-  if (result.kind === 'conflict') throw new CommandError('conflict', '这项设置刚在别处改过，没有保存。先读取当前版本再修改。', result.current);
+  if (result.kind === 'conflict') throw new CommandError('conflict', '这项设置刚在别处改过，没有保存。先读取当前版本再修改。', { reason: 'conflict', current: result.current });
   if (result.kind === 'rejected') throw new CommandError('bad-args', `没有保存：${result.fields.map(field => `${field.field}：${field.message}`).join('；')}`);
   if (result.kind === 'unavailable') throw new CommandError('refused', result.reason.kind === 'readonly' ? result.reason.message : '当前不可编辑。');
   // The daemon fills in a language model's backend: show what was stored, and for which groups.
@@ -296,5 +296,9 @@ export async function runSettingsAccess(target: Target, io: Io, daemon: Daemon =
     const { scope } = await resolveScope(call, target);
     return settingsAccess({ read: async scope => readView(call, scope) }, scope);
   });
-  print(io, [JSON.stringify(result)], result);
+  const human = Object.entries(result.access).map(([name, access]) => {
+    const each = access as SectionView['access'];
+    return `${name}：${each.kind === 'writable' ? '可以改' : `只读，${each.message}`}`;
+  });
+  print(io, human, result);
 }

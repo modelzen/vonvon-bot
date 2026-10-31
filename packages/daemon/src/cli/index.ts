@@ -1,7 +1,7 @@
 // first: sets the connection defaults of every daemon process (the supervisor, each `--bot` child and each command)
 import './tune-network';
-import { Command, Option } from 'commander';
-import { commandFailure } from './command-error';
+import { Command, CommanderError, Help, Option } from 'commander';
+import { badArgs, commandFailure } from './command-error';
 import { mkdir } from 'node:fs/promises';
 import { formatErrorTree } from '../core/error-parts';
 import { bridgeVersion } from '../core/version';
@@ -12,13 +12,38 @@ import { observeShutdown, type ShutdownControl } from '../host/lifecycle';
 import type { LingerChoice } from './commands/service';
 import type { ScheduleAction, ScheduleTarget } from './commands/schedule';
 
-const program = new Command().name('vonvon').description('Vonvon Bot daemon').version(bridgeVersion());
-const structured = ['settings', 'feishu', 'schedule'].includes(process.argv[2] ?? '');
-const jsonFailure = structured && process.argv.includes('--json');
-if (structured) program.exitOverride();
-if (jsonFailure) program.configureOutput({ writeErr: () => undefined });
+/** devices 8.1: every command takes --json and fails through `commandFailure` (the runner at the bottom). */
+export const program = new Command().name('vonvon').description('Vonvon Bot daemon').version(bridgeVersion());
+/** --json: stdout has JSON only, one line (`bot add`: one per step), a failure's too; commander's usage errors stay off stderr. */
+const jsonOutput = process.argv.includes('--json');
+// Before the subcommands, which copy both: commander's usage errors, --help and --version come back as a CommanderError.
+program.exitOverride();
+if (jsonOutput) program.configureOutput({ writeErr: () => undefined });
 let lease: DataLease | undefined;
 let control: ShutdownControl | undefined;
+
+const coverage = new WeakMap<Command, readonly string[]>();
+/** devices 8.5: the RPC kinds (protocol `rpcKinds()`) whose feature this command gives the terminal. */
+const covers = <C extends Command>(command: C, ...kinds: string[]): C => { coverage.set(command, kinds); return command; };
+export type CommandInfo = { path: string; hidden: boolean; covers: readonly string[]; options: string[] };
+/** Each command that runs something (a leaf), with what test/cli-parity.test.ts checks. */
+export function commandList(root: Command = program, prefix = '', hidden = false): CommandInfo[] {
+  const visible = new Set(new Help().visibleCommands(root));
+  return root.commands.flatMap(command => {
+    const path = `${prefix}${command.name()}`;
+    if (command.commands.length) return commandList(command, `${path} `, hidden || !visible.has(command));
+    return [{ path, hidden: hidden || !visible.has(command), covers: coverage.get(command) ?? [], options: command.options.flatMap(option => option.long ?? []) }];
+  });
+}
+type Json = { json?: boolean };
+const JSON_FLAG = ['--json', 'Print JSON'] as const;
+const io = (options: Json) => ({ json: Boolean(options.json), write: (text: string) => { process.stdout.write(text); } });
+const show = async <T extends object>(options: Json, human: string[], json: T & { ok?: never }): Promise<void> => (await import('./daemon-client')).print(io(options), human, json);
+const FRESH = ['--fresh', 'Have the daemon probe the tools and rebuild its state first (it does every 5 s)'] as const;
+const daemonFor = async (options: { fresh?: boolean }) => {
+  const client = await import('./daemon-client');
+  return options.fresh ? client.freshDaemon : client.withDaemon;
+};
 program.hook('preAction', async (_command, action) => {
   // bot, group, settings and schedule only talk RPC to a running daemon, so they never create the data root or take a lease;
   // bot repair-dir writes bots.json itself, under the daemon's own lock, and takes one.
@@ -51,69 +76,71 @@ daemon.command('run').description('Run in the foreground')
     await (await import('../host/bootstrap')).runHostRuntime({ bot: options.bot, port: options.port, managed: false, control });
   });
 daemon.command('start').description('Start a detached daemon')
-  .option('--port <port>', 'Loopback API port', (value) => Number(value), 0)
-  .action(async (options: { port: number }) => {
-    if (!Number.isInteger(options.port) || options.port < 0 || options.port > 65535) throw new Error('Invalid port.');
+  .option('--port <port>', 'Loopback API port', (value) => Number(value), 0).option(...JSON_FLAG)
+  .action(async (options: Json & { port: number }) => {
+    if (!Number.isInteger(options.port) || options.port < 0 || options.port > 65535) throw badArgs('Invalid port.');
     const status = await (await import('./commands/daemon')).runStart(options.port);
-    if (status.running) process.stdout.write(`running PID ${status.pid} at ${status.listen}\n`);
+    await show(options, status.running ? [`running PID ${status.pid} at ${status.listen}`] : [], status);
   });
-daemon.command('stop').description('Stop the running daemon').action(async () => {
+covers(daemon.command('stop'), 'machine.stopHost').description('Stop the running daemon').option(...JSON_FLAG).action(async (options: Json) => {
   const stopped = await (await import('./commands/daemon')).runStop();
-  process.stdout.write(stopped ? 'stopped\n' : 'already stopped\n');
+  await show(options, [stopped ? 'stopped' : 'already stopped'], { stopped });
 });
-daemon.command('restart').description('Restart the daemon (also resumes it after a crash pause)').action(async () => {
+covers(daemon.command('restart'), 'command.restartHost').description('Restart the daemon (also resumes it after a crash pause)').option(...JSON_FLAG).action(async (options: Json) => {
   const { status, outcome } = await (await import('./commands/daemon')).runRestart();
-  process.stdout.write(`running PID ${status.pid} at ${status.listen}\n`);
-  if (outcome === 'resumed') process.stdout.write('已恢复运行（之前因 10 分钟内崩溃 3 次暂停）。\n');
-  else if (outcome === 'started') process.stdout.write('daemon 没在运行，已启动。\n');
+  const note = outcome === 'resumed' ? '已恢复运行（之前因 10 分钟内崩溃 3 次暂停）。' : outcome === 'started' ? 'daemon 没在运行，已启动。' : undefined;
+  await show(options, [`running PID ${status.pid} at ${status.listen}`, ...note ? [note] : []], { ...status, outcome });
 });
-daemon.command('status').description('Show daemon status').option('--json', 'Print JSON').action(async (options: { json?: boolean }) => {
+covers(daemon.command('status'), 'admin.daemonStatus').description('Show daemon status').option(...JSON_FLAG).action(async (options: Json) => {
   await (await import('./commands/daemon')).runStatus(Boolean(options.json));
 });
-daemon.command('logs').description('Read recent daemon logs').option('--tail <lines>', 'Approximate line count', (value) => Number(value), 200)
-  .action(async (options: { tail: number }) => {
-    if (!Number.isInteger(options.tail) || options.tail < 1) throw new Error('Invalid tail count.');
-    await (await import('./commands/daemon')).runLogs(options.tail);
+covers(daemon.command('logs'), 'machine.logs').description('Read recent daemon logs').option('--tail <lines>', 'Approximate line count', (value) => Number(value), 200).option(...JSON_FLAG)
+  .action(async (options: Json & { tail: number }) => {
+    if (!Number.isInteger(options.tail) || options.tail < 1) throw badArgs('Invalid tail count.');
+    await (await import('./commands/daemon')).runLogs(options.tail, io(options));
   });
 program.command('open').description('Open the local web UI')
   .option('--print', '打印网页地址和 SSH 转发的办法，不打开浏览器（带凭据的链接只打印到终端）')
-  .action(async (options: { print?: boolean }) => {
-    await (await import('./commands/open')).runOpen(Boolean(options.print));
+  .option('--json', 'Print JSON: the address, never the credential')
+  .action(async (options: Json & { print?: boolean }) => {
+    await (await import('./commands/open')).runOpen(Boolean(options.print), { json: Boolean(options.json) });
   });
 const service = program.command('service').description('Manage the OS background service');
 const KEEP_RUNNING = ['--keep-running', '结束时之前在跑的 daemon 没了，就按原来的端口起一个分离的 daemon', false] as const;
-service.command('install').description('Install and start the OS service; a running detached daemon is handed over')
+covers(service.command('install'), 'machine.service.install').description('Install and start the OS service; a running detached daemon is handed over')
   .option('--port <port>', 'Loopback API port', (value) => Number(value))
   .option(...KEEP_RUNNING)
   .option('--linger', 'Linux：linger 没开就直接开，不问')
   .option('--no-linger', 'Linux：linger 没开也不开，只打印命令')
-  .action(async (options: { port?: number; keepRunning: boolean; linger?: boolean }) => {
-    if (options.port !== undefined && (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535)) throw new Error('Invalid port.');
+  .option(...JSON_FLAG)
+  .action(async (options: Json & { port?: number; keepRunning: boolean; linger?: boolean }) => {
+    if (options.port !== undefined && (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535)) throw badArgs('Invalid port.');
     let linger: LingerChoice = 'ask';
     if (options.linger === true) linger = 'on';
     else if (options.linger === false) linger = 'off';
-    await (await import('./commands/service')).runServiceCommand('install', undefined, { ...(options.port ? { port: options.port } : {}), keepRunning: options.keepRunning, linger });
+    await (await import('./commands/service')).runServiceCommand('install', undefined, { ...(options.port ? { port: options.port } : {}), keepRunning: options.keepRunning, linger }, {}, io(options));
   });
-service.command('uninstall').description('Stop and remove the OS service').option(...KEEP_RUNNING).action(async (options: { keepRunning: boolean }) => {
-  await (await import('./commands/service')).runServiceCommand('uninstall', undefined, { keepRunning: options.keepRunning });
+covers(service.command('uninstall'), 'machine.service.uninstall').description('Stop and remove the OS service').option(...KEEP_RUNNING).option(...JSON_FLAG).action(async (options: Json & { keepRunning: boolean }) => {
+  await (await import('./commands/service')).runServiceCommand('uninstall', undefined, { keepRunning: options.keepRunning }, {}, io(options));
 });
-service.command('status').description('Show the OS service and whether it runs the daemon').option('--json', 'Print JSON').action(async (options: { json?: boolean }) => {
+covers(service.command('status'), 'machine.status').description('Show the OS service and whether it runs the daemon').option(...JSON_FLAG).action(async (options: Json) => {
   await (await import('./commands/service')).runServiceStatus(Boolean(options.json));
 });
-type Json = { json?: boolean };
-const io = (options: Json) => ({ json: Boolean(options.json), write: (text: string) => { process.stdout.write(text); } });
 const BOT = ['--bot <bot>', 'Bot id (cli_…) or name'] as const;
 const bot = program.command('bot').description('Show bots through the running daemon');
-bot.command('add').description('Register a bot by scanning a QR code in this terminal').action(async () => {
-  await (await import('./commands/bot')).runBotAdd(io({}));
+covers(bot.command('add'), 'command.registerAgent', 'command.cancelJob').description('Register a bot by scanning a QR code in this terminal')
+  .option('--json', 'Print JSON Lines: the QR link and its expiry, each step, then the result')
+  .action(async (options: Json) => {
+    await (await import('./commands/bot')).runBotAdd(io(options));
+  });
+covers(bot.command('list'), 'snapshot.get', 'command.refresh').description('List bots and their connection state').option(...JSON_FLAG).option(...FRESH).action(async (options: Json & { fresh?: boolean }) => {
+  await (await import('./commands/bot')).runBotList(io(options), await daemonFor(options));
 });
-bot.command('list').description('List bots and their connection state').option('--json', 'Print JSON').action(async (options: Json) => {
-  await (await import('./commands/bot')).runBotList(io(options));
-});
-bot.command('status [bot]').description("Show a bot's setup checklist").option(...BOT).option('--json', 'Print JSON').action(async (wanted: string | undefined, options: Json & { bot?: string }) => {
-  if (wanted !== undefined && options.bot !== undefined && wanted !== options.bot) throw new Error(`Bot 填了两次（${wanted} 和 --bot ${options.bot}），只留一个。`);
-  await (await import('./commands/bot')).runBotStatus(options.bot ?? wanted, io(options));
-});
+covers(bot.command('status [bot]'), 'admin.setupStatus', 'command.refresh').description("Show a bot's setup checklist").option(...BOT).option(...JSON_FLAG).option(...FRESH)
+  .action(async (wanted: string | undefined, options: Json & { bot?: string; fresh?: boolean }) => {
+    if (wanted !== undefined && options.bot !== undefined && wanted !== options.bot) throw badArgs(`Bot 填了两次（${wanted} 和 --bot ${options.bot}），只留一个。`);
+    await (await import('./commands/bot')).runBotStatus(options.bot ?? wanted, io(options), await daemonFor(options));
+  });
 bot.command('repair-dir <bot>').description("Record a bot's directories again where they are now, after a move or a restore")
   .option('--json', 'Print JSON')
   .addHelpText('after', `
@@ -129,16 +156,16 @@ Example:
     await (await import('./commands/bot')).runBotRepairDir(wanted, io(options));
   });
 const group = program.command('group').description('List and bind Feishu groups');
-group.command('list').description('List bound groups').option(...BOT).option('--json', 'Print JSON').action(async (options: Json & { bot?: string }) => {
-  await (await import('./commands/group')).runGroupList(options, io(options));
+covers(group.command('list'), 'snapshot.get', 'command.refresh').description('List bound groups').option(...BOT).option(...JSON_FLAG).option(...FRESH).action(async (options: Json & { bot?: string; fresh?: boolean }) => {
+  await (await import('./commands/group')).runGroupList(options, io(options), await daemonFor(options));
 });
-group.command('joined').description('List the groups a bot is in, from Feishu').option(...BOT).option('--json', 'Print JSON').action(async (options: Json & { bot?: string }) => {
+covers(group.command('joined'), 'command.listJoinedGroups').description('List the groups a bot is in, from Feishu').option(...BOT).option('--json', 'Print JSON').action(async (options: Json & { bot?: string }) => {
   await (await import('./commands/group')).runGroupJoined(options, io(options));
 });
-group.command('pending').description('List groups that added the bot and wait to be bound').option(...BOT).option('--json', 'Print JSON').action(async (options: Json & { bot?: string }) => {
+covers(group.command('pending'), 'command.listPendingGroups').description('List groups that added the bot and wait to be bound').option(...BOT).option('--json', 'Print JSON').action(async (options: Json & { bot?: string }) => {
   await (await import('./commands/group')).runGroupPending(options, io(options));
 });
-group.command('bind <groupId>').description('Bind a group (oc_…) to a folder')
+covers(group.command('bind <groupId>'), 'command.bindGroup', 'directory.choose').description('Bind a group (oc_…) to a folder')
   .requiredOption('--folder <path>', 'Working folder')
   .option('--name <name>', 'Project name; defaults to the group name')
   .option('--tool <tool>', 'codex or claude', 'codex')
@@ -149,41 +176,42 @@ group.command('bind <groupId>').description('Bind a group (oc_…) to a folder')
     await (await import('./commands/group')).runGroupBind(groupId, options, io(options));
   });
 const project = program.command('project').description('List projects: the folders and memory groups share');
-project.command('list').description('List projects with their folders and the groups that use them').option('--json', 'Print JSON').action(async (options: Json) => {
+covers(project.command('list'), 'library.list').description('List projects with their folders and the groups that use them').option('--json', 'Print JSON').action(async (options: Json) => {
   await (await import('./commands/project')).runProjectList(io(options));
 });
 const memory = program.command('memory').description('Read and change memory entries: a project\'s or a bot\'s');
 const memoryScope = (command: Command) => command.option('--project <project>', 'Project name or id (prj_…)').option('--bot <appId>', 'Bot id: its own memory').option('--json', 'Print JSON');
 const memoryContext = async (options: Json) => (await import('./commands/memory')).terminalMemoryContext(io(options));
-type MemoryOptions = Json & { project?: string; bot?: string; branch?: string; revision: string; text?: string };
-memoryScope(memory.command('list').description('List the entries by branch')).action(async (options: MemoryOptions) => {
+type MemoryOptions = Json & { project?: string; bot?: string; branch?: string; revision: string; text?: string; all?: boolean };
+memoryScope(covers(memory.command('list'), 'memory.list').description('List the entries by branch')).option('--all', 'Also list the archived entries; --json always has them').action(async (options: MemoryOptions) => {
   await (await import('./commands/memory')).runMemoryList(options, await memoryContext(options));
 });
-memoryScope(memory.command('export').description('One markdown document per branch')).action(async (options: MemoryOptions) => {
+memoryScope(covers(memory.command('export'), 'memory.export').description('One markdown document per branch')).action(async (options: MemoryOptions) => {
   await (await import('./commands/memory')).runMemoryExport(options, await memoryContext(options));
 });
-memoryScope(memory.command('add <text>').description('Add an entry (refused in a Bot session)').option('--branch <name>', 'Branch; a new name opens one, none means 其他'))
+memoryScope(covers(memory.command('add <text>'), 'memory.add').description('Add an entry (refused in a Bot session)').option('--branch <name>', 'Branch; a new name opens one, none means 其他'))
   .action(async (text: string, options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryAdd(text, options, await memoryContext(options)); });
-memoryScope(memory.command('edit <itemId>').description('Change an entry (refused in a Bot session)').requiredOption('--revision <n>', 'The revision vonvon memory list shows').option('--text <text>', 'New text').option('--branch <name>', 'Move to this branch'))
+memoryScope(covers(memory.command('edit <itemId>'), 'memory.edit').description('Change an entry (refused in a Bot session)').requiredOption('--revision <n>', 'The revision vonvon memory list shows').option('--text <text>', 'New text').option('--branch <name>', 'Move to this branch'))
   .action(async (itemId: string, options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryEdit(itemId, options, await memoryContext(options)); });
-memoryScope(memory.command('forget <itemId>').description('Archive an entry (refused in a Bot session)').requiredOption('--revision <n>', 'The revision vonvon memory list shows'))
+memoryScope(covers(memory.command('forget <itemId>'), 'memory.archive').description('Archive an entry (refused in a Bot session)').requiredOption('--revision <n>', 'The revision vonvon memory list shows'))
   .action(async (itemId: string, options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryForget(itemId, options, await memoryContext(options)); });
-memoryScope(memory.command('reseal').description('Accept memory.json as it is now after it was changed outside the daemon (refused in a Bot session)'))
+memoryScope(covers(memory.command('reseal'), 'memory.reseal').description('Accept memory.json as it is now after it was changed outside the daemon (refused in a Bot session)'))
   .action(async (options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryReseal(options, await memoryContext(options)); });
-memoryScope(memory.command('branch-rename <from> <to>').description('Rename a branch (refused in a Bot session)'))
+memoryScope(covers(memory.command('branch-rename <from> <to>'), 'memory.branchRename').description('Rename a branch (refused in a Bot session)'))
   .action(async (from: string, to: string, options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryBranch('rename', from, to, options, await memoryContext(options)); });
-memoryScope(memory.command('branch-merge <from> <into>').description('Merge a branch into another (refused in a Bot session)'))
+memoryScope(covers(memory.command('branch-merge <from> <into>'), 'memory.branchMerge').description('Merge a branch into another (refused in a Bot session)'))
   .action(async (from: string, into: string, options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryBranch('merge', from, into, options, await memoryContext(options)); });
 const settings = program.command('settings').description('Read and change bot, group and session settings');
 type Target = Json & { bot?: string; group?: string; session?: string; revision?: string; reason?: string };
+const READ = ['settings.read.agent', 'settings.read.project', 'settings.read.session'];
 const scoped = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--session <threadId>', 'Session thread id').option('--json', 'Print JSON');
-scoped(settings.command('get [section]').description('Show settings, or one section; `get judge` also prints the whole judge prompt')).action(async (section: string | undefined, options: Target) => {
+scoped(covers(settings.command('get [section]'), ...READ, 'settings.sessions').description('Show settings, or one section; `get judge` also prints the whole judge prompt')).action(async (section: string | undefined, options: Target) => {
   await (await import('./commands/settings')).runSettingsGet(section, options, io(options));
 });
-scoped(settings.command('access').description('Show access to the requested settings')).action(async (options: Target) => {
+scoped(covers(settings.command('access'), ...READ).description('Show access to the requested settings')).action(async (options: Target) => {
   await (await import('./commands/settings')).runSettingsAccess(options, io(options));
 });
-scoped(settings.command('set <section.key=value...>').description('Change fields of one section; values are JSON or plain text'))
+scoped(covers(settings.command('set <section.key=value...>'), 'settings.save.agent', 'settings.save.project', 'settings.save.session').description('Change fields of one section; values are JSON or plain text'))
   .option('--revision <revision>', 'Revision held by the caller; stale revisions are rejected')
   .option('--reason <text>', 'Explanation retained with the committed result')
   .addHelpText('after', `
@@ -220,23 +248,23 @@ const timing = (command: Command) => command
 const runSchedule = async (action: ScheduleAction, target: Json & ScheduleTarget) => {
   await (await import('./commands/schedule')).runSchedule(action, target, io(target));
 };
-inGroup(schedule.command('list').description("List a group's tasks, or with --all every group's")).option('--all', "Every group's tasks of the bot")
+inGroup(covers(schedule.command('list'), 'schedule.list', 'schedule.listBot').description("List a group's tasks, or with --all every group's")).option('--all', "Every group's tasks of the bot")
   .action(async (options: ScheduleOptions) => { await runSchedule('list', options); });
-timing(inGroup(schedule.command('add <instruction>').description('Add a task: --name, one time option and what to do'))).option('--new-topic', 'Post each run in a new topic')
+timing(inGroup(covers(schedule.command('add <instruction>'), 'schedule.create').description('Add a task: --name, one time option and what to do'))).option('--new-topic', 'Post each run in a new topic')
   .action(async (instruction: string, options: ScheduleOptions) => { await runSchedule('add', { ...options, instruction }); });
-timing(inGroup(schedule.command('edit <taskId> [instruction]').description('Change a task; give only what changes'))).requiredOption('--revision <revision>', 'The revision schedule list --json shows')
+timing(inGroup(covers(schedule.command('edit <taskId> [instruction]'), 'schedule.edit').description('Change a task; give only what changes'))).requiredOption('--revision <revision>', 'The revision schedule list --json shows')
   .action(async (taskId: string, instruction: string | undefined, options: ScheduleOptions) => { await runSchedule('edit', { ...options, taskId, ...(instruction === undefined ? {} : { instruction }) }); });
-inGroup(schedule.command('delete <taskId>').description('Delete a task and its run records')).option('--revision <revision>', 'Defaults to the current one')
+inGroup(covers(schedule.command('delete <taskId>'), 'schedule.delete').description('Delete a task and its run records')).option('--revision <revision>', 'Defaults to the current one')
   .action(async (taskId: string, options: ScheduleOptions) => { await runSchedule('delete', { ...options, taskId }); });
-for (const [action, description] of [['pause', 'Pause a task'], ['resume', 'Resume a task; runs missed while paused are not made up'], ['run', 'Run a task now; the next scheduled run stays'], ['runs', 'Show the run count and the last 20 runs']] as const) {
-  inGroup(schedule.command(`${action} <taskId>`).description(description)).action(async (taskId: string, options: ScheduleOptions) => { await runSchedule(action, { ...options, taskId }); });
+for (const [action, description, kinds] of [['pause', 'Pause a task', ['schedule.pause']], ['resume', 'Resume a task; runs missed while paused are not made up', ['schedule.resume']], ['run', 'Run a task now; the next scheduled run stays', ['schedule.runNow']], ['runs', 'Show the run count and the last 20 runs', []]] as const) {
+  inGroup(covers(schedule.command(`${action} <taskId>`), ...kinds).description(description)).action(async (taskId: string, options: ScheduleOptions) => { await runSchedule(action, { ...options, taskId }); });
 }
 const feishu = program.command('feishu').description('Read Feishu groups and members');
-feishu.command('groups').description('List joined groups, one page').option(...BOT).option('--cursor <cursor>', 'Next page cursor').option('--json', 'Print JSON')
+covers(feishu.command('groups'), 'command.listJoinedGroups').description('List joined groups, one page').option(...BOT).option('--cursor <cursor>', 'Next page cursor').option('--json', 'Print JSON')
   .action(async (options: Json & { bot?: string; cursor?: string }) => {
     await (await import('./commands/feishu')).runFeishu('groups', undefined, options, io(options));
   });
-feishu.command('members <groupId>').description('List group members, one page').option(...BOT).option('--cursor <cursor>', 'Next page cursor').option('--json', 'Print JSON')
+covers(feishu.command('members <groupId>'), 'command.listGroupMembers').description('List group members, one page').option(...BOT).option('--cursor <cursor>', 'Next page cursor').option('--json', 'Print JSON')
   .action(async (groupId: string, options: Json & { bot?: string; cursor?: string }) => {
     await (await import('./commands/feishu')).runFeishu('members', groupId, options, io(options));
   });
@@ -254,14 +282,14 @@ const secretsContext = async (options: Json = {}) => (await import('./commands/s
 secrets.command('get', { hidden: true }).description('exec-provider 端点（从 stdin 读 JSON 请求）').action(async () => {
   await (await import('./commands/secrets')).secretsGet();
 });
-secrets.command('list').description('列出要 key 的服务：填没填、末四位、哪些 Bot 和飞书群选了它').option('--json', 'Print JSON').action(async (options: Json) => {
+covers(secrets.command('list'), 'admin.secrets').description('列出要 key 的服务：填没填、末四位、哪些 Bot 和飞书群选了它').option('--json', 'Print JSON').action(async (options: Json) => {
   await (await import('./commands/secrets')).runSecretsList(await secretsContext(options));
 });
 // --raw <id>: any entry by its id, for internal use and repairs; not in the help
 // commander takes excess arguments silently and, allowed, unknown options too: a key typed after the name is then in
 // command.args, refused in words; commander's own error would echo it
-secrets.command('set <name>').description('填或换一个 key：终端里按提示粘贴（不回显），脚本里从标准输入传')
-  .addOption(new Option('--raw').hideHelp()).allowUnknownOption()
+covers(secrets.command('set <name>'), 'admin.setSecret', 'admin.testSecret').description('填或换一个 key：终端里按提示粘贴（不回显），脚本里从标准输入传')
+  .addOption(new Option('--raw').hideHelp()).option(...JSON_FLAG).allowUnknownOption()
   .addHelpText('after', `
 Names:
   typesafe-api-key   TypeSafe（决策模型 Jev）
@@ -271,34 +299,47 @@ The key is never an argument: it would stay in the shell history. After saving, 
 Examples:
   vonvon secrets set typesafe-api-key
   vonvon secrets set typesafe-api-key < key.txt   # 脚本里`)
-  .action(async (name: string, options: { raw?: boolean }, command: Command) => {
-    await (await import('./commands/secrets')).runSecretsSet(name, command.args.slice(1), options, await secretsContext());
+  .action(async (name: string, options: Json & { raw?: boolean }, command: Command) => {
+    await (await import('./commands/secrets')).runSecretsSet(name, command.args.slice(1), options, await secretsContext(options));
   });
-secrets.command('remove <name>').description('删掉一个 key；选了它的 Bot 和飞书群要判断的消息按出错处理').addOption(new Option('--raw').hideHelp()).allowUnknownOption()
+covers(secrets.command('remove <name>'), 'admin.removeSecret').description('删掉一个 key；选了它的 Bot 和飞书群要判断的消息按出错处理').addOption(new Option('--raw').hideHelp()).option(...JSON_FLAG).allowUnknownOption()
   .addHelpText('after', `
 删之前可以先运行 vonvon secrets list，看哪些 Bot 和飞书群选了它；删完也会列出还选着它的。`)
-  .action(async (name: string, options: { raw?: boolean }, command: Command) => {
-    await (await import('./commands/secrets')).runSecretsRemove(name, command.args.slice(1), options, await secretsContext());
+  .action(async (name: string, options: Json & { raw?: boolean }, command: Command) => {
+    await (await import('./commands/secrets')).runSecretsRemove(name, command.args.slice(1), options, await secretsContext(options));
   });
+
+/**
+ * Exits once the JSON line, and whatever was written before it, is out: process.exit would cut a pipe's pending output
+ * short on macOS. A failure can leave a handle behind (the data lease, a socket being closed), so it does not wait for the loop.
+ */
+function exitAfterJson(failure: object & { exitCode: number }): void {
+  process.exitCode = failure.exitCode;
+  process.stdout.write(`${JSON.stringify(failure)}\n`, () => process.exit(failure.exitCode));
+}
+const flushLogs = async (): Promise<void> => (await import('../core/logger')).flushLogs();
 
 // `vonvon hook` is answered in bin/vonvon.mjs before this bundle loads.
 program.parseAsync(process.argv).then(async () => {
   if (!control) return;
-  await (await import('../core/logger')).flushLogs();
+  await flushLogs();
   process.exit(process.exitCode ?? 0);
 }).catch(async (err) => {
-  if (structured) {
-    if (err?.code === 'commander.helpDisplayed' || err?.code === 'commander.version') return;
-    const failure = commandFailure(err);
-    if (jsonFailure) process.stdout.write(`${JSON.stringify(failure)}\n`);
-    else console.error(failure.error.message);
-    process.exitCode = failure.exitCode;
-    return;
+  if (control) {
+    // s17b: an AggregateError (a failed shutdown) also prints each error inside it, one per line.
+    console.error(formatErrorTree(err));
+    await flushLogs();
+    // A service-managed host keeps a stop (0) or a requested restart (75) even when cleanup failed; anything else is 1.
+    const code = process.exitCode;
+    return process.exit(process.env.VONVON_SERVICE && !process.send && (code === 0 || code === 75) ? code : 1);
   }
-  // s17b: an AggregateError (a failed shutdown) also prints each error inside it, one per line.
-  console.error(formatErrorTree(err));
-  await (await import('../core/logger')).flushLogs();
-  // A service-managed host keeps a stop (0) or a requested restart (75) even when cleanup failed; anything else is 1.
-  const code = process.exitCode;
-  process.exit(control && process.env.VONVON_SERVICE && !process.send && (code === 0 || code === 75) ? code : 1);
+  // --help and --version end here too, through exitOverride.
+  if (err instanceof CommanderError && err.exitCode === 0) return;
+  // devices 8.1: every command fails the same way, with its kind's exit code.
+  const failure = commandFailure(err);
+  // commander has printed its own usage error
+  if (!jsonOutput && !(err instanceof CommanderError)) console.error(formatErrorTree(err));
+  await flushLogs();
+  if (jsonOutput) exitAfterJson(failure);
+  else process.exit(failure.exitCode);
 });
