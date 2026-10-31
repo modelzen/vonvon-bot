@@ -138,36 +138,37 @@ describe('what the agent reads of a task', () => {
     lastResult: { at: NOW - MIN, status: 'failed', excerpt: long(500), messageId: 'om_result', link: link(100) },
     recent: Array.from({ length: 20 }, (_, i) => run(i)), ...patch,
   });
-  /** The longest list reply: under the 50,000 characters Claude Code passes on without counting tokens (25,000 ÷ 2 × 4). */
-  const LIST_CHARS = 40_000;
+  /** The longest list reply, in UTF-8 bytes: Codex cuts a tool result past 40,000 bytes, Claude Code past about 50,000 characters. */
+  const LIST_BYTES = 32_000;
+  const bytes = (text: string) => Buffer.byteLength(text);
   const listText = async (f: Awaited<ReturnType<typeof scheduleFixture>>) => {
     const reply = await f.call('schedule_list');
     expect(reply).toMatchObject({ ok: true });
     const text = String(reply.ok && reply.result);
-    expect(text.length).toBeLessThanOrEqual(LIST_CHARS);
+    expect(bytes(text)).toBeLessThanOrEqual(LIST_BYTES);
     return text;
   };
 
-  const clipped = '现在 2026-11-01 10:00（Asia/Shanghai）· 本群 20 个任务 · 太长的内容截短了，用 schedule_list 带 taskId 看一个任务的全文';
+  const clipped = (count: number) => `现在 2026-11-01 10:00（Asia/Shanghai）· 本群 ${count} 个任务 · 太长的内容截短了，用 schedule_list 带 taskId 看一个任务的全文`;
 
   it('cuts a list that is too long for the agent at the first level: the free text to 1000 and 200, run errors kept', async () => {
-    // 12 tasks of 4000 characters: about 150 KB, under the registry's byte cap, but past what Claude Code passes on uncounted.
-    const f = await scheduleFixture({ tasks: Array.from({ length: 12 }, (_, i) => full(`st_${i}`, { name: `任务 ${i}`, createdBy: { via: 'chat', text: long(150) },
+    // 6 tasks of 4000 characters: about 75 KB, under the registry's byte cap, but past what Codex passes on whole.
+    const f = await scheduleFixture({ tasks: Array.from({ length: 6 }, (_, i) => full(`st_${i}`, { name: `任务 ${i}`, createdBy: { via: 'chat', text: long(150) },
       lastResult: undefined, recent: [run(19, long(50))] })) });
     f.open();
     const { first, json } = lines(await listText(f));
-    expect(first).toBe('现在 2026-11-01 10:00（Asia/Shanghai）· 本群 12 个任务 · 太长的内容截短了，用 schedule_list 带 taskId 看一个任务的全文');
+    expect(first).toBe(clipped(6));
     const [task] = json.tasks;
     expect(task).toMatchObject({ instruction: `${long(999)}…`, instructionClipped: true, instructionLength: 4000, createdBy: { text: long(150) } });
     expect(task.recent).toEqual([{ runId: 'run-19', slot: NOW - MIN, trigger: 'schedule', status: 'failed', startedAt: NOW - MIN, endedAt: NOW - MIN + 1000,
       durationMs: 1000, link: link(19), error: long(50) }]);
   });
-  it('cuts a list of 20 tasks at every limit shorter, to 300 and 80 without run errors, marks what it cut, and says so', async () => {
-    const f = await scheduleFixture({ tasks: Array.from({ length: 20 }, (_, i) => full(`st_${i}`)) });
+  it('cuts a list of 10 tasks at every limit shorter, to 300 and 80 without run errors, marks what it cut, and says so', async () => {
+    const f = await scheduleFixture({ tasks: Array.from({ length: 10 }, (_, i) => full(`st_${i}`)) });
     f.open();
     const { first, json } = lines(await listText(f));
-    expect(first).toBe(clipped);
-    expect(json.tasks).toHaveLength(20);
+    expect(first).toBe(clipped(10));
+    expect(json.tasks).toHaveLength(10);
     const [task] = json.tasks;
     expect(task.instruction).toBe(`${long(299)}…`);
     expect(task).toMatchObject({ instructionClipped: true, instructionLength: 4000 });
@@ -189,20 +190,20 @@ describe('what the agent reads of a task', () => {
     })) });
     f.open();
     const text = await listText(f);
-    expect(text.length).toBeLessThan(LIST_CHARS / 4);
+    expect(bytes(text)).toBeLessThan(LIST_BYTES / 2);
     const { first, json } = lines(text);
-    expect(first).toBe(clipped);
+    expect(first).toBe(clipped(20));
     const [task] = json.tasks;
     expect(task).toEqual({ id: `st_${'0'.repeat(16)}`, name: long(40), revision: 'f'.repeat(16), state: 'paused', pausedReason: 'failures',
       describe: `cron「${minutes} 9 * * 1-5」（America/Argentina/Buenos_Aires）`, running: false, instructionClipped: true, instructionLength: 4000 });
     expect(json.tasks.every((one: object) => !('instruction' in one) && !('createdBy' in one) && !('recent' in one))).toBe(true);
   });
-  it('shows a single task whole, far under what a list may take, however long its fields', async () => {
+  it('shows a single task whole, under what a list may take, however long its fields', async () => {
     const f = await scheduleFixture({ tasks: [full('st_full')] });
     f.open();
     const text = await f.text('schedule_list', { taskId: 'st_full' });
     expect(lines(text).json.task).toMatchObject({ instruction: long(4000), createdBy: { text: long(500) }, lastResult: { excerpt: long(500) } });
-    expect(text.length).toBeLessThan(LIST_CHARS / 4);
+    expect(bytes(text)).toBeLessThan(LIST_BYTES);
   });
   it('lists a long instruction whole when the list fits, so an edit from the list keeps all of it', async () => {
     const f = await scheduleFixture({ tasks: [stored('st_long', { instruction: long(2500) })] });
@@ -218,7 +219,7 @@ describe('what the agent reads of a task', () => {
   it('reads one task whole by its taskId, and only a task the list would show', async () => {
     const f = await scheduleFixture({ tasks: [...Array.from({ length: 20 }, (_, i) => full(`st_${i}`)), stored('st_elsewhere', { chatId: OTHER })] });
     f.open();
-    expect(lines(await f.text('schedule_list')).first).toBe(clipped);
+    expect(lines(await f.text('schedule_list')).first).toBe(clipped(20));
     const one = lines(await f.text('schedule_list', { taskId: 'st_3' }));
     expect(one.first).toBe(`任务：${long(40)} · 每天 09:00 · 下次 11-02 09:00（Asia/Shanghai）`);
     expect(one.json).toMatchObject({ kind: 'task', task: { id: 'st_3', instruction: long(4000), createdBy: { text: long(500) }, lastResult: { excerpt: long(500) } } });
