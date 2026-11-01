@@ -114,7 +114,7 @@ owner 2026-10-31 定（`requirements.md` 五轮，后面的轮次覆盖前面的
   - 之后每次连接都是 4.4 的双向认证，没有令牌可泄露。
 - **授权存储** `<dataRoot>/clients.json`（0600）：`{ v: 1, generation: number, clients: [{ id: 'cl_…', name, publicKey, clientKind, createdAt, lastSeenAt, lastAddress, pairedVia: 'invite', invitedBy: 'local' | <clientId>, revokedAt?: number }] }`。`invitedBy` 记这条邀请是本机 CLI/桌面端发的还是某个已配对客户端经 RPC 发的（SEC-11 场景 2：笔记本被偷后拿它配进来的客户端能一起撤）。撤销不删条目，写 `revokedAt`（墓碑），这样被撤销的客户端重连时能收到 4003 `client_revoked` 和对应文案，而不是和"从没配过"一样的 4002（CONTRACT-1）。`vonvon clients ls|rename|revoke [--cascade]`，RPC `device.clients|renameClient|revokeClient`。**授权不过期，只能手动撤销**（Paseo、Orca 都这样；owner 2026-10-31 确认）；丢了的电脑靠"最近 24 小时新配对"的提示和 `invitedBy` 级联撤销兜底。
 - **撤销立即生效、没有竞态**（SEC-16）：每次写 `clients.json` 都让 `generation` +1；每条连接记下认证时的 `generation`，连接登记后、处理每条 RPC 之前都核对一次这个客户端仍在授权里且未撤销（内存里的 Map 查一次，不读文件）。撤销时：改文件 → 关闭该客户端的所有活连接（4003）→ 取消它发起、还没结束的任务和日志订阅（`jobs.detach`、`logs.detach`）。
-- **配对成功要让主人知道**（SEC-11）：诊断事件 `client-paired { clientId, name, kind, address, invitedBy }`；桌面端（被连的那一侧）弹一条"新设备「X」已配对，来自 <地址>。不是你就到「设备」撤销"；`clients ls` 把最近 24 小时配对的标出来。链接已被用掉时的文案专门写（第 15 节），列出最近配对的客户端。不经 bot 私聊通知（本期不加新的 bot 消息类型）。
+- **配对成功要让主人知道**（SEC-11）：诊断事件 `client-paired { clientId, name, kind, address, invitedBy }`；桌面端（被连的那一侧）弹一条"新设备「X」已配对，来自 <地址>。不是你就到「设备」撤销"；`clients ls` 把最近 24 小时配对的标出来。链接已被用掉时的文案专门写（第 15 节）：客户端此时还没配上、看不到对面的列表，所以指到那台设备的「允许别的设备连接」或 `vonvon clients ls` 去看最近配对的客户端（2026-11-01 U1b）。不经 bot 私聊通知（本期不加新的 bot 消息类型）。
 - **频率限制**（SEC-7：限流要在做任何 DH 之前，否则第一条握手消息就能把事件循环打满）：
   - 未认证连接数：每个来源 IP 最多 4 条、全局最多 32 条，超了直接关（4004），不读帧。
   - 每个 IP 一个令牌桶：每分钟 20 次握手开始；`handshake_failed`、`unknown_client`、`pairing_failed` 都计数；**带有效 `inviteId`（存在且未过期）的配对握手不计未知公钥**，免得用户自己重试几次把自己封了。超了封 60 秒。
@@ -238,7 +238,7 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 
 - 设置里新页"设备"：第一行永远是"这台电脑"（本机 daemon，不可删）；下面是加过的设备，每行：名字、平台图标、状态点（在线 / 连不上 / 版本不一致 / 需要重新配对 / 已撤销）、"切换到"。当前设备在主导航旁有一个小标签"<设备名>"，点它也能切。**一次只看一台**（第三轮），切换就是整个界面重新指向另一台的连接：`client-context` 的 `client` 换成那台的；所有页面本来就从 `snapshot` 事件起步，不用逐页改。切换时未保存草稿照旧确认。**非当前设备没有连接**（第 1 版的后台"关注点"连接砍掉，SCOPE-1）。
 - 添加：粘贴链接 → 解析（版本、地址列表）→ 填名字（默认链接里的 `device.name`）→ 按地址顺序试连 → 配对（4.3）→ 入列表。失败按地址分类给 Tailscale/局域网/公网提示（第 15 节）。链接已被用掉时给专门文案（第 15 节）。
-- 存哪：Electron `safeStorage` 加密后写 `userData/devices.json`：`{ v: 1, devices: [{ deviceId, name, pk, clientKeypair, routes: [...], lastConnectedAt }] }`——**每台设备一对客户端密钥**（4.3）。网页端（浏览器）不存，本期不远程。
+- 存哪：`userData/devices.json`（0600）：`{ v: 1, devices: [{ deviceId, name, pk, clientId, clientKey: { publicKey, secretKeySealed }, routes: [...], lastRoute, lastConnectedAt, lastKnown, problem }] }`——**每台设备一对客户端密钥**（4.3）。只有私钥用 Electron `safeStorage` 加密，列表本身不加密：钥匙串拒绝访问或应用换了签名时，列表还在，那几台显示"需要重新配对"，不会整个丢掉（U1a 计划 4.2，2026-11-01）。网页端（浏览器）不存，本期不远程。
 
 ### 6.2 被连的那一侧（桌面端里管自己这台设备）
 
@@ -469,6 +469,8 @@ owner 确认后的变化（2026-10-31，第 18 节）：加 U4（桌面端自带
 
 owner 2026-11-01 的变化（第 19 节）：Mac、Windows 只用安装包装全部软件，命令行只装服务端只在 Linux 上做。I4a、I4b 和 I2 的 `.ps1` 部分（I2b）取消，从表里拿掉，计划留作记录；I2 只剩 I2a（Linux 的 `install.sh`、`uninstall.sh`）；加 I6，在 I3 合入后删掉 Mac、Windows 只装服务端留下的代码，I5 等它；U2 的桌面侧共存只剩退出一条（~1,400 → ~1,300）。
 
+U1 计划后的变化（2026-11-01，`devices-ui-1a-connections.md`、`devices-ui-1b-devices-page.md`）：U1a、U1b 合成一个 PR `claude/devices-ui-1`，计划仍分两份、审查按模块分；协议不同时的维护视图从 U2 挪进 U1b（D4a 计划里写的"桌面端维护子集界面 → U2"以此为准）；U1a 加了"请求带上所属设备"（切换那一刻旧页面的请求不会落到新设备上）和"看远程时本机断线弹窗延后"。U1a ~1,100 → ~1,900，U1b ~1,000 → ~1,500，合计和 C 道各多约 1,300（合计约 26,650，C 道约 6,300）。D2 要补三处契约（`SecureConnection.closed`、`SecureChannelError.stage`、子路径导出），写在 D2 计划 4.2 末尾。
+
 | 片 | 做什么 | 依赖 | 道 | 约行数 | 验收一行 |
 |---|---|---|---|---|---|
 | D0 `devices-0-docs` | 本文进 `docs/plans/devices.md`；`product.md` 第 11 节的改动（3.7 按 owner 2026-10-31 的三层写，回执卡标推迟）；`architecture.md` | — | A | ~900（文档） | 两份文档改完、互相引用对；`product.md` 里不再有"群会话能改本群设置"的说法 |
@@ -490,8 +492,8 @@ owner 2026-11-01 的变化（第 19 节）：Mac、Windows 只用安装包装全
 | I3 `server-3-update-engine` | 签名清单（product/channel/url/回滚保护；`files` 只有 Linux 两项，2026-11-01）、下载校验、先切 `current` 再 `requestRestart`、助手按版本判成功、回滚、`performStandaloneUpdate`、`vonvon update`（断线后读 `update-status.json`）、`checkCoreUpdate` 回复、排空白名单加 `coreUpdateStatus`、子进程钉 release、UI 门控（6.5） | I1、C1 | B2 | ~1,300 | 本地起假 CDN：从 v 到 v+1 升级，bot 做完手上活再重启，新进程版本是 v+1；旧版本的合法清单放到 stable 被拒；坏签名拒；起不来回滚；排空期间 `vonvon update` 一直显示进度 |
 | I6 `server-6-linux-only` | 删 Mac、Windows 只装服务端留下的代码（2026-11-01）：`build-server.mjs` 的 `TARGETS` 只留 `linux-x64`、`linux-arm64`，删 `unpackZip`/`writeZip` 和 `.zip`、Windows 的 Node 和 npm 布局、260 字符预算、大小写重名检查，`server-node.json` 只留两个；`bundledNpmCli` 的 Windows 布局；launchd 接受 `standalone` 的分支；桌面端 `RegisteredDaemon.kind` 的 `standalone`；I3 的 `current.txt` 分支和 `extractZip`；清单 `files` 六项改两项，I2a 脚本的清单匹配跟着改；对应的测试 | I2a、I3 | B2 | ~400（多是删除） | `build-server.mjs` 默认只出两个包；I3 自测第 2 步的端到端升级照旧过；服务端代码和脚本里搜不到 `current.txt`、`win-x64`、`darwin-arm64` |
 | I5 `server-5-release` | `publish-server.mjs`、`release-publish.mjs` 的 server 项、CI 构建包 + 脚本冒烟、`ci-scope.mjs`、三平台同版本门（macOS、Windows 安装包和 Linux 服务端包） | I1、I2a、I3、I6 | B2 | ~900 | dry-run 列出两个包、构建摘要和清单；stable 不经 owner 不切 |
-| U1a `devices-ui-1a-connections` | `device-registry`（safeStorage，每设备一对密钥）、`connections.ts` 多设备连接管理、IPC 路由 `desktop:client:device`、`client-context` 的 `activeDevice/isRemote`、重连和 `serverInfo` 比较 | D1、D2（可先用桩） | C | ~1,100 | 桌面端能同时持有本机和一台远程的连接对象，切换后 `snapshot` 来自对面 |
-| U1b `devices-ui-1b-devices-page` | 设备页、添加/粘贴/配对、起名、切换、状态点、版本提示条（4.6）、按分类的连不上提示、链接已用掉文案 | U1a | C | ~1,000 | Mac 桌面端加 JP-VPS，切过去看到 Bot 6；撤销后 1 秒内变"已撤销"并给文案 |
+| U1a `devices-ui-1a-connections`（和 U1b 一个 PR `claude/devices-ui-1`） | `device-registry`（每设备一对密钥，私钥 safeStorage）、`remote-transport.ts`、`connections.ts` 多设备连接管理（切换、退避、撤销、添加、删除）、请求按设备路由并带上所属设备、`desktop:devices:*`、`client-context` 的 `useActiveDevice`、重连和 `serverInfo` 比较、本机断线弹窗在看远程时延后 | D1、D2（可先用桩）；真机验收要 D3 | C | ~1,900 | 探针：JP-VPS 上加设备、切换拿到对面快照、`clients revoke` 后 1 秒内 `revoked`、4006 后自动重连 |
+| U1b `devices-ui-1b-devices-page`（和 U1a 一个 PR） | 设备页、添加/粘贴/配对、起名、切换标签、状态点、版本提示条（4.6）、协议不同时的维护视图（原写在 U2）、连不上整页说明和重连提示条、按分类的连不上提示、链接已用掉文案、Tailscale 建议 | U1a | C | ~1,500 | Mac 桌面端经 Tailscale 粘链接加 JP-VPS，切过去看到 Bot 6；撤销后 1 秒内变"已撤销"并给文案 |
 | U2 `devices-ui-2-remote-mode` | 6.4 全表：隐藏/改造 IPC 功能、"登录"文案全部改掉并带设备名、目录浏览标题和 Windows 路径输入、放开 `directory-browser.ts` 的家目录限制、服务开关路由、7.4 桌面侧的退出规则（2026-11-01 起共存只剩这一条）、删 `AgentProfileSettings` 和旧 Codex 任务面板；**完全访问群警示**（`TierInfo.warning` 只在群的完全访问档上有值，执行权限选择、建群和拉进新群对话框、`settings_set`/`createProject` 的回复和 `group create`/`settings set` 的输出都带上，第 15 节） | U1a、D1（协议） | C | ~1,300 | 远程时退出桌面端 JP-VPS 不停；本机是另外注册成后台服务的 npm 版 daemon 时退出桌面端不停它，桌面端自带的照旧停；Provider 文案带设备名、不含"登录"；远程目录浏览能进 `/srv`；给群选完全访问时看到警示，私聊里让 bot 把群改成完全访问，回复里也有这句 |
 | U3 `devices-ui-3-served` | 6.2 "允许别的设备连接"面板（地址分类、`cgnat`/`public` 确认框、网络变了确认）、生成链接、客户端列表（`invitedBy`、最近配对标记）、撤销（含 `--cascade`）、配对成功提示、6.3 的 `jobRunning` 和 60 秒宽限 | D1、D3 | C | ~1,000 | Mac 上开 Tailscale 地址、生成链接，第二台客户端（JP-VPS 上无头桌面端或 CLI 探针）配对成功并出现在列表、弹出提示 |
 | U4 `devices-ui-4-bundled-update` | 7.5 末尾"桌面端自带的服务端远程升级"：`D/service/bundled-update.ts`（找本机声明了 `desktop.selfUpdate` 的外壳连接、`desktopUpdateRequest` 事件、`machine.desktopUpdateReport` 和它的权限表行、映射到 `coreUpdateStatus`、`checkCoreUpdate` 带 `desktopShell`、`desktop_not_running`）、`DT/remote-self-update.ts`（在本机连接上订阅、驱动 `DesktopUpdater`/`WindowsDesktopUpdater` 的 check → 下载 → `quitAndInstall`、沿用 `beforeUpdateInstall` 的排空、远程触发不弹 Windows 本机确认框、托盘和窗口里给提示）、6.5 `update.bundled` 的按钮和"要开着桌面端"文案、对齐测试白名单、假更新驱动的测试 | D1（`negotiate`、权限表）、I3（`coreUpdateStatus`、6.5 门控、`vonvon update`）、U1a（外壳对本机的连接一直在）；真机验收要 D3 | C（计划，macOS）+ D（Windows 验证） | ~600 | 假驱动测试里远程 `applyCoreUpdate` 走完检查 → 下载 → 排空 → `quitAndInstall`，外壳不在时回 `desktop_not_running`；真机上 Mac（C）和 Windows（D）桌面端开着时从另一台已配对客户端点升级能走到外壳并回进度和结果，退出桌面端后再点给"要在那台打开桌面端"；真实换包在 0.9.0 之后第一个 0.9.x 上验（第 16 节） |
@@ -542,8 +544,8 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | 100.x 但不是 Tailscale | 100.x.y.z 不在 Tailscale 的网卡上，可能是运营商分配的地址（CGNAT），开启后同一运营商的其他用户也可能连到这台设备。确定要开启请加 `--allow-public`。 |
 | 公网地址警告（CLI 和桌面端） | 这是公网地址。开启后互联网上任何人都能尝试连接这台设备；虽然只有配对过的客户端能连上、内容加密，但你的服务端会直接暴露在扫描和攻击之下。建议改用 Tailscale 或局域网地址。确定要开启请加 `--allow-public`（桌面端：勾选"我了解风险"）。 |
 | 局域网换了 | 这台设备所在的网络变了（之前在另一个局域网开启了 192.168.x.x）。确认现在的网络是你信任的，再重新开启。 |
-| 客户端连不上（按分类） | tailscale：连不上 <设备>（100.x）。两台设备都登录了同一个 Tailscale 吗？在那台设备上运行 `tailscale ping <这台的地址>` 看看。/ lan：连不上 <设备>（192.168.x）。两台在同一个局域网吗？/ public：连不上 <设备>（x.x.x.x）。那台设备的防火墙放行了 7767 端口吗？ |
-| 链接已被用掉 | 这条链接已经被另一台设备用掉了。如果不是你，请马上到 <设备> 的「允许别的设备连接」里撤销它（最近配对的：「X」，来自 <地址>），再生成一条新链接。 |
+| 客户端连不上（按分类） | tailscale：连不上 <设备>（100.x）。两台设备都登录了同一个 Tailscale 账号吗？在这台电脑上运行 `tailscale ping <那台的地址>` 看看。/ lan：连不上 <设备>（192.168.x）。两台设备在同一个局域网里吗？那台设备开着吗？/ cgnat：连不上 <设备>（100.x）。这是运营商分配的地址，一般从外面连不进去，建议两台都装上 Tailscale。/ public：连不上 <设备>（x.x.x.x）。那台设备的防火墙放行了 <端口> 端口吗？（2026-11-01 U1b：`tailscale ping` 改在这台电脑上对那台的地址跑，客户端知道对面的地址、不一定知道自己的；加 cgnat；客户端一侧的完整文案见 `devices-ui-1b-devices-page.md` 4.9） |
+| 链接已被用掉 | 这条链接已经被用掉了。如果不是你用的，请马上到 <设备> 上撤销它：在那台设备的「允许别的设备连接」里，或者运行 `vonvon clients ls` 查看最近配对的设备、`vonvon clients revoke <id>` 撤销。然后生成一条新链接。（2026-11-01 U1b：客户端此时还没配上，看不到对面的客户端列表，所以不列"最近配对的"，改为指过去看） |
 | 新客户端配对成功（被连的桌面端） | 新设备「X」（<类型>，来自 <地址>）已经配对，可以管理这台电脑的 Vonvon Bot。不是你操作的？到「允许别的设备连接」撤销。 |
 | 设备身份变了 | <设备> 的身份和配对时不一样了（可能重装过，或换了数据目录）。为安全起见已断开。确认是你自己的设备后，重新配对。 |
 | 被撤销 | <设备> 已取消这台电脑的访问。要再连，请在那台设备上重新生成连接链接。 |
