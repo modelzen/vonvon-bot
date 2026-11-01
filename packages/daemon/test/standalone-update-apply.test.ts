@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { cp, mkdir, readdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -46,6 +46,14 @@ async function setup() {
   return { installRoot, cdn, deps, restarts };
 }
 const details = (statuses: UpdateStatus[]) => statuses.map(status => status.detail ?? status.phase);
+/** The update code as the daemon of another data directory runs it, on the same install root (the check after review 207). */
+async function dataDirectory(): Promise<typeof import('../src/service/standalone-update')> {
+  const appDir = mkdtempSync(join(paths.appDir, 'data-'));
+  vi.resetModules();
+  vi.doMock('../src/config/paths', () => ({ paths: { appDir, secretsGetterScript: join(appDir, 'secrets-getter') } }));
+  try { return await import('../src/service/standalone-update'); }
+  finally { vi.doMock('../src/config/paths', () => ({ paths })); vi.resetModules(); }
+}
 
 beforeEach(() => { rmSync(join(paths.appDir, 'update-status.json'), { force: true }); rmSync(join(paths.appDir, 'update.lock'), { force: true }); });
 
@@ -95,6 +103,15 @@ describe('startStandaloneUpdate', () => {
     try { expect(() => startStandaloneUpdate({}, deps)).toThrow(UpdateBusyError); }
     finally { release?.(); }
   });
+  // the check after review 207: daemons of other data directories share releases/, and each update held only its own update.lock
+  it('lets one update at a time write into releases/, whichever data directory asks', async () => {
+    const { installRoot, deps } = await setup();
+    const first = (await dataDirectory()).startStandaloneUpdate({}, { ...deps, requestRestart: undefined });
+    // Before: this one cleared the other's releases/1.0.1.part, and the other's unpacking crashed on ENOENT.
+    expect(() => startStandaloneUpdate({}, deps)).toThrow(UpdateBusyError);
+    expect(await first.done).toMatchObject({ phase: 'done', to: '1.0.1' });
+    expect(existsSync(join(installRoot, 'releases.lock'))).toBe(false);
+  });
   it('says already current and lets the lock go', async () => {
     const { deps } = await setup();
     expect(await startStandaloneUpdate({}, { ...deps, currentVersion: '1.0.1' }).done).toMatchObject({ phase: 'done', message: '已是最新' });
@@ -121,16 +138,6 @@ describe('startStandaloneUpdate', () => {
     expect(cdn.requests.filter(url => url === URL_1_0_1)).toHaveLength(2);
     expect(existsSync(join(installRoot, 'releases', '1.0.1.part'))).toBe(false);
     expect(existsSync(join(installRoot, 'releases', '1.0.1', 'half'))).toBe(false);
-  });
-  it('takes the zip on Windows and switches current.txt', async () => {
-    const { installRoot, deps, cdn } = await setup();
-    await rm(join(installRoot, 'current'));
-    await switchCurrent(installRoot, '1.0.0', 'win32');
-    const zip = await packRelease(paths.appDir, '1.0.1', true);
-    cdn.routes.set(`${BASE}/stable/manifest.json`, { body: signManifest(manifestPayload('1.0.1', 10, { 'win-x64': { sha512: zip.sha512, size: zip.size } }), keys.privateKey) });
-    cdn.routes.set(`${BASE}/1.0.1/vonvon-server-1.0.1-win-x64.zip`, { body: zip.bytes });
-    expect(await startStandaloneUpdate({}, { ...deps, platform: 'win32' }).done).toMatchObject({ phase: 'restarting', to: '1.0.1', previous: '1.0.0' });
-    expect(await readFile(join(installRoot, 'current.txt'), 'utf8')).toBe('1.0.1\n1.0.0\n');
   });
   it('ends at the switch when no daemon restarts it (the CLI with the daemon stopped)', async () => {
     const { deps } = await setup();

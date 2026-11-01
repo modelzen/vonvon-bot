@@ -60,6 +60,14 @@ describe('extractTarGz', () => {
     const into = scratch();
     expect(await refusal(extractTarGz(await tarGz(Array.from({ length: 50_001 }, () => dir)), into))).toBe('too_big');
   });
+  // the check after review 207 (P3): a read error on the archive was an uncaught exception that killed the daemon,
+  // and the unpacking never settled
+  it.each([
+    ['is missing', 'ENOENT', (): string => join(root, 'missing.tar.gz')],
+    ['is a directory', 'EISDIR', (): string => root],
+  ])('rejects when the archive %s', async (_name, code, file) => {
+    await expect(extractTarGz(file(), scratch())).rejects.toMatchObject({ code });
+  });
   it('refuses an archive cut short', async () => {
     const file = `${scratch()}.tar.gz`;
     await writeFile(file, gzipSync(await member('a.txt', 'hello')));
