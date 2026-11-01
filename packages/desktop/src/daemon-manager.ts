@@ -12,7 +12,7 @@ export interface VerifiedDaemon {
 
 /** What an installed definition starts; the startup repair checks it still exists. */
 export interface RegisteredDaemon {
-  kind: 'npm' | 'desktop';
+  kind: 'npm' | 'desktop' | 'standalone';
   executable: string;
   entry: string;
   port: number;

@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import { lstat, mkdtemp, mkdir, readFile, readdir, readlink, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
-import { stageDependencies } from './stage-daemon.mjs';
+import { fileURLToPath } from 'node:url';
+import { bundledWorkspaces, stageDaemon, stageDependencies } from './stage-daemon.mjs';
 
 const sdk = '@anthropic-ai/claude-agent-sdk';
 
@@ -223,23 +225,51 @@ test('compact staging removes development payloads but retains runtime assets an
   assert.equal(createRequire(join(destination, 'package.json'))('runtime'), 'fixture');
 });
 
-test('compact staging keeps only built output and package/legal metadata for first-party runtime packages', async t => {
+test('hoist staging (Windows desktop, server packages) also removes development payloads', async t => {
   const {source, destination, pkg} = await fixture(t);
-  for (const name of ['@vonvon/client', '@vonvon/protocol']) {
-    const root = await pkg(name, {main: 'dist/index.cjs'});
-    await addFile(root, 'dist/index.cjs', `module.exports = ${JSON.stringify(name)};`);
-    for (const file of ['LICENSE', 'LICENSE.bridge', 'NOTICE', 'NOTICE.md']) await addFile(root, file);
-    for (const file of ['src/index.ts', 'test/runtime.test.ts', 'tsconfig.json', 'README.md', 'dist/index.d.ts', 'dist/index.cjs.map']) await addFile(root, file);
+  const runtime = await pkg('runtime', {main: 'src/index.js'});
+  const removed = ['index.d.ts', 'src/index.ts', 'src/worker.mts', 'dist/index.js.map', 'test/fixture.json', 'docs/guide.md', 'examples/demo.cjs'];
+  for (const file of removed) await addFile(runtime, file);
+  await addFile(runtime, 'src/index.js', "module.exports = 'runs from src';");
+  await addFile(runtime, 'LICENSE');
+  await stageDependencies(source, destination, {hoist: true, metadata: {dependencies: {runtime: '1'}}});
+  const staged = join(destination, 'node_modules/runtime');
+  for (const file of removed) await assert.rejects(lstat(join(staged, file)), {code: 'ENOENT'}, file);
+  assert.equal(await readFile(join(staged, 'LICENSE'), 'utf8'), 'fixture');
+  assert.equal(createRequire(join(destination, 'package.json'))('runtime'), 'runs from src');
+});
+
+test('stageDaemon ships a minified CLI with the workspace packages bundled from source', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'vonvon-stage-daemon-'));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const daemonRoot = fileURLToPath(new URL('../packages/daemon/', import.meta.url));
+  const daemon = JSON.parse(await readFile(join(daemonRoot, 'package.json'), 'utf8'));
+  const staged = join(root, 'daemon');
+  const result = await stageDaemon(staged, {name: daemon.name, version: daemon.version, type: 'module', bin: daemon.bin, dependencies: daemon.dependencies}, {hoist: true});
+  const cli = await readFile(join(staged, 'dist/cli.js'), 'utf8');
+  assert.ok(cli.length / cli.split('\n').length > 400, 'dist/cli.js is minified');
+  assert.doesNotMatch(cli, /sourceMappingURL|\bfrom\s*["']@vonvon\//);
+  const metadata = JSON.parse(await readFile(join(staged, 'package.json'), 'utf8'));
+  for (const name of bundledWorkspaces) {
+    assert.equal(name in metadata.dependencies, false, name);
+    await assert.rejects(lstat(join(staged, 'node_modules', name)), {code: 'ENOENT'}, name);
+    assert.equal(result.external.includes(name), false, name);
   }
-  await stageDependencies(source, destination, {compact: true, metadata: {dependencies: {'@vonvon/client': '1', '@vonvon/protocol': '1'}}});
-  const appRequire = createRequire(join(destination, 'package.json'));
-  for (const name of ['@vonvon/client', '@vonvon/protocol']) {
-    const root = join(destination, 'node_modules', name);
-    assert.equal(appRequire(name), name);
-    assert.equal(JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).name, name);
-    for (const file of ['LICENSE', 'LICENSE.bridge', 'NOTICE', 'NOTICE.md']) assert.equal(await readFile(join(root, file), 'utf8'), 'fixture');
-    for (const file of ['src', 'test', 'index.cjs', 'tsconfig.json', 'README.md', 'dist/index.d.ts', 'dist/index.cjs.map']) await assert.rejects(lstat(join(root, file)), {code: 'ENOENT'}, `${name}/${file}`);
+  assert.ok(result.external.includes('ws'));
+  // Protocol keeps its own zod when the daemon ships a different one.
+  const zodOf = from => realpath(dirname(createRequire(join(from, 'package.json')).resolve('zod/package.json')));
+  const protocolRoot = fileURLToPath(new URL('../packages/protocol/', import.meta.url));
+  assert.equal(result.bundled.includes('zod'), await zodOf(protocolRoot) !== await zodOf(daemonRoot));
+  const shipped = [];
+  async function walk(path) {
+    for (const entry of await readdir(path, {withFileTypes: true})) {
+      if (entry.isDirectory()) await walk(join(path, entry.name));
+      else if (/\.(?:[mc]?ts|map)$/.test(entry.name)) shipped.push(join(path, entry.name));
+    }
   }
+  await walk(staged);
+  assert.deepEqual(shipped, []);
+  assert.equal(execFileSync(process.execPath, [join(staged, 'bin/vonvon.mjs'), '--version'], {encoding: 'utf8'}).trim(), daemon.version);
 });
 
 test('default CLI staging keeps development payloads and separate dependency copies without symlinks', async t => {

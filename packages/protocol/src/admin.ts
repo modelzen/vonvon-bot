@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { agentIdSchema, permissionSchema } from "./domain.js";
+import { agentIdSchema, distributionSchema, permissionSchema } from "./domain.js";
 import { API_KEY_MAX, keyIdSchema, secretServiceSchema, secretTestOutcomeSchema } from "./secrets.js";
 
 export const adminProjectSchema = z.object({
@@ -85,7 +85,7 @@ export const adminSetupStatusSchema = z.object({
 export type AdminSetupStatus = z.infer<typeof adminSetupStatusSchema>;
 
 export const daemonStatusSchema = z.object({
-  distribution: z.object({kind:z.enum(["global-npm", "bundled", "development", "unknown"]), cliPath:z.string()}).optional(),
+  distribution: distributionSchema.optional(),
   platformName: z.string().optional(), installed: z.boolean(), running: z.boolean(),
   selfHosted: z.boolean(), pid: z.number().optional(), lastExit: z.string().optional(),
   version: z.string(), uptimeMs: z.number().optional(), servicePath: z.string().optional(),
