@@ -64,14 +64,6 @@ export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
   'memory.seen': { reason: 'client-only', note: "the web page's read marks" },
   'memory.newCounts': { reason: 'client-only', note: "the web page's unread counts" },
 
-  'settings.read.host': pending('C6', 'settings get --host'),
-  'settings.save.host': pending('C6', 'settings set --host'),
-  'settings.act.voice': pending('C6', 'settings act voice'),
-  'settings.act.adminMember': pending('C6', 'settings act admin add / remove'),
-  'settings.act.projectMember': pending('C6', 'settings act member add / remove'),
-  'settings.act.projectAudience': pending('C6', 'settings act member all'),
-  'settings.act.commentInstructions': pending('C6', 'settings act comment-instructions'),
-  'settings.models': pending('C6', 'settings models'),
   'settings.chooseExecutable': dead('D1'),
   'settings.saveExecutable': dead('D1'),
 

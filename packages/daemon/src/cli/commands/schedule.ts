@@ -6,7 +6,7 @@ import { pickBot, pickGroup, print, want, withDaemon, type Daemon, type Io } fro
 
 export type ScheduleAction = 'list' | 'add' | 'edit' | 'pause' | 'resume' | 'delete' | 'run' | 'runs';
 export type ScheduleTarget = {
-  bot?: string; group?: string; all?: boolean; taskId?: string; instruction?: string; name?: string; revision?: string; tz?: string; newTopic?: boolean;
+  bot?: string; group?: string; all?: boolean; taskId?: string; instruction?: string; name?: string; revision?: string; tz?: string; newTopic?: boolean; follow?: boolean;
   every?: string; daily?: string; weekly?: string; at?: string; cron?: string;
 };
 
@@ -163,8 +163,13 @@ export async function runSchedule(action: ScheduleAction, target: ScheduleTarget
   const name = words('--name ', target.name, 40);
   const instruction = words('任务内容', target.instruction, 4000);
   if (action === 'add' && (name === undefined || instruction === undefined)) throw badArgs('要给 --name <名字> 和任务内容。');
+  if (target.newTopic && target.follow) throw badArgs('--new-topic 和 --follow 只能选一个。');
+  // edit only: add posts the group's way unless --new-topic
+  const placement = action !== 'edit' ? undefined : target.newTopic ? { kind: 'newTopic' } as const : target.follow ? { kind: 'follow' } as const : undefined;
   if (action === 'edit' && target.revision === undefined) throw badArgs('要给 --revision：vonvon schedule list --json 里这个任务的 revision。');
-  if (action === 'edit' && spec === undefined && name === undefined && instruction === undefined && tz === undefined) throw badArgs(`没有要改的：给 --name、时间（${WHEN_FORMS}）、--tz 或新的任务内容。`);
+  if (action === 'edit' && spec === undefined && name === undefined && instruction === undefined && tz === undefined && placement === undefined) {
+    throw badArgs(`没有要改的：给 --name、时间（${WHEN_FORMS}）、--tz、--new-topic 或 --follow，或者新的任务内容。`);
+  }
   const taskId = target.taskId ?? '';
   const { what, kind } = ACTIONS[action];
 
@@ -195,7 +200,7 @@ export async function runSchedule(action: ScheduleAction, target: ScheduleTarget
       }) };
       case 'edit': {
         const next = await resolved();
-        const patch = { ...(name ? { name } : {}), ...(instruction ? { instruction } : {}), ...(next ? { spec: next } : {}), ...(tz ? { timeZone: tz } : {}) };
+        const patch = { ...(name ? { name } : {}), ...(instruction ? { instruction } : {}), ...(next ? { spec: next } : {}), ...(placement ? { placement } : {}), ...(tz ? { timeZone: tz } : {}) };
         return { reply: await send({ action: 'edit', chatId, taskId, revision: target.revision!, patch }) };
       }
       case 'pause': case 'resume': return { reply: await send({ action, chatId, taskId }) };
