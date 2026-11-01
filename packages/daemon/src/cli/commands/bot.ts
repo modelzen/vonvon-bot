@@ -46,8 +46,8 @@ const ACTION_COMMAND: Record<StepAction['kind'], (action: StepAction, bot: strin
   codexLogin: () => undefined,
   claudeLogin: () => undefined,
   serviceInstall: () => '运行 vonvon service install',
-  serviceSkip: () => undefined,      // C8 填：运行 vonvon service skip
-  serviceRecheck: () => undefined,   // C8 填：运行 vonvon service status
+  serviceSkip: () => '运行 vonvon service skip',
+  serviceRecheck: () => '运行 vonvon service status',
 };
 
 /** One checklist step as `bot status` prints it; exported for the tests of steps no status gives today. */

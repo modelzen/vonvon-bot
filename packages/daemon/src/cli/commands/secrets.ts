@@ -170,6 +170,24 @@ export async function runSecretsRemove(name: string, extra: string[], options: {
   });
 }
 
+/**
+ * `secrets test <名字>` (cli-8-machine): the daemon tries the stored key once, as `secrets set` does after saving.
+ * `busy` exits 0, the key itself being right; any other outcome but `ok` exits 1 with it as `reason`.
+ */
+export async function runSecretsTest(name: string, extra: string[], ctx: SecretsContext): Promise<void> {
+  refuseInSession(ctx);
+  if (extra.length) throw badArgs(REMOVE_ARGS_REFUSED);
+  const provider = service(name);
+  const reply = await ctx.daemon(call => call('试 key', c => c.admin({ type: 'testSecret', keyId: provider.keyId })));
+  if (reply.kind === 'refused') throw new CommandError('refused', `没试成：${reply.message}`, { reason: reply.code });
+  if (reply.kind !== 'secretTested') throw new CommandError('failed', `没试成：daemon 回了意外的结果（${reply.kind}）。`);
+  const tried = `试了一次：${reply.message}`;
+  if (reply.outcome !== 'ok' && reply.outcome !== 'busy') {
+    throw new CommandError('failed', `${tried}。${reply.outcome === 'auth' ? `换一个 key：vonvon secrets set ${provider.keyId}` : `稍后再试：vonvon secrets test ${provider.keyId}`}`, { reason: reply.outcome });
+  }
+  print(ctx.io, [tried], { keyId: provider.keyId, outcome: reply.outcome, message: reply.message, ...(reply.status === undefined ? {} : { status: reply.status }) });
+}
+
 /** lark-cli's exec provider (1.0.98, the same protocol as OpenClaw's). */
 export const EXEC_PROTOCOL_VERSION = 1;
 export interface ExecReply {
