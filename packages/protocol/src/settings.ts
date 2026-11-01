@@ -546,6 +546,7 @@ export const actionSchema = z.discriminatedUnion("kind", [
 export type SettingsAction = z.infer<typeof actionSchema>;
 export const modelQuerySchema = z
   .object({
+    refresh: z.boolean().optional(),
     botId: agentIdSchema,
     backend: z.string().trim().min(1).max(1000),
     purpose: z.enum(["project", "session", "comments", "titles", "judge"]),

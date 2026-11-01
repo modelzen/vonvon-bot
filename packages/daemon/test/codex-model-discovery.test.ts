@@ -179,7 +179,7 @@ describe('Codex model discovery preserves the native picker directory', () => {
     writeFileSync(join(directory,'auth.json'),'{"changed":true}');expect(backend.peekModels()).toBeUndefined();
     await backend.listModels();
     const now=Date.now();const clock=vi.spyOn(Date,'now').mockReturnValue(now+301_000);
-    try{expect(backend.peekModels()).toBeUndefined();}finally{clock.mockRestore();}
+    try{expect(backend.peekModels()?.[0]?.id).toBe('native-a');expect(backend.peekModels()?.[0]?.serviceTiers).toBeUndefined();}finally{clock.mockRestore();}
   });
 
   it('constrains account tiers by the actual session cwd configuration', async () => {

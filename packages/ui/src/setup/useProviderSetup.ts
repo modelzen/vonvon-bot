@@ -23,6 +23,7 @@ export function useProviderSetup(provider: SetupProvider, snapshot: DesktopSnaps
   const [pendingToolInstall, setPendingToolInstall] = useState(false);
   const [issue, setIssue] = useState('');
   const mounted = useRef(true);
+  const modelRefreshPending = useRef(false);
   const sequence = useRef(0);
   const infoSequence = useRef(0);
   const statusSequence = useRef(0);
@@ -66,8 +67,9 @@ export function useProviderSetup(provider: SetupProvider, snapshot: DesktopSnaps
   const read = useCallback(() => Promise.all([
     readReplies([{type: 'scan'}, {type: 'backendCatalog'}], infoSequence), pollStatus(),
   ]).then(() => undefined), [readReplies, pollStatus]);
-  const verify = useCallback(async () => {
+  const verify = useCallback(async (refresh = false) => {
     const mine = ++sequence.current;
+    if (refresh) modelRefreshPending.current = true;
     const currentRequest = () => mounted.current && providerNow.current === provider && mine === sequence.current;
     const previous = provider === 'codex' ? lastModels.current : undefined;
     setCheck({state: 'checking', provider, signature: '', models: previous, stale: Boolean(previous?.length)});
@@ -79,12 +81,12 @@ export function useProviderSetup(provider: SetupProvider, snapshot: DesktopSnaps
         if (!currentRequest()) return;
         accept(catalog);
         if (catalog.kind === 'backends' && catalog.entries.some(item => item.id === backend && item.depState === 'installed')) {
-          const login = await client.environment({type: 'backendLogin', id: backend, refresh: true});
+          const login = await client.environment({type: 'backendLogin', id: backend, refresh});
           if (!currentRequest()) return;
           accept(login);
         }
       }
-      await run({type: 'refresh', tools: true});
+      if (refresh) await run({type: 'refresh', tools: true});
       if (!currentRequest()) return;
       const current = (await client.snapshot()).tools.find(item => item.tool === provider);
       if (!currentRequest()) return;
@@ -99,8 +101,9 @@ export function useProviderSetup(provider: SetupProvider, snapshot: DesktopSnaps
         if (currentRequest()) setCheck({state: 'unavailable', provider, signature: currentSignature, models: previous, stale: Boolean(previous?.length), message: !current || current.installation === 'unknown' ? current?.message || '暂时无法确认安装状态，请重新检测。' : providerInstalled(current) && current.authentication === 'unknown' ? current.message : undefined});
         return;
       }
-      const models = await client.collaboration({action: 'providerModels', backend});
+      const models = await client.collaboration({action: 'providerModels', backend, ...(modelRefreshPending.current ? {refresh: true} : {})});
       if (!currentRequest()) return;
+      modelRefreshPending.current = false;
       if (models.kind !== 'providerModels') throw new Error('模型读取未完成，请重试。');
       if (models.state === 'ready' && models.models.length > 0) {
         if (provider === 'codex') lastModels.current = models.models;
@@ -140,10 +143,10 @@ export function useProviderSetup(provider: SetupProvider, snapshot: DesktopSnaps
     finally {if (mounted.current && providerNow.current === provider) setPendingToolInstall(false);}
   }
   async function installProvider(update = false) {
-    if (!tool || tool.installation === 'unknown') {await verify(); return;}
+    if (!tool || tool.installation === 'unknown') {await verify(true); return;}
     if (provider === 'codex') {
       const source = tools.find(item => item.tool === 'codex');
-      if (source?.installation === 'external' || source?.source === 'explicit') {await verify(); return;}
+      if (source?.installation === 'external' || source?.source === 'explicit') {await verify(true); return;}
     }
     sequence.current++; setCheck(undefined);
     const reply = await (provider === 'codex' ? installTool('codex', update) : request({type: 'backendInstall', id: backend, update}));
@@ -185,7 +188,7 @@ export function useProviderSetup(provider: SetupProvider, snapshot: DesktopSnaps
     : toolInstall?.id === observedToolInstallId.current && toolInstall?.kind === 'failed' ? toolInstall.message
     : login?.id === observedLoginId.current && (login?.kind === 'failed' || login?.kind === 'timedOut') ? login.message : undefined;
   const canContinue = ready && !working && !activeInstall && !relevantToolInstall && !activeLogin && !activeCodexJob && providerInstalled(tool) && providerAuthenticated(tool) && check?.state === 'ready' && check.provider === provider && Boolean(check.models?.length) && check.signature === signature;
-  return {tool, tools, entry, check, issue: issue || operationMessage || (tool?.installation === 'unknown' || providerInstalled(tool) && tool?.authentication === 'unknown' ? tool?.message : undefined), working, activeInstall, relevantToolInstall, activeLogin, activeCodexJob, canContinue, verify, read, installProvider,
+  return {tool, tools, entry, check, issue: issue || operationMessage || (tool?.installation === 'unknown' || providerInstalled(tool) && tool?.authentication === 'unknown' ? tool?.message : undefined), working, activeInstall, relevantToolInstall, activeLogin, activeCodexJob, canContinue, verify: () => verify(true), read, installProvider,
     cancelInstall: () => activeInstall ? request({type: 'cancelBackendInstall', operationId: activeInstall.operationId}) : relevantToolInstall ? request({type: 'cancelInstall', operationId: relevantToolInstall.id}) : undefined,
     cancelLogin: () => activeLogin ? request({type: 'cancelLogin', operationId: activeLogin.id}) : undefined,
     installTool, request};

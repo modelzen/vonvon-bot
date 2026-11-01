@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { AppServerClient } from './app-server-client';
-import { refreshCodexResolution } from './locate';
-import { binChildEnv } from '../../platform/tool-path';
-import { installManagedCodex, runSetupChild } from './managed-install';
+import { codexVersionAsync, refreshCodexResolution } from './locate';
+import { connectGated } from './client-pool';
+import { codexModelCacheKey } from './models';
+import { installManagedCodex } from './managed-install';
 import { ProviderProcessCleanupError, ProviderProcessStoppedError } from '../owned-process';
 
 export interface CodexSetup {
@@ -41,22 +42,30 @@ export class CodexSetupService {
   private active: JobEntry | undefined;
   private readonly cleanupFailures = new Map<string, ProviderProcessCleanupError>();
   private closed = false;
-  private probe: { abort: AbortController; done: Promise<CodexSetup> } | undefined;
+  private probe: { abort: AbortController; done: Promise<CodexSetup>; refresh: boolean } | undefined;
+  private queuedProbe: Promise<CodexSetup> | undefined;
   private closing: Promise<void> | undefined;
+  private cached: { key: string; value: CodexSetup } | undefined;
 
   constructor(private readonly options: { install?: (signal: AbortSignal) => Promise<void>; retain?: number } = {}) {}
 
-  setup(): Promise<CodexSetup> {
+  setup(opts?: { refresh?: boolean }): Promise<CodexSetup> {
     if (this.closed) throw new CodexSetupConflict('daemon 正在退出');
     if (this.cleanupFailures.size) throw new CodexSetupConflict('此前 Codex 子进程清理未确认，请先退出并检查');
-    if (this.probe) return this.probe.done;
+    if (this.probe) {
+      if (!opts?.refresh || this.probe.refresh) return this.probe.done;
+      return this.queuedProbe ??= this.probe.done.catch(() => undefined).then(() => {
+        this.queuedProbe = undefined;
+        return this.setup({ refresh: true });
+      });
+    }
     const abort = new AbortController();
-    const done = this.readSetup(abort.signal).catch(error => {
+    const done = this.readSetup(abort.signal, opts?.refresh === true).catch(error => {
       // The failed probe still reports its error, but confirmed death permits a new attempt.
       if (error instanceof ProviderProcessCleanupError && !(error instanceof ProviderProcessStoppedError)) this.cleanupFailures.set('probe', error);
       throw error;
     }).finally(() => { this.probe = undefined; });
-    this.probe = { abort, done };
+    this.probe = { abort, done, refresh: opts?.refresh === true };
     return done;
   }
 
@@ -64,21 +73,27 @@ export class CodexSetupService {
     return new AppServerClient({ bin, cwd: homedir(), clientName: 'vonvon-codex-setup', quietOutput: true, initializeTimeoutMs: 10_000 });
   }
 
-  private async readSetup(signal: AbortSignal): Promise<CodexSetup> {
-    const bin = await refreshCodexResolution({ force: true });
+  private async readSetup(signal: AbortSignal, refresh: boolean): Promise<CodexSetup> {
+    const bin = await refreshCodexResolution(refresh ? { force: true } : undefined);
     signal.throwIfAborted();
     if (!bin) return { installation: process.env.CODEX_BIN ? 'unknown' : 'missing', authentication: 'unknown', version: null, executable: null, message: process.env.CODEX_BIN ? `CODEX_BIN 指向不可用的文件：${process.env.CODEX_BIN}` : '尚未安装 Codex' };
-    let version: string | null = null;
+    // Explicit CODEX_BIN resolution has no version evidence until this call.
+    let version = await codexVersionAsync(bin, process.env.CODEX_BIN && refresh ? { force: true } : undefined);
+    const key = codexModelCacheKey(bin);
+    if (!refresh && this.cached?.key === key) return this.cached.value;
+    this.cached = undefined;
     const client = this.client(bin);
     const stop = (): void => { void client.close().catch(() => undefined); };
     signal.addEventListener('abort', stop, { once: true });
     try {
-      version = await runSetupChild(bin, ['--version'], { cwd: homedir(), signal, env: binChildEnv(bin), timeoutMs: 20_000 });
-      if (!/^codex-cli \S+$/.test(version)) throw new SetupDisplayError('所选文件不是可识别的 Codex CLI');
+      if (!version || !/^codex-cli \S+$/.test(version)) throw new SetupDisplayError('所选文件不是可识别的 Codex CLI');
       signal.throwIfAborted();
-      await client.connect();
+      await connectGated(client, bin);
       const authentication = accountState(await client.request('account/read', { refreshToken: false }, 10_000));
-      return { installation: 'installed', authentication, version, executable: bin, message: `当前 Codex：${bin}` };
+      if (key !== codexModelCacheKey(bin)) throw new SetupDisplayError('检测期间 Codex 配置已变化，请重新检测');
+      const value: CodexSetup = { installation: 'installed', authentication, version, executable: bin, message: `当前 Codex：${bin}` };
+      this.cached = { key, value };
+      return value;
     } catch (error) {
       if (error instanceof ProviderProcessCleanupError) throw error;
       return { installation: version && /^codex-cli \S+$/.test(version) ? 'installed' : 'unknown', authentication: 'unknown', version, executable: bin, message: `无法确认当前 Codex 的账户状态：${bin}` };
@@ -92,6 +107,7 @@ export class CodexSetupService {
     if (this.closed) throw new CodexSetupConflict('daemon 正在退出');
     if (this.cleanupFailures.size) throw new CodexSetupConflict('此前 Codex 子进程清理未确认，请先退出并检查');
     if (this.active) throw new CodexSetupConflict('已有 Codex 设置操作正在进行');
+    this.cached = undefined;
     if (type === 'install' && process.env.CODEX_BIN) throw new CodexSetupConflict(`当前使用显式 CODEX_BIN：${process.env.CODEX_BIN}；请先移除此覆盖再安装`);
     const id = randomUUID();
     const abort = new AbortController();
@@ -143,7 +159,7 @@ export class CodexSetupService {
     signal.addEventListener('abort', cancel, { once: true });
     try {
       signal.throwIfAborted();
-      await client.connect();
+      await connectGated(client, bin);
       const before = accountState(await client.request('account/read', { refreshToken: false }, 10_000));
       if (before === 'notRequired') throw new SetupDisplayError('当前 Codex 提供商不需要 OpenAI 账户登录，现有配置保持不变');
       if (before === 'signedIn') return;
@@ -188,7 +204,7 @@ export class CodexSetupService {
     this.closing ??= (async () => {
       this.probe?.abort.abort();
       this.active?.abort.abort();
-      await Promise.all([this.probe?.done, this.active?.done]);
+      await Promise.all([this.probe?.done, this.active?.done, this.queuedProbe?.catch(error => { if (!(error instanceof CodexSetupConflict)) throw error; })]);
       if (this.cleanupFailures.size) throw new AggregateError([...this.cleanupFailures.values()], 'Codex 子进程清理未确认');
     })();
     return this.closing;

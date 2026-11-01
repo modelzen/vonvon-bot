@@ -612,10 +612,13 @@ describe('model catalog availability', () => {
     await rememberModelCatalog(query.backend, native, '2026-10-01T00:00:00.000Z');
     const doctor = vi.fn();
     const listModels = vi.fn();
-    const { owner } = await fixture({ offline: true, backendFor: () => ({ ...backend, doctor, listModels, peekModels: () => native }) });
+    const refreshPermissions = vi.fn();
+    const { owner } = await fixture({ offline: true, backendFor: () => ({ ...backend, doctor, listModels, refreshPermissions, peekModels: () => native }) });
     expect(await owner.models(query)).toMatchObject({ state: 'fallback', models: native });
     expect(doctor).not.toHaveBeenCalled();
     expect(listModels).not.toHaveBeenCalled();
+    await owner.read(project);
+    expect(refreshPermissions).not.toHaveBeenCalled();
   });
 
   it('does not treat an old native cache as ready when the backend probe fails', async () => {
