@@ -165,7 +165,7 @@
 - **协议加一个可选字段 `requestId`**（4.5 说不加新 kind，kind 确实没加）：`install`、`update`、`backendInstall` 三个请求可以带；daemon 记在它为这次请求开始的任务上，`toolInstallStatus` 的任务（进行中和结束后）、`backendInstallStatus` 的任务里原样带回。接到别人已经开始的组件安装（`attached`）不改它。字段两头都可选：旧的网页和桌面不带照样能用；旧 daemon 的请求 schema 是 strict 的，会回 `invalid_request`，命令行这时去掉字段再发一次（没开始任何任务，重发安全；已经 Ctrl-C 就不重发）。
 - **失败的 `reason` 分开写**：工具安装、组件安装是 `install_failed`；登录是 `login_failed`，应用配置是 `profile_init_failed`（4.1 表里都写 `install_failed`，登录失败读成"装失败"会误导脚本）。
 - **登录和应用配置共用一个状态**：轮询看到别的 id，说明自己的已经结束、又开始了别的，结果没看到：退 6，文字同断线那句。
-- **Ctrl-C 时还不知道 id**：工具安装再读一次状态，组件安装用 `backendInstallStatus{id}`（所以 `env backend install` 的 `covers` 里的 `backendInstallStatus` 确实用到），只认带着这次请求号的任务；找不到就不发取消、直接 130，文字说任务如果开始了会继续进行、怎么看、怎么取消。组件安装的回复在 Ctrl-C 之后、5 秒之内到了，且不是 `attached`，就补发取消。
+- **Ctrl-C 时还不知道 id**：工具安装再读一次状态，组件安装用 `backendInstallStatus{id}`（所以 `env backend install` 的 `covers` 里的 `backendInstallStatus` 确实用到），只认带着这次请求号的任务；找不到就不发取消、直接 130，文字说任务如果开始了会继续进行、怎么看、怎么取消。只有 Ctrl-C 后查找还没结束时到的组件安装回复（不是 `attached`、带着这次请求号）才补发取消；查找结束以后才到的回复不再处理，命令已退 130，文字照上面说任务会继续进行（独立核对的 P3：计划原先写"5 秒之内到了就补发取消"，代码没这样做，按代码改计划）。
 - **JSON Lines 多几个字段**：`progress` 行带 `operationId`；组件安装的 `progress` 行还带 `attached`、`omittedBytes`；`env install` 的结果行多 `message`（daemon 的原话）；`env profile use / add` 的成功行多 `profiles`（daemon 回的就是新列表）。
 - **`env scan` 多打两种说明**：Claude 装了但 `--version` 失败；Codex 比验证过的版本新（`compatibility.status: newer`）。
 - **组件安装的输出**：人类输出里 `\r\n`、单独的 `\r` 都当换行，其余控制字符去掉；最后一段没换行时先补一个，结果另起一行。
