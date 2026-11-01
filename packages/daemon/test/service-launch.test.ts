@@ -215,7 +215,7 @@ it.each(['self-hosted', 'darwin', 'win32', 'bot child'] as const)('%s retains th
 it.each(['changed record', 'live lock'] as const)('does not overwrite update ownership after %s', async mode => {
   const owner = control(); owner.requestRestart(1234, record); child.emit('spawn');
   if (mode === 'changed record') writeUpdateStatus({ ...record, at: 43 });
-  else writeFileSync(join(paths.appDir, 'update.lock'), JSON.stringify({ pid: process.pid, at: 0 }));
+  else writeFileSync(join(paths.appDir, 'update.lock'), JSON.stringify({ pid: process.ppid, at: 0 }));
   const before = readFileSync(join(paths.appDir, 'update-status.json'), 'utf8');
   owner.requestStop(); died(); await owner.completeShutdown(async () => {});
   expect(readFileSync(join(paths.appDir, 'update-status.json'), 'utf8')).toBe(before);
