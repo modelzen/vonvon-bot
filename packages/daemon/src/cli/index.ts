@@ -295,6 +295,46 @@ inGroup(covers(schedule.command('delete <taskId>'), 'schedule.delete').descripti
 for (const [action, description, kinds] of [['pause', 'Pause a task', ['schedule.pause']], ['resume', 'Resume a task; runs missed while paused are not made up', ['schedule.resume']], ['run', 'Run a task now; the next scheduled run stays', ['schedule.runNow']], ['runs', 'Show the run count and the last 20 runs', []]] as const) {
   inGroup(covers(schedule.command(`${action} <taskId>`), ...kinds).description(description)).action(async (taskId: string, options: ScheduleOptions) => { await runSchedule(action, { ...options, taskId }); });
 }
+const session = program.command('session').description("A group's sessions, as the web page's 会话管理: context, compact, clear, stop, resume")
+  .addHelpText('after', `
+Examples:
+  vonvon session list --group 研发群 --resumable
+  vonvon session context --group 研发群                       # 上下文用量和在跑的任务
+  vonvon session stop --group 研发群
+  vonvon session compact --group 研发群 --session <threadId>   # 多会话群有几条会话时要指定`);
+type SessionOptions = Json & { bot?: string; group: string; session?: string };
+const inSessionGroup = (command: Command) => command.option(...BOT).requiredOption('--group <group>', 'Group id (oc_…) or project name').option('--json', 'Print JSON');
+const oneSession = (command: Command) => inSessionGroup(command).option('--session <threadId>', "Which session; needed when the group has more than one (session list shows them)");
+inSessionGroup(covers(session.command('list'), 'collaboration.history').description("List the group's sessions; --resumable also the provider's older ones that resume can bind"))
+  .option('--resumable', "Also list the provider's sessions that can be resumed here; --json always has them")
+  .action(async (options: SessionOptions & { resumable?: boolean }) => { await (await import('./commands/session')).runSessionList(options, io(options)); });
+oneSession(covers(session.command('context'), 'collaboration.context').description("Show a session's context use, what runs in it and the commands that act on it"))
+  .action(async (options: SessionOptions) => { await (await import('./commands/session')).runSessionContext(options, io(options)); });
+oneSession(covers(session.command('clear'), 'collaboration.clear').description('Start the main-area session over (not in a 多会话 group); resume brings the old one back'))
+  .action(async (options: SessionOptions) => { await (await import('./commands/session')).runSessionReset('clear', options, io(options)); });
+oneSession(covers(session.command('compact'), 'collaboration.compact').description("Compact a session's context"))
+  .action(async (options: SessionOptions) => { await (await import('./commands/session')).runSessionReset('compact', options, io(options)); });
+inSessionGroup(covers(session.command('resume <sessionId>'), 'collaboration.resume').description('Bind an older provider session to the group again (ids from session list --resumable)'))
+  .action(async (sessionId: string, options: SessionOptions) => { await (await import('./commands/session')).runSessionResume(sessionId, options, io(options)); });
+oneSession(covers(session.command('stop'), 'collaboration.stop').description('Stop the running task; nothing running exits 0'))
+  .action(async (options: SessionOptions) => { await (await import('./commands/session')).runSessionStop('stop', options, io(options)); });
+oneSession(covers(session.command('end-goal'), 'collaboration.endGoal').description('End the running goal (自主目标); nothing running exits 0'))
+  .action(async (options: SessionOptions) => { await (await import('./commands/session')).runSessionStop('endGoal', options, io(options)); });
+oneSession(covers(session.command('stop-subagent <subagentId>'), 'collaboration.stopSubagent').description('Stop one subagent of the running task (ids from session context)'))
+  .action(async (subagentId: string, options: SessionOptions) => { await (await import('./commands/session')).runSessionStopSubagent(subagentId, options, io(options)); });
+oneSession(covers(session.command('reminder'), 'collaboration.reminder').description("Turn the running task's 完成时提醒 on or off"))
+  .option('--on', 'Remind when it finishes').option('--off', 'Do not remind')
+  .action(async (options: SessionOptions & { on?: boolean; off?: boolean }) => { await (await import('./commands/session')).runSessionReminder(options, options, io(options)); });
+const usage = program.command('usage').description("The Codex account's usage and the decision model's, as the web page's 用量");
+covers(usage.command('show'), 'collaboration.usage').description('Show the plan, its quota windows and token totals; all bots share the account')
+  .option('--refresh', 'Read the account again instead of the daemon\'s cache (the web page\'s 刷新)').option('--json', 'Print JSON')
+  .action(async (options: Json & { refresh?: boolean }) => { await (await import('./commands/usage')).runUsageShow(options, io(options)); });
+covers(usage.command('share'), 'collaboration.shareUsage').description('Post a usage card in a group, to forward in Feishu')
+  .option(...BOT).requiredOption('--group <group>', 'Group id (oc_…) or project name')
+  .option('--sections <list>', 'Comma-separated, of stats, heatmap, insights, limits, plan; none means the whole card').option('--json', 'Print JSON')
+  .action(async (options: Json & { bot?: string; group: string; sections?: string }) => { await (await import('./commands/usage')).runUsageShare(options, io(options)); });
+covers(usage.command('judge'), 'admin.judgeUsage').description('Show how often smart groups asked the decision model, per day and bot (last 14 days)').option('--json', 'Print JSON')
+  .action(async (options: Json) => { await (await import('./commands/usage')).runUsageJudge(io(options)); });
 const feishu = program.command('feishu').description('Read Feishu groups and members');
 covers(feishu.command('groups'), 'command.listJoinedGroups').description('List joined groups, one page').option(...BOT).option('--cursor <cursor>', 'Next page cursor').option('--json', 'Print JSON')
   .action(async (options: Json & { bot?: string; cursor?: string }) => {
