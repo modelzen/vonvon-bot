@@ -40,7 +40,7 @@ export async function deviceRpc(deps: DeviceDeps, peer: Pick<Peer, 'principal'>,
       await deps.clients.rename(request.clientId, request.name);
       return read({ kind: 'clients', generation: deps.clients.generation, clients: deps.clients.list() });
     }
-    // announceRevocations tells the owner, and D3 disconnects them, through clients.onChange
+    // followRevocations tells the owner, and D3 disconnects them, through clients.onChange
     case 'revokeClient': return read({ kind: 'revoked', revoked: await deps.clients.revoke(request.clientId, { cascade: request.cascade ?? false }) });
     case 'rename': {
       deps.identity.current = await renameDevice(deps.home, request.name);

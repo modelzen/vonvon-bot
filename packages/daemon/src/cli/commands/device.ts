@@ -1,4 +1,5 @@
 import type { ClientRecord, DeviceReply, DeviceRequest } from '@vonvon/protocol';
+import { acquireMutex, closeMutex, MUTEX_TIMEOUT, type Mutex } from '../../config/data-access';
 import { paths } from '../../config/paths';
 import { createClientRegistry } from '../../remote/clients';
 import { loadOrCreateDevice, renameDevice } from '../../remote/device';
@@ -25,13 +26,36 @@ export async function runPair(options: { ttl?: string }, io: Io, daemon: Daemon 
   print(io, [pairHint(minutes), link], { link, inviteId, expiresAt });
 }
 
+const DAEMON_STARTING = '后台服务正在启动，等它起来再运行一次这条命令。';
+/** How long the files path waits for the host mutex: another CLI's turn takes milliseconds; a daemon holds it until it stops. */
+const FILES_WAIT_MS = 10_000;
+/** The host mutex, taken from a CLI that writes these files itself; undefined while someone else holds it. */
+async function hostMutex(home: string): Promise<Mutex | undefined> {
+  try { return await acquireMutex(home, 'host', 200); }
+  catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === MUTEX_TIMEOUT) return undefined;
+    throw error;
+  }
+}
+
 /** clients and device rename (devices 8.1): through the daemon when it runs, which alone writes these files then;
- * otherwise straight on the files, under the lease the CLI's preAction took, and the output says `source: 'files'`. */
+ * otherwise straight on the files, and the output says `source: 'files'`. The files path holds the host mutex, which a
+ * running daemon holds from its start to its exit (host/bootstrap.ts): two CLIs take turns at the read-change-write, and a
+ * daemon starting meanwhile waits for it and then reads what it wrote, so no revocation is lost to a stale copy. */
 async function either<T>(home: string, daemon: Daemon, what: string, rpc: (send: (request: DeviceRequest) => Promise<DeviceReply>) => Promise<T>,
   files: () => Promise<T>): Promise<[T, { source?: 'files' }]> {
-  if (await daemonRunning(home)) return [await daemon(call => rpc(request => call(what, c => c.device(request)))), {}];
-  try { return [await files(), { source: 'files' }]; }
-  catch (error) { throw error instanceof RpcError ? new CommandError(rpcErrorKind(error.code), error.message, { reason: error.code }) : error; }
+  const deadline = Date.now() + FILES_WAIT_MS;
+  for (;;) {
+    if (await daemonRunning(home)) return [await daemon(call => rpc(request => call(what, c => c.device(request)))), {}];
+    const lock = await hostMutex(home);
+    if (!lock) {
+      if (Date.now() >= deadline) throw new CommandError('connection', DAEMON_STARTING);
+      continue;
+    }
+    try { return [await files(), { source: 'files' }]; }
+    catch (error) { throw error instanceof RpcError ? new CommandError(rpcErrorKind(error.code), error.message, { reason: error.code }) : error; }
+    finally { await closeMutex(lock); }
+  }
 }
 async function onFiles<T>(home: string, use: (registry: Awaited<ReturnType<typeof createClientRegistry>>) => Promise<T>): Promise<T> {
   const registry = await createClientRegistry(home);

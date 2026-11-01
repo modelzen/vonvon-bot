@@ -21,7 +21,8 @@ it('lets the owner do everything, a connection of another protocol only the main
   expect(await authorize(owner, request('machine', { type: 'service', action: 'start' }))).toEqual({ ok: true });
   expect(await authorize(old, request('command', { type: 'refresh' }))).toMatchObject({ ok: false, code: 'permission_denied' });
   expect(await authorize(old, request('admin', { type: 'daemonStatus' }))).toEqual({ ok: true });
-  // a 0.8 desktop or CLI still stops a newer daemon (devices 4.5)
+  // a 0.8 desktop or CLI still stops a newer daemon (devices 4.5), by the shared constant D4a enforces, not a local exception
+  expect(MAINTENANCE_KINDS).toContain('machine.stopHost');
   expect(await authorize(old, request('machine', { type: 'stopHost' }))).toEqual({ ok: true });
   expect(await authorize(peer({ kind: 'unpaired' }), request('admin', { type: 'daemonStatus' }))).toMatchObject({ ok: false, code: 'permission_denied' });
   expect(await authorize(owner, request('command', { type: 'notAKind' }))).toMatchObject({ ok: false, code: 'permission_denied' });

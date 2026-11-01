@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Event } from '@vonvon/protocol';
 import { createClientRegistry } from '../src/remote/clients';
-import { announceRevocations, completePairing, createInviteBook, INVITE_TTL_MS, PairingError } from '../src/remote/pairing';
+import { devicesPath } from '../src/remote/files';
+import { followRevocations, completePairing, createInviteBook, INVITE_TTL_MS, PairingError } from '../src/remote/pairing';
 
 let home: string;
 beforeEach(async () => { home = await mkdtemp(join(tmpdir(), 'vonvon-pairing-')); });
@@ -45,7 +46,7 @@ it('registers the paired client and tells the owner, never logging the secret', 
   const request = { type: 'pairRequest' as const, inviteId: invite.id, inviteSecret: invite.secret, clientName: '笔记本', clientKind: 'desktop' as const };
   const result = await completePairing(deps, { publicKey: 'k'.repeat(43), request, address: '192.0.2.5:50000' });
   expect(result).toEqual({ clientId: expect.stringMatching(/^cl_/), deviceName: '工作电脑' });
-  expect(JSON.parse(await readFile(join(home, 'clients.json'), 'utf8')).clients).toMatchObject([{ id: result.clientId, name: '笔记本', invitedBy: 'local' }]);
+  expect(JSON.parse(await readFile(devicesPath(home, 'clients.json'), 'utf8')).clients).toMatchObject([{ id: result.clientId, name: '笔记本', invitedBy: 'local' }]);
   expect(published).toEqual([{ type: 'event', event: 'device', payload: { change: 'client-paired', clientId: result.clientId, name: '笔记本', clientKind: 'desktop', address: '192.0.2.5:50000', invitedBy: 'local' } }]);
   expect(log.info).toHaveBeenCalledWith('device', 'client-paired', expect.objectContaining({ clientId: result.clientId }));
 
@@ -56,9 +57,35 @@ it('registers the paired client and tells the owner, never logging the secret', 
   expect(published).toHaveLength(1);
 
   // devices 4.3: each revoked client, however revoked, reaches the owner and the log
-  announceRevocations(deps);
+  followRevocations(deps);
   await clients.revoke(result.clientId);
   expect(published[1]).toEqual({ type: 'event', event: 'device', payload: { change: 'client-revoked', clientId: result.clientId, name: '笔记本', clientKind: 'desktop', address: '192.0.2.5:50000', invitedBy: 'local' } });
   expect(log.info).toHaveBeenLastCalledWith('device', 'client-revoked', expect.objectContaining({ clientId: result.clientId }));
   expect(JSON.stringify(log.info.mock.calls)).not.toMatch(new RegExp(`${invite.secret}|vonvon://`));
+});
+// D1-SEC-1: a stolen laptop's unused links die with it. Revoked with --cascade, A cannot let a link it made pair a new
+// client the cascade already went past. main 必败: B paired after A was revoked, with owner access.
+it('pairs nobody with an invite its revoked inviter made, and frees those invites', async () => {
+  const invites = createInviteBook();
+  const clients = await createClientRegistry(home);
+  const deps = { invites, clients, device: { name: '工作电脑' }, publish: vi.fn(), log: { info: vi.fn() } };
+  followRevocations(deps);
+  const pair = (inviteId: string, inviteSecret: string, key: string) => completePairing(deps, {
+    publicKey: key.repeat(43), address: '192.0.2.5:50000', request: { type: 'pairRequest', inviteId, inviteSecret, clientName: '电脑', clientKind: 'desktop' },
+  });
+  const local = invites.create({ invitedBy: 'local' });
+  const a = await pair(local.id, local.secret, 'a');
+  const [first, second] = [invites.create({ invitedBy: a.clientId }), invites.create({ invitedBy: a.clientId })];
+  const other = invites.create({ invitedBy: 'local' });
+  expect(await clients.revoke(a.clientId, { cascade: true })).toEqual([a.clientId]);
+  // dropped on revocation: the three slots are free again, and D3 grants such ids no grace
+  expect([invites.has(first.id), invites.has(second.id), invites.has(other.id), invites.size()]).toEqual([false, false, true, 1]);
+  await expect(pair(first.id, first.secret, 'b')).rejects.toMatchObject({ code: 'pairing_failed' });
+  // and refused at redemption too: one its RPC made as the revocation landed, and one of a client this list does not have
+  for (const invitedBy of [a.clientId, 'cl_0123456789abcdef']) {
+    const late = invites.create({ invitedBy });
+    await expect(pair(late.id, late.secret, 'c')).rejects.toMatchObject({ code: 'pairing_failed' });
+  }
+  expect(clients.list().map(client => client.id)).toEqual([a.clientId]);
+  expect(clients.generation).toBe(2);
 });

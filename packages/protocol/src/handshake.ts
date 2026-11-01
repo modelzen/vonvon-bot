@@ -30,7 +30,7 @@ export const serverInfoSchema = z.object({
   deviceName: z.string().optional(), platform: z.string().optional(), capabilities: z.array(z.string()).optional(), principal: z.string().optional(),
 }).passthrough();
 export type ServerInfo = z.infer<typeof serverInfoSchema>;
-/** devices 4.5: all a connection of another protocol may ask. */
-export const MAINTENANCE_KINDS = ["admin.daemonStatus", "machine.checkCoreUpdate", "machine.applyCoreUpdate", "machine.coreUpdateStatus", "command.restartHost"] as const;
+/** devices 4.5: all a connection of another protocol may ask. `stopHost` too: a 0.8 desktop or CLI must still stop a newer daemon. */
+export const MAINTENANCE_KINDS = ["admin.daemonStatus", "machine.checkCoreUpdate", "machine.applyCoreUpdate", "machine.coreUpdateStatus", "command.restartHost", "machine.stopHost"] as const;
 /** devices 4.7: all a draining daemon still answers. */
 export const DRAIN_KINDS = ["admin.daemonStatus", "machine.stopHost", "machine.coreUpdateStatus"] as const;

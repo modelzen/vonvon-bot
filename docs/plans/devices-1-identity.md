@@ -56,7 +56,7 @@
 | `serverInfoV2Schema` | strict，v1 四个字段 + `deviceName:string`、`platform:'macos'\|'linux'\|'windows'\|'unsupported'`、`capabilities:string[]`、`principal:principalWireSchema`；`protocolVersion` 回 daemon 自己的 `2` | D1 |
 | `serverInfoSchema` | **客户端用的宽松解析**：`z.object({ type:z.literal('serverInfo'), machineId:string, version:string, protocolVersion:int, deviceName?:string, platform?:string, capabilities?:string[], principal?:string }).passthrough()`。客户端一律用它，不比较版本相等；`protocolVersion !== PROTOCOL_VERSION` 由上层决定（维护子集或"太旧"文案） | D1 |
 | `principalWireSchema` | `z.enum(['owner:local','owner:paired','bot-session:dm','bot-session:group','bot-session:comment','maintenance'])`（客户端按开放字符串读）。`unpaired` 不出现在 serverInfo 里（它拿不到 serverInfo） | D1 定，D2/D4a 填值 |
-| `MAINTENANCE_KINDS` | `['admin.daemonStatus','machine.checkCoreUpdate','machine.applyCoreUpdate','machine.coreUpdateStatus','command.restartHost'] as const`：协议不同的连接只放这些 | D1 定常量，D4a 执行 |
+| `MAINTENANCE_KINDS` | `['admin.daemonStatus','machine.checkCoreUpdate','machine.applyCoreUpdate','machine.coreUpdateStatus','command.restartHost','machine.stopHost'] as const`：协议不同的连接只放这些（`stopHost` 是设计 4.5 列表之外加的：0.8 的桌面端和 CLI 停 0.9 的 daemon 靠它，见第 9 节） | D1 定常量，D4a 执行 |
 | `DRAIN_KINDS` | `['admin.daemonStatus','machine.stopHost','machine.coreUpdateStatus'] as const`：排空期间只放这些 | D1 定常量，D4a 把 `ws.ts` 写死的两条换成它 |
 | `admin.negotiate` | 请求 `{ type:'negotiate', capabilities: z.array(z.string().regex(/^[a-z][a-z0-9.-]{0,63}$/)).max(32), scope?: scopeSchema }`；回复 `{ kind:'negotiated', principal: principalWire, scope: Scope \| null }`。一条连接只认第一次，第二次回 `invalid_request`。daemon 记进 `peer.capabilities`、`peer.scope` | D1 请求/回复和记录，D4a 范围核对 |
 | `daemonStatusSchema` | 加 `startedAt: z.number().int()`（epoch ms，`deps.daemonStartedAt`）。**对 `protocolVersion === 1` 的 peer，`dispatch` 把 `startedAt` 删掉再回**（0.8 客户端严格解析） | D1 |
@@ -126,12 +126,12 @@ export const deviceEventSchema = z.object({
 
 **RPC 错误码**（`RpcError.code`，CLI 退出码按 C1 的 `rpcErrorKind`）：本片新增 `pairing_limit`（未用邀请满 3 个）、`no_remote_address`（没开远程地址）→ 都映 4；D4a 新增 `session_token_invalid` → 4。其余沿用 C1 已登记的。`refused` 回复里的 `code` 用同一套名字。
 
-**文件格式**（都在 `<dataRoot>` 根，都 0600，都在 `ROOT_SECRETS`）：
+**文件格式**（`device.json`、`clients.json`、`remote.json` 在 `<dataRoot>/devices/` 里，目录 0700、文件 0600，读拒绝按整个目录，路径用 `D/remote/files.ts` 的 `devicesPath(home, 文件名)`；`local-credential` 在根，0600，在 `ROOT_SECRETS`）。三个文件读的时候：`v` 大于 1 报"较新版本写的"、不当损坏；同一个 `v` 里不认识的字段保留、写回时原样带上，RPC 回复只带认识的字段：
 
 | 文件 | 形状 | 写入者 |
 |---|---|---|
 | `device.json` | `{ v:1, deviceId, name, keypair:{ publicKey, secretKey } }`，两把钥匙都是 32 字节 base64url（JWK 的 `x`/`d`）；`deviceId` = `machine-id` 的 UUID | D1 `D/remote/device.ts`，首次启动生成，`rename` 改名；坏文件**报错退出**不重建（客户端钉了公钥） |
-| `clients.json` | `{ v:1, generation:int, clients: ClientRecord[] }`；每次写 `generation + 1`；撤销写 `revokedAt`（墓碑，条目不删） | D1 `D/remote/clients.ts`；daemon 在跑时只有 daemon 写，没跑时 CLI 在数据租约下写 |
+| `clients.json` | `{ v:1, generation:int, clients: ClientRecord[] }`；每次写 `generation + 1`；撤销写 `revokedAt`（墓碑，条目不删） | D1 `D/remote/clients.ts`；daemon 在跑时只有 daemon 写，没跑时 CLI 拿着 host 互斥锁写（`D/cli/commands/device.ts` 的 `either()`） |
 | `remote.json` | `{ v:1, port:int, addresses:[{ host, enabledAt, kind, iface?, network? }] }`；缺文件等于 `{ v:1, port:7767, addresses:[] }` | D1 只读（`D/remote/config.ts` 的 `readRemoteConfig`，`pair` 要看有没有地址）；D3 写 |
 | `local-credential` | 64 hex，**每次 daemon 启动重写** | D1 `createLocalIdentity` |
 
@@ -165,12 +165,12 @@ D1 填表：所有 kind `owner:'allow'`；`botSession` 一列**全部 `'deny'`**
 | 命令 | covers | 片 | daemon 没跑时 |
 |---|---|---|---|
 | `vonvon pair [--ttl <分钟>] [--json]` | `device.pair` | D1 | exit 3，文字见设计第 15 节"daemon 没跑时 `pair`" |
-| `vonvon clients ls [--json]` | `device.clients` | D1 | 数据租约下读文件，`source:'files'` |
-| `vonvon clients rename <clientId> <name>` | `device.renameClient` | D1 | 租约下写文件 |
-| `vonvon clients revoke <clientId> [--cascade]` | `device.revokeClient` | D1 | 租约下写文件（没有连接要断） |
-| `vonvon device rename <name>` | `device.rename` | D1 | 租约下写 `device.json` |
-| `vonvon remote status [--json]` | `device.status` | D3 | 租约下读 `remote.json`，`source:'files'`，各地址 `state:'disabled'`（daemon 不在） |
-| `vonvon remote enable <ip>\|--tailscale [--allow-public]` | `device.enable` | D3 | 租约下写 `remote.json` |
+| `vonvon clients ls [--json]` | `device.clients` | D1 | host 锁下读文件，`source:'files'` |
+| `vonvon clients rename <clientId> <name>` | `device.renameClient` | D1 | host 锁下写文件 |
+| `vonvon clients revoke <clientId> [--cascade]` | `device.revokeClient` | D1 | host 锁下写文件（没有连接要断） |
+| `vonvon device rename <name>` | `device.rename` | D1 | host 锁下写 `device.json` |
+| `vonvon remote status [--json]` | `device.status` | D3 | host 锁下读 `remote.json`，`source:'files'`，各地址 `state:'disabled'`（daemon 不在） |
+| `vonvon remote enable <ip>\|--tailscale [--allow-public]` | `device.enable` | D3 | host 锁下写 `remote.json`（用 D1 的 `either()`） |
 | `vonvon remote disable <ip>` | `device.disable` | D3 | 同上 |
 | `vonvon remote port <n>` | `device.setPort` | D3 | 同上 |
 | 全局 `--scope bot=<appId>[,group=<chatId>]` | （不是命令；经 `admin.negotiate`） | D4a | — |
@@ -194,7 +194,7 @@ D1 填表：所有 kind `owner:'allow'`；`botSession` 一列**全部 `'deny'`**
 - `D/remote/clients.ts`：`createClientRegistry(home): Promise<ClientRegistry>`，接口：`generation`、`list()`、`get(clientId)`、`byPublicKey(publicKey)`（**含墓碑**，D2 据 `revokedAt` 回 4003 还是 4002）、`add({ name, publicKey, clientKind, address, invitedBy })`（同一公钥已存在且未撤销 → 更新 `lastSeenAt/lastAddress` 返回原条目；已撤销 → 抛 `RpcError('client_revoked')`）、`rename(clientId, name)`、`revoke(clientId, { cascade })` 返回被撤销的 id 列表（`cascade` 沿 `invitedBy` 递归，已撤销的跳过）、`touch(clientId, address)`（只改内存，`save()` 节流到每分钟最多一次落盘，`close()` 时 flush）、`onChange(listener(generation, revokedIds))`（D3 的断连靠它）。每次 `save()`：`generation + 1`、`writeFile(tmp, { mode:0o600 })` + `rename`。文件缺 → `{ v:1, generation:0, clients:[] }`；坏 → 抛。`clientId` = `'cl_' + randomBytes(8).toString('hex')`。
 - `D/remote/pairing.ts`：`createInviteBook({ now = Date.now }): InviteBook`——`create({ ttlMs = 600_000, invitedBy }): Invite { id:'inv_'+16hex, secret: base64url(randomBytes(32)), expiresAt, invitedBy }`，未用且未过期的满 3 个 → `throw new RpcError('pairing_limit', '已经有 3 条没用过的连接链接了，先用掉或等它们过期（10 分钟）。')`；`redeem(id, secret): Invite | undefined`——先 `prune()`，按 id 找，`timingSafeEqual` 比 secret（长度不同先补齐再比、结果强制 false），成功即删；`has(id)`（D3 限流用：带有效 `inviteId` 的握手不计未知公钥）；`size()`。`completePairing(deps: { invites, clients, device, publish, log }, input: { publicKey, request: PairRequest, address }): Promise<{ clientId, deviceName }>`——`redeem` 失败抛 `PairingError('pairing_failed')`；成功 `clients.add(...)`、`publish({ event:'device', change:'client-paired', … })`、`log.info('device','client-paired',…)`。`PairRequest` 的 zod（`{ type:'pairRequest', inviteId, inviteSecret, clientName: 1..40, clientKind }`）和 `PairResult` 也放在 `P/device.ts`，D2 在通道里用。
 - `D/remote/config.ts`：`remoteConfigSchema`（4.0 的形状）、`readRemoteConfig(home): Promise<RemoteConfig>`（缺文件给默认值；坏文件抛）。写入函数 D3 加。
-- `D/config/read-scope.ts`：`ROOT_SECRETS` 加 `'device.json','clients.json','remote.json'`；`test/read-scope.test.ts` 的精确名单跟着改。
+- `D/config/read-scope.ts`：拒绝名单加 `<dataRoot>/devices` 整个目录（审查后从三个文件名改成目录，见文末）；`test/read-scope.test.ts` 的精确名单跟着改。
 
 ### 4.3 `D/server/`：凭据轮换、v1/v2 握手、权限表骨架、`device` RPC
 
@@ -216,7 +216,7 @@ D1 填表：所有 kind `owner:'allow'`；`botSession` 一列**全部 `'deny'`**
 ### 4.5 `D/cli/`：`pair`、`clients`、`device`
 
 - 新文件 `D/cli/commands/pair.ts`、`clients.ts`、`device.ts`，在 `index.ts` 注册并 `covers`（4.0 的表）。`pair`：`withDaemon` 连本机；连不上 → `CommandError('connection', <设计 15 节"daemon 没跑时 pair"原文>)`（exit 3）；`--ttl` 单位分钟，1..10，默认 10；人类输出两行（设计 15 节"`vonvon pair` 输出"原文 + 链接），`--json` 回 `{ ok:true, link, inviteId, expiresAt }`；**链接写 stdout，不管是不是 TTY**（设计 4.3 REQ-2）；`no_remote_address`、`pairing_limit` 经 `rpcErrorKind` 成 exit 4，`command-error.ts` 把这两个码加进 4 的那组。
-- `clients ls`：daemon 在 → `device.clients`；不在 → 数据租约下 `createClientRegistry(home).list()`，输出标 `source:'files'`（C1 的回退约定）。表格列：id、名字、种类、配对时间、最近连接、`invitedBy`、`revokedAt`；最近 24 小时配对的行末标"新"。`clients rename|revoke`：同样双路；`revoke --cascade` 输出被撤销的全部 id。`device rename`：双路。租约路径用 `enterDataAccess(home)`，preAction 的例外表**不加**这三条（它们本来就要租约）。
+- `clients ls`：daemon 在 → `device.clients`；不在 → host 互斥锁下 `createClientRegistry(home).list()`，输出标 `source:'files'`（C1 的回退约定）。表格列：id、名字、种类、配对时间、最近连接、`invitedBy`、`revokedAt`；最近 24 小时配对的行末标"新"。`clients rename|revoke`：同样双路；`revoke --cascade` 输出被撤销的全部 id。`device rename`：双路。租约路径用 `enterDataAccess(home)`，preAction 的例外表**不加**这三条（它们本来就要租约）。
 - `parity-allowlist.ts`：删 `device.pair/clients/renameClient/revokeClient/rename` 五条（命令 `covers` 了）；`device.status/enable/disable` 改成 `pending('D3')`、加 `device.setPort` 同款，**去掉 `arrives`**（协议里已有）；`admin.negotiate` 去掉 `arrives`，保留 `internal`；删 `dead('D1')` 十一条。`test/cli-parity.test.ts` 里断言 `arrives:'D1'` 的那几条改成断言这些 kind 已被 `covers` 或在 `pending('D3')`。
 - `test/cli-json.test.ts` 的 SAMPLES 加 `pair --json`（daemon 不在 → `ok:false, exitCode:3`）、`clients ls --json`、`device rename x --json`。
 
@@ -244,7 +244,7 @@ D1 填表：所有 kind `owner:'allow'`；`botSession` 一列**全部 `'deny'`**
 | `daemon/test/remote-pairing.test.ts`（新） | 邀请上限 | 连建 3 个过，第 4 个抛 `pairing_limit`；把 1 个 redeem 掉后第 4 个过 |
 | 同上 | 过期和一次性 | 假时钟推进 10 分 1 秒 → `redeem` 回 undefined；同一邀请 redeem 两次第二次 undefined；secret 差一位 undefined |
 | 同上 | `completePairing` | 有效邀请 → `clients.json` 多一条、`publish` 收到 `device/client-paired`、`log.info` 被调；无效 → `PairingError('pairing_failed')`，不写文件、不发事件 |
-| `daemon/test/read-scope.test.ts`（改） | 名单 | `ROOT_SECRETS` 含三个新文件；**新增**：起 `startFixture()`，列数据根上 mode `0o600` 的文件，每个都在 `ROOT_SECRETS`。main 必败 |
+| `daemon/test/read-scope.test.ts`（改） | 名单 | 拒绝名单含 `<dataRoot>/devices`；**新增**：起 `startFixture()`，`clients.json` 出现前的线程拒绝名单已含 `devices/`；`devices/` 0700、里面的文件都 0600；数据根上 mode `0o600` 的文件每个都在 `ROOT_SECRETS`。main 必败 |
 | `daemon/test/local-credential.test.ts`（新） | 轮换 | 连调两次 `createLocalIdentity` 凭据不同、`machineId` 相同、文件 mode 0600 |
 | `daemon/test/server-handshake.test.ts`（改） | v1 hello | `socketClient(port, cred, 1)` 收到的 serverInfo 恰好三个字段且 `protocolVersion === 1`；之后 `admin.daemonStatus` 回复**没有** `startedAt`。main 必败 |
 | 同上 | v2 hello | `version 2` 收到 `deviceName`、`platform`、`capabilities` 含 `'device'`、`principal 'owner:local'`、`protocolVersion 2`；`daemonStatus` 有 `startedAt`，等于夹具的 `daemonStartedAt` |
@@ -270,7 +270,7 @@ D1 填表：所有 kind `owner:'allow'`；`botSession` 一列**全部 `'deny'`**
 自测（都在隔离目录；重命令前缀 `flock /tmp/vonvon-heavy.lock`；临时目录只用 `T=$(mktemp -d)` 建、只用 `rm -rf -- "${T:?}"` 删；`HOME`/`VONVON_HOME` 只写在单条命令前，不 export）：
 
 1. `T=$(mktemp -d); HOME=$T/home VONVON_HOME=$T/vh flock /tmp/vonvon-heavy.lock npx vitest run packages/protocol/test packages/daemon/test/remote-*.test.ts packages/daemon/test/authz.test.ts packages/daemon/test/rpc-device.test.ts packages/daemon/test/server-handshake.test.ts packages/daemon/test/owner-verification.test.ts packages/daemon/test/read-scope.test.ts packages/daemon/test/cli-parity.test.ts packages/daemon/test/cli-json.test.ts packages/daemon/test/cli-clients.test.ts packages/client/test packages/desktop/test/bridge.test.ts packages/desktop/test/attach.test.ts`；然后 `flock /tmp/vonvon-heavy.lock npm run typecheck --workspaces` 和 `lint`，`build` 只跑 protocol、client、daemon。
-2. 真跑一次：`T=$(mktemp -d); mkdir -p $T/vh; printf '{"v":1,"port":7767,"addresses":[{"host":"192.168.1.9","enabledAt":0,"kind":"lan"}]}' > $T/vh/remote.json; HOME=$T/home VONVON_HOME=$T/vh node packages/daemon/dist/cli.js daemon start`，然后同样前缀跑 `vonvon pair --json | cat`（非 TTY）看到 `ok:true` 和 `vonvon://pair#` 链接；`vonvon pair` 连跑 4 次第 4 次 exit 4；`vonvon clients ls --json` 为空表；`vonvon device rename 测试机 --json` 后 `daemon status --json` 的 `startedAt` 是数字；`ls -l $T/vh` 看 `device.json`、`clients.json`、`local-credential` 都是 `-rw-------`；`daemon stop`，再 `daemon start`，`local-credential` 内容变了。最后 `daemon stop`，`rm -rf -- "${T:?}"`。这个临时 daemon 和 Paseo、`accept-home2` 无关，不碰它们。
+2. 真跑一次：`T=$(mktemp -d); mkdir -p $T/vh; mkdir -p -m 700 $T/vh/devices; printf '{"v":1,"port":7767,"addresses":[{"host":"192.168.1.9","enabledAt":0,"kind":"lan"}]}' > $T/vh/devices/remote.json; HOME=$T/home VONVON_HOME=$T/vh node packages/daemon/dist/cli.js daemon start`，然后同样前缀跑 `vonvon pair --json | cat`（非 TTY）看到 `ok:true` 和 `vonvon://pair#` 链接；`vonvon pair` 连跑 4 次第 4 次 exit 4；`vonvon clients ls --json` 为空表；`vonvon device rename 测试机 --json` 后 `daemon status --json` 的 `startedAt` 是数字；`ls -l $T/vh $T/vh/devices` 看 `local-credential`、`devices/device.json`、`devices/clients.json` 都是 `-rw-------`，`devices` 是 `drwx------`；`daemon stop`，再 `daemon start`，`local-credential` 内容变了。最后 `daemon stop`，`rm -rf -- "${T:?}"`。这个临时 daemon 和 Paseo、`accept-home2` 无关，不碰它们。
 3. 旧 daemon 兼容（设计 4.5 回归，Linux 上能做一半）：在另一个 mktemp 目录里用 `git worktree`（或 `npm pack` 的 0.8.x 包）跑一个 **v1 的 daemon**，再用本片的 CLI 对它 `daemon status`、`daemon stop`，都要成功；反过来（v1 CLI 停 v2 daemon）同样做一次，看 `owner-verification` 的 v1 路径收到 `protocolVersion:1` 的 serverInfo。做不到就在 PR 里写"未验，靠 server-handshake 和 owner-verification 测试"。
 4. 读档拒绝：`read-scope.test.ts` 的 0600 用例代替真会话；真会话的 `cat device.json` 被拒属于整批验收（Bot 6 的只读群），本片不做。
 
@@ -287,7 +287,7 @@ Mac 后验（写进整批的 Mac 验收任务，本片 PR 里标"待 Mac 验收"
 1. `P/handshake.ts`：`PROTOCOL_VERSION === 2`；`helloSchema` 的 diff 为空；存在 `serverInfoV1Schema`（strict）、`serverInfoV2Schema`（strict）、宽松 `serverInfoSchema`、`MAINTENANCE_KINDS`、`DRAIN_KINDS`，内容和本文 4.0 一字不差。
 2. `P/device.ts` 的 schema 和 4.0 一致；`CLOSE_CODES` 七个 4xxx 码和设计 4.7 一致。
 3. v1 hello 得到三字段 serverInfo 且 `protocolVersion: 1`，`daemonStatus` 回复无 `startedAt`；v2 hello 得到 v2 形状、`startedAt` 有值。
-4. `local-credential` 每次启动不同，mode 0600；`device.json`、`clients.json` mode 0600 且都在 `ROOT_SECRETS`；"0600 文件都在名单里"的测试存在。
+4. `local-credential` 每次启动不同，mode 0600；`device.json`、`clients.json` mode 0600，在 0700 的 `<dataRoot>/devices/` 里，这个目录在拒绝名单里；"0600 文件都在名单里"的测试存在。
 5. `authz.test.ts` 的双向覆盖测试存在且过；`dispatch` 之前调用了 `authorize`。
 6. 删掉的 11 个死 kind 在 protocol、daemon、ui、白名单里都没有残留（`grep -rn openEventSettings packages/` 为空）；`machine.startHost`、`machine.service` 仍在协议里；`DT/bridge.ts` 不再 import `machineRequestSchema` 解析外壳动作。
 7. `connectBrowser`/`connectLocal` 返回 `{ client, serverInfo }`，四个调用方和四个测试都改了；`owner-verification` 不再比较版本。
@@ -303,4 +303,21 @@ Mac 后验（写进整批的 Mac 验收任务，本片 PR 里标"待 Mac 验收"
 - `serverInfoSchema` 从 strict 改宽松会让仍 import 它做严格断言的测试跑红：全仓 grep `serverInfoSchema` 一次改完。
 - `local-credential` 用 `writeFile`+`rename` 覆盖：daemon 重启空档里客户端读到旧值会 4401 一次，`daemon-client.ts` 的 `connectLocalDaemon` 本来就重试（`freshDaemon`），确认它在 4401 后重读文件而不是缓存。
 - Codex 一侧的读档：若 `workspace-policy.ts` 的八条排除没覆盖数据根上的单个文件，要加三条路径，行数 +30；在 PR 里写明核对结果。
+- 偏差汇总（审查后加的三条）：`device.json`、`clients.json`、`remote.json` 放进 `<dataRoot>/devices/`（设计写在根），读拒绝按目录；`MAINTENANCE_KINDS` 加 `machine.stopHost`（设计 4.5 的列表没有它，但"旧的也能停新的"要它）；CLI 直接写这几个文件时拿 host 互斥锁，不是数据租约。
 - 偏差汇总：偏差 1、2（v1 peer 的 `protocolVersion` 回 1、`daemonStatus` 去 `startedAt`）；`remote.json` 的只读在 D1（设计放 D3，`pair` 要看地址）；`device.setPort` 是设计 `device.*` 列表之外的第 9 个 kind（`vonvon remote port` 在 daemon 跑着时必须经 RPC，否则违反"daemon 是唯一写入者"）；`DRAIN_KINDS` 和 `MAINTENANCE_KINDS` 分成两个常量（两组内容不同：排空放 `stopHost` 不放 `apply`，维护反之），设计 4.7 "同一个常量"按"同一处定义"理解；`pairing_limit`、`no_remote_address` 两个错误码是设计没列的，补在 4 那组。
+
+## 审查后改了什么
+
+两位审查者的 11 条全部接受，其中 D1-SEC-4 和 D1-R1 是同一个问题，合在一处改。
+
+- D1-SEC-1 → 接受。`completePairing` 兑换后核对邀请人：不是 `local` 时必须在 `clients.json` 里且没撤销，否则 `pairing_failed`；`InviteBook.dropInvitedBy(ids)`，`followRevocations`（原 `announceRevocations`）在 `clients.onChange` 里对被撤销的 id 调用。测试：撤销 A 后 A 的邀请都不能配对、名额释放、`clients.json` 不多条目。
+- D1-SEC-2 → 接受，用目录做法。三个文件搬进 `<dataRoot>/devices/`（0700），拒绝名单按目录：沙箱对目录是整个 tmpfs 遮挡，目录里的文件被 rename 替换也不会卸掉。本机用 bwrap 复现过：文件级 `--ro-bind /dev/null` 在 rename 后读到新内容，目录级 `--tmpfs` 不会。
+- D1-SEC-3 → 接受，同上。daemon 启动时（`host/bootstrap.ts` 拿到 pid 锁后、任何 Bot 起来前，`startApi` 也会做）建好 `devices/`，会话起来时目录一定在，后出现的 `clients.json`、`remote.json` 都在被拒的目录里。
+- D1-SEC-4 → 接受，和 D1-R1 一起改。
+- D1-SEC-5 → 接受。`device.json` 用 `O_NOFOLLOW` 打开，链接、非普通文件、属主不是当前用户都拒绝启动；权限不是 0600 就改成 0600。`devices/` 目录同样核对，权限不是 0700 就改。测试：0644/0755 加载后变成 0600/0700，链接被拒。
+- D1-R1 → 接受。CLI 直接写文件的那条路（`either()`）拿 host 互斥锁：daemon 从启动到退出一直拿着它，所以两个 CLI 轮流读改写，正在启动的 daemon 也要等 CLI 写完才读文件。拿不到锁就再看一次 daemon 在不在，在就走 RPC，10 秒还拿不到报"后台服务正在启动"（exit 3）。测试：6 条并发 revoke 都落盘；有人拿着 host 锁时 CLI 不写，放锁后才写。
+- D1-R2 → 接受。`machine.stopHost` 进 `MAINTENANCE_KINDS`，删掉 `authz.ts` 的局部补丁；4.0 的表、第 9 节、D4a 计划第 79 行同步。
+- D1-R3 → 接受。`AttachError` 加 `protocol`（带 `serverProtocol`，文字写两边的版本）；`checkProtocol` 遇到它返回对方版本号，交给 `daemon-manager` 现成的协议文案；`startupMessage` 对它不再加"请先启动 daemon"；重连循环把它当可重试，和 D1 之前一样。
+- D1-R4 → 接受。首次生成照 keystore：`open(wx, 0600)`、写、`sync()`、`link`、同步目录；`renameDevice` 和 `clients.json` 的每次保存用 `writeFileAtomic(..., { durable: true })`。没加测试（要掉电才看得出）。
+- D1-R5 → 接受。三个文件读的时候宽松：同一个 `v` 里不认识的字段保留、写回时带上，RPC 回复只带认识的字段；`v` 大于 1 报"较新版本写的"，不说损坏。测试：带 `accountId` 的条目能加载、撤销后还在，`v:2` 报较新版本；`device.json` 同样。
+- D1-R6 → 接受，用目录做法。临时文件和目标在同一个目录（`devices/`），一起被拒；目录做法下不用另外按前缀拒，也不用启动时清理。`local-credential` 的残留临时文件没生效过（rename 前崩溃，下次启动重新生成），不处理。
