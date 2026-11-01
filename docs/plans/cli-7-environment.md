@@ -136,7 +136,7 @@
 5. 安装类只做取消路径：在验收 daemon 上不装新东西；如果有可以更新的工具，`env update <tool>` 开始后 Ctrl-C，退出 130，`env scan` 显示没在安装（devices.md C7 验收一行的 Linux 部分）。
 6. `env login lark-cli` 只到出链接，然后 Ctrl-C（不用 owner 的账号登录）。
 
-**Mac**：托管安装和组件安装在 macOS 上走的路径不同（`D/` 里的安装脚本按平台分），集成分支验收时请 Mac 上的 Codex 在隔离的数据目录里跑一次 `env install lark-cli` 到成功、`env uninstall lark-cli`（devices.md C7 验收一行"真装一次"）。**Windows**：同样一次 `env install lark-cli`，归 D 线的 Windows 验收（Windows Codex）。
+**Mac**：托管安装和组件安装在 macOS 上走的路径不同（`D/` 里的安装脚本按平台分），集成分支验收时请 Mac 上的 Codex 在隔离的数据目录里跑一次 `env install lark-cli` 到成功、`env uninstall lark-cli`（devices.md C7 验收一行"真装一次"）。**Windows**：同样一次 `env install lark-cli`，归 D 线的 Windows 验收（Windows Codex）。（owner 2026-11-01：Windows 上不做只装服务端，这一批 Windows 上没有注册的 `vonvon`，这条不做；发给 Windows 的任务只有 U4 和 Windows 桌面端当被连的设备的检查，见 `devices.md` 第 19 节。）
 
 ## 7. 文档
 

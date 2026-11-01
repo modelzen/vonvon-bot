@@ -135,7 +135,7 @@ Linux 自测：
 2. 真开一次（设计 13 节 D3 验收行的 Linux 一半；用临时 daemon，不碰 Paseo、`accept-home2`、`~/.vonvon-bot`）：`T=$(mktemp -d)`，前缀 `HOME=$T/home VONVON_HOME=$T/vh` 跑 `vonvon daemon start`，`vonvon remote port 17767`（避开别人可能用的 7767），`vonvon remote enable --tailscale --json` 看到本机 Tailscale 地址、`state:'listening'`；`vonvon remote status`；`vonvon pair --json | cat` 出链接；本机 `curl -si http://<ts-ip>:17767/health` 只有两个键；`curl -si -H 'Origin: http://x' …/health` → 403；`curl -si -H 'Host: 1.2.3.4' …/health` → 403；用 D2 的 `test/manual/secure-probe.ts` 以客户端身份连 `<ts-ip>:17767` 带链接 → 配对成功、`clients ls` 多一条、daemon 日志有 `client-paired`；再用 `wscat`/`node -e` 发明文 `hello` → 4005；连着的探针在另一个终端 `vonvon clients revoke <id>` → 1 秒内断 4003；`vonvon remote enable 100.70.0.1` → exit 4 CGNAT 文字；`vonvon remote enable 0.0.0.0` → exit 4 公网文字；`vonvon remote disable <ts-ip>`，`daemon stop`。压力：`for i in $(seq 1 300); do (printf 'x' | nc -q0 <ts-ip> 17767 &) ; done` 一秒内几百条第一消息，同时 `vonvon daemon status --json` 1 秒内返回（Bot IPC 不卡；临时 daemon 没有 bot，看 `status` 延迟即可）。最后 `rm -rf -- "${T:?}"`。PR 里不贴地址、链接。
 3. `status` 的"等待地址出现"：`vonvon remote enable 10.255.255.254` 在没这个地址的机器上 → `state:'waiting'`；`daemon stop` 在 2 秒内退出（有待重试时排空能退）。
 
-Mac 后验（整批，U1b/U3 的任务里）：Mac 桌面端或 Mac 上的通道探针连 JP-VPS 的 Tailscale 地址能连；无通道探针被拒；`clients revoke` 后 Mac 那边 1 秒内断并显示"已撤销"文案。Windows：无专项（Windows 的 `tailscale ip` 和 `utun` 不适用，`isTailscale` 在 Windows 上只靠 `ts.ips`，I4a 后由 Windows Codex 顺带验一次 `remote enable --tailscale`）。
+Mac 后验（整批，U1b/U3 的任务里）：Mac 桌面端或 Mac 上的通道探针连 JP-VPS 的 Tailscale 地址能连；无通道探针被拒；`clients revoke` 后 Mac 那边 1 秒内断并显示"已撤销"文案。Windows：无专项（Windows 的 `tailscale ip` 和 `utun` 不适用，`isTailscale` 在 Windows 上只靠 `ts.ips`；I4a 已取消（owner 2026-11-01），改成在 Windows 的验收任务里顺带看一次 Windows 桌面端"允许别的设备连接"认不认 Tailscale 地址）。
 
 ## 7. 文档
 

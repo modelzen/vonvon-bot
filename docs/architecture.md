@@ -2,7 +2,7 @@
 
 这份文档说明 Vonvon Bot 的目标架构，以及每个关键决定的理由。实施顺序见 [roadmap.md](roadmap.md)。
 
-2026-10-31 起，远程连接和多设备按 [devices.md](plans/devices.md) 做（0.9.0）：远程客户端直连对方设备、走端到端加密通道，账号和云端中继以后再加，加进来只是多一条到达设备的路。产品行为见 [product.md](product.md) 3.7（在哪能改设置）、3.10（只装服务端）和 3.14（远程连接和多设备）。下面"远程连接和多设备"及其后几节是这部分的架构，和下文早先按"经云端远程"写的内容冲突时，以它们为准。
+2026-10-31 起，远程连接和多设备按 [devices.md](plans/devices.md) 做（0.9.0）：远程客户端直连对方设备、走端到端加密通道，账号和云端中继以后再加，加进来只是多一条到达设备的路。产品行为见 [product.md](product.md) 3.7（在哪能改设置）、3.10（Linux 上只装服务端）和 3.14（远程连接和多设备）。2026-11-01 起一条命令只装服务端只在 Linux 上做，Mac、Windows 只用桌面端安装包（[devices.md](plans/devices.md) 第 19 节）。下面"远程连接和多设备"及其后几节是这部分的架构，和下文早先按"经云端远程"写的内容冲突时，以它们为准。
 
 ## Vonvon Bot 做什么
 
@@ -63,7 +63,7 @@ V5 的系统服务设计要点如下。
 
 - 每个系统用户最多注册一个 Vonvon 服务。服务定义里写着它的 `VONVON_HOME`，这就是唯一的记录，不新增状态文件。其他数据目录的注册、认不出的定义，一律拒绝改动。
 - 注册了服务的数据目录只由系统服务管理器启动，`vonvon daemon start` 也交给管理器，失败就报错，不自己另起进程。
-- 管理器只在失败时重新拉起。停止退出 0，不会被拉起，注册保留。重启在排空后退出 75，由管理器按原端口拉起。崩溃或其他非零退出在 5 秒后拉起。Windows 没有服务管理器（0.9.0，只装服务端时）：当前用户的计划任务在登录时启动监督进程 `bin\vonvon-server.cmd __win-supervise`，由它实现同样的规则。监督进程用 `spawn`（不用 `fork`）、`windowsHide` 起 `daemon run` 并设 `VONVON_SERVICE=windows`；子进程退 0 监督也退出，退 75 先看安装根的 `current.txt` 变没变，变了就换成新版本的启动器接着监督，没变立刻重启，其他退出 5 秒后重启。计划任务名带用户 SID 和数据目录的哈希（`\VonvonBot\<sid-hash>-<root-hash>`），因为任务计划程序是全机命名空间。计划任务和命令都指向安装根里固定的启动器，启动器读 `current.txt` 找版本目录，不完整就退回上一版（见"服务端独立安装和升级"）。Windows 桌面端这一批不注册计划任务。
+- 管理器只在失败时重新拉起。停止退出 0，不会被拉起，注册保留。重启在排空后退出 75，由管理器按原端口拉起。崩溃或其他非零退出在 5 秒后拉起。Windows 没有服务管理器。原来为 Windows 只装服务端设计的计划任务和 `__win-supervise` 监督进程随 2026-11-01 的决定取消（[devices.md](plans/devices.md) 第 19 节）；Windows 桌面端这一批不做登录自启，`service/adapter.ts` 在 win32 照旧报不支持。
 - Vonvon 从不通过管理器停止正在运行的 daemon，停止只走 `stopHost`。所以排空没有时限，停止优先的规则和 V3 一样。
 - Core 更新后的重启仍由 V3 的重启助手确认新进程，并只完成它自己持有的那条更新记录。在 macOS 和 Windows 上，助手和 V3 一样另起进程组；macOS 的 `launchd.plist(5)` 文档支持这样做，但还要原生验收。Linux 上助手用 `systemd-run --user --scope` 放进单独的 scope。systemd 源码说明这一步不换 pid，但不会通知就绪，所以 daemon 自己查同一个 pid：它已经在这个 scope 里，命令行也已经换成助手，才提交并放锁（Gate L）。在这之前助手失败、超时或收到停止，都按 V3 的规则变成停止，那条更新记录写成 `error`。
 - macOS 上，`launchctl bootout` 只出现在一处“卸载屏障”里，也就是卸载时的“撤下定义、排空、再卸载”。安装时替换已加载的任务、回滚时卸载本次加载的任务，都走这道屏障。任务没加载时只做 `bootstrap`。回滚后旧任务留在磁盘上但不加载，等 `vonvon daemon start` 或下次登录（Gate M）。`bootout` 发出后失败、超时，或之后查询仍找到任务，就把状态当作未知：不写回定义，注册保持撤下，不再发第二次，报告未完成。
@@ -105,7 +105,7 @@ V2 先复制 `446b2a4` 的完整 `src/` 和 `test/`，包括 `src/web`，保留�
 - `hello` 的形状不变（`{ type, protocolVersion, clientKind, credential? }`）；bot 会话令牌也放在 `credential` 里，靠 `vs1.` 前缀认出。
 - daemon 按 `hello.protocolVersion` 选 `serverInfo` 的形状：v1 回原来的三个字段，v2 加 `deviceName`、`platform`、`capabilities`、`principal`。客户端一律宽松解析 `serverInfo`，枚举按开放字符串解析。客户端的能力和范围放在握手后的第一条请求 `admin.negotiate { capabilities, scope? }` 里。`capabilities` 是功能开关的唯一来源，客户端不按版本号猜。
 - 版本不再要求相等。协议相同、版本号不同只提示；协议不同，连接进入**维护子集**：只收 `admin.daemonStatus`、`machine.checkCoreUpdate`、`machine.applyCoreUpdate`、`machine.coreUpdateStatus`、`command.restartHost`，别的回 `protocol_mismatch`，不推 `snapshot`。这几个请求和回复的形状从 v2 起冻结，`daemonStatus` 加 `startedAt`。排空期间的白名单（`stopHost`、`daemonStatus`，加上 `coreUpdateStatus`，升级时要看进度）和维护子集写成同一个常量 `MAINTENANCE_KINDS`。
-- `owner-verification` 的核实和停止不再比版本：宽松解析 `serverInfo`，只取 pid，再 `stopHost`。本机 daemon 是独立安装的服务端（`standalone`）且协议不同，桌面端不报致命错误，按维护子集连上、显示升级条；是桌面端自带的（`bundled`）就照旧换成自己带的。
+- `owner-verification` 的核实和停止不再比版本：宽松解析 `serverInfo`，只取 pid，再 `stopHost`。本机 daemon 是桌面端自带的（`bundled`）且协议不同，就照旧换成自己带的。原来"本机是独立安装的服务端（`standalone`）就按维护子集连上、显示升级条"一条，2026-11-01 起 Mac、Windows 上没有 `standalone`，不做。
 
 ### 远程连接和多设备
 
@@ -272,16 +272,16 @@ vonvon-platform 只有约 1170 行，数据存在一个 JSON 文件里，只能�
 
 桌面端既是本机 daemon 的外壳，也是别的设备的客户端（见"远程连接和多设备"）。连着别的设备时，外壳里管本机的事一律不作用在对面。
 
-桌面端内置的 daemon（`bundled`）、安装脚本装的服务端（`standalone`）和 `npm i -g vonvon-bot` 装的 daemon 共用 `~/.vonvon-bot` 和同一把 pid 锁，所以同一时间只会有一个在运行。版本不同时以协议版本判断能否连接（见"本机和远程走同一套协议"的维护子集）。和独立安装的服务端共存时，桌面端只连它、不管它：退出和 Windows 更新前不停它（它退 0 以后服务管理器不再拉起），登录项开关显示"由独立安装的服务端管理"并禁用，启动修复不替换它、只提示升级，`vonvon` 命令认出它的标记 `# Vonvon Bot server CLI v1` 就算可用、不改写。反过来，安装脚本发现这台已经装过 Vonvon Bot（daemon 在跑、服务已注册、装了桌面端、或有桌面端注册的 `vonvon`）就跳过，什么都不动。
+桌面端内置的 daemon（`bundled`）和 `npm i -g vonvon-bot` 装的 daemon 共用 `~/.vonvon-bot` 和同一把 pid 锁，所以同一时间只会有一个在运行。版本不同时以协议版本判断能否连接（见"本机和远程走同一套协议"的维护子集）。2026-11-01 起安装脚本装的服务端（`standalone`）只在 Linux，Linux 没有桌面端，所以桌面端一侧只剩退出规则：退出时停本机的服务端，只有"不是 `bundled`、又另外注册成后台服务"的不停（比如 npm 装后 `vonvon service install`，它退 0 以后服务管理器不再拉起）。原来的登录项显示、启动修复只提示升级、认 `vonvon` 标记三条不做。安装脚本在 Linux 上发现这台已经装过（daemon 在跑、服务已注册、装过服务端、或 PATH 上有带标记的 `vonvon`）就跳过，什么都不动。
 
 ### 服务端独立安装和升级
 
-0.9.0 起，Mac、Windows、Linux 都能不装桌面端，只装服务端、`vonvon` 命令和后台服务（[product.md](product.md) 3.10"只装服务端"，[devices.md](plans/devices.md) 第 7 节）。
-- 新发行种类 `standalone`，靠安装根里的 `standalone.json` 识别，先于 `.git` 祖先检查。包里是 `app/`（`package.json`、`bin/vonvon.mjs`、压缩后的 `dist/cli.js`、`ui/dist/`、第三方 `node_modules/`）和官方 Node 24 LTS 二进制；不带 source map、TypeScript 源码和 `.d.ts`。`stageDaemon` 的这些改动对桌面端自带的 daemon 同样生效。六个包：`linux-x64`、`linux-arm64`（只支持 glibc）、`darwin-arm64`、`darwin-x64`、`win-x64`、`win-arm64`；依赖布局按目标平台选，包里不能有符号链接。
-- 安装根是 `~/.local/share/vonvon-bot/server/`（Windows `%LOCALAPPDATA%\VonvonBot\server\`），版本放在 `releases/<version>/`。当前版本在 POSIX 上是原子替换的符号链接 `current`，在 Windows 上是指针文件 `current.txt`（写临时文件再替换，原子），不用联接，免得"删旧建新"中间断掉。命令和服务定义都指向安装根里固定的启动器，exec `app/bin/vonvon.mjs`；服务定义对 `standalone` 不解析 realpath，升级只换 `current`。托管安装用的可信 npm 从 `process.execPath` 推出同一版本里 Node 自带的那份，不靠环境变量。
-- 升级：清单 `bot/server/stable/manifest.json` 用单独的 Ed25519 密钥签名，签名内容含 `product`、`channel`、`version`、每个包的 URL 和 sha512；只接受比当前和历史最高都新的版本，`publishedAt` 不倒退。`machine.applyCoreUpdate` 在 `update.lock` 里下载、核对、改名到 `releases/<v>/`，**先原子切 `current` 再请求重启**（排空、退 75、管理器拉起的就是新版本）；重启助手核对新进程的 `serverInfo.version`，不对或超时就切回上一版。`vonvon update` 发同一个 RPC，并在 daemon 重启的那一刻改读本机 `update-status.json`。
+0.9.0 起，Linux 能一条命令只装服务端、`vonvon` 命令和后台服务（[product.md](product.md) 3.10"只装服务端"，[devices.md](plans/devices.md) 第 7 节）。Mac、Windows 不做只装服务端，只用桌面端安装包（owner 2026-11-01，devices.md 第 19 节）；`install.sh`、`uninstall.sh` 在 macOS 上只打印去 https://vonvon.cc/get/ 下载安装包、退出非零，什么都不碰。
+- 新发行种类 `standalone`，靠安装根里的 `standalone.json` 识别，先于 `.git` 祖先检查。包里是 `app/`（`package.json`、`bin/vonvon.mjs`、压缩后的 `dist/cli.js`、`ui/dist/`、第三方 `node_modules/`）和官方 Node 24 LTS 二进制；不带 source map、TypeScript 源码和 `.d.ts`。`stageDaemon` 的这些改动对桌面端自带的 daemon 同样生效。只发两个包：`linux-x64`、`linux-arm64`（只支持 glibc，`.tar.gz`），包里不能有符号链接。I1 已合入的打包脚本还能打 darwin、win 四个目标（`.zip`、Windows 的 Node 和 npm 布局、260 字符预算），launchd 和桌面端也认 `standalone`；这些用不上，I3 合入后由清理片 I6 删。
+- 安装根是 `~/.local/share/vonvon-bot/server/`，版本放在 `releases/<version>/`。当前版本是原子替换的符号链接 `current`（原来给 Windows 的指针文件 `current.txt` 不做）。命令和服务定义都指向安装根里固定的启动器，exec `app/bin/vonvon.mjs`；服务定义对 `standalone` 不解析 realpath，升级只换 `current`。托管安装用的可信 npm 从 `process.execPath` 推出同一版本里 Node 自带的那份，不靠环境变量。
+- 升级：清单 `bot/server/stable/manifest.json` 用单独的 Ed25519 密钥签名，签名内容含 `product`、`channel`、`version`、`linux-x64` 和 `linux-arm64` 两个包的 URL 和 sha512；只接受比当前和历史最高都新的版本，`publishedAt` 不倒退。`machine.applyCoreUpdate` 在 `update.lock` 里下载、核对、改名到 `releases/<v>/`，**先原子切 `current` 再请求重启**（排空、退 75、管理器拉起的就是新版本）；重启助手核对新进程的 `serverInfo.version`，不对或超时就切回上一版。`vonvon update` 发同一个 RPC，并在 daemon 重启的那一刻改读本机 `update-status.json`。
 - 桌面端自带的服务端（`bundled`）不自己换文件：daemon 发事件 `desktopUpdateRequest` 给本机声明了 `desktop.selfUpdate` 能力的外壳连接，外壳跑它已有的应用更新（macOS Squirrel、Windows electron-updater），用 `machine.desktopUpdateReport` 回进度，daemon 映射到 `coreUpdateStatus`；排空沿用现有的 `beforeUpdateInstall` 和启动修复。外壳没连着就回 `desktop_not_running`。
-- 安装脚本只做下载、核对、解包和调 `vonvon`，逻辑尽量放在 `vonvon` 里（`service install`、`remote`）。脚本发现是 root 默认拒绝。
+- 安装脚本（`install.sh`，只在 Linux）只做下载、核对、解包和调 `vonvon`，逻辑尽量放在 `vonvon` 里（`service install`、`remote`）。先看系统，不是 Linux 就退出；再看 root，是 root 默认拒绝。
 
 ## 核心数据形状
 
@@ -403,4 +403,4 @@ packages/
 
 现在的桌面端在 Linux 上跑不起来，因为内核只打包了 macOS 和 Windows 版本。新结构的 daemon 是普通 Node 程序，网页由 daemon 提供，所以 macOS、Linux、Windows 都能跑完整的 daemon 和网页界面。没有桌面的 Linux 服务器也能用无头 Chromium 打开网页截图验证。
 
-0.9.0 起三个平台都有服务端包（见"服务端独立安装和升级"），自带 Node，一条命令装好：Linux、macOS 用 `install.sh`，Windows 用 `install.ps1`。Linux 只支持 glibc 的发行版；后台服务在 Linux 是 systemd 用户服务（开了 linger 不用登录），macOS 是 LaunchAgent、Windows 是计划任务，这两个都要有用户登录着（可以锁屏）。macOS、Windows 安装包和服务端包用同一个版本号。
+0.9.0 起 Linux 有服务端包（见"服务端独立安装和升级"），自带 Node，`install.sh` 一条命令装好，只支持 glibc 的发行版，后台服务是 systemd 用户服务（开了 linger 不用登录）。Mac、Windows 用桌面端安装包，服务端在里面，不单独装（owner 2026-11-01）；Mac 的登录时启动是桌面端的 LaunchAgent，Windows 桌面端这一批不做登录自启，两边都要有用户登录着（可以锁屏）。macOS、Windows 安装包和 Linux 服务端包用同一个版本号。
