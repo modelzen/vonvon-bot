@@ -276,7 +276,7 @@ JP-VPS 上，不碰 `accept-home2`、Bot 6、真 CDN、真 systemd：
 16. **`server/directory-suggestions.ts` 保留 `process.argv[1]`**：那是目录建议子进程读它自己的参数，不是本进程的入口。其余全部换成 `selfEntry()`。
 17. **`process.execPath` 在 Linux 上已是真实路径**（`self-entry.test.ts` 核实过），不加 `selfNode()`。
 18. **解包失败留下 `.part`**（下次升级先清），下载或校验失败当场删；§4.5 只写了后者。
-19. **行数超过 1,500**（约 2,200，其中测试约 1,000）。没拆成 I3a/I3b：助手回滚、启动收尾和应用流程共用状态记录，拆开后 I3a 要先回 `unsupported`，再改回来；合入集成分支前如果要拆，按 §9 的分法。
+19. **按 §9 拆成两个 PR**（合计约 2,800 行，其中测试约 1,000）：I3a `server-3a-update-core`（清单、下载校验、解包、切换、状态记录；standalone 的 `applyCoreUpdate` 先回 `unsupported`，每天检查的定时还没接线）和 I3b `server-3b-update-helper`（重启助手、回滚、启动收尾和清理、`bootstrap.ts` 接线、`vonvon update`、界面和进度文字）。本节和"审查后改了什么"写的是两片合起来的结果，其中重启助手、`startUpdateUpkeep`、`selfEntry()`、`vonvon update` 的输出和退出码、F2/F4/F5/F8 都落在 I3b。
 
 ## 审查后改了什么
 
