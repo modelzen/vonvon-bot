@@ -238,8 +238,10 @@ it('session catalog and speed saves use the session cwd capability', async () =>
   const listModelsForCwd = vi.fn(async (_cwd: string) => local);
   const { owner } = await fixture({ backendFor: () => ({ ...backend, listModelsForCwd }) });
   const catalog = await owner.models({ botId, backend: 'codex-appserver', purpose: 'session', threadId: session.threadId });
-  expect(listModelsForCwd).toHaveBeenCalledWith('/tmp/demo');
+  expect(listModelsForCwd).toHaveBeenCalledWith('/tmp/demo', { refresh: undefined });
   expect(catalog).toMatchObject({ state: 'ready', models: local });
+  await owner.models({ botId, backend: 'codex-appserver', purpose: 'session', threadId: session.threadId, refresh: true });
+  expect(listModelsForCwd).toHaveBeenLastCalledWith('/tmp/demo', { refresh: true });
   expect(() => parseModelQuery({ botId, backend: 'codex-appserver', purpose: 'project', threadId: session.threadId })).toThrow();
   const view = await owner.read(session) as SessionSettingsView;
   expect((await owner.save({ scope: session, section: 'speed', revision: view.sections.speed!.revision, patch: { tier: 'fast' } })).kind).toBe('rejected');
