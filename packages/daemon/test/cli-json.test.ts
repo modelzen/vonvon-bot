@@ -36,6 +36,7 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['usage', 'show'], 3], [['usage', 'share', '--group', 'g'], 3], [['usage', 'judge'], 3],
   [['feishu', 'groups'], 3], [['feishu', 'members', 'oc_x'], 3],
   [['secrets', 'list'], 0], [['secrets', 'set', 'typesafe-api-key'], 2], [['secrets', 'remove', 'typesafe-api-key'], 0],
+  [['update', '--to', 'latest'], 2],
   // argument errors from commander itself
   [['nope'], 2], [['bot', 'list', '--nope'], 2], [['group'], 2],
 ];

@@ -1,3 +1,4 @@
+import { selfEntry } from '../../core/self-entry';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { open } from 'node:fs/promises';
@@ -77,7 +78,7 @@ export async function runStart(port = 0): Promise<DaemonStatus> {
       }
     }
   }
-  const cliEntry = process.argv[1];
+  const cliEntry = selfEntry();
   if (!cliEntry) throw new Error('Cannot locate the daemon CLI entry.');
   const log = await open(join(paths.appDir, 'daemon.log'), 'a', 0o600);
   const env: NodeJS.ProcessEnv = { ...process.env, VONVON_HOME: paths.appDir };

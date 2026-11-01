@@ -46,7 +46,9 @@ const daemonFor = async (options: { fresh?: boolean }) => {
 };
 /** The commands that write the data root themselves, so they hold the data lease (cli-2-bot 4.6); every other command
  * talks to the daemon, or reads files published with tmp + rename, and takes none. */
-const LEASED = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon restart', 'bot repair-dir', 'secrets list', 'secrets set', 'secrets remove']);
+const LEASED = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon restart', 'bot repair-dir', 'secrets list', 'secrets set', 'secrets remove',
+  // with no daemon running, a standalone update takes update.lock and writes update-status.json itself (server-3 4.8)
+  'vonvon update']);
 program.hook('preAction', async (_command, action) => {
   const path = `${action.parent?.name() ?? ''} ${action.name()}`;
   if (path === 'daemon run') {
@@ -56,6 +58,8 @@ program.hook('preAction', async (_command, action) => {
   if (!LEASED.has(path)) return;
   // in a Bot's session secrets list, set and remove only refuse (s23g): before the lease, whose socket a sandbox may forbid
   if (action.parent?.name() === 'secrets' && inBotSession(process.env)) return;
+  // the same for update, which refuses in a Bot's session (commands/update.ts)
+  if (path === 'vonvon update' && inBotSession(process.env)) return;
   await mkdir(paths.appDir, { recursive: true, mode: 0o700 });
   lease = await enterDataAccess(paths.appDir);
 });
@@ -453,6 +457,18 @@ covers(feishu.command('groups'), 'command.listJoinedGroups').description('List j
 covers(feishu.command('members <groupId>'), 'command.listGroupMembers').description('List group members, one page').option(...BOT).option('--cursor <cursor>', 'Next page cursor').option('--json', 'Print JSON')
   .action(async (groupId: string, options: Json & { bot?: string; cursor?: string }) => {
     await (await import('./commands/feishu')).runFeishu('members', groupId, options, io(options));
+  });
+covers(program.command('update'), 'machine.checkCoreUpdate', 'machine.applyCoreUpdate', 'machine.coreUpdateStatus')
+  .description('Update this server to the signed stable release; with the daemon running, it drains and restarts')
+  .option('--check', 'Only say whether a newer version is out')
+  .option('--allow-downgrade', 'With --to: go back to a release still kept on this machine')
+  .option('--to <version>', 'The version to go to')
+  .option('--json', 'Print JSON Lines: each status change, then the result')
+  .addHelpText('after', `
+Exit codes: 0 updated (or already current), 1 failed (the server stays on or goes back to its version),
+5 another update is running, 6 the daemon restarted but the outcome is not known yet.`)
+  .action(async (options: Json & { check?: boolean; allowDowngrade?: boolean; to?: string }) => {
+    await (await import('./commands/update')).runUpdateCommand(options, io(options));
   });
 program.command('__daemon-control <action>', { hidden: true }).action(async (action: string) => {
   await (await import('./commands/daemon-control')).runDaemonControl(action);

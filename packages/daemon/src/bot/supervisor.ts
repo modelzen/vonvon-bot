@@ -1,3 +1,4 @@
+import { selfEntry } from '../core/self-entry';
 import { readSingleInstanceHolder } from '../core/single-instance';
 import { botPaths, paths } from '../config/paths';
 import { CHILD_SHUTDOWN_GRACE_MS, closeOwnedProviders, observeShutdown, settleOwnedChild, type ShutdownControl } from '../host/lifecycle';
@@ -83,8 +84,8 @@ export const HOST_PAUSED_ACTIVATION = 'daemon 已暂停（10 分钟内崩溃了 
 export async function runSupervisor(bots: BotEntry[], options: { control?: ShutdownControl; managed?: boolean; port?: number; onListening?: (listen: string) => Promise<void>; paused?: boolean; crash?: SupervisorCrash; notifier?: CrashNotifier; registryUnreadable?: boolean; timing?: { lockRetryMs?: number; lockWarnMs?: number; lockSlowMs?: number } } = {}): Promise<void> {
   const control = options.control ?? observeShutdown();
   const supervisorStartedAt = Date.now();
-  const cliEntry = process.argv[1];
-  if (!cliEntry) throw new Error('supervisor: 无法解析 CLI 入口（process.argv[1] 为空）');
+  const cliEntry = selfEntry();
+  if (!cliEntry) throw new Error('supervisor: 无法解析 CLI 入口');
 
   // An untracked host (no run marker) still gets its bots' records, under ids of its own.
   const runId = options.crash?.runId ?? randomUUID();
