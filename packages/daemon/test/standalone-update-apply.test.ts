@@ -308,6 +308,22 @@ describe('settleUpdateAtStartup', () => {
     resume();
     expect(await other.done).toMatchObject({ phase: 'done', to: '1.0.1' });
   });
+  // the check after the 3a/3b fixes: the locks of an update killed midway held for good once its pid came back (a
+  // container restarted hands the daemon the same pid)
+  it('ends the update a killed process left and clears releases/, when this daemon got its pid again', async () => {
+    const { installRoot } = await setup();
+    await mkdir(join(installRoot, 'releases', '1.0.1.part'), { recursive: true });
+    const left = JSON.stringify({ pid: process.pid, at: Date.now() - 7 * 86_400_000 });
+    await writeFile(join(installRoot, 'releases.lock'), left);
+    await writeFile(join(paths.appDir, 'update.lock'), left);
+    writeUpdateStatus({ phase: 'installing', from: '1.0.0', at: 5, detail: 'downloading' });
+    await settleUpdateAtStartup({ version: '1.0.0', installRoot, platform: 'linux' });
+    // Before: both locks counted as held, the record stayed `installing` and releases/1.0.1.part stayed.
+    expect(readUpdateStatus()).toMatchObject({ phase: 'error', message: '上次更新中断' });
+    expect(await readdir(join(installRoot, 'releases'))).toEqual(['1.0.0']);
+    expect(existsSync(join(installRoot, 'releases.lock'))).toBe(false);
+    expect(existsSync(join(paths.appDir, 'update.lock'))).toBe(false);
+  });
   it('keeps the release a live daemon of another data directory runs, and drops the note of a dead one', async () => {
     const { installRoot } = await setup();
     await fullRelease(installRoot, '1.0.0');
