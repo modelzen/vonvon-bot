@@ -131,4 +131,35 @@ describe('__standalone-teardown', () => {
     await runStandaloneTeardown({ installRoot: f.root }, f.io, f.deps);
     expect(await readFile(join(dotfiles, 'bashrc'), 'utf8')).toBe('export KEEP=1\n');
   });
+
+  // review F3: the rename used to replace a link to nothing with a plain file
+  it('leaves a startup file that is a link to nothing as it is, and names it', async () => {
+    const f = await fixture();
+    await symlink(join(f.base, 'dotfiles', 'zshrc'), join(f.home, '.zshrc'));
+    const result = await runStandaloneSetup({ installRoot: f.root, version: '1.0.0' }, f.io, f.deps);
+    expect(result.pathFiles).not.toContain(join(f.home, '.zshrc'));
+    expect(result.pathNote).toBe(`${join(f.home, '.zshrc')} 没写进去：符号链接指向的文件不存在`);
+    expect(await readlink(join(f.home, '.zshrc'))).toBe(join(f.base, 'dotfiles', 'zshrc'));
+    f.out();
+    expect(await runStandaloneTeardown({ installRoot: f.root }, f.io, f.deps)).not.toHaveProperty('pathNote');
+    expect(await readlink(join(f.home, '.zshrc'))).toBe(join(f.base, 'dotfiles', 'zshrc'));
+  });
+
+  // review F1: reading the file as UTF-8 turned other bytes (a GBK comment) into U+FFFD for good
+  it('keeps bytes that are not UTF-8, and writes the block for a bin path that is not ASCII as UTF-8', async () => {
+    const f = await fixture();
+    const gbk = Buffer.concat([Buffer.from('# '), Buffer.from('d6d0cec4d7a2cacd', 'hex'), Buffer.from('\nalias ll="ls -l"\n')]);
+    await writeFile(join(f.home, '.bashrc'), gbk);
+    const root = join(f.home, '服务端');
+    await mkdir(join(root, 'releases', '1.0.0'), { recursive: true });
+    await writeFile(join(root, 'releases', '1.0.0', 'standalone.json'), `${JSON.stringify({ v: 1, version: '1.0.0', target: 'linux-x64', node: 'test' })}\n`);
+    await runStandaloneSetup({ installRoot: root, version: '1.0.0' }, f.io, f.deps);
+    const block = Buffer.from(startupBlock(join(root, 'bin')), 'utf8');
+    expect(await readFile(join(f.home, '.bashrc'))).toEqual(Buffer.concat([gbk, block]));
+    expect(await readFile(join(f.home, '.zshrc'))).toEqual(block);
+    const result = await runStandaloneTeardown({ installRoot: root }, f.io, f.deps);
+    expect(result.pathFiles).toContain(join(f.home, '.bashrc'));
+    expect(await readFile(join(f.home, '.bashrc'))).toEqual(gbk);
+    expect(await readFile(join(f.home, '.zshrc'), 'utf8')).toBe('');
+  });
 });
