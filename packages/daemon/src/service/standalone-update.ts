@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { chmod, copyFile, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { chmod, copyFile, lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { log } from '../core/logger';
@@ -8,7 +8,7 @@ import { extractTarGz, extractZip, removeStaging } from './archive';
 import { isCompleteRelease, readCurrent, switchCurrent, VERSION } from './current-release';
 import { nearestPackageRoot } from './distribution';
 import { fetchManifest, ManifestError, readServerUpdateConfig, serverTarget, type Fetch, type Manifest, type ServerUpdateConfig } from './standalone-manifest';
-import { acquireUpdateLock, isNewer, readUpdateStatus, UpdateBusyError, writeUpdateStatus, type UpdateStatus } from './update';
+import { acquireUpdateLock, finishOwnedUpdate, isNewer, readUpdateStatus, UpdateBusyError, writeUpdateStatus, type UpdateStatus } from './update';
 
 /**
  * The standalone server's update (server-3 4.4, 4.5): check the signed stable manifest, and apply it by downloading
@@ -311,4 +311,61 @@ export function startStandaloneUpdate(options: ApplyOptions, deps: ApplyDeps): {
     } finally { release(); }
   })();
   return { done };
+}
+
+// ── 4.6, 4.10 at startup ─────────────────────────────────────────────────────────────────────────────────────────
+/**
+ * Keeps the current release and the previous one; removes other versions and every `.part`. Only direct children of
+ * `releases/` named like a version, real directories, holding `standalone.json` or named `.part`. A directory in use
+ * (Windows) is left for the next start.
+ */
+export async function cleanupReleases(installRoot: string, keep: ReadonlyArray<string | undefined>, remove: (dir: string) => Promise<void> = dir => rm(dir, { recursive: true })): Promise<void> {
+  const releases = join(installRoot, 'releases');
+  const names = await readdir(releases).catch(() => [] as string[]);
+  for (const name of names) {
+    const match = /^(\d+\.\d+\.\d+)(\.part)?$/.exec(name);
+    if (!match || (!match[2] && keep.includes(match[1]))) continue;
+    const dir = join(releases, name);
+    try {
+      const info = await lstat(dir);
+      if (!info.isDirectory() || info.isSymbolicLink() || dirname(dir) !== releases) continue;
+      if (!match[2] && !await isFile(join(dir, 'standalone.json'))) continue;
+      await remove(dir);
+    } catch (error) {
+      log.warn(EVENTS, 'update-cleanup-skipped', { name, code: error instanceof Error && 'code' in error ? String(error.code) : 'error' });
+    }
+  }
+}
+
+/**
+ * The new daemon, once it publishes its port: an `installing` record nobody holds the lock for was cut short; a
+ * standalone `restarting` record for this version is done (unless `current` was moved back meanwhile); then releases
+ * besides the current and previous one go.
+ */
+export async function settleUpdateAtStartup(options: { version: string; installRoot?: string; platform?: NodeJS.Platform }): Promise<void> {
+  const status = readUpdateStatus();
+  if (status?.phase === 'installing') {
+    const release = acquireUpdateLock();
+    if (release) {
+      try { if (readUpdateStatus()?.at === status.at) writeUpdateStatus({ phase: 'error', ok: false, from: status.from, ...(status.to ? { to: status.to } : {}), at: Date.now(), message: '上次更新中断' }); }
+      finally { release(); }
+    }
+  }
+  if (!options.installRoot) return;
+  const current = await readCurrent(options.installRoot, options.platform).catch(() => null);
+  if (status?.phase === 'restarting' && status.previous !== undefined) {
+    if (status.to !== options.version) finishOwnedUpdate(status, 'error', `重启后仍是 ${options.version}`);
+    else if (current?.version !== options.version) finishOwnedUpdate(status, 'error', `升级和回滚撞上了，当前运行 ${options.version}`);
+    else finishOwnedUpdate(status, 'done');
+  }
+  if (!current) return;
+  const release = acquireUpdateLock();
+  if (!release) return; // an update is downloading into releases/ right now
+  try {
+    const latest = readUpdateStatus();
+    // Never the current release itself: a record or `current.txt` naming it would leave no release to go back to.
+    const candidates = [current.previous, latest?.to === current.version ? latest.previous : undefined, ...await keptReleases(options.installRoot, current.version)];
+    const previous = candidates.find(version => version !== undefined && version !== current.version);
+    await cleanupReleases(options.installRoot, [current.version, previous]);
+  } finally { release(); }
 }

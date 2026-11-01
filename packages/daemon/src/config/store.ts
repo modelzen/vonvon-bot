@@ -1,3 +1,4 @@
+import { selfEntry } from '../core/self-entry';
 import { homedir } from 'node:os';
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -56,7 +57,7 @@ export async function buildEncryptedAccountConfig(
     secrets: {
       providers: {
         bridge: process.platform === 'win32'
-          ? { source: 'exec', command: process.execPath, args: [process.argv[1] ?? '', 'secrets', 'get'], env: { HOME: homedir(), USERPROFILE: homedir(), VONVON_HOME: paths.appDir, ELECTRON_RUN_AS_NODE: '1' } }
+          ? { source: 'exec', command: process.execPath, args: [selfEntry(), 'secrets', 'get'], env: { HOME: homedir(), USERPROFILE: homedir(), VONVON_HOME: paths.appDir, ELECTRON_RUN_AS_NODE: '1' } }
           : { source: 'exec', command: wrapperPath, args: [] },
       },
     },
@@ -71,7 +72,7 @@ export async function buildEncryptedAccountConfig(
 export async function ensureSecretsGetterWrapper(): Promise<string> {
   const wrapperPath = paths.secretsGetterScript;
   const node = process.execPath;
-  const bridgeEntry = process.argv[1] ?? '';
+  const bridgeEntry = selfEntry();
   const content = getterContents({ nodePath: node, cliPath: bridgeEntry }, paths.appDir);
   await mkdir(dirname(wrapperPath), { recursive: true });
   const tmp = `${wrapperPath}.tmp-${process.pid}`;

@@ -217,6 +217,11 @@ export const distributionKinds = ["global-npm", "bundled", "standalone", "develo
 export type DistributionKind = (typeof distributionKinds)[number];
 /** The kind parses as an open string, so a client does not fail on a kind that a newer daemon adds. */
 export const distributionSchema = z.object({ kind: z.string().min(1), cliPath: z.string() });
+/**
+ * The RPC kinds (rpc-kinds.ts names) a draining daemon still answers (devices 4.5, 4.7): its status, a stop, and the
+ * progress of an update, which `vonvon update` and the update panel keep polling while the bots finish their work.
+ */
+export const MAINTENANCE_KINDS = ["admin.daemonStatus", "machine.stopHost", "machine.coreUpdateStatus"] as const;
 /** Linux: whether systemd keeps this account's user services running without a login session (s20a). */
 export const lingerStateSchema = z.enum(["on", "off", "unknown"]);
 /** Why a service install or uninstall failed, read from the transaction's detail (daemon service/action-report.ts). */

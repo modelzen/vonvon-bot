@@ -1,7 +1,7 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Server } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
-import { helloSchema, requestSchema, type ErrorEnvelope, type Event, type Hello, type Request, type Response, type ServerInfo } from '@vonvon/protocol';
+import { helloSchema, MAINTENANCE_KINDS, requestSchema, type ErrorEnvelope, type Event, type Hello, type Request, type Response, type ServerInfo } from '@vonvon/protocol';
 import { getRpcErrorCode } from './errors';
 import type { JobPeer } from './jobs';
 
@@ -83,8 +83,8 @@ export function createSocketServer(options: { server: Server; credential: string
       }
       if (state === 'draining') {
         const parsed = requestSchema.safeParse(raw);
-        if (!parsed.success || !options.control || !(parsed.data.method === 'admin' && parsed.data.payload.type === 'daemonStatus'
-          || parsed.data.method === 'machine' && parsed.data.payload.type === 'stopHost')) {
+        const kind = parsed.success && 'type' in parsed.data.payload ? `${parsed.data.method}.${String(parsed.data.payload.type)}` : '';
+        if (!parsed.success || !options.control || !(MAINTENANCE_KINDS as readonly string[]).includes(kind)) {
           socket.close(1001, 'server_shutdown');
           return;
         }
