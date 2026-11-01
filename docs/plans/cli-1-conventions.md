@@ -67,7 +67,7 @@
 2. 测试 daemon 在跑、日志较大时 `vonvon daemon logs --tail 2000 --json | wc -c` 两次结果相同、`JSON.parse` 成功（输出没被截断）。
 3. `vonvon bot add --json > add.txt`，看到 `qr` 行后按 Ctrl-C：退出码 130，最后一行 `"kind":"interrupted"`；不扫码，不建飞书应用。
 
-**交给 Windows 上的 Codex（D 道）**：`vonvon.cmd bot list --json` 在 daemon 没跑时 `%ERRORLEVEL%` 为 3、PowerShell `ConvertFrom-Json` 能解析；`vonvon.cmd nope` 为 2。确认 `.cmd` 包装把退出码传出来。
+**交给 Windows 上的 Codex（D 道）**：`vonvon.cmd bot list --json` 在 daemon 没跑时 `%ERRORLEVEL%` 为 3、PowerShell `ConvertFrom-Json` 能解析；`vonvon.cmd nope` 为 2。确认 `.cmd` 包装把退出码传出来。（owner 2026-11-01：Windows 上不做只装服务端，这一批 Windows 上没有注册的 `vonvon`，这条不做；发给 Windows 的任务只有 U4 和 Windows 桌面端当被连的设备的检查，见 `devices.md` 第 19 节。）
 
 ## 7. 文档
 
