@@ -45,6 +45,7 @@ function harness(fields: { machine?: Machine; running?: boolean; ownerAlive?: ()
     pause: async ms => { clock += ms; },
     local: installRoot => ({ installRoot, currentVersion: '1.0.0', config: () => keys.config, fetch: cdn.fetch, platform: 'linux', arch: 'x64' }),
     env: fields.env ?? {},
+    npm: { check: async () => ({ current: '1.0.0', latest: '1.0.1', hasUpdate: true, dev: false }), install: vi.fn(async () => ({ ok: true, message: '' })) },
   };
   const io = (json = false) => ({ json, write: (text: string) => { out += text; } });
   return { deps, io, out: () => out, sent, time: () => clock };
@@ -108,6 +109,14 @@ describe('vonvon update', () => {
     await runUpdateCommand({}, io(), deps);
     expect(sent[0]).toEqual({ type: 'applyCoreUpdate' });
     expect(out().trim().split('\n')).toEqual(['下载中 50%', '解包中', '等 Bot 做完手上的活', '更新完成', '已更新到 1.0.1']);
+  });
+  // review 207: under --json a global npm install updated here and left the running daemon on the old code
+  it('has a running daemon of a global npm install update and restart itself, under --json too', async () => {
+    const { deps, io, out, sent } = harness({ distribution: { kind: 'global-npm', cliPath: '/x' }, machine: async payload => (payload.type === 'applyCoreUpdate' ? accepted : statusReply(status('done', { ok: true, to: '1.0.1' }))) });
+    await runUpdateCommand({}, io(true), deps);
+    expect(sent[0]).toEqual({ type: 'applyCoreUpdate' });
+    expect(deps.npm.install).not.toHaveBeenCalled();
+    expect(JSON.parse(out().trim().split('\n').at(-1)!)).toMatchObject({ ok: true, status: { phase: 'done', to: '1.0.1' } });
   });
   it('passes --to and --allow-downgrade to the daemon', async () => {
     const { deps, io, sent } = harness({ machine: async payload => (payload.type === 'applyCoreUpdate' ? accepted : statusReply(status('done', { ok: true, to: '0.9.0' }))) });

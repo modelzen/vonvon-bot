@@ -4,6 +4,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { log } from '../core/logger';
+import { paths } from '../config/paths';
+import { ensureSecretsGetterWrapper } from '../config/store';
+import { STEADY_OWNER_MS } from '../host/restart';
 import { extractTarGz, extractZip, removeStaging } from './archive';
 import { isCompleteRelease, readCurrent, switchCurrent, VERSION } from './current-release';
 import { nearestPackageRoot } from './distribution';
@@ -368,7 +371,10 @@ export async function cleanupReleases(installRoot: string, keep: ReadonlyArray<s
  * standalone `restarting` record for this version is done (unless `current` was moved back meanwhile); then releases
  * besides the current and previous one go.
  */
-export async function settleUpdateAtStartup(options: { version: string; installRoot?: string; platform?: NodeJS.Platform }): Promise<void> {
+export async function settleUpdateAtStartup(options: { version: string; installRoot?: string; platform?: NodeJS.Platform; alive?: () => boolean; pause?: (ms: number) => Promise<void> }): Promise<void> {
+  // A getter an earlier release wrote names that release, which the cleanup below or the helper's may remove (review 207).
+  const getter = options.installRoot && (options.platform ?? process.platform) !== 'win32' ? await readFile(paths.secretsGetterScript, 'utf8').catch(() => '') : '';
+  if (options.installRoot && getter.includes(`${join(options.installRoot, 'releases')}/`)) await ensureSecretsGetterWrapper(options.installRoot).catch(error => log.fail(EVENTS, error, { phase: 'getter' }));
   const status = readUpdateStatus();
   if (status?.phase === 'installing') {
     const release = acquireUpdateLock();
@@ -378,6 +384,10 @@ export async function settleUpdateAtStartup(options: { version: string; installR
     }
   }
   if (!options.installRoot) return;
+  // A restart is ended only once this process has stayed up as long as the helper watches a new owner (review 207):
+  // one that listens and dies at once leaves the record to the helper, which then switches back.
+  if (status?.phase === 'restarting') await (options.pause ?? (ms => new Promise<void>(resolve => { setTimeout(resolve, ms).unref(); })))(STEADY_OWNER_MS);
+  if (options.alive?.() === false) return;
   const current = await readCurrent(options.installRoot, options.platform).catch(() => null);
   if (status?.phase === 'restarting' && status.previous !== undefined) {
     if (status.to !== options.version) finishOwnedUpdate(status, 'error', `重启后仍是 ${options.version}`);

@@ -2,7 +2,8 @@ import { selfEntry } from '../core/self-entry';
 import { homedir } from 'node:os';
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import { classifyDistribution, nearestPackageRoot } from '../service/distribution';
 import { paths } from './paths';
 import type { AppConfig, AppPreferences, TenantBrand } from './schema';
 import { secretKeyForApp } from './schema';
@@ -45,7 +46,8 @@ export async function buildEncryptedAccountConfig(
     ...preferences,
     defaults: { ...defaults, permission: resolved.permission, network: resolved.network },
   };
-  const wrapperPath = await ensureSecretsGetterWrapper();
+  const own = process.platform === 'win32' ? undefined : classifyDistribution(nearestPackageRoot(selfEntry()));
+  const wrapperPath = await ensureSecretsGetterWrapper(own?.kind === 'standalone' ? own.installRoot : undefined);
   return {
     accounts: {
       app: {
@@ -69,10 +71,11 @@ export async function buildEncryptedAccountConfig(
  * Write the secrets-getter wrapper pointing at the current node + bridge
  * entry. Always rewrites (node path can move). 0700 perms.
  */
-export async function ensureSecretsGetterWrapper(): Promise<string> {
+export async function ensureSecretsGetterWrapper(installRoot?: string): Promise<string> {
   const wrapperPath = paths.secretsGetterScript;
-  const node = process.execPath;
-  const bridgeEntry = selfEntry();
+  // A standalone server's names `current`: the wrapper outlives this release, which a later update removes (review 207).
+  const node = installRoot ? join(installRoot, 'current', 'node', 'bin', 'node') : process.execPath;
+  const bridgeEntry = installRoot ? join(installRoot, 'current', 'app', 'bin', 'vonvon.mjs') : selfEntry();
   const content = getterContents({ nodePath: node, cliPath: bridgeEntry }, paths.appDir);
   await mkdir(dirname(wrapperPath), { recursive: true });
   const tmp = `${wrapperPath}.tmp-${process.pid}`;

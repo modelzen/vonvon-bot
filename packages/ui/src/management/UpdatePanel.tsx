@@ -19,6 +19,8 @@ export const canApplyCoreUpdate = (core: CoreUpdate | undefined): boolean => Boo
 export const coreStatusLine = (status: CoreUpdateStatus | null): string =>
   status ? `${coreUpdateStatusText(status)}${status.from && status.to ? ` · ${status.from} → ${status.to}` : ''}` : '尚无更新记录';
 const ended = (status: CoreUpdateStatus | null | undefined): boolean => status?.phase === 'done' || status?.phase === 'error';
+// No record is nothing to follow: following it would keep the update button off for good (review 207).
+const running = (status: CoreUpdateStatus | null): boolean => status !== null && !ended(status);
 
 /** `attached` no longer gates anything (devices 6.5): a standalone daemon is never one the desktop app attached to. */
 export function UpdatePanel({request, externalCoreAvailable,version,device,children,advancedSettings}: {request: MachineRequestHandler; attached?: boolean; externalCoreAvailable:boolean; version:string;device:string;children:ReactNode;advancedSettings:ReactNode}) {
@@ -37,7 +39,7 @@ export function UpdatePanel({request, externalCoreAvailable,version,device,child
     const timer = setInterval(() => void request({type: 'coreUpdateStatus'}).then(reply => {
       if (!active || reply.type !== 'coreUpdateStatus') return;
       setCoreStatus(reply.status);
-      if (ended(reply.status)) setFollowing(false);
+      if (!running(reply.status)) setFollowing(false);
     }, () => undefined), 1000);
     return () => {active = false; clearInterval(timer);};
   }, [following, request]);
@@ -54,7 +56,7 @@ export function UpdatePanel({request, externalCoreAvailable,version,device,child
       if (reply.type === 'coreUpdate') setCore(reply);
       if (reply.type === 'done') report(reply.message);
       if (reply.type === 'done' && operation.type === 'applyCoreUpdate' && core?.distribution.kind === 'standalone') setFollowing(true);
-      if (reply.type === 'coreUpdateStatus') { setCoreStatus(reply.status); report(''); if (!ended(reply.status)) setFollowing(true); }
+      if (reply.type === 'coreUpdateStatus') { setCoreStatus(reply.status); report(''); if (running(reply.status)) setFollowing(true); }
     } catch (error) {
       report(error instanceof Error ? error.message : '更新失败');
     } finally {

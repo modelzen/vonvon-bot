@@ -12,6 +12,9 @@ vi.mock('../src/config/paths', async () => {
 import { paths } from '../src/config/paths';
 import { NEW_OWNER_MS, ROLLBACK_OWNER_MS, runSamePortRestartHelper, STARTING_OWNER_MS, STEADY_OWNER_MS, type RestartHelperDeps } from '../src/host/restart';
 import { acquireUpdateLock, finishOwnedUpdate, readUpdateStatus, writeUpdateStatus, type UpdateStatus } from '../src/service/update';
+import { settleUpdateAtStartup } from '../src/service/standalone-update';
+import { switchCurrent } from '../src/service/current-release';
+import { mkdir, writeFile } from 'node:fs/promises';
 import type { PidLockInfo } from '../src/server/pid-lock';
 
 // main 必败: the helper wrote done for any new PID, whatever version it ran, and never switched back (server-3 4.6)
@@ -181,6 +184,20 @@ describe('standalone update restart helper', () => {
     await run();
     expect(calls.switches).toEqual(['1.0.0']);
     expect(readUpdateStatus()).toMatchObject({ phase: 'error', rolledBack: true, message: '新版本 1.0.1 没有起来，已切回 1.0.0' });
+  });
+  // review 207: a managed restart's new daemon ended the record as it listened, before the helper took it, and died
+  it('leaves the record to the helper when the new daemon dies within its first seconds', async () => {
+    const root = join(paths.appDir, 'install');
+    for (const version of ['1.0.0', '1.0.1']) await mkdir(join(root, 'releases', version), { recursive: true }).then(() => writeFile(join(root, 'releases', version, 'standalone.json'), JSON.stringify({ v: 1, version })));
+    await switchCurrent(root, '1.0.1', 'linux');
+    let paused: () => void = () => {}, resume: () => void = () => {};
+    const settling = settleUpdateAtStartup({ version: '1.0.1', installRoot: root, platform: 'linux', alive: () => false, pause: () => new Promise(resolve => { resume = resolve; paused(); }) });
+    await Promise.race([settling, new Promise<void>(resolve => { paused = resolve; })]);
+    const { run, calls } = helper(() => null);
+    await run();
+    await (resume(), settling);
+    expect(calls.switches).toEqual(['1.0.0']);
+    expect(readUpdateStatus()).toMatchObject({ phase: 'error', rolledBack: true });
   });
   it('marks the record waiting once the old daemon is gone, so no other update starts meanwhile', async () => {
     let seen: UpdateStatus | null = null;
