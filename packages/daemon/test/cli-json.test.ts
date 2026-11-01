@@ -20,6 +20,9 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['memory', 'list'], 2], [['memory', 'export'], 2], [['memory', 'add', 'x'], 2], [['memory', 'edit', 'x', '--revision', '1'], 2],
   [['memory', 'forget', 'x', '--revision', '1'], 2], [['memory', 'reseal'], 2], [['memory', 'branch-rename', 'a', 'b'], 2], [['memory', 'branch-merge', 'a', 'b'], 2],
   [['settings', 'get'], 3], [['settings', 'access'], 3], [['settings', 'set', 'cards.showToolCalls=false'], 3],
+  [['settings', 'get', '--host'], 3], [['settings', 'act', 'voice', 'test'], 3], [['settings', 'act', 'admin', 'add', 'ou_x'], 3], [['settings', 'act', 'admin', 'add', '123'], 2],
+  [['settings', 'act', 'member', 'all', '--group', 'g'], 3], [['settings', 'act', 'comment-instructions', '--default'], 3], [['settings', 'act', 'comment-instructions', '--stdin'], 2],
+  [['settings', 'models', '--backend', 'codex', '--purpose', 'project'], 3],
   [['schedule', 'list', '--all'], 3], [['schedule', 'add', '--group', 'g', '--name', 'n', '--every', '30m', 'x'], 3], [['schedule', 'edit', 'st_x', '--group', 'g', '--revision', 'r', '--name', 'n'], 3],
   [['schedule', 'delete', 'st_x', '--group', 'g'], 3], [['schedule', 'pause', 'st_x', '--group', 'g'], 3], [['schedule', 'resume', 'st_x', '--group', 'g'], 3],
   [['schedule', 'run', 'st_x', '--group', 'g'], 3], [['schedule', 'runs', 'st_x', '--group', 'g'], 3],
@@ -56,9 +59,9 @@ it('every command prints one JSON line with --json, its exit code inside a failu
   try {
     const home = join(base, 'home'); await mkdir(home);
     const root = join(base, 'data');
-    const sampled = new Set(SAMPLES.map(([args]) => args.slice(0, 2).filter(word => /^[a-z][a-z-]*$/.test(word)).join(' ')));
     const leaves = (await loadCommands()).filter(command => !command.hidden).map(command => command.path);
-    expect(leaves.filter(path => !sampled.has(path) && !STARTS_A_DAEMON.includes(path))).toEqual([]);
+    const sampled = (path: string) => SAMPLES.some(([args]) => path.split(' ').every((word, i) => args[i] === word));
+    expect(leaves.filter(path => !sampled(path) && !STARTS_A_DAEMON.includes(path))).toEqual([]);
     // one at a time: service and secrets take locks a second caller would be refused
     for (const [args, code] of SAMPLES) {
       const result = await run(home, root, args);
