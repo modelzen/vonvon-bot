@@ -146,7 +146,7 @@ export function runningBot(agents: readonly Agent[], wanted?: string): Agent {
 5. `vonvon project list --json` 在 daemon 跑着时 `source:'daemon'`。
 6. `project rename`、`project workspace` 只对第 1 步建出来的项目做，做完 `project remove --yes` 删掉。
 
-**Mac、Windows**：不需要。Windows 路径（`C:\…`、`~` 在 Windows 上）由 `path.resolve` 处理，和今天 `bind` 一样；Windows 的真机检查归 D 线的 Windows 验收。
+**Mac、Windows**：不需要。Windows 路径（`C:\…`、`~` 在 Windows 上）由 `path.resolve` 处理，和今天 `bind` 一样；Windows 的真机检查归 D 线的 Windows 验收。（owner 2026-11-01：Windows 上不做只装服务端，这一批 Windows 上没有注册的 `vonvon`，这条不做；发给 Windows 的任务只有 U4 和 Windows 桌面端当被连的设备的检查，见 `devices.md` 第 19 节。）
 
 ## 7. 文档
 

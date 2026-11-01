@@ -1,4 +1,3 @@
-import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { RpcError, type VonvonClient } from '@vonvon/client';
 import {
@@ -69,7 +68,7 @@ it('group create picks the folder through the daemon and stops when the daemon s
   const directory = chooser();
   const h = harness({ collaboration, directory });
   await runGroupCreate('研发', { conversation: 'multi', folder: '~/x' }, h.io(), h.daemon, host);
-  expect(directory).toHaveBeenCalledWith({ type: 'choose', path: join('/home/u', 'x') });
+  expect(directory).toHaveBeenCalledWith({ type: 'choose', path: '/home/u/x' });
   expect(collaboration).toHaveBeenCalledWith(expect.objectContaining({ folder: { kind: 'existing', folderToken: token } }));
   const missing = vi.fn(async () => { throw new RpcError('invalid_directory', '找不到这个目录，请检查路径。'); });
   const m = harness({ collaboration: created(), directory: missing });
@@ -199,6 +198,16 @@ it('expands ~ and relative paths on this computer only', () => {
   expect(folderPath('~/a', host)).toBe('/home/u/a');
   expect(folderPath('a/../b', host)).toBe('/here/b');
   expect(folderPath('/abs', host)).toBe('/abs');
+  // `\` is a name character outside Windows
+  expect(folderPath('~\\a', host)).toBe('/here/~\\a');
+  // main 必败: Windows took ~\Docs for a folder named "~" (Windows acceptance task 205)
+  const windows = { cwd: 'C:\\here', home: 'C:\\Users\\u', platform: 'win32' as const };
+  expect(folderPath('~', windows)).toBe('C:\\Users\\u');
+  expect(folderPath('~\\Docs', windows)).toBe('C:\\Users\\u\\Docs');
+  expect(folderPath('~/Docs', windows)).toBe('C:\\Users\\u\\Docs');
+  expect(folderPath('~\\..\\x', windows)).toBe('C:\\Users\\x');
+  expect(folderPath('a\\..\\b', windows)).toBe('C:\\here\\b');
+  expect(folderPath('D:\\abs', windows)).toBe('D:\\abs');
 });
 
 // main 必败: these were 1 (unexpected), and the folder ones came back as operation_failed anyway

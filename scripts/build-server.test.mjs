@@ -3,8 +3,9 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, posix } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { crc32, gunzipSync, inflateRawSync } from 'node:zlib';
 import { PUBLISHED_TARGETS, TARGETS, archiveName, assembleRelease, checkServerTree, parseArguments, pinnedNodeFile, tarHeader, unpackZip, writeTarGz, writeZip } from './build-server.mjs';
 import { fileEntries } from './package-tools.mjs';
@@ -52,7 +53,8 @@ test('a release has the app, the Node of its target with npm, and standalone.jso
     assert.deepEqual(files.filter(file => file.startsWith('node/') && !file.startsWith(`${npm}/`)).sort(), ['node/LICENSE', node]);
     assert.equal(files.some(file => file.endsWith('.d.cts')), false);
     assert.deepEqual(JSON.parse(await readFile(join(root, 'standalone.json'), 'utf8')), { v: 1, version: '0.9.0', target, node: '24.0.0' });
-    assert.equal((await stat(join(root, node))).mode & 0o111, 0o111);
+    // Windows keeps no execute bits; its own Node is node.exe, and POSIX targets are not built there.
+    if (process.platform !== 'win32') assert.equal((await stat(join(root, node))).mode & 0o111, 0o111);
   }
   // Windows npm keeps the CRLF launchers of the official Windows archive.
   assert.equal(await readFile(join(await release(t, 'win-x64'), 'node/node_modules/npm/bin/npm.cmd'), 'utf8'), '@ECHO off\r\n');
@@ -107,13 +109,20 @@ test('tar.gz archives hold regular files only, with fixed owner, time and modes,
   await put(root, `tree/${deep}`, 'deep');
   await chmod(join(root, 'tree/app/bin/vonvon.mjs'), 0o755);
   const entries = await fileEntries(join(root, 'tree'));
+  // The archive takes each entry's mode. Windows has no execute bit to read it from (chmod only sets read-only), so there
+  // the entry says it; elsewhere it must have come from the disk.
+  const launcher = entries.find(entry => entry.path === 'app/bin/vonvon.mjs');
+  if (process.platform === 'win32') launcher.mode = '755';
+  else assert.equal(launcher.mode, '755');
   await writeTarGz(join(root, 'tree'), entries, join(root, 'out.tar.gz'), 1_700_000_000);
-  const listing = execFileSync('tar', ['-tvzf', join(root, 'out.tar.gz')], { encoding: 'utf8' }).trim().split('\n');
+  // Windows tar.exe ends its lines with CRLF.
+  const listing = execFileSync('tar', ['-tvzf', join(root, 'out.tar.gz')], { encoding: 'utf8' }).trim().split(/\r?\n/);
   assert.equal(listing.length, 2);
   assert.match(listing.find(line => line.endsWith('vonvon.mjs')), /^-rwxr-xr-x/);
   assert.match(listing.find(line => line.endsWith('index.js')), /^-rw-r--r--/);
   const raw = gunzipSync(await readFile(join(root, 'out.tar.gz')));
-  for (const header of [0, 1024]) assert.deepEqual([raw.subarray(header + 108, header + 115).toString(), raw.subarray(header + 116, header + 123).toString(), raw.subarray(header + 136, header + 147).toString()], ['0000000', '0000000', (1_700_000_000).toString(8)]);
+  // mode, owner, group and time of the launcher's header, then of the deep file's
+  for (const [header, mode] of [[0, '0000755'], [1024, '0000644']]) assert.deepEqual([raw.subarray(header + 100, header + 107).toString(), raw.subarray(header + 108, header + 115).toString(), raw.subarray(header + 116, header + 123).toString(), raw.subarray(header + 136, header + 147).toString()], [mode, '0000000', '0000000', (1_700_000_000).toString(8)]);
   await mkdir(join(root, 'unpacked'));
   execFileSync('tar', ['-xzf', join(root, 'out.tar.gz'), '-C', join(root, 'unpacked')]);
   assert.equal(await readFile(join(root, 'unpacked', deep), 'utf8'), 'deep');
@@ -206,7 +215,27 @@ test('the default build and the published list are the two Linux targets; the ot
   assert.throws(() => parseArguments(['--out', '/tmp/server-out', '--targets', 'linux-x86']), /unknown target linux-x86/);
 });
 
-test('the build refuses an output inside the repository', async () => {
+// main 必败 on Windows: a URL's pathname there is /E:/…, which is not inside the repository, so the build went on to the
+// clean-tree check (Windows acceptance task 205). allowDirty keeps the answer from depending on the worktree.
+test('the build refuses an output or a Node cache inside the repository, and POSIX targets on Windows', async () => {
   const { buildServer } = await import('./build-server.mjs');
-  await assert.rejects(buildServer({ out: new URL('../.server-out', import.meta.url).pathname, targets: ['linux-x64'] }), /must be outside the repository/);
+  const inside = fileURLToPath(new URL('../.server-out', import.meta.url));
+  await assert.rejects(buildServer({ out: inside, targets: ['linux-x64'], allowDirty: true }), /\.server-out must be outside the repository/);
+  await assert.rejects(buildServer({ out: join(tmpdir(), 'vonvon-server-out'), cache: inside, targets: ['linux-x64'], allowDirty: true }), /\.server-out must be outside the repository/);
+  await assert.rejects(buildServer({ out: join(tmpdir(), 'vonvon-server-out'), targets: ['win-x64', 'linux-x64'], allowDirty: true, platform: 'win32' }), /^Error: linux-x64: build these on macOS or Linux/);
+});
+
+// main 必败: npm ci rewrote the CRLF shebang line of a linked bin on a Windows checkout with core.autocrlf=true, and the
+// build then refused the dirty tree (Windows acceptance task 205). .gitattributes keeps every package bin LF.
+test('every package bin is checked out with LF', async () => {
+  const repo = fileURLToPath(new URL('../', import.meta.url));
+  const { workspaces } = JSON.parse(await readFile(join(repo, 'package.json'), 'utf8'));
+  const bins = [];
+  for (const workspace of ['.', ...workspaces]) {
+    const { bin } = JSON.parse(await readFile(join(repo, workspace, 'package.json'), 'utf8'));
+    for (const file of typeof bin === 'string' ? [bin] : Object.values(bin ?? {})) bins.push(posix.join(workspace, file));
+  }
+  assert.ok(bins.includes('packages/daemon/bin/vonvon.mjs'));
+  const attributes = execFileSync('git', ['check-attr', 'eol', '--', ...bins], { cwd: repo, encoding: 'utf8' });
+  for (const file of bins) assert.ok(attributes.includes(`${file}: eol: lf`), `${file} has no eol=lf in .gitattributes`);
 });

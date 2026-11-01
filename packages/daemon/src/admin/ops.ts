@@ -156,9 +156,10 @@ export function validateBackendSwitch(opts: {
   return null;
 }
 
-/** 单个后端 doctor 探测的超时兜底（ms）：探测要 spawn CLI，未安装/卡死时不能
- * 拖住检测卡——超时按「探测没跑成」（probe undefined）渲染为不可用。 */
-export const BACKEND_PROBE_TIMEOUT_MS = 3000;
+/** Windows doctor starts Job Object supervisors for version and sandbox probes.
+ * Their bounded startup can exceed 3 s even for a healthy installed CLI. Keep
+ * the outer budget above those probes; a hung/failed doctor still cannot pass. */
+export const BACKEND_PROBE_TIMEOUT_MS = process.platform === 'win32' ? 60_000 : 3_000;
 
 /**
  * 🧠 后端检测的纯探测（exported for tests）：并行对全部后端 doctor({force})，

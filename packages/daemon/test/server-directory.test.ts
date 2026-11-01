@@ -1,9 +1,11 @@
-import { chmod, mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, rm, symlink as fileSymlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDirectoryBrowser } from '../src/server/directory-browser';
 
+/** A directory link. Windows makes a junction, which needs no admin rights (Windows acceptance task 205); targets here are absolute. */
+const symlink = (target: string, path: string) => fileSymlink(target, path, process.platform === 'win32' ? 'junction' : 'dir');
 const roots: string[] = [];
 afterEach(async () => { vi.restoreAllMocks(); vi.useRealTimers(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 async function fixture() {
@@ -113,6 +115,11 @@ describe('web directory suggestions', () => {
     expect(completion.path).toBe(result.path);
     expect((await browser.suggest('~/.private/')).entries.map(entry => entry.name)).toEqual(['.private', 'workspace']);
     expect((await browser.suggest('~/Projects/Vonvon Bot')).entries.map(entry => entry.name)).toEqual(['Vonvon Bot']);
+    if (process.platform !== 'win32') return;
+    // main 必败: Windows took ~\ for a name to search for (Windows acceptance task 205)
+    expect((await browser.suggest('~\\Projects\\')).entries.map(entry => entry.name)).toEqual(['Projects', 'Vonvon Bot']);
+    expect((await browser.suggest('~\\Projects\\Von')).entries.map(entry => entry.name)).toEqual(['Vonvon Bot']);
+    await expect(browser.suggest('~\\..\\outside')).rejects.toMatchObject({code: 'outside_home'});
   });
 
   it('rejects outside paths, escaped symlinks, nonexistent parents and files', async () => {
@@ -126,7 +133,8 @@ describe('web directory suggestions', () => {
     await expect(browser.suggest('~/not-a-directory')).rejects.toMatchObject({code: 'invalid_directory'});
   });
 
-  it.skipIf(process.getuid?.() === 0)('reports unreadable directories instead of presenting a successful empty result', async () => {
+  // chmod(0) means nothing on Windows, which has no POSIX permission bits; root reads everything.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('reports unreadable directories instead of presenting a successful empty result', async () => {
     const {home, browser} = await fixture();
     const protectedPath = join(home, 'protected');
     await mkdir(protectedPath); await chmod(protectedPath, 0);

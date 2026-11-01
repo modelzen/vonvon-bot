@@ -1,0 +1,5 @@
+# npm links every package.json "bin" during npm ci and rewrites a CRLF first line (the shebang) to LF in place. On a
+# Windows checkout with core.autocrlf=true that leaves the file changed, and scripts/build-server.mjs then refuses the
+# dirty tree (Windows acceptance task 205). These files are checked out with LF everywhere. Only the bin files: the rest
+# of the tree keeps each machine's autocrlf, and *.ps1 and *.cmd keep what they have.
+packages/daemon/bin/vonvon.mjs text eol=lf
