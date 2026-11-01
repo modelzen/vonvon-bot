@@ -73,9 +73,16 @@ test('checkServerTree refuses what must not ship', async t => {
     ['a readable CLI', root => put(root, 'app/dist/cli.js', 'const a = 1;\n'.repeat(50)), /not minified/],
     ['a missing Node', root => rm(join(root, 'node/bin/node')), /missing node\/bin\/node/],
     ['a missing web UI', root => rm(join(root, 'app/ui'), { recursive: true }), /missing app\/ui\/dist\/index\.html/],
+    ['a native module', root => put(root, 'app/node_modules/dep/addon.node'), /native module refused: app\/node_modules\/dep\/addon\.node/],
   ];
   if (process.platform !== 'win32') cases.push(['a symbolic link', root => symlink('node', join(root, 'node/bin/npm')), /symlink refused: node\/bin\/npm/]);
-  if (await caseSensitive(await scratch(t))) cases.push(['names that differ only in case', async root => { await put(root, 'app/node_modules/dep/README'); await put(root, 'app/node_modules/dep/readme'); }, /differ only in case/]);
+  if (await caseSensitive(await scratch(t))) {
+    cases.push(
+      ['files that differ only in case', async root => { await put(root, 'app/node_modules/dep/README'); await put(root, 'app/node_modules/dep/readme'); }, /differ only in case/],
+      ['a file and a directory that differ only in case', async root => { await put(root, 'app/node_modules/Case/a.js'); await put(root, 'app/node_modules/case'); }, /differ only in case: app\/node_modules\/Case and app\/node_modules\/case/],
+      ['directories that differ only in case', async root => { await put(root, 'app/node_modules/Dep/a.js'); await put(root, 'app/node_modules/dep/b.js'); }, /differ only in case: app\/node_modules\/dep and app\/node_modules\/Dep|differ only in case: app\/node_modules\/Dep and app\/node_modules\/dep/],
+    );
+  }
   for (const [name, change, problem] of cases) {
     const root = await release(t, 'linux-x64');
     await change(root);

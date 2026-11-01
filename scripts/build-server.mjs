@@ -122,17 +122,25 @@ export async function checkServerTree(release, target) {
   const required = ['standalone.json', 'app/package.json', 'app/bin/vonvon.mjs', 'app/dist/cli.js', 'app/ui/dist/index.html',
     'app/NOTICE', 'app/LICENSE.paseo', 'app/LICENSE.bridge', 'node/LICENSE', `node/${layout.node}`, `node/${layout.npm}/bin/npm-cli.js`];
   for (const file of required) if (!files.includes(file)) problems.push(`missing ${file}`);
+  // Every directory and file name, folded: Windows and macOS see `Case/` and `case` as one path.
   const folded = new Map();
+  const fold = (path, kind) => {
+    const seen = folded.get(path.toLowerCase());
+    if (!seen) folded.set(path.toLowerCase(), { path, kind });
+    else if (seen.path !== path || seen.kind !== kind) problems.push(`names differ only in case: ${seen.path} and ${path}`);
+  };
   for (const file of files) {
     if (SOURCE_FILE.test(file)) problems.push(`source, declaration or source map: ${file}`);
+    // One app serves every target, so nothing in it may be built for one platform.
+    if (file.endsWith('.node')) problems.push(`native module refused: ${file}`);
     if (file.startsWith('app/') && !file.startsWith('app/node_modules/')) {
       const top = file.split('/')[1];
       if (!APP_TOP.has(top) || (top === 'dist' && file !== 'app/dist/cli.js') || (top === 'ui' && !file.startsWith('app/ui/dist/'))) problems.push(`unexpected app file: ${file}`);
     }
     if (file.startsWith('app/node_modules/@vonvon/')) problems.push(`workspace package shipped as files: ${file}`);
-    const key = file.toLowerCase();
-    if (folded.has(key)) problems.push(`names differ only in case: ${folded.get(key)} and ${file}`);
-    folded.set(key, file);
+    const parts = file.split('/');
+    for (let at = 1; at < parts.length; at++) fold(parts.slice(0, at).join('/'), 'directory');
+    fold(file, 'file');
     if (isWindowsTarget(target) && WINDOWS_PREFIX + file.length >= 260) problems.push(`path too long for Windows: ${file}`);
   }
   if (files.includes('app/dist/cli.js')) {
