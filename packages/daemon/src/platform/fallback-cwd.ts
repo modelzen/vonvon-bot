@@ -1,3 +1,4 @@
+import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +13,14 @@ export function ownInstallDirectory(root = nearestPackageRoot(fileURLToPath(impo
   return distribution.kind === 'bundled' ? dirname(dirname(packageRoot)) : packageRoot;
 }
 
-export type FallbackInput = { env?: NodeJS.ProcessEnv; cwd?: string; home?: string; platform?: NodeJS.Platform; installDirectory?: string };
+export type FallbackInput = {
+  env?: NodeJS.ProcessEnv; cwd?: string; home?: string; platform?: NodeJS.Platform; installDirectory?: string;
+  isDirectory?: (path: string) => boolean;
+};
+
+function isDirectory(path: string): boolean {
+  try { return statSync(path).isDirectory(); } catch { return false; }
+}
 
 /**
  * Where a session runs when nothing names a folder (`runtime.fallbackCwd`): `FEISHU_CODEX_CWD` when set, otherwise the
@@ -36,5 +44,6 @@ export function fallbackWorkingDirectory(input: FallbackInput = {}): string {
   };
   const systemRoot = platform === 'win32' ? env.SystemRoot ?? env.SYSTEMROOT ?? env.windir ?? env.WINDIR ?? 'C:\\Windows' : undefined;
   if (path.parse(cwd).root === cwd || (systemRoot && inside(systemRoot)) || inside(input.installDirectory ?? ownInstallDirectory())) return home;
-  return cwd;
+  // Node caches the working folder, so process.cwd() still names it after it was deleted (task 210).
+  return (input.isDirectory ?? isDirectory)(cwd) ? cwd : home;
 }
