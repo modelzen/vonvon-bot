@@ -287,7 +287,7 @@ main() {
   system=$(uname -s 2>/dev/null || true)
   case "$system" in
     Linux) ;;
-    Darwin) fail 2 "Mac 上请下载 Vonvon Bot 桌面端安装包，它自带服务端，不用命令行装：$DESKTOP_DOWNLOAD" ;;
+    Darwin) fail 2 "Mac 请下载安装包：$DESKTOP_DOWNLOAD ，安装包里已经带了服务端和 vonvon 命令。这个脚本只用于 Linux，什么都没动。" ;;
     *) fail 2 "这个安装脚本只支持 Linux（这台是 ${system:-认不出的系统}）。Mac、Windows 请下载 Vonvon Bot 桌面端安装包：$DESKTOP_DOWNLOAD" ;;
   esac
   check_root

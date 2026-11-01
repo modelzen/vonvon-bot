@@ -176,9 +176,12 @@ test('installs: checks the signed manifest and the hash, unpacks, sets up, insta
   await f.ready();
   const run = await f.run('install.sh');
   assert.equal(run.code, 0, run.stderr);
-  assert.match(run.stdout, /正在安装 Vonvon Bot 服务端 1\.0\.0（linux-x64）…/);
-  assert.match(run.stdout, /装好了。后台服务已启动，登录后自动运行。/);
-  assert.match(run.stdout, /重开一个终端/);
+  // devices.md §15「安装脚本：开始」「安装脚本：完成」, line by line; 重开一个终端 sits between them while PATH is new
+  const lines = run.stdout.split('\n');
+  assert.ok(lines.includes('正在安装 Vonvon Bot 服务端 1.0.0（linux-x64）…'), run.stdout);
+  const done = lines.indexOf('装好了。后台服务已启动，登录后自动运行。');
+  assert.ok(done >= 0, run.stdout);
+  assert.deepEqual(lines.slice(done + 1), ['试一下：`vonvon --version`', '重开一个终端，或 `. ~/.bashrc`（zsh 用 `. ~/.zshrc`）再运行 `vonvon`。', '要从别的电脑连过来管理？看 https://vonvon.cc/guide/remote/', '']);
   assert.doesNotMatch(run.stdout, /保持这个账号登录着/);
   if (openssl3) assert.doesNotMatch(run.stdout, /没能核对发布签名/);
   assert.equal(await readlink(join(f.root, 'current')), 'releases/1.0.0');
@@ -200,7 +203,8 @@ test('without OpenSSL 3 the signature is not checked, and the script says so; wi
   await shim(f.shims, 'openssl', `case "$1" in version) echo 'OpenSSL 1.1.1w  11 Sep 2023' ;; *) exit 127 ;; esac`);
   let run = await f.run('install.sh');
   assert.equal(run.code, 0, run.stderr);
-  assert.match(run.stdout, /这台机器没有 openssl 3，没能核对发布签名；已核对下载内容的哈希，来源是 https:\/\/dl\.vonvon\.cc。/);
+  // devices.md §15「安装脚本：没验签名」
+  assert.ok(run.stdout.split('\n').includes('这台机器没有 openssl 3，没能核对发布签名；已核对下载内容的哈希，来源是 https://dl.vonvon.cc。'), run.stdout);
 
   // the trust boundary, written down: without OpenSSL 3 a manifest signed by another key still installs when the hash matches
   const other = await fixture(t);
@@ -288,8 +292,8 @@ test('root is refused before the network, unless VONVON_ALLOW_ROOT=1', async t =
   await shim(f.shims, 'id', `case "$1" in -u) echo 0 ;; *) echo root ;; esac`);
   let run = await f.run('install.sh');
   assert.equal(run.code, 2);
-  assert.match(run.stderr, /useradd -m vonvon && su - vonvon/);
-  assert.match(run.stderr, /VONVON_ALLOW_ROOT=1 sh -c "\$\(curl -fsSL https:\/\/dl\.vonvon\.cc\/bot\/server\/install\.sh\)"/);
+  // devices.md §15「安装脚本：root」, with the script's own address in place of …
+  assert.equal(run.stderr, '你正在用 root 运行。Vonvon Bot 会以这个账号运行 AI 代理，建议用普通用户：`useradd -m vonvon && su - vonvon`，再运行安装命令。坚持用 root：`VONVON_ALLOW_ROOT=1 sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/install.sh)"`。\n');
   assert.deepEqual(await f.curls(), []);
   run = await f.run('install.sh', { VONVON_ALLOW_ROOT: '1' });
   assert.equal(run.code, 0, run.stderr);
@@ -418,20 +422,23 @@ test('the service: linger left off, the fallbacks to a detached daemon, and fail
   await f.scenario({ 'service install': { stdout: JSON.stringify({ ok: true, action: 'install', linger: 'off', lingerUser: 'alice', notes: [] }) } });
   let run = await f.run('install.sh');
   assert.equal(run.code, 0, run.stderr);
-  assert.match(run.stdout, /为了在你退出登录后继续运行，请执行一次：`sudo loginctl enable-linger alice`/);
+  // devices.md §15「安装脚本：linger 要 sudo」
+  assert.ok(run.stdout.split('\n').includes('为了在你退出登录后继续运行，请执行一次：`sudo loginctl enable-linger alice`'), run.stdout);
   assert.match(run.stdout, /后台服务已启动/);
 
+  // devices.md §15「安装脚本：没有 systemd」「安装脚本：用户实例不可用」
+  const userInstance = '连不上这个账号的 systemd（用 sudo 切过来时常见）。已直接启动一次；用这个账号 SSH 登录后运行 `vonvon service install` 装成后台服务。';
   for (const [reason, text] of [
-    ['no_systemd', /这台机器没有 systemd（可能是容器）。已改为直接启动/],
-    ['user_instance_down', /连不上这个账号的 systemd（用 sudo 切过来时常见）。已直接启动一次/],
-    ['no_runtime_dir', /连不上这个账号的 systemd/],
+    ['no_systemd', '这台机器没有 systemd（可能是容器）。已改为直接启动，崩溃后不会自动重启；需要时运行 `vonvon daemon start`。'],
+    ['user_instance_down', userInstance],
+    ['no_runtime_dir', userInstance],
   ]) {
     const g = await fixture(t);
     await g.ready();
     await g.scenario({ 'service install': refusal(reason), 'daemon start': { stdout: '{"ok":true,"running":true,"pid":4242}' } });
     run = await g.run('install.sh');
     assert.equal(run.code, 0, `${reason}: ${run.stderr}`);
-    assert.match(run.stdout, text, reason);
+    assert.ok(run.stdout.split('\n').includes(text), `${reason}: ${run.stdout}`);
     assert.match(run.stdout, /装好了。已直接启动一次。/);
     assert.doesNotMatch(run.stdout, /登录后自动运行/);
     assert.equal((await g.calls())[2], 'daemon start --json');
@@ -526,7 +533,7 @@ test('on a Mac both scripts point to the desktop installer and exit 2: nothing w
     assert.equal(run.code, 2, run.stderr);
     assert.equal(run.stdout, '');
     // devices.md §15「安装脚本：在 Mac 上」
-    assert.equal(run.stderr, 'Mac 上请下载 Vonvon Bot 桌面端安装包，它自带服务端，不用命令行装：https://vonvon.cc/get/\n');
+    assert.equal(run.stderr, 'Mac 请下载安装包：https://vonvon.cc/get/ ，安装包里已经带了服务端和 vonvon 命令。这个脚本只用于 Linux，什么都没动。\n');
     await shim(f.shims, 'id', `case "$1" in -u) echo 0 ;; *) echo root ;; esac`);
   }
   assert.deepEqual(await readdir(f.home), []);
