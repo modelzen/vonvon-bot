@@ -12,6 +12,8 @@ export type Call = <T>(what: string, run: (c: VonvonClient) => Promise<T>, o?: {
 export type Daemon = <T>(fn: (call: Call) => Promise<T>) => Promise<T>;
 /** Feishu calls get longer than the supervisor's 60 s IPC timeout, so the daemon's own error arrives first. */
 export const TIMEOUTS = { local: 30_000, feishu: 75_000 };
+/** How long a command cut short by Ctrl-C waits for the connection's close handshake. */
+const CLOSE_AFTER_INTERRUPT = 200;
 
 const VERSION_MISMATCH = 'daemon 和命令行的版本不一致。先 vonvon daemon stop，再 vonvon daemon start。';
 const firstLine = (error: unknown): string => (error instanceof Error ? error.message : String(error)).split('\n')[0] ?? '';
@@ -64,6 +66,7 @@ function translate(what: string, error: unknown, ms: number, unknown?: string): 
 /** Client method → RPC method; snapshot() always sends the same payload. */
 const METHODS = {
   run: 'command', settings: 'settings', collaboration: 'collaboration', environment: 'environment', machine: 'machine', admin: 'admin', directory: 'directory',
+  library: 'library', memory: 'memory', contextPreview: 'contextPreview',
 } as const;
 
 /**
@@ -105,9 +108,18 @@ export async function withDaemon<T>(fn: (call: Call) => Promise<T>, connect = co
     finally { clearTimeout(timer); }
   };
   // Ordinary commands exit when the event loop drains, so an open socket would hang the CLI.
+  let interrupted = false;
   try { return await fn(call); }
-  catch (error) { throw printableError(error); }
-  finally { await client.close().catch(() => undefined); }
+  catch (error) { interrupted = error instanceof CommandError && error.kind === 'interrupted'; throw printableError(error); }
+  finally {
+    const closed = client.close().catch(() => undefined);
+    // Ctrl-C: the daemon may be the one not answering (a cancel never answered, cli-7-environment), and the process exits
+    // on a failure anyway (index.ts): its close handshake does not hold the command up
+    let timer: NodeJS.Timeout | undefined;
+    if (interrupted) await Promise.race([closed, new Promise<void>(done => { timer = setTimeout(done, CLOSE_AFTER_INTERRUPT); })]);
+    else await closed;
+    clearTimeout(timer);
+  }
 }
 
 /** `--fresh` (devices 8.1): the daemon probes the tools and rebuilds its snapshot, which it otherwise does every 5 s,
@@ -145,6 +157,13 @@ export function pickBot(agents: readonly Agent[], wanted?: string): Agent {
   if (named.length > 1) throw badArgs(`有 ${named.length} 个 Bot 都叫「${wanted}」，用 id 指定：${named.map(agent => agent.id).join('、')}`);
   if (named[0]) return named[0];
   throw badArgs(`没有找到 Bot「${wanted}」。现有的 Bot：${list}`);
+}
+
+/** A bot that answers now: collaboration requests go to its process, which a stopped or paused bot does not have. */
+export function runningBot(agents: readonly Agent[], wanted?: string): Agent {
+  const agent = pickBot(agents, wanted);
+  if (!agent.running) throw new CommandError('refused', `Bot「${printable(agent.name)}」没在运行。运行 vonvon bot enable ${agent.id}，或者 vonvon bot status ${agent.id} 看原因。`, { reason: 'bot_not_running' });
+  return agent;
 }
 
 /** Group id or project name; both are unique per bot because bind refuses a duplicate project name. */
