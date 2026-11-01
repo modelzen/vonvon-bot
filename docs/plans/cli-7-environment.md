@@ -161,10 +161,11 @@
 
 ## 和计划不一样的地方
 
-- **工具安装按回复定结局**：daemon 对 `install` / `update` 请求要等安装结束才回（`D/environment/service.ts` `install()` 返回整个安装的 promise），回复里没有任务 id。所以先读一次 `toolInstallStatus` 记下上一个任务的 id，再发请求（不设超时）；轮询里第一个同工具、同 `update`、id 不是上一个的 `running` 认作自己的，只用来打进度和 Ctrl-C 时取消。结局只看请求的回复（审查后改，见下一节）。
+- **工具安装按回复定结局**：daemon 对 `install` / `update` 请求要等安装结束才回（`D/environment/service.ts` `install()` 返回整个安装的 promise），回复里没有任务 id。请求不设超时，结局只看它的回复；轮询里的状态只用来打进度和 Ctrl-C 时取消，哪个状态是自己的靠请求号认（审查后改，见下一节"任务 202"）。
+- **协议加一个可选字段 `requestId`**（4.5 说不加新 kind，kind 确实没加）：`install`、`update`、`backendInstall` 三个请求可以带；daemon 记在它为这次请求开始的任务上，`toolInstallStatus` 的任务（进行中和结束后）、`backendInstallStatus` 的任务里原样带回。接到别人已经开始的组件安装（`attached`）不改它。字段两头都可选：旧的网页和桌面不带照样能用；旧 daemon 的请求 schema 是 strict 的，会回 `invalid_request`，命令行这时去掉字段再发一次（没开始任何任务，重发安全；已经 Ctrl-C 就不重发）。
 - **失败的 `reason` 分开写**：工具安装、组件安装是 `install_failed`；登录是 `login_failed`，应用配置是 `profile_init_failed`（4.1 表里都写 `install_failed`，登录失败读成"装失败"会误导脚本）。
 - **登录和应用配置共用一个状态**：轮询看到别的 id，说明自己的已经结束、又开始了别的，结果没看到：退 6，文字同断线那句。
-- **Ctrl-C 时还不知道 id**：工具安装再读一次状态找自己的任务，组件安装用 `backendInstallStatus{id}` 找（所以 `env backend install` 的 `covers` 里的 `backendInstallStatus` 确实用到）；找不到就直接 130。id 在 Ctrl-C 之后才到的，到了就补发取消。
+- **Ctrl-C 时还不知道 id**：工具安装再读一次状态，组件安装用 `backendInstallStatus{id}`（所以 `env backend install` 的 `covers` 里的 `backendInstallStatus` 确实用到），只认带着这次请求号的任务；找不到就不发取消、直接 130，文字说任务如果开始了会继续进行、怎么看、怎么取消。组件安装的回复在 Ctrl-C 之后、5 秒之内到了，且不是 `attached`，就补发取消。
 - **JSON Lines 多几个字段**：`progress` 行带 `operationId`；组件安装的 `progress` 行还带 `attached`、`omittedBytes`；`env install` 的结果行多 `message`（daemon 的原话）；`env profile use / add` 的成功行多 `profiles`（daemon 回的就是新列表）。
 - **`env scan` 多打两种说明**：Claude 装了但 `--version` 失败；Codex 比验证过的版本新（`compatibility.status: newer`）。
 - **组件安装的输出**：人类输出里 `\r\n`、单独的 `\r` 都当换行，其余控制字符去掉；最后一段没换行时先补一个，结果另起一行。
@@ -178,3 +179,11 @@ Codex 审查（#628 任务 201）两条 P2，都改在四类长任务共用的 `
 - **busy 被别人的结果改成成功**（`env install` / `env update`）：原来请求回 `refused` 后再读一次状态，只要状态的 id 不是开始前那个，就把它的结束当成自己的；另一个调用者在这期间装完，busy 就变成了退出 0。改成：工具安装的结局只看自己请求的回复，轮询读到的结束一律不算（状态不说是谁起的）。`applied` → 成功；`install-cancelled` → `cancelled`（1）；`install-failed`、`install-incomplete`、`install-not-selected`、`npm-missing`、`explicit-codex` 这几种只有开始了的安装才会回（`performInstall`）→ `failed`（1，`install_failed`）；其余（`busy` 等）是开始前就被拒 → 4，`reason` 是 daemon 的 code。
 - **Ctrl-C 等取消时，断线或轮询失败盖掉 interrupted**（四类都有）：原来第一次 Ctrl-C 后，断线的 `onError` 会先结束成 `lost`（6），正在飞的轮询失败会先 `fail`。改成：第一次 Ctrl-C 之后，只有取消有了回复（含因断线失败）、5 秒上限到了、第二次 Ctrl-C 这三件能结束，结局都是 interrupted（130）；断线、轮询或请求失败、任务自己的结束都不再结束它；轮询停下，不再读也不再打进度；第二次 Ctrl-C 时清掉 5 秒的计时。
 - **测试**（`T/cli-env.test.ts`，在改之前的代码上都失败）：busy 后状态里是别人的成功、别人同工具的安装先被轮询认领又先结束再收到 busy → 都是 4；四类任务各跑四种交错：认领后 Ctrl-C、取消回复前断线 → 130；Ctrl-C 时有请求在飞、它随后失败 → 130 且之后不再读；第二次 Ctrl-C → 立即 130 且第一次之后不再读；取消一直不回 → 假时钟下 4999 ms 还没结束、5 秒时 130，期间不再读。组件安装没有轮询，"第二次 Ctrl-C""取消不回"两种在原代码上本来就对，留作回归。测试桩的 `drop()` 改成和真客户端一样：先让在飞的请求失败，再报连接错误。
+
+Codex 复查（#628 任务 202）一条 P2 和两条 P3。
+
+- **P2：凭"新 id、同工具、同 update"认领，Ctrl-C 会取消别人的安装**（`env install` / `env update`，组件安装 Ctrl-C 前的查找也一样）：本次请求其实被拒 busy、回复还没到时，轮询先看到另一个调用者刚开始的同工具安装，就把它当成自己的，打出它的进度；这时 Ctrl-C 发的是对方 `operationId` 的取消。改成从源头证明归属：命令行每个长任务用 `crypto.randomUUID()` 生成一个请求号，放进开始请求的 `requestId`；daemon 把它记在这次请求开始的任务上，状态里带回（见上一节"协议加一个可选字段"）。命令行只认领、只打进度、只取消 `requestId` 等于自己的任务；`find()` 同样的规则。登录和应用配置的开始回复本来就带着这次开始的任务，不用改。组件安装：回复 `attached:false` 是自己开始的，照旧跟、Ctrl-C 取消；`attached:true` 是别处开始的，照旧跟着打输出，Ctrl-C 只退出（130），不取消，文字说它会继续、怎么取消。被拒（busy）的请求什么都不认领。旧 daemon（不带回 `requestId`）：不猜，不打进度，Ctrl-C 不发取消，直接 130 并说明安装如果开始了会继续；结局仍按请求的回复。
+- **P3 a：5 秒取消上限之后还要等关闭握手**（最多再 1 秒）：`withDaemon` 遇到 interrupted 的失败时，关闭连接最多等 200 毫秒，不再等 daemon 回关闭帧（失败时 `index.ts` 本来就直接退出）。别的失败和成功照旧等关闭完成。
+- **P3 b：自己的安装开始后回 `environment-closed` 之类被算成 refused（4）**：看到过带自己请求号的 `running` 之后，安装请求回的任何 `refused`（`install-cancelled` 除外）都算失败（1，`install_failed`）；没看到过的照旧按 code 分。
+- **前两条修复保持不变**：工具安装的结局只看自己请求的回复；第一次 Ctrl-C 之后只有取消有回复、5 秒上限、第二次 Ctrl-C 能结束，都是 130。
+- **测试**（在改之前的代码上都失败）：`T/cli-env.test.ts`：审查者的场景，install 和 update 各一遍——busy 回复延迟、轮询先看到别人带别的请求号的 `running`、Ctrl-C → 不发任何 `cancelInstall`、130、没有进度行；busy 先到 → 4、没有进度行；自己的任务（带自己请求号）→ 进度行和用自己 id 的取消，Ctrl-C 早于轮询时 `find()` 按请求号找到；旧 daemon（拒收字段后重发、或收了不带回）→ 没有进度、结局照回复、Ctrl-C 不发取消且说会继续；自己的安装开始后回 `environment-closed` → 1，没开始 → 4；取消不回且关闭握手不结束 → 5.2 秒内 130；组件安装接上别人的、Ctrl-C 前状态里是别人的或没有请求号的 → 不发取消；旧 daemon 拒收字段 → 去掉后重发、回复里的任务照样能取消。`T/environment-rpc.test.ts`：请求号留在开始的任务上，另一个调用者被拒 busy 后状态不变，取消后的状态也带着。`T/server-jobs.test.ts`：组件安装的请求号经 socket 进来、`attached` 不改它、`backendInstallStatus` 带回。`packages/protocol/test/protocol.test.ts`：三个开始请求带不带都能解析、不是 uuid 不行、别的请求不能带；状态带不带都能解析。原有用例里工具安装的状态改成带请求号，开始前那次状态读取去掉了（不再需要）。
