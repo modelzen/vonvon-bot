@@ -71,14 +71,11 @@ export function followRevocations({ clients, invites, publish, log }: Pick<Pairi
   });
 }
 /** Registers the key the secure channel authenticated (D2), once the invite checks out. Neither the link nor the secret is logged.
- * An invite a paired client made pairs nobody once that client is revoked or gone: `--cascade` would never reach the new one. */
+ * An invite a paired client made pairs nobody once that client is revoked or gone: `--cascade` would never reach the new one.
+ * `clients.add` checks that at its turn, after any revocation still being written when the invite was redeemed. */
 export async function completePairing(deps: PairingDeps, input: { publicKey: string; request: PairRequest; address: string }): Promise<{ clientId: string; deviceName: string }> {
   const invite = deps.invites.redeem(input.request.inviteId, input.request.inviteSecret);
   if (!invite) throw new PairingError('pairing_failed');
-  if (invite.invitedBy !== 'local') {
-    const inviter = deps.clients.get(invite.invitedBy);
-    if (!inviter || inviter.revokedAt !== undefined) throw new PairingError('pairing_failed');
-  }
   const client = await deps.clients.add({
     name: input.request.clientName, publicKey: input.publicKey, clientKind: input.request.clientKind, address: input.address, invitedBy: invite.invitedBy,
   });

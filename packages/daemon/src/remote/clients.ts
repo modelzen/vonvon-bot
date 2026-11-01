@@ -5,6 +5,7 @@ import { clientRecordSchema, type ClientRecord } from '@vonvon/protocol';
 import { writeFileAtomic } from '../server/atomic-file';
 import { RpcError } from '../server/errors';
 import { devicesPath, prepareDevicesDirectory, refuseNewer } from './files';
+import { PairingError } from './pairing';
 
 /** `<dataRoot>/devices/clients.json` (devices 4.3): every write adds 1 to `generation`; a revoked client stays, with `revokedAt`.
  * Each entry is the protocol's `clientRecordSchema` (zod 3, so parsed apart from this zod 4 frame). Fields a newer version
@@ -15,12 +16,15 @@ const wireRecordSchema = clientRecordSchema.strip();
 type ClientsFile = { v: 1; generation: number; clients: ClientRecord[] };
 
 export interface NewClient { name: string; publicKey: string; clientKind: ClientRecord['clientKind']; address: string; invitedBy: string }
+/** add, rename and revoke resolve once their write has landed. One whose write fails (EIO, ENOSPC...) rejects with that
+ * error and changes nothing, in memory or on disk: its retry is a real one, and no listener hears of it. */
 export interface ClientRegistry {
   readonly generation: number;
   list(): ClientRecord[]; get(clientId: string): ClientRecord | undefined;
   /** Revoked ones too: D2 answers 4003 for them and 4002 for a key it never saw. */
   byPublicKey(publicKey: string): ClientRecord | undefined;
-  /** A key already paired and not revoked: the same entry, seen again. */
+  /** A key already paired and not revoked: the same entry, seen again. One a client invited pairs only while that client
+   * is on the list and not revoked, as of the add's turn: `pairing_failed`. */
   add(client: NewClient): Promise<ClientRecord>;
   rename(clientId: string, name: string): Promise<ClientRecord>;
   /** The ids revoked now; `cascade` also revokes the clients each of them invited, down the line. */
@@ -31,13 +35,21 @@ export interface ClientRegistry {
   onChange(listener: (generation: number, revoked: readonly string[]) => void): () => void;
   close(): Promise<void>;
 }
-const copy = (client: ClientRecord | undefined): ClientRecord | undefined => client && wireRecordSchema.parse(client);
 const notFound = (clientId: string): RpcError => new RpcError('invalid_request', `没有这个客户端：${clientId}。运行 vonvon clients ls 查看。`);
+const find = (clients: ClientRecord[], clientId: string): ClientRecord => {
+  const found = clients.find(client => client.id === clientId);
+  if (!found) throw notFound(clientId);
+  return found;
+};
+type Seen = Pick<ClientRecord, 'lastSeenAt' | 'lastAddress'>;
+/** What a change does to the next list: its result, whether there is anything to write, and whom it revoked. */
+type Step<T> = { value: T; write: boolean; revoked?: readonly string[] };
 
 export async function createClientRegistry(home: string, options: { now?: () => number; touchEveryMs?: number } = {}): Promise<ClientRegistry> {
   await prepareDevicesDirectory(home);
   const file = devicesPath(home, 'clients.json');
   const now = options.now ?? Date.now;
+  /** The list as written; a change replaces it only once its write has landed. */
   let state: ClientsFile;
   let text: string | undefined;
   try { text = await readFile(file, 'utf8'); }
@@ -53,77 +65,88 @@ export async function createClientRegistry(home: string, options: { now?: () => 
     } catch (error) { throw new Error(`clients.json 损坏：${file} 不是有效的客户端列表。`, { cause: error }); }
   }
   const listeners = new Set<(generation: number, revoked: readonly string[]) => void>();
-  let writing: Promise<void> = Promise.resolve();
-  let dirty = false;
+  /** Last-seen not written yet (touch): laid over `state` when read, and written with the next write. */
+  const seen = new Map<string, Seen>();
+  let turn: Promise<unknown> = Promise.resolve();
   let timer: NodeJS.Timeout | undefined;
-  const find = (clientId: string): ClientRecord => {
-    const found = state.clients.find(client => client.id === clientId);
-    if (!found) throw notFound(clientId);
-    return found;
-  };
-  // One write at a time, in order; each takes the state as it is when its turn comes.
-  function save(revoked: readonly string[] = []): Promise<void> {
-    const write = writing.then(async () => {
-      dirty = false;
-      state.generation += 1;
-      await writeFileAtomic(file, `${JSON.stringify(state, null, 2)}\n`, { durable: true });
+  const view = (client: ClientRecord): ClientRecord => wireRecordSchema.parse({ ...client, ...seen.get(client.id) });
+  // One change at a time, in order. Each builds the next list from the written one at its turn, writes it, and only then
+  // makes it current and tells the listeners; a failed write leaves the list as it was and rejects that change alone.
+  function change<T>(step: (next: ClientsFile) => Step<T>): Promise<T> {
+    const run = turn.then(async () => {
+      const written = new Map(seen);
+      const next = structuredClone(state);
+      for (const client of next.clients) Object.assign(client, written.get(client.id));
+      const { value, write, revoked = [] } = step(next);
+      if (!write) return value;
+      next.generation += 1;
+      await writeFileAtomic(file, `${JSON.stringify(next, null, 2)}\n`, { durable: true });
+      state = next;
+      for (const [id, entry] of written) if (seen.get(id) === entry) seen.delete(id);
       for (const listener of listeners) { try { listener(state.generation, revoked); } catch { /* a listener's failure is its own */ } }
+      return value;
     });
-    writing = write.catch(() => undefined);
-    return write;
+    turn = run.catch(() => undefined);
+    return run;
   }
+  /** Writes the last-seen not written yet, if any; either way, settles after the changes made before it. */
   const flush = (): Promise<void> => {
     clearTimeout(timer);
     timer = undefined;
-    return dirty ? save() : writing;
+    return seen.size ? change(() => ({ value: undefined, write: seen.size > 0 })) : turn.then(() => undefined);
   };
   function touch(clientId: string, address: string): void {
-    const client = state.clients.find(entry => entry.id === clientId);
-    if (!client) return;
-    client.lastSeenAt = now();
-    client.lastAddress = address;
-    dirty = true;
+    if (!state.clients.some(entry => entry.id === clientId)) return;
+    seen.set(clientId, { lastSeenAt: now(), lastAddress: address });
     if (timer) return;
     timer = setTimeout(() => { void flush().catch(() => undefined); }, options.touchEveryMs ?? 60_000);
     timer.unref();
   }
   return {
     get generation() { return state.generation; },
-    list: () => state.clients.map(client => wireRecordSchema.parse(client)),
-    get: clientId => copy(state.clients.find(client => client.id === clientId)),
-    byPublicKey: publicKey => copy(state.clients.find(client => client.publicKey === publicKey)),
-    async add(client) {
-      const existing = state.clients.find(entry => entry.publicKey === client.publicKey);
+    list: () => state.clients.map(view),
+    get: clientId => {
+      const client = state.clients.find(entry => entry.id === clientId);
+      return client && view(client);
+    },
+    byPublicKey: publicKey => {
+      const client = state.clients.find(entry => entry.publicKey === publicKey);
+      return client && view(client);
+    },
+    add: client => change(next => {
+      // Checked at this turn: a revocation of the inviter that was still being written when the invite was redeemed is in now.
+      if (client.invitedBy !== 'local') {
+        const inviter = next.clients.find(entry => entry.id === client.invitedBy);
+        if (!inviter || inviter.revokedAt !== undefined) throw new PairingError('pairing_failed');
+      }
+      const existing = next.clients.find(entry => entry.publicKey === client.publicKey);
       if (existing?.revokedAt !== undefined) throw new RpcError('client_revoked', '这台设备的访问已经被撤销，要重新配对得换一对密钥。');
-      if (existing) { touch(existing.id, client.address); return wireRecordSchema.parse(existing); }
+      if (existing) { touch(existing.id, client.address); return { value: view(existing), write: false }; }
       const at = now();
-      const record: ClientRecord = {
+      const record = clientRecordSchema.parse({
         id: `cl_${randomBytes(8).toString('hex')}`, name: client.name, publicKey: client.publicKey, clientKind: client.clientKind,
         createdAt: at, lastSeenAt: at, lastAddress: client.address, pairedVia: 'invite', invitedBy: client.invitedBy,
-      };
-      state.clients.push(clientRecordSchema.parse(record));
-      await save();
-      return { ...record };
-    },
-    async rename(clientId, name) {
-      const client = find(clientId);
+      } satisfies ClientRecord);
+      next.clients.push(record);
+      return { value: wireRecordSchema.parse(record), write: true };
+    }),
+    rename: (clientId, name) => change(next => {
+      const client = find(next.clients, clientId);
       client.name = clientRecordSchema.shape.name.parse(name);
-      await save();
-      return wireRecordSchema.parse(client);
-    },
-    async revoke(clientId, { cascade = false } = {}) {
+      return { value: wireRecordSchema.parse(client), write: true };
+    }),
+    revoke: (clientId, { cascade = false } = {}) => change(next => {
       const revoked: string[] = [];
       const visited = new Set<string>();
-      const queue = [find(clientId)];
+      const queue = [find(next.clients, clientId)];
       for (let client = queue.shift(); client; client = queue.shift()) {
         if (visited.has(client.id)) continue;
         visited.add(client.id);
         if (client.revokedAt === undefined) { client.revokedAt = now(); revoked.push(client.id); }
-        if (cascade) queue.push(...state.clients.filter(entry => entry.invitedBy === client?.id));
+        if (cascade) queue.push(...next.clients.filter(entry => entry.invitedBy === client?.id));
       }
-      if (revoked.length) await save(revoked);
-      return revoked;
-    },
+      return { value: revoked, write: revoked.length > 0, revoked: [...revoked] };
+    }),
     touch,
     onChange(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     close: flush,

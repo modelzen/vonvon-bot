@@ -89,3 +89,22 @@ it('pairs nobody with an invite its revoked inviter made, and frees those invite
   expect(clients.list().map(client => client.id)).toEqual([a.clientId]);
   expect(clients.generation).toBe(2);
 });
+// Codex 审查任务 213、215: a revocation counts once written, so a pairing can redeem its client's invite while that write
+// is under way. The add takes its turn after the revocation and checks the inviter then, instead of slipping in under it.
+it('pairs nobody with an invite whose inviter is being revoked as it pairs', async () => {
+  const invites = createInviteBook();
+  const clients = await createClientRegistry(home);
+  const deps = { invites, clients, device: { name: '工作电脑' }, publish: vi.fn(), log: { info: vi.fn() } };
+  followRevocations(deps);
+  const pair = (invite: { id: string; secret: string }, key: string) => completePairing(deps, {
+    publicKey: key.repeat(43), address: '192.0.2.5:50000', request: { type: 'pairRequest', inviteId: invite.id, inviteSecret: invite.secret, clientName: '电脑', clientKind: 'desktop' },
+  });
+  const a = await pair(invites.create({ invitedBy: 'local' }), 'a');
+  const invite = invites.create({ invitedBy: a.clientId });
+  const revoking = clients.revoke(a.clientId, { cascade: true });
+  const pairing = pair(invite, 'b');
+  await expect(pairing).rejects.toMatchObject({ code: 'pairing_failed' });
+  expect(await revoking).toEqual([a.clientId]);
+  expect(clients.list().map(client => client.id)).toEqual([a.clientId]);
+  expect(JSON.parse(await readFile(devicesPath(home, 'clients.json'), 'utf8')).clients).toHaveLength(1);
+});
