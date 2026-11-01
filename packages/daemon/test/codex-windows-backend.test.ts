@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CodexAppServerBackend } from '../src/agent/codex-appserver/backend';
 import { codexTierUnavailable, type WindowsSandboxCapability } from '../src/agent/codex-appserver/full-only';
 import { codexTable } from '../src/agent/permission/codex';
+import { probeBackends } from '../src/admin/ops';
 import type { PermissionMode, StartThreadOptions } from '../src/agent/types';
 
 const state = vi.hoisted(() => ({
@@ -80,7 +81,46 @@ describe.skipIf(process.platform !== 'win32')('Windows native permission guards 
     state.refresh.mockImplementation(async () => state.capability);
     state.take.mockReturnValue({ request: state.request, close: state.close });
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it('keeps a healthy Windows doctor available while version and sandbox checks take more than 3 seconds', async () => {
+    vi.useFakeTimers();
+    state.versionProbe.mockImplementationOnce(async () => {
+      await new Promise(resolve => setTimeout(resolve, 4_000));
+      return state.version;
+    });
+    state.refresh.mockImplementation(async () => {
+      await new Promise(resolve => setTimeout(resolve, 6_000));
+      return state.capability;
+    });
+    const backend = new CodexAppServerBackend();
+    let settled = false;
+    const result = probeBackends([backend]).then(rows => { settled = true; return rows; });
+    await vi.advanceTimersByTimeAsync(3_001);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect((await result)[0]?.probe).toMatchObject({ ok: true, version: state.version, location: state.selectedBin });
+    expect(state.refresh).toHaveBeenCalledWith(state.selectedBin, expect.objectContaining({ force: true }));
+  });
+
+  it('still rejects a Windows doctor that fails after the old deadline or never finishes', async () => {
+    vi.useFakeTimers();
+    state.versionProbe.mockImplementation(async () => {
+      await new Promise(resolve => setTimeout(resolve, 4_000));
+      return null;
+    });
+    const failed = probeBackends([new CodexAppServerBackend()]);
+    await vi.advanceTimersByTimeAsync(4_001);
+    expect((await failed)[0]?.probe?.ok).toBe(false);
+    state.versionProbe.mockImplementation(() => new Promise(() => {}));
+    let settled = false;
+    const hung = probeBackends([new CodexAppServerBackend()]).then(rows => { settled = true; return rows; });
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect((await hung)[0]?.probe).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
   for (const action of ['start', 'resume'] as const) {
     it(`${action} probes the same executable that was selected for the session`, async () => {
