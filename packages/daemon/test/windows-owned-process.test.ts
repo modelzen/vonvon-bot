@@ -85,16 +85,21 @@ describe.runIf(process.platform === 'win32')('Windows provider cleanup', () => {
     owned.child.on('close', () => { closed = true; });
     await owned.exited;
     let settled = false;
-    const closing = owned.close().then(() => { settled = true; });
-    await new Promise(resolve => setTimeout(resolve, 100));
-    expect(closed).toBe(false);
-    expect(settled).toBe(false);
+    const closing = owned.close().then(() => { settled = true; return { kind: 'closed' as const }; }, error => { settled = true; return { kind: 'failed' as const, error }; });
     let stdout = '', stderr = '';
-    owned.child.stdout!.on('data', chunk => { stdout += String(chunk); });
-    owned.child.stderr!.on('data', chunk => { stderr += String(chunk); });
-    owned.child.stdout!.resume();
-    owned.child.stderr!.resume();
-    await closing;
+    try {
+      // A delayed consumer must not turn successful process cleanup into a
+      // transient Provider failure at the former 500 ms pipe deadline.
+      await new Promise(resolve => setTimeout(resolve, 800));
+      expect(closed).toBe(false);
+      expect(settled).toBe(false);
+    } finally {
+      owned.child.stdout!.on('data', chunk => { stdout += String(chunk); });
+      owned.child.stderr!.on('data', chunk => { stderr += String(chunk); });
+      owned.child.stdout!.resume();
+      owned.child.stderr!.resume();
+    }
+    expect(await closing).toEqual({ kind: 'closed' });
     expect(closed).toBe(true);
     expect(stdout).toBe('x'.repeat(8192));
     expect(stderr).toBe('y'.repeat(8192));
