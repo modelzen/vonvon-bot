@@ -1,8 +1,14 @@
 import {existsSync,mkdtempSync,mkdirSync,writeFileSync,realpathSync,rmSync,symlinkSync,unlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {delimiter,dirname,join,resolve} from 'node:path';
 import {it,expect} from 'vitest';
 import {classifyDistribution,runtimeDistribution,serviceProgram} from '../src/service/distribution';
+
+/** A directory link. Windows makes a junction, which needs no admin rights and takes an absolute target (Windows acceptance task 205). */
+function linkDirectory(target:string,path:string):void {
+  if (process.platform==='win32') symlinkSync(resolve(dirname(path),target),path,'junction');
+  else symlinkSync(target,path,'dir');
+}
 
 function fixture(root:string,name:string,bin='bin/vonvon.mjs'):void {
   mkdirSync(join(root,'bin'),{recursive:true});
@@ -113,7 +119,7 @@ it('keeps source checkouts and symlinked installs in development',()=>{
     const globalRoot=join(dir,'node_modules');
     mkdirSync(globalRoot);
     const link=join(globalRoot,'vonvon-bot');
-    symlinkSync(repo,link,'dir');
+    linkDirectory(repo,link);
     expect(classifyDistribution(link,globalRoot)).toEqual({kind:'development',cliPath:join(repo,'bin','vonvon.mjs')});
     writeFileSync(join(repo,'package.json'),JSON.stringify({name:'@modelzen/feishu-codex-bridge',bin:{vonvon:'bin/vonvon.mjs'}}));
     expect(classifyDistribution(repo).kind).toBe('unknown');
@@ -146,7 +152,7 @@ it('recognizes the standalone layout before the checkout test, through the curre
     const {installRoot,app}=standalone(dir);
     const expected={kind:'standalone',cliPath:join(app,'bin','vonvon.mjs'),installRoot};
     expect(classifyDistribution(app)).toEqual(expected);
-    symlinkSync(join('releases','0.9.0'),join(installRoot,'current'),'dir');
+    linkDirectory(join('releases','0.9.0'),join(installRoot,'current'));
     expect(classifyDistribution(join(installRoot,'current','app'))).toEqual(expected);
     writeFileSync(join(installRoot,'releases','0.9.0','standalone.json'),JSON.stringify({v:1,version:'0.9.0',installRoot,history:{highest:'0.9.0'}}));
     expect(classifyDistribution(app)).toEqual(expected);
@@ -183,11 +189,11 @@ it('runs a standalone service through current with its own Node first on PATH (d
     const {installRoot}=standalone(dir);
     const distribution={kind:'standalone' as const,cliPath:'/versioned/app/bin/vonvon.mjs',installRoot};
     expect(()=>serviceProgram(distribution,'/usr/bin/node','/usr/bin')).toThrow(/no usable current release/);
-    symlinkSync(join('releases','0.9.0'),join(installRoot,'current'),'dir');
+    linkDirectory(join('releases','0.9.0'),join(installRoot,'current'));
     const bin=join(installRoot,'current','node','bin');
-    expect(serviceProgram(distribution,'/usr/bin/node',['/usr/bin',bin,'/bin'].join(':'))).toEqual({
+    expect(serviceProgram(distribution,'/usr/bin/node',['/usr/bin',bin,'/bin'].join(delimiter))).toEqual({
       distribution:{kind:'standalone',executable:join(bin,'node'),entry:join(installRoot,'current','app','bin','vonvon.mjs')},
-      capturedPath:[bin,'/usr/bin','/bin'].join(':'),
+      capturedPath:[bin,'/usr/bin','/bin'].join(delimiter),
     });
     expect(serviceProgram({kind:'bundled',cliPath:'/r/daemon/bin/vonvon.mjs'},'/r/Electron','/usr/bin')).toEqual({distribution:{kind:'desktop',executable:'/r/Electron',entry:'/r/daemon/bin/vonvon.mjs'},capturedPath:'/usr/bin'});
     expect(serviceProgram({kind:'global-npm',cliPath:'/g/bin/vonvon.mjs'},'/usr/bin/node','/usr/bin').distribution).toEqual({kind:'npm',executable:'/usr/bin/node',entry:'/g/bin/vonvon.mjs'});

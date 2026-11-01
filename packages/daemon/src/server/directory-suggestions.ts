@@ -1,34 +1,45 @@
 import {spawn} from 'node:child_process';
+import {isAbsolute} from 'node:path';
 import {directoryReplySchema, type DirectoryReply} from '@vonvon/protocol';
+import {isHomeRelative} from '../platform/home-path';
 import {RpcError} from './errors';
 
 type Suggestions = Extract<DirectoryReply, {kind: 'suggestions'}>;
 
-// Self-contained because its compiled function body runs in a fresh Node process.
-// Never move filesystem reads into the parent: TCC/network mounts can block them
-// indefinitely, and a Promise timeout does not release a daemon threadpool slot.
-async function directorySuggestionWorker(root: string, query: string) {
-  const {opendir, realpath, stat} = process.getBuiltinModule('node:fs/promises') as typeof import('node:fs/promises');
-  const {basename, dirname, isAbsolute, join, relative, resolve, sep} = process.getBuiltinModule('node:path') as typeof import('node:path');
-  const entries = new Map<string, {name: string; path: string; hidden: boolean}>();
+/**
+ * The search itself, run by `node -e` in a fresh process with the home root and the typed query as its arguments. Never
+ * move filesystem reads into the parent: TCC/network mounts can block them indefinitely, and a Promise timeout does not
+ * release a daemon threadpool slot.
+ *
+ * It is plain JavaScript in a string on purpose. It used to be a TypeScript function sent as its own toString(), which is
+ * whatever the bundler made of it: the packaged daemon is minified with keepNames, the body then called esbuild's
+ * `__name` helper from outside the function, and every search on a packaged daemon failed (Windows acceptance task 205).
+ * No bundler rewrites a string. Keep it free of backticks and `${`, and its `~` rule the same as platform/home-path.ts.
+ */
+export const directorySuggestionWorkerSource = String.raw`(async (root, query) => {
+  const {opendir, realpath, stat} = require('node:fs/promises');
+  const {basename, dirname, isAbsolute, join, relative, resolve, sep} = require('node:path');
+  const windows = process.platform === 'win32';
+  const entries = new Map();
   const typed = query.trim();
-  const rooted = isAbsolute(typed) || typed === '~' || typed.startsWith('~/');
+  const fromHome = typed === '~' || typed.startsWith('~/') || (windows && typed.startsWith('~\\'));
+  const rooted = isAbsolute(typed) || fromHome;
   const discovery = Boolean(typed && !rooted);
   const ignored = new Set(['node_modules', 'vendor', 'venv', 'dist', 'build', 'target', 'out', 'coverage', '__pycache__']);
   const noDescent = new Set(['Desktop', 'Documents', 'Downloads', 'Music', 'Pictures', 'Movies', 'Library', 'OrbStack', 'Virtual Machines', 'Virtual Machines.localized', 'Parallels']);
   const preferred = new Set(['develop', 'developer', 'projects', 'project', 'workspaces', 'workspace', 'work', 'src', 'code']);
-  let path: string | null = null;
+  let path = null;
   let truncated = false;
   let remaining = 4000;
   let directoryCount = 0;
   const deadline = Date.now() + 1200;
-  const code = (error: unknown) => error instanceof Error && 'code' in error ? String(error.code) : '';
-  const fail = (code: string, message: string) => Object.assign(new Error(message), {code});
-  const contained = (candidate: string) => {
+  const code = error => error instanceof Error && 'code' in error ? String(error.code) : '';
+  const fail = (code, message) => Object.assign(new Error(message), {code});
+  const contained = candidate => {
     const rel = relative(root, candidate);
-    if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) throw fail('outside_home', '目录必须位于用户主目录内。');
+    if (isAbsolute(rel) || rel === '..' || rel.startsWith('..' + sep)) throw fail('outside_home', '目录必须位于用户主目录内。');
   };
-  const canonical = async (candidate: string) => {
+  const canonical = async candidate => {
     const safe = await realpath(candidate);
     contained(safe);
     if (!(await stat(safe)).isDirectory()) throw fail('invalid_directory', '请选择文件夹。');
@@ -40,13 +51,13 @@ async function directorySuggestionWorker(root: string, query: string) {
   };
   const emit = (partial = true) => {
     const needle = typed.toLocaleLowerCase();
-    const score = (entry: {name: string}) => entry.name.toLocaleLowerCase() === needle ? 0 : entry.name.toLocaleLowerCase().startsWith(needle) ? 1 : 2;
+    const score = entry => entry.name.toLocaleLowerCase() === needle ? 0 : entry.name.toLocaleLowerCase().startsWith(needle) ? 1 : 2;
     const list = [...entries.values()];
     if (discovery) list.sort((a, b) => score(a) - score(b) || a.path.split(sep).length - b.path.split(sep).length || a.path.localeCompare(b.path));
-    process.stdout.write(`${JSON.stringify({kind: 'suggestions', root, path, parent: path && path !== root ? dirname(path) : null, entries: list.slice(0, 50), truncated: partial || truncated || entries.size > 50})}\n`);
+    process.stdout.write(JSON.stringify({kind: 'suggestions', root, path, parent: path && path !== root ? dirname(path) : null, entries: list.slice(0, 50), truncated: partial || truncated || entries.size > 50}) + '\n');
   };
-  const add = (entry: {name: string; path: string; hidden: boolean}) => { entries.set(entry.path, entry); emit(); };
-  const children = async (directory: string, visit: (entry: {name: string; path: string; hidden: boolean; symlink: boolean}) => void) => {
+  const add = entry => { entries.set(entry.path, entry); emit(); };
+  const children = async (directory, visit) => {
     if (exhausted()) return;
     directoryCount++;
     const safe = await canonical(directory);
@@ -68,14 +79,14 @@ async function directorySuggestionWorker(root: string, query: string) {
   };
   try {
     if (!discovery) {
-      const requested = !typed || typed === '~' ? root : typed.startsWith('~/') ? resolve(root, typed.slice(2)) : resolve(typed);
+      const requested = !typed || typed === '~' ? root : fromHome ? resolve(root, typed.slice(2)) : resolve(typed);
       let prefix = '';
       try { path = await canonical(requested); add({name: basename(path), path, hidden: basename(path).startsWith('.')}); }
       catch (error) {
-        if (code(error) !== 'ENOENT' || typed.endsWith('/')) throw error;
+        if (code(error) !== 'ENOENT' || typed.endsWith('/') || (windows && typed.endsWith('\\'))) throw error;
         path = await canonical(dirname(requested)); prefix = basename(requested).toLocaleLowerCase();
       }
-      const found: Array<{name: string; path: string; hidden: boolean}> = [];
+      const found = [];
       await children(path, entry => {
         if ((!entry.hidden || prefix.startsWith('.')) && entry.name.toLocaleLowerCase().includes(prefix)) { found.push(entry); add(entry); }
       });
@@ -86,7 +97,7 @@ async function directorySuggestionWorker(root: string, query: string) {
       const seen = new Set([root]);
       while (queue.length && !exhausted()) {
         queue.sort((a, b) => Number(b.preferred) - Number(a.preferred) || a.depth - b.depth || a.path.localeCompare(b.path));
-        const directory = queue.shift()!;
+        const directory = queue.shift();
         try {
           await children(directory.path, entry => {
             if (entry.name.toLocaleLowerCase().includes(typed.toLocaleLowerCase())) add(entry);
@@ -105,12 +116,11 @@ async function directorySuggestionWorker(root: string, query: string) {
     const failure = code(error);
     const errorCode = failure === 'outside_home' ? failure : ['ENOENT', 'ENOTDIR', 'ELOOP', 'invalid_directory'].includes(failure) ? 'invalid_directory' : 'directory_unreadable';
     const message = errorCode === 'outside_home' ? '目录必须位于用户主目录内。' : errorCode === 'invalid_directory' ? '找不到这个目录，请检查路径。' : '无法读取这个目录，请检查 Bot 所在设备的访问权限。';
-    process.stdout.write(`${JSON.stringify({error: errorCode, message})}\n`);
+    process.stdout.write(JSON.stringify({error: errorCode, message}) + '\n');
     process.exitCode = 1;
   }
-}
-
-export const directorySuggestionWorkerSource = `(${directorySuggestionWorker.toString()})(process.argv[1],process.argv[2]).catch(()=>{process.exitCode=1;});`;
+})(process.argv[1], process.argv[2]).catch(() => { process.exitCode = 1; });
+`;
 
 /** The source override lets tests block an actual child on a FIFO, without a real mount. */
 export function createDirectorySuggestions(source = directorySuggestionWorkerSource) {
@@ -140,7 +150,7 @@ export function createDirectorySuggestions(source = directorySuggestionWorkerSou
         const cancel = () => finish(undefined, true);
         const timer = setTimeout(() => {
           const typed = query.trim();
-          if ((!typed || typed.startsWith('/') || typed === '~' || typed.startsWith('~/')) && !latest?.path) finish(new RpcError('directory_timeout', '读取目录超时，请重试或选择其他目录。'));
+          if ((!typed || isAbsolute(typed) || isHomeRelative(typed)) && !latest?.path) finish(new RpcError('directory_timeout', '读取目录超时，请重试或选择其他目录。'));
           else cancel();
         }, 1500);
         active.add(cancel);
