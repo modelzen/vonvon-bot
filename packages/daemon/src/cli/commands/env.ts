@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import QRCode from 'qrcode';
 import { ConnectionError, type VonvonClient } from '@vonvon/client';
 import type {
@@ -38,6 +39,8 @@ export type EnvDependencies = {
   wait: (ms: number) => Promise<void>;
   /** The App Secret: asked for without echo on a terminal, else all of stdin. */
   readSecret: (prompt: string) => Promise<string>;
+  /** A new id for each long task's starting request, which tells this command's operation from another caller's. */
+  requestId: () => string;
 };
 const envDefaults = (): EnvDependencies => ({
   tty: Boolean(process.stdout.isTTY),
@@ -46,6 +49,7 @@ const envDefaults = (): EnvDependencies => ({
   // unref: a wait still pending when the command ends does not hold the process
   wait: ms => new Promise(done => { setTimeout(done, ms).unref(); }),
   readSecret: prompt => process.stdin.isTTY ? readHidden(prompt, process.stdin, process.stderr) : readStdin(),
+  requestId: () => randomUUID(),
 });
 
 type Reply<K extends EnvironmentReply['kind']> = Extract<EnvironmentReply, { kind: K }>;
@@ -59,6 +63,19 @@ function answer<K extends EnvironmentReply['kind']>(what: string, reply: Environ
   throw new CommandError('failed', `${what}没有完成：daemon 回了意外的结果（${reply.kind}）。`);
 }
 const environment = (call: Call, what: string, request: EnvironmentRequest, o?: Parameters<Call>[2]): Promise<EnvironmentReply> => call(what, c => c.environment(request), o);
+/**
+ * A long task's starting request, with this command's own request id (审查 202). A daemon from before the id refuses the
+ * field as an invalid request (its schema is strict) and starts nothing; the request goes again without it, unless the
+ * command is already over (Ctrl-C). That daemon's states carry no id, so none of them is ever taken for this command's.
+ */
+async function startOwn(call: Call, what: string, request: EnvironmentRequest & { requestId: string }, over: () => boolean, o?: Parameters<Call>[2]): Promise<EnvironmentReply> {
+  try { return await environment(call, what, request, o); }
+  catch (error) {
+    if (!(error instanceof CommandError && error.reason === 'invalid_request') || over()) throw error;
+    const { requestId: _sent, ...plain } = request;
+    return environment(call, what, plain as EnvironmentRequest, o);
+  }
+}
 const emit = (io: Io, event: object): void => io.write(`${JSON.stringify(event)}\n`);
 
 /** Not printable(): a log keeps its line breaks and tabs; npm's progress `\r` becomes a line break. */
@@ -118,16 +135,18 @@ export async function runEnvScan(io: Io, daemon: Daemon = withDaemon): Promise<v
 // ---- following a long task ----
 
 type Ending = { kind: 'succeeded'; message: string } | { kind: 'failed' | 'cancelled' | 'timedOut'; message: string }
-  | { kind: 'refused'; code: string; message: string } | { kind: 'interrupted' }
+  | { kind: 'refused'; code: string; message: string }
+  /** Ctrl-C; `cancelled`: a cancel went out for this command's own operation */
+  | { kind: 'interrupted'; cancelled: boolean }
   /** the connection dropped: after the task started (an id is known) the outcome is unknown */
   | { kind: 'lost'; started: boolean }
   /** another operation replaced this one's state before its end was read */
   | { kind: 'unseen' };
-type Seen = { id: string; kind: 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timedOut'; message?: string; url?: string; tool?: EnvironmentTool; update?: boolean };
+type Seen = { id: string; kind: 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timedOut'; message?: string; url?: string; requestId?: string };
 function seenOf(operation: ToolInstallOperation | EnvironmentOperation | null): Seen | null {
   if (!operation) return null;
   if (operation.kind !== 'running') return { id: operation.id, kind: operation.kind, message: operation.message };
-  return { id: operation.id, kind: 'running', ...('url' in operation && operation.url ? { url: operation.url } : {}), ...('tool' in operation ? { tool: operation.tool, update: operation.update } : {}) };
+  return { id: operation.id, kind: 'running', ...('url' in operation && operation.url ? { url: operation.url } : {}), ...('requestId' in operation && operation.requestId ? { requestId: operation.requestId } : {}) };
 }
 type Follow = { call: Call; client: VonvonClient; io: Io; d: EnvDependencies };
 
@@ -136,11 +155,19 @@ type Follow = { call: Call; client: VonvonClient; io: Io; d: EnvDependencies };
  * it as interrupted once the cancel is answered or after 5 s, a second Ctrl-C at once (4.2 第 4 条). From the first
  * Ctrl-C on, nothing else ends it, not a dropped connection, a failed read or the task's own end, and nothing more is
  * read or shown (`over`). `claim` names the task once its id is known, and sends the cancel if Ctrl-C came first.
+ *
+ * The cancel only ever goes to an operation this command's request is proven to have started (`own`, 审查 202): the
+ * start's reply named it, or its state carries this request's id. `find` looks for one with the same rule; with none,
+ * Ctrl-C sends nothing and ends it at once, and the operation, if there is one, runs on.
  */
 function track(f: Follow, resolve: (ending: Ending) => void, reject: (error: unknown) => void, task: { cancel: (id: string) => EnvironmentRequest; find?: () => Promise<string | undefined> }) {
   const stops: Array<() => void> = [];
+  let cancelling: Promise<unknown> | undefined;
   const t = {
+    /** the task's operation once known: its states and events are the ones shown */
     id: undefined as string | undefined,
+    /** this command's request started it: Ctrl-C cancels it (an install this one attached to is followed, not cancelled) */
+    own: false,
     interrupted: false,
     settled: false,
     stops,
@@ -151,27 +178,33 @@ function track(f: Follow, resolve: (ending: Ending) => void, reject: (error: unk
       t.settled = true; for (const stop of stops.splice(0)) stop(); resolve(ending);
     },
     fail(error: unknown): void { if (t.over) return; t.settled = true; for (const stop of stops.splice(0)) stop(); reject(error); },
-    claim(id: string): void {
-      if (t.id !== undefined) return;
+    claim(id: string, own = true): void {
+      if (t.id !== undefined || t.settled) return;
       t.id = id;
+      t.own = own;
       // Ctrl-C came before the id: cancel now, while the interrupt still waits
-      if (t.interrupted) void f.client.environment(task.cancel(id)).catch(() => undefined);
+      if (t.interrupted) void t.cancel();
     },
+    /** The cancel, sent once and only for this command's own operation. */
+    cancel(): Promise<unknown> | undefined {
+      if (t.id !== undefined && t.own) cancelling ??= f.client.environment(task.cancel(t.id)).catch(() => undefined);
+      return cancelling;
+    },
+    interruption: (): Ending => ({ kind: 'interrupted', cancelled: cancelling !== undefined }),
   };
   // while cancelling, the cancel's request fails with the connection and ends it as interrupted
   stops.push(f.client.onError(error => { if (error instanceof ConnectionError) t.finish({ kind: 'lost', started: t.id !== undefined }); }));
   stops.push(f.d.onInterrupt(() => {
-    if (t.interrupted) { t.finish({ kind: 'interrupted' }); return; }
+    if (t.interrupted) { t.finish(t.interruption()); return; }
     t.interrupted = true;
     let timer: NodeJS.Timeout | undefined;
     const cap = new Promise<void>(done => { timer = setTimeout(done, CANCEL_WAIT); });
     stops.push(() => { clearTimeout(timer); });
     const cancel = (async () => {
-      const id = t.id ?? await task.find?.();
-      if (id !== undefined && t.id === undefined) t.id = id;
-      if (id !== undefined) await f.client.environment(task.cancel(id));
+      if (t.id === undefined) { const found = await task.find?.(); if (found !== undefined) t.claim(found); }
+      await t.cancel();
     })().catch(() => undefined);
-    void Promise.race([cancel, cap]).then(() => { t.finish({ kind: 'interrupted' }); });
+    void Promise.race([cancel, cap]).then(() => { t.finish(t.interruption()); });
   }));
   return t;
 }
@@ -180,15 +213,16 @@ type Polled = {
   /** Known from the start reply (sign-in, app profile); a tool install learns it from the first state `claim` accepts. */
   id?: string;
   first?: Seen | null;
+  /** A tool install: the state is this command's own, by the request id it carries. */
   claim?: (seen: Seen) => boolean;
   read: (started: boolean) => Promise<Seen | null>;
   cancel: (id: string) => EnvironmentRequest;
   find?: () => Promise<string | undefined>;
   /**
-   * A tool install's request, answered when the install ends: its answer is the end, and the states only show progress
-   * (a state does not say whose install it is).
+   * A tool install's request, sent once Ctrl-C is caught and answered when the install ends: its answer is the end,
+   * and the states only show progress. `own`: this command's install was seen running, so it had started.
    */
-  started?: { reply: Promise<EnvironmentReply>; ended: (reply: EnvironmentReply) => Ending };
+  started?: { reply: (over: () => boolean) => Promise<EnvironmentReply>; ended: (reply: EnvironmentReply, own: boolean) => Ending };
 };
 
 /**
@@ -222,9 +256,9 @@ function follow(f: Follow, task: Polled): Promise<Ending> {
     if (task.id !== undefined) t.claim(task.id);
     if (task.first) observe(task.first);
     const started = task.started;
-    started?.reply.then(async reply => {
+    started?.reply(() => t.over).then(async reply => {
       if (t.over) return;
-      const ending = started.ended(reply);
+      const ending = started.ended(reply, t.own);
       // the progress already read goes out first
       await queue;
       t.finish(ending);
@@ -238,12 +272,13 @@ function follow(f: Follow, task: Polled): Promise<Ending> {
   });
 }
 
-type Words = { cancelled: string; reason: string; unknown: string };
+/** `kept`: Ctrl-C sent no cancel, as no operation was proven this command's own */
+type Words = { cancelled: string; kept: string; reason: string; unknown: string };
 /** A follow's end other than success as the command's failure (cli-7-environment 4.1). */
 function mustSucceed(ending: Ending, w: Words): asserts ending is Extract<Ending, { kind: 'succeeded' }> {
   switch (ending.kind) {
     case 'succeeded': return;
-    case 'interrupted': throw new CommandError('interrupted', w.cancelled);
+    case 'interrupted': throw new CommandError('interrupted', ending.cancelled ? w.cancelled : w.kept);
     case 'refused': throw refusal(ending);
     case 'failed': throw new CommandError('failed', ending.message || '没有完成。', { reason: w.reason });
     case 'cancelled': throw new CommandError('failed', `在别处取消了：${ending.message}`, { reason: 'cancelled' });
@@ -264,40 +299,46 @@ const INSTALL_ENDED = new Set(['install-failed', 'install-incomplete', 'install-
 
 /**
  * `vonvon env install|update <tool>`: the web page's 托管安装. The daemon answers the request when the install ends, and
- * that answer is its end; meanwhile the state is read for the progress and for the id Ctrl-C cancels, and an install
- * running before this one is not taken for it.
+ * that answer is its end. Meanwhile the state is read for the progress and for the id Ctrl-C cancels; the install there
+ * is this command's only when it carries this request's id (审查 202): a state of another caller's install, or from a
+ * daemon that does not echo the id, is neither shown nor cancelled.
  */
 export async function runEnvInstall(wanted: string, update: boolean, io: Io, daemon: Daemon = withDaemon, overrides: Partial<EnvDependencies> = {}): Promise<void> {
   const tool = envTool(wanted);
   const d = deps(overrides);
   const verb = update ? '更新' : '安装';
+  const requestId = d.requestId();
+  const mine = (seen: Seen | null): seen is Seen => seen?.kind === 'running' && seen.requestId === requestId;
   await daemon(async call => {
     const client = await clientOf(call);
     const read = async (started: boolean) => seenOf(answer(`读取${verb}进度`, await environment(call, `读取${verb}进度`, { type: 'toolInstallStatus' }, started ? { unknown: INSTALL_UNKNOWN } : {}), 'toolInstall').operation);
-    const before = (await read(false))?.id;
     if (!io.json) io.write(`正在${verb} ${LABEL[tool]}…（Ctrl-C 取消）\n`);
     const ending = await follow({ call, client, io, d }, {
-      claim: seen => seen.kind === 'running' && seen.tool === tool && seen.update === update && seen.id !== before,
+      claim: mine,
       read,
       cancel: operationId => ({ type: 'cancelInstall', operationId }),
       find: async () => {
         const reply = await client.environment({ type: 'toolInstallStatus' });
         const seen = reply.kind === 'toolInstall' ? seenOf(reply.operation) : null;
-        return seen?.kind === 'running' && seen.tool === tool && seen.id !== before ? seen.id : undefined;
+        return mine(seen) ? seen.id : undefined;
       },
       started: {
-        reply: environment(call, `${verb} ${LABEL[tool]}`, { type: update ? 'update' : 'install', tool }, { ms: UNTIL_DONE }),
-        ended: reply => {
+        reply: over => startOwn(call, `${verb} ${LABEL[tool]}`, { type: update ? 'update' : 'install', tool, requestId }, over, { ms: UNTIL_DONE }),
+        ended: (reply, own) => {
           if (reply.kind === 'applied') return { kind: 'succeeded', message: reply.message };
           if (reply.kind !== 'refused') throw new CommandError('failed', `${verb}没有完成：daemon 回了意外的结果（${reply.kind}）。`);
           if (reply.code === 'install-cancelled') return { kind: 'cancelled', message: reply.message };
-          if (INSTALL_ENDED.has(reply.code)) return { kind: 'failed', message: reply.message };
+          // its own install was seen running, so any refusal is how it ended (environment-closed …)
+          if (own || INSTALL_ENDED.has(reply.code)) return { kind: 'failed', message: reply.message };
           // refused before it started (busy …): what the state shows meanwhile is another caller's
           return { kind: 'refused', code: reply.code, message: reply.message };
         },
       },
     });
-    mustSucceed(ending, { cancelled: `已取消${verb}。`, reason: 'install_failed', unknown: INSTALL_UNKNOWN });
+    mustSucceed(ending, {
+      cancelled: `已取消${verb}。`, reason: 'install_failed', unknown: INSTALL_UNKNOWN,
+      kept: `已退出，没有取消：确认不了哪个${verb}是这次开始的（daemon 比命令行旧，或者还没开始）。如果已经开始，它会继续进行；运行 vonvon env scan 看，vonvon env cancel install 取消。`,
+    });
     let version: string | undefined;
     try { version = answer('读取本机环境', await environment(call, '读取本机环境', { type: 'scan' }), 'tools').tools.find(each => each.tool === tool)?.version ?? undefined; }
     catch { /* the result goes without the version */ }
@@ -328,7 +369,7 @@ export async function runEnvLogin(wanted: string, io: Io, daemon: Daemon = withD
       read: async started => seenOf(answer('读取登录进度', await environment(call, '读取登录进度', { type: 'loginStatus' }, started ? { unknown: LOGIN_UNKNOWN } : {}), 'operation').operation),
       cancel: operationId => ({ type: 'cancelLogin', operationId }),
     });
-    mustSucceed(ending, { cancelled: '已取消登录。', reason: 'login_failed', unknown: LOGIN_UNKNOWN });
+    mustSucceed(ending, { cancelled: '已取消登录。', kept: `已退出，没有取消。${LOGIN_UNKNOWN}`, reason: 'login_failed', unknown: LOGIN_UNKNOWN });
     let auth: Auth | undefined;
     try {
       const reply = await environment(call, '检查 lark-cli 的登录', { type: 'authStatus', tool: 'lark-cli' });
@@ -396,7 +437,7 @@ export async function runEnvProfileInit(name: string, io: Io, daemon: Daemon = w
       read: async started => seenOf(answer('读取应用配置进度', await environment(call, '读取应用配置进度', { type: 'profileInitStatus' }, started ? { unknown: PROFILE_UNKNOWN } : {}), 'operation').operation),
       cancel: operationId => ({ type: 'profileInitCancel', operationId }),
     });
-    mustSucceed(ending, { cancelled: '已取消应用配置。', reason: 'profile_init_failed', unknown: PROFILE_UNKNOWN });
+    mustSucceed(ending, { cancelled: '已取消应用配置。', kept: `已退出，没有取消。${PROFILE_UNKNOWN}`, reason: 'profile_init_failed', unknown: PROFILE_UNKNOWN });
     print(io, [`✓ 应用配置「${name}」建好了。运行 vonvon env profile list 查看。`], { event: 'result', message: ending.message });
   });
 }
@@ -468,15 +509,16 @@ export async function runEnvBackendCheck(id: string, refresh: boolean, io: Io, d
 /**
  * Follows one component install by its events (cli-7-environment 4.2 第 3 条): the listener is on before the request,
  * the reply's replay comes first, then each event of its operation; the daemon sends them to this connection only, so
- * nothing is polled. `attached`: the same install was already running, and this follows it.
+ * nothing is polled. `attached`: the same install was already running, started elsewhere: this follows it, and Ctrl-C
+ * leaves it running (审查 202). Ctrl-C before the reply cancels only the install whose state carries this request's id.
  */
-function followBackend(f: Follow, id: string, update: boolean): Promise<Ending> {
+function followBackend(f: Follow, id: string, update: boolean, requestId: string): Promise<Ending> {
   return new Promise((resolve, reject) => {
     const t = track(f, resolve, reject, {
       cancel: operationId => ({ type: 'cancelBackendInstall', operationId }),
       find: async () => {
         const reply = await f.client.environment({ type: 'backendInstallStatus', id });
-        return reply.kind === 'backendInstallStatus' && reply.operation?.state === 'running' && reply.operation.update === update ? reply.operation.operationId : undefined;
+        return reply.kind === 'backendInstallStatus' && reply.operation?.state === 'running' && reply.operation.requestId === requestId ? reply.operation.operationId : undefined;
       },
     });
     const early: BackendInstallEventPayload[] = [];
@@ -498,15 +540,15 @@ function followBackend(f: Follow, id: string, update: boolean): Promise<Ending> 
       if (t.id === undefined) early.push(payload);
       else if (payload.operationId === t.id) take(payload.item);
     }));
-    environment(f.call, '安装组件', { type: 'backendInstall', id, update }).then(reply => {
+    startOwn(f.call, '安装组件', { type: 'backendInstall', id, update, requestId }, () => t.over).then(reply => {
       if (t.settled) return;
       if (reply.kind === 'refused') { t.finish({ kind: 'refused', code: reply.code, message: reply.message }); return; }
       if (reply.kind !== 'backendInstall') { t.fail(new CommandError('failed', `安装组件没有完成：daemon 回了意外的结果（${reply.kind}）。`)); return; }
-      t.claim(reply.operationId);
+      t.claim(reply.operationId, !reply.attached);
       if (t.interrupted) return;
       if (f.io.json) emit(f.io, { event: 'progress', state: 'running', operationId: reply.operationId, attached: reply.attached, ...(reply.omittedBytes ? { omittedBytes: reply.omittedBytes } : {}) });
       else {
-        if (reply.attached) f.io.write(`${id} 已经在${update ? '更新' : '安装'}了，接着看它的输出：\n`);
+        if (reply.attached) f.io.write(`${id} 已经在${update ? '更新' : '安装'}了（别处开始的），接着看它的输出；Ctrl-C 只退出，不取消它：\n`);
         if (reply.omittedBytes) f.io.write(`（前面还有 ${reply.omittedBytes} 字节的输出没显示）\n`);
       }
       for (const item of reply.replay) take(item);
@@ -522,8 +564,11 @@ export async function runEnvBackendInstall(id: string, update: boolean, io: Io, 
   await daemon(async call => {
     const client = await clientOf(call);
     if (!io.json) io.write(`正在${verb}组件 ${id}…（Ctrl-C 取消）\n`);
-    const ending = await followBackend({ call, client, io, d }, id, update);
-    mustSucceed(ending, { cancelled: `已取消组件${verb}。`, reason: 'install_failed', unknown: BACKEND_UNKNOWN });
+    const ending = await followBackend({ call, client, io, d }, id, update, d.requestId());
+    mustSucceed(ending, {
+      cancelled: `已取消组件${verb}。`, reason: 'install_failed', unknown: BACKEND_UNKNOWN,
+      kept: `已退出，没有取消：这个${verb}是别处开始的，或者确认不了是这次开始的。如果在进行，它会继续；运行 vonvon env backend list 看，vonvon env cancel backend ${id} 取消。`,
+    });
     let version: string | undefined;
     try {
       const entry = answer('读取组件', await environment(call, '读取组件', { type: 'backendCatalog' }, LONG), 'backends').entries.find(each => each.id === id);

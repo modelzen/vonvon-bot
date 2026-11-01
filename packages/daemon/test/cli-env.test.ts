@@ -13,6 +13,9 @@ import { loadCommands } from './helpers/cli-commands';
 /** cli-7-environment: vonvon env … and provider models, each through a fake client behind the real withDaemon. */
 const OP1 = '11111111-1111-4111-8111-111111111111';
 const OP2 = '22222222-2222-4222-8222-222222222222';
+/** this command's request id (deps.requestId), and another caller's */
+const REQ = '33333333-3333-4333-8333-333333333333';
+const THEIRS = '44444444-4444-4444-8444-444444444444';
 type Handle = (request: EnvironmentRequest) => unknown;
 /**
  * A fake daemon: `handle` answers each environment request; `drop()` loses the connection as the real client does (each
@@ -46,6 +49,7 @@ function envHarness(handle: Handle, extra: Record<string, unknown> = {}, o: { tt
     onInterrupt: handler => { interrupt = handler; return () => { interrupt = undefined; }; },
     wait: () => new Promise(done => { setTimeout(done, 0); }),
     readSecret: async () => o.secret ?? '',
+    requestId: () => REQ,
   };
   return {
     daemon, deps, connect, environment, order,
@@ -95,8 +99,13 @@ it('env scan reads the sign-in of each installed tool, and one failing read leav
 });
 
 const running = (id: string, extra: object = {}) => ({ kind: 'running', id, tool: 'codex', update: false, startedAt: 1, ...extra });
-/** A tool install: the states in turn (the last one stays), and the install's own answer once a state with an end was read. */
-function installer(states: unknown[], answer: unknown, hooks: { onRead?: (index: number) => void } = {}) {
+/** a running install this command's request started: its state carries the request id */
+const mine = (id: string, extra: object = {}) => running(id, { requestId: REQ, ...extra });
+/**
+ * A tool install: the states in turn (the last one stays), and the install's own answer once a state with an end was
+ * read (`now`, or busy: at once). `strict`: a daemon from before request ids, which refuses the field.
+ */
+function installer(states: unknown[], answer: unknown, hooks: { onRead?: (index: number) => void; now?: boolean; strict?: boolean } = {}) {
   let read = 0;
   let pending: { settle: (value: unknown) => void } | undefined;
   const h = envHarness(request => {
@@ -108,9 +117,10 @@ function installer(states: unknown[], answer: unknown, hooks: { onRead?: (index:
       return { kind: 'toolInstall', operation };
     }
     if (request.type === 'install' || request.type === 'update') {
+      if (hooks.strict && 'requestId' in request) throw new RpcError('invalid_request', '请求参数无效。');
       const reply = h.later<unknown>();
       pending = reply;
-      if ((answer as { code?: string }).code === 'busy') reply.settle(answer);
+      if (hooks.now || (answer as { code?: string }).code === 'busy') reply.settle(answer);
       return reply.promise;
     }
     if (request.type === 'cancelInstall') { pending?.settle({ kind: 'refused', code: 'install-cancelled', message: '已取消安装，原工具仍可使用。' }); return { kind: 'toolInstall', operation: { kind: 'cancelled', id: OP1, message: '已取消。' } }; }
@@ -123,24 +133,23 @@ function installer(states: unknown[], answer: unknown, hooks: { onRead?: (index:
 // main 必败: there was no env install
 it('env install follows its own operation to the end, not the one before it', async () => {
   const done = { kind: 'succeeded', id: OP1, message: 'codex 0.129.0 已安装。' };
-  const h = installer([{ kind: 'failed', id: OP2, message: '上一次失败了' }, { kind: 'failed', id: OP2, message: '上一次失败了' }, running(OP1), running(OP1), done], { kind: 'applied', message: done.message });
+  const h = installer([{ kind: 'failed', id: OP2, message: '上一次失败了' }, { kind: 'failed', id: OP2, message: '上一次失败了' }, mine(OP1), mine(OP1), done], { kind: 'applied', message: done.message });
   await runEnvInstall('codex', false, h.io(true), h.daemon, h.deps);
-  expect(h.sent()[0]).toEqual({ type: 'toolInstallStatus' });
-  expect(h.sent()).toContainEqual({ type: 'install', tool: 'codex' });
+  expect(h.sent()[0]).toEqual({ type: 'install', tool: 'codex', requestId: REQ });
   expect(h.lines()).toEqual([
     { event: 'progress', state: 'running', operationId: OP1 },
     { ok: true, event: 'result', tool: 'codex', version: '0.129.0', message: 'codex 0.129.0 已安装。' },
   ]);
-  const human = installer([null, running(OP1, { update: true }), { ...done, message: 'codex 0.129.0 已更新。' }], { kind: 'applied', message: 'codex 0.129.0 已更新。' });
+  const human = installer([null, mine(OP1, { update: true }), { ...done, message: 'codex 0.129.0 已更新。' }], { kind: 'applied', message: 'codex 0.129.0 已更新。' });
   await runEnvInstall('codex', true, human.io(), human.daemon, human.deps);
-  expect(human.sent()).toContainEqual({ type: 'update', tool: 'codex' });
+  expect(human.sent()).toContainEqual({ type: 'update', tool: 'codex', requestId: REQ });
   expect(human.out()).toBe('正在更新 Codex…（Ctrl-C 取消）\n✓ codex 0.129.0 已更新。\n');
   await expect(runEnvInstall('nope', false, human.io(), human.daemon, human.deps)).rejects.toEqual(failure('bad-args'));
 });
 
 // main 必败: there was no env install
 it('env install: an install that failed exits 1, one refused before it started exits 4', async () => {
-  const failed = installer([null, running(OP1), { kind: 'failed', id: OP1, message: '网络不通' }], { kind: 'refused', code: 'install-failed', message: '网络不通' });
+  const failed = installer([null, mine(OP1), { kind: 'failed', id: OP1, message: '网络不通' }], { kind: 'refused', code: 'install-failed', message: '网络不通' });
   expect(await caught(runEnvInstall('codex', false, failed.io(true), failed.daemon, failed.deps))).toEqual(failure('failed', '网络不通', { reason: 'install_failed' }));
   const busy = installer([null], { kind: 'refused', code: 'busy', message: '另一个本机环境操作正在进行。' });
   expect(await caught(runEnvInstall('codex', false, busy.io(true), busy.daemon, busy.deps))).toEqual(failure('refused', '另一个本机环境操作正在进行。', { reason: 'busy' }));
@@ -149,10 +158,10 @@ it('env install: an install that failed exits 1, one refused before it started e
 
 // main 必败: there was no env install
 it('env install: Ctrl-C cancels its operation; a dropped connection is 6 after it started and 3 before', async () => {
-  const stopped = installer([null, running(OP1)], {}, { onRead: index => { if (index === 2) setTimeout(() => stopped.interrupt(), 0); } });
+  const stopped = installer([null, mine(OP1)], {}, { onRead: index => { if (index === 2) setTimeout(() => stopped.interrupt(), 0); } });
   expect(await caught(runEnvInstall('codex', false, stopped.io(true), stopped.daemon, stopped.deps))).toEqual(failure('interrupted', '已取消安装。'));
   expect(stopped.sent()).toContainEqual({ type: 'cancelInstall', operationId: OP1 });
-  const after = installer([null, running(OP1)], {}, { onRead: index => { if (index === 2) setTimeout(() => after.drop(), 0); } });
+  const after = installer([null, mine(OP1)], {}, { onRead: index => { if (index === 2) setTimeout(() => after.drop(), 0); } });
   expect(await caught(runEnvInstall('codex', false, after.io(true), after.daemon, after.deps))).toEqual(failure('outcome-unknown', expect.stringContaining('安装可能还在进行，运行 vonvon env scan 看。')));
   const before = installer([null], {}, { onRead: index => { if (index === 1) setTimeout(() => before.drop(), 0); } });
   expect(await caught(runEnvInstall('codex', false, before.io(true), before.daemon, before.deps))).toEqual(failure('connection'));
@@ -255,7 +264,7 @@ it('env backend install listens before it asks, prints the replay first, then it
   const h = component([event(OP2, { type: 'log', chunk: 'not mine\n' }), event(OP1, { type: 'log', chunk: 'c\n' }), event(OP1, { type: 'done' })]);
   await runEnvBackendInstall('cbridge', false, h.io(true), h.daemon, h.deps);
   expect(h.order.slice(0, 2)).toEqual(['listen', 'backendInstall']);
-  expect(h.sent()[0]).toEqual({ type: 'backendInstall', id: 'cbridge', update: false });
+  expect(h.sent()[0]).toEqual({ type: 'backendInstall', id: 'cbridge', update: false, requestId: REQ });
   expect(h.lines()).toEqual([
     { event: 'progress', state: 'running', operationId: OP1, attached: false },
     { event: 'log', chunk: 'a\n' }, { event: 'log', chunk: 'b\n' }, { event: 'log', chunk: 'early\n' }, { event: 'log', chunk: 'c\n' },
@@ -314,6 +323,7 @@ it("env install: busy stays refused (4), whatever another caller's install shows
   });
   expect(await caught(runEnvInstall('codex', false, late.io(true), late.daemon, late.deps))).toEqual(failure('refused', BUSY.message, { reason: 'busy' }));
   expect(late.out()).not.toContain('"result"');
+  expect(late.out()).not.toContain('"progress"');
   expect(late.sent().filter(request => request.type === 'cancelInstall')).toEqual([]);
 });
 
@@ -332,7 +342,7 @@ const JOBS: Job[] = [
  * unless the test does (`cancels`); no request times out locally. `hold`: a request stays in flight (`held()`): the first state read after the
  * progress line, or the component install's own request.
  */
-function racing(job: Job, o: { hold?: boolean; wait?: EnvDependencies['wait'] } = {}) {
+function racing(job: Job, o: { hold?: boolean; wait?: EnvDependencies['wait']; client?: Record<string, unknown> } = {}) {
   let reads = 0;
   let held: Later | undefined;
   const cancels: Later[] = [];
@@ -341,7 +351,7 @@ function racing(job: Job, o: { hold?: boolean; wait?: EnvDependencies['wait'] } 
     if (request.type === job.status) {
       const index = reads++;
       if (o.hold && !held && h.out().includes('"progress"')) { held = h.later<unknown>(); return held.promise; }
-      if (request.type === 'toolInstallStatus') return { kind: 'toolInstall', operation: index === 0 ? null : running(OP1) };
+      if (request.type === 'toolInstallStatus') return { kind: 'toolInstall', operation: mine(OP1) };
       return { kind: 'operation', operation: request.type === 'loginStatus' ? login(OP1) : profileRun(OP1) };
     }
     switch (request.type) {
@@ -351,10 +361,10 @@ function racing(job: Job, o: { hold?: boolean; wait?: EnvDependencies['wait'] } 
       case 'backendInstall':
         if (o.hold) { held = h.later<unknown>(); return held.promise; }
         return { kind: 'backendInstall', operationId: OP1, id: 'cbridge', update: false, attached: false, replay: [] };
-      case 'backendInstallStatus': return { kind: 'backendInstallStatus', operation: { operationId: OP1, id: 'cbridge', update: false, state: 'running', replay: [], omittedBytes: 0 } };
+      case 'backendInstallStatus': return { kind: 'backendInstallStatus', operation: { operationId: OP1, id: 'cbridge', update: false, requestId: REQ, state: 'running', replay: [], omittedBytes: 0 } };
     }
     throw new Error(`unexpected ${request.type}`);
-  }, {}, { ms: 60_000 });
+  }, o.client ?? {}, { ms: 60_000 });
   if (o.wait) h.deps.wait = o.wait;
   return Object.assign(h, { reads: () => reads, held: () => held, cancels });
 }
@@ -423,6 +433,150 @@ it.each(JOBS)('$job: a cancel never answered ends it after 5 s as 130, with noth
   } finally {
     vi.useRealTimers();
   }
+});
+
+const sentOf = (h: Harness, type: EnvironmentRequest['type']) => h.sent().filter(request => request.type === type);
+/**
+ * 审查 202: this request is refused busy, but the answer is late; meanwhile the state shows another caller's install of
+ * the same tool (a new id, same tool, same update), which used to be taken for this one's.
+ */
+function overtaken(update: boolean) {
+  let reply: Later | undefined;
+  let reads = 0;
+  const h = envHarness(request => {
+    if (request.type === 'install' || request.type === 'update') { reply = h.later<unknown>(); return reply.promise; }
+    if (request.type === 'toolInstallStatus') return { kind: 'toolInstall', operation: reads++ === 0 ? null : running(OP2, { update, requestId: THEIRS }) };
+    if (request.type === 'cancelInstall') return { kind: 'toolInstall', operation: { kind: 'cancelled', id: OP2, message: '已取消。' } };
+    throw new Error(`unexpected ${request.type}`);
+  });
+  return Object.assign(h, { reply: () => reply, reads: () => reads });
+}
+
+// 审查 202: Ctrl-C sent cancelInstall with the other caller's operationId and stopped their install
+it.each([false, true])('env install/update (update: %s): busy answered late, another caller\'s install in the state: never shown, never cancelled', async update => {
+  const cut = overtaken(update);
+  const interrupted = caught(runEnvInstall('codex', update, cut.io(true), cut.daemon, cut.deps));
+  // their state was read, and read again after it
+  await vi.waitFor(() => { expect(cut.reads()).toBeGreaterThanOrEqual(3); });
+  cut.interrupt();
+  expect(await interrupted).toEqual(failure('interrupted', expect.stringContaining('没有取消')));
+  expect(sentOf(cut, 'cancelInstall')).toEqual([]);
+  expect(cut.out()).toBe('');
+  expect(cut.sent()[0]).toEqual({ type: update ? 'update' : 'install', tool: 'codex', requestId: REQ });
+  // the busy answer comes after their state was read: 4, and nothing shown
+  const busy = overtaken(update);
+  const refused = caught(runEnvInstall('codex', update, busy.io(true), busy.daemon, busy.deps));
+  await vi.waitFor(() => { expect(busy.reads()).toBeGreaterThanOrEqual(3); });
+  busy.reply()?.settle(BUSY);
+  expect(await refused).toEqual(failure('refused', BUSY.message, { reason: 'busy' }));
+  expect(sentOf(busy, 'cancelInstall')).toEqual([]);
+  expect(busy.out()).toBe('');
+});
+
+// 审查 202: what is this command's is proven by the request id it sent, in the progress and in the Ctrl-C before it
+it.each([false, true])('env install/update (update: %s): its own install, by the request id, is shown and cancelled by its own id', async update => {
+  const polled = installer([running(OP2, { update, requestId: THEIRS }), mine(OP1, { update })], {}, { onRead: index => { if (index === 2) setTimeout(() => polled.interrupt(), 0); } });
+  expect(await caught(runEnvInstall('codex', update, polled.io(true), polled.daemon, polled.deps))).toEqual(failure('interrupted', `已取消${update ? '更新' : '安装'}。`));
+  expect(polled.lines()).toEqual([{ event: 'progress', state: 'running', operationId: OP1 }]);
+  expect(sentOf(polled, 'cancelInstall')).toEqual([{ type: 'cancelInstall', operationId: OP1 }]);
+  // Ctrl-C before a read showed it: the read for the cancel finds it by the same rule
+  const early = installer([null, mine(OP1, { update })], {}, { onRead: index => { if (index === 0) setTimeout(() => early.interrupt(), 0); } });
+  expect(await caught(runEnvInstall('codex', update, early.io(true), early.daemon, early.deps))).toEqual(failure('interrupted', `已取消${update ? '更新' : '安装'}。`));
+  expect(sentOf(early, 'cancelInstall')).toEqual([{ type: 'cancelInstall', operationId: OP1 }]);
+  expect(early.out()).toBe('');
+});
+
+// 审查 202: a daemon without the request id has nothing to prove an install this command's; the CLI does not guess
+it('env install on a daemon without request ids: no progress, its answer still ends it, Ctrl-C cancels nothing', async () => {
+  const done = { kind: 'succeeded', id: OP1, message: 'codex 0.129.0 已安装。' };
+  // from before the id: the field is refused as invalid, and the install asked again without it
+  const strict = installer([null, running(OP1), done], { kind: 'applied', message: done.message }, { strict: true });
+  await runEnvInstall('codex', false, strict.io(true), strict.daemon, strict.deps);
+  expect(sentOf(strict, 'install')).toEqual([{ type: 'install', tool: 'codex', requestId: REQ }, { type: 'install', tool: 'codex' }]);
+  expect(strict.lines()).toEqual([{ ok: true, event: 'result', tool: 'codex', version: '0.129.0', message: done.message }]);
+  // takes the field, does not echo it: the same; Ctrl-C exits 130, says the install may run on, and sends no cancel
+  for (const o of [{ strict: true }, {}]) {
+    const cut: Harness = installer([null, running(OP1)], {}, { ...o, onRead: index => { if (index === 2) setTimeout(() => cut.interrupt(), 0); } });
+    expect(await caught(runEnvInstall('codex', false, cut.io(true), cut.daemon, cut.deps))).toEqual(failure('interrupted', expect.stringContaining('如果已经开始，它会继续进行')));
+    expect(sentOf(cut, 'cancelInstall')).toEqual([]);
+    expect(cut.out()).toBe('');
+  }
+});
+
+// 审查 202 P3 b: its own install had started, and a refusal outside INSTALL_ENDED (environment-closed) was 4
+it('env install: once its own install was seen running, any refusal is how it ended (1); before that, one it can be refused with stays 4', async () => {
+  const closing = { kind: 'refused', code: 'environment-closed', message: '本机环境正在退出。' };
+  const started = installer([null, mine(OP1), { kind: 'failed', id: OP1, message: closing.message, requestId: REQ }], closing);
+  expect(await caught(runEnvInstall('codex', false, started.io(true), started.daemon, started.deps))).toEqual(failure('failed', closing.message, { reason: 'install_failed' }));
+  const before = installer([null], closing, { now: true });
+  expect(await caught(runEnvInstall('codex', false, before.io(true), before.daemon, before.deps))).toEqual(failure('refused', closing.message, { reason: 'environment-closed' }));
+});
+
+// 审查 202 P3 a: after the 5 s cap the close handshake was still waited for, up to another second
+it('a cancel never answered, then a close never finished: 130 shortly after the 5 s', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    const job = JOBS[0]!;
+    const h = racing(job, { wait: ms => new Promise(done => { setTimeout(done, ms); }), client: { close: () => new Promise(() => undefined) } });
+    let ended = false;
+    const result = caught(job.run(h)).finally(() => { ended = true; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.out()).toContain('"progress"');
+    h.interrupt();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(ended).toBe(false);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(ended).toBe(true);
+    expect(await result).toEqual(failure('interrupted', '已取消安装。'));
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+const backendState = (operationId: string, extra: object = {}) => ({ kind: 'backendInstallStatus', operation: { operationId, id: 'cbridge', update: false, state: 'running', replay: [], omittedBytes: 0, ...extra } });
+// 审查 202: an install this request attached to, or one found before the reply by "same update", was cancelled
+it('env backend install: Ctrl-C leaves an install it attached to, or one another request started, running', async () => {
+  const attached = envHarness(request => {
+    if (request.type === 'backendInstall') return { kind: 'backendInstall', operationId: OP2, id: 'cbridge', update: false, attached: true, replay: [{ type: 'log', chunk: 'theirs\n' }] };
+    throw new Error(`unexpected ${request.type}`);
+  });
+  const followed = caught(runEnvBackendInstall('cbridge', false, attached.io(true), attached.daemon, attached.deps));
+  await vi.waitFor(() => { expect(attached.out()).toContain('theirs'); });
+  attached.interrupt();
+  expect(await followed).toEqual(failure('interrupted', expect.stringContaining('没有取消')));
+  expect(attached.sent()).toEqual([{ type: 'backendInstall', id: 'cbridge', update: false, requestId: REQ }]);
+  // Ctrl-C before the reply: the running install carries another request's id, or none (a daemon from before it)
+  for (const extra of [{ requestId: THEIRS }, {}]) {
+    let reply: Later | undefined;
+    const early = envHarness(request => {
+      if (request.type === 'backendInstall') { reply = early.later<unknown>(); return reply.promise; }
+      if (request.type === 'backendInstallStatus') return backendState(OP2, extra);
+      throw new Error(`unexpected ${request.type}`);
+    });
+    const pending = caught(runEnvBackendInstall('cbridge', false, early.io(true), early.daemon, early.deps));
+    await vi.waitFor(() => { expect(reply).toBeDefined(); });
+    early.interrupt();
+    expect(await pending).toEqual(failure('interrupted', expect.stringContaining('没有取消')));
+    expect(early.sent().map(request => request.type)).toEqual(['backendInstall', 'backendInstallStatus']);
+  }
+});
+
+// 审查 202: a daemon from before request ids refuses the field; the reply alone still names the install this one started
+it('env backend install on a daemon from before request ids asks again without one, and cancels the install its reply names', async () => {
+  const h = envHarness(request => {
+    if (request.type === 'backendInstall' && 'requestId' in request) throw new RpcError('invalid_request', '请求参数无效。');
+    if (request.type === 'backendInstall') return { kind: 'backendInstall', operationId: OP1, id: 'cbridge', update: false, attached: false, replay: [] };
+    if (request.type === 'cancelBackendInstall') return { kind: 'applied', message: '已请求取消安装。' };
+    throw new Error(`unexpected ${request.type}`);
+  });
+  const result = caught(runEnvBackendInstall('cbridge', false, h.io(true), h.daemon, h.deps));
+  await started(h);
+  h.interrupt();
+  expect(await result).toEqual(failure('interrupted', '已取消组件安装。'));
+  expect(h.sent()).toEqual([
+    { type: 'backendInstall', id: 'cbridge', update: false, requestId: REQ }, { type: 'backendInstall', id: 'cbridge', update: false },
+    { type: 'cancelBackendInstall', operationId: OP1 },
+  ]);
 });
 
 // main 必败: there was no provider models

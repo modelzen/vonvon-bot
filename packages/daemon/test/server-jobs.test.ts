@@ -104,6 +104,31 @@ describe('backend admission commit boundary', () => {
     expect(installs).toBe(1);
   });
 
+  // cli-7-environment 审查 202: the starting request's id is the install's, shown in its state; attaching does not change it
+  it('keeps the starting request id on a component install, through an attach and over the socket', async () => {
+    const complete = deferred<Awaited<ReturnType<AdminService['installBackend']>>>();
+    const jobs = manager(fakeService({ installBackend: () => complete.promise }));
+    const mine = '33333333-3333-4333-8333-333333333333';
+    try {
+      const first = jobs.selectBackend('claude-agent', false, mine);
+      const second = jobs.selectBackend('claude-agent', false, '44444444-4444-4444-8444-444444444444');
+      expect(second).toMatchObject({ attached: true, operation: { operationId: first.operation.operationId } });
+      expect(jobs.backendInstallStatus('claude-agent')).toMatchObject({ operationId: first.operation.operationId, requestId: mine, state: 'running' });
+      jobs.selectBackend('codex-appserver', false);
+      expect(jobs.backendInstallStatus('codex-appserver')).not.toHaveProperty('requestId');
+    } finally { complete.resolve({ ok: true, code: 0, aborted: false, tail: '' }); }
+    const gate = deferred<Awaited<ReturnType<AdminService['installBackend']>>>();
+    const fixture = await startFixture(fakeService({ installBackend: () => gate.promise }));
+    try {
+      const client = await socketClient(fixture.api.port, fixture.credential);
+      await client.ready();
+      await client.call({ type: 'request', id: 'install', method: 'environment', payload: { type: 'backendInstall', id: 'claude-agent', update: false, requestId: mine } });
+      expect(await client.call({ type: 'request', id: 'status', method: 'environment', payload: { type: 'backendInstallStatus', id: 'claude-agent' } }))
+        .toMatchObject({ type: 'response', payload: { kind: 'backendInstallStatus', operation: { requestId: mine, state: 'running' } } });
+      await client.close();
+    } finally { gate.resolve({ ok: true, code: 0, aborted: false, tail: '' }); await fixture.close(); }
+  });
+
   it('does not attach a peer that disconnects during the rebuild await', async () => {
     const complete = deferred<Awaited<ReturnType<AdminService['installBackend']>>>();
     const jobs = manager(fakeService({ installBackend: () => complete.promise }));
