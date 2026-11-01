@@ -1,15 +1,16 @@
 import { badArgs, CommandError } from '../command-error';
 import { settingsGet, settingsSet, settingsAccess } from '../../admin/structured-commands';
 import {
-  agentSectionSchemas, isKnownJudgeSelection, projectEditableSchemas, sessionSectionSchemas, sessionThreadIdSchema,
-  type Agent, type AgentSettingsView, type DecisionModelsView, type JudgeSelectionView, type Membership, type ProjectSettingsView, type SessionSettingsView,
-  type SettingsScope, type SettingsView, type SmartPromptView,
+  agentSectionSchemas, decisionApiProviderLabel, hostSectionSchemas, isKnownJudgeSelection, openIdSchema, projectEditableSchemas, sessionSectionSchemas, sessionThreadIdSchema,
+  type Agent, type AgentSettingsView, type DecisionModelsView, type HostSettingsView, type JudgeSelectionView, type Membership, type ProjectSettingsView, type SessionSettingsView,
+  type SettingsAction, type SettingsReply, type SettingsScope, type SettingsView, type SmartPromptView,
 } from '@vonvon/protocol';
 import {
   conversationLabel, localTime, pickBot, pickGroup, print, toolLabel, want, withDaemon, type Call, type Daemon, type Io,
 } from '../daemon-client';
 import { TIER_NAMES } from '../../agent/permission';
 import { keyMissingText } from '../../judge/decision';
+import { readStdin } from '../../core/stdin';
 
 // Structural views of the protocol's zod objects: the daemon's own zod is v4, protocol's is v3 (see daemon-client).
 type Issue = {
@@ -19,10 +20,11 @@ type Issue = {
 type Check = { safeParse(value: unknown): { success: true } | { success: false; error: { issues: readonly Issue[] } } };
 type SectionSchema = { shape: Record<string, unknown>; partial(): { strict(): Check } };
 type SectionView = { stored: unknown; effective: unknown; revision: string; access: { kind: 'writable' } | { kind: 'readonly'; message: string } };
-export type Kind = 'agent' | 'project' | 'session';
-export type Target = { bot?: string; group?: string; session?: string; revision?: string; reason?: string };
+export type Kind = 'agent' | 'project' | 'session' | 'host';
+/** `host`: the machine's own settings (the web page's 本机), which need no bot (cli-6-settings 4.2). */
+export type Target = { bot?: string; group?: string; session?: string; host?: boolean; revision?: string; reason?: string };
 
-const TABLES: Record<Kind, Record<string, SectionSchema>> = { agent: agentSectionSchemas, project: projectEditableSchemas, session: sessionSectionSchemas };
+const TABLES: Record<Kind, Record<string, SectionSchema>> = { agent: agentSectionSchemas, project: projectEditableSchemas, session: sessionSectionSchemas, host: hostSectionSchemas };
 const sectionNames = (kind: Kind): string[] => Object.keys(TABLES[kind]);
 const FORMAT = '写成 节.项=值，例如 permission.mode=full';
 // A top-level text field already takes 2024 or true as typed (parseAssignments), so only text inside JSON lands here.
@@ -31,6 +33,11 @@ const show = (value: unknown): string => typeof value === 'string' ? value : Str
 
 /** Checked before connecting: the protocol would refuse a blank --session, and that refusal is not the daemon's fault. */
 function scopeKind(target: Target): Kind {
+  if (target.host) {
+    const others = (['bot', 'group', 'session'] as const).filter(key => target[key] !== undefined).map(key => `--${key}`);
+    if (others.length) throw badArgs(`--host 是这台电脑的设置，不和 ${others.join('、')} 一起用。`);
+    return 'host';
+  }
   if (target.group !== undefined && target.session !== undefined) throw badArgs('--group 和 --session 只能选一个。');
   if (target.session !== undefined && !sessionThreadIdSchema.safeParse(target.session).success) {
     throw badArgs('--session 要填会话的话题 id（1 到 1000 个字）。用 vonvon settings get --group <群> 看群里的会话。');
@@ -127,6 +134,8 @@ async function resolveScope(call: Call, target: Target): Promise<{ agent: Agent;
 
 const readView = async (call: Call, scope: SettingsScope): Promise<SettingsView> =>
   (await settingsGet({ read: async scope => want('读取设置', await call('读取设置', c => c.settings({ type: 'read', scope })), 'view').view }, scope)).view;
+/** The machine's settings need no bot, so no snapshot either: they work before the first bot (cli-6-settings 4.2). */
+const scopeOf = async (call: Call, target: Target): Promise<SettingsScope> => target.host ? { kind: 'host' } : (await resolveScope(call, target)).scope;
 
 function header(view: SettingsView, agent: Agent, membership?: Membership): string {
   if (membership) return `群 ${membership.name}（${membership.groupId}）· ${toolLabel(membership.backend)} · ${conversationLabel(membership.conversation)} · ${membership.directory}`;
@@ -189,10 +198,100 @@ function unknownJudge(selection: JudgeSelectionView | undefined): string[] {
   return selection && !isKnownJudgeSelection(selection) ? [`  这个版本的命令行不认识 ${selection.kind} 这一类判断模型，上面是原样`] : [];
 }
 
+/** A judge service by name: Codex and Claude are backends, the rest decision APIs. */
+const providerName = (id: string): string => id === 'codex-appserver' || id === 'claude-agent' ? toolLabel(id) : decisionApiProviderLabel(id);
+const readonlyNote = (value: SectionView): string => value.access.kind === 'readonly' ? `（只读：${value.access.message}）` : '';
+
+/** `settings get --host`: what the web page's 本机 shows (cli-6-settings 4.2); `runtime` is what the daemon runs with, read only. */
+function hostLines(view: HostSettingsView, section: string | undefined): string[] {
+  const human = ['本机设置'];
+  const sections = view.sections as Record<string, SectionView | undefined>;
+  for (const name of sectionNames('host').filter(name => section === undefined || name === section)) {
+    const value = Object.hasOwn(sections, name) ? sections[name] : undefined;
+    if (!value) {
+      if (section !== undefined) human.push(`daemon 没有 ${name} 这一节。daemon 可能比命令行旧。`);
+      continue;
+    }
+    human.push(`[${name}]${readonlyNote(value)}`);
+    if (name === 'execution') {
+      const { codexBin } = value.stored as { codexBin: string | null };
+      human.push(`  codexBin = ${codexBin ?? 'null（没设，自动找）'}`);
+      continue;
+    }
+    type Judge = NonNullable<HostSettingsView['sections']['judge']>['stored'];
+    const stored = value.stored as Judge;
+    const effective = value.effective as Judge;
+    const chosen = effective.defaultProvider ?? stored.defaultProvider;
+    human.push(`  defaultProvider = ${chosen ? `${chosen}（${providerName(chosen)}）` : '没设'}${stored.defaultProvider ? '' : '，用默认'}`);
+    for (const [id, model] of Object.entries(effective.byProvider ?? stored.byProvider)) {
+      human.push(`  ${providerName(id)}（${id}）：${model.model}${model.effort ? `，推理强度 ${model.effort}` : ''}${model.endpoint ? `，接口 ${model.endpoint}` : ''}${Object.hasOwn(stored.byProvider, id) ? '' : '（默认）'}`);
+    }
+  }
+  if (section === undefined) {
+    const { runtime } = view;
+    human.push('[runtime]（只读）', `  实际用的 Codex：${runtime.codexBin ?? '自动找'}`, `  找不到文件夹时的默认目录：${runtime.fallbackCwd}`, `  平台：${runtime.platform}`);
+  }
+  return human;
+}
+
+/** Each administrator once, with where its access comes from; only 本机加的 can be removed here (the daemon refuses the rest). */
+function adminList(view: AgentSettingsView): string {
+  const { administrators: admins, ownerOpenId } = view;
+  const feishu = admins.feishu?.adminOpenIds ?? [];
+  const ids = [...new Set([ownerOpenId, admins.feishu?.ownerOpenId, ...feishu, admins.scannerOpenId, ...admins.openIds].filter((id): id is string => Boolean(id)))];
+  if (!ids.length) return '还没有';
+  return ids.map(id => {
+    const roles = [
+      (id === ownerOpenId || id === admins.feishu?.ownerOpenId) && '主人', feishu.includes(id) && '飞书管理员', id === admins.scannerOpenId && '扫码的人',
+    ].filter(Boolean);
+    return `${id}（${roles.length ? roles.join('、') : '本机加的'}）`;
+  }).join('、');
+}
+
+/** An empty list lets every member in (the web page's 允许所有成员); a name comes from the group's roster when it has one. */
+function memberList(members: ProjectSettingsView['members']): string {
+  if (!members.openIds.length) return '所有成员';
+  return members.openIds.map(id => {
+    const name = members.roster?.entries.find(entry => entry.openId === id)?.name;
+    return name ? `${id}（${name}）` : id;
+  }).join('、');
+}
+
+const commentLine = (instructions: AgentSettingsView['commentInstructions']): string =>
+  `评论指令：${instructions.content.kind === 'default' ? '默认' : `自定义「${cut(instructions.content.text)}」`}`;
+
+/** cli-6-settings 4.4: what the web page's buttons change. A daemon from before has none of it, so each part is optional. */
+function agentExtras(view: AgentSettingsView, target: Target): string[] {
+  const bot = target.bot !== undefined ? ` --bot ${target.bot}` : '';
+  return [
+    ...(view.voice ? [`语音转文字：${view.voice.enabled ? '开' : '关'}（飞书语音权限：${view.voice.feishu.message}）`] : []),
+    ...(view.administrators ? [`管理员：${adminList(view)}`, `管理员改动：vonvon settings act admin add|remove <openId>${bot}`] : []),
+    ...(view.commentInstructions ? [commentLine(view.commentInstructions)] : []),
+  ];
+}
+
+const SKILL_SOURCES = { workspace: '本群工作区', user: '用户目录', provider: 'Provider' } as const;
+/** The group's skills sit in the group's view: they come from its folders and its backend. */
+function projectExtras(view: ProjectSettingsView): string[] {
+  const human = view.members ? [`响应成员：${memberList(view.members)}`] : [];
+  const disabled = new Set(view.sections.skills?.stored.disabledPaths ?? []);
+  const off = (skill: NonNullable<ProjectSettingsView['skills']>[number]) => !skill.enabled || disabled.has(skill.path);
+  if (view.skills) {
+    human.push(`Skill：${view.skills.length} 个（停用 ${view.skills.filter(off).length} 个）`);
+    for (const skill of view.skills) human.push(`  ${skill.name}  ${SKILL_SOURCES[skill.source] ?? skill.source}${off(skill) ? '  已停用' : ''}`);
+  }
+  if (view.skillsError) human.push(`${view.skills ? '  ' : 'Skill：'}${view.skillsError}`);
+  return human;
+}
+
 export async function runSettingsGet(section: string | undefined, target: Target, io: Io, daemon: Daemon = withDaemon): Promise<void> {
   const kind = scopeKind(target);
   const names = sectionNames(kind);
   if (section !== undefined && !names.includes(section)) throw badArgs(`没有 ${section} 这一节。可以看的有：${names.join('、')}`);
+  if (kind === 'host') {
+    const view = await daemon(call => readView(call, { kind: 'host' })) as HostSettingsView;
+    return print(io, hostLines(view, section), { view });
+  }
   const { agent, membership, view, sessions } = await daemon(async call => {
     const { agent, membership, scope } = await resolveScope(call, target);
     const view = await readView(call, scope);
@@ -262,6 +361,9 @@ export async function runSettingsGet(section: string | undefined, target: Target
     human.push(sessions.length ? `会话（最近 ${recent.length} 个，共 ${sessions.length} 个；看单个会话：vonvon settings get --session <id>）` : '还没有会话。');
     for (const item of recent) human.push(`  ${item.threadId}  ${localTime(item.updatedAt)}  ${item.model ?? '默认模型'}  ${cut(item.summary)}`);
   }
+  // last, so the lines above keep their places; --json has all of it in the view already
+  if (section === undefined && view.scope.kind === 'agent') human.push(...agentExtras(view as AgentSettingsView, target));
+  if (section === undefined && view.scope.kind === 'project') human.push(...projectExtras(view as ProjectSettingsView));
   print(io, human, { view, ...(sessions ? { sessions } : {}) });
 }
 
@@ -269,7 +371,7 @@ export async function runSettingsSet(assignments: readonly string[], target: Tar
   const { section, patch } = parseAssignments(scopeKind(target), assignments);
   const unknown = '可能已经保存，运行 vonvon settings get 查看。';
   const result = await daemon(async call => {
-    const { scope } = await resolveScope(call, target);
+    const scope = await scopeOf(call, target);
     // Each section carries its own revision; there is no view-level one.
     const sections = (await readView(call, scope)).sections as Record<string, SectionView>;
     const revision = target.revision ?? (Object.hasOwn(sections, section) ? sections[section]?.revision : undefined);
@@ -277,9 +379,8 @@ export async function runSettingsSet(assignments: readonly string[], target: Tar
     return settingsSet({ save: async edit => want('保存设置', await call('保存设置', c => c.settings({ type: 'save', edit }), { unknown }), 'saved', unknown).result }, { scope, section, revision, patch });
   });
   // Same wording as the web page's errorText; a conflict is not retried, the user reruns with fresh eyes.
-  if (result.kind === 'conflict') throw new CommandError('conflict', '这项设置刚在别处改过，没有保存。先读取当前版本再修改。', { reason: 'conflict', current: result.current });
-  if (result.kind === 'rejected') throw new CommandError('bad-args', `没有保存：${result.fields.map(field => `${field.field}：${field.message}`).join('；')}`);
-  if (result.kind === 'unavailable') throw new CommandError('refused', result.reason.kind === 'readonly' ? result.reason.message : '当前不可编辑。');
+  if (result.kind === 'conflict') throw new CommandError('conflict', CONFLICT, { reason: 'conflict', current: result.current });
+  if (result.kind !== 'saved') throw notSaved(result);
   // The daemon fills in a language model's backend: show what was stored, and for which groups.
   const stored = section === 'judge' ? (result.section.value.stored as { selection?: JudgeSelectionView }).selection : undefined;
   const known = stored && isKnownJudgeSelection(stored) ? stored : undefined;
@@ -293,7 +394,7 @@ export async function runSettingsSet(assignments: readonly string[], target: Tar
 export async function runSettingsAccess(target: Target, io: Io, daemon: Daemon = withDaemon): Promise<void> {
   scopeKind(target);
   const result = await daemon(async call => {
-    const { scope } = await resolveScope(call, target);
+    const scope = await scopeOf(call, target);
     return settingsAccess({ read: async scope => readView(call, scope) }, scope);
   });
   const human = Object.entries(result.access).map(([name, access]) => {
@@ -301,4 +402,153 @@ export async function runSettingsAccess(target: Target, io: Io, daemon: Daemon =
     return `${name}：${each.kind === 'writable' ? '可以改' : `只读，${each.message}`}`;
   });
   print(io, human, result);
+}
+
+// ---- settings act and settings models: the settings page's buttons and model lists (cli-6-settings) ----
+
+const CONFLICT = '这项设置刚在别处改过，没有保存。先读取当前版本再修改。';
+/** A save or an action the daemon did not make, as the exit code of its kind (cli-6-settings 4.1). */
+function notSaved(result: { kind: 'rejected'; fields: { field: string; message: string }[] } | { kind: 'unavailable'; reason: SectionView['access'] & { reason?: string } }): CommandError {
+  if (result.kind === 'rejected') {
+    return new CommandError('bad-args', `没有保存：${result.fields.map(field => `${field.field}：${field.message}`).join('；')}`, { reason: 'rejected', partial: { fields: result.fields } });
+  }
+  const { reason } = result;
+  return new CommandError('refused', reason.kind === 'readonly' ? reason.message : '当前不可编辑。', { reason: reason.kind === 'readonly' && reason.reason ? reason.reason : 'unavailable' });
+}
+
+type Acted = Extract<SettingsReply, { kind: 'acted' }>['result'];
+type ActedView = AgentSettingsView | ProjectSettingsView;
+const ACT_UNKNOWN = '可能已经改了，运行 vonvon settings get 查看。';
+/** `feishu`: voice checks reach Feishu through the bot process, so they get the longer wait (daemon-client TIMEOUTS). */
+async function act(call: Call, action: SettingsAction, feishu = false): Promise<Acted> {
+  return want('修改设置', await call('修改设置', c => c.settings({ type: 'act', action }), { unknown: ACT_UNKNOWN, feishu }), 'acted', ACT_UNKNOWN).result;
+}
+/** The view after a saved action; a conflict carries the part the action changes, as it is now. */
+function saved<V extends ActedView>(result: Acted, part: (view: V) => unknown): { view: V; warnings: string[] } {
+  if (result.kind === 'saved') return { view: result.view as V, warnings: result.warnings };
+  if (result.kind === 'conflict') throw new CommandError('conflict', CONFLICT, { reason: 'conflict', current: part(result.view as V) });
+  throw notSaved(result);
+}
+const botOf = async (call: Call, wanted?: string): Promise<Agent> => pickBot((await call('读取快照', c => c.snapshot())).agents, wanted);
+const readAgent = async (call: Call, botId: Agent['id']): Promise<AgentSettingsView> => await readView(call, { kind: 'agent', botId }) as AgentSettingsView;
+const OPEN_ID = 'Open ID 要以 ou_ 开头。群成员的 Open ID 用 vonvon feishu members <群 id> 查。';
+
+export type ActTarget = { bot?: string; group?: string; revision?: string };
+const VOICE = { test: 'test', refresh: 'refreshPermission' } as const;
+
+/** `settings act voice test|refresh`: the web page's 测试 and 重新检测. Turning voice on or off is `presentation.voiceEnabled` (4.6). */
+export async function runSettingsVoice(what: string, target: ActTarget, io: Io, daemon: Daemon = withDaemon): Promise<void> {
+  if (!Object.hasOwn(VOICE, what)) throw badArgs('写成 voice test（测一次识别）或 voice refresh（重新检测飞书语音权限）。');
+  const result = await daemon(async call => {
+    const agent = await botOf(call, target.bot);
+    return act(call, { kind: 'voice', botId: agent.id, action: { action: VOICE[what as keyof typeof VOICE] } }, true);
+  });
+  const { view, warnings } = saved<AgentSettingsView>(result, view => view.voice);
+  const { voice } = view;
+  print(io, [
+    `语音转文字：${voice.enabled ? '开' : '关'}`, `飞书语音权限：${voice.feishu.message}`,
+    ...(voice.result ? [voice.result] : []), ...(voice.grantUrl ? [`开权限：${voice.grantUrl}`] : []), ...warnings,
+  ], { result: 'saved', warnings, voice });
+}
+
+/** `settings act admin add|remove <openId>`: this machine's administrators of a bot. Sent as asked: the daemon is idempotent. */
+export async function runSettingsAdmin(op: string, openId: string, target: ActTarget, io: Io, daemon: Daemon = withDaemon): Promise<void> {
+  const membership = op === 'add' ? 'present' : op === 'remove' ? 'absent' : undefined;
+  if (!membership) throw badArgs('写成 admin add <openId> 或 admin remove <openId>。');
+  if (!openIdSchema.safeParse(openId).success) throw badArgs(OPEN_ID);
+  const result = await daemon(async call => {
+    const agent = await botOf(call, target.bot);
+    const revision = target.revision ?? (await readAgent(call, agent.id)).administrators.revision;
+    return act(call, { kind: 'adminMember', botId: agent.id, openId, membership, revision });
+  });
+  const { view, warnings } = saved<AgentSettingsView>(result, view => view.administrators);
+  print(io, [`${membership === 'present' ? '已加上' : '已去掉'}管理员 ${openId}。`, `管理员：${adminList(view)}`, ...warnings],
+    { result: 'saved', warnings, administrators: view.administrators });
+}
+
+/** `settings act member add|remove <openId>` and `member all`: who a group responds to; an empty list is everyone. */
+export async function runSettingsMember(op: string, openId: string | undefined, target: ActTarget, io: Io, daemon: Daemon = withDaemon): Promise<void> {
+  if (op !== 'add' && op !== 'remove' && op !== 'all') throw badArgs('写成 member add <openId>、member remove <openId> 或 member all。');
+  if (op === 'all' && openId !== undefined) throw badArgs('member all 不带 Open ID：它清空名单，让所有成员都能用。');
+  if (op !== 'all' && (openId === undefined || !openIdSchema.safeParse(openId).success)) throw badArgs(OPEN_ID);
+  if (target.group === undefined) throw badArgs('要给 --group <群>（群 id oc_… 或项目名）。');
+  const outcome = await daemon(async (call): Promise<{ result: Acted } | { unchanged: ProjectSettingsView['members'] }> => {
+    const snapshot = await call('读取快照', c => c.snapshot());
+    const agent = pickBot(snapshot.agents, target.bot);
+    const projectName = pickGroup(snapshot.memberships, agent, target.group!).name;
+    let revision = target.revision;
+    if (revision === undefined) {
+      const { members } = await readView(call, { kind: 'project', botId: agent.id, projectName }) as ProjectSettingsView;
+      // as the web page, which shows 允许所有成员 only over a list (4.6)
+      if (op === 'all' && !members.openIds.length) return { unchanged: members };
+      revision = members.revision;
+    }
+    const action: SettingsAction = op === 'all'
+      ? { kind: 'projectAudience', botId: agent.id, projectName, audience: 'all', revision }
+      : { kind: 'projectMember', botId: agent.id, projectName, openId: openId!, membership: op === 'add' ? 'present' : 'absent', revision };
+    return { result: await act(call, action) };
+  });
+  if ('unchanged' in outcome) return print(io, ['已经是所有成员都能用，没有改。'], { result: 'unchanged', warnings: [], members: outcome.unchanged });
+  const { view, warnings } = saved<ProjectSettingsView>(outcome.result, view => view.members);
+  const done = op === 'all' ? '已改成所有成员都能用。' : `${op === 'add' ? '已加上' : '已去掉'}响应成员 ${openId}。`;
+  print(io, [done, `响应成员：${memberList(view.members)}`, ...warnings], { result: 'saved', warnings, members: view.members });
+}
+
+export type InstructionSource = { default?: boolean; text?: string; stdin?: boolean };
+/** Where `--stdin` reads; a terminal is refused, so the command never waits on a person. */
+export type Stdin = { isTTY: boolean; read(): Promise<string> };
+const processStdin = (): Stdin => ({ isTTY: Boolean(process.stdin.isTTY), read: readStdin });
+/** The protocol's bound, checked before connecting; the view's `maxEditLength` once read. */
+const MAX_INSTRUCTIONS = 30000;
+const tooLong = (max: number): CommandError => badArgs(`评论指令最多 ${max} 个字，这次没有发出。`);
+
+/** `settings act comment-instructions --default | --text <t> | --stdin`: the web page's 恢复默认 and 自定义. */
+export async function runSettingsCommentInstructions(source: InstructionSource, target: ActTarget, io: Io, daemon: Daemon = withDaemon, stdin: Stdin = processStdin()): Promise<void> {
+  const given = [source.default && '--default', source.text !== undefined && '--text', source.stdin && '--stdin'].filter(Boolean);
+  if (given.length !== 1) throw badArgs(`--default、--text <文字>、--stdin 正好给一个${given.length ? `，这次给了 ${given.join('、')}` : ''}。`);
+  let text = source.text;
+  if (source.stdin) {
+    if (stdin.isTTY) throw badArgs('--stdin 要从管道读，例如 cat 说明.md | vonvon settings act comment-instructions --stdin');
+    text = (await stdin.read()).replace(/\r?\n$/, '');
+  }
+  if (text !== undefined && !text.trim()) throw badArgs(source.stdin ? '--stdin 没读到内容。' : '--text 不能为空；要恢复默认用 --default。');
+  if (text !== undefined && text.length > MAX_INSTRUCTIONS) throw tooLong(MAX_INSTRUCTIONS);
+  const result = await daemon(async call => {
+    const agent = await botOf(call, target.bot);
+    let revision = target.revision;
+    if (revision === undefined) {
+      const { commentInstructions } = await readAgent(call, agent.id);
+      if (text !== undefined && text.length > commentInstructions.maxEditLength) throw tooLong(commentInstructions.maxEditLength);
+      revision = commentInstructions.revision;
+    }
+    return act(call, { kind: 'commentInstructions', botId: agent.id, revision, content: text === undefined ? { kind: 'default' } : { kind: 'custom', text } });
+  });
+  const { view, warnings } = saved<AgentSettingsView>(result, view => view.commentInstructions);
+  print(io, [`已保存。${commentLine(view.commentInstructions)}`, ...warnings], { result: 'saved', warnings, commentInstructions: view.commentInstructions });
+}
+
+const BACKEND_ALIASES: Record<string, string> = { codex: 'codex-appserver', claude: 'claude-agent' };
+const PURPOSES = ['project', 'session', 'comments', 'titles', 'judge'] as const;
+export type ModelsTarget = { bot?: string; backend?: string; purpose?: string; session?: string };
+
+/** `settings models`: what a model picker on the settings page lists; hidden models only in --json. */
+export async function runSettingsModels(target: ModelsTarget, io: Io, daemon: Daemon = withDaemon): Promise<void> {
+  if (!target.backend?.trim()) throw badArgs('要给 --backend：codex、claude，或者 codex-appserver 这样的 id。');
+  const purpose = PURPOSES.find(purpose => purpose === target.purpose);
+  if (!purpose) throw badArgs(`要给 --purpose：${PURPOSES.join('、')} 选一个。`);
+  if (purpose === 'session' && target.session === undefined) throw badArgs('--purpose session 要给 --session <会话的话题 id>。');
+  if (target.session !== undefined && !sessionThreadIdSchema.safeParse(target.session).success) throw badArgs('--session 要填会话的话题 id（1 到 1000 个字）。');
+  const backend = Object.hasOwn(BACKEND_ALIASES, target.backend) ? BACKEND_ALIASES[target.backend]! : target.backend.trim();
+  const catalog = await daemon(async call => {
+    const agent = await botOf(call, target.bot);
+    const query = { botId: agent.id, backend, purpose, ...(target.session !== undefined ? { threadId: target.session } : {}) };
+    // the bot process asks the backend for its list, which can outlast the local wait
+    return want('读取模型目录', await call('读取模型目录', c => c.settings({ type: 'models', query }), { feishu: true }), 'models').catalog;
+  });
+  if (catalog.state === 'unavailable') throw new CommandError('refused', `读不到 ${toolLabel(backend)} 的模型目录${catalog.error ? `：${catalog.error}` : '。'}`, { reason: 'models_unavailable' });
+  const visible = catalog.models.filter(model => !model.hidden);
+  print(io, [
+    ...(catalog.state === 'fallback' ? ['daemon 没拿到最新目录，这是内置的'] : []),
+    ...(visible.length ? visible.map(model => `${model.id}  ${model.displayName}${model.isDefault ? '（默认）' : ''}`) : ['没有可选的模型。']),
+  ], { catalog });
 }

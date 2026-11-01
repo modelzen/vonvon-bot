@@ -149,3 +149,14 @@ Bot 范围（`agent` 视图）在现有各段后面加：
 约 1,000 行：`settings.ts` +330（`--host`、`act`、`models`、人类输出），`index.ts` +80，`schedule.ts` +15，白名单 −8，测试约 560。
 - 管理员和响应成员是真权限：验收只动测试账号，做完还原。
 - 人类输出加长：`settings get` 已经很长，新段落放最后，不打乱现有顺序（已有测试按行断言的不受影响）。
+
+## 和计划不一样的地方
+
+- **`Skill` 那段放在群范围**：`skills`、`skillsError` 只在群视图里（`projectViewSchema`，技能按群的目录和后端找），Bot 视图没有。所以 Bot 范围加语音、管理员、评论指令三段，群范围加响应成员和 Skill 两段。
+- **`settings act` 的子命令是三层**：`voice <test|refresh>`、`admin <add|remove> <openId>`、`member <add|remove|all> [openId]`、`comment-instructions`，`add`、`test` 这些是参数，不是第四层命令；`member` 一条命令同时 `covers` `projectMember` 和 `projectAudience`。`voice` 没有 revision，不接 `--revision`。
+- **`act` 的 `--json` 都带 `warnings`**：计划只给 `voice` 写了；评论指令同步失败的提示就在 `warnings` 里，其余几个也带上，形状一样。
+- **`member all` 名单已空时 `--json` 是 `{ok:true, result:'unchanged', warnings:[], members}`**，和真改了的 `saved` 分开。给了 `--revision` 时照 4.2 不读，直接发。
+- **`settings set` 的失败对所有范围都带 `reason`**：`rejected` 带 `reason:'rejected'` 和 `partial.fields`，`unavailable` 带 `access.reason`（以前只有文字），和 `settings act` 共用一个函数。
+- **`settings access` 也接 `--host`**：`--host` 加在三条命令共用的选项上，`access --host` 列出本机两节能不能改。
+- **共用改动照 `cli-2-bot` 4.6 照抄了两处**：`preAction` 的 `LEASED` 名单（`settings act voice` 的上一级是 `act`，旧写法会让它拿数据租约）和 `T/cli-json.test.ts` 按叶子路径核对样本。4.6 第 3 条（对齐测试的反例）本片用不到，没动。
+- **"8 个 kind 不在白名单"的断言写在 `T/cli-settings-act.test.ts`**，不在 `T/cli-parity.test.ts`，免得和别的片在同一处加用例时冲突；`T/cli-parity.test.ts` 原有的总检查照样管着它们。
