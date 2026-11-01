@@ -44,9 +44,10 @@ function launch(home: string, root: string, args: string[], extraEnv: NodeJS.Pro
   const child = spawn(process.execPath, [...prefix, entry, ...args], { env, stdio: 'pipe' });
   children.push(child);
   let output = '';
-  child.stdout.on('data', data => { output += String(data); }); child.stderr.on('data', data => { output += String(data); });
+  let stdout = '';
+  child.stdout.on('data', data => { output += String(data); stdout += String(data); }); child.stderr.on('data', data => { output += String(data); });
   const exited = new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
-  return { child, exited, output: () => output };
+  return { child, exited, output: () => output, stdout: () => stdout };
 }
 it('exposes daemon lifecycle commands while status and logs leave a missing home untouched', async () => {
   const f = await fixture();
@@ -85,7 +86,8 @@ it('exposes daemon lifecycle commands while status and logs leave a missing home
 it('starts without bots, refuses duplicate ownership and releases PID lease on shutdown', async () => {
   const f = await fixture();
   const p = launch(f.home, f.root, ['daemon', 'run']);
-  await expect.poll(p.output, { timeout: 15_000 }).toContain('vonvon daemon ready');
+  // A loaded Windows ARM64 machine running x64 Node needed more than 15 s (Windows acceptance task 205).
+  await expect.poll(p.output, { timeout: process.platform === 'win32' ? 45_000 : 15_000 }).toContain('vonvon daemon ready');
   const record = z.object({ listen: z.string(), pid: z.number(), startedAt: z.string() }).parse(JSON.parse(await readFile(join(f.root, 'daemon.pid'), 'utf8')));
   expect(record.pid).toBe(p.child.pid); expect(record.listen).toMatch(/^127\.0\.0\.1:\d+$/);
   // The real connectLocal path: both must exit on their own once the socket is closed.
@@ -139,27 +141,33 @@ it('concurrent detached starts return the same ready owner and stop clears its l
 
 it('daemon restart replaces a detached daemon on the same port, and a clean stop leaves no crash record (s17)', async () => {
   const f = await fixture();
-  const start = launch(f.home, f.root, ['daemon', 'start', '--port', '0']);
-  expect(await start.exited, start.output()).toBe(0);
-  const before = z.object({ pid: z.number(), listen: z.string() }).parse(JSON.parse(await readFile(join(f.root, 'daemon.pid'), 'utf8')));
-  expect(await readdir(join(f.root, 'crash'))).toEqual(['run.json']);
-  const restart = launch(f.home, f.root, ['daemon', 'restart']);
-  const log = async () => readFile(join(f.root, 'daemon.log'), 'utf8').catch(() => '(no daemon.log)');
-  expect(await restart.exited, `${restart.output()}\ndaemon.log:\n${await log()}`).toBe(0);
-  const status = launch(f.home, f.root, ['daemon', 'status', '--json']);
-  expect(await status.exited).toBe(0);
-  const after = z.object({ running: z.literal(true), pid: z.number(), listen: z.string(), crashes: z.array(z.unknown()) }).parse(JSON.parse(status.output()));
-  expect(after.pid).not.toBe(before.pid);
-  expect(after.listen).toBe(before.listen);
-  expect(after.crashes).toEqual([]);
-  expect(restart.output()).toBe(`running PID ${after.pid} at ${after.listen}\n`);
-  const stop = launch(f.home, f.root, ['daemon', 'stop']);
-  expect(await stop.exited, stop.output()).toBe(0);
-  expect(await readdir(join(f.root, 'crash'))).toEqual([]);
-  const stopped = launch(f.home, f.root, ['daemon', 'restart']);
-  expect(await stopped.exited, stopped.output()).toBe(0);
-  expect(stopped.output()).toContain('daemon 没在运行，已启动。');
-  expect(await launch(f.home, f.root, ['daemon', 'stop']).exited).toBe(0);
+  try {
+    const start = launch(f.home, f.root, ['daemon', 'start', '--port', '0']);
+    expect(await start.exited, start.output()).toBe(0);
+    const before = z.object({ pid: z.number(), listen: z.string() }).parse(JSON.parse(await readFile(join(f.root, 'daemon.pid'), 'utf8')));
+    expect(await readdir(join(f.root, 'crash'))).toEqual(['run.json']);
+    const restart = launch(f.home, f.root, ['daemon', 'restart']);
+    const log = async () => readFile(join(f.root, 'daemon.log'), 'utf8').catch(() => '(no daemon.log)');
+    expect(await restart.exited, `${restart.output()}\ndaemon.log:\n${await log()}`).toBe(0);
+    const status = launch(f.home, f.root, ['daemon', 'status', '--json']);
+    expect(await status.exited).toBe(0);
+    const after = z.object({ running: z.literal(true), pid: z.number(), listen: z.string(), crashes: z.array(z.unknown()) }).parse(JSON.parse(status.output()));
+    expect(after.pid).not.toBe(before.pid);
+    expect(after.listen).toBe(before.listen);
+    expect(after.crashes).toEqual([]);
+    // Waiting for the old daemon is progress on stderr; stdout has the result alone (Windows acceptance task 205).
+    expect(restart.stdout()).toBe(`running PID ${after.pid} at ${after.listen}\n`);
+    const stop = launch(f.home, f.root, ['daemon', 'stop']);
+    expect(await stop.exited, stop.output()).toBe(0);
+    expect(await readdir(join(f.root, 'crash'))).toEqual([]);
+    const stopped = launch(f.home, f.root, ['daemon', 'restart']);
+    expect(await stopped.exited, stopped.output()).toBe(0);
+    expect(stopped.output()).toContain('daemon 没在运行，已启动。');
+    expect(await launch(f.home, f.root, ['daemon', 'stop']).exited).toBe(0);
+  } finally {
+    // A failed step must not leave the detached daemon running.
+    await launch(f.home, f.root, ['daemon', 'stop']).exited;
+  }
 }, 60_000);
 
 it('open --print on a new host creates the data root, starts the daemon and keeps the credential out of a pipe', async () => {
