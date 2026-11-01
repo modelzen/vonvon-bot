@@ -253,3 +253,27 @@ JP-VPS 上，不碰 `accept-home2`、Bot 6、真 CDN、真 systemd：
 - 自己写的 tar/zip 读取器是安全面：成员类型、路径、大小三道检查都有测试；不接受任何链接类型。
 - `applyCoreUpdate` 从 `shutdown` 改成先回 `done`：客户端今天的代码（UI、`vonvon update` 旧逻辑）期待回复后连接会断；改完连接不断，UI 要改成轮询状态（§4.9 已含）。
 - 行数估计 ~1,450（daemon 代码 ~750：manifest 120、archive 220、standalone-update 220、current-release 80、self-entry 20、watchdog 60、restart 改 60、bootstrap 20、cleanup 50；protocol 30；CLI 150；UI 60；测试 ~450）。超过 1,500 就拆：**I3a** = C1–C8 契约 + manifest + archive + current-release + check + apply + 事件（~900，含测试）；**I3b** = 助手/看门狗/bootstrap 回滚 + self-entry + `vonvon update` + 排空白名单 + UI 门控（~550）。I3a 单独合入时 `applyCoreUpdate` 对 standalone 先回 `unsupported`，不半开。
+
+## 和计划不一样的地方
+
+实现时（2026-11-01）照代码改了这些，理由写在每条后面。
+
+1. **没有 `__update-watchdog`，重启助手兼任。** §4.6 说"托管时没有助手"，但 `host/lifecycle.ts` 只在"托管且没有更新记录"时才不起助手；带更新记录的重启在托管时也起 `__restart-after-exit`（Linux 用 `systemd-run --user --scope` 脱离服务 cgroup）。所以两条路径都由助手判版本、60 秒没新主人或版本不对就切回 `previous`，再等 25 秒。win32 在服务下（`VONVON_SERVICE`）助手只写 `error`、不切 `current.txt`，留给 I4b 的监督进程。§5 的 `update-watchdog.test.ts` 和 `bootstrap-update-finish.test.ts` 因此并进 `standalone-restart.test.ts` 和 `standalone-update-apply.test.ts`（`settleUpdateAtStartup`）。
+2. **助手的启动命令是 `releases/<current>/node/bin/node releases/<current>/app/bin/vonvon.mjs daemon start`**（win 是 `node\node.exe`），不是 `<installRoot>/bin/vonvon`：启动器归 I2/I4a，还不存在；直接按 `current` 现在指的版本拼，意思一样。
+3. **等旧进程退出不设 30 秒上限**：助手原来就无限等旧主人放端口（已有测试要求排空无时限），没改。
+4. **启动时的收尾在 pid 锁发布之后、异步跑**（`bootstrap.ts` 的 `startUpdateUpkeep`），不在"启动早期"：要先确认自己拿到了锁才算新主人；收尾失败不影响启动。
+5. **切完 `current`、写好 `restarting` 后先放 `update.lock` 再请求重启。** §4.5 第 6 步说锁留到新进程；但锁文件按 pid 回收，旧进程退出前不放的话，新进程的清理和下一次升级要等回收，放掉更简单，`restarting` 记录本身挡住了重复写。
+6. **`finishOwnedUpdate` 判等比较全部自有字段**（`phase/ok/message/from/to/at/previous/detail/rolledBack`），不只 `from + to + at`：回滚后第二次写"它也没有起来"时，要认的是回滚写的那份。
+7. **回滚的 `error { rolledBack }` 在启动上一版之前写**：上一版启动时的收尾看到记录已结束，不会再写"重启后仍是"。
+8. **`server-update.json` 现在是占位**（`publicKey` 为空），打包时 `updateKey` 记 `"none"`（不是 `"release"`）；I5 生成密钥后提交公钥，才是 `release`。daemon 读不到可用公钥时回 `refused: 'config'`。
+9. **公钥文件按包根读**（`nearestPackageRoot(import.meta.url)/server-update.json`），不按 `dirname(selfEntry())/..`：源码和打包后都对。
+10. **`vonvon update` 文字版每一步、每 10% 打一行**，不覆盖同一行：输出常被重定向到日志，覆盖行在那里是乱码。
+11. **`update-state.json` 不存在时不记 `update-state-unreadable`**：第一次检查本来就没有它，只有读坏了才记。
+12. **清理时上一版的来源**依次是 `current.txt` 第 2 行、`update-status.json.previous`、剩下版本里最新的一个，保证 `releases/` 总留两版。
+13. **`covers()` 写 RPC kind**（`machine.checkCoreUpdate`、`applyCoreUpdate`、`coreUpdateStatus`），不是 §4.8 写的退出码名：`covers` 本来就是对齐 RPC kind 的。
+14. **`allowDowngrade` 不带 `version` 回 `invalid_request`**（命令行映射成退出 2），协议里没有 `bad-args` 这个错误码。
+15. **`checkCoreUpdate` 加可选 `fresh`**：`fresh: false` 用 daemon 每天检查留下的结果，不再连网；默认照旧现查。
+16. **`server/directory-suggestions.ts` 保留 `process.argv[1]`**：那是目录建议子进程读它自己的参数，不是本进程的入口。其余全部换成 `selfEntry()`。
+17. **`process.execPath` 在 Linux 上已是真实路径**（`self-entry.test.ts` 核实过），不加 `selfNode()`。
+18. **解包失败留下 `.part`**（下次升级先清），下载或校验失败当场删；§4.5 只写了后者。
+19. **行数超过 1,500**（约 2,200，其中测试约 1,000）。没拆成 I3a/I3b：助手回滚、启动收尾和应用流程共用状态记录，拆开后 I3a 要先回 `unsupported`，再改回来；合入集成分支前如果要拆，按 §9 的分法。

@@ -1,3 +1,4 @@
+import { selfEntry } from '../core/self-entry';
 import { randomBytes } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { log } from '../core/logger';
@@ -192,7 +193,7 @@ export function observeShutdown(parentControl = false, options: ShutdownOptions 
       intent = 'restart';
       if (serviceManaged && !update) { setImmediate(wake); return; }
       try {
-        const cliEntry = process.argv[1];
+        const cliEntry = selfEntry();
         if (!cliEntry) throw new Error('Cannot locate daemon CLI for restart.');
         const identity = z.object({ pid: z.number().int().positive(), startedAt: z.string().datetime() })
           .parse(JSON.parse(readFileSync(join(paths.appDir, 'daemon.pid'), 'utf8')));

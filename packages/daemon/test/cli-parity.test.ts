@@ -57,7 +57,11 @@ describe('CLI parity with the RPC kinds (devices 8.5)', () => {
     for (const kind of ['device.status', 'device.enable', 'device.disable', 'device.pair', 'device.clients', 'device.renameClient', 'device.revokeClient', 'device.rename', 'admin.negotiate']) {
       expect(CLI_PARITY_ALLOWLIST[kind]?.arrives, kind).toBe('D1');
     }
-    for (const kind of ['machine.checkCoreUpdate', 'machine.applyCoreUpdate', 'machine.coreUpdateStatus']) expect(CLI_PARITY_ALLOWLIST[kind]).toMatchObject({ reason: 'pending', slice: 'I3' });
+    // I3 (server-3) ends its pending lines: `vonvon update` covers them
+    for (const kind of ['machine.checkCoreUpdate', 'machine.applyCoreUpdate', 'machine.coreUpdateStatus']) {
+      expect(CLI_PARITY_ALLOWLIST[kind], kind).toBeUndefined();
+      expect(commands.find(command => command.path === 'update')?.covers, kind).toContain(kind);
+    }
   });
 
   // main 必败: only settings, feishu and schedule took --json

@@ -1,3 +1,4 @@
+import { selfEntry } from '../core/self-entry';
 import { badArgs, CommandError, rpcErrorKind } from './command-error';
 import { connectLocal, ConnectionError, RpcError, type VonvonClient } from '@vonvon/client';
 import { backendLabel, conversationCopy, requestSchema, type Agent, type Membership } from '@vonvon/protocol';
@@ -24,7 +25,7 @@ class BadRequest extends Error {}
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g;
 export const printable = (text: string): string => text.replace(CONTROL, '');
 
-export async function connectLocalDaemon(home = paths.appDir, cliEntry = process.argv[1]): Promise<VonvonClient> {
+export async function connectLocalDaemon(home = paths.appDir, cliEntry = selfEntry()): Promise<VonvonClient> {
   let lock;
   try { lock = await readRunningPidLock(home); }
   catch (error) { throw new CommandError('connection', `连不上 daemon：${firstLine(error)}`); }

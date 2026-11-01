@@ -131,9 +131,6 @@ export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
   'machine.checkDesktopUpdate': dead('D1'),
   'machine.openReleases': dead('D1'),
   'machine.installDesktopUpdate': dead('D1'),
-  'machine.checkCoreUpdate': pending('I3', 'vonvon update --check'),
-  'machine.applyCoreUpdate': pending('I3', 'vonvon update'),
-  'machine.coreUpdateStatus': pending('I3', 'vonvon update (waits on it)'),
 
   // devices 4 and 12: not in the protocol yet
   'device.pair': { ...pending('D1', 'vonvon pair'), arrives: 'D1' },

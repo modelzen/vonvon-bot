@@ -268,6 +268,18 @@ covers(feishu.command('members <groupId>'), 'command.listGroupMembers').descript
   .action(async (groupId: string, options: Json & { bot?: string; cursor?: string }) => {
     await (await import('./commands/feishu')).runFeishu('members', groupId, options, io(options));
   });
+covers(program.command('update'), 'machine.checkCoreUpdate', 'machine.applyCoreUpdate', 'machine.coreUpdateStatus')
+  .description('Update this server to the signed stable release; with the daemon running, it drains and restarts')
+  .option('--check', 'Only say whether a newer version is out')
+  .option('--allow-downgrade', 'With --to: go back to a release still kept on this machine')
+  .option('--to <version>', 'The version to go to')
+  .option('--json', 'Print JSON Lines: each status change, then the result')
+  .addHelpText('after', `
+Exit codes: 0 updated (or already current), 1 failed (the server stays on or goes back to its version),
+5 another update is running, 6 the daemon restarted but the outcome is not known yet.`)
+  .action(async (options: Json & { check?: boolean; allowDowngrade?: boolean; to?: string }) => {
+    await (await import('./commands/update')).runUpdateCommand(options, io(options));
+  });
 program.command('__daemon-control <action>', { hidden: true }).action(async (action: string) => {
   await (await import('./commands/daemon-control')).runDaemonControl(action);
 });

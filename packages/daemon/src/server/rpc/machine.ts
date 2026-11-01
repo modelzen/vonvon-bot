@@ -12,6 +12,10 @@ import { unsupported } from '../errors';
 import type { EnvironmentService } from '../../environment/service';
 import type {BridgeImporter} from '../../import/bridge/transaction';
 import {RpcError} from '../errors';
+import { checkStandaloneUpdate, lastStandaloneCheck, startStandaloneUpdate, type StandaloneDeps } from '../../service/standalone-update';
+import { currentVersion, UpdateBusyError } from '../../service/update';
+
+const standaloneDeps = (installRoot: string): StandaloneDeps => ({ installRoot, currentVersion: currentVersion() });
 
 /** The login-time service switch (3.10): the helper launcher, the snapshot that shows it, and the data root. */
 export type MachineServiceContext = { launcher: ServiceActionLauncher; snapshots: Pick<SnapshotStore, 'observeService' | 'refreshService'>; root: string; bridgeImport?: BridgeImporter; environment?: Pick<EnvironmentService, 'mcp'> };
@@ -40,7 +44,13 @@ export async function machineRpc(service: AdminService, control: ShutdownControl
       }, host: { ownership: 'owned', pid: process.pid }, cli: { kind: 'ready', bin: resolveCliBinPath(), message: 'Vonvon CLI 已就绪。' } } };
     }
     case 'logs': return { kind: 'read', value: { type: 'logs', text: await service.tailLogs({ maxBytes: 64 * 1024 }) } };
-    case 'checkCoreUpdate': return { kind: 'read', value: { type: 'coreUpdate', distribution: await runtimeDistribution(), ...await service.checkUpdate() } };
+    case 'checkCoreUpdate': {
+      const distribution = await runtimeDistribution();
+      if (distribution.kind !== 'standalone') return { kind: 'read', value: { type: 'coreUpdate', distribution, ...await service.checkUpdate() } };
+      // The page's own reads take the daily check (devices 6.5); 检查 and `vonvon update --check` read the manifest.
+      const check = (request.fresh === false ? lastStandaloneCheck() : undefined) ?? await checkStandaloneUpdate(standaloneDeps(distribution.installRoot));
+      return { kind: 'read', value: { type: 'coreUpdate', distribution, dev: false, ...check } };
+    }
     case 'coreUpdateStatus': return { kind: 'read', value: { type: 'coreUpdateStatus', status: service.updateStatus() } };
     case 'stopHost': {
       if (!control) return unsupported();
@@ -49,6 +59,15 @@ export async function machineRpc(service: AdminService, control: ShutdownControl
     }
     case 'applyCoreUpdate': {
       if (!control) return unsupported();
+      const distribution = await runtimeDistribution();
+      if (distribution.kind === 'standalone') {
+        if (request.allowDowngrade && !request.version) throw new RpcError('invalid_request', '降级要写明版本：--allow-downgrade --to <版本>。');
+        // Answered at once: the download may take minutes, and the drain only starts after `current` is switched.
+        try { void startStandaloneUpdate(request, { ...standaloneDeps(distribution.installRoot), requestRestart: status => control.requestRestart(port, status) }).done; }
+        catch (error) { if (error instanceof UpdateBusyError) throw new RpcError('conflict', error.message); throw error; }
+        return { kind: 'read', value: { type: 'done', message: '开始更新…' } };
+      }
+      if (request.version !== undefined || request.allowDowngrade) throw new RpcError('invalid_request', '只有独立安装的服务端能指定版本。');
       const update = await service.applyUpdate();
       return { kind: 'shutdown', reply: () => ({ type: 'done', message: '正在更新 daemon。' }), afterReply: () => control.requestRestart(port, update ?? undefined) };
     }

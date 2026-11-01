@@ -1,5 +1,5 @@
 import {runtimeDistribution} from './distribution';
-import { closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { paths } from '../config/paths';
@@ -229,26 +229,43 @@ function releaseUpdateLock(file: string): () => void {
   };
 }
 
+/** What a standalone update is doing inside its phase (server-3 C3). */
+export const updateDetails = ['downloading', 'verifying', 'unpacking', 'switching', 'draining', 'waiting', 'rolled-back'] as const;
 export const updateStatusSchema = z.object({
   phase: z.enum(['installing', 'restarting', 'done', 'error']),
   ok: z.boolean().optional(), message: z.string().optional(),
   from: z.string().optional(), to: z.string().optional(), at: z.number(),
+  /** The release a standalone update switched `current` away from: the one a rollback goes back to. */
+  previous: z.string().optional(),
+  progress: z.object({ transferred: z.number().nonnegative(), total: z.number().nonnegative() }).strict().optional(),
+  detail: z.enum(updateDetails).optional(),
+  rolledBack: z.boolean().optional(),
 }).strict();
 export type UpdateStatus = Readonly<z.infer<typeof updateStatusSchema>>;
 export type UpdatePhase = UpdateStatus['phase'];
 
-export function finishOwnedUpdate(expected: UpdateStatus | undefined, outcome: 'done' | 'error', message?: string): void {
-  if (!expected) return;
+/** A Core update already holds `update.lock`. */
+export class UpdateBusyError extends Error {
+  constructor() { super('已有更新正在进行。'); }
+}
+
+const OWNED_FIELDS = ['phase', 'ok', 'message', 'from', 'to', 'at', 'previous', 'detail', 'rolledBack'] as const;
+
+/** Ends `expected` only while the file is still that record; returns what it wrote. */
+export function finishOwnedUpdate(expected: UpdateStatus | undefined, outcome: 'done' | 'error', message?: string, extra: { rolledBack?: boolean } = {}): UpdateStatus | undefined {
+  if (!expected) return undefined;
   const release = acquireUpdateLock();
-  if (!release) { log.info('daemon-restart', 'update_record_ownership_lost', { reason: 'lock_busy' }); return; }
+  if (!release) { log.info('daemon-restart', 'update_record_ownership_lost', { reason: 'lock_busy' }); return undefined; }
   try {
     const current = readUpdateStatus();
-    if (!current || current.phase !== expected.phase || current.ok !== expected.ok ||
-      current.message !== expected.message || current.from !== expected.from || current.to !== expected.to || current.at !== expected.at) {
+    if (!current || OWNED_FIELDS.some(field => current[field] !== expected[field])) {
       log.info('daemon-restart', 'update_record_ownership_lost', { reason: 'record_changed' });
-      return;
+      return undefined;
     }
-    writeUpdateStatus({ ...expected, phase: outcome, ok: outcome === 'done', ...(message ? { message } : {}), at: Date.now() });
+    const { progress: _progress, detail: _detail, ...kept } = expected;
+    const record: UpdateStatus = { ...kept, phase: outcome, ok: outcome === 'done', ...(message ? { message } : {}), ...extra, at: Date.now() };
+    writeUpdateStatus(record);
+    return record;
   } finally { release(); }
 }
 
@@ -261,8 +278,11 @@ function updateStatusFile(): string {
  * 网页端完全静默）。同步、尽力而为、绝不抛。
  */
 export function writeUpdateStatus(status: UpdateStatus): void {
+  const file = updateStatusFile();
   try {
-    writeFileSync(updateStatusFile(), JSON.stringify(status), 'utf8');
+    // Whole-file replace: a reader polling it never sees half a record.
+    writeFileSync(`${file}.tmp`, JSON.stringify(status), 'utf8');
+    renameSync(`${file}.tmp`, file);
   } catch {
     /* best-effort */
   }

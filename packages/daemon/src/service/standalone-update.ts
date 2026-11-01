@@ -1,0 +1,293 @@
+import { createHash } from 'node:crypto';
+import { chmod, lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { z } from 'zod';
+import { log } from '../core/logger';
+import { extractTarGz, extractZip, removeStaging } from './archive';
+import { isCompleteRelease, readCurrent, switchCurrent, VERSION } from './current-release';
+import { nearestPackageRoot } from './distribution';
+import { fetchManifest, ManifestError, readServerUpdateConfig, serverTarget, type Fetch, type Manifest, type ServerUpdateConfig } from './standalone-manifest';
+import { acquireUpdateLock, finishOwnedUpdate, isNewer, readUpdateStatus, UpdateBusyError, writeUpdateStatus, type UpdateStatus } from './update';
+
+/**
+ * The standalone server's update (server-3 4.4, 4.5): check the signed stable manifest, and apply it by downloading
+ * the package into `releases/<v>.part`, checking it against the manifest, unpacking, renaming it to `releases/<v>` and
+ * switching `current` before the daemon drains and restarts. Progress is in `update-status.json`.
+ */
+export type Refusal = 'rollback' | 'signature' | 'network' | 'config';
+export const REFUSAL_TEXT: Record<Refusal, string> = {
+  signature: '没查到新版本：发布清单的签名不对，没有应用',
+  rollback: '没查到新版本：发布清单比上次看到的旧，没有应用',
+  network: '没查到新版本：连不上 dl.vonvon.cc',
+  config: '没查到新版本：这个服务端包没有带发布清单的公钥',
+};
+export type StandaloneCheck = { current: string; latest: string | null; hasUpdate: boolean; channel: 'stable'; refused?: Refusal };
+export type StandaloneDeps = {
+  installRoot: string;
+  currentVersion: string;
+  config?: () => ServerUpdateConfig | null;
+  fetch?: Fetch;
+  now?: () => number;
+  platform?: NodeJS.Platform;
+  arch?: string;
+};
+const EVENTS = 'core-update';
+
+/** `app/server-update.json` of the running package; no setting or variable points anywhere else (C2). */
+export const packagedUpdateConfig = (): ServerUpdateConfig | null =>
+  readServerUpdateConfig(join(nearestPackageRoot(fileURLToPath(import.meta.url)), 'server-update.json'));
+
+// ── C4 update-state.json: the highest version and publish time seen, so an older signed manifest is refused ─────
+const stateSchema = z.object({ v: z.literal(1), highestSeen: z.string().regex(VERSION), lastPublishedAt: z.number().nonnegative(), lastCheckAt: z.number().nonnegative() }).strict();
+type UpdateState = z.infer<typeof stateSchema>;
+const stateFile = (installRoot: string): string => join(installRoot, 'update-state.json');
+
+async function readState(installRoot: string, current: string): Promise<UpdateState> {
+  try { return stateSchema.parse(JSON.parse(await readFile(stateFile(installRoot), 'utf8'))); }
+  catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) log.warn(EVENTS, 'update-state-unreadable', {});
+    return { v: 1, highestSeen: current, lastPublishedAt: 0, lastCheckAt: 0 };
+  }
+}
+async function writeState(installRoot: string, state: UpdateState): Promise<void> {
+  await writeFile(`${stateFile(installRoot)}.tmp`, JSON.stringify(state));
+  await rename(`${stateFile(installRoot)}.tmp`, stateFile(installRoot));
+}
+
+async function readManifest(deps: StandaloneDeps): Promise<{ check: StandaloneCheck; manifest?: Manifest }> {
+  const base = { current: deps.currentVersion, latest: null, hasUpdate: false, channel: 'stable' as const };
+  const config = (deps.config ?? packagedUpdateConfig)();
+  if (!config) {
+    log.warn(EVENTS, 'update-config-missing', {});
+    return { check: { ...base, refused: 'config' } };
+  }
+  let manifest: Manifest;
+  try { manifest = await fetchManifest(config, deps.fetch); }
+  catch (error) {
+    const reason = error instanceof ManifestError ? error.reason : 'http';
+    log.warn(EVENTS, 'update-manifest-refused', { reason });
+    return { check: { ...base, refused: reason === 'http' ? 'network' : 'signature' } };
+  }
+  const state = await readState(deps.installRoot, deps.currentVersion);
+  // Equal is accepted: the same manifest read again, or one whose update did not go through.
+  if (manifest.publishedAt < state.lastPublishedAt || isNewer(state.highestSeen, manifest.version)) {
+    log.warn(EVENTS, 'update-manifest-refused', { reason: 'rollback', version: manifest.version, highestSeen: state.highestSeen });
+    return { check: { ...base, refused: 'rollback' } };
+  }
+  await writeState(deps.installRoot, {
+    v: 1, highestSeen: isNewer(manifest.version, state.highestSeen) ? manifest.version : state.highestSeen,
+    lastPublishedAt: Math.max(state.lastPublishedAt, manifest.publishedAt), lastCheckAt: (deps.now ?? Date.now)(),
+  });
+  // latest even when it is this version: the page shows "已是最新 0.9.0".
+  return { check: { ...base, latest: manifest.version, hasUpdate: isNewer(manifest.version, deps.currentVersion) }, manifest };
+}
+
+let lastCheck: StandaloneCheck | undefined;
+export async function checkStandaloneUpdate(deps: StandaloneDeps): Promise<StandaloneCheck> {
+  lastCheck = (await readManifest(deps)).check;
+  return lastCheck;
+}
+/** What the daily check last found, for `checkCoreUpdate { fresh: false }`. */
+export const lastStandaloneCheck = (): StandaloneCheck | undefined => lastCheck;
+
+const DAY = 24 * 3_600_000;
+/** 60 s after start, then every 24 h, only to show "有新版本"; a failed check waits for the next one. Never applies. */
+export function scheduleStandaloneChecks(deps: StandaloneDeps & { setTimeout?: typeof setTimeout; clearTimeout?: typeof clearTimeout }): () => void {
+  const schedule = deps.setTimeout ?? setTimeout;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+  const next = (delay: number): void => {
+    timer = schedule(() => {
+      if (stopped) return;
+      next(DAY);
+      void checkStandaloneUpdate(deps).catch(error => log.fail(EVENTS, error, { phase: 'daily-check' }));
+    }, delay);
+    timer.unref?.();
+  };
+  next(60_000);
+  return () => { stopped = true; (deps.clearTimeout ?? clearTimeout)(timer); };
+}
+
+// ── 4.5 apply ─────────────────────────────────────────────────────────────────────────────────────────────────
+export type ApplyOptions = { version?: string; allowDowngrade?: boolean };
+export type ApplyDeps = StandaloneDeps & {
+  /** The daemon's drain and restart. Without it (the CLI with no daemon running) the update ends at the switch. */
+  requestRestart?: (status: UpdateStatus) => void;
+  extract?: (archive: string, into: string, zip: boolean) => Promise<void>;
+  /** Sees each record written, in order. */
+  onStatus?: (status: UpdateStatus) => void;
+};
+class Failure extends Error {
+  constructor(message: string, readonly clearStaging = false) { super(message); }
+}
+
+/** Complete releases kept besides the current one, newest first. */
+async function keptReleases(installRoot: string, current: string | undefined): Promise<string[]> {
+  const names = await readdir(join(installRoot, 'releases')).catch(() => [] as string[]);
+  const kept: string[] = [];
+  for (const name of names) if (name !== current && await isCompleteRelease(installRoot, name)) kept.push(name);
+  return kept.sort((a, b) => (isNewer(a, b) ? -1 : isNewer(b, a) ? 1 : 0));
+}
+
+async function isFile(path: string): Promise<boolean> {
+  try { return (await stat(path)).isFile(); } catch { return false; }
+}
+
+/**
+ * Takes `update.lock` and writes `installing` before it returns, or throws UpdateBusyError; the work goes on in `done`.
+ * The lock is released before `requestRestart`, which may itself end the record (a stop that cancels the restart).
+ */
+export function startStandaloneUpdate(options: ApplyOptions, deps: ApplyDeps): { done: Promise<UpdateStatus> } {
+  const release = acquireUpdateLock();
+  if (!release) throw new UpdateBusyError();
+  const root = deps.installRoot;
+  const platform = deps.platform ?? process.platform;
+  const fetcher = deps.fetch ?? fetch;
+  const from = deps.currentVersion;
+  const at = (deps.now ?? Date.now)();
+  let status: UpdateStatus = { phase: 'installing', from, at, detail: options.allowDowngrade ? 'switching' : 'downloading' };
+  const write = (next: UpdateStatus): UpdateStatus => { status = next; writeUpdateStatus(next); deps.onStatus?.(next); return next; };
+  const step = (detail: UpdateStatus['detail'], extra: Partial<UpdateStatus> = {}): UpdateStatus => write({ phase: 'installing', from, at, detail, ...extra });
+  write(status);
+
+  const download = async (manifest: Manifest, version: string): Promise<void> => {
+    const target = serverTarget(platform, deps.arch);
+    if (!target) throw new Failure(`这台电脑（${platform}-${deps.arch ?? process.arch}）没有对应的服务端包。`);
+    const file = manifest.files[target];
+    const zip = target.startsWith('win-');
+    const staging = join(root, 'releases', `${version}.part`);
+    await removeStaging(root, version);
+    await mkdir(staging, { recursive: true });
+    const archive = join(staging, `download.${zip ? 'zip' : 'tar.gz'}`);
+    let response: Response;
+    try { response = await fetcher(file.url, { signal: AbortSignal.timeout(600_000) }); }
+    catch (error) { throw new Failure(`下载失败：${error instanceof Error ? error.message : String(error)}`, true); }
+    const length = response.headers.get('content-length');
+    if (response.status !== 200 || !response.body || (length !== null && Number(length) !== file.size)) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Failure(response.status !== 200 ? `下载失败：HTTP ${response.status}` : '下载的大小和发布清单不一致', true);
+    }
+    const hash = createHash('sha512');
+    let transferred = 0;
+    let reported = 0;
+    const handle = await open(archive, 'wx', 0o600);
+    try {
+      for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+        transferred += chunk.byteLength;
+        if (transferred > file.size) throw new Failure('下载的大小和发布清单不一致', true);
+        hash.update(chunk);
+        await handle.write(chunk);
+        if (transferred - reported >= 1024 * 1024) { reported = transferred; step('downloading', { progress: { transferred, total: file.size } }); }
+      }
+    } catch (error) {
+      throw error instanceof Failure ? error : new Failure(`下载失败：${error instanceof Error ? error.message : String(error)}`, true);
+    } finally { await handle.close(); }
+    step('verifying', { progress: { transferred, total: file.size } });
+    if (transferred !== file.size || hash.digest('hex') !== file.sha512) throw new Failure('下载内容和发布清单不一致', true);
+    log.info(EVENTS, 'update-standalone-downloaded', { version, size: file.size });
+    step('unpacking');
+    await (deps.extract ?? ((source, into, isZip) => (isZip ? extractZip : extractTarGz)(source, into)))(archive, staging, zip);
+    await rm(archive, { force: true });
+    const node = join(staging, 'node', platform === 'win32' ? 'node.exe' : join('bin', 'node'));
+    const marker = await readFile(join(staging, 'standalone.json'), 'utf8').then(text => JSON.parse(text) as { version?: unknown }, () => ({}) as { version?: unknown });
+    if (marker.version !== version || !await isFile(join(staging, 'app', 'bin', 'vonvon.mjs')) || !await isFile(node)) throw new Failure('下载的服务端包不完整。');
+    await chmod(node, 0o755);
+    await rename(staging, join(root, 'releases', version));
+  };
+
+  const done = (async (): Promise<UpdateStatus> => {
+    let version: string | undefined;
+    try {
+      const current = (await readCurrent(root, platform))?.version;
+      if (options.allowDowngrade) {
+        version = options.version;
+        if (!version) throw new Failure('降级要写明版本：--allow-downgrade --to <版本>。');
+        // No signed manifest vouches for an older package, so only a release still kept here is used.
+        if (!await isCompleteRelease(root, version)) {
+          const [previous] = await keptReleases(root, current);
+          throw new Failure(previous ? `本机没有 ${version}，只能降到保留着的上一版 ${previous}。` : `本机没有 ${version}，也没有保留着的上一版。`);
+        }
+      } else {
+        const { check, manifest } = await readManifest(deps);
+        if (check.refused || !manifest) throw new Failure(REFUSAL_TEXT[check.refused ?? 'network']);
+        if (options.version && options.version !== manifest.version) throw new Failure(`发布清单上的版本是 ${manifest.version}，不是 ${options.version}。`);
+        if (!check.hasUpdate) return write({ phase: 'done', ok: true, from, to: manifest.version, at, message: '已是最新' });
+        version = manifest.version;
+        // Downloaded before and not switched to: used as it is.
+        if (await isCompleteRelease(root, version)) await removeStaging(root, version);
+        else await download(manifest, version);
+      }
+      step('switching', { to: version });
+      const { previous } = await switchCurrent(root, version, platform);
+      log.info(EVENTS, 'update-standalone-swapped', { from, to: version });
+      const prior = previous ?? from;
+      if (!deps.requestRestart) return write({ phase: 'done', ok: true, from, to: version, previous: prior, at, message: `已切到 ${version}，运行 vonvon daemon start 生效。` });
+      const restarting = write({ phase: 'restarting', ok: true, from, to: version, previous: prior, at, detail: 'draining' });
+      release();
+      deps.requestRestart(restarting);
+      return restarting;
+    } catch (error) {
+      if (error instanceof Failure && error.clearStaging && version) await removeStaging(root, version).catch(() => undefined);
+      log.fail(EVENTS, error, { phase: 'apply', ...(version ? { to: version } : {}) });
+      const message = error instanceof Failure ? error.message : `更新失败：${error instanceof Error ? error.message : String(error)}`;
+      return write({ phase: 'error', ok: false, from, ...(version ? { to: version } : {}), at, message: message.slice(0, 300) });
+    } finally { release(); }
+  })();
+  return { done };
+}
+
+// ── 4.6, 4.10 at startup ─────────────────────────────────────────────────────────────────────────────────────────
+/**
+ * Keeps the current release and the previous one; removes other versions and every `.part`. Only direct children of
+ * `releases/` named like a version, real directories, holding `standalone.json` or named `.part`. A directory in use
+ * (Windows) is left for the next start.
+ */
+export async function cleanupReleases(installRoot: string, keep: ReadonlyArray<string | undefined>, remove: (dir: string) => Promise<void> = dir => rm(dir, { recursive: true })): Promise<void> {
+  const releases = join(installRoot, 'releases');
+  const names = await readdir(releases).catch(() => [] as string[]);
+  for (const name of names) {
+    const match = /^(\d+\.\d+\.\d+)(\.part)?$/.exec(name);
+    if (!match || (!match[2] && keep.includes(match[1]))) continue;
+    const dir = join(releases, name);
+    try {
+      const info = await lstat(dir);
+      if (!info.isDirectory() || info.isSymbolicLink() || dirname(dir) !== releases) continue;
+      if (!match[2] && !await isFile(join(dir, 'standalone.json'))) continue;
+      await remove(dir);
+    } catch (error) {
+      log.warn(EVENTS, 'update-cleanup-skipped', { name, code: error instanceof Error && 'code' in error ? String(error.code) : 'error' });
+    }
+  }
+}
+
+/**
+ * The new daemon, once it publishes its port: an `installing` record nobody holds the lock for was cut short; a
+ * standalone `restarting` record for this version is done (unless `current` was moved back meanwhile); then releases
+ * besides the current and previous one go.
+ */
+export async function settleUpdateAtStartup(options: { version: string; installRoot?: string; platform?: NodeJS.Platform }): Promise<void> {
+  const status = readUpdateStatus();
+  if (status?.phase === 'installing') {
+    const release = acquireUpdateLock();
+    if (release) {
+      try { if (readUpdateStatus()?.at === status.at) writeUpdateStatus({ phase: 'error', ok: false, from: status.from, ...(status.to ? { to: status.to } : {}), at: Date.now(), message: '上次更新中断' }); }
+      finally { release(); }
+    }
+  }
+  if (!options.installRoot) return;
+  const current = await readCurrent(options.installRoot, options.platform).catch(() => null);
+  if (status?.phase === 'restarting' && status.previous !== undefined) {
+    if (status.to !== options.version) finishOwnedUpdate(status, 'error', `重启后仍是 ${options.version}`);
+    else if (current?.version !== options.version) finishOwnedUpdate(status, 'error', `升级和回滚撞上了，当前运行 ${options.version}`);
+    else finishOwnedUpdate(status, 'done');
+  }
+  if (!current) return;
+  const release = acquireUpdateLock();
+  if (!release) return; // an update is downloading into releases/ right now
+  try {
+    const latest = readUpdateStatus();
+    const previous = current.previous ?? (latest?.to === current.version ? latest.previous : undefined) ?? (await keptReleases(options.installRoot, current.version))[0];
+    await cleanupReleases(options.installRoot, [current.version, previous]);
+  } finally { release(); }
+}
