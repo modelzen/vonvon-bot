@@ -48,6 +48,27 @@ describe('bundled npm', () => {
     expect(bundledNpmCli({ VONVON_NPM_CLI: root }, daemon)).toBe(bundled);
   });
 
+  it('finds the npm of a standalone release only while running on that release\'s own Node (devices 7.2)', async () => {
+    for (const [platform, node, cli] of [['linux', 'node/bin/node', 'node/lib/node_modules/npm/bin/npm-cli.js'], ['win32', 'node/node.exe', 'node/node_modules/npm/bin/npm-cli.js']] as const) {
+      const root = await realpath(await mkdtemp(join(tmpdir(), 'standalone-npm-')));
+      roots.push(root);
+      const release = join(root, 'releases', '0.9.0');
+      const files: Array<[string, string]> = [
+        ['app/package.json', JSON.stringify({ name: '@vonvon/daemon', version: '0.9.0', bin: { vonvon: 'bin/vonvon.mjs' } })],
+        ['app/bin/vonvon.mjs', ''], ['app/dist/cli.js', ''], ['standalone.json', JSON.stringify({ v: 1, version: '0.9.0' })], [node, ''], [cli, ''],
+      ];
+      for (const [file, content] of files) {
+        await mkdir(dirname(join(release, file)), { recursive: true });
+        await writeFile(join(release, file), content);
+      }
+      const app = join(release, 'app');
+      expect(bundledNpmCli({}, app, join(release, node), platform)).toBe(join(release, cli));
+      expect(bundledNpmCli({}, app, process.execPath, platform)).toBeUndefined();
+      await rm(join(release, cli));
+      expect(bundledNpmCli({}, app, join(release, node), platform)).toBeUndefined();
+    }
+  });
+
   it('runs a trusted CLI with this Node in Node mode, otherwise npm from PATH', () => {
     expect(npmInvocation('/r/npm/bin/npm-cli.js')).toEqual({ command: process.execPath, args: ['/r/npm/bin/npm-cli.js'], env: { ELECTRON_RUN_AS_NODE: '1', npm_config_update_notifier: 'false' } });
     expect(npmInvocation()).toEqual({ command: 'npm', args: [], env: {} });

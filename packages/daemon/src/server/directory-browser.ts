@@ -6,6 +6,13 @@ import { folderTokenSchema, type FolderChoice, type FolderToken } from '@vonvon/
 import { RpcError } from './errors';
 import { createDirectorySuggestions } from './directory-suggestions';
 
+/** A path that is not there (or runs through a file, or loops) is the caller's to fix, said as such instead of the raw
+ * ENOENT that reached the web page as 操作失败 and the command line as exit 1 (cli-3-groups). */
+function missing(error: unknown): unknown {
+  const code = error instanceof Error && 'code' in error ? String(error.code) : '';
+  return ['ENOENT', 'ENOTDIR', 'ELOOP'].includes(code) ? new RpcError('invalid_directory', '找不到这个目录，请检查路径。') : error;
+}
+
 export async function createDirectoryBrowser(home = homedir()) {
   const root = await realpath(home);
   const tokens = new Map<FolderToken, { path: string; expiresAt: number }>();
@@ -15,9 +22,12 @@ export async function createDirectoryBrowser(home = homedir()) {
     if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) throw new RpcError('outside_home', '目录必须位于用户主目录内。');
   }
   async function canonical(path: string): Promise<string> {
-    const resolved = await realpath(path);
+    let resolved: string;
+    try { resolved = await realpath(path); }
+    catch (error) { throw missing(error); }
     contained(resolved);
-    if (!(await stat(resolved)).isDirectory()) throw new RpcError('invalid_directory', '请选择文件夹。');
+    const info = await stat(resolved).catch((error: unknown) => { throw missing(error); });
+    if (!info.isDirectory()) throw new RpcError('invalid_directory', '请选择文件夹。');
     return resolved;
   }
   return {

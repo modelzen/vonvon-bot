@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, expect, it, vi } from 'vitest';
@@ -76,7 +76,7 @@ it('bot list and bot status show a bot paused alone, and every bot of a paused d
   await runBotList(h.io(), h.daemon);
   expect(h.out()).toBe('Vonvon Bot  cli_a  已暂停（10 分钟内崩溃了 3 次） · 未连接 · 0 个群\n另一个  cli_b  已启用 · 已连接 · 0 个群\n');
   h.clear(); await expect(runBotStatus('cli_a', h.io(), h.daemon)).rejects.toThrow();
-  expect(h.out().split('\n').slice(0, 2)).toEqual(['Vonvon Bot（cli_a）', '已暂停：10 分钟内崩溃了 3 次，没有自动重启。查完原因后在网页的状态与诊断页点「恢复运行」，或运行 vonvon daemon restart。']);
+  expect(h.out().split('\n').slice(0, 2)).toEqual(['Vonvon Bot（cli_a）', '已暂停：10 分钟内崩溃了 3 次，没有自动重启。查完原因后在网页的状态与诊断页点「恢复运行」，或运行 vonvon bot enable cli_a。']);
   const host = snapshot([agent('cli_b', '另一个', { running: false, connection: 'disconnected' })]);
   const down = harness({ snapshot: async () => ({ ...host, application: { ...host.application, crashes: { paused: { since: 1, crashes: 4 }, records: [] } } }) });
   await runBotList(down.io(), down.daemon);
@@ -104,7 +104,7 @@ it('bot status prints the checklist with its links and next steps', async () => 
   await runBotStatus(undefined, h.io(), h.daemon);
   expect(admin).toHaveBeenCalledWith({ type: 'setupStatus', agentId: 'cli_a' });
   for (const line of ['Vonvon Bot（cli_a）', '✓ 飞书应用：凭据有效', '! 权限：还缺 2 项', '    - im:message:readonly', '    - im:resource', `    一键开权限：${setup.scopes.grantUrl}`,
-    '· 卡片回调：待验证', '    打开回调设置：https://open.feishu.cn/app/cli_a/event', '    在网页里点「我已配置」（vonvon open）', '✓ Codex：可用 · 0.156.1', '· 后台服务：不支持', '还有 4 步没完成。']) expect(h.out()).toContain(`${line}\n`);
+    '· 卡片回调：待验证', '    打开回调设置：https://open.feishu.cn/app/cli_a/event', '    运行 vonvon bot callback confirm cli_a', '✓ Codex：可用 · 0.156.1', '· 后台服务：不支持', '还有 4 步没完成。']) expect(h.out()).toContain(`${line}\n`);
   h.clear(); await runBotStatus('cli_a', h.io(true), h.daemon);
   const json = JSON.parse(h.out());
   expect(json.steps.map((step: { id: string }) => step.id)).toEqual(['credentials', 'scopes', 'connection', 'event', 'callback', 'publish', 'codex', 'claude', 'service']);
@@ -274,7 +274,7 @@ it('group pending reports the daemon refusal and still closes', async () => {
 
 it('group bind sends an absolute folder, the chosen token and the pending name', async () => {
   const home = await mkdtemp(join(tmpdir(), 'vonvon-cli-admin-')); dirs.push(home);
-  await mkdir(join(home, 'work', 'pay'), { recursive: true }); await writeFile(join(home, 'work', 'file'), '');
+  await mkdir(join(home, 'work', 'pay'), { recursive: true });
   const host = { cwd: join(home, 'work'), home, platform: 'linux' as const };
   const token = '7d1f1a6e-3b8e-4d0c-9a51-2f6a0e4b9c11';
   const run = vi.fn(async (command: { type: string }) => command.type === 'listPendingGroups'
@@ -299,8 +299,7 @@ it('group bind sends an absolute folder, the chosen token and the pending name',
   await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'later' }, offline.io(), offline.daemon, host)).rejects.toThrow('--conversation 必须选一项');
   await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'toString' }, offline.io(), offline.daemon, host)).rejects.toThrow('--conversation 必须选一项');
   await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'multi', response: 'yes' }, offline.io(), offline.daemon, host)).rejects.toThrow('--response 只能是 mention');
-  await expect(runGroupBind('oc_pay', { folder: 'missing', conversation: 'multi' }, offline.io(), offline.daemon, host)).rejects.toThrow(`文件夹不存在：${join(home, 'work', 'missing')}`);
-  await expect(runGroupBind('oc_pay', { folder: 'file', conversation: 'multi' }, offline.io(), offline.daemon, host)).rejects.toThrow('不是文件夹：');
+  // cli-3-groups: a folder that is not there is the daemon's to say (test/cli-group.test.ts), not stat on this computer
   await expect(runGroupBind('chat_pay', { folder: 'pay', conversation: 'multi' }, offline.io(), offline.daemon, host)).rejects.toThrow('群 id 应该以 oc_ 开头。');
   expect(offline.connect).not.toHaveBeenCalled();
 

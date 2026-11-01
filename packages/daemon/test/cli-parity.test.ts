@@ -51,8 +51,8 @@ describe('CLI parity with the RPC kinds (devices 8.5)', () => {
     const early = { ...CLI_PARITY_ALLOWLIST, 'remote.later': { reason: 'pending', slice: 'D3', note: 'x', arrives: 'D3' } } as const;
     expect(parityProblems(kinds, commands, early)).toEqual([]);
     expect(parityProblems([...kinds, 'remote.later'], commands, early)).toEqual(['remote.later: in the protocol now, so the allowlist line drops arrives: D3']);
-    const loose = { ...CLI_PARITY_ALLOWLIST, 'command.deleteAgent': { reason: 'pending', note: 'bot remove' } } as const;
-    expect(parityProblems(kinds, commands, loose)).toEqual(['command.deleteAgent: pending needs the slice that ends it']);
+    const loose = { ...CLI_PARITY_ALLOWLIST, 'library.previous': { reason: 'pending', note: 'x' } } as const;
+    expect(parityProblems(kinds, commands, loose)).toEqual(['library.previous: pending needs the slice that ends it']);
   });
 
   // main 必败: the device kinds were not in the protocol and no command covered them

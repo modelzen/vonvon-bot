@@ -37,3 +37,14 @@ export function formatPercent(value: number): string {
   if (rounded === 100 && value < 100) return ">99%";
   return `${rounded}%`;
 }
+
+/** What 移除本地 Bot asks the owner to confirm, on the web page and in `vonvon bot remove`: what goes (counted) and what
+ * stays with the projects (§5.2). `memories` is the Bot's own active entries; left out when they cannot be read. */
+export function deleteAgentDescription(name: string, bindings: number, memories: number | undefined): string {
+  const counted = [`${bindings} 个群绑定`, ...(memories === undefined ? [] : [`${memories} 条 Bot 记忆`])].join("、");
+  return `将移除「${name}」的本地注册信息、凭据、${counted}、设置和会话记录。项目的记忆和工作区属于项目，不会删。飞书开发者平台中的应用不会删除。请确认这个 Bot 已停用并停止运行。`;
+}
+
+/** devices 第 15 节, word for word: said where a group gets 完全访问, such as `vonvon group create` (a group the Bot makes
+ * is full access, devices 5.3). U2 replaces it with `TierInfo.warning`; this is the one place to change then. */
+export const FULL_ACCESS_WARNING = "完全访问的群里，群成员能让 Bot 在这台设备上做任何事，包括改 vonvon 的设置，只给信任的群用。";
