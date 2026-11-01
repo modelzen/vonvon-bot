@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { afterLinuxInstall, LINGER_QUESTION, NO_GUI_SESSION_HINT, runServiceCommand, runServiceStatus, type AfterInstallDependencies, type LingerChoice, type ServiceCommandDependencies } from '../src/cli/commands/service';
+import { afterLinuxInstall, LINGER_QUESTION, runServiceCommand, runServiceStatus, type AfterInstallDependencies, type LingerChoice, type ServiceCommandDependencies } from '../src/cli/commands/service';
 import { commandFailure } from '../src/cli/command-error';
 import { ROOT_WARNING, rootWarning } from '../src/cli/root-warning';
 import { acquireMutex, closeMutex } from '../src/config/data-access';
@@ -207,10 +207,12 @@ describe('Linux: linger and the user manager (s20a)', () => {
     // install.sh reads the two side by side
     expect(JSON.stringify(commandFailure(error))).toContain(`"reason":"${reason}","fallback":"detached"`);
   });
-  it('launchd without a GUI session is a refusal with the fallback; other failures stay failed without one', async () => {
+  // owner 2026-11-01: no install script on a Mac, so launchd without a GUI session stays a plain failure
+  it('other failures, launchd without a GUI session among them, stay failed without the fallback', async () => {
     const noGui = { install: vi.fn(async () => outcome('install_refused', { detail: 'GUI domain unavailable: Could not find domain for user gui: 501' })), uninstall: vi.fn() };
-    const error = await runServiceCommand('install', noGui, {}, absent).catch((caught: unknown) => caught);
-    expect(commandFailure(error)).toMatchObject({ exitCode: 4, error: { kind: 'refused', reason: 'no_gui_session', fallback: 'detached', hint: NO_GUI_SESSION_HINT } });
+    const error = commandFailure(await runServiceCommand('install', noGui, {}, absent).catch((caught: unknown) => caught));
+    expect(error).toMatchObject({ exitCode: 1, error: { kind: 'failed', reason: 'install_refused' } });
+    expect(error.error).not.toHaveProperty('fallback');
     const other = { install: vi.fn(async () => outcome('install_incomplete', { detail: 'Bootstrap failed' })), uninstall: vi.fn() };
     const failed = commandFailure(await runServiceCommand('install', other, {}, linux({ problem: async () => ({ reason: 'no_systemd', hint: 'x' }) })).catch((caught: unknown) => caught));
     expect(failed).toMatchObject({ exitCode: 1, error: { kind: 'failed', reason: 'install_incomplete' } });

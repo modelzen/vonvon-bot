@@ -1,7 +1,8 @@
 #!/bin/sh
-# Vonvon Bot 服务端的安装脚本（Linux、macOS），docs/plans/server-2-install-scripts.md 4.1：
+# Vonvon Bot 服务端的安装脚本，只用于 Linux（glibc），docs/plans/server-2-install-scripts.md 4.1：
 #   sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/install.sh)"
-# 装到 ~/.local/share/vonvon-bot/server，数据目录是 ~/.vonvon-bot。已经装过桌面端或服务端就什么都不动。
+# 装到 ~/.local/share/vonvon-bot/server，数据目录是 ~/.vonvon-bot。已经装过服务端就什么都不动。
+# Mac、Windows 用桌面端安装包（里面带着服务端），这个脚本在 Mac 上什么都不做、退出 2（owner 2026-11-01）。
 # 用 root 运行默认拒绝；坚持要用：VONVON_ALLOW_ROOT=1。
 # 退出码：0 装好了或已经装过；1 设置命令或后台服务失败；2 环境不支持；3 下载失败；4 校验没通过。
 # 整个脚本只定义函数，最后一行才调用 main：下载中途断了，sh 读到半截脚本什么也不做。不读标准输入。
@@ -9,8 +10,8 @@ set -eu
 
 BASE_URL="https://dl.vonvon.cc/bot/server"
 GUIDE_URL="https://vonvon.cc/guide/remote/"
+DESKTOP_DOWNLOAD="https://bot.vonvon.cc"
 SERVER_MARKER="# Vonvon Bot server CLI v1"
-DESKTOP_MARKER="Vonvon Bot managed CLI v1"
 # 服务端发布清单的签名公钥（server-3 C2，SPKI PEM），和 packages/daemon/server-update.json 是同一把。
 # 发布前换成真的那把（server-5 4.2）；空着时脚本不安装。
 # BEGIN VONVON PUBKEY
@@ -55,36 +56,22 @@ server_cli_runs() {
 # 已经装过就说一句、返回 0；什么文件都不写，也不连网。
 # 只有 current、没有能运行的 bin/vonvon，是设置那一步没做完（切了 current 才失败或被打断）：不算装过，接着装。
 already_installed() {
-  kind=''
-  desktop=''
+  found=''
   if [ -f "$DATA/daemon.pid" ]; then
     pid=$(sed -n 's/.*"pid":\([0-9][0-9]*\).*/\1/p' "$DATA/daemon.pid" 2>/dev/null | head -n 1)
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then kind=服务端; fi
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then found=1; fi
   fi
-  if { [ -e "$ROOT/current" ] || [ -L "$ROOT/current" ]; } && server_cli_runs; then kind=服务端; fi
-  # systemd、launchd 的服务定义；数据目录不是默认的那份会带哈希后缀
-  for definition in "${XDG_CONFIG_HOME:-$HOME/.config}"/systemd/user/vonvon-bot*.service "$HOME"/Library/LaunchAgents/com.vonvon.bot.daemon*.plist; do
-    if [ -e "$definition" ]; then kind=服务端; fi
+  if { [ -e "$ROOT/current" ] || [ -L "$ROOT/current" ]; } && server_cli_runs; then found=1; fi
+  # systemd 的服务定义；数据目录不是默认的那份会带哈希后缀
+  for definition in "${XDG_CONFIG_HOME:-$HOME/.config}"/systemd/user/vonvon-bot*.service; do
+    if [ -e "$definition" ]; then found=1; fi
   done
-  if [ "$(uname -s 2>/dev/null || true)" = Darwin ]; then
-    for app in "/Applications/Vonvon Bot.app" "$HOME/Applications/Vonvon Bot.app"; do
-      if [ -d "$app" ]; then desktop=1; fi
-    done
-  fi
   command_path=$(command -v vonvon 2>/dev/null || true)
-  if [ -n "$command_path" ] && [ -f "$command_path" ]; then
-    if grep -qF "$DESKTOP_MARKER" "$command_path" 2>/dev/null; then desktop=1
-    elif grep -qF "$SERVER_MARKER" "$command_path" 2>/dev/null; then
-      if [ "$command_path" != "$ROOT/bin/vonvon" ] || server_cli_runs; then kind=服务端; fi
-    fi
+  if [ -n "$command_path" ] && [ -f "$command_path" ] && grep -qF "$SERVER_MARKER" "$command_path" 2>/dev/null; then
+    if [ "$command_path" != "$ROOT/bin/vonvon" ] || server_cli_runs; then found=1; fi
   fi
-  if [ -z "$kind$desktop" ]; then return 1; fi
-  if [ -n "$desktop" ]; then kind=桌面端; fi
-  if [ -z "$command_path" ] && [ -n "$desktop" ]; then
-    say "这台电脑已经装了 Vonvon Bot 桌面端，它自带服务端，不用再装。打开 Vonvon Bot 就能用。"
-  else
-    say "这台电脑已经装过 Vonvon Bot（$kind），不用再装。直接用：\`vonvon --version\`。"
-  fi
+  if [ -z "$found" ]; then return 1; fi
+  say "这台电脑已经装过 Vonvon Bot 服务端，不用再装。直接用：\`vonvon --version\`。"
   return 0
 }
 
@@ -100,36 +87,28 @@ need_tools() {
 
 pick_target() {
   system=$(uname -s)
-  case "$system" in
-    Linux) OS=linux ;;
-    Darwin) OS=darwin ;;
-    *) fail 2 "这个脚本只支持 Linux 和 macOS（这台是 $system）。Windows 用 install.ps1。" ;;
-  esac
+  if [ "$system" != Linux ]; then fail 2 "这个安装脚本只支持 Linux（这台是 $system）。Mac、Windows 请下载安装包：$DESKTOP_DOWNLOAD"; fi
   machine=$(uname -m)
   case "$machine" in
     x86_64|amd64) ARCH=x64 ;;
     aarch64|arm64) ARCH=arm64 ;;
     *) fail 2 "不支持这种处理器：$machine。只有 x64 和 arm64 的包。" ;;
   esac
-  # Rosetta 下的终端说自己是 x86_64，装 arm64 的包
-  if [ "$OS" = darwin ] && [ "$ARCH" = x64 ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || true)" = 1 ]; then ARCH=arm64; fi
-  if [ "$OS" = linux ]; then
-    # ldd 是 libc 自己的；它说不清时 getconf 认得 glibc。都认不出 glibc，有 ld-musl 才算 musl：
-    # glibc 的系统装了 musl 包（musl-tools）也会有 /lib/ld-musl-*.so.1
-    libc=''
-    case "$(ldd --version 2>&1 | head -n 1 || true)" in
-      *musl*) libc=musl ;;
-      *GLIBC*|*'GNU libc'*|*'GNU C Library'*) libc=glibc ;;
-    esac
-    if [ -z "$libc" ] && getconf GNU_LIBC_VERSION >/dev/null 2>&1; then libc=glibc; fi
-    if [ -z "$libc" ]; then
-      for loader in /lib/ld-musl-*.so.1; do
-        if [ -e "$loader" ]; then libc=musl; fi
-      done
-    fi
-    if [ "$libc" = musl ]; then fail 2 "这一版不支持 musl（Alpine 这类系统），只支持 glibc 的 Linux。"; fi
+  # ldd 是 libc 自己的；它说不清时 getconf 认得 glibc。都认不出 glibc，有 ld-musl 才算 musl：
+  # glibc 的系统装了 musl 包（musl-tools）也会有 /lib/ld-musl-*.so.1
+  libc=''
+  case "$(ldd --version 2>&1 | head -n 1 || true)" in
+    *musl*) libc=musl ;;
+    *GLIBC*|*'GNU libc'*|*'GNU C Library'*) libc=glibc ;;
+  esac
+  if [ -z "$libc" ] && getconf GNU_LIBC_VERSION >/dev/null 2>&1; then libc=glibc; fi
+  if [ -z "$libc" ]; then
+    for loader in /lib/ld-musl-*.so.1; do
+      if [ -e "$loader" ]; then libc=musl; fi
+    done
   fi
-  TARGET="$OS-$ARCH"
+  if [ "$libc" = musl ]; then fail 2 "这一版不支持 musl（Alpine 这类系统），只支持 glibc 的 Linux。"; fi
+  TARGET="linux-$ARCH"
 }
 
 sha512_of() {
@@ -168,10 +147,10 @@ read_manifest() {
       ;;
   esac
 
-  # payload 整个对上 C1 的形状：键、顺序、六个包都在、没有别的键；不用里面任何没核对过的值
+  # payload 整个对上 C1 的形状：键、顺序、两个 Linux 包都在、没有别的键；不用里面任何没核对过的值
   if [ "$(wc -l <"$TMP/payload.bin" | tr -d ' ')" != 0 ]; then fail 4 "发布清单的内容不对，没有安装。"; fi
   file='{"url":"[^"]*","sha512":"[0-9a-f]\{128\}","size":[1-9][0-9]*}'
-  shape='^{"schemaVersion":1,"product":"vonvon-bot-server","channel":"stable","version":"\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)","publishedAt":[1-9][0-9]*,"files":{"linux-x64":'"$file"',"linux-arm64":'"$file"',"darwin-arm64":'"$file"',"darwin-x64":'"$file"',"win-x64":'"$file"',"win-arm64":'"$file"'}\(,"notes":"[^"\\]*\(\\.[^"\\]*\)*"\)\{0,1\}}$'
+  shape='^{"schemaVersion":1,"product":"vonvon-bot-server","channel":"stable","version":"\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)","publishedAt":[1-9][0-9]*,"files":{"linux-x64":'"$file"',"linux-arm64":'"$file"'}\(,"notes":"[^"\\]*\(\\.[^"\\]*\)*"\)\{0,1\}}$'
   VERSION=$(LC_ALL=C sed -n "s#$shape#\\1#p" "$TMP/payload.bin")
   case "$VERSION" in
     ''|*[!0-9.]*|.*|*.|*..*) fail 4 "发布清单的内容不对，没有安装。" ;;
@@ -263,7 +242,6 @@ start_detached() {
   esac
   case "$1" in
     no_systemd) say "这台机器没有 systemd（可能是容器）。已改为直接启动，崩溃后不会自动重启；需要时运行 \`vonvon daemon start\`。" ;;
-    no_gui_session) say "这台 Mac 当前没有图形登录会话，后台服务要在你登录桌面后才能安装。已直接启动一次；登录桌面后运行 \`vonvon service install\`。" ;;
     *) say "连不上这个账号的 systemd（用 sudo 切过来时常见）。已直接启动一次；用这个账号 SSH 登录后运行 \`vonvon service install\` 装成后台服务。" ;;
   esac
   DETACHED=yes
@@ -284,7 +262,7 @@ install_service() {
     '{"ok":false'*)
       reason=$(printf '%s' "$output" | LC_ALL=C sed -n 's/.*"reason":"\([a-z_]*\)","fallback":"detached".*/\1/p')
       case "$reason" in
-        no_systemd|user_instance_down|no_runtime_dir|no_gui_session) start_detached "$reason" ;;
+        no_systemd|user_instance_down|no_runtime_dir) start_detached "$reason" ;;
         *)
           show_output "$output" "$TMP/service.err"
           fail 1 "后台服务没装上（退出码 $code）。文件已经装好，再运行安装命令不会重做这一步；问题解决后运行 \`$ROOT/bin/vonvon service install\`。"
@@ -303,10 +281,13 @@ finish() {
   say "试一下：\`vonvon --version\`"
   if [ "$ON_PATH" != yes ]; then say "重开一个终端，或 \`. ~/.bashrc\`（zsh 用 \`. ~/.zshrc\`）再运行 \`vonvon\`。"; fi
   say "要从别的电脑连过来管理？看 $GUIDE_URL"
-  if [ "$OS" = darwin ] && [ "$DETACHED" != yes ]; then say "这台电脑当服务端时请保持这个账号登录着（可以锁屏）；重启后要登录一次，Bot 才会上线。"; fi
 }
 
 main() {
+  # Mac 的安装包里已经带着服务端：先于一切检查、写文件和连网
+  if [ "$(uname -s 2>/dev/null || true)" = Darwin ]; then
+    fail 2 "Mac 请下载安装包：$DESKTOP_DOWNLOAD ，安装包里已经带了服务端和 vonvon 命令。这个脚本只用于 Linux，什么都没动。"
+  fi
   check_root
   case "${HOME:-}" in
     /*) ;;
@@ -323,7 +304,7 @@ main() {
   if [ -z "$PUBKEY_PEM" ]; then fail 4 "这份安装脚本没有带发布公钥，不能用来安装。请用官网上的安装命令。"; fi
   need_tools
   pick_target
-  # 数据目录固定是 ~/.vonvon-bot：Finder 打开的桌面端不继承 VONVON_HOME，两边要对得上
+  # 数据目录固定是 ~/.vonvon-bot：「已装过」的判断、服务名和卸载脚本都按这一份算
   if [ -n "${VONVON_HOME:-}" ]; then say "安装脚本不看 VONVON_HOME，数据目录用 ~/.vonvon-bot。"; fi
   unset VONVON_HOME
   TMP=$(mktemp -d) || fail 2 "建不了临时目录。"

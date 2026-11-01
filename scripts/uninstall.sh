@@ -1,9 +1,10 @@
 #!/bin/sh
-# Vonvon Bot 服务端的卸载脚本（Linux、macOS），docs/plans/server-2-install-scripts.md 4.2：
+# Vonvon Bot 服务端的卸载脚本，只用于 Linux，docs/plans/server-2-install-scripts.md 4.2：
 #   sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/uninstall.sh)"
 # 停后台服务、删服务定义、去掉启动文件里的 PATH 那几行、删安装根 ~/.local/share/vonvon-bot/server。
 # 数据目录 ~/.vonvon-bot（Bot、记忆、设置）留着。
-# 退出码：0 卸好了或没装过；1 后台服务没停下来，什么文件都没删；2 HOME 或安装根不对，什么都没删。
+# 退出码：0 卸好了或没装过；1 后台服务没停下来，什么文件都没删；2 在 Mac 上、HOME 或安装根不对，什么都没删。
+# Mac、Windows 的服务端在桌面端安装包里，不由脚本装（owner 2026-11-01）：这个脚本在 Mac 上什么都不做。
 set -eu
 
 PATH_BY_HAND="请手动删掉 ~/.zshrc、~/.bashrc 等文件里从 \`# >>> Vonvon Bot CLI >>>\` 到 \`# <<< Vonvon Bot CLI <<<\` 的那几行。"
@@ -73,15 +74,14 @@ vv() {
 
 # 数据目录是 ~/.vonvon-bot 时服务定义的位置（D/service/identity.ts 的 serviceTarget）
 service_defined() {
-  [ -e "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/vonvon-bot.service" ] || [ -L "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/vonvon-bot.service" ] \
-    || [ -e "$HOME/Library/LaunchAgents/com.vonvon.bot.daemon.plist" ] || [ -L "$HOME/Library/LaunchAgents/com.vonvon.bot.daemon.plist" ]
+  [ -e "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/vonvon-bot.service" ] || [ -L "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/vonvon-bot.service" ]
 }
 
 # 还指着安装根的服务定义，找到就记进 DEFINED、返回 0；数据目录不是默认的那份时名字带哈希后缀。
 # $1 是 others 时不看默认名字的那份：它由 service uninstall 卸掉。
 defined_for_root() {
-  for definition in "${XDG_CONFIG_HOME:-$HOME/.config}"/systemd/user/vonvon-bot*.service "$HOME"/Library/LaunchAgents/com.vonvon.bot.daemon*.plist; do
-    case "$1:${definition##*/}" in others:vonvon-bot.service|others:com.vonvon.bot.daemon.plist) continue ;; esac
+  for definition in "${XDG_CONFIG_HOME:-$HOME/.config}"/systemd/user/vonvon-bot*.service; do
+    case "$1:${definition##*/}" in others:vonvon-bot.service) continue ;; esac
     if [ -f "$definition" ] && grep -qF 'vonvon-bot/server/current' "$definition" 2>/dev/null; then
       DEFINED=$definition
       return 0
@@ -91,7 +91,7 @@ defined_for_root() {
 }
 
 # 服务定义还在时不删文件：删了代码，服务管理器会一直拉起不存在的 current。
-# 没有服务定义（安装时退回了直接启动：容器里没有 systemd、Mac 只 SSH）就不问服务管理器，它在这些环境里答不上来。
+# 没有服务定义（安装时退回了直接启动：容器里没有 systemd、连不上这个账号的 systemd）就不问服务管理器，它在这些环境里答不上来。
 stop_service() {
   if service_defined; then
     output=$(vv service uninstall --json 2>"$TMP/service.err") && code=0 || code=$?
@@ -130,6 +130,9 @@ no_cli() {
 }
 
 main() {
+  if [ "$(uname -s 2>/dev/null || true)" = Darwin ]; then
+    fail 2 "这个卸载脚本只用于 Linux，什么都没动。Mac 上的服务端在桌面端安装包里（https://bot.vonvon.cc），不是这个脚本装的。"
+  fi
   checked_home
   ROOT="$HOME/.local/share/vonvon-bot/server"
   if [ "$(id -u 2>/dev/null || true)" = 0 ]; then
