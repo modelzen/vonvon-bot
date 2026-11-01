@@ -3,6 +3,7 @@ import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { rm, writeFile } from 'node:fs/promises';
 import * as directoryModule from '../src/server/directory-browser';
+import { devicesPath } from '../src/remote/files';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { tmpdir } from 'node:os';
 import { WebSocket } from 'ws';
@@ -207,7 +208,7 @@ it.each(['mkdir', 'identity', 'directory'] as const)('awaits service rollback af
       await writeFile(fixture.home, 'not a directory');
     } else if (phase === 'identity') {
       // The credential is new every start (devices 4.4); a damaged device identity still stops the start.
-      await writeFile(join(fixture.home, 'device.json'), '{}');
+      await writeFile(devicesPath(fixture.home, 'device.json'), '{}');
     } else {
       vi.spyOn(directoryModule, 'createDirectoryBrowser').mockRejectedValue(directoryError);
     }
@@ -239,7 +240,7 @@ it('retains identity failure and a synchronous service rollback failure', async 
   const cleanupError = new Error('synchronous rollback failed');
   const close = vi.fn(() => { throw cleanupError; });
   try {
-    await writeFile(join(fixture.home, 'device.json'), '{}');
+    await writeFile(devicesPath(fixture.home, 'device.json'), '{}');
     const { startApi } = await import('../src/server/http');
     const result = await startApi({ service: fakeService({ close }), port: 0 }).catch(error => error);
     expect(causes(result)).toContainEqual(expect.objectContaining({ message: expect.stringContaining('device.json 损坏') }));

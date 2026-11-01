@@ -102,7 +102,7 @@ describe('read-only desktop attachment', () => {
   // devices 4.5: until U2 lets it in for maintenance, a daemon of another protocol still fails the attach, so startup repairs as before
   it('refuses a daemon of another protocol and closes the candidate', async () => {
     fake.connect.mockResolvedValueOnce({ client: { admin, close }, serverInfo: { ...serverInfo, protocolVersion: 1 } });
-    await expect(attachExisting(root)).rejects.toMatchObject({ reason: 'connection' });
+    await expect(attachExisting(root)).rejects.toMatchObject({ reason: 'protocol', serverProtocol: 1, message: expect.stringContaining('协议版本是 1') });
     expect(admin).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledOnce();
   });

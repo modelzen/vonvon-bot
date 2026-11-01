@@ -8,8 +8,7 @@ export interface Rule { owner: 'allow'; botSession: BotSessionRule; maintenance:
 export type Decision = { ok: true } | { ok: false; code: 'permission_denied' | 'protocol_mismatch' | 'scope_required' | 'not-dm' | 'not_in_session'; message: string };
 /** D4a adds what its checks read (a bot's groups, the Bot process for ★). */
 export type AuthzDeps = Record<string, never>;
-/** The maintenance kinds, and stopping: a 0.8 desktop or CLI must still stop a newer daemon (devices 4.5). */
-const MAINTENANCE = new Set<string>([...MAINTENANCE_KINDS, 'machine.stopHost']);
+const MAINTENANCE = new Set<string>(MAINTENANCE_KINDS);
 const rows = (method: string, types: string): Array<[string, Rule]> => types.split(/\s+/).filter(Boolean).map(type => {
   const kind = `${method}.${type}`;
   return [kind, { owner: 'allow', botSession: 'deny', maintenance: MAINTENANCE.has(kind) }];

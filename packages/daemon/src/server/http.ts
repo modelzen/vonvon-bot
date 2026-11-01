@@ -32,7 +32,7 @@ import { principalWire } from './principal';
 import { deviceRpc } from './rpc/device';
 import { loadOrCreateDevice } from '../remote/device';
 import { createClientRegistry, type ClientRegistry } from '../remote/clients';
-import { announceRevocations, createInviteBook } from '../remote/pairing';
+import { followRevocations, createInviteBook } from '../remote/pairing';
 import { log } from '../core/logger';
 import { serveWebUi } from './web-ui';
 import { getPidLockInfo, type PidLockInfo } from './pid-lock';
@@ -149,7 +149,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
     const identity = { current: await loadOrCreateDevice(paths.appDir, machineId) };
     const clients = acquiredClients = await createClientRegistry(paths.appDir);
     const invites = createInviteBook();
-    announceRevocations({ clients, publish: event => acquiredSockets?.publish(event), log });
+    followRevocations({ clients, invites, publish: event => acquiredSockets?.publish(event), log });
     const directory = acquiredDirectory = await createDirectoryBrowser();
     const server = acquiredServer = createServer((request, response) => {
       void serveWebUi(request, response).then(served => {

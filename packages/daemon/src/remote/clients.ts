@@ -1,14 +1,17 @@
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { z } from 'zod';
 import { clientRecordSchema, type ClientRecord } from '@vonvon/protocol';
 import { writeFileAtomic } from '../server/atomic-file';
 import { RpcError } from '../server/errors';
+import { devicesPath, prepareDevicesDirectory, refuseNewer } from './files';
 
-/** `<dataRoot>/clients.json` (devices 4.3): every write adds 1 to `generation`; a revoked client stays, with `revokedAt`.
- * Each entry is the protocol's `clientRecordSchema` (zod 3, so parsed apart from this zod 4 frame). */
-const clientsFileSchema = z.object({ v: z.literal(1), generation: z.number().int().nonnegative(), clients: z.array(z.unknown()) }).strict();
+/** `<dataRoot>/devices/clients.json` (devices 4.3): every write adds 1 to `generation`; a revoked client stays, with `revokedAt`.
+ * Each entry is the protocol's `clientRecordSchema` (zod 3, so parsed apart from this zod 4 frame). Fields a newer version
+ * added, outside or in an entry, are kept and written back; the RPC replies carry only the known ones. */
+const clientsFileSchema = z.looseObject({ v: z.literal(1), generation: z.number().int().nonnegative(), clients: z.array(z.unknown()) });
+const storedRecordSchema = clientRecordSchema.passthrough();
+const wireRecordSchema = clientRecordSchema.strip();
 type ClientsFile = { v: 1; generation: number; clients: ClientRecord[] };
 
 export interface NewClient { name: string; publicKey: string; clientKind: ClientRecord['clientKind']; address: string; invitedBy: string }
@@ -28,20 +31,26 @@ export interface ClientRegistry {
   onChange(listener: (generation: number, revoked: readonly string[]) => void): () => void;
   close(): Promise<void>;
 }
-const copy = (client: ClientRecord | undefined): ClientRecord | undefined => client && { ...client };
+const copy = (client: ClientRecord | undefined): ClientRecord | undefined => client && wireRecordSchema.parse(client);
 const notFound = (clientId: string): RpcError => new RpcError('invalid_request', `没有这个客户端：${clientId}。运行 vonvon clients ls 查看。`);
 
 export async function createClientRegistry(home: string, options: { now?: () => number; touchEveryMs?: number } = {}): Promise<ClientRegistry> {
-  const file = join(home, 'clients.json');
+  await prepareDevicesDirectory(home);
+  const file = devicesPath(home, 'clients.json');
   const now = options.now ?? Date.now;
   let state: ClientsFile;
-  try {
-    const parsed = clientsFileSchema.parse(JSON.parse(await readFile(file, 'utf8')));
-    state = { ...parsed, clients: parsed.clients.map(client => clientRecordSchema.parse(client)) };
-  }
-  catch (error) {
-    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw new Error(`clients.json 损坏：${file} 不是有效的客户端列表。`, { cause: error });
-    state = { v: 1, generation: 0, clients: [] };
+  let text: string | undefined;
+  try { text = await readFile(file, 'utf8'); }
+  catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error; }
+  if (text === undefined) state = { v: 1, generation: 0, clients: [] };
+  else {
+    let parsed: unknown;
+    try { parsed = JSON.parse(text); } catch { parsed = undefined; }
+    refuseNewer(file, parsed);
+    try {
+      const outer = clientsFileSchema.parse(parsed);
+      state = { ...outer, clients: outer.clients.map(client => storedRecordSchema.parse(client)) };
+    } catch (error) { throw new Error(`clients.json 损坏：${file} 不是有效的客户端列表。`, { cause: error }); }
   }
   const listeners = new Set<(generation: number, revoked: readonly string[]) => void>();
   let writing: Promise<void> = Promise.resolve();
@@ -57,7 +66,7 @@ export async function createClientRegistry(home: string, options: { now?: () => 
     const write = writing.then(async () => {
       dirty = false;
       state.generation += 1;
-      await writeFileAtomic(file, `${JSON.stringify(state, null, 2)}\n`);
+      await writeFileAtomic(file, `${JSON.stringify(state, null, 2)}\n`, { durable: true });
       for (const listener of listeners) { try { listener(state.generation, revoked); } catch { /* a listener's failure is its own */ } }
     });
     writing = write.catch(() => undefined);
@@ -80,13 +89,13 @@ export async function createClientRegistry(home: string, options: { now?: () => 
   }
   return {
     get generation() { return state.generation; },
-    list: () => state.clients.map(client => ({ ...client })),
+    list: () => state.clients.map(client => wireRecordSchema.parse(client)),
     get: clientId => copy(state.clients.find(client => client.id === clientId)),
     byPublicKey: publicKey => copy(state.clients.find(client => client.publicKey === publicKey)),
     async add(client) {
       const existing = state.clients.find(entry => entry.publicKey === client.publicKey);
       if (existing?.revokedAt !== undefined) throw new RpcError('client_revoked', '这台设备的访问已经被撤销，要重新配对得换一对密钥。');
-      if (existing) { touch(existing.id, client.address); return { ...existing }; }
+      if (existing) { touch(existing.id, client.address); return wireRecordSchema.parse(existing); }
       const at = now();
       const record: ClientRecord = {
         id: `cl_${randomBytes(8).toString('hex')}`, name: client.name, publicKey: client.publicKey, clientKind: client.clientKind,
@@ -100,7 +109,7 @@ export async function createClientRegistry(home: string, options: { now?: () => 
       const client = find(clientId);
       client.name = clientRecordSchema.shape.name.parse(name);
       await save();
-      return { ...client };
+      return wireRecordSchema.parse(client);
     },
     async revoke(clientId, { cascade = false } = {}) {
       const revoked: string[] = [];

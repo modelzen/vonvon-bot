@@ -7,7 +7,8 @@ import { verifyPidLockOwner } from '../../daemon/src/server/owner-verification.j
 import type { AttachedDaemon } from './ipc-contract.js';
 
 export class AttachError extends Error {
-  constructor(readonly reason: 'root' | 'owner' | 'credential' | 'connection' | 'identity' | 'close', cause?: unknown) {
+  /** `protocol`: the daemon runs, with this other protocol version. */
+  constructor(readonly reason: 'root' | 'owner' | 'credential' | 'connection' | 'identity' | 'close' | 'protocol', cause?: unknown, readonly serverProtocol?: number) {
     super({
       root: 'Vonvon 数据目录不可用。',
       owner: '没有找到在运行且通过校验的 Vonvon daemon。',
@@ -15,6 +16,7 @@ export class AttachError extends Error {
       connection: '正在运行的 Vonvon daemon 不接受这次桌面连接。',
       identity: '桌面连接期间 daemon 换了进程。',
       close: '桌面连接没有正常关闭。',
+      protocol: `正在运行的 Vonvon daemon 用的协议版本是 ${serverProtocol}，桌面端是 ${PROTOCOL_VERSION}。先别关它，把较旧的那一边更新到同一个版本。`,
     }[reason], { cause });
     this.name = 'AttachError';
   }
@@ -79,7 +81,7 @@ export async function attachExisting(root: string): Promise<AttachedDaemon> {
   }
   // Another protocol still fails the attach here, so startup repairs as before; U2 lets it in for maintenance (devices 4.5).
   if (serverInfo.protocolVersion !== PROTOCOL_VERSION) {
-    const rejection = new AttachError('connection', new Error('Daemon protocol version mismatch'));
+    const rejection = new AttachError('protocol', undefined, serverInfo.protocolVersion);
     try { await client.close(); }
     catch (closeFailure) { throw new AggregateError([rejection, closeFailure], '连接 daemon 失败，桌面连接也没有正常关闭。'); }
     throw rejection;

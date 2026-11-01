@@ -13,6 +13,8 @@ export interface InviteBook {
   /** An unexpired invite has this id: D3 does not count such a handshake as an unknown key. */
   has(id: string): boolean;
   size(): number;
+  /** Drops the unused invites these clients made: a revoked client's links die with it (http.ts, on clients.onChange). */
+  dropInvitedBy(clientIds: readonly string[]): void;
 }
 export const INVITE_TTL_MS = 600_000;
 const MAX_UNUSED = 3;
@@ -43,6 +45,10 @@ export function createInviteBook({ now = Date.now }: { now?: () => number } = {}
     },
     has(id) { prune(); return invites.has(id); },
     size() { prune(); return invites.size; },
+    dropInvitedBy(clientIds) {
+      const gone = new Set(clientIds);
+      for (const [id, invite] of invites) if (gone.has(invite.invitedBy)) invites.delete(id);
+    },
   };
 }
 export class PairingError extends Error {
@@ -52,9 +58,11 @@ export interface PairingDeps {
   invites: InviteBook; clients: ClientRegistry; device: { readonly name: string };
   publish(event: Event): void; log: Pick<typeof logger, 'info'>;
 }
-/** Tells the owner and the log of each client a write revoked, by whatever path; D3 closes their connections beside it. */
-export function announceRevocations({ clients, publish, log }: Pick<PairingDeps, 'clients' | 'publish' | 'log'>): () => void {
+/** For each client a write revoked, by whatever path: drops the unused invites it made, and tells the owner and the log.
+ * D3 closes their connections beside it. */
+export function followRevocations({ clients, invites, publish, log }: Pick<PairingDeps, 'clients' | 'invites' | 'publish' | 'log'>): () => void {
   return clients.onChange((_generation, revoked) => {
+    invites.dropInvitedBy(revoked);
     for (const client of revoked.flatMap(id => clients.get(id) ?? [])) {
       const fields = { clientId: client.id, name: client.name, clientKind: client.clientKind, address: client.lastAddress, invitedBy: client.invitedBy };
       publish({ type: 'event', event: 'device', payload: { change: 'client-revoked', ...fields } });
@@ -62,10 +70,15 @@ export function announceRevocations({ clients, publish, log }: Pick<PairingDeps,
     }
   });
 }
-/** Registers the key the secure channel authenticated (D2), once the invite checks out. Neither the link nor the secret is logged. */
+/** Registers the key the secure channel authenticated (D2), once the invite checks out. Neither the link nor the secret is logged.
+ * An invite a paired client made pairs nobody once that client is revoked or gone: `--cascade` would never reach the new one. */
 export async function completePairing(deps: PairingDeps, input: { publicKey: string; request: PairRequest; address: string }): Promise<{ clientId: string; deviceName: string }> {
   const invite = deps.invites.redeem(input.request.inviteId, input.request.inviteSecret);
   if (!invite) throw new PairingError('pairing_failed');
+  if (invite.invitedBy !== 'local') {
+    const inviter = deps.clients.get(invite.invitedBy);
+    if (!inviter || inviter.revokedAt !== undefined) throw new PairingError('pairing_failed');
+  }
   const client = await deps.clients.add({
     name: input.request.clientName, publicKey: input.publicKey, clientKind: input.request.clientKind, address: input.address, invitedBy: invite.invitedBy,
   });

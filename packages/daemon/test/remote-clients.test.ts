@@ -1,13 +1,15 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createClientRegistry, type NewClient } from '../src/remote/clients';
+import { devicesPath } from '../src/remote/files';
 
 let home: string;
 beforeEach(async () => { home = await mkdtemp(join(tmpdir(), 'vonvon-clients-')); });
 afterEach(async () => { vi.useRealTimers(); await rm(home, { recursive: true, force: true }); });
-const file = async () => JSON.parse(await readFile(join(home, 'clients.json'), 'utf8'));
+const path = (): string => devicesPath(home, 'clients.json');
+const file = async () => JSON.parse(await readFile(path(), 'utf8'));
 const client = (n: number, invitedBy = 'local'): NewClient => ({ name: `电脑 ${n}`, publicKey: String(n).repeat(43).slice(0, 43), clientKind: 'desktop', address: `192.0.2.${n}:50000`, invitedBy });
 
 it('counts a generation per write and keeps a revoked client as a tombstone', async () => {
@@ -18,7 +20,7 @@ it('counts a generation per write and keeps a revoked client as a tombstone', as
   const a = await registry.add(client(1));
   expect(a.id).toMatch(/^cl_[0-9a-f]{16}$/);
   expect(registry.generation).toBe(1);
-  if (process.platform !== 'win32') expect((await stat(join(home, 'clients.json'))).mode & 0o777).toBe(0o600);
+  if (process.platform !== 'win32') expect((await stat(path())).mode & 0o777).toBe(0o600);
   await registry.rename(a.id, '笔记本');
   expect(registry.generation).toBe(2);
   expect(await registry.revoke(a.id)).toEqual([a.id]);
@@ -73,6 +75,23 @@ it('writes last-seen at most once a period, and on close', async () => {
   expect(await file()).toMatchObject({ clients: [{ lastSeenAt: 500, lastAddress: '192.0.2.8:1' }] });
 });
 it('refuses a damaged list instead of treating it as empty', async () => {
-  await writeFile(join(home, 'clients.json'), JSON.stringify({ v: 1, generation: 2, clients: [{ id: 'x' }] }));
+  await mkdir(join(home, 'devices'));
+  await writeFile(path(), JSON.stringify({ v: 1, generation: 2, clients: [{ id: 'x' }] }));
   await expect(createClientRegistry(home)).rejects.toThrow('clients.json 损坏');
+});
+// D1-R5: after a rollback, the fields a newer version wrote are no damage: kept on disk, left out of the replies;
+// a newer format is named as such. main 必败: the daemon refused to start, "clients.json 损坏".
+it('reads and keeps the fields a newer version added, and names a newer format', async () => {
+  const registry = await createClientRegistry(home);
+  const a = await registry.add(client(1));
+  await registry.close();
+  const stored = await file();
+  await writeFile(path(), JSON.stringify({ ...stored, relay: 'r', clients: [{ ...stored.clients[0], accountId: 'acc_1' }] }));
+  const reread = await createClientRegistry(home);
+  expect(reread.list()).toEqual([expect.not.objectContaining({ accountId: expect.anything() })]);
+  expect(reread.get(a.id)).toEqual(registry.get(a.id));
+  await reread.revoke(a.id);
+  expect(await file()).toMatchObject({ relay: 'r', generation: 2, clients: [{ id: a.id, accountId: 'acc_1', revokedAt: expect.any(Number) }] });
+  await writeFile(path(), JSON.stringify({ ...stored, v: 2 }));
+  await expect(createClientRegistry(home)).rejects.toThrow('较新版本');
 });
