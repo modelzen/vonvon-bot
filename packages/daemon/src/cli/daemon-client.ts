@@ -13,6 +13,8 @@ export type Daemon = <T>(fn: (call: Call, info?: ServerInfo) => Promise<T>) => P
 export type DaemonConnection = { client: VonvonClient; serverInfo: ServerInfo };
 /** Feishu calls get longer than the supervisor's 60 s IPC timeout, so the daemon's own error arrives first. */
 export const TIMEOUTS = { local: 30_000, feishu: 75_000 };
+/** How long a command cut short by Ctrl-C waits for the connection's close handshake. */
+const CLOSE_AFTER_INTERRUPT = 200;
 
 const VERSION_MISMATCH = 'daemon 和命令行的版本不一致。先 vonvon daemon stop，再 vonvon daemon start。';
 const firstLine = (error: unknown): string => (error instanceof Error ? error.message : String(error)).split('\n')[0] ?? '';
@@ -115,9 +117,18 @@ export async function withDaemon<T>(fn: (call: Call, info?: ServerInfo) => Promi
     finally { clearTimeout(timer); }
   };
   // Ordinary commands exit when the event loop drains, so an open socket would hang the CLI.
+  let interrupted = false;
   try { return await fn(call, serverInfo); }
-  catch (error) { throw printableError(error); }
-  finally { await client.close().catch(() => undefined); }
+  catch (error) { interrupted = error instanceof CommandError && error.kind === 'interrupted'; throw printableError(error); }
+  finally {
+    const closed = client.close().catch(() => undefined);
+    // Ctrl-C: the daemon may be the one not answering (a cancel never answered, cli-7-environment), and the process exits
+    // on a failure anyway (index.ts): its close handshake does not hold the command up
+    let timer: NodeJS.Timeout | undefined;
+    if (interrupted) await Promise.race([closed, new Promise<void>(done => { timer = setTimeout(done, CLOSE_AFTER_INTERRUPT); })]);
+    else await closed;
+    clearTimeout(timer);
+  }
 }
 
 /** `--fresh` (devices 8.1): the daemon probes the tools and rebuilds its snapshot, which it otherwise does every 5 s,

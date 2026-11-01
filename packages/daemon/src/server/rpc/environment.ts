@@ -19,7 +19,7 @@ export async function environmentRpc(service: AdminService, jobs: Jobs, peer: Jo
       return { kind: 'mutation', reply: () => result.ok ? { kind: 'applied', message: result.message } : { kind: 'refused', code: 'uninstall_failed', message: result.message } };
     }
     case 'backendInstall': {
-      const admission = jobs.selectBackend(request.id, request.update);
+      const admission = jobs.selectBackend(request.id, request.update, request.requestId);
       return { kind: 'mutation', reply: () => jobs.attachBackend(admission, peer) };
     }
     case 'backendInstallStatus': return { kind: 'read', value: { kind: 'backendInstallStatus', operation: jobs.backendInstallStatus(request.id) } };

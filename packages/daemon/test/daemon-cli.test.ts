@@ -93,6 +93,13 @@ it('starts without bots, refuses duplicate ownership and releases PID lease on s
   expect(await bots.exited, bots.output()).toBe(0); expect(bots.output()).toContain('{"ok":true,"bots":[]}');
   const groups = launch(f.home, f.root, ['group', 'list']);
   expect(await groups.exited, groups.output()).toBe(0); expect(groups.output()).toContain('还没有绑定的群');
+  // main 必败: status and logs read the files with the daemon running; the status's own discovery must not ask itself (cli-8-machine)
+  const status = launch(f.home, f.root, ['daemon', 'status', '--json']);
+  expect(await status.exited, status.output()).toBe(0);
+  expect(JSON.parse(status.output())).toMatchObject({ ok: true, running: true, pid: p.child.pid, source: 'daemon', dataPath: expect.any(String), distribution: { kind: expect.any(String) } });
+  const logs = launch(f.home, f.root, ['daemon', 'logs', '--tail', '5', '--json']);
+  expect(await logs.exited, logs.output()).toBe(0);
+  expect(JSON.parse(logs.output())).toMatchObject({ ok: true, source: 'daemon' });
   const second = launch(f.home, f.root, ['daemon', 'run']);
   expect(await second.exited).toBe(1); expect(second.output()).toMatch(/host is busy|already running/);
   expect((await readdir(f.home)).filter((entry) => entry !== '.codex')).toEqual([]);

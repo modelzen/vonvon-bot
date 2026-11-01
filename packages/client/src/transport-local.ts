@@ -15,7 +15,8 @@ const statusSchema = z.object({
 /** devices 4.1: the daemon's server info comes back too; a different protocol is the caller's to judge (devices 4.5). */
 export async function connectLocal(options: { home: string; cliEntry: string }): Promise<{ client: VonvonClient; serverInfo: ServerInfo }> {
   const { stdout } = await run(process.execPath, [options.cliEntry, "daemon", "status", "--json"], {
-    env: { ...process.env, VONVON_HOME: options.home }, timeout: 10_000,
+    // The discovery reads the files: `daemon status` asks a running daemon otherwise, through this very function (cli-8-machine).
+    env: { ...process.env, VONVON_HOME: options.home, VONVON_STATUS_FROM_FILES: "1" }, timeout: 10_000,
   });
   const status = statusSchema.parse(JSON.parse(stdout));
   const credential = (await readFile(join(options.home, "local-credential"), "utf8")).trim();
