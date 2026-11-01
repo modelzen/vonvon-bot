@@ -23,10 +23,12 @@ export type RestartHelperDeps = {
   installRoot: () => Promise<string | undefined>;
   switchCurrent: (installRoot: string, version: string) => Promise<unknown>;
   readCurrentVersion: (installRoot: string) => Promise<string | undefined>;
-  /** Windows' service supervisor (I4b) switches `current.txt` back itself; two writers would fight. */
+  /** Whether this helper switches back: not for Windows under a service, once left to I4b's supervisor. Windows has no standalone (owner 2026-11-01); I6 removes it. */
   rollsBack: boolean;
   /** Clears `releases/` but for the given versions (standalone-update.ts cleanupReleases). */
   cleanup: (installRoot: string, keep: string[]) => Promise<void>;
+  /** Keeps a release from other data directories' cleanups while this process lives (noteRunning). */
+  note: (installRoot: string, version: string) => Promise<void>;
 };
 const realDeps = (): RestartHelperDeps => ({
   readLock: () => getPidLockInfo(paths.appDir),
@@ -44,6 +46,7 @@ const realDeps = (): RestartHelperDeps => ({
   readCurrentVersion: async root => (await readCurrent(root))?.version,
   rollsBack: !(process.platform === 'win32' && process.env.VONVON_SERVICE),
   cleanup: async (root, keep) => { await (await import('../service/standalone-update')).cleanupReleases(root, keep); },
+  note: async (root, version) => { await (await import('../service/standalone-update')).noteRunning(root, version); },
 });
 
 /**
@@ -155,6 +158,8 @@ export async function runSamePortRestartHelper(options: { port: number; oldPid: 
   }
 
   async function settleStandalone(root: string, update: UpdateStatus & { previous: string; to: string }): Promise<void> {
+    // This helper runs from `previous` (the old daemon's release) and may switch back to it.
+    await deps.note(root, update.previous).catch(error => log.fail('daemon-restart', error, { phase: 'note' }));
     // The old daemon is gone: the helper holds `update.lock` from here to the outcome, so no other update starts and the
     // new daemon's own startup check leaves the record to it. Someone already ended the record (a stop that cancelled
     // the restart, the new daemon): they own the outcome, and nothing is started against a stop.

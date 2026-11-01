@@ -349,32 +349,59 @@ export function startStandaloneUpdate(options: ApplyOptions, deps: ApplyDeps): {
 
 // ── 4.6, 4.10 at startup ─────────────────────────────────────────────────────────────────────────────────────────
 /**
- * Keeps the current release and the previous one; removes other versions and every `.part`. Only direct children of
- * `releases/` named like a version, real directories, holding `standalone.json` or named `.part`. A directory in use
- * (Windows) is left for the next start.
+ * Daemons of other data directories run from the same `releases/` (the check after review 207): each notes the release
+ * it runs as `running/<pid>-<version>`, and a restart helper the release it may go back to. A cleanup keeps what live
+ * processes noted and drops the notes of dead ones.
+ */
+export async function noteRunning(installRoot: string, version: string): Promise<void> {
+  try {
+    await mkdir(join(installRoot, 'running'), { recursive: true });
+    await writeFile(join(installRoot, 'running', `${process.pid}-${version}`), '');
+  } catch (error) { log.warn(EVENTS, 'update-running-unwritable', { code: errorCode(error) }); }
+}
+async function runningVersions(installRoot: string): Promise<string[]> {
+  const dir = join(installRoot, 'running');
+  const versions: string[] = [];
+  for (const name of await readdir(dir).catch(() => [] as string[])) {
+    const [, pid, version] = /^([1-9]\d*)-(\d+\.\d+\.\d+)$/.exec(name) ?? [];
+    if (!pid || !version) continue;
+    if (livePid(Number(pid))) versions.push(version);
+    else await rm(join(dir, name), { force: true }).catch(() => undefined);
+  }
+  return versions;
+}
+
+/**
+ * Keeps the given releases and those live processes run (noteRunning); removes other versions and every `.part`. Only
+ * direct children of `releases/` named like a version, real directories, holding `standalone.json` or named `.part`. A
+ * directory in use (Windows) is left for the next start, and so is all of it while an update holds `releases.lock`.
  */
 export async function cleanupReleases(installRoot: string, keep: ReadonlyArray<string | undefined>, remove: (dir: string) => Promise<void> = dir => rm(dir, { recursive: true })): Promise<void> {
-  const releases = join(installRoot, 'releases');
-  const names = await readdir(releases).catch(() => [] as string[]);
-  for (const name of names) {
-    const match = /^(\d+\.\d+\.\d+)(\.part)?$/.exec(name);
-    if (!match || (!match[2] && keep.includes(match[1]))) continue;
-    const dir = join(releases, name);
-    try {
-      const info = await lstat(dir);
-      if (!info.isDirectory() || info.isSymbolicLink() || dirname(dir) !== releases) continue;
-      if (!match[2] && !await isFile(join(dir, 'standalone.json'))) continue;
-      await remove(dir);
-    } catch (error) {
-      log.warn(EVENTS, 'update-cleanup-skipped', { name, code: error instanceof Error && 'code' in error ? String(error.code) : 'error' });
+  const release = acquireReleasesLock(installRoot);
+  if (!release) return;
+  try {
+    const kept = [...keep, ...await runningVersions(installRoot)];
+    const releases = join(installRoot, 'releases');
+    for (const name of await readdir(releases).catch(() => [] as string[])) {
+      const match = /^(\d+\.\d+\.\d+)(\.part)?$/.exec(name);
+      if (!match || (!match[2] && kept.includes(match[1]))) continue;
+      const dir = join(releases, name);
+      try {
+        const info = await lstat(dir);
+        if (!info.isDirectory() || info.isSymbolicLink() || dirname(dir) !== releases) continue;
+        if (!match[2] && !await isFile(join(dir, 'standalone.json'))) continue;
+        await remove(dir);
+      } catch (error) {
+        log.warn(EVENTS, 'update-cleanup-skipped', { name, code: errorCode(error) });
+      }
     }
-  }
+  } finally { release(); }
 }
 
 /**
  * The new daemon, once it publishes its port: an `installing` record nobody holds the lock for was cut short; a
  * standalone `restarting` record for this version is done (unless `current` was moved back meanwhile); then releases
- * besides the current and previous one go.
+ * besides the current and previous one, and those live daemons of other data directories run, go.
  */
 export async function settleUpdateAtStartup(options: { version: string; installRoot?: string; platform?: NodeJS.Platform; alive?: () => boolean; pause?: (ms: number) => Promise<void> }): Promise<void> {
   // A getter an earlier release wrote names that release, which the cleanup below or the helper's may remove (review 207).
@@ -389,6 +416,7 @@ export async function settleUpdateAtStartup(options: { version: string; installR
     }
   }
   if (!options.installRoot) return;
+  await noteRunning(options.installRoot, options.version);
   // A restart is ended only once this process has stayed up as long as the helper watches a new owner (review 207):
   // one that listens and dies at once leaves the record to the helper, which then switches back.
   if (status?.phase === 'restarting') await (options.pause ?? (ms => new Promise<void>(resolve => { setTimeout(resolve, ms).unref(); })))(STEADY_OWNER_MS);
@@ -401,7 +429,7 @@ export async function settleUpdateAtStartup(options: { version: string; installR
   }
   if (!current) return;
   const release = acquireUpdateLock();
-  if (!release) return; // an update is downloading into releases/ right now
+  if (!release) return; // an update of this data directory is under way
   try {
     const latest = readUpdateStatus();
     // Never the current release itself: a record or `current.txt` naming it would leave no release to go back to.

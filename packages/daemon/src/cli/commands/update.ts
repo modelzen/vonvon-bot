@@ -130,6 +130,8 @@ const defaultDeps = (): UpdateCommandDeps => ({
  * once no daemon drains any more (review F6).
  */
 export const OUTCOME_WAIT_MS = 120_000;
+/** How long `applyCoreUpdate` of a global npm install is waited for: its daemon runs `npm install -g` before answering. */
+export const NPM_INSTALL_MS = 10 * 60_000;
 const SESSION_REFUSED = 'vonvon update 不能在 Bot 的会话里用：升级会重启服务端。在网页的设置里更新，或者在自己的终端里运行。';
 
 type CheckReply = Extract<MachineReply, { type: 'coreUpdate' }> | (StandaloneCheck & { source: 'local' });
@@ -174,11 +176,16 @@ export async function runUpdateCommand(options: UpdateCommandOptions, io: Io, de
   if (distribution.kind === 'development') throw new CommandError('refused', '源码开发态不升级：在仓库里 git pull && npm i。');
   if (distribution.kind === 'global-npm') {
     if (options.to !== undefined) throw badArgs('全局 npm 安装只能更新到最新版，不能指定版本。');
-    if (!io.json && (options.check || !running)) return runUpdate({ check: options.check });
-    const found = await deps.npm.check();
-    if (options.check || !found.hasUpdate || found.dev) { print(io, [found.latest ? `已是最新（${found.current}）` : '查不到最新版本（网络或 npm registry 问题）'], { distribution: distribution.kind, ...found }); return; }
-    // A running daemon installs and restarts itself, as the page asks it to (review 207): followed below in both outputs.
-    if (!running) {
+    // A running daemon installs and restarts itself, as the page asks it to (review 207), when it is a global npm install
+    // too: the desktop app's own daemon refuses, and the global package is then installed here, as with none running.
+    const asked = running && !options.check ? await deps.daemon(call => call('检查更新', c => c.machine({ type: 'checkCoreUpdate' }))) : undefined;
+    const npmDaemon = asked?.type === 'coreUpdate' && asked.distribution.kind === 'global-npm' ? asked : undefined;
+    if (!io.json && !npmDaemon) return runUpdate({ check: options.check });
+    const { current, latest, hasUpdate, dev } = npmDaemon ?? await deps.npm.check();
+    const found = { current, latest, hasUpdate, dev };
+    if (!latest && !io.json) process.exitCode = 1;
+    if (options.check || !hasUpdate || dev) { print(io, [latest ? `已是最新（${current}）` : '查不到最新版本（网络或 npm registry 问题）'], { distribution: distribution.kind, ...found }); return; }
+    if (!npmDaemon) {
       const installed = await deps.npm.install();
       if (!installed.ok) throw new CommandError('failed', `安装失败：${installed.message}`);
       return print(io, [], { distribution: distribution.kind, ...found, updated: true });
@@ -219,7 +226,10 @@ export async function runUpdateCommand(options: UpdateCommandOptions, io: Io, de
   let accepted = false;
   try {
     const ended = await deps.daemon(async call => {
-      const started = await call('开始更新', c => c.machine({ type: 'applyCoreUpdate', ...wanted }));
+      // A global npm daemon answers once `npm install -g` is done (performCoreUpdate), which can take minutes: the call
+      // waits that long, and once it went out, a timeout or a dropped connection is followed in update-status.json.
+      accepted = distribution.kind === 'global-npm';
+      const started = await call('开始更新', c => c.machine({ type: 'applyCoreUpdate', ...wanted }), accepted ? { ms: NPM_INSTALL_MS } : undefined);
       if (started.type !== 'done') throw new CommandError('failed', `更新没有开始：daemon 回了意外的结果（${started.type}）。`);
       accepted = true;
       for (;;) {
