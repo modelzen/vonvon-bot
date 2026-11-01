@@ -7,9 +7,9 @@ import { badArgs, CommandError } from '../command-error';
 import type { Io } from '../daemon-client';
 
 /**
- * The two hidden commands the install scripts call (server-2 4.3): `__standalone-setup` points `current` at a release,
- * writes the `bin/vonvon` launcher and the PATH block; `__standalone-teardown` takes the PATH block out again. They run
- * from the release itself before `current` points at it, so they do not ask what kind of distribution this is.
+ * The two hidden commands the Linux install scripts call (server-2 4.3): `__standalone-setup` points `current` at a
+ * release, writes the `bin/vonvon` launcher and the PATH block; `__standalone-teardown` takes the PATH block out again.
+ * They run from the release itself before `current` points at it, so they do not ask what kind of distribution this is.
  */
 export const SERVER_CLI_MARKER = '# Vonvon Bot server CLI v1';
 /** Follows `current` at every run: it resolves `bin/..`, not `current`, so a switched `current` takes effect at once. */
@@ -40,8 +40,8 @@ export async function runStandaloneSetup(options: { installRoot: string; version
   const { installRoot, version } = options;
   await checkedRoot(installRoot);
   if (!VERSION.test(version)) throw badArgs(`版本号不对：${version}`);
-  // I4a writes the Windows launchers (bin\vonvon.cmd); until then nothing is switched there.
-  if (d.platform === 'win32') throw new CommandError('failed', 'Windows 上的服务端安装还没有做好。', { reason: 'unsupported_platform' });
+  // Only Linux has a script-installed server (owner 2026-11-01): Mac and Windows get theirs inside the desktop app.
+  if (d.platform !== 'linux') throw new CommandError('failed', '只有 Linux 用安装脚本装服务端；Mac、Windows 请下载安装包：https://bot.vonvon.cc', { reason: 'unsupported_platform' });
   let previous: string | null;
   // switchCurrent refuses a release without its standalone.json naming this version
   try { ({ previous } = await switchCurrent(installRoot, version, d.platform)); }
@@ -78,8 +78,7 @@ export async function runStandaloneSetup(options: { installRoot: string; version
 export async function runStandaloneTeardown(options: { installRoot: string }, io: Io, overrides: Partial<StandaloneDependencies> = {}): Promise<{ pathFiles: string[]; pathNote?: string }> {
   const d = { ...defaults(), ...overrides };
   if (!isAbsolute(options.installRoot)) throw badArgs(`--install-root 要是绝对路径：${options.installRoot}`);
-  // On Windows the PATH is in the registry and the script edits it.
-  const removed = d.platform === 'win32' ? { files: [], notes: [] } : await removePathBlock(await startupFiles(d.home, d.zdotdir), join(options.installRoot, 'bin'));
+  const removed = await removePathBlock(await startupFiles(d.home, d.zdotdir), join(options.installRoot, 'bin'));
   const result = { pathFiles: removed.files, ...removed.notes.length ? { pathNote: removed.notes.join('；') } : {} };
   if (io.json) io.write(`${JSON.stringify({ ok: true, ...result })}\n`);
   else io.write(`${removed.files.length ? `已从 ${removed.files.join('、')} 去掉 PATH` : '启动文件里没有服务端的 PATH'}\n${result.pathNote ? `${result.pathNote}\n` : ''}`);

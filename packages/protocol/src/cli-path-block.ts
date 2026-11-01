@@ -1,7 +1,6 @@
 /**
- * The PATH block the desktop app and the script-installed server both write into the shell startup files (devices 7.2,
- * COEX-2): one text and one way to splice it, so the two never leave two blocks. Pure strings: the callers read and
- * write the files.
+ * The PATH block the macOS desktop app and the Linux script-installed server write into the shell startup files
+ * (devices 7.2): one text and one way to splice it, kept in one place. Pure strings: the callers read and write the files.
  */
 export const CLI_PATH_BLOCK_BEGIN = '# >>> Vonvon Bot CLI >>>';
 export const CLI_PATH_BLOCK_END = '# <<< Vonvon Bot CLI <<<';

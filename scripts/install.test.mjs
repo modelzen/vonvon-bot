@@ -5,13 +5,12 @@
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { TARGETS, archiveName, tarHeader, writeTarGz } from './build-server.mjs';
+import { PUBLISHED_TARGETS, archiveName, tarHeader, writeTarGz } from './build-server.mjs';
 import { fileEntries } from './package-tools.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -20,8 +19,6 @@ const SH = '/bin/sh';
 /** The launcher __standalone-setup writes (packages/daemon/src/cli/commands/standalone-setup.ts), checked below. */
 const LAUNCHER = '#!/bin/sh\n# Vonvon Bot server CLI v1\nroot="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)"\nPATH="$root/current/node/bin:$PATH"\nexport PATH\nexec "$root/current/node/bin/node" "$root/current/app/bin/vonvon.mjs" "$@"\n';
 const openssl3 = (() => { try { return /^OpenSSL [3-9]/.test(execFileSync('openssl', ['version'], { encoding: 'utf8' })); } catch { return false; } })();
-// a Mac with the desktop app installed sees it from every HOME
-const desktopOnHost = existsSync('/Applications/Vonvon Bot.app');
 
 /**
  * The fake app/bin/vonvon.mjs: records its arguments; setup switches `current` and writes the launcher for real. A
@@ -132,9 +129,9 @@ cp "$source" "$out"`);
       const bytes = await readFile(out);
       return { sha512: createHash('sha512').update(bytes).digest('hex'), size: bytes.length };
     },
-    /** The C1 payload for `version`, `file` describing `target`'s package; the others are placeholders. */
+    /** The C1 payload for `version`, `file` describing `target`'s package; the other Linux one is a placeholder. */
     payload(version, target, file) {
-      const files = Object.fromEntries(TARGETS.map(name => [name, name === target ? { url: `${BASE}/${version}/${archiveName(version, name)}`, ...file } : { url: `${BASE}/${version}/${archiveName(version, name)}`, sha512: 'a'.repeat(128), size: 1 }]));
+      const files = Object.fromEntries(PUBLISHED_TARGETS.map(name => [name, name === target ? { url: `${BASE}/${version}/${archiveName(version, name)}`, ...file } : { url: `${BASE}/${version}/${archiveName(version, name)}`, sha512: 'a'.repeat(128), size: 1 }]));
       return { schemaVersion: 1, product: 'vonvon-bot-server', channel: 'stable', version, publishedAt: 1_800_000_000_000, files };
     },
     async publish(payload, key = keys.privateKey) {
@@ -233,7 +230,9 @@ test('a manifest that is not exactly the C1 shape is refused before the package 
     'version 1.0': { ...good, version: '1.0' },
     'another host': { ...good, files: { ...good.files, 'linux-x64': { ...good.files['linux-x64'], url: `https://example.com/1.0.0/${archiveName('1.0.0', 'linux-x64')}` } } },
     'sha512 of 127': { ...good, files: { ...good.files, 'linux-x64': { ...good.files['linux-x64'], sha512: file.sha512.slice(1) } } },
-    'a target missing': { ...good, files: Object.fromEntries(Object.entries(good.files).filter(([name]) => name !== 'win-arm64')) },
+    'a target missing': { ...good, files: Object.fromEntries(Object.entries(good.files).filter(([name]) => name !== 'linux-arm64')) },
+    // the manifest lists the two Linux packages only (owner 2026-11-01)
+    'a target more': { ...good, files: { ...good.files, 'darwin-arm64': { url: `${BASE}/1.0.0/${archiveName('1.0.0', 'darwin-arm64')}`, sha512: 'a'.repeat(128), size: 1 } } },
     'another product': { ...good, product: 'vonvon-bot' },
     'pretty-printed': JSON.stringify(good, null, 1),
   };
@@ -322,13 +321,10 @@ test('root with a HOME that is not its own is refused by both scripts, before an
 
 test('an install that is there already is left alone: no network, no file', async t => {
   const cases = [
-    ['a running daemon', async f => { await mkdir(join(f.home, '.vonvon-bot'), { recursive: true }); await writeFile(join(f.home, '.vonvon-bot', 'daemon.pid'), JSON.stringify({ pid: process.pid, startedAt: 'x' })); }, /已经装过 Vonvon Bot（服务端）/],
-    ['current and a launcher that runs', async f => { await mkdir(join(f.root, 'bin'), { recursive: true }); await symlink('releases/0.9.0', join(f.root, 'current')); await writeFile(join(f.root, 'bin', 'vonvon'), '#!/bin/sh\n# Vonvon Bot server CLI v1\nexit 0\n', { mode: 0o755 }); }, /已经装过 Vonvon Bot（服务端）/],
+    ['a running daemon', async f => { await mkdir(join(f.home, '.vonvon-bot'), { recursive: true }); await writeFile(join(f.home, '.vonvon-bot', 'daemon.pid'), JSON.stringify({ pid: process.pid, startedAt: 'x' })); }, /已经装过 Vonvon Bot 服务端/],
+    ['current and a launcher that runs', async f => { await mkdir(join(f.root, 'bin'), { recursive: true }); await symlink('releases/0.9.0', join(f.root, 'current')); await writeFile(join(f.root, 'bin', 'vonvon'), '#!/bin/sh\n# Vonvon Bot server CLI v1\nexit 0\n', { mode: 0o755 }); }, /已经装过 Vonvon Bot 服务端/],
     ['a systemd unit', async f => { await mkdir(join(f.home, '.config/systemd/user'), { recursive: true }); await writeFile(join(f.home, '.config/systemd/user/vonvon-bot-0123456789ab.service'), ''); }, /已经装过/],
-    ['a LaunchAgent', async f => { await mkdir(join(f.home, 'Library/LaunchAgents'), { recursive: true }); await writeFile(join(f.home, 'Library/LaunchAgents/com.vonvon.bot.daemon.plist'), ''); }, /已经装过/],
-    ['the desktop app on a Mac', async f => { await f.setUname(['Darwin', 'arm64']); await mkdir(join(f.home, 'Applications', 'Vonvon Bot.app'), { recursive: true }); }, /已经装了 Vonvon Bot 桌面端，它自带服务端，不用再装。打开 Vonvon Bot 就能用。/],
-    ['the desktop app\'s command', async f => { await f.command('# Vonvon Bot managed CLI v1'); }, /已经装过 Vonvon Bot（桌面端），不用再装。直接用：`vonvon --version`。/],
-    ['the server\'s command', async f => { await f.command('# Vonvon Bot server CLI v1'); }, /已经装过 Vonvon Bot（服务端），不用再装。直接用：`vonvon --version`。/],
+    ['the server\'s command', async f => { await f.command('# Vonvon Bot server CLI v1'); }, /已经装过 Vonvon Bot 服务端，不用再装。直接用：`vonvon --version`。/],
   ];
   for (const [name, arrange, text] of cases) {
     const f = await fixture(t);
@@ -429,7 +425,6 @@ test('the service: linger left off, the fallbacks to a detached daemon, and fail
     ['no_systemd', /这台机器没有 systemd（可能是容器）。已改为直接启动/],
     ['user_instance_down', /连不上这个账号的 systemd（用 sudo 切过来时常见）。已直接启动一次/],
     ['no_runtime_dir', /连不上这个账号的 systemd/],
-    ['no_gui_session', /这台 Mac 当前没有图形登录会话/],
   ]) {
     const g = await fixture(t);
     await g.ready();
@@ -480,7 +475,7 @@ test('a setup that failed after switching current is finished by the next run, n
   // now it is an install: the launcher runs the release
   run = await f.run('install.sh');
   assert.equal(run.code, 0, run.stderr);
-  assert.match(run.stdout, /已经装过 Vonvon Bot（服务端）/);
+  assert.match(run.stdout, /已经装过 Vonvon Bot 服务端/);
   assert.equal((await f.calls()).at(-1), '--version');
 });
 
@@ -519,13 +514,33 @@ test('an incomplete releases/<version> is not deleted; a leftover .part is', asy
   assert.equal(await g.exists(join(g.root, 'releases', '1.0.0.part')), false);
 });
 
-test('on a Mac the last line asks to stay logged in', { skip: desktopOnHost && 'the desktop app is installed on this machine' }, async t => {
+// main 必败: the scripts installed a server on a Mac too. owner 2026-11-01: Mac and Windows install the desktop app,
+// which carries the server; the scripts are for Linux only
+test('on a Mac both scripts point to the desktop installer and exit 2: nothing written, no network, root or not', async t => {
   const f = await fixture(t, { uname: ['Darwin', 'arm64'] });
-  await f.ready('1.0.0', 'darwin-arm64');
-  const run = await f.run('install.sh');
-  assert.equal(run.code, 0, run.stderr);
-  assert.match(run.stdout, /（darwin-arm64）/);
-  assert.match(run.stdout, /这台电脑当服务端时请保持这个账号登录着（可以锁屏）；重启后要登录一次，Bot 才会上线。/);
+  await f.ready();
+  // no temporary directory either
+  await shim(f.shims, 'mktemp', `echo "$*" >> '${f.shims}/mktemp.log'; exit 1`);
+  for (const env of [{}, { VONVON_ALLOW_ROOT: '1' }]) {
+    const run = await f.run('install.sh', env);
+    assert.equal(run.code, 2, run.stderr);
+    assert.equal(run.stdout, '');
+    assert.equal(run.stderr, 'Mac 请下载安装包：https://bot.vonvon.cc ，安装包里已经带了服务端和 vonvon 命令。这个脚本只用于 Linux，什么都没动。\n');
+    await shim(f.shims, 'id', `case "$1" in -u) echo 0 ;; *) echo root ;; esac`);
+  }
+  assert.deepEqual(await readdir(f.home), []);
+  assert.deepEqual(await f.curls(), []);
+  assert.equal(await f.exists(join(f.shims, 'mktemp.log')), false);
+
+  // an install root there by hand stays as it is
+  await mkdir(join(f.root, 'releases', '1.0.0'), { recursive: true });
+  await writeFile(join(f.root, 'releases', '1.0.0', 'standalone.json'), '{}');
+  const run = await f.run('uninstall.sh');
+  assert.equal(run.code, 2, run.stderr);
+  assert.match(run.stderr, /这个卸载脚本只用于 Linux，什么都没动。Mac 上的服务端在桌面端安装包里（https:\/\/bot\.vonvon\.cc）/);
+  assert.equal(await f.exists(join(f.root, 'releases', '1.0.0', 'standalone.json')), true);
+  assert.deepEqual(await f.calls(), []);
+  assert.equal(await f.exists(join(f.shims, 'mktemp.log')), false);
 });
 
 test('a script cut short anywhere before its last line does nothing', async t => {
@@ -612,7 +627,7 @@ test('uninstall: not registered as a service still stops the daemon, then delete
   assert.equal(await f.exists(f.root), false);
 });
 
-// main 必败: the detached fallback (no systemd, a Mac over SSH) left no unit, and asking the service manager there fails
+// main 必败: the detached fallback (no systemd, no user manager) left no unit, and asking the service manager there fails
 test('uninstall: with no service definition the service manager is not asked; the daemon is stopped and the root deleted', async t => {
   const f = await fixture(t);
   await f.ready();

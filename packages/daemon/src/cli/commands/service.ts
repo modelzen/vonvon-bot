@@ -40,8 +40,6 @@ type LinuxServiceSteps = {
   /** For `sudo loginctl enable-linger <user>`. */
   user: string;
 };
-/** launchd has no GUI domain for this user: logged in over SSH only, or not logged in at all. */
-export const NO_GUI_SESSION_HINT = '这台 Mac 当前没有图形登录会话（比如只通过 SSH 登录），launchd 装不了后台服务。登录桌面后再运行 vonvon service install；在那之前可以用 vonvon daemon start 起一个分离的 daemon，它崩溃后不会自动重启。';
 /** The user names a script can paste into `sudo loginctl enable-linger` as they are. */
 const SAFE_USER = /^[A-Za-z0-9._-]+$/;
 
@@ -153,14 +151,10 @@ export async function runServiceCommand(action: 'install' | 'uninstall', adapter
     case 'uninstall_incomplete': {
       if (result.detail.includes('stop_unconfirmed')) lines.push('Next step: vonvon service uninstall');
       const partial = { ...outcome, leftovers: result.leftovers, ...warning ? { notes: [warning] } : {} };
-      if (result.detail.startsWith('GUI domain unavailable')) {
-        lines.push(NO_GUI_SESSION_HINT);
-        if (result.kind === 'install_refused') throw new CommandError('refused', lines.join('\n'), { reason: 'no_gui_session', fallback: 'detached', hint: NO_GUI_SESSION_HINT, partial });
-      }
       if (result.detail.includes('User manager unavailable')) {
         const problem = await d.linux?.problem(result.detail);
         if (problem) lines.push(problem.hint);
-        // This machine or this login cannot run a user service: the script starts the daemon detached instead.
+        // This machine or this login cannot run a user service: the Linux install script starts the daemon detached instead.
         if (problem && result.kind === 'install_refused') throw new CommandError('refused', lines.join('\n'), { reason: problem.reason, fallback: 'detached', hint: problem.hint, partial });
       }
       throw new CommandError('failed', lines.join('\n'), { reason: result.kind, partial });

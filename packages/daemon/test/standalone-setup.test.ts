@@ -72,8 +72,13 @@ describe('__standalone-setup', () => {
     expect(await failure(f.root, '1.0.1')).toMatchObject({ exitCode: 1, error: { kind: 'failed', reason: 'release_incomplete' } });
     expect(await failure(f.root, '9.9.9')).toMatchObject({ error: { reason: 'release_incomplete' } });
     await expect(lstat(join(f.root, 'current'))).rejects.toMatchObject({ code: 'ENOENT' });
-    expect(await failure(f.root, '1.0.0', { ...f.deps, platform: 'win32' })).toMatchObject({ exitCode: 1, error: { reason: 'unsupported_platform' } });
+    // owner 2026-11-01: Mac and Windows install the desktop app, which carries the server
+    for (const platform of ['win32', 'darwin'] as const) {
+      expect(await failure(f.root, '1.0.0', { ...f.deps, platform })).toMatchObject({ exitCode: 1, error: { reason: 'unsupported_platform', message: expect.stringContaining('https://bot.vonvon.cc') } });
+    }
     await expect(lstat(join(f.root, 'current.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(lstat(join(f.root, 'current'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(lstat(join(f.root, 'bin'))).rejects.toMatchObject({ code: 'ENOENT' });
     await mkdir(join(f.root, 'bin', 'vonvon.tmp'), { recursive: true });
     expect(await failure(f.root, '1.0.0')).toMatchObject({ error: { reason: 'launcher_write_failed' } });
     expect(await readlink(join(f.root, 'current'))).toBe('releases/1.0.0');

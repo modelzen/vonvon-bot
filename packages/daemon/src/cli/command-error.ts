@@ -9,7 +9,7 @@ export type CommandErrorKind = keyof typeof commandExitCodes;
  */
 export type CommandErrorDetail = {
   reason?: string; current?: unknown; partial?: object;
-  /** server-2 4.4: a refusal the install script works around by starting the daemon detached, and what to tell the user. */
+  /** server-2 4.4: a refusal the Linux install script works around by starting the daemon detached, and what to tell the user. */
   fallback?: 'detached'; hint?: string;
 };
 export class CommandError extends Error {

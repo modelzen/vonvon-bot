@@ -48,7 +48,7 @@ async function startupPaths(options: CliRegistrationOptions): Promise<string[]> 
   return shellStartupFiles(options.home, { ...(options.zdotdir ? { zdotdir: options.zdotdir } : {}), exists });
 }
 
-/** The server's install script writes the same block (protocol `cli-path-block`); a half-written one is not touched. */
+/** The block and its splicing are shared with the Linux server's setup (protocol `cli-path-block`); a half-written one is not touched. */
 function updatedStartup(before: string, bin: string, path: string): string {
   const start = before.indexOf(CLI_PATH_BLOCK_BEGIN);
   const finish = before.indexOf(CLI_PATH_BLOCK_END);

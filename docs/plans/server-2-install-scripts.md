@@ -2,6 +2,8 @@
 
 依据 `docs/plans/devices.md` §7.2（布局）、§7.3（安装脚本）、§7.4 的退路、§15 的文案、§13 的 I2 行。契约（清单格式、签名公钥怎么进包、`current`/`current.txt`、`current-release.ts`、服务名）在 `docs/plans/server-3-update-engine.md` §4.1，本文按 C1–C8 的编号引用，不重写。缩写同 `devices.md`。
 
+> **2026-11-01 起只支持 Linux（owner）。** 只装服务端、用一行命令装，只在 Linux 上有；Mac、Windows 装桌面端安装包，服务端在里面。下文写 macOS、Windows 的部分（`install.ps1`、`uninstall.ps1`、I2b、LaunchAgent、找桌面端、`no_gui_session`、Mac 的完成文案、§4.5、§5.3、§6 的 Mac 和 Windows 验收）不再做，以文末"只支持 Linux"一节为准。
+
 ## 1. 做什么
 
 一台没装过 Vonvon Bot 的 Linux / macOS / Windows 机器，跑一行命令就装好 `standalone` 服务端：选包、读签名清单、校验哈希（有 OpenSSL 3 再验签名）、解到 `releases/<v>/`、切 `current`、写 `vonvon` 命令和 PATH、装后台服务（能开 linger 就开），装不了服务就直接启动一次并说清为什么。已经装过桌面端或服务端就一个字不动、退出 0。`uninstall.*` 停服务、删服务定义、删安装根、留数据目录。脚本只做下载、解包和调 `vonvon`，逻辑放在 `vonvon` 的两条隐藏命令里，脚本好测、好升级。
@@ -275,3 +277,15 @@ JP-VPS 自测：
 - F4 接受：`uninstall.sh` 能跑 vonvon 时，先查默认名字以外、还指着 `vonvon-bot/server/current` 的服务定义（别的 `VONVON_HOME` 装的、带哈希后缀），有就 exit 1、什么都不动，提示用它的 `VONVON_HOME` 先 `service uninstall`；和跑不了 vonvon 时的扫描共用一个函数；加了测试。
 - F5 接受：两个脚本以 root 运行而 `HOME` 不归当前用户（`[ -O "$HOME" ]` 不成立，sudo 留着原用户 HOME 时）就 exit 2、什么都不写；只对 root 查，普通用户不受影响；加了测试（用不存在的 HOME，测试不需要第二个账号）。
 - F6 接受：musl 的判断先看 `ldd --version`（说 musl 就是 musl，说 GLIBC/GNU libc 就是 glibc），再看 `getconf GNU_LIBC_VERSION`，都认不出 glibc 时 `/lib/ld-musl-*.so.1` 才算 musl；加了测试（测试里把加载器路径换到临时目录）。
+
+## 只支持 Linux（I2a，owner 2026-11-01）
+
+owner 原话："Mac 和 Windows 上就直接通过安装包安装全部软件就好了，没有这种场景只安装 Server 端，也不用通过命令行安装"。本片按这句收窄：
+
+- `install.sh`、`uninstall.sh` 只用于 Linux。在 macOS 上（`uname -s` 是 `Darwin`）第一步就打印一句中文、指向 https://bot.vonvon.cc 的安装包，exit 2：先于 root 检查，不建临时目录、不写文件、不连网。别的非 Linux 系统照旧在选包时 exit 2。
+- 删掉的 macOS 分支：已装过里的 LaunchAgent 和两个 `Applications` 目录、桌面端命令的标记（`Vonvon Bot managed CLI v1`，Linux 没有桌面端）、Rosetta 判断、`darwin-*` 目标、`no_gui_session` 退路和 Mac 的"保持登录"完成文案；卸载时只看 systemd 的服务定义。Linux 的部分都留着：root 和 `HOME` 检查、musl 判断、linger、已装过的四种命中（这个数据目录上在跑的 daemon、`current` 加能跑的 `bin/vonvon`、`vonvon-bot*.service`、PATH 里带服务端标记的 `vonvon`），已装过的文案统一成"已经装过 Vonvon Bot 服务端"。
+- 清单的字面校验跟着改：`files` 只有 `linux-x64`、`linux-arm64` 两项，按这个顺序，多一项、少一项都 exit 4。服务端升级清单（server-3 C1）也只列这两项，I3 的解析要对上。
+- `scripts/build-server.mjs`（I1）：新导出 `PUBLISHED_TARGETS = ['linux-x64', 'linux-arm64']`，不带 `--targets` 时只打这两个包，发布也只发这两个。`TARGETS` 里的 macOS、Windows 目标暂时还能用 `--targets` 点名打包；Windows 的 `.zip`、260 字符路径预算、`current.txt`、`unpackZip` 这些独立服务端在 Windows、macOS 上的代码已经用不上，等 I3 合入后由一次清理统一删掉，不算功能。
+- daemon：`service install` 不再把 launchd 没有图形会话说成带 `fallback: 'detached'` 的 `no_gui_session`，回到原来的 `failed`（exit 1）；三种 Linux 的 `reason` 照旧。`__standalone-setup` 在 Linux 以外回 `failed`、`reason: 'unsupported_platform'`，提示去下载安装包，什么都不切、不写；`__standalone-teardown` 去掉了 Windows 特判（它只删指向这个安装根的 PATH 块，在哪儿跑都无害）。`current-release.ts` 是 I3 那份的副本，`current.txt` 那段不在这里删。
+- 留着的：PATH 块搬到 `@vonvon/protocol` 的 `cli-path-block.ts`、桌面端 `cli-registration.ts` 改用它。这不是为 Mac 上脚本装的服务端和桌面端共存才做的：daemon 不能 import desktop，Linux 的 `__standalone-setup` 要用同一段文本，放在 protocol 里只有一份。
+- 退出规则（`docs/product.md` 3.10"桌面端的关闭与退出"和 3.14：桌面端自带的或没注册成后台服务的停，安装脚本装的不停）：Mac、Windows 上已经没有脚本装的服务端，3.10、3.14 的改写交给文档那一片，本片不碰桌面端的退出代码；本片把自己在 3.10 加的 Windows 签名那句和卸载那句的改动退回集成分支的原文，只留 3.3 里 Linux 安装布局那一条。
