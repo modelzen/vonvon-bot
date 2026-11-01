@@ -113,7 +113,8 @@ it('starts without bots, refuses duplicate ownership and releases PID lease on s
   expect(await readdir(join(f.root, '.access'))).toEqual([]);
 }, process.platform === 'win32' ? 120_000 : 20_000);
 
-it('service status gives an isolated data root service names of its own', async () => {
+// No background service on Windows (owner 2026-11-01: Mac and Windows run the desktop app only).
+it.skipIf(process.platform === 'win32')('service status gives an isolated data root service names of its own', async () => {
   const f = await fixture();
   const p = launch(f.home, f.root, ['service', 'status', '--json']);
   expect(await p.exited, p.output()).toBe(0);
@@ -293,9 +294,14 @@ it('service commands from a checkout and hidden controls leave an absent data ho
   const f = await fixture();
   await rm(f.root, { recursive: true });
   for (const [args, code, text] of [
-    [['service', 'install'], 1, 'install_refused: Distribution cannot install a service'],
-    [['service', 'uninstall'], 0, 'not-installed: No data directory'],
-    [['service', 'status'], 0, 'not installed'],
+    ...(process.platform === 'win32'
+      // No background service on Windows (owner 2026-11-01: Mac and Windows run the desktop app only).
+      ? (['install', 'uninstall', 'status'] as const).map(action => [['service', action], 1, 'not supported on win32'] as const)
+      : [
+        [['service', 'install'], 1, 'install_refused: Distribution cannot install a service'],
+        [['service', 'uninstall'], 0, 'not-installed: No data directory'],
+        [['service', 'status'], 0, 'not installed'],
+      ] as const),
     [['__daemon-control', 'start'], 1, SERVICE_UNAVAILABLE], [['__daemon-control', 'stop'], 1, SERVICE_UNAVAILABLE],
     [['__daemon-control', 'restart'], 1, SERVICE_UNAVAILABLE], [['__daemon-control', 'update'], 1, SERVICE_UNAVAILABLE],
   ] as const) {
