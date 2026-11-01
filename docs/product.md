@@ -735,7 +735,7 @@ owner 说过"崩溃报错就好了"，让 Claude 斟酌。自动重启是 Claude
 4. 装完不打印连接链接，只提示试一下 `vonvon --version`，要从别的电脑连过来管就看官网说明 https://vonvon.cc/guide/remote/。
 5. 在那台设备上把 Codex 或 Claude 配置好（账号或自定义 API 都行，3.11），然后从别的设备连过来走首次运行清单（3.14）。不连也行：`vonvon bot add` 在终端里扫码建 bot，`vonvon bot status` 看清单各步，`vonvon group bind` 绑群，`vonvon settings get`、`set` 改设置。
 
-已经装过 Vonvon Bot 时（后台服务在跑、服务已注册、装过服务端，或者 PATH 上的 `vonvon` 是 Vonvon Bot 自己的），脚本说已经装过、可以直接用，退出，什么都不动。`uninstall.sh` 停服务、删服务定义和安装根，保留数据目录；在 Mac 上同样什么都不动，只说明 Mac 上是安装包装的。从 npm 装（`npm i -g vonvon-bot`）照旧可以。升级见 3.14"升级和版本"。
+已经装过 Vonvon Bot 时（后台服务在跑、服务已注册、装过服务端，或者 PATH 上的 `vonvon` 是 Vonvon Bot 自己的），脚本说已经装过、可以直接用，退出，什么都不动。`uninstall.sh` 停服务、删服务定义和安装根，保留数据目录；不是 Linux 时同样什么都不动，在 Mac 上说明 Mac 上是安装包装的。从 npm 装（`npm i -g vonvon-bot`）照旧可以。升级见 3.14"升级和版本"。
 
 **和桌面端共存。** 2026-11-01 起没有"脚本装的服务端和桌面端在同一台"：Mac、Windows 上服务端只随桌面端装，Linux 没有桌面端。一台设备只跑一个服务端（同一把 pid 锁）照旧；自己用 npm 装、又注册成后台服务的，退出桌面端不停它（上面"关闭与退出"）。原来为"先跑安装脚本、再装桌面端"定的登录项显示、`vonvon` 命令归属、只提示升级这几条不做。
 

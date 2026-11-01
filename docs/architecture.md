@@ -272,7 +272,7 @@ vonvon-platform 只有约 1170 行，数据存在一个 JSON 文件里，只能�
 
 桌面端既是本机 daemon 的外壳，也是别的设备的客户端（见"远程连接和多设备"）。连着别的设备时，外壳里管本机的事一律不作用在对面。
 
-桌面端内置的 daemon（`bundled`）和 `npm i -g vonvon-bot` 装的 daemon 共用 `~/.vonvon-bot` 和同一把 pid 锁，所以同一时间只会有一个在运行。版本不同时以协议版本判断能否连接（见"本机和远程走同一套协议"的维护子集）。2026-11-01 起安装脚本装的服务端（`standalone`）只在 Linux，Linux 没有桌面端，所以桌面端一侧只剩退出规则：退出时停本机的服务端，只有"不是 `bundled`、又另外注册成后台服务"的不停（比如 npm 装后 `vonvon service install`，它退 0 以后服务管理器不再拉起），Windows 更新前的 `beforeUpdateInstall` 同样跳过它。原来的登录项显示、启动修复只提示升级、认 `vonvon` 标记三条不做。安装脚本在 Linux 上发现这台已经装过（daemon 在跑、服务已注册、装过服务端、或 PATH 上有带标记的 `vonvon`）就跳过，什么都不动。
+桌面端内置的 daemon（`bundled`）和 `npm i -g vonvon-bot` 装的 daemon 共用 `~/.vonvon-bot` 和同一把 pid 锁，所以同一时间只会有一个在运行。版本不同时以协议版本判断能否连接（见"本机和远程走同一套协议"的维护子集）。2026-11-01 起安装脚本装的服务端（`standalone`）只在 Linux，Linux 没有桌面端，所以桌面端一侧只剩退出规则：退出时停本机的服务端，只有"不是 `bundled`、又另外注册成后台服务"的不停（比如 npm 装后 `vonvon service install`，它退 0 以后服务管理器不再拉起）。原来的登录项显示、启动修复只提示升级、认 `vonvon` 标记三条不做。安装脚本在 Linux 上发现这台已经装过（daemon 在跑、服务已注册、装过服务端、或 PATH 上有带标记的 `vonvon`）就跳过，什么都不动。
 
 ### 服务端独立安装和升级
 

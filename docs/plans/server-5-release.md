@@ -2,7 +2,7 @@
 
 依据 `docs/plans/devices.md` §7.6（发布流水线）、§7.1 末尾（三平台同版本 0.9.0）、§13 的 I5 行、`AGENTS.md`"Mac 发布任务（owner 2026-10-26 定）"和"双平台发布版本（owner 2026-10-28 定）"。契约 C1（签名清单）、C2（服务端签名密钥、`server-update.json`、`updateKey: test`）在 `docs/plans/server-3-update-engine.md` §4.1。缩写同 `devices.md`。
 
-**2026-11-01 改动**（owner："Mac 和 Windows 上就直接通过安装包安装全部软件就好了，没有这种场景只安装 Server 端，也不用通过命令行安装"；`devices.md` 第 19 节）：服务端包只发 `linux-x64`、`linux-arm64`，安装脚本只有 `install.sh`、`uninstall.sh`（I2b 的 `.ps1` 取消）。I1 已合入的 `build-server.mjs` 还会打六个包，I3 合入后由清理片 I6 改成两个，本片等 I6。下文已按两个包、两个脚本改过。
+**2026-11-01 改动**（owner："Mac 和 Windows 上就直接通过安装包安装全部软件就好了，没有这种场景只安装 Server 端，也不用通过命令行安装"；`devices.md` 第 19 节）：服务端包只发 `linux-x64`、`linux-arm64`，安装脚本只有 `install.sh`、`uninstall.sh`（I2b 的 `.ps1` 取消）。I1 已合入的 `build-server.mjs` 能打六个包，I2a 起不带 `--targets` 只打两个 Linux 包（`PUBLISHED_TARGETS`）；另外四个目标由清理片 I6 删，本片等 I6。签名清单的 `files` 只有两项：I2a 的脚本已经只认两项，I3 的 `SERVER_TARGETS` 在 I3 里改成两项，本片产出第一份清单时两边已经一致。下文已按两个包、两个脚本改过。
 
 ## 1. 做什么
 
@@ -29,7 +29,7 @@
 
 ## 3. 现在的代码
 
-- `scripts/build-server.mjs`（I1）：`buildServer({ out, targets, cache, allowDirty })` → 六个包（I6 改成两个）+ `vonvon-server-<v>-build.json`（每个包的 sha256/sha512/size、`node`、`sha` 源码提交）；I3 加 `--update-public-key`、`--update-base-url`、`updateKey: 'test' | 'release'`。
+- `scripts/build-server.mjs`（I1）：`buildServer({ out, targets, cache, allowDirty })` → 默认两个 Linux 包（I2a 的 `PUBLISHED_TARGETS`；另外四个目标 I6 删）+ `vonvon-server-<v>-build.json`（每个包的 sha256/sha512/size、`node`、`sha` 源码提交）；I3 加 `--update-public-key`、`--update-base-url`、`updateKey: 'test' | 'release'`。
 - `scripts/release-all.mjs`：`prepareRelease`（版本门、源码 worktree、runner 检查）→ `buildRelease`（mac 两个架构 + Windows Actions 分发）→ `releaseStatus` → `collectRelease`；状态文件原子写（`atomicJSON`）、`CANCEL` 文件、`lock`。
 - `scripts/release-publish.mjs`：`planPublication` 打印统一计划的 SHA-256；`uploadPublication` 要 `--plan-sha256`，并发上传 mac 和 Windows 的版本化对象；`promotePublication` 要同一个哈希 + `--owner-confirmation`，切 stable、公网复核、写 website handoff；`publicationStatus`。配置路径 `~/.config/vonvon-release/cos-write.json`（mac）、`cos-windows.json`。
 - `scripts/release-cos-publish.mjs`：`planPublish`/`uploadRelease`/`promoteRelease`/`reverifyRelease`/`rollbackRelease`/`fixReleaseHeaders`；禁止覆盖（`x-cos-forbid-overwrite`）、bucket 版本控制检查、stable 最后切、台账 `appendLedger`。
@@ -162,5 +162,5 @@ JP-VPS：
 - 服务端签名密钥是新的信任根：丢了就换不了清单（所有已装机器验不过）；泄了就能给所有机器推包。放在 Mac 发布配置目录、和 Windows 更新私钥同等对待；备份由 owner 定（I5 不替 owner 决定备份放哪，验收时问一句）。
 - `publishedAt` 单调：promote 时检查公网 stable 的 `publishedAt` 不比要发的新；如果有一天要回退 stable 到旧版本（`rollbackRelease` 那种），服务端这边要**重新签**一份 `publishedAt` 更新、`version` 更旧的清单——但 I3 的回滚保护会拒 `version < highestSeen`。所以服务端的 stable 回退 = 发一个更高版本号的修复版，不是指回旧版本；写进 `docs/release-orchestration.md`。
 - CI 冒烟要下载 Node 二进制（~30 MB）：用 actions cache 按 `server-node.json` 的哈希缓存 `--node-cache`；缓存失效时多 1 分钟。
-- `install-smoke.mjs` 依赖 I2a（脚本）、I3（`update --check`、`server-update.json` 进包的构建选项）、I6（两个包、清单两项）合入；I5 可以先合，冒烟里对未合入的步骤按文件是否存在跳过并打印"跳过：等 I3"——不行：跳过会让 CI 绿得没意义。顺序上 I5 最后合（§13 依赖 I1、I2a、I3、I6），冒烟不写条件跳过。
+- `install-smoke.mjs` 依赖 I2a（脚本）、I3（`update --check`、`server-update.json` 进包的构建选项）、I6（只剩两个目标）合入；I5 可以先合，冒烟里对未合入的步骤按文件是否存在跳过并打印"跳过：等 I3"——不行：跳过会让 CI 绿得没意义。顺序上 I5 最后合（§13 依赖 I1、I2a、I3、I6），冒烟不写条件跳过。
 - 行数估计 ~950（`publish-server.mjs` 260、`server-update-signing.mjs` 90、`server-manifest.mjs` 60、`server-constants.mjs` 10、`release-publish.mjs` 改 80、`release-all.mjs` 改 60、`product-version.mjs` 15、`install-smoke.mjs` 150、`ci-scope`/`ci-run` 30、文档 60、测试 ~350——测试多一些就到 1,100）。不拆。
