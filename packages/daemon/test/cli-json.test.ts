@@ -29,6 +29,11 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['schedule', 'delete', 'st_x', '--group', 'g'], 3], [['schedule', 'pause', 'st_x', '--group', 'g'], 3], [['schedule', 'resume', 'st_x', '--group', 'g'], 3],
   [['schedule', 'run', 'st_x', '--group', 'g'], 3], [['schedule', 'runs', 'st_x', '--group', 'g'], 3],
   [['feishu', 'groups'], 3], [['feishu', 'members', 'oc_x'], 3],
+  [['env', 'scan'], 3], [['env', 'install', 'codex'], 3], [['env', 'update', 'codex'], 3], [['env', 'uninstall', 'codex'], 3], [['env', 'login', 'lark-cli'], 3],
+  [['env', 'profile', 'list'], 3], [['env', 'profile', 'use', 'p'], 3], [['env', 'profile', 'add', 'p', '--app-id', 'cli_x'], 3], [['env', 'profile', 'init', 'p'], 3],
+  [['env', 'backend', 'list'], 3], [['env', 'backend', 'version', 'x'], 3], [['env', 'backend', 'install', 'x'], 3], [['env', 'backend', 'uninstall', 'x'], 3],
+  [['env', 'backend', 'check', 'x'], 3], [['env', 'cancel', 'install'], 3],
+  [['provider', 'models', 'codex'], 3],
   [['secrets', 'list'], 0], [['secrets', 'set', 'typesafe-api-key'], 2], [['secrets', 'remove', 'typesafe-api-key'], 0],
   // argument errors from commander itself
   [['nope'], 2], [['bot', 'list', '--nope'], 2], [['group'], 2],

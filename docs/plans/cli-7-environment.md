@@ -158,3 +158,15 @@
 约 1,280 行：`env.ts` +460，`provider.ts` +40，`index.ts` +110，`bot.ts` 1 行，白名单 −24，测试约 650。超过 1,500 时拆：C7a（工具、登录、应用配置、`env cancel`）和 C7b（`env backend`、`provider models`），C7b 在 C7a 后合入。
 - 长任务的测试依赖时间：用假时钟和注入的轮询间隔，不 `sleep`。
 - 真装要联网、改这台机器：Linux 自测不真装；真装只在 Mac、Windows 的隔离数据目录里做。
+
+## 和计划不一样的地方
+
+- **工具安装按回复定结局**：daemon 对 `install` / `update` 请求要等安装结束才回（`D/environment/service.ts` `install()` 返回整个安装的 promise），回复里没有任务 id。所以先读一次 `toolInstallStatus` 记下上一个任务的 id，再发请求（不设超时）；轮询里第一个同工具、同 `update`、id 不是上一个的 `running` 才认作自己的。结局取先到的那个：轮询看到自己 id 的结束，或者请求的回复（`applied` 成功；`refused` 时再读一次状态，有自己的结束就按它，没有就是开始前就被拒，如 `busy`，退 4）。
+- **失败的 `reason` 分开写**：工具安装、组件安装是 `install_failed`；登录是 `login_failed`，应用配置是 `profile_init_failed`（4.1 表里都写 `install_failed`，登录失败读成"装失败"会误导脚本）。
+- **登录和应用配置共用一个状态**：轮询看到别的 id，说明自己的已经结束、又开始了别的，结果没看到：退 6，文字同断线那句。
+- **Ctrl-C 时还不知道 id**：工具安装再读一次状态找自己的任务，组件安装用 `backendInstallStatus{id}` 找（所以 `env backend install` 的 `covers` 里的 `backendInstallStatus` 确实用到）；找不到就直接 130。id 在 Ctrl-C 之后才到的，到了就补发取消。
+- **JSON Lines 多几个字段**：`progress` 行带 `operationId`；组件安装的 `progress` 行还带 `attached`、`omittedBytes`；`env install` 的结果行多 `message`（daemon 的原话）；`env profile use / add` 的成功行多 `profiles`（daemon 回的就是新列表）。
+- **`env scan` 多打两种说明**：Claude 装了但 `--version` 失败；Codex 比验证过的版本新（`compatibility.status: newer`）。
+- **组件安装的输出**：人类输出里 `\r\n`、单独的 `\r` 都当换行，其余控制字符去掉；最后一段没换行时先补一个，结果另起一行。
+- **"24 个 kind 被 `covers`、不在白名单"放在 `T/cli-env.test.ts`**（同 C2 的做法），`T/cli-parity.test.ts` 不改。`T/cli-admin.test.ts`、`T/cli-bot.test.ts` 里"在网页里点「去本机环境」"的三处期望改成 `运行 vonvon env scan`。
+- **`settings models` 的帮助加一行**，说明和 `provider models` 的区别（4.3 说两条命令的帮助都写）。
