@@ -28,15 +28,6 @@ export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
   'command.setResponse': { reason: 'superseded', note: 'settings.save.project response (settings set)' },
   'command.setPermission': { reason: 'superseded', note: 'settings.save.project permission (settings set)' },
 
-  'collaboration.createProject': pending('C3', 'group create'),
-  'collaboration.project': pending('C3', 'group show'),
-  'collaboration.editProject': pending('C3', 'group set'),
-  'collaboration.removeProject': pending('C3', 'group unbind'),
-  'directory.list': pending('C3', 'dir list'),
-  'directory.suggest': pending('C3', 'dir suggest'),
-  'library.workspace': pending('C3', 'project workspace'),
-  'library.rename': pending('C3', 'project rename'),
-  'library.delete': pending('C3', 'project remove'),
   'library.previous': { reason: 'unused', note: 'no client sends it' },
 
   'collaboration.startGoal': { reason: 'unused', note: 'goals start in the group chat; no client sends it' },
@@ -52,14 +43,6 @@ export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
   'memory.seen': { reason: 'client-only', note: "the web page's read marks" },
   'memory.newCounts': { reason: 'client-only', note: "the web page's unread counts" },
 
-  'settings.read.host': pending('C6', 'settings get --host'),
-  'settings.save.host': pending('C6', 'settings set --host'),
-  'settings.act.voice': pending('C6', 'settings act voice'),
-  'settings.act.adminMember': pending('C6', 'settings act admin add / remove'),
-  'settings.act.projectMember': pending('C6', 'settings act member add / remove'),
-  'settings.act.projectAudience': pending('C6', 'settings act member all'),
-  'settings.act.commentInstructions': pending('C6', 'settings act comment-instructions'),
-  'settings.models': pending('C6', 'settings models'),
   'settings.chooseExecutable': dead('D1'),
   'settings.saveExecutable': dead('D1'),
 
