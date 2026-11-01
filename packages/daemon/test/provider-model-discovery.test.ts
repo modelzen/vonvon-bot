@@ -12,7 +12,8 @@ describe('Bot-free provider model discovery', () => {
     const listModels = vi.fn(async () => { seen = [native]; return [native]; });
     const backend = { doctor, listModels, peekModels: () => seen } as unknown as AgentBackend;
     expect(await discoverProviderModels('claude-agent', () => backend)).toEqual({ models: [native] });
-    expect(doctor).toHaveBeenCalledWith({ force: true });
+    expect(doctor).toHaveBeenCalledWith({ permissions: false });
+    expect(listModels).toHaveBeenCalledWith({ refresh: false });
     expect(listModels).toHaveBeenCalledOnce();
   });
 

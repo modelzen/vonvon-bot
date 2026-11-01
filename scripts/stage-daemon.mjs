@@ -3,6 +3,7 @@ import { access, cp, mkdir, readFile, realpath, symlink, writeFile } from 'node:
 import { basename, dirname, join, relative, sep } from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { buildWindowsSupervisor } from './build-windows-supervisor.mjs';
 
 const source = fileURLToPath(new URL('../packages/daemon/', import.meta.url));
 const assets = ['LICENSE.bridge', 'LICENSE.paseo', 'NOTICE', 'PROVENANCE.md', 'import-core.json'];
@@ -146,6 +147,7 @@ async function stageHoistedDependencies(from, destination, options) {
 
 export async function stageDaemon(destination, metadata, options = {}) {
   await mkdir(join(destination, 'dist'), { recursive: true });
+  const supervisorHash = process.platform === 'win32' ? await buildWindowsSupervisor(join(destination, 'dist')) : undefined;
   await build({
     absWorkingDir: source,
     entryPoints: ['src/cli/index.ts'],
@@ -155,6 +157,7 @@ export async function stageDaemon(destination, metadata, options = {}) {
     platform: 'node',
     target: 'node22',
     format: 'esm',
+    define: { __VONVON_SUPERVISOR_SHA256__: supervisorHash ? JSON.stringify(supervisorHash) : 'undefined' },
   });
   await cp(join(source, 'bin'), join(destination, 'bin'), { recursive: true });
   await writeFile(join(destination, 'package.json'), JSON.stringify(metadata, null, 2) + '\n');

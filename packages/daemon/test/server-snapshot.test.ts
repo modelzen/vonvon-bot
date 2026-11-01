@@ -124,6 +124,22 @@ describe('snapshot commit queue', () => {
     expect(reads).toBe(3);
     expect(store.current().tools[0]).toMatchObject({ authentication: 'signedIn', version: '3' });
   });
+  it('an already queued poll cannot downgrade a later explicit environment refresh', async () => {
+    let release!: () => void;
+    const reads: boolean[] = [];
+    const store = await createSnapshotStore({service:{listBots:async()=>[],listProjects:async()=>[]},jobs:()=>[],publish:()=>{},readService:noManager,readTools:async refresh=>{
+      reads.push(refresh === true);
+      if(reads.length===2)await new Promise<void>(resolve=>{release=resolve;});
+      return [];
+    }});
+    stores.push(store);
+    const poll = (store.refreshTools as (refresh?:boolean)=>Promise<void>)(false);
+    const queued = (store.refreshTools as (refresh?:boolean)=>Promise<void>)(false);
+    const manual = store.refreshTools();
+    release();
+    await Promise.all([poll,queued,manual]);
+    expect(reads).toEqual([false,false,true]);
+  });
   it('does not wait for the service manager before serving, and keeps the last login item when it cannot tell', async () => {
     let answer: (value: DesktopServiceStatus) => void = () => {};
     let item: Promise<DesktopServiceStatus> = new Promise(resolve => { answer = resolve; });

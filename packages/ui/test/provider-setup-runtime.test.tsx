@@ -53,6 +53,16 @@ it('requires installed, authenticated and native nonempty models', async () => {
   await render('codex', signed).verify(); expect(render('codex', signed).canContinue).toBe(true);
 });
 
+it('ordinary reads use the successful catalog while a user recheck explicitly refreshes tools and native models', async () => {
+  const signed = snapshot([tool('codex')]); h.client.snapshot.mockResolvedValue(signed);
+  render('codex', signed); await flush();
+  expect(run).not.toHaveBeenCalled();
+  expect(h.client.collaboration).toHaveBeenLastCalledWith({action:'providerModels',backend:'codex-appserver'});
+  await render('codex', signed).verify();
+  expect(run).toHaveBeenLastCalledWith({type:'refresh',tools:true});
+  expect(h.client.collaboration).toHaveBeenLastCalledWith({action:'providerModels',backend:'codex-appserver',refresh:true});
+});
+
 it('refreshes Codex models and source metadata together, retaining the last list on failure', async () => {
   const signed = snapshot([tool('codex')]); h.client.snapshot.mockResolvedValue(signed);
   let path = '/old/codex';
@@ -201,7 +211,7 @@ it('retains a failed detection message and recovers through a tool refresh witho
   expect(state.check?.message).toBe('检测 Codex 失败：进程清理异常');
   expect(state.canContinue).toBe(false);
   expect(h.client.collaboration).not.toHaveBeenCalled();
-  expect(run).toHaveBeenLastCalledWith({type: 'refresh', tools: true});
+  expect(run).not.toHaveBeenCalled();
 
   const recovered = snapshot([tool('codex')]);
   h.client.snapshot.mockResolvedValue(recovered);

@@ -72,9 +72,13 @@ test('combined downloads require both native installer acceptance reports for ma
     const h = await fixture(t, architecture);
     const inventory = await createWindowsInventory(h.options);
     const report = { architecture, hostArchitecture: architecture, sourceSha, installerSha256: inventory.artifacts[0].sha256, passed: true,
-      steps: ['fresh-install','overwrite-install','uninstall','reinstall-after-uninstall','reinstall-after-0.7.5-orphan'].map(name => ({ name, passed: true })) };
+      steps: ['fresh-install','overwrite-install','uninstall','reinstall-after-uninstall','reinstall-after-0.7.5-orphan'].map(name => ({ name, passed: true, provider: {nativeModelParity:true,catalogCache:true,explicitRefresh:true,refreshFailureRecovery:true,configInvalidation:true} })) };
     const expected = { architecture, sourceSha, installerSha256: report.installerSha256 };
     validateWindowsAcceptance(report, expected);
+    const legacy = structuredClone(report); delete legacy.steps[0].provider;
+    assert.throws(() => validateWindowsAcceptance(legacy, expected), /packaged Provider verification/);
+    const failedProvider = structuredClone(report); failedProvider.steps[0].provider.catalogCache = false;
+    assert.throws(() => validateWindowsAcceptance(failedProvider, expected), /packaged Provider verification/);
     for (const change of [{ hostArchitecture: 'emulated' }, { sourceSha: 'f'.repeat(40) }, { installerSha256: '0'.repeat(64) }, { steps: [] }, { passed: false }]) {
       assert.throws(() => validateWindowsAcceptance({ ...report, ...change }, expected));
     }

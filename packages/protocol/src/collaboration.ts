@@ -16,7 +16,7 @@ const conversation = conversationSchema;
 const folder = folderSelectionSchema;
 
 export const collaborationRequestSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("providerModels"), backend }).strict(),
+  z.object({ action: z.literal("providerModels"), backend, refresh: z.boolean().optional() }).strict(),
   z.object({ action: z.literal("createProject"), agentId: agentIdSchema, name: projectName, folder, project: projectIdSchema.optional(), tool: toolSchema, conversation, judge: groupDecisionSchema.optional(), response: replyModeSchema.optional() }).strict(),
   z.object({ action: z.literal("project"), ...target }).strict(),
   z.object({ action: z.literal("editProject"), ...target, expectedRevision: revision, folderToken: folderTokenSchema.optional(), project: projectIdSchema.optional(), conversation: conversation.optional(), enabled: z.boolean().optional() }).strict(),

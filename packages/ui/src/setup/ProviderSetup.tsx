@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
 import {ArrowRight, Check, ChevronRight, RefreshCw, Package, KeyRound} from 'lucide-react';
 import type {CollaborationReply, Command, CommandResult, DesktopSnapshot, ToolState} from '@vonvon/protocol';
 import {backendInstallProgress} from '@vonvon/protocol';
@@ -58,11 +58,14 @@ function ProviderModelPreview({provider, tool, ready}: {provider: SetupProvider;
   const signature = providerSignature(tool);
   const available = ready && providerInstalled(tool) && providerAuthenticated(tool);
   const [retry, setRetry] = useState(0);
+  const readRetry = useRef(0);
   const [catalog, setCatalog] = useState<{signature: string; reply?: Extract<CollaborationReply, {kind: 'providerModels'}>; stale?: boolean; refreshing?: boolean}>();
   useEffect(() => {
     let current = true;
     setCatalog(previous => provider === 'codex' && previous?.signature === signature ? {...previous, refreshing: true} : undefined);
-    if (available) void client.collaboration({action: 'providerModels', backend: providerBackends[provider]}).then(reply => {
+    const refresh = retry > readRetry.current;
+    readRetry.current = retry;
+    if (available) void client.collaboration({action: 'providerModels', backend: providerBackends[provider], ...(refresh ? {refresh: true} : {})}).then(reply => {
       if (current) setCatalog(previous => provider === 'claude'
         ? {signature, ...(reply.kind === 'providerModels' ? {reply} : {})}
         : reply.kind === 'providerModels' && reply.state === 'ready' && reply.models.length

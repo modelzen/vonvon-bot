@@ -74,11 +74,16 @@ function Uninstall-Candidate {
   }
 }
 function Check-Runtime([string]$Name) {
-  & node (Join-Path $PSScriptRoot 'windows-runtime-smoke.mjs') $installDir $data | ForEach-Object { Write-Host $_ }
+  $runtimeOutput = & node (Join-Path $PSScriptRoot 'windows-runtime-smoke.mjs') $installDir $data
   if ($LASTEXITCODE -ne 0) { throw "Installed runtime failed: $Name" }
+  $runtimeOutput | ForEach-Object { Write-Host $_ }
+  $runtimeResult = $runtimeOutput | Select-Object -Last 1 | ConvertFrom-Json
+  foreach ($field in @('nativeModelParity','catalogCache','explicitRefresh','refreshFailureRecovery','configInvalidation')) {
+    if ($runtimeResult.provider.$field -ne $true) { throw "Installed Provider acceptance missing ${field}: $Name" }
+  }
   if ((Get-Content -LiteralPath $sentinel -Raw).Trim() -ne 'preserve isolated data') { throw 'Isolated data was changed' }
   # PowerShell functions have their own scope; return the case to the caller.
-  return @{ name = $Name; passed = $true }
+  return @{ name = $Name; passed = $true; provider = $runtimeResult.provider }
 }
 try {
   foreach ($view in $views) {
