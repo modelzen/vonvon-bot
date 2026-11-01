@@ -49,8 +49,8 @@ describe('CLI parity with the RPC kinds (devices 8.5)', () => {
     expect(parityProblems(kinds, commands, both)).toEqual(['machine.stopHost: covered by daemon stop and still in the allowlist']);
     // D1 adds the device kinds: their lines then drop `arrives`
     expect(parityProblems([...kinds, 'device.pair'], commands, CLI_PARITY_ALLOWLIST)).toEqual(['device.pair: in the protocol now, so the allowlist line drops arrives: D1']);
-    const loose = { ...CLI_PARITY_ALLOWLIST, 'command.deleteAgent': { reason: 'pending', note: 'bot remove' } } as const;
-    expect(parityProblems(kinds, commands, loose)).toEqual(['command.deleteAgent: pending needs the slice that ends it']);
+    const loose = { ...CLI_PARITY_ALLOWLIST, 'library.previous': { reason: 'pending', note: 'x' } } as const;
+    expect(parityProblems(kinds, commands, loose)).toEqual(['library.previous: pending needs the slice that ends it']);
   });
 
   it('registers the kinds D1, D3 and I3 bring before they exist (devices 8.1 SLICE-1)', () => {
