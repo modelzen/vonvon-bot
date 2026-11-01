@@ -169,7 +169,7 @@ function updateLockFile(): string {
   return join(paths.appDir, 'update.lock');
 }
 
-function livePid(pid: number): boolean {
+export function livePid(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
