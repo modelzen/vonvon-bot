@@ -1,7 +1,7 @@
 import { encodePairingLink, type DeviceReply, type DeviceRequest } from '@vonvon/protocol';
 import type { ClientRegistry } from '../../remote/clients';
 import { readRemoteConfig } from '../../remote/config';
-import { renameDevice, type DeviceIdentity } from '../../remote/device';
+import type { DeviceHolder, DeviceIdentity } from '../../remote/device';
 import type { InviteBook } from '../../remote/pairing';
 import { RpcError, unsupported } from '../errors';
 import type { RpcOutcome } from '../rpc';
@@ -11,8 +11,8 @@ import type { Peer } from '../ws';
 export const NO_REMOTE_ADDRESS = '这台设备还没允许别的设备连接。先运行 `vonvon remote enable --tailscale`（推荐）或 `vonvon remote enable <这台设备的 IP>`。';
 export interface DeviceDeps {
   home: string;
-  /** Held here, so a rename reaches the next server info. */
-  identity: { current: DeviceIdentity };
+  /** Held here, so a rename reaches the next server info; renames take turns there. */
+  identity: DeviceHolder;
   clients: ClientRegistry; invites: InviteBook;
 }
 const deviceView = ({ deviceId, name, keypair }: DeviceIdentity) => ({ id: deviceId, name, publicKey: keypair.publicKey });
@@ -42,9 +42,6 @@ export async function deviceRpc(deps: DeviceDeps, peer: Pick<Peer, 'principal'>,
     }
     // followRevocations tells the owner, and D3 disconnects them, through clients.onChange
     case 'revokeClient': return read({ kind: 'revoked', revoked: await deps.clients.revoke(request.clientId, { cascade: request.cascade ?? false }) });
-    case 'rename': {
-      deps.identity.current = await renameDevice(deps.home, request.name);
-      return read({ kind: 'device', device: deviceView(deps.identity.current) });
-    }
+    case 'rename': return read({ kind: 'device', device: deviceView(await deps.identity.rename(request.name)) });
   }
 }
