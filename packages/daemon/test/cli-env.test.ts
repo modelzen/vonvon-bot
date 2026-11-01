@@ -4,7 +4,7 @@ import type { BackendInstallEventPayload, EnvironmentRequest } from '@vonvon/pro
 import { withDaemon, type Daemon } from '../src/cli/daemon-client';
 import { stepLines } from '../src/cli/commands/bot';
 import {
-  runEnvBackendInstall, runEnvCancel, runEnvInstall, runEnvLogin, runEnvProfileAdd, runEnvProfileInitState, runEnvScan, type EnvDependencies,
+  runEnvBackendInstall, runEnvCancel, runEnvInstall, runEnvLogin, runEnvProfileAdd, runEnvProfileInit, runEnvProfileInitState, runEnvScan, type EnvDependencies,
 } from '../src/cli/commands/env';
 import { runProviderModels } from '../src/cli/commands/provider';
 import { CLI_PARITY_ALLOWLIST } from '../src/cli/parity-allowlist';
@@ -14,22 +14,31 @@ import { loadCommands } from './helpers/cli-commands';
 const OP1 = '11111111-1111-4111-8111-111111111111';
 const OP2 = '22222222-2222-4222-8222-222222222222';
 type Handle = (request: EnvironmentRequest) => unknown;
-/** A fake daemon: `handle` answers each environment request; `drop()` loses the connection, `push()` sends an install event. */
-function envHarness(handle: Handle, extra: Record<string, unknown> = {}, o: { tty?: boolean; secret?: string } = {}) {
+/**
+ * A fake daemon: `handle` answers each environment request; `drop()` loses the connection as the real client does (each
+ * request in flight fails, then the error is told), `push()` sends an install event.
+ */
+function envHarness(handle: Handle, extra: Record<string, unknown> = {}, o: { tty?: boolean; secret?: string; ms?: number } = {}) {
   let onError: ((error: Error) => void) | undefined;
   let onInstall: ((payload: BackendInstallEventPayload) => void) | undefined;
   let interrupt: (() => void) | undefined;
   const order: string[] = [];
-  const closing: Array<() => void> = [];
-  const environment = vi.fn(async (request: EnvironmentRequest) => { order.push(request.type); return handle(request); });
+  const inFlight = new Set<(error: Error) => void>();
+  const failAll = (error: Error) => { for (const reject of [...inFlight]) reject(error); inFlight.clear(); };
+  let dropped = false;
+  const environment = vi.fn(async (request: EnvironmentRequest) => {
+    order.push(request.type);
+    if (dropped) throw new ConnectionError(new Error('Daemon connection closed'));
+    return handle(request);
+  });
   const client = {
-    environment, close: vi.fn(async () => { for (const each of closing.splice(0)) each(); }),
+    environment, close: vi.fn(async () => { failAll(new Error('Daemon connection closed')); }),
     onError: (listener: (error: Error) => void) => { onError = listener; return () => { onError = undefined; }; },
     onBackendInstall: (listener: (payload: BackendInstallEventPayload) => void) => { order.push('listen'); onInstall = listener; return () => { onInstall = undefined; }; },
     ...extra,
   };
   const connect = vi.fn(async () => client as unknown as VonvonClient);
-  const daemon: Daemon = fn => withDaemon(fn, connect, { local: 50, feishu: 50 });
+  const daemon: Daemon = fn => withDaemon(fn, connect, { local: o.ms ?? 50, feishu: o.ms ?? 50 });
   let out = '';
   const deps: Partial<EnvDependencies> = {
     tty: o.tty ?? false,
@@ -43,14 +52,15 @@ function envHarness(handle: Handle, extra: Record<string, unknown> = {}, o: { tt
     io: (json = false) => ({ json, write: (text: string) => { out += text; } }),
     out: () => out, lines: () => out.trimEnd().split('\n').map(line => JSON.parse(line) as Record<string, unknown>),
     sent: () => environment.mock.calls.map(([request]) => request),
-    drop: () => onError?.(new ConnectionError(new Error('Daemon connection closed'))),
+    drop: () => { dropped = true; const error = new ConnectionError(new Error('Daemon connection closed')); failAll(error); onError?.(error); },
     push: (payload: BackendInstallEventPayload) => onInstall?.(payload),
     interrupt: () => interrupt?.(),
-    /** a request the daemon answers later, rejected when the client closes, as the real one is */
+    /** a request the daemon answers later, failed when the client closes or the connection drops, as the real one is */
     later: <T>() => {
       let settle!: (value: T) => void;
-      const promise = new Promise<T>((resolve, reject) => { settle = resolve; closing.push(() => reject(new Error('Daemon connection closed'))); });
-      return { promise, settle };
+      let fail!: (error: Error) => void;
+      const promise = new Promise<T>((resolve, reject) => { settle = resolve; fail = reject; inFlight.add(reject); });
+      return { promise, settle: (value: T) => { inFlight.delete(fail); settle(value); }, fail: (error: Error) => { inFlight.delete(fail); fail(error); } };
     },
   };
 }
@@ -279,6 +289,140 @@ it('env cancel reads the operation id first, then cancels that one', async () =>
   expect(install.out()).toBe('没有在进行的安装。\n');
   await expect(runEnvCancel('backend', undefined, install.io(), install.daemon)).rejects.toEqual(failure('bad-args'));
   await expect(runEnvCancel('profile', undefined, install.io(), install.daemon)).rejects.toEqual(failure('bad-args'));
+});
+
+type Later = { promise: Promise<unknown>; settle: (value: unknown) => void; fail: (error: Error) => void };
+const BUSY = { kind: 'refused', code: 'busy', message: '另一个本机环境操作正在进行。' };
+// 审查 201 第 1 条: after a busy refusal the state was read, and another caller's end there taken for this one's (exit 0)
+it("env install: busy stays refused (4), whatever another caller's install shows in the state", async () => {
+  const theirs = { kind: 'succeeded', id: OP2, message: 'lark-cli installed by another caller' };
+  const after = installer([null, theirs], BUSY);
+  expect(await caught(runEnvInstall('codex', false, after.io(true), after.daemon, after.deps))).toEqual(failure('refused', BUSY.message, { reason: 'busy' }));
+  expect(after.out()).toBe('');
+  // their install of the same tool runs when this one asks, and its end is read before the busy answer is
+  const states = [null, running(OP2), theirs];
+  let read = 0;
+  let reply: Later | undefined;
+  const late = envHarness(request => {
+    if (request.type === 'install') { reply = late.later<unknown>(); return reply.promise; }
+    if (request.type === 'toolInstallStatus') {
+      const operation = states[Math.min(read++, states.length - 1)];
+      if (operation === theirs) setTimeout(() => reply?.settle(BUSY), 5);
+      return { kind: 'toolInstall', operation };
+    }
+    throw new Error(`unexpected ${request.type}`);
+  });
+  expect(await caught(runEnvInstall('codex', false, late.io(true), late.daemon, late.deps))).toEqual(failure('refused', BUSY.message, { reason: 'busy' }));
+  expect(late.out()).not.toContain('"result"');
+  expect(late.sent().filter(request => request.type === 'cancelInstall')).toEqual([]);
+});
+
+const profileRun = (id: string) => ({ kind: 'running', id, purpose: { kind: 'profileInit' }, startedAt: 1 });
+type Harness = ReturnType<typeof envHarness>;
+type Job = { job: string; status?: EnvironmentRequest['type']; cancel: EnvironmentRequest['type']; run: (h: Harness) => Promise<void> };
+/** The four long jobs share track() and follow(): what Ctrl-C does is the same in each. */
+const JOBS: Job[] = [
+  { job: 'env install', status: 'toolInstallStatus', cancel: 'cancelInstall', run: h => runEnvInstall('codex', false, h.io(true), h.daemon, h.deps) },
+  { job: 'env login', status: 'loginStatus', cancel: 'cancelLogin', run: h => runEnvLogin('lark-cli', h.io(true), h.daemon, h.deps) },
+  { job: 'env profile init', status: 'profileInitStatus', cancel: 'profileInitCancel', run: h => runEnvProfileInit('p1', h.io(true), h.daemon, h.deps) },
+  { job: 'env backend install', cancel: 'cancelBackendInstall', run: h => runEnvBackendInstall('cbridge', false, h.io(true), h.daemon, h.deps) },
+];
+/**
+ * A daemon that has started `job` as OP1 and never ends it: its state reads say running, its cancel is never answered
+ * unless the test does (`cancels`); no request times out locally. `hold`: a request stays in flight (`held()`): the first state read after the
+ * progress line, or the component install's own request.
+ */
+function racing(job: Job, o: { hold?: boolean; wait?: EnvDependencies['wait'] } = {}) {
+  let reads = 0;
+  let held: Later | undefined;
+  const cancels: Later[] = [];
+  const h = envHarness(request => {
+    if (request.type === job.cancel) { const reply = h.later<unknown>(); cancels.push(reply); return reply.promise; }
+    if (request.type === job.status) {
+      const index = reads++;
+      if (o.hold && !held && h.out().includes('"progress"')) { held = h.later<unknown>(); return held.promise; }
+      if (request.type === 'toolInstallStatus') return { kind: 'toolInstall', operation: index === 0 ? null : running(OP1) };
+      return { kind: 'operation', operation: request.type === 'loginStatus' ? login(OP1) : profileRun(OP1) };
+    }
+    switch (request.type) {
+      case 'install': return h.later<unknown>().promise;
+      case 'startLogin': return { kind: 'operation', operation: login(OP1) };
+      case 'profileInit': return { kind: 'operation', operation: profileRun(OP1) };
+      case 'backendInstall':
+        if (o.hold) { held = h.later<unknown>(); return held.promise; }
+        return { kind: 'backendInstall', operationId: OP1, id: 'cbridge', update: false, attached: false, replay: [] };
+      case 'backendInstallStatus': return { kind: 'backendInstallStatus', operation: { operationId: OP1, id: 'cbridge', update: false, state: 'running', replay: [], omittedBytes: 0 } };
+    }
+    throw new Error(`unexpected ${request.type}`);
+  }, {}, { ms: 60_000 });
+  if (o.wait) h.deps.wait = o.wait;
+  return Object.assign(h, { reads: () => reads, held: () => held, cancels });
+}
+const cancelSent = async (h: Harness, job: Job) => { await vi.waitFor(() => { expect(h.sent()).toContainEqual({ type: job.cancel, operationId: OP1 }); }); };
+const started = async (h: Harness) => { await vi.waitFor(() => { expect(h.out()).toContain('"progress"'); }); };
+
+// 审查 201 第 2 条: the dropped connection ended it as lost, 6
+it.each(JOBS)('$job: Ctrl-C, then the connection drops before the cancel is answered: still 130', async job => {
+  const h = racing(job);
+  const result = caught(job.run(h));
+  await started(h);
+  h.interrupt();
+  await cancelSent(h, job);
+  h.drop();
+  expect(await result).toEqual(failure('interrupted'));
+});
+
+// 审查 201 第 2 条: the request in flight failed and that failure was the command's
+it.each(JOBS)('$job: Ctrl-C while a request is in flight, and that request fails: still 130, nothing read after', async job => {
+  const h = racing(job, { hold: true });
+  const result = caught(job.run(h));
+  await vi.waitFor(() => { expect(h.held()).toBeDefined(); });
+  h.interrupt();
+  await cancelSent(h, job);
+  const reads = h.reads();
+  h.held()?.fail(new Error('poll failed during cancel'));
+  await new Promise(done => { setTimeout(done, 20); });
+  h.cancels[0]?.settle({ kind: 'applied', message: '已取消。' });
+  expect(await result).toEqual(failure('interrupted'));
+  expect(h.reads()).toBe(reads);
+});
+
+// 审查 201 第 2 条: the state was still read every pause while the cancel waited
+it.each(JOBS)('$job: a second Ctrl-C ends it at once, and nothing is read after the first', async job => {
+  const h = racing(job);
+  const result = caught(job.run(h));
+  await started(h);
+  h.interrupt();
+  const reads = h.reads();
+  await cancelSent(h, job);
+  // the pauses between reads (0 ms here) go by while the cancel is not answered
+  await new Promise(done => { setTimeout(done, 20); });
+  h.interrupt();
+  expect(await result).toEqual(failure('interrupted'));
+  expect(h.reads()).toBe(reads);
+});
+
+// 审查 201 第 2 条: the state was still read each second while the cancel waited
+it.each(JOBS)('$job: a cancel never answered ends it after 5 s as 130, with nothing read meanwhile', async job => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    const h = racing(job, { wait: ms => new Promise(done => { setTimeout(done, ms); }) });
+    let ended = false;
+    const result = caught(job.run(h)).finally(() => { ended = true; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.out()).toContain('"progress"');
+    h.interrupt();
+    const reads = h.reads();
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(h.sent()).toContainEqual({ type: job.cancel, operationId: OP1 });
+    expect(ended).toBe(false);
+    expect(h.reads()).toBe(reads);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ended).toBe(true);
+    expect(await result).toEqual(failure('interrupted'));
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 // main 必败: there was no provider models

@@ -161,7 +161,7 @@
 
 ## 和计划不一样的地方
 
-- **工具安装按回复定结局**：daemon 对 `install` / `update` 请求要等安装结束才回（`D/environment/service.ts` `install()` 返回整个安装的 promise），回复里没有任务 id。所以先读一次 `toolInstallStatus` 记下上一个任务的 id，再发请求（不设超时）；轮询里第一个同工具、同 `update`、id 不是上一个的 `running` 才认作自己的。结局取先到的那个：轮询看到自己 id 的结束，或者请求的回复（`applied` 成功；`refused` 时再读一次状态，有自己的结束就按它，没有就是开始前就被拒，如 `busy`，退 4）。
+- **工具安装按回复定结局**：daemon 对 `install` / `update` 请求要等安装结束才回（`D/environment/service.ts` `install()` 返回整个安装的 promise），回复里没有任务 id。所以先读一次 `toolInstallStatus` 记下上一个任务的 id，再发请求（不设超时）；轮询里第一个同工具、同 `update`、id 不是上一个的 `running` 认作自己的，只用来打进度和 Ctrl-C 时取消。结局只看请求的回复（审查后改，见下一节）。
 - **失败的 `reason` 分开写**：工具安装、组件安装是 `install_failed`；登录是 `login_failed`，应用配置是 `profile_init_failed`（4.1 表里都写 `install_failed`，登录失败读成"装失败"会误导脚本）。
 - **登录和应用配置共用一个状态**：轮询看到别的 id，说明自己的已经结束、又开始了别的，结果没看到：退 6，文字同断线那句。
 - **Ctrl-C 时还不知道 id**：工具安装再读一次状态找自己的任务，组件安装用 `backendInstallStatus{id}` 找（所以 `env backend install` 的 `covers` 里的 `backendInstallStatus` 确实用到）；找不到就直接 130。id 在 Ctrl-C 之后才到的，到了就补发取消。
@@ -170,3 +170,11 @@
 - **组件安装的输出**：人类输出里 `\r\n`、单独的 `\r` 都当换行，其余控制字符去掉；最后一段没换行时先补一个，结果另起一行。
 - **"24 个 kind 被 `covers`、不在白名单"放在 `T/cli-env.test.ts`**（同 C2 的做法），`T/cli-parity.test.ts` 不改。`T/cli-admin.test.ts`、`T/cli-bot.test.ts` 里"在网页里点「去本机环境」"的三处期望改成 `运行 vonvon env scan`。
 - **`settings models` 的帮助加一行**，说明和 `provider models` 的区别（4.3 说两条命令的帮助都写）。
+
+## 审查后改了什么
+
+Codex 审查（#628 任务 201）两条 P2，都改在四类长任务共用的 `track()` / `follow()` 里。
+
+- **busy 被别人的结果改成成功**（`env install` / `env update`）：原来请求回 `refused` 后再读一次状态，只要状态的 id 不是开始前那个，就把它的结束当成自己的；另一个调用者在这期间装完，busy 就变成了退出 0。改成：工具安装的结局只看自己请求的回复，轮询读到的结束一律不算（状态不说是谁起的）。`applied` → 成功；`install-cancelled` → `cancelled`（1）；`install-failed`、`install-incomplete`、`install-not-selected`、`npm-missing`、`explicit-codex` 这几种只有开始了的安装才会回（`performInstall`）→ `failed`（1，`install_failed`）；其余（`busy` 等）是开始前就被拒 → 4，`reason` 是 daemon 的 code。
+- **Ctrl-C 等取消时，断线或轮询失败盖掉 interrupted**（四类都有）：原来第一次 Ctrl-C 后，断线的 `onError` 会先结束成 `lost`（6），正在飞的轮询失败会先 `fail`。改成：第一次 Ctrl-C 之后，只有取消有了回复（含因断线失败）、5 秒上限到了、第二次 Ctrl-C 这三件能结束，结局都是 interrupted（130）；断线、轮询或请求失败、任务自己的结束都不再结束它；轮询停下，不再读也不再打进度；第二次 Ctrl-C 时清掉 5 秒的计时。
+- **测试**（`T/cli-env.test.ts`，在改之前的代码上都失败）：busy 后状态里是别人的成功、别人同工具的安装先被轮询认领又先结束再收到 busy → 都是 4；四类任务各跑四种交错：认领后 Ctrl-C、取消回复前断线 → 130；Ctrl-C 时有请求在飞、它随后失败 → 130 且之后不再读；第二次 Ctrl-C → 立即 130 且第一次之后不再读；取消一直不回 → 假时钟下 4999 ms 还没结束、5 秒时 130，期间不再读。组件安装没有轮询，"第二次 Ctrl-C""取消不回"两种在原代码上本来就对，留作回归。测试桩的 `drop()` 改成和真客户端一样：先让在飞的请求失败，再报连接错误。

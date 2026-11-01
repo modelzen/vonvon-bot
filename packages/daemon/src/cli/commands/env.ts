@@ -132,9 +132,10 @@ function seenOf(operation: ToolInstallOperation | EnvironmentOperation | null): 
 type Follow = { call: Call; client: VonvonClient; io: Io; d: EnvDependencies };
 
 /**
- * What both followers share: the end comes once; a dropped connection ends it; Ctrl-C sends the task's cancel (5 s at
- * most) and ends it, a second one ends it at once. `claim` names the task once its id is known, and sends the cancel
- * if Ctrl-C came first.
+ * What both followers share: the end comes once; a dropped connection ends it; Ctrl-C sends the task's cancel and ends
+ * it as interrupted once the cancel is answered or after 5 s, a second Ctrl-C at once (4.2 第 4 条). From the first
+ * Ctrl-C on, nothing else ends it, not a dropped connection, a failed read or the task's own end, and nothing more is
+ * read or shown (`over`). `claim` names the task once its id is known, and sends the cancel if Ctrl-C came first.
  */
 function track(f: Follow, resolve: (ending: Ending) => void, reject: (error: unknown) => void, task: { cancel: (id: string) => EnvironmentRequest; find?: () => Promise<string | undefined> }) {
   const stops: Array<() => void> = [];
@@ -143,8 +144,13 @@ function track(f: Follow, resolve: (ending: Ending) => void, reject: (error: unk
     interrupted: false,
     settled: false,
     stops,
-    finish(ending: Ending): void { if (t.settled) return; t.settled = true; for (const stop of stops.splice(0)) stop(); resolve(ending); },
-    fail(error: unknown): void { if (t.settled) return; t.settled = true; for (const stop of stops.splice(0)) stop(); reject(error); },
+    /** ended, or cancelling after Ctrl-C */
+    get over(): boolean { return t.settled || t.interrupted; },
+    finish(ending: Ending): void {
+      if (t.settled || (t.interrupted && ending.kind !== 'interrupted')) return;
+      t.settled = true; for (const stop of stops.splice(0)) stop(); resolve(ending);
+    },
+    fail(error: unknown): void { if (t.over) return; t.settled = true; for (const stop of stops.splice(0)) stop(); reject(error); },
     claim(id: string): void {
       if (t.id !== undefined) return;
       t.id = id;
@@ -152,18 +158,20 @@ function track(f: Follow, resolve: (ending: Ending) => void, reject: (error: unk
       if (t.interrupted) void f.client.environment(task.cancel(id)).catch(() => undefined);
     },
   };
+  // while cancelling, the cancel's request fails with the connection and ends it as interrupted
   stops.push(f.client.onError(error => { if (error instanceof ConnectionError) t.finish({ kind: 'lost', started: t.id !== undefined }); }));
   stops.push(f.d.onInterrupt(() => {
     if (t.interrupted) { t.finish({ kind: 'interrupted' }); return; }
     t.interrupted = true;
     let timer: NodeJS.Timeout | undefined;
     const cap = new Promise<void>(done => { timer = setTimeout(done, CANCEL_WAIT); });
+    stops.push(() => { clearTimeout(timer); });
     const cancel = (async () => {
       const id = t.id ?? await task.find?.();
       if (id !== undefined && t.id === undefined) t.id = id;
       if (id !== undefined) await f.client.environment(task.cancel(id));
     })().catch(() => undefined);
-    void Promise.race([cancel, cap]).then(() => { clearTimeout(timer); t.finish({ kind: 'interrupted' }); });
+    void Promise.race([cancel, cap]).then(() => { t.finish({ kind: 'interrupted' }); });
   }));
   return t;
 }
@@ -176,8 +184,11 @@ type Polled = {
   read: (started: boolean) => Promise<Seen | null>;
   cancel: (id: string) => EnvironmentRequest;
   find?: () => Promise<string | undefined>;
-  /** A tool install's request, answered when the install ends, and how its answer ends the follow. */
-  started?: { reply: Promise<EnvironmentReply>; ended: (reply: EnvironmentReply, id: string | undefined) => Promise<Ending> };
+  /**
+   * A tool install's request, answered when the install ends: its answer is the end, and the states only show progress
+   * (a state does not say whose install it is).
+   */
+  started?: { reply: Promise<EnvironmentReply>; ended: (reply: EnvironmentReply) => Ending };
 };
 
 /**
@@ -191,8 +202,8 @@ function follow(f: Follow, task: Polled): Promise<Ending> {
     let url: string | undefined;
     let queue = Promise.resolve();
     const show = async (seen: Seen): Promise<void> => {
-      if (t.settled || t.interrupted) return;
-      if (seen.kind !== 'running') { t.finish({ kind: seen.kind, message: seen.message ?? '' }); return; }
+      if (t.over) return;
+      if (seen.kind !== 'running') { if (!task.started) t.finish({ kind: seen.kind, message: seen.message ?? '' }); return; }
       if (state !== seen.kind) { state = seen.kind; if (f.io.json) emit(f.io, { event: 'progress', state, operationId: seen.id }); }
       if (!seen.url || seen.url === url) return;
       url = seen.url;
@@ -201,7 +212,7 @@ function follow(f: Follow, task: Polled): Promise<Ending> {
       f.io.write(`在浏览器里打开：${printable(url)}\n${art}`);
     };
     const observe = (seen: Seen | null): void => {
-      if (!seen || t.settled || t.interrupted) return;
+      if (!seen || t.over) return;
       if (t.id === undefined && task.claim?.(seen)) t.claim(seen.id);
       if (t.id === undefined) return;
       // sign-in and app profile share one state: another id there means this one ended unseen
@@ -212,16 +223,16 @@ function follow(f: Follow, task: Polled): Promise<Ending> {
     if (task.first) observe(task.first);
     const started = task.started;
     started?.reply.then(async reply => {
-      if (t.settled || t.interrupted) return;
-      const ending = await started.ended(reply, t.id);
-      // the poll may have shown the end meanwhile: the first one stands
+      if (t.over) return;
+      const ending = started.ended(reply);
+      // the progress already read goes out first
       await queue;
       t.finish(ending);
     }).catch(error => t.fail(error));
     void (async () => {
-      while (!t.settled) {
+      while (!t.over) {
         observe(await task.read(t.id !== undefined));
-        if (!t.settled) await f.d.wait(POLL_MS);
+        if (!t.over) await f.d.wait(POLL_MS);
       }
     })().catch(error => t.fail(error));
   });
@@ -248,9 +259,13 @@ const clientOf = (call: Call): Promise<VonvonClient> => call('连接 daemon', as
 
 // ---- env install / update / uninstall ----
 
+/** The refusals a tool install gives once it started (D/environment/service.ts performInstall): its own end, exit 1. */
+const INSTALL_ENDED = new Set(['install-failed', 'install-incomplete', 'install-not-selected', 'npm-missing', 'explicit-codex']);
+
 /**
- * `vonvon env install|update <tool>`: the web page's 托管安装. The daemon answers the request when the install ends, so
- * the state is read meanwhile; the last install before this one is remembered, so its end is not taken for this one's.
+ * `vonvon env install|update <tool>`: the web page's 托管安装. The daemon answers the request when the install ends, and
+ * that answer is its end; meanwhile the state is read for the progress and for the id Ctrl-C cancels, and an install
+ * running before this one is not taken for it.
  */
 export async function runEnvInstall(wanted: string, update: boolean, io: Io, daemon: Daemon = withDaemon, overrides: Partial<EnvDependencies> = {}): Promise<void> {
   const tool = envTool(wanted);
@@ -272,12 +287,12 @@ export async function runEnvInstall(wanted: string, update: boolean, io: Io, dae
       },
       started: {
         reply: environment(call, `${verb} ${LABEL[tool]}`, { type: update ? 'update' : 'install', tool }, { ms: UNTIL_DONE }),
-        ended: async (reply, id) => {
+        ended: reply => {
           if (reply.kind === 'applied') return { kind: 'succeeded', message: reply.message };
           if (reply.kind !== 'refused') throw new CommandError('failed', `${verb}没有完成：daemon 回了意外的结果（${reply.kind}）。`);
-          // an install that started has its end in the state; one refused before starting (busy) left none
-          const last = await read(id !== undefined).catch(() => null);
-          if (last && last.kind !== 'running' && (id !== undefined ? last.id === id : last.id !== before)) return { kind: last.kind, message: last.message ?? reply.message };
+          if (reply.code === 'install-cancelled') return { kind: 'cancelled', message: reply.message };
+          if (INSTALL_ENDED.has(reply.code)) return { kind: 'failed', message: reply.message };
+          // refused before it started (busy …): what the state shows meanwhile is another caller's
           return { kind: 'refused', code: reply.code, message: reply.message };
         },
       },
@@ -468,7 +483,7 @@ function followBackend(f: Follow, id: string, update: boolean): Promise<Ending> 
     /** the output so far ends mid-line: the result starts on a line of its own */
     let open = false;
     const take = (item: BackendInstallItem): void => {
-      if (t.settled || t.interrupted) return;
+      if (t.over) return;
       if (item.type === 'log') {
         if (f.io.json) { emit(f.io, { event: 'log', chunk: item.chunk }); return; }
         const text = logText(item.chunk);
@@ -488,6 +503,7 @@ function followBackend(f: Follow, id: string, update: boolean): Promise<Ending> 
       if (reply.kind === 'refused') { t.finish({ kind: 'refused', code: reply.code, message: reply.message }); return; }
       if (reply.kind !== 'backendInstall') { t.fail(new CommandError('failed', `安装组件没有完成：daemon 回了意外的结果（${reply.kind}）。`)); return; }
       t.claim(reply.operationId);
+      if (t.interrupted) return;
       if (f.io.json) emit(f.io, { event: 'progress', state: 'running', operationId: reply.operationId, attached: reply.attached, ...(reply.omittedBytes ? { omittedBytes: reply.omittedBytes } : {}) });
       else {
         if (reply.attached) f.io.write(`${id} 已经在${update ? '更新' : '安装'}了，接着看它的输出：\n`);
