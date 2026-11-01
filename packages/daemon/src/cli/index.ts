@@ -191,7 +191,7 @@ for (const [name, description] of [['confirm', 'Confirm the card callback is set
       await (await import('./commands/bot')).runBotCallback(name, oneBot(wanted, options.bot), io(options));
     });
 }
-const group =program.command('group').description('List and bind Feishu groups');
+const group =program.command('group').description('List, create, bind and change Feishu groups');
 covers(group.command('list'), 'snapshot.get', 'command.refresh').description('List bound groups').option(...BOT).option(...JSON_FLAG).option(...FRESH).action(async (options: Json & { bot?: string; fresh?: boolean }) => {
   await (await import('./commands/group')).runGroupList(options, io(options), await daemonFor(options));
 });
@@ -201,20 +201,97 @@ covers(group.command('joined'), 'command.listJoinedGroups').description('List th
 covers(group.command('pending'), 'command.listPendingGroups').description('List groups that added the bot and wait to be bound').option(...BOT).option('--json', 'Print JSON').action(async (options: Json & { bot?: string }) => {
   await (await import('./commands/group')).runGroupPending(options, io(options));
 });
-covers(group.command('bind <groupId>'), 'command.bindGroup', 'directory.choose').description('Bind a group (oc_…) to a folder')
-  .requiredOption('--folder <path>', 'Working folder')
+const FOLDER = ['--folder <path>', "Working folder on the daemon's computer (~ and relative paths are taken from here); default, or none, is a new folder the daemon makes"] as const;
+const JOIN_PROJECT = ['--project <project>', "Join this project (name or prj_…) and use its folder instead of making one; not with --folder <path>"] as const;
+const CONVERSATION = ['--conversation <mode>', 'Required. multi (@ me opens a topic, one session per topic), single (one session for the main area) or smart (the Bot reads the group and replies when it fits)'] as const;
+const RESPONSE = ['--response <reply>', 'mention (reply only when @-ed) or all (no @ needed); defaults: multi all, single mention; not with smart'] as const;
+covers(group.command('bind <groupId>'), 'command.bindGroup', 'directory.choose', 'library.list').description('Bind a group (oc_…) to a folder')
+  .option(...FOLDER)
+  .option(...JOIN_PROJECT)
   .option('--name <name>', 'Project name; defaults to the group name')
   .option('--tool <tool>', 'codex or claude', 'codex')
-  .option('--conversation <mode>', 'Required. multi (@ me opens a topic, one session per topic), single (one session for the main area) or smart (the Bot reads the group and replies when it fits)')
-  .option('--response <reply>', 'mention (reply only when @-ed) or all (no @ needed); defaults: multi all, single mention; not with smart')
+  .option(...CONVERSATION)
+  .option(...RESPONSE)
   .option(...BOT).option('--json', 'Print JSON')
-  .action(async (groupId: string, options: Json & { folder: string; name?: string; tool: string; conversation?: string; response?: string; bot?: string }) => {
+  .action(async (groupId: string, options: Json & { folder?: string; project?: string; name?: string; tool: string; conversation?: string; response?: string; bot?: string }) => {
     await (await import('./commands/group')).runGroupBind(groupId, options, io(options));
   });
-const project = program.command('project').description('List projects: the folders and memory groups share');
+covers(group.command('create <name>'), 'collaboration.createProject', 'directory.choose').description('Create a Feishu group with the bot in it and bind it, as the web page\'s 创建群聊; the group is full access')
+  .option(...FOLDER).option(...JOIN_PROJECT)
+  .option('--tool <tool>', 'codex or claude', 'codex')
+  .option(...CONVERSATION).option(...RESPONSE)
+  .option(...BOT).option(...JSON_FLAG)
+  .addHelpText('after', `
+Feishu makes the group, so this takes up to 75 s. Choose the judge model afterwards with
+vonvon settings set --group <name> judge.selection=….
+
+Example:
+  vonvon group create 研发 --conversation multi --folder ~/work/app`)
+  .action(async (name: string, options: Json & { folder?: string; project?: string; tool: string; conversation?: string; response?: string; bot?: string }) => {
+    await (await import('./commands/group')).runGroupCreate(name, options, io(options));
+  });
+covers(group.command('show <group>'), 'collaboration.project').description("Show a bound group (oc_… or its name) as the daemon has it, with the revision group set --revision takes")
+  .option(...BOT).option(...JSON_FLAG)
+  .action(async (wanted: string, options: Json & { bot?: string }) => {
+    await (await import('./commands/group')).runGroupShow(wanted, options, io(options));
+  });
+covers(group.command('set <group>'), 'collaboration.editProject').description("Change a bound group: enable or disable it, its 会话方式, its folder or its project")
+  .option('--enable', 'Use the bot in this group again')
+  .option('--disable', 'Stop using the bot in this group; the binding stays')
+  .option('--conversation <mode>', 'multi, single or smart')
+  .option('--folder <path>', "Another working folder on the daemon's computer (~ and relative paths are taken from here)")
+  .option('--project <project>', 'Move the group to this project (name or prj_…)')
+  .option('--revision <revision>', 'The revision group show --json printed; a change made since is refused. Defaults to the current one')
+  .option(...BOT).option(...JSON_FLAG)
+  .action(async (wanted: string, options: Json & { enable?: boolean; disable?: boolean; conversation?: string; folder?: string; project?: string; revision?: string; bot?: string }) => {
+    await (await import('./commands/group')).runGroupSet(wanted, options, io(options));
+  });
+covers(group.command('unbind <group>'), 'collaboration.removeProject').description('Unbind a group: the bot leaves it (or hands a group it made to you); the folder, files and project stay')
+  .option('--yes', 'Unbind it; without --yes nothing changes and the command says what would')
+  .option(...BOT).option(...JSON_FLAG)
+  .action(async (wanted: string, options: Json & { yes?: boolean; bot?: string }) => {
+    await (await import('./commands/group')).runGroupUnbind(wanted, options, io(options));
+  });
+const dir = program.command('dir').description("Browse folders on the daemon's computer, inside its user's home, as the web page's folder picker");
+covers(dir.command('list [path]'), 'directory.list').description('List the folders in a folder; no path: the home folder')
+  .option('--all', 'Also list hidden folders; --json always has them').option(...JSON_FLAG)
+  .action(async (path: string | undefined, options: Json & { all?: boolean }) => {
+    await (await import('./commands/dir')).runDirList(path, options, io(options));
+  });
+covers(dir.command('suggest <query>'), 'directory.suggest').description('Find folders by what was typed, as the web page\'s folder box completes it')
+  .option(...JSON_FLAG)
+  .action(async (query: string, options: Json) => {
+    await (await import('./commands/dir')).runDirSuggest(query, io(options));
+  });
+const project = program.command('project').description('List and change projects: the folders and memory groups share');
 covers(project.command('list'), 'library.list').description('List projects with their folders and the groups that use them').option('--json', 'Print JSON').action(async (options: Json) => {
   await (await import('./commands/project')).runProjectList(io(options));
 });
+covers(project.command('rename <project> <name>'), 'library.rename').description("Rename a project (name or prj_…); its groups keep their names").option(...JSON_FLAG)
+  .action(async (wanted: string, name: string, options: Json) => {
+    await (await import('./commands/project')).runProjectRename(wanted, name, io(options));
+  });
+covers(project.command('remove <project>'), 'library.delete').description('Delete a project no group uses, with its memory and records; the files in its folders stay')
+  .option('--yes', 'Delete it; without --yes nothing is deleted and the command says what would go').option(...JSON_FLAG)
+  .action(async (wanted: string, options: Json & { yes?: boolean }) => {
+    await (await import('./commands/project')).runProjectRemove(wanted, options, io(options));
+  });
+const more = (value: string, previous: string[] = []): string[] => [...previous, value];
+covers(project.command('workspace <project>'), 'library.workspace').description("Change a project's folders; each of its groups follows and starts new sessions")
+  .option('--primary <path>', 'The main folder')
+  .option('--add <path>', 'Add an extra folder (repeatable)', more)
+  .option('--remove <path>', 'Take an extra folder out (repeatable)', more)
+  .option('--repos <path>', 'Set the repositories, all of them (repeatable)', more)
+  .option('--default-repos', "Drop the project's repositories: each bot uses its own default")
+  .option(...JSON_FLAG)
+  .addHelpText('after', `
+Paths are folders on the daemon's computer; ~ and relative paths are taken from here.
+
+Example:
+  vonvon project workspace 研发 --add ~/work/docs --default-repos`)
+  .action(async (wanted: string, options: Json & { primary?: string; add?: string[]; remove?: string[]; repos?: string[]; defaultRepos?: boolean }) => {
+    await (await import('./commands/project')).runProjectWorkspace(wanted, options, io(options));
+  });
 const memory = program.command('memory').description('Read and change memory entries: a project\'s or a bot\'s');
 const memoryScope = (command: Command) => command.option('--project <project>', 'Project name or id (prj_…)').option('--bot <appId>', 'Bot id: its own memory').option('--json', 'Print JSON');
 const memoryContext = async (options: Json) => (await import('./commands/memory')).terminalMemoryContext(io(options));

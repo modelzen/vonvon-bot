@@ -28,15 +28,6 @@ export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
   'command.setResponse': { reason: 'superseded', note: 'settings.save.project response (settings set)' },
   'command.setPermission': { reason: 'superseded', note: 'settings.save.project permission (settings set)' },
 
-  'collaboration.createProject': pending('C3', 'group create'),
-  'collaboration.project': pending('C3', 'group show'),
-  'collaboration.editProject': pending('C3', 'group set'),
-  'collaboration.removeProject': pending('C3', 'group unbind'),
-  'directory.list': pending('C3', 'dir list'),
-  'directory.suggest': pending('C3', 'dir suggest'),
-  'library.workspace': pending('C3', 'project workspace'),
-  'library.rename': pending('C3', 'project rename'),
-  'library.delete': pending('C3', 'project remove'),
   'library.previous': { reason: 'unused', note: 'no client sends it' },
 
   'collaboration.history': pending('C4', 'session list'),
