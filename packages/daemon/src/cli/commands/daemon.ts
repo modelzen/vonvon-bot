@@ -13,6 +13,7 @@ import { readStartupRegistration, startRegisteredDaemon } from '../../service/st
 import { readCrashSummary, removeResumeRequest, writeResumeRequest, type CrashRecord, type CrashSummary } from '../../host/crash-store';
 import { CommandError } from '../command-error';
 import { localTime, print, want, withDaemon, type Daemon, type Io } from '../daemon-client';
+import { interrupts, onSigint, type Interrupts, type OnInterrupt } from '../interrupt';
 
 export type DaemonStatus = { running: false } | {
   running: true;
@@ -309,13 +310,9 @@ export type LogsDeps = {
   daemon: Daemon;
   /** Without a daemon: today's and yesterday's log files. */
   readFiles: (maxBytes: number) => Promise<string>;
-  /** Installs a Ctrl-C handler and returns its removal. */
-  onInterrupt: (handler: () => void) => () => void;
+  onInterrupt: OnInterrupt;
 };
-const logsDeps = (): LogsDeps => ({
-  env: process.env, daemon: withDaemon, readFiles: maxBytes => readRecentLogs({ maxBytes }),
-  onInterrupt: handler => { process.on('SIGINT', handler); return () => { process.off('SIGINT', handler); }; },
-});
+const logsDeps = (): LogsDeps => ({ env: process.env, daemon: withDaemon, readFiles: maxBytes => readRecentLogs({ maxBytes }), onInterrupt: onSigint });
 /** --follow waits as long as the user does; a timer longer than this fires at once. */
 const FOREVER = 2_147_483_647;
 /** Logs keep tabs and line breaks; other control characters, which could drive the terminal, go. */
@@ -340,26 +337,32 @@ export function afterPrinted(printed: string, lines: string): string {
   return lines;
 }
 
+const STOPPED = '不再跟日志。';
+
 /**
  * `vonvon daemon logs` (devices 8.3): a running daemon reads its own logs (`admin.logs`), else the files are read. With
  * --follow it then sends each new batch (`admin.followLogs`) until Ctrl-C (130) or the daemon stops (3); nothing falls
- * back to the files then, nor in a Bot's session.
+ * back to the files then, nor in a Bot's session. With --follow, Ctrl-C from the first request on decides: 130.
  */
 export async function runLogs(options: { tail: number; follow?: boolean | undefined }, io: Io, overrides: Partial<LogsDeps> = {}): Promise<void> {
   const d = { ...logsDeps(), ...overrides };
   try {
     await d.daemon(async call => {
-      const maxBytes = Math.min(256 * 1024, Math.max(1024, options.tail * 400));
-      const text = lastLines(want('读日志', await call('读日志', c => c.admin({ type: 'logs', maxBytes })), 'logs').text, options.tail);
-      if (!options.follow) {
-        if (io.json) print(io, [], { source: 'daemon', text });
-        else io.write(clean(text));
-        return;
-      }
-      const write = (lines: string): void => { if (lines) io.write(io.json ? `${JSON.stringify({ event: 'log', lines })}\n` : clean(lines)); };
-      write(text);
-      const outcome = await call('跟日志', c => followLogs(c, d, text, write), { ms: FOREVER });
-      throw outcome === 'interrupted' ? new CommandError('interrupted', '不再跟日志。') : new CommandError('connection', 'daemon 停了，日志跟不下去了。运行 vonvon daemon status 查看。');
+      const ctrlC = options.follow ? interrupts(d.onInterrupt, () => new CommandError('interrupted', STOPPED)) : undefined;
+      try {
+        const maxBytes = Math.min(256 * 1024, Math.max(1024, options.tail * 400));
+        const read = call('读日志', c => c.admin({ type: 'logs', maxBytes }));
+        const text = lastLines(want('读日志', await (ctrlC ? ctrlC.until(read) : read), 'logs').text, options.tail);
+        if (!ctrlC) {
+          if (io.json) print(io, [], { source: 'daemon', text });
+          else io.write(clean(text));
+          return;
+        }
+        const write = (lines: string): void => { if (lines) io.write(io.json ? `${JSON.stringify({ event: 'log', lines })}\n` : clean(lines)); };
+        write(text);
+        const outcome = await call('跟日志', c => followLogs(c, ctrlC, text, write), { ms: FOREVER });
+        throw outcome === 'interrupted' ? new CommandError('interrupted', STOPPED) : new CommandError('connection', 'daemon 停了，日志跟不下去了。运行 vonvon daemon status 查看。');
+      } finally { ctrlC?.stop(); }
     });
     return;
   } catch (error) {
@@ -369,26 +372,39 @@ export async function runLogs(options: { tail: number; follow?: boolean | undefi
   io.write(io.json ? `${JSON.stringify({ ok: true, source: 'files', text: recent })}\n` : recent);
 }
 
-/** Ctrl-C asks the daemon to stop sending (1 s at most); the connection closes when the command ends either way. */
-function followLogs(c: VonvonClient, d: LogsDeps, printed: string, write: (lines: string) => void): Promise<'interrupted' | 'lost'> {
+/**
+ * Prints each batch until Ctrl-C or the connection ends. After Ctrl-C the outcome is `interrupted` whatever comes next:
+ * it asks the daemon to stop sending, 1 s at most, and a second Ctrl-C, a dropped connection or a failed request ends
+ * that wait at once. The connection closes when the command ends either way.
+ */
+function followLogs(c: VonvonClient, ctrlC: Interrupts, printed: string, write: (lines: string) => void): Promise<'interrupted' | 'lost'> {
   return new Promise((resolve, reject) => {
     let first = true;
     let settled = false;
     const stops: Array<() => void> = [];
-    const settle = (end: () => void): void => { if (!settled) { settled = true; for (const stop of stops.splice(0)) stop(); end(); } };
-    stops.push(c.onLog(({ lines }) => {
+    /** Without a failure, the connection ended, or Ctrl-C's wait did. */
+    const end = (failure?: { error: unknown }): void => {
       if (settled) return;
+      settled = true;
+      for (const stop of stops.splice(0)) stop();
+      if (ctrlC.interrupted) resolve('interrupted');
+      else if (failure) reject(failure.error);
+      else resolve('lost');
+    };
+    stops.push(c.onLog(({ lines }) => {
+      if (settled || ctrlC.interrupted) return;
       write(first ? afterPrinted(printed, lines) : lines);
       first = false;
     }));
-    stops.push(c.onError(error => { if (error instanceof ConnectionError) settle(() => resolve('lost')); }));
-    stops.push(d.onInterrupt(() => {
-      let timer: NodeJS.Timeout | undefined;
-      const wait = new Promise<void>(done => { timer = setTimeout(done, 1000); });
-      void Promise.race([c.admin({ type: 'followLogs', follow: false }).catch(() => undefined), wait]).then(() => { clearTimeout(timer); settle(() => resolve('interrupted')); });
+    stops.push(c.onError(error => { if (error instanceof ConnectionError) end(); }));
+    stops.push(ctrlC.on(count => {
+      if (count > 1) { end(); return; }
+      const timer = setTimeout(() => end(), 1000);
+      stops.push(() => { clearTimeout(timer); });
+      void c.admin({ type: 'followLogs', follow: false }).catch(() => undefined).then(() => end());
     }));
     c.admin({ type: 'followLogs', follow: true }).then(reply => {
-      if (reply.kind !== 'following') settle(() => reject(new CommandError('failed', `跟日志没有开始：daemon 回了意外的结果（${reply.kind}）。`)));
-    }, (error: unknown) => settle(() => reject(error)));
+      if (reply.kind !== 'following') end({ error: new CommandError('failed', `跟日志没有开始：daemon 回了意外的结果（${reply.kind}）。`) });
+    }, (error: unknown) => end({ error }));
   });
 }

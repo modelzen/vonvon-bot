@@ -221,3 +221,14 @@
 - **`snapshot --json`**：Bot、群和成员关系的头像都去掉。
 - **`secrets test` 失败的提示**：`auth` 提示 `vonvon secrets set <id>` 换一个 key，其他失败提示稍后 `vonvon secrets test <id>`。
 - **`T/cli-json.test.ts` 多了两条反例**：`mcp add` 两个都不给（2）、`context show` 不给群（2）。`T/cli-parity.test.ts` 加了一条用例：本片的 kind 都被覆盖，`machine.logs` 标 superseded，`daemon logs` 有 `--follow`。
+
+## 审查后改了什么
+
+Codex 审查（任务 203）两条 P2、一条 P3：
+
+- **P2 导入的 Ctrl-C 没盖住首个回复，等状态时出错会盖掉中断** → 新文件 `P/daemon/src/cli/interrupt.ts`（`interrupts`）：第一次 Ctrl-C 就定下结果 130，经它等的请求（`until`）当场结束，之后 daemon 回什么、超时还是断线都不改结果；`stop` 摘掉处理器。`import start --accept` 和 `import rollback` 在发 `start`、`rollback` 之前装上，整个跟随共用一个：首个回复没到时 Ctrl-C 也是 130 加"导入在后台继续"，`--json` 有最后一行错误；等状态时 Ctrl-C 不再等满 30 秒。每秒一次的停顿随 Ctrl-C 结束，不留计时器。连上 daemon 之前（还没发请求）的 Ctrl-C 照旧由 Node 处理，和其他一来一回的命令一样。
+- **P2 日志 Ctrl-C 后等退订时断线，130 变成 3** → `daemon logs --follow` 从第一个请求（读尾巴）起用同一套：Ctrl-C 后断线、请求失败都还是 130，之后来的日志不再打印；等退订最多 1 秒，第二次 Ctrl-C、断线或请求失败当场结束；1 秒的计时器、日志和断线的监听在结束时都摘掉。读尾巴时按 Ctrl-C 也是 130，不再发 `follow:true`。
+- 两处一样：结果定下、处理器摘掉以后（命令在关连接，最多 1 秒），再按 Ctrl-C 由 Node 处理，立即退出。
+- 本片别的命令：只有 `import start/rollback` 和 `daemon logs --follow` 有轮询或订阅；`now`、`snapshot`、`context show`、`secrets test`、`service skip`、`mcp`、`daemon status` 都是一来一回，没有改。
+- **P3 PR 描述试用步骤 3 的 MCP 写法** → PR 描述已改成 `--provider codex --command echo`，代码不用改。
+- 新测试（改前都失败）：`T/cli-import.test.ts` 两条，首个回复没到时 Ctrl-C（start 和 rollback），等状态时 Ctrl-C 之后断线、超时或 daemon 不回；`T/cli-machine.test.ts` 两条，Ctrl-C 后退订没回时断线或请求失败，第二次 Ctrl-C 当场结束和读尾巴时 Ctrl-C。
