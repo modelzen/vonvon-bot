@@ -136,3 +136,16 @@
 约 900 行：`session.ts` +320，`usage.ts` +130，`index.ts` +70，白名单 −12，测试约 390。
 - 停止和清空是真操作：验收只在测试群、只对自己刚起的任务做。
 - `history` 在 provider 那边读可恢复会话，可能慢：用 `feishu` 档（75 秒）超时，读类超时 exit 3 不是 6（C1 的规矩：读没有"可能已经做了"）。
+
+## 和计划不一样的地方
+
+- **时间打成 `YYYY-MM-DD HH:mm`**（`localTime()`，4.2 写 `HH:mm`）：历史会话和 7 天限额的重置时间常常不在今天。
+- **分离的会话标"（已归档）"**（4.2 写"已分离"）：网页历史会话、daemon 的报错都叫"已归档"，三处一致（8.1）。
+- **`usage show` 的窗口名照网页 `usageWindowLabel`**："5 小时限额：已用 42% · 2026-11-01 14:30 重置"；第一行多了账号名（网页同），最后一行"读取于 …"。
+- **`clear`、`resume` 也用 `feishu` 档（75 秒）**：两者都要起或接 provider 会话、往群里发回执；`resume` 的 `unknown` 是"可能已经接上，运行 vonvon session list … 看。"。`usage show` 读账号也走网络，同样 `feishu` 档，读类超时 exit 3；daemon 回 `usage_unavailable`（没登录等）照 C1 是 exit 1，`reason` 带码。
+- **写类回复的 `warning` 也给**：`clear / compact / resume` 的 JSON 带 `warning?`，人类输出多一行"飞书回执未确认：…"（网页同样显示）。
+- **`resume` 读不到可恢复列表（`threadsError`）而 id 不在里面时 exit 1**，文字是读不到的原因，不说"没有这条会话"。
+- **提示里的命令带上要的参数**：`--group` 用群 id；有几个 Bot 时带 `--bot <id>`；用户给了 `--session` 时带 `--session`。`session context` 第一行是会话 id 和摘要，没在跑时打"现在没有在跑的任务。"。
+- **"12 个 kind 被 `covers`、不在白名单"放在 `T/cli-session.test.ts`、`T/cli-usage.test.ts`**，同 C2 的做法，不改 `T/cli-parity.test.ts`。
+- **`usage judge` 只列今天和有判断的日子**（网页同）；全是 0 时打"最近 14 天没有判断。只有智能群会判断。"，`botsUnreadable` 另打一行。
+- **`runningBot()` 放在 `pickBot()` 紧后面**，`METHODS` 照 C3 4.6 原文。
