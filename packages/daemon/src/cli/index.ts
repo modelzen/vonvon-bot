@@ -259,6 +259,21 @@ inGroup(covers(schedule.command('delete <taskId>'), 'schedule.delete').descripti
 for (const [action, description, kinds] of [['pause', 'Pause a task', ['schedule.pause']], ['resume', 'Resume a task; runs missed while paused are not made up', ['schedule.resume']], ['run', 'Run a task now; the next scheduled run stays', ['schedule.runNow']], ['runs', 'Show the run count and the last 20 runs', []]] as const) {
   inGroup(covers(schedule.command(`${action} <taskId>`), ...kinds).description(description)).action(async (taskId: string, options: ScheduleOptions) => { await runSchedule(action, { ...options, taskId }); });
 }
+// devices 4.3 and 8.1: the link another computer pairs with, the clients that did, and this device's name
+const devices = async () => import('./commands/device');
+covers(program.command('pair'), 'device.pair').description('Print a one-time link another computer pastes to manage this one')
+  .option('--ttl <minutes>', 'Minutes the link stays valid, 1 to 10', '10').option(...JSON_FLAG)
+  .action(async (options: Json & { ttl: string }) => { await (await devices()).runPair(options, io(options)); });
+const clients = program.command('clients').description('The computers paired with this one');
+covers(clients.command('ls'), 'device.clients').description('List paired clients, revoked ones too').option(...JSON_FLAG)
+  .action(async (options: Json) => { await (await devices()).runClients('ls', {}, io(options)); });
+covers(clients.command('rename <clientId> <name>'), 'device.renameClient').description('Rename a paired client').option(...JSON_FLAG)
+  .action(async (clientId: string, name: string, options: Json) => { await (await devices()).runClients('rename', { clientId, name }, io(options)); });
+covers(clients.command('revoke <clientId>'), 'device.revokeClient').description('Revoke a client at once; --cascade also the ones it invited').option('--cascade', 'Also revoke the clients it invited, down the line').option(...JSON_FLAG)
+  .action(async (clientId: string, options: Json & { cascade?: boolean }) => { await (await devices()).runClients('revoke', { clientId, cascade: options.cascade }, io(options)); });
+const device = program.command('device').description("This computer's device identity");
+covers(device.command('rename <name>'), 'device.rename').description('Rename this computer as paired clients see it').option(...JSON_FLAG)
+  .action(async (name: string, options: Json) => { await (await devices()).runDeviceRename(name, io(options)); });
 const feishu = program.command('feishu').description('Read Feishu groups and members');
 covers(feishu.command('groups'), 'command.listJoinedGroups').description('List joined groups, one page').option(...BOT).option('--cursor <cursor>', 'Next page cursor').option('--json', 'Print JSON')
   .action(async (options: Json & { bot?: string; cursor?: string }) => {

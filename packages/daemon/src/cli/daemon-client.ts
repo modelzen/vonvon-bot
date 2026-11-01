@@ -70,7 +70,7 @@ function translate(what: string, error: unknown, ms: number, unknown?: string): 
 
 /** Client method → RPC method; snapshot() always sends the same payload. */
 const METHODS = {
-  run: 'command', settings: 'settings', collaboration: 'collaboration', environment: 'environment', machine: 'machine', admin: 'admin', directory: 'directory',
+  run: 'command', settings: 'settings', collaboration: 'collaboration', environment: 'environment', machine: 'machine', admin: 'admin', directory: 'directory', device: 'device',
 } as const;
 
 /**

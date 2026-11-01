@@ -13,7 +13,7 @@
  * `arrives`: registered before the kind exists; the slice that adds it to the protocol drops `arrives`.
  */
 export type ParityReason = 'client-only' | 'desktop-only' | 'internal' | 'superseded' | 'unused' | 'dead' | 'pending';
-export type ParitySlice = 'C2' | 'C3' | 'C4' | 'C5' | 'C6' | 'C7' | 'C8' | 'D1' | 'D3' | 'I3' | 'U2';
+export type ParitySlice = 'C2' | 'C3' | 'C4' | 'C5' | 'C6' | 'C7' | 'C8' | 'D3' | 'I3' | 'U2';
 export type ParityEntry = { reason: ParityReason; note: string; slice?: ParitySlice; arrives?: ParitySlice };
 
 const pending = (slice: ParitySlice, note: string): ParityEntry => ({ reason: 'pending', slice, note });
@@ -125,11 +125,6 @@ export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
   'machine.coreUpdateStatus': pending('I3', 'vonvon update (waits on it)'),
 
   // devices 4: the remote listeners and their commands come with D3
-  'device.pair': pending('D1', 'vonvon pair'),
-  'device.clients': pending('D1', 'vonvon clients ls'),
-  'device.renameClient': pending('D1', 'vonvon clients rename'),
-  'device.revokeClient': pending('D1', 'vonvon clients revoke'),
-  'device.rename': pending('D1', 'vonvon device rename'),
   'device.status': pending('D3', 'vonvon remote status'),
   'device.enable': pending('D3', 'vonvon remote enable'),
   'device.disable': pending('D3', 'vonvon remote disable'),
