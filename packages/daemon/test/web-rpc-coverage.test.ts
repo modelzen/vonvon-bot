@@ -23,7 +23,7 @@ const operationId = '00000000-0000-4000-8000-000000000001';
 it('serves browser daemon branches and keeps local URL and shell actions unsupported', async () => {
   const fixture = await startFixture();
   try {
-    const client = await socketClient(fixture.api.port, fixture.credential, 1, requestTimeout);
+    const client = await socketClient(fixture.api.port, fixture.credential, undefined, requestTimeout);
     await client.ready();
     const daemon = [
       ['command', { type: 'refresh' }],
@@ -88,7 +88,7 @@ it('holds the real API drain until a login child exits after stop intent', async
     signal.throwIfAborted();
     fixture = await (starting = startFixture(fakeService(), { home: dir, getDataRoot: () => dir, resolveCodex: () => null, nodePath, path: dir, fetchLatest: async () => null }));
     signal.throwIfAborted();
-    const client = await socketClient(fixture.api.port, fixture.credential, 1, requestTimeout);
+    const client = await socketClient(fixture.api.port, fixture.credential, undefined, requestTimeout);
     await client.ready();
     const login = await client.call(requestSchema.parse({ type: 'request', id: 'login', method: 'environment', payload: { type: 'startLogin', tool: 'lark-cli' } }));
     expect(login).toMatchObject({ type: 'response', payload: { kind: 'operation', operation: { kind: 'running' } } });
@@ -172,7 +172,7 @@ else process.exit(0);
   let fixture: Awaited<ReturnType<typeof startFixture>> | undefined;
   try {
     fixture = await startFixture(service, environmentOptions);
-    const client = await socketClient(fixture.api.port, fixture.credential, 1, requestTimeout);
+    const client = await socketClient(fixture.api.port, fixture.credential, undefined, requestTimeout);
     await client.ready();
     const folderReply = await client.call(requestSchema.parse({ type: 'request', id: 'folder-for-union', method: 'directory', payload: { type: 'choose', path: process.env.HOME } }));
     if (folderReply.type !== 'response' || folderReply.method !== 'directory' || folderReply.payload.kind !== 'folderChosen') throw new Error('Folder token missing');

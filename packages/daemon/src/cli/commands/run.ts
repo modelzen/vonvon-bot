@@ -144,6 +144,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
     } else {
       const startedAt = Date.now();
       api = await startApi({
+        startedAt,
         port: options.port,
         control,
         ...(diagnostics ? { diagnostics } : {}),

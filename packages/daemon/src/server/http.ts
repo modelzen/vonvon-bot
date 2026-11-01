@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { PROTOCOL_VERSION, type Request, type Response } from '@vonvon/protocol';
+import { PROTOCOL_VERSION, serverInfoV1Schema, serverInfoV2Schema, type Request, type Response } from '@vonvon/protocol';
 import type { AdminService } from '../admin/service';
 import type { ShutdownControl } from '../host/lifecycle';
 import { createServiceActionLauncher } from '../host/service-action';
@@ -14,7 +14,7 @@ import { contextPreviewRpc } from './rpc/context-preview';
 import { scheduleRpc } from './rpc/schedule';
 import { Jobs } from './jobs';
 import { LogFollowers } from './logs';
-import { createSnapshotStore, type SnapshotStore } from './snapshot';
+import { createSnapshotStore, hostPlatform, type SnapshotStore } from './snapshot';
 import { createSocketServer, type Peer } from './ws';
 import type { RpcOutcome } from './rpc';
 import { adminRpc } from './rpc/admin';
@@ -25,8 +25,15 @@ import { libraryRpc } from './rpc/library';
 import { machineRpc } from './rpc/machine';
 import type {BridgeImporter} from '../import/bridge/transaction';
 import { settingsRpc } from './rpc/settings';
-import { readLocalIdentity } from './local-credential';
-import { getRpcErrorCode } from './errors';
+import { createLocalIdentity } from './local-credential';
+import { getRpcErrorCode, RpcError } from './errors';
+import { authorize } from './authz';
+import { principalWire } from './principal';
+import { deviceRpc } from './rpc/device';
+import { loadOrCreateDevice } from '../remote/device';
+import { createClientRegistry, type ClientRegistry } from '../remote/clients';
+import { createInviteBook } from '../remote/pairing';
+import { log } from '../core/logger';
 import { serveWebUi } from './web-ui';
 import { getPidLockInfo, type PidLockInfo } from './pid-lock';
 import { EnvironmentService, type EnvironmentServiceOptions } from '../environment/service';
@@ -54,13 +61,19 @@ export interface DaemonApi extends ApiLifetime {
 /** Test seams for the login-time service: the platform and spawn of the helper launcher, and the manager read. */
 type ServiceSeams = Pick<Parameters<typeof createServiceActionLauncher>[0], 'platform' | 'spawn'> & Pick<Parameters<typeof createSnapshotStore>[0], 'readService'>;
 
-export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; bridgeImport?: BridgeImporter; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics']; crashes?: Parameters<typeof createSnapshotStore>[0]['crashes'] }): Promise<DaemonApi> {
+/** devices 4.5: what this daemon reports in a v2 server info; D3 adds `remote`, D4a `session-scope`. */
+const capabilities = (): string[] => ['device'];
+
+/** `startedAt`: when this daemon process started (epoch ms), in every daemonStatus reply (devices 4.7). */
+export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; bridgeImport?: BridgeImporter; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics']; crashes?: Parameters<typeof createSnapshotStore>[0]['crashes']; startedAt?: number }): Promise<DaemonApi> {
+  const startedAt = options.startedAt ?? Math.round(performance.timeOrigin);
   let acquiredServer: ReturnType<typeof createServer> | undefined;
   let acquiredJobs: Jobs | undefined;
   let acquiredLogs: LogFollowers | undefined;
   let acquiredEnvironment: EnvironmentService | undefined;
   let acquiredDirectory: Awaited<ReturnType<typeof createDirectoryBrowser>> | undefined;
   let acquiredSockets: ReturnType<typeof createSocketServer> | undefined;
+  let acquiredClients: ClientRegistry | undefined;
   let snapshots: SnapshotStore | undefined;
   let port = options.port ?? 0;
   const invalidate = (): void => { void snapshots?.rebuild().catch(() => undefined); };
@@ -100,8 +113,9 @@ export async function startApi(options: { service: AdminService; port?: number; 
     let listenerClosed: Promise<void>;
     released = Promise.resolve().then(async () => {
       await listenerClosed;
-      try { await socketCleanup; }
-      catch (error) { throw new ApiCleanupError([error]); }
+      const results = await Promise.allSettled([socketCleanup, Promise.resolve().then(() => acquiredClients?.close())]);
+      const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+      if (errors.length) throw new ApiCleanupError(errors);
     });
     socketCleanup = new Promise<void>(resolve => resolve(acquiredSockets?.release()));
     listenerClosed = new Promise<void>((resolve, reject) => {
@@ -131,7 +145,10 @@ export async function startApi(options: { service: AdminService; port?: number; 
       home: homedir(), getDataRoot: () => paths.appDir,
       resolveCodex: () => refreshCodexResolution({ force: true }), nodePath: process.execPath,
     });
-    const { credential, machineId } = await readLocalIdentity(paths.appDir);
+    const { credential, machineId } = await createLocalIdentity(paths.appDir);
+    const identity = { current: await loadOrCreateDevice(paths.appDir, machineId) };
+    const clients = acquiredClients = await createClientRegistry(paths.appDir);
+    const invites = createInviteBook();
     const directory = acquiredDirectory = await createDirectoryBrowser();
     const server = acquiredServer = createServer((request, response) => {
       void serveWebUi(request, response).then(served => {
@@ -158,10 +175,13 @@ export async function startApi(options: { service: AdminService; port?: number; 
     }
     async function dispatch(peer: Peer, request: Request): Promise<void> {
       if (!snapshots) throw new Error('Snapshot store is not ready');
+      const decision = await authorize(peer, request);
+      if (!decision.ok) throw new RpcError(decision.code, decision.message);
       const { id } = request;
       switch (request.method) {
         case 'snapshot': peer.send({ type: 'response', id, method: 'snapshot', payload: snapshots.current() }); return;
-        case 'admin': return finish(peer, await adminRpc(options.service, follow => logs.follow(peer, follow), request.payload), payload => ({ type: 'response', id, method: 'admin', payload }));
+        case 'admin': return finish(peer, await adminRpc(options.service, follow => logs.follow(peer, follow), request.payload, { startedAt, peer }), payload => ({ type: 'response', id, method: 'admin', payload }));
+        case 'device': return finish(peer, await deviceRpc({ home, identity, clients, invites, publish: event => sockets.publish(event), log }, peer, request.payload), payload => ({ type: 'response', id, method: 'device', payload }));
         case 'settings': return finish(peer, await settingsRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'settings', payload }));
         case 'collaboration': return finish(peer, await collaborationRpc(options.service, directory, request.payload), payload => ({ type: 'response', id, method: 'collaboration', payload }));
         case 'environment': return finish(peer, await environmentRpc(options.service, jobs, peer, request.payload, environment), payload => ({ type: 'response', id, method: 'environment', payload }));
@@ -197,11 +217,16 @@ export async function startApi(options: { service: AdminService; port?: number; 
         const lock = await owner;
         const own = lock?.pid === process.pid && lock.listen === `127.0.0.1:${port}`;
         peer.send({ type: 'response', id: request.id, method: 'admin', payload: { kind: 'daemonStatus', status: {
-          installed: false, supported: false, selfHosted: true, running: own, version: bridgeVersion(), ...(own ? { pid: lock.pid } : {}),
+          installed: false, supported: false, selfHosted: true, running: own, version: bridgeVersion(), startedAt, ...(own ? { pid: lock.pid } : {}),
         } } });
       }
     }
-    const sockets = acquiredSockets = createSocketServer({ server, credential, info: { type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: PROTOCOL_VERSION }, request, control, detached: peer => { jobs.detach(peer); logs.detach(peer); } });
+    // devices 4.5: a protocol 1 client gets the three fields it parses strictly, with its own version, so a 0.8 client can still stop this daemon.
+    const info = (peer: Peer) => peer.protocolVersion === 1
+      ? serverInfoV1Schema.parse({ type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: 1 })
+      : serverInfoV2Schema.parse({ type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: PROTOCOL_VERSION,
+        deviceName: identity.current.name, platform: hostPlatform(), capabilities: capabilities(), principal: principalWire(peer.principal) });
+    const sockets = acquiredSockets = createSocketServer({ server, credential, info, request, control, detached: peer => { jobs.detach(peer); logs.detach(peer); } });
     snapshots = await createSnapshotStore({ service: options.service, jobs: () => jobs.snapshot(), serviceAction: () => serviceActions.current(), ...(readService ? { readService } : {}), ...(options.diagnostics ? { diagnostics: options.diagnostics } : {}), ...(options.crashes ? { crashes: options.crashes } : {}), publish: snapshot => sockets.publish({ type: 'event', event: 'snapshot', payload: snapshot }) });
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', () => { server.off('error', reject); resolve(); }); });
     const address = server.address();

@@ -1,5 +1,6 @@
-import type { VonvonClient } from '@vonvon/client/browser';
-import type { BackendInstallEventPayload, CommandResult, DesktopSnapshot, DesktopUpdate, LogEventPayload, MachineReply } from '@vonvon/protocol';
+import { z } from 'zod';
+import type { ServerInfo, VonvonClient } from '@vonvon/client/browser';
+import { agentIdSchema, type BackendInstallEventPayload, type CommandResult, type DesktopSnapshot, type DesktopUpdate, type LogEventPayload, type MachineReply } from '@vonvon/protocol';
 import type { ShellCapabilities } from '../../ui/src/client-context.js';
 
 /** Main-to-preload notification only; it exposes no renderer action or daemon access. */
@@ -18,6 +19,7 @@ export const desktopChannels = {
   memory: 'desktop:client:memory',
   contextPreview: 'desktop:client:contextPreview',
   schedule: 'desktop:client:schedule',
+  device: 'desktop:client:device',
   close: 'desktop:client:close',
   subscribe: 'desktop:subscribe',
   external: 'desktop:shell:external',
@@ -34,6 +36,19 @@ export const desktopChannels = {
   quit: 'desktop:shell:quit',
   event: 'desktop:event',
 } as const;
+
+/**
+ * The machine-page actions the shell does itself, not the daemon (devices 8.4): their shapes live here, so the protocol
+ * no longer declares `repairCli` and the desktop update requests for the shell's sake.
+ */
+export const desktopShellRequestSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('startHost'), bot: agentIdSchema.unwrap().optional() }),
+  z.object({ type: z.literal('service'), action: z.enum(['install', 'start', 'stop', 'uninstall']) }),
+  z.object({ type: z.literal('repairCli') }),
+  z.object({ type: z.literal('checkDesktopUpdate') }),
+  z.object({ type: z.literal('installDesktopUpdate') }),
+]);
+export type DesktopShellRequest = z.infer<typeof desktopShellRequestSchema>;
 
 export type SafeFailure = {
   kind: 'rpc' | 'connection' | 'validation';
@@ -70,6 +85,8 @@ export interface DesktopResources {
 
 export interface AttachedDaemon {
   readonly client: VonvonClient;
+  /** What the daemon answered the hello with (devices 4.1). */
+  readonly serverInfo: ServerInfo;
   readonly identity: { pid: number; startedAt: string; listen: string };
   dispose(): Promise<void>;
 }
