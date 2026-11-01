@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { build } from 'esbuild';
@@ -15,6 +15,8 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['daemon', 'start', '--port', '70000'], 2], [['daemon', 'stop'], 0], [['daemon', 'status'], 0], [['daemon', 'logs'], 0],
   [['service', 'install'], 1], [['service', 'uninstall'], 0], [['service', 'status'], 0],
   [['bot', 'add'], 3], [['bot', 'list'], 3], [['bot', 'status'], 3], [['bot', 'repair-dir', 'nope'], 1],
+  [['bot', 'enable'], 3], [['bot', 'disable'], 3], [['bot', 'remove', 'x'], 3], [['bot', 'rescan'], 3],
+  [['bot', 'callback', 'status'], 3], [['bot', 'callback', 'confirm'], 3], [['bot', 'callback', 'unconfirm'], 3],
   [['group', 'list'], 3], [['group', 'joined'], 3], [['group', 'pending'], 3], [['group', 'bind', 'oc_x', '--folder', '.'], 2],
   [['project', 'list'], 0],
   [['memory', 'list'], 2], [['memory', 'export'], 2], [['memory', 'add', 'x'], 2], [['memory', 'edit', 'x', '--revision', '1'], 2],
@@ -75,3 +77,16 @@ it('every command prints one JSON line with --json, its exit code inside a failu
     }
   } finally { await rm(base, { recursive: true, force: true }); }
 }, 180_000);
+
+// cli-2-bot 4.6: only the commands named in LEASED take the data lease, and with it make the data root
+it('takes the data lease for the commands that write the data root only', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'vonvon-cli-lease-'));
+  try {
+    const home = join(base, 'home'); await mkdir(home);
+    const root = join(base, 'data');
+    expect((await run(home, root, ['bot', 'enable'])).code).toBe(3);
+    await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await run(home, root, ['daemon', 'stop'])).code).toBe(0);
+    expect((await stat(root)).isDirectory()).toBe(true);
+  } finally { await rm(base, { recursive: true, force: true }); }
+}, 60_000);

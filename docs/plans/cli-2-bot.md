@@ -190,3 +190,13 @@ expect(leaves.filter(path => !sampled(path) && !STARTS_A_DAEMON.includes(path)))
 约 650 行（不含本计划）：`D/cli/commands/bot.ts` 约 +200（其中 `follow`/`runRegistration` 改造 40、`ACTION_COMMAND` 15），`D/cli/index.ts` 约 +55（含 `preAction` 改写），`P/display.ts` +12、`U/project-model.ts` −10，白名单 −5，测试约 380。
 - `preAction` 改写影响所有命令的租约：名单写错会让某条命令该拿不拿（并发写数据目录）或不该拿却拿（沙箱里连不上租约 socket）。测试按"会写数据目录的命令拿、其余不拿"各抽一条核对，`T/cli-memory-preaction.test.ts` 保留。
 - `follow()` 多一个参数，`bot add` 的行为不能变：C1 的 `T/cli-admin.test.ts` 里 `bot add` 的用例原样要过。
+
+## 和计划不一样的地方
+
+- **`follow()` 接的是 `{start, purpose, again}`**，不只是起始请求：二维码那一行的用途（"建一个新的飞书应用" / "给「X」换一套飞书凭据"）和叫人重跑的命令（`vonvon bot add` / `vonvon bot rescan <id>`）也随命令变。二维码前已经写了"扫下面的二维码"，所以 `rescan` 的提示语省掉"重新扫码"四个字。
+- **QR 出来前断线的那句也换命令名**：除了 `expired_token`，"和 daemon 的连接断了，扫码已经取消。重新运行 …"也写 `vonvon bot rescan <id>`。`bot add` 的文字一字不变。
+- **`bot callback` 的 `bot` 字段是 `withoutAvatar(agent)`**（照 4.1"`bot` 字段都是 `withoutAvatar(agent)`"），包含表里写的 `{id, name}`。
+- **`stepLines` 导出给测试**：`撤销确认`（`confirmCallback{confirmed:false}`）只出现在已完成的卡片回调一步上，`bot status` 不打已完成步骤的按钮，所以这一行直接测 `stepLines`。
+- **"5 个 kind 被 `covers`、不在白名单"放在 `T/cli-bot.test.ts`**，不往 `T/cli-parity.test.ts` 加用例，少碰共用文件；`T/cli-parity.test.ts` 只照 4.6 第 3 条换反例。
+- **`T/cli-admin.test.ts` 改了两处期望**：暂停那句的结尾（`vonvon bot enable cli_a`）和卡片回调一步的 `运行 vonvon bot callback confirm cli_a`；`bot add` 的用例原样通过。
+- **`remove` 遇到启用中的 Bot**，文字前面加了「X」还启用着：，后面照 4.2。
