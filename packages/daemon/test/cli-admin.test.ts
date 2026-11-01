@@ -136,7 +136,7 @@ it('bot status prints the service step after the tools without counting it', asy
   await runBotStatus(undefined, mac.io(), mac.daemon);
   expect(mac.out()).toContain(['✓ Codex：可用 · 0.156.1', '· Claude：无法确认', '    运行 vonvon env scan',
     '! 登录电脑时自动运行 Bot（推荐）：推荐打开', '    打开后 Bot 跑在 macOS 的后台服务里：退出 app、注销再登录都在线，崩溃后自动重启。',
-    '    运行 vonvon service install', '    在网页里点「跳过」（vonvon open）', '全部就绪。', ''].join('\n'));
+    '    运行 vonvon service install', '    运行 vonvon service skip', '全部就绪。', ''].join('\n'));
   mac.clear(); await runBotStatus(undefined, mac.io(true), mac.daemon);
   expect(JSON.parse(mac.out())).toMatchObject({ ready: true, steps: expect.arrayContaining([expect.objectContaining({ id: 'service', done: false })]) });
   const linux = harness({ snapshot: status({ platform: 'linux', version: '1', loginItem: false, dataPath: '/x', service: { state: 'not-installed', skipped: false } }), admin: async () => ({ kind: 'setupStatus', status: setup }) });

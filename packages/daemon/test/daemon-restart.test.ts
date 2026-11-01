@@ -10,6 +10,7 @@ vi.mock('../src/server/owner-verification', async original => ({ ...await origin
 import { runRestart, runStatus, type RestartDeps } from '../src/cli/commands/daemon';
 import { crashDir, readBootId, writeBotPausesSync, writeCrashRecordSync, writeRunMarkerSync, type CrashRecord, type RunMarker } from '../src/host/crash-store';
 import { PidLockError } from '../src/server/pid-lock';
+import { CommandError } from '../src/cli/command-error';
 
 const roots: string[] = [];
 afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });
@@ -109,12 +110,15 @@ describe('runStatus', () => {
   });
   afterEach(() => { vi.restoreAllMocks(); });
   const running = (): void => writeFileSync(join(home, 'daemon.pid'), JSON.stringify({ pid: process.pid, startedAt: at(Date.now() - 1000), listen: '127.0.0.1:43119' }));
+  // a daemon that does not answer: the files do (cli-8-machine)
+  const offline = async (): Promise<never> => { throw new CommandError('connection', 'daemon 没有运行。'); };
+  const status = (json: boolean) => runStatus({ json, write: text => { out += text; } }, { home, now: () => T0, env: {}, daemon: offline });
   it('prints one line when there is nothing to show', async () => {
     running();
-    await runStatus(false, home, () => T0);
+    await status(false);
     expect(out).toBe('running PID ' + process.pid + ' at 127.0.0.1:43119\n');
     out = '';
-    await runStatus(true, home, () => T0);
+    await status(true);
     expect(JSON.parse(out)).toMatchObject({ running: true, pid: process.pid, crashes: [] });
   });
   it('shows the pause and the last day of crashes', async () => {
@@ -125,7 +129,7 @@ describe('runStatus', () => {
     writeCrashRecordSync(home, crash({ at: at(T0 - 780_000), scope: 'bot', appId: 'cli_a1b2c3d4', kind: 'rejection', reason: 'Error: boom', uptimeMs: 12_000 }));
     writeCrashRecordSync(home, crash({ at: at(T0 - 25 * 3_600_000) }));
     writeCrashRecordSync(home, crash({ at: at(T0 - 900_000), kind: 'forced', reason: '被系统强制结束', uptimeMs: 0 }));
-    await runStatus(false, home, () => T0);
+    await status(false);
     const lines = out.trimEnd().split('\n');
     expect(lines[0]).toBe(`running PID ${process.pid} at 127.0.0.1:43119`);
     expect(lines[1]).toBe('已暂停：10 分钟内崩溃了 3 次，Bot 都没有启动。查完原因后运行 vonvon daemon restart 恢复运行。');
@@ -136,7 +140,7 @@ describe('runStatus', () => {
     expect(lines[6]).toMatch(/ {2}daemon {2}被系统强制结束（kill -9、内存不够，或者关机、注销时没来得及退出）$/);
     expect(lines).toHaveLength(7);
     out = '';
-    await runStatus(true, home, () => T0);
+    await status(true);
     const json = JSON.parse(out);
     expect(json.paused).toEqual({ since: at(T0), crashes: 3, running: true });
     expect(json.crashes).toHaveLength(4);
@@ -146,12 +150,12 @@ describe('runStatus', () => {
   it('stopped while paused: the paused run ended and nothing restarted it', async () => {
     writeRunMarkerSync(home, marker({ state: 'paused', pausedAt: at(T0), pauseCrashes: 3 }));
     writeCrashRecordSync(home, crash({ kind: 'fatal', reason: 'Error: listen EADDRINUSE', paused: true }));
-    await runStatus(false, home, () => T0);
+    await status(false);
     const lines = out.trimEnd().split('\n');
     expect(lines.slice(0, 3)).toEqual(['stopped', '已暂停：10 分钟内崩溃了 3 次；暂停期间 daemon 又出错退出，没有自动重启。查完原因后运行 vonvon daemon restart 恢复运行。', '最近 24 小时的崩溃：']);
     expect(lines[3]).toMatch(/出错退出：Error: listen EADDRINUSE，运行了 3 分 9 秒（暂停期间）$/);
     out = '';
-    await runStatus(true, home, () => T0);
+    await status(true);
     expect(JSON.parse(out)).toMatchObject({ running: false, paused: { running: false, crashes: 3 } });
   });
   it('names the bots paused in this run and the bots of the records (s18a)', async () => {
@@ -160,18 +164,18 @@ describe('runStatus', () => {
     writeFileSync(join(home, 'bots.json'), JSON.stringify({ version: 1, bots: [{ appId: 'cli_a1b2c3d4', name: '值班助手' }] }));
     writeBotPausesSync(home, CHAIN, { cli_a1b2c3d4: { pausedAt: at(T0), pauseCrashes: 3 } });
     writeCrashRecordSync(home, crash({ scope: 'bot', appId: 'cli_a1b2c3d4', kind: 'forced', reason: 'SIGKILL', uptimeMs: 5000 }));
-    await runStatus(false, home, () => T0);
+    await status(false);
     const lines = out.trimEnd().split('\n');
     expect(lines[1]).toBe('已暂停的 Bot：值班助手（10 分钟内崩溃了 3 次）。查完原因后在网页的状态与诊断页点「恢复运行」，或运行 vonvon daemon restart。');
     expect(lines[3]).toMatch(/ {2}bot 值班助手 {2}被系统强制结束（SIGKILL），运行了 5 秒$/);
     out = '';
-    await runStatus(true, home, () => T0);
+    await status(true);
     expect(JSON.parse(out).pausedBots).toEqual([{ appId: 'cli_a1b2c3d4', since: at(T0), crashes: 3 }]);
   });
   it('ignores a paused marker of another live daemon', async () => {
     running();
     writeRunMarkerSync(home, marker({ pid: process.pid + 1, state: 'paused', pausedAt: at(T0), pauseCrashes: 3 }));
-    await runStatus(false, home, () => T0);
+    await status(false);
     expect(out).toBe(`running PID ${process.pid} at 127.0.0.1:43119\n`);
   });
 });
