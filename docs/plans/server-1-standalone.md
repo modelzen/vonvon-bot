@@ -193,5 +193,5 @@ Windows 11 ARM64 上的 Codex 对集成分支 `aec3bb47` 做了验收（modelzen
   - `bundled-npm.test.ts`：`toolDirectories`、`withToolDirectories` 按目标平台用 `path.posix`/`path.win32`（产品代码），launchd、systemd 的 PATH 在任何机器上都是 `:` 和 `/`。
   - `cli-dir`、`cli-group`、`cli-project`：同上，`folderPath` 按测试给的平台算，夹具不用改；`cli-group` 补了 Windows 的用例。
   - `distribution.test.ts`、`server-directory.test.ts`：目录链接在 Windows 上建成 junction（不用管理员权限，目标用绝对路径）。Windows 的 `current.txt`（I4a/I3）还不在集成分支上，所以只改夹具。`chmod(0)` 的"读不了的目录"在 Windows 上跳过，Windows 没有 POSIX 权限位。
-  - `daemon-cli.test.ts`：`daemon restart` 的"等待 daemon 重启…"本来就写在 stderr（命令行约定：结果在 stdout），测试原来把 stdout 和 stderr 拼在一起比，改成只比 stdout，失败时也在 `finally` 里停掉 daemon；"daemon ready"的等待在 Windows 上从 15 秒放到 45 秒。
+  - `daemon-cli.test.ts`：`daemon restart` 的"等待 daemon 重启…"本来就写在 stderr（命令行约定：结果在 stdout），测试原来把 stdout 和 stderr 拼在一起比，改成只比 stdout，失败时也在 `finally` 里停掉 daemon；"daemon ready"的等待在 Windows 上从 15 秒放到 45 秒，这条测试在 Windows 上自己的超时放到 120 秒（原来跟配置的 60 秒走，等满 45 秒后只剩约 15 秒给后面五次命令行和关闭），别的平台照旧 20 秒。
 - **没改的：** `cli-json` 的 `service uninstall` 样本、`daemon-cli` 的"service status gives an isolated data root…"和"service commands from a checkout…"在 Windows 上失败，是因为 Windows 后台服务还没做，I4a 的分支会改这几条预期。RPC 的 `distribution` 没有 `installRoot` 是设计如此（协议只有 `{ kind, cliPath }`，4.1）；没有 Bot 时 `group list` 退出 0、列表为空，也是对的。

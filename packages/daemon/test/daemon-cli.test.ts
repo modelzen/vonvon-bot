@@ -86,7 +86,8 @@ it('exposes daemon lifecycle commands while status and logs leave a missing home
 it('starts without bots, refuses duplicate ownership and releases PID lease on shutdown', async () => {
   const f = await fixture();
   const p = launch(f.home, f.root, ['daemon', 'run']);
-  // A loaded Windows ARM64 machine running x64 Node needed more than 15 s (Windows acceptance task 205).
+  // A loaded Windows ARM64 machine running x64 Node needed more than 15 s (Windows acceptance task 205);
+  // the test's own Windows timeout below leaves the five CLI launches and the shutdown time after this wait.
   await expect.poll(p.output, { timeout: process.platform === 'win32' ? 45_000 : 15_000 }).toContain('vonvon daemon ready');
   const record = z.object({ listen: z.string(), pid: z.number(), startedAt: z.string() }).parse(JSON.parse(await readFile(join(f.root, 'daemon.pid'), 'utf8')));
   expect(record.pid).toBe(p.child.pid); expect(record.listen).toMatch(/^127\.0\.0\.1:\d+$/);
@@ -110,7 +111,7 @@ it('starts without bots, refuses duplicate ownership and releases PID lease on s
   expect(await p.exited).toBe(0);
   await expect(readFile(join(f.root, 'daemon.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(await readdir(join(f.root, '.access'))).toEqual([]);
-});
+}, process.platform === 'win32' ? 120_000 : 20_000);
 
 it('service status gives an isolated data root service names of its own', async () => {
   const f = await fixture();
