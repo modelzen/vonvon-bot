@@ -3,7 +3,8 @@ import type { ReadScope } from '../agent/types';
 import { SafeAppIdSchema } from './bot-namespace';
 import { KEYSTORE_READ_FILES } from './keystore';
 
-export const ROOT_SECRETS = ['secrets.enc', 'master.key', '.keystore.salt', 'local-credential', 'config.json'] as const;
+/** Every 0600 file at the data root (test/read-scope.test.ts checks); the devices files are the device's key and who may connect. */
+export const ROOT_SECRETS = ['secrets.enc', 'master.key', '.keystore.salt', 'local-credential', 'config.json', 'device.json', 'clients.json', 'remote.json'] as const;
 export const SECRETS_GET_FILES: readonly string[] = KEYSTORE_READ_FILES;
 
 export function claudeReadScope(input: {

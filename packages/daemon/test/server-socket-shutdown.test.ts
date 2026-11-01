@@ -22,7 +22,7 @@ it('closes admission synchronously, shares reentrant close, and retains the acce
   const calls: string[] = [];
   const sockets = createSocketServer({
     server, credential: 'test-credential',
-    info: { type: 'serverInfo', machineId: machineIdSchema.parse('00000000-0000-4000-8000-000000000000'), version: 'test', protocolVersion: 1 },
+    info: () => ({ type: 'serverInfo', machineId: machineIdSchema.parse('00000000-0000-4000-8000-000000000000'), version: 'test', protocolVersion: 1 }),
     request: async (_peer, request) => { calls.push(request.id); entered.release(); await operation.promise; },
     detached: () => { reentered = sockets.close(); void reentered.catch(() => undefined); detached.release(); },
   });

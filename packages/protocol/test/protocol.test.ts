@@ -51,7 +51,7 @@ describe("pinned contract extraction", () => {
     expect(directoryRequestSchema.safeParse({type:"suggest",query:"x".repeat(4097)}).success).toBe(false);
     expect(directoryReplySchema.parse({kind:"folderChosen",folder:{token:randomUUID(),displayPath:"/tmp/p"}}).kind).toBe("folderChosen");
     const backend = {id:"codex",name:"Codex",ok:true,version:"1",isDefault:true};
-    const daemon = {installed:false,running:true,selfHosted:true,version:"1",supported:false};
+    const daemon = {installed:false,running:true,selfHosted:true,version:"1",supported:false,startedAt:1};
     for (const payload of [
       {kind:"diagnosis",bot:"cli_fixture",backends:[backend],event:{state:"ok"},eventConfigUrl:"https://example.test"},
       {kind:"hostDoctor",doctor:{node:"24",platform:"darwin",arch:"arm64",osRelease:"1",appDir:"/tmp",logsDir:"/tmp/logs",logBytes:0,version:"1",backends:[backend]}},

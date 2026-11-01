@@ -50,7 +50,7 @@ it("discovers the daemon, authenticates, and correlates concurrent group replies
       first.socket.send(JSON.stringify({type:"response",id:first.id,method:first.method,payload:{kind:"state",state}}));
     }
   });
-  const client = await connectLocal(options);
+  const { client } = await connectLocal(options);
   const [admin, directory] = await Promise.all([client.admin({type:"state"}),client.directory({type:"list"})]);
   expect(admin).toEqual({kind:"state",state});
   expect(directory.kind).toBe("entries");
@@ -64,7 +64,7 @@ it("rejects a mismatched method and exposes remote errors", async () => {
     if (count === 1) socket.send(JSON.stringify({type:"response",id:frame.id,method:"directory",payload:{kind:"state",state}}));
     else socket.send(JSON.stringify({type:"error",id:frame.id,code:"outside_home",message:"outside"}));
   });
-  const client = await connectLocal(options);
+  const { client } = await connectLocal(options);
   await expect(client.admin({type:"state"})).rejects.toThrow("method or envelope mismatch");
   await expect(client.directory({type:"list",path:"/elsewhere"})).rejects.toMatchObject({code:"outside_home"} satisfies Partial<RpcError>);
   await client.close();
@@ -77,7 +77,7 @@ it("sends schedule as { botId, request } and parses the tasks reply", async () =
     frames.push(frame);
     socket.send(JSON.stringify({type:"response",id:frame.id,method:"schedule",payload:reply}));
   });
-  const client = await connectLocal(options);
+  const { client } = await connectLocal(options);
   const request = {action:"list",chatId:"oc_pay"} as const;
   expect(await client.schedule("cli_a", request)).toEqual(reply);
   expect(frames).toEqual([{type:"request",id:expect.any(String),method:"schedule",payload:{botId:"cli_a",request}}]);
@@ -90,7 +90,7 @@ it("seeds snapshot watching without regressing after an earlier event", async ()
     socket.send(JSON.stringify({type:"event",event:"snapshot",payload:snapshot(2)}));
     socket.send(JSON.stringify({type:"response",id:frame.id,method:"snapshot",payload:snapshot(1)}));
   });
-  const client = await connectLocal(options);
+  const { client } = await connectLocal(options);
   const seen: number[] = [];
   const done = new Promise<void>(resolve => {
     client.watchSnapshots(value => { seen.push(value.revision); resolve(); });
@@ -108,7 +108,7 @@ it("delivers log and backend events and rejects an invalid reply payload", async
     socket.send(JSON.stringify({type:"event",event:"backendInstall",payload:{operationId,id:"codex",update:false,item:{type:"log",chunk:"downloading"}}}));
     socket.send(JSON.stringify({type:"response",id:frame.id,method:frame.method,payload:{kind:"state",state:{version:"bad"}}}));
   });
-  const client = await connectLocal(options);
+  const { client } = await connectLocal(options);
   const lines: string[] = [];
   const chunks: string[] = [];
   client.onLog(value => lines.push(value.lines));
@@ -124,7 +124,7 @@ it("keeps observer failures inspectable while allowing RPC to complete", async (
     socket.send(JSON.stringify({type:"event",event:"log",payload:{lines:"hello\n"}}));
     socket.send(JSON.stringify({type:"response",id:frame.id,method:frame.method,payload:{kind:"state",state}}));
   });
-  const client = await connectLocal(options);
+  const { client } = await connectLocal(options);
   client.onLog(() => { throw new Error("log observer failed"); });
   const stop = client.onError(() => { throw new Error("error observer failed"); });
   expect(await client.admin({type:"state"})).toEqual({kind:"state",state});
@@ -156,7 +156,8 @@ it("connects through the browser WebSocket API with the web hello", async () => 
   });
   cleanup.push(async () => { for (const socket of server.clients) socket.terminate(); await new Promise<void>(resolve => server.close(() => resolve())); });
   const { connectBrowser } = await import("../src/browser.js");
-  const client = await connectBrowser({ url: `ws://127.0.0.1:${address.port}`, credential });
+  const { client, serverInfo } = await connectBrowser({ url: `ws://127.0.0.1:${address.port}`, credential });
+  expect(serverInfo).toMatchObject({ type: "serverInfo", protocolVersion: PROTOCOL_VERSION });
   expect(await client.admin({ type: "state" })).toEqual({ kind: "state", state });
   await client.close();
 });

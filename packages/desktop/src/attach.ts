@@ -1,6 +1,7 @@
 import { lstat, readFile, realpath } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { connectBrowser } from '@vonvon/client/browser';
+import { PROTOCOL_VERSION } from '@vonvon/protocol';
 import { getPidLockInfo, isPidLockOwnerRunning, readRunningPidLock } from '../../daemon/src/server/pid-lock.js';
 import { verifyPidLockOwner } from '../../daemon/src/server/owner-verification.js';
 import type { AttachedDaemon } from './ipc-contract.js';
@@ -70,10 +71,18 @@ export async function attachExisting(root: string): Promise<AttachedDaemon> {
   }
 
   let client;
+  let serverInfo;
   try {
-    client = await connectBrowser({ url: `ws://${listen}`, credential, clientKind: 'desktop' });
+    ({ client, serverInfo } = await connectBrowser({ url: `ws://${listen}`, credential, clientKind: 'desktop' }));
   } catch (cause) {
     throw new AttachError('connection', cause);
+  }
+  // Another protocol still fails the attach here, so startup repairs as before; U2 lets it in for maintenance (devices 4.5).
+  if (serverInfo.protocolVersion !== PROTOCOL_VERSION) {
+    const rejection = new AttachError('connection', new Error('Daemon protocol version mismatch'));
+    try { await client.close(); }
+    catch (closeFailure) { throw new AggregateError([rejection, closeFailure], '连接 daemon 失败，桌面连接也没有正常关闭。'); }
+    throw rejection;
   }
 
   try {
@@ -93,7 +102,7 @@ export async function attachExisting(root: string): Promise<AttachedDaemon> {
 
   let closing: Promise<void> | undefined;
   return {
-    client,
+    client, serverInfo,
     identity: { pid: lock.pid, startedAt: lock.startedAt, listen },
     dispose() { return closing ??= client.close(); },
   };

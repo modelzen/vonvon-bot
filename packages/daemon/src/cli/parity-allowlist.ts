@@ -135,14 +135,15 @@ export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
   'machine.applyCoreUpdate': pending('I3', 'vonvon update'),
   'machine.coreUpdateStatus': pending('I3', 'vonvon update (waits on it)'),
 
-  // devices 4 and 12: not in the protocol yet
-  'device.pair': { ...pending('D1', 'vonvon pair'), arrives: 'D1' },
-  'device.clients': { ...pending('D1', 'vonvon clients ls'), arrives: 'D1' },
-  'device.renameClient': { ...pending('D1', 'vonvon clients rename'), arrives: 'D1' },
-  'device.revokeClient': { ...pending('D1', 'vonvon clients revoke'), arrives: 'D1' },
-  'device.rename': { ...pending('D1', 'vonvon device rename'), arrives: 'D1' },
-  'device.status': { ...pending('D3', 'vonvon remote status'), arrives: 'D1' },
-  'device.enable': { ...pending('D3', 'vonvon remote enable'), arrives: 'D1' },
-  'device.disable': { ...pending('D3', 'vonvon remote disable'), arrives: 'D1' },
-  'admin.negotiate': { reason: 'internal', note: 'each client sends it after the handshake', arrives: 'D1' },
+  // devices 4: the remote listeners and their commands come with D3
+  'device.pair': pending('D1', 'vonvon pair'),
+  'device.clients': pending('D1', 'vonvon clients ls'),
+  'device.renameClient': pending('D1', 'vonvon clients rename'),
+  'device.revokeClient': pending('D1', 'vonvon clients revoke'),
+  'device.rename': pending('D1', 'vonvon device rename'),
+  'device.status': pending('D3', 'vonvon remote status'),
+  'device.enable': pending('D3', 'vonvon remote enable'),
+  'device.disable': pending('D3', 'vonvon remote disable'),
+  'device.setPort': pending('D3', 'vonvon remote port'),
+  'admin.negotiate': { reason: 'internal', note: 'each client sends it after the handshake' },
 };
