@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { chmod, copyFile, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, link, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
@@ -8,7 +8,7 @@ import { extractTarGz, extractZip, removeStaging } from './archive';
 import { isCompleteRelease, readCurrent, switchCurrent, VERSION } from './current-release';
 import { nearestPackageRoot } from './distribution';
 import { fetchManifest, ManifestError, readServerUpdateConfig, serverTarget, type Fetch, type Manifest, type ServerUpdateConfig } from './standalone-manifest';
-import { acquireUpdateLock, isNewer, readUpdateStatus, UpdateBusyError, writeUpdateStatus, type UpdateStatus } from './update';
+import { acquireUpdateLock, isNewer, livePid, readUpdateStatus, UpdateBusyError, writeUpdateStatus, type UpdateStatus } from './update';
 
 /**
  * The standalone server's update (server-3 4.4, 4.5): check the signed stable manifest, and apply it by downloading
@@ -84,6 +84,36 @@ function inTurn<T>(work: () => Promise<T>): Promise<T> {
   stateTurn = run.catch(() => undefined);
   return run;
 }
+// Daemons of different data directories share the install root and so this record (review 206): the read, compare and
+// write also hold `update-state.lock` beside it, made with O_EXCL. A lock whose holder died or is older than 10 s is
+// moved aside under a name of its own, and goes back if what was moved is not the lock judged stale.
+const STATE_LOCK_STALE_MS = 10_000;
+const stateLockStale = async (file: string, held: string): Promise<boolean> => {
+  try { const { pid, at } = JSON.parse(held) as { pid: number; at: number }; return !livePid(pid) || Date.now() - at > STATE_LOCK_STALE_MS; }
+  catch { return stat(file).then(info => Date.now() - info.mtimeMs > STATE_LOCK_STALE_MS, () => false); } // still being written, or left empty
+};
+async function withStateLock<T>(installRoot: string, work: () => Promise<T>): Promise<T> {
+  const file = join(installRoot, 'update-state.lock');
+  const token = randomBytes(8).toString('hex');
+  let mine = '';
+  for (const deadline = Date.now() + 1.5 * STATE_LOCK_STALE_MS; ;) {
+    mine = JSON.stringify({ pid: process.pid, at: Date.now(), token });
+    try { await writeFile(file, mine, { flag: 'wx' }); break; }
+    catch (error) {
+      if (errorCode(error) !== 'EEXIST' || Date.now() > deadline) { log.warn(EVENTS, 'update-state-unwritable', { code: errorCode(error) }); throw new StateUnusable(); }
+    }
+    const held = await readFile(file, 'utf8').catch(() => null);
+    const aside = `${file}.${token}.stale`;
+    if (held === null || !await stateLockStale(file, held) || !await rename(file, aside).then(() => true, () => false)) {
+      await new Promise(resolve => setTimeout(resolve, 20));
+      continue;
+    }
+    if (await readFile(aside, 'utf8').catch(() => held) !== held) await link(aside, file).catch(() => undefined);
+    await rm(aside, { force: true }).catch(() => undefined);
+  }
+  try { return await work(); }
+  finally { if (await readFile(file, 'utf8').catch(() => '') === mine) await rm(file, { force: true }).catch(() => undefined); }
+}
 
 async function readManifest(deps: StandaloneDeps): Promise<{ check: StandaloneCheck; manifest?: Manifest }> {
   const base = { current: deps.currentVersion, latest: null, hasUpdate: false, channel: 'stable' as const };
@@ -99,24 +129,20 @@ async function readManifest(deps: StandaloneDeps): Promise<{ check: StandaloneCh
     log.warn(EVENTS, 'update-manifest-refused', { reason });
     return { check: { ...base, refused: reason === 'http' ? 'network' : 'signature' } };
   }
-  return inTurn(async () => {
-    let state: UpdateState;
-    try { state = await readState(deps.installRoot, deps.currentVersion); }
-    catch (error) { if (error instanceof StateUnusable) return { check: { ...base, refused: 'state' as const } }; throw error; }
+  return inTurn(() => withStateLock(deps.installRoot, async () => {
+    const state = await readState(deps.installRoot, deps.currentVersion);
     // Equal is accepted: the same manifest read again, or one whose update did not go through.
     if (manifest.publishedAt < state.lastPublishedAt || isNewer(state.highestSeen, manifest.version)) {
       log.warn(EVENTS, 'update-manifest-refused', { reason: 'rollback', version: manifest.version, highestSeen: state.highestSeen });
       return { check: { ...base, refused: 'rollback' as const } };
     }
-    try {
-      await writeState(deps.installRoot, {
-        v: 1, highestSeen: isNewer(manifest.version, state.highestSeen) ? manifest.version : state.highestSeen,
-        lastPublishedAt: Math.max(state.lastPublishedAt, manifest.publishedAt), lastCheckAt: (deps.now ?? Date.now)(),
-      });
-    } catch (error) { if (error instanceof StateUnusable) return { check: { ...base, refused: 'state' as const } }; throw error; }
+    await writeState(deps.installRoot, {
+      v: 1, highestSeen: isNewer(manifest.version, state.highestSeen) ? manifest.version : state.highestSeen,
+      lastPublishedAt: Math.max(state.lastPublishedAt, manifest.publishedAt), lastCheckAt: (deps.now ?? Date.now)(),
+    });
     // latest even when it is this version: the page shows "已是最新 0.9.0".
     return { check: { ...base, latest: manifest.version, hasUpdate: isNewer(manifest.version, deps.currentVersion) }, manifest };
-  });
+  })).catch(error => { if (error instanceof StateUnusable) return { check: { ...base, refused: 'state' as const } }; throw error; });
 }
 
 let lastCheck: StandaloneCheck | undefined;
