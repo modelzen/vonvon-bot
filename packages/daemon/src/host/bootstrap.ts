@@ -26,12 +26,12 @@ const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * Once this daemon owns its port (server-3 4.5, 4.6, 4.10): end the update record that restarted it, clear the
  * releases a standalone server no longer needs, and start its daily manifest check. Nothing here holds startup up.
  */
-async function startUpdateUpkeep(): Promise<() => void> {
+async function startUpdateUpkeep(alive: () => boolean): Promise<() => void> {
   try {
     const [{ runtimeDistribution }, upkeep] = await Promise.all([import('../service/distribution'), import('../service/standalone-update')]);
     const distribution = await runtimeDistribution().catch(() => undefined);
     const installRoot = distribution?.kind === 'standalone' ? distribution.installRoot : undefined;
-    void upkeep.settleUpdateAtStartup({ version: bridgeVersion(), installRoot }).catch(error => log.fail('core-update', error, { phase: 'startup' }));
+    void upkeep.settleUpdateAtStartup({ version: bridgeVersion(), installRoot, alive }).catch(error => log.fail('core-update', error, { phase: 'startup' }));
     return installRoot ? upkeep.scheduleStandaloneChecks({ installRoot, currentVersion: bridgeVersion() }) : () => {};
   } catch (error) {
     log.fail('core-update', error, { phase: 'startup' });
@@ -168,7 +168,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       ...(run?.runId && run.chainId ? { crash: { runId: run.runId, chainId: run.chainId, ...(run.paused ? { pause: { since: run.pausedAt ? Date.parse(run.pausedAt) : Date.now(), crashes: run.pauseCrashes ?? 3 } } : {}), ...(notice ? { notice } : {}) } } : {}),
       onListening: claimedOwner ? async (listen) => {
         await publishPidLock(paths.appDir, claimedOwner, listen);
-        const upkeep = startUpdateUpkeep();
+        const upkeep = startUpdateUpkeep(() => !control.requested);
         stopUpkeep = () => { void upkeep.then(stop => stop(), () => undefined); };
       } : undefined,
     });

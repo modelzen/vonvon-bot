@@ -1,5 +1,6 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, rmSync } from 'node:fs';
-import { cp, mkdir, readdir, readFile, readlink, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -7,10 +8,12 @@ vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join: joinPath } = await import('node:path');
-  return { paths: { appDir: mkdtempSync(joinPath(tmpdir(), 'vonvon-standalone-apply-')) } };
+  const appDir = mkdtempSync(joinPath(tmpdir(), 'vonvon-standalone-apply-'));
+  return { paths: { appDir, secretsGetterScript: joinPath(appDir, 'secrets-getter') } };
 });
 
 import { paths } from '../src/config/paths';
+import { getterContents } from '../src/config/data-compatibility';
 import { readCurrent, switchCurrent } from '../src/service/current-release';
 import { observeShutdown } from '../src/host/lifecycle';
 import { RESTART_PENDING_MS, settleUpdateAtStartup, startStandaloneUpdate, type ApplyDeps } from '../src/service/standalone-update';
@@ -225,17 +228,34 @@ describe('settleUpdateAtStartup', () => {
     await switchCurrent(installRoot, '1.0.1', 'linux');
     const record: UpdateStatus = { phase: 'restarting', ok: true, from: '1.0.0', to: '1.0.1', previous: '1.0.0', at: 7, detail: 'draining' };
     writeUpdateStatus(record);
-    await settleUpdateAtStartup({ version: '1.0.1', installRoot, platform: 'linux' });
+    await settleUpdateAtStartup({ version: '1.0.1', installRoot, platform: 'linux', pause: async () => {} });
     expect(readUpdateStatus()).toMatchObject({ phase: 'done', ok: true, to: '1.0.1' });
     expect(readUpdateStatus()?.detail).toBeUndefined();
     writeUpdateStatus(record);
-    await settleUpdateAtStartup({ version: '1.0.0', installRoot, platform: 'linux' });
+    await settleUpdateAtStartup({ version: '1.0.0', installRoot, platform: 'linux', pause: async () => {} });
     expect(readUpdateStatus()).toMatchObject({ phase: 'error', message: '重启后仍是 1.0.0' });
     writeUpdateStatus(record);
     await switchCurrent(installRoot, '1.0.0', 'linux');
-    await settleUpdateAtStartup({ version: '1.0.1', installRoot, platform: 'linux' });
+    await settleUpdateAtStartup({ version: '1.0.1', installRoot, platform: 'linux', pause: async () => {} });
     expect(readUpdateStatus()).toMatchObject({ phase: 'error', message: '升级和回滚撞上了，当前运行 1.0.1' });
     expect(JSON.parse(await readFile(join(installRoot, 'releases', '1.0.1', 'standalone.json'), 'utf8'))).toMatchObject({ version: '1.0.1' });
+  });
+  // review 207: the getter wrapper named the release the Bot was created on, which the second update's cleanup removed
+  it('keeps the secrets getter working for outside callers after two updates', async () => {
+    const { installRoot } = await setup();
+    for (const version of ['1.0.0', '1.0.1', '1.0.2']) {
+      const release = join(installRoot, 'releases', version);
+      for (const dir of ['node/bin', 'app/bin']) await mkdir(join(release, dir), { recursive: true });
+      await writeFile(join(release, 'standalone.json'), JSON.stringify({ v: 1, version }));
+      await writeFile(join(release, 'app', 'bin', 'vonvon.mjs'), `process.stdout.write('${version} ' + process.argv.slice(2).join(' '));\n`);
+      await symlink(process.execPath, join(release, 'node', 'bin', 'node'));
+    }
+    await writeFile(paths.secretsGetterScript, getterContents({ nodePath: join(installRoot, 'releases', '1.0.0', 'node', 'bin', 'node'), cliPath: join(installRoot, 'releases', '1.0.0', 'app', 'bin', 'vonvon.mjs') }, paths.appDir), { mode: 0o700 });
+    await switchCurrent(installRoot, '1.0.1', 'linux').then(() => switchCurrent(installRoot, '1.0.2', 'linux'));
+    writeUpdateStatus({ phase: 'done', ok: true, from: '1.0.1', to: '1.0.2', previous: '1.0.1', at: 9 });
+    await settleUpdateAtStartup({ version: '1.0.2', installRoot, platform: 'linux' });
+    expect((await readdir(join(installRoot, 'releases'))).sort()).toEqual(['1.0.1', '1.0.2']);
+    expect(execFileSync(paths.secretsGetterScript, { encoding: 'utf8' })).toBe('1.0.2 secrets get');
   });
   // I3-SEC-1 (d): a record whose previous is the current release left releases/ with nothing to go back to
   it('keeps a release to go back to even when the record names the current one as previous', async () => {

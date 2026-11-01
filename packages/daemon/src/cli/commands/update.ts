@@ -110,6 +110,7 @@ export type UpdateCommandDeps = {
   /** The standalone update run here, when no daemon does it. */
   local: (installRoot: string) => ApplyDeps;
   env: NodeJS.ProcessEnv;
+  npm: { check: typeof checkUpdate; install: typeof installLatest };
 };
 const defaultDeps = (): UpdateCommandDeps => ({
   distribution: runtimeDistribution,
@@ -121,6 +122,7 @@ const defaultDeps = (): UpdateCommandDeps => ({
   pause: ms => new Promise(resolve => setTimeout(resolve, ms)),
   local: installRoot => ({ installRoot, currentVersion: currentVersion() }),
   env: process.env,
+  npm: { check: checkUpdate, install: installLatest },
 });
 /**
  * After the old daemon is gone, how long `update-status.json` is read for the outcome (4.6 60 + 25 s, and more). The
@@ -172,16 +174,18 @@ export async function runUpdateCommand(options: UpdateCommandOptions, io: Io, de
   if (distribution.kind === 'development') throw new CommandError('refused', '源码开发态不升级：在仓库里 git pull && npm i。');
   if (distribution.kind === 'global-npm') {
     if (options.to !== undefined) throw badArgs('全局 npm 安装只能更新到最新版，不能指定版本。');
-    if (!io.json) return runUpdate({ check: options.check });
-    const found = await checkUpdate();
-    if (options.check || !found.hasUpdate || found.dev) { print(io, [], { distribution: distribution.kind, ...found }); return; }
-    const installed = await installLatest();
-    if (!installed.ok) throw new CommandError('failed', `安装失败：${installed.message}`);
-    print(io, [], { distribution: distribution.kind, ...found, updated: true });
-    return;
+    if (!io.json && (options.check || !running)) return runUpdate({ check: options.check });
+    const found = await deps.npm.check();
+    if (options.check || !found.hasUpdate || found.dev) { print(io, [found.latest ? `已是最新（${found.current}）` : '查不到最新版本（网络或 npm registry 问题）'], { distribution: distribution.kind, ...found }); return; }
+    // A running daemon installs and restarts itself, as the page asks it to (review 207): followed below in both outputs.
+    if (!running) {
+      const installed = await deps.npm.install();
+      if (!installed.ok) throw new CommandError('failed', `安装失败：${installed.message}`);
+      return print(io, [], { distribution: distribution.kind, ...found, updated: true });
+    }
   }
   // bundled: the desktop shell updates it, through the daemon (U4); with no daemon running, the desktop app does.
-  if (distribution.kind !== 'standalone' && !(distribution.kind === 'bundled' && running)) {
+  else if (distribution.kind !== 'standalone' && !(distribution.kind === 'bundled' && running)) {
     throw new CommandError('refused', distribution.kind === 'bundled' ? '这个命令行随 Vonvon Bot 桌面应用提供，请在桌面应用里更新。' : '这个安装方式不能用 vonvon update 更新。');
   }
   const installRoot = distribution.kind === 'standalone' ? distribution.installRoot : undefined;
