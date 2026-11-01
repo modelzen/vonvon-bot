@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, expect, it, vi } from 'vitest';
@@ -274,7 +274,7 @@ it('group pending reports the daemon refusal and still closes', async () => {
 
 it('group bind sends an absolute folder, the chosen token and the pending name', async () => {
   const home = await mkdtemp(join(tmpdir(), 'vonvon-cli-admin-')); dirs.push(home);
-  await mkdir(join(home, 'work', 'pay'), { recursive: true }); await writeFile(join(home, 'work', 'file'), '');
+  await mkdir(join(home, 'work', 'pay'), { recursive: true });
   const host = { cwd: join(home, 'work'), home, platform: 'linux' as const };
   const token = '7d1f1a6e-3b8e-4d0c-9a51-2f6a0e4b9c11';
   const run = vi.fn(async (command: { type: string }) => command.type === 'listPendingGroups'
@@ -299,8 +299,7 @@ it('group bind sends an absolute folder, the chosen token and the pending name',
   await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'later' }, offline.io(), offline.daemon, host)).rejects.toThrow('--conversation 必须选一项');
   await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'toString' }, offline.io(), offline.daemon, host)).rejects.toThrow('--conversation 必须选一项');
   await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'multi', response: 'yes' }, offline.io(), offline.daemon, host)).rejects.toThrow('--response 只能是 mention');
-  await expect(runGroupBind('oc_pay', { folder: 'missing', conversation: 'multi' }, offline.io(), offline.daemon, host)).rejects.toThrow(`文件夹不存在：${join(home, 'work', 'missing')}`);
-  await expect(runGroupBind('oc_pay', { folder: 'file', conversation: 'multi' }, offline.io(), offline.daemon, host)).rejects.toThrow('不是文件夹：');
+  // cli-3-groups: a folder that is not there is the daemon's to say (test/cli-group.test.ts), not stat on this computer
   await expect(runGroupBind('chat_pay', { folder: 'pay', conversation: 'multi' }, offline.io(), offline.daemon, host)).rejects.toThrow('群 id 应该以 oc_ 开头。');
   expect(offline.connect).not.toHaveBeenCalled();
 

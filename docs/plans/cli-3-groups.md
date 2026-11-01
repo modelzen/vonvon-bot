@@ -169,3 +169,17 @@ export function runningBot(agents: readonly Agent[], wanted?: string): Agent {
 约 1,250 行：`group.ts` +330（create、set、unbind、show、`folderPath`），新 `dir.ts` +80，`project.ts` +200，`index.ts` +90，`daemon-client.ts` +15，`command-error.ts` +4，`directory-browser.ts` +8，`P/display.ts` +3，白名单 −9，测试约 520。贴近上限：超出时把 `project rename/remove/workspace`（约 300 行含测试）拆成 C3b，和 C3 同一个集成分支，C3b 在 C3 后合入。
 - `group create` 是真在飞书里建群：测试只用假客户端；验收只在验收 daemon 的 Bot 6 上建一个新群，做完解绑。
 - `canonical()` 的错误码变化也影响网页：网页今天对 `operation_failed` 显示"操作失败"，改后显示"找不到这个目录，请检查路径。"——是改好，不是回归；`U/` 里没有按 `operation_failed` 分支的代码（写计划时 grep 过）。
+
+## 和计划不一样的地方
+
+- **`group unbind` 的确认文字照网页确认框原文**（`GroupWorkspace.tsx`："解除 X 与「群名」的关联。Bot 加入的群会退出；Bot 创建的群会尝试转交群主。本地目录和文件保留。"）再加"确认后加 --yes 再运行一次。"：4.2 写了"网页那句如果不同就照网页"。
+- **`group set` 的 `conflict` 保留 daemon 的原话**，下一行再加"群设置刚被别处改过的话，运行 vonvon group show <group> 看最新的再改。"：daemon 的 `conflict` 还包括"Agent 正在执行任务""正在群里说一句"这类，整句换掉会说错原因。
+- **`group set` 在本地多拦两种**（exit 2）：`--folder default`（没有"换回默认"）；`--folder` 和 `--project` 同给（daemon 也拒："换项目和改文件夹要分两次"）。
+- **`group bind` 不给 `--folder` 路径时**，人类输出的文件夹从绑定后的快照里取（daemon 回复写请求前已重建快照）；取不到写"默认文件夹"，JSON 里不带 `folder`。
+- **`group create` 的免 @ 照网页 `sentResponse('create')`**：单会话的默认（关）也显式发 `response:'mention'`（s21 以前的 daemon 建群一律免 @ 开），多会话的默认不发。
+- **`group show` 那一行的会话方式写短名**（"多会话"，同 4.2 的例子）；`create`、`bind` 照旧写"多会话（@ 我开新会话）"。`runningBot()` 也用在 `group show`：读群也要 Bot 进程在跑，不然 daemon 回 `conflict`。
+- **`group set`、`group unbind` 的 JSON 多带 daemon 的 `warning`、`message`**（有才带）。
+- **`project list` 走 daemon 时 JSON 的 `projects` 是 `library.list` 原样**（`bindings` 带 `agentId`、`groupId`），`unlinked` 是个数，人类输出也只能写个数；读文件的照旧（`unlinked` 是名单，另有 `unreadable`）。连接时抛的 `ConnectionError` 也算连不上，回退读文件（会话里照样 exit 3）。
+- **`project workspace`**：`--primary` 换上来的文件夹从附加文件夹里去掉；`--add` 已有的不重复加；`--remove` 不在附加文件夹里的路径 exit 2（按 daemon 给的规范路径比对）；请求超时按 `feishu` 档（扇出到各 Bot、归档会话）。
+- **`dir list` 人类输出每行是完整路径**（能直接给 `--folder`），没有子文件夹时说一句，隐藏的有几个、加 `--all` 看。
+- **测试落点**：`project` 的新用例放在新文件 `T/cli-project.test.ts`，不放 `T/cli-project-list.test.ts`（它整文件 mock 了 `commands/project` 和 `node:fs/promises`，测入口不拿租约，真模块进不去）；"9 个 kind 被 `covers`、不在白名单"和 C2 一样放在 `T/cli-group.test.ts`，`T/cli-parity.test.ts` 不动；`T/cli-admin.test.ts` 删了 `bind` 本地 `stat` 的两条期望（文件夹不存在、不是文件夹），新行为在 `T/cli-group.test.ts` 测；`METHODS` 的三条（验收要点 6）在 `T/cli-project.test.ts` 测。

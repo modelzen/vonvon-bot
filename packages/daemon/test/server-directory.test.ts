@@ -43,6 +43,24 @@ describe('canonical home directory tokens', () => {
     vi.setSystemTime(Date.now() + 600_000);
     await expect(browser.resolve(rootFolder.token)).rejects.toMatchObject({ code: 'invalid_folder_token' });
   });
+  // main 必败: a path that is not there came out as the raw ENOENT, which the web page showed as 操作失败 (cli-3-groups)
+  it('says a folder that is not there, runs through a file or loops is invalid_directory', async () => {
+    const { home, browser } = await fixture();
+    await writeFile(join(home, 'file'), 'file');
+    await symlink(join(home, 'loop-b'), join(home, 'loop-a'));
+    await symlink(join(home, 'loop-a'), join(home, 'loop-b'));
+    const missing = { code: 'invalid_directory', message: '找不到这个目录，请检查路径。' };
+    await expect(browser.choose(join(home, 'nope'))).rejects.toMatchObject(missing);
+    await expect(browser.list(join(home, 'nope'))).rejects.toMatchObject(missing);
+    await expect(browser.list(join(home, 'file', 'sub'))).rejects.toMatchObject(missing);
+    await expect(browser.choose(join(home, 'loop-a'))).rejects.toMatchObject(missing);
+    await expect(browser.list(join(home, 'file'))).rejects.toMatchObject({ code: 'invalid_directory' });
+    // a loop among the children is left out of a listing, as before
+    expect((await browser.list()).entries.map(entry => entry.name)).toEqual([]);
+    const folder = await browser.choose(home);
+    expect(await browser.resolve(folder.token)).toBe(folder.displayPath);
+  });
+
   it('sorts and caps a directory listing at 1000 entries with an explicit truncated flag', async () => {
     const { home, browser } = await fixture();
     await Promise.all(Array.from({ length: 1001 }, (_, index) => mkdir(join(home, String(index).padStart(4, '0')))));
