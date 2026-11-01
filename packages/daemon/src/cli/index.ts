@@ -238,16 +238,17 @@ memoryScope(covers(memory.command('branch-rename <from> <to>'), 'memory.branchRe
 memoryScope(covers(memory.command('branch-merge <from> <into>'), 'memory.branchMerge').description('Merge a branch into another (refused in a Bot session)'))
   .action(async (from: string, into: string, options: MemoryOptions) => { await (await import('./commands/memory')).runMemoryBranch('merge', from, into, options, await memoryContext(options)); });
 const settings = program.command('settings').description('Read and change bot, group and session settings');
-type Target = Json & { bot?: string; group?: string; session?: string; revision?: string; reason?: string };
-const READ = ['settings.read.agent', 'settings.read.project', 'settings.read.session'];
-const scoped = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--session <threadId>', 'Session thread id').option('--json', 'Print JSON');
+type Target = Json & { bot?: string; group?: string; session?: string; host?: boolean; revision?: string; reason?: string };
+const READ = ['settings.read.agent', 'settings.read.project', 'settings.read.session', 'settings.read.host'];
+const scoped = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--session <threadId>', 'Session thread id')
+  .option('--host', "This computer's own settings (the web page's 本机), for every bot; not with --bot, --group or --session").option('--json', 'Print JSON');
 scoped(covers(settings.command('get [section]'), ...READ, 'settings.sessions').description('Show settings, or one section; `get judge` also prints the whole judge prompt')).action(async (section: string | undefined, options: Target) => {
   await (await import('./commands/settings')).runSettingsGet(section, options, io(options));
 });
 scoped(covers(settings.command('access'), ...READ).description('Show access to the requested settings')).action(async (options: Target) => {
   await (await import('./commands/settings')).runSettingsAccess(options, io(options));
 });
-scoped(covers(settings.command('set <section.key=value...>'), 'settings.save.agent', 'settings.save.project', 'settings.save.session').description('Change fields of one section; values are JSON or plain text'))
+scoped(covers(settings.command('set <section.key=value...>'), 'settings.save.agent', 'settings.save.project', 'settings.save.session', 'settings.save.host').description('Change fields of one section; values are JSON or plain text'))
   .option('--revision <revision>', 'Revision held by the caller; stale revisions are rejected')
   .option('--reason <text>', 'Explanation retained with the committed result')
   .addHelpText('after', `
@@ -260,9 +261,40 @@ Examples:
   vonvon settings set --group oc_xxx model.selection='{"kind":"explicit","model":"gpt-5.5","effort":"medium"}'
   vonvon settings set judge.selection='{"kind":"llm","model":"gpt-6-luna","effort":"low"}'
   vonvon settings set judge.selection='{"kind":"decision","provider":"typesafe","model":"jev-latest"}'   # 决策模型，各后端的群都用
-  vonvon settings set --group oc_xxx judge.selection='{"kind":"default"}'   # 群里去掉覆盖，用 bot 的`)
+  vonvon settings set --group oc_xxx judge.selection='{"kind":"default"}'   # 群里去掉覆盖，用 bot 的
+  vonvon settings set --host execution.codexBin=/usr/local/bin/codex      # 本机：Codex 可执行文件，null 回到自动找`)
   .action(async (assignments: string[], options: Target) => {
     await (await import('./commands/settings')).runSettingsSet(assignments, options, io(options));
+  });
+const settingsAct = settings.command('act').description("Do what the settings page's buttons do: voice checks, administrators, response members, comment instructions")
+  .addHelpText('after', `
+Examples:
+  vonvon settings act voice test                      # 测一次语音识别；refresh 重新检测飞书语音权限
+  vonvon settings act admin add ou_xxx                # 本机管理员；remove 去掉
+  vonvon settings act member add ou_xxx --group 研发群  # 这个群只回名单里的人；member all 清空名单，所有成员都能用
+  vonvon settings act comment-instructions --text "只回和代码有关的评论"
+  cat 说明.md | vonvon settings act comment-instructions --stdin
+  vonvon settings act comment-instructions --default`);
+type ActOptions = Json & { bot?: string; group?: string; revision?: string };
+const ACT_REVISION = ['--revision <revision>', 'The revision settings get --json shows; without it the current one is read first'] as const;
+covers(settingsAct.command('voice <action>'), 'settings.act.voice').description('Voice: test tries recognition once, refresh checks the Feishu voice permission again').option(...BOT).option(...JSON_FLAG)
+  .action(async (what: string, options: ActOptions) => { await (await import('./commands/settings')).runSettingsVoice(what, options, io(options)); });
+covers(settingsAct.command('admin <op> <openId>'), 'settings.act.adminMember').description("Add or remove one of the bot's administrators on this computer").option(...BOT).option(...ACT_REVISION).option(...JSON_FLAG)
+  .action(async (op: string, openId: string, options: ActOptions) => { await (await import('./commands/settings')).runSettingsAdmin(op, openId, options, io(options)); });
+covers(settingsAct.command('member <op> [openId]'), 'settings.act.projectMember', 'settings.act.projectAudience').description('Add or remove whom a group responds to; all: every member, the list emptied')
+  .option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option(...ACT_REVISION).option(...JSON_FLAG)
+  .action(async (op: string, openId: string | undefined, options: ActOptions) => { await (await import('./commands/settings')).runSettingsMember(op, openId, options, io(options)); });
+covers(settingsAct.command('comment-instructions'), 'settings.act.commentInstructions').description('How the bot answers document comments: --default, --text or --stdin')
+  .option('--default', 'Back to the built-in instructions').option('--text <text>', 'Your own instructions').option('--stdin', 'Your own instructions, read from a pipe')
+  .option(...BOT).option(...ACT_REVISION).option(...JSON_FLAG)
+  .action(async (options: ActOptions & { default?: boolean; text?: string; stdin?: boolean }) => {
+    await (await import('./commands/settings')).runSettingsCommentInstructions(options, options, io(options));
+  });
+covers(settings.command('models'), 'settings.models').description("List the models a settings page's model picker offers")
+  .option('--backend <backend>', 'codex, claude, or an id like codex-appserver').option('--purpose <purpose>', 'project, session, comments, titles or judge')
+  .option('--session <threadId>', 'Session thread id; needed for --purpose session').option(...BOT).option(...JSON_FLAG)
+  .action(async (options: Json & { bot?: string; backend?: string; purpose?: string; session?: string }) => {
+    await (await import('./commands/settings')).runSettingsModels(options, io(options));
   });
 const schedule = program.command('schedule').description('List and change the scheduled tasks of a group (定时任务)')
   .addHelpText('after', `
@@ -289,6 +321,7 @@ inGroup(covers(schedule.command('list'), 'schedule.list', 'schedule.listBot').de
 timing(inGroup(covers(schedule.command('add <instruction>'), 'schedule.create').description('Add a task: --name, one time option and what to do'))).option('--new-topic', 'Post each run in a new topic')
   .action(async (instruction: string, options: ScheduleOptions) => { await runSchedule('add', { ...options, instruction }); });
 timing(inGroup(covers(schedule.command('edit <taskId> [instruction]'), 'schedule.edit').description('Change a task; give only what changes'))).requiredOption('--revision <revision>', 'The revision schedule list --json shows')
+  .option('--new-topic', 'Post each run in a new topic').option('--follow', "Post each run the way the group's conversation mode does")
   .action(async (taskId: string, instruction: string | undefined, options: ScheduleOptions) => { await runSchedule('edit', { ...options, taskId, ...(instruction === undefined ? {} : { instruction }) }); });
 inGroup(covers(schedule.command('delete <taskId>'), 'schedule.delete').description('Delete a task and its run records')).option('--revision <revision>', 'Defaults to the current one')
   .action(async (taskId: string, options: ScheduleOptions) => { await runSchedule('delete', { ...options, taskId }); });

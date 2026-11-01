@@ -103,6 +103,22 @@ describe('parsing the time options', () => {
     await h.run('edit', { taskId: 'st_0123456789abcdef', revision: 'r7', daily: '10:00', name: ' 早报 ' });
     expect(h.requests).toEqual([{ action: 'edit', chatId: 'oc_group', taskId: 'st_0123456789abcdef', revision: 'r7', patch: { name: '早报', spec: { kind: 'daily', time: '10:00' } } }]);
   });
+
+  // main 必败 (cli-6-settings): edit had no placement, and --new-topic alone was "nothing to change"
+  it('edit --new-topic or --follow changes where each run posts, alone or with the rest', async () => {
+    const h = harness(created);
+    await h.run('edit', { taskId: 'st_1', revision: '3', follow: true });
+    await h.run('edit', { taskId: 'st_1', revision: '4', newTopic: true });
+    await h.run('edit', { taskId: 'st_1', revision: '5', newTopic: true, name: '巡检' });
+    expect(h.requests).toEqual([
+      { action: 'edit', chatId: 'oc_group', taskId: 'st_1', revision: '3', patch: { placement: { kind: 'follow' } } },
+      { action: 'edit', chatId: 'oc_group', taskId: 'st_1', revision: '4', patch: { placement: { kind: 'newTopic' } } },
+      { action: 'edit', chatId: 'oc_group', taskId: 'st_1', revision: '5', patch: { name: '巡检', placement: { kind: 'newTopic' } } },
+    ]);
+    expect(await h.failure('edit', { taskId: 'st_1', revision: '3', newTopic: true, follow: true })).toMatchObject({ exitCode: 2, error: { kind: 'bad-args', message: '--new-topic 和 --follow 只能选一个。' } });
+    expect(await h.failure('edit', { taskId: 'st_1', revision: '3' })).toMatchObject({ exitCode: 2, error: { message: expect.stringContaining('--new-topic 或 --follow') } });
+    expect(h.connect).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe('requests that read first', () => {
