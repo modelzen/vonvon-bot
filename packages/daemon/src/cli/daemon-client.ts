@@ -65,6 +65,7 @@ function translate(what: string, error: unknown, ms: number, unknown?: string): 
 /** Client method → RPC method; snapshot() always sends the same payload. */
 const METHODS = {
   run: 'command', settings: 'settings', collaboration: 'collaboration', environment: 'environment', machine: 'machine', admin: 'admin', directory: 'directory',
+  library: 'library', memory: 'memory', contextPreview: 'contextPreview',
 } as const;
 
 /**
@@ -146,6 +147,13 @@ export function pickBot(agents: readonly Agent[], wanted?: string): Agent {
   if (named.length > 1) throw badArgs(`有 ${named.length} 个 Bot 都叫「${wanted}」，用 id 指定：${named.map(agent => agent.id).join('、')}`);
   if (named[0]) return named[0];
   throw badArgs(`没有找到 Bot「${wanted}」。现有的 Bot：${list}`);
+}
+
+/** A bot that answers now: collaboration requests go to its process, which a stopped or paused bot does not have. */
+export function runningBot(agents: readonly Agent[], wanted?: string): Agent {
+  const agent = pickBot(agents, wanted);
+  if (!agent.running) throw new CommandError('refused', `Bot「${printable(agent.name)}」没在运行。运行 vonvon bot enable ${agent.id}，或者 vonvon bot status ${agent.id} 看原因。`, { reason: 'bot_not_running' });
+  return agent;
 }
 
 /** Group id or project name; both are unique per bot because bind refuses a duplicate project name. */

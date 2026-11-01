@@ -260,7 +260,7 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 |---|---|---|
 | 选目录（建群、换目录、工作区） | 桌面端走系统原生选择器（`U/directory-picker.tsx:107-111`，`shell.chooseDirectoryPaths`），网页端走 daemon 侧目录浏览器 | daemon 侧目录浏览器，标题写"<设备> 上的文件夹"；`DT/main.ts:621-627` 的原生目录对话框和 `chooseExecutablePath` 在远程模式不暴露；手动输入路径要认 Windows 路径（今天只认 `/` 开头，`directory-picker.tsx:129`）；家目录限制（`directory-browser.ts:13-16`）放开到该用户能读的任何目录，本机和远程一样（owner 2026-10-31 确认：服务器上代码常在 `/srv`、`/data`；daemon 本来就以该用户运行，限制只防误点），U2 改 |
 | 托管安装 Codex / Claude SDK / lark-cli | 装本机 | RPC 本来就作用在对面，文案加"在 <设备> 上安装" |
-| Provider 没配好 | "把 Codex 配置好" | "在 <设备> 上把 <Codex / Claude Code> 配置好（账号或自定义 API 都行），然后点「重新检测」"，检查逻辑不变（`environment.scan`、`backendLogin{refresh}`）。第 1 版末尾那句"Vonvon 不代你登录"删掉（REQ-5）。**现有带"登录"的文案一起改**，列在 U2：`JoinGroupDialog.tsx:150,214`、`settings/useProviderDiscovery.ts:49,56`、`settings/DecisionFields.tsx:41`、`settings/GroupDesignSettings.tsx:113,137,183`、`management/EnvironmentPanel.tsx:143,298,310,314,364`、`management/environmentPresentation.ts:30`、`setup/ProviderSetup.tsx:152,175`、`setup/useClaudeLoginCheck.ts:21`、`management/UsagePanel.tsx:69`、`DiagnosticsPanel.tsx:246`、`search.ts:69,70,98`——统一成"配置好 / 可用 / 检查配置"，远程时带设备名；判断逻辑不动 |
+| Provider 没配好 | "把 Codex 配置好" | "在 <设备> 上把 <Codex / Claude> 配置好（账号或自定义 API 都行），然后点「重新检测」"，检查逻辑不变（`environment.scan`、`backendLogin{refresh}`）。第 1 版末尾那句"Vonvon 不代你登录"删掉（REQ-5）。**现有带"登录"的文案一起改**，列在 U2：`JoinGroupDialog.tsx:150,214`、`settings/useProviderDiscovery.ts:49,56`、`settings/DecisionFields.tsx:41`、`settings/GroupDesignSettings.tsx:113,137,183`、`management/EnvironmentPanel.tsx:143,298,310,314,364`、`management/environmentPresentation.ts:30`、`setup/ProviderSetup.tsx:152,175`、`setup/useClaudeLoginCheck.ts:21`、`management/UsagePanel.tsx:69`、`DiagnosticsPanel.tsx:246`、`search.ts:69,70,98`——统一成"配置好 / 可用 / 检查配置"，远程时带设备名；判断逻辑不动 |
 | 登录项开关 `setLoginItem`（`DT/login-item.ts`） | 本机 launchd | 隐藏；改显示对面 `machine.status.service`，macOS 对面可用 `machine.service install/uninstall`（daemon 里已有，`D/host/service-action.ts`），Linux/Windows 显示"在那台设备的终端运行 `vonvon service install`" |
 | 启动 daemon（`startHost`）、服务启动（`service start`） | 本机，**照旧可用**（这两个 kind 不是死代码，见 8.4） | 隐藏：连不上的设备在列表里就是"连不上"，没有能按的 |
 | 停止 daemon（`machine.stopHost`） | 照旧 | 保留但确认框写"停止后只能在 <设备> 上重新启动；要重启请用「重启」"；`restartHost` 放在前面（owner 2026-10-31 确认） |
@@ -548,7 +548,7 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | 新客户端配对成功（被连的桌面端） | 新设备「X」（<类型>，来自 <地址>）已经配对，可以管理这台电脑的 Vonvon Bot。不是你操作的？到「允许别的设备连接」撤销。 |
 | 设备身份变了 | <设备> 的身份和配对时不一样了（可能重装过，或换了数据目录）。为安全起见已断开。确认是你自己的设备后，重新配对。 |
 | 被撤销 | <设备> 已取消这台电脑的访问。要再连，请在那台设备上重新生成连接链接。 |
-| 在远程设备上配 Provider | 在 <设备> 上把 <Codex / Claude Code> 配置好（账号或自定义 API 都行），然后点「重新检测」。 |
+| 在远程设备上配 Provider | 在 <设备> 上把 <Codex / Claude> 配置好（账号或自定义 API 都行），然后点「重新检测」。 |
 | 查更新：清单签名不对（`refused: signature`） | 没查到新版本：发布清单的签名不对，没有应用 |
 | 查更新：清单比上次看到的旧（`refused: rollback`） | 没查到新版本：发布清单比上次看到的旧，没有应用 |
 | 查更新：连不上（`refused: network`） | 没查到新版本：连不上 dl.vonvon.cc |

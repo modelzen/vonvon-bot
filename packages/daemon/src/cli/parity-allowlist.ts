@@ -20,11 +20,6 @@ const pending = (slice: ParitySlice, note: string): ParityEntry => ({ reason: 'p
 const dead = (slice: ParitySlice, note = 'the daemon answers unsupported'): ParityEntry => ({ reason: 'dead', slice, note });
 
 export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
-  'command.refreshAgentCredentials': pending('C2', 'bot rescan'),
-  'command.setAgentEnabled': pending('C2', 'bot enable / bot disable'),
-  'command.deleteAgent': pending('C2', 'bot remove'),
-  'admin.cardCallbackStatus': pending('C2', 'bot callback status'),
-  'admin.confirmCardCallback': pending('C2', 'bot callback confirm / unconfirm'),
   'command.openEventSettings': dead('D1'),
   'command.openJobAuthorization': dead('D1'),
   'command.copyJobAuthorization': dead('D1'),
@@ -33,29 +28,8 @@ export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
   'command.setResponse': { reason: 'superseded', note: 'settings.save.project response (settings set)' },
   'command.setPermission': { reason: 'superseded', note: 'settings.save.project permission (settings set)' },
 
-  'collaboration.createProject': pending('C3', 'group create'),
-  'collaboration.project': pending('C3', 'group show'),
-  'collaboration.editProject': pending('C3', 'group set'),
-  'collaboration.removeProject': pending('C3', 'group unbind'),
-  'directory.list': pending('C3', 'dir list'),
-  'directory.suggest': pending('C3', 'dir suggest'),
-  'library.workspace': pending('C3', 'project workspace'),
-  'library.rename': pending('C3', 'project rename'),
-  'library.delete': pending('C3', 'project remove'),
   'library.previous': { reason: 'unused', note: 'no client sends it' },
 
-  'collaboration.history': pending('C4', 'session list'),
-  'collaboration.context': pending('C4', 'session context'),
-  'collaboration.clear': pending('C4', 'session clear'),
-  'collaboration.compact': pending('C4', 'session compact'),
-  'collaboration.resume': pending('C4', 'session resume'),
-  'collaboration.stop': pending('C4', 'session stop'),
-  'collaboration.stopSubagent': pending('C4', 'session stop-subagent'),
-  'collaboration.endGoal': pending('C4', 'session end-goal'),
-  'collaboration.reminder': pending('C4', 'session reminder'),
-  'collaboration.usage': pending('C4', 'usage show'),
-  'collaboration.shareUsage': pending('C4', 'usage share'),
-  'admin.judgeUsage': pending('C4', 'usage judge'),
   'collaboration.startGoal': { reason: 'unused', note: 'goals start in the group chat; no client sends it' },
   'collaboration.openGroup': dead('D1'),
 
@@ -69,14 +43,6 @@ export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
   'memory.seen': { reason: 'client-only', note: "the web page's read marks" },
   'memory.newCounts': { reason: 'client-only', note: "the web page's unread counts" },
 
-  'settings.read.host': pending('C6', 'settings get --host'),
-  'settings.save.host': pending('C6', 'settings set --host'),
-  'settings.act.voice': pending('C6', 'settings act voice'),
-  'settings.act.adminMember': pending('C6', 'settings act admin add / remove'),
-  'settings.act.projectMember': pending('C6', 'settings act member add / remove'),
-  'settings.act.projectAudience': pending('C6', 'settings act member all'),
-  'settings.act.commentInstructions': pending('C6', 'settings act comment-instructions'),
-  'settings.models': pending('C6', 'settings models'),
   'settings.chooseExecutable': dead('D1'),
   'settings.saveExecutable': dead('D1'),
 
