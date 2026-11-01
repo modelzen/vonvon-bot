@@ -1,5 +1,6 @@
-import { posix } from 'node:path';
+import { posix, win32 } from 'node:path';
 import type { CanonicalRoot, Target } from './identity';
+import { decodeConsoleText } from './windows-command';
 
 export type DistributionInput =
   | { kind: 'npm'; executable: string; entry: string }
@@ -17,7 +18,9 @@ export type Definition = Readonly<{
 type DecodedDefinition = Omit<Definition, 'root'> & { root: string };
 export type SerializedDefinition =
   | { platform: 'darwin'; plist: Uint8Array }
-  | { platform: 'linux'; unit: Uint8Array };
+  | { platform: 'linux'; unit: Uint8Array }
+  /** The task XML: UTF-16LE with a BOM as written; `schtasks /Query /XML` gives back its own serialization (I4a §4.2). */
+  | { platform: 'win32'; xml: Uint8Array };
 
 export class InvalidDefinitionInput extends Error {
   constructor(reason: string) { super(reason); this.name = 'InvalidDefinitionInput'; }
@@ -44,9 +47,11 @@ function ununit(value: string, exec = false): string {
   if (tokens.join('') !== value) throw new Error('Invalid systemd escape');
   return tokens.map((token) => token.startsWith('\\') ? token.slice(1) : token === '%%' ? '%' : exec && token === '$$' ? '$' : token).join('');
 }
-export function renderDefinition(input: {
-  target: Target; root: CanonicalRoot; port: number; distribution: DistributionInput; capturedPath: string;
-}): SerializedDefinition {
+type RenderInput<T extends Target> = { target: T; root: CanonicalRoot; port: number; distribution: DistributionInput; capturedPath: string };
+export function renderDefinition(input: RenderInput<Extract<Target, { platform: 'win32' }>>): Extract<SerializedDefinition, { platform: 'win32' }>;
+export function renderDefinition(input: RenderInput<Exclude<Target, { platform: 'win32' }>>): Exclude<SerializedDefinition, { platform: 'win32' }>;
+export function renderDefinition(input: RenderInput<Target>): SerializedDefinition;
+export function renderDefinition(input: RenderInput<Target>): SerializedDefinition {
   if (input.distribution.kind === 'development' || input.distribution.kind === 'unknown') {
     throw new InvalidDefinitionInput('Distribution cannot install a service');
   }
@@ -59,6 +64,7 @@ function render(target: Target, definition: DecodedDefinition): SerializedDefini
   for (const value of [root, distribution.executable, distribution.entry, capturedPath]) {
     literal(value);
   }
+  if (target.platform === 'win32') return { platform: 'win32', xml: renderTask(target, definition) };
   for (const value of [root, distribution.executable, distribution.entry]) {
     if (!posix.isAbsolute(value)) {
       throw new InvalidDefinitionInput('Service paths must be fully absolute');
@@ -78,6 +84,133 @@ function render(target: Target, definition: DecodedDefinition): SerializedDefini
       return { platform: target.platform, unit: Buffer.from(unit) };
     }
   }
+}
+
+/** I4a §4.2: what the task's `Description` starts with; a JSON of the four definition fields follows. */
+export const WINDOWS_TASK_MARKER = 'vonvon-bot service v1 ';
+const LAUNCHER = '\\bin\\vonvon-server.cmd';
+const CURRENT = '\\current.txt';
+
+/** The install root a Windows definition's launcher sits in; only the standalone server installs a task. */
+function windowsInstallRoot(distribution: DecodedDefinition['distribution']): string {
+  if (distribution.kind !== 'standalone') throw new InvalidDefinitionInput('Windows 只支持 standalone 的服务');
+  const { executable, entry } = distribution;
+  if (!executable.toLowerCase().endsWith(LAUNCHER)) throw new InvalidDefinitionInput(`The Windows service runs the launcher ${LAUNCHER}`);
+  const installRoot = executable.slice(0, -LAUNCHER.length);
+  if (entry.toLowerCase() !== `${installRoot}${CURRENT}`.toLowerCase()) throw new InvalidDefinitionInput('The Windows service entry is the install root\'s current.txt');
+  return installRoot;
+}
+
+/** `cmd.exe` reads the task's command line: no `%` (variable expansion) or `"`, and no trailing `\` before a closing quote. */
+function windowsPath(value: string): void {
+  if (!win32.isAbsolute(value)) throw new InvalidDefinitionInput('Service paths must be fully absolute');
+  if (/["%]/.test(value) || value.endsWith('\\')) throw new InvalidDefinitionInput(`Unsupported character in a Windows service path: ${value}`);
+}
+
+/** The task's arguments: the data root goes along, since a task has no environment of its own. */
+const windowsArguments = (port: number, root: string): string => `__win-supervise --port ${port} --home "${root}"`;
+
+/** JSON with every non-ASCII character escaped, so the field reads the same whatever code page `schtasks` answers in. */
+const asciiJson = (value: unknown): string => JSON.stringify(value).replace(/[\u007f-\uffff]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+
+function renderTask(target: Extract<Target, { platform: 'win32' }>, definition: DecodedDefinition): Uint8Array {
+  const { root, port, distribution, capturedPath } = definition;
+  if (!/^S-1-[0-9-]+$/.test(target.sid)) throw new InvalidDefinitionInput('The task needs the user SID');
+  const installRoot = windowsInstallRoot(distribution);
+  for (const value of [root, installRoot]) windowsPath(value);
+  const description = `${WINDOWS_TASK_MARKER}${asciiJson({ root, port, distribution: { kind: distribution.kind, executable: distribution.executable, entry: distribution.entry }, capturedPath })}`;
+  const sid = xml(target.sid);
+  const text = [
+    '<?xml version="1.0" encoding="UTF-16"?>',
+    '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
+    '  <RegistrationInfo>',
+    `    <Description>${xml(description)}</Description>`,
+    '  </RegistrationInfo>',
+    `  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${sid}</UserId></LogonTrigger></Triggers>`,
+    `  <Principals><Principal id="Author"><UserId>${sid}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>`,
+    '  <Settings>',
+    '    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>',
+    '    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>',
+    '    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>',
+    '    <AllowHardTerminate>true</AllowHardTerminate>',
+    '    <StartWhenAvailable>true</StartWhenAvailable>',
+    '    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>',
+    '    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>',
+    '    <Hidden>true</Hidden>',
+    '    <Enabled>true</Enabled>',
+    '    <RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure>',
+    '  </Settings>',
+    '  <Actions Context="Author"><Exec>',
+    `    <Command>${xml(distribution.executable)}</Command>`,
+    `    <Arguments>${xml(windowsArguments(port, root))}</Arguments>`,
+    `    <WorkingDirectory>${xml(installRoot)}</WorkingDirectory>`,
+    '  </Exec></Actions>',
+    '</Task>',
+    '',
+  ].join('\r\n');
+  return Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);
+}
+
+/** Task Scheduler serializes text its own way: entities, character references, or the bare character. */
+function unxmlText(value: string): string {
+  if (/&(?!(?:amp|lt|gt|quot|apos|#[0-9]+|#x[0-9a-fA-F]+);)/u.test(value)) throw new Error('Invalid XML literal');
+  return value.replace(/&(amp|lt|gt|quot|apos|#[0-9]+|#x[0-9a-fA-F]+);/g, (_, name: string) => {
+    if (name.startsWith('#x')) return String.fromCodePoint(Number.parseInt(name.slice(2), 16));
+    if (name.startsWith('#')) return String.fromCodePoint(Number.parseInt(name.slice(1), 10));
+    return ({ amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" } as Record<string, string>)[name] ?? '';
+  });
+}
+
+/** One element's text, unescaped; it must appear exactly once in `scope`, and the error names it. */
+function element(scope: string, name: string): string {
+  const matches = [...scope.matchAll(new RegExp(`<${name}(?:\\s[^>]*)?>([^<]*)</${name}>`, 'g'))];
+  if (matches.length !== 1) throw new Error(`Task ${name} is ${matches.length === 0 ? 'missing' : 'repeated'}`);
+  return unxmlText(matches[0]?.[1] ?? '').trim();
+}
+
+const unquote = (value: string): string => /^".*"$/.test(value) ? value.slice(1, -1) : value;
+
+/**
+ * I4a §4.2: the XML `schtasks` gives back is its own serialization, so nothing is compared byte for byte. Five fixed
+ * elements decide: the Description marker and its JSON, the Command (the launcher, any case), the Arguments, the
+ * Principal's UserId (this user, when it is a SID) and RunLevel (LeastPrivilege, its default when left out).
+ */
+function decodeTask(target: Extract<Target, { platform: 'win32' }>, bytes: Uint8Array): DecodedDefinition {
+  const text = decodeConsoleText(bytes);
+  const description = element(text, 'Description');
+  if (!description.startsWith(WINDOWS_TASK_MARKER)) throw new Error('Task Description lacks the vonvon-bot service marker');
+  let recorded: unknown;
+  try { recorded = JSON.parse(description.slice(WINDOWS_TASK_MARKER.length)); }
+  catch { throw new Error('Task Description JSON is malformed'); }
+  const fields = recorded as Partial<{ root: unknown; port: unknown; capturedPath: unknown; distribution: Partial<Record<'kind' | 'executable' | 'entry', unknown>> }> | null;
+  const d = fields?.distribution;
+  if (typeof fields?.root !== 'string' || typeof fields.port !== 'number' || typeof fields.capturedPath !== 'string'
+    || typeof d !== 'object' || d === null || d.kind !== 'standalone' || typeof d.executable !== 'string' || typeof d.entry !== 'string') {
+    throw new Error('Task Description JSON lacks root, port, distribution or capturedPath');
+  }
+  const definition: DecodedDefinition = { root: fields.root, port: fields.port, capturedPath: fields.capturedPath, distribution: { kind: 'standalone', executable: d.executable, entry: d.entry } };
+  // Checks the recorded fields as install would; throws on any it would refuse.
+  render(target, definition);
+  const command = unquote(element(text, 'Command'));
+  if (command.toLowerCase() !== d.executable.toLowerCase()) throw new Error(`Task Command runs ${command}, not ${d.executable}`);
+  const spaced = (value: string): string => value.replace(/\s+/g, ' ').toLowerCase();
+  const args = element(text, 'Arguments');
+  if (spaced(args) !== spaced(windowsArguments(definition.port, definition.root))) throw new Error(`Task Arguments are ${args}`);
+  const principal = /<Principal(?:\s[^>]*)?>([\s\S]*?)<\/Principal>/.exec(text)?.[1];
+  if (principal === undefined) throw new Error('Task Principal is missing');
+  const user = element(principal, 'UserId');
+  if (/^S-1-/i.test(user) && user.toUpperCase() !== target.sid.toUpperCase()) throw new Error(`Task runs as ${user}, not this user`);
+  const level = /<RunLevel>/.test(principal) ? element(principal, 'RunLevel') : 'LeastPrivilege';
+  if (level !== 'LeastPrivilege') throw new Error(`Task RunLevel is ${level}`);
+  return definition;
+}
+
+/** Whether Task Scheduler has the task enabled: `<Settings><Enabled>false` is a disabled task, whatever the UI language. */
+export function windowsTaskEnabled(bytes: Uint8Array): boolean {
+  const settings = /<Settings(?:\s[^>]*)?>([\s\S]*?)<\/Settings>/.exec(decodeConsoleText(bytes))?.[1] ?? '';
+  // Settings' own Enabled, not one nested in IdleSettings or elsewhere.
+  const own = settings.replace(/<(\w+)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g, (whole, name: string) => name === 'Enabled' ? whole : '');
+  return !/<Enabled>\s*false\s*<\/Enabled>/.test(own);
 }
 
 /** `<installRoot>/current/node/bin/node <installRoot>/current/app/bin/vonvon.mjs`, as distribution.ts serviceProgram writes it. */
@@ -101,6 +234,7 @@ function field(text: string, pattern: RegExp): string {
 
 export function decodeGeneratedDefinition(target: Target, bytes: SerializedDefinition): DecodedDefinition {
   if (target.platform !== bytes.platform) throw new Error('Platform mismatch');
+  if (target.platform === 'win32' && bytes.platform === 'win32') return decodeTask(target, bytes.xml);
   const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
   let root: string;
   let capturedPath: string;
@@ -109,6 +243,7 @@ export function decodeGeneratedDefinition(target: Target, bytes: SerializedDefin
   let port: number;
   let desktop: boolean;
   switch (bytes.platform) {
+    case 'win32': throw new Error('Platform mismatch');
     case 'darwin': {
       const text = utf8.decode(bytes.plist);
       root = unxml(field(text, /<key>VONVON_HOME<\/key><string>([^<]*)<\/string>/g));

@@ -53,11 +53,36 @@ afterEach(async () => {
 });
 
 describe('desktop daemon dependencies', () => {
-  it('runs the bundled daemon without a service registration on Windows', async () => {
+  it('I4a: on Windows reads the standalone server\'s scheduled task, and runs the bundled daemon without one', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'desktop-win-task-')));
+    roots.push(root);
+    const sid = 'S-1-5-21-1000000001-2000000002-3000000003-1001';
+    const installRoot = 'C:\\Users\\U\\AppData\\Local\\VonvonBot\\server';
+    const target = serviceTarget({ platform: 'win32', sid, root });
+    const xml = renderDefinition({ target, root: root as CanonicalRoot, port: 7788, distribution: { kind: 'standalone', executable: `${installRoot}\\bin\\vonvon-server.cmd`, entry: `${installRoot}\\current.txt` }, capturedPath: '' }).xml;
+    let task: Uint8Array | null = xml;
+    const calls: string[] = [];
+    const windowsRun = async (command: string, args: readonly string[]) => {
+      calls.push([command, ...args].join(' '));
+      if (command === 'whoami') return { ok: true, status: 0, stdout: `"host\\u","${sid}"`, stderr: '' };
+      if (!task) return { ok: false, status: 1, stdout: '', stderr: 'ERROR: not found' };
+      return { ok: true, status: 0, stdout: args.includes('/XML') ? task : '"x","N/A","Ready"', stderr: '' };
+    };
     const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
     Object.defineProperty(process, 'platform', { ...original, value: 'win32' });
     try {
-      await expect(dependencies().readRegistration()).resolves.toEqual({ kind: 'absent' });
+      const desktop = createDaemonDependencies({ root, home: root, resources: '/owned/resources', executable: '/owned/Electron', packaged: false, windowsRun });
+      const found = await desktop.readRegistration();
+      expect(found).toEqual({ kind: 'ours', definition: { kind: 'standalone', executable: `${installRoot}\\bin\\vonvon-server.cmd`, entry: `${installRoot}\\current.txt`, port: 7788 } });
+      if (found.kind !== 'ours') throw new Error('Expected ours');
+      expect(found.definition?.executable.endsWith('\\bin\\vonvon-server.cmd')).toBe(true);
+      expect(found.definition?.entry.endsWith('\\current.txt')).toBe(true);
+      expect(calls).toEqual(['whoami /user /fo csv /nh', `schtasks /Query /TN ${target.taskName} /FO CSV /NH`, `schtasks /Query /TN ${target.taskName} /XML`]);
+      task = null;
+      await expect(desktop.readRegistration()).resolves.toEqual({ kind: 'absent' });
+      // Without the SID there is no task to look up: the app runs its bundled daemon, as before.
+      const noSid = createDaemonDependencies({ root, home: root, resources: '/owned/resources', executable: '/owned/Electron', packaged: false, windowsRun: async () => ({ ok: false, status: 1, stdout: '', stderr: 'no' }) });
+      await expect(noSid.readRegistration()).resolves.toEqual({ kind: 'absent' });
     } finally {
       Object.defineProperty(process, 'platform', original);
     }

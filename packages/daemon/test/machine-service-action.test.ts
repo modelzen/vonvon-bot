@@ -161,6 +161,20 @@ it('Linux refuses with the terminal command', async () => {
   expect(m.spawn).not.toHaveBeenCalled();
 });
 
+it('I4a: Windows is not refused: the helper is detached and hidden, like macOS', async () => {
+  const m = await machine('win32');
+  for (const action of ['install', 'uninstall'] as const) {
+    const outcome = await m.call({ type: 'service', action });
+    if (outcome.kind !== 'shutdown') throw new Error('Expected the reply before the helper');
+    outcome.afterReply();
+    const [, args, options] = m.spawn.mock.calls.at(-1) as [string, string[], { detached: boolean; windowsHide: boolean; env: NodeJS.ProcessEnv }];
+    expect(args.slice(1)).toEqual(['service', action, '--keep-running']);
+    expect(options).toMatchObject({ detached: true, windowsHide: true, env: { VONVON_HOME: m.root } });
+    m.children.at(-1)?.emit('exit', 0, null);
+    await vi.waitFor(() => expect(m.launcher.current()).toBeUndefined());
+  }
+});
+
 it.each(['start', 'stop'] as const)('service %s stays unsupported', async action => {
   const m = await machine();
   await expect(m.call({ type: 'service', action })).rejects.toMatchObject({ code: 'unsupported' });

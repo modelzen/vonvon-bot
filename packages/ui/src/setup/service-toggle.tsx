@@ -34,7 +34,7 @@ export async function skipService(client: ServiceClient): Promise<string> {
   return '已跳过。Bot 跑在分离的 daemon 里，这样崩溃后不会自动重启。';
 }
 
-const DEVICE_TITLE: Record<DesktopSnapshot['application']['platform'], string> = {macos: '这台 Mac', linux: '这台 Linux 主机', unsupported: '这台电脑'};
+const DEVICE_TITLE: Record<DesktopSnapshot['application']['platform'], string> = {macos: '这台 Mac', linux: '这台 Linux 主机', windows: '这台 Windows 电脑', unsupported: '这台电脑'};
 /** The 这台设备 row of the 应用与启动 page. */
 export const deviceTitle = (platform: DesktopSnapshot['application']['platform']): string => DEVICE_TITLE[platform];
 

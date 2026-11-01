@@ -305,3 +305,39 @@ it.each([
 ] as const)('classifies %s', (detail, reason) => {
   expect(classifyServiceFailure(detail)).toBe(reason);
 });
+
+describe('Windows reasons (I4a §4.7)', () => {
+  const json = () => { let out = ''; return { io: { json: true, write: (text: string) => { out += text; } }, out: () => out }; };
+  it('a failure carries the fixed reason, the detached fallback, and the exit kind of a refusal or a conflict', async () => {
+    for (const [reason, kind] of [['schtasks_denied', 'refused'], ['task_foreign', 'conflict'], ['task_other_root', 'conflict'], ['schtasks_create_failed', 'failed'], ['sid_unavailable', 'failed']] as const) {
+      const o = json();
+      const fallback = reason === 'schtasks_denied' ? { fallback: 'detached' as const } : {};
+      const failed = runServiceCommand('install', { install: vi.fn(async () => outcome('install_refused', { reason, ...fallback })), uninstall: vi.fn() }, {}, absent, o.io);
+      await expect(failed).rejects.toMatchObject({ kind, reason, partial: { result: 'install_refused', reason, ...fallback } });
+      expect(o.out()).toBe('');
+    }
+  });
+  it('success keeps the reason (not_registered) and the warning of a daemon that did not come up', async () => {
+    const o = json();
+    await runServiceCommand('uninstall', { install: vi.fn(), uninstall: vi.fn(async () => outcome('not-installed', { reason: 'not_registered' })) }, {}, absent, o.io);
+    expect(JSON.parse(o.out())).toMatchObject({ ok: true, result: 'not-installed', reason: 'not_registered' });
+    const w = json();
+    await runServiceCommand('install', { install: vi.fn(async () => outcome('installed', { warning: 'later' })), uninstall: vi.fn() }, {}, absent, w.io);
+    expect(JSON.parse(w.out())).toMatchObject({ ok: true, result: 'installed', warning: 'later' });
+  });
+  it('--keep-running reaches the adapter, so Windows can leave the daemon to the next logon', async () => {
+    const { deps } = await helper();
+    const install = vi.fn(async () => outcome('installed'));
+    vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    await runServiceCommand('install', { install, uninstall: vi.fn() }, { keepRunning: true }, deps);
+    expect(install).toHaveBeenCalledWith({ keepRunning: true });
+  });
+  it('status prints the task status column', async () => {
+    const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const status = { platformName: 'Task Scheduler (Windows)', state: 'stopped', installed: true, running: false, name: '\\VonvonBot\\a-b', servicePath: '\\VonvonBot\\a-b', stdoutPath: 'o', stderrPath: 'e', detail: 'd', task: { name: '\\VonvonBot\\a-b', status: 'Ready' } } as const;
+    await runServiceStatus(false, { status: async () => status });
+    expect(String(write.mock.calls[0]?.[0])).toContain('Task Scheduler status: Ready\n');
+    await runServiceStatus(true, { status: async () => status });
+    expect(JSON.parse(String(write.mock.calls[1]?.[0]))).toMatchObject({ task: { name: '\\VonvonBot\\a-b', status: 'Ready' } });
+  });
+});

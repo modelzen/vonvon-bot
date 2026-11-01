@@ -8,7 +8,7 @@ import { classifyServiceFailure, serviceActionPath, writeServiceActionRecord, ty
 import type { ServiceAdapter, ServiceTransactionOutcome } from '../../service/adapter';
 import { describeServiceExits } from '../../service/exits';
 import { enableFailed, enableLinger, lingerLine, readLinger, userManagerHint, type Linger } from '../../service/linux-session';
-import { CommandError } from '../command-error';
+import { CommandError, type CommandErrorKind } from '../command-error';
 import type { Io } from '../daemon-client';
 
 const STATE_TEXT = {
@@ -34,6 +34,8 @@ type LinuxServiceSteps = {
 };
 
 const detailOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
+/** Windows reasons that are a refusal or a conflict rather than a failure (exit 4 and 5, devices 8.1). */
+const WINDOWS_FAILURE_KIND: Partial<Record<string, CommandErrorKind>> = { schtasks_denied: 'refused', task_foreign: 'conflict', task_other_root: 'conflict' };
 const TEXT: Io = { json: false, write: text => { process.stdout.write(text); } };
 const succeeded = (kind: ServiceTransactionOutcome['kind']): boolean => kind === 'installed' || kind === 'already-installed' || kind === 'uninstalled' || kind === 'not-installed';
 
@@ -76,7 +78,8 @@ export async function runServiceCommand(action: 'install' | 'uninstall', adapter
     if (mutex) await writeServiceActionRecord(d.root, { ...run, phase: 'running' });
     const before = await d.readOwner(d.root).catch(() => null);
     const { keepRunning, linger: _linger, ...install } = options;
-    try { result = action === 'install' ? await service.install(install) : await service.uninstall(); }
+    // Windows leaves a running daemon to the task's next logon (I4a §4.3); launchd and systemd ignore it.
+    try { result = action === 'install' ? await service.install({ ...install, ...(keepRunning ? { keepRunning } : {}) }) : await service.uninstall(); }
     catch (error) { result = { kind: `${action}_incomplete`, detail: detailOf(error), retained: null, leftovers: [] }; }
     // The service now owns the port, or nothing changed: a daemon that still runs is left alone.
     if (keepRunning && before && !(await d.readOwner(d.root).catch(() => null))) {
@@ -108,6 +111,8 @@ export async function runServiceCommand(action: 'install' | 'uninstall', adapter
   const outcome = {
     action, result: result.kind, detail: result.detail, retained: result.retained,
     ...restart.restarted ? { restarted: { ...restart.restarted, port } } : {}, ...restart.restartError ? { restartError: restart.restartError } : {},
+    // Windows (I4a §4.7): the fixed reason install.ps1 reads, its `detached` fallback, and a not-yet-running daemon.
+    ...result.reason ? { reason: result.reason } : {}, ...result.fallback ? { fallback: result.fallback } : {}, ...result.warning ? { warning: result.warning } : {},
   };
   if (result.kind === 'installed' || result.kind === 'already-installed') {
     if (result.retained !== null) lines.push(`Daemon PID ${result.retained.pid} is running under the service.`);
@@ -141,7 +146,7 @@ export async function runServiceCommand(action: 'install' | 'uninstall', adapter
         const hint = await d.linux?.hint();
         if (hint) lines.push(hint);
       }
-      throw new CommandError('failed', lines.join('\n'), { reason: result.kind, partial: { ...outcome, leftovers: result.leftovers } });
+      throw new CommandError(result.reason ? WINDOWS_FAILURE_KIND[result.reason] ?? 'failed' : 'failed', lines.join('\n'), { reason: result.reason ?? result.kind, partial: { ...outcome, leftovers: result.leftovers } });
     default: {
       const exhaustive: never = result.kind;
       throw new Error(`Unknown service result: ${String(exhaustive)}`);
@@ -222,6 +227,7 @@ export async function runServiceStatus(json: boolean, adapter?: Pick<ServiceAdap
     ...describeServiceExits(status.exits).lines,
     ...(status.hint ? [status.hint] : []),
     ...(status.linger ? [lingerLine(status.linger, userInfo().username)] : []),
+    ...(status.task ? [`Task Scheduler status: ${status.task.status}`] : []),
     `Definition: ${status.servicePath}`,
     `Logs: ${status.stdoutPath}, ${status.stderrPath}`,
   ].join('\n') + '\n');

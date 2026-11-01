@@ -94,6 +94,19 @@ function launchFailure(file: string, error: unknown): string {
   return `${file} 没有运行成功`;
 }
 
+/** What a Windows browser launch may carry: a loopback URL without whitespace or `cmd.exe`'s metacharacters (I4a §4.5). */
+const WINDOWS_URL = /^http:\/\/127\.0\.0\.1:\d{1,5}\/[A-Za-z0-9._~!$'()*+,;=:@/?%#-]*$/;
+
+/** How the browser is started: `open`, `xdg-open`, or on Windows `rundll32 url.dll,FileProtocolHandler`, which takes the
+ * URL as an argument without a shell (`start` would go through `cmd.exe`). */
+export function browserCommand(platform: NodeJS.Platform, url: string): { file: string; args: string[] } {
+  if (platform === 'win32') {
+    if (!WINDOWS_URL.test(url)) throw new Error('网页地址不合法，没有打开浏览器。运行 vonvon open --print 手动打开。');
+    return { file: 'rundll32.exe', args: ['url.dll,FileProtocolHandler', url] };
+  }
+  return { file: platform === 'darwin' ? 'open' : 'xdg-open', args: [url] };
+}
+
 /** `--print`, and `open` on a Linux without DISPLAY or WAYLAND_DISPLAY, print the guide instead of starting a browser. */
 export async function runOpen(print = false, overrides: Partial<OpenDependencies> = {}): Promise<void> {
   const d: OpenDependencies = { ...defaults(), ...overrides };
@@ -105,8 +118,8 @@ export async function runOpen(print = false, overrides: Partial<OpenDependencies
     return;
   }
   const url = buildOpenUrl(listen, credential);
-  const file = d.platform === 'darwin' ? 'open' : 'xdg-open';
-  try { await d.launch(file, [url]); }
+  const { file, args } = browserCommand(d.platform, url);
+  try { await d.launch(file, args); }
   catch (error) { throw new Error(`没能打开浏览器：${launchFailure(file, error)}。运行 vonvon open --print 手动打开。`); }
   if (d.json) d.write(result(true));
 }

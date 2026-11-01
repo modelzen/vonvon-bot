@@ -86,6 +86,7 @@ export async function runStart(port = 0): Promise<DaemonStatus> {
   try {
     child = spawn(process.execPath, [cliEntry, 'daemon', 'run', '--port', String(port)], {
       detached: true,
+      windowsHide: true,
       stdio: ['ignore', log.fd, log.fd],
       env,
     });

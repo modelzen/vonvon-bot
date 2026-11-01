@@ -6,6 +6,7 @@ import type { Registration } from '../src/service/registration';
 const fixture = vi.hoisted(() => ({
   registration: vi.fn<() => Promise<Registration>>(), owner: vi.fn(), verify: vi.fn(),
   launchdStart: vi.fn(), systemdStart: vi.fn(), spawn: vi.fn(), close: vi.fn(), open: vi.fn(),
+  windowsStart: vi.fn(), sid: vi.fn(async () => 'S-1-5-21-1000000001-2000000002-3000000003-1001'),
 }));
 vi.mock('../src/config/paths', () => ({ paths: { appDir: '/owned/root' } }));
 vi.mock('node:os', async original => {
@@ -18,6 +19,8 @@ vi.mock('../src/server/pid-lock', () => ({ readRunningPidLock: fixture.owner, Pi
 vi.mock('../src/server/owner-verification', () => ({ verifyPidLockOwner: fixture.verify }));
 vi.mock('../src/service/launchd', () => ({ createLaunchdService: () => ({ start: fixture.launchdStart }) }));
 vi.mock('../src/service/systemd', () => ({ createSystemdService: () => ({ start: fixture.systemdStart }) }));
+vi.mock('../src/service/windows', () => ({ createWindowsService: () => ({ start: fixture.windowsStart }) }));
+vi.mock('../src/service/identity', async original => ({ ...await original<typeof import('../src/service/identity')>(), currentWindowsSid: fixture.sid }));
 vi.mock('node:child_process', async original => ({ ...await original<typeof import('node:child_process')>(), spawn: fixture.spawn }));
 vi.mock('node:fs/promises', async original => ({ ...await original<typeof import('node:fs/promises')>(), open: fixture.open, realpath: vi.fn(async () => '/owned/root'), stat: vi.fn(async () => ({ isDirectory: () => true })) }));
 
@@ -48,6 +51,24 @@ it.each(['darwin', 'linux'] as const)('routes %s to its manager and maps zero to
   expect(platform === 'darwin' ? fixture.launchdStart : fixture.systemdStart).toHaveBeenCalledWith({});
   expect(platform === 'darwin' ? fixture.systemdStart : fixture.launchdStart).not.toHaveBeenCalled();
   expect(fixture.spawn).not.toHaveBeenCalled();
+});
+it('I4a: routes win32 to the scheduled task, looked up by the user\'s SID', async () => {
+  vi.stubGlobal('process', Object.defineProperty(Object.create(process), 'platform', { value: 'win32' }));
+  fixture.sid.mockResolvedValue('S-1-5-21-1000000001-2000000002-3000000003-1001');
+  fixture.windowsStart.mockResolvedValue({ ...owner, port: 1234 });
+  await expect(runStart()).resolves.toEqual({ running: true, ...owner });
+  expect(fixture.windowsStart).toHaveBeenCalledWith({});
+  expect(fixture.registration).toHaveBeenCalledWith({ target: { platform: 'win32', taskName: expect.stringMatching(/^\\VonvonBot\\[0-9a-f]{12}-[0-9a-f]{12}$/), sid: 'S-1-5-21-1000000001-2000000002-3000000003-1001' }, requestedRoot: '/owned/root' });
+  expect(fixture.spawn).not.toHaveBeenCalled();
+});
+it('I4a: win32 without a SID has no task to look up, and starts detached and hidden', async () => {
+  vi.stubGlobal('process', Object.defineProperty(Object.create(process), 'platform', { value: 'win32' }));
+  fixture.sid.mockRejectedValue(new Error('no whoami'));
+  fixture.spawn.mockImplementation(() => { throw new Error('stop here'); });
+  await expect(runStart()).rejects.toThrow('stop here');
+  expect(fixture.registration).not.toHaveBeenCalled();
+  expect(fixture.windowsStart).not.toHaveBeenCalled();
+  expect(fixture.spawn.mock.calls[0]?.[2]).toMatchObject({ detached: true, windowsHide: true });
 });
 it('propagates manager output without detached fallback', async () => {
   fixture.launchdStart.mockRejectedValue(new Error('launchctl denied'));

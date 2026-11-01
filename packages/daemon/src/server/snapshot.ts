@@ -27,6 +27,11 @@ export interface SnapshotStore {
   close(): Promise<void>;
 }
 
+/** The snapshot's `application.platform`: Windows is `windows` since I4a; other systems stay `unsupported`. */
+export function applicationPlatform(platform: NodeJS.Platform): 'macos' | 'linux' | 'windows' | 'unsupported' {
+  return platform === 'darwin' ? 'macos' : platform === 'linux' ? 'linux' : platform === 'win32' ? 'windows' : 'unsupported';
+}
+
 export async function createSnapshotStore(options: {
   service: Pick<AdminService, 'listBots' | 'listProjects' | 'codexSetup'>;
   jobs: () => Job[];
@@ -51,7 +56,7 @@ export async function createSnapshotStore(options: {
 }): Promise<SnapshotStore> {
   const version = bridgeVersion();
   const root = options.root ?? paths.appDir;
-  const base = { platform: process.platform === 'darwin' ? 'macos' : process.platform === 'linux' ? 'linux' : 'unsupported', version, dataPath: paths.appDir } as const;
+  const base = { platform: applicationPlatform(process.platform), version, dataPath: paths.appDir } as const;
   let snapshot: DesktopSnapshot = {
     revision: 0, observedAt: 0, stale: false,
     host: { kind: 'connected', ownership: 'owned', version },

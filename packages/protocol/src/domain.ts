@@ -264,7 +264,7 @@ export const desktopSnapshotSchema = z.object({
   projects: z.array(snapshotProjectSchema).optional(),
   tools: z.array(toolStateSchema), jobs: z.array(jobSchema),
   recentConversations: z.object({items:z.array(z.object({agentId:agentIdSchema,groupId:groupIdSchema,threadId:z.string(),summary:z.string(),updatedAt:z.number()})),unavailableBots:z.number().int().nonnegative()}).optional(),
-  application: z.object({ platform: z.enum(["macos", "linux", "unsupported"]), version: z.string(), loginItem: z.boolean(), dataPath: z.string(), service: applicationServiceSchema.optional(),
+  application: z.object({ platform: z.enum(["macos", "linux", "windows", "unsupported"]), version: z.string(), loginItem: z.boolean(), dataPath: z.string(), service: applicationServiceSchema.optional(),
     /** The whole daemon's pause and the last day's crash records (s18a); absent from older daemons. */
     crashes: applicationCrashesSchema.optional() }),
 });

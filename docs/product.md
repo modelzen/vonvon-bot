@@ -701,7 +701,7 @@ owner 的话："后台服务不要依赖 Electron，因为 Linux 上没有桌面
 - 用 `vonvon service install`、`uninstall`、`status` 注册、卸载和查看。桌面端只调用打包在里面的同一个命令行。不用 Electron 的 `agentService`，也不用 SMAppService：这两种都要求服务登记在 .app 名下，Linux 上没有对应的东西。
 - macOS：用户级 LaunchAgent `com.vonvon.bot.daemon`，plist 写在 `~/Library/LaunchAgents/`（`D/service/identity.ts:33`）。用户登录后启动，能用钥匙串里的 Claude 登录和 Codex 的登录（推断，要实测）。Mac 设成自动登录时，就等于开机启动。
 - Linux：systemd 用户服务 `vonvon-bot.service`。安装时检查 linger：交互终端里没开就问一句，同意后执行 `loginctl enable-linger`；安装脚本带 `--linger`，能开就开、不问，要 sudo 才能开时打印那条命令，不自己 sudo，也不算安装失败（owner 2026-10-31）；不在终端里、又没带参数时不开并提示。这样开机就启动，退出 SSH 以后 bot 也还在跑。
-- Windows（只装服务端时，0.9.0）：没有服务管理器，用当前用户的计划任务，登录时启动。任务名带用户和数据目录，同一台电脑上几个用户各装各的。计划任务拉起一个隐藏的监督进程，它按下面同样的规则管 daemon：退 0 就停；退 75（排空后重启）时，安装根里的当前版本变了就换成新版本接着监督，没变立刻重启；其他退出 5 秒后重启。命令和计划任务都指向安装根里固定的启动器，启动器按 `current.txt` 找当前版本，版本目录不完整就退回上一版。Windows 桌面端这一批不用计划任务（3.1 第 3 条）。
+- Windows（只装服务端时，0.9.0）：没有服务管理器，用当前用户的计划任务，登录时启动。任务名带用户和数据目录，同一台电脑上几个用户各装各的。计划任务拉起一个隐藏的监督进程，它按下面同样的规则管 daemon：退 0 就停；退 75（排空后重启）时，安装根里的当前版本变了就换成新版本接着监督，没变立刻重启；其他退出 5 秒后重启。命令和计划任务都指向安装根里固定的启动器，启动器按 `current.txt` 找当前版本，版本目录不完整就退回上一版。Windows 桌面端这一批不用计划任务（3.1 第 3 条）。管理员账号也能装，任务照普通权限运行，不弹提权；`vonvon open` 用默认浏览器打开界面。
 - **Mac、Windows 当服务端要有用户登录着**（owner 2026-10-31：本期接受）：LaunchAgent 和 Windows 计划任务都只在这个用户登录后运行；登录后可以锁屏，bot 照常在线；电脑重启后要有人登录一次，bot 才上线。Linux 开了 linger 不需要。不用登录也能跑的 Windows 服务、macOS LaunchDaemon 放进第 10 节。
 - 从 dmg 装的，服务用 app 里的 Electron 程序以 Node 模式运行（`ELECTRON_RUN_AS_NODE=1`），不用另带一份 Node；从安装脚本装的（下面"只装服务端"），用包里自带的 Node；从 npm 装的，用用户自己的 `node`。这只是借 Electron 的 Node 来用，服务的生死由 launchd 管，桌面窗口开不开都一样。代价是 app 被删或挪走以后，服务就起不来了，所以桌面端提供"关闭登录时启动"，文档写清卸载步骤。
 - 注册以后，系统的服务管理器是唯一拉起 daemon 的。`vonvon daemon start` 和桌面端都请它去启动，不自己再起一个。停止走 `vonvon daemon stop`：先排空，再正常退出，管理器就不会再拉起它。

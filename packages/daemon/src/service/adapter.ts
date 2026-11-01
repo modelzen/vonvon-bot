@@ -10,10 +10,13 @@ import { describeServiceExits, type ServiceExits } from './exits';
 import type { LaunchdTransactionOutcome } from './launchd';
 
 export type { ServiceStatus };
-export type ServiceTransactionOutcome = LaunchdTransactionOutcome;
+/** Windows adds a fixed `reason` (I4a §4.7, read by install.ps1), the `detached` fallback when tasks are forbidden, and
+ * a `warning` for an installed task whose daemon did not come up in time. */
+export type ServiceTransactionOutcome = LaunchdTransactionOutcome & { reason?: string; fallback?: 'detached'; warning?: string };
 
 export interface ServiceAdapter {
-  install(options?: { port?: number }): Promise<ServiceTransactionOutcome>;
+  /** `keepRunning` (Windows): a running daemon is left alone and the task takes over at the next logon. */
+  install(options?: { port?: number; keepRunning?: boolean }): Promise<ServiceTransactionOutcome>;
   uninstall(): Promise<ServiceTransactionOutcome>;
   status(): Promise<ServiceStatus>;
 }
@@ -74,8 +77,24 @@ async function rootExists(): Promise<boolean> {
   catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false; throw error; }
 }
 
+/** I4a: a scheduled task per user and data root, for the standalone server only. */
+function windowsAdapter(): ServiceAdapter {
+  const windows = async (distribution?: Distribution) => (await import('./windows')).createWindowsService({ root: paths.appDir }, distribution ? { distribution: async () => distribution } : {});
+  return {
+    async install(options) {
+      const distribution = await runtimeDistribution();
+      if (!installsService(distribution)) return result('install_refused', 'Distribution cannot install a service');
+      await mkdir(paths.appDir, { recursive: true, mode: 0o700 });
+      return (await windows(distribution)).install(options);
+    },
+    async uninstall() { return (await windows()).uninstall(); },
+    async status() { return (await windows()).status(); },
+  };
+}
+
 export function getServiceAdapter(): ServiceAdapter {
   const platform = process.platform;
+  if (platform === 'win32') return windowsAdapter();
   if (platform !== 'darwin' && platform !== 'linux') throw new Error(`The background service is not supported on ${platform}.`);
   const platformName = platform === 'darwin' ? 'launchd (macOS)' : 'systemd (Linux)';
   // Without a data directory nothing is resolved; the names still follow its path.

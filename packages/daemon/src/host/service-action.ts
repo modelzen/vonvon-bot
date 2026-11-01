@@ -31,7 +31,8 @@ export function createServiceActionLauncher(options: {
     current: () => slot && { ...slot },
     reserve(action) {
       // Linux would need the helper moved out of the unit's cgroup, and linger first (s20a); the terminal works today.
-      if (platform !== 'darwin') throw new RpcError('unsupported', LINUX_SERVICE_REFUSAL);
+      // Windows (I4a): a detached helper outlives the daemon it stops, as on macOS.
+      if (platform !== 'darwin' && platform !== 'win32') throw new RpcError('unsupported', LINUX_SERVICE_REFUSAL);
       if (slot || liveServiceActionRecord(root, now())?.phase === 'running') throw new RpcError('busy', SERVICE_BUSY_MESSAGE);
       const cliEntry = options.cliEntry ?? process.argv[1];
       if (!cliEntry) throw new Error('Cannot locate the daemon CLI entry.');
@@ -77,7 +78,7 @@ export function createServiceActionLauncher(options: {
           try {
             const log = openSync(join(root, 'daemon.log'), 'a', 0o600);
             let child;
-            try { child = spawn(options.execPath ?? process.execPath, [cliEntry, 'service', action, '--keep-running'], { detached: true, stdio: ['ignore', log, log], env }); }
+            try { child = spawn(options.execPath ?? process.execPath, [cliEntry, 'service', action, '--keep-running'], { detached: true, windowsHide: true, stdio: ['ignore', log, log], env }); }
             finally { closeSync(log); }
             reserved.pid = child.pid;
             // The helper outlives this daemon on purpose: install and uninstall both stop it.

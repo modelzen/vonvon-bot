@@ -457,6 +457,11 @@ covers(feishu.command('members <groupId>'), 'command.listGroupMembers').descript
 program.command('__daemon-control <action>', { hidden: true }).action(async (action: string) => {
   await (await import('./commands/daemon-control')).runDaemonControl(action);
 });
+// I4a: what the Windows scheduled task runs (`bin\vonvon-server.cmd __win-supervise --port N --home <root>`); I4b's supervisor replaces the placeholder.
+program.command('__win-supervise', { hidden: true }).option('--port <port>', 'Loopback API port', (value) => Number(value), 0).option('--home <dir>', 'The data root the task was registered for')
+  .action(async (options: { port: number; home?: string }) => {
+    process.exitCode = await (await import('./commands/win-supervise')).runWinSupervise(options);
+  });
 program.command('__restart-after-exit <port> <oldPid> <oldStartedAt> [update]', { hidden: true }).action(async (port: string, oldPid: string, oldStartedAt: string, update?: string) => {
   const { updateStatusSchema } = await import('../service/update');
   await (await import('../host/restart')).runSamePortRestartHelper({ port: Number(port), oldPid: Number(oldPid), oldStartedAt, ...(update ? { update: updateStatusSchema.parse(JSON.parse(update)) } : {}) });

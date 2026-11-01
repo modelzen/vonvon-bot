@@ -8,7 +8,7 @@ export type DesktopServiceStatus = Partial<ServiceStatus> & Pick<ServiceStatus, 
 /** Only `status` is served: installing and removing the service goes through the CLI (s08 wires the desktop to it). */
 export async function controlDesktopService(action: string, adapter?: Pick<ServiceAdapter, 'status'>, _inspect?: () => Promise<HostInspection>): Promise<DesktopServiceStatus> {
   if (action !== 'status') throw new Error(SERVICE_UNAVAILABLE);
-  if (!adapter && process.platform !== 'darwin' && process.platform !== 'linux') return { supported: false, installed: false, running: false };
+  if (!adapter && process.platform !== 'darwin' && process.platform !== 'linux' && process.platform !== 'win32') return { supported: false, installed: false, running: false };
   try {
     return { supported: true, ...await (adapter ?? (await import('../service/adapter')).getServiceAdapter()).status() };
   } catch (error) {

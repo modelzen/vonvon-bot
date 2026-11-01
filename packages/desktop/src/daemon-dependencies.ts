@@ -7,8 +7,9 @@ import { isPidLockOwnerRunning, readRunningPidLock } from '../../daemon/src/serv
 import { verifyPidLockOwner } from '../../daemon/src/server/owner-verification.js';
 import { classifyDistribution } from '../../daemon/src/service/distribution.js';
 import { withToolDirectories } from '../../daemon/src/platform/tool-path.js';
-import { serviceTarget } from '../../daemon/src/service/identity.js';
+import { createSidReader, currentWindowsSid, serviceTarget, type Target } from '../../daemon/src/service/identity.js';
 import { isIrreplaceableDefinition, readRegistration } from '../../daemon/src/service/registration.js';
+import { withTimeout, type WindowsRun } from '../../daemon/src/service/windows-command.js';
 import { attachExisting } from './attach.js';
 import type { DaemonManagerDependencies } from './daemon-manager.js';
 
@@ -34,10 +35,14 @@ interface DesktopDaemonRuntime {
   executable: string;
   resources: string;
   packaged: boolean;
+  /** Windows: answers `whoami` and `schtasks` (tests); the real tools by default. */
+  windowsRun?: WindowsRun;
 }
 
 export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonManagerDependencies & { ownerRunning(previous: { pid: number; startedAt: string }): Promise<boolean> } {
   const pause = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+  const windowsRun = runtime.windowsRun ? withTimeout(runtime.windowsRun) : undefined;
+  const windowsSid = windowsRun ? createSidReader(windowsRun) : currentWindowsSid;
 
   async function launch(command: 'start' | 'run', port: number, bot?: string): Promise<number | undefined> {
     const distribution = classifyDistribution(join(runtime.resources, 'daemon'));
@@ -85,12 +90,19 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
     },
     async readRegistration() {
       const platform = process.platform;
-      // Windows runs the bundled daemon directly, without a registered service.
-      if (platform === 'win32') return { kind: 'absent' };
-      if (platform !== 'darwin' && platform !== 'linux') throw new Error(`桌面端不支持这个系统：${platform}。`);
-      const target = platform === 'darwin' ? serviceTarget({ platform, home: runtime.home, root: runtime.root })
-        : serviceTarget({ platform, home: runtime.home, root: runtime.root, xdgConfigHome: process.env.XDG_CONFIG_HOME });
-      const registration = await readRegistration({ target, requestedRoot: runtime.root });
+      if (platform !== 'darwin' && platform !== 'linux' && platform !== 'win32') throw new Error(`桌面端不支持这个系统：${platform}。`);
+      let target: Target;
+      if (platform === 'win32') {
+        // I4a: the standalone server's scheduled task for this data root. Without the SID there is no name to look up, and
+        // the app starts its bundled daemon, as it did before the task existed.
+        let sid: string;
+        try { sid = await windowsSid(); } catch { return { kind: 'absent' }; }
+        target = serviceTarget({ platform, sid, root: runtime.root });
+      } else {
+        target = platform === 'darwin' ? serviceTarget({ platform, home: runtime.home, root: runtime.root })
+          : serviceTarget({ platform, home: runtime.home, root: runtime.root, xdgConfigHome: process.env.XDG_CONFIG_HOME });
+      }
+      const registration = await readRegistration({ target, requestedRoot: runtime.root, ...(windowsRun ? { run: windowsRun } : {}) });
       switch (registration.kind) {
         case 'absent': return { kind: 'absent' };
         case 'ours': {

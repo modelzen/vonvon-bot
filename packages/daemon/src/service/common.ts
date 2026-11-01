@@ -22,9 +22,9 @@ import type { Linger } from './linux-session';
  */
 export type { ServiceState };
 
-/** The background service as launchd (macOS) or systemd (Linux) reports it. */
+/** The background service as launchd (macOS), systemd (Linux) or Task Scheduler (Windows) reports it. */
 export interface ServiceStatus {
-  /** `"launchd (macOS)"` or `"systemd (Linux)"`. */
+  /** `"launchd (macOS)"`, `"systemd (Linux)"` or `"Task Scheduler (Windows)"`. */
   platformName: string;
   state: ServiceState;
   /** The definition file exists. */
@@ -47,6 +47,8 @@ export interface ServiceStatus {
   exits?: ServiceExits;
   /** s17b: one line on how the previous daemon process ended (also the 上次退出 row of the web page). */
   lastExit?: string;
+  /** Windows (I4a §4.7): the scheduled task and its Status column, in the UI language (`Running`, `Ready`, `Disabled`…). */
+  task?: { name: string; status: string };
 }
 
 /** Service log files live under the app dir, identical across platforms. */

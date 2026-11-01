@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { buildOpenUrl, openGuide, runOpen, type GuideInput } from '../src/cli/commands/open';
+import { browserCommand, buildOpenUrl, openGuide, runOpen, type GuideInput } from '../src/cli/commands/open';
 
 const credential = 'ab'.repeat(32);
 const input = (fields: Partial<GuideInput> = {}): GuideInput => ({
@@ -73,4 +73,22 @@ it('reports a failed browser launch without the command line that holds the cred
   const mac = opener({ platform: 'darwin', env: {}, launch: async () => { throw Object.assign(new Error(`spawn open ENOENT ${credential}`), { code: 'ENOENT' }); } });
   await expect(mac.open()).rejects.toThrow(/^没能打开浏览器：open：ENOENT。/);
   expect(mac.launch).toHaveBeenCalledWith('open', expect.any(Array));
+});
+
+it('I4a: opens the browser on Windows with rundll32 url.dll,FileProtocolHandler, never through cmd.exe', async () => {
+  const windows = opener({ platform: 'win32', env: {} });
+  await windows.open();
+  expect(windows.launch).toHaveBeenCalledExactlyOnceWith('rundll32.exe', ['url.dll,FileProtocolHandler', `http://127.0.0.1:41234/#credential=${credential}`]);
+  const printed = opener({ platform: 'win32', env: {} });
+  await printed.open(true);
+  expect(printed.launch).not.toHaveBeenCalled();
+});
+
+it('I4a: a Windows URL with whitespace or a cmd.exe metacharacter is refused before anything starts', () => {
+  for (const url of ['http://127.0.0.1:41234/#a&b', 'http://127.0.0.1:41234/a b', 'http://127.0.0.1:41234/"x', 'http://127.0.0.1:41234/a|b', 'http://127.0.0.1:41234/a^b', 'http://127.0.0.1:41234/<x>', 'http://example.com/', 'http://127.0.0.1:41234/\nx']) {
+    expect(() => browserCommand('win32', url), url).toThrow('不合法');
+  }
+  expect(browserCommand('win32', `http://127.0.0.1:41234/#credential=${credential}`).file).toBe('rundll32.exe');
+  expect(browserCommand('darwin', 'http://127.0.0.1:1/')).toEqual({ file: 'open', args: ['http://127.0.0.1:1/'] });
+  expect(browserCommand('linux', 'http://127.0.0.1:1/')).toEqual({ file: 'xdg-open', args: ['http://127.0.0.1:1/'] });
 });
