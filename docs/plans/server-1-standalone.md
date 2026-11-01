@@ -1,5 +1,7 @@
 # I1：服务端独立安装包（`standalone` 种类和 `build-server.mjs`）
 
+> 2026-11-01 后记：owner 定 Mac、Windows 只用安装包装全部软件，不做命令行只装服务端，服务端包只发 `linux-x64`、`linux-arm64`（`docs/plans/devices.md` 第 19 节）。本片已合入，下文照当时写的留着。其中只为 Mac、Windows 写的部分成了用不上的代码：`build-server.mjs` 的 `darwin-arm64`、`darwin-x64`、`win-x64`、`win-arm64` 四个目标，`.zip`、`writeZip` 和 `unpackZip`，Windows 的 Node 和 npm 布局，Windows 的 260 字符路径预算，大小写重名检查，`server-node.json` 的四个 Node，`bundledNpmCli` 的 Windows 布局，launchd 接受 `standalone`，桌面端 `RegisteredDaemon.kind` 的 `standalone`。I3 合入后由清理片 I6 删，在那之前不发布这四个包；I2a 起 `build-server.mjs` 不带 `--targets` 只打两个 Linux 包（`PUBLISHED_TARGETS`）。
+
 ## 1. 做什么
 
 服务端第一次有自己的安装包：六个平台各一个压缩包，里面是压缩过的服务端代码、网页端、`vonvon` 入口和官方 Node（含 npm）。装好以后它认得自己是 `standalone`，能装后台服务，服务定义指向不随版本变的路径，托管安装 Codex 用包里自带的 npm。桌面端自带的 `Resources/daemon` 也一起变成压缩、无源码的样子。总设计 `docs/plans/devices.md`（下称"总设计"）7.1、7.2、第 13 节 I1 行；`stageDaemon` 对桌面端同样生效（总设计 7.1 REQ-11）。不依赖别的片；I2（安装脚本）、I3（升级）、I4a（Windows 计划任务）、I5（发布）在它上面接。
