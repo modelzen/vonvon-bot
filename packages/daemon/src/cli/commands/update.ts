@@ -16,6 +16,7 @@ import { runtimeDistribution, type Distribution } from '../../service/distributi
 import { coreUpdateStatusText, type CoreUpdateStatus, type MachineReply } from '@vonvon/protocol';
 import { paths } from '../../config/paths';
 import { readRunningPidLock } from '../../server/pid-lock';
+import { inBotSession } from '../../config/session-env';
 import { VERSION } from '../../service/current-release';
 import { checkStandaloneUpdate, REFUSAL_TEXT, startStandaloneUpdate, type ApplyDeps, type Refusal, type StandaloneCheck } from '../../service/standalone-update';
 import { badArgs, CommandError } from '../command-error';
@@ -100,24 +101,34 @@ export type UpdateCommandOptions = { check?: boolean; allowDowngrade?: boolean; 
 export type UpdateCommandDeps = {
   distribution: () => Promise<Distribution>;
   daemonRunning: () => Promise<boolean>;
+  /** Some daemon process holds the pid lock, listening or not: one draining, or one still starting. */
+  ownerAlive: () => Promise<boolean>;
   daemon: Daemon;
   readStatus: () => CoreUpdateStatus | null;
   now: () => number;
   pause: (ms: number) => Promise<void>;
   /** The standalone update run here, when no daemon does it. */
   local: (installRoot: string) => ApplyDeps;
+  env: NodeJS.ProcessEnv;
 };
 const defaultDeps = (): UpdateCommandDeps => ({
   distribution: runtimeDistribution,
   daemonRunning: async () => Boolean((await readRunningPidLock(paths.appDir).catch(() => null))?.listen),
+  ownerAlive: async () => Boolean(await readRunningPidLock(paths.appDir).catch(() => null)),
   daemon: fn => withDaemon(fn),
   readStatus: readUpdateStatus,
   now: Date.now,
   pause: ms => new Promise(resolve => setTimeout(resolve, ms)),
   local: installRoot => ({ installRoot, currentVersion: currentVersion() }),
+  env: process.env,
 });
-/** After the daemon goes away to restart, how long `update-status.json` is read for the outcome (4.6 60 + 25 s, and more). */
+/**
+ * After the old daemon is gone, how long `update-status.json` is read for the outcome (4.6 60 + 25 s, and more). The
+ * connection drops when the drain starts, and the drain waits for the Bots' work with no limit: the clock starts only
+ * once no daemon drains any more (review F6).
+ */
 export const OUTCOME_WAIT_MS = 120_000;
+const SESSION_REFUSED = 'vonvon update 不能在 Bot 的会话里用：升级会重启服务端。在网页的设置里更新，或者在自己的终端里运行。';
 
 type CheckReply = Extract<MachineReply, { type: 'coreUpdate' }> | (StandaloneCheck & { source: 'local' });
 function checkLine(reply: CheckReply): string {
@@ -146,11 +157,14 @@ function outcome(io: Io, status: CoreUpdateStatus): void {
     const back = status.rolledBack && status.previous && !status.message?.includes('已切回') ? `（已切回 ${status.previous}）` : '';
     throw new CommandError('failed', `更新没有完成：${status.message ?? '原因不明'}${back}`, { partial: { status } });
   }
-  const line = status.message === '已是最新' ? `已是最新（${status.to ?? status.from}）` : status.message?.includes('daemon start') ? status.message : `已更新到 ${status.to}`;
+  const line = status.message === '已是最新' ? `已是最新（${status.from ?? status.to}）`
+    : status.message?.includes('daemon start') || status.message?.startsWith('已经是') ? status.message : `已更新到 ${status.to}`;
   print(io, [line], { status });
 }
 
 export async function runUpdateCommand(options: UpdateCommandOptions, io: Io, deps: UpdateCommandDeps = defaultDeps()): Promise<void> {
+  // devices 8.3: a Bot's agent may not restart or downgrade the server it runs under, with or without a daemon.
+  if (inBotSession(deps.env)) throw new CommandError('refused', SESSION_REFUSED, { reason: 'not_in_session' });
   if (options.allowDowngrade && options.to === undefined) throw badArgs('--allow-downgrade 要和 --to <版本> 一起用。');
   if (options.to !== undefined && !VERSION.test(options.to)) throw badArgs(`--to 要写成 1.2.3 这样的版本号，不是「${options.to}」。`);
   const distribution = await deps.distribution();
@@ -187,7 +201,9 @@ export async function runUpdateCommand(options: UpdateCommandOptions, io: Io, de
   const wanted = { ...(options.to !== undefined ? { version: options.to } : {}), ...(options.allowDowngrade ? { allowDowngrade: true } : {}) };
   if (!running) {
     let job: ReturnType<typeof startStandaloneUpdate>;
-    try { job = startStandaloneUpdate(wanted, deps.local(installRoot!)); }
+    // A daemon that holds the lock without listening is starting, maybe after an update whose helper still waits for it.
+    const ownerAlive = await deps.ownerAlive();
+    try { job = startStandaloneUpdate(wanted, { ...deps.local(installRoot!), ownerAlive }); }
     catch (error) { if (error instanceof UpdateBusyError) throw new CommandError('conflict', error.message); throw error; }
     let settled: CoreUpdateStatus | undefined;
     void job.done.then(status => { settled = status; });
@@ -215,10 +231,11 @@ export async function runUpdateCommand(options: UpdateCommandOptions, io: Io, de
     // The daemon closes every connection when it drains to restart: the rest is in update-status.json.
     if (!accepted || !(error instanceof CommandError) || (error.kind !== 'connection' && error.kind !== 'outcome-unknown')) throw error;
   }
-  const until = deps.now() + OUTCOME_WAIT_MS;
+  let until = deps.now() + OUTCOME_WAIT_MS;
   while (deps.now() < until) {
     const status = show(deps.readStatus());
     if (status?.phase === 'done' || status?.phase === 'error') { outcome(io, status); return; }
+    if (status?.phase === 'restarting' && status.detail === 'draining' && await deps.ownerAlive()) until = deps.now() + OUTCOME_WAIT_MS;
     await deps.pause(500);
   }
   throw new CommandError('outcome-unknown', '更新的结果还没出来。稍后运行 vonvon update --check 或 vonvon daemon status 查看。');

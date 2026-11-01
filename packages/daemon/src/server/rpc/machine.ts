@@ -63,7 +63,8 @@ export async function machineRpc(service: AdminService, control: ShutdownControl
       if (distribution.kind === 'standalone') {
         if (request.allowDowngrade && !request.version) throw new RpcError('invalid_request', '降级要写明版本：--allow-downgrade --to <版本>。');
         // Answered at once: the download may take minutes, and the drain only starts after `current` is switched.
-        try { void startStandaloneUpdate(request, { ...standaloneDeps(distribution.installRoot), requestRestart: status => control.requestRestart(port, status) }).done; }
+        // `stopping`: once a restart or stop is asked for, no update starts, and one under way does not switch `current`.
+        try { void startStandaloneUpdate(request, { ...standaloneDeps(distribution.installRoot), stopping: () => control.requested, requestRestart: status => control.requestRestart(port, status) }).done; }
         catch (error) { if (error instanceof UpdateBusyError) throw new RpcError('conflict', error.message); throw error; }
         return { kind: 'read', value: { type: 'done', message: '开始更新…' } };
       }

@@ -27,7 +27,7 @@ const ROOT = join(paths.appDir, 'install');
 const standalone = { kind: 'standalone' as const, cliPath: join(ROOT, 'current', 'app', 'bin', 'vonvon.mjs'), installRoot: ROOT };
 type Machine = (payload: { type: string }) => Promise<MachineReply>;
 
-function harness(fields: { machine?: Machine; running?: boolean; distribution?: Awaited<ReturnType<UpdateCommandDeps['distribution']>>; file?: () => CoreUpdateStatus | null } = {}) {
+function harness(fields: { machine?: Machine; running?: boolean; ownerAlive?: () => boolean; env?: NodeJS.ProcessEnv; distribution?: Awaited<ReturnType<UpdateCommandDeps['distribution']>>; file?: () => CoreUpdateStatus | null } = {}) {
   let clock = 1_000_000;
   let out = '';
   const sent: Array<{ type: string }> = [];
@@ -38,11 +38,13 @@ function harness(fields: { machine?: Machine; running?: boolean; distribution?: 
   const deps: UpdateCommandDeps = {
     distribution: async () => fields.distribution ?? standalone,
     daemonRunning: async () => fields.running ?? true,
+    ownerAlive: async () => fields.ownerAlive?.() ?? false,
     daemon: fn => withDaemon(fn, connect, { local: 50, feishu: 50 }),
     readStatus: fields.file ?? (() => null),
     now: () => clock,
     pause: async ms => { clock += ms; },
     local: installRoot => ({ installRoot, currentVersion: '1.0.0', config: () => keys.config, fetch: cdn.fetch, platform: 'linux', arch: 'x64' }),
+    env: fields.env ?? {},
   };
   const io = (json = false) => ({ json, write: (text: string) => { out += text; } });
   return { deps, io, out: () => out, sent, time: () => clock };
@@ -146,6 +148,34 @@ describe('vonvon update', () => {
     const release = acquireUpdateLock();
     try { await expect(runUpdateCommand({}, io(), deps)).rejects.toEqual(failed('conflict')); }
     finally { release?.(); }
+  });
+  // review F6: the connection drops when the drain starts, and a long drain used up the 120 s
+  it('starts the 120 s only once the old daemon no longer drains', async () => {
+    let draining = true;
+    const { deps, io, time } = harness({
+      machine: async payload => { if (payload.type === 'applyCoreUpdate') return accepted; throw new ConnectionError(new Error('closed')); },
+      ownerAlive: () => draining,
+      file: () => (time() < 1_300_000 ? status('restarting', { to: '1.0.1', previous: '1.0.0', detail: 'draining' }) : (draining = false, status('restarting', { to: '1.0.1', previous: '1.0.0', detail: 'waiting' }))),
+    });
+    await expect(runUpdateCommand({}, io(), deps)).rejects.toEqual(failed('outcome-unknown'));
+    expect(time()).toBeGreaterThan(1_300_000 + 119_000);
+  });
+  // review F1: with no daemon listening, a second update overwrote the record a restart helper still waited on
+  it('says conflict while an earlier update waits for its restart, with no daemon listening', async () => {
+    const { deps, io } = harness({ running: false, ownerAlive: () => true });
+    const { writeUpdateStatus } = await import('../src/service/update');
+    writeUpdateStatus({ phase: 'restarting', ok: true, from: '1.0.0', to: '1.0.1', previous: '1.0.0', at: 1, detail: 'waiting' });
+    try { await expect(runUpdateCommand({}, io(), deps)).rejects.toEqual(failed('conflict')); }
+    finally { rmSync(join(paths.appDir, 'update-status.json'), { force: true }); }
+  });
+  // I3-SEC-3: a Bot's agent could restart or downgrade the server it runs under
+  it('refuses in a Bot session, with the daemon running or not', async () => {
+    for (const running of [true, false]) {
+      const { deps, io, sent } = harness({ running, env: { VONVON_SESSION: '1' }, machine: async () => accepted });
+      await expect(runUpdateCommand({}, io(), deps)).rejects.toEqual(expect.objectContaining({ kind: 'refused', reason: 'not_in_session' }));
+      await expect(runUpdateCommand({ to: '1.0.0', allowDowngrade: true }, io(), deps)).rejects.toEqual(expect.objectContaining({ kind: 'refused', reason: 'not_in_session' }));
+      expect(sent).toEqual([]);
+    }
   });
   it('turns the daemon refusing a second update into conflict', async () => {
     const { RpcError } = await import('@vonvon/client');

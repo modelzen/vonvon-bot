@@ -42,13 +42,18 @@ export async function isCompleteRelease(installRoot: string, version: string): P
   } catch { return false; }
 }
 
-/** Points `current` at `releases/<version>`; returns the version it pointed at before. */
-export async function switchCurrent(installRoot: string, version: string, platform: NodeJS.Platform = process.platform): Promise<{ previous: string | null }> {
+/**
+ * Points `current` at `releases/<version>`; returns the version it pointed at before. On Windows the second line of
+ * `current.txt` is the release to fall back to: `previous` when the caller knows it (an update names the release
+ * running now), else what `current` named before, unless that is `version` itself.
+ */
+export async function switchCurrent(installRoot: string, version: string, platform: NodeJS.Platform = process.platform, previous?: string): Promise<{ previous: string | null }> {
   if (!(await isCompleteRelease(installRoot, version))) throw new ReleaseIncomplete(version);
   const before = await readCurrent(installRoot, platform);
   if (platform === 'win32') {
     const file = join(installRoot, 'current.txt');
-    await writeFile(`${file}.tmp`, `${version}\n${before?.version ?? ''}\n`);
+    const fallback = previous ?? (before && before.version !== version ? before.version : before?.previous) ?? '';
+    await writeFile(`${file}.tmp`, `${version}\n${fallback}\n`);
     await rename(`${file}.tmp`, file);
   } else {
     const next = join(installRoot, 'current.next');

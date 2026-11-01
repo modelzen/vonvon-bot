@@ -11,9 +11,10 @@ vi.mock('../src/config/paths', async () => {
 });
 
 import { paths } from '../src/config/paths';
-import { switchCurrent } from '../src/service/current-release';
-import { settleUpdateAtStartup, startStandaloneUpdate, type ApplyDeps } from '../src/service/standalone-update';
-import { acquireUpdateLock, readUpdateStatus, UpdateBusyError, writeUpdateStatus, type UpdateStatus } from '../src/service/update';
+import { readCurrent, switchCurrent } from '../src/service/current-release';
+import { observeShutdown } from '../src/host/lifecycle';
+import { RESTART_PENDING_MS, settleUpdateAtStartup, startStandaloneUpdate, type ApplyDeps } from '../src/service/standalone-update';
+import { abandonOwnedUpdate, acquireUpdateLock, readUpdateStatus, UpdateBusyError, writeUpdateStatus, type UpdateStatus } from '../src/service/update';
 import { BASE, fakeCdn, manifestPayload, signManifest, testKeys } from './helpers/fake-cdn';
 import { packRelease } from './helpers/fake-release';
 
@@ -133,6 +134,81 @@ describe('startStandaloneUpdate', () => {
     const { requestRestart: _restart, ...local } = deps;
     expect(await startStandaloneUpdate({}, local).done).toMatchObject({ phase: 'done', to: '1.0.1', previous: '1.0.0', message: '已切到 1.0.1，运行 vonvon daemon start 生效。' });
   });
+  // review F1, I3-SEC-1: a second update overwrote the record the restart helper rolls back by
+  it('refuses another update while the last one waits for its restart, and lets a stale one go', async () => {
+    const { deps } = await setup();
+    const first = await startStandaloneUpdate({}, deps).done;
+    expect(first).toMatchObject({ phase: 'restarting', to: '1.0.1', previous: '1.0.0' });
+    expect(() => startStandaloneUpdate({}, { ...deps, currentVersion: '1.0.1' })).toThrow(UpdateBusyError);
+    expect(() => startStandaloneUpdate({ version: '1.0.0', allowDowngrade: true }, deps)).toThrow(UpdateBusyError);
+    expect(readUpdateStatus()).toEqual(first);
+    expect(existsSync(join(paths.appDir, 'update.lock'))).toBe(false);
+    // Long past: its helper is gone, unless a daemon still holds the pid lock (one starting).
+    writeUpdateStatus({ ...first, at: Date.now() - RESTART_PENDING_MS - 1 });
+    expect(() => startStandaloneUpdate({}, { ...deps, currentVersion: '1.0.1', ownerAlive: true })).toThrow(UpdateBusyError);
+    expect(await startStandaloneUpdate({}, { ...deps, currentVersion: '1.0.1' }).done).toMatchObject({ phase: 'done', message: '已是最新' });
+    // Taken by the helper (`waiting`), it is the helper's lock that holds updates off: with the lock free, the helper is gone.
+    writeUpdateStatus({ ...first, detail: 'waiting', at: Date.now() });
+    expect(await startStandaloneUpdate({}, { ...deps, currentVersion: '1.0.1' }).done).toMatchObject({ phase: 'done', message: '已是最新' });
+  });
+  it('starts no update once the daemon stops or restarts, and does not switch when that comes during the download', async () => {
+    const { installRoot, deps, restarts } = await setup();
+    expect(() => startStandaloneUpdate({}, { ...deps, stopping: () => true })).toThrow(UpdateBusyError);
+    let stopping = false;
+    const ended = await startStandaloneUpdate({}, { ...deps, stopping: () => stopping, onStatus: status => { if (status.detail === 'unpacking') stopping = true; } }).done;
+    expect(ended).toMatchObject({ phase: 'error', to: '1.0.1' });
+    expect(ended.message).toContain('没有切换版本');
+    expect(await readlink(join(installRoot, 'current'))).toBe('releases/1.0.0');
+    expect(restarts).toEqual([]);
+    // The download is kept: the next update switches to it without fetching it again.
+    expect(await readdir(join(installRoot, 'releases'))).toEqual(['1.0.0', '1.0.1']);
+  });
+  // review F2: a stop during the drain left `current` on the new release while the record said it was cancelled
+  it('switches current back when a stop cancels the restart', async () => {
+    const { installRoot, deps } = await setup();
+    const control = observeShutdown(false, { installRoot: async () => installRoot });
+    try {
+      await startStandaloneUpdate({}, { ...deps, requestRestart: status => { control.requestStop(); control.requestRestart(43119, status); } }).done;
+      await control.completeShutdown(async () => {
+        expect(await readlink(join(installRoot, 'current'))).toBe('releases/1.0.0');
+      });
+      expect(readUpdateStatus()).toMatchObject({ phase: 'error', to: '1.0.1', rolledBack: true, message: '重启已被停止取消，已切回 1.0.0' });
+    } finally { control.dispose(); }
+  });
+  it('only ends the record of an update that never switched current', async () => {
+    const record: UpdateStatus = { phase: 'restarting', ok: true, from: '1', to: '2', at: 4 };
+    writeUpdateStatus(record);
+    await abandonOwnedUpdate(record, 'helper_lost', async () => { throw new Error('not asked'); });
+    expect(readUpdateStatus()).toMatchObject({ phase: 'error', message: 'helper_lost' });
+  });
+  // review F3, I3-SEC-1: `previous` was whatever `current` named, which can be the target itself
+  it('records the running release as previous even when current already names the target', async () => {
+    const { installRoot, deps } = await setup();
+    await startStandaloneUpdate({}, { ...deps, requestRestart: undefined }).done;
+    rmSync(join(paths.appDir, 'update-status.json'), { force: true });
+    expect(await startStandaloneUpdate({}, deps).done).toMatchObject({ phase: 'restarting', from: '1.0.0', to: '1.0.1', previous: '1.0.0' });
+    expect(await readlink(join(installRoot, 'current'))).toBe('releases/1.0.1');
+  });
+  it('keeps the running release as the fallback in current.txt when switching to the release current.txt already names', async () => {
+    const { installRoot, deps } = await setup();
+    await rm(join(installRoot, 'current'));
+    await cp(join(installRoot, 'releases', '1.0.0'), join(installRoot, 'releases', '1.0.1'), { recursive: true });
+    await writeFile(join(installRoot, 'releases', '1.0.1', 'standalone.json'), JSON.stringify({ v: 1, version: '1.0.1' }));
+    await writeFile(join(installRoot, 'current.txt'), '1.0.1\n1.0.0\n');
+    expect(await startStandaloneUpdate({ version: '1.0.1', allowDowngrade: true }, { ...deps, platform: 'win32' }).done).toMatchObject({ phase: 'restarting', previous: '1.0.0' });
+    expect(await readCurrent(installRoot, 'win32')).toEqual({ version: '1.0.1', previous: '1.0.0' });
+  });
+  it('does not drain to go to the version already running', async () => {
+    const { deps, restarts } = await setup();
+    expect(await startStandaloneUpdate({ version: '1.0.0', allowDowngrade: true }, deps).done).toMatchObject({ phase: 'done', ok: true, message: '已经是 1.0.0，不用切换。' });
+    expect(restarts).toEqual([]);
+  });
+  // review F7, I3-SEC-2: an error the user reads carried the install root's path
+  it('names a file system error by its code, not by a path', async () => {
+    const { deps } = await setup();
+    const ended = await startStandaloneUpdate({}, { ...deps, extract: async () => { throw Object.assign(new Error(`ENOSPC: no space left, write '${paths.appDir}/x'`), { code: 'ENOSPC' }); } }).done;
+    expect(ended).toMatchObject({ phase: 'error', message: '更新失败：ENOSPC' });
+  });
 });
 
 describe('settleUpdateAtStartup', () => {
@@ -160,5 +236,15 @@ describe('settleUpdateAtStartup', () => {
     await settleUpdateAtStartup({ version: '1.0.1', installRoot, platform: 'linux' });
     expect(readUpdateStatus()).toMatchObject({ phase: 'error', message: '升级和回滚撞上了，当前运行 1.0.1' });
     expect(JSON.parse(await readFile(join(installRoot, 'releases', '1.0.1', 'standalone.json'), 'utf8'))).toMatchObject({ version: '1.0.1' });
+  });
+  // I3-SEC-1 (d): a record whose previous is the current release left releases/ with nothing to go back to
+  it('keeps a release to go back to even when the record names the current one as previous', async () => {
+    const { installRoot } = await setup();
+    await cp(join(installRoot, 'releases', '1.0.0'), join(installRoot, 'releases', '1.0.1'), { recursive: true });
+    await writeFile(join(installRoot, 'releases', '1.0.1', 'standalone.json'), JSON.stringify({ v: 1, version: '1.0.1' }));
+    await switchCurrent(installRoot, '1.0.1', 'linux');
+    writeUpdateStatus({ phase: 'done', ok: true, from: '1.0.0', to: '1.0.1', previous: '1.0.1', at: 8 });
+    await settleUpdateAtStartup({ version: '1.0.1', installRoot, platform: 'linux' });
+    expect((await readdir(join(installRoot, 'releases'))).sort()).toEqual(['1.0.0', '1.0.1']);
   });
 });

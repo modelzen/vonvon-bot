@@ -1,5 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
@@ -66,6 +66,24 @@ describe('checkStandaloneUpdate', () => {
     publish('1.0.1', 1);
     expect(await checkStandaloneUpdate(deps)).toMatchObject({ latest: '1.0.1' });
     expect(await state()).toMatchObject({ highestSeen: '1.0.1' });
+    expect(await readFile(join(installRoot, 'update-state.json.invalid'), 'utf8')).toBe('{"v":2}');
+  });
+  // review F7, I3-SEC-2: every writer shared update-state.json.tmp, and the second rename failed with ENOENT
+  it('takes checks at the same time one after another', async () => {
+    const { deps, publish, installRoot, state } = setup();
+    await mkdir(installRoot, { recursive: true });
+    publish('1.0.1', 2000);
+    const results = await Promise.allSettled(Array.from({ length: 8 }, () => checkStandaloneUpdate(deps)));
+    expect(results.map(result => result.status)).toEqual(Array(8).fill('fulfilled'));
+    expect(await state()).toMatchObject({ highestSeen: '1.0.1', lastPublishedAt: 2000 });
+    expect((await readdir(installRoot)).filter(name => name.endsWith('.tmp'))).toEqual([]);
+  });
+  it('accepts nothing when update-state.json is there but cannot be read', async () => {
+    const { deps, publish, installRoot } = setup();
+    await mkdir(join(installRoot, 'update-state.json'), { recursive: true });
+    publish('1.0.1', 2000);
+    expect(await checkStandaloneUpdate(deps)).toMatchObject({ latest: null, hasUpdate: false, refused: 'state' });
+    expect((await stat(join(installRoot, 'update-state.json'))).isDirectory()).toBe(true);
   });
 });
 

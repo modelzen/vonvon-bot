@@ -58,6 +58,8 @@ program.hook('preAction', async (_command, action) => {
   if (parent === 'memory') return;
   // in a Bot's session secrets list, set and remove only refuse (s23g): before the lease, whose socket a sandbox may forbid, and the data root
   if (parent === 'secrets' && action.name() !== 'get' && inBotSession(process.env)) return;
+  // the same for update, which refuses in a Bot's session (commands/update.ts)
+  if (action.parent === program && action.name() === 'update' && inBotSession(process.env)) return;
   if (action.name() === 'run') {
     const runControl = control = observeShutdown(Boolean(action.opts().parentControl));
     (await import('../host/crash-guard')).installCrashHandlers({ intent: () => runControl.intent ?? (runControl.requested ? 'stop' : 'running') });
