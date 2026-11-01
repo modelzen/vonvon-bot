@@ -73,10 +73,11 @@ describe('checkStandaloneUpdate', () => {
     const { deps, publish, installRoot, state } = setup();
     await mkdir(installRoot, { recursive: true });
     publish('1.0.1', 2000);
+    await writeFile(join(installRoot, 'update-state.lock'), JSON.stringify({ pid: 2 ** 30, at: Date.now(), token: 'x' })); // its daemon died
     const results = await Promise.allSettled(Array.from({ length: 8 }, () => checkStandaloneUpdate(deps)));
     expect(results.map(result => result.status)).toEqual(Array(8).fill('fulfilled'));
     expect(await state()).toMatchObject({ highestSeen: '1.0.1', lastPublishedAt: 2000 });
-    expect((await readdir(installRoot)).filter(name => name.endsWith('.tmp'))).toEqual([]);
+    expect((await readdir(installRoot)).filter(name => /\.(tmp|lock|stale)$/.test(name))).toEqual([]);
   });
   it('accepts nothing when update-state.json is there but cannot be read', async () => {
     const { deps, publish, installRoot } = setup();
@@ -84,6 +85,42 @@ describe('checkStandaloneUpdate', () => {
     publish('1.0.1', 2000);
     expect(await checkStandaloneUpdate(deps)).toMatchObject({ latest: null, hasUpdate: false, refused: 'state' });
     expect((await stat(join(installRoot, 'update-state.json'))).isDirectory()).toBe(true);
+  });
+  // review 206: two daemons (module instances) on one install root read the same old record; the older manifest won
+  it('keeps the record moving forward when two daemons check at once', async () => {
+    const { deps, installRoot, state } = setup();
+    await mkdir(installRoot, { recursive: true });
+    await writeFile(join(installRoot, 'update-state.json'), JSON.stringify({ v: 1, highestSeen: '1.0.0', lastPublishedAt: 0, lastCheckAt: 0 }));
+    const held: Array<() => void> = [];
+    let contended = false, free = false;
+    vi.doMock('node:fs/promises', async original => {
+      const fs = await original<typeof import('node:fs/promises')>();
+      const readFile = async (...args: Parameters<typeof fs.readFile>) => {
+        const data = await fs.readFile(...args);
+        if (String(args[0]).endsWith('update-state.lock')) contended = true;
+        if (String(args[0]).endsWith('update-state.json') && !free) await new Promise<void>(resolve => held.push(resolve));
+        return data;
+      };
+      return { ...fs, readFile, default: { ...fs, readFile } };
+    });
+    const daemon = async (version: string, publishedAt: number) => {
+      vi.resetModules();
+      const instance = await import('../src/service/standalone-update');
+      return instance.checkStandaloneUpdate({ ...deps, fetch: async () => new Response(signManifest(manifestPayload(version, publishedAt), keys.privateKey)) });
+    };
+    try {
+      const high = daemon('1.0.2', 2000);
+      await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 5000 });
+      const low = daemon('1.0.1', 1000);
+      await vi.waitFor(() => expect(held.length === 2 || contended).toBe(true), { timeout: 5000 });
+      held[0]?.();
+      expect(await high).toMatchObject({ latest: '1.0.2', hasUpdate: true });
+      free = true;
+      held[1]?.();
+      expect(await low).toMatchObject({ latest: null, refused: 'rollback' });
+      expect(await state()).toMatchObject({ highestSeen: '1.0.2', lastPublishedAt: 2000 });
+      expect((await readdir(installRoot)).filter(name => name.includes('.lock'))).toEqual([]);
+    } finally { free = true; held.forEach(resolve => resolve()); vi.doUnmock('node:fs/promises'); vi.resetModules(); }
   });
 });
 
@@ -106,5 +143,6 @@ describe('scheduleStandaloneChecks', () => {
     stop();
     await vi.advanceTimersByTimeAsync(48 * 3_600_000);
     expect(cdn.requests).toHaveLength(2);
+    await checkStandaloneUpdate(deps); // queued behind the daily check still writing, so it ends before the directory goes
   });
 });

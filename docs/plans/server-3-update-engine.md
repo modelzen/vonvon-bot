@@ -64,7 +64,7 @@
 - `update.lock` 不变（`paths.appDir/update.lock`，`O_EXCL`，内容是 pid）。
 
 **C4 `update-state.json`**（安装根 `<installRoot>/update-state.json`）
-- `{ "v": 1, "highestSeen": "<semver>", "lastPublishedAt": <ms>, "lastCheckAt": <ms> }`。写 `.tmp` 再 `rename`。读不出来（没有、坏 JSON、v 不对）→ 当作 `{ highestSeen: currentVersion, lastPublishedAt: 0 }` 并记事件 `update-state-unreadable`，不拒绝检查。
+- `{ "v": 1, "highestSeen": "<semver>", "lastPublishedAt": <ms>, "lastCheckAt": <ms> }`。写 `.tmp` 再 `rename`；读、比较、写回拿着同目录的 `update-state.lock`（O_EXCL），不同数据目录的 daemon 共用安装根。读不出来（没有、坏 JSON、v 不对）→ 当作 `{ highestSeen: currentVersion, lastPublishedAt: 0 }` 并记事件 `update-state-unreadable`，不拒绝检查。
 - 接受一份清单的条件：`publishedAt >= lastPublishedAt` 且 `version >= highestSeen`（相等允许：同一份清单重读、上次没升成功）。接受后更新 `highestSeen = max(highestSeen, version)`、`lastPublishedAt = max(…)`。拒绝时回 `latest: null`、`refused: 'rollback'` 并记事件 `update-manifest-refused { reason }`。
 - 和总设计不一样：§7.5 说记进 `standalone.json`。那个文件在版本目录里，每版一份、随版本目录删，升级切过去就"忘了"历史；放在安装根只有一份。见 §4.11。
 
@@ -291,3 +291,4 @@ JP-VPS 上，不碰 `accept-home2`、Bot 6、真 CDN、真 systemd：
 - **F7、I3-SEC-2 → 接受**：`update-state.json` 的临时文件名带 pid 和随机串，进程内排队读改写；只有 ENOENT 算第一次，其他读写错误回 `refused: 'state'`、不接受也不写回；坏 JSON 先另存 `.invalid`；出错文字只带错误码、不带本机路径。
 - **F8 → 接受**：standalone 下普通重启也按 `current` 起；认安装根只看本包，不为此跑 `npm root -g`。
 - **I3-SEC-3 → 接受**：Bot 会话里 `vonvon update` 一律退出码 4（`not_in_session`），不拿租约；daemon 侧拦会话令牌仍归 D4a。
+- **任务 206（Codex 审查 #632）P2 → 接受**：不同数据目录的 daemon 共用安装根，进程内排队挡不住别的进程：两边读到同一份旧记录，旧清单后写，把更高的 `highestSeen`/`lastPublishedAt` 写回低值。读、比较、写回现在拿着安装根的 `update-state.lock`（O_EXCL 建，内容是 pid、时间和随机串；持有进程死了或锁超过 10 秒就挪开接管，挪错了放回去），15 秒拿不到回 `refused: 'state'`。`standalone-update-check.test.ts` 用两个模块实例复现审查的交错（改前低版本被接受、记录退回 1.0.1），并发检查那条加了死进程留下的锁。
