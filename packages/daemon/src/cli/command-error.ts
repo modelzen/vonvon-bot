@@ -28,12 +28,15 @@ const REFUSED = new Set([
   'desktop_not_running', 'client_revoked', 'pairing_failed', 'rate_limited',
 ]);
 const CONNECTION = new Set(['protocol_mismatch', 'device_identity_changed']);
+/** What was typed is wrong: a bad request, and a folder that is not there, not a folder, outside the daemon user's home
+ * or picked too long ago (cli-3-groups). */
+const BAD_ARGS = new Set(['invalid_request', 'invalid_directory', 'outside_home', 'invalid_folder_token']);
 export function rpcErrorKind(code: string): CommandErrorKind {
   if (REFUSED.has(code)) return 'refused';
   if (CONNECTION.has(code)) return 'connection';
   if (code === 'conflict') return 'conflict';
   if (code === 'outcome_unknown') return 'outcome-unknown';
-  return code === 'invalid_request' ? 'bad-args' : 'failed';
+  return BAD_ARGS.has(code) ? 'bad-args' : 'failed';
 }
 
 /** commander's own usage errors (an unknown option, a missing argument or subcommand) are argument errors. */
