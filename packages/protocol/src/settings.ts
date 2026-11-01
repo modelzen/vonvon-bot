@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { JUDGE_PROVIDER_IDS } from './decision-providers.js';
-import { agentIdSchema, folderTokenSchema, groupIdSchema } from "./domain.js";
+import { agentIdSchema, groupIdSchema } from "./domain.js";
 
 const effort = z.enum([
   "none",
@@ -586,14 +586,6 @@ export const settingsRequestSchema = z.discriminatedUnion("type", [
       projectName: z.string().trim().min(1).max(1000),
     })
     .strict(),
-  z.object({ type: z.literal("chooseExecutable") }).strict(),
-  z
-    .object({
-      type: z.literal("saveExecutable"),
-      token: folderTokenSchema,
-      revision: z.string().min(1),
-    })
-    .strict(),
 ]);
 export type ParsedSettingsRequest = z.infer<typeof settingsRequestSchema>;
 export type SettingsRequest =
@@ -605,9 +597,7 @@ export type SettingsRequest =
       type: "sessions";
       botId: z.infer<typeof agentIdSchema>;
       projectName: string;
-    }
-  | { type: "chooseExecutable" }
-  | { type: "saveExecutable"; token: string; revision: string };
+    };
 const sectionView = z.object({
   scope,
   section: z.string(),

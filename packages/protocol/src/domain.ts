@@ -69,7 +69,6 @@ const empty = <T extends string>(type: T) =>
 export const commandSchema = z.discriminatedUnion("type", [
   z.object({type: z.literal("refresh"), tools: z.boolean().optional()}).strict(),
   z.object({type: z.literal("listPendingGroups"), agentId: agentIdSchema}).strict(),
-  z.object({type: z.literal("openEventSettings"), url: z.string().regex(/^https:\/\/open\.(?:feishu\.cn|larksuite\.com)\/app\/cli_[\w-]{1,200}\/event$/)}).strict(),
   empty("registerAgent"),
   z.object({type: z.literal("refreshAgentCredentials"), agentId: agentIdSchema}).strict(),
   empty("installCodex"),
@@ -128,12 +127,6 @@ export const commandSchema = z.discriminatedUnion("type", [
     .strict(),
   z.object({type:z.literal("deleteAgent"),agentId:agentIdSchema}).strict(),
   z.object({ type: z.literal("cancelJob"), jobId: jobIdSchema }).strict(),
-  z
-    .object({ type: z.literal("openJobAuthorization"), jobId: jobIdSchema })
-    .strict(),
-  z
-    .object({ type: z.literal("copyJobAuthorization"), jobId: jobIdSchema })
-    .strict(),
 ]);
 export type Command = z.infer<typeof commandSchema>;
 export const hostStateSchema = z.discriminatedUnion("kind", [
