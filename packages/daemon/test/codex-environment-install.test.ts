@@ -41,7 +41,8 @@ function fixture(externalVersion?: string) {
   `).bin;
   const externalDir = join(home, 'external');
   mkdirSync(externalDir);
-  const external = externalVersion ? writeNodeExecutable(externalDir, 'codex', `console.log('codex-cli ${externalVersion}')`).bin : null;
+  const externalCalls = join(home, 'external-version-calls');
+  const external = externalVersion ? writeNodeExecutable(externalDir, 'codex', `require('node:fs').appendFileSync(${JSON.stringify(externalCalls)}, 'version\\n'); console.log('codex-cli ${externalVersion}')`).bin : null;
   vi.stubEnv('CODEX_BIN', '');
   vi.stubEnv('VONVON_NPM_CLI', '');
   const context = { home, dataRoot, env: { PATH: externalDir } };
@@ -49,7 +50,7 @@ function fixture(externalVersion?: string) {
   const service = new EnvironmentService({ home, getDataRoot: () => dataRoot, nodePath: process.execPath, npmPath: npm, path: externalDir, resolveCodex: resolve });
   services.push(service);
   const pointer = join(dataRoot, 'managed-tools', 'codex', 'current.json');
-  return { service, home, npm, externalDir, dataRoot, control, trace, resolve, pointer, external };
+  return { service, home, npm, externalDir, dataRoot, control, trace, resolve, pointer, external, externalCalls };
 }
 
 it('installs latest through the real environment engine, publishes its pointer and selects the new executable', async () => {
@@ -83,6 +84,7 @@ it('keeps a verified managed fallback when a newer external Codex remains select
   expect(await f.service.run({ type: 'install', tool: 'codex' })).toMatchObject({ kind: 'applied' });
   const fallback = managedToolSelection(f.dataRoot, 'codex');
   expect(fallback).toMatchObject({ kind: 'active', version: '9.2.0' });
+  expect(readFileSync(f.externalCalls, 'utf8').trim().split('\n')).toEqual(['version']);
   expect(await f.resolve()).toBe(f.external);
   rmSync(f.external!);
   expect(await f.resolve()).toBe(fallback.kind === 'active' ? fallback.executable : null);

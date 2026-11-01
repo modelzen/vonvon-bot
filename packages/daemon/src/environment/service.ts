@@ -445,7 +445,11 @@ export class EnvironmentService {
         // Automatic discovery may prefer a newer external install. Keep the verified
         // managed release as a fallback without claiming that it replaced that CLI.
         if (!signal.aborted && !selected && tool === 'codex' && after?.ownership === 'external' && !process.env.CODEX_BIN) {
-          const probe = await this.command(after.executable, ['--version'], 5_000, undefined, signal);
+          // The shared resolver already version-probed its selection. Repeating
+          // that process here used a shorter deadline and could undo a valid install.
+          const evidence = cachedCodexVersion(after.executable);
+          const probe = typeof evidence === 'string' ? {exitCode: 0, stdout: evidence}
+            : await this.command(after.executable, ['--version'], process.platform === 'win32' ? 20_000 : 5_000, undefined, signal);
           const activeVersion = probe.exitCode === 0 ? probe.stdout.match(/^codex-cli (\d+\.\d+\.\d+(?:-[\w.-]+)?)/)?.[1] : undefined;
           selected = Boolean(activeVersion && compareCodexVersions(activeVersion, manifest.version) >= 0);
         }
