@@ -32,23 +32,17 @@ it('counts a generation per write and keeps a revoked client as a tombstone', as
   expect(reread.generation).toBe(3);
   expect(reread.list()).toEqual(registry.list());
 });
-
 it('revokes down the invitation line only when asked to', async () => {
   const registry = await createClientRegistry(home);
   const a = await registry.add(client(1));
   const b = await registry.add(client(2, a.id));
   const c = await registry.add(client(3, b.id));
-  const other = await registry.add(client(4));
-  expect(await registry.revoke(a.id)).toEqual([a.id]);
-  expect(await registry.revoke(a.id, { cascade: true })).toEqual([b.id, c.id]);
-  expect(registry.get(other.id)?.revokedAt).toBeUndefined();
-  const fresh = await createClientRegistry(await mkdtemp(join(home, 'cascade-')));
-  const x = await fresh.add(client(1));
-  const y = await fresh.add(client(2, x.id));
-  const z = await fresh.add(client(3, y.id));
-  expect(await fresh.revoke(x.id, { cascade: true })).toEqual([x.id, y.id, z.id]);
+  const x = await registry.add(client(4));
+  const y = await registry.add(client(5, x.id));
+  expect(await registry.revoke(x.id)).toEqual([x.id]);
+  expect(registry.get(y.id)?.revokedAt).toBeUndefined();
+  expect(await registry.revoke(a.id, { cascade: true })).toEqual([a.id, b.id, c.id]);
 });
-
 it('finds a revoked key and refuses to pair it again; a known key is the same client', async () => {
   const registry = await createClientRegistry(home);
   const a = await registry.add(client(1));
@@ -59,7 +53,6 @@ it('finds a revoked key and refuses to pair it again; a known key is the same cl
   expect(registry.byPublicKey(client(9).publicKey)).toBeUndefined();
   await expect(registry.add(client(1))).rejects.toMatchObject({ code: 'client_revoked' });
 });
-
 it('writes last-seen at most once a period, and on close', async () => {
   vi.useFakeTimers();
   let now = 100;
@@ -79,7 +72,6 @@ it('writes last-seen at most once a period, and on close', async () => {
   expect(registry.generation).toBe(3);
   expect(await file()).toMatchObject({ clients: [{ lastSeenAt: 500, lastAddress: '192.0.2.8:1' }] });
 });
-
 it('refuses a damaged list instead of treating it as empty', async () => {
   await writeFile(join(home, 'clients.json'), JSON.stringify({ v: 1, generation: 2, clients: [{ id: 'x' }] }));
   await expect(createClientRegistry(home)).rejects.toThrow('clients.json 损坏');

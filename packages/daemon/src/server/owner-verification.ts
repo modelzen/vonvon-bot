@@ -7,10 +7,8 @@ import { helloSchema, PROTOCOL_VERSION, serverInfoSchema } from '@vonvon/protoco
 import { getPidLockInfo, isPidLockOwnerRunning, PidLockError, type PidLockInfo } from './pid-lock';
 
 /* devices 4.5: the owner of the lock may run another protocol (old stops new, new stops old), so only the fields read here are checked. */
-const statusReplySchema = z.looseObject({
-  type: z.literal('response'), id: z.string(), method: z.literal('admin'),
-  payload: z.looseObject({ kind: z.literal('daemonStatus'), status: z.looseObject({ running: z.boolean(), pid: z.number() }) }),
-});
+const statusReplySchema = z.looseObject({ type: z.literal('response'), id: z.string(), method: z.literal('admin'),
+  payload: z.looseObject({ kind: z.literal('daemonStatus'), status: z.looseObject({ running: z.boolean(), pid: z.number() }) }) });
 const stopReplySchema = z.looseObject({ type: z.literal('response'), id: z.string(), method: z.literal('machine'), payload: z.looseObject({ type: z.literal('done') }) });
 const isEvent = (raw: unknown): boolean => !!raw && typeof raw === 'object' && 'type' in raw && raw.type === 'event';
 

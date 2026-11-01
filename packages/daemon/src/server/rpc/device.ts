@@ -1,5 +1,4 @@
-import { encodePairingLink, type DeviceReply, type DeviceRequest, type Event } from '@vonvon/protocol';
-import type { log as logger } from '../../core/logger';
+import { encodePairingLink, type DeviceReply, type DeviceRequest } from '@vonvon/protocol';
 import type { ClientRegistry } from '../../remote/clients';
 import { readRemoteConfig } from '../../remote/config';
 import { renameDevice, type DeviceIdentity } from '../../remote/device';
@@ -10,13 +9,11 @@ import type { Peer } from '../ws';
 
 /** devices 第 15 节"没开远程时 pair". */
 export const NO_REMOTE_ADDRESS = '这台设备还没允许别的设备连接。先运行 `vonvon remote enable --tailscale`（推荐）或 `vonvon remote enable <这台设备的 IP>`。';
-
 export interface DeviceDeps {
   home: string;
   /** Held here, so a rename reaches the next server info. */
   identity: { current: DeviceIdentity };
   clients: ClientRegistry; invites: InviteBook;
-  publish(event: Event): void; log: Pick<typeof logger, 'info'>;
 }
 const deviceView = ({ deviceId, name, keypair }: DeviceIdentity) => ({ id: deviceId, name, publicKey: keypair.publicKey });
 
@@ -43,18 +40,8 @@ export async function deviceRpc(deps: DeviceDeps, peer: Pick<Peer, 'principal'>,
       await deps.clients.rename(request.clientId, request.name);
       return read({ kind: 'clients', generation: deps.clients.generation, clients: deps.clients.list() });
     }
-    case 'revokeClient': {
-      const revoked = await deps.clients.revoke(request.clientId, { cascade: request.cascade ?? false });
-      // D3 closes their connections through clients.onChange.
-      for (const id of revoked) {
-        const client = deps.clients.get(id);
-        if (!client) continue;
-        const fields = { clientId: id, name: client.name, clientKind: client.clientKind, address: client.lastAddress, invitedBy: client.invitedBy };
-        deps.publish({ type: 'event', event: 'device', payload: { change: 'client-revoked', ...fields } });
-        deps.log.info('device', 'client-revoked', fields);
-      }
-      return read({ kind: 'revoked', revoked });
-    }
+    // announceRevocations tells the owner, and D3 disconnects them, through clients.onChange
+    case 'revokeClient': return read({ kind: 'revoked', revoked: await deps.clients.revoke(request.clientId, { cascade: request.cascade ?? false }) });
     case 'rename': {
       deps.identity.current = await renameDevice(deps.home, request.name);
       return read({ kind: 'device', device: deviceView(deps.identity.current) });

@@ -37,10 +37,8 @@ export const desktopChannels = {
   event: 'desktop:event',
 } as const;
 
-/**
- * The machine-page actions the shell does itself, not the daemon (devices 8.4): their shapes live here, so the protocol
- * no longer declares `repairCli` and the desktop update requests for the shell's sake.
- */
+/** The machine-page actions the shell does itself, not the daemon (devices 8.4): their shapes live here, so the protocol
+ * no longer declares `repairCli` and the desktop update requests for the shell's sake. */
 export const desktopShellRequestSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('startHost'), bot: agentIdSchema.unwrap().optional() }),
   z.object({ type: z.literal('service'), action: z.enum(['install', 'start', 'stop', 'uninstall']) }),

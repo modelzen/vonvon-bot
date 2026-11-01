@@ -45,14 +45,22 @@ export function createInviteBook({ now = Date.now }: { now?: () => number } = {}
     size() { prune(); return invites.size; },
   };
 }
-
 export class PairingError extends Error {
   constructor(readonly code: 'pairing_failed') { super('邀请无效、过期或已经用过。'); this.name = 'PairingError'; }
 }
-
 export interface PairingDeps {
   invites: InviteBook; clients: ClientRegistry; device: { readonly name: string };
   publish(event: Event): void; log: Pick<typeof logger, 'info'>;
+}
+/** Tells the owner and the log of each client a write revoked, by whatever path; D3 closes their connections beside it. */
+export function announceRevocations({ clients, publish, log }: Pick<PairingDeps, 'clients' | 'publish' | 'log'>): () => void {
+  return clients.onChange((_generation, revoked) => {
+    for (const client of revoked.flatMap(id => clients.get(id) ?? [])) {
+      const fields = { clientId: client.id, name: client.name, clientKind: client.clientKind, address: client.lastAddress, invitedBy: client.invitedBy };
+      publish({ type: 'event', event: 'device', payload: { change: 'client-revoked', ...fields } });
+      log.info('device', 'client-revoked', fields);
+    }
+  });
 }
 /** Registers the key the secure channel authenticated (D2), once the invite checks out. Neither the link nor the secret is logged. */
 export async function completePairing(deps: PairingDeps, input: { publicKey: string; request: PairRequest; address: string }): Promise<{ clientId: string; deviceName: string }> {

@@ -8,17 +8,14 @@ export interface Rule { owner: 'allow'; botSession: BotSessionRule; maintenance:
 export type Decision = { ok: true } | { ok: false; code: 'permission_denied' | 'protocol_mismatch' | 'scope_required' | 'not-dm' | 'not_in_session'; message: string };
 /** D4a adds what its checks read (a bot's groups, the Bot process for ★). */
 export type AuthzDeps = Record<string, never>;
-
 /** The maintenance kinds, and stopping: a 0.8 desktop or CLI must still stop a newer daemon (devices 4.5). */
 const MAINTENANCE = new Set<string>([...MAINTENANCE_KINDS, 'machine.stopHost']);
 const rows = (method: string, types: string): Array<[string, Rule]> => types.split(/\s+/).filter(Boolean).map(type => {
   const kind = `${method}.${type}`;
   return [kind, { owner: 'allow', botSession: 'deny', maintenance: MAINTENANCE.has(kind) }];
 });
-/**
- * devices 5.2: one row per `rpcKinds()` name, written out, so a new RPC is refused until it gets a row here
- * (test/authz.test.ts checks both ways). D1: the owner may do everything, a bot session nothing yet (D4a fills that column).
- */
+/** devices 5.2: one row per `rpcKinds()` name, written out, so a new RPC is refused until it gets a row here (test/authz.test.ts
+ * checks both ways). D1: the owner may do everything, a bot session nothing yet (D4a fills that column). */
 export const RULES: ReadonlyMap<string, Rule> = new Map([
   ...rows('snapshot', 'get'),
   ...rows('command', `refresh listPendingGroups registerAgent refreshAgentCredentials installCodex startCodexLogin restartHost

@@ -30,9 +30,7 @@ describe('Claude group read scope', () => {
       await clients.add({ name: '笔记本', publicKey: 'k'.repeat(43), clientKind: 'desktop', address: '192.0.2.5:50000', invitedBy: 'local' });
       await clients.close();
       const ownerOnly: string[] = [];
-      for (const entry of await readdir(fixture.home, { withFileTypes: true })) {
-        if (entry.isFile() && ((await stat(join(fixture.home, entry.name))).mode & 0o777) === 0o600) ownerOnly.push(entry.name);
-      }
+      for (const name of await readdir(fixture.home)) if (((await stat(join(fixture.home, name))).mode & 0o777) === 0o600) ownerOnly.push(name);
       expect(ownerOnly).toEqual(expect.arrayContaining(['local-credential', 'device.json', 'clients.json']));
       // machine-id is the device id every server info and pairing link carries: owner-only, but no secret.
       expect(ownerOnly.filter(name => name !== 'machine-id' && !(ROOT_SECRETS as readonly string[]).includes(name))).toEqual([]);

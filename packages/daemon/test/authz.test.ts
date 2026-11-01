@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { MAINTENANCE_KINDS, rpcKinds, type Request } from '@vonvon/protocol';
+import { DRAIN_KINDS, MAINTENANCE_KINDS, rpcKinds, type Request } from '@vonvon/protocol';
 import { authorize, RULES } from '../src/server/authz';
 import type { Principal } from '../src/server/principal';
 
@@ -12,8 +12,8 @@ it('has one row for every RPC kind and no row for anything else', () => {
   expect(kinds.filter(kind => !RULES.has(kind))).toEqual([]);
   expect([...RULES.keys()].filter(kind => !kinds.includes(kind))).toEqual([]);
   for (const kind of MAINTENANCE_KINDS) expect(RULES.get(kind)?.maintenance).toBe(true);
+  for (const kind of DRAIN_KINDS) expect(RULES.has(kind)).toBe(true);
 });
-
 it('lets the owner do everything, a connection of another protocol only the maintenance kinds', async () => {
   const owner = peer({ kind: 'owner', via: 'local' });
   const old = peer({ kind: 'maintenance', protocolVersion: 1, inner: 'owner:local' });

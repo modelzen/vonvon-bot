@@ -9,18 +9,13 @@ import type { Principal } from './principal';
 export interface Peer extends JobPeer {
   /** What the client said it is in its hello; every request comes after it. */
   readonly clientKind?: Hello['clientKind'];
-  /** Who the connection acts as (devices 5.1); set by the hello. */
-  readonly principal: Principal;
-  /** The hello's, not the daemon's. */
-  readonly protocolVersion: number;
-  /** What admin.negotiate recorded; empty and null until then. */
-  readonly capabilities: readonly string[];
-  readonly scope: Scope | null;
-  readonly negotiated: boolean;
+  /** Who the connection acts as (devices 5.1), set by the hello; `protocolVersion` is the hello's, not the daemon's. */
+  readonly principal: Principal; readonly protocolVersion: number;
+  /** What admin.negotiate recorded, empty and null until then; `negotiate` answers false when this connection already did. */
+  readonly capabilities: readonly string[]; readonly scope: Scope | null; readonly negotiated: boolean;
+  negotiate(capabilities: readonly string[], scope: Scope | null): boolean;
   /** The remote end, `ip:port` (`[ip]:port` for IPv6). */
   readonly address: string;
-  /** admin.negotiate: false when this connection already negotiated. */
-  negotiate(capabilities: readonly string[], scope: Scope | null): boolean;
   send(value: Response | ErrorEnvelope): void;
 }
 export const formatAddress = (host: string | undefined, port: number | undefined): string =>
