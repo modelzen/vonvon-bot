@@ -30,6 +30,10 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['schedule', 'list', '--all'], 3], [['schedule', 'add', '--group', 'g', '--name', 'n', '--every', '30m', 'x'], 3], [['schedule', 'edit', 'st_x', '--group', 'g', '--revision', 'r', '--name', 'n'], 3],
   [['schedule', 'delete', 'st_x', '--group', 'g'], 3], [['schedule', 'pause', 'st_x', '--group', 'g'], 3], [['schedule', 'resume', 'st_x', '--group', 'g'], 3],
   [['schedule', 'run', 'st_x', '--group', 'g'], 3], [['schedule', 'runs', 'st_x', '--group', 'g'], 3],
+  [['session', 'list', '--group', 'g'], 3], [['session', 'context', '--group', 'g'], 3], [['session', 'clear', '--group', 'g'], 3], [['session', 'compact', '--group', 'g'], 3],
+  [['session', 'resume', 'x', '--group', 'g'], 3], [['session', 'stop', '--group', 'g'], 3], [['session', 'end-goal', '--group', 'g'], 3],
+  [['session', 'stop-subagent', 'x', '--group', 'g'], 3], [['session', 'reminder', '--on', '--group', 'g'], 3],
+  [['usage', 'show'], 3], [['usage', 'share', '--group', 'g'], 3], [['usage', 'judge'], 3],
   [['feishu', 'groups'], 3], [['feishu', 'members', 'oc_x'], 3],
   [['secrets', 'list'], 0], [['secrets', 'set', 'typesafe-api-key'], 2], [['secrets', 'remove', 'typesafe-api-key'], 0],
   // argument errors from commander itself

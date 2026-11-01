@@ -30,18 +30,6 @@ export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
 
   'library.previous': { reason: 'unused', note: 'no client sends it' },
 
-  'collaboration.history': pending('C4', 'session list'),
-  'collaboration.context': pending('C4', 'session context'),
-  'collaboration.clear': pending('C4', 'session clear'),
-  'collaboration.compact': pending('C4', 'session compact'),
-  'collaboration.resume': pending('C4', 'session resume'),
-  'collaboration.stop': pending('C4', 'session stop'),
-  'collaboration.stopSubagent': pending('C4', 'session stop-subagent'),
-  'collaboration.endGoal': pending('C4', 'session end-goal'),
-  'collaboration.reminder': pending('C4', 'session reminder'),
-  'collaboration.usage': pending('C4', 'usage show'),
-  'collaboration.shareUsage': pending('C4', 'usage share'),
-  'admin.judgeUsage': pending('C4', 'usage judge'),
   'collaboration.startGoal': { reason: 'unused', note: 'goals start in the group chat; no client sends it' },
   'collaboration.openGroup': dead('D1'),
 
