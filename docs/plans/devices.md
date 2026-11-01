@@ -1,6 +1,6 @@
-# 设备：服务端补齐、安装脚本、远程连接、多设备客户端（总设计，第 3 版：owner 2026-10-31 确认后）
+# 设备：服务端补齐、安装脚本、远程连接、多设备客户端（总设计，第 3 版：owner 2026-10-31 确认后；2026-11-01 只在 Linux 上只装服务端）
 
-owner 2026-10-31 定（`requirements.md` 五轮，后面的轮次覆盖前面的）：四块一起设计、一波实现，开发分支都合到一个集成分支，最后统一跑一次 CI，三平台同一个版本 0.9.0 发布（`AGENTS.md`"2026-10-30 起"）。产品行为以 `requirements.md` 为准，本文只写做法、共享契约和切片。第 2 版第 14 节"待 owner 确认"的各条，owner 2026-10-31 都答了，答案已写进正文，第 14 节改成"owner 已定"表，没有还开着的产品选择；这一轮改了什么见第 18 节。第 1 版经三位审查者（安全、可行性、需求）审过，改了什么见第 17 节；`devices.draft1.md` 是第 1 版原文。
+owner 2026-10-31 定（`requirements.md` 五轮，后面的轮次覆盖前面的）：四块一起设计、一波实现，开发分支都合到一个集成分支，最后统一跑一次 CI，三平台同一个版本 0.9.0 发布（`AGENTS.md`"2026-10-30 起"）。产品行为以 `requirements.md` 为准，本文只写做法、共享契约和切片。第 2 版第 14 节"待 owner 确认"的各条，owner 2026-10-31 都答了，答案已写进正文，第 14 节改成"owner 已定"表，没有还开着的产品选择；这一轮改了什么见第 18 节。第 1 版经三位审查者（安全、可行性、需求）审过，改了什么见第 17 节；`devices.draft1.md` 是第 1 版原文。2026-11-01 owner 又定：命令行只装服务端只在 Linux 上做，Mac、Windows 只用安装包装全部软件；I2b、I4a、I4b 取消，改了什么见第 19 节，和前面各节、第 17、18 节的记录冲突时以第 19 节为准。
 
 调研基线：`origin/dev` 32f0d521。路径前缀：`P/` = `packages/protocol/src/`，`D/` = `packages/daemon/src/`，`CL/` = `packages/client/src/`，`DT/` = `packages/desktop/src/`，`U/` = `packages/ui/src/`。行号按 32f0d521，漂了按函数名找。"未核实"是没在代码或实机上确认过的判断。正文引用的调研笔记（远程就绪、安装升级、Paseo、Orca/Tailscale/中继、服务端和命令行清单、功能对照表 156 行及其复核）是英文原文，没进仓库；和本文冲突时以本文为准。
 
@@ -8,13 +8,13 @@ owner 2026-10-31 定（`requirements.md` 五轮，后面的轮次覆盖前面的
 
 **做：**
 1. 服务端和命令行补齐：页面上客户端能做的，服务端都支持，`vonvon` 命令行都能做；每条命令不交互也能跑完，`--json`、退出码、原因齐全（第 8 节）。
-2. 安装脚本：`curl -fsSL https://dl.vonvon.cc/bot/server/install.sh | sh`（Linux、macOS）和 `irm https://dl.vonvon.cc/bot/server/install.ps1 | iex`（Windows），装服务端 + `vonvon` 命令 + 开机自启的后台服务，自带 Node，三平台一个发行物（第 7 节）。
+2. 安装脚本（只在 Linux）：`curl -fsSL https://dl.vonvon.cc/bot/server/install.sh | sh`，装服务端 + `vonvon` 命令 + 开机自启的后台服务，自带 Node（第 7 节）。Mac、Windows 不做命令行只装服务端：用户装桌面端安装包，里面自带服务端（owner 2026-11-01："Mac 和 Windows 上就直接通过安装包安装全部软件就好了，没有这种场景只安装 Server 端，也不用通过命令行安装"）。
 3. 远程连接：一台设备的服务端能被别的设备上的桌面端连上管理，配对链接、每台客户端一份可撤销的授权、加密通道（第 4、5 节）。
 4. 多设备客户端：桌面端默认连本机，再加别的设备，切换着看（第 6 节）。
 5. 升级：客户端里看到服务端版本、直接升级它，桌面端自带的服务端也行（那台的桌面端要开着，6.5）；`vonvon update`；版本对不上连接时提示（第 4.6、7.5 节）。
 6. 三个内置 Skill（飞书、设置、任务）改成配合新命令行和范围参数（第 9 节）；官网一篇"远程连接 / 多设备"说明（第 10 节）。
 
-**不做（本期）：** vonvon 账号；vonvon 运营的中继（relay）；浏览器远程连接（无状态、没账号不知道连哪台，第三轮）；Bot 搬家（第二轮）；命令行远程控制别的设备（`--host`，第三轮）；按同事分权限（第二轮：能连上的都当主人本人）；新增 Skill；Linux 桌面端；设置回执卡和［撤销］（`product.md` 3.7 写了、代码没有，owner 2026-10-31 同意推迟）；Windows 桌面端注册 `vonvon` 和登录自启。账号和中继要留好位置，以后加进来只是多一种连接方式（4.8）。
+**不做（本期）：** vonvon 账号；vonvon 运营的中继（relay）；浏览器远程连接（无状态、没账号不知道连哪台，第三轮）；Bot 搬家（第二轮）；命令行远程控制别的设备（`--host`，第三轮）；按同事分权限（第二轮：能连上的都当主人本人）；新增 Skill；Linux 桌面端；设置回执卡和［撤销］（`product.md` 3.7 写了、代码没有，owner 2026-10-31 同意推迟）；Windows 桌面端注册 `vonvon` 和登录自启；Mac、Windows 上用命令行只装服务端，以及为它设计的 Windows 计划任务和监督进程（owner 2026-11-01）。账号和中继要留好位置，以后加进来只是多一种连接方式（4.8）。
 
 **审查后砍掉的（需求没要，第 17 节 SCOPE-1）：** 配对链接的二维码（本期客户端只有桌面端，粘贴就够）；对非当前设备的后台"关注点"连接（owner 选的是一次看一台）；扫码任务的"接管"（`force`、`attachJob`）；`remote.hostnames`（`.ts.net` 后缀，没有入口能配）；和设备无关的两处 UI 修复（行 E、`MigrationBanner` 文案）另开小 PR，不进这一批。
 
@@ -22,8 +22,8 @@ owner 2026-10-31 定（`requirements.md` 五轮，后面的轮次覆盖前面的
 
 | 事 | 定法 | 出处 |
 |---|---|---|
-| 服务端在哪 | Mac、Windows、Linux 上都有服务端，每台都叫"设备"，不叫"服务器" | 第四轮 |
-| 装什么 | 脚本只装服务端 + 命令行 + 后台服务；桌面端装了就默认连本机服务端，没有"只当客户端"的电脑 | 目标、第四轮 |
+| 服务端在哪 | Mac、Windows、Linux 上都有服务端，每台都叫"设备"，不叫"服务器"。Mac、Windows 的服务端是桌面端自带的，Linux 的是脚本装的（2026-11-01） | 第四轮、owner 2026-11-01 |
+| 装什么 | 脚本只在 Linux 上，只装服务端 + 命令行 + 后台服务；Mac、Windows 只用安装包装全部软件（桌面端自带服务端），没有只装服务端的场景，也不用命令行装；桌面端装了就默认连本机服务端，没有"只当客户端"的电脑 | 目标、第四轮、owner 2026-11-01 |
 | 谁来管 | 别的设备上的桌面端连过来管；不是 SSH，不是远程执行命令 | 目标、第三轮 |
 | 网络 | 文案建议 Tailscale 等安全网络，不默认直连、不暗示暴露端口，不强制 Tailscale；有 Tailscale 就识别、给提示 | 第三、四轮 |
 | 第一次连接 | Orca 式连接链接，每台客户端一条，可单独撤销；装完不打印链接，靠官网一篇说明 | 第三、四轮 |
@@ -37,15 +37,15 @@ owner 2026-10-31 定（`requirements.md` 五轮，后面的轮次覆盖前面的
 | 3.7 照旧 | 设置 skill 只装私聊；Bot 记忆只收主人/管理员亲手打的话；谁触发的这一轮由 daemon 核对——经命令行也一样（5.3）。3.7 写的设置回执卡和［撤销］今天没做（只有记忆能撤销），**推迟，不进这一批**；这一批 bot 在回复里说清改前 → 改后（第 9 节） | 命令行、设计后 owner 回答 |
 | 完全访问的群 | 默认不变（bot 自己建的群是完全访问）；凡是给群选完全访问的地方加一句警示（第 15 节），残留风险照实写（5.3、第 16 节） | 设计后 owner 回答 |
 | 升级 | 任何连着的客户端都能升级服务端；命令行也能；默认不自动升级；升级前等现有 drain。**桌面端自带的服务端（bundled）也能远程升级**：daemon 请那台的桌面端外壳跑它自己的更新，桌面端没开就明说要开着（6.5、7.5、U4） | 升级、设计后 owner 回答 |
-| 版本号 | macOS、Windows 和服务端包同一个版本 0.9.0 | 设计后 owner 回答 |
-| Mac/Windows 当服务端 | 要有用户登录着（可以锁屏），本期接受；文档写明（7.4、第 10 节） | 设计后 owner 回答 |
+| 版本号 | macOS、Windows 安装包和服务端包（Linux）同一个版本 0.9.0 | 设计后 owner 回答 |
+| Mac/Windows 当服务端 | 要有用户登录着（可以锁屏），本期接受；文档写明（7.4、第 10 节）。Mac 靠桌面端的登录项（LaunchAgent，今天就有）；Windows 桌面端这一批不做登录自启，Vonvon Bot 开着时才在线 | 设计后 owner 回答、owner 2026-11-01 |
 | 端口 | 远程监听默认 7767（Paseo 默认 6767，Orca 移动端直连默认 6768，vonvon 本机端口随机，不冲突）；撞了 `vonvon remote port <n>` 改 | 设计后 owner 回答 |
 | 版本对不上 | 连接时提示 | 升级 |
-| 安装包 | 和 Mac/Windows 安装包同一个 CDN；自带 Node；不发源码（压缩混淆、无 source map、无 TS、无 .d.ts）；三平台一起换，桌面端自带的服务端也一样 | 安装与共存 |
-| 共存 | 脚本先装、再装桌面端：桌面端只连它，退出/卸载不停、不动它，登录项开关不覆盖，不改写它的 `vonvon`；桌面端先装、再跑脚本：脚本说已装过、可以直接用，跳过（装了桌面端但没在跑也算） | 安装与共存、第五轮 |
+| 安装包 | 服务端包只有 `linux-x64`、`linux-arm64`（glibc），和 Mac/Windows 安装包同一个 CDN；自带 Node；不发源码（压缩混淆、无 source map、无 TS、无 .d.ts）；三平台一起换，桌面端自带的服务端也一样 | 安装与共存、owner 2026-11-01 |
+| 共存 | 不再有：Linux 没有桌面端，Mac、Windows 没有脚本装的服务端（owner 2026-11-01）。Linux 上脚本照旧先查"已装过"（daemon 在跑、服务已注册、装过服务端），命中就跳过；在 macOS 上脚本只打印去下载桌面端安装包的话、退出非零，什么都不动。原来"脚本先装、再装桌面端"那一套作废 | 安装与共存、第五轮、owner 2026-11-01 |
 | Provider | 服务器上的 Codex / Claude 用户自己装、自己配；托管安装远程也能用（装在那台设备上）；选目录选的是那台设备的目录 | 第二轮 |
 | 不说"登录" | 文案按"在 <设备> 上把 Codex 配置好（账号或自定义 API 都行）"；"能用"的判断和现有检查一致 | 第五轮 |
-| 验收资源 | JP-VPS 当 Linux 服务端；Mac mini 当远程客户端；Windows 机器的任务 Claude 写好、owner 转发 | 验收与资源 |
+| 验收资源 | JP-VPS 当 Linux 服务端；Mac mini 当远程客户端；Windows 机器的任务 Claude 写好、owner 转发（2026-11-01 起只剩 Windows 桌面端当设备、被远程升级的验收） | 验收与资源 |
 | 说明文档 | 官网 vonvon-site 一篇"远程连接 / 多设备" | 第四、五轮 |
 
 ## 3. 架构
@@ -151,7 +151,7 @@ owner 2026-10-31 定（`requirements.md` 五轮，后面的轮次覆盖前面的
 - **服务端按 hello 的 `protocolVersion` 选 serverInfo 形状**：v1 → 今天的三个字段；≥2 → 加 `deviceName`、`platform`、`capabilities: string[]`、`principal`。客户端一律**非严格**解析 serverInfo，枚举按开放字符串。
 - **客户端能力声明和范围**放在握手后的第一条请求 `admin.negotiate { capabilities: string[], scope?: Scope }`（新 kind；bot-session 主体在它之前只能发 `admin.daemonStatus`，别的请求回 `scope_required`）。
 - **版本不再要求相等**：`PROTOCOL_VERSION = 2`。服务端回 serverInfo 后：版本相同 → 正常；不同 → 连接进入**维护子集**，只接受 `admin.daemonStatus`、`machine.checkCoreUpdate`、`machine.applyCoreUpdate`、`machine.coreUpdateStatus`、`command.restartHost`（第 1 版写成 `machine.restartHost`，协议里它在 `command`，`P/domain.ts:77`），这几个的请求和回复形状从 v2 起冻结：**回复里的枚举客户端按开放字符串解析**（strict 对象 + 封闭 enum 下"只加可选字段"不成立，PROTO-1 第 3 点），`daemonStatus` 加 `startedAt`（4.7、6.4 要比较它，今天 schema 里没有）。别的请求回 `protocol_mismatch { serverProtocol, clientProtocol, serverVersion, clientVersion }`。维护子集的连接不推 `snapshot` 事件。
-- **`owner-verification` 的 verify 和 stop 不再要求版本相等**：宽松解析 serverInfo，`daemonStatus` 只取 `pid`，然后 `stopHost`——新桌面端和 CLI 能停掉旧 daemon，旧的也能停新的。`daemon-manager.ts:70-72`、`daemon-dependencies.ts:79-82` 的硬检查改成：本机 daemon 是 `standalone` 且协议不同 → 不报致命错误，按维护子集连上，界面显示 4.6 的升级条（REQ-10）；本机是 `bundled` 且协议不同 → 照今天走启动修复（换成自己带的）。
+- **`owner-verification` 的 verify 和 stop 不再要求版本相等**：宽松解析 serverInfo，`daemonStatus` 只取 `pid`，然后 `stopHost`——新桌面端和 CLI 能停掉旧 daemon，旧的也能停新的。`daemon-manager.ts:70-72`、`daemon-dependencies.ts:79-82` 的硬检查改成：本机是 `bundled` 且协议不同 → 照今天走启动修复（换成自己带的）。原来还有一条"本机 daemon 是 `standalone` 且协议不同 → 不报致命错误，按维护子集连上，显示升级条"（REQ-10），2026-11-01 起不做：桌面端只在 Mac、Windows 上，那里没有 `standalone`（第 19 节）。
 - 对面是今天的 v1 服务端（serverInfo 没有 `capabilities`，`protocolVersion: 1`）：客户端显示"那台设备的 Vonvon 太旧（x.y.z），要在它上面升级一次"，不提供按钮。
 - `capabilities` 是功能开关的唯一来源，客户端不按版本号猜。
 - 回归测试（D1）：0.8 的 bundled daemon 在跑时起 0.9 桌面端，能停掉旧的并换上新的；0.9 CLI 对 0.8 daemon 的 `daemon stop` 成功。
@@ -261,7 +261,7 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 | 选目录（建群、换目录、工作区） | 桌面端走系统原生选择器（`U/directory-picker.tsx:107-111`，`shell.chooseDirectoryPaths`），网页端走 daemon 侧目录浏览器 | daemon 侧目录浏览器，标题写"<设备> 上的文件夹"；`DT/main.ts:621-627` 的原生目录对话框和 `chooseExecutablePath` 在远程模式不暴露；手动输入路径要认 Windows 路径（今天只认 `/` 开头，`directory-picker.tsx:129`）；家目录限制（`directory-browser.ts:13-16`）放开到该用户能读的任何目录，本机和远程一样（owner 2026-10-31 确认：服务器上代码常在 `/srv`、`/data`；daemon 本来就以该用户运行，限制只防误点），U2 改 |
 | 托管安装 Codex / Claude SDK / lark-cli | 装本机 | RPC 本来就作用在对面，文案加"在 <设备> 上安装" |
 | Provider 没配好 | "把 Codex 配置好" | "在 <设备> 上把 <Codex / Claude> 配置好（账号或自定义 API 都行），然后点「重新检测」"，检查逻辑不变（`environment.scan`、`backendLogin{refresh}`）。第 1 版末尾那句"Vonvon 不代你登录"删掉（REQ-5）。**现有带"登录"的文案一起改**，列在 U2：`JoinGroupDialog.tsx:150,214`、`settings/useProviderDiscovery.ts:49,56`、`settings/DecisionFields.tsx:41`、`settings/GroupDesignSettings.tsx:113,137,183`、`management/EnvironmentPanel.tsx:143,298,310,314,364`、`management/environmentPresentation.ts:30`、`setup/ProviderSetup.tsx:152,175`、`setup/useClaudeLoginCheck.ts:21`、`management/UsagePanel.tsx:69`、`DiagnosticsPanel.tsx:246`、`search.ts:69,70,98`——统一成"配置好 / 可用 / 检查配置"，远程时带设备名；判断逻辑不动 |
-| 登录项开关 `setLoginItem`（`DT/login-item.ts`） | 本机 launchd | 隐藏；改显示对面 `machine.status.service`，macOS 对面可用 `machine.service install/uninstall`（daemon 里已有，`D/host/service-action.ts`），Linux/Windows 显示"在那台设备的终端运行 `vonvon service install`" |
+| 登录项开关 `setLoginItem`（`DT/login-item.ts`） | 本机 launchd | 隐藏；改显示对面 `machine.status.service`，macOS 对面可用 `machine.service install/uninstall`（daemon 里已有，`D/host/service-action.ts`），Linux 显示"在那台设备的终端运行 `vonvon service install`"，Windows 显示"这一批 Windows 不做登录自启，那台电脑上的 Vonvon Bot 开着时才在线" |
 | 启动 daemon（`startHost`）、服务启动（`service start`） | 本机，**照旧可用**（这两个 kind 不是死代码，见 8.4） | 隐藏：连不上的设备在列表里就是"连不上"，没有能按的 |
 | 停止 daemon（`machine.stopHost`） | 照旧 | 保留但确认框写"停止后只能在 <设备> 上重新启动；要重启请用「重启」"；`restartHost` 放在前面（owner 2026-10-31 确认） |
 | 修复 `vonvon` 命令、PATH（`repairCli`） | 本机 | 隐藏；`DT/bridge.ts:270-271` 用本机 CLI 状态覆盖 `machine.status.cli` 的行为只在本机做 |
@@ -269,7 +269,7 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 | 服务端更新（`UpdatePanel`） | 7.5 | 7.5，标题"<设备> 的服务端"；对面是 `bundled` 时按钮写"更新 <设备> 上的 Vonvon Bot"，走 7.5 末尾的桌面端外壳路径（U4） |
 | 在 Finder 里显示 / 打开文件夹 / 打开本机路径 | 有 | 隐藏（路径在对面） |
 | 打开飞书链接、浏览器链接（`openExternal`） | 有 | 有（在客户端打开是对的） |
-| 退出桌面端 | 停本机 daemon（`DT/quit-daemon.ts`，且 7.4 改成只停自己那种） | 不碰对面 |
+| 退出桌面端 | 停本机 daemon（`DT/quit-daemon.ts`，7.4：另外注册成后台服务、不是桌面端自带的不停） | 不碰对面 |
 | 重启 / 停止后的跟踪 | 等本机 pid 锁（`DT/main.ts:370-463`） | 看 socket 断开，重连后比较 `serverInfo` 和 `daemonStatus.pid/startedAt` |
 
 ### 6.5 升级按钮今天是死的
@@ -281,63 +281,62 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 ### 7.1 发行物：`standalone`
 
 - 新发行种类 `standalone`（`Distribution.kind` 在 `D/service/distribution.ts:7`、`P/machine.ts:45` **和 `P/admin.ts:88` 的 `daemonStatus.distribution`**（PROTO-2，第 1 版漏了这处，漏了的话 standalone 上每次连接都解析失败）三处加；客户端按开放字符串解析）。识别靠安装根里的 `standalone.json`（`{ v: 1, version, installRoot }`），**先于** `.git` 祖先检查（今天 development 优先，`distribution.ts:27-33,49`，一个 dotfiles git 仓库下的家目录会误判），不依赖 `npm root -g`。
-- 内容（PKG-1 补齐）：`app/{package.json, bin/vonvon.mjs, dist/cli.js, ui/dist/, node_modules/}`——`package.json` 和 `bin/vonvon.mjs` 是 `classifyDistribution`、版本号（`core/version.ts:14`）和 `vonvon hook`（只在 `bin/vonvon.mjs:7-19` 处理）要的；`ui/dist` 是 `vonvon open` 要的（`server/web-ui.ts:7-10,33-37`，没有就 503，而 `open` 是只装服务端的 Mac、Windows 上本机唯一的界面）；`node/`（官方 Node 24 LTS 二进制，含 npm）；`LICENSE`、`NOTICE`、paseo 的声明。`dist/cli.js` 用 esbuild `minify: true`，把 `@vonvon/client`、`@vonvon/protocol` 一起打进去，`packages: 'external'` 只留 node_modules 里的第三方；不带 source map、`src/`、`test/`、`.d.ts`（`scripts/stage-daemon.mjs:147-158` 今天 `minify` 关着、client/protocol 以 tsc 输出外置）。**`stageDaemon` 的这些改动对桌面端同样生效**（REQ-11：需求"三个平台一起换"包括桌面端自带的 `Resources/daemon`，`packages/desktop/build.mjs:89` 调的就是同一个 `stageDaemon`）；"不动"只是说发行种类还是 `bundled`。
-- **依赖布局跟目标平台走**（PKG-2）：`build-server.mjs` 给 win-* 用 `hoist`、其余用 `compact`（今天按构建机平台选，`build.mjs:93`；`compact` 会建 symlink，Windows 的 `Expand-Archive` 解不出）；`build-manifest` 检查里加"包内没有 symlink"和"最长相对路径不超过预算"（按 `%LOCALAPPDATA%\VonvonBot\server\releases\<v>.part\app\node_modules\…` 推算，PS 5.1 的 260 字符限制）。
-- 六个包：`linux-x64`、`linux-arm64`（glibc；musl/Alpine 本期不支持，脚本明说，owner 2026-10-31 确认）、`darwin-arm64`、`darwin-x64`、`win-x64`、`win-arm64`，`.tar.gz`（Windows `.zip`）。
-- 三个平台的桌面端和服务端包**同一个版本号**，这一批是 **0.9.0**（owner 2026-10-31 定；协议升到 2、三平台首次有服务端包）。`scripts/product-version.mjs` 已同步 daemon、desktop，I5 让它也管服务端包。
+- 内容（PKG-1 补齐）：`app/{package.json, bin/vonvon.mjs, dist/cli.js, ui/dist/, node_modules/}`——`package.json` 和 `bin/vonvon.mjs` 是 `classifyDistribution`、版本号（`core/version.ts:14`）和 `vonvon hook`（只在 `bin/vonvon.mjs:7-19` 处理）要的；`ui/dist` 是 `vonvon open` 要的（`server/web-ui.ts:7-10,33-37`，没有就 503，而 `open` 是 Linux 服务端上本机唯一的界面）；`node/`（官方 Node 24 LTS 二进制，含 npm）；`LICENSE`、`NOTICE`、paseo 的声明。`dist/cli.js` 用 esbuild `minify: true`，把 `@vonvon/client`、`@vonvon/protocol` 一起打进去，`packages: 'external'` 只留 node_modules 里的第三方；不带 source map、`src/`、`test/`、`.d.ts`（`scripts/stage-daemon.mjs:147-158` 今天 `minify` 关着、client/protocol 以 tsc 输出外置）。**`stageDaemon` 的这些改动对桌面端同样生效**（REQ-11：需求"三个平台一起换"包括桌面端自带的 `Resources/daemon`，`packages/desktop/build.mjs:89` 调的就是同一个 `stageDaemon`）；"不动"只是说发行种类还是 `bundled`。
+- **依赖布局**（PKG-2）：原来写 win-* 用 `hoist`、其余用 `compact`，I1 实际六个包都用 `hoist`（I1 计划 4.7）；`build-manifest` 检查里有"包内没有 symlink"。原来的"最长相对路径不超过预算"（按 `%LOCALAPPDATA%\VonvonBot\server\releases\<v>.part\app\node_modules\…` 推算，PS 5.1 的 260 字符限制）是给 Windows 包的，2026-11-01 起用不上。
+- 两个包：`linux-x64`、`linux-arm64`（glibc；musl/Alpine 本期不支持，脚本明说，owner 2026-10-31 确认），`.tar.gz`。原来还有 `darwin-arm64`、`darwin-x64`、`win-x64`、`win-arm64`（Windows 用 `.zip`），owner 2026-11-01 定 Mac、Windows 只用安装包装全部软件，这四个不发。I1 已合入的代码还会打六个包：`scripts/build-server.mjs` 的 `TARGETS`、`scripts/server-node.json` 的四个 Node、`unpackZip`/`writeZip` 和 `.zip`、Windows 的 Node 和 npm 布局、260 字符预算、大小写重名检查，`bundledNpmCli` 的 Windows 布局，launchd 接受 `standalone`，桌面端 `RegisteredDaemon.kind` 的 `standalone`。这些是用不上的代码，I3 合入后由清理片 I6 删（第 13、19 节）；在那之前不当功能写进文档，也不发布。
+- macOS、Windows 桌面端和 Linux 服务端包**同一个版本号**，这一批是 **0.9.0**（owner 2026-10-31 定；协议升到 2、Linux 首次有服务端包）。`scripts/product-version.mjs` 已同步 daemon、desktop，I5 让它也管服务端包。
 
 ### 7.2 安装布局：稳定的真实路径
 
-| | Linux / macOS | Windows |
-|---|---|---|
-| 安装根 | `~/.local/share/vonvon-bot/server/` | `%LOCALAPPDATA%\VonvonBot\server\` |
-| 版本目录 | `releases/<version>/{app,node,standalone.json}` | 同 |
-| 当前 | `current` → 符号链接到 `releases/<version>`（先建 `current.next` 再 `rename` 覆盖，原子） | **`current.txt` 指针文件**（内容是版本号；写 `current.txt.tmp` 再 `MoveFileEx` 替换，原子）。不用联接：联接"删旧建新"两步中间断掉 `current` 就没了，而自愈代码也在 `current` 里（SEC-10、WIN-1） |
-| 启动器 | `bin/vonvon`（shell 脚本，exec `current/node/bin/node current/app/bin/vonvon.mjs "$@"`，带标记 `# Vonvon Bot server CLI v1`） | `bin\vonvon.cmd` 和 `bin\vonvon-server.cmd`：读 `current.txt`，`releases\<v>\` 缺失或不完整就退回 `standalone.json` 里记的上一版，再 exec `releases\<v>\node\node.exe releases\<v>\app\bin\vonvon.mjs …`。服务定义和命令都指向启动器，不指向版本目录 |
-| PATH | 和桌面端今天一样往 `.zshrc/.zprofile/.bashrc/bash profile` 加**完全相同的** `# >>> Vonvon Bot CLI >>>` 块（`DT/cli-registration.ts:17-34`，COEX-2：免得两边各写一块）；非交互 shell 下只提示 | `HKCU\Environment\Path` 追加 + 广播 `WM_SETTINGCHANGE`（`irm \| iex` 当前窗口要重开才生效，脚本说明） |
-| 数据 | `~/.vonvon-bot`（默认，脚本不读 `VONVON_HOME`，因为 Finder 开的 app 不继承它，`install-update-release.md` §4） | `%USERPROFILE%\.vonvon-bot` |
+| | Linux |
+|---|---|
+| 安装根 | `~/.local/share/vonvon-bot/server/` |
+| 版本目录 | `releases/<version>/{app,node,standalone.json}` |
+| 当前 | `current` → 符号链接到 `releases/<version>`（先建 `current.next` 再 `rename` 覆盖，原子） |
+| 启动器 | `bin/vonvon`（shell 脚本，exec `current/node/bin/node current/app/bin/vonvon.mjs "$@"`，带标记 `# Vonvon Bot server CLI v1`） |
+| PATH | 往 `.zshrc/.zprofile/.bashrc/bash profile` 加和桌面端今天**完全相同的** `# >>> Vonvon Bot CLI >>>` 块（`DT/cli-registration.ts:17-34`，文本两边共用）；非交互 shell 下只提示 |
+| 数据 | `~/.vonvon-bot`（默认，脚本不读 `VONVON_HOME`） |
 
-命令和服务定义都 exec `app/bin/vonvon.mjs` 而不是 `app/dist/cli.js`（PKG-1：`hook` 在 `.mjs` 里处理，跳过它旧的 hook 每次工具调用都报错）。服务定义对 `standalone` **不解析 realpath**（今天 `systemd.ts:103,316`、`launchd.ts:114,318` 记 realpath，会钉到版本目录），写成 `current/node/bin/node current/app/bin/vonvon.mjs daemon run --port N`，`PATH` 前置 `current/node/bin`。**不靠 `VONVON_NPM_CLI`**（NPM-1：没有 systemd 时退回 `daemon start`、手动 `daemon run` 都没有这个变量）：`bundledNpmCli()`（`D/platform/npm.ts:13-21`）认出 `standalone`，从 `realpath(process.execPath)` 推出同一 release 里 Node 自带的 npm（POSIX `bin/../lib/node_modules/npm/bin/npm-cli.js`；Windows `node.exe` 同级 `node_modules\npm\bin\npm-cli.js`），托管安装 Codex 的 `requireTrustedNpm`（`managed-install.ts:53`）就有可信 npm。升级只换 `current` 指向，服务定义不用重写。
+原来表里还有 macOS（和 Linux 同一列）和 Windows 一列：`%LOCALAPPDATA%\VonvonBot\server\`、`current.txt` 指针文件（SEC-10、WIN-1）、`bin\vonvon.cmd` 和 `bin\vonvon-server.cmd` 启动器、`HKCU\Environment\Path`、`%USERPROFILE%\.vonvon-bot`。owner 2026-11-01 定 Mac、Windows 不做只装服务端，这些都不做；I3 里为 Windows 写的 `current.txt` 分支在清理片 I6 删。
+
+命令和服务定义都 exec `app/bin/vonvon.mjs` 而不是 `app/dist/cli.js`（PKG-1：`hook` 在 `.mjs` 里处理，跳过它旧的 hook 每次工具调用都报错）。服务定义对 `standalone` **不解析 realpath**（今天 `systemd.ts:103,316`、`launchd.ts:114,318` 记 realpath，会钉到版本目录），写成 `current/node/bin/node current/app/bin/vonvon.mjs daemon run --port N`，`PATH` 前置 `current/node/bin`。**不靠 `VONVON_NPM_CLI`**（NPM-1：没有 systemd 时退回 `daemon start`、手动 `daemon run` 都没有这个变量）：`bundledNpmCli()`（`D/platform/npm.ts:13-21`）认出 `standalone`，从 `realpath(process.execPath)` 推出同一 release 里 Node 自带的 npm（`bin/../lib/node_modules/npm/bin/npm-cli.js`；I1 还写了 Windows 的布局，I6 删），托管安装 Codex 的 `requireTrustedNpm`（`managed-install.ts:53`）就有可信 npm。升级只换 `current` 指向，服务定义不用重写。
 
 ### 7.3 安装脚本
 
-`install.sh`（POSIX sh，Linux/macOS）和 `install.ps1`（PowerShell 5.1+）同一套步骤：
+`install.sh`（POSIX sh）只在 Linux 上装。`install.ps1` 随 I2b 取消（owner 2026-11-01）。
+
+先看系统：`uname -s` 不是 `Linux` 就什么都不碰、退出非零（2）。是 `Darwin` 时打印第 15 节"安装脚本：在 Mac 上"那句，让用户到 https://bot.vonvon.cc 下载桌面端安装包（它自带服务端）；别的系统打印"这一版只支持 Linux"。这一步在 root 检查之前，不联网、不写文件。然后：
 0. **root 检查**（SEC-13：大陆云服务器默认 root 登录，`curl | sh` 会把 daemon、Bot 和远程 owner 全变成 root，完全访问档被注入一次就是整机 root）：`id -u` 为 0 默认拒绝，打印 `useradd -m vonvon && su - vonvon` 这样的命令；坚持要用加 `--allow-root`（环境变量 `VONVON_ALLOW_ROOT=1`，因为 `| sh` 没法传参）并打印风险。`vonvon daemon run` 和 `service install` 在 root 下同样警告（Claude Code 以 root 运行时拒绝 bypassPermissions，完全访问档在 root 下可能起不来，未核实 SDK 下的行为）。owner 2026-10-31 确认默认拒绝。
-1. **已装过？**（REQ-3、COEX-1：第 1 版只看 daemon 活着或服务定义存在，漏掉"装了桌面端但没在跑"——Windows 桌面端根本不注册服务，`DT/daemon-dependencies.ts:88-89`；Mac 关了登录项、应用没开也一样；而老桌面端会把不认识的普通文件 plist 当成可替换的旧格式重装成自己的，`login-item.ts:186`、`registration.ts:16-17`）。任一命中就按第 15 节的文案跳过、退出 0、不动任何东西：
+1. **已装过？**（REQ-3）任一命中就按第 15 节的文案跳过、退出 0、不动任何东西：
    - 数据目录里 `daemon.pid` 的进程活着；
-   - 服务定义存在（launchd `com.vonvon.bot.daemon`、systemd `vonvon-bot.service`、Windows 计划任务，见 7.4 的命名）；
-   - **桌面端装了**：macOS `/Applications/Vonvon Bot.app` 或 `~/Applications/Vonvon Bot.app`（或 `mdfind "kMDItemCFBundleIdentifier == '<bundle id>'"`）；Windows HKCU 的 NSIS 卸载项或 `%LOCALAPPDATA%\Programs\Vonvon Bot`；
-   - 桌面端写的 `vonvon` 包装（标记 `Vonvon Bot managed CLI v1`，`DT/cli-registration.ts:16`）。
-   跳过文案按平台分（第 15 节）：Windows 和没注册命令的 Mac 写"打开 Vonvon Bot 桌面端就能用"，不写 `vonvon --version`（Windows 桌面端不注册 `vonvon`，`cli-registration.ts:68` 非 darwin 直接抛；Mac 要启动过一次才注册）。Windows 桌面端这一批也不注册 `vonvon`、不做登录自启（owner 2026-10-31 确认），Skill 在 Windows 桌面端上只用进程内工具（本来就是主路径）。
-2. 选包：`uname -s/-m`；Linux 查 `ldd --version` 不是 musl；读 `https://dl.vonvon.cc/bot/server/stable/manifest.json`（7.5 同一份签名清单），**用清单里 `files[os-arch].sha512` 核对压缩包**，不再用同源的 `.sha512` sidecar（SEC-14：sidecar 和包同源，只防传输损坏）；有 openssl 3 就用 `pkeyutl -verify -rawin` 验 Ed25519 签名（公钥写死在脚本里），没有就跳过并明说"没验签名，信任根是 HTTPS 和 dl.vonvon.cc"。`version` 必须匹配 `^[0-9]+\.[0-9]+\.[0-9]+$` 才往路径里拼；解包后检查成员路径没有 `..` 和绝对路径；解到 `releases/<version>.part/` 再改名 `releases/<version>/`，再切 `current`。
+   - systemd 的服务定义 `vonvon-bot*.service` 在（7.4 的命名）；
+   - 安装根的 `current` 在（装过服务端）；
+   - PATH 上的 `vonvon` 带 vonvon 自己的标记。
+   原来还查桌面端装没装（COEX-1：macOS `/Applications/Vonvon Bot.app`、Windows 的 NSIS 卸载项）、LaunchAgent、Windows 计划任务，并按平台分跳过文案。2026-11-01 起脚本只在 Linux 上装，Linux 没有桌面端，这些不查。
+2. 选包：`uname -m`（`linux-x64` 或 `linux-arm64`）；查 `ldd --version` 不是 musl；读 `https://dl.vonvon.cc/bot/server/stable/manifest.json`（7.5 同一份签名清单），**用清单里 `files[os-arch].sha512` 核对压缩包**，不再用同源的 `.sha512` sidecar（SEC-14：sidecar 和包同源，只防传输损坏）；有 openssl 3 就用 `pkeyutl -verify -rawin` 验 Ed25519 签名（公钥写死在脚本里），没有就跳过并明说"没验签名，信任根是 HTTPS 和 dl.vonvon.cc"。`version` 必须匹配 `^[0-9]+\.[0-9]+\.[0-9]+$` 才往路径里拼；解包后检查成员路径没有 `..` 和绝对路径；解到 `releases/<version>.part/` 再改名 `releases/<version>/`，再切 `current`。
 3. 写命令和 PATH（7.2）。
-4. `vonvon service install --linger --json`：Linux 在管道下 stdin 不是 TTY，今天 linger 会被静默跳过（`D/cli/commands/service.ts:160,189`），所以脚本显式传 `--linger`（能开就开、不问用户，owner 2026-10-31 确认）。**"装好了但 linger 没开成"不再让命令非零退出**（LINGER-1：今天抛错，`service.ts:107`，`set -e` 的脚本会在这里中止、打不出 sudo 提示）：`--json` 回 `{ ok: true, linger: 'off', hint }`，退出 0，脚本按它打印 `sudo loginctl enable-linger <用户名>`，不自己 sudo。退路：没有 systemd（容器）、**用户实例没在跑或没有 `XDG_RUNTIME_DIR`**（`sudo -u` 切过去时常见，`linux-session.ts:77-85` 已经分得出这两种）→ 打印对应提示，退回 `vonvon daemon start` 并明说"崩溃不会自动重启"。macOS 没有 GUI 登录（SSH 上的 Mac）→ launchd GUI 域不可用（`launchd.ts:300-301`），同样退回 detached 并说明。Windows 见 7.4。
+4. `vonvon service install --linger --json`：Linux 在管道下 stdin 不是 TTY，今天 linger 会被静默跳过（`D/cli/commands/service.ts:160,189`），所以脚本显式传 `--linger`（能开就开、不问用户，owner 2026-10-31 确认）。**"装好了但 linger 没开成"不再让命令非零退出**（LINGER-1：今天抛错，`service.ts:107`，`set -e` 的脚本会在这里中止、打不出 sudo 提示）：`--json` 回 `{ ok: true, linger: 'off', hint }`，退出 0，脚本按它打印 `sudo loginctl enable-linger <用户名>`，不自己 sudo。退路：没有 systemd（容器）、**用户实例没在跑或没有 `XDG_RUNTIME_DIR`**（`sudo -u` 切过去时常见，`linux-session.ts:77-85` 已经分得出这两种）→ 打印对应提示，退回 `vonvon daemon start` 并明说"崩溃不会自动重启"。原来的 macOS 没有 GUI 登录、Windows 计划任务两种退路随 2026-11-01 的决定不要了。
 5. 打印：装好了、版本、`vonvon --version` 试一下、下一步看官网说明（URL 等 W1 定下路径，见第 10 节；不打印连接链接，第四轮）。
-- 加固（SEC-14）：脚本内部的 `curl` 一律 `--proto '=https' --tlsv1.2`，PowerShell 强制 TLS 1.2；整个脚本包进 `main()`、最后一行才调用（管道中途断开不会执行半截）；`set -eu`。
-- 脚本自身只做下载、解包、调 `vonvon`，逻辑尽量放在 `vonvon` 里（`service install`、`remote`），脚本好测、好升级。`uninstall.sh/.ps1` 一并提供（停服务、删服务定义、删安装根、保留数据目录并说明）。
+- 加固（SEC-14）：脚本内部的 `curl` 一律 `--proto '=https' --tlsv1.2`；整个脚本包进 `main()`、最后一行才调用（管道中途断开不会执行半截）；`set -eu`。
+- 脚本自身只做下载、解包、调 `vonvon`，逻辑尽量放在 `vonvon` 里（`service install`、`remote`），脚本好测、好升级。`uninstall.sh` 一并提供（停服务、删服务定义、删安装根、保留数据目录并说明），同样只在 Linux 上动手，在 macOS 上打印第 15 节"卸载脚本：在 Mac 上"那句、退出非零。
 - **脚本里的删除**（SCRIPT-1：第 1 版"不对变量拼的家目录路径用 rm -rf"和 uninstall 要删安装根本身冲突）：`install.sh` 只删自己刚建的 `releases/<version>.part`；`uninstall.sh` 删安装根只走一个受保护的函数：`${HOME:?}` 非空、目标是 `$HOME/.local/share/vonvon-bot/server` 这个字面拼法、不是符号链接、目录里有 `releases/*/standalone.json` 标记，四条都满足才 `rm -rf -- "$target"`；不删数据目录。脚本测试：`HOME` 为空或指向没有标记的目录时拒绝。
 
 ### 7.4 后台服务和共存
 
 - **Linux** systemd 用户服务：现有（`D/service/systemd.ts`），只加 `standalone` 种类和 7.2 的不解析 realpath。
-- **macOS** LaunchAgent：现有（`D/service/launchd.ts`），同上。Claude 的钥匙串登录在 launchd 下的行为未核实（`install-update-release.md` §5）。
-- **Mac、Windows 当服务端要有用户登录着**（owner 2026-10-31：本期接受）：macOS LaunchAgent 和 Windows 计划任务（`LogonTrigger`）都只在这个用户登录后运行；登录后可以锁屏，Bot 照常在线；机器重启后要有人登录一次。Linux 开了 linger 不需要。写进官网文档（第 10 节第 2 条）、`product.md` 3.10（第 11 节）、安装脚本在 macOS、Windows 上的"完成"文案（第 15 节）。不用登录也能跑的 Windows 服务 / macOS LaunchDaemon 进 `product.md`"v1 之后"。
-- **Windows**（今天没有，`service/adapter.ts:79` 直接抛）：新 `D/service/windows.ts`。
-  - 计划任务名**带用户和数据目录**（SEC-15：任务计划程序是全机命名空间，`\VonvonBot` 会让同一台 Windows 的第二个用户装不上或被"已装过"误判）：`\VonvonBot\<sid-hash12>-<root-hash12>`，规则和 `identity.ts:36-41` 一致（默认数据目录也带 sid-hash）。"已装过"只认本用户、本数据目录的任务；不带 `/F` 覆盖不属于本用户的任务。
-  - 创建只用一种写法 `schtasks /Create /TN <name> /XML <file> /F`（WIN-2：`/XML` 不能和 `/SC`、`/RL` 混用），XML 里 `LogonTrigger` 带当前用户 `UserId`、`RunLevel LeastPrivilege`、`Hidden`、`StartWhenAvailable`、`ExecutionTimeLimit PT0S`、`MultipleInstancesPolicy IgnoreNew`，动作是 **`bin\vonvon-server.cmd __win-supervise --port N`**（7.2 的启动器，不是 `current\…`）。
-  - **监督进程**（新隐藏命令）：按 `docs/architecture.md:59-60` 的规则给子进程设 `VONVON_SERVICE=windows`、用 `spawn`（不用 `fork`，`fork` 会建 IPC 通道让 `serviceManaged` 为假，`lifecycle.ts:102`）、`windowsHide: true`。子进程 `daemon run` 退 0 → 监督退出；退 75 → **先检查 `current.txt` 是否变了**：变了就监督进程自己 `exec` 新版本的启动器后退出（新 node.exe、新代码接管监督），没变立刻重启；别的退出码 → 5 秒后重启；`daemon stop` / `machine.stopHost` 让它退 0。`daemon start` 走 `schtasks /Run`；`service status` 读 `schtasks /Query /XML`。daemon 里所有 detached spawn（`daemon.ts:86-90`、`lifecycle.ts:204-206`、`restart.ts:33`、`service-action.ts`）都加 `windowsHide: true`。`vonvon open` 在 win32 调 `xdg-open`（`open.ts:105`）改 `start`。桌面端 `readRegistration`（`DT/daemon-dependencies.ts:88-89`）学会这种注册，不再在同一数据目录上另起 bundled daemon。`snapshot.ts:53` 的 win32 → `unsupported` 改成 `windows`；`definitions.ts:16-18` 的 `SerializedDefinition` 加 `{ platform: 'win32'; xml }`。
-- **共存，桌面端一侧**（`install-update-release.md` §4 列的四个坑，逐个改）：
-  1. 退出：`DT/quit-daemon.ts:15-41` 只在运行的 daemon 是 `bundled` 或没有服务注册的 detached 时停它；`standalone` 一律不停（它退 0 以后服务管理器不会再拉起它，`definitions.ts:75`）。Windows 更新前的 `beforeUpdateInstall`（`DT/main.ts:233-236`）同样跳过 `standalone`。
-  2. 登录项开关：注册是 `standalone` → 开关显示"由独立安装的服务端管理"并禁用，不 `install|uninstall`。
-  3. 启动修复：`DT/login-item.ts:187,225-229` 遇到没注册、版本更旧的 daemon 会停掉它换自己的；`standalone` 一律不碰（`planStartupRepair` 加 `standalone` 分支回 `none`），只在界面上按 4.6 提示升级；`daemon-manager` 的协议检查按 4.5 放宽。
-  4. 命令：`DT/cli-registration.ts:95` 已经不覆盖带别的标记的文件，但 `observeCli` 会回 `error`"不属于当前桌面版"并被 bridge 写进 `machine.status.cli`（`cli-registration.ts:78`、`bridge.ts:270`，COEX-2）。改成认出 `# Vonvon Bot server CLI v1` 就回 `ready`，文案"由服务端安装提供"，不写 PATH。
-- **共存，脚本一侧**：7.3 第 1 步。
+- **macOS** LaunchAgent：现有（`D/service/launchd.ts`），只给桌面端自带的服务端用（"登录时启动"，今天就有）。Mac 上没有脚本装的 `standalone`（owner 2026-11-01）；I1 已让 launchd 接受 `standalone`，这条分支用不上，I6 删。Claude 的钥匙串登录在 launchd 下的行为未核实（`install-update-release.md` §5）。
+- **Mac、Windows 当服务端要有用户登录着**（owner 2026-10-31：本期接受）：Mac 靠桌面端的登录项（LaunchAgent），这个用户登录后运行；登录后可以锁屏，Bot 照常在线；机器重启后要有人登录一次。Windows 桌面端这一批不注册 `vonvon`、不做登录自启（owner 2026-10-31 确认），要用户登录着、Vonvon Bot 开着才在线，同样可以锁屏。Skill 在 Windows 桌面端上只用进程内工具（本来就是主路径）。Linux 开了 linger 不需要登录。写进官网文档（第 10 节第 2 条）、`product.md` 3.10（第 11 节）。不用登录也能跑的 Windows 服务 / macOS LaunchDaemon，以及 Windows 的登录自启，进 `product.md`"v1 之后"。
+- **Windows**：不做只装服务端，也就不做 `D/service/windows.ts`、按用户和数据目录命名的计划任务、`bin\vonvon-server.cmd` 启动器和 `__win-supervise` 监督进程（owner 2026-11-01，I4a、I4b 取消）。原来的做法（SEC-15、WIN-2）留在 `docs/plans/server-4a-windows-task.md`、`server-4b-windows-supervise.md` 和分支 `claude/server-4a-windows-task` 里作参考，不合入。那两片里顺带的 Windows 小修（daemon 里 detached spawn 加 `windowsHide: true`、`vonvon open` 在 win32 用 `start`）也不进这一批；Windows 桌面端真用得上时另开小 PR。`service/adapter.ts:79` 在 win32 照旧抛错。
+- **共存，桌面端一侧**：原来为"脚本装的服务端 + 桌面端在同一台"写了四条（`install-update-release.md` §4）。2026-11-01 起 Mac、Windows 上没有脚本装的服务端，Linux 没有桌面端，只剩第 1 条，而且换个说法：
+  1. 退出：`DT/quit-daemon.ts:15-41` 停本机的服务端，只有一种不停——它不是桌面端自带的（`bundled`），又另外注册成了后台服务（比如用户自己 `npm i -g vonvon-bot` 后 `vonvon service install`）。这种停了以后（退 0）服务管理器不会再拉起它（`definitions.ts:75`），所以退出桌面端只断开。桌面端自带的、没有服务注册的 detached 照旧停。Windows 更新前的 `beforeUpdateInstall`（`DT/main.ts:233-236`）同样跳过这种。
+  原来的第 2 到 4 条（登录项开关显示"由独立安装的服务端管理"、启动修复不碰 `standalone`、`observeCli` 认 `# Vonvon Bot server CLI v1`）不做。npm 装的服务注册，桌面端今天就不做启动修复（`login-item.ts:181` 只对 `desktop`），不用改。
+- **共存，脚本一侧**：7.3 第 1 步（只在 Linux）。
 
 ### 7.5 升级引擎和 `vonvon update`
 
-- **清单** `https://dl.vonvon.cc/bot/server/stable/manifest.json`，Ed25519 签名（复用 Windows 清单的签名和校验代码 `DT/windows-update-manifest.mjs`、`scripts/windows-update-signing.mjs`，**用一把单独的服务端密钥**，公钥编进 daemon 和安装脚本）。签名内容照 Windows 的 `validateWindowsUpdatePayload` 那样严格（SEC-9：第 1 版只有 `{version, publishedAt, files}`，每个版本的签名清单又公开放在 `bot/server/<version>/manifest.json`，谁拿到 COS 写权限或配错了就能把旧版本的合法清单放到 stable 回滚所有人）：`{ schemaVersion: 1, product: 'vonvon-bot-server', channel: 'stable', version, publishedAt, files: { 'linux-x64': { url, sha512, size }, … } }`，`url` 必须等于 `https://dl.vonvon.cc/bot/server/<version>/vonvon-server-<version>-<os>-<arch>.<ext>`，`version` 必须是语义版本。
+- **清单** `https://dl.vonvon.cc/bot/server/stable/manifest.json`，Ed25519 签名（复用 Windows 清单的签名和校验代码 `DT/windows-update-manifest.mjs`、`scripts/windows-update-signing.mjs`，**用一把单独的服务端密钥**，公钥编进 daemon 和安装脚本）。签名内容照 Windows 的 `validateWindowsUpdatePayload` 那样严格（SEC-9：第 1 版只有 `{version, publishedAt, files}`，每个版本的签名清单又公开放在 `bot/server/<version>/manifest.json`，谁拿到 COS 写权限或配错了就能把旧版本的合法清单放到 stable 回滚所有人）：`{ schemaVersion: 1, product: 'vonvon-bot-server', channel: 'stable', version, publishedAt, files: { 'linux-x64': { url, sha512, size }, … } }`，`url` 必须等于 `https://dl.vonvon.cc/bot/server/<version>/vonvon-server-<version>-<os>-<arch>.<ext>`，`version` 必须是语义版本。`files` 只有 `linux-x64`、`linux-arm64` 两项，`<ext>` 是 `tar.gz`（owner 2026-11-01；I3 计划的 C1 原来写六项，按那里的说明改）。
 - **检查**：`machine.checkCoreUpdate` 对 `standalone` 读清单（对 `global-npm` 照旧 `npm view`，`D/service/update.ts:68-91`）；回复加 `distribution.kind: 'standalone'`、`channel`。**只接受比当前和历史最高都新的版本**（`newer()`，照 `windows-updates.ts:108-110`），历史最高和上次见到的 `publishedAt` 记进 `standalone.json`，`publishedAt` 倒退的清单拒绝（防冻结）；降级只能在本机 `vonvon update --allow-downgrade --to <v>` 显式要求。默认不自动升级（升级一节）；daemon 每 24 小时查一次只为了在界面上标"有新版本"。
-- **应用**（UPD-1：第 1 版让助手在旧 daemon 退出后才切 `current`，但 launchd `KeepAlive SuccessfulExit=false, ThrottleInterval 5` 和 Windows 监督进程收到 75 立刻拉起、systemd 5 秒后拉起，拉起的都是还指向旧版的 `current`，助手看到"同端口换了 pid"就写 `done`——macOS、Windows 上升级报成功实际跑旧版。改成和 npm 路径一样"先换文件再重启"，`update.ts:142-153`）：`machine.applyCoreUpdate` → `performStandaloneUpdate`：`update.lock`（已有）→ 下载到 `releases/<v>.part/`（校验 sha512 和清单签名）→ 改名 `releases/<v>/` → **原子切 `current`（POSIX rename / Windows `current.txt`）** → 把 `{ previous: <旧版> }` 写进 `update-status.json` → `requestRestart(port, update)`（已有：drain → bot 做完手上的活 → 退 75 → 服务管理器 / 监督进程按 `current` 拉起**新版本**）。`__restart-after-exit` 助手（`D/host/restart.ts`）改成：等新 owner 出现后**核对 `serverInfo.version === update.to`**，不只看 pid 变了；成功写 `done`；超时或版本不对 → 切回 `previous`、让管理器再拉起、写 `error`。助手和 Bot 子进程重起自己用的 `process.argv[1]`（`supervisor.ts:86`、`lifecycle.ts:195`、`restart.ts:13`、`service-action.ts:36`、`config/store.ts:59,74`）都改成钉在自己 `realpath` 所在的 release 上，免得排空期间重起的子进程加载新代码。`releases/` 只保留当前和上一版；清理时被占用的目录（Windows）跳过，下次再试。
+- **应用**（UPD-1：第 1 版让助手在旧 daemon 退出后才切 `current`，但 launchd `KeepAlive SuccessfulExit=false, ThrottleInterval 5` 和 Windows 监督进程收到 75 立刻拉起、systemd 5 秒后拉起，拉起的都是还指向旧版的 `current`，助手看到"同端口换了 pid"就写 `done`——macOS、Windows 上升级报成功实际跑旧版。改成和 npm 路径一样"先换文件再重启"，`update.ts:142-153`）：`machine.applyCoreUpdate` → `performStandaloneUpdate`：`update.lock`（已有）→ 下载到 `releases/<v>.part/`（校验 sha512 和清单签名）→ 改名 `releases/<v>/` → **原子切 `current`（rename）** → 把 `{ previous: <旧版> }` 写进 `update-status.json` → `requestRestart(port, update)`（已有：drain → bot 做完手上的活 → 退 75 → systemd 按 `current` 拉起**新版本**，不托管时由助手起）。`__restart-after-exit` 助手（`D/host/restart.ts`）改成：等新 owner 出现后**核对 `serverInfo.version === update.to`**，不只看 pid 变了；成功写 `done`；超时或版本不对 → 切回 `previous`、让管理器再拉起、写 `error`。助手和 Bot 子进程重起自己用的 `process.argv[1]`（`supervisor.ts:86`、`lifecycle.ts:195`、`restart.ts:13`、`service-action.ts:36`、`config/store.ts:59,74`）都改成钉在自己 `realpath` 所在的 release 上，免得排空期间重起的子进程加载新代码。`releases/` 只保留当前和上一版。
 - **`vonvon update [--check] [--json] [--allow-downgrade --to <v>]`**：注册到 `cli/index.ts`（今天 `runUpdate` 没注册，`install-update-release.md` §2）。daemon 在跑就发 `machine.applyCoreUpdate` 并轮询 `coreUpdateStatus`（排空期间也放行，4.7）；连接断了（daemon 退出重启那一刻）就改读本机 `update-status.json` 继续显示，直到 `done`/`error` 或 60 秒；"进行中、结果待定"退出码 6。没在跑就直接下载、切 `current`、不启动。`bundled`：daemon 在跑就和别的客户端一样发 `applyCoreUpdate`，由本机桌面端外壳更新（下一条）；桌面端没开或 daemon 没跑，照旧提示"在桌面端里更新"（今天的文案，`cli/commands/update.ts:26-29`）。
 - **从任何客户端升级**：就是 6.5 的按钮 + 4.5 的维护子集。
 - **桌面端自带的服务端（`bundled`）远程升级**（owner 2026-10-31 要，U4）。bundled 的 daemon 在 `.app` / NSIS 安装目录里，只能随桌面端整包更新，所以 daemon 不自己换文件，而是请同一台电脑上的桌面端外壳跑它已有的应用更新：
@@ -351,10 +350,10 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 
 ### 7.6 发布流水线加什么
 
-- `scripts/build-server.mjs`：复用 `stageDaemon`（加 minify、bundle client/protocol、删 `.d.ts`/`src`/`test`、按目标平台选 compact/hoist），拷 `ui/dist`、`bin`、`package.json`，下载六个 Node 二进制（校验 nodejs.org 的 SHASUMS256），写 `standalone.json`，打 `.tar.gz/.zip`，产出 `build-manifest.json` 做确定性核对（照 `pack-vonvon-bot.mjs:54-68`、`check-vonvon-bot-package.mjs`），检查无 symlink、路径长度、无 `.ts/.d.ts/.map/src`。没有原生模块（调研没找到 `.node` 文件），Linux runner 上能打全部六个。
-- `scripts/publish-server.mjs`：COS 写入 `bot/server/<version>/…` 禁止覆盖；签名清单**只有 stable 一份**（`channel: 'stable'` 在签名里，`bot/server/<version>/manifest.json` 只放未签名的文件表供脚本和人看）；**切 `bot/server/stable/manifest.json` 和 `install.sh/.ps1` 只在 owner 本人确认后**，照 `AGENTS.md`"Mac 发布任务"的 stable 规则，`release-publish.mjs` 的 plan → upload → promote 加 `server` 一项。
+- `scripts/build-server.mjs`：复用 `stageDaemon`（加 minify、bundle client/protocol、删 `.d.ts`/`src`/`test`、用 `hoist`），拷 `ui/dist`、`bin`、`package.json`，下载两个 Linux 的 Node 二进制（校验 nodejs.org 的 SHASUMS256），写 `standalone.json`，打 `.tar.gz`，产出 `build-manifest.json` 做确定性核对（照 `pack-vonvon-bot.mjs:54-68`、`check-vonvon-bot-package.mjs`），检查无 symlink、无 `.ts/.d.ts/.map/src`。没有原生模块（调研没找到 `.node` 文件），Linux runner 上两个都能打。I1 已合入的代码还打六个包，I6 改成两个（7.1）。
+- `scripts/publish-server.mjs`：COS 写入 `bot/server/<version>/…` 禁止覆盖；签名清单**只有 stable 一份**（`channel: 'stable'` 在签名里，`bot/server/<version>/manifest.json` 只放未签名的文件表供脚本和人看）；**切 `bot/server/stable/manifest.json` 和 `install.sh`、`uninstall.sh` 只在 owner 本人确认后**，照 `AGENTS.md`"Mac 发布任务"的 stable 规则，`release-publish.mjs` 的 plan → upload → promote 加 `server` 一项。
 - CI：`.github/workflows/ci.yml` 的 Linux 任务加"构建服务端包 + 安装脚本冒烟（在 `mktemp -d` 的 HOME 里跑 `install.sh`，只验证解包、`vonvon --version`、`vonvon open --print` 回 200、`vonvon hook` 退 0、`service install` 在无 systemd 下的退路）"；`ci-scope.mjs` 把 `scripts/install.*`、`scripts/build-server.mjs` 归入全量。
-- 三平台同版本（`AGENTS.md`"双平台发布版本"扩到三个），这一批 0.9.0（owner 2026-10-31 定）。
+- macOS、Windows 安装包和 Linux 服务端包同版本（`AGENTS.md`"双平台发布版本"扩到服务端包），这一批 0.9.0（owner 2026-10-31 定）。
 
 ## 8. 命令行补全
 
@@ -412,13 +411,13 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 
 ## 10. 说明文档（官网）
 
-仓库 modelzen/vonvon-site。**第 1 版看的是过时的本地 worktree（`claude/bot-site-v3` 2b3b3e8），`origin/main`（0b7bd42）已经是 `site/` 结构**（REQ-4）：官网域名 vonvon.cc，bot.vonvon.cc 整站 301 到它；`site/scripts/deploy-config.mjs` 的 `HOST_SCOPED_PATHS` 把 `/docs/` 划给 bridge.vonvon.cc，`LEGACY_PATH_REDIRECTS` 把 `/docs` 301 到 `https://bridge.vonvon.cc/docs/`。所以第 1 版的 `https://vonvon.cc/docs/remote/` 会跳到 bridge 的文档站。W1 按 `origin/main` 重做：路径用 **`/guide/remote/`**（不和 bridge 的 `/docs/` 冲突；`HOST_SCOPED_PATHS` 加 `['/guide/', BOT_DOMAIN]`），样式照 `site/` 里现有页面，怎么进构建由实现者看 `site/` 的构建脚本定。安装脚本和 CLI 打印的 URL 用 **`https://vonvon.cc/guide/remote/`**，W1 定稿前脚本先写这个值，W1 改了路径再一起改。W1 验收加：在 vonvon.cc 和 bot.vonvon.cc 上打开这个 URL 都能到这页。**发布官网要 owner 点头**，PR 开好等确认。
+仓库 modelzen/vonvon-site。**第 1 版看的是过时的本地 worktree（`claude/bot-site-v3` 2b3b3e8），`origin/main`（0b7bd42）已经是 `site/` 结构**（REQ-4）：官网域名 vonvon.cc，bot.vonvon.cc 整站 301 到它；`site/scripts/deploy-config.mjs` 的 `HOST_SCOPED_PATHS` 把 `/docs/` 划给 bridge.vonvon.cc，`LEGACY_PATH_REDIRECTS` 把 `/docs` 301 到 `https://bridge.vonvon.cc/docs/`。所以第 1 版的 `https://vonvon.cc/docs/remote/` 会跳到 bridge 的文档站。W1 按 `origin/main` 重做：路径用 **`/guide/remote/`**（不和 bridge 的 `/docs/` 冲突；`HOST_SCOPED_PATHS` 加 `['/guide/', BOT_DOMAIN]`），样式照 `site/` 里现有页面，怎么进构建由实现者看 `site/` 的构建脚本定。Linux 的安装脚本和 CLI 打印的 URL 用 **`https://vonvon.cc/guide/remote/`**，W1 定稿前脚本先写这个值，W1 改了路径再一起改。W1 验收加：在 vonvon.cc 和 bot.vonvon.cc 上打开这个 URL 都能到这页。**发布官网要 owner 点头**，PR 开好等确认。
 
 提纲：
 1. 这是什么：一台设备上的 Vonvon Bot，用别的电脑上的 Vonvon Bot 桌面端来管。什么时候需要（服务器上 24 小时跑、代码在服务器上、几台电脑、团队共用）。
-2. 装服务端：Mac/Linux 一行、Windows 一行；装完 `vonvon --version`；已经装了桌面端的不用再装；**不要用 root 装**（为什么、怎么建普通用户）；Linux 只支持 glibc 发行版（Alpine 等 musl 不支持）；首次安装的信任根是 HTTPS 和 dl.vonvon.cc。**Mac、Windows 当服务端要保持这个用户登录着**（可以锁屏；重启后要有人登录一次），Linux 装完会自动开 linger、退出登录也照常跑。
-3. 让它能被连上：先把两台设备放进同一个安全网络——推荐 Tailscale（装、登录、`tailscale ip -4`；大陆用户可能延迟高，也可以用局域网）；然后 `vonvon remote enable --tailscale`（或 `vonvon remote enable <ip>`）；公网地址的风险和为什么不建议；100.x 地址不一定是 Tailscale（运营商 CGNAT）。
-4. 配对：服务端 `vonvon pair` 拿链接（或桌面端"生成连接链接"）；客户端设置 → 设备 → 添加 → 粘贴 → 起名；链接 10 分钟有效、只用一次；一台客户端一条；链接会进你的 Agent 的对话记录；配对成功后被连的那台会提示，不是你就撤销。
+2. 装：**Mac、Windows 下载桌面端安装包**（https://bot.vonvon.cc），它自带服务端，装好打开就是一台能被连的设备，不用命令行；**Linux 一行命令只装服务端**（`curl … | sh`），装完 `vonvon --version`；在 Mac 上跑这条命令只会提示去下载安装包（owner 2026-11-01）。Linux 一段写：**不要用 root 装**（为什么、怎么建普通用户）；只支持 glibc 发行版（Alpine 等 musl 不支持）；首次安装的信任根是 HTTPS 和 dl.vonvon.cc；装完会自动开 linger，退出登录也照常跑。**Mac、Windows 当设备要保持这个用户登录着**（可以锁屏；重启后要有人登录一次）：Mac 打开"登录时启动"；Windows 这一批不做登录自启，要 Vonvon Bot 开着。
+3. 让它能被连上：先把两台设备放进同一个安全网络——推荐 Tailscale（装、登录、`tailscale ip -4`；大陆用户可能延迟高，也可以用局域网）；然后 Linux 上 `vonvon remote enable --tailscale`（或 `vonvon remote enable <ip>`），Mac、Windows 在桌面端设置 →"应用与启动"→"允许别的设备连接"里勾选地址；公网地址的风险和为什么不建议；100.x 地址不一定是 Tailscale（运营商 CGNAT）。
+4. 配对：Linux 上 `vonvon pair` 拿链接，Mac、Windows 在桌面端点"生成连接链接"；客户端设置 → 设备 → 添加 → 粘贴 → 起名；链接 10 分钟有效、只用一次；一台客户端一条；链接会进你的 Agent 的对话记录；配对成功后被连的那台会提示，不是你就撤销。
 5. 切换和日常：切换设备、"在 <设备> 上把 Codex 配置好"是什么意思、选目录选的是那台设备的、托管安装装在那台设备上。
 6. 撤销和改名：在被连的那台设备上（桌面端"允许别的设备连接"或 `vonvon clients ls/revoke`）；授权不会过期，不用的客户端要自己撤销；一台客户端电脑上装了完全访问档的 Bot，它配对过的设备都在同一个信任范围里；完全访问的群里，群成员能让 Bot 在这台设备上做任何事，包括改 vonvon 的设置，只给信任的群用。
 7. 升级：客户端里一键、`vonvon update`、版本对不上的提示；桌面端自带的服务端也能从别的设备一键更新，前提是那台电脑上的 Vonvon Bot 桌面端开着（它会下载、等 Bot 做完手上的活再重启）；0.8 及更早的要先在那台电脑上更新一次。
@@ -426,6 +425,8 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 9. 命令速查：`remote`（含 `remote port <n>`：默认 7767，撞了就换）、`pair`、`clients`、`device`、`update`、`service`，每条一行。
 
 ## 11. `docs/product.md` 要改的节
+
+本表是 D0 当时（2026-10-31）的改法，已经合入。2026-11-01 owner 定只在 Linux 上只装服务端，`product.md` 第 1 节、3.1、3.10、3.14、第 7 到 11 节又按第 19 节改了一次；下表里"Mac、Windows、Linux 都可以只装服务端""Windows 服务端的登录启动用计划任务""`install.sh/.ps1`""Windows 计划任务"这些说法以第 19 节为准。
 
 | 节 | 改什么 |
 |---|---|
@@ -449,22 +450,24 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 |---|---|
 | protocol | `P/handshake.ts`：`PROTOCOL_VERSION = 2`，`helloSchema` **不变**，`serverInfoSchema` 分 v1/v2 两个（v2 加 `deviceName`、`platform`、`capabilities`、`principal`），客户端用非严格解析；`P/admin.ts`：`negotiate { capabilities, scope? }`、`daemonStatus` 加 `startedAt`、`distribution.kind` 加 `standalone`；`P/device.ts`：`pairingLinkSchema`、`scopeSchema`、`deviceRequestSchema`（`status / enable / disable / pair / clients / renameClient / revokeClient / rename`）、`deviceReplySchema`、`clientRecordSchema`（含 `invitedBy`、`revokedAt`）、`addressKindSchema`（加 `cgnat`）；`P/secure-channel.ts`：`createInitiator / createResponder / Frame`（Noise_IK_25519_AESGCM_SHA256）；`P/machine.ts`：`distribution.kind` 加 `standalone`，`coreUpdate` 回复加 `channel`、`desktopShell?`，新请求 `desktopUpdateReport { requestId, state, latest?, message, progress? }`、新事件 `desktopUpdateRequest { requestId, action: 'check' | 'apply', by }`（U4）；能力名 `update.standalone / update.npm / update.bundled`（daemon 报）、`desktop.selfUpdate`（桌面端外壳在 `negotiate` 里报）；`P/domain.ts`：`registerAgent` 的 `jobRunning` 回复；`P/rpc.ts` 加 `device`；错误码加 `protocol_mismatch / permission_denied / scope_required / session_token_missing / not_in_session / not-dm（复用进程内工具的 reason 和文字）/ client_revoked / device_identity_changed / pairing_failed / rate_limited / desktop_not_running`；`MAINTENANCE_KINDS` 常量 |
 | client | `CL/transport-browser.ts`、`transport-local.ts`：`connect()` 返回 `{ client, serverInfo }`，不读 `local-credential` 当 `inBotSession()`；新 `CL/transport-secure.ts`（通道上的 ws）；`CL/device-store.ts` 类型（存储由桌面端实现） |
-| daemon | `D/server/authz.ts`（权限表 + ★ 转 Bot 进程）、`D/server/remote-listeners.ts`、`D/remote/{config,address,tailscale,pairing,clients,rate-limit}.ts`、`D/server/rpc/device.ts`、`D/host/session-tokens.ts`（host 侧令牌表 + IPC `issueSessionToken / revokeSessionToken / authorizeSessionCall`）、`D/agent/entry/registry.ts` 暴露 `authorizeSessionCall`、`D/server/snapshot-filter.ts`、`D/service/windows.ts`、`D/cli/commands/{remote,pair,clients,device,update,win-supervise}.ts`、`D/cli/parity-allowlist.ts`、`D/service/distribution.ts` 的 `standalone`、`D/service/update.ts` 的 `performStandaloneUpdate`、`D/config/read-scope.ts` 的 `ROOT_SECRETS` 加三个文件、`D/server/local-credential.ts` 每次启动轮换、`D/service/bundled-update.ts`（找本机外壳连接、发 `desktopUpdateRequest`、把 `desktopUpdateReport` 映射到 `coreUpdateStatus`，U4）、`D/agent/permission/types.ts` 的完全访问群警示（`TierInfo.warning`，U2） |
-| 文件 | `<dataRoot>/device.json`、`clients.json`、`remote.json`（都 0600、都在 `ROOT_SECRETS`）；安装根 `releases/<v>/standalone.json`、`current`（POSIX symlink）/ `current.txt`（Windows）、`bin/vonvon-server.cmd` |
-| 桌面端 | `DT/device-registry.ts`（safeStorage，每设备一对密钥）、`DT/connections.ts`（多设备连接管理）、`ipc-contract.ts` 加 `desktopShellRequestSchema`（接管 `startHost`、`service`、`repairCli` 的形状）、`desktop:devices:*`、`desktop:client:device`；`client-context.tsx` 加 `activeDevice`、`isRemote`；`daemon-manager.ts`、`daemon-dependencies.ts`、`login-item.ts`、`quit-daemon.ts`、`cli-registration.ts` 认 `standalone`；`DT/remote-self-update.ts`（收 `desktopUpdateRequest`、驱动 `DesktopUpdater` / `WindowsDesktopUpdater`、回 `desktopUpdateReport`、远程触发时不弹本机确认框、给不拦人的提示，U4） |
+| daemon | `D/server/authz.ts`（权限表 + ★ 转 Bot 进程）、`D/server/remote-listeners.ts`、`D/remote/{config,address,tailscale,pairing,clients,rate-limit}.ts`、`D/server/rpc/device.ts`、`D/host/session-tokens.ts`（host 侧令牌表 + IPC `issueSessionToken / revokeSessionToken / authorizeSessionCall`）、`D/agent/entry/registry.ts` 暴露 `authorizeSessionCall`、`D/server/snapshot-filter.ts`、`D/cli/commands/{remote,pair,clients,device,update}.ts`、`D/cli/parity-allowlist.ts`、`D/service/distribution.ts` 的 `standalone`、`D/service/update.ts` 的 `performStandaloneUpdate`、`D/config/read-scope.ts` 的 `ROOT_SECRETS` 加三个文件、`D/server/local-credential.ts` 每次启动轮换、`D/service/bundled-update.ts`（找本机外壳连接、发 `desktopUpdateRequest`、把 `desktopUpdateReport` 映射到 `coreUpdateStatus`，U4）、`D/agent/permission/types.ts` 的完全访问群警示（`TierInfo.warning`，U2） |
+| 文件 | `<dataRoot>/device.json`、`clients.json`、`remote.json`（都 0600、都在 `ROOT_SECRETS`）；Linux 安装根 `releases/<v>/standalone.json`、`current`（symlink）、`bin/vonvon` |
+| 桌面端 | `DT/device-registry.ts`（safeStorage，每设备一对密钥）、`DT/connections.ts`（多设备连接管理）、`ipc-contract.ts` 加 `desktopShellRequestSchema`（接管 `startHost`、`service`、`repairCli` 的形状）、`desktop:devices:*`、`desktop:client:device`；`client-context.tsx` 加 `activeDevice`、`isRemote`；`quit-daemon.ts` 按来历决定停不停（7.4，另外注册成后台服务、不是自带的不停）；`DT/remote-self-update.ts`（收 `desktopUpdateRequest`、驱动 `DesktopUpdater` / `WindowsDesktopUpdater`、回 `desktopUpdateReport`、远程触发时不弹本机确认框、给不拦人的提示，U4） |
 | UI | `U/settings/DevicesPanel.tsx`（客户端侧）、`U/settings/RemoteAccessPanel.tsx`（被连侧）、`U/device-switcher.tsx`、`U/management/UpdatePanel.tsx` 改门控（`bundled` 的按钮和"要开着桌面端"归 U4）、6.4 列的"登录"文案、执行权限选完全访问时的群警示（`SettingsPanel.tsx:1058` 一带和建群/拉进新群对话框，U2） |
 | 终端 | `vonvon remote enable <ip>|--tailscale [--allow-public] / disable <ip> / status / port <n>`、`vonvon pair [--ttl]`、`vonvon clients ls|rename|revoke [--cascade]`、`vonvon device rename <name>`、`vonvon update [--check] [--allow-downgrade --to <v>]`、全局 `--scope`、`--json`；第 8.2 节的新子命令 |
-| CDN | `bot/server/<version>/vonvon-server-<version>-<os>-<arch>.{tar.gz,zip}`、`bot/server/<version>/manifest.json`（未签名文件表）、`bot/server/stable/manifest.json`（签名，含 product/channel）、`bot/server/install.sh`、`bot/server/install.ps1`、`uninstall.*` |
-| 脚本 | `scripts/build-server.mjs`、`scripts/publish-server.mjs`、`scripts/install.sh`、`scripts/install.ps1`、`scripts/uninstall.sh`、`scripts/uninstall.ps1` |
+| CDN | `bot/server/<version>/vonvon-server-<version>-linux-{x64,arm64}.tar.gz`、`bot/server/<version>/manifest.json`（未签名文件表）、`bot/server/stable/manifest.json`（签名，含 product/channel）、`bot/server/install.sh`、`bot/server/uninstall.sh` |
+| 脚本 | `scripts/build-server.mjs`、`scripts/publish-server.mjs`、`scripts/install.sh`、`scripts/uninstall.sh` |
 | 诊断事件 | `remote-bind-waiting`、`remote-bind-failed`、`remote-network-changed`、`pairing-refused`、`client-paired`、`client-revoked`、`handshake-rejected`、`rate-limited`、`update-standalone-{downloaded,swapped,rolled-back}`、`update-bundled-{requested,no-desktop,reported}` |
 
 ## 13. 切片
 
-集成分支 `claude/devices-integration`，从最新 `origin/dev` 开；每片 `claude/<片>` 从集成分支开、PR 回集成分支，不跑 CI；全部合入后一个 `frozen` 的集成 → `dev` PR 跑一次 CI（三平台，`ci:all`）；再 `dev → main`，三平台同一个版本发布（`AGENTS.md`"2026-10-30 起"）。每片 ≤1,500 行（不含 lockfile）。**owner 2026-10-31 定：每片的计划和实现都由 Claude 自己写**（先按 `docs/plans/README.md` 写 `docs/plans/<片>.md`，计划和代码同一个 PR），分支一律 `claude/<片>`；Codex 只做两件事：**独立审查**（JP-VPS Codex 审 Claude 的计划和 PR，不同模型；连接、加密、权限这类高风险片再加一轮 Claude 多角度审查）和**真机验收**（Mac mini Codex 有桌面界面和 Computer Use，做桌面端和 macOS 验收；Windows Codex 由 Claude 写任务、owner 转发）。额度用完就暂停，刷新后接着做，不转给 Codex 实现。下表"道"一栏保留原来的分组，只表示**哪类机器验收、按什么顺序做**：**A** = 协议、密码学、授权；**B1** = 命令行；**B2** = Linux 上能自测的服务端片；**C** = 要 Mac Codex 验收的桌面片；**D** = 要 Windows Codex 跑和验的片。
+集成分支 `claude/devices-integration`，从最新 `origin/dev` 开；每片 `claude/<片>` 从集成分支开、PR 回集成分支，不跑 CI；全部合入后一个 `frozen` 的集成 → `dev` PR 跑一次 CI（三平台，`ci:all`）；再 `dev → main`，三平台同一个版本发布（`AGENTS.md`"2026-10-30 起"）。每片 ≤1,500 行（不含 lockfile）。**owner 2026-10-31 定：每片的计划和实现都由 Claude 自己写**（先按 `docs/plans/README.md` 写 `docs/plans/<片>.md`，计划和代码同一个 PR），分支一律 `claude/<片>`；Codex 只做两件事：**独立审查**（JP-VPS Codex 审 Claude 的计划和 PR，不同模型；连接、加密、权限这类高风险片再加一轮 Claude 多角度审查）和**真机验收**（Mac mini Codex 有桌面界面和 Computer Use，做桌面端和 macOS 验收；Windows Codex 由 Claude 写任务、owner 转发）。额度用完就暂停，刷新后接着做，不转给 Codex 实现。下表"道"一栏保留原来的分组，只表示**哪类机器验收、按什么顺序做**：**A** = 协议、密码学、授权；**B1** = 命令行；**B2** = Linux 上能自测的服务端片；**C** = 要 Mac Codex 验收的桌面片；**D** = 要 Windows Codex 跑和验的片（2026-11-01 起只剩 U4 的 Windows 验证）。
 
 审查后的变化（SLICE-1 ×2、SLICE-2）：U1、D4、I4 各拆成两片；D1 的撤销验收挪到 D3；K1 补上 C3、C4、C6 依赖；I2 的 ps1 部分依赖 I4a；`update` 只在 I3；C1 先于 D1、D3、I3 合入；I1、I3、I5 和 I2 的 sh 部分从 A 道挪到 B2（只在 Linux 上做、JP-VPS 能自测），A 道只留协议、密码学、授权和 skill 这些关键片加审查，不再占总量一半。
 
 owner 确认后的变化（2026-10-31，第 18 节）：加 U4（桌面端自带的服务端远程升级，C 道 + D 道验证）；U2 加完全访问群警示和放开家目录限制（~1,300 → ~1,400）；D0、D4a、D4b、K1 按"群会话不写设置"的三层改内容和验收。
+
+owner 2026-11-01 的变化（第 19 节）：Mac、Windows 只用安装包装全部软件，命令行只装服务端只在 Linux 上做。I4a、I4b 和 I2 的 `.ps1` 部分（I2b）取消，从表里拿掉，计划留作记录；I2 只剩 I2a（Linux 的 `install.sh`、`uninstall.sh`）；加 I6，在 I3 合入后删掉 Mac、Windows 只装服务端留下的代码，I5 等它；U2 的桌面侧共存只剩退出一条（~1,400 → ~1,300）。
 
 | 片 | 做什么 | 依赖 | 道 | 约行数 | 验收一行 |
 |---|---|---|---|---|---|
@@ -482,23 +485,22 @@ owner 确认后的变化（2026-10-31，第 18 节）：加 U4（桌面端自带
 | C6 `cli-6-settings` | 8.2 C6（12 条） | C1 | B1 | ~1,000 | `settings act admin add` 后 `settings get --json` 的 `administrators` 多一条 |
 | C7 `cli-7-environment` | 8.2 C7（15 条） | C1 | B1 | ~1,300 | `env install lark-cli` 进度 JSON Lines 到 done；`env profile init --status` 和界面一致 |
 | C8 `cli-8-machine` | 8.2 C8（21 条） | C1 | B1 | ~1,100 | `mcp add/remove` 改到 Codex 配置；`daemon logs --follow` 实时出行；`snapshot --json` 合法 |
-| I1 `server-1-standalone` | `standalone` 种类（三处 + 开放解析）、`standalone.json` 识别、`build-server.mjs`（minify、bundle、删 d.ts、`ui/dist`、`bin`、`package.json`、Node、按目标平台 hoist/compact、无 symlink、路径预算）、不解析 realpath、`bundledNpmCli` 认 standalone | — | B2 | ~1,100 | 产出六个包；解开后 `node app/bin/vonvon.mjs --version` 对、`vonvon open --print` 的页面能开、`vonvon hook` 退 0；包里和桌面端 `Resources/daemon` 里都无 `.ts/.d.ts/.map/src`，`dist/cli.js` 已压缩；win 包无 symlink |
-| I2 `server-2-install-scripts` | `install.sh/.ps1`、`uninstall.*`（受保护删法）、命令和 PATH（同桌面端的块）、已装过检测（含桌面端安装包和包装）、root 拒绝、清单 sha512 + 可选 Ed25519、TLS/`main()`/版本格式/解包路径加固、linger `--json`、无 systemd / 用户实例不可用 / 无 GUI 退路、脚本测试（Node 测试在 `mktemp -d` HOME 里跑 sh） | I1、I4a（ps1 的 `service install`） | B2（sh，计划）+ D（ps1 验证） | ~1,300 | JP-VPS 干净用户 `curl \| sh` 后 `systemctl --user status` 运行中、linger 已开（或打印 sudo 提示且退出 0）；再跑一次说"已经装过了"；root 下拒绝；`HOME=` 空时 uninstall 拒绝 |
-| I3 `server-3-update-engine` | 签名清单（product/channel/url/回滚保护）、下载校验、先切 `current` 再 `requestRestart`、助手按版本判成功、回滚、`performStandaloneUpdate`、`vonvon update`（断线后读 `update-status.json`）、`checkCoreUpdate` 回复、排空白名单加 `coreUpdateStatus`、子进程钉 release、UI 门控（6.5） | I1、C1 | B2 | ~1,300 | 本地起假 CDN：从 v 到 v+1 升级，bot 做完手上活再重启，新进程版本是 v+1；旧版本的合法清单放到 stable 被拒；坏签名拒；起不来回滚；排空期间 `vonvon update` 一直显示进度 |
-| I4a `server-4a-windows-task` | `D/service/windows.ts`、按用户和数据目录命名的计划任务、`/XML` 单一写法、`bin\vonvon-server.cmd` 启动器 + `current.txt`、`service status/install/uninstall`、`open` 用 `start`、`snapshot`/`definitions` 的 win32、桌面端 `readRegistration` 认计划任务 | I1 | D（Claude 写代码和任务，Windows Codex 跑和修） | ~1,100 | 注销再登录后 daemon 在跑；第二个 Windows 用户也能装；`current.txt` 指向缺失版本时启动器退回上一版 |
-| I4b `server-4b-windows-supervise` | `__win-supervise`（`VONVON_SERVICE=windows`、spawn、0/75/其他、75 时看 `current.txt` 变了就 exec 新启动器）、所有 detached spawn 加 `windowsHide`、清理被占用目录跳过 | I4a、I3 | D | ~900 | kill -9 daemon 5 秒内回来；`daemon stop` 后不回来；升级后监督进程本身是新版 node.exe；切 `current.txt` 到一半 kill，重登后能起 |
-| I5 `server-5-release` | `publish-server.mjs`、`release-publish.mjs` 的 server 项、CI 构建包 + 脚本冒烟、`ci-scope.mjs`、三平台同版本门 | I1、I2、I3 | B2 | ~900 | dry-run 列出六个对象和清单；stable 不经 owner 不切 |
+| I1 `server-1-standalone`（已合入） | `standalone` 种类（三处 + 开放解析）、`standalone.json` 识别、`build-server.mjs`（minify、bundle、删 d.ts、`ui/dist`、`bin`、`package.json`、Node、按目标平台 hoist/compact、无 symlink、路径预算）、不解析 realpath、`bundledNpmCli` 认 standalone。六个包里 darwin、win 四个和 Windows 的那些检查 2026-11-01 起用不上，I6 删 | — | B2 | ~1,100 | 产出六个包；解开后 `node app/bin/vonvon.mjs --version` 对、`vonvon open --print` 的页面能开、`vonvon hook` 退 0；包里和桌面端 `Resources/daemon` 里都无 `.ts/.d.ts/.map/src`，`dist/cli.js` 已压缩；win 包无 symlink |
+| I2 `server-2-install-scripts`（只剩 I2a `server-2a-install-sh`） | `install.sh`、`uninstall.sh`（只在 Linux；在 macOS 上打印去 https://bot.vonvon.cc 下载桌面端安装包的话、退出非零、什么都不动）、受保护删法、命令和 PATH（同桌面端的块）、已装过检测（Linux）、root 拒绝、清单 sha512 + 可选 Ed25519、TLS/`main()`/版本格式/解包路径加固、linger `--json`、无 systemd / 用户实例不可用退路、脚本测试（Node 测试在 `mktemp -d` HOME 里跑 sh）。`.ps1`（I2b）取消 | I1 | B2 | ~1,150 | JP-VPS 干净用户 `curl \| sh` 后 `systemctl --user status` 运行中、linger 已开（或打印 sudo 提示且退出 0）；再跑一次说"已经装过了"；root 下拒绝；`HOME=` 空时 uninstall 拒绝；`uname` 是 Darwin 时两个脚本都退出非零、什么都没写 |
+| I3 `server-3-update-engine` | 签名清单（product/channel/url/回滚保护；`files` 只有 Linux 两项，2026-11-01）、下载校验、先切 `current` 再 `requestRestart`、助手按版本判成功、回滚、`performStandaloneUpdate`、`vonvon update`（断线后读 `update-status.json`）、`checkCoreUpdate` 回复、排空白名单加 `coreUpdateStatus`、子进程钉 release、UI 门控（6.5） | I1、C1 | B2 | ~1,300 | 本地起假 CDN：从 v 到 v+1 升级，bot 做完手上活再重启，新进程版本是 v+1；旧版本的合法清单放到 stable 被拒；坏签名拒；起不来回滚；排空期间 `vonvon update` 一直显示进度 |
+| I6 `server-6-linux-only` | 删 Mac、Windows 只装服务端留下的代码（2026-11-01）：`build-server.mjs` 的 `TARGETS` 只留 `linux-x64`、`linux-arm64`，删 `unpackZip`/`writeZip` 和 `.zip`、Windows 的 Node 和 npm 布局、260 字符预算、大小写重名检查，`server-node.json` 只留两个；`bundledNpmCli` 的 Windows 布局；launchd 接受 `standalone` 的分支；桌面端 `RegisteredDaemon.kind` 的 `standalone`；I3 的 `current.txt` 分支和 `extractZip`；清单 `files` 六项改两项，I2a 脚本的清单匹配跟着改；对应的测试 | I2a、I3 | B2 | ~400（多是删除） | `build-server.mjs` 默认只出两个包；I3 自测第 2 步的端到端升级照旧过；服务端代码和脚本里搜不到 `current.txt`、`win-x64`、`darwin-arm64` |
+| I5 `server-5-release` | `publish-server.mjs`、`release-publish.mjs` 的 server 项、CI 构建包 + 脚本冒烟、`ci-scope.mjs`、三平台同版本门（macOS、Windows 安装包和 Linux 服务端包） | I1、I2a、I3、I6 | B2 | ~900 | dry-run 列出两个包、构建摘要和清单；stable 不经 owner 不切 |
 | U1a `devices-ui-1a-connections` | `device-registry`（safeStorage，每设备一对密钥）、`connections.ts` 多设备连接管理、IPC 路由 `desktop:client:device`、`client-context` 的 `activeDevice/isRemote`、重连和 `serverInfo` 比较 | D1、D2（可先用桩） | C | ~1,100 | 桌面端能同时持有本机和一台远程的连接对象，切换后 `snapshot` 来自对面 |
 | U1b `devices-ui-1b-devices-page` | 设备页、添加/粘贴/配对、起名、切换、状态点、版本提示条（4.6）、按分类的连不上提示、链接已用掉文案 | U1a | C | ~1,000 | Mac 桌面端加 JP-VPS，切过去看到 Bot 6；撤销后 1 秒内变"已撤销"并给文案 |
-| U2 `devices-ui-2-remote-mode` | 6.4 全表：隐藏/改造 IPC 功能、"登录"文案全部改掉并带设备名、目录浏览标题和 Windows 路径输入、放开 `directory-browser.ts` 的家目录限制、服务开关路由、7.4 桌面侧共存四条（退出/登录项/启动修复/命令标记）、`daemon-manager` 协议放宽、删 `AgentProfileSettings` 和旧 Codex 任务面板；**完全访问群警示**（`TierInfo.warning` 只在群的完全访问档上有值，执行权限选择、建群和拉进新群对话框、`settings_set`/`createProject` 的回复和 `group create`/`settings set` 的输出都带上，第 15 节） | U1a、I1（种类）、D1（协议） | C | ~1,400 | 远程时退出桌面端 JP-VPS 不停；本机 standalone 时登录项开关禁用、`vonvon` 显示"由服务端安装提供"；Provider 文案带设备名、不含"登录"；本机桌面端协议 N+1、standalone 是 N 时不报致命错误、显示升级条；远程目录浏览能进 `/srv`；给群选完全访问时看到警示，私聊里让 bot 把群改成完全访问，回复里也有这句 |
+| U2 `devices-ui-2-remote-mode` | 6.4 全表：隐藏/改造 IPC 功能、"登录"文案全部改掉并带设备名、目录浏览标题和 Windows 路径输入、放开 `directory-browser.ts` 的家目录限制、服务开关路由、7.4 桌面侧的退出规则（2026-11-01 起共存只剩这一条）、删 `AgentProfileSettings` 和旧 Codex 任务面板；**完全访问群警示**（`TierInfo.warning` 只在群的完全访问档上有值，执行权限选择、建群和拉进新群对话框、`settings_set`/`createProject` 的回复和 `group create`/`settings set` 的输出都带上，第 15 节） | U1a、D1（协议） | C | ~1,300 | 远程时退出桌面端 JP-VPS 不停；本机是另外注册成后台服务的 npm 版 daemon 时退出桌面端不停它，桌面端自带的照旧停；Provider 文案带设备名、不含"登录"；远程目录浏览能进 `/srv`；给群选完全访问时看到警示，私聊里让 bot 把群改成完全访问，回复里也有这句 |
 | U3 `devices-ui-3-served` | 6.2 "允许别的设备连接"面板（地址分类、`cgnat`/`public` 确认框、网络变了确认）、生成链接、客户端列表（`invitedBy`、最近配对标记）、撤销（含 `--cascade`）、配对成功提示、6.3 的 `jobRunning` 和 60 秒宽限 | D1、D3 | C | ~1,000 | Mac 上开 Tailscale 地址、生成链接，第二台客户端（JP-VPS 上无头桌面端或 CLI 探针）配对成功并出现在列表、弹出提示 |
 | U4 `devices-ui-4-bundled-update` | 7.5 末尾"桌面端自带的服务端远程升级"：`D/service/bundled-update.ts`（找本机声明了 `desktop.selfUpdate` 的外壳连接、`desktopUpdateRequest` 事件、`machine.desktopUpdateReport` 和它的权限表行、映射到 `coreUpdateStatus`、`checkCoreUpdate` 带 `desktopShell`、`desktop_not_running`）、`DT/remote-self-update.ts`（在本机连接上订阅、驱动 `DesktopUpdater`/`WindowsDesktopUpdater` 的 check → 下载 → `quitAndInstall`、沿用 `beforeUpdateInstall` 的排空、远程触发不弹 Windows 本机确认框、托盘和窗口里给提示）、6.5 `update.bundled` 的按钮和"要开着桌面端"文案、对齐测试白名单、假更新驱动的测试 | D1（`negotiate`、权限表）、I3（`coreUpdateStatus`、6.5 门控、`vonvon update`）、U1a（外壳对本机的连接一直在）；真机验收要 D3 | C（计划，macOS）+ D（Windows 验证） | ~600 | 假驱动测试里远程 `applyCoreUpdate` 走完检查 → 下载 → 排空 → `quitAndInstall`，外壳不在时回 `desktop_not_running`；真机上 Mac（C）和 Windows（D）桌面端开着时从另一台已配对客户端点升级能走到外壳并回进度和结果，退出桌面端后再点给"要在那台打开桌面端"；真实换包在 0.9.0 之后第一个 0.9.x 上验（第 16 节） |
 | K1 `skills-scope` | 第 9 节三个 skill（群里不改设置、拒绝时说 `not-dm` 那句；私聊改完说改前 → 改后） | C1、C3、C4、C6、D4b | A | ~500 | Bot 6 群里让 Claude 用命令行建任务，带 `--scope` 成功、改大范围被拒；让它"重启 vonvon"被拒并解释；群里让它改本群设置被拒、回"设置只能在私聊里改…"、不去试命令行；私聊里主人让它改某个群的设置成功，回复写清改前 → 改后 |
 | W1 `site-remote-doc` | 第 10 节（vonvon-site 仓库 `origin/main` 的 `site/`，`/guide/remote/`，单独 PR，等 owner 点头发布） | 全部合入后定稿 | A | ~300 | 按文档从零在一台干净机器上连上；vonvon.cc 和 bot.vonvon.cc 上打开打印出的 URL 都到这页 |
 
-**验收怎么跑**（验收与资源一节）：JP-VPS 当 Linux 服务端——在一个干净的测试用户下用 SSH 登录跑 `install.sh`（不用 `sudo -u`，免得没有 `XDG_RUNTIME_DIR`；不碰 `accept-home2` 和 Bot 6 的数据目录；要用验收 daemon 时按 #422 的目录锁 `mkdir /tmp/accept-user.d`），开 Tailscale 地址、`pair`。Mac mini 当远程客户端——Mac Codex 用桌面端粘链接配对、切换、在远程模式下走 6.4 的每一行、撤销后看断开；Mac 本机的 standalone 共存（脚本 → 装桌面端、桌面端 → 跑脚本、桌面端装了没开时跑脚本）也在 Mac 上验；0.8 桌面端升到候选版本能停掉旧 daemon；U4 的 macOS 一侧（用 Mac 测试环境里的桌面端，不碰 owner 的 `/Applications/Vonvon Bot.app` 和 `~/.vonvon-bot`；桌面端开着时，从 Windows 桌面端或 JP-VPS 上的通道探针点升级这台 Mac，再退出桌面端点一次）。Windows 机器——Claude 把 I4a/I4b、I2 `.ps1` 和 U4 的 Windows 验证写成一份带开始/结果标记的提示词，owner 转发给 Windows 上的 Codex：装、注销登录、锁屏后 Bot 仍在线、kill、`daemon stop`、升级、再跑一次脚本、第二个用户装；从 Mac 桌面端点升级这台 Windows 的桌面端自带服务端（开着、关着各一次，开着时不弹本机确认框）。三台机器都装同一个 0.9.0 候选版本号，验收通过的 SHA 记进集成 PR 描述；一次 CI 之后才 `dev → main`。
+**验收怎么跑**（验收与资源一节）：JP-VPS 当 Linux 服务端——在一个干净的测试用户下用 SSH 登录跑 `install.sh`（不用 `sudo -u`，免得没有 `XDG_RUNTIME_DIR`；不碰 `accept-home2` 和 Bot 6 的数据目录；要用验收 daemon 时按 #422 的目录锁 `mkdir /tmp/accept-user.d`），开 Tailscale 地址、`pair`。Mac mini 当远程客户端——Mac Codex 用桌面端粘链接配对、切换、在远程模式下走 6.4 的每一行、撤销后看断开；Mac 上跑 `install.sh`、`uninstall.sh` 只打印去下载桌面端安装包的话、退出非零、什么都不动；0.8 桌面端升到候选版本能停掉旧 daemon；U4 的 macOS 一侧（用 Mac 测试环境里的桌面端，不碰 owner 的 `/Applications/Vonvon Bot.app` 和 `~/.vonvon-bot`；桌面端开着时，从 Windows 桌面端或 JP-VPS 上的通道探针点升级这台 Mac，再退出桌面端点一次）。Windows 机器——Claude 把 Windows 的验证写成一份带开始/结果标记的提示词，owner 转发给 Windows 上的 Codex（2026-11-01 起 I4a、I4b、I2 `.ps1` 取消，只剩桌面端）：Windows 桌面端当被连的设备（在"允许别的设备连接"里开地址、生成链接、被 Mac 桌面端配对，桌面端开着、锁屏后 Bot 仍在线）；从 Mac 桌面端点升级这台 Windows 的桌面端自带服务端（开着、关着各一次，开着时不弹本机确认框）。三台机器都装同一个 0.9.0 候选版本号，验收通过的 SHA 记进集成 PR 描述；一次 CI 之后才 `dev → main`。
 
-合计约 27,200 行、27 片（代码约 26,000：A 道 6,000；B1 8,300；B2 4,600；C 5,100；D 2,000。文档约 1,200：D0、W1，也在 A 道）。第 2 版写的"26,400、A 道 7,000"是加错的（按表应为 26,500、A 道代码 6,000），这次按表重算。**并行道**：C1 立刻开（B1），I1 立刻开（B2）；A 的 D1 等 C1，然后 D1 → D2 → D3，D4a 叠在 D1 上、D4b 接 D4a；B1 的 C2–C7 在 C1 之后两两并行（测试环境按目录锁排队），C8 等 C1；B2 的 I1 → I3 → I5，I2 的 sh 在 I1 之后；C 的 U1a 用 D1 的 protocol 和 D2 的客户端传输（桩）开工，U1b、U2 紧接，U3 等 D3，U4 等 I3 和 U1a（真机验收等 D3）；D 的 I4a 在 I1 之后，I4b 等 I3，I2 的 `.ps1` 验证、U4 的 Windows 验证和 I4 一起发给 Windows。CI 一次：全部合入集成分支后，Claude merge 最新 `dev`、打 `frozen` + `ci:all`。
+合计约 25,350 行、26 片（2026-11-01 重算：去掉 I4a、I4b，I2 只剩 I2a，加 I6，U2 少 100。代码约 24,150：A 道 6,000；B1 8,300；B2 4,850；C 5,000；D 0，只剩 U4 的 Windows 验证。文档约 1,200：D0、W1，也在 A 道）。第 3 版原来是 27,200 行、27 片；第 2 版写的"26,400、A 道 7,000"是加错的（按表应为 26,500、A 道代码 6,000）。**并行道**：C1 立刻开（B1），I1 立刻开（B2）；A 的 D1 等 C1，然后 D1 → D2 → D3，D4a 叠在 D1 上、D4b 接 D4a；B1 的 C2–C7 在 C1 之后两两并行（测试环境按目录锁排队），C8 等 C1；B2 的 I1 → I3 → I6 → I5，I2a 在 I1 之后（I6 也等它）；C 的 U1a 用 D1 的 protocol 和 D2 的客户端传输（桩）开工，U1b、U2 紧接，U3 等 D3，U4 等 I3 和 U1a（真机验收等 D3）；D 道只剩 U4 的 Windows 验证（含 Windows 桌面端当被连的设备），和 U4 一起发给 Windows。CI 一次：全部合入集成分支后，Claude merge 最新 `dev`、打 `frozen` + `ci:all`。
 
 ## 14. owner 已定（2026-10-31）
 
@@ -523,7 +525,8 @@ owner 确认后的变化（2026-10-31，第 18 节）：加 U4（桌面端自带
 | 15 | Linux libc | 只支持 glibc，musl/Alpine 脚本明说不支持 | 7.1、I2 |
 | 16 | linger | 安装脚本能开就自动开，要 sudo 就打印命令，不问 | 7.3、I2 |
 | 17 | 远程"停止 daemon" | 保留，带"只能在那台设备上重新启动"的确认，"重启"放前面 | 6.4、U2 |
-| 18 | Windows 桌面端的 `vonvon` 命令和登录自启 | 这一批都不做 | 7.3、`product.md` 3.1 |
+| 18 | Windows 桌面端的 `vonvon` 命令和登录自启 | 这一批都不做 | 7.4、`product.md` 3.1 |
+| 19 | Mac、Windows 上用命令行只装服务端（2026-11-01 追加） | 不做："Mac 和 Windows 上就直接通过安装包安装全部软件就好了，没有这种场景只安装 Server 端，也不用通过命令行安装"。命令行只装服务端只在 Linux 上做；I2b、I4a、I4b 取消 | 第 19 节 |
 
 Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：群令牌的设置写在 host 就拒、不问 Bot 进程（5.2）；私聊会话的只读查询也要主人或管理员那一轮，和 `settings_get` 一样（5.2）；`removeProject`（解绑）在会话里一律拒，因为 3.7 的能改表里没有解绑（5.2）；群里被拒的事中，绑已有群、密钥、运维和设备命令私聊里也不能做，拒绝文字不用 `not-dm`（不叫人去私聊），只有设置写和建群用 `not-dm`（第 5 节开头）；云文档评论会话照进程内工具今天的判法，不写设置、没有任务和记忆（第 5 节开头）；远程触发桌面端自更新时不弹 Windows 本机的"安装并重启？"确认框，确认在发起的客户端上做，被更新的那台给不拦人的提示（7.5）。
 
@@ -556,15 +559,15 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | 服务端太旧（v1） | <设备> 上的 Vonvon Bot（0.7.x）不支持远程管理，请在那台设备上升级一次。 |
 | 安装脚本：开始 | 正在安装 Vonvon Bot 服务端 0.9.0（linux-x64）… |
 | 安装脚本：root | 你正在用 root 运行。Vonvon Bot 会以这个账号运行 AI 代理，建议用普通用户：`useradd -m vonvon && su - vonvon`，再运行安装命令。坚持用 root：`VONVON_ALLOW_ROOT=1 sh -c "$(curl -fsSL …)"`。 |
-| 安装脚本：已装过（有 `vonvon` 命令） | 这台电脑已经装过 Vonvon Bot（<桌面端 / 服务端>），不用再装。直接用：`vonvon --version`。 |
-| 安装脚本：已装过（Windows 桌面端、没注册命令的 Mac 桌面端） | 这台电脑已经装了 Vonvon Bot 桌面端，它自带服务端，不用再装。打开 Vonvon Bot 就能用。 |
+| 安装脚本：已装过 | 这台机器已经装过 Vonvon Bot，不用再装。直接用：`vonvon --version`。 |
+| 安装脚本：在 Mac 上（退出非零，什么都不动） | Mac 上请下载 Vonvon Bot 桌面端安装包，它自带服务端，不用命令行装：https://bot.vonvon.cc |
+| 安装脚本：不是 Linux、也不是 Mac | 这个安装脚本只支持 Linux。Mac、Windows 请下载 Vonvon Bot 桌面端安装包：https://bot.vonvon.cc |
+| 卸载脚本：在 Mac 上（退出非零，什么都不动） | 这个脚本只卸载 Linux 上的服务端。Mac 上的 Vonvon Bot 是桌面端安装包装的，说明见 https://bot.vonvon.cc |
 | 安装脚本：完成 | 装好了。后台服务已启动，登录后自动运行。\n试一下：`vonvon --version`\n要从别的电脑连过来管理？看 https://vonvon.cc/guide/remote/ |
-| 安装脚本：完成（macOS、Windows 多一行） | 这台电脑当服务端时请保持这个账号登录着（可以锁屏）；重启后要登录一次，Bot 才会上线。 |
 | 安装脚本：没验签名 | 这台机器没有 openssl 3，没能核对发布签名；已核对下载内容的哈希，来源是 https://dl.vonvon.cc。 |
 | 安装脚本：linger 要 sudo | 为了在你退出登录后继续运行，请执行一次：`sudo loginctl enable-linger <用户名>` |
 | 安装脚本：没有 systemd | 这台机器没有 systemd（可能是容器）。已改为直接启动，崩溃后不会自动重启；需要时运行 `vonvon daemon start`。 |
 | 安装脚本：用户实例不可用 | 连不上这个账号的 systemd（用 sudo 切过来时常见）。已直接启动一次；用这个账号 SSH 登录后运行 `vonvon service install` 装成后台服务。 |
-| 安装脚本：macOS 无 GUI 登录 | 这台 Mac 当前没有图形登录会话，后台服务要在你登录桌面后才能安装。已直接启动一次；登录桌面后运行 `vonvon service install`。 |
 | 撤销确认（桌面端） | 取消「Clay 的 MacBook」的访问？它会立刻断开，要再连得重新配对。[同时撤销它带进来的 2 台] |
 | 另一台正在扫码 | 另一台设备（<客户端名>）正在为这个 Bot 扫码。等它完成后再试。 |
 | `--scope` 缺失 | 这次调用来自 Bot 会话，必须带 `--scope bot=<appId>[,group=<chatId>]`，而且不能比会话本身的范围大。 |
@@ -582,14 +585,14 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 1. **自己接 Noise**：套件是标准的、原语是 `node:crypto` 的，但状态机（转录哈希、密钥派生顺序、prologue）仍是自己写。缓解：官方向量、坏实现互测、另一个模型的多角度审查、不处理握手完成前的任何帧、`unpaired` 状态只收一帧。
 2. **完全访问档的 bot 就是 owner**（5.3）：它能读这个 OS 用户的任何文件，包括本机凭据，所以**完全访问的群里，群成员可以诱导 bot 以主人身份做事，包括改 vonvon 的设置**——"群会话不写设置"在完全访问的群里挡的是照规矩办事的 agent，挡不住被诱导去读凭据文件的 agent。一台客户端电脑上的 bot 还等于它配对过的所有设备的 owner（Windows 的 `safeStorage` 同用户进程可解，未在 Electron 44 实测）。令牌和范围参数只防失误和一般越权。owner 2026-10-31 定：默认不变（bot 自己建的群仍是完全访问），给群选完全访问的每个地方都带第 15 节那句警示（U2），写进 `product.md` 3.7、3.8 和官网文档，不夸大也不淡化。彻底挡要 bot 换 OS 用户跑，进"v1 之后"。
 3. **loopback 仍是 TCP**：多用户机器上别的账号能在 daemon 重启空档抢端口。凭据每次启动轮换把损失限制在"那一次重启失败"；Unix socket / 挑战应答留到以后。文档写明"团队共用的服务器上，每个人用自己的账号装"。
-4. **Windows 计划任务**在锁屏、快速切换用户、未登录时的行为未核实（"要有用户登录着、可以锁屏"是 owner 接受的限制，7.4，但锁屏和快速切换下是否一直在跑要实测）；`irm | iex` 的执行策略、PATH 要重开窗口；启动器 `.cmd` 的参数转义。由 Windows Codex 在真机上验，I4a/I4b 的计划写明每一条要测的。
+4. **Windows 当设备**：原来这里是 Windows 计划任务、`irm | iex`、启动器 `.cmd` 的风险，随 I4a、I4b、I2b 取消（owner 2026-11-01）。剩下的是 Windows 桌面端开着、锁屏或快速切换用户时 Bot 是不是一直在线（"要有用户登录着、可以锁屏"是 owner 接受的限制，7.4），在 U4 的 Windows 验收里顺带看。
 5. **Tailscale 用户态网络模式**（容器、NAS）没有 100.x 网卡，绑不上；`tailscale ip` 能拿到地址但网卡核对不过。文档让用户用局域网地址或宿主机。
-6. **launchd 下 Claude 的钥匙串**（`login.ts:36-45`）和 SSH-only Mac 装不了 LaunchAgent：文档说明，脚本有退路。
+6. **launchd 下 Claude 的钥匙串**（`login.ts:36-45`）：Mac 桌面端的"登录时启动"今天就是 LaunchAgent，Mac 当设备时一样；文档说明。原来"只 SSH 的 Mac 装不了 LaunchAgent、脚本退回直接启动"一条随 2026-11-01 的决定不要了。
 7. **CLI 98 条缺口的工期**：7 片 B1 道，每片一个 Codex 会话，测试环境是瓶颈；靠 `--json` 的单元测试多、真飞书只验几条。
 8. **协议升到 2**：hello 不变、serverInfo 分形状、owner-verification 放宽后，旧桌面端连新 daemon 和新桌面端停旧 daemon 都有回归测试；但 0.7.x 的桌面端对新 daemon 仍会在界面上报协议不一致（它自己硬比版本），只能靠"桌面端先更新"。
-9. **安装根和桌面端同一个 `vonvon` 路径**：谁先到谁生效。标记区分，桌面端认服务端的标记，文档写"桌面端和服务端共用一个 `vonvon`，版本看 `vonvon --version`"。
+9. **安装根和桌面端同一个 `vonvon` 路径**：2026-11-01 起不会发生（Linux 没有桌面端，Mac、Windows 没有脚本装的服务端），这一条作废。
 10. **公网直连**：用户确认后仍可能被扫。DH 前限流、加密、`/health` 不回身份，但不做入侵检测；文档明说不建议。
-11. **升级的回滚窗口**：先切 `current` 再重启，新版本起不来时助手切回旧版再让管理器拉起；最坏是服务停 5-10 秒。Windows 上旧 `node.exe` 被监督进程占着时目录删不掉，下次清理再试。
+11. **升级的回滚窗口**：先切 `current` 再重启，新版本起不来时助手切回旧版再让管理器拉起；最坏是服务停 5-10 秒。
 12. **多客户端的扫码**：一台在扫时别的只能等；60 秒宽限内断线的客户端重连能续上，不做接管。
 13. **安装脚本写入用户 shell rc**：和桌面端一样加一块；用户用 fish 等别的 shell 时只提示不写（未核实 fish 用户比例）。
 14. **100.64/10 的判定依赖 `tailscale` 命令或网卡名**：macOS 上 Tailscale 的网卡是 `utun*`，只能靠 `tailscale ip` 核对；没装 `tailscale` 命令的 macOS 100.x 会被归成 `cgnat` 要求确认，这是保守的一面。
@@ -673,3 +676,23 @@ owner 对第 2 版第 14 节各条和设计后追问的回答，按条改进正�
 | 第 14 节 | 改成"owner 已定（2026-10-31）"表（18 行）和 Claude 按答案定的六处细节 |
 | 切片 | 加 U4；U2 ~1,300 → ~1,400；D0、D4a、D4b、K1 的内容和验收按三层改；验收段加 U4 的 Mac、Windows 检查和锁屏后在线；合计按表重算为约 27,200 行、27 片（代码 26,000：A 6,000、B1 8,300、B2 4,600、C 5,100、D 2,000；文档 1,200），第 2 版的 26,400 是加错的 |
 | 第 17 节 | 加一句说明：那里的"第 14 节第 N 条"指第 2 版的清单 |
+
+## 19. owner 2026-11-01 的改动：只在 Linux 上只装服务端
+
+owner 原话："Mac 和 Windows 上就直接通过安装包安装全部软件就好了，没有这种场景只安装 Server 端，也不用通过命令行安装。"本节和前面各节冲突时以本节为准；第 17、18 节是当时的记录，不改。
+
+| 改了哪里 | 改成什么 |
+|---|---|
+| 范围（第 1、2 节） | 一条命令只装服务端只在 Linux 上做。Mac、Windows 只用桌面端安装包，里面自带服务端；没有脚本装的 `standalone`，也不用命令行装 |
+| 取消的片 | I2b（`install.ps1`、`uninstall.ps1`）、I4a（Windows 计划任务、`.cmd` 启动器、`current.txt`）、I4b（`__win-supervise` 监督进程）。计划文件头上标"已取消"，留作记录；分支 `claude/server-4a-windows-task` 不合入，留作参考。Windows 桌面端这一批仍不注册 `vonvon`、不做登录自启（owner 2026-10-31），没有别的东西要用 Windows 的计划任务 |
+| 安装脚本（7.3） | `install.sh`、`uninstall.sh` 只在 Linux 上动手。在 macOS 上打印一句中文，让用户到 https://bot.vonvon.cc 下载桌面端安装包，退出非零，什么都不碰；别的系统同样退出非零。脚本里不再有 Mac 的 LaunchAgent、桌面端共存、无图形登录这些分支；Linux 照旧查"已装过" |
+| 服务端包和清单（7.1、7.5、7.6） | 只有 `linux-x64`、`linux-arm64`（glibc），`.tar.gz`；签名清单的 `files` 只有这两项 |
+| 用不上的代码 | I1 已合入的：`build-server.mjs` 的 darwin、win 四个目标，`.zip` 和 `unpackZip`/`writeZip`，Windows 的 Node 和 npm 布局，260 字符预算，大小写重名检查，`server-node.json` 的四个 Node，`bundledNpmCli` 的 Windows 布局，launchd 接受 `standalone`，桌面端 `RegisteredDaemon.kind` 的 `standalone`。I3 里的：`current.txt` 分支、`extractZip`、清单六项。先留着，I3 合入后由新片 I6 一起删，I5 等 I6；在那之前文档不把它们当功能写，也不发布 |
+| 共存（4.5、6.4、7.4） | Mac、Windows 上没有脚本装的服务端，Linux 没有桌面端。桌面端一侧原来的四条只剩"退出"：桌面端停本机的服务端，只有"不是桌面端自带、又另外注册成后台服务"的不停（比如自己 npm 装再 `vonvon service install`），因为停了以后服务管理器不会再拉起它；登录项、启动修复、`vonvon` 标记三条不做。4.5 里"本机 `standalone` 协议不同时显示升级条"也不做 |
+| 不变 | Mac、Windows 桌面端是能被别的设备连过来管的设备，能经桌面端外壳远程升级（U4）；桌面端自带的服务端；多设备；远程配对；Linux 服务端的全部做法；Mac、Windows 当设备要有用户登录着（Mac 靠桌面端的登录项，Windows 只在应用开着时） |
+| 切片（第 13 节） | 表里去掉 I4a、I4b；I2 只剩 I2a；加 I6；U2 ~1,400 → ~1,300；I5 依赖加 I6；D 道只剩 U4 的 Windows 验证（含 Windows 桌面端当被连的设备）；合计重算为约 25,350 行、26 片 |
+| 命令行的 Windows 检查 | C1、C3、C8 计划里交给 Windows（D 道）的命令行检查，靠的是 Windows 上只装服务端的 `vonvon.cmd`。这一批 Windows 上没有注册的 `vonvon`，这些检查不做；Skill 在 Windows 桌面端上只用进程内工具 |
+| 官网（第 10 节，W1） | Mac、Windows 下载桌面端安装包；Linux 一条命令；开远程地址、生成链接在 Mac、Windows 上走桌面端；登录着的要求按平台写 |
+| 文案（第 15 节） | 去掉 Windows、Mac 的"已装过"、"保持登录"、Mac 无图形登录几条；加安装脚本"在 Mac 上""不是 Linux"和卸载脚本"在 Mac 上" |
+| 风险（第 16 节） | 第 4 条换成 Windows 桌面端锁屏时在不在线；第 6 条去掉只 SSH 的 Mac；第 9 条作废；第 11 条去掉 Windows 的 `node.exe` 占用 |
+| 别的文档 | `product.md` 第 1 节、3.1、3.10、3.14、第 7 到 11 节和 `architecture.md` 的服务管理、维护子集、共存、"服务端独立安装和升级""在哪些系统上能跑"按上面改；`server-1/2/3/5` 的计划在文首说明；`devices-3-remote-listen.md` 里"I4a 后由 Windows Codex 顺带验 `remote enable --tailscale`"改成在 Windows 的验收任务里看桌面端认不认 Tailscale 地址 |
