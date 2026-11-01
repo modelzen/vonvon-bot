@@ -60,6 +60,17 @@ describe('CLI parity with the RPC kinds (devices 8.5)', () => {
     for (const kind of ['machine.checkCoreUpdate', 'machine.applyCoreUpdate', 'machine.coreUpdateStatus']) expect(CLI_PARITY_ALLOWLIST[kind]).toMatchObject({ reason: 'pending', slice: 'I3' });
   });
 
+  // main 必败: C8's kinds were pending, admin.logs superseded by machine.logs
+  it('covers the machine kinds C8 brings: daemon logs takes admin.logs, so machine.logs is the superseded one', () => {
+    for (const kind of ['machine.mcp.list', 'machine.mcp.add', 'machine.mcp.remove', 'machine.bridgeImport.detect', 'machine.bridgeImport.preflight', 'machine.bridgeImport.start',
+      'machine.bridgeImport.status', 'machine.bridgeImport.rollback', 'machine.setServiceSkipped', 'admin.followLogs', 'contextPreview.get', 'admin.logs']) {
+      expect(CLI_PARITY_ALLOWLIST[kind], kind).toBeUndefined();
+      expect(commands.some(command => command.covers.includes(kind)), kind).toBe(true);
+    }
+    expect(CLI_PARITY_ALLOWLIST['machine.logs']).toMatchObject({ reason: 'superseded' });
+    expect(commands.find(command => command.path === 'daemon logs')?.options).toContain('--follow');
+  });
+
   // main 必败: only settings, feishu and schedule took --json
   it('gives every command --json but `daemon run` and the hidden ones', () => {
     const missing = commands.filter(command => !command.hidden && command.path !== 'daemon run' && !command.options.includes('--json')).map(command => command.path);

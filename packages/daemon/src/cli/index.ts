@@ -85,12 +85,13 @@ covers(daemon.command('restart'), 'command.restartHost').description('Restart th
   await show(options, [`running PID ${status.pid} at ${status.listen}`, ...note ? [note] : []], { ...status, outcome });
 });
 covers(daemon.command('status'), 'admin.daemonStatus').description('Show daemon status').option(...JSON_FLAG).action(async (options: Json) => {
-  await (await import('./commands/daemon')).runStatus(Boolean(options.json));
+  await (await import('./commands/daemon')).runStatus(io(options));
 });
-covers(daemon.command('logs'), 'machine.logs').description('Read recent daemon logs').option('--tail <lines>', 'Approximate line count', (value) => Number(value), 200).option(...JSON_FLAG)
-  .action(async (options: Json & { tail: number }) => {
+covers(daemon.command('logs'), 'admin.logs', 'admin.followLogs').description('Read recent daemon logs').option('--tail <lines>', 'Line count', (value) => Number(value), 200)
+  .option('--follow', 'Then print new lines as they come, until Ctrl-C; needs the daemon running').option(...JSON_FLAG)
+  .action(async (options: Json & { tail: number; follow?: boolean }) => {
     if (!Number.isInteger(options.tail) || options.tail < 1) throw badArgs('Invalid tail count.');
-    await (await import('./commands/daemon')).runLogs(options.tail, io(options));
+    await (await import('./commands/daemon')).runLogs(options, io(options));
   });
 program.command('open').description('Open the local web UI')
   .option('--print', '打印网页地址和 SSH 转发的办法，不打开浏览器（带凭据的链接只打印到终端）')
@@ -119,6 +120,11 @@ covers(service.command('uninstall'), 'machine.service.uninstall').description('S
 covers(service.command('status'), 'machine.status').description('Show the OS service and whether it runs the daemon').option(...JSON_FLAG).action(async (options: Json) => {
   await (await import('./commands/service')).runServiceStatus(Boolean(options.json));
 });
+covers(service.command('skip'), 'machine.setServiceSkipped').description("跳过登录时启动: the checklist stops asking to install the service; --undo asks again")
+  .option('--undo', '取消跳过').option(...JSON_FLAG)
+  .action(async (options: Json & { undo?: boolean }) => {
+    await (await import('./commands/service')).runServiceSkip(!options.undo, io(options));
+  });
 const BOT = ['--bot <bot>', 'Bot id (cli_…) or name'] as const;
 const bot = program.command('bot').description('Add, show and change bots through the running daemon');
 covers(bot.command('add'), 'command.registerAgent', 'command.cancelJob').description('Register a bot by scanning a QR code in this terminal')
@@ -377,6 +383,51 @@ covers(secrets.command('remove <name>'), 'admin.removeSecret').description('删�
   .action(async (name: string, options: Json & { raw?: boolean }, command: Command) => {
     await (await import('./commands/secrets')).runSecretsRemove(name, command.args.slice(1), options, await secretsContext(options));
   });
+covers(secrets.command('test <name>'), 'admin.testSecret').description('试一次存着的 key：busy 说明 key 是对的，只是服务忙').option(...JSON_FLAG).allowUnknownOption()
+  .action(async (name: string, options: Json, command: Command) => {
+    await (await import('./commands/secrets')).runSecretsTest(name, command.args.slice(1), await secretsContext(options));
+  });
+
+const mcp = program.command('mcp').description("MCP servers in Codex's or Claude's own user configuration (the web page's 本机 → MCP)")
+  .addHelpText('after', `
+Examples:
+  vonvon mcp list --provider codex
+  vonvon mcp add github --provider codex --command npx --arg -y --arg github-mcp --env GITHUB_TOKEN   # 值取自这个终端的环境变量
+  vonvon mcp add docs --provider claude --url https://example.com/mcp --bearer-env DOCS_TOKEN
+  vonvon mcp remove github --provider codex`);
+const PROVIDER = ['--provider <provider>', 'codex or claude'] as const;
+const repeat = (value: string, previous: string[]): string[] => [...previous, value];
+type McpOptions = Json & { provider: string; command?: string; arg: string[]; env: string[]; url?: string; bearerEnv?: string };
+covers(mcp.command('list'), 'machine.mcp.list').description('List the servers: names, commands and the variables they read, never values').requiredOption(...PROVIDER).option(...JSON_FLAG)
+  .action(async (options: McpOptions) => { await (await import('./commands/mcp')).runMcp('list', undefined, options, io(options)); });
+covers(mcp.command('add <name>'), 'machine.mcp.add').description('Add a server: --command (with --arg, --env) or --url (with --bearer-env)').requiredOption(...PROVIDER)
+  .option('--command <command>', 'A local server: the command').option('--arg <arg>', 'One argument of --command; repeat, in order', repeat, [])
+  .option('--env <NAME=VALUE|NAME>', "A variable of --command; NAME alone takes this shell's value, so a key stays out of the arguments; repeat", repeat, [])
+  .option('--url <url>', 'A remote (http) server').option('--bearer-env <NAME>', 'The variable that holds the bearer token of --url; only its name is stored').option(...JSON_FLAG)
+  .action(async (name: string, options: McpOptions) => { await (await import('./commands/mcp')).runMcp('add', name, options, io(options)); });
+covers(mcp.command('remove <name>'), 'machine.mcp.remove').description('Remove a server').requiredOption(...PROVIDER).option(...JSON_FLAG)
+  .action(async (name: string, options: McpOptions) => { await (await import('./commands/mcp')).runMcp('remove', name, options, io(options)); });
+const bridgeImport = program.command('import').description("Bring the old Feishu Codex Bridge over, its bots, groups and settings (macOS; the web page's 从 Bridge 导入)");
+for (const [action, description] of [
+  ['detect', 'Look for the old bridge on this computer'], ['preflight', 'Check it and list what an import changes'], ['status', 'Show the import going on or the last one'],
+] as const) {
+  covers(bridgeImport.command(action), `machine.bridgeImport.${action}`).description(description).option(...JSON_FLAG)
+    .action(async (options: Json) => { await (await import('./commands/import')).runImportRead(action, io(options)); });
+}
+covers(bridgeImport.command('start'), 'machine.bridgeImport.start', 'machine.bridgeImport.status').description('Import, after reading what changes; stops the old bridge. Without --accept it only lists the changes')
+  .option('--accept', 'Import: you read the changes').option('--json', 'Print JSON Lines: each step, then the result')
+  .action(async (options: Json & { accept?: boolean }) => { await (await import('./commands/import')).runImportStart(Boolean(options.accept), io(options)); });
+covers(bridgeImport.command('rollback'), 'machine.bridgeImport.rollback').description('Undo an import that did not finish, or retry a rollback that failed').option('--json', 'Print JSON Lines: each step, then the result')
+  .action(async (options: Json) => { await (await import('./commands/import')).runImportRollback(io(options)); });
+const context = program.command('context').description("What the model is handed (the web page's 模型看到什么)");
+covers(context.command('show'), 'contextPreview.get').description("vonvon's own parts a new session would get, and what the session was last handed")
+  .option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--comment', 'Document comments instead of a group')
+  .option('--session <threadId>', "Which session; defaults to the group's latest").option(...JSON_FLAG)
+  .action(async (options: Json & { bot?: string; group?: string; comment?: boolean; session?: string }) => { await (await import('./commands/context')).runContextShow(options, io(options)); });
+covers(program.command('now'), 'snapshot.get').description("What each bot is doing now and which groups it attends to (the web page's 此刻)").option(...BOT).option(...JSON_FLAG)
+  .action(async (options: Json & { bot?: string }) => { await (await import('./commands/now')).runNow(options.bot, io(options)); });
+covers(program.command('snapshot'), 'snapshot.get').description("The web page's whole state: a summary, or all of it with --json").option(...JSON_FLAG)
+  .action(async (options: Json) => { await (await import('./commands/now')).runSnapshot(io(options)); });
 
 /**
  * Exits once the JSON line, and whatever was written before it, is out: process.exit would cut a pipe's pending output
