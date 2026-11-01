@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs';
 import { lstat, mkdir, open, readFile, rm, type FileHandle } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { createGunzip, crc32, inflateRawSync } from 'node:zlib';
 import { VERSION } from './current-release';
 
@@ -65,42 +66,45 @@ export async function extractTarGz(file: string, into: string, limits: ArchiveLi
   let entry: { handle: FileHandle; remaining: number; pad: number } | undefined;
   let ended = false;
   try {
-    for await (const chunk of createReadStream(file).pipe(createGunzip()) as AsyncIterable<Buffer>) {
-      if (ended) continue;
-      pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
-      for (;;) {
-        if (entry) {
-          if (entry.remaining > 0) {
-            if (!pending.length) break;
-            const take = Math.min(entry.remaining, pending.length);
-            await entry.handle.write(pending.subarray(0, take));
-            pending = pending.subarray(take);
-            entry.remaining -= take;
+    // pipeline, not pipe: a read error on the archive (ENOENT, EACCES, EIO) rejects here instead of killing the daemon
+    await pipeline(createReadStream(file), createGunzip(), async (chunks: AsyncIterable<Buffer>) => {
+      for await (const chunk of chunks) {
+        if (ended) continue;
+        pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
+        for (;;) {
+          if (entry) {
+            if (entry.remaining > 0) {
+              if (!pending.length) break;
+              const take = Math.min(entry.remaining, pending.length);
+              await entry.handle.write(pending.subarray(0, take));
+              pending = pending.subarray(take);
+              entry.remaining -= take;
+              continue;
+            }
+            if (pending.length < entry.pad) break;
+            pending = pending.subarray(entry.pad);
+            await entry.handle.close();
+            entry = undefined;
             continue;
           }
-          if (pending.length < entry.pad) break;
-          pending = pending.subarray(entry.pad);
-          await entry.handle.close();
-          entry = undefined;
-          continue;
+          if (pending.length < 512) break;
+          const header = pending.subarray(0, 512);
+          pending = pending.subarray(512);
+          if (header.every(byte => byte === 0)) { ended = true; break; }
+          let sum = 0;
+          for (let at = 0; at < 512; at++) sum += at >= 148 && at < 156 ? 32 : header[at]!;
+          if (octal(header.subarray(148, 156)) !== sum || !header.subarray(257, 262).equals(Buffer.from('ustar'))) throw new ArchiveError('corrupt', 'bad tar header');
+          const prefix = text(header.subarray(345, 500));
+          const name = prefix ? `${prefix}/${text(header.subarray(0, 100))}` : text(header.subarray(0, 100));
+          const type = String.fromCharCode(header[156]!);
+          const size = octal(header.subarray(124, 136));
+          writer.count(size);
+          if (type === '5') { await writer.dir(memberPath(into, name)); continue; }
+          if (type !== '0' && type !== '\0') throw new ArchiveError('unsafe', `${JSON.stringify(name)} is not a regular file or directory`);
+          entry = { handle: await writer.file(name, octal(header.subarray(100, 108))), remaining: size, pad: (512 - (size % 512)) % 512 };
         }
-        if (pending.length < 512) break;
-        const header = pending.subarray(0, 512);
-        pending = pending.subarray(512);
-        if (header.every(byte => byte === 0)) { ended = true; break; }
-        let sum = 0;
-        for (let at = 0; at < 512; at++) sum += at >= 148 && at < 156 ? 32 : header[at]!;
-        if (octal(header.subarray(148, 156)) !== sum || !header.subarray(257, 262).equals(Buffer.from('ustar'))) throw new ArchiveError('corrupt', 'bad tar header');
-        const prefix = text(header.subarray(345, 500));
-        const name = prefix ? `${prefix}/${text(header.subarray(0, 100))}` : text(header.subarray(0, 100));
-        const type = String.fromCharCode(header[156]!);
-        const size = octal(header.subarray(124, 136));
-        writer.count(size);
-        if (type === '5') { await writer.dir(memberPath(into, name)); continue; }
-        if (type !== '0' && type !== '\0') throw new ArchiveError('unsafe', `${JSON.stringify(name)} is not a regular file or directory`);
-        entry = { handle: await writer.file(name, octal(header.subarray(100, 108))), remaining: size, pad: (512 - (size % 512)) % 512 };
       }
-    }
+    });
   } finally { await entry?.handle.close(); }
   if (!ended || entry) throw new ArchiveError('corrupt', 'the tar archive ends early');
 }
