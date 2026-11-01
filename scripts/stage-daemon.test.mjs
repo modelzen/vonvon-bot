@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { lstat, mkdtemp, mkdir, readFile, readdir, readlink, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -270,6 +270,29 @@ test('stageDaemon ships a minified CLI with the workspace packages bundled from 
   await walk(staged);
   assert.deepEqual(shipped, []);
   assert.equal(execFileSync(process.execPath, [join(staged, 'bin/vonvon.mjs'), '--version'], {encoding: 'utf8'}).trim(), daemon.version);
+
+  // main 必败: the folder search ran its worker from Function.prototype.toString(), and after minify + keepNames the body
+  // called esbuild's __name helper, which the worker's own process did not have: every search failed with
+  // directory_unreadable on the packaged daemon (Windows acceptance task 205).
+  await t.test('dir suggest finds a folder through the staged daemon', async () => {
+    const home = join(root, 'home');
+    await mkdir(join(home, 'Projects', 'vonvon-stage-target'), {recursive: true});
+    const env = {...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, '.config'), VONVON_HOME: join(root, 'data')};
+    for (const name of ['VONVON_SERVICE', 'VONVON_SESSION', 'FEISHU_CODEX_BRIDGE', 'FEISHU_CODEX_CWD', 'CODEX_HOME']) delete env[name];
+    const vonvon = (...args) => spawnSync(process.execPath, [join(staged, 'bin/vonvon.mjs'), ...args], {env, encoding: 'utf8', timeout: 60_000});
+    const started = vonvon('daemon', 'start', '--port', '0');
+    try {
+      assert.equal(started.status, 0, started.stdout + started.stderr);
+      for (const query of ['vonvon-stage', '~/Projects/', ...process.platform === 'win32' ? ['~\\Projects\\'] : []]) {
+        const found = vonvon('dir', 'suggest', query, '--json');
+        assert.equal(found.status, 0, `${query}: ${found.stdout}${found.stderr}`);
+        assert.ok(JSON.parse(found.stdout).entries.some(entry => entry.name === 'vonvon-stage-target'), `${query}: ${found.stdout}`);
+      }
+    } finally {
+      const stopped = vonvon('daemon', 'stop');
+      assert.equal(stopped.status, 0, stopped.stdout + stopped.stderr);
+    }
+  });
 });
 
 test('default CLI staging keeps development payloads and separate dependency copies without symlinks', async t => {

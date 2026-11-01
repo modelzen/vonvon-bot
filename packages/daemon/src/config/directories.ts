@@ -3,6 +3,7 @@ import { paths } from './paths';
 import { lstat, realpath, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
+import { expandHome } from '../platform/home-path';
 import { spawnProcess } from '../platform/spawn';
 
 const AbsolutePathSchema = z.string().min(1).refine(value => isAbsolute(value) && !value.includes('\0'));
@@ -87,10 +88,9 @@ export function resolveProjectsRootDir(configured?: unknown): string {
   if (typeof configured !== 'string') throw new Error('配置 preferences.projectsRootDir 必须是字符串');
   const value = configured.trim();
   if (!value) return paths.projectsRootDir;
-  if (value === '~') return homedir();
-  if (value.startsWith('~/') || value.startsWith('~\\')) return resolve(homedir(), value.slice(2));
-  if (!isAbsolute(value)) throw new Error('配置 preferences.projectsRootDir 必须是绝对路径或以 ~ 开头');
-  return resolve(value);
+  const expanded = expandHome(value, homedir());
+  if (!isAbsolute(expanded)) throw new Error('配置 preferences.projectsRootDir 必须是绝对路径或以 ~ 开头');
+  return resolve(expanded);
 }
 
 class GitCleanupError extends Error {

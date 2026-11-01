@@ -15,6 +15,7 @@ import { log } from '../core/logger';
 import type { Project } from '../project/registry';
 import { groupPermission } from '../config/execution';
 import { checkUploadPath, uploadPlan } from '../provider/outbound/policy';
+import { expandHome } from '../platform/home-path';
 
 export const FILE_GET = 'file.get';
 export const MAX_FILE_BYTES = 30 * 1024 * 1024;
@@ -115,8 +116,7 @@ function sourcePath(src: string, cwd: string): string {
   else { try { path = decodeURIComponent(path); } catch { /* literal percent */ } }
   // Codex source references can carry :line[:column] or #Lline anchors.
   path = path.replace(/#L\d+(?:C\d+)?(?:-L?\d+(?:C\d+)?)?$/, '').replace(/:\d+(?::\d+)?$/, '');
-  if (path.startsWith('~/')) path = join(homedir(), path.slice(2));
-  return resolve(cwd, path);
+  return resolve(cwd, expandHome(path, homedir()));
 }
 
 async function inspect(path: string, cwd: string, mode: PermissionMode): Promise<FileSnapshot> {
