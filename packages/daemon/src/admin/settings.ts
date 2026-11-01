@@ -365,7 +365,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       if (query.threadId && (!target || target.backend !== query.backend))
         return { ...base, models: [], state: 'unavailable', error: '会话不存在或后端已变化' };
       if (deps.offline) { const cached = await offlineModelCatalog(query.backend); const peeked = backend.peekModels?.(); return { ...base, models: peeked?.length ? peeked : cached.models, state: 'fallback', observedAt: cached.observedAt, error: cached.message }; }
-      const [status] = await probeBackends([backend]);
+      // A model catalog does not require a Windows sandbox capability probe.
+      const [status] = await probeBackends([backend], undefined, { permissions: false });
       if (!status?.probe?.ok)
         return {
           ...base,
@@ -374,8 +375,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           error: '后端当前不可用，请检查安装或登录状态'
         };
       const listed = target?.cwd && backend.listModelsForCwd
-        ? await backend.listModelsForCwd(target.cwd)
-        : await backend.listModels();
+        ? await backend.listModelsForCwd(target.cwd, { refresh: query.refresh })
+        : await backend.listModels({ refresh: query.refresh });
       // Native backends also return a static list on discovery failure. Only their
       // successful discovery populates peekModels; fallback must not become a
       // confirmed catalog or overwrite a previously confirmed disk snapshot.
@@ -568,7 +569,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
   async function projectSettings(p: Project): Promise<T.ProjectSections> {
     // Identity changes invalidate immediately; ordinary reads share the bounded cache.
     // Environment diagnostics use doctor({ force: true }) for an explicit recheck.
-    await deps.backendFor(groupBackendId(p)).refreshPermissions?.();
+    if (!deps.offline) await deps.backendFor(groupBackendId(p)).refreshPermissions?.({ cached: true });
     const result = projectData(p, deps.backendFor(groupBackendId(p)));
     // `profile` is only a record of what the row held before the memory migration; the runtime reads `role` and the entries.
     result.role = { supplement: supplementOf(p) };

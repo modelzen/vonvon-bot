@@ -143,7 +143,10 @@ export class WindowsOwnedProcess {
       let timer: NodeJS.Timeout | undefined;
       try {
         await Promise.race([this.finishClose(), new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error('Windows provider output pipes did not close')), 500);
+          // Process exit can precede pipe EOF under scheduling or filesystem
+          // load. Keep draining within the existing close
+          // deadline instead of treating a delayed EOF as a cleanup failure.
+          timer = setTimeout(() => reject(new Error('Windows provider output pipes did not close')), Math.max(0, deadline - Date.now()));
         })]);
       } finally { clearTimeout(timer); }
     } finally { channel.close(); }

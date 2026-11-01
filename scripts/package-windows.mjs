@@ -18,6 +18,11 @@ export function validateWindowsAcceptance(report, { architecture, sourceSha, ins
       !Array.isArray(report.steps) || required.some(name => !report.steps.some(step => step.name === name && step.passed === true))) {
     throw new Error(`${architecture} native acceptance evidence does not match installer`);
   }
+  const providerFields = ['nativeModelParity', 'catalogCache', 'explicitRefresh', 'refreshFailureRecovery', 'configInvalidation'];
+  for (const name of required.filter(name => name !== 'uninstall')) {
+    const step = report.steps.find(step => step.name === name && step.passed === true);
+    if (providerFields.some(field => step?.provider?.[field] !== true)) throw new Error(`${architecture} native acceptance lacks packaged Provider verification: ${name}`);
+  }
 }
 
 export function peMachine(bytes) {

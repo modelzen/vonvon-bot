@@ -614,19 +614,19 @@ export interface AgentBackend {
    * refused one by one (codex on Linux, s20b). */
   fullAccessOnly?(): string | undefined;
   /** Refresh permission capabilities off the synchronous per-message path. */
-  refreshPermissions?(opts?: { force?: boolean }): Promise<void>;
+  refreshPermissions?(opts?: { force?: boolean; cached?: boolean }): Promise<void>;
   isAvailable(): Promise<boolean>;
   /** Probe the backend runtime（版本/路径/装法提示）—— doctor CLI、onboarding、
    * DM 体检卡共用，替代散落的硬编码探测。`force` 绕过探测缓存（体检要看
    * 「现在」的状态）。绝不抛错，必须全程异步（卡片回调里 spawnSync 会冻住
    * 事件循环——见 DM.doctor）。 */
-  doctor(opts?: { force?: boolean }): Promise<BackendProbe>;
+  doctor(opts?: { force?: boolean; permissions?: boolean }): Promise<BackendProbe>;
   /** Login state (已登录 / 未登录 / 无法确认) for backends that need one; slower than
    * {@link doctor}, so it is kept out of it (callers race doctor() against 3 s). */
   loginStatus?(opts?: { refresh?: boolean }): Promise<BackendLogin>;
-  listModels(): Promise<ModelInfo[]>;
+  listModels(opts?: { refresh?: boolean }): Promise<ModelInfo[]>;
   /** Account-confirmed model tiers constrained by the effective session configuration. */
-  listModelsForCwd?(cwd: string): Promise<ModelInfo[]>;
+  listModelsForCwd?(cwd: string, opts?: { refresh?: boolean }): Promise<ModelInfo[]>;
   /** recent codex threads under `cwd`, newest first (for resume picker) */
   listThreads(cwd: string, limit?: number): Promise<ThreadSummary[]>;
   /**

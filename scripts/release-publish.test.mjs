@@ -38,7 +38,8 @@ async function fixture(t, modern = false) {
       artifacts.push({ kind, file, bytes: bytes.length, sha256: hash(bytes), sha512: hash(bytes, 'sha512', 'base64') });
     }
     await save(join(windowsOut, `windows-acceptance-${architecture}.json`), { passed: true, architecture, hostArchitecture: architecture, sourceSha: sha,
-      installerSha256: hash(pe), steps: ['fresh-install', 'overwrite-install', 'uninstall', 'reinstall-after-uninstall', 'reinstall-after-0.7.5-orphan'].map(name => ({ name, passed: true })) });
+      installerSha256: hash(pe), steps: ['fresh-install', 'overwrite-install', 'uninstall', 'reinstall-after-uninstall', 'reinstall-after-0.7.5-orphan'].map(name => ({ name, passed: true,
+        ...(name === 'uninstall' ? {} : { provider: { nativeModelParity: true, catalogCache: true, explicitRefresh: true, refreshFailureRecovery: true, configInvalidation: true } }) })) });
   }
   await save(join(windowsOut, 'windows-release-inventory.json'), { version, sourceSha: sha, architecture: 'x64+arm64', signed: false, updatesEnabled: modern, ...(modern ? { format: 2, publicKey: keys.publicKey.export({ type: 'spki', format: 'pem' }).toString() } : {}), artifacts });
   await save(join(windowsOut, 'github-build.json'), { sourceSha: sha, runId: 123, artifactId: 456, artifactDigest: `sha256:${'b'.repeat(64)}` });
@@ -96,6 +97,20 @@ async function fixture(t, modern = false) {
   const plan = await planPublication(options, dependencies);
   return { out, options: { ...options, 'plan-sha256': plan.planSHA256, 'owner-confirmation': '确认发布' }, dependencies, calls, flags, macOut, windowsOut, plan, oldManifest };
 }
+test('publication refuses missing or failed packaged Provider evidence before uploading', async t => {
+  for (const architecture of ['x64', 'arm64']) for (const corruption of ['missing', 'failed']) await t.test(`${architecture} ${corruption}`, async t => {
+    const f = await fixture(t, true);
+    const reportPath = join(f.windowsOut, `windows-acceptance-${architecture}.json`);
+    const report = JSON.parse(await readFile(reportPath, 'utf8'));
+    const step = report.steps.find(step => step.name === 'fresh-install');
+    if (corruption === 'missing') delete step.provider;
+    else step.provider.explicitRefresh = false;
+    await save(reportPath, report);
+    await assert.rejects(uploadPublication(f.options, f.dependencies), /native acceptance lacks packaged Provider verification/);
+    assert.deepEqual(f.calls, []);
+  });
+});
+
 test('both native verified candidates produce one reviewed plan; uploads overlap and stable waits for both', async t => {
   const f = await fixture(t), macEntered = deferred(), windowsEntered = deferred(), release = deferred();
   assert.deepEqual(f.calls, []);
