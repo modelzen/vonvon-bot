@@ -376,6 +376,8 @@ covers(settingsAct.command('comment-instructions'), 'settings.act.commentInstruc
 covers(settings.command('models'), 'settings.models').description("List the models a settings page's model picker offers")
   .option('--backend <backend>', 'codex, claude, or an id like codex-appserver').option('--purpose <purpose>', 'project, session, comments, titles or judge')
   .option('--session <threadId>', 'Session thread id; needed for --purpose session').option(...BOT).option(...JSON_FLAG)
+  .addHelpText('after', `
+These are what a bot's model picker offers for one use; every model a Provider reports is vonvon provider models <codex|claude>.`)
   .action(async (options: Json & { bot?: string; backend?: string; purpose?: string; session?: string }) => {
     await (await import('./commands/settings')).runSettingsModels(options, io(options));
   });
@@ -460,6 +462,78 @@ covers(feishu.command('members <groupId>'), 'command.listGroupMembers').descript
   .action(async (groupId: string, options: Json & { bot?: string; cursor?: string }) => {
     await (await import('./commands/feishu')).runFeishu('members', groupId, options, io(options));
   });
+const env = program.command('env').description("This computer's tools and Provider components: the web page's 本机环境")
+  .addHelpText('after', `
+<tool> is codex, claude or lark-cli. vonvon signs in lark-cli only; Codex and Claude sign in with their own commands.
+
+Examples:
+  vonvon env scan
+  vonvon env install lark-cli
+  vonvon env login lark-cli
+  printf %s "$APP_SECRET" | vonvon env profile add 研发 --app-id cli_xxx --use
+  vonvon env backend install <id>          # ids: vonvon env backend list
+  vonvon env cancel install`);
+const JSON_LINES = ['--json', 'Print JSON Lines: the progress, then the result'] as const;
+const envCommands = () => import('./commands/env');
+covers(env.command('scan'), 'environment.scan', 'environment.authStatus').description('Show Codex, Claude and lark-cli: installed or not, the version, signed in or not').option(...JSON_FLAG)
+  .action(async (options: Json) => { await (await envCommands()).runEnvScan(io(options)); });
+for (const [name, update, description] of [['install', false, 'Install a managed copy of a tool'], ['update', true, 'Update the managed copy of a tool']] as const) {
+  covers(env.command(`${name} <tool>`), `environment.${name}`, 'environment.toolInstallStatus', 'environment.cancelInstall').description(`${description}, following it to the end (Ctrl-C cancels it)`).option(...JSON_LINES)
+    .action(async (tool: string, options: Json) => { await (await envCommands()).runEnvInstall(tool, update, io(options)); });
+}
+covers(env.command('uninstall <tool>'), 'environment.uninstall').description('Stop using the managed copy of a tool; other installs stay').option(...JSON_FLAG)
+  .action(async (tool: string, options: Json) => { await (await envCommands()).runEnvUninstall(tool, io(options)); });
+covers(env.command('login <tool>'), 'environment.startLogin', 'environment.loginStatus', 'environment.cancelLogin').description('Sign lark-cli in through the link it gives, following it to the end (Ctrl-C cancels it)').option(...JSON_LINES)
+  .action(async (tool: string, options: Json) => { await (await envCommands()).runEnvLogin(tool, io(options)); });
+const envProfile = env.command('profile').description("lark-cli's app profiles (应用配置)");
+covers(envProfile.command('list'), 'environment.profileList').description('List the profiles; * marks the one in use').option(...JSON_FLAG)
+  .action(async (options: Json) => { await (await envCommands()).runEnvProfileList(io(options)); });
+covers(envProfile.command('use <name>'), 'environment.profileUse').description('Use this profile from now on').option(...JSON_FLAG)
+  .action(async (name: string, options: Json) => { await (await envCommands()).runEnvProfileUse(name, io(options)); });
+covers(envProfile.command('add <name>'), 'environment.profileAdd').description("Add an existing app's profile; the App Secret is pasted at a hidden prompt, or piped in")
+  .requiredOption('--app-id <id>', "The app's id (cli_…)").option('--brand <brand>', 'feishu or lark', 'feishu').option('--use', 'Use it from now on').option(...JSON_FLAG)
+  .addHelpText('after', `
+The App Secret is never an argument: it would stay in the shell history.
+
+Examples:
+  vonvon env profile add 研发 --app-id cli_xxx
+  printf %s "$APP_SECRET" | vonvon env profile add 研发 --app-id cli_xxx --use   # 脚本里`)
+  .action(async (name: string, options: Json & { appId: string; brand?: string; use?: boolean }) => {
+    await (await envCommands()).runEnvProfileAdd(name, options, io(options));
+  });
+covers(envProfile.command('init [name]'), 'environment.profileInit', 'environment.profileInitStatus', 'environment.profileInitCancel')
+  .description('Make a new app through the link lark-cli gives, following it to the end (Ctrl-C cancels it); --status and --cancel need no name')
+  .option('--status', 'Show the app profile being made, or how the last one ended').option('--cancel', 'Cancel the app profile being made').option(...JSON_LINES)
+  .action(async (name: string | undefined, options: Json & { status?: boolean; cancel?: boolean }) => {
+    if (options.status && options.cancel) throw badArgs('--status 和 --cancel 只给一个。');
+    const commands = await envCommands();
+    if (options.status || options.cancel) {
+      if (name !== undefined) throw badArgs(`--${options.status ? 'status' : 'cancel'} 不带名字。`);
+      await commands.runEnvProfileInitState(options.status ? 'status' : 'cancel', io(options));
+    } else if (name === undefined) throw badArgs('要写新应用配置的名字，比如 vonvon env profile init 研发。');
+    else await commands.runEnvProfileInit(name, io(options));
+  });
+const envBackend = env.command('backend').description('The Provider components (组件) the bots run on');
+covers(envBackend.command('list'), 'environment.backendCatalog').description('List the components: installed or not, and which can be installed').option(...JSON_FLAG)
+  .action(async (options: Json) => { await (await envCommands()).runEnvBackendList(io(options)); });
+covers(envBackend.command('version <id>'), 'environment.backendVersion').description("Show a component's installed and latest version").option(...JSON_FLAG)
+  .action(async (id: string, options: Json) => { await (await envCommands()).runEnvBackendVersion(id, io(options)); });
+covers(envBackend.command('install <id>'), 'environment.backendInstall', 'environment.backendInstallStatus', 'environment.cancelBackendInstall')
+  .description('Install a component, printing its output as it comes (Ctrl-C cancels it)').option('--update', 'Update it instead').option('--json', 'Print JSON Lines: the output, then the result')
+  .action(async (id: string, options: Json & { update?: boolean }) => { await (await envCommands()).runEnvBackendInstall(id, Boolean(options.update), io(options)); });
+covers(envBackend.command('uninstall <id>'), 'environment.backendUninstall').description('Uninstall a component').option(...JSON_FLAG)
+  .action(async (id: string, options: Json) => { await (await envCommands()).runEnvBackendUninstall(id, io(options)); });
+covers(envBackend.command('check <id>'), 'environment.backendLogin').description("Check a component's sign-in (检查登录)").option('--refresh', 'Check again now (重新检测); without it the last check').option(...JSON_FLAG)
+  .action(async (id: string, options: Json & { refresh?: boolean }) => { await (await envCommands()).runEnvBackendCheck(id, Boolean(options.refresh), io(options)); });
+covers(env.command('cancel <what> [id]'), 'environment.cancelInstall', 'environment.cancelLogin', 'environment.cancelBackendInstall')
+  .description('Cancel what runs: install (a tool), login (lark-cli) or backend <id> (a component); an app profile: env profile init --cancel').option(...JSON_FLAG)
+  .action(async (what: string, id: string | undefined, options: Json) => { await (await envCommands()).runEnvCancel(what, id, io(options)); });
+const provider = program.command('provider').description('The Providers the bots run on: Codex and Claude');
+covers(provider.command('models <provider>'), 'collaboration.providerModels').description('List every model a Provider reports: codex or claude').option(...JSON_FLAG)
+  .addHelpText('after', `
+These are all the models the Provider itself reports. The ones a bot's model picker offers for one use are
+vonvon settings models --backend <codex|claude> --purpose <use>.`)
+  .action(async (name: string, options: Json) => { await (await import('./commands/provider')).runProviderModels(name, io(options)); });
 program.command('__daemon-control <action>', { hidden: true }).action(async (action: string) => {
   await (await import('./commands/daemon-control')).runDaemonControl(action);
 });

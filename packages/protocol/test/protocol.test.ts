@@ -310,6 +310,32 @@ it("accepts optional omittedBytes and rejects negative or fractional counts", ()
   expect(environmentReplySchema.safeParse({...reply,omittedBytes:0.5}).success).toBe(false);
 });
 
+// cli-7-environment 审查 202: the request id is optional both ways, so an older client and an older reply still parse
+it("takes an optional request id on the install starts and echoes it in their states, older shapes still parsing", () => {
+  const requestId = randomUUID();
+  const envelope = (payload: unknown) => requestSchema.safeParse({type:"request",id:"1",method:"environment",payload});
+  for (const start of [{type:"install",tool:"codex"}, {type:"update",tool:"lark-cli"}, {type:"backendInstall",id:"claude-agent",update:false}]) {
+    expect(envelope(start).success).toBe(true);
+    expect(envelope({...start,requestId}).success).toBe(true);
+    expect(envelope({...start,requestId:"not-a-uuid"}).success).toBe(false);
+  }
+  // only the starts carry one
+  expect(envelope({type:"toolInstallStatus",requestId}).success).toBe(false);
+  expect(envelope({type:"startLogin",tool:"lark-cli",requestId}).success).toBe(false);
+  const running = {kind:"running",id:"op",tool:"codex",update:false,startedAt:1};
+  const ended = {kind:"failed",id:"op",message:"x"};
+  for (const operation of [running, ended]) {
+    expect(environmentReplySchema.parse({kind:"toolInstall",operation})).toEqual({kind:"toolInstall",operation});
+    expect(environmentReplySchema.parse({kind:"toolInstall",operation:{...operation,requestId}})).toEqual({kind:"toolInstall",operation:{...operation,requestId}});
+  }
+  const status = {operationId:randomUUID(),id:"claude-agent",update:false,state:"running",replay:[],omittedBytes:0};
+  expect(environmentReplySchema.parse({kind:"backendInstallStatus",operation:status})).toEqual({kind:"backendInstallStatus",operation:status});
+  expect(environmentReplySchema.parse({kind:"backendInstallStatus",operation:{...status,requestId}})).toEqual({kind:"backendInstallStatus",operation:{...status,requestId}});
+  // a reply schema without the field (an older client's) drops it instead of failing
+  const older = z.object({kind:z.literal("running"),id:z.string(),tool:z.string(),update:z.boolean(),startedAt:z.number()});
+  expect(older.parse({...running,requestId})).toEqual(running);
+});
+
 it("writes a crash in one line: a signal the supervisor saw with its uptime, a forced end found later with a lower bound (s18a)", () => {
   expect(crashText({ kind: "exception", reason: "TypeError: x", uptimeMs: 192_000 })).toBe("程序出错：TypeError: x，运行了 3 分 12 秒");
   expect(crashText({ kind: "forced", reason: "SIGKILL", uptimeMs: 500 })).toBe("被系统强制结束（SIGKILL），运行了 0 秒");
