@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { enableLinger, lingerLine, readLinger, runCommand, userManagerHint, type CommandResult, type SessionDependencies } from '../src/service/linux-session';
+import { enableLinger, lingerLine, readLinger, runCommand, userManagerHint, userManagerProblem, type CommandResult, type SessionDependencies } from '../src/service/linux-session';
 
 /** A fake loginctl that answers `show-user` from the list, one answer per call (the last repeats), and a fake file system. */
 function session(answers: CommandResult[], files: string[] = ['/run/systemd/system'], fields: Partial<SessionDependencies> = {}) {
@@ -47,4 +47,17 @@ it('names the three common reasons the user manager cannot be asked, and nothing
   expect(await hint(['/run/systemd/system', '/run/user/1000', '/run/user/1000/bus'], '/tmp/elsewhere')).toContain('export XDG_RUNTIME_DIR=/run/user/1000');
   expect(await hint(['/run/systemd/system'], '/run/user/1000')).toContain('sudo loginctl enable-linger ops');
   expect(await hint(['/run/systemd/system', '/run/user/1000', '/run/user/1000/bus'], '/run/user/1000')).toBeUndefined();
+});
+
+// main 必败: the causes had no stable names the install script could act on (server-2 4.4)
+it('names each common cause with a stable reason, and takes systemctl at its word when it has no systemd', async () => {
+  const problem = (files: string[], xdgRuntimeDir?: string, detail = '') => userManagerProblem(detail, session([yes], files, { xdgRuntimeDir }).d);
+  expect(await problem([])).toMatchObject({ reason: 'no_systemd', hint: expect.stringMatching(/^这台机器不是用 systemd 启动的/) });
+  expect(await problem(['/run/systemd/system', '/run/user/1000', '/run/user/1000/bus'])).toMatchObject({ reason: 'no_runtime_dir' });
+  expect(await problem(['/run/systemd/system'], '/run/user/1000')).toMatchObject({ reason: 'user_instance_down' });
+  const up = ['/run/systemd/system', '/run/user/1000', '/run/user/1000/bus'];
+  expect(await problem(up, '/run/user/1000')).toBeUndefined();
+  // a container that still has the directory, or a machine without systemctl
+  expect(await problem(up, '/run/user/1000', "User manager unavailable: System has not been booted with systemd as init system (PID 1). Can't operate.")).toMatchObject({ reason: 'no_systemd' });
+  expect(await problem(up, '/run/user/1000', 'User manager unavailable: spawn systemctl ENOENT')).toMatchObject({ reason: 'no_systemd' });
 });

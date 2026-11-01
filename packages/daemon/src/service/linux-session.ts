@@ -73,13 +73,27 @@ export function lingerLine(linger: Linger, user: string): string {
   return `查不到 linger 的状态：${linger.detail ?? '原因不明'}。${lingerOffHint(user)}`;
 }
 
-/** Why `systemctl --user` cannot be asked, when it is one of the three common cases; undefined otherwise. */
-export async function userManagerHint(d: SessionDependencies = sessionDefaults()): Promise<string | undefined> {
-  if (!(await d.exists('/run/systemd/system'))) return '这台机器不是用 systemd 启动的（容器里常见），装不了 systemd 用户服务。用 vonvon daemon start 起一个分离的 daemon；它崩溃后不会自动重启。';
+/** server-2 4.4: the three causes `service install --json` names in `reason`, for the install script's fallback. */
+export type UserManagerProblem = { reason: 'no_systemd' | 'user_instance_down' | 'no_runtime_dir'; hint: string };
+/** What systemctl says without systemd as PID 1, or when it is not installed at all. */
+const NO_SYSTEMD = /has not been booted with systemd|spawn systemctl ENOENT/;
+
+/**
+ * Why `systemctl --user` cannot be asked, when it is one of the three common cases; undefined otherwise. `detail` is
+ * what systemctl answered, if it was asked.
+ */
+export async function userManagerProblem(detail = '', d: SessionDependencies = sessionDefaults()): Promise<UserManagerProblem | undefined> {
+  if (NO_SYSTEMD.test(detail) || !(await d.exists('/run/systemd/system'))) {
+    return { reason: 'no_systemd', hint: '这台机器不是用 systemd 启动的（容器里常见），装不了 systemd 用户服务。用 vonvon daemon start 起一个分离的 daemon；它崩溃后不会自动重启。' };
+  }
   const runtime = `/run/user/${d.uid}`;
   if (d.xdgRuntimeDir !== runtime && await d.exists(`${runtime}/bus`)) {
-    return `当前终端没有 XDG_RUNTIME_DIR（用 sudo -u 或 su 切到这个账号时常见），连不上这个账号的 systemd。运行 export XDG_RUNTIME_DIR=${runtime} 再试，或者直接用这个账号 SSH 登录。`;
+    return { reason: 'no_runtime_dir', hint: `当前终端没有 XDG_RUNTIME_DIR（用 sudo -u 或 su 切到这个账号时常见），连不上这个账号的 systemd。运行 export XDG_RUNTIME_DIR=${runtime} 再试，或者直接用这个账号 SSH 登录。` };
   }
-  if (!(await d.exists(runtime))) return `这个账号的 systemd 用户实例没在运行：没有登录会话，也没开 linger。用这个账号 SSH 登录后再试；或者先开 linger：loginctl enable-linger（不行就 ${sudoLinger(d.user)}）。`;
+  if (!(await d.exists(runtime))) return { reason: 'user_instance_down', hint: `这个账号的 systemd 用户实例没在运行：没有登录会话，也没开 linger。用这个账号 SSH 登录后再试；或者先开 linger：loginctl enable-linger（不行就 ${sudoLinger(d.user)}）。` };
   return undefined;
+}
+
+export async function userManagerHint(d: SessionDependencies = sessionDefaults()): Promise<string | undefined> {
+  return (await userManagerProblem('', d))?.hint;
 }

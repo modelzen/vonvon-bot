@@ -254,3 +254,15 @@ JP-VPS 自测：
 - 行数估计 ~1,550（`install.sh` 260、`uninstall.sh` 90、`install.ps1` 260、`uninstall.ps1` 80、`standalone-setup.ts` 150、`P/cli-path-block.ts` + `D/platform/shell-path.ts` 100、`service.ts` 60、desktop 改 import 净 -30、测试 ~580），超过 1,500，**拆两片**：
   - **I2a**（本片主体，B2 道，依赖 I1）：sh 两个脚本、TS 两条隐藏命令、PATH 块搬家、`service.ts`、root 警告、§5.1 和 §5.2 的测试。~1,150。
   - **I2b**（D 道，依赖 I2a、I4a）：`install.ps1`、`uninstall.ps1`、§5.3 静态测试、§6 的 Windows 验收清单（写进发给 Windows Codex 的任务）。~400。
+
+## 和计划不一样的地方（I2a）
+
+- `__standalone-setup` 的版本参数叫 `--release`，不叫 `--version`：commander 的程序级 `--version` 写在子命令后面也会被它截走，打印版本就退出。
+- §4.3 第 1 步和第 6 步矛盾（版本目录不完整既是 `bad-args` 又是 `release_incomplete`）：不另做预检，交给 `switchCurrent` 判，统一 `failed`、`reason: 'release_incomplete'`，exit 1。
+- `D/service/current-release.ts` 是 I3（server-3）同名文件的逐字副本，两边合进集成分支时内容相同、不冲突；以后只留一份由 I3 维护。
+- PATH 块：已有的启动文件不可写时不靠 `rename` 绕过权限，记进 `pathNote`；启动文件是符号链接（dotfiles 仓库）时改它指向的文件，链接本身保留。
+- `uninstall.sh`：只在 `~/.config/systemd/user/vonvon-bot.service` 或 `~/Library/LaunchAgents/com.vonvon.bot.daemon.plist` 在时才跑 `service uninstall`。安装时退回直接启动的环境（没有 systemd、Mac 只 SSH）没有服务定义，`service uninstall` 在那里问不了服务管理器、回 `uninstall_incomplete`，照计划写会永远卸不掉（§6.2 的真包自测里碰到的）。`service uninstall` 没注册时回的是 `ok: true`（`result: 'not-installed'`），所以只要它成功就再跑一次 `daemon stop`（`connection` 当作没在跑）；`bin/vonvon` 坏了时，用 `releases/*/node` 里第一个能跑的版本走完整流程（停服务、停 daemon、去 PATH），不只是 teardown；一个都跑不了、而服务定义还指着安装根时，exit 1，什么都不删。删安装根时多两条：`HOME` 不是 `/`，目标是目录。
+- `install.sh` 比计划严：清单 payload 整体对 C1 的形状（键顺序、六个目标、可选 `notes`）做字面匹配，不只看前缀；包成员用 `tar -tzvf` 只放行普通文件和目录（软链接、硬链接都拒绝），再查路径；OpenSSL 3 及以上都验签名；脚本里公钥是空的时直接 exit 4（真公钥等 owner 按 I5 §4.2 生成后填进 `# BEGIN VONVON PUBKEY` 那一段）。
+- 两个脚本都 `unset VONVON_HOME`：数据目录固定是 `~/.vonvon-bot`，和"已装过"的判断、桌面端对得上；设了的话 `install.sh` 说一句。
+- `service install`：root 警告在失败时放进 `partial.notes`；`CommandError` 加了 `fallback`、`hint` 两个字段，JSON 里紧跟 `reason`。
+- `README.md` 没加安装命令：脚本还没发到 dl.vonvon.cc，等 I5 上线时一起加。
