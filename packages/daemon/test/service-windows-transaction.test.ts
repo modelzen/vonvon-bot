@@ -172,14 +172,44 @@ it('a daemon that does not exit 15 s after the stop is killed with taskkill /T /
   expect(m.state.clock).toBeGreaterThanOrEqual(WINDOWS_SERVICE_TIMING.handoverMs);
 });
 
-it('waits for the old supervisor too before /Run, so IgnoreNew does not swallow the start', async () => {
+it('hands over once the daemon is gone, whatever a stale supervisor.pid names, and kills nothing by PID (F6)', async () => {
+  // supervisor.pid left by a killed supervisor, its PID now someone else's: the hand-over does not wait on it.
   const m = await machine();
   m.state.lock = owner(500);
   m.state.supervisor = 499; m.state.alive.add(499);
-  m.state.onStop = () => { m.state.lock = null; m.state.onSleep = () => { if (m.state.clock >= 1500) m.state.alive.delete(499); }; };
+  m.state.onStop = () => { m.state.lock = null; };
   m.state.onRun = () => { m.state.lock = owner(600); };
-  await expect(m.service.install()).resolves.toMatchObject({ kind: 'installed' });
-  expect(m.state.clock).toBeGreaterThanOrEqual(1500);
+  await expect(m.service.install()).resolves.toMatchObject({ kind: 'installed', retained: { pid: 600 } });
+  expect(m.calls.slice(-2)).toEqual(['stopHost 500', `schtasks /Run /TN ${m.name}`]);
+  expect(m.calls.some(call => call.startsWith('taskkill'))).toBe(false);
+  expect(m.state.clock).toBeLessThan(WINDOWS_SERVICE_TIMING.handoverMs);
+});
+
+it('a /Run that IgnoreNew drops while the old supervisor exits is asked again after 5 s', async () => {
+  const m = await machine();
+  m.state.lock = owner(500);
+  m.state.onStop = () => { m.state.lock = null; };
+  let runs = 0;
+  m.state.onRun = () => { runs++; if (runs === 2) m.state.lock = owner(600); };
+  await expect(m.service.install()).resolves.toMatchObject({ kind: 'installed', retained: { pid: 600 } });
+  expect(m.calls.filter(call => call.includes('/Run'))).toHaveLength(2);
+  expect(m.state.clock).toBeGreaterThanOrEqual(WINDOWS_SERVICE_TIMING.rerunAfterMs);
+});
+
+it('kills by PID only while the lock still names the daemon that answered the stop', async () => {
+  // It answered, then let the lock go just as the 15 s ran out: no taskkill on a PID that may be reused by now.
+  const m = await machine();
+  m.state.lock = owner(500);
+  let phase = 0;
+  m.state.onStop = () => {
+    m.state.onRead = () => {
+      if (phase === 0 && m.state.clock >= WINDOWS_SERVICE_TIMING.handoverMs) phase = 1;
+      else if (phase === 1) { m.state.lock = null; phase = 2; }
+    };
+  };
+  m.state.onRun = () => { m.state.lock = owner(600); };
+  const result = await m.service.install();
+  expect(result).toMatchObject({ kind: 'installed' });
   expect(m.calls.some(call => call.startsWith('taskkill'))).toBe(false);
 });
 
@@ -284,6 +314,22 @@ it('uninstall never kills by PID a daemon that did not answer the stop: /End, de
   expect(m.calls.some(call => call.startsWith('taskkill'))).toBe(false);
 });
 
+it('uninstall removes its own task when the data directory is gone, and still refuses a foreign one (F7)', async () => {
+  const m = await machine();
+  m.state.task = reserialized(decodeConsoleText(m.ours()));
+  await rm(m.root, { recursive: true, force: true });
+  await expect(m.service.uninstall()).resolves.toMatchObject({ kind: 'uninstalled' });
+  expect(m.calls.at(-1)).toBe(`schtasks /Delete /TN ${m.name} /F`);
+  expect(m.stops).toEqual([]);
+  expect(m.state.task).toBeNull();
+
+  const f = await machine();
+  f.state.task = foreignTaskXml();
+  await rm(f.root, { recursive: true, force: true });
+  await expect(f.service.uninstall()).resolves.toMatchObject({ kind: 'uninstall_refused', reason: 'task_foreign' });
+  expect(f.calls.some(call => call.includes('/Delete'))).toBe(false);
+});
+
 it('uninstall refuses a foreign task, and reports a /Delete that failed while the task is still there', async () => {
   const f = await machine();
   f.state.task = foreignTaskXml();
@@ -346,6 +392,6 @@ it('start runs the task and returns the daemon that comes up; a /Run that fails 
 });
 
 it('parses one CSV row with quotes, commas and doubled quotes', () => {
-  expect(parseCsvRow('"HOST","\\VonvonBot\\a-b","N/A","Running","x, ""y"""\r\n"second"')).toEqual(['HOST', '\\VonvonBot\\a-b', 'N/A', 'Running', 'x, "y"']);
+  expect(parseCsvRow('"HOST","\\VonvonBot-a-b","N/A","Running","x, ""y"""\r\n"second"')).toEqual(['HOST', '\\VonvonBot-a-b', 'N/A', 'Running', 'x, "y"']);
   expect(parseCsvRow('')).toEqual(['']);
 });

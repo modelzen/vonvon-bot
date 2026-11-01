@@ -120,7 +120,7 @@ root 警告：`daemon run` 和 `service install` 在 `process.getuid?.() === 0` 
 同 §4.1 的 12 步，差别：
 - `Set-StrictMode -Version 2`、`$ErrorActionPreference = 'Stop'`、`[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12`；`Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0`。整个脚本是函数 + 最后一行 `Main`。
 - root 一步换成"管理员"：`([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole('Administrator')` 为真 → 警告（不拒绝：Windows 上管理员账号就是普通用法；计划任务仍 `LeastPrivilege`）。
-- 已装过：`$env:USERPROFILE\.vonvon-bot\daemon.pid` 的 pid `Get-Process -Id` 存在；`$env:LOCALAPPDATA\VonvonBot\server\current.txt` 存在；计划任务 `schtasks /Query /TN "\VonvonBot\<sid-hash12>-<root-hash12>"` 退 0（C7 的哈希在 PS 里算：SID 来自 `WindowsIdentity.GetCurrent().User.Value`，数据目录小写、去尾 `\`，`[Security.Cryptography.SHA256]`）；桌面端：`HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*` 里 `DisplayName -eq 'Vonvon Bot'` 或 `$env:LOCALAPPDATA\Programs\Vonvon Bot` 存在。文案用"打开 Vonvon Bot 就能用"那句（Windows 桌面端不注册 `vonvon`）。
+- 已装过：`$env:USERPROFILE\.vonvon-bot\daemon.pid` 的 pid `Get-Process -Id` 存在；`$env:LOCALAPPDATA\VonvonBot\server\current.txt` 存在；计划任务 `schtasks /Query /TN "\VonvonBot-<sid-hash12>-<root-hash12>"` 退 0（C7 的哈希在 PS 里算：SID 来自 `WindowsIdentity.GetCurrent().User.Value`，数据目录小写、去尾 `\`，`[Security.Cryptography.SHA256]`）；桌面端：`HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*` 里 `DisplayName -eq 'Vonvon Bot'` 或 `$env:LOCALAPPDATA\Programs\Vonvon Bot` 存在。文案用"打开 Vonvon Bot 就能用"那句（Windows 桌面端不注册 `vonvon`）。
 - 选包：`[Environment]::Is64BitOperatingSystem` 为假 → 不支持；`$env:PROCESSOR_ARCHITECTURE`（`AMD64` → `win-x64`，`ARM64` → `win-arm64`；PS 5.1 x86 进程在 ARM64 上跑时读 `PROCESSOR_ARCHITEW6432`）。
 - **签名**：.NET Framework 4.x 没有 Ed25519，PowerShell 5.1 验不了签名；用包里刚解出来的 `node.exe` 来验也不行——它就是待验的内容。所以 `.ps1` 固定打印"这台机器上没能核对发布签名；已核对下载内容的哈希，来源是 https://dl.vonvon.cc"（和没有 OpenSSL 3 的 sh 同一个信任根），payload 照样做 C1 的全部字面校验（`ConvertFrom-Json` 后逐字段比对，不靠键顺序）。
 - 解包：先 `[IO.Compression.ZipFile]::OpenRead` 枚举 `Entries`，`FullName` 含 `..` 段、以 `/` 或 `\` 开头、含 `:` → 拒；再 `Expand-Archive -DestinationPath "<根>\releases\<v>.part"`；`Move-Item` 改名。
@@ -218,7 +218,7 @@ JP-VPS 自测：
 - JP-VPS 干净测试用户，SSH 登录（不用 `sudo -u`）：`sh -c "$(curl -fsSL <assets>/install.sh)"` → `systemctl --user status vonvon-bot` 运行中、linger 已开或打印了 sudo 提示且 exit 0；再跑一次 → "已经装过了"；`uninstall.sh` 后 unit 没了、`~/.vonvon-bot` 还在。
 - Mac 测试环境：装了桌面端（开着 / 没开）时跑脚本 → 跳过；没装时跑 → LaunchAgent 在、`vonvon --version` 对；SSH 到 Mac（无 GUI 会话）跑 → "没有图形登录会话"退路。
 - Windows（随 I4a/I4b 的任务一起发给 Windows Codex；验收清单）：
-  1. 标准用户 PowerShell 5.1：`irm <assets>/install.ps1 | iex` → exit 0；`%LOCALAPPDATA%\VonvonBot\server\current.txt` 第 1 行是版本；`bin\vonvon.cmd --version` 对；`schtasks /Query /TN "\VonvonBot\<名>"` 存在；重开 PowerShell 后 `vonvon --version` 直接能用。
+  1. 标准用户 PowerShell 5.1：`irm <assets>/install.ps1 | iex` → exit 0；`%LOCALAPPDATA%\VonvonBot\server\current.txt` 第 1 行是版本；`bin\vonvon.cmd --version` 对；`schtasks /Query /TN "\VonvonBot-<名>"` 存在；重开 PowerShell 后 `vonvon --version` 直接能用。
   2. 再跑一次 → "已经装过"，exit 0，`current.txt` 的修改时间没变。
   3. 装了桌面端（NSIS）没开时跑 → 跳过，文案是"打开 Vonvon Bot 就能用"。
   4. 第二个本地用户登录后跑 → 也装上，任务名不同。

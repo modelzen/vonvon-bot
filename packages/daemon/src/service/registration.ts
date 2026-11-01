@@ -9,8 +9,12 @@ export type Registration =
   | { kind: 'ours'; definition: Definition }
   | { kind: 'other-root'; recordedRoot: CanonicalRoot; definition: Definition }
   | { kind: 'unrecognized'; location: string; reason: string };
-/** `run` answers `schtasks` for a Windows target; the real one by default. */
-type ReadInput = { target: Target; requestedRoot: string; run?: WindowsRun };
+/**
+ * `run` answers `schtasks` for a Windows target; the real one by default. `unansweredAsAbsent`: a `schtasks` that gives no
+ * answer (timed out, not started, failed other than "no such task") reads as no task rather than an unrecognized one, for
+ * callers that may then start a daemon themselves, which the data root's pid lock still guards (I4a review F5).
+ */
+type ReadInput = { target: Target; requestedRoot: string; run?: WindowsRun; unansweredAsAbsent?: boolean };
 
 const MAX_DEFINITION_BYTES = 1024 * 1024;
 const NOT_A_REGULAR_FILE = 'Definition must be a regular file, not a symlink or directory';
@@ -75,12 +79,13 @@ export function readDefinitionBytes(target: Target, run: WindowsRun = defaultRun
 }
 
 export async function readRegistration(input: ReadInput): Promise<Registration> {
-  const location = definitionLocation(input.target);
-  try {
-    return await registrationFromBytes(input, await readDefinitionBytes(input.target, input.run));
-  } catch (error) {
-    return { kind: 'unrecognized', location, reason: error instanceof Error ? error.message : String(error) };
+  let bytes: Buffer | null;
+  try { bytes = await readDefinitionBytes(input.target, input.run); }
+  catch (error) {
+    if (input.unansweredAsAbsent && error instanceof TaskQueryFailed) return { kind: 'absent' };
+    return { kind: 'unrecognized', location: definitionLocation(input.target), reason: error instanceof Error ? error.message : String(error) };
   }
+  return registrationFromBytes(input, bytes);
 }
 
 /** Classifies definition bytes already read; the Windows adapter reads them itself to tell a failed query from a foreign task. */

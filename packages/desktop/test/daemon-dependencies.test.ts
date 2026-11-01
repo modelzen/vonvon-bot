@@ -83,6 +83,10 @@ describe('desktop daemon dependencies', () => {
       // Without the SID there is no task to look up: the app runs its bundled daemon, as before.
       const noSid = createDaemonDependencies({ root, home: root, resources: '/owned/resources', executable: '/owned/Electron', packaged: false, windowsRun: async () => ({ ok: false, status: 1, stdout: '', stderr: 'no' }) });
       await expect(noSid.readRegistration()).resolves.toEqual({ kind: 'absent' });
+      // A schtasks that gives no answer does not keep the app from opening: no task, and the pid lock guards the root (review F5).
+      const silent = createDaemonDependencies({ root, home: root, resources: '/owned/resources', executable: '/owned/Electron', packaged: false,
+        windowsRun: async command => command === 'whoami' ? { ok: true, status: 0, stdout: `"host\\u","${sid}"`, stderr: '' } : { ok: false, status: null, stdout: '', stderr: 'schtasks /Query 超时' } });
+      await expect(silent.readRegistration()).resolves.toEqual({ kind: 'absent' });
     } finally {
       Object.defineProperty(process, 'platform', original);
     }

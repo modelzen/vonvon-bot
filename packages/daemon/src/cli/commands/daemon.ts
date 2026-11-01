@@ -60,7 +60,8 @@ export async function runStart(port = 0): Promise<DaemonStatus> {
     if (ready) return ready;
   }
   {
-    const registration = await readStartupRegistration(paths.appDir);
+    // A schtasks that does not answer is no reason to refuse: the pid lock keeps a second daemon off the data root.
+    const registration = await readStartupRegistration(paths.appDir, { unansweredAsAbsent: true });
     switch (registration.kind) {
       case 'ours': {
         const endpoint = await startRegisteredDaemon(paths.appDir, port, unverified);

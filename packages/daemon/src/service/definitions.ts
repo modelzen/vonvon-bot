@@ -107,8 +107,14 @@ function windowsPath(value: string): void {
   if (/["%]/.test(value) || value.endsWith('\\')) throw new InvalidDefinitionInput(`Unsupported character in a Windows service path: ${value}`);
 }
 
-/** The task's arguments: the data root goes along, since a task has no environment of its own. */
-const windowsArguments = (port: number, root: string): string => `__win-supervise --port ${port} --home "${root}"`;
+/**
+ * What the task runs: `conhost.exe --headless`, which gives the launcher a console no one sees. A `.cmd` started straight
+ * from an InteractiveToken task opens a console window on the desktop, and closing it ends cmd, the supervisor and the
+ * daemon together (I4a review F3). `Hidden` only hides the task in the Task Scheduler UI.
+ */
+export const WINDOWS_TASK_HOST = '%SystemRoot%\\System32\\conhost.exe';
+/** The task's arguments: the launcher, then the data root, since a task has no environment of its own. */
+const windowsArguments = (launcher: string, port: number, root: string): string => `--headless "${launcher}" __win-supervise --port ${port} --home "${root}"`;
 
 /** JSON with every non-ASCII character escaped, so the field reads the same whatever code page `schtasks` answers in. */
 const asciiJson = (value: unknown): string => JSON.stringify(value).replace(/[\u007f-\uffff]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
@@ -136,13 +142,15 @@ function renderTask(target: Extract<Target, { platform: 'win32' }>, definition: 
     '    <StartWhenAvailable>true</StartWhenAvailable>',
     '    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>',
     '    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>',
+    // Normal priority: the default 7 is below normal for CPU, I/O and memory, and the daemon's agents inherit it.
+    '    <Priority>4</Priority>',
     '    <Hidden>true</Hidden>',
     '    <Enabled>true</Enabled>',
     '    <RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure>',
     '  </Settings>',
     '  <Actions Context="Author"><Exec>',
-    `    <Command>${xml(distribution.executable)}</Command>`,
-    `    <Arguments>${xml(windowsArguments(port, root))}</Arguments>`,
+    `    <Command>${xml(WINDOWS_TASK_HOST)}</Command>`,
+    `    <Arguments>${xml(windowsArguments(distribution.executable, port, root))}</Arguments>`,
     `    <WorkingDirectory>${xml(installRoot)}</WorkingDirectory>`,
     '  </Exec></Actions>',
     '</Task>',
@@ -171,9 +179,22 @@ function element(scope: string, name: string): string {
 const unquote = (value: string): string => /^".*"$/.test(value) ? value.slice(1, -1) : value;
 
 /**
+ * Piped, `schtasks /Query /XML` writes the console's code page, not UTF-16 (I4a review F1): a non-ASCII character of a
+ * path comes back as one to four bytes, `?` or a best-fit letter. Read one byte per character, the ASCII around it must
+ * still match; each run of non-ASCII characters in `expected` stands for any one to four characters per character.
+ */
+function lossyEqual(actual: string, expected: string): boolean {
+  if (!/[^\x00-\x7f]/.test(expected) || expected.length > 4096) return false;
+  const pattern = expected.replace(/[^\x00-\x7f]+|[\x00-\x7f]/g, part => /[^\x00-\x7f]/.test(part)
+    ? `[^\\r\\n]{1,${part.length * 4}}` : part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return new RegExp(`^${pattern}$`, 'i').test(actual);
+}
+
+/**
  * I4a §4.2: the XML `schtasks` gives back is its own serialization, so nothing is compared byte for byte. Five fixed
- * elements decide: the Description marker and its JSON, the Command (the launcher, any case), the Arguments, the
- * Principal's UserId (this user, when it is a SID) and RunLevel (LeastPrivilege, its default when left out).
+ * elements decide: the Description marker and its JSON (ASCII, so exact in any code page), the Command (conhost, any
+ * case), the Arguments (the launcher, port and data root; see lossyEqual), the Principal's UserId (this user, when it is
+ * a SID) and RunLevel (LeastPrivilege, its default when left out).
  */
 function decodeTask(target: Extract<Target, { platform: 'win32' }>, bytes: Uint8Array): DecodedDefinition {
   const text = decodeConsoleText(bytes);
@@ -192,10 +213,12 @@ function decodeTask(target: Extract<Target, { platform: 'win32' }>, bytes: Uint8
   // Checks the recorded fields as install would; throws on any it would refuse.
   render(target, definition);
   const command = unquote(element(text, 'Command'));
-  if (command.toLowerCase() !== d.executable.toLowerCase()) throw new Error(`Task Command runs ${command}, not ${d.executable}`);
-  const spaced = (value: string): string => value.replace(/\s+/g, ' ').toLowerCase();
+  if (command.toLowerCase() !== WINDOWS_TASK_HOST.toLowerCase()) throw new Error(`Task Command runs ${command}, not ${WINDOWS_TASK_HOST}`);
+  const spaced = (value: string): string => value.replace(/[ \t\r\n]+/g, ' ').trim();
   const args = element(text, 'Arguments');
-  if (spaced(args) !== spaced(windowsArguments(definition.port, definition.root))) throw new Error(`Task Arguments are ${args}`);
+  const expected = spaced(windowsArguments(d.executable, definition.port, definition.root));
+  const bytewise = (): string => { try { return spaced(element(Buffer.from(bytes).toString('latin1'), 'Arguments')); } catch { return ''; } };
+  if (spaced(args).toLowerCase() !== expected.toLowerCase() && !lossyEqual(bytewise(), expected)) throw new Error(`Task Arguments are ${args}`);
   const principal = /<Principal(?:\s[^>]*)?>([\s\S]*?)<\/Principal>/.exec(text)?.[1];
   if (principal === undefined) throw new Error('Task Principal is missing');
   const user = element(principal, 'UserId');

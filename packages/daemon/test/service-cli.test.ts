@@ -334,10 +334,10 @@ describe('Windows reasons (I4a §4.7)', () => {
   });
   it('status prints the task status column', async () => {
     const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
-    const status = { platformName: 'Task Scheduler (Windows)', state: 'stopped', installed: true, running: false, name: '\\VonvonBot\\a-b', servicePath: '\\VonvonBot\\a-b', stdoutPath: 'o', stderrPath: 'e', detail: 'd', task: { name: '\\VonvonBot\\a-b', status: 'Ready' } } as const;
+    const status = { platformName: 'Task Scheduler (Windows)', state: 'stopped', installed: true, running: false, name: '\\VonvonBot-a-b', servicePath: '\\VonvonBot-a-b', stdoutPath: 'o', stderrPath: 'e', detail: 'd', task: { name: '\\VonvonBot-a-b', status: 'Ready' } } as const;
     await runServiceStatus(false, { status: async () => status });
     expect(String(write.mock.calls[0]?.[0])).toContain('Task Scheduler status: Ready\n');
     await runServiceStatus(true, { status: async () => status });
-    expect(JSON.parse(String(write.mock.calls[1]?.[0]))).toMatchObject({ task: { name: '\\VonvonBot\\a-b', status: 'Ready' } });
+    expect(JSON.parse(String(write.mock.calls[1]?.[0]))).toMatchObject({ task: { name: '\\VonvonBot-a-b', status: 'Ready' } });
   });
 });

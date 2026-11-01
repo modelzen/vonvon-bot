@@ -58,7 +58,7 @@ it('I4a: routes win32 to the scheduled task, looked up by the user\'s SID', asyn
   fixture.windowsStart.mockResolvedValue({ ...owner, port: 1234 });
   await expect(runStart()).resolves.toEqual({ running: true, ...owner });
   expect(fixture.windowsStart).toHaveBeenCalledWith({});
-  expect(fixture.registration).toHaveBeenCalledWith({ target: { platform: 'win32', taskName: expect.stringMatching(/^\\VonvonBot\\[0-9a-f]{12}-[0-9a-f]{12}$/), sid: 'S-1-5-21-1000000001-2000000002-3000000003-1001' }, requestedRoot: '/owned/root' });
+  expect(fixture.registration).toHaveBeenCalledWith({ target: { platform: 'win32', taskName: expect.stringMatching(/^\\VonvonBot-[0-9a-f]{12}-[0-9a-f]{12}$/), sid: 'S-1-5-21-1000000001-2000000002-3000000003-1001' }, requestedRoot: '/owned/root', unansweredAsAbsent: true });
   expect(fixture.spawn).not.toHaveBeenCalled();
 });
 it('I4a: win32 without a SID has no task to look up, and starts detached and hidden', async () => {

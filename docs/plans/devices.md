@@ -323,7 +323,7 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 - **macOS** LaunchAgent：现有（`D/service/launchd.ts`），同上。Claude 的钥匙串登录在 launchd 下的行为未核实（`install-update-release.md` §5）。
 - **Mac、Windows 当服务端要有用户登录着**（owner 2026-10-31：本期接受）：macOS LaunchAgent 和 Windows 计划任务（`LogonTrigger`）都只在这个用户登录后运行；登录后可以锁屏，Bot 照常在线；机器重启后要有人登录一次。Linux 开了 linger 不需要。写进官网文档（第 10 节第 2 条）、`product.md` 3.10（第 11 节）、安装脚本在 macOS、Windows 上的"完成"文案（第 15 节）。不用登录也能跑的 Windows 服务 / macOS LaunchDaemon 进 `product.md`"v1 之后"。
 - **Windows**（今天没有，`service/adapter.ts:79` 直接抛）：新 `D/service/windows.ts`。
-  - 计划任务名**带用户和数据目录**（SEC-15：任务计划程序是全机命名空间，`\VonvonBot` 会让同一台 Windows 的第二个用户装不上或被"已装过"误判）：`\VonvonBot\<sid-hash12>-<root-hash12>`，规则和 `identity.ts:36-41` 一致（默认数据目录也带 sid-hash）。"已装过"只认本用户、本数据目录的任务；不带 `/F` 覆盖不属于本用户的任务。
+  - 计划任务名**带用户和数据目录**（SEC-15：任务计划程序是全机命名空间，`\VonvonBot` 会让同一台 Windows 的第二个用户装不上或被"已装过"误判）：`\VonvonBot-<sid-hash12>-<root-hash12>`（在根文件夹，I4a 审查 F2），规则和 `identity.ts:36-41` 一致（默认数据目录也带 sid-hash）。"已装过"只认本用户、本数据目录的任务；不带 `/F` 覆盖不属于本用户的任务。
   - 创建只用一种写法 `schtasks /Create /TN <name> /XML <file> /F`（WIN-2：`/XML` 不能和 `/SC`、`/RL` 混用），XML 里 `LogonTrigger` 带当前用户 `UserId`、`RunLevel LeastPrivilege`、`Hidden`、`StartWhenAvailable`、`ExecutionTimeLimit PT0S`、`MultipleInstancesPolicy IgnoreNew`，动作是 **`bin\vonvon-server.cmd __win-supervise --port N`**（7.2 的启动器，不是 `current\…`）。
   - **监督进程**（新隐藏命令）：按 `docs/architecture.md:59-60` 的规则给子进程设 `VONVON_SERVICE=windows`、用 `spawn`（不用 `fork`，`fork` 会建 IPC 通道让 `serviceManaged` 为假，`lifecycle.ts:102`）、`windowsHide: true`。子进程 `daemon run` 退 0 → 监督退出；退 75 → **先检查 `current.txt` 是否变了**：变了就监督进程自己 `exec` 新版本的启动器后退出（新 node.exe、新代码接管监督），没变立刻重启；别的退出码 → 5 秒后重启；`daemon stop` / `machine.stopHost` 让它退 0。`daemon start` 走 `schtasks /Run`；`service status` 读 `schtasks /Query /XML`。daemon 里所有 detached spawn（`daemon.ts:86-90`、`lifecycle.ts:204-206`、`restart.ts:33`、`service-action.ts`）都加 `windowsHide: true`。`vonvon open` 在 win32 调 `xdg-open`（`open.ts:105`）改 `start`。桌面端 `readRegistration`（`DT/daemon-dependencies.ts:88-89`）学会这种注册，不再在同一数据目录上另起 bundled daemon。`snapshot.ts:53` 的 win32 → `unsupported` 改成 `windows`；`definitions.ts:16-18` 的 `SerializedDefinition` 加 `{ platform: 'win32'; xml }`。
   - 实现时和上面不一样的地方（`open` 用 `rundll32` 不用 `start`、默认数据目录也带 root 哈希、只装 `standalone`、任务参数带 `--home`、`RestartOnFailure` 兜底）见 `docs/plans/server-4a-windows-task.md` §4.8 和文末"和计划不一样的地方"。
@@ -617,7 +617,7 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | SEC-12 | 接受 | 每台设备一对客户端密钥；信任范围写进 5.3、16.2、文档；列表显示最近地址 |
 | SEC-13 | 接受 | 脚本 euid=0 默认拒绝，`VONVON_ALLOW_ROOT=1` 放行；`daemon run`/`service install` 警告；列第 14 节第 9 条 |
 | SEC-14 | 接受 | 用签名清单的 sha512 不用 sidecar；可选 openssl 3 验 Ed25519；`--proto =https --tlsv1.2`；`main()`；版本格式；解包路径检查（7.3） |
-| SEC-15 | 接受 | 计划任务名 `\VonvonBot\<sid-hash>-<root-hash>`，只认本用户本目录，不 `/F` 覆盖别人的（7.4） |
+| SEC-15 | 接受 | 计划任务名 `\VonvonBot-<sid-hash>-<root-hash>`，只认本用户本目录，不 `/F` 覆盖别人的（7.4） |
 | SEC-16 | 接受 | `clients.json` 加 `generation`，每条 RPC 前核对；撤销取消任务和日志订阅（4.3） |
 | PROTO-1 | 接受 | hello 形状不变、serverInfo 分 v1/v2、能力和范围放 `negotiate`、owner-verification 不比版本、枚举开放解析、`command.restartHost`、`startedAt`、维护子集不推 snapshot、0.8→0.9 回归测试（4.5） |
 | UPD-1 | 接受 | 先切 `current` 再 `requestRestart`；助手按 `serverInfo.version` 判成功；子进程钉自己的 release（7.5） |

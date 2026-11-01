@@ -4,14 +4,14 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, win32 } from 'node:path';
 import type { HostEndpoint } from '../host/discovery';
-import { isStaleOwner, readRunningPidLock, type PidLockInfo, type StaleOwner } from '../server/pid-lock';
+import { isPidLockOwnerRunning, isStaleOwner, readRunningPidLock, type PidLockInfo, type StaleOwner } from '../server/pid-lock';
 import { stopVerifiedOwner, verifyPidLockOwner } from '../server/owner-verification';
 import type { ServiceTransactionOutcome } from './adapter';
 import { serviceStderrPath, serviceStdoutPath, type ServiceStatus } from './common';
-import { renderDefinition, windowsTaskEnabled, type Definition } from './definitions';
+import { decodeGeneratedDefinition, renderDefinition, windowsTaskEnabled, type Definition } from './definitions';
 import { runtimeDistribution, type Distribution } from './distribution';
 import type { OwnerIdentity } from './drain';
-import { createSidReader, resolveServiceRoot, serviceTarget, SidUnavailable, type CanonicalRoot } from './identity';
+import { createSidReader, resolveServiceRoot, serviceTarget, SidUnavailable, windowsTaskName, type CanonicalRoot } from './identity';
 import { readDefinitionBytes, registrationFromBytes, TaskQueryFailed, type Registration } from './registration';
 import { decodeConsoleText, runWindowsCommand, withTimeout, type WindowsRun } from './windows-command';
 
@@ -41,7 +41,7 @@ export type WindowsServiceDependencies = {
   verifyOwner: typeof verifyPidLockOwner;
   /** `machine.stopHost` over loopback to a verified owner, as the Linux handover does. */
   stopHost: typeof stopVerifiedOwner;
-  /** The pid in `<root>\supervisor.pid`, or null. */
+  /** The pid in `<root>\supervisor.pid`, or null; null too for a file written before this boot. */
   readSupervisor: (root: string) => Promise<number | null>;
   isAlive: (pid: number) => boolean;
   isFile: (path: string) => boolean;
@@ -61,7 +61,7 @@ const isMissing = (error: unknown): boolean => error instanceof Error && 'code' 
 const identity = (owner: PidLockInfo): OwnerIdentity => ({ pid: owner.pid, startedAt: owner.startedAt });
 const sameOwner = (a: OwnerIdentity, b: OwnerIdentity): boolean => a.pid === b.pid && a.startedAt === b.startedAt;
 const text = (value: Uint8Array | string): string => decodeConsoleText(value).trim();
-/** Group Policy "Prohibit users from creating tasks" and its kin: English, Chinese, or the HRESULT. */
+/** Access is denied (Group Policy "Prohibit users from creating tasks", or the account's rights): English, Chinese, or the HRESULT. */
 const DENIED = /access is denied|拒绝访问|0x80070005/i;
 
 function freePort(): Promise<number> {
@@ -84,10 +84,13 @@ function isAlive(pid: number): boolean {
   catch (error) { return error instanceof Error && 'code' in error && error.code === 'EPERM'; }
 }
 
+/** A supervisor killed by /End, taskkill /F or a logoff leaves its file: one older than this boot names no supervisor. */
 async function readSupervisor(root: string): Promise<number | null> {
   try {
-    const value = JSON.parse(await readFile(join(root, SUPERVISOR_PID_FILE), 'utf8')) as { pid?: unknown };
-    return typeof value.pid === 'number' && Number.isSafeInteger(value.pid) && value.pid > 0 ? value.pid : null;
+    const value = JSON.parse(await readFile(join(root, SUPERVISOR_PID_FILE), 'utf8')) as { pid?: unknown; startedAt?: unknown };
+    if (typeof value.pid !== 'number' || !Number.isSafeInteger(value.pid) || value.pid <= 0) return null;
+    if (typeof value.startedAt !== 'string' || Number.isNaN(Date.parse(value.startedAt))) return value.pid;
+    return isPidLockOwnerRunning({ pid: value.pid, startedAt: value.startedAt, listen: null }) ? value.pid : null;
   } catch { return null; }
 }
 
@@ -158,10 +161,22 @@ export function createWindowsService(options: { root: string }, overrides: Parti
       if (error instanceof TaskQueryFailed) return { kind: 'query-failed', detail: error.message };
       return { kind: 'read', registration: { kind: 'unrecognized', location: s.target.taskName, reason: detailOf(error) }, xml: null };
     }
-    if (!s.exists) {
-      return { kind: 'read', xml, registration: xml === null ? { kind: 'absent' } : { kind: 'unrecognized', location: s.target.taskName, reason: `its data directory ${s.root} is missing` } };
-    }
+    if (!s.exists) return { kind: 'read', xml, registration: xml === null ? { kind: 'absent' } : orphaned(s, xml) };
     return { kind: 'read', xml, registration: await registrationFromBytes({ target: s.target, requestedRoot: s.root }, xml) };
+  }
+
+  /**
+   * Our task whose data root is gone (I4a review F7): the five elements still say ours and the recorded root still names
+   * this task, so uninstall removes it; only the realpath check, which needs the directory, is skipped.
+   */
+  function orphaned(s: Snapshot, xml: Buffer): Registration {
+    try {
+      const decoded = decodeGeneratedDefinition(s.target, { platform: 'win32', xml });
+      if (windowsTaskName(s.target.sid, decoded.root) !== s.target.taskName) throw new Error(`its Description names ${decoded.root}`);
+      return { kind: 'ours', definition: { ...decoded, root: decoded.root as CanonicalRoot } };
+    } catch (error) {
+      return { kind: 'unrecognized', location: s.target.taskName, reason: `${detailOf(error)}; its data directory ${s.root} is missing` };
+    }
   }
 
   async function exists(s: Snapshot): Promise<boolean | null> {
@@ -178,10 +193,15 @@ export function createWindowsService(options: { root: string }, overrides: Parti
     }
   }
 
+  /** The daemon this lock named has let it go. */
+  async function released(s: Snapshot, owner: PidLockInfo | null): Promise<boolean> {
+    const lock = await d.readLock(s.root);
+    return !(owner && lock && sameOwner(lock, owner));
+  }
+
   /** The daemon this lock named is gone, and so is any supervisor that `supervisor.pid` names. */
   async function stopped(s: Snapshot, owner: PidLockInfo | null): Promise<boolean> {
-    const lock = await d.readLock(s.root);
-    if (owner && lock && sameOwner(lock, owner)) return false;
+    if (!(await released(s, owner))) return false;
     const supervisor = await d.readSupervisor(s.root);
     return supervisor === null || !d.isAlive(supervisor);
   }
@@ -219,14 +239,20 @@ export function createWindowsService(options: { root: string }, overrides: Parti
     return null;
   }
 
-  /** I4a §4.3 step 5: stop a detached daemon so the task takes the data root over; `taskkill` after 15 s. */
+  /**
+   * I4a §4.3 step 5: stop a detached daemon so the task takes the data root over; `taskkill` after 15 s. Only the daemon's
+   * exit is waited for: a supervisor still on its way out makes IgnoreNew drop the /Run, which waitForOwner asks again
+   * after 5 s, and a stale `supervisor.pid` whose PID is reused would otherwise hold the hand-over (I4a review F6).
+   */
   async function handOver(s: Snapshot, owner: PidLockInfo): Promise<string | null> {
     // An owner that does not answer as ours is never killed by PID: the PID may belong to someone else now.
     try { await d.stopHost(s.root, owner); }
     catch (error) { return `daemon PID ${owner.pid} 没回应停止请求：${detailOf(error)}`; }
-    if (await waitUntil(() => stopped(s, owner), T.handoverMs)) return null;
+    if (await waitUntil(() => released(s, owner), T.handoverMs)) return null;
+    // It answered the stop and the lock still names it, so this PID is still that daemon.
+    if (await released(s, owner)) return null;
     await d.run('taskkill', ['/T', '/F', '/PID', String(owner.pid)]);
-    if (await waitUntil(() => stopped(s, owner), T.killedMs)) return null;
+    if (await waitUntil(() => released(s, owner), T.killedMs)) return null;
     return `daemon PID ${owner.pid} 在 taskkill 之后还在`;
   }
 
@@ -285,7 +311,7 @@ export function createWindowsService(options: { root: string }, overrides: Parti
       }
       if (!created.ok || created.status !== 0) {
         const stderr = text(created.stderr) || text(created.stdout) || `exit ${created.status}`;
-        if (DENIED.test(stderr)) return result('install_refused', `schtasks /Create 被拒绝（组策略可能禁止了用户建计划任务）：${stderr}`, { reason: 'schtasks_denied', fallback: 'detached' });
+        if (DENIED.test(stderr)) return result('install_refused', `schtasks /Create 被拒绝访问，这个账号现在不能建计划任务：${stderr}`, { reason: 'schtasks_denied', fallback: 'detached' });
         return result('install_refused', `schtasks /Create: ${stderr}`, { reason: 'schtasks_create_failed' });
       }
 
@@ -352,7 +378,7 @@ export function createWindowsService(options: { root: string }, overrides: Parti
       });
       let s: Snapshot;
       try { s = await snapshot(); }
-      catch (error) { return shape('\\VonvonBot', 'unknown', `Cannot ask Task Scheduler: ${detailOf(error)}`); }
+      catch (error) { return shape('\\VonvonBot-*', 'unknown', `Cannot ask Task Scheduler: ${detailOf(error)}`); }
       const name = s.target.taskName;
       const observed = await observe(s);
       if (observed.kind === 'query-failed') return shape(name, 'unknown', `Cannot ask Task Scheduler: ${observed.detail}`);

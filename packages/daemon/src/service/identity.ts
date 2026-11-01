@@ -81,11 +81,12 @@ export function canonicalWindowsRoot(root: string): string {
 }
 
 /**
- * C7: `\VonvonBot\<sid-hash12>-<root-hash12>`. Task names are machine-wide, so even the default data root carries both
- * hashes: two users, or one user's second data root, never share a task.
+ * C7: `\VonvonBot-<sid-hash12>-<root-hash12>`. Task names are machine-wide, so even the default data root carries both
+ * hashes: two users, or one user's second data root, never share a task. The task sits in the root folder, as per-user
+ * installs' tasks do: a standard user may create tasks there but not a folder (I4a review F2).
  */
 export function windowsTaskName(sid: string, root: string): string {
-  return `\\VonvonBot\\${hash12(sid)}-${hash12(canonicalWindowsRoot(root))}`;
+  return `\\VonvonBot-${hash12(sid)}-${hash12(canonicalWindowsRoot(root))}`;
 }
 
 export class SidUnavailable extends Error {

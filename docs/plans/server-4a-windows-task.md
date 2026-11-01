@@ -6,7 +6,7 @@
 
 ## 1. 做什么
 
-Windows 上 `vonvon service install` 注册一个**按用户和数据目录命名**的计划任务，用户登录时以最低权限、隐藏窗口运行 `bin\vonvon-server.cmd __win-supervise --port N`；`service status` / `service uninstall` / `daemon start` 都认这个任务；`bin\vonvon.cmd` 和 `bin\vonvon-server.cmd` 读 `current.txt` 第 1 行选版本、缺了退回第 2 行；`vonvon open` 在 Windows 上能开浏览器；桌面端的 `readRegistration` 认出这个任务，不在同一数据目录上再起 bundled daemon。
+Windows 上 `vonvon service install` 注册一个**按用户和数据目录命名**的计划任务，用户登录时以最低权限、经 `conhost.exe --headless`（不开窗口）运行 `bin\vonvon-server.cmd __win-supervise --port N`；`service status` / `service uninstall` / `daemon start` 都认这个任务；`bin\vonvon.cmd` 和 `bin\vonvon-server.cmd` 读 `current.txt` 第 1 行选版本、缺了退回第 2 行；`vonvon open` 在 Windows 上能开浏览器；桌面端的 `readRegistration` 认出这个任务，不在同一数据目录上再起 bundled daemon。
 
 ## 2. 范围
 
@@ -20,7 +20,7 @@ Windows 上 `vonvon service install` 注册一个**按用户和数据目录命�
 - `D/cli/commands/open.ts`：win32 用 `rundll32 url.dll,FileProtocolHandler <url>`。
 - `D/server/snapshot.ts` 的 win32 → `'windows'`；`P/domain.ts` `application.platform` 枚举加 `windows`。
 - `DT/daemon-dependencies.ts` `readRegistration` 的 win32 分支。
-- 任务 XML 里的动作行是 `__win-supervise`，这条隐藏命令在 I4b 实现；I4a 里先注册一个**占位**：`__win-supervise` 存在、直接 `daemon run` 同参数（不监督），I4b 换成真的。这样 I4a 单独合入也能在 Windows 上跑通安装、状态、卸载。
+- 任务 XML 里的动作行是 `__win-supervise`，这条隐藏命令在 I4b 实现；I4a 里先注册一个**占位**：`__win-supervise` 存在、起 `daemon run` 并在它退出时自己重起（§4.6），I4b 换成真的。这样 I4a 单独合入也能在 Windows 上跑通安装、状态、卸载。
 
 不做：
 - 监督进程本体（I4b）、`windowsHide` 普查（I4b）、升级（I3）、`.ps1`（I2b）。
@@ -46,7 +46,7 @@ Windows 上 `vonvon service install` 注册一个**按用户和数据目录命�
 
 ### 4.1 身份：任务名和 SID
 
-- `windowsTaskName(sid: string, root: string): string` = `\VonvonBot\${h(sid)}-${h(canonicalWin(root))}`，`h = sha256 → hex 前 12 位`，`canonicalWin(root)` = `path.win32.normalize(root)` 小写、去掉末尾 `\`。**默认数据目录也带两个哈希**（和 C7 一致，不像 darwin/linux 默认不带后缀——Windows 任务是全机命名空间，不带 SID 就撞）。
+- `windowsTaskName(sid: string, root: string): string` = `\VonvonBot-${h(sid)}-${h(canonicalWin(root))}`（放在根文件夹：标准用户能在根文件夹建任务、不能建子文件夹，审查 F2），`h = sha256 → hex 前 12 位`，`canonicalWin(root)` = `path.win32.normalize(root)` 小写、去掉末尾 `\`。**默认数据目录也带两个哈希**（和 C7 一致，不像 darwin/linux 默认不带后缀——Windows 任务是全机命名空间，不带 SID 就撞）。
 - SID：`deps.run('whoami', ['/user', '/fo', 'csv', '/nh'])` → 输出一行 `"<域\用户>","S-1-5-21-…"`，取第二列，必须匹配 `^S-1-[0-9-]+$`，否则抛 `SidUnavailable`。进程内缓存一次。
 - `Target` 加 `{ platform: 'win32'; taskName: string }`；`serviceTarget({ platform: 'win32', sid, root })`。
 
@@ -70,19 +70,20 @@ Windows 上 `vonvon service install` 注册一个**按用户和数据目录命�
     <StartWhenAvailable>true</StartWhenAvailable>
     <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>4</Priority>
     <Hidden>true</Hidden>
     <Enabled>true</Enabled>
     <RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure>
   </Settings>
   <Actions Context="Author"><Exec>
-    <Command>C:\…\VonvonBot\server\bin\vonvon-server.cmd</Command>
-    <Arguments>__win-supervise --port N</Arguments>
+    <Command>%SystemRoot%\System32\conhost.exe</Command>
+    <Arguments>--headless "C:\…\VonvonBot\server\bin\vonvon-server.cmd" __win-supervise --port N --home "<数据目录>"</Arguments>
     <WorkingDirectory>C:\…\VonvonBot\server</WorkingDirectory>
   </Exec></Actions>
 </Task>
 ```
-- `Description` 里的 JSON 和 darwin/linux 定义里记的四项相同（`root`、`port`、`distribution`、`capturedPath`），JSON 里的 `"`、`<`、`&` 做 XML 转义。`Command` 是 **启动器**（`<安装根>\bin\vonvon-server.cmd`），不是 `releases\<v>\…`；安装根 = `distribution.kind === 'standalone'` 时 `distribution.installRoot`（I1 的 `Distribution` 有它），不是 standalone → `renderDefinition` 抛 `InvalidDefinitionInput('Windows 只支持 standalone 的服务')`（bundled 在 Windows 不注册服务）。`WorkingDirectory` 是安装根（`.cmd` 用 `%~dp0` 不依赖它，写上只为 `schtasks` 不报缺字段）。
-- `RestartOnFailure` 是**监督进程**自己崩了（不是 daemon）的兜底；daemon 的 5 秒重启由监督进程做（I4b）。`AllowHardTerminate true` 让 `/End` 能杀；`IgnoreNew` 保证同一任务不会起两个监督进程。
+- `Description` 里的 JSON 和 darwin/linux 定义里记的四项相同（`root`、`port`、`distribution`、`capturedPath`），JSON 里的 `"`、`<`、`&` 做 XML 转义。`Command` 是 `conhost.exe`，`Arguments` 里 `--headless` 后面是 **启动器**（`<安装根>\bin\vonvon-server.cmd`），不是 `releases\<v>\…`（审查 F3：InteractiveToken 的任务直接起 `.cmd` 会在桌面开一个控制台窗口，关掉它 daemon 跟着退出；`Hidden` 只是在任务计划程序界面里藏起任务）；`Priority 4` 是普通优先级，默认的 7 会让 daemon 和它起的 agent 都低一档（审查 F8）；安装根 = `distribution.kind === 'standalone'` 时 `distribution.installRoot`（I1 的 `Distribution` 有它），不是 standalone → `renderDefinition` 抛 `InvalidDefinitionInput('Windows 只支持 standalone 的服务')`（bundled 在 Windows 不注册服务）。`WorkingDirectory` 是安装根（`.cmd` 用 `%~dp0` 不依赖它，写上只为 `schtasks` 不报缺字段）。
+- `RestartOnFailure` 只在任务**起不来**（动作启动失败）时重试，不看动作进程的退出码（审查 F4）；daemon 的重启全由监督进程做（I4a 的占位已经自己循环，I4b 换成真的）。`AllowHardTerminate true` 让 `/End` 能杀；`IgnoreNew` 保证同一任务不会起两个监督进程。
 - `decodeGeneratedDefinition(target, { platform: 'win32', xml })`：`schtasks /Query /XML` 吐回的 XML 是任务计划程序**重新序列化**的，和我们写的不字节相等，所以 win32 分支**不比字节**：解 UTF-16（有 BOM 看 BOM，没有当 UTF-16LE）→ 用正则取 `<Description>`、`<Command>`、`<Arguments>`、Principal 的 `<UserId>`、`<RunLevel>`（不引 XML 库：五个固定元素、我们自己写的结构）→ `Description` 必须以 `vonvon-bot service v1 ` 开头、后面是合法 JSON 且四项齐全；`Command` 和 `安装根\bin\vonvon-server.cmd` 不区分大小写相等；`Arguments` 是 `__win-supervise --port <port>`；`RunLevel === 'LeastPrivilege'`。任一不对 → `unrecognized`，`reason` 写哪一项。和总设计不一样：见 §4.8。
 - `readDefinitionBytes(target)` win32：`run('schtasks', ['/Query', '/TN', taskName, '/XML'])`；exit 0 → `{ platform: 'win32', xml: stdout 的字节 }`；exit 1 且 stderr 含 `cannot find the file` / `找不到` / 错误码 `0x80070002` → `null`（absent）——**语言相关**，所以先 `run('schtasks', ['/Query', '/TN', taskName, '/FO', 'CSV', '/NH'])` 判存在（exit 0 存在，exit 1 不存在，和语言无关），存在再 `/XML`。stdout 超 1 MiB → `unrecognized`。
 
@@ -135,7 +136,7 @@ set "PATH=%VONVON_ROOT%\releases\%VONVON_VER%\node;%PATH%"
 "%VONVON_ROOT%\releases\%VONVON_VER%\node\node.exe" "%VONVON_ROOT%\releases\%VONVON_VER%\app\bin\vonvon.mjs" %*
 exit /b %ERRORLEVEL%
 ```
-- `for /f` 跳过空行，所以首次安装 `current.txt` 第 2 行为空时 `VONVON_PREV` 不定义，正好。`DisableDelayedExpansion` 让 `!` 不被吃；`%*` 原样透传（含引号）。`exit /b %ERRORLEVEL%` 让 **75 / 0 / 其他** 透传给任务计划程序和监督进程（I4b 的监督进程是 `node.exe` 直接 `spawn` 子进程，不经 `.cmd`，但 `__win-supervise` 自己是经 `.cmd` 起的，退出码透传让 `RestartOnFailure` 能判）。
+- `for /f` 跳过空行，所以首次安装 `current.txt` 第 2 行为空时 `VONVON_PREV` 不定义，正好。`DisableDelayedExpansion` 让 `!` 不被吃。`%*` **不是**原样透传：参数先经调用方的一次 cmd 解析、再经 `%*` 展开后的那一行，没在引号里的 `&`、`|`、`^`、`<`、`>` 和 `%VAR%` 会被 cmd 解释（BatBadBut 一类，npm 的 cmd-shim 也一样；审查 F9，记为已知限制）。`exit /b %ERRORLEVEL%` 让 **75 / 0 / 其他** 透传给调用方。
 - 路径里有空格、中文、括号：全部加引号；`%~dp0` 带尾 `\`，所以 `%~dp0..` 是 `bin\..`。`)` 在 `if ( … )` 块里出现在变量值中会出问题，但我们只在块里 `set`、`echo` 固定文字，值的展开在块外。
 - 测试在 Linux 上只能做文本断言 + "`current.txt` 两行解析"的 TS 等价实现（`parseCurrentTxt`，I3 的 `readCurrent` 用同一个）；真跑在 §6。
 
@@ -148,7 +149,7 @@ exit /b %ERRORLEVEL%
 
 ### 4.6 `__win-supervise` 占位
 
-`D/cli/commands/win-supervise.ts`（I4b 重写）：`program.command('__win-supervise', { hidden: true }).option('--port <n>')` → 直接 `await runDaemon({ port })`（和 `daemon run` 同一个入口），进程退出码照 daemon 的。I4a 合入后在 Windows 上：任务起 `.cmd` → `node.exe … __win-supervise --port N` → daemon 在跑；daemon 退 75 → `.cmd` 退 75 → 任务计划程序认为任务结束（非 0 算失败，`RestartOnFailure` 1 分钟后再起一次、最多 3 次）。够验收 I4a；真正的 0/75/其他处理在 I4b。
+`D/cli/commands/win-supervise.ts`（I4b 重写）：`program.command('__win-supervise', { hidden: true }).option('--port <n>')` → 起 `daemon run` 子进程并**自己循环**（审查 F4：任务结束后 `RestartOnFailure` 不会再拉起）：退 0 自己也退 0；退 75 立刻重起；其他 5 秒后重起，连续 5 次都在一分钟内退出就改成 30 秒。I4a 合入后在 Windows 上：任务起 `conhost --headless` → `.cmd` → `node.exe … __win-supervise` → daemon 在跑；`daemon restart` 和崩溃都由占位接住。换版本（75 时看 `current.txt`）和自己的锁在 I4b。
 
 ### 4.7 CLI 的 `--json` 和 reason
 
@@ -163,7 +164,7 @@ exit /b %ERRORLEVEL%
 | 定义靠字节相等认"我们写的"（darwin/linux 的做法） | win32 解析五个固定元素比较 | `schtasks /Query /XML` 返回的是重新序列化的 XML，字节一定不同 |
 | §7.4 没说 bundled 在 Windows 的服务 | `renderDefinition` 在 win32 只接受 `standalone` | Windows 桌面端不注册服务（owner 2026-10-31） |
 | §7.4 任务名的哈希规则"和 `identity.ts:36-41` 一致" | 默认数据目录也带 root 哈希 | 任务是全机命名空间，两个用户都用默认目录时只有 SID 哈希不够区分同一用户的第二个数据目录；统一带两个哈希比"默认不带"少一条分支 |
-| 监督进程崩溃的兜底没写 | 任务 `RestartOnFailure PT1M ×3` | daemon 崩由监督进程管，监督进程崩由任务计划程序管 |
+| 监督进程崩溃的兜底没写 | 任务 `RestartOnFailure PT1M ×3`，只管任务起不来 | 它不看退出码（审查 F4）；daemon 崩由监督进程管 |
 
 ## 5. 测试
 
@@ -218,7 +219,7 @@ JP-VPS：`flock /tmp/vonvon-heavy.lock npm run build`、daemon / desktop / proto
 ## 8. 验收要点
 
 - `schtasks /Create` 只有 `/TN /XML /F` 一种写法；`/F` 只在现有任务是 `ours`（或不存在）时用；foreign 任务不覆盖、不删除。
-- XML 的 Principal/Trigger/Settings 字段和 §4.2 一致；`Command` 指启动器不指版本目录；bundled 拒。
+- XML 的 Principal/Trigger/Settings 字段和 §4.2 一致；动作经 `conhost.exe --headless` 起启动器，不指版本目录；bundled 拒。
 - decode 不比字节、按五个元素判；`/Query /FO CSV` 判存在、`/XML` 取内容，不靠英文错误文本判"不存在"。
 - install / uninstall 的顺序、每一步失败的 reason、超时值（`run` 15 秒、owner 30 秒、交接 15 秒、停监督 10 秒）和 §4.3 一致且都有测试。
 - 启动器：两行 `current.txt` 解析、退回第 2 行、退出码透传、全部路径带引号；TS 的 `parseCurrentTxt` 和 `.cmd` 的规则一致（空第 2 行 = 没有 previous）。
@@ -231,7 +232,7 @@ JP-VPS：`flock /tmp/vonvon-heavy.lock npm run build`、daemon / desktop / proto
 
 - `schtasks` 的输出和错误文本随系统语言变：存在性用退出码判，`Status` 列只显示不判逻辑；仍有一处依赖文本——`Access is denied` 的识别（同时匹配英文、中文和 HRESULT `0x80070005`），认不出就落到 `schtasks_create_failed`，不会误判成成功。
 - 任务计划程序对 `LogonTrigger` + `InteractiveToken` 的任务在"快速用户切换"下的行为（`U1` 的任务在 `U2` 前台时是否继续跑）要靠第 6 条验收确认；不行的话 `product.md` 要写"只有当前前台用户的 Bot 在线"。
-- `RestartOnFailure` 在 daemon 退 75（`.cmd` 透传）时会把升级重启当成失败并延迟 1 分钟——这只在 I4a 占位期间发生，I4b 的监督进程接住 75 后任务不会结束。
+- `RestartOnFailure` 不看退出码（审查 F4），所以 0、75 和崩溃都由占位自己处理，任务不会因为 daemon 退出而结束；只有占位自己退 0（daemon 退 0）时任务才结束。
 - 行数估计 ~1,150（`windows.ts` 320、`identity.ts` 40、`definitions.ts` 120、`registration.ts` 30、`startup.ts`/`adapter.ts`/`service-action.ts` 40、`windows-launchers.ts` 70、`open.ts` 20、`snapshot`/protocol 10、desktop 30、占位 15、测试 ~450）。不拆。
 
 ## 10. Windows 验收任务（发给 Windows Codex）
@@ -253,11 +254,11 @@ JP-VPS：`flock /tmp/vonvon-heavy.lock npm run build`、daemon / desktop / proto
      node --experimental-strip-types --input-type=module -e "await (await import('./packages/daemon/src/service/windows-launchers.ts')).writeWindowsLaunchers(process.argv[1])" "$env:LOCALAPPDATA\VonvonBot\server"
      ```
 - 下文的 `vonvon` 指 `& "$env:LOCALAPPDATA\VonvonBot\server\bin\vonvon.cmd"`。命令不用 PATH，每条记下退出码（`$LASTEXITCODE`）。
-- 计划任务是隐藏的。要在任务计划程序里看到它，先打开"查看 → 显示隐藏的任务"，它在 `VonvonBot` 文件夹下。任务名取自 `vonvon service status --json` 的 `task.name`。
+- 计划任务是隐藏的。要在任务计划程序里看到它，先打开"查看 → 显示隐藏的任务"，它在根文件夹（任务计划程序库）里，名字以 `VonvonBot-` 开头。任务名取自 `vonvon service status --json` 的 `task.name`。
 
 **隔离和不碰的东西。**
 - 只在 U1、U2 里装和测。
-- 计划任务只动两类：`\VonvonBot\` 下本任务装出来的，以及第 7 条自己建的假任务。结束时全部删掉。
+- 计划任务只动两类：名字以 `\VonvonBot-` 开头、本任务装出来的，以及第 7 条自己建的假任务。结束时全部删掉。
 - 第 13 条改的组策略，测完恢复，结果里写明已恢复。
 - 不碰 owner 账号的计划任务、数据和桌面端。不碰飞书。
 
@@ -282,11 +283,12 @@ JP-VPS：`flock /tmp/vonvon-heavy.lock npm run build`、daemon / desktop / proto
    - `vonvon daemon start --json` → 起来了；桌面上没有黑色控制台窗口。
    - `vonvon open --print --json` → 退出码 0。
 2. `vonvon service install --json`：
-   - 输出 `ok: true`、`result: installed`，没有 `warning`。第 1 条起的 detached daemon 被交接，pid 变了。
-   - `schtasks /Query /TN "<task.name>" /V /FO LIST`：`Run As User` 是 U1；`Logon Mode` 是 `Interactive only`；`Task To Run` 是 `…\bin\vonvon-server.cmd __win-supervise --port <N> --home "C:\Users\<u>\.vonvon-bot"`；`Status` 是 `Running`。
+   - 这是标准用户 U1 在这台机器上第一次建计划任务：输出 `ok: true`、`result: installed`，没有 `warning`，不能是 `schtasks_denied`（任务放在根文件夹，不建文件夹）。第 1 条起的 detached daemon 被交接，pid 变了。
+   - `schtasks /Query /TN "<task.name>" /V /FO LIST`：`Run As User` 是 U1；`Logon Mode` 是 `Interactive only`；`Task To Run` 是 `%SystemRoot%\System32\conhost.exe --headless "…\bin\vonvon-server.cmd" __win-supervise --port <N> --home "C:\Users\<u>\.vonvon-bot"`；`Status` 是 `Running`。`schtasks /Query /XML` 里 `Priority` 是 4。
    - `vonvon service status --json` → `state: running`，`task.status` 有值。`vonvon daemon status --json` 连得上。
    - `.vonvon-bot\supervisor.pid` 在，里面的 pid 是 `__win-supervise` 那个 `node.exe`。`.vonvon-bot\service.log` 有 daemon 的输出。
-   - **控制台窗口：** 桌面上和任务栏里有没有一直开着的 `cmd` 或 `node` 窗口，原样写。计划把 `Hidden` 只当作"在任务计划程序里隐藏"，没有保证不弹窗，这一条决定要不要换启动方式。
+   - **控制台窗口：** 任务经 `conhost.exe --headless` 起，桌面上和任务栏里不应有 `cmd`、`node` 或 `conhost` 的窗口。有的话原样写，再把它关掉，看 daemon 还在不在。任务的 `Last Result` 非 0、daemon 没起来（`--headless` 在这台机器上不管用）也原样写，Claude 换成不带控制台的小启动器。
+   - 任务管理器"详细信息"里 daemon 的 `node.exe` 优先级是"正常"，不是"低于正常"。
 3. 再跑一次 `vonvon service install --json` → `ok: true`。任务被 `/F` 覆盖，daemon 重启一次后又在跑，pid 变了。
 4. **注销 U1，再登录** → 30 秒内 `vonvon service status --json` 是 `running`，pid 变了。登录后有没有弹窗，原样写。
 5. 锁屏 5 分钟，解锁 → 仍是同一个 pid。
@@ -306,7 +308,8 @@ JP-VPS：`flock /tmp/vonvon-heavy.lock npm run build`、daemon / desktop / proto
    - 恢复原样。
 9. 测重启规则：
    - `vonvon service status --json` → `running`。
-   - 在任务管理器里结束 daemon 那个 `node.exe`（`daemon run` 的子进程，不是 `__win-supervise`）→ 约 1 分钟后又是 `running`。I4a 只有任务的 `RestartOnFailure`；5 秒重启是 I4b 的事。
+   - 在任务管理器里结束 daemon 那个 `node.exe`（`daemon run` 的子进程，不是 `__win-supervise`）→ 约 5 秒后又是 `running`，`service.err.log` 里有 `daemon exited 1; starting it again in 5 s`。重起的是占位自己，不靠任务的 `RestartOnFailure`（它不看退出码）。
+   - `vonvon daemon restart --json` → 成功，pid 变了，`service status` 仍是 `running`。
    - `vonvon daemon stop --json` → `service status` 是 `stopped`，任务 `Status` 是 `Ready`，2 分钟内**不会**自己回来。
    - `vonvon daemon start --json` → 又在跑（走 `schtasks /Run`）。
 10. 测禁用：
@@ -317,6 +320,7 @@ JP-VPS：`flock /tmp/vonvon-heavy.lock npm run build`、daemon / desktop / proto
     - `vonvon open` → 默认浏览器打开界面。
     - 把整个安装根拷到 `$env:LOCALAPPDATA\Vonvon 测试 (1)\server`，在那里重写启动器，用那里的 `bin\vonvon.cmd` 跑第 1、2 条和 `open`。
     - `service status --json` 要是 `running`，不能是 `conflict`。这条同时验管道下 `schtasks /Query /XML` 输出的编码：路径里的中文要能解出来。
+    - 同一个 PowerShell 窗口里先 `chcp 437`，再 `vonvon service status --json` → 仍是 `running`；`chcp 850` 再做一遍；最后 `chcp` 改回原值。管道下 `schtasks` 按控制台代码页输出，中文会变成 `?`，这条验的是认任务不靠非 ASCII 字符。有英文系统的测试机，或者用户名带 `é` 的测试账号，就在那里再做一遍第 2 条和这一条。
     - 恢复：用原安装根的 `vonvon service install --json`，再删拷贝出来的安装根（照上面的删除规矩）。
 12. `vonvon service uninstall --json` → `ok: true`、`result: uninstalled`；任务没了，U1 下没有 `node.exe`，`supervisor.pid` 不在。再跑一次 → `ok: true`、`result: not-installed`、`reason: not_registered`。
 13. 测组策略拒绝：
@@ -325,15 +329,15 @@ JP-VPS：`flock /tmp/vonvon-heavy.lock npm run build`、daemon / desktop / proto
     - 恢复策略，`gpupdate /force`，再 `service install`。
 14. 测桌面端共存：用 Windows 测试安装包（不是 owner 装的那个），在已经装了服务的 U1 里启动桌面端：
     - 它不另起 daemon，`vonvon daemon status --json` 的 pid 不变；
-    - 退出桌面端以后，服务端的 daemon 还在跑。
+    - 退出桌面端以后服务端的 daemon 还在不在，原样写。这半条依赖 U2：U2 合入前桌面端退出时会停掉它连着的 daemon，停了不算 I4a 不过。
     - 没有测试安装包就写"没测"。
 15. 测管理员账号：在 U2 里，任务的 `RunLevel` 是 `LeastPrivilege`（`schtasks /Query /XML`）；装的时候没有 UAC 提示；任务管理器"详细信息"里 daemon 的"已提升"一列是"否"。
-16. 收尾：两个账号都 `vonvon service uninstall --json`，确认 `\VonvonBot\` 下没有这次留下的任务。把各条的日志和 `schtasks /Query /V /FO LIST` 的输出（打码）贴进结果。
+16. 收尾：两个账号都 `vonvon service uninstall --json`，确认根文件夹里没有这次留下的、名字以 `VonvonBot-` 开头的任务。把各条的日志和 `schtasks /Query /V /FO LIST` 的输出（打码）贴进结果。
 
 **结果。**
 - 第 1 行是任务的结果标记，第 2 行一句结论；卡住了，第 2 行写"卡住了："加原因。
 - 下面按 1 到 16 逐条写：过、不过或没测；不过的贴原文。
-- 第 2、4 条的弹窗、第 6 条的快速切换、第 13 条的 schtasks 原文，不管过没过都写。
+- 第 2、4 条的弹窗、第 6 条的快速切换、第 11 条换代码页的结果、第 13 条的 schtasks 原文，不管过没过都写。
 
 ## 和计划不一样的地方
 
@@ -348,7 +352,7 @@ JP-VPS：`flock /tmp/vonvon-heavy.lock npm run build`、daemon / desktop / proto
    - 比 §4.7 多两个原因：`schtasks_query_failed`（`/Query` 失败但不是"任务不存在"，不当作没装）；`handover_failed`（detached 的 daemon 不回停止请求，或 `taskkill` 后还在）。
    - `/Run` 失败是 `install_incomplete` 加 `schtasks_run_failed`：任务已经注册了，不算失败回滚。
 4. 状态没有 `installed-not-running`，协议的 `ServiceState` 里没有这个值。已注册、没在跑是 `stopped`，文字里有 `daemon start`。"禁用"按 XML 里 `Settings` 的 `Enabled` 判，`Status` 列只显示，不参与判断，因为它随系统语言变。
-5. `/Run` 5 秒后还没有新 owner，再 `/Run` 一次：上一个实例还没退时，`IgnoreNew` 会把第一次吞掉。交接除了等 pid 锁，也等 `supervisor.pid` 那个进程退出。
+5. `/Run` 5 秒后还没有新 owner，再 `/Run` 一次：上一个实例还没退时，`IgnoreNew` 会把第一次吞掉。交接只等 daemon 放掉 pid 锁，不等 `supervisor.pid`（审查 F6）。
 6. 卸载：
    - 等 daemon 的锁和 `supervisor.pid` 都消失。
    - `/Delete` 失败时再查一次任务在不在，不在就算卸载成功。
@@ -360,7 +364,7 @@ JP-VPS：`flock /tmp/vonvon-heavy.lock npm run build`、daemon / desktop / proto
    - `Command` 带引号、大小写不同都认；
    - `Principal` 的 `UserId` 只在是 SID 时比较，任务计划程序可能回写成账号名。
    - Description 里的 JSON 把非 ASCII 转成 `\uXXXX`，Description 整行都是 ASCII。
-   - 读回的字节按 BOM、UTF-16LE、UTF-8、GB18030 依次试着解。
+   - 读回的字节按 BOM、UTF-16LE、UTF-8、GB18030 依次试着解。`Arguments` 还对不上时按字节（latin1）再比一次：路径里每段非 ASCII 字符可以是每字符 1 到 4 个任意字符（代码页字节、`?`、近似字母），ASCII 部分必须一样（审查 F1）。
 9. 渲染前校验路径：拒绝 `"`、`%`、结尾的 `\` 和相对路径，因为这些字符在 `cmd.exe` 里会被解释。所以 definitions 测试改测 `&`、`<`、`>` 的 XML 转义，不测 `"`。
 10. 启动器：
     - `parseCurrentTxt` 放在 `windows-launchers.ts`，I3 直接 import。
@@ -379,5 +383,17 @@ JP-VPS：`flock /tmp/vonvon-heavy.lock npm run build`、daemon / desktop / proto
     - `service-action` 对应 `machine-service-action.test.ts`。
     - 新增 `win-supervise-placeholder.test.ts`、`service-startup-routing.test.ts` 的 win32 用例，以及共用的 `service-windows-fixture.ts`。
     - `cli-parity` 没改，隐藏命令本来就不进对齐。
-16. 风险，留给 Windows 验收：
-    - 任务的 `Command` 是 `.cmd`，加上 `InteractiveToken`，登录时可能弹出一直开着的控制台窗口（§10 第 2、4 条）。`Hidden` 只在任务计划程序里隐藏任务。真弹窗的话，I4b 要把任务的动作换成不带控制台的启动方式（例如 `conhost.exe --headless`，或一个 GUI 子系统的小启动器），decode 的 `Command` 跟着改。
+16. 任务的动作原来直接是 `.cmd`，登录时会弹出一直开着的控制台窗口。审查 F3 后改成 `conhost.exe --headless "<启动器>" …`，decode 的 `Command` 跟着改。`--headless` 是没写进文档的参数（Windows 10 1809 起有），§10 第 2、4 条验；不管用就换 GUI 子系统的小启动器。
+
+## 审查后改了什么
+
+- F1 → 接受：`Arguments` 对不上时按字节再比一次，路径里的非 ASCII 字符可以是代码页字节、`?` 或近似字母，ASCII 部分必须一样；Description 本来就是纯 ASCII。测试按 cp850、cp932（第二字节是 `\`）、cp437（`?` 和近似字母）、cp936 造字节，去掉这条规则后有 4 个用例失败。§10 第 11 条加了 `chcp 437`、`chcp 850`。
+- F2 → 接受：任务名改成根文件夹里的 `\VonvonBot-<sid12>-<root12>`，和按用户安装的软件放任务的位置一样。C7（`server-3-update-engine.md`）、I2b 的名字、`devices.md`、`architecture.md` 一起改了。被拒绝访问时的文案不再说一定是组策略。§10 第 2 条验标准用户第一次装。
+- F3 → 接受：任务的 `Command` 改成 `%SystemRoot%\System32\conhost.exe`，`Arguments` 是 `--headless "<启动器>" __win-supervise …`，decode 跟着改。`--headless` 没写进文档，§10 第 2、4 条验；不管用就换 GUI 小启动器。
+- F4 → 接受：`__win-supervise` 占位自己循环。0 退出；75 立刻重起；其他 5 秒后重起；连续 5 次一分钟内退出改 30 秒。改了 §4.6、§9 和 §10 第 9 条，第 9 条加了 `daemon restart`；I4b 的 §4.1、§6 第 10 条和 §9 里依赖 `RestartOnFailure` 的说法也改了。
+- F5 → 接受：`readRegistration` 加 `unansweredAsAbsent`。`daemon start` 和桌面端遇到 schtasks 超时、起不来或查询失败时，当作没有任务，由 pid 锁挡住第二个 daemon。任务自己起的 daemon 仍当作 unrecognized，失败后由占位重试。
+- F6 → 接受：交接只等 daemon 放掉 pid 锁，不等 `supervisor.pid`；`taskkill` 前再确认锁仍记着回过停止请求的那个 owner。`supervisor.pid` 的 `startedAt` 早于这次开机时，不算活着。
+- F7 → 接受：数据目录不在时，五项对得上、而且 Description 里的 root 算出的就是这个任务名，就当作我们的任务，`uninstall` 照删，不再报 `task_foreign`。
+- F8 → 接受：Settings 加 `<Priority>4</Priority>`，§10 第 2 条验。
+- F9 → 驳回代码改动，只改文档：命令行只在完全访问档里连得上 daemon（`devices.md` 第 5 节 e04、e04b）。那一档的 agent 本来就能跑任何命令，没有只放行 `vonvon` 的档。npm 的 cmd-shim 也是 `%*`。§4.4 删掉了"原样透传"，写成已知限制。
+- F10 → 接受，只改文档：桌面端退出时不停 standalone daemon 是 U2 的事（`devices.md` §13）。§10 第 14 条的后半条注明依赖 U2，只记现象，不算 I4a 不过。

@@ -79,7 +79,7 @@
 
 **C7 服务名**
 - launchd `com.vonvon.bot.daemon`、systemd `vonvon-bot.service`，非默认数据目录加哈希后缀（`D/service/identity.ts` 今天的规则，不变）。
-- Windows 计划任务 `\VonvonBot\<sid-hash12>-<root-hash12>`：`sid-hash12` = 当前用户 SID 字符串的 sha256 前 12 个十六进制；`root-hash12` = 数据目录绝对路径**小写、`\` 结尾去掉**后的 sha256 前 12 个十六进制（I4a 实现，`identity.ts` 加 `windowsTaskName(sid, dataRoot)`）。
+- Windows 计划任务 `\VonvonBot-<sid-hash12>-<root-hash12>`（在根文件夹：标准用户不能在任务计划程序里建文件夹，I4a 审查 F2）：`sid-hash12` = 当前用户 SID 字符串的 sha256 前 12 个十六进制；`root-hash12` = 数据目录绝对路径**小写、`\` 结尾去掉**后的 sha256 前 12 个十六进制（I4a 实现，`identity.ts` 加 `windowsTaskName(sid, dataRoot)`）。
 
 **C8 `MAINTENANCE_KINDS`**
 - `P/domain.ts` 导出 `MAINTENANCE_KINDS = ['admin.daemonStatus', 'machine.stopHost', 'machine.coreUpdateStatus'] as const`，`D/server/ws.ts` 的排空白名单改成读它。D4a 也要这个常量（§4.7 维护子集），I3 和 D4a 谁先合入谁建，后到的只加自己的项。

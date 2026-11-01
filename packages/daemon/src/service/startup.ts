@@ -4,8 +4,12 @@ import { readRegistration, type Registration } from './registration';
 import type { HostEndpoint } from '../host/discovery';
 import type { StaleOwner } from '../server/pid-lock';
 
-/** Reads this user's service registration; platforms without a supported service manager have none. */
-export async function readStartupRegistration(root: string): Promise<Registration> {
+/**
+ * Reads this user's service registration; platforms without a supported service manager have none. With
+ * `unansweredAsAbsent`, a Windows `schtasks` that gives no answer reads as no task (`daemon start`: the pid lock still
+ * keeps a second daemon off the data root); without it, as unrecognized, so a task's own daemon fails and is retried.
+ */
+export async function readStartupRegistration(root: string, options: { unansweredAsAbsent?: boolean } = {}): Promise<Registration> {
   const home = homedir();
   switch (process.platform) {
     case 'darwin':
@@ -16,7 +20,7 @@ export async function readStartupRegistration(root: string): Promise<Registratio
       // Without the SID there is no task name to look up: start detached, as before I4a.
       let sid: string;
       try { sid = await currentWindowsSid(); } catch { return { kind: 'absent' }; }
-      return readRegistration({ target: serviceTarget({ platform: 'win32', sid, root }), requestedRoot: root });
+      return readRegistration({ target: serviceTarget({ platform: 'win32', sid, root }), requestedRoot: root, ...(options.unansweredAsAbsent ? { unansweredAsAbsent: true } : {}) });
     }
     default:
       return { kind: 'absent' };

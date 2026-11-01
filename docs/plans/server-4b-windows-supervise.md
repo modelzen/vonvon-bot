@@ -32,7 +32,7 @@ Windows 上计划任务起的不是 daemon 本身，而是一个监督进程 `vo
 - `D/platform/spawn.ts` 的 `crossSpawn` 包装带 `windowsHide: true`；但 `daemon.ts`、`lifecycle.ts`、`restart.ts`、`service-action.ts` 直接用 `node:child_process` 的 `spawn`，没带。
 - I1：`runtimeDistribution()` 对 standalone 回 `{ kind: 'standalone', cliPath, installRoot }`；`core/version.ts` 的 `currentVersion()`。
 - I3：`current-release.ts` 的 `readCurrent`/`switchCurrent`、`readUpdateStatus`/`finishOwnedUpdate`、`selfEntry()`。
-- I4a：任务动作 `bin\vonvon-server.cmd __win-supervise --port N`；占位命令直接跑 daemon；`renderWindowsLaunchers`；uninstall 等 `supervisor.pid`。
+- I4a：任务动作 `conhost.exe --headless "<安装根>\bin\vonvon-server.cmd" __win-supervise --port N --home "<数据目录>"`；占位命令起 daemon 并自己重起（0 停、75 立刻、其他 5 秒）；`renderWindowsLaunchers`；uninstall 等 `supervisor.pid`。
 - `D/provider/process/windows-supervisor.ts` 是 Codex provider 的进程监督，名字相近、无关；本文的文件叫 `win-supervisor.ts`。
 
 ## 4. 怎么改
@@ -40,7 +40,7 @@ Windows 上计划任务起的不是 daemon 本身，而是一个监督进程 `vo
 ### 4.1 进入和单实例
 
 `__win-supervise --port <n>`：
-1. `distribution = runtimeDistribution()`；不是 `standalone` → stderr 一行、退 64（配置错；任务计划程序会按 `RestartOnFailure` 重试三次然后放弃，不会无限循环）。`installRoot`、`ownVersion = currentVersion()`。
+1. `distribution = runtimeDistribution()`；不是 `standalone` → stderr 一行、退 64（配置错；任务就此结束，不会再被拉起：`RestartOnFailure` 只管任务起不来，不看退出码，I4a 审查 F4）。`installRoot`、`ownVersion = currentVersion()`。
 2. `acquireFileLock(<数据目录>\supervisor.lock)`（`O_EXCL`、写 `{ pid, startedAt }`；已存在 → 读 pid，活着 → **退 0**（已有监督进程，`IgnoreNew` 之外的第二道；比如交接后的孤儿还在跑而用户又登录了一次）；死了 → 删掉重建）。拿不到也不是活的（EACCES 等）→ 退 64。
 3. 写 `supervisor.pid`（`{ pid, startedAt, version: ownVersion }`，`.tmp` + `rename`）。
 4. 日志：`<数据目录>\supervisor.log` 追加，每行 `<ISO 时间> [supervise] …`；超过 1 MiB 时在下一次写之前 `rename` 成 `supervisor.log.1`（覆盖旧的 `.1`）。
@@ -142,7 +142,7 @@ JP-VPS：构建、typecheck、lint、§5 全绿；另外在 Linux 上**真跑一
 7. 接着**注销再登录** → 只有一组进程（锁挡住了第二个监督进程），`supervisor.log` 里有一行 `another supervisor is alive, exiting`。
 8. 回滚：把 `releases\1.0.2` 的 `app\bin\vonvon.mjs` 改成 `process.exit(3)`，`current.txt` 改 `1.0.2\n1.0.1\n`，状态文件 `restarting to 1.0.2 previous 1.0.1`，`vonvon daemon restart` → 新监督进程（1.0.2）起 daemon 失败三次 → `current.txt` 回到 `1.0.1`、状态 `error rolledBack: true`、监督进程又是 1.0.1 的 `node.exe`、`vonvon status` 连得上。
 9. 回滚（新 node.exe 坏）：把 `releases\1.0.3\node\node.exe` 换成空文件，`current.txt` 改 `1.0.3\n1.0.1\n`，状态同上 → 10 秒后旧监督进程回滚、`current.txt` 回 `1.0.1`、daemon 回来。
-10. `current.txt` 改到一半（只写第 1 行 `1.0.9`、没有第 2 行、`releases\1.0.9` 不存在）然后 `taskkill /F` 掉监督进程和 daemon，再注销登录 → `.cmd` 退 70、任务 `Last Result` 非 0、`RestartOnFailure` 三次后放弃；恢复 `current.txt` 后 `vonvon daemon start` 能起。（这条验证的是"坏到底时不会无限拉起"，不是自愈——第 2 行有值时才能自愈，I4a 第 8 条已验。）
+10. `current.txt` 改到一半（只写第 1 行 `1.0.9`、没有第 2 行、`releases\1.0.9` 不存在）然后 `taskkill /F` 掉监督进程和 daemon，再注销登录 → `.cmd` 退 70、任务 `Last Result` 非 0、任务结束且不再被拉起（`RestartOnFailure` 不看退出码）；恢复 `current.txt` 后 `vonvon daemon start` 能起。（这条验证的是"坏到底时不会无限拉起"，不是自愈——第 2 行有值时才能自愈，I4a 第 8 条已验。）
 11. `service uninstall` 在 daemon 排空中（起一个 20 秒的假任务）→ 等排空结束才删任务；再来一次让 daemon 卡死（`taskkill /F` 不行——用 `PsSuspend` 或调试器挂起 daemon）→ 10 秒后 `taskkill` 监督进程、再 10 秒 `taskkill /T` daemon、任务删除。
 12. 锁屏 10 分钟、睡眠再唤醒 → 两个进程都在；Bot 在飞书里能回。
 13. 把 `supervisor.log` 和 `daemon.log` 的相关段（打码）贴回任务。
@@ -166,7 +166,7 @@ JP-VPS：构建、typecheck、lint、§5 全绿；另外在 Linux 上**真跑一
 
 ## 9. 风险和行数
 
-- 孤儿监督进程（§4.7）让 `schtasks` 的 `Status` 不可信：I4a 的状态判定已经按 pid 锁；但"任务计划程序历史"里会显示任务已结束，用户看着会疑惑——写进 `product.md`。另一条路（退特定码让 `RestartOnFailure` 拉起）要等 1 分钟且最多 3 次，不选。
+- 孤儿监督进程（§4.7）让 `schtasks` 的 `Status` 不可信：I4a 的状态判定已经按 pid 锁；但"任务计划程序历史"里会显示任务已结束，用户看着会疑惑——写进 `product.md`。另一条路（退特定码让 `RestartOnFailure` 拉起）走不通：它只管任务起不来，不看退出码（I4a 审查 F4）。
 - `.cmd` 经 `cmd.exe /c` 起：安装根带 `&`、`^`、`%` 这类字符时 `cmd` 会解释——路径加了引号能挡住大多数，但 `%` 在引号里仍会展开 `%VAR%`。安装根是 `%LOCALAPPDATA%\VonvonBot\server`，用户名含 `%` 极少见；I4a 启动器测试里加一条带 `%` 的路径看 `.cmd` 行为，不行就记为已知限制。
 - `--parent-control` 的 stdin 协议要核对 `lifecycle.ts:157` 到底接受什么（关闭 / 一行文本）；两种都支持最稳。
 - `taskkill /F` 杀监督进程时锁和 pid 文件留下，靠 pid 存活回收；pid 被复用的窗口期（Windows 复用快）可能误判"活着"而退 0——`supervisor.pid` 带 `startedAt`，`isAlive` 用 `wmic`/PowerShell 核 `CreationDate` 太重，接受这个窄窗口，下次登录会再试。

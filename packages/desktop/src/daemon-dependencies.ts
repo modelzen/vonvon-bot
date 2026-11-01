@@ -102,7 +102,9 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
         target = platform === 'darwin' ? serviceTarget({ platform, home: runtime.home, root: runtime.root })
           : serviceTarget({ platform, home: runtime.home, root: runtime.root, xdgConfigHome: process.env.XDG_CONFIG_HOME });
       }
-      const registration = await readRegistration({ target, requestedRoot: runtime.root, ...(windowsRun ? { run: windowsRun } : {}) });
+      // A schtasks that gives no answer is no task here: the bundled daemon's pid lock still keeps a second one off the
+      // data root, and the app opens (I4a review F5).
+      const registration = await readRegistration({ target, requestedRoot: runtime.root, ...(windowsRun ? { run: windowsRun } : {}), ...(platform === 'win32' ? { unansweredAsAbsent: true } : {}) });
       switch (registration.kind) {
         case 'absent': return { kind: 'absent' };
         case 'ours': {

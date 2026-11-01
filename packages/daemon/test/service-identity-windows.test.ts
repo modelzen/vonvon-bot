@@ -5,7 +5,8 @@ import { afterEach, expect, it } from 'vitest';
 import { canonicalWindowsRoot, createSidReader, parseWhoamiSid, serviceTarget, SidUnavailable, windowsTaskName } from '../src/service/identity';
 import { fail, ok, recorder, SID, WHOAMI } from './service-windows-fixture';
 
-const NAME = /^\\VonvonBot\\[0-9a-f]{12}-[0-9a-f]{12}$/;
+/** In the root folder: a standard user may create a task there, not a folder (I4a review F2). */
+const NAME = /^\\VonvonBot-[0-9a-f]{12}-[0-9a-f]{12}$/;
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
@@ -22,7 +23,8 @@ it('gives another user, or another data root, another task: the default root car
   const name = windowsTaskName(SID, 'C:\\Users\\U\\.vonvon-bot');
   expect(windowsTaskName('S-1-5-21-1000000001-2000000002-3000000003-1002', 'C:\\Users\\U\\.vonvon-bot')).not.toBe(name);
   expect(windowsTaskName(SID, 'C:\\Users\\U\\other')).not.toBe(name);
-  expect(name.split('\\')[2]?.split('-')).toHaveLength(2);
+  expect(name.split('\\')).toEqual(['', expect.stringMatching(/^VonvonBot-/)]);
+  expect(name.split('-')).toHaveLength(3);
 });
 
 it('serviceTarget carries the task name and the SID; a malformed SID is refused', () => {
