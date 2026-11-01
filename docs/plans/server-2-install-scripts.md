@@ -1,8 +1,8 @@
-# I2 `server-2-install-scripts`：`install.sh` / `install.ps1` / `uninstall.*`
+# I2 `server-2-install-scripts`：`install.sh`、`uninstall.sh`（`install.ps1`、`uninstall.ps1` 已取消，2026-11-01）
 
 依据 `docs/plans/devices.md` §7.2（布局）、§7.3（安装脚本）、§7.4 的退路、§15 的文案、§13 的 I2 行。契约（清单格式、签名公钥怎么进包、`current`/`current.txt`、`current-release.ts`、服务名）在 `docs/plans/server-3-update-engine.md` §4.1，本文按 C1–C8 的编号引用，不重写。缩写同 `devices.md`。
 
-**2026-11-01 改动**（owner："Mac 和 Windows 上就直接通过安装包安装全部软件就好了，没有这种场景只安装 Server 端，也不用通过命令行安装"；`devices.md` 第 19 节）：脚本只在 Linux 上装。`install.sh`、`uninstall.sh` 在 macOS 上只打印一句中文，让用户到 https://bot.vonvon.cc 下载桌面端安装包，退出 2，不联网、不写任何文件；别的系统同样退出 2。脚本里不再有 Mac 的 LaunchAgent、`Applications` 里的桌面端、无图形登录这些分支，Linux 照旧查"已装过"。I2b（`install.ps1`、`uninstall.ps1`、§4.5、§5.3、§6 的 Windows 清单）取消，那几节留作记录。服务端包只有 `linux-x64`、`linux-arm64`，签名清单的 `files` 也只有这两项（I3 C1）；I2a 已按六项写好的清单匹配先留着，I3 合入后由清理片 I6 改成两项。下文已按这些改过。
+**2026-11-01 改动**（owner："Mac 和 Windows 上就直接通过安装包安装全部软件就好了，没有这种场景只安装 Server 端，也不用通过命令行安装"；`devices.md` 第 19 节）：脚本只在 Linux 上装。`install.sh`、`uninstall.sh` 在 macOS 上只打印一句中文，让用户到 https://vonvon.cc/get/ 下载安装包，退出 2，不联网、不写任何文件；别的系统同样退出 2。脚本里不再有 Mac 的 LaunchAgent、`Applications` 里的桌面端、无图形登录这些分支，Linux 照旧查"已装过"。I2b（`install.ps1`、`uninstall.ps1`、§4.5、§5.3、§6 的 Windows 清单）取消，那几节留作记录。服务端包只有 `linux-x64`、`linux-arm64`，签名清单的 `files` 也只有这两项（I3 C1）；I2a 的脚本已经只认这两项，多一项、少一项都 exit 4，I3 的 `SERVER_TARGETS` 在 I3 里改成同样两项（`devices.md` 第 13 节 I3 行）。下文已按这些改过。
 
 ## 1. 做什么
 
@@ -42,19 +42,19 @@
 
 退出码：0 装好或已装过；1 setup / 服务步骤失败；2 环境不支持（root、平台、缺工具）；3 下载失败；4 校验失败（清单、签名、哈希、包内容）。所有失败都先打印一行中文原因，再 `exit`。脚本里的 `curl` 一律 `curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2`。
 
-常量（脚本头部，测试用 sed 换**公钥**那一段）：`BASE_URL="https://dl.vonvon.cc/bot/server"`、`ROOT="$HOME/.local/share/vonvon-bot/server"`、`DATA="$HOME/.vonvon-bot"`、`PUBKEY_PEM`（C2 那把钥匙的 SPKI PEM，夹在 `# BEGIN VONVON PUBKEY` / `# END VONVON PUBKEY` 两行之间）、`SERVER_MARKER="# Vonvon Bot server CLI v1"`、`DESKTOP_MARKER="Vonvon Bot managed CLI v1"`。
+常量（脚本头部，测试用 sed 换**公钥**那一段）：`BASE_URL="https://dl.vonvon.cc/bot/server"`、`ROOT="$HOME/.local/share/vonvon-bot/server"`、`DATA="$HOME/.vonvon-bot"`、`PUBKEY_PEM`（C2 那把钥匙的 SPKI PEM，夹在 `# BEGIN VONVON PUBKEY` / `# END VONVON PUBKEY` 两行之间）、`SERVER_MARKER="# Vonvon Bot server CLI v1"`、`DESKTOP_DOWNLOAD="https://vonvon.cc/get/"`（新版本只认 vonvon.cc，bot.vonvon.cc 只为 0.7.0 留着 301，`v1-plan.md` 第 10 节）（原来还有桌面端命令的标记 `DESKTOP_MARKER`，Linux 没有桌面端，I2a 删了）。
 
-先看系统（2026-11-01）：`uname -s` 不是 `Linux` → 不联网、不写文件，exit 2。`Darwin` 打印 devices.md §15"安装脚本：在 Mac 上"那句（到 https://bot.vonvon.cc 下载桌面端安装包，它自带服务端）；别的系统打印"不是 Linux、也不是 Mac"那句。这一步在 root 检查之前。
+先看系统（2026-11-01）：`uname -s` 不是 `Linux` → 不联网、不写文件、不建临时目录，exit 2。`Darwin` 打印 devices.md §15"安装脚本：在 Mac 上"那句（到 https://vonvon.cc/get/ 下载安装包，里面带了服务端和 `vonvon` 命令）；别的系统（FreeBSD、Windows 的 Git Bash 这类）打印"安装脚本：不是 Linux、也不是 Mac"那句，带上 `uname -s` 的结果。这一步是 `main` 的第一步，在 root、`HOME`、已装过和公钥的检查之前。
 
 0. **root**：`[ "$(id -u)" = 0 ]` 且 `VONVON_ALLOW_ROOT` 不是 `1` → 打印 §15"安装脚本：root"那段，exit 2。是 `1` → 打印"以 root 继续，Bot 和 AI 代理都会以 root 运行"继续。
 1. **已装过**（任一命中 → 按 §15 文案打印、exit 0、不写任何文件）：
    - `$DATA/daemon.pid` 存在，用 `sed -n 's/.*"pid":\([0-9]*\).*/\1/p'` 取 pid，`kill -0 "$pid"` 成功；
-   - `$ROOT/current` 存在（服务端装过）；
+   - `$ROOT/current` 存在，而且 `$ROOT/bin/vonvon --version` 能跑（只有 `current` 是设置那一步没做完，接着装）；
    - `$HOME/.config/systemd/user/vonvon-bot*.service` 有匹配（C7 的名字，带哈希后缀的也算）；
-   - `command -v vonvon` 找到的文件里含 `$SERVER_MARKER` 或 `$DESKTOP_MARKER`。
+   - `command -v vonvon` 找到的文件里含 `$SERVER_MARKER`。
    文案：§15"安装脚本：已装过"（"……不用再装。直接用：`vonvon --version`"）。原来还查 macOS 的 LaunchAgent 和 `Applications` 里的桌面端、按有没有命令分两种文案，2026-11-01 起脚本只在 Linux 上装，不查了。
 2. **工具**：`curl`、`tar`、`mktemp`、`sed`，以及 `sha512sum` 或 `shasum`，以及 `base64` 或 `openssl`；缺一个 → 列出缺的，exit 2。
-3. **选包**：`uname -s` 开头已核过是 `Linux`，`os=linux`；`uname -m` → `x86_64|amd64` → `x64`，`aarch64|arm64` → `arm64`，其他 exit 2。Linux 再查 musl：`ldd --version 2>&1 | head -n 1` 含 `musl`，或 `/lib/ld-musl-*.so.1` 存在 → "这一版不支持 musl（Alpine）"exit 2。`TARGET="$os-$arch"`、`EXT=tar.gz`。
+3. **选包**：`uname -s` 在 `main` 第一步已核过是 `Linux`，`os=linux`；`uname -m` → `x86_64|amd64` → `x64`，`aarch64|arm64` → `arm64`，其他 exit 2。Linux 再查 musl：`ldd --version 2>&1 | head -n 1` 含 `musl`，或 `/lib/ld-musl-*.so.1` 存在 → "这一版不支持 musl（Alpine）"exit 2。`TARGET="$os-$arch"`、`EXT=tar.gz`。
 4. **临时目录**：`TMP=$(mktemp -d)`，`trap 'rm -rf -- "${TMP:?}"' EXIT`。这是脚本里唯一一处对临时目录的 `rm`。
 5. **清单**：`curl … -o "$TMP/manifest.json" "$BASE_URL/stable/manifest.json"` 失败 → exit 3。文件 > 65536 字节 → exit 4。
    - 取信封字段（信封是 `JSON.stringify` 的紧凑 JSON，键顺序 `payload`、`signature`）：`sed -n 's/.*"payload":"\([A-Za-z0-9+\/=]*\)".*/\1/p'`，`signature` 同理；任一为空 → exit 4。
@@ -77,7 +77,7 @@
 
 ### 4.2 `uninstall.sh`
 
-0. 先看系统，同 §4.1：不是 Linux → exit 2，什么都不碰；`Darwin` 打印 §15"卸载脚本：在 Mac 上"那句。
+0. 先看系统，同 §4.1：不是 Linux → exit 2，什么都不碰；`Darwin` 打印 §15"卸载脚本：在 Mac 上"那句，别的系统打印"卸载脚本：不是 Linux、也不是 Mac"那句。
 1. root 检查同上（root 下的安装根不同，照样按 `$HOME` 算；只警告不拒绝）。
 2. `ROOT` 不存在 → "没有装过服务端"exit 0。
 3. 有 `$ROOT/bin/vonvon` 且能跑（`"$ROOT/bin/vonvon" --version` 退 0）：
@@ -115,7 +115,7 @@ root 警告：`daemon run` 和 `service install` 在 `process.getuid?.() === 0` 
 ### 4.4 `service install --linger --json`（`D/cli/commands/service.ts`）
 
 - linger 没开成：不再 `throw`。`--json` → `{ ok: true, ...outcome, linger: 'off', lingerUser: <os.userInfo().username>, notes }`，exit 0；文字版打印 `enableFailed(...)` 那句加 `sudo loginctl enable-linger <user>`，exit 0。`linger` 字段：`on`（已开或刚开成）、`off`、`unsupported`（非 Linux）。`lingerUser` 只允许 `^[A-Za-z0-9._-]+$`，不匹配就省略字段（脚本退回打印不带用户名的那句）。
-- 环境性拒绝统一成 `CommandError('refused', message, { reason, fallback: 'detached', hint })`，`reason` 四个稳定值：`no_systemd`、`user_instance_down`、`no_runtime_dir`（Linux，来自 `userManagerHint()` 的三种）、`no_gui_session`（macOS，launchd GUI 域不可用；2026-11-01 起脚本不在 Mac 上跑，脚本不认它）。`--json` 失败形状按 C1：`{ ok: false, error: { kind: 'refused', message, reason, fallback: 'detached', hint }, exitCode: 4 }`。`hint` 是 §15 的那句。
+- 环境性拒绝统一成 `CommandError('refused', message, { reason, fallback: 'detached', hint })`，`reason` 三个稳定值：`no_systemd`、`user_instance_down`、`no_runtime_dir`（Linux，来自 `userManagerHint()` 的三种）。原来还有第四个 `no_gui_session`（macOS，launchd GUI 域不可用），2026-11-01 起脚本不在 Mac 上跑，I2a 把它去掉了：launchd 没有图形会话时照旧是普通的 `failed`（exit 1），没有 `fallback`。`--json` 失败形状按 C1：`{ ok: false, error: { kind: 'refused', message, reason, fallback: 'detached', hint }, exitCode: 4 }`。`hint` 是 §15 的那句。
 - 别的失败（`systemctl` 退非零、写 unit 文件 EACCES）照旧 `failed`，没有 `fallback`。
 - `daemon start --json` 成功输出 `{ ok: true, pid, port }`（C1 已定就不动）。
 
@@ -173,9 +173,9 @@ root 警告：`daemon run` 和 `service install` 在 `process.getuid?.() === 0` 
 | root 拒绝 | `id` 替身 → exit 2，stdout 含 `useradd -m vonvon`，没有网络调用（`curl.log` 不存在） | 是 |
 | root 放行 | `VONVON_ALLOW_ROOT=1` → 走完，exit 0，stdout 含"以 root 继续" | 是 |
 | 已装过：pid 活着 | `home/.vonvon-bot/daemon.pid` 写 `{"pid":<本测试进程 pid>}` → exit 0，"已经装过"，没有 `curl` 调用，安装根不存在 | 是 |
-| 已装过：`current` 存在 / systemd unit 文件 / PATH 里有带桌面端标记的 `vonvon` / 带服务端标记的 `vonvon` | 各 exit 0，文案含 `vonvon --version` | 是 |
-| 在 macOS 上（2026-11-01） | `uname` 替身 `Darwin`/`arm64`，`install.sh` 和 `uninstall.sh` 各跑一次 → 都 exit 2，stdout 含 `https://bot.vonvon.cc`；没有 `curl` 调用（`curl.log` 不存在），`home/` 下什么都没写；`home/.local/share/vonvon-bot/server` 事先建好时 `uninstall.sh` 也不删它 | 是 |
-| 不是 Linux、也不是 Mac | `uname` 替身 `FreeBSD` → exit 2，含"只支持 Linux"，没有网络调用 | 是 |
+| 已装过：`current` 加能跑的 `bin/vonvon` / systemd unit 文件 / PATH 里有带服务端标记的 `vonvon` | 各 exit 0，文案是 §15"安装脚本：已装过"那句 | 是 |
+| 在 macOS 上（2026-11-01） | `uname` 替身 `Darwin`/`arm64`，`install.sh` 和 `uninstall.sh` 各跑一次 → 都 exit 2，stdout 为空，stderr 逐字是 §15"在 Mac 上"那两句；没有 `curl` 调用（`curl.log` 不存在），`home/` 下什么都没写；`home/.local/share/vonvon-bot/server` 事先建好时 `uninstall.sh` 也不删它 | 是 |
+| 不是 Linux、也不是 Mac | `uname` 替身 `FreeBSD`、`MINGW64_NT-10.0-19045`、空输出，同时 `id` 替身是 root、`daemon.pid` 的进程活着、脚本没带公钥 → `install.sh`、`uninstall.sh` 都 exit 2，stderr 逐字是 §15"不是 Linux、也不是 Mac"那两句；没有网络调用、没建临时目录、安装根没动 | 是 |
 | musl | `ldd` 替身 → exit 2，含"musl" | 是 |
 | 缺工具 | `PATH` 里去掉 `tar`（替身目录里放一个 exit 127 的 `tar`，并把 PATH 只给替身目录 + 一个只含 sh/sed/mktemp 的目录）→ exit 2，列出 `tar` | 是 |
 | 清单下载失败 | `cdn/stable/manifest.json` 不存在 → exit 3 | 是 |
@@ -203,7 +203,7 @@ root 警告：`daemon run` 和 `service install` 在 `process.getuid?.() === 0` 
 | `standalone-setup.test.ts` | teardown：桌面端的块（bin 是 `~/.local/share/vonvon-bot/bin`）不删，服务端的块删，文件末尾换行保留 | 是 |
 | `cli-path-block.test.ts`（`packages/protocol/test/`） | `spliceBlock` 四种：无标记追加、有标记替换、`null` 删除、标记残缺（只有 begin）→ 追加完整块并保留原文；`startupBlock` 文本和旧 `DT/cli-registration.ts` 的 snapshot 一致 | 是 |
 | `cli-registration.test.ts`（desktop，已有） | 不改断言，改 import 后仍绿 | 否 |
-| `service-command.test.ts`（扩） | `--linger --json`、`enableLinger` 注入失败 → stdout `ok: true, linger: 'off', lingerUser`、exit 0；文字版 exit 0 且含 `loginctl enable-linger`；`userManagerHint` 三种 → `--json` 的 `error.reason` 分别是 `no_systemd`/`user_instance_down`/`no_runtime_dir`，`fallback: 'detached'`，exit 4；launchd 无 GUI → `no_gui_session`；`lingerUser` 含空格 → 字段省略 | 是 |
+| `service-command.test.ts`（扩） | `--linger --json`、`enableLinger` 注入失败 → stdout `ok: true, linger: 'off', lingerUser`、exit 0；文字版 exit 0 且含 `loginctl enable-linger`；`userManagerHint` 三种 → `--json` 的 `error.reason` 分别是 `no_systemd`/`user_instance_down`/`no_runtime_dir`，`fallback: 'detached'`，exit 4；launchd 无 GUI → 照旧 `failed`、没有 `fallback`（I2a 去掉了 `no_gui_session`）；`lingerUser` 含空格 → 字段省略 | 是 |
 | `cli-root-warning.test.ts` | 注入 `getuid: () => 0` → `daemon run` 的 stderr 第一行含 "root"；`service install --json` 的 `notes` 含那句 | 是 |
 
 ### 5.3 `install.ps1` 静态测试（`scripts/install-ps1.test.mjs`，JP-VPS 没有 pwsh）
@@ -227,7 +227,7 @@ JP-VPS 自测：
 
 验收（owner / Mac Codex / Windows Codex；本片合入前不要求，和 I5 一起）：
 - JP-VPS 干净测试用户，SSH 登录（不用 `sudo -u`）：`sh -c "$(curl -fsSL <assets>/install.sh)"` → `systemctl --user status vonvon-bot` 运行中、linger 已开或打印了 sudo 提示且 exit 0；再跑一次 → "已经装过了"；`uninstall.sh` 后 unit 没了、`~/.vonvon-bot` 还在。
-- Mac 测试环境（2026-11-01 改）：`sh install.sh`、`sh uninstall.sh` 都退出非零，打印去 https://bot.vonvon.cc 下载桌面端安装包的那句，HOME 下什么都没写，不碰已装的桌面端。
+- Mac 测试环境（2026-11-01 改）：`sh install.sh`、`sh uninstall.sh` 都退出非零，打印去 https://vonvon.cc/get/ 下载安装包的那句，HOME 下什么都没写，不碰已装的桌面端。
 - Windows（随 I4a/I4b 的任务一起发给 Windows Codex；验收清单）：
 
   > 已取消（owner 2026-11-01：Mac、Windows 只用安装包装全部软件，不做命令行只装服务端）
@@ -255,7 +255,7 @@ JP-VPS 自测：
 - 清单的字面校验（前缀、版本正则、`url` 字面相等、sha512 128 位）全在 sh 里做，不信 payload 的任何没校验的字段；验签只在 OpenSSL 3 下做，没有时**明说**。
 - 解包前检查成员路径，解到 `.part` 再 `mv`；脚本里唯一的 `rm -rf` 对象是 `$TMP` 和满足四条件的 `.part`；`uninstall.sh` 的删除走四条件函数，`HOME` 为空、符号链接、无标记各有测试。
 - `__standalone-setup` 写启动器和 PATH 块都是写临时文件再 `rename`；PATH 块文本和桌面端的来自同一个 `P/cli-path-block.ts`，桌面端测试不改断言仍绿。
-- `service install --linger --json`：linger 没开成 exit 0、带 `lingerUser`；四个 `reason` 稳定、带 `fallback: 'detached'`；脚本对 Linux 的三个 reason 的文案和 §15 一致。
+- `service install --linger --json`：linger 没开成 exit 0、带 `lingerUser`；三个 `reason` 稳定、带 `fallback: 'detached'`；脚本对 Linux 的三个 reason 的文案和 §15 一致。
 - `.ps1` 那几条随 I2b 取消。
 - 测试在 `mkdtemp` 的 HOME 里跑 `sh`，`HOME` 只在子进程 `env` 里；不碰真服务管理器、不连网。
 - diff 里没有真实 id、密钥、本机路径；测试钥匙现生成；脚本里的公钥是 C2 那把的公开部分（owner 生成后提交）。

@@ -272,11 +272,11 @@ vonvon-platform 只有约 1170 行，数据存在一个 JSON 文件里，只能�
 
 桌面端既是本机 daemon 的外壳，也是别的设备的客户端（见"远程连接和多设备"）。连着别的设备时，外壳里管本机的事一律不作用在对面。
 
-桌面端内置的 daemon（`bundled`）和 `npm i -g vonvon-bot` 装的 daemon 共用 `~/.vonvon-bot` 和同一把 pid 锁，所以同一时间只会有一个在运行。版本不同时以协议版本判断能否连接（见"本机和远程走同一套协议"的维护子集）。2026-11-01 起安装脚本装的服务端（`standalone`）只在 Linux，Linux 没有桌面端，所以桌面端一侧只剩退出规则：退出时停本机的服务端，只有"不是 `bundled`、又另外注册成后台服务"的不停（比如 npm 装后 `vonvon service install`，它退 0 以后服务管理器不再拉起），Windows 更新前的 `beforeUpdateInstall` 同样跳过它。原来的登录项显示、启动修复只提示升级、认 `vonvon` 标记三条不做。安装脚本在 Linux 上发现这台已经装过（daemon 在跑、服务已注册、装过服务端、或 PATH 上有带标记的 `vonvon`）就跳过，什么都不动。
+桌面端内置的 daemon（`bundled`）和 `npm i -g vonvon-bot` 装的 daemon 共用 `~/.vonvon-bot` 和同一把 pid 锁，所以同一时间只会有一个在运行。版本不同时以协议版本判断能否连接（见"本机和远程走同一套协议"的维护子集）。2026-11-01 起安装脚本装的服务端（`standalone`）只在 Linux，Linux 没有桌面端，所以桌面端一侧只剩退出规则：退出时停本机的服务端，只有"不是 `bundled`、又另外注册成后台服务"的不停（比如 npm 装后 `vonvon service install`，它退 0 以后服务管理器不再拉起）。原来的登录项显示、启动修复只提示升级、认 `vonvon` 标记三条不做。安装脚本在 Linux 上发现这台已经装过（daemon 在跑、服务已注册、装过服务端、或 PATH 上有带标记的 `vonvon`）就跳过，什么都不动。
 
 ### 服务端独立安装和升级
 
-0.9.0 起，Linux 能一条命令只装服务端、`vonvon` 命令和后台服务（[product.md](product.md) 3.10"只装服务端"，[devices.md](plans/devices.md) 第 7 节）。Mac、Windows 不做只装服务端，只用桌面端安装包（owner 2026-11-01，devices.md 第 19 节）；`install.sh`、`uninstall.sh` 在 macOS 上只打印去 https://bot.vonvon.cc 下载安装包、退出非零，什么都不碰。
+0.9.0 起，Linux 能一条命令只装服务端、`vonvon` 命令和后台服务（[product.md](product.md) 3.10"只装服务端"，[devices.md](plans/devices.md) 第 7 节）。Mac、Windows 不做只装服务端，只用桌面端安装包（owner 2026-11-01，devices.md 第 19 节）；`install.sh`、`uninstall.sh` 在 macOS 上只打印去 https://vonvon.cc/get/ 下载安装包、退出非零，什么都不碰。
 - 新发行种类 `standalone`，靠安装根里的 `standalone.json` 识别，先于 `.git` 祖先检查。包里是 `app/`（`package.json`、`bin/vonvon.mjs`、压缩后的 `dist/cli.js`、`ui/dist/`、第三方 `node_modules/`）和官方 Node 24 LTS 二进制；不带 source map、TypeScript 源码和 `.d.ts`。`stageDaemon` 的这些改动对桌面端自带的 daemon 同样生效。只发两个包：`linux-x64`、`linux-arm64`（只支持 glibc，`.tar.gz`），包里不能有符号链接。I1 已合入的打包脚本还能打 darwin、win 四个目标（`.zip`、Windows 的 Node 和 npm 布局、260 字符预算），launchd 和桌面端也认 `standalone`；这些用不上，I3 合入后由清理片 I6 删。
 - 安装根是 `~/.local/share/vonvon-bot/server/`，版本放在 `releases/<version>/`。当前版本是原子替换的符号链接 `current`（原来给 Windows 的指针文件 `current.txt` 不做）。命令和服务定义都指向安装根里固定的启动器，exec `app/bin/vonvon.mjs`；服务定义对 `standalone` 不解析 realpath，升级只换 `current`。托管安装用的可信 npm 从 `process.execPath` 推出同一版本里 Node 自带的那份，不靠环境变量。
 - 升级：清单 `bot/server/stable/manifest.json` 用单独的 Ed25519 密钥签名，签名内容含 `product`、`channel`、`version`、`linux-x64` 和 `linux-arm64` 两个包的 URL 和 sha512；只接受比当前和历史最高都新的版本，`publishedAt` 不倒退。`machine.applyCoreUpdate` 在 `update.lock` 里下载、核对、改名到 `releases/<v>/`，**先原子切 `current` 再请求重启**（排空、退 75、管理器拉起的就是新版本）；重启助手核对新进程的 `serverInfo.version`，不对或超时就切回上一版。`vonvon update` 发同一个 RPC，并在 daemon 重启的那一刻改读本机 `update-status.json`。

@@ -2,7 +2,7 @@
 
 依据 `docs/plans/devices.md` §7.5（升级引擎）、§6.5（升级按钮）、§4.7（排空期间放行）、§12（共享契约）、§13 的 I3 行。I2、I4a、I4b、I5 四片引用本文 §4.1 的契约，不各自重写。本文的缩写同 `devices.md`：`D/` = `packages/daemon/src`，`P/` = `packages/protocol/src`，`CL/` = `packages/client/src`，`DT/` = `packages/desktop/src`，`U/` = `packages/ui/src`。
 
-**2026-11-01 改动**（owner："Mac 和 Windows 上就直接通过安装包安装全部软件就好了，没有这种场景只安装 Server 端，也不用通过命令行安装"；`devices.md` 第 19 节）：`standalone` 只在 Linux 上有，服务端包和签名清单只有 `linux-x64`、`linux-arm64`，托管时的服务管理器只有 systemd。I4a、I4b、I2b 取消。所以本文下面为 Windows、macOS 写的部分都用不上：C1 的四个 darwin、win 目标和 `.zip`，C5 的 `current.txt`，C6、§4.6 里的 I4b 监督进程和 launchd，C7 的 Windows 计划任务名，§4.3 的 `extractZip`，§4.10 的 Windows 占用目录。I3 不再为它们写新代码；I3a、I3b 已经写好的（`current-release.ts` 的 `current.txt` 分支、`archive.ts` 的 `extractZip`、清单六项、win32 下助手只写 `error` 的分支）先留着，I3 合入后由清理片 I6 一起删，清单改成两项要赶在 I5 发第一份 stable 清单之前。下文原样留着，读的时候按这一段。
+**2026-11-01 改动**（owner："Mac 和 Windows 上就直接通过安装包安装全部软件就好了，没有这种场景只安装 Server 端，也不用通过命令行安装"；`devices.md` 第 19 节）：`standalone` 只在 Linux 上有，服务端包和签名清单只有 `linux-x64`、`linux-arm64`，托管时的服务管理器只有 systemd。I4a、I4b、I2b 取消。所以本文下面为 Windows、macOS 写的部分都用不上：C1 的四个 darwin、win 目标和 `.zip`，C5 的 `current.txt`，C6、§4.6 里的 I4b 监督进程和 launchd，C7 的 Windows 计划任务名，§4.3 的 `extractZip`，§4.10 的 Windows 占用目录。I3 不再为它们写新代码；I3a、I3b 已经写好的（`current-release.ts` 的 `current.txt` 分支、`archive.ts` 的 `extractZip`、win32 下助手只写 `error` 的分支）先留着，I3 合入后由清理片 I6 一起删。清单不等 I6：I2a 的 `install.sh` 已经只认 `linux-x64`、`linux-arm64` 两项（多一项、少一项都 exit 4），I3 在自己的片里把 `standalone-manifest.ts` 的 `SERVER_TARGETS` 连同 `fake-cdn` 和测试改成同样两项，否则脚本认的清单 daemon 不认、daemon 认的脚本不认；万一 I3 按六项合入，I6 先改它，I5 发第一份 stable 清单之前两边必须一致。下文原样留着，读的时候按这一段。
 
 ## 1. 做什么
 
@@ -48,7 +48,7 @@
 
 **C1 签名清单 `https://dl.vonvon.cc/bot/server/stable/manifest.json`**
 - 信封：`{ "payload": "<base64>", "signature": "<base64>" }`，和 Windows 清单同一种信封。`payload` 是 UTF-8 的紧凑 JSON（`JSON.stringify` 无空白）；`signature` 是对 **解码后的 payload 字节** 的 Ed25519 签名（64 字节）。信封最大 64 KiB，超了拒。
-- payload 的键按这个顺序写（sh 脚本用 sed 取字段靠的是固定顺序和无空白）：`schemaVersion`、`product`、`channel`、`version`、`publishedAt`、`files`、`notes`（可选，最后）。`files` 的键按 `scripts/build-server.mjs` 的 `TARGETS` 顺序：`linux-x64`、`linux-arm64`；每项 `{ "url", "sha512", "size" }`。原来还有 `darwin-arm64`、`darwin-x64`、`win-x64`、`win-arm64`，2026-11-01 起不发（见文首），I6 改成两项。
+- payload 的键按这个顺序写（sh 脚本用 sed 取字段靠的是固定顺序和无空白）：`schemaVersion`、`product`、`channel`、`version`、`publishedAt`、`files`、`notes`（可选，最后）。`files` 的键按 `scripts/build-server.mjs` 的 `PUBLISHED_TARGETS`（I2a）顺序：`linux-x64`、`linux-arm64`；每项 `{ "url", "sha512", "size" }`。原来还有 `darwin-arm64`、`darwin-x64`、`win-x64`、`win-arm64`，2026-11-01 起不发（见文首），I3 改成两项，和 I2a 的脚本一致。
 - 校验（TS 和 sh 都做，任一不过就整份拒，不用 payload 里的任何值）：`schemaVersion === 1`；`product === 'vonvon-bot-server'`；`channel === 'stable'`；`version` 匹配 `^[0-9]+\.[0-9]+\.[0-9]+$`；`publishedAt` 是正的安全整数（epoch 毫秒）；`files` 恰好两个键（2026-11-01 前写的是六个），不多不少；每个 `url` **字面等于** `https://dl.vonvon.cc/bot/server/<version>/vonvon-server-<version>-<target>.tar.gz`（原来 win 用 zip）；`sha512` 匹配 `^[0-9a-f]{128}$`；`size` 是正的安全整数；`notes` 可选、字符串、≤ 4096；没有别的键（zod `.strict()`）。
 - 测试和 CI 的假 CDN 用不同的 `baseURL`（见 C2），`url` 的前缀就换成那个 `baseURL`；sh 脚本里 `baseURL` 是常量，只能靠改脚本副本换。
 - 未签名的 `https://dl.vonvon.cc/bot/server/<version>/manifest.json`：内容是 payload 去掉 `channel` 的那份（`{ schemaVersion, product, version, publishedAt, files }`），给人和 I5 的 publish 自检看，daemon 和脚本都不读它。
@@ -237,7 +237,7 @@ JP-VPS 上，不碰 `accept-home2`、Bot 6、真 CDN、真 systemd：
 
 ## 8. 验收要点
 
-- 签名清单的信封、键顺序、每个 `url` 的字面规则和本文 C1 一致（2026-11-01 起两项，I3a 已写的六项由 I6 改）；坏签名、多键、`channel` 不是 stable、`url` 换主机都拒，拒绝时不把 payload 内容带进用户可见文字。
+- 签名清单的信封、键顺序、每个 `url` 的字面规则和本文 C1 一致（2026-11-01 起两项，I3a 已写的六项在 I3 里改，和 I2a 的脚本一致）；坏签名、多键、`channel` 不是 stable、`url` 换主机都拒，拒绝时不把 payload 内容带进用户可见文字。
 - 回滚保护：`publishedAt` 倒退或版本低于 `highestSeen` 的清单拒，`update-state.json` 在安装根、原子写。
 - 应用顺序是 下载 → sha512 → 解包到 `.part` → 改名 → 切 `current` → 写 `restarting{previous}` → 排空 → 75；每一步崩都有对应的测试且 `current` 不会半新半旧。
 - 助手按 pid 锁里的 `version` 判成功；60 秒 / 25 秒 / 90 秒三个期限都有测试；回滚后状态带 `rolledBack: true`。
