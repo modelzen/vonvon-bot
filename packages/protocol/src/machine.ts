@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {agentIdSchema, lingerStateSchema, serviceStateSchema} from './domain.js';
+import {agentIdSchema, distributionSchema, lingerStateSchema, serviceStateSchema} from './domain.js';
 import {mcpRequestSchema, mcpReplySchema} from './mcp.js';
 import {bridgeImportReplySchema} from './bridge-import.js';
 
@@ -42,7 +42,7 @@ export const machineReplySchema = z.discriminatedUnion('type', [
   z.object({type:z.literal('status'),service:serviceStatusSchema,host:z.object({ownership:z.enum(['owned','attached']),pid:z.number()}).nullable(),temporaryAgent:z.string().optional(),cli:z.union([z.object({kind:z.literal('ready'),bin:z.string(),message:z.string()}),z.object({kind:z.literal('error'),message:z.string()})])}),
   z.object({type:z.literal('done'),message:z.string()}),
   z.object({type:z.literal('logs'),text:z.string()}),
-  z.object({type:z.literal('coreUpdate'),distribution:z.object({kind:z.enum(['global-npm','bundled','development','unknown']),cliPath:z.string()}),current:z.string(),latest:z.string().nullable(),hasUpdate:z.boolean(),dev:z.boolean()}),
+  z.object({type:z.literal('coreUpdate'),distribution:distributionSchema,current:z.string(),latest:z.string().nullable(),hasUpdate:z.boolean(),dev:z.boolean()}),
   z.object({type:z.literal('coreUpdateStatus'),status:coreUpdateStatusSchema}),
   z.object({type:z.literal('desktopUpdate'),update:desktopUpdateSchema}),
 ]);
