@@ -27,7 +27,7 @@ const record: UpdateStatus = { phase: 'restarting', ok: true, from: '1.0.0', to:
 function helper(locks: (clock: number, starts: number) => PidLockInfo | null, fields: Partial<RestartHelperDeps> = {}) {
   let clock = 0;
   let current = '1.0.1';
-  const calls = { starts: [] as Array<[string, string[]]>, switches: [] as string[], cleanups: [] as string[][] };
+  const calls = { starts: [] as Array<[string, string[]]>, switches: [] as string[], cleanups: [] as string[][], notes: [] as string[] };
   const deps: Partial<RestartHelperDeps> = {
     readLock: async () => locks(clock, calls.starts.length),
     running: () => true,
@@ -40,6 +40,7 @@ function helper(locks: (clock: number, starts: number) => PidLockInfo | null, fi
     readCurrentVersion: async () => current,
     rollsBack: true,
     cleanup: async (_root, keep) => { calls.cleanups.push(keep); },
+    note: async (_root, version) => { calls.notes.push(version); },
     ...fields,
   };
   const run = (update: UpdateStatus | null = record) => runSamePortRestartHelper({ port: 43119, oldPid: old.pid, oldStartedAt: old.startedAt, ...(update ? { update } : {}) }, deps);
@@ -57,6 +58,7 @@ describe('standalone update restart helper', () => {
     expect(calls.starts).toEqual([]);
     expect(calls.switches).toEqual([]);
     expect(calls.cleanups).toEqual([['1.0.1', '1.0.0']]);
+    expect(calls.notes).toEqual(['1.0.0']);
   });
   it('starts the release current points at, not its own entry', async () => {
     let gone = false;

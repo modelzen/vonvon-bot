@@ -54,6 +54,12 @@ const failed = (kind: keyof typeof commandExitCodes) => expect.objectContaining(
 const status = (phase: string, extra: Partial<CoreUpdateStatus> = {}): CoreUpdateStatus => ({ phase, from: '1.0.0', at: 2_000_000, ...extra });
 const statusReply = (value: CoreUpdateStatus | null): MachineReply => ({ type: 'coreUpdateStatus', status: value });
 const accepted: MachineReply = { type: 'done', message: '开始更新…' };
+/** A daemon of a global npm install (or of `kind`): its check, its update accepted by `apply`, then a done record. */
+const npmDaemon = (apply: () => Promise<MachineReply> = async () => accepted, kind = 'global-npm', latest: string | null = '1.0.1') => harness({
+  distribution: { kind: 'global-npm', cliPath: '/x' }, file: () => status('done', { ok: true, to: '1.0.1' }),
+  machine: async payload => (payload.type === 'checkCoreUpdate' ? { type: 'coreUpdate', distribution: { kind, cliPath: '/x' }, current: '1.0.0', latest, hasUpdate: latest !== null, dev: false }
+    : payload.type === 'applyCoreUpdate' ? apply() : statusReply(status('done', { ok: true, to: '1.0.1' }))),
+});
 
 beforeEach(async () => {
   rmSync(join(paths.appDir, 'update.lock'), { force: true });
@@ -112,11 +118,33 @@ describe('vonvon update', () => {
   });
   // review 207: under --json a global npm install updated here and left the running daemon on the old code
   it('has a running daemon of a global npm install update and restart itself, under --json too', async () => {
-    const { deps, io, out, sent } = harness({ distribution: { kind: 'global-npm', cliPath: '/x' }, machine: async payload => (payload.type === 'applyCoreUpdate' ? accepted : statusReply(status('done', { ok: true, to: '1.0.1' }))) });
+    const { deps, io, out, sent } = npmDaemon();
     await runUpdateCommand({}, io(true), deps);
-    expect(sent[0]).toEqual({ type: 'applyCoreUpdate' });
+    expect(sent.slice(0, 2)).toEqual([{ type: 'checkCoreUpdate' }, { type: 'applyCoreUpdate' }]);
     expect(deps.npm.install).not.toHaveBeenCalled();
     expect(JSON.parse(out().trim().split('\n').at(-1)!)).toMatchObject({ ok: true, status: { phase: 'done', to: '1.0.1' } });
+  });
+  // the check after review 207: that daemon answers only once npm install -g is done, and the call gave up after 30 s
+  it('waits for a global npm daemon to install, and follows the record when the call drops', async () => {
+    const slow = npmDaemon(() => new Promise(resolve => setTimeout(() => resolve(accepted), 200)));
+    await runUpdateCommand({}, slow.io(), slow.deps);
+    expect(slow.out().trim().split('\n').at(-1)).toBe('已更新到 1.0.1');
+    const dropped = npmDaemon(async () => { throw new ConnectionError(new Error('closed')); });
+    await runUpdateCommand({}, dropped.io(true), dropped.deps);
+    expect(JSON.parse(dropped.out().trim().split('\n').at(-1)!)).toMatchObject({ ok: true, status: { phase: 'done', to: '1.0.1' } });
+    expect(slow.deps.npm.install).not.toHaveBeenCalled();
+  });
+  it('installs here when the daemon is not a global npm install, and exits 1 when npm has no answer', async () => {
+    const desktop = npmDaemon(undefined, 'bundled');
+    await runUpdateCommand({}, desktop.io(true), desktop.deps);
+    expect(desktop.sent).toEqual([{ type: 'checkCoreUpdate' }]);
+    expect(desktop.deps.npm.install).toHaveBeenCalled();
+    const offline = npmDaemon(undefined, 'global-npm', null);
+    try {
+      await runUpdateCommand({}, offline.io(), offline.deps);
+      expect(offline.out()).toContain('查不到最新版本');
+      expect(process.exitCode).toBe(1);
+    } finally { process.exitCode = undefined; }
   });
   it('passes --to and --allow-downgrade to the daemon', async () => {
     const { deps, io, sent } = harness({ machine: async payload => (payload.type === 'applyCoreUpdate' ? accepted : statusReply(status('done', { ok: true, to: '0.9.0' }))) });

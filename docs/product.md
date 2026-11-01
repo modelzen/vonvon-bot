@@ -746,7 +746,7 @@ owner 说过"崩溃报错就好了"，让 Claude 斟酌。自动重启是 Claude
 **只装服务端的升级（standalone，server-3）。** 不自动升级：daemon 每天查一次签名的发布清单，只在界面和 `vonvon update --check` 上提示有新版本，主人点"更新"或运行 `vonvon update` 才装。
 - 先换文件再重启：下载、核对清单里的 sha512、解包到 `releases/<版本>`、把 `current` 切过去，再排空重启（Bot 做完手上的活）。下载和解包期间 Bot 照常回复；任何一步失败，`current` 不动，还是原来的版本。
 - 新版本起不来，或者起来的不是新版本：60 秒后切回上一版再启动，结果写"新版本 x 没有起来，已切回 y"。新版本已经在启动、只是慢（比如第一次启动迁移数据），最多再等 4 分钟，不在它启动中途切回。上一版 25 秒内也没起来，再提示运行 `vonvon daemon start`。本机只留当前和上一版。
-- 排空期间停止服务端或关机，这次升级取消，`current` 切回原来的版本，结果写"重启已被停止取消，已切回 y"。一次升级在等重启结果时，再点更新或运行 `vonvon update` 回"已有更新在进行"。
+- 排空期间停止服务端或关机，这次升级取消，`current` 切回原来的版本，结果写"重启已被停止取消，已切回 y"。一次升级在等重启结果时，或者同一个安装目录上另一个数据目录的服务端正在更新时，再点更新或运行 `vonvon update` 回"已有更新在进行"。
 - 降级只能到本机还留着的上一版：`vonvon update --allow-downgrade --to <版本>`，不下载旧包。
 - `vonvon update` 的退出码：0 已更新或已是最新；1 没更新成（已切回或原样没动）；4 在 Bot 的会话里运行（不能用）；5 已有更新在进行；6 daemon 已重启但还看不到结果，稍后用 `vonvon update --check` 或 `vonvon daemon status` 查。daemon 没在跑时，`vonvon update` 只换文件，下次 `vonvon daemon start` 才用新版本。
 

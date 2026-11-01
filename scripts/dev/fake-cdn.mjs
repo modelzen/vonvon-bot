@@ -4,17 +4,18 @@
 //
 //   node scripts/dev/fake-cdn.mjs --root <dir> --key <ed25519-private.pem> [--port 0] [--version 1.0.1] [--published-at <ms>]
 //
-// <dir> holds the packages as `<version>/vonvon-server-<version>-<target>.<tar.gz|zip>`. It serves them under
+// <dir> holds the packages as `<version>/vonvon-server-<version>-<target>.tar.gz`. It serves them under
 // /bot/server/ and signs /bot/server/stable/manifest.json for --version (default: the highest version in <dir>).
-// Targets with no package get a placeholder entry, so the manifest still lists all six.
+// A target with no package gets a placeholder entry, so the manifest still lists both: the standalone server is Linux
+// only (owner 2026-11-01), and these are standalone-manifest.ts SERVER_TARGETS and build-server PUBLISHED_TARGETS.
 import { createHash, createPrivateKey, sign } from 'node:crypto';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join, resolve } from 'node:path';
 
-const TARGETS = ['linux-x64', 'linux-arm64', 'darwin-arm64', 'darwin-x64', 'win-x64', 'win-arm64'];
+const TARGETS = ['linux-x64', 'linux-arm64'];
 const VERSION = /^\d+\.\d+\.\d+$/;
-const archiveName = (version, target) => `vonvon-server-${version}-${target}.${target.startsWith('win-') ? 'zip' : 'tar.gz'}`;
+const archiveName = (version, target) => `vonvon-server-${version}-${target}.tar.gz`;
 const newer = (a, b) => { const [x, y] = [a, b].map(v => v.split('.').map(Number)); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i]; return false; };
 
 function options(args) {
@@ -55,7 +56,7 @@ const server = createServer((request, response) => {
       response.writeHead(200, { 'content-type': 'application/json' }).end(manifest(config, base));
       return;
     }
-    const match = /^\/bot\/server\/(\d+\.\d+\.\d+)\/(vonvon-server-\1-[a-z0-9-]+\.(?:tar\.gz|zip))$/.exec(path);
+    const match = /^\/bot\/server\/(\d+\.\d+\.\d+)\/(vonvon-server-\1-[a-z0-9-]+\.tar\.gz)$/.exec(path);
     const file = match && join(config.root, match[1], match[2]);
     if (!file || !statSync(file, { throwIfNoEntry: false })?.isFile()) { response.writeHead(404).end('missing'); return; }
     const bytes = readFileSync(file);

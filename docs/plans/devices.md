@@ -288,8 +288,6 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 
 ### 7.2 安装布局：稳定的真实路径
 
-> Windows 启动器退回的上一版改从 `current.txt` 第 2 行读，见 `docs/plans/server-3-update-engine.md` §4.11。
-
 | | Linux / macOS | Windows |
 |---|---|---|
 | 安装根 | `~/.local/share/vonvon-bot/server/` | `%LOCALAPPDATA%\VonvonBot\server\` |

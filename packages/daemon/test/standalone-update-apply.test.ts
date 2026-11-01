@@ -14,7 +14,8 @@ vi.mock('../src/config/paths', async () => {
 
 import { paths } from '../src/config/paths';
 import { getterContents } from '../src/config/data-compatibility';
-import { readCurrent, switchCurrent } from '../src/service/current-release';
+import { readCurrent, releaseCommand, switchCurrent } from '../src/service/current-release';
+import { extractTarGz } from '../src/service/archive';
 import { observeShutdown } from '../src/host/lifecycle';
 import { RESTART_PENDING_MS, settleUpdateAtStartup, startStandaloneUpdate, type ApplyDeps } from '../src/service/standalone-update';
 import { abandonOwnedUpdate, acquireUpdateLock, readUpdateStatus, UpdateBusyError, writeUpdateStatus, type UpdateStatus } from '../src/service/update';
@@ -46,6 +47,14 @@ async function setup() {
   return { installRoot, cdn, deps, restarts };
 }
 const details = (statuses: UpdateStatus[]) => statuses.map(status => status.detail ?? status.phase);
+/** releases/<version> with a Node and an entry that prints the version and its arguments. */
+async function fullRelease(installRoot: string, version: string): Promise<void> {
+  const release = join(installRoot, 'releases', version);
+  for (const dir of ['node/bin', 'app/bin']) await mkdir(join(release, dir), { recursive: true });
+  await writeFile(join(release, 'standalone.json'), JSON.stringify({ v: 1, version }));
+  await writeFile(join(release, 'app', 'bin', 'vonvon.mjs'), `process.stdout.write('${version} ' + process.argv.slice(2).join(' '));\n`);
+  await symlink(process.execPath, join(release, 'node', 'bin', 'node'));
+}
 /** The update code as the daemon of another data directory runs it, on the same install root (the check after review 207). */
 async function dataDirectory(): Promise<typeof import('../src/service/standalone-update')> {
   const appDir = mkdtempSync(join(paths.appDir, 'data-'));
@@ -250,13 +259,7 @@ describe('settleUpdateAtStartup', () => {
   // review 207: the getter wrapper named the release the Bot was created on, which the second update's cleanup removed
   it('keeps the secrets getter working for outside callers after two updates', async () => {
     const { installRoot } = await setup();
-    for (const version of ['1.0.0', '1.0.1', '1.0.2']) {
-      const release = join(installRoot, 'releases', version);
-      for (const dir of ['node/bin', 'app/bin']) await mkdir(join(release, dir), { recursive: true });
-      await writeFile(join(release, 'standalone.json'), JSON.stringify({ v: 1, version }));
-      await writeFile(join(release, 'app', 'bin', 'vonvon.mjs'), `process.stdout.write('${version} ' + process.argv.slice(2).join(' '));\n`);
-      await symlink(process.execPath, join(release, 'node', 'bin', 'node'));
-    }
+    for (const version of ['1.0.0', '1.0.1', '1.0.2']) await fullRelease(installRoot, version);
     await writeFile(paths.secretsGetterScript, getterContents({ nodePath: join(installRoot, 'releases', '1.0.0', 'node', 'bin', 'node'), cliPath: join(installRoot, 'releases', '1.0.0', 'app', 'bin', 'vonvon.mjs') }, paths.appDir), { mode: 0o700 });
     await switchCurrent(installRoot, '1.0.1', 'linux').then(() => switchCurrent(installRoot, '1.0.2', 'linux'));
     writeUpdateStatus({ phase: 'done', ok: true, from: '1.0.1', to: '1.0.2', previous: '1.0.1', at: 9 });
@@ -273,5 +276,35 @@ describe('settleUpdateAtStartup', () => {
     writeUpdateStatus({ phase: 'done', ok: true, from: '1.0.0', to: '1.0.1', previous: '1.0.1', at: 8 });
     await settleUpdateAtStartup({ version: '1.0.1', installRoot, platform: 'linux' });
     expect((await readdir(join(installRoot, 'releases'))).sort()).toEqual(['1.0.0', '1.0.1']);
+  });
+  // the check after review 207: daemons of other data directories share releases/, and the cleanup held only update.lock
+  it('leaves releases/ alone while an update of another data directory writes into it', async () => {
+    const { installRoot, deps } = await setup();
+    let resume!: () => void;
+    const held = new Promise<void>(resolve => { resume = resolve; });
+    let unpacking = false;
+    const other = (await dataDirectory()).startStandaloneUpdate({}, { ...deps, requestRestart: undefined, onStatus: status => { unpacking ||= status.detail === 'unpacking'; }, extract: (archive, into) => held.then(() => extractTarGz(archive, into)) });
+    await vi.waitFor(() => expect(unpacking).toBe(true));
+    await settleUpdateAtStartup({ version: '1.0.0', installRoot, platform: 'linux' });
+    // Before: releases/1.0.1.part went, and the other update failed with ENOENT.
+    expect(await readdir(join(installRoot, 'releases'))).toEqual(['1.0.0', '1.0.1.part']);
+    resume();
+    expect(await other.done).toMatchObject({ phase: 'done', to: '1.0.1' });
+  });
+  it('keeps the release a live daemon of another data directory runs, and drops the note of a dead one', async () => {
+    const { installRoot } = await setup();
+    await fullRelease(installRoot, '1.0.0');
+    await (await dataDirectory()).settleUpdateAtStartup({ version: '1.0.0', installRoot, platform: 'linux' });
+    for (const version of ['0.9.0', '1.0.1', '1.0.2']) await fullRelease(installRoot, version);
+    await mkdir(join(installRoot, 'running'), { recursive: true });
+    await writeFile(join(installRoot, 'running', `${2 ** 31 - 2}-0.9.0`), '');
+    await switchCurrent(installRoot, '1.0.2', 'linux');
+    writeUpdateStatus({ phase: 'done', ok: true, from: '1.0.1', to: '1.0.2', previous: '1.0.1', at: 9 });
+    await settleUpdateAtStartup({ version: '1.0.2', installRoot, platform: 'linux' });
+    // Before: 1.0.0 went, and the other daemon's next Bot, started from its own release, failed with ENOENT.
+    expect((await readdir(join(installRoot, 'releases'))).sort()).toEqual(['1.0.0', '1.0.1', '1.0.2']);
+    expect((await readdir(join(installRoot, 'running'))).sort()).toEqual([`${process.pid}-1.0.0`, `${process.pid}-1.0.2`]);
+    const { node, entry } = releaseCommand(installRoot, '1.0.0', 'linux');
+    expect(execFileSync(node, [entry, 'bot'], { encoding: 'utf8' })).toBe('1.0.0 bot');
   });
 });
