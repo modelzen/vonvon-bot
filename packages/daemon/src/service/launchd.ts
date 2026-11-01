@@ -9,7 +9,7 @@ import { isStaleOwner, readRunningPidLock, type StaleOwner } from '../server/pid
 import { stopVerifiedOwner, verifyPidLockOwner } from '../server/owner-verification';
 import { renderDefinition, type Definition } from './definitions';
 import { parseLaunchdExits } from './exits';
-import { isTranslocated, runtimeDistribution } from './distribution';
+import { installsService, isTranslocated, runtimeDistribution, serviceProgram } from './distribution';
 import { createServiceDrain, type DrainFailure, type DrainScope, type OwnerIdentity } from './drain';
 import { resolveServiceRoot, serviceTarget, type CanonicalRoot } from './identity';
 import { readDefinitionBytes, readRegistration, type Registration } from './registration';
@@ -300,8 +300,9 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
         const domainResult = await d.run(['print', domain], 30_000);
         if (!domainResult.ok) throw new Error(`GUI domain unavailable${domainResult.stderr.trim() ? `: ${domainResult.stderr.trim()}` : ''}`);
         const distribution = await d.distribution();
-        if (distribution.kind !== 'bundled' && distribution.kind !== 'global-npm') throw new Error('Distribution cannot install a service');
-        if (isTranslocated(d.executable) || isTranslocated(distribution.cliPath)) throw new Error(TRANSLOCATED_REFUSAL);
+        if (!installsService(distribution)) throw new Error('Distribution cannot install a service');
+        const program = serviceProgram(distribution, d.executable, d.capturedPath);
+        if (isTranslocated(program.distribution.executable) || isTranslocated(program.distribution.entry)) throw new Error(TRANSLOCATED_REFUSAL);
         const current = await registration(s);
         // An unrecognized plist under our own name is an older format: replace it, keeping its bytes for rollback.
         if (current.kind === 'other-root') throw new Error(registrationDetail(current));
@@ -315,7 +316,7 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
           if (!match) throw new Error('Running owner has no published port');
           port = Number(match[1]);
         } else port = input.port ?? (current.kind === 'ours' ? current.definition.port : await d.freePort());
-        desired = bytes(s, { root: s.root, port, distribution: { kind: distribution.kind === 'bundled' ? 'desktop' : 'npm', executable: d.executable, entry: distribution.cliPath }, capturedPath: d.capturedPath });
+        desired = bytes(s, { root: s.root, port, ...program });
         initial = await observeJob();
         // Without a readable job record the running daemon may be the job's own: never stop it on a guess.
         if (initial.kind === 'unknown') throw new Error(`launchd query failed: ${initial.detail}`);

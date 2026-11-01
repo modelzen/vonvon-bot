@@ -228,6 +228,28 @@ it('status asks for the exits while is-enabled is still out, and not at all when
   expect(stuck.calls).not.toContain(EXITS);
 });
 
+it('a standalone server runs through current, so an upgrade needs no new unit (devices 7.2)', async () => {
+  const f = await fixture();
+  const installRoot = await resolveServiceRoot(await mkdtemp(join(tmpdir(), 'vonvon-standalone-unit-')));
+  roots.push(installRoot);
+  for (const version of ['0.9.0', '0.9.1']) for (const file of ['node/bin/node', 'app/bin/vonvon.mjs']) {
+    await mkdir(posix.dirname(posix.join(installRoot, 'releases', version, file)), { recursive: true });
+    await writeFile(posix.join(installRoot, 'releases', version, file), '');
+  }
+  const current = posix.join(installRoot, 'current');
+  const standalone: Overrides = { distribution: async () => ({ kind: 'standalone', cliPath: posix.join(installRoot, 'releases/0.9.0/app/bin/vonvon.mjs'), installRoot }) };
+  expect((await f.service(standalone).install()).detail).toMatch(/no usable current release/);
+  await symlink('releases/0.9.0', current);
+  expect((await f.service(standalone).install()).kind).toBe('installed');
+  const unit = (await f.bytes()).toString();
+  expect(unit).toContain(`ExecStart="${current}/node/bin/node" "${current}/app/bin/vonvon.mjs" daemon run --port 32123`);
+  expect(unit).toContain(`Environment="PATH=${current}/node/bin:/captured/tools:/usr/bin"`);
+  expect(unit).not.toContain('releases/');
+  expect(await f.registration()).toMatchObject({ kind: 'ours', definition: { distribution: { kind: 'standalone' } } });
+  await rm(current);
+  await symlink('releases/0.9.1', current);
+  expect((await f.service(standalone).install()).kind).toBe('already-installed');
+});
 it.each(['development', 'unknown'] as const)('refuses %s distribution before writing', async kind => {
   const f = await fixture(); expect((await f.service({ distribution: async () => ({ kind, cliPath: '/dev/bin.mjs' }) }).install()).kind).toBe('install_refused');
   expect(f.mutations()).toEqual([]); expect((await f.registration()).kind).toBe('absent');

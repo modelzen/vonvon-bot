@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { renderDefinition } from '../src/service/definitions';
+import { decodeGeneratedDefinition, renderDefinition } from '../src/service/definitions';
 import { resolveServiceRoot, LAUNCHD_LABEL, SYSTEMD_UNIT_NAME } from '../src/service/identity';
 
 vi.mock('../src/service/identity', async importOriginal => ({
@@ -43,5 +43,21 @@ describe('launchd definition', () => {
     expect(plist).toContain(`<string>${root}/service.log</string>`);
     expect(plist).toContain('<key>SuccessfulExit</key><false/>');
     expect(plist).not.toContain('CODEX_BIN');
+  });
+});
+
+describe('standalone definition', () => {
+  it('runs through the current link and decodes as standalone; other paths stay npm (devices 7.2)', async () => {
+    const root = await resolveServiceRoot('/fixture/root');
+    const target = { platform: 'linux' as const, unitName: SYSTEMD_UNIT_NAME, unitPath: '/unused.service' };
+    const program = { executable: '/fixture/server/current/node/bin/node', entry: '/fixture/server/current/app/bin/vonvon.mjs' };
+    const decode = (distribution: { kind: 'standalone' | 'npm'; executable: string; entry: string }) => {
+      const rendered = renderDefinition({ target, root, port: 32123, distribution, capturedPath: '/bin' });
+      return decodeGeneratedDefinition(target, rendered).distribution;
+    };
+    expect(decode({ kind: 'standalone', ...program })).toEqual({ kind: 'standalone', ...program });
+    expect(decode({ kind: 'npm', executable: '/usr/bin/node', entry: program.entry })).toEqual({ kind: 'npm', executable: '/usr/bin/node', entry: program.entry });
+    const rendered = renderDefinition({ target, root, port: 32123, distribution: { kind: 'standalone', ...program }, capturedPath: '/bin' });
+    expect(Buffer.from(rendered.platform === 'linux' ? rendered.unit : new Uint8Array()).toString()).not.toContain('ELECTRON_RUN_AS_NODE');
   });
 });

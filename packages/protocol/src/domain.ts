@@ -205,6 +205,11 @@ export const toolStateSchema = z.object({
 export type ToolState = z.infer<typeof toolStateSchema>;
 export const serviceStateSchema = z.enum(["not-installed", "running", "stopped", "disabled", "detached", "conflict", "unknown"]);
 export type ServiceState = z.infer<typeof serviceStateSchema>;
+/** How this daemon was installed (devices 7.1). `standalone` is the script-installed server package. */
+export const distributionKinds = ["global-npm", "bundled", "standalone", "development", "unknown"] as const;
+export type DistributionKind = (typeof distributionKinds)[number];
+/** The kind parses as an open string, so a client does not fail on a kind that a newer daemon adds. */
+export const distributionSchema = z.object({ kind: z.string().min(1), cliPath: z.string() });
 /** Linux: whether systemd keeps this account's user services running without a login session (s20a). */
 export const lingerStateSchema = z.enum(["on", "off", "unknown"]);
 /** Why a service install or uninstall failed, read from the transaction's detail (daemon service/action-report.ts). */
