@@ -71,8 +71,5 @@ export function crossGroupWarning(project: SnapshotProject | undefined, groupId:
   return `加入后，这个项目现有的 ${others} 个群和这个群的人会通过 Bot 互相间接看到：项目记忆、工作区文件和可恢复的会话历史；以后新增的也一样。`;
 }
 
-/** What 移除本地 Bot asks the owner to confirm: what goes (counted) and what stays with the projects (§5.2). */
-export function deleteAgentDescription(name: string, bindings: number, memories: number | undefined): string {
-  const counted = [`${bindings} 个群绑定`, ...(memories === undefined ? [] : [`${memories} 条 Bot 记忆`])].join('、');
-  return `将移除「${name}」的本地注册信息、凭据、${counted}、设置和会话记录。项目的记忆和工作区属于项目，不会删。飞书开发者平台中的应用不会删除。请确认这个 Bot 已停用并停止运行。`;
-}
+/** What 移除本地 Bot asks the owner to confirm; `vonvon bot remove` says the same (devices 8.1). */
+export { deleteAgentDescription } from '@vonvon/protocol';

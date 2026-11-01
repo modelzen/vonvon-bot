@@ -120,7 +120,7 @@ covers(service.command('status'), 'machine.status').description('Show the OS ser
   await (await import('./commands/service')).runServiceStatus(Boolean(options.json));
 });
 const BOT = ['--bot <bot>', 'Bot id (cli_…) or name'] as const;
-const bot = program.command('bot').description('Show bots through the running daemon');
+const bot = program.command('bot').description('Add, show and change bots through the running daemon');
 covers(bot.command('add'), 'command.registerAgent', 'command.cancelJob').description('Register a bot by scanning a QR code in this terminal')
   .option('--json', 'Print JSON Lines: the QR link and its expiry, each step, then the result')
   .action(async (options: Json) => {
@@ -148,7 +148,50 @@ Example:
   .action(async (wanted: string, options: Json) => {
     await (await import('./commands/bot')).runBotRepairDir(wanted, io(options));
   });
-const group = program.command('group').description('List and bind Feishu groups');
+/** `[bot]` or --bot; both given, they must be the same (as `bot status`). */
+const oneBot = (wanted: string | undefined, option: string | undefined): string | undefined => {
+  if (wanted !== undefined && option !== undefined && wanted !== option) throw badArgs(`Bot 填了两次（${wanted} 和 --bot ${option}），只留一个。`);
+  return option ?? wanted;
+};
+for (const [name, enabled, description] of [
+  ['enable', true, 'Enable a bot: it connects to Feishu and answers; also resumes a bot paused after crashing (恢复运行)'],
+  ['disable', false, 'Disable a bot: it leaves Feishu and stops answering'],
+] as const) {
+  covers(bot.command(`${name} [bot]`), 'command.setAgentEnabled').description(description).option(...BOT).option(...JSON_FLAG)
+    .action(async (wanted: string | undefined, options: Json & { bot?: string }) => {
+      await (await import('./commands/bot')).runBotEnable(enabled, oneBot(wanted, options.bot), io(options));
+    });
+}
+covers(bot.command('remove <bot>'), 'command.deleteAgent').description("Remove a disabled bot from this computer: its registration, credentials, group bindings, settings and sessions")
+  .option('--yes', 'Remove it; without --yes nothing is removed and the command says what would go')
+  .option(...JSON_FLAG)
+  .addHelpText('after', `
+The projects' memory and folders stay, and so does the app on the Feishu developer console. Disable the bot first
+(vonvon bot disable) and wait for it to stop.
+
+Example:
+  vonvon bot remove 研发助手 --yes`)
+  .action(async (wanted: string, options: Json & { yes?: boolean }) => {
+    await (await import('./commands/bot')).runBotRemove(wanted, { yes: options.yes }, io(options));
+  });
+covers(bot.command('rescan [bot]'), 'command.refreshAgentCredentials', 'command.cancelJob').description("Scan a QR code again for a bot's new Feishu credentials; its groups, sessions and settings stay")
+  .option(...BOT).option('--json', 'Print JSON Lines: the QR link and its expiry, each step, then the result')
+  .action(async (wanted: string | undefined, options: Json & { bot?: string }) => {
+    await (await import('./commands/bot')).runBotRescan(oneBot(wanted, options.bot), io(options));
+  });
+const callback = bot.command('callback').description("A bot's card callback (卡片回调): the web page's 我已配置 and 撤销确认");
+covers(callback.command('status [bot]'), 'admin.cardCallbackStatus').description('Show whether a real card callback came and whether you confirmed the setup')
+  .option(...BOT).option(...JSON_FLAG)
+  .action(async (wanted: string | undefined, options: Json & { bot?: string }) => {
+    await (await import('./commands/bot')).runBotCallback('status', oneBot(wanted, options.bot), io(options));
+  });
+for (const [name, description] of [['confirm', 'Confirm the card callback is set up (我已配置)'], ['unconfirm', 'Take the confirmation back (撤销确认)']] as const) {
+  covers(callback.command(`${name} [bot]`), 'admin.confirmCardCallback').description(description).option(...BOT).option(...JSON_FLAG)
+    .action(async (wanted: string | undefined, options: Json & { bot?: string }) => {
+      await (await import('./commands/bot')).runBotCallback(name, oneBot(wanted, options.bot), io(options));
+    });
+}
+const group =program.command('group').description('List and bind Feishu groups');
 covers(group.command('list'), 'snapshot.get', 'command.refresh').description('List bound groups').option(...BOT).option(...JSON_FLAG).option(...FRESH).action(async (options: Json & { bot?: string; fresh?: boolean }) => {
   await (await import('./commands/group')).runGroupList(options, io(options), await daemonFor(options));
 });

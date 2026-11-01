@@ -20,11 +20,6 @@ const pending = (slice: ParitySlice, note: string): ParityEntry => ({ reason: 'p
 const dead = (slice: ParitySlice, note = 'the daemon answers unsupported'): ParityEntry => ({ reason: 'dead', slice, note });
 
 export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
-  'command.refreshAgentCredentials': pending('C2', 'bot rescan'),
-  'command.setAgentEnabled': pending('C2', 'bot enable / bot disable'),
-  'command.deleteAgent': pending('C2', 'bot remove'),
-  'admin.cardCallbackStatus': pending('C2', 'bot callback status'),
-  'admin.confirmCardCallback': pending('C2', 'bot callback confirm / unconfirm'),
   'command.openEventSettings': dead('D1'),
   'command.openJobAuthorization': dead('D1'),
   'command.copyJobAuthorization': dead('D1'),
