@@ -115,7 +115,7 @@ it('bot status still prints the connection and tool steps when the checklist rea
   const h = harness({ snapshot: one(undefined, [], [{ tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '0.156.1' }]), admin: async () => { throw new RpcError('internal', '飞书接口超时'); } });
   await expect(runBotStatus(undefined, h.io(), h.daemon)).rejects.toThrow('清单没有读全，稍后重新运行 vonvon bot status。');
   expect(h.out()).toBe(['Vonvon Bot（cli_a）', '! 飞书应用：检测失败', '    读取清单状态失败：飞书接口超时', '✓ 长连接：已连接', '✓ Codex：可用 · 0.156.1',
-    '· Claude：无法确认', '    在网页里点「去本机环境」（vonvon open）', '· 后台服务：不支持', '    这台电脑不支持后台服务。', ''].join('\n'));
+    '· Claude：无法确认', '    运行 vonvon env scan', '· 后台服务：不支持', '    这台电脑不支持后台服务。', ''].join('\n'));
   // main 必败: --json printed a success line before exiting 1; what was read now rides on the failure
   h.clear(); const thrown = await runBotStatus(undefined, h.io(true), h.daemon).catch((error: unknown) => error);
   expect(thrown).toEqual(failure('failed', '清单没有读全，稍后重新运行 vonvon bot status。'));
@@ -134,7 +134,7 @@ it('bot status prints the service step after the tools without counting it', asy
   const status = (application: DesktopSnapshot['application']) => async () => ({ ...snapshot([agent('cli_a')], [], [{ tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '0.156.1' }]), application });
   const mac = harness({ snapshot: status({ platform: 'macos', version: '1', loginItem: false, dataPath: '/x', service: { state: 'not-installed', skipped: false } }), admin: async () => ({ kind: 'setupStatus', status: setup }) });
   await runBotStatus(undefined, mac.io(), mac.daemon);
-  expect(mac.out()).toContain(['✓ Codex：可用 · 0.156.1', '· Claude：无法确认', '    在网页里点「去本机环境」（vonvon open）',
+  expect(mac.out()).toContain(['✓ Codex：可用 · 0.156.1', '· Claude：无法确认', '    运行 vonvon env scan',
     '! 登录电脑时自动运行 Bot（推荐）：推荐打开', '    打开后 Bot 跑在 macOS 的后台服务里：退出 app、注销再登录都在线，崩溃后自动重启。',
     '    运行 vonvon service install', '    运行 vonvon service skip', '全部就绪。', ''].join('\n'));
   mac.clear(); await runBotStatus(undefined, mac.io(true), mac.daemon);

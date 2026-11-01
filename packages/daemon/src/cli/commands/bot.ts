@@ -42,7 +42,7 @@ const ACTION_COMMAND: Record<StepAction['kind'], (action: StepAction, bot: strin
   open: a => a.kind === 'open' ? `${a.label}：${a.url}` : undefined,
   enable: (_a, bot) => `运行 vonvon bot enable ${bot}`,
   confirmCallback: (a, bot) => a.kind === 'confirmCallback' ? `运行 vonvon bot callback ${a.confirmed ? 'confirm' : 'unconfirm'} ${bot}` : undefined,
-  environment: () => undefined,      // C7 填：运行 vonvon env scan
+  environment: () => '运行 vonvon env scan',
   codexLogin: () => undefined,
   claudeLogin: () => undefined,
   serviceInstall: () => '运行 vonvon service install',
