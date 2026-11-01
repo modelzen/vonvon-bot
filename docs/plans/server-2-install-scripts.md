@@ -1,8 +1,8 @@
-# I2 `server-2-install-scripts`：`install.sh` / `install.ps1` / `uninstall.*`
+# I2 `server-2-install-scripts`：`install.sh`、`uninstall.sh`（`install.ps1`、`uninstall.ps1` 已取消，2026-11-01）
 
 依据 `docs/plans/devices.md` §7.2（布局）、§7.3（安装脚本）、§7.4 的退路、§15 的文案、§13 的 I2 行。契约（清单格式、签名公钥怎么进包、`current`/`current.txt`、`current-release.ts`、服务名）在 `docs/plans/server-3-update-engine.md` §4.1，本文按 C1–C8 的编号引用，不重写。缩写同 `devices.md`。
 
-**2026-11-01 改动**（owner："Mac 和 Windows 上就直接通过安装包安装全部软件就好了，没有这种场景只安装 Server 端，也不用通过命令行安装"；`devices.md` 第 19 节）：脚本只在 Linux 上装。`install.sh`、`uninstall.sh` 在 macOS 上只打印一句中文，让用户到 https://bot.vonvon.cc 下载桌面端安装包，退出 2，不联网、不写任何文件；别的系统同样退出 2。脚本里不再有 Mac 的 LaunchAgent、`Applications` 里的桌面端、无图形登录这些分支，Linux 照旧查"已装过"。I2b（`install.ps1`、`uninstall.ps1`、§4.5、§5.3、§6 的 Windows 清单）取消，那几节留作记录。服务端包只有 `linux-x64`、`linux-arm64`，签名清单的 `files` 也只有这两项（I3 C1）；I2a 的脚本已经只认这两项，多一项、少一项都 exit 4，I3 的 `SERVER_TARGETS` 在 I3 里改成同样两项（`devices.md` 第 13 节 I3 行）。下文已按这些改过。
+**2026-11-01 改动**（owner："Mac 和 Windows 上就直接通过安装包安装全部软件就好了，没有这种场景只安装 Server 端，也不用通过命令行安装"；`devices.md` 第 19 节）：脚本只在 Linux 上装。`install.sh`、`uninstall.sh` 在 macOS 上只打印一句中文，让用户到 https://vonvon.cc/get/ 下载安装包，退出 2，不联网、不写任何文件；别的系统同样退出 2。脚本里不再有 Mac 的 LaunchAgent、`Applications` 里的桌面端、无图形登录这些分支，Linux 照旧查"已装过"。I2b（`install.ps1`、`uninstall.ps1`、§4.5、§5.3、§6 的 Windows 清单）取消，那几节留作记录。服务端包只有 `linux-x64`、`linux-arm64`，签名清单的 `files` 也只有这两项（I3 C1）；I2a 的脚本已经只认这两项，多一项、少一项都 exit 4，I3 的 `SERVER_TARGETS` 在 I3 里改成同样两项（`devices.md` 第 13 节 I3 行）。下文已按这些改过。
 
 ## 1. 做什么
 
@@ -42,9 +42,9 @@
 
 退出码：0 装好或已装过；1 setup / 服务步骤失败；2 环境不支持（root、平台、缺工具）；3 下载失败；4 校验失败（清单、签名、哈希、包内容）。所有失败都先打印一行中文原因，再 `exit`。脚本里的 `curl` 一律 `curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2`。
 
-常量（脚本头部，测试用 sed 换**公钥**那一段）：`BASE_URL="https://dl.vonvon.cc/bot/server"`、`ROOT="$HOME/.local/share/vonvon-bot/server"`、`DATA="$HOME/.vonvon-bot"`、`PUBKEY_PEM`（C2 那把钥匙的 SPKI PEM，夹在 `# BEGIN VONVON PUBKEY` / `# END VONVON PUBKEY` 两行之间）、`SERVER_MARKER="# Vonvon Bot server CLI v1"`、`DESKTOP_DOWNLOAD="https://bot.vonvon.cc"`（原来还有桌面端命令的标记 `DESKTOP_MARKER`，Linux 没有桌面端，I2a 删了）。
+常量（脚本头部，测试用 sed 换**公钥**那一段）：`BASE_URL="https://dl.vonvon.cc/bot/server"`、`ROOT="$HOME/.local/share/vonvon-bot/server"`、`DATA="$HOME/.vonvon-bot"`、`PUBKEY_PEM`（C2 那把钥匙的 SPKI PEM，夹在 `# BEGIN VONVON PUBKEY` / `# END VONVON PUBKEY` 两行之间）、`SERVER_MARKER="# Vonvon Bot server CLI v1"`、`DESKTOP_DOWNLOAD="https://vonvon.cc/get/"`（新版本只认 vonvon.cc，bot.vonvon.cc 只为 0.7.0 留着 301，`v1-plan.md` 第 10 节）（原来还有桌面端命令的标记 `DESKTOP_MARKER`，Linux 没有桌面端，I2a 删了）。
 
-先看系统（2026-11-01）：`uname -s` 不是 `Linux` → 不联网、不写文件、不建临时目录，exit 2。`Darwin` 打印 devices.md §15"安装脚本：在 Mac 上"那句（到 https://bot.vonvon.cc 下载桌面端安装包，它自带服务端）；别的系统（FreeBSD、Windows 的 Git Bash 这类）打印"安装脚本：不是 Linux、也不是 Mac"那句，带上 `uname -s` 的结果。这一步是 `main` 的第一步，在 root、`HOME`、已装过和公钥的检查之前。
+先看系统（2026-11-01）：`uname -s` 不是 `Linux` → 不联网、不写文件、不建临时目录，exit 2。`Darwin` 打印 devices.md §15"安装脚本：在 Mac 上"那句（到 https://vonvon.cc/get/ 下载安装包，里面带了服务端和 `vonvon` 命令）；别的系统（FreeBSD、Windows 的 Git Bash 这类）打印"安装脚本：不是 Linux、也不是 Mac"那句，带上 `uname -s` 的结果。这一步是 `main` 的第一步，在 root、`HOME`、已装过和公钥的检查之前。
 
 0. **root**：`[ "$(id -u)" = 0 ]` 且 `VONVON_ALLOW_ROOT` 不是 `1` → 打印 §15"安装脚本：root"那段，exit 2。是 `1` → 打印"以 root 继续，Bot 和 AI 代理都会以 root 运行"继续。
 1. **已装过**（任一命中 → 按 §15 文案打印、exit 0、不写任何文件）：
@@ -227,7 +227,7 @@ JP-VPS 自测：
 
 验收（owner / Mac Codex / Windows Codex；本片合入前不要求，和 I5 一起）：
 - JP-VPS 干净测试用户，SSH 登录（不用 `sudo -u`）：`sh -c "$(curl -fsSL <assets>/install.sh)"` → `systemctl --user status vonvon-bot` 运行中、linger 已开或打印了 sudo 提示且 exit 0；再跑一次 → "已经装过了"；`uninstall.sh` 后 unit 没了、`~/.vonvon-bot` 还在。
-- Mac 测试环境（2026-11-01 改）：`sh install.sh`、`sh uninstall.sh` 都退出非零，打印去 https://bot.vonvon.cc 下载桌面端安装包的那句，HOME 下什么都没写，不碰已装的桌面端。
+- Mac 测试环境（2026-11-01 改）：`sh install.sh`、`sh uninstall.sh` 都退出非零，打印去 https://vonvon.cc/get/ 下载安装包的那句，HOME 下什么都没写，不碰已装的桌面端。
 - Windows（随 I4a/I4b 的任务一起发给 Windows Codex；验收清单）：
 
   > 已取消（owner 2026-11-01：Mac、Windows 只用安装包装全部软件，不做命令行只装服务端）

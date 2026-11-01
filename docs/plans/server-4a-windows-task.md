@@ -1,6 +1,6 @@
 # I4a `server-4a-windows-task`：Windows 计划任务、`.cmd` 启动器、`current.txt`
 
-> 已取消（owner 2026-11-01：Mac、Windows 只用安装包装全部软件，不做命令行只装服务端）
+> 已取消（owner 2026-11-01：Mac、Windows 只用安装包装全部软件，不做命令行只装服务端）。其中"`D/server/snapshot.ts` 的 win32 → `'windows'`、`P/domain.ts` 枚举加 `windows`"一项不取消，挪给 U2（`devices.md` 第 19 节"Windows 的平台名"）
 
 依据 `docs/plans/devices.md` §7.2（Windows 列）、§7.4 的 Windows 一段、§13 的 I4a 行。契约（`current.txt` 两行格式、任务名 C7、退出码 C6、`current-release.ts` C5）在 `docs/plans/server-3-update-engine.md` §4.1。I4b（监督进程）另有计划，本文只写任务的动作行是什么、监督进程要满足什么。缩写同 `devices.md`。
 
