@@ -266,3 +266,12 @@ JP-VPS 自测：
 - 两个脚本都 `unset VONVON_HOME`：数据目录固定是 `~/.vonvon-bot`，和"已装过"的判断、桌面端对得上；设了的话 `install.sh` 说一句。
 - `service install`：root 警告在失败时放进 `partial.notes`；`CommandError` 加了 `fallback`、`hint` 两个字段，JSON 里紧跟 `reason`。
 - `README.md` 没加安装命令：脚本还没发到 dl.vonvon.cc，等 I5 上线时一起加。
+
+## 审查后改了什么（I2a）
+
+- F1 接受：`shell-path.ts` 按字节读写启动文件（latin1 一字节对一字符，PATH 块先转成它的 UTF-8 字节），GBK 这类不是 UTF-8 的内容装完再卸载字节不变；加了测试（含非 ASCII 的安装根路径）。桌面端 `cli-registration.ts` 的 utf8 读写是 dev 上原有的，不在这一片改。
+- F2 接受：`install.sh` 只有 `current`、`bin/vonvon` 不在或跑不了 `--version` 时不算装过，接着用 `releases/<v>` 重跑 setup；service、直接启动失败的提示写明"再运行安装命令不会重做这一步"和要跑的命令；加了"切了 current 才失败、重跑补完"的测试。
+- F3 接受：启动文件是指向不存在文件的符号链接时不写，链接留着，记进 `pathNote`（"符号链接指向的文件不存在"）；卸载时跳过；加了测试。
+- F4 接受：`uninstall.sh` 能跑 vonvon 时，先查默认名字以外、还指着 `vonvon-bot/server/current` 的服务定义（别的 `VONVON_HOME` 装的、带哈希后缀），有就 exit 1、什么都不动，提示用它的 `VONVON_HOME` 先 `service uninstall`；和跑不了 vonvon 时的扫描共用一个函数；加了测试。
+- F5 接受：两个脚本以 root 运行而 `HOME` 不归当前用户（`[ -O "$HOME" ]` 不成立，sudo 留着原用户 HOME 时）就 exit 2、什么都不写；只对 root 查，普通用户不受影响；加了测试（用不存在的 HOME，测试不需要第二个账号）。
+- F6 接受：musl 的判断先看 `ldd --version`（说 musl 就是 musl，说 GLIBC/GNU libc 就是 glibc），再看 `getconf GNU_LIBC_VERSION`，都认不出 glibc 时 `/lib/ld-musl-*.so.1` 才算 musl；加了测试（测试里把加载器路径换到临时目录）。

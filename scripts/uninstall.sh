@@ -77,6 +77,19 @@ service_defined() {
     || [ -e "$HOME/Library/LaunchAgents/com.vonvon.bot.daemon.plist" ] || [ -L "$HOME/Library/LaunchAgents/com.vonvon.bot.daemon.plist" ]
 }
 
+# 还指着安装根的服务定义，找到就记进 DEFINED、返回 0；数据目录不是默认的那份时名字带哈希后缀。
+# $1 是 others 时不看默认名字的那份：它由 service uninstall 卸掉。
+defined_for_root() {
+  for definition in "${XDG_CONFIG_HOME:-$HOME/.config}"/systemd/user/vonvon-bot*.service "$HOME"/Library/LaunchAgents/com.vonvon.bot.daemon*.plist; do
+    case "$1:${definition##*/}" in others:vonvon-bot.service|others:com.vonvon.bot.daemon.plist) continue ;; esac
+    if [ -f "$definition" ] && grep -qF 'vonvon-bot/server/current' "$definition" 2>/dev/null; then
+      DEFINED=$definition
+      return 0
+    fi
+  done
+  return 1
+}
+
 # 服务定义还在时不删文件：删了代码，服务管理器会一直拉起不存在的 current。
 # 没有服务定义（安装时退回了直接启动：容器里没有 systemd、Mac 只 SSH）就不问服务管理器，它在这些环境里答不上来。
 stop_service() {
@@ -110,18 +123,20 @@ remove_path_block() {
 }
 
 no_cli() {
-  for definition in "${XDG_CONFIG_HOME:-$HOME/.config}"/systemd/user/vonvon-bot*.service "$HOME"/Library/LaunchAgents/com.vonvon.bot.daemon*.plist; do
-    if [ -f "$definition" ] && grep -qF 'vonvon-bot/server/current' "$definition" 2>/dev/null; then
-      fail 1 "安装目录里没有能运行的 vonvon，后台服务 $definition 还在，什么都没删。先停掉并删掉这个服务，再运行一次卸载。"
-    fi
-  done
+  if defined_for_root all; then
+    fail 1 "安装目录里没有能运行的 vonvon，后台服务 $DEFINED 还在，什么都没删。先停掉并删掉这个服务，再运行一次卸载。"
+  fi
   say "安装目录里没有能运行的 vonvon。$PATH_BY_HAND"
 }
 
 main() {
   checked_home
   ROOT="$HOME/.local/share/vonvon-bot/server"
-  if [ "$(id -u 2>/dev/null || true)" = 0 ]; then say "你正在用 root 运行：卸载的是 root 这个账号下的服务端（$ROOT）。"; fi
+  if [ "$(id -u 2>/dev/null || true)" = 0 ]; then
+    # sudo 常留着原来用户的 HOME：那是别人的服务端
+    if [ ! -O "$HOME" ]; then fail 2 "HOME（$HOME）不是 root 的，什么都没删。卸载哪个用户的服务端，就用那个用户自己运行，不要 sudo。"; fi
+    say "你正在用 root 运行：卸载的是 root 这个账号下的服务端（$ROOT）。"
+  fi
   if [ ! -e "$ROOT" ] && [ ! -L "$ROOT" ]; then
     say "没有装过服务端（$ROOT 不存在）。"
     exit 0
@@ -133,6 +148,10 @@ main() {
   trap 'rm -rf -- "${TMP:?}"' EXIT
   trap 'exit 130' HUP INT TERM
   if pick_cli; then
+    # 用别的数据目录装的服务（VONVON_HOME=… vonvon service install）这里卸不掉：先停下，什么都不动
+    if defined_for_root others; then
+      fail 1 "后台服务 $DEFINED 还指着安装目录，什么都没删。先用它的数据目录卸掉它：\`VONVON_HOME=<这个文件里 VONVON_HOME 的值> vonvon service uninstall\`，再运行一次卸载。"
+    fi
     stop_service
     remove_path_block
   else

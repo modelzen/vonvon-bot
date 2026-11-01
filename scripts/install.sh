@@ -46,7 +46,14 @@ check_root() {
   fail 2 "你正在用 root 运行。Vonvon Bot 会以这个账号运行 AI 代理，建议用普通用户：\`useradd -m vonvon && su - vonvon\`，再运行安装命令。坚持用 root：\`VONVON_ALLOW_ROOT=1 sh -c \"\$(curl -fsSL $BASE_URL/install.sh)\"\`。"
 }
 
+# 安装根里的 bin/vonvon 是服务端的启动器，而且能运行。
+server_cli_runs() {
+  [ -f "$ROOT/bin/vonvon" ] && grep -qF "$SERVER_MARKER" "$ROOT/bin/vonvon" 2>/dev/null \
+    && "$ROOT/bin/vonvon" --version </dev/null >/dev/null 2>&1
+}
+
 # 已经装过就说一句、返回 0；什么文件都不写，也不连网。
+# 只有 current、没有能运行的 bin/vonvon，是设置那一步没做完（切了 current 才失败或被打断）：不算装过，接着装。
 already_installed() {
   kind=''
   desktop=''
@@ -54,7 +61,7 @@ already_installed() {
     pid=$(sed -n 's/.*"pid":\([0-9][0-9]*\).*/\1/p' "$DATA/daemon.pid" 2>/dev/null | head -n 1)
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then kind=服务端; fi
   fi
-  if [ -e "$ROOT/current" ] || [ -L "$ROOT/current" ]; then kind=服务端; fi
+  if { [ -e "$ROOT/current" ] || [ -L "$ROOT/current" ]; } && server_cli_runs; then kind=服务端; fi
   # systemd、launchd 的服务定义；数据目录不是默认的那份会带哈希后缀
   for definition in "${XDG_CONFIG_HOME:-$HOME/.config}"/systemd/user/vonvon-bot*.service "$HOME"/Library/LaunchAgents/com.vonvon.bot.daemon*.plist; do
     if [ -e "$definition" ]; then kind=服务端; fi
@@ -67,7 +74,8 @@ already_installed() {
   command_path=$(command -v vonvon 2>/dev/null || true)
   if [ -n "$command_path" ] && [ -f "$command_path" ]; then
     if grep -qF "$DESKTOP_MARKER" "$command_path" 2>/dev/null; then desktop=1
-    elif grep -qF "$SERVER_MARKER" "$command_path" 2>/dev/null; then kind=服务端
+    elif grep -qF "$SERVER_MARKER" "$command_path" 2>/dev/null; then
+      if [ "$command_path" != "$ROOT/bin/vonvon" ] || server_cli_runs; then kind=服务端; fi
     fi
   fi
   if [ -z "$kind$desktop" ]; then return 1; fi
@@ -106,12 +114,20 @@ pick_target() {
   # Rosetta 下的终端说自己是 x86_64，装 arm64 的包
   if [ "$OS" = darwin ] && [ "$ARCH" = x64 ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || true)" = 1 ]; then ARCH=arm64; fi
   if [ "$OS" = linux ]; then
-    musl=''
-    case "$(ldd --version 2>&1 | head -n 1 || true)" in *musl*) musl=1 ;; esac
-    for loader in /lib/ld-musl-*.so.1; do
-      if [ -e "$loader" ]; then musl=1; fi
-    done
-    if [ -n "$musl" ]; then fail 2 "这一版不支持 musl（Alpine 这类系统），只支持 glibc 的 Linux。"; fi
+    # ldd 是 libc 自己的；它说不清时 getconf 认得 glibc。都认不出 glibc，有 ld-musl 才算 musl：
+    # glibc 的系统装了 musl 包（musl-tools）也会有 /lib/ld-musl-*.so.1
+    libc=''
+    case "$(ldd --version 2>&1 | head -n 1 || true)" in
+      *musl*) libc=musl ;;
+      *GLIBC*|*'GNU libc'*|*'GNU C Library'*) libc=glibc ;;
+    esac
+    if [ -z "$libc" ] && getconf GNU_LIBC_VERSION >/dev/null 2>&1; then libc=glibc; fi
+    if [ -z "$libc" ]; then
+      for loader in /lib/ld-musl-*.so.1; do
+        if [ -e "$loader" ]; then libc=musl; fi
+      done
+    fi
+    if [ "$libc" = musl ]; then fail 2 "这一版不支持 musl（Alpine 这类系统），只支持 glibc 的 Linux。"; fi
   fi
   TARGET="$OS-$ARCH"
 }
@@ -242,7 +258,7 @@ start_detached() {
     '0:{"ok":true'*) ;;
     *)
       show_output "$output" "$TMP/start.err"
-      fail 1 "后台服务装不上，直接启动也没成功（退出码 $code）。"
+      fail 1 "后台服务装不上，直接启动也没成功（退出码 $code）。文件已经装好，再运行安装命令不会重做这一步；问题解决后运行 \`$ROOT/bin/vonvon daemon start\`。"
       ;;
   esac
   case "$1" in
@@ -271,13 +287,13 @@ install_service() {
         no_systemd|user_instance_down|no_runtime_dir|no_gui_session) start_detached "$reason" ;;
         *)
           show_output "$output" "$TMP/service.err"
-          fail 1 "后台服务没装上（退出码 $code）。文件已经装好，问题解决后运行 \`$ROOT/bin/vonvon service install\`。"
+          fail 1 "后台服务没装上（退出码 $code）。文件已经装好，再运行安装命令不会重做这一步；问题解决后运行 \`$ROOT/bin/vonvon service install\`。"
           ;;
       esac
       ;;
     *)
       show_output "$output" "$TMP/service.err"
-      fail 1 "后台服务没装上：$ROOT/bin/vonvon 没有正常运行（退出码 $code）。"
+      fail 1 "后台服务没装上：$ROOT/bin/vonvon 没有正常运行（退出码 $code）。问题解决后运行 \`$ROOT/bin/vonvon service install\`。"
       ;;
   esac
 }
@@ -297,6 +313,10 @@ main() {
     *) fail 2 "HOME 没有设置或不是绝对路径，不知道装到哪里。" ;;
   esac
   if [ -z "$(printf '%s' "$HOME" | sed 's#/*$##')" ]; then fail 2 "HOME 是 /，不往根目录里装。"; fi
+  # sudo 常留着原来用户的 HOME：root 往里写，启动文件和数据目录都会变成 root 的
+  if [ "$(id -u 2>/dev/null || true)" = 0 ] && [ ! -O "$HOME" ]; then
+    fail 2 "HOME（$HOME）不是 root 的，没有安装。要装给那个用户，就用那个用户自己运行，不要 sudo；坚持装在 root 下，用 \`sudo -H\` 或 \`su -\` 切成 root 再运行。"
+  fi
   ROOT="$HOME/.local/share/vonvon-bot/server"
   DATA="$HOME/.vonvon-bot"
   if already_installed; then exit 0; fi

@@ -23,7 +23,11 @@ const openssl3 = (() => { try { return /^OpenSSL [3-9]/.test(execFileSync('opens
 // a Mac with the desktop app installed sees it from every HOME
 const desktopOnHost = existsSync('/Applications/Vonvon Bot.app');
 
-/** The fake app/bin/vonvon.mjs: records its arguments; setup switches `current` and writes the launcher for real. */
+/**
+ * The fake app/bin/vonvon.mjs: records its arguments; setup switches `current` and writes the launcher for real. A
+ * scenario answer for setup with `afterSwitch` switches `current` first and then answers, as the real one does when it
+ * cannot write the launcher.
+ */
 const fakeCli = base => `import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 const base = ${JSON.stringify(base)};
@@ -32,12 +36,16 @@ appendFileSync(join(base, 'calls.log'), args.join(' ') + '\\n');
 const key = args[0] === 'service' || args[0] === 'daemon' ? args.slice(0, 2).join(' ') : args[0];
 let scenario = {};
 try { scenario = JSON.parse(readFileSync(join(base, 'scenario.json'), 'utf8')); } catch {}
-if (key === '__standalone-setup' && !scenario[key]) {
+if (key === '__standalone-setup' && (!scenario[key] || scenario[key].afterSwitch)) {
   const root = args[args.indexOf('--install-root') + 1];
   const version = args[args.indexOf('--release') + 1];
   rmSync(join(root, 'current.next'), { force: true });
   symlinkSync('releases/' + version, join(root, 'current.next'));
   renameSync(join(root, 'current.next'), join(root, 'current'));
+  if (scenario[key]) {
+    process.stdout.write(scenario[key].stdout + '\\n');
+    process.exit(scenario[key].exit ?? 0);
+  }
   mkdirSync(join(root, 'bin'), { recursive: true });
   writeFileSync(join(root, 'bin', 'vonvon.tmp'), ${JSON.stringify(LAUNCHER)}, { mode: 0o755 });
   renameSync(join(root, 'bin', 'vonvon.tmp'), join(root, 'bin', 'vonvon'));
@@ -289,10 +297,33 @@ test('root is refused before the network, unless VONVON_ALLOW_ROOT=1', async t =
   assert.match(run.stdout, /以 root 继续/);
 });
 
+// review F5: sudo keeps the user's HOME (macOS, sudo -s, sudo -E), and root writing there takes the user's files
+test('root with a HOME that is not its own is refused by both scripts, before anything is written', async t => {
+  const f = await fixture(t);
+  await f.ready();
+  await shim(f.shims, 'id', `case "$1" in -u) echo 0 ;; *) echo root ;; esac`);
+  // a HOME this process does not own: one that is not there (a HOME owned by another user needs a second account)
+  const other = join(f.base, 'someone-else');
+  let run = await f.run('install.sh', { VONVON_ALLOW_ROOT: '1', HOME: other });
+  assert.equal(run.code, 2, run.stderr);
+  assert.match(run.stderr, /HOME（.*someone-else）不是 root 的，没有安装。.*`sudo -H` 或 `su -`/);
+  assert.deepEqual(await f.curls(), []);
+  run = await f.run('uninstall.sh', { HOME: other });
+  assert.equal(run.code, 2, run.stderr);
+  assert.match(run.stderr, /不是 root 的，什么都没删/);
+  assert.equal(await f.exists(other), false);
+  // root's own HOME is fine
+  run = await f.run('install.sh', { VONVON_ALLOW_ROOT: '1' });
+  assert.equal(run.code, 0, run.stderr);
+  run = await f.run('uninstall.sh');
+  assert.equal(run.code, 0, run.stderr);
+  assert.match(run.stdout, /卸载的是 root 这个账号下的服务端/);
+});
+
 test('an install that is there already is left alone: no network, no file', async t => {
   const cases = [
     ['a running daemon', async f => { await mkdir(join(f.home, '.vonvon-bot'), { recursive: true }); await writeFile(join(f.home, '.vonvon-bot', 'daemon.pid'), JSON.stringify({ pid: process.pid, startedAt: 'x' })); }, /已经装过 Vonvon Bot（服务端）/],
-    ['current', async f => { await mkdir(f.root, { recursive: true }); await symlink('releases/0.9.0', join(f.root, 'current')); }, /已经装过/],
+    ['current and a launcher that runs', async f => { await mkdir(join(f.root, 'bin'), { recursive: true }); await symlink('releases/0.9.0', join(f.root, 'current')); await writeFile(join(f.root, 'bin', 'vonvon'), '#!/bin/sh\n# Vonvon Bot server CLI v1\nexit 0\n', { mode: 0o755 }); }, /已经装过 Vonvon Bot（服务端）/],
     ['a systemd unit', async f => { await mkdir(join(f.home, '.config/systemd/user'), { recursive: true }); await writeFile(join(f.home, '.config/systemd/user/vonvon-bot-0123456789ab.service'), ''); }, /已经装过/],
     ['a LaunchAgent', async f => { await mkdir(join(f.home, 'Library/LaunchAgents'), { recursive: true }); await writeFile(join(f.home, 'Library/LaunchAgents/com.vonvon.bot.daemon.plist'), ''); }, /已经装过/],
     ['the desktop app on a Mac', async f => { await f.setUname(['Darwin', 'arm64']); await mkdir(join(f.home, 'Applications', 'Vonvon Bot.app'), { recursive: true }); }, /已经装了 Vonvon Bot 桌面端，它自带服务端，不用再装。打开 Vonvon Bot 就能用。/],
@@ -342,6 +373,35 @@ test('musl, an unknown system and a missing tool are refused with exit 2', async
   assert.deepEqual(await f.curls(), []);
 });
 
+// review F6: Debian and Ubuntu put /lib/ld-musl-*.so.1 beside glibc when the musl package is installed
+test('a musl loader beside glibc is not musl: ldd, then getconf, decide; the loader counts only when neither knows glibc', async t => {
+  const prepare = async () => {
+    const f = await fixture(t);
+    await f.ready();
+    const script = join(f.base, 'scripts', 'install.sh');
+    const text = await readFile(script, 'utf8');
+    assert.equal(text.split('for loader in /lib/ld-musl-*.so.1;').length, 2);
+    await writeFile(script, text.replace('for loader in /lib/ld-musl-*.so.1;', `for loader in ${f.base}/lib/ld-musl-*.so.1;`));
+    await mkdir(join(f.base, 'lib'));
+    await writeFile(join(f.base, 'lib', 'ld-musl-x86_64.so.1'), '');
+    await shim(f.shims, 'getconf', 'exit 1');
+    return f;
+  };
+  const f = await prepare();
+  await shim(f.shims, 'ldd', `echo 'ldd (Ubuntu GLIBC 2.39-0ubuntu8) 2.39'`);
+  let run = await f.run('install.sh');
+  assert.equal(run.code, 0, run.stderr);
+
+  const g = await prepare();
+  await shim(g.shims, 'ldd', 'exit 1');
+  run = await g.run('install.sh');
+  assert.equal(run.code, 2);
+  assert.match(run.stderr, /不支持 musl/);
+  await shim(g.shims, 'getconf', `[ "$1" = GNU_LIBC_VERSION ] && echo 'glibc 2.39'`);
+  run = await g.run('install.sh');
+  assert.equal(run.code, 0, run.stderr);
+});
+
 test('a manifest or package that cannot be downloaded exits 3 and leaves no .part', async t => {
   const f = await fixture(t);
   let run = await f.run('install.sh');
@@ -388,13 +448,40 @@ test('the service: linger left off, the fallbacks to a detached daemon, and fail
   run = await h.run('install.sh');
   assert.equal(run.code, 1);
   assert.match(run.stderr, /后台服务没装上/);
+  assert.match(run.stderr, /再运行安装命令不会重做这一步；问题解决后运行 `.*\/bin\/vonvon service install`/);
   assert.equal((await h.calls()).includes('daemon start --json'), false);
 
   // a refusal the script knows, but the detached start fails too
   const i = await fixture(t);
   await i.ready();
   await i.scenario({ 'service install': refusal('no_systemd'), 'daemon start': { stdout: '{"ok":false,"error":{"kind":"failed","message":"m"},"exitCode":1}', exit: 1 } });
-  assert.equal((await i.run('install.sh')).code, 1);
+  run = await i.run('install.sh');
+  assert.equal(run.code, 1);
+  assert.match(run.stderr, /问题解决后运行 `.*\/bin\/vonvon daemon start`/);
+});
+
+// review F2: the real setup switches `current` before it writes bin/vonvon, and `current` alone used to read as installed
+test('a setup that failed after switching current is finished by the next run, not taken for an install', async t => {
+  const f = await fixture(t);
+  await f.ready();
+  await f.scenario({ '__standalone-setup': { afterSwitch: true, stdout: '{"ok":false,"error":{"kind":"failed","message":"m","reason":"launcher_write_failed"},"exitCode":1}', exit: 1 } });
+  let run = await f.run('install.sh');
+  assert.equal(run.code, 1);
+  assert.match(run.stderr, /再运行一次安装命令会从这一步接着做/);
+  assert.equal(await readlink(join(f.root, 'current')), 'releases/1.0.0');
+  assert.equal(await f.exists(join(f.root, 'bin', 'vonvon')), false);
+  await f.scenario({});
+  run = await f.run('install.sh');
+  assert.equal(run.code, 0, run.stderr);
+  assert.doesNotMatch(run.stdout, /已经装过/);
+  assert.match(run.stdout, /不再下载/);
+  assert.equal(await readFile(join(f.root, 'bin', 'vonvon'), 'utf8'), LAUNCHER);
+  assert.equal((await f.calls()).filter(line => line.startsWith('__standalone-setup')).length, 2);
+  // now it is an install: the launcher runs the release
+  run = await f.run('install.sh');
+  assert.equal(run.code, 0, run.stderr);
+  assert.match(run.stdout, /已经装过 Vonvon Bot（服务端）/);
+  assert.equal((await f.calls()).at(-1), '--version');
 });
 
 test('a setup that fails keeps the release; the next run skips the download and sets up again', async t => {
@@ -537,6 +624,30 @@ test('uninstall: with no service definition the service manager is not asked; th
   assert.equal(calls.includes('service uninstall --json'), false);
   assert.deepEqual(calls.slice(-2), ['daemon stop --json', `__standalone-teardown --install-root ${f.root} --json`]);
   assert.equal(await f.exists(f.root), false);
+});
+
+// review F4: a service set up with the server's vonvon for another VONVON_HOME has a hashed name and was left behind
+test('uninstall: another data directory\'s service still naming the install root keeps everything; one naming something else does not', async t => {
+  const f = await fixture(t);
+  await f.ready();
+  assert.equal((await f.run('install.sh')).code, 0);
+  await f.defineService();
+  const units = join(f.home, '.config/systemd/user');
+  await writeFile(join(units, 'vonvon-bot-0123456789ab.service'), `[Service]\nExecStart=${f.root}/current/node/bin/node ${f.root}/current/app/bin/vonvon.mjs daemon run\n`);
+  await writeFile(join(units, 'vonvon-bot-ba9876543210.service'), `[Service]\nExecStart=${join(f.base, 'other', 'node')} daemon run\n`);
+  const before = (await f.calls()).length;
+  let run = await f.run('uninstall.sh');
+  assert.equal(run.code, 1);
+  assert.match(run.stderr, /vonvon-bot-0123456789ab\.service 还指着安装目录，什么都没删。先用它的数据目录卸掉它/);
+  assert.equal(await f.exists(join(f.root, 'current')), true);
+  assert.equal(await f.exists(join(units, 'vonvon-bot.service')), true);
+  // nothing was stopped or taken out
+  assert.deepEqual((await f.calls()).slice(before), ['--version']);
+  await rm(join(units, 'vonvon-bot-0123456789ab.service'));
+  run = await f.run('uninstall.sh');
+  assert.equal(run.code, 0, run.stderr);
+  assert.equal(await f.exists(f.root), false);
+  assert.equal(await f.exists(join(units, 'vonvon-bot-ba9876543210.service')), true);
 });
 
 test('uninstall: a service that will not uninstall keeps every file', async t => {

@@ -6,12 +6,18 @@ import { findCliPathBlock, shellStartupFiles, spliceBlock, startupBlock } from '
 /**
  * Reads and writes the shell startup files for the standalone server's `bin` (server-2 4.3): the same block the desktop
  * app writes (protocol `cli-path-block`), so there is only ever one. Each file is written to a temporary file beside
- * it and renamed over it, keeping its mode; a link is followed to the file it names, as `>>` would.
+ * it and renamed over it, keeping its mode; a link is followed to the file it names, and a link that names nothing is
+ * left alone. The files are handled as bytes (latin1 maps each byte to one character and back), so text that is not
+ * UTF-8 comes back as it was; the block is turned into its UTF-8 bytes the same way.
  */
 export type ShellPathResult = { files: string[]; notes: string[] };
 
 const errnoOf = (error: unknown): string => (error instanceof Error && 'code' in error && typeof error.code === 'string') ? error.code : error instanceof Error ? error.message : String(error);
 const missing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
+const asBytes = (text: string): string => Buffer.from(text, 'utf8').toString('latin1');
+
+/** A startup file that is a link to nothing: writing through it would replace the link, so it is not written. */
+class DanglingLink extends Error {}
 
 export async function startupFiles(home: string, zdotdir: string | undefined): Promise<string[]> {
   const exists = (path: string): Promise<boolean> => lstat(path).then(() => true, () => false);
@@ -20,8 +26,12 @@ export async function startupFiles(home: string, zdotdir: string | undefined): P
 
 /** The file a write lands in: the path itself, or what its link names. */
 async function target(path: string): Promise<string> {
-  try { return (await lstat(path)).isSymbolicLink() ? await realpath(path) : path; }
+  let link: boolean;
+  try { link = (await lstat(path)).isSymbolicLink(); }
   catch (error) { if (missing(error)) return path; throw error; }
+  if (!link) return path;
+  try { return await realpath(path); }
+  catch (error) { if (missing(error)) throw new DanglingLink('符号链接指向的文件不存在'); throw error; }
 }
 
 async function rewrite(path: string, edit: (content: string) => string): Promise<boolean> {
@@ -32,7 +42,7 @@ async function rewrite(path: string, edit: (content: string) => string): Promise
   try {
     const info = await stat(file);
     if (!info.isFile()) throw Object.assign(new Error(`${file} is not a regular file`), { code: 'ENOTFILE' });
-    before = await readFile(file, 'utf8');
+    before = (await readFile(file)).toString('latin1');
     mode = info.mode & 0o7777;
   } catch (error) { if (!missing(error)) throw error; existed = false; }
   const after = edit(before);
@@ -41,7 +51,7 @@ async function rewrite(path: string, edit: (content: string) => string): Promise
   if (existed) await access(file, constants.W_OK);
   const temporary = join(dirname(file), `.${basename(file)}.vonvon-tmp`);
   try {
-    await writeFile(temporary, after, { mode });
+    await writeFile(temporary, Buffer.from(after, 'latin1'), { mode });
     await chmod(temporary, mode);
     await rename(temporary, file);
   } catch (error) {
@@ -54,11 +64,12 @@ async function rewrite(path: string, edit: (content: string) => string): Promise
 /** Puts the block for `bin` in each file. A file that cannot be written is not an error: it is named in `notes`. */
 export async function writePathBlock(files: string[], bin: string): Promise<ShellPathResult> {
   const result: ShellPathResult = { files: [], notes: [] };
+  const block = asBytes(startupBlock(bin));
   for (const file of files) {
     try {
-      await rewrite(file, content => spliceBlock(content, startupBlock(bin)));
+      await rewrite(file, content => spliceBlock(content, block));
       result.files.push(file);
-    } catch (error) { result.notes.push(`${file} 没写进去：${errnoOf(error)}`); }
+    } catch (error) { result.notes.push(`${file} 没写进去：${error instanceof DanglingLink ? error.message : errnoOf(error)}`); }
   }
   return result;
 }
@@ -66,13 +77,14 @@ export async function writePathBlock(files: string[], bin: string): Promise<Shel
 /** Takes the block out of each file, only where it is the block for `bin`: the desktop app's block stays. */
 export async function removePathBlock(files: string[], bin: string): Promise<ShellPathResult> {
   const result: ShellPathResult = { files: [], notes: [] };
-  const ours = startupBlock(bin).replace(/\n$/, '');
+  const ours = asBytes(startupBlock(bin)).replace(/\n$/, '');
   for (const file of files) {
     try {
       const changed = await rewrite(file, content => findCliPathBlock(content)?.text.replace(/\n$/, '') === ours ? spliceBlock(content, null) : content);
       if (changed) result.files.push(file);
     } catch (error) {
-      if (!missing(error)) result.notes.push(`${file} 没改成：${errnoOf(error)}`);
+      // a link to nothing has no block to take out
+      if (!missing(error) && !(error instanceof DanglingLink)) result.notes.push(`${file} 没改成：${errnoOf(error)}`);
     }
   }
   return result;
