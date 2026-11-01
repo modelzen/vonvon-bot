@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { decodePairingLink } from '@vonvon/protocol';
 import { createClientRegistry } from '../src/remote/clients';
-import { loadOrCreateDevice } from '../src/remote/device';
+import { holdDevice, loadOrCreateDevice } from '../src/remote/device';
 import { devicesPath } from '../src/remote/files';
 import { createInviteBook } from '../src/remote/pairing';
 import { deviceRpc } from '../src/server/rpc/device';
@@ -44,7 +44,7 @@ it('renames and revokes clients, files and replies alike, and records who made e
     const clients = await createClientRegistry(home);
     const invites = createInviteBook();
     const create = vi.spyOn(invites, 'create');
-    const deps = { home, identity: { current: await loadOrCreateDevice(home, '00000000-0000-4000-8000-000000000000') }, clients, invites };
+    const deps = { home, identity: holdDevice(home, await loadOrCreateDevice(home, '00000000-0000-4000-8000-000000000000')), clients, invites };
     const owner = { principal: { kind: 'owner', via: 'local' } } as const;
     const a = await clients.add({ name: 'A', publicKey: 'a'.repeat(43), clientKind: 'desktop', address: '192.0.2.1:1', invitedBy: 'local' });
     const b = await clients.add({ name: 'B', publicKey: 'b'.repeat(43), clientKind: 'cli', address: '192.0.2.2:1', invitedBy: a.id });
@@ -58,5 +58,22 @@ it('renames and revokes clients, files and replies alike, and records who made e
     await deviceRpc(deps, owner, { type: 'pair' });
     await deviceRpc(deps, { principal: { kind: 'owner', via: 'paired', clientId: a.id, generation: 1 } }, { type: 'pair', ttlMs: 60_000 });
     expect(create.mock.calls).toEqual([[{ invitedBy: 'local' }], [{ ttlMs: 60_000, invitedBy: a.id }]]);
+  } finally { await rm(home, { recursive: true, force: true }); }
+});
+// 独立核对：两次并发改名，写盘先后和 await 恢复先后可能相反，identity.current 停在不是最后落盘的名字。改之前的代码上必败。
+it('renames this device one at a time, so what it reports is what device.json holds', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vonvon-rpc-device-'));
+  try {
+    const identity = holdDevice(home, await loadOrCreateDevice(home, '00000000-0000-4000-8000-000000000000'));
+    const deps = { home, identity, clients: await createClientRegistry(home), invites: createInviteBook() };
+    const owner = { principal: { kind: 'owner', via: 'local' } } as const;
+    for (let round = 0; round < 10; round += 1) {
+      const names = Array.from({ length: 6 }, (_, index) => `n-${round}-${index}`);
+      const replies = await Promise.all(names.map(name => deviceRpc(deps, owner, { type: 'rename', name })));
+      expect(replies.map(reply => reply.kind === 'read' && reply.value.kind === 'device' && reply.value.device.name)).toEqual(names);
+      const written = JSON.parse(await readFile(devicesPath(home, 'device.json'), 'utf8')).name;
+      expect(identity.current.name).toBe(written);
+      expect(written).toBe(names[5]);
+    }
   } finally { await rm(home, { recursive: true, force: true }); }
 });

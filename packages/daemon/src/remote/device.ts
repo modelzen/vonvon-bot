@@ -86,6 +86,22 @@ export async function renameDevice(home: string, name: string): Promise<DeviceId
   await writeFileAtomic(devicesPath(home, 'device.json'), serialize(renamed), { durable: true });
   return known(renamed);
 }
+/** The daemon's identity (devices 4.1): renames one at a time, each from the file at its turn, and `current` only once
+ * written. Two renames at once could otherwise land on disk in one order and resume in the other, leaving `current` (and
+ * the server info and pairing links built from it) on a name the file no longer holds. A failed write changes nothing. */
+export interface DeviceHolder { readonly current: DeviceIdentity; rename(name: string): Promise<DeviceIdentity> }
+export function holdDevice(home: string, identity: DeviceIdentity): DeviceHolder {
+  let current = identity;
+  let turn: Promise<unknown> = Promise.resolve();
+  return {
+    get current() { return current; },
+    rename(name) {
+      const run = turn.then(async () => (current = await renameDevice(home, name)));
+      turn = run.catch(() => undefined);
+      return run;
+    },
+  };
+}
 /** For the secure channel (D2). */
 export function deviceKeyPair(identity: DeviceIdentity): { publicKey: Buffer; privateKey: KeyObject } {
   const { publicKey: x, secretKey: d } = identity.keypair;

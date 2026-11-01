@@ -30,7 +30,7 @@ import { getRpcErrorCode, RpcError } from './errors';
 import { authorize } from './authz';
 import { principalWire } from './principal';
 import { deviceRpc } from './rpc/device';
-import { loadOrCreateDevice } from '../remote/device';
+import { holdDevice, loadOrCreateDevice } from '../remote/device';
 import { createClientRegistry, type ClientRegistry } from '../remote/clients';
 import { followRevocations, createInviteBook } from '../remote/pairing';
 import { log } from '../core/logger';
@@ -146,7 +146,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
       resolveCodex: () => refreshCodexResolution({ force: true }), nodePath: process.execPath,
     });
     const { credential, machineId } = await createLocalIdentity(paths.appDir);
-    const identity = { current: await loadOrCreateDevice(paths.appDir, machineId) };
+    const identity = holdDevice(paths.appDir, await loadOrCreateDevice(paths.appDir, machineId));
     const clients = acquiredClients = await createClientRegistry(paths.appDir);
     const invites = createInviteBook();
     followRevocations({ clients, invites, publish: event => acquiredSockets?.publish(event), log });
