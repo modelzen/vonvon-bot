@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -54,6 +54,14 @@ it("discovers the daemon, authenticates, and correlates concurrent group replies
   const [admin, directory] = await Promise.all([client.admin({type:"state"}),client.directory({type:"list"})]);
   expect(admin).toEqual({kind:"state",state});
   expect(directory.kind).toBe("entries");
+  await client.close();
+});
+
+// main 必败: the discovery child had no marker, and `daemon status` asks a running daemon through this function (cli-8-machine)
+it("tells the discovery child to answer from the files", async () => {
+  const options = await fixture(() => {});
+  await writeFile(options.cliEntry, `if (process.env.VONVON_STATUS_FROM_FILES !== "1") process.exit(9);\n${await readFile(options.cliEntry, "utf8")}`);
+  const { client } = await connectLocal(options);
   await client.close();
 });
 
