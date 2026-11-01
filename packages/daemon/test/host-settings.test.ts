@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, rmdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHostSettings } from '../src/admin/host-settings';
@@ -7,6 +7,7 @@ import { readServiceCodexBin, saveServiceCodexBin } from '../src/service/codex-b
 import type { HostSettingsView } from '../src/admin/settings-types';
 import { acquireMutex, closeMutex } from '../src/config/data-access';
 import { parseSettingsEdit } from '../src/admin/settings-parse';
+import { fallbackWorkingDirectory, ownInstallDirectory } from '../src/platform/fallback-cwd';
 
 const homes: string[] = [];
 afterEach(async () => { await Promise.all(homes.splice(0).map(home => rm(home, { recursive: true, force: true }))); });
@@ -165,5 +166,47 @@ describe('global judge model settings', () => {
     expect((await other.save({ ...edit, patch: { byProvider: { 'codex-appserver': { model: 'other', custom: true } } } })).kind).toBe('conflict');
     expect((await other.save({ ...edit, revision: fresh.sections.judge.revision,
       patch: { byProvider: { typesafe: { model: 'jev-latest', effort: 'high' } } } })).kind).toBe('rejected');
+  });
+});
+
+// main 必败: the folder was process.cwd() as it came, so a service got / or C:\Windows\System32 (Windows acceptance task 205)
+describe('the fallback working folder', () => {
+  const linux = { env: {}, home: '/home/u', platform: 'linux' as const, installDirectory: '/opt/vonvon/server', isDirectory: () => true };
+  const windows = { env: { SystemRoot: 'C:\\Windows' }, home: 'C:\\Users\\u', platform: 'win32' as const, installDirectory: 'C:\\Users\\u\\AppData\\Local\\VonvonBot\\server', isDirectory: () => true };
+  it('keeps FEISHU_CODEX_CWD and a folder a person started the daemon in', () => {
+    expect(fallbackWorkingDirectory({ ...linux, env: { FEISHU_CODEX_CWD: '/srv/work' }, cwd: '/' })).toBe('/srv/work');
+    expect(fallbackWorkingDirectory({ ...linux, cwd: '/home/u/work' })).toBe('/home/u/work');
+    expect(fallbackWorkingDirectory({ ...linux, cwd: '/tmp/x' })).toBe('/tmp/x');
+    expect(fallbackWorkingDirectory({ ...linux, cwd: '/opt/vonvon/server-notes' })).toBe('/opt/vonvon/server-notes');
+    expect(fallbackWorkingDirectory({ ...windows, cwd: 'D:\\code\\site' })).toBe('D:\\code\\site');
+    expect(fallbackWorkingDirectory({ ...windows, cwd: 'C:\\WindowsApps' })).toBe('C:\\WindowsApps');
+  });
+  it('takes the home folder for a filesystem root, the Windows system folder or its own install folder', () => {
+    expect(fallbackWorkingDirectory({ ...linux, cwd: '/' })).toBe('/home/u');
+    expect(fallbackWorkingDirectory({ ...linux, cwd: '/opt/vonvon/server' })).toBe('/home/u');
+    expect(fallbackWorkingDirectory({ ...linux, cwd: '/opt/vonvon/server/releases/0.9.0/app' })).toBe('/home/u');
+    expect(fallbackWorkingDirectory({ ...windows, cwd: 'C:\\' })).toBe('C:\\Users\\u');
+    expect(fallbackWorkingDirectory({ ...windows, cwd: 'D:\\' })).toBe('C:\\Users\\u');
+    expect(fallbackWorkingDirectory({ ...windows, cwd: 'c:\\windows\\System32' })).toBe('C:\\Users\\u');
+    expect(fallbackWorkingDirectory({ ...windows, env: {}, cwd: 'C:\\Windows\\SysWOW64' })).toBe('C:\\Users\\u');
+    expect(fallbackWorkingDirectory({ ...windows, cwd: 'C:\\Users\\u\\AppData\\Local\\VonvonBot\\server\\releases\\0.9.0' })).toBe('C:\\Users\\u');
+  });
+  // main 必败 (task 210): Node caches the working folder, so a deleted one still came back as the fallback
+  it('takes the home folder when the working folder is gone', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'vonvon-fallback-'));
+    try {
+      const gone = join(parent, 'gone');
+      await mkdir(gone);
+      expect(fallbackWorkingDirectory({ env: {}, cwd: gone, home: '/elsewhere', installDirectory: '/opt/none' })).toBe(gone);
+      await rmdir(gone);
+      expect(fallbackWorkingDirectory({ env: {}, cwd: gone, home: '/elsewhere', installDirectory: '/opt/none' })).toBe('/elsewhere');
+    } finally { await rm(parent, { recursive: true, force: true }); }
+  });
+  it('knows this checkout as its own install folder, and the view shows the folder', async () => {
+    const daemonRoot = join(import.meta.dirname, '..');
+    expect(ownInstallDirectory()).toBe(await realpath(daemonRoot));
+    expect(fallbackWorkingDirectory({ env: {}, cwd: join(daemonRoot, 'src'), home: '/elsewhere' })).toBe('/elsewhere');
+    const f = await fixture();
+    expect((await f.read()).runtime.fallbackCwd).toBe(fallbackWorkingDirectory());
   });
 });
