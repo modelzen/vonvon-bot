@@ -204,6 +204,7 @@ function DeviceGate({ state, renderApp }) {
 - 标题"「X」和这台电脑的版本不能一起工作"，正文 `versionNotice(...)` 的文字。
 - 服务端旧，`capabilities` 含 `update.standalone` 或 `update.npm`：
   - 显示 I3 的 `UpdatePanel`，外面包 `DraftGuardProvider` 和 `DesktopUpdateProvider`。
+  - U2 把服务端那一段抽成 `ServerUpdateCard`（U2 计划 4.4.2）：本片先合入时，U2 把这里换成 `<ServerUpdateCard variant="remote">`；U2 先合入时，本片直接用它。`request` 照样传 `maintenanceRequest(...)`。
   - `request` 传 `maintenanceRequest(client.machine)`：请求不在 `MAINTENANCE_KINDS` 里就在本地拒绝，回"版本不一致时只能做升级"，不发出去，免得对面以 4001 关掉连接。
   - 含 `update.bundled` 的按钮归 U4，本片只写文字。
   - I3 没合入时也只写文字。

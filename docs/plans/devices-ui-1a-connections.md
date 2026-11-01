@@ -470,9 +470,11 @@ dispose 后不发任何事件，测试核 `vi.getTimerCount() === 0`。
 - `run`：`restartHost` 先 `devices.expect('restart')`，再 `client().run(value)`。不走 `actions.restartHost`，那条路等的是本机 pid 锁。
 - `machine`：
   - `stopHost` 先 `devices.expect('stop')`，再直接转发。
+  - `service` 且 `action` 是 `install` 或 `uninstall`（对面的登录时启动开关）先 `devices.expect('restart')`，再转发：daemon 回完就被助手换掉。U2 做（U2 计划 4.6）。
   - `status` 原样返回对面的回复：不套 `stoppedStatus`，不用 `observeCli` 覆盖，`lastStatus` 只记本机的。
 - `close`：远程时什么都不做。不能从远程视图 dispose 本机连接。
-- 只对本机有效的六个——`startHost`、`service`、`setLoginItem`、`repairCli`、`chooseExecutablePath`、`chooseDirectoryPaths`——在 `view` 不是本机时抛 `LocalOnlyRefusal`。
+- 不论看哪台，页面发来的 `admin.negotiate` 一律不转发，抛 `LocalOnlyRefusal`，文字"能力由桌面端自己声明。"一条连接只认第一次 `negotiate`，U4 要在本机主连接上声明 `desktop.selfUpdate`（U4 计划 4.4），页面不能抢先。
+- 只对本机有效的六个——`startHost`、`service`、`setLoginItem`、`repairCli`、`chooseExecutablePath`、`chooseDirectoryPaths`——在 `view` 不是本机时抛 `LocalOnlyRefusal`。U2 加的 `quitKeepsDaemon`（退出时停不停本机服务端，U2 计划 4.7）同样只对本机有效，由 U2 加进这一组。
   - `safeFailure` 映射成 `{ kind: 'validation', code: 'local_only', message: '现在看的是「<名字>」，这个操作只对这台电脑有效。先切回这台电脑。' }`。
   - 这是第二道防线，U2 会把入口藏起来。
 
@@ -554,7 +556,7 @@ export function deviceCopyName(device: Pick<ActiveDevice, 'isRemote' | 'name'>):
 export function shellForDevice(shell: ShellCapabilities | undefined, device: ActiveDevice): ShellCapabilities | undefined;
 ```
 
-`shellForDevice` 在远程时去掉 `chooseExecutablePath`、`chooseDirectoryPaths`、`setLoginItem`、`service`、`startHost`、`repairCli`，其余原样。设计 6.4 表里"原生目录对话框在远程模式不暴露"因此一并做到：`directory-picker.tsx:107` 拿不到 `chooseDirectoryPaths`，就走 daemon 侧目录浏览器。U2 只需改它的标题和 Windows 路径输入。
+`shellForDevice` 在远程时去掉 `chooseExecutablePath`、`chooseDirectoryPaths`、`setLoginItem`、`service`、`startHost`、`repairCli`，其余原样。U2 加 `quitKeepsDaemon` 时一起加进去掉的名单；U4 加的 `onRemoteUpdate` 说的是这台电脑，不去掉。设计 6.4 表里"原生目录对话框在远程模式不暴露"因此一并做到：`directory-picker.tsx:107` 拿不到 `chooseDirectoryPaths`，就走 daemon 侧目录浏览器。U2 只需改它的标题和 Windows 路径输入。
 
 `useClient()` 不变，返回 context 里的 client，就是 U1b 用 `clientFor(active.id)` 传进来的那个。**U2–U4 只用这几个 hook，不直接碰 `window.vonvonShell.devices`。**
 
@@ -570,7 +572,7 @@ export function shellForDevice(shell: ShellCapabilities | undefined, device: Act
 4. `cleanup` 在 `await starting` 之后、`bridge.dispose()` 之前 `await devices.dispose()`。远程连接先关，退出时就不会再触发重连定时器。退出桌面端不碰对面的 daemon（设计 6.4"退出桌面端"一行）。
 5. `recoverConnection` 的两处 `showConnectionLost()`（541、549）改成 `if (!bridge?.deferLocalLost()) showConnectionLost();`。
 6. 本机生命周期里的 `setLocal`：`stopHost`、`service stop` 写 `stoppedStatus` 时 `offline`，`startHost` 开始时 `connecting`。`replaceOwner` 成功时 bridge 自己会调。
-7. `confirmQuit`、`beforeUpdateInstall`、托盘：不改。退出确认的文字说的是本机，U2 再看远程时要不要改。
+7. `confirmQuit`、`beforeUpdateInstall`、托盘：不改。退出确认的文字说的是本机，U2 再看远程时要不要改。U2 计划 4.7 的结论：退出没有确认框，`confirmQuit` 不改；只改"应用与启动"页的页脚，远程时写"退出这台电脑上的 Vonvon Bot 不影响「X」"。
 
 ### 4.9 顺序
 
