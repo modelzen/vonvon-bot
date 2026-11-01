@@ -13,11 +13,11 @@ import type { AgentBackend } from '../agent/types';
 
 /** Discover native models without a Bot. A backend's listModels may return its static fallback on failure;
  * only peekModels is populated after a successful provider discovery. */
-export async function discoverProviderModels(backendId: 'codex-appserver' | 'claude-agent', backendFor: (id: string) => AgentBackend = createBackend): Promise<{ models: ModelInfo[]; message?: string }> {
+export async function discoverProviderModels(backendId: 'codex-appserver' | 'claude-agent', backendFor: (id: string) => AgentBackend = createBackend, refresh = false): Promise<{ models: ModelInfo[]; message?: string }> {
   try {
     const backend = backendFor(backendId);
-    if (!(await backend.doctor({ force: true })).ok) return { models: [], message: 'Provider 尚未安装或无法运行。' };
-    await backend.listModels();
+    if (!(await backend.doctor({ permissions: false })).ok) return { models: [], message: 'Provider 尚未安装或无法运行。' };
+    await backend.listModels({ refresh });
     const models = backend.peekModels?.();
     if (!models?.length) return { models: [], message: '暂时无法读取 Provider 实时模型列表。' };
     return { models };

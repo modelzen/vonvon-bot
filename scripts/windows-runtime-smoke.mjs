@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
+import { createPackagedCodexFixture, verifyPackagedProvider } from './windows-provider-smoke.mjs';
 
 const exec = promisify(execFile);
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -34,7 +35,8 @@ export async function verifyWindowsRuntime(appDirectory, { timeoutMs = 90000, re
   const home = retainedHome ?? await mkdtemp(join(tmpdir(), 'vonvon-packaged-smoke-'));
   const executable = join(appDirectory, 'Vonvon Bot.exe');
   const cli = join(appDirectory, 'resources/daemon/bin/vonvon.mjs');
-  const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', VONVON_HOME: home };
+  const fixture = await createPackagedCodexFixture(home, executable);
+  const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', HOME: home, USERPROFILE: home, VONVON_HOME: home, CODEX_BIN: fixture.bin, CODEX_HOME: fixture.directory };
   delete env.VONVON_SERVICE;
   let stderr = '', exit, spawnError;
   const child = spawn(executable, [cli, 'daemon', 'run', '--parent-control'], { env, windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] });
@@ -61,11 +63,12 @@ export async function verifyWindowsRuntime(appDirectory, { timeoutMs = 90000, re
     if (!status.running || status.pid !== child.pid || status.listen !== ready.listen) throw new Error('Packaged daemon authenticated status failed');
     const response = await fetch(`http://${ready.listen}/`, { signal: AbortSignal.timeout(10000) });
     if (!response.ok || !(await response.text()).includes('<html')) throw new Error('Packaged daemon did not serve the built UI');
+    const provider = await verifyPackagedProvider(ready.listen, home, fixture);
     child.stdin.end('shutdown\n');
     await boundedWait(closed, 10000);
     if (!exit || exit.code !== 0) throw new Error('Packaged daemon shutdown was not confirmed');
     success = true;
-    return { runtimeStarted: true, authenticatedStatus: true, builtUiServed: true, cleanShutdown: true };
+    return { runtimeStarted: true, authenticatedStatus: true, builtUiServed: true, cleanShutdown: true, provider };
   } finally {
     if (!exit && child.pid) {
       if (!child.stdin.destroyed) child.stdin.end('shutdown\n');

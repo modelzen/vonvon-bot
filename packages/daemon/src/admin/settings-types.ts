@@ -362,6 +362,7 @@ export type SettingsActionResult = {
   reason: SettingsAccess;
 };
 export interface ModelQuery {
+  refresh?: boolean;
   botId: string;
   backend: string;
   purpose: 'project' | 'session' | 'comments' | 'titles' | 'judge';
