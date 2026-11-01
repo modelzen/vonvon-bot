@@ -1,6 +1,7 @@
 import {runtimeDistribution, standaloneInstallRoot} from './distribution';
 import { readCurrent, switchCurrent } from './current-release';
-import { closeSync, existsSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { closeSync, existsSync, linkSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { paths } from '../config/paths';
@@ -179,52 +180,89 @@ export function livePid(pid: number): boolean {
   }
 }
 
-function isUpdateLockStale(file: string): boolean {
+/**
+ * Which run of `pid` this is, on Linux: the boot and the start time in clock ticks after it (/proc/<pid>/stat field 22).
+ * A pid used again later, also by a container started anew, gets another start time. Undefined elsewhere.
+ */
+export function processStart(pid: number): string | undefined {
   try {
-    const rec = JSON.parse(readFileSync(file, 'utf8')) as { pid?: number; at?: number };
-    if (typeof rec.pid !== 'number') return true; // 无 pid → 损坏，可回收
-    if (!livePid(rec.pid)) return true; // 持有者已死 → 优先回收（不受时钟影响）
-    return false;
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const ticks = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+    const boot = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+    return ticks && /^\d+$/.test(ticks) ? `${boot}/${ticks}` : undefined;
   } catch {
-    return true; // 损坏/读不出 → 可回收
+    return undefined;
   }
 }
 
-/** A live update owns the lock until it exits or releases it, without an age limit. */
+// The locks this process holds, path → token: a lock naming this pid that is not here was left by an earlier process
+// with the same pid. Kept on the process, not the module, so every copy of the module sees the same ones.
+const HELD_LOCKS = Symbol.for('vonvon.update-locks');
+const heldLocks = ((globalThis as Record<symbol, unknown>)[HELD_LOCKS] ??= new Map<string, string>()) as Map<string, string>;
+/** A lock file that does not parse is one being written, until it is this old. */
+const UNREADABLE_LOCK_MS = 10_000;
+
+function isUpdateLockStale(file: string, held: string): boolean {
+  let rec: { pid?: unknown; token?: unknown; start?: unknown };
+  try {
+    rec = JSON.parse(held) as typeof rec;
+    if (typeof rec !== 'object' || rec === null) return true;
+  } catch {
+    try { return Date.now() - statSync(file).mtimeMs > UNREADABLE_LOCK_MS; } catch { return false; } // gone: try again
+  }
+  if (typeof rec.pid !== 'number') return true; // 无 pid → 损坏，可回收
+  if (rec.pid === process.pid) { const mine = heldLocks.get(resolve(file)); return mine === undefined || mine !== rec.token; }
+  if (!livePid(rec.pid)) return true; // 持有者已死 → 优先回收（不受时钟影响）
+  // The pid lives, but as another process when its start time is not the one written (a lock written without one,
+  // or a system without /proc, goes by the pid alone).
+  const start = typeof rec.start === 'string' ? processStart(rec.pid) : undefined;
+  return start !== undefined && start !== rec.start;
+}
+
+/** Moves a stale lock aside under a name of its own; one someone else took meanwhile goes back (as withStateLock does). */
+function reclaimUpdateLock(file: string, held: string, token: string): void {
+  const aside = `${file}.${token}.stale`;
+  try { renameSync(file, aside); } catch { return; } // 可能被别人抢先回收，交给下一轮
+  try { if (readFileSync(aside, 'utf8') !== held) linkSync(aside, file); } catch { /* a newer lock is in place: it stands */ }
+  try { rmSync(aside, { force: true }); } catch { /* best-effort */ }
+}
+
+/**
+ * A live update owns the lock until it exits or releases it, without an age limit. The lock names the holder's pid,
+ * its start time (processStart) and a token, so neither another process that got the pid later nor this process, when
+ * it got the pid of a holder that died, is taken for the holder.
+ */
 export function acquireUpdateLock(file = updateLockFile()): (() => void) | null {
+  const key = resolve(file);
+  const token = randomBytes(8).toString('hex');
+  const start = processStart(process.pid);
+  const mine = JSON.stringify({ pid: process.pid, at: Date.now(), token, ...(start ? { start } : {}) });
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const fd = openSync(file, 'wx'); // O_EXCL：创建即占有，创建失败即已存在
-      writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
-      closeSync(fd);
-      return releaseUpdateLock(file); // 只删「属于自己」的锁，绝不误删他人的
+      try { writeSync(fd, mine); } catch (error) { rmSync(file, { force: true }); throw error; } finally { closeSync(fd); }
+      heldLocks.set(key, token);
+      return releaseUpdateLock(file, key, token, mine); // 只删「属于自己」的锁，绝不误删他人的
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== 'EEXIST') return null; // EACCES/ENOSPC/… → 当作拿不到锁，绝不 throw
-      if (!isUpdateLockStale(file)) return null;
-      try {
-        rmSync(file, { force: true }); // 回收陈旧锁后重试 wx 创建
-      } catch {
-        /* 可能被别人抢先回收，交给下一轮 */
-      }
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return null; // EACCES/ENOSPC/… → 当作拿不到锁，绝不 throw
     }
+    let held: string;
+    try { held = readFileSync(file, 'utf8'); } catch { continue; } // 已被释放 → 下一轮再建
+    if (!isUpdateLockStale(file, held)) return null;
+    reclaimUpdateLock(file, held, token); // 回收陈旧锁后重试 wx 创建
   }
   return null; // 连续抢回收都输 → 当作进行中（安全：绝不并发 npm）
 }
 
-/** release：只在锁文件仍指向自己时删——避免删掉「回收了本进程陈旧锁后的新持有者」的锁。 */
-function releaseUpdateLock(file: string): () => void {
+/** release：只删仍是自己写的那份锁，只删一次——同一进程之后再拿的锁、回收后换了主的锁都不动。 */
+function releaseUpdateLock(file: string, key: string, token: string, mine: string): () => void {
   return () => {
+    if (heldLocks.get(key) !== token) return; // 已释放过
+    heldLocks.delete(key);
     try {
-      const rec = JSON.parse(readFileSync(file, 'utf8')) as { pid?: number };
-      if (rec.pid !== process.pid) return; // 不是自己的锁（已被回收/换主）→ 别动
+      if (readFileSync(file, 'utf8') === mine) rmSync(file, { force: true });
     } catch {
-      /* 损坏/已不存在 → 落到下面尽力删（force 对不存在无害） */
-    }
-    try {
-      rmSync(file, { force: true });
-    } catch {
-      /* best-effort */
+      /* 已不存在 / best-effort */
     }
   };
 }

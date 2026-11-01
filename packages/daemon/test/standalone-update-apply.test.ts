@@ -18,7 +18,7 @@ import { readCurrent, releaseCommand, switchCurrent } from '../src/service/curre
 import { extractTarGz } from '../src/service/archive';
 import { observeShutdown } from '../src/host/lifecycle';
 import { RESTART_PENDING_MS, settleUpdateAtStartup, startStandaloneUpdate, type ApplyDeps } from '../src/service/standalone-update';
-import { abandonOwnedUpdate, acquireUpdateLock, readUpdateStatus, UpdateBusyError, writeUpdateStatus, type UpdateStatus } from '../src/service/update';
+import { abandonOwnedUpdate, acquireUpdateLock, processStart, readUpdateStatus, UpdateBusyError, writeUpdateStatus, type UpdateStatus } from '../src/service/update';
 import { BASE, fakeCdn, manifestPayload, signManifest, testKeys } from './helpers/fake-cdn';
 import { packRelease } from './helpers/fake-release';
 
@@ -120,6 +120,23 @@ describe('startStandaloneUpdate', () => {
     expect(() => startStandaloneUpdate({}, deps)).toThrow(UpdateBusyError);
     expect(await first.done).toMatchObject({ phase: 'done', to: '1.0.1' });
     expect(existsSync(join(installRoot, 'releases.lock'))).toBe(false);
+  });
+  // the check after the 3a/3b fixes: only a dead pid made a lock stale, so the releases.lock of an update killed midway
+  // held off every data directory for good once its pid was used again (a restarted container hands out the same pids)
+  it('takes over a releases.lock that an earlier process with this pid left', async () => {
+    const { installRoot, deps } = await setup();
+    await writeFile(join(installRoot, 'releases.lock'), JSON.stringify({ pid: process.pid, at: Date.now() - 7 * 86_400_000 }));
+    expect(await startStandaloneUpdate({}, { ...deps, requestRestart: undefined }).done).toMatchObject({ phase: 'done', to: '1.0.1' });
+    expect(existsSync(join(installRoot, 'releases.lock'))).toBe(false);
+  });
+  it.runIf(process.platform === 'linux')('takes over a releases.lock whose pid another process uses now, and keeps one its holder still has', async () => {
+    const { installRoot, deps } = await setup();
+    const lock = join(installRoot, 'releases.lock');
+    await writeFile(lock, JSON.stringify({ pid: process.ppid, at: Date.now(), start: processStart(process.ppid) }));
+    expect(() => startStandaloneUpdate({}, deps)).toThrow(UpdateBusyError);
+    await writeFile(lock, JSON.stringify({ pid: process.ppid, at: Date.now(), start: `${processStart(process.ppid)}0` }));
+    expect(await startStandaloneUpdate({}, { ...deps, requestRestart: undefined }).done).toMatchObject({ phase: 'done', to: '1.0.1' });
+    expect(existsSync(lock)).toBe(false);
   });
   it('says already current and lets the lock go', async () => {
     const { deps } = await setup();
