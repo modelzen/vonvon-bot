@@ -224,17 +224,22 @@ async function isFile(path: string): Promise<boolean> {
   try { return (await stat(path)).isFile(); } catch { return false; }
 }
 
+/** Daemons of every data directory share `releases/` (the check after review 207): what writes or clears it holds this. */
+export const acquireReleasesLock = (installRoot: string): (() => void) | null => acquireUpdateLock(join(installRoot, 'releases.lock'));
+
 /**
- * Takes `update.lock` and writes `installing` before it returns, or throws UpdateBusyError (the lock is busy, the
- * daemon already stops or restarts, or an earlier update's restart has not ended); the work goes on in `done`.
- * The lock is released before `requestRestart`, which may itself end the record (a stop that cancels the restart);
- * the `restarting` record keeps other updates off from then on (restartPending).
+ * Takes `update.lock` and `releases.lock` and writes `installing` before it returns, or throws UpdateBusyError (a lock
+ * is busy, the daemon already stops or restarts, or an earlier update's restart has not ended); the work goes on in
+ * `done`. The locks are released before `requestRestart`, which may itself end the record (a stop that cancels the
+ * restart); the `restarting` record keeps other updates off from then on (restartPending).
  */
 export function startStandaloneUpdate(options: ApplyOptions, deps: ApplyDeps): { done: Promise<UpdateStatus> } {
   const busy = '服务端正在重启或停止，这次不更新；等它起来后再试。';
   if (deps.stopping?.()) throw new UpdateBusyError(busy);
-  const release = acquireUpdateLock();
-  if (!release) throw new UpdateBusyError();
+  const own = acquireUpdateLock();
+  const shared = own && acquireReleasesLock(deps.installRoot);
+  if (!own || !shared) { own?.(); throw new UpdateBusyError(); }
+  const release = (): void => { shared(); own(); };
   const at = (deps.now ?? Date.now)();
   const pending = readUpdateStatus();
   if (restartPending(pending, at, deps.ownerAlive)) {

@@ -191,8 +191,7 @@ function isUpdateLockStale(file: string): boolean {
 }
 
 /** A live update owns the lock until it exits or releases it, without an age limit. */
-export function acquireUpdateLock(): (() => void) | null {
-  const file = updateLockFile();
+export function acquireUpdateLock(file = updateLockFile()): (() => void) | null {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const fd = openSync(file, 'wx'); // O_EXCL：创建即占有，创建失败即已存在

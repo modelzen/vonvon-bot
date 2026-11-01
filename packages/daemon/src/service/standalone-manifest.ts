@@ -7,7 +7,12 @@ import { z } from 'zod';
  * signature an Ed25519 one over the decoded payload bytes, with the server's own key (not the Windows desktop one).
  * Nothing in a payload is used before its signature and every field are checked.
  */
-export const SERVER_TARGETS = ['linux-x64', 'linux-arm64', 'darwin-arm64', 'darwin-x64', 'win-x64', 'win-arm64'] as const;
+/**
+ * The packages a manifest lists, exactly: the standalone server is Linux only (owner 2026-11-01). It must stay equal to
+ * scripts/build-server.mjs `PUBLISHED_TARGETS` (I2a), and install.sh takes exactly these two; one side with another
+ * list refuses every manifest the other accepts.
+ */
+export const SERVER_TARGETS = ['linux-x64', 'linux-arm64'] as const;
 export type ServerTarget = (typeof SERVER_TARGETS)[number];
 const MAX_ENVELOPE = 64 * 1024;
 
@@ -16,7 +21,7 @@ export const archiveName = (version: string, target: string): string => `vonvon-
 export const expectedURL = (baseURL: string, version: string, target: string): string => `${baseURL}/${version}/${archiveName(version, target)}`;
 export const manifestURL = (baseURL: string): string => `${baseURL}/stable/manifest.json`;
 
-/** This machine's package, or undefined where no server package is built. */
+/** This machine's package, or undefined where no server package is built (macOS and Windows use the desktop app). */
 export function serverTarget(platform: NodeJS.Platform = process.platform, arch: string = process.arch): ServerTarget | undefined {
   const name = `${platform === 'win32' ? 'win' : platform}-${arch}`;
   return (SERVER_TARGETS as readonly string[]).includes(name) ? name as ServerTarget : undefined;
