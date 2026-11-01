@@ -1,5 +1,5 @@
 import {runtimeDistribution} from './distribution';
-import { closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { paths } from '../config/paths';
@@ -229,13 +229,25 @@ function releaseUpdateLock(file: string): () => void {
   };
 }
 
+/** What a standalone update is doing inside its phase (server-3 C3). */
+export const updateDetails = ['downloading', 'verifying', 'unpacking', 'switching', 'draining', 'waiting', 'rolled-back'] as const;
 export const updateStatusSchema = z.object({
   phase: z.enum(['installing', 'restarting', 'done', 'error']),
   ok: z.boolean().optional(), message: z.string().optional(),
   from: z.string().optional(), to: z.string().optional(), at: z.number(),
+  /** The release a standalone update switched `current` away from: the one a rollback goes back to. */
+  previous: z.string().optional(),
+  progress: z.object({ transferred: z.number().nonnegative(), total: z.number().nonnegative() }).strict().optional(),
+  detail: z.enum(updateDetails).optional(),
+  rolledBack: z.boolean().optional(),
 }).strict();
 export type UpdateStatus = Readonly<z.infer<typeof updateStatusSchema>>;
 export type UpdatePhase = UpdateStatus['phase'];
+
+/** A Core update already holds `update.lock`, or a standalone restart has not ended yet. */
+export class UpdateBusyError extends Error {
+  constructor(message = '已有更新正在进行。') { super(message); }
+}
 
 export function finishOwnedUpdate(expected: UpdateStatus | undefined, outcome: 'done' | 'error', message?: string): void {
   if (!expected) return;
@@ -261,8 +273,11 @@ function updateStatusFile(): string {
  * 网页端完全静默）。同步、尽力而为、绝不抛。
  */
 export function writeUpdateStatus(status: UpdateStatus): void {
+  const file = updateStatusFile();
   try {
-    writeFileSync(updateStatusFile(), JSON.stringify(status), 'utf8');
+    // Whole-file replace: a reader polling it never sees half a record. The name is this process's own.
+    writeFileSync(`${file}.${process.pid}.tmp`, JSON.stringify(status), 'utf8');
+    renameSync(`${file}.${process.pid}.tmp`, file);
   } catch {
     /* best-effort */
   }
