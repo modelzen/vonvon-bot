@@ -2,7 +2,7 @@
 
 总设计见 `docs/plans/devices.md`（下文简称"设计"）6.5、7.5 末尾"桌面端自带的服务端（`bundled`）远程升级"、5.2、8.5、第 15 节，本片对应第 13 节的 U4 行。单独一个 PR，分支 `claude/devices-ui-4-bundled-update`，从集成分支开、PR 回集成分支。产品行为以 `docs/product.md` 3.14 为准。
 
-缩写同 D1：`P/`、`CL/`、`D/`、`DT/`、`U/` 分别是 protocol、client、daemon、desktop、ui 的 `src/`。行号以 `origin/claude/devices-integration`（8051b03c，代码和 413d78d5 相同）为准。I3 的代码以 `origin/claude/server-3-update-engine`（4aca3777）为准，写"I3 分支"；D1 的以 `origin/claude/devices-1-identity`（911dd2c4）为准，写"D1 分支"。U1a、U2、U3 的接口以它们的计划为准。
+缩写同 D1：`P/`、`CL/`、`D/`、`DT/`、`U/` 分别是 protocol、client、daemon、desktop、ui 的 `src/`。行号以 `origin/claude/devices-integration`（8051b03c，代码和 413d78d5 相同）为准。I3 的代码以 `origin/claude/server-3-update-engine`（4aca3777）为准，写"I3 分支"；D1 的以 `origin/claude/devices-1-identity`（e8bbe267）为准，写"D1 分支"。U1a、U2、U3 的接口以它们的计划为准。
 
 ## 1. 做什么
 
@@ -16,14 +16,14 @@
 - **那台桌面端没开时：** 按钮旁写"要那台电脑上的 Vonvon Bot 桌面端开着才能远程更新…"。点了也是这句，不会卡住。
 - **被更新的那台：** 菜单栏 / 托盘和窗口顶部出一句"「X」正在更新这台电脑上的 Vonvon Bot。下载好后会等 Bot 做完手上的活再重启。"不弹确认框、不拦人。Windows 上本机点"安装"时的确认框，远程触发时不弹。
 - **出问题时说清楚：**
-  - 那台的安装包没有签名更新源（开发版）：原样回它的话；
+  - 那台的安装包更新不了（开发版、没有可信更新源、查不到更新清单）：原样回它更新器的话；
   - 下载失败、超时、桌面端中途被关掉、重启后没换上新版本：各有一句；
   - 不会一直显示"进行中"。
 
 依赖：
 - D1：`admin.negotiate`、权限表、`Peer` 的 `principal`、`capabilities`。
 - I3：`coreUpdateStatus`、`update-status.json` 和锁、`settleUpdateAtStartup`、`vonvon update`、`UpdatePanel` 的门控。
-- U1a：外壳对本机的连接一直在、`DesktopBridge.localOwner()` 和 `onLocalOwner`。
+- U1a：外壳对本机的连接一直在、`DesktopBridge.localOwner()` 和 `onLocalOwner`（签名和触发时机以 U1a 4.5 为准）。
 - U2：`ServerUpdateCard` 留给本片的 `bundled` 渲染位、`update.standalone`/`update.npm` 的能力上报。
 - 真机验收要 D3（另一台要能连进来）。
 
@@ -45,7 +45,9 @@
   - 新文件 `DT/remote-self-update.ts`；
   - `DT/main.ts`（接线、`beforeUpdateInstall`、`installDesktopUpdate`）；
   - `DT/tray.ts` 的 `setNotice`；
-  - `DT/bridge.ts` 的 `remoteUpdate` 事件。
+  - `DT/bridge.ts` 的 `remoteUpdate` 事件；
+  - `DT/ipc-contract.ts`：`DesktopEvent` 加 `{ type: 'remoteUpdate'; text?: string }`，`DesktopBridge` 加 `sendRemoteUpdate`；
+  - `DT/facade.ts`：`onEvent` 认 `remoteUpdate`，`shell.onRemoteUpdate`；facade 的 client 补 `onDesktopUpdateRequest`（4.5）。
 - UI：
   - `U/management/ServerUpdateCard.tsx` 的 bundled 渲染（U2 留的位）；
   - 新文件 `U/devices/RemoteUpdateNotice.tsx`，挂在 U1b 的 `DesktopRoot`。
@@ -66,7 +68,7 @@
   - `acquireUpdateLock`（194）：创建即占有；
   - `updateStatusSchema`（235-244）：`detail` 是封闭枚举；
   - `writeUpdateStatus`/`readUpdateStatus`/`clearUpdateStatus`（362-383）；
-  - `restartPending`（I3 分支 `standalone-update.ts:174`）：重启还没结束时不让开新的更新。
+  - `restartPending`（I3 分支 `standalone-update.ts:174-178`）：重启还没结束时不让开新的更新。它第一行是 `if (status?.phase !== 'restarting' || status.previous === undefined) return false;`，只认带 `previous` 的 standalone 记录。bundled 写的记录没有 `previous`，交给它永远是 false，所以本片另写判断（4.2）。
 - **`settleUpdateAtStartup`**（I3 分支 `standalone-update.ts:345`）：新进程起来时，把没人持锁的 `installing` 记成"上次更新中断"，把 standalone 的 `restarting` 按版本记成成功或失败。bundled 的 `restarting` 没人收。
 - **I3 的 CLI**（I3 分支 `D/cli/commands/update.ts`）：bundled 且 daemon 在跑时已经发 `applyCoreUpdate` 并跟进度；不在跑时说"这个命令行随 Vonvon Bot 桌面应用提供，请在桌面应用里更新"。本片不改 CLI，只让 daemon 那头真的能做。
 - **I3 分支 `U/management/UpdatePanel.tsx:16`** 的 `coreUpdatable` 只认 `standalone`、`global-npm`。U2 把服务端卡抽成 `ServerUpdateCard`，bundled 时写一句文字，留了 `bundled` 渲染位。
@@ -157,7 +159,16 @@ export function createBundledUpdate(deps: BundledUpdateDeps): BundledUpdate;
 
 **应用 `apply(by)`：**
 1. 没有外壳 → `RpcError('desktop_not_running', 设计第 15 节"那台桌面端没开"原文，<设备> 用这台的设备名)`。
-2. `restartPending(read(), now)` → `RpcError('conflict', '上一次更新还在重启，稍后再试。')`。
+2. `pendingRestart(read(), now)` → `RpcError('conflict', '上一次更新还在重启，稍后再试。')`。`pendingRestart` 是本文件导出的：
+   ```ts
+   export function pendingRestart(status: UpdateStatus | null, now: number): boolean {
+     if (restartPending(status, now)) return true;   // I3：带 previous 的 standalone 记录
+     return status?.phase === 'restarting' && status.via === 'desktop' && now - status.at < RESTART_PENDING_MS;
+   }
+   ```
+   - 不复用 `restartPending` 本身：它只认 standalone 的记录（第 3 节）。也不改它：standalone 的判断还要看 `detail === 'waiting'` 和 pid 锁，和这里不同。
+   - 窗口用 I3 的 `RESTART_PENDING_MS`（10 分钟），和第 6 步 `restarting` 之后的 10 分钟看门狗一样长：看门狗写了 `error` 以后，记录不再是 `restarting`，就能再点。
+   - 正常路径上，新进程的 `settleUpdateAtStartup` 把记录收成 `done` 或 `error`，也就不再挡。
 3. `lock()` 拿不到 → `RpcError('conflict', '已有更新正在进行。')`。
 4. 写状态：`{ phase: 'installing', detail: 'desktop-checking', via: 'desktop', from: version, at: now }`。发事件 `{ requestId, action: 'apply', by }`。回"开始更新…"。
 5. 之后按报告改状态（每次写都带 `via`、`from`，`at` 取当下）：
@@ -246,9 +257,10 @@ export function startRemoteSelfUpdate(deps: RemoteSelfUpdateDeps): {
 
 **连上本机就声明能力：**
 - 对 `owner()`（启动时）和之后每个 `onOwner` 给的连接，发一次 `admin.negotiate { capabilities: ['desktop.selfUpdate'] }`，再 `client.onDesktopUpdateRequest(handle)`。
+- `onOwner` 就是 U1a 的 `onLocalOwner`，签名照 U1a 4.5：`(listener: (owner: AttachedDaemon) => void) => () => void`，只在新的本机连接就绪后给非空的连接，看本机和看远程时都会触发；本机断开时不通知，这时 `owner()` 回 `null`，等下一个 `onOwner`。
 - `negotiate` 被拒（旧 daemon 没有这个 kind、或已经声明过）→ 记日志，不订阅。
 - 只在这条主连接上做；远程设备的连接（U1a 的 `connections.ts`）不声明这项能力。
-- bridge 不转发渲染进程发来的 `admin.negotiate`（本机视图），免得页面抢先在这条连接上声明，导致外壳声明不了。U1a 4.6 的 bridge 路由加一条拒绝。
+- bridge 不转发渲染进程发来的 `admin.negotiate`，免得页面抢先在这条连接上声明，导致外壳声明不了。这条拒绝 U1a 4.5 已经有了（看哪台都不转发），本片不用再加。
 
 **`check` 请求：**
 - `updater.check()` → 报告 `{ state: update.state, latest: update.latest, message: update.message }`。
@@ -276,13 +288,18 @@ export function startRemoteSelfUpdate(deps: RemoteSelfUpdateDeps): {
 
 - `main.ts`，`updater` 建好（244-256）、bridge 装好之后：
   - `remoteUpdate = startRemoteSelfUpdate({ updater, owner: () => bridge?.localOwner() ?? null, onOwner: l => bridge?.onLocalOwner(l) ?? (() => {}), quitting: () => quitRequested, notice, publish: u => bridge?.publishUpdate(noteUpdate(u)), onProgress, log })`。
-  - Windows 的 `onUpdate`（249）在原来的 `publishUpdate` 之外也交给 `onProgress` 的监听者。
+  - Windows 的 `onUpdate`（248）在原来的 `publishUpdate` 之外也交给 `onProgress` 的监听者。
 - `beforeUpdateInstall`（230）第一行：`await remoteUpdate?.aboutToRestart();`，然后照旧。macOS、Windows 都这样。
 - `installDesktopUpdate`（630）开头：`remoteUpdate?.busy` → `throw new StartHostRefusal('正在按另一台设备的请求更新，下载好后会自动安装并重启。')`。避免本机和远程同时走到 `quitAndInstall`。
 - `cleanup` 里 `remoteUpdate?.dispose()`，放在 `bridge.dispose()` 之前。
 - `notice(text)`：
   - `tray?.setNotice(text)`。`DT/tray.ts` 加 `setNotice(text | undefined)`：在菜单顶部放一条不可点的文字，和 `setUpdate` 同样的做法。
   - `bridge?.sendRemoteUpdate(text)`：发 `DesktopEvent { type: 'remoteUpdate', text }`，bridge 里留最后一条，新窗口订阅时补发，同 `publishUpdate` 的 `retainedUpdate`（149 一带）。
+- `DT/ipc-contract.ts`：`DesktopEvent` 加 `{ type: 'remoteUpdate'; text?: string }`；`DesktopBridge` 加 `sendRemoteUpdate(text: string | undefined): void`。
+- `DT/facade.ts`：
+  - `onEvent` 加 `case 'remoteUpdate'`，放在 `if (clientClosed) return;` 之前（和 `quitRequested` 一样，它说的是外壳，不是某条 daemon 连接）。`text` 不是字符串也不是 `undefined` 时照旧抛 `Invalid desktop event`。今天没有这个分支，事件一到就走 `default` 抛错。
+  - `shell.onRemoteUpdate(listener)`：留最后一条，订阅时先给它，写法同 `onDesktopUpdate`。
+  - `CL/client.ts` 的 `VonvonClient` 加了 `onDesktopUpdateRequest`，facade 造的 client 也得有：渲染进程永远收不到这个事件，实现成直接回一个空的退订函数。U1a 的 `clientFor(view)` 造的每个 client 同样。测试里手写的假 `VonvonClient` 跟着补。
 - `client-context.tsx` 的 `ShellCapabilities` 加 `onRemoteUpdate?: (listener: (text: string | undefined) => void) => () => void`。`shellForDevice` 不去掉它：它说的是这台电脑。
 
 ### 4.6 UI
@@ -295,7 +312,7 @@ bundled={(core, run) => <BundledUpdateRow core={core} where={where} run={run}/>}
 
 - 版本行同 standalone。
 - `core.desktopShell === false` → 按钮旁写设计第 15 节"那台桌面端没开"那句。按钮照样可点，点了得到同一句（`desktop_not_running`），用户在那台打开桌面端后不用刷新页面就能再点。
-- `core.message` → 原样写在下面（开发版的"没有可用的签名更新源…"、"没有回应"）。
+- `core.message` → 原样写在下面（那台更新器的原话，比如 macOS 没签名时的"这个安装包没有可用的签名更新源…"、Windows 查不到可信清单时的"检查桌面更新失败…"，以及"没有回应"）。
 - `core.hasUpdate` → 按钮"更新「X」上的 Vonvon Bot"，点了先确认（设计第 15 节"远程更新桌面端自带的服务端（确认）"）→ `run({ type: 'applyCoreUpdate' })`。
 - 跟进度：用 U2 已放宽的条件（`done` + `applyCoreUpdate` 就跟）。状态行用 `coreStatusLine`；`via === 'desktop'` 时前面加"在「X」上"。
 - 断开期间轮询失败不报错；U1a 重连后照常读到 `done` 或 `error`。U1b 的提示条会说"「X」已更新到 …"。
@@ -321,7 +338,8 @@ bundled={(core, run) => <BundledUpdateRow core={core} where={where} run={run}/>}
 | `daemon/test/bundled-update.test.ts`（新，假外壳、假时钟、临时状态文件） | 没有外壳 | `check` → `desktopShell: false`、`latest: null`；`apply` → `desktop_not_running`、文字是设计第 15 节那句。main 必败 |
 | 同上 | 检查 | 外壳收到 `check` 事件、回 `available 0.9.1` → `hasUpdate: true`、`latest: '0.9.1'`；20 秒不回 → `message` 是"没有回应"，`hasUpdate: false` |
 | 同上 | 应用走完 | `apply` → 外壳收到 `apply`；依次报 `downloading`（50/100）、`downloaded 0.9.1`、`restarting` → 状态依次是 `installing/desktop-downloading` 带进度、`installing/desktop-downloaded` 带 `to`、`restarting/draining`；`restarting` 后锁已放 |
-| 同上 | 并发 | `apply` 进行中再 `apply` → `conflict`；`restarting` 后 5 分钟再 `apply` → `conflict`（`restartPending`） |
+| 同上 | 并发 | `apply` 进行中再 `apply` → `conflict`；`restarting` 后 5 分钟再 `apply` → `conflict`；`restarting` 后 11 分钟（看门狗已写 `error`）再 `apply` → 能开始 |
+| 同上 | `pendingRestart` | 状态文件放 `{ phase: 'restarting', via: 'desktop', at: now - 5 分钟 }`（没有 `previous`）→ 真；同样的记录 `at: now - 11 分钟` → 假；I3 的 standalone 记录 `{ phase: 'restarting', previous: '0.9.0', detail: 'draining', at: now - 5 分钟 }` → 真；`{ phase: 'done' }` → 假。另断言 I3 的 `restartPending` 对那条 desktop 记录回假（说明为什么要另写）。main 必败 |
 | 同上 | 报告来源 | 别的连接报同一个 `requestId` → `invalid_request`；旧的 `requestId` → `invalid_request` |
 | 同上 | 看门狗 | 30 秒没报 → `error`"没有回应更新请求"；报了 `downloading` 后 15 分钟没动静 → `error`"下载桌面端更新超时"；`restarting` 前外壳断开 → `error`"关掉了"；`restarting` 后 10 分钟 → `error`"没有换上新版本"；`restarting` 后外壳又连上 → `error`"服务端还是 0.9.0" |
 | 同上 | 不覆盖别人 | 看门狗触发前状态文件被别的记录替换 → 不写 |
@@ -345,6 +363,7 @@ bundled={(core, run) => <BundledUpdateRow core={core} where={where} run={run}/>}
 | 同上 | Windows 进度 | `onProgress` 连发 10 次 → 报告最多 1 秒一条 |
 | `desktop/test/main-update.test.ts`（改，或现有 `beforeUpdateInstall` 的测试） | 顺序 | `beforeUpdateInstall` 里 `aboutToRestart` 在 `stopHost` 和 `cleanup` 之前被调 |
 | 同上 | 本机按钮 | 远程更新进行中调 `installDesktopUpdate` → 拒，文字"正在按另一台设备的请求更新" |
+| `desktop/test/facade.test.ts`（改） | 远程更新提示 | 发 `{ type: 'remoteUpdate', text: 'x' }` → `shell.onRemoteUpdate` 收到 `x`、没有 `Invalid desktop event`；之后才订阅的也先收到 `x`；`{ type: 'remoteUpdate', text: 3 }` → `Invalid desktop event`；client 已关（`clientClosed`）时照样收到。main 必败 |
 | `desktop/test/tray.test.ts`（改） | 提示 | `setNotice('x')` → 菜单第一项是 `x`、不可点；`setNotice(undefined)` → 没有 |
 | `ui/test/server-update-card.test.tsx`（U2 的，改） | bundled | `desktopShell: false` → 有"要那台电脑上的 Vonvon Bot 桌面端开着"；`hasUpdate` → "更新「X」上的 Vonvon Bot"，点了出确认框，确认 → 发 `applyCoreUpdate` 并开始跟进度；`message` 原样显示 |
 | `ui/test/remote-update-notice.test.tsx`（新） | 提示 | `onRemoteUpdate('…正在更新…')` → 显示；`undefined` → 消失 |
@@ -357,7 +376,9 @@ bundled={(core, run) => <BundledUpdateRow core={core} where={where} run={run}/>}
 - 不在 shell 里给 `HOME`、`VONVON_HOME` 赋值或 export，只写在单条命令前面，例如 `HOME=$T/home VONVON_HOME=$T/vh npx vitest run`。
 
 真实的换包（下载签名包、`quitAndInstall`、新版本起来）要一个已发布、签了名、有更新清单的版本，才能更新到下一个版本。所以：
-- 这一批的真机验收只到"通道通了"：开发版的更新器回 `unavailable`，原样回到发起的那台。
+- 这一批的真机验收只到"通道通了"：被更新的那台的更新器给出一句"更新不了"的原话，原样回到发起的那台。
+  - macOS 不签名的目录包：`unavailable`，"这个安装包没有可用的签名更新源…"（6.2）。
+  - Windows 目录包换上一把临时公钥：检查失败，`error`，"检查桌面更新失败，请检查网络或稍后重试。"（6.3）。
 - 真实换包在 0.9.0 发布之后的第一个 0.9.x 上验（设计第 16 节）：用装好的 0.9.0 从另一台点更新。验法写进那次发布任务。
 - 除此之外靠第 5 节的假驱动测试。
 
@@ -376,8 +397,8 @@ bundled={(core, run) => <BundledUpdateRow core={core} where={where} run={run}/>}
 Mac 当**被更新的那台**，JP-VPS 的探针当发起的那台。U3 已合入时，Mac 开远程地址、配对的步骤照 U3 第 6 节；没合入时这一项等 U3。
 
 `bundled` 只认打包后的目录结构，所以这里不用开发版（`npm start` 跑的是 `development`），用**不签名的目录包**：
-- 在临时 worktree 里 `CSC_IDENTITY_AUTO_DISCOVERY=false npm run package:dir -w packages/desktop`。前缀只写在这一条命令前，不用钥匙串里的签名身份。
-- 打出来的 `.app` 留在临时 worktree 的 `packages/desktop/release/` 下，不拷到 `/Applications`，不打 DMG。
+- 在临时 worktree 里构建后 `CSC_IDENTITY_AUTO_DISCOVERY=false npm run package:dir -w packages/desktop`。前缀只写在这一条命令前，不用钥匙串里的签名身份。
+- 打出来的 `.app` 留在临时 worktree 的 `packages/desktop/dist/package/` 下（`electron-builder.yml` 的 `directories.output`），不拷到 `/Applications`，不打 DMG。
 - 没签名，所以更新器是关着的：`DT/update-configuration.ts:11-25` 要 Developer ID 签名和 `update-config.json`，缺一样就回 `unavailable`，不会去查真的更新源、不会下载。
 - 启动时前缀 `VONVON_DESKTOP_TEST_HOME=<临时目录>/desk VONVON_HOME=<临时目录>/vh`，直接运行 `.app/Contents/MacOS/` 里的可执行文件。
 
@@ -414,7 +435,11 @@ Windows 只有这一个任务，等 U2、U3、U4 都合入集成分支后发。C
 
 隔离：
 - 临时 worktree 取集成分支的 sha，`npm ci`、构建，`npm run package:dir -w packages/desktop` 打不签名的目录包（理由同 6.2：`bundled` 只认打包后的结构），从临时 worktree 里直接运行，不装。
-- **打完先查**：包里没有 `resources/app.asar` 里的 `dist/windows-update-config.json`。没有它，`windowsUpdateConfiguration`（`DT/windows-updates.ts:47-54`）不给公钥，更新器是关着的，只会回 `unavailable`。有这个文件就停下，结果写"卡住了：目录包带了更新配置"。否则它会去查真的更新源，可能下载并装上已发布的版本。
+- **换一把临时的更新公钥再构建。** 目录包里一定有 `dist/windows-update-config.json`：`packages/desktop/build.mjs:19-21` 每次构建都读 `VONVON_WINDOWS_UPDATE_CONFIG`，没设就读仓库里的 `packages/desktop/windows-update.json`（正式发布用的公钥），57、65 行把它写进 `dist/` 和 `stage/dist/`，`electron-builder.yml` 再把它打进包里。有公钥，更新器就是开着的（`DT/windows-updates.ts:77` 的 `enabled` 只看公钥和架构）。用正式公钥打的包会去查真实的更新源，比已发布的版本低就会下载，点"安装"还会装上已发布的版本。所以：
+  - 先生成一把只在本任务用的密钥：`node scripts/windows-update-signing.mjs create-key <临时目录>\k\private.pem <临时目录>\k\windows-update.json`。私钥用不上，随临时目录删掉。
+  - 跑 `packages/desktop/build.mjs` 的那一条命令（`npm run build -w packages/desktop`，或者包含它的 `npm run build`）只给它设 `VONVON_WINDOWS_UPDATE_CONFIG=<临时目录>\k\windows-update.json`，写法照 #631 正文"隔离变量"（子 PowerShell 里设，不用 `setx`）。
+  - 打包前核对 `packages\desktop\stage\dist\windows-update-config.json` 的 `publicKey` 和 `<临时目录>\k\windows-update.json` 的一样（`stage` 原样打进包）。不一样就停下，结果写"卡住了：目录包带的是正式更新公钥"。
+  - 换了临时公钥以后，更新器照常去读真实的更新清单。这一步只读，`allowedWindowsUpdateRequest` 只放行 `dl.vonvon.cc/bot/windows/`。清单是正式私钥签的，`verifyWindowsUpdate`（`windows-updates.ts:34`）验不过，检查一律失败（111 行），不会下载。
 - 数据目录的前缀照 #631 正文，只写在单条命令前，不用 `setx`、不改用户环境变量。
 - 不碰 owner 装好的 Vonvon Bot 和它的数据目录。
 - 删除规矩原样写进去；Windows 上同样只删自己刚建的临时目录，用字面路径。
@@ -426,11 +451,16 @@ Windows 只有这一个任务，等 U2、U3、U4 都合入集成分支后发。C
    - 勾上 → 监听中；生成连接链接，经验收助手发给 JP-VPS 探针配对 → Windows 上弹"新设备…已经配对"；
    - 锁屏 5 分钟，探针 `/status` 仍连得上；
    - 撤销它 → 探针 1 秒内断。
-3. **远程更新**（U4）：
-   - 开着：探针 `/check-update`、`/apply-update`，同 6.2 第 2、3 步：托盘提示出现，**不弹**"安装并重启 Vonvon Bot？"确认框；
-   - 关掉桌面端、单独起 daemon 后再点一次 → `desktop_not_running`。
+3. **远程更新**（U4）。用上面换了临时公钥的目录包，预期和 macOS 不同：
+   - 助手 `/check-update` → `desktopShell: true`、`hasUpdate: false`、没有 `latest`，`message` 是"检查桌面更新失败，请检查网络或稍后重试。"（`DT/windows-updates.ts:111`：临时公钥验不过真实清单，`getLatestVersion` 抛错，`lookUp` 换成这句）。断网时也是这句，不影响判断。不是这句就停下，贴打码后的回复。
+   - 助手 `/apply-update`：
+     - 回"开始更新…"，不是 `desktop_not_running`；
+     - 托盘菜单顶部和窗口顶部出现"「…」正在更新这台电脑上的 Vonvon Bot…"，随后消失；
+     - 探针读到的 `coreUpdateStatus` 是 `error`，`message` 同上；没有出现下载进度；
+     - **不弹**"安装并重启 Vonvon Bot？"确认框（`main.ts:633-637`）。
+   - 退出桌面端，用包里自带的命令单独起 daemon，安装方式仍是 bundled：同 6.2 第 4 步，可执行文件换成目录包里的 `Vonvon Bot.exe`，脚本是它旁边 `resources\daemon\bin\vonvon.mjs`，`ELECTRON_RUN_AS_NODE`、`VONVON_HOME` 照"隔离变量"只给这一条。再点 `/apply-update` → `desktop_not_running`，文字是设计第 15 节那句。最后同样的写法 `daemon stop`。
 4. **启动修复**（U2 4.8）：
-   - 在另一个临时 worktree 里打一个版本号更低的目录包（只改那份 worktree 里 `packages/daemon/package.json` 的版本，不提交）；
+   - 在另一个临时 worktree 里打一个版本号更低的目录包：改那份 worktree 里 `packages/daemon/package.json` 的版本（比如 0.8.0），再运行 `npm run version:sync`，把桌面端和 `package-lock.json` 的版本跟着改掉。都不提交。不跑这一步，`build.mjs` 开头的 `checkedProductVersion`（`scripts/product-version.mjs:15-19`）会报"Desktop/Core version mismatch"，构建直接失败。构建同样用上面那把临时公钥；
    - 用它起 daemon；
    - 再打开本任务的目录包 → 它停掉旧的、起自己的，不报协议不同。
    - 做不了就写原因，靠单测。
@@ -460,10 +490,10 @@ Windows 只有这一个任务，等 U2、U3、U4 都合入集成分支后发。C
 2. 远程触发不走 `installDesktopUpdate`，Windows 的本机确认框不弹；本机按钮在远程更新进行中先拒。
 3. `restarting` 在 `stopHost` 和 `cleanup` 之前报出去，最多等 2 秒。
 4. 每条路径都会结束：成功由新进程的 `settleUpdateAtStartup` 收；没回应、超时、中途关掉、没换上新版本各有看门狗；看门狗不覆盖别人的记录；关闭时定时器清干净。
-5. 锁：开始时拿，`restarting` 或结束时放；`restartPending` 期间不开新的。
+5. 锁：开始时拿，`restarting` 或结束时放；`pendingRestart` 期间不开新的，它同时认 standalone 的记录（I3 的 `restartPending`）和不带 `previous` 的 `via: 'desktop'` 记录。
 6. `update.bundled` 由 daemon 按安装方式报；按钮的可用不看 `desktopShell`，没开时点了得到明确的话。
 7. 白名单和权限表各一行，RPC 种类计数加 1。
-8. 开发版的 `unavailable` 原样回到发起的那台（这一批的真机验收就看这个）；真实换包写进 0.9.0 之后第一次发布的任务。
+8. 那台更新器的原话原样回到发起的那台（这一批的真机验收就看这个）：macOS 不签名的目录包是 `unavailable`，Windows 目录包用临时公钥构建、检查失败是 `error`；Windows 的目录包不带正式更新公钥。真实换包写进 0.9.0 之后第一次发布的任务。
 9. diff 里没有真实 id、密钥、本机路径和地址。
 
 ## 9. 风险和行数

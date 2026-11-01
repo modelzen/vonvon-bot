@@ -2,7 +2,7 @@
 
 总设计见 `docs/plans/devices.md`（下文简称"设计"）4.3–4.7、6.1、6.4 末行、第 15、16、19 节，本片对应第 13 节的 U1a 行。**U1a 和 U1b（`docs/plans/devices-ui-1b-devices-page.md`）合成一个 PR**，分支 `claude/devices-ui-1`：U1a 单独合入没有用户能看到的东西，Mac 验收也要两片一起才做得了。两份计划各管各的模块，审查也按模块分（第 9 节）。
 
-缩写同 D1：`P/` = `packages/protocol/src/`，`CL/` = `packages/client/src/`，`D/` = `packages/daemon/src/`，`DT/` = `packages/desktop/src/`，`U/` = `packages/ui/src/`。行号以 `origin/claude/devices-integration`（a2577fb3）为准；D1 还没合入，它的名字以 `origin/claude/devices-1-identity`（911dd2c4）为准，写作"D1 分支"。
+缩写同 D1：`P/` = `packages/protocol/src/`，`CL/` = `packages/client/src/`，`D/` = `packages/daemon/src/`，`DT/` = `packages/desktop/src/`，`U/` = `packages/ui/src/`。行号以 `origin/claude/devices-integration`（8051b03c；本片引用的 desktop、ui、client、protocol 文件和 a2577fb3 相同）为准；D1 还没合入，它的名字以 `origin/claude/devices-1-identity`（e8bbe267）为准，写作"D1 分支"。
 
 ## 1. 做什么
 
@@ -22,7 +22,7 @@
 - `DT/device-registry.ts`：设备列表文件 `userData/devices.json`。
 - `DT/remote-transport.ts`：`ws` + D2 的 `connectSecure`，把各种失败归成一组错误码。
 - `DT/connections.ts`：多设备连接管理：当前设备一条会话、加设备时至多再一条配对连接；切换、重连退避、比较 `serverInfo`、撤销和身份变化、添加、删除。
-- `DT/bridge.ts`：请求按当前看的设备走；本机连接和"正在看的那条"分开管；远程时拒绝只对本机有效的外壳操作；切换时旧页面的请求不会打到新设备上。
+- `DT/bridge.ts`：请求按当前看的设备走；本机连接和"正在看的那条"分开管，本机换连接和切换交错时不串台；远程时拒绝只对本机有效的外壳操作，但把对面的登录时启动开关（`machine.service install/uninstall`）转过去；切换时旧页面的请求不会打到新设备上。
 - `DT/ipc-contract.ts`、`DT/facade.ts`、`DT/preload.ts`：`desktop:devices:*` 通道，`devices`、`localDevice` 事件，按设备绑定的 client。
 - `DT/main.ts`：接线、`powerMonitor` 唤醒、退出收尾、本机断线弹窗在看远程时延后。
 - `CL/client.ts`：`onDevice`。
@@ -46,7 +46,7 @@
   - `reconnectPassive` 492-532。`recoverConnection` 535-560 恢复失败时直接 `showConnectionLost()`（541、549）；`showConnectionLost` 562-571 弹"daemon 连接中断了"的模态框。
   - `installBridge(owner, current, paths, {...})` 573-654；托盘 655；`loadFile` 670。今天没用 `powerMonitor`。
 - `DT/bridge.ts`：
-  - `installBridge` 115。状态在 119-130：`activeOwner`、`replacing`、`candidate`、`stoppedStatus`、`lastStatus`、`retainedErrors`。`send` 140-143 只在 `subscribed && currentDocument()` 时发。
+  - `installBridge` 115。状态在 119-130：`activeOwner`、`replacing`、`candidate`、`stoppedStatus`、`lastStatus`、`retainedErrors`。`send` 144-147 只在 `subscribed && currentDocument()` 时发。
   - `onError(error, from)` 168-179：`ConnectionError` 先问 `isExpectedDisconnect()` 和 `recoverConnection(from.identity)`，都不接就发 `error` 事件并调 `actions.connectionLost()`。
   - `client()` 181-184。`bind(current, paused)` 191-224 订 `watchSnapshots`、`onLog`、`onBackendInstall`、`onError`，靠 `activeOwner === current` 防串。
   - 注册在 242-323：
@@ -55,9 +55,10 @@
     - `close` 280：`activeOwner?.dispose()`。
     - 本机专属：`startHost` 282-287、`service` 288-303、`setLoginItem` 304-311、`repairCli` 312、`chooseExecutablePath` 314、`chooseDirectoryPaths` 315-318。
   - `subscribe` 324-332 重放错误、更新和退出请求。
-  - `replaceOwner` 343-377：先 dispose 旧的，暂停绑定新的，等快照，发 `reattached`，再 `activate`。
+  - `replaceOwner` 343-377：先 dispose 旧的，暂停绑定新的，等快照，发 `reattached`，再 `activate`。只有一个 `binding` 变量（226），`replaceOwner` 在 await 之后直接 `binding = nextBinding`、发 `reattached`、`activate`，不看别的。
   - `dispose` 384-397。
   - D1 分支：`machine`、`startHost`、`service` 的解析换成 `desktopShellRequestSchema`；加 `register(desktopChannels.device, 1, deviceRequestSchema.parse, value => client().device(value))`。
+    - `machine` 的解析（D1 分支 `bridge.ts:251-253`）先 `desktopShellRequestSchema.safeParse(value)`，命中就抛 `Shell-owned machine action`。这个 schema 含 `service`（D1 分支 `ipc-contract.ts:42-48`），所以今天页面发 `machine {type:'service', action:'install'}` 到不了任何 daemon。
 - `DT/ipc-contract.ts`：`desktopChannels` 8-36（D1 加 `device: 'desktop:client:device'`）、`SafeFailure` 38-42、`DesktopEvent` 51-59、`DesktopShell` 61-63、`AttachedDaemon` 71-75（D1 加 `serverInfo`）、`DesktopBridge` 77-84、`ShellActions` 86-108。
 - `DT/facade.ts`：`createDesktopFacades(transport)` 46；`onEvent` 82-127，`reattached` 让 `connectionEpoch++`；`callClient` 133-146；`client.watchSnapshots` 156-176 只收 `revision` 变大的快照，`connectionEpoch` 变了才把 revision 清零；`shell` 221-265。
 - `DT/preload.ts` 20-30：`createDesktopFacades` 后 `exposeInMainWorld('vonvonClient' | 'vonvonShell')`。
@@ -419,14 +420,22 @@ dispose 后不发任何事件，测试核 `vi.getTimerCount() === 0`。
 
 签名改成 `installBridge(owner, window, paths, actions, devices: DeviceConnections)`。`DesktopBridge` 加：
 - `localOwner(): AttachedDaemon | null`
-- `onLocalOwner(listener: (owner: AttachedDaemon | null) => void): () => void`
+- `onLocalOwner(listener: (owner: AttachedDaemon) => void): () => void`
+  - 每次新的本机连接就绪后调用一次，参数就是它（非空）。看本机、看远程两条路都调（见下面 `replaceOwner` 第 4 步）。
+  - 本机断开时不调：这时 `localOwner()` 回 `null`，断线照旧由 `localLost` 和 `main.ts` 处理。
+  - 订阅者抛错只记日志，不影响别的订阅者和 `replaceOwner`。
+  - U4 照这个签名用（U4 计划 4.4），不另定。
 - `deferLocalLost(): boolean`
 - `viewId(): ViewId`
 
 状态：
 - `activeOwner` 改名 `localOwner`，生命周期和今天一样。
 - 新增 `view: { kind: 'local' } | { kind: 'remote'; session: ViewSession } | { kind: 'waiting'; id: string }`。
-- 新增 `viewSeq`、`localLostPending`。
+- 今天的一个 `binding` 拆开：
+  - `localWatch`：本机连接的订阅（`watchLocal`，见下），只跟着 `localOwner` 换；
+  - `viewBinding`：正在看的那条的绑定，可以为空；
+  - `replaceOwner` 的候选绑定只在 `replaceOwner` 里，确认视图仍是本机才放进 `viewBinding`。
+- 新增 `viewSeq`（每次 `onView` 加一）、`localGen`（每次 `replaceOwner` 开始时加一）、`localLostPending`。`replacing` 照旧。
 
 两类订阅分开：
 - `watchLocal(owner)`：只要有本机连接就订着，不管正在看哪台。
@@ -435,6 +444,7 @@ dispose 后不发任何事件，测试核 `vi.getTimerCount() === 0`。
   - `replaceOwner` 成功和 `dispose` 时换掉、退订。
 - `bind(target, paused)`：和今天一样，只是对象换成"正在看的那条"。`target = { view: ViewId; client: VonvonClient }`。
   - 发出的 `snapshot`、`log`、`backendInstall`、`device` 事件都带 `view` 字段（4.6）。
+  - 发事件的条件从今天的 `activeOwner === current` 改成"`viewBinding` 就是这份绑定，而且没暂停"。换下来的、过期的绑定即使还没退订完，也发不出东西。
   - 它的 `onError` 只转发非连接错误。远程的 `ConnectionError` 交给 `connections` 处理，不发给界面，也不弹窗。
 
 `localLost(error, from)`：
@@ -447,15 +457,16 @@ dispose 后不发任何事件，测试核 `vi.getTimerCount() === 0`。
 `deferLocalLost()` 给 `main.ts` 用：正在看远程时设 `localLostPending` 并返回 `true`，本机时返回 `false`。
 
 `devices.onView(change)`：
-1. `const seq = ++viewSeq`，先 `binding.dispose()`。
+1. `const seq = ++viewSeq`；`viewBinding?.dispose()`，`viewBinding = null`。
 2. 按 `change.kind` 处理：
    - `local`：
      - `view = local`。
-     - 有 `localOwner`：`bind(local, true)`，`await snapshot()`，`seq` 没变才 `send({ type: 'reattached', view: 'local' })` 并 `activate`。顺序和 `replaceOwner` 一样。
+     - `replacing` 进行中：到此为止。`replaceOwner` 收尾时看到视图是本机，会发 `reattached` 并激活新连接（下面第 5 步）。
+     - 有 `localOwner`：记下 `owner = localOwner`、`gen = localGen`；`b = bind(local, true)`，`viewBinding = b`（暂停着，不发）；`await owner.client.snapshot()`；然后 `seq === viewSeq` 且 `gen === localGen` 才 `send({ type: 'reattached', view: 'local' })` 并 `b.activate`，否则 `b.dispose()`、退出。顺序和 `replaceOwner` 一样。
      - 没有 `localOwner`：只发 `reattached`；`localLostPending` 为真时清标记，`actions.connectionLost()`。
    - `remote`：
      - `view = remote`。
-     - `mode === 'full'`：`bind(session, true)`，`await session.client.snapshot()`，`seq` 没变才 `send({ type: 'reattached', view: id })` 并 `activate`。
+     - `mode === 'full'`：`b = bind(session, true)`，`viewBinding = b`，`await session.client.snapshot()`，`seq` 没变才 `send({ type: 'reattached', view: id })` 并 `activate`。
      - `maintenance`：不订快照，维护连接不推快照，`snapshot` 也不在维护子集里，只发 `reattached`。
      - `snapshot` 失败（刚连上又断）就丢掉，`connections` 会再发 `waiting`。
    - `waiting`：`view = waiting`，不绑定。页面留着旧快照，U1b 显示重连条，请求回 `device_unavailable`。
@@ -469,23 +480,34 @@ dispose 后不发任何事件，测试核 `vi.getTimerCount() === 0`。
 各通道在远程时：
 - `run`：`restartHost` 先 `devices.expect('restart')`，再 `client().run(value)`。不走 `actions.restartHost`，那条路等的是本机 pid 锁。
 - `machine`：
+  - 解析：D1 分支的外壳专属检查（`desktopShellRequestSchema` 命中就抛 `Shell-owned machine action`）改成看视图：
+    - 看本机：照旧，全部拦下。
+    - 看远程（`view.kind === 'remote'`）：只放行 `service` 的 `install`、`uninstall`（对面的登录时启动开关，U2 4.4.3 的 `toggleService` 在远程时 shell 没有 `setLoginItem`，就发这个）。转发前先 `devices.expect('restart')`：daemon 回完就被助手换掉（I3 分支 `rpc/machine.ts:75-82`），断开显示成"正在重启"，不算连不上。
+    - 看远程时其余命中的（`startHost`、`service start/stop`、`repairCli`、两项桌面更新）照旧拦：它们由外壳做，只对这台电脑有意义。
+    - `waiting` 时照 `client()` 回 `device_unavailable`。
   - `stopHost` 先 `devices.expect('stop')`，再直接转发。
-  - `service` 且 `action` 是 `install` 或 `uninstall`（对面的登录时启动开关）先 `devices.expect('restart')`，再转发：daemon 回完就被助手换掉。U2 做（U2 计划 4.6）。
   - `status` 原样返回对面的回复：不套 `stoppedStatus`，不用 `observeCli` 覆盖，`lastStatus` 只记本机的。
 - `close`：远程时什么都不做。不能从远程视图 dispose 本机连接。
 - 不论看哪台，页面发来的 `admin.negotiate` 一律不转发，抛 `LocalOnlyRefusal`，文字"能力由桌面端自己声明。"一条连接只认第一次 `negotiate`，U4 要在本机主连接上声明 `desktop.selfUpdate`（U4 计划 4.4），页面不能抢先。
-- 只对本机有效的六个——`startHost`、`service`、`setLoginItem`、`repairCli`、`chooseExecutablePath`、`chooseDirectoryPaths`——在 `view` 不是本机时抛 `LocalOnlyRefusal`。U2 加的 `quitKeepsDaemon`（退出时停不停本机服务端，U2 计划 4.7）同样只对本机有效，由 U2 加进这一组。
+- 只对本机有效的六个通道——`startHost`、`service`、`setLoginItem`、`repairCli`、`chooseExecutablePath`、`chooseDirectoryPaths`——在 `view` 不是本机时抛 `LocalOnlyRefusal`。U2 加的 `quitKeepsDaemon`（退出时停不停本机服务端，U2 计划 4.7）同样只对本机有效，由 U2 加进这一组。这里说的 `service` 是外壳自己的 `desktop:shell:service` 通道，和上面 `machine` 通道里转给对面的 `service` 不是一回事。
   - `safeFailure` 映射成 `{ kind: 'validation', code: 'local_only', message: '现在看的是「<名字>」，这个操作只对这台电脑有效。先切回这台电脑。' }`。
   - 这是第二道防线，U2 会把入口藏起来。
 
-`replaceOwner(next)`：
-- 正在看本机：和今天一样。
-- 正在看远程或 `waiting`：
-  1. dispose 旧的，`watchLocal(next)`。
-  2. `await next.client.snapshot()` 只用来确认 `next` 可用，结果丢掉，失败照今天抛。
-  3. `localOwner = next`，`devices.setLocal({ status: 'online', serverInfo: next.serverInfo })`，通知 `onLocalOwner` 的订阅者。
-  4. **不发 `reattached`，不发快照。**
-- `stoppedStatus`、`connectionLost` 的复位照旧。
+`replaceOwner(next)`：看哪台都走同一条路，每个 `await` 之后按**此刻的** `view` 决定发不发：
+1. `localGen++`；`localWatch` 退订；视图是本机时 `viewBinding?.dispose()`、`viewBinding = null`（远程的绑定不动）。
+2. `previous = localOwner`，`localOwner = null`，`await previous?.dispose()`，失败照今天抛。
+3. `candidate = bind({ view: 'local', client: next.client }, true)`，不放进 `viewBinding`；`initial = await next.client.snapshot()`；连接失败照今天：`candidate.dispose()`、`next.dispose()`、抛。
+4. `localOwner = next`，`watchLocal(next)`，`stoppedStatus = undefined`，`connectionLost = false`，`devices.setLocal({ status: 'online', serverInfo: next.serverInfo })`，通知 `onLocalOwner` 的订阅者。两种视图都走这一步：U4 靠它在每条新的本机连接上重新声明 `desktop.selfUpdate`，本机 daemon 重启或升级后也一样。
+5. 再看 `view`：
+   - 本机：`viewBinding = candidate`，`send({ type: 'reattached', view: 'local' })`，`candidate.activate(initial)`。顺序和今天一样。
+   - 远程或 `waiting`：`candidate.dispose()`，**不发 `reattached`，不发快照**。以后切回本机，由 `onView(local)` 用 `localOwner`（就是 `next`）重新绑定。
+
+和切换交错时：
+- 看远程时 `replaceOwner` 在等快照，用户切回本机：`onView(local)` 看到 `replacing`，不绑；`replaceOwner` 第 5 步看到视图已是本机，发 `reattached{local}` 和 `next` 的快照。
+- 看本机时 `replaceOwner` 在等快照，用户切到远程：`onView(remote)` 绑远程、发 `reattached{B}`；`replaceOwner` 第 5 步看到视图是远程，丢掉候选，什么都不发。
+- `onView(local)` 正在等旧本机连接的快照，`replaceOwner` 开始：第 1 步 dispose 了 `viewBinding`（就是那份 `b`），`localGen` 也变了，`onView` 醒来后直接退出，旧连接的快照不发；之后同第一种。
+- 所以渲染端在 `reattached{view: X}` 之后收到的快照只来自 X 的连接。
+- `replaceOwner` 失败：照今天抛，`main.ts` 按今天的路径处理断线；视图此刻是本机时 `deferLocalLost()` 回假，照常弹。
 
 `subscribe`：在今天的重放之后，再发 `{ type: 'devices', value: devices.state() }`。另外订 `devices.onState` 一次，之后每次变化都发 `{ type: 'devices', value }`。
 
@@ -632,7 +654,13 @@ export function shellForDevice(shell: ShellCapabilities | undefined, device: Act
 | 同上 | 本机专属 | 看远程时 `startHost`、`service`、`setLoginItem`、`repairCli`、`chooseDirectoryPaths`、`chooseExecutablePath` → `local_only`，`actions.*` 没被调 |
 | 同上 | 远程重启、停止 | 看远程时 `run(restartHost)` → `devices.expect('restart')` 后转发，`actions.restartHost` 没被调；`machine(status)` 回远程原样，不带 `observeCli` 的覆盖 |
 | 同上 | 换设备发 `reattached` | 本机快照 revision 50，切到 B 后 B 的快照 revision 3 → 先发 `reattached{view:B}`，再发 `snapshot{view:B, revision 3}`。main 必败 |
+| 同上 | 远程的服务开关 | 看远程 A 时 `machine {type:'service', action:'install'}` → 先 `devices.expect('restart')`，A 的假 client 收到这条，本机假 client 没收到。看本机时同一条 → `Shell-owned machine action`，两边都没收到。看远程时 `machine {type:'repairCli'}`、`{type:'service', action:'start'}` → 仍是 `Shell-owned machine action`。main 必败 |
 | 同上 | 看远程时本机换连接 | `replaceOwner(next)` → 没发 `reattached`、没发本机快照；`localOwner()` 是 next；`onLocalOwner` 收到 next；切回本机 → 发 `reattached{view:'local'}` 和 next 的快照 |
+| 同上 | 看本机时本机换连接 | `replaceOwner(next)` → 发 `reattached{view:'local'}` 和 next 的快照；`onLocalOwner` 也收到 next（U4 靠它重新声明能力）。main 必败 |
+| 同上 | 交错一：看远程 B，换连接中切回本机 | `replaceOwner(next)` 的快照挂着时 `onView(local)`，再放行快照 → 渲染端依次收到 `reattached{view:'local'}`、next 的快照，各一次；`reattached{local}` 之后没有 B 的快照 |
+| 同上 | 交错二：看本机，换连接中切到 B | `replaceOwner(next)` 的快照挂着时 `onView(remote B)` 完成，再放行 next 的快照 → 渲染端最后一条 `reattached` 是 `{view:'B'}`，之后只有 B 的快照，没有 `reattached{local}`、没有 next 的快照；`localOwner()` 是 next，`onLocalOwner` 收到 next |
+| 同上 | 交错三：切回本机等快照时本机换连接 | `onView(local)` 等旧本机连接的快照时 `replaceOwner(next)` 完成，再放行旧快照 → 旧连接的快照没发出去；`reattached{local}` 只一次，之后是 next 的快照 |
+| 同上 | 交错的共同断言 | 上面三例里，渲染端每条 `snapshot` 的 `view` 都等于它前面最近一条 `reattached` 的 `view`，值也来自那台的假 client |
 | 同上 | 看远程时本机断了 | 本机假 client 报 `ConnectionError`、`recoverConnection` 回假 → `connectionLost` 没调；切回本机后调一次 |
 | 同上 | 远程断了不弹窗 | 远程假 client 报 `ConnectionError` → 不发 `error`、不调 `connectionLost` |
 | 同上 | 本机设备事件 | 看远程时本机 client 发 `device` 事件 → 发 `localDevice` |
@@ -691,18 +719,19 @@ U1a 和 U1b 是一个 PR，Mac 上只发一次验收，写在 U1b 第 6 节。U1
 10. 删除当前设备会先自撤销（3 秒），4003 不当"被撤销"；删除非当前设备不联网。
 11. 发给 daemon 的通道都带 `view`，不匹配的回 `device_switched`；外壳通道不带。
 12. 换设备发 `reattached{view}`，而且在第一份快照之前。
-13. 看远程时本机换连接不发 `reattached`；本机断线的弹窗推迟到切回本机时。
-14. 远程时六个本机专属操作在主进程被拒；`shellForDevice` 去掉同样的六项。
-15. `cleanup` 先 `devices.dispose()` 再 `bridge.dispose()`；退出不碰远程 daemon。
-16. 日志只有设备 id 前 8 位、事件、码、时间。
-17. diff 里没有真实 id、密钥、本机路径和地址；示例地址只用文档段（`203.0.113.x`、`fd7a:115c:a1e0::1` 这类）。
+13. 看远程时本机换连接不发 `reattached`；本机断线的弹窗推迟到切回本机时。`onLocalOwner` 在看本机、看远程时都会触发。`replaceOwner` 和切换交错时，`reattached{X}` 之后只有 X 的快照：每个 `await` 之后按此刻的视图决定发不发，`onView(local)` 还要核对 `localGen`。
+14. 远程视图下 `machine.service install/uninstall` 先 `expect('restart')` 再转给对面；本机视图照旧按外壳专属拦下，远程视图的其他外壳专属请求也拦。
+15. 远程时六个本机专属操作在主进程被拒；`shellForDevice` 去掉同样的六项。
+16. `cleanup` 先 `devices.dispose()` 再 `bridge.dispose()`；退出不碰远程 daemon。
+17. 日志只有设备 id 前 8 位、事件、码、时间。
+18. diff 里没有真实 id、密钥、本机路径和地址；示例地址只用文档段（`203.0.113.x`、`fd7a:115c:a1e0::1` 这类）。
 
 ## 9. 风险和行数
 
-- 估计约 1,900 行：
-  - protocol 130、registry 220、transport 200、connections 560、bridge 净增 250、ipc、facade 和 preload 180、main 50、client 20、client-context 80。
+- 估计约 1,950 行：
+  - protocol 130、registry 220、transport 200、connections 560、bridge 净增 290（本机和视图的绑定分开、交错的核对、远程的服务开关）、ipc、facade 和 preload 180、main 50、client 20、client-context 80。
   - 测试约 1,300，按上表压缩。
-- 加上 U1b 约 1,500，整个 PR 约 3,400 行：
+- 加上 U1b 约 1,500，整个 PR 约 3,450 行：
   - 超过 1,500，所以一个审查者读整个 diff，另加两位按模块读：(a) `DT/` 和 `P/desktop-devices.ts`，(b) `U/`。
   - 涉及并发、关闭顺序、错误路径，再加一轮多角度审查，每条发现先复现或驳回。
   - 没超过 5,000，不拆。

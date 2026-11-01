@@ -2,7 +2,7 @@
 
 总设计见 `docs/plans/devices.md`（下文简称"设计"）4.6、6.1、6.4、第 15 节，本片对应第 13 节的 U1b 行。**和 U1a（`docs/plans/devices-ui-1a-connections.md`）合成一个 PR**，分支 `claude/devices-ui-1`。本片只碰界面，主进程、协议和连接管理全在 U1a。产品行为以 `docs/product.md` 3.14 为准。
 
-缩写同 D1：`P/`、`CL/`、`D/`、`DT/`、`U/` 分别是 protocol、client、daemon、desktop、ui 的 `src/`。行号以 `origin/claude/devices-integration`（a2577fb3）为准。
+缩写同 D1：`P/`、`CL/`、`D/`、`DT/`、`U/` 分别是 protocol、client、daemon、desktop、ui 的 `src/`。行号以 `origin/claude/devices-integration`（8051b03c；本片引用的 ui、desktop 文件和 a2577fb3 相同）为准。
 
 ## 1. 做什么
 
@@ -115,10 +115,10 @@ function DeviceGate({ state, renderApp }) {
 ### 4.3 `U/LocalShell.tsx`、`U/TodayHome.tsx`、`U/search.ts`
 
 - `AppShell` 的 props 加 `deviceSwitcher?: ReactNode`，渲染在 `</nav>`（21）之后。**放在 `!firstUse` 的条件外面**：远程那台还没有 bot 时也得能切回来。
-- `settingsEntries` 在 `application` 前面插 `{ page: 'devices', title: '设备', description: '加别的设备，切换着管理', icon: MonitorSmartphone }`。
+- `settingsEntries`（今天 8 项，`SettingsHome` 按 `slice(0, 4)`"模型与工具"、`slice(4)`"连接与应用"分组）在下标 4 插 `{ page: 'devices', title: '设备', description: '加别的设备，切换着管理', icon: MonitorSmartphone }`，也就是 `setup`（飞书连接）前面。
   - 图标用 lucide 里现有的那个，名字以实现时为准。
-  - `SettingsHome` 加 `devices?: boolean`，为假时过滤掉这一条，网页端没有这页。
-  - 分组仍按 `slice(0, 4)` 和 `slice(4)` 切，"设备"落在"连接与应用"那组的第一项。
+  - `SettingsHome` 加 `devices?: boolean`，为假时在切分之前滤掉这一条，网页端没有这页。
+  - 插在下标 4：`slice(0, 4)` 还是原来四项；"设备"是"连接与应用"的第一项，原来那四项顺延到第 2–5 项，没有哪一项换组。`devices` 为假时滤掉后两组和今天一模一样。
 - `searchEntries` 的 `capabilities` 加 `devices?: boolean`。为真时在页面表里加 `{ id: 'devices', title: '设备', aliases: ['远程', '添加设备', '切换设备', '连接链接', '配对', 'Tailscale', '服务器'], page: 'devices' }`。"服务器"只作搜索词，界面上不出现。
 
 ### 4.4 `U/devices/DeviceSwitcher.tsx`
@@ -205,7 +205,7 @@ function DeviceGate({ state, renderApp }) {
 - 服务端旧，`capabilities` 含 `update.standalone` 或 `update.npm`：
   - 显示 I3 的 `UpdatePanel`，外面包 `DraftGuardProvider` 和 `DesktopUpdateProvider`。
   - U2 把服务端那一段抽成 `ServerUpdateCard`（U2 计划 4.4.2）：本片先合入时，U2 把这里换成 `<ServerUpdateCard variant="remote">`；U2 先合入时，本片直接用它。`request` 照样传 `maintenanceRequest(...)`。
-  - `request` 传 `maintenanceRequest(client.machine)`：请求不在 `MAINTENANCE_KINDS` 里就在本地拒绝，回"版本不一致时只能做升级"，不发出去，免得对面以 4001 关掉连接。
+  - `request` 传 `maintenanceRequest(client.machine)`：请求不在 `MAINTENANCE_KINDS` 里就在本地拒绝，回"版本不一致时只能做升级"，不发出去。维护子集以外的请求，D1 的 `authz.ts` 回 `permission_denied`（D4a 换成 `protocol_mismatch`），连接不关，界面不该发这种请求；只有反复越界（D4a 计划 4.4：连续 20 条）服务端才以 4001 关掉连接。
   - 含 `update.bundled` 的按钮归 U4，本片只写文字。
   - I3 没合入时也只写文字。
 - 客户端旧：显示"这台电脑上的应用"的更新：`DesktopUpdateButton`，外面包 `DesktopUpdateProvider`。
@@ -364,7 +364,7 @@ function DeviceGate({ state, renderApp }) {
 | `app-device.test.tsx`（新，或并进现有 App 测试） | 远程快照不改外框 | `useActiveDevice` 为远程、快照 `application.platform: 'linux'` → `dataset.desktopPlatform` 没被改成 `linux`。main 必败 |
 | 同上 | 提示条 | 远程 `reconnecting`、`expected: 'restart'` → "正在重启"；`notice: updated` → "已更新到 0.9.1" |
 | `search.test.ts`（改） | 设备页 | `devices: true` → 有 `id: 'devices'`；不传 → 没有 |
-| `settings-home` 相关测试（改，现有文件名以实现时为准） | 入口 | `devices` 为真 → "设备"在"连接与应用"组第一项；为假 → 没有 |
+| `settings-home` 相关测试（改，现有文件名以实现时为准） | 入口 | `devices` 为真 → "模型与工具"组仍是原来四项，"设备"在"连接与应用"组第一项、后面依次是飞书连接、导入 Bridge、应用与启动、状态与诊断；为假 → 两组和今天一样，没有"设备" |
 | `url-actions` 测试（改） | 白名单 | `https://tailscale.com/download` 在 `tailscale` 种类下通过；`https://tailscale.com/download?x=1`、`http://…`、`https://evil.com` 不过 |
 
 ## 6. 自测和验收
@@ -478,7 +478,7 @@ Claude 收尾：停助手；`remote disable`；撤销验收中配对的客户端
 - 估计约 1,500 行：
   - presentation 280、设备页 220、添加对话框 260、gate 和两个外部视图 230、提示条和版本提示 130、切换标签 100、App/LocalShell/TodayHome/search/main.tsx 的改动 120、css 80、url-actions 10、验收助手 120。
   - 测试约 500，压缩写。
-- 和 U1a 合起来约 3,400 行。审查分法见 U1a 第 9 节：一个读整个 diff，两个按 `DT/`+`P/` 和 `U/` 分，再加一轮多角度审查。
+- 和 U1a 合起来约 3,450 行。审查分法见 U1a 第 9 节：一个读整个 diff，两个按 `DT/`+`P/` 和 `U/` 分，再加一轮多角度审查。
 - I3 的 `UpdatePanel` 如果在请求里带了维护子集以外的东西，维护视图里它会显示"版本不一致时只能做升级"，不会把连接弄断。I3 合入后实现时再核一次。
 - Mac 能不能经 Tailscale 打到 JP-VPS 的助手端口，没有实测过。两台的 Paseo daemon 就是走 Tailscale 互通的，应该可以。不行就由 Claude 把链接经 `paseo send` 发给 Mac 上的 Codex 会话（要 owner 同意开 Paseo 会话），不经过 GitHub。
 - 开发版桌面端的 `safeStorage` 用的是"Electron Safe Storage"钥匙串项，第一次会弹授权框，Computer Use 点允许；锁屏会让 Computer Use 失败，按 #322 的规矩停下写"卡住了"。
