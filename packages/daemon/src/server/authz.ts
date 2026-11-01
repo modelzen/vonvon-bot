@@ -21,18 +21,18 @@ const rows = (method: string, types: string): Array<[string, Rule]> => types.spl
  */
 export const RULES: ReadonlyMap<string, Rule> = new Map([
   ...rows('snapshot', 'get'),
-  ...rows('command', `refresh listPendingGroups openEventSettings registerAgent refreshAgentCredentials installCodex startCodexLogin restartHost
-    listJoinedGroups listGroupMembers bindGroup setResponse setPermission setAgentEnabled deleteAgent cancelJob openJobAuthorization copyJobAuthorization`),
+  ...rows('command', `refresh listPendingGroups registerAgent refreshAgentCredentials installCodex startCodexLogin restartHost
+    listJoinedGroups listGroupMembers bindGroup setResponse setPermission setAgentEnabled deleteAgent cancelJob`),
   ...rows('settings', `read.host read.agent read.project read.session save.host save.agent save.project save.session
-    act.voice act.adminMember act.projectMember act.projectAudience act.commentInstructions models sessions chooseExecutable saveExecutable`),
+    act.voice act.adminMember act.projectMember act.projectAudience act.commentInstructions models sessions`),
   ...rows('collaboration', `providerModels createProject project editProject removeProject history context clear compact resume startGoal stop
-    stopSubagent endGoal reminder usage shareUsage openGroup`),
+    stopSubagent endGoal reminder usage shareUsage`),
   ...rows('environment', `scan backendCatalog backendVersion backendInstall backendInstallStatus cancelBackendInstall backendUninstall backendLogin
-    install update toolInstallStatus cancelInstall uninstall authStatus startLogin loginStatus openVerification cancelLogin
+    install update toolInstallStatus cancelInstall uninstall authStatus startLogin loginStatus cancelLogin
     profileList profileUse profileAdd profileInit profileInitStatus profileInitCancel`),
   ...rows('machine', `mcp.list mcp.add mcp.remove bridgeImport.detect bridgeImport.preflight bridgeImport.start bridgeImport.status bridgeImport.rollback
-    status repairCli service.install service.start service.stop service.uninstall setServiceSkipped startHost stopHost logs
-    checkCoreUpdate applyCoreUpdate coreUpdateStatus checkDesktopUpdate openReleases installDesktopUpdate`),
+    status service.install service.start service.stop service.uninstall setServiceSkipped startHost stopHost logs
+    checkCoreUpdate applyCoreUpdate coreUpdateStatus`),
   ...rows('admin', `judgeUsage state diagnosis hostDoctor setupStatus cardCallbackStatus confirmCardCallback daemonStatus codexSetup logs followLogs
     switchBackend secrets setSecret removeSecret testSecret negotiate`),
   ...rows('directory', 'list suggest choose'),

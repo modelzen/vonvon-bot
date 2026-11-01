@@ -34,7 +34,6 @@ export const environmentRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("authStatus"), tool: environmentToolSchema }).strict(),
   z.object({ type: z.literal("startLogin"), tool: environmentToolSchema }).strict(),
   z.object({ type: z.literal("loginStatus") }).strict(),
-  z.object({ type: z.literal("openVerification"), operationId }).strict(),
   z.object({ type: z.literal("cancelLogin"), operationId }).strict(),
   z.object({ type: z.literal("profileList") }).strict(),
   z.object({ type: z.literal("profileUse"), name }).strict(),
