@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, expect, it, vi } from 'vitest';
@@ -115,7 +115,7 @@ it('bot status still prints the connection and tool steps when the checklist rea
   const h = harness({ snapshot: one(undefined, [], [{ tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '0.156.1' }]), admin: async () => { throw new RpcError('internal', '飞书接口超时'); } });
   await expect(runBotStatus(undefined, h.io(), h.daemon)).rejects.toThrow('清单没有读全，稍后重新运行 vonvon bot status。');
   expect(h.out()).toBe(['Vonvon Bot（cli_a）', '! 飞书应用：检测失败', '    读取清单状态失败：飞书接口超时', '✓ 长连接：已连接', '✓ Codex：可用 · 0.156.1',
-    '· Claude：无法确认', '    在网页里点「去本机环境」（vonvon open）', '· 后台服务：不支持', '    这台电脑不支持后台服务。', ''].join('\n'));
+    '· Claude：无法确认', '    运行 vonvon env scan', '· 后台服务：不支持', '    这台电脑不支持后台服务。', ''].join('\n'));
   // main 必败: --json printed a success line before exiting 1; what was read now rides on the failure
   h.clear(); const thrown = await runBotStatus(undefined, h.io(true), h.daemon).catch((error: unknown) => error);
   expect(thrown).toEqual(failure('failed', '清单没有读全，稍后重新运行 vonvon bot status。'));
@@ -134,9 +134,9 @@ it('bot status prints the service step after the tools without counting it', asy
   const status = (application: DesktopSnapshot['application']) => async () => ({ ...snapshot([agent('cli_a')], [], [{ tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '0.156.1' }]), application });
   const mac = harness({ snapshot: status({ platform: 'macos', version: '1', loginItem: false, dataPath: '/x', service: { state: 'not-installed', skipped: false } }), admin: async () => ({ kind: 'setupStatus', status: setup }) });
   await runBotStatus(undefined, mac.io(), mac.daemon);
-  expect(mac.out()).toContain(['✓ Codex：可用 · 0.156.1', '· Claude：无法确认', '    在网页里点「去本机环境」（vonvon open）',
+  expect(mac.out()).toContain(['✓ Codex：可用 · 0.156.1', '· Claude：无法确认', '    运行 vonvon env scan',
     '! 登录电脑时自动运行 Bot（推荐）：推荐打开', '    打开后 Bot 跑在 macOS 的后台服务里：退出 app、注销再登录都在线，崩溃后自动重启。',
-    '    运行 vonvon service install', '    在网页里点「跳过」（vonvon open）', '全部就绪。', ''].join('\n'));
+    '    运行 vonvon service install', '    运行 vonvon service skip', '全部就绪。', ''].join('\n'));
   mac.clear(); await runBotStatus(undefined, mac.io(true), mac.daemon);
   expect(JSON.parse(mac.out())).toMatchObject({ ready: true, steps: expect.arrayContaining([expect.objectContaining({ id: 'service', done: false })]) });
   const linux = harness({ snapshot: status({ platform: 'linux', version: '1', loginItem: false, dataPath: '/x', service: { state: 'not-installed', skipped: false } }), admin: async () => ({ kind: 'setupStatus', status: setup }) });
@@ -274,7 +274,7 @@ it('group pending reports the daemon refusal and still closes', async () => {
 
 it('group bind sends an absolute folder, the chosen token and the pending name', async () => {
   const home = await mkdtemp(join(tmpdir(), 'vonvon-cli-admin-')); dirs.push(home);
-  await mkdir(join(home, 'work', 'pay'), { recursive: true }); await writeFile(join(home, 'work', 'file'), '');
+  await mkdir(join(home, 'work', 'pay'), { recursive: true });
   const host = { cwd: join(home, 'work'), home, platform: 'linux' as const };
   const token = '7d1f1a6e-3b8e-4d0c-9a51-2f6a0e4b9c11';
   const run = vi.fn(async (command: { type: string }) => command.type === 'listPendingGroups'
@@ -299,8 +299,7 @@ it('group bind sends an absolute folder, the chosen token and the pending name',
   await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'later' }, offline.io(), offline.daemon, host)).rejects.toThrow('--conversation 必须选一项');
   await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'toString' }, offline.io(), offline.daemon, host)).rejects.toThrow('--conversation 必须选一项');
   await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'multi', response: 'yes' }, offline.io(), offline.daemon, host)).rejects.toThrow('--response 只能是 mention');
-  await expect(runGroupBind('oc_pay', { folder: 'missing', conversation: 'multi' }, offline.io(), offline.daemon, host)).rejects.toThrow(`文件夹不存在：${join(home, 'work', 'missing')}`);
-  await expect(runGroupBind('oc_pay', { folder: 'file', conversation: 'multi' }, offline.io(), offline.daemon, host)).rejects.toThrow('不是文件夹：');
+  // cli-3-groups: a folder that is not there is the daemon's to say (test/cli-group.test.ts), not stat on this computer
   await expect(runGroupBind('chat_pay', { folder: 'pay', conversation: 'multi' }, offline.io(), offline.daemon, host)).rejects.toThrow('群 id 应该以 oc_ 开头。');
   expect(offline.connect).not.toHaveBeenCalled();
 

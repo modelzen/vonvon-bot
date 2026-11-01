@@ -236,7 +236,7 @@ it('bot status gives the command for the steps the terminal can do now', async (
   expect(stepLines({ id: 'callback', title: '卡片回调', status: '已手动确认', tone: 'success', done: false, actions: [{ kind: 'confirmCallback', label: '撤销确认', confirmed: false }] }, 'cli_a'))
     .toEqual(['✓ 卡片回调：已手动确认', '    运行 vonvon bot callback unconfirm cli_a']);
   expect(stepLines({ id: 'claude', title: 'Claude', status: '无法确认', tone: 'neutral', done: false, actions: [{ kind: 'environment', label: '去本机环境' }] }, 'cli_a'))
-    .toEqual(['· Claude：无法确认', '    在网页里点「去本机环境」（vonvon open）']);
+    .toEqual(['· Claude：无法确认', '    运行 vonvon env scan']);
 });
 
 // main 必败: the five kinds were pending C2 in the allowlist
