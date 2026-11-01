@@ -14,8 +14,7 @@ type ClientsFile = { v: 1; generation: number; clients: ClientRecord[] };
 export interface NewClient { name: string; publicKey: string; clientKind: ClientRecord['clientKind']; address: string; invitedBy: string }
 export interface ClientRegistry {
   readonly generation: number;
-  list(): ClientRecord[];
-  get(clientId: string): ClientRecord | undefined;
+  list(): ClientRecord[]; get(clientId: string): ClientRecord | undefined;
   /** Revoked ones too: D2 answers 4003 for them and 4002 for a key it never saw. */
   byPublicKey(publicKey: string): ClientRecord | undefined;
   /** A key already paired and not revoked: the same entry, seen again. */
@@ -29,7 +28,7 @@ export interface ClientRegistry {
   onChange(listener: (generation: number, revoked: readonly string[]) => void): () => void;
   close(): Promise<void>;
 }
-
+const copy = (client: ClientRecord | undefined): ClientRecord | undefined => client && { ...client };
 const notFound = (clientId: string): RpcError => new RpcError('invalid_request', `没有这个客户端：${clientId}。运行 vonvon clients ls 查看。`);
 
 export async function createClientRegistry(home: string, options: { now?: () => number; touchEveryMs?: number } = {}): Promise<ClientRegistry> {
@@ -82,8 +81,8 @@ export async function createClientRegistry(home: string, options: { now?: () => 
   return {
     get generation() { return state.generation; },
     list: () => state.clients.map(client => ({ ...client })),
-    get: clientId => state.clients.find(client => client.id === clientId),
-    byPublicKey: publicKey => state.clients.find(client => client.publicKey === publicKey),
+    get: clientId => copy(state.clients.find(client => client.id === clientId)),
+    byPublicKey: publicKey => copy(state.clients.find(client => client.publicKey === publicKey)),
     async add(client) {
       const existing = state.clients.find(entry => entry.publicKey === client.publicKey);
       if (existing?.revokedAt !== undefined) throw new RpcError('client_revoked', '这台设备的访问已经被撤销，要重新配对得换一对密钥。');

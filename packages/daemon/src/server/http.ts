@@ -32,7 +32,7 @@ import { principalWire } from './principal';
 import { deviceRpc } from './rpc/device';
 import { loadOrCreateDevice } from '../remote/device';
 import { createClientRegistry, type ClientRegistry } from '../remote/clients';
-import { createInviteBook } from '../remote/pairing';
+import { announceRevocations, createInviteBook } from '../remote/pairing';
 import { log } from '../core/logger';
 import { serveWebUi } from './web-ui';
 import { getPidLockInfo, type PidLockInfo } from './pid-lock';
@@ -149,6 +149,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
     const identity = { current: await loadOrCreateDevice(paths.appDir, machineId) };
     const clients = acquiredClients = await createClientRegistry(paths.appDir);
     const invites = createInviteBook();
+    announceRevocations({ clients, publish: event => acquiredSockets?.publish(event), log });
     const directory = acquiredDirectory = await createDirectoryBrowser();
     const server = acquiredServer = createServer((request, response) => {
       void serveWebUi(request, response).then(served => {
@@ -181,7 +182,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
       switch (request.method) {
         case 'snapshot': peer.send({ type: 'response', id, method: 'snapshot', payload: snapshots.current() }); return;
         case 'admin': return finish(peer, await adminRpc(options.service, follow => logs.follow(peer, follow), request.payload, { startedAt, peer }), payload => ({ type: 'response', id, method: 'admin', payload }));
-        case 'device': return finish(peer, await deviceRpc({ home, identity, clients, invites, publish: event => sockets.publish(event), log }, peer, request.payload), payload => ({ type: 'response', id, method: 'device', payload }));
+        case 'device': return finish(peer, await deviceRpc({ home, identity, clients, invites }, peer, request.payload), payload => ({ type: 'response', id, method: 'device', payload }));
         case 'settings': return finish(peer, await settingsRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'settings', payload }));
         case 'collaboration': return finish(peer, await collaborationRpc(options.service, directory, request.payload), payload => ({ type: 'response', id, method: 'collaboration', payload }));
         case 'environment': return finish(peer, await environmentRpc(options.service, jobs, peer, request.payload, environment), payload => ({ type: 'response', id, method: 'environment', payload }));

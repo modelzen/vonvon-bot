@@ -17,14 +17,12 @@ it("round-trips a pairing link, with or without its prefix, and refuses anything
   expect(() => encodePairingLink({ ...link, addresses: [] })).toThrow();
   expect(() => encodePairingLink({ ...link, addresses: [{ host: "127.0.0.1", port: 7767, kind: "loopback" as "lan" }] })).toThrow();
 });
-
 it("gives the seven remote close reasons their 4xxx codes", () => {
   expect(Object.entries(CLOSE_CODES).filter(([, code]) => code >= 4000 && code < 4400).map(([reason]) => reason)).toEqual([
     "protocol_mismatch", "unknown_client", "client_revoked", "rate_limited", "handshake_failed", "remote_disabled", "pairing_failed",
   ]);
   expect(closeReasonSchema.parse("unauthorized")).toBe("unauthorized");
 });
-
 it("carries the device event inside the event envelope", () => {
   const event = { type: "event", event: "device", payload: { change: "client-revoked", clientId: "cl_0123456789abcdef", name: "笔记本", clientKind: "desktop" } };
   expect(deviceEventSchema.parse(event)).toEqual(event);

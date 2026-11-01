@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Event } from '@vonvon/protocol';
 import { createClientRegistry } from '../src/remote/clients';
-import { completePairing, createInviteBook, INVITE_TTL_MS, PairingError } from '../src/remote/pairing';
+import { announceRevocations, completePairing, createInviteBook, INVITE_TTL_MS, PairingError } from '../src/remote/pairing';
 
 let home: string;
 beforeEach(async () => { home = await mkdtemp(join(tmpdir(), 'vonvon-pairing-')); });
@@ -21,15 +21,12 @@ it('keeps at most three unused invites', () => {
   expect(book.create({ invitedBy: 'local' }).id).toMatch(/^inv_/);
   expect(book.size()).toBe(3);
 });
-
 it('lets an invite be used once, before it expires, with its exact secret', () => {
   let now = 0;
   const book = createInviteBook({ now: () => now });
   const a = book.create({ invitedBy: 'local' });
   expect(a.expiresAt).toBe(INVITE_TTL_MS);
-  expect(book.redeem(a.id, `${a.secret.slice(0, -1)}${a.secret.endsWith('A') ? 'B' : 'A'}`)).toBeUndefined();
-  expect(book.redeem(a.id, a.secret.slice(0, -1))).toBeUndefined();
-  expect(book.redeem(a.id, `${a.secret}x`)).toBeUndefined();
+  for (const wrong of [`${a.secret.slice(0, -1)}${a.secret.endsWith('A') ? 'B' : 'A'}`, a.secret.slice(0, -1), `${a.secret}x`]) expect(book.redeem(a.id, wrong)).toBeUndefined();
   expect(book.redeem(a.id, a.secret)).toBeDefined();
   expect(book.redeem(a.id, a.secret)).toBeUndefined();
   const b = book.create({ invitedBy: 'local' });
@@ -38,7 +35,6 @@ it('lets an invite be used once, before it expires, with its exact secret', () =
   expect(book.has(b.id)).toBe(false);
   expect(book.redeem(b.id, b.secret)).toBeUndefined();
 });
-
 it('registers the paired client and tells the owner, never logging the secret', async () => {
   const invites = createInviteBook();
   const clients = await createClientRegistry(home);
@@ -52,11 +48,17 @@ it('registers the paired client and tells the owner, never logging the secret', 
   expect(JSON.parse(await readFile(join(home, 'clients.json'), 'utf8')).clients).toMatchObject([{ id: result.clientId, name: '笔记本', invitedBy: 'local' }]);
   expect(published).toEqual([{ type: 'event', event: 'device', payload: { change: 'client-paired', clientId: result.clientId, name: '笔记本', clientKind: 'desktop', address: '192.0.2.5:50000', invitedBy: 'local' } }]);
   expect(log.info).toHaveBeenCalledWith('device', 'client-paired', expect.objectContaining({ clientId: result.clientId }));
-  expect(JSON.stringify(log.info.mock.calls)).not.toContain(invite.secret);
 
   const again = completePairing(deps, { publicKey: 'm'.repeat(43), request, address: '192.0.2.6:50000' });
   await expect(again).rejects.toBeInstanceOf(PairingError);
   await expect(again).rejects.toMatchObject({ code: 'pairing_failed' });
   expect(clients.generation).toBe(1);
   expect(published).toHaveLength(1);
+
+  // devices 4.3: each revoked client, however revoked, reaches the owner and the log
+  announceRevocations(deps);
+  await clients.revoke(result.clientId);
+  expect(published[1]).toEqual({ type: 'event', event: 'device', payload: { change: 'client-revoked', clientId: result.clientId, name: '笔记本', clientKind: 'desktop', address: '192.0.2.5:50000', invitedBy: 'local' } });
+  expect(log.info).toHaveBeenLastCalledWith('device', 'client-revoked', expect.objectContaining({ clientId: result.clientId }));
+  expect(JSON.stringify(log.info.mock.calls)).not.toMatch(new RegExp(`${invite.secret}|vonvon://`));
 });

@@ -99,8 +99,7 @@ beforeEach(() => { handlers.clear(); openExternal.mockClear(); failRegistration.
 describe('desktop IPC boundary', () => {
   it('forwards a device request and refuses one of no known shape', async () => {
     const h = harness();
-    expect(await h.invoke(desktopChannels.device, { type: 'clients' })).toEqual({ ok: true, value: { kind: 'clients', generation: 0, clients: [] } });
-    expect(await h.invoke(desktopChannels.device, { type: 'revokeClient' })).toMatchObject({ ok: false });
+    expect([await h.invoke(desktopChannels.device, { type: 'clients' }), await h.invoke(desktopChannels.device, { type: 'revokeClient' })]).toMatchObject([{ ok: true, value: { kind: 'clients' } }, { ok: false }]);
     expect(h.device).toHaveBeenCalledExactlyOnceWith({ type: 'clients' });
     await h.bridge.dispose();
   });

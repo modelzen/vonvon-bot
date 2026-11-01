@@ -19,7 +19,6 @@ export const pairingLinkSchema = z.object({
 }).strict();
 export type PairingLink = z.infer<typeof pairingLinkSchema>;
 export const PAIRING_LINK_PREFIX = "vonvon://pair#";
-
 function toBase64url(text: string): string {
   let binary = "";
   for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
@@ -40,7 +39,6 @@ export function decodePairingLink(text: string): PairingLink {
   try { return pairingLinkSchema.parse(JSON.parse(fromBase64url(body))); }
   catch { throw new Error("invalid_pairing_link"); }
 }
-
 /** One entry of `<dataRoot>/clients.json` (devices 4.3); a revoked client stays, with `revokedAt`. */
 export const clientRecordSchema = z.object({
   id: z.string().regex(/^cl_[0-9a-f]{16}$/), name: z.string().min(1).max(40), publicKey: z.string(),
@@ -70,7 +68,6 @@ export const deviceStatusSchema = z.object({
   clients: z.object({ total: z.number().int(), active: z.number().int() }).strict(),
 }).strict();
 export type DeviceStatus = z.infer<typeof deviceStatusSchema>;
-
 export const deviceRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("status") }).strict(),
   /** exactly one of host and tailscale */
@@ -102,7 +99,6 @@ export const CLOSE_CODES = {
 } as const;
 export type CloseReason = keyof typeof CLOSE_CODES;
 export const closeReasonSchema = z.enum(Object.keys(CLOSE_CODES) as [CloseReason, ...CloseReason[]]);
-
 /** Pushed when a client is paired or revoked (devices 4.3); D4a sends it to the owner's connections only. */
 export const deviceEventPayloadSchema = z.object({
   change: z.enum(["client-paired", "client-revoked"]),

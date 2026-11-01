@@ -22,13 +22,11 @@ it('creates the identity once, owner-only, keyed to the machine id', async () =>
   expect(deviceKeyPair(first).publicKey).toHaveLength(32);
   expect(deviceKeyPair(first).privateKey.asymmetricKeyType).toBe('x25519');
 });
-
 it('refuses a damaged identity and leaves the file for the owner', async () => {
   await writeFile(join(home, 'device.json'), '{}');
   await expect(loadOrCreateDevice(home, machineId)).rejects.toThrow('device.json 损坏');
   expect(await readFile(join(home, 'device.json'), 'utf8')).toBe('{}');
 });
-
 it('renames the device and keeps the file owner-only', async () => {
   const before = await loadOrCreateDevice(home, machineId);
   expect(await renameDevice(home, 'A')).toEqual({ ...before, name: 'A' });
