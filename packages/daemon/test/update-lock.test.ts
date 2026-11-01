@@ -1,4 +1,4 @@
-import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,7 +12,7 @@ vi.mock('../src/config/paths', async () => {
 });
 
 import { paths } from '../src/config/paths';
-import { acquireUpdateLock, clearUpdateStatus, readUpdateStatus, writeUpdateStatus } from '../src/service/update';
+import { acquireUpdateLock, clearUpdateStatus, processStart, readUpdateStatus, writeUpdateStatus } from '../src/service/update';
 
 const lockFile = (): string => join(paths.appDir, 'update.lock');
 afterAll(() => rmSync(paths.appDir, { recursive: true, force: true }));
@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 // B（跨进程更新锁）：防止 Web「升级」与私聊「更新」并发跑两个 `npm i -g` 装坏全局目录。
-// O_EXCL 原子占有 + 陈旧回收（持有者已死 / 超 10min）。纯 fs，mac 上可测。
+// O_EXCL 原子占有 + 陈旧回收（持有者已死，或 pid 已换了进程）。纯 fs，mac 上可测。
 describe('acquireUpdateLock（跨进程更新互斥）', () => {
   it('持锁期间第二次 acquire 返回 null；release 后可再拿', () => {
     const r1 = acquireUpdateLock();
@@ -50,9 +50,54 @@ describe('acquireUpdateLock（跨进程更新互斥）', () => {
   });
 
   it('存活持有者的锁不因超过 30min 而被回收', () => {
-    writeFileSync(lockFile(), JSON.stringify({ pid: process.pid, at: Date.now() - 31 * 60 * 1000 }), 'utf8');
+    // 父进程（vitest 主进程）在跑：写锁时没记启动时间的旧锁只按 pid 判。
+    writeFileSync(lockFile(), JSON.stringify({ pid: process.ppid, at: Date.now() - 31 * 60 * 1000 }), 'utf8');
     const r = acquireUpdateLock();
     try { expect(r).toBeNull(); } finally { r?.(); }
+  });
+
+  // 审查（3a/3b 修完后的检查）：只认 pid 死了才算陈旧，被杀掉的更新留下的锁在 pid 被再用后永远拿不回来。
+  it('写着本进程 pid、却不是本进程拿的锁（之前同 pid 的进程留下的）被回收', () => {
+    writeFileSync(lockFile(), JSON.stringify({ pid: process.pid, at: Date.now() - 7 * 86_400_000 }), 'utf8');
+    const r = acquireUpdateLock();
+    expect(typeof r).toBe('function');
+    expect(acquireUpdateLock()).toBeNull(); // 本进程拿着的照旧算进行中
+    r!();
+    expect(existsSync(lockFile())).toBe(false);
+  });
+
+  it.runIf(process.platform === 'linux')('pid 还活着、但启动时间不是锁里记的（pid 被别的进程再用了）→ 回收', () => {
+    const start = processStart(process.ppid);
+    expect(start).toMatch(/^[\w-]+\/\d+$/);
+    writeFileSync(lockFile(), JSON.stringify({ pid: process.ppid, at: Date.now(), start }), 'utf8');
+    expect(acquireUpdateLock()).toBeNull(); // 同一个进程 → 还在用
+    writeFileSync(lockFile(), JSON.stringify({ pid: process.ppid, at: Date.now(), start: `${start}0` }), 'utf8');
+    const r = acquireUpdateLock();
+    expect(typeof r).toBe('function');
+    expect(JSON.parse(readFileSync(lockFile(), 'utf8'))).toMatchObject({ pid: process.pid, start: processStart(process.pid) });
+    r!();
+  });
+
+  it('release 只删一次：同一进程之后再拿的锁不被早先的 release 删掉', () => {
+    const r1 = acquireUpdateLock();
+    r1!();
+    const r2 = acquireUpdateLock();
+    expect(typeof r2).toBe('function');
+    r1!(); // 早先那把的第二次 release
+    expect(existsSync(lockFile())).toBe(true);
+    expect(acquireUpdateLock()).toBeNull();
+    r2!();
+    expect(existsSync(lockFile())).toBe(false);
+  });
+
+  it('读不出的锁（另一个进程刚建、还没写完）10 秒内不回收，之后回收', () => {
+    writeFileSync(lockFile(), '', 'utf8');
+    expect(acquireUpdateLock()).toBeNull();
+    const old = (Date.now() - 11_000) / 1000;
+    utimesSync(lockFile(), old, old);
+    const r = acquireUpdateLock();
+    expect(typeof r).toBe('function');
+    r!();
   });
 
   it('release 只删属于自己的锁：文件被换成别的 pid 时不误删', () => {
