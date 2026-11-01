@@ -163,6 +163,7 @@ Vonvon Bot 是一个 macOS 桌面应用（2026-10-28 起也有 Windows 桌面端
 - 定义文件都是 markdown 和 json，不进用户的代码仓库。只有角色设定（`SOUL.md`）主人可以直接用编辑器改；记忆条目库和项目表由 vonvon 读写，在桌面端改。主工作区（会话的 cwd）里的 `AGENTS.md`、`CLAUDE.md` 照旧由 agent 自己读；Claude 默认只在 cwd 和上级目录都没有 `CLAUDE.md` 时才读 `AGENTS.md`，按会话的开关能让它两份都读（Claude Code 2.1.296 实测，`docs/research/2026-10-16-bot-home/multi-workspace.md` 4.2、4.4）。其余工作区和代码仓库里的，两家默认都不读，vonvon 在指令里让 agent 先读（3.6）。
 - vonvon 不往工作区写任何文件。角色设定、名单和 bot 自己的 skill 都只在 `bots/<appId>/` 下，项目和项目记忆在 `library/` 下，都由 vonvon 交给会话（3.6）。所以工作区里已有的文件不会被覆盖，工作区只读也不影响 bot 记东西。
 - 会话照旧从工作区起，不从 bot 自己的目录起（owner 2026-10-16 定）。这样主工作区里的 `CLAUDE.md`、`AGENTS.md`、skill 和 MCP 由两家原生加载，Codex 一侧还要看 vonvon 传的信任设置（3.6）。原生加载只限主工作区：其余工作区和代码仓库在哪种做法下都是附加目录，那里的 MCP 和 `AGENTS.md` 两家都不加载，Claude 默认也不读那里的 `CLAUDE.md`，只加载 `.claude/skills`，Codex 连 skill 也不读（Claude Code 2.1.296、Codex 0.163.0 实测）。新群的主工作区默认是 vonvon 建的空目录，代码仓库作为附加目录接上（3.2，`docs/v1-plan.md` s36），所以默认情况下仓库自己的 `CLAUDE.md`、MCP 和 Codex 的 skill 都不会原生加载。从 bot 的目录起的话，连主工作区也成了附加目录；今天的代码里，只读档、能发哪些文件也只按会话目录判断。调研见 `docs/research/2026-10-16-bot-home/`。
+- 只装服务端时（3.10"只装服务端"），程序在数据目录之外：`~/.local/share/vonvon-bot/server/` 下 `releases/<版本>/` 每个版本一份（`app/`、自带的 `node/`、`standalone.json`），`current` 指向在用的那一版，`bin/vonvon` 是命令，它每次跟着 `current` 走。启动文件里加 PATH 的那几行和桌面端是同一段文本（`# >>> Vonvon Bot CLI >>>` 到 `# <<< Vonvon Bot CLI <<<`），只是路径指向安装根的 `bin`；卸载只去掉指向安装根的那一段。安装根整个删掉也不丢 Bot、记忆和设置，它们都在 `~/.vonvon-bot`。
 
 ### 3.4 群：智能模式和规则模式
 
@@ -729,11 +730,11 @@ owner 说过"崩溃报错就好了"，让 Claude 斟酌。自动重启是 Claude
 **只装服务端（Mac、Windows、Linux，0.9.0）。** 不装桌面端，只装服务端、`vonvon` 命令和登录后自动运行的后台服务，再用别的设备上的桌面端连过来管（3.14）。Linux 没有桌面端，这就是它的命令行版（0.7.0 没发 Linux 版，owner 2026-10-26；0.9.0 第一次发）。三个平台一个发行物，自带 Node，不发源码（压缩、不带 source map 和类型声明），和 Mac、Windows 安装包放在同一个 https://dl.vonvon.cc：
 1. 一条命令：Linux、macOS 用 `curl -fsSL https://dl.vonvon.cc/bot/server/install.sh | sh`，Windows 用 `irm https://dl.vonvon.cc/bot/server/install.ps1 | iex`。装在用户自己的目录里（Linux、macOS `~/.local/share/vonvon-bot/server/`，Windows `%LOCALAPPDATA%\VonvonBot\server\`），数据目录照旧是 `~/.vonvon-bot`。Windows 的 PATH 要重开窗口才生效，脚本会说。
 2. 不用 root（owner 2026-10-31）：脚本发现是 root 就停下，建议先建一个普通用户；坚持要用加 `VONVON_ALLOW_ROOT=1`，并打印风险。Linux 只支持 glibc 的发行版，Alpine 这类 musl 的脚本明说不支持。
-3. 脚本用签名清单里的哈希核对下载的包，有 openssl 3 时再验签名，没有就明说没验、信任根是 HTTPS 和 dl.vonvon.cc；然后执行 `vonvon service install --linger` 装后台服务（上面三个平台各自的做法）。没有 systemd（容器）、连不上这个账号的 systemd（用 sudo 切过来时常见）、Mac 没有图形登录（只 SSH 上去）时，退回直接启动一次，并说明崩溃后不会自动重启、之后怎么装成后台服务。
+3. 脚本用签名清单里的哈希核对下载的包，有 openssl 3 时再验签名，没有就明说没验、信任根是 HTTPS 和 dl.vonvon.cc；Windows 的脚本不验签名，只核对哈希（PowerShell 5.1 没有 Ed25519，用包里的 Node 验等于让包自己证明自己）；然后执行 `vonvon service install --linger` 装后台服务（上面三个平台各自的做法）。没有 systemd（容器）、连不上这个账号的 systemd（用 sudo 切过来时常见）、Mac 没有图形登录（只 SSH 上去）时，退回直接启动一次，并说明崩溃后不会自动重启、之后怎么装成后台服务。
 4. 装完不打印连接链接，只提示试一下 `vonvon --version`，要从别的电脑连过来管就看官网说明 https://vonvon.cc/guide/remote/；Mac、Windows 上多一行"请保持这个账号登录着（可以锁屏）"。
 5. 在那台设备上把 Codex 或 Claude 配置好（账号或自定义 API 都行，3.11），然后从别的设备连过来走首次运行清单（3.14）。不连也行：`vonvon bot add` 在终端里扫码建 bot，`vonvon bot status` 看清单各步，`vonvon group bind` 绑群，`vonvon settings get`、`set` 改设置。
 
-已经装过 Vonvon Bot 时（后台服务在跑、服务已注册、装了桌面端但没在跑也算，或者有桌面端注册的 `vonvon` 命令），脚本说已经装过、可以直接用，退出，什么都不动。`uninstall.sh`、`uninstall.ps1` 停服务、删服务定义和安装根，保留数据目录。从 npm 装（`npm i -g vonvon-bot`）照旧可以。升级见 3.14"升级和版本"。
+已经装过 Vonvon Bot 时（后台服务在跑、服务已注册、装了桌面端但没在跑也算，或者有桌面端注册的 `vonvon` 命令），脚本说已经装过、可以直接用，退出，什么都不动。`uninstall.sh`、`uninstall.ps1` 停服务、删服务定义、去掉 PATH 那几行、删安装根，保留数据目录；服务停不下来时什么文件都不删。从 npm 装（`npm i -g vonvon-bot`）照旧可以。升级见 3.14"升级和版本"。
 
 **和桌面端共存（0.9.0）。** 一台设备只跑一个服务端（同一把 pid 锁）。先跑安装脚本、再装桌面端：桌面端只连它；退出、卸载桌面端都不停它、不动它；登录项开关显示"由独立安装的服务端管理"，不能在桌面端里改；桌面端不改写它的 `vonvon`，显示"由服务端安装提供"；它比桌面端旧时，桌面端不替换它，只提示升级（3.14）。先装桌面端、再跑脚本：脚本按上一段跳过。两边共用一个 `vonvon` 命令名，版本看 `vonvon --version`。
 

@@ -1,6 +1,7 @@
 import { chmod, lstat, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
+import { CLI_PATH_BLOCK_BEGIN, CLI_PATH_BLOCK_END, shellStartupFiles, spliceBlock, startupBlock } from '@vonvon/protocol';
 import { classifyDistribution } from '../../daemon/src/service/distribution.js';
 
 export type CliRegistration = { kind: 'ready'; bin: string; message: string } | { kind: 'error'; message: string };
@@ -14,8 +15,6 @@ export interface CliRegistrationOptions {
 }
 
 const marker = 'Vonvon Bot managed CLI v1';
-const begin = '# >>> Vonvon Bot CLI >>>';
-const end = '# <<< Vonvon Bot CLI <<<';
 
 function quote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
@@ -30,10 +29,6 @@ function wrapperBody(options: CliRegistrationOptions, cli: string): string {
   return `#!/bin/sh\n# ${marker}\nELECTRON_RUN_AS_NODE=1; export ELECTRON_RUN_AS_NODE\nexec ${quote(options.executable)} ${quote(cli)} "$@"\n`;
 }
 
-function startupBlock(bin: string): string {
-  return `${begin}\n_vv_rest=$PATH\n_vv_path=\n_vv_first=1\nwhile :; do\n  case $_vv_rest in *:*) _vv_part=\${_vv_rest%%:*}; _vv_rest=\${_vv_rest#*:}; _vv_more=1 ;; *) _vv_part=$_vv_rest; _vv_more=0 ;; esac\n  if [ "$_vv_part" != ${quote(bin)} ]; then\n    if [ "$_vv_first" = 1 ]; then _vv_path=$_vv_part; _vv_first=0; else _vv_path=$_vv_path:$_vv_part; fi\n  fi\n  [ "$_vv_more" = 0 ] && break\ndone\nPATH=${quote(bin)}\${_vv_path:+:$_vv_path}; export PATH\nunset _vv_rest _vv_path _vv_first _vv_part _vv_more\n${end}\n`;
-}
-
 async function regularText(path: string): Promise<string | undefined> {
   try {
     const info = await lstat(path);
@@ -46,21 +41,19 @@ async function regularText(path: string): Promise<string | undefined> {
 }
 
 async function startupPaths(options: CliRegistrationOptions): Promise<string[]> {
-  const zsh = options.zdotdir ?? options.home;
-  let bash = '.profile';
-  for (const candidate of ['.bash_profile', '.bash_login', '.profile']) {
-    try { await lstat(join(options.home, candidate)); bash = candidate; break; }
-    catch (error) { if (!missing(error)) throw error; }
-  }
-  return [join(zsh, '.zshrc'), join(zsh, '.zprofile'), join(options.home, bash), join(options.home, '.bashrc')];
+  const exists = async (path: string): Promise<boolean> => {
+    try { await lstat(path); return true; }
+    catch (error) { if (missing(error)) return false; throw error; }
+  };
+  return shellStartupFiles(options.home, { ...(options.zdotdir ? { zdotdir: options.zdotdir } : {}), exists });
 }
 
+/** The server's install script writes the same block (protocol `cli-path-block`); a half-written one is not touched. */
 function updatedStartup(before: string, bin: string, path: string): string {
-  const start = before.indexOf(begin);
-  const finish = before.indexOf(end);
+  const start = before.indexOf(CLI_PATH_BLOCK_BEGIN);
+  const finish = before.indexOf(CLI_PATH_BLOCK_END);
   if ((start < 0) !== (finish < 0) || (start >= 0 && finish < start)) throw new Error(`CLI PATH 标记不完整：${path}`);
-  const without = start < 0 ? before : before.slice(0, start) + before.slice(finish + end.length).replace(/^\n/, '');
-  return `${without}${without && !without.endsWith('\n') ? '\n' : ''}${startupBlock(bin)}`;
+  return spliceBlock(before, startupBlock(bin));
 }
 
 async function validateDistribution(options: CliRegistrationOptions, cli: string): Promise<void> {
