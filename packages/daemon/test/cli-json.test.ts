@@ -12,8 +12,8 @@ import { loadCommands } from './helpers/cli-commands';
  * otherwise. No daemon runs and the data root is a temporary one, so the RPC commands answer 3 (or 2 for bad input).
  */
 const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
-  [['daemon', 'start', '--port', '70000'], 2], [['daemon', 'stop'], 0], [['daemon', 'status'], 0], [['daemon', 'logs'], 0],
-  [['service', 'install'], 1], [['service', 'uninstall'], 0], [['service', 'status'], 0],
+  [['daemon', 'start', '--port', '70000'], 2], [['daemon', 'stop'], 0], [['daemon', 'status'], 0], [['daemon', 'logs'], 0], [['daemon', 'logs', '--follow'], 3],
+  [['service', 'install'], 1], [['service', 'uninstall'], 0], [['service', 'status'], 0], [['service', 'skip'], 3],
   [['bot', 'add'], 3], [['bot', 'list'], 3], [['bot', 'status'], 3], [['bot', 'repair-dir', 'nope'], 1],
   [['bot', 'enable'], 3], [['bot', 'disable'], 3], [['bot', 'remove', 'x'], 3], [['bot', 'rescan'], 3],
   [['bot', 'callback', 'status'], 3], [['bot', 'callback', 'confirm'], 3], [['bot', 'callback', 'unconfirm'], 3],
@@ -35,7 +35,15 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['session', 'stop-subagent', 'x', '--group', 'g'], 3], [['session', 'reminder', '--on', '--group', 'g'], 3],
   [['usage', 'show'], 3], [['usage', 'share', '--group', 'g'], 3], [['usage', 'judge'], 3],
   [['feishu', 'groups'], 3], [['feishu', 'members', 'oc_x'], 3],
-  [['secrets', 'list'], 0], [['secrets', 'set', 'typesafe-api-key'], 2], [['secrets', 'remove', 'typesafe-api-key'], 0],
+  [['env', 'scan'], 3], [['env', 'install', 'codex'], 3], [['env', 'update', 'codex'], 3], [['env', 'uninstall', 'codex'], 3], [['env', 'login', 'lark-cli'], 3],
+  [['env', 'profile', 'list'], 3], [['env', 'profile', 'use', 'p'], 3], [['env', 'profile', 'add', 'p', '--app-id', 'cli_x'], 3], [['env', 'profile', 'init', 'p'], 3],
+  [['env', 'backend', 'list'], 3], [['env', 'backend', 'version', 'x'], 3], [['env', 'backend', 'install', 'x'], 3], [['env', 'backend', 'uninstall', 'x'], 3],
+  [['env', 'backend', 'check', 'x'], 3], [['env', 'cancel', 'install'], 3],
+  [['provider', 'models', 'codex'], 3],
+  [['secrets', 'list'], 0], [['secrets', 'set', 'typesafe-api-key'], 2], [['secrets', 'remove', 'typesafe-api-key'], 0], [['secrets', 'test', 'typesafe-api-key'], 3],
+  [['mcp', 'list', '--provider', 'codex'], 3], [['mcp', 'add', 'x', '--provider', 'codex', '--command', 'y'], 3], [['mcp', 'remove', 'x', '--provider', 'codex'], 3], [['mcp', 'add', 'x', '--provider', 'codex'], 2],
+  [['import', 'detect'], 3], [['import', 'preflight'], 3], [['import', 'start'], 3], [['import', 'status'], 3], [['import', 'rollback'], 3],
+  [['context', 'show', '--group', 'g'], 3], [['context', 'show'], 2], [['now'], 3], [['snapshot'], 3],
   // argument errors from commander itself
   [['nope'], 2], [['bot', 'list', '--nope'], 2], [['group'], 2],
 ];

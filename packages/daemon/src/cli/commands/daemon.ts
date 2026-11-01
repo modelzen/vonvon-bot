@@ -1,16 +1,19 @@
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { open } from 'node:fs/promises';
+import { ConnectionError, type VonvonClient } from '@vonvon/client';
 import { crashText } from '@vonvon/protocol';
 import { join } from 'node:path';
 import { paths } from '../../config/paths';
+import { inBotSession } from '../../config/session-env';
 import { readRecentLogs } from '../../core/logger';
 import { stopVerifiedOwner, verifyPidLockOwner } from '../../server/owner-verification';
 import { getPidLockInfo, isPidLockOwnerRunning, PidLockError, readRunningPidLock, type PidLockInfo } from '../../server/pid-lock';
 import { readStartupRegistration, startRegisteredDaemon } from '../../service/startup';
-import { readCrashSummary, removeResumeRequest, writeResumeRequest, type CrashRecord } from '../../host/crash-store';
+import { readCrashSummary, removeResumeRequest, writeResumeRequest, type CrashRecord, type CrashSummary } from '../../host/crash-store';
 import { CommandError } from '../command-error';
-import { localTime, want, withDaemon, type Daemon, type Io } from '../daemon-client';
+import { localTime, print, want, withDaemon, type Daemon, type Io } from '../daemon-client';
+import { interrupts, onSigint, type Interrupts, type OnInterrupt } from '../interrupt';
 
 export type DaemonStatus = { running: false } | {
   running: true;
@@ -164,26 +167,74 @@ function botNames(home: string): Map<string, string> {
     return new Map(bots.flatMap(bot => typeof bot.appId === 'string' && typeof bot.name === 'string' ? [[bot.appId, bot.name] as const] : []));
   } catch { return new Map(); }
 }
-const crashLine = (record: CrashRecord, names: Map<string, string>): string =>
+type CrashLine = Pick<CrashRecord, 'at' | 'scope' | 'appId' | 'kind' | 'reason' | 'uptimeMs' | 'paused'>;
+const crashLine = (record: CrashLine, names: Map<string, string>): string =>
   `  ${localTime(Date.parse(record.at))}  ${record.scope === 'host' ? 'daemon' : `bot ${names.get(record.appId ?? '') ?? record.appId ?? ''}`.trim()}  ${crashText(record)}`;
 
-export async function runStatus(json = false, home = paths.appDir, now: () => number = Date.now): Promise<void> {
-  const status = await daemonStatus(home);
-  const summary = readCrashSummary(home, { running: status.running, ...(status.running ? { ownerPid: status.pid } : {}), now: now() });
-  if (json) {
-    const crashes = summary.crashes.map(({ at, kind, scope, appId, version, uptimeMs, paused, reason }) => ({ at, kind, scope, ...(appId ? { appId } : {}), version, ...(uptimeMs !== undefined ? { uptimeMs } : {}), ...(paused ? { paused } : {}), reason }));
-    // devices 8.3: read from the files here; an answer over RPC (C8) will say `source: 'daemon'`.
-    process.stdout.write(`${JSON.stringify({ ok: true, ...status, source: 'files', ...(summary.paused ? { paused: summary.paused } : {}), pausedBots: summary.pausedBots, crashes })}\n`);
-    return;
+/** What `daemon status` prints besides the lock, in the files' shape (`readCrashSummary`) whoever answered. */
+type Summary = Omit<CrashSummary, 'crashes'> & { crashes: Array<CrashLine & { version?: string }> };
+const iso = (ms: number): string => new Date(ms).toISOString();
+const DISTRIBUTION: Record<string, string> = { standalone: 'standalone（安装脚本）', 'global-npm': 'npm', bundled: '桌面端', development: '开发目录' };
+
+export type StatusDeps = {
+  home: string; now: () => number; env: NodeJS.ProcessEnv;
+  /** daemon status --json is also how a client finds the daemon (`connectLocal`): asking it here would ask itself. */
+  daemon: Daemon;
+};
+const statusDeps = (): StatusDeps => ({ home: paths.appDir, now: Date.now, env: process.env, daemon: withDaemon });
+
+/**
+ * devices 8.3: a running daemon answers, with how it was installed and its data root (`source: 'daemon'`); otherwise
+ * the files do (`source: 'files'`). In a Bot's session nothing falls back to the files. Both shapes keep `running`,
+ * `pid` and `listen`, which `connectLocal` reads.
+ */
+export async function runStatus(io: Io, overrides: Partial<StatusDeps> = {}): Promise<void> {
+  const d = { ...statusDeps(), ...overrides };
+  const status = await daemonStatus(d.home);
+  const session = inBotSession(d.env);
+  if (d.env.VONVON_STATUS_FROM_FILES !== '1') {
+    if (!status.running && session) throw new CommandError('connection', 'daemon 没有运行。先运行 vonvon daemon start。');
+    if (status.running) {
+      try { await statusFromDaemon(status, io, d.daemon); return; }
+      catch (error) { if (session || !(error instanceof CommandError && error.kind === 'connection')) throw error; }
+    }
   }
-  const names = botNames(home);
+  const summary = readCrashSummary(d.home, { running: status.running, ...(status.running ? { ownerPid: status.pid } : {}), now: d.now() });
+  const crashes = summary.crashes.map(({ at, kind, scope, appId, version, uptimeMs, paused, reason }) => ({ at, kind, scope, ...(appId ? { appId } : {}), version, ...(uptimeMs !== undefined ? { uptimeMs } : {}), ...(paused ? { paused } : {}), reason }));
+  print(io, statusLines(status, summary, botNames(d.home)), { ...status, source: 'files', ...(summary.paused ? { paused: summary.paused } : {}), pausedBots: summary.pausedBots, crashes });
+}
+
+async function statusFromDaemon(status: RunningStatus, io: Io, daemon: Daemon): Promise<void> {
+  const { daemon: answer, application, agents } = await daemon(async call => {
+    const reply = want('读 daemon 状态', await call('读 daemon 状态', c => c.admin({ type: 'daemonStatus' })), 'daemonStatus');
+    const snapshot = await call('读取快照', c => c.snapshot());
+    return { daemon: reply.status, application: snapshot.application, agents: snapshot.agents };
+  });
+  const paused = application.crashes?.paused;
+  const summary: Summary = {
+    ...paused ? { paused: { since: iso(paused.since), crashes: paused.crashes, running: true } } : {},
+    pausedBots: agents.flatMap(agent => agent.paused ? [{ appId: agent.id, since: iso(agent.paused.since), crashes: agent.paused.crashes }] : []),
+    crashes: (application.crashes?.records ?? []).map(({ at, appId, ...record }) => ({ at: iso(at), scope: appId ? 'bot' as const : 'host' as const, ...appId ? { appId } : {}, ...record })),
+  };
+  const { distribution, uptimeMs, version, installed, supported, platformName, servicePath, stdoutPath, stderrPath } = answer;
+  const human = statusLines(status, summary, new Map(agents.map(agent => [agent.id, agent.name])));
+  if (distribution) human.push(`安装方式：${DISTRIBUTION[distribution.kind] ?? distribution.kind}`);
+  human.push(`数据目录：${application.dataPath}`);
+  print(io, human, {
+    ...status, version, source: 'daemon', ...summary.paused ? { paused: summary.paused } : {}, pausedBots: summary.pausedBots, crashes: summary.crashes,
+    ...distribution ? { distribution } : {}, dataPath: application.dataPath, platform: application.platform, ...uptimeMs === undefined ? {} : { uptimeMs },
+    service: { installed, supported, ...platformName ? { platformName } : {}, ...servicePath ? { servicePath, stdoutPath, stderrPath } : {} },
+  });
+}
+
+function statusLines(status: DaemonStatus, summary: Summary, names: Map<string, string>): string[] {
   const lines = [status.running ? `running PID ${status.pid} at ${status.listen}` : 'stopped'];
   if (summary.paused) lines.push((summary.paused.running ? PAUSED_RUNNING : PAUSED_STOPPED).replace('{n}', String(summary.paused.crashes)));
   if (summary.pausedBots.length) {
     lines.push(`已暂停的 Bot：${summary.pausedBots.map(bot => `${names.get(bot.appId) ?? bot.appId}（10 分钟内崩溃了 ${bot.crashes} 次）`).join('、')}。查完原因后在网页的状态与诊断页点「恢复运行」，或运行 vonvon daemon restart。`);
   }
   if (summary.crashes.length) lines.push('最近 24 小时的崩溃：', ...summary.crashes.map(record => crashLine(record, names)));
-  process.stdout.write(`${lines.join('\n')}\n`);
+  return lines;
 }
 
 export type RunningStatus = Extract<DaemonStatus, { running: true }>;
@@ -256,7 +307,106 @@ export async function runRestart(home = paths.appDir, d: RestartDeps = restartDe
   return { status: await waitForReplacement(home, before, d), outcome: wasPaused ? 'resumed' : 'restarted' };
 }
 
-export async function runLogs(tail: number, io: Io): Promise<void> {
-  const recent = await readRecentLogs({ maxBytes: Math.min(Math.max(tail * 200, 1024), 256 * 1024) });
+export type LogsDeps = {
+  env: NodeJS.ProcessEnv;
+  daemon: Daemon;
+  /** Without a daemon: today's and yesterday's log files. */
+  readFiles: (maxBytes: number) => Promise<string>;
+  onInterrupt: OnInterrupt;
+};
+const logsDeps = (): LogsDeps => ({ env: process.env, daemon: withDaemon, readFiles: maxBytes => readRecentLogs({ maxBytes }), onInterrupt: onSigint });
+/** --follow waits as long as the user does; a timer longer than this fires at once. */
+const FOREVER = 2_147_483_647;
+/** Logs keep tabs and line breaks; other control characters, which could drive the terminal, go. */
+// eslint-disable-next-line no-control-regex
+const clean = (text: string): string => text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '');
+export function lastLines(text: string, count: number): string {
+  const kept = (text.endsWith('\n') ? text.slice(0, -1) : text).split('\n').slice(-count).join('\n');
+  return kept ? `${kept}\n` : '';
+}
+/**
+ * The follower first sends the end of today's file again, up to 16 KB (server/logs.ts): what was printed already is
+ * not printed twice, whether that replay holds all of it (a short --tail) or starts inside it (a long one).
+ */
+export function afterPrinted(printed: string, lines: string): string {
+  if (!printed) return lines;
+  for (let at = lines.lastIndexOf(printed); at >= 0; at = at ? lines.lastIndexOf(printed, at - 1) : -1) {
+    if (at === 0 || lines[at - 1] === '\n') return lines.slice(at + printed.length);
+  }
+  for (let start = Math.max(0, printed.length - lines.length); start < printed.length; start++) {
+    if ((start === 0 || printed[start - 1] === '\n') && lines.startsWith(printed.slice(start))) return lines.slice(printed.length - start);
+  }
+  return lines;
+}
+
+const STOPPED = '不再跟日志。';
+
+/**
+ * `vonvon daemon logs` (devices 8.3): a running daemon reads its own logs (`admin.logs`), else the files are read. With
+ * --follow it then sends each new batch (`admin.followLogs`) until Ctrl-C (130) or the daemon stops (3); nothing falls
+ * back to the files then, nor in a Bot's session. With --follow, Ctrl-C from the first request on decides: 130.
+ */
+export async function runLogs(options: { tail: number; follow?: boolean | undefined }, io: Io, overrides: Partial<LogsDeps> = {}): Promise<void> {
+  const d = { ...logsDeps(), ...overrides };
+  try {
+    await d.daemon(async call => {
+      const ctrlC = options.follow ? interrupts(d.onInterrupt, () => new CommandError('interrupted', STOPPED)) : undefined;
+      try {
+        const maxBytes = Math.min(256 * 1024, Math.max(1024, options.tail * 400));
+        const read = call('读日志', c => c.admin({ type: 'logs', maxBytes }));
+        const text = lastLines(want('读日志', await (ctrlC ? ctrlC.until(read) : read), 'logs').text, options.tail);
+        if (!ctrlC) {
+          if (io.json) print(io, [], { source: 'daemon', text });
+          else io.write(clean(text));
+          return;
+        }
+        const write = (lines: string): void => { if (lines) io.write(io.json ? `${JSON.stringify({ event: 'log', lines })}\n` : clean(lines)); };
+        write(text);
+        const outcome = await call('跟日志', c => followLogs(c, ctrlC, text, write), { ms: FOREVER });
+        throw outcome === 'interrupted' ? new CommandError('interrupted', STOPPED) : new CommandError('connection', 'daemon 停了，日志跟不下去了。运行 vonvon daemon status 查看。');
+      } finally { ctrlC?.stop(); }
+    });
+    return;
+  } catch (error) {
+    if (options.follow || inBotSession(d.env) || !(error instanceof CommandError && error.kind === 'connection')) throw error;
+  }
+  const recent = await d.readFiles(Math.min(Math.max(options.tail * 200, 1024), 256 * 1024));
   io.write(io.json ? `${JSON.stringify({ ok: true, source: 'files', text: recent })}\n` : recent);
+}
+
+/**
+ * Prints each batch until Ctrl-C or the connection ends. After Ctrl-C the outcome is `interrupted` whatever comes next:
+ * it asks the daemon to stop sending, 1 s at most, and a second Ctrl-C, a dropped connection or a failed request ends
+ * that wait at once. The connection closes when the command ends either way.
+ */
+function followLogs(c: VonvonClient, ctrlC: Interrupts, printed: string, write: (lines: string) => void): Promise<'interrupted' | 'lost'> {
+  return new Promise((resolve, reject) => {
+    let first = true;
+    let settled = false;
+    const stops: Array<() => void> = [];
+    /** Without a failure, the connection ended, or Ctrl-C's wait did. */
+    const end = (failure?: { error: unknown }): void => {
+      if (settled) return;
+      settled = true;
+      for (const stop of stops.splice(0)) stop();
+      if (ctrlC.interrupted) resolve('interrupted');
+      else if (failure) reject(failure.error);
+      else resolve('lost');
+    };
+    stops.push(c.onLog(({ lines }) => {
+      if (settled || ctrlC.interrupted) return;
+      write(first ? afterPrinted(printed, lines) : lines);
+      first = false;
+    }));
+    stops.push(c.onError(error => { if (error instanceof ConnectionError) end(); }));
+    stops.push(ctrlC.on(count => {
+      if (count > 1) { end(); return; }
+      const timer = setTimeout(() => end(), 1000);
+      stops.push(() => { clearTimeout(timer); });
+      void c.admin({ type: 'followLogs', follow: false }).catch(() => undefined).then(() => end());
+    }));
+    c.admin({ type: 'followLogs', follow: true }).then(reply => {
+      if (reply.kind !== 'following') end({ error: new CommandError('failed', `跟日志没有开始：daemon 回了意外的结果（${reply.kind}）。`) });
+    }, (error: unknown) => end({ error }));
+  });
 }

@@ -9,7 +9,7 @@ import type { ServiceAdapter, ServiceTransactionOutcome } from '../../service/ad
 import { describeServiceExits } from '../../service/exits';
 import { enableFailed, enableLinger, lingerLine, readLinger, userManagerHint, type Linger } from '../../service/linux-session';
 import { CommandError, type CommandErrorKind } from '../command-error';
-import type { Io } from '../daemon-client';
+import { print, withDaemon, type Daemon, type Io } from '../daemon-client';
 
 const STATE_TEXT = {
   'not-installed': 'not installed', running: 'running', stopped: 'installed, stopped', disabled: 'turned off',
@@ -231,4 +231,13 @@ export async function runServiceStatus(json: boolean, adapter?: Pick<ServiceAdap
     `Definition: ${status.servicePath}`,
     `Logs: ${status.stdoutPath}, ${status.stderrPath}`,
   ].join('\n') + '\n');
+}
+
+const SKIP_UNKNOWN = '可能已经改了，运行 vonvon bot status 查看。';
+/** `vonvon service skip` (cli-8-machine): the checklist's 跳过登录时启动, `--undo` its 取消跳过; the daemon keeps the choice. */
+export async function runServiceSkip(skipped: boolean, io: Io, daemon: Daemon = withDaemon): Promise<void> {
+  const what = skipped ? '跳过登录时启动' : '取消跳过';
+  const reply = await daemon(call => call(what, c => c.machine({ type: 'setServiceSkipped', skipped }), { unknown: SKIP_UNKNOWN }));
+  if (reply.type !== 'done') throw new CommandError('failed', `${what}没有完成：daemon 回了意外的结果（${reply.type}）。`);
+  print(io, [reply.message], { skipped, message: reply.message });
 }

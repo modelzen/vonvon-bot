@@ -85,12 +85,13 @@ covers(daemon.command('restart'), 'command.restartHost').description('Restart th
   await show(options, [`running PID ${status.pid} at ${status.listen}`, ...note ? [note] : []], { ...status, outcome });
 });
 covers(daemon.command('status'), 'admin.daemonStatus').description('Show daemon status').option(...JSON_FLAG).action(async (options: Json) => {
-  await (await import('./commands/daemon')).runStatus(Boolean(options.json));
+  await (await import('./commands/daemon')).runStatus(io(options));
 });
-covers(daemon.command('logs'), 'machine.logs').description('Read recent daemon logs').option('--tail <lines>', 'Approximate line count', (value) => Number(value), 200).option(...JSON_FLAG)
-  .action(async (options: Json & { tail: number }) => {
+covers(daemon.command('logs'), 'admin.logs', 'admin.followLogs').description('Read recent daemon logs').option('--tail <lines>', 'Line count', (value) => Number(value), 200)
+  .option('--follow', 'Then print new lines as they come, until Ctrl-C; needs the daemon running').option(...JSON_FLAG)
+  .action(async (options: Json & { tail: number; follow?: boolean }) => {
     if (!Number.isInteger(options.tail) || options.tail < 1) throw badArgs('Invalid tail count.');
-    await (await import('./commands/daemon')).runLogs(options.tail, io(options));
+    await (await import('./commands/daemon')).runLogs(options, io(options));
   });
 program.command('open').description('Open the local web UI')
   .option('--print', '打印网页地址和 SSH 转发的办法，不打开浏览器（带凭据的链接只打印到终端）')
@@ -119,6 +120,11 @@ covers(service.command('uninstall'), 'machine.service.uninstall').description('S
 covers(service.command('status'), 'machine.status').description('Show the OS service and whether it runs the daemon').option(...JSON_FLAG).action(async (options: Json) => {
   await (await import('./commands/service')).runServiceStatus(Boolean(options.json));
 });
+covers(service.command('skip'), 'machine.setServiceSkipped').description("跳过登录时启动: the checklist stops asking to install the service; --undo asks again")
+  .option('--undo', '取消跳过').option(...JSON_FLAG)
+  .action(async (options: Json & { undo?: boolean }) => {
+    await (await import('./commands/service')).runServiceSkip(!options.undo, io(options));
+  });
 const BOT = ['--bot <bot>', 'Bot id (cli_…) or name'] as const;
 const bot = program.command('bot').description('Add, show and change bots through the running daemon');
 covers(bot.command('add'), 'command.registerAgent', 'command.cancelJob').description('Register a bot by scanning a QR code in this terminal')
@@ -370,6 +376,8 @@ covers(settingsAct.command('comment-instructions'), 'settings.act.commentInstruc
 covers(settings.command('models'), 'settings.models').description("List the models a settings page's model picker offers")
   .option('--backend <backend>', 'codex, claude, or an id like codex-appserver').option('--purpose <purpose>', 'project, session, comments, titles or judge')
   .option('--session <threadId>', 'Session thread id; needed for --purpose session').option(...BOT).option(...JSON_FLAG)
+  .addHelpText('after', `
+These are what a bot's model picker offers for one use; every model a Provider reports is vonvon provider models <codex|claude>.`)
   .action(async (options: Json & { bot?: string; backend?: string; purpose?: string; session?: string }) => {
     await (await import('./commands/settings')).runSettingsModels(options, io(options));
   });
@@ -454,6 +462,78 @@ covers(feishu.command('members <groupId>'), 'command.listGroupMembers').descript
   .action(async (groupId: string, options: Json & { bot?: string; cursor?: string }) => {
     await (await import('./commands/feishu')).runFeishu('members', groupId, options, io(options));
   });
+const env = program.command('env').description("This computer's tools and Provider components: the web page's 本机环境")
+  .addHelpText('after', `
+<tool> is codex, claude or lark-cli. vonvon signs in lark-cli only; Codex and Claude sign in with their own commands.
+
+Examples:
+  vonvon env scan
+  vonvon env install lark-cli
+  vonvon env login lark-cli
+  printf %s "$APP_SECRET" | vonvon env profile add 研发 --app-id cli_xxx --use
+  vonvon env backend install <id>          # ids: vonvon env backend list
+  vonvon env cancel install`);
+const JSON_LINES = ['--json', 'Print JSON Lines: the progress, then the result'] as const;
+const envCommands = () => import('./commands/env');
+covers(env.command('scan'), 'environment.scan', 'environment.authStatus').description('Show Codex, Claude and lark-cli: installed or not, the version, signed in or not').option(...JSON_FLAG)
+  .action(async (options: Json) => { await (await envCommands()).runEnvScan(io(options)); });
+for (const [name, update, description] of [['install', false, 'Install a managed copy of a tool'], ['update', true, 'Update the managed copy of a tool']] as const) {
+  covers(env.command(`${name} <tool>`), `environment.${name}`, 'environment.toolInstallStatus', 'environment.cancelInstall').description(`${description}, following it to the end (Ctrl-C cancels it)`).option(...JSON_LINES)
+    .action(async (tool: string, options: Json) => { await (await envCommands()).runEnvInstall(tool, update, io(options)); });
+}
+covers(env.command('uninstall <tool>'), 'environment.uninstall').description('Stop using the managed copy of a tool; other installs stay').option(...JSON_FLAG)
+  .action(async (tool: string, options: Json) => { await (await envCommands()).runEnvUninstall(tool, io(options)); });
+covers(env.command('login <tool>'), 'environment.startLogin', 'environment.loginStatus', 'environment.cancelLogin').description('Sign lark-cli in through the link it gives, following it to the end (Ctrl-C cancels it)').option(...JSON_LINES)
+  .action(async (tool: string, options: Json) => { await (await envCommands()).runEnvLogin(tool, io(options)); });
+const envProfile = env.command('profile').description("lark-cli's app profiles (应用配置)");
+covers(envProfile.command('list'), 'environment.profileList').description('List the profiles; * marks the one in use').option(...JSON_FLAG)
+  .action(async (options: Json) => { await (await envCommands()).runEnvProfileList(io(options)); });
+covers(envProfile.command('use <name>'), 'environment.profileUse').description('Use this profile from now on').option(...JSON_FLAG)
+  .action(async (name: string, options: Json) => { await (await envCommands()).runEnvProfileUse(name, io(options)); });
+covers(envProfile.command('add <name>'), 'environment.profileAdd').description("Add an existing app's profile; the App Secret is pasted at a hidden prompt, or piped in")
+  .requiredOption('--app-id <id>', "The app's id (cli_…)").option('--brand <brand>', 'feishu or lark', 'feishu').option('--use', 'Use it from now on').option(...JSON_FLAG)
+  .addHelpText('after', `
+The App Secret is never an argument: it would stay in the shell history.
+
+Examples:
+  vonvon env profile add 研发 --app-id cli_xxx
+  printf %s "$APP_SECRET" | vonvon env profile add 研发 --app-id cli_xxx --use   # 脚本里`)
+  .action(async (name: string, options: Json & { appId: string; brand?: string; use?: boolean }) => {
+    await (await envCommands()).runEnvProfileAdd(name, options, io(options));
+  });
+covers(envProfile.command('init [name]'), 'environment.profileInit', 'environment.profileInitStatus', 'environment.profileInitCancel')
+  .description('Make a new app through the link lark-cli gives, following it to the end (Ctrl-C cancels it); --status and --cancel need no name')
+  .option('--status', 'Show the app profile being made, or how the last one ended').option('--cancel', 'Cancel the app profile being made').option(...JSON_LINES)
+  .action(async (name: string | undefined, options: Json & { status?: boolean; cancel?: boolean }) => {
+    if (options.status && options.cancel) throw badArgs('--status 和 --cancel 只给一个。');
+    const commands = await envCommands();
+    if (options.status || options.cancel) {
+      if (name !== undefined) throw badArgs(`--${options.status ? 'status' : 'cancel'} 不带名字。`);
+      await commands.runEnvProfileInitState(options.status ? 'status' : 'cancel', io(options));
+    } else if (name === undefined) throw badArgs('要写新应用配置的名字，比如 vonvon env profile init 研发。');
+    else await commands.runEnvProfileInit(name, io(options));
+  });
+const envBackend = env.command('backend').description('The Provider components (组件) the bots run on');
+covers(envBackend.command('list'), 'environment.backendCatalog').description('List the components: installed or not, and which can be installed').option(...JSON_FLAG)
+  .action(async (options: Json) => { await (await envCommands()).runEnvBackendList(io(options)); });
+covers(envBackend.command('version <id>'), 'environment.backendVersion').description("Show a component's installed and latest version").option(...JSON_FLAG)
+  .action(async (id: string, options: Json) => { await (await envCommands()).runEnvBackendVersion(id, io(options)); });
+covers(envBackend.command('install <id>'), 'environment.backendInstall', 'environment.backendInstallStatus', 'environment.cancelBackendInstall')
+  .description('Install a component, printing its output as it comes (Ctrl-C cancels it)').option('--update', 'Update it instead').option('--json', 'Print JSON Lines: the output, then the result')
+  .action(async (id: string, options: Json & { update?: boolean }) => { await (await envCommands()).runEnvBackendInstall(id, Boolean(options.update), io(options)); });
+covers(envBackend.command('uninstall <id>'), 'environment.backendUninstall').description('Uninstall a component').option(...JSON_FLAG)
+  .action(async (id: string, options: Json) => { await (await envCommands()).runEnvBackendUninstall(id, io(options)); });
+covers(envBackend.command('check <id>'), 'environment.backendLogin').description("Check a component's sign-in (检查登录)").option('--refresh', 'Check again now (重新检测); without it the last check').option(...JSON_FLAG)
+  .action(async (id: string, options: Json & { refresh?: boolean }) => { await (await envCommands()).runEnvBackendCheck(id, Boolean(options.refresh), io(options)); });
+covers(env.command('cancel <what> [id]'), 'environment.cancelInstall', 'environment.cancelLogin', 'environment.cancelBackendInstall')
+  .description('Cancel what runs: install (a tool), login (lark-cli) or backend <id> (a component); an app profile: env profile init --cancel').option(...JSON_FLAG)
+  .action(async (what: string, id: string | undefined, options: Json) => { await (await envCommands()).runEnvCancel(what, id, io(options)); });
+const provider = program.command('provider').description('The Providers the bots run on: Codex and Claude');
+covers(provider.command('models <provider>'), 'collaboration.providerModels').description('List every model a Provider reports: codex or claude').option(...JSON_FLAG)
+  .addHelpText('after', `
+These are all the models the Provider itself reports. The ones a bot's model picker offers for one use are
+vonvon settings models --backend <codex|claude> --purpose <use>.`)
+  .action(async (name: string, options: Json) => { await (await import('./commands/provider')).runProviderModels(name, io(options)); });
 program.command('__daemon-control <action>', { hidden: true }).action(async (action: string) => {
   await (await import('./commands/daemon-control')).runDaemonControl(action);
 });
@@ -499,6 +579,51 @@ covers(secrets.command('remove <name>'), 'admin.removeSecret').description('删�
   .action(async (name: string, options: Json & { raw?: boolean }, command: Command) => {
     await (await import('./commands/secrets')).runSecretsRemove(name, command.args.slice(1), options, await secretsContext(options));
   });
+covers(secrets.command('test <name>'), 'admin.testSecret').description('试一次存着的 key：busy 说明 key 是对的，只是服务忙').option(...JSON_FLAG).allowUnknownOption()
+  .action(async (name: string, options: Json, command: Command) => {
+    await (await import('./commands/secrets')).runSecretsTest(name, command.args.slice(1), await secretsContext(options));
+  });
+
+const mcp = program.command('mcp').description("MCP servers in Codex's or Claude's own user configuration (the web page's 本机 → MCP)")
+  .addHelpText('after', `
+Examples:
+  vonvon mcp list --provider codex
+  vonvon mcp add github --provider codex --command npx --arg -y --arg github-mcp --env GITHUB_TOKEN   # 值取自这个终端的环境变量
+  vonvon mcp add docs --provider claude --url https://example.com/mcp --bearer-env DOCS_TOKEN
+  vonvon mcp remove github --provider codex`);
+const PROVIDER = ['--provider <provider>', 'codex or claude'] as const;
+const repeat = (value: string, previous: string[]): string[] => [...previous, value];
+type McpOptions = Json & { provider: string; command?: string; arg: string[]; env: string[]; url?: string; bearerEnv?: string };
+covers(mcp.command('list'), 'machine.mcp.list').description('List the servers: names, commands and the variables they read, never values').requiredOption(...PROVIDER).option(...JSON_FLAG)
+  .action(async (options: McpOptions) => { await (await import('./commands/mcp')).runMcp('list', undefined, options, io(options)); });
+covers(mcp.command('add <name>'), 'machine.mcp.add').description('Add a server: --command (with --arg, --env) or --url (with --bearer-env)').requiredOption(...PROVIDER)
+  .option('--command <command>', 'A local server: the command').option('--arg <arg>', 'One argument of --command; repeat, in order', repeat, [])
+  .option('--env <NAME=VALUE|NAME>', "A variable of --command; NAME alone takes this shell's value, so a key stays out of the arguments; repeat", repeat, [])
+  .option('--url <url>', 'A remote (http) server').option('--bearer-env <NAME>', 'The variable that holds the bearer token of --url; only its name is stored').option(...JSON_FLAG)
+  .action(async (name: string, options: McpOptions) => { await (await import('./commands/mcp')).runMcp('add', name, options, io(options)); });
+covers(mcp.command('remove <name>'), 'machine.mcp.remove').description('Remove a server').requiredOption(...PROVIDER).option(...JSON_FLAG)
+  .action(async (name: string, options: McpOptions) => { await (await import('./commands/mcp')).runMcp('remove', name, options, io(options)); });
+const bridgeImport = program.command('import').description("Bring the old Feishu Codex Bridge over, its bots, groups and settings (macOS; the web page's 从 Bridge 导入)");
+for (const [action, description] of [
+  ['detect', 'Look for the old bridge on this computer'], ['preflight', 'Check it and list what an import changes'], ['status', 'Show the import going on or the last one'],
+] as const) {
+  covers(bridgeImport.command(action), `machine.bridgeImport.${action}`).description(description).option(...JSON_FLAG)
+    .action(async (options: Json) => { await (await import('./commands/import')).runImportRead(action, io(options)); });
+}
+covers(bridgeImport.command('start'), 'machine.bridgeImport.start', 'machine.bridgeImport.status').description('Import, after reading what changes; stops the old bridge. Without --accept it only lists the changes')
+  .option('--accept', 'Import: you read the changes').option('--json', 'Print JSON Lines: each step, then the result')
+  .action(async (options: Json & { accept?: boolean }) => { await (await import('./commands/import')).runImportStart(Boolean(options.accept), io(options)); });
+covers(bridgeImport.command('rollback'), 'machine.bridgeImport.rollback').description('Undo an import that did not finish, or retry a rollback that failed').option('--json', 'Print JSON Lines: each step, then the result')
+  .action(async (options: Json) => { await (await import('./commands/import')).runImportRollback(io(options)); });
+const context = program.command('context').description("What the model is handed (the web page's 模型看到什么)");
+covers(context.command('show'), 'contextPreview.get').description("vonvon's own parts a new session would get, and what the session was last handed")
+  .option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--comment', 'Document comments instead of a group')
+  .option('--session <threadId>', "Which session; defaults to the group's latest").option(...JSON_FLAG)
+  .action(async (options: Json & { bot?: string; group?: string; comment?: boolean; session?: string }) => { await (await import('./commands/context')).runContextShow(options, io(options)); });
+covers(program.command('now'), 'snapshot.get').description("What each bot is doing now and which groups it attends to (the web page's 此刻)").option(...BOT).option(...JSON_FLAG)
+  .action(async (options: Json & { bot?: string }) => { await (await import('./commands/now')).runNow(options.bot, io(options)); });
+covers(program.command('snapshot'), 'snapshot.get').description("The web page's whole state: a summary, or all of it with --json").option(...JSON_FLAG)
+  .action(async (options: Json) => { await (await import('./commands/now')).runSnapshot(io(options)); });
 
 /**
  * Exits once the JSON line, and whatever was written before it, is out: process.exit would cut a pipe's pending output

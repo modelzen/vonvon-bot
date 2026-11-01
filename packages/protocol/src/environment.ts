@@ -5,6 +5,12 @@ export const environmentToolSchema = z.enum(["codex", "claude", "lark-cli"]);
 export type EnvironmentTool = z.infer<typeof environmentToolSchema>;
 const name = z.string().trim().min(1).max(128).regex(/^[^\x00-\x1f]+$/);
 const operationId = z.string().uuid();
+/**
+ * Optional on the requests that start a tool or component install (cli-7-environment): the caller's own id for this one
+ * request, kept on the operation it starts and shown in that operation's state, so a caller can tell its own operation
+ * from another caller's. A daemon from before it refuses the field (strict schema); one that has it echoes it.
+ */
+const requestId = z.string().uuid().optional();
 // These messages travel in the existing install output and survive status replay.
 export const backendInstallProgress = {
   installing: '\n正在下载并安装组件…\n',
@@ -21,13 +27,13 @@ export const environmentRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("scan") }).strict(),
   z.object({ type: z.literal("backendCatalog") }).strict(),
   z.object({ type: z.literal("backendVersion"), id: z.string().regex(/^[a-z0-9-]{1,80}$/) }).strict(),
-  z.object({ type: z.literal("backendInstall"), id: z.string().regex(/^[a-z0-9-]{1,80}$/), update: z.boolean() }).strict(),
+  z.object({ type: z.literal("backendInstall"), id: z.string().regex(/^[a-z0-9-]{1,80}$/), update: z.boolean(), requestId }).strict(),
   z.object({ type: z.literal("backendInstallStatus"), id: z.string().regex(/^[a-z0-9-]{1,80}$/) }).strict(),
   z.object({ type: z.literal("cancelBackendInstall"), operationId }).strict(),
   z.object({ type: z.literal("backendUninstall"), id: z.string().regex(/^[a-z0-9-]{1,80}$/) }).strict(),
   z.object({ type: z.literal("backendLogin"), id: z.string().regex(/^[a-z0-9-]{1,80}$/), refresh: z.boolean() }).strict(),
-  z.object({ type: z.literal("install"), tool: environmentToolSchema }).strict(),
-  z.object({ type: z.literal("update"), tool: environmentToolSchema }).strict(),
+  z.object({ type: z.literal("install"), tool: environmentToolSchema, requestId }).strict(),
+  z.object({ type: z.literal("update"), tool: environmentToolSchema, requestId }).strict(),
   z.object({ type: z.literal("toolInstallStatus") }).strict(),
   z.object({ type: z.literal("cancelInstall"), operationId }).strict(),
   z.object({ type: z.literal("uninstall"), tool: environmentToolSchema }).strict(),
@@ -88,13 +94,15 @@ export const environmentOperationSchema = z.union([
   z.object({kind:z.enum(["succeeded", "failed", "cancelled", "timedOut"]), id:z.string(), message:z.string()}),
 ]);
 export type EnvironmentOperation = z.infer<typeof environmentOperationSchema>;
+/** `requestId`: the one its starting request carried; absent when that request had none, or from a daemon from before it. */
+const echoedRequestId = z.string().max(64).optional();
 export const toolInstallOperationSchema = z.union([
-  z.object({kind:z.literal("running"), id:z.string(), tool:environmentToolSchema, update:z.boolean(), startedAt:z.number()}),
-  z.object({kind:z.enum(["succeeded", "failed", "cancelled"]), id:z.string(), message:z.string()}),
+  z.object({kind:z.literal("running"), id:z.string(), tool:environmentToolSchema, update:z.boolean(), startedAt:z.number(), requestId:echoedRequestId}),
+  z.object({kind:z.enum(["succeeded", "failed", "cancelled"]), id:z.string(), message:z.string(), requestId:echoedRequestId}),
 ]);
 export type ToolInstallOperation = z.infer<typeof toolInstallOperationSchema>;
 export const backendInstallStatusSchema = z.object({
-  operationId, id: z.string(), update: z.boolean(),
+  operationId, id: z.string(), update: z.boolean(), requestId: echoedRequestId,
   state: z.enum(["running", "succeeded", "failed", "cancelled"]),
   replay: z.array(backendInstallItemSchema),
   omittedBytes: z.number().int().nonnegative(),
