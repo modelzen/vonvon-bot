@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest';
-import type { VonvonClient } from '@vonvon/client';
+import { ConnectionError, type VonvonClient } from '@vonvon/client';
 import type { BridgeImportReply, BridgeImportStep, BridgeImportView, BridgePreflight, MachineRequest } from '@vonvon/protocol';
+import { commandFailure } from '../src/cli/command-error';
 import { withDaemon, type Daemon } from '../src/cli/daemon-client';
 import { runImportRead, runImportRollback, runImportStart, type ImportDeps } from '../src/cli/commands/import';
 
@@ -13,16 +14,35 @@ const preflight = (canImport = true): BridgePreflight => ({
 const view = (step: BridgeImportStep, extra: Partial<BridgeImportView> = {}): BridgeImportView => ({ txId: 't1', step, bots: [{ appId: 'cli_a', name: '小助手' }], notes: [], cleanupPending: false, canRollback: false, ...extra });
 const reply = (extra: Partial<BridgeImportReply> = {}): BridgeImportReply => ({ type: 'bridgeImport', detection: { kind: 'found', message: '发现飞书 Codex Bridge。' }, preflight: null, view: null, ...extra });
 type Request = Extract<MachineRequest, { type: 'bridgeImport' }>;
-function harness(answer: (request: Request) => BridgeImportReply) {
-  const machine = vi.fn(async (request: Request) => answer(request));
-  const close = vi.fn(async () => {});
-  const daemon: Daemon = fn => withDaemon(fn, async () => ({ machine, close }) as unknown as VonvonClient, { local: 50, feishu: 50 });
+/** The daemon's 30 s: a Ctrl-C test that waits for it fails in `within`. */
+const SLOW = { local: 30_000, feishu: 30_000 };
+function harness(answer: (request: Request) => BridgeImportReply | Promise<BridgeImportReply>, timeouts = { local: 50, feishu: 50 }) {
+  const waiting = new Set<(error: Error) => void>();
+  const machine = vi.fn((request: Request) => new Promise<BridgeImportReply>((resolve, reject) => {
+    waiting.add(reject);
+    void Promise.resolve().then(() => answer(request)).then(resolve, reject).finally(() => waiting.delete(reject));
+  }));
+  // As the real client: closing fails the requests still out.
+  const close = vi.fn(async () => { for (const fail of waiting) fail(new Error('Daemon connection closed')); });
+  const daemon: Daemon = fn => withDaemon(fn, async () => ({ machine, close }) as unknown as VonvonClient, timeouts);
   let out = '';
+  let handlers = 0;
   let interrupt = (): void => {};
-  const deps: Partial<ImportDeps> = { daemon, pause: async () => {}, onInterrupt: handler => { interrupt = handler; return () => { interrupt = () => {}; }; } };
-  return { machine, close, daemon, deps, interrupt: () => interrupt(), sent: () => machine.mock.calls.map(([call]) => call), io: (json = false) => ({ json, write: (text: string) => { out += text; } }), out: () => out };
+  const deps: Partial<ImportDeps> = { daemon, pause: async () => {}, onInterrupt: handler => { handlers++; interrupt = handler; return () => { handlers--; interrupt = () => {}; }; } };
+  return {
+    machine, close, daemon, deps, interrupt: () => interrupt(), handlers: () => handlers, sent: () => machine.mock.calls.map(([call]) => call),
+    io: (json = false) => ({ json, write: (text: string) => { out += text; } }), out: () => out,
+  };
 }
 const caught = (promise: Promise<unknown>) => promise.then(() => { throw new Error('resolved'); }, (error: unknown) => error as { kind: string; message: string; reason?: string; partial?: Record<string, unknown> });
+/** `promise`, unless it takes a second. */
+async function within<T>(promise: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try { return await Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('still waiting after 1 s')), 1000); })]); }
+  finally { clearTimeout(timer); }
+}
+const BACKGROUND = '导入在后台继续，运行 vonvon import status 查看。';
+const never = (): Promise<never> => new Promise(() => {});
 /** A daemon whose status walks through `steps`, one per read. */
 function walking(steps: BridgeImportStep[], first: Partial<BridgeImportReply> = {}) {
   const queue = [...steps];
@@ -72,8 +92,45 @@ it('import start leaves the import running on Ctrl-C (130) and sends nothing mor
   let reads = 0;
   h.deps.pause = async () => { if (++reads === 2) h.interrupt(); };
   const error = await caught(runImportStart(true, h.io(), h.deps));
-  expect(error).toMatchObject({ kind: 'interrupted', message: '导入在后台继续，运行 vonvon import status 查看。' });
+  expect(error).toMatchObject({ kind: 'interrupted', message: BACKGROUND });
   expect(h.sent().map(call => call.action)).toEqual(['start', 'status']);
+});
+
+// 审查后（任务 203）: the Ctrl-C handler came only after the first reply, so a Ctrl-C before it was Node's own (no JSON line)
+it('import start and rollback: Ctrl-C before the first reply ends at once with 130 and the background note', async () => {
+  for (const action of ['start', 'rollback'] as const) {
+    const h = harness(request => request.action === action ? never() : reply({ view: view('rollback-failed', { canRollback: true }) }), SLOW);
+    const run = caught(action === 'start' ? runImportStart(true, h.io(true), h.deps) : runImportRollback(h.io(true), h.deps));
+    await vi.waitFor(() => expect(h.sent().at(-1)?.action).toBe(action));
+    expect(h.handlers()).toBe(1);
+    h.interrupt();
+    const error = await within(run);
+    expect(error).toMatchObject({ kind: 'interrupted', message: BACKGROUND });
+    expect(commandFailure(error)).toEqual({ ok: false, error: { kind: 'interrupted', message: BACKGROUND }, exitCode: 130 });
+    expect(h.out()).toBe('');
+    expect(h.sent().at(-1)?.action).toBe(action);
+    // the handler is gone, so a second Ctrl-C, while the connection closes, is Node's own and exits
+    expect(h.handlers()).toBe(0);
+    expect(h.close).toHaveBeenCalled();
+  }
+});
+
+// 审查后（任务 203）: Ctrl-C during a status read only set a flag; the read's failure then won (3), or a silent daemon was waited for
+it('import start: Ctrl-C while a status read is out stays 130 when the connection then drops, the read times out or the daemon stays silent', async () => {
+  for (const [after, timeouts] of [['drop', SLOW], ['time out', undefined], ['stay silent', SLOW]] as const) {
+    let fail = (_error: Error): void => {};
+    const status = new Promise<never>((_, reject) => { fail = reject; });
+    const h = harness(request => request.action === 'start' ? reply({ view: view('staging') }) : status, timeouts);
+    const run = caught(runImportStart(true, h.io(true), h.deps));
+    await vi.waitFor(() => expect(h.sent().map(call => call.action)).toEqual(['start', 'status']));
+    h.interrupt();
+    if (after === 'drop') fail(new ConnectionError(new Error('closed')));
+    const error = await within(run);
+    expect(error, after).toMatchObject({ kind: 'interrupted', message: BACKGROUND });
+    expect(h.out()).toBe(`${JSON.stringify({ event: 'step', step: 'staging' })}\n`);
+    expect(h.handlers()).toBe(0);
+    expect(h.sent()).toHaveLength(2);
+  }
 });
 
 // main 必败: there was no import detect / status / rollback

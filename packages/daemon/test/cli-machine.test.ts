@@ -94,17 +94,30 @@ describe('daemon status', () => {
 
 describe('daemon logs', () => {
   const text = Array.from({ length: 80 }, (_, i) => `line ${i}`).join('\n') + '\n';
-  /** A daemon whose logs are `text`; `emit` pushes a log event, `drop` closes the connection. */
-  function logs() {
+  /**
+   * A daemon whose logs are `text`; `emit` pushes a log event, `drop` closes the connection. `silent` requests get no
+   * reply, unless `fail` fails them; `listening` counts the client listeners and Ctrl-C handlers still on.
+   */
+  function logs(silent: (request: AdminRequest) => boolean = () => false) {
     let log: ((payload: { lines: string }) => void) | undefined;
     let error: ((error: Error) => void) | undefined;
-    const admin = vi.fn(async (request: AdminRequest): Promise<AdminReply> => request.type === 'logs' ? { kind: 'logs', text } : { kind: 'following', follow: request.type === 'followLogs' && request.follow });
+    const waiting: Array<(error: Error) => void> = [];
+    const admin = vi.fn((request: AdminRequest): Promise<AdminReply> => silent(request) ? new Promise((_, reject) => { waiting.push(reject); })
+      : Promise.resolve(request.type === 'logs' ? { kind: 'logs', text } : { kind: 'following', follow: request.type === 'followLogs' && request.follow }));
     const h = harness({ admin, onLog: ((listener: typeof log) => { log = listener; return () => { log = undefined; }; }) as never, onError: ((listener: typeof error) => { error = listener; return () => { error = undefined; }; }) as never });
+    let handlers = 0;
     let interrupt = (): void => {};
     const readFiles = vi.fn(async () => 'from files\n');
-    const deps = { daemon: h.daemon, env: {}, readFiles, onInterrupt: (handler: () => void) => { interrupt = handler; return () => { interrupt = () => {}; }; } };
-    return { ...h, admin, readFiles, deps, emit: (lines: string) => log?.({ lines }), drop: () => error?.(new ConnectionError(new Error('closed'))), interrupt: () => interrupt() };
+    const deps = { daemon: h.daemon, env: {}, readFiles, onInterrupt: (handler: () => void) => { handlers++; interrupt = handler; return () => { handlers--; interrupt = () => {}; }; } };
+    return {
+      ...h, admin, readFiles, deps, emit: (lines: string) => log?.({ lines }), drop: () => error?.(new ConnectionError(new Error('closed'))), interrupt: () => interrupt(),
+      listening: () => handlers + Number(log !== undefined) + Number(error !== undefined),
+      fail: (failure: Error) => { for (const reject of waiting.splice(0)) reject(failure); },
+    };
   }
+  const stopSending = (request: AdminRequest): boolean => request.type === 'followLogs' && !request.follow;
+  /** Lets every reply already given arrive; the timers are fake in the Ctrl-C tests, so only these run. */
+  const settled = <T>(run: Promise<T>): Promise<T | 'still waiting'> => Promise.race([run, new Promise<'still waiting'>(resolve => { setImmediate(() => resolve('still waiting')); })]);
 
   it('keeps the last lines, and skips what the follower sends again', () => {
     expect(lastLines('a\nb\nc\n', 2)).toBe('b\nc\n');
@@ -149,6 +162,54 @@ describe('daemon logs', () => {
       { event: 'log', lines: 'line 78\nline 79\n' }, { event: 'log', lines: 'line 80\n' }, { event: 'log', lines: 'line 81\n' },
     ]);
     expect(h.close).toHaveBeenCalled();
+  });
+
+  // 审查后（任务 203）: Ctrl-C did not decide the outcome; a dropped connection while it stopped sending ended it with 3
+  it('--follow: after Ctrl-C a dropped connection or a failed request still ends with 130, at once and with nothing left on', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      for (const after of ['drop', 'fail'] as const) {
+        const h = logs(after === 'drop' ? stopSending : request => stopSending(request) || request.type === 'followLogs');
+        const run = caught(runLogs({ tail: 1, follow: true }, h.io(true), h.deps));
+        expect(await settled(run)).toBe('still waiting');
+        expect(h.admin).toHaveBeenCalledWith({ type: 'followLogs', follow: true });
+        h.interrupt();
+        expect(h.admin).toHaveBeenLastCalledWith({ type: 'followLogs', follow: false });
+        h.emit('line 81\n');
+        if (after === 'drop') h.drop();
+        else h.fail(new ConnectionError(new Error('closed'))); // the requests out fail instead
+        expect(await settled(run), after).toMatchObject({ kind: 'interrupted', message: '不再跟日志。' });
+        expect(h.out()).toBe(`${JSON.stringify({ event: 'log', lines: 'line 79\n' })}\n`);
+        expect(h.listening()).toBe(0);
+        expect(vi.getTimerCount()).toBe(0);
+      }
+    } finally { vi.useRealTimers(); }
+  });
+
+  // 审查后（任务 203）: a second Ctrl-C waited for the first one's second, and Ctrl-C during the first read was Node's own
+  it('--follow: a second Ctrl-C ends at once, and Ctrl-C during the first read is 130 too', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const h = logs(stopSending);
+      const run = caught(runLogs({ tail: 1, follow: true }, h.io(), h.deps));
+      expect(await settled(run)).toBe('still waiting');
+      h.interrupt();
+      expect(await settled(run)).toBe('still waiting'); // the first one waits up to 1 s for the daemon to stop sending
+      h.interrupt();
+      expect(await settled(run)).toMatchObject({ kind: 'interrupted' });
+      expect(h.admin.mock.calls.filter(([request]) => stopSending(request))).toHaveLength(1);
+      expect(h.listening()).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+
+      const reading = logs(request => request.type === 'logs');
+      const early = caught(runLogs({ tail: 1, follow: true }, reading.io(true), reading.deps));
+      expect(await settled(early)).toBe('still waiting');
+      reading.interrupt();
+      expect(await settled(early)).toMatchObject({ kind: 'interrupted', message: '不再跟日志。' });
+      expect(reading.admin.mock.calls.map(([request]) => request.type)).toEqual(['logs']);
+      expect(reading.out()).toBe('');
+      expect(reading.listening()).toBe(0);
+    } finally { vi.useRealTimers(); }
   });
 
   // main 必败: there was no --follow
