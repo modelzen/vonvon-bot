@@ -2,7 +2,7 @@
 
 总设计见 `docs/plans/devices.md`（下文简称"设计"）4.5、6.4、6.5、7.4、第 15 节、第 19 节"Windows 的平台名"，本片对应第 13 节的 U2 行。单独一个 PR，分支 `claude/devices-ui-2-remote-mode`，从集成分支开、PR 回集成分支。产品行为以 `docs/product.md` 3.1、3.8、3.10、3.14 为准。
 
-缩写同 D1：`P/`、`CL/`、`D/`、`DT/`、`U/` 分别是 protocol、client、daemon、desktop、ui 的 `src/`。行号以 `origin/claude/devices-integration`（8051b03c，代码和 413d78d5 相同）为准；D1 的代码以 `origin/claude/devices-1-identity`（911dd2c4）为准，I3 的以 `origin/claude/server-3-update-engine`（4aca3777）为准，文中写明"D1 分支""I3 分支"。U1a、U1b 的接口以 `devices-ui-1a-connections.md`、`devices-ui-1b-devices-page.md` 为准。
+缩写同 D1：`P/`、`CL/`、`D/`、`DT/`、`U/` 分别是 protocol、client、daemon、desktop、ui 的 `src/`。行号以 `origin/claude/devices-integration`（8051b03c，代码和 413d78d5 相同）为准；D1 的代码以 `origin/claude/devices-1-identity`（e8bbe267）为准，I3 的以 `origin/claude/server-3-update-engine`（4aca3777）为准，文中写明"D1 分支""I3 分支"。U1a、U1b 的接口以 `devices-ui-1a-connections.md`、`devices-ui-1b-devices-page.md` 为准。
 
 ## 1. 做什么
 
@@ -45,7 +45,8 @@
   - `D/server/jobs.ts`、`D/server/rpc/command.ts`、`D/admin/service.ts`、`D/agent/codex-appserver/setup.ts` 的删除；
   - 完全访问警示：`D/agent/permission/types.ts`、`D/admin/settings.ts`、`D/agent/entry/command-tools.ts`、`D/card/dm-cards.ts`、`D/bot/handle-message.ts`；
   - `D/cli/commands/settings.ts`、`D/cli/commands/env.ts`；
-  - serverInfo 的 `update.*` 能力（4.11）。
+  - serverInfo 的 `update.*` 能力（4.11）；
+  - `D/server/ws.ts` 的 `send`：维护连接不发 `snapshot` 事件（4.5；D4a 先合入就不做）。
 - protocol：`P/domain.ts`、`P/settings.ts`、`scripts/verify-built.mjs`。
 - desktop：`DT/quit-daemon.ts`、`DT/main.ts`、`DT/bridge.ts`、`DT/daemon-manager.ts`、`DT/daemon-dependencies.ts`、`DT/login-item.ts`。
 - 文档：设计 6.3、6.4、第 15 节的几处（已在本计划的 PR 里改，第 7 节）。
@@ -71,7 +72,7 @@
   - `UpdatePanel` 的 `device` 用 `deviceTitle(snapshot.application.platform)`（`U/setup/service-toggle.tsx:37-39`），版本取快照。远程时快照是对面的，所以今天切过去这张卡会把对面的版本当成"这台电脑上的应用"的版本。
   - "启动选项"的页脚（909）写"选择退出会停止后台和所有 Bot"；`MachinePanel` 页脚（`U/management/MachinePanel.tsx:77`）和确认框（104）同样。
   - `MachinePanel` 的"启动 daemon"（71）、"启动服务"（82）、"仅运行此 Bot"（92）靠 `shell.startHost`、`shell.service`。远程时 `shellForDevice` 已经去掉这两项（U1a 4.7），按钮是灰的，但还在。
-  - `LoginServiceRow`（`service-toggle.tsx:42-51`）只在 `platform === 'macos'` 时显示，开关走 `toggleService`（14-29）：有 `shell.setLoginItem` 就走外壳，没有就发 `machine.service install/uninstall`。远程时外壳那项被去掉，正好走 daemon。
+  - `LoginServiceRow`（`service-toggle.tsx:42-51`）只在 `platform === 'macos'` 时显示，开关走 `toggleService`（14-29）：有 `shell.setLoginItem` 就走外壳，没有就发 `machine.service install/uninstall`。远程时外壳那项被去掉，于是发 `machine.service`。可这一条今天到不了对面：bridge 的 `machine` 通道在转发之前就用 `desktopShellRequestSchema` 把 `service` 拦成 `Shell-owned machine action`（D1 分支 `DT/bridge.ts:251-253`）。U1a 4.5 改成远程时放行（本片 4.6）。
 - **平台。** 快照的 `application.platform` 是 `macos | linux | unsupported`（`P/domain.ts:267`）。D1 分支把平台判定提成 `hostPlatform()`（D1 分支 `D/server/snapshot.ts:31`），serverInfo 也用它，win32 仍判成 `unsupported`。界面里用到它的地方：
   - 按平台取值的完整 Record 只有 `U/setup/service-toggle.tsx:37` 的 `DEVICE_TITLE`（加一个值就编不过）；`SetupChecklist.tsx:15` 的 `SERVICE_FOOTER` 是 `Partial`；
   - 其余都是和 `'macos'`、`'linux'` 比相等：`App.tsx:906,909`、`SetupChecklist.tsx:88,96`、`setup/BridgeImportPanel.tsx:102,110`、`service-toggle.tsx:43`。`windows` 自然落进"不是 macOS"那一支。
@@ -162,7 +163,7 @@ export const whereName: (where: Where) => string;
 | `D/admin/ops.ts:145` | 环境探测失败（未安装或未登录） | 环境探测失败（没装或没配置好） |
 | `D/admin/service.ts:1059-1060` | 「X」的登录在它自己的设置里看。/ 无法确认登录状态，请重新检测。 | 「X」的配置在它自己的设置里看。/ 无法确认配置，请重新检测。 |
 | `D/admin/service.ts:1265` | 环境探测失败（未安装、未登录或探测超时） | 环境探测失败（没装、没配置好或探测超时） |
-| `D/cli/commands/env.ts:98-103` | 登录状态查不到 / 已登录 / 登录状态不确定 / 没登录：在终端里运行 codex login | 配置状态查不到 / 可用 / 确认不了：… / 没配置好：在终端里运行 `codex` 或 `claude` 配置（账号或自定义 API 都行）。lark-cli 那一行（102）不动 |
+| `D/cli/commands/env.ts:97-104` 的 `authText` | 登录状态查不到 / 已登录 / 登录状态不确定：… / 没登录：在终端里运行 codex login（Claude 是"claude 登录"） | 只改 Codex、Claude 那一路：配置状态查不到 / 可用 / 确认不了：… / 没配置好：在终端里运行 `codex` 或 `claude` 配置（账号或自定义 API 都行）。这个函数 lark-cli 也在用（102 行），而 lark-cli 确实要登录飞书：函数开头先按 `tool.tool === 'lark-cli'` 分出去，lark-cli 的四种输出一字不改 |
 | `D/cli/commands/env.ts:495` | `LOGIN_STATE` | 可用 / 没配置好 / 可用 / 确认不了 |
 
 `login.ts:29` 的"已登录 claude.ai 账号（<套餐>）"是在说明实际用的账号，保留。`jobs.ts:117` 随 4.9 删掉。
@@ -183,7 +184,8 @@ export const whereName: (where: Where) => string;
 **daemon，放开家目录限制**（设计 6.4，owner 2026-10-31）：
 - `directory-browser.ts`：
   - 删 `contained`（20-23）和 28 行的调用。
-  - 加 `expand(path)`：`'~'` 或 `'~/'`、`'~\\'` 开头时接到 `root` 上，其余原样。
+  - `list`、`choose` 收到的路径先过 `expandHome(path, root)`（`D/platform/home-path.ts`，判断用同一个文件的 `isHomeRelative`）：`~`、`~/…`，以及 Windows 上的 `~\…`，接到家目录上，其余原样。不另写一份：`directory-suggestions.ts` 已经按 `isHomeRelative` 的规则认 `~`（它的注释写着两边要一样），再写一份，两处规则会跑偏，Windows 的 `~\` 最容易不一致。
+  - 界面的 `looksLikePath` 只决定"当路径打开还是当搜索词"，展开由 daemon 按它自己的平台做。所以 `~\x` 在非 Windows 的 daemon 上照 `isHomeRelative` 当普通名字，回"找不到这个目录"。
   - `list` 的 `parent` 改成 `dirname(resolved) === resolved ? null : dirname(resolved)`，只在文件系统根（`/`、`C:\`）为 `null`。
   - 默认路径仍是 `root`（家目录）。
   - `resolve(token)` 照旧再 `canonical` 一次。
@@ -249,7 +251,7 @@ export const DISTRIBUTION_LABEL: Record<string, string>; // standalone 独立安
 
 - "重启"发 `restartHost`。bridge 在发之前已经 `devices.expect('restart')`（U1a），断开时提示条写"正在重启"。
 - `RemoteLoginRow` 按 `application.platform`：
-  - `macos`：同 `LoginServiceRow` 的开关；`onToggle` 调 `toggleService(enabled, client, undefined)`（远程时外壳没有 `setLoginItem`，自然走 `machine.service install/uninstall`）。成功后提示条由 4.6 的 `expect('restart')` 接管。
+  - `macos`：同 `LoginServiceRow` 的开关；`onToggle` 调 `toggleService(enabled, client, undefined)`（远程时外壳没有 `setLoginItem`，就发 `machine.service install/uninstall`，bridge 按 U1a 4.5 转给对面，见 4.6）。成功后提示条由 bridge 里的 `expect('restart')` 接管。
   - `linux`：标题"登录时启动"，值取 `serviceStep(application).status`，下面写"在那台设备的终端运行 `vonvon service install`"。没开 linger 时（`application.service.linger`）接 `service.hint`。
   - `windows`：标题"登录时启动"，值"不支持"，说明"这一批 Windows 不做登录自启，那台电脑上的 Vonvon Bot 开着时才在线。"
   - 其他：不显示这一行。
@@ -271,7 +273,10 @@ export const DISTRIBUTION_LABEL: Record<string, string>; // standalone 独立安
 
 - D1 分支 `D/server/snapshot.ts:31` 的 `hostPlatform` 改成 `hostPlatform(platform = process.platform)`，win32 → `'windows'`。serverInfo 和快照同源，所以都跟着变。
 - `P/domain.ts:267` 的 `application.platform` 枚举加 `'windows'`。
-  - 旧客户端解析新服务端会失败吗？快照只在协议相同时才发（维护模式不发），而同协议的客户端都来自这一批，所以不会。
+  - 旧客户端解析新服务端会失败吗？0.8 的客户端按严格 schema 解析快照，收到 `platform: 'windows'` 会失败，所以快照只能发给同协议的客户端。
+    - 设计 4.5 和 PROTO-1 要求维护连接不推 `snapshot` 事件，D4a 计划 4.4 也写了，但 D1 分支还没做：`ws.ts:203` 的 `publish` 发给所有 peer，`forProtocol1`（24-29）只去掉 `device` 事件和 `daemonStatus.startedAt`。
+    - 所以本片在 `ws.ts` 的 `send` 里加一条：`principal.kind === 'maintenance'` 时丢掉 `type: 'event'`、`event: 'snapshot'` 的帧。D4a 先合入、已经有这一条时不重复。
+    - 有了它，快照只到同协议的客户端，而同协议的客户端都来自这一批，认得 `windows`。
 - 界面：
   - `DEVICE_TITLE` 换成 `hostTitle`（4.1），`windows` →"这台 Windows 电脑"；`GroupWorkspace.tsx:179` 经 `deviceTitle` 跟着变。
   - 比相等的几处不用改：`LoginServiceRow`（`service-toggle.tsx:43`）仍只认 `macos`；`App.tsx:909` 的页脚用今天非 macOS 的那句；导入 Bridge 只在 macOS。
@@ -279,7 +284,11 @@ export const DISTRIBUTION_LABEL: Record<string, string>; // standalone 独立安
 
 ### 4.6 `DT/bridge.ts`：远程的服务开关
 
-U1a 的远程路由里，`machine` 请求是 `service` 且 `action` 是 `install` 或 `uninstall` 时，先 `devices.expect(id, 'restart')` 再发。daemon 回完就会被助手换掉（I3 分支 `rpc/machine.ts:75-81`），这样断开会显示成"重启中"，不算"连不上"。`start`、`stop` 远程时外壳已经拒了（U1a 4.7 的 `LocalOnlyRefusal`），不用管。
+路由归 U1a（U1a 4.5"各通道在远程时"的 `machine` 一条），本片用它：
+- 今天 `machine` 通道在转发之前就用 `desktopShellRequestSchema` 把 `service` 拦成 `Shell-owned machine action`（D1 分支 `bridge.ts:251-253`），4.4.3 的远程开关一点就报错。
+- U1a 改成：看远程时放行 `service` 的 `install`、`uninstall`，先 `devices.expect('restart')` 再转给对面；看本机照旧拦。daemon 回完就会被助手换掉（I3 分支 `rpc/machine.ts:75-82`），断开显示成"正在重启"，不算"连不上"。
+- `service start/stop` 远程时照旧被拦（U1a 4.5），远程页面上也没有入口。
+- 本片在 `bridge.ts` 里只加 4.7 的 `quitKeepsDaemon` 通道。
 
 ### 4.7 退出规则（设计 7.4 共存第 1 条，2026-11-01 的写法）
 
@@ -412,7 +421,8 @@ D1 分支 `D/server/http.ts:65` 的 `capabilities()` 加：`distribution.kind ==
 |---|---|---|
 | `ui/test/device-copy.test.ts`（新） | 设备名 | 本机 → `configureProvider` 不含"在"；远程「Linux 主机」→ 含"在「Linux 主机」上把 Codex 配置好（账号或自定义 API 都行）"；`hostTitle('windows')` → "这台 Windows 电脑"。main 必败 |
 | `ui/test/no-login-wording.test.ts`（新） | 用词 | 对 4.2 第一张表里每个文件读源码，去掉含 `lark`、`飞书` 的行后不含"登录"；`search.ts` 只有 98 的别名一处。main 必败 |
-| `daemon/test/provider-wording.test.ts`（新） | 用词 | `CLAUDE_SIGNED_OUT_MESSAGE`、`CLAUDE_TURN_SIGNED_OUT_MESSAGE` 不含"登录"；`env.ts` 的 `LOGIN_STATE` 值不含"登录"。main 必败 |
+| `daemon/test/provider-wording.test.ts`（新） | 用词 | `CLAUDE_SIGNED_OUT_MESSAGE`、`CLAUDE_TURN_SIGNED_OUT_MESSAGE` 不含"登录"；`env.ts` 的 `LOGIN_STATE` 值不含"登录"；`authText`（导出给测试）对 codex、claude 四种状态都不含"登录"。main 必败 |
+| 同上 | lark-cli 不变 | `authText` 对 lark-cli：没有 `auth` → "登录状态查不到"；`signedIn` → "已登录"；`unknown` → "登录状态不确定：<原文>"；`signedOut` → "没登录：运行 vonvon env login lark-cli"，四条都和今天一字不差 |
 | `ui/test/directory-picker.test.tsx`（改） | 路径识别 | `looksLikePath`：`/srv`、`~/a`、`~`、`C:\\x`、`c:/x`、`\\\\host\\share` 为真；`srv`、`~a`、`C:` 为假。main 必败 |
 | 同上 | 远程标题 | `ClientProvider device={远程 X}`、多选 → 标题"添加「X」上的文件夹"；本机 → "添加目录" |
 | `daemon/test/server-directory.test.ts`（改 30、31、42、122、129-131） | 家目录外 | `list('/')`（测试里用 `mktemp -d` 建的家目录之外的另一个临时目录）→ 列出；`parent` 在根是 `null`；`choose(家目录外)` 给 token；`list('~')` 等于家目录。原来"家目录外拒绝"的用例改成"能进"。main 必败 |
@@ -426,7 +436,7 @@ D1 分支 `D/server/http.ts:65` 的 `capabilities()` 加：`distribution.kind ==
 | `ui/test/machine-panel.test.tsx`（改，或 `machine-restart.test.tsx`） | 远程 | `remote` 有值 → 没有"启动 daemon""启动服务""仅运行此 Bot"；按钮顺序 [重启][停止]；点停止 → 确认框是设计第 15 节那句 |
 | `ui/test/machine-restart.test.tsx:83,92`（改） | 退出页脚 | `quitKeepsDaemon` 真 → "退出桌面应用不会停止后台"；假 → 原文 |
 | `ui/test/service-toggle.test.tsx`（改） | 远程开关 | `shell` 不带 `setLoginItem` → 发 `machine.service install` |
-| `desktop/test/bridge-remote.test.ts`（U1a 的，改） | 服务开关 | 远程 `machine {service install}` → 先 `devices.expect(A,'restart')` 再发 |
+| `desktop/test/bridge.test.ts`（U1a 的） | 服务开关 | 不改：U1a 的"远程的服务开关"一例已经覆盖（远程 `machine {service install}` 先 `devices.expect('restart')` 再到对面，本机照旧拦） |
 | `desktop/test/quit-daemon.test.ts`（改） | 不停 | `keep` 回真 → `requestStop` 没被调、返回；`keep` 第一轮假、停完第二轮读到新 owner 且真 → 只停第一个 |
 | `desktop/test/quit-keep.test.ts`（新，注入依赖） | 判定 | 注册 `npm` + 在跑 `global-npm` → 真；注册 `desktop` → 假；注册 `npm` + 在跑 `bundled` → 假；`absent` → 假；`attachExisting` 抛 `AttachError('protocol')` → 假；pid 对不上 → 假。main 必败 |
 | `desktop/test/daemon-manager.test.ts`（改） | 协议提示 | `server 1`、注册 `npm` → 含 `npm i -g vonvon-bot@latest`；`server 1`、`absent` → 含"退出 Vonvon Bot 再打开"；`server 3` → 含 `vonvon.cc/get` |
@@ -441,6 +451,7 @@ D1 分支 `D/server/http.ts:65` 的 `capabilities()` 加：`distribution.kind ==
 | `daemon/test/dm-cards.test.ts`（改） | 卡片 | `buildPermissionCard` 含警示；`buildNewProjectDoneCard` 群是 `full` 时含，`write` 时不含 |
 | `ui/test/permission-fields.test.tsx`（新或改） | 界面 | 选项里 `full` 有 `warning` → 渲染出这句；当前是 `full` → `PermissionSummary` 有这句 |
 | `ui/test/join-group-dialog.test.tsx`（改） | 建群 | 建群模式 → "权限 完全访问" + 警示；绑定模式 → "只读（不联网）"、没有警示 |
+| `daemon/test/ws-maintenance-snapshot.test.ts`（新，D4a 先合入就并进它的 `authz-maintenance.test.ts`） | 维护连接不收快照 | protocol 1 和 protocol 2 的本机连接都连着时 `publish` 一条 `snapshot` 事件 → 只有 protocol 2 的收到；protocol 1 的 `admin.daemonStatus` 照常回。main 必败 |
 | `daemon/test/server-info.test.ts`（D1 的，改） | 能力 | 注入 `standalone` → `capabilities` 含 `update.standalone`；`global-npm` → `update.npm`；`bundled` → 都没有 |
 
 ## 6. 自测和验收
@@ -526,7 +537,7 @@ Windows 的平台名和 4.8 的 Windows 启动修复，放进 U4 的 Windows 任
 3. 家目录限制在浏览和搜索建议两处都去掉；默认起点仍是家目录；`outside_home` 只为旧 daemon 留着。
 4. 远程时应用卡的版本取客户端自己的，不取快照。
 5. 远程时"启动 daemon""启动服务""仅运行此 Bot"不渲染，不只是灰掉。
-6. 远程的服务开关和重启都先 `devices.expect('restart')`。
+6. 远程的服务开关和重启都先 `devices.expect('restart')`（U1a 的 bridge 做，本片的界面走到它）；维护连接收不到快照，旧客户端不会因为 `windows` 解析失败。
 7. 退出规则只看三件事：注册种类不是 `desktop`、在跑的不是 `bundled`、owner 没换。拿不准一律照旧停；`beforeUpdateInstall` 没动。
 8. 协议不同的提示分三种，说清楚哪边旧、该运行什么。
 9. `installCodex`、`startCodexLogin`、`loginCodex` 在协议、daemon、UI、白名单里都没有了，RPC 种类计数减 2。
