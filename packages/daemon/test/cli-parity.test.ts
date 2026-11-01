@@ -55,8 +55,12 @@ describe('CLI parity with the RPC kinds (devices 8.5)', () => {
     expect(parityProblems(kinds, commands, loose)).toEqual(['command.deleteAgent: pending needs the slice that ends it']);
   });
 
-  it('names the device kinds now in the protocol, the remote ones until D3 (devices 8.1 SLICE-1)', () => {
+  // main 必败: the device kinds were not in the protocol and no command covered them
+  it('covers the device kinds D1 brings, the remote ones pending until D3 (devices 8.1 SLICE-1)', () => {
     expect(Object.values(CLI_PARITY_ALLOWLIST).filter(entry => entry.arrives)).toEqual([]);
+    const covered = new Map(commands.flatMap(command => command.covers.map(kind => [kind, command.path] as const)));
+    expect(['device.pair', 'device.clients', 'device.renameClient', 'device.revokeClient', 'device.rename'].map(kind => covered.get(kind)))
+      .toEqual(['pair', 'clients ls', 'clients rename', 'clients revoke', 'device rename']);
     for (const kind of ['device.status', 'device.enable', 'device.disable', 'device.setPort']) expect(CLI_PARITY_ALLOWLIST[kind], kind).toMatchObject({ reason: 'pending', slice: 'D3' });
     expect(CLI_PARITY_ALLOWLIST['admin.negotiate']).toMatchObject({ reason: 'internal' });
     for (const kind of ['machine.checkCoreUpdate', 'machine.applyCoreUpdate', 'machine.coreUpdateStatus']) expect(CLI_PARITY_ALLOWLIST[kind]).toMatchObject({ reason: 'pending', slice: 'I3' });

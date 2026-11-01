@@ -25,6 +25,8 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['schedule', 'run', 'st_x', '--group', 'g'], 3], [['schedule', 'runs', 'st_x', '--group', 'g'], 3],
   [['feishu', 'groups'], 3], [['feishu', 'members', 'oc_x'], 3],
   [['secrets', 'list'], 0], [['secrets', 'set', 'typesafe-api-key'], 2], [['secrets', 'remove', 'typesafe-api-key'], 0],
+  // devices 4.5: pair needs the daemon; the others fall back to the files
+  [['pair'], 3], [['clients', 'ls'], 0], [['clients', 'rename', 'cl_0000000000000000', 'x'], 2], [['clients', 'revoke', 'cl_0000000000000000'], 2], [['device', 'rename', 'x'], 0],
   // argument errors from commander itself
   [['nope'], 2], [['bot', 'list', '--nope'], 2], [['group'], 2],
 ];
