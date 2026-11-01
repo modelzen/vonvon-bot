@@ -3,8 +3,8 @@
 #   sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/uninstall.sh)"
 # 停后台服务、删服务定义、去掉启动文件里的 PATH 那几行、删安装根 ~/.local/share/vonvon-bot/server。
 # 数据目录 ~/.vonvon-bot（Bot、记忆、设置）留着。
-# 退出码：0 卸好了或没装过；1 后台服务没停下来，什么文件都没删；2 在 Mac 上、HOME 或安装根不对，什么都没删。
-# Mac、Windows 的服务端在桌面端安装包里，不由脚本装（owner 2026-11-01）：这个脚本在 Mac 上什么都不做。
+# 退出码：0 卸好了或没装过；1 后台服务没停下来，什么文件都没删；2 不是 Linux、HOME 或安装根不对，什么都没删。
+# Mac、Windows 的服务端在桌面端安装包里，不由脚本装（owner 2026-11-01）：不是 Linux 就什么都不做。
 set -eu
 
 PATH_BY_HAND="请手动删掉 ~/.zshrc、~/.bashrc 等文件里从 \`# >>> Vonvon Bot CLI >>>\` 到 \`# <<< Vonvon Bot CLI <<<\` 的那几行。"
@@ -130,9 +130,12 @@ no_cli() {
 }
 
 main() {
-  if [ "$(uname -s 2>/dev/null || true)" = Darwin ]; then
-    fail 2 "这个卸载脚本只用于 Linux，什么都没动。Mac 上的服务端在桌面端安装包里（https://bot.vonvon.cc），不是这个脚本装的。"
-  fi
+  system=$(uname -s 2>/dev/null || true)
+  case "$system" in
+    Linux) ;;
+    Darwin) fail 2 "这个脚本只卸载 Linux 上的服务端。Mac 上的 Vonvon Bot 是桌面端安装包装的，说明见 https://bot.vonvon.cc" ;;
+    *) fail 2 "这个脚本只卸载 Linux 上的服务端（这台是 ${system:-认不出的系统}），什么都没动。" ;;
+  esac
   checked_home
   ROOT="$HOME/.local/share/vonvon-bot/server"
   if [ "$(id -u 2>/dev/null || true)" = 0 ]; then

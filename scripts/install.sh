@@ -2,7 +2,7 @@
 # Vonvon Bot 服务端的安装脚本，只用于 Linux（glibc），docs/plans/server-2-install-scripts.md 4.1：
 #   sh -c "$(curl -fsSL https://dl.vonvon.cc/bot/server/install.sh)"
 # 装到 ~/.local/share/vonvon-bot/server，数据目录是 ~/.vonvon-bot。已经装过服务端就什么都不动。
-# Mac、Windows 用桌面端安装包（里面带着服务端），这个脚本在 Mac 上什么都不做、退出 2（owner 2026-11-01）。
+# Mac、Windows 用桌面端安装包（里面带着服务端）：不是 Linux 就什么都不做、退出 2（owner 2026-11-01）。
 # 用 root 运行默认拒绝；坚持要用：VONVON_ALLOW_ROOT=1。
 # 退出码：0 装好了或已经装过；1 设置命令或后台服务失败；2 环境不支持；3 下载失败；4 校验没通过。
 # 整个脚本只定义函数，最后一行才调用 main：下载中途断了，sh 读到半截脚本什么也不做。不读标准输入。
@@ -71,7 +71,7 @@ already_installed() {
     if [ "$command_path" != "$ROOT/bin/vonvon" ] || server_cli_runs; then found=1; fi
   fi
   if [ -z "$found" ]; then return 1; fi
-  say "这台电脑已经装过 Vonvon Bot 服务端，不用再装。直接用：\`vonvon --version\`。"
+  say "这台机器已经装过 Vonvon Bot，不用再装。直接用：\`vonvon --version\`。"
   return 0
 }
 
@@ -86,8 +86,7 @@ need_tools() {
 }
 
 pick_target() {
-  system=$(uname -s)
-  if [ "$system" != Linux ]; then fail 2 "这个安装脚本只支持 Linux（这台是 $system）。Mac、Windows 请下载安装包：$DESKTOP_DOWNLOAD"; fi
+  # 系统在 main 的第一步已经核过是 Linux
   machine=$(uname -m)
   case "$machine" in
     x86_64|amd64) ARCH=x64 ;;
@@ -284,10 +283,13 @@ finish() {
 }
 
 main() {
-  # Mac 的安装包里已经带着服务端：先于一切检查、写文件和连网
-  if [ "$(uname -s 2>/dev/null || true)" = Darwin ]; then
-    fail 2 "Mac 请下载安装包：$DESKTOP_DOWNLOAD ，安装包里已经带了服务端和 vonvon 命令。这个脚本只用于 Linux，什么都没动。"
-  fi
+  # Mac、Windows 的安装包里已经带着服务端：不是 Linux 就先于一切检查、写文件和连网退出
+  system=$(uname -s 2>/dev/null || true)
+  case "$system" in
+    Linux) ;;
+    Darwin) fail 2 "Mac 上请下载 Vonvon Bot 桌面端安装包，它自带服务端，不用命令行装：$DESKTOP_DOWNLOAD" ;;
+    *) fail 2 "这个安装脚本只支持 Linux（这台是 ${system:-认不出的系统}）。Mac、Windows 请下载 Vonvon Bot 桌面端安装包：$DESKTOP_DOWNLOAD" ;;
+  esac
   check_root
   case "${HOME:-}" in
     /*) ;;

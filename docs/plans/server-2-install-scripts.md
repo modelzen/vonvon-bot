@@ -282,9 +282,9 @@ JP-VPS 自测：
 
 owner 原话："Mac 和 Windows 上就直接通过安装包安装全部软件就好了，没有这种场景只安装 Server 端，也不用通过命令行安装"。本片按这句收窄：
 
-- `install.sh`、`uninstall.sh` 只用于 Linux。在 macOS 上（`uname -s` 是 `Darwin`）第一步就打印一句中文、指向 https://bot.vonvon.cc 的安装包，exit 2：先于 root 检查，不建临时目录、不写文件、不连网。别的非 Linux 系统照旧在选包时 exit 2。
-- 删掉的 macOS 分支：已装过里的 LaunchAgent 和两个 `Applications` 目录、桌面端命令的标记（`Vonvon Bot managed CLI v1`，Linux 没有桌面端）、Rosetta 判断、`darwin-*` 目标、`no_gui_session` 退路和 Mac 的"保持登录"完成文案；卸载时只看 systemd 的服务定义。Linux 的部分都留着：root 和 `HOME` 检查、musl 判断、linger、已装过的四种命中（这个数据目录上在跑的 daemon、`current` 加能跑的 `bin/vonvon`、`vonvon-bot*.service`、PATH 里带服务端标记的 `vonvon`），已装过的文案统一成"已经装过 Vonvon Bot 服务端"。
-- 清单的字面校验跟着改：`files` 只有 `linux-x64`、`linux-arm64` 两项，按这个顺序，多一项、少一项都 exit 4。服务端升级清单（server-3 C1）也只列这两项，I3 的解析要对上。
+- `install.sh`、`uninstall.sh` 只用于 Linux。`main` 的第一步看 `uname -s`：不是 `Linux` 就 exit 2，先于 root、`HOME`、已装过和公钥的检查，不建临时目录、不写文件、不连网。`Darwin` 打印 `devices.md` §15"在 Mac 上"那句（指向 https://bot.vonvon.cc 的桌面端安装包），别的系统（FreeBSD、Windows 的 Git Bash 这类）打印"不是 Linux、也不是 Mac"那句，带上 `uname -s` 的结果。四句和 §15 逐字一样，`install.test.mjs` 按全文核对。
+- 删掉的 macOS 分支：已装过里的 LaunchAgent 和两个 `Applications` 目录、桌面端命令的标记（`Vonvon Bot managed CLI v1`，Linux 没有桌面端）、Rosetta 判断、`darwin-*` 目标、`no_gui_session` 退路和 Mac 的"保持登录"完成文案；卸载时只看 systemd 的服务定义。Linux 的部分都留着：root 和 `HOME` 检查、musl 判断、linger、已装过的四种命中（这个数据目录上在跑的 daemon、`current` 加能跑的 `bin/vonvon`、`vonvon-bot*.service`、PATH 里带服务端标记的 `vonvon`），已装过的文案统一成 §15"安装脚本：已装过"那句。
+- 清单的字面校验跟着改：`files` 只有 `linux-x64`、`linux-arm64` 两项，按这个顺序，多一项、少一项都 exit 4。服务端升级清单（server-3 C1）也只列这两项：I3 的 `SERVER_TARGETS`（连同 `fake-cdn` 和它的测试）要改成同样两项，在 I5 产出第一份清单之前两边必须一致（`devices.md` 第 13 节 I3、I6 行）。
 - `scripts/build-server.mjs`（I1）：新导出 `PUBLISHED_TARGETS = ['linux-x64', 'linux-arm64']`，不带 `--targets` 时只打这两个包，发布也只发这两个。`TARGETS` 里的 macOS、Windows 目标暂时还能用 `--targets` 点名打包；Windows 的 `.zip`、260 字符路径预算、`current.txt`、`unpackZip` 这些独立服务端在 Windows、macOS 上的代码已经用不上，等 I3 合入后由一次清理统一删掉，不算功能。
 - daemon：`service install` 不再把 launchd 没有图形会话说成带 `fallback: 'detached'` 的 `no_gui_session`，回到原来的 `failed`（exit 1）；三种 Linux 的 `reason` 照旧。`__standalone-setup` 在 Linux 以外回 `failed`、`reason: 'unsupported_platform'`，提示去下载安装包，什么都不切、不写；`__standalone-teardown` 去掉了 Windows 特判（它只删指向这个安装根的 PATH 块，在哪儿跑都无害）。`current-release.ts` 是 I3 那份的副本，`current.txt` 那段不在这里删。
 - 留着的：PATH 块搬到 `@vonvon/protocol` 的 `cli-path-block.ts`、桌面端 `cli-registration.ts` 改用它。这不是为 Mac 上脚本装的服务端和桌面端共存才做的：daemon 不能 import desktop，Linux 的 `__standalone-setup` 要用同一段文本，放在 protocol 里只有一份。
