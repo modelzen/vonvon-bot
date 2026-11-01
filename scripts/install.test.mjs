@@ -321,10 +321,10 @@ test('root with a HOME that is not its own is refused by both scripts, before an
 
 test('an install that is there already is left alone: no network, no file', async t => {
   const cases = [
-    ['a running daemon', async f => { await mkdir(join(f.home, '.vonvon-bot'), { recursive: true }); await writeFile(join(f.home, '.vonvon-bot', 'daemon.pid'), JSON.stringify({ pid: process.pid, startedAt: 'x' })); }, /已经装过 Vonvon Bot 服务端/],
-    ['current and a launcher that runs', async f => { await mkdir(join(f.root, 'bin'), { recursive: true }); await symlink('releases/0.9.0', join(f.root, 'current')); await writeFile(join(f.root, 'bin', 'vonvon'), '#!/bin/sh\n# Vonvon Bot server CLI v1\nexit 0\n', { mode: 0o755 }); }, /已经装过 Vonvon Bot 服务端/],
+    ['a running daemon', async f => { await mkdir(join(f.home, '.vonvon-bot'), { recursive: true }); await writeFile(join(f.home, '.vonvon-bot', 'daemon.pid'), JSON.stringify({ pid: process.pid, startedAt: 'x' })); }, /已经装过 Vonvon Bot，不用再装/],
+    ['current and a launcher that runs', async f => { await mkdir(join(f.root, 'bin'), { recursive: true }); await symlink('releases/0.9.0', join(f.root, 'current')); await writeFile(join(f.root, 'bin', 'vonvon'), '#!/bin/sh\n# Vonvon Bot server CLI v1\nexit 0\n', { mode: 0o755 }); }, /已经装过 Vonvon Bot，不用再装/],
     ['a systemd unit', async f => { await mkdir(join(f.home, '.config/systemd/user'), { recursive: true }); await writeFile(join(f.home, '.config/systemd/user/vonvon-bot-0123456789ab.service'), ''); }, /已经装过/],
-    ['the server\'s command', async f => { await f.command('# Vonvon Bot server CLI v1'); }, /已经装过 Vonvon Bot 服务端，不用再装。直接用：`vonvon --version`。/],
+    ['the server\'s command', async f => { await f.command('# Vonvon Bot server CLI v1'); }, /^这台机器已经装过 Vonvon Bot，不用再装。直接用：`vonvon --version`。\n$/],
   ];
   for (const [name, arrange, text] of cases) {
     const f = await fixture(t);
@@ -475,7 +475,7 @@ test('a setup that failed after switching current is finished by the next run, n
   // now it is an install: the launcher runs the release
   run = await f.run('install.sh');
   assert.equal(run.code, 0, run.stderr);
-  assert.match(run.stdout, /已经装过 Vonvon Bot 服务端/);
+  assert.match(run.stdout, /已经装过 Vonvon Bot，不用再装/);
   assert.equal((await f.calls()).at(-1), '--version');
 });
 
@@ -525,7 +525,8 @@ test('on a Mac both scripts point to the desktop installer and exit 2: nothing w
     const run = await f.run('install.sh', env);
     assert.equal(run.code, 2, run.stderr);
     assert.equal(run.stdout, '');
-    assert.equal(run.stderr, 'Mac 请下载安装包：https://bot.vonvon.cc ，安装包里已经带了服务端和 vonvon 命令。这个脚本只用于 Linux，什么都没动。\n');
+    // devices.md §15「安装脚本：在 Mac 上」
+    assert.equal(run.stderr, 'Mac 上请下载 Vonvon Bot 桌面端安装包，它自带服务端，不用命令行装：https://bot.vonvon.cc\n');
     await shim(f.shims, 'id', `case "$1" in -u) echo 0 ;; *) echo root ;; esac`);
   }
   assert.deepEqual(await readdir(f.home), []);
@@ -537,10 +538,46 @@ test('on a Mac both scripts point to the desktop installer and exit 2: nothing w
   await writeFile(join(f.root, 'releases', '1.0.0', 'standalone.json'), '{}');
   const run = await f.run('uninstall.sh');
   assert.equal(run.code, 2, run.stderr);
-  assert.match(run.stderr, /这个卸载脚本只用于 Linux，什么都没动。Mac 上的服务端在桌面端安装包里（https:\/\/bot\.vonvon\.cc）/);
+  // devices.md §15「卸载脚本：在 Mac 上」
+  assert.equal(run.stderr, '这个脚本只卸载 Linux 上的服务端。Mac 上的 Vonvon Bot 是桌面端安装包装的，说明见 https://bot.vonvon.cc\n');
   assert.equal(await f.exists(join(f.root, 'releases', '1.0.0', 'standalone.json')), true);
   assert.deepEqual(await f.calls(), []);
   assert.equal(await f.exists(join(f.shims, 'mktemp.log')), false);
+});
+
+// main 必败: only Darwin was refused up front; elsewhere the root, HOME and "already installed" checks ran first, so
+// Windows Git Bash with the desktop's live daemon.pid was told to use a `vonvon` that Windows does not have
+test('on any other system both scripts exit 2 first, with the only-Linux text: before root, the already-installed check and the key', async t => {
+  for (const system of ['FreeBSD', 'MINGW64_NT-10.0-19045', '']) {
+    const f = await fixture(t, { uname: [system, 'x86_64'] });
+    await f.ready();
+    // the desktop's daemon running in this HOME, root, a script without its key: none of them is reached
+    await mkdir(join(f.home, '.vonvon-bot'), { recursive: true });
+    await writeFile(join(f.home, '.vonvon-bot', 'daemon.pid'), JSON.stringify({ pid: process.pid, startedAt: 'x' }));
+    await shim(f.shims, 'id', `case "$1" in -u) echo 0 ;; *) echo root ;; esac`);
+    await shim(f.shims, 'mktemp', `echo "$*" >> '${f.shims}/mktemp.log'; exit 1`);
+    await writeFile(join(f.base, 'scripts', 'install-unkeyed.sh'), await readFile(join(here, 'install.sh')));
+    const shown = system || '认不出的系统';
+    for (const script of ['install.sh', 'install-unkeyed.sh']) {
+      const run = await f.run(script);
+      assert.equal(run.code, 2, `${system} ${script}: ${run.stderr}`);
+      assert.equal(run.stdout, '', `${system} ${script}`);
+      // devices.md §15「安装脚本：不是 Linux、也不是 Mac」
+      assert.equal(run.stderr, `这个安装脚本只支持 Linux（这台是 ${shown}）。Mac、Windows 请下载 Vonvon Bot 桌面端安装包：https://bot.vonvon.cc\n`, `${system} ${script}`);
+    }
+    await mkdir(join(f.root, 'releases', '1.0.0'), { recursive: true });
+    await writeFile(join(f.root, 'releases', '1.0.0', 'standalone.json'), '{}');
+    const run = await f.run('uninstall.sh');
+    assert.equal(run.code, 2, `${system}: ${run.stderr}`);
+    assert.equal(run.stdout, '', system);
+    // devices.md §15「卸载脚本：不是 Linux、也不是 Mac」
+    assert.equal(run.stderr, `这个脚本只卸载 Linux 上的服务端（这台是 ${shown}），什么都没动。\n`, system);
+    assert.equal(await f.exists(join(f.root, 'releases', '1.0.0', 'standalone.json')), true, system);
+    assert.deepEqual(await f.curls(), [], system);
+    assert.deepEqual(await f.calls(), [], system);
+    assert.equal(await f.exists(join(f.shims, 'mktemp.log')), false, system);
+    assert.deepEqual((await readdir(f.home)).sort(), ['.local', '.vonvon-bot'], system);
+  }
 });
 
 test('a script cut short anywhere before its last line does nothing', async t => {
