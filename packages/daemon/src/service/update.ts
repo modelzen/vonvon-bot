@@ -169,7 +169,7 @@ function updateLockFile(): string {
   return join(paths.appDir, 'update.lock');
 }
 
-export { livePid, processStart, UNREADABLE_LOCK_MS } from './update-lock';
+export { livePid, processStart } from './update-lock';
 
 /**
  * `update.lock` of this data directory by default, or the lock `file` named (`releases.lock`, `update-state.lock`).
