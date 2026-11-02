@@ -10,6 +10,8 @@ type Application = DesktopSnapshot['application'];
 type Where = Pick<ActiveDevice, 'isRemote' | 'name'>;
 
 export const WINDOWS_LOGIN_TEXT = '这一批 Windows 不做登录自启，那台电脑上的 Vonvon Bot 开着时才在线。';
+/** 后台运行's restart, here and on this computer's 启动选项: since R1 (#657) it interrupts the conversations directly. */
+export const RESTART_HOST_TEXT = '重新加载已保存的 Bot 设置，会中断正在进行的对话';
 
 /** devices-ui-2 4.4.3: 登录时启动 on another device, by that device's platform. */
 export function RemoteLoginRow({application, busy, onToggle}: {application: Application; busy: boolean; onToggle: (enabled: boolean) => void}) {
@@ -27,7 +29,7 @@ export function RemoteLoginRow({application, busy, onToggle}: {application: Appl
  * sends (`onRestart`); the desktop's bridge already expects the restart, so the banner says 正在重启. */
 export function RemoteServiceGroup({application, where, busy, onRestart, onToggle}: {application: Application; where: Where; busy: boolean; onRestart: () => void; onToggle: (enabled: boolean) => void}) {
   return <SettingsGroup label={`${whereName(where)}的后台服务`} id={settingAnchor('启动选项')} footer={remoteServiceFooter(where)}>
-    <SettingsRow title="后台运行" description="重新加载已保存的 Bot 设置" trailing={<Button size="sm" disabled={busy} onClick={onRestart}>重启</Button>}/>
+    <SettingsRow title="后台运行" description={RESTART_HOST_TEXT} trailing={<Button size="sm" disabled={busy} onClick={onRestart}>重启</Button>}/>
     <RemoteLoginRow application={application} busy={busy} onToggle={onToggle}/>
   </SettingsGroup>;
 }
