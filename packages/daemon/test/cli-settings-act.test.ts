@@ -1,15 +1,17 @@
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { VonvonClient } from '@vonvon/client';
 import type { SettingsRequest } from '@vonvon/protocol';
 import { commandFailure } from '../src/cli/command-error';
 import { CLI_PARITY_ALLOWLIST } from '../src/cli/parity-allowlist';
 import { loadCommands } from './helpers/cli-commands';
 import { withDaemon, type Daemon } from '../src/cli/daemon-client';
+import { adminIpcTimeout, type AdminIpcOp } from '../src/admin/ipc';
+import { runProviderModels } from '../src/cli/commands/provider';
 import {
-  runSettingsAdmin, runSettingsCommentInstructions, runSettingsGet, runSettingsMember, runSettingsModels, runSettingsVoice, type Stdin,
+  runSettingsAdmin, runSettingsCommentInstructions, runSettingsGet, runSettingsMember, runSettingsModels, runSettingsSet, runSettingsVoice, type Stdin,
 } from '../src/cli/commands/settings';
 
 /** cli-6-settings: `settings act` (the settings page's buttons) and `settings models`, through the real withDaemon and a fake client. */
@@ -206,6 +208,81 @@ describe('settings models', () => {
       expect(await h.failure(runSettingsModels(target, h.io(true), h.daemon)), JSON.stringify(target)).toMatchObject({ exitCode: 2 });
     }
     expect(h.connect).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * dev #641 gave the bot's settings calls 120 s over admin IPC: a read, a save, a model list or an action may start a
+ * Provider (validateModelAccess, effectiveSelection). A terminal waiting less said 「可能已经保存」 while the daemon still
+ * saved, and the web page, with no limit of its own, finished the same save.
+ */
+describe('settings calls that may start a Provider wait past the daemon\'s own budget', () => {
+  const budget = (kind: AdminIpcOp['kind']) => adminIpcTimeout({ kind } as AdminIpcOp);
+  const late = <T>(ms: number, value: T) => new Promise<T>(done => { setTimeout(() => done(value), ms); });
+  const BUDGET = { read: budget('settingsRead'), save: budget('settingsPatch'), models: budget('settingsModels'), act: budget('settingsAction') };
+  const access = section({ backend: 'codex-appserver', models: ['gpt-6'], efforts: ['low'], defaultModel: 'gpt-6' });
+  const accessView = projectView(['ou_b'], { sections: { modelAccess: access } });
+  const catalog = { backend: 'codex-appserver', state: 'ready', source: 'backend-provided', observedAt: 'x', titleEfforts: [], models: [
+    { id: 'gpt-6', displayName: 'GPT-6', description: '', supportedEfforts: ['low'], defaultEffort: 'low', isDefault: true, hidden: false },
+  ] };
+  /** The real withDaemon with its own waits; each settings request answers `ms(request)` later, or never. */
+  function slow(ms: (request: SettingsRequest) => number | undefined, collaboration = async () => ({ kind: 'providerModels', backend: 'codex-appserver', state: 'ready', models: catalog.models })) {
+    let out = '';
+    const reply = (request: SettingsRequest) => request.type === 'models' ? { kind: 'models', catalog }
+      : request.type === 'save' ? { kind: 'saved', result: { kind: 'saved', section: { scope: accessView.scope, section: 'modelAccess', value: access }, effects: [] } }
+        : request.type === 'act' ? savedWith(agentView())
+          : request.type === 'sessions' ? { kind: 'sessions', sessions: [] }
+            : { kind: 'view', view: request.scope.kind === 'project' ? accessView : agentView() };
+    const settings = vi.fn((request: SettingsRequest) => { const wait = ms(request); return wait === undefined ? new Promise(() => {}) : late(wait, reply(request)); });
+    const snapshot = async () => ({
+      agents: [{ id: 'cli_a', name: 'Test' }],
+      memberships: [{ agentId: 'cli_a', groupId: 'oc_dev', name: '研发', conversation: 'threads', backend: 'codex-appserver', directory: '/home/u/dev' }],
+    });
+    const daemon: Daemon = fn => withDaemon(fn, async () => ({ snapshot, settings, collaboration, close: async () => {} }) as unknown as VonvonClient);
+    return { daemon, settings, io: { json: false, write: (text: string) => { out += text; } }, out: () => out };
+  }
+  /** Runs `run` to its end, moving the fake clock `by` at a time; returns the error, if any. */
+  async function settle(run: Promise<void>, by: number): Promise<unknown> {
+    let ended = false;
+    const result = run.then(() => undefined, (error: unknown) => error).finally(() => { ended = true; });
+    for (let i = 0; i < 10 && !ended; i++) await vi.advanceTimersByTimeAsync(by);
+    expect(ended).toBe(true);
+    return result;
+  }
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  // 035848d2 必败: settings get and set waited 30 s, settings models and provider models 75 s
+  it('a read, a save, a model list and an action answered just inside the daemon\'s budget complete', async () => {
+    const wait = (request: SettingsRequest) => request.type === 'save' ? BUDGET.save - 1 : request.type === 'models' ? BUDGET.models - 1
+      : request.type === 'act' ? BUDGET.act - 1 : request.type === 'read' ? BUDGET.read - 1 : 0;
+    const set = slow(wait);
+    expect(await settle(runSettingsSet(['modelAccess.defaultModel=gpt-6'], { group: '研发' }, set.io, set.daemon), 60_000)).toBeUndefined();
+    expect(set.settings.mock.calls.map(([request]) => request.type)).toEqual(['read', 'save']);
+    expect(set.out()).toBe('已保存 modelAccess.defaultModel = gpt-6。\n');
+    const get = slow(wait);
+    expect(await settle(runSettingsGet('modelAccess', { group: '研发' }, get.io, get.daemon), 60_000)).toBeUndefined();
+    const models = slow(wait);
+    expect(await settle(runSettingsModels({ backend: 'codex', purpose: 'project' }, models.io, models.daemon), 60_000)).toBeUndefined();
+    expect(models.out()).toBe('gpt-6  GPT-6（默认）\n');
+    const voice = slow(wait);
+    expect(await settle(runSettingsVoice('refresh', {}, voice.io, voice.daemon), 60_000)).toBeUndefined();
+    // no admin IPC budget here: the daemon itself starts the Provider, as the web page's Provider list does
+    const provider = slow(() => 0, () => late(BUDGET.models - 1, { kind: 'providerModels', backend: 'codex-appserver', state: 'ready', models: catalog.models }));
+    expect(await settle(runProviderModels('codex', provider.io, provider.daemon), 60_000)).toBeUndefined();
+    expect(provider.out()).toBe('gpt-6  GPT-6（默认）\n');
+  });
+
+  it('a daemon that never answers still ends the command, after its budget, as outcome unknown', async () => {
+    const h = slow(request => request.type === 'save' ? undefined : 0);
+    const run = runSettingsSet(['modelAccess.defaultModel=gpt-6'], { group: '研发' }, h.io, h.daemon);
+    let ended = false;
+    const result = run.then(() => undefined, (error: unknown) => error).finally(() => { ended = true; });
+    await vi.advanceTimersByTimeAsync(BUDGET.save);
+    expect(ended).toBe(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(ended).toBe(true);
+    expect(commandFailure(await result)).toMatchObject({ exitCode: 6, error: { kind: 'outcome-unknown', message: expect.stringContaining('可能已经保存，运行 vonvon settings get 查看。') } });
   });
 });
 

@@ -184,7 +184,7 @@ export async function runGroupBind(rawGroupId: string, options: BindOptions, io:
     const where = chosen?.displayPath ?? await call('读取快照', c => c.snapshot())
       .then(after => after.memberships.find(m => m.agentId === agent.id && m.groupId === groupId.data)?.directory, () => undefined);
     const view = tool === 'codex'
-      ? want('读取群设置', await call('读取群设置', c => c.settings({ type: 'read', scope: { kind: 'project', botId: agent.id, projectName } })), 'view').view
+      ? want('读取群设置', await call('读取群设置', c => c.settings({ type: 'read', scope: { kind: 'project', botId: agent.id, projectName } }), { provider: true }), 'view').view
       : undefined;
     const fullOnly = view && 'identity' in view && 'fullOnly' in view.identity ? view.identity.fullOnly : undefined;
     return { fullOnly, revision, name: projectName, folder: where, several: snapshot.agents.length > 1, agentId: agent.id };
