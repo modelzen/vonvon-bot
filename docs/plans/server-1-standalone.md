@@ -1,6 +1,6 @@
 # I1：服务端独立安装包（`standalone` 种类和 `build-server.mjs`）
 
-> 2026-11-01 后记：owner 定 Mac、Windows 只用安装包装全部软件，不做命令行只装服务端，服务端包只发 `linux-x64`、`linux-arm64`（`docs/plans/devices.md` 第 19 节）。本片已合入，下文照当时写的留着。其中只为 Mac、Windows 写的部分成了用不上的代码：`build-server.mjs` 的 `darwin-arm64`、`darwin-x64`、`win-x64`、`win-arm64` 四个目标，`.zip`、`writeZip` 和 `unpackZip`，Windows 的 Node 和 npm 布局，Windows 的 260 字符路径预算，大小写重名检查，`server-node.json` 的四个 Node，`bundledNpmCli` 的 Windows 布局，launchd 接受 `standalone`，桌面端 `RegisteredDaemon.kind` 的 `standalone`。I3 合入后由清理片 I6 删，在那之前不发布这四个包；I2a 起 `build-server.mjs` 不带 `--targets` 只打两个 Linux 包（`PUBLISHED_TARGETS`）。
+> 2026-11-01 后记：owner 定 Mac、Windows 只用安装包装全部软件，不做命令行只装服务端，服务端包只发 `linux-x64`、`linux-arm64`（`docs/plans/devices.md` 第 19 节）。本片已合入，下文照当时写的留着。其中只为 Mac、Windows 写的部分成了用不上的代码：`build-server.mjs` 的 `darwin-arm64`、`darwin-x64`、`win-x64`、`win-arm64` 四个目标，`.zip`、`writeZip` 和 `unpackZip`，Windows 的 Node 和 npm 布局，Windows 的 260 字符路径预算，大小写重名检查，`server-node.json` 的四个 Node，`bundledNpmCli` 的 Windows 布局，launchd 接受 `standalone`，桌面端 `RegisteredDaemon.kind` 的 `standalone`。清理片 I6（`server-6-linux-only.md`）已删，`build-server.mjs` 只认两个 Linux 包（`PUBLISHED_TARGETS`）；桌面端 `RegisteredDaemon.kind` 的 `standalone` 留着，原因见那份计划。
 
 ## 1. 做什么
 

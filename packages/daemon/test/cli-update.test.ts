@@ -70,7 +70,7 @@ beforeEach(async () => {
   rmSync(join(paths.appDir, 'update.lock'), { force: true });
   await mkdir(join(ROOT, 'releases', '1.0.0'), { recursive: true });
   await writeFile(join(ROOT, 'releases', '1.0.0', 'standalone.json'), JSON.stringify({ v: 1, version: '1.0.0' }));
-  await switchCurrent(ROOT, '1.0.0', 'linux');
+  await switchCurrent(ROOT, '1.0.0');
 });
 
 describe('vonvon update --check', () => {
