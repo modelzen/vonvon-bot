@@ -318,6 +318,9 @@ export function observeShutdown(parentControl = false, options: ShutdownOptions 
         if (child.exitCode !== null || child.signalCode !== null) died();
         if (isStopping()) cancelHelper();
         child.unref();
+        // owner 2026-11-02 (review 260): the stop starts now, not once the scope's helper is ready (up to 25 s): the Bots are
+        // interrupted at once and the host's 30 s count from here. Only the release waits for the helper (Gate L, complete()).
+        if (scope) wake();
       } catch (error) {
         log.fail('daemon-restart', error, { phase: 'helper-spawn' });
         helperFailed(update, 'helper_lost', false);

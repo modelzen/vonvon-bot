@@ -237,6 +237,32 @@ describe('the replies, one group after another', () => {
     expect(readDropped(file, NOW).entries).toMatchObject([{ messageId: second.messageId, count: 2 }]);
   });
 
+  // review 259: a cut-short turn kept when the drain stopped waiting, whose card then got through before the process went
+  it('takes an appended message back out: its group is put back together without it, the others kept', () => {
+    const { replies, log } = start(vi.fn(async () => undefined));
+    const queued = origin('a', 'queued', NOW + 2);
+    replies.saveSync([queued], 'shutdown');
+    const [before] = readDropped(file, Date.now()).entries;
+    const cut = origin('a', 'cut', NOW + 3);
+    const other = origin('a', 'other', NOW + 1);
+    const lone = origin('b', 'lone', NOW);
+    for (const item of [cut, other, lone]) replies.appendSync(item);
+    const group = (chat: string): DroppedEntry | undefined => readDropped(file, Date.now()).entries.find(entry => entry.chatId === chat);
+    expect(group(queued.chatId)).toMatchObject({ messageId: cut.messageId, count: 3, revision: 2 });
+    expect(replies.retractSync(cut)).toBe(true);
+    // The newest left is the queued message again, counted with the other one, under a revision past the file's.
+    expect(group(queued.chatId)).toMatchObject({ messageId: queued.messageId, count: 2, revision: 3 });
+    expect(log.info).toHaveBeenCalledWith('bridge', 'dropped-retracted', { chat: queued.chatId.slice(-6), left: 1 });
+    expect(replies.retractSync(other)).toBe(true);
+    expect(group(queued.chatId)).toEqual(before);
+    expect(replies.retractSync(lone)).toBe(true);
+    expect(readDropped(file, Date.now()).entries).toEqual([before]);
+    // Saved as the shutdown began, or taken out already: not this one's to take out.
+    expect(replies.retractSync(queued)).toBe(false);
+    expect(replies.retractSync(cut)).toBe(false);
+    expect(readDropped(file, Date.now()).entries).toEqual([before]);
+  });
+
   it('a dropped.json it cannot append is logged without throwing', () => {
     writeFileSync(join(dir, 'blocker'), '');
     const { replies, log } = start(vi.fn(async () => undefined), join(dir, 'blocker', 'dropped.json'));

@@ -361,7 +361,7 @@ import {
   SUPPORTED_FILE_TYPES,
   syncCommentInstructions,
 } from './comments';
-import { createGracefulInterrupt, createIdlePause, Semaphore, withIdleTimeout, type IdlePause } from './watchdog';
+import { createEarlyInterrupt, createGracefulInterrupt, createIdlePause, Semaphore, withIdleTimeout, type IdlePause } from './watchdog';
 import { createBotRoster } from './bot-roster';
 import { readResponseRoster, responseMemberLabel } from './response-members';
 import { createNameBook, fetchChatMembers, resolveNames, withDeadline } from './names';
@@ -798,7 +798,11 @@ interface ActiveState {
   newAt?: number;
   /** The run's trigger while it waits for a global slot (acquireRunSlot), for a shutdown to keep (s18c). */
   waiting?: DroppedOrigin;
-  /** A person's turn in flight, from turn/start until its final card is written: what a shutdown or a crash cuts short. */
+  /**
+   * A person's turn in flight, from the moment its run reserves the session (a first turn still being prepared: its
+   * session resumed, its images downloaded) or takes it off the queue, until its final card is written: what a shutdown
+   * or a crash cuts short (review 260).
+   */
   inFlight?: DroppedOrigin;
   /** A main-area run's trigger time: until {@link woven} is known, its record block will carry the unread
    * messages before it (a smart verdict to open a topic checks this, s25). */
@@ -1576,6 +1580,12 @@ export function createOrchestrator(
    * hears once the bot is back.
    */
   const cutShort = new Map<string, DroppedOrigin>();
+  /**
+   * What this shutdown settled for each person's message, by id: saved as it began (collectLost), appended later
+   * (keepForResend), or answered by its card. A message is kept once however many paths reach it, its preparation ending
+   * after the drain, say (review 260); an appended one a late card answers leaves dropped.json again (review 259).
+   */
+  const resendKept = new Map<string, 'saved' | 'appended' | 'answered'>();
   const interruptGraceMs = options?.shutdownTiming?.interruptGraceMs ?? SHUTDOWN_INTERRUPT_GRACE_MS;
   const shutdownDrainMs = options?.shutdownTiming?.drainMs ?? SHUTDOWN_DRAIN_MS;
   const droppedReplies = options?.droppedFile ? createDroppedReplies({
@@ -3539,7 +3549,9 @@ export function createOrchestrator(
       return;
     }
     const reserved: ActiveState = { queue: [], chatId: msg.chatId, requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg), smart: project && sessionModeOf(project) === 'smart', isGoal: goal, runLoop: true,
-      ...(flat && !msg.threadId && !goal ? { triggerAt: msg.createTime } : {}) };
+      ...(flat && !msg.threadId && !goal ? { triggerAt: msg.createTime } : {}),
+      // A shutdown keeps it from now on, however long its preparation takes past the drain (review 260).
+      ...(origin ? { inFlight: origin } : {}) };
     active.set(sessionKey, reserved);
     dropRetries(sessionKey);
     extra?.retry?.accepted();
@@ -3897,7 +3909,7 @@ export function createOrchestrator(
         // Stopping: the shutdown's, not this turn's failure, as in launchRun (settleGone); the shutdown took the queue.
         if (shuttingDown) {
           if (extra?.scheduled) extra.scheduled.settle(scheduleStopped());
-          else if (origin) droppedReplies?.appendSync(origin);
+          else if (origin) keepForResend(origin);
           return;
         }
         if (!goal) noteFailure(msg, flat ? 'main' : 'topic', launchOpts?.backendId ?? groupBackend(project).id, { error: err });
@@ -7435,7 +7447,7 @@ export function createOrchestrator(
     // Checked right after this await: no macrotask can start a shutdown between here and the free-slot acquire below.
     // A shutdown that began meanwhile found this turn neither queued nor waiting for a slot (collectLost), so a
     // person's turn is kept for redelivery here.
-    if (shuttingDown) { if (opts.origin) droppedReplies?.appendSync(opts.origin); reaction?.done(); await opts.thread.close(); return; }
+    if (shuttingDown) { if (opts.origin) keepForResend(opts.origin); reaction?.done(); await opts.thread.close(); return; }
     state.runLoop = true;
     state.smart = opts.smart === true;
     if (opts.requesterOpenId) state.requesterOpenId = opts.requesterOpenId;
@@ -7641,6 +7653,8 @@ export function createOrchestrator(
       let replyInThread = opts.flat ? false : (opts.replyInThread ?? Boolean(opts.knownThreadId));
       for (;;) {
         let turnInput = currentTurn.input;
+        // In flight from here, through the preparation below, not only once turn/start went out (review 260).
+        state.inFlight = currentTurn.origin;
         state.requesterOpenId = currentTurn.requesterOpenId;
         state.requesterKind = currentTurn.requesterKind;
         const scheduled = currentTurn.scheduled;
@@ -7703,11 +7717,14 @@ export function createOrchestrator(
         // the closed thread. A person's first turn, evicted while it was prepared, still runs (T2 做法).
         if ((fromQueue || scheduled || shuttingDown) && settleGone(currentTurn, replyTo)) break;
         const run = opts.thread.runStreamed(turnInput, { model: turnModel, effort: turnEffort, serviceTier: turnServiceTier });
-        state.inFlight = currentTurn.origin;
         let unseen = currentTurn.seen;
         titleTurnAttempted = true;
         const turnStartAt = Date.now(); // turn/start 已在 runStreamed() 内发出（与下面的建卡并行）
         state.run = run;
+        // review 260: the ⏹ entry comes only once the card is created and the topic adopted (Feishu calls, seconds when
+        // Feishu is slow); a stop or the shutdown meanwhile interrupts the turn through this one, as soon as it has its id.
+        const early = createEarlyInterrupt({ turnId: () => run.turnId(), abort: (tid) => void opts.thread.abort(tid).catch(() => undefined) });
+        state.interrupt = () => { state.intakeCancelled = true; early.interrupt(); };
         activity?.end();
         activity = createRunActivity(opts.chatId);
         const render = new RunRender();
@@ -7796,8 +7813,9 @@ export function createOrchestrator(
           // 无人消费的通知流会污染该 thread 的下一轮。turnId 此时多半还没到手
           // （事件尚未消费），abort 仅尽力而为；close() SIGKILL 子进程兜底终结
           // 这轮。下一条消息经 resolveThread 的 resume 兜底自愈。
+          const { sentTo } = early.handOver();
           const tid = run.turnId();
-          if (tid) void opts.thread.abort(tid).catch(() => undefined);
+          if (tid && tid !== sentTo) void opts.thread.abort(tid).catch(() => undefined);
           void trackTask(opts.thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
           if (topicThreadId) sessions.delete(topicThreadId);
           throw err; // 外层 catch 把错误回给用户
@@ -7920,9 +7938,12 @@ export function createOrchestrator(
         });
         let startedTurnId: string | undefined;
         let awaitingSubagents = false;
+        // From here the ⏹ entry below stops the turn; a stop that came while the card was created goes on through it.
+        const handed = early.handOver();
         const stopper = createGracefulInterrupt({
           turnId: () => run.turnId() ?? (awaitingSubagents ? startedTurnId : undefined),
-          abort: (tid) => void opts.thread.abort(tid).catch(() => undefined),
+          // That stop sent turn/interrupt to this turn already.
+          abort: (tid) => { if (tid !== handed.sentTo) void opts.thread.abort(tid).catch(() => undefined); },
           forceStop: resolveStop,
         });
         disposeInterrupt = stopper.dispose;
@@ -7948,6 +7969,7 @@ export function createOrchestrator(
           run.lastActivity, // raw-notification liveness: a long shell command isn't "idle"
           idlePause,
         );
+        if (handed.stopped) originalInterrupt();
         // Per-turn stream-latency observability (file log `stream.timing`): locates
         // where a reply lags — first byte, backlog (lastEv vs done), push split, RTT.
         const tStart = Date.now();
@@ -8341,7 +8363,7 @@ export function createOrchestrator(
    * non-complete goal is cleared first so it won't reactivate on the next resume.
    */
   async function launchGoalRun(opts: LaunchOpts): Promise<void> {
-    if (shuttingDown) { if (opts.origin) droppedReplies?.appendSync(opts.origin); await opts.thread.close(); return; }
+    if (shuttingDown) { if (opts.origin) keepForResend(opts.origin); await opts.thread.close(); return; }
     const objective = opts.firstText;
     let activeKey = opts.knownThreadId ?? `pending:${opts.replyTo}`;
     let topicThreadId = opts.knownThreadId;
@@ -9474,19 +9496,38 @@ export function createOrchestrator(
     return lost;
   }
 
-  /** The people's turns in flight now (ActiveState.inFlight). */
+  /** Each message once: a run waiting for a slot is both lost (collectLost) and in flight. */
+  function oncePerMessage(items: readonly DroppedOrigin[]): DroppedOrigin[] {
+    return items.filter((item, index) => items.findIndex(other => other.messageId === item.messageId) === index);
+  }
+
+  /** The people's turns in flight now (ActiveState.inFlight), a first turn still being prepared too. */
   function inFlightTurns(): DroppedOrigin[] {
     return [...new Set(active.values())].flatMap(state => state.inFlight ? [state.inFlight] : []);
   }
 
-  /** A cut-short turn whose card said so: its sender is not asked again once the bot is back. */
+  /**
+   * A cut-short turn whose card said so (or answered): its sender is not asked again once the bot is back. A card that
+   * got through after the drain had kept its turn takes it off dropped.json again (review 259).
+   */
   function cutShortAnswered(origin: DroppedOrigin | undefined): void {
-    if (origin && cutShort.delete(origin.messageId)) log.info('bridge', 'cut-short-card', { ref: origin.messageId.slice(-6) });
+    if (!origin) return;
+    const ref = origin.messageId.slice(-6);
+    if (cutShort.delete(origin.messageId)) {
+      resendKept.set(origin.messageId, 'answered');
+      log.info('bridge', 'cut-short-card', { ref });
+    } else if (resendKept.get(origin.messageId) === 'appended') {
+      resendKept.set(origin.messageId, 'answered');
+      droppedReplies?.retractSync(origin);
+      log.info('bridge', 'cut-short-card-late', { ref });
+    }
   }
 
-  /** Keeps a person's turn the shutdown dropped or cut short in dropped.json, once. */
+  /** Keeps a person's message the shutdown dropped or cut short in dropped.json: once, and not one its card answered. */
   function keepForResend(origin: DroppedOrigin): void {
     cutShort.delete(origin.messageId);
+    if (resendKept.has(origin.messageId)) return;
+    resendKept.set(origin.messageId, 'appended');
     droppedReplies?.appendSync(origin);
   }
 
@@ -9533,8 +9574,11 @@ export function createOrchestrator(
     attention.observe(() => undefined);
     asks.shutdown();
     // Written at once, before anything is cleared below and long before the Codex processes end or the lock goes.
-    droppedReplies?.saveSync(collectLost(), 'shutdown');
-    for (const origin of inFlightTurns()) cutShort.set(origin.messageId, origin);
+    const lost = collectLost();
+    droppedReplies?.saveSync(lost, 'shutdown');
+    for (const origin of lost) resendKept.set(origin.messageId, 'saved');
+    // A run waiting for a slot is in both: kept above already.
+    for (const origin of inFlightTurns()) if (!resendKept.has(origin.messageId)) cutShort.set(origin.messageId, origin);
     // After collectLost read the lanes, before the judge's processes go: nothing judged lands now, nor takes its THINKING off.
     for (const item of smartLanes.pending()) dropAck(item);
     smartLanes.shutdown();
@@ -9893,7 +9937,7 @@ export function createOrchestrator(
     // the shutdown keeps the cut-short turns whose cards had not said so yet; the shutdown already saved the rest.
     saveDroppedSync: (why: 'shutdown' | 'crash') => {
       if (shuttingDown) keepCutShort();
-      else droppedReplies?.saveSync([...collectLost(), ...inFlightTurns()], why);
+      else droppedReplies?.saveSync(oncePerMessage([...collectLost(), ...inFlightTurns()]), why);
     },
     replyDropped: () => { if (!shuttingDown) droppedReplies?.start(); },
   };
