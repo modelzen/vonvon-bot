@@ -55,3 +55,14 @@ test('macOS uses the isolated local runner and a same-repository trust guard', (
   assert.match(body, /id -Gn/);
   assert.match(body, /admin/);
 });
+
+test('the Linux job keeps the pinned server Node between runs for the install smoke; other jobs do not', () => {
+  const body = jobs.linux;
+  assert.match(body, /uses:\s*actions\/cache@v4/);
+  assert.match(body, /path:\s*\$\{\{\s*runner\.temp\s*\}\}\/vonvon-server-node/);
+  assert.match(body, /key:\s*server-node-\$\{\{\s*hashFiles\('scripts\/server-node\.json'\)\s*\}\}/);
+  assert.match(body, /VONVON_SMOKE_NODE_CACHE:\s*\$\{\{\s*runner\.temp\s*\}\}\/vonvon-server-node/);
+  // The cache is restored after the exact source is checked out and verified.
+  assert.ok(body.indexOf('actions/cache') > body.indexOf('SOURCE_SHA'));
+  for (const platform of ['macos', 'windows']) assert.doesNotMatch(jobs[platform], /VONVON_SMOKE_NODE_CACHE|vonvon-server-node/);
+});

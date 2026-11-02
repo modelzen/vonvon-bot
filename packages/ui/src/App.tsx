@@ -2,6 +2,7 @@ import {useActiveDevice, useClient, useDevicesState, useShellCapabilities} from 
 import {DevicesPanel} from './devices/DevicesPanel';
 import {DeviceSwitcher} from './devices/DeviceSwitcher';
 import {DeviceStatusBanner, DeviceVersionNotice} from './devices/DeviceStatusBanner';
+import {RemoteUpdateNotice} from './devices/RemoteUpdateNotice';
 import {shouldMarkPlatform} from './devices/devices-presentation';
 import {groupUrl} from './url-actions';
 import {uiFeatures} from './features';
@@ -664,6 +665,7 @@ function DesktopApp() {
             </div>;
           })}
           {feedback}
+          <RemoteUpdateNotice/>
           <DeviceStatusBanner/>
           <DeviceVersionNotice onUpgrade={() => openPage('application')}/>
           {!ready && (
