@@ -118,22 +118,32 @@ function blocksIn(content: string): Array<{ start: number; end: number; text: st
   }
 }
 
+/** One name for a file reached by several (a home behind a link): its real path, or the name when it does not resolve. */
+const sameFile = (path: string): Promise<string> => realpath(path).catch(() => path);
+
 /**
- * Takes every block for `bin` out of each file (a copy someone made of it too); other blocks, such as the desktop
- * app's, stay. The line break `breaks` names goes too while the last of them still starts right where that text ended
- * and nothing follows it; once something has been written after the block, or the text before it is no longer as long
- * as it was, the break stays.
+ * Takes every block for one of `bins` out of each file (a copy someone made of it too); other blocks, such as the
+ * desktop app's, stay. The line break `breaks` names goes too while the last of them still starts right where that
+ * text ended and nothing follows it; once something has been written after the block, or the text before it is no
+ * longer as long as it was, the break stays. A file named twice (through a linked home and by its real path) is
+ * handled once, and its break is found under either name.
  */
-export async function removePathBlock(files: string[], bin: string, breaks: AddedBreaks = {}): Promise<ShellPathResult> {
+export async function removePathBlock(files: string[], bins: string[], breaks: AddedBreaks = {}): Promise<ShellPathResult> {
   const result: ShellPathResult = { files: [], notes: [] };
-  const ours = asBytes(startupBlock(bin)).replace(/\n$/, '');
+  const ours = new Set(bins.map(bin => asBytes(startupBlock(bin)).replace(/\n$/, '')));
+  const added = new Map<string, number>();
+  for (const [file, at] of Object.entries(breaks)) added.set(await sameFile(file), at);
+  const seen = new Set<string>();
   for (const file of files) {
+    const real = await sameFile(file);
+    if (seen.has(real)) continue;
+    seen.add(real);
     try {
       const changed = await rewrite(file, content => {
-        const found = blocksIn(content).filter(block => block.text.replace(/\n$/, '') === ours);
+        const found = blocksIn(content).filter(block => ours.has(block.text.replace(/\n$/, '')));
         const last = found.at(-1);
         if (!last) return content;
-        const at = breaks[file];
+        const at = added.get(real);
         if (at !== undefined && at >= (found.at(-2)?.end ?? 0) && last.start === at + 1 && last.end === content.length && content[at] === '\n') last.start = at;
         let rest = '';
         let from = 0;

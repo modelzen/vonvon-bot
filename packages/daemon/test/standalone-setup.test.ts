@@ -198,7 +198,7 @@ describe('__standalone-teardown', () => {
       await runStandaloneSetup({ installRoot: f.root, version: '1.0.0' }, f.io, { ...f.deps, zdotdir: setup && zdot });
       const written = [setup ? join(zdot, '.zshrc') : join(f.home, '.zshrc'), setup ? join(zdot, '.zprofile') : join(f.home, '.zprofile'), join(f.home, '.profile'), join(f.home, '.bashrc')];
       for (const file of written) expect(await readFile(file, 'utf8')).toContain(startupBlock(join(f.root, 'bin')));
-      if (keepRecord) expect(JSON.parse(await readFile(join(f.root, 'path-block.json'), 'utf8'))).toEqual({ files: written, breaks: { [join(f.home, '.bashrc')]: 'export KEEP=1'.length } });
+      if (keepRecord) expect(JSON.parse(await readFile(join(f.root, 'path-block.json'), 'utf8'))).toEqual({ files: written, breaks: { [join(f.home, '.bashrc')]: 'export KEEP=1'.length }, bins: [join(f.root, 'bin')] });
       else await rm(join(f.root, 'path-block.json'), { force: true });
       // bash would now pick .bash_profile, not the .profile setup wrote
       await writeFile(join(f.home, '.bash_profile'), loginLine);
@@ -208,6 +208,44 @@ describe('__standalone-teardown', () => {
       for (const file of written) expect(await readFile(file, 'utf8')).not.toContain('Vonvon Bot CLI');
       expect(await readFile(join(f.home, '.bashrc'), 'utf8')).toBe(keepRecord ? 'export KEEP=1' : 'export KEEP=1\n');
       expect(await readFile(join(f.home, '.bash_profile'), 'utf8')).toBe(loginLine);
+    }
+  });
+
+  // review 223 P3: the block names the install root as setup was given it, under the home as it was reached then; a home
+  // reached through a link at setup and by its real path at teardown (or the other way round) gave another text, so
+  // the block stayed while the record still found the file
+  it.runIf(process.platform !== 'win32')('takes the block out when the home was reached through a link at setup and not at teardown, or the other way round', async () => {
+    const cases: Array<{ setup: 'real' | 'link'; teardown: 'real' | 'link'; keepRecord: boolean }> = [
+      { setup: 'real', teardown: 'link', keepRecord: true },
+      { setup: 'link', teardown: 'real', keepRecord: true },
+      // the record is gone: the install root's real path still names the block setup wrote
+      { setup: 'real', teardown: 'link', keepRecord: false },
+    ];
+    for (const { setup, teardown, keepRecord } of cases) {
+      const f = await fixture();
+      const link = join(f.base, 'home-link');
+      await symlink(f.home, link);
+      const via = (which: 'real' | 'link') => {
+        const home = which === 'link' ? link : f.home;
+        return { home, root: join(home, '.local', 'share', 'vonvon-bot', 'server') };
+      };
+      const before: Record<string, string> = { '.bashrc': 'export KEEP=1', '.profile': 'export A=1\n' };
+      for (const [name, text] of Object.entries(before)) await writeFile(join(f.home, name), text);
+      const at = via(setup);
+      await runStandaloneSetup({ installRoot: at.root, version: '1.0.0' }, f.io, { ...f.deps, home: at.home });
+      expect(await readFile(join(f.home, '.bashrc'), 'utf8')).toBe(`export KEEP=1\n${startupBlock(join(at.root, 'bin'))}`);
+      if (!keepRecord) await rm(join(f.root, 'path-block.json'));
+      // the desktop app's block, for another bin, stays
+      const desktop = `export Z=1\n${startupBlock(join(f.base, 'desktop', 'bin'))}`;
+      await writeFile(join(f.home, '.zshrc'), desktop);
+      const then = via(teardown);
+      f.out();
+      const result = await runStandaloneTeardown({ installRoot: then.root }, f.io, { ...f.deps, home: then.home });
+      expect(result.pathFiles).toHaveLength(3);
+      expect(await readFile(join(f.home, '.bashrc'), 'latin1')).toBe(keepRecord ? before['.bashrc'] : `${before['.bashrc']}\n`);
+      expect(await readFile(join(f.home, '.profile'), 'latin1')).toBe(before['.profile']);
+      expect(await readFile(join(f.home, '.zprofile'), 'utf8')).toBe('');
+      expect(await readFile(join(f.home, '.zshrc'), 'utf8')).toBe(desktop);
     }
   });
 
