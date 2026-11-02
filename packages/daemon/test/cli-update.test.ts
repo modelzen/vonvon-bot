@@ -134,6 +134,8 @@ describe('vonvon update', () => {
       distribution: { kind: 'bundled', cliPath: '/x' },
       machine: async payload => {
         if (payload.type === 'applyCoreUpdate') return accepted;
+        // the desktop app there found the new version
+        if (payload.type === 'checkCoreUpdate') return { type: 'coreUpdate', distribution: { kind: 'bundled', cliPath: '/x' }, current: '1.0.0', latest: '1.0.1', hasUpdate: true, dev: false, desktopShell: true };
         const next = steps[polls++];
         if (!next) throw new ConnectionError(new Error('closed'));
         return statusReply(next);
@@ -141,7 +143,7 @@ describe('vonvon update', () => {
       file: () => status('done', { ...desktop, ok: true, to: '1.0.1' }),
     });
     await runUpdateCommand({}, io(), deps);
-    expect(sent[0]).toEqual({ type: 'applyCoreUpdate' });
+    expect(sent.slice(0, 2)).toEqual([{ type: 'checkCoreUpdate' }, { type: 'applyCoreUpdate' }]);
     expect(out().trim().split('\n')).toEqual([UPDATE_INTERRUPTS, '正在检查桌面端更新', '正在下载桌面端更新 50%', '下载好了，正在重启（会中断正在进行的对话）', '正在中断进行中的对话', '更新完成', '已更新到 1.0.1']);
   });
   it('says nothing about interrupting when the running server is already up to date, nor under --json', async () => {
