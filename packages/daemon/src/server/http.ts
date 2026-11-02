@@ -1,8 +1,8 @@
 import { createServer } from 'node:http';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
-import { PROTOCOL_VERSION, serverInfoV1Schema, serverInfoV2Schema, type Request, type Response } from '@vonvon/protocol';
+import { homedir, networkInterfaces } from 'node:os';
+import { CLOSE_CODES, DRAIN_KINDS, PROTOCOL_VERSION, rpcKindOf, serverInfoV1Schema, serverInfoV2Schema, type Request, type Response } from '@vonvon/protocol';
 import type { AdminService } from '../admin/service';
 import type { ShutdownControl } from '../host/lifecycle';
 import { createServiceActionLauncher } from '../host/service-action';
@@ -30,7 +30,7 @@ import { machineRpc } from './rpc/machine';
 import type {BridgeImporter} from '../import/bridge/transaction';
 import { settingsRpc } from './rpc/settings';
 import { createLocalIdentity } from './local-credential';
-import { errorEnvelope, RpcError } from './errors';
+import { drainingError, errorEnvelope, RpcError } from './errors';
 import { authorize, MAINTENANCE_STRIKES, type AuthzDeps } from './authz';
 import { filterSnapshot, scopedOwner } from './snapshot-filter';
 import { createSessionTokens, type SessionTokens } from '../host/session-tokens';
@@ -39,6 +39,11 @@ import { deviceRpc } from './rpc/device';
 import { deviceKeyPair, holdDevice, loadOrCreateDevice } from '../remote/device';
 import { createClientRegistry, type ClientRegistry } from '../remote/clients';
 import { completePairing, followRevocations, createInviteBook } from '../remote/pairing';
+import { networkIdentity, type EnableDeps } from '../remote/address';
+import { readRemoteConfig, type RemoteConfig } from '../remote/config';
+import { createRateLimiter } from '../remote/rate-limit';
+import { tailscaleIps } from '../remote/tailscale';
+import { createRemoteListeners, type RemoteListenerDeps, type RemoteListeners } from './remote-listeners';
 import { log } from '../core/logger';
 import { serveWebUi } from './web-ui';
 import { getPidLockInfo, type PidLockInfo } from './pid-lock';
@@ -66,11 +71,15 @@ export interface DaemonApi extends ApiLifetime {
   readonly secure?: SecureDeps;
 }
 
+/** devices 4.7: what a draining daemon still answers (`control`); the rest reads `draining`. */
+const DRAINING = new Set<string>(DRAIN_KINDS);
+
 /** Test seams for the login-time service: the platform and spawn of the helper launcher, and the manager read. */
 type ServiceSeams = Pick<Parameters<typeof createServiceActionLauncher>[0], 'platform' | 'spawn'> & Pick<Parameters<typeof createSnapshotStore>[0], 'readService'>;
 
-/** devices 4.5: what this daemon reports in a v2 server info; D3 adds `remote`. `session-scope`: Bot sessions' tokens and `--scope` (D4a). */
-const capabilities = (): string[] => ['device', 'session-scope'];
+/** Test seams for the remote listeners (D3): this machine's interfaces, Tailscale and LAN network, the classification
+ * (a loopback alias passes for a LAN address), the retry timers and the secure channel's. */
+export type RemoteSeams = Partial<Pick<EnableDeps, 'interfaces' | 'tailscale' | 'networkIdentity' | 'classify'>> & Pick<RemoteListenerDeps, 'timers' | 'secureTimers'>;
 
 /**
  * devices-4a 4.7: what each connection gets of a published event. The owner all of it, its snapshot cut to its `--scope`
@@ -90,7 +99,7 @@ const viewFor = (tokens: Pick<SessionTokens, 'active'>): PeerView => (peer, even
  * Bot sessions' tokens the host issues to its bots (devices-4a 4.1), which a session's hello is checked against.
  * `askBot`: a session's Bot process, asked about a ★ request (devices-4b 4.3); without it those are refused.
  */
-export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; bridgeImport?: BridgeImporter; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics']; crashes?: Parameters<typeof createSnapshotStore>[0]['crashes']; startedAt?: number; sessionTokens?: SessionTokens; askBot?: AuthzDeps['askBot'] }): Promise<DaemonApi> {
+export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; bridgeImport?: BridgeImporter; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics']; crashes?: Parameters<typeof createSnapshotStore>[0]['crashes']; startedAt?: number; sessionTokens?: SessionTokens; askBot?: AuthzDeps['askBot']; remote?: RemoteSeams }): Promise<DaemonApi> {
   const startedAt = options.startedAt ?? Math.round(performance.timeOrigin);
   const sessionTokens = options.sessionTokens ?? createSessionTokens();
   /** What the bot-session checks read: a bot's bound groups and their sessions, from its files (the snapshot can be 5 s old). */
@@ -113,6 +122,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
   let acquiredDirectory: Awaited<ReturnType<typeof createDirectoryBrowser>> | undefined;
   let acquiredSockets: ReturnType<typeof createSocketServer> | undefined;
   let acquiredClients: ClientRegistry | undefined;
+  let acquiredRemote: RemoteListeners | undefined;
   let snapshots: SnapshotStore | undefined;
   let port = options.port ?? 0;
   const invalidate = (): void => { void snapshots?.rebuild().catch(() => undefined); };
@@ -134,6 +144,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
     void owner.catch(() => undefined);
     for (const cleanup of [
       () => acquiredSockets?.beginDrain(),
+      () => acquiredRemote?.beginDrain(),
       () => acquiredDirectory?.close(),
       () => Promise.resolve().then(() => options.service.close?.()),
       () => acquiredJobs?.close(),
@@ -150,14 +161,19 @@ export async function startApi(options: { service: AdminService; port?: number; 
     if (released) return released;
     let socketCleanup: Promise<void>;
     let listenerClosed: Promise<void>;
+    let remoteClosed: Promise<void>;
     stopEnding?.();
     released = Promise.resolve().then(async () => {
       await listenerClosed;
-      const results = await Promise.allSettled([socketCleanup, Promise.resolve().then(() => acquiredClients?.close())]);
+      // The remote servers are closed beside the loopback one; the clients' last-seen is written once nothing can touch it.
+      const closed = await Promise.allSettled([socketCleanup, remoteClosed]);
+      const results = [...closed, ...await Promise.allSettled([Promise.resolve().then(() => acquiredClients?.close())])];
       const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
       if (errors.length) throw new ApiCleanupError(errors);
     });
     socketCleanup = new Promise<void>(resolve => resolve(acquiredSockets?.release()));
+    remoteClosed = new Promise<void>(resolve => resolve(acquiredRemote?.release()));
+    void remoteClosed.catch(() => undefined);
     listenerClosed = new Promise<void>((resolve, reject) => {
       if (!acquiredServer) { resolve(); return; }
       acquiredServer.close(error => { if (error && !('code' in error && error.code === 'ERR_SERVER_NOT_RUNNING')) reject(error); else resolve(); });
@@ -189,7 +205,6 @@ export async function startApi(options: { service: AdminService; port?: number; 
     const identity = holdDevice(paths.appDir, await loadOrCreateDevice(paths.appDir, machineId));
     const clients = acquiredClients = await createClientRegistry(paths.appDir);
     const invites = createInviteBook();
-    followRevocations({ clients, invites, publish: event => acquiredSockets?.publish(event), log });
     const directory = acquiredDirectory = await createDirectoryBrowser();
     const server = acquiredServer = createServer((request, response) => {
       void serveWebUi(request, response).then(served => {
@@ -229,7 +244,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
       switch (request.method) {
         case 'snapshot': peer.send({ type: 'response', id, method: 'snapshot', payload: shown(snapshots.current()) }); return;
         case 'admin': return finish(peer, await adminRpc(options.service, follow => logs.follow(peer, follow), request.payload, { startedAt, peer }), payload => ({ type: 'response', id, method: 'admin', payload }));
-        case 'device': return finish(peer, await deviceRpc({ home, identity, clients, invites }, peer, request.payload), payload => ({ type: 'response', id, method: 'device', payload }));
+        case 'device': return finish(peer, await deviceRpc({ home, identity, clients, invites, remote: { listeners: remote, enable, active } }, peer, request.payload), payload => ({ type: 'response', id, method: 'device', payload }));
         case 'settings': return finish(peer, await settingsRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'settings', payload: shown(payload) }));
         case 'collaboration': return finish(peer, await collaborationRpc(options.service, directory, request.payload), payload => ({ type: 'response', id, method: 'collaboration', payload: shown(payload) }));
         case 'environment': return finish(peer, await environmentRpc(options.service, jobs, peer, request.payload, environment), payload => ({ type: 'response', id, method: 'environment', payload }));
@@ -266,23 +281,51 @@ export async function startApi(options: { service: AdminService; port?: number; 
         if ((strikes.get(peer) ?? 0) >= MAINTENANCE_STRIKES) peer.close(4001, 'protocol_mismatch');
       }
     }
-    /** A draining daemon still answers DRAIN_KINDS (devices 4.7), to whoever the table lets ask them. */
+    /**
+     * devices 4.7: a draining daemon answers DRAIN_KINDS, to whoever the table lets ask them, and every other request
+     * `draining`, the connection kept. Codex review 248: a client the drain closed reconnects to follow the update, and
+     * its first request is the snapshot (`watchSnapshots`): it gets the last one built, marked stale, without a rebuild or
+     * a word to a Bot process that is stopping; a negotiate only records on the connection. A connection of another
+     * protocol is refused what it may never ask as when open, and closed 4001 after 20 in a row; nothing else is checked
+     * for a request a draining daemon does not answer (a ★ row would ask a stopping Bot process).
+     */
     async function control(peer: Peer, request: Request): Promise<void> {
-      await admitted(peer, request);
-      if (request.method === 'machine' && request.payload.type === 'coreUpdateStatus') {
-        peer.send({ type: 'response', id: request.id, method: 'machine', payload: { type: 'coreUpdateStatus', status: options.service.updateStatus() } });
-      } else if (request.method === 'machine' && request.payload.type === 'stopHost') {
-        if (!options.control) throw new Error('Host control is unavailable');
-        options.control.requestStop();
-        peer.send({ type: 'response', id: request.id, method: 'machine', payload: { type: 'done', message: 'daemon 正在停止。' } });
-      } else if (request.method === 'admin' && request.payload.type === 'daemonStatus') {
-        const lock = await owner;
-        const own = lock?.pid === process.pid && lock.listen === `127.0.0.1:${port}`;
-        peer.send({ type: 'response', id: request.id, method: 'admin', payload: { kind: 'daemonStatus', status: {
-          installed: false, supported: false, selfHosted: true, running: own, version: bridgeVersion(), startedAt, ...(own ? { pid: lock.pid } : {}),
-        } } });
+      const answered = DRAINING.has(rpcKindOf(request));
+      try {
+        if (!answered && peer.principal.kind !== 'maintenance') throw drainingError();
+        const decision = await admitted(peer, request);
+        if (!answered) throw drainingError();
+        const { id } = request;
+        if (request.method === 'snapshot') {
+          if (!snapshots) throw new Error('Snapshot store is not ready');
+          const shown = decision.narrow ?? (<T>(payload: T): T => payload);
+          peer.send({ type: 'response', id, method: 'snapshot', payload: shown({ ...snapshots.current(), stale: true }) });
+        } else if (request.method === 'admin' && request.payload.type === 'negotiate') {
+          // A read: answered as it is, never through a snapshot rebuild
+          const outcome = await adminRpc(options.service, follow => logs.follow(peer, follow), request.payload, { startedAt, peer });
+          if (outcome.kind !== 'read') throw drainingError();
+          peer.send({ type: 'response', id, method: 'admin', payload: outcome.value });
+        } else if (request.method === 'machine' && request.payload.type === 'coreUpdateStatus') {
+          peer.send({ type: 'response', id, method: 'machine', payload: { type: 'coreUpdateStatus', status: options.service.updateStatus() } });
+        } else if (request.method === 'machine' && request.payload.type === 'stopHost') {
+          if (!options.control) throw new Error('Host control is unavailable');
+          options.control.requestStop();
+          peer.send({ type: 'response', id, method: 'machine', payload: { type: 'done', message: 'daemon 正在停止。' } });
+        } else if (request.method === 'admin' && request.payload.type === 'daemonStatus') {
+          const lock = await owner;
+          const own = lock?.pid === process.pid && lock.listen === `127.0.0.1:${port}`;
+          peer.send({ type: 'response', id, method: 'admin', payload: { kind: 'daemonStatus', status: {
+            installed: false, supported: false, selfHosted: true, running: own, version: bridgeVersion(), startedAt, ...(own ? { pid: lock.pid } : {}),
+          } } });
+        } else throw drainingError();
+      } catch (error) {
+        peer.send(errorEnvelope(request.id, error));
+        if ((strikes.get(peer) ?? 0) >= MAINTENANCE_STRIKES) peer.close(4001, 'protocol_mismatch');
       }
     }
+    /** devices 4.5: what this daemon reports in a v2 server info: `remote` while an address is opened (D3); `session-scope`:
+     * Bot sessions' tokens and `--scope` (D4a). */
+    const capabilities = (): string[] => ['device', 'session-scope', ...(remote.status().length ? ['remote'] : [])];
     // devices 4.5: a protocol 1 client gets the three fields it parses strictly, with its own version, so a 0.8 client can still stop this daemon.
     const info = (peer: Peer) => peer.protocolVersion === 1
       ? serverInfoV1Schema.parse({ type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: 1 })
@@ -291,14 +334,38 @@ export async function startApi(options: { service: AdminService; port?: number; 
     // devices-2 4.3: every server's connections in one hub, so a publish, a drain or a release reaches all of them; its
     // view gives each connection its part of an event whoever publishes it (devices-4a 4.7).
     const hub = createPeerHub({ detached: peer => { jobs.detach(peer); logs.detach(peer); }, view: viewFor(sessionTokens) });
+    // devices 4.3 (SEC-16): a revoked client's connections end now, with 4003; the hub's detach cancels its jobs and log
+    // follows. Before the owner hears of it (followRevocations), so the revoked one does not get that event.
+    clients.onChange((_generation, revoked) => {
+      if (revoked.length) hub.closeWhere(peer => peer.clientId !== undefined && revoked.includes(peer.clientId), CLOSE_CODES.client_revoked, 'client_revoked');
+    });
+    followRevocations({ clients, invites, publish: event => hub.publish(event), log });
     const sockets = acquiredSockets = createSocketServer({ server, credential, sessions: sessionTokens, info, request, control, hub });
     const secure: SecureDeps = { hub, device: deviceKeyPair(identity.current), deviceName: () => identity.current.name, clients, invites, completePairing, info, request, control };
     stopEnding = sessionTokens.onEnd(sessionId => hub.closeWhere(peer => peer.principal.kind === 'bot-session' && peer.principal.sessionId === sessionId, 4401, 'invalid_session_token'));
+    const seams = options.remote ?? {};
+    const interfaces = seams.interfaces ?? networkInterfaces;
+    const enable: EnableDeps = {
+      interfaces, tailscale: seams.tailscale ?? (() => tailscaleIps()), networkIdentity: seams.networkIdentity ?? (iface => networkIdentity(iface)),
+      ...(seams.classify ? { classify: seams.classify } : {}),
+    };
+    const remote = acquiredRemote = createRemoteListeners({
+      secure, interfaces, networkIdentity: enable.networkIdentity, log, ...(seams.timers ? { timers: seams.timers } : {}), ...(seams.secureTimers ? { secureTimers: seams.secureTimers } : {}),
+      limiter: createRateLimiter({ onBan: ip => { log.warn('remote', 'rate-limited', { ip }); } }),
+    });
+    /** Paired clients connected now, each once however many connections it has. */
+    const active = (): number => new Set([...hub.peers].flatMap(peer => peer.open && peer.clientId !== undefined ? [peer.clientId] : [])).size;
     snapshots = await createSnapshotStore({ service: options.service, jobs: () => jobs.snapshot(), serviceAction: () => serviceActions.current(), ...(readService ? { readService } : {}), ...(options.diagnostics ? { diagnostics: options.diagnostics } : {}), ...(options.crashes ? { crashes: options.crashes } : {}), publish: snapshot => sockets.publish({ type: 'event', event: 'snapshot', payload: snapshot }) });
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', () => { server.off('error', reject); resolve(); }); });
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('API did not bind a TCP port');
     port = address.port;
+    // devices 4.2: the remote addresses bind once the loopback listens, without holding the start up: one that waits
+    // for its address retries every 15 s. A remote.json that cannot be read leaves them closed, and says so in the log.
+    let remoteConfig: RemoteConfig | undefined;
+    try { remoteConfig = await readRemoteConfig(home); }
+    catch (error) { log.warn('remote', 'remote-config-unreadable', { error: error instanceof Error ? error.message : String(error) }); }
+    if (remoteConfig) void remote.sync(remoteConfig).catch(error => { log.fail('remote', error, { phase: 'sync' }); });
     return {
       port, listen: `127.0.0.1:${port}`, invalidate, close,
       beginDrain, release, secure,

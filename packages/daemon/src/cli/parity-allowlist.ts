@@ -50,10 +50,5 @@ export const CLI_PARITY_ALLOWLIST: Readonly<Record<string, ParityEntry>> = {
   'machine.service.start': { reason: 'desktop-only', note: "the shell's 启动服务" },
   'machine.service.stop': { reason: 'desktop-only', note: "the shell's 停止服务" },
 
-  // devices 4: the remote listeners and their commands come with D3
-  'device.status': pending('D3', 'vonvon remote status'),
-  'device.enable': pending('D3', 'vonvon remote enable'),
-  'device.disable': pending('D3', 'vonvon remote disable'),
-  'device.setPort': pending('D3', 'vonvon remote port'),
   'admin.negotiate': { reason: 'internal', note: 'each client sends it after the handshake' },
 };

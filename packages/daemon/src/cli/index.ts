@@ -46,15 +46,15 @@ const daemonFor = async (options: { fresh?: boolean }) => {
   return options.fresh ? client.freshDaemon : client.withDaemon;
 };
 /** The commands that write the data root themselves, so they hold the data lease (cli-2-bot 4.6); every other command
- * talks to the daemon, or reads files published with tmp + rename, and takes none. clients and device rename write
- * `devices/` themselves when no daemon runs (devices 4.5); pair only asks the daemon. */
+ * talks to the daemon, or reads files published with tmp + rename, and takes none. clients, device rename and remote
+ * write `devices/` themselves when no daemon runs (devices 4.5, D3 4.8); pair only asks the daemon. */
 const LEASED = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon restart', 'bot repair-dir', 'secrets list', 'secrets set', 'secrets remove',
-  'clients ls', 'clients rename', 'clients revoke', 'device rename',
+  'clients ls', 'clients rename', 'clients revoke', 'device rename', 'remote status', 'remote enable', 'remote disable', 'remote port',
   // with no daemon running, a standalone update takes update.lock and writes update-status.json itself (server-3 4.8)
   'update']);
 /**
  * devices 8.3 and 5.3: what only the person at this computer runs (the trust root, file locks, the service manager,
- * remote access, pairing), refused in a Bot's session before anything runs. `remote …` comes with D3. `update` refuses in
+ * remote access, pairing), refused in a Bot's session before anything runs. `update` refuses in
  * runUpdateCommand too (I3-SEC-3); `__standalone-setup` and `__standalone-teardown` are the install scripts' (server-2 4.3):
  * the first switches `current` to a kept release, an update by another name.
  * `secrets get` is not here: the session's lark-cli resolves its App Secret through it (secrets-get.test.ts). Nor are the
@@ -515,6 +515,20 @@ covers(clients.command('revoke <clientId>'), 'device.revokeClient').description(
 const device = program.command('device').description("This computer's device identity");
 covers(device.command('rename <name>'), 'device.rename').description('Rename this computer as paired clients see it').option(...JSON_FLAG)
   .action(async (name: string, options: Json) => { await (await devices()).runDeviceRename(name, io(options)); });
+// devices 4.2 and D3 4.8: the addresses other computers reach this one on, and the port
+const remotes = async () => import('./commands/remote');
+const remote = program.command('remote').description('Let other computers connect to this one: the addresses and the port');
+covers(remote.command('status'), 'device.status').description('Show the opened addresses, whether each is listened on, and the clients').option(...JSON_FLAG)
+  .action(async (options: Json) => { await (await remotes()).runRemote('status', {}, io(options)); });
+covers(remote.command('enable [ip]'), 'device.enable').description("Accept paired clients on this address (a literal IP), or this machine's Tailscale address")
+  .option('--tailscale', "Use this machine's Tailscale address").option('--allow-public', 'Confirm a public or carrier (CGNAT) address').option(...JSON_FLAG)
+  .action(async (ip: string | undefined, options: Json & { tailscale?: boolean; allowPublic?: boolean }) => {
+    await (await remotes()).runRemote('enable', { ...(ip === undefined ? {} : { host: ip }), tailscale: Boolean(options.tailscale), allowPublic: Boolean(options.allowPublic) }, io(options));
+  });
+covers(remote.command('disable <ip>'), 'device.disable').description('Stop accepting connections on this address; its connections end').option(...JSON_FLAG)
+  .action(async (ip: string, options: Json) => { await (await remotes()).runRemote('disable', { host: ip }, io(options)); });
+covers(remote.command('port <port>'), 'device.setPort').description('Change the remote port (default 7767); paired clients pair again').option(...JSON_FLAG)
+  .action(async (port: string, options: Json) => { await (await remotes()).runRemote('port', { port }, io(options)); });
 const feishu = program.command('feishu').description('Read Feishu groups and members');
 covers(feishu.command('groups'), 'command.listJoinedGroups').description('List joined groups, one page').option(...BOT).option('--cursor <cursor>', 'Next page cursor').option('--json', 'Print JSON')
   .action(async (options: Json & { bot?: string; cursor?: string }) => {
