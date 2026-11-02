@@ -13,7 +13,7 @@ import { getPidLockInfo, isPidLockOwnerRunning, PidLockError, readRunningPidLock
 import { readStartupRegistration, startRegisteredDaemon } from '../../service/startup';
 import { readCrashSummary, removeResumeRequest, writeResumeRequest, type CrashRecord, type CrashSummary } from '../../host/crash-store';
 import { CommandError } from '../command-error';
-import { localTime, print, want, withDaemon, type Daemon, type Io } from '../daemon-client';
+import { cliScope, localTime, print, scopeNeedsDaemon, want, withDaemon, type Daemon, type Io } from '../daemon-client';
 import { interrupts, onSigint, type Interrupts, type OnInterrupt } from '../interrupt';
 
 export type DaemonStatus = { running: false } | {
@@ -183,8 +183,11 @@ export type StatusDeps = {
   home: string; now: () => number; env: NodeJS.ProcessEnv;
   /** daemon status --json is also how a client finds the daemon (`connectLocal`): asking it here would ask itself. */
   daemon: Daemon;
+  /** the owner gave `--scope`: only the daemon answers, which cuts the bots and crashes to it (devices 5.3) */
+  scoped: boolean;
 };
-const statusDeps = (): StatusDeps => ({ home: paths.appDir, now: Date.now, env: process.env, daemon: withDaemon });
+const statusDeps = (): StatusDeps => ({ home: paths.appDir, now: Date.now, env: process.env, daemon: withDaemon, scoped: cliScope() !== undefined });
+const NOT_RUNNING = 'daemon 没有运行。先运行 vonvon daemon start。';
 
 /**
  * devices 8.3: a running daemon answers, with how it was installed and its data root (`source: 'daemon'`); otherwise
@@ -193,6 +196,8 @@ const statusDeps = (): StatusDeps => ({ home: paths.appDir, now: Date.now, env: 
  * `--scope` for its snapshot, and the crash files name the other bots. So it does for `connectLocal`'s discovery
  * (`VONVON_STATUS_FROM_FILES=1`): a caller that hands it a credential of its own (a session's token) must not have the
  * owner's read for it, and the owner's callers check the owner themselves before they connect (Codex review 230-2).
+ * With the owner's `--scope` the files do not answer either: their crashes name every bot, which the daemon leaves out
+ * under a scope (Codex review 251-1).
  */
 export async function runStatus(io: Io, overrides: Partial<StatusDeps> = {}): Promise<void> {
   const d = { ...statusDeps(), ...overrides };
@@ -200,14 +205,18 @@ export async function runStatus(io: Io, overrides: Partial<StatusDeps> = {}): Pr
   const lockOnly = discovery || inBotSession(d.env);
   const status = await daemonStatus(d.home, d.env, !lockOnly);
   if (lockOnly) {
-    if (!status.running && !discovery) throw new CommandError('connection', 'daemon 没有运行。先运行 vonvon daemon start。');
+    if (!status.running && !discovery) throw new CommandError('connection', NOT_RUNNING);
     print(io, [status.running ? `running PID ${status.pid} at ${status.listen}` : 'stopped'], { ...status, source: 'files' });
     return;
   }
   if (status.running) {
     try { await statusFromDaemon(status, io, d.daemon); return; }
-    catch (error) { if (!(error instanceof CommandError && error.kind === 'connection')) throw error; }
+    catch (error) {
+      if (!(error instanceof CommandError && error.kind === 'connection')) throw error;
+      if (d.scoped) throw scopeNeedsDaemon(error);
+    }
   }
+  if (d.scoped) throw scopeNeedsDaemon(NOT_RUNNING);
   const summary = readCrashSummary(d.home, { running: status.running, ...(status.running ? { ownerPid: status.pid } : {}), now: d.now() });
   const crashes = summary.crashes.map(({ at, kind, scope, appId, version, uptimeMs, paused, reason }) => ({ at, kind, scope, ...(appId ? { appId } : {}), version, ...(uptimeMs !== undefined ? { uptimeMs } : {}), ...(paused ? { paused } : {}), reason }));
   print(io, statusLines(status, summary, botNames(d.home)), { ...status, source: 'files', ...(summary.paused ? { paused: summary.paused } : {}), pausedBots: summary.pausedBots, crashes });

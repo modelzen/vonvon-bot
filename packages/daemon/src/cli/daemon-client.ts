@@ -40,6 +40,17 @@ export function setCliContext(next: { scope?: Scope | undefined; env?: NodeJS.Pr
   if ('scope' in next) { if (next.scope) context.scope = next.scope; else delete context.scope; }
   if (next.env) context.env = next.env;
 }
+/** The global `--scope` this command was given, if any. */
+export const cliScope = (): Scope | undefined => context.scope;
+
+/**
+ * devices 5.3 and 8.3: an owner's `--scope` is the daemon's to apply. A read that falls back to the files with no daemon
+ * cannot apply it, so with one given it wants the daemon instead of quietly ignoring it (Codex review 251-1).
+ */
+export const SCOPE_NEEDS_DAEMON = '给了 --scope 时要 daemon 在运行：范围由 daemon 核对，命令行不读本机文件。';
+/** The connection's own words, then why the files are no way round it. */
+export const scopeNeedsDaemon = (error: unknown): CommandError =>
+  new CommandError('connection', `${error instanceof Error ? error.message : String(error)}\n${SCOPE_NEEDS_DAEMON}`, error instanceof CommandError ? error : {});
 
 /**
  * In a Bot's session (devices 5.3) a command acts as the session, never as the owner: its token goes in the hello,
