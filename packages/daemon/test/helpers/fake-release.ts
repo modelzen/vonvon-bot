@@ -4,7 +4,6 @@ import { dirname, join } from 'node:path';
 
 type Tools = {
   writeTarGz: (root: string, entries: Array<{ path: string; mode: string }>, out: string, mtime: number) => Promise<void>;
-  writeZip: (root: string, entries: Array<{ path: string; mode: string }>, out: string, mtime: number) => Promise<void>;
   tarHeader: (path: string, size: number, mode: number, mtime: number) => Buffer;
 };
 /** scripts/build-server.mjs, the writer the real packages come from. */
@@ -18,7 +17,6 @@ export async function releaseTree(parent: string, version: string, files: Record
     'app/package.json': JSON.stringify({ name: '@vonvon/daemon', version }),
     'app/bin/vonvon.mjs': 'export {};\n',
     'node/bin/node': '#!/bin/sh\nexit 0\n',
-    'node/node.exe': 'MZ',
     ...files,
   };
   for (const [path, content] of Object.entries(tree)) {
@@ -29,14 +27,14 @@ export async function releaseTree(parent: string, version: string, files: Record
   return root;
 }
 
-/** Packs `version` as tar.gz (or zip) under `parent`; returns the archive with its bytes, sha512 and size. */
-export async function packRelease(parent: string, version: string, zip = false): Promise<{ root: string; archive: string; bytes: Buffer; sha512: string; size: number }> {
+/** Packs `version` as tar.gz under `parent`; returns the archive with its bytes, sha512 and size. */
+export async function packRelease(parent: string, version: string): Promise<{ root: string; archive: string; bytes: Buffer; sha512: string; size: number }> {
   const tools = await buildTools();
   const root = await releaseTree(parent, version);
-  const entries = ['app/bin/vonvon.mjs', 'app/package.json', 'node/bin/node', 'node/node.exe', 'standalone.json']
+  const entries = ['app/bin/vonvon.mjs', 'app/package.json', 'node/bin/node', 'standalone.json']
     .map(path => ({ path, mode: path === 'node/bin/node' ? '755' : '644' }));
-  const archive = `${root}.${zip ? 'zip' : 'tar.gz'}`;
-  await (zip ? tools.writeZip : tools.writeTarGz)(root, entries, archive, 1_700_000_000);
+  const archive = `${root}.tar.gz`;
+  await tools.writeTarGz(root, entries, archive, 1_700_000_000);
   const bytes = await readFile(archive);
   return { root, archive, bytes, sha512: createHash('sha512').update(bytes).digest('hex'), size: bytes.length };
 }

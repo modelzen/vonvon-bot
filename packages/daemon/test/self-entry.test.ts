@@ -26,7 +26,7 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data', () => process.stdout.write(JSON.stringify({ entry: selfEntry(), node: process.execPath }) + '\\n'));
 `);
   }
-  await switchCurrent(root, '1.0.0', 'linux');
+  await switchCurrent(root, '1.0.0');
   const child = spawn(join(root, 'current', 'node', 'bin', 'node'), [join(root, 'current', 'app', 'bin', 'x.mjs')], { stdio: ['pipe', 'pipe', 'inherit'] });
   const lines: string[] = [];
   child.stdout.setEncoding('utf8').on('data', (text: string) => lines.push(...text.trim().split('\n')));
@@ -37,7 +37,7 @@ process.stdin.on('data', () => process.stdout.write(JSON.stringify({ entry: self
   };
   try {
     const before = await ask(1);
-    await switchCurrent(root, '1.0.1', 'linux');
+    await switchCurrent(root, '1.0.1');
     const after = await ask(2);
     for (const seen of [before, after]) {
       expect(seen.entry).toBe(join(root, 'releases', '1.0.0', 'app', 'bin', 'x.mjs'));

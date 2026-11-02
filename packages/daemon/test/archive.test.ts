@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { afterAll, describe, expect, it } from 'vitest';
-import { ArchiveError, extractTarGz, extractZip, removeStaging } from '../src/service/archive';
+import { ArchiveError, extractTarGz, removeStaging } from '../src/service/archive';
 import { buildTools, packRelease } from './helpers/fake-release';
 
 // main 必败: the update had no unpacker (server-3 4.3)
@@ -72,24 +72,6 @@ describe('extractTarGz', () => {
     const file = `${scratch()}.tar.gz`;
     await writeFile(file, gzipSync(await member('a.txt', 'hello')));
     expect(await refusal(extractTarGz(file, scratch()))).toBe('corrupt');
-  });
-});
-
-describe('extractZip', () => {
-  it('unpacks a Windows package', async () => {
-    const pkg = await packRelease(root, '1.0.1', true);
-    const into = scratch();
-    await extractZip(pkg.archive, into);
-    expect(await readFile(join(into, 'node/node.exe'), 'utf8')).toBe('MZ');
-  });
-  it('refuses a member whose attributes say symbolic link', async () => {
-    const pkg = await packRelease(root, '1.0.2', true);
-    const bytes = await readFile(pkg.archive);
-    const central = bytes.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
-    bytes.writeUInt32LE(0xa1ff << 16 >>> 0, central + 38);
-    const file = `${scratch()}.zip`;
-    await writeFile(file, bytes);
-    expect(await refusal(extractZip(file, scratch()))).toBe('unsafe');
   });
 });
 

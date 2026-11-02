@@ -16,14 +16,14 @@ export const SERVER_TARGETS = ['linux-x64', 'linux-arm64'] as const;
 export type ServerTarget = (typeof SERVER_TARGETS)[number];
 const MAX_ENVELOPE = 64 * 1024;
 
-/** scripts/build-server.mjs `archiveName`: zip for Windows, tar.gz for the rest. */
-export const archiveName = (version: string, target: string): string => `vonvon-server-${version}-${target}.${target.startsWith('win-') ? 'zip' : 'tar.gz'}`;
+/** scripts/build-server.mjs `archiveName`. */
+export const archiveName = (version: string, target: string): string => `vonvon-server-${version}-${target}.tar.gz`;
 export const expectedURL = (baseURL: string, version: string, target: string): string => `${baseURL}/${version}/${archiveName(version, target)}`;
 export const manifestURL = (baseURL: string): string => `${baseURL}/stable/manifest.json`;
 
 /** This machine's package, or undefined where no server package is built (macOS and Windows use the desktop app). */
 export function serverTarget(platform: NodeJS.Platform = process.platform, arch: string = process.arch): ServerTarget | undefined {
-  const name = `${platform === 'win32' ? 'win' : platform}-${arch}`;
+  const name = `${platform}-${arch}`;
   return (SERVER_TARGETS as readonly string[]).includes(name) ? name as ServerTarget : undefined;
 }
 

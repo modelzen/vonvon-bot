@@ -66,9 +66,8 @@ export async function buildEncryptedAccountConfig(
   };
 }
 
-/** The install root of the standalone server this process runs from; never on Windows, which has none (I6). */
+/** The install root of the standalone server this process runs from, if it runs from one. */
 function ownStandaloneRoot(): string | undefined {
-  if (process.platform === 'win32') return undefined;
   const own = classifyDistribution(nearestPackageRoot(selfEntry()));
   return own.kind === 'standalone' ? own.installRoot : undefined;
 }
