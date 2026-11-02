@@ -48,6 +48,8 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['context', 'show', '--group', 'g'], 3], [['context', 'show'], 2], [['now'], 3], [['snapshot'], 3],
   // devices 4.5: pair needs the daemon; the others fall back to the files
   [['pair'], 3], [['clients', 'ls'], 0], [['clients', 'rename', 'cl_0000000000000000', 'x'], 2], [['clients', 'revoke', 'cl_0000000000000000'], 2], [['device', 'rename', 'x'], 0],
+  // D3 4.8: remote too; a public address needs --allow-public, a port under 1024 is a typing error
+  [['remote', 'status'], 0], [['remote', 'enable', '203.0.113.5'], 4], [['remote', 'disable', '192.0.2.1'], 2], [['remote', 'port', '80'], 2],
   // argument errors from commander itself
   [['nope'], 2], [['bot', 'list', '--nope'], 2], [['group'], 2],
 ];
