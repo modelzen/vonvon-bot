@@ -18,7 +18,7 @@ import { groupSkillProfile } from '../agent/group-skills';
 import { completeBuiltinPackage, ensureBuiltinPackage } from '../agent/builtin-skills/package';
 import { builtinSkillsOfSet } from '../agent/builtin-skills/registry';
 import type { SessionProfile } from '../agent/session-profile';
-import { SESSION_ENV } from '../config/session-env';
+import { SESSION_ENV, SESSION_SCOPE_ENV, sessionScope } from '../config/session-env';
 import type { HostApi } from '../admin/ipc';
 import { parseStoredJudge } from '../judge/model';
 import { presentationConfig } from './group-presentation';
@@ -1400,13 +1400,17 @@ export function createOrchestrator(
       throw new ThreadPermissionChanged('旧权限会话没能关闭，请稍后重试。', {cause: error});
     } finally { clearTimeout(timer); }
   }
-  /** The token a new session's `vonvon` commands carry (devices 5.3), in place of the bare marker. */
+  /**
+   * The token a new session's `vonvon` commands carry (devices 5.3), in place of the bare marker, and beside it the
+   * `--scope` the builtin skills copy (skills-scope): a group's reach is its group, a private chat's and a comment's the bot.
+   */
   async function sessionEnv(api: Pick<HostApi, 'issueSessionToken'>, sessionId: string, place: AgentPlace): Promise<Record<string, string>> {
+    const chatId = place.kind !== 'doc' && place.chatId ? place.chatId : undefined;
     const token = await api.issueSessionToken({
       appId: cfg.accounts.app.id, place: place.kind === 'p2p' ? 'dm' : place.kind === 'group' ? 'group' : 'comment', sessionId,
-      ...(place.kind !== 'doc' && place.chatId ? { chatId: place.chatId } : {}),
+      ...(chatId ? { chatId } : {}),
     });
-    return { [SESSION_ENV]: token };
+    return { [SESSION_ENV]: token, [SESSION_SCOPE_ENV]: sessionScope(cfg.accounts.app.id, place.kind === 'group' ? chatId : undefined) };
   }
   /** The profile a thread was actually started with: a permission save can swap in a rebuilt one (and its opening). */
   const profileUsed = new WeakMap<AgentThread, object>();
