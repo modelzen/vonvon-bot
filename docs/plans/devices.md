@@ -337,6 +337,8 @@ bot-session 的 `via`/`origin` 标成 `cli` 加会话信息（今天 memory 走 
 
 ### 7.5 升级引擎和 `vonvon update`
 
+> 实现时和本节不一样的地方（状态文件、降级、看门狗、`applyCoreUpdate` 先回复）见 `docs/plans/server-3-update-engine.md` §4.11 和文末。
+
 - **清单** `https://dl.vonvon.cc/bot/server/stable/manifest.json`，Ed25519 签名（复用 Windows 清单的签名和校验代码 `DT/windows-update-manifest.mjs`、`scripts/windows-update-signing.mjs`，**用一把单独的服务端密钥**，公钥编进 daemon 和安装脚本）。签名内容照 Windows 的 `validateWindowsUpdatePayload` 那样严格（SEC-9：第 1 版只有 `{version, publishedAt, files}`，每个版本的签名清单又公开放在 `bot/server/<version>/manifest.json`，谁拿到 COS 写权限或配错了就能把旧版本的合法清单放到 stable 回滚所有人）：`{ schemaVersion: 1, product: 'vonvon-bot-server', channel: 'stable', version, publishedAt, files: { 'linux-x64': { url, sha512, size }, … } }`，`url` 必须等于 `https://dl.vonvon.cc/bot/server/<version>/vonvon-server-<version>-<os>-<arch>.<ext>`，`version` 必须是语义版本。`files` 只有 `linux-x64`、`linux-arm64` 两项，`<ext>` 是 `tar.gz`（owner 2026-11-01；I3 计划的 C1 原来写六项，按那里的说明改）。
 - **检查**：`machine.checkCoreUpdate` 对 `standalone` 读清单（对 `global-npm` 照旧 `npm view`，`D/service/update.ts:68-91`）；回复加 `distribution.kind: 'standalone'`、`channel`。**只接受比当前和历史最高都新的版本**（`newer()`，照 `windows-updates.ts:108-110`），历史最高和上次见到的 `publishedAt` 记进 `standalone.json`，`publishedAt` 倒退的清单拒绝（防冻结）；降级只能在本机 `vonvon update --allow-downgrade --to <v>` 显式要求。默认不自动升级（升级一节）；daemon 每 24 小时查一次只为了在界面上标"有新版本"。
 - **应用**（UPD-1：第 1 版让助手在旧 daemon 退出后才切 `current`，但 launchd `KeepAlive SuccessfulExit=false, ThrottleInterval 5` 和 Windows 监督进程收到 75 立刻拉起、systemd 5 秒后拉起，拉起的都是还指向旧版的 `current`，助手看到"同端口换了 pid"就写 `done`——macOS、Windows 上升级报成功实际跑旧版（2026-11-01 起 `standalone` 只在 Linux，Windows 监督进程、Mac 的 launchd 对它已不适用，systemd 那种照样会发生）。改成和 npm 路径一样"先换文件再重启"，`update.ts:142-153`）：`machine.applyCoreUpdate` → `performStandaloneUpdate`：`update.lock`（已有）→ 下载到 `releases/<v>.part/`（校验 sha512 和清单签名）→ 改名 `releases/<v>/` → **原子切 `current`（rename）** → 把 `{ previous: <旧版> }` 写进 `update-status.json` → `requestRestart(port, update)`（已有：drain → bot 做完手上的活 → 退 75 → systemd 按 `current` 拉起**新版本**，不托管时由助手起）。`__restart-after-exit` 助手（`D/host/restart.ts`）改成：等新 owner 出现后**核对 `serverInfo.version === update.to`**，不只看 pid 变了；成功写 `done`；超时或版本不对 → 切回 `previous`、让管理器再拉起、写 `error`。助手和 Bot 子进程重起自己用的 `process.argv[1]`（`supervisor.ts:86`、`lifecycle.ts:195`、`restart.ts:13`、`service-action.ts:36`、`config/store.ts:59,74`）都改成钉在自己 `realpath` 所在的 release 上，免得排空期间重起的子进程加载新代码。`releases/` 只保留当前和上一版。
@@ -556,6 +558,9 @@ Claude 按这些答案自己定的细节（不算新问题，PR 里能改）：�
 | 设备身份变了 | <设备> 的身份和配对时不一样了（可能重装过，或换了数据目录）。为安全起见已断开。确认是你自己的设备后，重新配对。 |
 | 被撤销 | <设备> 已取消这台电脑的访问。要再连，请在那台设备上重新生成连接链接。 |
 | 在远程设备上配 Provider | 在 <设备> 上把 <Codex / Claude> 配置好（账号或自定义 API 都行），然后点「重新检测」。 |
+| 查更新：清单签名不对（`refused: signature`） | 没查到新版本：发布清单的签名不对，没有应用 |
+| 查更新：清单比上次看到的旧（`refused: rollback`） | 没查到新版本：发布清单比上次看到的旧，没有应用 |
+| 查更新：连不上（`refused: network`） | 没查到新版本：连不上 dl.vonvon.cc |
 | 版本不一致（服务端旧，协议相同） | <设备> 的服务端是 0.9.0，这台电脑是 0.9.1。可以继续用；建议升级服务端。[升级 <设备>] |
 | 版本不一致（协议不同，服务端旧） | <设备> 的服务端是 0.8.0，这台电脑是 0.9.0，两边不能一起工作。升级服务端后才能继续管理。[升级 <设备>] |
 | 版本不一致（协议不同，对面是 0.8 及更早的桌面端自带服务端） | <设备> 的服务端是桌面端自带的（0.8.0），要先在那台电脑上更新一次 Vonvon Bot；之后就能从这里更新。 |

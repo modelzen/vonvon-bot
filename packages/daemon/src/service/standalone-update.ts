@@ -1,14 +1,18 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { chmod, copyFile, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { chmod, copyFile, lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { log } from '../core/logger';
+import { paths } from '../config/paths';
+import { isGeneratedGetter } from '../config/data-compatibility';
+import { ensureSecretsGetterWrapper, secretsGetterContents } from '../config/store';
+import { STEADY_OWNER_MS } from '../host/restart';
 import { extractTarGz, extractZip, removeStaging } from './archive';
 import { isCompleteRelease, readCurrent, switchCurrent, VERSION } from './current-release';
 import { nearestPackageRoot } from './distribution';
 import { fetchManifest, ManifestError, readServerUpdateConfig, serverTarget, type Fetch, type Manifest, type ServerUpdateConfig } from './standalone-manifest';
-import { acquireUpdateLock, isNewer, readUpdateStatus, tryUpdateLock, UpdateBusyError, writeUpdateStatus, type UpdateStatus } from './update';
+import { acquireUpdateLock, finishOwnedUpdate, isNewer, livePid, readUpdateStatus, tryUpdateLock, UpdateBusyError, writeUpdateStatus, type UpdateStatus } from './update';
 
 /**
  * The standalone server's update (server-3 4.4, 4.5): check the signed stable manifest, and apply it by downloading
@@ -335,4 +339,131 @@ export function startStandaloneUpdate(options: ApplyOptions, deps: ApplyDeps): {
     } finally { release(); }
   })();
   return { done };
+}
+
+// ── 4.6, 4.10 at startup ─────────────────────────────────────────────────────────────────────────────────────────
+/**
+ * Daemons of other data directories run from the same `releases/` (the check after review 207): each notes the release
+ * it runs as `running/<pid>-<version>`, and a restart helper the release it may go back to. A cleanup keeps what live
+ * processes noted and drops the notes of dead ones.
+ */
+export async function noteRunning(installRoot: string, version: string): Promise<void> {
+  try {
+    await mkdir(join(installRoot, 'running'), { recursive: true });
+    await writeFile(join(installRoot, 'running', `${process.pid}-${version}`), '');
+  } catch (error) { log.warn(EVENTS, 'update-running-unwritable', { code: errorCode(error) }); }
+}
+async function runningVersions(installRoot: string): Promise<string[]> {
+  const dir = join(installRoot, 'running');
+  const versions: string[] = [];
+  for (const name of await readdir(dir).catch(() => [] as string[])) {
+    const [, pid, version] = /^([1-9]\d*)-(\d+\.\d+\.\d+)$/.exec(name) ?? [];
+    if (!pid || !version) continue;
+    if (livePid(Number(pid))) versions.push(version);
+    else await rm(join(dir, name), { force: true }).catch(() => undefined);
+  }
+  return versions;
+}
+
+/**
+ * Keeps the given releases, the one `current` names and those live processes run (noteRunning); removes other versions
+ * and every `.part`. Only direct children of `releases/` named like a version, real directories, holding
+ * `standalone.json` or named `.part`. A directory in use (Windows) is left for the next start, and so is all of it while
+ * an update holds `releases.lock`, when `current` cannot be read, or while this data directory's getter is not on it.
+ *
+ * `current` is read here, under `releases.lock` (review 221): every switch to a newly unpacked release holds that lock
+ * (startStandaloneUpdate), so what is read is what stays current until the lock goes. The caller's `keep` may be older
+ * than that: another data directory's update can switch `current` between the caller's read and this lock, or while a
+ * restart helper waits. Every standalone getter and service definition goes through `current`, so the release it
+ * names must never go.
+ */
+export async function cleanupReleases(installRoot: string, keep: ReadonlyArray<string | undefined>, remove: (dir: string) => Promise<void> = dir => rm(dir, { recursive: true })): Promise<void> {
+  const release = acquireReleasesLock(installRoot);
+  if (!release) return;
+  try {
+    let current: Awaited<ReturnType<typeof readCurrent>>;
+    try { current = await readCurrent(installRoot); }
+    catch (error) { log.warn(EVENTS, 'update-cleanup-skipped', { name: 'current', code: errorCode(error) }); return; }
+    // This data directory's getter still naming a release (its rewrite at startup failed) keeps every release.
+    const getter = await ownGetter(installRoot);
+    if (getter === 'stale' || getter === 'unreadable') { log.warn(EVENTS, 'update-cleanup-skipped', { name: 'getter', code: getter }); return; }
+    const kept = [...keep, current?.version, current?.previous, ...await runningVersions(installRoot)];
+    const releases = join(installRoot, 'releases');
+    for (const name of await readdir(releases).catch(() => [] as string[])) {
+      const match = /^(\d+\.\d+\.\d+)(\.part)?$/.exec(name);
+      if (!match || (!match[2] && kept.includes(match[1]))) continue;
+      const dir = join(releases, name);
+      try {
+        const info = await lstat(dir);
+        if (!info.isDirectory() || info.isSymbolicLink() || dirname(dir) !== releases) continue;
+        if (!match[2] && !await isFile(join(dir, 'standalone.json'))) continue;
+        await remove(dir);
+      } catch (error) {
+        log.warn(EVENTS, 'update-cleanup-skipped', { name, code: errorCode(error) });
+      }
+    }
+  } finally { release(); }
+}
+
+/**
+ * This data directory's secrets getter and `current` (reviews 207, 221). Only a standalone build before I3b wrote a
+ * getter naming its own release (`releases/<v>`), and none was published: the first server package, 0.9.0, has this
+ * code. A getter of ours is told by its header (isGeneratedGetter), never by finding the install root's path in its
+ * text, which the shell quoting changes when the path holds `'`. 'other' is none, or not ours: nothing to keep for it.
+ */
+async function ownGetter(installRoot: string): Promise<'current' | 'other' | 'stale' | 'unreadable'> {
+  let text: string;
+  try { text = await readFile(paths.secretsGetterScript, 'utf8'); }
+  catch (error) {
+    if (['ENOENT', 'EISDIR'].includes(errorCode(error))) return 'other';
+    log.warn(EVENTS, 'update-getter-unreadable', { code: errorCode(error) });
+    return 'unreadable';
+  }
+  if (!isGeneratedGetter(text)) return 'other';
+  return text === secretsGetterContents(installRoot) ? 'current' : 'stale';
+}
+/** A getter of ours that names anything but `current` is rewritten at startup, before any cleanup. */
+async function moveGetterToCurrent(installRoot: string): Promise<void> {
+  if (await ownGetter(installRoot) !== 'stale') return;
+  await ensureSecretsGetterWrapper(installRoot).catch(error => log.fail(EVENTS, error, { phase: 'getter' }));
+}
+
+/**
+ * The new daemon, once it publishes its port: this data directory's getter goes onto `current`; an `installing` record
+ * nobody holds the lock for was cut short; a standalone `restarting` record for this version is done (unless `current`
+ * was moved back meanwhile); then releases besides the current and previous one, and those live daemons of other data
+ * directories run, go.
+ */
+export async function settleUpdateAtStartup(options: { version: string; installRoot?: string; platform?: NodeJS.Platform; alive?: () => boolean; pause?: (ms: number) => Promise<void> }): Promise<void> {
+  if (options.installRoot && (options.platform ?? process.platform) !== 'win32') await moveGetterToCurrent(options.installRoot);
+  const status = readUpdateStatus();
+  if (status?.phase === 'installing') {
+    const release = acquireUpdateLock();
+    if (release) {
+      try { if (readUpdateStatus()?.at === status.at) writeUpdateStatus({ phase: 'error', ok: false, from: status.from, ...(status.to ? { to: status.to } : {}), at: Date.now(), message: '上次更新中断' }); }
+      finally { release(); }
+    }
+  }
+  if (!options.installRoot) return;
+  await noteRunning(options.installRoot, options.version);
+  // A restart is ended only once this process has stayed up as long as the helper watches a new owner (review 207):
+  // one that listens and dies at once leaves the record to the helper, which then switches back.
+  if (status?.phase === 'restarting') await (options.pause ?? (ms => new Promise<void>(resolve => { setTimeout(resolve, ms).unref(); })))(STEADY_OWNER_MS);
+  if (options.alive?.() === false) return;
+  const current = await readCurrent(options.installRoot, options.platform).catch(() => null);
+  if (status?.phase === 'restarting' && status.previous !== undefined) {
+    if (status.to !== options.version) finishOwnedUpdate(status, 'error', `重启后仍是 ${options.version}`);
+    else if (current?.version !== options.version) finishOwnedUpdate(status, 'error', `升级和回滚撞上了，当前运行 ${options.version}`);
+    else finishOwnedUpdate(status, 'done');
+  }
+  if (!current) return;
+  const release = acquireUpdateLock();
+  if (!release) return; // an update of this data directory is under way
+  try {
+    const latest = readUpdateStatus();
+    // Never the current release itself: a record or `current.txt` naming it would leave no release to go back to.
+    const candidates = [current.previous, latest?.to === current.version ? latest.previous : undefined, ...await keptReleases(options.installRoot, current.version)];
+    const previous = candidates.find(version => version !== undefined && version !== current.version);
+    await cleanupReleases(options.installRoot, [current.version, previous]);
+  } finally { release(); }
 }

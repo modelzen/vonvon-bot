@@ -57,11 +57,13 @@ it('detaches existing peers immediately while accepted work and its completion s
   }
 });
 
-it('serves fresh authenticated status and stop during held drain without rebuilding snapshots or emitting events', async () => {
+// main 必败 for the update status line: coreUpdateStatus closed the socket while the daemon drained to update (server-3 4.6)
+it('serves fresh authenticated status, update progress and stop during held drain without rebuilding snapshots or emitting events', async () => {
   const work = gate();
   const listBots = vi.fn(async () => []);
   const getDaemonStatus = vi.fn(async () => ({ installed: false, running: true, selfHosted: true, version: 'test', supported: false, pid: process.pid }));
-  const fixture = await startFixture(fakeService({ listBots, getDaemonStatus, close: () => work.promise }));
+  const updating = { phase: 'restarting' as const, ok: true, from: '1.0.0', to: '1.0.1', previous: '1.0.0', at: 1, detail: 'draining' as const };
+  const fixture = await startFixture(fakeService({ listBots, getDaemonStatus, close: () => work.promise, updateStatus: () => updating }));
   const owner = await recordOwner(fixture);
   const draining = fixture.api.beginDrain();
   void draining.catch(() => undefined);
@@ -71,6 +73,7 @@ it('serves fresh authenticated status and stop during held drain without rebuild
     const snapshotReads = listBots.mock.calls.length;
     const statusReads = getDaemonStatus.mock.calls.length;
     expect(await client.call({ type: 'request', id: 'status', method: 'admin', payload: { type: 'daemonStatus' } })).toMatchObject({ type: 'response', payload: { kind: 'daemonStatus', status: { running: true, pid: owner.pid, installed: false, supported: false } } });
+    expect(await client.call({ type: 'request', id: 'update', method: 'machine', payload: { type: 'coreUpdateStatus' } })).toMatchObject({ type: 'response', payload: { type: 'coreUpdateStatus', status: updating } });
     expect(await client.call({ type: 'request', id: 'stop', method: 'machine', payload: { type: 'stopHost' } })).toMatchObject({ type: 'response', payload: { type: 'done' } });
     expect(fixture.control.requestStop).toHaveBeenCalledOnce();
     expect(listBots).toHaveBeenCalledTimes(snapshotReads);
@@ -103,7 +106,7 @@ const forbidden: Request[] = [
   { type: 'request', id: 'command', method: 'command', payload: { type: 'refresh' } },
   { type: 'request', id: 'snapshot', method: 'snapshot', payload: { type: 'get' } },
   { type: 'request', id: 'admin', method: 'admin', payload: { type: 'codexSetup' } },
-  { type: 'request', id: 'machine', method: 'machine', payload: { type: 'coreUpdateStatus' } },
+  { type: 'request', id: 'machine', method: 'machine', payload: { type: 'checkCoreUpdate' } },
   { type: 'request', id: 'environment', method: 'environment', payload: { type: 'backendUninstall', id: 'test' } },
   { type: 'request', id: 'directory', method: 'directory', payload: { type: 'list', path: '/' } },
 ];

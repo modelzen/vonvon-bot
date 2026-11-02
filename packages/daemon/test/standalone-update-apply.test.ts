@@ -1,6 +1,7 @@
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { cp, mkdir, readdir, readFile, readlink, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { constants, gzipSync } from 'node:zlib';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,13 +10,17 @@ vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join: joinPath } = await import('node:path');
-  return { paths: { appDir: mkdtempSync(joinPath(tmpdir(), 'vonvon-standalone-apply-')) } };
+  const appDir = mkdtempSync(joinPath(tmpdir(), 'vonvon-standalone-apply-'));
+  return { paths: { appDir, secretsGetterScript: joinPath(appDir, 'secrets-getter') } };
 });
 
 import { paths } from '../src/config/paths';
-import { readCurrent, switchCurrent } from '../src/service/current-release';
-import { RESTART_PENDING_MS, startStandaloneUpdate, type ApplyDeps } from '../src/service/standalone-update';
-import { acquireUpdateLock, processStart, readUpdateStatus, UpdateBusyError, writeUpdateStatus, type UpdateStatus } from '../src/service/update';
+import { getterContents } from '../src/config/data-compatibility';
+import { readCurrent, releaseCommand, switchCurrent } from '../src/service/current-release';
+import { extractTarGz } from '../src/service/archive';
+import { observeShutdown } from '../src/host/lifecycle';
+import { RESTART_PENDING_MS, settleUpdateAtStartup, startStandaloneUpdate, type ApplyDeps } from '../src/service/standalone-update';
+import { abandonOwnedUpdate, acquireUpdateLock, processStart, readUpdateStatus, UpdateBusyError, writeUpdateStatus, type UpdateStatus } from '../src/service/update';
 import { BASE, fakeCdn, manifestPayload, signManifest, testKeys } from './helpers/fake-cdn';
 import { buildTools, packRelease } from './helpers/fake-release';
 
@@ -44,6 +49,14 @@ async function setup() {
   return { installRoot, cdn, deps, restarts };
 }
 const details = (statuses: UpdateStatus[]) => statuses.map(status => status.detail ?? status.phase);
+/** releases/<version> with a Node and an entry that prints the version and its arguments. */
+async function fullRelease(installRoot: string, version: string): Promise<void> {
+  const release = join(installRoot, 'releases', version);
+  for (const dir of ['node/bin', 'app/bin']) await mkdir(join(release, dir), { recursive: true });
+  await writeFile(join(release, 'standalone.json'), JSON.stringify({ v: 1, version }));
+  await writeFile(join(release, 'app', 'bin', 'vonvon.mjs'), `process.stdout.write('${version} ' + process.argv.slice(2).join(' '));\n`);
+  await symlink(process.execPath, join(release, 'node', 'bin', 'node'));
+}
 /** The update code as the daemon of another data directory runs it, on the same install root (the check after review 207). */
 async function dataDirectory(): Promise<typeof import('../src/service/standalone-update')> {
   const appDir = mkdtempSync(join(paths.appDir, 'data-'));
@@ -202,6 +215,24 @@ describe('startStandaloneUpdate', () => {
     // The download is kept: the next update switches to it without fetching it again.
     expect(await readdir(join(installRoot, 'releases'))).toEqual(['1.0.0', '1.0.1']);
   });
+  // review F2: a stop during the drain left `current` on the new release while the record said it was cancelled
+  it('switches current back when a stop cancels the restart', async () => {
+    const { installRoot, deps } = await setup();
+    const control = observeShutdown(false, { installRoot: async () => installRoot });
+    try {
+      await startStandaloneUpdate({}, { ...deps, requestRestart: status => { control.requestStop(); control.requestRestart(43119, status); } }).done;
+      await control.completeShutdown(async () => {
+        expect(await readlink(join(installRoot, 'current'))).toBe('releases/1.0.0');
+      });
+      expect(readUpdateStatus()).toMatchObject({ phase: 'error', to: '1.0.1', rolledBack: true, message: '重启已被停止取消，已切回 1.0.0' });
+    } finally { control.dispose(); }
+  });
+  it('only ends the record of an update that never switched current', async () => {
+    const record: UpdateStatus = { phase: 'restarting', ok: true, from: '1', to: '2', at: 4 };
+    writeUpdateStatus(record);
+    await abandonOwnedUpdate(record, 'helper_lost', async () => { throw new Error('not asked'); });
+    expect(readUpdateStatus()).toMatchObject({ phase: 'error', message: 'helper_lost' });
+  });
   // review F3, I3-SEC-1: `previous` was whatever `current` named, which can be the target itself
   it('records the running release as previous even when current already names the target', async () => {
     const { installRoot, deps } = await setup();
@@ -229,5 +260,100 @@ describe('startStandaloneUpdate', () => {
     const { deps } = await setup();
     const ended = await startStandaloneUpdate({}, { ...deps, extract: async () => { throw Object.assign(new Error(`ENOSPC: no space left, write '${paths.appDir}/x'`), { code: 'ENOSPC' }); } }).done;
     expect(ended).toMatchObject({ phase: 'error', message: '更新失败：ENOSPC' });
+  });
+});
+
+describe('settleUpdateAtStartup', () => {
+  it('marks an install nobody holds as cut short', async () => {
+    writeUpdateStatus({ phase: 'installing', from: '1.0.0', at: 5, detail: 'unpacking' });
+    await writeFile(join(paths.appDir, 'update.lock'), JSON.stringify({ pid: 2 ** 31 - 2, at: 1 }));
+    await settleUpdateAtStartup({ version: '1.0.0' });
+    expect(readUpdateStatus()).toMatchObject({ phase: 'error', message: '上次更新中断' });
+  });
+  it('ends the restart that brought this version up, or says it is still the old one', async () => {
+    const { installRoot } = await setup();
+    await cp(join(installRoot, 'releases', '1.0.0'), join(installRoot, 'releases', '1.0.1'), { recursive: true });
+    await writeFile(join(installRoot, 'releases', '1.0.1', 'standalone.json'), JSON.stringify({ v: 1, version: '1.0.1' }));
+    await switchCurrent(installRoot, '1.0.1', 'linux');
+    const record: UpdateStatus = { phase: 'restarting', ok: true, from: '1.0.0', to: '1.0.1', previous: '1.0.0', at: 7, detail: 'draining' };
+    writeUpdateStatus(record);
+    await settleUpdateAtStartup({ version: '1.0.1', installRoot, platform: 'linux', pause: async () => {} });
+    expect(readUpdateStatus()).toMatchObject({ phase: 'done', ok: true, to: '1.0.1' });
+    expect(readUpdateStatus()?.detail).toBeUndefined();
+    writeUpdateStatus(record);
+    await settleUpdateAtStartup({ version: '1.0.0', installRoot, platform: 'linux', pause: async () => {} });
+    expect(readUpdateStatus()).toMatchObject({ phase: 'error', message: '重启后仍是 1.0.0' });
+    writeUpdateStatus(record);
+    await switchCurrent(installRoot, '1.0.0', 'linux');
+    await settleUpdateAtStartup({ version: '1.0.1', installRoot, platform: 'linux', pause: async () => {} });
+    expect(readUpdateStatus()).toMatchObject({ phase: 'error', message: '升级和回滚撞上了，当前运行 1.0.1' });
+    expect(JSON.parse(await readFile(join(installRoot, 'releases', '1.0.1', 'standalone.json'), 'utf8'))).toMatchObject({ version: '1.0.1' });
+  });
+  // review 207: the getter wrapper named the release the Bot was created on, which the second update's cleanup removed
+  it('keeps the secrets getter working for outside callers after two updates', async () => {
+    const { installRoot } = await setup();
+    for (const version of ['1.0.0', '1.0.1', '1.0.2']) await fullRelease(installRoot, version);
+    await writeFile(paths.secretsGetterScript, getterContents({ nodePath: join(installRoot, 'releases', '1.0.0', 'node', 'bin', 'node'), cliPath: join(installRoot, 'releases', '1.0.0', 'app', 'bin', 'vonvon.mjs') }, paths.appDir), { mode: 0o700 });
+    await switchCurrent(installRoot, '1.0.1', 'linux').then(() => switchCurrent(installRoot, '1.0.2', 'linux'));
+    writeUpdateStatus({ phase: 'done', ok: true, from: '1.0.1', to: '1.0.2', previous: '1.0.1', at: 9 });
+    await settleUpdateAtStartup({ version: '1.0.2', installRoot, platform: 'linux' });
+    expect((await readdir(join(installRoot, 'releases'))).sort()).toEqual(['1.0.1', '1.0.2']);
+    expect(execFileSync(paths.secretsGetterScript, { encoding: 'utf8' })).toBe('1.0.2 secrets get');
+  });
+  // I3-SEC-1 (d): a record whose previous is the current release left releases/ with nothing to go back to
+  it('keeps a release to go back to even when the record names the current one as previous', async () => {
+    const { installRoot } = await setup();
+    await cp(join(installRoot, 'releases', '1.0.0'), join(installRoot, 'releases', '1.0.1'), { recursive: true });
+    await writeFile(join(installRoot, 'releases', '1.0.1', 'standalone.json'), JSON.stringify({ v: 1, version: '1.0.1' }));
+    await switchCurrent(installRoot, '1.0.1', 'linux');
+    writeUpdateStatus({ phase: 'done', ok: true, from: '1.0.0', to: '1.0.1', previous: '1.0.1', at: 8 });
+    await settleUpdateAtStartup({ version: '1.0.1', installRoot, platform: 'linux' });
+    expect((await readdir(join(installRoot, 'releases'))).sort()).toEqual(['1.0.0', '1.0.1']);
+  });
+  // the check after review 207: daemons of other data directories share releases/, and the cleanup held only update.lock
+  it('leaves releases/ alone while an update of another data directory writes into it', async () => {
+    const { installRoot, deps } = await setup();
+    let resume!: () => void;
+    const held = new Promise<void>(resolve => { resume = resolve; });
+    let unpacking = false;
+    const other = (await dataDirectory()).startStandaloneUpdate({}, { ...deps, requestRestart: undefined, onStatus: status => { unpacking ||= status.detail === 'unpacking'; }, extract: (archive, into) => held.then(() => extractTarGz(archive, into)) });
+    await vi.waitFor(() => expect(unpacking).toBe(true));
+    await settleUpdateAtStartup({ version: '1.0.0', installRoot, platform: 'linux' });
+    // Before: releases/1.0.1.part went, and the other update failed with ENOENT.
+    expect(await readdir(join(installRoot, 'releases'))).toEqual(['1.0.0', '1.0.1.part']);
+    resume();
+    expect(await other.done).toMatchObject({ phase: 'done', to: '1.0.1' });
+  });
+  // the check after the 3a/3b fixes: the locks of an update killed midway held for good once its pid came back (a
+  // container restarted hands the daemon the same pid)
+  it('ends the update a killed process left and clears releases/, when this daemon got its pid again', async () => {
+    const { installRoot } = await setup();
+    await mkdir(join(installRoot, 'releases', '1.0.1.part'), { recursive: true });
+    const left = JSON.stringify({ pid: process.pid, at: Date.now() - 7 * 86_400_000 });
+    await writeFile(join(installRoot, 'releases.lock'), left);
+    await writeFile(join(paths.appDir, 'update.lock'), left);
+    writeUpdateStatus({ phase: 'installing', from: '1.0.0', at: 5, detail: 'downloading' });
+    await settleUpdateAtStartup({ version: '1.0.0', installRoot, platform: 'linux' });
+    // Before: both locks counted as held, the record stayed `installing` and releases/1.0.1.part stayed.
+    expect(readUpdateStatus()).toMatchObject({ phase: 'error', message: '上次更新中断' });
+    expect(await readdir(join(installRoot, 'releases'))).toEqual(['1.0.0']);
+    expect(existsSync(join(installRoot, 'releases.lock'))).toBe(false);
+    expect(existsSync(join(paths.appDir, 'update.lock'))).toBe(false);
+  });
+  it('keeps the release a live daemon of another data directory runs, and drops the note of a dead one', async () => {
+    const { installRoot } = await setup();
+    await fullRelease(installRoot, '1.0.0');
+    await (await dataDirectory()).settleUpdateAtStartup({ version: '1.0.0', installRoot, platform: 'linux' });
+    for (const version of ['0.9.0', '1.0.1', '1.0.2']) await fullRelease(installRoot, version);
+    await mkdir(join(installRoot, 'running'), { recursive: true });
+    await writeFile(join(installRoot, 'running', `${2 ** 31 - 2}-0.9.0`), '');
+    await switchCurrent(installRoot, '1.0.2', 'linux');
+    writeUpdateStatus({ phase: 'done', ok: true, from: '1.0.1', to: '1.0.2', previous: '1.0.1', at: 9 });
+    await settleUpdateAtStartup({ version: '1.0.2', installRoot, platform: 'linux' });
+    // Before: 1.0.0 went, and the other daemon's next Bot, started from its own release, failed with ENOENT.
+    expect((await readdir(join(installRoot, 'releases'))).sort()).toEqual(['1.0.0', '1.0.1', '1.0.2']);
+    expect((await readdir(join(installRoot, 'running'))).sort()).toEqual([`${process.pid}-1.0.0`, `${process.pid}-1.0.2`]);
+    const { node, entry } = releaseCommand(installRoot, '1.0.0', 'linux');
+    expect(execFileSync(node, [entry, 'bot'], { encoding: 'utf8' })).toBe('1.0.0 bot');
   });
 });
