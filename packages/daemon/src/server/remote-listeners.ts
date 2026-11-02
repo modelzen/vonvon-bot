@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { Socket } from 'node:net';
 import { PROTOCOL_VERSION, type AddressKind, type CloseReason } from '@vonvon/protocol';
 import type { log as logger } from '../core/logger';
-import { exposure, hasAddress, hostHeader, type Interfaces } from '../remote/address';
+import { exposure, hasAddress, hostHeader, interfaceFor, type Interfaces } from '../remote/address';
 import type { RemoteAddress, RemoteConfig } from '../remote/config';
 import type { RateLimiter } from '../remote/rate-limit';
 import { createSecureSocketServer, type SecureDeps, type SecureSocketServerOptions } from './secure-socket';
@@ -97,16 +97,30 @@ export function createRemoteListeners(deps: RemoteListenerDeps): RemoteListeners
   }
   function live(entry: Entry): boolean { return !entry.stopped && !drained; }
 
-  /** A LAN address opened with a network binds only on that network: another one waits for the owner, one not known
-   * yet (no route or gateway seen) waits like a missing address. */
+  /**
+   * devices 4.2: whether a LAN address is still on the network it was opened on. The interface that carries it now comes
+   * first (Codex review 233-1): another one than recorded is another network, whatever its gateway (a dock unplugged, Wi-Fi
+   * on another network with the same IP; the old interface may be gone with its gateway). On that interface, the
+   * gateway's MAC if one was recorded: another one is another network, none seen yet is `unknown`.
+   */
+  async function lanCheck(address: RemoteAddress): Promise<'absent' | 'same' | 'changed' | 'unknown'> {
+    const current = interfaceFor(address.host, deps.interfaces())?.name;
+    if (current === undefined) return 'absent';
+    if (address.iface !== undefined && current !== address.iface) return 'changed';
+    if (address.network === undefined) return 'same';
+    const network = await deps.networkIdentity(current);
+    return network === undefined ? 'unknown' : network === address.network ? 'same' : 'changed';
+  }
+  /** A LAN address binds only on the network it was opened on: another one waits for the owner, one not known yet (no
+   * route or gateway seen) waits like a missing address; a missing address tries, and waits. */
   async function ensure(entry: Entry): Promise<void> {
     if (!live(entry)) return;
     const { address } = entry;
-    if (address.kind === 'lan' && address.network !== undefined) {
-      const network = address.iface === undefined ? undefined : await deps.networkIdentity(address.iface);
+    if (address.kind === 'lan') {
+      const check = await lanCheck(address);
       if (!live(entry)) return;
-      if (network !== undefined && network !== address.network) { set(entry, 'needs-confirmation', networkChanged(address.host)); return; }
-      if (network === undefined) { set(entry, 'waiting', waitingFor(address.host)); later(entry, retryMs, () => ensure(entry)); return; }
+      if (check === 'changed') { set(entry, 'needs-confirmation', networkChanged(address.host)); return; }
+      if (check === 'unknown') { set(entry, 'waiting', waitingFor(address.host)); later(entry, retryMs, () => ensure(entry)); return; }
     }
     await bind(entry);
   }
@@ -187,17 +201,14 @@ export function createRemoteListeners(deps: RemoteListenerDeps): RemoteListeners
     });
     return entry.binding;
   }
-  /** An address that left this machine (devices 4.2) goes back to waiting; a LAN address on another network now waits
-   * for the owner. Either way its connections end with 4006. */
+  /** An address that left this machine (devices 4.2) goes back to waiting; a LAN address on another interface or network
+   * now waits for the owner. Either way its connections end with 4006. A network not seen for a moment keeps it. */
   async function watch(entry: Entry): Promise<void> {
     if (!live(entry) || entry.state !== 'listening') return;
     const { address } = entry;
     let next: { state: RemoteAddressState; detail: string } | undefined;
     if (!hasAddress(address.host, deps.interfaces())) next = { state: 'waiting', detail: waitingFor(address.host) };
-    else if (address.kind === 'lan' && address.network !== undefined && address.iface !== undefined) {
-      const network = await deps.networkIdentity(address.iface);
-      if (network !== undefined && network !== address.network) next = { state: 'needs-confirmation', detail: networkChanged(address.host) };
-    }
+    else if (address.kind === 'lan' && await lanCheck(address) === 'changed') next = { state: 'needs-confirmation', detail: networkChanged(address.host) };
     if (!live(entry)) return;
     if (!next) { later(entry, watchMs, () => watch(entry)); return; }
     await teardown(entry, 'remote_disabled');

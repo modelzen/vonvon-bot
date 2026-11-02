@@ -197,6 +197,57 @@ describe.runIf(canBind)('remote listeners', () => {
     await h.remote.sync(config(port, lan(ALIAS, { iface: 'lo', network: 'gw:11:22:33:44:55:66', enabledAt: 2 })));
     expect(h.remote.status()[0]?.state).toBe('listening');
   });
+  // Codex review 233-1: an address that moved to another interface is another network, whatever the gateway says (none
+  // known, or the old interface gone with its gateway): it stops, its connections end, and the owner confirms.
+  describe('a LAN address that moves to another interface', () => {
+    const changedText = `这台设备所在的网络变了（之前在另一个局域网开启了 ${ALIAS}）。确认现在的网络是你信任的，再重新开启。`;
+    const on = (name: string): Interfaces => ({ [name]: aliasNic(ALIAS).lo ?? [] });
+    it('stops listening when only the interface is recorded', async () => {
+      let nics = on('eth0');
+      const h = await harness({ interfaces: () => nics, timers: { watch: 50, retry: 60_000 } });
+      const port = await freePort();
+      await h.remote.sync(config(port, lan(ALIAS, { iface: 'eth0' })));
+      expect(h.remote.status()[0]?.state).toBe('listening');
+      const connection = await pairOver(h, port);
+      nics = on('wlan0');
+      expect(await closeCode(connection.closed)).toBe('remote_disabled');
+      await vi.waitFor(() => expect(h.remote.status()[0]).toMatchObject({ state: 'needs-confirmation', detail: changedText }));
+      await expect(get(port, '/health')).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+      expect(h.log.warn).toHaveBeenCalledWith('remote', 'remote-network-changed', { host: ALIAS, iface: 'eth0' });
+    });
+    it('stops listening when the network was known and the old interface is gone', async () => {
+      let nics = on('eth0');
+      // Linux: the gateway of an interface that is gone cannot be read
+      const h = await harness({ interfaces: () => nics, networkIdentity: async iface => (iface === 'eth0' && nics.eth0 ? 'gw:aa:bb:cc:dd:ee:ff' : undefined), timers: { watch: 50, retry: 60_000 } });
+      const port = await freePort();
+      await h.remote.sync(config(port, lan(ALIAS, { iface: 'eth0', network: 'gw:aa:bb:cc:dd:ee:ff' })));
+      expect(h.remote.status()[0]?.state).toBe('listening');
+      nics = on('wlan0');
+      await vi.waitFor(() => expect(h.remote.status()[0]).toMatchObject({ state: 'needs-confirmation', detail: changedText }));
+      await expect(get(port, '/health')).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+    });
+    it('does not bind again on another interface, at a start or after the address came back', async () => {
+      let nics = on('wlan0');
+      const h = await harness({ interfaces: () => nics, timers: { watch: 50, retry: 50 } });
+      const port = await freePort();
+      const { Server } = await import('node:net');
+      const listen = vi.spyOn(Server.prototype, 'listen');
+      await h.remote.sync(config(port, lan(ALIAS, { iface: 'eth0' })));
+      expect(h.remote.status()).toEqual([{ host: ALIAS, kind: 'lan', enabledAt: 1, state: 'needs-confirmation', detail: changedText }]);
+      expect(listen).not.toHaveBeenCalled();
+      // opened on eth0 and listening; the address leaves, and comes back on wlan0
+      nics = on('eth0');
+      await h.remote.sync(config(port, lan(ALIAS, { iface: 'eth0', enabledAt: 2 })));
+      expect(h.remote.status()[0]?.state).toBe('listening');
+      nics = {};
+      await vi.waitFor(() => expect(h.remote.status()[0]?.state).toBe('waiting'));
+      const binds = listen.mock.calls.length;
+      nics = on('wlan0');
+      await vi.waitFor(() => expect(h.remote.status()[0]).toMatchObject({ state: 'needs-confirmation', detail: changedText }));
+      expect(listen.mock.calls.length).toBe(binds);
+      await expect(get(port, '/health')).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+    });
+  });
   // Codex review 232-2 / devices 4.7: draining keeps the address open for what a draining daemon answers; the release
   // closes it. The hub's drain decides about the connections, as on the loopback.
   it('keeps listening while draining, with no retry or watch, and closes at the release', async () => {
