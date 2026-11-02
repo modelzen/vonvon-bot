@@ -247,6 +247,22 @@ describe('the terminal: the daemon, or the files for a read when none runs', () 
     expect(run).not.toHaveBeenCalled();
   });
 
+  // s1b: a group's session has no library list; its project comes from the snapshot the daemon cut to it
+  it('in a Bot session finds the project in the snapshot, never the library', async () => {
+    const { run, files } = filesCtx();
+    const memory = vi.fn(async (): Promise<MemoryReply> => list([item]));
+    const library = vi.fn(async () => { throw new Error('a group session has no library list'); });
+    const snapshot = vi.fn(async () => ({ agents: [{ id: 'cli_a', name: 'A' }], memberships: [],
+      projects: [{ id: 'prj_0a1b2c3d', name: '支付组', revision: 1, directory: '', bindings: [{ agentId: 'cli_a', groupId: 'oc_pay' }] }] }));
+    const daemon = <T>(fn: Parameters<typeof withDaemon<T>>[0]) => withDaemon(fn, async () => ({ memory, library, snapshot, close: async () => {} }) as never);
+    const out = io();
+    const token = { VONVON_SESSION: `vs1.ses_0123456789abcdef.${'a'.repeat(43)}` };
+    await runMemoryList({ project: '支付组' }, terminalMemoryContext(out, { env: token, running: async () => true, daemon, files }));
+    expect(memory).toHaveBeenCalledWith({ type: 'list', scope: P1 });
+    expect(library).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  });
+
   // main 必败: a session's list read the files
   it('in a Bot session reads through the daemon only: no token is refused, no daemon is not the files', async () => {
     const { run, files } = filesCtx();

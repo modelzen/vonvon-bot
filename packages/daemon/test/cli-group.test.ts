@@ -5,7 +5,8 @@ import {
   type Agent, type DesktopSnapshot, type LibraryProject, type Membership, type ProjectRecord,
 } from '@vonvon/protocol';
 import { rpcErrorKind } from '../src/cli/command-error';
-import { runningBot, withDaemon, type Daemon } from '../src/cli/daemon-client';
+import { runningBot, setCliContext, withDaemon, type Daemon } from '../src/cli/daemon-client';
+import { NOT_DM_MESSAGE } from '../src/agent/entry/registry';
 import { folderPath, runGroupBind, runGroupCreate, runGroupSet, runGroupShow, runGroupUnbind } from '../src/cli/commands/group';
 import { CLI_PARITY_ALLOWLIST } from '../src/cli/parity-allowlist';
 import { loadCommands } from './helpers/cli-commands';
@@ -28,7 +29,7 @@ const token = '7d1f1a6e-3b8e-4d0c-9a51-2f6a0e4b9c11';
 const host = { cwd: '/here', home: '/home/u', platform: 'linux' as const };
 const WARNING = '完全访问的群里，群成员能让 Bot 在这台设备上做任何事，包括改 vonvon 的设置，只给信任的群用。';
 
-type Fake = Partial<Record<'snapshot' | 'run' | 'collaboration' | 'directory' | 'library' | 'settings', (request: never) => unknown>>;
+type Fake = Partial<Record<'snapshot' | 'run' | 'collaboration' | 'directory' | 'library' | 'settings' | 'admin', (request: never) => unknown>>;
 function harness(client: Fake) {
   const close = vi.fn(async () => {});
   const connect = vi.fn(async () => ({
@@ -151,6 +152,34 @@ it('group set reads the revision and writes right after; --revision skips the re
     expect(await caught(runGroupSet('研发', options, offline.io(), offline.daemon, host))).toEqual(failure('bad-args'));
   }
   expect(offline.connect).not.toHaveBeenCalled();
+});
+
+// Codex review 256-3 / 257-2. main 必败: a group's session sees no bindings (s1b), so pickGroup refused its own group with
+// 这个操作不能从 Bot 会话里做 before the write reached the daemon, whose answer is the not-dm sentence
+it('group set in a group\'s Bot session sends the write for the daemon to refuse, with nothing read first', async () => {
+  setCliContext({ env: { VONVON_SESSION: `vs1.ses_0123456789abcdef.${'a'.repeat(43)}` } });
+  try {
+    const collaboration = vi.fn(async (_request: { action: string }) => { throw new RpcError('not-dm', NOT_DM_MESSAGE); });
+    const directory = chooser();
+    const library = vi.fn(async () => { throw new Error('a group session has no library list'); });
+    const h = harness({
+      collaboration, directory, library,
+      // the snapshot a group's session reads: no bindings, its group's project with its own binding
+      snapshot: async () => ({ ...snapshot([agent('cli_a')]), projects: [{ id: 'prj_0000000a', name: '研发', revision: 1, directory: '', bindings: [{ agentId: 'cli_a', groupId: 'oc_dev' }] }] }),
+      admin: async () => ({ kind: 'negotiated', principal: 'bot-session:group', scope: { bot: 'cli_a', group: 'oc_dev' } }),
+    } as Fake);
+    for (const [wanted, options] of [['研发', { disable: true }], ['oc_dev', { conversation: 'single', folder: '~/y', revision: 'r0' }], ['研发', { project: '官网' }]] as const) {
+      collaboration.mockClear();
+      const error = await caught(runGroupSet(wanted, options, h.io(true), h.daemon, host));
+      expect(error, wanted).toEqual(failure('refused', { reason: 'not-dm', message: NOT_DM_MESSAGE }));
+      expect(collaboration.mock.calls.map(([request]) => request.action), wanted).toEqual(['editProject']);
+      expect(collaboration.mock.calls[0]?.[0], wanted).toMatchObject({ agentId: 'cli_a', groupId: 'oc_dev', projectName: '研发' });
+    }
+    expect(directory).not.toHaveBeenCalled();
+    expect(library).not.toHaveBeenCalled();
+    // a name the snapshot does not have reads as any other refused read
+    expect(await caught(runGroupSet('别的', { disable: true }, h.io(true), h.daemon, host))).toEqual(failure('refused', { reason: 'permission_denied', message: '这个操作不能从 Bot 会话里做。' }));
+  } finally { setCliContext({ env: process.env }); }
 });
 
 // main 必败: there was no group unbind

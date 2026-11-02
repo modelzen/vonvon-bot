@@ -124,7 +124,7 @@ describe('buildClearedCard', () => {
 });
 
 describe('buildHelpCard 权限过滤', () => {
-  it('主群区：非管理员看不到 owner-only 命令(/resume、/settings)，但对话类命令仍在', () => {
+  it('主群区：非管理员看不到 owner-only 命令(/resume)，但对话类命令仍在', () => {
     const json = JSON.stringify(buildHelpCard('main', true, false));
     expect(json).not.toContain('/resume');
     expect(json).not.toContain('/settings');
@@ -132,16 +132,19 @@ describe('buildHelpCard 权限过滤', () => {
     expect(json).toContain('/help');
   });
 
-  it('主群区：管理员能看到全部命令', () => {
+  it('主群区：管理员能看到全部命令；群里不列 /settings（s1b，只在私聊里有）', () => {
     const json = JSON.stringify(buildHelpCard('main', true, true));
     expect(json).toContain('/resume');
-    expect(json).toContain('/settings');
+    expect(json).not.toContain('/settings');
     expect(json).toContain('/model');
   });
 
-  it('单会话群：/settings 仅管理员可见，/model 始终可见', () => {
-    expect(JSON.stringify(buildHelpCard('single', true, false))).not.toContain('/settings');
-    expect(JSON.stringify(buildHelpCard('single', true, true))).toContain('/settings');
+  it('单会话群：谁都看不到 /settings（s1b），/model 始终可见', () => {
+    for (const scope of ['single', 'topic', 'main'] as const) {
+      for (const admin of [true, false]) {
+        for (const kind of ['single', 'smart', 'multi'] as const) expect(JSON.stringify(buildHelpCard(scope, false, admin, undefined, kind))).not.toContain('/settings');
+      }
+    }
     expect(JSON.stringify(buildHelpCard('single', true, false))).toContain('/model');
   });
 
@@ -177,9 +180,9 @@ describe('buildHelpCard 权限过滤', () => {
     }
     const head = JSON.stringify(buildHelpCard('single', false, true, undefined, 'smart'));
     expect(head).toContain('💬 **智能开话题** — 不用 @ 我，我会读群消息，合适时接话。');
-    expect(head).toContain('· `/settings` → 群设置\\n');
+    expect(head).not.toContain('/settings');
     expect(JSON.stringify(buildHelpCard('topic', false, false, undefined, 'smart'))).toContain('要新的会话，就在主区的某条消息下开一个新话题。');
-    expect(JSON.stringify(buildHelpCard('single', false, true, undefined, 'single'))).toContain('本群默认需 @；`/settings` 可开启免@');
+    expect(JSON.stringify(buildHelpCard('single', false, true, undefined, 'single'))).toContain('本群默认需 @）');
   });
 
   it('智能群的欢迎卡（s25c）：第一行就是那一句"我会读群消息，合适时接话"，不提免@', () => {
@@ -190,7 +193,7 @@ describe('buildHelpCard 权限过滤', () => {
     expect(smart).toContain('· **@我 + 内容** → 我马上看，该回就回');
     expect(smart).not.toContain('一定回');
     expect(smart).toContain('/new');
-    expect(JSON.stringify(buildWelcomeCard('single', undefined, false))).toContain('群设置（免@ 开关）');
+    for (const kind of ['single', 'smart', 'multi'] as const) expect(JSON.stringify(buildWelcomeCard(kind, undefined, false))).not.toContain('/settings');
   });
 
   it('单会话群：后端不支持 resume（caps.resume=false）时管理员也不列 /resume，但仍列 /clear', () => {

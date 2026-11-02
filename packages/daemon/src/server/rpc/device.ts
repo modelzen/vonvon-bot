@@ -9,8 +9,8 @@ import type { RemoteListeners } from '../remote-listeners';
 import type { RpcOutcome } from '../rpc';
 import type { Peer } from '../ws';
 
-/** devices 第 15 节"没开远程时 pair". */
-export const NO_REMOTE_ADDRESS = '这台设备还没允许别的设备连接。先运行 `vonvon remote enable --tailscale`（推荐）或 `vonvon remote enable <这台设备的 IP>`。';
+/** devices 第 15 节"没开远程时 pair" (A1: no --tailscale; the terminal lists the addresses). */
+export const NO_REMOTE_ADDRESS = '这台设备还没允许别的设备连接。先在终端里运行 `vonvon remote enable`，选一个别的设备能连到的地址。';
 export interface DeviceDeps {
   home: string;
   /** Held here, so a rename reaches the next server info; renames take turns there. */

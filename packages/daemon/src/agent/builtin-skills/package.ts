@@ -23,15 +23,27 @@ async function ensureDirectory(path: string): Promise<void> {
   if (created !== undefined) await chmod(path, 0o700);
 }
 
+/**
+ * Builtin files are read-only (0444, s1b): they come from the daemon's code, and one changed by hand is written over
+ * again when the next session opens. The directory stays the owner's, so a rename still replaces a file.
+ */
+const READ_ONLY = 0o444;
+
+const writable = (path: string): Promise<void> => chmod(path, 0o644).catch((error: unknown) => {
+  if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+});
+
 async function updateFile(path: string, content: string): Promise<boolean> {
   if (await readIfPresent(path) === content) {
-    await chmod(path, 0o644);
+    await chmod(path, READ_ONLY);
     return false;
   }
   const temporary = join(dirname(path), `.${randomUUID()}.tmp`);
   try {
-    await writeFile(temporary, content, { flag: 'wx', mode: 0o644 });
-    await chmod(temporary, 0o644);
+    await writeFile(temporary, content, { flag: 'wx', mode: READ_ONLY });
+    await chmod(temporary, READ_ONLY);
+    // Windows refuses to rename over (or unlink) a read-only file: the old one is made writable first.
+    await writable(path);
     await rename(temporary, path);
   } catch (error) {
     await unlink(temporary).catch(() => undefined);
@@ -108,6 +120,7 @@ async function writeBuiltinPackage(
     const oldFile = join(skillsPath, entry.name, 'SKILL.md');
     if (await readIfPresent(oldFile) !== undefined) {
       try {
+        await writable(oldFile);
         await unlink(oldFile);
         changed = true;
       } catch (error) {

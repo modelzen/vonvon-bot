@@ -18,7 +18,7 @@ vi.mock('../src/config/card-callback', async original => {
     actual.createCardCallbackRecorder(appId, { ...options, now: () => 1_790_000_000_000, write: fixture.write }) };
 });
 vi.mock('../src/config/app-roles', () => ({
-  APP_ROLE_CACHE_MS: 60_000, getAppRoleSnapshot: () => ({ fetchedAt: Date.now() }),
+  APP_ROLE_CACHE_MS: 60_000, APP_ROLE_RETRY_MS: 30_000, trustedFeishuAdmins: () => [], getAppRoleSnapshot: () => ({ fetchedAt: Date.now() }),
   createAppRoleRefresher: () => ({ refresh: async () => {}, stop: async () => {} }),
 }));
 vi.mock('../src/admin/groups', () => ({ createGroupExecutor: () => async () => ({ groups: [] }) }));

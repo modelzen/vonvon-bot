@@ -28,10 +28,10 @@ describe('buildHelpCard 后端能力裁剪', () => {
     }
   });
 
-  it('resume=false：主群区（管理员）→ 不列 /resume，但 /settings 仍在', () => {
+  it('resume=false：主群区（管理员）→ 不列 /resume，/help 仍在', () => {
     const j = JSON.stringify(buildHelpCard('main', true, true, noCaps));
     expect(j).not.toContain('/resume');
-    expect(j).toContain('/settings');
+    expect(j).toContain('/help');
   });
 
   it('codex 主群区（管理员，无 caps）→ 仍列 /resume', () => {

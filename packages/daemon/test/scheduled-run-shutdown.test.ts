@@ -14,7 +14,7 @@ const fixture = vi.hoisted(() => ({
 vi.mock('../src/bot/bridge-channel', () => ({ createBridgeChannel: () => ({ on() {}, connect: async () => {}, disconnect: async () => {} }) }));
 vi.mock('../src/config/card-callback', () => ({ createCardCallbackRecorder: () => ({ received() {}, close: async () => {} }) }));
 vi.mock('../src/config/app-roles', () => ({
-  APP_ROLE_CACHE_MS: 60_000, getAppRoleSnapshot: () => ({ fetchedAt: Date.now() }),
+  APP_ROLE_CACHE_MS: 60_000, APP_ROLE_RETRY_MS: 30_000, trustedFeishuAdmins: () => [], getAppRoleSnapshot: () => ({ fetchedAt: Date.now() }),
   createAppRoleRefresher: () => ({ refresh: async () => {}, stop: async () => {} }),
 }));
 vi.mock('../src/admin/groups', () => ({ createGroupExecutor: () => async () => ({ groups: [] }) }));

@@ -1,4 +1,4 @@
-import { getAppRoleSnapshot } from './app-roles';
+import { getAppRoleSnapshot, trustedFeishuAdmins } from './app-roles';
 import type { BotDefaults } from './defaults';
 import type { DirectorySettings } from './directories';
 import { REASONING_EFFORTS, type ReasoningEffort } from '../agent/types';
@@ -357,11 +357,14 @@ export function resolveOwner(cfg: AppConfig): string | undefined {
   return getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant)?.ownerOpenId ?? access?.ownerOpenId ?? access?.admins?.[0];
 }
 
-/** Management access is the union of Feishu owner/admins/developers, scanner and local admins. */
+/**
+ * Management access is the union of Feishu owner/admins/developers, scanner and local admins. Feishu's admins and
+ * developers only while a recent refresh vouches for them (audit 252-4); its owner, like the scanner, stays.
+ */
 export function isAdmin(cfg: AppConfig, senderId: string): boolean {
   if (!senderId) return false;
   const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
-  return senderId === roles?.ownerOpenId || Boolean(roles?.admins.includes(senderId))
+  return senderId === roles?.ownerOpenId || trustedFeishuAdmins(roles).includes(senderId)
     || senderId === cfg.preferences?.access?.ownerOpenId
     || Boolean(cfg.preferences?.access?.admins?.includes(senderId));
 }

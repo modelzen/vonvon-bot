@@ -12,6 +12,8 @@ import { projectRevision } from '../src/admin/collaboration';
 import type { JudgeRequest, JudgeResult } from '../src/judge/types';
 import { receive, type EventMessage } from './helpers/lark-events';
 import { DM, GS, SMART_NO_MENTION_NOTE } from '../src/card/dm-cards';
+import { NOT_DM_MESSAGE } from '../src/agent/entry/registry';
+import { sendManagedCard } from '../src/card/managed';
 
 // s25c: what an entry writes is what the inbound path reads. Real registry on disk, the SDK's own event parsing;
 // only Feishu, the agent and the judge are fakes.
@@ -118,16 +120,57 @@ describe('s25c: the web entry writes 智能 the way the inbound path reads it', 
   it('an old card\'s 免@ button on a group since switched to 智能 is refused and redraws the card without it', async () => {
     await switchTo('smart');
     const tap = (a: string, extra: Record<string, unknown> = {}) => ({ chatId: CHAT, messageId: `om_old_${a}`, operator: { openId: 'ou_owner' }, action: { tag: 'button', value: { a, v: 'on', ...extra } } });
-    await orchestrator.dispatcher.handle(tap(GS.setNoMention) as never);
     await orchestrator.dispatcher.handle(tap(DM.setNoMentionDm, { n: 'entry' }) as never);
-    await vi.waitFor(() => expect(fake.updated).toHaveLength(2), { timeout: 3000 });
-    for (const card of fake.updated.map(item => JSON.stringify(item))) {
-      expect(card).toContain('⚠️ 没有改：这个群现在是智能开话题。');
-      expect(card).toContain(SMART_NO_MENTION_NOTE);
-      expect(card).not.toContain(`"a":"${GS.setNoMention}"`);
-      expect(card).not.toContain(`"a":"${DM.setNoMentionDm}"`);
-    }
+    await vi.waitFor(() => expect(fake.updated).toHaveLength(1), { timeout: 3000 });
+    const card = JSON.stringify(fake.updated[0]);
+    expect(card).toContain('⚠️ 没有改：这个群现在是智能开话题。');
+    expect(card).toContain(SMART_NO_MENTION_NOTE);
+    expect(card).not.toContain(`"a":"${DM.setNoMentionDm}"`);
     expect(await getProjectByName('entry')).toMatchObject({ kind: 'single', smart: true, noMention: false });
+  });
+
+  it('an old in-group settings card changes nothing any more (s1b): its 免@ button turns into the not-dm sentence', async () => {
+    const tap = { chatId: CHAT, messageId: 'om_old_gs', operator: { openId: 'ou_owner' }, action: { tag: 'button', value: { a: GS.setNoMention, v: 'off' } } };
+    await orchestrator.dispatcher.handle(tap as never);
+    await vi.waitFor(() => expect(fake.updated).toHaveLength(1), { timeout: 3000 });
+    const card = JSON.stringify(fake.updated[0]);
+    expect(card).toContain(NOT_DM_MESSAGE);
+    expect(card).not.toContain(`"a":"${GS.setNoMention}"`);
+    expect(await getProjectByName('entry')).toMatchObject({ kind: 'single', noMention: true });
+  });
+});
+
+describe('s1b: /settings is a private chat\'s', () => {
+  const managed = () => vi.mocked(sendManagedCard).mock.calls;
+  const atBot = (text: string, extra: Record<string, unknown> = {}): EventMessage => {
+    const id = `om_settings_${++sequence}`;
+    const time = String(Date.now() + sequence * 1000);
+    return { message_id: id, create_time: time, update_time: time, chat_id: CHAT, chat_type: 'group', message_type: 'text', content: JSON.stringify({ text: `@_user_1 ${text}` }), mentions: [{ key: '@_user_1', id: { open_id: BOT.openId }, name: BOT.name }], ...extra };
+  };
+
+  it('a group\'s /settings, in the main area or a topic, from the owner, says where to change settings and sends no card', async () => {
+    for (const kind of ['single', 'multi', 'smart'] as const) {
+      if (kind !== 'single') await switchTo(kind);
+      fake.send.mockClear();
+      vi.mocked(sendManagedCard).mockClear();
+      const main = atBot('/settings');
+      await send(main);
+      await vi.waitFor(() => expect(fake.send).toHaveBeenCalledWith(CHAT, { markdown: NOT_DM_MESSAGE }, { replyTo: main.message_id }));
+      const topic = atBot('/settings', { thread_id: 'omt_settings', root_id: 'om_root', parent_id: 'om_root' });
+      await send(topic);
+      await vi.waitFor(() => expect(fake.send).toHaveBeenCalledWith(CHAT, { markdown: NOT_DM_MESSAGE }, { replyTo: topic.message_id, replyInThread: true }));
+      expect(managed()).toEqual([]);
+    }
+  });
+
+  it('a private chat\'s /settings still opens the private console', async () => {
+    vi.mocked(sendManagedCard).mockClear();
+    const time = String(Date.now());
+    await send({ message_id: 'om_dm_settings', create_time: time, update_time: time, chat_id: 'oc_dm', chat_type: 'p2p', message_type: 'text', content: JSON.stringify({ text: '/settings' }) });
+    await vi.waitFor(() => expect(managed()).toHaveLength(1));
+    expect(managed()[0]![1]).toBe('oc_dm');
+    expect(JSON.stringify(managed()[0]![2])).not.toContain(NOT_DM_MESSAGE);
+    expect(fake.send).not.toHaveBeenCalledWith('oc_dm', { markdown: NOT_DM_MESSAGE }, expect.anything());
   });
 });
 

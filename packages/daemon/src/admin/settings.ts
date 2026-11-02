@@ -1,4 +1,4 @@
-import { getAppRoleSnapshot } from '../config/app-roles';
+import { getAppRoleSnapshot, trustedFeishuAdmins } from '../config/app-roles';
 import { ToolRefusal } from '../agent/entry/tools';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -645,7 +645,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         },
         ownerOpenId: resolveOwner(cfg) ?? null,
         administrators: {
-          feishu: { ownerOpenId: roles?.ownerOpenId ?? null, adminOpenIds: roles?.admins ?? [] },
+          feishu: { ownerOpenId: roles?.ownerOpenId ?? null, adminOpenIds: [...trustedFeishuAdmins(roles)] },
           scannerOpenId: cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0] ?? null,
           openIds: [...(cfg.preferences?.access?.admins ?? [])],
           revision: settingsRevision([botId, resolveOwner(cfg), cfg.preferences?.access?.admins ?? []])
@@ -1122,7 +1122,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             check([botId, resolveOwner(cfg), p.access?.admins ?? []], action.revision);
             const roles = getAppRoleSnapshot(botId, cfg.accounts.app.tenant);
             const scanner = cfg.preferences?.access?.ownerOpenId ?? cfg.preferences?.access?.admins?.[0];
-            if (action.membership === 'absent' && (action.openId === resolveOwner(cfg) || action.openId === scanner || roles?.admins.includes(action.openId)))
+            if (action.membership === 'absent' && (action.openId === resolveOwner(cfg) || action.openId === scanner || trustedFeishuAdmins(roles).includes(action.openId)))
               throw new SettingsInputError('飞书应用管理员和注册者不能在本机移除');
             const admins = new Set(p.access?.admins ?? []);
             if (action.membership === 'present')

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  createEarlyInterrupt,
   createGracefulInterrupt,
   createIdlePause,
   type IdlePause,
@@ -313,6 +314,52 @@ describe('withIdleTimeout', () => {
 // QW-15 ⏹ 优雅中断：interrupt → turn/interrupt → 等事件流自然 done（0.139+
 // turn/completed(status:"interrupted") 干净收尾）→ 线程与进程留用；turnId 缺失
 // 或超时没收尾才强停（forced → 调用方按旧样杀进程回收）。
+// review 260: a stop while the turn's card was created sent no turn/interrupt at all
+describe('createEarlyInterrupt: the stop entry while the card is created', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('sends turn/interrupt at once when the turn has its id, once, and the ⏹ entry hears of it', () => {
+    const abort = vi.fn();
+    const early = createEarlyInterrupt({ turnId: () => 'turn_1', abort });
+    early.interrupt();
+    early.interrupt();
+    expect(abort).toHaveBeenCalledExactlyOnceWith('turn_1');
+    expect(early.handOver()).toEqual({ stopped: true, sentTo: 'turn_1' });
+  });
+
+  it('sends it once the id comes, and stops looking when it is handed over or after waitMs', async () => {
+    vi.useFakeTimers();
+    let id: string | undefined;
+    const abort = vi.fn();
+    const early = createEarlyInterrupt({ turnId: () => id, abort, pollMs: 25, waitMs: 1_000 });
+    early.interrupt();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(abort).not.toHaveBeenCalled();
+    id = 'turn_2';
+    await vi.advanceTimersByTimeAsync(25);
+    expect(abort).toHaveBeenCalledExactlyOnceWith('turn_2');
+    expect(vi.getTimerCount()).toBe(0);
+    expect(early.handOver()).toEqual({ stopped: true, sentTo: 'turn_2' });
+    const never = createEarlyInterrupt({ turnId: () => undefined, abort, pollMs: 25, waitMs: 100 });
+    never.interrupt();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(vi.getTimerCount()).toBe(0);
+    const handed = createEarlyInterrupt({ turnId: () => undefined, abort, pollMs: 25 });
+    handed.interrupt();
+    expect(handed.handOver()).toEqual({ stopped: true });
+    expect(vi.getTimerCount()).toBe(0);
+    expect(abort).toHaveBeenCalledOnce();
+  });
+
+  it('sends nothing without a stop, nor after it handed over', () => {
+    const abort = vi.fn();
+    const early = createEarlyInterrupt({ turnId: () => 'turn_3', abort });
+    expect(early.handOver()).toEqual({ stopped: false });
+    early.interrupt();
+    expect(abort).not.toHaveBeenCalled();
+  });
+});
+
 describe('createGracefulInterrupt（QW-15 ⏹ 后进程留用）', () => {
   afterEach(() => {
     vi.useRealTimers();
