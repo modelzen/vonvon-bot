@@ -183,7 +183,7 @@ owner 2026-10-31 定的三层（第 14 节）。**会话里的 `vonvon` 命令�
 | vonvon Bot 会话以外：主人的终端、别的 Agent（Codex、Claude Code）、在那里调命令行的 Skill | 本机主人 `owner`（local） | 全部 |
 | 别的设备上的桌面端 | 已配对客户端 `owner`（paired） | 全部（第二轮：能连上的都是主人本人） |
 | 私聊会话（只有主人和管理员能私聊） | `bot-session`，令牌 `place: 'dm'` | 本 bot 和它所有群的设置，只在主人或管理员亲手触发、还在进行的那一轮（`authorizeNow`）；加、移本机管理员只在主人那一轮；"聊天改设置"开关关了一律拒；建群（3.7）；本 bot 的只读查询（也要主人或管理员那一轮，和 `settings_get` 一样）。不能：密钥、`host` 段、绑已有群和解绑、升级/停服务、配对/远程/设备命令 |
-| 群会话 | `bot-session`，令牌 `place: 'group'` | **不写任何设置**。能做：本群定时任务（3.13 的规则，`authorizeSchedule`）；记忆（`authorizeMemory`，只有主人/管理员亲手打的话进 Bot 记忆，3.7）；本群和本群成员的只读查询（`feishu_groups`、`feishu_members` 和对应的只读命令，范围同工具）；lark-cli 的飞书操作（走 lark-cli 自己的授权，不经 vonvon，本设计不管）。2026-11-02 起没有 `settings_get`、`settings_access`，命令行读设置也拒（第 20 节）。拒：任何设置读写（含权限档、会话方式、角色设定）、绑群和建群、密钥、升级/停服务、配对/远程/设备命令，命令行 exit 4。设置读写和建群（私聊里能做的）的拒绝文字复用 `not-dm` 那句，2026-11-02 改成 owner 定的"群里不能改设置。私聊我可以改，也可以在 Vonvon Bot 客户端或命令行里改。"（`registry.ts` 的 `NOT_DM_MESSAGE`）；绑已有群、密钥、运维和设备命令在私聊里也不能做，照 5.2、5.3 回 `permission_denied` / `not_in_session` 的文字，不叫人去私聊 |
+| 群会话 | `bot-session`，令牌 `place: 'group'` | **不写任何设置**。能做：本群定时任务（3.13 的规则，`authorizeSchedule`）；记忆（`authorizeMemory`，只有主人/管理员亲手打的话进 Bot 记忆，3.7）；本群成员的只读查询（`feishu_members` 和 `listGroupMembers`）；2026-11-02 起（s1b）群里改成白名单，其余查询一律拒（下面 5.2 表），`feishu_groups` 只在私聊里有；lark-cli 的飞书操作（走 lark-cli 自己的授权，不经 vonvon，本设计不管）。2026-11-02 起没有 `settings_get`、`settings_access`，命令行读设置也拒（第 20 节）。拒：任何设置读写（含权限档、会话方式、角色设定）、绑群和建群、密钥、升级/停服务、配对/远程/设备命令，命令行 exit 4。设置读写和建群（私聊里能做的）的拒绝文字复用 `not-dm` 那句，2026-11-02 改成 owner 定的"群里不能改设置。私聊我可以改，也可以在 Vonvon Bot 客户端或命令行里改。"（`registry.ts` 的 `NOT_DM_MESSAGE`）；绑已有群、密钥、运维和设备命令在私聊里也不能做，照 5.2、5.3 回 `permission_denied` / `not_in_session` 的文字，不叫人去私聊 |
 | 云文档评论会话 | `bot-session`，令牌 `place: 'comment'` | 和进程内工具今天一样：不写设置（`authorizeNow` 回 `not-dm`），没有任务（`not-group`）和记忆，设置和群的只读查询也拿不到 |
 
 ### 5.1 主体
@@ -204,15 +204,15 @@ owner 2026-10-31 定的三层（第 14 节）。**会话里的 `vonvon` 命令�
 
 | RPC（method.type） | owner | bot-session |
 |---|---|---|
-| `snapshot.get`、事件 `snapshot` | 全量 | 过滤成只含自己 bot 和它的群（`filterSnapshot(appId)`）；群令牌只含本群，评论令牌只含 bot 本身 |
-| `command.refresh / listPendingGroups / listJoinedGroups / listGroupMembers` | ✓ | 只带自己 `agentId` 的。群令牌：`listJoinedGroups` 只回本群、`listGroupMembers` 只能查本群（同 `feishu_groups`、`feishu_members` 在群里的判法，`command-tools.ts`）；私聊令牌：★ 要这一轮是主人或管理员亲手发的（同工具的 `ctx.admin`）；评论令牌 ✗ |
+| `snapshot.get`、事件 `snapshot` | 全量 | 私聊令牌过滤成只含自己 bot 和它的群（`filterSnapshot`）。群令牌、评论令牌（s1b，`sessionSnapshot`）只剩自己 bot 的 id、名字和状态，本群的 id 和名字，本群项目的 id、名字和本群那条绑定（`--group <项目名>`、`memory --project` 解析用）；`memberships`、`tools`、`jobs` 为空，文件夹、数据目录、连接说明留空，不给权限档、模型、别的群和设备；评论令牌连本群也没有 |
+| `command.refresh / listPendingGroups / listJoinedGroups / listGroupMembers` | ✓ | 只带自己 `agentId` 的。群令牌（s1b）：只有 `listGroupMembers`，只能查本群（同 `feishu_members`）；`refresh`、`listPendingGroups`、`listJoinedGroups` ✗；私聊令牌：★ 要这一轮是主人或管理员亲手发的（同工具的 `ctx.admin`）；评论令牌 ✗ |
 | `command.registerAgent / refreshAgentCredentials / bindGroup / setAgentEnabled / deleteAgent / cancelJob / restartHost / stopHost` | ✓ | ✗（绑群、建 bot、停服务都在禁区，私聊也一样） |
-| `settings.read / sessions / models` | ✓ | 群令牌：`read` ✗ `not-dm`（2026-11-02，群会话没有 `settings_get`，第 20 节；原来是只给 `project{本群}`、各段标只读），`sessions`、`models` 只有本群；私聊令牌：★ 主人或管理员那一轮，范围 `agent{自己}`、`project{自己的任何群}`、`session{自己}`；评论令牌 ✗ |
+| `settings.read / sessions / models` | ✓ | 群令牌：`read` ✗ `not-dm`（2026-11-02，群会话没有 `settings_get`，第 20 节；原来是只给 `project{本群}`、各段标只读），`sessions`、`models` ✗（s1b；原来只有本群）；私聊令牌：★ 主人或管理员那一轮，范围 `agent{自己}`、`project{自己的任何群}`、`session{自己}`；评论令牌 ✗ |
 | `settings.save / act` | ✓ | **群令牌、评论令牌 ✗ `not-dm`**（含权限档、会话方式、角色设定，一律不写）。私聊令牌：★ 过 `authorizeNow`（私聊、这一轮活着、人发的、主人或管理员、"聊天改设置"开关开着），再按范围：`host` 段 ✗；`agent{自己}`、`project{自己的任何群}` 按 3.7 的"能改"表——权限档和网络、允许哪些群用都能改（和工具一样，REQ-6）。`act adminMember add|remove` 再要求这一轮是**主人**触发（3.7："本机管理员名单只有主人触发的那一轮能改"，`TurnAuth.facts.requesterOpenId` 等于 owner）；`projectMember`、`projectAudience` 按 `authorizeNow`（主人或管理员） |
-| `collaboration.*`（含 `createProject`） | ✓ | 读类（`history / context / project`）限自己（群令牌只本群）；`createProject`：群令牌 ✗ `not-dm`，私聊令牌 ★ 过 `authorizeNow`（3.7：建群在私聊能改）；`editProject`（会话方式、启用、目录，3.7 能改表里的项）：群令牌 ✗ `not-dm`，私聊令牌 ★ 同 `settings.save`；`removeProject`（解绑）和别的写类（`clear / compact / stop / …`）✗——3.7 的能改表里没有解绑，和绑群一起留给桌面端和会话以外的终端 |
-| `environment.*`、`machine.*`、`admin.*`（含 `secrets*`） | ✓（`machine.desktopUpdateReport` 只收本机 loopback 的桌面端外壳，已配对客户端 ✗，7.5） | 全部 ✗，只放 `admin.daemonStatus`、`admin.negotiate` |
-| `directory.*`、`library.*`、`contextPreview.get` | ✓ | `library.list` 过滤；其余 ✗ |
-| `memory.*` | ✓ | ★ 过 `authorizeMemory`；范围只有自己 bot 和自己群的项目（群令牌只本群）；评论令牌 ✗（同工具的 `unknown-tool`）；bot 记忆的落点按这一轮的角色（`roleOf(auth)`，主人/管理员亲手打的才进 bot 记忆，3.7）——由 Bot 进程在同一次 IPC 里回 `role`，host 透传给 `memoryAction` |
+| `collaboration.*`（含 `createProject`） | ✓ | 读类（`history / context / project / providerModels`）私聊令牌限自己，群令牌、评论令牌 ✗（s1b）；`createProject`：群令牌 ✗ `not-dm`，私聊令牌 ★ 过 `authorizeNow`（3.7：建群在私聊能改）；`editProject`（会话方式、启用、目录，3.7 能改表里的项）：群令牌 ✗ `not-dm`，私聊令牌 ★ 同 `settings.save`；`removeProject`（解绑）和别的写类（`clear / compact / stop / …`）✗——3.7 的能改表里没有解绑，和绑群一起留给桌面端和会话以外的终端 |
+| `environment.*`、`machine.*`、`admin.*`（含 `secrets*`） | ✓（`machine.desktopUpdateReport` 只收本机 loopback 的桌面端外壳，已配对客户端 ✗，7.5） | 全部 ✗，只放 `admin.negotiate`，私聊令牌再放 `admin.daemonStatus`（s1b：群里的命令行读锁文件就够，回包里有路径） |
+| `directory.*`、`library.*`、`contextPreview.get` | ✓ | 私聊令牌 `library.list` 过滤；群令牌、评论令牌 ✗（s1b）；其余 ✗ |
+| `memory.*` | ✓ | ★ 过 `authorizeMemory`；范围只有自己 bot 和自己群的项目（群令牌只本群）；群令牌只有 `list / add / edit / archive`（s1b），`list` 和读回的条目去掉作者、最后修改人、事件号和问题清单，只列现行条目，`export`、`events` ✗；评论令牌 ✗（同工具的 `unknown-tool`）；bot 记忆的落点按这一轮的角色（`roleOf(auth)`，主人/管理员亲手打的才进 bot 记忆，3.7）——由 Bot 进程在同一次 IPC 里回 `role`，host 透传给 `memoryAction` |
 | `schedule.*` | ✓ | ★ 过 `authorizeSchedule(action, taskId)`；群令牌只本群；私聊、评论令牌 ✗ `not-group`（同工具）；`ScheduleActor` 加一种 `{ kind: 'session', openId, role }`，命令核按它再查一遍（今天 RPC 一律按 `local` 跑，`D/server/rpc/schedule.ts:9-16`） |
 | `device.*`（新） | ✓ | ✗ |
 

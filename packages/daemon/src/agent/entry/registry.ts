@@ -54,6 +54,10 @@ type Reason = NonNullable<Failure['reason']>;
  * 5.2). The owner's words (2026-11-02, settings-dm-only).
  */
 export const NOT_DM_MESSAGE = '群里不能改设置。私聊我可以改，也可以在 Vonvon Bot 客户端或命令行里改。';
+/** The same refusal in a document comment's session (s1b): it is not a group. */
+export const NOT_DM_COMMENT_MESSAGE = '评论里不能改设置。私聊我可以改，也可以在 Vonvon Bot 客户端或命令行里改。';
+/** The not-dm sentence of a place: a comment's own, every other place's the group's. */
+export const notDmMessage = (place: 'group' | 'dm' | 'comment' | AgentPlace['kind']): string => place === 'comment' || place === 'doc' ? NOT_DM_COMMENT_MESSAGE : NOT_DM_MESSAGE;
 /** devices 15, 这一轮已结束: a Bot session's command line called when no turn of its session is going (or its Bot process is gone). */
 export const SESSION_TURN_ENDED = '这次调用对应的那一轮对话已经结束，不能再改设置。';
 /** devices 3.7: only the owner's turn changes this machine's administrators (devices-4b 4.2). */
@@ -87,6 +91,10 @@ function failure(code: Exclude<Failure['code'], 'refused' | 'bad-args'>): Failur
 }
 function refused(reason: Reason): Failure {
   return { ok: false, code: 'refused', reason, message: messages[reason] };
+}
+/** A settings write outside a private chat, in its place's words. */
+function notDm(place: AgentPlace): Failure {
+  return { ...refused('not-dm'), message: notDmMessage(place.kind) };
 }
 function scheduleRefused(reason: keyof typeof scheduleTurnMessages): Failure {
   return { ok: false, code: 'refused', reason, message: scheduleTurnMessages[reason] };
@@ -192,7 +200,7 @@ export function createAgentEntries(opts: {
   function authorizeNow(grant: Grant, auth: TurnAuth | undefined): Failure | undefined {
     if (grant.thread && !grant.thread.isAlive()) revoke(grant);
     if (grant.phase === 'revoked') return failure('revoked');
-    if (grant.place.kind !== 'p2p') return refused('not-dm');
+    if (grant.place.kind !== 'p2p') return notDm(grant.place);
     if (!auth) return refused('unknown-origin');
     if (!auth.active || grant.turn !== auth) return refused('turn-ended');
     if (!auth.human) return refused('not-human-turn');
@@ -474,7 +482,7 @@ export function createAgentEntries(opts: {
         return { ok: true, ...who(auth) };
       }
       case 'adminRead': {
-        const failure = grant.place.kind !== 'p2p' ? refused('not-dm') : adminTurn(grant);
+        const failure = grant.place.kind !== 'p2p' ? notDm(grant.place) : adminTurn(grant);
         return failure || !grant.turn ? denial(failure ?? refused('turn-ended')) : { ok: true, ...who(grant.turn) };
       }
       case 'schedule': {

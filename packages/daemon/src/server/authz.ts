@@ -1,15 +1,15 @@
 import {
   MAINTENANCE_KINDS, PROTOCOL_VERSION, rpcKindOf,
-  type AgentSettingsView, type CollaborationReply, type Command, type CommandResult, type DesktopSnapshot, type LibraryReply, type MemoryItem, type MemoryRequest,
+  type AgentSettingsView, type CollaborationReply, type Command, type CommandResult, type DesktopSnapshot, type LibraryReply, type MemoryItem, type MemoryReply, type MemoryRequest,
   type MemoryScopeRef, type ProjectSettingsView, type Request, type ScheduleReply, type Scope, type SettingsReply, type SettingsScope,
 } from '@vonvon/protocol';
-import { NOT_DM_MESSAGE, SESSION_TURN_ENDED } from '../agent/entry/registry';
+import { notDmMessage, SESSION_TURN_ENDED } from '../agent/entry/registry';
 import { sessionTurnEnded, type SessionAction, type SessionAuthz } from '../admin/ipc';
 import { scheduleRefusalMessages } from '../admin/schedule-commands';
 import { bridgeVersion } from '../core/version';
 import { SESSION_TOKEN_INVALID } from '../host/session-tokens';
 import { RpcError } from './errors';
-import { filterSnapshot, scopedOwner, sessionGroups, type BotSessionPrincipal } from './snapshot-filter';
+import { filterSnapshot, scopedOwner, sessionGroups, sessionSnapshot, type BotSessionPrincipal } from './snapshot-filter';
 import type { Peer } from './ws';
 
 /** host: decided in the host (D4a); bot: the ★ rows, asked of the Bot process (D4b). */
@@ -58,8 +58,8 @@ export const SESSION_DENIED = '这个操作不能从 Bot 会话里做。';
 const MAINTENANCE = new Set<string>(MAINTENANCE_KINDS);
 const PLACES = ['dm', 'group', 'comment'] as const;
 const ALL = (cell: PlaceRule): Record<SessionPlace, PlaceRule> => ({ dm: cell, group: cell, comment: cell });
-/** Read in a group, asked of the Bot process in a private chat, not in a comment. */
-const READ = { dm: 'bot', group: 'host', comment: 'deny' } as const;
+/** A private chat's read: its Bot process asks whose turn it is. A group and a comment get none (s1b: a group's whitelist). */
+const DM_READ = { dm: 'bot', group: 'deny', comment: 'deny' } as const;
 /** A settings write: only a private chat's turn may, the group and the comment read the not-dm sentence (devices 5.2). */
 const WRITE = { dm: 'bot', group: 'not-dm', comment: 'not-dm' } as const;
 const rows = (method: string, types: string, cell: PlaceRule | Readonly<Record<SessionPlace, PlaceRule>> = 'deny'): Array<[string, Rule]> => types.split(/\s+/).filter(Boolean).map(type => {
@@ -72,10 +72,17 @@ const rows = (method: string, types: string, cell: PlaceRule | Readonly<Record<S
 /**
  * devices 5.2: one row per `rpcKinds()` name, written out, so a new RPC is refused until it gets a row here (test/authz.test.ts
  * checks both ways). The owner may do everything; a bot session what its place's cell says, `deny` unless written.
+ *
+ * A group's cells are a whitelist (s1b, owner 2026-11-02): what a group's work needs and nothing else. Its tasks
+ * (`schedule.*`), its project's memory and the bot's as the memory tools list them (`memory list add edit archive`), its
+ * own members (`command.listGroupMembers`), and what the command line itself runs on (`admin.negotiate`, a
+ * `snapshot.get` cut to the names it resolves). A settings write reads the not-dm sentence; anything else is refused
+ * with words that say nothing of what is there.
  */
 export const RULES: ReadonlyMap<string, Rule> = new Map([
   ...rows('snapshot', 'get', 'host'),
-  ...rows('command', 'refresh listPendingGroups listJoinedGroups listGroupMembers', READ),
+  ...rows('command', 'refresh listPendingGroups listJoinedGroups', DM_READ),
+  ...rows('command', 'listGroupMembers', { dm: 'bot', group: 'host', comment: 'deny' }),
   ...rows('command', 'registerAgent refreshAgentCredentials restartHost bindGroup setAgentEnabled deleteAgent cancelJob'),
   // The desktop's older permission and reply switches: settings writes, which the command line makes as settings set.
   ...rows('command', 'setResponse setPermission', { dm: 'deny', group: 'not-dm', comment: 'not-dm' }),
@@ -84,9 +91,9 @@ export const RULES: ReadonlyMap<string, Rule> = new Map([
   // and a comment read none: `settings set` and `settings act` read before they write, so these reads answer with the
   // write's sentence (a private chat's turn may do both).
   ...rows('settings', 'read.agent read.session read.project', WRITE),
-  ...rows('settings', 'models sessions', { dm: 'bot', group: 'host', comment: 'not-dm' }),
+  ...rows('settings', 'models sessions', DM_READ),
   ...rows('settings', 'save.agent save.project save.session act.voice act.adminMember act.projectMember act.projectAudience act.commentInstructions', WRITE),
-  ...rows('collaboration', 'history context project providerModels', { dm: 'host', group: 'host', comment: 'deny' }),
+  ...rows('collaboration', 'history context project providerModels', { dm: 'host', group: 'deny', comment: 'deny' }),
   // The owner's whole provider account (plan, daily use, use outside vonvon), which no tool shows a session.
   ...rows('collaboration', 'usage'),
   ...rows('collaboration', 'createProject editProject', WRITE),
@@ -99,13 +106,18 @@ export const RULES: ReadonlyMap<string, Rule> = new Map([
     checkCoreUpdate applyCoreUpdate coreUpdateStatus`),
   ...rows('admin', `judgeUsage state diagnosis hostDoctor setupStatus cardCallbackStatus confirmCardCallback codexSetup logs followLogs
     switchBackend secrets setSecret removeSecret testSecret`),
-  ...rows('admin', 'daemonStatus negotiate', 'host'),
+  // A session's command line never asks daemonStatus (`vonvon daemon status` reads the lock there); its paths are the owner's.
+  ...rows('admin', 'daemonStatus', { dm: 'host', group: 'deny', comment: 'deny' }),
+  ...rows('admin', 'negotiate', 'host'),
   ...rows('directory', 'list suggest choose'),
-  ...rows('library', 'list', 'host'),
+  // The library's projects with their folders: a session's command line finds its project's name in the snapshot.
+  ...rows('library', 'list', { dm: 'host', group: 'deny', comment: 'deny' }),
   ...rows('library', 'workspace rename previous delete'),
-  // What memory_list, memory_add, memory_update and memory_forget do, and reading it out: the Bot process says where a
-  // write lands and whether an item may be changed (memory-authority, D4b). The rest is the owner's.
-  ...rows('memory', 'list export events add edit archive', { dm: 'bot', group: 'bot', comment: 'deny' }),
+  // What memory_list, memory_add, memory_update and memory_forget do: the Bot process says where a write lands and
+  // whether an item may be changed (memory-authority, D4b). A group reads the entries as memory_list shows them
+  // (groupMemoryReply); the files' export and an entry's history, with its authors and earlier texts, are a private chat's.
+  ...rows('memory', 'list add edit archive', { dm: 'bot', group: 'bot', comment: 'deny' }),
+  ...rows('memory', 'export events', DM_READ),
   ...rows('memory', 'restore promote move branchRename branchMerge branchDelete confirm purge undo reseal seen newCounts'),
   ...rows('contextPreview', 'get'),
   ...rows('schedule', 'list create edit pause resume delete runNow', { dm: 'not-group', group: 'bot', comment: 'not-group' }),
@@ -165,7 +177,7 @@ async function authorizeSession(principal: BotSessionPrincipal, peer: Pick<Peer,
   const cell = rule.places[principal.place];
   switch (cell) {
     case 'deny': return denied(SESSION_DENIED);
-    case 'not-dm': return { ok: false, code: 'not-dm', message: NOT_DM_MESSAGE };
+    case 'not-dm': return { ok: false, code: 'not-dm', message: notDmMessage(principal.place) };
     case 'not-group': return { ok: false, code: 'not-group', message: scheduleRefusalMessages['not-group'] };
     case 'host': case 'bot': break;
   }
@@ -272,7 +284,7 @@ function inReach(principal: BotSessionPrincipal, scope: Scope | null, groups: re
   const settingsShown = (decision: Decision): Decision => !decision.ok || !session ? decision
     : narrow((reply: SettingsReply) => sessionReply(reply, principal.place === 'group'));
   switch (request.method) {
-    case 'snapshot': return narrow((snapshot: DesktopSnapshot) => filterSnapshot(snapshot, principal, scope));
+    case 'snapshot': return narrow((snapshot: DesktopSnapshot) => (session ? sessionSnapshot : filterSnapshot)(snapshot, principal, scope));
     case 'admin': {
       // A session's row lets through only daemonStatus and negotiate, which name no bot; the owner's name theirs.
       const admin = request.payload;
@@ -416,7 +428,9 @@ function sessionReply(reply: SettingsReply, group: boolean): SettingsReply {
  * session (its Bot process then keeps it to the turn's own person) and by the owner, while no group is named.
  */
 function memoryInReach(request: MemoryRequest, principal: BotSessionPrincipal, scope: Scope | null, groups: readonly BoundGroup[], who: Who): Decision {
-  const ok: Decision = { ok: true };
+  // s1b: a group session reads the entries as memory_list shows them, the authors and the archived ones left out.
+  const ok: Decision = who === 'session' && principal.place === 'group'
+    ? { ok: true, narrow: <T>(payload: T): T => groupMemoryReply(payload as MemoryReply) as T } : { ok: true };
   // newCounts and seen name no memory: the owner's, and a session's row denies them.
   if (!('scope' in request)) return who === 'owner' ? ok : outOfReach();
   const projects = new Set(groups.flatMap(group => group.projectId ? [group.projectId] : []));
@@ -427,4 +441,31 @@ function memoryInReach(request: MemoryRequest, principal: BotSessionPrincipal, s
   if (target.botId !== principal.appId) return outOfReach();
   if (target.kind === 'dm') return (who === 'owner' || principal.place === 'dm') && scope?.group === undefined ? ok : outOfReach();
   return ok;
+}
+
+/** An entry as a group reads it (s1b): its text, branch, trust and revision; who wrote or last edited it, where and why, blank. */
+function groupMemoryItem(item: MemoryItem): MemoryItem {
+  const { lastEditedBy: _edited, source, ...rest } = item;
+  return { ...rest, source: { via: source.via, botId: '', actorRole: source.actorRole } };
+}
+
+/**
+ * A memory reply as a group session reads it (s1b, "nothing beyond the memory rules"): memory_list's view of the same
+ * entries. The active ones only, no authors (a branch's maker blank unless the system's), none of the owner page's marks.
+ */
+function groupMemoryReply(reply: MemoryReply): MemoryReply {
+  switch (reply.kind) {
+    case 'list': {
+      const { lastEventId: _last, newIds: _ids, newBranches: _new, madeRoom: _room, ...rest } = reply;
+      return {
+        ...rest, problems: [],
+        items: reply.items.filter(item => item.state === 'active').map(groupMemoryItem),
+        branches: reply.branches.map(branch => branch.fixed ? branch : { ...branch, createdBy: '' }),
+      };
+    }
+    case 'item': return { ...reply, item: groupMemoryItem(reply.item) };
+    case 'conflict': return reply.current ? { ...reply, current: groupMemoryItem(reply.current) } : reply;
+    case 'branches': return { ...reply, branches: reply.branches.map(branch => branch.fixed ? branch : { ...branch, createdBy: '' }) };
+    default: return reply;
+  }
 }

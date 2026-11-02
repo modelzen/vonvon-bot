@@ -853,7 +853,7 @@ export function sanitizeContext(s: string, maxLen: number, oneLine: boolean, lin
 /** The most of another bot's message that goes into the turn's input, in UTF-16 units; a longer one is cut there
  * (one less when that would split an emoji) and gets 「…」 and a note, about 30 more. */
 export const BOT_TRIGGER_MAX = 800;
-const TRUNCATED = '（已截断，需要时用 vonvon 飞书 skill 查全文）';
+const TRUNCATED = '（已截断）';
 const NO_TEXT = '（对方没有给出文字回答）';
 
 /**
@@ -1016,7 +1016,7 @@ export interface RecordBlock {
  * time and real name) before the user's text:
  *
  *   [飞书 · 群「支付组」· 主区 · 你是「小码」]
- *   （更早还有 3 条没带进来，需要时用 vonvon 飞书 skill 查）
+ *   （更早还有 3 条没带进来）
  *   09:58 张三：下午三点发版
  *   10:01 张三 → @你：订单接口一直报 500
  *   10:03 小P（bot）：网关日志里 500 都来自 OrderService
@@ -1039,7 +1039,7 @@ export function weaveRecordBlock(text: string, block: RecordBlock): string {
   const { opening, now } = block;
   const quotes = block.quotes ?? [];
   const all = [...block.entries, ...(opening?.main ?? []), ...(block.refs ?? [])];
-  const more = block.moreTopics && quotes.length ? [`（还有 ${block.moreTopics} 个话题没列，需要时用 vonvon 飞书 skill 列）`] : [];
+  const more = block.moreTopics && quotes.length ? [`（还有 ${block.moreTopics} 个话题没列）`] : [];
   const own = sectionLines(block.entries, opening ? [] : quotes, all, now, block.rootId, earlierNote(block.earlier));
   const lines = opening ? own : [...more, ...own];
   if (opening) {
@@ -1089,7 +1089,7 @@ function sectionLines(msgs: ContextMessage[], quotes: TopicQuote[], all: Context
 
 /** The opening's pointer: where the topic hangs, and the main session's id. */
 function pointerLine(p: TopicPointer, now: number): string {
-  const rest = '主区的其他内容不在这里，需要时用 vonvon 飞书 skill 查。';
+  const rest = '主区的其他内容不在这里。';
   const at = p.root ? ` ${clockOf(p.root.at, now)} ` : '';
   if (p.botOpened) {
     const under = p.root ? `${at}${whoText(p.root.who)}的这条` : '的一条';
@@ -1127,7 +1127,7 @@ function whereText(root: TopicQuote['root'], prev: ContextMessage | undefined, a
 /** The table of recent topics (product.md 3.5), or none without rows. */
 function tableLines(rows: TopicRow[], now: number): string[] {
   if (!rows.length) return [];
-  const head = `〔本群最近 ${rows.length} 个活跃话题〕这条会话压缩过，前面的话题引用可能已经被摘要掉。更多话题用 vonvon 飞书 skill 列。`;
+  const head = `〔本群最近 ${rows.length} 个活跃话题〕这条会话压缩过，前面的话题引用可能已经被摘要掉。`;
   return [head, ...rows.map((r) => {
     const title = label(r.title ?? '', 30);
     const what = title ? `「${title}」` : '一个话题，';
@@ -1171,8 +1171,8 @@ function recordHeader(p: RecordPlace): string {
 
 /** The note on older messages left out, or undefined when there are none. */
 function earlierNote(earlier: RecordBlock['earlier']): string | undefined {
-  if (earlier === 'some') return '（更早的消息没带进来，需要时用 vonvon 飞书 skill 查）';
-  if (earlier) return `（更早还有 ${earlier} 条没带进来，需要时用 vonvon 飞书 skill 查）`;
+  if (earlier === 'some') return '（更早的消息没带进来）';
+  if (earlier) return `（更早还有 ${earlier} 条没带进来）`;
   return undefined;
 }
 
