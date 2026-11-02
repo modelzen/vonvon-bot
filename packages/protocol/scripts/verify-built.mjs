@@ -12,21 +12,19 @@ const folderToken = randomUUID();
 const samples = [
   {type:"refresh"},
   {type:"listPendingGroups",agentId},
-  {type:"openEventSettings",url:"https://open.feishu.cn/app/cli_fixture/event"},
   {type:"registerAgent"},
   {type:"refreshAgentCredentials",agentId},
   {type:"installCodex"},
   {type:"startCodexLogin"},
   {type:"restartHost"},
   {type:"listJoinedGroups",agentId},
+  {type:"listGroupMembers",agentId,groupId},
   {type:"bindGroup",agentId,groupId,projectName:"fixture",folder:{kind:"existing",folderToken},tool:"codex",conversation:"threads"},
   {type:"setResponse",membershipId,response:"mention"},
   {type:"setPermission",membershipId,administrator:"full",network:false},
   {type:"setAgentEnabled",agentId,enabled:true},
   {type:"deleteAgent",agentId},
   {type:"cancelJob",jobId},
-  {type:"openJobAuthorization",jobId},
-  {type:"copyJobAuthorization",jobId},
 ];
 assert.deepEqual(new Set(samples.map(sample => sample.type)), new Set(commandSchema.optionsMap.keys()));
 for (const sample of samples) commandSchema.parse(sample);

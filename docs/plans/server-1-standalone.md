@@ -1,5 +1,7 @@
 # I1：服务端独立安装包（`standalone` 种类和 `build-server.mjs`）
 
+> 2026-11-01 后记：owner 定 Mac、Windows 只用安装包装全部软件，不做命令行只装服务端，服务端包只发 `linux-x64`、`linux-arm64`（`docs/plans/devices.md` 第 19 节）。本片已合入，下文照当时写的留着。其中只为 Mac、Windows 写的部分成了用不上的代码：`build-server.mjs` 的 `darwin-arm64`、`darwin-x64`、`win-x64`、`win-arm64` 四个目标，`.zip`、`writeZip` 和 `unpackZip`，Windows 的 Node 和 npm 布局，Windows 的 260 字符路径预算，大小写重名检查，`server-node.json` 的四个 Node，`bundledNpmCli` 的 Windows 布局，launchd 接受 `standalone`，桌面端 `RegisteredDaemon.kind` 的 `standalone`。I3 合入后由清理片 I6 删，在那之前不发布这四个包；I2a 起 `build-server.mjs` 不带 `--targets` 只打两个 Linux 包（`PUBLISHED_TARGETS`）。
+
 ## 1. 做什么
 
 服务端第一次有自己的安装包：六个平台各一个压缩包，里面是压缩过的服务端代码、网页端、`vonvon` 入口和官方 Node（含 npm）。装好以后它认得自己是 `standalone`，能装后台服务，服务定义指向不随版本变的路径，托管安装 Codex 用包里自带的 npm。桌面端自带的 `Resources/daemon` 也一起变成压缩、无源码的样子。总设计 `docs/plans/devices.md`（下称"总设计"）7.1、7.2、第 13 节 I1 行；`stageDaemon` 对桌面端同样生效（总设计 7.1 REQ-11）。不依赖别的片；I2（安装脚本）、I3（升级）、I4a（Windows 计划任务）、I5（发布）在它上面接。
@@ -179,3 +181,20 @@ export function serviceProgram(d: Distribution, executable: string, capturedPath
 - protocol/client 从源码打进 `cli.js`：起初用的是它们的 `dist`，自测时 `dist` 比源码旧，打进了旧的协议，CLI 连自己起的 daemon 都报"Cannot verify daemon owner"，所以改成从源码编。代价是 esbuild 要能编这两个包的 TS（今天能，它们没有 esbuild 不支持的写法）。
 - Windows 的 npm 取自官方 Windows zip：本来想省掉解包器、借 linux-x64 包里的 npm，比对后发现官方 Windows zip 的 npm 有 1,910/1,926 个文件是 CRLF 行尾（含 `.cmd` 启动器），不是同一份，所以加了 `unpackZip`。它只解官方 Node zip，哈希先核过；解包规则见 4.6 第 2 步。
 - 首次下载 Node 走 nodejs.org，信任根是 HTTPS 加仓库里钉的哈希；没验 Node 的 GPG 签名。
+
+## Windows 验收（任务 205）后改了什么
+
+Windows 11 ARM64 上的 Codex 对集成分支 `aec3bb47` 做了验收（modelzen/vonvon-bot#631 任务 205）。发现和改动：
+
+- **打包后的 daemon 查不了文件夹（所有平台）。** 网页端选文件夹和 `vonvon dir suggest` 在新的 Node 进程里跑一段搜索代码，这段代码原来是一个 TS 函数的 `toString()`。4.5 打开 `minify` + `keepNames` 以后，函数体里多了 esbuild 放在函数外面的 `__name` 调用，新进程里没有它，于是包里的 daemon（服务端包和桌面端自带的）每次搜索都报 `directory_unreadable`。改成：搜索代码直接写成 `directory-suggestions.ts` 里的一段 JS 字符串，打包工具不改字符串，`keepNames` 照旧不关。全仓库没有别处把函数 `toString()` 了再执行。`scripts/stage-daemon.test.mjs` 真跑 `stageDaemon`，起包里的 daemon，用 `dir suggest` 找到临时家目录里的文件夹，旧代码上失败。
+- **Windows 上 `~\Docs` 不展开。** 新的 `D/platform/home-path.ts`：`~`、`~/…` 到处都认，`~\…` 只在 Windows 认（别的平台上 `\` 是文件名里的字符）。CLI 的 `--folder`（`group create/bind/set`、`dir list`、`project workspace`）、设置里的路径（`projectsRootDir` 和路径规则）、Bot 发文件的路径、Codex 的模型目录路径都走它；搜索代码里写了同样的规则。家目录边界照旧由 daemon 查（`outside_home`）。`folderPath` 按传进来的平台用 `path.win32` 或 `path.posix`，Linux 上也能测 Windows 的结果。`projectsRootDir` 在 macOS、Linux 上不再把 `~\x` 当成家目录。
+- **Windows 上 `npm ci` 以后工作区变脏，`build-server.mjs` 拒绝出包。** 系统的 `core.autocrlf=true` 把 `bin/vonvon.mjs` 检出成 CRLF，npm 链接 bin 时把第一行改成 LF。加 `.gitattributes`，只让各包 `package.json` 的 `bin` 文件按 LF 检出，不动别的文件；测试核对每个 bin 都有 `eol=lf`。
+- **找不到文件夹时的默认目录。** 原来是 `FEISHU_CODEX_CWD || process.cwd()`：服务起的 daemon 拿到 `/`（launchd）或 `C:\Windows\System32`（Windows 计划任务），命令行起的拿到当时 shell 的目录。新的 `fallbackWorkingDirectory()`：`FEISHU_CODEX_CWD` 照旧优先；`process.cwd()` 是磁盘根、在 `%SystemRoot%` 下、在 daemon 自己的安装目录（standalone 的安装根、桌面端的应用目录、或者包本身）里，或者已经不在了，就用家目录。设置页的 `runtime.fallbackCwd` 和 Bot 进程用的是同一个函数。
+- **只在 Windows 上失败的测试（测试的问题，断言不放松）：**
+  - `scripts/build-server.test.mjs`：执行位只在 POSIX 上从磁盘查，Windows 上由条目给出、再核 tar 头里的模式；`tar -tv` 的输出按 CRLF 也能切；"输出在仓库里"的测试原来用 URL 的 `pathname`，Windows 上是 `/E:/…`，不在仓库里，才走到了脏工作区检查，改用 `fileURLToPath`，并带 `allowDirty`。另外 `build-server.mjs` 在 Windows 上拒绝出 tar.gz 目标：Windows 磁盘上没有执行位，也解不开官方 Node 包里的符号链接。
+  - `bundled-npm.test.ts`：`toolDirectories`、`withToolDirectories` 按目标平台用 `path.posix`/`path.win32`（产品代码），launchd、systemd 的 PATH 在任何机器上都是 `:` 和 `/`。
+  - `cli-dir`、`cli-group`、`cli-project`：同上，`folderPath` 按测试给的平台算，夹具不用改；`cli-group` 补了 Windows 的用例。
+  - `distribution.test.ts`、`server-directory.test.ts`：目录链接在 Windows 上建成 junction（不用管理员权限，目标用绝对路径）。Windows 的 `current.txt`（I4a/I3）还不在集成分支上，所以只改夹具。`chmod(0)` 的"读不了的目录"在 Windows 上跳过，Windows 没有 POSIX 权限位。
+  - `daemon-cli.test.ts`：`daemon restart` 的"等待 daemon 重启…"本来就写在 stderr（命令行约定：结果在 stdout），测试原来把 stdout 和 stderr 拼在一起比，改成只比 stdout，失败时也在 `finally` 里停掉 daemon；"daemon ready"的等待在 Windows 上从 15 秒放到 45 秒，这条测试在 Windows 上自己的超时放到 120 秒（原来跟配置的 60 秒走，等满 45 秒后只剩约 15 秒给后面五次命令行和关闭），别的平台照旧 20 秒。
+- **Windows 上的 service 测试：** `cli-json` 的 `service uninstall`/`status` 样本、`daemon-cli` 的"service status gives an isolated data root…"和"service commands from a checkout…"在 Windows 上改成期望"not supported"：owner 2026-11-01 定 Mac、Windows 只用安装包，I4a 取消，Windows 没有后台服务。RPC 的 `distribution` 没有 `installRoot` 是设计如此（协议只有 `{ kind, cliPath }`，4.1）；没有 Bot 时 `group list` 退出 0、列表为空，也是对的。
+- **Codex 审查（任务 210）：** 启动目录被删后，Node 缓存的 `process.cwd()` 还会返回它，默认目录就落到一个不存在的地方。`fallbackWorkingDirectory` 最后再查一次它还是目录，不是就用家目录；`host-settings.test.ts` 补了"先建再删"的用例。

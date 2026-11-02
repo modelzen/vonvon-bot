@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { requestSchema, rpcKinds } from "../src/index.js";
+import { requestSchema, rpcKindOf, rpcKinds, type Request } from "../src/index.js";
 
 it("names every request once, nested variants by their own field", () => {
   const entries = rpcKinds();
@@ -14,4 +14,20 @@ it("names every request once, nested variants by their own field", () => {
   // an expanded request has no name of its own
   for (const kind of ["settings.act", "settings.read", "settings.save", "machine.mcp", "machine.service", "machine.bridgeImport"]) expect(kinds).not.toContain(kind);
   expect(new Set(entries.map(entry => entry.method))).toEqual(new Set(requestSchema.options.map(option => option.shape.method.value)));
+  // devices 8.4: the eleven dead kinds left, the nine device kinds and admin.negotiate came. main 必败: 152 kinds, none of them device
+  expect(kinds).toHaveLength(151);
+  for (const kind of ["device.pair", "device.setPort", "admin.negotiate"]) expect(kinds).toContain(kind);
+  for (const kind of ["machine.repairCli", "collaboration.openGroup"]) expect(kinds).not.toContain(kind);
+});
+
+// devices 5.2: the permission table looks a request up by this name.
+it("names a parsed request the way rpcKinds names its variant", () => {
+  const request = (method: string, payload: object): Request => ({ type: "request", id: "1", method, payload } as Request);
+  expect(rpcKindOf(request("snapshot", { type: "get" }))).toBe("snapshot.get");
+  expect(rpcKindOf(request("machine", { type: "service", action: "start" }))).toBe("machine.service.start");
+  expect(rpcKindOf(request("machine", { type: "stopHost" }))).toBe("machine.stopHost");
+  expect(rpcKindOf(request("settings", { type: "act", action: { kind: "voice" } }))).toBe("settings.act.voice");
+  expect(rpcKindOf(request("settings", { type: "save", edit: { scope: { kind: "host" } } }))).toBe("settings.save.host");
+  expect(rpcKindOf(request("schedule", { request: { action: "create" } }))).toBe("schedule.create");
+  expect(rpcKindOf(request("device", { type: "pair" }))).toBe("device.pair");
 });

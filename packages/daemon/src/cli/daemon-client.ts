@@ -1,7 +1,7 @@
 import { selfEntry } from '../core/self-entry';
 import { badArgs, CommandError, rpcErrorKind } from './command-error';
 import { connectLocal, ConnectionError, RpcError, type VonvonClient } from '@vonvon/client';
-import { backendLabel, conversationCopy, requestSchema, type Agent, type Membership } from '@vonvon/protocol';
+import { backendLabel, conversationCopy, PROTOCOL_VERSION, requestSchema, type Agent, type Membership, type ServerInfo } from '@vonvon/protocol';
 import { paths } from '../config/paths';
 import { verifyPidLockOwner } from '../server/owner-verification';
 import { PidLockError, readRunningPidLock } from '../server/pid-lock';
@@ -9,10 +9,13 @@ import { PidLockError, readRunningPidLock } from '../server/pid-lock';
 /** Where a command prints; `json` switches stdout to one JSON line, `{ ok: true, … }`. The entry point formats failures for --json. */
 export type Io = { json: boolean; write(text: string): void };
 export type Call = <T>(what: string, run: (c: VonvonClient) => Promise<T>, o?: { feishu?: boolean; unknown?: string; ms?: number }) => Promise<T>;
-/** One connection for the whole command; s47 passes its own connector through `withDaemon`. */
-export type Daemon = <T>(fn: (call: Call) => Promise<T>) => Promise<T>;
+/** One connection for the whole command; s47 passes its own connector through `withDaemon`. `info`: the daemon's server info, when the connector has it. */
+export type Daemon = <T>(fn: (call: Call, info?: ServerInfo) => Promise<T>) => Promise<T>;
+export type DaemonConnection = { client: VonvonClient; serverInfo: ServerInfo };
 /** Feishu calls get longer than the supervisor's 60 s IPC timeout, so the daemon's own error arrives first. */
 export const TIMEOUTS = { local: 30_000, feishu: 75_000 };
+/** How long a command cut short by Ctrl-C waits for the connection's close handshake. */
+const CLOSE_AFTER_INTERRUPT = 200;
 
 const VERSION_MISMATCH = 'daemon 和命令行的版本不一致。先 vonvon daemon stop，再 vonvon daemon start。';
 const firstLine = (error: unknown): string => (error instanceof Error ? error.message : String(error)).split('\n')[0] ?? '';
@@ -25,7 +28,7 @@ class BadRequest extends Error {}
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g;
 export const printable = (text: string): string => text.replace(CONTROL, '');
 
-export async function connectLocalDaemon(home = paths.appDir, cliEntry = selfEntry()): Promise<VonvonClient> {
+export async function connectLocalDaemon(home = paths.appDir, cliEntry = selfEntry()): Promise<DaemonConnection> {
   let lock;
   try { lock = await readRunningPidLock(home); }
   catch (error) { throw new CommandError('connection', `连不上 daemon：${firstLine(error)}`); }
@@ -38,16 +41,22 @@ export async function connectLocalDaemon(home = paths.appDir, cliEntry = selfEnt
     throw error;
   }
   if (!cliEntry) throw new CommandError('connection', 'Cannot locate the daemon CLI entry.');
-  try { return await connectLocal({ home, cliEntry }); }
+  let connected: DaemonConnection;
+  try { connected = await connectLocal({ home, cliEntry }); }
   catch (error) {
     // The child printed {"running":false}: the daemon stopped between the lock check and discovery.
     if (isZodError(error)) throw new CommandError('connection', 'daemon 刚刚停止了。先运行 vonvon daemon start。');
     const message = firstLine(error);
     if (message === 'Daemon closed during handshake') throw new CommandError('connection', 'daemon 在握手时断开了：本机凭据对不上，或者 daemon 刚好停止或重启了。稍后重试，或运行 vonvon daemon status 查看。');
     if (message === 'Daemon handshake timed out') throw new CommandError('connection', '和 daemon 握手超时。');
-    if (message.includes('protocol version mismatch')) throw new CommandError('connection', VERSION_MISMATCH);
     throw new CommandError('connection', `连不上 daemon：${message}`);
   }
+  // A daemon of another protocol answers only the maintenance kinds (devices 4.5); daemon stop and status do not come here.
+  if (connected.serverInfo.protocolVersion !== PROTOCOL_VERSION) {
+    await connected.client.close().catch(() => undefined);
+    throw new CommandError('connection', VERSION_MISMATCH);
+  }
+  return connected;
 }
 
 function translate(what: string, error: unknown, ms: number, unknown?: string): Error {
@@ -65,7 +74,7 @@ function translate(what: string, error: unknown, ms: number, unknown?: string): 
 /** Client method → RPC method; snapshot() always sends the same payload. */
 const METHODS = {
   run: 'command', settings: 'settings', collaboration: 'collaboration', environment: 'environment', machine: 'machine', admin: 'admin', directory: 'directory',
-  library: 'library', memory: 'memory', contextPreview: 'contextPreview',
+  library: 'library', memory: 'memory', contextPreview: 'contextPreview', device: 'device',
 } as const;
 
 /**
@@ -94,8 +103,10 @@ function printableError(error: unknown): unknown {
   return message === error.message ? error : error instanceof CommandError ? new CommandError(error.kind, message, error) : new Error(message);
 }
 
-export async function withDaemon<T>(fn: (call: Call) => Promise<T>, connect = connectLocalDaemon, timeouts = TIMEOUTS): Promise<T> {
-  const client = await connect();
+/** `connect` may give a bare client (the tests' fakes) or a connection with the server info. */
+export async function withDaemon<T>(fn: (call: Call, info?: ServerInfo) => Promise<T>, connect: () => Promise<VonvonClient | DaemonConnection> = connectLocalDaemon, timeouts = TIMEOUTS): Promise<T> {
+  const connected = await connect();
+  const { client, serverInfo } = 'serverInfo' in connected ? connected : { client: connected, serverInfo: undefined };
   const checked = checkRequests(client);
   const call: Call = async (what, run, o = {}) => {
     const ms = o.ms ?? (o.feishu ? timeouts.feishu : timeouts.local);
@@ -107,16 +118,25 @@ export async function withDaemon<T>(fn: (call: Call) => Promise<T>, connect = co
     finally { clearTimeout(timer); }
   };
   // Ordinary commands exit when the event loop drains, so an open socket would hang the CLI.
-  try { return await fn(call); }
-  catch (error) { throw printableError(error); }
-  finally { await client.close().catch(() => undefined); }
+  let interrupted = false;
+  try { return await fn(call, serverInfo); }
+  catch (error) { interrupted = error instanceof CommandError && error.kind === 'interrupted'; throw printableError(error); }
+  finally {
+    const closed = client.close().catch(() => undefined);
+    // Ctrl-C: the daemon may be the one not answering (a cancel never answered, cli-7-environment), and the process exits
+    // on a failure anyway (index.ts): its close handshake does not hold the command up
+    let timer: NodeJS.Timeout | undefined;
+    if (interrupted) await Promise.race([closed, new Promise<void>(done => { timer = setTimeout(done, CLOSE_AFTER_INTERRUPT); })]);
+    else await closed;
+    clearTimeout(timer);
+  }
 }
 
 /** `--fresh` (devices 8.1): the daemon probes the tools and rebuilds its snapshot, which it otherwise does every 5 s,
  * before the command reads. A write needs none: the daemon rebuilds before it answers one. */
-export const freshDaemon: Daemon = fn => withDaemon(async call => {
+export const freshDaemon: Daemon = fn => withDaemon(async (call, info) => {
   await call('刷新状态', c => c.run({ type: 'refresh', tools: true }));
-  return fn(call);
+  return fn(call, info);
 });
 
 /** Throws the reply's own message unless it is the expected kind. */

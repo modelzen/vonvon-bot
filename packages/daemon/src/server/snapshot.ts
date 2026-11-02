@@ -27,6 +27,8 @@ export interface SnapshotStore {
   close(): Promise<void>;
 }
 
+/** The platform the snapshot and the server info report (devices 4.5). */
+export const hostPlatform = (): 'macos' | 'linux' | 'unsupported' => process.platform === 'darwin' ? 'macos' : process.platform === 'linux' ? 'linux' : 'unsupported';
 export async function createSnapshotStore(options: {
   service: Pick<AdminService, 'listBots' | 'listProjects' | 'codexSetup'>;
   jobs: () => Job[];
@@ -51,7 +53,7 @@ export async function createSnapshotStore(options: {
 }): Promise<SnapshotStore> {
   const version = bridgeVersion();
   const root = options.root ?? paths.appDir;
-  const base = { platform: process.platform === 'darwin' ? 'macos' : process.platform === 'linux' ? 'linux' : 'unsupported', version, dataPath: paths.appDir } as const;
+  const base = { platform: hostPlatform(), version, dataPath: paths.appDir } as const;
   let snapshot: DesktopSnapshot = {
     revision: 0, observedAt: 0, stale: false,
     host: { kind: 'connected', ownership: 'owned', version },

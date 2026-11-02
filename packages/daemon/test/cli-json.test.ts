@@ -11,9 +11,11 @@ import { loadCommands } from './helpers/cli-commands';
  * `{ ok: true, … }` on exit 0 and `{ ok: false, error: { kind, message }, exitCode }` with the same exit code
  * otherwise. No daemon runs and the data root is a temporary one, so the RPC commands answer 3 (or 2 for bad input).
  */
+/** No background service on Windows (owner 2026-11-01: Mac and Windows run the desktop app only), so the service commands fail there. */
+const WINDOWS = process.platform === 'win32';
 const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
-  [['daemon', 'start', '--port', '70000'], 2], [['daemon', 'stop'], 0], [['daemon', 'status'], 0], [['daemon', 'logs'], 0],
-  [['service', 'install'], 1], [['service', 'uninstall'], 0], [['service', 'status'], 0],
+  [['daemon', 'start', '--port', '70000'], 2], [['daemon', 'stop'], 0], [['daemon', 'status'], 0], [['daemon', 'logs'], 0], [['daemon', 'logs', '--follow'], 3],
+  [['service', 'install'], 1], [['service', 'uninstall'], WINDOWS ? 1 : 0], [['service', 'status'], WINDOWS ? 1 : 0], [['service', 'skip'], 3],
   [['bot', 'add'], 3], [['bot', 'list'], 3], [['bot', 'status'], 3], [['bot', 'repair-dir', 'nope'], 1],
   [['bot', 'enable'], 3], [['bot', 'disable'], 3], [['bot', 'remove', 'x'], 3], [['bot', 'rescan'], 3],
   [['bot', 'callback', 'status'], 3], [['bot', 'callback', 'confirm'], 3], [['bot', 'callback', 'unconfirm'], 3],
@@ -35,7 +37,17 @@ const SAMPLES: ReadonlyArray<readonly [string[], number]> = [
   [['session', 'stop-subagent', 'x', '--group', 'g'], 3], [['session', 'reminder', '--on', '--group', 'g'], 3],
   [['usage', 'show'], 3], [['usage', 'share', '--group', 'g'], 3], [['usage', 'judge'], 3],
   [['feishu', 'groups'], 3], [['feishu', 'members', 'oc_x'], 3],
-  [['secrets', 'list'], 0], [['secrets', 'set', 'typesafe-api-key'], 2], [['secrets', 'remove', 'typesafe-api-key'], 0],
+  [['env', 'scan'], 3], [['env', 'install', 'codex'], 3], [['env', 'update', 'codex'], 3], [['env', 'uninstall', 'codex'], 3], [['env', 'login', 'lark-cli'], 3],
+  [['env', 'profile', 'list'], 3], [['env', 'profile', 'use', 'p'], 3], [['env', 'profile', 'add', 'p', '--app-id', 'cli_x'], 3], [['env', 'profile', 'init', 'p'], 3],
+  [['env', 'backend', 'list'], 3], [['env', 'backend', 'version', 'x'], 3], [['env', 'backend', 'install', 'x'], 3], [['env', 'backend', 'uninstall', 'x'], 3],
+  [['env', 'backend', 'check', 'x'], 3], [['env', 'cancel', 'install'], 3],
+  [['provider', 'models', 'codex'], 3],
+  [['secrets', 'list'], 0], [['secrets', 'set', 'typesafe-api-key'], 2], [['secrets', 'remove', 'typesafe-api-key'], 0], [['secrets', 'test', 'typesafe-api-key'], 3],
+  [['mcp', 'list', '--provider', 'codex'], 3], [['mcp', 'add', 'x', '--provider', 'codex', '--command', 'y'], 3], [['mcp', 'remove', 'x', '--provider', 'codex'], 3], [['mcp', 'add', 'x', '--provider', 'codex'], 2],
+  [['import', 'detect'], 3], [['import', 'preflight'], 3], [['import', 'start'], 3], [['import', 'status'], 3], [['import', 'rollback'], 3],
+  [['context', 'show', '--group', 'g'], 3], [['context', 'show'], 2], [['now'], 3], [['snapshot'], 3],
+  // devices 4.5: pair needs the daemon; the others fall back to the files
+  [['pair'], 3], [['clients', 'ls'], 0], [['clients', 'rename', 'cl_0000000000000000', 'x'], 2], [['clients', 'revoke', 'cl_0000000000000000'], 2], [['device', 'rename', 'x'], 0],
   [['update', '--to', 'latest'], 2],
   // argument errors from commander itself
   [['nope'], 2], [['bot', 'list', '--nope'], 2], [['group'], 2],
@@ -95,5 +107,9 @@ it('takes the data lease for the commands that write the data root only', async 
     await expect(stat(root)).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await run(home, root, ['daemon', 'stop'])).code).toBe(0);
     expect((await stat(root)).isDirectory()).toBe(true);
+    // devices 4.5: with no daemon, clients ls makes devices/ itself, so it needs the data root the lease makes
+    const fresh = join(base, 'fresh');
+    expect((await run(home, fresh, ['clients', 'ls'])).code).toBe(0);
+    expect((await stat(join(fresh, 'devices'))).isDirectory()).toBe(true);
   } finally { await rm(base, { recursive: true, force: true }); }
 }, 60_000);

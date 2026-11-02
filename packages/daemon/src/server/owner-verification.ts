@@ -2,8 +2,15 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
-import { eventSchema, helloSchema, PROTOCOL_VERSION, replyEnvelopeSchema, serverInfoSchema } from '@vonvon/protocol';
+import { z } from 'zod';
+import { helloSchema, PROTOCOL_VERSION, serverInfoSchema } from '@vonvon/protocol';
 import { getPidLockInfo, isPidLockOwnerRunning, PidLockError, type PidLockInfo } from './pid-lock';
+
+/* devices 4.5: the owner of the lock may run another protocol (old stops new, new stops old), so only the fields read here are checked. */
+const statusReplySchema = z.looseObject({ type: z.literal('response'), id: z.string(), method: z.literal('admin'),
+  payload: z.looseObject({ kind: z.literal('daemonStatus'), status: z.looseObject({ running: z.boolean(), pid: z.number() }) }) });
+const stopReplySchema = z.looseObject({ type: z.literal('response'), id: z.string(), method: z.literal('machine'), payload: z.looseObject({ type: z.literal('done') }) });
+const isEvent = (raw: unknown): boolean => !!raw && typeof raw === 'object' && 'type' in raw && raw.type === 'event';
 
 export function stopVerifiedOwner(home: string, lock: PidLockInfo): Promise<void> {
   return exchangeWithOwner(home, lock, true);
@@ -41,22 +48,20 @@ async function exchangeWithOwner(home: string, lock: PidLockInfo, stop: boolean)
         try { if (binary) throw failure(); raw = JSON.parse(bytes.toString()); }
         catch { fail(); return; }
         if (phase === 'hello') {
-          const info = serverInfoSchema.safeParse(raw);
-          if (!info.success || info.data.protocolVersion !== PROTOCOL_VERSION) { fail(); return; }
+          if (!serverInfoSchema.safeParse(raw).success) { fail(); return; }
           phase = 'status';
           socket.send(JSON.stringify({ type: 'request', id: statusId, method: 'admin', payload: { type: 'daemonStatus' } }));
           return;
         }
-        if (eventSchema.safeParse(raw).success) return;
-        const reply = replyEnvelopeSchema.safeParse(raw);
-        if (!reply.success || reply.data.type !== 'response') { fail(); return; }
+        if (isEvent(raw)) return;
         if (phase === 'stop') {
-          if (reply.data.id !== stopId || reply.data.method !== 'machine' || reply.data.payload.type !== 'done') { fail(); return; }
+          const reply = stopReplySchema.safeParse(raw);
+          if (!reply.success || reply.data.id !== stopId) { fail(); return; }
           succeed();
           return;
         }
-        if (phase !== 'status' || reply.data.id !== statusId || reply.data.method !== 'admin'
-          || reply.data.payload.kind !== 'daemonStatus' || !reply.data.payload.status.running || reply.data.payload.status.pid !== lock.pid) {
+        const reply = statusReplySchema.safeParse(raw);
+        if (phase !== 'status' || !reply.success || reply.data.id !== statusId || !reply.data.payload.status.running || reply.data.payload.status.pid !== lock.pid) {
           fail(); return;
         }
         phase = 'identity';

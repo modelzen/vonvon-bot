@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { replyEnvelopeSchema, serverInfoSchema, type Hello, type ReplyEnvelope, type ScheduleReply, type ScheduleRequest } from '@vonvon/protocol';
+import { PROTOCOL_VERSION, replyEnvelopeSchema, serverInfoSchema, type Hello, type ReplyEnvelope, type ScheduleReply, type ScheduleRequest } from '@vonvon/protocol';
 import type { AdminService, AdminServiceDeps } from '../src/admin/service';
 import type { ShutdownControl } from '../src/host/lifecycle';
 
@@ -86,7 +86,7 @@ async function connect(port: number, clientKind: Hello['clientKind']) {
   const frames: unknown[] = [];
   socket.on('message', bytes => { frames.push(JSON.parse(bytes.toString())); });
   await new Promise<void>((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });
-  socket.send(JSON.stringify({ type: 'hello', protocolVersion: 1, clientKind, credential }));
+  socket.send(JSON.stringify({ type: 'hello', protocolVersion: PROTOCOL_VERSION, clientKind, credential }));
   await vi.waitFor(() => expect(frames.some(frame => serverInfoSchema.safeParse(frame).success)).toBe(true));
   return {
     async call(id: string, botId: string, request: ScheduleRequest): Promise<ReplyEnvelope> {

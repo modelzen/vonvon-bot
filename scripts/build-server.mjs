@@ -286,9 +286,12 @@ async function outsideRepository(path) {
   if (existing === repo || existing.startsWith(repo + sep)) throw new Error(`${path} must be outside the repository`);
 }
 
-export async function buildServer({ out, targets, cache, allowDirty, publicKeyFile, baseURL }) {
+export async function buildServer({ out, targets, cache, allowDirty, publicKeyFile, baseURL, platform = process.platform }) {
   await outsideRepository(out);
   if (cache) await outsideRepository(cache);
+  // A tar.gz takes its modes from the disk, and Windows keeps no execute bits; nor can it unpack the links in Node's tar.gz.
+  const posix = targets.filter(target => !isWindowsTarget(target));
+  if (platform === 'win32' && posix.length) throw new Error(`${posix.join(', ')}: build these on macOS or Linux; Windows builds the win-* targets only`);
   const git = args => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim();
   const sourceDirty = git(['status', '--porcelain']) !== '';
   if (sourceDirty && !allowDirty) throw new Error('the worktree has uncommitted changes; commit them or pass --allow-dirty (such a build must not be published)');

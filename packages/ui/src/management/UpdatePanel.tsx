@@ -52,7 +52,6 @@ export function UpdatePanel({request, externalCoreAvailable,version,device,child
     const report = channel === 'desktop' ? setDesktopMessage : setCoreMessage;
     try {
       const reply = await request(operation);
-      if (reply.type === 'desktopUpdate') setDesktop(reply.update);
       if (reply.type === 'coreUpdate') setCore(reply);
       if (reply.type === 'done') report(reply.message);
       if (reply.type === 'done' && operation.type === 'applyCoreUpdate' && core?.distribution.kind === 'standalone') setFollowing(true);

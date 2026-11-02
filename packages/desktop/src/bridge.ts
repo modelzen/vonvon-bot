@@ -4,7 +4,7 @@ import { shell, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'ele
 import { ConnectionError, RpcError } from '@vonvon/client/browser';
 import {
   adminRequestSchema, agentIdSchema, collaborationRequestSchema, commandSchema, scheduleRequestSchema,
-  directoryRequestSchema, environmentRequestSchema, libraryRequestSchema, machineRequestSchema, memoryRequestSchema, contextPreviewRequestSchema,
+  directoryRequestSchema, environmentRequestSchema, libraryRequestSchema, machineRequestSchema, memoryRequestSchema, contextPreviewRequestSchema, deviceRequestSchema,
   settingsRequestSchema, machineReplySchema, type DesktopUpdate, type MachineReply,
 } from '@vonvon/protocol';
 import { allowedExternalUrl, type ExternalUrlKind } from '../../ui/src/url-actions.js';
@@ -12,7 +12,7 @@ import { ServiceActionError } from './service-error.js';
 import { StartHostRefusal } from './daemon-manager.js';
 import { DesktopUpdateError } from './updates.js';
 import {
-  desktopChannels, safeErrorCode, type AttachedDaemon, type DesktopBridge, type DesktopEvent,
+  desktopChannels, desktopShellRequestSchema, safeErrorCode, type AttachedDaemon, type DesktopBridge, type DesktopEvent,
   type DesktopResources, type IpcResult, type SafeFailure, type ShellActions,
 } from './ipc-contract.js';
 
@@ -249,11 +249,8 @@ export function installBridge(
     register(desktopChannels.collaboration, 1, value => collaborationRequestSchema.parse(value), value => client().collaboration(value));
     register(desktopChannels.environment, 1, value => environmentRequestSchema.parse(value), value => client().environment(value));
     register(desktopChannels.machine, 1, value => {
-      const request = machineRequestSchema.parse(value);
-      if (request.type === 'repairCli' || request.type === 'service' || request.type === 'startHost' ||
-          request.type === 'checkDesktopUpdate' || request.type === 'installDesktopUpdate')
-        throw new Error('Shell-owned machine action');
-      return request;
+      if (desktopShellRequestSchema.safeParse(value).success) throw new Error('Shell-owned machine action');
+      return machineRequestSchema.parse(value);
     }, async value => {
       if (value.type === 'stopHost' && activeOwner) {
         const owner = activeOwner;
@@ -277,16 +274,17 @@ export function installBridge(
     register(desktopChannels.library, 1, value => libraryRequestSchema.parse(value), value => client().library(value));
     register(desktopChannels.schedule, 2, (botId, request) => ({ botId: agentIdSchema.parse(botId), request: scheduleRequestSchema.parse(request) }),
       value => client().schedule(value.botId, value.request));
+    register(desktopChannels.device, 1, value => deviceRequestSchema.parse(value), value => client().device(value));
     register(desktopChannels.close, 0, noArg, () => activeOwner?.dispose() ?? Promise.resolve());
     register(desktopChannels.external, 1, value => value, openAllowedExternal);
     register(desktopChannels.startHost, 1, value => {
-      const request = machineRequestSchema.parse(value);
+      const request = desktopShellRequestSchema.parse(value);
       if (request.type !== 'startHost') throw new Error('Invalid start request');
       return request;
     },
       value => actions.startHost(value.bot).then(reply => machineReplySchema.parse(reply)));
     register(desktopChannels.service, 1, value => {
-      const request = machineRequestSchema.parse(value);
+      const request = desktopShellRequestSchema.parse(value);
       if (request.type !== 'service') throw new Error('Invalid service request');
       return request.action;
     }, async value => {

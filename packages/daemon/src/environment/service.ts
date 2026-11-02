@@ -208,8 +208,8 @@ export class EnvironmentService {
     try {
       switch (request.type) {
         case "scan": return { kind: "tools", tools: await Promise.all(kinds.map((tool) => this.inspect(tool))) };
-        case "install": return await this.install(request.tool, false);
-        case "update": return await this.install(request.tool, true);
+        case "install": return await this.install(request.tool, false, request.requestId);
+        case "update": return await this.install(request.tool, true, request.requestId);
         case "toolInstallStatus": return { kind: "toolInstall", operation: this.toolInstall };
         case "cancelInstall": return await this.cancelInstall(request.operationId);
         case "uninstall": return await this.uninstall(request.tool);
@@ -355,24 +355,26 @@ export class EnvironmentService {
     return `${process.platform === 'win32' ? root.toLowerCase() : root}:${tool}`;
   }
 
-  private install(tool: EnvironmentTool, update: boolean): Promise<EnvironmentReply> {
+  /** `requestId`: the caller's id for this request, kept on the operation's state from start to end (cli-7-environment). */
+  private install(tool: EnvironmentTool, update: boolean, requestId?: string): Promise<EnvironmentReply> {
     const key = this.managedMutationKey(tool);
     if (this.mutation || this.active || managedMutations.has(key)) return Promise.resolve(refused("busy", "另一个本机环境操作正在进行。"));
     managedMutations.add(key);
     this.mutation = true;
     const id = randomUUID();
+    const caller = requestId === undefined ? {} : { requestId };
     const abort = new AbortController();
     const cancel = () => abort.abort(this.installSignal?.reason);
     this.installSignal?.addEventListener('abort', cancel, {once: true});
     if (this.installSignal?.aborted) cancel();
-    this.toolInstall = { kind: "running", id, tool, update, startedAt: Date.now() };
+    this.toolInstall = { kind: "running", id, tool, update, startedAt: Date.now(), ...caller };
     this.installAbort = abort;
     const pending = this.performInstall(tool, update, abort.signal).then((reply) => {
-      this.toolInstall = { kind: reply.kind === "applied" ? "succeeded" : abort.signal.aborted ? "cancelled" : "failed", id, message: reply.kind === "applied" || reply.kind === "refused" ? reply.message : "安装已结束。" };
+      this.toolInstall = { kind: reply.kind === "applied" ? "succeeded" : abort.signal.aborted ? "cancelled" : "failed", id, message: reply.kind === "applied" || reply.kind === "refused" ? reply.message : "安装已结束。", ...caller };
       return reply;
     }).catch(() => {
       const message = abort.signal.aborted ? "已取消安装，原工具仍可使用。" : "工具安装失败，原工具仍可使用。";
-      this.toolInstall = { kind: abort.signal.aborted ? "cancelled" : "failed", id, message };
+      this.toolInstall = { kind: abort.signal.aborted ? "cancelled" : "failed", id, message, ...caller };
       return refused(abort.signal.aborted ? "install-cancelled" : "install-failed", message);
     }).finally(() => {
       managedMutations.delete(key);

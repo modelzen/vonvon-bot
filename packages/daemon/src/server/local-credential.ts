@@ -1,7 +1,8 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { chmod, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { machineIdSchema } from '@vonvon/protocol';
+import { machineIdSchema, type MachineId } from '@vonvon/protocol';
+import { writeFileAtomic } from './atomic-file';
 
 async function persistentValue(file: string, create: () => string): Promise<string> {
   try { await writeFile(file, create(), { flag: 'wx', mode: 0o600 }); }
@@ -9,9 +10,14 @@ async function persistentValue(file: string, create: () => string): Promise<stri
   await chmod(file, 0o600);
   return (await readFile(file, 'utf8')).trim();
 }
-export async function readLocalIdentity(home: string) {
-  const credential = await persistentValue(join(home, 'local-credential'), () => randomBytes(32).toString('hex'));
-  if (!/^[a-f0-9]{64}$/.test(credential)) throw new Error('Invalid local credential file');
-  const machineId = machineIdSchema.parse(await persistentValue(join(home, 'machine-id'), randomUUID));
+/** The data root's UUID, made once; also the device id (devices 4.1). */
+export async function readMachineId(home: string): Promise<MachineId> {
+  return machineIdSchema.parse(await persistentValue(join(home, 'machine-id'), randomUUID));
+}
+/** devices 4.1/4.4: a new credential every daemon start, so one caught while the port was free a moment no longer works. */
+export async function createLocalIdentity(home: string): Promise<{ credential: string; machineId: MachineId }> {
+  const machineId = await readMachineId(home);
+  const credential = randomBytes(32).toString('hex');
+  await writeFileAtomic(join(home, 'local-credential'), credential);
   return { credential, machineId };
 }
