@@ -92,6 +92,12 @@ describe('runRestart', () => {
     const d = deps({ daemon: async () => { throw new Error('和 daemon 的连接断了，daemon 可能正在停止。'); } });
     await expect(runRestart(home, d)).rejects.toThrow('daemon 正在停止或重启，等它结束后再试。');
   });
+  // devices 4.7 (Codex review 248): a draining daemon now answers `draining` and keeps the connection
+  it('tells a draining daemon apart by its draining answer too', async () => {
+    locks = [old];
+    const d = deps({ daemon: async () => { throw new CommandError('connection', '重启 daemon失败：daemon 正在停止或重启', { reason: 'draining' }); } });
+    await expect(runRestart(home, d)).rejects.toMatchObject({ kind: 'connection', reason: 'draining', message: 'daemon 正在停止或重启，等它结束后再试。' });
+  });
   it('gives up after the timeout with a progress line every 5 s', async () => {
     locks = [old];
     const d = deps({ timeoutMs: 12_000 });

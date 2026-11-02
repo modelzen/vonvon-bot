@@ -206,7 +206,16 @@ Mac 后验（整批，U1b/U3 的任务里）：Mac 桌面端或 Mac 上的通道
 
 另外核对了 D4a 的权限表：`device` 一行（`status enable disable setPort pair clients renameClient revokeClient rename`）没给会话写格子，Bot 会话一律拒；CLI 在会话里先由 `LOCAL_ONLY` 拒。`package-lock.json` 没变。排空白名单原来缺 `machine.coreUpdateStatus`（PR 描述的已知限制），D2 合入后远程连接也走共用的 `DRAIN_KINDS`，这条没了。
 
-## Codex 审查后改了什么（任务 232–234）
+## 合入集成分支（D2 #644、D4b #648 合入后）
+
+2026-11-02，D2 合入了集成分支，PR 的基从 D2 改成 `claude/devices-integration`。本片把集成分支（`774592ad`：D2、D4a 会话令牌和权限表、D4b 的 ★ 请求转 Bot 进程、I3 升级引擎）merge 进来，单独一个提交 `0ca07b1a`。冲突两处，两边的行为都留：
+
+- `server/http.ts`：`startApi` 的选项两边各加了一个，合成 `askBot?: AuthzDeps['askBot']; remote?: RemoteSeams`。本片的远程监听、排空保留监听、`control()` 白名单，D4a 的会话令牌和 `MAINTENANCE_KINDS`/`DRAIN_KINDS`，I3 的 `coreUpdateStatus`，D4b 的 `askBot`、`memoryItem`、memory 落点和 schedule actor 都在。
+- `test/server-fixture.ts`：`startFixture` 的第 4 个参数两边各占了一个（本片的 `remote`、D4b 的 `askBot`）。改成第 4 个 `remote`、第 5 个 `askBot`，D4b 那三处按位置传 `askBot` 的调用（`authz-session.test.ts` 两处、`cli-bot-session.test.ts` 一处）补一个 `undefined`。
+
+合并后 build、typecheck 通过，daemon 里 D3、D4a、D4b、D2 相关的 42 个测试文件 401 条通过。`package-lock.json` 没变。
+
+## Codex 审查后改了什么（任务 232–234、248）
 
 2026-11-02，JP-VPS 上的 Codex 分三份审查本片（232 通读全部 diff，233 远程监听和撤销，234 地址、限流、配置、命令行），去重后 4 条，都复现了，都接受：
 
@@ -216,3 +225,13 @@ Mac 后验（整批，U1b/U3 的任务里）：Mac 桌面端或 Mac 上的通道
 4. **带 zone 的 IPv6（234-2）→ 接受。** `fe80::1%eth0` 能开、进链接，客户端 `new URL('ws://[fe80::1%eth0]:7767/')` 直接报错，服务端的网卡名也不是客户端那边的 zone。这一批不支持链路本地 IPv6（`fe80::/10`，带不带 zone），开启时拒（exit 2），文字见第 11 节第 16 条，和第 1 条一起测。
 
 设计 `devices.md` 4.2 的两句（"`0.0.0.0`/`::` 按 `public` 处理"、LISTEN-1"排空时停止接受新连接"）加了改动说明。
+
+**复查（任务 248）的 P2：排空期间桌面端重连后被初始化快照再次踢掉 → 接受。** 第 2 条之后，排空开始时已有的连接 1001 关掉，客户端自动重连、认证、`daemonStatus` 都能过；可客户端一连上头一个请求就是快照（`watchSnapshots` 自带一次 `snapshot.get`，U2 的桌面 bridge 再显式要一次），快照不在 `DRAIN_KINDS`，`message-loop.ts` 的排空分支对白名单外的一律 `peer.close(1001)`，于是"连上 → 要快照 → 1001 → 重连"一直循环，bridge 拿不到初始快照就不发 `reattached`，升级进度看不到。设计 4.7 写的是"其余回 `draining`"，代码却是关连接。改成：
+
+- `P/handshake.ts` 的 `DRAIN_KINDS` 加 `snapshot.get` 和 `admin.negotiate`。快照回最后一次建好的那份，`stale: true`（现成字段，界面显示"正在更新…"，不加新协议字段）：只读缓存，不重建、不问正在停的 Bot 进程；权限照表走 `authorize`，Bot 会话照样裁到自己那部分。`negotiate` 只记在这条连接上，Bot 会话和带 `--scope` 的命令行要先发它才能读快照。
+- `message-loop.ts`：排空时带 id 的请求都交给 `control`，读不懂的（未知方法、参数不对）回 `draining`；没有 id 可回的帧才 1001 关。
+- `http.ts` 的 `control()`：`DRAIN_KINDS` 照答，其余回错误码 `draining`（`errors.ts` 的 `drainingError()`），连接不关。白名单外的请求不做权限判断（★ 那几行会去问正在停的 Bot 进程），只有协议不同的连接照 D4a 先判：它本来就不能问的回 `protocol_mismatch` 并记一次，连续 20 条照旧 4001 关，排空与否一样。
+- 命令行：`draining` 归连接类错误（exit 3，和原来连接被关时一样）；`daemon restart` 遇到它照旧报"daemon 正在停止或重启，等它结束后再试。"。
+- 排空开始时已有的连接照旧 1001 关（排空期间 hub 不再推事件，关掉、重连拿一份标了 `stale` 的快照，页面才知道在排空）；`release` 时所有连接 1001 关；本机和远程同一套。
+
+测试：`server-drain-control.test.ts` 加"重连后拿到快照、跟着看升级进度、白名单外回 `draining` 不断开"（真 `startApi`，本机用真 `connectLocal`、远程用真 `connectSecure` 经 `127.0.0.2`，都走 `watchSnapshots` 加显式 `snapshot()`；中途改进度再读一次；真命令行 `withDaemon` 发 `restartHost` 得 `connection`/`draining`；`release` 后两条都 1001），"Bot 会话排空中 negotiate 后只读到自己那部分快照，协议不同的连接 20 次越界后 4001"；原来"白名单外 1001"的那组改成回 `draining`、连接还开着，"读不懂的请求"分成"没有 id 的 1001"和"带 id 的回 `draining`"；`secure-socket.test.ts` 两条排空用例照新规则改（远程排空中快照回 `stale: true`，`release` 后通道里收到 1001）；`daemon-restart.test.ts` 加 `draining` 那一路。新加的两条在改动前都失败（快照请求把连接 1001 关了）。另用 U2（`95e21996`）的真 connections、bridge 对本片的 daemon 跑了一遍复查的探针（只把 Electron 的 IPC 和窗口换成替身，探针放在临时目录，没动审查 worktree）：排空中重连 1 次、`reattached` 1 次、收到 `stale: true` 的快照、`phase` 停在 `ready`，两次读 `coreUpdateStatus` 看到进度变化，`settings` 回 `draining`，`release` 后 1001。U2 还没合进集成分支，这一层仍由之后的复查用 U2 源码核对。
