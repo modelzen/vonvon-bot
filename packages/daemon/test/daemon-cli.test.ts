@@ -44,9 +44,10 @@ function launch(home: string, root: string, args: string[], extraEnv: NodeJS.Pro
   const child = spawn(process.execPath, [...prefix, entry, ...args], { env, stdio: 'pipe' });
   children.push(child);
   let output = '';
-  child.stdout.on('data', data => { output += String(data); }); child.stderr.on('data', data => { output += String(data); });
+  let stdout = '';
+  child.stdout.on('data', data => { output += String(data); stdout += String(data); }); child.stderr.on('data', data => { output += String(data); });
   const exited = new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
-  return { child, exited, output: () => output };
+  return { child, exited, output: () => output, stdout: () => stdout };
 }
 it('exposes daemon lifecycle commands while status and logs leave a missing home untouched', async () => {
   const f = await fixture();
@@ -85,7 +86,9 @@ it('exposes daemon lifecycle commands while status and logs leave a missing home
 it('starts without bots, refuses duplicate ownership and releases PID lease on shutdown', async () => {
   const f = await fixture();
   const p = launch(f.home, f.root, ['daemon', 'run']);
-  await expect.poll(p.output, { timeout: 15_000 }).toContain('vonvon daemon ready');
+  // A loaded Windows ARM64 machine running x64 Node needed more than 15 s (Windows acceptance task 205);
+  // the test's own Windows timeout below leaves the five CLI launches and the shutdown time after this wait.
+  await expect.poll(p.output, { timeout: process.platform === 'win32' ? 45_000 : 15_000 }).toContain('vonvon daemon ready');
   const record = z.object({ listen: z.string(), pid: z.number(), startedAt: z.string() }).parse(JSON.parse(await readFile(join(f.root, 'daemon.pid'), 'utf8')));
   expect(record.pid).toBe(p.child.pid); expect(record.listen).toMatch(/^127\.0\.0\.1:\d+$/);
   // The real connectLocal path: both must exit on their own once the socket is closed.
@@ -93,6 +96,13 @@ it('starts without bots, refuses duplicate ownership and releases PID lease on s
   expect(await bots.exited, bots.output()).toBe(0); expect(bots.output()).toContain('{"ok":true,"bots":[]}');
   const groups = launch(f.home, f.root, ['group', 'list']);
   expect(await groups.exited, groups.output()).toBe(0); expect(groups.output()).toContain('还没有绑定的群');
+  // main 必败: status and logs read the files with the daemon running; the status's own discovery must not ask itself (cli-8-machine)
+  const status = launch(f.home, f.root, ['daemon', 'status', '--json']);
+  expect(await status.exited, status.output()).toBe(0);
+  expect(JSON.parse(status.output())).toMatchObject({ ok: true, running: true, pid: p.child.pid, source: 'daemon', dataPath: expect.any(String), distribution: { kind: expect.any(String) } });
+  const logs = launch(f.home, f.root, ['daemon', 'logs', '--tail', '5', '--json']);
+  expect(await logs.exited, logs.output()).toBe(0);
+  expect(JSON.parse(logs.output())).toMatchObject({ ok: true, source: 'daemon' });
   const second = launch(f.home, f.root, ['daemon', 'run']);
   expect(await second.exited).toBe(1); expect(second.output()).toMatch(/host is busy|already running/);
   expect((await readdir(f.home)).filter((entry) => entry !== '.codex')).toEqual([]);
@@ -101,9 +111,10 @@ it('starts without bots, refuses duplicate ownership and releases PID lease on s
   expect(await p.exited).toBe(0);
   await expect(readFile(join(f.root, 'daemon.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(await readdir(join(f.root, '.access'))).toEqual([]);
-});
+}, process.platform === 'win32' ? 120_000 : 20_000);
 
-it('service status gives an isolated data root service names of its own', async () => {
+// No background service on Windows (owner 2026-11-01: Mac and Windows run the desktop app only).
+it.skipIf(process.platform === 'win32')('service status gives an isolated data root service names of its own', async () => {
   const f = await fixture();
   const p = launch(f.home, f.root, ['service', 'status', '--json']);
   expect(await p.exited, p.output()).toBe(0);
@@ -132,27 +143,33 @@ it('concurrent detached starts return the same ready owner and stop clears its l
 
 it('daemon restart replaces a detached daemon on the same port, and a clean stop leaves no crash record (s17)', async () => {
   const f = await fixture();
-  const start = launch(f.home, f.root, ['daemon', 'start', '--port', '0']);
-  expect(await start.exited, start.output()).toBe(0);
-  const before = z.object({ pid: z.number(), listen: z.string() }).parse(JSON.parse(await readFile(join(f.root, 'daemon.pid'), 'utf8')));
-  expect(await readdir(join(f.root, 'crash'))).toEqual(['run.json']);
-  const restart = launch(f.home, f.root, ['daemon', 'restart']);
-  const log = async () => readFile(join(f.root, 'daemon.log'), 'utf8').catch(() => '(no daemon.log)');
-  expect(await restart.exited, `${restart.output()}\ndaemon.log:\n${await log()}`).toBe(0);
-  const status = launch(f.home, f.root, ['daemon', 'status', '--json']);
-  expect(await status.exited).toBe(0);
-  const after = z.object({ running: z.literal(true), pid: z.number(), listen: z.string(), crashes: z.array(z.unknown()) }).parse(JSON.parse(status.output()));
-  expect(after.pid).not.toBe(before.pid);
-  expect(after.listen).toBe(before.listen);
-  expect(after.crashes).toEqual([]);
-  expect(restart.output()).toBe(`running PID ${after.pid} at ${after.listen}\n`);
-  const stop = launch(f.home, f.root, ['daemon', 'stop']);
-  expect(await stop.exited, stop.output()).toBe(0);
-  expect(await readdir(join(f.root, 'crash'))).toEqual([]);
-  const stopped = launch(f.home, f.root, ['daemon', 'restart']);
-  expect(await stopped.exited, stopped.output()).toBe(0);
-  expect(stopped.output()).toContain('daemon 没在运行，已启动。');
-  expect(await launch(f.home, f.root, ['daemon', 'stop']).exited).toBe(0);
+  try {
+    const start = launch(f.home, f.root, ['daemon', 'start', '--port', '0']);
+    expect(await start.exited, start.output()).toBe(0);
+    const before = z.object({ pid: z.number(), listen: z.string() }).parse(JSON.parse(await readFile(join(f.root, 'daemon.pid'), 'utf8')));
+    expect(await readdir(join(f.root, 'crash'))).toEqual(['run.json']);
+    const restart = launch(f.home, f.root, ['daemon', 'restart']);
+    const log = async () => readFile(join(f.root, 'daemon.log'), 'utf8').catch(() => '(no daemon.log)');
+    expect(await restart.exited, `${restart.output()}\ndaemon.log:\n${await log()}`).toBe(0);
+    const status = launch(f.home, f.root, ['daemon', 'status', '--json']);
+    expect(await status.exited).toBe(0);
+    const after = z.object({ running: z.literal(true), pid: z.number(), listen: z.string(), crashes: z.array(z.unknown()) }).parse(JSON.parse(status.output()));
+    expect(after.pid).not.toBe(before.pid);
+    expect(after.listen).toBe(before.listen);
+    expect(after.crashes).toEqual([]);
+    // Waiting for the old daemon is progress on stderr; stdout has the result alone (Windows acceptance task 205).
+    expect(restart.stdout()).toBe(`running PID ${after.pid} at ${after.listen}\n`);
+    const stop = launch(f.home, f.root, ['daemon', 'stop']);
+    expect(await stop.exited, stop.output()).toBe(0);
+    expect(await readdir(join(f.root, 'crash'))).toEqual([]);
+    const stopped = launch(f.home, f.root, ['daemon', 'restart']);
+    expect(await stopped.exited, stopped.output()).toBe(0);
+    expect(stopped.output()).toContain('daemon 没在运行，已启动。');
+    expect(await launch(f.home, f.root, ['daemon', 'stop']).exited).toBe(0);
+  } finally {
+    // A failed step must not leave the detached daemon running.
+    await launch(f.home, f.root, ['daemon', 'stop']).exited;
+  }
 }, 60_000);
 
 it('open --print on a new host creates the data root, starts the daemon and keeps the credential out of a pipe', async () => {
@@ -277,9 +294,14 @@ it('service commands from a checkout and hidden controls leave an absent data ho
   const f = await fixture();
   await rm(f.root, { recursive: true });
   for (const [args, code, text] of [
-    [['service', 'install'], 1, 'install_refused: Distribution cannot install a service'],
-    [['service', 'uninstall'], 0, 'not-installed: No data directory'],
-    [['service', 'status'], 0, 'not installed'],
+    ...(process.platform === 'win32'
+      // No background service on Windows (owner 2026-11-01: Mac and Windows run the desktop app only).
+      ? (['install', 'uninstall', 'status'] as const).map(action => [['service', action], 1, 'not supported on win32'] as const)
+      : [
+        [['service', 'install'], 1, 'install_refused: Distribution cannot install a service'],
+        [['service', 'uninstall'], 0, 'not-installed: No data directory'],
+        [['service', 'status'], 0, 'not installed'],
+      ] as const),
     [['__daemon-control', 'start'], 1, SERVICE_UNAVAILABLE], [['__daemon-control', 'stop'], 1, SERVICE_UNAVAILABLE],
     [['__daemon-control', 'restart'], 1, SERVICE_UNAVAILABLE], [['__daemon-control', 'update'], 1, SERVICE_UNAVAILABLE],
   ] as const) {

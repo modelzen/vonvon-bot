@@ -1,6 +1,7 @@
 import { isAbsolute } from 'node:path';
 import { JUDGE_PROVIDER_IDS } from '@vonvon/protocol';
 import { REASONING_EFFORTS } from '../agent/types';
+import { isHomeRelative } from '../platform/home-path';
 import type { SettingsAction, SettingsEdit, SettingsScope, ModelQuery } from './settings-types';
 export class SettingsInputError extends Error {
 }
@@ -16,7 +17,7 @@ const one = (...values: readonly unknown[]): Rule => value => values.includes(va
 const integer = (min: number, max: number): Rule => value => typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
 const identifier = (prefix: string): Rule => value => typeof value === 'string' && new RegExp(`^${prefix}_[A-Za-z0-9_-]{1,200}$`).test(value);
 const array = (rule: Rule): Rule => value => Array.isArray(value) && value.length <= 1000 && value.every(rule);
-const path: Rule = value => value === null || typeof value === 'string' && value.length <= 4096 && !/[\r\n\0]/.test(value) && (isAbsolute(value) || value === '~' || value.startsWith('~/'));
+const path: Rule = value => value === null || typeof value === 'string' && value.length <= 4096 && !/[\r\n\0]/.test(value) && (isAbsolute(value) || isHomeRelative(value));
 export function settingsObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new SettingsInputError('设置请求必须是对象');

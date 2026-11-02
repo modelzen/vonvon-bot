@@ -7,7 +7,6 @@ export const machineRequestSchema = z.discriminatedUnion('type', [
   z.object({type:z.literal('mcp'), request:mcpRequestSchema}),
   z.object({type:z.literal('bridgeImport'), action:z.enum(['detect','preflight','start','status','rollback']), acceptedChanges:z.literal(true).optional()}),
   z.object({type:z.literal('status')}),
-  z.object({type:z.literal('repairCli')}),
   z.object({type:z.literal('service'), action:z.enum(['install','start','stop','uninstall'])}),
   /** Remembers that the user chose a detached daemon over the login-time service, so the checklist stops asking. */
   z.object({type:z.literal('setServiceSkipped'), skipped:z.boolean()}),
@@ -19,9 +18,6 @@ export const machineRequestSchema = z.discriminatedUnion('type', [
   /** Standalone only: `version` with `allowDowngrade` goes back to a release still kept on this machine. */
   z.object({type:z.literal('applyCoreUpdate'), version:z.string().regex(/^\d+\.\d+\.\d+$/).optional(), allowDowngrade:z.boolean().optional()}),
   z.object({type:z.literal('coreUpdateStatus')}),
-  z.object({type:z.literal('checkDesktopUpdate')}),
-  z.object({type:z.literal('openReleases')}),
-  z.object({type:z.literal('installDesktopUpdate')}),
 ]);
 export type MachineRequest = z.infer<typeof machineRequestSchema>;
 export const serviceStatusSchema = z.object({platformName:z.string(),installed:z.boolean(),running:z.boolean(),servicePath:z.string(),stdoutPath:z.string(),stderrPath:z.string(),pid:z.string().optional(),lastExit:z.string().optional(),state:serviceStateSchema.optional(),detail:z.string().optional(),name:z.string().optional(),linger:z.object({state:lingerStateSchema,detail:z.string().optional()}).optional(),hint:z.string().optional()});
@@ -64,7 +60,6 @@ export const machineReplySchema = z.discriminatedUnion('type', [
   z.object({type:z.literal('logs'),text:z.string()}),
   z.object({type:z.literal('coreUpdate'),distribution:distributionSchema,current:z.string(),latest:z.string().nullable(),hasUpdate:z.boolean(),dev:z.boolean(),channel:z.string().optional(),refused:z.string().optional()}),
   z.object({type:z.literal('coreUpdateStatus'),status:coreUpdateStatusSchema}),
-  z.object({type:z.literal('desktopUpdate'),update:desktopUpdateSchema}),
 ]);
 export type MachineReply = z.infer<typeof machineReplySchema>;
 export type MachineRequestHandler = (request:MachineRequest)=>Promise<MachineReply>;

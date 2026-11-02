@@ -460,6 +460,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     };
     bridgeTimer = setTimeout(() => void checkBridgeLocks(), lockSlowMs);
     api = await startApi({
+      startedAt: supervisorStartedAt,
       port: options.port,
       control,
       bridgeImport: migration.importer,

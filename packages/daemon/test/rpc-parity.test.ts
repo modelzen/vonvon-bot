@@ -127,7 +127,8 @@ describe('route inventory parity', () => {
       await client.close();
     } finally { await fixture.close(); }
   });
-  it('refuses UI-local and shell-owned actions without closing the connection', async () => {
+  // devices 8.4: the UI-local actions left the protocol; an old client sending one gets invalid_request
+  it('refuses the removed UI-local actions without closing the connection', async () => {
     const fixture = await startFixture();
     try {
       const client = await socketClient(fixture.api.port, fixture.credential); await client.ready();
@@ -136,8 +137,8 @@ describe('route inventory parity', () => {
         { method: 'collaboration', payload: { action: 'openGroup', agentId: bot.appId, groupId: project.chatId, projectName: project.name } },
       ];
       for (const [index, value] of requests.entries()) {
-        const frame = await client.call(requestSchema.parse({ type: 'request', id: `unsupported-${index}`, ...value }));
-        expect(frame).toMatchObject({ type: 'error', code: 'unsupported' });
+        const frame = await client.call({ type: 'request', id: `removed-${index}`, ...value } as never);
+        expect(frame).toMatchObject({ type: 'error', code: 'invalid_request' });
       }
       expect(await client.call({ type: 'request', id: 'still-open', method: 'snapshot', payload: { type: 'get' } })).toMatchObject({ type: 'response' });
       await client.close();

@@ -107,7 +107,7 @@ describe('共享层契约：DM（handle-message re-export）与 ops 是同一个
   it('validateBackendSwitch / probeBackends / BACKEND_PROBE_TIMEOUT_MS 同源（防止两套逻辑漂移回潮）', () => {
     expect(hmValidateBackendSwitch).toBe(opsValidateBackendSwitch);
     expect(hmProbeBackends).toBe(opsProbeBackends);
-    expect(hmTimeout).toBe(3000);
+    expect(hmTimeout).toBe(process.platform === 'win32' ? 60_000 : 3_000);
   });
 });
 

@@ -45,7 +45,7 @@ export async function networkIdentity(ifaceName: string, platform = process.plat
 
 ### 4.3 `D/remote/tailscale.ts`
 
-`tailscaleIps({ exec = execFile, timeoutMs = 5000 }): Promise<{ installed: boolean; ips: string[] }>`：跑 `tailscale ip`（两族），ENOENT → `installed:false`；超时、非零退出 → `installed:true, ips:[]`。`isTailscale(host, iface, ts)`：`fd7a:115c:a1e0::/48` 只看段；100.64/10 要满足其一：网卡名以 `tailscale` 开头；或网卡名以 `utun` 开头**且** `ts.ips` 含它。`pickTailscaleAddress(ctx)`：第一个满足 `isTailscale` 的 IPv4。
+`tailscaleIps({ exec = execFile, timeoutMs = 5000 }): Promise<{ installed: boolean; ips: string[] }>`：跑 `tailscale ip`（两族），ENOENT → `installed:false`；超时、非零退出 → `installed:true, ips:[]`。`isTailscale(host, iface, ts)`：`fd7a:115c:a1e0::/48` 只看段；100.64/10 要满足其一：`ts.ips` 含它（不看网卡名：macOS 的 `utun*`、Windows 都靠这条）；或网卡名**不区分大小写**以 `tailscale` 开头（Linux 的 `tailscale0`、Windows 的 `Tailscale`，没装命令行时靠这条）。（2026-11-01 按 U3 计划改：原来写的"`tailscale` 开头，或 `utun*` 且 `ts.ips` 含它"认不出 Windows 的 `Tailscale` 网卡。）`pickTailscaleAddress(ctx)`：第一个满足 `isTailscale` 的 IPv4。
 
 ### 4.4 `D/remote/rate-limit.ts`（全在内存，重启清零，不起定时器，按 `now()` 懒清理）
 
@@ -78,6 +78,8 @@ export function createRemoteListeners(deps: {
 }): RemoteListeners;
 ```
 
+- `failed` 要进协议：D1 分支 `P/device.ts:61` 的 `remoteAddressStateSchema` 只有 `listening`、`waiting`、`needs-confirmation`、`disabled`。本片把它放宽成五个值（加 `failed`），`detail` 本来就是可选的。不加的话，绑定出了别的错误时 `device.status` 的回复过不了 schema，U3 的页面和 `remote status` 都拿不到状态，U3 写好的 `failed` 文案也用不上。
+
 每个地址一个 `Entry { address, state, detail?, server?: http.Server, secure?: { close() }, timer?: NodeJS.Timeout }`：
 - `ensure(address, port)`：`lan` 且 `address.network` 有值 → 先算当前 `networkIdentity(address.iface)`，不等 → `needs-confirmation`，`detail` = 设计 15 节"局域网换了"那句，`log.warn('remote','remote-network-changed')`，**不绑**，直到用户再 `enable` 一次（`enableAddress` 会刷新 `network`）。否则 `http.createServer(handler)`：有 `Origin` 头 → 403；`Host` ≠ `hostHeader(host, port)` → 403；`GET /health` → `200 {"ok":true,"protocolVersion":2}`（不回设备 id、版本、名字）；其余 404 空体。`createSecureSocketServer({ ...secure, server, listenerId: host, admit, onHandshake, onHandshakeFailed })`，其中 `admit(req)`：Origin 存在或 Host 不符 → `{ok:false,status:403}`，`limiter.connectionOpened(ip)` 回 `too_many` → `{ok:false,status:429}`；`onHandshake(ip)` → `limiter.handshakeStarted(ip, exposure(kind))`；`onHandshakeFailed` → `limiter.handshakeFailed` + `log.warn('remote', reason==='pairing_failed' ? 'pairing-refused' : 'handshake-rejected', { ip, reason })`。`server.listen(port, host)`：`listening` → 状态 `listening`、`log.info('remote','remote-listening',{ host, port, kind })`；`error`：`EADDRNOTAVAIL` → `waiting`，detail "等待地址 <host> 出现"，`log.info('remote','remote-bind-waiting')`，15 秒后重试；`EADDRINUSE` → `waiting`，detail "端口 <port> 被占用，每 15 秒重试；可用 `vonvon remote port <n>` 换端口"，`log.warn('remote','remote-bind-failed')`，15 秒重试；其他错误 → `failed`，detail 是错误码，不重试。
 - 在听时每 15 秒 `watch`：`host` 不在 `interfaces()` 里了 → 关 server（连接 4006）、回到 `waiting` 并重试（设计 4.2 "地址消失同样回到等待"）。
@@ -100,14 +102,15 @@ export function createRemoteListeners(deps: {
 
 ### 4.8 `D/cli/commands/remote.ts`
 
-`remote status [--json]`、`remote enable <ip> | --tailscale [--allow-public]`、`remote disable <ip>`、`remote port <n>`；`covers` 按 D1 4.0 的表（`device.status/enable/disable/setPort`）。双路：daemon 在 → RPC；不在 → `enterDataAccess(home)` 下用同一套 `classify/tailscaleIps/enableAddress/...` 直接改 `remote.json`，输出末尾加一行"后台服务没在运行，下次启动时生效。"，`--json` 带 `source:'files'`。`enable` 成功文字：设计 15 节"`remote enable` 成功"，`<kind>` 的中文：tailscale "Tailscale 地址"、lan "局域网地址"、cgnat "运营商地址（已确认）"、public "公网地址（已确认）"。`status` 人类输出一张表：地址、种类、状态（在听 / 等待地址出现 / 网络变了，确认后再开 / 失败）、说明、端口；最后一行"客户端：<total> 台，在线 <active>"。`parity-allowlist.ts` 删 `pending('D3')` 四条。`cli-json.test.ts` SAMPLES 加 `remote status --json`、`remote enable 203.0.113.5 --json`（无 `--allow-public` → exit 4）。
+`remote status [--json]`、`remote enable <ip> | --tailscale [--allow-public]`、`remote disable <ip>`、`remote port <n>`；`covers` 按 D1 4.0 的表（`device.status/enable/disable/setPort`）。双路：daemon 在 → RPC；不在 → 走 D1 `D/cli/commands/device.ts` 的 `either()`（导出它复用），在 host 互斥锁下用同一套 `classify/tailscaleIps/enableAddress/...` 直接改 `remote.json`，输出末尾加一行"后台服务没在运行，下次启动时生效。"，`--json` 带 `source:'files'`。`enable` 成功文字：设计 15 节"`remote enable` 成功"，`<kind>` 的中文：tailscale "Tailscale 地址"、lan "局域网地址"、cgnat "运营商地址（已确认）"、public "公网地址（已确认）"。`status` 人类输出一张表：地址、种类、状态（在听 / 等待地址出现 / 网络变了，确认后再开 / 失败）、说明、端口；最后一行"客户端：<total> 台，在线 <active>"。`parity-allowlist.ts` 删 `pending('D3')` 四条。`cli-json.test.ts` SAMPLES 加 `remote status --json`、`remote enable 203.0.113.5 --json`（无 `--allow-public` → exit 4）。
 
 ## 5. 测试
 
 | 文件 | 用例 | 输入 → 期望 |
 |---|---|---|
-| `daemon/test/remote-address.test.ts`（新） | 分类表 | `127.0.0.1`→loopback；`::1`→loopback；`0.0.0.0`、`::`→public；`10.1.2.3`、`172.16.0.9`、`172.31.255.1`、`192.168.1.9`、`169.254.1.1`、`fd00::1`、`fe80::1`→lan；`172.32.0.1`→public；`100.100.1.1` 在 `tailscale0` 上→tailscale；同地址在 `eth0` 上且 ts.ips 不含→cgnat；在 `utun3` 且 ts.ips 含→tailscale；`fd7a:115c:a1e0::1`→tailscale；`8.8.8.8`→public；`example.com`、`192.168.1`→invalid。main 必败 |
+| `daemon/test/remote-address.test.ts`（新） | 分类表 | `127.0.0.1`→loopback；`::1`→loopback；`0.0.0.0`、`::`→public；`10.1.2.3`、`172.16.0.9`、`172.31.255.1`、`192.168.1.9`、`169.254.1.1`、`fd00::1`、`fe80::1`→lan；`172.32.0.1`→public；`100.100.1.1` 在 `tailscale0` 上→tailscale；同地址在 `eth0` 上且 ts.ips 不含→cgnat；在 `utun3` 且 ts.ips 含→tailscale；在 `Tailscale`（Windows 的网卡名）上、ts.ips 为空→tailscale；在 `Ethernet` 上且 ts.ips 含→tailscale；`fd7a:115c:a1e0::1`→tailscale；`8.8.8.8`→public；`example.com`、`192.168.1`→invalid。main 必败 |
 | 同上 | `hostHeader` | `('192.168.1.9',7767)`→`192.168.1.9:7767`；`('fd00::1',7767)`→`[fd00::1]:7767` |
+| `protocol/test/device.test.ts`（改） | 地址状态 `failed` | 带 `state: 'failed', detail: 'EACCES'` 的 `device.status` 回复能被 `deviceReplySchema` 解析，原样回来。main 必败 |
 | `daemon/test/remote-tailscale.test.ts`（新） | 命令缺失/超时 | 假 `exec` 抛 ENOENT → `installed:false, ips:[]`；5 s 不回 → `installed:true, ips:[]`；正常输出两行 → 两个 ip |
 | `daemon/test/remote-rate-limit.test.ts`（新，假时钟） | 未认证连接数 | 同 IP 第 5 条 `too_many`；`connectionClosed` 后第 5 条 ok；8 个 IP 各 4 条后第 33 条 `too_many` |
 | 同上 | 令牌桶和封禁 | 同 IP 1 分钟内第 21 次 `handshakeStarted` → `rate_limited`，`onBan` 调一次，60 s 内都拒，61 s 后 ok；`handshakeFailed(unknown_client, validInvite:true)` 不扣桶，`validInvite:false` 扣 |
@@ -135,7 +138,7 @@ Linux 自测：
 2. 真开一次（设计 13 节 D3 验收行的 Linux 一半；用临时 daemon，不碰 Paseo、`accept-home2`、`~/.vonvon-bot`）：`T=$(mktemp -d)`，前缀 `HOME=$T/home VONVON_HOME=$T/vh` 跑 `vonvon daemon start`，`vonvon remote port 17767`（避开别人可能用的 7767），`vonvon remote enable --tailscale --json` 看到本机 Tailscale 地址、`state:'listening'`；`vonvon remote status`；`vonvon pair --json | cat` 出链接；本机 `curl -si http://<ts-ip>:17767/health` 只有两个键；`curl -si -H 'Origin: http://x' …/health` → 403；`curl -si -H 'Host: 1.2.3.4' …/health` → 403；用 D2 的 `test/manual/secure-probe.ts` 以客户端身份连 `<ts-ip>:17767` 带链接 → 配对成功、`clients ls` 多一条、daemon 日志有 `client-paired`；再用 `wscat`/`node -e` 发明文 `hello` → 4005；连着的探针在另一个终端 `vonvon clients revoke <id>` → 1 秒内断 4003；`vonvon remote enable 100.70.0.1` → exit 4 CGNAT 文字；`vonvon remote enable 0.0.0.0` → exit 4 公网文字；`vonvon remote disable <ts-ip>`，`daemon stop`。压力：`for i in $(seq 1 300); do (printf 'x' | nc -q0 <ts-ip> 17767 &) ; done` 一秒内几百条第一消息，同时 `vonvon daemon status --json` 1 秒内返回（Bot IPC 不卡；临时 daemon 没有 bot，看 `status` 延迟即可）。最后 `rm -rf -- "${T:?}"`。PR 里不贴地址、链接。
 3. `status` 的"等待地址出现"：`vonvon remote enable 10.255.255.254` 在没这个地址的机器上 → `state:'waiting'`；`daemon stop` 在 2 秒内退出（有待重试时排空能退）。
 
-Mac 后验（整批，U1b/U3 的任务里）：Mac 桌面端或 Mac 上的通道探针连 JP-VPS 的 Tailscale 地址能连；无通道探针被拒；`clients revoke` 后 Mac 那边 1 秒内断并显示"已撤销"文案。Windows：无专项（Windows 的 `tailscale ip` 和 `utun` 不适用，`isTailscale` 在 Windows 上只靠 `ts.ips`，I4a 后由 Windows Codex 顺带验一次 `remote enable --tailscale`）。
+Mac 后验（整批，U1b/U3 的任务里）：Mac 桌面端或 Mac 上的通道探针连 JP-VPS 的 Tailscale 地址能连；无通道探针被拒；`clients revoke` 后 Mac 那边 1 秒内断并显示"已撤销"文案。Windows：无专项（Windows 上网卡名是 `Tailscale`，按 4.3 不区分大小写的前缀认；`tailscale.exe` 不在 PATH 里时由 U3 补的安装位置取 `ts.ips`；I4a 已取消（owner 2026-11-01），改成在 Windows 的验收任务里顺带看一次 Windows 桌面端"允许别的设备连接"认不认 Tailscale 地址）。
 
 ## 7. 文档
 
@@ -151,10 +154,10 @@ Mac 后验（整批，U1b/U3 的任务里）：Mac 桌面端或 Mac 上的通道
 4. 限流数值：4/IP、32 全局、20 次/分钟/IP、封 60 秒、exposed 10 次/秒；带有效 `inviteId` 的失败不计。
 5. `EADDRNOTAVAIL`、`EADDRINUSE` 进 `waiting` 每 15 秒重试；`beginDrain` 后没有定时器；`release` 等所有远程 server 关完。
 6. `lan` 地址开启时记 `iface`/`network`，重试前核对，不一致进 `needs-confirmation` 且不绑；`tailscale` 地址不做这项。
-7. 100.64/10 的判定按 4.3（网卡名 `tailscale*`，或 `utun*` 且在 `tailscale ip` 输出里），其余归 `cgnat` 要 `--allow-public`。
+7. 100.64/10 的判定按 4.3（在 `tailscale ip` 输出里，或网卡名不区分大小写是 `tailscale*`），其余归 `cgnat` 要 `--allow-public`。
 8. 撤销：改文件 → 关连接 4003 → `jobs.detach`、`logs.detach`，1 秒内；事件 `client-revoked` 发出。
 9. 关地址、换端口的连接收 4006。
-10. `remote *` 四条双路，daemon 没跑时在数据租约下写文件并提示"下次启动时生效"。
+10. `remote *` 四条双路，daemon 没跑时在 host 互斥锁下写文件并提示"下次启动时生效"。
 11. 文案和设计第 15 节一致（成功、Tailscale 提示、CGNAT、公网、网络变了）。
 12. 行数 ≤1,500；diff 里没有真实 id、密钥、本机路径、Tailscale 地址。
 
@@ -166,3 +169,9 @@ Mac 后验（整批，U1b/U3 的任务里）：Mac 桌面端或 Mac 上的通道
 - `ws` 的 `verifyClient` 是同步/回调式；`admit` 保持同步。
 - 用 `127.0.0.2` 做测试地址依赖 Linux 的 127/8 全可绑；macOS 上这些测试会 `EADDRNOTAVAIL`（CI 的 macOS 任务）：测试里先 `try bind` 探测，不行就 `test.skip` 并在 Linux 上跑全量。
 - `nc` 压测只验证 daemon 的 `status` 不被拖慢；真实的 Bot IPC 不卡由整批验收在 Bot 6 上看一次。
+
+## 10. 审查后改了什么
+
+2026-11-02，#640 上 Sonnet 审查 U1a–U4 计划时，提到本片的一条，接受：
+
+- 监听器会把地址记成 `failed`，U3 也给它写了文案，可 D1 的协议枚举没有这个值，没有哪一片负责加。由本片加进 `remoteAddressStateSchema`，并加一条解析测试（4.5、第 5 节）。U3 计划写明：本片没加时由 U3 补。
