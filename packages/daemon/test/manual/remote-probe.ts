@@ -120,7 +120,10 @@ async function connect(text: string): Promise<void> {
   print('1 device.enable 127.0.0.2', statusOf(await owner.device({ type: 'enable', host: ALIAS })));
   print('1 device.enable 127.0.0.1', await owner.call('device', { type: 'enable', host: '127.0.0.1' }).then(reply => reply.code));
   print('1 device.enable 100.70.0.1', await owner.call('device', { type: 'enable', host: '100.70.0.1' }).then(reply => reply.code));
-  print('1 device.enable 0.0.0.0', await owner.call('device', { type: 'enable', host: '0.0.0.0' }).then(reply => reply.code));
+  // Codex review 232-1, 234-1, 234-2: refused, confirmed or not
+  for (const host of ['0.0.0.0', '::', 'fe80::1%eth0']) {
+    print(`1 device.enable ${host} --allow-public`, await owner.call('device', { type: 'enable', host, allowPublic: true }).then(reply => reply.code));
+  }
   print('2 GET /health', await get(PORT));
   print('2 GET /health with Origin', await get(PORT, { origin: 'http://x' }));
   print('2 GET /health with Host 1.2.3.4', await get(PORT, { host: '1.2.3.4' }));

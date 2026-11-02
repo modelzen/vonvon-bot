@@ -42,6 +42,12 @@ it('writes remote.json itself when no daemon runs, says it takes effect at the n
   await expect(runRemote('enable', { host: '203.0.113.5', tailscale: true }, output().io, noDaemon, home, deps)).rejects.toMatchObject({ kind: 'bad-args' });
   await expect(runRemote('enable', { tailscale: true }, output().io, noDaemon, home, deps)).rejects.toMatchObject({ kind: 'refused', reason: 'tailscale_unavailable' });
   await expect(runRemote('port', { port: '80' }, output().io, noDaemon, home, deps)).rejects.toMatchObject({ kind: 'bad-args' });
+  // Codex review 232-1, 234-1, 234-2: the file path refuses a wildcard and a link-local IPv6 like the daemon, writing nothing
+  const before = await readFile(devicesPath(home, 'remote.json'), 'utf8');
+  for (const host of ['0.0.0.0', '::', 'fe80::1%eth0']) {
+    await expect(runRemote('enable', { host, allowPublic: true }, output().io, noDaemon, home, deps)).rejects.toMatchObject({ kind: 'bad-args', message: expect.stringMatching(/^不能开启 /) });
+  }
+  expect(await readFile(devicesPath(home, 'remote.json'), 'utf8')).toBe(before);
   await expect(runRemote('disable', { host: '192.0.2.1' }, output().io, noDaemon, home, deps)).rejects.toMatchObject({ kind: 'bad-args', message: '这个地址没有开启。' });
   const moved = output();
   await runRemote('port', { port: '17767' }, moved.io, noDaemon, home, deps);

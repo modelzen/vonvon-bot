@@ -63,7 +63,17 @@ it('refuses what enable must not open, with the design texts, and records a LAN 
   expect(await refused({ host: '127.0.0.1' })).toEqual({ code: 'invalid_request', message: '回环地址不用开启，本机客户端一直能连。' });
   expect(await refused({ host: '100.70.1.1' })).toMatchObject({ code: 'confirm_required', message: expect.stringMatching(/^100\.70\.1\.1 不在 Tailscale 的网卡上.*CGNAT/) });
   expect(await refused({ host: '203.0.113.5' })).toMatchObject({ code: 'confirm_required', message: expect.stringContaining('这是公网地址') });
-  expect(await refused({ host: '0.0.0.0' })).toMatchObject({ code: 'confirm_required', message: expect.stringContaining('这是公网地址') });
+  // Codex review 232-1 / 234-1: a wildcard is no address another computer can dial, and the Host it sends would never
+  // match it; refused, confirmed or not, before anything is written
+  for (const [typed, host] of [['0.0.0.0', '0.0.0.0'], ['::', '::'], ['0:0::0', '::']] as const) {
+    for (const allowPublic of [false, true]) {
+      expect(await refused({ host: typed, allowPublic })).toEqual({ code: 'invalid_request', message: `不能开启 ${host}：它代表这台设备的所有地址，别的设备拿它连不上。改用 \`vonvon remote enable --tailscale\`（推荐）或 \`vonvon remote enable <这台设备的 IP>\`。` });
+    }
+  }
+  // Codex review 234-2: a link-local IPv6, its zone or not, gives a link no client can build a URL from
+  for (const [typed, host] of [['fe80::1', 'fe80::1'], ['fe80::1%eth0', 'fe80::1%eth0'], ['FE80::ABCD', 'fe80::abcd'], ['febf::1', 'febf::1']] as const) {
+    expect(await refused({ host: typed, allowPublic: true })).toEqual({ code: 'invalid_request', message: `不能开启 ${host}：现在还不支持链路本地的 IPv6 地址（fe80:: 开头）。改用 \`vonvon remote enable --tailscale\`（推荐）或 \`vonvon remote enable <这台设备的局域网 IP>\`。` });
+  }
   expect(await refused({})).toMatchObject({ code: 'invalid_request' });
   expect(await resolveEnable({ host: '203.0.113.5', allowPublic: true }, deps)).toEqual({ host: '203.0.113.5', enabledAt: 5, kind: 'public' });
   expect(await resolveEnable({ host: '192.168.1.9' }, deps)).toEqual({ host: '192.168.1.9', enabledAt: 5, kind: 'lan', iface: 'eth0', network: 'gw:aa:bb:cc:dd:ee:ff' });
