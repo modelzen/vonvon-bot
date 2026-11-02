@@ -120,10 +120,13 @@ async function pickAddress(candidates: readonly Candidate[], terminal: Terminal,
   }
 }
 
+/** A1: `--tailscale` is gone; the old scripts and habits get told what to write instead. */
+export const TAILSCALE_REMOVED = '没有 `--tailscale` 了，直接写地址：`vonvon remote enable "$(tailscale ip -4)"`。不知道写哪个地址时，在终端里直接运行 `vonvon remote enable` 选一个，或者先看 `vonvon remote candidates`。';
+
 /** `vonvon remote status|enable|disable|port|candidates` (D3 4.8, A1): through the daemon when it runs, which binds and
  * closes the listener at once; otherwise on remote.json under the host mutex, for the next start. `candidates` reads
  * this machine's interfaces only. */
-export async function runRemote(action: 'status' | 'enable' | 'disable' | 'port' | 'candidates', target: { host?: string; allowPublic?: boolean; port?: string; all?: boolean },
+export async function runRemote(action: 'status' | 'enable' | 'disable' | 'port' | 'candidates', target: { host?: string; allowPublic?: boolean; port?: string; all?: boolean; tailscale?: boolean },
   io: Io, daemon: Daemon = withDaemon, home = paths.appDir, deps: EnableDeps = machine, terminal: Terminal = processTerminal()): Promise<void> {
   if (action === 'candidates') {
     const all = listCandidates(await candidateContext(deps), { all: true });
@@ -145,6 +148,7 @@ export async function runRemote(action: 'status' | 'enable' | 'disable' | 'port'
     return;
   }
   if (action === 'enable') {
+    if (target.tailscale) throw badArgs(TAILSCALE_REMOVED);
     let host = target.host === undefined ? undefined : canonicalHost(target.host);
     let allowPublic = Boolean(target.allowPublic);
     const asked = host === undefined;
