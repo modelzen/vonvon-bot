@@ -89,16 +89,20 @@ describe('a Bot session\'s command line', () => {
       expect((await run(d.fixture.home, d.home, ['--scope', `bot=${BOT},group=${GROUP}`, 'schedule', 'list', '--group', GROUP], { VONVON_SESSION: d.token })).code).toBe(0);
       const missing = await run(d.fixture.home, d.home, ['schedule', 'list', '--group', GROUP], { VONVON_SESSION: d.token });
       expect(missing).toMatchObject({ code: 4, json: { error: { kind: 'refused', reason: 'scope_required' } } });
-      expect(missing.json.error?.message).toContain('必须带 `--scope');
+      // settings-dm-only: no skill teaches it, so the refusal says what to add
+      expect(missing.json.error?.message).toContain('要带上 `--scope "$VONVON_SCOPE"`');
       const wider = await run(d.fixture.home, d.home, ['schedule', 'list', '--group', GROUP, '--scope', `bot=${BOT}`], { VONVON_SESSION: d.token });
       expect(wider).toMatchObject({ code: 4, json: { error: { reason: 'scope_required' } } });
       expect(wider.json.error?.message).toContain('范围超过了这条会话');
+      expect(wider.json.error?.message).toContain('改用 `--scope "$VONVON_SCOPE"`');
       // a settings write from a group: the tools' sentence
       // D4a review R1: also those that read the bot's settings before they write
-      for (const args of [['settings', 'act', 'voice', 'test'], ['settings', 'set', 'cards.showToolCalls=true'], ['settings', 'act', 'admin', 'add', 'ou_0123456789abcdef'], ['settings', 'act', 'comment-instructions', '--default']]) {
+      // settings-dm-only: and reading the group's own settings, as no group session has settings_get
+      for (const args of [['settings', 'act', 'voice', 'test'], ['settings', 'set', 'cards.showToolCalls=true'], ['settings', 'act', 'admin', 'add', 'ou_0123456789abcdef'], ['settings', 'act', 'comment-instructions', '--default'],
+        ['settings', 'set', '--group', GROUP, 'permission.mode=full'], ['settings', 'get', '--group', GROUP]]) {
         const write = await run(d.fixture.home, d.home, [...args, '--scope', `bot=${BOT},group=${GROUP}`], { VONVON_SESSION: d.token });
         expect(write, args.join(' ')).toMatchObject({ code: 4, json: { error: { kind: 'refused', reason: 'not-dm' } } });
-        expect(write.json.error?.message).toMatch(/：设置只能在私聊里改。请对方去私聊里跟我说。$/);
+        expect(write.json.error?.message).toMatch(/：群里不能改设置。私聊我可以改，也可以在 Vonvon Bot 客户端或命令行里改。$/);
       }
       // D4a review SEC-2: service status takes the lock as it is, never asking the daemon with local-credential (unreadable here)
       const service = await run(d.fixture.home, d.home, ['service', 'status'], { VONVON_SESSION: d.token });

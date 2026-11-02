@@ -53,11 +53,16 @@ describe('the bot-session column (unit)', () => {
     for (const place of ['group', 'comment'] as const) {
       for (const write of writes) expect(await authorize(peer(place), write, deps)).toEqual({ ok: false, code: 'not-dm', message: NOT_DM_MESSAGE });
     }
-    expect(NOT_DM_MESSAGE).toBe('设置只能在私聊里改。请对方去私聊里跟我说。');
+    // settings-dm-only: the owner's words
+    expect(NOT_DM_MESSAGE).toBe('群里不能改设置。私聊我可以改，也可以在 Vonvon Bot 客户端或命令行里改。');
   });
 
-  it('lets a group session read its own group\'s settings, every part read-only for not-dm, and nothing else', async () => {
-    const decision = await authorize(peer('group'), request('settings', { type: 'read', scope: { kind: 'project', botId: BOT, projectName: '研发' } }), deps);
+  // settings-dm-only: a group session has no settings_get, and its command line reads no settings either, its own group's
+  // included; what it may still read of its group (members, sessions) stays.
+  it('refuses a group session every settings read with the not-dm sentence, and reads a private chat\'s as settings_get does', async () => {
+    const own = request('settings', { type: 'read', scope: { kind: 'project', botId: BOT, projectName: '研发' } });
+    expect(await authorize(peer('group'), own, deps)).toEqual({ ok: false, code: 'not-dm', message: NOT_DM_MESSAGE });
+    const decision = await authorize(peer('dm', { bot: BOT }), own, { ...deps, askBot: botSays(ownerTurn) });
     expect(decision).toMatchObject({ ok: true });
     const view = {
       scope: { kind: 'project', botId: BOT, projectName: '研发' }, sections: { permission: { value: {}, access: { kind: 'writable' } }, model: { value: {}, access: { kind: 'writable' } } },
@@ -66,12 +71,11 @@ describe('the bot-session column (unit)', () => {
     };
     const shown = decision.ok && decision.narrow ? decision.narrow({ kind: 'view', view } as unknown as SettingsReply) : undefined;
     const narrowed = (shown as { view: { sections: Record<string, { access: unknown }>; members: object } }).view;
-    expect(Object.values(narrowed.sections).map(section => section.access))
-      .toEqual([{ kind: 'readonly', reason: 'not-dm', message: NOT_DM_MESSAGE }, { kind: 'readonly', reason: 'not-dm', message: NOT_DM_MESSAGE }]);
+    expect(Object.values(narrowed.sections).map(section => section.access)).toEqual([{ kind: 'writable' }, { kind: 'writable' }]);
     // D4a review SEC-4/R6: what settings_get leaves out stays out, but for what the view's schema needs (its group's identity, the response list without names)
     expect(Object.keys(narrowed).sort()).toEqual(['identity', 'members', 'scope', 'sections']);
     expect(narrowed.members).toEqual({ openIds: ['ou_a'], revision: 'm1' });
-    expect(await authorize(peer('group'), request('settings', { type: 'read', scope: { kind: 'project', botId: BOT, projectName: '运营' } }), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
+    expect(await authorize(peer('group'), request('settings', { type: 'read', scope: { kind: 'project', botId: BOT, projectName: '运营' } }), deps)).toMatchObject({ ok: false, code: 'not-dm' });
     // D4a review R1: settings set and settings act read the bot's or a session's view before they write: the write's sentence
     for (const scope of [{ kind: 'agent', botId: BOT }, { kind: 'session', botId: BOT, threadId: 'thread-y' }]) {
       for (const place of ['group', 'comment'] as const) expect(await authorize(peer(place), request('settings', { type: 'read', scope }), deps)).toEqual({ ok: false, code: 'not-dm', message: NOT_DM_MESSAGE });

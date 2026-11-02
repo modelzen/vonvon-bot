@@ -28,6 +28,8 @@ export const TOOL_RESULT_BYTES = 256 * 1024;
 export interface AgentTool {
   name: string;
   class: 'read' | 'settings' | 'memory' | 'schedule';
+  /** Where it is listed and may be called, besides what its class allows; everywhere its class allows when absent. */
+  places?: readonly AgentPlace['kind'][];
   /** schedule 类：对应命令核的哪个动作，登记表按它查 3.13 的角色表 */
   action?: ScheduleRequest['action'];
   description: string;
@@ -47,7 +49,7 @@ export function toolReplyText(reply: AgentToolReply): string {
 export const sessionInfoTool: AgentTool = {
   name: 'session_info',
   class: 'read',
-  description: '查这条会话在 vonvon 里属于哪里，以及这一轮能不能改 vonvon 的设置。要改设置之前先调它；平时不用调。',
+  description: '查这条会话在 vonvon 里属于哪里（群、私聊还是文档评论），以及现在这一轮是不是有人发消息触发的。平时不用调。',
   input: z.object({}).strict(),
   async run() { throw new Error('session_info is evaluated by the registry'); },
 };
