@@ -527,6 +527,27 @@ describe('desktop IPC boundary', () => {
     expect(h.webContents.send).not.toHaveBeenCalled();
   });
 
+  // devices-ui-4: the window says another device is updating this computer, after a reload too, until it is taken away.
+  it('pushes the remote update line to the window, replays it after a reload, and forgets it once taken away', async () => {
+    const h = harness();
+    h.bridge.sendRemoteUpdate('「笔记本」正在更新这台电脑上的 Vonvon Bot。');
+    expect(h.webContents.send).not.toHaveBeenCalled();
+    await h.invoke(desktopChannels.subscribe);
+    expect(h.events()).toEqual([{ type: 'remoteUpdate', text: '「笔记本」正在更新这台电脑上的 Vonvon Bot。' }]);
+    h.webContents.send.mockClear();
+    await h.invoke(desktopChannels.subscribe);
+    expect(h.events()).toEqual([{ type: 'remoteUpdate', text: '「笔记本」正在更新这台电脑上的 Vonvon Bot。' }]);
+    h.bridge.sendRemoteUpdate(undefined);
+    expect(h.webContents.send).toHaveBeenLastCalledWith(desktopChannels.event, { type: 'remoteUpdate' });
+    h.webContents.send.mockClear();
+    await h.invoke(desktopChannels.subscribe);
+    expect(h.events()).toEqual([]);
+    await h.bridge.dispose();
+    h.webContents.send.mockClear();
+    h.bridge.sendRemoteUpdate('x');
+    expect(h.webContents.send).not.toHaveBeenCalled();
+  });
+
   it('replays a manual download after reload instead of the earlier automatic available result', async () => {
     const h = harness();
     const found = { state: 'available' as const, current: '1.0.0', latest: '1.1.0', message: '有新版本' };

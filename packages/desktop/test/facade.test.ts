@@ -113,6 +113,27 @@ describe('synchronous desktop facade', () => {
     expect(early).toEqual([found]);
     expect(late).toEqual([found]);
   });
+  // devices-ui-4: the line the window shows while another device updates this computer.
+  it('delivers the remote update line, replays the latest to a late listener, and drops a malformed one', async () => {
+    const h = harness();
+    const { shell, client } = createDesktopFacades(h.transport);
+    const early: unknown[] = [];
+    shell.onRemoteUpdate?.(text => early.push(text));
+    expect(early).toEqual([]);
+    h.event({ type: 'remoteUpdate', text: '「笔记本」正在更新' });
+    expect(early).toEqual(['「笔记本」正在更新']);
+    const late: unknown[] = [];
+    shell.onRemoteUpdate?.(text => late.push(text));
+    expect(late).toEqual(['「笔记本」正在更新']);
+    h.event({ type: 'remoteUpdate' });
+    expect(early).toEqual(['「笔记本」正在更新', undefined]);
+    const errors: string[] = [];
+    client.onError(error => errors.push(error.message));
+    h.event({ type: 'remoteUpdate', text: 'x'.repeat(513) });
+    h.event({ type: 'remoteUpdate', text: 3 });
+    expect(errors).toEqual(['Invalid desktop event', 'Invalid desktop event']);
+    expect(late).toEqual(['「笔记本」正在更新', undefined]);
+  });
   it('forwards the optional selected Bot unchanged and validates the machine reply', async () => {
     const h = harness();
     const requests: unknown[][] = [];

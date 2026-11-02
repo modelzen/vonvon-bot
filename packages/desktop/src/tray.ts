@@ -5,6 +5,8 @@ export interface DesktopTray {
   destroy(): void;
   /** 有更新提示时（"有新版本 x.y.z"、"上次更新没装上"）在菜单最上面加一项，点它打开窗口；传 undefined 去掉。菜单栏图标本身不变。 */
   setUpdate(notice: string | undefined): void;
+  /** U4: a line that is not a button at the top of the menu ("「笔记本」正在更新这台电脑上的 Vonvon Bot…"); undefined takes it away. */
+  setNotice(text: string | undefined): void;
 }
 
 function trayImage(pngPath: string, platform: NodeJS.Platform) {
@@ -26,8 +28,10 @@ export function createDesktopTray(pngPath: string, show: () => void, quit: () =>
   const tray = new Tray(icon);
   tray.setToolTip('Vonvon Bot');
   let announced: string | undefined;
+  let notice: string | undefined;
   const buildMenu = (): void => {
     tray.setContextMenu(Menu.buildFromTemplate([
+      ...(notice ? [{ label: notice, enabled: false }, { type: 'separator' as const }] : []),
       ...(announced ? [{ label: announced, click: show }, { type: 'separator' as const }] : []),
       { label: '打开 Vonvon Bot', click: show },
       { type: 'separator' },
@@ -39,11 +43,16 @@ export function createDesktopTray(pngPath: string, show: () => void, quit: () =>
   if (platform !== 'darwin') tray.on('click', show);
   return {
     destroy: () => tray.destroy(),
-    setUpdate(notice) {
-      if (notice === announced) return;
-      announced = notice;
+    setUpdate(update) {
+      if (update === announced) return;
+      announced = update;
       buildMenu();
-      tray.setToolTip(notice ? `Vonvon Bot · ${notice}` : 'Vonvon Bot');
+      tray.setToolTip(update ? `Vonvon Bot · ${update}` : 'Vonvon Bot');
+    },
+    setNotice(text) {
+      if (text === notice) return;
+      notice = text;
+      buildMenu();
     },
   };
 }

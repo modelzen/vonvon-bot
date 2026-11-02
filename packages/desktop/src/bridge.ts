@@ -165,6 +165,7 @@ export function installBridge(
   let subscribed = false;
   let pendingQuit = false;
   let retainedUpdate: DesktopUpdate | undefined;
+  let retainedRemoteUpdate: string | undefined;
   let connectionLost = false;
   /** This computer's connection, whichever device the page shows. */
   let localDaemon: AttachedDaemon | null = owner;
@@ -533,6 +534,7 @@ export function installBridge(
       subscribed = true;
       for (const value of retainedErrors.splice(0)) send({ type: 'error', value });
       if (retainedUpdate) send({ type: 'update', value: retainedUpdate });
+      if (retainedRemoteUpdate !== undefined) send({ type: 'remoteUpdate', text: retainedRemoteUpdate });
       if (pendingQuit) { pendingQuit = false; send({ type: 'quitRequested' }); }
       send({ type: 'devices', value: devices.state() });
       return { ok: true, value: undefined };
@@ -612,6 +614,11 @@ export function installBridge(
     },
     viewId,
     publishUpdate,
+    sendRemoteUpdate(text) {
+      if (disposed) return;
+      retainedRemoteUpdate = text;
+      send(text === undefined ? { type: 'remoteUpdate' } : { type: 'remoteUpdate', text });
+    },
     requestQuit() {
       if (disposed) return;
       if (!subscribed || !currentDocument()) pendingQuit = true;

@@ -11,7 +11,9 @@ const fake = vi.hoisted(() => ({
   app: undefined as unknown,
   window: undefined as unknown,
   // deferLocalLost: false while the page shows this computer, as in the real bridge (devices-ui-1a 4.5).
-  bridge: { requestQuit: vi.fn(), publishUpdate: vi.fn(), replaceOwner: vi.fn(async () => {}), dispose: vi.fn(async () => {}), deferLocalLost: vi.fn(() => false) },
+  bridge: { requestQuit: vi.fn(), publishUpdate: vi.fn(), replaceOwner: vi.fn(async () => {}), dispose: vi.fn(async () => {}), deferLocalLost: vi.fn(() => false),
+    // devices-ui-4: this computer's daemon connection, which the remote update listens on, and the window's line
+    localOwner: vi.fn((): unknown => null), onLocalOwner: vi.fn((_listener: (owner: unknown) => void) => () => {}), sendRemoteUpdate: vi.fn() },
   owner: { dispose: vi.fn(async () => {}) },
   attach: vi.fn(),
   ready: vi.fn(async (): Promise<VerifiedDaemon> => ({ pid: 42, startedAt: 'initial', listen: '127.0.0.1:42345' })),
@@ -22,7 +24,7 @@ const fake = vi.hoisted(() => ({
   verified: vi.fn(async (): Promise<VerifiedDaemon | null> => null),
   running: vi.fn(async (_previous: { pid: number; startedAt: string }) => false),
   stopDaemonForQuit: vi.fn(async () => {}),
-  tray: { destroy: vi.fn(), setUpdate: vi.fn() },
+  tray: { destroy: vi.fn(), setUpdate: vi.fn(), setNotice: vi.fn() },
   dock: {
     visible: true,
     isVisible: vi.fn(() => fake.dock.visible),
@@ -194,7 +196,11 @@ beforeEach(async () => {
   fake.owner.dispose.mockClear();
   fake.tray.destroy.mockClear();
   fake.tray.setUpdate.mockClear();
+  fake.tray.setNotice.mockClear();
   fake.bridge.publishUpdate.mockClear();
+  fake.bridge.sendRemoteUpdate.mockClear();
+  fake.bridge.localOwner.mockReset().mockReturnValue(null);
+  fake.bridge.onLocalOwner.mockReset().mockReturnValue(() => {});
   fake.attach.mockReset().mockResolvedValue(fake.owner);
   fake.ready.mockClear();
   fake.cliRegister.mockClear();
@@ -364,6 +370,68 @@ describe('explicit desktop quit', () => {
     await vi.waitFor(() => expect(app.quit).toHaveBeenCalledOnce());
     expect(fake.stopDaemonForQuit).not.toHaveBeenCalled();
     expect(fake.bridge.dispose).toHaveBeenCalledOnce();
+  });
+});
+
+// devices-ui-4 第 5 节: another device updates this computer's Vonvon Bot. The app's own updater runs with Electron's
+// updater as the fake driver: a remote applyCoreUpdate goes check → download → quitAndInstall. main 必败: no remote update.
+describe('an update another device asks for', () => {
+  function shellConnection() {
+    const listeners = new Set<(payload: { requestId: string; action: 'check' | 'apply'; by: string }) => void>();
+    const client = {
+      admin: vi.fn(async () => ({ kind: 'negotiated', principal: 'owner:local', scope: null })),
+      machine: vi.fn(async () => ({ type: 'done', message: '已收到。' })),
+      onDesktopUpdateRequest: vi.fn((listener: (payload: { requestId: string; action: 'check' | 'apply'; by: string }) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; }),
+      onError: vi.fn((_listener: (error: Error) => void) => () => {}),
+    };
+    const ask = (action: 'check' | 'apply') => { for (const listener of [...listeners]) listener({ requestId: 'dur_0123456789abcdef', action, by: '「笔记本」' }); };
+    const states = () => client.machine.mock.calls.map(call => ((call as unknown[])[0] as { state: string }).state);
+    // the bridge hands the remote update this computer's daemon connection
+    const attach = fake.bridge.onLocalOwner.mock.lastCall?.[0] as (owner: { client: typeof client }) => void;
+    attach({ client });
+    return { client, ask, states, listeners };
+  }
+
+  it('declares it can on this computer\'s daemon connection, and answers a check with the app\'s own', async () => {
+    const shell = shellConnection();
+    expect(shell.client.admin).toHaveBeenCalledExactlyOnceWith({ type: 'negotiate', capabilities: ['desktop.self-update'] });
+    shell.ask('check');
+    await vi.waitFor(() => expect(shell.client.machine).toHaveBeenCalledOnce());
+    expect(shell.client.machine).toHaveBeenCalledWith(expect.objectContaining({ type: 'desktopUpdateReport', state: 'available', latest: '0.2.0' }));
+    expect(fake.bridge.publishUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'available', latest: '0.2.0' }));
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+  });
+
+  it('downloads, says so here, reports each step, and quits and installs without asking', async () => {
+    const shell = shellConnection();
+    shell.ask('apply');
+    await vi.waitFor(() => expect(autoUpdater.checkForUpdates).toHaveBeenCalledOnce());
+    const notice = '「笔记本」正在更新这台电脑上的 Vonvon Bot。下载好后会直接重启，正在进行的对话会被中断。';
+    expect(fake.tray.setNotice).toHaveBeenLastCalledWith(notice);
+    expect(fake.bridge.sendRemoteUpdate).toHaveBeenLastCalledWith(notice);
+    await vi.waitFor(() => expect(shell.states()).toEqual(['downloading']));
+    // this computer's 重启升级 waits for it
+    await expect(actions.installDesktopUpdate()).rejects.toThrow('正在按另一台设备的请求更新，下载好后会自动安装并重启。');
+    autoUpdater.emit('update-downloaded');
+    await vi.waitFor(() => expect(autoUpdater.quitAndInstall).toHaveBeenCalledOnce());
+    expect(shell.states()).toEqual(['downloading', 'downloaded', 'restarting']);
+    // `restarting` went before the app closed its connections
+    expect(shell.client.machine.mock.invocationCallOrder.at(-1)).toBeLessThan(fake.bridge.dispose.mock.invocationCallOrder[0]!);
+    expect(shell.listeners.size).toBe(0);
+    expect(fake.stopDaemonForQuit).not.toHaveBeenCalled();
+    expect(dialog.showMessageBox).not.toHaveBeenCalled();
+    expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+  });
+
+  it('says why it stopped and takes the notice away when the download fails', async () => {
+    const shell = shellConnection();
+    shell.ask('apply');
+    await vi.waitFor(() => expect(autoUpdater.checkForUpdates).toHaveBeenCalledOnce());
+    autoUpdater.emit('error', new Error('/Users/someone/Library/Caches'));
+    await vi.waitFor(() => expect(fake.tray.setNotice).toHaveBeenLastCalledWith(undefined));
+    expect(shell.client.machine).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'error', message: '桌面更新下载或签名校验失败' }));
+    expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+    expect(app.quit).not.toHaveBeenCalled();
   });
 });
 
