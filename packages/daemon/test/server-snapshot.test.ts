@@ -230,7 +230,7 @@ describe('login-time service field (s08)', () => {
     set({ ...managed('unknown', 'Cannot ask systemd (Linux): Failed to connect to bus'), hint: '当前终端没有 XDG_RUNTIME_DIR。', linger: { state: 'off', detail: 'x' } });
     await store.refreshService();
     expect(store.current().application.service).toMatchObject({ state: 'unknown', hint: '当前终端没有 XDG_RUNTIME_DIR。', linger: 'off' });
-    expect(store.current().application.platform).toBe(process.platform === 'darwin' ? 'macos' : process.platform === 'linux' ? 'linux' : 'unsupported');
+    expect(store.current().application.platform).toBe(hostPlatform());
   });
   it('re-reads the skip flag and a finished report on the next rebuild', async () => {
     const { root, store } = await serviceStore();

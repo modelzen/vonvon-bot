@@ -11,9 +11,10 @@ import { standaloneInstallRoot } from '../service/distribution';
  * the managed copies on the Node it ships, which no terminal has on PATH. The desktop app's `nodePath` is Electron, not a
  * `node`; a managed copy there runs on the computer's own Node, which its terminal has too. On Windows a path that needs
  * quotes is written for PowerShell, the default terminal there: `& '<path>'`, as a quoted path alone is only a string.
+ * A `~` inside a path (an 8.3 short name like `RUNNER~1`) needs none: PowerShell reads it as home only at the start.
  */
 export function terminalCommand(executable: string, nodePath = process.execPath, platform: NodeJS.Platform = process.platform): string {
-  if (platform === 'win32') return /^[\w:\\./-]+$/.test(executable) ? executable : `& '${executable.replaceAll("'", "''")}'`;
+  if (platform === 'win32') return /^[\w:\\./~-]+$/.test(executable) ? executable : `& '${executable.replaceAll("'", "''")}'`;
   return basename(nodePath) === 'node' && nodeScript(executable) ? `${shellWord(stableNode(nodePath))} ${shellWord(executable)}` : shellWord(executable);
 }
 
