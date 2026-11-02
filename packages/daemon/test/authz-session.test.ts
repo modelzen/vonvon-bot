@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Request, ScheduledTaskView, Scope, SettingsReply } from '@vonvon/protocol';
+import { settingsReplySchema, type Request, type ScheduledTaskView, type Scope, type SettingsReply } from '@vonvon/protocol';
+import agentFixture from '../../protocol/test/fixtures/agent-settings.json';
 
 const memory = vi.hoisted(() => ({ action: vi.fn() }));
 vi.mock('../src/admin/memory', async original => ({ ...await original<object>(), memoryAction: memory.action }));
 import { fakeService, socketClient, startFixture } from './server-fixture';
-import { authorize, BOT_MEMORY_FROM_SESSION, DM_MEMORY_FROM_SESSION, ONE_GROUP_ONLY, SCOPE_MISSING, SESSION_DENIED, scopeExceeded, type AuthzDeps } from '../src/server/authz';
+import { authorize, ONE_GROUP_ONLY, SCOPE_MISSING, SESSION_DENIED, scopeExceeded, type AuthzDeps } from '../src/server/authz';
 import { SESSION_TOKEN_INVALID } from '../src/host/session-tokens';
-import { NOT_DM_MESSAGE } from '../src/agent/entry/registry';
+import { NOT_DM_MESSAGE, SESSION_TURN_ENDED } from '../src/agent/entry/registry';
+import type { MemoryLanding, SessionAction, SessionAuthz } from '../src/admin/ipc';
 import { scheduleRefusalMessages } from '../src/admin/schedule-commands';
 import type { SessionPlace } from '../src/host/session-tokens';
 import type { AdminProject } from '../src/admin/service';
@@ -25,6 +27,10 @@ const peer = (place: SessionPlace, scope: Scope | null = { bot: BOT, ...(place =
   ({ principal: principal(place), protocolVersion: 2, negotiated, scope });
 const request = (method: string, payload: object): Request => ({ type: 'request', id: '1', method, payload } as Request);
 const settingsSave = (projectName: string) => request('settings', { type: 'save', edit: { scope: { kind: 'project', botId: BOT, projectName }, section: 'permission', revision: 'r', patch: { mode: 'full' } } });
+/** devices-4b: a Bot process that answers every ★ request with `answer`, its questions kept. */
+const botSays = (answer: SessionAuthz) => vi.fn(async (_appId: string, _sessionId: string, _action: SessionAction): Promise<SessionAuthz> => answer);
+const ownerTurn = { ok: true, role: 'owner', openId: 'ou_owner' } as const;
+const ended = { ok: false, code: 'permission_denied', message: SESSION_TURN_ENDED, details: { reason: 'turn-ended' } } as const;
 
 afterEach(() => { memory.action.mockReset(); });
 
@@ -97,29 +103,53 @@ describe('the bot-session column (unit)', () => {
     expect(await authorize(peer('group'), request('collaboration', { action: 'providerModels', provider: 'codex' }), deps)).toMatchObject({ ok: true });
   });
 
-  // D4a review SEC-3, SEC-6, R2, R4: the memory tools' limits the host cannot check are refused until D4b asks the Bot process
-  it('lets a session list and add only what the memory tools would, refusing what turns on who it is', async () => {
+  // devices-4b 4.5: the memory tools' limits are the Bot process's to check; the host keeps the session to its reach first
+  it('asks the Bot process about every memory request in reach, with the item as stored for a change', async () => {
     const item = { itemId: 'mem_1', revision: 1 };
+    const stored = { scope: { kind: 'bot' as const }, source: { via: 'tool' as const, botId: BOT, actorRole: 'admin' as const, actorOpenId: 'ou_admin' } };
+    const memoryItem = vi.fn(async () => stored);
+    const landing: MemoryLanding = { scope: { kind: 'project', projectId: 'prj_0000000a' }, trust: 'untrusted', actor: { role: 'member', openId: 'ou_m' }, source: { botId: BOT } };
+    const askBot = botSays({ ok: true, role: 'member', openId: 'ou_m', memory: landing });
+    const with_ = { ...deps, askBot, memoryItem };
     for (const scope of [{ kind: 'bot', botId: BOT }, { kind: 'project', projectId: 'prj_0000000a' }]) {
-      expect(await authorize(peer('group'), request('memory', { type: 'archive', scope, ...item }), deps)).toEqual({ ok: false, code: 'permission_denied', message: SESSION_DENIED });
-      expect(await authorize(peer('group'), request('memory', { type: 'edit', scope, ...item, text: 'x' }), deps)).toEqual({ ok: false, code: 'permission_denied', message: SESSION_DENIED });
-      expect(await authorize(peer('group'), request('memory', { type: 'list', scope }), deps)).toMatchObject({ ok: true });
+      // main 必败 (D4a refused these): memory_update and memory_forget have a command now
+      expect(await authorize(peer('group'), request('memory', { type: 'archive', scope, ...item }), with_)).toMatchObject({ ok: true, grant: { memory: landing } });
+      expect(askBot).toHaveBeenLastCalledWith(BOT, 'ses_0123456789abcdef', { kind: 'memory', op: 'edit', item: stored });
+      expect(await authorize(peer('group'), request('memory', { type: 'edit', scope, ...item, text: '新的' }), with_)).toMatchObject({ ok: true });
+      expect(askBot).toHaveBeenLastCalledWith(BOT, 'ses_0123456789abcdef', { kind: 'memory', op: 'edit', item: stored, text: '新的' });
+      expect(memoryItem).toHaveBeenLastCalledWith(scope, 'mem_1');
     }
-    expect(await authorize(peer('group'), request('memory', { type: 'add', scope: { kind: 'bot', botId: BOT }, text: 'x' }), deps)).toEqual({ ok: false, code: 'permission_denied', message: BOT_MEMORY_FROM_SESSION });
-    for (const scope of [{ bot: BOT }, { bot: BOT, group: GROUP }]) {
-      for (const type of ['list', 'add']) {
-        expect(await authorize(peer('dm', scope), request('memory', { type, scope: { kind: 'dm', botId: BOT, openId: 'ou_someone_else' }, ...(type === 'add' ? { text: 'x' } : {}) }), deps))
-          .toEqual({ ok: false, code: 'permission_denied', message: DM_MEMORY_FROM_SESSION });
-      }
+    expect(await authorize(peer('group'), request('memory', { type: 'list', scope: { kind: 'project', projectId: 'prj_0000000a' } }), with_)).toMatchObject({ ok: true, grant: { role: 'member' } });
+    expect(askBot).toHaveBeenLastCalledWith(BOT, 'ses_0123456789abcdef', { kind: 'memory', op: 'read', target: { kind: 'project', projectId: 'prj_0000000a' } });
+    // a member's --bot: where it lands is the Bot process's to say (decideAdd)
+    expect(await authorize(peer('group'), request('memory', { type: 'add', scope: { kind: 'bot', botId: BOT }, text: '周四发版' }), with_)).toMatchObject({ ok: true, grant: { memory: landing } });
+    expect(askBot).toHaveBeenLastCalledWith(BOT, 'ses_0123456789abcdef', { kind: 'memory', op: 'add', target: { kind: 'bot' }, text: '周四发版' });
+    // an item that is not there is not asked about
+    askBot.mockClear();
+    expect(await authorize(peer('group'), request('memory', { type: 'archive', scope: { kind: 'bot', botId: BOT }, ...item }), { ...with_, memoryItem: async () => undefined }))
+      .toEqual({ ok: false, code: 'permission_denied', message: '没有这条记忆。' });
+    expect(askBot).not.toHaveBeenCalled();
+    // a private chat's memory: from a private chat whose reach names no group, the Bot process keeps it to the turn's person
+    for (const type of ['list', 'add']) {
+      const dm = request('memory', { type, scope: { kind: 'dm', botId: BOT, openId: 'ou_someone_else' }, ...(type === 'add' ? { text: 'x' } : {}) });
+      expect(await authorize(peer('dm', { bot: BOT }), dm, { ...deps, askBot: botSays({ ok: false, reason: 'out-of-scope', message: '这条记忆不在这里，动不了。' }) }))
+        .toEqual({ ok: false, code: 'permission_denied', message: '这条记忆不在这里，动不了。', details: { reason: 'out-of-scope' } });
+      const never = botSays(ownerTurn);
+      expect(await authorize(peer('dm', { bot: BOT, group: GROUP }), dm, { ...deps, askBot: never })).toMatchObject({ ok: false, code: 'permission_denied' });
+      expect(await authorize(peer('group'), dm, { ...deps, askBot: never })).toMatchObject({ ok: false, code: 'permission_denied' });
+      expect(never).not.toHaveBeenCalled();
     }
+    // a write the Bot process let through without saying where it lands is not written
+    expect(await authorize(peer('group'), request('memory', { type: 'add', scope: { kind: 'project', projectId: 'prj_0000000a' }, text: 'x' }), { ...deps, askBot: botSays({ ok: true, role: 'owner' }) })).toEqual(ended);
   });
 
   // D4a review SEC-6: --scope group narrows the sessions a private chat may name too
   it('keeps a session named by its thread to the groups reached', async () => {
     const save = (threadId: string) => request('settings', { type: 'save', edit: { scope: { kind: 'session', botId: BOT, threadId }, section: 'model', revision: 'r', patch: {} } });
-    expect(await authorize(peer('dm', { bot: BOT, group: GROUP }), save('thread-z'), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
-    expect(await authorize(peer('dm', { bot: BOT, group: GROUP }), save('thread-y'), deps)).toMatchObject({ ok: true });
-    expect(await authorize(peer('dm', { bot: BOT }), save('thread-z'), deps)).toMatchObject({ ok: true });
+    const owned = { ...deps, askBot: botSays(ownerTurn) };
+    expect(await authorize(peer('dm', { bot: BOT, group: GROUP }), save('thread-z'), owned)).toMatchObject({ ok: false, code: 'permission_denied' });
+    expect(await authorize(peer('dm', { bot: BOT, group: GROUP }), save('thread-y'), owned)).toMatchObject({ ok: true });
+    expect(await authorize(peer('dm', { bot: BOT }), save('thread-z'), owned)).toMatchObject({ ok: true });
     const models = (threadId: string) => request('settings', { type: 'models', query: { botId: BOT, backend: 'codex-appserver', purpose: 'session', threadId } });
     expect(await authorize(peer('group'), models('thread-z'), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
     expect(await authorize(peer('group'), models('thread-y'), deps)).toMatchObject({ ok: true });
@@ -154,7 +184,7 @@ describe('the bot-session column (unit)', () => {
 
   // Codex review 228-3 / 229-2: devices 5.3, a private chat narrowed to one group moves only that group, whoever's turn it is
   it('keeps a reach of one group from the whole bot and from new groups, even on the owner\'s turn', async () => {
-    const owner = vi.fn(async () => ({ ok: true as const, role: 'owner' as const }));
+    const owner = botSays(ownerTurn);
     const bound = { bot: BOT, group: GROUP };
     const wide = [
       request('settings', { type: 'save', edit: { scope: { kind: 'agent', botId: BOT }, section: 'cards', revision: 'r1', patch: { showToolCalls: true } } }),
@@ -165,12 +195,12 @@ describe('the bot-session column (unit)', () => {
     ];
     for (const write of wide) {
       for (const deps2 of [deps, { ...deps, askBot: owner }]) expect(await authorize(peer('dm', bound), write, deps2)).toEqual({ ok: false, code: 'permission_denied', message: ONE_GROUP_ONLY });
-      // the whole bot's private chat may (D4b asks whose turn it is)
-      expect(await authorize(peer('dm', { bot: BOT }), write, deps)).toMatchObject({ ok: true });
+      // the whole bot's private chat may, if its Bot process says the turn may
+      expect(await authorize(peer('dm', { bot: BOT }), write, { ...deps, askBot: owner })).toMatchObject({ ok: true });
     }
     // what is that group's still is
     expect(await authorize(peer('dm', bound), settingsSave('研发'), { ...deps, askBot: owner })).toMatchObject({ ok: true, grant: { role: 'owner' } });
-    expect(await authorize(peer('dm', bound), request('settings', { type: 'act', action: { kind: 'projectMember', botId: BOT, projectName: '研发', openId: 'ou_0123456789abcdef', membership: 'present', revision: 'r' } }), deps)).toMatchObject({ ok: true });
+    expect(await authorize(peer('dm', bound), request('settings', { type: 'act', action: { kind: 'projectMember', botId: BOT, projectName: '研发', openId: 'ou_0123456789abcdef', membership: 'present', revision: 'r' } }), { ...deps, askBot: owner })).toMatchObject({ ok: true });
   });
 
   // Codex review 229-4: the owner's --scope binds no other group, and moves no other bot's or project's things
@@ -210,33 +240,101 @@ describe('the bot-session column (unit)', () => {
     expect(await authorize(owner({ bot: BOT }), request('command', { type: 'deleteAgent', agentId: 'cli_other' }), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
   });
 
+  // devices-4b acceptance: the owner's private chat changes another group of the same bot, and no other bot's
   it('keeps a private chat to its bot\'s groups, narrowed by --scope group', async () => {
-    expect(await authorize(peer('dm', { bot: BOT }), settingsSave('运营'), deps)).toMatchObject({ ok: true, grant: { role: 'member' } });
-    expect(await authorize(peer('dm', { bot: BOT, group: GROUP }), settingsSave('运营'), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
+    const askBot = botSays(ownerTurn);
+    expect(await authorize(peer('dm', { bot: BOT }), settingsSave('运营'), { ...deps, askBot })).toMatchObject({ ok: true, grant: { role: 'owner', openId: 'ou_owner' } });
+    expect(askBot).toHaveBeenCalledExactlyOnceWith(BOT, 'ses_0123456789abcdef', { kind: 'settingsWrite' });
+    askBot.mockClear();
+    expect(await authorize(peer('dm', { bot: BOT, group: GROUP }), settingsSave('运营'), { ...deps, askBot })).toMatchObject({ ok: false, code: 'permission_denied' });
+    expect(await authorize(peer('dm', { bot: BOT }), request('settings', { type: 'save', edit: { scope: { kind: 'project', botId: 'cli_other', projectName: '研发' }, section: 'permission', revision: 'r', patch: { mode: 'full' } } }), { ...deps, askBot }))
+      .toMatchObject({ ok: false, code: 'permission_denied' });
+    expect(askBot).not.toHaveBeenCalled();
     expect(await authorize(peer('dm', { bot: BOT }), request('settings', { type: 'save', edit: { scope: { kind: 'host' }, section: 'execution', revision: 'r', patch: { codexBin: null } } }), deps))
       .toMatchObject({ ok: false, code: 'permission_denied' });
     expect(await authorize(peer('dm', { bot: BOT }), request('settings', { type: 'read', scope: { kind: 'agent', botId: 'cli_other' } }), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
   });
 
-  // 4.6: until D4b asks the Bot process, a ★ request within reach goes through as a member's
-  it('lets the ★ rows through within reach as a member, and only within reach', async () => {
+  // devices-4b 4.3. main 必败 (D4a let these through as a member's): no Bot process to ask, no answer, an error is a refusal
+  it('refuses the ★ rows as a turn that ended unless the Bot process says yes, and never asks about what is out of reach', async () => {
     const create = request('schedule', { botId: BOT, request: { action: 'create', chatId: GROUP, name: '日报', instruction: 'x', spec: { kind: 'daily', time: '09:00' } } });
-    expect(await authorize(peer('group'), create, deps)).toMatchObject({ ok: true, grant: { role: 'member' } });
-    expect(await authorize(peer('group'), request('schedule', { botId: 'cli_other', request: { action: 'list', chatId: GROUP } }), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
-    expect(await authorize(peer('group'), request('schedule', { botId: BOT, request: { action: 'list', chatId: OTHER } }), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
-    expect(await authorize(peer('group'), request('memory', { type: 'add', scope: { kind: 'project', projectId: 'prj_0000000a' }, text: 'x' }), deps)).toMatchObject({ ok: true, grant: { role: 'member' } });
-    expect(await authorize(peer('group'), request('memory', { type: 'add', scope: { kind: 'project', projectId: 'prj_0000000b' }, text: 'x' }), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
-    expect(await authorize(peer('group'), request('memory', { type: 'add', scope: { kind: 'bot', botId: 'cli_other' }, text: 'x' }), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
-    expect(await authorize(peer('comment', { bot: BOT }), request('memory', { type: 'list', scope: { kind: 'bot', botId: BOT } }), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
-    // with D4b's askBot the Bot process decides
-    const askBot = vi.fn(async () => ({ ok: false as const, reason: 'turn-ended', message: '这一轮已经结束了。' }));
-    expect(await authorize(peer('group'), create, { ...deps, askBot })).toMatchObject({ ok: false, code: 'permission_denied', message: '这一轮已经结束了。' });
+    const add = request('memory', { type: 'add', scope: { kind: 'project', projectId: 'prj_0000000a' }, text: 'x' });
+    const adminList = request('command', { type: 'listJoinedGroups', agentId: BOT });
+    for (const [place, star] of [['group', create], ['group', add], ['dm', settingsSave('研发')], ['dm', adminList]] as const) {
+      expect(await authorize(peer(place), star, deps)).toEqual(ended);
+      expect(await authorize(peer(place), star, { ...deps, askBot: vi.fn(async () => { throw new Error('channel closed'); }) })).toEqual(ended);
+    }
+    expect(SESSION_TURN_ENDED).toBe('这次调用对应的那一轮对话已经结束，不能再改设置。');
+    const askBot = botSays(ownerTurn);
+    for (const outside of [
+      request('schedule', { botId: 'cli_other', request: { action: 'list', chatId: GROUP } }),
+      request('schedule', { botId: BOT, request: { action: 'list', chatId: OTHER } }),
+      request('memory', { type: 'add', scope: { kind: 'project', projectId: 'prj_0000000b' }, text: 'x' }),
+      request('memory', { type: 'add', scope: { kind: 'bot', botId: 'cli_other' }, text: 'x' }),
+    ]) expect(await authorize(peer('group'), outside, { ...deps, askBot })).toMatchObject({ ok: false, code: 'permission_denied' });
+    expect(await authorize(peer('comment', { bot: BOT }), request('memory', { type: 'list', scope: { kind: 'bot', botId: BOT } }), { ...deps, askBot })).toMatchObject({ ok: false, code: 'permission_denied', message: SESSION_DENIED });
+    // a group's settings write is refused by the table: its Bot process is not asked
+    expect(await authorize(peer('group'), settingsSave('研发'), { ...deps, askBot })).toEqual({ ok: false, code: 'not-dm', message: NOT_DM_MESSAGE });
+    expect(askBot).not.toHaveBeenCalled();
+  });
+
+  it('maps each ★ request to the check its Bot process runs, and passes its refusal on word for word', async () => {
+    const asked = async (place: SessionPlace, star: Request, answer: SessionAuthz = ownerTurn) => {
+      const askBot = botSays(answer);
+      const decision = await authorize(peer(place), star, { ...deps, askBot });
+      return { decision, action: askBot.mock.calls[0]?.[2] };
+    };
+    const act = (action: object) => request('settings', { type: 'act', action });
+    expect((await asked('dm', act({ kind: 'adminMember', botId: BOT, openId: 'ou_0123456789abcdef', membership: 'present', revision: 'r' }))).action).toEqual({ kind: 'adminMember' });
+    expect((await asked('dm', act({ kind: 'voice', botId: BOT, action: { action: 'enable' } }))).action).toEqual({ kind: 'settingsWrite' });
+    expect((await asked('dm', request('collaboration', { action: 'createProject', agentId: BOT, name: 'P', folder: { kind: 'default' }, tool: 'codex', conversation: 'shared' }))).action).toEqual({ kind: 'settingsWrite' });
+    // devices-4b 4.5a: a private chat's reads, as settings_get and the group lists are an admin's there
+    expect((await asked('dm', request('settings', { type: 'read', scope: { kind: 'agent', botId: BOT } }))).action).toEqual({ kind: 'adminRead' });
+    expect((await asked('dm', request('settings', { type: 'sessions', botId: BOT, projectName: '研发' }))).action).toEqual({ kind: 'adminRead' });
+    expect((await asked('dm', request('command', { type: 'listJoinedGroups', agentId: BOT }))).action).toEqual({ kind: 'adminRead' });
+    expect((await asked('dm', request('command', { type: 'listGroupMembers', agentId: BOT, groupId: GROUP }))).action).toEqual({ kind: 'adminRead' });
+    const actor = { kind: 'session', openId: 'ou_m', role: 'member', chatId: GROUP } as const;
+    const edit = await asked('group', request('schedule', { botId: BOT, request: { action: 'edit', chatId: GROUP, taskId: 'st_1', revision: 'r1', patch: { name: 'x' } } }), { ok: true, role: 'member', openId: 'ou_m', actor });
+    expect(edit.action).toEqual({ kind: 'schedule', action: 'edit', taskId: 'st_1' });
+    expect(edit.decision).toMatchObject({ ok: true, grant: { actor } });
+    // a task the Bot process let through without an actor does not run
+    expect((await asked('group', request('schedule', { botId: BOT, request: { action: 'list', chatId: GROUP } }), ownerTurn)).decision).toEqual(ended);
+    // its refusals: the sentence word for word, the code the command line knows for its place
+    const notOwner = await asked('dm', act({ kind: 'adminMember', botId: BOT, openId: 'ou_0123456789abcdef', membership: 'present', revision: 'r' }), { ok: false, reason: 'not-owner', message: '本机管理员名单只有主人能改。' });
+    expect(notOwner.decision).toEqual({ ok: false, code: 'permission_denied', message: '本机管理员名单只有主人能改。', details: { reason: 'not-owner' } });
+    const notGroup = await asked('group', request('schedule', { botId: BOT, request: { action: 'list', chatId: GROUP } }), { ok: false, reason: 'not-group', message: scheduleRefusalMessages['not-group'] });
+    expect(notGroup.decision).toMatchObject({ ok: false, code: 'not-group' });
+    const switchOff = await asked('dm', settingsSave('研发'), { ok: false, reason: 'switch-off', message: '关了' });
+    expect(switchOff.decision).toEqual({ ok: false, code: 'permission_denied', message: '关了', details: { reason: 'switch-off' } });
+  });
+
+  // devices-4b 4.5a (SEC-4): a private chat reads the bot's settings as settings_get shows them
+  it('shows a private chat the bot\'s view without what settings_get leaves out', async () => {
+    const decision = await authorize(peer('dm', { bot: BOT }), request('settings', { type: 'read', scope: { kind: 'agent', botId: BOT } }), { ...deps, askBot: botSays(ownerTurn) });
+    const view = {
+      scope: { kind: 'agent', botId: BOT }, sections: { cards: { value: {}, access: { kind: 'writable' } } }, ownerOpenId: 'ou_owner',
+      administrators: { openIds: ['ou_admin'], revision: 'a1', feishu: ['ou_admin'], draft: { text: 'x' } }, voice: { enabled: false }, commentInstructions: { kind: 'default' },
+      smartPrompt: { text: '判断提示词' }, botProfile: { name: 'X' }, decisionModels: [{ id: 'm', hasKey: true }], roleDraft: '草稿',
+    };
+    const shown = decision.ok && decision.narrow ? decision.narrow({ kind: 'view', view } as unknown as SettingsReply) : undefined;
+    const narrowed = (shown as { view: Record<string, unknown> }).view;
+    expect(Object.keys(narrowed).sort()).toEqual(['administrators', 'commentInstructions', 'ownerOpenId', 'scope', 'sections', 'voice']);
+    expect(narrowed.administrators).toEqual({ openIds: ['ou_admin'], revision: 'a1' });
+    // a project's sections stay writable in a private chat; the roster's names stay out
+    const project = await authorize(peer('dm', { bot: BOT }), request('settings', { type: 'read', scope: { kind: 'project', botId: BOT, projectName: '研发' } }), { ...deps, askBot: botSays(ownerTurn) });
+    const projectView = { scope: { kind: 'project', botId: BOT, projectName: '研发' }, sections: { permission: { value: {}, access: { kind: 'writable' } } }, identity: { chatId: GROUP },
+      members: { openIds: ['ou_a'], revision: 'm1', roster: { state: 'complete', entries: [] } }, smartPrompt: { text: 'x' } };
+    const projectShown = project.ok && project.narrow ? project.narrow({ kind: 'view', view: projectView } as unknown as SettingsReply) : undefined;
+    expect((projectShown as { view: unknown }).view).toEqual({ scope: projectView.scope, sections: projectView.sections, identity: projectView.identity, members: { openIds: ['ou_a'], revision: 'm1' } });
   });
 });
 
 describe('a Bot session against the daemon', () => {
   const executeSchedule = vi.fn(async () => ({ kind: 'tasks' as const, tasks: [], now: 1, timeZone: 'UTC' }));
-  const start = () => startFixture(fakeService({ listProjects: async appId => appId === BOT ? projects : [], executeSchedule }));
+  const turn = vi.fn(async (_appId: string, _sessionId: string, action: SessionAction): Promise<SessionAuthz> => action.kind === 'schedule'
+    ? { ok: true, role: 'member', openId: 'ou_m', actor: { kind: 'session', openId: 'ou_m', role: 'member', chatId: GROUP } }
+    : { ok: true, role: 'member', openId: 'ou_m', memory: { scope: { kind: 'project', projectId: 'prj_0000000a' }, trust: 'untrusted', actor: { role: 'member', openId: 'ou_m' }, source: { botId: BOT, chatId: GROUP } } });
+  const start = (askBot: AuthzDeps['askBot'] = turn) => startFixture(fakeService({ listProjects: async appId => appId === BOT ? projects : [], executeSchedule }), undefined, undefined, undefined, askBot);
   const negotiate = (scope?: Scope) => ({ type: 'request' as const, id: `n${Math.random()}`, method: 'admin' as const, payload: { type: 'negotiate' as const, capabilities: ['cli'], ...(scope ? { scope } : {}) } });
 
   it('checks --scope at negotiate against the session', async () => {
@@ -278,7 +376,7 @@ describe('a Bot session against the daemon', () => {
     } finally { await fixture.close(); }
   });
 
-  it('reaches the schedule and memory handlers for a ★ request, with the member\'s role and the terminal\'s origin', async () => {
+  it('reaches the schedule and memory handlers for a ★ request as the turn its Bot process named', async () => {
     memory.action.mockResolvedValue({ kind: 'seen', at: 1 });
     const fixture = await start();
     try {
@@ -290,16 +388,36 @@ describe('a Bot session against the daemon', () => {
       const task = { action: 'create', chatId: GROUP, name: '日报', instruction: 'x', spec: { kind: 'daily', time: '09:00' } };
       const schedule = (id: string, botId: string) => ({ type: 'request', id, method: 'schedule', payload: { botId, request: task } }) as unknown as Request;
       expect(await client.call(schedule('c', BOT))).toMatchObject({ type: 'response', method: 'schedule' });
-      expect(executeSchedule).toHaveBeenCalledWith(BOT, 'cli', task);
+      expect(executeSchedule).toHaveBeenCalledWith(BOT, { kind: 'session', openId: 'ou_m', role: 'member', chatId: GROUP }, task);
+      expect(turn).toHaveBeenCalledWith(BOT, 'ses_0123456789abcdef', { kind: 'schedule', action: 'create' });
       expect(await client.call(schedule('c2', 'cli_other'))).toMatchObject({ type: 'error', code: 'permission_denied' });
       expect(executeSchedule).toHaveBeenCalledTimes(1);
       const add = (id: string, projectId: string) => ({ type: 'request', id, method: 'memory', payload: { type: 'add', scope: { kind: 'project', projectId }, text: '周四发版' } }) as unknown as Request;
       expect(await client.call(add('m', 'prj_0000000a'))).toMatchObject({ type: 'response', method: 'memory' });
-      expect(memory.action).toHaveBeenCalledWith({ type: 'add', scope: { kind: 'project', projectId: 'prj_0000000a' }, text: '周四发版' }, { origin: 'cli', actor: { role: 'member' } });
+      expect(memory.action).toHaveBeenCalledWith({ type: 'add', scope: { kind: 'project', projectId: 'prj_0000000a' }, text: '周四发版' },
+        { origin: 'cli', landing: { scope: { kind: 'project', projectId: 'prj_0000000a' }, trust: 'untrusted', actor: { role: 'member', openId: 'ou_m' }, source: { botId: BOT, chatId: GROUP } } });
       expect(await client.call(add('m2', 'prj_0000000b'))).toMatchObject({ type: 'error', code: 'permission_denied' });
       expect(memory.action).toHaveBeenCalledTimes(1);
       // a group session's settings write: the not-dm sentence, word for word
       expect(await client.call({ ...settingsSave('研发'), id: 'w' })).toMatchObject({ type: 'error', code: 'not-dm', message: NOT_DM_MESSAGE });
+      await client.close();
+    } finally { await fixture.close(); }
+  });
+
+  // devices-4b acceptance: with no Bot process to ask (the daemon alone), a ★ request reaches no handler
+  it('runs no ★ request when there is no Bot process to ask', async () => {
+    executeSchedule.mockClear();
+    const fixture = await startFixture(fakeService({ listProjects: async appId => appId === BOT ? projects : [], executeSchedule }));
+    try {
+      const client = await socketClient(fixture.api.port, fixture.sessionTokens.issue({ appId: BOT, place: 'group', chatId: GROUP, sessionId: 'ses_0123456789abcdef' }));
+      await client.ready();
+      await client.call(negotiate({ bot: BOT, group: GROUP }));
+      const list = { type: 'request', id: 'l', method: 'schedule', payload: { botId: BOT, request: { action: 'list', chatId: GROUP } } } as unknown as Request;
+      expect(await client.call(list)).toMatchObject({ type: 'error', code: 'permission_denied', message: SESSION_TURN_ENDED });
+      const add = { type: 'request', id: 'm', method: 'memory', payload: { type: 'add', scope: { kind: 'project', projectId: 'prj_0000000a' }, text: 'x' } } as unknown as Request;
+      expect(await client.call(add)).toMatchObject({ type: 'error', code: 'permission_denied', message: SESSION_TURN_ENDED });
+      expect(executeSchedule).not.toHaveBeenCalled();
+      expect(memory.action).not.toHaveBeenCalled();
       await client.close();
     } finally { await fixture.close(); }
   });
@@ -384,6 +502,61 @@ describe('a Bot session against the daemon', () => {
       const list = { type: 'request', id: 'l', method: 'schedule', payload: { botId: BOT, request: { action: 'list', chatId: GROUP } } } as unknown as Request;
       expect(await other.client.call(list)).toMatchObject({ type: 'response', method: 'schedule' });
       await other.client.close();
+    } finally { await fixture.close(); }
+  });
+
+  // Codex review 239-2 / 240-1. main 必败 (in this slice): read's view was cut, and the act's reply carried it whole again
+  it('cuts the view a saved or conflicting act answers a private chat with, as read\'s, still to the protocol; the owner\'s terminal gets it whole', async () => {
+    const section = (value: unknown) => ({ stored: value, effective: value, revision: 'r1', access: { kind: 'writable' }, apply: [] });
+    const options = { tiers: ['qa', 'write', 'full'].map(tier => ({ tier, name: '权限', summary: '说明', native: '' })), strength: '能力说明', fields: [], expanded: { qa: {}, write: {}, full: {} } };
+    const decisionModels = [{ provider: 'deepseek', displayName: 'DeepSeek', models: [{ id: 'deepseek-chat', displayName: 'Chat' }], keyId: 'deepseek', keySet: true }];
+    // What settings_get leaves out, each one set: where the administrators come from, the role draft, the keystore's, the roster's names, the skills.
+    const agent = {
+      ...agentFixture, scope: { kind: 'agent', botId: BOT }, decisionModels, judgeByBackend: { 'codex-appserver': { model: 'gpt-5', source: 'bot' } },
+      roleInfo: { draft: '身份草稿', headed: true, oversized: false, mergedNotice: false, integrity: 'ok' },
+      administrators: { feishu: { ownerOpenId: 'ou_owner', adminOpenIds: ['ou_fs'] }, scannerOpenId: 'ou_scan', openIds: ['ou_local', 'ou_0123456789abcdef'], revision: 'a2' },
+    };
+    const project = {
+      scope: { kind: 'project', botId: BOT, projectName: '研发' }, decisionModels, skillsError: '读不到 /w/skills',
+      sections: { permission: section({ mode: 'qa', guestMode: 'qa', network: false, custom: null, options }), response: section({ noMention: false }), model: section({ selection: { kind: 'default' } }) },
+      identity: { chatId: GROUP, backend: 'codex-appserver', cwd: '/w', kind: 'multi' },
+      skills: [{ path: '/w/skills/review', name: 'review', description: '审查', source: 'workspace', enabled: true }],
+      members: { openIds: ['ou_a'], revision: 'm2', roster: { state: 'complete', entries: [{ openId: 'ou_a', name: '小A', kind: 'person' }], otherBots: false } },
+    };
+    const act = vi.fn(async (action: { kind: string }) => action.kind === 'adminMember' ? { kind: 'saved', view: agent, effects: [], warnings: [] } : { kind: 'conflict', view: project });
+    const settings = { act, read: async () => { throw new Error('unused'); }, save: async () => { throw new Error('unused'); }, models: async () => { throw new Error('unused'); } };
+    const fixture = await startFixture(fakeService({ listProjects: async (appId: string) => appId === BOT ? projects : [], settings } as unknown as Parameters<typeof fakeService>[0]),
+      undefined, undefined, undefined, botSays(ownerTurn));
+    const admin = { type: 'request', id: 'a', method: 'settings', payload: { type: 'act', action: { kind: 'adminMember', botId: BOT, openId: 'ou_0123456789abcdef', membership: 'present', revision: 'a1' } } } as unknown as Request;
+    const member = { type: 'request', id: 'm', method: 'settings', payload: { type: 'act', action: { kind: 'projectMember', botId: BOT, projectName: '研发', openId: 'ou_0123456789abcdef', membership: 'present', revision: 'm1' } } } as unknown as Request;
+    // the frame as the client takes it: its schema checked
+    const acted = (frame: unknown): Extract<SettingsReply, { kind: 'acted' }>['result'] => {
+      expect(frame).toMatchObject({ type: 'response', method: 'settings', payload: { kind: 'acted' } });
+      const reply = settingsReplySchema.parse((frame as { payload: unknown }).payload);
+      if (reply.kind !== 'acted') throw new Error('not acted');
+      return reply.result;
+    };
+    try {
+      const client = await socketClient(fixture.api.port, fixture.sessionTokens.issue({ appId: BOT, place: 'dm', chatId: 'oc_dm', sessionId: 'ses_0123456789abcdef' }));
+      await client.ready();
+      await client.call(negotiate({ bot: BOT }));
+      const saved = acted(await client.call(admin));
+      expect(saved).toMatchObject({ kind: 'saved', effects: [], warnings: [] });
+      expect('view' in saved && saved.view).toEqual({ scope: agent.scope, sections: agent.sections, ownerOpenId: agent.ownerOpenId,
+        administrators: { openIds: ['ou_local', 'ou_0123456789abcdef'], revision: 'a2' }, voice: agent.voice, commentInstructions: agent.commentInstructions });
+      const conflict = acted(await client.call(member));
+      expect(conflict.kind).toBe('conflict');
+      expect('view' in conflict && conflict.view).toEqual({ scope: project.scope, sections: project.sections, identity: project.identity, members: { openIds: ['ou_a'], revision: 'm2' } });
+      await client.close();
+      // not in a session: the owner sees what the settings page shows
+      const owner = await socketClient(fixture.api.port, fixture.credential);
+      await owner.ready();
+      const whole = acted(await owner.call(admin));
+      expect('view' in whole && whole.view).toMatchObject({ roleInfo: agent.roleInfo, decisionModels, administrators: agent.administrators });
+      const wholeProject = acted(await owner.call(member));
+      expect('view' in wholeProject && wholeProject.view).toMatchObject({ skills: project.skills, members: project.members });
+      await owner.close();
+      expect(act).toHaveBeenCalledTimes(4);
     } finally { await fixture.close(); }
   });
 });

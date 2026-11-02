@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import type { AgentEntry, AgentThread, AgentToolReply } from '../types';
 import { log } from '../../core/logger';
-import type { MemoryTurn } from '../../bot/memory-authority';
+import { decideAdd, decideEdit, decisionMessages, ownDm, type MemoryPlace, type MemoryTurn, type RequestedScope } from '../../bot/memory-authority';
 import { scheduleRefusalMessages, type ScheduleActor } from '../../admin/schedule-commands';
+import type { MemoryLanding, SessionAction, SessionAuthz } from '../../admin/ipc';
 import { sessionInfoTool, TOOL_RESULT_BYTES, ToolRefusal, type AgentTool, type ToolContext } from './tools';
 
 export interface AgentPlace { kind: 'group' | 'p2p' | 'doc'; chatId?: string; docId?: string }
@@ -38,12 +39,24 @@ export interface AgentEntries {
   /** 这一轮对记忆的事实（`memoryTurn()` 一调就绑定当前这一轮）；线程不是这个 daemon 发过入口的返回 undefined */
   memoryTurn(thread: AgentThread): TurnMemory | undefined;
   noteSteer(thread: AgentThread, sender: { openId?: string; kind: 'user' | 'bot' | 'unknown' }): void;
+  /**
+   * devices-4b 4.2: a Bot session's ★ request from its command line, judged for the session's current turn by the same
+   * checks as the tools' (authorizeNow, authorizeMemory, authorizeSchedule, `ctx.admin`). Changes nothing but a dead
+   * session's grant (revoked) and a bot-memory write's quota of the turn.
+   */
+  authorizeSessionCall(sessionId: string, action: SessionAction): Promise<SessionAuthz>;
   closeAll(reason: 'shutdown'): void;
 }
 type Failure = Extract<AgentToolReply, { ok: false }>;
 type Reason = NonNullable<Failure['reason']>;
 /** A settings write outside a private chat: the tools' refusal, and the daemon's to a Bot session's command line (devices 5.2). */
 export const NOT_DM_MESSAGE = '设置只能在私聊里改。请对方去私聊里跟我说。';
+/** devices 15, 这一轮已结束: a Bot session's command line called when no turn of its session is going (or its Bot process is gone). */
+export const SESSION_TURN_ENDED = '这次调用对应的那一轮对话已经结束，不能再改设置。';
+/** devices 3.7: only the owner's turn changes this machine's administrators (devices-4b 4.2). */
+export const NOT_OWNER_MESSAGE = '本机管理员名单只有主人能改。';
+/** A session's call is not tied to a tool use: a turn not known, ended or a session gone all read as the turn having ended. */
+const ENDED = new Set(['revoked', 'unknown-origin', 'turn-ended']);
 const messages = {
   'not-ready': 'vonvon 还没准备好这条会话的工具，稍后再试。',
   revoked: '这条会话的 vonvon 工具已经失效（会话结束了，或者 daemon 重启过）。不要重试，接着做别的。',
@@ -121,6 +134,8 @@ export function createAgentEntries(opts: {
   tools?: readonly AgentTool[];
   /** devices-4a 4.3: told once when a session ends, so the host drops its token (best effort: it never throws). */
   sessions?: { revoke(sessionId: string): void };
+  /** devices-4b 4.5: a turn's place for memory (the memory writer's own), where a session's command-line write lands. */
+  memoryPlace?(turn: Pick<MemoryTurn, 'chatId' | 'place'>): Promise<MemoryPlace>;
 }): AgentEntries {
   const tools = opts.tools ?? [sessionInfoTool];
   const table = new Map(tools.map(tool => [tool.name, tool]));
@@ -202,6 +217,13 @@ export function createAgentEntries(opts: {
     if (auth.presence !== 'scheduled') return undefined;
     if (action === 'create') return refused('no-human-create');
     if ((action !== 'edit' && action !== 'delete') || taskId !== auth.facts.scheduled?.taskId) return refused('scheduled-run-scope');
+  }
+  /** The tools' `ctx.admin` (a private chat's read-only queries, settings_get): the owner's or an admin's own turn, going. */
+  function adminTurn(grant: Grant): Failure | undefined {
+    const turn = grant.turn;
+    if (!turn?.active) return refused('turn-ended');
+    if (!turn.human) return refused('not-human-turn');
+    if (!opts.isAdmin(turn.facts.requesterOpenId ?? '')) return refused('not-admin');
   }
   const roleOf = (auth: TurnAuth): MemoryTurn['role'] => {
     const openId = auth.facts.requesterOpenId ?? '';
@@ -324,7 +346,7 @@ export function createAgentEntries(opts: {
           if (Date.now() > deadline - reserveMs) throw new ToolRefusal(failure('timeout'));
         };
         async function execute() {
-          const ctx: ToolContext = { signal: controller.signal, place: grant.place, notAfter: deadline, get admin() { return !!grant.turn?.active && grant.turn.human && opts.isAdmin(grant.turn.facts.requesterOpenId ?? ''); }, get writeRefusal() { return authorizeNow(grant, auth); } };
+          const ctx: ToolContext = { signal: controller.signal, place: grant.place, notAfter: deadline, get admin() { return !adminTurn(grant); }, get writeRefusal() { return authorizeNow(grant, auth); } };
           if (memory && auth) {
             ctx.turn = { id: auth.id, requesterOpenId: auth.facts.requesterOpenId ?? '', triggerMessageId: auth.facts.triggerMessageId ?? '', role: roleOf(auth) };
             ctx.memoryTurn = () => memoryTurnOf(grant, auth);
@@ -416,8 +438,82 @@ export function createAgentEntries(opts: {
       revoke() { revoke(grant); },
     };
   }
+  /** A refusal as a session's command line reads it: the tools' reason and sentence, but an ended turn in the design's words. */
+  const denial = (failure: Failure): SessionAuthz => {
+    const reason = failure.reason ?? failure.code;
+    return ENDED.has(reason) ? { ok: false, reason: 'turn-ended', message: SESSION_TURN_ENDED } : { ok: false, reason, message: failure.message };
+  };
+  const live = (sessionId: string): Grant | undefined => {
+    for (const grant of grants) if (grant.sessionId === sessionId) return grant;
+  };
+  async function authorizeSessionCall(sessionId: string, action: SessionAction): Promise<SessionAuthz> {
+    const ended = denial(refused('turn-ended'));
+    const found = live(sessionId);
+    if (!found) return ended;
+    // The only wait, before the turn is read: everything after it runs in one go, so the turn cannot change under it.
+    const place = action.kind === 'memory' && action.op !== 'read'
+      ? await opts.memoryPlace?.({ place: found.place.kind === 'group' ? 'group' : found.place.kind === 'p2p' ? 'dm' : 'comment', ...(found.place.chatId ? { chatId: found.place.chatId } : {}) }) ?? {}
+      : {};
+    const grant = live(sessionId);
+    if (!grant) return ended;
+    if (grant.thread && !grant.thread.isAlive()) { revoke(grant); return ended; }
+    const auth = grant.turn;
+    const who = (turn: TurnAuth): { role: MemoryTurn['role']; openId?: string } => ({ role: roleOf(turn), ...(turn.facts.requesterOpenId ? { openId: turn.facts.requesterOpenId } : {}) });
+    switch (action.kind) {
+      case 'settingsWrite': case 'adminMember': {
+        const failure = authorizeNow(grant, auth);
+        if (failure || !auth) return denial(failure ?? refused('unknown-origin'));
+        if (action.kind === 'adminMember' && !opts.isOwner(auth.facts.requesterOpenId ?? '')) return { ok: false, reason: 'not-owner', message: NOT_OWNER_MESSAGE };
+        return { ok: true, ...who(auth) };
+      }
+      case 'adminRead': {
+        const failure = grant.place.kind !== 'p2p' ? refused('not-dm') : adminTurn(grant);
+        return failure || !grant.turn ? denial(failure ?? refused('turn-ended')) : { ok: true, ...who(grant.turn) };
+      }
+      case 'schedule': {
+        const failure = authorizeSchedule(grant, auth, action.action, action.taskId);
+        if (failure || !auth) return denial(failure ?? refused('unknown-origin'));
+        const actor = scheduleActor(grant, auth);
+        // The command core checks a person's turn again by its role; a task's own run as itself (3.13).
+        if (actor.kind === 'scheduled') return { ok: true, ...who(auth), actor };
+        const { openId, role, chatId, name, messageId } = actor;
+        return { ok: true, ...who(auth), actor: { kind: 'session', openId, role, chatId, ...(name ? { name } : {}), ...(messageId ? { messageId } : {}) } };
+      }
+      case 'memory': {
+        const failure = authorizeMemory(grant, auth);
+        const turn = !failure && auth ? memoryTurnOf(grant, auth) : undefined;
+        if (!turn || !auth) return denial(failure ?? refused('unknown-origin'));
+        const target = action.op === 'edit' ? action.item.scope : action.target;
+        // A private chat's memory is its own person's: the tools' decideAdd and decideEdit give no other (4.5a).
+        if (target.kind === 'dm' && !ownDm(turn, target.openId)) return { ok: false, reason: 'out-of-scope', message: decisionMessages['out-of-scope'] };
+        if (action.op === 'read') return { ok: true, ...who(auth) };
+        const source: MemoryLanding['source'] = {
+          botId: opts.appId, turn: { kind: turn.kind, steered: turn.steered }, ...(turn.chatId ? { chatId: turn.chatId } : {}),
+          ...(auth.facts.triggerMessageId ? { messageId: auth.facts.triggerMessageId } : {}),
+        };
+        const actorOf = (decided: { actorRole: string; actorOpenId?: string }): MemoryLanding['actor'] =>
+          ({ role: decided.actorRole as MemoryLanding['actor']['role'], ...(decided.actorOpenId ? { openId: decided.actorOpenId } : {}) });
+        if (action.op === 'edit') {
+          const decision = decideEdit({ turn, place, item: action.item, ...(action.text !== undefined ? { text: action.text } : {}) });
+          if (!decision.allow) return { ok: false, reason: decision.reason, message: decisionMessages[decision.reason] };
+          // One Bot-memory write a turn, as the tools reserve it; not given back if the write then fails.
+          if (action.item.scope.kind === 'bot') auth.botWrites++;
+          return { ok: true, ...who(auth), memory: { scope: action.item.scope, trust: 'untrusted', actor: actorOf(decision.actor), source } };
+        }
+        const requested: RequestedScope = target.kind === 'project' ? { project: target.projectId } : target.kind;
+        const decision = decideAdd({ turn, place, via: 'tool', text: action.text.trim(), scope: requested });
+        if (!decision.allow) return { ok: false, reason: decision.reason, message: decisionMessages[decision.reason] };
+        if (decision.scope.kind === 'bot') auth.botWrites++;
+        return { ok: true, ...who(auth), memory: {
+          scope: decision.scope, trust: decision.trust, actor: actorOf(decision),
+          source: { ...source, ...(decision.downgraded ? { downgraded: decision.downgraded } : {}) },
+        } };
+      }
+    }
+  }
   return {
     issue,
+    authorizeSessionCall,
     openTurn(thread, facts) {
       const grant = threads.get(thread);
       const scheduled = facts.scheduled ? { ...facts.scheduled } : undefined;
