@@ -19,7 +19,8 @@ const BASE = 'https://dl.vonvon.cc/bot/server';
 const SH = '/bin/sh';
 /** The launcher __standalone-setup writes (packages/daemon/src/cli/commands/standalone-setup.ts), checked below. */
 const LAUNCHER = '#!/bin/sh\n# Vonvon Bot server CLI v1\nroot="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)"\nPATH="$root/current/node/bin:$PATH"\nexport PATH\nexec "$root/current/node/bin/node" "$root/current/app/bin/vonvon.mjs" "$@"\n';
-const openssl3 = (() => { try { return /^OpenSSL [3-9]/.test(execFileSync('openssl', ['version'], { encoding: 'utf8' })); } catch { return false; } })();
+/** Whether install.sh, run with the fixture's PATH below, finds OpenSSL 3: macOS has LibreSSL in /usr/bin, Homebrew's is elsewhere. */
+const openssl3 = (() => { try { return /^OpenSSL [3-9]/.test(execFileSync('openssl', ['version'], { encoding: 'utf8', env: { ...process.env, PATH: '/usr/bin:/bin' } })); } catch { return false; } })();
 
 /**
  * The fake app/bin/vonvon.mjs: records its arguments; setup switches `current` and writes the launcher for real. A
