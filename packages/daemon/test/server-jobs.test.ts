@@ -222,6 +222,42 @@ describe('scan ownership', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(phases(jobs)).toEqual(['cancelled']);
   });
+  // Codex 审查 267-1、268-1: two web pages of this computer open, one starts the scan, both show its QR; the one that
+  // started it is closed, the other stays. 修之前必败: only the starting connection held it.
+  it('counts the client\'s connections from before the scan as holders: one dropping keeps it, the last starts the grace', async () => {
+    vi.useFakeTimers();
+    const jobs = manager(fakeService(scanning()));
+    const WEB = { key: 'local:web', label: '本机的网页端', far: '「办公室 Mac」上的网页端' };
+    const [a, b, c] = [peer('a').value, peer('b').value, peer('c').value];
+    jobs.attach(a, WEB);
+    jobs.attach(b, WEB);
+    jobs.attach(c, CLI);
+    jobs.startRegistration(a, undefined, WEB);
+    await settle();
+    jobs.detach(a);
+    expect(vi.getTimerCount()).toBe(1); // the finished-job poll only: b still holds it
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(phases(jobs)).toEqual(['qr']);
+    // c is another client (local:cli): it does not hold a web page's scan
+    jobs.detach(b);
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(phases(jobs)).toEqual(['qr']);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(phases(jobs)).toEqual(['cancelled']);
+  });
+  it('does not count a connection of the client that ended before the scan started', async () => {
+    vi.useFakeTimers();
+    const jobs = manager(fakeService(scanning()));
+    const [a, b] = [peer('a').value, peer('b').value];
+    jobs.attach(b, A);
+    jobs.detach(b);
+    jobs.attach(a, A);
+    jobs.startRegistration(a, undefined, A);
+    await settle();
+    jobs.detach(a);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(phases(jobs)).toEqual(['cancelled']);
+  });
   it('counts a short command of the same client as a holder, and none of another', async () => {
     vi.useFakeTimers();
     const jobs = manager(fakeService(scanning()));

@@ -55,6 +55,9 @@ export class Jobs {
   private readonly backends = new Map<string, BackendOperation>();
   private readonly backendWork = new Set<BackendOperation>();
   private readonly backendLatest = new Map<string, BackendOperation>();
+  /** devices 6.3: each connection now and the client it belongs to (`attach`, `detach`), so a scan holds every
+   * connection of its client, the ones there before it started too. */
+  private readonly connected = new Map<string, string>();
   private readonly poll: NodeJS.Timeout;
   private closed = false;
   private closing: Promise<void> | undefined;
@@ -91,7 +94,7 @@ export class Jobs {
     const entry: Registration = {
       job: { id, type: 'registerAgent', phase: 'running', message: '正在创建扫码会话。' }, owner: peer.id, abort: new AbortController(), done: Promise.resolve(), qrVersion: 0,
       ...(agentId ? { agentId } : {}),
-      ...(owner ? { ownerKey: owner.key, ownerLabel: owner.label, ownerFar: owner.far, holders: new Set([peer.id]) } : {}),
+      ...(owner ? { ownerKey: owner.key, ownerLabel: owner.label, ownerFar: owner.far, holders: this.holdersOf(peer, owner.key) } : {}),
     };
     this.registration = entry;
     this.registrations.set(id, entry);
@@ -133,6 +136,12 @@ export class Jobs {
       this.options.changed();
     });
     return { kind: 'started', jobId: id };
+  }
+  /** The connection starting a scan and every other connection of its client now. */
+  private holdersOf(peer: JobPeer, ownerKey: string): Set<string> {
+    const holders = new Set([peer.id]);
+    for (const [id, key] of this.connected) if (key === ownerKey) holders.add(id);
+    return holders;
   }
   private cancelRegistration(entry: Registration): void {
     clearTimeout(entry.grace);
@@ -228,6 +237,7 @@ export class Jobs {
    * owner loses a holder; with none left it waits `REGISTRATION_GRACE_MS` for the same client to come back (`attach`).
    */
   detach(peer: JobPeer): void {
+    this.connected.delete(peer.id);
     for (const entry of this.unsettled) {
       if (ended(entry)) continue;
       if (!entry.holders) { if (entry.owner === peer.id) this.cancelRegistration(entry); continue; }
@@ -238,12 +248,14 @@ export class Jobs {
     for (const operation of this.backendWork) operation.peers.delete(peer);
   }
   /**
-   * A connection of `owner` started (the hub's `attached`): it holds that client's scans, in their grace or not. A new
+   * A connection of `owner` started (the hub's `attached`): it holds that client's scans, in their grace or not, and the
+   * ones that client starts while it is connected (Codex 审查 267-1: a second web page open before the scan). A new
    * network often brings the new connection before the server sees the old one drop; that later `detach` then leaves a
    * holder, and no grace starts. Any connection of the same client counts, a short `vonvon bot list` too.
    */
   attach(peer: JobPeer, owner: PeerOwner | undefined): void {
     if (!owner) return;
+    this.connected.set(peer.id, owner.key);
     for (const entry of this.unsettled) {
       if (entry.ownerKey !== owner.key || !entry.holders || ended(entry)) continue;
       entry.holders.add(peer.id);

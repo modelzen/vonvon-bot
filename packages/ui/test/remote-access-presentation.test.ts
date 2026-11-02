@@ -3,7 +3,7 @@ import type {ClientRecord, DeviceStatus} from '@vonvon/protocol';
 import * as words from '../src/settings/remote-access-presentation';
 import {
   addressRows, cascadeCount, confirmedRequest, defaultPick, disableStep, enableErrorText, enableStep, hostOf, invitedByText, isRecent, kindLabel,
-  linkBlocked, linkCountdown, liveClients, pairedToastText, panelTitle, portHint, readErrorText, riskFromReply, stateText,
+  linkBlocked, linkCountdown, linkUsable, liveClients, pairedToastText, panelTitle, portHint, readErrorText, riskFromReply, stateText,
 } from '../src/settings/remote-access-presentation';
 
 // devices-ui-3 第 5 节 remote-access-presentation. main 必败: there was no 允许别的设备连接.
@@ -67,6 +67,16 @@ it('greys the link until an address listens, and counts down', () => {
   expect(linkBlocked(rows.map(row => row.enabled ? {...row, state: 'listening'} : row))).toBeUndefined();
   expect(linkCountdown(1_000 + 552_000, 1_000)).toBe('还剩 9 分 12 秒');
   expect(linkCountdown(1_000, 1_000)).toBe('已过期');
+});
+// Codex 审查 267-2、269-1: a link connects to the address and port it was made on.
+it('keeps a link usable only while its address is the open one, listening, on its port', () => {
+  const rows = (host: string | undefined, state: 'listening' | 'waiting' = 'listening') => addressRows(status({candidates, addresses: host ? [{host, kind: 'tailscale', enabledAt: 1, state}] : []}));
+  const made = {host: '100.64.0.10', port: 7767};
+  expect(linkUsable(made, rows('100.64.0.10'), 7767)).toBe(true);
+  expect(linkUsable(made, rows('192.168.1.9'), 7767)).toBe(false);
+  expect(linkUsable(made, rows(undefined), 7767)).toBe(false);
+  expect(linkUsable(made, rows('100.64.0.10', 'waiting'), 7767)).toBe(false);
+  expect(linkUsable(made, rows('100.64.0.10'), 7768)).toBe(false);
 });
 it('counts the clients a cascade revokes, down the line through revoked ones, the revoked ones not', () => {
   const at = (id: string, invitedBy: string, revokedAt?: number): ClientRecord => ({id, name: id, publicKey: 'k', clientKind: 'desktop', createdAt: 0, lastSeenAt: 0, lastAddress: '192.0.2.1:1', pairedVia: 'invite', invitedBy, ...(revokedAt ? {revokedAt} : {})});
