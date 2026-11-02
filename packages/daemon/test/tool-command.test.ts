@@ -42,6 +42,7 @@ describe.skipIf(process.platform === 'win32')('what a terminal types to start a 
       .toBe("& 'C:\\Users\\Jo Ann\\.vonvon-bot\\managed-tools\\codex\\releases\\g\\codex.cmd'");
     expect(terminalCommand("C:\\Users\\O'Brien\\codex.cmd", 'C:\\x\\node.exe', 'win32')).toBe("& 'C:\\Users\\O''Brien\\codex.cmd'");
     expect(terminalCommand('C:\\Users\\jo\\codex.cmd', 'C:\\x\\node.exe', 'win32')).toBe('C:\\Users\\jo\\codex.cmd');
+    expect(terminalCommand('C:\\Users\\RUNNER~1\\AppData\\codex.cmd', 'C:\\x\\node.exe', 'win32')).toBe('C:\\Users\\RUNNER~1\\AppData\\codex.cmd');
   });
 
   it('names a standalone server\'s Node through current/, which outlives the release it runs from', () => {
