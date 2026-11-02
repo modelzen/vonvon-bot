@@ -18,6 +18,8 @@ import { groupSkillProfile } from '../agent/group-skills';
 import { completeBuiltinPackage, ensureBuiltinPackage } from '../agent/builtin-skills/package';
 import { builtinSkillsOfSet } from '../agent/builtin-skills/registry';
 import type { SessionProfile } from '../agent/session-profile';
+import { SESSION_ENV } from '../config/session-env';
+import type { HostApi } from '../admin/ipc';
 import { parseStoredJudge } from '../judge/model';
 import { presentationConfig } from './group-presentation';
 import { projectRevision, projectView, projectSettingsRevision, type CollaborationRequest } from '../admin/collaboration';
@@ -373,6 +375,12 @@ async function fetchAllProjectMembers(channel: LarkChannel): Promise<{ openId: s
     for (const m of members) if (!seen.has(m.openId)) seen.set(m.openId, m.name);
   }
   return [...seen].map(([openId, name]) => ({ openId, name }));
+}
+
+/** The profile a session starts with, its env carrying `env` too; a session with no profile gets one with only that. */
+export function withSessionEnv(profile: SessionProfile | undefined, env: Record<string, string>): SessionProfile {
+  return profile ? { ...profile, env: { ...profile.env, ...env } }
+    : { instructions: '', env, nativeSettings: { automaticMemory: false }, additionalRoots: [], capabilityPackages: [], mcpServers: [] };
 }
 
 /**
@@ -920,9 +928,10 @@ export interface Orchestrator {
   /** The host changed a library project's workspace: this bot's rows of it follow, their groups' sessions archived (admin/library.ts). */
   libraryExecute: (op: AdminLibraryOp) => Promise<unknown>;
   settings: HostSettings;
-  /** Scheduled tasks from the desktop and the terminal, run as the local owner (admin/schedule-commands.ts). */
-  schedule: (via: 'desktop' | 'cli', request: ScheduleRequest) => Promise<ScheduleReply>;
-  /** The same command core for the agent tools (agent/entry/schedule-tools.ts): the actor comes from the turn's grant. */
+  /**
+   * Scheduled tasks through the command core (admin/schedule-commands.ts): the agent tools' actor comes from the turn's
+   * grant (agent/entry/schedule-tools.ts), the wire's is the local owner's or a Bot session's turn.
+   */
   scheduleAs: (actor: ScheduleActor, request: ScheduleRequest) => Promise<ScheduleReply>;
   /** The scheduled-task tick (bot/schedule/scheduler.ts), outside admit; bridge.ts starts it once Feishu is connected. */
   scheduler: { start(): Promise<void>; stop(): void; drain(ms: number): Promise<void> };
@@ -1097,9 +1106,12 @@ export function createOrchestrator(
   /** `droppedFile`: where a shutdown keeps the queued messages it drops (s18c). No default: without it, nothing is
    * kept or answered (tests, and every caller but `daemon run`). */
   // Only daemon run supplies judgeUsageFile; tests that omit it do not persist usage.
-  options?: { entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention },
+  options?: { entries?: AgentEntries; memory?: MemoryWriter; droppedFile?: string; judgeUsageFile?: string; bot?: BotIdentity; time?: IntakeTime; attention?: Attention;
+    /** devices-4a 4.3: where each new session's token comes from (the host, over IPC). Without it a session gets none (tests). */
+    host?: Pick<HostApi, 'issueSessionToken'> },
 ): Orchestrator {
   const entries = options?.entries;
+  const host = options?.host;
   const memory = options?.memory;
   const bindingBot = options?.bot ? { ...options.bot } : undefined;
   /** Lazily-constructed backends by id — one instance per backend for the whole
@@ -1388,6 +1400,14 @@ export function createOrchestrator(
       throw new ThreadPermissionChanged('旧权限会话没能关闭，请稍后重试。', {cause: error});
     } finally { clearTimeout(timer); }
   }
+  /** The token a new session's `vonvon` commands carry (devices 5.3), in place of the bare marker. */
+  async function sessionEnv(api: Pick<HostApi, 'issueSessionToken'>, sessionId: string, place: AgentPlace): Promise<Record<string, string>> {
+    const token = await api.issueSessionToken({
+      appId: cfg.accounts.app.id, place: place.kind === 'p2p' ? 'dm' : place.kind === 'group' ? 'group' : 'comment', sessionId,
+      ...(place.kind !== 'doc' && place.chatId ? { chatId: place.chatId } : {}),
+    });
+    return { [SESSION_ENV]: token };
+  }
   /** The profile a thread was actually started with: a permission save can swap in a rebuilt one (and its opening). */
   const profileUsed = new WeakMap<AgentThread, object>();
   /** A save can finish while a provider is starting, before eviction can see its thread. */
@@ -1402,7 +1422,12 @@ export function createOrchestrator(
       }
       const entry = entries?.issue(place);
       let thread: AgentThread;
-      try { thread = await create({...opts, ...(entry ? {entry} : {})}); entry?.attach(thread); }
+      try {
+        // devices 5.3: the session's shell gets its token, never the bare marker; no token, no session (the host is gone).
+        const session = entry && host ? await sessionEnv(host, entry.sessionId, place) : undefined;
+        thread = await create({...opts, ...(entry ? {entry} : {}), ...(session ? {profile: withSessionEnv(opts.profile, session)} : {})});
+        entry?.attach(thread);
+      }
       catch (error) { entry?.revoke('start-failed'); throw error; }
       if (opts.profile) profileUsed.set(thread, opts.profile);
       const fingerprint = permissionFingerprint(opts);
@@ -3960,6 +3985,8 @@ export function createOrchestrator(
         // 还在，话题自愈而不是僵死到重启）。
         sessions.delete(threadId);
         log.info('agent', 'dead-thread-evict', { threadId });
+        // Closed all the same: its entry, and the session's token with it, ends (devices 5.3).
+        void trackTask(live.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
       }
     }
     const rec = await getSession(threadId);
@@ -9712,18 +9739,11 @@ export function createOrchestrator(
   const scheduleCommands = createScheduleCommands({ store: scheduleStore, scheduler, botId: cfg.accounts.app.id, now: () => Date.now(), hostTimeZone });
   let storeLoaded: ReturnType<typeof scheduleStore.load> | undefined;
   const loadStore = (): ReturnType<typeof scheduleStore.load> => (storeLoaded ??= scheduleStore.load());
-  const schedule = async (via: 'desktop' | 'cli', request: ScheduleRequest): Promise<ScheduleReply> => {
-    await loadStore();
-    return scheduleCommands.execute({ kind: 'local', via }, request);
-  };
   const scheduleAs = async (actor: ScheduleActor, request: ScheduleRequest): Promise<ScheduleReply> => {
     await loadStore();
     return scheduleCommands.execute(actor, request);
   };
   /** Not admit: a stopping bot did nothing, so it says so as a refusal, not as a rejection the terminal reads as a result not known. */
-  const admittedSchedule = (via: 'desktop' | 'cli', request: ScheduleRequest): Promise<ScheduleReply> => (
-    shuttingDown ? Promise.resolve(botNotRunning()) : trackTask(schedule(via, request))
-  );
   const admittedScheduleAs = (actor: ScheduleActor, request: ScheduleRequest): Promise<ScheduleReply> => (
     shuttingDown ? Promise.resolve(botNotRunning()) : trackTask(scheduleAs(actor, request))
   );
@@ -9757,7 +9777,6 @@ export function createOrchestrator(
     adminExecute: admit(adminExecute),
     libraryExecute: admit(libraryExecute),
     settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },
-    schedule: admittedSchedule,
     scheduleAs: admittedScheduleAs,
     scheduler: { start: async () => scheduler.start(await loadStore()), stop: () => scheduler.stop(), drain: ms => scheduler.drain(ms) },
     shutdown,

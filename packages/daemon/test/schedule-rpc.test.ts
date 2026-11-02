@@ -13,6 +13,9 @@ const f = vi.hoisted(() => ({
   /** The supervisor and the single-bot run get an API that listens nowhere; the RPC tests get the real one. */
   fakeApi: false,
   bridgeSchedule: undefined as unknown as ReturnType<typeof vi.fn>,
+  authorize: vi.fn(async () => ({ ok: true, role: 'admin' })),
+  /** What the supervisor and the single-bot run gave the API (devices-4b: its askBot). */
+  api: undefined as { askBot?: (appId: string, sessionId: string, action: { kind: 'settingsWrite' }) => Promise<unknown> } | undefined,
 }));
 vi.mock('../src/core/logger', async original => ({ ...await original<typeof import('../src/core/logger')>(), log: { info() {}, warn() {}, fail() {} } }));
 vi.mock('../src/agent', () => ({ createBackend: () => ({ doctor: async () => ({ ok: false, version: null, depState: 'not-installed' }) }), installBackendDep() {}, uninstallBackendDep() {} }));
@@ -23,7 +26,7 @@ vi.mock('../src/admin/service', async original => {
 vi.mock('../src/server/http', async original => {
   const real = await original<typeof import('../src/server/http')>();
   const nowhere = { port: 1, listen: '127.0.0.1:1', invalidate() {}, beginDrain: async () => {}, release: async () => {}, close: async () => {} };
-  return { ...real, startApi: (options: Parameters<typeof real.startApi>[0]) => (f.fakeApi ? Promise.resolve(nowhere) : real.startApi(options)) };
+  return { ...real, startApi: (options: Parameters<typeof real.startApi>[0]) => { f.api = options; return f.fakeApi ? Promise.resolve(nowhere) : real.startApi(options); } };
 });
 vi.mock('../src/import/bridge/runtime', () => ({ bridgeImportRuntime: () => ({ importer: {}, guard: async () => undefined, bind() {}, releaseRemoved() {}, shutdown: async () => {}, dispose() {} }) }));
 vi.mock('../src/agent/owned-process', () => ({ closeOwnedProviderProcesses: async () => {}, unconfirmedProviderPids: () => [] }));
@@ -36,13 +39,14 @@ vi.mock('../src/bot/onboarding', () => ({
   announceEventsWhenLive() {},
 }));
 vi.mock('../src/bot/bridge', () => ({
-  startBridge: async () => ({ channel: { getConnectionStatus: () => ({ state: 'connected' }) }, schedule: f.bridgeSchedule, shutdown: async () => {} }),
+  startBridge: async () => ({ channel: { getConnectionStatus: () => ({ state: 'connected' }) }, schedule: f.bridgeSchedule, entries: { authorizeSessionCall: f.authorize }, shutdown: async () => {} }),
 }));
 
 function bot(appId: string) { return { appId, name: appId, tenant: 'feishu' as const, createdAt: 0 }; }
 const list: ScheduleRequest = { action: 'list', chatId: 'oc_pay' };
 const tasks: ScheduleReply = { kind: 'tasks', tasks: [], now: 1_700_000_000_000, timeZone: 'Asia/Tokyo' };
 const refused: ScheduleReply = { kind: 'refused', reason: 'bot-not-running', message: 'Bot 没在运行，任务暂时看不到；启动后再来。' };
+const local = (via: 'cli' | 'desktop') => ({ kind: 'local' as const, via });
 
 let root: string;
 type Modules = {
@@ -71,7 +75,7 @@ afterAll(() => {
   vi.unstubAllEnvs();
   rmSync(root, { recursive: true, force: true });
 });
-afterEach(() => { f.fakeApi = false; f.deps = undefined; });
+afterEach(() => { f.fakeApi = false; f.deps = undefined; f.api = undefined; f.authorize.mockClear(); });
 
 function control(): ShutdownControl & { stop(): void } {
   let stop = (): void => {};
@@ -110,12 +114,12 @@ describe('schedule over RPC', () => {
     try {
       const client = await connect(api.port, clientKind);
       expect(await client.call('list-1', 'cli_a', list)).toEqual({ type: 'response', id: 'list-1', method: 'schedule', payload: tasks });
-      expect(executeSchedule).toHaveBeenLastCalledWith('cli_a', via, list);
+      expect(executeSchedule).toHaveBeenLastCalledWith('cli_a', local(via), list);
       // A refusal is a reply; a write is answered as it comes, without a snapshot rebuild (the snapshot has no tasks).
       executeSchedule.mockResolvedValueOnce(refused);
       const run: ScheduleRequest = { action: 'runNow', chatId: 'oc_pay', taskId: 'st_0123456789abcdef' };
       expect(await client.call('run-1', 'cli_a', run)).toEqual({ type: 'response', id: 'run-1', method: 'schedule', payload: refused });
-      expect(executeSchedule).toHaveBeenLastCalledWith('cli_a', via, run);
+      expect(executeSchedule).toHaveBeenLastCalledWith('cli_a', local(via), run);
       await client.close();
     } finally { await api.close(); }
   });
@@ -153,7 +157,8 @@ const echoChild = `
   process.on('SIGTERM', stop);
   process.on('message', message => {
     if (message.type === 'bridge:shutdown') stop();
-    else if (message.fcb === 'fcb.admin.req') process.send({ fcb: 'fcb.admin.res', id: message.id, ok: true, result: message.op.kind === 'status' ? { connection: 'connected' } : { echoed: message.op } });
+    else if (message.fcb === 'fcb.admin.req') process.send({ fcb: 'fcb.admin.res', id: message.id, ok: true, result: message.op.kind === 'status' ? { connection: 'connected' }
+      : message.op.kind === 'authorizeSessionCall' && message.op.sessionId === 'ses_owner' ? { ok: true, role: 'owner', openId: 'ou_owner' } : { echoed: message.op } });
   });
 `;
 
@@ -184,12 +189,19 @@ describe('the supervisor', () => {
     try {
       await vi.waitFor(() => expect(f.deps?.executeSchedule).toBeDefined());
       const deps = f.deps!;
-      expect(await deps.executeSchedule!('cli_b', 'cli', list)).toEqual(refused);
+      expect(await deps.executeSchedule!('cli_b', local('cli'), list)).toEqual(refused);
       await vi.waitFor(async () => expect(await deps.liveStatus!('cli_a')).toMatchObject({ running: true }), { timeout: 10_000 });
       // The op the bot process gets: `run.ts` hands it to the bridge's schedule.
-      expect(await deps.executeSchedule!('cli_a', 'desktop', list)).toEqual({ echoed: { kind: 'schedule', via: 'desktop', request: list } });
+      expect(await deps.executeSchedule!('cli_a', local('desktop'), list)).toEqual({ echoed: { kind: 'schedule', actor: local('desktop'), request: list } });
+      // devices-4b 4.3: a session's ★ request goes to its bot's process; an answer of another shape, no process: refused
+      const askBot = f.api!.askBot!;
+      const ended = { ok: false, reason: 'turn-ended', message: '这次调用对应的那一轮对话已经结束，不能再改设置。' };
+      expect(await askBot('cli_a', 'ses_owner', { kind: 'settingsWrite' })).toEqual({ ok: true, role: 'owner', openId: 'ou_owner' });
+      expect(await askBot('cli_a', 'ses_other', { kind: 'settingsWrite' })).toEqual(ended);
+      expect(await askBot('cli_b', 'ses_owner', { kind: 'settingsWrite' })).toEqual(ended);
       await deps.applyBotActivation!('cli_a', false);
-      expect(await deps.executeSchedule!('cli_a', 'desktop', list)).toEqual(refused);
+      expect(await deps.executeSchedule!('cli_a', local('desktop'), list)).toEqual(refused);
+      expect(await askBot('cli_a', 'ses_owner', { kind: 'settingsWrite' })).toEqual(ended);
     } finally {
       host.stop();
       await supervisor;
@@ -214,12 +226,12 @@ describe('the supervisor while a bot stops', () => {
       await vi.waitFor(() => expect(f.deps?.executeSchedule).toBeDefined());
       const deps = f.deps!;
       await vi.waitFor(async () => expect(await deps.liveStatus!('cli_a')).toMatchObject({ running: true }), { timeout: 10_000 });
-      expect(await deps.executeSchedule!('cli_a', 'cli', list)).toEqual({ echoed: { kind: 'schedule', via: 'cli', request: list }, stopping: false });
+      expect(await deps.executeSchedule!('cli_a', local('cli'), list)).toEqual({ echoed: { kind: 'schedule', actor: local('cli'), request: list }, stopping: false });
       // The host stops: the bot stays enabled while its process drains.
       host.stop();
       const answers: unknown[] = [];
       await vi.waitFor(async () => {
-        answers.push(await deps.executeSchedule!('cli_a', 'cli', list));
+        answers.push(await deps.executeSchedule!('cli_a', local('cli'), list));
         expect(answers.at(-1)).toEqual(refused);
       }, { timeout: 10_000, interval: 20 });
       expect(answers.filter(answer => (answer as { stopping?: boolean }).stopping)).toEqual([]);
@@ -241,9 +253,13 @@ describe('the bot process', () => {
     const running = m.runRun('cli_a', { control: host });
     try {
       await vi.waitFor(() => expect(f.deps?.executeSchedule).toBeDefined(), { timeout: 10_000 });
-      expect(await f.deps!.executeSchedule!('cli_b', 'cli', list)).toEqual(refused);
-      expect(await f.deps!.executeSchedule!('cli_a', 'cli', list)).toEqual(tasks);
-      expect(f.bridgeSchedule).toHaveBeenCalledExactlyOnceWith('cli', list);
+      expect(await f.deps!.executeSchedule!('cli_b', local('cli'), list)).toEqual(refused);
+      expect(await f.deps!.executeSchedule!('cli_a', local('cli'), list)).toEqual(tasks);
+      expect(f.bridgeSchedule).toHaveBeenCalledExactlyOnceWith(local('cli'), list);
+      // devices-4b 4.3: alone, the process judges its own sessions' ★ requests, and no other bot's
+      expect(await f.api!.askBot!('cli_a', 'ses_0123456789abcdef', { kind: 'settingsWrite' })).toEqual({ ok: true, role: 'admin' });
+      expect(f.authorize).toHaveBeenCalledExactlyOnceWith('ses_0123456789abcdef', { kind: 'settingsWrite' });
+      expect(await f.api!.askBot!('cli_b', 'ses_0123456789abcdef', { kind: 'settingsWrite' })).toMatchObject({ ok: false, reason: 'turn-ended' });
     } finally {
       host.stop();
       await running;
@@ -270,14 +286,16 @@ describe('the bot process', () => {
     const host = control();
     const running = m.runRun('cli_a', { control: host });
     try {
-      let respond: ((message: unknown) => void) | undefined;
-      await vi.waitFor(() => {
-        respond = process.listeners('message').find(listener => !before.has(listener)) as typeof respond;
-        expect(respond).toBeDefined();
-      });
-      respond!({ fcb: 'fcb.admin.req', id: 7, op: { kind: 'schedule', via: 'cli', request: list } });
+      // devices-4a: the child listens on two channels, the host one (its sessions' tokens) first, then the admin one
+      const added = () => process.listeners('message').filter(listener => !before.has(listener)) as Array<(message: unknown) => void>;
+      await vi.waitFor(() => expect(added()).toHaveLength(2));
+      for (const listener of added()) listener({ fcb: 'fcb.admin.req', id: 7, op: { kind: 'schedule', actor: local('cli'), request: list } });
       await vi.waitFor(() => expect(sent).toContainEqual({ fcb: 'fcb.admin.res', id: 7, ok: true, result: tasks }));
-      expect(f.bridgeSchedule).toHaveBeenCalledExactlyOnceWith('cli', list);
+      expect(f.bridgeSchedule).toHaveBeenCalledExactlyOnceWith(local('cli'), list);
+      // devices-4b 4.3: the host asks this process about its session's ★ request
+      for (const listener of added()) listener({ fcb: 'fcb.admin.req', id: 8, op: { kind: 'authorizeSessionCall', sessionId: 'ses_0123456789abcdef', action: { kind: 'adminRead' } } });
+      await vi.waitFor(() => expect(sent).toContainEqual({ fcb: 'fcb.admin.res', id: 8, ok: true, result: { ok: true, role: 'admin' } }));
+      expect(f.authorize).toHaveBeenLastCalledWith('ses_0123456789abcdef', { kind: 'adminRead' });
     } finally {
       host.stop();
       await running;

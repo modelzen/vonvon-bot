@@ -103,6 +103,8 @@ export function createSecureSocketServer(options: SecureSocketServerOptions): { 
         return true;
       },
       send, event: send,
+      // The message loop's 1001/1007 and the maintenance strikes' 4001 (D4a), said inside the channel too.
+      close(code, reason) { shut(code, reason); },
     };
     const detach = (): void => {
       if (detached) return;
@@ -195,7 +197,8 @@ export function createSecureSocketServer(options: SecureSocketServerOptions): { 
       let raw: unknown;
       try { raw = text === undefined ? undefined : JSON.parse(text); } catch { raw = undefined; }
       const parsed = helloSchema.safeParse(raw);
-      // No credential of any kind over the channel: the key is the authorization (devices 4.4, 5.3).
+      // No credential of any kind over the channel, a Bot session's `vs1.` token included: the key is the authorization
+      // (devices 4.4, 5.3). Bot sessions only ever reach the loopback.
       if (!parsed.success || parsed.data.credential !== undefined) { close('unauthorized'); return; }
       if (clientId !== undefined) clients.touch(clientId, address);
       clientKind = parsed.data.clientKind;
@@ -237,7 +240,7 @@ export function createSecureSocketServer(options: SecureSocketServerOptions): { 
           deadline(idleMs, () => close('server_shutdown'));
           if (plain.type === FRAME.ping) { frame(FRAME.pong); return; }
           if (plain.type === FRAME.pong) return;
-          handleMessage(hub, peer, text, { request: options.request, ...(options.control ? { control: options.control } : {}), close: shut });
+          handleMessage(hub, peer, text, { request: options.request, ...(options.control ? { control: options.control } : {}) });
           return;
       }
     });
