@@ -116,6 +116,9 @@ daemon.command('run').description('Run in the foreground')
   .action(async (options: { bot?: string; port: number; parentControl?: boolean }) => {
     const warning = (await import('./root-warning')).rootWarning();
     if (warning) process.stderr.write(`${warning}\n`);
+    // The host reads <data dir>/env before any bot starts; a bot child inherits it. The note reaches `vonvon daemon logs`.
+    const envNote = options.bot ? undefined : (await import('./service-env')).applyServiceEnv(paths.appDir);
+    if (envNote) (await import('../core/logger')).log.info('host', 'env_file', { note: envNote });
     // owner 2026-11-02: a host's stop, restart or update ends within 30 s, whatever a Bot or Feishu does meanwhile; a Bot
     // child has its own, shorter limit (bot/supervisor.ts). Ended this way, the run is not taken for a crash.
     const runControl = control;
