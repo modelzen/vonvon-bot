@@ -582,6 +582,11 @@ export function createDeviceConnections(deps: DeviceConnectionsDeps): DeviceConn
           ...(info.deviceName ? { deviceName: info.deviceName } : {}), at },
       };
       await registry.put(stored);
+      // Cancelled while it was saved (Codex 审查 236-3): put back what was there; below takes the key back off its list.
+      if (abort.signal.aborted) {
+        await (existing ? registry.put(existing) : registry.remove(stored.deviceId)).catch(() => undefined);
+        throw new Error('aborted');
+      }
     } catch {
       // Paired over there, forgotten here: take the key back off its list while the connection is still open.
       await withTimeout(linked.client.device({ type: 'revokeClient', clientId }), REVOKE_TIMEOUT_MS).catch(() => undefined);
