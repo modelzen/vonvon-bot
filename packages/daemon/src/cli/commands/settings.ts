@@ -6,7 +6,7 @@ import {
   type SettingsAction, type SettingsReply, type SettingsScope, type SettingsView, type SmartPromptView,
 } from '@vonvon/protocol';
 import {
-  conversationLabel, localTime, pickBot, pickGroup, print, toolLabel, want, withDaemon, type Call, type Daemon, type Io,
+  bindingsHidden, conversationLabel, localTime, pickBot, pickGroup, print, toolLabel, want, withDaemon, type Call, type Daemon, type Io,
 } from '../daemon-client';
 import { TIER_NAMES } from '../../agent/permission';
 import { keyMissingText } from '../../judge/decision';
@@ -125,6 +125,8 @@ async function resolveScope(call: Call, target: Target): Promise<{ agent: Agent;
   const snapshot = await call('读取快照', c => c.snapshot());
   const agent = pickBot(snapshot.agents, target.bot);
   if (target.group !== undefined) {
+    // s1b: a group's session names no group; the daemon answers its settings read with 群里不能改设置
+    if (bindingsHidden(snapshot.memberships, agent)) return { agent, scope: { kind: 'project', botId: agent.id, projectName: target.group } };
     const membership = pickGroup(snapshot.memberships, agent, target.group);
     return { agent, membership, scope: { kind: 'project', botId: agent.id, projectName: membership.name } };
   }
@@ -476,7 +478,7 @@ export async function runSettingsMember(op: string, openId: string | undefined, 
   const outcome = await daemon(async (call): Promise<{ result: Acted } | { unchanged: ProjectSettingsView['members'] }> => {
     const snapshot = await call('读取快照', c => c.snapshot());
     const agent = pickBot(snapshot.agents, target.bot);
-    const projectName = pickGroup(snapshot.memberships, agent, target.group!).name;
+    const projectName = bindingsHidden(snapshot.memberships, agent) ? target.group! : pickGroup(snapshot.memberships, agent, target.group!).name;
     let revision = target.revision;
     if (revision === undefined) {
       const { members } = await readView(call, { kind: 'project', botId: agent.id, projectName }) as ProjectSettingsView;

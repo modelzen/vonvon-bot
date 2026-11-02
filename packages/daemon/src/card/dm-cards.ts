@@ -138,7 +138,7 @@ export const DM = {
   sessionTitleDisable: 'dm.sessionTitle.disable',
 } as const;
 
-/** Action ids for the in-group settings card (@bot /settings). */
+/** Action ids of the in-group settings card (@bot /settings), no longer sent (s1b): a click on an old one changes nothing. */
 export const GS = {
   setNoMention: 'gs.noMention',
   // 旧卡上的自动压缩按钮（s12 已去掉开关）
@@ -1455,7 +1455,7 @@ export function buildCompletionReminderCustomCard(cfg: AppConfig): CardObject {
 export const AUTO_COMPACT_RETIRED = '🗜️ 自动压缩现在一直开着，这个开关已经去掉了。';
 
 /**
- * In-group settings card (@bot /settings). 会话方式 is a read-only label here (the web
+ * In-group settings card (@bot /settings until s1b, which sends none any more). 会话方式 is a read-only label here (the web
  * changes it); 免@ is a live toggle. Uses option buttons (never lock) like
  * {@link buildSettingsCard}. Admin-gated by the handler. `notice` = 卡顶提示行。
  */

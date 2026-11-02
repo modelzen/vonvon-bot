@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { settingsReplySchema, type Request, type ScheduledTaskView, type Scope, type SettingsReply } from '@vonvon/protocol';
+import { rpcKindOf, settingsReplySchema, type Request, type ScheduledTaskView, type Scope, type SettingsReply } from '@vonvon/protocol';
 import agentFixture from '../../protocol/test/fixtures/agent-settings.json';
 
 const memory = vi.hoisted(() => ({ action: vi.fn() }));
 vi.mock('../src/admin/memory', async original => ({ ...await original<object>(), memoryAction: memory.action }));
 import { fakeService, socketClient, startFixture } from './server-fixture';
-import { authorize, ONE_GROUP_ONLY, SCOPE_MISSING, SESSION_DENIED, scopeExceeded, type AuthzDeps } from '../src/server/authz';
+import { authorize, ONE_GROUP_ONLY, RULES, SCOPE_MISSING, SESSION_DENIED, scopeExceeded, type AuthzDeps } from '../src/server/authz';
 import { SESSION_TOKEN_INVALID } from '../src/host/session-tokens';
-import { NOT_DM_MESSAGE, SESSION_TURN_ENDED } from '../src/agent/entry/registry';
+import { NOT_DM_COMMENT_MESSAGE, NOT_DM_MESSAGE, SESSION_TURN_ENDED } from '../src/agent/entry/registry';
 import type { MemoryLanding, SessionAction, SessionAuthz } from '../src/admin/ipc';
 import { scheduleRefusalMessages } from '../src/admin/schedule-commands';
 import type { SessionPlace } from '../src/host/session-tokens';
@@ -38,7 +38,9 @@ describe('the bot-session column (unit)', () => {
   it('asks a session for its scope before anything but daemonStatus and negotiate', async () => {
     const unnegotiated = peer('group', null, false);
     expect(await authorize(unnegotiated, request('command', { type: 'refresh' }), deps)).toEqual({ ok: false, code: 'scope_required', message: SCOPE_MISSING });
-    expect(await authorize(unnegotiated, request('admin', { type: 'daemonStatus' }), deps)).toMatchObject({ ok: true });
+    expect(await authorize(peer('dm', null, false), request('admin', { type: 'daemonStatus' }), deps)).toMatchObject({ ok: true });
+    // s1b: a group's command line never asks daemonStatus (its paths are the owner's)
+    expect(await authorize(unnegotiated, request('admin', { type: 'daemonStatus' }), deps)).toEqual({ ok: false, code: 'permission_denied', message: SESSION_DENIED });
     expect(await authorize(unnegotiated, request('admin', { type: 'negotiate', capabilities: ['cli'] }), deps)).toMatchObject({ ok: true });
   });
 
@@ -50,15 +52,17 @@ describe('the bot-session column (unit)', () => {
       request('collaboration', { action: 'createProject', agentId: BOT, name: 'P', folder: { kind: 'existing', folderToken: 'x' }, tool: 'codex', conversation: 'threads' }),
       request('collaboration', { action: 'editProject', agentId: BOT, projectName: '研发', groupId: GROUP, expectedRevision: 'r' }),
     ];
-    for (const place of ['group', 'comment'] as const) {
-      for (const write of writes) expect(await authorize(peer(place), write, deps)).toEqual({ ok: false, code: 'not-dm', message: NOT_DM_MESSAGE });
+    // s1b: a comment's sentence is its own
+    for (const [place, message] of [['group', NOT_DM_MESSAGE], ['comment', NOT_DM_COMMENT_MESSAGE]] as const) {
+      for (const write of writes) expect(await authorize(peer(place), write, deps)).toEqual({ ok: false, code: 'not-dm', message });
     }
     // settings-dm-only: the owner's words
     expect(NOT_DM_MESSAGE).toBe('群里不能改设置。私聊我可以改，也可以在 Vonvon Bot 客户端或命令行里改。');
+    expect(NOT_DM_COMMENT_MESSAGE).toBe('评论里不能改设置。私聊我可以改，也可以在 Vonvon Bot 客户端或命令行里改。');
   });
 
   // settings-dm-only: a group session has no settings_get, and its command line reads no settings either, its own group's
-  // included; what it may still read of its group (members, sessions) stays.
+  // included; of its group it still reads its members (s1b's whitelist).
   it('refuses a group session every settings read with the not-dm sentence, and reads a private chat\'s as settings_get does', async () => {
     const own = request('settings', { type: 'read', scope: { kind: 'project', botId: BOT, projectName: '研发' } });
     expect(await authorize(peer('group'), own, deps)).toEqual({ ok: false, code: 'not-dm', message: NOT_DM_MESSAGE });
@@ -78,12 +82,72 @@ describe('the bot-session column (unit)', () => {
     expect(await authorize(peer('group'), request('settings', { type: 'read', scope: { kind: 'project', botId: BOT, projectName: '运营' } }), deps)).toMatchObject({ ok: false, code: 'not-dm' });
     // D4a review R1: settings set and settings act read the bot's or a session's view before they write: the write's sentence
     for (const scope of [{ kind: 'agent', botId: BOT }, { kind: 'session', botId: BOT, threadId: 'thread-y' }]) {
-      for (const place of ['group', 'comment'] as const) expect(await authorize(peer(place), request('settings', { type: 'read', scope }), deps)).toEqual({ ok: false, code: 'not-dm', message: NOT_DM_MESSAGE });
+      for (const [place, message] of [['group', NOT_DM_MESSAGE], ['comment', NOT_DM_COMMENT_MESSAGE]] as const) {
+        expect(await authorize(peer(place), request('settings', { type: 'read', scope }), deps)).toEqual({ ok: false, code: 'not-dm', message });
+      }
     }
-    expect(await authorize(peer('comment', { bot: BOT }), request('settings', { type: 'read', scope: { kind: 'project', botId: BOT, projectName: '研发' } }), deps)).toEqual({ ok: false, code: 'not-dm', message: NOT_DM_MESSAGE });
+    expect(await authorize(peer('comment', { bot: BOT }), request('settings', { type: 'read', scope: { kind: 'project', botId: BOT, projectName: '研发' } }), deps)).toEqual({ ok: false, code: 'not-dm', message: NOT_DM_COMMENT_MESSAGE });
     expect(await authorize(peer('group'), request('command', { type: 'listGroupMembers', agentId: BOT, groupId: OTHER }), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
     expect(await authorize(peer('group'), request('command', { type: 'listGroupMembers', agentId: BOT, groupId: GROUP }), deps)).toMatchObject({ ok: true });
     expect(await authorize(peer('group'), request('command', { type: 'listJoinedGroups', agentId: 'cli_other' }), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
+  });
+
+  // s1b: a group's token, every RPC kind. What its work needs passes the host (a ★ one asked of its Bot process); every
+  // other kind is refused before any handler, a settings write with the not-dm sentence. main 必败: the bot's groups,
+  // its sessions, models, history, the library list and daemonStatus all passed for a group.
+  it('lets a group\'s token through only its whitelist, every other RPC kind refused', async () => {
+    const stored = { scope: { kind: 'project' as const, projectId: 'prj_0000000a' }, source: { via: 'tool' as const, botId: BOT, actorRole: 'member' as const } };
+    const landing: MemoryLanding = { scope: { kind: 'project', projectId: 'prj_0000000a' }, trust: 'untrusted', actor: { role: 'member', openId: 'ou_m' }, source: { botId: BOT } };
+    const askBot = botSays({ ok: true, role: 'member', openId: 'ou_m', actor: { kind: 'session', openId: 'ou_m', role: 'member', chatId: GROUP }, memory: landing });
+    const all = { ...deps, askBot, memoryItem: async () => stored };
+    const project = { kind: 'project', projectId: 'prj_0000000a' };
+    const task = (action: string, extra: object = {}) => request('schedule', { botId: BOT, request: { action, chatId: GROUP, ...extra } });
+    const allowed: Record<string, Request> = {
+      'snapshot.get': request('snapshot', { type: 'get' }),
+      'admin.negotiate': request('admin', { type: 'negotiate', capabilities: ['cli'] }),
+      'command.listGroupMembers': request('command', { type: 'listGroupMembers', agentId: BOT, groupId: GROUP }),
+      'memory.list': request('memory', { type: 'list', scope: project }),
+      'memory.add': request('memory', { type: 'add', scope: project, text: '周四发版' }),
+      'memory.edit': request('memory', { type: 'edit', scope: project, itemId: 'mem_1', revision: 1, text: '周五发版' }),
+      'memory.archive': request('memory', { type: 'archive', scope: project, itemId: 'mem_1', revision: 1 }),
+      'schedule.list': task('list'),
+      'schedule.create': task('create', { name: '日报', instruction: 'x', spec: { kind: 'daily', time: '09:00' } }),
+      'schedule.edit': task('edit', { taskId: 'st_1', revision: 'r1', patch: { name: 'x' } }),
+      'schedule.pause': task('pause', { taskId: 'st_1' }),
+      'schedule.resume': task('resume', { taskId: 'st_1' }),
+      'schedule.delete': task('delete', { taskId: 'st_1', revision: 'r1' }),
+      'schedule.runNow': task('runNow', { taskId: 'st_1' }),
+    };
+    const whitelist = [...RULES].filter(([, rule]) => rule.places.group === 'host' || rule.places.group === 'bot').map(([kind]) => kind).sort();
+    expect(whitelist).toEqual(Object.keys(allowed).sort());
+    for (const [kind, call] of Object.entries(allowed)) {
+      expect(rpcKindOf(call)).toBe(kind);
+      expect(await authorize(peer('group'), call, all), kind).toMatchObject({ ok: true });
+    }
+    /** The least request of a kind: its discriminators only, which is all a refusal reads. */
+    const nested: Record<string, (sub: string) => object> = {
+      'settings.read': sub => ({ type: 'read', scope: { kind: sub } }), 'settings.save': sub => ({ type: 'save', edit: { scope: { kind: sub } } }),
+      'settings.act': sub => ({ type: 'act', action: { kind: sub } }), 'machine.mcp': sub => ({ type: 'mcp', request: { action: sub } }),
+      'machine.service': sub => ({ type: 'service', action: sub }), 'machine.bridgeImport': sub => ({ type: 'bridgeImport', action: sub }),
+    };
+    const skeleton = (kind: string): Request => {
+      const [method, type, sub] = kind.split('.') as [string, string, string | undefined];
+      const shapes = method === 'schedule' ? [{ botId: BOT, request: { action: type } }]
+        : sub !== undefined ? [nested[`${method}.${type}`]!(sub)] : [{ type }, { action: type }];
+      const found = shapes.map(payload => request(method, payload)).find(each => { try { return rpcKindOf(each) === kind; } catch { return false; } });
+      if (!found) throw new Error(`no skeleton for ${kind}`);
+      return found;
+    };
+    const refused = [...RULES.keys()].filter(kind => !(kind in allowed));
+    expect(refused.length).toBeGreaterThan(100);
+    for (const kind of refused) {
+      const decision = await authorize(peer('group'), skeleton(kind), all);
+      const cell = RULES.get(kind)!.places.group;
+      expect(decision, kind).toEqual(cell === 'not-dm' ? { ok: false, code: 'not-dm', message: NOT_DM_MESSAGE }
+        : cell === 'not-group' ? expect.objectContaining({ ok: false, code: 'not-group' }) : { ok: false, code: 'permission_denied', message: SESSION_DENIED });
+    }
+    // asked only for the whitelist's ★ requests
+    expect(askBot.mock.calls.every(([, , action]) => action.kind === 'schedule' || action.kind === 'memory')).toBe(true);
   });
 
   it('refuses the deny rows, and schedules outside a group with the not-group sentence', async () => {
@@ -104,7 +168,9 @@ describe('the bot-session column (unit)', () => {
     for (const place of ['group', 'dm', 'comment'] as const) {
       expect(await authorize(peer(place), request('collaboration', { action: 'usage', force: true }), deps)).toMatchObject({ ok: false, code: 'permission_denied', message: SESSION_DENIED });
     }
-    expect(await authorize(peer('group'), request('collaboration', { action: 'providerModels', provider: 'codex' }), deps)).toMatchObject({ ok: true });
+    expect(await authorize(peer('dm', { bot: BOT }), request('collaboration', { action: 'providerModels', provider: 'codex' }), deps)).toMatchObject({ ok: true });
+    // s1b: not in a group's whitelist
+    expect(await authorize(peer('group'), request('collaboration', { action: 'providerModels', provider: 'codex' }), deps)).toEqual({ ok: false, code: 'permission_denied', message: SESSION_DENIED });
   });
 
   // devices-4b 4.5: the memory tools' limits are the Bot process's to check; the host keeps the session to its reach first
@@ -155,8 +221,10 @@ describe('the bot-session column (unit)', () => {
     expect(await authorize(peer('dm', { bot: BOT, group: GROUP }), save('thread-y'), owned)).toMatchObject({ ok: true });
     expect(await authorize(peer('dm', { bot: BOT }), save('thread-z'), owned)).toMatchObject({ ok: true });
     const models = (threadId: string) => request('settings', { type: 'models', query: { botId: BOT, backend: 'codex-appserver', purpose: 'session', threadId } });
-    expect(await authorize(peer('group'), models('thread-z'), deps)).toMatchObject({ ok: false, code: 'permission_denied' });
-    expect(await authorize(peer('group'), models('thread-y'), deps)).toMatchObject({ ok: true });
+    expect(await authorize(peer('dm', { bot: BOT, group: GROUP }), models('thread-z'), owned)).toMatchObject({ ok: false, code: 'permission_denied' });
+    expect(await authorize(peer('dm', { bot: BOT, group: GROUP }), models('thread-y'), owned)).toMatchObject({ ok: true });
+    // s1b: a group's session lists no models
+    expect(await authorize(peer('group'), models('thread-y'), deps)).toEqual({ ok: false, code: 'permission_denied', message: SESSION_DENIED });
   });
 
   // D4a review SEC-1/R5: a token that ended is not good for one more request on a connection already made with it
@@ -446,7 +514,9 @@ describe('a Bot session against the daemon', () => {
         return reply;
       };
       const group = fixture.sessionTokens.issue({ appId: BOT, place: 'group', chatId: GROUP, sessionId: 'ses_0123456789abcdef' });
-      for (const reply of [await ask(group, { bot: BOT, group: GROUP }), await ask(fixture.credential, { bot: BOT, group: GROUP })]) {
+      // s1b: a group's session reads no history at all; the owner narrowed to the group still gets its own sessions only
+      expect(await ask(group, { bot: BOT, group: GROUP })).toMatchObject({ type: 'error', code: 'permission_denied', message: SESSION_DENIED });
+      for (const reply of [await ask(fixture.credential, { bot: BOT, group: GROUP })]) {
         expect(reply).toMatchObject({ type: 'response', payload: { kind: 'history', sessions: [bound], threads: [native('native-a', 'A 群自己的会话')] } });
         for (const leak of ['native-b', 'B 群的发版计划', 'native-owner', '主人终端']) expect(JSON.stringify(reply)).not.toContain(leak);
       }

@@ -70,9 +70,10 @@ describe('s47 MCP authorization and structured commands', () => {
     expect(f.save).not.toHaveBeenCalled();
   });
   // settings-dm-only: settings are a private chat's, read and written; a group and a comment have none of the three.
+  // s1b: a group's whitelist has its own members and not the bot's groups; a comment neither.
   it.each([
-    [{ kind: 'group', chatId: 'visible-chat' }, ['session_info', 'feishu_groups', 'feishu_members']],
-    [{ kind: 'doc', docId: 'doc' }, ['session_info', 'feishu_groups', 'feishu_members']],
+    [{ kind: 'group', chatId: 'visible-chat' }, ['session_info', 'feishu_members']],
+    [{ kind: 'doc', docId: 'doc' }, ['session_info']],
     [{ kind: 'p2p' }, ['session_info', 'settings_get', 'settings_access', 'settings_set', 'feishu_groups', 'feishu_members']],
   ] satisfies [AgentPlace, string[]][])('lists the settings tools in a private chat only: %j', (place, names) => {
     expect(fixture({ place }).listed()).toEqual(names);
@@ -106,13 +107,20 @@ describe('s47 MCP authorization and structured commands', () => {
     expect(await f.call('settings_set', { edit: { ...edit, scope: { ...projectScope, botId: 'cli_other' } } })).toMatchObject({ ok: false, code: 'refused' });
     expect(f.save).not.toHaveBeenCalled();
   });
-  it('filters a nonadministrator group list locally without asking for all upstream groups', async () => {
-    const f = fixture({ admin: false, place: { kind: 'group', chatId: 'visible-chat' } });
-    expect(await f.call('feishu_groups', {})).toEqual({ ok: true, result: { groups: [{ chatId: 'visible-chat', name: 'visible', bound: true }] } });
-    expect(f.groups).not.toHaveBeenCalled();
+  it('has no group list in a group or a comment, and refuses a private chat\'s nonadministrator without asking upstream', async () => {
+    for (const place of [{ kind: 'group', chatId: 'visible-chat' }, { kind: 'doc', docId: 'doc' }] satisfies AgentPlace[]) {
+      const f = fixture({ admin: true, place });
+      expect(await f.call('feishu_groups', {})).toEqual({ ok: false, code: 'unknown-tool', message: '没有这个工具。' });
+      expect(f.groups).not.toHaveBeenCalled();
+    }
     const dm = fixture({ admin: false });
-    expect(await dm.call('feishu_groups', {})).toEqual({ ok: true, result: { groups: [] } });
+    expect(await dm.call('feishu_groups', {})).toMatchObject({ ok: false, code: 'refused' });
     expect(dm.groups).not.toHaveBeenCalled();
+  });
+  it('has no member query in a comment', async () => {
+    const f = fixture({ admin: true, place: { kind: 'doc', docId: 'doc' } });
+    expect(await f.call('feishu_members', { chatId: 'visible-chat' })).toEqual({ ok: false, code: 'unknown-tool', message: '没有这个工具。' });
+    expect(f.members).not.toHaveBeenCalled();
   });
   it('preserves administrator list pagination and shares the direct business function result', async () => {
     const f = fixture();
@@ -144,7 +152,7 @@ describe('s47 MCP authorization and structured commands', () => {
   it('does not expand group visibility when the triggering user is an administrator', async () => {
     const f = fixture({ admin: true, place: { kind: 'group', chatId: 'visible-chat' } });
     expect(await f.call('settings_get', { scope: { ...projectScope, projectName: 'hidden' } })).toMatchObject({ ok: false, code: 'unknown-tool' });
-    expect(await f.call('feishu_groups', {})).toEqual({ ok: true, result: { groups: [{ chatId: 'visible-chat', name: 'visible', bound: true }] } });
+    expect(await f.call('feishu_groups', {})).toMatchObject({ ok: false, code: 'unknown-tool' });
     expect(await f.call('feishu_members', { chatId: 'hidden-chat' })).toMatchObject({ ok: false, code: 'refused' });
     expect(f.groups).not.toHaveBeenCalled(); expect(f.members).not.toHaveBeenCalled();
   });

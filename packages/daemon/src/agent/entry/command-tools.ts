@@ -83,20 +83,18 @@ export function createCommandTools(deps: {
       return { ...result, ...(reason ? { reason } : {}) };
     },
   }, {
-    name: 'feishu_groups', class: 'read', description: '列出当前调用方可见的本 Bot 群。',
+    // s1b: a group's whitelist has its own members, not the bot's groups; a comment has neither.
+    name: 'feishu_groups', class: 'read', places: ['p2p'], description: '列出当前调用方可见的本 Bot 群。',
     input: z.object({ cursor: z.string().max(2000).optional() }).strict(),
     async run(args, ctx) {
       const { cursor } = z.object({ cursor: z.string().optional() }).parse(args);
-      if (!ctx.admin || ctx.place.kind !== 'p2p') {
-        const own = ctx.place.kind === 'group' ? (await deps.projects()).filter(p => p.chatId === ctx.place.chatId) : [];
-        return { groups: own.map(p => ({ chatId: p.chatId, name: p.name, bound: true })) };
-      }
+      if (!ctx.admin || ctx.place.kind !== 'p2p') throw denied();
       const result = await feishuGroups(deps, cursor);
       if (!ctx.admin || ctx.place.kind !== 'p2p') throw denied();
       return result;
     },
   }, {
-    name: 'feishu_members', class: 'read', description: '查询可见群的成员，失败不会伪装成空列表。',
+    name: 'feishu_members', class: 'read', places: ['group', 'p2p'], description: '查询可见群的成员，失败不会伪装成空列表。',
     input: z.object({ chatId: z.string().min(1).max(1000), cursor: z.string().max(2000).optional() }).strict(),
     async run(args, ctx) {
       const { chatId, cursor } = z.object({ chatId: z.string(), cursor: z.string().optional() }).parse(args);

@@ -44,11 +44,17 @@ async function daemonRunning(): Promise<boolean> {
   return readRunningPidLock(paths.appDir).then(lock => lock !== null, () => true);
 }
 
-function daemonContext(io: Io, call: Call): MemoryContext {
+/**
+ * In a Bot's session the projects come from the snapshot, which the daemon cuts to the session's reach (s1b: a group's
+ * session has no library list); the owner's terminal reads the library, unbound projects too.
+ */
+function daemonContext(io: Io, call: Call, session: boolean): MemoryContext {
+  const bound = (projects: readonly { id: string; name: string; bindings: readonly { agentId: string }[] }[]): MemoryProject[] =>
+    projects.map(project => ({ id: project.id, name: project.name, bots: [...new Set(project.bindings.map(binding => binding.agentId))] }));
   return {
     io, source: 'daemon',
-    projects: async () => want('读取项目', await call('读取项目', c => c.library({ type: 'list' })), 'list').projects
-      .map(project => ({ id: project.id, name: project.name, bots: [...new Set(project.bindings.map(binding => binding.agentId))] })),
+    projects: async () => session ? bound((await call('读取快照', c => c.snapshot())).projects ?? [])
+      : bound(want('读取项目', await call('读取项目', c => c.library({ type: 'list' })), 'list').projects),
     bots: async () => (await call('读取快照', c => c.snapshot())).agents.map(agent => ({ id: agent.id, name: agent.name })),
     run: request => call('读写记忆', c => c.memory(request), READS.has(request.type) ? {} : { unknown: CHANGED_MAYBE }),
   };
@@ -84,7 +90,7 @@ export function terminalMemoryContext(io: Io, deps: MemoryTerminalDeps = {}): Me
       if (kind === 'read' && !session && !scoped && !(await (deps.running ?? daemonRunning)())) return fn((deps.files ?? filesContext)(io));
       let reached = false;
       try {
-        return await daemon(async call => { reached = true; return fn(daemonContext(io, call)); });
+        return await daemon(async call => { reached = true; return fn(daemonContext(io, call, session)); });
       } catch (error) {
         if (!reached && error instanceof CommandError && error.kind === 'connection') {
           if (kind === 'write') throw new CommandError('connection', `${error.message}\n${WRITE_NEEDS_DAEMON}`, error);

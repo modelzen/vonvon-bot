@@ -136,3 +136,149 @@ Claude 在 JP-VPS 上做，不发飞书消息、不碰 `accept-home2`：daemon �
 5. **不是主人看到只读名单，而不是一句"只有主人能改"。** 管理员仍能看谁是管理员；旧卡片上的按钮点了也只回只读名单。
 6. **`context-weave.ts` 里"需要时用 vonvon 飞书 skill 查"那几句没改。** 那是 s14 时的开场提示（早于 K1），说的正是 3.5 以后做的查询；改它会动话题开场的文字和一批测试，不在本片范围，留给做 3.5 查询的那一片一起定。
 7. **评论会话被拒也是这句"群里不能改设置……"。** `NOT_DM_MESSAGE` 只有一句，评论会话原来用的也是同一个常量；评论会话里几乎碰不到设置，这一批不单写一句。
+
+## S1b：群里只给干活要用的（owner 2026-11-02 晚）
+
+S1 做完、送审查之前，owner 又定了几条，在同一个分支上接着做：
+- 群里不管经工具还是经命令行，凡是改配置的都禁止，而且要在命令行和工具这一层挡，不靠 skill 的文字。
+- 查询也要管：隐私信息查不到，但不能影响功能，比如定时任务的查询不能禁。
+- vonvon 自己的 skill 都以 `vonvon` 开头。
+- 群里的 `/settings` 去掉。
+- 飞书消息的格式改成 skill，开场说明只留每一轮都要守的。
+- 两个 skill 的描述要写到该用时一定会被打开，并用两家的真实模型测过。
+
+### 做了什么
+
+1. **群改成白名单（`D/server/authz.ts` 的 `RULES`）。** 群这一格只留干活要用的，其余默认拒绝：
+   - `schedule.*`（Bot 进程判）；
+   - `memory list/add/edit/archive`（Bot 进程判）；
+   - `command.listGroupMembers`（只查本群）；
+   - `admin.negotiate`；
+   - `snapshot.get`（收窄过的快照）。
+
+   被拒的有：
+   - `command.refresh/listPendingGroups/listJoinedGroups`、`settings.models/sessions`；
+   - `collaboration.history/context/project/providerModels`、`library.list`；
+   - `memory.export/events`、`admin.daemonStatus`。
+
+   改设置的回 `not-dm` 那句，其余回 `SESSION_DENIED`（"这个操作不能从 Bot 会话里做。"），不透露有什么。评论这一格核对过，只有 `snapshot.get`（只剩 bot 本身）和 `admin.negotiate` 放行。`test/authz-session.test.ts` 加了一个探针：群令牌把 `rpcKinds()` 的每一种都调一次，白名单里的放行，其余全拒。
+2. **快照（`D/server/snapshot-filter.ts` 的 `sessionSnapshot`）。** 私聊令牌照旧用 `filterSnapshot`。群令牌和评论令牌只剩：
+   - 本 bot 的 id、名字和状态；
+   - 本群的 id 和名字；
+   - 本群项目的 id、名字和本群那一条绑定。
+
+   `memberships`、`tools`、`jobs` 都是空的，文件夹、数据目录、连接说明填空字符串。`http.ts` 推的 `snapshot` 事件也走同一个函数。
+3. **记忆回包（`groupMemoryReply`）。** 群令牌看记忆，回包收窄到和 `memory_list` 工具一样：
+   - 只列现行条目；
+   - 去掉最后修改人、来源里的 bot 和 openId、事件号、新增 id、问题清单；
+   - 分支不带创建人。
+
+   `export`、`events` 里有作者和改前的原文，只在私聊里给。
+4. **进程内工具。** `feishu_groups` 只在私聊里有（`places: ['p2p']`），`feishu_members` 只在群和私聊。群里的工具剩 `session_info`、`feishu_members`、`memory_*`、`schedule_*`。Codex 群会话本来只有 `schedule_*`，没动。
+5. **命令行。**
+   - `not-dm` 只打那一句，不加"读取设置失败："（S1 的第 5 个待定问题）。
+   - 会话的快照里看不到任何绑定时（群会话、评论会话），`pickGroup` 回 `SESSION_DENIED`（exit 4），不说"没有绑定"。`settings` 在这种情况下把 `--group` 原样交给 daemon，daemon 回 `not-dm` 那句。
+   - `schedule --group <项目名>`、`memory --project` 在会话里从快照的 `projects` 解析，不读 `library.list`。
+6. **`/settings` 只在私聊里有。**
+   - 群里三处 `/settings` 分支（单会话群的主区、话题里、多会话群的主区）都改成回 `NOT_DM_MESSAGE`，不发卡、不看是不是管理员。
+   - `GS.*` 五个回调（免 @、旧的自动压缩、回群设置卡、默认模型、默认模型表单）一律把卡变成这句话，什么也不写。这些卡只在群里发过，回调里分不出位置，也不用分。
+   - `/help`、欢迎卡和"本群默认需 @"那一行都去掉了 `/settings`。
+
+   顺带查了还有没有别的，在群里发出来就能改持久设置的卡片或命令，结果只有 `GS.*` 一组：
+   - `/model`（`MC.*`）只改当前会话；
+   - 新群的绑定卡发给 open_id，也就是私聊；
+   - `DM.*` 只在私聊；
+   - `/new`、`/clear`、`/compact`、`/context`、`/resume`、`/goal` 是会话操作。
+7. **skill。**
+   - `scheduled-tasks.ts` 用 `git mv` 改成 `schedule.ts`：名字 `vonvon-schedule`，标题"定时任务"，描述照 s1b 的草稿。正文不变。
+   - 新加 `feishu-message.ts`：名字 `vonvon-feishu-message`，标题"飞书消息格式"。正文照 `card/markdown-render.ts`、`report-render.ts`、`file-refs.ts` 实际支持的写：
+     - 能显示的写法，含表格（最多 5 张，格子里的图片挪到末尾，不放进 `feishu-card`）和 `<font color>`；
+     - 发文件；
+     - 图片和截图；
+     - `feishu-card` 卡片；
+     - 不要 `codex-followup`。
+   - `builtinSkillsOfSet('group')` 返回这两个 skill。
+   - 名字不用迁移：内置 skill 的名字每次开会话都从代码算，不写到盘上；群的禁用名单只记用户 skill 的路径。
+   - 文件改成 0444。内容没变也会把权限改回 0444；覆盖或删除前先改成 0644，因为 Windows 不让 rename 或 unlink 只读文件。
+8. **开场说明（`bridge-instructions.ts`）。** 只留：
+   - 第一句；
+   - 红线和不复述开场；
+   - 记忆约定；
+   - 设置更新只认最前面那份；
+   - 自动消息；
+   - 交付文件那一句（`FILE_DELIVERY`）。
+
+   卡片和图片的写法挪进 skill。`codex-file-citation` 那句去掉，因为 `file-refs.ts` 已经把它转成文件链接。`codex-followup` 没有处理，所以写进 skill 的"别的"一节。
+9. **评论会话的拒绝句。** `NOT_DM_COMMENT_MESSAGE`："评论里不能改设置。私聊我可以改，也可以在 Vonvon Bot 客户端或命令行里改。"按位置选句子，工具和 daemon 都用 `notDmMessage(place)`（S1 的第 4 个待定问题）。
+10. **`context-weave.ts`。** 删掉"需要时用 vonvon 飞书 skill 查""更多话题用 vonvon 飞书 skill 列"这几处，因为那个 skill 不存在。留下的都是事实：哪些内容不在这里、哪些没带进来（S1 的第 2 个待定问题）。
+11. **252-3。** S1 已经记进 3.8"留下的风险"，这次不改代码。
+
+### 和 s1b 的要求不一样的地方
+
+1. **群快照不给 `memberships`。** s1b 说的是"命令行解析名字需要的字段"。但 `membershipSchema` 的权限档、目录、后端、会话方式都是必填，填假值会让命令行和读快照的 agent 读错，所以给空数组。解析名字改用 `projects` 里本群项目的那一条绑定，`schedule` 和 `memory` 两个命令按它解析。代价：群会话里 `vonvon group list` 是空的，`--group` 写错名字时回"这个操作不能从 Bot 会话里做。"。
+2. **`admin.daemonStatus` 在群里也拒。** s1b 让按实际调用确认要不要放行。实际情况：会话里的 `vonvon daemon status` 读锁文件，不发这条 RPC（`cli-bot-session.test.ts` 有这一步），回包里有本机路径，所以拒。`snapshot.get` 照旧放行，命令行每条命令都先读它。
+3. **记忆的 `list`、`item` 回包也收窄。** s1b 只要求核对 `export`、`events`。但 `list` 的回包也带最后修改人、来源 openId 和事件号，比 `memory_list` 工具给的多，所以一起收窄。`export`、`events` 拒绝。
+4. **飞书消息格式 skill 的正文比开场说明里原来那段多。** 多了能显示的写法（标题、表格、颜色）和 `codex-followup`，都是照渲染器实际支持的写的。
+5. **S1 里"实现时和计划不一样的地方"第 1、6、7 条被这一节改掉了。** `group show`、`session list`、`models`、`feishu groups` 在群里也拒；话题开场那几句改了；评论会话有它自己的句子。第 8 节验收要点第 3 条也照这一节改。
+
+### 触发测试
+
+脚本 `packages/daemon/test/manual/skill-trigger-eval.ts`，开头写了怎么跑。每条消息各开一个短会话，开法和 vonvon 开群会话一样：
+- Claude 走 Agent SDK，带内置插件；Codex 走 app-server，带 `selectedCapabilityRoots`。
+- 只读档；工具是群的那一套，每次调用都回"没有执行"；用户消息前面加一段群的记录块。
+
+用的是 JP-VPS 上已登录的账号，HOME 没改，用后端的默认模型：Claude 是 `claude-opus-5-5`（Agent SDK 0.3.296），Codex 是 `gpt-6.1-sol`（0.163.0）。
+
+怎么算"打开了"：
+- Claude 看 `Skill` 调用。
+- Codex 读的是线程的 rollout。它通过 `skills.read` 读 skill 正文，经常写在 code-mode 的 `exec` 脚本里，和任务工具在同一个脚本里调；这种调用不在 app-server 推来的事件里，所以只看事件会全部判成没打开。
+
+结果：第一轮两家 46 条全对，描述就用 s1b 的起点草稿，没有改。
+
+花了大约 57 次调用。其中 11 次是在修判定：
+- 第一次接 Claude 的 SDK 消息没接上；
+- Codex 第一版只看事件。
+这两次跑的结果都作废。
+
+| # | 消息 | 应该打开 | Claude | Codex |
+|---|---|---|---|---|
+| s1 | 每天早上 9 点在群里发一下昨天的进度 | 定时任务 | ✓ 定时任务 | ✓ 定时任务 |
+| s2 | 20 分钟后再看看构建结果 | 定时任务 | ✓ 定时任务 | ✓ 定时任务 |
+| s3 | 本群有哪些定时任务 | 定时任务 | ✓ 定时任务 | ✓ 定时任务 |
+| s4 | 把下周一的提醒停掉 | 定时任务 | ✓ 定时任务 | ✓ 定时任务 |
+| s5 | 每个工作日下午 6 点提醒大家填日报 | 定时任务 | ✓ 定时任务 | ✓ 定时任务 |
+| s6 | 明天上午十点提醒我跟进一下合同 | 定时任务 | ✓ 定时任务 | ✓ 定时任务 |
+| s7 | 每隔两小时检查一下线上告警，有问题就在群里说 | 定时任务 | ✓ 定时任务 | ✓ 定时任务 |
+| s8 | 把周报那个任务改成每周五下午 4 点 | 定时任务 | ✓ 定时任务 | ✓ 定时任务 |
+| s9 | 部署完了，你过半小时回来看看日志有没有报错 | 定时任务 | ✓ 定时任务 | ✓ 定时任务 |
+| f1 | 用卡片总结一下这次改动：登录页改版、修了导出的乱码、接口超时从 10 秒改成 30 秒 | 飞书消息格式 | ✓ 飞书消息格式 | ✓ 飞书消息格式 |
+| f2 | 把报告文件发给我 | 飞书消息格式 | ✓ 飞书消息格式 | ✓ 飞书消息格式 |
+| f3 | 截个图放上来 | 飞书消息格式 | ✓ 飞书消息格式 | ✓ 飞书消息格式 |
+| f4 | 把 Redis、Memcached、本地缓存三个方案的优缺点做成表格发群里 | 飞书消息格式 | ✓ 飞书消息格式 | ✓ 飞书消息格式 |
+| f5 | 做一张本周的 changelog 卡片 | 飞书消息格式 | ✓ 飞书消息格式 | ✓ 飞书消息格式 |
+| f6 | 把刚才生成的 CSV 导出给我下载 | 飞书消息格式 | ✓ 飞书消息格式 | ✓ 飞书消息格式 |
+| f7 | 回复里把关键风险用红色标出来：数据库迁移没有回滚脚本、证书下周过期 | 飞书消息格式 | ✓ 飞书消息格式 | ✓ 飞书消息格式 |
+| f8 | 画个部署架构图放到回复里 | 飞书消息格式 | ✓ 飞书消息格式 | ✓ 飞书消息格式 |
+| f9 | 帮我把这周的进展整理成周报，用标题和分隔线排好版：完成支付对账、上线灰度、修复 3 个线上问题 | 飞书消息格式 | ✓ 飞书消息格式 | ✓ 飞书消息格式 |
+| n1 | 解释一下这段代码：`const total = items.reduce((sum, item) => sum + item.price, 0)` | 都不打开 | ✓ 都没打开 | ✓ 都没打开 |
+| n2 | 帮我看下这个 bug：登录成功后跳到了 404 页面，可能是什么原因 | 都不打开 | ✓ 都没打开 | ✓ 都没打开 |
+| n3 | 今天天气怎么样 | 都不打开 | ✓ 都没打开 | ✓ 都没打开 |
+| n4 | TypeScript 里 interface 和 type 有什么区别？ | 都不打开 | ✓ 都没打开 | ✓ 都没打开 |
+| n5 | JS 的 setInterval 和 setTimeout 有什么区别？ | 都不打开 | ✓ 都没打开 | ✓ 都没打开 |
+
+旁注：
+- Claude 在 n2 跑了一次 `Bash`，看工作目录。
+- Codex 在 f2、f6 也去列了工作目录；f8 同时打开了这台机器上用户自己的 `gstack-diagram` skill，还调了生图；n3 回问用户在哪个城市。
+
+限制：
+- 每条消息每家只跑了一次。
+- Claude 打开第一个 skill 就停，看不到它后来还会不会打开另一个。
+- 用的是这台机器的个人设置，`~/.claude` 和 `~/.codex` 里个人 skill 很多。owner 的 Mac 上没测。
+
+### 验收要点（S1b）
+
+1. 群令牌按 `rpcKinds()` 每种 RPC 各调一次：白名单里的放行，其余全拒。被拒的文字里不出现别的群、路径和模型。
+2. 群会话的快照里，没有别的群、文件夹、权限档、模型和设备。
+3. 群里 `/settings` 只回那句话、不发卡；旧群设置卡被点后，设置不落盘；私聊 `/settings` 照旧。
+4. 群会话的内置 skill 是 `vonvon-schedule`、`vonvon-feishu-message`，文件是 0444；开场说明里没有卡片的写法，有交付文件那一句。
+5. 触发测试的结果写在 PR 里。

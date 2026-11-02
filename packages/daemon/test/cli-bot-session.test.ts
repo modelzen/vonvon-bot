@@ -12,6 +12,7 @@ import { loadCommands, loadLocalOnly } from './helpers/cli-commands';
 import { fakeService, startFixture } from './server-fixture';
 import type { AuthzDeps } from '../src/server/authz';
 import agentFixture from '../../protocol/test/fixtures/agent-settings.json';
+import { NOT_DM_MESSAGE } from '../src/agent/entry/registry';
 
 /**
  * devices-4a 4.9, run as a Bot session's shell would: the CLI bundle against a daemon in this process. A session's
@@ -102,7 +103,16 @@ describe('a Bot session\'s command line', () => {
         ['settings', 'set', '--group', GROUP, 'permission.mode=full'], ['settings', 'get', '--group', GROUP]]) {
         const write = await run(d.fixture.home, d.home, [...args, '--scope', `bot=${BOT},group=${GROUP}`], { VONVON_SESSION: d.token });
         expect(write, args.join(' ')).toMatchObject({ code: 4, json: { error: { kind: 'refused', reason: 'not-dm' } } });
-        expect(write.json.error?.message).toMatch(/：群里不能改设置。私聊我可以改，也可以在 Vonvon Bot 客户端或命令行里改。$/);
+        // s1b: the sentence alone, not "读取设置失败：…" from the read a write starts with
+        expect(write.json.error?.message, args.join(' ')).toBe(NOT_DM_MESSAGE);
+      }
+      // s1b: a group's queries are its whitelist; the rest is refused without saying what is there
+      for (const args of [['group', 'show', '研发'], ['group', 'joined'], ['group', 'pending'], ['session', 'list', '--group', GROUP], ['settings', 'models', '--backend', 'codex', '--purpose', 'project'], ['project', 'list'],
+        ['memory', 'export', '--bot', BOT], ['memory', 'events', 'p_prj_0a1b2c3d:abcdef', '--bot', BOT], ['daemon', 'logs']]) {
+        const read = await run(d.fixture.home, d.home, [...args, '--scope', `bot=${BOT},group=${GROUP}`], { VONVON_SESSION: d.token });
+        expect(read, args.join(' ')).toMatchObject({ code: 4, json: { ok: false, error: { kind: 'refused' } } });
+        expect(JSON.stringify(read.json), args.join(' ')).not.toContain('运营');
+        expect(JSON.stringify(read.json), args.join(' ')).not.toContain('/w');
       }
       // D4a review SEC-2: service status takes the lock as it is, never asking the daemon with local-credential (unreadable here)
       const service = await run(d.fixture.home, d.home, ['service', 'status'], { VONVON_SESSION: d.token });

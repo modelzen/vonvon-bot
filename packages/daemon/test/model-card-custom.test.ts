@@ -70,6 +70,7 @@ vi.mock('../src/card/run-card-stream', () => ({
 import { createOrchestrator } from '../src/bot/handle-message';
 import { MC } from '../src/card/command-cards';
 import { GS } from '../src/card/dm-cards';
+import { NOT_DM_MESSAGE } from '../src/agent/entry/registry';
 import { CUSTOM_MODEL_OPTION } from '../src/agent/model-id';
 import type { AppConfig } from '../src/config/schema';
 
@@ -299,7 +300,7 @@ describe('/model 闪电单击切换速度', () => {
   });
 });
 
-describe('群设置里的默认模型手填 id', () => {
+describe('群里旧的群设置卡（s1b）', () => {
   const submitDefault = (formValue: Record<string, unknown>) =>
     orchestrator.dispatcher.handle({
       messageId: 'gs-card',
@@ -309,23 +310,12 @@ describe('群设置里的默认模型手填 id', () => {
       raw: { action: { form_value: formValue } },
     } as never);
 
-  it('合格就按手填保存；不合格就带提示重发默认模型卡，不保存', async () => {
+  it('默认模型表单提交被拒：卡变成那句话，不保存，也不重发卡', async () => {
     setup();
-    await submitDefault({ model: CUSTOM_MODEL_OPTION, customModel: 'a b', effort: 'high' });
-    await until(() => expect(fake.sent).toHaveLength(1));
-    expect(fake.setDefault).not.toHaveBeenCalled();
-    const retry = JSON.stringify(fake.sent[0]!.card);
-    expect(retry).toContain('不能包含空格');
-    expect(retry).toContain(GS.modelDefaultSubmit);
-
     await submitDefault({ model: CUSTOM_MODEL_OPTION, customModel: 'deepseek-chat', effort: 'max' });
-    await until(() => expect(fake.setDefault).toHaveBeenCalledOnce());
-    expect(fake.setDefault).toHaveBeenCalledWith({ projectName: 'test', model: 'deepseek-chat', effort: 'max', custom: true });
-    await until(() => expect(fake.sent).toHaveLength(2));
-
-    await submitDefault({ model: 'gone', effort: 'high' });
-    await until(() => expect(fake.sent).toHaveLength(3));
-    expect(fake.setDefault).toHaveBeenCalledOnce();
-    expect(JSON.stringify(fake.sent[2]!.card)).toContain('所选模型无效或已下架');
+    await until(() => expect(fake.update).toHaveBeenCalledTimes(1));
+    expect(JSON.stringify(fake.update.mock.calls[0]?.[2])).toContain(NOT_DM_MESSAGE);
+    expect(fake.setDefault).not.toHaveBeenCalled();
+    expect(fake.sent).toEqual([]);
   });
 });
