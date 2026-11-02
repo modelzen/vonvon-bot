@@ -1,6 +1,5 @@
 import { isAbsolute } from 'node:path';
 import { JUDGE_PROVIDER_IDS } from '@vonvon/protocol';
-import { REASONING_EFFORTS } from '../agent/types';
 import { isHomeRelative } from '../platform/home-path';
 import type { SettingsAction, SettingsEdit, SettingsScope, ModelQuery } from './settings-types';
 export class SettingsInputError extends Error {
@@ -17,6 +16,7 @@ const one = (...values: readonly unknown[]): Rule => value => values.includes(va
 const integer = (min: number, max: number): Rule => value => typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
 const identifier = (prefix: string): Rule => value => typeof value === 'string' && new RegExp(`^${prefix}_[A-Za-z0-9_-]{1,200}$`).test(value);
 const array = (rule: Rule): Rule => value => Array.isArray(value) && value.length <= 1000 && value.every(rule);
+const stringMap = (rule: Rule): Rule => value => isPlainObject(value) && Object.keys(value as object).length <= 1000 && Object.entries(value as Record<string, unknown>).every(([key, entry]) => text(key) && !['__proto__', 'constructor', 'prototype'].includes(key) && rule(entry));
 const path: Rule = value => value === null || typeof value === 'string' && value.length <= 4096 && !/[\r\n\0]/.test(value) && (isAbsolute(value) || isHomeRelative(value));
 export function settingsObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -36,11 +36,11 @@ const selection: Rule = value => shape({
 })(value) || shape({
   kind: one('explicit'),
   model: text,
-  effort: one(...REASONING_EFFORTS)
+  effort: text
 })(value) || shape({
   kind: one('explicit'),
   model: text,
-  effort: one(...REASONING_EFFORTS),
+  effort: text,
   custom: bool
 })(value);
 // The judge model (s23d): llm may leave out backend, effort and custom; decision takes no backend.
@@ -53,7 +53,7 @@ const judgeSelection: Rule = value => shape({
   kind: one('llm'),
   backend: text,
   model: text,
-  effort: one(...REASONING_EFFORTS),
+  effort: text,
   custom: bool
 }, true)(value) && (value as Record<string, unknown>).kind === 'llm' && Object.hasOwn(value as object, 'model') || shape({
   kind: one('decision'),
@@ -65,7 +65,7 @@ const title: Rule = value => shape({
 })(value) || shape({
   enabled: one(true),
   model: text,
-  effort: one(...REASONING_EFFORTS)
+  effort: text
 })(value);
 const schemas: Record<string, Record<string, Rule>> = {
   agent: {
@@ -89,7 +89,7 @@ const schemas: Record<string, Record<string, Rule>> = {
       selection
     }, true),
     titles: value => shape({ policy: value => shape({ enabled: one(false) })(value) || shape({
-      enabled: one(true), backend: text, model: text, effort: one(...REASONING_EFFORTS)
+      enabled: one(true), backend: text, model: text, effort: text
     })(value) })(value) || shape({ byBackend: value => {
       const map = settingsObject(value);
       return Object.keys(map).length === 1 && Object.entries(map).every(([key, policy]) => text(key) && !['__proto__', 'constructor', 'prototype'].includes(key) && title(policy));
@@ -107,7 +107,7 @@ const schemas: Record<string, Record<string, Rule>> = {
   project: {
     profile: shape({ persona: body, memory: body, inheritPersona: bool, inheritMemory: bool }, true),
     role: shape({ supplement: body }, true),
-    modelAccess: shape({ backend: text, models: value => array(text)(value) && (value as unknown[]).length > 0, efforts: array(one(...REASONING_EFFORTS)) }, true),
+    modelAccess: shape({ backend: text, models: value => array(text)(value) && (value as unknown[]).length > 0, efforts: array(text), modelEfforts: stringMap(array(text)), modelServiceTiers: stringMap(array(one('fast', 'ultrafast'))), defaultModel: text, defaultEffort: text }, true),
     workspace: shape({ primary: value => value !== null && path(value), directories: array(value => value !== null && path(value)), repositories: array(value => value !== null && path(value)) }, true),
     smartRules: shape({ respond: body, newTopic: body }, true),
     skills: shape({ disabledPaths: array(selector) }, true),
@@ -143,7 +143,7 @@ const schemas: Record<string, Record<string, Rule>> = {
     judge: shape({ defaultProvider: one(...JUDGE_PROVIDER_IDS), byProvider: value => {
       if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
       return Object.entries(value).every(([provider, choice]) =>
-        text(provider) && !['__proto__','constructor','prototype'].includes(provider) && shape({ model: text, effort: one(...REASONING_EFFORTS), custom: bool, endpoint: value => typeof value === 'string' && value.length <= 2048 }, true)(choice)
+        text(provider) && !['__proto__','constructor','prototype'].includes(provider) && shape({ model: text, effort: text, custom: bool, endpoint: value => typeof value === 'string' && value.length <= 2048 }, true)(choice)
         && Object.hasOwn(choice as object, 'model'));
     } }, true)
   },
@@ -199,6 +199,7 @@ export function parseModelQuery(input: unknown): ModelQuery {
     botId: identifier('cli'),
     backend: text,
     purpose: one('project', 'session', 'comments', 'titles', 'judge'),
+    refresh: value => value === undefined || bool(value),
     threadId: value => value === undefined || text(value)
   }, true)(input) || !['botId', 'backend', 'purpose'].every(key => Object.hasOwn(input as object, key)))
     throw new SettingsInputError('模型查询无效');

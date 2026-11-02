@@ -1,9 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Readable, Writable } from 'node:stream';
 import { channelOver, exitOf, killAndReject, spawned, type HolderChannel } from './holder-channel';
 import { startTokenFromFileTime } from './identity';
@@ -25,6 +26,14 @@ using System.Threading;
 using Microsoft.Win32.SafeHandles;
 
 public static class VonvonSupervisor {
+  public static int Main(string[] args) {
+    if(args.Length!=3) return 10;
+    using(var sha=System.Security.Cryptography.SHA256.Create()) {
+      byte[] bytes=File.ReadAllBytes(System.Reflection.Assembly.GetExecutingAssembly().Location);
+      Environment.SetEnvironmentVariable("VONVON_SUPERVISOR_ASSEMBLY_SHA256",BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant());
+    }
+    return Run(args[0],args[1],args[2]);
+  }
   [StructLayout(LayoutKind.Sequential)] struct IO { public ulong readOperations,writeOperations,otherOperations,readBytes,writeBytes,otherBytes; }
   [StructLayout(LayoutKind.Sequential)] struct Limits {
     public long processTime,jobTime; public uint flags; public UIntPtr minWorkingSet,maxWorkingSet; public uint active;
@@ -184,7 +193,9 @@ public static class VonvonSupervisor {
     if(!GetProcessTimes(GetCurrentProcess(),out creation,out exitTime,out kernel,out user)) { Log("GetProcessTimes failed"); Finish(CODE_INTERNAL); }
     uint pid=(uint)Process.GetCurrentProcess().Id;
     if(!ProcessIdToSessionId(pid,out session)) { Log("ProcessIdToSessionId failed"); Finish(CODE_INTERNAL); }
-    Emit("hello "+token+" "+pid+" "+session+" "+((ulong)creation).ToString());
+    string assemblyHash=Environment.GetEnvironmentVariable("VONVON_SUPERVISOR_ASSEMBLY_SHA256");
+    Environment.SetEnvironmentVariable("VONVON_SUPERVISOR_ASSEMBLY_SHA256",null);
+    Emit("hello "+token+" "+pid+" "+session+" "+((ulong)creation).ToString()+" "+assemblyHash);
     string ok=reader.ReadLine();
     if(ok!="ok") { Log("not authenticated: "+(ok==null?"EOF":ok)); Finish(CODE_NEVER_LAUNCHED); }
     Log("authenticated; job "+jobName);
@@ -312,31 +323,66 @@ public static class VonvonSupervisor {
 `;
 
 export const SUPERVISOR_LOADER = [
-  'param([string]$Pipe, [string]$Job, [string]$Log)',
+  'param([string]$Pipe, [string]$Job, [string]$Log, [string]$SourceHash, [string]$AssemblyHash, [string]$AssemblyFile)',
   "$ErrorActionPreference = 'Stop'",
-  "Add-Type -Path (Join-Path $PSScriptRoot 'supervisor.cs') -ReferencedAssemblies 'System.Core.dll'",
+  "$assembly = if ($AssemblyHash) { $AssemblyFile } else { Join-Path $PSScriptRoot 'supervisor.dll' }",
+  '$sha = [System.Security.Cryptography.SHA256]::Create()',
+  'if ($AssemblyHash) {',
+  '  $bytes = [System.IO.File]::ReadAllBytes($assembly)',
+  '  if ([BitConverter]::ToString($sha.ComputeHash($bytes)).Replace("-", "").ToLowerInvariant() -cne $AssemblyHash) { throw "Supervisor assembly changed" }',
+  '} else {',
+  "  $source = [System.IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'supervisor.cs'))",
+  '  if ([BitConverter]::ToString($sha.ComputeHash($source)).Replace("-", "").ToLowerInvariant() -cne $SourceHash) { throw "Supervisor source changed" }',
+  '  $temporary = $assembly + "." + [Guid]::NewGuid().ToString("N") + ".dll"',
+  '  try {',
+  '    Add-Type -TypeDefinition ([Text.Encoding]::UTF8.GetString($source)) -ReferencedAssemblies "System.Core.dll" -OutputAssembly $temporary -OutputType Library',
+  '    $bytes = [System.IO.File]::ReadAllBytes($temporary)',
+  '    [System.IO.File]::Move($temporary, $assembly)',
+  '  } finally { if ([System.IO.File]::Exists($temporary)) { [System.IO.File]::Delete($temporary) } }',
+  '}',
+  '$env:VONVON_SUPERVISOR_ASSEMBLY_SHA256 = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace("-", "").ToLowerInvariant()',
+  '$sha.Dispose()',
+  '[Reflection.Assembly]::Load($bytes) | Out-Null',
   'exit [VonvonSupervisor]::Run($Pipe, $Job, $Log)',
   '',
 ].join('\r\n');
 
 export const POWERSHELL = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 export const newPipeName = (): string => `\\\\.\\pipe\\vonvon-${randomUUID()}`;
-const HELLO = /^hello ([0-9a-f]{64}) ([1-9]\d{0,9}) (\d{1,10}) (\d{1,20})$/;
+const HELLO = /^hello ([0-9a-f]{64}) ([1-9]\d{0,9}) (\d{1,10}) (\d{1,20}) ([0-9a-f]{64})$/;
 const DEFAULT_SPAWN_DEADLINE_MS = 60_000;
 
-/** Writes the source and loader once under a directory named by their hash; a concurrent writer converges on the same bytes. */
+let supervisorFiles: { dir: string; loader: string } | undefined;
+declare const __VONVON_SUPERVISOR_SHA256__: string | undefined;
+const packagedHash = typeof __VONVON_SUPERVISOR_SHA256__ === 'string' ? __VONVON_SUPERVISOR_SHA256__ : undefined;
+let assembly: { file: string; hash: string } | undefined = packagedHash
+  ? { file: join(dirname(fileURLToPath(import.meta.url)), 'native', 'windows-supervisor.exe'), hash: packagedHash } : undefined;
+let compiling: Promise<void> | undefined;
+const digest = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
+function checkedFile(file: string): Buffer {
+  const stat = lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Invalid Windows supervisor file');
+  return readFileSync(file);
+}
+
+/** A fresh per-daemon directory, never a previous daemon's executable cache.
+ * Only the first authenticated holder compiles; later holders verify the digest
+ * retained in this daemon's memory and load those bytes without recompilation. */
 export function ensureSupervisorFiles(): { dir: string; loader: string } {
-  const hash = createHash('sha256').update(SUPERVISOR_SOURCE).update('\0').update(SUPERVISOR_LOADER).digest('hex').slice(0, 16);
-  const dir = join(tmpdir(), `vonvon-supervisor-${hash}`);
+  if (!supervisorFiles) {
+    const dir = mkdtempSync(join(tmpdir(), 'vonvon-supervisor-'));
+    writeFileSync(join(dir, 'supervisor.cs'), SUPERVISOR_SOURCE, { encoding: 'utf8', flag: 'wx' });
+    writeFileSync(join(dir, 'supervisor.ps1'), SUPERVISOR_LOADER, { encoding: 'utf8', flag: 'wx' });
+    supervisorFiles = { dir, loader: join(dir, 'supervisor.ps1') };
+  }
+  const { dir } = supervisorFiles;
+  const stat = lstatSync(dir);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Invalid Windows supervisor directory');
   const files: Array<[string, string]> = [[join(dir, 'supervisor.cs'), SUPERVISOR_SOURCE], [join(dir, 'supervisor.ps1'), SUPERVISOR_LOADER]];
   for (const [path, content] of files) {
-    if (existsSync(path)) continue;
-    mkdirSync(dir, { recursive: true });
-    const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
-    writeFileSync(temp, content, 'utf8');
-    renameSync(temp, path);
+    if (!checkedFile(path).equals(Buffer.from(content))) throw new Error('Windows supervisor source changed');
   }
-  return { dir, loader: join(dir, 'supervisor.ps1') };
+  return supervisorFiles;
 }
 
 export interface WindowsSupervisorOptions {
@@ -348,33 +394,68 @@ export interface WindowsSupervisorOptions {
   spawnDeadlineMs?: number;
 }
 
-type Hello = { token: string; pid: number; session: number; start: string };
+type Hello = { token: string; pid: number; session: number; start: string; assemblyHash: string };
 
 /**
  * Listens on the pipe, spawns the supervisor with the token in its environment, accepts exactly one connection, checks the
  * token and that the hello pid is the child's, answers `ok`, and returns the channel. Any failure kills the child and rejects.
  */
 export async function spawnWindowsSupervisor(options: WindowsSupervisorOptions): Promise<HolderChannel> {
+  if (compiling) await compiling;
+  const first = !assembly;
+  let prepared: (() => void) | undefined;
+  let failed: ((error: unknown) => void) | undefined;
+  if (first) {
+    compiling = new Promise<void>((resolve, reject) => { prepared = resolve; failed = reject; });
+    void compiling.catch(() => undefined);
+  }
+  let channel: HolderChannel | undefined;
+  try {
+    const started = await startWindowsSupervisor(options);
+    channel = started.channel;
+    if (first) {
+      const file = join(ensureSupervisorFiles().dir, 'supervisor.dll');
+      if (digest(checkedFile(file)) !== started.assemblyHash) throw new Error('Windows supervisor assembly changed during compilation');
+      assembly = { file, hash: started.assemblyHash };
+      prepared?.();
+    }
+    return channel;
+  } catch (error) {
+    if (channel) { channel.close(); await channel.exited; }
+    if (first) { supervisorFiles = undefined; failed?.(error); }
+    throw error;
+  } finally { if (first) compiling = undefined; }
+}
+
+async function startWindowsSupervisor(options: WindowsSupervisorOptions): Promise<{channel: HolderChannel; assemblyHash: string}> {
   const files = ensureSupervisorFiles();
+  if (assembly && digest(checkedFile(assembly.file)) !== assembly.hash) throw new Error('Windows supervisor assembly changed');
   const pipeName = options.pipeName ?? newPipeName();
   const token = randomBytes(32).toString('hex');
   const server = createServer();
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(pipeName, resolve); });
-  const child = spawn(POWERSHELL, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', files.loader, pipeName, options.jobName, options.logPath], {
+  const executable = packagedHash ? assembly!.file : POWERSHELL;
+  const arguments_ = packagedHash ? [pipeName, options.jobName, options.logPath]
+    : ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', files.loader, pipeName, options.jobName, options.logPath, digest(SUPERVISOR_SOURCE), assembly?.hash ?? '', assembly?.file ?? ''];
+  const child = spawn(executable, arguments_, {
     env: { ...process.env, VONVON_CONTROL_TOKEN: token }, stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe', 'pipe'], windowsHide: true,
   });
   const stdio = child.stdio as unknown as ReadonlyArray<Readable | Writable | null>;
   const [stdin, stdout, stderr] = [stdio[3] as Writable, stdio[4] as Readable, stdio[5] as Readable];
   stdin.on('error', () => { /* the provider's end may close first */ });
   try {
-    await spawned(child, `windows supervisor ${POWERSHELL}`);
+    await spawned(child, `windows supervisor ${executable}`);
     const { socket, hello, rest } = await authenticate(server, child, token, options.spawnDeadlineMs ?? DEFAULT_SPAWN_DEADLINE_MS);
+    if (assembly && hello.assemblyHash !== assembly.hash) {
+      socket.destroy();
+      return await killAndReject(child, 'Windows supervisor loaded an unexpected assembly');
+    }
     socket.write('ok\n');
-    return channelOver({
+    return { assemblyHash: hello.assemblyHash, channel: channelOver({
       platform: 'win32', child, commands: socket, receipts: socket, initial: rest, close: () => socket.destroy(),
       stdio: { stdin, stdout, stderr },
       start: startTokenFromFileTime(hello.start), osSession: hello.session,
-    });
+    }) };
   } finally {
     server.close();
   }
@@ -418,8 +499,8 @@ function authenticate(server: Server, child: ChildProcess, token: string, deadli
 function parseHello(line: string): Hello | undefined {
   const match = HELLO.exec(line);
   if (!match) return undefined;
-  const [, token, pid, session, start] = match as unknown as [string, string, string, string, string];
-  return { token, pid: Number(pid), session: Number(session), start };
+  const [, token, pid, session, start, assemblyHash] = match as unknown as [string, string, string, string, string, string];
+  return { token, pid: Number(pid), session: Number(session), start, assemblyHash };
 }
 
 const sameToken = (a: string, b: string): boolean => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));

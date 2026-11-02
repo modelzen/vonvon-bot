@@ -278,10 +278,16 @@ describe('desktop update port', () => {
 
 describe('automatic update checks', () => {
   const minute = 60 * 1000, hour = 60 * minute;
-  function clock() {
+  const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+  function clock(start = '2026-11-02T09:00:00+08:00') {
     const timers: { at: number; run: () => void; id: number }[] = [];
-    let now = 0, next = 0;
+    let now = Date.parse(start), next = 0;
+    let resume: (() => void) | undefined;
     return {
+      now: () => now,
+      onResume: (listener: () => void) => { resume = listener; return () => { resume = undefined; }; },
+      resume: () => resume?.(),
+      sleep: (ms: number) => { now += ms; },
       setTimer: (run: () => void, ms: number) => { const id = ++next; timers.push({ at: now + ms, run, id }); return id; },
       clearTimer: (id: unknown) => { const i = timers.findIndex(timer => timer.id === id); if (i >= 0) timers.splice(i, 1); },
       pending: () => timers.map(timer => timer.at - now),
@@ -291,9 +297,9 @@ describe('automatic update checks', () => {
           const due = timers.filter(timer => timer.at <= end).sort((a, b) => a.at - b.at)[0];
           if (!due) break;
           timers.splice(timers.indexOf(due), 1);
-          now = due.at;
+          now = Math.max(now, due.at);
           due.run();
-          await new Promise(resolve => setImmediate(resolve));
+          await flush();
         }
         now = end;
       },
@@ -301,83 +307,186 @@ describe('automatic update checks', () => {
   }
   const found = { state: 'available' as const, current: '1.0.0', latest: '1.1.0', message: 'x' };
 
-  it('checks about a minute after start, then every 24 hours plus up to an hour of random delay', async () => {
+  it('checks after two minutes and finds a later release after 90 minutes without restarting', async () => {
     const time = clock();
-    const check = vi.fn(async () => found);
+    const check = vi.fn().mockResolvedValueOnce({ ...found, state: 'current' }).mockResolvedValue(found);
     const results: unknown[] = [];
-    scheduleUpdateChecks({ check, busy: false }, update => results.push(update), { ...time, random: () => 0.5 });
-    expect(time.pending()).toEqual([minute]);
-    await time.advance(minute - 1);
+    scheduleUpdateChecks({ check, busy: false }, update => results.push(update), time);
+    expect(time.pending()).toEqual([2 * minute]);
+    await time.advance(2 * minute - 1);
     expect(check).not.toHaveBeenCalled();
     await time.advance(1);
     expect(check).toHaveBeenCalledTimes(1);
-    expect(results).toEqual([found]);
-    expect(time.pending()).toEqual([24 * hour + 30 * minute]);
-    await time.advance(24 * hour + 30 * minute);
-    expect(check).toHaveBeenCalledTimes(2);
-    expect(time.pending()).toEqual([24 * hour + 30 * minute]);
+    expect(results).toEqual([{ ...found, state: 'current' }]);
+    expect(time.pending()).toEqual([90 * minute]);
+    await time.advance(90 * minute - 1);
+    expect(check).toHaveBeenCalledTimes(1);
+    await time.advance(1);
+    expect(results).toEqual([{ ...found, state: 'current' }, found]);
+    expect(time.pending()).toEqual([90 * minute]);
   });
 
-  it('keeps the random delay within one hour and uses the default timer without holding the process open', async () => {
-    const time = clock();
-    scheduleUpdateChecks({ check: async () => found, busy: false }, () => {}, { ...time, random: () => 0.999999 });
-    await time.advance(minute);
-    const [delay] = time.pending();
-    expect(delay).toBeGreaterThan(24 * hour);
-    expect(delay).toBeLessThan(25 * hour);
+  it('uses a native timer without keeping the process alive', async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-02T09:00:00+08:00'));
     try {
       const check = vi.fn(async () => found);
       const stop = scheduleUpdateChecks({ check, busy: false }, () => {});
-      await vi.advanceTimersByTimeAsync(minute);
-      expect(check).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2 * minute);
+      expect(check).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(1);
       stop();
+      expect(vi.getTimerCount()).toBe(0);
     } finally { vi.useRealTimers(); }
   });
 
-  it('retries a failed check after an hour and keeps going', async () => {
+  it.each([
+    ['2026-11-02T00:00:00+08:00', true],
+    ['2026-11-02T01:59:59.999+08:00', true],
+    ['2026-11-02T02:00:00+08:00', false],
+    ['2026-11-02T04:59:59.999+08:00', false],
+    ['2026-11-02T05:00:00+08:00', true],
+    ['2026-11-02T23:59:59.999+08:00', true],
+  ])('uses the Beijing time window at %s (allowed: %s)', async (start, allowed) => {
+    const time = clock(start);
+    const check = vi.fn(async () => found);
+    scheduleUpdateChecks({ check, busy: false }, () => {}, { ...time, firstDelayMs: 0 });
+    await time.advance(0);
+    expect(check).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    expect(time.pending()).toEqual([90 * minute]);
+  });
+
+  it.each(['02:08:00', '02:38:00'])('keeps its own phase after skipping the first check at night (%s)', async start => {
+    const time = clock(`2026-11-02T${start}+08:00`);
+    const check = vi.fn(async () => found);
+    scheduleUpdateChecks({ check, busy: false }, () => {}, time);
+    await time.advance(3 * hour + 2 * minute - 1);
+    expect(check).not.toHaveBeenCalled();
+    await time.advance(1);
+    expect(check).toHaveBeenCalledOnce();
+    expect(time.pending()).toEqual([90 * minute]);
+  });
+
+  it('keeps the fixed cycle after an initial failure and a failing result listener', async () => {
     const time = clock();
     const check = vi.fn<() => Promise<typeof found>>().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(found);
-    const results: unknown[] = [];
-    scheduleUpdateChecks({ check, busy: false }, update => results.push(update), { ...time, random: () => 0 });
-    await time.advance(minute);
-    expect(results).toEqual([]);
-    expect(time.pending()).toEqual([hour]);
-    await time.advance(hour);
-    expect(results).toEqual([found]);
+    const onResult = vi.fn(() => { throw new Error('window gone'); });
+    scheduleUpdateChecks({ check, busy: false }, onResult, time);
+    await time.advance(2 * minute);
+    expect(onResult).not.toHaveBeenCalled();
+    expect(time.pending()).toEqual([90 * minute]);
+    await time.advance(90 * minute);
+    expect(onResult).toHaveBeenCalledOnce();
+    expect(time.pending()).toEqual([90 * minute]);
+    await time.advance(90 * minute);
+    expect(check).toHaveBeenCalledTimes(3);
   });
 
-  it('skips a round while a download is running, and a failing listener does not stop the schedule', async () => {
+  it('skips a download in progress and resumes at its own next slot', async () => {
     const time = clock();
     const updater = { check: vi.fn(async () => found), busy: true };
-    const onResult = vi.fn(() => { throw new Error('window gone'); });
-    scheduleUpdateChecks(updater, onResult, { ...time, random: () => 0 });
-    await time.advance(minute);
+    scheduleUpdateChecks(updater, () => {}, time);
+    await time.advance(2 * minute);
     expect(updater.check).not.toHaveBeenCalled();
     updater.busy = false;
-    await time.advance(24 * hour);
-    expect(updater.check).toHaveBeenCalledTimes(1);
-    expect(onResult).toHaveBeenCalledTimes(1);
-    expect(time.pending()).toEqual([24 * hour]);
+    await time.advance(90 * minute);
+    expect(updater.check).toHaveBeenCalledOnce();
+    expect(time.pending()).toEqual([90 * minute]);
   });
 
-  it('stops on quit: no pending timer, and a check already running reports nothing', async () => {
+  it('waits 90 minutes from completion, coalescing resume events during a slow check', async () => {
+    const time = clock();
+    let finish!: (value: typeof found) => void;
+    const check = vi.fn(() => new Promise<typeof found>(resolve => { finish = resolve; }));
+    scheduleUpdateChecks({ check, busy: false }, () => {}, time);
+    await time.advance(2 * minute);
+    await time.advance(3 * minute);
+    time.resume();
+    time.resume();
+    expect(check).toHaveBeenCalledOnce();
+    expect(time.pending()).toEqual([]);
+    finish(found);
+    await flush();
+    expect(time.pending()).toEqual([90 * minute]);
+  });
+
+  it('catches up only once after a long sleep, cancelling the overdue timer', async () => {
+    const time = clock();
+    const check = vi.fn(async () => found);
+    scheduleUpdateChecks({ check, busy: false }, () => {}, time);
+    time.resume();
+    expect(check).not.toHaveBeenCalled();
+    expect(time.pending()).toEqual([2 * minute]);
+    time.sleep(3 * hour);
+    time.resume();
+    time.resume();
+    await time.advance(0);
+    expect(check).toHaveBeenCalledOnce();
+    expect(time.pending()).toEqual([90 * minute]);
+    await time.advance(90 * minute);
+    expect(check).toHaveBeenCalledTimes(2);
+  });
+
+  it('also catches up once when an overdue timer arrives before the resume event', async () => {
+    const time = clock();
+    const check = vi.fn(async () => found);
+    scheduleUpdateChecks({ check, busy: false }, () => {}, time);
+    time.sleep(3 * hour);
+    await time.advance(0);
+    time.resume();
+    await flush();
+    expect(check).toHaveBeenCalledOnce();
+    expect(time.pending()).toEqual([90 * minute]);
+  });
+
+  it('re-arms an early timer after the wall clock moves backwards', async () => {
+    const time = clock();
+    let correction = 0;
+    const check = vi.fn(async () => found);
+    scheduleUpdateChecks({ check, busy: false }, () => {}, { ...time, now: () => time.now() + correction });
+    correction = -5 * minute;
+    await time.advance(2 * minute);
+    expect(check).not.toHaveBeenCalled();
+    expect(time.pending()).toEqual([5 * minute]);
+    await time.advance(5 * minute);
+    expect(check).toHaveBeenCalledOnce();
+    expect(time.pending()).toEqual([90 * minute]);
+  });
+
+  it('resuming at night skips missed slots without resetting the phase to 05:00', async () => {
+    const time = clock('2026-11-01T23:00:00+08:00');
+    const check = vi.fn(async () => found);
+    scheduleUpdateChecks({ check, busy: false }, () => {}, time);
+    time.sleep(5 * hour);
+    time.resume();
+    await time.advance(0);
+    expect(check).not.toHaveBeenCalled();
+    expect(time.pending()).toEqual([62 * minute]);
+    await time.advance(62 * minute);
+    expect(check).toHaveBeenCalledOnce();
+  });
+
+  it('stops on quit, including resume events and an in-flight result', async () => {
     const time = clock();
     const check = vi.fn(async () => found);
     const onResult = vi.fn();
     const stop = scheduleUpdateChecks({ check, busy: false }, onResult, time);
     stop();
+    stop();
     expect(time.pending()).toEqual([]);
-    await time.advance(48 * hour);
+    time.sleep(48 * hour);
+    time.resume();
+    await time.advance(0);
     expect(check).not.toHaveBeenCalled();
 
-    let finish: (value: typeof found) => void = () => {};
+    let finish!: (value: typeof found) => void;
     const slow = vi.fn(() => new Promise<typeof found>(resolve => { finish = resolve; }));
     const stopSlow = scheduleUpdateChecks({ check: slow, busy: false }, onResult, time);
-    await time.advance(minute);
+    await time.advance(2 * minute);
     stopSlow();
     finish(found);
-    await new Promise(resolve => setImmediate(resolve));
+    await flush();
+    time.resume();
     expect(onResult).not.toHaveBeenCalled();
     expect(time.pending()).toEqual([]);
   });

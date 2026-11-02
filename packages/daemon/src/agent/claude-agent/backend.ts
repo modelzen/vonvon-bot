@@ -1,6 +1,6 @@
 import { realpath } from 'node:fs/promises';
 import { statSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type {
@@ -108,7 +108,7 @@ function sessionClaudeEnv(profileEnv: Readonly<Record<string, string>>): Record<
  * tools, MCP servers, claude.ai connectors, the transcript and personal CLAUDE.md
  * are disabled by the options below. Managed policy can override hook settings;
  * user apiKeyHelper may still execute to obtain credentials. The project layer is not loaded: the model list is
- * cached per backend, not per project, and titles only need the credentials.
+ * cached per process, not per project, and titles only need the credentials.
  */
 function helperQueryOptions(cwd: string): Options {
   return {
@@ -164,6 +164,18 @@ function loadSdk(): Promise<ClaudeSdkFacade> {
 const TITLE_GENERATION_TIMEOUT_MS = 30_000;
 const MODEL_DISCOVERY_TIMEOUT_MS = 30_000;
 const LOGIN_PROBE_TIMEOUT_MS = 15_000;
+// A default-loader cache is shared by transient Provider details and persistent Bot backends.
+// Injected loaders get independent caches, without retaining test SDKs for the process lifetime.
+type ClaudeModelCache = { key: string; refresh: boolean; models?: ModelInfo[]; flight?: Promise<ModelInfo[]> };
+const modelCaches = new WeakMap<() => Promise<ClaudeSdkFacade>, ClaudeModelCache>();
+
+function modelFileVersion(path: string): string {
+  try {
+    const stat = statSync(path);
+    return `${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}`;
+  } catch { return 'missing'; }
+}
+
 const TITLE_OUTPUT_SCHEMA = {
   type: 'object',
   properties: { title: { type: 'string', maxLength: 36 } },
@@ -338,18 +350,16 @@ export class ClaudeAgentBackend implements AgentBackend {
   } satisfies SessionProfileCapabilities;
   readonly id = 'claude-agent';
   readonly displayName = 'Claude';
-  /** Successful SDK discovery is stable for this backend process and avoids
-   * spawning an auxiliary Claude CLI on every topic start/settings render.
-   * Failures are deliberately not cached so installation/login recovery can
-   * retry on the next call (same policy as the Codex backend). */
-  private modelCache: ModelInfo[] | null = null;
-  private modelCacheKey = '';
-
   private modelSettingsKey(): string {
     const dir = claudeConfigDir();
-    let file = 'missing';
-    try { const stat = statSync(join(dir, 'settings.json')); file = `${stat.mtimeMs}:${stat.size}`; } catch { /* missing settings */ }
-    return JSON.stringify([dir, file, ...['ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL'].map(key => process.env[key] ?? '')]);
+    // Hash credentials rather than retaining their values in cache keys. Keychain changes
+    // cannot be observed cheaply; the explicit refresh also invalidates those catalogs.
+    const env = Object.entries(process.env).filter(([key]) =>
+      /^(ANTHROPIC_|CLAUDE_CODE_|AWS_|GOOGLE_|CLOUD_ML_)/.test(key)).sort(([a], [b]) => a.localeCompare(b));
+    return JSON.stringify([homedir(), dir, this.configuredModel(),
+      modelFileVersion(join(dir, 'settings.json')), modelFileVersion(join(dir, '.credentials.json')),
+      modelFileVersion(join(homedir(), '.claude.json')), installedBackendVersion(SDK_PKG),
+      createHash('sha256').update(JSON.stringify(env)).digest('hex')]);
   }
 
   constructor(
@@ -460,10 +470,22 @@ export class ClaudeAgentBackend implements AgentBackend {
     } finally { abortController.abort(); query.close(); }
   }
 
-  async listModels(): Promise<ModelInfo[]> {
-    const cacheKey = this.modelSettingsKey();
-    if (this.modelCache && this.modelCacheKey === cacheKey) return this.modelCache;
-    this.modelCache = null;
+  async listModels(opts: { refresh?: boolean } = {}): Promise<ModelInfo[]> {
+    const key = this.modelSettingsKey();
+    const existing = modelCaches.get(this.sdkLoader);
+    if (existing?.key === key) {
+      // A click after ordinary discovery began needs new evidence. Concurrent clicks
+      // share that refresh, but must not reuse the earlier background request.
+      if (existing.flight && (!opts.refresh || existing.refresh)) return existing.flight;
+      if (!opts.refresh && existing.models) return existing.models;
+    }
+    const entry: ClaudeModelCache = { key, refresh: opts.refresh === true };
+    modelCaches.set(this.sdkLoader, entry);
+    entry.flight = this.discoverModels(entry).finally(() => { entry.flight = undefined; });
+    return entry.flight;
+  }
+
+  private async discoverModels(entry: ClaudeModelCache): Promise<ModelInfo[]> {
     let query: Query | undefined;
     const abortController = new AbortController();
     try {
@@ -483,9 +505,11 @@ export class ClaudeAgentBackend implements AgentBackend {
         'model discovery',
       );
       if (!discovered.length) throw new Error('Claude SDK returned an empty model catalog');
-      this.modelCache = withConfiguredDefault(discovered.map(mapClaudeModel), this.configuredModel());
-      this.modelCacheKey = cacheKey;
-      return this.modelCache;
+      if (entry.key !== this.modelSettingsKey() || modelCaches.get(this.sdkLoader) !== entry) {
+        throw new Error('Claude model discovery was superseded or configuration changed');
+      }
+      entry.models = withConfiguredDefault(discovered.map(mapClaudeModel), this.configuredModel());
+      return entry.models;
     } catch (err) {
       log.fail('agent', err, { backend: 'claude-agent', phase: 'supportedModels' });
       return withConfiguredDefault(OFFLINE_CLAUDE_MODELS, this.configuredModel());
@@ -495,9 +519,10 @@ export class ClaudeAgentBackend implements AgentBackend {
     }
   }
 
-  /** Only models returned by this instance's successful SDK discovery; fallback is never cached. */
+  /** Only a successful catalog for the current inputs; fallback is never cached. */
   peekModels(): ModelInfo[] | undefined {
-    return this.modelCache ?? undefined;
+    const entry = modelCaches.get(this.sdkLoader);
+    return entry?.key === this.modelSettingsKey() ? entry.models : undefined;
   }
 
   /** 最近会话（newest first），读 ~/.claude/projects/<cwd-hash> 的 JSONL 存储——

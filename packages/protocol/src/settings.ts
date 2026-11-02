@@ -2,16 +2,8 @@ import { z } from "zod";
 import { JUDGE_PROVIDER_IDS } from './decision-providers.js';
 import { agentIdSchema, groupIdSchema } from "./domain.js";
 
-const effort = z.enum([
-  "none",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-  "ultra",
-]);
+/** Provider-defined effort IDs are discovered with the model catalog. */
+const effort = z.string().trim().min(1).max(1000);
 export const openIdSchema = z.string().regex(/^ou_[A-Za-z0-9_-]{1,200}$/);
 const selection = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("default") }).strict(),
@@ -105,7 +97,15 @@ export const roleSettings = z.object({ identity: z.string().max(70000), notes: z
 /** 补充职责（原"本群个性"）：绑定行的 `supplement`。 */
 const projectRole = z.object({ supplement: z.string().max(30000) });
 const groupProfile = profile.extend({ inheritPersona: z.boolean(), inheritMemory: z.boolean() });
-const modelAccess = z.object({ backend: z.string().min(1).max(1000), models: z.array(z.string().trim().min(1).max(1000)).max(1000), efforts: z.array(effort).max(8) });
+const modelAccess = z.object({
+  backend: z.string().min(1).max(1000),
+  models: z.array(z.string().trim().min(1).max(1000)).max(1000),
+  efforts: z.array(effort).max(1000),
+  modelEfforts: z.record(z.string(), z.array(effort).max(1000)).optional(),
+  modelServiceTiers: z.record(z.string(), z.array(z.enum(['fast', 'ultrafast'])).max(2)).optional(),
+  defaultModel: z.string().trim().min(1).max(1000).optional(),
+  defaultEffort: effort.optional(),
+});
 const workspace = z.object({ primary: z.string().min(1).max(4096), directories: z.array(z.string().min(1).max(4096)).min(1).max(1000), repositories: z.array(z.string().min(1).max(4096)).max(1000) });
 const smartRules = z.object({ respond: z.string().max(30000), newTopic: z.string().max(30000) });
 const skills = z.object({ disabledPaths: z.array(z.string().min(1).max(4096)).max(1000) });
@@ -549,6 +549,7 @@ export const actionSchema = z.discriminatedUnion("kind", [
 export type SettingsAction = z.infer<typeof actionSchema>;
 export const modelQuerySchema = z
   .object({
+    refresh: z.boolean().optional(),
     botId: agentIdSchema,
     backend: z.string().trim().min(1).max(1000),
     purpose: z.enum(["project", "session", "comments", "titles", "judge"]),

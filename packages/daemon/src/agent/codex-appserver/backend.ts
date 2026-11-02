@@ -39,7 +39,7 @@ import { CodexFullOnlyError, codexTierUnavailable, type WindowsSandboxCapability
 import { cachedCodexVersion, codexVersionAsync, refreshCodexResolution, resolveCodexBin } from './locate';
 import { cachedWindowsSandbox, refreshWindowsSandbox, windowsShellPath } from './windows-sandbox';
 import type { ServerNotification, Thread, ThreadItem, Turn, TurnStartResponse } from './protocol';
-import { codexModelCacheKey, codexRemoteCacheKey, constrainCodexModelTiers, discoverCodexModels } from './models';
+import { codexCatalogCache, constrainCodexModelTiers } from './models';
 
 const APPROVAL_POLICY = 'never';
 
@@ -809,10 +809,7 @@ export class CodexAppServerBackend implements AgentBackend {
   readonly id = 'codex-appserver';
   readonly displayName = 'Codex (app-server)';
   private modelCache: ModelInfo[] | null = null;
-  private modelCacheKey = '';
-  private modelCacheExpiresAt = 0;
-  private modelCacheEvidenceKey = '';
-  private modelCatalogPath: string | undefined;
+  private modelReadGeneration = 0;
 
   async listSkills({ cwd }: { cwd: string; directories?: string[] }): Promise<AgentSkill[]> {
     const result = await utilityRequest<{ data: Array<{ cwd: string; skills: Array<{ path: string; name: string; description: string; scope: string; enabled: boolean }>; errors?: Array<{ message: string }> }> }>('skills/list', { cwds: [cwd], forceReload: true });
@@ -840,10 +837,11 @@ export class CodexAppServerBackend implements AgentBackend {
     return reason;
   }
 
-  async refreshPermissions(opts?: { force?: boolean; selectedBin?: string | null }): Promise<void> {
+  async refreshPermissions(opts?: { force?: boolean; cached?: boolean; selectedBin?: string | null }): Promise<void> {
     if (process.platform !== 'win32') return;
     const bin = opts?.selectedBin === undefined ? await refreshCodexResolution(opts) : opts.selectedBin;
     if (!bin) return;
+    if (opts?.cached && !opts.force && cachedWindowsSandbox(bin)) return;
     const version = await codexVersionAsync(bin, opts);
     // A version-only check is cheap and cannot accidentally start sandbox setup.
     if (!codexTierUnavailable('qa', 'win32', version, { status: 'ready', implementation: 'mxc' })) {
@@ -855,7 +853,7 @@ export class CodexAppServerBackend implements AgentBackend {
     return (await this.doctor()).ok;
   }
 
-  async doctor(opts?: { force?: boolean }): Promise<BackendProbe> {
+  async doctor(opts?: { force?: boolean; permissions?: boolean }): Promise<BackendProbe> {
     // async 版本探测：DM 体检等卡片回调会 await 这里，同步 spawn 会冻结事件循环。
     // force 绕过 locate 模块缓存重新探测（体检要看「现在」的状态）。
     const probe = opts?.force ? { force: true as const } : undefined;
@@ -871,7 +869,12 @@ export class CodexAppServerBackend implements AgentBackend {
     if (!version) {
       return { ok: false, version: null, location: bin, hint: `codex --version 执行失败（${bin}）` };
     }
-    await this.refreshPermissions({ ...opts, selectedBin: bin });
+    // Resolution/version above already established this binary's version evidence.
+    if (opts?.permissions !== false) {
+      if (process.platform === 'win32' && !codexTierUnavailable('qa', 'win32', version, { status: 'ready', implementation: 'mxc' })) {
+        await refreshWindowsSandbox(bin, opts);
+      }
+    }
     return { ok: true, version, location: bin,
       ...(process.platform === 'win32' ? { hint: this.fullAccessOnly() } : {}) };
   }
@@ -886,27 +889,21 @@ export class CodexAppServerBackend implements AgentBackend {
     return { state: 'unknown', message: '无法确认 Codex 的配置。' };
   }
 
-  async listModels(): Promise<ModelInfo[]> {
+  async listModels(opts?: { refresh?: boolean }): Promise<ModelInfo[]> {
+    // Start before resolution/version awaits: any older call can finish after a
+    // refresh, but must not erase the capabilities used by subsequently opened threads.
+    const generation = ++this.modelReadGeneration;
     const bin = await refreshCodexResolution();
-    if (!bin) { this.modelCache = null; return []; }
+    if (!bin) { if (generation === this.modelReadGeneration) this.modelCache = null; return []; }
     // Explicit paths skip candidate ranking. Establish their version evidence
     // before taking the catalog key, since discovery can read it for tier access.
     await codexVersionAsync(bin);
-    const priorCatalogPath = this.modelCatalogPath;
-    const key = codexModelCacheKey(bin, priorCatalogPath);
-    if (this.modelCache && this.modelCacheKey === key && Date.now() < this.modelCacheExpiresAt
-      && this.modelCacheEvidenceKey === codexRemoteCacheKey()) return this.modelCache;
-    this.modelCache = null;
     try {
-      const { models, catalogPath, expiresAt } = await discoverCodexModels(bin);
-      if (codexModelCacheKey(bin, priorCatalogPath) !== key) throw new Error('Codex configuration changed during discovery');
-      this.modelCache = models;
-      this.modelCatalogPath = catalogPath;
-      this.modelCacheKey = codexModelCacheKey(bin, catalogPath);
-      this.modelCacheExpiresAt = expiresAt;
-      this.modelCacheEvidenceKey = codexRemoteCacheKey();
+      const models = await codexCatalogCache.read(bin, opts?.refresh);
+      if (generation === this.modelReadGeneration) this.modelCache = models;
       return models;
     } catch {
+      if (generation === this.modelReadGeneration) this.modelCache = null;
       // Native config errors can quote lines containing private API settings.
       log.warn('agent', 'Codex model discovery failed', { phase: 'model/list' });
       return [];
@@ -914,8 +911,8 @@ export class CodexAppServerBackend implements AgentBackend {
   }
 
   /** Apply the actual session configuration without expanding account access. */
-  async listModelsForCwd(cwd: string): Promise<ModelInfo[]> {
-    const models = await this.listModels();
+  async listModelsForCwd(cwd: string, opts?: { refresh?: boolean }): Promise<ModelInfo[]> {
+    const models = await this.listModels(opts);
     const bin = resolveCodexBin();
     return bin && this.peekModels() ? constrainCodexModelTiers(bin, models, cwd)
       : models.map(({serviceTiers: _tiers, ...model}) => model);
@@ -924,8 +921,7 @@ export class CodexAppServerBackend implements AgentBackend {
   /** The cached `model/list`, or undefined; never fetches. */
   peekModels(): ModelInfo[] | undefined {
     const bin = resolveCodexBin();
-    return bin && Date.now() < this.modelCacheExpiresAt && this.modelCacheKey === codexModelCacheKey(bin, this.modelCatalogPath)
-      && this.modelCacheEvidenceKey === codexRemoteCacheKey() ? this.modelCache ?? undefined : undefined;
+    return bin ? codexCatalogCache.peek(bin) : undefined;
   }
 
   private threadEffortSupport(): (model: string) => boolean {

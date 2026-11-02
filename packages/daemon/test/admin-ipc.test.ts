@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   ADMIN_IPC_REQ,
   ADMIN_IPC_RES,
+  adminIpcTimeout,
   askBotOver,
   createAdminIpcCaller,
   SESSION_IPC_TIMEOUT_MS,
@@ -79,6 +80,33 @@ describe('admin IPC · 请求/响应关联', () => {
 });
 
 describe('admin IPC · 兜底（超时 / 子进程退场 / 脏消息）', () => {
+  it('Codex and Claude metadata survive the former 15 s forwarding deadline on every platform; ordinary status remains bounded', async () => {
+    vi.useFakeTimers();
+    try {
+      const caller = wirePair(async () => { await new Promise(resolve => setTimeout(resolve, 18_000)); return { state: 'ready' }; });
+      const operations = ['codex-appserver', 'claude-agent'].map(backend => ({ kind: 'settingsModels', query: { botId: 'cli_fixture', backend, purpose: 'project' } } satisfies AdminIpcOp));
+      const results = operations.map(op => caller.call(op));
+      // Attach rejection handlers before advancing the old deadline.
+      const result = Promise.all(results).catch(error => String(error));
+      const status = caller.call({kind: 'status'}).catch(error => String(error));
+      await vi.advanceTimersByTimeAsync(15_001);
+      expect(await status).toContain('15000ms');
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(await result).toEqual([{state: 'ready'}, {state: 'ready'}]);
+      expect(adminIpcTimeout({ kind: 'setNoMention', project: 'demo', on: true })).toBe(15_000);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('metadata still times out when the provider never answers', async () => {
+    vi.useFakeTimers();
+    try {
+      const caller = createAdminIpcCaller(() => undefined);
+      const op: AdminIpcOp = {kind: 'settingsRead', scope: {kind: 'agent', botId: 'cli_fixture'}};
+      const pending = caller.call(op).catch(error => String(error));
+      await vi.advanceTimersByTimeAsync(120_001);
+      expect(await pending).toContain('120000ms');
+    } finally { vi.useRealTimers(); }
+  });
   it('超时 reject（绝不悬挂 Web 请求）；迟到响应被静默忽略', async () => {
     vi.useFakeTimers();
     try {

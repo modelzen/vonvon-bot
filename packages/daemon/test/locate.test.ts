@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { codexVersion, codexVersionAsync, resolveCodexBin } from '../src/agent/codex-appserver/locate';
 import { writeNodeExecutable } from './helpers/node-executable';
+import { ProviderProcessCleanupError, ProviderProcessStoppedError } from '../src/agent/owned-process';
 
 // locate 模块级缓存（QW-9）：bin/版本只在成功时缓存、force 强制重探、同步与
 // 异步版本探测共享一份缓存。版本 fixture 在各平台运行真实子进程。
@@ -239,6 +240,15 @@ describe('asynchronous Codex candidate refresh', () => {
 });
 
 describe('bounded version probes', () => {
+  it.each([ProviderProcessCleanupError, ProviderProcessStoppedError])('preserves %s from a failed version probe', async Failure => {
+    const managed = await import('../src/agent/codex-appserver/managed-install');
+    const failure = new Failure('fixture version cleanup failed');
+    const probe = vi.spyOn(managed, 'runSetupChild').mockRejectedValueOnce(failure);
+    try {
+      await expect(codexVersionAsync(join(dir, Failure.name), { force: true })).rejects.toBe(failure);
+    } finally { probe.mockRestore(); }
+  });
+
   it.skipIf(process.platform !== 'win32')('allows the owned Windows supervisor to start before a slow valid version reply', async () => {
     const { bin } = fakeBin('windows-delayed-version', "setTimeout(() => console.log('codex-cli 9.2.0'), 3_200)");
     expect(await codexVersionAsync(bin, { force: true })).toBe('codex-cli 9.2.0');

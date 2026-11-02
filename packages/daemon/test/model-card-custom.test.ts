@@ -26,9 +26,10 @@ vi.mock('../src/project/registry', async (original) => ({
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),
   getSession: async () => fake.record,
-  patchSession: async (_key: string, patch: Record<string, unknown>) => {
+  patchSession: async (_key: string, patch: Record<string, unknown> | ((record: any) => Record<string, unknown>)) => {
     if (!fake.record) return;
-    for (const [k, v] of Object.entries(patch)) if (v !== undefined) fake.record[k] = v;
+    const selected = typeof patch === 'function' ? patch(fake.record) : patch;
+    for (const [k, v] of Object.entries(selected)) if (v !== undefined) fake.record[k] = v;
   },
   mutateSession: async (_key: string, mutate: (record: any) => void | Promise<void>) => {
     if (!fake.record) throw new Error('missing test session');
@@ -222,6 +223,41 @@ describe('/model 卡手填模型 id', () => {
     expect(fake.sent).toHaveLength(1);
     expect(fake.record.model).toBe('opus');
   });
+});
+
+it('rejects an effort click from an older card after another card switches the session model', async () => {
+  const catalog = [
+    { id: 'a', displayName: 'A', description: '', supportedEfforts: ['low'], defaultEffort: 'low', isDefault: true, hidden: false },
+    { id: 'b', displayName: 'B', description: '', supportedEfforts: ['high'], defaultEffort: 'high', isDefault: false, hidden: false },
+  ];
+  fake.backend.id = 'codex-appserver';
+  fake.backend.listModels.mockResolvedValue(catalog as never);
+  fake.backend.listModelsForCwd.mockResolvedValue(catalog as never);
+  fake.record = { ...record(), backend: 'codex-appserver', model: 'a', effort: 'low' };
+  fake.project = { ...fake.project, backend: 'codex-appserver', modelAccess: { backend: 'codex-appserver', models: ['a', 'b'], efforts: ['low', 'high'], modelEfforts: { a: ['low'], b: ['high'] } } };
+  const o = setup();
+  await o.onMessage(message('/model'));
+  await until(() => expect(fake.sent).toHaveLength(1));
+  await o.onMessage(message('/model'));
+  await until(() => expect(fake.sent).toHaveLength(2));
+  await o.dispatcher.handle({ messageId: 'card-2', chatId: 'chat', operator: { openId: 'owner' }, action: { value: { a: MC.model }, option: 'b' } } as never);
+  await until(() => expect(fake.record).toMatchObject({ model: 'b', effort: 'high' }));
+  fake.update.mockClear();
+  await o.dispatcher.handle({ messageId: 'card-1', chatId: 'chat', operator: { openId: 'owner' }, action: { value: { a: MC.effort }, option: 'low' } } as never);
+  await until(() => expect(fake.update).toHaveBeenCalled());
+  expect(fake.record).toMatchObject({ model: 'b', effort: 'high' });
+  expect(JSON.stringify(fake.update.mock.calls.at(-1)?.[2])).toContain('会话模型已变化');
+});
+
+it('accepts a normal effort click when the persisted custom flag is omitted', async () => {
+  fake.record = { ...record(), effort: 'low' };
+  const o = setup();
+  await o.onMessage(message('/model'));
+  await until(() => expect(fake.sent).toHaveLength(1));
+  await o.dispatcher.handle({ messageId: 'card-1', chatId: 'chat', operator: { openId: 'owner' }, action: { value: { a: MC.effort }, option: 'high' } } as never);
+  await until(() => expect(fake.update).toHaveBeenCalled());
+  expect(fake.record.effort).toBe('high');
+  expect(JSON.stringify(fake.update.mock.calls.at(-1)?.[2])).toContain('已设置 effort');
 });
 
 describe('/model 闪电单击切换速度', () => {
