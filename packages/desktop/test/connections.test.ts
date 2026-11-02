@@ -589,6 +589,20 @@ describe('adding', () => {
     expect(h.registry.get(id)?.clientId).toBe('cl_00000000000000dd');
   });
 
+  it('cancelled while it is saved, adds nothing and takes its key back off the device (Codex 审查 236-3)', async () => {
+    const h = harness();
+    const id = randomUUID();
+    const put = h.registry.put;
+    h.registry.put = async device => { const saving = put(device); h.devices.cancelAdd(); return saving; };
+    const adding = h.devices.add({ link: pairingLink(id) });
+    const paired = h.link({ machineId: id }, { pairResult: { clientId: 'cl_00000000000000cc' } });
+    h.calls[0]!.resolve(paired);
+    await expect(adding).resolves.toMatchObject({ kind: 'failed', code: 'aborted' });
+    expect(h.registry.list()).toEqual([]);
+    expect(paired.client.device).toHaveBeenCalledWith({ type: 'revokeClient', clientId: 'cl_00000000000000cc' });
+    expect(paired.closeSpy).toHaveBeenCalled();
+  });
+
   it('adds one device at a time and can be cancelled', async () => {
     const h = harness();
     const first = h.devices.add({ link: pairingLink(randomUUID()) });
