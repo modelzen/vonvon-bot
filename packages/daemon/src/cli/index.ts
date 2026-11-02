@@ -49,7 +49,9 @@ const daemonFor = async (options: { fresh?: boolean }) => {
  * talks to the daemon, or reads files published with tmp + rename, and takes none. clients and device rename write
  * `devices/` themselves when no daemon runs (devices 4.5); pair only asks the daemon. */
 const LEASED = new Set(['daemon run', 'daemon start', 'daemon stop', 'daemon restart', 'bot repair-dir', 'secrets list', 'secrets set', 'secrets remove',
-  'clients ls', 'clients rename', 'clients revoke', 'device rename']);
+  'clients ls', 'clients rename', 'clients revoke', 'device rename',
+  // with no daemon running, a standalone update takes update.lock and writes update-status.json itself (server-3 4.8)
+  'update']);
 /**
  * devices 8.3 and 5.3: what only the person at this computer runs (the trust root, file locks, the service manager,
  * remote access, pairing), refused in a Bot's session before anything runs. `update` and `remote …` come with I3 and D3.
@@ -107,6 +109,8 @@ daemon.command('run').description('Run in the foreground')
   .option('--parent-control', 'Accept shutdown through stdin', false)
   .option('--port <port>', 'Loopback API port', (value) => Number(value), 0)
   .action(async (options: { bot?: string; port: number; parentControl?: boolean }) => {
+    const warning = (await import('./root-warning')).rootWarning();
+    if (warning) process.stderr.write(`${warning}\n`);
     await (await import('../host/bootstrap')).runHostRuntime({ bot: options.bot, port: options.port, managed: false, control });
   });
 daemon.command('start').description('Start a detached daemon')
@@ -590,8 +594,29 @@ covers(provider.command('models <provider>'), 'collaboration.providerModels').de
 These are all the models the Provider itself reports. The ones a bot's model picker offers for one use are
 vonvon settings models --backend <codex|claude> --purpose <use>.`)
   .action(async (name: string, options: Json) => { await (await import('./commands/provider')).runProviderModels(name, io(options)); });
+covers(program.command('update'), 'machine.checkCoreUpdate', 'machine.applyCoreUpdate', 'machine.coreUpdateStatus')
+  .description('Update this server to the signed stable release; with the daemon running, it drains and restarts')
+  .option('--check', 'Only say whether a newer version is out')
+  .option('--allow-downgrade', 'With --to: go back to a release still kept on this machine')
+  .option('--to <version>', 'The version to go to')
+  .option('--json', 'Print JSON Lines: each status change, then the result')
+  .addHelpText('after', `
+Exit codes: 0 updated (or already current), 1 failed (the server stays on or goes back to its version),
+5 another update is running, 6 the daemon restarted but the outcome is not known yet.`)
+  .action(async (options: Json & { check?: boolean; allowDowngrade?: boolean; to?: string }) => {
+    await (await import('./commands/update')).runUpdateCommand(options, io(options));
+  });
 program.command('__daemon-control <action>', { hidden: true }).action(async (action: string) => {
   await (await import('./commands/daemon-control')).runDaemonControl(action);
+});
+// server-2 4.3: what the install scripts run from a release before `current` points at it. `--release`, not `--version`:
+// the program's own --version would answer first.
+program.command('__standalone-setup', { hidden: true }).requiredOption('--install-root <root>').requiredOption('--release <version>').option(...JSON_FLAG)
+  .action(async (options: Json & { installRoot: string; release: string }) => {
+    await (await import('./commands/standalone-setup')).runStandaloneSetup({ installRoot: options.installRoot, version: options.release }, io(options));
+  });
+program.command('__standalone-teardown', { hidden: true }).requiredOption('--install-root <root>').option(...JSON_FLAG).action(async (options: Json & { installRoot: string }) => {
+  await (await import('./commands/standalone-setup')).runStandaloneTeardown({ installRoot: options.installRoot }, io(options));
 });
 program.command('__restart-after-exit <port> <oldPid> <oldStartedAt> [update]', { hidden: true }).action(async (port: string, oldPid: string, oldStartedAt: string, update?: string) => {
   const { updateStatusSchema } = await import('../service/update');
