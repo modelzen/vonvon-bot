@@ -846,8 +846,8 @@ test('uninstall: HOME through a symbolic link still finds the program, by the re
 const python3 = (() => { try { return execFileSync(SH, ['-c', 'command -v python3'], { encoding: 'utf8' }).trim() || undefined; } catch { return undefined; } })();
 const NOT_DUMPABLE = 'import ctypes, sys, time\nif ctypes.CDLL(None).prctl(4, 0, 0, 0, 0) != 0: sys.exit(3)\nprint("ready", flush=True)\ntime.sleep(120)\n';
 /** `program` (a python3) started for another data directory, not dumpable; undefined when it cannot get there. */
-async function notDumpable(t, program, f) {
-  const child = spawn(program, ['-c', NOT_DUMPABLE], { stdio: ['ignore', 'pipe', 'ignore'], detached: true, env: { ...process.env, VONVON_HOME: join(f.base, 'other-data') } });
+async function notDumpable(t, program, f, options = {}) {
+  const child = spawn(program, ['-c', NOT_DUMPABLE], { stdio: ['ignore', 'pipe', 'ignore'], detached: true, env: { ...process.env, VONVON_HOME: join(f.base, 'other-data') }, ...options });
   t.after(() => child.kill('SIGKILL'));
   const ready = await new Promise(resolve => {
     let out = '';
@@ -884,6 +884,35 @@ test('uninstall: a program from the install root whose exe this account cannot r
   assert.equal(await f.exists(join(f.home, '.vonvon-bot', 'config.json')), true);
 });
 
+// review of c678aa41 (P3): its cwd reads no more than its exe, so only the command line tells. An absolute path through a
+// symbolic link (to the root, or to the program) is resolved; a relative one is known only by the install directory's name.
+test('uninstall: a program from the install root whose exe cannot be read, started through a link or by a relative path naming the root, keeps the root', { ...LINUX_PROC, ...!python3 && { skip: 'needs python3' } }, async t => {
+  const r = fromRoot(t);
+  const f = await r.installed();
+  await writeFile(join(f.root, 'bin', 'vonvon'), '#!/bin/sh\nexit 1\n');
+  await writeFile(join(f.root, 'releases', '1.0.0', 'node', 'bin', 'node'), '#!/bin/sh\nexit 1\n');
+  const program = join(f.root, 'releases', '1.0.0', 'node', 'bin', 'python3');
+  await copyFile(await realpath(python3), program);
+  await chmod(program, 0o755);
+  await symlink(f.root, join(f.base, 'root-link'));
+  await symlink(program, join(f.base, 'python3-link'));
+  for (const [command, options] of [
+    [join(f.base, 'root-link', 'releases', '1.0.0', 'node', 'bin', 'python3'), {}],
+    [join(f.base, 'python3-link'), {}],
+    ['.local/share/vonvon-bot/server/releases/1.0.0/node/bin/python3', { cwd: f.home }],
+  ]) {
+    const child = await notDumpable(t, command, f, options);
+    if (!child) return t.skip('python3 cannot set PR_SET_DUMPABLE here');
+    if (process.getuid?.() !== 0) await assert.rejects(readlink(`/proc/${child.pid}/cwd`), { code: 'EACCES' });
+    assert.equal((await readFile(`/proc/${child.pid}/cmdline`, 'utf8')).split('\0')[0], command);
+    await r.refused(f, await f.run('uninstall.sh'), child);
+    await r.stop(child);
+  }
+  const run = await f.run('uninstall.sh');
+  assert.equal(run.code, 0, run.stderr);
+  assert.equal(await f.exists(f.root), false);
+});
+
 test('uninstall: a program of this account whose exe cannot be read, not from the install root, does not keep the root', { ...LINUX_PROC, ...!python3 && { skip: 'needs python3' } }, async t => {
   for (const cli of [true, false]) {
     const r = fromRoot(t);
@@ -892,7 +921,8 @@ test('uninstall: a program of this account whose exe cannot be read, not from th
       await writeFile(join(f.root, 'bin', 'vonvon'), '#!/bin/sh\nexit 1\n');
       await writeFile(join(f.root, 'releases', '1.0.0', 'node', 'bin', 'node'), '#!/bin/sh\nexit 1\n');
     }
-    const child = await notDumpable(t, python3, f);
+    // the second as an ssh login session shows itself (this account's, not dumpable, a relative path with a slash in it)
+    const child = await notDumpable(t, python3, f, cli ? {} : { argv0: 'sshd: me@pts/0' });
     if (!child) return t.skip('python3 cannot set PR_SET_DUMPABLE here');
     const run = await f.run('uninstall.sh');
     assert.equal(run.code, 0, run.stderr);
