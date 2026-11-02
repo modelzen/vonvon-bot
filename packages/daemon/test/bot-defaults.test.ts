@@ -42,7 +42,7 @@ describe('execution defaults boundary', () => {
   });
 
   it.each(['catalog', 'custom'])('retains %s model, effort and future backend ids', (kind) => {
-    const raw = { backend: 'future-provider', model: { kind, id: 'custom/model', effort: 'ultra' }, permission: 'full', network: false };
+    const raw = { backend: 'future-provider', model: { kind, id: 'custom/model', effort: 'future-adaptive' }, permission: 'full', network: false };
     const parsed = parseBotDefaults(raw);
     expect(parsed).toEqual(raw);
     expect(resolveBotDefaults(parsed)).toEqual({ ...raw, network: true });
@@ -59,7 +59,11 @@ describe('execution defaults boundary', () => {
   const malformed = [
     null, [], 'secret-value', { backend: '' }, { backend: '  ' }, { backend: ' padded ' }, { backend: 4 },
     { model: { kind: 'custom', id: ' padded ' } }, { model: 'model' }, { model: null }, { model: { kind: 'custom', id: '' } },
-    { model: { kind: 'catalog', id: 'm', effort: 'super' } },
+    { model: { kind: 'catalog', id: 'm', effort: '' } },
+    { model: { kind: 'catalog', id: 'm', effort: '   ' } },
+    { model: { kind: 'catalog', id: 'm', effort: ' future-adaptive ' } },
+    { model: { kind: 'catalog', id: 'm', effort: 'x'.repeat(1001) } },
+    { model: { kind: 'catalog', id: 'm', effort: 42 } },
     { model: { kind: 'unknown', id: 'm' } }, { model: { kind: 'catalog' } },
     { model: { kind: 'custom', id: 'm', future: 'secret-value' } },
     { permission: 'admin' }, { network: 'true' }, { effort: 'high' }, { future: 'secret-value' },
@@ -72,7 +76,7 @@ describe('execution defaults boundary', () => {
   });
 
   it('identifies known malformed paths without exposing values or arbitrary keys', () => {
-    expect(() => parseBotDefaults({ model: { kind: 'custom', id: 'm', effort: 'private-token' } }))
+    expect(() => parseBotDefaults({ model: { kind: 'custom', id: 'm', effort: ' private-token ' } }))
       .toThrow('preferences.defaults.model.effort');
     try { parseBotDefaults({ 'private-token': 'other-secret' }); } catch (error) {
       expect(String(error)).not.toMatch(/private-token|other-secret/);

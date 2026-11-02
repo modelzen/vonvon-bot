@@ -21,7 +21,8 @@ export const DEFAULT_BACKEND_ID = 'codex-appserver';
 
 export const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 
-export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+/** Native providers may introduce effort IDs between releases. */
+export type ReasoningEffort = string;
 
 /**
  * Permission tier for a project's codex sandbox:
