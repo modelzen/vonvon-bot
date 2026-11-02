@@ -3,9 +3,11 @@ import type { BotSettingsScope, ModelQuery } from './settings-types';
 import { GroupUpstreamError, InvalidGroupInput, type AdminGroupOp } from './groups';
 import { AdminWriteError, type AdminWriteOp } from './ops';
 import type { AdminLibraryOp } from './library';
-import type { ScheduleRequest } from '@vonvon/protocol';
+import type { ScheduleActor } from './schedule-commands';
+import type { MemoryDowngrade, MemoryItem, MemoryItemScope, MemorySource, ScheduleRequest } from '@vonvon/protocol';
 import { z } from 'zod';
 import { SESSION_ID_RE, type SessionInput } from '../host/session-tokens';
+import { SESSION_TURN_ENDED } from '../agent/entry/registry';
 
 /**
  * supervisor ↔ bot 子进程的管理面 IPC（node 'ipc' stdio / process.send）。
@@ -27,9 +29,41 @@ export const ADMIN_IPC_REQ = 'fcb.admin.req' as const;
 export const ADMIN_IPC_RES = 'fcb.admin.res' as const;
 
 export type AdminSettingsReadOp = { kind: 'settingsRead'; scope: BotSettingsScope } | { kind: 'settingsModels'; query: ModelQuery };
-/** Scheduled-task requests from the desktop and the terminal; the bot process runs them through schedule-commands as the local owner. */
-export type AdminScheduleOp = { kind: 'schedule'; via: 'desktop' | 'cli'; request: ScheduleRequest };
-export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | { kind: 'status' };
+/**
+ * Scheduled-task requests over the wire; the bot process runs them through schedule-commands as `actor`: the local owner
+ * (`local`, the desktop or the terminal) or a Bot session's turn (`session`, D4b), as the host decided.
+ */
+export type AdminScheduleOp = { kind: 'schedule'; actor: ScheduleActor; request: ScheduleRequest };
+
+/** A memory a Bot session's request names (the bot's own: the host has checked that). */
+export type SessionMemoryTarget = { kind: 'bot' } | { kind: 'project'; projectId: string } | { kind: 'dm'; openId: string };
+/**
+ * devices-4b 4.1: what a Bot session's ★ request asks of its Bot process, which answers with the tools' own checks for the
+ * session's current turn. `settingsWrite`: authorizeNow; `adminMember`: that and the owner's turn; `adminRead`: the private
+ * chat's read-only queries (the tools' `ctx.admin`); `memory`: authorizeMemory, then memory-authority's decideAdd (where it
+ * lands) or decideEdit (the item as the host read it); `schedule`: authorizeSchedule.
+ */
+export type SessionAction =
+  | { kind: 'settingsWrite' }
+  | { kind: 'adminMember' }
+  | { kind: 'adminRead' }
+  | { kind: 'memory'; op: 'read'; target: SessionMemoryTarget }
+  | { kind: 'memory'; op: 'add'; target: SessionMemoryTarget; text: string }
+  | { kind: 'memory'; op: 'edit'; item: Pick<MemoryItem, 'scope' | 'source'>; text?: string }
+  | { kind: 'schedule'; action: ScheduleRequest['action']; taskId?: string };
+/** Where a session's memory write lands and as whom (memory-authority's decision), with the source fields the tools write. */
+export interface MemoryLanding {
+  scope: MemoryItemScope;
+  trust: 'trusted' | 'untrusted';
+  actor: { role: 'owner' | 'admin' | 'member' | 'bot'; openId?: string };
+  source: { botId: string; turn?: NonNullable<MemorySource['turn']>; chatId?: string; messageId?: string; downgraded?: MemoryDowngrade };
+}
+/** The Bot process's answer: who started the turn (and for a task its actor, for a memory write where it lands), or the refusal with the tools' sentence. */
+export type SessionAuthz =
+  | { ok: true; role: 'owner' | 'admin' | 'member' | 'bot'; openId?: string; actor?: Extract<ScheduleActor, { kind: 'session' | 'scheduled' }>; memory?: MemoryLanding }
+  | { ok: false; reason: string; message: string };
+export type AdminSessionOp = { kind: 'authorizeSessionCall'; sessionId: string; action: SessionAction };
+export type AdminIpcOp = AdminCollaborationOp | AdminWriteOp | AdminGroupOp | AdminSettingsReadOp | AdminLibraryOp | AdminScheduleOp | AdminSessionOp | { kind: 'status' };
 
 export interface AdminIpcRequest {
   fcb: typeof ADMIN_IPC_REQ;
@@ -180,6 +214,47 @@ export function createAdminIpcResponder(
   send: (msg: AdminIpcResponse) => void,
 ): (raw: unknown) => void {
   return createIpcResponder<AdminIpcOp>(ADMIN_CHANNELS, execute, msg => send(msg as AdminIpcResponse));
+}
+
+/** devices-4b 4.3: a Bot process slower than this is refused, not waited for (not ADMIN_IPC_TIMEOUT_MS). */
+export const SESSION_IPC_TIMEOUT_MS = 5_000;
+/** No turn to answer for: the grant is gone, the process is gone, or it did not answer (devices 15, 这一轮已结束). */
+export const sessionTurnEnded = (): SessionAuthz => ({ ok: false, reason: 'turn-ended', message: SESSION_TURN_ENDED });
+const short = z.string().min(1).max(200);
+/** The answer as the host takes it: anything else, a local actor above all, is refused. */
+export const sessionAuthzSchema: z.ZodType<SessionAuthz> = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true), role: z.enum(['owner', 'admin', 'member', 'bot']), openId: short.optional(),
+    actor: z.discriminatedUnion('kind', [
+      // A bot's turn may list its group's tasks: no openId then (and as a member it may create none).
+      z.object({ kind: z.literal('session'), openId: z.string().max(200), role: z.enum(['owner', 'admin', 'member']), chatId: short, name: z.string().max(200).optional(), messageId: short.optional() }).strict(),
+      z.object({ kind: z.literal('scheduled'), taskId: short, runId: short, chatId: short }).strict(),
+    ]).optional(),
+    memory: z.object({
+      scope: z.discriminatedUnion('kind', [
+        z.object({ kind: z.literal('project'), projectId: short }).strict(), z.object({ kind: z.literal('bot') }).strict(), z.object({ kind: z.literal('dm'), openId: short }).strict(),
+      ]),
+      trust: z.enum(['trusted', 'untrusted']),
+      actor: z.object({ role: z.enum(['owner', 'admin', 'member', 'bot']), openId: short.optional() }).strict(),
+      source: z.object({
+        botId: short, turn: z.object({ kind: z.enum(['human', 'wake', 'initiative', 'retry', 'bot']), steered: z.boolean() }).strict().optional(),
+        chatId: short.optional(), messageId: short.optional(), downgraded: z.enum(['member', 'not-human-turn', 'steered', 'not-typed', 'not-in-message', 'quota']).optional(),
+      }).strict(),
+    }).strict().optional(),
+  }).strict(),
+  z.object({ ok: z.literal(false), reason: short, message: z.string().min(1).max(500) }).strict(),
+]);
+
+/**
+ * The host asks a Bot process to authorize a session's ★ request. No process, no answer in time, a failure or an
+ * answer of the wrong shape are all refusals: never a way through (devices 5.2).
+ */
+export async function askBotOver(ipc: Pick<AdminIpcCaller, 'call'> | undefined, sessionId: string, action: SessionAction): Promise<SessionAuthz> {
+  if (!ipc) return sessionTurnEnded();
+  try {
+    const parsed = sessionAuthzSchema.safeParse(await ipc.call({ kind: 'authorizeSessionCall', sessionId, action }, SESSION_IPC_TIMEOUT_MS));
+    return parsed.success ? parsed.data : sessionTurnEnded();
+  } catch { return sessionTurnEnded(); }
 }
 
 /** devices-4a 4.2: bot → host. A bot process asks the host for its sessions' tokens (devices 5.3), the reverse of the admin channel. */
