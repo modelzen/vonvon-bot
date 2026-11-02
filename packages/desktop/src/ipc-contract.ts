@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import type { ServerInfo, VonvonClient } from '@vonvon/client/browser';
-import { agentIdSchema, type BackendInstallEventPayload, type CommandResult, type DesktopSnapshot, type DesktopUpdate, type LogEventPayload, type MachineReply } from '@vonvon/protocol';
+import {
+  agentIdSchema, viewIdSchema, type BackendInstallEventPayload, type CommandResult, type DesktopSnapshot, type DesktopUpdate, type DeviceEventPayload,
+  type DevicesState, type LogEventPayload, type MachineReply, type ViewId,
+} from '@vonvon/protocol';
 import type { ShellCapabilities } from '../../ui/src/client-context.js';
 
 /** Main-to-preload notification only; it exposes no renderer action or daemon access. */
@@ -34,8 +37,25 @@ export const desktopChannels = {
   installDesktopUpdate: 'desktop:shell:installDesktopUpdate',
   hide: 'desktop:shell:hide',
   quit: 'desktop:shell:quit',
+  devicesState: 'desktop:devices:state',
+  devicesInspect: 'desktop:devices:inspect',
+  devicesAdd: 'desktop:devices:add',
+  devicesCancelAdd: 'desktop:devices:cancelAdd',
+  devicesRename: 'desktop:devices:rename',
+  devicesRemove: 'desktop:devices:remove',
+  devicesSwitch: 'desktop:devices:switch',
+  devicesRetry: 'desktop:devices:retry',
   event: 'desktop:event',
 } as const;
+
+/** devices-ui-1a 4.6: the channels that reach a daemon take one more, last argument: the device the calling page belongs
+ * to, or 'current'. A page bound to one device cannot send to another after a switch. */
+export const clientChannelNames = [
+  'snapshot', 'run', 'settings', 'collaboration', 'environment', 'machine', 'admin', 'memory', 'contextPreview', 'directory',
+  'library', 'schedule', 'device', 'close',
+] as const satisfies readonly (keyof typeof desktopChannels)[];
+export const viewArgumentSchema = z.union([viewIdSchema, z.literal('current')]);
+export type ViewArgument = z.infer<typeof viewArgumentSchema>;
 
 /** The machine-page actions the shell does itself, not the daemon (devices 8.4): their shapes live here, so the protocol
  * no longer declares `repairCli` and the desktop update requests for the shell's sake. */
@@ -62,10 +82,15 @@ export function safeErrorCode(value: unknown): string | undefined {
 export type IpcResult<T> = { ok: true; value: T } | { ok: false; error: SafeFailure };
 
 export type DesktopEvent =
-  | { type: 'reattached' }
-  | { type: 'snapshot'; value: DesktopSnapshot }
-  | { type: 'log'; value: LogEventPayload }
-  | { type: 'backendInstall'; value: BackendInstallEventPayload }
+  /** The page now hears `view`'s connection: snapshots after it come from there only. */
+  | { type: 'reattached'; view: ViewId }
+  | { type: 'snapshot'; view: ViewId; value: DesktopSnapshot }
+  | { type: 'log'; view: ViewId; value: LogEventPayload }
+  | { type: 'backendInstall'; view: ViewId; value: BackendInstallEventPayload }
+  | { type: 'device'; view: ViewId; value: DeviceEventPayload }
+  /** This computer's own device events, whichever device the page shows (U3's "new device paired"). */
+  | { type: 'localDevice'; value: DeviceEventPayload }
+  | { type: 'devices'; value: DevicesState }
   /** 自动检查更新的结果；窗口之后才订阅时由主进程补发最近一次。 */
   | { type: 'update'; value: DesktopUpdate }
   | { type: 'error'; value: SafeFailure }
@@ -73,7 +98,7 @@ export type DesktopEvent =
 
 export type DesktopShell = Required<Pick<ShellCapabilities,
   'openExternal' | 'chooseExecutablePath' | 'chooseDirectoryPaths' | 'checkDesktopUpdate' | 'retryDesktopUpdate' | 'installDesktopUpdate' | 'onDesktopUpdate' |
-  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem'>>;
+  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem' | 'devices' | 'onLocalDeviceEvent'>>;
 
 export interface DesktopResources {
   uiIndex: string;
@@ -90,6 +115,14 @@ export interface AttachedDaemon {
 }
 
 export interface DesktopBridge {
+  /** This computer's daemon connection, whichever device the page shows; null while it is lost. */
+  localOwner(): AttachedDaemon | null;
+  /** Each new local connection once it is ready (looking at this computer or not); never on a loss. U4 declares its
+   * capability on each. A listener that throws affects no other. */
+  onLocalOwner(listener: (owner: AttachedDaemon) => void): () => void;
+  /** Showing a remote device: a lost local connection is reported when the user switches back. True when deferred. */
+  deferLocalLost(): boolean;
+  viewId(): ViewId;
   requestQuit(): void;
   /** 把自动检查到的更新状态推给窗口；窗口还没订阅或刷新后重新订阅时补发最近一次。 */
   publishUpdate(update: DesktopUpdate): void;

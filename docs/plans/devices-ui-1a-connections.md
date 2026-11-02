@@ -788,3 +788,40 @@ U1a 和 U1b 是一个 PR，Mac 上只发一次验收，写在 U1b 第 6 节。U1
 - 探针"`remote enable` 后 30 秒内"等于退避上限，加一次连接超时可能偶发失败。改成 45 秒（第 6 节第 2 步第 4 项）。
 - 撤销到断开的 1 秒原来靠 Mac 上 Computer Use 加跨机计时，量不准。判据改为同机探针，`device-closed` 日志只作参考（4.4 日志一段）。
 - U4 的能力名 `desktop.selfUpdate` 过不了 D1 的小写正则，改成 `desktop.self-update`；D1 分支的 sha 更新到 147b2619（开头、4.5）。
+
+## 11. 实现时和计划不一样的地方
+
+按本计划（含第 10 节）在 D2 分支 `claude/devices-2-secure-channel` 318c1b1c 上实现，直接用 D2 的 `@vonvon/client/secure`，没有占位实现。和计划不一样的地方：
+
+1. **`RemoteConnectOptions` 多一个可选的 `onSocketOpen()`**：WebSocket 打开、通道开始时调用。添加设备的进度靠它从"正在连接"变成"正在配对"（`adding.stage`），计划没写这个信号从哪来。
+2. **看远程时本机断了，切回本机就报**：计划 4.5 只在"没有 `localOwner`"时补报。实际断线后 `localOwner` 还在（今天也不清空），只是连接已死；照计划会去绑死连接、拿不到快照，弹窗永远不出。改成 `localLostPending` 为真时不绑定，发 `reattached{local}` 后调 `connectionLost()`，和"没有 `localOwner`"一样。
+3. **`admin.negotiate` 的拒绝码是 `shell_owned`**，不是 `local_only`：它在本机视图下也拒，和"只对这台电脑有效"不是一回事。文字照计划。
+4. **`DeviceConnectionsError`、`RegistryError` 的中文提示**是本片定的（计划和总设计第 15 节没写）：`unknown_device`"设备列表里没有这台设备。"、`local_device`"这台电脑不能在这里删除或改名。"、`invalid_name`"名字要 1 到 40 个字。"、`registry_newer`、`registry_unreadable` 各一句，见 `DT/bridge.ts` 的 `deviceErrorText`。U1b 有自己的文案时以 U1b 为准。
+5. **`clientFor(view)` 的缓存**：某台设备的 client 被 `close()` 后，下次 `clientFor` 给一个新的；`'current'` 那个关了就是关了（旧行为和旧测试不变）。不然 U1b 卸载页面关掉 client 后，再切回这台就只能拿到一个关掉的 client。
+6. **`bridge.test.ts` 的假 client** 的 `onError` 改成能挂多个监听（视图绑定和 `watchLocal` 各挂一个），`invoke` 对发给 daemon 的通道自动在最后补 `'current'`；`subscribe` 现在总会多发一条 `devices`，旧用例改为看去掉 `devices` 之后的事件。
+7. **桌面端 `package.json` 加了 `ws` 8.22.0 和 `@types/ws` 8.18.2**（4.3 要的），`package-lock.json` 只多这两行；esbuild 把 `ws` 打进 `main.cjs`，`bufferutil`、`utf-8-validate` 是 `ws` 自己 try 着 require 的，没装也能跑。
+8. **第 6 节的真通道探针 `test/manual/devices-probe.ts` 没写**：它要 D3 的 `vonvon remote port/enable`，D3 还没合入，按 4.9 第 9 步放到 D3 合入后，和 Mac 验收一起。本片的真通道只测到 `remote-transport.test.ts`：本机 `ws` 服务器加 D2 的 `createResponder`（`test/helpers/fake-secure-server.ts`），配对、撤销、4006、4002、403/429、拒绝、取消、超时、钥匙不对都走真 `ws` 和真 `connectSecure`。
+9. **行数**：`connections.ts` 约 750 行（估 560），多在"添加"的配对中途断线找回和各处 `gen`/`seq` 核对；整片不含 lockfile 约 3,700 行（估 1,950 + 测试 1,300）。加上 U1b 约 1,500 会超过 5,000，U1b 动手前要再看一次拆不拆。
+10. **日志文件的 0600** 只在创建时设（`appendFile` 的 `mode`）；已存在的文件不再 `chmod`，用户自己改的权限不动。
+11. **`secureConnector` 的 `handshakeTimeout`** 是 `min(5 秒, 路由超时)`，`unexpected-response` 里 403、429 以外的 HTTP 状态归为 `closed`（可重试）。
+
+已知限制（按真实用法不另做处理）：
+- 远程的 `ConnectionError` 只作 250 ms 后的兜底：通道 250 ms 内没说关闭原因，就按普通断开（`closed`）重连。
+- 同一台设备在两个桌面端窗口同时操作不在本片考虑之内：桌面端只有一个窗口。
+- 非当前设备的状态点只是上次的结果（第 9 节）。
+
+## Codex 审查后改了什么（任务 235–237）
+
+2026-11-02，Codex 在 JP-VPS 上审了 head 3ed5f8b6：任务 235 通读全部 diff，236 看 desktop 主进程和 protocol/client，237 看 ui。和本片有关的下面五条都接受了：
+
+- **235-1 本机停了，切到远程再切回，页面一直停在"正在打开 Vonvon Bot…"。** 页面按设备重建，新页面要一份快照才显示；本机连接已经停了或断了，`onView(local)` 拿快照失败就什么都不发。改成 bridge 记住本机连接最后一份快照；切回本机时本机已停（`stoppedStatus`）、断了（`connectionLost`、`localLostPending`）或正在换连接，就发 `reattached{local}` 和这份快照，`snapshot` 通道也回它，断线照旧在切回时弹窗。页面和以前一个窗口时一样：留着上次的内容，"高级运行设置"里读到"已停止"，能点"启动 daemon"（4.5 `onView(local)`；`bridge.test.ts` 加两例：正常停止、看远程时断线）。
+- **235-2 消息 2 之前的明文 4005 被写成"身份变了"，网络好了也只能重新配对。** 握手前的关闭码谁都能伪造（D2 已知限制）。改成 `identity_changed`（每条地址都回 4005，或 `machineId` 对不上）只算这一次连接的结果：停在 `failed`、不排重连，但不进 `problems`、不写进设备列表；`retry()`、切走再切回、重启桌面端都会再连一次，真的换了身份会再得到同样的结果。`machineId` 对不上一并这样处理：它在发出任何请求之前就核对，再连一次也只会再停下。用新链接重新配对照旧可以（`inspectLink` 看这次运行的 `lastFailure`）。写进列表的终止问题只剩 `revoked` 和 `unknown_client`，都是对面在通道里说的（4.4"连"第 3、4 步、"失败"、`retry()`；`connections.test.ts` 改两例、加一例）。
+- **235-3 / 236-1 收到 `pairResult` 之后、等 `serverInfo` 时断了，丢掉了已获准的密钥。** 这时对面已经登记了这把钥匙，邀请也用掉了。"添加"第 4 步的找回原来只认 `stage === 'pairing'`，改成 `pairing` 或 `hello`：同一把钥匙、不带邀请再连，从 `device.clients` 找回 `clientId`（`connections.test.ts` 那例改成两个阶段各跑一次）。
+- **236-2 切换时，已握手、还在读 `daemonStatus` 的连接要等读完（最多 5 秒）才关。** 从拿到连接到交给 `session` 之前，这次尝试被 abort（切换、`retry()`、退出）就立刻关掉它；交出时退订（`connections.test.ts` 加一例：连着三次"切过去 → 切回本机"，每次切走后打开的连接都是 0）。
+- **236-3 保存设备时点"取消"，仍可能添加成功。** `registry.put` 之后再看一次 abort：取消了就把列表恢复原样（新设备删掉，重新配对的放回原来那条），再照写失败的路子在对面撤销这把钥匙，回 `failed: aborted`（`connections.test.ts` 加一例）。
+
+## 合入集成分支
+
+2026-11-02 把 `claude/devices-integration`（带 I3 升级引擎、D2、D4a、D4b）合进本分支（merge 2d986e4a），文本没有冲突。合并后两个测试失败，原因都在 U1 自己：测试文件没跟上 U1 的改动，桌面端只换回 U1 的源码也一样失败，和集成分支的改动无关；产品代码没有接错，没改。
+- `DT/test/native-lifecycle.test.ts`（81 条败 78 条）：4.8 让 `main.ts` 启动时用 Electron 的 `safeStorage`、`powerMonitor`，测试的 electron mock 没有这两个，`startDesktop` 走不到 `installBridge`；假 bridge 也没有 `deferLocalLost`。mock 补上这三样（`deferLocalLost` 默认 `false`，即页面看的是这台电脑），再照 4.8 加两例：设备列表交给 bridge、`resume` 时 `wake()`、退出时先关设备连接再关 bridge 并去掉 `resume` 监听；看远程时本机连接断了不弹窗，留到切回再报。
+- `U/test/bot-schedules-app.test.tsx`：U1b 4.2 让 `App` 调 `useActiveDevice()`，这个测试的 `client-context` mock 只给了 `useClient`、`useShellCapabilities`。改成在真模块上只换 hook：`useActiveDevice` 给 `LOCAL_ACTIVE_DEVICE`，`useDevicesState` 给 `undefined`。

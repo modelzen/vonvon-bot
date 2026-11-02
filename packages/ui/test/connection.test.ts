@@ -15,6 +15,7 @@ vi.mock("@vonvon/client/browser", async () => ({
   ...await import("../../client/src/browser"), connectBrowser: harness.connect,
 }));
 vi.mock("../src/App", () => ({ App: () => null }));
+vi.mock("../src/devices/DesktopRoot", () => ({ DesktopRoot: () => null }));
 vi.mock("../src/directory-picker", () => ({ DirectoryPickerProvider: () => null }));
 vi.mock("../src/client-context", () => ({ ClientProvider: () => null }));
 

@@ -7,7 +7,7 @@ import {
   type CollaborationReply, type CollaborationRequest, type Command,
   type CommandResult, type DesktopSnapshot, type DirectoryReply,
   type DirectoryRequest, type EnvironmentReply, type EnvironmentRequest, type MemoryReply, type MemoryRequest, type ContextPreviewReply, type ContextPreviewRequest,
-  type LibraryReply, type LibraryRequest, type LogEventPayload, type MachineReply, type MachineRequest,
+  type LibraryReply, type LibraryRequest, type LogEventPayload, type MachineReply, type MachineRequest, type DeviceEventPayload,
   type ScheduleReply, type ScheduleRequest, type SettingsReply, type SettingsRequest,
 } from "@vonvon/protocol";
 import type { z } from "zod";
@@ -48,6 +48,8 @@ export interface VonvonClient {
   device(request: DeviceRequest): Promise<DeviceReply>;
   onLog(listener: (payload: LogEventPayload) => void): () => void;
   onBackendInstall(listener: (payload: BackendInstallEventPayload) => void): () => void;
+  /** A client paired with or revoked from this device (devices 4.3); only the owner's connections hear it. */
+  onDevice(listener: (payload: DeviceEventPayload) => void): () => void;
   onError(listener: (error: Error) => void): () => void;
   close(): Promise<void>;
 }
@@ -77,6 +79,7 @@ export function createClient(socket: ClientConnection): VonvonClient {
   const snapshots = new Set<(value: DesktopSnapshot) => void>();
   const logs = new Set<(value: LogEventPayload) => void>();
   const installs = new Set<(value: BackendInstallEventPayload) => void>();
+  const devices = new Set<(value: DeviceEventPayload) => void>();
   const errors = new Set<(error: Error) => void>();
   const undeliveredErrors: Error[] = [];
   let closed = false;
@@ -133,6 +136,7 @@ export function createClient(socket: ClientConnection): VonvonClient {
         case "snapshot": deliver(snapshots, event.data.payload); break;
         case "log": deliver(logs, event.data.payload); break;
         case "backendInstall": deliver(installs, event.data.payload); break;
+        case "device": deliver(devices, event.data.payload); break;
       }
       return;
     }
@@ -193,6 +197,7 @@ export function createClient(socket: ClientConnection): VonvonClient {
     device: request => send("device", request),
     onLog(listener) { logs.add(listener); return () => { logs.delete(listener); }; },
     onBackendInstall(listener) { installs.add(listener); return () => { installs.delete(listener); }; },
+    onDevice(listener) { devices.add(listener); return () => { devices.delete(listener); }; },
     onError(listener) {
       errors.add(listener);
       for (const error of undeliveredErrors.splice(0)) {

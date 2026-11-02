@@ -56,7 +56,7 @@ describe('synchronous desktop facade', () => {
     const request = { action: 'runNow', chatId: 'oc_schedule', taskId: 'st_1' } as const;
     h.replies.set(desktopChannels.schedule, async () => ({ ok: true, value: { kind: 'started', taskId: 'st_1', runId: 'run_1' } }));
     await expect(client.schedule('cli_schedule', request)).resolves.toEqual({ kind: 'started', taskId: 'st_1', runId: 'run_1' });
-    expect(args).toEqual([['cli_schedule', request]]);
+    expect(args).toEqual([['cli_schedule', request, 'current']]);
     h.replies.set(desktopChannels.schedule, async () => ({ ok: true, value: { kind: 'unexpected' } }));
     await expect(client.schedule('cli_schedule', request)).rejects.toThrow();
   });
@@ -138,8 +138,8 @@ describe('synchronous desktop facade', () => {
     client.watchSnapshots(value => seen.push(value.revision));
     await Promise.resolve();
     await Promise.resolve();
-    h.event({ type: 'reattached' });
-    h.event({ type: 'snapshot', value: snapshot(1) });
+    h.event({ type: 'reattached', view: 'local' });
+    h.event({ type: 'snapshot', view: 'local', value: snapshot(1) });
     expect(seen).toEqual([10, 1]);
   });
   it('exposes the executable chooser and validates its path-or-cancel response', async () => {
@@ -176,13 +176,13 @@ describe('synchronous desktop facade', () => {
     expect(h.calls[0]).toBe(desktopChannels.subscribe);
     const seen: number[] = [];
     const unsubscribe = client.watchSnapshots(value => seen.push(value.revision));
-    h.event({ type: 'snapshot', value: snapshot(3) });
+    h.event({ type: 'snapshot', view: 'local', value: snapshot(3) });
     resolveSeed({ ok: true, value: snapshot(2) });
     await Promise.resolve();
     await Promise.resolve();
     expect(seen).toEqual([3]);
     unsubscribe();
-    h.event({ type: 'snapshot', value: snapshot(4) });
+    h.event({ type: 'snapshot', view: 'local', value: snapshot(4) });
     expect(seen).toEqual([3]);
   });
 
@@ -294,10 +294,10 @@ describe('synchronous desktop facade', () => {
     client.watchSnapshots(() => seen.push('snapshot'));
     client.onLog(() => seen.push('log'));
     client.onBackendInstall(() => seen.push('install'));
-    h.event({ type: 'snapshot', value: snapshot(4) });
+    h.event({ type: 'snapshot', view: 'local', value: snapshot(4) });
     h.event({ type: 'error', value: { kind: 'connection', message: 'Late failure' } });
-    h.event({ type: 'log', value: { lines: 'late log' } });
-    h.event({ type: 'backendInstall', value: {
+    h.event({ type: 'log', view: 'local', value: { lines: 'late log' } });
+    h.event({ type: 'backendInstall', view: 'local', value: {
       operationId: 'b6389cdd-fc7e-4e55-9e4f-7ebaf3ad2240', id: 'codex', update: false,
       item: { type: 'log', chunk: 'late install' },
     } });
@@ -341,12 +341,87 @@ it('delivers each daemon revision once: the login item changes only with the dae
   const seen: Array<[number, boolean]> = [];
   client.watchSnapshots(value => seen.push([value.revision, value.application.loginItem]));
   const value = snapshot(3);
-  h.event({ type: 'snapshot', value });
-  h.event({ type: 'snapshot', value: { ...value, application: { ...value.application, loginItem: true } } });
+  h.event({ type: 'snapshot', view: 'local', value });
+  h.event({ type: 'snapshot', view: 'local', value: { ...value, application: { ...value.application, loginItem: true } } });
   seed({ ok: true, value });
   await Promise.resolve(); await Promise.resolve();
-  h.event({ type: 'snapshot', value: snapshot(2) });
+  h.event({ type: 'snapshot', view: 'local', value: snapshot(2) });
   const next = snapshot(4);
-  h.event({ type: 'snapshot', value: { ...next, application: { ...next.application, loginItem: true } } });
+  h.event({ type: 'snapshot', view: 'local', value: { ...next, application: { ...next.application, loginItem: true } } });
   expect(seen).toEqual([[3, false], [4, true]]);
+});
+
+// devices-ui-1a 第 5 节 facade: a page per device. main 必败: there was one client for one daemon.
+const A = '11111111-1111-4111-8111-111111111111';
+const B = '22222222-2222-4222-8222-222222222222';
+const devicesState = {
+  v: 1, revision: 2, client: { version: '1', protocolVersion: 2 }, registry: 'ok', secureStorage: true,
+  devices: [{ id: 'local', name: '这台电脑', current: true, status: 'online', routes: [] }],
+  active: { id: 'local', phase: 'ready', attempt: 0 },
+};
+
+describe('devices-ui-1a facade', () => {
+  it('gives a page of one device only that device\'s events, and names the device on every request', async () => {
+    const h = harness();
+    const args: unknown[][] = [];
+    const invoke = h.transport.invoke;
+    h.transport.invoke = (channel, ...values) => {
+      if (channel === desktopChannels.settings || channel === desktopChannels.snapshot || channel === desktopChannels.close) args.push([channel, ...values]);
+      return invoke(channel, ...values);
+    };
+    h.replies.set(desktopChannels.snapshot, () => new Promise(() => {}));
+    const { shell } = createDesktopFacades(h.transport);
+    const a = shell.devices.clientFor(A);
+    expect(shell.devices.clientFor(A)).toBe(a);
+    expect(() => shell.devices.clientFor('not-a-device')).toThrow();
+    const seen: number[] = [];
+    a.watchSnapshots(value => seen.push(value.revision));
+    h.event({ type: 'snapshot', view: A, value: snapshot(5) });
+    h.event({ type: 'snapshot', view: B, value: snapshot(9) });
+    h.event({ type: 'snapshot', view: 'local', value: snapshot(9) });
+    // Another device's reattachment does not start A's revisions over; A's own does.
+    h.event({ type: 'reattached', view: B });
+    h.event({ type: 'snapshot', view: A, value: snapshot(4) });
+    h.event({ type: 'reattached', view: A });
+    h.event({ type: 'snapshot', view: A, value: snapshot(1) });
+    expect(seen).toEqual([5, 1]);
+    const read = { type: 'read', scope: { kind: 'host' } } as const;
+    await a.settings(read).catch(() => {});
+    await a.close();
+    expect(args).toEqual([[desktopChannels.snapshot, A], [desktopChannels.settings, read, A], [desktopChannels.close, A]]);
+    expect(shell.devices.clientFor(A)).not.toBe(a);
+  });
+
+  it('replays the latest device list to a late listener, refuses a malformed one, and passes this computer\'s device events', () => {
+    const h = harness();
+    const { client, shell } = createDesktopFacades(h.transport);
+    h.event({ type: 'devices', value: devicesState });
+    const seen: unknown[] = [];
+    shell.devices.onState(value => seen.push(value));
+    expect(seen).toEqual([devicesState]);
+    const errors: string[] = [];
+    client.onError(error => errors.push(error.message));
+    h.event({ type: 'devices', value: { ...devicesState, devices: [] } });
+    expect(errors).toEqual(['Invalid desktop event']);
+    expect(seen).toHaveLength(1);
+    const local: unknown[] = [];
+    shell.onLocalDeviceEvent(value => local.push(value));
+    const paired = { change: 'client-paired', clientId: 'cl_0123456789abcdef', name: '笔记本', clientKind: 'desktop' };
+    h.event({ type: 'localDevice', value: paired });
+    expect(local).toEqual([paired]);
+    h.event({ type: 'snapshot', value: snapshot(1) });
+    expect(errors).toEqual(['Invalid desktop event', 'Invalid desktop event']);
+  });
+
+  it('sends the device page\'s requests over the shell\'s own channels and checks the replies', async () => {
+    const h = harness();
+    const { shell } = createDesktopFacades(h.transport);
+    h.replies.set(desktopChannels.devicesState, async () => ({ ok: true, value: devicesState }));
+    await expect(shell.devices.state()).resolves.toEqual(devicesState);
+    h.replies.set(desktopChannels.devicesRemove, async () => ({ ok: true, value: { revokedRemotely: 'yes' } }));
+    await expect(shell.devices.remove(A)).rejects.toThrow();
+    h.replies.set(desktopChannels.devicesSwitch, async () => ({ ok: false, error: { kind: 'validation', code: 'unknown_device', message: '设备列表里没有这台设备。' } }));
+    await expect(shell.devices.switchTo(B)).rejects.toMatchObject({ message: '设备列表里没有这台设备。', code: 'unknown_device' });
+    expect(h.calls.slice(-3)).toEqual([desktopChannels.devicesState, desktopChannels.devicesRemove, desktopChannels.devicesSwitch]);
+  });
 });

@@ -415,3 +415,10 @@ test('任务 opens the group 任务 tab, and a task the Bot answered with is fou
     [['每日站会提醒', {kind: 'membership', id: membershipId}, {kind: 'membership-settings'}, '任务', '每日站会提醒']]);
   assert.deepEqual(findEntries(withTasks, '别处的提醒'), []);
 });
+
+test('devices-ui-1b: the devices page is found on the desktop only', () => {
+  const desktop = searchEntries(snapshot, {devices: true}).find(entry => entry.id === 'devices');
+  assert.deepEqual(desktop?.destination, {page: 'devices', view: undefined, selection: undefined});
+  assert.ok(findEntries(searchEntries(snapshot, {devices: true}), 'Tailscale').some(entry => entry.id === 'devices'));
+  assert.equal(searchEntries(snapshot).some(entry => entry.id === 'devices'), false);
+});

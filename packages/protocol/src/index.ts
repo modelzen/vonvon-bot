@@ -8,6 +8,7 @@ export * from "./watch.js";
 export * from "./store.js";
 export * from "./handshake.js";
 export * from "./device.js";
+export * from "./desktop-devices.js";
 export * from "./rpc.js";
 export * from "./rpc-kinds.js";
 export * from "./events.js";
