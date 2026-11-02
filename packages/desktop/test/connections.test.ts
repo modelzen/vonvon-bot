@@ -297,7 +297,7 @@ describe('revocation and identity', () => {
     expect(h.registry.get(a.deviceId)?.problem).toBeUndefined();
   });
 
-  it('stops on a device whose machine id is not the paired one', async () => {
+  it('stops on a device whose machine id is not the paired one, as this attempt\'s result only', async () => {
     const h = harness();
     const a = h.add();
     await h.devices.switchTo(a.deviceId);
@@ -306,7 +306,10 @@ describe('revocation and identity', () => {
     await flush();
     expect(other.closeSpy).toHaveBeenCalled();
     expect(h.devices.state().active).toMatchObject({ phase: 'failed', failure: { code: 'identity_changed' } });
-    expect(h.registry.get(a.deviceId)?.problem?.code).toBe('identity_changed');
+    expect(vi.getTimerCount()).toBe(0);
+    expect(h.registry.get(a.deviceId)?.problem).toBeUndefined();
+    h.devices.retry();
+    expect(h.calls).toHaveLength(2);
   });
 
   it('moves past one address that is another machine; all of them is another identity', async () => {
@@ -328,7 +331,33 @@ describe('revocation and identity', () => {
     h.calls[3]!.reject(failWith('device_identity_changed', 'handshake'));
     await flush();
     expect(h.devices.state().active).toMatchObject({ phase: 'failed', failure: { code: 'identity_changed' } });
-    expect(h.registry.get(b.deviceId)?.problem?.code).toBe('identity_changed');
+    expect(h.devices.state().devices.find(row => row.id === b.deviceId)).toMatchObject({ status: 'needs-pairing', problem: 'identity_changed' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps a 4005 before message 2 out of the list: retry, a switch back and the next start try again (Codex 审查 235-2)', async () => {
+    const h = harness();
+    const a = h.add();
+    await h.devices.switchTo(a.deviceId);
+    // Anyone on the path can close with a plain 4005 before message 2 (D2).
+    h.calls[0]!.reject(failWith('device_identity_changed', 'handshake'));
+    await flush();
+    expect(h.devices.state().active).toMatchObject({ phase: 'failed', failure: { code: 'identity_changed' } });
+    expect(h.registry.get(a.deviceId)?.problem).toBeUndefined();
+    // A new link of the same device may still pair it again.
+    expect(h.devices.inspectLink(pairingLink(a.deviceId))).toMatchObject({ ok: true, repair: true });
+    h.devices.retry();
+    expect(h.calls).toHaveLength(2);
+    h.calls[1]!.reject(failWith('device_identity_changed', 'handshake'));
+    await flush();
+    await h.devices.switchTo('local');
+    await h.devices.switchTo(a.deviceId);
+    expect(h.calls).toHaveLength(3);
+    h.calls[2]!.resolve(h.link({ machineId: a.deviceId }));
+    await flush();
+    expect(h.devices.state().active.phase).toBe('ready');
+    // The next start reads the list: nothing there stops it.
+    expect(h.registry.get(a.deviceId)?.problem).toBeUndefined();
   });
 
   it('leaves an unreadable key on disk as it is, retries it, and lets a new link repair it', async () => {
